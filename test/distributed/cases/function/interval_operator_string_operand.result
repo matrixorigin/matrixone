@@ -1,0 +1,50 @@
+drop database if exists interval_op_str;
+create database interval_op_str;
+use interval_op_str;
+create table s (id int primary key, c char(19), v varchar(19), t text, b blob, bn binary(10));
+insert into s values (1, '2026-01-31', '2026-01-31', '2026-01-31 10:20:30', '2026-01-31', '2026-01-31'), (2, null, null, null, null, null), (3, 'bad', 'bad', 'bad', 'bad', 'bad');
+select id, c + interval 1 month, v + interval 1 month, t + interval 1 month, b + interval 1 day, bn + interval 1 day from s order by id;
+➤ id[4,32,0]  ¦  c + INTERVAL 1 month[1,255,0]  ¦  v + INTERVAL 1 month[12,65535,0]  ¦  t + INTERVAL 1 month[-1,16383,0]  ¦  b + INTERVAL 1 day[91,10,0]  ¦  bn + INTERVAL 1 day[91,10,0]  𝄀
+1  ¦  2026-02-28  ¦  2026-02-28  ¦  2026-02-28 10:20:30  ¦  2026-02-01  ¦  2026-02-01  𝄀
+2  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  𝄀
+3  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null
+select id, interval 1 day + c, interval 1 day + t, c - interval 1 day, t - interval 1 hour from s order by id;
+➤ id[4,32,0]  ¦  INTERVAL 1 day + c[1,255,0]  ¦  INTERVAL 1 day + t[-1,16383,0]  ¦  c - INTERVAL 1 day[1,255,0]  ¦  t - INTERVAL 1 hour[-1,16383,0]  𝄀
+1  ¦  2026-02-01  ¦  2026-02-01 10:20:30  ¦  2026-01-30  ¦  2026-01-31 09:20:30  𝄀
+2  ¦  null  ¦  null  ¦  null  ¦  null  𝄀
+3  ¦  null  ¦  null  ¦  null  ¦  null
+select id, c + interval 1 day = date_add(c, interval 1 day), t - interval 1 hour = date_sub(t, interval 1 hour) from s where id = 1;
+➤ id[4,32,0]  ¦  c + INTERVAL 1 day = date_add(c, INTERVAL 1 day)[-6,8,0]  ¦  t - INTERVAL 1 hour = date_sub(t, INTERVAL 1 hour)[-6,8,0]  𝄀
+1  ¦  1  ¦  1
+select id from s where c + interval 1 day = '2026-02-01' order by id;
+➤ id[4,32,0]  𝄀
+1
+select cast('2026-01-31' as char(10)) + interval 1 day, cast('2026-01-31 23:00:00' as char(19)) - interval 1 hour, '' + interval 1 day;
+➤ cast(2026-01-31 as char(10)) + INTERVAL 1 day[1,255,0]  ¦  cast(2026-01-31 23:00:00 as char(19)) - INTERVAL 1 hour[1,255,0]  ¦   + INTERVAL 1 day[1,255,0]  𝄀
+2026-02-01  ¦  2026-01-31 22:00:00  ¦  null
+set @d = '2026-02-28';
+set @dt = '2024-02-29 13:14:15';
+set @n = 3;
+set @x = null;
+prepare p1 from 'select ? + interval 1 day, ? - interval 1 day, interval 1 month + ?';
+execute p1 using @d, @d, @d;
+➤ ? + INTERVAL 1 day[12,65535,0]  ¦  ? - INTERVAL 1 day[12,65535,0]  ¦  INTERVAL 1 month + ?[12,65535,0]  𝄀
+2026-03-01  ¦  2026-02-27  ¦  2026-03-28
+execute p1 using @dt, @dt, @dt;
+➤ ? + INTERVAL 1 day[12,65535,0]  ¦  ? - INTERVAL 1 day[12,65535,0]  ¦  INTERVAL 1 month + ?[12,65535,0]  𝄀
+2024-03-01 13:14:15  ¦  2024-02-28 13:14:15  ¦  2024-03-29 13:14:15
+execute p1 using @x, @x, @x;
+➤ ? + INTERVAL 1 day[12,65535,0]  ¦  ? - INTERVAL 1 day[12,65535,0]  ¦  INTERVAL 1 month + ?[12,65535,0]  𝄀
+null  ¦  null  ¦  null
+prepare p2 from 'select ? + interval ? day';
+execute p2 using @d, @n;
+➤ ? + INTERVAL ? day[12,65535,0]  𝄀
+2026-03-03
+prepare p3 from 'select id from s where cast(v as date) < ? - interval 1 day order by id';
+execute p3 using @d;
+➤ id[4,32,0]  𝄀
+1
+deallocate prepare p1;
+deallocate prepare p2;
+deallocate prepare p3;
+drop database interval_op_str;
