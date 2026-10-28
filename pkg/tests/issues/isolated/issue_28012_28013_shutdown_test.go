@@ -88,12 +88,16 @@ func TestIssue28012And28013AcceptedCommitDuringStandaloneShutdown(t *testing.T) 
 		require.NoError(t, cleanupErr)
 	})
 
+	// Install a rejecting transaction selector before this cluster starts any
+	// commit workers. Otherwise an in-flight commit can pass absent selectors
+	// and encounter the WAIT point only after it is armed below.
+	faultEnabledHere = fault.Enable()
+	require.NoError(t, fault.AddFaultPoint(t.Context(), objectio.FJ_CommitWaitTargetTxn, ":::", "ECHO", 0, string(uuid.Nil[:]), false))
 	var err error
 	cluster, err = embed.StartTestCluster(embed.WithCNCount(1))
 	require.NoError(t, err)
 	// Cluster admission can wait behind other coverage tests for minutes.
 	// Start the SQL deadline only after this test owns a running cluster.
-	faultEnabledHere = fault.Enable()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	sysDB := openIssue28012And28013DB(t, ctx, cluster, "dump:111", &dbs)
