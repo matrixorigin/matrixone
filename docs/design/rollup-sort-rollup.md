@@ -2,7 +2,9 @@
 
 Status: the original implementation merged in #28987. This follow-up preserves
 R1.2's official-main ROLLUP semantics while strengthening DISTINCT rewrite
-protection, bound-column order reuse, and automatic COST admission.
+protection, bound-column order reuse, and automatic COST admission. A further
+executor optimization reuses supported single-group states without changing
+algorithm selection or SQL semantics.
 
 Owner issue: [#20653](https://github.com/matrixorigin/matrixone/issues/20653)
 
@@ -129,10 +131,11 @@ grand total: (NULL-like, NULL-like)
 ```
 
 Every input row is added exactly once to every currently applicable state.
-When a key boundary is observed, the state machine flushes and recreates only
-the prefixes that ended, from the deepest level to the shallowest. Each
-finished row is appended to a bounded output batch immediately; aggregate
-state is never combined by averaging finalized values and is never retained
+When a key boundary is observed, the state machine finalizes only the prefixes
+that ended, from the deepest level to the shallowest. Supported aggregate lists
+append their results and reset state in place; other lists flush and recreate
+their executors. Each finished row is appended to a bounded output batch
+immediately; aggregate state is never combined by averaging finalized values and is never retained
 for already-emitted groups.
 
 The rollup value is a vector constant carrying grouping metadata. Its value is
@@ -251,19 +254,22 @@ not prove that the later detailed rewrite will succeed; a rejected rewrite
 executes the legacy branches and therefore costs more than this envelope.
 Let `G` be the estimated number of completed output groups across all prefixes,
 including the grand total: `G = 1 + sum_i min(N, product_{j<=i}(NDV_j))`.
-`F(G,L)` is the relative cost of flushing a completed prefix, freeing its
-aggregate state, and recreating the single-group executor. The runtime performs
-this lifecycle for every completed prefix even when input order is already
-proven, so ordered high-NDV input must pay `F(G,L) * G * A` rather than being
-modeled as boundary checks alone. The conservative calibration uses a constant
+`F(G,L)` is a conservative completed-prefix charge, originally calibrated for
+flushing results, freeing aggregate state, and recreating single-group
+executors. Unsupported aggregate lists still perform that lifecycle. Supported
+lists now append results and reset state in place, but this follow-up does not
+reduce the cost coefficients or broaden automatic admission. Both paths still
+materialize every completed result, so ordered input retains the
+`F(G,L) * G * A` term rather than being modeled as boundary checks alone. This
+is a conservative model, not a precise estimate of the optimized executor's
+measured cost. The calibration uses a constant
 `F = 32` per completed prefix whenever any prefix has more than one estimated
 group, for every number of grouping keys. Rollups whose prefixes are all
-singletons retain `F = 2`: their state closes only once at EOF, without
-repeated recreation during input.
+singletons retain `F = 2`: their state closes only once at EOF.
 
-The earlier ramp starting at 10,000 groups admitted a slower intermediate-NDV plan: at 100,000
-INT rows with NDVs `(1,1,10000)`, the reviewed Linux amd64 operator benchmark
-measured SORT at median 34.3 ms and shared HASH at 27.0 ms, with 68.2 MB versus
+The historical ramp starting at 10,000 groups admitted a slower intermediate-NDV
+plan: at 100,000 INT rows with NDVs `(1,1,10000)`, the reviewed Linux amd64
+operator benchmark measured SORT at median 34.3 ms and shared HASH at 27.0 ms, with 68.2 MB versus
 7.87 MB allocated per iteration. The [exact-head review evidence](https://github.com/matrixorigin/matrixone/pull/28987#pullrequestreview-5519656710)
 used `GOMAXPROCS=4`, no race, `-benchtime=10x -count=5`. These are operator
 measurements, not SQL-service latency or peak memory.
@@ -301,7 +307,7 @@ an independent key/GROUPING/COUNT oracle before timing. Unused legacy-branch
 batches and oracle scratch are reclaimed before measurements. Each operation
 includes four complete queries, both with the same child ORDER BY.
 
-A local Darwin/arm64, Go 1.27.1, `GOMAXPROCS=4` run executed one warm-up round
+A historical Darwin/arm64, Go 1.27.1, `GOMAXPROCS=4` run executed one warm-up round
 and three measured rounds, each with ten cohorts per algorithm/shape:
 
 ```bash
@@ -333,8 +339,9 @@ are a local control, not a production throughput or capacity claim.
 This is conservative admission, not a claim that 32 is a platform-independent
 elapsed-time coefficient or that every intermediate shape has been measured.
 The cited timings measure operators, not SQL-service latency or peak resident
-memory. Forced SORT remains available for experiments; aggregate-state reuse
-and executor lifecycle are unchanged.
+memory. These historical measurements predate the single-group reuse
+optimization described below. Forced SORT remains available for experiments;
+the conservative COST coefficients and admission gates are unchanged.
 For each prefix, `K_i` is its key-width factor and `A` is the aggregate update
 factor derived from the selected aggregate functions:
 
@@ -375,8 +382,9 @@ removed. Configured sort workspace and aggregate-state limits add bounded
 penalties. Both ordered and unordered sort paths check the same bounded
 streaming state: the active `L+1` prefix states plus fixed per-input-batch
 scratch. Unordered input additionally pays for its sort workspace and can spill
-there; it does not materialize one aggregate state per emitted group, but it
-still pays the append/flush/free/recreate lifecycle represented by `G`. `N_cap`,
+there; it does not materialize one aggregate state per emitted group. Every
+completed group still incurs result materialization, conservatively charged by
+`G`; only unsupported lists retain flush/free/recreate at runtime. `N_cap`,
 retained below as a diagnostic output-group upper bound, is the larger of the
 filtered input estimate and the table-row estimate so stale or optimistic
 filtered `Outcnt` cannot make diagnostics look artificially small.
@@ -403,7 +411,11 @@ missing/unknown statistics, non-finite values, and overflow all select hash.
 
 ### Benchmark evidence
 
-The reproducible operator benchmark is:
+#### Historical calibration
+
+The following measurements predate the single-group reuse follow-up. They
+explain the conservative selector and are not current-code performance claims.
+The retained operator benchmark is:
 
 ```text
 go test -mod=readonly ./pkg/sql/colexec/group -run '^$' \
@@ -521,6 +533,48 @@ claim that an arbitrary unordered ROLLUP should always sort. The additional
 `AVG` row uses two grouping keys plus a third measure column and matches the
 issue's `AVG(x)` shape.
 
+#### Single-group reuse follow-up measurements
+
+On 2026-10-28, the follow-up was measured on Apple M4, Go 1.27.1 darwin/arm64,
+CGo enabled, `GOMAXPROCS=4`, without race/coverage, using 100 ms benchmarks and three samples
+per shape. Timing includes fixture duplication, Prepare, complete draining and
+Free, but excludes input construction and the independent result oracle. The
+four ordered high-NDV COUNT/seven-aggregate shapes reduced median time by
+78.2–94.4% relative to the pre-reuse executor; candidate maxima were below
+baseline minima, and B/op and allocs/op each fell by more than 96%. The four
+derived high-NDV shapes also improved, but these eight candidates still took
+1.08–6.80 times the retained historical shared HASH time. HASH was not remeasured
+concurrently. These are local physical-operator results, not SQL latency,
+concurrent throughput, CPU/GC attribution, or peak RSS measurements.
+
+Low-NDV COUNT, AVG and many-level AVG controls passed the 20% engineering
+budget in the complete supplementary window: candidate-median/baseline-median
+ratios were 0.977, 1.048 and 0.932, with all nine pairwise ratios at most 1.128.
+Each shape had only three pairs in fixed baseline-then-candidate order. Using
+that window for primary acceptance was a reviewed, post-hoc applicability
+decision; the original rule combined six samples across time periods. Initial
+ratios of 1.756/1.557/1.566 and combined-six ratios of 1.283/1.473/1.134 remain
+valid observations; combined COUNT and AVG exceed 1.2. This limited engineering
+acceptance neither proves general absence of regression nor establishes a
+statistical non-inferiority result or a host-level cause for the disagreement.
+
+Reproduce the current fixtures with the repository's CGo wrapper:
+
+```bash
+GOMAXPROCS=4 .agents/skills/mo-dev/scripts/mo-cgo-test \
+  -run '^$' -bench '^BenchmarkRollupFinalization$/./^sort$' \
+  -benchmem -benchtime=100ms -count=3 ./pkg/sql/colexec/group
+GOMAXPROCS=4 .agents/skills/mo-dev/scripts/mo-cgo-test \
+  -run '^$' -bench '^BenchmarkSingleGroupReuseMechanisms$' \
+  -benchmem -benchtime=100ms -count=3 ./pkg/sql/colexec/aggexec
+```
+
+The mechanism fixture isolates completion and range filling with 64 work units
+per operation. Both reduced time and allocations; exact AVG result conversion
+still allocates. Benefits apply only to the supported complete aggregate lists
+below. Unsupported lists and forced SORT's remaining high-NDV risk persist;
+the selector was not retuned from these measurements.
+
 The aggregate marker is carried in `ExtraOptions`, which is already part of
 the plan representation. The final group is compiled only after the global
 ordered stream is available, on one coordinator scope, with no partial-result
@@ -537,13 +591,48 @@ aggregate state.
 
 The streaming implementation uses one single-group aggregate executor per
 active ROLLUP prefix, one-row last-key vectors, and one bounded output batch.
-At a key boundary it flushes the finished prefixes, emits their grouping
-sentinels, and recreates those single-group executors. For the automatically
+At a key boundary it finalizes the finished prefixes and emits their grouping
+sentinels. The fallback path flushes and recreates those single-group executors;
+a supported complete list instead copies each completed result into output-owned
+vectors and resets the live executor in place. For the automatically
 admitted fixed-state aggregates, retained state is therefore proportional to
 the number of levels, not the total number of input groups. Complete key-runs
-use the aggregate API's single-group `BulkFill` after chunk-level capacity
-preflight, avoiding repeated group-id dispatch for a state that can only
-contain group 1. `agg_spill_mem` is resolved to the effective executor
+use single-group filling after chunk-level capacity preflight, avoiding
+repeated group-id dispatch for a state that can only contain group 1.
+
+After constructing all prefix states, preparation probes the entire aggregate
+list at every prefix with `SupportsSingleGroupReuse`. The optional capability
+belongs to concrete non-DISTINCT COUNT executors with `extra == 0` and native
+`sumAvgExec` SUM/AVG executors, subject to single-group shape and allocation
+generation checks. Eligibility follows the concrete executor: native integer
+AVG can return an exact decimal result, while decimal-specific accumulators
+(including the current int64/uint64 SUM/AVG routes) are unsupported. DISTINCT,
+MIN/MAX, decimal-specific and other unsupported executors, or any mixed list
+containing one, keep the whole list on the original execution path. Grouping
+without aggregates retains its existing path. This executor choice does not
+change planner eligibility or select HASH.
+
+For supported lists, `AppendSingleGroupResultAndReset` appends an independent
+value, then resets COUNT, SUM/NULL or AVG sum/count state only after successful
+append. Live state vectors remain aggregate-owned; they are never attached to
+output. `BulkFillSingleGroupRange` borrows the original argument vectors for
+`[offset, offset + rows)`, avoiding argument windows while preserving each run's
+local accumulation and final merge order, including NULL and constant handling.
+For unsupported lists, completion still uses `FlushWithContext`, result
+attachment/copying, `Free` and reconstruction, and filling still uses argument
+windows with `BulkFill`. There is no per-column mixture of the two paths.
+Preflight/account and cancellation checks remain in force for both.
+
+Capability or append/fill errors abort execution; they never retry via fallback.
+A partial output row is not published, even if an earlier column was appended
+and reset. Existing destinations remain group-owned; a helper-created result
+vector is freed on failure or transferred to the group on success. Reset/Free
+cleans retained states and output, and a new Prepare uses its own allocation
+generation. Reuse retains the existing state-vector reservation (8192 elements)
+and bounded output batches; it does not cache completed groups. Total result
+materialization still grows with completed groups and aggregate columns.
+
+`agg_spill_mem` is resolved to the effective executor
 threshold during preparation and is enforced against the resident state after
 input work and before output publication; unordered input sorting remains
 responsible for its own workspace/spill limit.
