@@ -631,7 +631,11 @@ select cast('a10' as unsigned integer);
 select 10+'a';
 invalid argument cast to int, bad value a
 select 10.0+cast('a' as decimal(38,0));
-invalid input: "a" is invalid decimal string
+➤ 10.0 + cast(a as decimal(38))[3,40,1]  𝄀
+10.0
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1292  ¦  Truncated incorrect DECIMAL value: 'a'
 select 10E+0+'a';
 ➤ 10e+0 + a[8,54,0]  𝄀
 10.0
@@ -944,3 +948,85 @@ hex(_binary X'F0' | _binary X'0F'),
 hex(_binary X'FF' ^ _binary X'0F');
 ➤ hex(0xFF & 0x0F)[12,-1,0]  ¦  hex(0xF0 | 0x0F)[12,-1,0]  ¦  hex(0xFF ^ 0x0F)[12,-1,0]  𝄀
 0F  ¦  FF  ¦  F0
+select cast('' as decimal(10,2));
+➤ cast( as decimal(10, 2))[3,10,2]  𝄀
+0.00
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1292  ¦  Truncated incorrect DECIMAL value: ''
+select cast('   ' as decimal(10,2));
+➤ cast(    as decimal(10, 2))[3,10,2]  𝄀
+0.00
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1292  ¦  Truncated incorrect DECIMAL value: '   '
+select cast('  -123x' as decimal(10,2));
+➤ cast(  -123x as decimal(10, 2))[3,10,2]  𝄀
+-123.00
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1292  ¦  Truncated incorrect DECIMAL value: '  -123x'
+select cast('756e' as decimal(10,2));
+➤ cast(756e as decimal(10, 2))[3,10,2]  𝄀
+756.00
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1292  ¦  Truncated incorrect DECIMAL value: '756e'
+select cast('abc' as decimal(10,2));
+➤ cast(abc as decimal(10, 2))[3,10,2]  𝄀
+0.00
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1292  ¦  Truncated incorrect DECIMAL value: 'abc'
+select cast(cast('abc' as binary) as decimal(10,2));
+➤ cast(cast(abc as binary) as decimal(10, 2))[3,10,2]  𝄀
+0.00
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1292  ¦  Truncated incorrect DECIMAL value: 'abc'
+select cast('0x2e' as decimal(10,2));
+➤ cast(0x2e as decimal(10, 2))[3,10,2]  𝄀
+46.00
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]
+select cast(null as decimal(10,2));
+➤ cast(null as decimal(10, 2))[3,10,2]  𝄀
+NULL
+set session sql_mode = 'STRICT_TRANS_TABLES';
+select cast('abc' as decimal(10,2));
+➤ cast(abc as decimal(10, 2))[3,10,2]  𝄀
+0.00
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1292  ¦  Truncated incorrect DECIMAL value: 'abc'
+set session sql_mode = @@global.sql_mode;
+
+drop database if exists dml_cast_guard;
+create database dml_cast_guard;
+use dml_cast_guard;
+create table own(id int primary key, v decimal(10,2));
+insert into own values (1, 42.42);
+set session sql_mode = 'STRICT_TRANS_TABLES';
+insert into own values (2, cast('abc' as decimal(10,2)));
+invalid input: "abc" is invalid decimal string
+insert into own select 3, cast('abc' as decimal(10,2));
+invalid input: "abc" is invalid decimal string
+update own set v = cast('abc' as decimal(10,2)) where id = 1;
+invalid input: "abc" is invalid decimal string
+select id, v from own order by id;
+➤ id[4,32,0]  ¦  v[3,10,2]  𝄀
+1  ¦  42.42
+insert ignore into own values (4, cast('abc' as decimal(10,2)));
+select id, v from own order by id;
+➤ id[4,32,0]  ¦  v[3,10,2]  𝄀
+1  ¦  42.42  𝄀
+4  ¦  0.00
+set session sql_mode = '';
+insert into own values (5, cast('abc' as decimal(10,2)));
+select id, v from own order by id;
+➤ id[4,32,0]  ¦  v[3,10,2]  𝄀
+1  ¦  42.42  𝄀
+4  ¦  0.00  𝄀
+5  ¦  0.00
+set session sql_mode = @@global.sql_mode;
+drop database dml_cast_guard;

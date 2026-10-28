@@ -62,6 +62,6 @@ from information_schema.columns
 where table_schema = 'binary_string_result_domain' and table_name = 'binary_result_ctas'
 order by ordinal_position;
 ➤ column_name[12,256,0]  ¦  data_type[12,65535,0]  ¦  character_maximum_length[-5,64,0]  ¦  character_set_name[12,7,0]  ¦  collation_name[12,18,0]  𝄀
-repeated  ¦  blob  ¦  0  ¦  binary  ¦  binary  𝄀
-concatenated  ¦  blob  ¦  0  ¦  binary  ¦  binary
+repeated  ¦  blob  ¦  0  ¦  null  ¦  null  𝄀
+concatenated  ¦  blob  ¦  0  ¦  null  ¦  null
 drop database binary_string_result_domain;

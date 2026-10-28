@@ -42,6 +42,42 @@ func TestGetFunctionByIdRejectsUnknownOverload(t *testing.T) {
 	require.False(t, GetFunctionIsWinOrderFunById(unknown))
 }
 
+func TestRegisteredArgumentType(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		input  types.T
+		want   types.T
+		legacy bool
+	}{
+		{"varchar", types.T_varchar, types.T_varchar, false},
+		{"canonical_char", types.T_char, types.T_varchar, false},
+		{"legacy_char", types.T_char, types.T_char, true},
+		{"text", types.T_text, types.T_text, false},
+		{"blob", types.T_blob, types.T_blob, false},
+		{"decimal", types.T_decimal64, types.T_decimal64, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			resolved, err := GetFunctionByName(t.Context(), "coalesce", []types.Type{test.input.ToType(), test.input.ToType()})
+			require.NoError(t, err)
+			identity := resolved.GetEncodedOverloadID()
+			if test.legacy {
+				// This retained registered CHAR identity predates canonical binding.
+				identity = encodeOverloadID(COALESCE, 1)
+			}
+			registered, ok := GetFunctionByIdWithoutError(identity)
+			require.True(t, ok)
+			argument, ok := registered.GetArgumentType(0)
+			require.True(t, ok)
+			require.Equal(t, test.want, argument)
+			for _, index := range []int{-1, 1} {
+				argument, ok = registered.GetArgumentType(index)
+				require.False(t, ok)
+				require.Equal(t, types.T_any, argument)
+			}
+		})
+	}
+}
+
 func TestDecimalFloatAdditionResolvesToDouble(t *testing.T) {
 	decimal := types.New(types.T_decimal64, 10, 2)
 	double := types.T_float64.ToType()

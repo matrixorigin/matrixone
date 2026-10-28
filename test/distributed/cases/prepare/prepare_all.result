@@ -866,7 +866,7 @@ select @prepared_self_ref, @prepared_b;
 5  ¦  unchanged
 set @prepared_a = 77, @prepared_b = 'stable';
 execute prepared_set_multi using @prepared_input_a;
-invalid input: Incorrect arguments to EXECUTE
+Incorrect arguments to EXECUTE
 select @prepared_a, @prepared_b;
 ➤ @prepared_a[-5,64,0]  ¦  @prepared_b[12,65535,0]  𝄀
 77  ¦  stable
