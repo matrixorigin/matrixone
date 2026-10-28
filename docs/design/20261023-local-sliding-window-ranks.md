@@ -1,5 +1,41 @@
 # Local Sliding-Window Ranks: `mrank`, `cumrank`, `tmrank`
 
+## Performance amendment: cumulative and fixed-width ranks
+
+The original direct-scan contract remains the fallback. For a materialized
+partition, `cumrank` and `mrank` with a constant width may instead compress
+the non-NULL, non-NaN values into ordered ranks and maintain their frequencies
+in a Fenwick tree. The result remains one plus the count of values strictly
+less than the current value. NULL consumes a physical frame position but is
+never counted; a current NaN ranks 1, NaN inputs do not contribute, and signed
+zeros compare equal. Width validation still precedes NULL-result handling.
+
+The window container owns partition state across output chunks. It discards
+that state on partition/generation change, reset, free and partial setup error.
+Scratch and retained arrays are charged to the existing analytic allocation
+account before allocation, using at most 32*n + O(1) bytes simultaneously for
+four 64-bit arrays and checked size arithmetic. A resource-capacity rejection
+releases partial reservations and falls back to the original scan; cancellation,
+closed-generation, account-invariant and other errors propagate. Every O(n)
+construction loop and sorting step has bounded cancellation checks. A
+nonsequential fallback invalidates state before any subsequent fast-path use.
+For fixed-width mrank, the first width is validated after the ordinary
+cancellation check and before index construction. A capacity rejection keeps
+the partition on the scan path, without repeated admission attempts. The
+fixed-width path adds the entering row and removes the leaving row. A
+per-row width may move its frame start backwards and therefore uses the original
+scan; `tmrank` also retains the original resolver and scan, including disjoint
+DST spans. Unsupported types and nonsequential evaluation fall back safely.
+
+Compression costs O(n log n) time and O(n) memory per partition, then each
+rank costs O(log n); it can increase first-output latency, especially for a
+LIMIT consumer, and must be validated against the direct scan at small and
+large partitions, several cardinalities and batch boundaries. Differential
+tests cover ties, NULL, NaN, signed zero, width overflow, partition/reuse,
+cancellation during construction and evaluation, capacity fallback, and
+invariant-error propagation. The original reviewed design revision
+below remains historical and is not represented as approval of this amendment.
+
 - Owning issue: matrixorigin/matrixone#29947 ("[Feature Request]: local sliding-window ranks
   distinct from partition-wide RANK")
 - Status: revision 8, 2026-10-23, **approved design**. The design-only review of
