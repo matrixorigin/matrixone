@@ -905,8 +905,9 @@ func deduceNotNullable(ctx context.Context, overloadID int64, args []*plan.Expr)
 		// String conversions synthesize NULL with a truncation warning for
 		// invalid input even when the argument is NOT NULL. The typed and
 		// numeric overloads fail the statement instead of producing NULL
-		// and keep their NOT NULL inference.
-		if oid >= 5 && oid <= 8 {
+		// and keep their NOT NULL inference. Historical dump bindings keep
+		// their pre-8dd published NOT NULL metadata.
+		if oid >= 5 && oid <= 8 && !LegacyTemporalNullability(ctx) {
 			return false
 		}
 	case CAST:

@@ -2240,6 +2240,10 @@ func TestHistoricalTemporalNullabilityBinding(t *testing.T) {
 	}{
 		{DATE, 3, []*plan.Expr{source}}, {DATE, 4, []*plan.Expr{source}},
 		{CAST, 0, []*plan.Expr{source, target}}, {CAST, 1, []*plan.Expr{source, target}},
+		// Pre-8dd releases also published NOT NULL TIME() string bindings;
+		// historical dump re-binding must reproduce them exactly.
+		{TIME, 5, []*plan.Expr{source}}, {TIME, 6, []*plan.Expr{source}},
+		{TIME, 7, []*plan.Expr{source}}, {TIME, 8, []*plan.Expr{source}},
 	} {
 		id := EncodeOverloadID(tc.fid, tc.oid)
 		require.False(t, DeduceNotNullable(id, tc.args))
