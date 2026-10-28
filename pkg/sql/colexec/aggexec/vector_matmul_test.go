@@ -2123,8 +2123,13 @@ func vmParseBoundCoversParse(t *testing.T, nq, dim int) {
 		for name, raw := range configs {
 			bound, err := vectorMatmulParseBound(raw, typ)
 			require.NoError(t, err, "%s %s nq=%d dim=%d", oid, name, nq, dim)
+			// other goroutines can only add to the process's allocation; take the least of
+			// several runs
 			var parseErr error
-			alloc := vmGoAlloc(func() { _, parseErr = parseVectorMatmulConfig(raw, typ) })
+			alloc := uint64(math.MaxUint64)
+			for range 5 {
+				alloc = min(alloc, vmGoAlloc(func() { _, parseErr = parseVectorMatmulConfig(raw, typ) }))
+			}
 			if name == "json-null" {
 				require.Error(t, parseErr)
 			} else {
@@ -2164,25 +2169,35 @@ func TestVectorMatmulJSONRows(t *testing.T) {
 		rows  int
 		lens  []int
 		valid bool
+		nulls []int
 	}{
-		{"[[1,2],[3,4]]", 2, []int{2, 2}, true},
-		{" [ [ 1 , 2.5e3 ] , [ -3 ] ] ", 2, []int{2, 1}, true},
-		{"[]", 0, nil, true},
-		{"[[]]", 1, []int{0}, true},
-		{`[{"g":1,"s":[1,2],"v":[3]},{"g":2}]`, 2, []int{1, 1}, true},
-		{`[["a,]b", "c\"]"],[1]]`, 2, []int{2, 1}, true},
-		{"[[1,2],[3,4]", 0, nil, false},
-		{"[[1,2]]x", 0, nil, false},
-		{"{}", 0, nil, false},
-		{"[[1,,2]]", 0, nil, false},
-		{"", 0, nil, false},
+		{"[[1,2],[3,4]]", 2, []int{2, 2}, true, nil},
+		{"[[1,null],[null,2,null]]", 2, []int{2, 3}, true, []int{1, 0}},
+		{"[[1,2], null, [3]]", 3, []int{2, 1, 1}, true, []int{-1, -2, -1}},
+		{`[["null", 1], [nullx]]`, 2, []int{2, 1}, true, []int{-1, -1}},
+		{" [ [ 1 , 2.5e3 ] , [ -3 ] ] ", 2, []int{2, 1}, true, nil},
+		{"[]", 0, nil, true, nil},
+		{"[[]]", 1, []int{0}, true, nil},
+		{`[{"g":1,"s":[1,2],"v":[3]},{"g":2}]`, 2, []int{1, 1}, true, nil},
+		{`[["a,]b", "c\"]"],[1]]`, 2, []int{2, 1}, true, nil},
+		{"[[1,2],[3,4]", 0, nil, false, nil},
+		{"[[1,2]]x", 0, nil, false, nil},
+		{"{}", 0, nil, false, nil},
+		{"[[1,,2]]", 0, nil, false, nil},
+		{"", 0, nil, false, nil},
 	} {
-		var lens []int
-		rows, ok := vectorMatmulJSONRows(tc.text, func(_, n int) { lens = append(lens, n) })
+		var lens, nulls []int
+		rows, ok := vectorMatmulJSONRows(tc.text, func(_, n, null int) {
+			lens = append(lens, n)
+			nulls = append(nulls, null)
+		})
 		require.Equal(t, tc.valid, ok, tc.text)
 		if tc.valid {
 			require.Equal(t, tc.rows, rows, tc.text)
 			require.Equal(t, tc.lens, lens, tc.text)
+			if tc.nulls != nil {
+				require.Equal(t, tc.nulls, nulls, tc.text)
+			}
 		}
 	}
 }

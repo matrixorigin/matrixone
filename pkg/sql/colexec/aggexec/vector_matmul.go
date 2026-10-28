@@ -338,7 +338,7 @@ func vectorMatmulParseBound(raw []byte, vecType types.Type) (uint64, error) {
 		bound += uint64(len(queries)) + uint64(nq)*(2048+uint64(cellSize)+256*uint64(dim))
 	default:
 		badRow, badLen := -1, 0
-		rows, ok := vectorMatmulJSONRows(queries, func(row, n int) {
+		rows, ok := vectorMatmulJSONRows(queries, func(row, n, _ int) {
 			if badRow < 0 && n != dim {
 				badRow, badLen = row, n
 			}
@@ -350,11 +350,8 @@ func vectorMatmulParseBound(raw []byte, vecType types.Type) (uint64, error) {
 		if nq >= 1 && nq <= vectorMatmulMaxQueries && nq*int(topk) <= vectorMatmulMaxEntries && badRow >= 0 {
 			return 0, moerr.NewArrayInvalidOpNoCtx(dim, badLen)
 		}
-		// the decoded vectors with append growth, and the second read when text holds null
-		bound += uint64(nq) * (48 + 16*uint64(dim))
-		if strings.Contains(queries, "null") {
-			bound += uint64(nq) * (48 + 48*uint64(dim))
-		}
+		// the decoded vectors with append growth
+		bound += uint64(nq) * (128 + 24*uint64(dim))
 	}
 	if nq < 1 || nq > vectorMatmulMaxQueries {
 		return 0, moerr.NewInvalidInputNoCtxf("vector_matmul: query count %d out of range [1, %d]", nq, vectorMatmulMaxQueries)
@@ -365,15 +362,17 @@ func vectorMatmulParseBound(raw []byte, vecType types.Type) (uint64, error) {
 	// the converted storage (cells built from vectors, then copied back to back), the
 	// scorer views and the score scratch
 	opSize := uint64(reflect.TypeFor[metric.VecBlockOperand]().Size())
-	bound += uint64(nq) * (24 + 4*uint64(cellSize) + 8*uint64(dim) + opSize + 8)
-	return bound, nil
+	bound += uint64(nq) * (64 + 4*uint64(cellSize) + 8*uint64(dim) + opSize + 8)
+	// a margin for the decoder's own allocation; the commit returns what is not retained
+	return 2 * bound, nil
 }
 
 // vectorMatmulJSONRows scans text as a JSON array of arrays without decoding it: it returns
-// the number of rows and calls row, when not nil, with each row's element count. ok is
-// false when text is not an array of arrays; the decoder then reports the error. An element
-// of the outer array that is not an array counts as a row of one element.
-func vectorMatmulJSONRows(text string, row func(i, n int)) (rows int, ok bool) {
+// the number of rows and calls row, when not nil, with each row's element count and the
+// index of its first null element (-1 when none). ok is false when text is not well-formed
+// JSON of that shape; the decoder then reports the error. An element of the outer array that
+// is not an array counts as a row of one element; a null one has null at -2.
+func vectorMatmulJSONRows(text string, row func(i, n, null int)) (rows int, ok bool) {
 	i := 0
 	ws := func() {
 		for i < len(text) && (text[i] == ' ' || text[i] == '\t' || text[i] == '\n' || text[i] == '\r') {
@@ -393,6 +392,14 @@ func vectorMatmulJSONRows(text string, row func(i, n int)) (rows int, ok bool) {
 		}
 		return false
 	}
+	// isNull reports whether the value at text[i] is the literal null.
+	isNull := func() bool {
+		ws()
+		return strings.HasPrefix(text[i:], "null") &&
+			(i+4 == len(text) || strings.IndexByte(",]} \t\n\r", text[i+4]) >= 0)
+	}
+	// firstNull is the index of the first null element of the array skipValue last left.
+	firstNull := -1
 	// skipValue moves i past one value, counting the elements of an array.
 	var skipValue func() (elems int, ok bool)
 	skipValue = func() (int, bool) {
@@ -412,9 +419,10 @@ func vectorMatmulJSONRows(text string, row func(i, n int)) (rows int, ok bool) {
 			ws()
 			if i < len(text) && text[i] == closer {
 				i++
+				firstNull = -1
 				return 0, true
 			}
-			n := 0
+			n, null := 0, -1
 			for {
 				if open == '{' {
 					ws()
@@ -427,6 +435,9 @@ func vectorMatmulJSONRows(text string, row func(i, n int)) (rows int, ok bool) {
 					}
 					i++
 				}
+				if null < 0 && open == '[' && isNull() {
+					null = n
+				}
 				if _, ok := skipValue(); !ok {
 					return 0, false
 				}
@@ -437,9 +448,11 @@ func vectorMatmulJSONRows(text string, row func(i, n int)) (rows int, ok bool) {
 				}
 				if text[i] == closer {
 					i++
+					firstNull = -1
 					if open == '{' {
 						return 1, true
 					}
+					firstNull = null
 					return n, true
 				}
 				if text[i] != ',' {
@@ -470,15 +483,21 @@ func vectorMatmulJSONRows(text string, row func(i, n int)) (rows int, ok bool) {
 	for {
 		ws()
 		isArray := i < len(text) && text[i] == '['
+		null := -1
+		if !isArray && isNull() {
+			null = -2
+		}
 		n, ok := skipValue()
 		if !ok {
 			return 0, false
 		}
-		if !isArray {
+		if isArray {
+			null = firstNull
+		} else {
 			n = 1
 		}
 		if row != nil {
-			row(rows, n)
+			row(rows, n, null)
 		}
 		rows++
 		ws()
@@ -601,32 +620,27 @@ func decodeVectorMatmulBinaryQueries(b string, dim int) ([][]float32, error) {
 	return queries, nil
 }
 
-// decodeVectorMatmulJSONQueries reads a JSON array of vectors. A null coordinate is an
-// error: unmarshalling into float32 reads it as 0, so text holding "null" is read again
-// with a pointer per coordinate.
+// decodeVectorMatmulJSONQueries reads a JSON array of vectors. A null query or coordinate is
+// an error: unmarshalling into float32 reads it as 0, so the row scan finds the first one.
 func decodeVectorMatmulJSONQueries(text string) ([][]float32, error) {
 	var queries [][]float32
 	if err := sonic.UnmarshalString(text, &queries); err != nil {
 		return nil, moerr.NewInvalidInputNoCtx("vector_matmul: queries must be a JSON array of vectors")
 	}
-	if !strings.Contains(text, "null") {
+	nullRow, nullAt := -1, -1
+	vectorMatmulJSONRows(text, func(row, _, null int) {
+		if nullRow < 0 && null != -1 {
+			nullRow, nullAt = row, null
+		}
+	})
+	switch {
+	case nullRow < 0:
 		return queries, nil
+	case nullAt == -2:
+		return nil, moerr.NewInvalidInputNoCtxf("vector_matmul: query %d is null", nullRow)
+	default:
+		return nil, moerr.NewInvalidInputNoCtxf("vector_matmul: query %d: coordinate %d is null", nullRow, nullAt)
 	}
-	var coords [][]*float32
-	if err := sonic.UnmarshalString(text, &coords); err != nil {
-		return nil, moerr.NewInvalidInputNoCtx("vector_matmul: queries must be a JSON array of vectors")
-	}
-	for i, q := range coords {
-		if q == nil {
-			return nil, moerr.NewInvalidInputNoCtxf("vector_matmul: query %d is null", i)
-		}
-		for j, v := range q {
-			if v == nil {
-				return nil, moerr.NewInvalidInputNoCtxf("vector_matmul: query %d: coordinate %d is null", i, j)
-			}
-		}
-	}
-	return queries, nil
 }
 
 // decodeVectorMatmulCells reads query_format vecblock queries for a vecf8/vecf4 column of
