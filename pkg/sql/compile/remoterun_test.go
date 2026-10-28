@@ -533,23 +533,6 @@ func TestRemoteRunOperatorCodecRoundTrip(t *testing.T) {
 		return restored
 	}
 
-	t.Run("GroupLocalReductionFallsBackRemotely", func(t *testing.T) {
-		original := &group.Group{
-			SpillMem: 64 << 20, LocalReductionMem: 2 << 20,
-			GroupBy: []*planpb.Expr{{
-				Typ:  planpb.Type{Id: int32(types.T_int64)},
-				Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}},
-			}},
-		}
-		restored := roundTrip(t, original).(*group.Group)
-		defer restored.Release()
-		require.False(t, restored.NeedEval)
-		require.Equal(t, original.SpillMem, restored.SpillMem)
-		require.Equal(t, original.GroupBy, restored.GroupBy)
-		require.Zero(t, restored.LocalReductionMem,
-			"remote execution keeps full reduction with the original resource policy")
-	})
-
 	t.Run("ProductL2", func(t *testing.T) {
 		original := &productl2.Productl2{
 			Result:       []colexec.ResultPos{{Rel: 1, Pos: 2}},

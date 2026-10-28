@@ -91,9 +91,6 @@ func (group *Group) Prepare(proc *process.Process) (err error) {
 	if group.ctr.mp != nil {
 		group.ctr.free()
 	}
-	if err = group.prepareLocalReduction(); err != nil {
-		return err
-	}
 	group.ctr.groupConcatSourceRowsUntrusted = proc != nil &&
 		!proc.GroupConcatSourceRowProvenanceTrusted()
 	group.ctr.prepareParamKind.Reset(group.Aggs)
@@ -406,10 +403,6 @@ func (group *Group) Call(
 			group.ctr.resetForSpill()
 			group.ctr.state = vm.Build
 		}
-		if group.ctr.localReduction.bypassRows > 0 {
-			return group.projectLocalKeys(proc)
-		}
-		group.ctr.localReduction.output.Vecs = nil
 		if err = group.ctr.ensureMemoryGrowthParticipant(); err != nil {
 			return vm.CancelResult, err
 		}
@@ -458,9 +451,6 @@ func (group *Group) Call(
 				return vm.CancelResult, err
 			}
 
-			if group.observeLocalReduction(r.Batch.RowCount()) {
-				needSpill = true
-			}
 			if needSpill {
 				// we need to spill the data to disk.
 				if group.NeedEval {
@@ -930,10 +920,6 @@ func (group *Group) retryBuildBatchAfterCapacity(
 		return false, cause
 	}
 	before := group.ctr.hr.Hash.GroupCount()
-	// Recovery owns the resident prefix and any queued disk partitions. Keep
-	// its complete drain path until this execution ends.
-	group.ctr.localReduction.limit = 0
-	group.ctr.localReduction.bypassRows = 0
 	bytes, rows, err := group.ctr.spillDataToDisk(proc, group.OpAnalyzer, nil)
 	if err != nil {
 		return false, err

@@ -3388,9 +3388,6 @@ func TestStreamingGroupDrainsCapacitySpill(t *testing.T) {
 			}
 			partial := newGroupOp(proc, []*plan.Expr{colExpr(0, types.T_varchar)}, aggs)
 			partial.NeedEval = false
-			if !withAggregate {
-				partial.LocalReductionMem = 2 << 20
-			}
 			registry, err := mpool.NewAllocationAccountRegistry(1, 1<<12)
 			require.NoError(t, err)
 			controller := &rejectNextGroupAllocationController{}
@@ -3406,12 +3403,12 @@ func TestStreamingGroupDrainsCapacitySpill(t *testing.T) {
 			merge := newMergeGroupOp(aggs)
 			merge.AppendChild(partial)
 			defer func() {
-				defer finalizeGroupTestAllocation(t, partial, allocation)
 				merge.Free(proc, false, nil)
 				partial.Free(proc, false, nil)
 				require.Zero(t, account.Snapshot().Used)
 				require.Zero(t, generation.Snapshot().SpillDiskUsed)
 				require.Zero(t, generation.Snapshot().SpillFDUsed)
+				finalizeGroupTestAllocation(t, partial, allocation)
 			}()
 			require.NoError(t, partial.Prepare(proc))
 			require.NoError(t, merge.Prepare(proc))
@@ -3435,8 +3432,6 @@ func TestStreamingGroupDrainsCapacitySpill(t *testing.T) {
 			require.True(t, rejected)
 			require.Positive(t, partial.OpAnalyzer.GetOpStats().ExtraStats["GroupSpillRecords"])
 			require.Positive(t, partial.OpAnalyzer.GetOpStats().ExtraStats["GroupSpillReloadBuckets"])
-			require.Zero(t, partial.ctr.localReduction.limit,
-				"capacity recovery must disable local bypass before draining queued keys")
 			require.Len(t, got, 768)
 			for row := range 768 {
 				want := int64(1)

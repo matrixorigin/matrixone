@@ -207,7 +207,6 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op := group.NewArgument()
 		op.NeedEval = t.NeedEval
 		op.SpillMem = t.SpillMem
-		op.LocalReductionMem = t.LocalReductionMem
 		op.GroupingFlag = t.GroupingFlag
 		op.DynamicGrouping = t.DynamicGrouping
 		op.SortRollup = t.SortRollup

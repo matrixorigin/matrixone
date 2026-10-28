@@ -4003,67 +4003,6 @@ func TestCompileLocalPreAggregationPhysicalSelection(t *testing.T) {
 	}
 }
 
-func TestLocalPreAggregationAdaptiveSelection(t *testing.T) {
-	for _, tc := range []struct {
-		name      string
-		spillMem  int64
-		remote    bool
-		multiCN   bool
-		partial   bool
-		oneWorker bool
-		subset    bool
-		dynamic   bool
-		want      bool
-	}{
-		{name: "automatic budget", want: true},
-		{name: "small explicit budget", spillMem: 64 << 10, want: true},
-		{name: "large explicit budget", spillMem: 12 << 30, want: true},
-		{name: "remote source", remote: true},
-		{name: "remote exchange", multiCN: true},
-		{name: "metadata partials", partial: true},
-		{name: "one worker", oneWorker: true},
-		{name: "physical key subset", subset: true},
-		{name: "dynamic grouping", dynamic: true},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			c := newCompileForShuffleGroupTest(t)
-			c.addr = "127.0.0.1:18000"
-			c.cnList = engine.Nodes{{Addr: c.addr, Mcpu: 4}}
-			if tc.multiCN {
-				c.cnList = append(c.cnList, engine.Node{Addr: "127.0.0.1:18001", Mcpu: 4})
-			}
-			local, final, nodes := newLocalPreAggregationTestNodes()
-			local.Stats.Outcnt = 1_000_000 // Retain the local reducer.
-			local.SpillMem, final.SpillMem = tc.spillMem, tc.spillMem
-			if tc.oneWorker {
-				final.Stats.Dop = 1
-			}
-			if tc.subset {
-				local.GroupByHashKey = []int32{0}
-			}
-			if tc.dynamic {
-				nodes[0].ExtraOptions = "grouping_set_expand:2"
-			}
-			source := newShuffleGroupInputScope(t, 4)
-			source.HasPartialResults = tc.partial
-			if tc.remote {
-				source.NodeInfo.Addr = "127.0.0.1:18001"
-			}
-			result := c.compileLocalGroupBy(local, final, []*Scope{source}, nodes)
-			t.Cleanup(func() { ReleaseScopes(result) })
-			op := result[0].RootOp.(*group.Group)
-			require.Equal(t, tc.want, op.LocalReductionMem > 0)
-			require.Equal(t, tc.spillMem, op.SpillMem)
-			require.Equal(t, tc.spillMem, local.SpillMem)
-			require.Equal(t, tc.spillMem, final.SpillMem)
-			clone := dupOperator(op, 0, 1).(*group.Group)
-			defer clone.Release()
-			require.Equal(t, op.LocalReductionMem, clone.LocalReductionMem)
-			require.Equal(t, op.SpillMem, clone.SpillMem)
-		})
-	}
-}
-
 func TestLocalPreAggregationOmissionGuards(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
@@ -4188,14 +4127,13 @@ func TestLocalPreAggregationCompileShapeIsReachableFromSQL(t *testing.T) {
 	}
 
 	for _, tc := range []struct {
-		name         string
-		sql          string
-		ndv          float64
-		wantOmit     bool
-		wantAdaptive bool
-		reuse        bool
+		name     string
+		sql      string
+		ndv      float64
+		wantOmit bool
+		reuse    bool
 	}{
-		{name: "grouped fallback", sql: "select l_returnflag, count(distinct l_orderkey) from lineitem group by l_returnflag", ndv: 1_500_000, wantAdaptive: true},
+		{name: "grouped fallback", sql: "select l_returnflag, count(distinct l_orderkey) from lineitem group by l_returnflag", ndv: 1_500_000},
 		{name: "large global key", sql: "select count(distinct l_orderkey) from lineitem", ndv: 5_000_000, wantOmit: true},
 		{name: "grouped tuple", sql: "select l_returnflag, count(distinct l_suppkey,l_orderkey) from lineitem group by l_returnflag", ndv: 1_500_000},
 		{name: "global tuple spelling", sql: "select count(distinct (l_orderkey,l_suppkey)) from lineitem", ndv: 1_500_000},
@@ -4287,8 +4225,6 @@ func TestLocalPreAggregationCompileShapeIsReachableFromSQL(t *testing.T) {
 					require.IsType(t, &projection.Projection{}, result[0].RootOp)
 				} else {
 					require.IsType(t, &group.Group{}, result[0].RootOp)
-					require.Equal(t, tc.wantAdaptive, result[0].RootOp.(*group.Group).LocalReductionMem > 0,
-						"compact tuple equality keys retain their complete representative-value path")
 				}
 				return
 			}

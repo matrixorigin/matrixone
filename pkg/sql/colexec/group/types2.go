@@ -95,11 +95,6 @@ type Group struct {
 	NeedEval bool
 	SpillMem int64
 
-	// LocalReductionMem enables adaptive pure-key reduction before a local
-	// completing Group. This cost hint is copied to local worker clones, but
-	// remote serialization deliberately falls back to full local reduction.
-	LocalReductionMem int64
-
 	// group-by column.
 	GroupBy      []*plan.Expr
 	GroupingFlag []bool
@@ -305,7 +300,6 @@ type container struct {
 	groupByHashKey               []int32
 	hashKeyVecs                  []*vector.Vector
 	groupKeyStringSourceMetadata bool
-	localReduction               localReductionState
 
 	// MergeGroup locks the partial wire metadata on the first input. It must
 	// survive resident spills, because later partials and queued spill records
@@ -742,7 +736,6 @@ func (ctr *container) freeGroupingRollups() {
 
 func (ctr *container) free() {
 	// free container stuff, WTH is the Free0?
-	ctr.localReduction = localReductionState{}
 	ctr.releaseMemoryGrowthParticipant()
 	ctr.inputDone = false
 	ctr.inputRowCount = 0
@@ -819,8 +812,6 @@ func (ctr *container) reset() {
 }
 
 func (ctr *container) resetForSpill() {
-	ctr.localReduction.inputRows = 0
-	ctr.localReduction.output.Vecs = nil
 	if ctr.distinctSpill != nil {
 		ctr.distinctGroupReset = true
 	}
