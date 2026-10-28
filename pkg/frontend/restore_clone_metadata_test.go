@@ -75,6 +75,8 @@ func TestCatalogRestoreMetadataOwnership(t *testing.T) {
 					bh.sql2result[master] = newMrsForRestoreStringRows([]string{"db", "table"}, nil)
 					clone := restoreTableDataByTsSQL(moCatalog, "mo_user", 123)
 					if scenario == "ordinary and UDF" {
+						modeQuery := "select attname from mo_catalog.mo_columns {MO_TS = 123} where account_id = 42 and att_database = 'mo_catalog' and att_relname = 'mo_user_defined_function' and attname = 'sql_mode' limit 2"
+						bh.sql2result[modeQuery] = newMrsForRestoreStringRows([]string{"attname"}, [][]interface{}{{"sql_mode"}})
 						require.NoError(t, family.restore(ctx, bh))
 						require.Contains(t, bh.executedSQLs, clone)
 						require.Contains(t, bh.executedSQLs, MoCatalogMoUserDefinedFunctionDDL)

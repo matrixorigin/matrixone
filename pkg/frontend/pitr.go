@@ -1066,6 +1066,13 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (s
 		); err != nil {
 			return stats, err
 		}
+		targetAccount, targetExists, err := restoreTargetAccountID(ctx, bh, accountName)
+		if err != nil {
+			return stats, err
+		}
+		if err = preflightIcebergAccountRestore(ctx, bh, ts, uint32(accountRecord.accountId), targetAccount, targetExists); err != nil {
+			return stats, err
+		}
 
 		restoreOtherAccount := func() (rtnErr error) {
 			var (
@@ -1149,12 +1156,20 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (s
 		}
 		return stats, nil
 	}
+	if restoreLevel == tree.RESTORELEVELDATABASE || restoreLevel == tree.RESTORELEVELTABLE {
+		if err = preflightIcebergPartialRestore(ctx, bh, ts, tenantInfo.TenantID, dbName, tblName); err != nil {
+			return stats, err
+		}
+	}
 	if err = preflightRestorePitrEntry(
 		ctx, ses.GetService(), bh, pitrName, ts, restoreLevel, dbName, tenantInfo.TenantID,
 	); err != nil {
 		return stats, err
 	}
 	if restoreLevel == tree.RESTORELEVELACCOUNT {
+		if err = preflightIcebergAccountRestore(ctx, bh, ts, tenantInfo.TenantID, tenantInfo.TenantID, true); err != nil {
+			return stats, err
+		}
 		if err = invalidateAccountViewMetadata(ctx, ses, bh, tenantInfo.TenantID); err != nil {
 			return stats, err
 		}
@@ -1304,6 +1319,9 @@ func preflightRestorePitrEntry(
 	var err error
 	switch level {
 	case tree.RESTORELEVELACCOUNT:
+		if err = preflightHistoricalCDCAccountRestore(ctx, bh, ts, sourceAccount); err != nil {
+			return err
+		}
 		databaseNames, err = showDatabasesWithPitr(sourceCtx, sid, bh, pitrName, ts)
 		if err != nil {
 			return err
@@ -1638,14 +1656,15 @@ func reCreateTableWithPitr(
 	if isExternalTable(tblInfo) {
 		return newExternalTableRestoreError(ctx, tblInfo, "pitr")
 	}
-	if isCurrentSchemaUserDefinedFunctionCatalog(tblInfo) {
+	if isCurrentSchemaRoutineCatalog(tblInfo) {
 		accountID, accountErr := defines.GetAccountId(ctx)
 		if accountErr != nil {
 			return accountErr
 		}
-		return restoreUserDefinedFunctionCatalogWithCurrentSchema(
+		return restoreRoutineCatalogWithCurrentSchema(
 			ctx,
 			bh,
+			tblInfo.tblName,
 			fmt.Sprintf(" {MO_TS = %d}", ts),
 			accountID,
 			accountID,
@@ -1706,7 +1725,7 @@ func reCreateTableWithPitr(
 	}
 	getLogger(sid).Info(fmt.Sprintf("[%s] insert select table: %v, cost: %v", pitrName, tblInfo.tblName, time.Since(beginTime)))
 
-	return
+	return ensureRestoredIcebergAllocator(ctx, bh, tblInfo)
 }
 
 func getTableInfoWithPitr(
