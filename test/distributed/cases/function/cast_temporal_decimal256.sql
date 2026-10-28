@@ -1,0 +1,21 @@
+-- DECIMAL(p,s) with p > 38 must accept the same temporal / JSON sources as DECIMAL(<=38)
+select cast(cast('2026-10-28' as date) as decimal(50,2)), cast(cast('2026-10-28' as date) as decimal(38,2));
+select cast(cast('2026-10-28 01:02:03.5' as datetime(1)) as decimal(50,2)), cast(cast('2026-10-28 01:02:03.5' as datetime(1)) as decimal(38,2));
+select cast(cast('2026-10-28 01:02:03.5' as datetime(1)) as decimal(65,30));
+select cast(cast('2026-10-28 01:02:03.5' as timestamp(1)) as decimal(50,2));
+select cast(cast('-01:02:03.5' as time(1)) as decimal(50,2)), cast(cast('01:02:03' as time) as decimal(40,0));
+select cast(cast(2026 as year) as decimal(50,1));
+select cast(cast('1.5' as json) as decimal(50,2)), cast(cast('null' as json) as decimal(50,2));
+select cast(cast('2026-10-28 01:02:03' as datetime) as decimal(40,30));
+drop database if exists cast_temporal_decimal256;
+create database cast_temporal_decimal256;
+use cast_temporal_decimal256;
+create table t (id int primary key, d date, dt datetime(3), ts timestamp(2), tm time(1), y year, j json);
+insert into t values (1, '2026-10-28', '2026-10-28 01:02:03.456', '2026-10-28 01:02:03.45', '-12:34:56.7', 2026, '12.5');
+insert into t values (2, null, null, null, null, null, null);
+select id, cast(d as decimal(45,3)), cast(dt as decimal(45,3)), cast(ts as decimal(45,3)), cast(tm as decimal(45,3)), cast(y as decimal(45,3)), cast(j as decimal(45,3)) from t order by id;
+create table w (id int primary key, a decimal(50,4));
+insert into w select id, dt from t;
+insert into w select id + 10, d from t;
+select * from w order by id;
+drop database cast_temporal_decimal256;

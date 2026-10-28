@@ -649,7 +649,7 @@ var supportedTypeCast = map[types.T][]types.T{
 
 	types.T_date: {
 		types.T_int32, types.T_int64,
-		types.T_decimal64, types.T_decimal128,
+		types.T_decimal64, types.T_decimal128, types.T_decimal256,
 		types.T_date, types.T_datetime,
 		types.T_time, types.T_timestamp, types.T_year,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
@@ -680,7 +680,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
-		types.T_decimal64, types.T_decimal128,
+		types.T_decimal64, types.T_decimal128, types.T_decimal256,
 		types.T_binary, types.T_varbinary,
 		types.T_bit,
 	},
@@ -883,7 +883,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 		types.T_float32, types.T_float64,
-		types.T_decimal64, types.T_decimal128,
+		types.T_decimal64, types.T_decimal128, types.T_decimal256,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
 		types.T_date, types.T_datetime, types.T_timestamp, types.T_time,
@@ -1469,6 +1469,18 @@ func castToDecimal256(proc *process.Process, from *vector.Vector, toType types.T
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink:
 		s := vector.GenerateFunctionStrParameter(from)
 		return strToDecimal256(proc, s, rs, length, selectList, mode)
+	case types.T_date:
+		return dateToOthers(proc, vector.GenerateFunctionFixedTypeParameter[types.Date](from), toType, result, length, selectList)
+	case types.T_datetime:
+		return datetimeToOthers(proc, vector.GenerateFunctionFixedTypeParameter[types.Datetime](from), toType, result, length, selectList)
+	case types.T_timestamp:
+		return timestampToOthers(proc, vector.GenerateFunctionFixedTypeParameter[types.Timestamp](from), toType, result, length, selectList)
+	case types.T_time:
+		return timeToOthers(proc, vector.GenerateFunctionFixedTypeParameter[types.Time](from), toType, result, length, selectList, mode)
+	case types.T_year:
+		return yearToOthers(proc, vector.GenerateFunctionFixedTypeParameter[types.MoYear](from), toType, result, length, selectList)
+	case types.T_json:
+		return jsonToNumeric(proc.Ctx, vector.GenerateFunctionStrParameter(from), result, length, toType)
 	default:
 		return moerr.NewInternalError(proc.Ctx, fmt.Sprintf("unsupported cast from %s to %s", from.GetType(), toType))
 	}
@@ -2359,6 +2371,9 @@ func dateToOthers(proc *process.Process,
 	case types.T_decimal128:
 		rs := vector.MustFunctionResult[types.Decimal128](result)
 		return dateToDecimal128(source, rs, length, selectList)
+	case types.T_decimal256:
+		return temporalToDecimal256(source, vector.MustFunctionResult[types.Decimal256](result), length,
+			func(v types.Date) string { return strconv.FormatInt(packedDateInt64(v), 10) })
 	case types.T_date:
 		rs := vector.MustFunctionResult[types.Date](result)
 		return rs.DupFromParameter(source, length)
@@ -2425,6 +2440,9 @@ func datetimeToOthers(proc *process.Process,
 	case types.T_decimal128:
 		rs := vector.MustFunctionResult[types.Decimal128](result)
 		return datetimeToDecimal128(proc.Ctx, source, rs, length, selectList)
+	case types.T_decimal256:
+		return temporalToDecimal256(source, vector.MustFunctionResult[types.Decimal256](result), length,
+			packedDatetimeDecimalString)
 	}
 	return moerr.NewInternalError(proc.Ctx, fmt.Sprintf("unsupported cast from datetime to %s", toType))
 }
@@ -2469,6 +2487,9 @@ func timestampToOthers(proc *process.Process,
 	case types.T_decimal128:
 		rs := vector.MustFunctionResult[types.Decimal128](result)
 		return timestampToDecimal128(source, rs, length, zone, selectList)
+	case types.T_decimal256:
+		return temporalToDecimal256(source, vector.MustFunctionResult[types.Decimal256](result), length,
+			func(v types.Timestamp) string { return packedDatetimeDecimalString(v.ToDatetime(zone)) })
 	}
 	return moerr.NewInternalError(proc.Ctx, fmt.Sprintf("unsupported cast from timestamp to %s", toType))
 }
@@ -2525,6 +2546,10 @@ func timeToOthers(proc *process.Process,
 	case types.T_decimal128:
 		rs := vector.MustFunctionResult[types.Decimal128](result)
 		return timeToDecimal128(ctx, source, rs, length, selectList)
+	case types.T_decimal256:
+		fromScale := source.GetType().Scale
+		return temporalToDecimal256(source, vector.MustFunctionResult[types.Decimal256](result), length,
+			func(v types.Time) string { return v.NumericString(fromScale) })
 	}
 	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from time to %s", toType))
 }
@@ -3576,6 +3601,8 @@ func jsonAppendNull(result vector.FunctionResultWrapper, toType types.Type) erro
 		return vector.MustFunctionResult[types.Decimal64](result).Append(0, true)
 	case types.T_decimal128:
 		return vector.MustFunctionResult[types.Decimal128](result).Append(types.Decimal128{}, true)
+	case types.T_decimal256:
+		return vector.MustFunctionResult[types.Decimal256](result).Append(types.Decimal256{}, true)
 	default:
 		panic("jsonAppendNull: unsupported type")
 	}
@@ -4904,6 +4931,33 @@ func packedDatetimeInt64(v types.Datetime) int64 {
 
 func packedDatetimeDecimalString(v types.Datetime) string {
 	return fmt.Sprintf("%d.%06d", packedDatetimeInt64(v), v.MicroSec())
+}
+
+// temporalToDecimal256 casts DATE/TIME/DATETIME/TIMESTAMP/YEAR to a
+// DECIMAL wider than 38 digits. numeric renders the same packed number
+// (e.g. 20261028010203.500000) that the Decimal64/Decimal128 paths parse, so
+// the three widths agree on value, rounding and overflow errors.
+func temporalToDecimal256[T types.FixedSizeTExceptStrType](
+	from vector.FunctionParameterWrapper[T],
+	to *vector.FunctionResult[types.Decimal256], length int, numeric func(T) string) error {
+	toType := to.GetType()
+	for i := uint64(0); i < uint64(length); i++ {
+		v, null := from.GetValue(i)
+		if null {
+			if err := to.Append(types.Decimal256{}, true); err != nil {
+				return err
+			}
+			continue
+		}
+		result, err := types.ParseDecimal256(numeric(v), toType.Width, toType.Scale)
+		if err != nil {
+			return err
+		}
+		if err = to.Append(result, false); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func packedDatetimeDecimal64(v types.Datetime, toType types.Type) (types.Decimal64, error) {
@@ -11537,6 +11591,9 @@ func yearToOthers(proc *process.Process,
 	case types.T_decimal128:
 		rs := vector.MustFunctionResult[types.Decimal128](result)
 		return yearToDecimal128(source, rs, length, selectList)
+	case types.T_decimal256:
+		return temporalToDecimal256(source, vector.MustFunctionResult[types.Decimal256](result), length,
+			func(v types.MoYear) string { return strconv.FormatUint(uint64(v), 10) })
 	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary:
 		rs := vector.MustFunctionResult[types.Varlena](result)
 		return yearToStr(ctx, source, rs, length, toType, strictStringWidth...)

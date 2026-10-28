@@ -1,0 +1,43 @@
+select cast(cast('2026-10-28' as date) as decimal(50,2)), cast(cast('2026-10-28' as date) as decimal(38,2));
+➤ cast(cast(2026-10-28 as date) as decimal(50, 2))[3,50,2]  ¦  cast(cast(2026-10-28 as date) as decimal(38, 2))[3,38,2]  𝄀
+20261028.00  ¦  20261028.00
+select cast(cast('2026-10-28 01:02:03.5' as datetime(1)) as decimal(50,2)), cast(cast('2026-10-28 01:02:03.5' as datetime(1)) as decimal(38,2));
+➤ cast(cast(2026-10-28 01:02:03.5 as datetime(1)) as decimal(50, 2))[3,50,2]  ¦  cast(cast(2026-10-28 01:02:03.5 as datetime(1)) as decimal(38, 2))[3,38,2]  𝄀
+20261028010203.50  ¦  20261028010203.50
+select cast(cast('2026-10-28 01:02:03.5' as datetime(1)) as decimal(65,30));
+➤ cast(cast(2026-10-28 01:02:03.5 as datetime(1)) as decimal(65, 30))[3,65,30]  𝄀
+20261028010203.500000000000000000000000000000
+select cast(cast('2026-10-28 01:02:03.5' as timestamp(1)) as decimal(50,2));
+➤ cast(cast(2026-10-28 01:02:03.5 as timestamp(1)) as decimal(50, 2))[3,50,2]  𝄀
+20261028010203.50
+select cast(cast('-01:02:03.5' as time(1)) as decimal(50,2)), cast(cast('01:02:03' as time) as decimal(40,0));
+➤ cast(cast(-01:02:03.5 as time(1)) as decimal(50, 2))[3,50,2]  ¦  cast(cast(01:02:03 as time) as decimal(40))[3,40,0]  𝄀
+-10203.50  ¦  10203
+select cast(cast(2026 as year) as decimal(50,1));
+➤ cast(cast(2026 as year) as decimal(50, 1))[3,50,1]  𝄀
+2026.0
+select cast(cast('1.5' as json) as decimal(50,2)), cast(cast('null' as json) as decimal(50,2));
+➤ cast(cast(1.5 as json) as decimal(50, 2))[3,50,2]  ¦  cast(cast(null as json) as decimal(50, 2))[3,50,2]  𝄀
+1.50  ¦  null
+select cast(cast('2026-10-28 01:02:03' as datetime) as decimal(40,30));
+invalid input: 20261028010203.000000 beyond the range, can't be converted to Decimal256(40,30).
+drop database if exists cast_temporal_decimal256;
+create database cast_temporal_decimal256;
+use cast_temporal_decimal256;
+create table t (id int primary key, d date, dt datetime(3), ts timestamp(2), tm time(1), y year, j json);
+insert into t values (1, '2026-10-28', '2026-10-28 01:02:03.456', '2026-10-28 01:02:03.45', '-12:34:56.7', 2026, '12.5');
+insert into t values (2, null, null, null, null, null, null);
+select id, cast(d as decimal(45,3)), cast(dt as decimal(45,3)), cast(ts as decimal(45,3)), cast(tm as decimal(45,3)), cast(y as decimal(45,3)), cast(j as decimal(45,3)) from t order by id;
+➤ id[4,32,0]  ¦  cast(d as decimal(45, 3))[3,45,3]  ¦  cast(dt as decimal(45, 3))[3,45,3]  ¦  cast(ts as decimal(45, 3))[3,45,3]  ¦  cast(tm as decimal(45, 3))[3,45,3]  ¦  cast(y as decimal(45, 3))[3,45,3]  ¦  cast(j as decimal(45, 3))[3,45,3]  𝄀
+1  ¦  20261028.000  ¦  20261028010203.456  ¦  20261028010203.450  ¦  -123456.700  ¦  2026.000  ¦  12.500  𝄀
+2  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null
+create table w (id int primary key, a decimal(50,4));
+insert into w select id, dt from t;
+insert into w select id + 10, d from t;
+select * from w order by id;
+➤ id[4,32,0]  ¦  a[3,50,4]  𝄀
+1  ¦  20261028010203.4560  𝄀
+2  ¦  null  𝄀
+11  ¦  20261028.0000  𝄀
+12  ¦  null
+drop database cast_temporal_decimal256;
