@@ -93,7 +93,7 @@ GPU kernels agree on the encoding.
   its float32 value), so a value is narrowed exactly when `CAST` accepts it:
   `f <= 6.0000001` on a `float4` column, or `g <= 448.000001` on a `float8` column,
   compares wide although float32 rounds those literals to the maximum, and the `bf16`
-  printed maximum `±3.3895314e+38` narrows and matches the row it was inserted as. A
+  maximum's float32 text `±3.3895314e+38` narrows and matches the row it was inserted as. A
   constant expression (`a = ABS(-0.1)`, `a >= 1 + 0.5`) is folded first and then rounded
   as a literal is. For `<`/`>` this follows the column's grid: a literal that
   rounds down compares as its rounded value.
@@ -117,8 +117,9 @@ GPU kernels agree on the encoding.
   cast and write rejects a value outside the type's finite range with a "data out of
   range" error (e.g. `float16` above ±65504, `float8` above ±448, `float4` above ±6), also
   a value just above the maximum that rounds back to it (`65505` for `float16`); a `bf16`
-  text or wider source is checked by its float32 value, so the printed maximum
-  `3.3895314e+38`, above the exact maximum, loads back. NaN or ±Inf is an
+  text or wider source is checked by its float32 value, so the maximum's float32 text
+  `3.3895314e+38`, above the exact maximum, loads back, as does `3.38953e38`, the text
+  `CAST(… AS CHAR)` prints for it (six significant digits, as for `FLOAT`). NaN or ±Inf is an
   invalid-input error, so no SQL path stores a saturated or non-finite value. The
   codec's own float32 conversion saturates and keeps NaN where the format has a NaN
   slot; it is only reached after these checks.

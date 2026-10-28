@@ -347,8 +347,9 @@ SELECT CAST(65505 AS float16);
 SELECT CAST(-65505 AS float16);
 SELECT CAST('65504.5' AS float16);
 SELECT CAST(3.39e38 AS bf16);
--- a bf16 is checked by its float32 value: its printed maximum loads back
+-- a bf16 is checked by its float32 value: its maximum's float32 text and the text CAST prints load back
 SELECT CAST(CAST('3.3895314e+38' AS bf16) AS char), CAST(CAST('-3.3895314e+38' AS bf16) AS char);
+SELECT CAST(CAST(CAST('3.3895314e+38' AS bf16) AS char) AS bf16) = CAST('3.3895314e+38' AS bf16), CAST(CAST(CAST('-3.3895314e+38' AS bf16) AS char) AS bf16) = CAST('-3.3895314e+38' AS bf16);
 SELECT CAST('3.3895316e+38' AS bf16);
 -- the printed maximum also matches the stored value in a comparison, as a literal and as a
 -- prepared parameter

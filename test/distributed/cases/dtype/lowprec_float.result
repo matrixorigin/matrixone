@@ -165,15 +165,15 @@ SELECT ANY_VALUE(a), MEDIAN(b), STDDEV(c), GROUP_CONCAT(d ORDER BY id) FROM lp W
 1.0  ¦  1.5  ¦  0.5  ¦  1,2
 SELECT JSON_ARRAYAGG(a), JSON_OBJECTAGG('k', b) FROM lp WHERE id = 2;
 ➤ JSON_ARRAYAGG(a)[-1,2147483647,0]  ¦  JSON_OBJECTAGG(k, b)[-1,2147483647,0]  𝄀
-[2]  ¦  {"k": 2}
+[2.0]  ¦  {"k": 2.0}
 SELECT PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY c), PERCENTILE_DISC(0.5) WITHIN GROUP (ORDER BY d) FROM lp;
 ➤ PERCENTILE_CONT(0.5) within group (order by c)[8,53,31]  ¦  PERCENTILE_DISC(0.5) within group (order by d)[7,23,31]  𝄀
 1.0  ¦  1.0
 SELECT COALESCE(a, 0), IFNULL(b, 1), GREATEST(c, 1), IF(d > 1, 'y', 'n'), JSON_OBJECT('k', a) FROM lp ORDER BY id;
 ➤ COALESCE(a, 0)[7,23,31]  ¦  IFNULL(b, 1)[7,23,31]  ¦  GREATEST(c, 1)[8,53,31]  ¦  IF(d > 1, y, n)[12,1,0]  ¦  JSON_OBJECT(k, a)[-1,2147483647,0]  𝄀
-1.0  ¦  1.0  ¦  1.0  ¦  n  ¦  {"k": 1}  𝄀
-2.0  ¦  2.0  ¦  2.0  ¦  y  ¦  {"k": 2}  𝄀
-0.0  ¦  0.0  ¦  1.0  ¦  n  ¦  {"k": 0}  𝄀
+1.0  ¦  1.0  ¦  1.0  ¦  n  ¦  {"k": 1.0}  𝄀
+2.0  ¦  2.0  ¦  2.0  ¦  y  ¦  {"k": 2.0}  𝄀
+0.0  ¦  0.0  ¦  1.0  ¦  n  ¦  {"k": 0.0}  𝄀
 -0.100097656  ¦  -0.099975586  ¦  1.0  ¦  n  ¦  {"k": -0.10009765625}  𝄀
 0.0  ¦  1.0  ¦  null  ¦  n  ¦  {"k": null}  𝄀
 1.5  ¦  1.5  ¦  1.5  ¦  y  ¦  {"k": 1.5}
@@ -653,7 +653,10 @@ SELECT CAST(3.39e38 AS bf16);
 Data truncation: data out of range: data type BF16, value 3.39e+38
 SELECT CAST(CAST('3.3895314e+38' AS bf16) AS char), CAST(CAST('-3.3895314e+38' AS bf16) AS char);
 ➤ cast(cast(3.3895314e+38 as bf16) as varchar)[12,65535,0]  ¦  cast(cast(-3.3895314e+38 as bf16) as varchar)[12,65535,0]  𝄀
-3.3895314E+38  ¦  -3.3895314E+38
+3.38953e38  ¦  -3.38953e38
+SELECT CAST(CAST(CAST('3.3895314e+38' AS bf16) AS char) AS bf16) = CAST('3.3895314e+38' AS bf16), CAST(CAST(CAST('-3.3895314e+38' AS bf16) AS char) AS bf16) = CAST('-3.3895314e+38' AS bf16);
+➤ cast(cast(cast(3.3895314e+38 as bf16) as varchar) as bf16) = cast(3.3895314e+38 as bf16)[-7,1,0]  ¦  cast(cast(cast(-3.3895314e+38 as bf16) as varchar) as bf16) = cast(-3.3895314e+38 as bf16)[-7,1,0]  𝄀
+1  ¦  1
 SELECT CAST('3.3895316e+38' AS bf16);
 Data truncation: data out of range: data type BF16, value 3.3895316e+38
 CREATE TABLE bmax (id int, f bf16);
