@@ -16,8 +16,10 @@ The complete owner, including setup and admission, is the performance boundary.
 
 ## Implementation
 
-Replace only the existing four/eight-byte scalar cases with a dedicated private
-narrow helper. Construct bounded source/destination views there and copy using
+Keep a direct scalar store for exactly one selected row in the existing
+four/eight-byte cases. A single selection is one store and needs no typed views
+or gather loop. For multiple selections, use a dedicated private narrow helper.
+Construct bounded source/destination views there and copy using
 uint32/uint64 representatives; these are physical bit copies for every logical
 type of that width, including floating NaNs and signed zero. Keep the existing
 wide helper untouched instead of extending its width dispatch, which exposed
@@ -38,6 +40,17 @@ Inspect generated common-owner frame/code before expensive measurements. Abort
 this candidate if setup spills into common paths or a proven changed-path
 slowdown cannot be removed within this scope; do not add a framework or tuning
 threshold just to rescue a prototype.
+
+## Single-row correction
+
+The first prototype incurred about two nanoseconds of additional complete-owner
+cost for one row because it called the bulk helper and admitted two typed views
+for one scalar store. An independent longer run reproduced the cost after
+removing dynamic width multiplication. Preserve the zero/one/multiple operation
+distinction instead: the existing early return owns zero, a direct scalar copy
+owns one, and the bounded typed gather owns multiple selections. There is no
+empirically selected batch-size crossover or configurable threshold. Keep these
+stores in the existing width dispatch so they add no common typed-view locals.
 
 ## Evidence and acceptance
 
