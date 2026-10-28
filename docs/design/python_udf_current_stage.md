@@ -2,10 +2,10 @@
 
 | Field | Value |
 | --- | --- |
-| Design revision | `python-udf-current-stage-r34-2026-10-28` |
+| Design revision | `python-udf-current-stage-r35-2026-10-28` |
 | Applies to | MatrixOne PR #29152, test/development-stage Python UDF |
-| Upstream repair baseline | `3b7752551b8a1cc60daddecde9a5438d5357cdf4` (unrelated existing MORPC gates through 134 and catalog handlers through 4.0.17 preserved) |
-| Approval | Feature owner approved the r1 current-stage contract on 2026-09-24 in [PR comment](https://github.com/matrixorigin/matrixone/pull/29152#issuecomment-5809313638). The r34 contract preserves upstream historical upgrade identities through 4.0.17, adds a separate Python revision repair in catalog 4.0.18, and follows full-cluster shutdown upgrade, with no Python/shared-routine MORPC capability gate. Independent Architecture and SQL/Planner approval of this revision is pending; no production or security scope is added. The immutable approval artifact and independent-review status remain recorded in the [design approval record](python_udf_current_stage_approval.md). |
+| Upstream repair baseline | `66c9e7624e3374897acc649195fde5b2836343a5` (unrelated existing MORPC gates through 134 and catalog handlers through 4.0.17 preserved) |
+| Approval | Feature owner approved the r1 current-stage contract on 2026-09-24 in [PR comment](https://github.com/matrixorigin/matrixone/pull/29152#issuecomment-5809313638). The r35 contract preserves upstream historical upgrade identities through 4.0.17, adds a separate Python revision repair in catalog 4.0.18, and follows full-cluster shutdown upgrade, with no Python/shared-routine MORPC capability gate. Independent Architecture and SQL/Planner approval of this revision is pending; no production or security scope is added. The immutable approval artifact and independent-review status remain recorded in the [design approval record](python_udf_current_stage_approval.md). |
 | Not covered | Production tenant isolation, sandbox, Operator rollout, or cross-version rollback/restore |
 
 This is the versioned governing proposal for the current PR stage. The owner
@@ -117,9 +117,17 @@ required tenant schema and refuses execution until it is present. Cached/prepare
 plans still validate exact catalog identity and namespace; physical evaluators
 still validate account, descriptors and the external worker contract.
 
-The shared `Query` protobuf preserves official `correlation = 19`; this PR
-uses `routine_dependencies = 20`. Both survive serialization, generated
-descriptor lookup and deep-copy without aliasing. Routine metadata introduces
+The shared `Query` protobuf preserves official `correlation = 19` and
+`integer_precision = 20`; this PR uses the next free field,
+`routine_dependencies = 21`. All three survive serialization, generated
+descriptor lookup and deep-copy without aliasing. The previously proposed
+routine field 20 was never a merged allocation; it is replaced rather than
+read as an alternative tag, since official field 20 has different semantics.
+Routine dependencies belong to executable plans and in-memory cache/prepared
+validation. Catalog revisions persist typed definitions and fingerprints,
+not this Query envelope. Rebuild plans and sessions on the supported full-cluster
+shutdown upgrade; old unmerged PR plan/cache blobs are not a persistence or
+mixed-binary compatibility contract. Routine metadata introduces
 no placement, destination capability probe, stream floor or receiver version
 gate. Unrelated existing gates, including dependent programs, remain unchanged.
 The read-only `GetPythonUdfStatus` uses query method 47, request field 49 and
