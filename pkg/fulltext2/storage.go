@@ -22,6 +22,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -795,8 +796,10 @@ func LoadTailSegmentsWithin(sqlproc *sqlexec.SqlProcess, cfg TableConfig, reserv
 	return segs, deletes, nil
 }
 
-// loadTailFrames returns the tail's frames in chunk order, each with its starting chunk: from
-// their index files, or from the chunk rows when some chunk has no frame metadata row (legacy).
+// loadTailFrames returns the tail's frames in chunk order, each with its starting chunk: a
+// frame that fits in one chunk from its row, read with the others in one scan, a larger one
+// from its index file; or all from the chunk rows when some chunk has no frame metadata row
+// (legacy).
 func loadTailFrames(sqlproc *sqlexec.SqlProcess, cfg TableConfig, legacy bool) ([]TailFrame, error) {
 	if legacy {
 		return legacyTailFrames(sqlproc, cfg)
@@ -805,15 +808,72 @@ func loadTailFrames(sqlproc *sqlexec.SqlProcess, cfg TableConfig, legacy bool) (
 	if err != nil {
 		return nil, err
 	}
+	small, err := readSmallTailFrames(sqlproc, cfg, rows)
+	if err != nil {
+		return nil, err
+	}
 	frames := make([]TailFrame, 0, len(rows))
 	for _, r := range rows {
-		data, err := readTailFrameFile(sqlproc, cfg, r)
-		if err != nil {
-			return nil, err
+		data, ok := small[r.start]
+		if !ok {
+			if data, err = readTailFrameFile(sqlproc, cfg, r); err != nil {
+				return nil, err
+			}
 		}
 		frames = append(frames, TailFrame{ChunkId: r.start, Data: data})
 	}
 	return frames, nil
+}
+
+// readSmallTailFrames reads the frames of rows that fit in one chunk from their chunk rows in
+// one scan, checks each against its row, and returns them by starting chunk.
+func readSmallTailFrames(sqlproc *sqlexec.SqlProcess, cfg TableConfig, rows []tailFrame) (map[int64][]byte, error) {
+	var starts []string
+	for _, r := range rows {
+		if smallTailFrame(r.size) {
+			starts = append(starts, strconv.FormatInt(r.start, 10))
+		}
+	}
+	if len(starts) == 0 {
+		return nil, nil
+	}
+	sql := fmt.Sprintf("SELECT %s, %s FROM %s WHERE %s = %s AND %s = %d AND %s IN (%s)",
+		catalog.FullText2Index_TblCol_Storage_Chunk_Id, catalog.FullText2Index_TblCol_Storage_Data,
+		sqlquote.QualifiedIdent(cfg.DbName, cfg.IndexTable),
+		catalog.FullText2Index_TblCol_Storage_Index_Id, sqlquote.String(vectorindex.CdcTailId),
+		catalog.FullText2Index_TblCol_Storage_Tag, int(vectorindex.Tag_CdcEvents),
+		catalog.FullText2Index_TblCol_Storage_Chunk_Id, strings.Join(starts, ", "))
+	res, err := runSql(sqlproc, sql)
+	if err != nil {
+		return nil, err
+	}
+	defer res.Close()
+	chunks := make(map[int64][]byte, len(starts))
+	for _, bat := range res.Batches {
+		if bat == nil {
+			continue
+		}
+		cids := vector.MustFixedColNoTypeCheck[int64](bat.Vecs[0])
+		for i := 0; i < bat.RowCount(); i++ {
+			chunks[cids[i]] = append([]byte(nil), bat.Vecs[1].GetRawBytesAt(i)...)
+		}
+	}
+	for _, r := range rows {
+		if !smallTailFrame(r.size) {
+			continue
+		}
+		data, ok := chunks[r.start]
+		if !ok {
+			return nil, moerr.NewInternalErrorNoCtxf("fulltext2 tail frame at chunk %d: missing chunk", r.start)
+		}
+		if int64(len(data)) != r.size {
+			return nil, moerr.NewInternalErrorNoCtxf("fulltext2 tail frame at chunk %d: %d bytes, want %d", r.start, len(data), r.size)
+		}
+		if err := verifyFrameBytes(data, r.checksum); err != nil {
+			return nil, err
+		}
+	}
+	return chunks, nil
 }
 
 // legacyTailFrames reads a tail written before every frame had a metadata row from its chunk

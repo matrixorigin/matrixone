@@ -131,6 +131,12 @@ func tailRef(cfg TableConfig, start, size int64, checksum string) indexfile.Ref 
 	}
 }
 
+// smallTailFrame reports whether a tail frame of size bytes fits in one chunk. Such a frame
+// is stored without an index-file cache entry and read from its chunk row.
+func smallTailFrame(size int64) bool {
+	return size <= indexfile.ChunkSize
+}
+
 // verifyFrame checks a tail frame: its envelope and body CRC, and that CRC against checksum,
 // the one its metadata row records.
 func verifyFrame(f *os.File, size int64, checksum string) error {
@@ -138,6 +144,11 @@ func verifyFrame(f *os.File, size int64, checksum string) error {
 	if _, err := f.ReadAt(buf, 0); err != nil {
 		return err
 	}
+	return verifyFrameBytes(buf, checksum)
+}
+
+// verifyFrameBytes is verifyFrame of a frame in memory.
+func verifyFrameBytes(buf []byte, checksum string) error {
 	if _, _, _, _, _, err := cuvscdc.UnframeCdcChunk(buf); err != nil {
 		return err
 	}

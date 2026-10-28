@@ -304,11 +304,18 @@ func TestTailPersistPackedRanges(t *testing.T) {
 	check := func() {
 		t.Helper()
 		start := int64(7)
+		small := 0
 		for i, want := range expected {
 			require.Equal(t, want, files.get(t, vectorindex.CdcTailId, int64(vectorindex.Tag_CdcEvents), start), "frame %d", i)
+			uncached := files.uncached[fakeFileKey(vectorindex.CdcTailId, int64(vectorindex.Tag_CdcEvents), start)]
+			require.Equal(t, smallTailFrame(int64(len(want))), uncached, "frame %d: only a frame that fits in one chunk is written uncached", i)
+			if uncached {
+				small++
+			}
 			start += FrameChunkCount(len(want))
 		}
 		require.Len(t, files.files, len(expected), "one index file per frame")
+		require.Positive(t, small)
 	}
 	next, err := tb.PersistFinished(sp, testStorageCfg(), nil, 7, 0)
 	require.NoError(t, err)

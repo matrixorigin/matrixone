@@ -272,11 +272,8 @@ func TestLoadTailSegmentsErrorPaths(t *testing.T) {
 			stored += int64(len(r.frame))
 			chunks += FrameChunkCount(len(r.frame))
 		}
-		swapTailSql(t, mp, stored, chunks, chunks, rows, nil)
 		fake := swapIndexFiles(t)
-		for start, frame := range files {
-			fake.putFrame(start, frame)
-		}
+		swapTailSql(t, mp, stored, chunks, chunks, rows, fake.storeFrames(files))
 		return LoadTailSegments(sp, testStorageCfg())
 	}
 	loadFrame := func(t *testing.T, start int64, frame []byte) ([]*Segment, map[any]int64, error) {
@@ -511,6 +508,8 @@ func TestCompactSegmentsFoldsTail(t *testing.T) {
 			return executor.Result{Mp: mp, Batches: []*batch.Batch{docsAndBytesBatch(mp, 1, 0)}}, nil
 		case strings.Contains(sql, "ORDER BY"): // the tail's frame rows
 			return executor.Result{Mp: mp, Batches: []*batch.Batch{frameRowsBatch(t, mp, []frameRow{{start: 1, frame: framed}})}}, nil
+		case strings.Contains(sql, " IN ("): // the one-chunk frame's chunk row
+			return executor.Result{Mp: mp, Batches: []*batch.Batch{tailChunkBatch(mp, []TailChunk{{ChunkId: 1, Data: framed}})}}, nil
 		case strings.HasPrefix(strings.TrimSpace(sql), "SELECT"): // LoadAllBases enumerate → no bases
 			return executor.Result{Mp: mp, Batches: nil}, nil
 		default: // DELETE / INSERT writes succeed
@@ -528,14 +527,13 @@ func TestCompactSegmentsFoldsTail(t *testing.T) {
 
 	installPersistenceExecutor(t, sp, func(sql string, opts executor.StatementOption) (executor.Result, error) { return runSql(sp, sql) })
 	files := swapIndexFiles(t)
-	files.putFrame(1, framed)
 
 	nlive, err := CompactSegments(sp, cfg, 0, 0)
 	require.NoError(t, err)
 	require.Equal(t, 2, nlive) // both docs are live → folded into the fresh base
 	require.True(t, deleteAllRan, "MERGE must clear prior bases first")
 	require.True(t, insertRan, "MERGE must persist the rebuilt base")
-	require.Len(t, files.files, 2, "MERGE writes the rebuilt base as one index file beside the tail frame")
+	require.Len(t, files.files, 1, "MERGE writes the rebuilt base as one index file")
 	account, role := sp.StatementOption().SessionIdentity()
 	require.Equal(t, "tenant", account)
 	require.Equal(t, "accountadmin", role)

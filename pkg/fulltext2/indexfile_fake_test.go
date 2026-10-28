@@ -49,6 +49,8 @@ type fakeIndexFiles struct {
 	opens   int
 	openErr error
 	held    map[string]int
+	// uncached records the files written with no storage engine or cache.
+	uncached map[string]bool
 }
 
 func fakeFileKey(id string, tag, first int64) string { return fmt.Sprintf("%s/%d/%d", id, tag, first) }
@@ -100,7 +102,7 @@ func (f *fakeIndexFiles) holds(id string, tag, first int64) int {
 
 // swapIndexFiles replaces the index-file layer for the test.
 func swapIndexFiles(t *testing.T) *fakeIndexFiles {
-	fake := &fakeIndexFiles{files: make(map[string][]byte), held: make(map[string]int)}
+	fake := &fakeIndexFiles{files: make(map[string][]byte), held: make(map[string]int), uncached: make(map[string]bool)}
 	prevOpen, prevWrite := openIndexFile, writeIndexFile
 	openIndexFile = func(_ *sqlexec.SqlProcess, ref indexfile.Ref) (indexFile, error) {
 		fake.mu.Lock()
@@ -134,13 +136,16 @@ func swapIndexFiles(t *testing.T) *fakeIndexFiles {
 		}
 		return &fakeOpenFile{f: f, size: int64(len(buf)), release: fake.hold(key)}, nil
 	}
-	writeIndexFile = func(_ *sqlexec.SqlProcess, _ *IndexFiles, _ client.TxnOperator, ref indexfile.Ref, src io.Reader,
+	writeIndexFile = func(_ *sqlexec.SqlProcess, files *IndexFiles, _ client.TxnOperator, ref indexfile.Ref, src io.Reader,
 		_ func(sql string) error) (int64, string, error) {
 		buf, err := io.ReadAll(src)
 		if err != nil {
 			return 0, "", err
 		}
 		fake.put(ref.IndexID, ref.Tag, ref.FirstChunk, buf)
+		fake.mu.Lock()
+		fake.uncached[fakeFileKey(ref.IndexID, ref.Tag, ref.FirstChunk)] = files != nil && files.Engine == nil && files.Cache == nil
+		fake.mu.Unlock()
 		sum := md5.Sum(buf)
 		return int64(len(buf)), hex.EncodeToString(sum[:]), nil
 	}
@@ -157,6 +162,20 @@ func (f *fakeIndexFiles) put(id string, tag, first int64, buf []byte) {
 // putFrame stores a tail frame starting at chunk start.
 func (f *fakeIndexFiles) putFrame(start int64, frame []byte) {
 	f.put(vectorindex.CdcTailId, int64(vectorindex.Tag_CdcEvents), start, frame)
+}
+
+// storeFrames stores tail frames by starting chunk as they are written: a frame that fits in
+// one chunk as its chunk row, returned for the SQL stub to serve, a larger one as an index file.
+func (f *fakeIndexFiles) storeFrames(frames map[int64][]byte) []TailChunk {
+	var rows []TailChunk
+	for start, frame := range frames {
+		if smallTailFrame(int64(len(frame))) {
+			rows = append(rows, TailChunk{ChunkId: start, Data: frame})
+		} else {
+			f.putFrame(start, frame)
+		}
+	}
+	return rows
 }
 
 func (f *fakeIndexFiles) get(t *testing.T, id string, tag, first int64) []byte {
