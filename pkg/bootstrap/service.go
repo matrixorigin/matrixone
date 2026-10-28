@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/partitionservice"
@@ -148,10 +149,13 @@ type service struct {
 
 	upgrade struct {
 		upgradeTenantBatch                               int
+		catalogObjectLimit                               uint64
+		decisionFileService                              fileservice.FileService
 		checkUpgradeDuration                             time.Duration
 		checkUpgradeTenantDuration                       time.Duration
 		upgradeTenantTasks                               int
 		finalVersionCompleted                            atomic.Bool
+		failure                                          atomic.Pointer[upgradeFailure]
 		orphanPrivilegeMaintenanceWorkerRunning          atomic.Bool
 		orphanPrivilegeMaintenanceRunning                atomic.Bool
 		orphanPrivilegeMaintenanceState                  orphanPrivilegeMaintenanceState
@@ -193,6 +197,7 @@ func NewService(
 }
 
 func (s *service) Bootstrap(ctx context.Context) error {
+	ctx = executor.WithLocalExecution(ctx)
 	s.logger.Info("start to check bootstrap state")
 
 	if ok, err := s.checkAlreadyBootstrappedWithRetry(ctx); ok {

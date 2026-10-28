@@ -20,6 +20,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 )
 
+// CatalogUpgradePageBytes limits retained results for one upgrade page.
+const CatalogUpgradePageBytes uint64 = 4 << 20
+
 var (
 	FrameworkInitSQLs = []string{
 		fmt.Sprintf(`create table %s.%s (

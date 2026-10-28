@@ -65,7 +65,9 @@ func indexMetadataProvenanceColumns(tblType string) []string {
 // HandleTenantUpgrade for the whole tenant. The retry re-reads the same stale row and fails
 // identically, so the tenant would never reach 4.0.7 -- an upgrade wedged by one orphaned
 // catalog row. Joining what exists skips it instead.
-func listIndexMetadataTables(txn executor.TxnExecutor, accountId uint32) ([][3]string, error) {
+type IndexMetadataKey [3]string // database, metadata table, index algorithm
+
+func (v *versionHandle) ListIndexMetadataTables(txn executor.TxnExecutor, accountId uint32, after IndexMetadataKey, pageBytes uint64) ([]IndexMetadataKey, error) {
 	quoted := make([]string, 0, len(indexMetadataProvenanceTypes))
 	for _, t := range indexMetadataProvenanceTypes {
 		quoted = append(quoted, sqlquote.String(t))
@@ -74,19 +76,24 @@ func listIndexMetadataTables(txn executor.TxnExecutor, accountId uint32) ([][3]s
 		"select distinct t.reldatabase, i.index_table_name, i.algo_table_type "+
 			"from %s.mo_indexes i join %s.mo_tables t on t.rel_id = i.table_id "+
 			"join %s.mo_tables it on it.reldatabase = t.reldatabase and it.relname = i.index_table_name "+
-			"where i.algo_table_type in (%s) and i.index_table_name is not null and i.index_table_name != ''",
-		catalog.MO_CATALOG, catalog.MO_CATALOG, catalog.MO_CATALOG, strings.Join(quoted, ","))
+			"where t.account_id = %d and it.account_id = %d and i.algo_table_type in (%s) and i.index_table_name is not null and i.index_table_name != '' "+
+			"and (t.reldatabase > ? or (t.reldatabase = ? and i.index_table_name > ?) or "+
+			"(t.reldatabase = ? and i.index_table_name = ? and i.algo_table_type > ?)) "+
+			"order by t.reldatabase, i.index_table_name, i.algo_table_type limit %d",
+		catalog.MO_CATALOG, catalog.MO_CATALOG, catalog.MO_CATALOG, accountId, accountId, strings.Join(quoted, ","), CatalogDataPageSize)
 
-	res, err := txn.Exec(sql, versions.UpgradeStatementOption(accountId))
+	res, err := txn.Exec(sql, versions.UpgradeStatementOption(accountId).
+		WithParams([]string{after[0], after[0], after[1], after[0], after[1], after[2]}).
+		WithMaxResultBytes(pageBytes))
 	if err != nil {
 		return nil, err
 	}
 	defer res.Close()
 
-	var out [][3]string
+	var out []IndexMetadataKey
 	res.ReadRows(func(rows int, cols []*vector.Vector) bool {
 		for i := 0; i < rows; i++ {
-			out = append(out, [3]string{
+			out = append(out, IndexMetadataKey{
 				cols[0].GetStringAt(i), cols[1].GetStringAt(i), cols[2].GetStringAt(i),
 			})
 		}
@@ -98,8 +105,8 @@ func listIndexMetadataTables(txn executor.TxnExecutor, accountId uint32) ([][3]s
 // hasColumn reports whether db.tbl already has the named column.
 func hasIndexMetadataColumn(txn executor.TxnExecutor, accountId uint32, db, tbl, col string) (bool, error) {
 	sql := fmt.Sprintf(
-		"select count(*) from %s.mo_columns where att_database = %s and att_relname = %s and attname = %s",
-		catalog.MO_CATALOG, sqlquote.String(db), sqlquote.String(tbl), sqlquote.String(col))
+		"select count(*) from %s.mo_columns where account_id = %d and att_database = %s and att_relname = %s and attname = %s",
+		catalog.MO_CATALOG, accountId, sqlquote.String(db), sqlquote.String(tbl), sqlquote.String(col))
 	res, err := txn.Exec(sql, versions.UpgradeStatementOption(accountId))
 	if err != nil {
 		return false, err
@@ -124,30 +131,43 @@ func hasIndexMetadataColumn(txn executor.TxnExecutor, accountId uint32, db, tbl,
 //
 // Idempotent -- it checks each column before altering, so a retried upgrade is a no-op, and MO
 // has no ADD COLUMN IF NOT EXISTS.
-func upgradeIndexMetadataProvenance(_ context.Context, tenantID int32, txn executor.TxnExecutor) error {
-	accountId := uint32(tenantID)
-	tables, err := listIndexMetadataTables(txn, accountId)
-	if err != nil {
-		return err
-	}
-	for _, t := range tables {
-		db, tbl, typ := t[0], t[1], t[2]
-		for _, col := range indexMetadataProvenanceColumns(typ) {
-			has, err := hasIndexMetadataColumn(txn, accountId, db, tbl, col)
-			if err != nil {
-				return err
-			}
-			if has {
-				continue
-			}
-			alter := fmt.Sprintf("alter table %s add column %s bigint not null default 0",
-				sqlquote.QualifiedIdent(db, tbl), sqlquote.Ident(col))
-			res, err := txn.Exec(alter, versions.UpgradeStatementOption(accountId))
-			if err != nil {
-				return err
-			}
-			res.Close()
+func upgradeIndexMetadataProvenance(ctx context.Context, tenantID int32, txn executor.TxnExecutor) error {
+	var after IndexMetadataKey
+	for {
+		tables, err := Handler.ListIndexMetadataTables(txn, uint32(tenantID), after, versions.CatalogUpgradePageBytes)
+		if err != nil {
+			return err
 		}
+		for _, table := range tables {
+			if err := Handler.UpgradeIndexMetadataTable(ctx, tenantID, txn, table); err != nil {
+				return err
+			}
+			after = table
+		}
+		if len(tables) < CatalogDataPageSize {
+			return nil
+		}
+	}
+}
+
+func (v *versionHandle) UpgradeIndexMetadataTable(_ context.Context, tenantID int32, txn executor.TxnExecutor, table IndexMetadataKey) error {
+	accountID := uint32(tenantID)
+	db, tbl, typ := table[0], table[1], table[2]
+	for _, col := range indexMetadataProvenanceColumns(typ) {
+		has, err := hasIndexMetadataColumn(txn, accountID, db, tbl, col)
+		if err != nil {
+			return err
+		}
+		if has {
+			continue
+		}
+		alter := fmt.Sprintf("alter table %s add column %s bigint not null default 0",
+			sqlquote.QualifiedIdent(db, tbl), sqlquote.Ident(col))
+		res, err := txn.Exec(alter, versions.UpgradeStatementOption(accountID))
+		if err != nil {
+			return err
+		}
+		res.Close()
 	}
 	return nil
 }

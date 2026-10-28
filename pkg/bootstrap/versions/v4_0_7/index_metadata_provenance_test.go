@@ -16,6 +16,7 @@ package v4_0_7
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -84,9 +85,9 @@ func TestListIndexMetadataTables(t *testing.T) {
 		}), nil
 	})
 
-	got, err := listIndexMetadataTables(txn, 0)
+	got, err := Handler.ListIndexMetadataTables(txn, 0, IndexMetadataKey{}, 4<<20)
 	require.NoError(t, err)
-	require.Equal(t, [][3]string{
+	require.Equal(t, []IndexMetadataKey{
 		{"db1", "meta_a", catalog.Hnsw_TblType_Metadata},
 		{"db2", "meta_b", catalog.FullText2Index_TblType_Metadata},
 	}, got)
@@ -112,7 +113,7 @@ func TestListIndexMetadataTablesPropagatesError(t *testing.T) {
 	txn := newVersionTxnExecutor(t, func(string) (executor.Result, error) {
 		return executor.Result{}, want
 	})
-	_, err := listIndexMetadataTables(txn, 0)
+	_, err := Handler.ListIndexMetadataTables(txn, 0, IndexMetadataKey{}, 4<<20)
 	require.ErrorIs(t, err, want)
 }
 
@@ -202,4 +203,25 @@ func TestUpgradeIndexMetadataProvenanceNoIndexes(t *testing.T) {
 		return tableListResult(t, nil), nil
 	})
 	require.NoError(t, upgradeIndexMetadataProvenance(context.Background(), 0, txn))
+}
+
+func TestIndexMetadataDiscoveryUsesAccountOwnership(t *testing.T) {
+	for _, id := range []uint32{0, 7} {
+		t.Run(fmt.Sprint(id), func(t *testing.T) {
+			txn := newVersionTxnExecutor(t, func(sql string) (executor.Result, error) {
+				if strings.Contains(sql, "mo_columns") {
+					require.Contains(t, sql, fmt.Sprintf("account_id = %d", id))
+					return countResult(t, 0), nil
+				}
+				require.Contains(t, sql, fmt.Sprintf("t.account_id = %d", id))
+				require.Contains(t, sql, fmt.Sprintf("it.account_id = %d", id))
+				return tableListResult(t, nil), nil
+			})
+			_, err := Handler.ListIndexMetadataTables(txn, id, IndexMetadataKey{}, 4<<20)
+			require.NoError(t, err)
+			has, err := hasIndexMetadataColumn(txn, id, "db", "meta", "build_ts")
+			require.NoError(t, err)
+			require.False(t, has)
+		})
+	}
 }

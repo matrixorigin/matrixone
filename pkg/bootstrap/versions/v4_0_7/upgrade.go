@@ -16,7 +16,7 @@ package v4_0_7
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/defines"
+	"fmt"
 	"time"
 
 	"go.uber.org/zap"
@@ -24,15 +24,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
 
-// 4.0.7 exists so the index metadata provenance migration reaches clusters ALREADY at
-// 4.0.6. The upgrade chain queues only handlers strictly newer than a cluster's persisted
-// version (service_upgrade.go: Compare(v.Version, from) > 0), and the checker short-circuits
-// when version and offset both match, so appending the migration to the 4.0.6 handler left
-// every 4.0.6 cluster skipping it. VersionOffset cannot substitute: it is derived from the
-// entry count and this migration is not an entry.
 var (
 	Handler *versionHandle
 )
@@ -45,17 +40,8 @@ func init() {
 			UpgradeCluster:    versions.Yes,
 			UpgradeTenant:     versions.Yes,
 			VersionOffset:     uint32(len(tenantUpgEntries) + len(clusterUpgEntries)),
-			// The tenant migration WIDENS every existing index metadata table. A CN that
-			// predates these columns writes four positional values, which no longer matches a
-			// widened table -- so the widening must not begin while such a CN can still serve
-			// the tenant. This holds the tenant snapshot until every service reports the
-			// protocol that carries the new writer.
-			//
-			// It is only half the guarantee: the migration is asynchronous per tenant, so a
-			// new CN still meets not-yet-widened tables. That direction is handled on the
-			// write side, which names its columns and omits the provenance ones until the
-			// table has them (sqlexec.HasProvenanceColumns).
-			RequiredProtocolVersion: defines.MORPCVersion61,
+			// The final view definitions and writers require the current protocol.
+			RequiredProtocolVersion: defines.MORPCVersion126,
 		},
 	}
 }
@@ -74,23 +60,22 @@ func (v *versionHandle) Prepare(ctx context.Context, txn executor.TxnExecutor, f
 }
 
 func (v *versionHandle) HandleTenantUpgrade(ctx context.Context, tenantID int32, txn executor.TxnExecutor) error {
-	for _, upgEntry := range tenantUpgEntries {
-		start := time.Now()
-		if err := upgEntry.Upgrade(txn, uint32(tenantID)); err != nil {
-			getLogger(txn.Txn().TxnOptions().CN).Error("tenant upgrade entry execute error",
-				zap.Error(err),
-				zap.Int32("tenantId", tenantID),
-				zap.String("version", v.Metadata().Version),
-				zap.String("upgrade entry", upgEntry.String()))
-			return err
+	for i := range tenantUpgEntries {
+		var cursor TenantPageCursor
+		for {
+			more, err := v.UpgradeTenantEntryPage(ctx, tenantID, i, txn, 0, &cursor)
+			if err != nil {
+				return err
+			}
+			if !more {
+				break
+			}
 		}
-		getLogger(txn.Txn().TxnOptions().CN).Info("tenant upgrade entry complete",
-			zap.String("upgrade entry", upgEntry.String()),
-			zap.Int64("time cost(ms)", time.Since(start).Milliseconds()),
-			zap.String("toVersion", v.Metadata().Version))
 	}
-	// Work a fixed UpgSql cannot express: the metadata tables to widen are only known at
-	// runtime. Same escape hatch v4_0_6 uses for upgradeLegacyForeignKeyMetadata.
+	if err := upgradeLegacyForeignKeyMetadata(ctx, tenantID, txn); err != nil {
+		return err
+	}
+	// Metadata tables to widen are discovered per tenant at runtime.
 	if err := upgradeIndexMetadataProvenance(ctx, tenantID, txn); err != nil {
 		return err
 	}
@@ -100,24 +85,72 @@ func (v *versionHandle) HandleTenantUpgrade(ctx context.Context, tenantID int32,
 	return nil
 }
 
+func (v *versionHandle) TenantUpgradeEntryCount() int { return len(tenantUpgEntries) }
+
 func (v *versionHandle) HandleClusterUpgrade(ctx context.Context, txn executor.TxnExecutor) error {
-	for _, upgEntry := range clusterUpgEntries {
-		start := time.Now()
-		if err := upgEntry.Upgrade(txn, uint32(txn.Txn().TxnOptions().AccountID)); err != nil {
-			getLogger(txn.Txn().TxnOptions().CN).Error("cluster upgrade entry execute error",
-				zap.Error(err),
-				zap.String("version", v.Metadata().Version),
-				zap.String("upgrade entry", upgEntry.String()))
-			return err
+	for i := range clusterUpgEntries {
+		for {
+			more, err := v.UpgradeClusterEntryPage(ctx, i, txn, 64<<20)
+			if err != nil {
+				return err
+			}
+			if !more {
+				break
+			}
 		}
-		getLogger(txn.Txn().TxnOptions().CN).Info("cluster upgrade entry complete",
-			zap.String("upgrade entry", upgEntry.String()),
-			zap.Int64("time cost(ms)", time.Since(start).Milliseconds()),
-			zap.String("toVersion", v.Metadata().Version))
 	}
 	getLogger(txn.Txn().TxnOptions().CN).Info("cluster upgrade success",
 		zap.String("toVersion", v.Metadata().Version))
 	return nil
+}
+
+func (v *versionHandle) ClusterUpgradeEntryCount() int { return len(clusterUpgEntries) }
+
+func (v *versionHandle) UpgradeClusterEntryPage(_ context.Context, index int, txn executor.TxnExecutor, objectLimit uint64) (bool, error) {
+	if index < 0 || index >= len(clusterUpgEntries) {
+		return false, moerr.NewInvalidInputNoCtxf("invalid cluster upgrade entry %d", index)
+	}
+	entry := clusterUpgEntries[index]
+	txn = limitedCatalogTxn{TxnExecutor: txn, limit: objectLimit}
+	start := time.Now()
+	if entry.TableName == catalog.MOSysAsyncTask && entry.UpgType == versions.MODIFY_METADATA {
+		accountID := uint32(txn.Txn().TxnOptions().AccountID)
+		done, err := entry.CheckFunc(txn, accountID)
+		if err != nil || done {
+			return false, err
+		}
+		if err := versions.CheckCommonProtocolVersion(txn, entry.RequiredProtocolVersion); err != nil {
+			return false, err
+		}
+		sql := fmt.Sprintf("%s order by task_id limit %d", entry.UpgSql, CatalogDataPageSize)
+		result, err := txn.Exec(sql, versions.UpgradeStatementOption(accountID))
+		if err != nil {
+			return false, err
+		}
+		affected := result.AffectedRows
+		result.Close()
+		if affected == 0 {
+			return false, moerr.NewInvalidStateNoCtx("orphan task cleanup made no progress")
+		}
+		return true, nil
+	}
+	if err := entry.Upgrade(txn, uint32(txn.Txn().TxnOptions().AccountID)); err != nil {
+		getLogger(txn.Txn().TxnOptions().CN).Error("cluster upgrade entry execute error",
+			zap.Error(err), zap.String("version", v.Metadata().Version), zap.String("upgrade entry", entry.String()))
+		return false, err
+	}
+	if entry.UpgType == versions.ADD_INDEX {
+		ready, err := entry.CheckFunc(txn, uint32(txn.Txn().TxnOptions().AccountID))
+		if err != nil {
+			return false, err
+		}
+		if !ready {
+			return false, &IndexConflict{fmt.Sprintf("index on %s.%s did not become ready", entry.Schema, entry.TableName)}
+		}
+	}
+	getLogger(txn.Txn().TxnOptions().CN).Info("cluster upgrade entry complete",
+		zap.String("upgrade entry", entry.String()), zap.Int64("time cost(ms)", time.Since(start).Milliseconds()), zap.String("toVersion", v.Metadata().Version))
+	return false, nil
 }
 
 func (v *versionHandle) HandleCreateFrameworkDeps(txn executor.TxnExecutor) error {

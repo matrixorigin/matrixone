@@ -16,110 +16,100 @@ package bootstrap
 
 import (
 	"errors"
-	"fmt"
 	"strings"
 	"testing"
 
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
-	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
-	"github.com/matrixorigin/matrixone/pkg/pb/txn"
-	"github.com/matrixorigin/matrixone/pkg/txn/clock"
+	pbtxn "github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/util/sysview"
 	"github.com/stretchr/testify/require"
 )
 
-func TestColumnsUpgradeReachesExistingTenants(t *testing.T) {
-	runtime.RunTest("", func(runtime.Runtime) {
-		current := versions.Version{Version: "4.0.16", VersionOffset: 1, State: versions.StateReady}
-		definition := sysview.InformationSchemaColumnsV109DDL()
-		tenantVersion := "4.0.16"
-		var queuedVersion, queuedRoute bool
-		var writes []string
-		failCreate := false
-		injected := errors.New("injected COLUMNS create failure")
-		op := mock_frontend.NewMockTxnOperator(gomock.NewController(t))
-		op.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
-		op.EXPECT().TxnOptions().Return(txn.TxnOptions{}).AnyTimes()
-		exec := executor.NewMemExecutor2(func(sql string) (executor.Result, error) {
-			switch {
-			case strings.HasPrefix(sql, "SELECT reldatabase, relname, account_id FROM mo_catalog.mo_tables"):
-				return newBootstrapStringResult("mo_catalog"), nil
-			case sql == "select version, version_offset, state from mo_version order by create_at desc limit 1":
-				return recoveryVersionResult(t, current), nil
-			case strings.HasPrefix(sql, "select state from mo_version"):
-				return executor.Result{}, nil
-			case strings.HasPrefix(sql, "select version from mo_version"):
-				return newBootstrapStringResult("4.0.16"), nil
-			case strings.HasPrefix(sql, "insert into mo_version"):
-				require.Contains(t, sql, "'4.0.17', 1, 0")
-				queuedVersion = true
-			case strings.HasPrefix(sql, "insert into mo_upgrade"):
-				require.Contains(t, sql, "'4.0.16'")
-				require.Contains(t, sql, "'4.0.17'")
-				queuedRoute = true
-			case strings.HasPrefix(sql, "select create_version from mo_account"):
-				return newBootstrapStringResult(tenantVersion), nil
-			case strings.HasPrefix(sql, "SELECT tbl.rel_createsql"):
-				return newBootstrapStringResult(definition), nil
-			case sql == "SELECT mo_ctl('cn', 'GetProtocolVersion', '')":
-				return newBootstrapStringResult(`{"result":"cn:118"}`), nil
-			case sql == "DROP VIEW IF EXISTS information_schema.COLUMNS;":
-				writes = append(writes, sql)
-			case sql == sysview.InformationSchemaColumnsDDL:
-				writes = append(writes, sql)
-				if failCreate {
-					return executor.Result{}, injected
+func TestColumnsUpgradeAdmissionAndIdempotence(t *testing.T) {
+	const protocolSQL = "SELECT mo_ctl('cn', 'GetProtocolVersion', '')"
+	entry := versions.InformationSchemaColumnsUpgradeEntry()
+	injected := errors.New("injected columns upgrade failure")
+	for _, tc := range []struct {
+		name       string
+		definition string
+		protocol   string
+		failSQL    string
+		wantDDL    []string
+		wantErr    bool
+	}{
+		{name: "already current", definition: sysview.InformationSchemaColumnsDDL},
+		{name: "legacy V58", definition: sysview.InformationSchemaColumnsV58DDL(), protocol: `{"result":"cn0:109,cn1:109"}`, wantDDL: []string{entry.PreSql, entry.UpgSql}},
+		{name: "old protocol", definition: sysview.InformationSchemaColumnsV58DDL(), protocol: `{"result":"cn0:109,cn1:108"}`, wantErr: true},
+		{name: "failed drop", definition: sysview.InformationSchemaColumnsV58DDL(), protocol: `{"result":"cn0:109"}`, failSQL: entry.PreSql, wantErr: true, wantDDL: []string{entry.PreSql}},
+		{name: "failed create", definition: sysview.InformationSchemaColumnsV58DDL(), protocol: `{"result":"cn0:109"}`, failSQL: entry.UpgSql, wantErr: true, wantDDL: []string{entry.PreSql, entry.UpgSql}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			runtime.RunTest("", func(runtime.Runtime) {
+				operator := mock_frontend.NewMockTxnOperator(gomock.NewController(t))
+				operator.EXPECT().TxnOptions().Return(pbtxn.TxnOptions{}).AnyTimes()
+				mp := mpool.MustNewZero()
+				defer func() { require.Zero(t, mp.CurrNB()) }()
+				result := func(value string) executor.Result {
+					r := executor.NewMemResult([]types.Type{types.T_varchar.ToType()}, mp)
+					if value != "" {
+						r.NewBatchWithRowCount(1)
+						require.NoError(t, executor.AppendStringRows(r, 0, []string{value}))
+					}
+					return r.GetResult()
 				}
-				definition = sql
-			case sql == "update mo_account set create_version = '4.0.17' where account_id = 7":
-				require.Equal(t, sysview.InformationSchemaColumnsDDL, definition,
-					"tenant completion must follow the successful view refresh")
-				tenantVersion = "4.0.17"
-				return executor.Result{AffectedRows: 1}, nil
-			default:
-				return executor.Result{}, fmt.Errorf("unexpected upgrade SQL: %s", sql)
-			}
-			return executor.Result{}, nil
-		}, op)
-		s := newServiceForTest("", &memLocker{}, clock.NewHLCClock(func() int64 { return 0 }, 0), nil, exec,
-			func(s *service) { s.initUpgrade() })
-		t.Cleanup(s.stopper.Stop)
-		final := s.getFinalVersionHandle().Metadata()
-		require.NoError(t, s.doCheckUpgrade(t.Context()))
-		require.True(t, queuedVersion)
-		require.True(t, queuedRoute, "a completed 4.0.16 cluster must queue the forward repair")
-		require.Equal(t, "4.0.17", final.Version)
-		require.Equal(t, "4.0.16", final.MinUpgradeVersion)
-		require.Equal(t, uint32(1), final.VersionOffset)
-		require.Equal(t, defines.MORPCVersion118, final.RequiredProtocolVersion)
+				definition := tc.definition
+				var ddl []string
+				txn := executor.NewMemTxnExecutor(func(sql string) (executor.Result, error) {
+					switch {
+					case strings.HasPrefix(sql, "SELECT tbl.rel_createsql"):
+						return result(definition), nil
+					case sql == protocolSQL:
+						return result(tc.protocol), nil
+					default:
+						ddl = append(ddl, sql)
+						if sql == tc.failSQL {
+							return executor.Result{}, injected
+						}
+						if sql == entry.PreSql {
+							definition = ""
+						} else if sql == entry.UpgSql {
+							definition = sysview.InformationSchemaColumnsDDL
+						}
+						return executor.Result{}, nil
+					}
+				}, operator)
+				err := entry.Upgrade(txn, 7)
+				if tc.failSQL != "" {
+					require.ErrorIs(t, err, injected)
+				} else if tc.wantErr {
+					require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), "%v", err)
+				} else {
+					require.NoError(t, err)
+				}
+				require.Equal(t, tc.wantDDL, ddl)
 
-		// Model a tenant created by an old CN after batch enumeration: the
-		// cluster route has finished, but its persisted account version is old.
-		current = final
-		current.State = versions.StateReady
-		failCreate = true
-		fetchTenant := func() (int32, string, error) { return 7, "4.0.17", nil }
-		upgraded, err := s.MaybeUpgradeTenant(t.Context(), fetchTenant, nil)
-		require.ErrorIs(t, err, injected)
-		require.False(t, upgraded)
-		require.Equal(t, "4.0.16", tenantVersion)
-		require.Empty(t, s.mu.tenants, "failed admission must remain retryable")
-		failCreate = false
-		writes = nil
-		upgraded, err = s.MaybeUpgradeTenant(t.Context(), fetchTenant, nil)
-		require.NoError(t, err)
-		require.True(t, upgraded)
-		require.Equal(t, []string{"DROP VIEW IF EXISTS information_schema.COLUMNS;", sysview.InformationSchemaColumnsDDL}, writes)
-		require.Equal(t, "4.0.17", tenantVersion)
-		require.Equal(t, sysview.InformationSchemaColumnsDDL, definition)
-		writes = nil
-		upgraded, err = s.MaybeUpgradeTenant(t.Context(), fetchTenant, nil)
-		require.NoError(t, err)
-		require.False(t, upgraded)
-		require.Empty(t, writes, "a completed tenant must not be refreshed again")
-	})
+				if tc.wantErr && tc.failSQL == "" {
+					return
+				}
+				if tc.failSQL != "" {
+					// The owner transaction rolls back a failed entry. A retry sees the
+					// persisted legacy view and performs the complete repair.
+					definition, tc.failSQL, tc.protocol = sysview.InformationSchemaColumnsV58DDL(), "", `{"result":"cn0:109"}`
+					ddl = nil
+					require.NoError(t, entry.Upgrade(txn, 7))
+					require.Equal(t, []string{entry.PreSql, entry.UpgSql}, ddl)
+				}
+				ddl = nil
+				require.NoError(t, entry.Upgrade(txn, 7))
+				require.Empty(t, ddl, "a completed refresh must be idempotent")
+			})
+		})
+	}
 }

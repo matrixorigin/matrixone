@@ -16,12 +16,14 @@ package bootstrap
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
+	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_7"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -169,18 +171,27 @@ func shouldRunTenantUpgrade(createVersion string, upgrade versions.VersionUpgrad
 // the pass independent from the periodic task makes completion observable
 // without coupling callers (or tests) to the task's wall clock.
 func (s *service) newTenantUpgradePass(ctx context.Context) func() (bool, error) {
+	// This cursor is only a contention hint. Durable progress remains in the
+	// upgrade tables, and a complete scan always starts again at zero.
+	var cursorUpgradeID uint64
+	var cursor int32
 	return func() (bool, error) {
-		ctx, cancel := context.WithTimeoutCause(ctx, time.Hour*24, moerr.CauseAsyncUpgradeTenantTask)
-		defer cancel()
+		passCtx := ctx
+		if !s.upgrade.finalVersionCompleted.Load() {
+			passCtx = executor.WithLocalExecution(passCtx)
+		}
+		operationCtx, cancel := context.WithTimeoutCause(passCtx, time.Hour*24, moerr.CauseAsyncUpgradeTenantTask)
 
 		hasUpgradeTenants := false
+		resetCursor := false
+		var selected *tenantUpgradeSelection
 		opts := executor.Options{}.
 			WithDatabase(catalog.MO_CATALOG).
 			WithMinCommittedTS(s.now()).
 			WithWaitCommittedLogApplied().
 			WithTimeZone(time.Local)
 		err := s.exec.ExecTxn(
-			ctx,
+			operationCtx,
 			func(txn executor.TxnExecutor) error {
 				upgrade, ok, err := versions.GetUpgradingTenantVersion(txn)
 				if err != nil {
@@ -192,8 +203,12 @@ func (s *service) newTenantUpgradePass(ctx context.Context) func() (bool, error)
 				s.logger.Debug("get upgrading tenant version",
 					zap.String("upgrade", upgrade.String()),
 					zap.Bool("has", ok))
-				if !ok || upgrade.TotalTenant == upgrade.ReadyTenant {
+				if !ok {
+					cursorUpgradeID, cursor = 0, 0
 					return nil
+				}
+				if cursorUpgradeID != upgrade.ID {
+					cursorUpgradeID, cursor = upgrade.ID, 0
 				}
 
 				// no upgrade logic on current cn, skip
@@ -206,11 +221,8 @@ func (s *service) newTenantUpgradePass(ctx context.Context) func() (bool, error)
 				}
 
 				// select task and tenants for update
-				taskID, tenants, createVersions, hasDeletedTenantTasks, hasConflictTenantTasks, err := versions.GetUpgradeTenantTasks(upgrade.ID, txn)
+				taskID, tenants, createVersions, hasDeletedTenantTasks, err := versions.GetUpgradeTenantTasks(upgrade.ID, cursor, txn)
 				if err != nil {
-					s.logger.Error("failed to load upgrade tenants",
-						zap.String("upgrade", upgrade.String()),
-						zap.Error(err))
 					return err
 				}
 
@@ -218,6 +230,12 @@ func (s *service) newTenantUpgradePass(ctx context.Context) func() (bool, error)
 					zap.Int("count", len(tenants)),
 					zap.String("upgrade", upgrade.String()))
 				if len(tenants) == 0 {
+					if cursor != 0 {
+						// This scan skipped a previously contended range. Start a
+						// fresh full scan before reconciling counts or task states.
+						resetCursor = true
+						return nil
+					}
 					hasUnreadyTasks, err := versions.HasUnreadyUpgradeTenantTasks(upgrade.ID, txn)
 					if err != nil {
 						s.logger.Error("failed to check remaining tenant upgrade tasks",
@@ -225,10 +243,6 @@ func (s *service) newTenantUpgradePass(ctx context.Context) func() (bool, error)
 							zap.Error(err))
 						return err
 					}
-					if hasConflictTenantTasks {
-						return nil
-					}
-
 					reconciledDeletedTaskCount := int64(0)
 					if hasUnreadyTasks {
 						reconciledDeletedTaskCount, err = versions.ReconcileDeletedUpgradeTenantTasks(upgrade.ID, txn)
@@ -276,6 +290,10 @@ func (s *service) newTenantUpgradePass(ctx context.Context) func() (bool, error)
 
 				hasUpgradeTenants = true
 				h := s.getVersionHandle(upgrade.ToVersion)
+				if h == v4_0_7.Handler {
+					selected = &tenantUpgradeSelection{upgrade: upgrade, taskID: taskID, tenants: tenants}
+					return nil
+				}
 				updated := int32(0)
 				for i, id := range tenants {
 					createVersion := createVersions[i]
@@ -294,7 +312,7 @@ func (s *service) newTenantUpgradePass(ctx context.Context) func() (bool, error)
 						zap.String("tenant-version", createVersion),
 						zap.String("upgrade", upgrade.String()))
 
-					if err = h.HandleTenantUpgrade(ctx, id, txn); err != nil {
+					if err = h.HandleTenantUpgrade(operationCtx, id, txn); err != nil {
 						s.logger.Error("failed to execute upgrade tenant",
 							zap.Int32("tenant", id),
 							zap.String("tenant-version", createVersion),
@@ -355,26 +373,34 @@ func (s *service) newTenantUpgradePass(ctx context.Context) func() (bool, error)
 			},
 			opts)
 		if err != nil {
-			err = moerr.AttachCause(ctx, err)
-			s.logger.Error("tenant task handle failed",
-				zap.Error(err))
+			var conflict *versions.TenantTaskConflict
+			if errors.As(err, &conflict) {
+				cursor = conflict.NextAccountID
+			}
+			err = moerr.AttachCause(operationCtx, err)
+			cancel()
 			return false, err
 		}
+		cancel()
+		if selected != nil {
+			if err := s.upgradeV407TenantRange(passCtx, *selected); err != nil {
+				return false, err
+			}
+		}
+		if resetCursor {
+			cursor = 0
+		}
 		if !hasUpgradeTenants && s.upgrade.finalVersionCompleted.Load() {
-			if err := s.maintainInformationSchemaViews(ctx); err != nil {
-				err = moerr.AttachCause(ctx, err)
-				s.logger.Error("information schema views maintenance failed", zap.Error(err))
-				return false, err
+			maintenanceCtx, cancel := context.WithTimeoutCause(passCtx, time.Hour*24, moerr.CauseAsyncUpgradeTenantTask)
+			defer cancel()
+			if err := s.maintainInformationSchemaViews(maintenanceCtx); err != nil {
+				return false, fmt.Errorf("information schema views maintenance: %w", moerr.AttachCause(maintenanceCtx, err))
 			}
-			if err := s.maintainInformationSchemaColumnsTables(ctx); err != nil {
-				err = moerr.AttachCause(ctx, err)
-				s.logger.Error("information schema columns/tables maintenance failed", zap.Error(err))
-				return false, err
+			if err := s.maintainInformationSchemaColumnsTables(maintenanceCtx); err != nil {
+				return false, fmt.Errorf("information schema columns/tables maintenance: %w", moerr.AttachCause(maintenanceCtx, err))
 			}
-			if err := s.maintainOrphanObjectPrivileges(ctx); err != nil {
-				err = moerr.AttachCause(ctx, err)
-				s.logger.Error("orphan object privilege maintenance failed", zap.Error(err))
-				return false, err
+			if err := s.maintainOrphanObjectPrivileges(maintenanceCtx); err != nil {
+				return false, fmt.Errorf("orphan object privilege maintenance: %w", moerr.AttachCause(maintenanceCtx, err))
 			}
 		}
 		return hasUpgradeTenants, nil
@@ -410,57 +436,48 @@ func (s *service) asyncUpgradeTenantTask(ctx context.Context) {
 				}
 				maintenanceOwner = true
 			}
-			drainUpgradeTenants(ctx, fn)
+			err := drainUpgradeTenants(ctx, fn)
+			var terminal *terminalUpgradeError
+			if errors.As(err, &terminal) && s.recordTerminalUpgradeFailure(ctx, err) {
+				return
+			}
+			if err != nil && ctx.Err() == nil {
+				s.logger.Error("tenant upgrade or catalog maintenance failed; will retry", zap.Error(err))
+			}
 			timer.Reset(s.upgrade.checkUpgradeTenantDuration)
 		}
 	}
 }
 
-func drainUpgradeTenants(ctx context.Context, fn func() (bool, error)) {
+func drainUpgradeTenants(ctx context.Context, fn func() (bool, error)) error {
 	for {
 		select {
 		case <-ctx.Done():
-			return
+			return ctx.Err()
 		default:
 		}
 
 		hasUpgradeTenants, err := fn()
 		if err != nil || !hasUpgradeTenants {
-			return
+			return err
 		}
 	}
 }
 
-func fetchTenants(
-	batch int,
-	fn func([]int32) error,
-	txn executor.TxnExecutor) error {
-	last := int32(-1)
-	var ids []int32
-	for {
-		ids = ids[:0]
-		sql := fmt.Sprintf("select account_id from mo_account where account_id > %d order by account_id limit %d",
-			last,
-			batch)
-		res, err := txn.Exec(sql, executor.StatementOption{})
-		if err != nil {
-			return err
-		}
-		n := 0
-		res.ReadRows(func(rows int, cols []*vector.Vector) bool {
-			for i := 0; i < rows; i++ {
-				last = vector.GetFixedAtWithTypeCheck[int32](cols[0], i)
-				ids = append(ids, last)
-				n++
-			}
-			return true
-		})
-		res.Close()
-		if n == 0 {
-			return nil
-		}
-		if err := fn(ids); err != nil {
-			return err
-		}
+func fetchTenantPage(after int32, txn executor.TxnExecutor) ([]int32, error) {
+	const pageSize = 128
+	sql := fmt.Sprintf("select account_id from mo_account where account_id > %d order by account_id limit %d", after, pageSize)
+	res, err := txn.Exec(sql, executor.StatementOption{})
+	if err != nil {
+		return nil, err
 	}
+	defer res.Close()
+	ids := make([]int32, 0, pageSize)
+	res.ReadRows(func(rows int, cols []*vector.Vector) bool {
+		for i := 0; i < rows; i++ {
+			ids = append(ids, vector.GetFixedAtWithTypeCheck[int32](cols[0], i))
+		}
+		return true
+	})
+	return ids, nil
 }
