@@ -53,10 +53,11 @@ type LocalFS struct {
 	sync.RWMutex
 	dirFiles map[string]*os.File
 
-	memCache    *MemCache
-	diskCache   *DiskCache
-	remoteCache *RemoteCache
-	asyncUpdate bool
+	memCache       *MemCache
+	diskCache      *DiskCache
+	indexFileCache *IndexFileCache
+	remoteCache    *RemoteCache
+	asyncUpdate    bool
 
 	perfCounterSets []*perfcounter.CounterSet
 
@@ -283,6 +284,7 @@ func (l *LocalFS) initCaches(ctx context.Context, config CacheConfig) error {
 	l.remoteCache = caches.remote
 	l.memCache = caches.memory
 	l.diskCache = caches.disk
+	l.indexFileCache = caches.index
 	return nil
 }
 
@@ -1353,8 +1355,13 @@ func (l *LocalFS) Replace(ctx context.Context, vector IOVector) error {
 
 var _ CachingFileService = new(LocalFS)
 
+// IndexFileCache returns the index-file cache, or nil.
+func (l *LocalFS) IndexFileCache() *IndexFileCache {
+	return l.indexFileCache
+}
+
 func (l *LocalFS) Close(ctx context.Context) {
-	caches := fileServiceCaches{memory: l.memCache, disk: l.diskCache}
+	caches := fileServiceCaches{memory: l.memCache, disk: l.diskCache, index: l.indexFileCache}
 	caches.close(ctx)
 	closeDirFiles(&l.RWMutex, l.dirFiles)
 }
