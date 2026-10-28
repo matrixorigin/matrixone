@@ -798,10 +798,30 @@ func TestViewDescriptionSubscription(t *testing.T) {
 		publisherView := readCharsets(sys, "view_description_pub", "charset_v")
 		require.Equal(t, publisherTable, publisherView)
 		legacySubscriptionView := readCharsets(subscriber, "subscribed", "charset_v")
-		require.Equal(t, publisherView, legacySubscriptionView)
+		require.Len(t, legacySubscriptionView, len(publisherView),
+			"pre-refresh the subscriber must still project the same ordered column list")
+		for i, c := range legacySubscriptionView {
+			require.Equal(t, publisherView[i].name, c.name)
+			if c.name != "raw" {
+				require.Equal(t, publisherView[i], c,
+					"non-binary column %q must match the publisher in every persisted COLUMNS generation", c.name)
+				continue
+			}
+			// raw is the varbinary column (selector 2 of
+			// internal_column_character_set). Until the subscriber's persisted
+			// COLUMNS text is rebuilt by the V109/V118 MODIFY_VIEW refresh, the
+			// historical selector projection renders 'binary'; the current
+			// projection renders NULL (read as "" here, NullString). Both are
+			// valid pre-refresh states; charset/collation must stay consistent.
+			require.True(t, c.charset == "binary" || c.charset == "",
+				"raw charset %q is neither the historical 'binary' projection nor the refreshed NULL", c.charset)
+			require.Equal(t, c.charset, c.collation,
+				"raw charset/collation must stay consistent in every projection")
+		}
 		require.Equal(t, "utf8mb4", publisherTable[0].charset)
 		require.Equal(t, "utf8mb4_general_ci", publisherTable[0].collation)
-		require.Equal(t, "binary", publisherTable[3].charset)
+		require.Equal(t, "", publisherTable[3].charset, "binary-family columns render NULL charset in information_schema (#31160)")
+		require.Equal(t, "", publisherTable[3].collation, "binary-family columns render NULL collation in information_schema (#31160)")
 
 		testViewColumnsUpgradeRollback(t, ctx, sqlExecutor, tenantID)
 		checkHistoricalColumnsWidth := func() {
@@ -818,8 +838,15 @@ func TestViewDescriptionSubscription(t *testing.T) {
 		checkHistoricalColumnsWidth()
 		testNativeViewColumnsUpgradeRollback(t, ctx, sqlExecutor, tenantID)
 		require.Equal(t, publisherTable, readCharsets(subscriber, "subscribed", "charset_src"))
-		require.Equal(t, publisherView, readCharsets(subscriber, "subscribed", "charset_v"))
-		require.Equal(t, legacySubscriptionView, readCharsets(subscriber, "subscribed", "charset_v"))
+		refreshedSubscriptionView := readCharsets(subscriber, "subscribed", "charset_v")
+		require.Equal(t, publisherView, refreshedSubscriptionView,
+			"the V109/V118 refresh must converge the subscription projection to the publisher's NULL charset/collation (#31160)")
+		for i, c := range legacySubscriptionView {
+			if c.name == "raw" && c.charset == "binary" {
+				require.NotEqual(t, c, refreshedSubscriptionView[i],
+					"a column that still carried the historical 'binary' projection must be rewritten by the native refresh")
+			}
+		}
 		checkHistoricalColumnsWidth()
 
 		// The snapshot belongs to the subscriber, but the View's source database

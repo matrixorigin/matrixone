@@ -112,7 +112,9 @@ func (dmlCtx *DMLContext) ResolveUpdateTables(ctx CompilerContext, stmt *tree.Up
 	for alias, idx := range dmlCtx.aliasMap {
 		allColumns[alias] = make(map[string]bool)
 		for _, col := range dmlCtx.tableDefs[idx].Cols {
-			allColumns[alias][col.Name] = true
+			if !col.Hidden {
+				allColumns[alias][col.Name] = true
+			}
 		}
 	}
 

@@ -6423,6 +6423,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		TimeZone:               ses.GetTimeZone(),
 		StorageEngine:          pu.StorageEngine,
 		LastInsertID:           ses.GetLastInsertID(),
+		LastInsertIDSet:        true,
 		SqlHelper:              ses.GetSqlHelper(),
 		CompilerContext:        ses.txnCompileCtx,
 		Buf:                    ses.GetBuffer(),
@@ -6710,6 +6711,18 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		// packet, so clear it before executing each statement while leaving the
 		// session-visible LAST_INSERT_ID state in LastInsertID untouched.
 		proc.SetStatementLastInsertID(0)
+		// A COM_QUERY may contain multiple statements.  The previous statement
+		// can have published a generated ODKU value to the session after the
+		// process was initialized, so reseed the expression-visible process
+		// value before planning this statement.
+		lastInsertID := ses.GetLastInsertID()
+		proc.SetLastInsertID(lastInsertID)
+		// Retry restoration uses the session snapshot carried by SessionInfo. Keep
+		// that attempt baseline aligned when COM_QUERY reuses the process across
+		// statements.
+		proc.Base.SessionInfo.LastInsertID = lastInsertID
+		proc.Base.SessionInfo.LastInsertIDSet = true
+		proc.ResetODKUResult()
 		if isTopLevelClientStatement(ses, execCtx, currentInput) {
 			execCtx.captureDiagnosticCountsSnapshot(ses)
 		}
@@ -7418,8 +7431,10 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		// consumed; COM_STMT_CLOSE is the explicit cleanup/reprepare escape hatch.
 		preStmt, err = ses.getPrepareStmtAllowInvalidated(execCtx.reqCtx, stmtName)
 		if err != nil {
+			// A valid COM_STMT_CLOSE is response-free even when the handle was
+			// already closed. Drivers do not read a reply to this command.
 			restoreRowCount(ses, ses.GetProc(), savedRowCount)
-			return NewGeneralErrorResponse(COM_STMT_CLOSE, ses.GetTxnHandler().GetServerStatus(), err), nil
+			return nil, nil
 		}
 		preStmt.closeCursor()
 		preStmt.resetBinaryParamState()
@@ -7433,10 +7448,12 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		// COM_STMT_CLOSE never changes ROW_COUNT(), including deallocation errors.
 		err = doComQuery(ses, execCtx, &UserInput{sql: sql})
 		if err != nil {
-			resp = NewGeneralErrorResponse(COM_STMT_CLOSE, ses.GetTxnHandler().GetServerStatus(), err)
+			// The SQL cleanup path retains its own error bookkeeping. Sending its
+			// error to a binary client would desynchronize the next command.
+			ses.Error(execCtx.reqCtx, "failed to close binary prepared statement", zap.Error(err))
 		}
 		restoreRowCount(ses, ses.GetProc(), savedRowCount)
-		return resp, nil
+		return nil, nil
 
 	case COM_STMT_RESET:
 		//Payload of COM_STMT_RESET

@@ -15,6 +15,7 @@
 package types
 
 import (
+	"context"
 	"strconv"
 	"strings"
 
@@ -59,6 +60,11 @@ func (t Type) PlanType() plan.Type {
 }
 
 func ParseBool(s string) (bool, error) {
+	return ParseBoolWithContext(defaultParseContext, s)
+}
+
+// ParseBoolWithContext parses with the caller's error reporting context.
+func ParseBoolWithContext(ctx context.Context, s string) (bool, error) {
 	// try to parse as a bool, we treat TuRe as true, therefore ToLower.
 	v, err := strconv.ParseBool(strings.ToLower(s))
 	if err == nil {
@@ -71,5 +77,20 @@ func ParseBool(s string) (bool, error) {
 		return num != 0.0, nil
 	}
 
-	return false, moerr.NewInvalidInputNoCtxf("'%s' is not a valid bool expression", s)
+	return false, moerr.NewInvalidInputf(parseErrorContext(ctx), "'%s' is not a valid bool expression", s)
+}
+
+// defaultParseContext is a private token for the context-free entry points.
+// It keeps their successful path free of global context lookups. Resolve it
+// before constructing an error; never pass it across a package boundary.
+var defaultParseContext context.Context = &struct{ context.Context }{context.Background()}
+
+// parseErrorContext resolves the default only on failure. Context-free callers
+// retain their reporting policy without a global context lookup on successful
+// scalar parsing or arithmetic; explicit probe contexts pass through unchanged.
+func parseErrorContext(ctx context.Context) context.Context {
+	if ctx == nil || ctx == defaultParseContext {
+		return moerr.Context()
+	}
+	return ctx
 }
