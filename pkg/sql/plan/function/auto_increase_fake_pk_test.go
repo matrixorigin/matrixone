@@ -54,3 +54,21 @@ func TestGetTableAutoIncrColSkipsFakePrimaryKey(t *testing.T) {
 	defs = []engine.TableDef{&engine.ViewDef{}, autoIncrAttr("id", true, false)}
 	require.Equal(t, "", getTableAutoIncrCol(defs))
 }
+
+// A visible user column that reuses the fake pk name is a real
+// AUTO_INCREMENT column and must not be skipped by the fake-pk filter.
+func TestGetTableAutoIncrColKeepsVisibleFakePkNameColumn(t *testing.T) {
+	// explicit primary key: MO adds no hidden fake pk, and the visible
+	// same-name column is the table's real AUTO_INCREMENT column.
+	defs := []engine.TableDef{
+		autoIncrAttr("a", false, false),
+		autoIncrAttr(catalog.FakePrimaryKeyColName, true, false),
+	}
+	require.Equal(t, catalog.FakePrimaryKeyColName, getTableAutoIncrCol(defs))
+
+	// the hidden synthetic fake pk is still skipped.
+	defs = []engine.TableDef{
+		autoIncrAttr(catalog.FakePrimaryKeyColName, true, true),
+	}
+	require.Equal(t, "", getTableAutoIncrCol(defs))
+}

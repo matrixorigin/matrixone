@@ -97,7 +97,8 @@ func getTableAutoIncrCol(engineDefs []engine.TableDef) string {
 		// Select the first user column with the auto increment property. The
 		// synthetic primary key (fake pk) of a table without a primary key is
 		// also auto-increment, but it is not the table's AUTO_INCREMENT column.
-		if attr, ok := def.(*engine.AttributeDef); ok && attr.Attr.AutoIncrement && !catalog.IsFakePkName(attr.Attr.Name) {
+		if attr, ok := def.(*engine.AttributeDef); ok && attr.Attr.AutoIncrement &&
+			(!catalog.IsFakePkName(attr.Attr.Name) || !attr.Attr.IsHidden) {
 			autoIncrCol = attr.Attr.Name
 			break
 		}

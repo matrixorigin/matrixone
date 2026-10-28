@@ -24,4 +24,12 @@ select internal_auto_increment('ai_no_pk_meta', 'with_ai');
 select internal_auto_increment('ai_no_pk_meta', 'no_pk_ai');
 ➤ internal_auto_increment(ai_no_pk_meta, no_pk_ai)[-5,64,0]  𝄀
 4
+create table visible_fake_pk(a int primary key, `__mo_fake_pk_col` bigint unsigned auto_increment unique key);
+insert into visible_fake_pk(a) values (1), (2);
+select table_name, auto_increment from information_schema.tables where table_schema = 'ai_no_pk_meta' and table_name = 'visible_fake_pk';
+➤ table_name[12,5000,0]  ¦  auto_increment[-5,64,0]  𝄀
+visible_fake_pk  ¦  3
+select internal_auto_increment('ai_no_pk_meta', 'visible_fake_pk');
+➤ internal_auto_increment(ai_no_pk_meta, visible_fake_pk)[-5,64,0]  𝄀
+3
 drop database ai_no_pk_meta;

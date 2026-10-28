@@ -15,4 +15,11 @@ select table_name, auto_increment from information_schema.tables where table_sch
 select internal_auto_increment('ai_no_pk_meta', 'no_pk') is null;
 select internal_auto_increment('ai_no_pk_meta', 'with_ai');
 select internal_auto_increment('ai_no_pk_meta', 'no_pk_ai');
+-- A visible user column that reuses the fake pk name is a real
+-- AUTO_INCREMENT column; the fake-pk skip must apply only to the hidden
+-- synthetic column.
+create table visible_fake_pk(a int primary key, `__mo_fake_pk_col` bigint unsigned auto_increment unique key);
+insert into visible_fake_pk(a) values (1), (2);
+select table_name, auto_increment from information_schema.tables where table_schema = 'ai_no_pk_meta' and table_name = 'visible_fake_pk';
+select internal_auto_increment('ai_no_pk_meta', 'visible_fake_pk');
 drop database ai_no_pk_meta;
