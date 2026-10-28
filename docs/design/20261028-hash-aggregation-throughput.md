@@ -308,4 +308,15 @@ threshold preservation. Public SQL must exercise tuple/grouped DISTINCT as well
 as both full Q5 orders; inspect plans, exact results, CPU, memory and spill/swap.
 Do not retain adaptive behavior on a repeatable control regression above 5%.
 
-Revision 4 design review is pending; implementation must follow its review.
+Revision 4 design self-review of `da2da0d024`: PASS before implementation, with
+performance acceptance still open. No independent approval is claimed.
+The runtime byte limit becomes zero after hard-capacity recovery to disable the
+adaptive mode for the rest of that execution; Reset/Free clears all adaptive
+state and Prepare restores the immutable operator parameter. This explicitly
+closes recovery even after the generic spill reader clears its active buckets.
+The bypass header is not added to groupByBatches and is never a batch.Clean
+owner. Its lifetime ends before the next child/expression call. The local
+consumer reads ordinary keys and does not require MergeGroup partial framing.
+Periodic resampling and phase-shift controls are mandatory; permanent bypass is
+rejected. Q1-Q3 retain the reviewed exchange cleanup/wait bounds, with only
+bounded scalar counters and one borrowed header added to Group's owner.
