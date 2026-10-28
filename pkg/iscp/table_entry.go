@@ -158,6 +158,14 @@ func (t *TableEntry) getCandidate() (iter []*IterationContext, minFromTS types.T
 	}
 	iterations := make([]*IterationContext, 0, len(candidates))
 	shareableIterations := make([]*IterationContext, 0, len(candidates))
+	// Index consumers build and publish their own index generations. Their
+	// progress must not affect the range selected for other consumers.
+	sharedCandidates := make([]*JobEntry, 0, len(candidates))
+	for _, candidate := range candidates {
+		if !candidate.isIndexJob {
+			sharedCandidates = append(sharedCandidates, candidate)
+		}
+	}
 	minFromTS = types.MaxTs()
 	for _, sinker := range candidates {
 		if sinker.watermark.IsEmpty() && sinker.state == ISCPJobState_Completed {
@@ -173,7 +181,21 @@ func (t *TableEntry) getCandidate() (iter []*IterationContext, minFromTS types.T
 			})
 			continue
 		}
-		ok, from, to, share := sinker.jobSpec.Check(candidates, sinker, types.MaxTs())
+		var ok, share bool
+		var from, to types.TS
+		if sinker.isIndexJob {
+			// A default index job always catches up from its own watermark.
+			// Timed index jobs keep their interval but never share a range.
+			if sinker.jobSpec.JobType == TriggerType_Default {
+				ok, from, to, share = checkAlwaysUpdateJobConfig(nil, sinker, types.MaxTs())
+			} else {
+				spec := *sinker.jobSpec
+				spec.Share = false
+				ok, from, to, share = spec.Check(nil, sinker, types.MaxTs())
+			}
+		} else {
+			ok, from, to, share = sinker.jobSpec.Check(sharedCandidates, sinker, types.MaxTs())
+		}
 		if !ok {
 			continue
 		}
@@ -207,7 +229,7 @@ func (t *TableEntry) getCandidate() (iter []*IterationContext, minFromTS types.T
 				toTS:      to,
 			}
 			iterations = append(iterations, iter)
-			if sinker.stage != JobStage_Init {
+			if share && sinker.stage != JobStage_Init {
 				shareableIterations = append(shareableIterations, iter)
 			}
 			if from.LT(&minFromTS) {

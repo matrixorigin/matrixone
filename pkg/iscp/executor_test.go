@@ -210,7 +210,7 @@ func TestTableEntryDoesNotShareInitIterations(t *testing.T) {
 	exec := newRuntimeTestExecutor()
 	table := NewTableEntry(exec, 1, 2, 3, "db", "table")
 	spec := &JobSpec{
-		ConsumerInfo: ConsumerInfo{InitSQL: "select 1"},
+		ConsumerInfo: ConsumerInfo{ConsumerType: int8(ConsumerType_IndexSync), InitSQL: "select 1"},
 		TriggerSpec:  TriggerSpec{JobType: TriggerType_Default},
 	}
 	watermark := types.BuildTS(10, 0)
@@ -253,7 +253,7 @@ func TestTableEntryDoesNotShareInitIterations(t *testing.T) {
 		require.Len(t, iter.jobNames, 1)
 	}
 
-	// Normal running jobs retain the existing shared-iteration behavior.
+	// Running index jobs also retain separate iterations.
 	table.AddOrUpdateSinker(
 		context.Background(),
 		"index_hv",
@@ -266,9 +266,11 @@ func TestTableEntryDoesNotShareInitIterations(t *testing.T) {
 	)
 	require.Equal(t, int8(JobStage_Running), table.jobs[JobKey{JobName: "index_hv", JobID: 2}].stage)
 	iters, _ = table.getCandidate()
-	require.Len(t, iters, 1)
-	require.ElementsMatch(t, []string{"index_ft", "index_hv"}, iters[0].jobNames)
-	require.Equal(t, []int8{JobStage_Running, JobStage_Running}, iters[0].stages)
+	require.Len(t, iters, 2)
+	for _, iter := range iters {
+		require.Len(t, iter.jobNames, 1)
+		require.Equal(t, []int8{JobStage_Running}, iter.stages)
+	}
 }
 
 func TestPublishRebuiltStateReplacesAbandonedGeneration(t *testing.T) {

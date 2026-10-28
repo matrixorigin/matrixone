@@ -29,6 +29,13 @@ commit at one timestamp and a dirty 30-minute range remain unbounded. Solving
 that part of #26973 requires a restart-stable source cursor or another durable
 bounded-work protocol.
 
+Index sync jobs now select their own ranges from their own watermarks and run
+in separate iterations, including when two index jobs or a normal consumer
+have identical ranges. The scheduler caps each non-snapshot range at the
+existing 30-minute timestamp span before dispatch or clean-table watermark
+advance. Initial snapshots use the worker's snapshot timestamp and are not
+bounded by this catch-up window.
+
 ## Validation
 
 Run focused tests on the designated remote host for multi-batch insert and
