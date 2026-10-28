@@ -151,8 +151,8 @@ class MatrixOneSQLBuilder:
         if self._query_type != "INSERT":
             raise ValueError("insert_values() can only be used with INSERT operations")
 
-        self._insert_columns = columns
-        self._insert_values = values
+        self._insert_columns = list(columns)
+        self._insert_values = [list(row) for row in values]
         return self
 
     # UPDATE methods
