@@ -297,3 +297,10 @@ func MergeReindexParams(old map[string]string, update ReindexParamUpdate, algo s
 	}
 	return out, nil
 }
+
+// RejectUnstorableRows reports whether the build of an index fails on a row the index cannot
+// store instead of recording it as ignored: only a new index built by the user's statement,
+// whose user is waiting on it, rejects such a row.
+func RejectUnstorableRows(ctx CompileContext) bool {
+	return ctx.IndexInfo() != nil && ctx.IsFrontend()
+}

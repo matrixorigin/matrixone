@@ -37,9 +37,32 @@ func TestCheckStorable(t *testing.T) {
 	require.Error(t, CheckStorable([]float32{1, float32(math.NaN())}, usearch.F32))
 	require.Error(t, CheckStorable([]float32{}, usearch.F32))
 
-	// CheckStorable rejects exactly the vectors ToStorage rejects
-	for _, v := range [][]float32{{1, 2}, {70000, 1}, {65504, -65504}, {65520, 0}} {
-		_, _, err := ToStorage(v, usearch.F16, QuantizeBounds{})
-		require.Equal(t, err != nil, CheckStorable(v, usearch.F16) != nil, "%v", v)
+	// CheckStorable rejects exactly the vectors ToStorage rejects, with the same error, on both
+	// sides of every overflow boundary
+	var f32s []float32
+	for _, b := range []float32{f16Overflow, bf16Overflow, math.MaxFloat32} {
+		for _, x := range []float32{b, math.Nextafter32(b, 0), math.Nextafter32(b, float32(math.Inf(1)))} {
+			f32s = append(f32s, x, -x)
+		}
+	}
+	f32s = append(f32s, 65504, 1, 0)
+	for _, kind := range []usearch.Quantization{usearch.F32, usearch.F16, usearch.BF16, usearch.I8, usearch.U8} {
+		bounds := QuantizeBounds{Min: -1, Max: 1, Set: true}
+		for _, x := range f32s {
+			if math.IsInf(float64(x), 0) {
+				continue
+			}
+			v := []float32{1, x}
+			_, _, want := ToStorage(v, kind, bounds)
+			require.Equal(t, want, CheckStorable(v, kind), "%v as %v", x, kind)
+		}
+		// a vecf64 element near the float32 limit, rounding either way
+		for _, x := range []float64{math.MaxFloat32, math.MaxFloat32 * (1 + 0x1p-25), math.MaxFloat32 * (1 + 0x1p-23), 65519.999, 65520.001} {
+			for _, e := range []float64{x, -x} {
+				v := []float64{1, e}
+				_, _, want := ToStorage(v, kind, bounds)
+				require.Equal(t, want, CheckStorable(v, kind), "%v as %v", e, kind)
+			}
+		}
 	}
 }

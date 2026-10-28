@@ -9,6 +9,8 @@ create table t(id bigint primary key, v vecf32(2));
 insert into t values (1,'[1,1]'),(4,'[100000,1]');
 create index i using hnsw on t(v) op_type 'vector_l2_ops' quantization 'float16';
 Data truncation: data out of range: data type hnsw quantization, vector element 100000 cannot be stored as F16
+alter table t add index i using hnsw (v) op_type 'vector_l2_ops' quantization 'float16';
+Data truncation: data out of range: data type hnsw quantization, vector element 100000 cannot be stored as F16
 show index ignored from t;
 ➤ Key_name[12,65535,0]  ¦  Primary_key[12,65535,0]  ¦  Reason[12,65535,0]  ¦  Ignored_at[93,19,0]
 select count(*) from mo_catalog.mo_indexes where name = 'i' and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = 'hnsw_ignored' and relname = 't');
@@ -21,8 +23,8 @@ insert into t values (2,'[100000,100000]');
 insert into t values (3,'[2,2]');
 show index ignored from t;
 ➤ Key_name[12,65535,0]  ¦  Primary_key[12,65535,0]  ¦  Reason[12,65535,0]  ¦  Ignored_at[93,19,0]  𝄀
-i  ¦  2  ¦  data out of range: data type hnsw quantization, vector element 100000 cannot be stored as F16  ¦  2026-10-28 11:59:08  𝄀
-i  ¦  4  ¦  data out of range: data type hnsw quantization, vector element 100000 cannot be stored as F16  ¦  2026-10-28 11:59:08
+i  ¦  2  ¦  data out of range: data type hnsw quantization, vector element 100000 cannot be stored as F16  ¦  2026-10-28 13:17:43  𝄀
+i  ¦  4  ¦  data out of range: data type hnsw quantization, vector element 100000 cannot be stored as F16  ¦  2026-10-28 13:17:43
 select id from t order by l2_distance(v,'[2,2]') limit 3 by rank with option 'mode=pre';
 ➤ id[-5,64,0]  𝄀
 3  𝄀
@@ -32,40 +34,47 @@ select id from t order by l2_distance(v,'[2,2]') limit 3 by rank with option 'mo
 3  𝄀
 1  𝄀
 4
+update t set v = '[1,99999]' where id = 1;
+show index ignored from t where Primary_key = '1';
+➤ Key_name[12,65535,0]  ¦  Primary_key[12,65535,0]  ¦  Reason[12,65535,0]  ¦  Ignored_at[93,19,0]  𝄀
+i  ¦  1  ¦  data out of range: data type hnsw quantization, vector element 99999 cannot be stored as F16  ¦  2026-10-28 13:19:43
+update t set v = '[1,70000]' where id = 1;
 update t set v = '[3,3]' where id = 2;
 update t set v = '[1,70000]' where id = 3;
 delete from t where id = 4;
 show index ignored from t;
 ➤ Key_name[12,65535,0]  ¦  Primary_key[12,65535,0]  ¦  Reason[12,65535,0]  ¦  Ignored_at[93,19,0]  𝄀
-i  ¦  3  ¦  data out of range: data type hnsw quantization, vector element 70000 cannot be stored as F16  ¦  2026-10-28 12:01:08
+i  ¦  1  ¦  data out of range: data type hnsw quantization, vector element 70000 cannot be stored as F16  ¦  2026-10-28 13:20:44  𝄀
+i  ¦  3  ¦  data out of range: data type hnsw quantization, vector element 70000 cannot be stored as F16  ¦  2026-10-28 13:20:44
 select id from t order by l2_distance(v,'[2,2]') limit 3 by rank with option 'mode=pre';
 ➤ id[-5,64,0]  𝄀
-2  𝄀
-1
+2
+update t set v = '[1,1]' where id = 1;
 alter table t alter reindex i hnsw;
 show index ignored from t;
 ➤ Key_name[12,65535,0]  ¦  Primary_key[12,65535,0]  ¦  Reason[12,65535,0]  ¦  Ignored_at[93,19,0]  𝄀
-i  ¦  3  ¦  data out of range: data type hnsw quantization, vector element 70000 cannot be stored as F16  ¦  2026-10-28 12:03:08
-select id from t order by l2_distance(v,'[2,2]') limit 3 by rank with option 'mode=pre';
-➤ id[-5,64,0]  𝄀
-2  𝄀
-1
+i  ¦  3  ¦  data out of range: data type hnsw quantization, vector element 70000 cannot be stored as F16  ¦  2026-10-28 13:22:44
+alter table t alter reindex i hnsw force_sync;
+show index ignored from t;
+➤ Key_name[12,65535,0]  ¦  Primary_key[12,65535,0]  ¦  Reason[12,65535,0]  ¦  Ignored_at[93,19,0]  𝄀
+i  ¦  3  ¦  data out of range: data type hnsw quantization, vector element 70000 cannot be stored as F16  ¦  2026-10-28 13:22:44
+alter table t add column c int;
+show index ignored from t;
+➤ Key_name[12,65535,0]  ¦  Primary_key[12,65535,0]  ¦  Reason[12,65535,0]  ¦  Ignored_at[93,19,0]  𝄀
+i  ¦  3  ¦  data out of range: data type hnsw quantization, vector element 70000 cannot be stored as F16  ¦  2026-10-28 13:22:46
+create table a(id bigint primary key, v vecf32(2));
+insert into a values (1,'[1,1]'),(2,'[100000,1]');
+create index ia using hnsw on a(v) op_type 'vector_l2_ops' quantization 'float16' async;
+show index ignored from a;
+➤ Key_name[12,65535,0]  ¦  Primary_key[12,65535,0]  ¦  Reason[12,65535,0]  ¦  Ignored_at[93,19,0]  𝄀
+ia  ¦  2  ¦  data out of range: data type hnsw quantization, vector element 100000 cannot be stored as F16  ¦  2026-10-28 13:23:46
 truncate t;
-insert into t values (9,'[1,99999]'),(10,'[1,1]');
+insert into t(id, v) values (9,'[1,99999]'),(10,'[1,1]');
 show index ignored from hnsw_ignored.t;
 ➤ Key_name[12,65535,0]  ¦  Primary_key[12,65535,0]  ¦  Reason[12,65535,0]  ¦  Ignored_at[93,19,0]  𝄀
-i  ¦  9  ¦  data out of range: data type hnsw quantization, vector element 99999 cannot be stored as F16  ¦  2026-10-28 12:03:16
-create table p(id bigint primary key, v vecf32(2)) partition by hash(id) partitions 2;
-insert into p values (1,'[1,1]'),(2,'[1,70000]');
-create index pi using hnsw on p(v) op_type 'vector_l2_ops' quantization 'float16';
-Data truncation: data out of range: data type hnsw quantization, vector element 70000 cannot be stored as F16
-delete from p where id = 2;
-create index pi using hnsw on p(v) op_type 'vector_l2_ops' quantization 'float16';
-insert into p values (2,'[1,70000]'),(3,'[70000,1]');
-show index ignored from hnsw_ignored.p;
-➤ Key_name[12,65535,0]  ¦  Primary_key[12,65535,0]  ¦  Reason[12,65535,0]  ¦  Ignored_at[93,19,0]  𝄀
-pi  ¦  2  ¦  data out of range: data type hnsw quantization, vector element 70000 cannot be stored as F16  ¦  2026-10-28 12:04:08  𝄀
-pi  ¦  3  ¦  data out of range: data type hnsw quantization, vector element 70000 cannot be stored as F16  ¦  2026-10-28 12:04:08
+i  ¦  9  ¦  data out of range: data type hnsw quantization, vector element 99999 cannot be stored as F16  ¦  2026-10-28 13:24:46
+select id from t order by l2_distance(v,'[1,100000]') limit 1;
+Data truncation: data out of range: data type hnsw quantization, vector element 100000 cannot be stored as F16
 create table m(id bigint primary key, v1 vecf32(2), v2 vecf32(2));
 insert into m values (4,'[1,1]','[1,1]');
 create index m1 using hnsw on m(v1) op_type 'vector_l2_ops' quantization 'float16';
@@ -73,37 +82,60 @@ create index m2 using hnsw on m(v2) op_type 'vector_l2_ops' quantization 'float1
 insert into m values (1,'[70000,1]','[1,1]'),(2,'[1,1]','[1,70000]'),(3,'[70000,1]','[1,70000]');
 show index ignored from m;
 ➤ Key_name[12,65535,0]  ¦  Primary_key[12,65535,0]  ¦  Reason[12,65535,0]  ¦  Ignored_at[93,19,0]  𝄀
-m1  ¦  1  ¦  data out of range: data type hnsw quantization, vector element 70000 cannot be stored as F16  ¦  2026-10-28 12:05:08  𝄀
-m1  ¦  3  ¦  data out of range: data type hnsw quantization, vector element 70000 cannot be stored as F16  ¦  2026-10-28 12:05:08  𝄀
-m2  ¦  2  ¦  data out of range: data type hnsw quantization, vector element 70000 cannot be stored as F16  ¦  2026-10-28 12:05:08  𝄀
-m2  ¦  3  ¦  data out of range: data type hnsw quantization, vector element 70000 cannot be stored as F16  ¦  2026-10-28 12:05:08
+m1  ¦  1  ¦  data out of range: data type hnsw quantization, vector element 70000 cannot be stored as F16  ¦  2026-10-28 13:25:44  𝄀
+m1  ¦  3  ¦  data out of range: data type hnsw quantization, vector element 70000 cannot be stored as F16  ¦  2026-10-28 13:25:44  𝄀
+m2  ¦  2  ¦  data out of range: data type hnsw quantization, vector element 70000 cannot be stored as F16  ¦  2026-10-28 13:25:44  𝄀
+m2  ¦  3  ¦  data out of range: data type hnsw quantization, vector element 70000 cannot be stored as F16  ¦  2026-10-28 13:25:44
 show index ignored from m where Key_name = 'm1';
 ➤ Key_name[12,65535,0]  ¦  Primary_key[12,65535,0]  ¦  Reason[12,65535,0]  ¦  Ignored_at[93,19,0]  𝄀
-m1  ¦  1  ¦  data out of range: data type hnsw quantization, vector element 70000 cannot be stored as F16  ¦  2026-10-28 12:05:08  𝄀
-m1  ¦  3  ¦  data out of range: data type hnsw quantization, vector element 70000 cannot be stored as F16  ¦  2026-10-28 12:05:08
+m1  ¦  1  ¦  data out of range: data type hnsw quantization, vector element 70000 cannot be stored as F16  ¦  2026-10-28 13:25:44  𝄀
+m1  ¦  3  ¦  data out of range: data type hnsw quantization, vector element 70000 cannot be stored as F16  ¦  2026-10-28 13:25:44
 show index ignored from m where Key_name = 'm2';
 ➤ Key_name[12,65535,0]  ¦  Primary_key[12,65535,0]  ¦  Reason[12,65535,0]  ¦  Ignored_at[93,19,0]  𝄀
-m2  ¦  2  ¦  data out of range: data type hnsw quantization, vector element 70000 cannot be stored as F16  ¦  2026-10-28 12:05:08  𝄀
-m2  ¦  3  ¦  data out of range: data type hnsw quantization, vector element 70000 cannot be stored as F16  ¦  2026-10-28 12:05:08
+m2  ¦  2  ¦  data out of range: data type hnsw quantization, vector element 70000 cannot be stored as F16  ¦  2026-10-28 13:25:44  𝄀
+m2  ¦  3  ¦  data out of range: data type hnsw quantization, vector element 70000 cannot be stored as F16  ¦  2026-10-28 13:25:44
 show index ignored from m where Primary_key = '3' and Reason like '%F16%';
 ➤ Key_name[12,65535,0]  ¦  Primary_key[12,65535,0]  ¦  Reason[12,65535,0]  ¦  Ignored_at[93,19,0]  𝄀
-m1  ¦  3  ¦  data out of range: data type hnsw quantization, vector element 70000 cannot be stored as F16  ¦  2026-10-28 12:05:08  𝄀
-m2  ¦  3  ¦  data out of range: data type hnsw quantization, vector element 70000 cannot be stored as F16  ¦  2026-10-28 12:05:08
+m1  ¦  3  ¦  data out of range: data type hnsw quantization, vector element 70000 cannot be stored as F16  ¦  2026-10-28 13:25:44  𝄀
+m2  ¦  3  ¦  data out of range: data type hnsw quantization, vector element 70000 cannot be stored as F16  ¦  2026-10-28 13:25:44
+show index ignored from m where Key_name = 'nope';
+➤ Key_name[12,65535,0]  ¦  Primary_key[12,65535,0]  ¦  Reason[12,65535,0]  ¦  Ignored_at[93,19,0]
 update m set v1 = '[2,2]' where id = 3;
 show index ignored from m where Key_name = 'm1';
 ➤ Key_name[12,65535,0]  ¦  Primary_key[12,65535,0]  ¦  Reason[12,65535,0]  ¦  Ignored_at[93,19,0]  𝄀
-m1  ¦  1  ¦  data out of range: data type hnsw quantization, vector element 70000 cannot be stored as F16  ¦  2026-10-28 12:05:08
+m1  ¦  1  ¦  data out of range: data type hnsw quantization, vector element 70000 cannot be stored as F16  ¦  2026-10-28 13:25:44
 show index ignored from m where Key_name = 'm2';
 ➤ Key_name[12,65535,0]  ¦  Primary_key[12,65535,0]  ¦  Reason[12,65535,0]  ¦  Ignored_at[93,19,0]  𝄀
-m2  ¦  2  ¦  data out of range: data type hnsw quantization, vector element 70000 cannot be stored as F16  ¦  2026-10-28 12:05:08  𝄀
-m2  ¦  3  ¦  data out of range: data type hnsw quantization, vector element 70000 cannot be stored as F16  ¦  2026-10-28 12:06:09
-show index ignored from m where Key_name = 'nope';
-➤ Key_name[12,65535,0]  ¦  Primary_key[12,65535,0]  ¦  Reason[12,65535,0]  ¦  Ignored_at[93,19,0]
+m2  ¦  2  ¦  data out of range: data type hnsw quantization, vector element 70000 cannot be stored as F16  ¦  2026-10-28 13:25:44  𝄀
+m2  ¦  3  ¦  data out of range: data type hnsw quantization, vector element 70000 cannot be stored as F16  ¦  2026-10-28 13:26:44
+create table p(id bigint primary key, v vecf32(2)) partition by hash(id) partitions 2;
+insert into p values (1,'[1,1]');
+create index pi using hnsw on p(v) op_type 'vector_l2_ops' quantization 'float16';
+insert into p values (2,'[1,70000]'),(3,'[70000,1]');
+show index ignored from hnsw_ignored.p;
+➤ Key_name[12,65535,0]  ¦  Primary_key[12,65535,0]  ¦  Reason[12,65535,0]  ¦  Ignored_at[93,19,0]  𝄀
+pi  ¦  2  ¦  data out of range: data type hnsw quantization, vector element 70000 cannot be stored as F16  ¦  2026-10-28 13:27:44  𝄀
+pi  ¦  3  ¦  data out of range: data type hnsw quantization, vector element 70000 cannot be stored as F16  ¦  2026-10-28 13:27:44
 create table e(a int primary key, b int, key kb(b));
 show index ignored from e;
 ➤ Key_name[12,65535,0]  ¦  Primary_key[12,65535,0]  ¦  Reason[12,65535,0]  ¦  Ignored_at[93,19,0]
 show index ignored from nope;
 no such table hnsw_ignored.nope
+drop role if exists hnsw_ignored_r;
+drop user if exists hnsw_ignored_u;
+create role hnsw_ignored_r;
+grant connect on account * to hnsw_ignored_r;
+grant show tables on database hnsw_ignored to hnsw_ignored_r;
+create user hnsw_ignored_u identified by '111' default role hnsw_ignored_r;
+show index ignored from hnsw_ignored.m;
+internal error: do not have privilege to execute the statement
+grant select on table hnsw_ignored.m to hnsw_ignored_r;
+show index ignored from hnsw_ignored.m where Key_name = 'm2';
+➤ Key_name[12,65535,0]  ¦  Primary_key[12,65535,0]  ¦  Reason[12,65535,0]  ¦  Ignored_at[93,19,0]  𝄀
+m2  ¦  2  ¦  data out of range: data type hnsw quantization, vector element 70000 cannot be stored as F16  ¦  2026-10-28 13:25:44  𝄀
+m2  ¦  3  ¦  data out of range: data type hnsw quantization, vector element 70000 cannot be stored as F16  ¦  2026-10-28 13:26:44
+drop user hnsw_ignored_u;
+drop role hnsw_ignored_r;
 drop index i on t;
 show index ignored from t;
 ➤ Key_name[12,65535,0]  ¦  Primary_key[12,65535,0]  ¦  Reason[12,65535,0]  ¦  Ignored_at[93,19,0]

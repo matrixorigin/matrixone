@@ -19,7 +19,10 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -138,4 +141,35 @@ func TestNewIgnoredRowsWithoutTable(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, writer.Insert(context.Background(), []any{int64(1), []float32{1, 1}, nil}))
 	require.False(t, writer.Empty())
+}
+
+func TestIgnoredRowsLoadsKeysAsTheWriterSeesThem(t *testing.T) {
+	ctx := context.Background()
+	mp := mpool.MustNewZero()
+	tabledef := newTestTableDef("pk", types.T_varbinary, "vec", types.T_array_float32, 2)
+	tabledef.Indexes = newTestHnswIgnoredTableDef("float16").Indexes
+	ignored := newIgnoredRows("db", tabledef, tabledef.Indexes)
+
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = vector.NewVec(types.T_varbinary.ToType())
+	for _, k := range []string{"a\x00", "b\x01"} {
+		require.NoError(t, vector.AppendBytes(bat.Vecs[0], []byte(k), false, mp))
+	}
+	bat.SetRowCount(2)
+	old := ExecWithResult
+	ExecWithResult = func(context.Context, string, string, client.TxnOperator, ...executor.StatementOption) (executor.Result, error) {
+		return executor.Result{Mp: mp, Batches: []*batch.Batch{bat}}, nil
+	}
+	t.Cleanup(func() { ExecWithResult = old })
+	require.NoError(t, ignored.load(ctx, "", nil, false))
+	require.Len(t, ignored.present, 2)
+
+	// a writer delivers a key as a new byte slice; it still finds the recorded row
+	ignored.indexed([]byte("a\x00"))
+	ignored.ignore([]byte("c"), "bad")
+	sqls := captureIgnoredSql(t)
+	require.NoError(t, ignored.flush(ctx, "", nil, "idx"))
+	require.Len(t, *sqls, 2)
+	require.Contains(t, (*sqls)[0], "DELETE FROM `db`.`ignored_tbl` WHERE `__mo_index_pk` IN (")
+	require.Contains(t, (*sqls)[1], "'bad'")
 }
