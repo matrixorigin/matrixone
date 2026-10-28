@@ -281,6 +281,13 @@ ifneq ($(ARCHSIMD_ARCH),)
   endif
 endif
 
+# Keep unchanged amd64 hot loops at the same cache-line offset when other Go
+# functions change size. Other architectures retain their existing alignment.
+MO_GO_FUNCTION_ALIGNMENT_FLAG :=
+ifeq ($(ARCHSIMD_ARCH),amd64)
+  MO_GO_FUNCTION_ALIGNMENT_FLAG := -funcalign=64
+endif
+
 ifeq ($(MO_CL_CUDA),1)
 	include $(ROOT_DIR)/cgo/gpu-toolchain.mk
 	CUDA_CFLAGS := $(MO_GPU_CFLAGS)
@@ -328,10 +335,10 @@ endif
 endif
 
 CGO_OPTS :=$(SIRIUS_CGO_ENV) CGO_CFLAGS="-I$(CGO_DIR) -I$(THIRDPARTIES_INSTALL_DIR)/include $(CUDA_CFLAGS) $(SIRIUS_CFLAGS)"
-GOLDFLAGS=-ldflags="$(SIRIUS_EXTLD) -extldflags '$(CUDA_LDFLAGS) -L$(CGO_DIR) -lmo -L$(THIRDPARTIES_INSTALL_DIR)/lib $(SIRIUS_LDFLAGS) -Wl,-rpath,\$${ORIGIN}/lib -fopenmp' $(VERSION_INFO)"
+GOLDFLAGS=-ldflags="$(MO_GO_FUNCTION_ALIGNMENT_FLAG) $(SIRIUS_EXTLD) -extldflags '$(CUDA_LDFLAGS) -L$(CGO_DIR) -lmo -L$(THIRDPARTIES_INSTALL_DIR)/lib $(SIRIUS_LDFLAGS) -Wl,-rpath,\$${ORIGIN}/lib -fopenmp' $(VERSION_INFO)"
 
 ifeq ("$(UNAME_S)","darwin")
-GOLDFLAGS:=-ldflags="-extldflags '-L$(CGO_DIR) -lmo -L$(THIRDPARTIES_INSTALL_DIR)/lib -Wl,-rpath,@executable_path/lib' $(VERSION_INFO)"
+GOLDFLAGS:=-ldflags="$(MO_GO_FUNCTION_ALIGNMENT_FLAG) -extldflags '-L$(CGO_DIR) -lmo -L$(THIRDPARTIES_INSTALL_DIR)/lib -Wl,-rpath,@executable_path/lib' $(VERSION_INFO)"
 endif
 
 # Keep all mo-service build variants on one compiler/feature contract. Targets
@@ -500,7 +507,7 @@ musl-thirdparties: musl-install
 	
 .PHONY: musl
 musl: override CGO_OPTS += CC=$(MUSL_CC)
-musl: override GOLDFLAGS:=-ldflags="--linkmode 'external' --extldflags '-static -L$(THIRDPARTIES_INSTALL_DIR)/lib -lstdc++ -Wl,-rpath,\$${ORIGIN}/lib' $(VERSION_INFO)"
+musl: override GOLDFLAGS:=-ldflags="$(MO_GO_FUNCTION_ALIGNMENT_FLAG) --linkmode 'external' --extldflags '-static -L$(THIRDPARTIES_INSTALL_DIR)/lib -lstdc++ -Wl,-rpath,\$${ORIGIN}/lib' $(VERSION_INFO)"
 musl: override TAGS := -tags musl
 musl: musl-install musl-cgo config musl-thirdparties jieba-dict
 musl:
