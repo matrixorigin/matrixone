@@ -2,14 +2,14 @@
 
 Issue: #28037
 
-Base-sync note (2026-10-28): verified target main
-`c4946bb74d43f0f777977507a5a7d0105e628bf2` assigns v133 to typed JSON
-MIN/MAX and v134 to ordered ODKU result summary and session baseline. This
-candidate preserves both and assigns JSON_VALUE provisional v135; v134 is the
-actual predecessor. This allocation is not independently approved or reserved,
-and must be revalidated against authoritative main before landing. Existing
-performance, shutdown-upgrade, durable recovery, QA and design approval gaps
-remain open.
+Base-sync note (2026-10-29): verified upstream main
+`3cf38889bca2d183e973e78b1288f8c704727542` retains v133 for typed JSON MIN/MAX
+and v134 for ordered ODKU result summary and session baseline. This candidate
+preserves both and assigns JSON_VALUE provisional v135; v134 is the actual
+predecessor. This allocation is not independently approved or reserved. Open draft PR #31492
+also claims MORPCVersion135 (checked 2026-10-29), so the cumulative allocation
+remains contested pending a coordinated decision. Existing performance,
+shutdown-upgrade, durable recovery, QA and design approval gaps remain open.
 
 ## Contract
 
@@ -72,10 +72,11 @@ values are not automatically recomputed. Upgrade validation covers views,
 generated columns, indexes, values over the 512-character boundary, and the
 explicit rebuild procedure.
 
-### Versioned compatibility decision (candidate revision 12, 2026-10-28)
+### Versioned compatibility decision (candidate revision 13, 2026-10-29)
 
 Status: independent maintainer approval pending. This candidate updates revision
-11 after the landed JSON MIN/MAX and ODKU allocations, retaining shutdown-upgrade acceptance;
+12 after merging fresh main and confirming the landed JSON MIN/MAX and ODKU
+allocations. Shutdown-upgrade acceptance and the previously recorded gaps remain;
 superseded details remain in PR history rather than this contract.
 Approval must identify
 this revision's immutable commit and an independent approver. Author replies,
@@ -85,8 +86,8 @@ The pre-conflict revision-9 source was a MORPC v124 candidate for JSON_VALUE
 function ID 462, overload 2, based on
 `7c146f4adbf068dd0c06b377157cfb7d7698b1eb` (v123). This isolated conflict
 repair advances the JSON_VALUE gate to provisional v135 against verified target
-main `c4946bb74d43f0f777977507a5a7d0105e628bf2`; revalidate that allocation at
-the authoritative main merge.
+main `3cf38889bca2d183e973e78b1288f8c704727542`; revalidate that allocation at
+the authoritative main landing.
 It preserves main's
 functional-index metadata and generated-key maintenance capability at v107 and
 isolated user-variable NULL regexp migration history at v108, plus native Unicode

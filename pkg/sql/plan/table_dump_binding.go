@@ -57,6 +57,7 @@ type tableDumpExpressionVisitor struct {
 	hasTimestampAdd       bool
 	hasUnixTimestamp      bool
 	hasJSON               bool
+	hasLegacyJSONValue    bool
 	hasIncompleteTemporal bool
 }
 
@@ -79,6 +80,10 @@ func (v *tableDumpExpressionVisitor) Enter(e tree.Expr) (tree.Expr, bool) {
 			v.hasUnixTimestamp = true
 		case "json_length", "json_set", "json_insert", "json_replace":
 			v.hasJSON = true
+		case "json_value":
+			if fn.JsonValue == nil || !jsonValueUsesContract(fn.JsonValue) {
+				v.hasLegacyJSONValue = true
+			}
 		case "date_format", "datediff", "to_days", "to_seconds", "dayofweek", "week":
 			v.hasIncompleteTemporal = true
 		}
@@ -638,6 +643,29 @@ func sameTableDumpBoundExpression(a, b *planpb.Expr) bool {
 	return sameProjectedBoundExpression(a, b, boundExpressionNormalized)
 }
 
+// Historical bare JSON_VALUE defaults can be folded to a non-null string
+// literal even though rebinding the nullable function keeps NotNullable false.
+// Compare that result only during the legacy float-format proof and retain all
+// other expression and type fields exactly.
+func sameLegacyJSONValueFoldedText(a, b *planpb.Expr) bool {
+	if a == nil || b == nil || types.T(a.Typ.Id) != types.T_varchar || types.T(b.Typ.Id) != types.T_varchar {
+		return false
+	}
+	leftLit, rightLit := a.GetLit(), b.GetLit()
+	if leftLit == nil || rightLit == nil || leftLit.Isnull || rightLit.Isnull {
+		return false
+	}
+	if _, ok := leftLit.Value.(*planpb.Literal_Sval); !ok {
+		return false
+	}
+	if _, ok := rightLit.Value.(*planpb.Literal_Sval); !ok {
+		return false
+	}
+	left, right := *a, *b
+	left.Typ.NotNullable, right.Typ.NotNullable = false, false
+	return sameTableDumpBoundExpression(&left, &right)
+}
+
 func sameTableDumpBoundType(a, b planpb.Type) bool {
 	return sameTableDumpBoundExpression(&planpb.Expr{Typ: a}, &planpb.Expr{Typ: b})
 }
@@ -1069,7 +1097,8 @@ func analyzeTableDumpBindingsWithCandidateVisitLimit(ctx CompilerContext, target
 					}
 				}()
 				if sameTableDumpBoundExpression(want, candidate) ||
-					mode&tableDumpBindingLegacyFloat != 0 && sameHistoricalFloatBoundExpression(want, candidate) {
+					mode&tableDumpBindingLegacyFloat != 0 && sameHistoricalFloatBoundExpression(want, candidate) ||
+					item.kind == "default" && visit.hasLegacyJSONValue && mode&tableDumpBindingLegacyFloatFormatting != 0 && sameLegacyJSONValueFoldedText(want, candidate) {
 					return true, nil
 				}
 				if !integerDecimal || mode&tableDumpBindingFrozenFloatDefaults == 0 || candidate == nil {
@@ -1094,6 +1123,11 @@ func analyzeTableDumpBindingsWithCandidateVisitLimit(ctx CompilerContext, target
 				return changed && sameTableDumpBoundExpression(want, normalized), nil
 			}
 			eras := append([]tableDumpBindingMode(nil), modes...)
+			if visit.hasLegacyJSONValue {
+				for _, era := range eras {
+					modes = append(modes, era|tableDumpBindingLegacyFloatFormatting)
+				}
+			}
 			if hasLegacyFloatStringCast(want) {
 				for _, era := range eras {
 					modes = append(modes, era|tableDumpBindingLegacyFloat)

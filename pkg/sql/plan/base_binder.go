@@ -3870,7 +3870,7 @@ func jsonValueDefaultNumericText(value string) string {
 	case "false":
 		return "0"
 	default:
-		return value
+		return strings.TrimSpace(value)
 	}
 }
 

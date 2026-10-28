@@ -8,6 +8,11 @@ select json_value('{"a":[12]}', '$.a');
 select json_value('{"a":{"k":1}}', '$.a');
 select json_value('{}', '$.missing' default 'empty' on empty);
 select json_value('{"a":"bad"}', '$.a' returning unsigned default 7 on error);
+-- Integer DEFAULT text accepts the same surrounding whitespace as extracted numeric strings.
+select json_value('{}', '$.missing' returning signed default ' 12 ' on empty) as signed_empty;
+select json_value('{"a":"bad"}', '$.a' returning signed default ' 12 ' on error) as signed_error;
+select json_value('{}', '$.missing' returning unsigned default ' 12 ' on empty) as unsigned_empty;
+select json_value('{"a":"bad"}', '$.a' returning unsigned default ' 12 ' on error) as unsigned_error;
 select json_value('{"a":1,"b":2}', '$.*' returning unsigned default 7 on error);
 select json_value('{"a":[12]}', '$.a' returning json);
 select json_value('{"a":"longer"}', '$.a' returning char(4) default 'back' on error);

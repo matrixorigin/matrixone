@@ -16,6 +16,18 @@ empty
 select json_value('{"a":"bad"}', '$.a' returning unsigned default 7 on error);
 json_value({"a":"bad"}, $.a returning unsigned default 7 on error)
 7
+select json_value('{}', '$.missing' returning signed default ' 12 ' on empty) as signed_empty;
+signed_empty
+12
+select json_value('{"a":"bad"}', '$.a' returning signed default ' 12 ' on error) as signed_error;
+signed_error
+12
+select json_value('{}', '$.missing' returning unsigned default ' 12 ' on empty) as unsigned_empty;
+unsigned_empty
+12
+select json_value('{"a":"bad"}', '$.a' returning unsigned default ' 12 ' on error) as unsigned_error;
+unsigned_error
+12
 select json_value('{"a":1,"b":2}', '$.*' returning unsigned default 7 on error);
 json_value({"a":1,"b":2}, $.* returning unsigned default 7 on error)
 7

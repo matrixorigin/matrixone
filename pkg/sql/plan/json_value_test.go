@@ -369,6 +369,17 @@ func TestJSONValueDefaultValidationMatrix(t *testing.T) {
 		require.NoError(t, validateJSONValueDefaultLiteral(ctx, literal("7"), types.New(oid, 0, 0)), oid)
 	}
 	for _, tc := range []struct {
+		name string
+		oid  types.T
+	}{
+		{"signed whitespace", types.T_int64},
+		{"unsigned whitespace", types.T_uint64},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.NoError(t, validateJSONValueDefaultLiteral(ctx, literal(" 12 "), types.New(tc.oid, 0, 0)))
+		})
+	}
+	for _, tc := range []struct {
 		name  string
 		value string
 		typ   types.Type
@@ -439,6 +450,26 @@ func TestJSONValueDefaultValidationMatrix(t *testing.T) {
 	require.Error(t, validateJSONValueDefaultLiteral(ctx, literal("abcd"), types.New(types.T_varchar, 3, 0)))
 	require.NoError(t, validateJSONValueDefaultLiteral(ctx, literal("abc"), types.New(types.T_binary, 3, 0)))
 	require.Error(t, validateJSONValueDefaultLiteral(ctx, literal("abcd"), types.New(types.T_binary, 3, 0)))
+}
+
+func TestJSONValueIntegerDefaultWhitespaceBinds(t *testing.T) {
+	for _, sql := range []string{
+		`select json_value('{}', '$.missing' returning signed default ' 12 ' on empty)`,
+		`select json_value('{"a":"bad"}', '$.a' returning signed default ' 12 ' on error)`,
+		`select json_value('{}', '$.missing' returning unsigned default ' 12 ' on empty)`,
+		`select json_value('{"a":"bad"}', '$.a' returning unsigned default ' 12 ' on error)`,
+	} {
+		t.Run(sql, func(t *testing.T) {
+			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			selectStmt := stmt.(*tree.Select).Select.(*tree.SelectClause)
+			builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
+			binder := NewDefaultBinder(context.Background(), builder, nil, plan.Type{}, nil)
+			_, err = binder.BindExpr(selectStmt.Exprs[0].Expr, 0, false)
+			require.NoError(t, err)
+		})
+	}
 }
 
 func TestJSONValueTargetValidationBoundaries(t *testing.T) {
