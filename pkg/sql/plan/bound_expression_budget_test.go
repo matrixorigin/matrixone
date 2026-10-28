@@ -15,14 +15,50 @@
 package plan
 
 import (
+	"context"
 	"crypto/sha256"
+	"encoding/json"
+	"fmt"
+	"sort"
 	"testing"
 	"time"
 
 	"github.com/gogo/protobuf/proto"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
+
+// Observe the real migration context rather than substituting the binder or
+// folder. Relative visits make generous/exact/one-less traces comparable.
+type boundMigrationTraceContext struct {
+	CompilerContext
+	proc    *process.Process
+	budget  *tableDumpBindingBudget
+	initial int
+	events  *[]string
+}
+
+func (c boundMigrationTraceContext) GetContext() context.Context {
+	session := c.proc.GetSessionInfo()
+	*c.events = append(*c.events, fmt.Sprintf("%d/%d/%d/%s/%s", c.budget.visits-c.initial, c.budget.nodes, c.budget.text, session.TimeZone, session.LCTimeNames))
+	return c.CompilerContext.GetContext()
+}
+
+func boundMigrationMemoSnapshot(budget *tableDumpBindingBudget) []string {
+	var snapshot []string
+	for source, memo := range budget.probeMemo.sources {
+		snapshot = append(snapshot, fmt.Sprintf("source:%d:%x", source.mode, source.source))
+		for session, result := range memo.results {
+			snapshot = append(snapshot, fmt.Sprintf("result:%d:%x:%s:%s:%x:%x", source.mode, source.source, session.zone, session.locale, result.data, result.value))
+		}
+	}
+	for _, hint := range budget.sessionHints {
+		snapshot = append(snapshot, fmt.Sprintf("hint:%s:%s", hint.zone, hint.locale))
+	}
+	sort.Strings(snapshot)
+	return snapshot
+}
 
 func TestProjectedBoundExpressionCumulativeBudget(t *testing.T) {
 	compiler, source := legacyFloatScopeTable(t, "create table t(a double,g varchar(200) default(concat(a,from_unixtime(0))),h varchar(200) default(concat(a,from_unixtime(0))))", 4)
@@ -36,16 +72,36 @@ func TestProjectedBoundExpressionCumulativeBudget(t *testing.T) {
 		defer proof.Free()
 		proofCtx := tableDumpBindContext{CompilerContext: compiler, ctx: compiler.GetContext(), proc: proof}
 		budget := &tableDumpBindingBudget{visits: initial}
+		var events []string
+		traced := boundMigrationTraceContext{CompilerContext: proofCtx, proc: proof, budget: budget, initial: initial, events: &events}
 		var results []*planpb.Expr
 		var costs []cost
 		for item := range persistedTableExpressions(source) {
 			if !hasLegacyFloatStringCast(item.expr) {
 				continue
 			}
-			repaired, err := rebindLegacyFloatStringExpression(proofCtx, source, item, budget)
+			repaired, err := rebindLegacyFloatStringExpression(traced, source, item, budget)
 			require.Same(t, time.UTC, proof.GetSessionInfo().TimeZone)
 			require.Equal(t, "en_US", proof.GetSessionInfo().LCTimeNames)
 			costs = append(costs, cost{budget.visits - initial, budget.nodes, budget.text, budget.probeMemo.entries, budget.probeMemo.bytes, len(budget.sessionHints)})
+			var wire []byte
+			var marshalErr error
+			if repaired != nil {
+				wire, marshalErr = proto.Marshal(repaired)
+				require.NoError(t, marshalErr)
+			}
+			observation := struct {
+				Initial, Item                       int
+				Tree                                []byte
+				Error                               string
+				Visits, Nodes, Text, Entries, Bytes int
+				Memo, SessionTrace                  []string
+			}{
+				initial, len(costs) - 1, wire, fmt.Sprintf("%T:%v", err, err), budget.visits - initial, budget.nodes, budget.text, budget.probeMemo.entries, budget.probeMemo.bytes, boundMigrationMemoSnapshot(budget), append([]string(nil), events...),
+			}
+			observationJSON, marshalErr := json.Marshal(observation)
+			require.NoError(t, marshalErr)
+			t.Logf("migration-observation %s", observationJSON)
 			if err != nil {
 				require.True(t, fail)
 				require.ErrorContains(t, err, "binding exceeds limit")
