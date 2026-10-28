@@ -49,6 +49,9 @@ func TestColumnDefaultPublicBinding(t *testing.T) {
 		"SELECT DEFAULT(x) IS NULL FROM (SELECT +n_regionkey x FROM nation UNION ALL SELECT +n_regionkey x FROM nation) d",
 		"SELECT DEFAULT(x) IS NULL FROM (SELECT -n_regionkey x FROM nation LIMIT 1) d",
 		"SELECT DEFAULT(x)=7 FROM (SELECT n_regionkey x FROM nation LIMIT 1) d",
+		"SELECT DEFAULT(x)=7, x+1 FROM (SELECT +n_regionkey x FROM nation LIMIT 1) d",
+		"SELECT DEFAULT(x) IS NULL, x+1 FROM (SELECT n_regionkey+1 x FROM nation LIMIT 1) d",
+		"SELECT DEFAULT(x)=0, x+1 FROM (SELECT 1 x UNION ALL SELECT 2 x) d",
 		"WITH d AS (SELECT n_regionkey x FROM nation) SELECT DEFAULT(x)=7 FROM d",
 		"SELECT DEFAULT(x)=7 FROM (SELECT n_regionkey x FROM nation GROUP BY n_regionkey) d",
 		"SELECT DEFAULT(x) IS NULL FROM (SELECT n_regionkey x FROM nation UNION ALL SELECT n_regionkey x FROM nation) d",
@@ -78,6 +81,7 @@ func TestColumnDefaultPublicBinding(t *testing.T) {
 			logical, err := runOneStmt(mock, t, sql)
 			require.NoError(t, err)
 			query := logical.GetQuery()
+			require.NoError(t, query.ValidateIntegerPrecision())
 			root := query.Nodes[query.Steps[0]]
 			require.NotEmpty(t, root.ProjectList)
 			value, err := ConstantFold(batch.EmptyForConstFoldBatch, DeepCopyExpr(root.ProjectList[0]), proc, false, true)

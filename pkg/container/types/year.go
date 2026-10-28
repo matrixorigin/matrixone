@@ -15,6 +15,7 @@
 package types
 
 import (
+	"context"
 	"fmt"
 	"strconv"
 
@@ -38,14 +39,19 @@ const (
 // - 2-digit string '70'-'99': converted to years 1970-1999
 // - String '0' or '00': interpreted as year 2000
 func ParseMoYear(s string) (MoYear, error) {
+	return ParseMoYearWithContext(defaultParseContext, s)
+}
+
+// ParseMoYearWithContext parses with the caller's error reporting context.
+func ParseMoYearWithContext(ctx context.Context, s string) (MoYear, error) {
 	if s == "" {
-		return 0, moerr.NewInvalidInputNoCtx("invalid year format: empty string")
+		return 0, moerr.NewInvalidInput(parseErrorContext(ctx), "invalid year format: empty string")
 	}
 
 	// Try to parse as integer
 	v, err := strconv.ParseInt(s, 10, 64)
 	if err != nil {
-		return 0, moerr.NewInvalidInputNoCtxf("invalid year format: %s", s)
+		return 0, moerr.NewInvalidInputf(parseErrorContext(ctx), "invalid year format: %s", s)
 	}
 
 	length := len(s)
@@ -66,9 +72,9 @@ func ParseMoYear(s string) (MoYear, error) {
 				return MoYear(1900 + v), nil
 			}
 			// 0100-0999 is invalid
-			return 0, moerr.NewInvalidInputNoCtxf("year value out of range: %s", s)
+			return 0, moerr.NewInvalidInputf(parseErrorContext(ctx), "year value out of range: %s", s)
 		}
-		return ParseMoYearFromInt(v)
+		return ParseMoYearFromIntWithContext(ctx, v)
 	}
 
 	// Handle 1-2 digit year (string format)
@@ -82,7 +88,7 @@ func ParseMoYear(s string) (MoYear, error) {
 		}
 	}
 
-	return 0, moerr.NewInvalidInputNoCtxf("invalid year value: %s", s)
+	return 0, moerr.NewInvalidInputf(parseErrorContext(ctx), "invalid year value: %s", s)
 }
 
 // ParseMoYearFromInt parses an integer value to MoYear type.
@@ -92,6 +98,11 @@ func ParseMoYear(s string) (MoYear, error) {
 // - 2-digit number 70-99: converted to years 1970-1999
 // - Number 0: stored as 0000
 func ParseMoYearFromInt(v int64) (MoYear, error) {
+	return ParseMoYearFromIntWithContext(defaultParseContext, v)
+}
+
+// ParseMoYearFromIntWithContext parses with the caller's error reporting context.
+func ParseMoYearFromIntWithContext(ctx context.Context, v int64) (MoYear, error) {
 	// Handle zero specially
 	if v == 0 {
 		return 0, nil
@@ -111,7 +122,7 @@ func ParseMoYearFromInt(v int64) (MoYear, error) {
 		return MoYear(v), nil
 	}
 
-	return 0, moerr.NewInvalidInputNoCtxf("year value out of range: %d", v)
+	return 0, moerr.NewInvalidInputf(parseErrorContext(ctx), "year value out of range: %d", v)
 }
 
 // ValidateMoYear checks if a MoYear value is valid.
