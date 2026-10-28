@@ -514,6 +514,15 @@ type QueryBuilder struct {
 	// window, PREPARE) reads the same decision.
 	boolSumAvgCompat      bool
 	noUnsignedSubtraction bool
+	// matrixOneNativeMode is the statement's D11 MatrixOneNativeMode
+	// decision, resolved once by the same single resolver the BindContext and
+	// DDL expression carriers use. It is stored as the native-mode flag by
+	// itself (false by zero value) so literal QueryBuilder constructions -
+	// the stats re-planner - keep the MySQL-compatible default; GetContext
+	// attaches the resulting boolean-contracts scalar so builder-scoped DML
+	// assignment casts and projected rewrites bind with the statement's
+	// actual mode instead of the absent-scalar default.
+	matrixOneNativeMode   bool
 	divPrecisionIncrement int32
 	isForUpdate           bool // if it's a query plan for update
 	isRestore             bool
@@ -904,6 +913,29 @@ type BindContext struct {
 	// raw ENUM/SET sidecar in the query block's PROJECT. It is populated only
 	// for row-preserving View ORDER BY boundaries.
 	mysqlSpecialRawProjectPositions map[int32]int32
+	// mysqlSpecialGroupStorageSlots maps a visible GROUP BY slot whose group
+	// expression is an ENUM/SET display call to a hidden storage-identity group
+	// slot appended beside it. Grouping on (display, storage) gives the group
+	// key MySQL's ordinal/bitmask identity for declarations whose zero sentinel
+	// and a valid member display identically as text (an empty label member),
+	// and boolean-truth consumers above the GROUP BY read the hidden slot so
+	// stored truth, never display text, decides the outcome. Planner-local only.
+	mysqlSpecialGroupStorageSlots map[int32]int32
+
+	// mysqlConditionalBooleanContracts resolves the statement's compatibility
+	// scalar from the session flag (MatrixOneNativeMode) once per root context:
+	// true binds IF/CASE conditions and every boolean context with the MySQL
+	// storage-truth / in-domain JSON conditional semantics; false keeps the
+	// exact pre-contract behavior (D11 two-carrier design, one scalar carried
+	// on BindContext for the SELECT path and attached to contexts from
+	// ddlExpressionContext for the standalone DDL binders). Children inherit
+	// it; the hidden grouping sibling exists only when it is true.
+	// mysqlConditionalBooleanContractsValid marks that a root context (or a
+	// context with a resolved ancestor) resolved the session's decision - an
+	// unsettled value never gates behavior, because the default session is
+	// MySQL-compatible.
+	mysqlConditionalBooleanContracts      bool
+	mysqlConditionalBooleanContractsValid bool
 
 	//cteByName saves all cte definitions in the current stmt
 	cteByName map[string]*CTERef

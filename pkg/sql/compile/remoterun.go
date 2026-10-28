@@ -175,6 +175,17 @@ func encodeRemoteScopeWithProtocol(s *Scope, proc *process.Process, requiredProt
 	if requiredProtocol != nil && features.LoadFKIgnoreCheck {
 		*requiredProtocol = max(*requiredProtocol, defines.MORPCVersion125)
 	}
+	// v135: in-domain T_json IF/CASE conditions and the ENUM/SET storage-truth
+	// BOOL casts change what a worker must evaluate; a below-floor receiver
+	// would apply the strict JSON-to-BOOL cast or the pre-change BOOL-vector
+	// assumption and mis-execute the row. The raised floor rides the encoded
+	// scope the same way the other expression-contract floors do, so older
+	// workers refuse delivery with the typed version error and the stream
+	// confirmation covers the gate version. Upstream main minted 132-134 for
+	// unrelated contracts first, so this feature owns 135.
+	if requiredProtocol != nil && features.JSONBooleanConditionContracts {
+		*requiredProtocol = max(*requiredProtocol, defines.MORPCVersion135)
+	}
 	if err = validateRemoteExpressionDestination(proc, p, features); err != nil {
 		return nil, err
 	}
@@ -2523,6 +2534,9 @@ func validateRemoteExpressionFeatures(proc *process.Process, features plan.Remot
 	}
 	if features.JSONNumericComparisons && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion128) {
 		return moerr.NewNotSupportedNoCtx("mixed JSON/numeric comparisons require MORPC protocol version 128")
+	}
+	if features.JSONBooleanConditionContracts && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion135) {
+		return moerr.NewNotSupportedNoCtx("implicit boolean-condition contracts require MORPC protocol version 135")
 	}
 	if features.JSONScalarLiteralContracts && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion104) {
 		return moerr.NewNotSupportedNoCtx("typed JSON scalar literals require MORPC protocol version 104")

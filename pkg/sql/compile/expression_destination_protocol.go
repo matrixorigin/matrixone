@@ -114,6 +114,9 @@ func validateRemoteExpressionDestination(proc *process.Process, p *pipeline.Pipe
 		{features.ViewMetadataFunctions, defines.MORPCVersion126,
 			"view metadata remote execution requires a versioned remote destination",
 			"remote destination does not support view metadata functions (MORPC version %d)"},
+		{features.JSONBooleanConditionContracts, defines.MORPCVersion135,
+			"implicit boolean-condition contracts require a versioned remote destination",
+			"remote destination does not support implicit boolean-condition contracts (MORPC version %d)"},
 	}
 	var parent context.Context
 	var observed int64

@@ -154,6 +154,14 @@ func remoteExpressionProtocolVersion(features plan.RemoteExpressionFeatures) int
 	if features.IncompleteTemporalStrings {
 		required = max(required, defines.MORPCVersion130)
 	}
+	// v135: the implicit boolean-condition contracts (in-domain T_json IF/CASE
+	// conditions, ENUM/SET storage-truth BOOL casts) change what a worker must
+	// evaluate; the compile-side shared mapper and the persisted feature->version
+	// table must derive the same requirement from the same walk. Upstream main
+	// minted 132-134 for unrelated contracts first, so this feature owns 135.
+	if features.JSONBooleanConditionContracts {
+		required = max(required, defines.MORPCVersion135)
+	}
 	return required
 }
 

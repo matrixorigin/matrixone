@@ -21,6 +21,7 @@ import (
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -45,6 +46,42 @@ func RequirePersistedExpressionProtocolForAuthoring(
 	owner any,
 ) error {
 	return requirePersistedExpressionProtocol(ctx, proc, owner, true)
+}
+
+// RequireMySQLConditionalBooleanConsumption enforces the same-version
+// cross-mode boundary for an already-bound expression that crosses the
+// catalog boundary (persisted generated columns, defaults, CHECK, ON UPDATE,
+// VIEW/CTAS rebinds). The conditional boolean contracts are admitted and
+// evaluated only on a MySQL-mode statement; the durable protocol floor
+// cannot distinguish the two session modes at the same binary version. A
+// native-mode session keeps the pre-contract admission, so it must fail
+// closed here instead of mis-executing: the pre-contract BOOL decoding of a
+// T_json condition panics, and the ENUM storage-truth cast would apply the
+// new kernel to a native-mode statement.
+func RequireMySQLConditionalBooleanConsumption(
+	ctx context.Context,
+	proc *process.Process,
+	owner any,
+) error {
+	if owner == nil {
+		return nil
+	}
+	features, err := planpb.RequiredRemoteExpressionFeatures(owner)
+	if err != nil {
+		return err
+	}
+	if !features.JSONBooleanConditionContracts {
+		return nil
+	}
+	if function.MySQLConditionalBooleanContractsFromProcess(proc) {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return moerr.NewNotSupported(
+		ctx,
+		"implicit boolean-condition contracts expression cannot be evaluated by a MatrixOne native-mode session")
 }
 
 // RequirePersistedIPFunctionProtocol is retained for source compatibility
@@ -101,6 +138,18 @@ func RequiredPersistedExpressionProtocolVersion(owner any) (int64, error) {
 	if features.LegacyIntervalUnits {
 		return 0, moerr.NewNotSupportedNoCtx("persisted legacy interval unit contract requires rebinding")
 	}
+	return RequiredPersistedExpressionProtocolVersionForFeatures(features), nil
+}
+
+// RequiredPersistedExpressionProtocolVersionForFeatures maps the shared
+// feature walk to the durable persisted-expression floor. It takes the
+// feature set directly so the reader-lacking-detector regression can pin the
+// pre-v135 behavior: a reader whose compiled walk lacks a feature computes
+// requirement 0 from the same expression, and the read gate then returns nil
+// (persisted_ip requirement-0 pass-through) - the executable record that the
+// verified process-retirement rollout prerequisite, not this gate, closes the
+// expired-but-serving path.
+func RequiredPersistedExpressionProtocolVersionForFeatures(features planpb.RemoteExpressionFeatures) int64 {
 	requiredVersion := int64(0)
 	if features.FloatConversionSemantics {
 		requiredVersion = defines.MORPCVersion132
@@ -189,7 +238,16 @@ func RequiredPersistedExpressionProtocolVersion(owner any) (int64, error) {
 	if features.IncompleteTemporalStrings {
 		requiredVersion = max(requiredVersion, defines.MORPCVersion130)
 	}
-	return requiredVersion, nil
+	// v135: the implicit boolean-condition contracts (in-domain T_json
+	// IF/CASE conditions, ENUM/SET storage-truth BOOL casts) change what a
+	// reader must evaluate in persisted expressions the same way they change
+	// remote pipelines; the authoring/read gates derive the requirement from
+	// this one mapping. Upstream main minted 132-134 first, so this feature
+	// owns 135.
+	if features.JSONBooleanConditionContracts {
+		requiredVersion = max(requiredVersion, defines.MORPCVersion135)
+	}
+	return requiredVersion
 }
 
 // observeExpressionProtocol records the requirement while a

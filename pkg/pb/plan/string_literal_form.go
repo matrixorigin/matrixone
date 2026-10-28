@@ -299,6 +299,7 @@ const (
 	planBooleanTypeID                int32 = 10
 	planJSONTypeID                   int32 = 62
 	planInt32TypeID                  int32 = 22
+	planEnumTypeID                   int32 = 66
 	// These stable function IDs are mirrored from pkg/sql/plan/function to
 	// avoid a dependency cycle. The generic CAST operator is not an assignment
 	// bounds check; these three internal assignment casts are.
@@ -458,6 +459,11 @@ type RemoteExpressionFeatures struct {
 	// LeastGreatestCollationSemantics requires v117 for appended overload 4.
 	// Released overload 0 retains its historical byte-order contract.
 	LeastGreatestCollationSemantics bool
+	// JSONBooleanConditionContracts requires v135: IF/CASE admit T_json
+	// condition slots that evaluate in-domain with MySQL conditional numeric
+	// coercion, and the ENUM/SET boolean-condition admission evaluates the
+	// stored ordinal/bitmap through the new CAST-to-BOOL contract.
+	JSONBooleanConditionContracts bool
 }
 
 func (features RemoteExpressionFeatures) Any() bool {
@@ -496,7 +502,8 @@ func (features RemoteExpressionFeatures) Any() bool {
 		features.DecimalStatisticalResultContracts ||
 		features.TableCollationFunction ||
 		features.InvalidDecimalStatisticalResultContract || features.ScalarDivision ||
-		features.LeastGreatestCollationSemantics
+		features.LeastGreatestCollationSemantics ||
+		features.JSONBooleanConditionContracts
 }
 
 func isPlanMediumIntType(typ Type) bool {
@@ -934,6 +941,61 @@ func isExpressionResultMetadataContract(expr *Expr) bool {
 	}
 }
 
+// isMySQLBooleanConditionContractNode reports whether one expression node uses
+// a boolean-condition semantic that requires MORPC version 135: a T_json
+// condition slot of IF/CASE that evaluates in-domain with MySQL conditional
+// numeric coercion (a pre-v135 receiver instead applies the strict
+// JSON-to-BOOL cast to the condition vector), or the ENUM storage-truth
+// admission that casts the stored ordinal to BOOL. Both change what a worker
+// must evaluate, so a below-floor receiver must refuse the expression
+// instead of mis-executing the old semantics. SET storage conditions are
+// exempt (design revision 8, finding F8): the persisted binder binds their
+// raw uint64 storage type and MySQL-mode query plans recover the same
+// numeric operand, so the pre-existing numeric admission, uint64 truth and
+// numeric-to-BOOL cast kernels evaluate them identically in any receiver and
+// session mode - classifying them would fence an unchanged execution and
+// lock native sessions out of SET catalog definitions base already serves.
+func isMySQLBooleanConditionContractNode(expr *Expr, fn *Function, id int32) bool {
+	if fn == nil {
+		return false
+	}
+	switch id {
+	case 21: // generic CAST
+		if expr == nil || expr.Typ.Id != planBooleanTypeID {
+			return false
+		}
+		if len(fn.Args) == 0 || fn.Args[0] == nil {
+			return false
+		}
+		src := fn.Args[0].Typ
+		return src.Id == planEnumTypeID
+	case iffFunctionID:
+		if len(fn.Args) == 0 || fn.Args[0] == nil {
+			return false
+		}
+		// iffCheck admits the ENUM condition in-domain exactly the way
+		// caseCheck's condition slots stay typed, so the IFF condition needs
+		// the same capability bit the CASE contract does: an ENUM condition
+		// evaluates through the post-v135 kernel, while a pre-contract worker
+		// hits the old boolean admission and mis-executes the row. A SET
+		// condition keeps its raw numeric uint64 type here and everywhere
+		// else, so the unchanged kernel row never needs the capability bit.
+		cond := fn.Args[0].Typ
+		return cond.Id == planJSONTypeID || cond.Id == planEnumTypeID
+	case caseFunctionID:
+		for i := 0; i+1 < len(fn.Args); i += 2 {
+			arg := fn.Args[i]
+			if arg == nil {
+				continue
+			}
+			if arg.Typ.Id == planJSONTypeID || arg.Typ.Id == planEnumTypeID {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // RequiredRemoteExpressionFeatures reports the independent versioned
 // expression features present in owner. Keep the features separate so callers
 // can retain precise diagnostics, while sharing one owner walk so adding one
@@ -1017,6 +1079,10 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 				if id == 21 && current.Typ.Id == 11 && len(fn.Args) > 0 &&
 					fn.Args[0] != nil && fn.Args[0].Typ.Id == 55 { // CAST YEAR -> BIT
 					features.YearBitCast = true
+				}
+				if id == 21 || id == caseFunctionID || id == iffFunctionID {
+					features.JSONBooleanConditionContracts = features.JSONBooleanConditionContracts ||
+						isMySQLBooleanConditionContractNode(current, fn, id)
 				}
 				if id == 16 || id == 76 { // CONCAT / CONCAT_WS
 					for _, arg := range fn.Args {
