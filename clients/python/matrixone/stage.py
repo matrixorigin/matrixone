@@ -282,10 +282,14 @@ class BaseStageManager:
             ]
             sql_parts.append(f"CREDENTIALS={{{', '.join(cred_parts)}}}")
 
+        # The server's default status is the usable "in_use"; only a disabled
+        # stage needs an explicit clause, which must precede COMMENT.
+        if not enable:
+            sql_parts.append("ENABLE=FALSE")
+
         if comment is not None:
             sql_parts.append(f"COMMENT={sql_string_token(comment, context='Stage')}")
 
-        # Note: enable is not included in SQL - MatrixOne stages are enabled by default
         return " ".join(sql_parts)
 
     def _build_drop_stage_sql(self, stage_name: str, if_exists: bool = False) -> str:
@@ -359,19 +363,20 @@ class BaseStageManager:
         credentials: Optional[Dict[str, str]] = None,
         comment: Optional[str] = None,
         if_not_exists: bool = False,
+        enable: bool = True,
     ) -> tuple:
         """
         Prepare data for create operation.
         Returns: (sql, stage_object)
         """
         sql = self._build_create_stage_sql(
-            name, url, credentials, enable=True, comment=comment, if_not_exists=if_not_exists
+            name, url, credentials, enable=enable, comment=comment, if_not_exists=if_not_exists
         )
         stage = Stage(
             name=name,
             url=url,
             credentials=credentials,
-            status='enabled',
+            status='enabled' if enable else 'disabled',
             comment=comment,
             created_time=datetime.now(),
             _client=self.client,
@@ -644,6 +649,7 @@ class StageManager(BaseStageManager):
         credentials: Optional[Dict[str, str]] = None,
         comment: Optional[str] = None,
         if_not_exists: bool = False,
+        enable: bool = True,
     ) -> Stage:
         """
         Create a new external stage.
@@ -666,6 +672,7 @@ class StageManager(BaseStageManager):
                 }
             comment (str, optional): Stage description
             if_not_exists (bool): If True, don't error if stage already exists
+            enable (bool): If False, create the stage disabled (``ENABLE=FALSE``)
 
         Returns:
             Stage: Created stage object
@@ -695,7 +702,7 @@ class StageManager(BaseStageManager):
             ...     'stage://production_data/archive/2024/'
             ... )
         """
-        sql, stage = self._prepare_create(name, url, credentials, comment, if_not_exists)
+        sql, stage = self._prepare_create(name, url, credentials, comment, if_not_exists, enable)
         self._get_executor().execute(sql)
         try:
             return self.get(name)
@@ -1197,9 +1204,10 @@ class AsyncStageManager(BaseStageManager):
         credentials: Optional[Dict[str, str]] = None,
         comment: Optional[str] = None,
         if_not_exists: bool = False,
+        enable: bool = True,
     ) -> Stage:
         """Create a stage asynchronously"""
-        sql, stage = self._prepare_create(name, url, credentials, comment, if_not_exists)
+        sql, stage = self._prepare_create(name, url, credentials, comment, if_not_exists, enable)
         await self._get_executor().execute(sql)
         try:
             return await self.get(name)
