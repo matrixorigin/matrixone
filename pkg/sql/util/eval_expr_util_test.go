@@ -471,6 +471,56 @@ func TestSetInsertValueStringBinaryStringKeepsLegacyWidthBehavior(t *testing.T) 
 	require.Equal(t, []byte("时"), got)
 }
 
+func TestSetInsertValueIntegerLiteralText(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	for _, tc := range []struct {
+		name  string
+		value *tree.NumVal
+		want  string
+	}{
+		{"signed", tree.NewNumVal(int64(3921094321), "03921094321", false, tree.P_int64), "3921094321"},
+		{"zero", tree.NewNumVal(int64(0), "000000", false, tree.P_int64), "0"},
+		{"negative", tree.NewNumVal(int64(-2), "-0002", true, tree.P_int64), "-2"},
+		{"unsigned", tree.NewNumVal(uint64(math.MaxUint64), "018446744073709551615", false, tree.P_uint64), "18446744073709551615"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			original := tc.value.String()
+			for _, oid := range []types.T{types.T_varchar, types.T_varbinary, types.T_binary} {
+				typ := types.New(oid, int32(len(tc.want)+1), 0)
+				canInsert, got, err := SetInsertValueString(proc, tc.value, &typ)
+				require.NoError(t, err)
+				require.True(t, canInsert)
+				want := []byte(tc.want)
+				if oid == types.T_binary {
+					want = append(want, 0)
+				}
+				require.Equal(t, want, got, oid.String())
+			}
+			canInsert, got, err := SetInsertValueJSON(proc, tc.value)
+			require.NoError(t, err)
+			require.True(t, canInsert)
+			require.Equal(t, tc.want, types.DecodeJson(got).String())
+			require.Equal(t, original, tc.value.String(), "lexical precision must remain available")
+		})
+	}
+
+	typ := types.New(types.T_varbinary, 1, 0)
+	canInsert, got, err := SetInsertValueString(proc, tree.NewNumVal(int64(2), "0002", false, tree.P_int64), &typ)
+	require.NoError(t, err)
+	require.True(t, canInsert)
+	require.Equal(t, []byte("2"), got, "width is checked after numeric conversion")
+
+	typ.Width = 4
+	canInsert, got, err = SetInsertValueString(proc, tree.NewNumVal("0002", "0002", false, tree.P_char), &typ)
+	require.NoError(t, err)
+	require.True(t, canInsert)
+	require.Equal(t, []byte("0002"), got, "character literals retain leading zeros")
+	canInsert, got, err = SetInsertValueJSON(proc, tree.NewNumVal(`"0002"`, `"0002"`, false, tree.P_char))
+	require.NoError(t, err)
+	require.True(t, canInsert)
+	require.Equal(t, `"0002"`, types.DecodeJson(got).String())
+}
+
 func TestBinaryToInt(t *testing.T) {
 	var val uint64
 	var err error

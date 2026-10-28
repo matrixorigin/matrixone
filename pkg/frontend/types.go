@@ -292,13 +292,14 @@ type PrepareStmt struct {
 	sqlModeFlagsSet bool
 	// divPrecisionIncrementSet distinguishes a captured default value from
 	// legacy and minimal in-memory prepared-statement fixtures.
-	divPrecisionIncrementSet bool
-	ParamTypes               []byte
-	ColDefData               [][]byte
-	IsCloudNonuser           bool
-	proc                     *process.Process
-	remapDb                  map[string]string
-	defaultDatabase          string
+	divPrecisionIncrementSet  bool
+	ParamTypes                []byte
+	integerArithmeticBindings []plan2.PreparedSourceBinding
+	ColDefData                [][]byte
+	IsCloudNonuser            bool
+	proc                      *process.Process
+	remapDb                   map[string]string
+	defaultDatabase           string
 
 	params              *vector.Vector
 	getFromSendLongData map[int]struct{}
@@ -879,6 +880,7 @@ func (prepareStmt *PrepareStmt) Close() {
 	if prepareStmt.PrepareStmt != nil {
 		prepareStmt.PrepareStmt.Free()
 	}
+	prepareStmt.integerArithmeticBindings = nil
 	if prepareStmt.ParamTypes != nil {
 		prepareStmt.ParamTypes = nil
 	}

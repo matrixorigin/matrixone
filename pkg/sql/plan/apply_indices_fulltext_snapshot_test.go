@@ -148,7 +148,10 @@ func TestCoveredFulltext2ScoreLimitOnlyForEquivalentSort(t *testing.T) {
 		{name: "score ascending", keys: []*plan.OrderBySpec{{Flag: plan.OrderBySpec_ASC}}},
 		{name: "different projected key", keys: []*plan.OrderBySpec{{Flag: plan.OrderBySpec_DESC,
 			Expr: GetColExpr(plan.Type{Id: int32(types.T_int64)}, 0, 0)}}},
-		{name: "second key", keys: []*plan.OrderBySpec{{Flag: plan.OrderBySpec_DESC}, {Flag: plan.OrderBySpec_DESC}}},
+		{name: "second key", keys: []*plan.OrderBySpec{{Flag: plan.OrderBySpec_DESC}, {Flag: plan.OrderBySpec_ASC,
+			Expr: GetColExpr(plan.Type{Id: int32(types.T_int64)}, 0, 0)}}, wantLimit: 200},
+		{name: "second key first", keys: []*plan.OrderBySpec{{Flag: plan.OrderBySpec_ASC,
+			Expr: GetColExpr(plan.Type{Id: int32(types.T_int64)}, 0, 0)}, {Flag: plan.OrderBySpec_DESC}}},
 		{name: "explicit null placement", keys: []*plan.OrderBySpec{{Flag: plan.OrderBySpec_DESC | plan.OrderBySpec_NULLS_FIRST}}},
 		{name: "found rows", foundRows: true},
 	} {
@@ -269,7 +272,7 @@ func TestCoveredFulltext2ScoreLimitOnBoundSQL(t *testing.T) {
 		{name: "nested score page", orderBy: "sc DESC", pagination: "LIMIT 2 OFFSET 1", wrap: true, wantLimit: 3},
 		{name: "ascending score", orderBy: "sc ASC", pagination: "LIMIT 2"},
 		{name: "different sort", orderBy: "id DESC", pagination: "LIMIT 2"},
-		{name: "score with second key", orderBy: "sc DESC, id", pagination: "LIMIT 2"},
+		{name: "score with second key", orderBy: "sc DESC, id", pagination: "LIMIT 2", wantLimit: 2},
 		{name: "id before score", orderBy: "id, sc DESC", pagination: "LIMIT 2"},
 		{name: "score expression", orderBy: "sc + 1 DESC", pagination: "LIMIT 2"},
 		{name: "no limit", orderBy: "sc DESC"},
@@ -339,7 +342,7 @@ func TestJoinFulltext2ScoreLimitOnBoundSQL(t *testing.T) {
 		{name: "explicit match score", orderBy: "MATCH(title, body) AGAINST('hello' IN BOOLEAN MODE) DESC", pagination: "LIMIT 2", wantLimit: 2},
 		{name: "ascending score", orderBy: "sc ASC", pagination: "LIMIT 2"},
 		{name: "different sort", orderBy: "id DESC", pagination: "LIMIT 2"},
-		{name: "score with second key", orderBy: "sc DESC, id", pagination: "LIMIT 2"},
+		{name: "score with second key", orderBy: "sc DESC, id", pagination: "LIMIT 2", wantLimit: 2},
 		{name: "id before score", orderBy: "id, sc DESC", pagination: "LIMIT 2"},
 		{name: "no limit", orderBy: "sc DESC"},
 		{name: "residual filter", residual: " AND title <> 'excluded'", orderBy: "sc DESC", pagination: "LIMIT 2"},
@@ -436,7 +439,7 @@ func TestFulltext2ScoreLimitParityWithIncludeFilters(t *testing.T) {
 		{name: "implicit order with residual", residual: " AND title <> 'excluded'"},
 		{name: "explicit score order with residual", orderBy: "sc DESC", residual: " AND title <> 'excluded'"},
 		{name: "explicit score order found rows", prefix: "SQL_CALC_FOUND_ROWS ", orderBy: "sc DESC"},
-		{name: "explicit score order with tiebreak", orderBy: "sc DESC, id"},
+		{name: "explicit score order with tiebreak", orderBy: "sc DESC, id", wantLimit: 2},
 		{name: "id before score", orderBy: "id, sc DESC"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -612,12 +615,16 @@ func TestCoveredFulltext2ScoreLimitSortBarriers(t *testing.T) {
 	type testCase struct {
 		name   string
 		mutate func(nodes)
+		bound  bool
 	}
 	for _, withInner := range []bool{false, true} {
 		cases := []testCase{
-			{name: "equivalent"},
+			{name: "equivalent", bound: true},
 			{name: "ascending", mutate: func(n nodes) { n.outer.OrderBy[0].Flag = plan.OrderBySpec_ASC }},
-			{name: "secondary key", mutate: func(n nodes) { n.outer.OrderBy = append(n.outer.OrderBy, n.outer.OrderBy[0]) }},
+			{name: "secondary key", bound: true, mutate: func(n nodes) {
+				second := &plan.OrderBySpec{Expr: GetColExpr(n.outer.OrderBy[0].Expr.Typ, n.outer.OrderBy[0].Expr.GetCol().RelPos, 0), Flag: plan.OrderBySpec_ASC}
+				n.outer.OrderBy = append(n.outer.OrderBy, second)
+			}},
 			{name: "non-score key first", mutate: func(n nodes) {
 				first := &plan.OrderBySpec{Expr: GetColExpr(n.outer.OrderBy[0].Expr.Typ, n.outer.OrderBy[0].Expr.GetCol().RelPos, 0), Flag: plan.OrderBySpec_DESC}
 				n.outer.OrderBy = append([]*plan.OrderBySpec{first}, n.outer.OrderBy...)
@@ -675,7 +682,7 @@ func TestCoveredFulltext2ScoreLimitSortBarriers(t *testing.T) {
 					tc.mutate(nodes{outer, project, inner, search})
 				}
 				b.pushCoveredFulltext2ScoreLimitFromSort(outer)
-				if tc.mutate == nil {
+				if tc.bound {
 					require.NotNil(t, search.IndexSearchScan.CandidateLimit)
 					require.Equal(t, uint64(3), search.IndexSearchScan.CandidateLimit.GetLit().GetU64Val())
 				} else {
