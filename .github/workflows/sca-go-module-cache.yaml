@@ -7,7 +7,7 @@ on:
         description: Full SCA resource experiment
         required: true
         type: choice
-        options: [baseline, tuned, lint-memory-only]
+        options: [baseline, tuned, lint-memory-only, make-memory-only]
 
 permissions:
   contents: read
@@ -285,7 +285,7 @@ jobs:
           VARIANT: ${{ inputs.variant }}
         run: |
           set -euo pipefail
-          case "$VARIANT" in baseline|tuned|lint-memory-only) ;; *) exit 2 ;; esac
+          case "$VARIANT" in baseline|tuned|lint-memory-only|make-memory-only) ;; *) exit 2 ;; esac
           relative="$(awk -F: '$1 == "0" { print $3; exit }' /proc/self/cgroup)"
           cgroup="/sys/fs/cgroup${relative}"
           if [[ ! -r "$cgroup/memory.current" ]]; then cgroup=/sys/fs/cgroup; fi
@@ -338,6 +338,8 @@ jobs:
           if [[ "$VARIANT" == tuned ]]; then
             go_flags="$(go env GOFLAGS)"
             export GOFLAGS="${go_flags:+${go_flags} }-p=1"
+            export GOMEMLIMIT="${GOMEMLIMIT:-5GiB}"
+          elif [[ "$VARIANT" == make-memory-only ]]; then
             export GOMEMLIMIT="${GOMEMLIMIT:-5GiB}"
           fi
           echo "SCA_ANALYSIS_FLAGS goflags=${GOFLAGS:-<unset>} gomemlimit=${GOMEMLIMIT:-<unset>}"
