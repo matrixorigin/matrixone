@@ -52,4 +52,14 @@ execute st30717on;
 set sql_auto_is_null=0;
 execute st30717on;
 deallocate prepare st30717on;
+-- Derived-table projections carry the lineage of their producers: a
+-- projected column of the null-extended side keeps plain IS NULL semantics
+-- (mo-bot review 5690740934), while the preserved side of the same derived
+-- table and a plain derived projection keep the MySQL rewrite.
+set sql_auto_is_null=1;
+create table u30717(id bigint auto_increment primary key, b int);
+insert into u30717(b) values (1),(2);
+select d.ti, d.ui from (select t.id as ti, u.id as ui from t30717 t left join u30717 u on u.id=t.id) d where d.ui is null order by d.ti;
+select d.ti, d.ui from (select t.id as ti, u.id as ui from t30717 t left join u30717 u on u.id=t.id) d where d.ti is null order by d.ti;
+select d.id from (select id from t30717) d where d.id is null;
 drop database if exists sql_auto_is_null_bvt;

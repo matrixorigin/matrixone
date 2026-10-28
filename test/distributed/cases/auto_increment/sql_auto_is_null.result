@@ -69,4 +69,22 @@ execute st30717on;
 ➤ v[4,32,0]  𝄀
 14
 deallocate prepare st30717on;
+set sql_auto_is_null=1;
+create table u30717(id bigint auto_increment primary key, b int);
+insert into u30717(b) values (1),(2);
+select d.ti, d.ui from (select t.id as ti, u.id as ui from t30717 t left join u30717 u on u.id=t.id) d where d.ui is null order by d.ti;
+➤ ti[-5,64,0]  ¦  ui[-5,64,0]  𝄀
+3  ¦  null  𝄀
+4  ¦  null  𝄀
+100  ¦  null  𝄀
+101  ¦  null  𝄀
+102  ¦  null  𝄀
+103  ¦  null  𝄀
+104  ¦  null
+select d.ti, d.ui from (select t.id as ti, u.id as ui from t30717 t left join u30717 u on u.id=t.id) d where d.ti is null order by d.ti;
+➤ ti[-5,64,0]  ¦  ui[-5,64,0]  𝄀
+1  ¦  1
+select d.id from (select id from t30717) d where d.id is null;
+➤ id[-5,64,0]  𝄀
+1
 drop database if exists sql_auto_is_null_bvt;

@@ -349,3 +349,67 @@ func TestSqlAutoIsNullChainedLeftJoinsNotRewritten(t *testing.T) {
 	require.False(t, sqlAutoIsNullQueryHasFunction(qry, "last_insert_id"))
 	require.False(t, sqlAutoIsNullAnyNodeNotCacheable(qry))
 }
+
+// The derived-table family pins column lineage: a projected column keeps the
+// null-extended reachability of its producer, while a preserved-side
+// reference stays rewrite-eligible and a plain projection keeps rewriting.
+// MySQL observable semantics: a mergeable derived table collapses into the
+// outer block, so the whole-clause form must behave exactly as if written
+// against the underlying JOIN.
+
+// TestSqlAutoIsNullDerivedTableNullExtendedColumnNotRewritten is the review
+// case: `WHERE d.id IS NULL` where d projects the null-extended side's
+// AUTO_INCREMENT column must select the unmatched rows, never compare them to
+// last_insert_id().
+func TestSqlAutoIsNullDerivedTableNullExtendedColumnNotRewritten(t *testing.T) {
+	cc := newSqlAutoIsNullTestContext(t, int64(1), nil)
+	qry := buildSqlAutoIsNullQuery(t, cc,
+		"select d.seq from (select s.seq from auto_t m left join auto_t s "+
+			"on m.seq = s.seq) d where d.seq is null")
+	require.False(t, sqlAutoIsNullQueryHasFunction(qry, "last_insert_id"),
+		"a projected null-extended AUTO_INCREMENT column must keep plain IS NULL semantics")
+	require.True(t, sqlAutoIsNullQueryHasFunction(qry, "isnull"))
+	require.False(t, sqlAutoIsNullAnyNodeNotCacheable(qry))
+}
+
+// TestSqlAutoIsNullDerivedTableMixPreservedColumnStillRewritten pins the
+// per-column boundary of the same derived table: the preserved side's
+// AUTO_INCREMENT column keeps its rewrite even though a null-extended column
+// is projected right next to it.
+func TestSqlAutoIsNullDerivedTableMixPreservedColumnStillRewritten(t *testing.T) {
+	cc := newSqlAutoIsNullTestContext(t, int64(1), nil)
+	qry := buildSqlAutoIsNullQuery(t, cc,
+		"select d.d1 from (select m.seq as d1, s.seq as d2 from auto_t m "+
+			"left join auto_t s on m.seq = s.seq) d where d.d1 is null")
+	require.True(t, sqlAutoIsNullQueryHasFunction(qry, "last_insert_id"),
+		"a preserved-side AUTO_INCREMENT column keeps the rewrite")
+	require.False(t, sqlAutoIsNullQueryHasFunction(qry, "isnull"))
+	require.True(t, sqlAutoIsNullAnyNodeNotCacheable(qry))
+}
+
+// TestSqlAutoIsNullNestedDerivedNullSideNotRewritten walks the lineage one
+// derived layer deeper: the null extension introduced in the innermost block
+// still excludes the outermost reference.
+func TestSqlAutoIsNullNestedDerivedNullSideNotRewritten(t *testing.T) {
+	cc := newSqlAutoIsNullTestContext(t, int64(1), nil)
+	qry := buildSqlAutoIsNullQuery(t, cc,
+		"select e.d2 from (select d.d2 from (select s.seq as d2 from auto_t m "+
+			"left join auto_t s on m.seq = s.seq) d) e where e.d2 is null")
+	require.False(t, sqlAutoIsNullQueryHasFunction(qry, "last_insert_id"),
+		"the innermost block's null extension must exclude the outer reference")
+	require.True(t, sqlAutoIsNullQueryHasFunction(qry, "isnull"))
+	require.False(t, sqlAutoIsNullAnyNodeNotCacheable(qry))
+}
+
+// TestSqlAutoIsNullDerivedTablePlainProjectionStillRewritten guards the
+// opposite direction: with no outer join anywhere in the lineage, the
+// projected AUTO_INCREMENT column keeps the MySQL rewrite; over-excluding
+// here would silently break the ODBC consumer pattern behind derived tables.
+func TestSqlAutoIsNullDerivedTablePlainProjectionStillRewritten(t *testing.T) {
+	cc := newSqlAutoIsNullTestContext(t, int64(1), nil)
+	qry := buildSqlAutoIsNullQuery(t, cc,
+		"select d.seq from (select seq from auto_t) d where d.seq is null")
+	require.True(t, sqlAutoIsNullQueryHasFunction(qry, "last_insert_id"),
+		"a plain derived projection must keep the rewrite")
+	require.True(t, sqlAutoIsNullAnyNodeNotCacheable(qry))
+}

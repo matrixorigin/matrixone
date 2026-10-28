@@ -9653,7 +9653,7 @@ func (builder *QueryBuilder) rewriteSqlAutoIsNull(
 	if !colExpr.Typ.AutoIncr || !colExpr.Typ.NotNullable {
 		return boundFilters, false, nil
 	}
-	if builder.colOnOuterJoinNullSide(fromNodeID, colExpr.GetCol().RelPos) {
+	if builder.colRefOnOuterJoinNullSide(fromNodeID, colExpr.GetCol()) {
 		// References reached through the null-extended side of an outer join
 		// never participate in the rewrite: per MySQL's odbc.result they keep
 		// plain IS NULL semantics and select the null-extended join rows.
@@ -9772,6 +9772,108 @@ func (builder *QueryBuilder) collectSqlAutoIsNullScopeTags(nodeID int32, into ma
 	}
 	for _, child := range node.Children {
 		builder.collectSqlAutoIsNullScopeTags(child, into)
+	}
+}
+
+// colRefOnOuterJoinNullSide reports whether a bound reference reaches a
+// relation an outer join null-extends, either directly or through the
+// projections and derived-table blocks that re-expose it. Direct references
+// resolve through the raw walk in colOnOuterJoinNullSide; a derived-table
+// column resolves through its producing projection, so a projected
+// null-extended column keeps plain IS NULL semantics exactly like a bare
+// reference to the underlying JOIN side.
+func (builder *QueryBuilder) colRefOnOuterJoinNullSide(fromNodeID int32, col *plan.ColRef) bool {
+	if col == nil {
+		return false
+	}
+	nullSideTags := make(map[int32]struct{})
+	builder.collectOuterJoinNullSideTags(fromNodeID, nullSideTags)
+	if _, ok := nullSideTags[col.RelPos]; ok {
+		return true
+	}
+	return builder.colRefProducedOnNullSide(fromNodeID, col, nullSideTags,
+		map[[2]int32]bool{{col.RelPos, col.ColPos}: true})
+}
+
+// colRefProducedOnNullSide resolves (tag, column) through the nodes in the
+// FROM subtree that project that tag: the projected expression's own column
+// references decide the lineage. References landing on raw relations are
+// terminal (they already answered in nullSideTags); references landing on
+// other projections recurse. visited bounds the resolution against cycles.
+func (builder *QueryBuilder) colRefProducedOnNullSide(fromNodeID int32, col *plan.ColRef,
+	nullSideTags map[int32]struct{}, visited map[[2]int32]bool) bool {
+	if col == nil {
+		return false
+	}
+	var producers []int32
+	var collect func(nodeID int32)
+	collect = func(nodeID int32) {
+		if nodeID < 0 || int(nodeID) >= len(builder.qry.Nodes) {
+			return
+		}
+		node := builder.qry.Nodes[nodeID]
+		if len(node.ProjectList) > 0 {
+			for _, tag := range node.BindingTags {
+				if tag == col.RelPos {
+					producers = append(producers, nodeID)
+					break
+				}
+			}
+		}
+		for _, child := range node.Children {
+			collect(child)
+		}
+	}
+	collect(fromNodeID)
+	for _, producer := range producers {
+		project := builder.qry.Nodes[producer].ProjectList
+		if col.ColPos < 0 || int(col.ColPos) >= len(project) {
+			continue
+		}
+		refs := make([]*plan.ColRef, 0, 2)
+		collectSqlAutoIsNullColRefs(project[col.ColPos], &refs)
+		for _, ref := range refs {
+			if ref != nil {
+				if _, ok := nullSideTags[ref.RelPos]; ok {
+					return true
+				}
+			}
+		}
+		for _, ref := range refs {
+			if ref == nil {
+				continue
+			}
+			key := [2]int32{ref.RelPos, ref.ColPos}
+			if visited[key] {
+				continue
+			}
+			visited[key] = true
+			if builder.colRefProducedOnNullSide(fromNodeID, ref, nullSideTags, visited) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// collectSqlAutoIsNullColRefs gathers every column reference of a projection
+// expression; scalar functions and IN lists stay transparent.
+func collectSqlAutoIsNullColRefs(expr *plan.Expr, into *[]*plan.ColRef) {
+	if expr == nil {
+		return
+	}
+	if col := expr.GetCol(); col != nil {
+		*into = append(*into, col)
+	}
+	if fn := expr.GetF(); fn != nil {
+		for _, arg := range fn.Args {
+			collectSqlAutoIsNullColRefs(arg, into)
+		}
+	}
+	if list := expr.GetList(); list != nil {
+		for _, item := range list.List {
+			collectSqlAutoIsNullColRefs(item, into)
+		}
 	}
 }
 
