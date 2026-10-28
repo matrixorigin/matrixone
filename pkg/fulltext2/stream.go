@@ -254,7 +254,7 @@ func (idx *Index) StreamQuery(pattern []byte, boolean bool, parser string, algo 
 
 	if haveQ {
 		if terms, ok := disjunctiveTerms(q); ok {
-			return idx.streamDisjunction(terms, algo, filter, sink)
+			return idx.streamDisjunction(terms, algo, filter, sink, 0) // boolean/NL mode: no high-df cutoff
 		}
 	} else {
 		// NL mode = exact positional phrase. Stream it ONE SEGMENT AT A TIME (peak =
@@ -326,11 +326,11 @@ func (idx *Index) streamPhrase(slots []phraseSlot, algo ScoreAlgo, filter *prefi
 // heap-free via streamWAND — the position-free analogue of StreamQuery's disjunctive
 // branch, but a CJK run is tokenized to OR terms instead of a positional phrase, so it
 // works on a POSITION_FREE index.
-func (idx *Index) StreamBagOfWords(pattern []byte, parser string, algo ScoreAlgo, filter *prefilter, wantInclude bool, emit func(out *vectorindex.SearchOutput) error) error {
+func (idx *Index) StreamBagOfWords(pattern []byte, parser string, algo ScoreAlgo, filter *prefilter, wantInclude bool, emit func(out *vectorindex.SearchOutput) error, dfCutoff float64) error {
 	if idx.globalN == 0 {
 		return nil
 	}
-	q, err := buildBagOfWordsQuery(string(pattern), normalizeParser(parser))
+	q, err := buildBagOfWordsQuery(string(pattern), normalizeParser(parser), idx.tokenFilters...)
 	if err != nil {
 		return err
 	}
@@ -338,15 +338,18 @@ func (idx *Index) StreamBagOfWords(pattern []byte, parser string, algo ScoreAlgo
 	if !ok {
 		return nil // no resolvable tokens → nothing to stream
 	}
-	return idx.streamDisjunction(terms, algo, filter, newStreamSink(idx, wantInclude, filter, emit))
+	// Same high-df cutoff as the top-k path, so a query behaves identically with or without
+	// a pushed LIMIT (streamDisjunction applies it under the gs it creates — no extra pass).
+	return idx.streamDisjunction(terms, algo, filter, newStreamSink(idx, wantInclude, filter, emit), dfCutoff)
 }
 
 // streamDisjunction streams a pure OR of terms heap-free across all segments (global
 // corpus stats + per-segment liveness), pushing every (pk, score) into sink and
 // flushing at the end. Shared by StreamQuery's boolean disjunctive branch and
 // StreamBagOfWords' IN BM25 MODE path — a change to the disjunctive walk lands once.
-func (idx *Index) streamDisjunction(terms []clause, algo ScoreAlgo, filter *prefilter, sink *streamSink) error {
+func (idx *Index) streamDisjunction(terms []clause, algo ScoreAlgo, filter *prefilter, sink *streamSink, dfCutoff float64) error {
 	gs := idx.newGlobalStats()
+	terms = idx.highDFKept(terms, gs, dfCutoff) // no-op when dfCutoff==0 (the boolean-mode caller)
 	for si, seg := range idx.segments {
 		allow := andAllow(mkAllow(seg, filter), &livenessMembership{idx: idx, si: si})
 		seg.streamWAND(terms, algo, gs, allow, sink)
