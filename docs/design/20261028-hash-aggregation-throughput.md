@@ -1,6 +1,6 @@
 # Hash aggregation throughput with atomic publication
 
-Status: revision 1 passed design self-review before production implementation.
+Status: revision 2 passed design self-review before production implementation.
 Work item: user-requested systematic exact aggregation optimization, prompted by
 the full ClickBench Q5 comparison. Delivery is one implementation branch/PR;
 the PR link is assigned when published.
@@ -54,7 +54,9 @@ collisions, growth, failed admission, reset and reuse remain valid.
    For sufficiently large tables and bounded batches, load first cells into
    call-local fixed scratch before resolving collisions and tentative inserts
    in input order. The table is immutable during preview, so these cell copies
-   remain valid. A copied empty cell is still checked against earlier planned
+   remain valid. An alternative is to write confirmed existing matches directly
+   into the output mapping and resolve the remaining rows in input order, avoiding
+   a separate cell-copy buffer. A copied empty cell is still checked against earlier planned
    inserts; collision chains beyond it use the live, unchanged table. Keep
    scalar handling for small tables/batches. Apply only to representations with
    measured benefit; integer and string-state plans have separate cost evidence.
@@ -135,6 +137,12 @@ cardinality that reaches the changed branch, not 100M rows. Performance data is
 generated deterministically outside UT and reports allocations, RSS, CPU,
 wall time, spill and process swap. Cover both low and high cardinality, clustered
 duplicates and shuffled keys, hits/misses, nullable/non-null and one/four workers.
+The user explicitly requires a general optimization. Make clustered keys and a
+random permutation of the exact same multiset a mandatory comparison; an
+adjacent-repeat shortcut cannot be the main source of the claimed gain. Include
+all-unique keys, hot working sets and full-table random working sets. Use fixed
+prehashed keys for primitive comparisons so process-local random hash seeds do
+not confound table layout. Report string/composite/NULL controls separately.
 No timing assertion belongs in a unit test.
 
 Target a material improvement (initial acceptance target: at least 25% lower
@@ -159,3 +167,12 @@ duplicate-only group shortcut must preserve existing-row provenance and
 aggregate preflight/update. Existing ownership/version/admission boundaries are
 unchanged. No unresolved design blocker remains; measured regression or an
 escaping scratch allocation rejects the corresponding implementation.
+
+Revision 2 design self-review: the first-cell experiment may publish confirmed
+existing matches to caller-owned output scratch before sequential resolution of
+unmatched rows. It does not publish table state, alter group IDs or bypass the
+planned-slot overlay. The additional same-multiset/order controls are mandatory.
+The full cell-copy experiment improves random accesses but regresses skew/hot
+controls; it is not accepted for delivery. No new owner, resource bound or
+compatibility change is introduced by the alternative. Decision: PASS before
+implementing the output-scratch variant; implementation performance remains open.
