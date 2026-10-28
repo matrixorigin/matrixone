@@ -16,13 +16,17 @@ package plan
 
 import (
 	"context"
+	"fmt"
 	"math"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -112,6 +116,167 @@ func setupLeftJoinBase(t *testing.T) (*MockCompilerContext, *QueryBuilder, *plan
 	}
 
 	return ctx, builder, leftIDCol, rightIDCol, leftSpaceCol
+}
+
+// Count entries, not elapsed time or process-wide allocations: even a short
+// chain detects repeated empty deduction passes without exhausting CI memory.
+func pushdownFilterVisitCount(builder *QueryBuilder) int {
+	visits := 0
+	for _, entry := range builder.optimizationHistory {
+		if strings.HasPrefix(entry, "pushdownFilters:before (") {
+			visits++
+		}
+	}
+	return visits
+}
+
+func TestPushdownFiltersSkipsEmptyDeduction(t *testing.T) {
+	for _, joinType := range []plan.Node_JoinType{
+		plan.Node_INNER, plan.Node_SEMI, plan.Node_RIGHT,
+		plan.Node_ANTI, plan.Node_LEFT, plan.Node_SINGLE,
+	} {
+		for _, chainSide := range []int{0, 1} {
+			for _, tables := range []int{4, 8} {
+				t.Run(fmt.Sprintf("%s/chainSide=%d/tables=%d", joinType, chainSide, tables), func(t *testing.T) {
+					builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, false)
+					for i := 0; i < tables; i++ {
+						builder.qry.Nodes = append(builder.qry.Nodes, &plan.Node{
+							NodeType: plan.Node_TABLE_SCAN, BindingTags: []int32{int32(i)},
+							Stats: &plan.Stats{Outcnt: 2},
+						})
+					}
+					root := int32(0)
+					for i := 1; i < tables; i++ {
+						children := []int32{root, int32(i)}
+						if chainSide == 1 {
+							children[0], children[1] = children[1], children[0]
+						}
+						builder.qry.Nodes = append(builder.qry.Nodes, &plan.Node{
+							NodeType: plan.Node_JOIN, JoinType: joinType,
+							Children: children, Stats: &plan.Stats{Outcnt: 2},
+						})
+						root = int32(len(builder.qry.Nodes) - 1)
+					}
+
+					newRoot, remaining := builder.pushdownFilters(root, nil, false)
+					require.Equal(t, root, newRoot)
+					require.Empty(t, remaining)
+					require.Len(t, builder.qry.Nodes, 2*tables-1)
+					require.Equal(t, len(builder.qry.Nodes), pushdownFilterVisitCount(builder),
+						"without deduced predicates each node must be visited exactly once")
+					for _, node := range builder.qry.Nodes {
+						require.Empty(t, node.FilterList)
+						if node.NodeType == plan.Node_JOIN {
+							require.Equal(t, joinType, node.JoinType)
+						}
+					}
+				})
+			}
+		}
+	}
+}
+
+func TestPushdownFiltersPreservesNonemptyDeduction(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		joinType plan.Node_JoinType
+		fromLeft bool
+		inOnList bool
+	}{
+		{"inner-left-to-right", plan.Node_INNER, true, false},
+		{"inner-right-to-left", plan.Node_INNER, false, false},
+		{"semi-left-to-right", plan.Node_SEMI, true, false},
+		{"semi-right-to-left", plan.Node_SEMI, false, true},
+		{"anti-right-to-left", plan.Node_ANTI, false, true},
+		{"left-left-to-right", plan.Node_LEFT, true, false},
+		{"single-left-to-right", plan.Node_SINGLE, true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, builder, leftCol, rightCol, _ := setupLeftJoinBase(t)
+			builder.qry.Nodes[2].JoinType = tc.joinType
+			col := rightCol
+			if tc.fromLeft {
+				col = leftCol
+			}
+			filter, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), "=", []*plan.Expr{
+				DeepCopyExpr(col), MakePlan2Int64ConstExprWithType(7),
+			})
+			require.NoError(t, err)
+			filters := []*plan.Expr{filter}
+			if tc.inOnList {
+				builder.qry.Nodes[2].OnList = append(builder.qry.Nodes[2].OnList, filter)
+				filters = nil
+			}
+
+			root, remaining := builder.pushdownFilters(2, filters, false)
+			require.Equal(t, int32(2), root)
+			require.Empty(t, remaining)
+			require.Equal(t, tc.joinType, builder.qry.Nodes[root].JoinType)
+			for i, expectedCol := range []*plan.Expr{leftCol, rightCol} {
+				require.Len(t, builder.qry.Nodes[i].FilterList, 1)
+				pred := builder.qry.Nodes[i].FilterList[0].GetF()
+				require.NotNil(t, pred)
+				require.Equal(t, "=", pred.Func.ObjName)
+				require.Len(t, pred.Args, 2)
+				require.Equal(t, expectedCol.GetCol(), pred.Args[0].GetCol())
+				require.NotNil(t, pred.Args[1].GetLit())
+				require.Equal(t, int64(7), pred.Args[1].GetLit().GetI64Val())
+			}
+		})
+	}
+}
+
+func TestPrepareJoinChain(t *testing.T) {
+	const tables = 8
+	var sql strings.Builder
+	sql.WriteString("prepare join_chain from 'select n1.n_name from nation n1")
+	for i := 2; i <= tables; i++ {
+		fmt.Fprintf(&sql, " join nation n%d on n%d.n_nationkey = n%d.n_nationkey", i, i-1, i)
+	}
+	sql.WriteString(" where n1.n_nationkey = 1'")
+
+	ctx := NewMockCompilerContext(true)
+	mp := mpool.MustNewZeroNoFixed()
+	t.Cleanup(func() { mpool.DeleteMPool(mp) })
+	proc := process.NewTopProcess(ctx.GetContext(), mp, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	t.Cleanup(proc.Free)
+	ctx.GetProcessFunc = func() *process.Process { return proc }
+	proc.SetResolveVariableFunc(ctx.ResolveVariable)
+	stmt, err := mysql.ParseOne(ctx.GetContext(), sql.String(), 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	p, err := BuildPlan(ctx, stmt, false)
+	require.NoError(t, err)
+	prepared := p.GetDcl().GetPrepare()
+	require.NotNil(t, prepared)
+	require.True(t, prepared.Plan.IsPrepare)
+	query := prepared.Plan.GetQuery()
+	require.NotNil(t, query)
+	require.Len(t, query.Steps, 1)
+	require.Equal(t, []string{"n_name"}, query.Headings)
+	scans, joins, filteredScans := 0, 0, 0
+	var visit func(int32)
+	visit = func(id int32) {
+		node := query.Nodes[id]
+		if node.NodeType == plan.Node_TABLE_SCAN {
+			scans++
+			require.Equal(t, "nation", node.TableDef.Name)
+			if len(node.FilterList) > 0 {
+				filteredScans++
+			}
+		}
+		if node.NodeType == plan.Node_JOIN {
+			joins++
+			require.Equal(t, plan.Node_INNER, node.JoinType)
+		}
+		for _, child := range node.Children {
+			visit(child)
+		}
+	}
+	visit(query.Steps[0])
+	require.Equal(t, tables, scans)
+	require.Equal(t, tables-1, joins)
+	require.Positive(t, filteredScans)
 }
 
 func TestLeftJoinOrFilterKeepsLeftJoin(t *testing.T) {
