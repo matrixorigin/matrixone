@@ -1464,5 +1464,484 @@
     "sql": "SELECT /*+ QB_NAME(16T) */ 1",
     "text": "SELECT /*+ QB_NAME ( `16T` ) */ ?",
     "digest": "45f0fc3af0bd1cfe9ae4822edd06e1365487dd30c1973ee1dec47eae050af46e"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT @@session.\"sql_mode\"",
+    "text": "SELECT @@SESSION . ?",
+    "digest": "6d7c31a8ee4a91c4e0f98cefdb0073b3abacb9a9909b586ef5c792d3e41e796f"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT @@session.'sql_mode'",
+    "text": "SELECT @@SESSION . ?",
+    "digest": "6d7c31a8ee4a91c4e0f98cefdb0073b3abacb9a9909b586ef5c792d3e41e796f"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT @@\"sql_mode\"",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT @@'sql_mode'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT @@global.\"sql_mode\"",
+    "text": "SELECT @@GLOBAL . ?",
+    "digest": "0a9caee0198f71cb31c8763e20f33a0ffc85772b382366af7e20f2648c4d4eb8"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT @@local.\"sql_mode\"",
+    "text": "SELECT @@LOCAL . ?",
+    "digest": "adc7ed5eec41b108852729dc1870f6482337bb6417e58d6bf335d8de7aa25e4d"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*!50000 ' a' */",
+    "text": "SELECT ?",
+    "digest": "d1b44b0c19af710b5a679907e284acd2ddc285201794bc69a2389d77baedddae"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*!50000 ' a ' */",
+    "text": "SELECT ?",
+    "digest": "d1b44b0c19af710b5a679907e284acd2ddc285201794bc69a2389d77baedddae"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*!50000 '' */",
+    "text": "SELECT ?",
+    "digest": "d1b44b0c19af710b5a679907e284acd2ddc285201794bc69a2389d77baedddae"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*!50000 ' + ' */",
+    "text": "SELECT ?",
+    "digest": "d1b44b0c19af710b5a679907e284acd2ddc285201794bc69a2389d77baedddae"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*!50000 '+' */",
+    "text": "SELECT ?",
+    "digest": "d1b44b0c19af710b5a679907e284acd2ddc285201794bc69a2389d77baedddae"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*!50000 'a' */",
+    "text": "SELECT ?",
+    "digest": "d1b44b0c19af710b5a679907e284acd2ddc285201794bc69a2389d77baedddae"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*!50000 '/* x */' */",
+    "text": "SELECT ?",
+    "digest": "d1b44b0c19af710b5a679907e284acd2ddc285201794bc69a2389d77baedddae"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*!50000 n' a' */",
+    "text": "SELECT ?",
+    "digest": "d1b44b0c19af710b5a679907e284acd2ddc285201794bc69a2389d77baedddae"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*!50000 _latin1' a' */",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*!50000 ' a' */ 'b'",
+    "text": "SELECT ? ?",
+    "digest": "330b0454d6423fbb864f3707655da47d815faa8923bdaa068e8e9365e6c97a55"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*!99999 ' a' */ 1",
+    "text": "SELECT ?",
+    "digest": "d1b44b0c19af710b5a679907e284acd2ddc285201794bc69a2389d77baedddae"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ QB_NAME(1k) */ 1",
+    "text": "SELECT /*+ QB_NAME ( `1k` ) */ ?",
+    "digest": "6e9a60c28ab6c841f60a73f0acf9d4d93b8cb4da7c15a24e0a342a1c0127fc58"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ QB_NAME(1K) */ 1",
+    "text": "SELECT /*+ QB_NAME (?) */ ?",
+    "digest": "6a8c707b2e7f43dda8879355b7cbfd716fd1ccd810e68dfd95a66d5a6f90b924"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ QB_NAME(1m) */ 1",
+    "text": "SELECT /*+ QB_NAME ( `1m` ) */ ?",
+    "digest": "0f6cb12c8447e5a77bfba5a140f276b05753d5b50ff54e67982db49308041344"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ QB_NAME(1M) */ 1",
+    "text": "SELECT /*+ QB_NAME (?) */ ?",
+    "digest": "6a8c707b2e7f43dda8879355b7cbfd716fd1ccd810e68dfd95a66d5a6f90b924"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ QB_NAME(1g) */ 1",
+    "text": "SELECT /*+ QB_NAME ( `1g` ) */ ?",
+    "digest": "0093a51b2c6a5e10ee2446445101c7b847e66a42f4d09aeb972b7985b7eed43e"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ QB_NAME(1G) */ 1",
+    "text": "SELECT /*+ QB_NAME (?) */ ?",
+    "digest": "6a8c707b2e7f43dda8879355b7cbfd716fd1ccd810e68dfd95a66d5a6f90b924"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ QB_NAME(1.) */ 1",
+    "text": "SELECT /*+ QB_NAME ( ) */ ?",
+    "digest": "641d2a81ea2c731332059e9534c4b80e7df83342f573141755860d6f3bd394fe"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ QB_NAME(1.0) */ 1",
+    "text": "SELECT /*+ QB_NAME (?) */ ?",
+    "digest": "6a8c707b2e7f43dda8879355b7cbfd716fd1ccd810e68dfd95a66d5a6f90b924"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ QB_NAME(1.a) */ 1",
+    "text": "SELECT /*+ QB_NAME ( `a` ) */ ?",
+    "digest": "65401aa3928c59262bb768c7cf9452acd3121ba44ebcbef98c271bbfb5101eee"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ QB_NAME(1.e2) */ 1",
+    "text": "SELECT /*+ QB_NAME ( `e2` ) */ ?",
+    "digest": "2425baa1d6d1ace8401371f355f1f9c3efe26c43d77cee32de8941609ea6fe61"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ QB_NAME(.1) */ 1",
+    "text": "SELECT /*+ QB_NAME (?) */ ?",
+    "digest": "6a8c707b2e7f43dda8879355b7cbfd716fd1ccd810e68dfd95a66d5a6f90b924"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ QB_NAME(1..) */ 1",
+    "text": "SELECT /*+ QB_NAME ( ) */ ?",
+    "digest": "641d2a81ea2c731332059e9534c4b80e7df83342f573141755860d6f3bd394fe"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ QB_NAME(1k2) */ 1",
+    "text": "SELECT /*+ QB_NAME ( `1k2` ) */ ?",
+    "digest": "8c7cc7bb1c7146966bbdd017ad2a759e73419cbe356824654f8ca3fc6c6d6994"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ QB_NAME(0x1) */ 1",
+    "text": "SELECT /*+ QB_NAME ( `0x1` ) */ ?",
+    "digest": "18bbbf8f4264de1fc36951d1857ba64b06d1f77af06949a4b1319bd1f6286294"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ QB_NAME(1.0k) */ 1",
+    "text": "SELECT /*+ QB_NAME ( `k` ) */ ?",
+    "digest": "0aceb9125d10194ef802fe5047e81645bddbf105539a3870d6bd703dbfb6fd57"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a INT NOT NULL DEFAULT NULL)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a INT NOT NULL DEFAULT NULL",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a INT NOT NULL DEFAULT NULL",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN b a INT NOT NULL DEFAULT NULL",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a INT PRIMARY KEY DEFAULT NULL",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a INT PRIMARY KEY DEFAULT NULL",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN b a INT PRIMARY KEY DEFAULT NULL",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a INT AUTO_INCREMENT DEFAULT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a INT AUTO_INCREMENT DEFAULT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN b a INT AUTO_INCREMENT DEFAULT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a INT AUTO_INCREMENT DEFAULT NULL",
+    "text": "ALTER TABLE `t` ADD COLUMN `a` INTEGER AUTO_INCREMENT DEFAULT ?",
+    "digest": "45ab3aa1e25c40d9b933373fdd9fc340000b960b77554194e474ba6edbe1de3b"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a INT AUTO_INCREMENT DEFAULT NULL",
+    "text": "ALTER TABLE `t` MODIFY COLUMN `a` INTEGER AUTO_INCREMENT DEFAULT ?",
+    "digest": "9d532a25fef400f4cd915e320c9b591d39c5fc1d726f4cc83c7d9f9f264a0333"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN b a INT AUTO_INCREMENT DEFAULT NULL",
+    "text": "ALTER TABLE `t` CHANGE COLUMN `b` `a` INTEGER AUTO_INCREMENT DEFAULT ?",
+    "digest": "5363c695a8d85b80007546b444458037edeea5c3734f1409dc253611a37983ad"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a INT AS (1) DEFAULT 1)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a INT AS (1) DEFAULT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a INT AS (1) DEFAULT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN b a INT AS (1) DEFAULT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a INT DEFAULT 1 AS (1))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a INT DEFAULT 1 AS (1)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a INT DEFAULT 1 AS (1)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN b a INT DEFAULT 1 AS (1)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a INT AS (1) DEFAULT NULL)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a INT AS (1) DEFAULT NULL",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a INT AS (1) DEFAULT NULL",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN b a INT AS (1) DEFAULT NULL",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a INT AS (1) DEFAULT (NULL))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a INT AS (1) DEFAULT (NULL)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a INT AS (1) DEFAULT (NULL)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN b a INT AS (1) DEFAULT (NULL)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a INT AS (1) AUTO_INCREMENT)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a INT AS (1) AUTO_INCREMENT",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a INT AS (1) AUTO_INCREMENT",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN b a INT AS (1) AUTO_INCREMENT",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a INT AS (1) NOT NULL)",
+    "text": "CREATE TABLE `t` ( `a` INTEGER AS (?) NOT NULL )",
+    "digest": "257e6764433e696eb7a809f7640bf10e8f04e35699cbe5d928ab120b8222d254"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a INT AS (1) NOT NULL",
+    "text": "ALTER TABLE `t` ADD COLUMN `a` INTEGER AS (?) NOT NULL",
+    "digest": "8efe89053cf6529b295e3892b2aa87be9092e39c13f1e08c8fe6a20bb6265ce3"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a INT AS (1) NOT NULL",
+    "text": "ALTER TABLE `t` MODIFY COLUMN `a` INTEGER AS (?) NOT NULL",
+    "digest": "b2e19ff6f6d87dfdfbc070e9bc94b4eda0c0b4d2688078b08eb04bf08f12e3be"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN b a INT AS (1) NOT NULL",
+    "text": "ALTER TABLE `t` CHANGE COLUMN `b` `a` INTEGER AS (?) NOT NULL",
+    "digest": "8885f292077ece4710bd2f0afd80063bc0a7eb19be6afb29bedc368948de19af"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a INT AS (1) PRIMARY KEY)",
+    "text": "CREATE TABLE `t` ( `a` INTEGER AS (?) PRIMARY KEY )",
+    "digest": "b5a79524ccdeb185797f4cda2f3edac19871960a2bec434951c74e90660b7cb1"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a INT AS (1) PRIMARY KEY",
+    "text": "ALTER TABLE `t` ADD COLUMN `a` INTEGER AS (?) PRIMARY KEY",
+    "digest": "bbe045e916a6423e1f1d8dc7a4cee03587bd1f639e90965cb3b05be0d4293705"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a INT AS (1) PRIMARY KEY",
+    "text": "ALTER TABLE `t` MODIFY COLUMN `a` INTEGER AS (?) PRIMARY KEY",
+    "digest": "ac1d73dd135f4f4b7c2e9e7b2e604be028815e2681fca96c7dd272ab9a221744"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN b a INT AS (1) PRIMARY KEY",
+    "text": "ALTER TABLE `t` CHANGE COLUMN `b` `a` INTEGER AS (?) PRIMARY KEY",
+    "digest": "854ff3a61a34e02a5c06497d115c786d1fab684c66cc409143c273916e52ba40"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a INT AS (1) COMMENT 'ok')",
+    "text": "CREATE TABLE `t` ( `a` INTEGER AS (?) COMMENT ? )",
+    "digest": "fb96d45f4556c5ff70925623706e2a71799b30cac6cd52de0f98c6e72184423a"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a INT AS (1) COMMENT 'ok'",
+    "text": "ALTER TABLE `t` ADD COLUMN `a` INTEGER AS (?) COMMENT ?",
+    "digest": "5f2cb83725aba449820b9a55101912ca8e9f7dea39a73c6c1003521a522f537e"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a INT AS (1) COMMENT 'ok'",
+    "text": "ALTER TABLE `t` MODIFY COLUMN `a` INTEGER AS (?) COMMENT ?",
+    "digest": "21d05b328f2fa2682b54bb04826cc85e6772059ac62ccfdbd35889255e1f9b3d"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN b a INT AS (1) COMMENT 'ok'",
+    "text": "ALTER TABLE `t` CHANGE COLUMN `b` `a` INTEGER AS (?) COMMENT ?",
+    "digest": "cea4966000a23b1102a9e30147656827b84311923538efa9493620cc55f0f9b4"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a TIMESTAMP AS (CURRENT_TIMESTAMP) DEFAULT CURRENT_TIMESTAMP)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a TIMESTAMP AS (CURRENT_TIMESTAMP) DEFAULT CURRENT_TIMESTAMP",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a TIMESTAMP AS (CURRENT_TIMESTAMP) DEFAULT CURRENT_TIMESTAMP",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN b a TIMESTAMP AS (CURRENT_TIMESTAMP) DEFAULT CURRENT_TIMESTAMP",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a INT DEFAULT 1)",
+    "text": "CREATE TABLE `t` ( `a` INTEGER DEFAULT ? )",
+    "digest": "ff1562883c07c9e5bea4368aed3cef1b656190c4501378250a202584d166fda2"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a INT DEFAULT 1",
+    "text": "ALTER TABLE `t` ADD COLUMN `a` INTEGER DEFAULT ?",
+    "digest": "dbe318a16b3a283de64839051ad81011098760d9e49abc4698314ba3ebdfe699"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a INT DEFAULT 1",
+    "text": "ALTER TABLE `t` MODIFY COLUMN `a` INTEGER DEFAULT ?",
+    "digest": "f3bfb42035b8c370db96432ad65f7330b585afc6565d2be48423701b590a9cfb"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN b a INT DEFAULT 1",
+    "text": "ALTER TABLE `t` CHANGE COLUMN `b` `a` INTEGER DEFAULT ?",
+    "digest": "7c769ef0a9fbd01825f5f118420d32c696cb5afaa65c775b581a8b0d25c194e2"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT @@\"sql_mode\"",
+    "error_code": 3677
   }
 ]

@@ -59,8 +59,12 @@ func TestColumnDefaultPublicBinding(t *testing.T) {
 		"SELECT DEFAULT(x)=0 FROM (SELECT 1 x) d",
 		"SELECT DEFAULT(x)='' FROM (SELECT 'abc' x) d",
 		"SELECT DEFAULT(x) IS NULL FROM (SELECT NULL x) d",
+		"SELECT DEFAULT(x) IS NULL FROM (SELECT NULL x UNION SELECT NULL x) d",
+		"SELECT DEFAULT(x) IS NULL FROM (SELECT n_regionkey x FROM nation UNION SELECT n_regionkey x FROM nation) d",
 		"SELECT DEFAULT(x)=0.00 FROM (SELECT 1.23 x) d",
 		"SELECT DEFAULT(x) IS NULL FROM (SELECT CAST('2020-01-01' AS DATE) x) d",
+		"SELECT DEFAULT(x) IS NULL FROM (SELECT CAST('2020-01-01' AS DATE) x UNION SELECT CAST('2020-01-01' AS DATE) x) d",
+		"SELECT DEFAULT(x) IS NULL FROM (SELECT CAST('12:34:56' AS TIME) x UNION SELECT CAST('12:34:56' AS TIME) x) d",
 		"SELECT DEFAULT(x) IS NULL FROM (SELECT CAST('12:34:56' AS TIME) x) d",
 		"SELECT DEFAULT(x) IS NULL FROM (SELECT CAST('2020-01-01' AS DATETIME) x) d",
 		"SELECT DEFAULT(x) IS NOT NULL FROM (SELECT DATE '2020-01-01' x) d",
@@ -96,6 +100,11 @@ func TestColumnDefaultPublicBinding(t *testing.T) {
 		"SELECT n_regionkey AS n_name FROM nation HAVING DEFAULT(n_name)=7",
 		"SELECT n_regionkey AS x FROM nation HAVING DEFAULT(x)=7",
 		"SELECT +n_regionkey AS x FROM nation HAVING DEFAULT(x)=7",
+		"SELECT n_regionkey AS x FROM nation HAVING DEFAULT(n_regionkey)=7",
+		"SELECT n.n_regionkey AS x FROM nation n HAVING DEFAULT(n.n_regionkey)=7",
+		"SELECT 1 FROM nation GROUP BY n_regionkey HAVING DEFAULT(n_regionkey)=7",
+		"SELECT 1 FROM nation HAVING MAX(DEFAULT(n_regionkey))=7",
+		"SELECT (SELECT 1 HAVING DEFAULT(n.n_regionkey)=7) FROM nation n",
 		"SELECT +n_regionkey AS x FROM nation ORDER BY DEFAULT(x)",
 		"SELECT n_regionkey AS x FROM nation ORDER BY DEFAULT(x)",
 		"INSERT INTO nation(n_nationkey,n_name,n_regionkey) VALUES(1,'a',DEFAULT(n_regionkey))",
@@ -128,24 +137,26 @@ func TestColumnDefaultUnionTemporalModes(t *testing.T) {
 			{"CAST('2020-01-01' AS DATE)", false},
 			{"1", false},
 		} {
-			t.Run(mode+"/"+tc.expression, func(t *testing.T) {
-				mock := NewMockOptimizer(true, newPlanTestProcess(t))
-				currentMode := "STRICT_TRANS_TABLES"
-				if mode != "" {
-					currentMode = ""
-				}
-				mock.ctxt.sqlModeOverride = &currentMode
-				sql := "SELECT DEFAULT(y) FROM (SELECT x AS y FROM (SELECT " + tc.expression + " x UNION ALL SELECT " + tc.expression + " x) d) outer_d"
-				statement, err := mysql.ParseOneWithSQLMode(t.Context(), sql, 1, mode)
-				require.NoError(t, err)
-				defer statement.Free()
-				_, err = BuildPlan(&mock.ctxt, statement, false)
-				if mode != "" && tc.strictError {
-					require.True(t, moerr.IsMoErrCode(err, moerr.ErrNoDefaultForColumn), "%v", err)
-				} else {
+			for _, operator := range []string{"UNION", "UNION ALL"} {
+				t.Run(mode+"/"+operator+"/"+tc.expression, func(t *testing.T) {
+					mock := NewMockOptimizer(true, newPlanTestProcess(t))
+					currentMode := "STRICT_TRANS_TABLES"
+					if mode != "" {
+						currentMode = ""
+					}
+					mock.ctxt.sqlModeOverride = &currentMode
+					sql := "SELECT DEFAULT(y) FROM (SELECT x AS y FROM (SELECT " + tc.expression + " x " + operator + " SELECT " + tc.expression + " x) d) outer_d"
+					statement, err := mysql.ParseOneWithSQLMode(t.Context(), sql, 1, mode)
 					require.NoError(t, err)
-				}
-			})
+					defer statement.Free()
+					_, err = BuildPlan(&mock.ctxt, statement, false)
+					if mode != "" && tc.strictError {
+						require.True(t, moerr.IsMoErrCode(err, moerr.ErrNoDefaultForColumn), "%v", err)
+					} else {
+						require.NoError(t, err)
+					}
+				})
+			}
 		}
 	}
 }
@@ -193,6 +204,14 @@ func TestColumnDefaultBindingErrors(t *testing.T) {
 		{"SELECT DEFAULT(n_name) FROM nation", moerr.ErrNoDefaultForColumn},
 		{"SELECT n_regionkey AS n_name FROM nation ORDER BY DEFAULT(n_name)", moerr.ErrNoDefaultForColumn},
 		{"SELECT 1 AS x FROM nation HAVING DEFAULT(x)=0", moerr.ErrNoDefaultForColumn},
+		{"SELECT 1 FROM nation HAVING DEFAULT(n_regionkey)=7", moerr.ErrBadFieldError},
+		{"SELECT n_regionkey AS x,n_name AS x FROM nation HAVING DEFAULT(x)=7", moerr.ErrInvalidInput},
+		{"SELECT 1 FROM nation n HAVING DEFAULT(n.n_regionkey)=7", moerr.ErrBadFieldError},
+		{"SELECT n_regionkey+1 FROM nation HAVING DEFAULT(n_regionkey)=7", moerr.ErrBadFieldError},
+		{"SELECT COUNT(n_regionkey) FROM nation HAVING DEFAULT(n_regionkey)=7", moerr.ErrBadFieldError},
+		{"SELECT DEFAULT(n_regionkey) FROM nation HAVING DEFAULT(n_regionkey)=7", moerr.ErrBadFieldError},
+		{"SELECT 1 FROM nation GROUP BY n_regionkey HAVING DEFAULT(n_name) IS NULL", moerr.ErrBadFieldError},
+		{"SELECT 1 FROM nation GROUP BY n_regionkey+1 HAVING DEFAULT(n_regionkey)=7", moerr.ErrBadFieldError},
 		{"SELECT DEFAULT(x) FROM (SELECT n_regionkey+0 x FROM nation) d", moerr.ErrNoDefaultForColumn},
 		{"SELECT DEFAULT(x) FROM (SELECT -n_regionkey x FROM nation) d", moerr.ErrNoDefaultForColumn},
 		{"SELECT DEFAULT(x) FROM (SELECT +CAST(n_regionkey AS SIGNED) x FROM nation) d", moerr.ErrNoDefaultForColumn},

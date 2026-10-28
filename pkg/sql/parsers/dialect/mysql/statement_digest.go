@@ -235,6 +235,10 @@ func (d *statementDigest) scan(s *Scanner, syntax *statementDigestSyntax, hint b
 					if symbol, ok := digestSymbols[strings.ToUpper(part)]; i == 0 && len(parts) > 1 && ok {
 						d.add(symbol.id, "", false)
 					} else {
+						if len(part) > 0 && (part[0] == '\'' || part[0] == '"' && !mode.Has(SQLModeANSIQuotes)) {
+							d.add(digestValue, "", false)
+							continue
+						}
 						// The combined variable token retains quoting on a qualified
 						// component; identifier encoding needs its decoded bytes.
 						if len(part) >= 2 && part[0] == part[len(part)-1] &&
@@ -355,35 +359,55 @@ func digestRowConstructorValid(parent *Scanner) bool {
 }
 
 func digestSyntaxValid(statement tree.Statement) bool {
-	// Mirror column-attribute contextualization, not CREATE TABLE execution.
-	// Attribute order matters; a table-level primary key is not applied here.
-	if create, ok := statement.(*tree.CreateTable); ok {
-		for _, definition := range create.Defs {
-			column, ok := definition.(*tree.ColumnTableDef)
-			if !ok {
-				continue
-			}
-			notNull, nullDefault, hasDefault, autoIncrement := false, false, false, false
-			for _, attribute := range column.Attributes {
-				switch attr := attribute.(type) {
-				case *tree.AttributeNull:
-					notNull = !attr.Is
-				case *tree.AttributePrimaryKey:
-					notNull = true
-				case *tree.AttributeAutoIncrement:
-					autoIncrement = true
-				case *tree.AttributeDefault:
-					hasDefault = true
-					value, literal := attr.Expr.(*tree.NumVal)
-					nullDefault = literal && value.ValType == tree.P_null
-				}
-			}
-			if notNull && nullDefault || autoIncrement && hasDefault && !nullDefault {
+	switch stmt := statement.(type) {
+	case *tree.CreateTable:
+		for _, definition := range stmt.Defs {
+			if column, ok := definition.(*tree.ColumnTableDef); ok && !digestColumnValid(column) {
 				return false
+			}
+		}
+	case *tree.AlterTable:
+		for _, option := range stmt.Options {
+			switch option := option.(type) {
+			case *tree.AlterAddCol:
+				if !digestColumnValid(option.Column) {
+					return false
+				}
+			case *tree.AlterTableModifyColumnClause:
+				if !digestColumnValid(option.NewColumn) {
+					return false
+				}
+			case *tree.AlterTableChangeColumnClause:
+				if !digestColumnValid(option.NewColumn) {
+					return false
+				}
 			}
 		}
 	}
 	return true
+}
+
+func digestColumnValid(column *tree.ColumnTableDef) bool {
+	// Mirror column-attribute contextualization, not DDL execution. Attribute
+	// order matters; a table-level primary key is not applied here.
+	notNull, nullDefault, hasDefault, autoIncrement, generated := false, false, false, false, false
+	for _, attribute := range column.Attributes {
+		switch attr := attribute.(type) {
+		case *tree.AttributeNull:
+			notNull = !attr.Is
+		case *tree.AttributePrimaryKey:
+			notNull = true
+		case *tree.AttributeAutoIncrement:
+			autoIncrement = true
+		case *tree.AttributeGeneratedAlways:
+			generated = true
+		case *tree.AttributeDefault:
+			hasDefault = true
+			value, literal := attr.Expr.(*tree.NumVal)
+			nullDefault = literal && value.ValType == tree.P_null
+		}
+	}
+	return !(notNull && nullDefault || autoIncrement && hasDefault && !nullDefault || generated && (hasDefault || autoIncrement))
 }
 
 // Hint punctuation is not SQL punctuation: '?' is not a bind parameter,
@@ -427,8 +451,9 @@ func scanDigestHintNumber(s *Scanner) (int, string) {
 	s.scanMantissa(10)
 	if s.cur() == '.' {
 		s.inc()
+		fractionStart := s.Pos
 		s.scanMantissa(10)
-		if isUnquotedIdentifierLetterAt(s.buf, s.Pos) {
+		if s.Pos == fractionStart || isUnquotedIdentifierLetterAt(s.buf, s.Pos) {
 			// An invalid decimal prefix is discarded before scanning the
 			// trailing hint word; it is not a numeric token plus an alias.
 			return skippedScannerToken, ""
@@ -443,7 +468,7 @@ func scanDigestHintNumber(s *Scanner) (int, string) {
 		}
 		// Hints recognize decimal/size literals, but not SQL exponents or
 		// hex/bin literals. Thus 16K is a number while 1e2 is an identifier.
-		if s.Pos != end+1 || !strings.ContainsAny(s.buf[end:s.Pos], "kKmMgG") {
+		if s.Pos != end+1 || !strings.ContainsAny(s.buf[end:s.Pos], "KMG") {
 			return ID, s.buf[start:s.Pos]
 		}
 	}

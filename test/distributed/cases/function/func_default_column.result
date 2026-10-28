@@ -100,6 +100,14 @@ null  𝄀
 null
 SELECT DEFAULT(x) FROM (SELECT DATE '2020-01-01' AS x UNION ALL SELECT DATE '2021-01-01' AS x) derived;
 Field 'x' doesn't have a default value
+SELECT DEFAULT(x) FROM (SELECT DATE '2020-01-01' AS x UNION SELECT DATE '2020-01-01' AS x) derived;
+Field 'x' doesn't have a default value
+SELECT DEFAULT(x) FROM (SELECT CAST('2020-01-01' AS DATE) AS x UNION SELECT CAST('2020-01-01' AS DATE) AS x) derived;
+➤ default(x)[91,10,0]  𝄀
+null
+SELECT DEFAULT(x) FROM (SELECT CAST('12:34:56' AS TIME) AS x UNION SELECT CAST('12:34:56' AS TIME) AS x) derived;
+➤ default(x)[92,10,0]  𝄀
+null
 SELECT DEFAULT(x) FROM (SELECT JSON_OBJECT('a',1) AS x) derived;
 ➤ default(x)[-1,2147483647,0]  𝄀
 null
@@ -177,6 +185,21 @@ SELECT +a AS x FROM default_column_input HAVING DEFAULT(x)=7;
 SELECT +a AS x FROM default_column_input ORDER BY DEFAULT(x);
 ➤ x[4,32,0]  𝄀
 7
+SELECT 1 FROM default_column_input HAVING DEFAULT(a)=7;
+Unknown column 'a' in 'having clause'
+SELECT a+1 FROM default_column_input HAVING DEFAULT(a)=7;
+Unknown column 'a' in 'having clause'
+SELECT COUNT(a) FROM default_column_input HAVING DEFAULT(a)=7;
+Unknown column 'a' in 'having clause'
+SELECT a AS x FROM default_column_input HAVING DEFAULT(a)=7;
+➤ x[4,32,0]  𝄀
+7
+SELECT 1 FROM default_column_input GROUP BY a HAVING DEFAULT(a)=7;
+➤ 1[-5,64,0]  𝄀
+1
+SELECT 1 FROM default_column_input HAVING MAX(DEFAULT(a))=7;
+➤ 1[-5,64,0]  𝄀
+1
 SELECT a AS c FROM default_column_input HAVING DEFAULT(c)=7;
 ➤ c[4,32,0]  𝄀
 7
@@ -263,7 +286,7 @@ DROP TABLE IF EXISTS default_column_special;
 CREATE TABLE default_column_special(a ENUM('red','blue') NOT NULL DEFAULT 'blue',b SET('a','b') NOT NULL DEFAULT 'a,b');
 INSERT INTO default_column_special VALUES(DEFAULT,DEFAULT);
 SELECT DEFAULT(a),DEFAULT(a)+0,DEFAULT(b),DEFAULT(b)+0 FROM default_column_special;
-➤ default(a)[12,65535,0]  ¦  default(a) + 0[-5,64,0]  ¦  default(b)[12,65535,0]  ¦  default(b) + 0[-5,64,0]  𝄀
+➤ default(a)[12,65535,0]  ¦  default(a) + 0[-5,64,0]  ¦  default(b)[12,65535,0]  ¦  default(b) + 0[-5,21,0]  𝄀
 blue  ¦  2  ¦  a,b  ¦  3
 SELECT DEFAULT(x),DEFAULT(y) FROM (SELECT +a AS x,+b AS y FROM default_column_special LIMIT 1) derived;
 ➤ default(x)[12,65535,0]  ¦  default(y)[12,65535,0]  𝄀
@@ -297,6 +320,9 @@ SELECT DEFAULT(x) FROM (SELECT DEFAULT(a) AS x FROM default_column_special LIMIT
 DROP TABLE default_column_special_metadata;
 DROP TABLE default_column_special;
 SET sql_mode = '';
+SELECT DEFAULT(x) FROM (SELECT DATE '2020-01-01' AS x UNION SELECT DATE '2020-01-01' AS x) derived;
+➤ default(x)[91,10,0]  𝄀
+0000-00-00
 PREPARE default_union_mode FROM 'SELECT DEFAULT(x) FROM (SELECT DATE ''2020-01-01'' AS x UNION ALL SELECT DATE ''2021-01-01'' AS x) derived';
 EXECUTE default_union_mode;
 ➤ default(x)[91,10,0]  𝄀

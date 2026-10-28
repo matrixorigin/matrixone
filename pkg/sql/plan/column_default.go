@@ -179,10 +179,18 @@ func (b *baseBinder) columnDefaultMetadata(name *tree.UnresolvedName) (OutputCol
 
 	// HAVING prefers SELECT-list aliases, while ORDER BY expressions prefer
 	// table fields and consult aliases only when no field resolves.
-	if _, having := b.impl.(*HavingBinder); having && b.ctx != nil && name.NumParts == 1 {
-		// HAVING binds before projects exist; its authoritative output-name
-		// index still holds the SELECT AST, not an already-bound projection.
-		projected, found, ambiguous := b.ctx.havingOutputExpr(name.ColName())
+	if having, ok := b.impl.(*HavingBinder); ok && b.ctx != nil && !having.insideAgg && !having.bindingProjectedAlias {
+		// DEFAULT is row-independent, but that must not widen HAVING's visible
+		// namespace. Reuse its SELECT-output and direct-column identity owners
+		// without binding a row reference or manufacturing an aggregate.
+		var projected tree.Expr
+		var found, ambiguous bool
+		if name.NumParts == 1 {
+			projected, found, ambiguous = b.ctx.havingOutputExpr(name.ColName())
+		}
+		if !found && !ambiguous {
+			projected, found, ambiguous = b.ctx.havingProjectedColumnExpr(name)
+		}
 		if ambiguous {
 			return OutputColumnProvenance{}, plan.Type{}, ambiguousHavingColumn(b.GetContext(), name.ColName())
 		}
@@ -192,6 +200,10 @@ func (b *baseBinder) columnDefaultMetadata(name *tree.UnresolvedName) (OutputCol
 			if !column {
 				return OutputColumnProvenance{State: ProvenanceNone}, plan.Type{}, nil
 			}
+		} else if binding, position, local := resolveColumnIdentity(b.ctx, name); local &&
+			!groupByContainsColumn(b.ctx, binding.tag, position) {
+			return OutputColumnProvenance{}, plan.Type{}, moerr.NewBadFieldErrorf(b.GetContext(),
+				"Unknown column '%s' in 'having clause'", name.ColNameOrigin())
 		}
 	}
 

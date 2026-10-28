@@ -187,6 +187,11 @@ func (s *Scanner) scanToken(comments bool) (int, string) {
 		if s.cur() == '@' {
 			tokenID = AT_AT_ID
 			s.inc()
+			// System-variable strings require an explicit scope and dot.
+			// Backtick identifiers remain legal without a scope.
+			if s.digestMode && (s.cur() == '\'' || s.cur() == '"') {
+				return LEX_ERROR, ""
+			}
 		} else if s.cur() == '\'' || s.cur() == '"' {
 			return int('@'), ""
 		} else if s.cur() == ',' {
@@ -351,7 +356,7 @@ func (s *Scanner) scanToken(comments bool) (int, string) {
 			return s.stepBackOneChar(ch, comments)
 		}
 	case ch == '\'':
-		if !s.CommentFlag {
+		if !s.CommentFlag || s.digestMode {
 			return s.stepBackOneChar(ch, comments)
 		}
 		s.inc()
