@@ -274,6 +274,7 @@ func init() {
 		"in":                         IN,
 		"index":                      INDEX,
 		"indexes":                    INDEXES,
+		"ignored":                    IGNORED,
 		"inline":                     INLINE,
 		"infile":                     INFILE,
 		"inout":                      INOUT,

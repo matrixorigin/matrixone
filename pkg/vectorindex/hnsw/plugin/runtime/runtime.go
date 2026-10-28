@@ -40,6 +40,7 @@ func (CatalogHooks) HiddenTableTypes() []string {
 		catalog.Hnsw_TblType_Metadata,
 		catalog.Hnsw_TblType_Storage,
 		catalog.Hnsw_TblType_Dict,
+		catalog.IndexIgnored_TblType,
 	}
 }
 

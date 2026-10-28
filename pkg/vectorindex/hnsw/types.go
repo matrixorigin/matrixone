@@ -219,6 +219,18 @@ func ToStorage[T types.ArrayElement](vec []T, kind usearch.Quantization, bounds 
 	}
 }
 
+// CheckStorable returns the reason an index storing kind cannot store vec, or nil. It
+// applies the same element checks as ToStorage; the range of an int8/uint8 index does not
+// reject a vector.
+func CheckStorable[T types.ArrayElement](vec []T, kind usearch.Quantization) error {
+	var bounds QuantizeBounds
+	if NeedsQuantizeBounds(kind) {
+		bounds = QuantizeBounds{Min: -1, Max: 1, Set: true}
+	}
+	_, _, err := ToStorage(vec, kind, bounds)
+	return err
+}
+
 // allFinite reports whether no element of vec is NaN or infinite.
 func allFinite[T types.ArrayElement](vec []T) bool {
 	switch x := any(vec).(type) {

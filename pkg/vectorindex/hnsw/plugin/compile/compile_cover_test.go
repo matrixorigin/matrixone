@@ -236,7 +236,7 @@ func TestGenDeleteSQL(t *testing.T) {
 // The build statement calls hnsw_create alone; its config names the source table, its
 // columns and the hidden tables.
 func TestGenBuildSQL(t *testing.T) {
-	sqls, err := genBuildSQL(newRecordingCtx(), hnswDefs(""))
+	sqls, err := genBuildSQL(newRecordingCtx(), hnswDefs(""), false)
 	require.NoError(t, err)
 	require.Len(t, sqls, 1)
 	require.True(t, strings.HasPrefix(sqls[0], "SELECT f.* FROM hnsw_create('"), sqls[0])
@@ -246,15 +246,17 @@ func TestGenBuildSQL(t *testing.T) {
 		require.Contains(t, sqls[0], field)
 	}
 	require.NotContains(t, sqls[0], `"dict"`)
+	require.NotContains(t, sqls[0], `"reject_unstorable"`)
 
-	sqls, err = genBuildSQL(newRecordingCtx(), withDict(hnswDefs("")))
+	sqls, err = genBuildSQL(newRecordingCtx(), withDict(hnswDefs("")), true)
 	require.NoError(t, err)
 	require.Contains(t, sqls[0], `"dict":"__mo_dict"`)
+	require.Contains(t, sqls[0], `"reject_unstorable":true`)
 
 	for _, missing := range []string{catalog.Hnsw_TblType_Metadata, catalog.Hnsw_TblType_Storage} {
 		defs := hnswDefs("")
 		delete(defs, missing)
-		_, err := genBuildSQL(newRecordingCtx(), defs)
+		_, err := genBuildSQL(newRecordingCtx(), defs, false)
 		require.Error(t, err)
 	}
 }
