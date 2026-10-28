@@ -119,7 +119,9 @@ func (c *cancelInFunctionContext) Err() error {
 }
 
 type trackingMutableFileService struct {
-	fileservice.MutableFileService
+	// Preserve the concrete root owner while intercepting descriptors. Embedding
+	// only MutableFileService hides the CN-scoped spill-root provider.
+	*fileservice.LocalFS
 	mu    sync.Mutex
 	files []*os.File
 }
@@ -127,7 +129,7 @@ type trackingMutableFileService struct {
 func (s *trackingMutableFileService) CreateAndRemoveFile(
 	ctx context.Context, filePath string,
 ) (*os.File, error) {
-	file, err := s.MutableFileService.CreateAndRemoveFile(ctx, filePath)
+	file, err := s.LocalFS.CreateAndRemoveFile(ctx, filePath)
 	if err == nil {
 		s.mu.Lock()
 		s.files = append(s.files, file)
@@ -144,7 +146,7 @@ func (s *trackingMutableFileService) openedFiles() []*os.File {
 
 func installTrackingSpillFileService(t *testing.T, proc *process.Process) *trackingMutableFileService {
 	t.Helper()
-	local, err := fileservice.Get[fileservice.MutableFileService](
+	local, err := fileservice.Get[*fileservice.LocalFS](
 		proc.Base.FileService, defines.LocalFileServiceName)
 	require.NoError(t, err)
 	shared, err := fileservice.Get[fileservice.FileService](
@@ -153,7 +155,7 @@ func installTrackingSpillFileService(t *testing.T, proc *process.Process) *track
 	etl, err := fileservice.Get[fileservice.FileService](
 		proc.Base.FileService, defines.ETLFileServiceName)
 	require.NoError(t, err)
-	tracking := &trackingMutableFileService{MutableFileService: local}
+	tracking := &trackingMutableFileService{LocalFS: local}
 	proc.Base.FileService, err = fileservice.NewFileServices("", tracking, shared, etl)
 	require.NoError(t, err)
 	return tracking

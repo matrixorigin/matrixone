@@ -349,8 +349,12 @@ func initServiceFileServices(
 	if err != nil {
 		return nil, err
 	}
-	if err := clearSpillFiles(ctx, fs); err != nil {
-		return nil, err
+	// Only CN owns query spill files. Standalone/launch TN and CN can share
+	// LOCAL: a non-spilling role must not take CN's lease or clean its files.
+	if st == metadata.ServiceType_CN {
+		if err := clearSpillFiles(ctx, fs); err != nil {
+			return nil, err
+		}
 	}
 	if err = initTraceMetric(ctx, st, cfg, stopper, etlFS, nodeUUID); err != nil {
 		return nil, err

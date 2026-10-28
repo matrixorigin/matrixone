@@ -20,6 +20,7 @@ import (
 	"errors"
 	"os"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"golang.org/x/sys/unix"
 )
 
@@ -32,7 +33,7 @@ func openSpillRootLease(path string) (*os.File, error) {
 	info, err := file.Stat()
 	if err != nil || !info.Mode().IsRegular() {
 		_ = file.Close()
-		return nil, errors.Join(errors.New("spill lease must be a regular local file"), err)
+		return nil, errors.Join(moerr.NewInternalErrorNoCtx("spill lease must be a regular local file"), err)
 	}
 	if err := unix.Flock(fd, unix.LOCK_EX|unix.LOCK_NB); err != nil {
 		_ = file.Close()

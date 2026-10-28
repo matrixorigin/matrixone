@@ -23,17 +23,20 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
-	"github.com/matrixorigin/matrixone/pkg/proxy"
+	"github.com/matrixorigin/matrixone/pkg/tnservice"
 	"github.com/stretchr/testify/require"
 )
 
@@ -195,18 +198,17 @@ func (f *listErrorFileService) List(context.Context, string) iter.Seq2[*fileserv
 	}
 }
 
-func TestInitServiceFileServicesPublishesETLAfterSpillCleanup(t *testing.T) {
+func TestInitCNFileServicesPublishesETLAfterSpillCleanup(t *testing.T) {
 	configs := []fileservice.Config{
 		{Name: defines.LocalFileServiceName, Backend: "MEM"},
 		{Name: defines.SharedFileServiceName, Backend: "MEM"},
 		{Name: defines.ETLFileServiceName, Backend: "MEM"},
 		{Name: defines.TmpFileServiceName, Backend: "MEM"},
 	}
-	cfg := &Config{
-		ServiceType:  metadata.ServiceType_PROXY.String(),
-		ProxyConfig:  proxy.Config{UUID: "proxy-spill-list-error"},
-		FileServices: configs,
-	}
+	cfg := NewConfig()
+	cfg.ServiceType = metadata.ServiceType_CN.String()
+	cfg.CN.UUID = "cn-spill-list-error"
+	cfg.FileServices = configs
 	cfg.Observability.DisableMetric = true
 	cfg.Observability.DisableTrace = true
 	previousEtlFS := globalEtlFS
@@ -224,9 +226,9 @@ func TestInitServiceFileServicesPublishesETLAfterSpillCleanup(t *testing.T) {
 	listErr := errors.New("spill listing failed")
 	_, err := initServiceFileServices(
 		context.Background(),
-		metadata.ServiceType_PROXY,
+		metadata.ServiceType_CN,
 		cfg,
-		stopper.NewStopper("proxy-spill-list-error"),
+		stopper.NewStopper("cn-spill-list-error"),
 		func(ctx context.Context, fsCfg fileservice.Config, counters []*perfcounter.CounterSet) (fileservice.FileService, error) {
 			if fsCfg.Name == defines.LocalFileServiceName {
 				local, err := fileservice.NewLocalETLFS(fsCfg.Name, t.TempDir())
@@ -242,14 +244,14 @@ func TestInitServiceFileServicesPublishesETLAfterSpillCleanup(t *testing.T) {
 	require.Nil(t, globalEtlFS)
 	for _, fsCfg := range configs {
 		_, published := perfcounter.Named.Load(perfcounter.NameForFileService(
-			metadata.ServiceType_PROXY.String(),
-			cfg.ProxyConfig.UUID,
+			metadata.ServiceType_CN.String(),
+			cfg.CN.UUID,
 			fsCfg.Name,
 		))
 		require.Falsef(t, published, "counter %s remains published", fsCfg.Name)
 	}
 	_, published := perfcounter.Named.Load(perfcounter.NameForNode(
-		metadata.ServiceType_PROXY.String(), cfg.ProxyConfig.UUID,
+		metadata.ServiceType_CN.String(), cfg.CN.UUID,
 	))
 	require.False(t, published)
 }
@@ -312,6 +314,73 @@ func TestClearSpillFilesReturnsCanceledListError(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	require.ErrorIs(t, clearSpillFiles(ctx, fs), context.Canceled)
+}
+
+func TestInitServiceFileServicesOnlyCNOwnsSpillRoot(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	spillDir := filepath.Join(root, defines.SpillFileServiceName)
+	require.NoError(t, os.MkdirAll(spillDir, 0700))
+	orphan := filepath.Join(spillDir, "previous-process")
+	require.NoError(t, os.WriteFile(orphan, []byte("orphan"), 0600))
+	previousEtlFS, previousServiceType, previousNodeID := globalEtlFS, globalServiceType, globalNodeId
+	t.Cleanup(func() {
+		globalEtlFS, globalServiceType, globalNodeId = previousEtlFS, previousServiceType, previousNodeID
+	})
+	initRole := func(role metadata.ServiceType) *fileservice.FileServices {
+		t.Helper()
+		cfg := NewConfig()
+		cfg.ServiceType = role.String()
+		cfg.CN.UUID = "spill-startup-cn"
+		cfg.TN_please_use_getTNServiceConfig = &tnservice.Config{UUID: "spill-startup-tn"}
+		cfg.LogService.UUID = "spill-startup-log"
+		cfg.Observability.DisableMetric = true
+		cfg.Observability.DisableTrace = true
+		rt := runtime.DefaultRuntime()
+		runtime.SetupServiceBasedRuntime(cfg.mustGetServiceUUID(), rt)
+		t.Cleanup(func() { runtime.CompareAndDeleteServiceBasedRuntime(cfg.mustGetServiceUUID(), rt) })
+		cfg.FileServices = []fileservice.Config{
+			{Name: defines.LocalFileServiceName, Backend: "DISK", DataDir: root},
+			{Name: defines.SharedFileServiceName, Backend: "MEM"},
+			{Name: defines.ETLFileServiceName, Backend: "MEM"},
+			{Name: defines.TmpFileServiceName, Backend: "MEM"},
+		}
+		serviceStopper := stopper.NewStopper("spill-startup-" + role.String())
+		t.Cleanup(serviceStopper.Stop)
+		fs, err := initServiceFileServices(ctx, role, cfg, serviceStopper, fileservice.NewFileService)
+		require.NoError(t, err)
+		t.Cleanup(func() {
+			fs.Close(ctx)
+			for _, config := range cfg.FileServices {
+				perfcounter.Named.Delete(perfcounter.NameForFileService(role.String(), cfg.mustGetServiceUUID(), config.Name))
+			}
+			perfcounter.Named.Delete(perfcounter.NameForNode(role.String(), cfg.mustGetServiceUUID()))
+		})
+		return fs
+	}
+
+	// Launch's TN and CN configurations can share LOCAL. A non-spilling role
+	// must neither consume CN's lease nor delete its previous-process files.
+	initRole(metadata.ServiceType_TN)
+	_, err := os.Stat(orphan)
+	require.NoError(t, err)
+	cn := initRole(metadata.ServiceType_CN)
+	_, err = os.Stat(orphan)
+	require.ErrorIs(t, err, os.ErrNotExist)
+	local, err := fileservice.Get[fileservice.MutableFileService](cn, defines.LocalFileServiceName)
+	require.NoError(t, err)
+	spill, err := fileservice.GetSpillFileService(ctx, local, defines.SpillFileServiceName)
+	require.NoError(t, err)
+	fd, err := spill.CreateFile(ctx, "live-cn")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = fd.Close() })
+	_, err = fd.WriteString("still owned by CN")
+	require.NoError(t, err)
+
+	initRole(metadata.ServiceType_LOG)
+	contents, err := os.ReadFile(filepath.Join(spillDir, "live-cn"))
+	require.NoError(t, err)
+	require.Equal(t, "still owned by CN", string(contents))
 }
 
 func TestCreateProxyFileServiceWithRetryRecovers(t *testing.T) {

@@ -34,6 +34,17 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestSpillRootErrorSentinelsRemainDistinct(t *testing.T) {
+	sentinels := []error{ErrSpillRootFenced, ErrSpillRootOwned, ErrSpillRootClosed}
+	for i, sentinel := range sentinels {
+		wrapped := errors.Join(sentinel, os.ErrPermission)
+		for j, target := range sentinels {
+			require.Equal(t, i == j, errors.Is(wrapped, target))
+		}
+		require.ErrorIs(t, wrapped, os.ErrPermission)
+	}
+}
+
 func TestAnonymousSpillUnlinkFailure(t *testing.T) {
 	name := filepath.Join(t.TempDir(), "partial")
 	failure := errors.New("injected unlink failure")

@@ -17,10 +17,11 @@
 package fileservice
 
 import (
-	"errors"
 	"os"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 func openSpillRootLease(string) (*os.File, error) {
-	return nil, errors.New("local spill root leases require Linux or Darwin")
+	return nil, moerr.NewNotSupportedNoCtx("local spill root leases require Linux or Darwin")
 }

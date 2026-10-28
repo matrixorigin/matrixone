@@ -17,7 +17,6 @@ package fileservice
 import (
 	"context"
 	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -28,9 +27,9 @@ import (
 )
 
 var (
-	ErrSpillRootFenced = errors.New("spill scratch root is fenced; CN restart required")
-	ErrSpillRootOwned  = errors.New("spill scratch root has another live owner")
-	ErrSpillRootClosed = errors.New("spill scratch root is closed")
+	ErrSpillRootFenced = moerr.NewInternalErrorNoCtx("spill scratch root is fenced; CN restart required")
+	ErrSpillRootOwned  = moerr.NewInternalErrorNoCtx("spill scratch root has another live owner")
+	ErrSpillRootClosed = moerr.NewInternalErrorNoCtx("spill scratch root is closed")
 	// A failed root cannot be reinitialized in this process. Retain one OS
 	// lease per fenced configured root until process exit, not per-file tasks
 	// or query/owner callbacks. Healthy roots release after service drain.
@@ -51,7 +50,7 @@ type SpillRoot struct {
 
 func (r *SpillRoot) errLocked() error {
 	if r.failure != "" {
-		return fmt.Errorf("%w: %s", ErrSpillRootFenced, r.failure)
+		return errors.Join(ErrSpillRootFenced, moerr.NewInternalErrorNoCtx(r.failure))
 	}
 	if r.closed {
 		return ErrSpillRootClosed
@@ -179,7 +178,7 @@ func (h *spillRootHolder) get(ctx context.Context, base, directory string, local
 			return nil, ErrSpillRootClosed
 		}
 		if directory != h.directory {
-			return nil, errors.New("spill root directory changed within a service incarnation")
+			return nil, moerr.NewInternalErrorNoCtx("spill root directory changed within a service incarnation")
 		}
 		if h.err != nil {
 			return nil, h.err
@@ -198,7 +197,7 @@ func (h *spillRootHolder) get(ctx context.Context, base, directory string, local
 		if root != nil {
 			h.err = root.Err()
 		} else {
-			cause := errors.New("spill root initialization failed")
+			cause := moerr.NewInternalErrorNoCtx("spill root initialization failed")
 			if errors.Is(err, ErrSpillRootOwned) {
 				cause = ErrSpillRootOwned
 			}
@@ -206,7 +205,7 @@ func (h *spillRootHolder) get(ctx context.Context, base, directory string, local
 			if len(text) > 1024 {
 				text = text[:1024]
 			}
-			h.err = fmt.Errorf("%w: %s", cause, text)
+			h.err = errors.Join(cause, moerr.NewInternalErrorNoCtx(text))
 		}
 	}
 	closed := h.closed
@@ -252,7 +251,7 @@ func (l *LocalETLFS) spillRootFor(ctx context.Context, directory string, view Mu
 
 func newSpillRoot(ctx context.Context, base, directory string, local MutableFileService) (*SpillRoot, error) {
 	if directory == "" || directory == "." || directory == ".." || strings.ContainsAny(directory, "/\\") {
-		return nil, errors.New("invalid local spill directory")
+		return nil, moerr.NewInternalErrorNoCtx("invalid local spill directory")
 	}
 	canonical, err := filepath.EvalSymlinks(base)
 	if err != nil {
@@ -267,7 +266,7 @@ func newSpillRoot(ctx context.Context, base, directory string, local MutableFile
 		return nil, err
 	}
 	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
-		return nil, errors.New("spill root must be a local directory, not a symlink")
+		return nil, moerr.NewInternalErrorNoCtx("spill root must be a local directory, not a symlink")
 	}
 	lease, err := openSpillRootLease(filepath.Join(canonical, "."+directory+".lease"))
 	if err != nil {
@@ -281,7 +280,7 @@ func newSpillRoot(ctx context.Context, base, directory string, local MutableFile
 			break
 		}
 		if entry == nil || entry.Name == "" || entry.Name != filepath.Base(entry.Name) || entry.Name == "." || entry.Name == ".." {
-			err = errors.New("invalid startup spill entry")
+			err = moerr.NewInternalErrorNoCtx("invalid startup spill entry")
 			break
 		}
 		if deleteErr := spill.Delete(ctx, entry.Name); deleteErr != nil && !spillFileMissing(deleteErr) {
@@ -298,7 +297,7 @@ func newSpillRoot(ctx context.Context, base, directory string, local MutableFile
 		var remaining []os.DirEntry
 		remaining, err = os.ReadDir(path)
 		if err == nil && len(remaining) != 0 {
-			err = errors.New("spill startup cleanup left directory entries")
+			err = moerr.NewInternalErrorNoCtx("spill startup cleanup left directory entries")
 		}
 	}
 	if err != nil {
@@ -315,7 +314,7 @@ func GetSpillFileService(ctx context.Context, local MutableFileService, director
 		spillRootFor(context.Context, string, MutableFileService) (*SpillRoot, error)
 	})
 	if !ok {
-		return nil, errors.New("spill requires a local file service with a root owner")
+		return nil, moerr.NewInternalErrorNoCtx("spill requires a local file service with a root owner")
 	}
 	root, err := provider.spillRootFor(ctx, directory, local)
 	if err != nil {
@@ -323,7 +322,7 @@ func GetSpillFileService(ctx context.Context, local MutableFileService, director
 	}
 	mutable, ok := SubPath(local, directory).(MutableFileService)
 	if !ok {
-		return nil, errors.New("spill subpath is not mutable")
+		return nil, moerr.NewInternalErrorNoCtx("spill subpath is not mutable")
 	}
 	return &spillFileService{MutableFileService: mutable, root: root}, nil
 }
@@ -345,7 +344,7 @@ func (s *spillFileService) validateName(name string) error {
 		return err
 	}
 	if p.File == "" || p.File == "." || p.File == ".." || strings.ContainsAny(p.File, "/\\") {
-		return errors.New("spill requires a flat local filename")
+		return moerr.NewInternalErrorNoCtx("spill requires a flat local filename")
 	}
 	return nil
 }
@@ -380,7 +379,7 @@ func (s *spillFileService) EnsureDir(ctx context.Context, name string) error {
 		return err
 	}
 	if p.File != "" && p.File != "." {
-		return errors.New("spill subdirectories are not supported")
+		return moerr.NewInternalErrorNoCtx("spill subdirectories are not supported")
 	}
 	end, err := s.root.begin(ctx, true)
 	if err != nil {
