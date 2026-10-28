@@ -6054,8 +6054,9 @@ func VectorMatmulConfigArgs(n int) []int {
 	return []int{0, 3}
 }
 
-// IsVectorMatmulConfigExpr reports whether expr can be evaluated without an input row:
-// a constant, a prepared parameter or a variable.
+// IsVectorMatmulConfigExpr reports whether expr can be evaluated without an input row,
+// to the same value wherever it is evaluated: a constant, a prepared parameter, a variable,
+// or a function over them that is neither volatile nor real-time related.
 func IsVectorMatmulConfigExpr(expr *Expr) bool {
 	if expr == nil {
 		return false
@@ -6068,7 +6069,11 @@ func IsVectorMatmulConfigExpr(expr *Expr) bool {
 		return true
 	case *plan.Expr_F:
 		// a cast or other function over parameters, e.g. CAST(? AS BIGINT)
-		if e.F == nil {
+		if e.F == nil || e.F.Func == nil {
+			return false
+		}
+		f, ok := function.GetFunctionByIdWithoutError(e.F.Func.GetObj())
+		if !ok || f.IsVolatile() || f.IsRealTimeRelated() {
 			return false
 		}
 		for _, arg := range e.F.Args {

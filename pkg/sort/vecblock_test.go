@@ -15,6 +15,7 @@
 package sort
 
 import (
+	"runtime"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -54,5 +55,54 @@ func TestSortVecBlockByValue(t *testing.T) {
 		os = []int64{0, 1, 2, 3}
 		Sort(true, false, false, os, vec)
 		require.Equal(t, []int64{0, 2, 3, 1}, os, oid.String())
+	}
+}
+
+func TestSortVecBlockManyPeerGroups(t *testing.T) {
+	const rows, dim, groups = 400, 64, 150
+	mp := mpool.MustNewZero()
+	for _, oid := range []types.T{types.T_array_float8, types.T_array_float4} {
+		f, _ := oid.BlockScaledFormat()
+		keys := vector.NewVec(types.T_int64.ToType())
+		vecs := vector.NewVec(types.New(oid, dim, 0))
+		values := make([][]float32, rows)
+		for i := 0; i < rows; i++ {
+			require.NoError(t, vector.AppendFixed(keys, int64(i%groups), false, mp))
+			values[i] = make([]float32, dim)
+			for j := range values[i] {
+				values[i][j] = float32((i*7+j*13)%11) - 5
+			}
+			cell, err := types.AppendBlockScaled(nil, f, values[i])
+			require.NoError(t, err)
+			require.NoError(t, vector.AppendBytes(vecs, cell, false, mp))
+			values[i], err = types.BlockScaledToFloat32(cell)
+			require.NoError(t, err)
+		}
+		for _, desc := range []bool{false, true} {
+			os := make([]int64, rows)
+			for i := range os {
+				os[i] = int64(i)
+			}
+			scratch := &ByVectorsScratch{Partitions: make([]int64, 0, rows), Diffs: make([]bool, rows)}
+			var before, after runtime.MemStats
+			runtime.GC()
+			runtime.ReadMemStats(&before)
+			SortByVectorsWithScratch(os, []*vector.Vector{keys, vecs}, []bool{false, desc}, []bool{false, false}, scratch)
+			runtime.ReadMemStats(&after)
+			require.Less(t, after.TotalAlloc-before.TotalAlloc, uint64(64<<10), "%s desc=%v", oid, desc)
+			for i := 1; i < rows; i++ {
+				a, b := os[i-1], os[i]
+				require.LessOrEqual(t, a%groups, b%groups)
+				if a%groups == b%groups {
+					c := types.ArrayCompare(values[a], values[b])
+					if desc {
+						c = -c
+					}
+					require.LessOrEqual(t, c, 0, "%s desc=%v rows %d,%d", oid, desc, a, b)
+				}
+			}
+		}
+		keys.Free(mp)
+		vecs.Free(mp)
 	}
 }

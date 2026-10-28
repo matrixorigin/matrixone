@@ -380,8 +380,8 @@ only when it is stored into a `vecf8`/`vecf4` column (assignment cast).
 | `if`, `case`, `coalesce`, `ifnull` over one `vecf8(N)`/`vecf4(N)` type (text branches are quantized to it) | the column's type, cells copied as stored |
 | `case`/`coalesce` mixing vector types, `greatest`, `least`, `json_object`, `json_array`, `JSON_ARRAYAGG`, `JSON_OBJECTAGG` | on the values dequantized to `vecf32`; results as for `vecf32` |
 | `SUM`/`AVG`/`MIN`/`MAX` over vectors | not supported (no vector type has them) |
-| `ORDER BY`, window `ORDER BY` | as for `vecf32`: by the dequantized values, element-wise |
-| `GROUP BY`, `DISTINCT`, hash joins, set operations, `IN (subquery)`, `COUNT(DISTINCT)`, `approx_count_distinct` | by the decoded values, as `=` compares: the equality key (`keycodec.AppendCanonicalVecBlock`) is the cell's decoded float32 values, so cells that encode equal values with other block or global scales (vecf8 `[447]` and `[449]` both store 448) are one key |
+| `ORDER BY`, window `ORDER BY` | as for `vecf32`: by the dequantized values, element-wise, comparing the cells in place (no decoded copy of the column) |
+| `GROUP BY`, `DISTINCT`, hash joins, set operations, `IN (subquery)`, `COUNT(DISTINCT)`, `approx_count_distinct` | by the decoded values, as `=` compares: the equality key (`keycodec.AppendCanonicalVecBlock`) is the cell's decoded float32 values, so cells that encode equal values with other block or global scales (vecf8 `[447]` and `[449]` both store 448) are one key; the hash-key preflight reserves that decoded length (4 bytes per element), not the cell's |
 | window `PARTITION BY`, `ORDER BY` | by the decoded values, element-wise |
 | `subvector` | not supported (as for the other narrow vector types) |
 | comparison operators (`=`, `<>`, `<`, `<=`, `>`, `>=`, `<=>`, `IN`, `BETWEEN`) | as for `vecbf16`: a text literal is quantized to the column's type, as a stored value is, so a row matches the text it was inserted from (`'[3000, -12, 0.001, 1000000]'` matches the cell that displays as `[3072, -16, 0, 983040]`), and text of another dimension is rejected; cells compare by their dequantized values, element-wise |
@@ -443,10 +443,12 @@ vector_matmul(topk, src_id, src_vec, queries [, options]) → JSON
 | `src_id` | column | the row key: an integer, `char`/`varchar`/`text` or `uuid` column |
 | `src_vec` | column | `vecf8(N)`, `vecf4(N)`, `vecf32(N)`, `vecf16(N)`, `vecbf16(N)`, `vecint8(N)` or `vecuint8(N)`; `vecf64` is rejected |
 | `queries` | constant string or JSON, or `BLOB` | array of query vectors `[[…], …]`, each of length `N`, a `null` coordinate or a `NULL` argument an error; or a `BLOB` of little-endian float32 values, `N` per query back to back (`CAST(? AS BLOB)` for a client's bytes), whose length must be a non-zero multiple of `4·N` and whose values must be finite. Converted once to the column's type (quantized for `vecf8`/`vecf4`); for `vecint8`/`vecuint8` every value is an integer in the type's range, and for `vecf16`/`vecbf16` every converted value is finite (a float32 query above the type's range is an error), otherwise an error. With `"query_format":"vecblock"` (a `vecf8`/`vecf4` column only) the queries are cells used as given: a `BLOB` of cells back to back (`vecblock_binary`), its length a non-zero multiple of the cell size, or a JSON array of vecblock JSON objects; every cell must be a valid cell of the column's format and dimension |
-| `options` | optional constant JSON object | `"metric"`: `inner_product` (the default), `cosine` or `l2sq`; `"query_format"`: `float32` (the default, float values) or `vecblock` (cells); other keys are ignored; text that is not a JSON object (empty text and `NULL` included), or another value of either key, is an error; omitting the argument selects the defaults. Dispatch follows the session's `gpu_mode` |
+| `options` | optional constant JSON object, as text or a `JSON` value | `"metric"`: `inner_product` (the default), `cosine` or `l2sq`; `"query_format"`: `float32` (the default, float values) or `vecblock` (cells); other keys are ignored; text that is not a JSON object (empty text and `NULL` included), or another value of either key, is an error; omitting the argument selects the defaults. Dispatch follows the session's `gpu_mode` |
 
 An aggregate: one result per group (one row without `GROUP BY`), of MO's `JSON` type.
-`topk`, `queries` and `options` are constants, prepared parameters or user variables; the
+`topk`, `queries` and `options` are constants, prepared parameters or user variables, or
+functions of them that are neither volatile nor real-time (`RAND()`, `UUID()`, `SYSDATE()`
+are rejected, as each executor would evaluate its own); the
 compiler moves them into the aggregate's configuration, so each executor receives only
 `src_id` and `src_vec`. A scalar subquery is planned as a join and arrives as a column,
 so query vectors stored in a table go through a user variable:
@@ -693,6 +695,20 @@ within the fp32 GEMM's tolerance, rows closer than it in either order.
   and pool back to zero); without room for the native memory, or for the tile after the
   native memory, or when the engine cannot be created, the fill fails (the created engine is
   closed and its charge released).
+- **Configuration admission** (`aggexec/vector_matmul_test.go`): a 64 × 8192 configuration,
+  binary or JSON, `vecf32` or `vecf8`, refused by a 64 KiB account allocates under 64 KiB
+  of Go heap (5 to 18 MB when parsed first); the parse bound is at least the parse's Go
+  allocation for JSON (with and without `null`), binary and vecblock queries of every
+  supported type at 32 × 256, 2 × 4096 and 500 × 3; a query count above 4096, an empty
+  array, a dimension mismatch, `queries × topk` beyond the limit and topk 0 fail before
+  decoding with the parse's errors; the JSON row scan (`vectorMatmulJSONRows`) on nested,
+  spaced, string, object and malformed text. Binder (`plan/base_binder_vector_matmul_test.go`):
+  `RAND()`, `UUID()` and `SYSDATE()` configurations are rejected, parameters and constants
+  accepted; function resolution accepts JSON options and rejects BLOB options.
+- **Sort and hash keys** (`sort/vecblock_test.go`, `hashmap/strhashmap_test.go`): `ORDER BY k, v`
+  over 150 peer groups sorts each group by the decoded values with under 64 KiB of Go heap
+  (16.8 MB decoding the column per group); a `vecf8`/`vecf4(768)` hash key, flat, nullable
+  or constant, is encoded inside its preflight reservation.
 - **Unit, plain types** (`aggexec/vector_matmul_test.go`): `vecf32`, `vecf16`, `vecbf16`,
   `vecint8`, `vecuint8` against a brute-force dot-product reference; integer queries out
   of range or fractional are rejected. Function resolution and binder tests accept the
@@ -843,7 +859,12 @@ cosine divides the norm out and squared L2 includes it.
   executor holding the configuration charges its allocation account for the retained
   query storage and its score scratch, so a shared configuration is charged to each
   holder; a denial fails the aggregate's creation, and the charge returns when the
-  executor is freed.
+  executor is freed. The account is attached before the configuration is parsed: it
+  first admits an upper bound of the parse (the decoded queries, the converted storage
+  and the score scratch, from the configuration's lengths and a non-allocating scan of
+  JSON queries that also checks the query count, `queries × topk` and the dimension),
+  then keeps only the retained bytes, so a configuration beyond the account is refused
+  before its queries are decoded.
 - v1 is a function call per tile with no index, residency or dataset cache; the cuVS
   brute-force index is unchanged.
 - SQL surface = one aggregate, `vector_matmul`; partials per pipeline and the cross-CN

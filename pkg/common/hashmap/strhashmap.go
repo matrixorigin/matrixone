@@ -184,11 +184,7 @@ func (itr *strHashmapIterator) prepareHashKeys(
 			}
 			if vec.IsConst() {
 				value := canonicalVarlenaHashValueForType(*vec.GetType(), vec.GetBytesAt(0))
-				valueSize := len(value)
-				if vec.GetType().Oid == types.T_json {
-					valueSize = keycodec.CanonicalJSONSize(value)
-				}
-				size := prefix + 4 + valueSize
+				size := prefix + 4 + hashKeyValueSize(vec.GetType().Oid, value)
 				for i := 0; i < count; i++ {
 					if err := add(i, size); err != nil {
 						return err
@@ -197,10 +193,10 @@ func (itr *strHashmapIterator) prepareHashKeys(
 				continue
 			}
 			values, area := vector.MustVarlenaRawData(vec)
-			if vec.GetType().Oid == types.T_json {
+			if oid := vec.GetType().Oid; oid == types.T_json || oid.IsBlockScaledArray() {
 				for i := 0; i < count; i++ {
 					value := values[start+i].GetByteSlice(area)
-					if err := add(i, prefix+4+keycodec.CanonicalJSONSize(value)); err != nil {
+					if err := add(i, prefix+4+hashKeyValueSize(oid, value)); err != nil {
 						return err
 					}
 				}
@@ -245,11 +241,7 @@ func (itr *strHashmapIterator) prepareHashKeys(
 				valueRow = 0
 			}
 			value := canonicalVarlenaHashValueForType(*vec.GetType(), vec.GetBytesAt(valueRow))
-			valueSize := len(value)
-			if vec.GetType().Oid == types.T_json {
-				valueSize = keycodec.CanonicalJSONSize(value)
-			}
-			if err := add(i, prefix+4+valueSize); err != nil {
+			if err := add(i, prefix+4+hashKeyValueSize(vec.GetType().Oid, value)); err != nil {
 				return err
 			}
 		}
@@ -406,6 +398,18 @@ func (itr *strHashmapIterator) encodeHashKeys(vecs []*vector.Vector, start, coun
 			keys[i] = append(keys[i], hashtable.StrKeyPadding[l:]...)
 		}
 	}
+}
+
+// hashKeyValueSize is the length appendVarlenaHashKey appends for a canonical value:
+// a JSON or vecf8/vecf4 key differs in length from the stored value.
+func hashKeyValueSize(oid types.T, value []byte) int {
+	switch {
+	case oid == types.T_json:
+		return keycodec.CanonicalJSONSize(value)
+	case oid.IsBlockScaledArray():
+		return keycodec.CanonicalVecBlockSize(value)
+	}
+	return len(value)
 }
 
 func appendVarlenaHashKey(dst []byte, typ types.Type, value []byte) []byte {

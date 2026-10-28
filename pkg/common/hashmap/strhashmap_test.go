@@ -21,6 +21,7 @@ import (
 	"math/rand"
 	"strconv"
 	"testing"
+	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -1872,4 +1873,56 @@ func TestStrHashMap_MarshalUnmarshal(t *testing.T) {
 		}
 	})
 
+}
+
+func TestStrHashMapVecBlockKeysStayInReservedBuffer(t *testing.T) {
+	const dim = 768
+	row := make([]float32, dim)
+	for i := range row {
+		row[i] = float32(i%13) - 6
+	}
+	for _, oid := range []types.T{types.T_array_float8, types.T_array_float4} {
+		f, _ := oid.BlockScaledFormat()
+		cell, err := types.AppendBlockScaled(nil, f, row)
+		require.NoError(t, err)
+		for _, shape := range []string{"flat", "nullable", "const"} {
+			t.Run(fmt.Sprintf("%s/%s", oid, shape), func(t *testing.T) {
+				mp := mpool.MustNewZero()
+				typ := types.New(oid, dim, 0)
+				var vec *vector.Vector
+				if shape == "const" {
+					vec, err = vector.NewConstBytes(typ, cell, 3, mp)
+					require.NoError(t, err)
+				} else {
+					vec = vector.NewVec(typ)
+					for i := 0; i < 3; i++ {
+						require.NoError(t, vector.AppendBytes(vec, cell, shape == "nullable" && i == 1, mp))
+					}
+				}
+				m, err := NewStrHashMap(shape == "nullable", mp)
+				require.NoError(t, err)
+				itr := m.NewIterator().(*strHashmapIterator)
+				require.NoError(t, itr.prepareHashKeys([]*vector.Vector{vec}, 0, 3))
+				buf := itr.keyBuffer
+				reserved := make([]int, 3)
+				for i := range reserved {
+					reserved[i] = cap(itr.keys[i])
+				}
+				itr.encodeHashKeys([]*vector.Vector{vec}, 0, 3)
+				lo := uintptr(unsafe.Pointer(unsafe.SliceData(buf)))
+				hi := lo + uintptr(len(buf))
+				for i := 0; i < 3; i++ {
+					if shape == "nullable" && i == 1 {
+						continue
+					}
+					require.Greater(t, len(itr.keys[i]), len(cell), "row %d", i)
+					p := uintptr(unsafe.Pointer(unsafe.SliceData(itr.keys[i])))
+					require.True(t, p >= lo && p+uintptr(len(itr.keys[i])) <= hi, "row %d key left the accounted buffer", i)
+					require.Equal(t, reserved[i], cap(itr.keys[i]), "row %d", i)
+				}
+				m.Free()
+				vec.Free(mp)
+			})
+		}
+	}
 }

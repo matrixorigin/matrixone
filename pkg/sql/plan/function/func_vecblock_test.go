@@ -325,6 +325,11 @@ func TestVectorMatmulResolution(t *testing.T) {
 		}
 		_, err := GetFunctionByName(ctx, "vector_matmul", []types.Type{i64, i64, vb, types.T_json.ToType(), vc})
 		require.NoError(t, err)
+		// options as a JSON object, beside text queries or JSON queries
+		_, err = GetFunctionByName(ctx, "vector_matmul", []types.Type{i64, i64, vb, vc, types.T_json.ToType()})
+		require.NoError(t, err)
+		_, err = GetFunctionByName(ctx, "vector_matmul", []types.Type{i64, i64, vb, types.T_json.ToType(), types.T_json.ToType()})
+		require.NoError(t, err)
 		// a non-int64 topk, untyped queries and options are cast
 		r, err := GetFunctionByName(ctx, "vector_matmul", []types.Type{types.T_uint8.ToType(), i64, vb, types.T_any.ToType(), types.T_any.ToType()})
 		require.NoError(t, err)
@@ -347,7 +352,7 @@ func TestVectorMatmulResolution(t *testing.T) {
 			{i64, i64, vb},
 			{types.T_float64.ToType(), i64, vb, vc},
 			{i64, i64, vb, i64},
-			{i64, i64, vb, vc, types.T_json.ToType()},
+			{i64, i64, vb, vc, types.T_blob.ToType()},
 			{i64, types.T_float64.ToType(), vb, vc},
 			{i64, i64, types.New(types.T_array_float64, 4, 0), vc},
 			{i64, i64, vb, vc, vc, vc},

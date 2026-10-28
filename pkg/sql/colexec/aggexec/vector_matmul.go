@@ -128,6 +128,15 @@ func encodeVectorMatmulConfig(topk int64, queries, options string, gpu, binaryQu
 }
 
 func decodeVectorMatmulConfig(b []byte) (topk int64, queries, options string, gpu, binaryQueries bool, err error) {
+	return decodeVectorMatmulConfigFields(b, func(v []byte) string { return string(v) })
+}
+
+// decodeVectorMatmulConfigView is decodeVectorMatmulConfig with queries and options viewing b.
+func decodeVectorMatmulConfigView(b []byte) (topk int64, queries, options string, gpu, binaryQueries bool, err error) {
+	return decodeVectorMatmulConfigFields(b, util.UnsafeBytesToString)
+}
+
+func decodeVectorMatmulConfigFields(b []byte, str func([]byte) string) (topk int64, queries, options string, gpu, binaryQueries bool, err error) {
 	read := func() (string, bool) {
 		if len(b) < 4 {
 			return "", false
@@ -136,7 +145,7 @@ func decodeVectorMatmulConfig(b []byte) (topk int64, queries, options string, gp
 		if uint64(len(b)-4) < uint64(n) {
 			return "", false
 		}
-		s := string(b[4 : 4+n])
+		s := str(b[4 : 4+n])
 		b = b[4+n:]
 		return s, true
 	}
@@ -275,6 +284,217 @@ func acquireVectorMatmulConfig(raw []byte, vecType types.Type) (cfg *vectorMatmu
 		return nil, nil, e.err
 	}
 	return e.cfg, release, nil
+}
+
+// vectorMatmulParseBound returns an upper bound of the bytes parseVectorMatmulConfig allocates
+// for raw and vecType, the transient decoding and the retained configuration together, plus
+// the executor's score scratch. It decodes no query: it rejects a topk, query count or
+// dimension outside the limits from the configuration's lengths and a scan of JSON queries,
+// so the account admits the bound before parsing allocates.
+func vectorMatmulParseBound(raw []byte, vecType types.Type) (uint64, error) {
+	topk, queries, options, _, binaryQueries, err := decodeVectorMatmulConfigView(raw)
+	if err != nil {
+		return 0, err
+	}
+	if topk < 1 || topk > vectorMatmulMaxTopK {
+		return 0, moerr.NewInvalidInputNoCtxf("vector_matmul: topk %d out of range [1, %d]", topk, vectorMatmulMaxTopK)
+	}
+	dim := int(vecType.Width)
+	if dim < 1 || dim > types.MaxArrayDimension {
+		return 0, moerr.NewInvalidInputNoCtxf("vector_matmul: dimension %d out of range [1, %d]", dim, types.MaxArrayDimension)
+	}
+	_, vecblockQueries, err := parseVectorMatmulOptions(options)
+	if err != nil {
+		// parsing reports the options
+		return 0, err
+	}
+	cellSize := 4 * dim
+	if f, ok := vecType.Oid.BlockScaledFormat(); ok {
+		cellSize = types.BlockScaledCellSize(f, dim)
+	}
+	// the copies of queries and options, and the options map
+	bound := 2*uint64(len(queries)) + 4*uint64(len(options)) + 4096
+	var nq int
+	switch {
+	case binaryQueries:
+		width := 4 * dim
+		if vecblockQueries {
+			width = cellSize
+		}
+		if len(queries) == 0 || len(queries)%width != 0 {
+			// parsing reports the length
+			return bound, nil
+		}
+		nq = len(queries) / width
+		// the decoded values and their slice headers
+		bound += uint64(len(queries)) + uint64(nq)*24
+	case vecblockQueries:
+		rows, ok := vectorMatmulJSONRows(queries, nil)
+		if !ok {
+			return bound, nil
+		}
+		nq = rows
+		// the element texts, their JSON decoding and the cells built from them
+		bound += uint64(len(queries)) + uint64(nq)*(2048+uint64(cellSize)+256*uint64(dim))
+	default:
+		badRow, badLen := -1, 0
+		rows, ok := vectorMatmulJSONRows(queries, func(row, n int) {
+			if badRow < 0 && n != dim {
+				badRow, badLen = row, n
+			}
+		})
+		if !ok {
+			return bound, nil
+		}
+		nq = rows
+		if nq >= 1 && nq <= vectorMatmulMaxQueries && nq*int(topk) <= vectorMatmulMaxEntries && badRow >= 0 {
+			return 0, moerr.NewArrayInvalidOpNoCtx(dim, badLen)
+		}
+		// the decoded vectors with append growth, and the second read when text holds null
+		bound += uint64(nq) * (48 + 16*uint64(dim))
+		if strings.Contains(queries, "null") {
+			bound += uint64(nq) * (48 + 48*uint64(dim))
+		}
+	}
+	if nq < 1 || nq > vectorMatmulMaxQueries {
+		return 0, moerr.NewInvalidInputNoCtxf("vector_matmul: query count %d out of range [1, %d]", nq, vectorMatmulMaxQueries)
+	}
+	if nq*int(topk) > vectorMatmulMaxEntries {
+		return 0, moerr.NewInvalidInputNoCtxf("vector_matmul: queries x topk exceeds %d", vectorMatmulMaxEntries)
+	}
+	// the converted storage (cells built from vectors, then copied back to back), the
+	// scorer views and the score scratch
+	opSize := uint64(reflect.TypeFor[metric.VecBlockOperand]().Size())
+	bound += uint64(nq) * (24 + 4*uint64(cellSize) + 8*uint64(dim) + opSize + 8)
+	return bound, nil
+}
+
+// vectorMatmulJSONRows scans text as a JSON array of arrays without decoding it: it returns
+// the number of rows and calls row, when not nil, with each row's element count. ok is
+// false when text is not an array of arrays; the decoder then reports the error. An element
+// of the outer array that is not an array counts as a row of one element.
+func vectorMatmulJSONRows(text string, row func(i, n int)) (rows int, ok bool) {
+	i := 0
+	ws := func() {
+		for i < len(text) && (text[i] == ' ' || text[i] == '\t' || text[i] == '\n' || text[i] == '\r') {
+			i++
+		}
+	}
+	// skipString moves i past the string starting at text[i].
+	skipString := func() bool {
+		for i++; i < len(text); i++ {
+			switch text[i] {
+			case '\\':
+				i++
+			case '"':
+				i++
+				return true
+			}
+		}
+		return false
+	}
+	// skipValue moves i past one value, counting the elements of an array.
+	var skipValue func() (elems int, ok bool)
+	skipValue = func() (int, bool) {
+		ws()
+		if i >= len(text) {
+			return 0, false
+		}
+		switch text[i] {
+		case '"':
+			return 1, skipString()
+		case '[', '{':
+			open, closer := text[i], byte(']')
+			if open == '{' {
+				closer = '}'
+			}
+			i++
+			ws()
+			if i < len(text) && text[i] == closer {
+				i++
+				return 0, true
+			}
+			n := 0
+			for {
+				if open == '{' {
+					ws()
+					if i >= len(text) || text[i] != '"' || !skipString() {
+						return 0, false
+					}
+					ws()
+					if i >= len(text) || text[i] != ':' {
+						return 0, false
+					}
+					i++
+				}
+				if _, ok := skipValue(); !ok {
+					return 0, false
+				}
+				n++
+				ws()
+				if i >= len(text) {
+					return 0, false
+				}
+				if text[i] == closer {
+					i++
+					if open == '{' {
+						return 1, true
+					}
+					return n, true
+				}
+				if text[i] != ',' {
+					return 0, false
+				}
+				i++
+			}
+		default:
+			start := i
+			for i < len(text) && text[i] != ',' && text[i] != ']' && text[i] != '}' &&
+				text[i] != ' ' && text[i] != '\t' && text[i] != '\n' && text[i] != '\r' {
+				i++
+			}
+			return 1, i > start
+		}
+	}
+	ws()
+	if i >= len(text) || text[i] != '[' {
+		return 0, false
+	}
+	i++
+	ws()
+	if i < len(text) && text[i] == ']' {
+		i++
+		ws()
+		return 0, i == len(text)
+	}
+	for {
+		ws()
+		isArray := i < len(text) && text[i] == '['
+		n, ok := skipValue()
+		if !ok {
+			return 0, false
+		}
+		if !isArray {
+			n = 1
+		}
+		if row != nil {
+			row(rows, n)
+		}
+		rows++
+		ws()
+		if i >= len(text) {
+			return 0, false
+		}
+		if text[i] == ']' {
+			i++
+			ws()
+			return rows, i == len(text)
+		}
+		if text[i] != ',' {
+			return 0, false
+		}
+		i++
+	}
 }
 
 func parseVectorMatmulConfig(raw []byte, vecType types.Type) (*vectorMatmulConfig, error) {
@@ -1340,18 +1560,43 @@ func (exec *vectorMatmulExec) newState(mp *mpool.MPool, allocation *AllocationAc
 	return newVectorMatmulState(mp, allocation, exec.cfg.nq, exec.cfg.topk)
 }
 
+// SetExtraInformation parses the configuration. With an account attached, which the
+// aggregate factory attaches first (admitsConfigParse), the account admits the bound of the
+// parse before it allocates, and keeps the configuration's charge after it.
 func (exec *vectorMatmulExec) SetExtraInformation(partialResult any, _ int) error {
 	raw, ok := partialResult.([]byte)
 	if !ok {
 		return moerr.NewInternalErrorNoCtxf("vector_matmul: unexpected configuration %T", partialResult)
 	}
+	// a new configuration replaces the held one; its charge is returned first
+	exec.releaseConfig()
+	var reservation *mpool.CapacityReservation
+	if exec.allocation != nil {
+		bound, err := vectorMatmulParseBound(raw, exec.argTypes[1])
+		if err != nil {
+			return err
+		}
+		if reservation, err = exec.allocation.reserveCapacity(bound); err != nil {
+			return err
+		}
+	}
 	cfg, release, err := acquireVectorMatmulConfig(raw, exec.argTypes[1])
 	if err != nil {
+		reservation.Abort()
 		return err
 	}
-	exec.releaseConfig()
 	exec.cfg, exec.releaseCfg = cfg, release
 	exec.scores = make([]float64, cfg.nq)
+	if reservation != nil {
+		lease, err := reservation.Commit(exec.configBytes())
+		if err != nil {
+			reservation.Abort()
+			exec.releaseConfig()
+			return err
+		}
+		exec.cfgLease = lease
+		return nil
+	}
 	if err := exec.chargeConfig(); err != nil {
 		exec.releaseConfig()
 		return err
@@ -1359,8 +1604,10 @@ func (exec *vectorMatmulExec) SetExtraInformation(partialResult any, _ int) erro
 	return nil
 }
 
-// SetAllocationAccount attaches the account and charges it for the configuration, which
-// the aggregate factory sets first.
+// admitsConfigParse makes the aggregate factory attach the account before the configuration.
+func (exec *vectorMatmulExec) admitsConfigParse() {}
+
+// SetAllocationAccount attaches the account and charges it for a configuration set before.
 func (exec *vectorMatmulExec) SetAllocationAccount(allocation *AllocationAccount) error {
 	if err := exec.aggExec.SetAllocationAccount(allocation); err != nil {
 		return err

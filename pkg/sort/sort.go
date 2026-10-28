@@ -494,13 +494,18 @@ func sortByVector(
 			genericSort(col, os, arrayElementGreater[uint8])
 		}
 	case types.T_array_float8, types.T_array_float4:
-		// Order by the dequantized values, as vecf32 does.
-		col := blockScaledSortColumn(vec)
-		if !desc {
-			genericSort(col, os, arrayLess[float32])
-		} else {
-			genericSort(col, os, arrayGreater[float32])
-		}
+		// Order by the dequantized values, as vecf32 does, comparing the cells in place.
+		data, area := vector.MustVarlenaRawData(vec)
+		col := struct {
+			data []types.Varlena
+			area []byte
+		}{data: data, area: area}
+		genericSort(col, os, func(v struct {
+			data []types.Varlena
+			area []byte
+		}, i, j int64) bool {
+			return types.CompareBlockScaledFromBytes(v.data[i].GetByteSlice(v.area), v.data[j].GetByteSlice(v.area), desc) < 0
+		})
 	case types.T_TS:
 		col := vector.MustFixedColNoTypeCheck[types.TS](vec)
 		if !desc {
@@ -1270,19 +1275,4 @@ func reverseRange(a, b int, os []int64) {
 		i++
 		j--
 	}
-}
-
-// blockScaledSortColumn dequantizes a vecf8/vecf4 vector; a NULL or malformed cell
-// becomes an empty row.
-func blockScaledSortColumn(vec *vector.Vector) [][]float32 {
-	col := make([][]float32, vec.Length())
-	for i := range col {
-		if vec.IsNull(uint64(i)) {
-			continue
-		}
-		if v, err := types.BlockScaledToFloat32(vec.GetBytesAt(i)); err == nil {
-			col[i] = v
-		}
-	}
-	return col
 }

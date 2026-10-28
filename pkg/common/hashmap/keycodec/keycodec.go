@@ -268,7 +268,7 @@ func CanonicalValueSize(typ types.Type, value []byte) int {
 	case types.T_json:
 		return CanonicalJSONSize(value)
 	case types.T_array_float8, types.T_array_float4:
-		return canonicalVecBlockSize(value)
+		return CanonicalVecBlockSize(value)
 	case types.T_array_float32, types.T_array_float64,
 		types.T_array_bf16, types.T_array_float16,
 		types.T_float32, types.T_float64:
@@ -595,8 +595,8 @@ func AppendCanonicalVecBlock(dst, value []byte) []byte {
 	return dst
 }
 
-// canonicalVecBlockSize is the length of AppendCanonicalVecBlock's key.
-func canonicalVecBlockSize(value []byte) int {
+// CanonicalVecBlockSize is the length of AppendCanonicalVecBlock's key.
+func CanonicalVecBlockSize(value []byte) int {
 	if cell, err := types.ParseBlockScaledCell(value); err == nil {
 		return 4 * cell.Dim
 	}

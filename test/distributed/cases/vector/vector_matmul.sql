@@ -62,6 +62,14 @@ select vector_matmul(4, id, v, '[[1,2,2],[0,1,0]]') from mt;
 select id, inner_product(v, '[1,2,2]') d from mt order by d, id;
 select vector_matmul(4, id, v, '[[1,2,2],[0,1,0]]', '{"metric":"cosine"}') from mt;
 select id, cosine_distance(v, '[1,2,2]') d from mt order by d, id;
+-- options as a SQL JSON object equal the same options as text; one that is not a valid options object is an error
+select vector_matmul(4, id, v, '[[1,2,2],[0,1,0]]', json_object('metric', 'cosine')) = vector_matmul(4, id, v, '[[1,2,2],[0,1,0]]', '{"metric":"cosine"}') from mt;
+select vector_matmul(4, id, v, json_array(json_array(1, 2, 2)), json_object('metric', 'l2sq')) from mt;
+select vector_matmul(4, id, v, '[[1,2,2]]', json_object('metric', 'l2')) from mt;
+select vector_matmul(4, id, v, '[[1,2,2]]', json_array('cosine')) from mt;
+-- a configuration that can differ between evaluations is an error: rand(), uuid(), sysdate()
+select vector_matmul(4, id, v, json_array(json_array(rand(), rand(), rand()))) from mt;
+select vector_matmul(4, id, v, '[[1,2,2]]', json_object('metric', 'cosine', 'seed', uuid())) from mt;
 select vector_matmul(4, id, v, '[[1,2,2],[0,1,0]]', '{"metric":"l2sq"}') from mt;
 select id, l2_distance_sq(v, '[1,2,2]') d from mt order by d, id;
 

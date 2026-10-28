@@ -2024,3 +2024,165 @@ func vmFlushGoAllocation(t *testing.T, scale float32) {
 	require.Less(t, allocated[1024], uint64(64<<10))
 	require.Less(t, allocated[1024], 2*allocated[16]+(16<<10))
 }
+
+// vmJSONQueries is a JSON array of nq vectors of dim elements; withNull writes one null.
+func vmJSONQueries(nq, dim int, withNull bool) string {
+	var b strings.Builder
+	b.WriteByte('[')
+	for q := 0; q < nq; q++ {
+		if q > 0 {
+			b.WriteByte(',')
+		}
+		b.WriteByte('[')
+		for j := 0; j < dim; j++ {
+			if j > 0 {
+				b.WriteByte(',')
+			}
+			if withNull && q == nq-1 && j == dim-1 {
+				b.WriteString("null")
+			} else {
+				b.WriteString(strconv.Itoa((q+j)%5 - 2))
+			}
+		}
+		b.WriteByte(']')
+	}
+	b.WriteByte(']')
+	return b.String()
+}
+
+// The account admits the bound of the configuration parse before the parse allocates: a
+// configuration beyond the account is refused with little Go heap allocation, binary or JSON.
+func TestVectorMatmulConfigAdmittedBeforeParse(t *testing.T) {
+	const limit = 64 << 10
+	for _, oid := range []types.T{types.T_array_float32, types.T_array_float8} {
+		typ := types.New(oid, 8192, 0)
+		ones := make([]float32, 64*8192)
+		for i := range ones {
+			ones[i] = 1
+		}
+		for name, raw := range map[string][]byte{
+			"binary": EncodeVectorMatmulBinaryConfig(1, types.ArrayToBytes(ones), "", false),
+			"json":   EncodeVectorMatmulConfig(1, vmJSONQueries(64, 8192, false), "", false),
+		} {
+			t.Run(oid.String()+"/"+name, func(t *testing.T) {
+				mp := mpool.MustNewZero()
+				defer mpool.DeleteMPool(mp)
+				registry, err := mpool.NewAllocationAccountRegistry(1, 512)
+				require.NoError(t, err)
+				account, err := registry.Open(limit)
+				require.NoError(t, err)
+				allocation, err := NewAllocationAccount(account, mpool.AllocationOwnerGroup, AllocationAccountSites{
+					VectorData: 1, VectorArea: 2, VectorNulls: 3, VectorGrouping: 4, ArgumentCount: 5, ArgumentArena: 6,
+				})
+				require.NoError(t, err)
+				var aggErr error
+				alloc := vmGoAlloc(func() {
+					_, aggErr = MakeGroupAgg(mp, AggIdOfVectorMatmul, false, allocation, raw, types.T_int64.ToType(), typ)
+				})
+				require.ErrorIs(t, aggErr, mpool.ErrAllocationAccountCapacity)
+				require.Less(t, alloc, uint64(64<<10))
+				require.Zero(t, account.Snapshot().Used)
+			})
+		}
+	}
+}
+
+// The bound covers what parsing allocates, for every query form and column type.
+func TestVectorMatmulParseBoundCoversParse(t *testing.T) {
+	for _, shape := range [][2]int{{32, 256}, {2, 4096}, {500, 3}} {
+		vmParseBoundCoversParse(t, shape[0], shape[1])
+	}
+}
+
+func vmParseBoundCoversParse(t *testing.T, nq, dim int) {
+	values := make([]float32, nq*dim)
+	for i := range values {
+		values[i] = float32(i%7) - 3
+	}
+	for _, oid := range []types.T{types.T_array_float32, types.T_array_float16, types.T_array_bf16, types.T_array_int8, types.T_array_float8, types.T_array_float4} {
+		typ := types.New(oid, int32(dim), 0)
+		configs := map[string][]byte{
+			"json":      EncodeVectorMatmulConfig(4, vmJSONQueries(nq, dim, false), "", false),
+			"json-null": EncodeVectorMatmulConfig(4, vmJSONQueries(nq, dim, true), "", false),
+			"binary":    EncodeVectorMatmulBinaryConfig(4, types.ArrayToBytes(values), `{"metric":"cosine"}`, false),
+		}
+		if f, ok := oid.BlockScaledFormat(); ok {
+			var cells []byte
+			texts := make([]string, nq)
+			for q := 0; q < nq; q++ {
+				cell, err := types.AppendBlockScaled(nil, f, values[q*dim:(q+1)*dim])
+				require.NoError(t, err)
+				cells = append(cells, cell...)
+				texts[q], err = types.BlockScaledToJSON(cell)
+				require.NoError(t, err)
+			}
+			opts := `{"query_format":"vecblock"}`
+			configs["vecblock-binary"] = EncodeVectorMatmulBinaryConfig(4, cells, opts, false)
+			configs["vecblock-json"] = EncodeVectorMatmulConfig(4, "["+strings.Join(texts, ",")+"]", opts, false)
+		}
+		for name, raw := range configs {
+			bound, err := vectorMatmulParseBound(raw, typ)
+			require.NoError(t, err, "%s %s nq=%d dim=%d", oid, name, nq, dim)
+			var parseErr error
+			alloc := vmGoAlloc(func() { _, parseErr = parseVectorMatmulConfig(raw, typ) })
+			if name == "json-null" {
+				require.Error(t, parseErr)
+			} else {
+				require.NoError(t, parseErr, "%s %s", oid, name)
+			}
+			require.LessOrEqual(t, alloc, bound, "%s %s nq=%d dim=%d", oid, name, nq, dim)
+		}
+	}
+}
+
+// The bound rejects a query count or dimension beyond the limits before decoding, with the
+// errors parsing reports.
+func TestVectorMatmulParseBoundLimits(t *testing.T) {
+	typ := types.New(types.T_array_float32, 2, 0)
+	for _, tc := range []struct {
+		raw  []byte
+		want string
+	}{
+		{EncodeVectorMatmulConfig(1, vmJSONQueries(vectorMatmulMaxQueries+1, 2, false), "", false), "query count 4097 out of range"},
+		{EncodeVectorMatmulConfig(1, "[]", "", false), "query count 0 out of range"},
+		{EncodeVectorMatmulConfig(1, "[[1,2],[1,2,3]]", "", false), "vector ops between different dimensions"},
+		{EncodeVectorMatmulConfig(vectorMatmulMaxTopK, vmJSONQueries(vectorMatmulMaxQueries, 2, false), "", false), "queries x topk exceeds"},
+		{EncodeVectorMatmulConfig(0, "[[1,2]]", "", false), "topk 0 out of range"},
+	} {
+		var err error
+		alloc := vmGoAlloc(func() { _, err = vectorMatmulParseBound(tc.raw, typ) })
+		require.ErrorContains(t, err, tc.want)
+		require.Less(t, alloc, uint64(16<<10))
+		_, parseErr := parseVectorMatmulConfig(tc.raw, typ)
+		require.ErrorContains(t, parseErr, tc.want)
+	}
+}
+
+func TestVectorMatmulJSONRows(t *testing.T) {
+	for _, tc := range []struct {
+		text  string
+		rows  int
+		lens  []int
+		valid bool
+	}{
+		{"[[1,2],[3,4]]", 2, []int{2, 2}, true},
+		{" [ [ 1 , 2.5e3 ] , [ -3 ] ] ", 2, []int{2, 1}, true},
+		{"[]", 0, nil, true},
+		{"[[]]", 1, []int{0}, true},
+		{`[{"g":1,"s":[1,2],"v":[3]},{"g":2}]`, 2, []int{1, 1}, true},
+		{`[["a,]b", "c\"]"],[1]]`, 2, []int{2, 1}, true},
+		{"[[1,2],[3,4]", 0, nil, false},
+		{"[[1,2]]x", 0, nil, false},
+		{"{}", 0, nil, false},
+		{"[[1,,2]]", 0, nil, false},
+		{"", 0, nil, false},
+	} {
+		var lens []int
+		rows, ok := vectorMatmulJSONRows(tc.text, func(_, n int) { lens = append(lens, n) })
+		require.Equal(t, tc.valid, ok, tc.text)
+		if tc.valid {
+			require.Equal(t, tc.rows, rows, tc.text)
+			require.Equal(t, tc.lens, lens, tc.text)
+		}
+	}
+}

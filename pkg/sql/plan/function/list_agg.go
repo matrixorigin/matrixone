@@ -578,7 +578,8 @@ var supportedAggInNewFramework = []FuncNew{
 		layout:     STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			// vector_matmul(topk, id, vec, queries [, options]); queries is a JSON array of
-			// vectors or a BLOB of little-endian float32 values
+			// vectors or a BLOB of little-endian float32 values, options a JSON object as
+			// text or JSON
 			if len(inputs) != 4 && len(inputs) != 5 {
 				return newCheckResultWithFailure(failedAggParametersWrong)
 			}
@@ -595,11 +596,7 @@ var supportedAggInNewFramework = []FuncNew{
 			}
 			for i := 3; i < len(finalTypes); i++ {
 				switch finalTypes[i].Oid {
-				case types.T_char, types.T_varchar, types.T_text:
-				case types.T_json:
-					if i == 4 {
-						return newCheckResultWithFailure(failedAggParametersWrong)
-					}
+				case types.T_char, types.T_varchar, types.T_text, types.T_json:
 				case types.T_blob:
 					// queries as little-endian float32 values
 					if i != 3 {
