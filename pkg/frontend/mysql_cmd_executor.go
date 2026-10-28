@@ -6742,7 +6742,19 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		if sqlmongodb.RedactSQLForDiagnostics(errorInput.getSql()) != errorInput.getSql() {
 			parseErr = diagnosticErr
 		} else {
-			parseErr = reportParseErrorForClient(execCtx.reqCtx, parseErr, diagnosticErr)
+			// #30747 acceptance (issue comment 6330683761): a MALFORMED
+			// credential-bearing statement must not expose its raw fragment
+			// to the client either — redact through safe masking/truncation
+			// while keeping useful parse diagnostics. When the request text
+			// carries any diagnostic-sensitive literal (identified-by /
+			// credential values, terminated or not), the client receives the
+			// same redacted serialization the diagnostic sink uses; every
+			// other parse error keeps the historical raw near-echo verbatim.
+			clientErr := parseErr
+			if len(mysql.SensitiveLiteralSpansForDiagnostic(errorInput.getSql(), mysql.ParseSQLModeFlags(sessionSQLModeForParser(ses)))) > 0 {
+				clientErr = diagnosticErr
+			}
+			parseErr = reportParseErrorForClient(execCtx.reqCtx, clientErr, diagnosticErr)
 		}
 		// Keep the terminal error log on the same diagnostic boundary as
 		// RecordParseErrorStatement. Parse failures have no AST, so use the raw

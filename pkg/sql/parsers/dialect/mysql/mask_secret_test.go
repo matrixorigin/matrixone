@@ -83,6 +83,15 @@ func TestParseErrorKeepsIdentifiedByInNearEcho(t *testing.T) {
 	// misspelled CREATE keyword: the error position is at the start, so the
 	// whole statement (including the identified-by literal) echoes into the
 	// near text and must stay readable (zz_accesscontrol convention).
+	//
+	// Scope note (#30747 review round 16): this pins the PARSER's raw
+	// serialization only — it is the raw material the frontend redacts
+	// from (the near-fragment redactor locates fragments verbatim), not
+	// the client-visible contract. On the client path, credential-bearing
+	// malformed statements receive the redacted serialization instead
+	// (TestParseErrorClientEchoRedactsCredentials, battery cell
+	// r13-identified-by-unterminated): tests asserting plaintext AT THE
+	// CLIENT are gone.
 	_, err := ParseOne(context.Background(), "create accout a1 ADMIN_NAME 'admin' IDENTIFIED BY 'PWN123456';", 1)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "IDENTIFIED BY 'PWN123456'")

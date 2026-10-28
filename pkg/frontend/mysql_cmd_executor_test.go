@@ -13126,6 +13126,47 @@ func TestMaskQueryForDebugTraceNestedPrepare(t *testing.T) {
 	require.Contains(t, redacted, `credentials={'aws_secret_key'='******'}`)
 }
 
+// #30747 review round 16 (acceptance, issue comment 6330683761): a
+// MALFORMED credential-bearing statement must not expose its raw fragment
+// to the client — redact through safe masking/truncation while keeping
+// useful parse diagnostics. Non-credential parse errors keep the
+// historical raw near-echo byte-for-byte.
+func TestParseErrorClientEchoRedactsCredentials(t *testing.T) {
+	run := func(t *testing.T, sql string) error {
+		ctx := defines.AttachAccountId(t.Context(), sysAccountID)
+		ctrl := gomock.NewController(t)
+		previousPU := getPuIfPresent("")
+		defer setPu("", previousPU)
+		ses := newTestSession(t, ctrl)
+		defer ses.Close()
+		ses.ruleCache = map[string]string{}
+		getPu("").SV.LengthOfQueryPrinted = 400
+		execCtx := newTestExecCtx(ctx, ctrl)
+		execCtx.ses = ses
+		return doComQuery(ses, execCtx, &UserInput{sql: sql})
+	}
+
+	t.Run("unterminated identified by is redacted but still diagnostic", func(t *testing.T) {
+		err := run(t, `create user u identified by 'CLIENT_GATE_D6`)
+		require.Error(t, err)
+		require.NotContains(t, err.Error(), "CLIENT_GATE_D6")
+		require.Contains(t, err.Error(), "syntax error", "location/shape diagnostics survive")
+	})
+
+	t.Run("terminated identified by keeps structure with the secret masked", func(t *testing.T) {
+		err := run(t, `create accout a1 ADMIN_NAME 'admin' IDENTIFIED BY 'PWN_CLIENT' ;`)
+		require.Error(t, err)
+		require.NotContains(t, err.Error(), "PWN_CLIENT")
+		require.Contains(t, err.Error(), "syntax error")
+	})
+
+	t.Run("non-credential parse errors keep the raw near echo verbatim", func(t *testing.T) {
+		err := run(t, `create tablex t (id int)`)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "tablex", "ordinary parse errors are untouched")
+	})
+}
+
 func TestMaskQueryForDebugTraceSQLModeOperands(t *testing.T) {
 	const mode = "NO_BACKSLASH_ESCAPES"
 	const stage = ` create stage s url='file:///x' credentials={'k'='foo\','secret_key'='TRACE_OPERAND_CANARY'}`
@@ -13407,8 +13448,8 @@ func TestRound11MalformedMapFamilyAllSinks(t *testing.T) {
 		{"r12-near-tail-embedded-eq", "", `create stage s url='file:///x' credentials={'k'='foo\','secret_key'='C5CANARY=tail'} -- '`},
 		{"r12-near-tail-value-before-eq", "", `create stage s url='file:///x' credentials={'k'='foo\','secret_key'='C6CANARY'=''} -- '`},
 		// round 13 tier: scanner-rule transition admission, cursor resume
-		// across mode flips, identified-by unterminated tail (client echo
-		// intentionally stays plaintext; every other sink must be clean)
+		// across mode flips, identified-by unterminated tail (round 16
+		// acceptance: the client echo is redacted too — every sink clean)
 		{"r13-admission-backtick", "", "SET`sql_mode`='ANSI_QUOTES'; create stage \"s\\\" url='file:///x' credentials={'k'='D1CANARY'}"},
 		{"r13-admission-hash-interstitial", "", "SET # c\nsql_mode='ANSI_QUOTES'; create stage \"s\\\" url='file:///x' credentials={'k'='D2CANARY'}"},
 		{"r13-admission-dash-interstitial", "", "SET -- c\nsql_mode='ANSI_QUOTES'; create stage \"s\\\" url='file:///x' credentials={'k'='D3CANARY'}"},
@@ -13450,12 +13491,9 @@ func TestRound11MalformedMapFamilyAllSinks(t *testing.T) {
 			// doComQuery itself drives both the record path and the client
 			// error echo for this battery's (mostly invalid) diagnostics.
 			comErr := doComQuery(ses, execCtx, &UserInput{sql: shape.query})
-			if shape.name == "r13-identified-by-unterminated" {
-				// documented compatibility policy: the CLIENT echo keeps the
-				// intentional plaintext; every diagnostic sink stays clean.
-				require.Error(t, comErr)
-				require.Contains(t, comErr.Error(), "D6PASSWORD", "client echo keeps the documented password echo")
-			} else if comErr != nil && comErr.Error() != "" {
+			// round 16 acceptance: including the identified-by-unterminated
+			// cell, the CLIENT echo must not carry any secret either.
+			if comErr != nil && comErr.Error() != "" {
 				for _, canary := range canaries {
 					require.NotContains(t, comErr.Error(), canary, "client error echo")
 				}
