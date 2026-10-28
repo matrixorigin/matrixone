@@ -1857,21 +1857,34 @@ def _serialize_record_batch(record: pa.RecordBatch) -> bytes:
     return sink.getvalue().to_pybytes()
 
 
-def _serialize_record_batch_message(record: pa.RecordBatch) -> memoryview:
+def _serialize_record_batch_message(record: pa.RecordBatch) -> bytes:
     """Serialize one Arrow record-batch message without repeating its schema."""
     try:
-        # Keep the Arrow-owned buffer alive through the returned memoryview so
-        # the parent can hand it directly to protocol 5's out-of-band buffer
-        # without first copying it into a Python bytes object.
-        return memoryview(record.serialize())
+        # IPC and exception tracebacks can outlive this batch. Do not export
+        # an Arrow-owned buffer through a memoryview into those lifetimes:
+        # cyclic GC can encounter that view while native consumers export it.
+        return record.serialize().to_pybytes()
     except (pa.ArrowException, OSError, ValueError, TypeError) as exc:
         raise ValueError("PROTOCOL: cannot serialize Arrow record batch") from exc
 
 
-def _deserialize_record_batch(data: bytes) -> pa.RecordBatch:
+def _owned_ipc_bytes(data: Any) -> bytes:
+    """Detach native Arrow consumers from caller-owned buffer exports."""
     if isinstance(data, pickle.PickleBuffer):
-        data = data.raw()
-    if not isinstance(data, (bytes, bytearray, memoryview)) or not data:
+        # raw() creates our view; release it without releasing the caller's
+        # PickleBuffer. A returned batch must not keep that export alive.
+        with data.raw() as view:
+            return bytes(view)
+    if isinstance(data, bytes):
+        return data
+    if isinstance(data, (bytearray, memoryview)):
+        return bytes(data)
+    raise ValueError("PROTOCOL: execution payload is missing an Arrow batch")
+
+
+def _deserialize_record_batch(data: bytes) -> pa.RecordBatch:
+    data = _owned_ipc_bytes(data)
+    if not data:
         raise ValueError("PROTOCOL: execution payload is missing an Arrow batch")
     try:
         reader = pa.ipc.open_stream(pa.py_buffer(data))
@@ -1898,9 +1911,8 @@ def _deserialize_record_batch_message(data: Any, schema: pa.Schema) -> pa.Record
     is an internal handler IPC format, not a replacement for the Flight
     schema, which remains validated independently at the worker boundary.
     """
-    if isinstance(data, pickle.PickleBuffer):
-        data = data.raw()
-    if not isinstance(data, (bytes, bytearray, memoryview)) or not data:
+    data = _owned_ipc_bytes(data)
+    if not data:
         raise ValueError("PROTOCOL: execution payload is missing an Arrow batch")
     if not isinstance(schema, pa.Schema):
         raise ValueError("PROTOCOL: execution payload schema is invalid")
@@ -2148,9 +2160,9 @@ def _read_execution_request(stream) -> Optional[Dict[str, Any]]:
         request = pickle.loads(
             metadata_wire,
             # A readonly memoryview preserves the protocol-5 PickleBuffer
-            # type when the exact-read backing is a bytearray, while keeping
-            # the Arrow payload zero-copy and preventing handler code from
-            # mutating the receive buffer through the request object.
+            # type without another framing copy when exact-read uses a
+            # bytearray. The decoder takes its own immutable snapshot before
+            # handing this buffer to native Arrow consumers.
             buffers=[pickle.PickleBuffer(memoryview(arrow_wire).toreadonly())],
         )
     except (EOFError, pickle.PickleError, TypeError, ValueError) as exc:

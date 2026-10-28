@@ -1697,6 +1697,7 @@ class WorkerContractTest(unittest.TestCase):
         )
         stream_wire = worker._serialize_record_batch(batch)
         message_wire = worker._serialize_record_batch_message(batch)
+        self.assertIsInstance(message_wire, bytes)
         self.assertLess(len(message_wire), len(stream_wire))
 
         decoded = worker._deserialize_record_batch_message(message_wire, schema)
@@ -1710,6 +1711,70 @@ class WorkerContractTest(unittest.TestCase):
             )
         with self.assertRaisesRegex(ValueError, "valid Arrow record batch"):
             worker._deserialize_record_batch_message(bytes(message_wire) + b"junk", schema)
+
+    def test_arrow_ipc_decode_detaches_caller_buffer_lifetime(self):
+        batch = pa.record_batch([pa.array(["valid"])], names=["value"])
+        for encoding, encode, decode in (
+            ("stream", worker._serialize_record_batch, worker._deserialize_record_batch),
+            ("message", worker._serialize_record_batch_message,
+             lambda data: worker._deserialize_record_batch_message(data, batch.schema)),
+        ):
+            wire = encode(batch)
+            self.assertIs(wire, worker._owned_ipc_bytes(wire))
+            for kind in ("bytes", "bytearray", "memoryview", "pickle_buffer"):
+                with self.subTest(encoding=encoding, kind=kind):
+                    backing = bytearray(wire)
+                    with memoryview(backing) as view:
+                        buffer = pickle.PickleBuffer(view)
+                        try:
+                            data = {"bytes": wire, "bytearray": backing,
+                                    "memoryview": view, "pickle_buffer": buffer}[kind]
+                            decoded = decode(data)
+                        finally:
+                            buffer.release()
+                    # Both caller-owned exports are now released while the
+                    # native result is live. Its data must also be independent
+                    # of subsequent reuse of the receive buffer.
+                    backing[:] = b"\x00" * len(backing)
+                    self.assertEqual(["valid"], decoded.column(0).to_pylist())
+
+    def test_arrow_ipc_error_tracebacks_survive_cyclic_collection(self):
+        # Keep native crashes and unraisable GC errors inside a child process.
+        # No Flight server or handler is needed to exercise IPC ownership.
+        script = """
+import gc
+import sys
+import pyarrow as pa
+import worker
+
+unraisable_errors = []
+sys.unraisablehook = lambda value: unraisable_errors.append(str(value.exc_value))
+def attempt():
+    batch = pa.record_batch([pa.array(['valid'])], names=['value'])
+    wire = worker._serialize_record_batch_message(batch)
+    decoded = worker._deserialize_record_batch_message(memoryview(wire), batch.schema)
+    try:
+        worker._deserialize_record_batch_message(memoryview(wire + b'junk'), batch.schema)
+    except ValueError as exc:
+        retained = exc
+    else:
+        raise AssertionError('trailing IPC bytes accepted')
+    assert decoded.column(0).to_pylist() == ['valid']
+    # retained -> traceback -> this frame -> retained is an intentional cycle.
+
+for _ in range(8):
+    attempt()
+    gc.collect()
+assert not unraisable_errors, unraisable_errors
+print('ipc-gc-ok')
+"""
+        completed = subprocess.run(
+            [sys.executable, "-X", "faulthandler", "-c", script],
+            cwd=WORKER_PATH.parent, capture_output=True, text=True, timeout=20,
+        )
+        self.assertEqual(0, completed.returncode, completed.stderr)
+        self.assertEqual("ipc-gc-ok\n", completed.stdout)
+        self.assertEqual("", completed.stderr)
 
     def test_handler_frame_keeps_arrow_bytes_out_of_pickle_metadata(self):
         arrow_wire = b"arrow-payload"
