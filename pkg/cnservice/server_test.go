@@ -609,6 +609,7 @@ type testBootService struct {
 	bootstrapErr         error
 	bootstrapCount       atomic.Int32
 	bootstrapHook        func()
+	bootstrapContextHook func(context.Context) error
 	bootstrapUpgradeHook func(context.Context) error
 	maybeUpgrade         func()
 	maybeUpgradeFetch    func(func() (int32, string, error))
@@ -616,6 +617,9 @@ type testBootService struct {
 
 func (boot *testBootService) Bootstrap(ctx context.Context) error {
 	boot.bootstrapCount.Add(1)
+	if boot.bootstrapContextHook != nil {
+		return boot.bootstrapContextHook(ctx)
+	}
 	if boot.bootstrapHook != nil {
 		boot.bootstrapHook()
 	}
@@ -657,6 +661,10 @@ func (boot *testBootService) GetFinalVersionOffset() int32 {
 	//TODO implement me
 	panic("implement me")
 }
+
+func (boot *testBootService) UpgradeStatus() (bool, error) { return true, nil }
+
+func (boot *testBootService) CheckManualUpgradeReadiness(context.Context) error { return nil }
 
 func (boot *testBootService) Close() error {
 	boot.closeCount++

@@ -1,185 +1,11 @@
 # Native exact weighted percentiles with window support
 
-Owning issue: matrixone/matrixone#29944 (kind/feature).
-Implementation PR: matrixone/matrixone#31000.
-Revision: 5 (2026-10-23; design revision after the independent design review's
-fourth REQUEST_CHANGES; revision 4, SHA256 9f02eeeedb217c52758b34919c3757c8ae82e7e938a174f0649311484dedd129, was
-otherwise supported — typed weight admission, destination verification,
-saved-state contracts and threshold mathematics — but freed constructed
-result vectors on the success path, contradicting the framework's
-output-ownership contract).
-Lineage: follow-up to `docs/design/median_within_group.md`,
-`docs/design/approx_percentile_within_group.md`,
-`docs/design/20260910-prepared-and-discrete-percentiles.md`, and
-`docs/design/20260919-ordered-set-window-functions.md`.
-
-Revision log:
-
-- Revision 1 (2026-10-23): initial design-only checkpoint.
-- Revision 2 (2026-10-23): resolved the first four review blockers — (1) weights are
-  validated in their original numeric type before any lossy conversion and
-  normalized exactly to uint64 (decision D4 rewritten; the FLOAT64 transport
-  that let UINT64 2^53+1 and fractional DECIMAL weights pass validation is
-  removed); (2) the selection threshold is k = ceil(level · W), computed once
-  per group finalize with exact big.Int arithmetic from the level's rational,
-  then compared in uint64 — covering the entire accepted level domain
-  including 1e-100 and high-scale decimals (replacing fixed 128-bit product
-  comparisons); (3) mixed-version remote execution gains a MORPC protocol
-  capability gate modeled on the existing percentile gates (new decision D10),
-  replacing the incorrect claim that old nodes always reject the name first;
-  (4) the zero-weight and zero-total endpoint contract is made consistent
-  (decision D6 rewritten) with explicit witnesses for trailing massless
-  values, leading massless values at level 0, and all-zero groups.
-- Revision 3 (2026-10-23): resolves the two remaining blockers — (1) D10 is
-  rewritten to verify the ACTUAL destination: the intended coordinator-local
-  `MOProtocolVersion` check (`supportsRemoteXxx(proc.GetService())`) only
-  inspects the coordinator's own service runtime, so a coordinator at the new
-  gate version with an older worker passed revision 2's story. Mixed-version
-  safety is now anchored on the existing send-time destination-stream
-  confirmation: the aggregate raises the `requiredProtocol` floor during
-  remote-scope encoding (`encodeRemoteScopeWithProtocol`, the site that
-  already raises v122/v125/v129 floors), the destination confirms it on the
-  live stream (`confirmProtocolOnStream` → `Method_PipelineProtocolCheck`
-  before `sendPipeline`), and a compile-time
-  `AllCNsSupportProtocol` fast-fail rejects placement when the cluster
-  inventory contains any pre-gate CN. (2) New decision D11 fixes the
-  saved-state schema: the persisted payload retains the ORIGINAL typed weight
-  (exactly the declared `argTypes`), because the generic saved-state
-  machinery interprets payloads through `argTypes` (DISTINCT spill
-  restoration against FLOAT member widths; Group's generic spill calls
-  `SaveSpillIntermediateRows` on every aggregate), so revision 2's
-  uint64-normalized payload contradicted the declared types. Typed-to-uint64
-  normalization moves to `Flush` only.
-- Revision 4 (2026-10-23): resolves the two remaining contract gaps — (1) the
-  finalization resource and cancellation contract is completed (new decision
-  D12): the executor implements `FlushWithContext` because the framework's
-  `aggexec.FlushWithContext` (concat2.go:1507-1520) only forwards context to
-  interface implementers; finalization declares cancellation points, owns its
-  temporary buffers through the allocation account, and frees scratch and
-  partially built results on cancellation, allocation failure, and overflow
-  after partial finalization, following the owned finalization precedent of
-  `orderedPercentileDiscreteExec.FlushWithContext` (ordered_percentile.go:313-372)
-  while the retained state itself is released through the framework's
-  `aggExec.Free` path (aggState.go:3439-3449). The resource model now budgets
-  the arena overhead and finalization scratch, and the validation plan gains
-  deterministic failure/cancellation witnesses asserting resource release
-  and a successful subsequent execution. (2) DECIMAL256 weight admission is
-  resolved consistently: D4 now names one explicit supported-weight set —
-  signed/unsigned integer widths, BIT, FLOAT32/64, and DECIMAL64/128 — with
-  DECIMAL256 rejected at bind time (`types.IsNumeric()` includes T_decimal256,
-  so the earlier "any numeric SQL type" admission contradicted the
-  DECIMAL64/128-only executor rules), and registration, validation,
-  saved-state sizing, and tests all state the same set.
-- Revision 5 (2026-10-23): resolves the one remaining blocker — finalization
-  OUTPUT OWNERSHIP. Revision 4's D12 listed the constructed result vectors
-  in the "freed on both success and error" set, and the resource model said
-  the growing result vector is released before a successful return. That
-  contradicts the framework's ownership contract, verified at
-  `freeAggregateResultsOnError` (median2.go:1924-1935: a result is freed
-  only when an error exists) and at
-  `orderedPercentileDiscreteExec.FlushWithContext`
-  (ordered_percentile.go:324 installs ERROR-only deferred cleanup; :373-374
-  returns the LIVE vectors), whose callers retain and read the returned
-  output across calls (window.go:760-769 caches ordered-set partition
-  results and reads them through `UnionMulti`). As written, revision 4
-  would have returned freed output. D12 and the resource model are
-  corrected: scratch is released on every return; result vectors are freed
-  only on error; on success their ownership transfers to the caller, which
-  retains, reads, and releases them through its own consumer cleanup. The
-  validation plan gains an ownership witness for that transfer.
-- Post-approval annotation (2026-10-24; documentation change only, not a
-  design revision): the Status section below now records the independent
-  design review's final decision — PASS for revision 5, whose reviewed
-  content is identified by SHA256
-  b2705c13ab4d3f9965ab3d83a6f3e4a83d3426e4ffefdcdc8b6713864c69e083 — in
-  place of the pre-review "pending" wording, and the header links
-  implementation PR #31000. No reviewed decision, invariant, or validation
-  plan changed in this annotation; the approved revision-5 bytes remain
-  byte-preserved in the commit that first delivered this document
-  (`60d88ff6adb4ae6ea9e1ba0946ee82bc61f26ea7`, inside PR #31000), so the
-  reviewed content stays verifiable against the recorded hash.
-- Post-merge annotation (2026-10-24; documentation change only, not a
-  design revision): D10's protocol capability slot is re-minted from the
-  drafted `MORPCVersion130` to the delivered `MORPCVersion131`. Upstream
-  main merged #30311 (`5a813a324d`, incomplete temporal string overloads)
-  before this branch, independently claiming `MORPCVersion130` and bumping
-  the sentinel to 130, which raised the merge conflict in
-  `pkg/defines/const.go`. The resolution keeps upstream's temporal 130
-  and mints this aggregate's gate at the next free slot 131, moving
-  `MORPCLatestVersion` to 131 with it. D10's reviewed decision is that
-  remote dispatch is gated by the capability version minted for THIS
-  aggregate, whichever slot is free when it merges, enforced through the
-  same three verified layers against the actual destination — no decision,
-  invariant, layering or validation plan changed; only the concrete slot
-  number moved. The regression matrix now explicitly covers a worker
-  advertising only the temporal 130 as below this aggregate's gate. The
-  approved revision-5 bytes remain byte-preserved at the introducing
-  commit recorded above.
-- Post-merge annotation, second (2026-10-24; documentation change only,
-  not a design revision): the aggregate's catalog function ID is
-  re-issued from the drafted `606` to the delivered `616`. Upstream main
-  merged #31017 (`6fb6531432`, technical-indicator window kernels)
-  before this branch's second base merge, allocating SQL function IDs
-  605-615 for its indicator registry (with `MO_VIEW`'s internal 603/604
-  helpers in front), which raised the merge conflicts in
-  `pkg/sql/plan/function/function_id.go`, `function_id_test.go`,
-  `window_binder.go` and the generated parser. The resolution keeps
-  upstream's 605-615, re-issues `QUANTILE_EXACT_WEIGHTED = 616` with the
-  sentinel at 617, and keeps `AggIdOfQuantileExactWeighted` tracking the
-  catalog id as `616 << 32`; the two window-binder blocks coexist as
-  upstream-authored (indicator-window validation) and this aggregate's
-  reviewed DISTINCT recording, with disjoint paths. The reviewed decision
-  (registry item 3) is to allocate the first unassigned catalog function
-  ID past the current `FUNCTION_END_NUMBER` sentinel, whichever slot is
-  free when it merges — no decision, invariant, admission set or
-  validation plan changed; only the concrete number moved (the wire
-  gate stays D10's `MORPCVersion131`, untouched). The approved
-  revision-5 bytes remain byte-preserved at the introducing commit
-  recorded above.
-- Post-merge annotation, third (2026-10-24; documentation change only,
-  not a design revision): the aggregate's catalog function ID is
-  re-issued from the delivered `616` to `619`. Upstream main merged
-  #31020 (`ac4ec31587`, local sliding-window ranks mrank/cumrank/tmrank)
-  before this branch's fourth base merge, allocating SQL function IDs
-  616-618 for those three operators (themselves renumbered around
-  #31017's 605-615 block) with `FUNCTION_END_NUMBER = 619`, which raised
-  the merge conflicts in `pkg/sql/plan/function/function_id.go`,
-  `function_id_test.go` and the generated parser (the grammar,
-  keywords and window-binder seams auto-merged with disjoint paths).
-  The resolution re-applies the same allocation rule as the second
-  annotation: keep upstream's 616-618, re-issue
-  `QUANTILE_EXACT_WEIGHTED = 619` with the sentinel at 620, and keep
-  `AggIdOfQuantileExactWeighted` tracking the catalog id as
-  `619 << 32`; every reference stays by name, so renumbering is safe.
-  No decision, invariant, admission set or validation plan changed;
-  only the concrete number moved (the wire gate stays D10's
-  `MORPCVersion131`, untouched; the `Test_funids` pin and the
-  executor-id tracking assertion are updated with it). The approved
-  revision-5 bytes remain byte-preserved at the introducing commit
-  recorded above.
-
-## Status
-
-Approved by the mandatory independent design review on 2026-10-24: decision
-PASS for revision 5, whose reviewed content (SHA256
-b2705c13ab4d3f9965ab3d83a6f3e4a83d3426e4ffefdcdc8b6713864c69e083)
-was verified by the reviewer against the inspected code. The review was
-performed by an independent review session (separate from the
-implementation work) under this repository's contract
-`.agents/skills/mo-dev/references/feature-design-review.md`, design-only,
-with implementation blocked throughout: revisions 1–4 each returned
-REQUEST_CHANGES (every blocker and its resolution is recorded in the
-revision log above), and each successor revision was re-reviewed before the
-final decision — "Numerical semantics, typed saved state, destination
-protocol gates and corrected output ownership are coherent with the
-inspected code. No blocking design findings remain." One non-blocking P3
-(exercise executor destruction before retained-result reads) was carried
-into the implementation's window UT. The subsequent implementation review
-reused this recorded approval and found no deviation from it. This
-document is the review artifact required by the feature-design gate, with
-the approved revision identified above and preserved byte-for-byte in the
-introducing commit recorded in the revision log; implementation is
-delivered in PR matrixone/matrixone#31000.
+Owning issue: [matrixorigin/matrixone#29944](https://github.com/matrixorigin/matrixone/issues/29944).
+Implementation: [matrixorigin/matrixone#31000](https://github.com/matrixorigin/matrixone/pull/31000).
+The original design review, revision history and merge notes are preserved at
+the [original merged revision](https://github.com/matrixorigin/matrixone/blob/df8bfd602ecc036424ff7897187565657366919d/docs/design/20261023-exact-weighted-percentiles.md).
+The approved design was revision 5, content SHA-256
+`b2705c13ab4d3f9965ab3d83a6f3e4a83d3426e4ffefdcdc8b6713864c69e083`.
 
 ## Classification
 
@@ -473,7 +299,7 @@ Decision log (inline references D1–D12 resolve here):
   constant in `pkg/defines/const.go` — the aggregate's originally drafted slot,
   `MORPCVersion130`, was claimed first by upstream main's incomplete-temporal
   rework #30311, so the delivered gate is re-minted at the next free slot; see
-  the post-merge annotation in the revision log), enforced against the ACTUAL
+  the post-merge annotation in the original revision history), enforced against the ACTUAL
   destination in three verified layers — (1) at compile time, a
   `hasQuantileExactWeighted(node)` plan predicate paired with
   `AllCNsSupportProtocol(proc, <gate>)` fast-fails remote distribution when
@@ -560,7 +386,7 @@ First owner of each boundary (all in the assigned worktree):
    sentinel (605 at approval; the register's consistency tests audit gaps
    and the sentinel — after upstream #31017 allocated 605-615, the
    delivered aggregate id is the next unassigned slot `616`; see the second
-   post-merge annotation in the revision log); register `class: Function_AGG`, `layout: STANDARD_FUNCTION`
+   post-merge annotation in the original revision history); register `class: Function_AGG`, `layout: STANDARD_FUNCTION`
    with a three-argument `checkFn` (value domain as in the ordered percentile
    continuous check; weight admitted exactly for decision D4's set —
    signed/unsigned integer widths, BIT, FLOAT32/64, DECIMAL64/DECIMAL128
@@ -683,7 +509,7 @@ First owner of each boundary (all in the assigned worktree):
    the next free slot (`pkg/defines/const.go`, bumping the
    latest-version sentinel to 131; the drafted slot 130 was claimed first
    by upstream main's #30311 temporal rework, so the delivered constant moved
-   to 131 — recorded in the revision log's post-merge annotation), then
+   to 131 — recorded in the original revision history's post-merge annotation), then
    decision D10's three enforcement layers:
    (a) a `hasQuantileExactWeighted(node)` plan predicate added to
    `canCompileShuffleGroup`'s capability family and the remote-compile
