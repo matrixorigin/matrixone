@@ -106,6 +106,20 @@ func TestIntegerArithmeticWidth(t *testing.T) {
 
 			query(t, "select (b+b)*(b+b) from t order by id", []string{"BIGINT"}, [][]string{{"40000"}, {"65536"}})
 		})
+		t.Run("mixed signed columns", func(t *testing.T) {
+			exec("create table mixed(id int primary key,s bigint,u bigint unsigned)")
+			exec("insert into mixed values(1,-1,18446744073709551615),(2,-9223372036854775808,9223372036854775808),(3,-1,0),(4,-1,1)")
+			unsigned := []string{"UNSIGNED BIGINT", "UNSIGNED BIGINT"}
+			query(t, "select s+u,u+s from mixed where id=1", unsigned, [][]string{{"18446744073709551614", "18446744073709551614"}})
+			query(t, "select s+u,u+s from mixed where id=2", unsigned, [][]string{{"0", "0"}})
+			query(t, "select s*u,u*s from mixed where id=3", unsigned, [][]string{{"0", "0"}})
+			for _, expr := range []string{"s*u", "u*s"} {
+				var value string
+				err := conn.QueryRowContext(ctx, "select "+expr+" from mixed where id=4").Scan(&value)
+				require.ErrorContains(t, err, "1690")
+				query(t, "select s+u from mixed where id=1", unsigned[:1], [][]string{{"18446744073709551614"}})
+			}
+		})
 		t.Run("top level set outputs", func(t *testing.T) {
 			for _, tc := range []struct {
 				op   string
