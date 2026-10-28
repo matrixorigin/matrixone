@@ -8873,10 +8873,25 @@ func bindFuncExprImplByPlanExpr(
 		refineRepeatLiteralReturnType(args, &returnType)
 
 	case "substring", "substr", "mid":
-		refineSubstringLiteralReturnType(args, &returnType)
+		if argsType[0].Oid != types.T_blob {
+			refineSubstringLiteralReturnType(args, &returnType)
+		}
 
 	case "left", "right":
-		refineLeftRightLiteralReturnType(args, &returnType)
+		if argsType[0].Oid != types.T_blob {
+			refineLeftRightLiteralReturnType(args, &returnType)
+		}
+
+	case "hex":
+		// Keep the slice's BLOB type for its other consumers. HEX needs only
+		// its proven payload bound to choose the result's metadata.
+		if len(args) == 1 && argsType[0].Oid == types.T_blob {
+			if bounded, ok := boundedBinaryBlobSliceType(args[0]); ok {
+				if resolved, ok := function.GetFunctionByNameWithoutError(name, []types.Type{bounded}); ok {
+					returnType = resolved.GetReturnType()
+				}
+			}
+		}
 
 	case "lpad", "rpad":
 		refinePadLiteralReturnType(args, &returnType)
@@ -9473,11 +9488,6 @@ func refineSubstringLiteralReturnType(args []*plan.Expr, returnType *types.Type)
 		return
 	}
 
-	sourceType := makeTypeByPlan2Expr(args[0])
-	if sourceType.Oid == types.T_blob {
-		return
-	}
-
 	if possibleStringDomainsForExpr(args[0]) != possibleStringDomainBinary {
 		if len(args) == 3 {
 			refineCharacterSliceLiteralWidth(args[0], args[2], returnType)
@@ -9524,16 +9534,32 @@ func refineSubstringLiteralReturnType(args []*plan.Expr, returnType *types.Type)
 	refineKnownStringResultType(returnType, bound, binary)
 }
 
+// boundedBinaryBlobSliceType obtains a byte bound without changing the slice
+// expression's declared BLOB type, or its overload and execution arguments.
+func boundedBinaryBlobSliceType(expr *plan.Expr) (types.Type, bool) {
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil || len(fn.Args) == 0 ||
+		possibleStringDomainsForExpr(fn.Args[0]) != possibleStringDomainBinary {
+		return types.Type{}, false
+	}
+	bounded := types.T_blob.ToType()
+	switch strings.ToLower(fn.Func.GetObjName()) {
+	case "substring", "substr", "mid":
+		refineSubstringLiteralReturnType(fn.Args, &bounded)
+	case "left", "right":
+		refineLeftRightLiteralReturnType(fn.Args, &bounded)
+	default:
+		return types.Type{}, false
+	}
+	return bounded, bounded.Oid == types.T_varbinary
+}
+
 // refineLeftRightLiteralReturnType narrows LEFT/RIGHT when the requested
 // length is a constant.  The result cannot exceed either that length or the
 // source's proven bound; an unknown length keeps the overload's conservative
 // metadata.
 func refineLeftRightLiteralReturnType(args []*plan.Expr, returnType *types.Type) {
 	if len(args) != 2 {
-		return
-	}
-	sourceType := makeTypeByPlan2Expr(args[0])
-	if sourceType.Oid == types.T_blob {
 		return
 	}
 	if possibleStringDomainsForExpr(args[0]) != possibleStringDomainBinary {
