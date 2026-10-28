@@ -2265,6 +2265,31 @@ func TestCalculateTableStatsWithAppendableRows(t *testing.T) {
 	assert.Equal(t, 0, stats.TombstoneObjectCnt)
 }
 
+func TestCollectDataStatsCountsCompactReplayPhysicalColumns(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	input := batch.NewWithSize(3)
+	input.SetAttributes([]string{"rowid", "time", "id"})
+	input.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+	input.Vecs[1] = vector.NewVec(types.T_TS.ToType())
+	input.Vecs[2] = vector.NewVec(types.T_int64.ToType())
+	defer input.Clean(mp)
+	require.NoError(t, vector.AppendFixed(input.Vecs[0], types.RandomRowid(), false, mp))
+	require.NoError(t, vector.AppendFixed(input.Vecs[1], types.BuildTS(1, 0), false, mp))
+	require.NoError(t, vector.AppendFixed(input.Vecs[2], int64(42), false, mp))
+	input.SetRowCount(1)
+	proto, err := batch.BatchToProtoBatch(input)
+	require.NoError(t, err)
+	state := NewPartitionState("test", false, 42, false)
+	packer := types.NewPacker()
+	defer packer.Close()
+	state.HandleRowsInsert(context.Background(), proto, 0, packer, mp)
+	stats, err := state.CollectDataStats(context.Background(), types.BuildTS(2, 0), nil, nil)
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), stats.Rows)
+	require.Equal(t, float64(types.RowidSize+types.TxnTsSize+8), stats.Size)
+}
+
 // TestCalculateTableStatsWithInMemoryDeletes tests in-memory deletes on non-appendable object rows
 func TestCalculateTableStatsWithInMemoryDeletes(t *testing.T) {
 	ctx := context.Background()
@@ -3012,6 +3037,18 @@ func TestTombstoneReplayReclamationBoundaries(t *testing.T) {
 			proto, err := batch.BatchToProtoBatch(input)
 			require.NoError(t, err)
 			state.HandleRowsDelete(t.Context(), proto, packer, pool)
+			retained, ok := state.rows.Get(&RowEntry{
+				BlockID: dataBlock,
+				RowID:   rowIDs[0],
+				Time:    types.BuildTS(2, 0),
+			})
+			require.True(t, ok)
+			require.Len(t, retained.Batch.Vecs, 1)
+			for _, vec := range retained.Batch.Vecs[1:cap(retained.Batch.Vecs)] {
+				require.Nil(t, vec, "unused backing slots must not pin source vectors")
+			}
+			require.Equal(t, len(rowIDs), retained.Batch.RowCount())
+			require.Equal(t, int64(0), vector.GetFixedAtNoTypeCheck[int64](retained.Batch.Vecs[0], 0))
 			// An absent row must not stop cleanup of the remaining eligible rows.
 			orphan := &PrimaryIndexEntry{Bytes: target[:], Time: types.BuildTS(4, 0), RowEntryID: -1, RowID: types.NewRowid(&dataBlock, 99)}
 			state.inMemTombstoneRowIdIndex.Set(orphan)
