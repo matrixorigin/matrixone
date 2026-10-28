@@ -227,6 +227,48 @@ func runTestWithLogTailServer(t *testing.T, test func(ctx context.Context, e *En
 }
 */
 
+func TestReconnectHandlerConcurrentUpdate(t *testing.T) {
+	var c PushClient
+	var calls atomic.Int64
+	handler := func() { calls.Add(1) }
+	start := make(chan struct{})
+	var workers sync.WaitGroup
+	workers.Add(2)
+	go func() {
+		defer workers.Done()
+		<-start
+		for range 1000 {
+			c.SetReconnectHandler(handler)
+			c.SetReconnectHandler(nil)
+		}
+	}()
+	go func() {
+		defer workers.Done()
+		<-start
+		for range 1000 {
+			c.notifyReconnect()
+		}
+	}()
+	close(start)
+	workers.Wait()
+	c.SetReconnectHandler(handler)
+	c.notifyReconnect()
+	require.Positive(t, calls.Load())
+
+	// A callback can replace itself; notification must not retain the lock.
+	done := make(chan struct{})
+	c.SetReconnectHandler(func() {
+		c.SetReconnectHandler(nil)
+		close(done)
+	})
+	go c.notifyReconnect()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("reconnect callback could not update its handler")
+	}
+}
+
 func TestPushClient_LatestLogtailAppliedTime(t *testing.T) {
 	var c PushClient
 	tw := client.NewTimestampWaiter(runtime.GetLogger(""))
