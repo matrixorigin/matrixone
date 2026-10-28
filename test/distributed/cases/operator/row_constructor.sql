@@ -245,15 +245,15 @@ select o.k, (0,null) <=>
        (select count(1),sum(i.v) from row_scalar_inner_28295 i where i.k<o.k) as real_rows_only
 from row_scalar_outer_28295 o order by o.k;
 select o.k, (0,null) <=>
-       (select count(*),sum(i.v) from row_scalar_inner_28295 i where i.k<o.k limit 0) as rejected_limit
+       (select count(*),sum(i.v) from row_scalar_inner_28295 i where i.k<o.k limit 0) as limited_empty_value
 from row_scalar_outer_28295 o order by o.k;
 select o.k, (0,null) <=>
-       (select sum(coalesce(i.v,0)),sum(i.v) from row_scalar_inner_28295 i where i.k<o.k) as rejected_expression
+       (select sum(coalesce(i.v,0)),sum(i.v) from row_scalar_inner_28295 i where i.k<o.k) as expression_value
 from row_scalar_outer_28295 o order by o.k;
 select o.k, (o.k,(select v from row_scalar_inner_28295 where k=1)) =
-       (select count(*),sum(i.v) from row_scalar_inner_28295 i where i.k<o.k) as rejected_composition
+       (select count(*),sum(i.v) from row_scalar_inner_28295 i where i.k<o.k) as composed_value
 from row_scalar_outer_28295 o order by o.k;
-select 1 as query_after_rejections;
+select 1 as query_after_aggregates;
 insert into row_scalar_inner_28295 values (1,20);
 select o.k, (select group_concat(i.v order by i.v desc separator '~')
              from row_scalar_inner_28295 i where i.k<o.k) as ordered_concat

@@ -17,6 +17,7 @@ package function
 import (
 	"context"
 	"math"
+	"math/bits"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -105,16 +106,99 @@ func (operand integerDomainOperand) value(row uint64) (types.Decimal128, bool) {
 }
 
 func mixedUnsignedPlusFn(p []*vector.Vector, r vector.FunctionResultWrapper, proc *process.Process, n int, selected *FunctionSelectList) error {
+	if isMixedInt64Uint64(p) {
+		return mixedUnsignedAddMul(p, r, proc, n, selected, false)
+	}
 	return checkedIntegerArithmetic[uint64](p, r, proc, n, selected, "+", types.Decimal128.Add128)
 }
 func mixedUnsignedMinusFn(p []*vector.Vector, r vector.FunctionResultWrapper, proc *process.Process, n int, selected *FunctionSelectList) error {
 	return checkedIntegerArithmetic[uint64](p, r, proc, n, selected, "-", types.Decimal128.Sub128)
 }
 func mixedUnsignedMultiFn(p []*vector.Vector, r vector.FunctionResultWrapper, proc *process.Process, n int, selected *FunctionSelectList) error {
+	if isMixedInt64Uint64(p) {
+		return mixedUnsignedAddMul(p, r, proc, n, selected, true)
+	}
 	return checkedIntegerArithmetic[uint64](p, r, proc, n, selected, "*", types.Decimal128.Mul128)
 }
 func signedUnsignedMinusFn(p []*vector.Vector, r vector.FunctionResultWrapper, proc *process.Process, n int, selected *FunctionSelectList) error {
 	return checkedIntegerArithmetic[int64](p, r, proc, n, selected, "-", types.Decimal128.Sub128)
+}
+
+func isMixedInt64Uint64(p []*vector.Vector) bool {
+	a, b := p[0].GetType().Oid, p[1].GetType().Oid
+	return a == types.T_int64 && b == types.T_uint64 || a == types.T_uint64 && b == types.T_int64
+}
+
+// Only genuine mixed pairs use this path. Existing same-sign overload-2 inputs
+// keep checkedIntegerArithmetic's behavior. Normalize reading roles without
+// converting negative signed operands into unsigned mathematical values.
+func mixedUnsignedAddMul(p []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, n int, selected *FunctionSelectList, multiply bool) error {
+	signed, unsigned := p[0], p[1]
+	if signed.GetType().Oid == types.T_uint64 {
+		signed, unsigned = unsigned, signed
+	}
+	result.UseOptFunctionParamFrame(2)
+	out := vector.MustFunctionResult[uint64](result)
+	sourceSigned := vector.OptGetParamFromWrapper[int64](out, 0, signed)
+	sourceUnsigned := vector.OptGetParamFromWrapper[uint64](out, 1, unsigned)
+	for i := uint64(0); i < uint64(n); i++ {
+		if selected != nil && (selected.IgnoreAllRow() || selected.Contains(i)) {
+			if err := out.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+		s, sn := sourceSigned.GetValue(i)
+		u, un := sourceUnsigned.GetValue(i)
+		if sn || un {
+			if err := out.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+		var value uint64
+		var overflow bool
+		if multiply {
+			if s == 0 || u == 0 {
+				value = 0
+			} else if s < 0 {
+				overflow = true
+			} else {
+				var high uint64
+				high, value = bits.Mul64(uint64(s), u)
+				overflow = high != 0
+			}
+		} else if s < 0 {
+			// Unsigned negation also handles MinInt64 without signed overflow.
+			magnitude := uint64(0) - uint64(s)
+			overflow = u < magnitude
+			value = u - magnitude
+		} else {
+			var carry uint64
+			value, carry = bits.Add64(u, uint64(s), 0)
+			overflow = carry != 0
+		}
+		if overflow {
+			return mixedUnsignedAddMulError(proc.Ctx, s, u, multiply)
+		}
+		if err := out.Append(value, false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// Reuse the old mathematical diagnostic only on rejection, never per successful
+// row. A genuine mixed pair's product fits signed Decimal128 before domain checks.
+func mixedUnsignedAddMulError(ctx context.Context, s int64, u uint64, multiply bool) error {
+	a := types.Decimal128{B0_63: uint64(s), B64_127: uint64(s >> 63)}
+	b := types.Decimal128{B0_63: u}
+	operator, op := "+", types.Decimal128.Add128
+	if multiply {
+		operator, op = "*", types.Decimal128.Mul128
+	}
+	value, _ := op(a, b)
+	return moerr.NewOutOfRangef(ctx, "BIGINT UNSIGNED", "(mixed signed/unsigned %s result %s)", operator, value.Format(0))
 }
 
 // Inputs and the published result stay integer-typed, including after prepared
