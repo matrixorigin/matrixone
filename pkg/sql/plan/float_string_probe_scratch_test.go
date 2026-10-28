@@ -389,3 +389,161 @@ func TestLegacyFloatScratchIndependentReaders(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, before, after)
 }
+
+// A completed first island must not poison either island when the next source
+// charge fails. Exercise the same owners again, including optional memo refusal.
+func TestLegacyFloatScratchInterruptedIslandsReuse(t *testing.T) {
+	for _, memoKind := range []string{"enabled", "source_full", "result_full"} {
+		t.Run(memoKind, func(t *testing.T) {
+			compiler := floatCatalogCompiler(t)
+			originalContext := compiler.GetContext()
+			compiler.GetProcess().GetSessionInfo().TimeZone = time.UTC
+			compiler.GetProcess().GetSessionInfo().LCTimeNames = "en_US"
+			bind := func(name string, args ...*planpb.Expr) *planpb.Expr {
+				e, err := BindFuncExprImplByPlanExpr(originalContext, name, args)
+				require.NoError(t, err)
+				return e
+			}
+			temporal := bind("date_format", bind("from_unixtime", makePlan2Int64ConstExprWithType(0)), makePlan2StringConstExprWithType("%M %H"))
+			sum := bind("+", makePlan2Int64ConstExprWithType(1), makePlan2Int64ConstExprWithType(2))
+			typ := types.T_float64.ToType()
+			prepared, err := makePlan2CastExpr(originalContext, sum, makePlan2Type(&typ))
+			require.NoError(t, err)
+			prepared.PreparedNumeric = &planpb.PreparedNumericMetadata{ProvisionalResultPeer: true}
+			p, old := &legacyFloatSessionProbe{}, &legacyFloatSessionProbe{}
+			budget, oldBudget := &tableDumpBindingBudget{}, &tableDumpBindingBudget{}
+			if memoKind == "source_full" {
+				budget.probeMemo.bytes, oldBudget.probeMemo.bytes = legacyFloatProbeMemoBytes, legacyFloatProbeMemoBytes
+			}
+			var inputBytes [][]byte
+			for i, source := range []*planpb.Expr{temporal, prepared} {
+				want, err := ConstantFold(batch.EmptyForConstFoldBatch, DeepCopyExpr(source), legacyFloatSessionProbeProcess(compiler, 0), false, true)
+				require.NoError(t, err)
+				if i == 0 {
+					require.Equal(t, "January 00", want.GetLit().GetSval())
+				} else {
+					require.Equal(t, float64(3), want.GetLit().GetDval())
+					require.NotNil(t, want.GetLit().Src, "prepared folding retains the source graph")
+				}
+				p.islands = append(p.islands, legacyFloatSessionIsland{source: source, want: want})
+				old.islands = append(old.islands, legacyFloatSessionIsland{source: source, want: want})
+				require.NoError(t, budget.prepareSessionIsland(&p.islands[i], 0))
+				require.NoError(t, oldBudget.prepareSessionIsland(&old.islands[i], 0))
+				for _, input := range []*planpb.Expr{source, want} {
+					data, err := proto.Marshal(input)
+					require.NoError(t, err)
+					inputBytes = append(inputBytes, data)
+				}
+			}
+			if memoKind == "result_full" {
+				budget.probeMemo.entries, oldBudget.probeMemo.entries = legacyFloatProbeMemoEntries, legacyFloatProbeMemoEntries
+			}
+			check := func(b, oldB *tableDumpBindingBudget, want bool, canceled, exhausted bool) {
+				t.Helper()
+				matched, err := p.matches(compiler, b)
+				oldMatched, oldErr := legacyFloatCloneMatches(old, compiler, oldB)
+				require.Equal(t, oldMatched, matched)
+				require.Equal(t, want, matched)
+				if canceled {
+					require.ErrorIs(t, err, context.Canceled)
+					require.ErrorIs(t, oldErr, context.Canceled)
+				} else if exhausted {
+					require.Error(t, oldErr)
+					require.EqualError(t, err, oldErr.Error())
+				} else {
+					require.NoError(t, oldErr)
+					require.NoError(t, err)
+				}
+				require.Equal(t, oldB.visits, b.visits)
+				require.Equal(t, oldB.probeMemo.bytes, b.probeMemo.bytes)
+				require.Equal(t, oldB.probeMemo.entries, b.probeMemo.entries)
+				for i := range p.islands {
+					if p.islands[i].memo != nil {
+						require.Equal(t, old.islands[i].memo.results, p.islands[i].memo.results)
+					}
+					if p.islands[i].scratch != nil {
+						require.True(t, proto.Equal(DeepCopyExpr(p.islands[i].source), p.islands[i].scratch.root))
+					}
+					for j, input := range []*planpb.Expr{p.islands[i].source, p.islands[i].want} {
+						data, err := proto.Marshal(input)
+						require.NoError(t, err)
+						require.Equal(t, inputBytes[2*i+j], data)
+					}
+				}
+				require.Zero(t, compiler.GetProcess().Mp().CurrNB())
+			}
+			check(budget, oldBudget, true, false, false)
+			compiler.GetProcess().GetSessionInfo().TimeZone = time.FixedZone("B", 8*3600)
+			check(budget, oldBudget, false, false, false)
+			compiler.GetProcess().GetSessionInfo().TimeZone = time.UTC
+			check(budget, oldBudget, true, false, false)
+
+			// Foreign budgets cannot use retained memo entries. Leave exactly
+			// enough for the first island, then fail the second source charge.
+			firstCost := &tableDumpBindingBudget{}
+			first := &legacyFloatSessionProbe{islands: old.islands[:1]}
+			matched, err := legacyFloatCloneMatches(first, compiler, firstCost)
+			require.NoError(t, err)
+			require.True(t, matched)
+			remaining := tableDumpMaxCandidateVisits - firstCost.visits
+			check(&tableDumpBindingBudget{visits: remaining}, &tableDumpBindingBudget{visits: remaining}, false, false, true)
+			check(budget, oldBudget, true, false, false)
+			canceled, cancel := context.WithCancel(originalContext)
+			cancel()
+			compiler.SetContext(canceled)
+			t.Cleanup(func() { compiler.SetContext(originalContext) })
+			check(budget, oldBudget, false, true, false)
+			compiler.SetContext(originalContext)
+			check(budget, oldBudget, true, false, false)
+		})
+	}
+}
+
+func TestLegacyFloatScratchRebuildAfterRejectedBind(t *testing.T) {
+	compiler := floatCatalogCompiler(t)
+	source, err := BindFuncExprImplByPlanExpr(compiler.GetContext(), "+", []*planpb.Expr{makePlan2Int64ConstExprWithType(1), makePlan2Int64ConstExprWithType(2)})
+	require.NoError(t, err)
+	want, err := ConstantFold(batch.EmptyForConstFoldBatch, DeepCopyExpr(source), legacyFloatSessionProbeProcess(compiler, 0), false, true)
+	require.NoError(t, err)
+	require.Equal(t, int64(3), want.GetLit().GetI64Val())
+	before, err := proto.Marshal(source)
+	require.NoError(t, err)
+	probe := &legacyFloatSessionProbe{islands: []legacyFloatSessionIsland{{source: source, want: want}}, searches: []tableDumpSessionCandidate{{}}}
+	// No memo: after releasing the first scratch, the second candidate must
+	// rebuild and evaluate the original source instead of reusing a result.
+	budget := &tableDumpBindingBudget{}
+	a, b := time.UTC, time.FixedZone("B", 8*3600)
+	zones := func(yield func(*time.Location) bool) {
+		for _, zone := range []*time.Location{a, b} {
+			if !yield(zone) {
+				return
+			}
+		}
+	}
+	var tried []*time.Location
+	var boundTrees []*planpb.Expr
+	found, err := matchLegacyFloatSessionProbes(compiler, a, "en_US", zones, []*legacyFloatSessionProbe{probe}, budget, tableDumpMaxCandidateVisits,
+		func(_ tableDumpSessionCandidate, zone *time.Location, _ string) (*planpb.Expr, error) {
+			require.Nil(t, probe.islands[0].scratch, "release before each full binding")
+			tried = append(tried, zone)
+			bound, err := ConstantFold(batch.EmptyForConstFoldBatch, DeepCopyExpr(source), legacyFloatSessionProbeProcess(compiler, 0), false, true)
+			require.NoError(t, err)
+			boundTrees = append(boundTrees, bound)
+			return bound, nil
+		}, func(_ tableDumpSessionCandidate, bound *planpb.Expr) (bool, error) {
+			require.True(t, proto.Equal(want, bound))
+			require.Equal(t, int64(3), bound.GetLit().GetI64Val())
+			return len(tried) == 2, nil
+		})
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Equal(t, []*time.Location{a, b}, tried)
+	require.Nil(t, probe.islands[0].scratch)
+	require.NotSame(t, boundTrees[0], boundTrees[1])
+	boundTrees[0].GetLit().Value = &planpb.Literal_I64Val{I64Val: 99}
+	require.Equal(t, int64(3), boundTrees[1].GetLit().GetI64Val(), "caller trees are independent")
+	after, err := proto.Marshal(source)
+	require.NoError(t, err)
+	require.Equal(t, before, after)
+	require.Zero(t, compiler.GetProcess().Mp().CurrNB())
+}
