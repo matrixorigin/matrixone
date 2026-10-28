@@ -1800,7 +1800,11 @@ func (rule *ResetParamRefRule) rebindPreparedNumericExprWithBound(
 				}
 			}
 		}
-		bound, err := bindReboundNumericExpr(rule.ctx, name, copy.GetF().Args, fn.Args)
+		var originalBoundExpr *Expr
+		if name == "+" || name == "-" || name == "*" {
+			originalBoundExpr = expr
+		}
+		bound, err := bindFuncExprImplByPlanExpr(rule.ctx, nil, name, copy.GetF().Args, true, nil, originalBoundExpr, false)
 		if err != nil {
 			return nil, false, err
 		}
@@ -2922,13 +2926,6 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 	case *plan.Expr_Dependent:
 		return applyDependentOperands(e, rule.ApplyExpr)
 	case *plan.Expr_F:
-		var originalTemporalExpr *Expr
-		if exprImpl.F.Func != nil {
-			switch strings.ToLower(exprImpl.F.Func.GetObjName()) {
-			case "date_add", "date_sub", "str_to_date", "to_date", "addtime", "subtime", "timediff", "time", "timestamp", "timestampadd":
-				originalTemporalExpr = DeepCopyExpr(e)
-			}
-		}
 		functionName := ""
 		if exprImpl.F.Func != nil {
 			functionName = exprImpl.F.Func.GetObjName()
@@ -3891,13 +3888,24 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 				rewritten, err = rebindExplicitPreparedCast(rule.ctx, e, boundArgs)
 				rule.specialized = true
 			} else {
+				var originalBoundExpr *Expr
+				switch functionName {
+				case "+", "-", "*", "date_add", "date_sub", "str_to_date", "to_date", "addtime", "subtime", "timediff", "time", "timestamp", "timestampadd":
+					// The saved operands already own immutable provenance. Share
+					// them only when rebinding, without copying the tree again.
+					originalFunction := *exprImpl.F
+					originalFunction.Args = originalArgs
+					original := *e
+					original.Typ = originalTyp
+					original.Expr = &plan.Expr_F{F: &originalFunction}
+					originalBoundExpr = &original
+				}
 				rewritten, err = bindPreparedFuncExprImplByPlanExpr(
 					rule.ctx,
-					originalTemporalExpr,
+					originalBoundExpr,
 					exprImpl.F.Func.GetObjName(),
 					boundArgs,
 					stringDomainModes,
-					originalArgs,
 				)
 			}
 			if err != nil {

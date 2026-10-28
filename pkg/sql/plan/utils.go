@@ -1995,7 +1995,7 @@ func constantFoldWithPreparedExactSource(
 	if !spatialChecked || !jsonFeatureChecked {
 		features, featureErr := plan.RequiredRemoteExpressionFeatures(expr)
 		if featureErr != nil || (!spatialChecked && features.SpatialDistanceSemantics) ||
-			(!jsonFeatureChecked && (features.JSONStringConsumerOverload || features.JSONOpaqueTextContracts)) {
+			(!jsonFeatureChecked && (features.JSONStringConsumerOverload || features.JSONOpaqueTextContracts && !historicalFloatDefaultFolding(proc.Ctx))) {
 			return expr, nil
 		}
 		spatialChecked, jsonFeatureChecked = true, true
@@ -2057,6 +2057,11 @@ func constantFoldWithPreparedExactSource(
 	// Preserve diagnostic-bearing division subtrees through their parents;
 	// a later execution may use a different sql_mode or statement policy.
 	if rule.ContainsSqlModeDependentDivision(expr) {
+		return expr, nil
+	}
+	// Catalog proof can pre-fold independent children once while retaining
+	// session-dependent islands for a later, private witness evaluation.
+	if preserved, _ := proc.Ctx.Value(legacyFloatSessionFoldKey{}).(map[*plan.Expr]bool); preserved[expr] {
 		return expr, nil
 	}
 
@@ -4781,6 +4786,7 @@ func fillValuesOfParamsInPlanWithSpecializationSelected(
 			if err != nil {
 				return nil, false, err
 			}
+			refreshIntegerPrecisionParameters(pp.Ddl.Query, effectiveParamVals, selected)
 			return copied, specialized || numericPrefixSpecialization, nil
 		}
 
@@ -4790,6 +4796,7 @@ func fillValuesOfParamsInPlanWithSpecializationSelected(
 		if err != nil {
 			return nil, false, err
 		}
+		refreshIntegerPrecisionParameters(copied.GetQuery(), effectiveParamVals, selected)
 		return copied, specialized || runtimeDecimalPrefix, nil
 	}
 	return copied, false, nil
@@ -7266,7 +7273,7 @@ func refreshPreparedPlanProjectionExprType(
 			rebound, err = appendIntegerArgument(ctx, rebindArgs[0], target, false)
 		}
 		if rebound == nil && err == nil {
-			rebound, err = bindPreparedFuncExprImplByPlanExpr(ctx, expr, functionName, rebindArgs, nil, nil)
+			rebound, err = bindPreparedFuncExprImplByPlanExpr(ctx, expr, functionName, rebindArgs, nil)
 		}
 		if err != nil {
 			return false, err

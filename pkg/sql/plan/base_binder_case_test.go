@@ -91,7 +91,7 @@ func TestTemporalBindingUsesPrivatePreparedProvenance(t *testing.T) {
 					bound,
 					name,
 					[]*planpb.Expr{DeepCopyExpr(value), makePlan2StringConstExprWithType(format)},
-					nil, nil,
+					nil,
 				)
 				require.NoError(t, err)
 				require.Equal(t, int32(types.T_datetime), rebound.Typ.Id)
@@ -218,7 +218,7 @@ func TestPreparedTimeArithmeticMarkerKeepsTimeMetadata(t *testing.T) {
 		require.Equal(t, int32(types.T_time), bound.Typ.Id)
 		require.Equal(t, int32(6), bound.Typ.Scale)
 		rebound, err := bindPreparedFuncExprImplByPlanExpr(ctx, bound, name,
-			[]*planpb.Expr{makePlan2StringConstExprWithType("2024-02-29 12:34:56"), DeepCopyExpr(second)}, nil, nil)
+			[]*planpb.Expr{makePlan2StringConstExprWithType("2024-02-29 12:34:56"), DeepCopyExpr(second)}, nil)
 		require.NoError(t, err)
 		require.Equal(t, int32(types.T_time), rebound.Typ.Id)
 		require.Equal(t, int32(6), rebound.Typ.Scale)
@@ -251,7 +251,7 @@ func TestTypedTimeArithmeticDurationPrecision(t *testing.T) {
 			bound, err = BindFuncExprImplByPlanExpr(ctx, name, []*planpb.Expr{DeepCopyExpr(first), marker})
 			require.NoError(t, err)
 			require.Equal(t, int32(6), bound.Typ.Scale)
-			rebound, err := bindPreparedFuncExprImplByPlanExpr(ctx, bound, name, []*planpb.Expr{DeepCopyExpr(first), DeepCopyExpr(literal)}, nil, nil)
+			rebound, err := bindPreparedFuncExprImplByPlanExpr(ctx, bound, name, []*planpb.Expr{DeepCopyExpr(first), DeepCopyExpr(literal)}, nil)
 			require.NoError(t, err)
 			require.Equal(t, int32(6), rebound.Typ.Scale)
 		}
@@ -283,7 +283,7 @@ func TestTimeDiffStringLiteralPrecision(t *testing.T) {
 	require.Equal(t, int32(6), bound.Typ.Scale)
 	rebound, err := bindPreparedFuncExprImplByPlanExpr(ctx, bound, "timediff", []*planpb.Expr{
 		makePlan2StringConstExprWithType("12:00:00.1"), makePlan2StringConstExprWithType("11:00:00"),
-	}, nil, nil)
+	}, nil)
 	require.NoError(t, err)
 	require.Equal(t, int32(6), rebound.Typ.Scale)
 }

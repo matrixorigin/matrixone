@@ -345,11 +345,11 @@ func TestLocalRankBindArityAndDomain(t *testing.T) {
 	// types already bound), so pin it through the direct binder call the
 	// find_in_set internal-shape test established.
 	_, err := bindFuncExprImplByPlanExpr(context.Background(), nil, "tmrank",
-		[]*Expr{lit64(1), lit64(3)}, false, nil, nil, false, nil)
+		[]*Expr{lit64(1), lit64(3)}, false, nil, nil, false)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "tmrank function needs one value argument and one INTERVAL width")
 	_, err = bindFuncExprImplByPlanExpr(context.Background(), nil, "tmrank",
-		[]*Expr{lit64(1), lit64(3), lit64(5)}, false, nil, nil, false, nil)
+		[]*Expr{lit64(1), lit64(3), lit64(5)}, false, nil, nil, false)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "tmrank function needs one value argument and one INTERVAL width")
 
@@ -392,7 +392,7 @@ func TestLocalRankBindWindowIntervalSourceAdmitted(t *testing.T) {
 	bindFunctionNode := func(name string, args ...*planpb.Expr) *planpb.Expr {
 		t.Helper()
 		bound, err := bindFuncExprImplByPlanExpr(context.Background(), nil, name,
-			args, false, nil, nil, false, nil)
+			args, false, nil, nil, false)
 		require.NoError(t, err, name)
 		return bound
 	}
@@ -482,7 +482,7 @@ func TestLocalRankBindTmRankWidthNilProcSafety(t *testing.T) {
 	boundFuncExpr := func(name string, args ...*planpb.Expr) *planpb.Expr {
 		t.Helper()
 		bound, bErr := bindFuncExprImplByPlanExpr(ctx, nil, name, args,
-			false, nil, nil, false, nil)
+			false, nil, nil, false)
 		require.NoError(t, bErr, name)
 		return bound
 	}

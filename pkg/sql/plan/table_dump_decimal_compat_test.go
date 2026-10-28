@@ -25,6 +25,30 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestTableDumpBindingModeFlagsAreIndependent(t *testing.T) {
+	flags := []tableDumpBindingMode{
+		tableDumpBindingPreTemporalNullability,
+		tableDumpBindingPreUnixTimestampDatetime,
+		tableDumpBindingPreJSON,
+		tableDumpBindingPreIncompleteTemporal,
+		tableDumpBindingDDLColumnScope,
+		tableDumpBindingPreIntegerDecimal,
+		tableDumpBindingPreDecimalPrecision,
+		tableDumpBindingLegacyFloat,
+		tableDumpBindingLegacyFloatFormatting,
+		tableDumpBindingFrozenFloatDefaults,
+		tableDumpBindingPreJSONFolding,
+	}
+	var seen tableDumpBindingMode
+	for _, flag := range flags {
+		require.NotZero(t, flag)
+		require.Zero(t, flag&(flag-1), "an era flag must select one policy")
+		require.Zero(t, seen&flag, "independent decimal and float eras must not alias")
+		require.Zero(t, flag&0x3f, "era flags must not replace a base binding mode")
+		seen |= flag
+	}
+}
+
 // Reuse complete protobufs authored by the actual base planner, not trees
 // reconstructed by the historical binding implementation under test.
 func TestTableDumpPersistedDecimalBindings(t *testing.T) {

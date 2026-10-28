@@ -1623,8 +1623,15 @@ var supportedOperators = []FuncNew{
 		layout:     BINARY_ARITHMETIC_OPERATOR,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) == 2 {
-				if isMixedUnsignedInteger(inputs[0], inputs[1]) {
-					return newCheckResultWithCast(2, integerDomainOperands(inputs))
+				if operands, _, mixed, ok := resolveIntegerAddMulExecution(numericOpAdd, inputs[0], inputs[1]); ok {
+					overload := 0
+					if mixed {
+						overload = 2
+					}
+					if operands[0] == inputs[0] && operands[1] == inputs[1] {
+						return newCheckResultWithSuccess(overload)
+					}
+					return newCheckResultWithCast(overload, operands)
 				}
 				has, t1, t2 := arithmeticTypeCastRule1(inputs[0], inputs[1])
 				if widened, ok := decimalArithmeticInputs("+", inputs, []types.Type{t1, t2}); ok {
@@ -1770,8 +1777,15 @@ var supportedOperators = []FuncNew{
 		layout:     BINARY_ARITHMETIC_OPERATOR,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) == 2 {
-				if isMixedUnsignedInteger(inputs[0], inputs[1]) {
-					return newCheckResultWithCast(2, integerDomainOperands(inputs))
+				if operands, _, mixed, ok := resolveIntegerAddMulExecution(numericOpMul, inputs[0], inputs[1]); ok {
+					overload := 0
+					if mixed {
+						overload = 2
+					}
+					if operands[0] == inputs[0] && operands[1] == inputs[1] {
+						return newCheckResultWithSuccess(overload)
+					}
+					return newCheckResultWithCast(overload, operands)
 				}
 				has, t1, t2 := arithmeticTypeCastRule1(inputs[0], inputs[1])
 				// D64 is a signed coefficient. MUL's D128 result cannot recover

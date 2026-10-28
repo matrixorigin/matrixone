@@ -57,6 +57,15 @@ coercion remains unchanged. Existing kernels consume the same supported physical
 input/output pairs and the same serialized function IDs; no new execution
 layout is introduced.
 
+Prepared arithmetic reuses the binder's existing original-expression input to
+distinguish materialized EXECUTE parameters from weak SQL literals. Rebinding
+already saves immutable operands; a shallow expression/function header refers
+to those operands for both arithmetic and temporal consumers. No second operand
+list parameter or additional recursive copy is required. Recursive numeric
+fallback uses its original arithmetic expression, while ordinary and catalog
+binding retain their existing API and literal rules. Explicit casts keep their
+declared domains, and rebinding never mutates the cached prepared plan.
+
 ## Validation and performance acceptance
 
 Resolver regressions prove the small-domain failures on unchanged main and
@@ -174,3 +183,10 @@ acceptance is claimed from the rejected candidate.
 DUMP/LOAD must select historical precision for decimal-only arithmetic and rounding as well as integer coercions. There are independent released eras: pre-integer-width bindings, strict integer casts with pre-intermediate-precision metadata, and current bindings. Reconstruct complete trees for the first two eras; do not normalize supplied widths or combine partial witnesses. Both historical contexts are confined to origin verification, retain declared CAST/runtime checks, and share the existing cancellation and candidate-node limits. Ordinary integer-only defaults add no precision witness.
 
 Regression fixtures are serialized by an unmodified main planner and self-verified there before testing both DUMP and LOAD here. Include declared-decimal multiplication, nested/negative rounding, strict integer peers, unchanged controls, forged precision rejection and work limits.
+
+The float-string catalog repair composes the same independent decimal eras
+during origin matching, verified reconstruction and final rebinding. Its flags
+do not alias integer, float or base binding modes, and the pre-integer era
+already includes the old precision policy. Mixed generated/default fixtures
+from unmodified main verify that float repair cannot silently skip decimal
+expressions or authorize forged widths; folded default values remain unchanged.

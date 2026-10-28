@@ -110,33 +110,65 @@ func TestCTASDecimalAggregatePrecisionUsesColumnDomains(t *testing.T) {
 
 func TestPreparedDecimalArithmeticRetainsDeclaredRuntimeDomains(t *testing.T) {
 	for _, tc := range []struct {
-		name, value string
-		runtime     types.Type
-		widths      []int32
-		scales      []int32
+		name           string
+		values         []any
+		runtime        types.Type
+		widths, scales []int32
 	}{
-		{"bigint", "1", types.T_int64.ToType(), []int32{22, 22, 34}, []int32{2, 2, 2}},
-		{"decimal", "1.25", types.New(types.T_decimal128, 20, 2), []int32{21, 21, 35}, []int32{2, 2, 4}},
+		{"bigint", []any{"1", "9223372036854775807", nil, "1"}, types.T_int64.ToType(), []int32{22, 22, 34}, []int32{2, 2, 2}},
+		{"decimal", []any{"1.25", "999999999999999999.99", nil, "1.25"}, types.New(types.T_decimal128, 20, 2), []int32{21, 21, 35}, []int32{2, 2, 4}},
 	} {
 		for i, op := range []string{"+", "-", "*"} {
-			t.Run(tc.name+op, func(t *testing.T) {
-				prepared, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
-					"prepare arithmetic_domain from 'select cast(n_nationkey as decimal(15,2)) "+op+" ? as amount from nation'")
-				require.NoError(t, err)
-				cached := prepared.GetDcl().GetPrepare().Plan
-				before := proto.Clone(cached)
-				filled, _, err := FillValuesOfParamsInPlanWithSpecialization(context.Background(), cached, []any{
-					ParamValue{Value: tc.value, RuntimeType: tc.runtime, HasRuntimeType: true, IsBinaryProtocol: true},
+			for _, expression := range []string{
+				"cast(n_nationkey as decimal(15,2)) " + op + " ?",
+				"? " + op + " cast(n_nationkey as decimal(15,2))",
+				"abs(cast(n_nationkey as decimal(15,2)) " + op + " ?)",
+			} {
+				t.Run(tc.name+expression, func(t *testing.T) {
+					prepared, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
+						"prepare arithmetic_domain from 'select "+expression+" as amount from nation'")
+					require.NoError(t, err)
+					cached := prepared.GetDcl().GetPrepare().Plan
+					before := proto.Clone(cached)
+					for _, value := range tc.values {
+						filled, _, err := FillValuesOfParamsInPlanWithSpecialization(context.Background(), cached, []any{
+							ParamValue{Value: value, RuntimeType: tc.runtime, HasRuntimeType: true, IsBinaryProtocol: true},
+						})
+						require.NoError(t, err)
+						query := filled.GetQuery()
+						expr := query.Nodes[len(query.Nodes)-1].ProjectList[0]
+						require.Equal(t, int32(types.T_decimal128), expr.Typ.Id)
+						require.Equal(t, tc.widths[i], expr.Typ.Width)
+						require.Equal(t, tc.scales[i], expr.Typ.Scale)
+						require.True(t, proto.Equal(before, cached), "EXECUTE must not mutate the prepared domain")
+					}
 				})
-				require.NoError(t, err)
-				query := filled.GetQuery()
-				expr := query.Nodes[len(query.Nodes)-1].ProjectList[0]
-				require.Equal(t, int32(types.T_decimal128), expr.Typ.Id)
-				require.Equal(t, tc.widths[i], expr.Typ.Width)
-				require.Equal(t, tc.scales[i], expr.Typ.Scale)
-				require.True(t, proto.Equal(before, cached), "EXECUTE must not mutate the prepared domain")
-			})
+			}
 		}
+	}
+}
+
+func TestPreparedDecimalArithmeticRecursiveRebindRetainsDomain(t *testing.T) {
+	ctx := t.Context()
+	runtime := types.New(types.T_decimal128, 20, 2)
+	for _, op := range []string{"+", "-", "*"} {
+		t.Run(op, func(t *testing.T) {
+			marker := &Expr{Typ: makePlan2Type(&runtime), Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}}}
+			source, err := BindFuncExprImplByPlanExpr(ctx, op, []*Expr{
+				decimalArithmeticTestColumn(types.New(types.T_decimal64, 15, 2), 0), marker,
+			})
+			require.NoError(t, err)
+			before := proto.Clone(source)
+			value, err := preparedRuntimeParamExpr(ctx, "1.25", false, runtime)
+			require.NoError(t, err)
+			rule := NewResetParamRefRule(ctx, []*Expr{value})
+			rule.SetParamValues([]any{ParamValue{Value: "1.25", RuntimeType: runtime, HasRuntimeType: true, IsBinaryProtocol: true}})
+			bound, changed, err := rule.rebindPreparedNumericExpr(source, map[int32]struct{}{0: {}})
+			require.NoError(t, err)
+			require.True(t, changed)
+			require.Equal(t, source.Typ, bound.Typ, "a runtime value must not narrow the declared domain")
+			require.True(t, proto.Equal(before, source), "recursive rebinding must preserve its source")
+		})
 	}
 }
 

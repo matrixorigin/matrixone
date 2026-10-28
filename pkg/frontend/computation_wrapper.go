@@ -1843,6 +1843,9 @@ func initExecuteStmtParamWithResolverInSession(
 		if err != nil {
 			return nil, nil, nil, originSQL, false, err
 		}
+		// Update only after the full protocol payload and typed bindings are
+		// admitted. The effective domain also owns the specialization/packet key.
+		prepareStmt.rememberIntegerArithmeticBindings(preparePlan.Plan, cwft.paramBindings, cwft.paramVals)
 		bindingKey := preparedExecutionBindingKey(cwft.paramBindings, cwft.paramVals)
 		key := preparedFieldBindingKey(bindingKey, fieldTypes)
 		var proof func(*plan.Expr) bool

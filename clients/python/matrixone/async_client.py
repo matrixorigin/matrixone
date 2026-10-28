@@ -218,10 +218,8 @@ class AsyncMoCtlManager:
 
     async def _execute_moctl(self, method: str, target: str, params: str = "") -> Dict[str, Any]:
         """Execute mo_ctl command asynchronously"""
-        import json
-
         try:
-            from .moctl import _build_moctl_sql
+            from .moctl import _build_moctl_sql, _decode_moctl_result
 
             sql = _build_moctl_sql(method, target, params)
 
@@ -233,7 +231,7 @@ class AsyncMoCtlManager:
 
             # Parse the JSON result
             result_str = result.rows[0][0]
-            parsed_result = json.loads(result_str)
+            parsed_result = _decode_moctl_result(result_str, MoCtlError)
 
             # Check for errors in the result
             if "result" in parsed_result and parsed_result["result"]:
@@ -243,8 +241,8 @@ class AsyncMoCtlManager:
 
             return parsed_result
 
-        except json.JSONDecodeError as e:
-            raise MoCtlError(f"Failed to parse mo_ctl result: {e}") from e
+        except MoCtlError:
+            raise
         except Exception as e:
             raise MoCtlError(f"mo_ctl operation failed: {e}") from e
 
