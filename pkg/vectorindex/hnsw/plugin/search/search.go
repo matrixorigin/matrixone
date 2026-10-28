@@ -97,6 +97,7 @@ func (Hooks) NewReader(proc *process.Process, spec *plan.IndexSearchScan, req se
 
 // newAlgo creates the usearch search of one query.
 var newAlgo = func(idxcfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig, queryType int32) veccache.VectorIndexSearchIf {
+	// typeswitch:partial vecf32 is the default below; vecf8/vecf4 cannot carry a vector index (rejected at DDL)
 	switch types.T(queryType) {
 	case types.T_array_float64:
 		return hnsw.NewHnswSearch[float64](idxcfg, tblcfg)
@@ -230,6 +231,7 @@ func (s *searcher) Next(ctx context.Context) (planreader.Chunk, bool, error) {
 	var keys []int64
 	var distances []float64
 	var err error
+	// typeswitch:partial vecf32 is the default below; vecf8/vecf4 cannot carry a vector index (rejected at DDL)
 	switch types.T(s.queryType) {
 	case types.T_array_float64:
 		keys, distances, err = search[float64](s)
