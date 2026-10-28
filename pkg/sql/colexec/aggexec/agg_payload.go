@@ -17,7 +17,6 @@ package aggexec
 import (
 	"fmt"
 	"io"
-	"strconv"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -136,11 +135,7 @@ func appendGroupConcatData(dst []byte, typ types.Type, data []byte) ([]byte, err
 }
 
 func formatGroupConcatFloat(value float64, bitSize int) []byte {
-	if value >= 1e15 || (value > 0 && value < 1e-13) ||
-		(value < 0 && value > -1e-13) || value <= -1e15 {
-		return []byte(strconv.FormatFloat(value, 'E', -1, bitSize))
-	}
-	return []byte(strconv.FormatFloat(value, 'f', -1, bitSize))
+	return util.AppendMySQLFloat(nil, value, bitSize)
 }
 
 func writeGroupConcatData(
