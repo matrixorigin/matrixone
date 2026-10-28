@@ -164,6 +164,13 @@ func TestStatementRequiresPersistentWriteAccess(t *testing.T) {
 		"rename table t to t3",
 		"insert all into t (a) values (1) into t2 (a) values (2) select 1 from dual",
 		"create extension pg as myext file '/missing.so'",
+		// EXPLAIN ANALYZE executes the wrapped statement; plain EXPLAIN does not.
+		"explain analyze insert into t values (1)",
+		"explain analyze delete from t",
+		// Multi-table DELETE targets resolve through the FROM aliases.
+		"delete x from t as x",
+		"delete z from t as z",
+		"delete t1 from t1 join t2 on t1.a = t2.a",
 		"alter sequence s1 increment by 1",
 		"load data infile 'x.csv' into table t",
 	}
@@ -187,6 +194,7 @@ func TestStatementRequiresPersistentWriteAccess(t *testing.T) {
 		"show tables",
 		"show create table t",
 		"explain select * from t",
+		"explain analyze select * from t",
 		"grant select on table t.* to r1",
 		"revoke alter account on account * from r1",
 		"create user u1 identified by 'x'",
@@ -214,8 +222,7 @@ func TestStatementRequiresPersistentWriteAccessTemporaryTables(t *testing.T) {
 	// Session-local temporary aliases shadow any persistent table of the
 	// same name, exactly as resolution sees them at statement time.
 	ses.AddTempTable("testdb", "tt", "temp_tt_real_name")
-	other := parseSingleStatement(t, "create table t (a int)")
-	_ = other
+	ses.AddTempTable("testdb", "tt2", "temp_tt2_real_name")
 
 	temporaryAllowedSQLs := []string{
 		"create temporary table tt2 (a int)",
@@ -229,6 +236,10 @@ func TestStatementRequiresPersistentWriteAccessTemporaryTables(t *testing.T) {
 		"truncate table tt",
 		"alter table tt add column b int",
 		"load data infile 'x.csv' into table tt",
+		// DELETE write targets that resolve to the temporary alias stay exempt.
+		"delete tt from tt",
+		"delete x from tt as x",
+		"delete x, y from tt as x join tt2 as y on x.a = y.a",
 	}
 	for _, sql := range temporaryAllowedSQLs {
 		stmt := parseSingleStatement(t, sql)
@@ -240,6 +251,11 @@ func TestStatementRequiresPersistentWriteAccessTemporaryTables(t *testing.T) {
 		"insert into t values (1)",
 		"update tt, t set tt.a = t.a",
 		"drop table tt, t",
+		// A DELETE target alias resolves to its FROM source first; a temporary
+		// table sharing the alias' spelling must not shadow the persistent
+		// victim (the x alias resolves to the persistent table here).
+		"delete x from t as x",
+		"delete tt, t from tt join t on tt.a = t.a",
 	} {
 		stmt := parseSingleStatement(t, sql)
 		require.True(t, statementRequiresPersistentWriteAccess(ses, stmt, "testdb"), sql)
@@ -316,4 +332,90 @@ func TestEnforceReadOnlyTxnAccessMode(t *testing.T) {
 	require.NoError(t, enforceReadOnlyTxnAccessMode(ses, migrationCtx, insert, "testdb"))
 
 	ses.GetTxnHandler().txnReadOnly = false
+}
+
+func parseProcedureBody(t *testing.T, body string) []tree.Statement {
+	t.Helper()
+	stmts, err := parsers.ParseWithSQLMode(context.Background(), dialect.MYSQL, body, 0, "")
+	require.NoError(t, err)
+	require.NotEmpty(t, stmts)
+	return stmts
+}
+
+func TestCallerTxnReadOnly(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ses := newTestSession(t, ctrl)
+	ctx := context.Background()
+
+	// Back executions without a user origin are trusted maintenance work.
+	readOnly, err := callerTxnReadOnly(&backSession{})
+	require.NoError(t, err)
+	require.False(t, readOnly)
+
+	// A user session without an active transaction follows its session default.
+	readOnly, err = callerTxnReadOnly(ses)
+	require.NoError(t, err)
+	require.False(t, readOnly)
+	require.NoError(t, ses.SetSessionSysVar(ctx, transactionReadOnlySystemVariable, int64(1)))
+	readOnly, err = callerTxnReadOnly(ses)
+	require.NoError(t, err)
+	require.True(t, readOnly)
+	// A background session acting on behalf of the user session inherits the
+	// caller's mode through the upstream chain (procedure bodies, nested
+	// procedure calls).
+	readOnly, err = callerTxnReadOnly(&backSession{feSessionImpl: feSessionImpl{upstream: ses}})
+	require.NoError(t, err)
+	require.True(t, readOnly)
+	require.NoError(t, ses.SetSessionSysVar(ctx, transactionReadOnlySystemVariable, int64(0)))
+}
+
+func TestEnforceReadOnlyOnProcedureBody(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ses := newTestSession(t, ctrl)
+	ses.SetDatabaseName("testdb")
+	ctx := context.Background()
+
+	writingBodies := []string{
+		"begin insert into t values (2); end",
+		"begin update t set a = 2; end",
+		"begin delete from t; end",
+		"begin if 1 = 1 then insert into t values (2); end if; end",
+		"begin declare p1 int default 5; while p1 < 10 do update t set a = p1; set p1 = p1 + 1; end while; end",
+		"begin declare p1 int default 10; declare v1 int default 5; repeat delete from t limit 1; set v1 = v1 + 1; until v1 > p1 end repeat; end",
+		"begin label1: loop insert into t values (2); leave label1; end loop label1; end",
+		"begin case 1 when 1 then truncate table t; end case; end",
+	}
+	// Inside a read-only caller every writing body is rejected with 1792.
+	require.NoError(t, ses.SetSessionSysVar(ctx, transactionReadOnlySystemVariable, int64(1)))
+	for _, body := range writingBodies {
+		err := enforceReadOnlyOnProcedureBody(ctx, ses, parseProcedureBody(t, body), "testdb")
+		require.Error(t, err, body)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrCantExecuteInReadOnlyTransaction), body)
+	}
+
+	readOnlyBodies := []string{
+		"begin select count(*) from t; end",
+		"begin set sql_mode = 'ANSI_QUOTES'; end",
+		"begin call read_something(); end",
+		"begin if 1 = 1 then select a from t; end if; end",
+	}
+	// Read-only procedures stay callable under a read-only caller.
+	for _, body := range readOnlyBodies {
+		require.NoError(t, enforceReadOnlyOnProcedureBody(ctx, ses, parseProcedureBody(t, body), "testdb"), body)
+	}
+
+	// Callers not in READ ONLY mode see no new restriction.
+	require.NoError(t, ses.SetSessionSysVar(ctx, transactionReadOnlySystemVariable, int64(0)))
+	for _, body := range writingBodies {
+		require.NoError(t, enforceReadOnlyOnProcedureBody(ctx, ses, parseProcedureBody(t, body), "testdb"), body)
+	}
+	// Nested procedure execution on a background session inherits the
+	// caller's read-only mode through the upstream chain.
+	require.NoError(t, ses.SetSessionSysVar(ctx, transactionReadOnlySystemVariable, int64(1)))
+	nested := &backSession{feSessionImpl: feSessionImpl{upstream: ses}}
+	err := enforceReadOnlyOnProcedureBody(ctx, nested, parseProcedureBody(t, "begin insert into t values (2); end"), "testdb")
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrCantExecuteInReadOnlyTransaction))
+	require.NoError(t, ses.SetSessionSysVar(ctx, transactionReadOnlySystemVariable, int64(0)))
 }

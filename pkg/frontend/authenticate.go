@@ -12681,6 +12681,15 @@ func doInterpretCall(
 		}
 		defer freeStatements(stmt)
 
+		// Procedure bodies run on background executors that open and commit
+		// their own transactions. When the caller is in READ ONLY mode the
+		// whole call must therefore be rejected up front if any body
+		// statement could write; otherwise the procedure's writes would
+		// persist outside the caller's read-only transaction.
+		if err = enforceReadOnlyOnProcedureBody(ctx, ses, stmt, dbName); err != nil {
+			return nil, err
+		}
+
 		interpreter.ctx, err = enterSQLProcedure(ctx, ses, dbName, string(call.Name.Name.ObjectName))
 		if err != nil {
 			return nil, err
@@ -12693,6 +12702,17 @@ func doInterpretCall(
 		return interpreter.GetResult(), nil
 
 	case "starlark":
+		// Starlark bodies embed SQL in a non-SQL grammar whose statements
+		// cannot be classified statically; fail closed under a read-only
+		// caller rather than let embedded writes commit on their own
+		// transaction.
+		readOnly, readErr := callerTxnReadOnly(ses)
+		if readErr != nil {
+			return nil, readErr
+		}
+		if readOnly {
+			return nil, moerr.NewCantExecuteInReadOnlyTransaction(ctx)
+		}
 		interpreter.ctx, err = enterSQLProcedure(ctx, ses, dbName, string(call.Name.Name.ObjectName))
 		if err != nil {
 			return nil, err

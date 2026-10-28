@@ -68,6 +68,40 @@ execute s2;
 deallocate prepare s2;
 commit;
 
+-- EXPLAIN ANALYZE executes the wrapped statement, so it is gated by what
+-- it wraps. (Ordinary EXPLAIN plans only and stays allowed.)
+start transaction read only;
+explain analyze insert into t values (9);
+rollback;
+select count(*) from t;
+
+-- Multi-table DELETE write targets resolve through the FROM aliases: a
+-- temporary table sharing the target alias does not shadow the persistent
+-- victim, while a delete truly aimed at the temporary table stays allowed.
+create temporary table tmp (a int);
+insert into tmp values (7);
+start transaction read only;
+delete tmp from t as tmp;
+delete y from t as y;
+delete tmp from tmp as tmp;
+commit;
+select count(*) from t;
+drop table tmp;
+
+-- A procedure whose body writes runs on its own transaction; the whole
+-- call is rejected up front, read-only procedures stay callable.
+drop procedure if exists txn_read_only_wp;
+create procedure txn_read_only_wp() 'begin insert into t values (9); end';
+drop procedure if exists txn_read_only_rp;
+create procedure txn_read_only_rp() 'begin select count(*) from t; end';
+set session transaction read only;
+call txn_read_only_wp();
+select count(*) from t;
+call txn_read_only_rp();
+rollback;
+select count(*) from t;
+set session transaction read write;
+
 -- Direct variable assignment behaves like SET SESSION TRANSACTION.
 set session transaction_read_only = 1;
 delete from t;

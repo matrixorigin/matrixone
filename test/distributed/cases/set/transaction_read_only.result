@@ -86,6 +86,44 @@ count(*)
 2
 deallocate prepare s2;
 commit;
+start transaction read only;
+explain analyze insert into t values (9);
+Cannot execute statement in a READ ONLY transaction.
+rollback;
+select count(*) from t;
+count(*)
+2
+create temporary table tmp (a int);
+insert into tmp values (7);
+start transaction read only;
+delete tmp from t as tmp;
+Cannot execute statement in a READ ONLY transaction.
+delete y from t as y;
+Cannot execute statement in a READ ONLY transaction.
+delete tmp from tmp as tmp;
+commit;
+select count(*) from t;
+count(*)
+2
+drop table tmp;
+drop procedure if exists txn_read_only_wp;
+create procedure txn_read_only_wp() 'begin insert into t values (9); end';
+drop procedure if exists txn_read_only_rp;
+create procedure txn_read_only_rp() 'begin select count(*) from t; end';
+set session transaction read only;
+call txn_read_only_wp();
+Cannot execute statement in a READ ONLY transaction.
+select count(*) from t;
+count(*)
+2
+call txn_read_only_rp();
+count(*)
+2
+rollback;
+select count(*) from t;
+count(*)
+2
+set session transaction read write;
 set session transaction_read_only = 1;
 delete from t;
 Cannot execute statement in a READ ONLY transaction.
