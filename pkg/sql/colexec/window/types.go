@@ -39,6 +39,7 @@ const (
 )
 
 type container struct {
+	localRank    *localRankIndex
 	allocation   colexec.AnalyticAllocation
 	sortMetadata uint64
 	status       int
@@ -191,6 +192,7 @@ func (window *Window) Reset(proc *process.Process, pipelineFailed bool, err erro
 
 	ctr := &window.ctr
 
+	ctr.freeLocalRankIndex()
 	ctr.cleanOutput(proc.Mp())
 	ctr.resetParam()
 	ctr.prepareParamKind.Reset(nil)
@@ -217,6 +219,7 @@ func (window *Window) Reset(proc *process.Process, pipelineFailed bool, err erro
 func (window *Window) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := &window.ctr
 
+	ctr.freeLocalRankIndex()
 	ctr.cleanOutput(proc.Mp())
 	ctr.runtimeFrames = nil
 	ctr.clearCivilOrder()
