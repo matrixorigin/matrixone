@@ -28,30 +28,20 @@ select count(*) from t1 where match(body) against('alpha');
 select count(*) from t8 where match(body) against('alpha');
 ➤ count(*)[-5,64,0]  𝄀
 1600
-select id, match(body) against('beta gamma7') as sc from t1 where match(body) against('beta gamma7') order by sc desc, id limit 10;
+select id, match(body) against('beta gamma7') as sc from t1 where match(body) against('beta gamma7') order by sc desc, id limit 5;
 ➤ id[-5,64,0]  ¦  sc[7,5,0]  𝄀
 85  ¦  1.7980341  𝄀
 540  ¦  1.7980341  𝄀
 995  ¦  1.7980341  𝄀
 1450  ¦  1.7980341  𝄀
-1905  ¦  1.7980341  𝄀
-176  ¦  1.6763626  𝄀
-345  ¦  1.6763626  𝄀
-631  ¦  1.6763626  𝄀
-800  ¦  1.6763626  𝄀
-1086  ¦  1.6763626
-select id, match(body) against('beta gamma7') as sc from t8 where match(body) against('beta gamma7') order by sc desc, id limit 10;
+1905  ¦  1.7980341
+select id, match(body) against('beta gamma7') as sc from t8 where match(body) against('beta gamma7') order by sc desc, id limit 5;
 ➤ id[-5,64,0]  ¦  sc[7,5,0]  𝄀
 85  ¦  1.7980341  𝄀
 540  ¦  1.7980341  𝄀
 995  ¦  1.7980341  𝄀
 1450  ¦  1.7980341  𝄀
-1905  ¦  1.7980341  𝄀
-176  ¦  1.6763626  𝄀
-345  ¦  1.6763626  𝄀
-631  ¦  1.6763626  𝄀
-800  ¦  1.6763626  𝄀
-1086  ¦  1.6763626
+1905  ¦  1.7980341
 select count(*) from t1 where match(body) against('alpha gamma7');
 ➤ count(*)[-5,64,0]  𝄀
 18

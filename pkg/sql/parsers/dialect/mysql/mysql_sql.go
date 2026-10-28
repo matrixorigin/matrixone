@@ -35477,7 +35477,7 @@ yydefault:
 		var yyLOCAL tree.Expr
 //line mysql_sql.y:15341
 		{
-			str := fmt.Sprintf("%v", yyDollar[1].item)
+			str := yyDollar[1].str
 			switch v := yyDollar[1].item.(type) {
 			case uint64:
 				yyLOCAL = tree.NewNumVal(v, str, false, tree.P_uint64)
@@ -35519,7 +35519,7 @@ yydefault:
 		var yyLOCAL tree.Expr
 //line mysql_sql.y:15369
 		{
-			str := fmt.Sprintf("%v", yyDollar[1].item)
+			str := yyDollar[1].str
 			switch v := yyDollar[1].item.(type) {
 			case uint64:
 				yyLOCAL = tree.NewNumVal(v, str, false, tree.P_uint64)

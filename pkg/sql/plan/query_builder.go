@@ -4328,6 +4328,9 @@ func (builder *QueryBuilder) removeUnnecessaryProjections(nodeID int32) int32 {
 }
 
 func (builder *QueryBuilder) createQuery() (*Query, error) {
+	if err := builder.qry.ValidateIntegerPrecision(); err != nil {
+		return nil, err
+	}
 	if err := builder.bindPreparedPredicateDiagnostics(); err != nil {
 		return nil, err
 	}
@@ -4697,7 +4700,22 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 			nodeID, err = builder.bindSelect(&tree.Select{Select: sltStmt, Limit: astLimit, OrderBy: astOrderBy}, ctx, isRoot)
 		}
 		if err == nil {
+			// Identical UNION branches can collapse to one DISTINCT SELECT,
+			// but its SQL result still crosses a set-operation boundary.
+			var integerIDs []uint32
+			if builder.integerPrecision != nil {
+				integerIDs = make([]uint32, len(ctx.headings))
+				for i := range integerIDs {
+					integerIDs[i] = ctx.outputColumnProvenanceForProject(int32(i)).IntegerPrecisionID
+				}
+			}
 			ctx.clearOutputColumnProvenance()
+			for i, id := range integerIDs {
+				if !shareGroupingInput {
+					id = builder.integerPrecision.reference(id)
+				}
+				ctx.setOutputColumnProvenance(int32(i), OutputColumnProvenance{State: ProvenanceNone, IntegerPrecisionID: id})
+			}
 		}
 		return nodeID, err
 	}
@@ -4724,11 +4742,15 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 			subCtx.preserveOrderSemanticKeys = true
 		}
 		savedIsForUpdate := builder.isForUpdate
+		// Keep isRoot's binding semantics, but do not publish a branch's
+		// temporary headings as extra visible Query outputs.
+		savedHeadings := builder.qry.Headings
 		if slt, ok := sltStmt.(*tree.Select); ok {
 			nodeID, err = builder.bindSelect(slt, subCtx, isRoot)
 		} else {
 			nodeID, err = builder.bindSelect(&tree.Select{Select: sltStmt}, subCtx, isRoot)
 		}
+		builder.qry.Headings = savedHeadings
 		builder.isForUpdate = savedIsForUpdate
 		if err != nil {
 			return 0, err
@@ -4763,17 +4785,20 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 	// Capture both kinds of provenance before that mutation so a bare NULL can
 	// remain neutral even after transparent derived-table or CTE projection,
 	// without mistaking an explicit CAST(NULL AS string) for a neutral branch.
+	integerBranches := make([][]uint32, len(subCtxList))
 	setBranchPureNull := make([][]bool, len(subCtxList))
 	setBranchOrderTypes := make([][]*plan.Type, len(subCtxList))
 	setBranchPadSpaceProvenance := make([][]bool, len(subCtxList))
 	setOperationKeyRequired := make([]bool, projectLength)
 	for branchIdx, branchCtx := range subCtxList {
 		setBranchPureNull[branchIdx] = make([]bool, projectLength)
+		integerBranches[branchIdx] = make([]uint32, projectLength)
 		setBranchOrderTypes[branchIdx] = make([]*plan.Type, projectLength)
 		setBranchPadSpaceProvenance[branchIdx] = make([]bool, projectLength)
 		for colIdx := 0; colIdx < projectLength && colIdx < len(branchCtx.projects); colIdx++ {
 			setBranchPureNull[branchIdx][colIdx] =
 				branchCtx.outputColumnProvenanceForProject(int32(colIdx)).State == ProvenancePureNull
+			integerBranches[branchIdx][colIdx] = branchCtx.outputColumnProvenanceForProject(int32(colIdx)).IntegerPrecisionID
 			setBranchOrderTypes[branchIdx][colIdx] = branchCtx.mysqlSpecialOrderTypeForProject(int32(colIdx))
 			setBranchPadSpaceProvenance[branchIdx][colIdx] =
 				hasPadSpaceStringProvenance(builder.qry.Nodes[nodes[branchIdx]].ProjectList[colIdx])
@@ -5161,6 +5186,32 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 		})
 	}
 	ctx.clearOutputColumnProvenance()
+	if g := builder.integerPrecision; g != nil {
+		for colIdx, output := range ctx.projects {
+			if !types.T(output.Typ.Id).IsInteger() {
+				continue
+			}
+			id := integerBranches[0][colIdx]
+			if !shareGroupingInput {
+				var inputs []uint32
+				for branchIdx := range subCtxList {
+					if !setBranchPureNull[branchIdx][colIdx] {
+						inputs = append(inputs, integerBranches[branchIdx][colIdx])
+					}
+				}
+				g.captureFunction("case", inputs, output)
+				id = g.reference(g.ids[output])
+			}
+			// Grouping branches bind the same SQL projection. Their UNION is
+			// an execution rewrite: preserve that projection's source recipe
+			// and root class, including literal/declared/reference roots.
+			// Only a user-written set operation introduces a new SQL reference.
+			if id != 0 {
+				g.ids[output] = id
+				ctx.setOutputColumnProvenance(int32(colIdx), OutputColumnProvenance{State: ProvenanceNone, IntegerPrecisionID: id})
+			}
+		}
+	}
 	// A set-operation output is itself pure NULL only when every branch is pure
 	// NULL. Preserve that fact for another transparent derived-table or CTE
 	// boundary so a later set operation still treats the column as neutral.
@@ -6180,6 +6231,17 @@ func (builder *QueryBuilder) preprocessCte(stmt *tree.Select, ctx *BindContext) 
 }
 
 func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isRoot bool) (nodeID int32, err error) {
+	// This source was introduced solely to evaluate windows after grouping.
+	// Its AST identity, not its SQL alias, owns metadata transparency.
+	if ctx.parent != nil && ctx.parent.integerPrecisionGeneratedSource == stmt {
+		ctx.integerPrecisionTransparentBoundary = true
+	}
+	defer func() {
+		if err == nil && isRoot && builder.integerPrecision != nil {
+			builder.captureIntegerPrecisionOutputs(ctx)
+		}
+	}()
+
 	if isRoot {
 		defer func() { builder.stableCTERoots = nil }()
 	}
@@ -8126,6 +8188,7 @@ func rewriteRollupWindowSelectWithHeadingProvenance(
 		RankOption: astRankOption,
 	}
 	if ctx != nil {
+		ctx.integerPrecisionGeneratedSource = derived
 		// The rewritten projection is bound immediately below this call. Reset
 		// any metadata left by a previous bind of the same context so an ordinal
 		// cannot accidentally describe a later, unrelated select list.
@@ -14198,6 +14261,16 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 				outputColumnProvenance = make([]OutputColumnProvenance, colLength)
 			}
 			outputColumnProvenance[i] = subCtx.outputColumnProvenanceForProject(int32(i))
+			if id := outputColumnProvenance[i].IntegerPrecisionID; id != 0 && builder.integerPrecision != nil {
+				if subCtx.integerPrecision != nil && subCtx.integerPrecision != builder.integerPrecision {
+					id = builder.integerPrecision.importID(subCtx.integerPrecision.graph, id)
+				}
+				if !subCtx.integerPrecisionTransparentBoundary {
+					id = builder.integerPrecision.reference(id)
+				}
+				outputColumnProvenance[i].IntegerPrecisionID = id
+			}
+
 			if outputColumnProvenance[i].CTASDefaultPolicy == CTASDefaultInheritSource {
 				outputColumnProvenance[i].CTASDefaultPolicy = CTASDefaultNone
 			}

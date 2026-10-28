@@ -133,7 +133,7 @@ select id, tag from rk2 where match(body) against('needle') order by match(body)
 select id, tag from rk2 where match(body) against('needle') limit 1;
 ➤ id[-5,64,0]  ¦  tag[12,10,0]
 explain select id, tag from rk2 where match(body) against('needle') order by match(body) against('needle') desc, id limit 1;
--- @regex("Candidate Limit", false)
+-- @regex("Candidate Limit: 1", true)
 ➤ TP QUERY PLAN[12,-1,0]  𝄀
 Project  𝄀
   ->  Sort  𝄀
@@ -146,10 +146,9 @@ Project  𝄀
               ->  Table Scan on fulltext2_include_recheck.rk2  𝄀
                     Runtime Filter Probe: rk2.id  𝄀
               ->  Fulltext Index Scan on rk2x  𝄀
-                    Fulltext Index: rk2x
+                    Fulltext Index: rk2x, Candidate Limit: 1
 select id, tag from rk2 where match(body) against('needle') order by match(body) against('needle') desc, id limit 1;
-➤ id[-5,64,0]  ¦  tag[12,10,0]  𝄀
-120  ¦  live
+➤ id[-5,64,0]  ¦  tag[12,10,0]
 explain select id from rk2 where match(body) against('needle') order by match(body) against('needle') desc limit 1;
 -- @regex("Table Scan on fulltext2_include_recheck.rk2", true)
 ➤ TP QUERY PLAN[12,-1,0]  𝄀
