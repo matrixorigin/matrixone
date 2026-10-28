@@ -170,6 +170,12 @@ func statementRequiresPersistentWriteAccess(
 		// runs its plan directly); gate exactly what it would run. Ordinary
 		// EXPLAIN/EXPLAIN FOR only plans and stays exempt.
 		return statementRequiresPersistentWriteAccess(ses, st.Statement, defaultDatabase)
+	case *tree.ExplainPhyPlan:
+		// EXPLAIN PHYPLAN shares the executing branch with EXPLAIN ANALYZE
+		// (result_row_stmt.go *tree.ExplainAnalyze, *tree.ExplainPhyPlan runs
+		// the plan for both through Exec.Run); classify its wrapped statement
+		// exactly like EXPLAIN ANALYZE.
+		return statementRequiresPersistentWriteAccess(ses, st.Statement, defaultDatabase)
 	}
 	if st, ok := stmt.(tree.StatementType); ok && st.GetQueryType() == tree.QueryTypeDDL {
 		return true
@@ -226,17 +232,16 @@ func sourceTableName(expr tree.TableExpr) *tree.TableName {
 }
 
 // resolveDeleteTarget maps one write target of a multi-table DELETE to the
-// base table it names. An alias hit wins over the session temporary map,
-// matching engine resolution; without an alias the target names the table
-// directly. Returns nil when the target cannot be resolved statically.
+// base table it names. The planner matches a target to an aliased FROM
+// source by object name alone, overwriting even an explicit schema qualifier
+// (build_constraint_util.go setTableExprToDmlTableInfo applies aliasMap
+// unconditionally), so an alias hit wins here as well; without an alias the
+// target names the table directly. Returns nil when the target cannot be
+// resolved statically.
 func resolveDeleteTarget(target tree.TableExpr, aliasMap map[string][2]string) *tree.TableName {
 	name, ok := target.(*tree.TableName)
 	if !ok || name == nil {
 		return nil
-	}
-	if string(name.SchemaName) != "" {
-		// Schema-qualified targets are spelled as the base table already.
-		return name
 	}
 	if resolved, hit := aliasMap[string(name.ObjectName)]; hit {
 		return tree.NewTableName(
@@ -419,6 +424,15 @@ func procedureStatementRequiresWriteAccess(ses FeSession, stmt tree.Statement, d
 			}
 		}
 		return false
+	case *tree.PrepareStmt, *tree.PrepareString, *tree.PrepareVar, *tree.Execute:
+		// Dynamic SQL cannot be classified statically: EXECUTE resolves its
+		// statement at run time, procedure statements execute on a background
+		// session that is exempt from the per-statement read-only gate, and
+		// the procedure's own committed transaction cannot be rolled back by
+		// the caller. Fail closed, exactly like starlark procedure bodies.
+		// DEALLOCATE PREPARE only frees a handle and can never write, so it
+		// stays allowed.
+		return true
 	}
 	return statementRequiresPersistentWriteAccess(ses, stmt, defaultDatabase)
 }

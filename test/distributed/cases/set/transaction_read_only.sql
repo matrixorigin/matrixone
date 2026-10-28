@@ -102,6 +102,55 @@ rollback;
 select count(*) from t;
 set session transaction read write;
 
+-- EXPLAIN PHYPLAN shares the executing branch with EXPLAIN ANALYZE
+-- (both run the wrapped plan directly), so it is gated by its wrapped
+-- statement exactly the same way.
+start transaction read only;
+explain phyplan insert into t values (9);
+rollback;
+select count(*) from t;
+
+-- A schema-qualified multi-table DELETE target still resolves through the
+-- FROM alias first: the planner matches aliases by object name even when
+-- the target carries a qualifier. A temporary-table spelling of the target
+-- must not shadow the persistent victim, and the truly temporary qualified
+-- delete stays allowed. Under READ WRITE the same dangerous form deletes
+-- from the aliased persistent table, proving admission and execution
+-- resolve the same victim.
+create table dq (a int primary key);
+insert into dq values (1), (2);
+create temporary table dqt (a int);
+start transaction read only;
+delete txn_readonly.dqt from dq as dqt;
+select count(*) from dq;
+delete txn_readonly.dqt from txn_readonly.dqt;
+commit;
+select count(*) from dq;
+delete txn_readonly.dqt from dq as dqt;
+select count(*) from dq;
+drop table dq;
+drop table dqt;
+
+-- Dynamic SQL inside a procedure cannot be classified statically: it would
+-- execute on an exempt background session inside the procedure's own
+-- committed transaction, so PREPARE/EXECUTE in the body fails closed under
+-- READ ONLY — even for an underlying read.
+drop procedure if exists txn_read_only_dp;
+create procedure txn_read_only_dp() 'begin prepare ds from ''insert into t values (9)''; execute ds; end';
+drop procedure if exists txn_read_only_dsel;
+create procedure txn_read_only_dsel() 'begin prepare ss from ''select count(*) from t''; execute ss; end';
+set session transaction read only;
+call txn_read_only_dp();
+call txn_read_only_dsel();
+select count(*) from t;
+set session transaction read write;
+call txn_read_only_dp();
+select count(*) from t;
+call txn_read_only_dsel();
+delete from t where a = 9;
+drop procedure txn_read_only_dp;
+drop procedure txn_read_only_dsel;
+
 -- Direct variable assignment behaves like SET SESSION TRANSACTION.
 set session transaction_read_only = 1;
 delete from t;

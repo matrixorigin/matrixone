@@ -167,10 +167,16 @@ func TestStatementRequiresPersistentWriteAccess(t *testing.T) {
 		// EXPLAIN ANALYZE executes the wrapped statement; plain EXPLAIN does not.
 		"explain analyze insert into t values (1)",
 		"explain analyze delete from t",
+		// EXPLAIN PHYPLAN shares the executing branch with EXPLAIN ANALYZE.
+		"explain phyplan insert into t values (1)",
+		"explain phyplan delete from t",
 		// Multi-table DELETE targets resolve through the FROM aliases.
 		"delete x from t as x",
 		"delete z from t as z",
 		"delete t1 from t1 join t2 on t1.a = t2.a",
+		// A schema qualifier does not exempt a target from alias resolution.
+		"delete testdb.t from t as x",
+		"delete testdb.t from t",
 		"alter sequence s1 increment by 1",
 		"load data infile 'x.csv' into table t",
 	}
@@ -195,6 +201,7 @@ func TestStatementRequiresPersistentWriteAccess(t *testing.T) {
 		"show create table t",
 		"explain select * from t",
 		"explain analyze select * from t",
+		"explain phyplan select * from t",
 		"grant select on table t.* to r1",
 		"revoke alter account on account * from r1",
 		"create user u1 identified by 'x'",
@@ -240,6 +247,11 @@ func TestStatementRequiresPersistentWriteAccessTemporaryTables(t *testing.T) {
 		"delete tt from tt",
 		"delete x from tt as x",
 		"delete x, y from tt as x join tt2 as y on x.a = y.a",
+		// A schema-qualified target naming a temporary table stays exempt, and
+		// a qualified target whose FROM alias resolves to a temporary table
+		// writes that temporary table.
+		"delete testdb.tt from testdb.tt",
+		"delete testdb.tt from tt2 as tt",
 	}
 	for _, sql := range temporaryAllowedSQLs {
 		stmt := parseSingleStatement(t, sql)
@@ -256,6 +268,11 @@ func TestStatementRequiresPersistentWriteAccessTemporaryTables(t *testing.T) {
 		// victim (the x alias resolves to the persistent table here).
 		"delete x from t as x",
 		"delete tt, t from tt join t on tt.a = t.a",
+		// Schema-qualified targets resolve through the alias map exactly like
+		// unqualified ones: the planner matches by object name and overwrites
+		// the qualifier, so the temporary-table spelling of the target must
+		// not shadow the persistent victim either.
+		"delete testdb.tt from t as tt",
 	} {
 		stmt := parseSingleStatement(t, sql)
 		require.True(t, statementRequiresPersistentWriteAccess(ses, stmt, "testdb"), sql)
@@ -386,6 +403,15 @@ func TestEnforceReadOnlyOnProcedureBody(t *testing.T) {
 		"begin declare p1 int default 10; declare v1 int default 5; repeat delete from t limit 1; set v1 = v1 + 1; until v1 > p1 end repeat; end",
 		"begin label1: loop insert into t values (2); leave label1; end loop label1; end",
 		"begin case 1 when 1 then truncate table t; end case; end",
+		// EXPLAIN PHYPLAN executes its wrapped statement.
+		"begin explain phyplan insert into t values (2); end",
+		// Dynamic SQL defeats static classification: it executes on the
+		// exempt background session inside the procedure's own committed
+		// transaction, so any PREPARE/EXECUTE fails closed under READ ONLY.
+		"begin prepare s from 'insert into t values (2)'; execute s; end",
+		"begin prepare s from 'select 1'; end",
+		"begin set @dyn_v = 'insert into t values (2)'; prepare s from @dyn_v; execute s; end",
+		"begin execute s; end",
 	}
 	// Inside a read-only caller every writing body is rejected with 1792.
 	require.NoError(t, ses.SetSessionSysVar(ctx, transactionReadOnlySystemVariable, int64(1)))
@@ -400,6 +426,8 @@ func TestEnforceReadOnlyOnProcedureBody(t *testing.T) {
 		"begin set sql_mode = 'ANSI_QUOTES'; end",
 		"begin call read_something(); end",
 		"begin if 1 = 1 then select a from t; end if; end",
+		// DEALLOCATE PREPARE only frees a handle; it can never write.
+		"begin deallocate prepare s; end",
 	}
 	// Read-only procedures stay callable under a read-only caller.
 	for _, body := range readOnlyBodies {
