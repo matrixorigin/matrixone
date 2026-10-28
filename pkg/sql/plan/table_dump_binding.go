@@ -631,45 +631,11 @@ func sameTableDumpBoundExpression(a, b *planpb.Expr) bool {
 	if a == nil || b == nil {
 		return a == b
 	}
-	// Canonical trees need no compatibility rewrite. Avoid copying both
-	// complete trees for each speculative binding in the witness search.
+	// Preserve the allocation-free protobuf path for canonical trees.
 	if !tableDumpBoundExpressionNeedsNormalization(a) && !tableDumpBoundExpressionNeedsNormalization(b) {
 		return proto.Equal(a, b)
 	}
-	left := proto.Clone(a).(*planpb.Expr)
-	right := proto.Clone(b).(*planpb.Expr)
-	var normalize func(*planpb.Expr)
-	normalize = func(expr *planpb.Expr) {
-		if expr == nil {
-			return
-		}
-		// Type.Table is catalog lineage. Rebinding a persisted expression
-		// against its current table fills it in, while older stored trees do
-		// not carry it. It does not affect overload or value semantics.
-		expr.Typ.Table = ""
-		// Older TIME trees carry Scale but leave Width unset. New binding
-		// mirrors Scale into Width for DDL metadata; the stored Scale is the
-		// execution precision and must still match exactly.
-		if expr.Typ.Id == int32(types.T_time) && expr.Typ.Width == expr.Typ.Scale {
-			expr.Typ.Width = 0
-		}
-		if f := expr.GetF(); f != nil {
-			for _, arg := range f.Args {
-				normalize(arg)
-			}
-		}
-		if list := expr.GetList(); list != nil {
-			for _, entry := range list.List {
-				normalize(entry)
-			}
-		}
-		if lit := expr.GetLit(); lit != nil {
-			normalize(lit.Src)
-		}
-	}
-	normalize(left)
-	normalize(right)
-	return proto.Equal(left, right)
+	return sameProjectedBoundExpression(a, b, boundExpressionNormalized)
 }
 
 func sameTableDumpBoundType(a, b planpb.Type) bool {
