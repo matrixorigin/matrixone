@@ -42,9 +42,18 @@ execute covered;
 select id from t where match(body) against('hello') order by id;
 
 -- MERGE folds the whole tail, the frame without a row included, into the base
+drop snapshot if exists ft2_index_file_tail_sp;
+create snapshot ft2_index_file_tail_sp for account;
+delete from t where id = 1;
+-- @wait_expect(2, 60)
+select id from t where match(body) against('hello') order by id;
 alter table t alter reindex ft fulltext2 merge;
 execute frames;
 select id from t where match(body) against('hello') order by id;
+
+-- a named snapshot taken before MERGE still reads the index files MERGE replaced
+select id from t {snapshot = 'ft2_index_file_tail_sp'} where match(body) against('hello') order by id;
+drop snapshot ft2_index_file_tail_sp;
 
 deallocate prepare frames;
 deallocate prepare covered;

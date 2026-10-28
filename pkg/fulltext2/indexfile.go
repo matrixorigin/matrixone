@@ -15,10 +15,12 @@
 package fulltext2
 
 import (
+	"context"
 	"io"
 	"os"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
@@ -39,17 +41,39 @@ type indexFile interface {
 // tests replace them.
 var (
 	openIndexFile = func(sqlproc *sqlexec.SqlProcess, ref indexfile.Ref) (indexFile, error) {
-		env := indexFileEnv(sqlproc, nil, nil)
+		ctx, txn, err := readTarget(sqlproc)
+		if err != nil {
+			return nil, err
+		}
+		env := indexFileEnv(sqlproc, nil, txn)
 		if env.Engine == nil || env.Proc == nil {
 			return nil, moerr.NewInternalErrorNoCtx("fulltext2: reading an index file needs a process with a storage engine")
 		}
-		return indexfile.Open(sqlproc.GetContext(), env, ref)
+		return indexfile.Open(ctx, env, ref)
 	}
 	writeIndexFile = func(sqlproc *sqlexec.SqlProcess, files *IndexFiles, txn client.TxnOperator, ref indexfile.Ref,
 		src io.Reader, runSQL func(sql string) error) (int64, string, error) {
 		return indexfile.Write(sqlproc.GetContext(), indexFileEnv(sqlproc, files, txn), ref, src, runSQL)
 	}
 )
+
+// readTarget is what a read of index files runs under, as sqlproc's internal SQL does: the
+// account that SQL executes as, and the process's transaction pinned at its named snapshot
+// when that is historical.
+func readTarget(sqlproc *sqlexec.SqlProcess) (context.Context, client.TxnOperator, error) {
+	if sqlproc.Proc == nil {
+		return nil, nil, moerr.NewInternalErrorNoCtx("fulltext2: reading an index file needs a process")
+	}
+	account, err := sqlproc.EffectiveAccountID()
+	if err != nil {
+		return nil, nil, err
+	}
+	txn := sqlproc.Proc.GetTxnOperator()
+	if ts := sqlproc.EffectiveSnapshotTS(); ts != nil && txn != nil {
+		txn = txn.CloneSnapshotOp(*ts)
+	}
+	return defines.AttachAccountId(sqlproc.GetContext(), account), txn, nil
+}
 
 // IndexFiles is where a caller without a process reads and writes index files: the storage
 // engine and the CN's index-file cache (nil when the CN has none).
