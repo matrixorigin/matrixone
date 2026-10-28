@@ -128,8 +128,8 @@ func l1DistanceInt8SIMD(a, b []int8) (float64, error) {
 	var acc archsimd.Uint64x8
 	i := 0
 	for ; i <= n-64; i += 64 {
-		va := archsimd.LoadInt8x64(a[i : i+64]).AsUint8x64().Xor(bias)
-		vb := archsimd.LoadInt8x64(b[i : i+64]).AsUint8x64().Xor(bias)
+		va := archsimd.LoadInt8x64(a[i : i+64]).ToBits().Xor(bias)
+		vb := archsimd.LoadInt8x64(b[i : i+64]).ToBits().Xor(bias)
 		acc = acc.Add(va.SumOf8AbsDiff(vb))
 	}
 	var lanes [8]uint64

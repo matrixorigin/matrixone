@@ -21,6 +21,8 @@ Unified PubSub management supporting sync/async and client/session executors.
 from datetime import datetime
 from typing import List, Optional
 
+from ._sql_literals import sql_literal
+
 from .exceptions import PubSubError
 
 
@@ -337,7 +339,7 @@ class PubSubManager(BasePubSubManager):
             raise PubSubError(f"Publication '{name}' not found")
 
         except Exception as e:
-            raise PubSubError(f"Failed to get publication '{name}': {e}") from None
+            raise PubSubError(f"Failed to get publication '{name}': {e}") from e
 
     def list_publications(self, account: Optional[str] = None, database: Optional[str] = None) -> List[Publication]:
         """List publications with optional filters"""
@@ -363,7 +365,7 @@ class PubSubManager(BasePubSubManager):
             return publications
 
         except Exception as e:
-            raise PubSubError(f"Failed to list publications: {e}") from None
+            raise PubSubError(f"Failed to list publications: {e}") from e
 
     def alter_publication(
         self,
@@ -382,7 +384,7 @@ class PubSubManager(BasePubSubManager):
             return self.get_publication(name)
 
         except Exception as e:
-            raise PubSubError(f"Failed to alter publication '{name}': {e}") from None
+            raise PubSubError(f"Failed to alter publication '{name}': {e}") from e
 
     def drop_publication(self, name: str) -> bool:
         """Drop publication"""
@@ -392,7 +394,7 @@ class PubSubManager(BasePubSubManager):
             return result is not None
 
         except Exception as e:
-            raise PubSubError(f"Failed to drop publication '{name}': {e}") from None
+            raise PubSubError(f"Failed to drop publication '{name}': {e}") from e
 
     def show_create_publication(self, name: str) -> str:
         """Show CREATE PUBLICATION statement"""
@@ -406,7 +408,7 @@ class PubSubManager(BasePubSubManager):
             return result.rows[0][1]  # CREATE statement is in second column
 
         except Exception as e:
-            raise PubSubError(f"Failed to show create publication '{name}': {e}") from None
+            raise PubSubError(f"Failed to show create publication '{name}': {e}") from e
 
     def create_subscription(
         self, subscription_name: str, publication_name: str, publisher_account: str
@@ -421,7 +423,7 @@ class PubSubManager(BasePubSubManager):
             return self.get_subscription(subscription_name)
 
         except Exception as e:
-            raise PubSubError(f"Failed to create subscription '{subscription_name}': {e}") from None
+            raise PubSubError(f"Failed to create subscription '{subscription_name}': {e}") from e
 
     def get_subscription(self, name: str) -> Subscription:
         """Get subscription by name"""
@@ -441,7 +443,7 @@ class PubSubManager(BasePubSubManager):
             raise PubSubError(f"Subscription '{name}' not found")
 
         except Exception as e:
-            raise PubSubError(f"Failed to get subscription '{name}': {e}") from None
+            raise PubSubError(f"Failed to get subscription '{name}': {e}") from e
 
     def list_subscriptions(
         self, pub_account: Optional[str] = None, pub_database: Optional[str] = None
@@ -451,9 +453,9 @@ class PubSubManager(BasePubSubManager):
             conditions = []
 
             if pub_account:
-                conditions.append(f"pub_account = {self._client._escape_string(pub_account)}")
+                conditions.append(f"pub_account = {sql_literal(pub_account)}")
             if pub_database:
-                conditions.append(f"pub_database = {self._client._escape_string(pub_database)}")
+                conditions.append(f"pub_database = {sql_literal(pub_database)}")
 
             if conditions:
                 where_clause = " WHERE " + " AND ".join(conditions)
@@ -469,7 +471,7 @@ class PubSubManager(BasePubSubManager):
             return [self._row_to_subscription(row) for row in result.rows]
 
         except Exception as e:
-            raise PubSubError(f"Failed to list subscriptions: {e}") from None
+            raise PubSubError(f"Failed to list subscriptions: {e}") from e
 
 
 class AsyncPubSubManager(BasePubSubManager):
@@ -645,9 +647,9 @@ class AsyncPubSubManager(BasePubSubManager):
             conditions = []
 
             if pub_account:
-                conditions.append(f"pub_account = {self._client._escape_string(pub_account)}")
+                conditions.append(f"pub_account = {sql_literal(pub_account)}")
             if pub_database:
-                conditions.append(f"pub_database = {self._client._escape_string(pub_database)}")
+                conditions.append(f"pub_database = {sql_literal(pub_database)}")
 
             if conditions:
                 where_clause = " WHERE " + " AND ".join(conditions)

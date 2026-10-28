@@ -1698,7 +1698,7 @@ func initExecuteStmtParamWithResolverInSession(
 	cwft.paramVals = nil
 	if prepareStmt.params != nil && prepareStmt.params.Length() > 0 { // use binary protocol
 		if prepareStmt.params.Length() != numParams {
-			return nil, nil, nil, originSQL, false, moerr.NewInvalidInput(reqCtx, "Incorrect arguments to EXECUTE")
+			return nil, nil, nil, originSQL, false, moerr.NewWrongArguments(reqCtx, "EXECUTE")
 		}
 		paramCount := prepareStmt.params.Length()
 		if err = prepareStmt.params.SetStringSource(types.StringSourceCOMStmt); err != nil {
@@ -1787,7 +1787,7 @@ func initExecuteStmtParamWithResolverInSession(
 		}
 	} else if execPlan != nil && len(execPlan.Args) > 0 {
 		if len(execPlan.Args) != numParams {
-			return nil, nil, nil, originSQL, false, moerr.NewInvalidInput(reqCtx, "Incorrect arguments to EXECUTE")
+			return nil, nil, nil, originSQL, false, moerr.NewWrongArguments(reqCtx, "EXECUTE")
 		}
 		showPublicationPatternPositions := []int32(nil)
 		if show, ok := prepareStmt.PrepareStmt.(*tree.ShowPublications); ok && show.Like != nil {
@@ -1818,7 +1818,7 @@ func initExecuteStmtParamWithResolverInSession(
 		}
 	} else {
 		if numParams > 0 {
-			return nil, nil, nil, originSQL, false, moerr.NewInvalidInput(reqCtx, "Incorrect arguments to EXECUTE")
+			return nil, nil, nil, originSQL, false, moerr.NewWrongArguments(reqCtx, "EXECUTE")
 		}
 	}
 	if err = plan2.ValidatePreparedWindowParams(reqCtx, preparePlan.Plan, cwft.paramVals); err != nil {
