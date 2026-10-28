@@ -42,6 +42,16 @@ type ScanOptions struct {
 	// session variable at plan time (0 = off, the default). omitempty so an older CN
 	// that lacks the field simply ignores it (no cutoff).
 	SearchDFCutoff float64 `json:"search_df_cutoff,omitempty"`
+	// ConditionalStreamTopK is optional. Older readers ignore it and stream all rows.
+	ConditionalStreamTopK *ConditionalStreamTopK `json:"conditional_stream_topk,omitempty"`
+}
+
+// ConditionalStreamTopKVersion identifies exact score DESC / byte-PK ASC semantics.
+const ConditionalStreamTopKVersion = "bm25_score_desc_byte_pk_asc_v1"
+
+type ConditionalStreamTopK struct {
+	Semantics string `json:"semantics"`
+	K         uint64 `json:"k"`
 }
 
 // EncodeScanOptions returns the algo_options bytes of opts.

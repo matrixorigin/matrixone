@@ -15,6 +15,7 @@
 package fulltext2
 
 import (
+	"context"
 	"encoding/binary"
 	"math"
 
@@ -49,6 +50,10 @@ type streamSink struct {
 	// scoreRange drops a scored doc outside the pushed relevance interval before it is
 	// batched, so out-of-range rows never leave the TVF. nil ⇒ keep everything.
 	scoreRange *ScoreRange
+	// Conditional collection retains references until the exhaustive walk completes.
+	topK    *streamTopK
+	ctx     context.Context
+	visited uint64
 }
 
 // newStreamSink resolves the index's pk type (all segments share it). The batch buffer
@@ -71,8 +76,36 @@ func newStreamSink(idx *Index, wantInclude bool, filter *prefilter, emit func(ou
 	return s
 }
 
-// ensure lazily fetches a pooled batch buffer of the sink's pk type, and (when the covered
-// path is on) allocates one typed, nullable ColumnBuffer per FULL INCLUDE column.
+// close returns producer-owned buffers on every pre-flush error path.
+func (s *streamSink) close() {
+	if s.keys != nil {
+		PutColumnBuffer(s.keys)
+		s.keys = nil
+	}
+	s.scores, s.includeCols = nil, nil
+}
+
+func (s *streamSink) checkContext() bool {
+	if s.ctx != nil {
+		if err := s.ctx.Err(); err != nil {
+			s.err, s.stopped = err, true
+		}
+	}
+	return !s.stopped
+}
+
+func (s *streamSink) visit() bool {
+	if s.ctx == nil {
+		return !s.stopped
+	}
+	s.visited++
+	if s.visited%streamBatch == 0 {
+		return s.checkContext()
+	}
+	return !s.stopped
+}
+
+// ensure lazily allocates the typed batch buffers.
 func (s *streamSink) ensure() {
 	if s.keys == nil {
 		s.keys = GetColumnBuffer(s.pkType)
@@ -101,6 +134,13 @@ func (s *streamSink) appendIncludes(seg *Segment, ord int64) {
 // straight from the segment docmap into ColumnBuffer.Data.
 func (s *streamSink) pushPk(seg *Segment, ord int64, score float32) {
 	if s.stopped || !s.scoreRange.contains(score) {
+		return
+	}
+	if s.topK != nil {
+		s.topK.push(streamRef{seg: seg, ord: ord, score: score})
+		if s.topK.err != nil {
+			s.err, s.stopped = s.topK.err, true
+		}
 		return
 	}
 	s.ensure()
@@ -203,6 +243,9 @@ func (s *Segment) streamWAND(clauses []clause, algo ScoreAlgo, gs *globalStats, 
 		if minDoc == math.MaxInt64 {
 			break // all cursors exhausted
 		}
+		if !sink.visit() {
+			break
+		}
 		if allowed(allow, minDoc) {
 			var score float32
 			for _, it := range iters {
@@ -235,6 +278,7 @@ func (idx *Index) StreamQuery(pattern []byte, boolean bool, parser string, algo 
 		return nil
 	}
 	sink := newStreamSink(idx, wantInclude, filter, emit)
+	defer sink.close()
 	p := normalizeParser(parser)
 
 	// Resolve the query the same way SearchQuery does, but prefer the streaming
@@ -340,7 +384,9 @@ func (idx *Index) StreamBagOfWords(pattern []byte, parser string, algo ScoreAlgo
 	}
 	// Same high-df cutoff as the top-k path, so a query behaves identically with or without
 	// a pushed LIMIT (streamDisjunction applies it under the gs it creates — no extra pass).
-	return idx.streamDisjunction(terms, algo, filter, newStreamSink(idx, wantInclude, filter, emit), dfCutoff)
+	sink := newStreamSink(idx, wantInclude, filter, emit)
+	defer sink.close()
+	return idx.streamDisjunction(terms, algo, filter, sink, dfCutoff)
 }
 
 // streamDisjunction streams a pure OR of terms heap-free across all segments (global
@@ -351,11 +397,17 @@ func (idx *Index) streamDisjunction(terms []clause, algo ScoreAlgo, filter *pref
 	gs := idx.newGlobalStats()
 	terms = idx.highDFKept(terms, gs, dfCutoff) // no-op when dfCutoff==0 (the boolean-mode caller)
 	for si, seg := range idx.segments {
+		if !sink.checkContext() {
+			return sink.err
+		}
 		allow := andAllow(mkAllow(seg, filter), &livenessMembership{idx: idx, si: si})
 		seg.streamWAND(terms, algo, gs, allow, sink)
 		if sink.err != nil {
 			return sink.err
 		}
+	}
+	if !sink.checkContext() {
+		return sink.err
 	}
 	sink.flush()
 	return sink.err

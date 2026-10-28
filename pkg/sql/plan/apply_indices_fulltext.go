@@ -271,6 +271,7 @@ func (builder *QueryBuilder) applyIndicesForProjectionUsingFullTextIndex(nodeID 
 			projNode.ProjectList[i] = replaceScoreFnInExprBy(projNode.ProjectList[i], rewriter)
 		}
 	}
+	builder.attachConditionalStreamTopK(sortNode, projNode)
 	return nodeID, nil
 }
 
@@ -1498,6 +1499,13 @@ func (builder *QueryBuilder) coveredFulltext2ScoreLimit(nodeID int32, projNode, 
 // column projection and, when present, an equivalent implicit score sort may
 // separate the outer sort from the search; joins and residual filters decline.
 func (builder *QueryBuilder) pushCoveredFulltext2ScoreLimitFromSort(sortNode *plan.Node) {
+	if sortNode != nil && len(sortNode.Children) == 1 {
+		child := builder.qry.Nodes[sortNode.Children[0]]
+		if child.NodeType == plan.Node_PROJECT {
+			builder.attachConditionalStreamTopK(sortNode, child)
+		}
+	}
+
 	if sortNode == nil || sortNode.Limit == nil || sortNode.RankOption != nil ||
 		len(sortNode.Children) != 1 || len(sortNode.OrderBy) == 0 || len(sortNode.FilterList) != 0 {
 		return

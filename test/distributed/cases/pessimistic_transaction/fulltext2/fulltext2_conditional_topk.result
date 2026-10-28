@@ -1,0 +1,59 @@
+set @previous_experimental_fulltext2_index = @@session.experimental_fulltext2_index;
+set @previous_ft2_relevancy_algorithm = @@session.ft2_relevancy_algorithm;
+set experimental_fulltext2_index = 1;
+set ft2_relevancy_algorithm = 'BM25';
+drop database if exists ft2_conditional_topk;
+create database ft2_conditional_topk;
+use ft2_conditional_topk;
+create table fulltext_documents (doc_id varchar(255) primary key, body longtext);
+insert into fulltext_documents values ('z','alpha omega'),('b','alpha omega'),('aa','alpha omega'),('a','alpha omega'),('2','alpha omega'),('10','alpha omega'),('1','alpha omega'),('02','alpha omega'),('n0','beta gamma'),('n1','beta gamma'),('n2','beta gamma'),('n3','beta gamma');
+create fulltext2 index ft_body on fulltext_documents(body) with parser gojieba position_free = true;
+select doc_id, match(body) against('alpha' in bm25 mode) as relevance from fulltext_documents where match(body) against('alpha' in bm25 mode) > 0 order by relevance desc, doc_id limit 3;
+➤ doc_id[12,255,0]  ¦  relevance[7,5,0]  𝄀
+02  ¦  0.031008132  𝄀
+1  ¦  0.031008132  𝄀
+10  ¦  0.031008132
+select doc_id, match(body) against('alpha' in bm25 mode) as relevance from fulltext_documents where match(body) against('alpha' in bm25 mode) > 0 order by relevance desc, doc_id limit 3 offset 1;
+➤ doc_id[12,255,0]  ¦  relevance[7,5,0]  𝄀
+1  ¦  0.031008132  𝄀
+10  ¦  0.031008132  𝄀
+2  ¦  0.031008132
+select doc_id, match(body) against('alpha' in bm25 mode) as relevance from fulltext_documents where match(body) against('alpha' in bm25 mode) > 0 order by relevance desc, doc_id limit 0;
+➤ doc_id[12,255,0]  ¦  relevance[7,5,0]
+select doc_id, match(body) against('nomatchtoken' in bm25 mode) as relevance from fulltext_documents where match(body) against('nomatchtoken' in bm25 mode) > 0 order by relevance desc, doc_id limit 3;
+➤ doc_id[12,255,0]  ¦  relevance[7,5,0]
+select doc_id, match(body) against('alpha' in bm25 mode) as relevance from fulltext_documents where match(body) against('alpha' in bm25 mode) > 0 and doc_id >= 'a' order by relevance desc, doc_id limit 3;
+➤ doc_id[12,255,0]  ¦  relevance[7,5,0]  𝄀
+a  ¦  0.031008132  𝄀
+aa  ¦  0.031008132  𝄀
+b  ¦  0.031008132
+prepare ft_cached from 'select doc_id,relevance from (select doc_id,match(body) against(? in bm25 mode) as relevance from fulltext_documents) q where relevance>0 order by relevance desc,doc_id limit 3';
+set @term = 'alpha';
+execute ft_cached using @term;
+➤ doc_id[12,255,0]  ¦  relevance[7,5,0]  𝄀
+02  ¦  0.031008132  𝄀
+1  ¦  0.031008132  𝄀
+10  ¦  0.031008132
+begin;
+delete from fulltext_documents where doc_id in ('02','1','10');
+execute ft_cached using @term;
+➤ doc_id[12,255,0]  ¦  relevance[7,5,0]  𝄀
+2  ¦  0.031008132  𝄀
+a  ¦  0.031008132  𝄀
+aa  ¦  0.031008132
+rollback;
+execute ft_cached using @term;
+➤ doc_id[12,255,0]  ¦  relevance[7,5,0]  𝄀
+02  ¦  0.031008132  𝄀
+1  ¦  0.031008132  𝄀
+10  ¦  0.031008132
+deallocate prepare ft_cached;
+delete from fulltext_documents where doc_id in ('02','1');
+select doc_id, match(body) against('alpha' in bm25 mode) as relevance from fulltext_documents where match(body) against('alpha' in bm25 mode) > 0 order by relevance desc, doc_id limit 3;
+➤ doc_id[12,255,0]  ¦  relevance[7,5,0]  𝄀
+10  ¦  0.031008132  𝄀
+2  ¦  0.031008132  𝄀
+a  ¦  0.031008132
+drop database ft2_conditional_topk;
+set ft2_relevancy_algorithm = @previous_ft2_relevancy_algorithm;
+set experimental_fulltext2_index = @previous_experimental_fulltext2_index;

@@ -15,7 +15,9 @@
 package fulltext2
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"math"
 	"time"
 
@@ -24,6 +26,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fulltext2/tokenfilter"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	veccache "github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
@@ -59,6 +63,11 @@ type Fulltext2Query struct {
 	// values INSIDE the search — so a WHERE on an INCLUDE column needs no second base scan.
 	// nil = none. ANDed with FilterBytes.
 	IncludePredsJSON []byte
+	// ConditionalTopK is independent of RuntimeConfig.Limit: failure to prove
+	// visibility must preserve the original unlimited stream.
+	ConditionalTopK int
+	Context         context.Context
+	SourceUnchanged func(context.Context, int64) (bool, error)
 }
 
 // Fulltext2Search adapts a loaded fulltext2 Index to veccache.VectorIndexSearchIf so
@@ -90,6 +99,9 @@ type Fulltext2Search struct {
 	// matches exactly the generation this object searches. 0 = unknown (pre-migration
 	// index or read error), which callers must treat as "not current".
 	buildTS int64
+	// Ephemeral, immutable provenance of this successfully loaded generation.
+	loadSnapshot      timestamp.Timestamp
+	loadSnapshotKnown bool
 
 	// preloadNdoc is the base doc count read by Preload, so GetIndexSize can report what the
 	// following Load will cost before any base is mapped, and so Load can run the heap-budget
@@ -170,6 +182,13 @@ func (s *Fulltext2Search) Preload(sqlproc *sqlexec.SqlProcess) error {
 }
 
 func (s *Fulltext2Search) Load(sqlproc *sqlexec.SqlProcess) error {
+	// A retry must never inherit eligibility from an earlier generation.
+	s.loadSnapshotKnown = false
+	s.loadSnapshot = timestamp.Timestamp{}
+	s.genValid = false
+	s.buildTS = 0
+	before, known := captureReadonlySnapshot(sqlproc)
+
 	// Fail fast on the QUERY path if the bases' per-doc metadata won't fit the heap
 	// budget, rather than OOM-killing the CN (which takes down every query on the node).
 	// This guard is on Load, NOT LoadAllBases, so CompactSegments (MERGE) — the remedy —
@@ -221,6 +240,9 @@ func (s *Fulltext2Search) Load(sqlproc *sqlexec.SqlProcess) error {
 		if ts, tail, e2 := LoadGeneration(sqlproc, s.cfg); e2 == nil {
 			s.accountID, s.loadedTs, s.loadedTail, s.genValid = acc, ts, tail, true
 		}
+	}
+	if after, ok := captureReadonlySnapshot(sqlproc); known && ok && before.equal(after) {
+		s.loadSnapshot, s.loadSnapshotKnown = after.snapshot, true
 	}
 	return nil
 }
@@ -403,6 +425,19 @@ func (s *Fulltext2Search) Search(proc *sqlexec.SqlProcess, query any, rt vectori
 	// keys/distances (mirrors bm25). wantInclude tells the stream to carry each doc's INCLUDE
 	// values (segment order) through Emit's 3rd arg.
 	if rt.Emit != nil {
+		if q.ConditionalTopK > 0 && q.ConditionalTopK <= MaxConditionalStreamTopK &&
+			q.Context != nil && q.SourceUnchanged != nil && q.BagOfWords && !q.Boolean && !q.JSONProbe &&
+			q.Algo == BM25 && len(q.FilterBytes) == 0 && len(q.IncludePredsJSON) == 0 &&
+			len(rt.RequestedIncludeColumns) == 0 && s.idx.pkType() == int32(types.T_varchar) {
+			eligible, proofErr := s.conditionalTopKEligible(proc, q)
+			if proofErr != nil {
+				return nil, nil, proofErr
+			}
+			if eligible {
+				err := s.idx.streamBagOfWordsTopK(q.Context, q.Pattern, s.cfg.Parser, q.Algo, pf, q.ConditionalTopK, rt.Emit, rt.SearchDFCutoff)
+				return []any{}, []float64{}, err
+			}
+		}
 		wantInclude := len(rt.RequestedIncludeColumns) > 0
 		var serr error
 		if q.JSONProbe {
@@ -536,9 +571,74 @@ func (s *Fulltext2Search) Destroy() {
 	}
 	s.idx = nil
 	s.loaded = false
+	s.loadSnapshotKnown, s.genValid = false, false
+	s.loadSnapshot = timestamp.Timestamp{}
+	s.buildTS = 0
 }
 
 // SetReservedAhead receives what the governor has already promised to loads ahead of this one,
 // between Preload and Load. The tail budget subtracts it, so two concurrent loads cannot spend
 // the same free memory twice. Implements the cache's reservationAware interface.
 func (s *Fulltext2Search) SetReservedAhead(n int64) { s.reservedAhead = n }
+
+// readonlySnapshot is query-local. No transaction or workspace handle is cached.
+type readonlySnapshot struct {
+	id       []byte
+	snapshot timestamp.Timestamp
+}
+
+func captureReadonlySnapshot(sp *sqlexec.SqlProcess) (readonlySnapshot, bool) {
+	if sp == nil || sp.SnapshotTS != nil || sp.SnapshotAccountID != nil {
+		return readonlySnapshot{}, false
+	}
+	if sp.Proc != nil {
+		return captureReadonlyTxn(sp.Proc.GetTxnOperator())
+	}
+	if sp.SqlCtx != nil {
+		return captureReadonlyTxn(sp.SqlCtx.TxnOperator)
+	}
+	return readonlySnapshot{}, false
+}
+
+func (a readonlySnapshot) equal(b readonlySnapshot) bool {
+	return bytes.Equal(a.id, b.id) && a.snapshot.Equal(b.snapshot)
+}
+
+func (s *Fulltext2Search) conditionalTopKEligible(sp *sqlexec.SqlProcess, q Fulltext2Query) (bool, error) {
+	if err := q.Context.Err(); err != nil {
+		return false, err
+	}
+	before, ok := captureReadonlySnapshot(sp)
+	if !ok {
+		return false, nil
+	}
+	account, accountErr := sp.GetAccountID()
+	if accountErr != nil || account != s.accountID || !s.loadSnapshotKnown || !s.genValid || s.loadedTail != -1 || s.buildTS <= 0 ||
+		s.buildTS >= before.snapshot.PhysicalTime || before.snapshot.Less(s.loadSnapshot) {
+		return false, nil
+	}
+	eligible, err := q.SourceUnchanged(q.Context, s.buildTS)
+	if q.Context.Err() != nil {
+		return false, q.Context.Err()
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false, err
+	}
+	if err != nil || !eligible {
+		return false, nil
+	}
+	after, ok := captureReadonlySnapshot(sp)
+	return ok && before.equal(after), nil
+}
+
+func captureReadonlyTxn(op client.TxnOperator) (readonlySnapshot, bool) {
+	if op == nil || op.IsSnapOp() {
+		return readonlySnapshot{}, false
+	}
+	meta := op.Txn()
+	ws := op.GetWorkspace()
+	if meta.Mirror || len(meta.ID) == 0 || ws == nil || !ws.Readonly() || meta.SnapshotTS.IsEmpty() {
+		return readonlySnapshot{}, false
+	}
+	return readonlySnapshot{id: bytes.Clone(meta.ID), snapshot: meta.SnapshotTS}, true
+}
