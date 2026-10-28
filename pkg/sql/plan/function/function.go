@@ -608,6 +608,9 @@ func getFunctionByName(
 	}
 
 	check := f.checkArgumentTypes(args, stringDomainModes)
+	if legacyIntegerDecimalCoercions(ctx) {
+		check = legacyIntegerDecimalCheck(r.fid, args, check)
+	}
 	if r.fid == UNIX_TIMESTAMP && LegacyUnixTimestampDatetime(ctx) {
 		check = fixedTypeMatch(f.Overloads[:4], args)
 	}
@@ -625,6 +628,7 @@ func getFunctionByName(
 	if r.fid == MINUS && signedUnsignedSubtraction(ctx, args) {
 		check = newCheckResultWithCast(3, integerDomainOperands(args))
 	}
+	check = legacyFloatStringCheck(ctx, check, args)
 	switch check.status {
 	case succeedMatched:
 		r.overloadId = int32(check.idx)
@@ -1290,6 +1294,15 @@ func (ov *overload) GetExecuteMethod() (
 
 	fn := ov.newOp()
 	return fn, nil, nil, nil
+}
+
+// GetArgumentType returns one element of the registered signature, whose meaning
+// is defined by the function's type checker, without exposing its mutable slice.
+func (ov *overload) GetArgumentType(index int) (types.T, bool) {
+	if index < 0 || index >= len(ov.args) {
+		return types.T_any, false
+	}
+	return ov.args[index], true
 }
 
 func (ov *overload) GetReturnTypeMethod() func(parameters []types.Type) types.Type {

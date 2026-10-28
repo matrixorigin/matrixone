@@ -615,7 +615,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrAlterOperationNotSupportedReasonFkRename: {ER_ALTER_OPERATION_NOT_SUPPORTED_REASON_FK_RENAME, []string{MySQLDefaultSqlState}, "Columns participating in a foreign key are renamed"},
 	ErrPrimaryCantHaveNull:                      {ER_PRIMARY_CANT_HAVE_NULL, []string{"42000"}, "All parts of a PRIMARY KEY must be NOT NULL; if you need NULL in a key, use UNIQUE instead"},
 	ErrPartitionMgmtOnNonpartitioned:            {ER_PARTITION_MGMT_ON_NONPARTITIONED, []string{MySQLDefaultSqlState}, "Partition management on a not partitioned table is not possible"},
-	ErrFKRowIsReferenced:                        {ER_ROW_IS_REFERENCED, []string{"23000"}, "Cannot delete or update a parent row: a foreign key constraint fails"},
+	ErrFKRowIsReferenced:                        {ER_ROW_IS_REFERENCED_2, []string{"23000"}, "Cannot delete or update a parent row: a foreign key constraint fails"},
 	ErrDuplicateKeyName:                         {ER_DUP_KEYNAME, []string{"42000"}, "Duplicate foreign key constraint name '%-.192s'"},
 	ErrFKNoReferencedRow2:                       {ER_NO_REFERENCED_ROW_2, []string{"23000"}, "Cannot add or update a child row: a foreign key constraint fails"},
 	ErrBlobCantHaveDefault:                      {ER_BLOB_CANT_HAVE_DEFAULT, []string{"42000"}, "BLOB, TEXT, GEOMETRY or JSON column '%-.192s' can't have a default value"},
@@ -1152,6 +1152,13 @@ func NewPreparedParamOutOfRange(ctx context.Context, typ string, statement strin
 func NewDataTruncatedf(ctx context.Context, typ string, format string, args ...any) *Error {
 	msg := fmt.Sprintf(format, args...)
 	return newError(ctx, ErrDataTruncated, typ, msg)
+}
+
+// NewAssignmentValueTruncated is a real strict-assignment failure with MySQL
+// diagnostic 1265/01000. Reuse the released error code used by ENUM/SET so
+// older error decoders retain the same real-error and rollback semantics.
+func NewAssignmentValueTruncated(ctx context.Context, message string) *Error {
+	return newError(ctx, ErrEnumSetValueTruncated, message)
 }
 
 // NewEnumSetValueTruncated is a real strict-assignment failure, even though

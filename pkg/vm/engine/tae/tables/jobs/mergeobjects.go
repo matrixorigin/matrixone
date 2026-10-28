@@ -265,6 +265,7 @@ func (task *mergeObjectsTask) LoadNextBatch(
 
 	obj := task.mergedObjsHandle[objIdx]
 	ctx = fileservice.WithFileServicePolicy(ctx, fileservice.SkipAllCache)
+	ctx = tables.WithPreservePhysicalRows(ctx)
 	if task.isTombstone {
 		err = obj.Scan(
 			ctx,

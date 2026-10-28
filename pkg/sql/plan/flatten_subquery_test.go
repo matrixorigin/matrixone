@@ -430,8 +430,8 @@ func TestCorrelatedLimitIsPartitionedByCorrelationKey(t *testing.T) {
 	assertReachablePlanHasNoCorrelatedExpr(t, query)
 }
 
-func TestCorrelatedLimitRejectsNonPartitionablePredicate(t *testing.T) {
-	_, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t, `
+func TestCorrelatedLimitKeepsNonPartitionableRelation(t *testing.T) {
+	p, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t, `
 		SELECT n1.N_NATIONKEY,
 		       (SELECT n2.N_NATIONKEY
 		          FROM NATION n2
@@ -439,7 +439,9 @@ func TestCorrelatedLimitRejectsNonPartitionablePredicate(t *testing.T) {
 		         ORDER BY n2.N_NATIONKEY DESC
 		         LIMIT 1)
 		  FROM NATION n1`)
-	require.ErrorContains(t, err, "correlated LIMIT with non-equality predicates")
+	require.NoError(t, err)
+	require.NotNil(t, p.GetQuery().Correlation)
+	require.NoError(t, p.GetQuery().ValidateCorrelation())
 }
 
 func TestCorrelatedLimitRejectsProjectedCorrelatedOrdering(t *testing.T) {

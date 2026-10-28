@@ -40,6 +40,7 @@ func FilteredSearchUnsafeWithMembership(
 	query unsafe.Pointer,
 	limit uint,
 	f docfilter.MembershipFilter,
+	exact bool,
 ) (keys []usearch.Key, distances []float32, err error) {
 	var errorMessage *C.char
 
@@ -74,6 +75,7 @@ func FilteredSearchUnsafeWithMembership(
 		C.size_t(limit),
 		fptr,
 		kind,
+		cExact(exact),
 		(*C.usearch_key_t)(&keys[0]),
 		(*C.usearch_distance_t)(&distances[0]),
 		(*C.usearch_error_t)(&errorMessage)))
@@ -89,4 +91,11 @@ func FilteredSearchUnsafeWithMembership(
 		return nil, nil, err
 	}
 	return keys, distances, nil
+}
+
+func cExact(exact bool) C.int {
+	if exact {
+		return 1
+	}
+	return 0
 }

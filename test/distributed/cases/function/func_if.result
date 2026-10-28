@@ -276,12 +276,12 @@ T
 SELECT IF('0o17', 'T', 'F') AS if_octal_prefix_true;
 ➤ if_octal_prefix_true[12,1,0]  𝄀
 T
-SELECT IF('NaN', 'T', 'F') AS if_nan_true;
-➤ if_nan_true[12,1,0]  𝄀
-T
-SELECT IF('Inf', 'T', 'F') AS if_inf_true;
-➤ if_inf_true[12,1,0]  𝄀
-T
+SELECT IF('NaN', 'T', 'F') AS if_nan_false;
+➤ if_nan_false[12,1,0]  𝄀
+F
+SELECT IF('Inf', 'T', 'F') AS if_inf_false;
+➤ if_inf_false[12,1,0]  𝄀
+F
 SELECT IF(CAST(0 AS DOUBLE), 'T', 'F') AS if_double_zero_false;
 ➤ if_double_zero_false[12,1,0]  𝄀
 F

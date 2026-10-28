@@ -119,13 +119,15 @@ func TestJSONStringConsumerProtocolPlanAdmissionAndCachedRun(t *testing.T) {
 					rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion129)
 					require.NoError(t, validateJSONStringConsumerProtocol(proc, queryPlan))
 
-					rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion128)
-					c := &Compile{proc: proc, pn: queryPlan}
-					require.ErrorContains(t,
-						c.Compile(context.Background(), queryPlan, nil),
-						"protocol version 129")
-					_, err := c.Run(0)
-					require.ErrorContains(t, err, "protocol version 129")
+					for _, version := range []int64{112, 113, 114, 115, 116, 117, defines.MORPCVersion122, defines.MORPCVersion123, defines.MORPCVersion124, defines.MORPCVersion125, defines.MORPCVersion126, defines.MORPCVersion127, defines.MORPCVersion128} {
+						rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
+						c := &Compile{proc: proc, pn: queryPlan}
+						require.ErrorContains(t,
+							c.Compile(context.Background(), queryPlan, nil),
+							"protocol version 129")
+						_, err := c.Run(0)
+						require.ErrorContains(t, err, "protocol version 129")
+					}
 				})
 			}
 		})
@@ -160,16 +162,18 @@ func testJSONStringConsumerSerializationFences(t *testing.T, name string) {
 	}
 	workers := engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
 
-	// A simulated current-main v128 worker forces one-CN placement and prevents
-	// encoding a pipeline carrying overload 1 for that destination.
+	// The released v122-v128 prefix forces one-CN placement and prevents
+	// encoding a pipeline carrying overload 1 for those destinations.
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion129)
-	client.version = defines.MORPCVersion128
-	c.execType = plan2.ExecTypeAP_MULTICN
-	c.cnList = workers
-	require.NoError(t, c.constrainRemoteExpressionWorkers(qry))
-	require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
-	_, err := encodeRemoteScope(scope, c.proc)
-	require.ErrorContains(t, err, "remote destination")
+	for _, version := range []int64{defines.MORPCVersion122, defines.MORPCVersion123, defines.MORPCVersion124, defines.MORPCVersion125, defines.MORPCVersion126, defines.MORPCVersion127, defines.MORPCVersion128} {
+		client.version = version
+		c.execType = plan2.ExecTypeAP_MULTICN
+		c.cnList = workers
+		require.NoError(t, c.constrainRemoteExpressionWorkers(qry))
+		require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
+		_, err := encodeRemoteScope(scope, c.proc)
+		require.ErrorContains(t, err, "remote destination")
+	}
 
 	// A simulated v129 worker response retains multi-CN placement and permits
 	// encoding. This does not prove remote pipeline execution.
@@ -184,11 +188,13 @@ func testJSONStringConsumerSerializationFences(t *testing.T, name string) {
 	require.Equal(t, defines.MORPCVersion129, minimum, "the execution stream must confirm the selected JSON overload")
 	require.NotEmpty(t, data)
 
-	// A simulated current-main v128 receiver rejects the overload; a simulated
+	// Released receivers reject the serialized overload; a simulated
 	// v129 receiver accepts decoding. Neither case executes the decoded scope.
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion128)
-	_, err = decodeScope(data, c.proc, true, nil)
-	require.ErrorContains(t, err, "protocol version 129")
+	for _, version := range []int64{defines.MORPCVersion122, defines.MORPCVersion123, defines.MORPCVersion124, defines.MORPCVersion125, defines.MORPCVersion126, defines.MORPCVersion127, defines.MORPCVersion128} {
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
+		_, err = decodeScope(data, c.proc, true, nil)
+		require.ErrorContains(t, err, "protocol version 129")
+	}
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion129)
 	decoded, err := decodeScope(data, c.proc, true, nil)
 	require.NoError(t, err)
@@ -292,7 +298,7 @@ func TestJSONStringConsumerIndexSearchExpressionOwners(t *testing.T) {
 			floor, err := plan2.RequiredPersistedExpressionProtocolVersion(owner)
 			require.NoError(t, err)
 			require.Equal(t, defines.MORPCVersion129, floor)
-			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion117)
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion122)
 			require.ErrorContains(t, validateJSONStringConsumerProtocol(proc, owner), "protocol version 129")
 			c := &Compile{proc: proc, pn: owner}
 			_, err = c.Run(0)
