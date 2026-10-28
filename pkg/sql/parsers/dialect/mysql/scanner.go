@@ -1023,10 +1023,14 @@ func (s *Scanner) scanIdentifierToken(isVariable bool) (int, string) {
 	}
 	lower := strings.ToLower(keywordName)
 	if keywordID, found := keywords[lower]; found {
-		if isSQLModeSensitiveFunctionName(lower) && !s.sqlMode.Has(SQLModeIgnoreSpace) {
+		if isSQLModeSensitiveFunctionName(lower) && (!s.sqlMode.Has(SQLModeIgnoreSpace) || s.digestMode) {
 			pos := s.skipBlankAndCommentsFrom(s.Pos)
 			if pos != s.Pos && pos < len(s.buf) && s.buf[pos] == '(' {
-				return ID, keywordName
+				// IGNORE_SPACE admits whitespace, not intervening comments. Keep
+				// this digest contextualization isolated from execution parsing.
+				if !s.sqlMode.Has(SQLModeIgnoreSpace) || strings.Trim(s.buf[s.Pos:pos], " \n\r\t") != "" {
+					return ID, keywordName
+				}
 			}
 		}
 		if lower == "within" {

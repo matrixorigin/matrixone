@@ -56,6 +56,48 @@ func TestStatementDigestMySQL84(t *testing.T) {
 	}
 }
 
+func TestStatementDigestFunctionIdentityIsolation(t *testing.T) {
+	for _, tc := range []struct {
+		expression, mode                string
+		digestGeneric, executionGeneric bool
+		executionError                  bool
+	}{
+		{"NOW()", "", false, false, false},
+		{"NOW ()", "", true, true, false},
+		{"NOW ()", "IGNORE_SPACE", false, false, false},
+		{"NOW/**/()", "IGNORE_SPACE", true, false, false},
+		{"`current_timestamp`()", "", true, false, true},
+		{"CURRENT_TIMESTAMP/**/()", "", false, false, false},
+		{"ABS(1)", "", false, false, false},
+	} {
+		t.Run(tc.expression+tc.mode, func(t *testing.T) {
+			for _, digestMode := range []bool{true, false, true} {
+				func() {
+					var syntax *statementDigestSyntax
+					want := tc.executionGeneric
+					if digestMode {
+						syntax = &statementDigestSyntax{nulls: make(map[int]struct{})}
+						want = tc.digestGeneric
+					}
+					statements, err := parseWithSQLMode(t.Context(), "SELECT "+tc.expression, 0, tc.mode, syntax)
+					if !digestMode && tc.executionError {
+						require.Error(t, err)
+						return
+					}
+					require.NoError(t, err, "digestMode=%v", digestMode)
+					defer func() {
+						for _, statement := range statements {
+							statement.Free()
+						}
+					}()
+					function := statements[0].(*tree.Select).Select.(*tree.SelectClause).Exprs[0].Expr.(*tree.FuncExpr)
+					require.Equal(t, want, function.IsGeneric)
+				}()
+			}
+		})
+	}
+}
+
 func TestStatementDigestParseLimitsAndScannerReuse(t *testing.T) {
 	for _, limits := range []ParseLimits{
 		{Input: 7, Tokens: 100, Work: 1000},

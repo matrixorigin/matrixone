@@ -381,6 +381,14 @@ func digestSyntaxValid(statement tree.Statement) bool {
 				if !digestColumnValid(option.NewColumn, false) {
 					return false
 				}
+			case *tree.AlterTableAlterColumnClause:
+				// SET DEFAULT has no bare temporal-function production. Its
+				// parenthesized expressions are not column-definition contexts.
+				if option.OptionType == tree.AlterColumnOptionSetDefault {
+					if call, ok := option.DefaultExpr.Expr.(*tree.FuncExpr); ok && !call.IsTemporalLiteral {
+						return false
+					}
+				}
 			}
 		}
 	}
@@ -406,6 +414,9 @@ func digestColumnValid(column *tree.ColumnTableDef, allowReferences bool) bool {
 		case *tree.AttributeAutoIncrement:
 			autoIncrement = true
 		case *tree.AttributeGeneratedAlways:
+			if !digestColumnExpressionValid(attr.Expr, true) {
+				return false
+			}
 			generated = true
 		case *tree.AttributeReference:
 			// CREATE/ADD admit inline REFERENCES, but MODIFY/CHANGE do not.
@@ -420,26 +431,54 @@ func digestColumnValid(column *tree.ColumnTableDef, allowReferences bool) bool {
 		case *tree.AttributeColumnFormat, *tree.AttributeStorage:
 			generatedDisallowedAttribute = true
 		case *tree.AttributeDefault:
-			if !digestTemporalAttributeValid(column, attr.Expr, false) {
+			if !digestColumnExpressionValid(attr.Expr, false) || !digestTemporalAttributeValid(column, attr.Expr, false) {
 				return false
 			}
 			hasDefault = true
-			value, literal := attr.Expr.(*tree.NumVal)
+			expression := attr.Expr
+			if collated, ok := expression.(*tree.CollateExpr); ok {
+				expression = collated.Expr
+			}
+			value, literal := expression.(*tree.NumVal)
 			nullDefault = literal && value.ValType == tree.P_null
 		}
 	}
 	return !(notNull && nullDefault || autoIncrement && hasDefault && !nullDefault || generated && (hasDefault || autoIncrement || generatedDisallowedAttribute))
 }
 
+func digestColumnExpressionValid(expression tree.Expr, generated bool) bool {
+	syntax := tree.InspectExpressionSyntax(expression)
+	if syntax.VariableOrSubquery {
+		return false
+	}
+	for _, function := range syntax.Functions {
+		if function.IsGeneric || generated && function.FuncName != nil && isDigestTemporalFunctionName(function.FuncName.Origin()) {
+			return false
+		}
+	}
+	return true
+}
+
 func digestTemporalAttributeValid(column *tree.ColumnTableDef, expression tree.Expr, onUpdate bool) bool {
 	if !onUpdate {
+		// One trailing COLLATE is a column attribute even when the expression
+		// parser attaches it to the DEFAULT operand. Preserve the operand's
+		// literal/expression/native-function domain; repeated COLLATE is invalid.
+		collated := false
+		if value, ok := expression.(*tree.CollateExpr); ok {
+			expression, collated = value.Expr, true
+		}
 		switch value := expression.(type) {
 		case *tree.NumVal, *tree.ParenExpr:
 			// Parenthesized expressions are a separate DEFAULT grammar domain;
 			// their runtime value need not match the timestamp-column contract.
 			return true
 		case *tree.UnaryExpr:
-			if literal, ok := value.Expr.(*tree.NumVal); ok &&
+			operand := value.Expr
+			if value, ok := operand.(*tree.CollateExpr); ok && !collated {
+				operand = value.Expr
+			}
+			if literal, ok := operand.(*tree.NumVal); ok &&
 				(value.Op == tree.UNARY_PLUS || value.Op == tree.UNARY_MINUS) {
 				switch literal.ValType {
 				case tree.P_int64, tree.P_uint64, tree.P_float64, tree.P_decimal:
@@ -450,16 +489,14 @@ func digestTemporalAttributeValid(column *tree.ColumnTableDef, expression tree.E
 		}
 	}
 	function, direct := expression.(*tree.FuncExpr)
-	if !direct || function.IsTemporalLiteral {
+	if !direct || function.IsTemporalLiteral || function.IsGeneric {
 		return false
 	}
 	name := ""
 	if function.FuncName != nil {
 		name = strings.ToLower(function.FuncName.Origin())
 	}
-	switch name {
-	case "current_timestamp", "now", "localtime", "localtimestamp":
-	default:
+	if !isDigestTemporalFunctionName(name) {
 		return false
 	}
 	typ, ok := column.Type.(*tree.T)
@@ -478,6 +515,15 @@ func digestTemporalAttributeValid(column *tree.ColumnTableDef, expression tree.E
 		}
 	}
 	return precision >= 0 && precision <= 6 && precision == int64(typ.InternalType.Scale)
+}
+
+func isDigestTemporalFunctionName(name string) bool {
+	switch strings.ToLower(name) {
+	case "current_timestamp", "now", "localtime", "localtimestamp":
+		return true
+	default:
+		return false
+	}
 }
 
 // Hint punctuation is not SQL punctuation: '?' is not a bind parameter,

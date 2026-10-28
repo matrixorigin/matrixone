@@ -827,6 +827,9 @@ type Subquery struct {
 }
 
 func (node *Subquery) Format(ctx *FmtCtx) {
+	if ctx.expressionSyntax != nil {
+		ctx.expressionSyntax.VariableOrSubquery = true
+	}
 	if node.Exists {
 		ctx.WriteString("exists ")
 	}
@@ -960,10 +963,10 @@ type FuncExpr struct {
 	exprImpl
 	Func     ResolvableFunctionReference
 	FuncName *CStr
-	// IsGeneric is true when the parser recognized a whitespace-sensitive
-	// MySQL function through the generic identifier-function rule rather than
-	// its native built-in rule. That distinction matters when IGNORE_SPACE is
-	// disabled.
+	// IsGeneric records a native keyword function parsed through the generic
+	// identifier-function rule. Execution parsing records whitespace-sensitive
+	// names; digest parsing also records native temporal keywords so quoted
+	// names cannot stand in for built-in column defaults.
 	IsGeneric bool
 	// IsTemporalLiteral distinguishes DATE/TIME/TIMESTAMP literals from the
 	// conversion functions: only the literals have non-nullable MySQL fields.
@@ -984,6 +987,9 @@ type FuncExpr struct {
 }
 
 func (node *FuncExpr) Format(ctx *FmtCtx) {
+	if ctx.expressionSyntax != nil {
+		ctx.expressionSyntax.Functions = append(ctx.expressionSyntax.Functions, node)
+	}
 	if ctx.viewDefinition {
 		if value, ok := viewNameConstValue(node); ok {
 			// NAME_CONST returns its literal value. Keep the view export
@@ -1965,6 +1971,9 @@ type VarExpr struct {
 
 // incomplete
 func (node *VarExpr) Format(ctx *FmtCtx) {
+	if ctx.expressionSyntax != nil {
+		ctx.expressionSyntax.VariableOrSubquery = true
+	}
 	if node.Name != "" {
 		ctx.WriteByte('@')
 		if node.System {

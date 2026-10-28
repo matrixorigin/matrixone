@@ -1,6 +1,6 @@
 # MySQL 兼容函数与运算符补齐设计
 
-版本：v7，2026-10-28。归属：#31319（原始报告 #23010、#23024、#23025、#23035）。STATEMENT_DIGEST 的兼容目标为 MySQL 8.4 逐字节一致的摘要，而非近似指纹。
+版本：v8，2026-10-28。归属：#31319（原始报告 #23010、#23024、#23025、#23035）。STATEMENT_DIGEST 的兼容目标为 MySQL 8.4 逐字节一致的摘要，而非近似指纹。
 
 ## 范围、不变量与设计门槛
 
@@ -79,6 +79,11 @@ VALUES/REPLACE/ON DUPLICATE KEY UPDATE 通过本次 DML 已解析的目标列定
 - HAVING 的 DEFAULT 虽不依赖行值，仍受 HAVING 可见列约束：已声明的源分组列优先于同名 SELECT 别名，其次匹配输出别名和直接投影列；不因表达式或聚合引用了底层列就授予可见性。分组列可见性使用 GroupBinder 在降低前保存的 query-local 源列声明索引（关系 tag/列位置），只移除 AST 中括号/一元加号，不将 CAST、负号或算术视为透明；GROUP BY ordinal/alias 先由原分组解析器选定投影再记录。该索引不改变行值/函数依赖，只供 DEFAULT 元数据可见性使用；物理分组键改写不会删除 SQL 声明身份，子查询不继承，窗口校验克隆独立复制。它不使用仅表示小计分支函数依赖的 active grouping 位图，因此 ROLLUP/CUBE 的非活跃声明列仍能读取元数据。复用 HavingBinder 所有的名称/列身份索引，不创建伪造行引用或聚合；聚合参数及外层相关列仍使用各自原有作用域。
 - 系统变量的 scoped name 按词法引号域编码：反引号和 ANSI_QUOTES 双引号为标识符，普通单/双引号字符串为占位符；无 scope 的字符串语法拒绝，不把它伪装成注册表存在性校验。
 - 普通列的裸 CURRENT_TIMESTAMP/NOW/LOCALTIME/LOCALTIMESTAMP 默认值和 ON UPDATE 只用于 TIMESTAMP/DATETIME，显式/省略小数秒精度须与列声明相等且处于 0..6；其他函数、裸算术与表达式须使用 MySQL 的括号默认值语法，不能按裸时间默认值处理。括号表达式默认值仍允许其他目标类型和不同精度。digest-only lexer 允许 ON UPDATE NOW(fsp)，不扩展普通 MO 执行语法。
+- DEFAULT 的单个尾部 COLLATE 属于列属性，即使表达式 parser 把它附着在 literal、带符号数值或原生时间默认值的 AST 上，也须按原默认值语法域校验；重复尾部 COLLATE 拒绝。其对 NULL/default 与 AUTO_INCREMENT 的属性顺序校验不能丢失。
+- 列定义中的 DEFAULT/生成列表达式拒绝用户/系统变量、赋值及子查询；字符串或列标识符中的 @ 不算变量。复用现有 formatter 的完整 AST 遍历收集语法事实，避免调用未完成的 VarExpr/Subquery.Accept；该临时快照与 AST 同寿命，不缓存，不执行表达式。生成列表达式额外拒绝上述原生时间默认值函数；不扩张为任意 UDF/函数注册表校验。
+- ALTER COLUMN SET DEFAULT 与列定义不是相同上下文：其括号表达式在 MySQL 摘要解析阶段仍允许变量/子查询，不能套用列定义禁令；但不允许裸函数式时间默认值。保留独立的正负对照，不执行 ALTER 或推断现有列类型。
+- 裸时间默认值须来自原生 keyword 语法域；复用 FuncExpr.IsGeneric 保存普通 identifier 函数身份，digest-only 解析额外标记被引号包裹的原生时间 keyword。IGNORE_SPACE 仅放宽函数名和左括号之间的空白，不跨注释；括号表达式也不接受这些伪装的原生函数。普通执行 parser 契约不变。
+- 上述附加 AST 遍历仅发生于 DDL 的 DEFAULT/生成属性，按 1 MiB/65536 token 输入预算线性工作，临时文本及函数引用列表均受输入大小约束；普通 SELECT 摘要路径不增加扫描、会话、IO 或持久状态。
 - 列级 REFERENCES 的准入依赖 AST 所在 DDL 上下文：CREATE/ADD 可接受，MODIFY/CHANGE 拒绝；表级 FOREIGN KEY 不套此限制，不解析引用表或执行建表校验。
 - CREATE 和 ALTER ADD/MODIFY/CHANGE 共用列属性上下文化规则；生成列拒绝 DEFAULT（包括裸 NULL）、AUTO_INCREMENT、ON UPDATE、COLUMN_FORMAT 和 STORAGE；COMMENT、NULL/NOT NULL、索引/字符属性及普通列上的属性通过独立控制组保留，不按建表执行期的键约束误拒绝其他合法摘要。
 - 可执行注释在 digestMode 中按普通 SQL 字符串规则扫描，不沿用 MO 普通解析对注释内单引号的特殊跳过/拼接规则；普通执行 parser 的既有契约不变，版本过滤/工作预算仍由原 scanner 所有。

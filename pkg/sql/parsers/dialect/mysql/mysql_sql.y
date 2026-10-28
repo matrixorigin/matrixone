@@ -14461,7 +14461,8 @@ function_call_generic:
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
             FuncName: tree.NewCStr($1, 1),
-            IsGeneric: isSQLModeSensitiveFunctionName($1),
+            IsGeneric: isSQLModeSensitiveFunctionName($1) ||
+                (yylex.(*Lexer).digest != nil && isDigestTemporalFunctionName($1)),
             Exprs: $3,
         }
     }

@@ -3887,5 +3887,1394 @@
     "sql_mode": "",
     "sql": "ALTER TABLE t CHANGE COLUMN old_a a DATETIME DEFAULT TIMESTAMP '2020-01-01 00:00:00'",
     "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a VARCHAR(10) DEFAULT 'a' COLLATE utf8mb4_bin)",
+    "text": "CREATE TABLE `t` ( `a` VARCHARACTER (?) DEFAULT ? COLLATE `utf8mb4_bin` )",
+    "digest": "6aafbc7984e4970b719309a21cb65aab8d9283ff43e0873bd6d929bd8c63c513"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a VARCHAR(10) DEFAULT 'a' COLLATE utf8mb4_bin",
+    "text": "ALTER TABLE `t` ADD COLUMN `a` VARCHARACTER (?) DEFAULT ? COLLATE `utf8mb4_bin`",
+    "digest": "179bb5103cadc21b8ff4fe0c86cefb5cbedbf35f785773462a1ca4276a487014"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a VARCHAR(10) DEFAULT 'a' COLLATE utf8mb4_bin",
+    "text": "ALTER TABLE `t` MODIFY COLUMN `a` VARCHARACTER (?) DEFAULT ? COLLATE `utf8mb4_bin`",
+    "digest": "2711a6e5fb914c825138e8421e2f2e55b05370e2d010cb68d61c26bfa6391672"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN b a VARCHAR(10) DEFAULT 'a' COLLATE utf8mb4_bin",
+    "text": "ALTER TABLE `t` CHANGE COLUMN `b` `a` VARCHARACTER (?) DEFAULT ? COLLATE `utf8mb4_bin`",
+    "digest": "7778429a7590ffc6722df99adde2b7e1f462eede230c689f99da4c7454eb7e95"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a VARCHAR(10) DEFAULT _utf8mb4'a' COLLATE utf8mb4_bin)",
+    "text": "CREATE TABLE `t` ( `a` VARCHARACTER (?) DEFAULT (_charset) ? COLLATE `utf8mb4_bin` )",
+    "digest": "92ae60e9edd166e8bcf07804d69ab775a28e2a6ba056c8e2f6dae4d15ff14efd"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a VARCHAR(10) DEFAULT _utf8mb4'a' COLLATE utf8mb4_bin",
+    "text": "ALTER TABLE `t` ADD COLUMN `a` VARCHARACTER (?) DEFAULT (_charset) ? COLLATE `utf8mb4_bin`",
+    "digest": "c85821118e6ff8f122ae9e27c07e46754ecc1fdbbf5b610c1c1e25adbeece985"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a VARCHAR(10) DEFAULT _utf8mb4'a' COLLATE utf8mb4_bin",
+    "text": "ALTER TABLE `t` MODIFY COLUMN `a` VARCHARACTER (?) DEFAULT (_charset) ? COLLATE `utf8mb4_bin`",
+    "digest": "55d192093c0babed5709684ac7e2d19131e66f9ea922ff55c408b426323f3cc5"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN b a VARCHAR(10) DEFAULT _utf8mb4'a' COLLATE utf8mb4_bin",
+    "text": "ALTER TABLE `t` CHANGE COLUMN `b` `a` VARCHARACTER (?) DEFAULT (_charset) ? COLLATE `utf8mb4_bin`",
+    "digest": "41596ee51bb2d530378b1fc7c8ed1c68b03ebb0232335fd7c1789b9cc7c83d8a"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a VARCHAR(10) DEFAULT ('a' COLLATE utf8mb4_bin))",
+    "text": "CREATE TABLE `t` ( `a` VARCHARACTER (?) DEFAULT ( ? COLLATE `utf8mb4_bin` ) )",
+    "digest": "c457111e154ef3bbd659dcd270ad0f869722bb03002f81429145f66eb88d1aa7"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a VARCHAR(10) DEFAULT ('a' COLLATE utf8mb4_bin)",
+    "text": "ALTER TABLE `t` ADD COLUMN `a` VARCHARACTER (?) DEFAULT ( ? COLLATE `utf8mb4_bin` )",
+    "digest": "5a667decab0cd387650011a0a39f4b8b3400cb451b6486c6a979b8ac18f9b8de"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a VARCHAR(10) DEFAULT ('a' COLLATE utf8mb4_bin)",
+    "text": "ALTER TABLE `t` MODIFY COLUMN `a` VARCHARACTER (?) DEFAULT ( ? COLLATE `utf8mb4_bin` )",
+    "digest": "567095243837de38bc1003d73aa13f54b70d93c54fe71aa9633da63c98da6c96"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN b a VARCHAR(10) DEFAULT ('a' COLLATE utf8mb4_bin)",
+    "text": "ALTER TABLE `t` CHANGE COLUMN `b` `a` VARCHARACTER (?) DEFAULT ( ? COLLATE `utf8mb4_bin` )",
+    "digest": "82db465cabb24127535d65e9e9150c08df571bf42c4429eacd462615ac3185ef"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a VARCHAR(10) DEFAULT ('a') COLLATE utf8mb4_bin)",
+    "text": "CREATE TABLE `t` ( `a` VARCHARACTER (?) DEFAULT (?) COLLATE `utf8mb4_bin` )",
+    "digest": "98cae3a1fc77dc3cd70b20b943204dc63ba1969333c170bd20f110ad98b56ed2"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a VARCHAR(10) DEFAULT ('a') COLLATE utf8mb4_bin",
+    "text": "ALTER TABLE `t` ADD COLUMN `a` VARCHARACTER (?) DEFAULT (?) COLLATE `utf8mb4_bin`",
+    "digest": "ba99ffbe4b794396341fc6a5fe8b32074953914ae925b52c402bdaace5e1749b"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a VARCHAR(10) DEFAULT ('a') COLLATE utf8mb4_bin",
+    "text": "ALTER TABLE `t` MODIFY COLUMN `a` VARCHARACTER (?) DEFAULT (?) COLLATE `utf8mb4_bin`",
+    "digest": "4b179ae822195e389babf8e10666b6fe6e2fc3ee0359e2ef37e02d1c643d50cd"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN b a VARCHAR(10) DEFAULT ('a') COLLATE utf8mb4_bin",
+    "text": "ALTER TABLE `t` CHANGE COLUMN `b` `a` VARCHARACTER (?) DEFAULT (?) COLLATE `utf8mb4_bin`",
+    "digest": "57412e4719e7af0dc5f01ea23e3e5074231bb24667541f329578de795aec42a6"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a VARCHAR(10) DEFAULT 'a' COLLATE utf8mb4_bin COLLATE utf8mb4_general_ci)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a VARCHAR(10) DEFAULT 'a' COLLATE utf8mb4_bin COLLATE utf8mb4_general_ci",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a VARCHAR(10) DEFAULT 'a' COLLATE utf8mb4_bin COLLATE utf8mb4_general_ci",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN b a VARCHAR(10) DEFAULT 'a' COLLATE utf8mb4_bin COLLATE utf8mb4_general_ci",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a INT DEFAULT 1 COLLATE utf8mb4_bin)",
+    "text": "CREATE TABLE `t` ( `a` INTEGER DEFAULT ? COLLATE `utf8mb4_bin` )",
+    "digest": "42e765389d0701ee78eb37d0a9ef85d53d3d3b741cf8b1cd5dcf028ffcd21d9f"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a INT DEFAULT 1 COLLATE utf8mb4_bin",
+    "text": "ALTER TABLE `t` ADD COLUMN `a` INTEGER DEFAULT ? COLLATE `utf8mb4_bin`",
+    "digest": "88bb4764f29b0f98529bc1f1988f6668aeadd9fe977f28b6f87b44cdc29ae70f"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a INT DEFAULT 1 COLLATE utf8mb4_bin",
+    "text": "ALTER TABLE `t` MODIFY COLUMN `a` INTEGER DEFAULT ? COLLATE `utf8mb4_bin`",
+    "digest": "7342f76dad81fb4bc613f3b9e32d5b467359a8931c497389f73e0a4214916fc7"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN b a INT DEFAULT 1 COLLATE utf8mb4_bin",
+    "text": "ALTER TABLE `t` CHANGE COLUMN `b` `a` INTEGER DEFAULT ? COLLATE `utf8mb4_bin`",
+    "digest": "eb6e6e7463d8a2efdf7655d27c54fcf1187c27335fed67655a90327a61f06f5a"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a INT DEFAULT -1 COLLATE utf8mb4_bin)",
+    "text": "CREATE TABLE `t` ( `a` INTEGER DEFAULT ? COLLATE `utf8mb4_bin` )",
+    "digest": "42e765389d0701ee78eb37d0a9ef85d53d3d3b741cf8b1cd5dcf028ffcd21d9f"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a INT DEFAULT -1 COLLATE utf8mb4_bin",
+    "text": "ALTER TABLE `t` ADD COLUMN `a` INTEGER DEFAULT ? COLLATE `utf8mb4_bin`",
+    "digest": "88bb4764f29b0f98529bc1f1988f6668aeadd9fe977f28b6f87b44cdc29ae70f"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a INT DEFAULT -1 COLLATE utf8mb4_bin",
+    "text": "ALTER TABLE `t` MODIFY COLUMN `a` INTEGER DEFAULT ? COLLATE `utf8mb4_bin`",
+    "digest": "7342f76dad81fb4bc613f3b9e32d5b467359a8931c497389f73e0a4214916fc7"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN b a INT DEFAULT -1 COLLATE utf8mb4_bin",
+    "text": "ALTER TABLE `t` CHANGE COLUMN `b` `a` INTEGER DEFAULT ? COLLATE `utf8mb4_bin`",
+    "digest": "eb6e6e7463d8a2efdf7655d27c54fcf1187c27335fed67655a90327a61f06f5a"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a DATETIME DEFAULT CURRENT_TIMESTAMP COLLATE utf8mb4_bin)",
+    "text": "CREATE TABLE `t` ( `a` DATETIME DEFAULT NOW COLLATE `utf8mb4_bin` )",
+    "digest": "fcdf823771d7b1e7dcc33dd230351312fcb0d26a1701b351ac9f30e7e28419dd"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a DATETIME DEFAULT CURRENT_TIMESTAMP COLLATE utf8mb4_bin",
+    "text": "ALTER TABLE `t` ADD COLUMN `a` DATETIME DEFAULT NOW COLLATE `utf8mb4_bin`",
+    "digest": "5a42885134bb288004c6b6321f27e5cf64fe1617e4fd2349c6b4e1cf7b8c6f62"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a DATETIME DEFAULT CURRENT_TIMESTAMP COLLATE utf8mb4_bin",
+    "text": "ALTER TABLE `t` MODIFY COLUMN `a` DATETIME DEFAULT NOW COLLATE `utf8mb4_bin`",
+    "digest": "ed978663fed7028980437cc7435fad4dbb05f7f3e6c5090f689b902f1541637a"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN b a DATETIME DEFAULT CURRENT_TIMESTAMP COLLATE utf8mb4_bin",
+    "text": "ALTER TABLE `t` CHANGE COLUMN `b` `a` DATETIME DEFAULT NOW COLLATE `utf8mb4_bin`",
+    "digest": "7fff751e971e6febce3d3c258378778a47716e074278c2edb259e0a1847aee9f"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a VARCHAR(10) DEFAULT CONCAT('a','b') COLLATE utf8mb4_bin)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a VARCHAR(10) DEFAULT CONCAT('a','b') COLLATE utf8mb4_bin",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a VARCHAR(10) DEFAULT CONCAT('a','b') COLLATE utf8mb4_bin",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN b a VARCHAR(10) DEFAULT CONCAT('a','b') COLLATE utf8mb4_bin",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a INT DEFAULT (@x))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a INT DEFAULT (@x)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a INT DEFAULT (@x)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN b a INT DEFAULT (@x)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a INT DEFAULT ((@x)))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a INT DEFAULT ((@x))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a INT DEFAULT ((@x))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN b a INT DEFAULT ((@x))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a VARCHAR(100) DEFAULT (@@sql_mode))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a VARCHAR(100) DEFAULT (@@sql_mode)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a VARCHAR(100) DEFAULT (@@sql_mode)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN b a VARCHAR(100) DEFAULT (@@sql_mode)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a INT DEFAULT (ABS(@x)+1))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a INT DEFAULT (ABS(@x)+1)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a INT DEFAULT (ABS(@x)+1)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN b a INT DEFAULT (ABS(@x)+1)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a INT DEFAULT (CASE WHEN @x IS NULL THEN 1 ELSE 2 END))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a INT DEFAULT (CASE WHEN @x IS NULL THEN 1 ELSE 2 END)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a INT DEFAULT (CASE WHEN @x IS NULL THEN 1 ELSE 2 END)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN b a INT DEFAULT (CASE WHEN @x IS NULL THEN 1 ELSE 2 END)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a INT DEFAULT ((@x:=1)))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a INT DEFAULT ((@x:=1))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a INT DEFAULT ((@x:=1))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN b a INT DEFAULT ((@x:=1))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a VARCHAR(10) DEFAULT ((@x) COLLATE utf8mb4_bin))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a VARCHAR(10) DEFAULT ((@x) COLLATE utf8mb4_bin)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a VARCHAR(10) DEFAULT ((@x) COLLATE utf8mb4_bin)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN b a VARCHAR(10) DEFAULT ((@x) COLLATE utf8mb4_bin)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a INT AS (@x))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a INT AS (@x)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a INT AS (@x)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN b a INT AS (@x)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a INT AS (ABS(@x)))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a INT AS (ABS(@x))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a INT AS (ABS(@x))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN b a INT AS (ABS(@x))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a VARCHAR(100) AS (@@session.sql_mode))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a VARCHAR(100) AS (@@session.sql_mode)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a VARCHAR(100) AS (@@session.sql_mode)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN b a VARCHAR(100) AS (@@session.sql_mode)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a INT AS ((@x:=1)))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a INT AS ((@x:=1))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a INT AS ((@x:=1))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN b a INT AS ((@x:=1))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a VARCHAR(10) AS ((@x) COLLATE utf8mb4_bin))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a VARCHAR(10) AS ((@x) COLLATE utf8mb4_bin)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a VARCHAR(10) AS ((@x) COLLATE utf8mb4_bin)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN b a VARCHAR(10) AS ((@x) COLLATE utf8mb4_bin)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a INT DEFAULT ((SELECT @x)))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a INT DEFAULT ((SELECT @x))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a INT DEFAULT ((SELECT @x))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN b a INT DEFAULT ((SELECT @x))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a INT DEFAULT ((SELECT 1)))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a INT DEFAULT ((SELECT 1))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a INT DEFAULT ((SELECT 1))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN b a INT DEFAULT ((SELECT 1))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a INT AS ((SELECT @x)))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a INT AS ((SELECT @x))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a INT AS ((SELECT @x))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN b a INT AS ((SELECT @x))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a VARCHAR(10) DEFAULT '@x')",
+    "text": "CREATE TABLE `t` ( `a` VARCHARACTER (?) DEFAULT ? )",
+    "digest": "9c0f57421c8862dc2e6b455c8d361c75d93262f0486f22b5d9e072b2b4e22033"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a VARCHAR(10) DEFAULT '@x'",
+    "text": "ALTER TABLE `t` ADD COLUMN `a` VARCHARACTER (?) DEFAULT ?",
+    "digest": "2603febc52f01aff7f7aaaf184e8c665de420a67e8bd5c4a45d032b98104be89"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a VARCHAR(10) DEFAULT '@x'",
+    "text": "ALTER TABLE `t` MODIFY COLUMN `a` VARCHARACTER (?) DEFAULT ?",
+    "digest": "372bfd248aaafffa0cd9cafe6fc853f77a4219b958e2d13a019208c694a739a4"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN b a VARCHAR(10) DEFAULT '@x'",
+    "text": "ALTER TABLE `t` CHANGE COLUMN `b` `a` VARCHARACTER (?) DEFAULT ?",
+    "digest": "e5336f052941729aa82ee1b24c4d9eec97724ef9ef167140478631e4b784ed76"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a VARCHAR(10) AS (CONCAT('@x','')))",
+    "text": "CREATE TABLE `t` ( `a` VARCHARACTER (?) AS ( `CONCAT` (...) ) )",
+    "digest": "47c917c7043f5794717ef5c14bc2453bdf2813622f666c294f5a5b085f8738d7"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a VARCHAR(10) AS (CONCAT('@x',''))",
+    "text": "ALTER TABLE `t` ADD COLUMN `a` VARCHARACTER (?) AS ( `CONCAT` (...) )",
+    "digest": "0d84c6b465e0b963fcdb3dff90525cf0d977a95b1823a41b3bcecf5ec8f5336e"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a VARCHAR(10) AS (CONCAT('@x',''))",
+    "text": "ALTER TABLE `t` MODIFY COLUMN `a` VARCHARACTER (?) AS ( `CONCAT` (...) )",
+    "digest": "d4190683c3d840eef34a9ec91c16838b5cc776703b5eda50da0076fab79c8120"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN b a VARCHAR(10) AS (CONCAT('@x',''))",
+    "text": "ALTER TABLE `t` CHANGE COLUMN `b` `a` VARCHARACTER (?) AS ( `CONCAT` (...) )",
+    "digest": "81558e139c6ba71d320861c70eaf7df2fff8d4d346bb3faa374de6fc1ca259b9"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a INT DEFAULT (ABS(-1)+1))",
+    "text": "CREATE TABLE `t` ( `a` INTEGER DEFAULT ( `ABS` (?) + ? ) )",
+    "digest": "2fc6f6424e79857aeff7cbfe9e1a604102a8869e9568221a5a0d1ec08671f331"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a INT DEFAULT (ABS(-1)+1)",
+    "text": "ALTER TABLE `t` ADD COLUMN `a` INTEGER DEFAULT ( `ABS` (?) + ? )",
+    "digest": "93c73399e5389366448dc94ad7fe2f1f64a03982fec8639adb11dbf7f30238fa"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a INT DEFAULT (ABS(-1)+1)",
+    "text": "ALTER TABLE `t` MODIFY COLUMN `a` INTEGER DEFAULT ( `ABS` (?) + ? )",
+    "digest": "6bf9fd8eaa67fe8f88c129bc2fd47be9ff7d094e2963b940913a823dd398165f"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN b a INT DEFAULT (ABS(-1)+1)",
+    "text": "ALTER TABLE `t` CHANGE COLUMN `b` `a` INTEGER DEFAULT ( `ABS` (?) + ? )",
+    "digest": "b2c128282a7ee117eed448b768aad73c71c7dc85203ffff3c6c7b8002ed42677"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "CREATE TABLE t(a DATETIME DEFAULT NOW())",
+    "text": "CREATE TABLE `t` ( `a` DATETIME DEFAULT NOW ( ) )",
+    "digest": "f4fa495bc4fee1e790729add1dd114d90bbcba4e53951e0ca75b0a21b4286aec"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "CREATE TABLE t(a DATETIME ON UPDATE NOW())",
+    "text": "CREATE TABLE `t` ( `a` DATETIME ON UPDATE NOW ( ) )",
+    "digest": "d3f96defeb188578c40c4cfcee1b6d046bdcfc7f0bfa7b7562e03aa854c4e371"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a DATETIME DEFAULT NOW ())",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a DATETIME ON UPDATE NOW ())",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "CREATE TABLE t(a DATETIME DEFAULT NOW ())",
+    "text": "CREATE TABLE `t` ( `a` DATETIME DEFAULT NOW ( ) )",
+    "digest": "f4fa495bc4fee1e790729add1dd114d90bbcba4e53951e0ca75b0a21b4286aec"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "CREATE TABLE t(a DATETIME ON UPDATE NOW ())",
+    "text": "CREATE TABLE `t` ( `a` DATETIME ON UPDATE NOW ( ) )",
+    "digest": "d3f96defeb188578c40c4cfcee1b6d046bdcfc7f0bfa7b7562e03aa854c4e371"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a DATETIME DEFAULT NOW\t())",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a DATETIME ON UPDATE NOW\t())",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "CREATE TABLE t(a DATETIME DEFAULT NOW\t())",
+    "text": "CREATE TABLE `t` ( `a` DATETIME DEFAULT NOW ( ) )",
+    "digest": "f4fa495bc4fee1e790729add1dd114d90bbcba4e53951e0ca75b0a21b4286aec"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "CREATE TABLE t(a DATETIME ON UPDATE NOW\t())",
+    "text": "CREATE TABLE `t` ( `a` DATETIME ON UPDATE NOW ( ) )",
+    "digest": "d3f96defeb188578c40c4cfcee1b6d046bdcfc7f0bfa7b7562e03aa854c4e371"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a DATETIME DEFAULT NOW/**/())",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a DATETIME ON UPDATE NOW/**/())",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "CREATE TABLE t(a DATETIME DEFAULT NOW/**/())",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "CREATE TABLE t(a DATETIME ON UPDATE NOW/**/())",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a DATETIME DEFAULT NOW /* c */ ())",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a DATETIME ON UPDATE NOW /* c */ ())",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "CREATE TABLE t(a DATETIME DEFAULT NOW /* c */ ())",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "CREATE TABLE t(a DATETIME ON UPDATE NOW /* c */ ())",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a DATETIME DEFAULT `now`())",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a DATETIME ON UPDATE `now`())",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "CREATE TABLE t(a DATETIME DEFAULT `now`())",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "CREATE TABLE t(a DATETIME ON UPDATE `now`())",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a DATETIME DEFAULT mysql.now())",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a DATETIME ON UPDATE mysql.now())",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "CREATE TABLE t(a DATETIME DEFAULT mysql.now())",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "CREATE TABLE t(a DATETIME ON UPDATE mysql.now())",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a DATETIME DEFAULT CURRENT_TIMESTAMP ())",
+    "text": "CREATE TABLE `t` ( `a` DATETIME DEFAULT NOW ( ) )",
+    "digest": "f4fa495bc4fee1e790729add1dd114d90bbcba4e53951e0ca75b0a21b4286aec"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a DATETIME ON UPDATE CURRENT_TIMESTAMP ())",
+    "text": "CREATE TABLE `t` ( `a` DATETIME ON UPDATE NOW ( ) )",
+    "digest": "d3f96defeb188578c40c4cfcee1b6d046bdcfc7f0bfa7b7562e03aa854c4e371"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "CREATE TABLE t(a DATETIME DEFAULT CURRENT_TIMESTAMP ())",
+    "text": "CREATE TABLE `t` ( `a` DATETIME DEFAULT NOW ( ) )",
+    "digest": "f4fa495bc4fee1e790729add1dd114d90bbcba4e53951e0ca75b0a21b4286aec"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "CREATE TABLE t(a DATETIME ON UPDATE CURRENT_TIMESTAMP ())",
+    "text": "CREATE TABLE `t` ( `a` DATETIME ON UPDATE NOW ( ) )",
+    "digest": "d3f96defeb188578c40c4cfcee1b6d046bdcfc7f0bfa7b7562e03aa854c4e371"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a DATETIME DEFAULT CURRENT_TIMESTAMP/**/())",
+    "text": "CREATE TABLE `t` ( `a` DATETIME DEFAULT NOW ( ) )",
+    "digest": "f4fa495bc4fee1e790729add1dd114d90bbcba4e53951e0ca75b0a21b4286aec"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a DATETIME ON UPDATE CURRENT_TIMESTAMP/**/())",
+    "text": "CREATE TABLE `t` ( `a` DATETIME ON UPDATE NOW ( ) )",
+    "digest": "d3f96defeb188578c40c4cfcee1b6d046bdcfc7f0bfa7b7562e03aa854c4e371"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "CREATE TABLE t(a DATETIME DEFAULT CURRENT_TIMESTAMP/**/())",
+    "text": "CREATE TABLE `t` ( `a` DATETIME DEFAULT NOW ( ) )",
+    "digest": "f4fa495bc4fee1e790729add1dd114d90bbcba4e53951e0ca75b0a21b4286aec"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "CREATE TABLE t(a DATETIME ON UPDATE CURRENT_TIMESTAMP/**/())",
+    "text": "CREATE TABLE `t` ( `a` DATETIME ON UPDATE NOW ( ) )",
+    "digest": "d3f96defeb188578c40c4cfcee1b6d046bdcfc7f0bfa7b7562e03aa854c4e371"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a DATETIME DEFAULT LOCALTIME ())",
+    "text": "CREATE TABLE `t` ( `a` DATETIME DEFAULT NOW ( ) )",
+    "digest": "f4fa495bc4fee1e790729add1dd114d90bbcba4e53951e0ca75b0a21b4286aec"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a DATETIME ON UPDATE LOCALTIME ())",
+    "text": "CREATE TABLE `t` ( `a` DATETIME ON UPDATE NOW ( ) )",
+    "digest": "d3f96defeb188578c40c4cfcee1b6d046bdcfc7f0bfa7b7562e03aa854c4e371"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "CREATE TABLE t(a DATETIME DEFAULT LOCALTIME ())",
+    "text": "CREATE TABLE `t` ( `a` DATETIME DEFAULT NOW ( ) )",
+    "digest": "f4fa495bc4fee1e790729add1dd114d90bbcba4e53951e0ca75b0a21b4286aec"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "CREATE TABLE t(a DATETIME ON UPDATE LOCALTIME ())",
+    "text": "CREATE TABLE `t` ( `a` DATETIME ON UPDATE NOW ( ) )",
+    "digest": "d3f96defeb188578c40c4cfcee1b6d046bdcfc7f0bfa7b7562e03aa854c4e371"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT @x,@@session.sql_mode",
+    "text": "SELECT @? , @@SESSION . `sql_mode`",
+    "digest": "9804ef0a3a04bd6b10fee4c9082bfb5629ac484d0fec7668cc0606ec005c7999"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT (SELECT @x)",
+    "text": "SELECT ( SELECT @? )",
+    "digest": "c35842075495f58f7cb30cf61205bf11d4e478150c36289ee10165bc80a2597b"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a INT CHECK(@x>0))",
+    "text": "CREATE TABLE `t` ( `a` INTEGER CHECK ( @? > ? ) )",
+    "digest": "15b1e702bd0dbf203774142e88669977b2a6e495b083620f839ce05a81587b72"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a INT DEFAULT (CASE WHEN 1 THEN 7 ELSE 9 END))",
+    "text": "CREATE TABLE `t` ( `a` INTEGER DEFAULT ( CASE WHEN ? THEN ? ELSE ? END ) )",
+    "digest": "229362fd21de48a234a2cc33dea839f7c0b18f5bf3d9e1e16aae1f8717dc1c66"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a INT NOT NULL DEFAULT NULL COLLATE utf8mb4_bin)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a INT NOT NULL DEFAULT NULL COLLATE utf8mb4_bin",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a INT NOT NULL DEFAULT NULL COLLATE utf8mb4_bin",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN b a INT NOT NULL DEFAULT NULL COLLATE utf8mb4_bin",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a INT AUTO_INCREMENT DEFAULT NULL COLLATE utf8mb4_bin)",
+    "text": "CREATE TABLE `t` ( `a` INTEGER AUTO_INCREMENT DEFAULT ? COLLATE `utf8mb4_bin` )",
+    "digest": "74721b4c1b1f33777b7ea1bb292a685e628ad27aabdcbfd424fd098281916923"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a INT AUTO_INCREMENT DEFAULT NULL COLLATE utf8mb4_bin",
+    "text": "ALTER TABLE `t` ADD COLUMN `a` INTEGER AUTO_INCREMENT DEFAULT ? COLLATE `utf8mb4_bin`",
+    "digest": "48a6fa0fcea89a02e28d28b31357d17bd2aa4d16a50d80ec7544257aea0fe037"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a INT AUTO_INCREMENT DEFAULT NULL COLLATE utf8mb4_bin",
+    "text": "ALTER TABLE `t` MODIFY COLUMN `a` INTEGER AUTO_INCREMENT DEFAULT ? COLLATE `utf8mb4_bin`",
+    "digest": "101c9f9d3548975eb29acc8da63774300d6190840b90f529d4d7d98148a08e83"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN b a INT AUTO_INCREMENT DEFAULT NULL COLLATE utf8mb4_bin",
+    "text": "ALTER TABLE `t` CHANGE COLUMN `b` `a` INTEGER AUTO_INCREMENT DEFAULT ? COLLATE `utf8mb4_bin`",
+    "digest": "d3e12707cb71c0662ce92d6c9c2576aa40a0bd61f2549eb632f5a67e96b53482"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a INT DEFAULT -1 COLLATE utf8mb4_bin COLLATE utf8mb4_general_ci)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a INT DEFAULT -1 COLLATE utf8mb4_bin COLLATE utf8mb4_general_ci",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a INT DEFAULT -1 COLLATE utf8mb4_bin COLLATE utf8mb4_general_ci",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN b a INT DEFAULT -1 COLLATE utf8mb4_bin COLLATE utf8mb4_general_ci",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a VARCHAR(10) DEFAULT ('a' COLLATE utf8mb4_bin) COLLATE utf8mb4_general_ci)",
+    "text": "CREATE TABLE `t` ( `a` VARCHARACTER (?) DEFAULT ( ? COLLATE `utf8mb4_bin` ) COLLATE `utf8mb4_general_ci` )",
+    "digest": "9586313b7d0c841c8d7ae397645be24a216bd439fecc8fe88ff6cbfb6712008b"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a VARCHAR(10) DEFAULT ('a' COLLATE utf8mb4_bin) COLLATE utf8mb4_general_ci",
+    "text": "ALTER TABLE `t` ADD COLUMN `a` VARCHARACTER (?) DEFAULT ( ? COLLATE `utf8mb4_bin` ) COLLATE `utf8mb4_general_ci`",
+    "digest": "35b73ec535a4ae5864706779bb763b26b0fd46d3509ae7992de4d21b318c504a"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a VARCHAR(10) DEFAULT ('a' COLLATE utf8mb4_bin) COLLATE utf8mb4_general_ci",
+    "text": "ALTER TABLE `t` MODIFY COLUMN `a` VARCHARACTER (?) DEFAULT ( ? COLLATE `utf8mb4_bin` ) COLLATE `utf8mb4_general_ci`",
+    "digest": "9949dcdd7e01417c0686ceb178f3cb59ce31d1bc0b4bac77c224c6c1b9830df6"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN b a VARCHAR(10) DEFAULT ('a' COLLATE utf8mb4_bin) COLLATE utf8mb4_general_ci",
+    "text": "ALTER TABLE `t` CHANGE COLUMN `b` `a` VARCHARACTER (?) DEFAULT ( ? COLLATE `utf8mb4_bin` ) COLLATE `utf8mb4_general_ci`",
+    "digest": "4f21961d2c9e519c6f7adfec40e619ea16fb754d07979a0ba2fec36b81c52d1c"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a INT AS (CASE WHEN 1 THEN 7 ELSE @x END))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a INT AS (CASE WHEN 1 THEN 7 ELSE @x END)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a INT AS (CASE WHEN 1 THEN 7 ELSE @x END)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN b a INT AS (CASE WHEN 1 THEN 7 ELSE @x END)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a INT DEFAULT (CAST(@x AS SIGNED)))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a INT DEFAULT (CAST(@x AS SIGNED))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a INT DEFAULT (CAST(@x AS SIGNED))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN b a INT DEFAULT (CAST(@x AS SIGNED))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a INT AS (a+@x))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a INT AS (a+@x)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a INT AS (a+@x)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN b a INT AS (a+@x)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a INT AS ((SELECT 1)))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a INT AS ((SELECT 1))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a INT AS ((SELECT 1))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN b a INT AS ((SELECT 1))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a INT DEFAULT (CASE WHEN 1 THEN (SELECT @x) ELSE 0 END))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a INT DEFAULT (CASE WHEN 1 THEN (SELECT @x) ELSE 0 END)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a INT DEFAULT (CASE WHEN 1 THEN (SELECT @x) ELSE 0 END)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN b a INT DEFAULT (CASE WHEN 1 THEN (SELECT @x) ELSE 0 END)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a INT AS (`@x`+1))",
+    "text": "CREATE TABLE `t` ( `a` INTEGER AS ( `@x` + ? ) )",
+    "digest": "8e8a958f471cad5720dc33c18d3f281bdec08b2862975dd82e94db5502ee3002"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a INT AS (`@x`+1)",
+    "text": "ALTER TABLE `t` ADD COLUMN `a` INTEGER AS ( `@x` + ? )",
+    "digest": "2944449712b4d9da66e49c5f7aa1a7d1b0489d6a49051dbe85096f8bd9f17f5e"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a INT AS (`@x`+1)",
+    "text": "ALTER TABLE `t` MODIFY COLUMN `a` INTEGER AS ( `@x` + ? )",
+    "digest": "ac0ccfe0cccde2d205bc757170b2a7d7e52141b0749a68fcb82a5bfa63dd6885"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN b a INT AS (`@x`+1)",
+    "text": "ALTER TABLE `t` CHANGE COLUMN `b` `a` INTEGER AS ( `@x` + ? )",
+    "digest": "0fdc13abebb4e5dd7166acdb3f40f2e76e7c95a9afd8b15021a33a7439841be0"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a VARCHAR(10) DEFAULT '@@session.sql_mode' COLLATE utf8mb4_bin)",
+    "text": "CREATE TABLE `t` ( `a` VARCHARACTER (?) DEFAULT ? COLLATE `utf8mb4_bin` )",
+    "digest": "6aafbc7984e4970b719309a21cb65aab8d9283ff43e0873bd6d929bd8c63c513"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a VARCHAR(10) DEFAULT '@@session.sql_mode' COLLATE utf8mb4_bin",
+    "text": "ALTER TABLE `t` ADD COLUMN `a` VARCHARACTER (?) DEFAULT ? COLLATE `utf8mb4_bin`",
+    "digest": "179bb5103cadc21b8ff4fe0c86cefb5cbedbf35f785773462a1ca4276a487014"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a VARCHAR(10) DEFAULT '@@session.sql_mode' COLLATE utf8mb4_bin",
+    "text": "ALTER TABLE `t` MODIFY COLUMN `a` VARCHARACTER (?) DEFAULT ? COLLATE `utf8mb4_bin`",
+    "digest": "2711a6e5fb914c825138e8421e2f2e55b05370e2d010cb68d61c26bfa6391672"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN b a VARCHAR(10) DEFAULT '@@session.sql_mode' COLLATE utf8mb4_bin",
+    "text": "ALTER TABLE `t` CHANGE COLUMN `b` `a` VARCHARACTER (?) DEFAULT ? COLLATE `utf8mb4_bin`",
+    "digest": "7778429a7590ffc6722df99adde2b7e1f462eede230c689f99da4c7454eb7e95"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a DATETIME DEFAULT `current_timestamp`())",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a DATETIME ON UPDATE `current_timestamp`())",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "CREATE TABLE t(a DATETIME DEFAULT `current_timestamp`())",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "CREATE TABLE t(a DATETIME ON UPDATE `current_timestamp`())",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a DATETIME DEFAULT `localtime`())",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a DATETIME ON UPDATE `localtime`())",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "CREATE TABLE t(a DATETIME DEFAULT `localtime`())",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "CREATE TABLE t(a DATETIME ON UPDATE `localtime`())",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a DATETIME DEFAULT `localtimestamp`())",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a DATETIME ON UPDATE `localtimestamp`())",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "CREATE TABLE t(a DATETIME DEFAULT `localtimestamp`())",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "CREATE TABLE t(a DATETIME ON UPDATE `localtimestamp`())",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a DATETIME DEFAULT NOW -- c\n())",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a DATETIME ON UPDATE NOW -- c\n())",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "CREATE TABLE t(a DATETIME DEFAULT NOW -- c\n())",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "CREATE TABLE t(a DATETIME ON UPDATE NOW -- c\n())",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a DATETIME DEFAULT NOW # c\n())",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a DATETIME ON UPDATE NOW # c\n())",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "CREATE TABLE t(a DATETIME DEFAULT NOW # c\n())",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "CREATE TABLE t(a DATETIME ON UPDATE NOW # c\n())",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a DATETIME DEFAULT NOW/*!00000 */())",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a DATETIME ON UPDATE NOW/*!00000 */())",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "CREATE TABLE t(a DATETIME DEFAULT NOW/*!00000 */())",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "CREATE TABLE t(a DATETIME ON UPDATE NOW/*!00000 */())",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a DATETIME DEFAULT (NOW()))",
+    "text": "CREATE TABLE `t` ( `a` DATETIME DEFAULT ( NOW ( ) ) )",
+    "digest": "6df268456dd0358b0b252774e1acbea8e8da8d0dd675e78a6ec252f309064115"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a DATETIME AS (NOW()))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "CREATE TABLE t(a DATETIME DEFAULT (NOW()))",
+    "text": "CREATE TABLE `t` ( `a` DATETIME DEFAULT ( NOW ( ) ) )",
+    "digest": "6df268456dd0358b0b252774e1acbea8e8da8d0dd675e78a6ec252f309064115"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "CREATE TABLE t(a DATETIME AS (NOW()))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a DATETIME DEFAULT (NOW ()))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a DATETIME AS (NOW ()))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "CREATE TABLE t(a DATETIME DEFAULT (NOW ()))",
+    "text": "CREATE TABLE `t` ( `a` DATETIME DEFAULT ( NOW ( ) ) )",
+    "digest": "6df268456dd0358b0b252774e1acbea8e8da8d0dd675e78a6ec252f309064115"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "CREATE TABLE t(a DATETIME AS (NOW ()))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a DATETIME DEFAULT (NOW/**/()))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a DATETIME AS (NOW/**/()))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "CREATE TABLE t(a DATETIME DEFAULT (NOW/**/()))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "CREATE TABLE t(a DATETIME AS (NOW/**/()))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a DATETIME DEFAULT (`now`()))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a DATETIME AS (`now`()))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "CREATE TABLE t(a DATETIME DEFAULT (`now`()))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "CREATE TABLE t(a DATETIME AS (`now`()))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a DATETIME DEFAULT (`current_timestamp`()))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a DATETIME AS (`current_timestamp`()))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "CREATE TABLE t(a DATETIME DEFAULT (`current_timestamp`()))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "CREATE TABLE t(a DATETIME AS (`current_timestamp`()))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT now/**/(1)",
+    "text": "SELECT `now` (?)",
+    "digest": "199d48b26b57d58d832b3c8955d9b912be4b1c774ac018fe8ada871088912fb3"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT count/**/(1)",
+    "text": "SELECT `count` (?)",
+    "digest": "1403e23b9be892048d7daeb20096024af0585a55d64c8f981fdc8236b925ff8a"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT sum/**/(1)",
+    "text": "SELECT `sum` (?)",
+    "digest": "5421d3e519f1699e495aa4013d7e2a4f55e8482de194f58689b0b7008b5b52b9"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT cast/**/(1)",
+    "text": "SELECT `cast` (?)",
+    "digest": "024692601bb32c87b084636d3db443d9433abfdea3578ec30599bbe3d9d58991"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT current_timestamp/**/(1)",
+    "text": "SELECT NOW (?)",
+    "digest": "16bba19c9575285d052c97016ed2accec3e724a7b1a101b82b4d5f99121a5388"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT now/**/(1)",
+    "text": "SELECT `now` (?)",
+    "digest": "199d48b26b57d58d832b3c8955d9b912be4b1c774ac018fe8ada871088912fb3"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT count/**/(1)",
+    "text": "SELECT `count` (?)",
+    "digest": "1403e23b9be892048d7daeb20096024af0585a55d64c8f981fdc8236b925ff8a"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT sum/**/(1)",
+    "text": "SELECT `sum` (?)",
+    "digest": "5421d3e519f1699e495aa4013d7e2a4f55e8482de194f58689b0b7008b5b52b9"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT cast/**/(1)",
+    "text": "SELECT `cast` (?)",
+    "digest": "024692601bb32c87b084636d3db443d9433abfdea3578ec30599bbe3d9d58991"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT current_timestamp/**/(1)",
+    "text": "SELECT NOW (?)",
+    "digest": "16bba19c9575285d052c97016ed2accec3e724a7b1a101b82b4d5f99121a5388"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ALTER COLUMN a SET DEFAULT (@x)",
+    "text": "ALTER TABLE `t` ALTER COLUMN `a` SET DEFAULT ( @? )",
+    "digest": "0c60d3fd02826f9dda3929d6b2fec22e5ca24a0df610bf62913a3ca90ab205dc"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ALTER COLUMN a SET DEFAULT (@@sql_mode)",
+    "text": "ALTER TABLE `t` ALTER COLUMN `a` SET DEFAULT ( @@`sql_mode` )",
+    "digest": "f2083601a9218550f939dac466ccfcca81975bdefeddb178b9dd6a2ed0678717"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ALTER COLUMN a SET DEFAULT (ABS(@x))",
+    "text": "ALTER TABLE `t` ALTER COLUMN `a` SET DEFAULT ( `ABS` ( @? ) )",
+    "digest": "441f43704614d1e3477710199368d62808d6e83497e99de530b8b52c2a631873"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ALTER COLUMN a SET DEFAULT ((@x:=1))",
+    "text": "ALTER TABLE `t` ALTER COLUMN `a` SET DEFAULT ( ( @? := ? ) )",
+    "digest": "a8fbb3a47dff760e1c6fad6c85b334f6237b82dc79b561d17b294aaad7034904"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ALTER COLUMN a SET DEFAULT ((SELECT @x))",
+    "text": "ALTER TABLE `t` ALTER COLUMN `a` SET DEFAULT ( ( SELECT @? ) )",
+    "digest": "6ff94916687dacb4bd57fb42758ffcae79fcee0da13018e7d2fe02ff775e69a0"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ALTER COLUMN a SET DEFAULT (ABS(-1))",
+    "text": "ALTER TABLE `t` ALTER COLUMN `a` SET DEFAULT ( `ABS` (?) )",
+    "digest": "fe6e2f6d50afb16bd122e9ba900c2e0f7d419ea7ecc5b6b2324e8c411a20eefe"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ALTER COLUMN a SET DEFAULT '@x'",
+    "text": "ALTER TABLE `t` ALTER COLUMN `a` SET DEFAULT ?",
+    "digest": "98e9a4690d7e4cbff28f3a5521d9fedba5a31bc56961beddd795a62ea0104b59"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ALTER COLUMN a SET DEFAULT CURRENT_TIMESTAMP",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ALTER COLUMN a SET DEFAULT NOW ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ALTER COLUMN a DROP DEFAULT",
+    "text": "ALTER TABLE `t` ALTER COLUMN `a` DROP DEFAULT",
+    "digest": "0256d4a1cc7149c7a3a5feba9d957c55657f1189300fc89956dc374774ff5380"
   }
 ]
