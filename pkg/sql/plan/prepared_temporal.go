@@ -89,7 +89,7 @@ func inferPreparedCalendarResult(source types.Type, known bool, value any, calen
 	if known && value == nil {
 		return date
 	}
-	if source.Oid == types.T_datetime {
+	if source.Oid == types.T_datetime || source.Oid == types.T_timestamp {
 		return target
 	}
 	if source.Oid.IsMySQLString() && known {

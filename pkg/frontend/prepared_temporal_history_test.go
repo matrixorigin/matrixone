@@ -16,8 +16,10 @@ package frontend
 
 import (
 	"context"
+	"encoding/binary"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -29,6 +31,82 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/stretchr/testify/require"
 )
+
+func TestPreparedCalendarTypedSources(t *testing.T) {
+	for _, protocol := range []string{"sql", "binary"} {
+		for _, source := range []struct {
+			name string
+			oid  types.T
+			wire defines.MysqlType
+		}{
+			{"date", types.T_date, defines.MYSQL_TYPE_DATE},
+			{"datetime", types.T_datetime, defines.MYSQL_TYPE_DATETIME},
+			{"timestamp", types.T_timestamp, defines.MYSQL_TYPE_TIMESTAMP},
+		} {
+			for _, operation := range []struct{ expression, want string }{
+				{"date_add(?, interval 1 day)", "2024-02-29"},
+				{"date_sub(?, interval 1 month)", "2024-01-28"},
+			} {
+				t.Run(protocol+"/"+source.name+"/"+operation.expression, func(t *testing.T) {
+					// Each source starts with a fresh handle: an earlier DATETIME
+					// execution must not hide incorrect first-execution inference.
+					query := "select " + operation.expression + " as v"
+					ses, prepared, cw, ec := newPreparedExecuteEnvForSQL(t, 25304, query)
+					prepared.proc = cw.proc
+					cw.proc.GetSessionInfo().TimeZone = time.UTC
+					t.Cleanup(func() { cw.proc.SetPrepareParams(nil); ses.Close() })
+					var execute *plan.Execute
+					if protocol == "binary" {
+						proto, _, scratch := newBinaryPrepareProtocolTestCase(t, query)
+						t.Cleanup(scratch.Close)
+						packet := buildDateExecutePacketForParams([]defines.MysqlType{source.wire}, 2024, 2, 28)
+						if source.oid != types.T_date {
+							packet[9] = 11
+							packet = append(packet, 12, 34, 56)
+							packet = binary.LittleEndian.AppendUint32(packet, 123456)
+						}
+						require.NoError(t, proto.ParseExecuteData(ec.reqCtx, cw.proc, prepared, packet, 0))
+					} else {
+						ec.input.isBinaryProtExecute = false
+						cw.binaryPrepare = false
+						value := "2024-02-28"
+						if source.oid != types.T_date {
+							value += " 12:34:56.123456"
+						}
+						// SELECT INTO stores the scalar representation together with
+						// its source type; exercise the same session variable owner.
+						require.NoError(t, ses.setUserDefinedVarWithType("calendar_source", value, "", false, plan.Type{Id: int32(source.oid), Scale: 6}))
+						execute = &plan.Execute{Name: prepared.Name, Args: []*plan.Expr{{Expr: &plan.Expr_V{V: &plan.VarRef{Name: "calendar_source"}}}}}
+					}
+					_, p, stmt, _, owned, err := initExecuteStmtParam(ec, ses, cw, execute, prepared.Name)
+					if owned && stmt != nil {
+						defer stmt.Free()
+					}
+					require.NoError(t, err)
+					require.Len(t, cw.paramBindings, 1)
+					require.Equal(t, source.oid, cw.paramBindings[0].Type.Oid)
+					q := p.GetQuery()
+					expr := q.Nodes[q.Steps[len(q.Steps)-1]].ProjectList[0]
+					wantType, want := types.T_date, operation.want
+					if source.oid != types.T_date {
+						wantType = types.T_datetime
+						want += " 12:34:56.123456"
+					}
+					require.Equal(t, wantType, types.T(expr.Typ.Id))
+					result, free, err := colexec.GetReadonlyResultFromExpression(cw.proc, expr, []*batch.Batch{batch.EmptyForConstFoldBatch})
+					require.NoError(t, err)
+					defer free()
+					if wantType == types.T_date {
+						require.Equal(t, want, vector.GetFixedAtWithTypeCheck[types.Date](result, 0).String())
+					} else {
+						require.Equal(t, int32(6), expr.Typ.Scale)
+						require.Equal(t, want, vector.GetFixedAtWithTypeCheck[types.Datetime](result, 0).String2(6))
+					}
+				})
+			}
+		}
+	}
+}
 
 func TestPreparedTemporalHistoryPublicationAndCache(t *testing.T) {
 	ses, prepared, cw, ec := newPreparedExecuteEnvForSQL(t, 25302, "select date_add(?, interval 1 day) as v")

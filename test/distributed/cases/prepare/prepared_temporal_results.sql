@@ -102,6 +102,28 @@ EXECUTE p_compact USING @d, @d;
 DEALLOCATE PREPARE p_compact;
 DEALLOCATE PREPARE p_date_day;
 
+-- Typed TIMESTAMP variables carry a clock just like DATETIME. Each source uses
+-- a fresh handle so previous widening cannot mask first-execution inference.
+CREATE TABLE calendar_sources (d DATE, dt DATETIME(6), ts TIMESTAMP(6));
+INSERT INTO calendar_sources VALUES ('2024-02-28', '2024-02-28 12:34:56.123456', '2024-02-28 12:34:56.123456');
+SELECT d, dt, ts INTO @calendar_d, @calendar_dt, @calendar_ts FROM calendar_sources;
+PREPARE p_typed FROM 'SELECT CAST(DATE_ADD(?, INTERVAL 1 DAY) AS CHAR) AS added, CAST(DATE_SUB(?, INTERVAL 1 MONTH) AS CHAR) AS subtracted';
+EXECUTE p_typed USING @calendar_d, @calendar_d;
+DEALLOCATE PREPARE p_typed;
+PREPARE p_typed FROM 'SELECT CAST(DATE_ADD(?, INTERVAL 1 DAY) AS CHAR) AS added, CAST(DATE_SUB(?, INTERVAL 1 MONTH) AS CHAR) AS subtracted';
+EXECUTE p_typed USING @calendar_dt, @calendar_dt;
+DEALLOCATE PREPARE p_typed;
+PREPARE p_typed FROM 'SELECT CAST(DATE_ADD(?, INTERVAL 1 DAY) AS CHAR) AS added, CAST(DATE_SUB(?, INTERVAL 1 MONTH) AS CHAR) AS subtracted';
+EXECUTE p_typed USING @calendar_ts, @calendar_ts;
+DEALLOCATE PREPARE p_typed;
+PREPARE p_typed_ctas FROM 'CREATE TABLE calendar_timestamp_copy AS SELECT DATE_ADD(?, INTERVAL 1 DAY) AS v';
+EXECUTE p_typed_ctas USING @calendar_ts;
+SELECT column_type, datetime_precision FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'calendar_timestamp_copy';
+SELECT CAST(v AS CHAR) AS v FROM calendar_timestamp_copy;
+DEALLOCATE PREPARE p_typed_ctas;
+DROP TABLE calendar_timestamp_copy;
+DROP TABLE calendar_sources;
+
 -- SELECT retains a widened family for this handle; a fresh handle starts at DATE.
 PREPARE p_day_select FROM 'SELECT DATE_ADD(?, INTERVAL 1 DAY) AS v';
 SET @d = '2024-02-28';

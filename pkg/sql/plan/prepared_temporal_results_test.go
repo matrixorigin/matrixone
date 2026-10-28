@@ -66,6 +66,8 @@ func TestPreparedTemporalResultContracts(t *testing.T) {
 		{"interval operator calendar subtract", "? - interval 1 month", "2024-01-31 12:34:56.123456", "2023-12-31 12:34:56.123456", types.T_varchar.ToType(), types.T_datetime, 6},
 		{"interval operator explicit datetime", "cast(? as datetime(6)) + interval 1 day", "2024-01-31 12:34:56.123456", "2024-02-01 12:34:56.123456", types.T_varchar.ToType(), types.T_datetime, 6},
 		{"interval operator time add", "? + interval 1 hour", "2024-01-31 12:34:56.123456", "2024-01-31 13:34:56.123456", types.T_varchar.ToType(), types.T_datetime, 6},
+		{"date add typed timestamp", "date_add(?, interval 1 day)", "2024-02-28 12:34:56.123456", "2024-02-29 12:34:56.123456", types.New(types.T_timestamp, 6, 6), types.T_datetime, 6},
+		{"date sub typed timestamp", "date_sub(?, interval 1 month)", "2024-02-28 12:34:56.123456", "2024-01-28 12:34:56.123456", types.New(types.T_timestamp, 6, 6), types.T_datetime, 6},
 		{"date add explicit date", "date_add(cast(? as date), interval 1 hour)", "2024-01-31 12:34:56.123456", "2024-01-31 01:00:00", types.T_varchar.ToType(), types.T_datetime, 0},
 		{"date add time unit", "date_add(?, interval 1 hour)", "2024-01-31 12:34:56.123456", "2024-01-31 13:34:56.123456", types.T_varchar.ToType(), types.T_datetime, 6},
 		{"timestampadd microsecond", "timestampadd(microsecond, 1, ?)", "2024-01-31 12:34:56.000001", "2024-01-31 12:34:56.000002", types.T_varchar.ToType(), types.T_datetime, 6},

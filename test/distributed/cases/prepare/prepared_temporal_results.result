@@ -139,6 +139,35 @@ EXECUTE p_compact USING @d, @d;
 2024-02-29 23:30:00.999999  ¦  2024-01-28 23:30:00.999999
 DEALLOCATE PREPARE p_compact;
 DEALLOCATE PREPARE p_date_day;
+CREATE TABLE calendar_sources (d DATE, dt DATETIME(6), ts TIMESTAMP(6));
+INSERT INTO calendar_sources VALUES ('2024-02-28', '2024-02-28 12:34:56.123456', '2024-02-28 12:34:56.123456');
+SELECT d, dt, ts INTO @calendar_d, @calendar_dt, @calendar_ts FROM calendar_sources;
+PREPARE p_typed FROM 'SELECT CAST(DATE_ADD(?, INTERVAL 1 DAY) AS CHAR) AS added, CAST(DATE_SUB(?, INTERVAL 1 MONTH) AS CHAR) AS subtracted';
+EXECUTE p_typed USING @calendar_d, @calendar_d;
+➤ added[12,65535,0]  ¦  subtracted[12,65535,0]  𝄀
+2024-02-29  ¦  2024-01-28
+DEALLOCATE PREPARE p_typed;
+PREPARE p_typed FROM 'SELECT CAST(DATE_ADD(?, INTERVAL 1 DAY) AS CHAR) AS added, CAST(DATE_SUB(?, INTERVAL 1 MONTH) AS CHAR) AS subtracted';
+EXECUTE p_typed USING @calendar_dt, @calendar_dt;
+➤ added[12,65535,0]  ¦  subtracted[12,65535,0]  𝄀
+2024-02-29 12:34:56.123456  ¦  2024-01-28 12:34:56.123456
+DEALLOCATE PREPARE p_typed;
+PREPARE p_typed FROM 'SELECT CAST(DATE_ADD(?, INTERVAL 1 DAY) AS CHAR) AS added, CAST(DATE_SUB(?, INTERVAL 1 MONTH) AS CHAR) AS subtracted';
+EXECUTE p_typed USING @calendar_ts, @calendar_ts;
+➤ added[12,65535,0]  ¦  subtracted[12,65535,0]  𝄀
+2024-02-29 12:34:56.123456  ¦  2024-01-28 12:34:56.123456
+DEALLOCATE PREPARE p_typed;
+PREPARE p_typed_ctas FROM 'CREATE TABLE calendar_timestamp_copy AS SELECT DATE_ADD(?, INTERVAL 1 DAY) AS v';
+EXECUTE p_typed_ctas USING @calendar_ts;
+SELECT column_type, datetime_precision FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'calendar_timestamp_copy';
+➤ column_type[12,65535,0]  ¦  datetime_precision[-5,64,0]  𝄀
+datetime(6)  ¦  6
+SELECT CAST(v AS CHAR) AS v FROM calendar_timestamp_copy;
+➤ v[12,65535,0]  𝄀
+2024-02-29 12:34:56.123456
+DEALLOCATE PREPARE p_typed_ctas;
+DROP TABLE calendar_timestamp_copy;
+DROP TABLE calendar_sources;
 PREPARE p_day_select FROM 'SELECT DATE_ADD(?, INTERVAL 1 DAY) AS v';
 SET @d = '2024-02-28';
 EXECUTE p_day_select USING @d;
