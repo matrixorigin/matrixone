@@ -1606,7 +1606,19 @@ func (s *Scope) alterTableCopy(c *Compile, cleanup *alterAutoIncrementResetClean
 			if baseCtx == nil {
 				baseCtx = c.proc.GetTopContext()
 			}
-			replayCtx, err := plan2.WithAlterTableDDLReplay(baseCtx, dbName, sourceTableDef, qry.CopyTableDef)
+			// The live source refresh above returns stored catalog expressions,
+			// while the planned replacement already uses execution-owned repairs.
+			// Replay must compare the same binding era or an unchanged folded
+			// DEFAULT would be rebound under the ALTER session's settings.
+			replaySource := plan2.CloneTableDefForPlan(sourceTableDef, true)
+			bindCtx := &compilerContext{ctx: baseCtx, defaultDB: dbName, engine: c.e, proc: c.proc}
+			if err := plan2.MigrateLegacyFloatStringTableDef(bindCtx, replaySource); err != nil {
+				return err
+			}
+			if err := plan2.MigrateLegacyCatalogTableDef(baseCtx, c.proc, replaySource); err != nil {
+				return err
+			}
+			replayCtx, err := plan2.WithAlterTableDDLReplay(baseCtx, dbName, replaySource, qry.CopyTableDef)
 			if err != nil {
 				return err
 			}
