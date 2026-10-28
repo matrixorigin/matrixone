@@ -197,12 +197,12 @@ func TestPreparedNumericContextUsesColumnSiblingType(t *testing.T) {
 		{
 			name: "integer column",
 			sql:  "select (? + ?) + N_REGIONKEY from nation",
-			want: types.T_int32,
+			want: types.T_int64,
 		},
 		{
 			name: "qualified integer column",
 			sql:  "select (? + ?) + nation.N_REGIONKEY from nation",
-			want: types.T_int32,
+			want: types.T_int64,
 		},
 		{
 			name: "decimal column",
@@ -440,7 +440,7 @@ func TestPreparedNumericInspectionPreservesGroupAndAliasState(t *testing.T) {
 
 	queryPlan, err := BuildPlan(optimizer.CurrentContext(), stmts[0], true)
 	require.NoError(t, err)
-	require.Equal(t, []types.T{types.T_int32, types.T_int32}, collectPlanParamTypes(queryPlan))
+	require.Equal(t, []types.T{types.T_int64, types.T_int64}, collectPlanParamTypes(queryPlan))
 }
 
 func TestPreparedNumericContextMergesExactSiblingTypes(t *testing.T) {
@@ -519,7 +519,7 @@ func TestPreparedNumericContextUsesCorrelatedColumnType(t *testing.T) {
 			paramTypes := collectPlanParamTypes(queryPlan)
 			require.NotEmpty(t, paramTypes)
 			for _, typ := range paramTypes {
-				require.Equal(t, types.T_int32, typ)
+				require.Equal(t, types.T_int64, typ)
 			}
 		})
 	}
