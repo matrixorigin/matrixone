@@ -500,6 +500,28 @@ func TestHandleSqlForRecord(t *testing.T) {
 		// No credential keyword: preserve ordinary invalid SQL diagnostics.
 		require.Equal(t, []string{"SELECT ``"}, HandleSqlForRecord("SELECT ``"))
 	})
+	// A malformed SET PASSWORD FOR form (missing '=') must still mask the
+	// IDENTIFIED BY literal: the target-name guard skips target tokens, not
+	// the IDENTIFIED branch.
+	t.Run("malformed set password for identified by still masks literal", func(t *testing.T) {
+		for _, mode := range []string{"", "NO_BACKSLASH_ESCAPES", "ANSI_QUOTES,NO_BACKSLASH_ESCAPES"} {
+			fragments, secrets := MaskSecretLiteralsWithSQLMode(
+				"SET PASSWORD FOR ordinary_user IDENTIFIED BY 'ProbeSecret42'", mode)
+			joined := strings.Join(fragments, ";")
+			require.NotContains(t, joined, "ProbeSecret42", mode)
+			require.Contains(t, joined, "IDENTIFIED BY '******'", mode)
+			require.NotEmpty(t, secrets, mode)
+
+			// The target-name guard still holds: a user named
+			// access_key_id is a target, not a credential option.
+			fragments, secrets = MaskSecretLiteralsWithSQLMode(
+				"SET PASSWORD FOR access_key_id = 'TargetGuardPw42'", mode)
+			joined = strings.Join(fragments, ";")
+			require.Contains(t, joined, "access_key_id", mode)
+			require.NotContains(t, joined, "TargetGuardPw42", mode)
+			require.NotEmpty(t, secrets, mode)
+		}
+	})
 	t.Run("password keyword without set is not masked", func(t *testing.T) {
 		// ALTER USER ... PASSWORD EXPIRE has no secret literal to mask.
 		require.Equal(t, []string{"ALTER USER u1 PASSWORD EXPIRE INTERVAL 3 DAY"},

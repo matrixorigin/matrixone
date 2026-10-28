@@ -217,7 +217,11 @@ func handleSQLForRecordFragmentWithSecrets(sql string, mode mysql.SQLModeFlags) 
 		// SET PASSWORD owns its target and value. A target named
 		// access_key_id/secret_access_key is a user, not a credential option:
 		// generic lookahead must not consume '=' or PASSWORD('secret').
-		if sawSetPassword && typ != eq {
+		// IDENTIFIED is not part of the target: on malformed forms such as
+		// SET PASSWORD FOR u IDENTIFIED BY 'pw' (no '='), its literal must
+		// still pass through to the IDENTIFIED BY masking branch; skipping
+		// it would retain the password in diagnostics.
+		if sawSetPassword && typ != eq && typ != mysql.IDENTIFIED {
 			continue
 		}
 		if typ == mysql.IDENTIFIED {

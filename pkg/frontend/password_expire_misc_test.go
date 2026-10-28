@@ -1240,6 +1240,17 @@ func TestRedactParseErrorSecrets(t *testing.T) {
 	require.True(t, strings.HasSuffix(scrubbed.Error(), ` near "******"`) ||
 		strings.HasSuffix(scrubbed.Error(), ` near "******";`), scrubbed.Error())
 
+	// FOR-form without the '=' delimiter: the IDENTIFIED BY literal masks
+	// at the shared masker so neither the doComQuery statement log nor the
+	// error scrubber retains it.
+	raw = "SET PASSWORD FOR ordinary_user IDENTIFIED BY 'ProbeNoEqSecret42'"
+	require.NotContains(t, redactStatementTextForLogging(nil, raw, nil), "ProbeNoEqSecret42")
+	_, err = parsers.ParseOne(context.TODO(), dialect.MYSQL, raw, 1)
+	if err != nil {
+		scrubbed = redactStatementErrorForLogging(err, raw, nil)
+		require.NotContains(t, scrubbed.Error(), "ProbeNoEqSecret42")
+	}
+
 	// No secret shape: the original error passes through untouched.
 	_, err = parsers.ParseOne(context.TODO(), dialect.MYSQL, "selec from", 1)
 	require.Error(t, err)
