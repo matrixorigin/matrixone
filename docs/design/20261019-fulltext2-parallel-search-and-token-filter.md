@@ -380,39 +380,29 @@ at any time without migration.
 
 ### Eligibility
 
-The search is bounded only when the ORDER BY is exactly one key, the MATCH score
-descending with default null placement, and the query has a LIMIT. A query with
-any other or additional ORDER BY key, with `SQL_CALC_FOUND_ROWS`, or with a filter,
-join or aggregate between the sort and the search that the bound cannot see
-through, is not bounded. The sort above the search always re-applies ORDER BY,
-LIMIT and OFFSET.
+The search is bounded only when the first ORDER BY key is the MATCH score
+descending with default null placement, and the query has a LIMIT. Later ORDER
+BY keys are allowed. A query whose first key is anything else, with
+`SQL_CALC_FOUND_ROWS`, or with a filter, join or aggregate between the sort and
+the search that the bound cannot see through, is not bounded. The sort above the
+search always re-applies ORDER BY, LIMIT and OFFSET.
 
-### Secondary ORDER BY keys are not bounded (decision)
+### Secondary ORDER BY keys order the bounded rows (decision)
 
-Decided by @cpegeric, 2026-10-23 (PR #30618 review P1).
+Decided by @cpegeric, 2026-10-27; supersedes the 2026-10-23 decision (PR #30618
+review P1) that declined the bound for a secondary key.
 
-`ORDER BY score DESC, k2 LIMIT n` is not bounded. With rows tied at the n-th score,
-`k2` decides which of them are returned, and the search ranks by score only, so a
-bounded search could drop the row SQL requires. The query runs unbounded and
-returns the exact result.
-
-To re-order the top n by another key with the bound, rank in a derived table and
-sort the page outside it:
-
-```sql
-SELECT * FROM (
-  SELECT id, MATCH(body) AGAINST('q') AS score FROM t
-  WHERE MATCH(body) AGAINST('q') ORDER BY score DESC LIMIT n
-) AS page ORDER BY id;
-```
-
-The inner query is bounded; which rows tied at its cutoff enter the page is
-unspecified, as for any score-only top n.
+`ORDER BY score DESC, k2 LIMIT n` is bounded like `ORDER BY score DESC LIMIT n`:
+the search returns the top LIMIT+OFFSET rows by score, and the sort orders them by
+score and then `k2`. Rows tied at the n-th score are chosen by the search, as for
+the single-key form; `k2` orders the returned rows but does not choose which of
+the tied rows are returned. A query that needs `k2` to choose among the tied rows
+cannot rely on this bound.
 
 Rejected alternatives: carrying the secondary key into the search (by primary key
 or INCLUDE column), or keeping every row tied at the cutoff through each segment,
-worker and merge. Both diverge from the vector indexes, which bound only a
-single distance key, and add tie handling to every top-k path.
+worker and merge. Both diverge from the vector indexes and add tie handling to
+every top-k path.
 
 ### Index lag (decision)
 
