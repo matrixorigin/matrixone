@@ -147,7 +147,7 @@ physical target/state relations. Predecessors retain the view definition and
 reject its syntax for reads and its view kind for DML. This also covers ON DEMAND
 objects, which have no background job.
 
-Mixed-version MV availability is unsupported. Protocols below 132 are
+Mixed-version MV availability is unsupported. Protocols below 135 are
 predecessors without the MV consumer; none may create, claim, refresh, or
 recover MV jobs. Use capable binaries for reads,
 refresh and cleanup, and drop materialized views before a binary rollback.
