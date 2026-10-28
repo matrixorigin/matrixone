@@ -311,12 +311,25 @@ func informationSchemaCurrentColumnsDDL() string {
 		"WHEN 2 then 'binary'", "WHEN 2 then NULL")
 }
 
+// InformationSchemaViewDefinitionMatches compares initialization and replacement
+// definitions without changing the SELECT body or accepting other SQL variants.
+func InformationSchemaViewDefinitionMatches(actual, expected string) bool {
+	return canonicalInformationSchemaViewDDL(actual) == canonicalInformationSchemaViewDDL(expected)
+}
+
+func canonicalInformationSchemaViewDDL(definition string) string {
+	if body, ok := strings.CutPrefix(definition, "CREATE OR REPLACE VIEW information_schema."); ok {
+		return "CREATE VIEW information_schema." + body
+	}
+	return definition
+}
+
 // AdaptLegacyInformationSchemaColumnsDDL changes only the column authority of
 // known historical templates. Keep their projection/formatting rules; reading
 // a snapshot must not change its character-set selectors or add subscriptions
 // to a template that did not expose them.
 func AdaptLegacyInformationSchemaColumnsDDL(definition string) (string, bool) {
-	definition = canonicalColumnsViewName(definition)
+	definition = canonicalColumnsViewDDL(definition)
 	// V100 already contains the subscription-derived branches. Keep it byte
 	// stable when binding historical snapshots; re-deriving it would duplicate
 	// those branches and could change the persisted legacy projection.
@@ -325,7 +338,7 @@ func AdaptLegacyInformationSchemaColumnsDDL(definition string) (string, bool) {
 	}
 	// V109 already has the derived View-column branches and native Unicode
 	// selectors. Keep this historical template byte-stable apart from the
-	// lowercase view-name normalization above.
+	// authoring-form and lowercase view-name normalization above.
 	if definition == InformationSchemaColumnsV109DDL() {
 		return definition, true
 	}
@@ -342,7 +355,7 @@ func AdaptLegacyInformationSchemaColumnsDDL(definition string) (string, bool) {
 // publisher ID, to the common request so authorization and root resolution use
 // the caller's namespace. The persisted templates and projections do not change.
 func ViewMetadataColumnsDDL(definition string) (string, bool) {
-	definition = canonicalColumnsViewName(definition)
+	definition = canonicalColumnsViewDDL(definition)
 	known := definition == InformationSchemaColumnsDDL ||
 		definition == InformationSchemaColumnsV100DDL() || definition == InformationSchemaColumnsV109DDL()
 	if !known {
@@ -364,7 +377,7 @@ func ViewMetadataColumnsDDL(definition string) (string, bool) {
 }
 
 func IsCurrentInformationSchemaColumnsDDL(definition string) bool {
-	canonical := canonicalColumnsViewName(definition)
+	canonical := canonicalColumnsViewDDL(definition)
 	if canonical == InformationSchemaColumnsDDL {
 		return true
 	}
@@ -383,12 +396,15 @@ func IsCurrentInformationSchemaColumnsDDL(definition string) bool {
 // migration gates; the historical protocol-109 definition is an input to the
 // adapter, not a migration gate.
 func IsInformationSchemaColumnsMigrationDDL(definition string) bool {
-	definition = canonicalColumnsViewName(definition)
+	definition = canonicalColumnsViewDDL(definition)
 	return definition == InformationSchemaColumnsV100DDL() ||
 		definition == InformationSchemaColumnsDDL
 }
 
-func canonicalColumnsViewName(definition string) string {
+func canonicalColumnsViewDDL(definition string) string {
+	// Identity-preserving upgrades persist CREATE OR REPLACE. Readers and
+	// reconciliation must recognize the same authored template.
+	definition = canonicalInformationSchemaViewDDL(definition)
 	// Older upgrades used the lowercase spelling of this identifier. Do not
 	// case-fold literals or accept arbitrary lookalike system-view SQL.
 	return strings.Replace(definition, "CREATE VIEW information_schema.columns AS ",
