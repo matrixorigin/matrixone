@@ -94,16 +94,11 @@ func decodeJSONValueStored(data []byte) (value bytejson.ByteJson, err error) {
 	return value, nil
 }
 
-func decodeJSONValueStoredRaw(data []byte) (value bytejson.ByteJson, err error) {
-	defer func() {
-		if recovered := recover(); recovered != nil {
-			value = bytejson.Null
-			err = moerr.NewInvalidInputNoCtx("invalid binary JSON document")
-		}
-	}()
+func decodeJSONValueStoredRaw(data []byte) (bytejson.ByteJson, error) {
 	if len(data) < 2 {
 		return bytejson.Null, moerr.NewInvalidInputNoCtx("invalid binary JSON document")
 	}
+	var value bytejson.ByteJson
 	if err := value.Unmarshal(data); err != nil {
 		return bytejson.Null, err
 	}

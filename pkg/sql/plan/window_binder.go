@@ -158,18 +158,11 @@ func (jsonValueSemanticNormalizer) Exit(expr tree.Expr) (tree.Expr, bool) {
 
 // normalizeJSONValueSemantics works on a clone so formatting used for
 // expression identity never changes the AST that will later be rebound or
-// shown to the user. Some legacy expression nodes do not implement Accept;
-// keep the original in that case and let their existing identity path stand.
-func normalizeJSONValueSemantics(astExpr tree.Expr) (normalized tree.Expr) {
+// shown to the user.
+func normalizeJSONValueSemantics(astExpr tree.Expr) tree.Expr {
 	if astExpr == nil {
 		return nil
 	}
-	normalized = astExpr
-	defer func() {
-		if recover() != nil {
-			normalized = astExpr
-		}
-	}()
 	clone := cloneTreeExpr(astExpr)
 	if clone == nil {
 		return astExpr
