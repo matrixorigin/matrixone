@@ -211,3 +211,141 @@ func TestSqlAutoIsNullSubqueryWholeClauseRewritten(t *testing.T) {
 	require.True(t, sqlAutoIsNullQueryHasFunction(qry, "last_insert_id"),
 		"the inner query block's whole-clause IS NULL must be substituted")
 }
+
+// TestSqlAutoIsNullEnabledInterpretationMatrix pins the accepted-value
+// contract across every Go representation sql_auto_is_null can surface in:
+// session-store integers, protocol text, compatibility casts and float-form
+// protocol payloads. Every accepted representation enables/disables the
+// rewrite symmetrically; anything outside the accepted set disables it.
+func TestSqlAutoIsNullEnabledInterpretationMatrix(t *testing.T) {
+	enabled := []interface{}{
+		int(1), int8(1), int16(1), int32(1), int64(1),
+		uint(1), uint8(1), uint16(1), uint32(1), uint64(1),
+		float32(1), float64(1),
+		true, "1", "on", "true", "TRUE",
+	}
+	for _, v := range enabled {
+		require.True(t, sqlAutoIsNullEnabled(v),
+			"representation %T(%v) must enable the rewrite", v, v)
+	}
+	disabled := []interface{}{
+		int(0), int8(0), int16(0), int32(0), int64(0),
+		uint(0), uint8(0), uint16(0), uint32(0), uint64(0),
+		float32(0), float64(0),
+		false, "",
+	}
+	for _, v := range disabled {
+		require.False(t, sqlAutoIsNullEnabled(v),
+			"representation %T(%v) must disable the rewrite", v, v)
+	}
+}
+
+// TestSqlAutoIsNullExpressionOperandNotRewritten pins the operand criterion:
+// only a bare AUTO_INCREMENT column reference participates. The whole-clause
+// shape on any other expression keeps plain IS NULL semantics and stays
+// cacheable, because the statement never matched the MySQL shape.
+func TestSqlAutoIsNullExpressionOperandNotRewritten(t *testing.T) {
+	cc := newSqlAutoIsNullTestContext(t, int64(1), nil)
+	qry := buildSqlAutoIsNullQuery(t, cc, "select seq, val from auto_t where (seq + 1) is null")
+	require.True(t, sqlAutoIsNullQueryHasFunction(qry, "isnull"),
+		"an IS NULL whole clause on a non-column operand must keep plain semantics")
+	require.False(t, sqlAutoIsNullQueryHasFunction(qry, "last_insert_id"))
+	require.False(t, sqlAutoIsNullAnyNodeNotCacheable(qry),
+		"a non-matching shape must not burn the plan cache")
+}
+
+// TestSqlAutoIsNullOuterJoinNullSideMatrix pins the structural exclusion walk
+// without depending on parser join support. A LEFT (and ASOF LEFT) join
+// null-extends exactly its right subtree, so references through the left side
+// keep participating in the rewrite; a FULL OUTER join null-extends both
+// sides; and null-side reachability accumulates through nested joins (an
+// inner-joined pair on the null side exposes every member) and through
+// chained outer joins. Corrupt or out-of-range node references must stay a
+// no-op instead of panicking.
+func TestSqlAutoIsNullOuterJoinNullSideMatrix(t *testing.T) {
+	scan := func(tag int32) *plan.Node {
+		// NodeType is irrelevant to the walk under test: it reads only
+		// JoinType, Children and BindingTags.
+		return &plan.Node{BindingTags: []int32{tag}}
+	}
+	inner := func(children ...int32) *plan.Node {
+		return &plan.Node{JoinType: plan.Node_INNER, Children: children}
+	}
+	left := func(children ...int32) *plan.Node {
+		return &plan.Node{JoinType: plan.Node_LEFT, Children: children}
+	}
+	build := func(nodes ...*plan.Node) *QueryBuilder {
+		return &QueryBuilder{qry: &plan.Query{Nodes: nodes}}
+	}
+
+	// LEFT(a, INNER(b, c)): the right subtree is the null side, so tags b and c
+	// are excluded while the left-side tag a keeps plain rewrite eligibility.
+	nodes := []*plan.Node{
+		scan(1), // 0: a
+		scan(2), // 1: b
+		scan(3), // 2: c
+		inner(1, 2),
+		left(0, 3),
+	}
+	builder := build(nodes...)
+	require.True(t, builder.colOnOuterJoinNullSide(4, 2),
+		"every member of a nested inner pair on the left join's null side is null-extended")
+	require.True(t, builder.colOnOuterJoinNullSide(4, 3),
+		"every member of a nested inner pair on the left join's null side is null-extended")
+	require.False(t, builder.colOnOuterJoinNullSide(4, 1),
+		"the preserved side of a LEFT join is not null-extended")
+
+	// FULL OUTER(a, b): both sides are null-extended, so both are excluded.
+	nodes = []*plan.Node{
+		scan(10), // 0: a
+		scan(11), // 1: b
+		{NodeType: plan.Node_JOIN, JoinType: plan.Node_OUTER, Children: []int32{0, 1}},
+	}
+	builder = build(nodes...)
+	require.True(t, builder.colOnOuterJoinNullSide(2, 10),
+		"a FULL OUTER join conservatively null-extends its left side")
+	require.True(t, builder.colOnOuterJoinNullSide(2, 11),
+		"a FULL OUTER join conservatively null-extends its right side")
+
+	// Chained LEFT joins accumulate null sides: b (inner null side) and c
+	// (outer null side) are both excluded, a stays eligible.
+	nodes = []*plan.Node{
+		scan(20), // 0: a
+		scan(21), // 1: b
+		scan(22), // 2: c
+		left(0, 1),
+		left(3, 2),
+	}
+	builder = build(nodes...)
+	require.True(t, builder.colOnOuterJoinNullSide(4, 21))
+	require.True(t, builder.colOnOuterJoinNullSide(4, 22))
+	require.False(t, builder.colOnOuterJoinNullSide(4, 20))
+
+	// Out-of-range and negative node references must not panic; they simply
+	// report no exclusion.
+	builder = build(
+		scan(30),
+		left(0, 42),
+	)
+	require.False(t, builder.colOnOuterJoinNullSide(-1, 30))
+	require.False(t, builder.colOnOuterJoinNullSide(7, 30))
+	require.False(t, builder.colOnOuterJoinNullSide(1, 30),
+		"a dangling right child must stay a no-op")
+	require.False(t, builder.colOnOuterJoinNullSide(1, 31),
+		"an unknown tag is not null-extended")
+}
+
+// TestSqlAutoIsNullChainedLeftJoinsNotRewritten pins the SQL-level consumer
+// shape that accumulates null sides across chained outer joins: the
+// whole-clause form on a column that any join level null-extends keeps
+// plain IS NULL semantics, exactly as MySQL's odbc.result requires.
+func TestSqlAutoIsNullChainedLeftJoinsNotRewritten(t *testing.T) {
+	cc := newSqlAutoIsNullTestContext(t, int64(1), nil)
+	qry := buildSqlAutoIsNullQuery(t, cc,
+		"select b.seq from auto_t a left join auto_t b on a.seq = b.seq "+
+			"left join auto_t c on b.val = c.val where b.seq is null")
+	require.True(t, sqlAutoIsNullQueryHasFunction(qry, "isnull"),
+		"a column null-extended by any outer join level must keep plain IS NULL semantics")
+	require.False(t, sqlAutoIsNullQueryHasFunction(qry, "last_insert_id"))
+	require.False(t, sqlAutoIsNullAnyNodeNotCacheable(qry))
+}
