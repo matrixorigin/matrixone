@@ -46,10 +46,13 @@ func TestCountEliminatesUnobservedSort(t *testing.T) {
 			left join constraint_test.dept d on e.deptno = d.deptno order by d.deptno
 		) s`, 0},
 		// INNER JOIN branches are never pruned for missing references, so a
-		// released failing cast on the inner side stays observable in the plan.
+		// released failing expression on the inner side stays observable in
+		// the plan. Explicit text casts are lenient per MySQL (0 + warning),
+		// so the runtime-raising witness uses an invalid regexp pattern,
+		// which still errors at execution.
 		{"diagnostic inner join", `select count(*) from (
 			select e.ename from constraint_test.emp e
-			join constraint_test.dept d on e.deptno = d.deptno and cast(d.dname as unsigned) > 0
+			join constraint_test.dept d on e.deptno = d.deptno and length(regexp_substr(d.dname, '[')) > 0
 			order by d.deptno
 		) s`, 0},
 	} {
@@ -82,25 +85,28 @@ func TestCountKeepsObservableOrUnsafeSort(t *testing.T) {
 		{"mixed aggregate", "select count(*), sum(sal) from (select sal from constraint_test.emp order by sal) s"},
 		{"count distinct", "select count(distinct deptno) from (select deptno from constraint_test.emp order by deptno) s"},
 		{"volatile order", "select count(*) from (select ename from constraint_test.emp order by rand()) s"},
-		{"failing order", "select count(*) from (select ename from constraint_test.emp order by cast(ename as unsigned)) s"},
-		{"failing alias", "select count(*) from (select cast(ename as unsigned) as n from constraint_test.emp order by n) s"},
+		// Explicit text casts are lenient per MySQL (0 + warning), so the
+		// runtime-raising witness is an invalid regexp pattern, which errors
+		// at execution instead of returning a value.
+		{"failing order", "select count(*) from (select ename from constraint_test.emp order by regexp_substr(ename, '[')) s"},
+		{"failing alias", "select count(*) from (select regexp_substr(ename, '[') as n from constraint_test.emp order by n) s"},
 		{"volatile count", "select count(rand()) from (select ename from constraint_test.emp order by ename) s"},
-		{"failing count", "select count(cast(ename as unsigned)) from (select ename from constraint_test.emp order by ename) s"},
+		{"failing count", "select count(regexp_substr(ename, '[')) from (select ename from constraint_test.emp order by ename) s"},
 		{"window output", "select count(*) from (select row_number() over (order by empno) as rn from constraint_test.emp order by rn) s"},
 		{"non count consumer", "select ename from (select ename from constraint_test.emp order by ename) s"},
 		// Removing the Sort would release the last outside reference to the
 		// LEFT JOIN right branch, letting removeEffectlessLeftJoins prune the
-		// failing ON cast.
+		// failing ON expression.
 		{"diagnostic left join", `select count(*) from (
 			select e.ename from constraint_test.emp e
-			left join constraint_test.dept d on e.deptno = d.deptno and cast(d.dname as unsigned) > 0
+			left join constraint_test.dept d on e.deptno = d.deptno and length(regexp_substr(d.dname, '[')) > 0
 			order by d.deptno
 		) s`},
 		// A released LEFT JOIN branch keeps its failing scan filter too:
 		// pruning the branch would discard that evaluation.
 		{"left join filtered branch", `select count(*) from (
 			select e.ename from constraint_test.emp e
-			left join (select deptno from constraint_test.dept where cast(dname as unsigned) > 0) d
+			left join (select deptno from constraint_test.dept where length(regexp_substr(dname, '[')) > 0) d
 			on e.deptno = d.deptno order by d.deptno
 		) s`},
 	} {
@@ -118,7 +124,7 @@ func TestCountKeepsObservableOrUnsafeSort(t *testing.T) {
 func TestCountSortKeepsReleasedDiagnosticLeftJoin(t *testing.T) {
 	logical, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, `select count(*) from (
 		select e.ename from constraint_test.emp e
-		left join constraint_test.dept d on e.deptno = d.deptno and cast(d.dname as unsigned) > 0
+		left join constraint_test.dept d on e.deptno = d.deptno and cast(d.dname as decimal(10,0)) > 0
 		order by d.deptno
 	) s`)
 	require.NoError(t, err)
@@ -126,6 +132,7 @@ func TestCountSortKeepsReleasedDiagnosticLeftJoin(t *testing.T) {
 	require.True(t, reachableNodeType(query, planpb.Node_SORT), "diagnostic Sort subtree must not be eliminated")
 	join := firstReachableNode(query, planpb.Node_JOIN)
 	require.NotNil(t, join, "LEFT JOIN owning the released diagnostic branch must survive")
+	require.Equal(t, planpb.Node_LEFT, join.JoinType)
 	require.NotEmpty(t, join.OnList, "the failing ON predicate must stay evaluable")
 }
 

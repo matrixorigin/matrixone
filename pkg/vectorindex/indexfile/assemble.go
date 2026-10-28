@@ -15,6 +15,7 @@
 package indexfile
 
 import (
+	"errors"
 	"os"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -30,9 +31,36 @@ type assembler struct {
 	count int64
 }
 
+// stagingError is a failed I/O on the local file a rebuild or write assembles.
+type stagingError struct{ err error }
+
+func (e *stagingError) Error() string { return e.err.Error() }
+func (e *stagingError) Unwrap() error { return e.err }
+
+func isStagingError(err error) bool {
+	var se *stagingError
+	return errors.As(err, &se)
+}
+
+// beforeStagingWrite, when set by a test, runs before each write to a staging file.
+var beforeStagingWrite func(f *os.File) error
+
+func writeStagingAt(f *os.File, b []byte, off int64) (int, error) {
+	if beforeStagingWrite != nil {
+		if err := beforeStagingWrite(f); err != nil {
+			return 0, &stagingError{err}
+		}
+	}
+	n, err := f.WriteAt(b, off)
+	if err != nil {
+		return n, &stagingError{err}
+	}
+	return n, nil
+}
+
 func newAssembler(f *os.File, ref *Ref) (*assembler, error) {
 	if err := f.Truncate(ref.Size); err != nil {
-		return nil, err
+		return nil, &stagingError{err}
 	}
 	n := ref.numChunks()
 	return &assembler{f: f, ref: ref, n: n, seen: make([]bool, n)}, nil
@@ -55,7 +83,7 @@ func (a *assembler) add(chunkID int64, data []byte) error {
 		return moerr.NewInternalErrorNoCtxf("index file %s: chunk %d has %d bytes, want %d",
 			a.ref.IndexID, chunkID, len(data), want)
 	}
-	if _, err := a.f.WriteAt(data, i*ChunkSize); err != nil {
+	if _, err := writeStagingAt(a.f, data, i*ChunkSize); err != nil {
 		return err
 	}
 	a.seen[i] = true

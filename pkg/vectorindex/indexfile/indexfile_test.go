@@ -27,11 +27,13 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -150,6 +152,18 @@ func TestManifestAndNames(t *testing.T) {
 	require.Equal(t, "42/"+hex.EncodeToString([]byte("a/b:1"))+"/1/5-70000/0a1b2c3d", entryName(42, &ref))
 	ref.Checksum = "../x"
 	require.Equal(t, "42/"+hex.EncodeToString([]byte("a/b:1"))+"/1/5-70000/x"+hex.EncodeToString([]byte("../x")), entryName(42, &ref))
+
+	// distinct checksums never share a name, compared case-insensitively as on a
+	// case-insensitive file system
+	sums := []string{"!", "x21", "X21", "Ab", "aB", "ab", "AB", "x", "xx", "78", "0a1b2c3d", md5Hex([]byte("v"))}
+	seen := make(map[string]string)
+	for _, sum := range sums {
+		name := strings.ToLower(pathSafe(sum))
+		other, dup := seen[name]
+		require.False(t, dup, "%q and %q share %q", sum, other, name)
+		seen[name] = sum
+	}
+	require.Equal(t, md5Hex([]byte("v")), pathSafe(md5Hex([]byte("v"))), "a hex MD5 keeps its name")
 
 	for _, r := range []Ref{
 		{Table: "t", IndexID: "i", Checksum: "c"},
@@ -305,8 +319,9 @@ func newEnv(t *testing.T, ctrl *gomock.Controller, tbl *fakeTable, cache *filese
 }
 
 func fileRows(ref Ref, data []byte, shuffleSeed int64) []chunkRow {
-	var rows []chunkRow
-	for id, b := range chunksOf(data, ref.FirstChunk) {
+	chunks := chunksOf(data, ref.FirstChunk)
+	rows := make([]chunkRow, 0, len(chunks)+2)
+	for id, b := range chunks {
 		rows = append(rows, chunkRow{indexID: ref.IndexID, chunkID: id, data: b, tag: ref.Tag})
 	}
 	// rows of other files and tags in the same key range
@@ -319,7 +334,7 @@ func fileRows(ref Ref, data []byte, shuffleSeed int64) []chunkRow {
 }
 
 func newCache(t *testing.T, dir string) *fileservice.IndexFileCache {
-	c, err := fileservice.NewIndexFileCache(context.Background(), dir, fscache.ConstCapacity(1<<30), "")
+	c, err := fileservice.NewIndexFileCache(context.Background(), dir, fscache.ConstCapacity(1<<30), "", fileservice.IndexFileRebuildPolicyDefault)
 	require.NoError(t, err)
 	t.Cleanup(func() { c.Close(context.Background()) })
 	return c
@@ -368,6 +383,42 @@ func TestOpenRebuildsThenHitsCache(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, f.Close())
 	require.Equal(t, int32(1), tbl.scans.Load(), "a full check of a good entry still hits")
+}
+
+// Two versions of a file that differ only in a custom checksum are distinct cache entries:
+// opening the second rebuilds it instead of serving the first version's bytes.
+func TestOpenDistinguishesCustomChecksums(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	first, second := randomBytes(ChunkSize+9, 21), randomBytes(ChunkSize+9, 22)
+	want := map[string][]byte{"!": first, "x21": second}
+	ref := Ref{DB: "db", Table: "idx", IndexID: "idx:1:0", Size: int64(len(first)), Checksum: "!"}
+	ref.Verify = func(f *os.File, size int64, checksum string) error {
+		got, err := io.ReadAll(io.NewSectionReader(f, 0, size))
+		if err != nil {
+			return err
+		}
+		if string(got) != string(want[checksum]) {
+			return moerr.NewInternalErrorNoCtxf("content is not version %q", checksum)
+		}
+		return nil
+	}
+	current := first
+	tbl := &fakeTable{tableID: 23, rows: func() []chunkRow { return fileRows(ref, current, 24) }}
+	env := newEnv(t, ctrl, tbl, newCache(t, t.TempDir()))
+	ctx := context.Background()
+
+	f, err := Open(ctx, env, ref)
+	require.NoError(t, err)
+	require.Equal(t, first, readFile(t, f))
+	require.NoError(t, f.Close())
+
+	current = second
+	ref.Checksum = "x21"
+	f, err = Open(ctx, env, ref)
+	require.NoError(t, err)
+	require.Equal(t, second, readFile(t, f))
+	require.NoError(t, f.Close())
+	require.Equal(t, int32(2), tbl.scans.Load(), "the second version is rebuilt, not read from the first's entry")
 }
 
 func TestOpenTailFrameRange(t *testing.T) {
@@ -626,3 +677,100 @@ func TestVerifiedSetIsBounded(t *testing.T) {
 	verified.remove(strconv.Itoa(maxVerified))
 	require.False(t, verified.has(strconv.Itoa(maxVerified)))
 }
+
+// failCacheStaging makes writes to staging files under dir fail with ENOSPC once
+// allowed writes have succeeded.
+func failCacheStaging(t *testing.T, dir string, allowed int32) {
+	var n atomic.Int32
+	beforeStagingWrite = func(f *os.File) error {
+		if strings.HasPrefix(f.Name(), dir) && n.Add(1) > allowed {
+			return syscall.ENOSPC
+		}
+		return nil
+	}
+	t.Cleanup(func() { beforeStagingWrite = nil })
+}
+
+func requireNoStagingFiles(t *testing.T, dir string) {
+	entries, err := os.ReadDir(dir)
+	require.NoError(t, err)
+	for _, e := range entries {
+		require.False(t, strings.HasSuffix(e.Name(), ".tmp"), "temp files are removed: %s", e.Name())
+	}
+}
+
+func TestOpenFallsBackWhenCacheStagingFails(t *testing.T) {
+	resetVerified()
+	ctrl := gomock.NewController(t)
+	dir := t.TempDir()
+	cache := newCache(t, dir)
+	data := randomBytes(3*ChunkSize+5, 20)
+	ref := testRef(data)
+	tbl := &fakeTable{tableID: 20, rows: func() []chunkRow { return fileRows(ref, data, 20) }}
+	env := newEnv(t, ctrl, tbl, cache)
+	failCacheStaging(t, dir, 1)
+
+	f, err := Open(context.Background(), env, ref)
+	require.NoError(t, err, "a full cache disk does not fail the read")
+	require.Equal(t, data, readFile(t, f))
+	require.NoError(t, f.Close())
+	_, err = cache.Open(context.Background(), entryName(20, &ref), dataFile)
+	require.Error(t, err, "the file is not cached")
+	requireNoStagingFiles(t, dir)
+
+	beforeStagingWrite = func(*os.File) error { return syscall.EIO }
+	_, err = Open(context.Background(), env, ref)
+	require.ErrorIs(t, err, syscall.EIO, "a failing private file is still an error")
+}
+
+// onceReader cannot be rewound: it reads src once in small pieces.
+type onceReader struct{ src io.Reader }
+
+func (r *onceReader) Read(p []byte) (int, error) {
+	if len(p) > 1000 {
+		p = p[:1000]
+	}
+	return r.src.Read(p)
+}
+
+func TestWriteFallsBackWhenCacheStagingFails(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	dir := t.TempDir()
+	cache := newCache(t, dir)
+	tbl := &fakeTable{tableID: 21, rows: func() []chunkRow { return nil }}
+	env := newEnv(t, ctrl, tbl, cache)
+	data := randomBytes(2*ChunkSize+9, 21)
+	failCacheStaging(t, dir, 5)
+
+	ref := Ref{DB: "db", Table: "idx", IndexID: "idx:3:0"}
+	var got []byte
+	size, sum, err := Write(context.Background(), env, ref, &onceReader{src: bytes.NewReader(data)}, func(sql string) error {
+		token := sql[strings.Index(sql, "('")+2 : strings.Index(sql, "',")]
+		src, err := LookupSource(token, []byte("txn-1"))
+		require.NoError(t, err)
+		for id := int64(0); id < 3; id++ {
+			buf := make([]byte, ChunkSize)
+			chunk, err := src.ReadChunk(id, buf)
+			require.NoError(t, err)
+			got = append(got, chunk...)
+		}
+		return nil
+	})
+	require.NoError(t, err, "a full cache disk does not fail the write")
+	require.Equal(t, int64(len(data)), size)
+	require.Equal(t, md5Hex(data), sum)
+	require.Equal(t, data, got, "bytes staged before the failure are kept")
+	ref.Size, ref.Checksum = size, sum
+	_, err = cache.Open(context.Background(), entryName(21, &ref), dataFile)
+	require.Error(t, err, "the file is not cached")
+	requireNoStagingFiles(t, dir)
+
+	boom := errors.New("source failed")
+	_, _, err = Write(context.Background(), env, Ref{DB: "db", Table: "idx", IndexID: "idx:4:0"},
+		io.MultiReader(bytes.NewReader(data[:ChunkSize]), iotestErrReader{boom}), func(string) error { return nil })
+	require.ErrorIs(t, err, boom, "a source error is not hidden by the fallback")
+}
+
+type iotestErrReader struct{ err error }
+
+func (r iotestErrReader) Read([]byte) (int, error) { return 0, r.err }

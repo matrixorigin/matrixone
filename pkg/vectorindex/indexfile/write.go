@@ -53,20 +53,18 @@ func Write(ctx context.Context, env *Env, ref Ref, src io.Reader, runSQL func(sq
 		return 0, "", err
 	}
 
-	tmp, remove, err := createWriteTemp(env.Cache)
+	stage, err := newStagingWriter(env.Cache)
 	if err != nil {
 		return 0, "", err
 	}
-	defer func() {
-		_ = tmp.Close()
-		remove()
-	}()
+	defer stage.close()
 
 	md5h, crch := md5.New(), crc32.New(castagnoli)
-	size, err = io.Copy(io.MultiWriter(tmp, md5h, crch), src)
+	size, err = io.Copy(io.MultiWriter(stage, md5h, crch), src)
 	if err != nil {
 		return 0, "", err
 	}
+	tmp := stage.f
 	sum = hex.EncodeToString(md5h.Sum(nil))
 	ref.Size = size
 	if ref.Checksum == "" {
@@ -89,7 +87,7 @@ func Write(ctx context.Context, env *Env, ref Ref, src io.Reader, runSQL func(sq
 		}
 	}
 
-	if env.Cache != nil {
+	if stage.cached {
 		rel, err := openRelation(ctx, env, &ref)
 		if err != nil {
 			return 0, "", err
@@ -112,17 +110,69 @@ func Write(ctx context.Context, env *Env, ref Ref, src io.Reader, runSQL func(sq
 	return size, sum, nil
 }
 
-func createWriteTemp(cache *fileservice.IndexFileCache) (*os.File, func(), error) {
+// stagingWriter appends the file being written to a cache temp file. If the cache temp
+// file cannot be created or written, it moves what was written to a private temp file
+// and continues there; the file is then not cached.
+type stagingWriter struct {
+	f       *os.File
+	remove  func()
+	cached  bool
+	written int64
+}
+
+func newStagingWriter(cache *fileservice.IndexFileCache) (*stagingWriter, error) {
 	if cache != nil {
 		if f, remove, err := cache.CreateTempFile(); err == nil {
-			return f, remove, nil
+			return &stagingWriter{f: f, remove: remove, cached: true}, nil
 		}
 	}
+	f, remove, err := createPrivateTemp()
+	if err != nil {
+		return nil, err
+	}
+	return &stagingWriter{f: f, remove: remove}, nil
+}
+
+func createPrivateTemp() (*os.File, func(), error) {
 	f, err := os.CreateTemp("", "indexfile-*")
 	if err != nil {
 		return nil, nil, err
 	}
 	return f, func() { _ = os.Remove(f.Name()) }, nil
+}
+
+func (w *stagingWriter) Write(p []byte) (int, error) {
+	n, err := writeStagingAt(w.f, p, w.written)
+	w.written += int64(n)
+	if err == nil || !w.cached {
+		return n, err
+	}
+	if err := w.toPrivate(); err != nil {
+		return n, err
+	}
+	m, err := writeStagingAt(w.f, p[n:], w.written)
+	w.written += int64(m)
+	return n + m, err
+}
+
+func (w *stagingWriter) toPrivate() error {
+	f, remove, err := createPrivateTemp()
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(f, io.NewSectionReader(w.f, 0, w.written)); err != nil {
+		_ = f.Close()
+		remove()
+		return &stagingError{err}
+	}
+	w.close()
+	w.f, w.remove, w.cached = f, remove, false
+	return nil
+}
+
+func (w *stagingWriter) close() {
+	_ = w.f.Close()
+	w.remove()
 }
 
 func insertSQL(ref *Ref, token string, start, count int64) string {

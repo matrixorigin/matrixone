@@ -1,8 +1,11 @@
 # Index file I/O: a logical file layer over index chunk tables
 
-- Status: proposed
+- Status: approved by @fengttt on 2026-10-27, revision `fc9d8c02dd`
+  ([review](https://github.com/matrixorigin/matrixone/pull/31050#pullrequestreview-5661299764))
+- Issue: #31051
+- Implementation PR: #31050
 - Branch: `index_io`
-- Last updated: 2026-10-24
+- Last updated: 2026-10-27
 
 ## Problem
 
@@ -20,8 +23,11 @@ offset `o` lives in the chunk `o / chunk size`. Every byte moves through SQL:
   written are not available to the next read: the writing CN loads the file again
   through the read path.
 
-Incremental index maintenance (the next PR) multiplies both costs: it writes many small
-files and reads them back often.
+Incremental index maintenance multiplies both costs: it writes many small files and reads
+them back often.
+
+This document covers the layer itself: the file contract, the index-file disk cache, and
+the read and write paths. No index uses it yet; each algorithm adopts it in its own change.
 
 ## Contract
 
@@ -40,13 +46,12 @@ need its own garbage collection.
 
 ### File identity and versions
 
-A file is `(index table, index_id, tag)`. Its bytes at a given read snapshot are exactly
-the chunk rows visible at that snapshot, concatenated by `chunk_id`. A file version is
-identified by the content checksum recorded in the index metadata table.
-
-The CDC tail (`tag` 1) is not one immutable file: it grows by appended frames, each
-with its own metadata row. The unit of identity and versioning for the tail is the
-frame (its starting chunk and its checksum), not the whole tail.
+A file is a contiguous range of chunks of one `(index table, index_id, tag)`: a base file
+is all of its chunks from 0, and an appended unit such as a CDC tail frame is the chunks
+from its starting chunk. Its bytes at a given read snapshot are exactly the chunk rows of
+that range visible at that snapshot, concatenated by `chunk_id`. A file version is
+identified by the size and content checksum the caller reads from the index's metadata
+row; the layer reads no metadata itself.
 
 ### The unit is the whole file (decision)
 
@@ -57,8 +62,7 @@ internal detail of how a file is stored.
 ### File names
 
 A file name is derived from the file identity and its version: the index table's id,
-`index_id`, `tag` and the checksum in the metadata row the loader already reads; a CDC
-tail frame's name also carries its starting chunk and its length. A name is never reused
+`index_id`, `tag`, the starting chunk, the size and the checksum. A name is never reused
 for different content, so a rewritten file has a new name and nothing is invalidated.
 
 - The index table is named by its table id (decision, @cpegeric, 2026-10-24). Table ids
@@ -67,10 +71,9 @@ for different content, so a rewritten file has a new name and nothing is invalid
   are cached twice. A rebuild in place (REINDEX) keeps the table id; its new generation
   has a new `index_id` and checksum, so a new name. A snapshot read resolves the table id
   visible at its snapshot.
-- A CDC tail frame's checksum is 32 bits, weaker than a base file's (decision,
-  @cpegeric, 2026-10-24). After a merge rewrites the tail, a frame with different content
-  may start at the same chunk; the length in the name narrows a collision, and the
-  remaining chance (same start, length and checksum) is accepted.
+- A caller may name files by a weak checksum, such as a 32-bit frame checksum (decision,
+  @cpegeric, 2026-10-24). The starting chunk and size in the name narrow a collision, and
+  the remaining chance (same start, size and checksum for different content) is accepted.
 
 The name carries no snapshot timestamp (decision, @cpegeric, 2026-10-24). Snapshot reads
 are handled by the storage engine and the content-addressed name: a reader resolves names
@@ -119,10 +122,11 @@ all once the rows are flushed to storage objects.
   whole workspace for internal SQL that opens no statement). The relation
   readers read the stored objects through the fileservice, as any scan does.
 - How a rebuild uses the existing memory and table-data disk caches is a CN configuration
-  setting (decision, @cpegeric, 2026-10-24): read without filling them (default), bypass
-  them, or read and fill them like an ordinary scan. The default reuses chunk data that is
-  already cached without storing it a second time beside the assembled file, which goes
-  to the index-file cache in every mode.
+  setting (decision, @cpegeric, 2026-10-26): read and fill them like an ordinary scan
+  (default, today's behavior), read without filling them, or bypass them. The default
+  keeps today's caching of chunk data, so when the index-file cache is disabled, too
+  small or full to hold a file, reads still benefit from the memory and disk caches as
+  before. The assembled file goes to the index-file cache in every mode.
 - A missing or duplicated chunk is an error, never a short or padded file.
 - Each CN fills its own disk cache from the rows on first read.
 
@@ -137,9 +141,9 @@ format gate is needed.
 - Consumers that open the file by path (an archive unpacker, a library that maps the
   whole file) see the same bytes as today; nothing is appended or prepended.
 - When the layer rebuilds a file from its rows, it verifies the bytes against the
-  checksum in the file's metadata row, by the rule of that row's kind (a whole-file
-  checksum for a base file, the frame's own footer checksum for a CDC tail frame), then
-  writes the file and its manifest.
+  checksum the caller passes, by the caller's rule (by default the whole-file MD5 the index
+  metadata records; an appended frame can supply its own check), then writes the file and
+  its manifest.
 - The manifest never leaves the CN, so it uses one checksum for every file kind. The
   full checksum is verified on the first open of a cached file after the CN starts; later
   opens on the same CN check the length only (decision, @cpegeric, 2026-10-24). A failed
@@ -165,11 +169,11 @@ nor the reverse. Index files exist only in this cache: a miss is never served fr
 storage backend, only rebuilt from the chunk rows. A CN without a disk cache uses a
 private temporary directory instead, with no reuse between loads.
 
-- The share is enabled by default once an index reads through the layer (decision,
-  @cpegeric, 2026-10-24): until then the default share is zero and the table-data cache is
-  unchanged; with the first adopting index (FULLTEXT2) the default becomes 30%, and on
-  upgrade the table-data cache shrinks by that share. A runtime resize of the disk cache
-  applies the same split to the new size.
+- The default share is zero until an index reads through the layer (decision, @cpegeric,
+  2026-10-24), so this change leaves the table-data cache exactly as it is. The change in
+  which the first index adopts the layer sets the default share (30% is planned); on
+  upgrade the table-data cache then shrinks by that share. A runtime resize of the disk
+  cache applies the same split to the new size.
 - A CN whose storage backend is local disk has no table-data disk cache, because table
   data is already local, but it still gets the index-file cache, sized as the same share of
   the configured disk capacity (decision, @cpegeric, 2026-10-24): rebuilding a file from its
@@ -180,9 +184,14 @@ private temporary directory instead, with no reuse between loads.
   immutable and content-named and every write is a single rename, so sharing is safe; a
   file evicted by one CN is a miss for the other. Rejected alternative: a CN id in the
   path, which stores identical bytes once per CN.
-- The cache is best effort. A failure to write the cache (disk full, a file larger than
-  the cache) never fails the transaction or the query: the rows are the truth, and the
-  reader gets its file from a private temporary file removed when it is closed.
+- The index-file cache directory must not be, contain or lie inside the table-data cache
+  directory; such a configuration is rejected at startup. Each cache's restart scan removes
+  files it does not own.
+- The cache is best effort. A failure to write the cache (disk full while staging or
+  publishing a file, a file larger than the cache) never fails the transaction or the
+  query: the rows are the truth, and the reader or writer continues with a private
+  temporary file removed when it is closed. A writer keeps the bytes it already took
+  from its source, so a source that cannot be re-read is not lost.
 
 Rejected alternative: placing index files in the shared table-data cache under a reserved
 namespace. It needs no new capacity setting, but a large index load and hot table blocks
@@ -195,7 +204,9 @@ eviction mechanism and rules unchanged; index files get no pinning or other spec
 treatment.
 
 - Eviction follows the existing policy against the cache's capacity, including eviction
-  when the disk is full, and removes the evicted file.
+  when the disk is full, and removes the evicted file. Removing an entry leaves nothing
+  of it on disk, so the files and directories the cache keeps are bounded by its live
+  entries.
 - A reader never blocks eviction. It only waits for an in-progress write or eviction of
   the same file, then opens it. A file evicted while a reader holds it open or mapped stays
   readable through that handle; its space is freed when the last handle closes.
@@ -209,15 +220,8 @@ Accepted consequences:
   Table-data reads hold a file briefly; a loaded index holds its file while it is loaded.
   The excess is bounded by what the index-cache governor keeps loaded.
 - A consumer must use the handle the layer returns, not reopen the cache path by name: an
-  eviction between the two opens makes the name disappear.
-
-Explicit removal frees disk as today. Today a loaded index's file is unlinked and freed
-when the loaded index is destroyed. When the index cache destroys a loaded index on
-explicit removal (DDL, a CDC or MERGE replacement, a replaced generation), its files are
-deleted from the index-file cache. When it evicts a current index because it is idle or
-under memory pressure, the files stay, so the next load reads them from disk instead of
-from the rows; this is the one intended change (decision, @cpegeric, 2026-10-24). A CN
-that never learns of a DROP keeps the files until capacity eviction.
+  eviction between the two opens makes the name disappear. A library that takes a path is
+  given a path to the open handle itself, which stays valid until the handle is closed.
 
 Rejected alternative: pinning open files so eviction skips them. It keeps disk use within
 capacity, but adds a second eviction rule to the shared disk-cache code.
@@ -231,36 +235,14 @@ fails, the next waiter tries. A short wait on the cache's own write coordination
 enough: a rebuild takes seconds, and a reader that stops waiting would rebuild the file
 again.
 
-### CDC tail: one file per frame (decision)
-
-Decided by @cpegeric, 2026-10-24, for the first version. Each CDC tail frame is one
-file, whatever the number of chunks it spans; a reader opens the frame files in order.
-The frame encoding, which the vector indexes and FULLTEXT2 already share, moves out of
-the GPU package so neither depends on it.
-
-- A frame is immutable and matches its metadata row one to one, so a reload rebuilds only
-  frames it has not cached, and the writing CN already holds the frames it wrote.
-- MERGE removes the whole tail, and its files with it, so the number of frame files is
-  bounded by the frames between merges.
-
-Rejected alternatives: one file for the whole tail, whose content and name change on
-every appended frame, rewriting the tail each time (quadratic bytes); and appending to a
-cached file in place, which reuses a name for different content and breaks the write-once
-entry that CNs sharing a directory rely on.
-
-Revisit when measurement shows the frame count between merges makes per-frame opens or
-the file count matter. The candidate then is packing inside the cache, in doubling tiers:
-new frames form small packs, two packs of similar size combine into one twice as large,
-and each pack is immutable and named by its first and last frame and a checksum over its
-frames' checksums. About log n files per tail, each byte rewritten about log n times; the
-chunk rows are unchanged. Decide together with the incremental-update design.
-
 ### Memory
 
-The layer never stores file bytes in the memory cache: file bytes live in the index-file
-disk cache, sized and evicted by its configured capacity. A miss rebuild may read chunk
-data already in the memory cache, under the rebuild setting above. What a search keeps resident (a loaded graph, a GPU index,
-mapped postings) stays under the existing index-cache governor. This is how index I/O
+The index-file cache is a layer on top of the existing memory and disk caches, not a
+replacement: the assembled file lives in the index-file disk cache, sized and evicted
+by its configured capacity, while the chunk data a rebuild reads goes through the
+memory and disk caches as today, under the rebuild setting above. What a search keeps
+resident (a loaded graph, a GPU index, mapped postings) stays under the existing
+index-cache governor. This is how index I/O
 shares the CN with SQL instead of claiming its memory.
 
 ### Interoperability and compatibility (decision)
@@ -272,15 +254,13 @@ gate, and each algorithm can switch its readers and writers independently.
 
 ## Scope and non-goals
 
-- In scope: the logical file layer (naming, whole-file write and read, disk cache) and
-  its contract. Algorithms adopt it one at a time, FULLTEXT2 first (decision,
-  @cpegeric, 2026-10-24): its base segments and its CDC tail frames.
-- Not in scope: the incremental-update algorithm itself (the next PR); a new on-disk
-  format; changes to what clone, restore or backup copy; IVFFLAT, which stores no
-  chunks; GPU residency.
-- Before a vector algorithm adopts the layer: its libraries open files by name, so they
-  must be given the handle the layer returns; and IVF-PQ and CAGRA unpack their archive
-  into a second copy on disk, outside the cache and its capacity.
+- In scope: the logical file layer (naming, whole-file write and read, the index-file disk
+  cache, the internal table function the write path uses) and its contract.
+- Not in scope: adopting the layer in any index. Each algorithm adopts it in its own
+  change, which decides how its files map onto the layer (for example how a CDC tail is
+  split into files), when its cached files are deleted, and the default cache share.
+- Not in scope: the incremental-update algorithm; a new on-disk format; changes to what
+  clone, restore or backup copy; IVFFLAT, which stores no chunks; GPU residency.
 - Range reads of a file. Consumers map or load whole files today, and the disk cache
   serves the whole file.
 
@@ -288,47 +268,41 @@ gate, and each algorithm can switch its readers and writers independently.
 
 Every statement in "Contract" is checked by a test that would fail if it were false:
 
-- the bytes read through the layer equal the bytes read through SQL, for each adopting
-  algorithm,
-  at the current snapshot and at a historical snapshot;
-- a file written through the layer is read back identically through SQL, and the
-  reverse;
+- a file written through the layer reads back identically through SQL, through the writing
+  transaction before commit, and through another cache after commit; rows written by a
+  plain `INSERT` read back identically through the layer;
+- a read at a historical snapshot rebuilds a file whose rows were deleted after it;
 - a read on a disk-cache miss rebuilds the file from the rows, and a second read is served
-  from the disk cache without reading the rows;
-- a missing or duplicated chunk fails the read;
-- an aborted write leaves no rows, and no reader reaches its cached file;
-- a rewritten file never serves its previous content;
-- a corrupted chunk fails verification at rebuild, and a corrupted cached file or
-  manifest, or a file without its manifest, is rebuilt instead of being served;
-- the cached file is byte-identical to the payload (an archive or mapped file opens
-  unchanged);
-- the chunk rows written through the layer are byte-identical to those the SQL path writes
-  for the same file;
+  from the disk cache without reading the rows; a cached file is served without its rows;
+- the rebuild reads only the file's chunk range: rows of an `index_id` that is a prefix or
+  an extension of the file's, chunks beyond the file and neighbouring ranges are excluded,
+  for rows in memory and rows flushed to storage objects;
+- a missing, duplicated, wrongly sized or corrupted chunk fails the read, and nothing is
+  cached; a cache disk that fails while staging a file does not fail the read or the
+  write, keeps the bytes already read from the source, and caches nothing, while a source
+  error still fails the write;
+- a corrupted cached file is detected on the first open in the process and rebuilt; an
+  entry missing a file is replaced;
 - writing chunk rows that already exist fails with a duplicate-key error, as an `INSERT`
-  does;
-- the table function cannot be called from user SQL, nor by another transaction, nor after
-  its write finished;
-- clone, restore and snapshot reads of an index written through the layer behave as
-  before, including a snapshot search after a merge, which rebuilds the merged-away
-  segment from the rows visible at the snapshot;
-- the layer never stores file bytes in the memory cache, and index-file cache use stays
-  within its configured capacity, plus evicted files still mapped, under a load larger
-  than it;
-- a file evicted while open or mapped stays readable through the open handle, and the next
-  open is a miss that rebuilds it;
-- concurrent readers missing the same file rebuild it once; cancelling a waiter does not
-  affect the rebuild; a failed rebuild lets the next waiter rebuild;
-- the file and its manifest are never visible apart, and are evicted together; a
-  corrupted cached file is detected on the first open after a restart and rebuilt;
-- two CNs in one process sharing the directory never serve a partial file;
-- explicit removal deletes the removed index's files; idle eviction keeps them;
-- a tail reload rebuilds only frames not yet cached, and a merge deletes every frame file
-  of the old tail;
-- a cache write failure does not fail the write transaction or the read;
-- a runtime disk-cache resize applies the share;
-- each rebuild cache setting behaves as stated: the default fills neither the memory nor
-  the table-data disk cache, bypass reads none of them, read-and-fill fills them;
-- cached index files are reused after a CN restart;
-- a CN without a disk cache still serves reads, rebuilding each load from the rows;
-- the table-data cache behaves exactly as before: its capacity is reduced by the
-  configured share and nothing else changes.
+  does; a failed write caches nothing and leaves no registered source or temporary file;
+- the table function cannot be called from user SQL, nor by another transaction, nor
+  after its write finished, nor for chunks outside the file, nor with an input;
+- a file evicted while open stays readable through the open handle and through the path to
+  the handle, and the next open is a miss that rebuilds it;
+- concurrent readers missing the same file rebuild it once; a cancelled waiter does not
+  hold the lock;
+- an entry is never visible before it is complete, its files come from one version, and it
+  is evicted and deleted as a unit, leaving no directory of its own behind; concurrent
+  puts, opens, deletes and evictions leave the directory and the cache index in agreement;
+- two cache instances sharing a directory never serve a partial entry, and exactly one
+  publishes an entry both write;
+- cached entries are reused after a restart, and leftover temporary and trash directories
+  are removed;
+- the configured share splits the disk capacity and a runtime resize; with the default share
+  no index-file cache exists and the table-data cache keeps its full capacity; only a CN's
+  SHARED file service gets the cache; an overlapping directory and an invalid share or
+  rebuild setting are rejected; each rebuild setting maps to its cache policy, and a
+  rebuild in the `read` or `none` setting starts no full-file prefetch through the storage
+  engine's reader while the default setting does;
+- a CN without an index-file cache still serves reads, rebuilding each load from the rows;
+- a table-data disk cache never treats a directory as a cache entry.

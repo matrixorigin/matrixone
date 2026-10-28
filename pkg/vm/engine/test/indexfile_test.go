@@ -21,6 +21,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"sync"
 	"testing"
 	"time"
 
@@ -47,11 +48,11 @@ type indexFileEngine struct {
 	exec executor.SQLExecutor
 }
 
-func setupIndexFileEngine(t *testing.T) *indexFileEngine {
+func setupIndexFileEngine(t *testing.T, opts ...testutil.TestDisttaeEngineOptions) *indexFileEngine {
 	catalog.SetupDefines("")
 	base, cancel := context.WithCancel(context.Background())
 	base = context.WithValue(base, defines.TenantIDKey{}, catalog.System_Account)
-	de, tae, rpcAgent, _ := testutil.CreateEngines(base, testutil.TestOptions{}, t)
+	de, tae, rpcAgent, _ := testutil.CreateEngines(base, testutil.TestOptions{}, t, opts...)
 	ctx, cancelTimeout := context.WithTimeout(base, 5*time.Minute)
 	tae.GetDB().Runtime.SyncProtectionValidator = nil
 	t.Cleanup(func() {
@@ -90,10 +91,14 @@ func (e *indexFileEngine) run(txn client.TxnOperator, sql string) error {
 
 // flush persists the chunk table's rows into storage objects.
 func (e *indexFileEngine) flush() {
+	e.flushTable("idx")
+}
+
+func (e *indexFileEngine) flushTable(table string) {
 	op := e.txn()
 	db, err := e.de.Engine.Database(e.ctx, "ifdb", op)
 	require.NoError(e.t, err)
-	rel, err := db.Relation(e.ctx, "idx", nil)
+	rel, err := db.Relation(e.ctx, table, nil)
 	require.NoError(e.t, err)
 	require.NoError(e.t, e.tae.GetDB().FlushTable(e.ctx, catalog.System_Account, rel.GetDBID(e.ctx), rel.GetTableID(e.ctx),
 		types.TimestampToTS(e.de.Now())))
@@ -114,7 +119,11 @@ func (e *indexFileEngine) env(txn client.TxnOperator, cache *fileservice.IndexFi
 }
 
 func (e *indexFileEngine) cache() *fileservice.IndexFileCache {
-	c, err := fileservice.NewIndexFileCache(e.ctx, e.t.TempDir(), fscache.ConstCapacity(1<<30), "")
+	return e.cacheWith(fileservice.IndexFileRebuildPolicyDefault)
+}
+
+func (e *indexFileEngine) cacheWith(rebuild fileservice.Policy) *fileservice.IndexFileCache {
+	c, err := fileservice.NewIndexFileCache(e.ctx, e.t.TempDir(), fscache.ConstCapacity(1<<30), "", rebuild)
 	require.NoError(e.t, err)
 	e.t.Cleanup(func() { c.Close(context.Background()) })
 	return c
@@ -232,4 +241,82 @@ func TestIndexFileWriteOpenThroughEngine(t *testing.T) {
 	sqlRef := indexfile.Ref{DB: "ifdb", Table: "idx", IndexID: "sql:1", Size: int64(len(sqlFile)), Checksum: md5HexOf(sqlFile)}
 	require.Equal(t, sqlFile, e.open(txn4, e.cache(), sqlRef))
 	require.NoError(t, txn4.Commit(e.ctx))
+}
+
+type prefetchRecorder struct {
+	fileservice.FileService
+	mu    sync.Mutex
+	paths map[string]struct{}
+}
+
+func (r *prefetchRecorder) PrefetchFile(ctx context.Context, filePath string) error {
+	r.mu.Lock()
+	r.paths[filePath] = struct{}{}
+	r.mu.Unlock()
+	return r.FileService.PrefetchFile(ctx, filePath)
+}
+
+func (r *prefetchRecorder) seen(paths []string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, p := range paths {
+		if _, ok := r.paths[p]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+func (e *indexFileEngine) objectPaths(table string) []string {
+	res, err := e.exec.Exec(e.ctx,
+		"select distinct object_name from metadata_scan('ifdb."+table+"', '*') g",
+		executor.Options{}.WithDisableIncrStatement())
+	require.NoError(e.t, err)
+	defer res.Close()
+	var out []string
+	for _, bat := range res.Batches {
+		for i := 0; i < bat.RowCount(); i++ {
+			out = append(out, bat.Vecs[0].GetStringAt(i))
+		}
+	}
+	require.NotEmpty(e.t, out)
+	return out
+}
+
+func TestIndexFileRebuildPrefetchFollowsPolicy(t *testing.T) {
+	rec := &prefetchRecorder{paths: make(map[string]struct{})}
+	e := setupIndexFileEngine(t, testutil.WithDisttaeEngineFileService(func(fs fileservice.FileService) fileservice.FileService {
+		rec.FileService = fs
+		return rec
+	}))
+	e.run(nil, "create table ifdb.idx2 (index_id varchar(128), chunk_id bigint, data longblob, tag bigint, primary key (index_id, chunk_id))")
+
+	// prefetch starts once a scan covers four blocks: one object per chunk
+	data := indexFileBytes(4*indexfile.ChunkSize, 4)
+	for _, table := range []string{"idx", "idx2"} {
+		for i := 0; i < 4; i++ {
+			chunk := data[i*indexfile.ChunkSize : (i+1)*indexfile.ChunkSize]
+			e.run(nil, fmt.Sprintf("insert into ifdb.%s values ('p:1', %d, unhex('%s'), 0)", table, i, hex.EncodeToString(chunk)))
+			e.flushTable(table)
+		}
+	}
+	ref := indexfile.Ref{DB: "ifdb", Table: "idx", IndexID: "p:1", Size: int64(len(data)), Checksum: md5HexOf(data)}
+	ref2 := ref
+	ref2.Table = "idx2"
+	restricted, control := e.objectPaths("idx"), e.objectPaths("idx2")
+
+	for _, mode := range []string{fileservice.IndexFileRebuildCacheRead, fileservice.IndexFileRebuildCacheNone} {
+		policy, err := fileservice.ParseIndexFileRebuildCache(mode)
+		require.NoError(t, err)
+		txn := e.txn()
+		require.Equal(t, data, e.open(txn, e.cacheWith(policy), ref), mode)
+		require.NoError(t, txn.Commit(e.ctx))
+	}
+
+	txn := e.txn()
+	require.Equal(t, data, e.open(txn, e.cacheWith(fileservice.IndexFileRebuildPolicyDefault), ref2))
+	require.NoError(t, txn.Commit(e.ctx))
+	require.Eventually(t, func() bool { return rec.seen(control) }, time.Minute, 10*time.Millisecond,
+		"a read-write rebuild prefetches its objects")
+	require.False(t, rec.seen(restricted), "read and none rebuilds must not prefetch")
 }

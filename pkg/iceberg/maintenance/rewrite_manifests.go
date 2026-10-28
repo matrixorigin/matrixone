@@ -46,7 +46,7 @@ func (p RewriteManifestsPlanner) BuildMaintenanceCommit(ctx context.Context, req
 	}
 	targetRef := firstNonEmptyString(req.TargetRef, "main")
 	summary := map[string]string{
-		"operation":       string(OperationRewriteManifests),
+		"operation":       "replace",
 		"engine":          "matrixone",
 		"idempotency-key": firstNonEmptyString(req.IdempotencyKey, req.JobID),
 		"base-snapshot":   strconv.FormatInt(snapshot.SnapshotID, 10),

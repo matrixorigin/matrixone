@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
 
@@ -95,6 +96,9 @@ func bindAndOptimizeSelectQueryWithValidatorAndCapture(
 	if IsSnapshotValid(ctx.GetSnapshot()) {
 		bindCtx.snapshot = ctx.GetSnapshot()
 	}
+	// The physical ROLLUP selector is needed while binding the query block.
+	// createQuery parses the same setting again for the optimizer passes.
+	builder.parseOptimizeHints()
 
 	rootId, err := builder.bindSelect(stmt, bindCtx, true)
 	if err != nil {
@@ -103,6 +107,7 @@ func bindAndOptimizeSelectQueryWithValidatorAndCapture(
 	if err = builder.bindPreparedPredicateDiagnostics(); err != nil {
 		return nil, err
 	}
+	builder.finalizeCTEIdentity(rootId)
 	builder.skipStats = skipStats
 	// Shared-computation rewrites happen before createQuery, so parse the
 	// service-level rollback hint before entering either rewrite.
@@ -889,6 +894,8 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bool) (re
 		return nil, moerr.NewInternalErrorf(ctx.GetContext(), "statement: '%v'", tree.String(stmt, dialect.MYSQL))
 	case *tree.Do, *tree.Declare:
 		return nil, moerr.NewNotSupported(ctx.GetContext(), tree.String(stmt, dialect.MYSQL))
+	case *tree.CreateExtension, *tree.LoadExtension:
+		return nil, moerr.NewNotSupported(ctx.GetContext(), "extension statements are not supported in MatrixOne")
 	case *tree.ValuesStatement:
 		return buildValues(stmt, ctx, isPrepareStmt)
 	case *tree.LockTableStmt:
@@ -992,6 +999,11 @@ func GetResultColumnsFromPlan(p *Plan) []*ColDef {
 			return nil
 		}
 		columns := make([]*ColDef, len(lastNode.ProjectList))
+		var integerValues []function.IntegerLogicalPrecision
+		if query.IntegerPrecision != nil {
+			integerValues = evaluateIntegerPrecision(query.IntegerPrecision)
+		}
+
 		// Only BOOLEAN wire metadata consumes expression kind. Keep all other
 		// result types on the existing origin/key path.
 		var kinds *resultColumnKinds
@@ -1001,6 +1013,16 @@ func GetResultColumnsFromPlan(p *Plan) []*ColDef {
 				Typ:  expr.Typ,
 			}
 
+			if graph := query.IntegerPrecision; graph != nil && idx < len(graph.Outputs) {
+				out := graph.Outputs[idx]
+				if out.Node != 0 && graph.Nodes[out.Node-1].Arithmetic {
+					p := integerValues[out.Node-1]
+					oid := types.T(expr.Typ.Id)
+					if p.Known && (oid == types.T_int64 || oid == types.T_uint64) && p.Unsigned == oid.IsUnsignedInt() {
+						columns[idx].IntegerResultPresentation = &plan.IntegerResultPresentation{DisplayLength: uint32(p.DisplayLength())}
+					}
+				}
+			}
 			if exprCol, ok := expr.Expr.(*plan.Expr_Col); ok {
 				if col := exprCol.Col; col != nil {
 					columns[idx].TblName = col.TblName

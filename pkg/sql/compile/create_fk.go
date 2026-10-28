@@ -30,9 +30,8 @@ import (
 )
 
 type forwardForeignKeyChild struct {
-	relation   engine.Relation
-	constraint *engine.ConstraintDef
-	bindings   []*plan2.FkData
+	relation engine.Relation
+	bindings []*plan2.FkData
 }
 
 // The plan's incoming references only determine admission order. The catalog
@@ -112,11 +111,7 @@ func (c *Compile) bindCreateForwardForeignKeys(q *plan.CreateTable, database str
 			return nil, nil, err
 		}
 		current := rel.CopyTableDef(c.proc.Ctx)
-		complete, err := GetConstraintDef(c.proc.Ctx, rel)
-		if err != nil {
-			return nil, nil, err
-		}
-		child := forwardForeignKeyChild{relation: rel, constraint: complete}
+		child := forwardForeignKeyChild{relation: rel}
 		for _, name := range slices.Sorted(maps.Keys(constraints)) {
 			binding, err := plan2.BindForwardForeignKey(c.proc.Ctx, name, constraints[name], current, q.TableDef)
 			if err != nil {
@@ -169,10 +164,19 @@ func (c *Compile) publishCreateForwardForeignKeys(parent engine.Relation, childr
 			}
 			fresh[fk.Name] = fk
 		}
+		// Read the child's CURRENT constraint instead of the bind-time snapshot:
+		// between binding and publication, createTable registers this child on
+		// the direct-FK parents' RefChildTableDef. Merging into the stale
+		// snapshot would rewrite the child with a constraint that no longer
+		// carries unrelated entries added in the meantime (#30604-like loss).
+		latest, err := GetConstraintDef(c.proc.Ctx, child.relation)
+		if err != nil {
+			return err
+		}
 		// Preserve every unrelated constraint, and update each child exactly once.
 		merged := &engine.ForeignKeyDef{}
-		complete := &engine.ConstraintDef{Cts: make([]engine.Constraint, 0, len(child.constraint.Cts)+1)}
-		for _, constraint := range child.constraint.Cts {
+		complete := &engine.ConstraintDef{Cts: make([]engine.Constraint, 0, len(latest.Cts)+1)}
+		for _, constraint := range latest.Cts {
 			if existing, ok := constraint.(*engine.ForeignKeyDef); ok {
 				for _, fk := range existing.Fkeys {
 					if _, replaced := fresh[fk.Name]; !replaced {

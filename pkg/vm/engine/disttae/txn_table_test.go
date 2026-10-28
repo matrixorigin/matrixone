@@ -807,26 +807,6 @@ func TestPKCheckHistoricalSnapshotFallbackIsTerminal(t *testing.T) {
 // 	ctx := context.Background()
 // 	mp := mpool.MustNewZero()
 
-// 	getRowIDsBatch := func(table *txnTable) *batch.Batch {
-// 		bat := batch.New(false, []string{catalog.Row_ID})
-// 		vec := vector.NewVec(types.T_Rowid.ToType())
-// 		iter := table.localState.NewRowsIter(
-// 			types.TimestampToTS(table.nextLocalTS()),
-// 			nil,
-// 			false,
-// 		)
-// 		l := 0
-// 		for iter.Next() {
-// 			entry := iter.Entry()
-// 			vector.AppendFixed(vec, entry.RowID, false, mp)
-// 			l++
-// 		}
-// 		iter.Close()
-// 		bat.SetVector(0, vec)
-// 		bat.SetZs(l, mp)
-// 		return bat
-// 	}
-
 // 	table := newTxnTableForTest(mp)
 
 // 	// insert
@@ -1009,6 +989,43 @@ func TestPartitionRowEstimate(t *testing.T) {
 	state.UpdateDuration(types.BuildTS(10, 0), types.MaxTs())
 	_, err = partitionRowEstimate(state, types.BuildTS(9, 0))
 	require.Error(t, err, "historical state must not be admitted as current statistics")
+}
+
+func TestReplayRowColumnSizeIncludesPhysicalRowID(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	rowIDVec := vector.NewVec(types.T_Rowid.ToType())
+	tsVec := vector.NewVec(types.T_TS.ToType())
+	idVec := vector.NewVec(types.T_int64.ToType())
+	defer rowIDVec.Free(mp)
+	defer tsVec.Free(mp)
+	defer idVec.Free(mp)
+	require.NoError(t, vector.AppendFixed(rowIDVec, types.RandomRowid(), false, mp))
+	require.NoError(t, vector.AppendFixed(tsVec, types.BuildTS(1, 0), false, mp))
+	require.NoError(t, vector.AppendFixed(idVec, int64(42), false, mp))
+	state := logtailreplay.NewPartitionState("test", false, 42, false)
+	packer := types.NewPacker()
+	defer packer.Close()
+	state.HandleRowsInsert(context.Background(), &api.Batch{
+		Attrs: []string{catalog.Row_ID, objectio.DefaultCommitTS_Attr, "id"},
+		Vecs: []api.Vector{
+			mustVectorToProtoForMaterializedSnapshotTest(t, rowIDVec),
+			mustVectorToProtoForMaterializedSnapshotTest(t, tsVec),
+			mustVectorToProtoForMaterializedSnapshotTest(t, idVec),
+		},
+	}, 0, packer, mp)
+	iter := state.NewRowsIter(types.MaxTs(), nil, false)
+	defer iter.Close()
+	require.True(t, iter.Next())
+	entry := iter.Entry()
+	require.Zero(t, entry.Batch.Vecs[0].Length())
+	cols := map[string]*planpb.ColDef{
+		catalog.Row_ID: {Name: catalog.Row_ID},
+		"id":           {Name: "id"},
+	}
+	require.Equal(t, uint64(types.RowidSize+8), replayRowColumnSize(entry, cols))
+	delete(cols, catalog.Row_ID)
+	require.Equal(t, uint64(8), replayRowColumnSize(entry, cols))
 }
 
 func TestPartitionRowEstimateAfterAppendableFlush(t *testing.T) {

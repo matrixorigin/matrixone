@@ -24,6 +24,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/google/uuid"
@@ -46,6 +47,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionUtil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
@@ -560,6 +563,29 @@ func geometryShowColumnType(typ *types.Type) string {
 	return ts
 }
 
+// columnDefaultValue renders a stored default for information_schema.COLUMNS
+// and SHOW COLUMNS / DESC: DEFAULT NULL is SQL NULL and a string literal is
+// its value, like MySQL. Other defaults keep their origin text.
+func columnDefaultValue(origin string) []byte {
+	if origin == "" || strings.EqualFold(origin, "null") {
+		return nil
+	}
+	n := len(origin)
+	if n < 2 || origin[0] != '\'' || origin[n-1] != '\'' {
+		return functionUtil.QuickStrToBytes(origin)
+	}
+	// OriginString uses the persisted formatter's escapes, independently of
+	// the querying session's SQL mode. Keep lexical decoding with its owner.
+	scanner := mysql.NewScanner(dialect.MYSQL, origin)
+	defer mysql.PutScanner(scanner)
+	token, value := scanner.Scan()
+	if token != mysql.STRING || scanner.Pos != n {
+		return functionUtil.QuickStrToBytes(origin)
+	}
+	// A decoded empty literal is a non-NULL value, unlike an absent default.
+	return []byte(value)
+}
+
 func builtInMoShowVisibleBin(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
 	p2 := vector.GenerateFunctionFixedTypeParameter[uint8](parameters[1])
@@ -591,7 +617,7 @@ func builtInMoShowVisibleBin(parameters []*vector.Vector, result vector.Function
 			if err != nil {
 				return nil, err
 			}
-			return functionUtil.QuickStrToBytes(def.OriginString), nil
+			return columnDefaultValue(def.OriginString), nil
 		}
 	case typNormal:
 		f = func(s []byte) ([]byte, error) {
@@ -634,39 +660,16 @@ func builtInMoShowVisibleBin(parameters []*vector.Vector, result vector.Function
 			return functionUtil.QuickStrToBytes(ret), nil
 		}
 	case defExprInShowColumns:
-		formatStr := func(str string) string {
-			tmp := strings.Replace(str, "`", "``", -1)
-			strLen := len(tmp)
-			if strLen < 2 {
-				return tmp
-			}
-			if tmp == "''" {
-				return ""
-			}
-			if tmp[0] == '\'' && tmp[strLen-1] == '\'' {
-				return strings.Replace(tmp[1:strLen-1], "'", "''", -1)
-			}
-			return strings.Replace(tmp, "'", "''", -1)
-		}
+		// Same display as information_schema.COLUMNS.COLUMN_DEFAULT: decode a
+		// string literal via the MySQL scanner. OriginString is already SQL text,
+		// so re-escaping (the old formatStr) doubled quotes/backticks.
 		f = func(s []byte) ([]byte, error) {
 			def := new(plan.Default)
 			err := types.Decode(s, def)
 			if err != nil {
 				return nil, err
 			}
-			if strings.EqualFold(def.OriginString, "null") || len(def.OriginString) == 0 {
-				return nil, nil
-			}
-			trimmed := strings.TrimSpace(def.OriginString)
-			if strings.HasPrefix(trimmed, "(") && strings.HasSuffix(trimmed, ")") {
-				return functionUtil.QuickStrToBytes(trimmed), nil
-			}
-
-			fStr := formatStr(def.OriginString)
-			if len(fStr) == 0 {
-				return []byte{}, nil
-			}
-			return functionUtil.QuickStrToBytes(fStr), nil
+			return columnDefaultValue(def.OriginString), nil
 		}
 	case generatedExprOrigin:
 		f = func(s []byte) ([]byte, error) {
@@ -1197,23 +1200,85 @@ func builtInConcatCheck(_ []overload, inputs []types.Type) checkResult {
 
 // JSON stores an encoded value; concatenation consumes its JSON text, including
 // quotes around JSON strings. Keep assignment CAST's unquoting contract separate.
-func concatStringValue(source types.T, value []byte) ([]byte, error) {
+func concatStringValue(ctx context.Context, source types.T, value []byte) ([]byte, error) {
 	if source != types.T_json {
 		return value, nil
 	}
-	return types.DecodeJson(value).MarshalJSON()
+	return marshalJSONForFloatStringProof(ctx, types.DecodeJson(value))
 }
 
 func builtInConcat(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	ps := make([]vector.FunctionParameterWrapper[types.Varlena], len(parameters))
+	direct := !rs.GetResultVector().IsConst()
 	for i := range ps {
 		ps[i] = vector.GenerateFunctionStrParameter(parameters[i])
+		// JSON conversion can fail before a later NULL argument is visited.
+		// Keep that left-to-right behavior on the existing conversion path.
+		direct = direct && parameters[i].GetType().Oid != types.T_json
 	}
+	allocationLimit := mpool.MaxAllocationSize()
+	var inline [types.VarlenaInlineSize]byte
 
 	for i := uint64(0); i < uint64(length); i++ {
 		if functionRowSkipped(selectList, i) {
 			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		if direct {
+			var size int64
+			isNull, tooLarge := false, false
+			for _, p := range ps {
+				value, null := p.GetStrValue(i)
+				if null {
+					isNull = true
+					break
+				}
+				if int64(len(value)) > allocationLimit-size {
+					tooLarge = true
+				} else if !tooLarge {
+					size += int64(len(value))
+				}
+			}
+			if isNull {
+				if err := rs.AppendBytes(nil, true); err != nil {
+					return err
+				}
+				continue
+			}
+			// Check both the row length and cumulative area before arithmetic in
+			// the writer. A later NULL above still takes precedence over size.
+			if tooLarge || (size > types.VarlenaInlineSize &&
+				size > allocationLimit-int64(len(rs.GetResultVector().GetArea()))) {
+				return mpool.ErrAllocationAllocatorLimit
+			}
+			if size <= types.VarlenaInlineSize {
+				// Reuse bounded scratch for inline values. Passing a descriptor
+				// through the writer callback would allocate it on every row.
+				dst := inline[:int(size)]
+				offset := 0
+				for _, p := range ps {
+					value, _ := p.GetStrValue(i)
+					offset += copy(dst[offset:], value)
+				}
+				if err := rs.AppendBytes(dst, false); err != nil {
+					return err
+				}
+				continue
+			}
+			// Inputs remain owned by the child expressions. The synchronous
+			// writer reserves the result's storage before copying into it, so
+			// no intermediate concatenation escapes mpool admission.
+			if err := rs.AppendBytesWithWriter(int(size), func(dst []byte) error {
+				offset := 0
+				for _, p := range ps {
+					value, _ := p.GetStrValue(i)
+					offset += copy(dst[offset:], value)
+				}
+				return nil
+			}); err != nil {
 				return err
 			}
 			continue
@@ -1230,7 +1295,7 @@ func builtInConcat(parameters []*vector.Vector, result vector.FunctionResultWrap
 				apv = false
 				break
 			} else {
-				v, err := concatStringValue(parameters[j].GetType().Oid, v)
+				v, err := concatStringValue(proc.Ctx, parameters[j].GetType().Oid, v)
 				if err != nil {
 					return err
 				}
@@ -1863,9 +1928,11 @@ func builtInPurgeLog(parameters []*vector.Vector, result vector.FunctionResultWr
 func builtInDatabase(_ []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[types.Varlena](result)
 
+	// MySQL: DATABASE() / SCHEMA() return NULL when there is no default database.
+	db := proc.GetSessionInfo().GetDatabase()
+	isNull := len(db) == 0
 	for i := uint64(0); i < uint64(length); i++ {
-		db := proc.GetSessionInfo().GetDatabase()
-		if err := rs.AppendBytes(functionUtil.QuickStrToBytes(db), false); err != nil {
+		if err := rs.AppendBytes(functionUtil.QuickStrToBytes(db), isNull); err != nil {
 			return err
 		}
 	}
@@ -4646,18 +4713,6 @@ func builtInToSeconds(parameters []*vector.Vector, result vector.FunctionResultW
 	return nil
 }
 
-// CalcToSeconds: CalcToDays is used to return a day number (the number of days since year 0)
-func CalcToSeconds(ctx context.Context, datetimes []types.Datetime, ns *nulls.Nulls) ([]int64, error) {
-	res := make([]int64, len(datetimes))
-	for idx, datetime := range datetimes {
-		if nulls.Contains(ns, uint64(idx)) {
-			continue
-		}
-		res[idx] = DateTimeDiff(intervalUnitSECOND, types.DatetimeEpoch, datetime) + ADZeroSeconds
-	}
-	return res, nil
-}
-
 func builtInSin(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	p1 := vector.GenerateFunctionFixedTypeParameter[float64](parameters[0])
 	rs := vector.MustFunctionResult[float64](result)
@@ -5086,8 +5141,71 @@ func builtInToUpper(parameters []*vector.Vector, result vector.FunctionResultWra
 }
 
 func builtInToLower(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryBytesToBytesByStringDomain(
-		parameters, result, proc, length, bytes.ToLower, func(value []byte) []byte { return value }, selectList)
+	if length <= 1 {
+		return opUnaryBytesToBytesByStringDomain(
+			parameters, result, proc, length, bytes.ToLower, func(value []byte) []byte { return value }, selectList)
+	}
+	input := parameters[0]
+	binary, perRow := stringDomainMode(input)
+	if input.IsConst() || result.GetResultVector().IsConst() || input.HasNull() ||
+		binary || perRow || !selectList.ShouldEvalAllRow() || selectList.IgnoreAllRow() {
+		return opUnaryBytesToBytesByStringDomain(
+			parameters, result, proc, length, bytes.ToLower, func(value []byte) []byte { return value }, selectList)
+	}
+
+	// Reuse only within this evaluation; power-of-two growth stays below 128KiB total.
+	const maxScratch = 64 << 10
+	result.UseOptFunctionParamFrame(1)
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	param := vector.OptGetBytesParamFromWrapper(rs, 0, input)
+	var inline [types.VarlenaInlineSize]byte
+	scratch := inline[:]
+	for row := uint64(0); row < uint64(length); row++ {
+		value, _ := param.GetStrValue(row)
+		if len(value) > maxScratch {
+			if err := rs.AppendBytes(bytes.ToLower(value), false); err != nil {
+				return err
+			}
+			continue
+		}
+		isASCII, hasUpper := true, false
+		for _, c := range value {
+			if c >= utf8.RuneSelf {
+				isASCII = false
+				break
+			}
+			hasUpper = hasUpper || ('A' <= c && c <= 'Z')
+		}
+
+		var err error
+		switch {
+		case !isASCII:
+			err = rs.AppendBytes(bytes.Map(unicode.ToLower, value), false)
+		case !hasUpper:
+			err = rs.AppendBytes(value, false)
+		default:
+			if len(value) > cap(scratch) {
+				size := 32
+				for size < len(value) {
+					size *= 2
+				}
+				scratch = make([]byte, size)
+			}
+			dst := scratch[:len(value)]
+			for i := range dst {
+				c := value[i]
+				if 'A' <= c && c <= 'Z' {
+					c += 'a' - 'A'
+				}
+				dst[i] = c
+			}
+			err = rs.AppendBytes(dst, false)
+		}
+		if err != nil {
+			return err
+		}
+	}
+	return setSelectedStringResultDomain(input, result, proc)
 }
 
 // buildInMOCU extract cu or calculate cu from parameters

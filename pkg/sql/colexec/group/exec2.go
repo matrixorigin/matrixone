@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -155,6 +156,14 @@ func (group *Group) Prepare(proc *process.Process) (err error) {
 	if err = group.prepareGroupAndAggArg(proc); err != nil {
 		return err
 	}
+	if group.SortRollup {
+		if group.DynamicGrouping || hasInactiveGroupingColumn(group.GroupingFlag) {
+			return moerr.NewInternalErrorNoCtx("sort rollup does not support dynamic grouping metadata")
+		}
+		if err = group.prepareSortRollup(proc); err != nil {
+			return err
+		}
+	}
 
 	if err = group.PrepareProjectionWithAllocation(
 		proc, group.ctr.expressionAllocation); err != nil {
@@ -203,13 +212,21 @@ func (group *Group) prepareGroupAndAggArg(proc *process.Process) (err error) {
 				variableLengthKey = true
 			}
 			width := GetKeyWidth(types.T(expr.Typ.Id), expr.Typ.Width, group.ctr.keyNullable)
-			group.ctr.keyWidth += int32(width)
+			// Width only selects the hash-key codec. A LONGTEXT key plus its
+			// NULL marker already exceeds int32; wrapping a composite width can
+			// misclassify real keys as H0 or legacy H8. Saturate wide estimates
+			// while preserving exact widths for the eight-byte fast path.
+			if width < 0 || width > math.MaxInt32-int(group.ctr.keyWidth) {
+				group.ctr.keyWidth = math.MaxInt32
+			} else {
+				group.ctr.keyWidth += int32(width)
+			}
 		}
 
 		legacyShortVariableKey := variableLengthKey && group.ctr.keyWidth <= 8 &&
 			!groupHashStringWireEnabled(proc)
 		group.ctr.legacyH8CharSemantics = legacyShortVariableKey
-		if group.ctr.keyWidth == 0 {
+		if hashKeyCount == 0 {
 			group.ctr.mtyp = H0
 		} else if (compactHashKey || legacyShortVariableKey) && group.ctr.keyWidth <= 8 {
 			group.ctr.mtyp = H8
@@ -370,6 +387,9 @@ func (group *Group) Call(
 	defer func() {
 		callErr = hashbuild.TerminalBudgetErrorForOperator(proc.Ctx, "group", callErr)
 	}()
+	if group.SortRollup {
+		return group.callSortRollup(proc)
+	}
 	var err error
 
 	var isCancel bool
@@ -464,19 +484,15 @@ func (group *Group) Call(
 
 		// spilling -- spill whatever left in memory, and load first spilled bucket.
 		if group.ctr.isSpilling() {
-			if group.ctr.distinctSpill != nil {
-				if _, err = group.ctr.drainExactCountDistinct(
-					proc, group.OpAnalyzer); err != nil {
-					return vm.CancelResult, err
-				}
-			}
 			if bytes, rows, err := group.ctr.spillDataToDisk(proc, group.OpAnalyzer, nil); err != nil {
 				return vm.CancelResult, err
 			} else {
 				group.OpAnalyzer.Spill(bytes)
 				group.OpAnalyzer.SpillRows(rows)
 			}
-			if group.ctr.distinctSpill != nil && group.ctr.mtyp != H0 {
+			// Only final evaluation may reduce exact keys to cardinalities.
+			// Partials retain identities for downstream DISTINCT deduplication.
+			if group.NeedEval && group.ctr.distinctSpill != nil && group.ctr.mtyp != H0 {
 				if err = group.ctr.prepareGroupedDistinctContributions(proc); err != nil {
 					return vm.CancelResult, err
 				}
@@ -640,7 +656,13 @@ func (group *Group) buildOneBatch(proc *process.Process, bat *batch.Batch) (bool
 		for i := 0; i < count; i += hashmap.UnitLimit {
 			n := min(count-i, hashmap.UnitLimit)
 			var preview groupInsertPreview
-			var aggregateGroupScratch [hashmap.UnitLimit]uint64
+			// Only dynamic grouping needs to mask synthetic rows. Passing this
+			// scratch to aggregate interfaces makes it escape, so ordinary GROUP
+			// BY must not allocate a row-sized array for every input chunk.
+			var aggregateGroupScratch []uint64
+			if group.DynamicGrouping {
+				aggregateGroupScratch = make([]uint64, n)
+			}
 			for {
 				err = nil
 				if !evaluated {
@@ -1284,28 +1306,36 @@ func (group *Group) outputOneBatch(proc *process.Process) (vm.CallResult, error)
 	if group.NeedEval {
 		return group.ctr.outputOneBatchFinal(proc, group.OpAnalyzer, group.Aggs)
 	} else {
-		// The previous partial batch has returned to the caller. Only now may we
-		// release its state and materialize the next exact-key leaf.
-		if group.ctr.inputDone &&
-			group.ctr.currBatchIdx >= len(group.ctr.groupByBatches) &&
-			group.ctr.distinctSpill != nil {
-			loaded, err := group.ctr.loadNextDistinctPartialLeaf(proc)
-			if err != nil {
-				return vm.CancelResult, err
-			}
-			if !loaded {
-				group.ctr.state = vm.End
-				return vm.CancelResult, nil
+		// Retire the previous batch only after it has returned to the caller.
+		// Generic reload can drain more exact keys, so finish its queue before
+		// consuming exact-key leaves. Those leaves remain deferred until EOF.
+		if group.ctr.currBatchIdx >= len(group.ctr.groupByBatches) {
+			if group.ctr.spillBkts != nil && group.ctr.spillBkts.Len() != 0 {
+				if _, err := group.ctr.loadSpilledData(proc, group.OpAnalyzer, group.Aggs); err != nil {
+					return vm.CancelResult, err
+				}
+			} else if group.ctr.inputDone && group.ctr.distinctSpill != nil {
+				loaded, err := group.ctr.loadNextDistinctPartialLeaf(proc)
+				if err != nil {
+					return vm.CancelResult, err
+				}
+				if !loaded {
+					group.ctr.state = vm.End
+					return vm.CancelResult, nil
+				}
 			}
 		}
-		// no need to eval, we are in streaming mode.  spill never happen
-		// here.
+		// Publish intermediate aggregate state rather than final values.
 		res, hasMore, err := group.getNextIntermediateResult(proc)
 		if err != nil {
 			return vm.CancelResult, err
 		}
 		if !hasMore {
-			if group.ctr.inputDone {
+			if group.ctr.spillBkts != nil && group.ctr.spillBkts.Len() != 0 {
+				// Keep Eval until all generic spill buckets have been returned.
+				// Resetting or ending here would discard every remaining bucket.
+				group.ctr.state = vm.Eval
+			} else if group.ctr.inputDone {
 				if group.ctr.distinctSpill != nil {
 					// Keep Eval so the next Call can safely retire this returned
 					// batch before loading another exact-key leaf.

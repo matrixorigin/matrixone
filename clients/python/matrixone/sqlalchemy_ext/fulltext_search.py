@@ -78,6 +78,9 @@ Both are optional (don't filter documents) but affect ranking differently.
 
 from __future__ import annotations
 
+import re
+
+from .._sql_literals import fulltext_term_token
 from typing import TYPE_CHECKING, Any, List, Optional
 
 from sqlalchemy import Boolean
@@ -539,14 +542,32 @@ class FulltextQueryBuilder:
         return self
 
     def group(self, *builders: "FulltextQueryBuilder") -> "FulltextQueryBuilder":
-        """Add nested query builders as groups (OR semantics)."""
+        """Require any supported positive branch; reject unrepresentable boolean branches."""
+        if not builders:
+            raise ValueError("group() requires at least one positive branch")
+        combined = FulltextGroup("and")
         for builder in builders:
-            # Convert builder to group and add to main group
-            group = FulltextGroup("or")
-            # Add all elements from the builder's main group
-            group.elements.extend(builder.main_group.elements)
-            group.groups.extend(builder.main_group.groups)
-            self.main_group.groups.append(group)
+            if not isinstance(builder, FulltextQueryBuilder):
+                raise TypeError("group() expects FulltextQueryBuilder branches")
+            branch = builder.main_group
+            elements = branch.elements
+            required = [element for element in elements if element.operator == "+"]
+            if (
+                not elements
+                or branch.groups
+                or (required and len(elements) != 1)
+                or any(
+                    element.operator not in ("", "+")
+                    or element.weight_modifier
+                    or not isinstance(element.content, str)
+                    or re.fullmatch(r"\w+\*?", element.content) is None
+                    for element in elements
+                )
+            ):
+                raise ValueError("group() supports positive atoms or flat optional OR branches only")
+            combined.elements.extend(FulltextElement(element.content) for element in elements)
+        # Validate every branch before mutation, and keep no references to mutable children.
+        self.main_group.groups.append(combined)
         return self
 
     def build(self) -> str:
@@ -621,7 +642,7 @@ class FulltextQueryBuilder:
             select_parts = ["*"]
 
         if include_score:
-            score_expr = f"MATCH({columns_str}) AGAINST('{query_string}' IN {mode}) AS score"
+            score_expr = f"MATCH({columns_str}) AGAINST({fulltext_term_token(query_string)} IN {mode}) AS score"
             select_parts.append(score_expr)
 
         select_clause = f"SELECT {', '.join(select_parts)}"
@@ -633,7 +654,7 @@ class FulltextQueryBuilder:
         where_parts = []
 
         # Add fulltext search condition
-        fulltext_condition = f"MATCH({columns_str}) AGAINST('{query_string}' IN {mode})"
+        fulltext_condition = f"MATCH({columns_str}) AGAINST({fulltext_term_token(query_string)} IN {mode})"
         where_parts.append(fulltext_condition)
 
         # Add additional WHERE conditions
@@ -646,7 +667,7 @@ class FulltextQueryBuilder:
         order_clause = f"ORDER BY {order_by}" if order_by else ""
 
         # Build LIMIT clause
-        limit_clause = f"LIMIT {limit}" if limit else ""
+        limit_clause = f"LIMIT {limit}" if limit is not None else ""
 
         # Build OFFSET clause
         offset_clause = f"OFFSET {offset}" if offset else ""
@@ -830,6 +851,13 @@ class FulltextFilter(ColumnElement):
 
     def group(self, *filters: "FulltextFilter") -> "FulltextFilter":
         """Add nested query groups (OR semantics)."""
+        if self.mode != FulltextSearchMode.BOOLEAN:
+            raise ValueError("group() requires BOOLEAN mode")
+        for child in filters:
+            if not isinstance(child, FulltextFilter):
+                raise TypeError("group() expects FulltextFilter branches")
+            if child.mode != self.mode or child.columns != self.columns:
+                raise ValueError("group() branches must use the same columns and BOOLEAN mode")
         builders = [f.query_builder for f in filters]
         self.query_builder.group(*builders)
         return self
@@ -866,13 +894,13 @@ class FulltextFilter(ColumnElement):
             raise ValueError("Query cannot be empty")
 
         if self.mode == FulltextSearchMode.NATURAL_LANGUAGE:
-            return f"MATCH({columns_str}) AGAINST('{query_string}')"
+            return f"MATCH({columns_str}) AGAINST({fulltext_term_token(query_string)})"
         elif self.mode == FulltextSearchMode.BOOLEAN:
-            return f"MATCH({columns_str}) AGAINST('{query_string}' IN BOOLEAN MODE)"
+            return f"MATCH({columns_str}) AGAINST({fulltext_term_token(query_string)} IN BOOLEAN MODE)"
         elif self.mode == FulltextSearchMode.QUERY_EXPANSION:
-            return f"MATCH({columns_str}) AGAINST('{query_string}' WITH QUERY EXPANSION)"
+            return f"MATCH({columns_str}) AGAINST({fulltext_term_token(query_string)} WITH QUERY EXPANSION)"
         else:
-            return f"MATCH({columns_str}) AGAINST('{query_string}')"
+            return f"MATCH({columns_str}) AGAINST({fulltext_term_token(query_string)})"
 
     def label(self, name: str):
         """Create a labeled version for use in SELECT clauses.
@@ -1248,7 +1276,7 @@ class FulltextSearchBuilder:
         self._table_name: Optional[str] = None
         self._columns: List[str] = []
         self._search_mode = FulltextSearchMode.NATURAL_LANGUAGE
-        self._algorithm = FulltextSearchAlgorithm.BM25
+        self._algorithm = None
         self._query_obj = FulltextQueryBuilder()
         self._include_score = False
         self._where_conditions: List[str] = []
@@ -1335,7 +1363,10 @@ class FulltextSearchBuilder:
             # Use TF-IDF algorithm
             .with_algorithm(FulltextSearchAlgorithm.TF_IDF)
         """
-        self._algorithm = algorithm
+        normalized = str(algorithm).upper()
+        if normalized not in ('BM25', 'TF-IDF'):
+            raise ValueError('Fulltext algorithm must be BM25 or TF-IDF')
+        self._algorithm = normalized
         return self
 
     def query(self, query_string: str) -> "FulltextSearchBuilder":
@@ -1564,7 +1595,9 @@ class FulltextSearchBuilder:
         select_parts = self._select_columns.copy()
         if self._include_score:
             columns_str = ", ".join(self._columns)
-            select_parts.append(f"MATCH({columns_str}) AGAINST('{query_string}' IN {self._search_mode}) AS score")
+            select_parts.append(
+                f"MATCH({columns_str}) AGAINST({fulltext_term_token(query_string)} IN {self._search_mode}) AS score"
+            )
 
         select_clause = f"SELECT {', '.join(select_parts)}"
 
@@ -1576,7 +1609,7 @@ class FulltextSearchBuilder:
 
         # Add fulltext search condition
         columns_str = ", ".join(self._columns)
-        fulltext_condition = f"MATCH({columns_str}) AGAINST('{query_string}' IN {self._search_mode})"
+        fulltext_condition = f"MATCH({columns_str}) AGAINST({fulltext_term_token(query_string)} IN {self._search_mode})"
         where_parts.append(fulltext_condition)
 
         # Add additional WHERE conditions
@@ -1588,7 +1621,7 @@ class FulltextSearchBuilder:
         order_clause = f"ORDER BY {self._order_by}" if self._order_by else ""
 
         # Build LIMIT clause
-        limit_clause = f"LIMIT {self._limit_value}" if self._limit_value else ""
+        limit_clause = f"LIMIT {self._limit_value}" if self._limit_value is not None else ""
 
         # Build OFFSET clause
         offset_clause = f"OFFSET {self._offset_value}" if self._offset_value else ""
@@ -1613,7 +1646,21 @@ class FulltextSearchBuilder:
             Query results
         """
         sql = self._build_sql()
-        return self.client.execute(sql)
+        if self._algorithm is None:
+            return self.client.execute(sql)
+        import inspect
+        from .._scoped_query import execute_fulltext, execute_fulltext_async
+
+        if inspect.iscoroutinefunction(self.client.execute):
+            import asyncio
+            from .._connection_options import positive_timeout
+
+            owner = getattr(self.client, 'client', None) or self.client
+            return asyncio.wait_for(
+                execute_fulltext_async(self.client, sql, self._algorithm),
+                positive_timeout(owner.query_timeout, 'query_timeout'),
+            )
+        return execute_fulltext(self.client, sql, self._algorithm)
 
     def explain(self) -> str:
         """

@@ -90,7 +90,9 @@ func (builder *QueryBuilder) createDependentQuery() (*Query, error) {
 	colRefBool := make(map[[2]int32]bool)
 	sinkColRef := make(map[[2]int32]int)
 	for i, root := range q.Steps {
-		builder.rewriteDistinctToAGG(root)
+		if err := builder.rewriteDistinctToAGG(root); err != nil {
+			return nil, err
+		}
 		for j := range q.Nodes[root].ProjectList {
 			colRefBool[[2]int32{int32(i), int32(j)}] = true
 		}
@@ -182,12 +184,16 @@ func compactCorrelationPlan(q *plan.Query) error {
 // the caller and is forwarded when that caller's boundary is closed. Binding
 // tags identify semantic owners, so shadowed names cannot alias slots.
 func (builder *QueryBuilder) bindDependentSubquery(sub *plan.SubqueryRef) (*plan.Expr, error) {
+	builder.stableCTERoots = nil
 	if sub == nil || sub.NodeId < 0 || int(sub.NodeId) >= len(builder.qry.Nodes) {
 		return nil, moerr.NewInternalError(builder.GetContext(), "invalid dependent subquery root")
 	}
 	ctx := builder.ctxByNode[sub.NodeId]
 	if ctx == nil || len(ctx.results) == 0 {
 		return nil, moerr.NewInternalError(builder.GetContext(), "dependent subquery has no result binding")
+	}
+	if err := builder.validateCTEInvocation(sub.NodeId); err != nil {
+		return nil, err
 	}
 	spec := builder.qry.Correlation
 	if spec == nil {

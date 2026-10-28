@@ -1,6 +1,10 @@
 """Offline tests for clone statement builders."""
 
 import pytest
+from sqlalchemy import Column, Integer, MetaData, UniqueConstraint
+from sqlalchemy.orm import declarative_base
+from sqlalchemy.schema import BLANK_SCHEMA
+from matrixone.branch_builder import create_table_branch, delete_table_branch
 from matrixone.clone_builder import (
     clone_table,
     clone_database,
@@ -27,25 +31,47 @@ class NoTableModel:
 
 class TestCloneTable:
 
+    @pytest.mark.parametrize('schema_style', ['dict', 'tuple', 'metadata', 'blank', 'none'])
+    def test_mapped_table_schema(self, schema_style):
+        base = declarative_base(metadata=MetaData(schema='mydb' if schema_style in ('metadata', 'blank') else None))
+        table_args = {
+            'dict': {'schema': 'mydb'},
+            'tuple': (UniqueConstraint('id'), {'schema': 'mydb'}),
+            'metadata': {},
+            'blank': {'schema': BLANK_SCHEMA},
+            'none': {},
+        }[schema_style]
+
+        class Model(base):
+            __tablename__ = 'mapped_table'
+            __table_args__ = table_args
+            id = Column(Integer, primary_key=True)
+
+        name = 'mapped_table' if schema_style in ('blank', 'none') else 'mydb.mapped_table'
+        assert clone_table('copy').from_table(Model).compile() == f'CREATE TABLE copy CLONE {name}'
+        assert clone_table(Model).from_table('source').compile() == f'CREATE TABLE {name} CLONE source'
+        assert create_table_branch(Model).from_table(Model).compile() == f'data branch create table {name} from {name}'
+        assert delete_table_branch(Model).compile() == f'data branch delete table {name}'
+
     def test_basic(self):
         sql = clone_table('tgt').from_table('src').compile()
         assert sql == "CREATE TABLE tgt CLONE src"
 
     def test_with_snapshot(self):
         sql = clone_table('tgt').from_table('src', snapshot='snap1').compile()
-        assert sql == 'CREATE TABLE tgt CLONE src {snapshot = "snap1"}'
+        assert sql == "CREATE TABLE tgt CLONE src {snapshot = 'snap1'}"
 
     def test_if_not_exists(self):
-        sql = clone_table('tgt').if_not_exists().from_table('src').compile()
-        assert sql == "CREATE TABLE IF NOT EXISTS tgt CLONE src"
+        with pytest.raises(ValueError, match="use client.clone"):
+            clone_table('tgt').if_not_exists().from_table('src').compile()
 
     def test_to_account(self):
         sql = clone_table('tgt').from_table('src', snapshot='s1').to_account('acc1').compile()
         assert 'TO ACCOUNT acc1' in sql
 
     def test_all_options(self):
-        sql = clone_table('tgt').if_not_exists().from_table('src', snapshot='snap1').to_account('tenant1').compile()
-        assert sql == 'CREATE TABLE IF NOT EXISTS tgt CLONE src {snapshot = "snap1"} TO ACCOUNT tenant1'
+        sql = clone_table('tgt').from_table('src', snapshot='snap1').to_account('tenant1').compile()
+        assert sql == "CREATE TABLE tgt CLONE src {snapshot = 'snap1'} TO ACCOUNT tenant1"
 
     def test_qualified_names(self):
         sql = clone_table('db2.tgt').from_table('db1.src').compile()
@@ -115,25 +141,19 @@ class TestCloneDatabase:
 
     def test_with_snapshot(self):
         sql = clone_database('tgt_db').from_database('src_db', snapshot='snap1').compile()
-        assert sql == 'CREATE DATABASE tgt_db CLONE src_db {snapshot = "snap1"}'
+        assert sql == "CREATE DATABASE tgt_db CLONE src_db {snapshot = 'snap1'}"
 
     def test_if_not_exists(self):
-        sql = clone_database('tgt_db').if_not_exists().from_database('src_db').compile()
-        assert sql == "CREATE DATABASE IF NOT EXISTS tgt_db CLONE src_db"
+        with pytest.raises(ValueError, match="use client.clone"):
+            clone_database('tgt_db').if_not_exists().from_database('src_db').compile()
 
     def test_to_account(self):
         sql = clone_database('tgt_db').from_database('src_db', snapshot='s1').to_account('acc1').compile()
         assert 'TO ACCOUNT acc1' in sql
 
     def test_all_options(self):
-        sql = (
-            clone_database('tgt_db')
-            .if_not_exists()
-            .from_database('src_db', snapshot='snap1')
-            .to_account('tenant1')
-            .compile()
-        )
-        assert sql == 'CREATE DATABASE IF NOT EXISTS tgt_db CLONE src_db {snapshot = "snap1"} TO ACCOUNT tenant1'
+        sql = clone_database('tgt_db').from_database('src_db', snapshot='snap1').to_account('tenant1').compile()
+        assert sql == "CREATE DATABASE tgt_db CLONE src_db {snapshot = 'snap1'} TO ACCOUNT tenant1"
 
     def test_str(self):
         stmt = clone_database('tgt').from_database('src')

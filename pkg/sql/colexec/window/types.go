@@ -39,6 +39,7 @@ const (
 )
 
 type container struct {
+	localRank    *localRankIndex
 	allocation   colexec.AnalyticAllocation
 	sortMetadata uint64
 	status       int
@@ -58,15 +59,15 @@ type container struct {
 	runningRight     int
 	runningPeerEnd   int
 
-	// orderedSetPartitionResults retains one finalized scalar result per
+	// fullPartitionResults retains one finalized scalar result per
 	// logical partition while a materialized input generation is emitted in
-	// bounded chunks. The compact cache avoids rebuilding an ordered-set
-	// aggregate for every output chunk. orderedSetNextRow and
-	// orderedSetPartition enforce sequential consumption and identify the
+	// bounded chunks. The compact cache avoids rebuilding a full-partition
+	// aggregate for every output chunk. fullPartitionNextRow and
+	// fullPartition enforce sequential consumption and identify the
 	// cached scalar to broadcast next.
-	orderedSetPartitionResults *vector.Vector
-	orderedSetNextRow          int
-	orderedSetPartition        int
+	fullPartitionResults *vector.Vector
+	fullPartitionNextRow int
+	fullPartition        int
 
 	desc      []bool
 	nullsLast []bool
@@ -78,6 +79,14 @@ type container struct {
 	aggVecs []colexec.ExprEvalVector
 
 	prepareParamKind aggexec.PrepareParamKindStates
+
+	// indicatorEvals caches one technical-indicator evaluation state per
+	// window expression (issue #29949). Each cached prefix belongs to
+	// exactly one materialized generation and is freed at every eval
+	// entry, at Window.Reset and at Window.Free - the three lifecycle
+	// reset points of docs/design/technical_indicator_window_kernels.md
+	// section 5.2.
+	indicatorEvals []*indicatorEvaluator
 
 	emitOffset int
 	rBat       *batch.Batch
@@ -183,6 +192,7 @@ func (window *Window) Reset(proc *process.Process, pipelineFailed bool, err erro
 
 	ctr := &window.ctr
 
+	ctr.freeLocalRankIndex()
 	ctr.cleanOutput(proc.Mp())
 	ctr.resetParam()
 	ctr.prepareParamKind.Reset(nil)
@@ -193,7 +203,8 @@ func (window *Window) Reset(proc *process.Process, pipelineFailed bool, err erro
 	// hashes) in the mpool until the next reuse.
 	ctr.freeAggFun()
 	ctr.freeRunningAgg()
-	ctr.freeOrderedSetPartitionResults(proc.Mp())
+	ctr.freeFullPartitionResults(proc.Mp())
+	ctr.freeIndicatorState(proc.Mp())
 	if ctr.hasAccountedBufferedData() {
 		// AppendWithCopy and Dup preserve a source vector's allocation
 		// selection. Release inherited backing at the prepared-statement
@@ -208,6 +219,7 @@ func (window *Window) Reset(proc *process.Process, pipelineFailed bool, err erro
 func (window *Window) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := &window.ctr
 
+	ctr.freeLocalRankIndex()
 	ctr.cleanOutput(proc.Mp())
 	ctr.runtimeFrames = nil
 	ctr.clearCivilOrder()
@@ -215,7 +227,8 @@ func (window *Window) Free(proc *process.Process, pipelineFailed bool, err error
 	// the normal freeAggFun()) does not leak their mpool-held state.
 	ctr.freeAggFun()
 	ctr.freeRunningAgg()
-	ctr.freeOrderedSetPartitionResults(proc.Mp())
+	ctr.freeFullPartitionResults(proc.Mp())
+	ctr.freeIndicatorState(proc.Mp())
 	ctr.freeBatch(proc.Mp())
 	ctr.freeExes()
 	ctr.freeVector(proc.Mp())
@@ -292,13 +305,13 @@ func (ctr *container) freeRunningAgg() {
 	ctr.runningPeerEnd = 0
 }
 
-func (ctr *container) freeOrderedSetPartitionResults(mp *mpool.MPool) {
-	if ctr.orderedSetPartitionResults != nil {
-		ctr.orderedSetPartitionResults.Free(mp)
-		ctr.orderedSetPartitionResults = nil
+func (ctr *container) freeFullPartitionResults(mp *mpool.MPool) {
+	if ctr.fullPartitionResults != nil {
+		ctr.fullPartitionResults.Free(mp)
+		ctr.fullPartitionResults = nil
 	}
-	ctr.orderedSetNextRow = 0
-	ctr.orderedSetPartition = 0
+	ctr.fullPartitionNextRow = 0
+	ctr.fullPartition = 0
 }
 
 func (ctr *container) freeExes() {

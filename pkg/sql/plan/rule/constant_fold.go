@@ -54,12 +54,6 @@ func (r *ConstantFold) Apply(node *plan.Node, _ *plan.Query, proc *process.Proce
 	if node.Offset != nil {
 		node.Offset = r.constantFold(node.Offset, proc)
 	}
-	// if n.Interval != nil {
-	// 	n.Interval = r.constantFold(n.Interval, proc)
-	// }
-	// if n.Sliding != nil {
-	// 	n.Sliding = r.constantFold(n.Sliding, proc)
-	// }
 
 	for i := range node.OnList {
 		node.OnList[i] = r.constantFold(node.OnList[i], proc)
@@ -279,6 +273,10 @@ func (r *ConstantFold) foldExpr(expr *plan.Expr, proc *process.Process, spatialC
 		return expr
 	}
 	if isVec && !CanMaterializeConstantVector(expr) {
+		return expr
+	}
+
+	if ContainsTruncatedFloatTextConversion(expr) {
 		return expr
 	}
 
@@ -1273,4 +1271,47 @@ func EvaluateConstantExpression(proc *process.Process, expr *plan.Expr, bat *bat
 	child.WarningSink = sink
 	vec, free, err = colexec.GetReadonlyResultFromExpression(child, expr, []*batch.Batch{bat})
 	return vec, free, sink.Warned(), err
+}
+
+// ContainsTruncatedFloatTextConversion keeps a context-dependent conversion and
+// its parents executable. Safe source expressions may fold first; complete
+// numeric literals and unrelated CASTs remain foldable. In particular, a strict
+// assignment error must not escape speculative SQL PREPARE evaluation.
+func ContainsTruncatedFloatTextConversion(expr *plan.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	if fn := expr.GetF(); fn != nil {
+		if fn.Func != nil && len(fn.Args) > 0 && fn.Args[0] != nil {
+			id, _ := function.DecodeOverloadID(fn.Func.Obj)
+			target := types.T(expr.Typ.Id)
+			if (id == function.CAST || id == function.CAST_STRICT || id == function.CAST_ASSIGN || id == function.CAST_IGNORE) &&
+				(target == types.T_float32 || target == types.T_float64) && types.T(fn.Args[0].Typ.Id).IsMySQLString() {
+				source := fn.Args[0]
+				if lit := source.GetLit(); lit != nil && !lit.Isnull && !lit.IsBin {
+					if value, ok := lit.Value.(*plan.Literal_Sval); ok && function.FloatTextTruncated(value.Sval) {
+						return true
+					}
+				}
+				// scalarConstantVector is a borrowed view of the literal payload.
+				if vec := scalarConstantVector(source); vec != nil && !vec.IsNull(0) && !vec.GetIsBin() &&
+					function.FloatTextTruncated(vec.GetStringAt(0)) {
+					return true
+				}
+			}
+		}
+		for _, arg := range fn.Args {
+			if ContainsTruncatedFloatTextConversion(arg) {
+				return true
+			}
+		}
+	}
+	if list := expr.GetList(); list != nil {
+		for _, arg := range list.List {
+			if ContainsTruncatedFloatTextConversion(arg) {
+				return true
+			}
+		}
+	}
+	return false
 }

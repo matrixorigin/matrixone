@@ -27,6 +27,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -40,7 +41,7 @@ import (
 
 func newTestIndexFileCache(t *testing.T, dir string, capacity int64) *IndexFileCache {
 	t.Helper()
-	c, err := NewIndexFileCache(context.Background(), dir, fscache.ConstCapacity(capacity), "")
+	c, err := NewIndexFileCache(context.Background(), dir, fscache.ConstCapacity(capacity), "", IndexFileRebuildPolicyDefault)
 	require.NoError(t, err)
 	<-c.disk.load.done
 	t.Cleanup(func() { c.Close(context.Background()) })
@@ -289,7 +290,7 @@ func TestIndexFileCacheDelete(t *testing.T) {
 func TestIndexFileCacheReusedAfterRestart(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
-	c, err := NewIndexFileCache(ctx, dir, fscache.ConstCapacity(1<<30), "")
+	c, err := NewIndexFileCache(ctx, dir, fscache.ConstCapacity(1<<30), "", IndexFileRebuildPolicyDefault)
 	require.NoError(t, err)
 	<-c.disk.load.done
 	data := []byte("persisted")
@@ -518,7 +519,7 @@ func TestIndexFileCacheSplitsDiskCapacity(t *testing.T) {
 	require.Equal(t, int64(50<<20), caches.disk.capacityFunc())
 	require.Equal(t, int64(50<<20), caches.index.disk.capacityFunc())
 	require.Equal(t, path, caches.index.disk.path)
-	require.Equal(t, Policy(SkipAllCache), caches.index.RebuildPolicy())
+	require.Equal(t, Policy(SkipAllCache|SkipFullFilePreloads), caches.index.RebuildPolicy())
 }
 
 func TestIndexFileCacheDisabledKeepsDiskCapacity(t *testing.T) {
@@ -566,10 +567,10 @@ func TestIndexFileCacheRejectsInvalidConfig(t *testing.T) {
 	require.Error(t, err)
 
 	for s, want := range map[string]Policy{
-		"":                             IndexFileRebuildPolicyDefault,
-		IndexFileRebuildCacheRead:      SkipMemoryCacheWrites | SkipDiskCacheWrites,
-		IndexFileRebuildCacheNone:      SkipAllCache,
+		"":                             0,
 		IndexFileRebuildCacheReadWrite: 0,
+		IndexFileRebuildCacheRead:      SkipMemoryCacheWrites | SkipDiskCacheWrites | SkipFullFilePreloads,
+		IndexFileRebuildCacheNone:      SkipAllCache | SkipFullFilePreloads,
 	} {
 		got, err := ParseIndexFileRebuildCache(s)
 		require.NoError(t, err, s)
@@ -690,4 +691,54 @@ func TestIndexFileCachePutRepairsIncompleteEntry(t *testing.T) {
 	require.NoError(t, err)
 	defer closeFiles(files)
 	require.Equal(t, []byte("fresh"), readAllFile(t, files[0]))
+}
+
+func TestIndexFileCacheRemovalLeavesNoDirectories(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	var capacity atomic.Int64
+	capacity.Store(1 << 30)
+	c, err := NewIndexFileCache(ctx, root, func() int64 { return capacity.Load() }, "", IndexFileRebuildPolicyDefault)
+	require.NoError(t, err)
+	<-c.disk.load.done
+	t.Cleanup(func() { c.Close(context.Background()) })
+	names := []string{"7/6964/1/40-1/c1", "7/6964/1/41-1/c2", "7/6964/1/42-1/c3", "7/6964/1/43-1/c4"}
+	for _, name := range names {
+		written, err := c.Put(ctx, name, indexCacheEntry([]byte("x")))
+		require.NoError(t, err)
+		require.True(t, written)
+	}
+	entries, _, _ := listCacheDirs(t, root)
+	require.Len(t, entries, len(names))
+
+	capacity.Store(0)
+	evictIndexCache(c)
+	for _, name := range names {
+		requireIndexCacheMiss(t, c, name)
+	}
+	capacity.Store(1 << 30)
+	_, err = c.Put(ctx, names[0], indexCacheEntry([]byte("y")))
+	require.NoError(t, err)
+	require.NoError(t, c.Delete(ctx, names[0]))
+
+	// only the root and its shard directories remain
+	require.NoError(t, filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if path == root {
+			return nil
+		}
+		require.Equal(t, root, filepath.Dir(path), "left behind: %s", path)
+		require.True(t, d.IsDir(), "left behind: %s", path)
+		return nil
+	}))
+
+	long := strings.Repeat("a/", 200) + "z"
+	_, err = c.Put(ctx, long, indexCacheEntry([]byte("z")))
+	require.NoError(t, err)
+	files, err := c.Open(ctx, long, "data")
+	require.NoError(t, err)
+	require.Equal(t, []byte("z"), readAllFile(t, files[0]))
+	closeFiles(files)
 }

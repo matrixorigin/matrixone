@@ -1491,7 +1491,13 @@ func makeExecuteSql(ctx context.Context, ses *Session, stmt tree.Statement, binE
 		return true
 	}
 	finish := func() string { return commonutil.Abbreviate(bb.String(), limit) }
-	if !appendPart(envStmt) || !appendPart(" // ") || !appendPart(strings.TrimSpace(prepared.Sql)) || !appendPart(" ; ") {
+	if !appendPart(envStmt) || !appendPart(" // ") {
+		return finish()
+	}
+	// Only scan the saved SQL when its diagnostic can be retained. Redact
+	// before clipping so a later privacy marker cannot expose an earlier prefix.
+	preparedSQL := redactStatementTextForLogging(prepared.PrepareStmt, strings.TrimSpace(prepared.Sql))
+	if !appendPart(preparedSQL) || !appendPart(" ; ") {
 		return finish()
 	}
 	if len(variables) != 0 {
@@ -1681,6 +1687,83 @@ func convertRowsIntoBatch(pool *mpool.MPool, cols []Column, rows [][]any) (*batc
 				}
 
 				err := vector.AppendFixed[int64](bat.Vecs[colIndex], val, false, pool)
+				if err != nil {
+					return nil, nil, err
+				}
+			}
+		case types.T_uint8:
+			for rowIdx, row := range rows {
+				var val uint8
+				if row[colIndex] == nil {
+					nsp.Add(uint64(rowIdx))
+				} else {
+					unchecked, uerr := getUnsignedRowValue(row[colIndex])
+					if uerr != nil {
+						return nil, nil, uerr
+					}
+					if unchecked > math.MaxUint8 {
+						return nil, nil, moerr.NewInternalErrorNoCtxf("%d can't convert to uint8 type", unchecked)
+					}
+					val = uint8(unchecked)
+				}
+
+				err := vector.AppendFixed[uint8](bat.Vecs[colIndex], val, false, pool)
+				if err != nil {
+					return nil, nil, err
+				}
+			}
+		case types.T_uint16:
+			for rowIdx, row := range rows {
+				var val uint16
+				if row[colIndex] == nil {
+					nsp.Add(uint64(rowIdx))
+				} else {
+					unchecked, uerr := getUnsignedRowValue(row[colIndex])
+					if uerr != nil {
+						return nil, nil, uerr
+					}
+					if unchecked > math.MaxUint16 {
+						return nil, nil, moerr.NewInternalErrorNoCtxf("%d can't convert to uint16 type", unchecked)
+					}
+					val = uint16(unchecked)
+				}
+
+				err := vector.AppendFixed[uint16](bat.Vecs[colIndex], val, false, pool)
+				if err != nil {
+					return nil, nil, err
+				}
+			}
+		case types.T_uint32:
+			for rowIdx, row := range rows {
+				var val uint32
+				if row[colIndex] == nil {
+					nsp.Add(uint64(rowIdx))
+				} else {
+					unchecked, uerr := getUnsignedRowValue(row[colIndex])
+					if uerr != nil {
+						return nil, nil, uerr
+					}
+					if unchecked > math.MaxUint32 {
+						return nil, nil, moerr.NewInternalErrorNoCtxf("%d can't convert to uint32 type", unchecked)
+					}
+					val = uint32(unchecked)
+				}
+
+				err := vector.AppendFixed[uint32](bat.Vecs[colIndex], val, false, pool)
+				if err != nil {
+					return nil, nil, err
+				}
+			}
+		case types.T_uint64:
+			for rowIdx, row := range rows {
+				var val uint64
+				if row[colIndex] == nil {
+					nsp.Add(uint64(rowIdx))
+				} else if val, err = getUnsignedRowValue(row[colIndex]); err != nil {
+					return nil, nil, err
+				}
+
+				err := vector.AppendFixed[uint64](bat.Vecs[colIndex], val, false, pool)
 				if err != nil {
 					return nil, nil, err
 				}
@@ -1883,6 +1966,25 @@ func getDecimal256FromRowValue(v any, typ types.Type) (types.Decimal256, error) 
 	}
 }
 
+// getUnsignedRowValue resolves a hand-built result row value into its exact
+// unsigned integer form. Values that cannot be represented without sign
+// wraparound fail instead of being coerced or truncated: unsigned counts,
+// including values above MaxInt64, must never cross into a signed
+// destination type (issue #31498).
+func getUnsignedRowValue(v any) (uint64, error) {
+	switch val := v.(type) {
+	case uint64:
+		return val, nil
+	case int64:
+		if val < 0 {
+			return 0, moerr.NewInternalErrorNoCtxf("%d can't convert to unsigned type", val)
+		}
+		return uint64(val), nil
+	default:
+		return 0, moerr.NewInternalErrorNoCtxf("%v can't convert to unsigned integer type", v)
+	}
+}
+
 func cleanBatch(pool *mpool.MPool, data ...*batch.Batch) {
 	for _, item := range data {
 		if item != nil {
@@ -1928,15 +2030,33 @@ func mysqlColDef2PlanResultColDef(cols []Column) (*plan.ResultColDef, []types.Ty
 			}
 			tType = types.New(types.T_text, types.MaxVarcharLen, 0)
 		case defines.MYSQL_TYPE_TINY:
-			pType = plan.Type{
-				Id: int32(types.T_int8),
+			// Wire integer columns must round-trip their signedness into the
+			// saved result metadata: an unsigned count published by SHOW COUNT(*)
+			// belongs in an unsigned destination vector, where values above
+			// MaxInt64 survive without truncation (issue #31498).
+			if col.IsSigned() {
+				pType = plan.Type{
+					Id: int32(types.T_int8),
+				}
+				tType = types.New(types.T_int8, 0, 0)
+			} else {
+				pType = plan.Type{
+					Id: int32(types.T_uint8),
+				}
+				tType = types.New(types.T_uint8, 0, 0)
 			}
-			tType = types.New(types.T_int8, 0, 0)
 		case defines.MYSQL_TYPE_SHORT:
-			pType = plan.Type{
-				Id: int32(types.T_int16),
+			if col.IsSigned() {
+				pType = plan.Type{
+					Id: int32(types.T_int16),
+				}
+				tType = types.New(types.T_int16, 0, 0)
+			} else {
+				pType = plan.Type{
+					Id: int32(types.T_uint16),
+				}
+				tType = types.New(types.T_uint16, 0, 0)
 			}
-			tType = types.New(types.T_int16, 0, 0)
 		case defines.MYSQL_TYPE_YEAR:
 			pType = plan.Type{
 				Id:    int32(types.T_year),
@@ -1944,15 +2064,29 @@ func mysqlColDef2PlanResultColDef(cols []Column) (*plan.ResultColDef, []types.Ty
 			}
 			tType = types.T_year.ToType()
 		case defines.MYSQL_TYPE_LONG:
-			pType = plan.Type{
-				Id: int32(types.T_int32),
+			if col.IsSigned() {
+				pType = plan.Type{
+					Id: int32(types.T_int32),
+				}
+				tType = types.New(types.T_int32, 0, 0)
+			} else {
+				pType = plan.Type{
+					Id: int32(types.T_uint32),
+				}
+				tType = types.New(types.T_uint32, 0, 0)
 			}
-			tType = types.New(types.T_int32, 0, 0)
 		case defines.MYSQL_TYPE_LONGLONG:
-			pType = plan.Type{
-				Id: int32(types.T_int64),
+			if col.IsSigned() {
+				pType = plan.Type{
+					Id: int32(types.T_int64),
+				}
+				tType = types.New(types.T_int64, 0, 0)
+			} else {
+				pType = plan.Type{
+					Id: int32(types.T_uint64),
+				}
+				tType = types.New(types.T_uint64, 0, 0)
 			}
-			tType = types.New(types.T_int64, 0, 0)
 		case defines.MYSQL_TYPE_DOUBLE:
 			pType = plan.Type{
 				Id: int32(types.T_float64),
@@ -2836,6 +2970,11 @@ func colDef2MysqlColumn(ctx context.Context, col *plan.ColDef) (*MysqlColumn, er
 		c.SetLength(math.MaxUint16)
 	}
 	setColFlag(c, col)
+	if presentation := col.IntegerResultPresentation; presentation != nil && (typ.Oid == types.T_int64 || typ.Oid == types.T_uint64) {
+		c.SetLength(presentation.DisplayLength)
+		c.SetDecimal(0)
+	}
+
 	// MySQL represents predicate results as numeric 0/1 values. Keep native
 	// BOOLEAN columns on the dedicated BOOL path, but advertise a computed BOOL
 	// result as a regular TINYINT so JDBC clients do not reinterpret the
@@ -2972,20 +3111,6 @@ func tableNameIsLegal(name string) bool {
 	}
 	return isLegal(name, createTableSqls)
 }
-
-//func tableNameIsRegexpr(s string) bool {
-//	if len(s) < 2 {
-//		return false
-//	}
-//	if strings.HasPrefix(s, "/") && strings.HasSuffix(s, "/") {
-//		_, err := regexp.Compile(s)
-//		if err != nil {
-//			return false
-//		}
-//		return true
-//	}
-//	return false
-//}
 
 // replaceStr replaces s[start:end] by s2
 func replaceStr(s string, start, end int, s2 string) string {

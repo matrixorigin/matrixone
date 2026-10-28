@@ -117,11 +117,6 @@ func WithFileService(fs fileservice.FileService) MergeOption {
 		m.fs = fs
 	})
 }
-func WithMaxFileSize(filesize int64) MergeOption {
-	return MergeOption(func(m *Merge) {
-		m.MaxFileSize = filesize
-	})
-}
 func WithMaxMergeJobs(jobs int64) MergeOption {
 	return MergeOption(func(m *Merge) {
 		m.MaxMergeJobs = jobs

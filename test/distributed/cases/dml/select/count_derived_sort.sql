@@ -47,11 +47,15 @@ select count(*) as total from (select category from items order by id desc limit
 select count(rn) as total from (select row_number() over (order by id) as rn from items order by rn desc) s;
 select id from items order by id desc;
 
--- A sort-only failing cast must not disappear behind an alias.
-select count(*) from (select cast(name as unsigned) as k from items order by k) s;
+-- An execution-time expression failure must not disappear behind a sort-only
+-- alias. An invalid regular expression pattern is the execution-time oracle;
+-- issue #30417 made invalid DECIMAL text lenient, so the previous cast-based
+-- witness no longer errors. The regex error text is row-independent.
+-- @regex('^error parsing regexp: missing closing', true)
+select count(*) from (select regexp_substr(name, '[') as k from items order by k) s;
 
 -- A LEFT JOIN branch kept alive only by the COUNT input ordering must not be
--- pruned together with its failing ON cast.
+-- pruned together with its failing ON expression.
 create table left_join_keepalive_l (id int primary key);
 create table left_join_keepalive_r (id int primary key, bad varchar(32));
 insert into left_join_keepalive_l values (1);
@@ -59,7 +63,7 @@ insert into left_join_keepalive_r values (1, 'bad');
 select count(*) from (
     select l.id
     from left_join_keepalive_l l left join left_join_keepalive_r r
-      on l.id = r.id and cast(r.bad as unsigned) > 0
+      on l.id = r.id and length(regexp_substr(r.bad, '[')) > 0
     order by r.id
 ) s;
 -- The same shape with a total ON condition may still drop the ordering.

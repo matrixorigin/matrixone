@@ -18,6 +18,7 @@ import (
 	"encoding/json"
 	"strings"
 
+	"github.com/matrixorigin/matrixone/pkg/common/collation"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -82,6 +83,20 @@ func (builder *QueryBuilder) buildJSONTable(tbl *tree.TableFunction, ctx *BindCo
 					typ, err = getTypeFromAst(builder.GetContext(), column.Type)
 					if err != nil {
 						return nil, err
+					}
+					if column.Charset != nil {
+						switch types.T(typ.Id) {
+						case types.T_char, types.T_varchar, types.T_text:
+						default:
+							return nil, moerr.NewInvalidInput(builder.GetContext(), "JSON_TABLE CHARACTER SET requires a character string column")
+						}
+						// JSON scalar conversion produces UTF-8. Other domains need
+						// their own conversion semantics, not just different metadata.
+						identity, ok := collation.ResolveCharset(*column.Charset)
+						if !ok || identity != collation.UTF8MB4GeneralCIIdentity {
+							return nil, moerr.NewNotSupportedf(builder.GetContext(), "JSON_TABLE character set '%s'", *column.Charset)
+						}
+						applyTextCharsetToPlanType(&typ, uint32(identity))
 					}
 					typ.NotNullable = false
 				}
