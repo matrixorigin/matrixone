@@ -108,9 +108,6 @@ func RequiredPersistedExpressionProtocolVersion(owner any) (int64, error) {
 	if features.JSONNumericComparisons {
 		requiredVersion = max(requiredVersion, defines.MORPCVersion128)
 	}
-	if features.BinaryAssignmentSemantics {
-		requiredVersion = max(requiredVersion, defines.MORPCVersion135)
-	}
 	if features.IPFunctionSemantics {
 		requiredVersion = max(requiredVersion, defines.MORPCVersion72)
 	}

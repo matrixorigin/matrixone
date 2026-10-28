@@ -170,8 +170,7 @@ const (
 	MORPCVersion132    int64 = 132 // decimal float rounding and strict textual float conversions
 	MORPCVersion133    int64 = 133 // typed JSON MIN/MAX aggregate comparison
 	MORPCVersion134    int64 = 134 // ordered ODKU result summary and captured session LAST_INSERT_ID baseline
-	MORPCVersion135    int64 = 135 // binary assignment byte capacity and physical replay
-	MORPCLatestVersion       = MORPCVersion135
+	MORPCLatestVersion       = MORPCVersion134
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by
