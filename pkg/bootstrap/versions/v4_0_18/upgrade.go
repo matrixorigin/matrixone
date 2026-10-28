@@ -26,15 +26,13 @@ import (
 	"go.uber.org/zap"
 )
 
-// 4.0.18 replays the idempotent shared Python UDF catalog entries without
-// changing the already-published upstream handlers. Tenants that completed
-// upstream 4.0.17 may still lack this catalog; a new semantic version makes
-// them eligible for both background upgrade and first-login compensation.
-// Complete, partial and absent catalog states converge on retry.
+// 4.0.18 owns the shared routine repair after the frozen 4.0.7 catalog.
+// Older released sources must complete 4.0.7 before these idempotent entries;
+// an already-4.0.7 tenant is still eligible for scheduled and login repair.
 var Handler = &versionHandle{
 	metadata: versions.Version{
 		Version:           "4.0.18",
-		MinUpgradeVersion: "4.0.17",
+		MinUpgradeVersion: "4.0.7",
 		UpgradeCluster:    versions.No,
 		UpgradeTenant:     versions.Yes,
 		VersionOffset:     uint32(len(tenantUpgEntries)),

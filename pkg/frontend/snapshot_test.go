@@ -1900,8 +1900,7 @@ func TestRecreateUserDefinedFunctionCatalogPreservesCurrentSchema(t *testing.T) 
 	}
 
 	t.Run("current schema preserves revision head", func(t *testing.T) {
-		bh := &backgroundExecTest{}
-		bh.init()
+		bh := newExec(" {MO_TS = 123}")
 		ctx := defines.AttachAccountId(t.Context(), sourceAccount)
 		require.NoError(t, recreateTable(ctx, "", bh, snapshotName, currentUDFTable, sourceAccount, snapshotTS, false))
 		require.Contains(t, bh.executedSQLs[len(bh.executedSQLs)-1],
@@ -1962,6 +1961,38 @@ func TestRecreateUserDefinedFunctionCatalogPreservesCurrentSchema(t *testing.T) 
 		)
 		require.NotContains(t, strings.Join(bh.executedSQLs, "\n"), historicalCreateSQL)
 	})
+	for _, tc := range []struct {
+		name, ddl string
+		mode      bool
+		full      bool
+	}{
+		{name: "current descriptors without sql_mode", ddl: MoCatalogMoUserDefinedFunctionDDL, full: true},
+		{name: "revision heads with sql_mode", ddl: "create table mo_catalog.mo_user_defined_function(function_id int, active_revision bigint, namespace_version bigint, sql_mode varchar(1024))", mode: true},
+		{name: "revision heads without sql_mode", ddl: "create table mo_catalog.mo_user_defined_function(function_id int, active_revision bigint, namespace_version bigint)"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			bh := newExec(" {MO_TS = 123}")
+			if !tc.mode {
+				bh.sql2result[modeQuery(" {MO_TS = 123}")] = newMrsForSqlForShowDatabases(nil)
+			}
+			table := &tableInfo{dbName: moCatalog, tblName: "mo_user_defined_function", createSql: tc.ddl}
+			require.NoError(t, recreateTable(defines.AttachAccountId(t.Context(), sourceAccount), "", bh, snapshotName, table, sourceAccount, snapshotTS, false))
+			sql := bh.executedSQLs[len(bh.executedSQLs)-1]
+			projection := strings.SplitN(sql, ") select ", 2)[1]
+			require.True(t, strings.HasPrefix(projection, "function_id, active_revision, namespace_version, name"))
+			if tc.full {
+				require.Contains(t, projection, "canonical_input_descriptor, return_descriptor, signature_key_schema_version, signature_fingerprint")
+			} else {
+				require.Contains(t, projection, "'', '', 0, ''")
+			}
+			if tc.mode {
+				require.Contains(t, projection, "database_collation, sql_mode from")
+			} else {
+				require.Contains(t, projection, "database_collation, 'PIPES_AS_CONCAT' from")
+			}
+		})
+	}
+
 	t.Run("legacy snapshot uses released default", func(t *testing.T) {
 		bh := newExec(" {MO_TS = 123}")
 		bh.sql2result[modeQuery(" {MO_TS = 123}")] = newMrsForSqlForShowDatabases(nil)
