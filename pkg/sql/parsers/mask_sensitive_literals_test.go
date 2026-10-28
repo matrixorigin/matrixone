@@ -124,4 +124,14 @@ func TestHandleSqlForRecordWithSQLMode(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, records, 1)
 	require.NotContains(t, records[0], "R3ONLY_CANARY")
+
+	t.Run("cross-mode interval cannot hide reset", func(t *testing.T) {
+		sql := `SET sql_mode='NO_BACKSLASH_ESCAPES'; SELECT 'access_key_id'='foo\'; SET sql_mode=''; create stage s2 url="file:///x\"z" credentials={'k'='REVIEW_NEW_CANARY'}`
+		records, spans := HandleSqlForRecordSpansWithSQLMode(sql, "")
+		require.Len(t, records, 4)
+		require.Len(t, spans, len(records))
+		for _, record := range records {
+			require.NotContains(t, record, "REVIEW_NEW_CANARY")
+		}
+	})
 }

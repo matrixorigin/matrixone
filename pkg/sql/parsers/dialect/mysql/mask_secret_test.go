@@ -911,13 +911,9 @@ func TestMaskUnknownTailTransitionRePins(t *testing.T) {
 }
 
 // #30747 review round 10, P2 (the review's TestReviewUnknownModeBraceBoundary
-// probe, verbatim): in an unknown-mode tail, a `;` that ANY lexical variant
-// places inside a credential span must NOT terminate the statement. The
-// round-9 "shortest boundary" rule picked exactly such a `;`: another
-// variant reads `prefix}` inside a valid string, so the default-mode
-// mis-pairing cannot be trusted as a terminator either. The conservative
-// boundary is nowhere in the ambiguous tail; the credential keeps its
-// `credentials=` context and is union-masked whole.
+// probe, verbatim): without a known effective mode, keep conservative
+// boundaries outside every variant's credential interval. Known-mode spans
+// instead preserve real boundaries and inherit crossing redaction context.
 func TestMaskUnknownModeBraceBoundaryPreservesCredential(t *testing.T) {
 	sql := `set sql_mode=concat('NO_BACKSLASH','_ESCAPES'); ` +
 		`create stage s url='file:///x' credentials={'k'='foo\','secret_key'='prefix};REVIEW_BRACE_CANARY'}`
@@ -926,10 +922,17 @@ func TestMaskUnknownModeBraceBoundaryPreservesCredential(t *testing.T) {
 	require.Contains(t, got, "credentials=", "credential context must survive boundary selection")
 	require.Contains(t, got, `secret_key`, "structural text outside spans is untouched")
 	spans := StatementSQLModes(sql, 0)
-	require.Len(t, spans, 2, "the ambiguous tail is one conservative span")
+	require.Len(t, spans, 2, "the ambiguous unknown tail stays conservative")
 	require.True(t, spans[0].Known)
+	require.False(t, spans[1].Known)
 	require.False(t, spans[1].SemiTerminated)
 	require.Equal(t, len(sql), spans[1].End)
+	// With a known effective mode the same apparent terminator is allowed,
+	// but its keyword-free suffix must inherit the original secret interval.
+	known := strings.TrimPrefix(sql, `set sql_mode=concat('NO_BACKSLASH','_ESCAPES'); `)
+	knownSpans := StatementSQLModes(known, 0)
+	require.Len(t, knownSpans, 2)
+	require.Equal(t, "******'}", knownSpans[1].MaskSensitiveLiterals(known))
 	// A `;` genuinely OUTSIDE every variant's credential spans still
 	// terminates: the credential map closes cleanly in all four modes, so
 	// the boundary after it survives and the following statement is split.
@@ -993,4 +996,42 @@ func TestStatementSQLModesKeepsEffectiveModeChain(t *testing.T) {
 	out := MaskSensitiveSqlLiteralsPerStatement(sql, SQLModeFlags(SQLModeANSIQuotes))
 	require.NotContains(t, out, "REVIEW_CURSOR_CANARY")
 	require.Contains(t, out, `credentials={'k'='******'}`)
+
+	// An alternative-mode credential interval must not veto a real
+	// boundary under the effective mode, especially a subsequent reset.
+	t.Run("credential interval cannot hide reset", func(t *testing.T) {
+		sql := `SET sql_mode='NO_BACKSLASH_ESCAPES'; SELECT 'access_key_id'='foo\'; SET sql_mode=''; create stage s2 url="file:///x\"z" credentials={'k'='REVIEW_NEW_CANARY'}`
+		spans := StatementSQLModes(sql, 0)
+		require.Len(t, spans, 4)
+		for i, span := range spans {
+			require.True(t, span.Known)
+			require.Equal(t, i < 3, span.SemiTerminated)
+		}
+		require.Zero(t, spans[0].Mode)
+		require.Equal(t, SQLModeFlags(SQLModeNoBackslashEscapes), spans[1].Mode)
+		require.Equal(t, SQLModeFlags(SQLModeNoBackslashEscapes), spans[2].Mode)
+		require.Zero(t, spans[3].Mode)
+		masked := MaskSensitiveSqlLiteralsPerStatement(sql, 0)
+		require.NotContains(t, masked, "REVIEW_NEW_CANARY")
+		require.Equal(t, masked, MaskSensitiveSqlLiteralsPerStatement(masked, 0), "inherited redaction is idempotent")
+
+		// The same interval cannot hide re-pinning after an unevaluable SET.
+		unknown := `SET sql_mode=concat('',''); ` + sql
+		unknownSpans := StatementSQLModes(unknown, 0)
+		require.Len(t, unknownSpans, 5)
+		require.False(t, unknownSpans[1].Known)
+		require.True(t, unknownSpans[2].Known)
+		require.Zero(t, unknownSpans[4].Mode)
+		require.NotContains(t, MaskSensitiveSqlLiteralsPerStatement(unknown, 0), "REVIEW_NEW_CANARY")
+	})
+	t.Run("known mode discards speculative lookahead", func(t *testing.T) {
+		sql := `SET sql_mode=concat('',''); SELECT 'foo\'; SET sql_mode=''; SET sql_mode='NO_BACKSLASH_ESCAPES'; create stage s credentials={'k'='foo\','secret_key'='LOOKAHEAD_CANARY'}`
+		spans := StatementSQLModes(sql, 0)
+		require.Len(t, spans, 5)
+		require.True(t, spans[3].Known)
+		require.Zero(t, spans[3].Mode)
+		require.True(t, spans[4].Known)
+		require.Equal(t, SQLModeFlags(SQLModeNoBackslashEscapes), spans[4].Mode)
+		require.NotContains(t, MaskSensitiveSqlLiteralsPerStatement(sql, 0), "LOOKAHEAD_CANARY")
+	})
 }

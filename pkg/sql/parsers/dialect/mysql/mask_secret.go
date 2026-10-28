@@ -454,18 +454,20 @@ func MaskSensitiveSqlLiteralsPerStatement(sql string, initial SQLModeFlags) stri
 		return sql
 	}
 
-	var builder strings.Builder
-	builder.Grow(len(sql))
+	var spans [][2]int
+	var edits []credentialRawEdit
 	for _, sp := range StatementSQLModes(sql, initial) {
-		piece := sql[sp.Start:sp.End]
-		if sp.Known {
-			piece = maskSensitiveSqlLiteralsScoped(piece, CredentialStateNone, true, sp.Mode)
-		} else {
-			piece = maskPieceUnderAllLexicalVariants(piece, sp.Mode)
+		localSpans, localEdits := sp.credentialMasks(sql)
+		for _, s := range localSpans {
+			spans = append(spans, [2]int{s[0] + sp.Start, s[1] + sp.Start})
 		}
-		builder.WriteString(piece)
+		for _, r := range localEdits {
+			edits = append(edits, credentialRawEdit{r.start + sp.Start, r.end + sp.Start, r.text})
+		}
 	}
-	return builder.String()
+	// Merge in request coordinates, not by concatenating independently
+	// replaced fragments: one crossing interval must stay one replacement.
+	return spliceCredentialMaskUnion(sql, spans, edits)
 }
 
 // StatementSQLModeSpan is one statement's raw byte span [Start,End) of a
@@ -481,13 +483,44 @@ type StatementSQLModeSpan struct {
 	// SemiTerminated reports that the span ENDED at a detected `;` boundary
 	// (a trailing `;` inside a comment or string is content, not a boundary).
 	SemiTerminated bool
+	// Intersections of conservative credential intervals that cross this
+	// span's boundaries, relative to Start. Keep their original context even
+	// if an alternative lexical mode places a separator inside a secret.
+	sensitiveSpans [][2]int
+}
+
+// MaskSensitiveLiterals masks this span of the ORIGINAL request sql. Boundary
+// discovery tracks effective modes independently from conservative redaction:
+// a span must retain the sensitive context that started in another fragment,
+// but that context must never suppress a real SET sql_mode transition.
+func (sp StatementSQLModeSpan) MaskSensitiveLiterals(sql string) string {
+	piece := sql[sp.Start:sp.End]
+	if sp.Known && len(sp.sensitiveSpans) == 0 {
+		return maskSensitiveSqlLiteralsScoped(piece, CredentialStateNone, true, sp.Mode)
+	}
+	spans, edits := sp.credentialMasks(sql)
+	return spliceCredentialMaskUnion(piece, spans, edits)
+}
+
+func (sp StatementSQLModeSpan) credentialMasks(sql string) ([][2]int, []credentialRawEdit) {
+	piece := sql[sp.Start:sp.End]
+	if !sp.Known {
+		return collectCredentialMasksUnderAllLexicalVariants(piece, sp.Mode, true, CredentialStateNone, nil, true, sp.sensitiveSpans)
+	}
+	if len(sp.sensitiveSpans) == 0 && !hasCredentialActionableKeyword(piece, true, sp.Mode) {
+		return nil, nil
+	}
+	spans, edits, malformed := collectCredentialMasks(piece, CredentialStateNone, true, sp.Mode, true)
+	if malformed {
+		return collectCredentialMasksUnderAllLexicalVariants(piece, sp.Mode, true, CredentialStateNone, edits, false, sp.sensitiveSpans)
+	}
+	return append(spans, sp.sensitiveSpans...), edits
 }
 
 // StatementSQLModes splits a WHOLE multi-statement request into statement
-// spans under effective-mode tracking, so splitter and masker share ONE
-// boundary decision (#30747 review: two independent mode-sensitive passes —
-// one splitting under the default mode, one masking under the effective
-// mode — cut inside a credential literal and the tail lost its map context).
+// spans under effective-mode tracking. Splitter and masker share the same
+// spans, including inherited redaction context when a conservative credential
+// interval crosses a boundary; boundaries themselves follow effective modes.
 // Session-scope `SET sql_mode` transitions re-pin the mode for following
 // statements, INCLUDING inside an unknown tail: after an unevaluable
 // assignment subsequent statements stay Known=false (conservatively union-
@@ -508,14 +541,13 @@ func StatementSQLModes(sql string, initial SQLModeFlags) []StatementSQLModeSpan 
 
 	// ONE-TIME preprocessing per lexical variant (#30747 review rounds
 	// 10/11): each variant scans the request ONCE from a forward-only
-	// cursor, so the whole walk costs O(4x len(sql)) — never a rescan of
+	// cursor, so lexical scanning costs O(4x len(sql)) — never a rescan of
 	// every remaining suffix — even for a long unknown-mode tail
-	// (round-11 finding: the per-statement rescans were quadratic). A `;`
-	// candidate is accepted only OUTSIDE the union of credential spans
-	// every variant marks: a `;` covered by the union is credential
-	// content under some admitted mode, not a statement terminator, in
-	// known AND unknown stretches alike — a mis-paired fake close can
-	// never shear a credential off its context (round-11 brace finding).
+	// (round-11 finding: the per-statement rescans were quadratic). The
+	// union of credential intervals must not veto KNOWN-mode boundaries:
+	// a wrong-mode scan can cover real semicolons around a sql_mode reset.
+	// Carry crossing intervals into those fragments instead. Unknown spans
+	// retain the conservative gate until a literal SET re-pins their mode.
 	lexical := [4]SQLModeFlags{}
 	base := initial &^ SQLModeFlags(SQLModeNoBackslashEscapes|SQLModeANSIQuotes)
 	for variant := 0; variant < 4; variant++ {
@@ -536,7 +568,10 @@ func StatementSQLModes(sql string, initial SQLModeFlags) []StatementSQLModeSpan 
 	}
 	var covered func(int) bool
 	if len(unionSpans) > 0 {
-		covered = func(pos int) bool { return boundaryInsideSpans(unionSpans, pos) }
+		covered = func(pos int) bool {
+			i := sort.Search(len(unionSpans), func(i int) bool { return unionSpans[i][1] > pos })
+			return i < len(unionSpans) && unionSpans[i][0] <= pos
+		}
 	}
 	var cursors [4]variantSemiCursor
 	cursorOf := func(variant int) *variantSemiCursor {
@@ -548,30 +583,18 @@ func StatementSQLModes(sql string, initial SQLModeFlags) []StatementSQLModeSpan 
 			cursors[variant].release()
 		}
 	}()
-	variantOf := func(m SQLModeFlags) int {
-		idx := 0
-		if m.Has(SQLModeNoBackslashEscapes) {
-			idx |= 1
-		}
-		if m.Has(SQLModeANSIQuotes) {
-			idx |= 2
-		}
-		return idx
-	}
-
 	stmtStart := 0
 	for stmtStart < len(sql) {
 		var stmtEnd int
+		var typList []int
+		var valList []string
 		semiTerminated := false
 		bestVariant := -1
 		if known {
-			bestVariant = variantOf(mode)
-			end, ok := cursorOf(bestVariant).nextAfter(sql, stmtStart, covered)
-			if ok {
-				stmtEnd, semiTerminated = end, true
-			} else {
-				stmtEnd = len(sql)
-			}
+			// Known spans are disjoint, so scanning each once stays linear.
+			// Anchor at the actual statement start, never at an alternative
+			// cursor's speculative lookahead from an earlier unknown span.
+			stmtEnd, semiTerminated, typList, valList = splitOneStatement(sql, stmtStart, mode)
 		} else {
 			stmtEnd = len(sql)
 			for variant := 0; variant < 4; variant++ {
@@ -580,12 +603,20 @@ func StatementSQLModes(sql string, initial SQLModeFlags) []StatementSQLModeSpan 
 				}
 			}
 		}
-		var typList []int
-		var valList []string
 		if bestVariant >= 0 && stmtEnd > stmtStart {
 			typList, valList = statementSQLModeInventory(sql, stmtStart, stmtEnd, lexical[bestVariant])
 		}
-		spans = append(spans, StatementSQLModeSpan{stmtStart, stmtEnd, mode, known, semiTerminated})
+		span := StatementSQLModeSpan{Start: stmtStart, End: stmtEnd, Mode: mode, Known: known, SemiTerminated: semiTerminated}
+		// Intervals are sorted/disjoint. Binary search plus a monotonic span
+		// walk avoids scanning the entire union for every statement.
+		first := sort.Search(len(unionSpans), func(i int) bool { return unionSpans[i][1] > stmtStart })
+		for i := first; i < len(unionSpans) && unionSpans[i][0] < stmtEnd; i++ {
+			s := unionSpans[i]
+			if s[0] < stmtStart || s[1] > stmtEnd {
+				span.sensitiveSpans = append(span.sensitiveSpans, [2]int{max(s[0], stmtStart) - stmtStart, min(s[1], stmtEnd) - stmtStart})
+			}
+		}
+		spans = append(spans, span)
 		if newMode, ok, touched := setStatementSQLModeChange(typList, valList); touched {
 			// A SET in this statement governs the FOLLOWING statements; an
 			// evaluable one re-pins even after an unknown stretch.
@@ -639,8 +670,8 @@ func spanFirstTokenIsSet(sql string, start int, mode SQLModeFlags) bool {
 // StatementSQLModes: it reports top-level `;` ends (brace depth zero — the
 // round-5 adversarial-shape shielding) without ever restarting, so per-
 // variant boundary collection over a request is one O(n) pass. Statement
-// starts only move forward, and candidates the cross-variant credential
-// union covers are consumed and dropped in place.
+// starts only move forward. Only unknown-mode spans use these cursors and
+// their conservative coverage gate; known spans use splitOneStatement.
 //
 // On FIRST use the cursor starts at the statement boundary in effect, not
 // at byte 0 (#30747 review round 12): a constant-mode scan from the request
@@ -697,7 +728,7 @@ func (c *variantSemiCursor) fill(sql string) bool {
 }
 
 // nextAfter returns the smallest top-level `;` end strictly greater than
-// start that the coverage gate accepts; ok=false at end of input. A cursor
+// start; ok=false at end of input. A cursor
 // anchors at the current statement boundary not only on first use but every
 // time its scan position LAGS behind the boundary (#30747 review rounds
 // 12/13): intervening statements were consumed under effective modes this
@@ -775,10 +806,9 @@ func splitOneStatement(sql string, start int, mode SQLModeFlags) (int, bool, []i
 // unionCredentialSpansUnderAllLexicalVariants returns the union — in
 // original sql coordinates — of the credential spans every lexical variant
 // of lastKnown marks in sql[start:] (#30747 review round 10). The union is
-// the boundary gate for an unknown-mode stretch: a `;` inside it belongs to
-// a credential under at least one admitted mode and must not terminate a
-// statement; a map one variant cannot parse survives through some other
-// variant's spans, so coverage never depends on all four agreeing.
+// redaction context for a split request: a map one variant cannot parse
+// survives through some other variant's spans, even when a span crosses
+// statement boundaries. It must not decide the effective-mode boundaries.
 // Variants without an actionable credential keyword are skipped, exactly
 // like the masking pass itself.
 func unionCredentialSpansUnderAllLexicalVariants(sql string, start int, lastKnown SQLModeFlags) [][2]int {
@@ -846,14 +876,6 @@ func SensitiveLiteralSpansForDiagnostic(sql string, initial SQLModeFlags) [][2]i
 	return unionCredentialSpansUnderAllLexicalVariants(sql, 0, initial)
 }
 
-// boundaryInsideSpans reports whether byte position pos lies inside any
-// union span. Spans are merged disjoint and sorted by start; membership is
-// a binary search, so long credential-dense requests stay flat.
-func boundaryInsideSpans(spans [][2]int, pos int) bool {
-	i := sort.Search(len(spans), func(i int) bool { return spans[i][1] > pos })
-	return i < len(spans) && spans[i][0] <= pos
-}
-
 // MaskSensitiveSqlLiteralsUnderAllLexicalVariants masks credential literals
 // in sql when the effective lexical SQL mode CANNOT be inferred (an
 // unevaluable sql_mode assignment governs the span, #30747 review): it
@@ -879,20 +901,18 @@ func maskPieceUnderAllLexicalVariants(piece string, lastKnown SQLModeFlags) stri
 }
 
 func maskPieceUnderAllLexicalVariantsScoped(piece string, lastKnown SQLModeFlags, maskAll bool, initial CredentialMapState, preparedEdits []credentialRawEdit, descendPrepare bool) string {
+	spans, edits := collectCredentialMasksUnderAllLexicalVariants(piece, lastKnown, maskAll, initial, preparedEdits, descendPrepare, nil)
+	return spliceCredentialMaskUnion(piece, spans, edits)
+}
+
+func collectCredentialMasksUnderAllLexicalVariants(piece string, lastKnown SQLModeFlags, maskAll bool, initial CredentialMapState, preparedEdits []credentialRawEdit, descendPrepare bool, inherited [][2]int) ([][2]int, []credentialRawEdit) {
 	base := lastKnown &^ SQLModeFlags(SQLModeNoBackslashEscapes|SQLModeANSIQuotes)
-	type maskItem struct {
-		start, end int
-		text       string
-		isRaw      bool
-	}
-	var items []maskItem
+	spans := append([][2]int(nil), inherited...)
+	rawEdits := append([]credentialRawEdit(nil), preparedEdits...)
 	// A known-mode malformed-map fallback already masked each PREPARE child
 	// during its first collection. Reuse those edits instead of expanding the
 	// same subtree four times at every nesting level. Unknown-mode requests
 	// still need the separate per-variant descents (preparedEdits=nil).
-	for _, r := range preparedEdits {
-		items = append(items, maskItem{r.start, r.end, r.text, true})
-	}
 	for variant := 0; variant < 4; variant++ {
 		m := base
 		if variant&1 != 0 {
@@ -904,14 +924,21 @@ func maskPieceUnderAllLexicalVariantsScoped(piece string, lastKnown SQLModeFlags
 		if initial == CredentialStateNone && !hasCredentialActionableKeyword(piece, maskAll, m) {
 			continue
 		}
-		spans, rawEdits, _ := collectCredentialMasks(piece, initial, maskAll, m, descendPrepare)
-		for _, s := range spans {
-			items = append(items, maskItem{s[0], s[1], "******", false})
-		}
-		for _, r := range rawEdits {
-			items = append(items, maskItem{r.start, r.end, r.text, true})
-		}
+		variantSpans, variantEdits, _ := collectCredentialMasks(piece, initial, maskAll, m, descendPrepare)
+		spans = append(spans, variantSpans...)
+		rawEdits = append(rawEdits, variantEdits...)
 	}
+	return spans, rawEdits
+}
+
+// spliceCredentialMaskUnion merges overlapping masks in original coordinates;
+// re-masking text after one replacement would destroy another mode's context.
+func spliceCredentialMaskUnion(piece string, spans [][2]int, rawEdits []credentialRawEdit) string {
+	items := make([]credentialRawEdit, 0, len(spans)+len(rawEdits))
+	for _, s := range spans {
+		items = append(items, credentialRawEdit{s[0], s[1], "******"})
+	}
+	items = append(items, rawEdits...)
 	if len(items) == 0 {
 		return piece
 	}
@@ -925,7 +952,7 @@ func maskPieceUnderAllLexicalVariantsScoped(piece string, lastKnown SQLModeFlags
 		singleText := items[i].text
 		single := true
 		j := i + 1
-		for j < len(items) && items[j].start < clusterEnd {
+		for j < len(items) && items[j].start <= clusterEnd {
 			if items[j].end > clusterEnd {
 				clusterEnd = items[j].end
 			}

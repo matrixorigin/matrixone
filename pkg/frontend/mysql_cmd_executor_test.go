@@ -13222,21 +13222,30 @@ func TestExecRequestUnknownModeBraceBoundaryTrace(t *testing.T) {
 		return nil, stop
 	})
 	defer stubs.Reset()
-	// the review's probe, verbatim
-	query := `set sql_mode=concat('NO_BACKSLASH','_ESCAPES'); create stage s url='file:///x' credentials={'k'='foo\','secret_key'='prefix};REVIEW_BRACE_CANARY'}`
-	resp, err := ExecRequest(ses, newTestExecCtx(ctx, ctrl), &Request{cmd: COM_QUERY, data: []byte(query)})
-	require.NoError(t, err)
-	require.NotNil(t, resp)
-	require.Equal(t, ErrorResponse, resp.category)
-	responseErr, ok := resp.data.(error)
-	require.True(t, ok)
-	require.ErrorContains(t, responseErr, "stop after query trace")
-	require.Equal(t, 1, planCalls, "request must reach the injected planning boundary")
-	entries := logs.FilterMessage("query trace").All()
-	require.Len(t, entries, 1, "the actual debug sink must receive the request once")
-	logged := entries[0].ContextMap()["query"]
-	require.Equal(t, mysql.MaskSensitiveSqlLiteralsPerStatement(query, mysql.ParseSQLModeFlags("")), logged)
-	require.NotContains(t, logged, "REVIEW_BRACE_CANARY")
+	queries := []string{
+		`set sql_mode=concat('NO_BACKSLASH','_ESCAPES'); create stage s url='file:///x' credentials={'k'='foo\','secret_key'='prefix};REVIEW_BRACE_CANARY'}`,
+		`SET sql_mode='NO_BACKSLASH_ESCAPES'; SELECT 'access_key_id'='foo\'; SET sql_mode=''; create stage s2 url="file:///x\"z" credentials={'k'='REVIEW_NEW_CANARY'}`,
+		// Nearest controls: no mixed-mode prefix, and no quote re-pairing
+		// in the SELECT before the reset. Both were already safe.
+		`create stage s2 url="file:///x\"z" credentials={'k'='REVIEW_NEW_CANARY'}`,
+		`SET sql_mode='NO_BACKSLASH_ESCAPES'; SELECT 'access_key_id'='foo'; SET sql_mode=''; create stage s2 url="file:///x\"z" credentials={'k'='REVIEW_NEW_CANARY'}`,
+	}
+	for i, query := range queries {
+		resp, err := ExecRequest(ses, newTestExecCtx(ctx, ctrl), &Request{cmd: COM_QUERY, data: []byte(query)})
+		require.NoError(t, err)
+		require.NotNil(t, resp)
+		require.Equal(t, ErrorResponse, resp.category)
+		responseErr, ok := resp.data.(error)
+		require.True(t, ok)
+		require.ErrorContains(t, responseErr, "stop after query trace")
+		require.Equal(t, i+1, planCalls, "request must reach the injected planning boundary")
+		entries := logs.FilterMessage("query trace").All()
+		require.Len(t, entries, i+1, "the actual debug sink must receive each request once")
+		logged := entries[i].ContextMap()["query"]
+		require.Equal(t, mysql.MaskSensitiveSqlLiteralsPerStatement(query, mysql.ParseSQLModeFlags("")), logged)
+		require.NotContains(t, logged, "REVIEW_BRACE_CANARY")
+		require.NotContains(t, logged, "REVIEW_NEW_CANARY")
+	}
 }
 
 // #30747 review rounds 11/12, battery: the full malformed-map family from
