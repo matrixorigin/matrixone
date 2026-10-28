@@ -32,7 +32,12 @@ func TestViewMetadataColumnsKnownTemplatesPreserveRelationalContract(t *testing.
 		"v109":        InformationSchemaColumnsV109DDL(),
 	} {
 		t.Run(name, func(t *testing.T) {
-			for _, input := range []string{definition, strings.Replace(definition, "information_schema.COLUMNS", "information_schema.columns", 1)} {
+			lowerName := strings.Replace(definition, "information_schema.COLUMNS", "information_schema.columns", 1)
+			for _, input := range []string{
+				definition, lowerName,
+				strings.Replace(definition, "CREATE VIEW ", "CREATE OR REPLACE VIEW ", 1),
+				strings.Replace(lowerName, "CREATE VIEW ", "CREATE OR REPLACE VIEW ", 1),
+			} {
 				adapted, ok := ViewMetadataColumnsDDL(input)
 				require.True(t, ok)
 				require.Contains(t, adapted, "mo_view_columns(mt.reldatabase, mt.relname, mt.rel_id)")
@@ -107,8 +112,10 @@ func TestDerivedColumnsTemplateSeparatesPersistedAndDerivedAuthority(t *testing.
 
 func TestViewMetadataColumnsRejectsUnknownDefinitions(t *testing.T) {
 	for _, definition := range []string{"", "CREATE VIEW information_schema.COLUMNS AS SELECT 1", InformationSchemaColumnsDDL + " where true"} {
-		adapted, ok := ViewMetadataColumnsDDL(definition)
-		require.False(t, ok)
-		require.Empty(t, adapted)
+		for _, input := range []string{definition, strings.Replace(definition, "CREATE VIEW ", "CREATE OR REPLACE VIEW ", 1)} {
+			adapted, ok := ViewMetadataColumnsDDL(input)
+			require.False(t, ok)
+			require.Empty(t, adapted)
+		}
 	}
 }
