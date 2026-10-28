@@ -676,7 +676,10 @@ func (c *compilerContext) Resolve(dbName string, tableName string, snapshot *pla
 	}); err != nil {
 		return nil, nil, err
 	}
-	if err := plan.MigrateLegacyHexTableDef(c.proc, tableDef); err != nil {
+	if err := plan.MigrateLegacyFloatStringTableDef(c, tableDef); err != nil {
+		return nil, nil, err
+	}
+	if err := plan.MigrateLegacyCatalogTableDef(ctx, c.proc, tableDef); err != nil {
 		return nil, nil, err
 	}
 	ownedTemporary := false

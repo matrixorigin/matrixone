@@ -55,6 +55,9 @@ type Vector interface {
 	// Shallow Ops
 	ShallowGet(i int) any
 	Window(offset, length int) Vector
+	// CopyFrom copies one row without converting it through an interface value.
+	// This preserves vector types that are not supported by Get.
+	CopyFrom(src Vector, dstRow, srcRow int)
 
 	// Deepcopy if const
 	TryConvertConst() Vector

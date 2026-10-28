@@ -210,7 +210,7 @@ Field    Type    Null    Key    Default    Extra    Comment
 n1    int    YES        null        
 show create table extable1;
 Table    Create Table
-extable1    CREATE EXTERNAL TABLE `extable1` (\n  `n1` int DEFAULT NULL\n) INFILE{'FILEPATH'='','COMPRESSION'='','FORMAT'='csv','JSONDATA'=''}
+extable1    CREATE EXTERNAL TABLE `extable1` (\n  `n1` int DEFAULT NULL\n) INFILE{'FILEPATH'='$resources/external_table_file/extable.csv','FORMAT'='csv'}
 CREATE TABLE t_check (id BIGINT NOT NULL AUTO_INCREMENT, c_age INT NULL, c_score DECIMAL(5,2) NULL, PRIMARY KEY (id), CONSTRAINT chk_age CHECK (c_age IS NULL OR (c_age >= 0 AND c_age <= 200)), CONSTRAINT chk_score CHECK (c_score IS NULL OR (c_score >= 0 AND c_score <= 100))) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 show create table t_check;
 Table    Create Table

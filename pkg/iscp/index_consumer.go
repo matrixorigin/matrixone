@@ -274,11 +274,11 @@ func runIndex(c *IndexConsumer, ctx context.Context, errch chan error, r DataRet
 //
 // The generic parameter T is the vector element type (float32 or
 // float64), matched against the writer type at the call site.
-func RunHnsw[T types.RealNumbers](c *IndexConsumer, ctx context.Context, errch chan error, r DataRetriever) {
+func RunHnsw[T types.ArrayElement](c *IndexConsumer, ctx context.Context, errch chan error, r DataRetriever) {
 	runHnsw[T](c, ctx, errch, r)
 }
 
-func runHnsw[T types.RealNumbers](c *IndexConsumer, ctx context.Context, errch chan error, r DataRetriever) {
+func runHnsw[T types.ArrayElement](c *IndexConsumer, ctx context.Context, errch chan error, r DataRetriever) {
 
 	datatype := r.GetDataType()
 	indexName := c.indexName()

@@ -24,9 +24,199 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	icebergsql "github.com/matrixorigin/matrixone/pkg/sql/iceberg"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
 type systemCatalogRestorePolicy uint8
+
+// A pre-upgrade system snapshot can replace the current CDC watermark table
+// with an older schema while leaving the upgraded catalog version ready. Such
+// a restore would break even newly created CDC tasks, so reject it before any
+// account or catalog mutations. Non-system accounts do not own this catalog.
+func preflightHistoricalCDCAccountRestore(ctx context.Context, bh BackgroundExec, ts int64, sourceAccount uint32) error {
+	if sourceAccount != catalog.System_Account {
+		return nil
+	}
+	query := fmt.Sprintf("select attname from mo_catalog.mo_columns {MO_TS = %d} where account_id = 0 and att_database = 'mo_catalog' and att_relname = 'mo_cdc_watermark' and attname in ('source_table_id','owner_generation','pending_source_table_id','target_identity')", ts)
+	rows, err := getStringColsList(defines.AttachAccountId(ctx, catalog.System_Account), bh, query, 0)
+	if err != nil {
+		return err
+	}
+	columns := make(map[string]bool, len(rows))
+	for _, row := range rows {
+		columns[row[0]] = true
+	}
+	for _, name := range []string{"source_table_id", "owner_generation", "pending_source_table_id", "target_identity"} {
+		if !columns[name] {
+			return moerr.NewNotSupported(ctx, "historical system account restore would replace the CDC watermark catalog with an incompatible schema")
+		}
+	}
+	return nil
+}
+
+func preflightRestoreAccountMetadata(ctx context.Context, bh BackgroundExec, ts int64, sourceAccount, targetAccount uint32, targetExists bool) error {
+	if err := preflightHistoricalCDCAccountRestore(ctx, bh, ts, sourceAccount); err != nil {
+		return err
+	}
+	return preflightIcebergAccountRestore(ctx, bh, ts, sourceAccount, targetAccount, targetExists)
+}
+
+// Whole-account restore recreates object identities, while Iceberg metadata is
+// otherwise cloned verbatim. Reject only histories whose identities cannot be
+// preserved; do this before account creation, deletion, or object mutation.
+func preflightIcebergAccountRestore(ctx context.Context, bh BackgroundExec, ts int64, sourceAccount, targetAccount uint32, targetExists bool) error {
+	sameAccount := targetExists && sourceAccount == targetAccount
+	tables := []string{icebergsql.TableCatalogs, icebergsql.TablePrincipalMap, icebergsql.TableResidencyPolicy,
+		icebergsql.TableTables, icebergsql.TableRefs, icebergsql.TablePublishJobs, icebergsql.TableOrphanFiles, icebergsql.TableMaintenanceJobs}
+	names := make([]string, len(tables))
+	for i, name := range tables {
+		names[i] = quoteSQLStringLiteral(name)
+	}
+	sourceCtx := defines.AttachAccountId(ctx, sourceAccount)
+	query := fmt.Sprintf("select relname from mo_catalog.mo_tables {MO_TS = %d} where account_id = %d and reldatabase = 'mo_catalog' and relname in (%s)", ts, sourceAccount, strings.Join(names, ","))
+	present, err := getStringColsList(sourceCtx, bh, query, 0)
+	if err != nil {
+		return err
+	}
+	historical := make(map[string]bool, len(present))
+	for _, row := range present {
+		table := row[0]
+		historical[table] = true
+		// Only names returned by the constant allowlist above can reach the SQL.
+		query = fmt.Sprintf("select '1' from %s {MO_TS = %d}", qualifiedTableName(moCatalog, table), ts)
+		if sameAccount && table == icebergsql.TableCatalogs {
+			query += fmt.Sprintf(" where account_id <> %d", sourceAccount)
+		}
+		query += " limit 1"
+		rows, err := getStringColsList(sourceCtx, bh, query, 0)
+		if err != nil {
+			return err
+		}
+		if len(rows) != 0 {
+			return moerr.NewNotSupportedf(ctx, "account restore cannot safely rebind historical Iceberg metadata in %s for account %d", table, sourceAccount)
+		}
+	}
+	// Tables absent from the source are not replaced by catalog restore. Reject
+	// existing target metadata that would otherwise survive an older snapshot.
+	if targetExists {
+		targetCtx := defines.AttachAccountId(ctx, targetAccount)
+		for _, table := range tables {
+			if historical[table] {
+				continue
+			}
+			query = fmt.Sprintf("select '1' from %s limit 1", qualifiedTableName(moCatalog, table))
+			rows, err := getStringColsList(targetCtx, bh, query, 0)
+			if err != nil {
+				return err
+			}
+			if len(rows) != 0 {
+				return moerr.NewNotSupportedf(ctx, "account restore cannot preserve current Iceberg metadata in %s absent from the historical snapshot", table)
+			}
+		}
+	}
+	return nil
+}
+
+// Partial restore recreates a database or table. Iceberg external mappings are
+// skipped by the generic restore and must not be silently lost or overwritten.
+func preflightIcebergPartialRestore(ctx context.Context, bh BackgroundExec, ts int64, account uint32, database, table string) error {
+	accountCtx := defines.AttachAccountId(ctx, account)
+	for _, historical := range []bool{true, false} {
+		snapshot := ""
+		if historical {
+			snapshot = fmt.Sprintf(" {MO_TS = %d}", ts)
+		}
+		query := fmt.Sprintf("select relname, rel_createsql from mo_catalog.mo_tables%s where account_id = %d and reldatabase = %s and relkind = %s", snapshot, account, quoteSQLStringLiteral(database), quoteSQLStringLiteral(catalog.SystemExternalRel))
+		if table != "" {
+			query += " and relname = " + quoteSQLStringLiteral(table)
+		}
+		rows, err := getStringColsList(accountCtx, bh, query, 0, 1)
+		if err != nil {
+			return err
+		}
+		for _, row := range rows {
+			_, iceberg, err := icebergsql.ParseCreateSQLEnvelope(ctx, row[1])
+			if err != nil {
+				return err
+			}
+			if iceberg {
+				return moerr.NewNotSupportedf(ctx, "restore cannot safely restore or replace Iceberg table %s.%s", database, row[0])
+			}
+		}
+	}
+	return nil
+}
+
+func restoreTargetAccountID(ctx context.Context, bh BackgroundExec, targetName string) (uint32, bool, error) {
+	systemCtx := defines.AttachAccountId(ctx, catalog.System_Account)
+	query := "select cast(account_id as varchar(20)) from mo_catalog.mo_account where account_name = " + quoteSQLStringLiteral(targetName)
+	rows, err := getStringColsList(systemCtx, bh, query, 0)
+	if err != nil {
+		return 0, false, err
+	}
+	if len(rows) == 0 {
+		return 0, false, nil
+	}
+	if len(rows) != 1 {
+		return 0, false, moerr.NewInternalErrorNoCtx("duplicate restore target account")
+	}
+	id, err := strconv.ParseUint(rows[0][0], 10, 32)
+	if err != nil {
+		return 0, false, err
+	}
+	return uint32(id), true, nil
+}
+
+// A historical clone may predate the index required by the running Iceberg
+// catalog. Repair it in the same transaction without rewriting historical IDs.
+func ensureRestoredIcebergAllocator(ctx context.Context, bh BackgroundExec, table *tableInfo) error {
+	if table.dbName != moCatalog || table.tblName != icebergsql.TableCatalogs {
+		return nil
+	}
+	rows, err := getStringColsList(ctx, bh, "show create table mo_catalog.mo_iceberg_catalogs", 1)
+	if err != nil {
+		return err
+	}
+	if len(rows) != 1 {
+		return moerr.NewInternalErrorNoCtx("missing Iceberg catalog definition after restore")
+	}
+	statements, err := mysql.Parse(ctx, rows[0][0], 1)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		for _, stmt := range statements {
+			stmt.Free()
+		}
+	}()
+	if len(statements) != 1 {
+		return moerr.NewInternalErrorNoCtx("invalid Iceberg catalog definition after restore")
+	}
+	definition, ok := statements[0].(*tree.CreateTable)
+	if !ok {
+		return moerr.NewInternalErrorNoCtx("invalid Iceberg catalog definition after restore")
+	}
+	for _, def := range definition.Defs {
+		switch index := def.(type) {
+		case *tree.Index:
+			if !strings.EqualFold(index.Name, "catalog_id_allocator") {
+				continue
+			}
+			if (index.KeyType != tree.INDEX_TYPE_INVALID && index.KeyType != tree.INDEX_TYPE_BTREE) || len(index.KeyParts) != 1 || index.KeyParts[0] == nil || index.KeyParts[0].ColName == nil || index.KeyParts[0].Expr != nil || index.KeyParts[0].Length != 0 || index.KeyParts[0].Direction == tree.Descending || !strings.EqualFold(index.KeyParts[0].ColName.ColName(), "catalog_id") {
+				return moerr.NewInvalidStateNoCtxf("unexpected Iceberg catalog_id_allocator definition")
+			}
+			return nil
+		case *tree.UniqueIndex:
+			if strings.EqualFold(index.GetIndexName(), "catalog_id_allocator") {
+				return moerr.NewInvalidStateNoCtxf("unexpected Iceberg catalog_id_allocator definition")
+			}
+		}
+	}
+	internalCtx := context.WithValue(ctx, defines.InternalExecutorKey{}, true)
+	return bh.Exec(internalCtx, "create index catalog_id_allocator on mo_catalog.mo_iceberg_catalogs(catalog_id)")
+}
 
 const (
 	// systemCatalogRestoreSkip means that DDL or another subsystem owns the
@@ -74,6 +264,7 @@ type systemCatalogPostRestoreHandler struct {
 // The runtime policy/handler cross-check below makes a half-registered catalog
 // fail before any target catalog rows are rewritten.
 var systemCatalogPostRestoreHandlers = []systemCatalogPostRestoreHandler{
+	{tableName: "mo_role_grant", handler: restoreRoleGrantsAfterObjects},
 	{tableName: "mo_role_privs", handler: restoreRolePrivilegesAfterObjects},
 }
 
@@ -84,42 +275,84 @@ const userDefinedFunctionCatalogColumns = `function_id, name, owner, args, arg_t
 const userDefinedFunctionCatalogSourceColumns = `function_id, name, owner, args, ` +
 	catalog.UserDefinedFunctionArgumentTypesSQL + `, retType, body, language, db, definer, modified_time, created_time, type, security_type, comment, character_set_client, collation_connection, database_collation, sql_mode`
 
-// isCurrentSchemaUserDefinedFunctionCatalog identifies the catalog whose
-// schema is owned by the running binary. Restoring a historical CREATE TABLE
-// for it would remove arg_types even when the current tenant-upgrade state is
-// already complete.
-func isCurrentSchemaUserDefinedFunctionCatalog(tblInfo *tableInfo) bool {
-	return tblInfo != nil && tblInfo.dbName == moCatalog && tblInfo.tblName == "mo_user_defined_function"
+const storedProcedureCatalogColumns = `proc_id, name, creator, args, lang, body, sql_mode, db, definer, modified_time, created_time, type, security_type, comment, character_set_client, collation_connection, database_collation`
+
+// The 4.1 routine catalogs do not have sql_mode. Use the 4.2 catalog default
+// when projecting their rows into the current schema.
+const legacyRoutineSQLMode = "PIPES_AS_CONCAT"
+
+func isCurrentSchemaRoutineCatalog(tblInfo *tableInfo) bool {
+	return tblInfo != nil && tblInfo.dbName == moCatalog &&
+		(tblInfo.tblName == "mo_user_defined_function" || tblInfo.tblName == "mo_stored_procedure")
 }
 
-// restoreUserDefinedFunctionCatalogWithCurrentSchema restores historical UDF
-// rows into the current catalog shape. The source may predate arg_types, so
-// the copy deliberately derives it from args through the same ByteJson SQL
-// expression used by the v4.0.6 backfill. This keeps restore independent of
-// the snapshot's DDL generation and preserves exact overload identities.
-func restoreUserDefinedFunctionCatalogWithCurrentSchema(
+// historicalRoutineSQLModeExpression checks the source account at the same
+// snapshot as the copied rows. An absent column is distinct from a failed
+// metadata query: only the former uses the released 4.2 default.
+func historicalRoutineSQLModeExpression(
 	ctx context.Context,
 	bh BackgroundExec,
+	tableName, sourceSnapshot string,
+	sourceAccount uint32,
+) (string, error) {
+	query := fmt.Sprintf("select attname from mo_catalog.mo_columns%s where account_id = %d and att_database = 'mo_catalog' and att_relname = %s and attname = 'sql_mode' limit 2",
+		sourceSnapshot, sourceAccount, quoteSQLStringLiteral(tableName))
+	rows, err := getStringColsList(defines.AttachAccountId(ctx, sourceAccount), bh, query, 0)
+	if err != nil {
+		return "", err
+	}
+	if len(rows) > 1 {
+		return "", moerr.NewInvalidStateNoCtxf("duplicate historical sql_mode columns in %s", tableName)
+	}
+	if len(rows) == 0 {
+		return quoteSQLStringLiteral(legacyRoutineSQLMode), nil
+	}
+	return "sql_mode", nil
+}
+
+// Restore routine rows into the running binary's schema. UDF arg_types is
+// derived from historical args, as in the catalog migration.
+func restoreRoutineCatalogWithCurrentSchema(
+	ctx context.Context,
+	bh BackgroundExec,
+	catalogName string,
 	sourceSnapshot string,
 	sourceAccount uint32,
 	targetAccount uint32,
 ) error {
+	mode, err := historicalRoutineSQLModeExpression(ctx, bh, catalogName, sourceSnapshot, sourceAccount)
+	if err != nil {
+		return err
+	}
+	var ddl, targetColumns, sourceColumns string
+	switch catalogName {
+	case "mo_user_defined_function":
+		ddl = MoCatalogMoUserDefinedFunctionDDL
+		targetColumns = userDefinedFunctionCatalogColumns
+		sourceColumns = strings.TrimSuffix(userDefinedFunctionCatalogSourceColumns, "sql_mode") + mode
+	case "mo_stored_procedure":
+		ddl = MoCatalogMoStoredProcedureDDL
+		targetColumns = storedProcedureCatalogColumns
+		sourceColumns = strings.Replace(storedProcedureCatalogColumns, "sql_mode", mode, 1)
+	default:
+		return moerr.NewInvalidInputNoCtxf("unsupported routine catalog %q", catalogName)
+	}
 	targetCtx := defines.AttachAccountId(ctx, targetAccount)
-	tableName := qualifiedTableName(moCatalog, "mo_user_defined_function")
-	if err := bh.Exec(targetCtx, dropTableIfExistsSQL(moCatalog, "mo_user_defined_function")); err != nil {
+	tableName := qualifiedTableName(moCatalog, catalogName)
+	if err := bh.Exec(targetCtx, dropTableIfExistsSQL(moCatalog, catalogName)); err != nil {
 		return err
 	}
 	// The running binary owns this catalog schema, including historical widths.
 	internalDDL := context.WithValue(targetCtx, defines.InternalExecutorKey{}, true)
-	if err := bh.Exec(internalDDL, MoCatalogMoUserDefinedFunctionDDL); err != nil {
+	if err := bh.Exec(internalDDL, ddl); err != nil {
 		return err
 	}
 
 	copySQL := fmt.Sprintf(
 		"insert into %s (%s) select %s from %s%s",
 		tableName,
-		userDefinedFunctionCatalogColumns,
-		userDefinedFunctionCatalogSourceColumns,
+		targetColumns,
+		sourceColumns,
 		tableName,
 		sourceSnapshot,
 	)
@@ -219,6 +452,21 @@ type rolePrivilegeRestoreRow struct {
 	operationUserID uint64
 	grantedTime     string
 	withGrantOption bool
+}
+
+// Restore rows into the current table so the current role-grant indexes remain
+// available even when the snapshot predates their creation.
+func restoreRoleGrantsAfterObjects(restoreCtx *systemCatalogRestoreContext) error {
+	targetCtx := defines.AttachAccountId(restoreCtx.ctx, restoreCtx.targetAccount)
+	if err := restoreCtx.bh.Exec(targetCtx, "delete from mo_catalog.mo_role_grant"); err != nil {
+		return err
+	}
+	const columns = "granted_id,grantee_id,operation_role_id,operation_user_id,granted_time,with_grant_option"
+	statement := fmt.Sprintf("insert into mo_catalog.mo_role_grant (%s) select %s from mo_catalog.mo_role_grant {MO_TS = %d}", columns, columns, restoreCtx.snapshotTS)
+	if restoreCtx.sourceAccount != restoreCtx.targetAccount {
+		return restoreCtx.bh.ExecRestore(targetCtx, statement, restoreCtx.sourceAccount, restoreCtx.targetAccount)
+	}
+	return restoreCtx.bh.Exec(targetCtx, statement)
 }
 
 func restoreRolePrivilegesAfterObjects(restoreCtx *systemCatalogRestoreContext) error {
