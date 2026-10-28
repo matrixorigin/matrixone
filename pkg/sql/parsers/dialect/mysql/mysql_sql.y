@@ -15328,7 +15328,7 @@ keys:
 num_literal:
     INTEGRAL
     {
-        str := fmt.Sprintf("%v", $1)
+        str := $<str>1
         switch v := $1.(type) {
         case uint64:
             $$ = tree.NewNumVal(v, str, false, tree.P_uint64)
@@ -15356,7 +15356,7 @@ literal:
     }
 |   INTEGRAL
     {
-        str := fmt.Sprintf("%v", $1)
+        str := $<str>1
         switch v := $1.(type) {
         case uint64:
             $$ = tree.NewNumVal(v, str, false, tree.P_uint64)
