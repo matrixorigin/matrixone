@@ -62,5 +62,22 @@ set @explicit_unsigned_a = 2, @explicit_unsigned_b = 1;
 execute explicit_unsigned_stmt using @explicit_unsigned_a, @explicit_unsigned_b;
 deallocate prepare explicit_unsigned_stmt;
 
+create table narrow_values(id int primary key,b tinyint,s smallint,i int,u tinyint unsigned);
+insert into narrow_values values(1,100,30000,2147483647,200),(2,-128,NULL,NULL,NULL);
+select id,b+b as bp,b*b as bs,s*s as ss,i*i as ii,u*u as uu from narrow_values order by id;
+select sum(b*b) as total from narrow_values;
+create table narrow_result as select b*b as bb,i*i as ii from narrow_values;
+select column_name,column_type from information_schema.columns where table_schema='mixed_unsigned_arithmetic_28581' and table_name='narrow_result' order by ordinal_position;
+select bb,ii from narrow_result order by bb;
+prepare narrow_stmt from 'select b*b as square from narrow_values where id=?';
+set @narrow_id=1;
+execute narrow_stmt using @narrow_id;
+deallocate prepare narrow_stmt;
+
+-- Lexical integer precision must not change numeric-to-text assignment.
+create table literal_texts(id int primary key,b binary(4),v varchar(4),j json);
+insert into literal_texts values(1,0002,0002,0002),(2,'0002','0002','"0002"');
+select id,hex(b) as b,v,j from literal_texts order by id;
+
 set session sql_mode = @mixed_unsigned_saved_sql_mode;
 drop database mixed_unsigned_arithmetic_28581;
