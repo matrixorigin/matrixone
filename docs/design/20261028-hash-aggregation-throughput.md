@@ -49,23 +49,18 @@ collisions, growth, failed admission, reset and reuse remain valid.
 
 ## Selected approach
 
-1. Batch independent first-cell loads during immutable hash insertion planning.
-   The current scalar probe waits on each key before starting the next key.
-   For sufficiently large tables and bounded batches, load first cells into
-   call-local fixed scratch before resolving collisions and tentative inserts
-   in input order. The table is immutable during preview, so these cell copies
-   remain valid. An alternative is to write confirmed existing matches directly
-   into the output mapping and resolve the remaining rows in input order, avoiding
-   a separate cell-copy buffer. A copied empty cell is still checked against earlier planned
-   inserts; collision chains beyond it use the live, unchanged table. Keep
-   scalar handling for small tables/batches. Apply only to representations with
-   measured benefit; integer and string-state plans have separate cost evidence.
-2. Give one full-width, non-null integer vector a direct key path. The eight-byte
-   integer representation is already the H8 grammar. Either copy it in one
-   operation or borrow its storage for synchronous hashing, whichever wins.
-   Constants, NULL markers, floats, grouping sentinels, composites, CHAR padding
-   and legacy codecs retain the existing implementation. Borrowed pointers must
-   never survive the call; plans own hashes and mappings, never source pointers.
+1. Keep insertion planning sequential, hoist immutable segment address masks,
+   and advance directly when an existing or tentative mapping is resolved.
+   This removes repeated address computation and the redundant found-state
+   transition without adding another full batch scan, cell copies, table state
+   or special treatment for consecutive values. Integer and string-state
+   equality checks have separate cost evidence; only the integer rewrite is
+   retained because the string candidate regressed low-cardinality controls.
+2. Give one full-width, non-null fixed vector a direct copy path. Its eight-byte
+   representation is already the H8 grammar for integers, dates and decimals.
+   Copy into iterator-owned scratch. Constants, NULL markers, floats, composites,
+   CHAR padding and legacy codecs retain the existing implementation. No plan
+   retains a pointer to input-vector storage.
 3. Avoid redundant group-key work when the exact insertion plan proves there
    are no new groups, and carry already-proven selection counts across the
    publication boundary where useful. Existing-row aggregate updates and string
@@ -102,13 +97,13 @@ for CPU and needs a separate capacity argument rather than a Q5-only constant.
 
 ## Ownership and failure closure
 
-Call-local snapshot scratch is bounded by a compile-time batch cap and dies on
-all returns. It reads only validated table indices; skipped rows do not become
-insertions. The same planning epoch owns hashes, slots and flags. Resize
+The existing call-local tentative-slot overlay remains bounded and dies on
+all returns. Planning reads only validated table indices; skipped rows do not
+become insertions. The same planning epoch owns hashes, slots and flags. Resize
 invalidates the table version and requires the existing complete replan.
 
 The vector retains ownership of its key storage. Source vectors stay alive for
-the synchronous encode/hash operation, and no mutation is permitted. Iterator
+the synchronous encoding operation, which copies their bytes without mutation. Iterator
 scratch reset remains correct when switching between optimized and generic
 input or between Find, Insert, Preview and commit.
 
@@ -176,3 +171,74 @@ The full cell-copy experiment improves random accesses but regresses skew/hot
 controls; it is not accepted for delivery. No new owner, resource bound or
 compatibility change is introduced by the alternative. Decision: PASS before
 implementing the output-scratch variant; implementation performance remains open.
+
+Experiment update: neither first-cell copying nor a separate confirmed-hit pass
+meets the hot-cache control criterion. Both are rejected. The candidate instead
+keeps a single sequential probe pass, hoists immutable segment addressing, and
+advances immediately when a mapping is resolved. The planned-slot overlay and
+all validation/commit boundaries are preserved for both integer and string
+states. This is a simplification of the existing algorithm, with no new state or
+layout. Design self-review: PASS; numeric acceptance remains subject to SQL A/B.
+
+String probe candidate rejected after fixed-layout benchmarks: the larger
+hash-state representation incurred low-cardinality regressions above 5% despite
+better large-table misses. The string production algorithm stays at baseline;
+its benchmark remains a control. Integer probes passed an additional ABBA
+comparison after an initially noisy 1M-hit result. No adjacent-repeat shortcut,
+cardinality-specific encoding or query-pattern guard is retained.
+
+## Revision 3: bounded local reduction experiment
+
+The first implementation passes the owning suites and a shared-host SQL ABBA
+comparison: Q5 improves from 2.5202 to 2.3395 seconds (7.2%), below the 25% target.
+The candidate profile still attributes 43.18% flat CPU to insertion planning
+and 12.89% cumulative CPU to in-place rehashing. Hardware cache/TLB counters are
+unavailable; locality remains a hypothesis, not a measured cache-miss claim.
+
+Experiment: bound the resident working set of an existing pure-key local Group
+whose downstream Group completes exactly the same keys after a local shuffle.
+Reuse its established byte threshold and Build -> Eval -> EvalReset path. Start
+with a 2 MiB working-set hypothesis, then compare several sizes; no query, key
+name, adjacency, or cardinality-specific branch is allowed. Keep a smaller
+explicit threshold. This is a scheduling target checked after an input batch,
+not a replacement for hard allocation admission. The final Group retains its
+session threshold. No disk spill is introduced by a normal partial flush.
+
+The compiler must prove the existing pure-key pair contract and a single-CN
+exchange with local sources. Remote exchange retains full local reduction to
+avoid unmeasured network amplification. Ordered/grouping-set plans and
+coordinator relocation remain outside this experiment. Reuse placement checks
+with local-aggregation omission instead of duplicating their logic. The chosen
+threshold uses the existing serialized SpillMem field; no protocol or storage
+change, new resource owner, worker, or operator state is introduced. The explicit
+local threshold replaces automatic soft spill scheduling for that operator;
+the query/CN allocation ledger still owns hard admission and capacity recovery.
+
+The union of emitted local key batches must equal the local input's distinct
+keys; duplicate keys between batches are permitted only because the downstream
+Group merges them. Group owns each returned batch until the next Call. EvalReset
+frees the consumed hash, key batches and aggregate state before reading another
+input; EOF and cancellation retain the existing output/Free cleanup edges.
+Preflight and capacity-retry behavior are unchanged, including rare hard-budget
+recovery paths. Source provenance must merge across flushes exactly as across
+workers. There are no new waits; existing shuffle backpressure bounds queued
+batches. The working-set target may be exceeded by one input batch and transient
+preflight reservations, both still subject to the existing hard budget.
+
+Alternatives are the current unbounded local reduction, planner omission (can
+increase exchange traffic and requires a cost estimate), and a new partitioned
+aggregate subsystem (more owners and transitions). Bounded partial output is
+the smallest experiment that addresses the measured growing-table costs while
+preserving existing publication and distributed completion contracts.
+
+Require a full shuffled permutation of the official Q5 multiset, in addition to
+synthetic low/high-cardinality, unique, skew, NULL, string and composite controls.
+Existing 8M-key SQL plans can omit local aggregation, so verify plans actually
+exercise the changed stage. Check intermediate row amplification, wall/CPU,
+allocation/RSS, exact output, spill and swap. Reject the experiment if its gain
+depends on clustered order or repeats a control regression above 5%. Extend
+existing compile placement tests and test partial output -> reset -> resume/EOF,
+cross-flush duplicates/provenance, cancellation and final allocation release.
+
+Revision 3 design review is pending; production implementation of this
+experiment must follow a distinct review phase.
