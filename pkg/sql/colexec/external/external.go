@@ -34,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -726,10 +727,14 @@ func ReadFileOffset(param *tree.ExternParam, mcpu int, fileSize int64, visibleCo
 	offsets = append(offsets, param.FileStartOff)
 	batchSize := (fileSize - param.FileStartOff) / int64(mcpu)
 	legacyBoundary := param.Format != tree.CSV
+	requiresVerifiedBoundaries := false
 
 	for i := 1; i < mcpu; i++ {
 		if err := ctx.Err(); err != nil {
 			return nil, err
+		}
+		if param.Strict && batchSize > 0 && offsets[i-1] > math.MaxInt64-batchSize {
+			break
 		}
 		guess := offsets[i-1] + batchSize
 		if guess >= fileSize {
@@ -761,11 +766,17 @@ func ReadFileOffset(param *tree.ExternParam, mcpu int, fileSize int64, visibleCo
 			offsets = append(offsets, boundary)
 			continue
 		}
+		cfg := strictCSVConfig(param)
+		limit, ok := strictProbeInputLimit(&cfg, csvparser.BufferSizeScale)
+		if !ok {
+			break
+		}
+		attempt := &strictProbeAttempt{remaining: limit}
 		vec.Entries[0].Offset = guess
 		if err = fs.Read(ctx, &vec); err != nil {
 			return nil, err
 		}
-		tailSize, err := getTailSize(param, visibleCols, r)
+		tailSize, err := getTailSizeStrictAttempt(param, visibleCols, r, &cfg, attempt)
 		closeErr := r.Close()
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return nil, ctxErr
@@ -780,9 +791,42 @@ func ReadFileOffset(param *tree.ExternParam, mcpu int, fileSize int64, visibleCo
 			// Strict scanning retains its existing parser-resynchronization fallback.
 			break
 		}
-		next := vec.Entries[0].Offset + tailSize
-		if next >= fileSize {
+		if tailSize <= 0 || guess < 0 || guess > math.MaxInt64-tailSize {
 			break
+		}
+		next := guess + tailSize
+		if next <= offsets[i-1] || next >= fileSize {
+			break
+		}
+		// At the old cap, discovering real EOF can admit a candidate where
+		// the capped reader failed. Verify equality too, then keep verifying
+		// subsequent ranges even when their suffix probes consume less.
+		requiresVerifiedBoundaries = requiresVerifiedBoundaries || limit-attempt.remaining >= strictProbeSoftBytes
+		if requiresVerifiedBoundaries {
+			if param.FileStartOff < 0 || next-param.FileStartOff > attempt.remaining {
+				break
+			}
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+			vec.Entries[0].Offset = param.FileStartOff
+			if err := fs.Read(ctx, &vec); err != nil {
+				return nil, err
+			}
+			err := verifyStrictTarget(param, &cfg, r, next-param.FileStartOff, attempt)
+			closeErr := r.Close()
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return nil, ctxErr
+			}
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				return nil, err
+			}
+			if closeErr != nil {
+				return nil, closeErr
+			}
+			if err != nil {
+				break
+			}
 		}
 		offsets = append(offsets, next)
 	}
@@ -1029,50 +1073,119 @@ func getNonStrictFallbackBoundary(param *tree.ExternParam, fs fileservice.ETLFil
 }
 
 const (
-	strictProbeMaxBytes   = 256 * 1024
+	strictProbeSoftBytes  = 256 * 1024
 	strictProbeMaxRecords = 256
 	// CSVParser multiplies its requested block size by BufferSizeScale (5).
-	// Keep physical reads below the budget so a large valid file can split.
-	strictProbeBlockSize = 16 * 1024
+	// Keep reads small even when the record-size-derived hard cap is large.
+	strictProbeBlockSize  = 16 * 1024
+	strictProbeBufferSize = 4096
 )
 
 var errStrictProbeBudgetExceeded = moerr.NewInternalError(moerr.NoReportContext(), "strict CSV boundary probe budget exceeded")
+
+// strictCSVConfig freezes the execution parser's effective record weight for
+// both streams of one attempt. Ordinary execution keeps its existing defaults.
+func strictCSVConfig(param *tree.ExternParam) csvparser.CSVConfig {
+	cfg := *CSVConfigForLoad(param)
+	if cfg.MaxRecordSize <= 0 {
+		cfg.MaxRecordSize = int64(config.LargestEntryLimit)
+	}
+	return cfg
+}
+
+// strictProbeInputLimit bounds one initial fragment, one complete candidate,
+// skipped input and parser read-ahead. Record weight prices content and each
+// field, but not field delimiters or enclosing quotes. For C content bytes and
+// F fields, C+F <= W and physical bytes <= C+(F-1)*D+2*F*Q+L.
+// Thus R=W*max(1,D+2*Q)+L+P+4 also covers STARTING BY and an entry BOM.
+// H=2*R+S+2*(B+U), with one explicitly sized bufio buffer U, is a consumption
+// bound, never an allocation size. Infinite skipped input still stops at H.
+// cfg must carry the effective MaxRecordSize resolved by strictCSVConfig.
+func strictProbeInputLimit(cfg *csvparser.CSVConfig, scale int64) (int64, bool) {
+	weight := cfg.MaxRecordSize
+	if weight <= 0 || scale <= 0 || len(cfg.FieldsTerminatedBy) == 0 {
+		return 0, false
+	}
+	field, quote := int64(len(cfg.FieldsTerminatedBy)), int64(len(cfg.FieldsEnclosedBy))
+	if quote > (math.MaxInt64-field)/2 {
+		return 0, false
+	}
+	factor := max(int64(1), field+2*quote)
+	if weight > math.MaxInt64/factor {
+		return 0, false
+	}
+	record := weight * factor
+	for _, extra := range []int64{max(int64(2), int64(len(cfg.LinesTerminatedBy))), int64(len(cfg.LinesStartingBy)), 4} {
+		if record > math.MaxInt64-extra {
+			return 0, false
+		}
+		record += extra
+	}
+	if scale > math.MaxInt64/strictProbeBlockSize {
+		return 0, false
+	}
+	block := strictProbeBlockSize * scale
+	if block > int64(^uint(0)>>1) || block > (math.MaxInt64-strictProbeSoftBytes)/2-strictProbeBufferSize {
+		return 0, false
+	}
+	overhead := int64(strictProbeSoftBytes) + 2*(block+strictProbeBufferSize)
+	if record > (math.MaxInt64-overhead)/2 {
+		return 0, false
+	}
+	return 2*record + overhead, true
+}
 
 // strictProbeReader borrows the stream. A non-EOF error prevents the parser
 // from accepting an artificially truncated record as a complete final row.
 type strictProbeReader struct {
 	io.Reader
-	remaining int
+	remaining int64
 }
 
 func (r *strictProbeReader) Read(p []byte) (int, error) {
 	if r.remaining == 0 {
 		return 0, errStrictProbeBudgetExceeded
 	}
-	if len(p) > r.remaining {
-		p = p[:r.remaining]
+	if int64(len(p)) > r.remaining {
+		p = p[:int(r.remaining)]
 	}
 	n, err := r.Reader.Read(p)
-	r.remaining -= n
+	r.remaining -= int64(n)
 	return n, err
 }
 
 func getTailSizeStrict(param *tree.ExternParam, cols []*plan.ColDef, r io.ReadCloser) (int64, error) {
+	cfg := strictCSVConfig(param)
+	limit, ok := strictProbeInputLimit(&cfg, csvparser.BufferSizeScale)
+	if !ok {
+		return 0, errStrictProbeBudgetExceeded
+	}
+	return getTailSizeStrictWithLimit(param, cols, r, &cfg, limit)
+}
+
+func getTailSizeStrictWithLimit(param *tree.ExternParam, cols []*plan.ColDef, r io.Reader, cfg *csvparser.CSVConfig, limit int64) (int64, error) {
+	return getTailSizeStrictAttempt(param, cols, r, cfg, &strictProbeAttempt{remaining: limit})
+}
+
+func getTailSizeStrictAttempt(param *tree.ExternParam, cols []*plan.ColDef, r io.Reader, cfg *csvparser.CSVConfig, attempt *strictProbeAttempt) (int64, error) {
+	limit := attempt.remaining
 	ctx := param.Ctx
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	quietCtx := errutil.ContextWithNoReport(ctx, true)
-	bufR := bufio.NewReader(boundaryContextReader{ctx: ctx, Reader: &strictProbeReader{Reader: r, remaining: strictProbeMaxBytes}})
-	// ensure the first character is not field quote symbol
-	quoteByte := byte('"')
-	if param.Tail.Fields != nil {
-		if enclosed := param.Tail.Fields.EnclosedBy; enclosed != nil && enclosed.Value != 0 {
-			quoteByte = enclosed.Value
-		}
+	if err := ctx.Err(); err != nil {
+		return 0, err
 	}
+	if limit <= 0 {
+		return 0, errStrictProbeBudgetExceeded
+	}
+	quietCtx := errutil.ContextWithNoReport(ctx, true)
+	limited := &strictProbeReader{Reader: r, remaining: limit}
+	defer func() { attempt.remaining = limited.remaining }()
+	bufR := bufio.NewReaderSize(boundaryContextReader{ctx: ctx, Reader: limited}, strictProbeBufferSize)
+	// ensure the first character is not field quote symbol
 	skipCount := int64(0)
-	for {
+	for len(cfg.FieldsEnclosedBy) > 0 {
 		if err := ctx.Err(); err != nil {
 			return 0, err
 		}
@@ -1080,7 +1193,7 @@ func getTailSizeStrict(param *tree.ExternParam, cols []*plan.ColDef, r io.ReadCl
 		if err != nil {
 			return 0, err
 		}
-		if ch != quoteByte {
+		if ch != cfg.FieldsEnclosedBy[0] {
 			err = bufR.UnreadByte()
 			if err != nil {
 				return 0, err
@@ -1088,14 +1201,26 @@ func getTailSizeStrict(param *tree.ExternParam, cols []*plan.ColDef, r io.ReadCl
 			break
 		}
 		skipCount++
+		if skipCount == strictProbeSoftBytes {
+			return 0, errStrictProbeBudgetExceeded
+		}
 	}
-	csvReader, err := newCSVParserFromReaderWithBlockSize(param, bufR, strictProbeBlockSize)
+	csvReader, err := csvparser.NewCSVParser(cfg, bufR, strictProbeBlockSize, false)
 	if err != nil {
 		return 0, err
 	}
 	var fields []csvparser.Field
 	for attempts := 0; attempts < strictProbeMaxRecords; attempts++ {
 		if err := ctx.Err(); err != nil {
+			return 0, err
+		}
+		// Allow an initial fragment and the following complete candidate to
+		// finish, even for long records. Stop between subsequent candidates
+		// once physical reads (including read-ahead) reach the soft budget.
+		if attempts >= 2 && limit-limited.remaining >= strictProbeSoftBytes {
+			return 0, errStrictProbeBudgetExceeded
+		}
+		if err := attempt.nextRecord(); err != nil {
 			return 0, err
 		}
 		fields, err = csvReader.Read(fields)

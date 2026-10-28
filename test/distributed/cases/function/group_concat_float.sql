@@ -76,4 +76,34 @@ select g = '-0.00000000000000123456789012345681e20' as current_default,j = '[1e2
 update float_folded set a=1.2345678901234567e-15,g=default;
 select g = '0.00000000000000123456789012345681e20' as current_default,j = '[1e20]' as current_json from float_folded;
 
+-- Independent MySQL byte oracles for approximate numeric consumers.
+create table float_compat_oracle (id int primary key, d double);
+insert into float_compat_oracle values
+    (1,cast('1e20' as double)),
+    (2,cast('-1e20' as double)),
+    (3,cast('1e-7' as double)),
+    (4,cast('1e14' as double)),
+    (5,cast('1e-8' as double));
+-- B01-B08: each consumer independently prints the fixed MySQL bytes.
+select id, hex(cast(d as char)) as cast_hex, hex(concat(d)) as concat_hex,
+       hex(group_concat(d)) as aggregate_hex
+from float_compat_oracle group by id,d order by id;
+-- G03: preserve the original numerical result in addition to G01/G02 HEX.
+select greatest(9007199254740993,cast(9007199254740992 as double)) = 9007199254740992 as greatest_value,
+       least(9007199254740993,cast(9007199254740992 as double)) = 9007199254740992 as least_value;
+-- J01/J02/J06/J07: all three reported DOUBLE values, including the negative.
+select id, json_type(json_extract(json_array(d),'$[0]')) as numeric_type,
+       hex(cast(json_array(d) as char)) as array_hex,
+       hex(json_unquote(json_extract(json_array(d),'$[0]'))) as unquote_hex,
+       json_contains(json_array(d),cast(d as char)) as contains_value
+from float_compat_oracle where id <= 3 order by id;
+-- J03/J04: singleton groups avoid aggregate-order dependence.
+select id, hex(cast(json_arrayagg(d) as char)) as arrayagg_hex,
+       hex(cast(json_objectagg(cast(id as char),d) as char)) as objectagg_hex
+from float_compat_oracle where id <= 3 group by id order by id;
+-- J05: complete object bytes, including MySQL's colon-space.
+select id, hex(cast(json_set(json_object(),'$.v',d) as char)) as set_hex
+from float_compat_oracle where id <= 3 order by id;
+drop table float_compat_oracle;
+
 drop database group_concat_float_28660;
