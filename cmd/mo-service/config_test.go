@@ -590,8 +590,8 @@ func TestCreateFileServiceEnablesIndexFileCacheOnlyForCNShared(t *testing.T) {
 }
 
 func TestCNSharedFileServiceHasIndexFileCache(t *testing.T) {
-	for _, share := range []string{"", "index-file-disk-share = 0.3"} {
-		testCNSharedFileServiceIndexFileCache(t, share, share != "")
+	for share, configured := range map[string]bool{"": true, "index-file-disk-share = 0.3": true, "index-file-disk-share = 0": false} {
+		testCNSharedFileServiceIndexFileCache(t, share, configured)
 	}
 }
 

@@ -169,11 +169,10 @@ nor the reverse. Index files exist only in this cache: a miss is never served fr
 storage backend, only rebuilt from the chunk rows. A CN without a disk cache uses a
 private temporary directory instead, with no reuse between loads.
 
-- The default share is zero until an index reads through the layer (decision, @cpegeric,
-  2026-10-24), so this change leaves the table-data cache exactly as it is. The change in
-  which the first index adopts the layer sets the default share (30% is planned); on
-  upgrade the table-data cache then shrinks by that share. A runtime resize of the disk
-  cache applies the same split to the new size.
+- The default share is 30%, set when FULLTEXT2 adopted the layer (decision, @cpegeric,
+  2026-10-24: zero until an index reads through the layer); on upgrade the table-data cache
+  shrinks by that share. A runtime resize of the disk cache applies the same split to the
+  new size.
 - A CN whose storage backend is local disk has no table-data disk cache, because table
   data is already local, but it still gets the index-file cache, sized as the same share of
   the configured disk capacity (decision, @cpegeric, 2026-10-24): rebuilding a file from its

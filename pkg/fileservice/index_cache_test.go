@@ -522,10 +522,9 @@ func TestIndexFileCacheSplitsDiskCapacity(t *testing.T) {
 	require.Equal(t, Policy(SkipAllCache|SkipFullFilePreloads), caches.index.RebuildPolicy())
 }
 
-func TestIndexFileCacheDisabledKeepsDiskCapacity(t *testing.T) {
+func TestIndexFileCacheShareSplitsDiskCapacity(t *testing.T) {
 	zero := 0.0
 	for name, mutate := range map[string]func(*CacheConfig){
-		"default share":                func(c *CacheConfig) { c.IndexFileDiskShare = nil },
 		"not enabled for this service": func(c *CacheConfig) { c.IndexFileCacheEnabled = false },
 		"share 0":                      func(c *CacheConfig) { c.IndexFileDiskShare = &zero },
 	} {
@@ -536,10 +535,18 @@ func TestIndexFileCacheDisabledKeepsDiskCapacity(t *testing.T) {
 		require.Equal(t, int64(100<<20), caches.disk.capacityFunc(), name)
 	}
 
+	// the default share splits the capacity
 	config := indexCacheConfig(t, 100<<20)
+	config.IndexFileDiskShare = nil
+	caches := newTestFileServiceCaches(t, config)
+	require.NotNil(t, caches.index)
+	require.Equal(t, int64(30<<20), caches.index.disk.capacityFunc())
+	require.Equal(t, int64(70<<20), caches.disk.capacityFunc())
+
+	config = indexCacheConfig(t, 100<<20)
 	disabled := toml.ByteSize(DisableCacheCapacity)
 	config.DiskCapacity = &disabled
-	caches := newTestFileServiceCaches(t, config)
+	caches = newTestFileServiceCaches(t, config)
 	require.Nil(t, caches.index)
 	require.Nil(t, caches.disk)
 }

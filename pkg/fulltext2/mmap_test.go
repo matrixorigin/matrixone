@@ -27,8 +27,8 @@ import (
 // TestMmapLoad validates the base-segment mmap path (the storage LoadFromStorage
 // shape, without a cluster): serialize a segment to a file, mmap it, decode over
 // the mapping — FST + positions are views into the shared mmap, docIDs/tfs expand
-// off-heap — then search (ranking + phrase), and confirm Free() munmaps and deletes
-// the file.
+// off-heap — then search (ranking + phrase), and confirm Free() munmaps and leaves
+// the file, which the index-file cache owns, in place.
 func TestMmapLoad(t *testing.T) {
 	b := NewBuilder("mm", int32(types.T_int64))
 	feed(t, b, int64(0), "alpha", "beta", "alpha") // "alpha beta" phrase present
@@ -42,6 +42,7 @@ func TestMmapLoad(t *testing.T) {
 	f, err := os.CreateTemp("", "ft2mmtest")
 	require.NoError(t, err)
 	path := f.Name()
+	t.Cleanup(func() { os.Remove(path) })
 	_, err = f.Write(blob)
 	require.NoError(t, err)
 	require.NoError(t, f.Sync())
@@ -49,7 +50,7 @@ func TestMmapLoad(t *testing.T) {
 	f.Close()
 	require.NoError(t, err)
 
-	s := &Segment{Id: "mm", mmapData: data, mmapPath: path}
+	s := &Segment{Id: "mm", mmapData: data}
 	require.NoError(t, s.decodeSegment(data))
 	require.NotNil(t, s.mmapData, "segment holds the mmap")
 
@@ -76,11 +77,11 @@ func TestMmapLoad(t *testing.T) {
 	require.Len(t, ph, 1)
 	require.Equal(t, int64(0), ph[0].Pk)
 
-	// Free munmaps and deletes the owned file.
+	// Free munmaps; the file stays.
 	idx.Free()
 	require.Nil(t, s.mmapData)
 	_, statErr := os.Stat(path)
-	require.True(t, os.IsNotExist(statErr), "Free must delete the mmap-owned file")
+	require.NoError(t, statErr, "Free must not delete the index file")
 }
 
 // TestConcurrentBlockDecode proves the loaded-segment design invariant: docID/tf
@@ -110,13 +111,14 @@ func TestConcurrentBlockDecode(t *testing.T) {
 	f, err := os.CreateTemp("", "cctest")
 	require.NoError(t, err)
 	path := f.Name()
+	t.Cleanup(func() { os.Remove(path) })
 	_, err = f.Write(blob)
 	require.NoError(t, err)
 	require.NoError(t, f.Sync())
 	data, err := mmapReadOnly(f)
 	f.Close()
 	require.NoError(t, err)
-	s := &Segment{Id: "cc", mmapData: data, mmapPath: path}
+	s := &Segment{Id: "cc", mmapData: data}
 	require.NoError(t, s.decodeSegment(data))
 	idx := NewIndex([]*Segment{s}, nil)
 	defer idx.Free()
