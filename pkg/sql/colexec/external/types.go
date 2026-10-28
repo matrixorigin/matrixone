@@ -479,7 +479,11 @@ type ParseLineHandler struct {
 // It only depends on config and io.Reader, not on ExParam.
 // Used by both CsvReader.Open and getTailSizeStrict.
 func newCSVParserFromReader(extern *tree.ExternParam, r io.Reader) (*csvparser.CSVParser, error) {
-	return csvparser.NewCSVParser(CSVConfigForLoad(extern), bufio.NewReader(r), csvparser.ReadBlockSize, false)
+	return newCSVParserFromReaderWithBlockSize(extern, r, csvparser.ReadBlockSize)
+}
+
+func newCSVParserFromReaderWithBlockSize(extern *tree.ExternParam, r io.Reader, blockSize int64) (*csvparser.CSVParser, error) {
+	return csvparser.NewCSVParser(CSVConfigForLoad(extern), bufio.NewReader(r), blockSize, false)
 }
 
 // CSVConfigForLoad is the authoritative LOAD clause/default mapping. Export

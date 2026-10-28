@@ -110,6 +110,10 @@ func (builder *QueryBuilder) buildFulltext2SearchCfg(scanNode *plan.Node, idxdef
 			idxdef.IndexName)
 	}
 
+	// token_filter requires POSITION_FREE (enforced at CREATE), so the POSITION_FREE
+	// rejection above already blocks NL / BOOLEAN on a token_filter index; no separate
+	// check is needed here. The filter is carried in cfgMap below for the BM25 path.
+
 	cfgMap := map[string]any{
 		"db":       scanNode.ObjRef.SchemaName,
 		"index":    storeTbl,
@@ -117,6 +121,11 @@ func (builder *QueryBuilder) buildFulltext2SearchCfg(scanNode *plan.Node, idxdef
 	}
 	if parser := fulltext2ParserFromParams(idxdef.IndexAlgoParams); parser != "" {
 		cfgMap["parser"] = parser
+	}
+	// Carry the token_filter analyzer chain so the search strips the SAME tokens the
+	// build stripped (as a []string → TableConfig.TokenFilters).
+	if filters := fulltext2TokenFiltersFromParams(idxdef.IndexAlgoParams); len(filters) > 0 {
+		cfgMap["token_filter"] = filters
 	}
 	// Carry the INCLUDE column NAMES so the engine can map a covering query's requested
 	// columns (by name) to each result's positional Include values (search_cache
@@ -186,6 +195,13 @@ func (builder *QueryBuilder) buildFulltext2SearchScan(
 	pattern, guard *plan.Expr,
 	colDefs []*plan.ColDef,
 ) (int32, error) {
+	opts.ThreadsSearch = builder.fulltext2ThreadsSearch()
+	// The high-df cutoff is a BM25 bag-of-words knob only: NL/BOOLEAN/json-probe modes never
+	// consume it (runTopK/stream apply it solely on the BagOfWords branch), so don't even
+	// emit it into their algo_options.
+	if opts.Mode == int64(tree.FULLTEXT_BM25) {
+		opts.SearchDFCutoff = builder.fulltext2SearchDFCutoff()
+	}
 	algoOptions, err := ft2plan.EncodeScanOptions(opts)
 	if err != nil {
 		return -1, err
@@ -272,6 +288,21 @@ func fulltext2ParserFromParams(params string) string {
 	return p.Parser
 }
 
+// fulltext2TokenFiltersFromParams extracts the token_filter analyzer chain from an
+// index's IndexAlgoParams JSON so the search strips the same tokens the build did.
+func fulltext2TokenFiltersFromParams(params string) []string {
+	if len(params) == 0 {
+		return nil
+	}
+	var p struct {
+		TokenFilter string `json:"token_filter"`
+	}
+	if err := json.Unmarshal([]byte(params), &p); err != nil {
+		return nil
+	}
+	return fulltext2engine.ParseTokenFilterNames(p.TokenFilter)
+}
+
 // fulltext2PositionFreeFromParams reports whether the index was built POSITION_FREE
 // (position_free=="true" in IndexAlgoParams). Such an index has no positional payload,
 // so only IN BM25 MODE (bag-of-words) can query it.
@@ -306,4 +337,28 @@ func (builder *QueryBuilder) findFulltext2IndexTables(scanNode *plan.Node, idxde
 		}
 	}
 	return storeTbl, metaTbl, storeTbl != "" && metaTbl != ""
+}
+
+// fulltext2ThreadsSearch resolves the fulltext2_threads_search session variable
+// that sizes the multi-segment parallel top-k search. 0 (the default) is the
+// NEUTRAL value, which the search site (vectorindex.GetConcurrency) resolves to
+// the deployment's effective parallelism (GOMAXPROCS) — NOT serial. A positive
+// value caps the worker count.
+func (builder *QueryBuilder) fulltext2ThreadsSearch() int64 {
+	n, err := builder.resolveInt64Variable("fulltext2_threads_search", 0)
+	if err != nil {
+		return 0
+	}
+	return n
+}
+
+// fulltext2SearchDFCutoff resolves the fulltext2_search_df_cutoff session variable:
+// the global df/N fraction at or above which a ranked bag-of-words term is dropped from
+// the BM25 search. 0 (the default) disables the cutoff.
+func (builder *QueryBuilder) fulltext2SearchDFCutoff() float64 {
+	v, err := builder.resolveFloat64Variable("fulltext2_search_df_cutoff", 0)
+	if err != nil {
+		return 0
+	}
+	return v
 }
