@@ -94,12 +94,14 @@ type DataRetriever interface {
 type IterationContext struct {
 	accountID uint32
 	tableID   uint64
-	jobNames  []string
-	jobIDs    []uint64
-	lsn       []uint64
-	stages    []int8
-	fromTS    types.TS
-	toTS      types.TS
+	// indexJob selects the bounded catch-up window for an exclusive index iteration.
+	indexJob bool
+	jobNames []string
+	jobIDs   []uint64
+	lsn      []uint64
+	stages   []int8
+	fromTS   types.TS
+	toTS     types.TS
 }
 
 type ISCPData struct {
@@ -212,8 +214,8 @@ type JobEntry struct {
 	stage              int8
 	dropAt             types.Timestamp
 	currentLSN         uint64
-	// isIndexJob marks a ConsumerType_IndexSync job, whose watermark is flushed
-	// on IndexFlushWatermarkInterval rather than the general threshold.
+	// isIndexJob marks a ConsumerType_IndexSync job. It owns a separate,
+	// bounded iteration and uses IndexFlushWatermarkInterval for flushing.
 	isIndexJob bool
 }
 
