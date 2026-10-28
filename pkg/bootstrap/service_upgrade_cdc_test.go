@@ -74,43 +74,60 @@ func TestRejectLegacyCDCTasks(t *testing.T) {
 }
 
 func TestLegacyCDCAdmissionBeforeUpgradeMutation(t *testing.T) {
-	final := v4_0_7.Handler.Metadata()
-	for _, current := range []versions.Version{
-		{Version: "4.0.6", VersionOffset: 5, State: versions.StateReady},
-		{Version: "4.0.7", VersionOffset: final.VersionOffset, State: versions.StateCreated},
-	} {
-		t.Run(fmt.Sprintf("%s-state%d", current.Version, current.State), func(t *testing.T) {
-			runtime.RunTest("", func(runtime.Runtime) {
-				exec := executor.NewMemExecutor2(func(sql string) (executor.Result, error) {
-					switch {
-					case strings.HasPrefix(sql, "SELECT reldatabase, relname, account_id FROM mo_catalog.mo_tables"):
-						return newBootstrapStringResult("mo_catalog"), nil
-					case sql == versions.LatestVersionSQL:
-						return recoveryVersionResult(t, current), nil
-					case strings.Contains(sql, "from mo_upgrade"):
-						return ownRecoveryResult(t, buildUpgradeVersionResult(10, versions.StateCreated, "4.0.6", "4.0.7", final.VersionOffset, 0, versions.Yes, versions.Yes, 0, 0)), nil
-					case strings.Contains(sql, "from mo_catalog.mo_cdc_task"):
-						mp := mpool.MustNewZeroNoFixed()
-						t.Cleanup(func() { mpool.DeleteMPool(mp) })
-						res := executor.NewMemResult([]types.Type{types.T_varchar.ToType(), types.T_varchar.ToType(), types.T_varchar.ToType(), types.T_varchar.ToType()}, mp)
-						res.NewBatchWithRowCount(1)
-						for i, value := range []string{"10001", "task-uuid", "old-task", "paused"} {
-							executor.AppendStringRows(res, i, []string{value})
+	predecessor := v4_0_7.Handler.Metadata()
+	final := v4_0_18.Handler.Metadata()
+	for _, mode := range []string{"initial", "recheck", "recovery"} {
+		sources := []versions.Version{{Version: "4.0.18", VersionOffset: final.VersionOffset, State: versions.StateCreated}}
+		if mode == "initial" {
+			sources = append(sources, versions.Version{Version: "4.0.6", VersionOffset: 5, State: versions.StateReady}, versions.Version{Version: "4.0.7", VersionOffset: predecessor.VersionOffset, State: versions.StateCreated})
+		}
+		for _, current := range sources {
+			t.Run(fmt.Sprintf("%s-%s-state%d", mode, current.Version, current.State), func(t *testing.T) {
+				runtime.RunTest("", func(runtime.Runtime) {
+					exec := executor.NewMemExecutor2(func(sql string) (executor.Result, error) {
+						switch {
+						case strings.HasPrefix(sql, "SELECT reldatabase, relname, account_id FROM mo_catalog.mo_tables"):
+							return newBootstrapStringResult("mo_catalog"), nil
+						case sql == versions.LatestVersionSQL:
+							return recoveryVersionResult(t, current), nil
+						case strings.HasPrefix(sql, "select state from mo_version") && mode == "recheck":
+							return testCatalogUpgradeState(t, versions.StateCreated), nil
+						case strings.Contains(sql, "from mo_upgrade"):
+							if current.Version == "4.0.18" {
+								return recoveryRouteResult(t, []versions.VersionUpgrade{
+									{ID: 10, FromVersion: "4.0.6", ToVersion: "4.0.7", FinalVersion: "4.0.18", FinalVersionOffset: final.VersionOffset, State: versions.StateCreated, UpgradeOrder: 0, UpgradeCluster: versions.Yes, UpgradeTenant: versions.Yes},
+									{ID: 11, FromVersion: "4.0.7", ToVersion: "4.0.18", FinalVersion: "4.0.18", FinalVersionOffset: final.VersionOffset, State: versions.StateCreated, UpgradeOrder: 1, UpgradeCluster: versions.No, UpgradeTenant: versions.Yes},
+								}), nil
+							}
+							return ownRecoveryResult(t, buildUpgradeVersionResult(10, versions.StateCreated, "4.0.6", "4.0.7", predecessor.VersionOffset, 0, versions.Yes, versions.Yes, 0, 0)), nil
+						case strings.Contains(sql, "from mo_catalog.mo_cdc_task"):
+							mp := mpool.MustNewZeroNoFixed()
+							t.Cleanup(func() { mpool.DeleteMPool(mp) })
+							res := executor.NewMemResult([]types.Type{types.T_varchar.ToType(), types.T_varchar.ToType(), types.T_varchar.ToType(), types.T_varchar.ToType()}, mp)
+							res.NewBatchWithRowCount(1)
+							for i, value := range []string{"10001", "task-uuid", "old-task", "paused"} {
+								require.NoError(t, executor.AppendStringRows(res, i, []string{value}))
+							}
+							return res.GetResult(), nil
+						default:
+							return executor.Result{}, fmt.Errorf("unexpected SQL before CDC admission: %s", sql)
 						}
-						return res.GetResult(), nil
-					default:
-						return executor.Result{}, fmt.Errorf("unexpected SQL before CDC admission: %s", sql)
+					}, &testTxnOperator{})
+					s := newServiceForTest("", &memLocker{}, clock.NewHLCClock(func() int64 { return 0 }, 0), nil, exec, func(s *service) { s.initUpgrade() })
+					t.Cleanup(s.stopper.Stop)
+					var err error
+					if mode == "recovery" {
+						err = exec.ExecTxn(t.Context(), func(tx executor.TxnExecutor) error { return s.checkUpgradeRecovery(current, tx) }, executor.Options{})
+					} else {
+						err = s.checkUpgrade(t.Context(), mode == "recheck")
 					}
-				}, &testTxnOperator{})
-				s := newServiceForTest("", &memLocker{}, clock.NewHLCClock(func() int64 { return 0 }, 0), nil, exec, func(s *service) { s.initUpgrade() })
-				t.Cleanup(s.stopper.Stop)
-				err := s.doCheckUpgrade(t.Context())
-				var terminal *terminalUpgradeError
-				require.ErrorAs(t, err, &terminal)
-				require.ErrorContains(t, err, "account=10001 task_id=task-uuid")
-				require.ErrorContains(t, err, "state=\"paused\"")
+					var terminal *terminalUpgradeError
+					require.ErrorAs(t, err, &terminal)
+					require.ErrorContains(t, err, "account=10001 task_id=task-uuid")
+					require.ErrorContains(t, err, "state=\"paused\"")
+				})
 			})
-		})
+		}
 	}
 }
 
