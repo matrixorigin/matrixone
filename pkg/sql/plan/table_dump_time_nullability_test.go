@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/stretchr/testify/require"
 )
 
@@ -93,6 +94,77 @@ func TestTableDumpTimeLiteralNullabilityEra(t *testing.T) {
 	forged := proto.Clone(persisted).(*plan.TableDef)
 	arg := forged.Cols[0].GetGeneratedCol().GetExpr().GetF().Args[0]
 	arg.Typ.NotNullable = !arg.Typ.NotNullable
+	_, err = AnalyzeTableDumpBindings(compiler, forged, forged)
+	require.ErrorContains(t, err, "table dump cannot verify bound")
+}
+
+// TestTableDumpTimeIntermediateEraCombined covers the post-8dd, pre-TIME-fix
+// binding window from review 5690666502: released catalogs persisted combined
+// CHECK expressions whose TIME() string node is NOT NULL while the DATE
+// string conversion is already nullable. Neither the current era nor the
+// pre-8dd era reproduces that mixed tree; the dump consumer must re-verify it
+// through an independent intermediate era.
+func TestTableDumpTimeIntermediateEraCombined(t *testing.T) {
+	compiler := NewMockCompilerContext(false, newPlanTestProcess(t))
+	compiler.tables["ck"] = &plan.TableDef{Name: "ck"}
+	const ddl = "create table ck(a int,check(time('12:00:00') is not null and date('2024-01-01') is not null))"
+	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, ddl, 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	built, err := BuildPlan(tableDumpBindContext{CompilerContext: compiler, ctx: compiler.GetContext(), increment: 4}, stmt, false)
+	require.NoError(t, err)
+	def := built.GetDdl().GetCreateTable().GetTableDef()
+	require.NotEmpty(t, def.Checks)
+
+	var find func(e *plan.Expr, fid int32) *plan.Expr
+	find = func(e *plan.Expr, fid int32) *plan.Expr {
+		if f := e.GetF(); f != nil {
+			got, _ := function.DecodeOverloadID(f.Func.Obj)
+			if got == fid {
+				return e
+			}
+			for _, arg := range f.Args {
+				if hit := find(arg, fid); hit != nil {
+					return hit
+				}
+			}
+		}
+		return nil
+	}
+	timeNode := find(def.Checks[0].Check, function.TIME)
+	dateNode := find(def.Checks[0].Check, function.DATE)
+	require.NotNil(t, timeNode)
+	require.NotNil(t, dateNode)
+	_, timeOid := function.DecodeOverloadID(timeNode.GetF().Func.Obj)
+	_, dateOid := function.DecodeOverloadID(dateNode.GetF().Func.Obj)
+	t.Logf("current binding: time oid=%d notnull=%v, date oid=%d notnull=%v",
+		timeOid, timeNode.Typ.NotNullable, dateOid, dateNode.Typ.NotNullable)
+	// Current binding: both string conversions infer the row-local NULL
+	// synthesis contract.
+	require.False(t, timeNode.Typ.NotNullable)
+	require.False(t, dateNode.Typ.NotNullable)
+	_, err = AnalyzeTableDumpBindings(compiler, def, def)
+	require.NoError(t, err)
+
+	// The post-8dd published tree kept the TIME node NOT NULL while the
+	// DATE conversion was already nullable.
+	stored := proto.Clone(def).(*plan.TableDef)
+	find(stored.Checks[0].Check, function.TIME).Typ.NotNullable = true
+	_, err = AnalyzeTableDumpBindings(compiler, stored, stored)
+	require.NoError(t, err)
+
+	// The pre-8dd published tree kept both nodes NOT NULL.
+	oldest := proto.Clone(def).(*plan.TableDef)
+	find(oldest.Checks[0].Check, function.TIME).Typ.NotNullable = true
+	find(oldest.Checks[0].Check, function.DATE).Typ.NotNullable = true
+	_, err = AnalyzeTableDumpBindings(compiler, oldest, oldest)
+	require.NoError(t, err)
+
+	// Forged mixed metadata stays rejected: a stored argument nullability
+	// that no binding era ever produced.
+	forged := proto.Clone(stored).(*plan.TableDef)
+	forgedArg := find(forged.Checks[0].Check, function.TIME).GetF().Args[0]
+	forgedArg.Typ.NotNullable = !forgedArg.Typ.NotNullable
 	_, err = AnalyzeTableDumpBindings(compiler, forged, forged)
 	require.ErrorContains(t, err, "table dump cannot verify bound")
 }

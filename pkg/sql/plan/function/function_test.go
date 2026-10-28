@@ -2258,3 +2258,33 @@ func TestHistoricalTemporalNullabilityBinding(t *testing.T) {
 		require.False(t, DeduceNotNullableForBinding(ctx, EncodeOverloadID(DATE, 0), []*plan.Expr{{Typ: plan.Type{Id: int32(types.T_datetime), NotNullable: true}}}))
 	}
 }
+
+func TestLegacyTimeNullabilityEraBinding(t *testing.T) {
+	source := &plan.Expr{Typ: plan.Type{Id: int32(types.T_varchar), NotNullable: true}}
+	intermediate := WithLegacyTimeNullability(context.Background())
+	pre8dd := WithLegacyTemporalNullability(context.Background())
+	// The intermediate post-8dd era reconstructed the published TIME()
+	// string binding metadata independently: TIME restores NOT NULL while
+	// DATE conversions keep their current nullable inference.
+	for _, oid := range []int32{5, 6, 7, 8} {
+		id := EncodeOverloadID(TIME, oid)
+		require.False(t, DeduceNotNullableForBinding(context.Background(), id, []*plan.Expr{source}))
+		require.True(t, DeduceNotNullableForBinding(intermediate, id, []*plan.Expr{source}))
+		require.True(t, DeduceNotNullableForBinding(pre8dd, id, []*plan.Expr{source}))
+	}
+	for _, tc := range []struct {
+		fid  int32
+		oid  int32
+		args []*plan.Expr
+	}{
+		{DATE, 3, []*plan.Expr{source}}, {DATE, 4, []*plan.Expr{source}},
+	} {
+		id := EncodeOverloadID(tc.fid, tc.oid)
+		require.False(t, DeduceNotNullableForBinding(context.Background(), id, tc.args))
+		source.Typ.NotNullable = false
+		require.False(t, DeduceNotNullableForBinding(intermediate, id, tc.args))
+		source.Typ.NotNullable = true
+		require.False(t, DeduceNotNullableForBinding(intermediate, id, tc.args))
+		require.True(t, DeduceNotNullableForBinding(pre8dd, id, tc.args))
+	}
+}

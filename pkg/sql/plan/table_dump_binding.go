@@ -249,6 +249,7 @@ const (
 	tableDumpBindingDDLColumnScope           tableDumpBindingMode = 1 << 9
 	tableDumpBindingPreIntegerDecimal        tableDumpBindingMode = 1 << 15
 	tableDumpBindingPreDecimalPrecision      tableDumpBindingMode = 1 << 16
+	tableDumpBindingPreTimeNullability       tableDumpBindingMode = 1 << 17
 )
 
 const tableDumpBindingLegacyFloat tableDumpBindingMode = 1 << 11
@@ -389,6 +390,37 @@ func tableDumpHasLegacyDecimalPrecision(expr *planpb.Expr) bool {
 	return false
 }
 
+// tableDumpHasTimeStringConversion reports a stored tree with a TIME()
+// string conversion whose published binding metadata changed with the
+// row-local NULL synthesis contract; only such trees need the intermediate
+// post-8dd candidate era.
+func tableDumpHasTimeStringConversion(expr *planpb.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	if f := expr.GetF(); f != nil {
+		if fid, oid := function.DecodeOverloadID(f.Func.Obj); fid == function.TIME && oid >= 5 && oid <= 8 {
+			return true
+		}
+		for _, arg := range f.Args {
+			if tableDumpHasTimeStringConversion(arg) {
+				return true
+			}
+		}
+	}
+	if entry := expr.GetList(); entry != nil {
+		for _, arg := range entry.List {
+			if tableDumpHasTimeStringConversion(arg) {
+				return true
+			}
+		}
+	}
+	if lit := expr.GetLit(); lit != nil {
+		return tableDumpHasTimeStringConversion(lit.Src)
+	}
+	return false
+}
+
 // Float compatibility uses the same complete-era binder as DUMP/LOAD.
 func bindFloatTableDumpExpression(ctx CompilerContext, def *planpb.TableDef, item tableDumpExpression, ast tree.Expr, increment int64, legacy bool, legacyFloat ...bool) (*planpb.Expr, error) {
 	mode := tableDumpBindingCurrent
@@ -403,7 +435,7 @@ func bindFloatTableDumpExpression(ctx CompilerContext, def *planpb.TableDef, ite
 
 func bindTableDumpExpression(ctx CompilerContext, def *planpb.TableDef, item tableDumpExpression, ast tree.Expr, increment int64, mode tableDumpBindingMode, session *tableDumpDefaultSession) (*planpb.Expr, error) {
 	bindCtx := function.WithDivPrecisionIncrement(ctx.GetContext(), int32(increment))
-	baseMode := mode &^ (tableDumpBindingPreTemporalNullability | tableDumpBindingPreJSON | tableDumpBindingPreUnixTimestampDatetime | tableDumpBindingPreIntegerDecimal | tableDumpBindingPreDecimalPrecision | tableDumpBindingPreIncompleteTemporal | tableDumpBindingDDLColumnScope | tableDumpBindingLegacyFloat | tableDumpBindingLegacyFloatFormatting | tableDumpBindingFrozenFloatDefaults | tableDumpBindingPreJSONFolding)
+	baseMode := mode &^ (tableDumpBindingPreTemporalNullability | tableDumpBindingPreJSON | tableDumpBindingPreUnixTimestampDatetime | tableDumpBindingPreIntegerDecimal | tableDumpBindingPreDecimalPrecision | tableDumpBindingPreIncompleteTemporal | tableDumpBindingDDLColumnScope | tableDumpBindingLegacyFloat | tableDumpBindingLegacyFloatFormatting | tableDumpBindingFrozenFloatDefaults | tableDumpBindingPreJSONFolding | tableDumpBindingPreTimeNullability)
 	if mode&tableDumpBindingPreDecimalPrecision != 0 {
 		bindCtx = function.WithLegacyDecimalIntermediatePrecision(bindCtx)
 	}
@@ -421,6 +453,9 @@ func bindTableDumpExpression(ctx CompilerContext, def *planpb.TableDef, item tab
 	}
 	if mode&tableDumpBindingPreTemporalNullability != 0 {
 		bindCtx = function.WithLegacyTemporalNullability(bindCtx)
+	}
+	if mode&tableDumpBindingPreTimeNullability != 0 {
+		bindCtx = function.WithLegacyTimeNullability(bindCtx)
 	}
 	if mode&tableDumpBindingPreUnixTimestampDatetime != 0 {
 		bindCtx = function.WithLegacyUnixTimestampDatetime(bindCtx)
@@ -976,6 +1011,21 @@ func analyzeTableDumpBindingsWithCandidateVisitLimit(ctx CompilerContext, target
 				}
 				if visit.hasSpecial {
 					modes = append(modes, tableDumpBindingLegacySpecial|tableDumpBindingPreTemporalNullability)
+				}
+				if tableDumpHasTimeStringConversion(item.expr) {
+					// The intermediate post-8dd era kept TIME() NOT NULL while
+					// DATE conversions were already nullable; it pairs with the
+					// historical function-era modes such a tree also contains.
+					modes = append(modes, tableDumpBindingCurrent|tableDumpBindingPreTimeNullability)
+					if visit.hasTimestampAdd {
+						modes = append(modes, tableDumpBindingLegacyTimestampAdd|tableDumpBindingPreTimeNullability)
+					}
+					if visit.hasIntegerDivision {
+						modes = append(modes, tableDumpBindingLegacyDecimalIntegerDiv|tableDumpBindingPreTimeNullability)
+					}
+					if visit.hasSpecial {
+						modes = append(modes, tableDumpBindingLegacySpecial|tableDumpBindingPreTimeNullability)
+					}
 				}
 			}
 			if visit.hasJSON {

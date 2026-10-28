@@ -906,8 +906,10 @@ func deduceNotNullable(ctx context.Context, overloadID int64, args []*plan.Expr)
 		// invalid input even when the argument is NOT NULL. The typed and
 		// numeric overloads fail the statement instead of producing NULL
 		// and keep their NOT NULL inference. Historical dump bindings keep
-		// their pre-8dd published NOT NULL metadata.
-		if oid >= 5 && oid <= 8 && !LegacyTemporalNullability(ctx) {
+		// their pre-8dd published NOT NULL metadata, and the intermediate
+		// post-8dd era that predates the NULL synthesis change kept TIME
+		// NOT NULL while DATE conversions were already nullable.
+		if oid >= 5 && oid <= 8 && !LegacyTemporalNullability(ctx) && !LegacyTimeNullability(ctx) {
 			return false
 		}
 	case CAST:
