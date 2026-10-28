@@ -5,7 +5,7 @@
 | Record | `python-udf-current-stage-r1-2026-09-24-approval` |
 | Issue | [MatrixOne #28132](https://github.com/matrixorigin/matrixone/issues/28132) |
 | Implementation PR | [MatrixOne #29152](https://github.com/matrixorigin/matrixone/pull/29152) |
-| Current-stage proposal | [`python-udf-current-stage-r34-2026-10-28`](python_udf_current_stage.md); historical r1 approval retained below |
+| Current-stage proposal | [`python-udf-current-stage-r35-2026-10-28`](python_udf_current_stage.md); historical r1 approval retained below |
 | Scope | Explicitly enabled test/development adapter; no production rollout or production-readiness claim |
 
 This record separates the immutable current-stage design artifact, the feature
@@ -732,3 +732,17 @@ not rewritten. [Review 5673875427](https://github.com/matrixorigin/matrixone/pul
 accepted the development-stage design and identified these concrete defects;
 that assessment does not assert implementation approval of this correction.
 Independent Architecture/SQL approval facts remain as recorded above.
+
+
+## r35 — 2026-10-28 merged Query field allocation
+
+Governing artifact: `python_udf_current_stage.md` r35, based on official
+`66c9e7624e3374897acc649195fde5b2836343a5`. Official Query field 20 now carries
+integer precision. The unmerged routine dependency envelope moves to field 21;
+correlation remains field 19. Generated descriptors and executable-plan
+serialization preserve both metadata contracts. Catalog revision storage and
+full-cluster shutdown upgrade remain unchanged; previously emitted unmerged PR
+plan/cache blobs are not a supported persisted format. No Python MORPC feature
+gate, old-tag fallback or independent approval is introduced. Historical
+feature-owner scope approval is retained; independent Architecture/SQL approval
+of this revision remains pending.
