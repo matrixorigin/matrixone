@@ -519,6 +519,7 @@ func (l *Lexer) Lex(lval *yySymType) int {
 
 	switch typ {
 	case INTEGRAL:
+		lval.str = str // Preserve lexical precision independently of the integer value.
 		l.recordSyntaxToken(typ)
 		return l.toInt(lval, str)
 	case FLOAT:

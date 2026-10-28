@@ -12,13 +12,13 @@ insert into fk_foreign_key_checks2_db0.t2 values (1,1),(2,2),(3,3);
 insert into t1 values (1),(2),(3);
 SET FOREIGN_KEY_CHECKS=1;
 delete from fk_foreign_key_checks2_db0.t2 where a = 1;
-internal error: Cannot delete or update a parent row: a foreign key constraint fails
+Cannot delete or update a parent row: a foreign key constraint fails
 insert into t1 values (4);
 Cannot add or update a child row: a foreign key constraint fails
 insert into fk_foreign_key_checks2_db0.t2 values (4,4),(5,5);
 insert into t1 values (4);
 delete from fk_foreign_key_checks2_db0.t2 where a = 4;
-internal error: Cannot delete or update a parent row: a foreign key constraint fails
+Cannot delete or update a parent row: a foreign key constraint fails
 delete from fk_foreign_key_checks2_db0.t2 where a = 5;
 drop database if exists fk_foreign_key_checks2_db1;
 create database fk_foreign_key_checks2_db1;
@@ -28,7 +28,7 @@ insert into fk_foreign_key_checks2_db1.t3 values (1),(2),(3),(4);
 insert into fk_foreign_key_checks2_db1.t3 values (5);
 Cannot add or update a child row: a foreign key constraint fails
 delete from fk_foreign_key_checks2_db0.t2 where a = 3;
-internal error: Cannot delete or update a parent row: a foreign key constraint fails
+Cannot delete or update a parent row: a foreign key constraint fails
 drop table fk_foreign_key_checks2_db0.t2;
 internal error: can not drop table 't2' referenced by some foreign key constraint
 SET FOREIGN_KEY_CHECKS=0;
@@ -54,7 +54,7 @@ Cannot add or update a child row: a foreign key constraint fails
 insert into fk_foreign_key_checks2_db1.t3 values (9);
 Cannot add or update a child row: a foreign key constraint fails
 delete from fk_foreign_key_checks2_db0.t2 where a = 3;
-internal error: Cannot delete or update a parent row: a foreign key constraint fails
+Cannot delete or update a parent row: a foreign key constraint fails
 delete from t1 where b = 3;
 delete from fk_foreign_key_checks2_db1.t3 where b = 3;
 delete from fk_foreign_key_checks2_db0.t2 where a = 3;
@@ -84,7 +84,7 @@ insert into fk_foreign_key_checks2_db0.t2 values (1,1),(2,2),(3,3),(4,4),(5,5),(
 insert into fk_foreign_key_checks2_db0.t2 values (10,10);
 insert into fk_foreign_key_checks2_db1.t3 values (10);
 delete from fk_foreign_key_checks2_db0.t2 where a = 10;
-internal error: Cannot delete or update a parent row: a foreign key constraint fails
+Cannot delete or update a parent row: a foreign key constraint fails
 drop table fk_foreign_key_checks2_db0.t2;
 internal error: can not drop table 't2' referenced by some foreign key constraint
 drop table fk_foreign_key_checks2_db1.t3;

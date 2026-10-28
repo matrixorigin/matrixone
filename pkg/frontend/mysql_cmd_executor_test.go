@@ -6079,17 +6079,77 @@ func Test_ExecRequestPrepareCommandMissingStmt(t *testing.T) {
 			data := make([]byte, 4)
 			binary.LittleEndian.PutUint32(data, stmtID)
 			setRowCount(ses, ses.GetProc(), 7)
+			if tc.cmd == COM_STMT_CLOSE {
+				ses.appendErrorDiagnostic(1000, "previous diagnostic")
+			}
+			beforeDiagnostics := ses.diagnosticsSnapshot()
 
 			resp, err := ExecRequest(ses, ec, &Request{cmd: tc.cmd, data: data})
 			require.NoError(t, err)
-			require.NotNil(t, resp)
-			require.Equal(t, ErrorResponse, resp.category)
-			require.Equal(t, int(tc.cmd), resp.cmd)
-			require.Error(t, resp.GetData().(error))
+			if tc.cmd == COM_STMT_CLOSE {
+				require.Nil(t, resp)
+			} else {
+				require.NotNil(t, resp)
+				require.Equal(t, ErrorResponse, resp.category)
+				require.Equal(t, int(tc.cmd), resp.cmd)
+				require.Error(t, resp.GetData().(error))
+			}
 			require.Equal(t, tc.want, ses.GetLastAffectedRows())
 			require.Equal(t, tc.want, ses.GetProc().GetAffectedRows())
+			if tc.cmd == COM_STMT_CLOSE {
+				require.Equal(t, beforeDiagnostics, ses.diagnosticsSnapshot())
+			}
 		})
 	}
+}
+
+func TestExecRequestStmtCloseSuppressesDeallocateError(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	t.Cleanup(ses.Close)
+	ec := newTestExecCtx(ctx, ctrl)
+	ec.ses = ses
+	// Keep this session in an active transaction so the close command reaches
+	// deallocation planning without creating a transaction client.
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOp.EXPECT().GetWorkspace().Return(newTestWorkspace()).AnyTimes()
+	txnOp.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
+	txnOp.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
+	txnOp.EXPECT().SetFootPrints(gomock.Any(), gomock.Any()).AnyTimes()
+	txnOp.EXPECT().TryEnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).Return(uint64(1), nil).AnyTimes()
+	txnOp.EXPECT().ExitRunSqlWithToken(gomock.Any()).AnyTimes()
+	txnOp.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
+	ses.txnHandler.txnOp = txnOp
+	ses.txnHandler.txnCtx = ctx
+	storage := mock_frontend.NewMockEngine(ctrl)
+	storage.EXPECT().Hints().Return(engine.Hints{CommitOrRollbackTimeout: time.Second}).AnyTimes()
+	ses.txnHandler.storage = storage
+	stmtID := uint32(123)
+	stmtName := getPrepareStmtName(stmtID)
+	stmt := &PrepareStmt{Name: stmtName}
+	require.NoError(t, ses.SetPrepareStmt(ctx, stmtName, stmt))
+	setRowCount(ses, ses.GetProc(), 7)
+
+	oldBuild := buildPlanWithAuthorization
+	t.Cleanup(func() { buildPlanWithAuthorization = oldBuild })
+	deallocateCalled := false
+	buildPlanWithAuthorization = func(reqCtx context.Context, session FeSession, compiler plan.CompilerContext, statement tree.Statement) (*plan.Plan, error) {
+		if _, ok := statement.(*tree.Deallocate); ok {
+			deallocateCalled = true
+			return nil, errors.New("injected deallocate planning failure")
+		}
+		return oldBuild(reqCtx, session, compiler, statement)
+	}
+
+	data := make([]byte, 4)
+	binary.LittleEndian.PutUint32(data, stmtID)
+	resp, err := ExecRequest(ses, ec, &Request{cmd: COM_STMT_CLOSE, data: data})
+	require.NoError(t, err)
+	require.True(t, deallocateCalled)
+	require.Nil(t, resp)
+	require.Equal(t, int64(7), ses.GetLastAffectedRows())
+	require.Equal(t, int64(7), ses.GetProc().GetAffectedRows())
 }
 
 func Test_ExecRequestStmtExecuteErrorClearsPreparedBinaryState(t *testing.T) {

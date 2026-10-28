@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/embed"
+	"github.com/matrixorigin/matrixone/pkg/iscp"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/stretchr/testify/require"
@@ -80,29 +81,67 @@ func TestIssue29566IndexRebuildCoordinator(t *testing.T) {
 	waitWorkers(ctx, 2)
 	oldForce := plan.GetForceScanOnMultiCN()
 	t.Cleanup(func() { plan.SetForceScanOnMultiCN(oldForce) })
+	// Bookkeeping for the ISCP guard installed further below. The resume
+	// cleanup is registered here — before the connections even exist, and
+	// before any Pause or assertion that can FailNow — so in LIFO order it
+	// runs strictly after the leftover-transaction rollback, the conn closes,
+	// and the db closes, but before the cluster closes: Resume is only
+	// attempted after every server session that could still hold index/job
+	// locks has been destroyed, regardless of how the rollback itself ended.
+	var executor *iscp.ISCPTaskExecutor
+	var executorCN string
+	paused := false
+	t.Cleanup(func() {
+		if executor == nil || !paused {
+			return
+		}
+		if err := executor.Resume(); err != nil {
+			t.Errorf("resume ISCP executor before releasing the shared fixture: %v", err)
+		} else if restored, ready := iscp.GetExecutorRuntime(executorCN); !ready || restored != executor {
+			t.Errorf("ISCP executor for %s not restored (ready=%v)", executorCN, ready)
+		}
+	})
 	conns := make([]*sql.Conn, 0, 2)
 	for i := 0; i < 2; i++ {
 		cn, err := cluster.GetCNService(i)
 		require.NoError(t, err)
 		db, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/", cn.GetServiceConfig().CN.Frontend.Port))
 		require.NoError(t, err)
-		t.Cleanup(func() { require.NoError(t, db.Close()) })
+		// Release reporting stays non-fatal: a cleanup that FailNows would
+		// abort runCleanups and skip the later executor-resume/account/executor
+		// releases registered before these.
+		t.Cleanup(func() {
+			if err := db.Close(); err != nil {
+				t.Errorf("close db for test connection: %v", err)
+			}
+		})
 		conn, err := db.Conn(ctx)
 		require.NoError(t, err)
-		t.Cleanup(func() { require.NoError(t, conn.Close()) })
+		t.Cleanup(func() {
+			if err := conn.Close(); err != nil {
+				t.Errorf("close test connection: %v", err)
+			}
+		})
 		conns = append(conns, conn)
 	}
 	conn := conns[0]
 	const schema = "index_rebuild_coordinator"
 	// Cluster.Close owns the isolated database and its index jobs. Roll back
-	// any unfinished subtest transaction before closing the connections.
+	// any unfinished subtest transaction before the connections are closed;
+	// registered after the conn/db closes below so it runs first in LIFO
+	// order. Reporting is non-fatal (t.Errorf, never FailNow) so a failure
+	// here cannot skip the later conn/db closes. The executor-resume cleanup
+	// registered further above runs after those closes.
 	t.Cleanup(func() {
-		plan.SetForceScanOnMultiCN(oldForce)
-		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cleanupCancel()
-		for _, conn := range conns {
-			_, err := conn.ExecContext(cleanupCtx, "rollback")
-			require.NoError(t, err)
+		for i, c := range conns {
+			// Fresh ctx per connection: a shared budget lets one slow
+			// rollback consume the next connection's timeout.
+			rctx, rcancel := context.WithTimeout(context.Background(), 15*time.Second)
+			_, err := c.ExecContext(rctx, "rollback")
+			rcancel()
+			if err != nil {
+				t.Errorf("roll back leftover transaction on conn %d before closing it: %v", i, err)
+			}
 		}
 	})
 	exec := func(t *testing.T, statement string) {
@@ -174,6 +213,33 @@ func TestIssue29566IndexRebuildCoordinator(t *testing.T) {
 		_, err = conns[1].ExecContext(ctx, statement)
 		require.NoError(t, err)
 	}
+
+	// The periodic ISCP executor races the manual force_sync rebuilds below: its
+	// mo_catalog.mo_iscp_log job-state/watermark updates were observed to
+	// deadlock against an alter reindex force_sync issued from the second
+	// coordinator (lock cycle on the shared job row in the multi-CN CI).
+	// In the embedded multi-CN fixture only one CN hosts the executor, so
+	// discover the hosting CN, pause its executor before the manual rebuilds
+	// begin, and resume it before the cluster closes. Production retry
+	// ownership is unchanged; this only stops background ownership for the
+	// controlled manual path, as in the temporary-table fixture (#31288).
+	require.Eventually(t, func() bool {
+		for i := 0; i < 2; i++ {
+			cnService, err := cluster.GetCNService(i)
+			require.NoError(t, err)
+			service := cnService.RawService().(cnservice.Service)
+			if hosted, ready := iscp.GetExecutorRuntime(service.ID()); ready {
+				executor = hosted
+				executorCN = service.ID()
+				return true
+			}
+		}
+		return false
+	}, time.Minute, 10*time.Millisecond, "ISCP executor must be ready before pausing")
+	require.NoError(t, executor.Pause())
+	paused = true
+	_, running := iscp.GetExecutorRuntime(executorCN)
+	require.False(t, running, "Pause must drain and unpublish the executor")
 
 	for _, tc := range []struct {
 		name, table, index, algo, match, want, wantAfterDML, search, metaType string

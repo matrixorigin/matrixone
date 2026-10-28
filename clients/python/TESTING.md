@@ -14,8 +14,8 @@ source/test/config hashes, test selection, counts and exit status in
 failures, errors, skips or inputs changing during execution. Server fixtures
 record observed version and git revision in JUnit properties. A revision alone
 does not identify a dirty checkout; the content manifest identifies its tested
-inputs. Portable native reports and their JUnit results are indexed in
-[docs/validation/README.md](docs/validation/README.md).
+inputs. Keep generated provenance and JUnit reports with the CI run or other
+external test artifacts; generate fresh reports for the revision being qualified.
 
 ## Dependency and server dimensions
 
@@ -25,17 +25,22 @@ checks exclude Arrow; analytics requires its separate optional dependency and
 supported Python version. Installing the core SDK must not require PyArrow.
 
 Server contracts are explicitly configured; an offline green run does not prove
-server compatibility. Required online jobs select MatrixOne 4.2.5 or a built
-current-source server. Set these variables for an isolated disposable database:
+server compatibility. Release qualification selects an exact MatrixOne 4.1.x or 4.2.x patch, or a built
+current-source server. Use full contracts on 4.1.0, 4.1.6, 4.2.0 and 4.2.6,
+and core contracts on every intermediate stable patch. Set these variables for an isolated disposable target:
 
 - `MO_HOST`, `MO_PORT`, `MO_USER`, `MO_PASSWORD`.
-- `MO_SDK_EXPECT_VERSION`: `4.2.5` for that release, or the source server banner.
+- `MO_SDK_EXPECT_VERSION`: the exact selected release, or the source server banner.
 - `MO_SDK_EXPECT_REVISION`: required for `current-source`, matching `git_version()`.
 - `MO_SDK_EXPORT_DIR`: directory visible to the server.
 - `MO_SDK_EXPORT_LOCAL_DIR`: the same directory visible to the test process.
+- `MO_SDK_DISPOSABLE_SERVER=1`: required for full contracts, only when the server or tenant is disposable and
+  exclusively owned by this test run. Case-mode tests change a tenant-global setting and must run serially; they
+  restore it afterwards, but concurrent sessions could observe the temporary setting.
 
 ```sh
-python scripts/run_contracts.py --server 4.2.5 --output release-contracts
+python scripts/run_contracts.py --server 4.1.0 --suite full --output release-contracts
+python scripts/run_contracts.py --server 4.2.3 --suite core --output core-contracts
 python scripts/run_contracts.py --server current-source --output source-contracts
 ```
 
@@ -171,3 +176,15 @@ tokens from triggering floating-point comparisons. Non-finite values and
 fixed-point representations exceeding 4096 characters are rejected before
 formatting; the expansion budget includes the sign and decimal point. This
 budget also conservatively rejects excessive positive-exponent zero inputs.
+
+
+Release boundaries and deliberate compatibility restrictions are described in
+[the release compatibility design](docs/design/release-quality.md). Core server
+contracts do not require the export mount variables. Full contracts do. Neither
+suite substitutes for optional TLS, S3, HNSW or multi-CN qualification.
+
+CLONE managers verify target existence after acknowledgement. Manager
+`if_not_exists=True` uses a read-only catalog observation and never the native
+flag, which can duplicate existing data. Raw clone builders reject that flag;
+use `client.clone` or `session.clone` for the safe operation. Concurrent creation
+can still produce a native error. Async clone steps share one query timeout.

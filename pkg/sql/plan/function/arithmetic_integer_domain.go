@@ -38,6 +38,25 @@ func WithNoUnsignedSubtraction(ctx context.Context, enabled bool) context.Contex
 	return context.WithValue(ctx, noUnsignedSubtractionKey{}, enabled)
 }
 
+// resolveIntegerAddMulExecution owns only integer +/* signatures. The shared
+// mixed predicate below also serves subtraction and must keep its own policy.
+func resolveIntegerAddMulExecution(op numericBinaryOp, left, right types.Type) (operands []types.Type, result types.Type, mixed, ok bool) {
+	if (op != numericOpAdd && op != numericOpMul) || !left.Oid.IsInteger() || !right.Oid.IsInteger() {
+		return nil, types.Type{}, false, false
+	}
+	// Existing full-width same-sign vectors need no per-row adapter.
+	if left.Oid == right.Oid && (left.Oid == types.T_int64 || left.Oid == types.T_uint64) {
+		return []types.Type{left, right}, left, false, true
+	}
+	mixed = left.Oid.IsSignedInt() != right.Oid.IsSignedInt()
+	operands = integerDomainOperands([]types.Type{left, right})
+	result = operands[0]
+	if mixed {
+		result = types.New(types.T_uint64, 64, -1)
+	}
+	return operands, result, mixed, true
+}
+
 func isMixedUnsignedInteger(left, right types.Type) bool {
 	return left.Oid == types.T_uint64 && right.Oid.IsSignedInt() ||
 		right.Oid == types.T_uint64 && left.Oid.IsSignedInt()

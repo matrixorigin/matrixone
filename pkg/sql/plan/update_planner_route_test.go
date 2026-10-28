@@ -968,6 +968,19 @@ func TestBindUpdateForeignKeyRoutingByAffectedColumns(t *testing.T) {
 		))
 	})
 
+	t.Run("delete restricted parent carries typed fk assert", func(t *testing.T) {
+		mock := NewMockOptimizer(true, newPlanTestProcess(t))
+		prepareEmpDept(mock)
+
+		logicPlan, err := runOneStmt(mock, t, "DELETE FROM dept WHERE deptno = 2")
+		require.NoError(t, err)
+		query := logicPlan.GetQuery()
+		require.True(t, updateFkPlanContainsTypedAssert(
+			query,
+			foreignKeyRowIsReferencedAssert,
+		))
+	})
+
 	t.Run("set default preserves restrict compatibility on modern path", func(t *testing.T) {
 		mock := NewMockOptimizer(true, newPlanTestProcess(t))
 		prepareEmpDept(mock)

@@ -94,6 +94,34 @@ class TestStageSQLGeneration:
         assert "CREDENTIALS={" in actual_sql
         assert "COMMENT='full test'" in actual_sql
 
+    @pytest.mark.usefixtures("isolate_create_sql_from_catalog_readback")
+    def test_create_stage_disabled_emits_enable_false(self):
+        """Regression #31389: create(enable=False) must not silently create an enabled stage."""
+        self.stage_manager.create('my_stage', 'file:///data/', enable=False, comment='later')
+
+        actual_sql = self.mock_client.execute.call_args[0][0]
+        assert actual_sql == "CREATE STAGE my_stage URL='file:///data/' ENABLE=FALSE COMMENT='later'"
+
+    @pytest.mark.usefixtures("isolate_create_sql_from_catalog_readback")
+    def test_create_stage_default_keeps_server_default_status(self):
+        """Enabled is the default, so no ENABLE clause is emitted and the server keeps its default status."""
+        self.stage_manager.create('my_stage', 'file:///data/', enable=True)
+
+        actual_sql = self.mock_client.execute.call_args[0][0]
+        assert actual_sql == "CREATE STAGE my_stage URL='file:///data/'"
+
+    @pytest.mark.asyncio
+    @pytest.mark.usefixtures("isolate_create_sql_from_catalog_readback")
+    async def test_async_create_stage_disabled_emits_enable_false(self):
+        """Regression #31389: the async manager honors enable=False on CREATE too."""
+        client = Mock()
+        client.execute = AsyncMock()
+
+        await AsyncStageManager(client).create('my_stage', 'file:///data/', enable=False)
+
+        create_sql = client.execute.await_args_list[0][0][0]
+        assert create_sql == "CREATE STAGE my_stage URL='file:///data/' ENABLE=FALSE"
+
     def test_alter_stage_url(self):
         """Test ALTER STAGE SET URL"""
         # Mock get() to return a stage
