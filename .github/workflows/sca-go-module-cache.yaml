@@ -24,6 +24,12 @@ jobs:
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - name: Enable runner Node for incremental SCA
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        with:
+          script: |
+            core.addPath(require('node:path').dirname(process.execPath));
+            core.info(`SCA Node runtime: ${process.version}`);
       - name: Configure Shanghai Go proxy
         if: ${{ !vars.SCA_RUNNER_LABEL || contains(vars.SCA_RUNNER_LABEL, 'shanghai') }}
         run: |
