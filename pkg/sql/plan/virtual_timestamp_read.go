@@ -68,6 +68,16 @@ func (bc *BindContext) bindVirtualTimestampRead(binding *Binding, pos, depth int
 			"virtual generated column '%s' needs %d read-expression nodes (limit %d); run the virtual timestamp preflight and migrate this table before upgrade",
 			table.Cols[pos].Name, virtualTimestampReadCost(table, pos), maxVirtualTimestampExpansionNodes)
 	}
+	// A sequential UPDATE projection has already converted physical ENUM/SET
+	// columns to display strings. Catalog generated expressions were bound to
+	// their storage values, so recover those inputs before evaluating them.
+	if binding.virtualTimestampTable != nil {
+		var err error
+		computed, err = adaptVirtualTimestampProjectionInputs(bc.builder.GetContext(), computed, table, binding)
+		if err != nil {
+			return nil, true, err
+		}
+	}
 	// Sequential UPDATE binds its RHS to a PROJECT whose ENUM/SET columns
 	// already contain display strings. Match that projection's representation;
 	// ordinary table scans still expose the storage value to baseBinder, which
@@ -77,6 +87,20 @@ func (bc *BindContext) bindVirtualTimestampRead(binding *Binding, pos, depth int
 		var err error
 		computed, err = makeEnumOrSetDisplayValue(bc.builder.GetContext(), computed)
 		if err != nil {
+			return nil, true, err
+		}
+	}
+	if binding.virtualTimestampTable != nil {
+		var nodes int
+		if err := plan.VisitExprTree(computed, func(*plan.Expr) error {
+			nodes++
+			if nodes > maxVirtualTimestampExpansionNodes {
+				return moerr.NewNotSupportedf(bc.builder.GetContext(),
+					"virtual generated column '%s' needs more than %d read-expression nodes after projection conversion",
+					table.Cols[pos].Name, maxVirtualTimestampExpansionNodes)
+			}
+			return nil
+		}); err != nil {
 			return nil, true, err
 		}
 	}
@@ -107,6 +131,54 @@ func (bc *BindContext) bindVirtualTimestampRead(binding *Binding, pos, depth int
 		return computed, true, err
 	}
 	return computed, true, nil
+}
+
+func adaptVirtualTimestampProjectionInputs(ctx context.Context, expr *plan.Expr, table *plan.TableDef, binding *Binding) (*plan.Expr, error) {
+	if expr == nil {
+		return nil, nil
+	}
+	var pos int32 = -1
+	switch e := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		if e.Col != nil {
+			pos = e.Col.ColPos
+		}
+	case *plan.Expr_Corr:
+		if e.Corr != nil {
+			pos = e.Corr.ColPos
+		}
+	case *plan.Expr_F:
+		if e.F != nil {
+			for i, arg := range e.F.Args {
+				var err error
+				e.F.Args[i], err = adaptVirtualTimestampProjectionInputs(ctx, arg, table, binding)
+				if err != nil {
+					return nil, err
+				}
+			}
+		}
+	case *plan.Expr_List:
+		if e.List != nil {
+			for i, arg := range e.List.List {
+				var err error
+				e.List.List[i], err = adaptVirtualTimestampProjectionInputs(ctx, arg, table, binding)
+				if err != nil {
+					return nil, err
+				}
+			}
+		}
+	}
+	if pos < 0 || int(pos) >= len(table.Cols) || int(pos) >= len(binding.types) || binding.types[pos] == nil ||
+		table.Cols[pos] == nil || !isEnumOrSetPlanType(&table.Cols[pos].Typ) || isEnumOrSetPlanType(binding.types[pos]) {
+		return expr, nil
+	}
+	storage := &table.Cols[pos].Typ
+	if !mysqlSpecialNumericTypeReversible(storage) {
+		return nil, moerr.NewNotSupportedf(ctx, "virtual generated column '%s' depends on a non-reversible ENUM/SET projection", table.Cols[pos].Name)
+	}
+	display := DeepCopyExpr(expr)
+	display.Typ = *DeepCopyType(binding.types[pos])
+	return makeMySQLSpecialNumericValue(ctx, display, storage)
 }
 
 // state: 0 unseen, 1 visiting, 2 safe, 3 affected.

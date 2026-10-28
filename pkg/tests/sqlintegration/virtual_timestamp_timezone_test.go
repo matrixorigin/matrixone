@@ -83,7 +83,7 @@ func TestVirtualTimestampColumnUsesReaderTimeZone(t *testing.T) {
 		count("select count(*) from nullable_side r right join t on r.id=99 where r.d is null", 2)
 		// ENUM has a separate storage index and display value. The display
 		// conversion must consume the reader-session generated index.
-		exec("create table special_side(id int primary key, ts timestamp(6) not null, e enum('a','b') as (if(date(ts)='2024-03-01','b','a')) virtual, g varchar(16) as (concat(e,'!')) virtual, x varchar(16), y int)")
+		exec("create table special_side(id int primary key, ts timestamp(6) not null, p enum('a','b') default 'b', e enum('a','b') as (if(date(ts)='2024-03-01','b','a')) virtual, g varchar(16) as (concat(e,'!')) virtual, h varchar(32) as (concat(p,':',date(ts))) virtual, x varchar(32), y int)")
 		exec("set time_zone='+00:00'")
 		exec("insert into special_side(id,ts) values(1,'2024-02-29 23:30:00')")
 		exec("set time_zone='+08:00'")
@@ -92,7 +92,7 @@ func TestVirtualTimestampColumnUsesReaderTimeZone(t *testing.T) {
 		require.NoError(t, conn.QueryRowContext(ctx, "select cast(e as char) from special_side where id=1").Scan(&label))
 		require.Equal(t, "b", label)
 		exec("set time_zone='+00:00'")
-		exec("insert into special_side(id,ts) values(2,'2024-02-29 23:30:00'),(3,'2024-02-29 23:30:00'),(4,'2024-02-29 23:30:00')")
+		exec("insert into special_side(id,ts) values(2,'2024-02-29 23:30:00'),(3,'2024-02-29 23:30:00'),(4,'2024-02-29 23:30:00'),(5,'2024-02-29 23:30:00'),(6,'2024-02-29 23:30:00')")
 		exec("set time_zone='+08:00'")
 		// Sequential UPDATE projects ENUM as display text. Reading an
 		// affected virtual ENUM, directly or through another virtual column,
@@ -101,8 +101,11 @@ func TestVirtualTimestampColumnUsesReaderTimeZone(t *testing.T) {
 		exec("update special_side set x=e,y=1 where id=2")
 		exec("update special_side set x=g where id=3")
 		exec("update special_side set x=g,y=1 where id=4")
+		exec("update special_side set x=h where id=5")
+		exec("update special_side set x=h,y=1 where id=6")
 		count("select count(*) from special_side where id in (1,2) and x='b'", 2)
 		count("select count(*) from special_side where id in (3,4) and x='b!'", 2)
+		count("select count(*) from special_side where id in (5,6) and x='b:2024-03-01'", 2)
 		for _, hint := range []string{"", "force index(kd)", "ignore index(kd)"} {
 			count("select count(*) from t "+hint+" where d='2024-03-01'", 1)
 			count("select count(*) from t "+hint+" where d='2024-02-29'", 1)
