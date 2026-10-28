@@ -172,12 +172,9 @@ func TestWindowFrameEvaluationHonorsCancellation(t *testing.T) {
 		types.T_int32.ToType(),
 	)
 	require.NoError(t, err)
-	require.NoError(t, arg.ctr.batAggs[0].GroupGrow(bat.RowCount()))
-
-	// processFunc checks once at the outer row, then every 1024 frame rows.
-	// Cancel on the third check so the test proves an already-running frame is
+	// Cancel after the first 1024 frame rows so this proves running work is
 	// interrupted, rather than only proving that a pre-canceled call is rejected.
-	proc.Ctx = newCancelAfterDoneChecksContext(proc.Ctx, 3)
+	proc.Ctx = newCancelAfterDoneChecksContext(proc.Ctx, 2)
 
 	err = arg.ctr.processFunc(0, arg, proc, arg.OpAnalyzer)
 	require.ErrorIs(t, err, context.Canceled)
