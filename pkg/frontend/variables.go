@@ -1727,6 +1727,19 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Type:              InitSystemVariableBoolType("enable_privilege_cache"),
 		Default:           int64(1),
 	},
+	// allow_hidden_index_table_access is the debugging escape hatch for the
+	// hidden physical index table guard. When OFF (the default), ordinary
+	// (non-system) users cannot reference "__mo_index_*" tables directly;
+	// when ON, the guard is lifted for the session. Root keeps direct access
+	// regardless of the setting.
+	"allow_hidden_index_table_access": {
+		Name:              "allow_hidden_index_table_access",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableBoolType("allow_hidden_index_table_access"),
+		Default:           int64(0),
+	},
 	"clear_privilege_cache": {
 		Name:              "clear_privilege_cache",
 		Scope:             ScopeSession,
