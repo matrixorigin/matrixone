@@ -269,9 +269,6 @@ func (window *Window) Call(proc *process.Process) (vm.CallResult, error) {
 						return result, err
 					}
 				}
-				if err = ctr.batAggs[i].GroupGrow(ctr.bat.RowCount()); err != nil {
-					return result, err
-				}
 			}
 			// calculate
 			for i, w := range window.WinSpecList {
@@ -373,6 +370,18 @@ func (ctr *container) processFunc(idx int, ap *Window, proc *process.Process, an
 		return nil
 	}
 
+	frame := ctr.frameAt(idx, w.Frame)
+	// In 4.2, Partition delivers one complete partition per input batch.
+	// Keep the generic path for callers supplying internal partition bounds.
+	fullPartition := !isWinOrder && ctr.ps == nil && fullPartitionFrame(frame, len(w.OrderBy))
+	groups := n
+	if fullPartition {
+		groups = 1
+	}
+	if err = ctr.batAggs[idx].GroupGrow(groups); err != nil {
+		return err
+	}
+
 	if isWinOrder {
 		if ctr.ps == nil {
 			ctr.ps = append(ctr.ps, 0)
@@ -429,6 +438,19 @@ func (ctr *container) processFunc(idx int, ap *Window, proc *process.Process, an
 
 			}
 		}
+	} else if fullPartition {
+		for row := 0; row < n; row++ {
+			if err = checkCanceled(proc, row); err != nil {
+				return err
+			}
+			if err = ctr.batAggs[idx].Fill(0, row, ctr.aggVecs[idx].Vec); err != nil {
+				return err
+			}
+		}
+	} else if ctr.ps == nil && cumulativeFrame(frame) && cumulativeAggregate(ctr.batAggs[idx]) {
+		if err = ctr.processCumulativeAggregate(idx, frame, proc); err != nil {
+			return err
+		}
 	} else {
 		// plan.Function_AGG
 		for j := 0; j < n; j++ {
@@ -442,7 +464,7 @@ func (ctr *container) processFunc(idx int, ap *Window, proc *process.Process, an
 				start, end = buildPartitionInterval(ctr.ps, j, n)
 			}
 
-			left, right, err := ctr.buildInterval(j, start, end, ctr.frameAt(idx, w.Frame))
+			left, right, err := ctr.buildInterval(j, start, end, frame)
 			if err != nil {
 				return err
 			}
@@ -473,6 +495,10 @@ func (ctr *container) processFunc(idx int, ap *Window, proc *process.Process, an
 	// result of agg eval is not reuse the vector
 	if ctr.vec != nil {
 		ctr.vec.Free(proc.Mp())
+		ctr.vec = nil
+	}
+	if err = checkCanceled(proc, 0); err != nil {
+		return err
 	}
 	vecs, err := ctr.batAggs[idx].Flush()
 	if err != nil {
@@ -482,6 +508,11 @@ func (ctr *container) processFunc(idx int, ap *Window, proc *process.Process, an
 	if err != nil {
 		return err
 	}
+	if fullPartition && n != 1 {
+		if err = ctr.broadcastAggregate(n, proc); err != nil {
+			return err
+		}
+	}
 	if isWinOrder {
 		ctr.vec.SetNulls(nil)
 	}
@@ -490,6 +521,106 @@ func (ctr *container) processFunc(idx int, ap *Window, proc *process.Process, an
 	}
 	ctr.os = nil
 	ctr.ps = nil
+	return nil
+}
+
+func fullPartitionFrame(frame *plan.FrameClause, orderKeys int) bool {
+	if frame == nil || frame.Start == nil || frame.End == nil ||
+		frame.Start.Type != plan.FrameBound_PRECEDING || !frame.Start.UnBounded {
+		return false
+	}
+	return frame.End.Type == plan.FrameBound_FOLLOWING && frame.End.UnBounded ||
+		frame.Type == plan.FrameClause_RANGE && frame.End.Type == plan.FrameBound_CURRENT_ROW && orderKeys == 0
+}
+
+func cumulativeFrame(frame *plan.FrameClause) bool {
+	return frame != nil && frame.Start != nil && frame.End != nil &&
+		frame.Start.Type == plan.FrameBound_PRECEDING && frame.Start.UnBounded &&
+		frame.End.Type == plan.FrameBound_CURRENT_ROW
+}
+
+func cumulativeAggregate(agg aggexec.AggFuncExec) bool {
+	if agg.IsDistinct() {
+		return false
+	}
+	// These fixed-size states can be merged into an empty group without
+	// modifying the source. Flush transfers/finalizes state, so it cannot be
+	// used to take a snapshot of a running aggregate.
+	switch agg.AggID() {
+	case aggexec.AggIdOfCountStar, aggexec.AggIdOfCountColumn, aggexec.AggIdOfSum, aggexec.AggIdOfAvg:
+		return true
+	case aggexec.AggIdOfMin, aggexec.AggIdOfMax:
+		args, _ := agg.TypesInfo()
+		return len(args) == 1 && !args[0].IsVarlen()
+	}
+	return false
+}
+
+func (ctr *container) processCumulativeAggregate(idx int, frame *plan.FrameClause, proc *process.Process) error {
+	agg := ctr.batAggs[idx]
+	n := ctr.bat.RowCount()
+	peer := 0
+	for start := 0; start < n; {
+		end := start + 1
+		if frame.Type == plan.FrameClause_RANGE {
+			// processOrder computed peer starts using every ORDER BY key. Walk
+			// them once, including the final peer whose end is the partition end.
+			for peer < len(ctr.os) && ctr.os[peer] <= int64(start) {
+				peer++
+			}
+			end = n
+			if peer < len(ctr.os) {
+				end = int(ctr.os[peer])
+			}
+		}
+		if err := checkCanceled(proc, start); err != nil {
+			return err
+		}
+		if start > 0 {
+			if err := agg.Merge(agg, start, start-1); err != nil {
+				return err
+			}
+		}
+		for row := start; row < end; row++ {
+			if err := checkCanceled(proc, row); err != nil {
+				return err
+			}
+			if err := agg.Fill(start, row, ctr.aggVecs[idx].Vec); err != nil {
+				return err
+			}
+		}
+		for row := start + 1; row < end; row++ {
+			if err := checkCanceled(proc, row); err != nil {
+				return err
+			}
+			if err := agg.Merge(agg, row, start); err != nil {
+				return err
+			}
+		}
+		start = end
+	}
+	return nil
+}
+
+func (ctr *container) broadcastAggregate(rows int, proc *process.Process) error {
+	source := ctr.vec
+	ctr.vec = nil
+	defer source.Free(proc.Mp())
+	if err := checkCanceled(proc, 0); err != nil {
+		return err
+	}
+	result := vector.NewOffHeapVecWithType(*source.GetType())
+	// One call copies a varlen payload once and repeats its descriptors. Splitting
+	// this into chunks would repeatedly copy a partition-sized JSON/concat value.
+	if err := result.UnionMulti(source, 0, rows, proc.Mp()); err != nil {
+		result.Free(proc.Mp())
+		return err
+	}
+	if err := checkCanceled(proc, 0); err != nil {
+		result.Free(proc.Mp())
+		return err
+	}
+	ctr.vec = result
 	return nil
 }
 
