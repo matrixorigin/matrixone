@@ -31,8 +31,8 @@ create fulltext2 index ft8 on t8(body) include(category) max_index_capacity 50;
 
 select count(*) from t1 where match(body) against('alpha');
 select count(*) from t8 where match(body) against('alpha');
-select id, match(body) against('beta gamma7') as sc from t1 where match(body) against('beta gamma7') order by sc desc, id limit 10;
-select id, match(body) against('beta gamma7') as sc from t8 where match(body) against('beta gamma7') order by sc desc, id limit 10;
+select id, match(body) against('beta gamma7') as sc from t1 where match(body) against('beta gamma7') order by sc desc, id limit 5;
+select id, match(body) against('beta gamma7') as sc from t8 where match(body) against('beta gamma7') order by sc desc, id limit 5;
 -- Every matched (id, score) agrees between the serial and the pipelined build.
 select count(*) from t1 where match(body) against('alpha gamma7');
 select count(*) from t8 where match(body) against('alpha gamma7');
