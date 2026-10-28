@@ -625,9 +625,11 @@ UT_PREBUILD_EMBEDDED ?= $(if $(filter 8:2 8:3 8:4,$(UT_ISSUES_BATCHES):$(UT_ISSU
 # Reuse released engine slots for plan while resource-heavy work finishes.
 # The heavy process budget is unchanged; set 0 for a sequential A/B baseline.
 UT_OVERLAP_PLAN ?= 1
-# Keep plan race execution serial by default until a representative same-inventory
-# run validates the combined timing and memory impact. Set 2 for controlled runs.
-PLAN_RACE_PARALLEL ?= 1
+# Two independent plan processes shorten the long planner tail within the
+# existing heavy-wave budget. Limit the default to the measured Linux 8-task
+# runner; other budgets, a one-slot heavy cap, and a single requested shard
+# stay serial. An explicit PLAN_RACE_PARALLEL remains an override.
+PLAN_RACE_PARALLEL ?= $(if $(filter 1,$(HEAVY_RACE_PARALLEL) $(PLAN_RACE_SHARDS)),1,$(if $(and $(filter linux,$(UNAME_S)),$(filter 8,$(UT_PARALLEL))),2,1))
 # The table-dump plan cases marked independent may run three at a time inside
 # each fresh plan race process. Keep 1 or 2 as explicit rollbacks for
 # constrained or diagnostic runs.
