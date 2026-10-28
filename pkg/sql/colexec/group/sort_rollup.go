@@ -46,8 +46,9 @@ type sortRollupState struct {
 
 	// levelAggs[p] owns the current aggregate for the grouping prefix of
 	// length p. Prefix zero is the grand total and is always present.
-	levelAggs [][]aggexec.GroupAggFuncExec
-	groupIDs  []uint64
+	levelAggs        [][]aggexec.GroupAggFuncExec
+	groupIDs         []uint64
+	reuseSingleGroup bool
 
 	// Input batches are retained only while an output batch became full in the
 	// middle of processing them. The child owns the batch; the state only holds
@@ -168,6 +169,12 @@ func (s *sortRollupState) init(group *Group) error {
 			s.levelAggs[level] = list
 		}
 	}
+	// Select one execution path for the complete list and all prefixes. A
+	// capability error during execution must abort, never retry via fallback.
+	s.reuseSingleGroup = len(group.Aggs) > 0
+	for _, list := range s.levelAggs {
+		s.reuseSingleGroup = s.reuseSingleGroup && aggexec.SupportsSingleGroupReuse(list)
+	}
 	return nil
 }
 
@@ -216,6 +223,7 @@ func (s *sortRollupState) free(mp *mpool.MPool) {
 	s.finalizing = false
 	s.finalized = false
 	s.haveLast = false
+	s.reuseSingleGroup = false
 }
 
 // sortRollupTypeEligible is intentionally narrower than the set of types
@@ -432,9 +440,9 @@ func freeSortRollupArgWindows(
 	}
 }
 
-// appendOutputRow materializes exactly one finished ROLLUP row. Aggregate
-// Flush transfers ownership of the result vector, so the first row can attach
-// those vectors directly and later rows append into them with UnionOne.
+// appendOutputRow materializes exactly one finished ROLLUP row.
+// Reusable executors copy results into output-owned vectors. The fallback
+// Flush transfers its vectors on the first row and uses UnionOne thereafter.
 func (s *sortRollupState) appendOutputRow(
 	group *Group,
 	proc *process.Process,
@@ -470,6 +478,26 @@ func (s *sortRollupState) appendOutputRow(
 			return moerr.NewInternalErrorNoCtx("sort rollup aggregate prefix out of range")
 		}
 		for i, agg := range s.levelAggs[prefixLen] {
+			if s.reuseSingleGroup {
+				var dst *vector.Vector
+				if keyCount+i < len(s.output.Vecs) {
+					dst = s.output.Vecs[keyCount+i]
+				}
+				vec, err := aggexec.AppendSingleGroupResultAndReset(agg, dst)
+				if err != nil {
+					return err
+				}
+				if dst == nil {
+					// Take ownership before metadata or a later column can fail.
+					s.output.Vecs = append(s.output.Vecs, vec)
+				}
+				if err := vec.SetPrepareParamKindAtWithMP(
+					s.outputRows, group.ctr.prepareParamKind.Get(i), group.ctr.mp,
+				); err != nil {
+					return err
+				}
+				continue
+			}
 			vecs, err := aggexec.FlushWithContext(proc.Ctx, agg)
 			if err != nil {
 				freeSortRollupVectors(resultVecs, group.ctr.mp)
@@ -553,8 +581,10 @@ func (group *Group) drainSortRollupClose(proc *process.Process) error {
 		if err := s.appendOutputRow(group, proc, prefix); err != nil {
 			return err
 		}
-		if err := s.resetLevel(group, prefix); err != nil {
-			return err
+		if !s.reuseSingleGroup {
+			if err := s.resetLevel(group, prefix); err != nil {
+				return err
+			}
 		}
 		s.pendingCloseNext--
 	}
@@ -586,8 +616,8 @@ func (group *Group) fillSortRollupLevels(
 	// general BatchFill path still has to dispatch every row through its group
 	// id hash table, even though all ids are 1. Preflight the same chunks for
 	// allocation-account correctness, then use the aggregate's single-group
-	// BulkFill once for the complete run. Windows are borrowed views, so the
-	// input is not copied when a run starts after a previous key boundary.
+	// BulkFill once for the complete run. Reusable executors borrow the original
+	// range; unsupported lists retain the existing argument-window path.
 	for start := offset; start < end; {
 		if err, canceled := vm.CancelCheck(proc); canceled {
 			return err
@@ -606,6 +636,19 @@ func (group *Group) fillSortRollupLevels(
 			}
 		}
 		start += n
+	}
+
+	if s.reuseSingleGroup {
+		for _, level := range s.levelAggs {
+			for i, agg := range level {
+				if err := aggexec.BulkFillSingleGroupRange(
+					agg, offset, rows, group.ctr.aggArgEvaluate[i].Vec,
+				); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
 	}
 
 	argWindows := make([][]*vector.Vector, len(group.ctr.aggArgEvaluate))
