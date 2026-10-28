@@ -110,3 +110,40 @@ func TestTenantDataBackfillPagesAdvanceOnlyAfterSuccessfulWork(t *testing.T) {
 		})
 	}
 }
+
+// The runner owns commit. Neither a lost commit reply, a competing worker's
+// completion nor cancellation may allow subsequent operations to run.
+func TestTenantWalkerStopsAtTransactionBoundary(t *testing.T) {
+	failure := errors.New("commit outcome unknown")
+	for _, outcome := range []string{"unknown commit", "completed elsewhere", "cancelled"} {
+		t.Run(outcome, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			calls := 0
+			active, err := Handler.UpgradeTenant(ctx, 7, 8<<20, func(_ string, limit uint64, adjustable bool, _ func(executor.TxnExecutor) error) (bool, error) {
+				calls++
+				require.Equal(t, uint64(8<<20), limit)
+				require.True(t, adjustable)
+				switch outcome {
+				case "unknown commit":
+					return true, failure
+				case "completed elsewhere":
+					return false, nil
+				default:
+					cancel()
+					return true, nil
+				}
+			})
+			require.False(t, active)
+			require.Equal(t, 1, calls)
+			switch outcome {
+			case "unknown commit":
+				require.ErrorIs(t, err, failure)
+			case "cancelled":
+				require.ErrorIs(t, err, context.Canceled)
+			default:
+				require.NoError(t, err)
+			}
+		})
+	}
+}

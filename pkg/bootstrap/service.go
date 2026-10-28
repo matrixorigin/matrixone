@@ -495,16 +495,11 @@ func InitSystemViews(ctx context.Context, exec executor.SQLExecutor) error {
 			// Publish the v118 TABLES consumer only after admission, atomically
 			// with the derived-schema completion views. A retry after an uncertain
 			// commit can safely reconcile both definitions again.
-			for _, sql := range []string{
-				"DROP VIEW IF EXISTS information_schema.TABLES",
-				sysview.InformationSchemaTablesV118DDL,
-			} {
-				result, err := txn.Exec(sql, executor.StatementOption{})
-				result.Close()
-				if err != nil {
-					return err
-				}
+			entry := versions.InformationSchemaTablesUpgradeEntry()
+			if err := entry.UpgradeAfterProtocolCheck(txn, catalog.System_Account); err != nil {
+				return err
 			}
+
 			return motrace.InitSchemaViewsWithTxn(ctx, txn)
 		}, opts)
 		if err == nil || !isSystemViewRetryableError(err) {

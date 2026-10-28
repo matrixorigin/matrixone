@@ -20,6 +20,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -155,7 +156,7 @@ func TestUpgradeIndexMetadataProvenanceAltersOnlyMissingColumns(t *testing.T) {
 		}
 	})
 
-	require.NoError(t, upgradeIndexMetadataProvenance(context.Background(), 0, txn))
+	require.NoError(t, Handler.UpgradeIndexMetadataTable(context.Background(), 0, txn, IndexMetadataKey{"db1", "meta_a", catalog.Hnsw_TblType_Metadata}))
 	require.Len(t, alters, 1, "only the missing column is altered: %v", alters)
 	require.Contains(t, alters[0], catalog.Hnsw_TblCol_Metadata_Build_Ts)
 	require.Contains(t, alters[0], "`db1`.`meta_a`")
@@ -177,7 +178,7 @@ func TestUpgradeIndexMetadataProvenanceIsANoopWhenComplete(t *testing.T) {
 			return tableListResult(t, [][3]string{{"db1", "meta_a", catalog.Ivfpq_TblType_Metadata}}), nil
 		}
 	})
-	require.NoError(t, upgradeIndexMetadataProvenance(context.Background(), 0, txn))
+	require.NoError(t, Handler.UpgradeIndexMetadataTable(context.Background(), 0, txn, IndexMetadataKey{"db1", "meta_a", catalog.Ivfpq_TblType_Metadata}))
 	require.Zero(t, alters)
 }
 
@@ -194,7 +195,7 @@ func TestUpgradeIndexMetadataProvenancePropagatesAlterError(t *testing.T) {
 			return tableListResult(t, [][3]string{{"db1", "meta_a", catalog.Cagra_TblType_Metadata}}), nil
 		}
 	})
-	require.ErrorIs(t, upgradeIndexMetadataProvenance(context.Background(), 0, txn), want)
+	require.ErrorIs(t, Handler.UpgradeIndexMetadataTable(context.Background(), 0, txn, IndexMetadataKey{"db1", "meta_a", catalog.Cagra_TblType_Metadata}), want)
 }
 
 // An account with no vector or fulltext2 index has nothing to enumerate and must not error.
@@ -202,7 +203,9 @@ func TestUpgradeIndexMetadataProvenanceNoIndexes(t *testing.T) {
 	txn := newVersionTxnExecutor(t, func(string) (executor.Result, error) {
 		return tableListResult(t, nil), nil
 	})
-	require.NoError(t, upgradeIndexMetadataProvenance(context.Background(), 0, txn))
+	tables, err := Handler.ListIndexMetadataTables(txn, 0, IndexMetadataKey{}, versions.CatalogUpgradePageBytes)
+	require.NoError(t, err)
+	require.Empty(t, tables)
 }
 
 func TestIndexMetadataDiscoveryUsesAccountOwnership(t *testing.T) {

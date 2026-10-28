@@ -15,13 +15,18 @@
 package bootstrap
 
 import (
+	"context"
+	"fmt"
 	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
+	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_7"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/stretchr/testify/require"
@@ -67,5 +72,78 @@ func TestV407TaskCompletionAfterLastAccountCommit(t *testing.T) {
 		require.Equal(t, 1, taskUpdates, "a restart after the final account commit must finish the task")
 		require.NoError(t, s.finishV407TenantTask(t.Context(), selected))
 		require.Equal(t, 1, taskUpdates, "a repeated completion must be a no-op")
+	})
+}
+
+// A ready semantic version has no offset progress to replay. A restarted CN
+// must skip DDL rather than silently rebuilding existing objects and grants.
+func TestManualV407ReadyAccountDoesNotReplay(t *testing.T) {
+	for _, mismatch := range []bool{false, true} {
+		t.Run(fmt.Sprint(mismatch), func(t *testing.T) {
+			runtime.RunTest("", func(runtime.Runtime) {
+				metadata := v4_0_7.Handler.Metadata()
+				offset := metadata.VersionOffset
+				if mismatch {
+					offset++
+				}
+				reads := 0
+				exec := executor.NewMemExecutor2(func(sql string) (executor.Result, error) {
+					reads++
+					switch sql {
+					case "select create_version from mo_account where account_id = 7":
+						return newBootstrapStringResult(metadata.Version), nil
+					case versions.LatestVersionSQL:
+						return statisticsLatestVersionResult(t, versions.Version{Version: metadata.Version, VersionOffset: offset}, versions.StateReady), nil
+					default:
+						t.Fatalf("ready account must not run migrations: %s", sql)
+						return executor.Result{}, nil
+					}
+				}, &testTxnOperator{})
+				s := newServiceForTest("", &memLocker{}, clock.NewHLCClock(func() int64 { return 0 }, 0), nil, exec, func(s *service) { s.initUpgrade() })
+				t.Cleanup(s.stopper.Stop)
+				err := s.UpgradeOneTenant(t.Context(), 7)
+				if mismatch {
+					require.ErrorContains(t, err, "offset-only")
+					require.Empty(t, s.mu.tenants)
+				} else {
+					require.NoError(t, err)
+					require.True(t, s.mu.tenants[7])
+					require.NoError(t, s.UpgradeOneTenant(t.Context(), 7))
+				}
+				require.Equal(t, 2, reads)
+			})
+		})
+	}
+}
+
+type systemAccountExecutor struct {
+	executor.SQLExecutor
+	t     *testing.T
+	calls int
+}
+
+func (e *systemAccountExecutor) ExecTxn(ctx context.Context, fn func(executor.TxnExecutor) error, opts executor.Options) error {
+	e.calls++
+	require.Equal(e.t, uint32(7), ctx.Value(defines.TenantIDKey{}))
+	require.True(e.t, opts.HasAccountID(), "system catalog access must not inherit the calling tenant")
+	require.Equal(e.t, uint32(catalog.System_Account), opts.AccountID())
+	return e.SQLExecutor.ExecTxn(ctx, fn, opts)
+}
+
+func TestV407AccountTransactionsOverrideCallingTenant(t *testing.T) {
+	runtime.RunTest("", func(runtime.Runtime) {
+		exec := &systemAccountExecutor{t: t, SQLExecutor: executor.NewMemExecutor2(func(sql string) (executor.Result, error) {
+			require.Equal(t, "select create_version from mo_account where account_id = 7 for update", sql)
+			return newBootstrapStringResult("4.0.6"), nil
+		}, &testTxnOperator{})}
+		s := newServiceForTest("", &memLocker{}, clock.NewHLCClock(func() int64 { return 0 }, 0), nil, exec, func(*service) {})
+		t.Cleanup(s.stopper.Stop)
+		ctx := context.WithValue(t.Context(), defines.TenantIDKey{}, uint32(7))
+		worked := false
+		active, err := s.withV407Account(ctx, versions.VersionUpgrade{FromVersion: "4.0.6", ToVersion: "4.0.7"}, 7, func(executor.TxnExecutor) error { worked = true; return nil })
+		require.NoError(t, err)
+		require.True(t, active)
+		require.True(t, worked)
+		require.Equal(t, 1, exec.calls)
 	})
 }

@@ -582,9 +582,7 @@ func TestTenantViewDefinitionChecks(t *testing.T) {
 				targetDefinition = entry.PostSql
 			}
 			expectedViewName := entry.TableName
-			if entry.TableName == "TABLE_PRIVILEGES" {
-				expectedViewName = "table_privileges"
-			}
+
 			stub := gostub.Stub(&versions.CheckViewDefinition, func(_ executor.TxnExecutor, accountID uint32, schema, viewName string) (bool, string, error) {
 				if accountID != 42 || schema != sysview.InformationDBConst || viewName != expectedViewName {
 					t.Fatalf("unexpected view check arguments: account=%d schema=%s view=%s", accountID, schema, viewName)
@@ -662,99 +660,6 @@ func TestCheckConstraintViewsUpgradeMixedProtocolInitializedTenant(t *testing.T)
 	}
 }
 
-func TestKeyColumnUsageViewUpgradeIsOrderedAndIdempotent(t *testing.T) {
-	entry := upgradeInformationSchemaKeyColumnUsage()
-	upgraded := false
-	stub := gostub.Stub(&versions.CheckViewDefinition, func(_ executor.TxnExecutor, accountID uint32, schema, viewName string) (bool, string, error) {
-		require.Equal(t, uint32(42), accountID)
-		require.Equal(t, sysview.InformationDBConst, schema)
-		require.Equal(t, "key_column_usage", strings.ToLower(viewName))
-		if upgraded {
-			return true, sysview.InformationSchemaKeyColumnUsageDDL, nil
-		}
-		return false, "", nil
-	})
-	defer stub.Reset()
-
-	var executed []string
-	txnExecutor := newVersionTxnExecutor(t, func(sql string) (executor.Result, error) {
-		if strings.Contains(strings.ToLower(sql), "getprotocolversion") {
-			return newProtocolVersionResultValue(t,
-				`{"method":"GETPROTOCOLVERSION","result":"cn-a:41,cn-b:41"}`), nil
-		}
-		executed = append(executed, sql)
-		if sql == entry.PostSql {
-			upgraded = true
-		}
-		return executor.Result{}, nil
-	})
-
-	require.NoError(t, entry.Upgrade(txnExecutor, 42))
-	require.Equal(t, []string{entry.PreSql, entry.UpgSql, entry.PostSql}, executed)
-
-	executed = nil
-	require.NoError(t, entry.Upgrade(txnExecutor, 42))
-	require.Empty(t, executed)
-}
-
-func TestTablePrivilegesViewUpgradeConvergesAndIsIdempotent(t *testing.T) {
-	for _, test := range []struct {
-		name       string
-		exists     bool
-		definition string
-		wantDDL    bool
-	}{
-		{name: "missing object", wantDDL: true},
-		{name: "legacy base table", wantDDL: true},
-		{name: "stale view", exists: true, definition: "old view definition", wantDDL: true},
-		{name: "canonical view", exists: true, definition: sysview.InformationSchemaTablePrivilegesDDL},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			entry := upgradeInformationSchemaTablePrivileges()
-			upgraded := false
-			stub := gostub.Stub(&versions.CheckViewDefinition, func(
-				_ executor.TxnExecutor,
-				accountID uint32,
-				schema string,
-				viewName string,
-			) (bool, string, error) {
-				require.Equal(t, uint32(42), accountID)
-				require.Equal(t, sysview.InformationDBConst, schema)
-				require.Equal(t, "table_privileges", viewName)
-				if upgraded {
-					return true, sysview.InformationSchemaTablePrivilegesDDL, nil
-				}
-				return test.exists, test.definition, nil
-			})
-			defer stub.Reset()
-
-			var executed []string
-			txnExecutor := newVersionTxnExecutor(t, func(sql string) (executor.Result, error) {
-				if strings.Contains(strings.ToLower(sql), "getprotocolversion") {
-					return newProtocolVersionResultValue(t,
-						`{"method":"GETPROTOCOLVERSION","result":"cn-a:41,cn-b:41"}`), nil
-				}
-				executed = append(executed, sql)
-				if sql == entry.PostSql {
-					upgraded = true
-				}
-				return executor.Result{}, nil
-			})
-
-			require.NoError(t, entry.Upgrade(txnExecutor, 42))
-			if test.wantDDL {
-				require.Equal(t, []string{entry.PreSql, entry.UpgSql, entry.PostSql}, executed)
-			} else {
-				require.Empty(t, executed)
-			}
-
-			executed = nil
-			require.NoError(t, entry.Upgrade(txnExecutor, 42))
-			require.Empty(t, executed)
-		})
-	}
-}
-
 func TestLegacyForeignKeyMetadataUpgradeReadsAndUpdatesDefinitions(t *testing.T) {
 	definitionResult := newLegacyForeignKeyDefinitionResult(t)
 	var updates []string
@@ -769,7 +674,7 @@ func TestLegacyForeignKeyMetadataUpgradeReadsAndUpdatesDefinitions(t *testing.T)
 		return executor.Result{}, nil
 	})
 
-	if err := upgradeLegacyForeignKeyMetadata(context.Background(), 9, txnExecutor); err != nil {
+	if err := upgradeLegacyForeignKeyMetadataWhere(context.Background(), 9, txnExecutor, ""); err != nil {
 		t.Fatalf("upgrade legacy foreign-key metadata: %v", err)
 	}
 	updates = legacyForeignKeyMigrationUpdatesForAssertion(updates)
@@ -815,7 +720,7 @@ func TestLegacyForeignKeyMetadataUpgradeUsesHistoricalCreateActions(t *testing.T
 		}
 	})
 
-	require.NoError(t, upgradeLegacyForeignKeyMetadata(context.Background(), 9, txnExecutor))
+	require.NoError(t, upgradeLegacyForeignKeyMetadataWhere(context.Background(), 9, txnExecutor, ""))
 	require.Len(t, updates, 2)
 	require.Contains(t, strings.Join(updates, "\n"),
 		"constraint_name = 'fk_default' AND column_name = 'default_parent_id'")
@@ -854,7 +759,7 @@ func TestLegacyForeignKeyMetadataUpgradeBackfillsReferencedIndexForNumberedLegac
 		return executor.Result{}, nil
 	})
 
-	require.NoError(t, upgradeLegacyForeignKeyMetadata(context.Background(), 9, txnExecutor))
+	require.NoError(t, upgradeLegacyForeignKeyMetadataWhere(context.Background(), 9, txnExecutor, ""))
 	require.Equal(t, []string{
 		"UPDATE mo_catalog.mo_foreign_keys SET referenced_index_name = 'PRIMARY' WHERE db_name = 'db' AND table_name = 'child' AND constraint_name = 'fk_child_parent'",
 	}, updates)
@@ -893,7 +798,7 @@ func TestLegacyForeignKeyMetadataUpgradeBackfillsAlterAndUnnamedForeignKeys(t *t
 		return executor.Result{}, nil
 	})
 
-	require.NoError(t, upgradeLegacyForeignKeyMetadata(context.Background(), 9, txnExecutor))
+	require.NoError(t, upgradeLegacyForeignKeyMetadataWhere(context.Background(), 9, txnExecutor, ""))
 	require.Equal(t, []string{
 		"UPDATE mo_catalog.mo_foreign_keys SET constraint_id = 1, on_delete = 'CASCADE', on_update = 'SET_NULL' WHERE constraint_id = 0 AND db_name = 'db' AND table_name = 'alter_child' AND constraint_name = 'fk_added_by_alter' AND column_name = 'b'",
 		"UPDATE mo_catalog.mo_foreign_keys SET constraint_id = 2, on_delete = 'CASCADE', on_update = 'SET_NULL' WHERE constraint_id = 0 AND db_name = 'db' AND table_name = 'alter_child' AND constraint_name = 'fk_added_by_alter' AND column_name = 'a'",

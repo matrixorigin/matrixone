@@ -122,16 +122,8 @@ func UpgradeInformationSchemaViewsAfterProtocolCheck(
 // default lower_case_table_names setting. Catalog string predicates are case
 // sensitive; missing the folded name would make every maintenance pass repeat
 // DROP/CREATE even after the current definition was successfully installed.
-func CheckInformationSchemaViewsDefinition(
-	txn executor.TxnExecutor,
-	accountID uint32,
-) (bool, string, error) {
-	exists, definition, err := versions.CheckViewDefinition(
-		txn, accountID, sysview.InformationDBConst, "VIEWS")
-	if err != nil || exists {
-		return exists, definition, err
-	}
-	return versions.CheckViewDefinition(txn, accountID, sysview.InformationDBConst, "views")
+func CheckInformationSchemaViewsDefinition(txn executor.TxnExecutor, accountID uint32) (bool, string, error) {
+	return versions.CheckInformationSchemaViewDefinition(txn, accountID, "VIEWS")
 }
 
 // InformationSchemaViewsAuthoringProtocolReady reports the local write-side
@@ -161,20 +153,5 @@ func InformationSchemaViewsAuthoringProtocolReady(txn executor.TxnExecutor) bool
 // tenants already at v4.0.6, v4.0.7, or the final version without changing any
 // historical handler's offset or delaying its pending provenance migration.
 func upgradeInformationSchemaViews() versions.UpgradeEntry {
-	return versions.UpgradeEntry{
-		Schema:                  sysview.InformationDBConst,
-		TableName:               "VIEWS",
-		UpgType:                 versions.MODIFY_VIEW,
-		UpgSql:                  sysview.InformationSchemaViewsDDL,
-		RequiredProtocolVersion: defines.MORPCVersion126,
-		CheckFunc: func(txn executor.TxnExecutor, accountID uint32) (bool, error) {
-			exists, viewDef, err := CheckInformationSchemaViewsDefinition(txn, accountID)
-			if err != nil {
-				return false, err
-			}
-			return exists && viewDef == sysview.InformationSchemaViewsDDL, nil
-		},
-		PreSql: fmt.Sprintf("DROP VIEW IF EXISTS %s.%s;",
-			sysview.InformationDBConst, "VIEWS"),
-	}
+	return versions.InformationSchemaViewUpgradeEntry("VIEWS", sysview.InformationSchemaViewsDDL, defines.MORPCVersion126)
 }

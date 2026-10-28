@@ -20,6 +20,7 @@ import (
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
@@ -35,7 +36,7 @@ func rejectLegacyCDCTasks(tx executor.TxnExecutor) error {
 		"from mo_catalog.mo_cdc_task order by account_id, task_id limit 33"
 	res, err := tx.Exec(query, executor.StatementOption{}.WithAccountID(catalog.System_Account).WithMaxResultBytes(CatalogUpgradePageBytes))
 	if err != nil {
-		return fmt.Errorf("cannot verify legacy CDC tasks before upgrade: %w", err)
+		return wrapUpgradeError(err, "cannot verify legacy CDC tasks before upgrade")
 	}
 	defer res.Close()
 	var tasks []string
@@ -63,5 +64,5 @@ func rejectLegacyCDCTasks(tx executor.TxnExecutor) error {
 	if more {
 		suffix = "; more tasks exist; list all with SELECT account_id, task_id, task_name, state FROM mo_catalog.mo_cdc_task"
 	}
-	return &terminalUpgradeError{fmt.Errorf("legacy CDC tasks must be exported and removed using the source version before upgrade: %s%s; if new logservice has started, restore the pre-upgrade backup before restarting the source version; stop all old CNs, then recreate CDC with a clean target after upgrade", strings.Join(tasks, "; "), suffix)}
+	return &terminalUpgradeError{moerr.NewInternalErrorNoCtxf("legacy CDC tasks must be exported and removed using the source version before upgrade: %s%s; if new logservice has started, restore the pre-upgrade backup before restarting the source version; stop all old CNs, then recreate CDC with a clean target after upgrade", strings.Join(tasks, "; "), suffix)}
 }

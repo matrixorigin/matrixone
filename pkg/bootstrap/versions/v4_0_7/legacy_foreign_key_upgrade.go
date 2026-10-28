@@ -77,15 +77,11 @@ type legacyForeignKeyActions struct {
 	onUpdate legacyReferenceAction
 }
 
-// upgradeLegacyForeignKeyMetadata restores zero-valued legacy FK ordinals. The
+// upgradeLegacyForeignKeyMetadataWhere restores zero-valued legacy FK ordinals. The
 // catalog identifies the current constraints and SHOW CREATE TABLE supplies
 // their current names and column order. rel_createsql is consulted only as a
 // historical syntax record for a named CREATE-time FK that still reconciles
 // with the catalog; it is never treated as the current table definition.
-func upgradeLegacyForeignKeyMetadata(ctx context.Context, tenantID int32, txn executor.TxnExecutor) error {
-	return upgradeLegacyForeignKeyMetadataWhere(ctx, tenantID, txn, "")
-}
-
 func upgradeLegacyForeignKeyMetadataWhere(ctx context.Context, tenantID int32, txn executor.TxnExecutor, filter string) error {
 	filtered := func(query string) string {
 		return strings.Replace(query, " ORDER BY ", filter+" ORDER BY ", 1)

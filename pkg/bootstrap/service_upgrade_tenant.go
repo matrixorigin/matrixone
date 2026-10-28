@@ -52,6 +52,7 @@ func (s *service) MaybeUpgradeTenant(
 	}
 
 	upgraded := false
+	pendingV407 := false
 	opts := executor.Options{}.WithTxn(txnOp).
 		WithAccountID(catalog.System_Account).
 		WithDatabase(catalog.MO_CATALOG).
@@ -99,6 +100,9 @@ func (s *service) MaybeUpgradeTenant(
 				if err != nil {
 					return err
 				}
+				if len(upgrades) == 0 {
+					return moerr.NewInvalidStateNoCtx("tenant upgrade route is unavailable")
+				}
 				// latest cluster is already upgrade completed
 				if upgrades[len(upgrades)-1].State == versions.StateUpgradingTenant ||
 					upgrades[len(upgrades)-1].State == versions.StateReady {
@@ -125,7 +129,23 @@ func (s *service) MaybeUpgradeTenant(
 			for _, v := range s.handles {
 				if versions.Compare(v.Metadata().Version, from) > 0 &&
 					v.Metadata().CanDirectUpgrade(from) {
-					if err := v.HandleTenantUpgrade(ctx, tenantID, txn); err != nil {
+					if v == v4_0_7.Handler {
+						if txnOp == nil {
+							pendingV407 = true
+							break // Release the planning transaction/account lock before paging.
+						}
+						_, err := v4_0_7.Handler.UpgradeTenant(ctx, tenantID, s.upgrade.catalogObjectLimit,
+							func(operation string, limit uint64, adjustable bool, work func(executor.TxnExecutor) error) (bool, error) {
+								err := work(txn)
+								if err != nil {
+									err = catalogOperationError(err, fmt.Sprintf("tenant %d", tenantID), operation, limit, adjustable)
+								}
+								return true, err
+							})
+						if err != nil {
+							return err
+						}
+					} else if err := v.HandleTenantUpgrade(ctx, tenantID, txn); err != nil {
 						return err
 					}
 					if err := versions.UpgradeTenantVersion(tenantID, v.Metadata().Version, txn); err != nil {
@@ -135,7 +155,7 @@ func (s *service) MaybeUpgradeTenant(
 					upgraded = true
 				}
 			}
-			if from != currentCN.Version {
+			if !pendingV407 && from != currentCN.Version {
 				return moerr.NewInvalidInputNoCtxf("cannot upgrade tenant version %s to current cn version %s",
 					from, currentCN.Version)
 			}
@@ -144,6 +164,13 @@ func (s *service) MaybeUpgradeTenant(
 		opts)
 	if err != nil {
 		return false, err
+	}
+	if pendingV407 {
+		changed, err := s.upgradeV407TenantOnDemand(ctx, tenantID)
+		if err != nil {
+			return false, err
+		}
+		upgraded = upgraded || changed
 	}
 	// A caller-owned transaction can still roll back; only cache committed checks.
 	if txnOp == nil {
@@ -394,13 +421,13 @@ func (s *service) newTenantUpgradePass(ctx context.Context) func() (bool, error)
 			maintenanceCtx, cancel := context.WithTimeoutCause(passCtx, time.Hour*24, moerr.CauseAsyncUpgradeTenantTask)
 			defer cancel()
 			if err := s.maintainInformationSchemaViews(maintenanceCtx); err != nil {
-				return false, fmt.Errorf("information schema views maintenance: %w", moerr.AttachCause(maintenanceCtx, err))
+				return false, wrapUpgradeError(moerr.AttachCause(maintenanceCtx, err), "information schema views maintenance")
 			}
 			if err := s.maintainInformationSchemaColumnsTables(maintenanceCtx); err != nil {
-				return false, fmt.Errorf("information schema columns/tables maintenance: %w", moerr.AttachCause(maintenanceCtx, err))
+				return false, wrapUpgradeError(moerr.AttachCause(maintenanceCtx, err), "information schema columns/tables maintenance")
 			}
 			if err := s.maintainOrphanObjectPrivileges(maintenanceCtx); err != nil {
-				return false, fmt.Errorf("orphan object privilege maintenance: %w", moerr.AttachCause(maintenanceCtx, err))
+				return false, wrapUpgradeError(moerr.AttachCause(maintenanceCtx, err), "orphan object privilege maintenance")
 			}
 		}
 		return hasUpgradeTenants, nil

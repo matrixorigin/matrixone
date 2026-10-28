@@ -46,89 +46,11 @@ func (s *service) upgradeV407TenantRange(ctx context.Context, selected tenantUpg
 }
 
 func (s *service) upgradeV407Tenant(ctx context.Context, upgrade versions.VersionUpgrade, accountID int32) error {
-	for index := 0; index < v4_0_7.Handler.TenantUpgradeEntryCount(); index++ {
-		var cursor v4_0_7.TenantPageCursor
-		for {
-			next := cursor
-			var more bool
-			active, err := s.withV407Account(ctx, upgrade, accountID, func(tx executor.TxnExecutor) error {
-				var err error
-				more, err = v4_0_7.Handler.UpgradeTenantEntryPage(ctx, accountID, index, tx, s.upgrade.catalogObjectLimit, &next)
-				return err
-			})
-			if err != nil {
-				return catalogOperationError(err, fmt.Sprintf("tenant %d", accountID), fmt.Sprintf("entry %d", index), s.upgrade.catalogObjectLimit, true)
-			}
-			if !active {
-				return nil
-			}
-			cursor = next
-			if !more {
-				break
-			}
-		}
+	active, err := s.runV407Tenant(ctx, upgrade, accountID)
+	if err != nil || !active {
+		return err
 	}
-	var after v4_0_7.CatalogTableKey
-	for {
-		var tables []v4_0_7.CatalogTableKey
-		active, err := s.withV407Account(ctx, upgrade, accountID, func(tx executor.TxnExecutor) error {
-			var err error
-			tables, err = v4_0_7.Handler.ListForeignKeyTables(tx, accountID, after, CatalogUpgradePageBytes)
-			return err
-		})
-		if err != nil {
-			return catalogOperationError(err, fmt.Sprintf("tenant %d", accountID), "enumerating foreign-key tables", CatalogUpgradePageBytes, false)
-		}
-		if !active {
-			return nil
-		}
-		for _, table := range tables {
-			active, err = s.withV407Account(ctx, upgrade, accountID, func(tx executor.TxnExecutor) error {
-				return v4_0_7.Handler.UpgradeForeignKeyTable(ctx, accountID, tx, table, s.upgrade.catalogObjectLimit)
-			})
-			if err != nil {
-				return catalogOperationError(err, fmt.Sprintf("tenant %d", accountID), "foreign-key table "+table.Database+"."+table.Table, s.upgrade.catalogObjectLimit, true)
-			}
-			if !active {
-				return nil
-			}
-			after = table
-		}
-		if len(tables) < v4_0_7.CatalogDataPageSize {
-			break
-		}
-	}
-	var afterIndex v4_0_7.IndexMetadataKey
-	for {
-		var tables []v4_0_7.IndexMetadataKey
-		active, err := s.withV407Account(ctx, upgrade, accountID, func(tx executor.TxnExecutor) error {
-			var err error
-			tables, err = v4_0_7.Handler.ListIndexMetadataTables(tx, uint32(accountID), afterIndex, CatalogUpgradePageBytes)
-			return err
-		})
-		if err != nil {
-			return catalogOperationError(err, fmt.Sprintf("tenant %d", accountID), "enumerating index metadata tables", CatalogUpgradePageBytes, false)
-		}
-		if !active {
-			return nil
-		}
-		for _, table := range tables {
-			active, err = s.withV407Account(ctx, upgrade, accountID, func(tx executor.TxnExecutor) error {
-				return v4_0_7.Handler.UpgradeIndexMetadataTable(ctx, accountID, tx, table)
-			})
-			if err != nil {
-				return catalogOperationError(err, fmt.Sprintf("tenant %d", accountID), "index metadata table "+table[0]+"."+table[1], s.upgrade.catalogObjectLimit, true)
-			}
-			if !active {
-				return nil
-			}
-			afterIndex = table
-		}
-		if len(tables) < v4_0_7.CatalogDataPageSize {
-			break
-		}
-	}
-	_, err := s.withV407Account(ctx, upgrade, accountID, func(tx executor.TxnExecutor) error {
+	_, err = s.withV407Account(ctx, upgrade, accountID, func(tx executor.TxnExecutor) error {
 		current, err := versions.GetUpgradeVersionForUpdateByID(upgrade.ID, tx)
 		if err != nil {
 			return err
@@ -148,6 +70,32 @@ func (s *service) upgradeV407Tenant(ctx context.Context, upgrade versions.Versio
 	return err
 }
 
+// runV407Tenant is shared by scheduled and on-demand upgrades; their existing
+// completion owners decide whether the account belongs to a counted task.
+func (s *service) runV407Tenant(ctx context.Context, upgrade versions.VersionUpgrade, accountID int32) (bool, error) {
+	return v4_0_7.Handler.UpgradeTenant(ctx, accountID, s.upgrade.catalogObjectLimit,
+		func(operation string, limit uint64, adjustable bool, work func(executor.TxnExecutor) error) (bool, error) {
+			active, err := s.withV407Account(ctx, upgrade, accountID, work)
+			if err != nil {
+				err = catalogOperationError(err, fmt.Sprintf("tenant %d", accountID), operation, limit, adjustable)
+			}
+			return active, err
+		})
+}
+
+// On-demand completion does not count an account against a possibly unrelated
+// task. The existing task reconciliation counts committed account versions.
+func (s *service) upgradeV407TenantOnDemand(ctx context.Context, accountID int32) (bool, error) {
+	upgrade := versions.VersionUpgrade{FromVersion: "4.0.6", ToVersion: v4_0_7.Handler.Metadata().Version}
+	active, err := s.runV407Tenant(ctx, upgrade, accountID)
+	if err != nil || !active {
+		return false, err
+	}
+	return s.withV407Account(ctx, upgrade, accountID, func(tx executor.TxnExecutor) error {
+		return versions.UpgradeTenantVersion(accountID, upgrade.ToVersion, tx)
+	})
+}
+
 // Each operation reacquires the account lock and checks the authoritative
 // create_version. A concurrent worker that finished this account makes later
 // pages no-ops, including after an uncertain commit result.
@@ -165,7 +113,7 @@ func (s *service) withV407Account(ctx context.Context, upgrade versions.VersionU
 		}
 		active = true
 		return work(tx)
-	}, executor.Options{}.WithDatabase(catalog.MO_CATALOG).WithTxnMode(txn.TxnMode_Pessimistic).
+	}, executor.Options{}.WithAccountID(catalog.System_Account).WithDatabase(catalog.MO_CATALOG).WithTxnMode(txn.TxnMode_Pessimistic).
 		WithTxnIsolation(txn.TxnIsolation_RC).WithMinCommittedTS(s.now()).WithWaitCommittedLogApplied().WithTimeZone(time.Local))
 	return active, err
 }
@@ -214,24 +162,24 @@ func (s *service) finishV407TenantTask(ctx context.Context, selected tenantUpgra
 			return &terminalUpgradeError{moerr.NewInvalidStateNoCtx("tenant upgrade step is not accepting task completion")}
 		}
 		return versions.UpdateUpgradeTenantTaskState(selected.taskID, versions.Yes, tx)
-	}, executor.Options{}.WithDatabase(catalog.MO_CATALOG).WithTxnMode(txn.TxnMode_Pessimistic).
+	}, executor.Options{}.WithAccountID(catalog.System_Account).WithDatabase(catalog.MO_CATALOG).WithTxnMode(txn.TxnMode_Pessimistic).
 		WithTxnIsolation(txn.TxnIsolation_RC).WithMinCommittedTS(s.now()).WithWaitCommittedLogApplied())
 }
 
 func catalogOperationError(err error, scope, operation string, limit uint64, adjustable bool) error {
 	if mpool.IsMPoolCapacityFailure(err) {
-		return fmt.Errorf("%s %s exceeded engine memory capacity; the upgrade will retry, provision more memory if pressure persists: %w", scope, operation, err)
+		return wrapUpgradeError(err, "%s %s exceeded engine memory capacity; the upgrade will retry, provision more memory if pressure persists", scope, operation)
 	}
 	var indexConflict *v4_0_7.IndexConflict
 	if errors.As(err, &indexConflict) {
-		return &terminalUpgradeError{fmt.Errorf("%s %s: %w", scope, operation, err)}
+		return &terminalUpgradeError{wrapUpgradeError(err, "%s %s", scope, operation)}
 	}
 	var resultLimit *executor.ResultLimitError
 	if errors.As(err, &resultLimit) {
 		if !adjustable {
-			return &terminalUpgradeError{fmt.Errorf("%s %s exceeds the %d-byte catalog page limit: %w", scope, operation, limit, err)}
+			return &terminalUpgradeError{wrapUpgradeError(err, "%s %s exceeds the %d-byte catalog page limit", scope, operation, limit)}
 		}
-		return &terminalUpgradeError{fmt.Errorf("%s %s exceeds %d-byte catalog input limit; provision memory, raise cn.upgrade-catalog-object-limit on all CNs and restart: %w", scope, operation, limit, err)}
+		return &terminalUpgradeError{wrapUpgradeError(err, "%s %s exceeds %d-byte catalog input limit; provision memory, raise cn.upgrade-catalog-object-limit on all CNs and restart", scope, operation, limit)}
 	}
 	return err
 }

@@ -18,14 +18,14 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
-	"errors"
-	"fmt"
+
 	"io"
 	"reflect"
 	"strconv"
 	"unicode/utf8"
 
 	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/frontend/databranchutils"
 )
 
@@ -83,17 +83,17 @@ func newSnapshotDecisionReader(input io.Reader) (*snapshotDecisionReader, error)
 	reader := &snapshotDecisionReader{scanner: scanner}
 	if !scanner.Scan() {
 		if err := scanner.Err(); err != nil {
-			return nil, fmt.Errorf("decision header: %w", err)
+			return nil, wrapUpgradeError(err, "decision header")
 		}
-		return nil, errors.New("decision file is empty")
+		return nil, moerr.NewInvalidInputNoCtx("decision file is empty")
 	}
 	reader.line = 1
 	var header snapshotDecisionHeader
 	if err := decodeDecisionJSON(scanner.Bytes(), &header); err != nil {
-		return nil, fmt.Errorf("decision header: %w", err)
+		return nil, wrapUpgradeError(err, "decision header")
 	}
 	if header.Format != snapshotDecisionFormat || header.Target != "4.0.7" {
-		return nil, errors.New("invalid snapshot decision format or target")
+		return nil, moerr.NewInvalidInputNoCtx("invalid snapshot decision format or target")
 	}
 	return reader, nil
 }
@@ -101,29 +101,29 @@ func newSnapshotDecisionReader(input io.Reader) (*snapshotDecisionReader, error)
 func (r *snapshotDecisionReader) next() (*snapshotDecisionRecord, error) {
 	if !r.scanner.Scan() {
 		if err := r.scanner.Err(); err != nil {
-			return nil, fmt.Errorf("decision line %d: %w", r.line+1, err)
+			return nil, wrapUpgradeError(err, "decision line %d", r.line+1)
 		}
 		return nil, nil
 	}
 	r.line++
 	var d snapshotDecisionRecord
 	if err := decodeDecisionJSON(r.scanner.Bytes(), &d); err != nil {
-		return nil, fmt.Errorf("decision line %d: %w", r.line, err)
+		return nil, wrapUpgradeError(err, "decision line %d", r.line)
 	}
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(r.scanner.Bytes(), &fields); err != nil {
-		return nil, fmt.Errorf("decision line %d: %w", r.line, err)
+		return nil, wrapUpgradeError(err, "decision line %d", r.line)
 	}
 	for _, name := range []string{"catalog_account_id", "snapshot_id", "name", "timestamp", "level", "account_name", "database_name", "table_name", "object_id", "prior_kind", "edge", "decision"} {
 		if _, ok := fields[name]; !ok {
-			return nil, fmt.Errorf("decision line %d: missing %s", r.line, name)
+			return nil, moerr.NewInvalidInputNoCtxf("decision line %d: missing %s", r.line, name)
 		}
 	}
 	if err := d.validate(); err != nil {
-		return nil, fmt.Errorf("decision line %d: %w", r.line, err)
+		return nil, wrapUpgradeError(err, "decision line %d", r.line)
 	}
 	if r.previousName != "" && d.Name <= r.previousName {
-		return nil, fmt.Errorf("decision line %d: snapshot names must be strictly ordered", r.line)
+		return nil, moerr.NewInvalidInputNoCtxf("decision line %d: snapshot names must be strictly ordered", r.line)
 	}
 	r.previousName = d.Name
 	return &d, nil
@@ -131,44 +131,44 @@ func (r *snapshotDecisionReader) next() (*snapshotDecisionRecord, error) {
 
 func (d *snapshotDecisionRecord) validate() error {
 	if d.CatalogAccountID != "0" || d.PriorKind != "user" || d.Level == nil || *d.Level != "table" {
-		return errors.New("decision must refer to a system table snapshot previously marked user")
+		return moerr.NewInvalidInputNoCtx("decision must refer to a system table snapshot previously marked user")
 	}
 	parsed, err := uuid.Parse(d.SnapshotID)
 	if err != nil || parsed.String() != d.SnapshotID {
-		return errors.New("snapshot_id must be a canonical UUID")
+		return moerr.NewInvalidInputNoCtx("snapshot_id must be a canonical UUID")
 	}
 	child, ok := databranchutils.ParseBranchSnapshotName(d.Name)
 	if !ok || databranchutils.BranchSnapshotName(child) != d.Name {
-		return errors.New("snapshot name is not a canonical branch name")
+		return moerr.NewInvalidInputNoCtx("snapshot name is not a canonical branch name")
 	}
 	if d.Decision != "user" && d.Decision != "branch" {
-		return errors.New("decision must be user or branch")
+		return moerr.NewInvalidInputNoCtx("decision must be user or branch")
 	}
 	if d.Timestamp != nil {
 		if err := validateSignedDecimal(*d.Timestamp); err != nil {
-			return fmt.Errorf("timestamp: %w", err)
+			return wrapUpgradeError(err, "timestamp")
 		}
 	}
 	if d.ObjectID != nil {
 		if err := validateUnsignedDecimal(*d.ObjectID); err != nil {
-			return fmt.Errorf("object_id: %w", err)
+			return wrapUpgradeError(err, "object_id")
 		}
 	}
 	if d.Edge != nil {
 		e := d.Edge
 		if e.TableID == nil || e.ParentID == nil || e.CloneTS == nil || e.Creator == nil || e.Level == nil || e.Deleted == nil {
-			return errors.New("all edge fields are required")
+			return moerr.NewInvalidInputNoCtx("all edge fields are required")
 		}
 		if *e.TableID != strconv.FormatUint(child, 10) {
-			return errors.New("edge table_id does not match snapshot name")
+			return moerr.NewInvalidInputNoCtx("edge table_id does not match snapshot name")
 		}
 		for _, value := range []string{*e.TableID, *e.ParentID, *e.Creator} {
 			if err := validateUnsignedDecimal(value); err != nil {
-				return fmt.Errorf("edge ID: %w", err)
+				return wrapUpgradeError(err, "edge ID")
 			}
 		}
 		if err := validateSignedDecimal(*e.CloneTS); err != nil {
-			return fmt.Errorf("edge clone_ts: %w", err)
+			return wrapUpgradeError(err, "edge clone_ts")
 		}
 	}
 	return nil
@@ -177,14 +177,14 @@ func (d *snapshotDecisionRecord) validate() error {
 func validateUnsignedDecimal(s string) error {
 	value, err := strconv.ParseUint(s, 10, 64)
 	if err != nil || strconv.FormatUint(value, 10) != s {
-		return errors.New("expected canonical unsigned decimal string")
+		return moerr.NewInvalidInputNoCtx("expected canonical unsigned decimal string")
 	}
 	return nil
 }
 func validateSignedDecimal(s string) error {
 	value, err := strconv.ParseInt(s, 10, 64)
 	if err != nil || strconv.FormatInt(value, 10) != s {
-		return errors.New("expected canonical signed decimal string")
+		return moerr.NewInvalidInputNoCtx("expected canonical signed decimal string")
 	}
 	return nil
 }
@@ -193,7 +193,7 @@ func validateSignedDecimal(s string) error {
 // branch decision was committed in an earlier page.
 func validateSnapshotDecision(d snapshotDecisionRecord, actual snapshotDecisionPreimage, actualKind string) error {
 	if !reflect.DeepEqual(d.snapshotDecisionPreimage, actual) {
-		return errors.New("snapshot or branch-edge preimage changed")
+		return moerr.NewInvalidInputNoCtx("snapshot or branch-edge preimage changed")
 	}
 	switch actualKind {
 	case "user":
@@ -202,9 +202,9 @@ func validateSnapshotDecision(d snapshotDecisionRecord, actual snapshotDecisionP
 		if d.Decision == "branch" {
 			return nil
 		}
-		return errors.New("cannot reverse a committed branch decision")
+		return moerr.NewInvalidInputNoCtx("cannot reverse a committed branch decision")
 	default:
-		return fmt.Errorf("unexpected snapshot kind %q", actualKind)
+		return moerr.NewInvalidInputNoCtxf("unexpected snapshot kind %q", actualKind)
 	}
 }
 
@@ -212,7 +212,7 @@ func validateSnapshotDecision(d snapshotDecisionRecord, actual snapshotDecisionP
 // so two conflicting operator decisions cannot be interpreted by key order.
 func decodeDecisionJSON(raw []byte, target any) error {
 	if !utf8.Valid(raw) {
-		return errors.New("decision JSON is not UTF-8")
+		return moerr.NewInvalidInputNoCtx("decision JSON is not UTF-8")
 	}
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.UseNumber()
@@ -221,7 +221,7 @@ func decodeDecisionJSON(raw []byte, target any) error {
 	}
 	if _, err := dec.Token(); err != io.EOF {
 		if err == nil {
-			return errors.New("trailing JSON value")
+			return moerr.NewInvalidInputNoCtx("trailing JSON value")
 		}
 		return err
 	}
@@ -232,7 +232,7 @@ func decodeDecisionJSON(raw []byte, target any) error {
 	}
 	if err := dec.Decode(new(any)); err != io.EOF {
 		if err == nil {
-			return errors.New("trailing JSON value")
+			return moerr.NewInvalidInputNoCtx("trailing JSON value")
 		}
 		return err
 	}
@@ -241,7 +241,7 @@ func decodeDecisionJSON(raw []byte, target any) error {
 
 func checkJSONValue(dec *json.Decoder, depth int) error {
 	if depth > 32 {
-		return errors.New("decision JSON nesting exceeds 32")
+		return moerr.NewInvalidInputNoCtx("decision JSON nesting exceeds 32")
 	}
 	token, err := dec.Token()
 	if err != nil {
@@ -261,18 +261,18 @@ func checkJSONValue(dec *json.Decoder, depth int) error {
 			}
 			key, ok := keyToken.(string)
 			if !ok {
-				return errors.New("invalid JSON key")
+				return moerr.NewInvalidInputNoCtx("invalid JSON key")
 			}
 			// encoding/json matches struct fields case-insensitively. Accept
 			// only the format's canonical lower-case ASCII names so an alias
 			// cannot override an administrator's earlier decision.
 			for _, ch := range key {
 				if (ch < 'a' || ch > 'z') && ch != '_' {
-					return fmt.Errorf("noncanonical JSON key %q", key)
+					return moerr.NewInvalidInputNoCtxf("noncanonical JSON key %q", key)
 				}
 			}
 			if _, found := keys[key]; found {
-				return fmt.Errorf("duplicate JSON key %q", key)
+				return moerr.NewInvalidInputNoCtxf("duplicate JSON key %q", key)
 			}
 			keys[key] = struct{}{}
 			if err := checkJSONValue(dec, depth+1); err != nil {
@@ -284,7 +284,7 @@ func checkJSONValue(dec *json.Decoder, depth int) error {
 			return err
 		}
 		if end != json.Delim('}') {
-			return errors.New("invalid JSON object")
+			return moerr.NewInvalidInputNoCtx("invalid JSON object")
 		}
 	case '[':
 		for dec.More() {
@@ -297,10 +297,10 @@ func checkJSONValue(dec *json.Decoder, depth int) error {
 			return err
 		}
 		if end != json.Delim(']') {
-			return errors.New("invalid JSON array")
+			return moerr.NewInvalidInputNoCtx("invalid JSON array")
 		}
 	default:
-		return errors.New("unexpected JSON delimiter")
+		return moerr.NewInvalidInputNoCtx("unexpected JSON delimiter")
 	}
 	return nil
 }

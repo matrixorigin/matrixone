@@ -42,7 +42,7 @@ type catalogSnapshot struct {
 
 func (s *service) openSnapshotDecisions(ctx context.Context) (*snapshotDecisionReader, io.Closer, error) {
 	if s.upgrade.decisionFileService == nil {
-		return nil, nil, fmt.Errorf("shared file service is unavailable for catalog upgrade")
+		return nil, nil, moerr.NewInternalErrorNoCtx("shared file service is unavailable for catalog upgrade")
 	}
 	var input io.ReadCloser
 	v := fileservice.IOVector{
@@ -59,13 +59,13 @@ func (s *service) openSnapshotDecisions(ctx context.Context) (*snapshotDecisionR
 	}
 	if input == nil {
 		v.Release()
-		return nil, nil, fmt.Errorf("shared decision file did not provide a reader")
+		return nil, nil, moerr.NewInternalErrorNoCtx("shared decision file did not provide a reader")
 	}
 	reader, err := newSnapshotDecisionReader(input)
 	if err != nil {
 		input.Close()
 		v.Release()
-		return nil, nil, &terminalUpgradeError{fmt.Errorf("invalid %s: %w", SnapshotUpgradeDecisionPath, err)}
+		return nil, nil, &terminalUpgradeError{wrapUpgradeError(err, "invalid %s", SnapshotUpgradeDecisionPath)}
 	}
 	return reader, &snapshotInputCloser{reader: input, vector: &v}, nil
 }
@@ -207,7 +207,7 @@ func (s *service) scanSnapshotDecisions(ctx context.Context, visit func(snapshot
 	var missing []snapshotDecisionPreimage
 	missingError := func() error {
 		detail, _ := json.Marshal(missing)
-		return &terminalUpgradeError{fmt.Errorf("snapshot ownership requires administrator decisions by UUID; stop all CNs, prepare a decision file and publish it with mo-service -cfg <cn.toml> -catalog-upgrade-decisions <file>; see docs/guides/upgrade-4.2-to-main.md; undecided snapshots: %s", detail)}
+		return &terminalUpgradeError{moerr.NewInternalErrorNoCtxf("snapshot ownership requires administrator decisions by UUID; stop all CNs, prepare a decision file and publish it with mo-service -cfg <cn.toml> -catalog-upgrade-decisions <file>; see docs/guides/upgrade-4.2-to-main.md; undecided snapshots: %s", detail)}
 	}
 	after := ""
 	for {
@@ -225,10 +225,10 @@ func (s *service) scanSnapshotDecisions(ctx context.Context, visit func(snapshot
 				continue
 			}
 			if snapshot.kind != "user" && snapshot.kind != "branch" {
-				return &terminalUpgradeError{fmt.Errorf("snapshot %s has unexpected kind %q", after, snapshot.kind)}
+				return &terminalUpgradeError{moerr.NewInternalErrorNoCtxf("snapshot %s has unexpected kind %q", after, snapshot.kind)}
 			}
 			if decision != nil && decision.Name < after {
-				return &terminalUpgradeError{fmt.Errorf("unknown or stale decision for snapshot %s", decision.Name)}
+				return &terminalUpgradeError{moerr.NewInternalErrorNoCtxf("unknown or stale decision for snapshot %s", decision.Name)}
 			}
 			if decision == nil || decision.Name != after {
 				if snapshot.kind == "branch" {
@@ -251,7 +251,7 @@ func (s *service) scanSnapshotDecisions(ctx context.Context, visit func(snapshot
 			}
 			snapshot.preimage.Edge = edge
 			if err := validateSnapshotDecision(*decision, snapshot.preimage, snapshot.kind); err != nil {
-				return &terminalUpgradeError{fmt.Errorf("snapshot %s (%s): %w", after, snapshot.preimage.SnapshotID, err)}
+				return &terminalUpgradeError{wrapUpgradeError(err, "snapshot %s (%s)", after, snapshot.preimage.SnapshotID)}
 			}
 			if visit != nil {
 				if err := visit(*decision); err != nil {
@@ -268,7 +268,7 @@ func (s *service) scanSnapshotDecisions(ctx context.Context, visit func(snapshot
 		}
 	}
 	if decision != nil {
-		return &terminalUpgradeError{fmt.Errorf("unknown or stale decision for snapshot %s", decision.Name)}
+		return &terminalUpgradeError{moerr.NewInternalErrorNoCtxf("unknown or stale decision for snapshot %s", decision.Name)}
 	}
 	if len(missing) != 0 {
 		return missingError()
@@ -359,7 +359,7 @@ func (s *service) applySnapshotDecisionPage(ctx context.Context, upgrade version
 				return err
 			}
 			if len(rows) != 1 {
-				return &terminalUpgradeError{fmt.Errorf("snapshot %s (%s) changed or disappeared", d.Name, d.SnapshotID)}
+				return &terminalUpgradeError{moerr.NewInternalErrorNoCtxf("snapshot %s (%s) changed or disappeared", d.Name, d.SnapshotID)}
 			}
 			child, _ := databranchutils.ParseBranchSnapshotName(d.Name)
 			rows[0].preimage.Edge, err = readSnapshotEdge(tx, child)
@@ -367,7 +367,7 @@ func (s *service) applySnapshotDecisionPage(ctx context.Context, upgrade version
 				return err
 			}
 			if err := validateSnapshotDecision(d, rows[0].preimage, rows[0].kind); err != nil {
-				return &terminalUpgradeError{fmt.Errorf("snapshot %s (%s): %w", d.Name, d.SnapshotID, err)}
+				return &terminalUpgradeError{wrapUpgradeError(err, "snapshot %s (%s)", d.Name, d.SnapshotID)}
 			}
 			if d.Decision != "branch" || rows[0].kind == "branch" {
 				continue
@@ -380,7 +380,7 @@ func (s *service) applySnapshotDecisionPage(ctx context.Context, upgrade version
 			affected := res.AffectedRows
 			res.Close()
 			if affected != 1 {
-				return &terminalUpgradeError{fmt.Errorf("snapshot %s (%s) changed while applying decision", d.Name, d.SnapshotID)}
+				return &terminalUpgradeError{moerr.NewInternalErrorNoCtxf("snapshot %s (%s) changed while applying decision", d.Name, d.SnapshotID)}
 			}
 		}
 		return nil
@@ -426,7 +426,7 @@ func (s *service) withV407Step(ctx context.Context, upgrade versions.VersionUpgr
 func snapshotDecisionLimitError(err error) error {
 	var limit *executor.ResultLimitError
 	if errors.As(err, &limit) {
-		return &terminalUpgradeError{fmt.Errorf("snapshot catalog page exceeds %d bytes: %w", CatalogUpgradePageBytes, err)}
+		return &terminalUpgradeError{wrapUpgradeError(err, "snapshot catalog page exceeds %d bytes", CatalogUpgradePageBytes)}
 	}
 	return err
 }

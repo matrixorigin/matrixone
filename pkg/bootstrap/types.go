@@ -99,7 +99,7 @@ const (
 	// CatalogUpgradePageBytes limits ordinary catalog-upgrade result pages.
 	CatalogUpgradePageBytes = versions.CatalogUpgradePageBytes
 	// DefaultCatalogUpgradeObjectBytes permits larger indivisible definitions.
-	DefaultCatalogUpgradeObjectBytes uint64 = 64 << 20
+	DefaultCatalogUpgradeObjectBytes = versions.DefaultCatalogUpgradeObjectBytes
 )
 
 // WithUpgradeHandles reset upgrade handles

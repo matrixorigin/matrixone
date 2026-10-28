@@ -54,8 +54,8 @@ func indexMetadataProvenanceColumns(tblType string) []string {
 	return []string{catalog.IndexMetadata_TblCol_Nrow, catalog.IndexMetadata_TblCol_Build_Ts}
 }
 
-// listIndexMetadataTables returns (database, table, algo_table_type) for every index metadata
-// table this account owns AND that still exists.
+// IndexMetadataKey identifies (database, table, algo_table_type) for every index metadata
+// table. ListIndexMetadataTables returns only tables the account owns that still exist.
 //
 // The existence join is not belt-and-braces. mo_indexes names the index table; mo_tables is what
 // says there is one. A row that outlives its table -- a DROP INDEX that failed partway, a table
@@ -125,31 +125,7 @@ func hasIndexMetadataColumn(txn executor.TxnExecutor, accountId uint32, db, tbl,
 	return found, nil
 }
 
-// upgradeIndexMetadataProvenance adds the columns to every index metadata table this account
-// already owns. It follows upgradeLegacyForeignKeyMetadata: work that a fixed UpgSql cannot
-// express is a plain function called from HandleTenantUpgrade, not a new hook on UpgradeEntry.
-//
-// Idempotent -- it checks each column before altering, so a retried upgrade is a no-op, and MO
-// has no ADD COLUMN IF NOT EXISTS.
-func upgradeIndexMetadataProvenance(ctx context.Context, tenantID int32, txn executor.TxnExecutor) error {
-	var after IndexMetadataKey
-	for {
-		tables, err := Handler.ListIndexMetadataTables(txn, uint32(tenantID), after, versions.CatalogUpgradePageBytes)
-		if err != nil {
-			return err
-		}
-		for _, table := range tables {
-			if err := Handler.UpgradeIndexMetadataTable(ctx, tenantID, txn, table); err != nil {
-				return err
-			}
-			after = table
-		}
-		if len(tables) < CatalogDataPageSize {
-			return nil
-		}
-	}
-}
-
+// UpgradeIndexMetadataTable checks before altering so retrying a committed object is a no-op.
 func (v *versionHandle) UpgradeIndexMetadataTable(_ context.Context, tenantID int32, txn executor.TxnExecutor, table IndexMetadataKey) error {
 	accountID := uint32(tenantID)
 	db, tbl, typ := table[0], table[1], table[2]

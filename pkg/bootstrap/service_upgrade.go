@@ -48,6 +48,20 @@ type upgradeFailure struct{ err error }
 
 // terminalUpgradeError indicates that a retry cannot succeed without operator
 // action. Transient catalog, RPC and transaction errors continue to retry.
+// upgradeContextError adds an operation diagnostic without erasing the original
+// retry/terminal classification or errors.Is/errors.As identity.
+type upgradeContextError struct {
+	message string
+	cause   error
+}
+
+func (e *upgradeContextError) Error() string { return e.message + ": " + e.cause.Error() }
+func (e *upgradeContextError) Unwrap() error { return e.cause }
+
+func wrapUpgradeError(cause error, format string, args ...any) error {
+	return &upgradeContextError{message: fmt.Sprintf(format, args...), cause: cause}
+}
+
 type terminalUpgradeError struct{ error }
 
 func (e *terminalUpgradeError) Unwrap() error { return e.error }

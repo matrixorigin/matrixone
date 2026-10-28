@@ -97,3 +97,17 @@ is rejected instead of applying a stale decision. Diagnostics are bounded to
 128 undecided snapshots at a time. If the next restart reports more, stop the
 CNs again, append the newly verified records to the existing file in name
 order, and republish the complete file; retain earlier records.
+
+## Retry and resource limits
+
+A successful migration preserves the logical identities and exact-object grants
+of existing information-schema objects. Restarting or repeating an upgrade on an
+already-current account does not rebuild those objects. Failed transactions roll
+back together; work committed by earlier transactions remains and is checked
+again on retry.
+
+The page/object limit bounds retained SQL result payload, not query execution,
+index construction or total transaction memory. Login upgrades with a supplied
+transaction keep that transaction's atomicity and aggregate workspace. Foreign-key
+reconciliation currently scans the directory per child table; a large FK catalog
+can require substantial upgrade time and repeated scanning after interruption.

@@ -23,6 +23,9 @@ import (
 // CatalogUpgradePageBytes limits retained results for one upgrade page.
 const CatalogUpgradePageBytes uint64 = 4 << 20
 
+// DefaultCatalogUpgradeObjectBytes caps an indivisible catalog definition.
+const DefaultCatalogUpgradeObjectBytes uint64 = 64 << 20
+
 var (
 	FrameworkInitSQLs = []string{
 		fmt.Sprintf(`create table %s.%s (

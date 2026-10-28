@@ -189,7 +189,7 @@ func TestMaybeUpgradeTenantDoesNotCacheUncommittedOrFailedChecks(t *testing.T) {
 					require.Empty(t, b.mu.tenants)
 				}
 				if test.failUpgrade {
-					require.Equal(t, 4, reads)
+					require.Equal(t, 6, reads, "each retry rechecks the version in its independently owned operation transaction")
 				} else {
 					require.Equal(t, 2, reads)
 				}

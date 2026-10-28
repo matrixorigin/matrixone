@@ -101,7 +101,7 @@ func (s *service) maintainInformationSchemaViews(ctx context.Context) error {
 				}
 				return err
 			}
-			if exists && viewDefinition == sysview.InformationSchemaViewsDDL {
+			if exists && versions.InformationSchemaViewDefinitionMatches(viewDefinition, sysview.InformationSchemaViewsDDL) {
 				continue
 			}
 

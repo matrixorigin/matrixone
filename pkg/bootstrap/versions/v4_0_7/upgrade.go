@@ -60,29 +60,11 @@ func (v *versionHandle) Prepare(ctx context.Context, txn executor.TxnExecutor, f
 }
 
 func (v *versionHandle) HandleTenantUpgrade(ctx context.Context, tenantID int32, txn executor.TxnExecutor) error {
-	for i := range tenantUpgEntries {
-		var cursor TenantPageCursor
-		for {
-			more, err := v.UpgradeTenantEntryPage(ctx, tenantID, i, txn, 0, &cursor)
-			if err != nil {
-				return err
-			}
-			if !more {
-				break
-			}
-		}
-	}
-	if err := upgradeLegacyForeignKeyMetadata(ctx, tenantID, txn); err != nil {
-		return err
-	}
-	// Metadata tables to widen are discovered per tenant at runtime.
-	if err := upgradeIndexMetadataProvenance(ctx, tenantID, txn); err != nil {
-		return err
-	}
-	getLogger(txn.Txn().TxnOptions().CN).Info("tenant upgrade success",
-		zap.Int32("tenantId", tenantID),
-		zap.String("toVersion", v.Metadata().Version))
-	return nil
+	_, err := v.UpgradeTenant(ctx, tenantID, versions.DefaultCatalogUpgradeObjectBytes,
+		func(_ string, _ uint64, _ bool, work func(executor.TxnExecutor) error) (bool, error) {
+			return true, work(txn)
+		})
+	return err
 }
 
 func (v *versionHandle) TenantUpgradeEntryCount() int { return len(tenantUpgEntries) }

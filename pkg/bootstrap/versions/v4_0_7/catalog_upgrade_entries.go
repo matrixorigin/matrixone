@@ -15,7 +15,6 @@ package v4_0_7
 
 import (
 	"fmt"
-	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -48,32 +47,13 @@ func upgradeInformationSchemaMetadataVisibilityView(viewName, viewDDL string) ve
 	if viewName == "SCHEMATA" {
 		requiredProtocol = defines.MORPCVersion118
 	}
-	return versions.UpgradeEntry{
-		Schema:                  sysview.InformationDBConst,
-		TableName:               viewName,
-		UpgType:                 versions.MODIFY_VIEW,
-		UpgSql:                  viewDDL,
-		CheckFunc:               checkViewDefinition(viewName, viewDDL),
-		PreSql:                  fmt.Sprintf("DROP VIEW IF EXISTS %s.%s;", sysview.InformationDBConst, viewName),
-		RequiredProtocolVersion: requiredProtocol,
-	}
+	return versions.InformationSchemaViewUpgradeEntry(viewName, viewDDL, requiredProtocol)
 }
 
 func upgradeInformationSchemaTablePrivileges() versions.UpgradeEntry {
-	const (
-		viewName        = "TABLE_PRIVILEGES"
-		catalogViewName = "table_privileges"
-	)
-	return versions.UpgradeEntry{
-		Schema:                  sysview.InformationDBConst,
-		TableName:               viewName,
-		UpgType:                 versions.MODIFY_VIEW,
-		UpgSql:                  fmt.Sprintf("DROP VIEW IF EXISTS %s.%s;", sysview.InformationDBConst, viewName),
-		CheckFunc:               checkViewDefinition(catalogViewName, sysview.InformationSchemaTablePrivilegesDDL),
-		RequiredProtocolVersion: defines.MORPCVersion41,
-		PreSql:                  fmt.Sprintf("DROP TABLE IF EXISTS %s.%s;", sysview.InformationDBConst, viewName),
-		PostSql:                 sysview.InformationSchemaTablePrivilegesDDL,
-	}
+	entry := versions.InformationSchemaViewUpgradeEntry("TABLE_PRIVILEGES", sysview.InformationSchemaTablePrivilegesDDL, defines.MORPCVersion41)
+	entry.UpgType = versions.RECONCILE_LEGACY_INFORMATION_SCHEMA_VIEW
+	return entry
 }
 
 func backfillMoColumnsAttIsUnsigned() versions.UpgradeEntry {
@@ -127,22 +107,7 @@ func informationSchemaCollationsCheckSQL() string {
 }
 
 func upgradeInformationSchemaCollationCharacterSetApplicability() versions.UpgradeEntry {
-	return versions.UpgradeEntry{
-		Schema:    sysview.InformationDBConst,
-		TableName: "COLLATION_CHARACTER_SET_APPLICABILITY",
-		UpgType:   versions.CREATE_VIEW,
-		UpgSql:    sysview.InformationSchemaCollationCharacterSetApplicabilityDDL,
-		CheckFunc: func(txn executor.TxnExecutor, accountID uint32) (bool, error) {
-			exists, viewDef, err := versions.CheckViewDefinition(txn, accountID,
-				sysview.InformationDBConst, "COLLATION_CHARACTER_SET_APPLICABILITY")
-			if err != nil {
-				return false, err
-			}
-			return exists && viewDef == sysview.InformationSchemaCollationCharacterSetApplicabilityDDL, nil
-		},
-		PreSql: fmt.Sprintf("DROP VIEW IF EXISTS %s.COLLATION_CHARACTER_SET_APPLICABILITY;",
-			sysview.InformationDBConst),
-	}
+	return versions.InformationSchemaViewUpgradeEntry("COLLATION_CHARACTER_SET_APPLICABILITY", sysview.InformationSchemaCollationCharacterSetApplicabilityDDL, 0)
 }
 
 // User-defined function lookup is scoped by database and argument signature.
@@ -243,79 +208,25 @@ func addMoRoleGrantGranteeIndex() versions.UpgradeEntry {
 }
 
 func upgradeInformationSchemaKeyColumnUsage() versions.UpgradeEntry {
-	return versions.UpgradeEntry{
-		Schema:                  sysview.InformationDBConst,
-		TableName:               "KEY_COLUMN_USAGE",
-		UpgType:                 versions.CREATE_VIEW,
-		UpgSql:                  fmt.Sprintf("DROP VIEW IF EXISTS %s.%s;", sysview.InformationDBConst, "KEY_COLUMN_USAGE"),
-		RequiredProtocolVersion: defines.MORPCVersion41,
-		CheckFunc:               checkViewDefinition("KEY_COLUMN_USAGE", sysview.InformationSchemaKeyColumnUsageDDL),
-		PreSql:                  fmt.Sprintf("DROP TABLE IF EXISTS %s.%s;", sysview.InformationDBConst, "KEY_COLUMN_USAGE"),
-		PostSql:                 sysview.InformationSchemaKeyColumnUsageDDL,
-	}
+	entry := versions.InformationSchemaViewUpgradeEntry("KEY_COLUMN_USAGE", sysview.InformationSchemaKeyColumnUsageDDL, defines.MORPCVersion41)
+	entry.UpgType = versions.RECONCILE_LEGACY_INFORMATION_SCHEMA_VIEW
+	return entry
 }
 
 func upgradeInformationSchemaReferentialConstraints() versions.UpgradeEntry {
-	return versions.UpgradeEntry{
-		Schema:                  sysview.InformationDBConst,
-		TableName:               "REFERENTIAL_CONSTRAINTS",
-		UpgType:                 versions.MODIFY_VIEW,
-		UpgSql:                  sysview.InformationSchemaReferentialConstraintsDDL,
-		RequiredProtocolVersion: defines.MORPCVersion41,
-		CheckFunc:               checkViewDefinition("REFERENTIAL_CONSTRAINTS", sysview.InformationSchemaReferentialConstraintsDDL),
-		PreSql:                  fmt.Sprintf("DROP VIEW IF EXISTS %s.%s;", sysview.InformationDBConst, "REFERENTIAL_CONSTRAINTS"),
-	}
+	return versions.InformationSchemaViewUpgradeEntry("REFERENTIAL_CONSTRAINTS", sysview.InformationSchemaReferentialConstraintsDDL, defines.MORPCVersion41)
 }
 
 func upgradeInformationSchemaCheckConstraints() versions.UpgradeEntry {
-	return versions.UpgradeEntry{
-		Schema:                  sysview.InformationDBConst,
-		TableName:               "CHECK_CONSTRAINTS",
-		UpgType:                 versions.CREATE_VIEW,
-		UpgSql:                  sysview.InformationSchemaCheckConstraintsDDL,
-		RequiredProtocolVersion: defines.MORPCVersion41,
-		CheckFunc: checkViewDefinition("CHECK_CONSTRAINTS",
-			sysview.InformationSchemaCheckConstraintsDDL),
-		PreSql: fmt.Sprintf("DROP VIEW IF EXISTS %s.%s;",
-			sysview.InformationDBConst, "CHECK_CONSTRAINTS"),
-	}
+	return versions.InformationSchemaViewUpgradeEntry("CHECK_CONSTRAINTS", sysview.InformationSchemaCheckConstraintsDDL, defines.MORPCVersion41)
 }
 
 func upgradeInformationSchemaTableConstraints() versions.UpgradeEntry {
-	return versions.UpgradeEntry{
-		Schema:                  sysview.InformationDBConst,
-		TableName:               "TABLE_CONSTRAINTS",
-		UpgType:                 versions.MODIFY_VIEW,
-		UpgSql:                  sysview.InformationSchemaTableConstraintsDDL,
-		RequiredProtocolVersion: defines.MORPCVersion41,
-		CheckFunc: checkViewDefinition("TABLE_CONSTRAINTS",
-			sysview.InformationSchemaTableConstraintsDDL),
-		PreSql: fmt.Sprintf("DROP VIEW IF EXISTS %s.%s;",
-			sysview.InformationDBConst, "TABLE_CONSTRAINTS"),
-	}
+	return versions.InformationSchemaViewUpgradeEntry("TABLE_CONSTRAINTS", sysview.InformationSchemaTableConstraintsDDL, defines.MORPCVersion41)
 }
 
 // Refresh STATISTICS for tenants that completed an earlier v4.0.6 offset.
 
 func upgradeInformationSchemaStatistics() versions.UpgradeEntry {
-	return versions.UpgradeEntry{
-		Schema:                  sysview.InformationDBConst,
-		TableName:               "STATISTICS",
-		UpgType:                 versions.MODIFY_VIEW,
-		UpgSql:                  sysview.InformationSchemaStatisticsDDL,
-		RequiredProtocolVersion: defines.MORPCVersion107,
-		CheckFunc:               checkViewDefinition("STATISTICS", sysview.InformationSchemaStatisticsDDL),
-		PreSql: fmt.Sprintf("DROP VIEW IF EXISTS %s.%s;",
-			sysview.InformationDBConst, "STATISTICS"),
-	}
-}
-
-func checkViewDefinition(viewName, definition string) func(executor.TxnExecutor, uint32) (bool, error) {
-	return func(txn executor.TxnExecutor, accountID uint32) (bool, error) {
-		exists, viewDef, err := versions.CheckViewDefinition(txn, accountID, sysview.InformationDBConst, viewName)
-		if err == nil && !exists {
-			exists, viewDef, err = versions.CheckViewDefinition(txn, accountID, sysview.InformationDBConst, strings.ToLower(viewName))
-		}
-		return exists && viewDef == definition, err
-	}
+	return versions.InformationSchemaViewUpgradeEntry("STATISTICS", sysview.InformationSchemaStatisticsDDL, defines.MORPCVersion107)
 }

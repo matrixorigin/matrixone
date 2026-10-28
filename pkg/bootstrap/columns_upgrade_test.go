@@ -45,10 +45,9 @@ func TestColumnsUpgradeAdmissionAndIdempotence(t *testing.T) {
 		wantErr    bool
 	}{
 		{name: "already current", definition: sysview.InformationSchemaColumnsDDL},
-		{name: "legacy V58", definition: sysview.InformationSchemaColumnsV58DDL(), protocol: `{"result":"cn0:109,cn1:109"}`, wantDDL: []string{entry.PreSql, entry.UpgSql}},
+		{name: "legacy V58", definition: sysview.InformationSchemaColumnsV58DDL(), protocol: `{"result":"cn0:109,cn1:109"}`, wantDDL: []string{entry.UpgSql}},
 		{name: "old protocol", definition: sysview.InformationSchemaColumnsV58DDL(), protocol: `{"result":"cn0:109,cn1:108"}`, wantErr: true},
-		{name: "failed drop", definition: sysview.InformationSchemaColumnsV58DDL(), protocol: `{"result":"cn0:109"}`, failSQL: entry.PreSql, wantErr: true, wantDDL: []string{entry.PreSql}},
-		{name: "failed create", definition: sysview.InformationSchemaColumnsV58DDL(), protocol: `{"result":"cn0:109"}`, failSQL: entry.UpgSql, wantErr: true, wantDDL: []string{entry.PreSql, entry.UpgSql}},
+		{name: "failed create", definition: sysview.InformationSchemaColumnsV58DDL(), protocol: `{"result":"cn0:109"}`, failSQL: entry.UpgSql, wantErr: true, wantDDL: []string{entry.UpgSql}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			runtime.RunTest("", func(runtime.Runtime) {
@@ -77,9 +76,7 @@ func TestColumnsUpgradeAdmissionAndIdempotence(t *testing.T) {
 						if sql == tc.failSQL {
 							return executor.Result{}, injected
 						}
-						if sql == entry.PreSql {
-							definition = ""
-						} else if sql == entry.UpgSql {
+						if sql == entry.UpgSql {
 							definition = sysview.InformationSchemaColumnsDDL
 						}
 						return executor.Result{}, nil
@@ -104,7 +101,7 @@ func TestColumnsUpgradeAdmissionAndIdempotence(t *testing.T) {
 					definition, tc.failSQL, tc.protocol = sysview.InformationSchemaColumnsV58DDL(), "", `{"result":"cn0:109"}`
 					ddl = nil
 					require.NoError(t, entry.Upgrade(txn, 7))
-					require.Equal(t, []string{entry.PreSql, entry.UpgSql}, ddl)
+					require.Equal(t, []string{entry.UpgSql}, ddl)
 				}
 				ddl = nil
 				require.NoError(t, entry.Upgrade(txn, 7))
