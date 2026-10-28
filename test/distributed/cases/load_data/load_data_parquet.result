@@ -489,7 +489,7 @@ select dec_p38_s38 from pq_decimal_boundary WHERE dec_p38_s38 > 0;
 ➤ dec_p38_s38[3,38,38]  𝄀
 1E-38
 select dec_p9_s2 * 1.1 from pq_decimal_boundary LIMIT 1;
-➤ dec_p9_s2 * 1.1[3,38,3]  𝄀
+➤ dec_p9_s2 * 1.1[3,11,3]  𝄀
 10999999.989
 drop table if exists pq_binary_test;
 create table pq_binary_test (
