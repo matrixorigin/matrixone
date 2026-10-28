@@ -49,6 +49,7 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/util/csvparser"
+	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -675,11 +676,14 @@ func readFile(param *ExternalParam, proc *process.Process) (io.ReadCloser, error
 }
 
 func ReadFileOffset(param *tree.ExternParam, mcpu int, fileSize int64, visibleCols []*plan.ColDef) ([]int64, error) {
+	ctx := param.Ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if crt.GetCompressType(param.CompressType, param.Filepath) != tree.NOCOMPRESS {
-		ctx := param.Ctx
-		if ctx == nil {
-			ctx = context.Background()
-		}
 		return nil, moerr.NewInvalidInputf(ctx, "parallel read is not supported for compressed file %s", param.Filepath)
 	}
 	arr := make([]int64, 0)
@@ -719,6 +723,9 @@ func ReadFileOffset(param *tree.ExternParam, mcpu int, fileSize int64, visibleCo
 	legacyBoundary := param.Format != tree.CSV
 
 	for i := 1; i < mcpu; i++ {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		guess := offsets[i-1] + batchSize
 		if guess >= fileSize {
 			break
@@ -750,17 +757,23 @@ func ReadFileOffset(param *tree.ExternParam, mcpu int, fileSize int64, visibleCo
 			continue
 		}
 		vec.Entries[0].Offset = guess
-		if err = fs.Read(param.Ctx, &vec); err != nil {
+		if err = fs.Read(ctx, &vec); err != nil {
 			return nil, err
 		}
 		tailSize, err := getTailSize(param, visibleCols, r)
 		closeErr := r.Close()
-		if err != nil {
-			// Strict scanning retains its existing parser-resynchronization fallback.
-			break
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, ctxErr
+		}
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return nil, err
 		}
 		if closeErr != nil {
 			return nil, closeErr
+		}
+		if err != nil {
+			// Strict scanning retains its existing parser-resynchronization fallback.
+			break
 		}
 		next := vec.Entries[0].Offset + tailSize
 		if next >= fileSize {
@@ -777,6 +790,9 @@ func ReadFileOffset(param *tree.ExternParam, mcpu int, fileSize int64, visibleCo
 			arr = append(arr, offsets[i])
 			arr = append(arr, -1)
 		}
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 	return arr, nil
 }
@@ -1007,8 +1023,42 @@ func getNonStrictFallbackBoundary(param *tree.ExternParam, fs fileservice.ETLFil
 	return guess + tailSize, err
 }
 
+const (
+	strictProbeMaxBytes   = 256 * 1024
+	strictProbeMaxRecords = 256
+	// CSVParser multiplies its requested block size by BufferSizeScale (5).
+	// Keep physical reads below the budget so a large valid file can split.
+	strictProbeBlockSize = 16 * 1024
+)
+
+var errStrictProbeBudgetExceeded = moerr.NewInternalError(moerr.NoReportContext(), "strict CSV boundary probe budget exceeded")
+
+// strictProbeReader borrows the stream. A non-EOF error prevents the parser
+// from accepting an artificially truncated record as a complete final row.
+type strictProbeReader struct {
+	io.Reader
+	remaining int
+}
+
+func (r *strictProbeReader) Read(p []byte) (int, error) {
+	if r.remaining == 0 {
+		return 0, errStrictProbeBudgetExceeded
+	}
+	if len(p) > r.remaining {
+		p = p[:r.remaining]
+	}
+	n, err := r.Reader.Read(p)
+	r.remaining -= n
+	return n, err
+}
+
 func getTailSizeStrict(param *tree.ExternParam, cols []*plan.ColDef, r io.ReadCloser) (int64, error) {
-	bufR := bufio.NewReader(r)
+	ctx := param.Ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	quietCtx := errutil.ContextWithNoReport(ctx, true)
+	bufR := bufio.NewReader(boundaryContextReader{ctx: ctx, Reader: &strictProbeReader{Reader: r, remaining: strictProbeMaxBytes}})
 	// ensure the first character is not field quote symbol
 	quoteByte := byte('"')
 	if param.Tail.Fields != nil {
@@ -1018,6 +1068,9 @@ func getTailSizeStrict(param *tree.ExternParam, cols []*plan.ColDef, r io.ReadCl
 	}
 	skipCount := int64(0)
 	for {
+		if err := ctx.Err(); err != nil {
+			return 0, err
+		}
 		ch, err := bufR.ReadByte()
 		if err != nil {
 			return 0, err
@@ -1031,27 +1084,45 @@ func getTailSizeStrict(param *tree.ExternParam, cols []*plan.ColDef, r io.ReadCl
 		}
 		skipCount++
 	}
-	csvReader, err := newCSVParserFromReader(param, bufR)
+	csvReader, err := newCSVParserFromReaderWithBlockSize(param, bufR, strictProbeBlockSize)
 	if err != nil {
 		return 0, err
 	}
 	var fields []csvparser.Field
-	for {
+	for attempts := 0; attempts < strictProbeMaxRecords; attempts++ {
+		if err := ctx.Err(); err != nil {
+			return 0, err
+		}
 		fields, err = csvReader.Read(fields)
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return 0, ctxErr
+		}
 		if err != nil {
 			return 0, err
 		}
 		if len(fields) < len(cols) {
 			continue
 		}
-		if isLegalLine(param, cols, fields) {
+		legal := isLegalLineWithContext(quietCtx, param, cols, fields)
+		if err := ctx.Err(); err != nil {
+			return 0, err
+		}
+		if legal {
 			return csvReader.Pos() + skipCount, nil
 		}
 	}
+	return 0, errStrictProbeBudgetExceeded
 }
 
 func isLegalLine(param *tree.ExternParam, cols []*plan.ColDef, fields []csvparser.Field) bool {
+	return isLegalLineWithContext(moerr.Context(), param, cols, fields)
+}
+
+func isLegalLineWithContext(ctx context.Context, param *tree.ExternParam, cols []*plan.ColDef, fields []csvparser.Field) bool {
 	for idx, col := range cols {
+		if ctx.Err() != nil {
+			return false
+		}
 		field := fields[idx]
 		id := types.T(col.Typ.Id)
 		isSet := id == types.T_uint64 && col.Typ.Enumvalues != ""
@@ -1059,7 +1130,7 @@ func isLegalLine(param *tree.ExternParam, cols []*plan.ColDef, fields []csvparse
 		// T_bit carries raw bytes (parsed byte-by-byte, not as text), so
 		// whitespace bytes are data and must not be trimmed.
 		if id == types.T_enum || isSet {
-			field.Val, emptyIsNull = normalizeEnumSetCSVValue(id, col.Typ.Enumvalues, field.Val)
+			field.Val, emptyIsNull = normalizeEnumSetCSVValueWithContext(ctx, id, col.Typ.Enumvalues, field.Val)
 		} else if id != types.T_char && id != types.T_varchar && id != types.T_json &&
 			id != types.T_binary && id != types.T_varbinary && id != types.T_blob && id != types.T_text && id != types.T_datalink &&
 			id != types.T_bit {
@@ -1076,7 +1147,7 @@ func isLegalLine(param *tree.ExternParam, cols []*plan.ColDef, fields []csvparse
 		}
 		switch id {
 		case types.T_bool:
-			_, err := types.ParseBool(field.Val)
+			_, err := types.ParseBoolWithContext(ctx, field.Val)
 			if err != nil {
 				return false
 			}
@@ -1185,7 +1256,7 @@ func isLegalLine(param *tree.ExternParam, cols []*plan.ColDef, fields []csvparse
 		case types.T_uint64:
 			if len(col.Typ.Enumvalues) > 0 {
 				// SET column: validate as set member name or numeric bitmap
-				_, err := types.ParseSet(col.Typ.Enumvalues, field.Val)
+				_, err := types.ParseSetWithContext(ctx, col.Typ.Enumvalues, field.Val)
 				if err != nil {
 					return false
 				}
@@ -1209,7 +1280,7 @@ func isLegalLine(param *tree.ExternParam, cols []*plan.ColDef, fields []csvparse
 					return false
 				}
 			} else {
-				_, err := types.ParseDecimal128(field.Val, col.Typ.Width, col.Typ.Scale)
+				_, err := types.ParseDecimal128WithContext(ctx, field.Val, col.Typ.Width, col.Typ.Scale)
 				if err != nil {
 					return false
 				}
@@ -1222,7 +1293,7 @@ func isLegalLine(param *tree.ExternParam, cols []*plan.ColDef, fields []csvparse
 					return false
 				}
 			} else {
-				_, err := types.ParseDecimal128(field.Val, col.Typ.Width, col.Typ.Scale)
+				_, err := types.ParseDecimal128WithContext(ctx, field.Val, col.Typ.Width, col.Typ.Scale)
 				if err != nil {
 					return false
 				}
@@ -1231,39 +1302,39 @@ func isLegalLine(param *tree.ExternParam, cols []*plan.ColDef, fields []csvparse
 		case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink:
 			continue
 		case types.T_array_float32:
-			_, err := types.StringToArrayToBytes[float32](field.Val)
+			_, err := types.StringToArrayToBytesWithContext[float32](ctx, field.Val)
 			if err != nil {
 				return false
 			}
 		case types.T_array_float64:
-			_, err := types.StringToArrayToBytes[float64](field.Val)
+			_, err := types.StringToArrayToBytesWithContext[float64](ctx, field.Val)
 			if err != nil {
 				return false
 			}
 		case types.T_array_bf16:
-			_, err := types.StringToArrayToBytes[types.BF16](field.Val)
+			_, err := types.StringToArrayToBytesWithContext[types.BF16](ctx, field.Val)
 			if err != nil {
 				return false
 			}
 		case types.T_array_float16:
-			_, err := types.StringToArrayToBytes[types.Float16](field.Val)
+			_, err := types.StringToArrayToBytesWithContext[types.Float16](ctx, field.Val)
 			if err != nil {
 				return false
 			}
 		case types.T_array_int8:
-			_, err := types.StringToArrayToBytes[int8](field.Val)
+			_, err := types.StringToArrayToBytesWithContext[int8](ctx, field.Val)
 			if err != nil {
 				return false
 			}
 		case types.T_array_uint8:
-			_, err := types.StringToArrayToBytes[uint8](field.Val)
+			_, err := types.StringToArrayToBytesWithContext[uint8](ctx, field.Val)
 			if err != nil {
 				return false
 			}
 		case types.T_json:
 			if param.Format == tree.CSV {
 				field.Val = fmt.Sprintf("%v", strings.Trim(field.Val, "\""))
-				byteJson, err := types.ParseStringToByteJson(field.Val)
+				byteJson, err := types.ParseStringToByteJsonWithContext(ctx, field.Val)
 				if err != nil {
 					return false
 				}
@@ -1273,30 +1344,30 @@ func isLegalLine(param *tree.ExternParam, cols []*plan.ColDef, fields []csvparse
 				}
 			}
 		case types.T_date:
-			_, err := types.ParseDateCast(field.Val)
+			_, err := types.ParseDateCastWithContext(ctx, field.Val)
 			if err != nil {
 				return false
 			}
 		case types.T_time:
-			_, err := types.ParseTime(field.Val, col.Typ.Scale)
+			_, err := types.ParseTimeWithContext(ctx, field.Val, col.Typ.Scale)
 			if err != nil {
 				return false
 			}
 		case types.T_datetime:
-			_, err := types.ParseDatetime(field.Val, col.Typ.Scale)
+			_, err := types.ParseDatetimeWithContext(ctx, field.Val, col.Typ.Scale)
 			if err != nil {
 				return false
 			}
 		case types.T_year:
-			if _, err := parseLoadDataYear(field); err != nil {
+			if _, err := parseLoadDataYearWithContext(ctx, field); err != nil {
 				return false
 			}
 		case types.T_enum:
-			if _, err := types.ParseEnum(col.Typ.Enumvalues, field.Val); err != nil {
+			if _, err := types.ParseEnumWithContext(ctx, col.Typ.Enumvalues, field.Val); err != nil {
 				return false
 			}
 		case types.T_decimal64:
-			_, err := types.ParseDecimal64(field.Val, col.Typ.Width, col.Typ.Scale)
+			_, err := types.ParseDecimal64WithContext(ctx, field.Val, col.Typ.Width, col.Typ.Scale)
 			if err != nil {
 				// we tolerate loss of digits.
 				if !moerr.IsMoErrCode(err, moerr.ErrDataTruncated) {
@@ -1304,7 +1375,7 @@ func isLegalLine(param *tree.ExternParam, cols []*plan.ColDef, fields []csvparse
 				}
 			}
 		case types.T_decimal128:
-			_, err := types.ParseDecimal128(field.Val, col.Typ.Width, col.Typ.Scale)
+			_, err := types.ParseDecimal128WithContext(ctx, field.Val, col.Typ.Width, col.Typ.Scale)
 			if err != nil {
 				// we tolerate loss of digits.
 				if !moerr.IsMoErrCode(err, moerr.ErrDataTruncated) {
@@ -1312,7 +1383,7 @@ func isLegalLine(param *tree.ExternParam, cols []*plan.ColDef, fields []csvparse
 				}
 			}
 		case types.T_decimal256:
-			_, err := types.ParseDecimal256(field.Val, col.Typ.Width, col.Typ.Scale)
+			_, err := types.ParseDecimal256WithContext(ctx, field.Val, col.Typ.Width, col.Typ.Scale)
 			if err != nil {
 				// we tolerate loss of digits.
 				if !moerr.IsMoErrCode(err, moerr.ErrDataTruncated) {
@@ -1324,7 +1395,7 @@ func isLegalLine(param *tree.ExternParam, cols []*plan.ColDef, fields []csvparse
 			// not for actual data loading. It uses time.Local as fallback since proc is not available.
 			// The actual data loading uses getColData which correctly uses session timezone.
 			t := time.Local
-			_, err := types.ParseTimestamp(t, field.Val, col.Typ.Scale)
+			_, err := types.ParseTimestampWithContext(ctx, t, field.Val, col.Typ.Scale)
 			if err != nil {
 				return false
 			}
@@ -1467,6 +1538,10 @@ func isEnumMember(enumValues, name string) bool {
 // member names; numeric fallback follows that existing CSV policy, including
 // whitespace normalization. Unpadded values return early without parsing.
 func isPaddedSetInput(setValues, val string) bool {
+	return isPaddedSetInputWithContext(moerr.Context(), setValues, val)
+}
+
+func isPaddedSetInputWithContext(ctx context.Context, setValues, val string) bool {
 	if len(val) == 0 {
 		return false
 	}
@@ -1475,7 +1550,7 @@ func isPaddedSetInput(setValues, val string) bool {
 	if !unicode.IsSpace(first) && !unicode.IsSpace(last) {
 		return false
 	}
-	return types.MatchSetName(setValues, val)
+	return types.MatchSetNameWithContext(ctx, setValues, val)
 }
 
 // normalizeEnumSetCSVValue shares the member-aware trim and empty-to-NULL
@@ -1483,6 +1558,10 @@ func isPaddedSetInput(setValues, val string) bool {
 // Callers use it only for ENUM or uint64 with SET domain metadata, and apply
 // explicit NULL markers to the returned text before parsing it.
 func normalizeEnumSetCSVValue(id types.T, definition, val string) (text string, emptyIsNull bool) {
+	return normalizeEnumSetCSVValueWithContext(moerr.Context(), id, definition, val)
+}
+
+func normalizeEnumSetCSVValueWithContext(ctx context.Context, id types.T, definition, val string) (text string, emptyIsNull bool) {
 	if id == types.T_enum {
 		if isEnumMember(definition, val) {
 			return val, false
@@ -1490,7 +1569,7 @@ func normalizeEnumSetCSVValue(id types.T, definition, val string) (text string, 
 		val = strings.TrimSpace(val)
 		return val, len(val) == 0 && !isEnumMember(definition, "")
 	}
-	if !isPaddedSetInput(definition, val) {
+	if !isPaddedSetInputWithContext(ctx, definition, val) {
 		val = strings.TrimSpace(val)
 	}
 	return val, false
@@ -2526,14 +2605,18 @@ func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *Ext
 }
 
 func parseLoadDataYear(field csvparser.Field) (types.MoYear, error) {
+	return parseLoadDataYearWithContext(moerr.Context(), field)
+}
+
+func parseLoadDataYearWithContext(ctx context.Context, field csvparser.Field) (types.MoYear, error) {
 	if field.HasStringQuote {
-		return types.ParseMoYear(field.Val)
+		return types.ParseMoYearWithContext(ctx, field.Val)
 	}
 	d, err := strconv.ParseInt(field.Val, 10, 64)
 	if err != nil {
 		return 0, err
 	}
-	return types.ParseMoYearFromInt(d)
+	return types.ParseMoYearFromIntWithContext(ctx, d)
 }
 
 func loadFormatIsValid(param *tree.ExternParam) bool {

@@ -64,7 +64,7 @@ func stubAlgo(t *testing.T) (*[]uint, *[]*recordingSearch) {
 	limits := new([]uint)
 	created := new([]*recordingSearch)
 	saved := newAlgo
-	newAlgo = func(idxcfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig) veccache.VectorIndexSearchIf {
+	newAlgo = func(idxcfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig, _ int32) veccache.VectorIndexSearchIf {
 		s := &recordingSearch{idxcfg: idxcfg, tblcfg: tblcfg, limits: limits}
 		*created = append(*created, s)
 		return s
@@ -214,6 +214,8 @@ func TestExplainSettings(t *testing.T) {
 	}{
 		{"zero", hnswplan.ScanOptions{}, []string{`ThreadsSearch: 0`}},
 		{"ThreadsSearch", hnswplan.ScanOptions{ThreadsSearch: 8}, []string{`ThreadsSearch: 8`}},
+		{"PrefilterExactThreshold", hnswplan.ScanOptions{ThreadsSearch: 8, PrefilterExactThreshold: 100000},
+			[]string{`ThreadsSearch: 8`, `PrefilterExactThreshold: 100000`}},
 		{"maximum signed", hnswplan.ScanOptions{ThreadsSearch: 9223372036854775807}, []string{"ThreadsSearch: 9223372036854775807"}},
 		{"integer boundaries", hnswplan.ScanOptions{ThreadsSearch: -9223372036854775808}, []string{`ThreadsSearch: -9223372036854775808`}},
 	} {

@@ -70,11 +70,12 @@ func (filter *Filter) Release() {
 }
 
 type container struct {
-	buf              *batch.Batch
-	executors        []colexec.ExpressionExecutor
-	bs               vector.FunctionParameterWrapper[bool]
-	runtimeExecutors []colexec.ExpressionExecutor
-	allExecutors     []colexec.ExpressionExecutor // = executors + runtimeExecutor, do not free this executors
+	buf                       *batch.Batch
+	executors                 []colexec.ExpressionExecutor
+	bs                        vector.FunctionParameterWrapper[bool]
+	runtimeExecutors          []colexec.ExpressionExecutor
+	allExecutors              []colexec.ExpressionExecutor // = executors + runtimeExecutor, do not free this executors
+	subjectReuseAdmissionDone bool
 }
 
 func (filter *Filter) SetRuntimeFilterExprs(proc *process.Process, exes []*plan.Expr) (err error) {
@@ -105,6 +106,7 @@ func (ctr *container) cleanExecutor() {
 		}
 	}
 	ctr.executors = nil
+	ctr.subjectReuseAdmissionDone = false
 }
 
 func (ctr *container) cleanRuntimeExecutor() {

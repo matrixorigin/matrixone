@@ -3864,6 +3864,12 @@ var (
 			input:  "create fulltext2 index idx on A (a) max_index_capacity 500000 max_postings_capacity 8000000",
 			output: "create fulltext2 index idx on a (a) MAX_INDEX_CAPACITY 500000 MAX_POSTINGS_CAPACITY 8000000 ",
 		}, {
+			input:  "create fulltext2 index idx on A (a) with parser gojieba token_filter = 'stop'",
+			output: "create fulltext2 index idx on a (a) with parser gojieba TOKEN_FILTER = 'stop' ",
+		}, {
+			input:  "create fulltext2 index idx on A (a) with parser gojieba token_filter 'stop,synonym'",
+			output: "create fulltext2 index idx on a (a) with parser gojieba TOKEN_FILTER = 'stop,synonym' ",
+		}, {
 			input:  "alter table t1 alter reindex idx1 fulltext2 max_postings_capacity = 4000000",
 			output: "alter table t1 alter reindex idx1 fulltext2 max_postings_capacity = 4000000",
 		}, {

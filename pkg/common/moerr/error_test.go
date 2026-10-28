@@ -190,6 +190,15 @@ func TestCollationErrorCodeContracts(t *testing.T) {
 	}
 }
 
+// TestFKRowIsReferencedMySQLError pins the client-visible wire pairing for
+// parent-side FK rejections (issue #31453): MySQL 8.0 reports errno 1451
+// (ER_ROW_IS_REFERENCED_2) with SQLSTATE 23000 for parent DELETE/UPDATE blocks.
+func TestFKRowIsReferencedMySQLError(t *testing.T) {
+	err := NewErrFKRowIsReferenced(context.Background())
+	require.Equal(t, ErrFKRowIsReferenced, err.ErrorCode())
+	require.Equal(t, ER_ROW_IS_REFERENCED_2, err.MySQLCode())
+}
+
 func TestWrongArgumentsMySQLError(t *testing.T) {
 	err := NewWrongArguments(context.Background(), "nth_value")
 	require.Equal(t, ErrWrongArguments, err.ErrorCode())

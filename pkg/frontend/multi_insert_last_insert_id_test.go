@@ -55,6 +55,8 @@ func newLastInsertIDHarness(t *testing.T, targets int) (
 	proc := &process.Process{Base: &process.BaseProcess{
 		LastInsertID:          new(uint64),
 		StatementLastInsertID: new(uint64),
+		ODKUResult:            &process.ODKUResultState{},
+		ODKUInputOrdinal:      new(uint64),
 	}}
 	proc.InitSeq()
 	writer := &countingMysqlWriter{
@@ -69,6 +71,81 @@ func newLastInsertIDHarness(t *testing.T, targets int) (
 		cw:        &TxnComputationWrapper{plan: autoIncrPreInsertPlan(targets)},
 	}
 	return ses, proc, writer, NewMysqlResp(writer), execCtx
+}
+
+func newODKUInsertStatusHarness(t *testing.T) (
+	*Session, *process.Process, *countingMysqlWriter, *MysqlResp, *ExecCtx,
+) {
+	ses, proc, writer, resper, execCtx := newLastInsertIDHarness(t, 0)
+	execCtx.stmt = &tree.Insert{Rows: &tree.Select{Select: &tree.ValuesClause{}}, OnDuplicateUpdate: tree.UpdateExprs{&tree.UpdateExpr{}}}
+	p := autoIncrPreInsertPlan(1)
+	p.GetQuery().Nodes[0].PreInsertCtx.TrackOdkuResult = true
+	execCtx.cw = &TxnComputationWrapper{plan: p}
+	return ses, proc, writer, resper, execCtx
+}
+
+func TestODKUStatusLegacyNoKeyPublishesStatementID(t *testing.T) {
+	for _, generated := range []bool{false, true} {
+		t.Run(map[bool]string{false: "explicit", true: "generated"}[generated], func(t *testing.T) {
+			ses, proc, writer, resper, execCtx := newODKUInsertStatusHarness(t)
+			execCtx.cw = &TxnComputationWrapper{plan: autoIncrPreInsertPlan(1)}
+			ses.SetLastInsertID(700)
+			proc.SetLastInsertID(700)
+			want, session := uint64(0), uint64(700)
+			if generated {
+				proc.SetStatementLastInsertIDIfEarlier(1)
+				want, session = 1, 1
+			}
+			require.NoError(t, resper.respStatus(ses, execCtx))
+			require.Len(t, writer.responses, 1)
+			require.Equal(t, want, writer.responses[0].lastInsertId)
+			require.Equal(t, session, ses.GetLastInsertID())
+			// The next statement is seeded from this durable session value.
+			proc.SetLastInsertID(ses.GetLastInsertID())
+			proc.SetStatementLastInsertID(0)
+			require.Equal(t, session, proc.GetLastInsertID())
+		})
+	}
+}
+
+func TestODKUStatusKeepsSessionValueForUpdateFallback(t *testing.T) {
+	ses, proc, writer, resper, execCtx := newODKUInsertStatusHarness(t)
+	ses.SetLastInsertID(500)
+	proc.SetLastInsertID(500)
+	proc.RecordODKUAction(0, 1, true)
+
+	require.NoError(t, resper.respStatus(ses, execCtx))
+	require.Len(t, writer.responses, 1)
+	require.Equal(t, uint64(1), writer.responses[0].lastInsertId)
+	require.Equal(t, uint64(500), ses.GetLastInsertID())
+	require.Equal(t, uint64(500), proc.GetLastInsertID())
+}
+
+func TestODKUStatusNoopReturnsZeroAndKeepsSessionValue(t *testing.T) {
+	ses, proc, writer, resper, execCtx := newODKUInsertStatusHarness(t)
+	ses.SetLastInsertID(500)
+	proc.SetLastInsertID(500)
+	proc.RecordODKUAction(0, 1, false)
+
+	require.NoError(t, resper.respStatus(ses, execCtx))
+	require.Len(t, writer.responses, 1)
+	require.Zero(t, writer.responses[0].lastInsertId)
+	require.Equal(t, uint64(500), ses.GetLastInsertID())
+}
+
+func TestODKUStatusPublishesFirstGeneratedValue(t *testing.T) {
+	ses, proc, writer, resper, execCtx := newODKUInsertStatusHarness(t)
+	ses.SetLastInsertID(500)
+	proc.SetLastInsertID(500)
+	proc.RecordODKUGenerated(2, 3)
+
+	require.NoError(t, resper.respStatus(ses, execCtx))
+	require.Len(t, writer.responses, 1)
+	require.Equal(t, uint64(3), writer.responses[0].lastInsertId)
+	require.Equal(t, uint64(3), ses.GetLastInsertID())
+	// The process is normally discarded or refreshed after status emission;
+	// the session object is the durable value used by the next statement.
+	require.Equal(t, uint64(500), proc.GetLastInsertID())
 }
 
 // TestMultiInsertAmbiguousInsertIDLeavesNoProcessState is the regression for
@@ -135,4 +212,34 @@ func TestMultiInsertNoAutoIncrTargetKeepsPreviousValue(t *testing.T) {
 	require.Zero(t, writer.responses[0].lastInsertId)
 	require.Equal(t, uint64(51), ses.GetLastInsertID())
 	require.Equal(t, uint64(51), proc.GetLastInsertID())
+}
+
+func TestODKUStatusDistinguishesValuesAndSelectFallback(t *testing.T) {
+	for _, values := range []bool{true, false} {
+		for _, generated := range []bool{false, true} {
+			ses, proc, writer, resper, execCtx := newODKUInsertStatusHarness(t)
+			ses.SetLastInsertID(700)
+			proc.SetLastInsertID(700)
+			if !values {
+				execCtx.stmt.(*tree.Insert).Rows.Select = &tree.SelectClause{}
+			}
+			proc.RecordODKUAction(0, 90, true)
+			proc.RecordODKUAction(1, 2, false) // final no-op, not ID magnitude/success ordinal
+			want, session := uint64(2), uint64(700)
+			if !values {
+				want = 0
+			}
+			if generated {
+				// Deliberately non-monotonic IDs distinguish input ordinal from
+				// the legacy smallest-ID reduction and remote delivery order.
+				proc.RecordODKUGenerated(8, 3)
+				proc.RecordODKUGenerated(2, 91)
+				want, session = 91, 91
+			}
+			require.NoError(t, resper.respStatus(ses, execCtx))
+			require.Len(t, writer.responses, 1)
+			require.Equal(t, want, writer.responses[0].lastInsertId)
+			require.Equal(t, session, ses.GetLastInsertID())
+		}
+	}
 }
