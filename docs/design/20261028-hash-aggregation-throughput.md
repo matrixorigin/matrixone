@@ -266,9 +266,10 @@ between the two already-valid physical behaviors: reduction and key projection.
 An internal LocalReductionMem parameter enables this policy and sets its byte
 target; zero preserves existing behavior. It is separate from SpillMem so the
 session threshold, automatic memory participant and hard resource ledger remain
-unchanged. Copy it when duplicating operators and serialize it in pipeline.Group.
-The additive pipeline field defaults to disabled, affects no stored data, and
-needs no mixed-version capability gate (upgrades are shutdown-only).
+unchanged. Copy it when duplicating local operators. It is a local performance
+hint and is deliberately omitted from pipeline.Group serialization: a remotely
+reconstructed Group safely retains full local reduction with the original
+SpillMem. No protocol or stored-data format change is needed for this policy.
 
 After a complete input batch reaches the local target, emit the existing partial
 key batches. If the observed unique count exceeds half the input rows in that
@@ -303,7 +304,8 @@ wait or aggregate owner is introduced.
 Add independent final-set/provenance oracles across reduce -> emit -> reset ->
 bypass -> resample -> EOF, plus cancellation/error, reuse and zero retained
 allocation. Test low/high cardinality, NULL/string/composite keys and phase shifts
-in both directions. Verify compiler selection, clone/serialization and final
+in both directions. Verify compiler selection, local cloning, conservative
+serialization fallback and final
 threshold preservation. Public SQL must exercise tuple/grouped DISTINCT as well
 as both full Q5 orders; inspect plans, exact results, CPU, memory and spill/swap.
 Do not retain adaptive behavior on a repeatable control regression above 5%.
@@ -320,3 +322,9 @@ consumer reads ordinary keys and does not require MergeGroup partial framing.
 Periodic resampling and phase-shift controls are mandatory; permanent bypass is
 rejected. Q1-Q3 retain the reviewed exchange cleanup/wait bounds, with only
 bounded scalar counters and one borrowed header added to Group's owner.
+
+Pre-implementation simplification review: the local byte target changes only
+how much an already-partial Group reduces. Dropping it during remote transport
+preserves all output and completion semantics and avoids spreading a local cost
+policy into the wire contract. Local worker clones keep the hint. Decision:
+PASS; add a round-trip fallback oracle rather than a new protocol field.
