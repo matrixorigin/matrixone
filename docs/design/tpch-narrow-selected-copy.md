@@ -2,70 +2,60 @@
 
 Owning issue: #30845. This is one independently measured execution candidate.
 
-## Contract and scope
+## Contract and owner
 
-Preserve selected-row values bit for bit, order, duplicates, NULL/grouping state,
-provenance, destination prefixes and allocation/error ownership. Change only
-flat, non-NULL four/eight-byte payload copying. Keep the common union owner and
-its metadata admission, allocation, length publication and cleanup authoritative.
-No SQL, public API, format, configuration or retained-lifetime change is involved.
-
-Current scalar loops form byte offsets and bounds checks for every row. The
-candidate uses the existing typed shuffle to express destination bounds once.
-The complete owner, including setup and admission, is the performance boundary.
+Preserve physical values, selection order and duplicates, destination prefixes,
+NULL/grouping/provenance and allocation/error ownership. Change only flat,
+non-NULL four/eight-byte payload stores in `unionT`. The existing owner keeps
+preflight, capacity admission, length publication and metadata authoritative.
+There is no SQL, public API, format, configuration or retained-lifetime change.
 
 ## Implementation
 
-Keep a direct scalar store for exactly one selected row in the existing
-four/eight-byte cases. A single selection is one store and needs no typed views
-or gather loop. For multiple selections, use a dedicated private narrow helper.
-Construct bounded source/destination views there and copy using
-uint32/uint64 representatives; these are physical bit copies for every logical
-type of that width, including floating NaNs and signed zero. Keep the existing
-wide helper untouched instead of extending its width dispatch, which exposed
-wide-control costs in the earlier prototype. Do not introduce per-row dispatch,
-allocation, a new eligibility pre-scan or view locals in the common stack frame.
+Keep the direct scalar store for one selected value. For multiple selections,
+construct one byte window covering the complete destination append range, then
+advance row pointers only inside that window. Copy each source value with the
+existing checked source-byte indexing and uint32/uint64 stores. These stores
+preserve every logical type's bits, including NaNs and signed zero.
 
-Source and target views exist only during the existing call; ownership never
-moves into a cache or registry. Existing preflight remains before destination
-publication. Existing caller cleanup remains responsible after an allocation
-failure; the helper neither allocates nor changes metadata.
+For width W, the checked destination window is
+`v.data[oldLen*W:(oldLen+len(sels))*W]`. Its construction validates both ends,
+including a negative or invalid start. For every loop index
+`0 <= i < len(sels)`, the W-byte store at offset `i*W` stays within that admitted
+window. The pointer and window remain local to the existing call. No allocation,
+borrowed reference, eligibility scan or per-row destination check is introduced.
+Source-index checks remain as in the original scalar loop.
 
-## Alternatives and cost gates
+The zero-selection early return and wide, constant, NULL and varlen paths keep
+their implementations. Growth happens before the window is formed, so valid
+self-appends read the original prefix from the current backing allocation.
 
-Keep current scalar copies if they win complete-owner controls. Extending the
-wide dispatcher changes unaffected wide work, while gathering batches through a
-new generic fast-path preflight adds fallback cost. Both are excluded here.
-Inspect generated common-owner frame/code before expensive measurements. Abort
-this candidate if setup spills into common paths or a proven changed-path
-slowdown cannot be removed within this scope; do not add a framework or tuning
-threshold just to rescue a prototype.
+## Cost correction
 
-## Single-row correction
+The first typed-gather prototype added helper/two-view setup for a single scalar
+store. Keeping the one-row store removed that measured regression. Real joins
+also make many short multi-row calls, where per-call setup can offset payload
+loop savings. Exact-head measurements retained a slower Q9 signal; same-binary
+controls showed substantial process variation, so the entire query shift is not
+assumed to be caused by this mechanism.
 
-The first prototype incurred about two nanoseconds of additional complete-owner
-cost for one row because it called the bulk helper and admitted two typed views
-for one scalar store. An independent longer run reproduced the cost after
-removing dynamic width multiplication. Preserve the zero/one/multiple operation
-distinction instead: the existing early return owns zero, a direct scalar copy
-owns one, and the bounded typed gather owns multiple selections. There is no
-empirically selected batch-size crossover or configurable threshold. Keep these
-stores in the existing width dispatch so they add no common typed-view locals.
+This revision removes the helper and typed-view admission cost for all multi-row
+calls. It hoists a redundant destination check into one span admission and keeps
+the scalar loads/stores. There is no empirically tuned batch-size crossover,
+new abstraction or build-alignment change.
 
 ## Evidence and acceptance
 
-First attribute four/eight-byte selected-copy exposure on clean current main,
-including shuffle versus join callers. Correctness extends existing vector tests
-for both selector widths, bits/types, windows, repeats, self-append, prefixes,
-growth, NULL/grouping and provenance. Reuse unchanged consumer tests; run the
-owning package once on final code. A public SQL semantic change is a defect,
-not a result-file update.
+Reuse the existing selection fixture for both selector widths, logical types,
+bit patterns, windows, repeated/reversed rows, prefixes, growth, NULL/grouping,
+provenance and source independence. Validate the new pointer arithmetic with a
+focused checkptr run, run the final owning package once and retain its real
+BatchSet consumer evidence. Inspect the common-owner frame before benchmarks.
 
-Benchmark complete-owner tiny/empty, constant/NULL, narrow and wide controls.
-Use unchanged local SF10 Q1-Q22 and local SF100 mixed-I/O Q9/Q10/Q19 when SF10
-lacks exposure. Exclude cold runs, profile separately and execute/drain without
-input/schema/row/result/checksum verification. Require attributable target gain;
-block proven PR-caused slowdowns, including indirect ones. Confirm relevant
-signals once; disclose unattributed shifts in unchanged paths as limitations.
-Publish only if scoped acceptance passes, using the repository PR template and
-exact measured pins. The broader issue remains separate from this slice.
+Measure complete owners, including tiny, constant/NULL and wide controls. Use
+unchanged local TPC-H Q1-Q22; exclude cold runs and keep profiles separate. Do
+not verify benchmark inputs, schemas, row counts, results or checksums. Require
+attributable target improvement and reject proven PR-caused slowdowns. Report
+uncertainty and same-binary control variation without calling inconclusive
+results a pass. Publish source/binary pins and resource limits with the PR
+using its template. The broader issue remains separate from this slice.
