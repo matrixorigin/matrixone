@@ -302,7 +302,13 @@ func informationSchemaSubscriptionColumnAuthorizationPredicate() string {
 }
 
 func informationSchemaCurrentColumnsDDL() string {
-	return informationSchemaDerivedColumnsDDL(informationSchemaColumnsWithMediumIntDDL())
+	// Binary-family types have no character set or collation under MySQL
+	// parity (issue #31160): the current view must render NULL there, not the
+	// historical 'binary' literal. Historical layers (V41/V58/V100/V109)
+	// stay byte-stable; only the current definition is adapted.
+	return strings.ReplaceAll(
+		informationSchemaDerivedColumnsDDL(informationSchemaColumnsWithMediumIntDDL()),
+		"WHEN 2 then 'binary'", "WHEN 2 then NULL")
 }
 
 // AdaptLegacyInformationSchemaColumnsDDL changes only the column authority of
@@ -358,7 +364,17 @@ func ViewMetadataColumnsDDL(definition string) (string, bool) {
 }
 
 func IsCurrentInformationSchemaColumnsDDL(definition string) bool {
-	return canonicalColumnsViewName(definition) == InformationSchemaColumnsDDL
+	canonical := canonicalColumnsViewName(definition)
+	if canonical == InformationSchemaColumnsDDL {
+		return true
+	}
+	// Issue #31160 replay compatibility: a CN that shut down with the
+	// pre-fix binary selector and restarts on this version may have replayed
+	// the historical 'binary' branch into the current shape. That definition
+	// is one SELECT away from the current DDL and must converge, not rebuild;
+	// tolerate exactly that selector drift and nothing else.
+	return strings.ReplaceAll(canonical,
+		"WHEN 2 then 'binary'", "WHEN 2 then NULL") == InformationSchemaColumnsDDL
 }
 
 // IsInformationSchemaColumnsMigrationDDL reports whether a persisted COLUMNS
@@ -731,9 +747,16 @@ var (
 		catalog.IndexTableNamePrefix+"%", catalog.NonTemporaryTableSQLPredicate("tbl"), catalog.MO_ACCOUNT_LOCK, catalog.SystemPartitionRel)
 
 	InformationSchemaTablesDDL     = informationSchemaSubscriptionTablesDDL()
-	InformationSchemaTablesV118DDL = strings.ReplaceAll(InformationSchemaTablesDDL,
+	InformationSchemaTablesV118DDL = strings.NewReplacer(
 		"'"+DefaultCollationForCharset("utf8mb4")+"' AS TABLE_COLLATION,",
-		"internal_table_collation(tbl.extra_info) AS TABLE_COLLATION,")
+		"internal_table_collation(tbl.extra_info) AS TABLE_COLLATION,",
+		// A freshly created table has no UPDATE/CHECK time (issue #31163):
+		// do not fabricate one from CREATE_TIME. Views were already NULL.
+		"if(relkind = 'v', NULL, created_time) AS UPDATE_TIME,",
+		"cast(null as timestamp) AS UPDATE_TIME,",
+		"if(relkind = 'v', NULL, created_time) AS CHECK_TIME,",
+		"cast(null as timestamp) AS CHECK_TIME,",
+	).Replace(InformationSchemaTablesDDL)
 
 	InformationSchemaPartitionsDDL = "CREATE VIEW information_schema.`PARTITIONS` AS " +
 		informationSchemaMetadataVisibilityCTE() + "SELECT " +

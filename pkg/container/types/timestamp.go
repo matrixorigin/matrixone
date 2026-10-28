@@ -33,6 +33,7 @@
 package types
 
 import (
+	"context"
 	"fmt"
 	"strconv"
 	"strings"
@@ -127,11 +128,11 @@ var scaleTable = [...]uint32{1000000, 100000, 10000, 1000, 100, 10, 1}
 
 var OneSecInMicroSeconds = uint32(1000000)
 
-func getMsec(msecStr string, scale int32) (uint32, uint32, error) {
+func getMsecWithContext(ctx context.Context, msecStr string, scale int32) (uint32, uint32, error) {
 	// Validate the whole fraction before rounding; discarded digits still
 	// belong to the input grammar (including for a target scale of zero).
 	if scale < 0 || scale > 6 || len(msecStr) == 0 || !isAllDigit(msecStr) {
-		return 0, 0, moerr.NewInvalidArgNoCtx("get ms", msecStr)
+		return 0, 0, moerr.NewInvalidArg(parseErrorContext(ctx), "get ms", msecStr)
 	}
 	msecs := uint32(0)
 	carry := uint32(0)
@@ -142,7 +143,7 @@ func getMsec(msecStr string, scale int32) (uint32, uint32, error) {
 		} else if msecStr[scale] >= '0' && msecStr[scale] <= '4' {
 			msecCarry = 0
 		} else {
-			return 0, 0, moerr.NewInvalidArgNoCtx("get ms", msecStr)
+			return 0, 0, moerr.NewInvalidArg(parseErrorContext(ctx), "get ms", msecStr)
 		}
 		msecStr = msecStr[:scale]
 	} else if len(msecStr) < int(scale) {
@@ -151,7 +152,7 @@ func getMsec(msecStr string, scale int32) (uint32, uint32, error) {
 		padZeros := int(scale) - len(msecStr)
 		m, err := strconv.ParseUint(msecStr, 10, 64)
 		if err != nil {
-			return 0, 0, moerr.NewInvalidArgNoCtx("get ms", msecStr)
+			return 0, 0, moerr.NewInvalidArg(parseErrorContext(ctx), "get ms", msecStr)
 		}
 		for i := 0; i < padZeros; i++ {
 			m *= 10
@@ -168,7 +169,7 @@ func getMsec(msecStr string, scale int32) (uint32, uint32, error) {
 	}
 	m, err := strconv.ParseUint(msecStr, 10, 32)
 	if err != nil {
-		return 0, 0, moerr.NewInvalidArgNoCtx("get ms", msecStr)
+		return 0, 0, moerr.NewInvalidArg(parseErrorContext(ctx), "get ms", msecStr)
 	}
 	msecs = (uint32(m) + msecCarry) * scaleTable[scale]
 	if msecs == OneSecInMicroSeconds {
@@ -184,9 +185,14 @@ func getMsec(msecStr string, scale int32) (uint32, uint32, error) {
 // 2. yyyy-mm-dd hh:mm:ss(.msec)
 // 3. yyyymmddhhmmss(.msec)
 func ParseTimestamp(loc *time.Location, s string, scale int32) (Timestamp, error) {
-	dt, err := ParseDatetime(s, scale)
+	return ParseTimestampWithContext(defaultParseContext, loc, s, scale)
+}
+
+// ParseTimestampWithContext parses with the caller's error reporting context.
+func ParseTimestampWithContext(ctx context.Context, loc *time.Location, s string, scale int32) (Timestamp, error) {
+	dt, err := ParseDatetimeWithContext(ctx, s, scale)
 	if err != nil {
-		return -1, moerr.NewInvalidArgNoCtx("parse timestamp", s)
+		return -1, moerr.NewInvalidArg(parseErrorContext(ctx), "parse timestamp", s)
 	}
 	if dt == ZeroDatetime {
 		return ZeroTimestamp, nil
@@ -197,7 +203,7 @@ func ParseTimestamp(loc *time.Location, s string, scale int32) (Timestamp, error
 	//according to mysql, timestamp function actually return a datetime value
 	/*
 		if result < TimestampMinValue {
-			return -1, moerr.NewInvalidArgNoCtx("parse timestamp", s)
+			return -1, moerr.NewInvalidArg(parseErrorContext(ctx), "parse timestamp", s)
 		}
 	*/
 
