@@ -5555,6 +5555,13 @@ func (v *Vector) preExtendSelectedBatch(
 		selectedAreaBytes = int(length)
 	}
 
+	// Even an append that fits existing capacity must finish COW before its
+	// publication proof is admitted; publication cannot allocate or shrink it.
+	if selectedRows > 0 {
+		if err := v.MaterializeOwned(mp); err != nil {
+			return err
+		}
+	}
 	if w.HasNull() {
 		if err := v.PreExtendNulls(targetRows, mp); err != nil {
 			return err
@@ -6677,6 +6684,19 @@ func (v *Vector) ShuffleWithBuf(sels []int64, mp *mpool.MPool, buf *[]byte) (err
 
 // Copy simply does v[vi] = w[wi]
 func (v *Vector) Copy(w *Vector, vi, wi int64, mp *mpool.MPool) error {
+	// Preserve an aliased source row before COW can release its descriptors.
+	if v.HasBorrowedBacking() && byteSlicesOverlap(v.data, w.data) {
+		preserved, err := w.CloneWindow(int(wi), int(wi)+1, mp)
+		if err != nil {
+			return err
+		}
+		defer preserved.Free(mp)
+		return v.Copy(preserved, vi, 0, mp)
+	}
+	// Area growth must not replace data after we capture a destination header.
+	if err := v.MaterializeOwned(mp); err != nil {
+		return err
+	}
 	disjoint := v.areaDisjoint
 	destinationHasValue := vi >= 0 && vi < int64(v.length) && !v.IsNull(uint64(vi))
 	sourceGrouping := w.GetGrouping().Contains(uint64(wi))
@@ -6787,6 +6807,9 @@ func (v *Vector) Copy(w *Vector, vi, wi int64, mp *mpool.MPool) error {
 func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) error {
 	union := getUnionAllFunction(typ, mp)
 	return func(v, w *Vector) error {
+		if err := v.MaterializeOwned(mp); err != nil {
+			return err
+		}
 		if w.IsConst() {
 			// The raw const append helpers classify their input as ordinary data.
 			// UnionMulti copies a source value instead and therefore preserves its
@@ -8076,6 +8099,8 @@ func (v *Vector) UnionNull(mp *mpool.MPool) error {
 
 // It is simply append. the purpose of retention is ease of use
 func (v *Vector) UnionOne(w *Vector, sel int64, mp *mpool.MPool) error {
+	preserveAreaDisjoint := v.typ.IsVarlen() && !v.IsConst() && v.areaDisjoint &&
+		v.DataBackingKind() == OwnedMPoolUnique && v.AreaBackingKind() == OwnedMPoolUnique
 	// EmptyByFlag includes borrowed Arrow validity. Avoid row lookup only
 	// when the source has no NULL/grouping bits; retain the full append path.
 	sourceGrouping := !w.gsp.EmptyByFlag() && nulls.Contains(&w.gsp, uint64(sel))
@@ -8091,6 +8116,9 @@ func (v *Vector) UnionOne(w *Vector, sel int64, mp *mpool.MPool) error {
 		v.stringSources == nil && w.stringSources == nil && !v.preflightStringSourceReady &&
 		(v.length == 0 || v.stringSource == w.stringSource)
 	if !plainMetadata {
+		if err := v.MaterializeOwned(mp); err != nil {
+			return err
+		}
 		if err := v.PreflightUnionOnePrepareParamKinds(w, sel, mp); err != nil {
 			return err
 		}
@@ -8110,8 +8138,6 @@ func (v *Vector) UnionOne(w *Vector, sel int64, mp *mpool.MPool) error {
 		return err
 	}
 	varlen := v.typ.IsVarlen()
-	preserveAreaDisjoint := varlen && !v.IsConst() && v.areaDisjoint &&
-		v.DataBackingKind() == OwnedMPoolUnique && v.AreaBackingKind() == OwnedMPoolUnique
 	if varlen {
 		// Until the new descriptor and its payload are initialized, failure
 		// must leave the visible range without a disjoint-layout proof.
@@ -8219,6 +8245,9 @@ func appendSelectedGrouping[T int32 | int64](
 func (v *Vector) UnionMulti(w *Vector, sel int64, cnt int, mp *mpool.MPool) error {
 	if cnt == 0 {
 		return nil
+	}
+	if err := v.MaterializeOwned(mp); err != nil {
+		return err
 	}
 	if err := v.preflightPrepareParamKindAppend(
 		v.length+cnt,
@@ -8379,6 +8408,9 @@ func unionT[T int32 | int64](v, w *Vector, sels []T, mp *mpool.MPool) error {
 	preserveDisjointArea := v.typ.IsVarlen() &&
 		v.AreaBackingKind() == OwnedMPoolUnique &&
 		v.VarlenaAreaIsDisjoint()
+	if err := v.MaterializeOwned(mp); err != nil {
+		return err
+	}
 	if err := v.preflightPrepareParamKindAppend(
 		v.length+len(sels),
 		summarizePrepareParamKindSelection(w, sels),
@@ -8649,6 +8681,9 @@ func (v *Vector) unionBatch(
 		}
 		defer preserved.Free(mp)
 		return v.UnionBatch(preserved, 0, cnt, flags, mp)
+	}
+	if err := v.MaterializeOwned(mp); err != nil {
+		return err
 	}
 	oldLen := v.length
 	if !preflighted {
