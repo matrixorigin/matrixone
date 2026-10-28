@@ -24,6 +24,7 @@ import (
 	"github.com/fagongzi/goetty/v2/buf"
 	"github.com/golang/mock/gomock"
 	"github.com/smartystreets/goconvey/convey"
+	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -876,6 +877,36 @@ func TestCommitFailureAdvancesSessionGeneration(t *testing.T) {
 	if got := ses.getDDLVersion(); got != 1 {
 		t.Fatalf("unexpected DDL generation: got %d, want 1", got)
 	}
+}
+
+func TestFinishTxnReconnectErrorRollsBackExplicitTxn(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ctx := defines.AttachAccountId(context.Background(), sysAccountID)
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+	require.NoError(t, ses.SetSessionSysVar(ctx, "mo_rollback_txn_on_error", int64(0)))
+	eng := mock_frontend.NewMockEngine(ctrl)
+	eng.EXPECT().Hints().Return(engine.Hints{CommitOrRollbackTimeout: time.Second}).AnyTimes()
+	ses.txnHandler.storage = eng
+	op := newTestTxnOp()
+	op.meta = txn.TxnMeta{ID: []byte{1, 2, 3, 4}, Status: txn.TxnStatus_Active}
+	op.wp.SetHaveDDL(true)
+	op.wp.stack = []uint64{0}
+	op.wp.stmtId = 1
+	ses.txnHandler.txnOp = op
+	ses.txnHandler.txnCtx = ctx
+	ses.txnHandler.optionBits |= OPTION_BEGIN
+	ec := newTestExecCtx(ctx, ctrl)
+	ec.ses = ses
+	ec.stmt = &tree.Delete{}
+	ec.txnOpt = FeTxnOption{autoCommit: true}
+
+	reconnectErr := moerr.NewRetryForCNRollingRestart()
+	require.Same(t, reconnectErr, finishTxnFunc(ses, reconnectErr, ec))
+	require.Equal(t, 1, op.rollbackCalls)
+	require.Nil(t, ses.txnHandler.txnOp)
+	require.Equal(t, []uint64{0}, op.wp.stack, "whole-txn failure must not select statement-only rollback")
+	require.Equal(t, uint64(1), ses.getDDLVersion())
 }
 
 func TestRollbackDDLAdvancesSessionGeneration(t *testing.T) {

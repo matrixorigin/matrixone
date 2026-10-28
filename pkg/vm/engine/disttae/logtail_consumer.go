@@ -150,7 +150,8 @@ type PushClient struct {
 
 	mu struct {
 		sync.Mutex
-		paused bool
+		paused           bool
+		reconnectHandler func()
 	}
 	// pauseC is the channel used to control whether the receiver is paused.
 	pauseC  chan bool
@@ -161,8 +162,6 @@ type PushClient struct {
 	eng         *Engine
 
 	LogtailRPCClientFactory func(context.Context, string, string, morpc.RPCClient) (morpc.RPCClient, morpc.Stream, error)
-
-	reconnectHandler func()
 }
 
 type delayedCacheApply struct {
@@ -346,7 +345,18 @@ func (c *PushClient) init(
 }
 
 func (c *PushClient) SetReconnectHandler(handler func()) {
-	c.reconnectHandler = handler
+	c.mu.Lock()
+	c.mu.reconnectHandler = handler
+	c.mu.Unlock()
+}
+
+func (c *PushClient) notifyReconnect() {
+	c.mu.Lock()
+	handler := c.mu.reconnectHandler
+	c.mu.Unlock()
+	if handler != nil {
+		handler()
+	}
 }
 
 func (c *PushClient) validLogTailMustApplied(snapshotTS timestamp.Timestamp) {
@@ -1022,9 +1032,7 @@ func (c *PushClient) connect(ctx context.Context, e *Engine) {
 		logutil.Infof("%s %s: client init finished", logTag, c.serviceID)
 
 		// This is only for test.
-		if c.reconnectHandler != nil {
-			c.reconnectHandler()
-		}
+		c.notifyReconnect()
 
 		// clean memory table.
 		err := e.init(ctx)
