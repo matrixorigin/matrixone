@@ -6102,6 +6102,40 @@ func Test_ExecRequestPrepareCommandMissingStmt(t *testing.T) {
 	}
 }
 
+func TestExecRequestStmtCloseSuppressesDeallocateError(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	t.Cleanup(ses.Close)
+	ec := newTestExecCtx(ctx, ctrl)
+	ec.ses = ses
+	stmtID := uint32(123)
+	stmtName := getPrepareStmtName(stmtID)
+	stmt := &PrepareStmt{Name: stmtName}
+	require.NoError(t, ses.SetPrepareStmt(ctx, stmtName, stmt))
+	setRowCount(ses, ses.GetProc(), 7)
+
+	oldBuild := buildPlanWithAuthorization
+	t.Cleanup(func() { buildPlanWithAuthorization = oldBuild })
+	deallocateCalled := false
+	buildPlanWithAuthorization = func(reqCtx context.Context, session FeSession, compiler plan.CompilerContext, statement tree.Statement) (*plan.Plan, error) {
+		if _, ok := statement.(*tree.Deallocate); ok {
+			deallocateCalled = true
+			return nil, errors.New("injected deallocate planning failure")
+		}
+		return oldBuild(reqCtx, session, compiler, statement)
+	}
+
+	data := make([]byte, 4)
+	binary.LittleEndian.PutUint32(data, stmtID)
+	resp, err := ExecRequest(ses, ec, &Request{cmd: COM_STMT_CLOSE, data: data})
+	require.NoError(t, err)
+	require.True(t, deallocateCalled)
+	require.Nil(t, resp)
+	require.Equal(t, int64(7), ses.GetLastAffectedRows())
+	require.Equal(t, int64(7), ses.GetProc().GetAffectedRows())
+}
+
 func Test_ExecRequestStmtExecuteErrorClearsPreparedBinaryState(t *testing.T) {
 	ctx := context.TODO()
 	ctrl := gomock.NewController(t)
