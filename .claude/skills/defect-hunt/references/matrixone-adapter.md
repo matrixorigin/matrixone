@@ -74,9 +74,12 @@ def show(name, sql, db=None, timeout=120):
         # Use an owner-only, per-call file instead of exposing the secret in argv.
         with tempfile.TemporaryDirectory(prefix='mo-probe-auth-') as auth_dir:
             auth_file = Path(auth_dir) / 'client.cnf'
+            # MySQL option files use their own escapes, not JSON's. Preserve
+            # other bytes and quote only backslashes and double quotes.
+            escaped = os.fsencode(password).replace(b'\\', b'\\\\').replace(b'"', b'\\"')
             fd = os.open(auth_file, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-            with os.fdopen(fd, 'w', encoding='utf-8') as config:
-                config.write('[client]\npassword=' + json.dumps(password, ensure_ascii=False) + '\n')
+            with os.fdopen(fd, 'wb') as config:
+                config.write(b'[client]\npassword="' + escaped + b'"\n')
             command = [BASE[0], f'--defaults-file={auth_file}', *BASE[1:]]
             command += (['-D', db] if db is not None else []) + ['-e', sql]
             with (case / 'stdout').open('wb') as out, (case / 'stderr').open('wb') as err:
@@ -96,8 +99,10 @@ database. For stateful cases, create and clean only the schema owned by the
 probe. `status=exited` describes client completion, not whether an assertion
 passed; inspect `rc` and the raw streams. Timeout preserves partial output and
 terminates the local client; it does not establish server cancellation. Inspect
-server work before retrying. Preserve binary/text boundaries in comparisons;
-choose explicit SQL predicates when client rendering is ambiguous.
+server work before retrying. An uncatchable process termination can leave the
+private temporary credential file behind and require manual cleanup. Preserve
+binary/text boundaries in comparisons; choose explicit SQL predicates when
+client rendering is ambiguous.
 
 ## Issue search and policy, when preparing an issue
 
