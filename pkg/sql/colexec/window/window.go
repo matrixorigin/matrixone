@@ -368,8 +368,9 @@ func (window *Window) Call(proc *process.Process) (callResult vm.CallResult, cal
 			// A new materialized input batch starts a new aggregate generation.
 			// Normally the previous generation is released after its last chunk;
 			// this also closes reuse after an interrupted or failed generation.
+			ctr.freeLocalRankIndex()
 			ctr.freeRunningAgg()
-			ctr.freeOrderedSetPartitionResults(proc.Mp())
+			ctr.freeFullPartitionResults(proc.Mp())
 			// The civil-order index describes this generation's row range; the
 			// next generation reuses the accumulated batch's storage vectors,
 			// so an entry kept across generations could answer a cache lookup
@@ -520,6 +521,10 @@ func (ctr *container) processFuncRange(
 	if err != nil {
 		return nil, err
 	}
+	if ctr.localRank != nil && ctr.localRank.end <= outputEnd {
+		// Completed partition state must not compete with the next input copy.
+		ctr.freeLocalRankIndex()
+	}
 	if !vec.HasPrepareParamKind() {
 		vec.SetPrepareParamKind(ctr.prepareParamKind.Get(idx))
 	}
@@ -620,8 +625,12 @@ func (ctr *container) processAggregateFuncRange(
 ) (*vector.Vector, error) {
 	w := ap.WinSpecList[idx].Expr.(*plan.Expr_W).W
 	frame := ctr.frameAt(idx, w.Frame)
-	if orderedSetWindowAggregate(w.Name) && fullPartitionWindowFrame(frame) {
-		return ctr.processOrderedSetFullPartitionRange(
+	wholeFrame := fullPartitionWindowFrame(frame) ||
+		(cumulativeRangeWindowFrame(frame) && len(w.OrderBy) == 0)
+	if wholeFrame && (orderedSetWindowAggregate(w.Name) ||
+		(singleWindowPartition(ctr.ps) && cumulativePartitionUsesRunning(0, ctr.bat.RowCount()) &&
+			aggexec.FullPartitionWindowAggregate(ap.Aggs[idx].GetAggID()))) {
+		return ctr.processFullPartitionRange(
 			idx, ap, proc, outputStart, outputEnd)
 	}
 
@@ -630,6 +639,17 @@ func (ctr *container) processAggregateFuncRange(
 	}
 	defer ctr.freeAggFun()
 
+	if cumulativeRangeWindowFrame(frame) && singleWindowPartition(ctr.ps) && len(ctr.os) > 0 &&
+		cumulativePartitionUsesRunning(0, ctr.bat.RowCount()) &&
+		aggexec.SupportsWindowPrefixSnapshot(ctr.batAggs[idx]) {
+		monotonic, err := ctr.windowPrefixOrderMonotonic(proc)
+		if err != nil {
+			return nil, err
+		}
+		if monotonic {
+			return ctr.processSlidingAggregateFuncRange(idx, ap, proc, outputStart, outputEnd, frame, true)
+		}
+	}
 	if cumulativeRowsFrame(frame, ctr.ps, ctr.bat.RowCount()) &&
 		aggexec.MergePreservesSource(ctr.batAggs[idx]) {
 		return ctr.processCumulativeAggregateFuncRange(idx, ap, proc, outputStart, outputEnd)
@@ -637,7 +657,7 @@ func (ctr *container) processAggregateFuncRange(
 	if (boundedSlidingRowsFrame(frame) || boundedSlidingRangeFrame(frame, ctr.orderVecs)) &&
 		aggexec.MergePreservesSource(ctr.batAggs[idx]) &&
 		aggexec.SupportsWindowSliding(ctr.batAggs[idx]) {
-		return ctr.processSlidingAggregateFuncRange(idx, ap, proc, outputStart, outputEnd, frame)
+		return ctr.processSlidingAggregateFuncRange(idx, ap, proc, outputStart, outputEnd, frame, false)
 	}
 
 	n := ctr.bat.RowCount()
@@ -720,14 +740,41 @@ func fullPartitionWindowFrame(frame *plan.FrameClause) bool {
 		frame.End.Type == plan.FrameBound_FOLLOWING && frame.End.UnBounded
 }
 
-// processOrderedSetFullPartitionRange evaluates one aggregate state per
+func cumulativeRangeWindowFrame(frame *plan.FrameClause) bool {
+	return frame != nil && frame.Type == plan.FrameClause_RANGE && frame.Start != nil && frame.End != nil &&
+		frame.Start.Type == plan.FrameBound_PRECEDING && frame.Start.UnBounded &&
+		frame.End.Type == plan.FrameBound_CURRENT_ROW && !frame.End.UnBounded
+}
+
+func singleWindowPartition(partitions []int64) bool {
+	return len(partitions) == 0 || len(partitions) == 1 && partitions[0] == 0
+}
+
+// A single TIMESTAMP order key may select disjoint civil-time spans at a DST
+// fold. Reuse the existing generation-scoped index to prove monotonicity.
+// Multi-key order and constant vectors do not use the civil-time selector.
+func (ctr *container) windowPrefixOrderMonotonic(proc *process.Process) (bool, error) {
+	order := ctr.orderVecs
+	if len(order) != 1 || len(order[0].Vec) != 1 || order[0].Vec[0] == nil ||
+		order[0].Vec[0].GetType().Oid != types.T_timestamp || order[0].Vec[0].IsConst() {
+		return true, nil
+	}
+	index, err := ctr.timestampCivilOrderIndex(proc, windowSessionLocation(proc), 0,
+		ctr.bat.RowCount(), order[0].Vec[0], ctr.rangeDescending())
+	if err != nil {
+		return false, err
+	}
+	return !index.hasFold, nil
+}
+
+// processFullPartitionRange evaluates one aggregate state per
 // partition and broadcasts its result to the output rows in that partition.
 // The compact result vector is retained across bounded output chunks and is
 // released after the final chunk (or by Reset/Free on early termination). The
 // ordinary frame evaluator allocates one state per output row; for exact
 // percentiles over a full partition that would retain the same ordered values
 // repeatedly and turn a linear input into quadratic resident state.
-func (ctr *container) processOrderedSetFullPartitionRange(
+func (ctr *container) processFullPartitionRange(
 	idx int,
 	ap *Window,
 	proc *process.Process,
@@ -735,17 +782,17 @@ func (ctr *container) processOrderedSetFullPartitionRange(
 	outputEnd int,
 ) (_ *vector.Vector, retErr error) {
 	n := ctr.bat.RowCount()
-	if outputStart != ctr.orderedSetNextRow {
-		ctr.freeOrderedSetPartitionResults(proc.Mp())
-		return nil, moerr.NewInternalErrorNoCtx("ordered-set window output is not sequential")
+	if outputStart != ctr.fullPartitionNextRow {
+		ctr.freeFullPartitionResults(proc.Mp())
+		return nil, moerr.NewInternalErrorNoCtx("full-partition window output is not sequential")
 	}
 	defer func() {
 		if retErr != nil {
-			ctr.freeOrderedSetPartitionResults(proc.Mp())
+			ctr.freeFullPartitionResults(proc.Mp())
 		}
 	}()
 
-	if ctr.orderedSetPartitionResults == nil {
+	if ctr.fullPartitionResults == nil {
 		partitionCount := 1
 		if len(ctr.ps) > 0 {
 			partitionCount = len(ctr.ps)
@@ -778,16 +825,16 @@ func (ctr *container) processOrderedSetFullPartitionRange(
 		if err != nil {
 			return nil, err
 		}
-		ctr.orderedSetPartitionResults, err = aggexec.MergeSplitResult(vecs, proc.Mp())
+		ctr.fullPartitionResults, err = aggexec.MergeSplitResult(vecs, proc.Mp())
 		if err != nil {
 			return nil, err
 		}
-		if ctr.orderedSetPartitionResults.Length() != partitionCount {
-			return nil, moerr.NewInternalErrorNoCtx("ordered-set partition result count mismatch")
+		if ctr.fullPartitionResults.Length() != partitionCount {
+			return nil, moerr.NewInternalErrorNoCtx("full-partition result count mismatch")
 		}
 	}
 
-	result, allocationErr := ctr.allocation.NewVector(*ctr.orderedSetPartitionResults.GetType())
+	result, allocationErr := ctr.allocation.NewVector(*ctr.fullPartitionResults.GetType())
 	if allocationErr != nil {
 		return nil, allocationErr
 	}
@@ -797,31 +844,31 @@ func (ctr *container) processOrderedSetFullPartitionRange(
 		}
 	}()
 	for row := outputStart; row < outputEnd; {
-		group := ctr.orderedSetPartition
+		group := ctr.fullPartition
 		start := 0
 		if len(ctr.ps) > 0 {
 			if group >= len(ctr.ps) {
-				return nil, moerr.NewInternalErrorNoCtx("ordered-set partition cache exhausted")
+				return nil, moerr.NewInternalErrorNoCtx("full-partition cache exhausted")
 			}
 			start = int(ctr.ps[group])
 		}
 		end := partitionEnd(ctr.ps, group, n)
 		if row < start || row >= end {
-			return nil, moerr.NewInternalErrorNoCtx("invalid ordered-set partition cache position")
+			return nil, moerr.NewInternalErrorNoCtx("invalid full-partition cache position")
 		}
 		visibleEnd := min(end, outputEnd)
 		if err := result.UnionMulti(
-			ctr.orderedSetPartitionResults, int64(group), visibleEnd-row, proc.Mp()); err != nil {
+			ctr.fullPartitionResults, int64(group), visibleEnd-row, proc.Mp()); err != nil {
 			return nil, err
 		}
 		row = visibleEnd
 		if row == end {
-			ctr.orderedSetPartition++
+			ctr.fullPartition++
 		}
 	}
-	ctr.orderedSetNextRow = outputEnd
+	ctr.fullPartitionNextRow = outputEnd
 	if outputEnd == n {
-		ctr.freeOrderedSetPartitionResults(proc.Mp())
+		ctr.freeFullPartitionResults(proc.Mp())
 	}
 	return result, nil
 }
@@ -1084,6 +1131,7 @@ func (ctr *container) processSlidingAggregateFuncRange(
 	outputStart int,
 	outputEnd int,
 	frame *plan.FrameClause,
+	prefix bool,
 ) (_ *vector.Vector, retErr error) {
 	if outputStart != ctr.runningNextRow {
 		ctr.freeRunningAgg()
@@ -1100,7 +1148,7 @@ func (ctr *container) processSlidingAggregateFuncRange(
 		if retErr != nil {
 			return nil, retErr
 		}
-		if !aggexec.SupportsWindowSliding(ctr.runningAgg) {
+		if !prefix && !aggexec.SupportsWindowSliding(ctr.runningAgg) {
 			return nil, moerr.NewInternalErrorNoCtx("running aggregate does not support sliding windows")
 		}
 	}
@@ -1158,7 +1206,12 @@ func (ctr *container) processSlidingAggregateFuncRange(
 					return nil, err
 				}
 				edgeWork++
-				if err = aggexec.AddWindowRow(ctr.runningAgg, row, ctr.aggVecs[idx].Vec); err != nil {
+				if prefix {
+					err = ctr.runningAgg.Fill(0, row, ctr.aggVecs[idx].Vec)
+				} else {
+					err = aggexec.AddWindowRow(ctr.runningAgg, row, ctr.aggVecs[idx].Vec)
+				}
+				if err != nil {
 					return nil, err
 				}
 			}
@@ -1171,7 +1224,13 @@ func (ctr *container) processSlidingAggregateFuncRange(
 				}
 			}
 		}
-		if err := ctr.batAggs[idx].Merge(ctr.runningAgg, j-outputStart, 0); err != nil {
+		var err error
+		if prefix {
+			err = aggexec.SnapshotWindowPrefix(ctr.batAggs[idx], ctr.runningAgg, j-outputStart, 0)
+		} else {
+			err = ctr.batAggs[idx].Merge(ctr.runningAgg, j-outputStart, 0)
+		}
+		if err != nil {
 			return nil, err
 		}
 		ctr.runningNextRow = j + 1
@@ -1700,25 +1759,33 @@ func (ctr *container) processValueFuncRange(
 			if width > math.MaxInt64 {
 				width = math.MaxInt64
 			}
-			if localRankValueIsNull(srcVec, j) {
-				if err := vector.AppendAny(localResult, nil, true, proc.Mp()); err != nil {
+			start, end := 0, n
+			if ctr.ps != nil {
+				start, end = buildPartitionInterval(ctr.ps, j, n)
+			}
+			var indexed *localRankIndex
+			if nVec.IsConst() {
+				indexed, err = ctr.rankIndex(proc, srcVec, start, end, j, width, outputEnd)
+				if err != nil {
 					return nil, err
 				}
-				continue
 			}
-			start, _ := 0, n
-			if ctr.ps != nil {
-				start, _ = buildPartitionInterval(ctr.ps, j, n)
+			var count uint64
+			if indexed != nil {
+				count = indexed.advance(j)
 			}
-			frameStart := j - int(width-1)
-			if frameStart < start {
-				frameStart = start
+			isNull := localRankValueIsNull(srcVec, j)
+			if !isNull && indexed == nil {
+				frameStart := j - int(width-1)
+				if frameStart < start {
+					frameStart = start
+				}
+				count, err = countLessInRankRange(proc, srcVec, frameStart, j+1, j)
+				if err != nil {
+					return nil, err
+				}
 			}
-			count, err := countLessInRankRange(proc, srcVec, frameStart, j+1, j)
-			if err != nil {
-				return nil, err
-			}
-			if err := vector.AppendAny(localResult, count+1, false, proc.Mp()); err != nil {
+			if err := ctr.appendLocalRankResult(proc, localResult, count+1, isNull); err != nil {
 				return nil, err
 			}
 		}
@@ -1730,21 +1797,26 @@ func (ctr *container) processValueFuncRange(
 			if err = checkCanceled(proc, j-outputStart); err != nil {
 				return nil, err
 			}
-			if localRankValueIsNull(srcVec, j) {
-				if err := vector.AppendAny(localResult, nil, true, proc.Mp()); err != nil {
-					return nil, err
-				}
-				continue
-			}
-			start, _ := 0, n
+			start, end := 0, n
 			if ctr.ps != nil {
-				start, _ = buildPartitionInterval(ctr.ps, j, n)
+				start, end = buildPartitionInterval(ctr.ps, j, n)
 			}
-			count, err := countLessInRankRange(proc, srcVec, start, j+1, j)
+			indexed, err := ctr.rankIndex(proc, srcVec, start, end, j, 0, outputEnd)
 			if err != nil {
 				return nil, err
 			}
-			if err := vector.AppendAny(localResult, count+1, false, proc.Mp()); err != nil {
+			var count uint64
+			if indexed != nil {
+				count = indexed.advance(j)
+			}
+			isNull := localRankValueIsNull(srcVec, j)
+			if !isNull && indexed == nil {
+				count, err = countLessInRankRange(proc, srcVec, start, j+1, j)
+			}
+			if err != nil {
+				return nil, err
+			}
+			if err := ctr.appendLocalRankResult(proc, localResult, count+1, isNull); err != nil {
 				return nil, err
 			}
 		}

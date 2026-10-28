@@ -1339,6 +1339,9 @@ func (sinker *Sinker) Close() error {
 	var drainErr error
 	if sinker.pipe.enabled && sinker.pipe.result != nil {
 		drainErr = sinker.drainPipeline()
+		// No more jobs will use this context after Close. Release its
+		// registration with the parent even when every job succeeded.
+		sinker.pipe.result.cancel()
 	}
 	sinker.cleanupInMemoryStaged()
 	if sinker.buf.buffers != nil {
@@ -1381,6 +1384,7 @@ func (sinker *Sinker) Reset() {
 	// doesn't inherit stale errors or persisted stats.
 	if sinker.pipe.result != nil {
 		sinker.drainPipeline()
+		sinker.pipe.result.cancel()
 		sinker.pipe.result = nil
 	}
 

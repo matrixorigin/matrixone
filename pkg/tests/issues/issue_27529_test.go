@@ -384,11 +384,9 @@ func TestIssue27529JSONStringsDoNotCompareAsBooleans(t *testing.T) {
 					// their raw JSON partitions separately would silently yield NULL.
 					query := "select (select i.id from " + inner + " where " + pred +
 						" order by i.id limit 1 offset 1) from " + outer
-					err := db.QueryRowContext(ctx, query).Scan(new(sql.NullInt64))
-					var sqlErr *mysqlDriver.MySQLError
-					require.ErrorAs(t, err, &sqlErr)
-					require.Equal(t, uint16(moerr.ErrNYI), sqlErr.Number)
-					require.Contains(t, sqlErr.Message, "correlated LIMIT with non-equality predicates")
+					var got sql.NullInt64
+					require.NoError(t, db.QueryRowContext(ctx, query).Scan(&got))
+					require.Equal(t, sql.NullInt64{Int64: 2, Valid: true}, got)
 				})
 			}
 			for _, tc := range []struct {

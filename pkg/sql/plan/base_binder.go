@@ -63,6 +63,11 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 		return nil, bindErr
 	}
 	defer leaveBinding()
+	defer func() {
+		if err == nil && expr != nil && b.builder != nil && b.builder.integerPrecision != nil {
+			b.builder.integerPrecision.captureSource(b, astExpr, expr)
+		}
+	}()
 	if b.numericParamType != nil && !b.isNumericContextNode(astExpr, depth) {
 		paramType := b.numericParamType
 		b.numericParamType = nil
@@ -4458,6 +4463,16 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 				b.numericParamType = nil
 				b.numericSubqueryTarget = nil
 			}
+			if (name == "+" || name == "*") && b.numericParamType != nil && types.T(b.numericParamType.Id).IsInteger() {
+				if _, marker := unwrapParenExpr(arg).(*tree.ParamExpr); marker {
+					oid := types.T_int64
+					if types.T(b.numericParamType.Id).IsUnsignedInt() {
+						oid = types.T_uint64
+					}
+					wide := makeSimplePlan2Type(oid)
+					b.numericParamType = &wide
+				}
+			}
 			var expr *Expr
 			var err error
 			previousSuppressDefaultValueBindType := b.suppressDefaultValueBindType
@@ -4837,6 +4852,10 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 			return nil, err
 		}
 	}
+	var integerInputs []uint32
+	if b.builder != nil && b.builder.integerPrecision != nil {
+		integerInputs = b.builder.integerPrecision.functionInputs(b.ctx, name, args)
+	}
 	if b.builder != nil {
 		var e *plan.Expr
 		var err error
@@ -4850,6 +4869,9 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 				b.observeExpressionProtocol)
 		}
 		if err == nil {
+			if b.builder != nil && b.builder.integerPrecision != nil {
+				b.builder.integerPrecision.captureFunction(name, integerInputs, e)
+			}
 			if isNullIf {
 				b.rememberPreparedFieldNullIfDomain(e, args)
 			}
@@ -4881,7 +4903,6 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 				if err := b.recordIfNullContract(e, args); err != nil {
 					return nil, err
 				}
-				ensurePreparedNumericMetadata(e).IfnullCommonValue = true
 			}
 			b.markPreparedResultCastsProvisional(
 				b.GetContext(), name, astArgs, preparedPeerSources, e, preparedNumericProvenance)
@@ -4917,7 +4938,6 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 				if err := b.recordIfNullContract(builtinExpr, args); err != nil {
 					return nil, err
 				}
-				ensurePreparedNumericMetadata(builtinExpr).IfnullCommonValue = true
 			}
 			return builtinExpr, nil
 		}
@@ -4953,8 +4973,13 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 	return bindFuncExprImplUdf(b, name, udf, astArgs, args, depth)
 }
 
-func (b *baseBinder) recordIfNullContract(expr *plan.Expr, args []*plan.Expr) error {
+func applyIfNullCommonValueContract(expr *plan.Expr, args []*plan.Expr) {
 	expr.Typ.NotNullable = args[1].Typ.NotNullable || args[2].Typ.NotNullable
+	ensurePreparedNumericMetadata(expr).IfnullCommonValue = true
+}
+
+func (b *baseBinder) recordIfNullContract(expr *plan.Expr, args []*plan.Expr) error {
+	applyIfNullCommonValueContract(expr, args)
 	if b.ctx == nil || !hasSubquery(expr) {
 		return nil
 	}
@@ -8286,10 +8311,53 @@ func bindFuncExprImplByPlanExpr(
 				types.T_varchar, 0, 0, types.CharsetUTF8)}
 		}
 	}
+	// A prepared TIME boundary may already be represented by a decimal cast.
+	// Resolve from its existing TIME provenance, as the ordinary binder does;
+	// that envelope is not a genuine DECIMAL arithmetic domain.
+	if isPreparedTemporalIntegerArithmetic(name) {
+		hasTemporalPeer := false
+		for i, arg := range args {
+			if peer, ok := preparedTemporalNumericPeer(arg); ok && peer.Oid.IsDecimal() {
+				// Copy once before changing a TIME lookup; argsType describes
+				// the unchanged executable operands used later in this binder.
+				if &lookupTypes[0] == &argsType[0] {
+					lookupTypes = append([]types.Type(nil), lookupTypes...)
+				}
+				lookupTypes[i] = types.New(types.T_time, 0, peer.Scale)
+				hasTemporalPeer = true
+			}
+		}
+		if hasTemporalPeer {
+			for i, arg := range args {
+				cast := arg.GetF()
+				if cast == nil || cast.Func == nil || cast.Func.ObjName != "cast" ||
+					isExplicitPreparedCast(arg) || len(cast.Args) == 0 ||
+					!types.T(cast.Args[0].Typ.Id).IsInteger() {
+					continue
+				}
+				// The boundary cast executes the complete integer operand, but
+				// overload lookup must retain that operand's original domain.
+				lookupTypes[i] = makeTypeByPlan2Expr(cast.Args[0])
+			}
+		}
+	}
 	// MOD literal refinement is metadata-only; its existing casts must retain
 	// the integer's full storage domain.
-	if name != "mod" && name != "%" {
+	if name == "+" || name == "-" || name == "*" {
+		// Refinement is copy-on-write: keep argsType and the original lookup
+		// immutable so runtime parameters can restore their declared domains.
+		originalLookup := lookupTypes
 		lookupTypes = refineDecimalArithmeticLiteralLookupTypes(name, args, lookupTypes)
+		if original := originalBoundExpr.GetF(); original != nil && original.Func != nil &&
+			strings.EqualFold(original.Func.ObjName, name) && len(original.Args) == len(args) {
+			// EXECUTE values keep their declared domains; a materialized marker
+			// is not a weak SQL literal even when it has no retained ParamRef.
+			for i, original := range original.Args {
+				if lookupTypes[i] != originalLookup[i] && (isExplicitPreparedCast(original) || len(preparedNumericValueParamPositions(original)) > 0) {
+					lookupTypes[i] = originalLookup[i]
+				}
+			}
+		}
 	}
 	var fGet function.FuncGetResult
 	if stringDomainModes == nil {
@@ -8493,7 +8561,7 @@ func bindFuncExprImplByPlanExpr(
 		}
 	}
 
-	refineDecimalRoundingReturnType(name, args, argsType, &returnType)
+	refineDecimalRoundingReturnType(name, args, argsType, &returnType, function.LegacyDecimalIntermediatePrecision(ctx))
 
 	// Geometry constructors with an explicit SRID argument record the SRID in
 	// the result type's Width (geometry cells store bare WKB, so SRID lives in
@@ -9302,12 +9370,24 @@ func sameFunctionArgumentTypes(left, right []types.Type) bool {
 // refineDecimalRoundingReturnType applies the exact-numeric metadata rules
 // which depend on a constant digits argument and therefore cannot be expressed
 // by an overload's type-only return callback.
-func refineDecimalRoundingReturnType(name string, args []*plan.Expr, argsType []types.Type, returnType *types.Type) {
+func refineDecimalRoundingReturnType(name string, args []*plan.Expr, argsType []types.Type, returnType *types.Type, legacyPrecision bool) {
 	if len(argsType) == 0 || !argsType[0].IsDecimal() {
 		return
 	}
 	input := argsType[0]
 	integerDigits := input.Width - input.Scale
+	if !legacyPrecision && len(args) == 2 && args[1].GetLit() == nil {
+		switch name {
+		case "round":
+			// Nearest rounding can grow the coefficient by one digit.
+			returnType.Width = min(input.Width+1, maxDecimalPrecisionForRounding(input.Oid))
+		case "ceil", "ceiling", "floor":
+			// Directed rounding can reach any supported position. Until the
+			// runtime constant is known, retain the full family bound and scale.
+			returnType.Width = maxDecimalPrecisionForRounding(input.Oid)
+		}
+		return
+	}
 
 	switch name {
 	case "ceil", "ceiling", "floor":
@@ -9337,6 +9417,13 @@ func refineDecimalRoundingReturnType(name string, args []*plan.Expr, argsType []
 			resultScale = int32(digits)
 		}
 		precision := integerDigits + resultScale + 1 // reserve a carry digit
+		if digits < 0 && !legacyPrecision {
+			// CEIL(1, -35) is 10^35 regardless of the input precision.
+			// Bound the position before negating, including INT64_MIN. The
+			// existing execution guards still reject unsupported positions.
+			position := max(digits, -int64(maxDecimalPrecisionForRounding(input.Oid)))
+			precision = max(precision, 1-int32(position))
+		}
 		if precision < 1 {
 			precision = 1
 		}
@@ -9364,10 +9451,13 @@ func refineDecimalRoundingReturnType(name string, args []*plan.Expr, argsType []
 			return
 		}
 
-		// Preserve the established conservative width for negative D. MySQL
-		// exposes inconsistent metadata for that case between CTAS and views;
-		// the compatibility contract here is the unambiguous nonnegative case.
+		// Keep the conservative negative-D envelope, but reserve an integer
+		// carry for ROUND: e.g. a precision-30 product can round to 10^30.
+		// TRUNCATE cannot carry. Retain the existing decimal family and cap.
 		if digits < 0 {
+			if name == "round" && !legacyPrecision {
+				returnType.Width = max(input.Width, min(integerDigits+1, maxDecimalPrecisionForRounding(input.Oid)))
+			}
 			returnType.Scale = 0
 			return
 		}
@@ -11141,7 +11231,15 @@ func refineDecimalArithmeticLiteralLookupTypes(name string, args []*Expr, inputs
 			if isExplicitPreparedCast(current) {
 				break
 			}
-			if lit = current.GetLit(); lit != nil {
+			if value := current.GetLit(); value != nil {
+				// A folded runtime value keeps its source domain. Follow the
+				// source before deciding it is a direct numeric literal;
+				// parameters and explicit casts are not weak literals.
+				if value.Src != nil {
+					current = value.Src
+					continue
+				}
+				lit = value
 				literalExpr = current
 				break
 			}
@@ -11154,13 +11252,9 @@ func refineDecimalArithmeticLiteralLookupTypes(name string, args []*Expr, inputs
 		if lit == nil || lit.Isnull {
 			continue
 		}
-		// Integer literal precision matters for multiplication and MOD because the
-		// declared integer type's full domain can otherwise make a small factor
-		// spuriously widen the result. MOD uses this bound only for metadata.
-		// Addition and subtraction already derive
-		// their safe result precision from the integer domain; retaining their
-		// established Decimal128 coercion also avoids changing outer-join decimal
-		// expression execution paths.
+		// Multiplication and MOD use the exact bound of a direct integer literal.
+		// Addition/subtraction retain the established integer-domain coercion.
+		// Columns and syntax-explicit casts retain their declared domains.
 		if (name == "*" || name == "mod" || name == "%") && hasDecimalInput && inputs[i].IsIntOrUint() {
 			width, exact := decimalIntegerWidth(literalExpr, inputs[i])
 			if !exact || width <= 0 {

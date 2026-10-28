@@ -544,6 +544,13 @@ func (r *TableMetaReader) collectDataOfAObjsAndInMem(
 	return log, nil
 }
 
+func inMemTombstonePKVector(entry *logtailreplay.RowEntry) *vector.Vector {
+	if len(entry.Batch.Vecs) == 1 {
+		return entry.Batch.Vecs[0]
+	}
+	return entry.Batch.Vecs[2]
+}
+
 func (r *TableMetaReader) collectTombstoneOfAObjsAndInMem(
 	ctx context.Context,
 	mp *mpool.MPool,
@@ -591,7 +598,7 @@ func (r *TableMetaReader) collectTombstoneOfAObjsAndInMem(
 		}
 	}()
 
-	appendTombstoneRow := func(rowidVec, pkVec *vector.Vector, offset int64) error {
+	appendTombstoneRow := func(rowid types.Rowid, pkVec *vector.Vector, offset int64) error {
 		if rowsBatch == nil {
 			rowsBatch = batch.New(attrs)
 			rowsBatch.Attrs = attrs
@@ -599,7 +606,7 @@ func (r *TableMetaReader) collectTombstoneOfAObjsAndInMem(
 				rowsBatch.Vecs[i] = vector.NewVec(colTypes[i])
 			}
 		}
-		if err = rowsBatch.Vecs[0].UnionOne(rowidVec, offset, mp); err != nil {
+		if err = vector.AppendFixed(rowsBatch.Vecs[0], rowid, false, mp); err != nil {
 			return err
 		}
 		return rowsBatch.Vecs[1].UnionOne(pkVec, offset, mp)
@@ -622,7 +629,8 @@ func (r *TableMetaReader) collectTombstoneOfAObjsAndInMem(
 				return
 			}
 			for i := 0; i < entry.bat.RowCount(); i++ {
-				if appendErr = appendTombstoneRow(entry.bat.Vecs[0], entry.bat.Vecs[1], int64(i)); appendErr != nil {
+				rowid := vector.GetFixedAtNoTypeCheck[types.Rowid](entry.bat.Vecs[0], i)
+				if appendErr = appendTombstoneRow(rowid, entry.bat.Vecs[1], int64(i)); appendErr != nil {
 					return
 				}
 			}
@@ -635,9 +643,8 @@ func (r *TableMetaReader) collectTombstoneOfAObjsAndInMem(
 	for iter.Next() {
 		entry := iter.Entry()
 
-		// tombstones in the mem rows: del_row_id, commit_ts, pk, row_id.
-		// expected: del_row_id and pk.
-		if err = appendTombstoneRow(entry.Batch.Vecs[0], entry.Batch.Vecs[2], entry.Offset); err != nil {
+		// RowEntry owns the tombstone RowID; replay retains only its PK vector.
+		if err = appendTombstoneRow(entry.RowID, inMemTombstonePKVector(entry), entry.Offset); err != nil {
 			return zap.Skip(), err
 		}
 	}

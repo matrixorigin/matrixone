@@ -492,7 +492,7 @@ func (s *service) waitForViewMetadataAdmissionHandoff(publishIngress bool, minim
 	if timeout <= 0 {
 		timeout = 30 * time.Second
 	}
-	discoveryCtx, cancel := context.WithTimeout(context.Background(), timeout)
+	discoveryCtx, cancel := context.WithTimeout(s.startContext(), timeout)
 	defer cancel()
 
 	operationCtx := discoveryCtx
@@ -673,6 +673,9 @@ func (s *service) waitForViewMetadataAdmissionHandoff(publishIngress bool, minim
 		}
 		select {
 		case <-discoveryDone:
+			if discoveryCtx.Err() == context.Canceled {
+				return discoveryCtx.Err()
+			}
 			return moerr.NewInternalErrorf(
 				context.Background(),
 				"CN %s was not admitted before startup deadline: %v",

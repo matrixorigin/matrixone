@@ -36,6 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/insert"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/multi_update"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsert"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
 	"github.com/matrixorigin/matrixone/pkg/sql/models"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
@@ -121,6 +122,7 @@ func (s *Scope) remoteRun(c *Compile) (sender *messageSenderOnClient, err error)
 		return nil, err
 	}
 	sender.proc = s.Proc
+	sender.odkuGeneration = s.Proc.ODKUResultGeneration()
 	// Capture the execution-attempt sink, rather than looking it up from proc
 	// when the terminal message arrives. Retry/reuse can replace proc.WarningSink
 	// before an old RPC callback is delivered; a closed captured sink then drops
@@ -296,17 +298,53 @@ func prepareRemoteRunSendingDataWithProtocol(
 		return nil, false, nil, false, err
 	}
 
+	// Only producers (including forwarded producer subtrees) need an ordinal
+	// range. Ordinary nested remote reads must not consume a receiver's bounded
+	// range and prevent the next sibling pipeline from being sent.
+	var odkuOrdinalBase uint64
+	if remoteScopeProducesODKUOrdinals(encodedScope) {
+		odkuOrdinalBase, err = proc.NextODKURemoteOrdinalBase()
+		if err != nil {
+			return nil, false, nil, false, err
+		}
+	}
+
 	// Encode the Process related information.
 	if processData, err = encodeProcessInfo(
 		s.Proc,
 		sqlStr,
 		remoteFragmentCounts,
 		remoteExecutionID,
+		odkuOrdinalBase,
 	); err != nil {
 		return nil, false, nil, false, err
 	}
 
 	return scopeData, withoutOutput, processData, folded, nil
+}
+
+// PRE_INSERT owns ordinal generation; DEDUP_JOIN only consumes provenance.
+// Inspect all operator children and scope descendants, not just the remote root.
+func remoteScopeProducesODKUOrdinals(scope *Scope) bool {
+	if scope == nil {
+		return false
+	}
+	produces := false
+	_ = vm.HandleAllOp(scope.RootOp, func(_ vm.Operator, op vm.Operator) error {
+		if pre, ok := op.(*preinsert.PreInsert); ok && pre.TrackODKUResult {
+			produces = true
+		}
+		return nil
+	})
+	if produces {
+		return true
+	}
+	for _, child := range scope.PreScopes {
+		if remoteScopeProducesODKUOrdinals(child) {
+			return true
+		}
+	}
+	return false
 }
 
 func receiveMessageFromCnServer(s *Scope, withoutOutput bool, sender *messageSenderOnClient) error {
@@ -613,8 +651,9 @@ type messageSenderOnClient struct {
 	mp *mpool.MPool
 
 	// anal was used to merge remote-run's cost analysis information.
-	anal *AnalyzeModule
-	proc *process.Process
+	anal           *AnalyzeModule
+	proc           *process.Process
+	odkuGeneration uint64
 
 	// warningSink is the captured diagnostic destination on the initiating
 	// process for this execution attempt. Remote terminal warnings are applied
@@ -859,7 +898,7 @@ func (sender *messageSenderOnClient) markTerminal(message *pipeline.Message, suc
 // Execution failures keep their identity even when auxiliary terminal data is
 // malformed. Invalid data cannot authorize backend reuse during later cleanup.
 func (sender *messageSenderOnClient) finishRemoteTerminal(message *pipeline.Message) error {
-	analysisErr := sender.dealRemoteTerminal(message.GetAnalyse())
+	analysisErr := sender.dealRemoteTerminalWithResult(message.GetAnalyse(), len(message.GetErr()) == 0 && (sender.ctx == nil || sender.ctx.Err() == nil || context.Cause(sender.ctx) == process.ErrPipelineStopped))
 	var remoteErr error
 	valid := analysisErr == nil
 	if data := message.GetErr(); len(data) > 0 {
@@ -1140,6 +1179,10 @@ func (sender *messageSenderOnClient) dealRemoteAnalysis(p models.PhyPlan) {
 }
 
 func (sender *messageSenderOnClient) dealRemoteTerminal(data []byte) error {
+	return sender.dealRemoteTerminalWithResult(data, true)
+}
+
+func (sender *messageSenderOnClient) dealRemoteTerminalWithResult(data []byte, publishODKU bool) error {
 	sender.terminalMu.Lock()
 	defer sender.terminalMu.Unlock()
 	if sender.terminalSeen {
@@ -1156,6 +1199,19 @@ func (sender *messageSenderOnClient) dealRemoteTerminal(data []byte) error {
 	}
 	if sender.proc != nil && envelope.StatementLastInsertID != 0 {
 		sender.proc.SetStatementLastInsertIDIfEarlier(envelope.StatementLastInsertID)
+	}
+	if publishODKU && sender.proc != nil && envelope.ODKUResult != nil {
+		sender.proc.MergeODKUResultSummaryAtGeneration(process.ODKUResultSummary{
+			HasGenerated:          envelope.ODKUResult.HasGenerated,
+			FirstGeneratedOrdinal: envelope.ODKUResult.FirstGeneratedOrdinal,
+			FirstGeneratedID:      envelope.ODKUResult.FirstGeneratedID,
+			HasAction:             envelope.ODKUResult.HasAction,
+			LastActionOrdinal:     envelope.ODKUResult.LastActionOrdinal,
+			LastActionID:          envelope.ODKUResult.LastActionID,
+			HasSuccessfulAction:   envelope.ODKUResult.HasSuccessfulAction,
+			LastSuccessfulOrdinal: envelope.ODKUResult.LastSuccessfulOrdinal,
+			LastSuccessfulID:      envelope.ODKUResult.LastSuccessfulID,
+		}, sender.odkuGeneration)
 	}
 	if len(envelope.LocalScope) > 0 {
 		sender.dealRemoteAnalysis(envelope.PhyPlan)
