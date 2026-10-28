@@ -61,7 +61,8 @@ func boundMigrationMemoSnapshot(budget *tableDumpBindingBudget) []string {
 }
 
 func TestProjectedBoundExpressionCumulativeBudget(t *testing.T) {
-	compiler, source := legacyFloatScopeTable(t, "create table t(a double,g varchar(200) default(concat(a,from_unixtime(0))),h varchar(200) default(concat(a,from_unixtime(0))))", 4)
+	creationZone := time.FixedZone("creation", 8*3600)
+	compiler, source := legacyFloatScopeTable(t, "create table t(a double,g varchar(200) default(concat(a,from_unixtime(0))),h varchar(200) default(concat(a,from_unixtime(0))))", 4, creationZone)
 	before, err := proto.Marshal(source)
 	require.NoError(t, err)
 	// Every run starts with a fresh proof owner, memo and session-hint list.
@@ -71,7 +72,19 @@ func TestProjectedBoundExpressionCumulativeBudget(t *testing.T) {
 		proof := newTableDumpProofProcess(compiler)
 		defer proof.Free()
 		proofCtx := tableDumpBindContext{CompilerContext: compiler, ctx: compiler.GetContext(), proc: proof}
-		budget := &tableDumpBindingBudget{visits: initial}
+		budget := &tableDumpBindingBudget{
+			visits: initial,
+			// Search fairness depends on remaining headroom. Keep this budget
+			// boundary fixture independent of Local and the host's named zones,
+			// while retaining a rejected zone and a real session witness.
+			probeTimeZones: func(yield func(*time.Location) bool) {
+				for _, zone := range []*time.Location{time.UTC, creationZone} {
+					if !yield(zone) {
+						return
+					}
+				}
+			},
+		}
 		var events []string
 		traced := boundMigrationTraceContext{CompilerContext: proofCtx, proc: proof, budget: budget, initial: initial, events: &events}
 		var results []*planpb.Expr
@@ -117,6 +130,8 @@ func TestProjectedBoundExpressionCumulativeBudget(t *testing.T) {
 		return results, costs
 	}
 	expected, costs := run(0, false)
+	require.Positive(t, costs[0].entries, "the fixture must exercise the real session memo")
+	require.Positive(t, costs[0].hints, "the second expression must reuse a session witness")
 	require.Greater(t, costs[1].visits, costs[0].visits, "expressions accumulate instead of resetting the budget")
 	for i, e := range expected {
 		wire, err := proto.Marshal(e)
