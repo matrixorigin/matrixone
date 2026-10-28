@@ -1544,7 +1544,7 @@ func TestFoldRemoteJSONVariablePreservesTypeAndBinding(t *testing.T) {
 		{"string", `"true"`, `"true"`},
 		{"boolean", `true`, `true`},
 		{"number", `12.34`, `12.34`},
-		{"nested_float", `{"a":[1.0,18446744073709551615]}`, `{"a": [1, 18446744073709551615]}`},
+		{"nested_float", `{"a":[1.0,18446744073709551615]}`, `{"a": [1.0, 18446744073709551615]}`},
 		{"json_null", `null`, `null`},
 		{"sql_null", nil, ""},
 		{"rebound_object", `{"a":2}`, `{"a": 2}`},
