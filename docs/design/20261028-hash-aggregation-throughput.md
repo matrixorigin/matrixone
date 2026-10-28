@@ -240,5 +240,16 @@ depends on clustered order or repeats a control regression above 5%. Extend
 existing compile placement tests and test partial output -> reset -> resume/EOF,
 cross-flush duplicates/provenance, cancellation and final allocation release.
 
-Revision 3 design review is pending; production implementation of this
-experiment must follow a distinct review phase.
+Revision 3 design self-review of `8dfd23aaab`: PASS for the experiment, before
+implementation. This is not independent approval or performance acceptance.
+The experiment reuses an existing intermediate-output contract; it does not
+declare a locally reduced stream globally unique. The placement helper must
+also retain the parent coordinator-projection guard. A repeated order/control
+regression rejects the working-set cap even if Q5 alone meets the target.
+
+| Audit | Owner and terminal edge | Result |
+| --- | --- | --- |
+| Q1 partial batch | Group retains it until next Call; shuffle copies through BatchSet.Union or acknowledges a direct handoff before advancing the producer; reset/free releases it | Existing ownership is sufficient |
+| Q1 reset/retry | EvalReset frees hash/key/expression state; capacity retry keeps the same input offset; pipeline error invokes Group.Free | No new destruction owner |
+| Q2 exchange | Ready capacity waits release on consumer drain, pool ending, or context cancellation; failed reset aborts and joins producer before child cleanup | No new wait edge |
+| Q3 retention | Local byte target plus one admitted batch; existing query/CN ledger and bounded shuffle ready/recycle capacity remain authoritative | No unbounded new accumulation |
