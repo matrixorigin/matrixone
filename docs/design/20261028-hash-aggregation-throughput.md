@@ -328,3 +328,20 @@ how much an already-partial Group reduces. Dropping it during remote transport
 preserves all output and completion semantics and avoids spreading a local cost
 policy into the wire contract. Local worker clones keep the hint. Decision:
 PASS; add a round-trip fallback oracle rather than a new protocol field.
+
+Implementation review refinement: the local working-set target must measure
+hash-table bytes, not total operator memory. A single wide string key can exceed
+a total-byte target while the probe table is tiny; flushing that well-reducing
+table repeatedly would be a width-dependent regression. Keep whole-operator
+capacity under the existing spill/admission controller, and trigger adaptive
+partial output when Hash.Size reaches the local target. This narrows the cost
+policy to the measured probe working set. Compare 512 KiB against the initial
+2 MiB target, including NULL/string controls. Add a wide, low-cardinality case
+whose payload exceeds the target but whose hash table does not. Design
+self-review: PASS before this refinement; ownership and state transitions are
+unchanged.
+
+Implementation review also requires preserving ExecYield with a nil batch and
+normalizing non-empty ExecStop to ExecNext, matching the existing Group input
+contract. Cancellation and genuine nil-batch EOF remain distinct. A scripted
+child now tests yield -> resume with non-empty stop -> EOF -> repeated EOF.
