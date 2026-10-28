@@ -1,0 +1,14 @@
+set save_query_result = on;
+show count(*) warnings;
+➤ @@session.warning_count[-5,0,0]  𝄀
+0
+show count(*) errors;
+➤ @@session.error_count[-5,0,0]  𝄀
+0
+select uncompress(x'00000000') is null as corrupt_input_is_null;
+➤ corrupt_input_is_null[-6,8,0]  𝄀
+1
+show count(*) warnings;
+➤ @@session.warning_count[-5,0,0]  𝄀
+1
+set save_query_result = off;
