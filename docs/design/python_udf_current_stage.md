@@ -2,10 +2,10 @@
 
 | Field | Value |
 | --- | --- |
-| Design revision | `python-udf-current-stage-r35-2026-10-28` |
+| Design revision | `python-udf-current-stage-r36-2026-10-28` |
 | Applies to | MatrixOne PR #29152, test/development-stage Python UDF |
-| Upstream repair baseline | `66c9e7624e3374897acc649195fde5b2836343a5` (unrelated existing MORPC gates through 134 and catalog handlers through 4.0.17 preserved) |
-| Approval | Feature owner approved the r1 current-stage contract on 2026-09-24 in [PR comment](https://github.com/matrixorigin/matrixone/pull/29152#issuecomment-5809313638). The r35 contract preserves upstream historical upgrade identities through 4.0.17, adds a separate Python revision repair in catalog 4.0.18, and follows full-cluster shutdown upgrade, with no Python/shared-routine MORPC capability gate. Independent Architecture and SQL/Planner approval of this revision is pending; no production or security scope is added. The immutable approval artifact and independent-review status remain recorded in the [design approval record](python_udf_current_stage_approval.md). |
+| Upstream repair baseline | `23488e1eb2c50f4d3638dee1d50715bbc1eb1f67` (unrelated existing MORPC gates through 134 and the frozen consolidated 4.0.7 catalog preserved) |
+| Approval | Feature owner approved the r1 current-stage contract on 2026-09-24 in [PR comment](https://github.com/matrixorigin/matrixone/pull/29152#issuecomment-5809313638). The r36 contract preserves the official consolidated and frozen 4.0.7 catalog, follows it with the separate shared-routine repair in 4.0.18, and follows full-cluster shutdown upgrade, with no Python/shared-routine MORPC capability gate. Independent Architecture and SQL/Planner approval of this revision is pending; no production or security scope is added. The immutable approval artifact and independent-review status remain recorded in the [design approval record](python_udf_current_stage_approval.md). |
 | Not covered | Production tenant isolation, sandbox, Operator rollout, or cross-version rollback/restore |
 
 This is the versioned governing proposal for the current PR stage. The owner
@@ -98,20 +98,31 @@ never silently repaired or synthesized. The SQL UDF language, body, security,
 and evaluation semantics remain owned by the existing SQL path. The Python
 demo's old execution behavior is not a compatibility promise.
 
-Historical upgrade `4.0.7` retains its released zero entry offset and
-protocol-61 provenance requirement. The nine idempotent shared-function schema
-entries are held in a separate helper list; only registered repair `4.0.18`
-(minimum direct source `4.0.17`) replays them. They do not execute through the
-historical 4.0.7 handler. Upstream 4.0.8 through 4.0.17 upgrade identities,
-including statistics, COLUMNS, database defaults/table collation, COLLATIONS
-and MEDIUMINT refreshes, remain unchanged. The upstream VIEWS maintenance
-retains its independent protocol-126 admission and released handler offsets.
-Thus a tenant already at upstream final `4.0.17`, including one lacking revision
-tables, still
-receives the repair; earlier tenants traverse the normal chain first. Missing,
-partial and complete schemas converge through idempotent checks. Repair metadata
-does not require a feature protocol version; the handler repairs persisted
-schema directly on both scheduled upgrade and first-login compensation.
+The official consolidated `4.0.7` handler, entry list and offset are frozen.
+The nine idempotent shared-function schema entries belong exclusively to the
+registered `4.0.18` repair, whose minimum direct source is `4.0.7`. Released
+sources below that version finish the official upgrade route, including the
+bounded `4.0.7` cluster and tenant stages, before the routine repair. A tenant
+already at the exact official `4.0.7` identity receives `4.0.18` directly.
+Unpublished intermediate `4.0.8` through `4.0.17` handlers are not restored.
+The consolidated route rejects those sources unless an explicit handler is
+registered. Cluster admission, pending-route recovery, login/manual reads and
+their locked rereads, and scheduled tenant batches reject them before catalog
+mutation or completion caching. They cannot skip the consolidated migration
+merely because they satisfy the repair's minimum version.
+
+Appending the repair does not bypass the predecessor's safeguards: reject a
+ready `4.0.7` with a different offset and any `4.0.7` self-upgrade route before
+catalog mutation. The existing legacy CDC preflight follows an unfinished
+`4.0.7` step, including recovery/recheck of a route targeting `4.0.18`; an
+already-completed `4.0.7` repair-only route does not reclassify current CDC tasks
+as legacy. Snapshot decisions and paged cluster work retain their original
+step owner. Login and manual compensation continue from committed `4.0.7`
+paging through the routine repair before caching completion; a failed repair
+remains retryable and never marks the tenant checked.
+
+Missing, partial and complete routine schemas converge through the existing
+idempotent checks. Repair metadata does not require a feature protocol version.
 `Prepare` only selects `mo_catalog` and performs no DDL. Python DDL probes the
 required tenant schema and refuses execution until it is present. Cached/prepared
 plans still validate exact catalog identity and namespace; physical evaluators
@@ -144,6 +155,16 @@ require a current-contract binary to execute. The current evidence does not
 include a tested downgrade after Python definitions have been written.
 Historical skipped upgrade lanes are not claimed as passing evidence; persisted
 legacy catalog and same-contract restore behavior retain their explicit tests.
+
+Historical routine restore first inspects `sql_mode` in the source account at
+the selected snapshot, before dropping or replacing target rows. Only a proved
+missing column uses the released `PIPES_AS_CONCAT` default; metadata errors fail
+before mutation. Stored procedures retain the official current-schema path.
+For UDFs, complete descriptor/heads are preserved when present, revision-only
+snapshots retain their heads, and older snapshots get explicit zero/empty
+identity fields. Immutable revision rows retain the existing language-specific
+validation. This projection does not claim arbitrary historical SQL parser
+semantics are preserved across released versions.
 
 Current-contract snapshot restore preserves the selected revision and
 republishes its artifact into the destination account's namespace. The SQL
@@ -295,7 +316,7 @@ test/development correctness and backpressure, not hostile-code containment.
 
 | Contract | Evidence on the reviewed branch/head | Status |
 | --- | --- | --- |
-| Shared revision schema and shutdown-upgrade behavior | `pkg/bootstrap/versions/v4_0_18/upgrade_test.go`; `pkg/frontend/python_udf_catalog_test.go`; prepared, evaluator and remote payload regression tests | Schema-based historical SQL compatibility, malformed-head rejection, normal revision publication, evaluator execution without protocol state, and no routine-only destination probes. Real first-login repair retains six source versions 4.0.12–4.0.17, legacy SQL results and idempotent replay. External ABI/Flight negotiation remains independently tested; old per-feature rollback assertions are superseded. |
+| Shared revision schema and shutdown-upgrade behavior | `pkg/bootstrap/versions/v4_0_18/upgrade_test.go`; `pkg/frontend/python_udf_catalog_test.go`; prepared, evaluator and remote payload regression tests | Schema-based historical SQL compatibility, malformed-head rejection, normal revision publication, evaluator execution without protocol state, and no routine-only destination probes. Real first-login repair models released 4.0.6 and frozen 4.0.7 sources, preserves legacy SQL results, and verifies idempotent replay. External ABI/Flight negotiation remains independently tested; old per-feature rollback assertions are superseded. |
 | Exact FunctionRef and overload invalidation | `pkg/frontend/routine_plan_validation_test.go`; `pkg/frontend/routine_namespace_test.go`; `test/distributed/cases/udf_python/overload_namespace.sql` | Unit and SQL prepared-plan cases present. |
 | SQL expression placement and result semantics | `pkg/sql/colexec/external_routine_eval.go`; `test/distributed/cases/udf_python/relational_positions.sql`, `dml_positions.sql`, `vector_mode.sql` | Physical evaluator and ordinary BVT cases present. |
 | Current-contract restore | `pkg/frontend/clone_database_source.go`; `pkg/frontend/snapshot_catalog_restore.go`; `snapshot_restore.sql` | Same-contract account restore case present; cross-version restore not verified. |

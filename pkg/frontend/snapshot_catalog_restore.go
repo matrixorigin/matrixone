@@ -306,8 +306,14 @@ const storedProcedureCatalogColumns = `proc_id, name, creator, args, lang, body,
 const legacyRoutineSQLMode = "PIPES_AS_CONCAT"
 
 func isCurrentSchemaRoutineCatalog(tblInfo *tableInfo) bool {
-	return tblInfo != nil && tblInfo.dbName == moCatalog &&
-		(tblInfo.tblName == "mo_user_defined_function" || tblInfo.tblName == "mo_stored_procedure")
+	return isCurrentSchemaUserDefinedFunctionCatalog(tblInfo) ||
+		(tblInfo != nil && tblInfo.dbName == moCatalog && tblInfo.tblName == "mo_stored_procedure")
+}
+
+// UDF projections additionally need the historical definition to distinguish
+// revision heads/descriptors. Procedures only need the source sql_mode probe.
+func isCurrentSchemaUserDefinedFunctionCatalog(tblInfo *tableInfo) bool {
+	return tblInfo != nil && tblInfo.dbName == moCatalog && tblInfo.tblName == "mo_user_defined_function"
 }
 
 // isCurrentFunctionRevisionCatalog identifies the immutable shared revision

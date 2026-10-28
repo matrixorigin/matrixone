@@ -44,7 +44,7 @@ func TestV4018LoginRepairsLegacyRoutineCatalog(t *testing.T) {
 		systemDB, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/", port))
 		require.NoError(t, err)
 		defer systemDB.Close()
-		for _, sourceVersion := range []string{"4.0.12", "4.0.13", "4.0.14", "4.0.15", "4.0.16", "4.0.17"} {
+		for _, sourceVersion := range []string{"4.0.6", "4.0.7"} {
 			t.Run(sourceVersion, func(t *testing.T) {
 				account := "routine_repair_4018_" + strings.ReplaceAll(sourceVersion, ".", "")
 				_, err = systemDB.ExecContext(ctx, "create account "+account+" ADMIN_NAME 'root' IDENTIFIED BY '111'")

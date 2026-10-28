@@ -792,6 +792,9 @@ func TestV407RejectsInterruptedOffsetOnlyRouteBeforeMutation(t *testing.T) {
 		var terminal *terminalUpgradeError
 		require.ErrorAs(t, err, &terminal)
 		require.False(t, s.upgrade.finalVersionCompleted.Load())
+		err = exec.ExecTxn(t.Context(), func(tx executor.TxnExecutor) error { return s.checkUpgradeRecovery(target, tx) }, executor.Options{})
+		require.ErrorContains(t, err, "unsupported in-progress 4.0.7 offset-only upgrade")
+
 	})
 }
 

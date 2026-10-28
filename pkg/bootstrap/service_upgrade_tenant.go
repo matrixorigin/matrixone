@@ -175,7 +175,16 @@ func (s *service) MaybeUpgradeTenant(
 		if err != nil {
 			return false, err
 		}
-		upgraded = upgraded || changed
+		// Paging committed at least 4.0.7 (or observed another worker past it).
+		// Re-enter with committed state so later repairs run before caching. The
+		// next pass cannot select 4.0.7 again because account versions only advance.
+		later, err := s.MaybeUpgradeTenant(ctx, func() (int32, string, error) {
+			return tenantID, "", nil
+		}, nil)
+		if err != nil {
+			return false, err
+		}
+		return upgraded || changed || later, nil
 	}
 	// A caller-owned transaction can still roll back; only cache committed checks.
 	if txnOp == nil {
@@ -239,6 +248,9 @@ func (s *service) newTenantUpgradePass(ctx context.Context) func() (bool, error)
 					cursorUpgradeID, cursor = 0, 0
 					return nil
 				}
+				if err := s.checkRetiredCatalogSource(upgrade.FromVersion); err != nil {
+					return err
+				}
 				if cursorUpgradeID != upgrade.ID {
 					cursorUpgradeID, cursor = upgrade.ID, 0
 				}
@@ -256,6 +268,12 @@ func (s *service) newTenantUpgradePass(ctx context.Context) func() (bool, error)
 				taskID, tenants, createVersions, hasDeletedTenantTasks, err := versions.GetUpgradeTenantTasks(upgrade.ID, cursor, txn)
 				if err != nil {
 					return err
+				}
+				// Check the entire locked batch before any handler or task update.
+				for _, source := range createVersions {
+					if err := s.checkRetiredCatalogSource(source); err != nil {
+						return err
+					}
 				}
 
 				s.logger.Debug("load upgrade tenants",

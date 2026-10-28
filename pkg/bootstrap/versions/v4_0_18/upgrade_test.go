@@ -22,7 +22,6 @@ import (
 
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
-	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_7"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -35,14 +34,14 @@ import (
 func TestPythonRevisionRepairUpgradePath(t *testing.T) {
 	metadata := Handler.Metadata()
 	require.Equal(t, "4.0.18", metadata.Version)
-	require.Equal(t, "4.0.17", metadata.MinUpgradeVersion)
+	require.Equal(t, "4.0.7", metadata.MinUpgradeVersion)
 	require.Equal(t, versions.No, metadata.UpgradeCluster)
 	require.Equal(t, versions.Yes, metadata.UpgradeTenant)
 	require.Zero(t, metadata.RequiredProtocolVersion)
-	require.Equal(t, uint32(len(v4_0_7.PythonRevisionUpgradeEntries())), metadata.VersionOffset)
-	require.True(t, metadata.CanDirectUpgrade("4.0.17"))
-	require.False(t, metadata.CanDirectUpgrade("4.0.16"))
-	require.Len(t, v4_0_7.PythonRevisionUpgradeEntries(), 9)
+	require.Equal(t, uint32(len(tenantUpgEntries)), metadata.VersionOffset)
+	require.True(t, metadata.CanDirectUpgrade("4.0.7"))
+	require.False(t, metadata.CanDirectUpgrade("4.0.6"))
+	require.Len(t, tenantUpgEntries, 9)
 }
 
 func TestPythonRevisionRepairIsIdempotentForCatalogStates(t *testing.T) {
@@ -56,8 +55,8 @@ func TestPythonRevisionRepairIsIdempotentForCatalogStates(t *testing.T) {
 		wantFirstDDL  int
 	}{
 		{
-			name:         "upstream_final_4.0.17_missed_catalog",
-			schemaOrigin: "4.0.17",
+			name:         "frozen_4.0.7_missed_catalog",
+			schemaOrigin: "4.0.7",
 			legacyIndex:  true,
 			wantFirstDDL: 9,
 		},

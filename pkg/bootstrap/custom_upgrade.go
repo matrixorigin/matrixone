@@ -218,6 +218,9 @@ func (s *service) UpgradeOneTenant(ctx context.Context, tenantID int32) error {
 		if _, err := s.upgradeV407TenantOnDemand(ctx, tenantID); err != nil {
 			return err
 		}
+		// The paged owner committed 4.0.7 before returning. Re-read that state
+		// and complete later handlers before recording a checked tenant.
+		return s.UpgradeOneTenant(ctx, tenantID)
 	}
 	s.mu.Lock()
 	s.mu.tenants[tenantID] = true
