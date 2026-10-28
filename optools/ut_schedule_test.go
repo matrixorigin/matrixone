@@ -92,8 +92,12 @@ func scheduleHarnessWithMockTransform(t *testing.T, script, mock string, transfo
 
 func scheduleHarnessWithMockTimeout(t *testing.T, timeout time.Duration, script, mock string, transform func(string) string, variables ...string) ([]byte, error) {
 	t.Helper()
+	bash, err := exec.LookPath("bash")
+	if err != nil {
+		t.Fatal(err)
+	}
 	script = scheduleFixturePID + script
-	mock = strings.Replace(mock, "#!/bin/bash\n", "#!/bin/bash\n"+scheduleFixturePID, 1)
+	mock = strings.Replace(mock, "#!/bin/bash\n", "#!"+bash+"\n"+scheduleFixturePID, 1)
 	root := t.TempDir()
 	dir := filepath.Join(root, "optools")
 	if err := os.MkdirAll(dir, 0755); err != nil {
@@ -125,7 +129,7 @@ func scheduleHarnessWithMockTimeout(t *testing.T, timeout time.Duration, script,
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "bash", "-c", script)
+	cmd := exec.CommandContext(ctx, bash, "-c", script)
 	cmd.Dir = dir
 	// Start each fixture from the runner's defaults and its own explicit overrides.
 	for _, value := range os.Environ() {
