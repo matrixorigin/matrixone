@@ -483,6 +483,12 @@ func newCSVParserFromReader(extern *tree.ExternParam, r io.Reader) (*csvparser.C
 }
 
 func newCSVParserFromReaderWithBlockSize(extern *tree.ExternParam, r io.Reader, blockSize int64) (*csvparser.CSVParser, error) {
+	return csvparser.NewCSVParser(CSVConfigForLoad(extern), bufio.NewReader(r), blockSize, false)
+}
+
+// CSVConfigForLoad is the authoritative LOAD clause/default mapping. Export
+// validation uses the same configuration when replaying emitted fields.
+func CSVConfigForLoad(extern *tree.ExternParam) *csvparser.CSVConfig {
 	fieldsTerminatedBy := tree.DefaultFieldsTerminated
 	fieldsEnclosedBy := tree.DefaultFieldsEnclosedBy
 	fieldsEscapedBy := tree.DefaultFieldsEscapedBy
@@ -540,7 +546,7 @@ func newCSVParserFromReaderWithBlockSize(extern *tree.ExternParam, r io.Reader, 
 		config.Context = extern.Ctx
 	}
 
-	return csvparser.NewCSVParser(&config, bufio.NewReader(r), blockSize, false)
+	return &config
 }
 
 type ParquetHandler struct {
