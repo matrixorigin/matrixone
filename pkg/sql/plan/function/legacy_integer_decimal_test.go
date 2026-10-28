@@ -105,3 +105,62 @@ func TestLegacyDecimalRangeRetainsSignatureValidation(t *testing.T) {
 	require.Equal(t, types.T_uint8.ToType(), targets[3])
 	require.Equal(t, encodeOverloadID(IN_RANGE, 0), legacy.GetEncodedOverloadID())
 }
+
+func TestLegacyDecimalArithmeticRetainsHistoricalPrecision(t *testing.T) {
+	ctx := t.Context()
+	legacy := WithLegacyIntegerDecimalCoercions(ctx)
+	for _, tc := range []struct {
+		name, op string
+		inputs   []types.Type
+		want     types.Type
+	}{
+		{"small-product", "*", []types.Type{types.New(types.T_decimal64, 15, 2), types.New(types.T_decimal64, 15, 2)}, types.New(types.T_decimal128, 38, 4)},
+		{"carrier-product", "*", []types.Type{types.New(types.T_decimal128, 38, 0), types.New(types.T_decimal64, 18, 0)}, types.New(types.T_decimal256, 56, 0)},
+		{"mixed-sum", "+", []types.Type{types.T_int64.ToType(), types.New(types.T_decimal64, 15, 2)}, types.New(types.T_decimal128, 38, 2)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			current, err := GetFunctionByName(ctx, tc.op, tc.inputs)
+			require.NoError(t, err)
+			old, err := GetFunctionByName(legacy, tc.op, tc.inputs)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, old.GetReturnType())
+			again, err := GetFunctionByName(ctx, tc.op, tc.inputs)
+			require.NoError(t, err)
+			require.Equal(t, current, again, "origin verification cannot change normal inference")
+		})
+	}
+}
+
+func TestLegacyDecimalPrecisionKeepsStrictIntegerDomains(t *testing.T) {
+	ctx := t.Context()
+	legacy := WithLegacyDecimalIntermediatePrecision(ctx)
+	require.False(t, LegacyDecimalIntermediatePrecision(nil))
+	require.False(t, LegacyDecimalIntermediatePrecision(ctx))
+	require.True(t, LegacyDecimalIntermediatePrecision(legacy))
+	require.True(t, LegacyDecimalIntermediatePrecision(WithLegacyIntegerDecimalCoercions(ctx)))
+	for _, integer := range []types.T{types.T_int64, types.T_uint64, types.T_bit} {
+		inputs := []types.Type{integer.ToType(), types.New(types.T_decimal64, 15, 2)}
+		current, err := GetFunctionByName(ctx, "*", inputs)
+		require.NoError(t, err)
+		old, err := GetFunctionByName(legacy, "*", inputs)
+		require.NoError(t, err)
+		require.Equal(t, types.New(types.T_decimal128, 38, 2), old.GetReturnType())
+		targets, cast := old.ShouldDoImplicitTypeCast()
+		require.True(t, cast)
+		require.Equal(t, types.T_decimal128, targets[0].Oid)
+		minimum := int32(20)
+		if integer == types.T_int64 {
+			minimum = 19
+		}
+		require.GreaterOrEqual(t, targets[0].Width, minimum)
+		again, err := GetFunctionByName(ctx, "*", inputs)
+		require.NoError(t, err)
+		require.Equal(t, current, again, "historical verification cannot alter ordinary inference")
+	}
+	castInputs := []types.Type{types.T_int64.ToType(), types.New(types.T_decimal64, 18, 0)}
+	current, err := GetFunctionByName(ctx, "cast", castInputs)
+	require.NoError(t, err)
+	old, err := GetFunctionByName(legacy, "cast", castInputs)
+	require.NoError(t, err)
+	require.Equal(t, current, old, "declared assignments keep strict width checks")
+}

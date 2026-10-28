@@ -229,7 +229,7 @@ func parseTableDumpExpression(ctx context.Context, origin, mode string) (tree.St
 	return stmt, expr, visitor, nil
 }
 
-type tableDumpBindingMode uint16
+type tableDumpBindingMode uint32
 
 const (
 	tableDumpBindingCurrent tableDumpBindingMode = iota
@@ -248,6 +248,7 @@ const (
 	tableDumpBindingPreIncompleteTemporal    tableDumpBindingMode = 1 << 10
 	tableDumpBindingDDLColumnScope           tableDumpBindingMode = 1 << 9
 	tableDumpBindingPreIntegerDecimal        tableDumpBindingMode = 1 << 15
+	tableDumpBindingPreDecimalPrecision      tableDumpBindingMode = 1 << 16
 )
 
 const tableDumpBindingLegacyFloat tableDumpBindingMode = 1 << 11
@@ -354,6 +355,40 @@ func tableDumpHasIntegerNumericOperand(expr *planpb.Expr) bool {
 	return false
 }
 
+// Decimal-only trees need their own precision era even without an integer
+// cast. Ordinary integer defaults must not acquire extra candidate searches.
+func tableDumpHasLegacyDecimalPrecision(expr *planpb.Expr) bool {
+	if fn := expr.GetF(); fn != nil && fn.Func != nil {
+		switch fn.Func.ObjName {
+		case "+", "-", "*":
+			if len(fn.Args) == 2 && ((fn.Args[0] != nil && types.T(fn.Args[0].Typ.Id).IsDecimal()) ||
+				(fn.Args[1] != nil && types.T(fn.Args[1].Typ.Id).IsDecimal())) {
+				return true
+			}
+		case "round", "ceil", "ceiling", "floor":
+			if len(fn.Args) >= 1 && len(fn.Args) <= 2 && fn.Args[0] != nil && types.T(fn.Args[0].Typ.Id).IsDecimal() {
+				return true
+			}
+		}
+		for _, arg := range fn.Args {
+			if tableDumpHasLegacyDecimalPrecision(arg) {
+				return true
+			}
+		}
+	}
+	if list := expr.GetList(); list != nil {
+		for _, entry := range list.List {
+			if tableDumpHasLegacyDecimalPrecision(entry) {
+				return true
+			}
+		}
+	}
+	if lit := expr.GetLit(); lit != nil {
+		return tableDumpHasLegacyDecimalPrecision(lit.Src)
+	}
+	return false
+}
+
 // Float compatibility uses the same complete-era binder as DUMP/LOAD.
 func bindFloatTableDumpExpression(ctx CompilerContext, def *planpb.TableDef, item tableDumpExpression, ast tree.Expr, increment int64, legacy bool, legacyFloat ...bool) (*planpb.Expr, error) {
 	mode := tableDumpBindingCurrent
@@ -368,7 +403,10 @@ func bindFloatTableDumpExpression(ctx CompilerContext, def *planpb.TableDef, ite
 
 func bindTableDumpExpression(ctx CompilerContext, def *planpb.TableDef, item tableDumpExpression, ast tree.Expr, increment int64, mode tableDumpBindingMode, session *tableDumpDefaultSession) (*planpb.Expr, error) {
 	bindCtx := function.WithDivPrecisionIncrement(ctx.GetContext(), int32(increment))
-	baseMode := mode &^ (tableDumpBindingPreTemporalNullability | tableDumpBindingPreJSON | tableDumpBindingPreUnixTimestampDatetime | tableDumpBindingPreIntegerDecimal | tableDumpBindingPreIncompleteTemporal | tableDumpBindingDDLColumnScope | tableDumpBindingLegacyFloat | tableDumpBindingLegacyFloatFormatting | tableDumpBindingFrozenFloatDefaults | tableDumpBindingPreJSONFolding)
+	baseMode := mode &^ (tableDumpBindingPreTemporalNullability | tableDumpBindingPreJSON | tableDumpBindingPreUnixTimestampDatetime | tableDumpBindingPreIntegerDecimal | tableDumpBindingPreDecimalPrecision | tableDumpBindingPreIncompleteTemporal | tableDumpBindingDDLColumnScope | tableDumpBindingLegacyFloat | tableDumpBindingLegacyFloatFormatting | tableDumpBindingFrozenFloatDefaults | tableDumpBindingPreJSONFolding)
+	if mode&tableDumpBindingPreDecimalPrecision != 0 {
+		bindCtx = function.WithLegacyDecimalIntermediatePrecision(bindCtx)
+	}
 	if mode&tableDumpBindingPreIntegerDecimal != 0 {
 		bindCtx = function.WithLegacyIntegerDecimalCoercions(bindCtx)
 	}
@@ -915,9 +953,11 @@ func analyzeTableDumpBindingsWithCandidateVisitLimit(ctx CompilerContext, target
 			return false, moerr.NewInvalidInputNoCtx("table dump expression declaration does not match target")
 		}
 		integerDecimal := tableDumpHasIntegerDecimalCoercion(item.expr)
+		decimalPrecision := tableDumpHasLegacyDecimalPrecision(item.expr)
 		normalizedDecimal := item.kind == "default" && tableDumpHasIntegerNumericOperand(item.expr)
 		if supplied != nil {
 			integerDecimal = integerDecimal || tableDumpHasIntegerDecimalCoercion(sourceItems[i].expr)
+			decimalPrecision = decimalPrecision || tableDumpHasLegacyDecimalPrecision(sourceItems[i].expr)
 			normalizedDecimal = normalizedDecimal || item.kind == "default" && tableDumpHasIntegerNumericOperand(sourceItems[i].expr)
 		}
 		if len(item.origin) == 0 {
@@ -1002,11 +1042,19 @@ func analyzeTableDumpBindingsWithCandidateVisitLimit(ctx CompilerContext, target
 					modes = append(modes, mode|tableDumpBindingDDLColumnScope)
 				}
 			}
-			if integerDecimal {
-				// Compose whole-tree witnesses with the existing registry/scope
-				// eras, without normalizing an untrusted payload into validity.
-				for _, mode := range append([]tableDumpBindingMode(nil), modes...) {
-					modes = append(modes, mode|tableDumpBindingPreIntegerDecimal)
+			if decimalPrecision || integerDecimal {
+				baseModes := append([]tableDumpBindingMode(nil), modes...)
+				if decimalPrecision {
+					for _, mode := range baseModes {
+						modes = append(modes, mode|tableDumpBindingPreDecimalPrecision)
+					}
+				}
+				if integerDecimal {
+					// Compose complete eras, without redundant precision/integer
+					// combinations: the integer era already predates precision.
+					for _, mode := range baseModes {
+						modes = append(modes, mode|tableDumpBindingPreIntegerDecimal)
+					}
 				}
 			}
 			// All session witnesses share the ordinary cancellation and total
@@ -1111,9 +1159,15 @@ func analyzeTableDumpBindingsWithCandidateVisitLimit(ctx CompilerContext, target
 						// the float DEFAULT dependency, before taking folding eras.
 						integerDecimal = true
 						for _, era := range append([]tableDumpBindingMode(nil), eras...) {
+							if era&tableDumpBindingPreDecimalPrecision != 0 {
+								continue
+							}
 							eras = append(eras, era|tableDumpBindingPreIntegerDecimal)
 						}
 						for _, era := range append([]tableDumpBindingMode(nil), modes...) {
+							if era&tableDumpBindingPreDecimalPrecision != 0 {
+								continue
+							}
 							modes = append(modes, era|tableDumpBindingPreIntegerDecimal)
 						}
 					}
