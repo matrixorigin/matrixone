@@ -216,6 +216,96 @@ func TestWorkingSetConcurrentGrowthAndClose(t *testing.T) {
 	input.Release()
 }
 
+func TestWorkingSetOptionalStagingOwnership(t *testing.T) {
+	m, c, _ := admissionFixture(t, 1000, 900, 100)
+	spec := WorkingSetSpec{UnitBytes: 100, Inputs: []InputSlotSpec{{Name: "csv", Count: 1, Bytes: 100}}, IOBytes: 200}
+	w, ok, err := m.TryReserveWorkingSet(context.Background(), spec)
+	require.NoError(t, err)
+	require.True(t, ok)
+	t.Cleanup(w.Close)
+	ok, err = w.TryReserveStaging(context.Background(), 100)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, int64(200), c.inputPromise.Load())
+
+	lease, err := w.TryAcquireStaging(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, int64(100), lease.Capacity())
+	other, err := w.TryAcquireStaging(context.Background())
+	require.NoError(t, err)
+	require.Nil(t, other, "another writer must fall back instead of waiting")
+
+	spec.Inputs[0].Bytes = 150
+	require.NoError(t, w.TryGrow(context.Background(), spec))
+	require.Equal(t, int64(250), c.inputPromise.Load(), "growth must retain the staging promise")
+	w.Close()
+	require.Equal(t, int64(250), c.inputPromise.Load(), "a live staging owner keeps the complete promise")
+	lease.Release()
+	lease.Release()
+	require.Zero(t, c.inputPromise.Load())
+}
+
+func TestWorkingSetOptionalStagingDenial(t *testing.T) {
+	m, c, _ := admissionFixture(t, 1000, 900, 100)
+	spec := WorkingSetSpec{UnitBytes: 100, Inputs: []InputSlotSpec{{Name: "csv", Count: 1, Bytes: 500}}, IOBytes: 300}
+	w, ok, err := m.TryReserveWorkingSet(context.Background(), spec)
+	require.NoError(t, err)
+	require.True(t, ok)
+	t.Cleanup(w.Close)
+	ok, err = w.TryReserveStaging(context.Background(), 101)
+	require.NoError(t, err)
+	require.False(t, ok)
+	require.Equal(t, int64(500), c.inputPromise.Load())
+	lease, err := w.TryAcquireStaging(context.Background())
+	require.NoError(t, err)
+	require.Nil(t, lease)
+	w.Close()
+	require.Zero(t, c.inputPromise.Load())
+}
+
+func TestWorkingSetOptionalStagingRespectsWaiters(t *testing.T) {
+	m, c, queued := admissionFixture(t, 1000, 900, 100)
+	spec := WorkingSetSpec{UnitBytes: 100, Inputs: []InputSlotSpec{{Name: "csv", Count: 1, Bytes: 100}}, IOBytes: 200}
+	w, ok, err := m.TryReserveWorkingSet(context.Background(), spec)
+	require.NoError(t, err)
+	require.True(t, ok)
+	t.Cleanup(w.Close)
+	_, ok = m.Acquire(500)
+	require.True(t, ok)
+	t.Cleanup(func() { m.Release(500) })
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	done := make(chan error, 1)
+	go func() { done <- m.AcquireContext(ctx, 200) }()
+	require.Equal(t, "data", await(t, queued))
+	require.True(t, m.physicalFits(50), "the denial is due to the older waiter")
+	ok, err = w.TryReserveStaging(context.Background(), 50)
+	require.NoError(t, err)
+	require.False(t, ok)
+	require.Equal(t, int64(100), c.inputPromise.Load())
+	cancel()
+	require.ErrorIs(t, await(t, done), context.Canceled)
+}
+
+func TestWorkingSetOptionalStagingRejectsOverflow(t *testing.T) {
+	m, c, _ := admissionFixture(t, math.MaxInt64, math.MaxInt64, 0)
+	spec := WorkingSetSpec{UnitBytes: 10, Inputs: []InputSlotSpec{{Name: "csv", Count: 1, Bytes: 10}}, IOBytes: 10}
+	w, ok, err := m.TryReserveWorkingSet(context.Background(), spec)
+	require.NoError(t, err)
+	require.True(t, ok)
+	t.Cleanup(w.Close)
+	_, err = w.TryReserveStaging(context.Background(), math.MaxInt64-19)
+	require.Error(t, err)
+	require.Equal(t, int64(10), c.inputPromise.Load())
+	ok, err = w.TryReserveStaging(context.Background(), math.MaxInt64-30)
+	require.NoError(t, err)
+	require.True(t, ok)
+	spec.Inputs[0].Bytes = 20
+	spec.IOBytes = 20
+	require.Error(t, w.TryGrow(context.Background(), spec))
+	require.Equal(t, int64(math.MaxInt64-20), c.inputPromise.Load())
+}
+
 func TestWorkingSetDataFullIOProgressAndTransfer(t *testing.T) {
 	m, c, queued := admissionFixture(t, 1000, 900, 100)
 	w, err := m.ReserveWorkingSetCandidatesUntilFit(context.Background(), []WorkingSetSpec{{UnitBytes: 32, Inputs: []InputSlotSpec{{Name: "csv", Count: 1, Bytes: 100}}, IOBytes: 200}})

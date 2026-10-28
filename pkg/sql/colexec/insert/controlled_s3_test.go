@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -31,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
@@ -94,7 +96,7 @@ func controlledInsertFixture(t *testing.T, throttler *controlledTestThrottler) (
 	t.Cleanup(func() { runtime.SetupServiceBasedRuntime(proc.GetService(), oldRuntime) })
 	runtime.ServiceRuntime(proc.GetService()).SetGlobalVariables(runtime.CNMemoryThrottler, throttler)
 	const unit = 512 << 10
-	ioBytes, err := ioutil.IOEnvelope([][]types.Type{{types.T_int64.ToType(), types.T_varchar.ToType()}}, unit, unit)
+	ioBytes, err := ioutil.IOEnvelope([][]types.Type{{types.T_int64.ToType(), types.T_varchar.ToType()}}, unit, 2<<20)
 	require.NoError(t, err)
 	owner := rscthrottler.NewMemThrottler("insert-working-set", 1, rscthrottler.WithConstLimit(8<<30))
 	ws, err := owner.(rscthrottler.WorkingSetThrottler).ReserveWorkingSetCandidatesUntilFit(proc.Ctx, []rscthrottler.WorkingSetSpec{{
@@ -221,6 +223,210 @@ func TestControlledInsertZeroDataCreditsStreamsCompleteObjectFrames(t *testing.T
 	ioLease.Release()
 }
 
+func TestControlledInsertUsesOptionalStagingWithoutWaiting(t *testing.T) {
+	for _, test := range []struct {
+		name               string
+		occupied, noBudget bool
+	}{
+		{name: "available"},
+		{name: "occupied", occupied: true},
+		{name: "no_ordinary_throttler", noBudget: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			deny := &controlledTestThrottler{t: t}
+			proc, op, ws := controlledInsertFixture(t, deny)
+			ok, err := ws.TryReserveStaging(proc.Ctx, proc.Base.ImportMemory.UnitBytes)
+			require.NoError(t, err)
+			require.True(t, ok)
+			if test.noBudget {
+				op.ctr.controlled.throttler = nil
+			}
+			if test.occupied {
+				lease, leaseErr := ws.TryAcquireStaging(proc.Ctx)
+				require.NoError(t, leaseErr)
+				require.NotNil(t, lease)
+				defer lease.Release()
+			}
+			op.AppendChild(controlledInput(t, proc, 3, 1))
+			var objects, rows uint32
+			for {
+				result, callErr := op.Call(proc)
+				require.NoError(t, callErr)
+				if result.Batch == nil {
+					break
+				}
+				for i := 0; i < result.Batch.Vecs[1].Length(); i++ {
+					objects++
+					stats := objectio.ObjectStats(result.Batch.Vecs[1].GetBytesAt(i))
+					rows += stats.Rows()
+				}
+			}
+			require.Equal(t, uint32(3), rows)
+			if test.occupied {
+				require.Equal(t, uint32(3), objects, "an unavailable slot uses the existing direct-write path")
+			} else {
+				require.Equal(t, uint32(1), objects, "small input batches share one object")
+				lease, leaseErr := ws.TryAcquireStaging(proc.Ctx)
+				require.NoError(t, leaseErr)
+				require.NotNil(t, lease, "the flushed buffer returned its shared slot")
+				lease.Release()
+			}
+			require.Zero(t, deny.balance)
+		})
+	}
+}
+
+func TestControlledInsertStagingPreservesAmpleDataBudget(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		staging bool
+		grants  int
+		objects uint32
+	}{
+		{name: "ordinary_only", grants: 10, objects: 1},
+		{name: "ordinary_with_staging", staging: true, grants: 10, objects: 1},
+		{name: "staging_after_denial", staging: true, grants: 1, objects: 2},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			credits := &controlledTestThrottler{t: t, grants: test.grants}
+			proc, op, ws := controlledInsertFixture(t, credits)
+			if test.staging {
+				ok, err := ws.TryReserveStaging(proc.Ctx, proc.Base.ImportMemory.UnitBytes)
+				require.NoError(t, err)
+				require.True(t, ok)
+			}
+			batches := make([]*batch.Batch, 2)
+			for i := range batches {
+				b := batch.NewWithSize(2)
+				b.Vecs[0] = testutil.MakeInt64Vector([]int64{int64(i + 1)}, nil, proc.Mp())
+				b.Vecs[1] = testutil.MakeVarcharVector([]string{strings.Repeat("x", 200<<10)}, nil, proc.Mp())
+				b.SetRowCount(1)
+				batches[i] = b
+			}
+			input := colexec.NewMockOperator().WithBatchs(batches)
+			t.Cleanup(func() { input.Free(proc, false, nil) })
+			op.AppendChild(input)
+			var objects, rows uint32
+			for {
+				result, err := op.Call(proc)
+				require.NoError(t, err)
+				if result.Batch == nil {
+					break
+				}
+				for i := 0; i < result.Batch.Vecs[1].Length(); i++ {
+					objects++
+					stats := objectio.ObjectStats(result.Batch.Vecs[1].GetBytesAt(i))
+					rows += stats.Rows()
+				}
+			}
+			require.Equal(t, uint32(2), rows)
+			require.Equal(t, test.objects, objects)
+			require.Positive(t, credits.acquired)
+			require.Zero(t, credits.balance)
+			if test.staging {
+				lease, err := ws.TryAcquireStaging(proc.Ctx)
+				require.NoError(t, err)
+				require.NotNil(t, lease)
+				lease.Release()
+			}
+		})
+	}
+}
+
+type failingStagingFS struct {
+	fileservice.FileService
+	err error
+}
+
+func (fs *failingStagingFS) Write(context.Context, fileservice.IOVector) error { return fs.err }
+
+func TestControlledInsertStagingWriteFailureReleasesSlot(t *testing.T) {
+	deny := &controlledTestThrottler{t: t}
+	proc, op, ws := controlledInsertFixture(t, deny)
+	ok, err := ws.TryReserveStaging(proc.Ctx, proc.Base.ImportMemory.UnitBytes)
+	require.NoError(t, err)
+	require.True(t, ok)
+	state := op.ctr.controlled
+	dataMP := state.dataMP
+	writeErr := errors.New("injected object write failure")
+	state.fs = &failingStagingFS{FileService: state.fs, err: writeErr}
+	op.AppendChild(controlledInput(t, proc, 3, 1))
+	_, err = op.Call(proc)
+	require.ErrorIs(t, err, writeErr)
+	require.Zero(t, dataMP.AllocatedBytes())
+	lease, err := ws.TryAcquireStaging(proc.Ctx)
+	require.NoError(t, err)
+	require.NotNil(t, lease, "write failure must retire the staged owner")
+	lease.Release()
+	require.Zero(t, deny.balance)
+}
+
+func TestControlledInsertStagingCancellationReleasesSlot(t *testing.T) {
+	deny := &controlledTestThrottler{t: t}
+	proc, op, ws := controlledInsertFixture(t, deny)
+	ok, err := ws.TryReserveStaging(proc.Ctx, proc.Base.ImportMemory.UnitBytes)
+	require.NoError(t, err)
+	require.True(t, ok)
+	state := op.ctr.controlled
+	dataMP := state.dataMP
+	b := batch.NewWithSize(2)
+	b.Vecs[0] = testutil.MakeInt64Vector([]int64{1}, nil, proc.Mp())
+	b.Vecs[1] = testutil.MakeVarcharVector([]string{"pending"}, nil, proc.Mp())
+	b.SetRowCount(1)
+	defer b.Clean(proc.Mp())
+	require.NoError(t, state.append(proc, op.OpAnalyzer, b))
+	require.Positive(t, dataMP.AllocatedBytes())
+	lease, err := ws.TryAcquireStaging(proc.Ctx)
+	require.NoError(t, err)
+	require.Nil(t, lease, "the pending writer owns the shared slot")
+	op.AppendChild(controlledInput(t, proc, 1, 1))
+	ctx, cancel := context.WithCancel(proc.Ctx)
+	proc.Ctx = ctx
+	cancel()
+	_, err = op.Call(proc)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Zero(t, dataMP.AllocatedBytes())
+	lease, err = ws.TryAcquireStaging(context.Background())
+	require.NoError(t, err)
+	require.NotNil(t, lease)
+	lease.Release()
+	require.Zero(t, deny.balance)
+}
+
+func TestControlledInsertOversizedRowFallsBackFromStaging(t *testing.T) {
+	deny := &controlledTestThrottler{t: t}
+	proc, op, ws := controlledInsertFixture(t, deny)
+	ok, err := ws.TryReserveStaging(proc.Ctx, proc.Base.ImportMemory.UnitBytes)
+	require.NoError(t, err)
+	require.True(t, ok)
+	b := batch.NewWithSize(3)
+	b.Vecs[0] = testutil.MakeInt64Vector([]int64{1}, nil, proc.Mp())
+	b.Vecs[1] = testutil.MakeVarcharVector([]string{strings.Repeat("x", 1<<20)}, nil, proc.Mp())
+	b.Vecs[2] = testutil.MakeVarcharVector([]string{"unused"}, nil, proc.Mp())
+	b.SetRowCount(1)
+	input := colexec.NewMockOperator().WithBatchs([]*batch.Batch{b})
+	t.Cleanup(func() { input.Free(proc, false, nil) })
+	op.AppendChild(input)
+	var rows uint32
+	for {
+		result, callErr := op.Call(proc)
+		require.NoError(t, callErr)
+		if result.Batch == nil {
+			break
+		}
+		for i := 0; i < result.Batch.Vecs[1].Length(); i++ {
+			stats := objectio.ObjectStats(result.Batch.Vecs[1].GetBytesAt(i))
+			rows += stats.Rows()
+		}
+	}
+	require.Equal(t, uint32(1), rows)
+	lease, err := ws.TryAcquireStaging(proc.Ctx)
+	require.NoError(t, err)
+	require.NotNil(t, lease)
+	lease.Release()
+	require.Zero(t, deny.balance)
+}
+
 func TestControlledInsertRetiresGrantedDataBeforeBorrowedSpill(t *testing.T) {
 	deny := &controlledTestThrottler{t: t, grants: 1}
 	proc, op, _ := controlledInsertFixture(t, deny)
@@ -306,29 +512,48 @@ func TestControlledInsertInvalidMetadataAndCloseErrorReleaseOwners(t *testing.T)
 }
 
 func TestControlledInsertReleaseCallbackPreservesPrepaidGrowth(t *testing.T) {
-	credits := &controlledTestThrottler{t: t, grants: 2}
-	proc, op, _ := controlledInsertFixture(t, credits)
-	s := op.ctr.controlled
-	v := vector.NewVec(types.T_int64.ToType())
-	defer v.Free(s.dataMP)
-	s.begin()
-	require.True(t, s.acquire(v.AppendAllocation(1, 0)))
-	require.NoError(t, v.PreExtend(1, s.dataMP))
-	s.end()
-	old := s.dataMP.AllocatedBytes()
-	s.begin()
-	next := v.AppendAllocation(1000, 0)
-	require.True(t, s.acquire(next))
-	done := make(chan struct{})
-	go func() { s.sourceReleased(); close(done) }()
-	<-done
-	require.Equal(t, old+next, s.granted, "a concurrent old-source free must not refund the prepaid complete new N")
-	require.NoError(t, v.PreExtend(1000, s.dataMP))
-	s.end()
-	require.Equal(t, s.dataMP.AllocatedBytes(), s.granted)
-	v.Free(s.dataMP)
-	s.sourceReleased()
-	require.Zero(t, credits.balance)
-	require.Zero(t, s.dataMP.AllocatedBytes())
-	_ = proc
+	for _, staging := range []bool{false, true} {
+		t.Run(fmt.Sprintf("staging=%t", staging), func(t *testing.T) {
+			credits := &controlledTestThrottler{t: t, grants: 2}
+			proc, op, ws := controlledInsertFixture(t, credits)
+			if staging {
+				credits.grants = 0
+				ok, err := ws.TryReserveStaging(proc.Ctx, proc.Base.ImportMemory.UnitBytes)
+				require.NoError(t, err)
+				require.True(t, ok)
+			}
+			s := op.ctr.controlled
+			v := vector.NewVec(types.T_int64.ToType())
+			defer v.Free(s.dataMP)
+			s.begin()
+			granted, err := s.acquire(proc.Ctx, v.AppendAllocation(1, 0))
+			require.NoError(t, err)
+			require.True(t, granted)
+			require.NoError(t, v.PreExtend(1, s.dataMP))
+			s.end()
+			old := s.dataMP.AllocatedBytes()
+			s.begin()
+			next := v.AppendAllocation(1000, 0)
+			granted, err = s.acquire(proc.Ctx, next)
+			require.NoError(t, err)
+			require.True(t, granted)
+			done := make(chan struct{})
+			go func() { s.sourceReleased(); close(done) }()
+			<-done
+			require.Equal(t, old+next, s.granted, "a callback must not refund pending growth")
+			require.NoError(t, v.PreExtend(1000, s.dataMP))
+			s.end()
+			require.Equal(t, s.dataMP.AllocatedBytes(), s.granted)
+			v.Free(s.dataMP)
+			s.sourceReleased()
+			if staging {
+				lease, err := ws.TryAcquireStaging(proc.Ctx)
+				require.NoError(t, err)
+				require.NotNil(t, lease)
+				lease.Release()
+			}
+			require.Zero(t, credits.balance)
+			require.Zero(t, s.dataMP.AllocatedBytes())
+		})
+	}
 }

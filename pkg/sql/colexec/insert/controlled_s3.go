@@ -54,6 +54,7 @@ type controlledS3 struct {
 	staged     int64
 	mu         sync.Mutex
 	granted    int64
+	staging    *rscthrottler.StagingLease
 	mutations  int
 	spool      *os.File
 	written    int64
@@ -126,14 +127,20 @@ func newControlledS3(proc *process.Process, owner *Insert, fs fileservice.FileSe
 }
 
 func (s *controlledS3) reconcileLocked() {
-	if s.throttler != nil && s.dataMP != nil {
+	if s.dataMP != nil {
 		retained := s.dataMP.AllocatedBytes()
 		if s.writer != nil {
 			retained += s.writer.RetainedBitmapBytes()
 		}
 		if excess := s.granted - retained; excess > 0 {
-			s.throttler.Release(excess)
+			if s.staging == nil && s.throttler != nil {
+				s.throttler.Release(excess)
+			}
 			s.granted -= excess
+		}
+		if s.granted == 0 && s.staging != nil {
+			s.staging.Release()
+			s.staging = nil
 		}
 	}
 }
@@ -162,19 +169,43 @@ func (s *controlledS3) end() {
 	s.mu.Unlock()
 }
 
-func (s *controlledS3) acquire(n int64) bool {
+func (s *controlledS3) acquire(ctx context.Context, n int64) (bool, error) {
 	if n <= 0 {
-		return true
+		return true, nil
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.staging != nil {
+		if n <= s.staging.Capacity()-s.granted {
+			s.granted += n
+			return true, nil
+		}
+		return false, nil
+	}
 	if s.throttler != nil {
 		if _, ok := s.throttler.Acquire(n); ok {
 			s.granted += n
-			return true
+			return true, nil
 		}
 	}
-	return false
+	// Keep the ordinary data budget when it is available. A staging lease is
+	// a non-blocking fallback for a cold writer, not a smaller limit on growth.
+	if s.granted != 0 {
+		return false, nil
+	}
+	lease, err := s.memory.WorkingSet.TryAcquireStaging(ctx)
+	if err != nil {
+		return false, err
+	}
+	if lease != nil {
+		if n <= lease.Capacity() {
+			s.staging = lease
+			s.granted += n
+			return true, nil
+		}
+		lease.Release()
+	}
+	return false, nil
 }
 
 func (s *controlledS3) ensureWriter(proc *process.Process) {
@@ -253,7 +284,11 @@ func (s *controlledS3) appendWindow(proc *process.Process, analyzer process.Anal
 	for {
 		s.ensureWriter(proc)
 		s.begin()
-		ok := s.acquire(s.writer.AppendAllocation(window))
+		ok, err := s.acquire(proc.Ctx, s.writer.AppendAllocation(window))
+		if err != nil {
+			s.end()
+			return err
+		}
 		if ok {
 			err := s.writer.Write(proc.Ctx, window)
 			s.end()

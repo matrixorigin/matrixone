@@ -386,8 +386,30 @@ func admitMemoryManifest(ctx context.Context, throttler rscthrottler.WorkingSetT
 	}
 	meta := metas[working.UnitBytes()]
 	meta.WorkingSet = working
+	// A writer may otherwise have to write each upstream batch separately when
+	// the already admitted input and workspace promises leave no ordinary data
+	// credits. Reserve at most one shared batch unit when it fits; failure keeps
+	// the existing zero-credit path and never shrinks or delays admission.
+	// Avoid consuming headroom needed for a later CSV record-budget growth.
+	if meta.RecordBytes == int64(config.LargestEntryLimit) && manifestHasCSVInsert(manifest) {
+		if _, err = working.TryReserveStaging(ctx, meta.UnitBytes); err != nil {
+			working.Close()
+			return nil, err
+		}
+	}
 	bindMemoryRecordGrowth(meta, manifest)
 	return meta, nil
+}
+
+func manifestHasCSVInsert(manifest MemoryManifest) bool {
+	var source, writer bool
+	for _, stage := range manifest.Stages {
+		source = source || stage.Role == MemoryStageCSV && stage.Count > 0
+	}
+	for _, producer := range manifest.Producers {
+		writer = writer || producer.Kind == "insert-meta"
+	}
+	return source && writer
 }
 
 // tryMemoryCandidates never joins an admission queue or full recovery. A

@@ -89,6 +89,8 @@ type WorkingSet struct {
 	closed        bool
 	inputRefs     int
 	ioRefs        int
+	stagingBytes  int64
+	stagingInUse  bool
 	inputReleased bool
 	ioReleased    bool
 	closing       chan struct{}
@@ -97,6 +99,14 @@ type WorkingSet struct {
 type InputLease struct {
 	ticket   *WorkingSet
 	index    int
+	released atomic.Bool
+}
+
+// StagingLease is an optional, non-blocking data buffer for one insert writer.
+// Its capacity is included in the owning working set's input promise.
+type StagingLease struct {
+	ticket   *WorkingSet
+	bytes    int64
 	released atomic.Bool
 }
 
@@ -176,6 +186,10 @@ func (w *WorkingSet) TryGrow(ctx context.Context, next WorkingSetSpec) error {
 	if err != nil {
 		return err
 	}
+	if w.stagingBytes > math.MaxInt64-next.IOBytes-input {
+		return moerr.NewInternalErrorNoCtx("memory working set growth overflows")
+	}
+	input += w.stagingBytes
 	delta := input - w.inputBytes + max(0, next.IOBytes-c.workspacePromise.Load())
 	// An already admitted owner has priority over new admission. Queuing here
 	// could wait on the very writer that is pulling this owner's next row.
@@ -187,6 +201,72 @@ func (w *WorkingSet) TryGrow(ctx context.Context, next WorkingSetSpec) error {
 	w.inputBytes = input
 	w.spec.Store(&next)
 	return nil
+}
+
+// TryReserveStaging adds one optional writer buffer after the regular layout
+// is admitted. It never waits or changes the selected batch unit.
+func (w *WorkingSet) TryReserveStaging(ctx context.Context, bytes int64) (bool, error) {
+	if bytes <= 0 {
+		return false, moerr.NewInternalErrorNoCtx("invalid staging reservation")
+	}
+	if err := context.Cause(ctx); err != nil {
+		return false, err
+	}
+	w.throttler.Refresh()
+	c := w.coordinator
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if err := context.Cause(ctx); err != nil {
+		return false, err
+	}
+	if w.closed {
+		return false, ErrWorkingSetClosed
+	}
+	if w.stagingBytes != 0 || bytes > math.MaxInt64-w.IOBytes()-w.inputBytes || bytes > math.MaxInt64-c.inputPromise.Load() {
+		return false, moerr.NewInternalErrorNoCtx("invalid staging reservation state")
+	}
+	// Optional buffering must not bypass an older memory-admission waiter.
+	if len(c.queue) > 0 || !w.throttler.physicalFits(bytes) {
+		return false, nil
+	}
+	w.stagingBytes = bytes
+	w.inputBytes += bytes
+	c.inputPromise.Add(bytes)
+	return true, nil
+}
+
+// TryAcquireStaging never waits while its caller owns an upstream input.
+func (w *WorkingSet) TryAcquireStaging(ctx context.Context) (*StagingLease, error) {
+	c := w.coordinator
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if err := context.Cause(ctx); err != nil {
+		return nil, err
+	}
+	if w.closed {
+		return nil, ErrWorkingSetClosed
+	}
+	if w.stagingBytes == 0 || w.stagingInUse {
+		return nil, nil
+	}
+	w.stagingInUse = true
+	w.inputRefs++
+	return &StagingLease{ticket: w, bytes: w.stagingBytes}, nil
+}
+
+func (l *StagingLease) Capacity() int64 { return l.bytes }
+
+func (l *StagingLease) Release() {
+	if l == nil || !l.released.CompareAndSwap(false, true) {
+		return
+	}
+	w := l.ticket
+	c := w.coordinator
+	c.mu.Lock()
+	w.stagingInUse = false
+	w.inputRefs--
+	w.releasePromisesLocked()
+	c.mu.Unlock()
 }
 
 func (w *WorkingSet) AcquireInput(ctx context.Context, index int) (*InputLease, error) {

@@ -78,6 +78,47 @@ func TestImportRecordGrowthReservesCompleteLayout(t *testing.T) {
 	require.Zero(t, manifest.Producers[0].RecordBytes, "building growth choices must not mutate the compiler graph")
 }
 
+func TestImportOptionalStagingKeepsAdmissionAndRecordGrowth(t *testing.T) {
+	schema := []types.Type{types.T_varchar.ToType()}
+	for _, test := range []struct {
+		name       string
+		unit       int64
+		headroom   bool
+		wantBuffer bool
+	}{
+		{name: "available", unit: 16 << 20, headroom: true, wantBuffer: true},
+		{name: "no_headroom", unit: 16 << 20},
+		{name: "record_can_grow", unit: 1 << 20, headroom: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			manifest := MemoryManifest{TargetUnit: test.unit, Parallel: 1, NoWait: true,
+				Producers: []MemoryProducerDescriptor{{Kind: "csv", Schema: schema}, {Kind: "insert-meta", Inputs: []uint32{0}, InsertOnly: true, TableCount: 1}},
+				Stages:    []MemoryStageDescriptor{{Role: MemoryStageCSV, Count: 1, Schema: schema, RetainedFields: 1}, {Role: MemoryStageOutput, Count: 1, Schema: schema, TableCount: 1, InsertOnly: true}},
+			}
+			specs, _, err := memoryManifestCandidates(manifest, test.unit)
+			require.NoError(t, err)
+			limit := workingLayoutTotal(specs[0])
+			if test.headroom {
+				limit += test.unit
+			}
+			throttler := newCompilerMemoryThrottler(t.Name(), 1, rscthrottler.WithConstLimit(limit), rscthrottler.WithMemorySampleForTesting(limit, 0))
+			meta, err := admitMemoryManifest(context.Background(), throttler, manifest)
+			require.NoError(t, err)
+			t.Cleanup(meta.WorkingSet.Close)
+			require.Equal(t, test.unit, meta.UnitBytes, "the optional buffer cannot shrink admission")
+			lease, err := meta.WorkingSet.TryAcquireStaging(context.Background())
+			require.NoError(t, err)
+			if test.wantBuffer {
+				require.NotNil(t, lease)
+				require.Equal(t, test.unit, lease.Capacity())
+				lease.Release()
+			} else {
+				require.Nil(t, lease)
+			}
+		})
+	}
+}
+
 func (c *Compile) importMemoryLayout(unit int64) (*process.ImportMemory, rscthrottler.WorkingSetSpec, bool, error) {
 	manifest, err := c.localMemoryManifest(unit)
 	if err != nil {
