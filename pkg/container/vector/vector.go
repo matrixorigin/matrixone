@@ -8525,7 +8525,14 @@ func unionT[T int32 | int64](v, w *Vector, sels []T, mp *mpool.MPool) error {
 					p2 := unsafe.Pointer(&w.data[int(sels[0])*8])
 					*(*uint64)(p1) = *(*uint64)(p2)
 				} else {
-					unionNarrowFixedSelected(v, w, oldLen, sels, tlen)
+					// Admit the entire destination span once. Every row pointer
+					// below remains within it, including the complete value.
+					dst := v.data[oldLen*8 : (oldLen+len(sels))*8]
+					for i, sel := range sels {
+						p1 := unsafe.Add(unsafe.Pointer(unsafe.SliceData(dst)), i*8)
+						p2 := unsafe.Pointer(&w.data[int(sel)*8])
+						*(*uint64)(p1) = *(*uint64)(p2)
+					}
 				}
 			case 4:
 				if len(sels) == 1 {
@@ -8533,7 +8540,12 @@ func unionT[T int32 | int64](v, w *Vector, sels []T, mp *mpool.MPool) error {
 					p2 := unsafe.Pointer(&w.data[int(sels[0])*4])
 					*(*uint32)(p1) = *(*uint32)(p2)
 				} else {
-					unionNarrowFixedSelected(v, w, oldLen, sels, tlen)
+					dst := v.data[oldLen*4 : (oldLen+len(sels))*4]
+					for i, sel := range sels {
+						p1 := unsafe.Add(unsafe.Pointer(unsafe.SliceData(dst)), i*4)
+						p2 := unsafe.Pointer(&w.data[int(sel)*4])
+						*(*uint32)(p1) = *(*uint32)(p2)
+					}
 				}
 			case 2:
 				for i, sel := range sels {
@@ -8558,16 +8570,6 @@ func unionT[T int32 | int64](v, w *Vector, sels []T, mp *mpool.MPool) error {
 		return err
 	}
 	return nil
-}
-
-// unionNarrowFixedSelected keeps typed-view setup out of unionT's common frame.
-// Unsigned representatives preserve the bits of every logical type of the width.
-func unionNarrowFixedSelected[S int32 | int64](v, w *Vector, oldLen int, sels []S, width int) {
-	if width == 4 {
-		unionFixedSelected[uint32](v.data[oldLen*4:(oldLen+len(sels))*4], w.data[:w.length*4], sels)
-	} else {
-		unionFixedSelected[uint64](v.data[oldLen*8:(oldLen+len(sels))*8], w.data[:w.length*8], sels)
-	}
 }
 
 // unionWideFixedSelected handles widths that otherwise require a dynamic copy
