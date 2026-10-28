@@ -13102,6 +13102,30 @@ func TestMaskQueryForDebugTraceStagedSQLMode(t *testing.T) {
 	require.NotContains(t, out, "STAGED_DBG_CANARY2")
 }
 
+// #30747 review (nested PREPARE boundary): the FIRST statement inside a
+// `begin ... end` block — a compound statement or a CREATE SQL TASK body —
+// sits at statement-initial position without a preceding ';'; the
+// debug-trace helper must still descend into that PREPARE's payload
+// (observed query-trace regression coverage, review probe verbatim).
+func TestMaskQueryForDebugTraceNestedPrepare(t *testing.T) {
+	q := `begin prepare p from "create stage s url='file:///x' credentials={'aws_secret_key'='NESTED_TRACE_CANARY'}"; execute p; end`
+	for _, limit := range []int{-1, 400} {
+		out := maskQueryForDebugTrace(q, limit, "")
+		require.NotContains(t, out, "NESTED_TRACE_CANARY")
+		require.Contains(t, out, `credentials={'aws_secret_key'='******'}`)
+	}
+
+	// the task wrapper hits the same first-in-body position
+	out := maskQueryForDebugTrace(
+		`create task t as begin prepare p from "create stage s credentials={'k'='NESTED_TASK_CANARY'}"; execute p; end`, 400, "")
+	require.NotContains(t, out, "NESTED_TASK_CANARY")
+
+	// the redaction walker masks the nested payload identically
+	redacted := redactStatementTextForLogging(nil, q, "")
+	require.NotContains(t, redacted, "NESTED_TRACE_CANARY")
+	require.Contains(t, redacted, `credentials={'aws_secret_key'='******'}`)
+}
+
 func TestMaskQueryForDebugTraceSQLModeOperands(t *testing.T) {
 	const mode = "NO_BACKSLASH_ESCAPES"
 	const stage = ` create stage s url='file:///x' credentials={'k'='foo\','secret_key'='TRACE_OPERAND_CANARY'}`

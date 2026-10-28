@@ -332,6 +332,86 @@ func TestMaskPreparedSqlLiteralsMultiStatement(t *testing.T) {
 	require.Equal(t, sql, MaskSensitiveSqlLiterals(sql))
 }
 
+// #30747 review (nested PREPARE boundary): the FIRST statement inside a
+// compound block or control-flow body sits at statement-initial position
+// even though no ';' precedes it — re-arming statement start only at ';'
+// left an interior PREPARE's payload opaque, so its credentials survived
+// (review probe, verbatim: `begin prepare p from "..."; execute p; end`
+// and the CREATE SQL TASK wrapper). Nested statement starts re-arm the
+// descent without double-masking later statements of the same body.
+func TestMaskPrepareAtNestedStatementBoundary(t *testing.T) {
+	payload := `"create stage s url='file:///x' credentials={'aws_secret_key'='NESTED_REVIEW_CANARY'}"`
+	maskedPayload := `"create stage s url='file:///x' credentials={'aws_secret_key'='******'}"`
+
+	t.Run("first prepare inside begin end", func(t *testing.T) {
+		sql := `begin prepare p from ` + payload + `; execute p; end`
+		got := MaskSensitiveSqlLiterals(sql)
+		require.NotContains(t, got, "NESTED_REVIEW_CANARY")
+		require.Contains(t, got, `begin prepare p from `+maskedPayload)
+		require.Contains(t, got, "; execute p; end")
+		require.Equal(t, got, MaskSensitiveSqlLiterals(got), "idempotent")
+
+		// per-statement walker keeps the same masking
+		perStmt := MaskSensitiveSqlLiteralsPerStatement(sql, 0)
+		require.NotContains(t, perStmt, "NESTED_REVIEW_CANARY")
+		require.Contains(t, perStmt, maskedPayload)
+
+		// task wrapper hits the same first-in-body position
+		sql = `create task t as begin prepare p from ` + payload + `; execute p; end`
+		got = MaskSensitiveSqlLiterals(sql)
+		require.NotContains(t, got, "NESTED_REVIEW_CANARY")
+		require.Contains(t, got, maskedPayload)
+	})
+
+	t.Run("nesting depth and case variants", func(t *testing.T) {
+		// inner block's first prepare at depth 2
+		sql := `begin Begin prepare p from ` + payload + `; end; end`
+		got := MaskSensitiveSqlLiterals(sql)
+		require.NotContains(t, got, "NESTED_REVIEW_CANARY")
+		require.Contains(t, got, maskedPayload)
+		require.Equal(t, got, MaskSensitiveSqlLiterals(got), "idempotent")
+	})
+
+	t.Run("second prepare in one block masks once via the semicolon path", func(t *testing.T) {
+		sql := `begin prepare p from ` + payload + `; prepare q from ` + payload + `; execute p; execute q; end`
+		got := MaskSensitiveSqlLiterals(sql)
+		require.NotContains(t, got, "NESTED_REVIEW_CANARY")
+		require.Contains(t, got, `begin prepare p from `+maskedPayload)
+		require.Contains(t, got, `; prepare q from `+maskedPayload)
+		require.Equal(t, got, MaskSensitiveSqlLiterals(got), "idempotent, no double masking")
+	})
+
+	t.Run("control-flow body openers", func(t *testing.T) {
+		for _, tc := range []struct{ name, sql string }{
+			{"then", `begin if a then prepare p from ` + payload + `; end if; end`},
+			{"else", `begin if a then select 1; else prepare p from ` + payload + `; end if; end`},
+			{"while do", `begin while a do prepare p from ` + payload + `; end while; end`},
+			{"repeat", `begin repeat prepare p from ` + payload + ` until b end repeat; end`},
+			{"loop", `begin lp: loop prepare p from ` + payload + `; end loop; end`},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				got := MaskSensitiveSqlLiterals(tc.sql)
+				require.NotContains(t, got, "NESTED_REVIEW_CANARY")
+				require.Contains(t, got, maskedPayload)
+				require.Equal(t, got, MaskSensitiveSqlLiterals(got), "idempotent")
+			})
+		}
+	})
+
+	t.Run("controls", func(t *testing.T) {
+		// unwrapped PREPARE still masks exactly as before
+		sql := `prepare p from "create stage s url='file:///x' credentials={'aws_key'='CTRL_CANARY'}"`
+		got := MaskSensitiveSqlLiterals(sql)
+		require.NotContains(t, got, "CTRL_CANARY")
+		require.Contains(t, got, `credentials={'aws_key'='******'}`)
+
+		// the r14 4-statement NBE batch keeps its 4 effective-mode spans
+		batch := `SET sql_mode='NO_BACKSLASH_ESCAPES'; SELECT 'access_key_id'='foo\'; SET sql_mode=''; create stage s2 url="file:///x\"z" credentials={'k'='REVIEW_NEW_CANARY'}`
+		require.Len(t, StatementSQLModes(batch, 0), 4)
+		require.NotContains(t, MaskSensitiveSqlLiteralsPerStatement(batch, 0), "REVIEW_NEW_CANARY")
+	})
+}
+
 // #30747 review: each malformed unquoted value run is consumed once; a long
 // run of repeated a= segments must stay linear instead of re-scanning the
 // suffix once per token. Assert the raw ranges, not scheduler-sensitive wall

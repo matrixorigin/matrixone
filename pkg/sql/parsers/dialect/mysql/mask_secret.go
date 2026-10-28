@@ -217,7 +217,18 @@ func collectCredentialMasks(sql string, initial CredentialMapState, maskAll bool
 					}
 				}
 			}
-			statementStart = false
+			// Compound blocks and control-flow bodies open a FRESH
+			// statement-initial position: the FIRST statement inside
+			// `begin ... end` (compound statement, CREATE SQL TASK body;
+			// the scanner yields SPBEGIN for the `begin` keyword) or
+			// after THEN/ELSE/DO/REPEAT/LOOP must still reach the
+			// statement-initial PREPARE descent above (#30747 review:
+			// re-arming only at ';' left the first PREPARE inside a block
+			// an opaque string, so its credentials survived). Arming is
+			// idempotent per opener — the second+ statement of a body is
+			// re-armed by its preceding ';' exactly as before.
+			statementStart = typ == SPBEGIN || typ == THEN || typ == ELSE ||
+				typ == DO || typ == REPEAT || typ == LOOP
 		}
 		if tokStart < coveredUntil {
 			// Already redacted by an unquoted value run below; skip this

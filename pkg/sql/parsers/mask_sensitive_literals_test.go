@@ -134,4 +134,26 @@ func TestHandleSqlForRecordWithSQLMode(t *testing.T) {
 			require.NotContains(t, record, "REVIEW_NEW_CANARY")
 		}
 	})
+
+	// #30747 review (nested PREPARE boundary): the first PREPARE inside a
+	// compound `begin ... end` block — or a CREATE SQL TASK body — is
+	// statement-initial for redaction even without a preceding ';'; its
+	// payload must be descended into for records too.
+	t.Run("first prepare inside compound block", func(t *testing.T) {
+		sql := `begin prepare p from "create stage s url='file:///x' credentials={'aws_secret_key'='NESTED_RECORD_CANARY'}"; execute p; end`
+		records, spans := HandleSqlForRecordSpansWithSQLMode(sql, "")
+		require.Len(t, spans, len(records))
+		for _, record := range records {
+			require.NotContains(t, record, "NESTED_RECORD_CANARY")
+		}
+		require.Contains(t, records[0], `credentials={'aws_secret_key'='******'}`)
+
+		// the by-statement helper masks the same nested payload
+		byStmt, err := HandleSqlForRecordByStatementWithSQLMode(context.Background(), sql, "")
+		require.NoError(t, err)
+		require.NotEmpty(t, byStmt)
+		for _, record := range byStmt {
+			require.NotContains(t, record, "NESTED_RECORD_CANARY")
+		}
+	})
 }
