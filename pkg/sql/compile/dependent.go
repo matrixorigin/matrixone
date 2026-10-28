@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dependent"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
@@ -122,13 +123,24 @@ func (c *Compile) compileDependentSource(node *plan.Node) (dependent.SourceFacto
 		if node.ObjRef.PubInfo != nil {
 			ctx = defines.AttachAccountId(ctx, uint32(node.ObjRef.PubInfo.TenantId))
 		}
-		db, err := c.e.Database(ctx, node.ObjRef.SchemaName, txn)
-		if err != nil {
-			return nil, err
-		}
-		relation, err := db.Relation(ctx, node.TableDef.Name, proc)
-		if err != nil {
-			return nil, err
+		// Locking current-read integration (pre-PR review P2): an admitted
+		// dependent source consumes the exclusive relation pre-bound onto THIS
+		// attempt's carrier at pre-pipeline time, so its ranges, readers and
+		// rows resolve at the publication frontier exactly like an ordinary
+		// marked scan. An ABSENT preparation — unmarked statement, below-gate
+		// cluster, decline, a declined attempt, or an attempt this preparation
+		// did not cover — keeps today's session source unchanged.
+		relation := c.executionReadDependentBoundRelation(node)
+		if relation == nil {
+			var db engine.Database
+			db, err := c.e.Database(ctx, node.ObjRef.SchemaName, txn)
+			if err != nil {
+				return nil, err
+			}
+			relation, err = db.Relation(ctx, node.TableDef.Name, proc)
+			if err != nil {
+				return nil, err
+			}
 		}
 		data, err := relation.Ranges(ctx, engine.RangesParam{PreAllocBlocks: 2, TxnOffset: c.TxnOffset, Policy: engine.Policy_CollectAllData})
 		if err != nil {
@@ -240,4 +252,217 @@ func (s *dependentNativeSource) CloseWithCause(cause error) error {
 	s.op = nil
 	s.closeErr = err
 	return err
+}
+
+// executionReadDependentSourcePrep is one admitted dependent source's
+// per-attempt preparation (pre-PR review P2): the exclusive relation handle
+// bound onto this attempt's carrier, plus the attempt epoch that validates
+// it. Mid-stream region demand consumes the handle instead of re-deciding
+// admission, so a decline or binding refusal can never strand current-read
+// fragments behind rows an earlier source already produced.
+type executionReadDependentSourcePrep struct {
+	relation engine.Relation
+	frontier timestamp.Timestamp
+	epoch    uint64
+}
+
+// executionReadPrepareDependentSources joins this statement's dependent
+// (correlation) templates to the attempt's execution-read lifecycle. It runs
+// presence-gated at pre-pipeline time, BEFORE the stamp sweep and before any
+// pipeline starts: every marked dependent source's admission decision,
+// carrier acquisition and relation binding completes up front, while the
+// lazy region-demand opens ride the prepared handles. Unmarked statements
+// never touch the template.
+// executionReadProbeDependentSources mirrors executionReadPrepareDependent-
+// Sources's walk for the pre-pipeline admission probe (pre-PR review round
+// 9, D-10 clause 3/G4): every source node a dependent template opens for an
+// admitted marked scan resolves through the same scratch-scope construction,
+// and a soft binding refusal declines the whole statement BEFORE the
+// pre-pipeline lock options are chosen — never after the marked acquisition
+// suppressed a conflict the same statement would then restore to snapshot
+// semantics.
+func (c *Compile) executionReadProbeDependentSources() error {
+	for _, s := range c.scopes {
+		if err := c.executionReadProbeDependentScope(s); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// executionReadProbeDependentScope walks one compiled scope subtree with the
+// same shape executionReadPrepareDependentScope prepares through: dependent
+// templates (the single Template construction site in compileDependentQuery)
+// are visited once, never twice.
+func (c *Compile) executionReadProbeDependentScope(s *Scope) error {
+	if s == nil {
+		return nil
+	}
+	if err := vm.HandleAllOp(s.RootOp, func(_ vm.Operator, op vm.Operator) error {
+		dep, ok := op.(*dependent.Operator)
+		if !ok || dep.Template == nil {
+			return nil
+		}
+		return dep.Template.VisitSourceNodes(c.executionReadProbeDependentSource)
+	}); err != nil {
+		return err
+	}
+	for _, child := range s.PreScopes {
+		if err := c.executionReadProbeDependentScope(child); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// executionReadProbeDependentSource probes ONE admitted marked dependent
+// source's relation through the same scratch-scope construction the
+// preparation itself uses, without installing any scratch, carrier or
+// frontier state.
+func (c *Compile) executionReadProbeDependentSource(node *plan.Node) error {
+	if c.execReadDisabled || !c.executionReadScanAdmitted(node) {
+		return nil
+	}
+	scratch := &Scope{
+		Proc:       c.proc,
+		NodeInfo:   engine.Node{Addr: c.addr, Mcpu: 1, CNCNT: 1, CNIDX: 0},
+		DataSource: &Source{node: node},
+	}
+	return c.probeExecutionReadRelation(scratch, node)
+}
+
+func (c *Compile) executionReadPrepareDependentSources() error {
+	qry, _ := plan2.PlanLockingReadQuery(c.pn)
+	if !plan2.PlanHasLockingCurrentRead(qry) {
+		return nil
+	}
+	for _, s := range c.scopes {
+		if err := c.executionReadPrepareDependentScope(s); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// executionReadPrepareDependentScope walks one compiled scope subtree and
+// prepares every dependent Operator's sources it carries. The correlation
+// statement compiles to exactly one dependent template (the single
+// Template construction site in compileDependentQuery), so no template is
+// visited twice.
+func (c *Compile) executionReadPrepareDependentScope(s *Scope) error {
+	if s == nil {
+		return nil
+	}
+	if err := vm.HandleAllOp(s.RootOp, func(_ vm.Operator, op vm.Operator) error {
+		dep, ok := op.(*dependent.Operator)
+		if !ok || dep.Template == nil {
+			return nil
+		}
+		return dep.Template.VisitSourceNodes(c.executionReadPrepareDependentSource)
+	}); err != nil {
+		return err
+	}
+	for _, child := range s.PreScopes {
+		if err := c.executionReadPrepareDependentScope(child); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// executionReadPrepareDependentSource completes ONE marked dependent source's
+// admission: the same remote/closure/carrier checks and exclusive relation
+// binding the ordinary init loop runs for compiled scans, with the scratch
+// scope persisted across THIS execution's attempts (never across
+// executions: resetExecutionReadState retires the map at the execution and
+// pool boundaries, and the node-object identity check rebuilds any residue)
+// so a retried execution re-binds the same handle onto the new carrier. A
+// decline leaves the source absent (today's semantics); a binding refusal
+// abandons the WHOLE statement immediately.
+func (c *Compile) executionReadPrepareDependentSource(node *plan.Node) error {
+	if !c.executionReadScanAdmitted(node) {
+		return nil
+	}
+	if c.execReadDisabled {
+		return nil
+	}
+	scratch := c.execReadDependentScopes[node.GetNodeId()]
+	if scratch != nil &&
+		(scratch.DataSource == nil || scratch.DataSource.node != node) {
+		// The cache survives ATTEMPTS of one execution only (the plan's node
+		// objects persist across this execution's attempts). A scratch keyed
+		// by a colliding node id that belongs to a DIFFERENT node object is
+		// residue of a prior execution on a recycled Compile (the pool's
+		// clear() retires the map; this identity check remains the guard for
+		// any path that skips it): its Relation is another query's table.
+		// Drop it and rebuild from this statement's own plan.
+		scratch = nil
+		delete(c.execReadDependentScopes, node.GetNodeId())
+	}
+	if scratch == nil {
+		scratch = &Scope{
+			Proc:       c.proc,
+			NodeInfo:   engine.Node{Addr: c.addr, Mcpu: 1, CNCNT: 1, CNIDX: 0},
+			DataSource: &Source{node: node},
+		}
+		if c.execReadDependentScopes == nil {
+			c.execReadDependentScopes = make(map[int32]*Scope)
+		}
+		c.execReadDependentScopes[node.GetNodeId()] = scratch
+	}
+	declined, execOp, frontier, err := c.executionReadAdmitScan(scratch)
+	if err != nil {
+		return err
+	}
+	if declined {
+		return nil
+	}
+	txnOp, ctx, err := c.getCompileTableScanDataSourceTxn(scratch)
+	if err != nil {
+		return err
+	}
+	if scratch.DataSource.Rel == nil {
+		db, dbErr := c.e.Database(ctx, node.ObjRef.SchemaName, txnOp)
+		if dbErr != nil {
+			return dbErr
+		}
+		rel, relErr := db.Relation(ctx, node.TableDef.Name, c.proc)
+		if relErr != nil {
+			return relErr
+		}
+		scratch.DataSource.Rel = engine.NewRelationHandle(rel)
+	} else if resetErr := scratch.DataSource.Rel.Reset(txnOp); resetErr != nil {
+		return resetErr
+	}
+	bound, bindErr := c.bindExecutionReadRelation(scratch, execOp)
+	if bindErr != nil {
+		return bindErr
+	}
+	if !bound {
+		return c.abandonExecutionRead()
+	}
+	if c.execReadDependentSources == nil {
+		c.execReadDependentSources = make(map[int32]executionReadDependentSourcePrep)
+	}
+	c.execReadDependentSources[node.GetNodeId()] = executionReadDependentSourcePrep{
+		relation: scratch.DataSource.Rel,
+		frontier: frontier,
+		epoch:    c.execReadEpoch,
+	}
+	return nil
+}
+
+// executionReadDependentBoundRelation returns the exclusive relation handle
+// pre-bound onto this attempt's carrier for an admitted dependent source,
+// or nil when the source must keep today's session path (unmarked, declined
+// statement, or a preparation belonging to a different attempt).
+func (c *Compile) executionReadDependentBoundRelation(node *plan.Node) engine.Relation {
+	if node == nil || c.execReadDisabled || c.execReadDependentSources == nil {
+		return nil
+	}
+	prep, ok := c.execReadDependentSources[node.GetNodeId()]
+	if !ok || prep.epoch != c.execReadEpoch {
+		return nil
+	}
+	return prep.relation
 }

@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"errors"
 	"regexp"
 	"strconv"
 	"sync"
@@ -1227,6 +1228,43 @@ type SourceCommitTSProvider interface {
 // transactions after the copy timestamp.
 type SourceCommitTSAfterCopyProvider interface {
 	SourceCommitTSAfterCopy(ctx context.Context, mustExceed types.TS) (types.TS, error)
+}
+
+// ExecutionReadUnsupportedError is the soft signal returned by
+// ExecutionReadBinding when a relation kind cannot carry an execution-read
+// binding: the statement then falls back to today's snapshot semantics as a
+// whole (never mix current-read and snapshot fragments per execution).
+type ExecutionReadUnsupportedError struct {
+	Detail string
+}
+
+func (e *ExecutionReadUnsupportedError) Error() string {
+	return "execution-read binding is not supported for this relation kind: " + e.Detail
+}
+
+// IsExecutionReadUnsupported reports whether err is the soft
+// execution-read binding refusal.
+func IsExecutionReadUnsupported(err error) bool {
+	var target *ExecutionReadUnsupportedError
+	return errors.As(err, &target)
+}
+
+// ExecutionReadBinding is implemented by EXCLUSIVE relation handles that can
+// re-base this execution's relation onto an execution-read operator carrying
+// the locking execution's frontier (design D-3 relation-read surface: marked
+// relations resolve readTS from the admitted frontier while workspace, txn
+// metadata and lock identity delegate unchanged).
+type ExecutionReadBinding interface {
+	BindExecutionReadOp(op client.TxnOperator) error
+	// ProbeExecutionReadSupport returns exactly the soft refusal
+	// BindExecutionReadOp would return for this relation — the SAME shared
+	// predicate, without the carrier re-base, the tombstone-mask computation
+	// or any other binding side effect — so the compile can finish the
+	// whole-statement admission decision BEFORE any pre-pipeline lock option
+	// is chosen (pre-PR review round 9, D-10 clause 3/G4). A hard binding
+	// failure (mask computation, txn validity) is deliberately NOT
+	// predicted: it stays a real failure of the bind path.
+	ProbeExecutionReadSupport() error
 }
 
 // NewRelationHandle returns an exclusively owned handle when the engine

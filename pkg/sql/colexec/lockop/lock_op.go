@@ -413,6 +413,10 @@ func performLock(
 ) error {
 	needRetry := false
 	consumed := make([]bool, len(lockOp.targets))
+	// Max-aggregated retry floor for every marked target of this call
+	// (design D-5): one condition is surfaced once, after all locks have
+	// been taken, so the retry cannot immediately conflict again.
+	var markingFloor timestamp.Timestamp
 	for idx, target := range lockOp.targets {
 		if consumed[idx] {
 			continue
@@ -502,6 +506,23 @@ func performLock(
 		// and lockservice additionally bounds the actual keys retained across calls
 		// for a transaction and physical lock table. A planner estimate cannot own
 		// that runtime budget and must not widen it to the full table domain.
+		lockOpts := DefaultLockOptions(lockOp.ctr.parker).
+			WithLockMode(target.mode).
+			WithFetchLockRowsFunc(fetchRows).
+			WithMaxBytesPerLock(int(proc.GetLockService().GetConfig().MaxLockRowCount)).
+			WithFilterRows(target.filter, filterCols).
+			WithLockTable(lockTable, target.changeDef).
+			WithNoWait(target.noWait).
+			WithSkipLocked(target.skipLocked).
+			WithHasNewVersionInRangeFunc(hasNewVersionInRangeFunc)
+		// D-5/D-8 wiring: a marked target of a stamped, admitted execution
+		// revalidates against this attempt's frontier and never advances the
+		// transaction snapshot.
+		if lockOp.markingTarget(target) {
+			lockOpts.markingCurrentRead = true
+			lockOpts.markingFrontier = lockOp.markingFrontier
+			lockOpts.markingFloor = &markingFloor
+		}
 		locked, defChanged, refreshTS, err := doLock(
 			proc.Ctx,
 			lockOp.engine,
@@ -513,15 +534,7 @@ func performLock(
 			target.primaryColumnIndexInBatch,
 			target.primaryColumnType,
 			target.partitionColumnIndexInBatch,
-			DefaultLockOptions(lockOp.ctr.parker).
-				WithLockMode(target.mode).
-				WithFetchLockRowsFunc(fetchRows).
-				WithMaxBytesPerLock(int(proc.GetLockService().GetConfig().MaxLockRowCount)).
-				WithFilterRows(target.filter, filterCols).
-				WithLockTable(lockTable, target.changeDef).
-				WithNoWait(target.noWait).
-				WithSkipLocked(target.skipLocked).
-				WithHasNewVersionInRangeFunc(hasNewVersionInRangeFunc),
+			lockOpts,
 			0,
 		)
 		if lockOp.logger.Enabled(zap.DebugLevel) {
@@ -581,10 +594,91 @@ func performLock(
 	if needRetry && lockOp.ctr.retryError == nil {
 		lockOp.ctr.retryError = retryError
 	}
+	// D-5 single surface: the whole performLock call raises at most one
+	// locking-read retry error, carrying the MAX floor any marked branch
+	// recorded. A definition rebuild keeps its existing precedence.
+	if markingFloor.Greater(timestamp.Timestamp{}) &&
+		!markingFloor.IsEmpty() &&
+		lockOp.ctr.retryError == nil {
+		lockOp.ctr.lockingReadFloor = markingFloor
+		lockOp.ctr.retryError = moerr.NewTxnNeedRetryLockingRead(
+			proc.Ctx, markingFloor.PhysicalTime, markingFloor.LogicalTime)
+	}
 	if lockOp.ctr.defChanged {
 		lockOp.ctr.retryError = retryWithDefChangedError
 	}
 	return nil
+}
+
+// SetLockingReadCurrentFrontier stamps this attempt's execution frontier
+// (design D-5/D-8): compile's pre-pipeline sweep publishes it after this
+// attempt's source assembly admitted a carrier and before any pipeline
+// starts, so marks act on exactly the attempt whose read views they track.
+// The stamp is also where every occurrence's EFFECTIVE marked activation
+// resolves for this execution (rev 24, pre-PR review round 11; G2/R8-F3
+// with R9-F3): presence and the raw bind-time H are bind provenance, so the
+// per-execution engagement comparison runs here, against the executing
+// transaction's SnapshotTS the caller passes — the same predicate
+// compile's scan admission uses — and an occurrence whose H engages the
+// historical cohort for THIS execution resolves inert (exempt from marked
+// revalidation) while a later execution whose SnapshotTS no longer engages
+// re-resolves marked. An empty frontier retires every activation, exactly
+// as Reset does.
+func (lockOp *LockOp) SetLockingReadCurrentFrontier(
+	frontier, execSnapshotTS timestamp.Timestamp,
+) {
+	lockOp.markingFrontier = frontier
+	lockOp.markingFrontierSet = !frontier.IsEmpty()
+	for i := range lockOp.targets {
+		lockOp.targets[i].lockingReadEffective =
+			lockOp.markingFrontierSet &&
+				lockOp.targets[i].lockingRead &&
+				!lockingSnapshotEngagesCohort(lockOp.targets[i].explicitSnapshot, execSnapshotTS)
+	}
+}
+
+// lockingSnapshotEngagesCohort reports whether an occurrence's raw bind-time
+// explicit snapshot engages the historical cohort for the transaction whose
+// SnapshotTS is execSnapshotTS: nonzero and strictly older. This is the same
+// engagement test compile's scan admission applies
+// (executionReadScanAdmitted), evaluated on the provenance the plan target
+// stores beside the presence. A zero provenance never engages — ordinary
+// occurrences have no named snapshot, and occurrences without a real TS keep
+// the current read. No per-execution status is stored or transported here:
+// it is resolved afresh at every stamp.
+func lockingSnapshotEngagesCohort(explicitSnapshot, execSnapshotTS timestamp.Timestamp) bool {
+	return !explicitSnapshot.IsEmpty() && explicitSnapshot.Less(execSnapshotTS)
+}
+
+// MarkLockingReadTarget marks ONE target occurrence's bind-time locking
+// current-read presence (design D-1: presence is the plan.LockTarget's own
+// per-target field). Production installs presence with the target at add
+// time (constructLockOp / the wire rebuild); this setter exists for tests
+// that add targets through the generic adders and then pin one occurrence's
+// provenance, and for the operator-side unit surface of the per-occurrence
+// contract. Presence is bind provenance only (rev 24): set it BEFORE the
+// attempt stamp, whose resolution turns it into the occurrence's effective
+// activation for that attempt.
+func (lockOp *LockOp) MarkLockingReadTarget(index int, marked bool) {
+	lockOp.targets[index].lockingRead = marked
+}
+
+// markingTarget reports whether this physical lock acts for a marked
+// current-read OCCURRENCE of an admitted, stamped execution: the occurrence's
+// own presence carries the contract (pre-PR review round 10, finding 2) —
+// never expanded by table ID, so a same-table occurrence whose own presence
+// is unmarked (the LEFT-lowered same-table scalar-subquery shape) keeps
+// today's lock-only behavior — and marks never act on an unstamped
+// operator. Rev 24, pre-PR review round 11: only the occurrence's EFFECTIVE
+// activation for the stamped attempt acts marked, resolved at the stamp
+// from presence + raw H against the executing SnapshotTS; an occurrence
+// whose explicit snapshot ENGAGES the historical cohort for this execution
+// (H nonzero, H < executing SnapshotTS) keeps today's lock-only
+// revalidation — its mid-wait commit surfaces the legacy terminal conflict
+// — and a later execution that no longer engages re-attaches the marked
+// contract (G2/R8-F3, R9-F3).
+func (lockOp *LockOp) markingTarget(target lockTarget) bool {
+	return lockOp.markingFrontierSet && target.lockingReadEffective
 }
 
 // LockTable lock table, all rows in the table will be locked, and wait current txn
@@ -630,6 +724,44 @@ func LockTableWithMode(
 	return lockTableWithModeAndContext(proc.Ctx, eng, proc, tableID, pkType, mode, changeDef, true, false, 0)
 }
 
+// LockTableWithModeMarked locks all rows in a table with the specified mode
+// while carrying the admitted locking-current-read contract (design
+// D-5/D-7; pre-PR review round 8, finding 2). compileLock stages a promoted
+// marked Shared table target into Compile.lockTables and lockTable acquires
+// it in the pre-pipeline phase, BEFORE the attempt's source assembly — so a
+// promoted FOR SHARE / LOCK IN SHARE MODE statement must ride the SAME
+// marked doLock revalidation the marked row path uses. With the marks set,
+// a fixed-SI wait-resolved conflict (the writer committed while this reader
+// waited on its lock) and the defensive stale-flag cases resolve through the
+// marking branches: the logtail apply is waited past the grant-relevant
+// timestamp and the acquisition SUCCEEDS for the current-read statement —
+// the attempt's read frontier is then re-acquired after the grant through
+// the execution-read publication barrier — instead of today's terminal
+// "SI not support retry" WW-conflict, which fails exactly the locking read
+// that should see the committed value. markingFrontier names the read view
+// the call is already guaranteed to cover when it runs — the fixed SI
+// transaction snapshot — and no branch ever advances the transaction
+// snapshot. Table/DDL fences stay terminal for every SI statement
+// (non-goals N3/G3), and RC keeps its base branches. Unmarked statements
+// keep LockTableWithMode byte-identically.
+func LockTableWithModeMarked(
+	eng engine.Engine,
+	proc *process.Process,
+	tableID uint64,
+	pkType types.Type,
+	mode lock.LockMode,
+	changeDef bool,
+	markingFrontier timestamp.Timestamp,
+) error {
+	var deadline int64
+	if value, ok := proc.Ctx.Deadline(); ok {
+		deadline = value.UnixNano()
+	}
+	return lockTableWithModeMarked(
+		proc.Ctx, eng, proc, tableID, pkType, mode, changeDef, true, false,
+		true, markingFrontier, deadline)
+}
+
 // LockTableForSnapshotRefreshWithContext acquires a table lock and advances an
 // RC transaction's snapshot past the latest commit on that table without
 // turning the refresh into the ordinary retry signal. A fixed-snapshot
@@ -664,6 +796,35 @@ func lockTableWithModeAndContext(
 	refreshTableSnapshot bool,
 	lockWaitDeadline int64,
 	waitPolicy ...lock.WaitPolicy) error {
+	return lockTableWithModeMarked(
+		ctx, eng, proc, tableID, pkType, mode, changeDef, retryOnRefresh,
+		refreshTableSnapshot, false, timestamp.Timestamp{}, lockWaitDeadline, waitPolicy...)
+}
+
+// lockTableWithModeMarked is the one table-lock acquisition core: a
+// marking=false pass keeps every legacy caller byte-identical, and the
+// marked pre-pipeline entry (LockTableWithModeMarked) turns on the marked
+// current-read revalidation so doLock's bat==nil SI branches (the marked
+// wait-resolved conflict, the stale-flag defensive cases and the marked
+// stale-table validation when the table snapshot refresh flavor is armed)
+// serve the admitted statement instead of today's terminal SI conflicts. The
+// markingFloor accumulator stays nil on the table path: rows have not been
+// read yet when this lock is taken, so there is nothing a floor would
+// rebind — the attempt's read frontier is re-acquired after the grant.
+func lockTableWithModeMarked(
+	ctx context.Context,
+	eng engine.Engine,
+	proc *process.Process,
+	tableID uint64,
+	pkType types.Type,
+	mode lock.LockMode,
+	changeDef bool,
+	retryOnRefresh bool,
+	refreshTableSnapshot bool,
+	markingCurrentRead bool,
+	markingFrontier timestamp.Timestamp,
+	lockWaitDeadline int64,
+	waitPolicy ...lock.WaitPolicy) error {
 	txnOp := proc.GetTxnOperator()
 	if !txnOp.Txn().IsPessimistic() {
 		return nil
@@ -691,6 +852,17 @@ func lockTableWithModeAndContext(
 		WithLockTable(true, changeDef).
 		WithTableSnapshotRefresh(refreshTableSnapshot).
 		WithFetchLockRowsFunc(GetFetchRowsFunc(pkType))
+	if markingCurrentRead {
+		// The admitted current-read contract for a marked staged table lock
+		// (design D-5/D-8 wiring, same fields a marked row target receives in
+		// performLock): revalidation compares against the read view this
+		// call is already guaranteed to cover (markingFrontier -- the fixed
+		// SI transaction snapshot the call site passes) and never advances
+		// the transaction snapshot. The floor accumulator stays nil on the
+		// table path: no rows have been read when this lock is taken.
+		opts.markingCurrentRead = true
+		opts.markingFrontier = markingFrontier
+	}
 	if len(waitPolicy) > 0 {
 		opts.waitPolicy = &waitPolicy[0]
 	}
@@ -1103,6 +1275,16 @@ func doLock(
 	// statement was compiled against an older physical table generation.
 	definitionChanged := (result.TableDefChanged && result.HasPrevCommit) ||
 		(result.TableDefChangedAt != nil && planSnapshotTS.Less(*result.TableDefChangedAt))
+	// A retained definition fence cannot promise progress for a marked SI
+	// statement: the compile driver rebuilds the plan, but every rebuilt plan
+	// recaptures the SAME fixed SI snapshot, so each rebuilt attempt still
+	// predates the fence and the statement would rebuild until cancelled.
+	// Table/DDL fences stay outside the marked rebind family (non-goals N3
+	// and G3 keep table/DDL fences byte-identical; R13-F4 keeps the
+	// tokenized locking-read driver the only marked-SI retry class), so
+	// every SI statement — marked or not — keeps today's terminal
+	// WW-conflict. Only RC advances the snapshot in place and retries.
+	// (pre-PR review round 7, finding 2)
 	if definitionChanged {
 		if !txnOp.Txn().IsRCIsolation() {
 			return false, false, timestamp.Timestamp{},
@@ -1132,6 +1314,14 @@ func doLock(
 	// must not cause an endless retry at the same table timestamp.
 	if opts.refreshTableSnapshot && opts.lockTable && bat == nil &&
 		snapshotTS.Less(lockedTS) {
+		// Marked table-lock statement under SI (design D-5): the stale
+		// validation returns the refresh outcome for the retry driver —
+		// the next attempt re-reads at a strictly newer frontier — instead
+		// of today's terminal WW-conflict.
+		if opts.markingCurrentRead && !txnOp.Txn().IsRCIsolation() {
+			opts.recordMarkingFloor(lockedTS)
+			return true, false, timestamp.Timestamp{}, nil
+		}
 		if !txnOp.Txn().IsRCIsolation() {
 			return false, false, timestamp.Timestamp{},
 				moerr.NewTxnWWConflict(ctx, tableID, "table snapshot is stale")
@@ -1146,6 +1336,40 @@ func doLock(
 			return false, false, timestamp.Timestamp{}, err
 		}
 		return false, false, timestamp.Timestamp{}, nil
+	}
+
+	// Marked current-read target under SI (design D-5, R13-F4): revalidate
+	// the lock result against THIS ATTEMPT'S frontier. A commit inside
+	// (F, now] that touched the predicate rows is invisible to the F-locked
+	// read; the probe returns the refresh outcome as the retry floor. The
+	// snapshot is never advanced on any exit path.
+	if result.NewLockAdd &&
+		!result.HasConflict &&
+		opts.markingCurrentRead &&
+		!txnOp.Txn().IsRCIsolation() &&
+		opts.markingFrontier.LessEq(lockedTS) {
+
+		start = time.Now()
+		newSnapshotTS, err := txnClient.WaitLogTailAppliedAt(ctx, lockedTS)
+		if err != nil {
+			return false, false, timestamp.Timestamp{}, err
+		}
+		analyzeLockWaitTime(analyzer, start)
+
+		fn := opts.hasNewVersionInRangeFunc
+		if fn == nil {
+			fn = hasNewVersionInRange
+		}
+
+		changed, err := fn(proc, rel, analyzer, tableID, eng, bat, idx, partitionIdx, opts.markingFrontier, newSnapshotTS)
+		if err != nil {
+			return false, false, timestamp.Timestamp{}, err
+		}
+
+		if changed {
+			opts.recordMarkingFloor(newSnapshotTS)
+			return true, false, timestamp.Timestamp{}, nil
+		}
 	}
 
 	// Normal path: NewLockAdd=true, no conflict - original check
@@ -1211,6 +1435,36 @@ func doLock(
 		needsExtraCheck = true
 	}
 
+	// Same defensive stale-flag cases for the marked SI statement
+	// (design D-5): the staleness is judged against the execution
+	// frontier, and the refresh outcome goes to the retry floor.
+	if needsExtraCheck &&
+		opts.markingCurrentRead &&
+		!txnOp.Txn().IsRCIsolation() &&
+		opts.markingFrontier.LessEq(lockedTS) {
+		start = time.Now()
+		newSnapshotTS, err := txnClient.WaitLogTailAppliedAt(ctx, lockedTS)
+		if err != nil {
+			return false, false, timestamp.Timestamp{}, err
+		}
+		analyzeLockWaitTime(analyzer, start)
+
+		fn := opts.hasNewVersionInRangeFunc
+		if fn == nil {
+			fn = hasNewVersionInRange
+		}
+
+		changed, err := fn(proc, rel, analyzer, tableID, eng, bat, idx, partitionIdx, opts.markingFrontier, newSnapshotTS)
+		if err != nil {
+			return false, false, timestamp.Timestamp{}, err
+		}
+
+		if changed {
+			opts.recordMarkingFloor(newSnapshotTS)
+			return true, result.TableDefChanged, timestamp.Timestamp{}, nil
+		}
+	}
+
 	if needsExtraCheck && snapshotTS.LessEq(lockedTS) && txnOp.Txn().IsRCIsolation() {
 		start = time.Now()
 		newSnapshotTS, err := txnClient.WaitLogTailAppliedAt(ctx, lockedTS)
@@ -1244,6 +1498,34 @@ func doLock(
 
 	// lockedTS < snapshotTS means snapshot is already ahead
 	if lockedTS.Less(snapshotTS) {
+		return true, false, timestamp.Timestamp{}, nil
+	}
+
+	// Marked statement with a wait-resolved conflict under SI (design D-5):
+	// probe the window from this attempt's frontier. A touched row returns
+	// the refresh outcome as the retry floor; the current read stands only
+	// when the conflict resolved against unrelated keys.
+	if opts.markingCurrentRead && !txnOp.Txn().IsRCIsolation() {
+		start = time.Now()
+		newSnapshotTS, err := txnClient.WaitLogTailAppliedAt(ctx, lockedTS)
+		if err != nil {
+			return false, false, timestamp.Timestamp{}, err
+		}
+		analyzeLockWaitTime(analyzer, start)
+
+		fn := opts.hasNewVersionInRangeFunc
+		if fn == nil {
+			fn = hasNewVersionInRange
+		}
+
+		changed, err := fn(proc, rel, analyzer, tableID, eng, bat, idx, partitionIdx, opts.markingFrontier, newSnapshotTS)
+		if err != nil {
+			return false, false, timestamp.Timestamp{}, err
+		}
+
+		if changed {
+			opts.recordMarkingFloor(newSnapshotTS)
+		}
 		return true, false, timestamp.Timestamp{}, nil
 	}
 
@@ -1844,7 +2126,7 @@ func NewArgumentByEngine(engine engine.Engine) *LockOp {
 func (lockOp *LockOp) CopyToPipelineTarget() []*pipeline.LockTarget {
 	targets := make([]*pipeline.LockTarget, len(lockOp.targets))
 	for i, target := range lockOp.targets {
-		targets[i] = &pipeline.LockTarget{
+		pt := &pipeline.LockTarget{
 			TableId:              target.tableID,
 			PrimaryColIdxInBat:   target.primaryColumnIndexInBatch,
 			PrimaryColTyp:        plan.MakePlan2Type(&target.primaryColumnType),
@@ -1860,6 +2142,26 @@ func (lockOp *LockOp) CopyToPipelineTarget() []*pipeline.LockTarget {
 			NoWait:               target.noWait,
 			SkipLocked:           target.skipLocked,
 		}
+		// D-8 layer 1 / D-5 wire fields (rev 14; round-10 finding 2: the
+		// per-occurrence presence travels on the TARGET's own additive
+		// fields) — populated only for a stamped, admitted execution, so
+		// below-gate and legacy fragments never carry them and old
+		// receivers ignore them. An unmarked same-table occurrence never
+		// inherits the marked occurrence's presence or frontier. Rev 24,
+		// round 11: the shipped value is the occurrence's EFFECTIVE
+		// activation for the stamped attempt — an occurrence whose
+		// explicit snapshot engages the historical cohort for THIS
+		// execution never receives the marked wire fields (G2: the
+		// current-read machinery is withheld from it in those executions),
+		// so the remote rebuild serves its lock on today's lock-only
+		// revalidation and a later execution that no longer engages
+		// re-ships them.
+		if lockOp.markingFrontierSet && target.lockingReadEffective {
+			pt.LockingRead = true
+			pt.CurrentReadFrontierPhysical = lockOp.markingFrontier.PhysicalTime
+			pt.CurrentReadFrontierLogical = lockOp.markingFrontier.LogicalTime
+		}
+		targets[i] = pt
 	}
 	return targets
 }
@@ -1900,6 +2202,9 @@ func (lockOp *LockOp) CopyTargetsFrom(src *LockOp) {
 			skipLocked:                   t.skipLocked,
 			lockRows:                     plan.DeepCopyExpr(t.lockRows),
 			lockTableAtTheEnd:            t.lockTableAtTheEnd,
+			lockingRead:                  t.lockingRead,
+			explicitSnapshot:             t.explicitSnapshot,
+			lockingReadEffective:         t.lockingReadEffective,
 		}
 	}
 }
@@ -1943,7 +2248,8 @@ func (lockOp *LockOp) AddLockTargetWithMode(
 		lockTableAtTheEnd, false, false)
 }
 
-// AddLockTargetWithPolicy adds a target with explicit nonblocking read semantics.
+// AddLockTargetWithPolicy adds a target with explicit nonblocking read
+// semantics; the occurrence is UNMARKED (today's lock-only presence).
 func (lockOp *LockOp) AddLockTargetWithPolicy(
 	tableID uint64,
 	objRef *plan.ObjectRef,
@@ -1956,6 +2262,37 @@ func (lockOp *LockOp) AddLockTargetWithPolicy(
 	lockTableAtTheEnd bool,
 	noWait bool,
 	skipLocked bool) *LockOp {
+	return lockOp.AddLockTargetWithOccurrence(
+		tableID, objRef, mode, primaryColumnIndexInBatch, primaryColumnType,
+		partitionColIndexInBatch, refreshTimestampIndexInBatch, lockRows,
+		lockTableAtTheEnd, noWait, skipLocked, false, timestamp.Timestamp{})
+}
+
+// AddLockTargetWithOccurrence adds a target together with its OCCURRENCE'S
+// bind-time locking-current-read provenance (pre-PR review round 10, finding
+// 2; design D-1: presence is the plan.LockTarget's own per-target field —
+// operator.go's constructLockOp and the remoterun wire rebuild pass exactly
+// that value, so an unmarked occurrence of a marked table never expands by
+// table ID). Rev 24, pre-PR review round 11: the occurrence's raw bind-time
+// explicit-snapshot TS travels with the presence from the plan target's own
+// additive fields, so the attempt stamp can resolve the occurrence's
+// EFFECTIVE activation per execution against the executing SnapshotTS. Both
+// act only while this execution's marking frontier is also stamped — an
+// unstamped operator keeps today's lock-only behavior.
+func (lockOp *LockOp) AddLockTargetWithOccurrence(
+	tableID uint64,
+	objRef *plan.ObjectRef,
+	mode lock.LockMode,
+	primaryColumnIndexInBatch int32,
+	primaryColumnType types.Type,
+	partitionColIndexInBatch int32,
+	refreshTimestampIndexInBatch int32,
+	lockRows *plan.Expr,
+	lockTableAtTheEnd bool,
+	noWait bool,
+	skipLocked bool,
+	lockingRead bool,
+	explicitSnapshot timestamp.Timestamp) *LockOp {
 	lockOp.targets = append(lockOp.targets, lockTarget{
 		tableID:                      tableID,
 		objRef:                       objRef,
@@ -1968,6 +2305,8 @@ func (lockOp *LockOp) AddLockTargetWithPolicy(
 		lockRows:                     lockRows,
 		lockTableAtTheEnd:            lockTableAtTheEnd,
 		partitionColumnIndexInBatch:  partitionColIndexInBatch,
+		lockingRead:                  lockingRead,
+		explicitSnapshot:             explicitSnapshot,
 	})
 	return lockOp
 }
@@ -2110,6 +2449,23 @@ func (lockOp *LockOp) Reset(proc *process.Process, pipelineFailed bool, err erro
 	lockOp.ctr.retryError = nil
 	lockOp.ctr.defChanged = false
 	lockOp.ctr.lockCount = 0
+	// Per-attempt state dies with the attempt it was stamped for (design
+	// D-8): the compile sweep re-stamps the frontier every attempt, and the
+	// rev-24 effective activation resolves with it. The per-OCCURRENCE
+	// presence flags and raw explicit-snapshot provenance are bind-time
+	// facts installed with each target by constructLockOp from the plan
+	// (the plan.LockTarget's own LockingRead and explicit-snapshot pair,
+	// never a table-ID set), rebuilt per target from the wire and carried
+	// by CopyTargetsFrom — a prepared pipeline Reset that lost them would
+	// make every later EXECUTE's marked occurrence silently fall back to
+	// today's lock-only behavior (pre-PR review P1), so they stay with the
+	// retained physical generation exactly as the targets do.
+	lockOp.markingFrontier = timestamp.Timestamp{}
+	lockOp.markingFrontierSet = false
+	for i := range lockOp.targets {
+		lockOp.targets[i].lockingReadEffective = false
+	}
+	lockOp.ctr.lockingReadFloor = timestamp.Timestamp{}
 }
 
 // Free free mem

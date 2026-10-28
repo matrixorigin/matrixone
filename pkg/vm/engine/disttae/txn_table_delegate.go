@@ -1154,6 +1154,93 @@ func (tbl *txnTableDelegate) Reset(op client.TxnOperator) error {
 	return tbl.resetFromCatalog(op, txn)
 }
 
+// executionReadSupport returns the soft-refusal predicate shared by
+// BindExecutionReadOp and the compile's pre-pipeline admission probe
+// (ProbeExecutionReadSupport, pre-PR review round 9): the relation kinds
+// above have no carrier implementation yet, so every consumer of this
+// predicate answers the SAME whole-statement declinature for the relation —
+// the binding path at source initialization and the pre-lock option chooser
+// can never disagree.
+func (tbl *txnTableDelegate) executionReadSupport() error {
+	if !tbl.reusableHandle {
+		return &engine.ExecutionReadUnsupportedError{Detail: "non-exclusive relation handle"}
+	}
+	// A PARTITIONED base's index relation fans its reads out through the
+	// partition-service parent link (getPartitionIndexesTables) and refuses.
+	partitionedParent := tbl.parent != nil &&
+		tbl.parent.GetExtraInfo() != nil &&
+		features.IsPartitioned(tbl.parent.GetExtraInfo().FeatureFlag)
+	if tbl.isMock || tbl.combined.is || tbl.shard.is || partitionedParent {
+		return &engine.ExecutionReadUnsupportedError{Detail: "relation handling"}
+	}
+	origin := tbl.origin
+	if origin == nil || origin.db == nil {
+		return &engine.ExecutionReadUnsupportedError{Detail: "unbound relation handle"}
+	}
+	if origin.createdInTxn {
+		// Transaction-created tables resolve through the tableOps payload
+		// today (rev-11 R11-F1 view-local handles are not implemented yet);
+		// a created-table marked scan stays on today's path.
+		return &engine.ExecutionReadUnsupportedError{Detail: "transaction-created table"}
+	}
+	return nil
+}
+
+// ProbeExecutionReadSupport consumes engine.ExecutionReadBinding's probe
+// (pre-PR review round 9): it returns exactly the soft refusal
+// BindExecutionReadOp would return for this relation, WITHOUT the carrier
+// re-base, the tombstone-mask computation or any other binding side effect,
+// so the compile resolves the FINAL whole-statement admission decision
+// BEFORE any pre-pipeline lock option is chosen.
+func (tbl *txnTableDelegate) ProbeExecutionReadSupport() error {
+	return tbl.executionReadSupport()
+}
+
+// BindExecutionReadOp consumes engine.ExecutionReadBinding: it re-bases this
+// EXCLUSIVE relation handle onto an execution-read operator carrying the
+// locking execution's frontier. The bound relation keeps the same workspace,
+// txn identity and cached metadata; only readTS resolution changes (the
+// execution carrier on the database). Relation kinds whose read path spans
+// combined partitions, sharding transport, mock relations, transaction-created
+// tables, or a PARTITIONED base's index relation — where the partition-service
+// parent link fans reads out through getPartitionIndexesTables — have no
+// carrier implementation yet and signal soft-unsupported so the whole
+// statement falls back to today's snapshot semantics (never mix fragments
+// per execution). A plain (non-partitioned) base's covered index relation
+// binds like any ordinary surface (design D-10.2, R13-F3): its reads serve
+// from the index relation alone, and the parent link's remaining uses
+// (partition metadata and the non-local estimate fallbacks) never engage a
+// local, non-sharded relation.
+func (tbl *txnTableDelegate) BindExecutionReadOp(op client.TxnOperator) error {
+	if err := tbl.executionReadSupport(); err != nil {
+		return err
+	}
+	origin := tbl.origin
+	if _, err := txnIsValid(op); err != nil {
+		return err
+	}
+	clone := origin.cloneForExecutionRead(op)
+	// D-4 stage-1 (rev 14 R14-F1): a delete-carrying marked read never ships
+	// without the transfer mask — computed here, cursorlessly, for exactly
+	// THIS execution's frontier. A computation failure is a REAL failure
+	// (allocation error, unreadable tombstone object): it propagates
+	// unchanged so the compile binding caller terminates the WHOLE statement
+	// (G4) instead of degrading it into today's snapshot semantics; soft
+	// refusal stays reserved for the excluded relation kinds above. A
+	// delete-free execution costs one workspace scan (D-6: zero mask work).
+	ctx := context.Background()
+	if proc := origin.proc.Load(); proc != nil {
+		ctx = proc.Ctx
+	}
+	mask, maskErr := computeExecutionReadTombstoneMask(ctx, clone)
+	if maskErr != nil {
+		return maskErr
+	}
+	clone.execReadTombstoneMask = mask
+	tbl.origin = clone
+	return nil
+}
+
 // Keep the cache-miss path separate so its transaction-local database can
 // escape only when a new canonical relation actually has to be constructed.
 func (tbl *txnTableDelegate) resetFromCatalog(

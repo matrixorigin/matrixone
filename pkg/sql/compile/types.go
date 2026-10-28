@@ -341,6 +341,63 @@ type Compile struct {
 	// retaining the physical plan built at this timestamp.
 	planSnapshotTS    timestamp.Timestamp
 	hasPlanSnapshotTS bool
+
+	// Locking current-read execution state (design D-2/D-8): one frontier
+	// per EXECUTION of a marked locking statement, acquired before this
+	// execution's first marked source assembly, reused by every marked
+	// scope of that execution, and retired with the execution (Compile.Reset
+	// clears all of it; a fresh Compile starts zeroed). A frontier is never
+	// inherited by a later execution or serialized into a cached plan.
+	// execReadOpOwner pins WHICH execution's operator the cached carrier
+	// wraps: a Compile object can be recycled by the compile pool for a
+	// later statement without Reset running, so the cache is honored only
+	// while the carrier still wraps this execution's (still-active)
+	// transaction operator.
+	execReadFrontier      timestamp.Timestamp
+	execReadFrontierSet   bool
+	execReadOp            client.TxnOperator
+	execReadOpOwner       client.TxnOperator
+	execReadBoundScopes   []*Scope
+	execReadDisabled      bool
+	execReadDisableReason string
+	// execReadEpoch is this Compile's current attempt token (design D-8
+	// rev-13 closure; the rev-14 review's P3-1 direction — advanced at EVERY
+	// runOnce entry, an admission boundary that no retirement path owns): a
+	// cached carrier is honored only while the carrier token captured at
+	// its acquisition equals the current epoch, so a skipped pool
+	// retirement can never re-serve a previous statement's or a previous
+	// attempt's carrier; it degrades to a fresh acquisition. Values come
+	// from the package-level counter shared by every Compile, so an
+	// equality can never repeat through wraparound or object reuse.
+	execReadEpoch uint64
+	// execReadCarrierToken records which attempt's epoch the cached carrier
+	// was acquired under (D-8/P3-1): a carrier is reusable by later marked
+	// scopes of the SAME attempt only.
+	execReadCarrierToken uint64
+	// execReadClosureToken records the attempt that ran the R14-F2 closure
+	// walk; the walk is pure plan data so exactly one run per attempt is
+	// complete.
+	execReadClosureToken uint64
+	// execReadRetryFloor is this execution chain's strictly-progressing
+	// retry floor (design D-5): the next attempt waits for the applied
+	// pipeline to cover the floor before its first carrier binds. Attempt
+	// retries inherit the floor; a fresh execution (Reset/clear) is
+	// floorless.
+	execReadRetryFloor timestamp.Timestamp
+	// execReadDependentScopes holds each marked dependent (correlation)
+	// source's scratch scope keyed by plan node id, for THIS compile's
+	// lifetime (pre-PR review P2): the dependent template outlives
+	// attempts, so its sources' exclusive relation handles are held across
+	// attempts and re-bound onto every attempt's carrier at
+	// pre-pipeline time. execReadDependentSources is the per-attempt view
+	// of the same preparation (handle + frontier under the attempt's
+	// epoch) the runtime source factory consumes when region demand opens
+	// the source mid-stream. Both die with the attempt via
+	// resetExecutionReadAttemptState, except the scratch scopes which are
+	// reused; a declined or unmarked source is absent and keeps today's
+	// session path.
+	execReadDependentScopes  map[int32]*Scope
+	execReadDependentSources map[int32]executionReadDependentSourcePrep
 	// Fixed CREATE target/declared-parent pins survive only this statement retry.
 	createNamePinsAdmitted bool
 	// planGenerationReused is true only when this execution admitted an

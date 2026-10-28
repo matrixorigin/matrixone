@@ -1333,6 +1333,21 @@ func (builder *QueryBuilder) tryApplyCoveredFulltext2(nodeID int32, projNode, so
 	}
 
 	// ---- All guards passed: build the covered plan. From here on we mutate. ----
+	// A covered search plan is an index-served surface. While D-3(D)'s marked
+	// search machinery is not implemented, the surviving base scan keeps
+	// today's snapshot semantics (all-or-nothing per execution: never mix
+	// current-read and snapshot fragments in one locking statement). The
+	// strip is EXPLICIT (rev 14, R14-F2): the covered-plan allowlist is its
+	// own enum value, so the compile closure walk can tell it apart from a
+	// mark lost through an unknown rewrite and stage-1 declines the whole
+	// statement (search-generated scans are outside the admission set).
+	if builder.lockingCurrentReadGateActive() {
+		scanNode.ScanReadRole = plan.ScanReadRole_ScanCoveredPlanStrip
+	} else {
+		// Below the allocated capability gate (design D-7): the strip keeps
+		// the legacy unset form so below-gate plans stay wire-identical.
+		scanNode.ScanReadRole = plan.ScanReadRole_ScanNestedBlock
+	}
 	// All qualification now runs inside the search. Only its own score order
 	// permits early truncation; another ordering must keep the full stream.
 	searchLimit := builder.coveredFulltext2ScoreLimit(nodeID, projNode, sortNode,

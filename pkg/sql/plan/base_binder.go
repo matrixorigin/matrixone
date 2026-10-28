@@ -996,11 +996,15 @@ func (b *baseBinder) baseBindSubquery(astExpr *tree.Subquery, isRoot bool) (*Exp
 	// A subquery is a nested SELECT and must not inherit the outer FOR UPDATE
 	// state. MySQL only locks rows in the outer query; rows reached through
 	// EXISTS/IN/scalar subqueries are not locked unless the subquery itself
-	// also specifies FOR UPDATE.
+	// also specifies FOR UPDATE. The view-inheritance provenance clears with
+	// it (rev 14): a subquery inside a view body stays explicit-nested.
 	savedIsForUpdate := b.builder.isForUpdate
+	savedViewInheritLocking := b.builder.viewInheritLocking
 	b.builder.isForUpdate = false
+	b.builder.viewInheritLocking = false
 	defer func() {
 		b.builder.isForUpdate = savedIsForUpdate
+		b.builder.viewInheritLocking = savedViewInheritLocking
 	}()
 
 	var nodeID int32

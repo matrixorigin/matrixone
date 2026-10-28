@@ -149,6 +149,21 @@ func (db *txnDatabase) relation(ctx context.Context, name string, proc any) (eng
 		return nil, nil
 	}
 
+	// The transaction's shared table cache stores a SESSION-ANCHORED canonical
+	// only (pre-PR review round 3, the G2 wait-shape fix): a resolving database
+	// may carry an execution-read carrier (compile's marked locking discovery
+	// passes one after a lock-wait retry cleared the cache), and a table
+	// anchored on such an operator would make every LATER ORDINARY read of
+	// this transaction resolve at that operator's readTS instead of the SI
+	// snapshot — the observed wait-resolved leak, table-scoped to the locked
+	// statement's own table. Carriers get their front view through the
+	// exclusive execution-read binding, never through the shared cache.
+	if db.op != txn.op {
+		sessionDB := *db
+		sessionDB.op = txn.op
+		db = &sessionDB
+	}
+
 	tbl, err := newTxnTable(
 		ctx,
 		db,

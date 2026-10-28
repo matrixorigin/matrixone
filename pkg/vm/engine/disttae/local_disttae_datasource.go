@@ -81,6 +81,13 @@ func NewLocalDataSource(
 	source.table = table
 	source.txnOffset = txnOffset
 	source.snapshotTS = types.TimestampToTS(table.db.op.SnapshotTS())
+	// D-4 ownership rule: the mask is consumed only when the source's readTS
+	// equals the frontier the mask was computed for — exactly the carrier
+	// clone this source reads through. Snapshot paths, unmarked readers and
+	// any later frontier resolve nil and pay nothing.
+	if m := table.execReadTombstoneMask; m != nil && m.frontier.Equal(&source.snapshotTS) {
+		source.maskTombstones = m
+	}
 
 	source.iteratePhase = engine.InMem
 	if skipReadMem {
@@ -97,8 +104,14 @@ func NewLocalDataSource(
 type LocalDisttaeDataSource struct {
 	category        engine.DataSourceType
 	extraTombstones engine.Tombstoner
-	rangeSlice      objectio.BlockInfoSlice
-	pState          *logtailreplay.PartitionState
+	// maskTombstones is the D-4 stage-1 mask-only tombstone input (design rev
+	// 14 R14-F1): populated only for a marked relation whose readTS equals
+	// the mask's execution frontier — i.e. a carrier-bound clone — and
+	// consumed by the uncommitted-delete stages' policy families. Nil on
+	// every other source.
+	maskTombstones *ExecutionReadTombstoneMask
+	rangeSlice     objectio.BlockInfoSlice
+	pState         *logtailreplay.PartitionState
 
 	memPKFilter *readutil.MemPKFilter
 	pStateRows  struct {
@@ -1113,6 +1126,21 @@ func (ls *LocalDisttaeDataSource) ApplyTombstones(
 	if len(rowsOffset) == 0 {
 		return nil, nil
 	}
+	// D-4 mask stage (design rev 14 R14-F1): the mask re-expresses this
+	// transaction's own deletes that an in-window compaction moved into the
+	// generation this source enumerates, so it applies beside the
+	// uncommitted-delete families and is idempotent (re-application is a
+	// set filter).
+	if ls.maskTombstones != nil &&
+		ls.tombstonePolicy&engine.Policy_SkipUncommitedInMemory == 0 &&
+		dynamicPolicy&engine.Policy_SkipUncommitedInMemory == 0 &&
+		ls.tombstonePolicy&engine.Policy_SkipUncommitedS3 == 0 &&
+		dynamicPolicy&engine.Policy_SkipUncommitedS3 == 0 {
+		rowsOffset = ls.maskTombstones.applyOffsets(bid, rowsOffset)
+		if len(rowsOffset) == 0 {
+			return nil, nil
+		}
+	}
 
 	if ls.tombstonePolicy&engine.Policy_SkipUncommitedInMemory == 0 &&
 		dynamicPolicy&engine.Policy_SkipUncommitedInMemory == 0 {
@@ -1167,6 +1195,14 @@ func (ls *LocalDisttaeDataSource) GetTombstones(
 			deletedRows.Release()
 			return
 		}
+	}
+
+	// D-4 mask stage (design rev 14 R14-F1), bitmap form: the same ownership
+	// and policy families as the offset path above.
+	if ls.maskTombstones != nil &&
+		ls.tombstonePolicy&engine.Policy_SkipUncommitedInMemory == 0 &&
+		ls.tombstonePolicy&engine.Policy_SkipUncommitedS3 == 0 {
+		ls.maskTombstones.markInto(bid, &deletedRows)
 	}
 
 	if ls.tombstonePolicy&engine.Policy_SkipUncommitedInMemory == 0 {

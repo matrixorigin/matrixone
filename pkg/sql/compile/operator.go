@@ -978,13 +978,31 @@ func constructMergeblock(eng engine.Engine, node *plan.Node) *mergeblock.MergeBl
 
 func constructLockOp(node *plan.Node, eng engine.Engine) (*lockop.LockOp, error) {
 	arg := lockop.NewArgumentByEngine(eng)
+	// D-8 layer 1 (rev 14; pre-PR review round 10, finding 2): bind-time
+	// presence flows to the operator PER OCCURRENCE — the plan target's own
+	// LockingRead travels with the target it adds, so marks can never
+	// expand across a table-ID set (the LEFT-lowered same-table
+	// scalar-subquery shape keeps the nested occurrence's lock on today's
+	// lock-only behavior). Marks act only while this execution's marking
+	// frontier was also stamped (compile's sweep): an unstamped LockOp — a
+	// declined statement, an inapplicable kernel path — keeps every target
+	// on today's lock-only behavior.
 	for _, target := range node.LockTargets {
 		partitionColPos := int32(-1)
 		if target.HasPartitionCol {
 			partitionColPos = target.PartitionColIdxInBat
 		}
 		typ := plan2.MakeTypeByPlan2Type(target.PrimaryColTyp)
-		arg.AddLockTargetWithPolicy(target.GetTableId(), target.GetObjRef(), target.GetMode(), target.GetPrimaryColIdxInBat(), typ, partitionColPos, target.GetRefreshTsIdxInBat(), target.GetLockRows(), target.GetLockTableAtTheEnd(), target.GetNoWait(), target.GetSkipLocked())
+		// Rev 24, pre-PR review round 11: the target's raw bind-time
+		// explicit-snapshot provenance H travels with the presence, so the
+		// attempt stamp can resolve this occurrence's EFFECTIVE activation
+		// against the executing SnapshotTS (the same engagement predicate
+		// the scan admission uses).
+		arg.AddLockTargetWithOccurrence(target.GetTableId(), target.GetObjRef(), target.GetMode(), target.GetPrimaryColIdxInBat(), typ, partitionColPos, target.GetRefreshTsIdxInBat(), target.GetLockRows(), target.GetLockTableAtTheEnd(), target.GetNoWait(), target.GetSkipLocked(), target.GetLockingRead(),
+			timestamp.Timestamp{
+				PhysicalTime: target.GetExplicitSnapshotPhysical(),
+				LogicalTime:  target.GetExplicitSnapshotLogical(),
+			})
 	}
 	for _, target := range node.LockTargets {
 		if target.LockTable {

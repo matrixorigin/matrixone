@@ -271,6 +271,13 @@ message LockTarget {
   int32 partition_col_idx_in_bat = 12;
   bool no_wait = 13;
   bool skip_locked = 14;
+  // Locking-current-read provenance on the shipped wire (design D-1: additive
+  // gate-bounded values; below-gate decode runs today's semantics). Additive.
+  bool locking_read = 15;
+  // Per-statement execution-frontier TS of the locking current read, stamped
+  // by the compiling execution (D-2/D-3) for the revalidation family (D-5).
+  int64 current_read_frontier_physical = 16;
+  uint32 current_read_frontier_logical = 17;
 }
 
 message LockOp {

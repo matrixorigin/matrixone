@@ -786,6 +786,31 @@ func (tc *txnOperator) IsSnapOp() bool {
 	return tc.reset.parent.Load() != nil
 }
 
+// executionReadOp carries a locking execution's current-read frontier F
+// (design D-3): readTS resolution on the operator is the ONLY semantic that
+// changes. Everything else — workspace, txn metadata, lock identity, the
+// named-snapshot cohort answer — delegates to the wrapped operator, so a
+// relation bound to this carrier sees the transaction's own writes,
+// deletedBlocks and flushed tombstones through the SAME workspace while
+// resolving committed state at F. The carrier never rewrites the wrapped
+// operator's SnapshotTS, is never a "snap op", and never binds txn ops
+// (BindTxnOp) anywhere.
+type executionReadOp struct {
+	TxnOperator
+	readTS timestamp.Timestamp
+}
+
+func (op *executionReadOp) SnapshotTS() timestamp.Timestamp {
+	return op.readTS
+}
+
+// ApplyExecutionReadTS returns op wrapped with F as its readTS resolution.
+// F must come from this execution's publication barrier and is immutable for
+// the carrier instance (retry floors build a new carrier, never rewrite one).
+func ApplyExecutionReadTS(op TxnOperator, ts timestamp.Timestamp) TxnOperator {
+	return &executionReadOp{TxnOperator: op, readTS: ts}
+}
+
 func (tc *txnOperator) CloneSnapshotOp(snapshot timestamp.Timestamp) TxnOperator {
 	op := &txnOperator{}
 	op.mu.txn = txn.TxnMeta{

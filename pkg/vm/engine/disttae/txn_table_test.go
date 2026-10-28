@@ -426,6 +426,97 @@ func TestReusableRelationHandleResetFromCatalogCacheMiss(t *testing.T) {
 	require.Same(t, handle.origin, value.(*txnTableDelegate).origin)
 }
 
+// insertCarrierFixtureDatabase seeds the catalog cache with the DATABASE
+// tuple the carrier-anchoring member's direct eng.Database opens need (the
+// reset fixtures only seed table tuples).
+func insertCarrierFixtureDatabase(
+	t *testing.T,
+	eng *Engine,
+	txn *Transaction,
+	accountID uint32,
+	databaseID uint64,
+	databaseName string,
+) {
+	t.Helper()
+	packer := types.NewPacker()
+	defer packer.Close()
+	bat, err := catalog.GenCreateDatabaseTuple(
+		"create database "+databaseName,
+		accountID, 1, 1, databaseName, databaseID, "",
+		txn.proc.Mp(), packer,
+	)
+	require.NoError(t, err)
+	_, err = fillRandomRowidAndZeroTs(bat, txn.proc.Mp())
+	require.NoError(t, err)
+	eng.GetLatestCatalogCache().InsertDatabase(bat)
+	t.Cleanup(func() { bat.Clean(txn.proc.Mp()) })
+}
+
+// The round-3 G2 cache-anchoring contract (the wait-shape fix): a database
+// carrying an execution-read CARRIER — the shape compile's marked locking
+// discovery re-resolves relations through after a lock-wait retry's
+// clearTableCache emptied the transaction cache — must repopulate the shared
+// table cache with a SESSION-ANCHORED canonical. With the pre-fix swap the
+// stored table carried the carrier as its database operator, and every later
+// ordinary read of that table resolved at the frontier readTS — the
+// table-scoped SI violation only the wait-resolved shape could hit.
+func TestRelationMissStoreKeepsSessionAnchoredCanonicalUnderCarrierDB(t *testing.T) {
+	oldCanonical := newTxnTableForTest()
+	oldCanonical.accountId = 7
+	oldCanonical.tableId = 42
+	oldCanonical.tableName = "t"
+	oldCanonical.db.accountId = 7
+	oldCanonical.db.databaseId = 10
+	oldCanonical.db.databaseName = "db"
+
+	eng := oldCanonical.eng.(*Engine)
+	sessionOp, newTxn := newResetTxnForTest(t, eng)
+	key := genTableKey(7, "t", 10, "db")
+	_, cached := newTxn.tableCache.Load(key)
+	require.False(t, cached)
+	require.Nil(t, newTxn.tableOps.existAndActive(key))
+	insertCarrierFixtureDatabase(t, eng, newTxn, 7, 10, "db")
+	insertCatalogTableForResetTest(t, eng, newTxn, 7, 10, 84, "db", "t")
+	eng.GetLatestCatalogCache().UpdateDuration(types.TS{}, types.MaxTs())
+
+	sessionTS := sessionOp.SnapshotTS()
+	frontier := timestamp.Timestamp{
+		PhysicalTime: sessionTS.PhysicalTime + 1000,
+		LogicalTime:  9,
+	}
+	carrier := client.ApplyExecutionReadTS(sessionOp, frontier)
+	ctx := defines.AttachAccountId(newTxn.proc.Ctx, 7)
+
+	// The carrier-anchored database — compile's marked discovery shape —
+	// opens the relation on a cache miss.
+	dbCarrier, err := eng.Database(ctx, "db", carrier)
+	require.NoError(t, err)
+	relCarrier, err := dbCarrier.Relation(ctx, "t", newTxn.proc)
+	require.NoError(t, err)
+	require.NotNil(t, relCarrier)
+
+	// The cache canonical is SESSION-anchored: its database operator is the
+	// transaction's own operator resolving the SI snapshot, and the carrier
+	// never leaks into the shared entry.
+	value, cached := newTxn.tableCache.Load(key)
+	require.True(t, cached)
+	canonical := value.(*txnTableDelegate)
+	require.Same(t, newTxn.op, canonical.origin.db.op,
+		"the shared cache canonical resolves the session operator, never a carrier")
+	require.Equal(t, sessionTS, canonical.origin.db.op.SnapshotTS(),
+		"the shared cache canonical keeps the transaction snapshot readTS")
+
+	// An ordinary open through the SESSION database yields the SAME shared,
+	// session-anchored canonical.
+	dbSession, err := eng.Database(ctx, "db", sessionOp)
+	require.NoError(t, err)
+	relSession, err := dbSession.Relation(ctx, "t", newTxn.proc)
+	require.NoError(t, err)
+	require.Same(t, canonical.origin, relSession.(*txnTableDelegate).origin,
+		"ordinary opens resume the shared session-anchored canonical")
+	require.Same(t, sessionOp, relSession.(*txnTableDelegate).origin.db.op)
+}
+
 func TestReusableRelationHandleResetFromCatalogMissingTable(t *testing.T) {
 	oldCanonical := newTxnTableForTest()
 	oldCanonical.accountId = 7

@@ -519,12 +519,19 @@ type QueryBuilder struct {
 	noUnsignedSubtraction bool
 	divPrecisionIncrement int32
 	isForUpdate           bool // if it's a query plan for update
-	isRestore             bool
-	isRestoreByTs         bool
-	skipStats             bool
-	isInsertIgnore        bool             // INSERT IGNORE: over-length CHAR/VARCHAR writes are truncated instead of rejected
-	isODKU                bool             // INSERT ... ON DUPLICATE KEY UPDATE: retain action provenance
-	deleteNode            map[uint64]int32 //delete node in this query. key is tableId, value is the nodeId of sinkScan node in the delete plan
+	// viewInheritLocking carries the outer locking statement's provenance
+	// into transparent view-body expansion (R5-F1 carve-out, delivered
+	// rev 14): LOCK_OP suppression stays bound to isForUpdate, while the
+	// role helper consults both. Every nested-block entry (subqueries, CTE
+	// bodies, grouping/UNION arms, and a FOR UPDATE written inside a nested
+	// block) clears it with the same discipline that clears isForUpdate.
+	viewInheritLocking bool
+	isRestore          bool
+	isRestoreByTs      bool
+	skipStats          bool
+	isInsertIgnore     bool             // INSERT IGNORE: over-length CHAR/VARCHAR writes are truncated instead of rejected
+	isODKU             bool             // INSERT ... ON DUPLICATE KEY UPDATE: retain action provenance
+	deleteNode         map[uint64]int32 //delete node in this query. key is tableId, value is the nodeId of sinkScan node in the delete plan
 
 	// Ordinary LOAD validates real primary keys while retaining the bulk-write plan.
 	checkLoadPrimaryKey bool

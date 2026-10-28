@@ -28,6 +28,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/apache/arrow-go/v18/arrow"
@@ -309,6 +310,9 @@ func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*bat
 	c.applyPlanSnapshot()
 	c.captureStringShuffleHashAlgorithm()
 
+	// A reused Compile starts the execution with no inherited frontier,
+	// carrier or rollback ledger (design D-8 per-execution admission).
+	c.resetExecutionReadState()
 	c.fill = fill
 	c.sql = sqlmongodb.RedactSQLForDiagnostics(sql)
 	c.affectRows.Store(0)
@@ -510,6 +514,12 @@ func (c *Compile) clear() {
 	c.executionGeneration = 0
 	c.runSqlToken = 0
 	c.createNamePinsAdmitted = false
+	// The execution-read state dies with the recycled Compile (design D-8
+	// rev-13 closure): a pool-recycle boundary retires the frontier, carrier,
+	// binding ledger, attempt tokens and retry floor idempotently, even when
+	// the pool hands this object to a later statement of the same still-open
+	// transaction.
+	c.resetExecutionReadState()
 	c.retryTimes = 0
 	c.affectRows.Store(0)
 	c.addr = ""
@@ -710,12 +720,26 @@ func (c *Compile) run(s *Scope) error {
 	return nil
 }
 
-// isRetryErr if the error is ErrTxnNeedRetry and the transaction is RC isolation, we need to retry t
-// he statement
+// isRetryErr accepts transaction retries under RC and, for marked locking
+// current-read statements under SI (design D-5, rev 14), the tokenized
+// locking-read driver and the shared retry codes that the marked refresh
+// family surfaces. Definition-retry codes never retry under SI: a rebuilt
+// plan recaptures the SAME fixed SI snapshot, so a retained definition
+// fence cannot promise progress and keeps today's terminal conflict
+// (non-goal N3/G3; pre-PR review round 7, finding 2). Nothing else retries
+// under SI: an unmarked statement keeps today's terminal behavior exactly.
+// ErrVectorIndexSnapshotChanged was dropped here upstream by #30989 (hnsw
+// lag-search), so it stays retired in this merge too.
 func (c *Compile) isRetryErr(err error) bool {
-	return (moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) ||
-		moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged)) &&
-		c.proc.GetTxnOperator().Txn().IsRCIsolation()
+	if c.lockingCurrentReadStatement() &&
+		moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryLockingRead) {
+		return true
+	}
+	return (moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) &&
+		(c.lockingCurrentReadStatement() ||
+			c.proc.GetTxnOperator().Txn().IsRCIsolation())) ||
+		(moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) &&
+			c.proc.GetTxnOperator().Txn().IsRCIsolation())
 }
 
 type scopeRunResult struct {
@@ -852,6 +876,16 @@ func (c *Compile) prePipelineInitializer() (startedSources []*materialized.Sourc
 		return nil, err
 	}
 	if !c.disableLock {
+		// Round 9 (D-10 clause 3/G4): the whole-statement admission
+		// decision — including relation support, resolved through the same
+		// exclusive handles and the same soft-refusal predicate source
+		// initialization binds with — is FINAL before the pre-pipeline
+		// lock options are chosen, so a later binding refusal can never
+		// restore a conflict the marked acquisition had suppressed onto
+		// today's snapshot semantics.
+		if err = c.executionReadResolveRelationSupport(); err != nil {
+			return nil, err
+		}
 		if err = c.lockTable(); err != nil {
 			return nil, err
 		}
@@ -866,6 +900,29 @@ func (c *Compile) prePipelineInitializer() (startedSources []*materialized.Sourc
 			return nil, err
 		}
 	}
+	// Complete stage-1 admission for the scopes the loop above cannot reach:
+	// a LazyPreScopes union defers every branch data source to branch start
+	// (an outer LIMIT keeps supported branch-locking UNION forms lazy), and
+	// without this pass a fully-lazy locking statement would admit its first
+	// marked scan only mid-execution — after the stamp sweep below published
+	// no frontier (every marked LockOp stays inert and a commit while
+	// waiting falls back to legacy SI conflict handling), and a later
+	// branch's decline or binding refusal would abandon admission after
+	// earlier branches produced current-read rows (pre-PR review P1, G4).
+	if err = c.executionReadPreAdmitLazyScopes(); err != nil {
+		return nil, err
+	}
+	// The same pre-pipeline discipline covers DEPENDENT (correlation)
+	// sources: region demand opens them lazily mid-stream, so their
+	// statement-wide admission decision, carrier and relation binding are
+	// completed here — before any source opens (pre-PR review P2, G4).
+	if err = c.executionReadPrepareDependentSources(); err != nil {
+		return nil, err
+	}
+	// Publish this attempt's marking frontier to every LockOp of the marked
+	// statement after all sources initialized and before any pipeline starts
+	// (design D-5/D-8: LockOps are per plan, the frontier is per attempt).
+	c.executionReadStampMarkingLockScopes()
 	var spillBudget materialized.SpillBudget
 	if len(c.materializedSources) > 0 {
 		spillBudget = newMaterializedSpillBudget(c.proc)
@@ -924,6 +981,17 @@ func (c *Compile) runPipelineAttempt(run func() error) (err error) {
 	if err = window.ValidateIntervalFrameBounds(c.proc, c.pn); err != nil {
 		return err
 	}
+	// Attempt admission (design D-8, rev-14 P3-1 direction) runs BEFORE any
+	// materialized-source generation: prePipelineInitializer assembles data
+	// sources (locking admission, carrier acquisition, relation binding) and
+	// stamps the LockOps of the marked statement, so the attempt's epoch must
+	// already own the state those steps install (pre-PR review P1). On a
+	// fresh Compile the zero-token closure walk would otherwise be skipped
+	// during initialization (epoch == closureToken == 0 checks nothing), and
+	// replacing this attempt's carrier/frontier/decline after the fact would
+	// let mid-execution discovery re-acquire an unsynchronized second
+	// frontier behind the one the sources and LockOps already consumed.
+	c.beginExecutionReadAttempt()
 	startedSources, err := c.prePipelineInitializer()
 	defer closeMaterializedSourceGenerations(startedSources)
 	if err != nil {
@@ -989,13 +1057,35 @@ func (r *materializedSpillDiskReservation) Grow(size uint64) error {
 	return nil
 }
 
+// execReadAttemptCounter backs the per-Compile attempt tokens (design D-8,
+// P3-1): every runOnce entry takes the next value, so one recycled Compile
+// object can never observe an epoch equal to one of its earlier attempts'.
+var execReadAttemptCounter uint64
+
+// beginExecutionReadAttempt admits THIS execution attempt's locking
+// current-read state (design D-8): the attempt token advances first, so a
+// cached carrier of any earlier attempt — or of any earlier statement served
+// by a recycled Compile whose pool retirement was skipped — can never be
+// re-served by this attempt, and the failed attempt's frontier, carrier,
+// binding ledger and declinature die with it. Only the execution chain's
+// retry floor survives (D-5). runPipelineAttempt calls this before it
+// assembles any data source, so source binds, discovery, LockOp stamps and
+// reader construction all resolve against the SAME attempt token and at most
+// one frontier per attempt.
+func (c *Compile) beginExecutionReadAttempt() {
+	c.execReadEpoch = atomic.AddUint64(&execReadAttemptCounter, 1)
+	c.resetExecutionReadAttemptState()
+}
+
 // run once
 func (c *Compile) runOnce() (err error) {
 	//c.printPipeline()
+	// Attempt admission happened in runPipelineAttempt BEFORE data sources
+	// were assembled; nothing here may re-own the attempt's locking
+	// current-read state (pre-PR review P1).
 
 	// defer cleanup at the end of runOnce()
-	defer func() {
-		// cleanup post dml sql and stage cache
+	defer func() { // cleanup post dml sql and stage cache
 		c.proc.Base.PostDmlSqlList.Clear()
 		c.proc.Base.StageCache.Clear()
 	}()
@@ -1323,6 +1413,7 @@ func (c *Compile) appendMetaTables(objRes *plan.ObjectRef) {
 }
 
 func (c *Compile) lockTable() error {
+	markedLocks := c.markedPrePipelineLockTables()
 	tableIDs := make([]uint64, 0, len(c.lockTables))
 	for tableID := range c.lockTables {
 		tableIDs = append(tableIDs, tableID)
@@ -1331,6 +1422,35 @@ func (c *Compile) lockTable() error {
 	for _, tableID := range tableIDs {
 		tbl := c.lockTables[tableID]
 		typ := plan2.MakeTypeByPlan2Type(tbl.PrimaryColTyp)
+		// A staged promoted target of an admitted marked locking current-read
+		// statement (pre-PR review round 8, finding 2) acquires the table
+		// lock WITH its current-read contract: under SI the wait-resolved
+		// conflict a Shared promotion can meet (the writer committed while
+		// this reader waited on its lock — promoted FOR SHARE / LOCK IN
+		// SHARE MODE) succeeds with the logtail apply waited past the grant,
+		// and this attempt's read frontier is then re-acquired AFTER the
+		// grant through the execution-read publication barrier (D-5/D-2)
+		// instead of failing today's terminal "SI not support retry". The
+		// fixed transaction snapshot is never advanced and table/DDL fences
+		// stay terminal (N3/G3). Unmarked staged entries keep the legacy
+		// call byte-identically. Round 10, finding 1: markedLocks is the
+		// EFFECTIVE set — a table joins only through an occurrence this
+		// execution's admission admits (the engaging explicit-snapshot
+		// occurrence that stays historical claims nothing), so a promoted
+		// historical LOCK IN SHARE MODE keeps the legacy call above.
+		if _, marked := markedLocks[tbl.TableId]; marked {
+			if err := lockop.LockTableWithModeMarked(
+				c.e,
+				c.proc,
+				tbl.TableId,
+				typ,
+				tbl.Mode,
+				false,
+				c.proc.GetTxnOperator().Txn().SnapshotTS); err != nil {
+				return err
+			}
+			continue
+		}
 		if err := lockop.LockTableWithMode(
 			c.e,
 			c.proc,
@@ -1342,6 +1462,146 @@ func (c *Compile) lockTable() error {
 		}
 	}
 	return nil
+}
+
+// markedPrePipelineLockTables reports the keyed marked-table set whose
+// STAGED pre-pipeline table-lock dispositions must carry the admitted
+// locking-current-read contract (pre-PR review round 8, finding 2). The
+// gate predicts, from plan- and scope-derived facts alone, every
+// whole-statement declinature the later source-admission sweep would take
+// — the R14-F2 closure walk, a remote marked fragment, and an
+// already-disabled attempt — because the pre-pipeline lock runs BEFORE that
+// sweep: a predictable decline conserves today's whole-statement lock
+// outcome (terminal under SI on a wait-resolved commit, G4), so it answers
+// nil and the acquisition stays legacy. Presence, the closure verdict and
+// scope placement cannot change between here and the sweep, and relation
+// support — the one declinature class those facts cannot see — is resolved
+// by executionReadResolveRelationSupport BEFORE this method's options are
+// consumed (pre-PR review round 9): an admission-side binding refusal
+// declines the attempt up front, so the FINAL whole-statement admission
+// decision is already shared with source initialization when the lock
+// options are chosen. Round 10, finding 1: beyond those declinatures, a
+// presence-marked table is only offered the marked options when at least
+// one of its occurrences is EFFECTIVELY admitted by this execution's own
+// admission predicate (executionReadAdmittedLockTables — the engaging
+// explicit-snapshot occurrence that stays historical for this execution
+// never claims the marked contract), so an occurrence-exempt but locked
+// shape — the promoted historical LOCK IN SHARE MODE — keeps today's
+// legacy acquisition as D-1/R8-F3 require.
+func (c *Compile) markedPrePipelineLockTables() map[uint64]struct{} {
+	if c.execReadDisabled {
+		return nil
+	}
+	qry, _ := plan2.PlanLockingReadQuery(c.pn)
+	if !plan2.PlanHasLockingCurrentRead(qry) {
+		return nil
+	}
+	if closure := plan2.WalkLockingReadClosure(qry); closure.LostMark ||
+		closure.OutsideAdmission ||
+		closure.UnsupportedOuterKind {
+		return nil
+	}
+	if c.anyScopePlacedRemote() {
+		return nil
+	}
+	presence := planLockingReadMarkedTables(c)
+	if len(presence) == 0 {
+		return nil
+	}
+	// Pre-PR review round 10, finding 1 (D-1's historical exemption with
+	// R8-F3/R9-F3's per-execution engagement): the staged options follow
+	// the EFFECTIVE per-execution occurrence eligibility, never presence
+	// alone. A locked occurrence with an ENGAGING explicit snapshot (H
+	// nonzero and strictly earlier than the executing SnapshotTS) has its
+	// current-read machinery withheld from this execution — it reads its
+	// named snapshot exactly as today with its lock target conserved — so
+	// a statement whose only occurrence is historical keeps today's
+	// LEGACY acquisition (a mid-wait committed writer surfaces today's
+	// terminal w-w conflict instead of being suppressed by a marked
+	// acquisition no scan serves), while every table with at least one
+	// effectively admitted occurrence (ordinary outer, non-engaging
+	// H >= S) keeps the marked options the round-8/9 contracts promise.
+	admitted := c.executionReadAdmittedLockTables(qry)
+	if len(admitted) == 0 {
+		return nil
+	}
+	effective := make(map[uint64]struct{}, len(presence))
+	for tableID := range presence {
+		if _, ok := admitted[tableID]; ok {
+			effective[tableID] = struct{}{}
+		}
+	}
+	if len(effective) == 0 {
+		return nil
+	}
+	return effective
+}
+
+// executionReadAdmittedLockTables collects the tables this execution's
+// staged PRESENCE-marked tables must claim through effective admission: it
+// walks the same plan nodes whose scans the source-admission sweep binds
+// and asks the SAME per-occurrence predicate (executionReadScanAdmitted,
+// evaluated against the executing transaction — roles and relation kinds,
+// RC, disabled attempts, and the R9-F3 H vs SnapshotTS engagement), then
+// claims each admitted scan's own table. A table takes the marked staged
+// options only through an occurrence that genuinely current-reads in THIS
+// execution — never through bind-time presence alone — so the reviewer's
+// promoted historical LOCK IN SHARE MODE stays legacy while ordinary and
+// non-engaging occurrences keep the round-8 contract.
+func (c *Compile) executionReadAdmittedLockTables(qry *plan.Query) map[uint64]struct{} {
+	if qry == nil {
+		return nil
+	}
+	var claims map[uint64]struct{}
+	for _, node := range qry.GetNodes() {
+		if node == nil || node.NodeType != plan.Node_TABLE_SCAN {
+			continue
+		}
+		if !c.executionReadScanAdmitted(node) {
+			continue
+		}
+		tbl := node.GetTableDef()
+		if tbl == nil {
+			continue
+		}
+		if claims == nil {
+			claims = make(map[uint64]struct{})
+		}
+		claims[tbl.TblId] = struct{}{}
+	}
+	return claims
+}
+
+// anyScopePlacedRemote reports whether any pipeline piece of this compile
+// executes on another CN. A marked fragment on a remote CN declines the
+// whole statement at source admission; predicting the placement here keeps
+// the pre-pipeline acquisition conservative (the same declinature class as
+// the remote-marked-fragment decline), trading a narrow set of
+// mixed-fragment statements' promoted shared lock for today's terminal
+// outcome instead of a mixed lock contract. A statement that would decline
+// later can never have taken the marked contract.
+func (c *Compile) anyScopePlacedRemote() bool {
+	var walk func(s *Scope) bool
+	walk = func(s *Scope) bool {
+		if s == nil {
+			return false
+		}
+		if s.NodeInfo.Addr != "" && s.NodeInfo.Addr != c.addr {
+			return true
+		}
+		for _, ps := range s.PreScopes {
+			if walk(ps) {
+				return true
+			}
+		}
+		return false
+	}
+	for _, s := range c.scopes {
+		if walk(s) {
+			return true
+		}
+	}
+	return false
 }
 
 func (c *Compile) shouldPrePipelineLockTable(target *plan.LockTarget) bool {
@@ -5612,6 +5872,791 @@ func (c *Compile) indexSearchScanParallelism(node *plan.Node, capacity int) (int
 	return max(1, min(int(node.Stats.Dop), capacity, c.ncpu)), nil
 }
 
+// resetExecutionReadState retires the current execution's locking
+// current-read state (design D-8): a frontier, its carrier, the rollback
+// ledger AND the dependent scratch scopes die with the execution; the next
+// execution re-resolves everything from its own admission. Scratch-scope
+// retirement closes the Compile pool-reuse hazard (pre-PR review round 3,
+// P1): the pooled Compile survives its statement via clear(), and a map
+// keyed only by plan node id would hand the NEXT query a source whose
+// Relation still belongs to the previous statement's table; the node-id
+// identity check below cannot run for a map entry that should not exist.
+func (c *Compile) resetExecutionReadState() {
+	c.resetExecutionReadAttemptState()
+	c.execReadEpoch = 0
+	c.execReadRetryFloor = timestamp.Timestamp{}
+	c.execReadDependentScopes = nil
+}
+
+// resetExecutionReadAttemptState clears every attempt-scoped locking
+// current-read state (design D-8): the frontier, carrier, binding ledger and
+// declinature die with the attempt. The retry floor belongs to this
+// execution chain's retry sequence (D-5) and is cleared only at execution
+// boundaries by resetExecutionReadState.
+func (c *Compile) resetExecutionReadAttemptState() {
+	c.execReadFrontier = timestamp.Timestamp{}
+	c.execReadFrontierSet = false
+	c.execReadOp = nil
+	c.execReadOpOwner = nil
+	c.execReadBoundScopes = nil
+	c.execReadDisabled = false
+	c.execReadDisableReason = ""
+	c.execReadCarrierToken = 0
+	c.execReadClosureToken = 0
+	// Dependent (correlation) sources keep their scratch scopes (the relation
+	// handles re-bind onto the next attempt's carrier), but the per-attempt
+	// preparation handed to runtime opens always dies with the attempt.
+	c.execReadDependentSources = nil
+}
+
+// executionReadScanAdmitted resolves the per-execution admission decision
+// for one scan node's locking-read provenance (design D-1/D-8; R9-F3 in both
+// SnapshotTS-crossing directions). Provenance was captured at bind; the
+// EFFECTIVE role resolves here, against THIS execution's transaction
+// snapshot: an engaging explicit snapshot (H != 0 and H strictly earlier than
+// SnapshotTS — the same predicate that picks the historical clone op in
+// getCompileTableScanDataSourceTxn) rides the named-snapshot cohort and gets
+// NO current read; RC keeps the base behavior byte-identically (its locking
+// reads already current-read through the RC refresh machinery); ordinary
+// locked user tables under SI are admitted.
+func (c *Compile) executionReadScanAdmitted(node *plan.Node) bool {
+	role := node.GetScanReadRole()
+	if c.execReadDisabled {
+		return false
+	}
+	// Rev 14's explicit representation (R14-F2): only an outer locking
+	// occurrence — one whose own query block declared the lock, or a
+	// transparent view-body expansion of it — participates in the stage-1
+	// admission set. Explicit-nested and covered-strip occurrences are exempt
+	// by representation and keep snapshot semantics; an UNSET role inside a
+	// presence plan never reaches here (the closure walk declines the whole
+	// statement first, design D-10.3/G4).
+	switch role {
+	case plan.ScanReadRole_ScanOuterLocking,
+		plan.ScanReadRole_ScanOuterLockingWithExplicitSnapshot:
+	default:
+		return false
+	}
+	tbl := node.GetTableDef()
+	if tbl == nil {
+		return false
+	}
+	switch tbl.GetTableType() {
+	case catalog.SystemOrdinaryRel:
+	case catalog.SystemIndexRel:
+		// Covered/forced secondary-index surfaces (design D-10.2, R13-F3):
+		// a fabricated index-table scan admits THROUGH its owning locked
+		// base table — the additive IndexScanInfo.ParentTableId propagated
+		// by the rewrite must match a marked lock target of this statement,
+		// so the index surface current-reads together with the base
+		// occurrence and no newly matching row can be excluded before
+		// locking.
+		info := node.GetIndexScanInfo()
+		parentID := info.GetParentTableId()
+		if parentID <= 0 || !c.lockingTargetMarked(uint64(parentID)) {
+			return false
+		}
+	default:
+		return false
+	}
+	txnOp := c.proc.GetTxnOperator()
+	if txnOp == nil {
+		return false
+	}
+	txnMeta := txnOp.Txn()
+	if txnMeta.IsRCIsolation() {
+		return false
+	}
+	if role == plan.ScanReadRole_ScanOuterLockingWithExplicitSnapshot {
+		snap := node.GetScanSnapshot()
+		if plan2.SnapshotHasExplicitTS(snap) && snap.TS.Less(txnMeta.SnapshotTS) {
+			return false
+		}
+	}
+	return true
+}
+
+// executionReadOperator lazily acquires this execution's publication-barrier
+// frontier (design D-2: a TN-ordered frontier whose logtail apply has
+// completed before the call returns) and wraps the SESSION operator with it
+// as the D-3 execution-read carrier. One frontier per execution: acquired
+// before this execution's first marked source assembly, reused by every
+// marked scope of the execution, never rewritten in place and never
+// inherited by a later execution.
+func (c *Compile) executionReadOperator() (client.TxnOperator, timestamp.Timestamp, error) {
+	txnOp := c.proc.GetTxnOperator()
+	if txnOp == nil {
+		return nil, timestamp.Timestamp{}, moerr.NewInternalError(c.proc.Ctx, "locking read has no transaction operator")
+	}
+	// A recycled Compile must never re-serve a previous execution's carrier:
+	// honor the cache only while the carrier still wraps THIS execution's
+	// operator and only while that transaction is still open. The compile
+	// pool recycles Compile objects without Reset running, so a cached
+	// carrier whose transaction has already committed or aborted must be
+	// rebuilt (D-8: reuse is per-execution only).
+	if c.execReadFrontierSet && c.execReadCarrierToken == c.execReadEpoch &&
+		c.execReadOpOwner == txnOp &&
+		disttae.CheckTxnIsValid(txnOp) == nil {
+		return c.execReadOp, c.execReadFrontier, nil
+	}
+	barrier, ok := getLogtailReadBarrier(c.e)
+	if !ok {
+		return nil, timestamp.Timestamp{}, moerr.NewInternalError(c.proc.Ctx, "locking-read logtail barrier is unavailable")
+	}
+	frontier, err := barrier.AcquireLogtailReadBarrier(c.proc.Ctx)
+	if err != nil {
+		return nil, timestamp.Timestamp{}, err
+	}
+	// The current read must see everything the transaction snapshot saw: a
+	// frontier behind SnapshotTS (only possible on a clock/scheduling
+	// anomaly) is raised to the snapshot floor so the read only ADDS
+	// visibility, never loses it.
+	if frontier.Less(txnOp.Txn().SnapshotTS) {
+		frontier = txnOp.Txn().SnapshotTS
+	}
+	// D-5: a retry generation never re-enters behind its own floor. Wait for
+	// the applied pipeline to cover this chain's strictly-progressing retry
+	// floor before the first carrier binds; the floor token came from a
+	// validated lock result, and the applied watermark the waiter returns is
+	// a valid new-frontier source only because of that.
+	if floor := c.execReadRetryFloor; floor.Greater(frontier) && c.proc.Base.TxnClient != nil {
+		waited, waitErr := c.proc.Base.TxnClient.WaitLogTailAppliedAt(c.proc.Ctx, floor)
+		if waitErr != nil {
+			return nil, timestamp.Timestamp{}, waitErr
+		}
+		if waited.Greater(frontier) {
+			frontier = waited
+		}
+	}
+	c.execReadFrontier = frontier
+	c.execReadOp = client.ApplyExecutionReadTS(txnOp, frontier)
+	c.execReadOpOwner = txnOp
+	c.execReadFrontierSet = true
+	c.execReadCarrierToken = c.execReadEpoch
+	return c.execReadOp, c.execReadFrontier, nil
+}
+
+// executionReadAdmitScan resolves ONE marked scan's stage-1 admission for
+// this execution attempt (design D-10.2/D-10.3): a marked scan placed on a
+// non-coordinator CN declines the WHOLE statement until D-9's transport
+// lands, the R14-F2 closure walk runs before any marked source binds, and
+// every decline conserves the whole statement at today's semantics (G4)
+// rather than failing: locks still acquire exactly as today and every read
+// stays on the transaction snapshot.
+func (c *Compile) executionReadAdmitScan(
+	s *Scope,
+) (declined bool, op client.TxnOperator, frontier timestamp.Timestamp, err error) {
+	// (a) Stage-1 is the node-local surface: a marked scan whose scope was
+	// placed on another CN cannot run its current read there, so the whole
+	// statement declines (no other marked scope may publish a current-read
+	// fragment either).
+	if s.NodeInfo.Addr != "" && s.NodeInfo.Addr != c.addr {
+		c.execReadDisableReason = "marked scan would execute remote"
+		abandonErr := c.abandonExecutionRead()
+		return true, nil, timestamp.Timestamp{}, abandonErr
+	}
+	// (b) R14-F2 closure walk, once per attempt, before the first carrier:
+	// in a locking-presence plan an unset scan role can only be a mark lost
+	// through rewriting, and search-served surfaces (INDEX_SEARCH_SCAN, the
+	// covered-plan strip) sit outside the stage-1 admission set; either
+	// declines the whole statement before source publication.
+	if c.execReadClosureToken != c.execReadEpoch {
+		c.execReadClosureToken = c.execReadEpoch
+		qry, _ := plan2.PlanLockingReadQuery(c.pn)
+		if plan2.PlanHasLockingCurrentRead(qry) {
+			detail := ""
+			switch closure := plan2.WalkLockingReadClosure(qry); {
+			case closure.LostMark:
+				detail = "locking-read provenance lost in a rewritten scan"
+			case closure.OutsideAdmission:
+				detail = "locking statement mixes a search-served scan outside the stage-1 admission set"
+			case closure.UnsupportedOuterKind:
+				detail = "locking statement locks an outer occurrence on a relation kind outside the stage-1 admission set"
+			}
+			if detail != "" {
+				c.execReadDisableReason = detail
+				abandonErr := c.abandonExecutionRead()
+				return true, nil, timestamp.Timestamp{}, abandonErr
+			}
+		}
+	}
+	if c.execReadDisabled {
+		return true, nil, timestamp.Timestamp{}, nil
+	}
+	// (c) The carrier: one frontier per attempt, one closure outcome for the
+	// whole statement.
+	op, frontier, err = c.executionReadOperator()
+	return false, op, frontier, err
+}
+
+// executionReadDiscoveryCarrier resolves this attempt's carrier for
+// Run-time relation discovery (ranges, tombstone views, reader limits —
+// design D-3(b), R13-F2): an admitted marked scan opens its discovery
+// relation through the execution carrier, staying at F instead of the
+// transaction snapshot. A decline (nil) leaves the session operator; errors
+// stay local to the caller's own admission path, which surfaces them.
+func (c *Compile) executionReadDiscoveryCarrier() client.TxnOperator {
+	if c.execReadDisabled {
+		return nil
+	}
+	op, _, err := c.executionReadOperator()
+	if err != nil {
+		return nil
+	}
+	return op
+}
+
+// executionReadStatementFrontier reports whether this attempt has an active
+// marking frontier, and its value — the frontier every marked LockOp of the
+// statement revalidates against (D-5/D-8). A declined statement (frontier
+// retired by the G4 rollback) answers false: its marks stay inert and the
+// statement conserves today's whole-statement semantics.
+// lockingReadRetryProgressFloor (rev-18, review round 4, finding 3) reports
+// the frontier a retry token must strictly exceed. The just-executed
+// attempt may have published a read frontier beyond the execution chain's
+// floor - its per-attempt state survives on runC until the retry
+// transition - so strict progress (design D-5: F(k+1) = max(requiredTS,
+// F(k)) > F(k), where F(k) is the EXECUTING attempt's read frontier) is
+// measured against max(chain floor, the executing attempt's active
+// frontier). Comparing against the chain floor alone would admit a token
+// that cannot advance the executing read, letting the next attempt
+// reacquire a frontier below the one that just failed. An attempt without
+// a published frontier (the failure preceded the first carrier publish)
+// degenerates to the chain floor, the pre-existing contract.
+func (c *Compile) lockingReadRetryProgressFloor(runC *Compile) timestamp.Timestamp {
+	floor := c.execReadRetryFloor
+	if runC != nil && runC.execReadFrontierSet && runC.execReadFrontier.Greater(floor) {
+		floor = runC.execReadFrontier
+	}
+	return floor
+}
+
+// validateLockingReadRetryProgress enforces the D-5 strict-progress contract
+// on a locking-read retry token produced by the just-executed attempt.
+// A missing, malformed or non-progressing token - one that cannot strictly
+// advance past the floor reported by lockingReadRetryProgressFloor - is
+// terminal: it terminates through the canRetry=false path instead of
+// re-driving an identical or regressing marked read against the same
+// frontier. The check is a pure comparison: the attempt's and the
+// transaction's snapshots are never mutated here.
+func (c *Compile) validateLockingReadRetryProgress(runC *Compile, err error) error {
+	if !moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryLockingRead) {
+		return err
+	}
+	phys, logical, tokenOK := moerr.GetTxnNeedRetryLockingReadFrontier(err)
+	progressing := tokenOK && timestamp.Timestamp{
+		PhysicalTime: phys, LogicalTime: logical,
+	}.Greater(c.lockingReadRetryProgressFloor(runC))
+	if !progressing {
+		return moerr.NewInternalErrorNoCtx(
+			"invalid locking-read retry frontier: no strict progress past the executing attempt's frontier")
+	}
+	return err
+}
+
+func (c *Compile) executionReadStatementFrontier() (bool, timestamp.Timestamp) {
+	return c.execReadFrontierSet && !c.execReadDisabled, c.execReadFrontier
+}
+
+// executionReadStampMarkingLockScopes publishes this attempt's frontier to
+// every LockOp in the compiled scope tree (design D-5/D-8): LockOps are
+// constructed once per physical plan while the frontier is per attempt, so
+// the stamp runs after this attempt's source assembly, before any pipeline
+// starts. The occurrence presence it activates is bind-time provenance
+// carried by each target itself (pre-PR review round 10, finding 2,
+// D-10/D-1's per-target representation): constructLockOp installs it — with
+// the target's raw bind-time explicit-snapshot provenance — from the plan
+// target's own fields when the target is added, the wire rebuild installs it
+// per target, and Reset retains it with the retained physical generation —
+// so the stamp publishes the FRONTIER ONLY and never re-derives presence,
+// and can never degrade per-occurrence identity back into a table-ID set.
+// Rev 24, pre-PR review round 11: the stamp is also the resolution boundary
+// for each occurrence's EFFECTIVE marked activation — resolved here against
+// the executing transaction's SnapshotTS (the same engagement predicate the
+// scan-admission sweep uses), so an occurrence whose stored H engages the
+// historical cohort for THIS execution stays exempt from marked
+// revalidation and later executions re-resolve per attempt (G2/R8-F3 with
+// R9-F3). Without a stamp — a declined statement, a non-admitted shape, an
+// inapplicable operator — every marked occurrence keeps today's lock-only
+// behavior.
+func (c *Compile) executionReadStampMarkingLockScopes() {
+	active, frontier := c.executionReadStatementFrontier()
+	if !active {
+		return
+	}
+	execSnapshotTS := timestamp.Timestamp{}
+	if txnOp := c.proc.GetTxnOperator(); txnOp != nil {
+		execSnapshotTS = txnOp.Txn().SnapshotTS
+	}
+	for _, s := range c.scopes {
+		executionReadWalkMarkingLockOps(s, frontier, execSnapshotTS)
+	}
+}
+
+func executionReadWalkMarkingLockOps(
+	s *Scope, frontier, execSnapshotTS timestamp.Timestamp,
+) {
+	if s == nil {
+		return
+	}
+	vm.HandleAllOp(s.RootOp, func(parentOp vm.Operator, op vm.Operator) error {
+		if lockOp, ok := op.(*lockop.LockOp); ok {
+			lockOp.SetLockingReadCurrentFrontier(frontier, execSnapshotTS)
+		}
+		return nil
+	})
+	for _, ps := range s.PreScopes {
+		executionReadWalkMarkingLockOps(ps, frontier, execSnapshotTS)
+	}
+}
+
+// planLockingReadMarkedTables rebuilds the bind-time marked-TABLE set from
+// the plan (design D-8 layer 1): the per-occurrence presence every plan
+// target carries as its own LockingRead. Round-10 finding 2 moved the
+// operator-side representation to that same per-target basis (installed
+// with the target at construction, per target on the wire, retained by
+// Reset); this table-keyed view remains only as the PRESENCE side of
+// markedPrePipelineLockTables' effective-admission intersection.
+func planLockingReadMarkedTables(c *Compile) map[uint64]struct{} {
+	if c.pn == nil {
+		return nil
+	}
+	qry, _ := plan2.PlanLockingReadQuery(c.pn)
+	if qry == nil {
+		return nil
+	}
+	var marked map[uint64]struct{}
+	for _, node := range qry.GetNodes() {
+		for _, t := range node.GetLockTargets() {
+			if !t.GetLockingRead() {
+				continue
+			}
+			if marked == nil {
+				marked = make(map[uint64]struct{})
+			}
+			marked[t.GetTableId()] = struct{}{}
+		}
+	}
+	return marked
+}
+
+// executionReadResolveRelationSupport (pre-PR review round 9, D-10 clause
+// 3/G4) finishes the whole-statement admission decision BEFORE
+// prePipelineInitializer chooses the pre-pipeline lock options: it resolves,
+// through the same exclusive-handle construction and the SAME soft-refusal
+// predicate the source-initialization sweep binds with
+// (ProbeExecutionReadSupport over engine.ExecutionReadBinding), every
+// relation an admitted locked occurrence of this statement would bind —
+// eager scans, lazily initialized union-branch scans and dependent
+// (correlation) sources. Any refusal declines the whole statement up front
+// (c.execReadDisabled — the one declinature state lockTable, the init sweep,
+// the lazy-union completion, the dependent-source preparation and the
+// discovery surface all consume), so the pre-pipeline table lock acquires
+// TODAY'S legacy options: a writer that commits while a promoted Shared lock
+// waits then surfaces today's terminal conflict instead of being suppressed
+// by a marked acquisition that the same statement would afterwards restore
+// to snapshot semantics (bindExecutionReadRelation refusal ->
+// abandonExecutionRead) and return stale committed values successfully.
+// Relation support cannot change inside one execution attempt, so the sweep
+// cannot meet a soft refusal after this pass. The marked route's frontier
+// acquisition keeps its approved site — after the lock grant.
+func (c *Compile) executionReadResolveRelationSupport() error {
+	if len(c.markedPrePipelineLockTables()) == 0 {
+		// Plan and scope facts already decline the marked pre-pipeline
+		// route — or no staged target would carry it — so the lock options
+		// are legacy regardless of relation support; nothing is probed and
+		// today's behavior is untouched (below-gate and unmarked statements
+		// included).
+		return nil
+	}
+	for _, s := range c.scopes {
+		if err := c.probeExecutionReadEagerScope(s); err != nil {
+			return err
+		}
+	}
+	for _, s := range c.scopes {
+		if err := c.probeExecutionReadLazyBranches(s); err != nil {
+			return err
+		}
+	}
+	return c.executionReadProbeDependentSources()
+}
+
+// probeExecutionReadEagerScope mirrors Scope.InitAllDataSource's walk for
+// the sources that initialize eagerly: the scope's own scan, then the child
+// scopes. The walk stops at a LazyPreScopes parent exactly where init stops,
+// because every branch below it initializes at branch start and is probed
+// by probeExecutionReadLazyBranches instead.
+func (c *Compile) probeExecutionReadEagerScope(s *Scope) error {
+	if s == nil || c.execReadDisabled {
+		return nil
+	}
+	if err := c.probeExecutionReadScopeScan(s); err != nil {
+		return err
+	}
+	if s.LazyPreScopes {
+		return nil
+	}
+	for _, child := range s.PreScopes {
+		if err := c.probeExecutionReadEagerScope(child); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// probeExecutionReadLazyBranches mirrors executionReadFindLazyPreAdmission's
+// discovery walk: every lazily initialized subtree initializes its scans at
+// branch start, so this pass finds them and probes each before locks.
+func (c *Compile) probeExecutionReadLazyBranches(s *Scope) error {
+	if s == nil || c.execReadDisabled {
+		return nil
+	}
+	if s.LazyPreScopes {
+		for _, branch := range s.PreScopes {
+			if err := c.probeExecutionReadLazySubtree(branch); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	for _, child := range s.PreScopes {
+		if err := c.probeExecutionReadLazyBranches(child); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// probeExecutionReadLazySubtree walks ONE lazily initialized subtree with
+// the same shape executionReadPreAdmitLazySubtree admits and binds through,
+// entering nested lazy unions the same way.
+func (c *Compile) probeExecutionReadLazySubtree(s *Scope) error {
+	if s == nil || c.execReadDisabled {
+		return nil
+	}
+	if err := c.probeExecutionReadScopeScan(s); err != nil {
+		return err
+	}
+	if s.LazyPreScopes {
+		for _, branch := range s.PreScopes {
+			if err := c.probeExecutionReadLazySubtree(branch); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	for _, child := range s.PreScopes {
+		if err := c.probeExecutionReadLazySubtree(child); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// probeExecutionReadScopeScan probes one scope's own table-scan relation when
+// the source-initialization sweep would admit and bind it (the same
+// executionReadScanAdmitted decision); index-search scans initialize through
+// compileIndexSearchScanDataSource and never take a binding, mirroring
+// Scope.initDataSource's dispatch.
+func (c *Compile) probeExecutionReadScopeScan(s *Scope) error {
+	if s == nil || s.DataSource == nil || s.DataSource.isConst ||
+		s.DataSource.node == nil ||
+		s.DataSource.node.NodeType == plan.Node_INDEX_SEARCH_SCAN {
+		return nil
+	}
+	return c.probeExecutionReadRelation(s, s.DataSource.node)
+}
+
+// probeExecutionReadRelation resolves one admitted scan node's relation
+// exactly the way the source-initialization sweeps resolve it before
+// binding — the operator/ctx from getCompileTableScanDataSourceTxn, the
+// database on the node's schema, db.Relation under this transaction, the
+// EXCLUSIVE handle from engine.NewRelationHandle — and asks the shared
+// soft-refusal predicate. A soft refusal declines the whole statement
+// immediately; a hard error from the probe's resolution is a real failure
+// and propagates unchanged (it would fail the sweep the same way).
+func (c *Compile) probeExecutionReadRelation(s *Scope, node *plan.Node) error {
+	if c.execReadDisabled || !c.executionReadScanAdmitted(node) {
+		return nil
+	}
+	txnOp, ctx, err := c.getCompileTableScanDataSourceTxn(s)
+	if err != nil {
+		return err
+	}
+	db, err := c.e.Database(ctx, node.ObjRef.SchemaName, txnOp)
+	if err != nil {
+		return err
+	}
+	rel, err := db.Relation(ctx, node.TableDef.Name, c.proc)
+	if err != nil {
+		return err
+	}
+	handle := engine.NewRelationHandle(rel)
+	binder, ok := handle.(engine.ExecutionReadBinding)
+	if !ok {
+		// The same refusal class bindExecutionReadRelation turns into a
+		// whole-statement declinature at source initialization.
+		c.declineExecutionReadStatement("relation handle without execution-read binding")
+		return nil
+	}
+	probeErr := binder.ProbeExecutionReadSupport()
+	if probeErr == nil {
+		return nil
+	}
+	if engine.IsExecutionReadUnsupported(probeErr) {
+		c.declineExecutionReadStatement(probeErr.Error())
+		return nil
+	}
+	return probeErr
+}
+
+// declineExecutionReadStatement records the FINAL whole-statement declinature
+// shared by the pre-pipeline lock chooser and source initialization: with
+// the attempt disabled, markedPrePipelineLockTables answers nil (the staged
+// promotion acquires today's legacy options), every admission pass (the
+// init sweep, the lazy-union completion, the dependent-source preparation
+// and the discovery surface) skips its marked binding, and the statement
+// executes today's semantics exactly — the G4 conservation direction.
+func (c *Compile) declineExecutionReadStatement(reason string) {
+	if !c.execReadDisabled {
+		c.execReadDisabled = true
+		c.execReadDisableReason = reason
+	}
+}
+
+// executionReadPreAdmitLazyScopes completes a locking statement's stage-1
+// admission for marked scans whose scopes initialize LAZILY (design
+// D-10.2/D-10.3, pre-PR review P1). Scope.InitAllDataSource stops at a
+// LazyPreScopes parent and leaves every branch's data source to branch start,
+// so the pass walks the compiled scope tree, finds every lazily initialized
+// subtree, and runs the SAME admission, carrier acquisition and relation
+// binding the ordinary init loop ran for initialized scopes — BEFORE the
+// stamp sweep publishes the frontier and before any branch produces rows.
+// The pass is presence-gated: an unmarked statement (below-gate clusters
+// included) never touches lazy scopes, so their behavior is byte-identical to
+// today's. Every decline or binding refusal conserves the WHOLE statement at
+// today's snapshot semantics (G4).
+func (c *Compile) executionReadPreAdmitLazyScopes() error {
+	qry, _ := plan2.PlanLockingReadQuery(c.pn)
+	if !plan2.PlanHasLockingCurrentRead(qry) {
+		return nil
+	}
+	for _, s := range c.scopes {
+		if err := c.executionReadFindLazyPreAdmission(s); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// executionReadFindLazyPreAdmission walks already-initialized scopes (the
+// ordinary init loop admitted their marked scans and bound their relations)
+// looking for lazily initialized UNIONS whose branches still need admission;
+// a nested lazy union inside a branch is reached again through the subtree
+// walk below, never twice on the same scopes.
+func (c *Compile) executionReadFindLazyPreAdmission(s *Scope) error {
+	if s == nil {
+		return nil
+	}
+	if s.LazyPreScopes {
+		for _, branch := range s.PreScopes {
+			if err := c.executionReadPreAdmitLazySubtree(branch); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	for _, child := range s.PreScopes {
+		if err := c.executionReadFindLazyPreAdmission(child); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// executionReadPreAdmitLazySubtree walks ONE lazily initialized subtree
+// (everything below a LazyPreScopes parent initializes at branch start): it
+// admits any marked table-scan scope of the subtree and recurses, entering
+// nested lazy unions the same way so every marked scan of the statement owns
+// this attempt's admission decision before any pipeline runs.
+func (c *Compile) executionReadPreAdmitLazySubtree(s *Scope) error {
+	if s == nil {
+		return nil
+	}
+	if s.DataSource != nil && s.DataSource.node != nil &&
+		s.DataSource.node.GetTableDef() != nil &&
+		c.executionReadScanAdmitted(s.DataSource.node) {
+		if err := c.executionReadAdmitAndBindLazyScan(s); err != nil {
+			return err
+		}
+	}
+	if s.LazyPreScopes {
+		for _, branch := range s.PreScopes {
+			if err := c.executionReadPreAdmitLazySubtree(branch); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	for _, child := range s.PreScopes {
+		if err := c.executionReadPreAdmitLazySubtree(child); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// executionReadAdmitAndBindLazyScan mirrors compileTableScanDataSource's
+// admission block for ONE lazily initialized marked scan: the remote/closure
+// checks run, the statement acquires its carrier, and the branch relation is
+// OPENED (or Reset when an earlier attempt of this execution already opened
+// it) and BOUND onto the execution carrier now, so branch-start discovery
+// rides the exclusive handle. A binding refusal abandons the whole
+// statement immediately, never after earlier branches produced rows.
+func (c *Compile) executionReadAdmitAndBindLazyScan(s *Scope) error {
+	node := s.DataSource.node
+	declined, execOp, frontier, err := c.executionReadAdmitScan(s)
+	if err != nil {
+		return err
+	}
+	if declined {
+		return nil
+	}
+	txnOp, ctx, err := c.getCompileTableScanDataSourceTxn(s)
+	if err != nil {
+		return err
+	}
+	if s.DataSource.Rel == nil {
+		db, dbErr := c.e.Database(ctx, node.ObjRef.SchemaName, txnOp)
+		if dbErr != nil {
+			return dbErr
+		}
+		rel, relErr := db.Relation(ctx, node.TableDef.Name, c.proc)
+		if relErr != nil {
+			return relErr
+		}
+		s.DataSource.Rel = engine.NewRelationHandle(rel)
+	} else if resetErr := s.DataSource.Rel.Reset(txnOp); resetErr != nil {
+		return resetErr
+	}
+	bound, bindErr := c.bindExecutionReadRelation(s, execOp)
+	if bindErr != nil {
+		return bindErr
+	}
+	if bound {
+		// D-3(B): like every admitted scan, the lazy branch's DataSource
+		// rides the stamped frontier; branch start Reset+re-bind keeps it.
+		s.DataSource.Timestamp = frontier
+	} else if abortErr := c.abandonExecutionRead(); abortErr != nil {
+		return abortErr
+	}
+	return nil
+}
+
+// lockingCurrentReadStatement reports whether this compile executes a
+// marked locking current-read statement under snapshot isolation (design
+// D-8 layer 1/D-5): bind-time presence (plan data, cheap to derive) plus a
+// non-RC transaction. It gates SI retry acceptance: only such a statement
+// retries under SI through the refresh family or the tokenized
+// ErrTxnNeedRetryLockingRead driver; everything else keeps today's SI
+// behavior.
+func (c *Compile) lockingCurrentReadStatement() bool {
+	if c.pn == nil {
+		return false
+	}
+	qry, _ := plan2.PlanLockingReadQuery(c.pn)
+	if !plan2.PlanHasLockingCurrentRead(qry) {
+		return false
+	}
+	txnOp := c.proc.GetTxnOperator()
+	if txnOp == nil {
+		return false
+	}
+	return !txnOp.Txn().IsRCIsolation()
+}
+
+// lockingTargetMarked reports whether the given table is a bind-time marked
+// lock target of this statement (design D-8 layer 1): the parent-side
+// admission link for fabricated secondary-index surfaces (D-10.2, R13-F3).
+func (c *Compile) lockingTargetMarked(tableID uint64) bool {
+	if c.pn == nil {
+		return false
+	}
+	qry, _ := plan2.PlanLockingReadQuery(c.pn)
+	if qry == nil {
+		return false
+	}
+	for _, node := range qry.GetNodes() {
+		for _, t := range node.GetLockTargets() {
+			if t.GetLockingRead() && t.GetTableId() == tableID {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// bindExecutionReadRelation pins this execution's marked scan at the
+// frontier: the exclusive relation handle re-bases onto the execution-read
+// carrier (D-3 relation reads) and the scan's DataSource carries F to every
+// consumer, including the shipped wire (D-3 shipped reads run at
+// DataSource.Timestamp). G4 keeps a statement all-or-nothing in BOTH
+// directions: a relation KIND that cannot be bound makes the whole execution
+// fall back to today's snapshot semantics (soft, excluded kinds only), while
+// a hard binding failure terminates the statement terminally after rolling
+// back every already-published binding.
+func (c *Compile) bindExecutionReadRelation(s *Scope, op client.TxnOperator) (bool, error) {
+	binder, ok := s.DataSource.Rel.(engine.ExecutionReadBinding)
+	if !ok {
+		c.execReadDisableReason = "relation handle without execution-read binding"
+		return false, nil
+	}
+	if err := binder.BindExecutionReadOp(op); err != nil {
+		if engine.IsExecutionReadUnsupported(err) {
+			c.execReadDisableReason = err.Error()
+			return false, nil
+		}
+		// A hard binding failure — an allocation error, an unreadable
+		// tombstone, any computation failure the engine propagates
+		// unchanged (pre-PR review round 3) — is TERMINAL: the statement
+		// must never degrade to snapshot semantics and a later lazy branch
+		// must not mix fragments after earlier branches published (G4).
+		// The G4 rollback still retires every already-published carrier,
+		// stamp and bound handle before the statement's error surfaces.
+		if abortErr := c.abandonExecutionRead(); abortErr != nil {
+			return false, abortErr
+		}
+		return false, err
+	}
+	c.execReadBoundScopes = append(c.execReadBoundScopes, s)
+	return true, nil
+}
+
+// abandonExecutionRead rolls back every marked scope already bound in this
+// execution (their relation handles reset onto the SESSION operator and
+// their DataSource re-stamped) and disables the marking for the remainder of
+// the execution, so a locking statement never mixes current-read and
+// snapshot fragments (G4).
+func (c *Compile) abandonExecutionRead() error {
+	txnOp := c.proc.GetTxnOperator()
+	for _, s := range c.execReadBoundScopes {
+		if s.DataSource == nil || s.DataSource.Rel == nil {
+			continue
+		}
+		if err := s.DataSource.Rel.Reset(txnOp); err != nil {
+			return err
+		}
+		s.DataSource.Timestamp = txnOp.Txn().SnapshotTS
+	}
+	c.execReadBoundScopes = nil
+	c.execReadFrontier = timestamp.Timestamp{}
+	c.execReadFrontierSet = false
+	c.execReadOp = nil
+	c.execReadDisabled = true
+	return nil
+}
+
 func (c *Compile) getCompileTableScanDataSourceTxn(s *Scope) (client.TxnOperator, context.Context, error) {
 	var err error
 	var txnOp client.TxnOperator
@@ -5787,6 +6832,26 @@ func (c *Compile) compileTableScanDataSource(s *Scope) error {
 		s.DataSource.Rel = engine.NewRelationHandle(rel)
 	} else if err = s.DataSource.Rel.Reset(txnOp); err != nil {
 		return err
+	}
+	if c.executionReadScanAdmitted(node) {
+		declined, execOp, frontier, execErr := c.executionReadAdmitScan(s)
+		if execErr != nil {
+			return execErr
+		}
+		if !declined {
+			bound, bindErr := c.bindExecutionReadRelation(s, execOp)
+			if bindErr != nil {
+				return bindErr
+			}
+			if bound {
+				// D-3(B): the marked scan reads at the execution frontier; the
+				// stamped DataSource.Timestamp carries F to local and remote
+				// consumers alike.
+				ts = frontier
+			} else if abortErr := c.abandonExecutionRead(); abortErr != nil {
+				return abortErr
+			}
+		}
 	}
 	tblDef = s.DataSource.Rel.GetTableDef(ctx)
 
@@ -9814,11 +10879,19 @@ func (c *Compile) compileLock(node *plan.Node, ss []*Scope) ([]*Scope, error) {
 			}
 		}
 	}
-	if !localizeLockPlan {
-		// Preserve exact-main compile behavior outside the positively admitted
-		// internal INSERT and LOAD paths, including canonical-node reuse.
-		node.LockTargets = lockRows
-	}
+	// Pre-PR review round 7, finding 1 (design D-8's bind-time presence
+	// immutability, R13-F3's covering admission premise): a table-lock
+	// promotion moves only the PHYSICAL disposition — the promoted target
+	// is handed to c.lockTables for the pre-pipeline acquisition and stays
+	// out of the lock operator's row list — while the canonical plan's
+	// LockTargets keep every bind-time marked target. Stripping them here
+	// destroyed the presence the marked contract relies on: the Run
+	// capability validation, lockingTargetMarked's covering parent
+	// admission and the session/prepared cache marking all read the
+	// canonical plan, and a promoted Shared covering locking read silently
+	// fell back to a snapshot read below the gate. The lock operator below
+	// is therefore built from a local node carrying exactly the physical
+	// list it consumed at base, and the canonical node is never rewritten.
 	if len(lockRows) == 0 {
 		if promotedNewTable && (!c.IsTpQuery() || len(ss) > 1 || len(c.pn.GetQuery().Steps) > 1) {
 			// Keep the original input merge and downstream writer placement/DOP.
@@ -9847,13 +10920,14 @@ func (c *Compile) compileLock(node *plan.Node, ss []*Scope) ([]*Scope, error) {
 	}
 	var err error
 	var lockOpArg *lockop.LockOp
-	lockNode := node
-	if localizeLockPlan {
-		localNode := *node
-		localNode.LockTargets = lockRows
-		lockNode = &localNode
-	}
-	lockOpArg, err = constructLockOp(lockNode, c.e)
+	// The lock operator consumes a LOCAL node with the physical row-target
+	// list for EVERY statement (internal INSERT/LOAD and the general path
+	// alike): the shallow copy reproduces exactly the target list the
+	// operator received at base, while the canonical node keeps its
+	// marked LockTargets for the presence consumers above.
+	localNode := *node
+	localNode.LockTargets = lockRows
+	lockOpArg, err = constructLockOp(&localNode, c.e)
 	if err != nil {
 		return nil, err
 	}
@@ -10971,6 +12045,24 @@ func (c *Compile) handleDbRelContext(node *plan.Node, onRemoteCN bool) (engine.R
 		ctx = defines.AttachAccountId(ctx, catalog.System_Account)
 	}
 
+	// Marked locking occurrences run their discovery (ranges, tombstone
+	// views, reader-side limits) at the execution frontier (design
+	// D-3(b), R13-F2). Pre-PR review round 3's G2 fix: the front view
+	// arrives through the EXCLUSIVE execution-read binding — never by
+	// resolving the shared transaction tableCache through a carrier
+	// database. The old swap re-anchored the transaction's cached canonical
+	// onto the frontier whenever the marked discovery repopulated the
+	// cache (a lock-wait retry clears it via the statement rollback), and
+	// every later ordinary read of that table then resolved at the front
+	// readTS — a table-scoped SI violation only the wait shape could hit.
+	discoveryCarrier := false
+	if !onRemoteCN && c.executionReadScanAdmitted(node) {
+		if carrier := c.executionReadDiscoveryCarrier(); carrier != nil {
+			txnOp = carrier
+			discoveryCarrier = true
+		}
+	}
+
 	db, err = c.e.Database(ctx, node.ObjRef.SchemaName, txnOp)
 	if err != nil {
 		return nil, nil, nil, err
@@ -10978,6 +12070,24 @@ func (c *Compile) handleDbRelContext(node *plan.Node, onRemoteCN bool) (engine.R
 	rel, err = db.Relation(ctx, node.TableDef.Name, c.proc)
 	if err != nil {
 		return nil, nil, nil, err
+	}
+	if discoveryCarrier {
+		handle := engine.NewRelationHandle(rel)
+		if binder, ok := handle.(engine.ExecutionReadBinding); ok {
+			bindErr := binder.BindExecutionReadOp(txnOp)
+			switch {
+			case bindErr == nil:
+				rel = handle
+			case engine.IsExecutionReadUnsupported(bindErr):
+				// An excluded relation kind keeps today's session-anchored
+				// discovery; the scope-level admission declines the whole
+				// statement before any fragment publishes (G4).
+			default:
+				// A hard binding failure is terminal for the discovery caller
+				// (G4): never a silent snapshot downgrade mid-discovery.
+				return nil, nil, nil, bindErr
+			}
+		}
 	}
 
 	return rel, db, ctx, nil
