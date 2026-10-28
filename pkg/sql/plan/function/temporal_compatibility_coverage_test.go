@@ -1385,6 +1385,20 @@ func TestTimePublicNumericBoundary(t *testing.T) {
 	}
 }
 
+// The int64 TIME() overload still aborts the statement for values its parser
+// rejects; it never synthesizes a row-level NULL or a truncation warning.
+func TestTimeUnparseableNumericKeepsErroring(t *testing.T) {
+	proc := newTmpProcess(t)
+	warnings := &numericWarningSession{}
+	proc.WarningSink = warnings
+	tc := NewFunctionTestCase(proc,
+		[]FunctionTestInput{NewFunctionTestInput(types.T_int64.ToType(), []int64{99999999999}, nil)},
+		NewFunctionTestResult(types.T_time.ToType(), true, nil, nil), Int64ToTime)
+	ok, info := tc.RunAndFree()
+	require.True(t, ok, info)
+	require.Empty(t, warnings.warnings)
+}
+
 func TestPreparedTimeArithmeticTolerantInputs(t *testing.T) {
 	for _, tc := range []struct {
 		name string

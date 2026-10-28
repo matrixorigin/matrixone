@@ -1627,6 +1627,55 @@ func TestTypedDateConversionNullability(t *testing.T) {
 	require.False(t, DeduceNotNullable(EncodeOverloadID(CAST, 1), []*plan.Expr{dateSource, datetimeTarget}))
 }
 
+// TIME() string overloads synthesize NULL with a truncation warning for
+// invalid input even when the argument column is NOT NULL, so binding must
+// not promise a NOT NULL result for them. Typed and numeric overloads fail
+// the statement instead and keep their NOT NULL inference.
+func TestTimeStringConversionNullability(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		typ  types.T
+		oid  int32
+	}{
+		{"varchar", types.T_varchar, 5},
+		{"char", types.T_char, 6},
+		{"text", types.T_text, 7},
+		{"blob", types.T_blob, 8},
+	} {
+		t.Run("string/"+tt.name, func(t *testing.T) {
+			op, err := GetFunctionById(t.Context(), EncodeOverloadID(TIME, tt.oid))
+			require.NoError(t, err)
+			require.Len(t, op.args, 1)
+			require.Equal(t, tt.typ, op.args[0])
+			args := []*plan.Expr{{Typ: plan.Type{Id: int32(tt.typ), NotNullable: true}}}
+			require.False(t, DeduceNotNullable(EncodeOverloadID(TIME, tt.oid), args), "overload %d must stay nullable", tt.oid)
+		})
+	}
+	for _, tt := range []struct {
+		name string
+		typ  types.T
+		oid  int32
+	}{
+		{"time", types.T_time, 0},
+		{"date", types.T_date, 1},
+		{"datetime", types.T_datetime, 2},
+		{"int64", types.T_int64, 3},
+		{"decimal128", types.T_decimal128, 4},
+	} {
+		t.Run("typed/"+tt.name, func(t *testing.T) {
+			op, err := GetFunctionById(t.Context(), EncodeOverloadID(TIME, tt.oid))
+			require.NoError(t, err)
+			require.Len(t, op.args, 1)
+			require.Equal(t, tt.typ, op.args[0])
+			args := []*plan.Expr{{Typ: plan.Type{Id: int32(tt.typ), NotNullable: true}}}
+			require.True(t, DeduceNotNullable(EncodeOverloadID(TIME, tt.oid), args))
+		})
+	}
+	// A nullable argument keeps the result nullable through the default rule.
+	nullable := &plan.Expr{Typ: plan.Type{Id: int32(types.T_varchar)}}
+	require.False(t, DeduceNotNullable(EncodeOverloadID(TIME, 5), []*plan.Expr{nullable}))
+}
+
 func TestTemporalArithmeticOverflowNullability(t *testing.T) {
 	notNull := &plan.Expr{Typ: plan.Type{NotNullable: true}}
 	for _, tt := range []struct {
