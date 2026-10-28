@@ -20,6 +20,7 @@ from pathlib import Path
 from urllib.parse import quote, unquote, urlsplit, urlunsplit
 
 from .exceptions import MatrixOneError
+from ._sql_literals import sql_identifier
 
 
 class AnalyticsCleanupError(MatrixOneError):
@@ -109,9 +110,10 @@ def _arrow():
 
 
 def _identifier(name):
-    if not isinstance(name, str) or not name or "\x00" in name or len(name) > 64:
-        raise ValueError("SQL identifiers must contain 1..64 characters and no NUL")
-    return "`" + name.replace("`", "``") + "`"
+    try:
+        return sql_identifier(name, force=True)
+    except (TypeError, ValueError):
+        raise ValueError("SQL identifiers must contain 1..64 characters and no NUL") from None
 
 
 def _table_name(name):

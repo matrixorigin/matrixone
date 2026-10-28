@@ -151,8 +151,7 @@ func TestClusterSelfReadinessHonorsCancellationBeforeHeartbeat(t *testing.T) {
 	cancel()
 
 	err := s.waitForClusterSelfReadyWithContext(ctx, time.Millisecond, false)
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "before startup deadline")
+	require.ErrorIs(t, err, context.Canceled)
 	require.Zero(t, cluster.calls())
 }
 

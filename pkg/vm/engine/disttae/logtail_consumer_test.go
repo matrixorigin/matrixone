@@ -54,6 +54,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail/service"
@@ -3860,4 +3861,82 @@ func TestLogtailConsumerPreservesLiveOwnerError(t *testing.T) {
 		rc.close()
 		rc.wait()
 	})
+}
+
+// The cache's column-only-update proof depends on this dispatcher ordering,
+// including when reconnect buffers updates until the catalog snapshot is ready.
+func TestDispatchCatalogUpdateOrdersTablesBeforeColumns(t *testing.T) {
+	for _, delayed := range []bool{false, true} {
+		t.Run(fmt.Sprintf("delayed=%v", delayed), func(t *testing.T) {
+			ctx := t.Context()
+			tw := client.NewTimestampWaiter(runtime.GetLogger(""))
+			defer tw.Close()
+			mp := mpool.MustNewZeroNoFixed()
+			t.Cleanup(func() { mpool.DeleteMPool(mp) })
+			packer := types.NewPacker()
+			t.Cleanup(packer.Close)
+			e := &Engine{partitions: make(map[[2]uint64]*logtailreplay.Partition),
+				globalStats: &GlobalStats{tailC: make(chan *logtail.TableLogtail, 16)}, mp: mp,
+				packerPool: fileservice.NewPool(1, func() *types.Packer { return packer }, func(p *types.Packer) { p.Reset() }, nil)}
+			e.catalog.Store(cache.NewCatalog())
+			e.pClient.receivedLogTailTime.initLogTailTimestamp(tw)
+			if !delayed {
+				e.pClient.dcaConfirmAndApply()
+			}
+			routines := newTestRoutineControllers(16)
+			makeTail := func(bat *batch.Batch, id uint64, name string, seq uint32, at int64) logtail.TableLogtail {
+				t.Helper()
+				_, err := fillRandomRowidAndZeroTs(bat, mp)
+				require.NoError(t, err)
+				ts := vector.MustFixedColWithTypeCheck[types.TS](bat.Vecs[cache.MO_TIMESTAMP_IDX])
+				for i := range ts {
+					ts[i] = types.BuildTS(at, 0)
+				}
+				encoded, err := batch.BatchToProtoBatch(bat)
+				require.NoError(t, err)
+				t.Cleanup(func() { bat.Clean(mp) })
+				return logtail.TableLogtail{Table: &api.TableID{DbId: catalog.MO_CATALOG_ID, TbId: id, DbName: catalog.MO_CATALOG, TbName: name, PrimarySeqnum: seq},
+					Commands: []api.Entry{{EntryType: api.Entry_Insert, TableId: id, TableName: name, DatabaseId: catalog.MO_CATALOG_ID, DatabaseName: catalog.MO_CATALOG, Bat: encoded}}}
+			}
+			cols, err := catalog.GenColumnsFromDefs(7, "t", "db", 90, 80, []engine.TableDef{&engine.AttributeDef{Attr: engine.Attribute{Name: "n", Type: types.T_uint64.ToType()}}})
+			require.NoError(t, err)
+			cols[0].IsUnsigned = 0
+			for _, at := range []int64{100, 200} {
+				cols[0].Comment = fmt.Sprint(at)
+				cb, err := catalog.GenCreateColumnTuples(cols, mp, packer)
+				require.NoError(t, err)
+				tb, err := catalog.GenCreateTableTuple(catalog.Table{AccountId: 7, TableId: 90, DatabaseId: 80, TableName: "t", DatabaseName: "db", Version: uint32(at)}, mp, packer)
+				require.NoError(t, err)
+				to := timestamp.Timestamp{PhysicalTime: at}
+				// Deliberately put the column event first in the incoming atomic response.
+				response := &logtail.UpdateResponse{To: &to, LogtailList: []logtail.TableLogtail{
+					makeTail(cb, catalog.MO_COLUMNS_ID, catalog.MO_COLUMNS, catalog.MO_COLUMNS_ATT_CPKEY_IDX, at),
+					makeTail(tb, catalog.MO_TABLES_ID, catalog.MO_TABLES, catalog.MO_TABLES_CPKEY_IDX, at)}}
+				require.NoError(t, dispatchUpdateResponse(ctx, e, response, routines, time.Now()))
+			}
+			q := &cache.TableItem{AccountId: 7, DatabaseId: 80, Name: "t", Ts: timestamp.Timestamp{PhysicalTime: 300}}
+			if delayed {
+				require.False(t, e.GetLatestCatalogCache().GetTable(q))
+				e.pClient.dcaConfirmAndApply()
+			}
+			require.True(t, e.GetLatestCatalogCache().GetTable(q))
+			require.NotNil(t, q.TableDef)
+			require.Equal(t, "200", q.TableDef.Cols[0].Comment)
+			// Both versions must have been initialized, not only the last buffered one.
+			q.Ts.PhysicalTime = 100
+			require.True(t, e.GetLatestCatalogCache().GetTable(q))
+			require.NotNil(t, q.TableDef)
+			require.Equal(t, "100", q.TableDef.Cols[0].Comment)
+			cols[0].IsUnsigned = 1
+			cb, err := catalog.GenCreateColumnTuples(cols[:1], mp, packer)
+			require.NoError(t, err)
+			to := timestamp.Timestamp{PhysicalTime: 300}
+			require.NoError(t, dispatchUpdateResponse(ctx, e, &logtail.UpdateResponse{To: &to, LogtailList: []logtail.TableLogtail{
+				makeTail(cb, catalog.MO_COLUMNS_ID, catalog.MO_COLUMNS, catalog.MO_COLUMNS_ATT_CPKEY_IDX, 300)}}, routines, time.Now()))
+			q.Ts = to
+			require.True(t, e.GetLatestCatalogCache().GetTable(q))
+			require.Equal(t, uint32(200), q.Version)
+			require.Equal(t, "200", q.TableDef.Cols[0].Comment)
+		})
+	}
 }
