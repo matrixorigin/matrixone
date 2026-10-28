@@ -364,7 +364,12 @@ N 的正常停机目录升级已完成：字段存在、所有tenant初始为C
 2. **一个请求与两种域**：frontend owner、A/T、surface admission、公共 binder/错误分类、lexical资源；query/CTAS及SHOW/I_S最小真实用户路径一起验证。
 3. **完整消费者与安全**：补齐订阅/历史/系统、所有reuse/retry/cursor与早停路径；逐个分类剩余 Cols/mo_columns 用户，不以一次搜索代替审计。
 4. **升级/恢复贯通**：字段安装与默认值、新切换合同、unknown commit/old backup、真实无tag N/C→N/D；只有前面合同和性能门禁通过才发布激活命令。
-5. **独立清理**：通过后再评估删除 refresh-only runtime。已入场 C 语句必须能终结；下一次受支持停机部署可成为删除旧reader代码的边界。共享 persisted-expression/admission/snapshot 保护与 legacy raw catalog不顺带删除。
+5. **独立清理**：通过后再评估删除 refresh-only runtime，这不等于允许删除 C reader。停机只能结束进程内已入场的 C 语句、cursor 等消费者，不能消除持久的 C 语义需求。删除 C reader 须另案评审，并同时满足以下兼容条件：
+   - **存量租户**：持久 `view_metadata_version=0` 的租户须已按批准路径完成迁移；仍有0租户需要服务时，目标版本必须保留 C 兼容读取，不能直接把0解释为D或忽略这些租户。
+   - **新建入口**：fresh install、CREATE ACCOUNT 的默认0及相关写入入口已有经批准的迁移安排，不再产生无法服务的 C 租户。本稿默认0不因清理计划而自动改变。
+   - **恢复入口**：旧备份/快照恢复投影0、隔离 N/C 恢复与 legacy 修复路径仍有受支持的 reader 或经验证的前置迁移流程；不能以删除 reader 为由静默丢弃已有恢复兼容承诺。
+
+   只有这些持久兼容条件成立后，受支持的停机部署才可作为移除不再需要的 reader 代码的边界。共享 persisted-expression/admission/snapshot 保护与 legacy raw catalog不顺带删除。
 
 没有“先称S5完成，后补生产路由”的交付状态。设计批准、实现完成、局部验收、可激活、默认启用、遗留清理是不同结论；每个PR只声明实际达到的一个范围。缓存与默认启用另外评审，不能由局部 benchmark或设计PR自动触发。
 
@@ -381,7 +386,7 @@ N 的正常停机目录升级已完成：字段存在、所有tenant初始为C
 |---|---|---|
 | D1 | 按需权威 + 请求memo，raw保持物理接口 | bulk读成本、raw工具迁移 |
 | D2 | T/A分离，surface typed admission先于推导 | 当前权限读成本；更多明确错误而非旧值成功 |
-| D3 | **允许已经准入的C语句在tenant提交后完成；不设新的资格/drain提交** | 不提供“提交即全局无旧reader”保证；删除C代码需后续停机边界 |
+| D3 | **允许已经准入的C语句在tenant提交后完成；不设新的资格/drain提交** | 不提供“提交即全局无旧reader”保证；删除C代码须先满足存量0租户、新建默认值与旧备份恢复的兼容条件，停机本身不充分 |
 | D4 | 一个默认0的account属性；显式管理员DDL原子激活；create_version继续只管catalog升级 | 新字段及恢复投影、新SQL入口；激活全量检查持account行锁，不提供后台进度 |
 | D5 | 缺失历史语义不猜；先修复再激活，旧备份保留兼容修复路径 | legacy租户可能不能直接激活，历史快照可能受控失败 |
 | D6 | 默认关闭，不承诺跨请求cache，不自动删除已有共享gate | 多阶段交付，保留独立保护的短期维护成本 |
