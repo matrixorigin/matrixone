@@ -350,7 +350,11 @@ func (entry *ObjectEntry) PrepareRollback() (err error) {
 	return
 }
 
-func (entry *ObjectEntry) ApplyRollback() error { panic("not support") }
+func (entry *ObjectEntry) ApplyRollback() error {
+	// PrepareRollback has already removed a newly created object from the
+	// object list or restored the previous version of a deleted object.
+	return nil
+}
 
 func (entry *ObjectEntry) StatsString(zonemapKind common.ZonemapPrintKind) string {
 	zonemapStr := "nil"
