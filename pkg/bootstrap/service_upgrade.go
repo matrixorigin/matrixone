@@ -298,6 +298,9 @@ func (s *service) checkUpgrade(ctx context.Context, recheck bool) error {
 					zap.Error(err))
 				return err
 			}
+			if err := s.checkRetiredCatalogSource(v.Version); err != nil {
+				return err
+			}
 
 			// A previously created offset-only route is equally unsupported. Its
 			// target can have this binary's offset even though account versions
@@ -492,6 +495,9 @@ func (s *service) checkUpgradeRecovery(target versions.Version, txn executor.Txn
 		return &terminalUpgradeError{moerr.NewInvalidStateNoCtxf("cannot resume incomplete upgrade route to %s", target.Version)}
 	}
 	for i, u := range upgrades {
+		if err := s.checkRetiredCatalogSource(u.FromVersion); err != nil {
+			return err
+		}
 		if u.UpgradeOrder != int32(i) ||
 			(i > 0 && u.FromVersion != upgrades[i-1].ToVersion) ||
 			versions.Compare(u.FromVersion, u.ToVersion) > 0 ||
@@ -520,15 +526,14 @@ func (s *service) checkUpgradeRecovery(target versions.Version, txn executor.Txn
 			return &terminalUpgradeError{moerr.NewInvalidStateNoCtxf("cannot resume unsupported upgrade step %s", u.String())}
 		}
 	}
-	// A retained route to the frozen 4.0.7 stage needs the same catalog
-	// admission upstream enforces before creating it: a final above 4.0.7
-	// reaches this resume path without any other admission check.
-	// canResumeUpgrade already pinned the route to the registered frozen
-	// handle's offset.
-	if target.Version == v4_0_7.Handler.Metadata().Version {
-		if err := rejectLegacyCDCTasks(txn); err != nil {
-			return err
-		}
+	// Preserve the frozen-stage admission fence even when a later catalog
+	// repair is the retained route's final target.
+	pending, err := validateV407UpgradeSteps(upgrades)
+	if err != nil {
+		return err
+	}
+	if pending {
+		return rejectLegacyCDCTasks(txn)
 	}
 	return nil
 }
@@ -721,6 +726,11 @@ func (s *service) performUpgrade(
 		return false, false, nil, err
 	}
 
+	for _, u := range upgrades {
+		if err := s.checkRetiredCatalogSource(u.FromVersion); err != nil {
+			return false, false, nil, err
+		}
+	}
 	for _, u := range upgrades {
 		s.logger.Info("handle version upgrade",
 			zap.String("upgrade", u.String()))

@@ -5,7 +5,7 @@
 | Record | `python-udf-current-stage-r1-2026-09-24-approval` |
 | Issue | [MatrixOne #28132](https://github.com/matrixorigin/matrixone/issues/28132) |
 | Implementation PR | [MatrixOne #29152](https://github.com/matrixorigin/matrixone/pull/29152) |
-| Current-stage proposal | [`python-udf-current-stage-r35-2026-10-28`](python_udf_current_stage.md); historical r1 approval retained below |
+| Current-stage proposal | [`python-udf-current-stage-r36-2026-10-28`](python_udf_current_stage.md); historical r1 approval retained below |
 | Scope | Explicitly enabled test/development adapter; no production rollout or production-readiness claim |
 
 This record separates the immutable current-stage design artifact, the feature
@@ -746,3 +746,29 @@ plan/cache blobs are not a supported persisted format. No Python MORPC feature
 gate, old-tag fallback or independent approval is introduced. Historical
 feature-owner scope approval is retained; independent Architecture/SQL approval
 of this revision remains pending.
+
+
+## r36 — consolidated catalog predecessor (2026-10-28)
+
+Current artifact: `python-udf-current-stage-r36-2026-10-28` in
+[python_udf_current_stage.md](python_udf_current_stage.md).
+The prior exact-parent [review 5678129549](https://github.com/matrixorigin/matrixone/pull/29152#pullrequestreview-5678129549)
+accepted the development-stage design and confirmed the earlier correctness,
+MORPC and group-lifetime findings resolved. That review remains evidence for its
+reviewed revision, rather than an approval inferred for this addendum.
+
+Official main consolidated the released-source catalog route into frozen
+`4.0.7`. This revision retains that handler/list/offset and moves the routine
+repair helpers into their own `4.0.18` owner with minimum source `4.0.7`.
+It preserves predecessor CDC, offset/recovery and snapshot preconditions when
+that later repair is the final target. Unregistered unpublished intermediate
+source catalogs fail before cluster/account mutation, including locked rereads,
+recovery routes and scheduled batches. Login/manual paging continues to the
+final committed repair before completion is cached. Restore combines upstream
+source SQL-mode inspection and procedure projection with the existing immutable
+UDF heads/descriptors and revision-row validation.
+
+The Query allocation, catalog row formats, external worker protocol and
+shutdown-only upgrade policy are unchanged. No feature MORPC gate, production
+isolation or Operator scope is introduced. Independent review of this revision
+is tracked separately; no owner decision is fabricated by this record.

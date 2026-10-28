@@ -71,6 +71,7 @@ func TestCatalogDDLOwnsInternalExecutionContext(t *testing.T) {
 					sourceDDL = ddl
 				}
 				modeSQL := "select attname from mo_catalog.mo_columns {MO_TS = 123} where account_id = 42 and att_database = 'mo_catalog' and att_relname = 'mo_user_defined_function' and attname = 'sql_mode' limit 2"
+				bh.sql2result[modeSQL] = newMrsForSqlForShowDatabases(nil)
 				if scenario == "current head restore" {
 					bh.sql2result[modeSQL] = newMrsForSqlForShowDatabases([][]interface{}{{"sql_mode"}})
 				}
