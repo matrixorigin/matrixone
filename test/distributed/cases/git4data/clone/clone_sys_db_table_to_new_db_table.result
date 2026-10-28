@@ -139,6 +139,8 @@ mo_cdc_task
 mo_cdc_watermark
 mo_columns
 mo_configurations
+mo_data_branch_link_retention
+mo_data_branch_update_link
 mo_data_key
 mo_database
 mo_database_defaults
@@ -210,6 +212,8 @@ mo_cdc_task
 mo_cdc_watermark
 mo_columns
 mo_configurations
+mo_data_branch_link_retention
+mo_data_branch_update_link
 mo_data_key
 mo_database
 mo_database_defaults

@@ -89,3 +89,23 @@ func VisibleStateRecoveryResourcesFromContext(
 	resources, _ := ctx.Value(visibleStateRecoveryResourcesKey{}).(VisibleStateRecoveryResources)
 	return resources
 }
+
+// VisibleStateRecoverySubstitutionObserver is the optional seam a
+// VisibleStateRecoveryResources implements to be told when the
+// dispatcher substitutes the visible-state handle for the replay
+// handle on a recovery class: every instant the substituted output
+// stamps is the window end, not a recorded commit, so a provenance
+// consumer must classify that window's instant-bearing extracts as
+// synthetic. The apply side's governance implements it to certify
+// serving modes (r53 D156(E) amendment).
+type VisibleStateRecoverySubstitutionObserver interface {
+	OnVisibleStateRecoverySubstitution()
+}
+
+// NotifyVisibleStateRecoverySubstitution reports one successful
+// substitution to the resources, when they implement the seam.
+func NotifyVisibleStateRecoverySubstitution(resources VisibleStateRecoveryResources) {
+	if observer, ok := resources.(VisibleStateRecoverySubstitutionObserver); ok {
+		observer.OnVisibleStateRecoverySubstitution()
+	}
+}

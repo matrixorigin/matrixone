@@ -715,6 +715,11 @@ func (c *Compile) compactExpiredAlterDataBranchLineage(now time.Time) error {
 	); err != nil {
 		return err
 	}
+	// The compacted generations' protected streams just became unreadable,
+	// so any pk-move update links they recorded are reclaimed with them.
+	if err = deletePkMoveUpdateLinksForIDs(c, plan.TableIDs); err != nil {
+		return err
+	}
 	return c.runSqlWithSystemTenant(
 		databranchutils.BuildAlterLineageMetadataDeleteSQL(plan.TableIDs),
 	)

@@ -28,6 +28,25 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+// isUpdatePkMoveLinkCtx reports whether ctx is the synthetic pk-move link
+// ctx appended by bind_update for genuine pk-touching UPDATE statements.
+// REPLACE and ODKU never get one, preserving their delete+insert semantics.
+func isUpdatePkMoveLinkCtx(ctx *MultiUpdateCtx) bool {
+	return ctx != nil && plan.IsDataBranchUpdateLinkObjRef(ctx.ObjRef) &&
+		len(ctx.InsertCols) == 0 && len(ctx.DeleteCols) == 0
+}
+
+// pkMoveLinkWriteAction reports whether this multi_update action records
+// pk-move links through updateOneBatch's link branch. Only UpdateWriteTable
+// stages the owning delete+insert there with the old->new pairing intact.
+// UpdateWriteS3 buffers its batches so the S3 writer records the links
+// itself (s3WriterDelegate.append), and UpdateFlushS3Info never receives
+// actionUpdate batches on current routes — its durable side replays
+// per-table delete/insert streams where the pairing no longer exists.
+func pkMoveLinkWriteAction(action UpdateAction) bool {
+	return action == UpdateWriteTable
+}
+
 func updateCtxKey(ctx *MultiUpdateCtx) string {
 	if ctx == nil {
 		return ""
@@ -81,6 +100,11 @@ const (
 	UpdateMainTable UpdateTableType = iota
 	UpdateUniqueIndexTable
 	UpdateSecondaryIndexTable
+	// UpdatePkMoveLinkTable is the per-account
+	// mo_catalog.mo_data_branch_update_link target: a synthetic, plan-gated
+	// context whose rows are synthesized by the operator from the owning
+	// main-table context instead of being projected from the input batch.
+	UpdatePkMoveLinkTable
 )
 
 type actionType int
@@ -93,7 +117,22 @@ const (
 	// It carries no storage batch; rowCount is the statement-semantic affected
 	// count accumulated by one or more ODKU writers.
 	actionAffectedRows
+	// actionPkMoveLink ferries one synthesized pk-move link batch from an
+	// UpdateWriteS3 producer to UpdateFlushS3Info, which stages it in the
+	// COORDINATOR's transaction workspace. The producer cannot stage it
+	// itself: remote execution writes against an independent mirror
+	// workspace whose mutations never reach the committing transaction,
+	// so remotely produced provenance used to vanish before commit.
+	actionPkMoveLink
 )
+
+// pkMoveLinkSpillName marks an actionPkMoveLink tail row whose batch
+// column carries the block-info of a spilled link object instead of the
+// link rows themselves: once the producer's buffered link retention
+// crosses pkMoveLinkMemBudget it writes every buffered batch of one link
+// ctx into one object and ferries the location; the receiver reads the
+// rows back and stages them exactly like an in-memory batch.
+const pkMoveLinkSpillName = "pk_move_link_spill"
 
 func init() {
 	reuse.CreatePool[MultiUpdate](
@@ -136,6 +175,19 @@ type updateCtxInfo struct {
 	insertAttrs  []string
 	isContiguous bool
 	refBatch     *batch.Batch
+	// pkMoveLinkDisabled is set when the link table cannot be resolved in this
+	// account (for example a tenant predating v4.0.15): pk-move link writes are
+	// skipped and data-branch diff keeps the legacy delete+insert behaviour.
+	pkMoveLinkDisabled bool
+	// retentionSource is the lazily resolved mo_data_branch_link_retention
+	// relation the genesis protocol stages identity rows into; it shares the
+	// link ctx's info slot because both are consulted by exactly the pk-move
+	// recorder paths.
+	retentionSource engine.Relation
+	// pkMoveRetentionDisabled sticks once the retention catalog cannot be
+	// resolved (pre-upgrade tenant): genesis writes degrade alongside the
+	// link disable, never past a resolution failure.
+	pkMoveRetentionDisabled bool
 }
 
 type container struct {

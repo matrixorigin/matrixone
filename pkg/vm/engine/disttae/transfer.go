@@ -84,9 +84,10 @@ func transferTombstoneObjects(
 ) (err error) {
 
 	var (
-		fs   fileservice.FileService
-		logs []zap.Field
-		flow *TransferFlow
+		fs     fileservice.FileService
+		logs   []zap.Field
+		flow   *TransferFlow
+		inputs []objectio.ObjectStats
 	)
 
 	return txn.forEachTableHasDeletesLocked(
@@ -98,7 +99,7 @@ func transferTombstoneObjects(
 				}
 			}
 			now := time.Now()
-			if flow, logs, err = ConstructCNTombstoneObjectsTransferFlow(
+			if flow, inputs, logs, err = ConstructCNTombstoneObjectsTransferFlow(
 				ctx, start, end, tbl, txn, txn.proc.Mp(), fs); err != nil {
 				return err
 			} else if flow == nil {
@@ -150,6 +151,21 @@ func transferTombstoneObjects(
 					tbl.extraInfo.AutoIncrEpoch,
 				); err != nil {
 					return err
+				}
+
+				// r26 review F3 (D113): a pass-through flow replaced EVERY row
+				// of the consumed inputs (re-keyed or verbatim). The superseded
+				// source entries must never publish beside their replacements:
+				// at a pk-move anchor the twin breaks the chain evidence's
+				// uniqueness and the apply fails closed unresolved. Retirement
+				// removes the input stats from this table's pending entries and
+				// records them for statement-rollback resurrection and close-time
+				// GC — the retired files are never published in any outcome.
+				if flow.passThrough {
+					if err = txn.retireTransferredTombstoneStatsLocked(
+						tbl, inputs); err != nil {
+						return err
+					}
 				}
 			}
 
@@ -469,17 +485,9 @@ func batchTransferToTombstones(
 	batPositions := vector.MustFixedColWithTypeCheck[int32](searchBatPos)
 	rowids := vector.MustFixedColWithTypeCheck[types.Rowid](targetRowids)
 
-	for pos, endPos := 0, searchPKColumn.Length(); pos < endPos; pos++ {
-		entryIdx := entryPositions[pos]
-		entry := txnWrites[entryIdx]
-
-		if err = vector.SetFixedAtWithTypeCheck[types.Rowid](
-			entry.bat.GetVector(0),
-			int(batPositions[pos]),
-			rowids[pos],
-		); err != nil {
-			return
-		}
+	if err = transferTombstoneRowidsAndCarryPkMove(
+		table.getTxn(), txnWrites, entryPositions, batPositions, rowids); err != nil {
+		return
 	}
 
 	searchPKColumn.Reset(*searchPKColumn.GetType())
@@ -489,6 +497,45 @@ func batchTransferToTombstones(
 	transferIntents.Reset(*transferIntents.GetType())
 	readPKColumn.Reset(*readPKColumn.GetType())
 	return
+}
+
+// transferTombstoneRowidsAndCarryPkMove replaces each pending delete
+// tombstone's pre-transfer row id with the row id the transfer resolved and,
+// in the same shot, carries pk-move bookkeeping through the identical
+// re-key so the committed tombstone and its update link keep one identity
+// (r25 review F3). Both transfer entry points (statement-boundary RC path
+// via IncrStatementID and transferTombstonesByCommit) hold the txn lock, so
+// the Locked carry runs inline here; an error fails the transfer and with it
+// the enclosing statement or commit rather than committing a tombstone whose
+// provenance dangles.
+func transferTombstoneRowidsAndCarryPkMove(
+	txn *Transaction,
+	txnWrites []Entry,
+	entryPositions, batPositions []int32,
+	rowids []types.Rowid,
+) (err error) {
+	var migOldIDs, migNewIDs []types.Rowid
+	for pos := range rowids {
+		entry := txnWrites[entryPositions[pos]]
+		rowVec := entry.bat.GetVector(0)
+		batRow := int(batPositions[pos])
+		oldID := vector.GetFixedAtNoTypeCheck[types.Rowid](rowVec, batRow)
+		if err = vector.SetFixedAtWithTypeCheck[types.Rowid](
+			rowVec, batRow, rowids[pos]); err != nil {
+			return err
+		}
+		if oldID != rowids[pos] {
+			migOldIDs = append(migOldIDs, oldID)
+			migNewIDs = append(migNewIDs, rowids[pos])
+		}
+	}
+	if len(migOldIDs) != 0 {
+		if err = txn.carryPkMoveProvenanceThroughRekeyLocked(
+			migOldIDs, migNewIDs); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // doTransferRowids transfers rowids from transferIntents to targetRowids

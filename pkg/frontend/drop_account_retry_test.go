@@ -210,3 +210,68 @@ func TestDropAccountRetryCancellation(t *testing.T) {
 		require.Equal(t, 1, begins)
 	})
 }
+
+// dataBranchCatalogDropSQLs are the teardown statements DROP ACCOUNT owes the
+// per-account pk-move provenance catalogs: every tenant receives
+// mo_data_branch_update_link and mo_data_branch_link_retention at creation
+// (existing tenants from the v4.0.8 tenant upgrade), and both physical
+// tables must vanish with the account or their mo_catalog.mo_tables rows
+// outlive it (the async-drop integration test counts exactly those
+// leftovers).
+var dataBranchCatalogDropSQLs = []string{
+	"drop table if exists mo_catalog.`mo_data_branch_update_link`;",
+	"drop table if exists mo_catalog.`mo_data_branch_link_retention`;",
+}
+
+func TestDropAccountRetiresDataBranchCatalogs(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx, ses, bh, _ := newAccountDropTest(t)
+		bh.beforeExec = func(statement string) {
+			switch statement {
+			case "begin;":
+				bh.op = &accountDropTestTxn{id: []byte{1}}
+			case "rollback;":
+				bh.op.cleaned = true
+			}
+		}
+		require.NoError(t, doDropAccount(ctx, bh, ses, &dropAccount{Name: "acc"}))
+		idx := make(map[string]int, len(bh.executedSQLs))
+		for i, s := range bh.executedSQLs {
+			if _, dup := idx[s]; !dup {
+				idx[s] = i
+			}
+		}
+		dbDrop := "drop database if exists `db1`;"
+		icebergDrop := "drop table if exists mo_catalog.mo_iceberg_refs;"
+		for _, want := range append([]string{dbDrop, icebergDrop}, dataBranchCatalogDropSQLs...) {
+			require.Contains(t, idx, want, "drop account must execute %q", want)
+		}
+		// The per-database drops still consult both catalogs, and the
+		// catalog drop must precede the remaining sink cleanups.
+		for _, catalogDrop := range dataBranchCatalogDropSQLs {
+			require.Less(t, idx[dbDrop], idx[catalogDrop])
+			require.Less(t, idx[catalogDrop], idx[icebergDrop])
+		}
+	})
+}
+
+func TestDropAccountDataBranchCatalogDropFailureAborts(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx, ses, bh, _ := newAccountDropTest(t)
+		failure := errors.New("link drop failed")
+		bh.beforeExec = func(statement string) {
+			switch statement {
+			case "begin;":
+				bh.op = &accountDropTestTxn{id: []byte{1}}
+			case "rollback;":
+				bh.op.cleaned = true
+			}
+		}
+		bh.sql2err[dataBranchCatalogDropSQLs[0]] = failure
+		require.ErrorIs(t, doDropAccount(ctx, bh, ses, &dropAccount{Name: "acc"}), failure)
+		// A failed link-catalog drop aborts the sequence: the retention
+		// catalog and the sink cleanups must not run half-retired.
+		require.NotContains(t, bh.executedSQLs, dataBranchCatalogDropSQLs[1])
+		require.NotContains(t, bh.executedSQLs, "drop table if exists mo_catalog.mo_iceberg_refs;")
+	})
+}

@@ -277,6 +277,15 @@ func (e *Engine) Close() error {
 				return
 			}
 		}
+		// r31 review F3 (D131): the durable orphan registry keys retained
+		// cleanup ownership by storage, and this closing engine is the
+		// last certain live caller over its own storage. Run the terminal
+		// synchronous pass: every confirmed deletion deregisters here,
+		// and whatever storage keeps failing stays owned under the
+		// storage key for the next live engine — which never needs a
+		// reference to THIS retiring one. (dynamicCtx is already closed,
+		// error-checked, at the top of this once-block on this base.)
+		retireEngineDurableOrphanGC(e)
 		e.cloneTxnCache = nil
 		e.ccprTxnCache = nil
 	})
@@ -839,7 +848,10 @@ func (e *Engine) Delete(ctx context.Context, name string, op client.TxnOperator)
 		return err
 	}
 
-	if bat = txn.deleteBatch(bat, catalog.MO_CATALOG_ID, catalog.MO_DATABASE_ID); bat.RowCount() > 0 {
+	if bat, err = txn.deleteBatch(bat, catalog.MO_CATALOG_ID, catalog.MO_DATABASE_ID); err != nil {
+		return err
+	}
+	if bat.RowCount() > 0 {
 		note := noteForDrop(uint64(accountId), name)
 		if _, err := txn.WriteBatch(DELETE, note, catalog.System_Account, catalog.MO_CATALOG_ID, catalog.MO_DATABASE_ID,
 			catalog.MO_CATALOG, catalog.MO_DATABASE, bat, txn.tnStores[0]); err != nil {

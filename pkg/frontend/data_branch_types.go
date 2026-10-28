@@ -283,6 +283,52 @@ type tableStuff struct {
 	worker               *ants.Pool
 	hashmapAllocator     *branchHashmapAllocator
 	maxTombstoneBatchCnt int
+	// pkMoveTarWindows / pkMoveBaseWindows record the physical table ids
+	// and upper collect bounds of every relation whose change stream feeds
+	// this side's diff, so pk-move provenance probes cover the whole
+	// lineage (multi-generation branches) and never read links written
+	// after the side's collect window ends.
+	pkMoveTarWindows  []pkMoveLinkTableWindow
+	pkMoveBaseWindows []pkMoveLinkTableWindow
+	// recoveryResources is the visible-state governance instance the
+	// apply attaches to its collection ctx; the hashmap build reads its
+	// substitution counter to certify each window's serving mode (r53
+	// D156(E) amendment).
+	recoveryResources *dataBranchVisibleStateRecoveryResources
+	// tarWindowEnds / baseWindowEnds carry each drained handle's window
+	// end in handle order, aligning the collector's per-generation
+	// windows with the hashmap build's sequential drain (nil-handled
+	// windows never append, so the projection skips them identically).
+	tarWindowEnds  []types.TS
+	baseWindowEnds []types.TS
+	// tarWindowFromEmpty / baseWindowFromEmpty mark, in the same handle
+	// order, a whole-history window whose empty lower bound dispatched
+	// the end-stamping checkpoint state reader (r53 D156(E) amendment:
+	// serving-mode certification point (a)).
+	tarWindowFromEmpty  []bool
+	baseWindowFromEmpty []bool
+	// tarWindowSubstConstruct / baseWindowSubstConstruct mark, in the same
+	// handle order, a window whose handle CONSTRUCTION already swapped a
+	// range to the end-stamping visible-state recovery reader: the
+	// partition dispatcher can install that reader (and notify the
+	// observer) while NewPartitionChangesHandle splits the range, before
+	// any drain-side baseline exists (r53 D156(E) amendment: serving-mode
+	// certification point (c) spans construction and drain).
+	tarWindowSubstConstruct  []bool
+	baseWindowSubstConstruct []bool
+	// pickDepKeys marks encoded keys the PICK closure admitted as row
+	// reconstruction dependencies rather than literal selection. A folded
+	// key-moving update may only be produced for a tombstone whose anchor
+	// key was literally picked; dependency keys exist so the selected
+	// lineage can be reassembled, never to admit an unrelated lineage.
+	pickDepKeys map[string]struct{}
+	// pickLiteralKeys holds the literal PICK KEYS selection (encoded-pk
+	// strings), captured before any dependency expansion. The fold pass
+	// authorizes an inline victim delete at a fold's new key only when the
+	// source deleted that key AND the key belongs to this selection; MERGE
+	// leaves it nil, in which case any in-window source tombstone at the
+	// new key authorizes (every source change is selected).
+	pickLiteralKeys map[string]struct{}
 	// lcaReaderProbeMode is shared across copies of tableStuff in a single diff
 	// request. When enabled, LCA probing skips SQL and directly uses reader
 	// fallback.
@@ -360,7 +406,37 @@ type batchWithKind struct {
 	// hasReplacement marks a preserved PICK conflict whose source side emitted
 	// a row to replace the destination conflict victim.
 	hasReplacement bool
-	batch          *batch.Batch
+	// keyMovingUpdate marks a native destination UPDATE whose primary key
+	// changes: batch rows carry the NEW values (kind diffInsert) or the OLD
+	// rows (kind diffDelete, conflict checks only), and keyMovingOldKeys[i]
+	// holds the OLD primary-key values (def.pkColIdxes order) for batch row i.
+	// Provenance comes from mo_catalog.mo_data_branch_update_link; without a
+	// recorded link the same change stream replays as delete+insert.
+	// keyMovingWhereKeys, when set, has one entry per batch row; a non-nil
+	// entry overrides the WHERE key of that row's native UPDATE. The merge
+	// conflict resolver fills it when the destination moved the same row
+	// elsewhere: the accepted source version must apply to the destination
+	// row's current key, not to the shared old key.
+	keyMovingUpdate    bool
+	keyMovingOldKeys   [][]any
+	keyMovingWhereKeys [][]any
+	// keyMovingVictimAuth, when set, has one entry per batch row: whether
+	// the apply may delete the destination row holding this move's new key
+	// before the native UPDATE lands. Authorization comes from the source
+	// stream (the source itself displaced that key-holder, so merge delete
+	// semantics cover it) or from the conflict resolver honouring ACCEPT;
+	// an occupant unchanged since the branch point with no source tombstone
+	// at the new key stays unauthorized, so apply never silently deletes it
+	// (the UPDATE then meets the raw duplicate-key guard atomically).
+	keyMovingVictimAuth []bool
+	// keyMovingUnchangedOcc, when set, has one entry per batch row: the
+	// fold-time probe found a destination row holding the new key that the
+	// destination never changed since the branch point and that no source
+	// tombstone covers. The conflict resolver enforces the statement's
+	// conflict option on it (FAIL/bare error, SKIP drops the move, ACCEPT
+	// leaves the row for the raw duplicate-key guard).
+	keyMovingUnchangedOcc []bool
+	batch                 *batch.Batch
 }
 
 // logicalOperation returns the SQL-level operation represented by this diff
@@ -399,4 +475,10 @@ type compositeOption struct {
 	outputSQL             bool
 	expandUpdate          bool
 	preservePickConflicts bool
+	// pickUserConflictOpt carries the PICK statement's own WHEN CONFLICT
+	// clause (nil for MERGE and for a bare PICK). conflictOpt is forced to
+	// ACCEPT under PICK so the producer preserves every conflict for the
+	// consumer; conflict-resolution code that enforces folded-move
+	// semantics must read this field instead.
+	pickUserConflictOpt *tree.ConflictOpt
 }

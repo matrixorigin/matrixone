@@ -28,6 +28,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -148,6 +149,308 @@ func batchesShareAppendSchema(dst, src *batch.Batch) bool {
 	return true
 }
 
+// grownCapacity mirrors the exact allocation sequence the vector growth
+// path performs when a buffer at capacity prev must hold required bytes:
+// repeated mpool.GrowCapacity steps from prev, each REPLACING the previous
+// buffer — the replacement is allocated before the old buffer is freed, so
+// the previous and new buffers coexist during the step. It returns the
+// final capacity the growth settles at and the extra bytes (beyond prev,
+// which a combined-live count already charges) the sequence's peak needs:
+// the largest (previous + replacement) coexistence minus prev. Callers
+// share mpool.GrowCapacity itself with the allocator, so admission and
+// allocation can never disagree about capacity classes or rounding.
+func grownCapacity(prev, required int) (final, extra int) {
+	if prev < 0 {
+		prev = 0
+	}
+	if required <= prev {
+		return prev, 0
+	}
+	current := prev
+	transient := 0
+	for current < required {
+		next, ok := mpool.GrowCapacity(int64(current), int64(required))
+		if !ok {
+			// The allocator itself rejects this growth; charge the failing
+			// request so admission rejects first with the capacity class.
+			return required, required
+		}
+		if step := current + int(next); step > transient {
+			transient = step
+		}
+		current = int(next)
+	}
+	return current, transient - prev
+}
+
+// dstVecGrowth tracks one assembly-destination vector's allocator-owned
+// buffer capacities across serves. Vector Shrink compaction is in place
+// and the varlena area is an append log, so both capacities and the area
+// high-water are monotone: they survive coalescing unchanged.
+type dstVecGrowth struct {
+	dataCap   int
+	areaCap   int
+	areaUsed  int
+	bitmapCap int // bytes of externally stored null bitmap words
+}
+
+// dstGrowthModel mirrors the allocator state of one accumulating assembly
+// destination batch. The model is advanced speculatively at each
+// pre-growth admission gate (chargeServeGrow stages the post-serve state)
+// and committed only after the serve it admitted actually succeeds, so a
+// rejected or schema-stopped serve never corrupts the tracked state. When
+// the destination batch itself is replaced or released, the model resets
+// with it: a fresh destination is created by the serve's first append,
+// which allocates from zero capacities through the same growth arithmetic.
+type dstGrowthModel struct {
+	vecs    []dstVecGrowth
+	pending []dstVecGrowth
+}
+
+// growColSpec describes one column of an append: the fixed slot size, the
+// summed out-of-line varlena payload the append copies into the area, and
+// whether any appended row may carry a null (which can install externally
+// stored null bitmap words on accounted destination vectors). Const
+// sources expand per appended row, matching the materialization the serve
+// performs.
+type growColSpec struct {
+	typeSize int
+	varlen   bool
+	payload  int
+	nulls    bool
+}
+
+// growStep advances one modeled buffer capacity to hold req bytes with
+// the allocator's growth arithmetic and raises peak to the growth step's
+// transient when it crosses it: the previous and replacement buffers
+// coexist during the reallocation, so the step's peak is prev+final.
+// Serves whose requirement never exceeds the current capacity allocate
+// nothing and leave the peak alone.
+func growStep(capRef *int, req int, peak *int) {
+	if req <= *capRef {
+		return
+	}
+	prev := *capRef
+	final, _ := grownCapacity(prev, req)
+	if transient := prev + final; transient > *peak {
+		*peak = transient
+	}
+	*capRef = final
+}
+
+// chargeColumnGrow advances one column's modeled capacities across a
+// serve appending [start, end) rows of src to a destination that
+// already holds dstRows rows, returning the growth sequence's transient
+// peaks beyond the capacities the combined-live count already charges.
+// union selects the serve's growth primitive:
+//
+//   - A Vector.Union serve (CN object windows, both creation and
+//     append) extends every buffer ONCE for the whole selection
+//     (extendWithBitmaps) and pre-grows the varlena area once
+//     (pregrowVarlenaArea); a constant source materializes once per
+//     appended row in the data buffer, but its varlena payload is
+//     stored once (BuildVarlenaFromVarlena) and broadcast by
+//     descriptor.
+//   - The clone family (BatchHandle/AObjectHandle window serves)
+//     appends one row at a time onto an existing destination
+//     (appendFromEntry), growing every buffer with one allocator step
+//     per row; a creation serve bulk-extends the data buffer
+//     (PreExtend) and copies the null bitmap once
+//     (copyWindowBitmapsOwned) but still grows the varlena area per
+//     appended row (BuildVarlenaFromByteSlice).
+//
+// Charging the peak of the sequence each primitive actually runs —
+// instead of the payload sum — is what lets admission reject BEFORE an
+// over-budget reallocation exists; the one-shot charge for a multi-row
+// row-append would settle below the real capacity (the allocator's
+// amortized doubling overshoots a single round-up).
+func (g *dstVecGrowth) chargeColumnGrow(dstRows int, src *vector.Vector, start, end int, union bool) (add int) {
+	if src == nil || start >= end {
+		return 0
+	}
+	t := src.GetType()
+	rows := end - start
+	typeSize := t.TypeSize()
+	constVec := src.IsConst()
+	constNull := src.IsConstNull()
+
+	// Data buffer.
+	initData := g.dataCap
+	peakData := initData
+	if union || dstRows == 0 {
+		growStep(&g.dataCap, (dstRows+rows)*typeSize, &peakData)
+	} else {
+		for r := 1; r <= rows; r++ {
+			growStep(&g.dataCap, (dstRows+r)*typeSize, &peakData)
+		}
+	}
+	add += peakData - initData
+
+	// Varlena area: an append log of out-of-line payload bytes.
+	if t.IsVarlen() {
+		payloadAt := func(r int) int {
+			// r is an absolute src row index in [start, end).
+			if constVec {
+				if constNull {
+					return 0
+				}
+				if bs := src.GetBytesAt(0); len(bs) > types.VarlenaInlineSize {
+					return len(bs)
+				}
+				return 0
+			}
+			if src.IsNull(uint64(r)) {
+				return 0
+			}
+			if bs := src.GetBytesAt(r); len(bs) > types.VarlenaInlineSize {
+				return len(bs)
+			}
+			return 0
+		}
+		initArea := g.areaCap
+		peakArea := initArea
+		if union {
+			total := 0
+			if constVec {
+				// A constant varlena stores its payload once; the union
+				// broadcasts the varlena descriptor across the extended
+				// data buffer.
+				total = payloadAt(start)
+			} else {
+				for r := start; r < end; r++ {
+					total += payloadAt(r)
+				}
+			}
+			areaReq := g.areaUsed + total
+			growStep(&g.areaCap, areaReq, &peakArea)
+			g.areaUsed = areaReq
+		} else {
+			for r := start; r < end; r++ {
+				if p := payloadAt(r); p != 0 {
+					areaReq := g.areaUsed + p
+					growStep(&g.areaCap, areaReq, &peakArea)
+					g.areaUsed = areaReq
+				}
+			}
+		}
+		add += peakArea - initArea
+	}
+
+	// Externally stored null bitmap words (what the destination's
+	// Allocated reports for installed storage).
+	hasNullRows := constNull
+	if !hasNullRows && !constVec && src.HasNull() {
+		for r := start; r < end; r++ {
+			if src.IsNull(uint64(r)) {
+				hasNullRows = true
+				break
+			}
+		}
+	}
+	if hasNullRows {
+		initBitmap := g.bitmapCap
+		peakBitmap := initBitmap
+		if union || dstRows == 0 {
+			growStep(&g.bitmapCap, ((dstRows+rows+63)/64)*8, &peakBitmap)
+		} else {
+			for r := 0; r < rows; r++ {
+				if constNull || src.IsNull(uint64(start+r)) {
+					growStep(&g.bitmapCap, ((dstRows+r+1+63)/64)*8, &peakBitmap)
+				}
+			}
+		}
+		add += peakBitmap - initBitmap
+	}
+	return add
+}
+
+// chargeGrowCols computes the bytes one append of rows entries described
+// by cols allocates beyond the destination's currently modeled capacities,
+// staging the post-append capacities as pending. dstRows is the
+// destination's row count before the append (zero for a creation append:
+// destination vectors do not exist yet and every buffer allocates from
+// zero through the same growth arithmetic). The charge is the growth
+// sequence's transient peak beyond the currently modeled — and externally
+// counted — capacities, so an admitted append can never exceed the
+// admitted envelope, and the post-serve accounting backstop always passes.
+func (m *dstGrowthModel) chargeGrowCols(dstRows int, cols []growColSpec, rows int) (add int) {
+	m.pending = m.pending[:0]
+	for i, col := range cols {
+		model := dstVecGrowth{}
+		if i < len(m.vecs) {
+			model = m.vecs[i]
+		}
+		next := model
+		finalRows := dstRows + rows
+		var extra int
+		next.dataCap, extra = grownCapacity(model.dataCap, finalRows*col.typeSize)
+		add += extra
+		if col.varlen {
+			areaReq := model.areaUsed + col.payload
+			next.areaCap, extra = grownCapacity(model.areaCap, areaReq)
+			add += extra
+			next.areaUsed = areaReq
+		}
+		if col.nulls {
+			bitmapReq := ((finalRows + 63) / 64) * 8
+			next.bitmapCap, extra = grownCapacity(model.bitmapCap, bitmapReq)
+			add += extra
+		}
+		m.pending = append(m.pending, next)
+	}
+	return add
+}
+
+// chargeServeGrow computes the allocation charge of one serve appending
+// [start, end) rows of src to the tracked destination, staging the
+// post-serve capacities as pending. union selects the growth primitive
+// the serve runs: Vector.Union serves (CN object windows) extend every
+// buffer once for the whole selection, while the clone family
+// (BatchHandle/AObjectHandle serves) appends row by row onto an
+// existing destination. See chargeColumnGrow.
+func (m *dstGrowthModel) chargeServeGrow(dstRows int, src *batch.Batch, start, end int, union bool) (add int) {
+	if src == nil || start >= end {
+		m.pending = m.pending[:0]
+		return 0
+	}
+	m.pending = m.pending[:0]
+	for i := range src.Vecs {
+		var next dstVecGrowth
+		if i < len(m.vecs) {
+			next = m.vecs[i]
+		}
+		if src.Vecs[i] != nil {
+			add += next.chargeColumnGrow(dstRows, src.Vecs[i], start, end, union)
+		}
+		m.pending = append(m.pending, next)
+	}
+	return add
+}
+
+// commitPending applies the staged post-serve model after the admitted
+// serve succeeded, transferring the staged slice into the tracked state.
+func (m *dstGrowthModel) commitPending() {
+	if len(m.pending) > 0 {
+		m.vecs = m.pending
+		m.pending = nil
+	}
+}
+
+// dropPending discards the staged model after a serve that was stopped
+// (schema boundary) or failed, keeping the tracked state untouched.
+func (m *dstGrowthModel) dropPending() {
+	m.pending = m.pending[:0]
+}
+
+// fork returns a value copy used to mirror a multi-leg serve walk (quick
+// mode) without touching the tracked state; the serving leg commits the
+// fork's charge into its own staging so the whole walk stays atomic.
+func (m *dstGrowthModel) fork() dstGrowthModel {
+	f := dstGrowthModel{vecs: make([]dstVecGrowth, len(m.vecs))}
+	copy(f.vecs, m.vecs)
+	return f
+}
+
 func NewRowHandle(data *batch.Batch, mp *mpool.MPool, baseHandle *baseHandle, ctx context.Context, tombstone bool) (handle *BatchHandle) {
 	handle = &BatchHandle{
 		mp:         mp,
@@ -220,6 +523,24 @@ func (r *BatchHandle) QuickNext(data **batch.Batch, mp *mpool.MPool) (err error)
 	}
 	r.rowOffsetCursor = r.batchLength
 	return
+}
+
+// prospectiveWindow reports the window the next QuickNext call will
+// append to the caller's destination BEFORE any CloneWindow allocation:
+// QuickNext always clones the whole remaining window. A schema boundary
+// against the current destination makes the serve stop with
+// OkExpectedEOB without appending, reported as eob. The allocation
+// charge of appending this window is computed by the caller through the
+// destination growth model, which shares capacity arithmetic with the
+// allocator itself.
+func (r *BatchHandle) prospectiveWindow(bat *batch.Batch) (src *batch.Batch, start, end int, eob bool) {
+	if r == nil || r.isEnd() {
+		return nil, 0, 0, false
+	}
+	if bat != nil && !batchesShareAppendSchema(bat, r.batches) {
+		return nil, 0, 0, true
+	}
+	return r.batches, r.rowOffsetCursor, r.batchLength, false
 }
 
 func (r *BatchHandle) next(bat **batch.Batch, mp *mpool.MPool, start, end int) (err error) {
@@ -1330,6 +1651,25 @@ func (h *CNObjectHandle) prefetch(ctx context.Context) (err error) {
 		if bounded {
 			rowOffset = h.blockRowOffset
 		}
+		if h.base.changesHandle.deferRangeLimitToAssembly {
+			// Remaining-budget admission BEFORE the read allocates: the
+			// window's metadata projection must fit the current combined
+			// working set or the range is refused here, before any source
+			// buffer exists. Bounded prefetch width is one window, so no
+			// scheduled job can precede a rejection.
+			var estRows, estBytes int
+			if estRows, estBytes, err = estimatePersistedWindow(
+				ctx, h.fs, &stats, uint32(h.blkOffsetCursor), rowOffset,
+				h.maxRows, h.maxBytes, false,
+			); err != nil {
+				h.base.changesHandle.readDuration += time.Since(t0)
+				return
+			}
+			if err = h.base.changesHandle.admitSourceWindow(estRows, estBytes); err != nil {
+				h.base.changesHandle.readDuration += time.Since(t0)
+				return
+			}
+		}
 		h.TSs = append(h.TSs, entry.CreateTime)
 		blks = append(blks, objectio.NewBlockidWithObjectID(stats.ObjectName().ObjectId(), blk))
 		job := prefetchObjects(
@@ -1383,15 +1723,44 @@ func (h *CNObjectHandle) isEnd() bool {
 func (h *CNObjectHandle) IsEmpty() bool {
 	return len(h.objects) == 0
 }
-func (h *CNObjectHandle) Next(ctx context.Context, bat **batch.Batch, mp *mpool.MPool) (err error) {
+
+// discardServeWindow retires the head serve window completely: the
+// prepared slice entries go with it and the batch's allocation is
+// released, matching the lambda that previously lived inside Next.
+func (h *CNObjectHandle) discardServeWindow() {
+	data := h.cache[0]
+	h.cache = h.cache[1:]
+	if len(h.prepared) > 0 {
+		h.prepared = h.prepared[1:]
+	}
+	if len(h.blks) > 0 {
+		h.blks = h.blks[1:]
+	}
+	h.TSs = h.TSs[1:]
+	data.Clean(h.mp)
+}
+
+// ensureServeWindow materializes and prepares the head serve window. The
+// bounded prefetch READ loads the window into the cache, then
+// updateCN*Batch shapes it, so the window's complete live charge is
+// measurable BEFORE any assembly growth against it. Bounded reads are the
+// only allocation allowed ahead of the capacity gate; CloneWindow/Union
+// growth is not.
+func (h *CNObjectHandle) ensureServeWindow(ctx context.Context) (err error) {
 	if h.isEnd() {
 		return moerr.GetOkExpectedEOF()
 	}
 	if len(h.cache) == 0 {
-		err = h.prefetch(ctx)
-		if err != nil {
+		if err = h.prefetch(ctx); err != nil {
 			return
 		}
+	}
+	if len(h.cache) == 0 {
+		return moerr.GetOkExpectedEOF()
+	}
+	prepared := len(h.prepared) > 0 && h.prepared[0]
+	if prepared {
+		return nil
 	}
 	data := h.cache[0]
 	var blk *types.Blockid
@@ -1399,49 +1768,65 @@ func (h *CNObjectHandle) Next(ctx context.Context, bat **batch.Batch, mp *mpool.
 		blk = &h.blks[0]
 	}
 	ts := h.TSs[0]
-	discardSource := func() {
-		h.cache = h.cache[1:]
-		if len(h.prepared) > 0 {
-			h.prepared = h.prepared[1:]
-		}
-		if len(h.blks) > 0 {
-			h.blks = h.blks[1:]
-		}
-		h.TSs = h.TSs[1:]
-		data.Clean(h.mp)
+	t0 := time.Now()
+	if h.isTombstone {
+		err = updateCNTombstoneBatch(
+			data, ts, blk, h.base.changesHandle.retainRowID, h.mp,
+		)
+	} else {
+		err = updateCNDataBatch(
+			data, ts, blk, h.base.changesHandle.retainRowID, h.mp,
+		)
 	}
-	prepared := len(h.prepared) > 0 && h.prepared[0]
-	if !prepared {
-		t0 := time.Now()
-		if h.isTombstone {
-			err = updateCNTombstoneBatch(
-				data, ts, blk, h.base.changesHandle.retainRowID, h.mp,
-			)
-		} else {
-			err = updateCNDataBatch(
-				data, ts, blk, h.base.changesHandle.retainRowID, h.mp,
-			)
-		}
-		if err != nil {
-			discardSource()
-			return err
-		}
-		if len(h.prepared) == 0 {
-			h.prepared = append(h.prepared, true)
-		} else {
-			h.prepared[0] = true
-		}
-		h.base.changesHandle.updateDuration += time.Since(t0)
+	if err != nil {
+		h.discardServeWindow()
+		return err
 	}
+	if len(h.prepared) == 0 {
+		h.prepared = append(h.prepared, true)
+	} else {
+		h.prepared[0] = true
+	}
+	h.base.changesHandle.updateDuration += time.Since(t0)
+	return nil
+}
+
+// prospectiveWindow materializes and prepares the head serve window
+// (bounded reads only, each admitted by the source-window budget gate
+// inside prefetch) and reports it for charging: every serve unions the
+// complete window in every mode. The window itself stays charged through
+// assemblyLiveRowsBytes until discardServeWindow actually releases it. A
+// schema boundary against the current destination makes the serve stop
+// with OkExpectedEOB without appending, reported as eob (the prepared
+// window stays cached for the next destination).
+func (h *CNObjectHandle) prospectiveWindow(ctx context.Context, bat *batch.Batch) (src *batch.Batch, eob bool, err error) {
+	if h == nil || h.IsEmpty() || h.isEnd() {
+		return nil, false, nil
+	}
+	if err = h.ensureServeWindow(ctx); err != nil {
+		if moerr.IsMoErrCode(err, moerr.OkExpectedEOF) {
+			return nil, false, nil
+		}
+		return nil, false, err
+	}
+	data := h.cache[0]
+	if bat != nil && !batchesShareAppendSchema(bat, data) {
+		return nil, true, nil
+	}
+	return data, false, nil
+}
+
+func (h *CNObjectHandle) Next(ctx context.Context, bat **batch.Batch, mp *mpool.MPool) (err error) {
+	if err = h.ensureServeWindow(ctx); err != nil {
+		return
+	}
+	data := h.cache[0]
 	t0 := time.Now()
 	if *bat == nil {
 		*bat = batch.NewWithSize(0)
 		(*bat).Attrs = append((*bat).Attrs, data.Attrs...)
 		for _, vec := range data.Vecs {
 			newVec := vector.NewVec(*vec.GetType())
-			if err != nil {
-				return err
-			}
 			(*bat).Vecs = append((*bat).Vecs, newVec)
 		}
 	} else if !batchesShareAppendSchema(*bat, data) {
@@ -1455,12 +1840,12 @@ func (h *CNObjectHandle) Next(ctx context.Context, bat **batch.Batch, mp *mpool.
 	for i, vec := range (*bat).Vecs {
 		src := data.Vecs[i]
 		if err = vec.Union(src, sels, mp); err != nil {
-			discardSource()
+			h.discardServeWindow()
 			return err
 		}
 	}
 	(*bat).SetRowCount((*bat).Vecs[0].Length())
-	discardSource()
+	h.discardServeWindow()
 	h.base.changesHandle.copyDuration += time.Since(t0)
 	return
 }
@@ -1846,6 +2231,25 @@ func (h *AObjectHandle) prefetch(ctx context.Context) (err error) {
 			}
 		}
 		stats := obj.ObjectStats
+		if h.p.changesHandle.deferRangeLimitToAssembly {
+			// Remaining-budget admission BEFORE the read allocates: the
+			// window's metadata projection must fit the current combined
+			// working set or the range is refused before any source buffer
+			// exists. On rejection the resolved target stays pending, so a
+			// later retry resolves the same block again.
+			var estRows, estBytes int
+			if estRows, estBytes, err = estimatePersistedWindow(
+				ctx, h.fs, &stats, uint32(blk), h.blockRowOffset,
+				h.maxRows, h.maxBytes, h.isTombstone && !h.quick,
+			); err != nil {
+				h.p.changesHandle.readDuration += time.Since(t0)
+				return
+			}
+			if err = h.p.changesHandle.admitSourceWindow(estRows, estBytes); err != nil {
+				h.p.changesHandle.readDuration += time.Since(t0)
+				return
+			}
+		}
 		job := prefetchObjects(
 			ctx, uint32(blk), h.blockRowOffset, h.fs, &stats,
 			h.p.changesHandle.scheduler, h.maxRows, h.maxBytes,
@@ -1970,6 +2374,32 @@ func (h *AObjectHandle) QuickNext(ctx context.Context, data **batch.Batch, mp *m
 	return
 }
 
+// prospectiveWindow loads the current window if needed (bounded reads
+// only, each admitted by the source-window budget gate inside prefetch)
+// and reports the remaining append window of the next serve: QuickNext
+// serves [start, end); Next serves the single row at start. The batch
+// itself stays charged through assemblyLiveRowsBytes until the window is
+// retired. A schema boundary against the current destination makes the
+// serve stop with OkExpectedEOB without appending, reported as eob (the
+// loaded window stays current for the next destination).
+func (h *AObjectHandle) prospectiveWindow(ctx context.Context, bat *batch.Batch) (src *batch.Batch, start, end int, eob bool, err error) {
+	if h == nil || (h.isEnd() && h.rowOffsetCursor >= h.batchLength) {
+		return nil, 0, 0, false, nil
+	}
+	if h.currentBatch == nil && !h.isEnd() {
+		if err = h.getNextAObject(ctx); err != nil {
+			return nil, 0, 0, false, err
+		}
+	}
+	if h.currentBatch == nil || h.rowOffsetCursor >= h.batchLength {
+		return nil, 0, 0, false, nil
+	}
+	if bat != nil && !batchesShareAppendSchema(bat, h.currentBatch) {
+		return nil, 0, 0, true, nil
+	}
+	return h.currentBatch, h.rowOffsetCursor, h.batchLength, false, nil
+}
+
 func (h *AObjectHandle) Next(ctx context.Context, bat **batch.Batch, mp *mpool.MPool) (err error) {
 	if h.isEnd() && h.rowOffsetCursor >= h.batchLength {
 		return moerr.GetOkExpectedEOF()
@@ -2003,6 +2433,10 @@ func (h *AObjectHandle) next(ctx context.Context, bat **batch.Batch, mp *mpool.M
 		}
 	}
 	(*bat).SetRowCount((*bat).Vecs[0].Length())
+	// Publish the (possibly just-created) destination BEFORE the tail
+	// prefetch below: its admission must charge against the live
+	// combined set that includes this destination.
+	h.p.changesHandle.pinAssemblyDst(h.p, *bat)
 	h.p.changesHandle.copyDuration += time.Since(t0)
 	h.rowOffsetCursor = end
 	if h.rowOffsetCursor >= h.batchLength {
@@ -2159,6 +2593,14 @@ func (p *baseHandle) init(ctx context.Context, quick bool, mp *mpool.MPool) (err
 		return
 	}
 	if p.inMemoryHandle != nil {
+		// The aobject first window is prepared and retention-charged now;
+		// the in-memory sort's copy transients must be admitted against
+		// the combined set that includes it BEFORE sortBatch allocates
+		// any replacement buffer (shuffle allocates the replacement while
+		// the original vector is still held).
+		if err = p.changesHandle.chargeConstructionSort(p.inMemoryHandle, quick); err != nil {
+			return
+		}
 		err = p.inMemoryHandle.init(quick, mp)
 	}
 	return
@@ -2298,6 +2740,173 @@ func (p *baseHandle) QuickNext(ctx context.Context, bat **batch.Batch, mp *mpool
 	}
 	return nil
 }
+
+// prospectiveQuickCharge mirrors QuickNext's serve order, schema
+// boundaries, and coarseMaxRow stops WITHOUT assembling anything: it
+// reports the rows and bytes the next QuickNext call would append to
+// bat, so an attached bound can be enforced before the CloneWindow/Union
+// growth. model carries the destination's allocator state: each leg's
+// append charge comes from advancing a value fork of it, and the fork's
+// final state is staged as model.pending for the gate to commit after
+// the admitted serve. The model never under-counts: it shares capacity
+// arithmetic with the allocator itself (capacity classes, rounding, and
+// transient old+replacement buffer coexistence during growth), so a
+// bound checked against the projected peak cannot be crossed inside the
+// serve. When bat is nil the serve creates a fresh destination, so the
+// tracked state resets to zero capacities first. A bounded read may
+// materialize a handle's head serve window; every retained source keeps
+// its separate assemblyLiveRowsBytes charge until its actual release.
+func (p *baseHandle) prospectiveQuickCharge(ctx context.Context, bat *batch.Batch, model *dstGrowthModel) (rows, bytes int, err error) {
+	accRows := 0
+	// schemaRef is the schema the growing destination would carry at each
+	// mirror step: the existing destination's, or the first serving
+	// window's when the destination has not been created yet. A window on
+	// the other side of a schema boundary appends nothing and stops the
+	// whole QuickNext call, so the mirror stops charging there as well.
+	schemaRef := bat
+	if bat != nil {
+		accRows = bat.RowCount()
+	} else {
+		model.vecs = nil
+	}
+	walk := model.fork()
+	// stage hands the fork's advanced state to the caller's model: what
+	// the destination's capacities will be after the admitted serve.
+	stage := func() {
+		model.pending = walk.vecs
+		walk.vecs = nil
+	}
+	if p.aobjHandle != nil {
+		var src *batch.Batch
+		var start, end int
+		var eob bool
+		if src, start, end, eob, err = p.aobjHandle.prospectiveWindow(ctx, schemaRef); err != nil {
+			return 0, 0, err
+		}
+		if eob {
+			stage()
+			return
+		}
+		if src != nil && end > start {
+			r := end - start
+			bytes += walk.chargeServeGrow(accRows, src, start, end, false)
+			walk.commitPending()
+			rows += r
+			accRows += r
+			if schemaRef == nil {
+				schemaRef = src
+			}
+		}
+	}
+	if accRows > p.changesHandle.coarseMaxRow {
+		stage()
+		return
+	}
+	if p.inMemoryHandle != nil {
+		if bh, ok := p.inMemoryHandle.(*BatchHandle); ok {
+			var src *batch.Batch
+			var start, end int
+			var eob bool
+			if src, start, end, eob = bh.prospectiveWindow(schemaRef); eob {
+				stage()
+				return
+			}
+			if src != nil && end > start {
+				r := end - start
+				bytes += walk.chargeServeGrow(accRows, src, start, end, false)
+				walk.commitPending()
+				rows += r
+				accRows += r
+				if schemaRef == nil {
+					schemaRef = src
+				}
+			}
+		} else {
+			// Non-*BatchHandle implementations (spill-backed runs) retain no
+			// mpool source, matching assemblyLiveRowsBytes, which only
+			// accounts the *BatchHandle shape; rows still charge.
+			accRows += p.inMemoryHandle.Rows()
+		}
+	}
+	if accRows > p.changesHandle.coarseMaxRow {
+		stage()
+		return
+	}
+	if p.cnObjectHandle != nil {
+		var src *batch.Batch
+		var eob bool
+		if src, eob, err = p.cnObjectHandle.prospectiveWindow(ctx, schemaRef); err != nil {
+			return 0, 0, err
+		}
+		if eob {
+			stage()
+			return
+		}
+		if src != nil {
+			if r := src.RowCount(); r > 0 {
+				bytes += walk.chargeServeGrow(accRows, src, 0, r, true)
+				walk.commitPending()
+				rows += r
+			}
+		}
+	}
+	stage()
+	return
+}
+
+// prospectiveRowCharge mirrors Next: nextTS picks the single sub-handle
+// that serves next, and the charge is what that serve appends — one row
+// for the row handles, the whole prepared window for CN, whose serve
+// unions the complete window in every mode. model carries the
+// destination's allocator state and receives the staged post-serve state
+// exactly as in prospectiveQuickCharge. A serve sitting on the other
+// side of a schema boundary against bat appends nothing (OkExpectedEOB),
+// so it charges nothing.
+func (p *baseHandle) prospectiveRowCharge(ctx context.Context, bat *batch.Batch, model *dstGrowthModel) (rows, bytes int, err error) {
+	dstRows := 0
+	if bat != nil {
+		dstRows = bat.RowCount()
+	} else {
+		model.vecs = nil
+	}
+	_, typ := p.nextTS()
+	switch typ {
+	case NextChangeHandle_CNObj:
+		src, eob, cerr := p.cnObjectHandle.prospectiveWindow(ctx, bat)
+		if eob || cerr != nil {
+			return 0, 0, cerr
+		}
+		if src == nil {
+			return 0, 0, nil
+		}
+		r := src.RowCount()
+		if r <= 0 {
+			return 0, 0, nil
+		}
+		bytes = model.chargeServeGrow(dstRows, src, 0, r, true)
+		return r, bytes, nil
+	case NextChangeHandle_AObj:
+		src, start, _, eob, cerr := p.aobjHandle.prospectiveWindow(ctx, bat)
+		if eob || cerr != nil {
+			return 0, 0, cerr
+		}
+		if src == nil {
+			return 0, 0, nil
+		}
+		bytes = model.chargeServeGrow(dstRows, src, start, start+1, false)
+		return 1, bytes, nil
+	case NextChangeHandle_InMemory:
+		if bh, ok := p.inMemoryHandle.(*BatchHandle); ok && !bh.isEnd() {
+			if bat != nil && !batchesShareAppendSchema(bat, bh.batches) {
+				return 0, 0, nil
+			}
+			bytes = model.chargeServeGrow(dstRows, bh.batches, bh.rowOffsetCursor, bh.rowOffsetCursor+1, false)
+			return 1, bytes, nil
+		}
+	}
+	return 0, 0, nil
+}
+
 func (p *baseHandle) newBatchHandleWithRowIterator(
 	ctx context.Context,
 	iter RowsIter,
@@ -2349,6 +2958,30 @@ func (p *baseHandle) newBatchHandleWithRowIterator(
 		return nil
 	}
 	chunkRows, chunkBytes := p.changesHandle.rangeSpillChunkLimits()
+	// fillRowModel tracks the growing replay buffer's allocator state so
+	// each row's growth is admitted BEFORE fillIn* allocates it: a row
+	// whose buffers do not fit the remaining combined budget is refused
+	// with zero new allocation, and the admitted model is committed only
+	// after the row actually lands. A spill flush releases the buffer, so
+	// the model resets with it.
+	var fillRowModel dstGrowthModel
+	admitRow := func(tombstoneRow bool, entry *RowEntry) error {
+		if !p.changesHandle.deferRangeLimitToAssembly {
+			return nil
+		}
+		cols := fillRowCols(entry, tombstoneRow, p.changesHandle.retainRowID, p.changesHandle.logicalSeqnums)
+		dstRows := 0
+		if bat != nil {
+			dstRows = bat.RowCount()
+		}
+		addBytes := fillRowModel.chargeGrowCols(dstRows, cols, 1)
+		liveRows, liveBytes := p.changesHandle.assemblyLiveRowsBytes(nil, nil)
+		if bat != nil {
+			liveRows += bat.RowCount()
+			liveBytes += bat.Allocated()
+		}
+		return p.changesHandle.checkRangeLimit(liveRows+1, liveBytes+addBytes)
+	}
 	for iter.Next() {
 		select {
 		case <-ctx.Done():
@@ -2360,8 +2993,16 @@ func (p *baseHandle) newBatchHandleWithRowIterator(
 		if checkTS(start, end, entry.Time) {
 			tsMatched++
 			if !entry.Deleted && !tombstone {
+				if limitErr := admitRow(false, entry); limitErr != nil {
+					fillRowModel.dropPending()
+					err = limitErr
+					return nil, err
+				}
 				fillInInsertBatch(&bat, entry, p.changesHandle.retainRowID, p.changesHandle.logicalSeqnums, mp)
 				bat.SetRowCount(bat.Vecs[0].Length())
+				if p.changesHandle.deferRangeLimitToAssembly {
+					fillRowModel.commitPending()
+				}
 				emitted++
 			}
 			if entry.Deleted && tombstone {
@@ -2371,15 +3012,37 @@ func (p *baseHandle) newBatchHandleWithRowIterator(
 						continue
 					}
 				}
+				if limitErr := admitRow(true, entry); limitErr != nil {
+					fillRowModel.dropPending()
+					err = limitErr
+					return nil, err
+				}
 				fillInDeleteBatch(&bat, entry, p.changesHandle.retainRowID, mp)
 				bat.SetRowCount(bat.Vecs[0].Length())
+				if p.changesHandle.deferRangeLimitToAssembly {
+					fillRowModel.commitPending()
+				}
 				emitted++
+			}
+			if bat != nil && p.changesHandle.deferRangeLimitToAssembly {
+				// Backstop for the pre-admission above: the measured bulk
+				// can never cross the admitted envelope, so this only ever
+				// trips on a model regression.
+				liveRows, liveBytes := p.changesHandle.assemblyLiveRowsBytes(nil, nil)
+				liveRows += bat.RowCount()
+				liveBytes += bat.Allocated()
+				if limitErr := p.changesHandle.checkRangeLimit(liveRows, liveBytes); limitErr != nil {
+					err = limitErr
+					return nil, err
+				}
 			}
 			if bat != nil && ((chunkRows > 0 && bat.RowCount() >= chunkRows) ||
 				(chunkBytes > 0 && bat.Allocated() >= chunkBytes)) {
 				if err = flush(); err != nil {
 					return nil, err
 				}
+				fillRowModel.vecs = nil
+				fillRowModel.pending = nil
 			}
 		}
 	}
@@ -2813,6 +3476,31 @@ type ChangeHandler struct {
 	spillConfig             engine.ChangeRangeSpillConfig
 	spillNetEffectData      replayRowHandle
 	spillNetEffectTombstone replayRowHandle
+
+	// deferRangeLimitToAssembly marks the default-policy constructors'
+	// limit enforcement: an attached bound is charged against the combined
+	// live working set while the in-memory replay buffers materialize and
+	// during assembly (destination batches, prefetch cache, in-memory
+	// buffer), with every allocation counted completely until its owner
+	// releases it, instead of driving the visible-state family's spill
+	// chunk flush. The underlying stream stays byte-identical and
+	// exhausting the bound surfaces the capacity class.
+	deferRangeLimitToAssembly bool
+
+	// dataGrowth/tombGrowth mirror the allocator state of the two
+	// accumulating assembly destinations for the pre-growth admission
+	// gates. Each gate stages the post-serve state; the serve owning the
+	// stage commits it, and only a destination replacement resets it.
+	dataGrowth dstGrowthModel
+	tombGrowth dstGrowthModel
+	// assemblyData/assemblyTombstone reference the in-flight destinations
+	// while the assembly loops own them, so persisted source-read
+	// admission measures the REMAINING combined budget — destinations and
+	// retained sources together — rather than the raw attached bound.
+	// They are nil outside assembly (construction), where the surviving
+	// handles alone make up the working set.
+	assemblyData      *batch.Batch
+	assemblyTombstone *batch.Batch
 	// debugLabel scopes temporary diagnostics to a single CollectChanges call chain.
 	debugLabel string
 
@@ -2821,7 +3509,35 @@ type ChangeHandler struct {
 	LogThreshold time.Duration
 }
 
+// attachRangeLimit reads the caller-owned recovery bound with the contract
+// shared by every range constructor: a row bound cannot bound variable-width
+// persisted columns by itself, so rows without bytes is a caller
+// misconfiguration rejected at construction. The default-policy constructors
+// (in-memory partition replay and checkpoint replay) enforce an attached
+// bound through construction and assembly accounting over the combined live
+// working set; an unattached context leaves both fields zero, which the
+// engine API defines as unbounded, preserving every pre-existing caller
+// byte-identically.
+func (p *ChangeHandler) attachRangeLimit(ctx context.Context) error {
+	rangeLimit := engine.ChangeRangeLimitFromContext(ctx)
+	if rangeLimit.MaxInMemoryRows > 0 && rangeLimit.MaxInMemoryBytes <= 0 {
+		return moerr.NewInvalidInputNoCtx(
+			"change range MaxInMemoryRows requires MaxInMemoryBytes to bound variable-width persisted columns",
+		)
+	}
+	p.maxInMemoryRows = rangeLimit.MaxInMemoryRows
+	p.maxInMemoryBytes = rangeLimit.MaxInMemoryBytes
+	p.deferRangeLimitToAssembly = rangeLimit.Enabled()
+	return nil
+}
+
 func (p *ChangeHandler) rangeSpillChunkLimits() (rows, bytes int) {
+	if p.deferRangeLimitToAssembly {
+		// Limit enforcement moved to assembly: no spill ownership is
+		// attached on this construction path, and the chunk flush exists
+		// only to slice spilled runs.
+		return 0, 0
+	}
 	// Construction can retain one chunk for the other replay side while a
 	// merge holds two inputs and one output. Quarters keep that working set
 	// within the caller's combined data+tombstone memory budget.
@@ -2832,6 +3548,360 @@ func (p *ChangeHandler) rangeSpillChunkLimits() (rows, bytes int) {
 		bytes = max(1, p.maxInMemoryBytes/4)
 	}
 	return
+}
+
+// assemblyLiveRowsBytes counts the combined live working set: both
+// accumulating destination batches, the persisted prefetch window caches,
+// and the in-memory replay buffers. Every allocation counts COMPLETELY
+// while its owner is alive: a replay handle releases its batch only when
+// the handle closes, long after the read cursor has passed (and only after
+// Next/QuickNext deep-copied the served window out of it), so the bound
+// governs peak retained memory, not the unread remainder. The count is
+// pure inspection; nothing is mutated or moved.
+func (p *ChangeHandler) assemblyLiveRowsBytes(data, tombstone *batch.Batch) (rows, bytes int) {
+	account := func(b *batch.Batch) {
+		if b == nil {
+			return
+		}
+		rows += b.RowCount()
+		bytes += b.Allocated()
+	}
+	account(data)
+	account(tombstone)
+	for _, h := range []*baseHandle{p.dataHandle, p.tombstoneHandle} {
+		if h == nil {
+			continue
+		}
+		if h.cnObjectHandle != nil {
+			for _, c := range h.cnObjectHandle.cache {
+				account(c)
+			}
+		}
+		if h.aobjHandle != nil {
+			for _, c := range h.aobjHandle.cache {
+				account(c)
+			}
+			account(h.aobjHandle.currentBatch)
+		}
+		if h.inMemoryHandle != nil {
+			if bh, ok := h.inMemoryHandle.(*BatchHandle); ok && bh != nil {
+				account(bh.batches)
+			}
+		}
+	}
+	return
+}
+
+// checkRangeLimit compares one measured {rows, bytes} working set against
+// the attached bound, returning the capacity class on the first crossing.
+func (p *ChangeHandler) checkRangeLimit(rows, bytes int) error {
+	if (p.maxInMemoryRows > 0 && rows > p.maxInMemoryRows) ||
+		(p.maxInMemoryBytes > 0 && bytes > p.maxInMemoryBytes) {
+		return engine.NewChangeRangeCapacityError(fmt.Sprintf(
+			"%d rows / %d bytes live against rows=%d bytes=%d",
+			rows, bytes, p.maxInMemoryRows, p.maxInMemoryBytes))
+	}
+	return nil
+}
+
+// chargeConstructionSort admits the sort/normalization copy transient of
+// one constructor initializer BEFORE sortBatch allocates anything: the
+// batch's vectors are shuffled in place, each vector's replacement
+// backing materializing while its original is still held (alloc-before-
+// free), so the peak is the retained working set plus the LARGEST single
+// vector copy. The gate measures the combined live set at the
+// initializer's own point in the construction order — replay buffers,
+// prepared aobject windows, destinations alike — and refuses the range
+// before the first replacement buffer exists; a later per-vector peak can
+// never exceed the projection because every other vector stays retained,
+// not freed, during the shuffle. Quick mode skips sorting, so it skips
+// the charge; nil or non-batch replay handles (spill legs) own no in-
+// memory vectors and charge nothing. The check is pure inspection; the
+// caller's error path owns cleanup.
+func (p *ChangeHandler) chargeConstructionSort(inMemory replayRowHandle, quick bool) error {
+	if !p.deferRangeLimitToAssembly || quick {
+		return nil
+	}
+	bh, ok := inMemory.(*BatchHandle)
+	if !ok || bh == nil || bh.batches == nil {
+		return nil
+	}
+	sortTemp := 0
+	for _, vec := range bh.batches.Vecs {
+		if vec == nil {
+			continue
+		}
+		// The vector's complete current allocation soundly bounds its
+		// shuffle copy: the replacement holds the same rows (same length,
+		// same payload), so its fresh capacity step can never exceed the
+		// original's complete charged size.
+		sortTemp = max(sortTemp, vec.Allocated())
+	}
+	if sortTemp == 0 {
+		return nil
+	}
+	liveRows, liveBytes := p.assemblyLiveRowsBytes(nil, nil)
+	return p.checkRangeLimit(liveRows, liveBytes+sortTemp)
+}
+
+// chargeConstruction enforces the deferred default-policy bound while the
+// handler is still being built: retained replay buffers and prefetch
+// caches are charged at their complete allocation the moment they
+// materialize, so an over-budget in-memory range, or two individually
+// bounded buffers coexisting, surfaces the capacity class at construction
+// instead of after the whole replay already peaked. The check is pure
+// inspection; the constructor's error path owns cleanup.
+func (p *ChangeHandler) chargeConstruction() error {
+	if !p.deferRangeLimitToAssembly {
+		return nil
+	}
+	return p.checkRangeLimit(p.assemblyLiveRowsBytes(nil, nil))
+}
+
+// chargeAssembly enforces the attached bound at each assembly accounting
+// point: every union append into the accumulating destinations and every
+// batch the Next loops emit is checked against the combined live working
+// set. Exceeding the bound surfaces the capacity class after cleaning the
+// destinations and releasing the replay handles, so bounded peak and full
+// release are the same event. Emitted rows, order, hint progression, and
+// recorded commit stamps are byte-identical to the unbudgeted read; the
+// capacity class only ever replaces a result batch that would have crossed
+// the bound.
+func (p *ChangeHandler) chargeAssembly(data, tombstone **batch.Batch, mp *mpool.MPool) (err error) {
+	if !p.deferRangeLimitToAssembly {
+		return nil
+	}
+	rows, bytes := p.assemblyLiveRowsBytes(*data, *tombstone)
+	if err = p.checkRangeLimit(rows, bytes); err != nil {
+		if *data != nil {
+			(*data).Clean(mp)
+			*data = nil
+		}
+		if *tombstone != nil {
+			(*tombstone).Clean(mp)
+			*tombstone = nil
+		}
+		_ = p.Close()
+		return err
+	}
+	return nil
+}
+
+// growthModelFor returns the destination growth model tracking the data
+// (dataSide=true) or tombstone assembly side: one model per accumulating
+// destination batch, committed only by serves the gate admitted.
+func (p *ChangeHandler) growthModelFor(dataSide bool) *dstGrowthModel {
+	if dataSide {
+		return &p.dataGrowth
+	}
+	return &p.tombGrowth
+}
+
+// releaseAssemblyDsts cleans both in-flight destinations and closes the
+// handler. It is the shared rejection cleanup for every
+// assembly-capacity rejection — admission gate, source-window gate, and
+// accounting backstop — so bounded peak and full release are always the
+// same event.
+func (p *ChangeHandler) releaseAssemblyDsts(data, tombstone **batch.Batch, mp *mpool.MPool) {
+	if data != nil && *data != nil {
+		(*data).Clean(mp)
+		*data = nil
+	}
+	if tombstone != nil && *tombstone != nil {
+		(*tombstone).Clean(mp)
+		*tombstone = nil
+	}
+	_ = p.Close()
+}
+
+// admitAssemblyGrowth enforces the attached bound BEFORE an assembly
+// serve grows the destinations: the prospective serve charge is added to
+// the combined live working set (both accumulating destinations plus
+// every retained source, charged until its actual release) and checked
+// ahead of the CloneWindow/Union allocation, so a rejected range never
+// transiently exceeds the admitted envelope. The charge is computed from
+// the destination growth model, which shares capacity arithmetic with
+// the allocator itself, so an admitted projection can never under-count
+// the allocation the serve performs. Rejection runs the shared release.
+// The post-serve chargeAssembly calls remain as the backstop; because
+// the projection never under-counts the serve, they always pass for
+// admitted growth.
+func (p *ChangeHandler) admitAssemblyGrowth(data, tombstone **batch.Batch, addRows, addBytes int, mp *mpool.MPool) (err error) {
+	if !p.deferRangeLimitToAssembly {
+		return nil
+	}
+	var d, t *batch.Batch
+	if data != nil {
+		d = *data
+	}
+	if tombstone != nil {
+		t = *tombstone
+	}
+	rows, bytes := p.assemblyLiveRowsBytes(d, t)
+	if err = p.checkRangeLimit(rows+addRows, bytes+addBytes); err != nil {
+		p.releaseAssemblyDsts(data, tombstone, mp)
+		return err
+	}
+	return nil
+}
+
+// admitSourceWindow enforces the attached bound BEFORE a persisted
+// source read allocates its buffers: the metadata-projected window
+// charge is added to the current combined live set (both destinations
+// plus every retained source), so a read whose buffers cannot fit inside
+// the remaining budget is refused before any buffer exists. No buffer is
+// owned by the read yet on rejection, so no local cleanup is due; the
+// gate that called into the read turns the capacity error into the
+// shared release. assemblyData/assemblyTombstone pin the in-flight
+// destinations during the gated section; outside assembly gates
+// (construction reads) they are nil and only the constructed handles
+// make up the working set.
+func (p *ChangeHandler) admitSourceWindow(rows, bytes int) error {
+	if !p.deferRangeLimitToAssembly {
+		return nil
+	}
+	liveRows, liveBytes := p.assemblyLiveRowsBytes(p.assemblyData, p.assemblyTombstone)
+	return p.checkRangeLimit(liveRows+rows, liveBytes+bytes)
+}
+
+// pinAssemblyDst publishes a destination created inside a serve into
+// the assembly gate's snapshot: a source-window load trailing the serve
+// (the aobj tail prefetch) must charge against the live combined set it
+// actually joins, including a destination that did not exist when the
+// gate opened and snapshotted the pre-serve pointers. Appends re-pin
+// the same pointer, which the liveness walk re-measures anyway; outside
+// gated sections the slots are nil and each serve clears them again.
+func (p *ChangeHandler) pinAssemblyDst(owner *baseHandle, dst *batch.Batch) {
+	if !p.deferRangeLimitToAssembly {
+		return
+	}
+	if p.dataHandle == owner {
+		p.assemblyData = dst
+	} else if p.tombstoneHandle == owner {
+		p.assemblyTombstone = dst
+	}
+}
+
+// estimatePersistedWindow projects the PEAK the gated section reaches
+// while one bounded window read materializes and prepares its batch,
+// WITHOUT scheduling the read: it repeats the bounded-read job's own
+// window arithmetic from the block metadata (remaining rows, chunk row
+// cap, chunk byte budget) and then charges a SOUND per-column bound —
+// fixed-width columns scale exactly (every row carries the constant
+// width), each varlena column charges its decoded 24-byte header per
+// window row plus the WHOLE column payload area (any subset of the
+// block's values, in any width distribution, materializes at most that
+// much area), plus a null bitmap per column per window row — with every
+// buffer passed through one allocator capacity-class step from zero
+// previous capacity, the way a fresh allocation behaves. Charged rows
+// equal the arithmetic exactly; charged bytes never under-count,
+// including a skewed window whose single wide value dominates the block
+// and a payload sitting just under a size class — the two shapes integer
+// payload scaling under-counted.
+//
+// Two further transients ride on the same charge so rejection stays
+// strictly ahead of every allocation the window provokes:
+//
+//   - Chunk-union growth. A chunk-encoded column (Location().Alg() ==
+//     compress.Lz4Chunked) materializes its window chunk part by part,
+//     unioning each part into the accumulated destination: the grown
+//     replacement buffer is allocated BEFORE the previous buffer is
+//     freed (mpool's reallocation sequence), while the part stays alive
+//     until after the union. Previous, replacement and part coexist, so
+//     one union step peaks at up to three times the destination's final
+//     buffer set (previous and part each fit individually inside that
+//     final set: their accumulated bytes both belong to the unioned
+//     total). A chunked column is therefore charged THREE times its
+//     retained composition — a sound bound for any chunk count; a
+//     single-chunk window pays the same charge even though it never
+//     unions, which keeps the gate fail-closed without reading chunk
+//     headers. Flat columns materialize in one shot and charge once.
+//   - Tombstone normalization. A persisted tombstone window is sorted by
+//     commit-ts right after materialization (updateTombstoneBatch ->
+//     sortBatch -> Shuffle), each vector's copy coexisting with its
+//     original; the peak adds the LARGEST single column copy, bounded by
+//     the largest per-column retained charge. normalizeSort is set only
+//     by the tombstone aobject leg in row mode; data windows and CN
+//     windows are not commit-ts sorted, and quick mode sorts nothing.
+//
+// The extra meta load is the only added IO and is cache-satisfiable, and
+// it is skipped entirely on paths without an attached policy.
+func estimatePersistedWindow(
+	ctx context.Context,
+	fs fileservice.FileService,
+	stats *objectio.ObjectStats,
+	blockID uint32,
+	rowOffset, maxRows, maxBytes int,
+	normalizeSort bool,
+) (rows, bytes int, err error) {
+	loc := stats.BlockLocation(uint16(blockID), 8192)
+	meta, err := objectio.FastLoadObjectMeta(ctx, &loc, false, fs)
+	if err != nil {
+		return 0, 0, err
+	}
+	dataMeta := meta.MustGetMeta(objectio.SchemaData)
+	blockMeta := dataMeta.GetBlockMeta(blockID)
+	var decodedBytes uint64
+	for seqnum := uint16(0); seqnum < blockMeta.GetMetaColumnCount(); seqnum++ {
+		decodedBytes += uint64(blockMeta.ColumnMeta(seqnum).Location().OriginSize())
+	}
+	totalRows := int(blockMeta.GetRows())
+	windowRows := totalRows - rowOffset
+	if windowRows < 0 {
+		windowRows = 0
+	}
+	if maxRows > 0 {
+		windowRows = min(windowRows, max(1, maxRows/4))
+	}
+	if decodedBytes > 0 && totalRows > 0 && maxBytes > 0 {
+		windowByteBudget := max(1, maxBytes/4)
+		windowRows = min(windowRows, max(1, int(uint64(windowByteBudget)*uint64(totalRows)/decodedBytes)))
+	}
+	var payload uint64
+	maxColumnCharge := 0
+	charge := func(bytes int64) int {
+		rounded, _ := grownCapacity(0, int(bytes))
+		return rounded
+	}
+	for seqnum := uint16(0); seqnum < blockMeta.GetMetaColumnCount(); seqnum++ {
+		cm := blockMeta.ColumnMeta(seqnum)
+		origin := int64(cm.Location().OriginSize())
+		var columnCharge int
+		if fixed := types.T(cm.DataType()).FixedLength(); fixed > 0 {
+			columnCharge += charge(int64(windowRows) * int64(fixed))
+		} else {
+			columnCharge += charge(types.VarlenaSize * int64(windowRows))
+			area := origin - types.VarlenaSize*int64(totalRows)
+			if area < 0 {
+				// Layout where OriginSize does not decompose into
+				// headers plus area; the whole origin is the only sound
+				// metadata bound.
+				area = origin
+			}
+			columnCharge += charge(area)
+		}
+		columnCharge += charge(int64((windowRows + 63) / 64 * 8))
+		// The largest single-column charge binds the normalization
+		// sort's copy transient below; the retained composition is the
+		// measure (the sort never unions, it replaces).
+		maxColumnCharge = max(maxColumnCharge, columnCharge)
+		if cm.Location().Alg() == compress.Lz4Chunked {
+			// Previous + replacement + part coexist at one union step
+			// (see the doc comment): charge three complete copies of
+			// the window's retained composition for chunked columns.
+			columnCharge *= 3
+		}
+		payload += uint64(columnCharge)
+	}
+	if normalizeSort {
+		payload += uint64(maxColumnCharge)
+	}
+	if payload == 0 && decodedBytes > 0 {
+		payload = 1
+	}
+	rows = windowRows
+	bytes = int(payload) + 128
+	return rows, bytes, nil
 }
 
 type checkpointObjectSelection uint8
@@ -3130,6 +4200,9 @@ func newChangesHandlerWithCheckpointEntries(
 			changeHandle = nil
 		}
 	}()
+	if err = changeHandle.attachRangeLimit(ctx); err != nil {
+		return
+	}
 	if selection == checkpointObjectSelectionRange {
 		changeHandle.enableCommitTSBlockPrune = true
 		changeHandle.strictCommitTSBlockPrune = true
@@ -3160,6 +4233,13 @@ func newChangesHandlerWithCheckpointEntries(
 		return
 	}
 	if err = changeHandle.tombstoneHandle.init(ctx, changeHandle.quick, mp); err != nil {
+		return
+	}
+	// Same construction-time enforcement as the in-memory partition
+	// replay family: the complete retained working set must fit the
+	// attached budget before the drain starts; cleanup runs through the
+	// deferred close above.
+	if err = changeHandle.chargeConstruction(); err != nil {
 		return
 	}
 	if selection == checkpointObjectSelectionRange {
@@ -3365,6 +4445,9 @@ func NewChangesHandler(
 			changeHandle = nil
 		}
 	}()
+	if err = changeHandle.attachRangeLimit(ctx); err != nil {
+		return
+	}
 	changeHandle.tombstoneHandle, err = NewBaseHandler(state, changeHandle, start, end, mp, true, fs, ctx)
 	if err != nil {
 		return
@@ -3383,6 +4466,14 @@ func NewChangesHandler(
 	}
 	err = changeHandle.tombstoneHandle.init(ctx, changeHandle.quick, mp)
 	if err != nil {
+		changeHandle.dataHandle.Close()
+		changeHandle.tombstoneHandle.Close()
+		return
+	}
+	// The retained buffers and prefetch caches now hold their complete
+	// construction-time allocations: an attached budget that cannot hold
+	// this working set fails before any drain begins.
+	if err = changeHandle.chargeConstruction(); err != nil {
 		changeHandle.dataHandle.Close()
 		changeHandle.tombstoneHandle.Close()
 	}
@@ -3461,11 +4552,45 @@ func (p *ChangeHandler) quickNext(ctx context.Context, mp *mpool.MPool) (data, t
 	for {
 		dataEnd := false
 		tombstoneEnd := false
+		if p.deferRangeLimitToAssembly {
+			gmodel := p.growthModelFor(true)
+			var addRows, addBytes int
+			p.assemblyData, p.assemblyTombstone = data, tombstone
+			if addRows, addBytes, err = p.dataHandle.prospectiveQuickCharge(ctx, data, gmodel); err != nil {
+				gmodel.dropPending()
+				p.assemblyData, p.assemblyTombstone = nil, nil
+				if engine.IsChangeRangeCapacityError(err) {
+					p.releaseAssemblyDsts(&data, &tombstone, mp)
+				}
+				return
+			}
+			if err = p.admitAssemblyGrowth(&data, &tombstone, addRows, addBytes, mp); err != nil {
+				gmodel.dropPending()
+				p.assemblyData, p.assemblyTombstone = nil, nil
+				return
+			}
+		}
 		err = p.dataHandle.QuickNext(ctx, &data, mp)
+		if p.deferRangeLimitToAssembly {
+			// The admitted serve ran to one of EOF/EOB/success (or a read
+			// error partway): commit the staged destination state — the
+			// model never over-admits a later serve after a partial one.
+			p.dataGrowth.commitPending()
+			p.assemblyData, p.assemblyTombstone = nil, nil
+			if engine.IsChangeRangeCapacityError(err) {
+				// A source-window gate fires inside the serve when the
+				// trailing prefetch lands there: the rejection cleanup is
+				// the same shared release the outer gates run.
+				p.releaseAssemblyDsts(&data, &tombstone, mp)
+			}
+		}
 		if moerr.IsMoErrCode(err, moerr.OkExpectedEOF) {
 			dataEnd = true
 			err = nil
 		} else if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
+			if err = p.chargeAssembly(&data, &tombstone, mp); err != nil {
+				return
+			}
 			if err = p.coalesceBatch(data, tombstone); err != nil {
 				return
 			}
@@ -3474,17 +4599,51 @@ func (p *ChangeHandler) quickNext(ctx context.Context, mp *mpool.MPool) (data, t
 		if err != nil {
 			return
 		}
+		if err = p.chargeAssembly(&data, &tombstone, mp); err != nil {
+			return
+		}
+		if p.deferRangeLimitToAssembly {
+			gmodel := p.growthModelFor(false)
+			var addRows, addBytes int
+			p.assemblyData, p.assemblyTombstone = data, tombstone
+			if addRows, addBytes, err = p.tombstoneHandle.prospectiveQuickCharge(ctx, tombstone, gmodel); err != nil {
+				gmodel.dropPending()
+				p.assemblyData, p.assemblyTombstone = nil, nil
+				if engine.IsChangeRangeCapacityError(err) {
+					p.releaseAssemblyDsts(&data, &tombstone, mp)
+				}
+				return
+			}
+			if err = p.admitAssemblyGrowth(&data, &tombstone, addRows, addBytes, mp); err != nil {
+				gmodel.dropPending()
+				p.assemblyData, p.assemblyTombstone = nil, nil
+				return
+			}
+		}
 		err = p.tombstoneHandle.QuickNext(ctx, &tombstone, mp)
+		if p.deferRangeLimitToAssembly {
+			p.tombGrowth.commitPending()
+			p.assemblyData, p.assemblyTombstone = nil, nil
+			if engine.IsChangeRangeCapacityError(err) {
+				p.releaseAssemblyDsts(&data, &tombstone, mp)
+			}
+		}
 		if moerr.IsMoErrCode(err, moerr.OkExpectedEOF) {
 			tombstoneEnd = true
 			err = nil
 		} else if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
+			if err = p.chargeAssembly(&data, &tombstone, mp); err != nil {
+				return
+			}
 			if err = p.coalesceBatch(data, tombstone); err != nil {
 				return
 			}
 			return
 		}
 		if err != nil {
+			return
+		}
+		if err = p.chargeAssembly(&data, &tombstone, mp); err != nil {
 			return
 		}
 		if err = p.coalesceBatch(data, tombstone); err != nil {
@@ -3747,7 +4906,40 @@ func (p *ChangeHandler) Next(ctx context.Context, mp *mpool.MPool) (data, tombst
 		typ := p.decideNextHandle()
 		switch typ {
 		case NextChangeHandle_Data:
+			if p.deferRangeLimitToAssembly {
+				gmodel := p.growthModelFor(true)
+				var addRows, addBytes int
+				p.assemblyData, p.assemblyTombstone = data, tombstone
+				if addRows, addBytes, err = p.dataHandle.prospectiveRowCharge(ctx, data, gmodel); err != nil {
+					gmodel.dropPending()
+					p.assemblyData, p.assemblyTombstone = nil, nil
+					if engine.IsChangeRangeCapacityError(err) {
+						p.releaseAssemblyDsts(&data, &tombstone, mp)
+					}
+					return
+				}
+				if err = p.admitAssemblyGrowth(&data, &tombstone, addRows, addBytes, mp); err != nil {
+					gmodel.dropPending()
+					p.assemblyData, p.assemblyTombstone = nil, nil
+					return
+				}
+			}
 			err = p.dataHandle.Next(ctx, &data, mp)
+			if p.deferRangeLimitToAssembly {
+				p.dataGrowth.commitPending()
+				p.assemblyData, p.assemblyTombstone = nil, nil
+				if engine.IsChangeRangeCapacityError(err) {
+					// A source-window gate fires inside the serve when
+					// the trailing prefetch lands there: the rejection
+					// cleanup is the shared release the outer gates run.
+					p.releaseAssemblyDsts(&data, &tombstone, mp)
+				}
+			}
+			if err == nil {
+				if err = p.chargeAssembly(&data, &tombstone, mp); err != nil {
+					return
+				}
+			}
 			if err == nil && data.Vecs[0].Length() >= p.coarseMaxRow*2 {
 				if err = p.coalesceBatch(data, tombstone); err != nil {
 					return
@@ -3764,7 +4956,37 @@ func (p *ChangeHandler) Next(ctx context.Context, mp *mpool.MPool) (data, tombst
 				}
 			}
 		case NextChangeHandle_Tombstone:
+			if p.deferRangeLimitToAssembly {
+				gmodel := p.growthModelFor(false)
+				var addRows, addBytes int
+				p.assemblyData, p.assemblyTombstone = data, tombstone
+				if addRows, addBytes, err = p.tombstoneHandle.prospectiveRowCharge(ctx, tombstone, gmodel); err != nil {
+					gmodel.dropPending()
+					p.assemblyData, p.assemblyTombstone = nil, nil
+					if engine.IsChangeRangeCapacityError(err) {
+						p.releaseAssemblyDsts(&data, &tombstone, mp)
+					}
+					return
+				}
+				if err = p.admitAssemblyGrowth(&data, &tombstone, addRows, addBytes, mp); err != nil {
+					gmodel.dropPending()
+					p.assemblyData, p.assemblyTombstone = nil, nil
+					return
+				}
+			}
 			err = p.tombstoneHandle.Next(ctx, &tombstone, mp)
+			if p.deferRangeLimitToAssembly {
+				p.tombGrowth.commitPending()
+				p.assemblyData, p.assemblyTombstone = nil, nil
+				if engine.IsChangeRangeCapacityError(err) {
+					p.releaseAssemblyDsts(&data, &tombstone, mp)
+				}
+			}
+			if err == nil {
+				if err = p.chargeAssembly(&data, &tombstone, mp); err != nil {
+					return
+				}
+			}
 			if err == nil && tombstone.Vecs[0].Length() >= p.coarseMaxRow*2 {
 				if err = p.coalesceBatch(data, tombstone); err != nil {
 					return
@@ -3784,6 +5006,9 @@ func (p *ChangeHandler) Next(ctx context.Context, mp *mpool.MPool) (data, tombst
 		if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
 			err = nil
 			if data != nil || tombstone != nil {
+				if err = p.chargeAssembly(&data, &tombstone, mp); err != nil {
+					return
+				}
 				if err = p.coalesceBatch(data, tombstone); err != nil {
 					return
 				}
@@ -3800,6 +5025,9 @@ func (p *ChangeHandler) Next(ctx context.Context, mp *mpool.MPool) (data, tombst
 		}
 		if moerr.IsMoErrCode(err, moerr.OkExpectedEOF) {
 			err = nil
+			if err = p.chargeAssembly(&data, &tombstone, mp); err != nil {
+				return
+			}
 			if err = p.coalesceBatch(data, tombstone); err != nil {
 				return
 			}
@@ -4010,6 +5238,74 @@ func fillInInsertBatch(bat **batch.Batch, entry *RowEntry, retainRowID bool, log
 	}
 
 }
+
+// fillRowCols describes the columns ONE replay-row append writes into
+// the growing replay buffer, mirroring fillInInsertBatch/fillInDeleteBatch
+// column-for-column (same source-to-destination order, same skips), with
+// the row's exact out-of-line varlena payload and nullness measured from
+// the source entry. It exists so the construction budget gate can admit
+// the row's buffer growth BEFORE fillIn* allocates it.
+func fillRowCols(entry *RowEntry, tombstone, retainRowID bool, logicalSeqnums []uint16) []growColSpec {
+	srcRow := func(vec *vector.Vector) (payload int, nulls bool, typeSize int, varlen bool) {
+		if vec == nil {
+			return 0, false, 0, false
+		}
+		t := vec.GetType()
+		typeSize = t.TypeSize()
+		varlen = t.IsVarlen()
+		row := entry.Offset
+		if vec.IsConst() {
+			row = 0
+		}
+		if varlen {
+			bs := vec.GetBytesAt(int(row))
+			if len(bs) > types.VarlenaInlineSize {
+				payload = len(bs)
+			}
+		}
+		nulls = vec.IsNull(uint64(row))
+		return
+	}
+	fixedSpec := func(oid types.T) growColSpec {
+		return growColSpec{typeSize: oid.ToType().TypeSize()}
+	}
+	var cols []growColSpec
+	if tombstone {
+		if retainRowID {
+			cols = append(cols, fixedSpec(types.T_Rowid))
+		}
+		pkPayload, pkNulls, pkSize, pkVarlen := srcRow(entry.Batch.Vecs[2])
+		cols = append(cols, growColSpec{typeSize: pkSize, varlen: pkVarlen, payload: pkPayload, nulls: pkNulls})
+		cols = append(cols, fixedSpec(types.T_TS))
+		return cols
+	}
+	if retainRowID {
+		cols = append(cols, fixedSpec(types.T_Rowid))
+	}
+	appendDataCol := func(vec *vector.Vector) {
+		payload, nulls, typeSize, varlen := srcRow(vec)
+		cols = append(cols, growColSpec{typeSize: typeSize, varlen: varlen, payload: payload, nulls: nulls})
+	}
+	if len(logicalSeqnums) > 0 {
+		for _, seqnum := range logicalSeqnums {
+			idx := 2 + int(seqnum)
+			if idx >= len(entry.Batch.Vecs) || entry.Batch.Vecs[idx] == nil {
+				continue
+			}
+			appendDataCol(entry.Batch.Vecs[idx])
+		}
+	} else {
+		for _, vec := range entry.Batch.Vecs {
+			if vec.GetType().Oid == types.T_Rowid || vec.GetType().Oid == types.T_TS {
+				continue
+			}
+			appendDataCol(vec)
+		}
+	}
+	cols = append(cols, fixedSpec(types.T_TS))
+	return cols
+}
+
 func fillInDeleteBatch(bat **batch.Batch, entry *RowEntry, retainRowID bool, mp *mpool.MPool) {
 	// Replayed delete entries retain only the PK vector. Older in-memory
 	// entries and test fixtures may still carry the original logtail layout.

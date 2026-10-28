@@ -797,6 +797,83 @@ func TestComputeAccountBranchReclaimPlan(t *testing.T) {
 	require.Equal(t, []string{"__mo_branch_2"}, plan.SnapshotNames)
 }
 
+func TestComputeBranchReclaimTableIDs(t *testing.T) {
+	// Lineage chain 1 -> 2 -> 3 (1 has no metadata row of its own, the
+	// usual shape for a table that was only ever branched FROM) plus an
+	// unrelated leaf branch 4 under 1.
+	rows := []DataBranchMetadata{
+		{TableID: 2, PTableID: 1, Creator: 10, Level: "table"},
+		{TableID: 3, PTableID: 2, Creator: 10, Level: "table"},
+		{TableID: 4, PTableID: 1, Creator: 10, Level: "table"},
+		{TableID: 5, PTableID: 2, Creator: 10, Level: AlterLineageLevel, TableDeleted: true},
+	}
+
+	// A dropped leaf with no descendants is reclaimable on its own.
+	dag := NewBranchReclaimDag(rows)
+	if node, ok := dag.Info[4]; ok {
+		node.Deleted = true
+		dag.Info[4] = node
+	}
+	require.Equal(t, []uint64{4}, ComputeBranchReclaimTableIDs(dag, []uint64{4}))
+
+	// Dropping the intermediate generation while its child is live
+	// reclaims nothing: the protected stream (and any per-table auxiliary
+	// rows such as pk-move links) is still readable through the child.
+	dag = NewBranchReclaimDag(rows)
+	if node, ok := dag.Info[2]; ok {
+		node.Deleted = true
+		dag.Info[2] = node
+	}
+	require.Empty(t, ComputeBranchReclaimTableIDs(dag, []uint64{2}))
+
+	// Dropping the last live descendant retires the whole deleted chain
+	// above it. The already-deleted ALTER generation stays excluded: the
+	// ALTER-lineage compactor owns its lifetime.
+	if node, ok := dag.Info[3]; ok {
+		node.Deleted = true
+		dag.Info[3] = node
+	}
+	require.Equal(t, []uint64{2, 3}, ComputeBranchReclaimTableIDs(dag, []uint64{3}))
+}
+
+func TestBranchReclaimOrphanParentIDs(t *testing.T) {
+	// Lineage chain 1 -> 2 -> 3 with siblings 4 (under row-less root 1)
+	// and 5 (under 2). Table 1 carries no metadata row of its own.
+	rows := []DataBranchMetadata{
+		{TableID: 2, PTableID: 1, Creator: 10, Level: "table"},
+		{TableID: 3, PTableID: 2, Creator: 10, Level: "table"},
+		{TableID: 4, PTableID: 1, Creator: 10, Level: "table"},
+		{TableID: 5, PTableID: 2, Creator: 10, Level: "table"},
+	}
+	dag := NewBranchReclaimDag(rows)
+
+	// Retiring table 4 exposes the row-less root 1 as an orphan-parent
+	// candidate (a live sibling 2 still anchors it: the caller probes).
+	require.Equal(t, []uint64{1}, BranchReclaimOrphanParentIDs(dag, []uint64{4}))
+
+	// Retiring a whole chain (3 and 2) surfaces 2's row-less parent 1
+	// exactly once, even though no retired row names it directly twice;
+	// table 2 itself has a row and is covered by the reclaim set.
+	require.Equal(t, []uint64{1}, BranchReclaimOrphanParentIDs(dag, []uint64{2, 3}))
+
+	// Retiring 2 and 3 and 4 together still surfaces 1 only once.
+	require.Equal(t, []uint64{1}, BranchReclaimOrphanParentIDs(dag, []uint64{2, 3, 4}))
+
+	// Table 5's parent 2 carries a metadata row: a chain ancestor either
+	// retires inside the reclaim set or keeps its rows with it — no
+	// orphan-parent candidate either way.
+	require.Empty(t, BranchReclaimOrphanParentIDs(dag, []uint64{5}))
+
+	// Retired ids absent from the DAG contribute nothing.
+	require.Empty(t, BranchReclaimOrphanParentIDs(dag, []uint64{99}))
+
+	// A metadata root with no parent contributes none.
+	rowsRoot := []DataBranchMetadata{
+		{TableID: 7, PTableID: 0, Creator: 10, Level: "table"},
+	}
+	require.Empty(t, BranchReclaimOrphanParentIDs(NewBranchReclaimDag(rowsRoot), []uint64{7}))
+}
+
 func TestNewDAGCycle(t *testing.T) {
 	const childEnv = "MO_TEST_NEW_DAG_CYCLE_CHILD"
 	if os.Getenv(childEnv) == "" {

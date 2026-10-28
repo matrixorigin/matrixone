@@ -16,10 +16,13 @@ package multi_update
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 
+	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -120,10 +123,114 @@ type s3WriterDelegate struct {
 	seenTargetRows   map[uint64]*hashmap.StrHashMap
 	admitSeenGrowth  func(int64) error
 
+	// collectPkMoveLinkRows synthesizes one pk-move link batch for a
+	// buffered (already target-deduped) batch, or returns nil when
+	// nothing moved. The S3 route must not stage the batch in the
+	// producer: remote execution writes into an independent mirror
+	// workspace whose mutations never reach the committing transaction,
+	// so remotely produced provenance used to vanish before commit. The
+	// buffered batch is the last point where the old->new pairing still
+	// exists, so synthesis happens here; the batch then rides the tail
+	// output (actionPkMoveLink) to UpdateFlushS3Info, which stages it in
+	// the coordinator's committing workspace. Bound from the owning
+	// MultiUpdate at construction; nil disables link recording.
+	collectPkMoveLinkRows func(proc *process.Process, linkCtx, ownerCtx *MultiUpdateCtx, contextBatch *batch.Batch) (*batch.Batch, error)
+	// pkMoveLinkBufs holds the synthesized link batches (one entry per
+	// link-context collection) until flushTailAndWriteToOutput appends
+	// them to the tail output and frees them. Intermediate sortAndSync
+	// flushes do NOT touch them; retention is bounded separately by
+	// pkMoveLinkMemBudget through spillPkMoveLinkBufs.
+	pkMoveLinkBufs []pkMoveLinkBuf
+	// pkMoveLinkBytes approximates the in-memory footprint retained in
+	// pkMoveLinkBufs (unset for already-spilled entries). It is reset
+	// after a full spill and at the final ferry.
+	pkMoveLinkBytes int64
+	// pkMoveLinkSpillFiles tracks every temporary spill object this
+	// writer created together with its crash-recovery cleanup marker.
+	// The writer OWNS each file from spill until ownership transfers:
+	// emitting the ferry tail row PUBLISHES the record and hands
+	// ownership to the committing consumer, which deletes object and
+	// marker after a successful read-back-and-stage; an unpublished
+	// record is reclaimed by the writer's own terminal paths (reset,
+	// free). A process crash abandons both sides: the marker's
+	// sync-protection window then expires and the GC
+	// unpublished-cleanup replay deletes the object (it is never
+	// catalog-visible) and releases the marker.
+	pkMoveLinkSpillFiles []pkMoveLinkSpillFile
+	// pkMoveLinkSpillSeen dedupes marker creation by object name: the
+	// sinker's name-before-persist hook observes every sync attempt, and
+	// a commit-ambiguous retry must not double-register one file.
+	pkMoveLinkSpillSeen map[string]bool
+	// pkMoveLinkSpillJob / pkMoveLinkSpillValid fence GC replay away from
+	// this writer's live spill objects: the marker carries the job id and
+	// the end of the protection window (first spill time plus
+	// pkMoveLinkSpillProtection), and replay skips cleanup while the
+	// window holds.
+	pkMoveLinkSpillJob   string
+	pkMoveLinkSpillValid int64
+
 	memController struct {
 		grantedSize int64
 		throttler   rscthrottler.RSCThrottler
 	}
+}
+
+// pkMoveLinkMemBudget bounds the in-memory retention of synthesized
+// pk-move link batches inside one S3 writer: link markers are emitted
+// per row (they feed commit-time lineage healing), so a bulk UPDATE
+// statement would otherwise retain two encoded pk copies plus identity
+// columns for every row until the final ferry. Over the budget the
+// writer spills all buffered batches (one object per link ctx) and
+// ferries the object locations instead. A var so tests can shrink it.
+var pkMoveLinkMemBudget int64 = 16 << 20
+
+// pkMoveLinkSpillFile pairs one temporary spill object with the cleanup
+// marker that secures its crash recovery. published marks ownership
+// handed to the ferry consumer: the tail row naming the object (and its
+// marker) has been emitted to the committing pipeline, whose read-back
+// deletes object and marker after a successful stage; the producer's
+// teardown (reset/free) must never delete a published object — the
+// consumer may not have read it yet — and a consumer that never runs
+// leaves the marker's expired GC replay as the cleanup owner.
+type pkMoveLinkSpillFile struct {
+	file      string
+	marker    string
+	published bool
+}
+
+// pkMoveLinkSpillProtection bounds how long the crash-recovery fence of a
+// spilled link object defers GC replay cleanup. Live statements hold
+// spill objects far shorter than this window; crash orphans are reclaimed
+// once it (plus the GC protection manager's TTL) passes. A statement that
+// still holds spill objects past the window can lose them to replay and
+// then fails LOUDLY at ferried read-back instead of silently dropping
+// provenance. A var so tests can shorten it.
+var pkMoveLinkSpillProtection = 6 * time.Hour
+
+// pkMoveLinkRecordSpillMarker is the cleanup-intent write seam for spill
+// objects, split from the spill path so tests can inject ownership
+// failures.
+var pkMoveLinkRecordSpillMarker = ioutil.RecordUnpublishedObjectCleanup
+
+// pkMoveLinkDeleteSpillObjects and pkMoveLinkReleaseSpillMarker are the
+// terminal delete seams, split out so tests can inject cleanup failures
+// and pin the ownership ordering — an object stays owned by its marker
+// until the object is confirmed absent, never the other way round.
+var pkMoveLinkDeleteSpillObjects = ioutil.DeleteUnpublishedObjects
+var pkMoveLinkReleaseSpillMarker = ioutil.DeleteUnpublishedObjectCleanup
+
+// pkMoveLinkBuf is one synthesized pk-move link batch awaiting its ferry
+// slot in the tail output; idx is the synthetic link context's position
+// in writer.updateCtxs (its TableDef supplies the link table id). bat
+// is nil after a spill, when spilled carries the block-info of the
+// object the rows were written to; rows is the link-row count either
+// way (the buffer row count is needed at the ferry even when the raw
+// batch no longer exists).
+type pkMoveLinkBuf struct {
+	idx     int
+	bat     *batch.Batch
+	spilled *batch.Batch
+	rows    uint64
 }
 
 func newS3Writer(
@@ -176,6 +283,7 @@ func newS3Writer(
 	}
 
 	writer.updateCtxs = update.MultiUpdateCtx
+	writer.collectPkMoveLinkRows = update.collectPkMoveLinkBatch
 
 	threshold := InsertWriteS3Threshold
 	if faultInjected {
@@ -323,6 +431,43 @@ func (writer *s3WriterDelegate) append(
 	seenIncrement := writer.seenTargetRowsSize() - seenSizeBefore
 	if err = writer.admitSeenGrowth(seenIncrement); err != nil {
 		return err
+	}
+
+	// Synthesize pk-move update links from the same target-deduped batch
+	// the writer is about to split into independent delete/insert
+	// streams. Mirrors the link branch of updateOneBatch; the batches are
+	// buffered (not written) and ferry to the coordinator with the tail:
+	// only its workspace commits. Skip empty batches and let the shared
+	// collector drop rows whose pk did not move.
+	if writer.collectPkMoveLinkRows != nil {
+		for i, updateCtx := range writer.updateCtxs {
+			if !isUpdatePkMoveLinkCtx(updateCtx) {
+				continue
+			}
+			targetIdx := updateCtx.TargetUpdateCtxIdx
+			if targetIdx < 0 || targetIdx >= len(writer.updateCtxs) {
+				return moerr.NewInternalError(proc.Ctx, "invalid multi-target update context index")
+			}
+			linkBat, lerr := writer.collectPkMoveLinkRows(
+				proc, updateCtx,
+				writer.updateCtxs[targetIdx], contextBatches[i],
+			)
+			if lerr != nil {
+				return lerr
+			}
+			if linkBat == nil || linkBat.RowCount() == 0 {
+				if linkBat != nil {
+					linkBat.Clean(proc.Mp())
+				}
+				continue
+			}
+			writer.pkMoveLinkBufs = append(writer.pkMoveLinkBufs,
+				pkMoveLinkBuf{idx: i, bat: linkBat, rows: uint64(linkBat.RowCount())})
+			writer.pkMoveLinkBytes += int64(linkBat.Size())
+		}
+		if err = writer.spillPkMoveLinkBufs(proc, analyzer); err != nil {
+			return err
+		}
 	}
 
 	// Route insert columns directly to per-table sinkers (no clone).
@@ -478,6 +623,382 @@ func (writer *s3WriterDelegate) append(
 	writer.memController.grantedSize += int64(increment)
 
 	return
+}
+
+// spillPkMoveLinkBufs bounds pk-move link retention across intermediate
+// sortAndSync flushes. Once the buffered link batches exceed
+// pkMoveLinkMemBudget, every buffered batch of a link ctx is written
+// into one spilled object (one per ctx, in first-use order) and the
+// buffer list collapses into location entries; the final ferry then
+// carries the block-info instead of the rows. Same-key continuity
+// markers ride along untouched — commit-time lineage healing consumes
+// them — and rows spilled here are exactly the rows the receive side
+// would have staged from memory.
+//
+// Cleanup ownership is write-ahead at byte level: the sinker invokes the
+// writer's ownership hook after reserving an object's name and before any
+// byte of that object reaches storage — including automatic threshold
+// flushes inside Write — so the durable cleanup marker always precedes
+// the object, and a statement whose marker cannot be secured fails before
+// the object ever exists. The writer deletes objects and markers on every
+// live terminal path (reset, free); a failed group removes anything it
+// already persisted and releases those markers on the spot. A process
+// crash abandons object and marker together: the marker's protection
+// window (pkMoveLinkSpillProtection) fences live statements from GC
+// replay, and after it expires the unpublished-cleanup replay deletes
+// the never-catalog-visible object and releases its marker.
+func (writer *s3WriterDelegate) spillPkMoveLinkBufs(proc *process.Process, analyzer process.Analyzer) (err error) {
+	if writer.pkMoveLinkBytes <= pkMoveLinkMemBudget {
+		return nil
+	}
+	if len(writer.pkMoveLinkBufs) == 0 {
+		writer.pkMoveLinkBytes = 0
+		return nil
+	}
+	mp := proc.Mp()
+	fs, err := colexec.GetSharedFSFromProc(proc)
+	if err != nil {
+		return err
+	}
+	writeCtx := perfcounter.AttachS3RequestKey(proc.Ctx, analyzer.GetOpCounterSet())
+
+	// Group the IN-MEMORY buffers by link ctx in first-use order (an
+	// earlier spill's location entries carry no rows to re-write). Each
+	// group gains one spilled-object buffer anchored at its first
+	// position, preserving the cross-ctx ferry order of the rows.
+	seen := make(map[int]bool)
+	var groupOrder []int
+	for _, buf := range writer.pkMoveLinkBufs {
+		if buf.bat == nil {
+			continue
+		}
+		if !seen[buf.idx] {
+			seen[buf.idx] = true
+			groupOrder = append(groupOrder, buf.idx)
+		}
+	}
+	if len(groupOrder) == 0 {
+		writer.pkMoveLinkBytes = 0
+		return nil
+	}
+	spilledByIdx := make(map[int]pkMoveLinkBuf)
+	for _, idx := range groupOrder {
+		sinker := colexec.NewCNS3DataWriterForService(
+			proc.GetService(), mp, fs, writer.updateCtxs[idx].TableDef, -1, false,
+			ioutil.WithUnpublishedNameObserver(func(octx context.Context, name string) error {
+				return writer.trackPkMoveLinkSpillObject(fs, octx, name)
+			}))
+		// A group that fails anywhere before joining the ferry deletes
+		// whatever it already persisted and releases the matching
+		// markers: partial spill output has no consumer and must not
+		// outlive the statement. A file that cannot be deleted keeps its
+		// marker, so crash recovery owns every survivor.
+		deletePartial := func() {
+			deleted, derr := sinker.DeletePersisted(writeCtx)
+			if derr != nil {
+				logutil.Warn("failed to delete partial pk-move link spill",
+					zap.Int("link_ctx_idx", idx), zap.Error(derr))
+				return
+			}
+			writer.releasePkMoveLinkSpillMarkers(writeCtx, fs, deleted)
+		}
+		var rows uint64
+		for i := range writer.pkMoveLinkBufs {
+			buf := &writer.pkMoveLinkBufs[i]
+			if buf.idx != idx || buf.bat == nil {
+				continue
+			}
+			rows += buf.rows
+			if werr := process.MeasureFilesystemWaitErr(analyzer, func() error {
+				return sinker.Write(writeCtx, buf.bat)
+			}); werr != nil {
+				deletePartial()
+				_ = sinker.Close()
+				return werr
+			}
+		}
+		if _, serr := sinker.Sync(writeCtx); serr != nil {
+			deletePartial()
+			_ = sinker.Close()
+			return serr
+		}
+		var infoBat *batch.Batch
+		if infoBat, err = sinker.FillBlockInfoBat(); err != nil {
+			deletePartial()
+			_ = sinker.Close()
+			return err
+		}
+		// FillBlockInfoBat returns the sinker-owned batch; a spill entry
+		// must outlive the sinker, so clone it across the ownership
+		// boundary before closing.
+		var ownedInfo *batch.Batch
+		if ownedInfo, err = sqlutil.CopyBatch(infoBat, proc); err != nil {
+			deletePartial()
+			_ = sinker.Close()
+			return err
+		}
+		if err = sinker.Close(); err != nil {
+			deletePartial()
+			ownedInfo.Clean(mp)
+			return err
+		}
+		// The group is durable — and already owned: the sinker's
+		// name-before-persist hook recorded every file's cleanup marker
+		// before its first byte reached storage, so a process crash at
+		// any point from here on leaves reclaimable, marked objects that
+		// transaction GC never sees but the unpublished-cleanup replay
+		// reclaims once the protection window expires. Ride the markers
+		// along the ferry itself as a second tail column: the committing
+		// consumer needs them to release cleanup ownership after its own
+		// successful read-back-and-stage (the producer's teardown skips
+		// published records, so without the column nobody would ever
+		// reclaim a consumed spill).
+		if err = writer.attachPkMoveLinkSpillMarkers(proc, ownedInfo); err != nil {
+			deletePartial()
+			ownedInfo.Clean(mp)
+			return err
+		}
+		spilledByIdx[idx] = pkMoveLinkBuf{idx: idx, spilled: ownedInfo, rows: rows}
+		logutil.Info("pk-move link buffers spilled to object storage",
+			zap.Int("link_ctx_idx", idx),
+			zap.Uint64("rows", rows),
+			zap.Int64("retained_bytes_before_spill", writer.pkMoveLinkBytes))
+	}
+	var next []pkMoveLinkBuf
+	emitted := make(map[int]bool)
+	for _, buf := range writer.pkMoveLinkBufs {
+		if buf.spilled != nil {
+			next = append(next, buf)
+			continue
+		}
+		if sb, ok := spilledByIdx[buf.idx]; ok && !emitted[buf.idx] {
+			emitted[buf.idx] = true
+			next = append(next, sb)
+		}
+		if buf.bat != nil {
+			buf.bat.Clean(mp)
+		}
+	}
+	writer.pkMoveLinkBufs = next
+	writer.pkMoveLinkBytes = 0
+	return nil
+}
+
+// pkMoveLinkBlockInfoFiles decodes the object file names a spill group's
+// block-info batch points at (one per block row).
+func pkMoveLinkBlockInfoFiles(infoBat *batch.Batch) []string {
+	if infoBat == nil || infoBat.RowCount() == 0 || len(infoBat.Vecs) == 0 {
+		return nil
+	}
+	files := make([]string, 0, infoBat.RowCount())
+	blkVec := infoBat.Vecs[0]
+	for i := 0; i < infoBat.RowCount(); i++ {
+		blk := objectio.DecodeBlockInfo(blkVec.GetBytesAt(i))
+		files = append(files, blk.MetaLocation().Name().String())
+	}
+	return files
+}
+
+// trackPkMoveLinkSpillObject secures durable crash-recovery ownership for
+// one spill object the sinker is about to persist. The sinker invokes
+// this hook after reserving the object's name and before any byte of
+// that object reaches storage, so the marker always precedes the file:
+// a crash at any later point leaves a reclaimable, owned object, and a
+// marker write failure aborts the sync before the object exists. The
+// marker carries the writer's sync-protection identity: while the
+// protection window holds, GC replay skips these files; after a crash it
+// expires and the replay deletes the never-catalog-visible objects and
+// releases their markers.
+func (writer *s3WriterDelegate) trackPkMoveLinkSpillObject(
+	fs fileservice.FileService,
+	ctx context.Context,
+	file string,
+) error {
+	if writer.pkMoveLinkSpillJob == "" ||
+		time.Now().UnixNano() >= writer.pkMoveLinkSpillValid {
+		// One armed lease per window: reset clears the job at the
+		// execution boundary, and an expired window never extends over a
+		// later spill — its marker must never brand a live, unconsumed
+		// object reclaimable while the consumer may still read it back.
+		writer.pkMoveLinkSpillJob = "pk-move-link-spill-" + uuid.NewString()
+		writer.pkMoveLinkSpillValid = time.Now().Add(pkMoveLinkSpillProtection).UnixNano()
+	}
+	if writer.pkMoveLinkSpillSeen[file] {
+		// The name reservation precedes every sync attempt of one file
+		// sinker; a commit-ambiguous retry observes the same name twice.
+		return nil
+	}
+	marker, err := pkMoveLinkRecordSpillMarker(ctx, fs, ioutil.UnpublishedObject{
+		File:                  file,
+		SyncProtectionJobID:   writer.pkMoveLinkSpillJob,
+		SyncProtectionValidTS: writer.pkMoveLinkSpillValid,
+	})
+	if err != nil {
+		return moerr.NewInternalErrorNoCtxf(
+			"pk-move link spill ownership marker for %s: %v", file, err)
+	}
+	if writer.pkMoveLinkSpillSeen == nil {
+		writer.pkMoveLinkSpillSeen = make(map[string]bool)
+	}
+	writer.pkMoveLinkSpillSeen[file] = true
+	writer.pkMoveLinkSpillFiles = append(writer.pkMoveLinkSpillFiles,
+		pkMoveLinkSpillFile{file: file, marker: marker})
+	return nil
+}
+
+// releasePkMoveLinkSpillMarkers releases the cleanup markers of spill
+// files confirmed deleted. The writer calls it only on the success path
+// of a deletion pass; a file whose deletion failed keeps its marker, so
+// crash recovery owns every surviving object.
+func (writer *s3WriterDelegate) releasePkMoveLinkSpillMarkers(
+	ctx context.Context,
+	fs fileservice.FileService,
+	deleted []string,
+) {
+	if len(deleted) == 0 || len(writer.pkMoveLinkSpillFiles) == 0 {
+		return
+	}
+	gone := make(map[string]struct{}, len(deleted))
+	for _, f := range deleted {
+		gone[f] = struct{}{}
+	}
+	kept := writer.pkMoveLinkSpillFiles[:0]
+	for _, rec := range writer.pkMoveLinkSpillFiles {
+		if _, ok := gone[rec.file]; !ok {
+			kept = append(kept, rec)
+			continue
+		}
+		delete(writer.pkMoveLinkSpillSeen, rec.file)
+		if err := pkMoveLinkReleaseSpillMarker(ctx, fs, rec.marker); err != nil {
+			// The object is gone; a stale marker self-heals — the
+			// replay finds the object absent and releases the marker.
+			logutil.Warn("pk-move link spill marker release failed; crash recovery owns it",
+				zap.String("marker", rec.marker), zap.Error(err))
+		}
+	}
+	writer.pkMoveLinkSpillFiles = kept
+}
+
+// pkMoveLinkSpillCleanupTimeout bounds the terminal live cleanup. Pipeline
+// teardown cancels proc.Ctx BEFORE operator reset runs, so deletes issued
+// under that context fail immediately and every spill survives for the
+// whole crash-recovery window; a fresh context keeps the live cleanup
+// actually live, and the cap keeps a wedged object store from stalling
+// the teardown path.
+const pkMoveLinkSpillCleanupTimeout = 10 * time.Minute
+
+// cleanupPkMoveLinkSpillFiles is the owner-side terminal action for
+// reset and free: delete every UNPUBLISHED recorded spill object and then
+// its cleanup marker. A published record's ownership already moved to
+// the ferry consumer — deleting its object here could race the
+// consumer's read-back (pipeline teardown resets this writer without
+// waiting for the committing fragment), so the producer leaves published
+// objects, and their markers, alone. Each marker of a deleted object is
+// released only after the object is confirmed absent — releasing it
+// while the object survives would discard the crash-recovery ownership
+// of a file nothing else tracks. Best-effort with a crash backstop:
+// anything that cannot be deleted stays owned by its marker, whose
+// expired protection lets GC replay reclaim it; a leftover marker for
+// an already-deleted object is self-healing (the replay finds the
+// object absent and releases the marker).
+func (writer *s3WriterDelegate) cleanupPkMoveLinkSpillFiles(proc *process.Process) {
+	if len(writer.pkMoveLinkSpillFiles) == 0 {
+		return
+	}
+	var owned []pkMoveLinkSpillFile
+	for _, rec := range writer.pkMoveLinkSpillFiles {
+		if rec.published {
+			// Ownership transferred to the ferry consumer at
+			// publication: the consumer reclaims the object and its
+			// marker after a successful read-back, so the producer
+			// sheds the record here — the producer ledger is
+			// execution-scoped and must not pin a transferred object
+			// into the next execution's pass.
+			continue
+		}
+		owned = append(owned, rec)
+	}
+	writer.pkMoveLinkSpillFiles = nil
+	if len(owned) == 0 {
+		return
+	}
+	fs, err := colexec.GetSharedFSFromProc(proc)
+	if err != nil {
+		logutil.Warn("pk-move link spill cleanup lost its filesystem; crash recovery owns the remainder",
+			zap.Error(err))
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), pkMoveLinkSpillCleanupTimeout)
+	defer cancel()
+	for _, rec := range owned {
+		if _, err := pkMoveLinkDeleteSpillObjects(ctx, fs, rec.file); err != nil {
+			logutil.Warn("pk-move link spill object cleanup failed; crash recovery owns it",
+				zap.String("file", rec.file), zap.Error(err))
+			continue
+		}
+		if err := pkMoveLinkReleaseSpillMarker(ctx, fs, rec.marker); err != nil {
+			logutil.Warn("pk-move link spill marker cleanup failed; crash recovery owns the remainder",
+				zap.String("marker", rec.marker), zap.Error(err))
+		}
+	}
+}
+
+// pkMoveLinkSpillMarkerCol names the ferried block-info batch's second
+// column: per block row, the crash-recovery cleanup marker of the object
+// that block lives in. The committing consumer needs it to release
+// cleanup ownership after a successful read-back-and-stage — the
+// producer's teardown skips published records, so without the column
+// nobody would ever reclaim a consumed spill.
+const pkMoveLinkSpillMarkerCol = "pk_move_link_spill_marker"
+
+// attachPkMoveLinkSpillMarkers appends the marker column to a durable
+// spill group's block-info batch, one marker string per block row (empty
+// when a file has no recorded marker, which cannot happen on the success
+// path — the name observer records before persistence).
+func (writer *s3WriterDelegate) attachPkMoveLinkSpillMarkers(
+	proc *process.Process, infoBat *batch.Batch,
+) error {
+	files := pkMoveLinkBlockInfoFiles(infoBat)
+	if len(files) == 0 {
+		return nil
+	}
+	markerVec := vector.NewVec(types.T_varchar.ToType())
+	for _, file := range files {
+		marker := ""
+		for _, rec := range writer.pkMoveLinkSpillFiles {
+			if rec.file == file {
+				marker = rec.marker
+				break
+			}
+		}
+		if err := vector.AppendBytes(markerVec, []byte(marker), false, proc.Mp()); err != nil {
+			markerVec.Free(proc.Mp())
+			return err
+		}
+	}
+	infoBat.Vecs = append(infoBat.Vecs, markerVec)
+	infoBat.Attrs = append(infoBat.Attrs, pkMoveLinkSpillMarkerCol)
+	return nil
+}
+
+// markPkMoveLinkSpillPublished hands the cleanup ownership of every spill
+// object one ferried block-info batch names to the committing consumer:
+// its tail row is on the way, and the producer's teardown (reset/free)
+// must keep its hands off the object from here on — the consumer reads
+// it back on its own schedule, possibly after this writer reset. A
+// consumer that never runs leaves the object to the marker's expired GC
+// replay, exactly like a producer crash.
+func (writer *s3WriterDelegate) markPkMoveLinkSpillPublished(infoBat *batch.Batch) {
+	if len(writer.pkMoveLinkSpillFiles) == 0 {
+		return
+	}
+	for _, file := range pkMoveLinkBlockInfoFiles(infoBat) {
+		for i := range writer.pkMoveLinkSpillFiles {
+			if writer.pkMoveLinkSpillFiles[i].file == file {
+				writer.pkMoveLinkSpillFiles[i].published = true
+			}
+		}
+	}
 }
 
 func (writer *s3WriterDelegate) seenTargetRowsSize() int64 {
@@ -888,6 +1409,50 @@ func (writer *s3WriterDelegate) flushTailAndWriteToOutput(proc *process.Process,
 		}
 	}
 
+	// Ferry the synthesized pk-move link batches: UpdateFlushS3Info stages
+	// them in the coordinator's committing workspace via actionPkMoveLink.
+	// Encode the OWNER table id: the link ctx's plan TableDef is
+	// schema-only with TblId 0 (a per-account virtual catalog table), and
+	// the receiver resolves the link relation by matching this owner id to
+	// its own link ctx.
+	for _, buf := range writer.pkMoveLinkBufs {
+		if buf.rows == 0 {
+			continue
+		}
+		linkBat := buf.bat
+		name := ""
+		if buf.spilled != nil {
+			// Spilled: the tail row names the object, the receiver reads
+			// the link rows back out of its block-info. Emitting the row
+			// hands the object's cleanup ownership to the committing
+			// consumer: teardown after this point must not delete it.
+			linkBat = buf.spilled
+			name = pkMoveLinkSpillName
+			writer.markPkMoveLinkSpillPublished(buf.spilled)
+		}
+		if linkBat == nil {
+			continue
+		}
+		ownerIdx := writer.updateCtxs[buf.idx].TargetUpdateCtxIdx
+		if ownerIdx < 0 || ownerIdx >= len(writer.updateCtxs) {
+			return moerr.NewInternalError(proc.Ctx, "invalid multi-target update context index")
+		}
+		if err = writer.addBatchToOutput(mp, actionPkMoveLink, ownerIdx,
+			buf.rows, name, linkBat); err != nil {
+			return
+		}
+	}
+	for _, buf := range writer.pkMoveLinkBufs {
+		if buf.bat != nil {
+			buf.bat.Clean(mp)
+		}
+		if buf.spilled != nil {
+			buf.spilled.Clean(mp)
+		}
+	}
+	writer.pkMoveLinkBufs = nil
+	writer.pkMoveLinkBytes = 0
+
 	// Logical ODKU counts are independent of physical blocks: a pure no-op can
 	// have a non-zero CLIENT_FOUND_ROWS result, and parallel writers may be
 	// hidden below merge PreScopes. Emit one control record from the shared
@@ -946,6 +1511,25 @@ func (writer *s3WriterDelegate) reset(proc *process.Process) (err error) {
 		writer.outputBat.CleanOnlyData()
 	}
 
+	for _, buf := range writer.pkMoveLinkBufs {
+		if buf.bat != nil {
+			buf.bat.Clean(proc.Mp())
+		}
+		if buf.spilled != nil {
+			buf.spilled.Clean(proc.Mp())
+		}
+	}
+	writer.pkMoveLinkBufs = nil
+	writer.pkMoveLinkBytes = 0
+	writer.cleanupPkMoveLinkSpillFiles(proc)
+	// Prepare reuses this writer across pipeline executions, so the
+	// execution-scoped spill leases shed here: the next execution arms
+	// its own protection job and deadline instead of inheriting this
+	// execution's running (or already expired) window.
+	writer.pkMoveLinkSpillSeen = nil
+	writer.pkMoveLinkSpillJob = ""
+	writer.pkMoveLinkSpillValid = 0
+
 	writer.buf.Reset()
 	return
 }
@@ -999,6 +1583,17 @@ func (writer *s3WriterDelegate) free(proc *process.Process) (err error) {
 		writer.outputBat.Clean(mp)
 		writer.outputBat = nil
 	}
+	for _, buf := range writer.pkMoveLinkBufs {
+		if buf.bat != nil {
+			buf.bat.Clean(mp)
+		}
+		if buf.spilled != nil {
+			buf.spilled.Clean(mp)
+		}
+	}
+	writer.pkMoveLinkBufs = nil
+	writer.pkMoveLinkBytes = 0
+	writer.cleanupPkMoveLinkSpillFiles(proc)
 	writer.buf.Reset()
 
 	return
@@ -1117,7 +1712,12 @@ func resetMergeBlockForOldCN(proc *process.Process, bat *batch.Batch) error {
 		// var objDataMeta objectio.ObjectDataMeta
 		var objStats objectio.ObjectStats
 		for idx := 0; idx < bat.RowCount(); idx++ {
-			blkInfo := objectio.DecodeBlockInfo(blkVec.GetBytesAt(idx))
+			// DecodeBlockInfo from an owned copy: blkVec rows alias the
+			// incoming batch's (possibly off-heap) memory, which is
+			// released when its pipeline scope ends, while the meta load
+			// below caches under keys derived from the object-name bytes
+			// for the entry's whole lifetime.
+			blkInfo := objectio.DecodeBlockInfo(append([]byte(nil), blkVec.GetBytesAt(idx)...))
 			objStats, _, err = disttae.ConstructObjStatsByLoadObjMeta(proc.Ctx, blkInfo.MetaLocation(), fs)
 			if err != nil {
 				return err

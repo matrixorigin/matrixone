@@ -35,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/frontend/databranchutils"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -143,6 +144,24 @@ func releaseBuffer(pool *sync.Pool, buf *bytes.Buffer) {
 	if pool != nil {
 		pool.Put(buf)
 	}
+}
+
+// collectHashmapEncodedKeys records every encoded key of a branch hashmap
+// into set (string form). Cursor keys alias internal storage, so the string
+// conversion owns the copy.
+func collectHashmapEncodedKeys(
+	hm databranchutils.BranchHashmap,
+	set map[string]struct{},
+) error {
+	if hm == nil {
+		return nil
+	}
+	return hm.ForEachShardParallel(func(cursor databranchutils.ShardCursor) error {
+		return cursor.ForEach(func(key []byte, _ []byte) error {
+			set[string(key)] = struct{}{}
+			return nil
+		})
+	}, 1)
 }
 
 func newEmitter(

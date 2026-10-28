@@ -6253,6 +6253,81 @@ func TestExtractPrivilegeTipsFromPlanInsertDedupTargetScan(t *testing.T) {
 	}
 }
 
+// The privilege exemption for the pk-move link table is scoped to the
+// synthetic UpdateCtx (no columns): a user-directed write to it —
+// INSERT ... SELECT builds a MULTI_UPDATE target ctx whose InsertCols
+// are populated (bind_insert.go) — must demand the ordinary target
+// privilege, never ride the source SELECT privilege alone.
+func TestExtractPrivilegeTipsFromPlanDataBranchUpdateLink(t *testing.T) {
+	linkRef := &plan.ObjectRef{
+		SchemaName: catalog.MO_CATALOG,
+		ObjName:    catalog.MO_DATA_BRANCH_UPDATE_LINK,
+	}
+	linkDef := &plan.TableDef{
+		DbName: catalog.MO_CATALOG,
+		Name:   catalog.MO_DATA_BRANCH_UPDATE_LINK,
+	}
+	userRef := &plan.ObjectRef{SchemaName: "app_db", ObjName: "app_t"}
+	userDef := &plan.TableDef{DbName: "app_db", Name: "app_t"}
+
+	type tipKey struct {
+		typ      PrivilegeType
+		database string
+		table    string
+	}
+	extract := func(t *testing.T, stmtType plan.Query_StatementType, ctxs ...*plan.UpdateCtx) []tipKey {
+		p := &plan2.Plan{Plan: &plan2.Plan_Query{Query: &plan.Query{
+			StmtType: stmtType,
+			Nodes: []*plan.Node{
+				{NodeType: plan.Node_MULTI_UPDATE, UpdateCtxList: ctxs},
+			},
+		}}}
+		tips, err := extractPrivilegeTipsFromPlan(p)
+		require.NoError(t, err)
+		got := make([]tipKey, 0, len(tips))
+		for _, tip := range tips {
+			got = append(got, tipKey{tip.typ, tip.databaseName, tip.tableName})
+		}
+		return got
+	}
+
+	t.Run("synthetic link ctx stays exempt beside a user write", func(t *testing.T) {
+		userCtx := &plan.UpdateCtx{
+			ObjRef:     userRef,
+			TableDef:   userDef,
+			InsertCols: []plan.ColRef{{RelPos: 0, ColPos: 0}},
+		}
+		syntheticLinkCtx := &plan.UpdateCtx{
+			ObjRef:             linkRef,
+			TableDef:           linkDef,
+			IgnoreAffectedRows: true,
+			TargetUpdateCtxIdx: 0,
+		}
+		require.True(t, plan2.IsDataBranchUpdateLinkPlanCtx(syntheticLinkCtx),
+			"the fabric mirrors buildUpdatePkMoveLinkPlanCtx's shape")
+		got := extract(t, plan.Query_UPDATE, userCtx, syntheticLinkCtx)
+		require.ElementsMatch(t, []tipKey{
+			{PrivilegeTypeUpdate, "app_db", "app_t"},
+		}, got, "the internal side effect demands no catalog privilege")
+	})
+
+	t.Run("user directed insert into the link table demands the target privilege", func(t *testing.T) {
+		// INSERT ... INTO mo_catalog.mo_data_branch_update_link SELECT ...
+		// binds a MULTI_UPDATE whose target ctx carries populated
+		// InsertCols: it is NOT the synthetic ctx and must be checked.
+		userLinkWrite := &plan.UpdateCtx{
+			ObjRef:     linkRef,
+			TableDef:   linkDef,
+			InsertCols: []plan.ColRef{{RelPos: 0, ColPos: 0}},
+		}
+		require.False(t, plan2.IsDataBranchUpdateLinkPlanCtx(userLinkWrite))
+		got := extract(t, plan.Query_INSERT, userLinkWrite)
+		require.ElementsMatch(t, []tipKey{
+			{PrivilegeTypeInsert, catalog.MO_CATALOG, catalog.MO_DATA_BRANCH_UPDATE_LINK},
+		}, got, "catalog-write authorization is preserved for user-directed writes")
+	})
+}
+
 func TestExtractPrivilegeTipsFromPlanKeepsUserDedupJoinSources(t *testing.T) {
 	const dbName = "insert_privilege"
 	newTable := func(name string) (*plan.ObjectRef, *plan.TableDef) {
@@ -17610,7 +17685,11 @@ func TestDoDropSnapshot(t *testing.T) {
 		mrs = newMrsForPasswordOfUser([][]interface{}{})
 		bh.sql2result[sql] = mrs
 
-		err := doDropSnapshot(ctx, ses, ds)
+		// D155-B: the pre-DELETE owner-scope classification read.
+		sql = "select level, ifnull(account_name, ''), ifnull(obj_id, 0) from mo_catalog.mo_snapshots where sname = 'snapshot_test' order by snapshot_id"
+		bh.sql2result[sql] = newMrsForPasswordOfUser([][]interface{}{})
+
+		err := doDropSnapshot(defines.AttachAccountId(ctx, sysAccountID), ses, ds)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(bh.executedSQLs, convey.ShouldContain, historicalAlterLineageMetadataSQL())
 	})
@@ -17673,7 +17752,11 @@ func TestDoDropSnapshot(t *testing.T) {
 		mrs = newMrsForPasswordOfUser([][]interface{}{})
 		bh.sql2result[sql] = mrs
 
-		err := doDropSnapshot(ctx, ses, ds)
+		// D155-B: the pre-DELETE owner-scope classification read.
+		sql = "select level, ifnull(account_name, ''), ifnull(obj_id, 0) from mo_catalog.mo_snapshots where sname = 'snapshot_test' order by snapshot_id"
+		bh.sql2result[sql] = newMrsForPasswordOfUser([][]interface{}{})
+
+		err := doDropSnapshot(defines.AttachAccountId(ctx, sysAccountID), ses, ds)
 		convey.So(err, convey.ShouldBeNil)
 	})
 

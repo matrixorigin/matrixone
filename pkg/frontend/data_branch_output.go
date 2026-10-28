@@ -1982,6 +1982,9 @@ func appendBatchRowsAsSQLValues(
 	tmpValsBuffer *bytes.Buffer,
 	appender sqlValuesAppender,
 ) (err error) {
+	if wrapped.keyMovingUpdate {
+		return appendKeyMovingUpdateRows(ctx, ses, tblStuff, wrapped, tmpValsBuffer, appender)
+	}
 	directUpdate, err := dataBranchDirectUpdateBatch(tblStuff, wrapped, appender.batchInfo)
 	if err != nil {
 		return err
@@ -2022,6 +2025,269 @@ func appendBatchRowsAsSQLValues(
 	}
 
 	return nil
+}
+
+// appendKeyMovingUpdateRows applies a recorded source pk move as one native
+// destination UPDATE per row: SET carries every writable column including the
+// new primary key, WHERE pins the OLD key from the link-proven tombstone.
+// The paired diffDelete batch (LCA before-images) participates in conflict
+// checks only and is skipped here. Statements execute immediately, like the
+// stable-key native update path, so ON UPDATE actions declared on the
+// destination run for the moved key, and RESTRICT violations abort the merge
+// atomically.
+func appendKeyMovingUpdateRows(
+	ctx context.Context,
+	ses *Session,
+	tblStuff tableStuff,
+	wrapped batchWithKind,
+	tmpValsBuffer *bytes.Buffer,
+	appender sqlValuesAppender,
+) (err error) {
+	if wrapped.kind == diffDelete {
+		return nil
+	}
+	if len(wrapped.keyMovingOldKeys) != wrapped.batch.RowCount() {
+		return moerr.NewInternalErrorNoCtxf(
+			"data branch key-moving update has %d old keys for %d rows",
+			len(wrapped.keyMovingOldKeys), wrapped.batch.RowCount())
+	}
+	if len(wrapped.keyMovingWhereKeys) != 0 &&
+		len(wrapped.keyMovingWhereKeys) != wrapped.batch.RowCount() {
+		return moerr.NewInternalErrorNoCtxf(
+			"data branch key-moving update has %d where keys for %d rows",
+			len(wrapped.keyMovingWhereKeys), wrapped.batch.RowCount())
+	}
+	if len(wrapped.keyMovingVictimAuth) != 0 &&
+		len(wrapped.keyMovingVictimAuth) != wrapped.batch.RowCount() {
+		return moerr.NewInternalErrorNoCtxf(
+			"data branch key-moving update has %d victim authorization flags for %d rows",
+			len(wrapped.keyMovingVictimAuth), wrapped.batch.RowCount())
+	}
+	row := make([]any, len(tblStuff.def.colNames))
+	for rowIdx := range wrapped.batch.RowCount() {
+		if err = ctx.Err(); err != nil {
+			return err
+		}
+		if wrapped.keyMovingOldKeys[rowIdx] == nil {
+			return moerr.NewInternalErrorNoCtxf(
+				"data branch key-moving update row %d misses its old key", rowIdx)
+		}
+		if err = extractDataBranchApplyRow(
+			ctx, ses, tblStuff, wrapped.batch, rowIdx, nil, row,
+			"data branch key-moving batch shape mismatch",
+		); err != nil {
+			return err
+		}
+		if err = execKeyMovingUpdate(
+			ctx, ses, appender.bh, appender.writeFile, tblStuff,
+			row, pickKeyMovingWhereRow(wrapped, rowIdx),
+			keyMovingRowVictimAuthorized(wrapped, rowIdx), wrapped.restoreMissing,
+			tmpValsBuffer,
+		); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// pickKeyMovingWhereRow resolves the WHERE key of one key-moving row: the
+// destination-lineage override when the conflict resolver proving the
+// destination moved the same row elsewhere filled one, otherwise the
+// shared old key.
+func pickKeyMovingWhereRow(wrapped batchWithKind, rowIdx int) []any {
+	if rowIdx < len(wrapped.keyMovingWhereKeys) && wrapped.keyMovingWhereKeys[rowIdx] != nil {
+		return wrapped.keyMovingWhereKeys[rowIdx]
+	}
+	return wrapped.keyMovingOldKeys[rowIdx]
+}
+
+// keyMovingRowVictimAuthorized reports whether the apply may remove the
+// destination row holding the move's NEW key inline. Only two sources grant
+// the flag: the fold plan (the source itself deleted that key before moving
+// into it, plain merge delete semantics) and the conflict resolver (the
+// destination's own tracked change lost under ACCEPT). A withheld flag
+// leaves the raw duplicate-key guard as the only arbiter, so a row no write
+// on either side ever touched can never be silently erased.
+func keyMovingRowVictimAuthorized(wrapped batchWithKind, rowIdx int) bool {
+	return rowIdx < len(wrapped.keyMovingVictimAuth) && wrapped.keyMovingVictimAuth[rowIdx]
+}
+
+// execKeyMovingUpdate replays one proven pk move on the destination. The
+// destination row addressed by whereRow must exist exactly once: the merge
+// conflict resolver derives whereRow from proven lineage on both sides, so
+// a zero match means provenance and destination state disagree and the
+// accepted source version would be silently lost; that aborts loudly.
+//
+// A destination row already holding the move's NEW key is removed inline
+// first, but only when victimAuthorized: the fold plan authorized keys the
+// source itself freed (the replicated delete of the previous key-holder can
+// stream after this UPDATE — topological apply order and the inline delete
+// keep any interleaving sound), and the conflict resolver granted tracked
+// destination changes lost under ACCEPT. Without authorization the UPDATE
+// runs alone and meets the raw duplicate-key guard atomically; no row the
+// source never wrote is silently deleted. When the where key equals the new
+// key (both sides moved the row to the same key) there is no victim: the
+// row being updated is the key-holder itself.
+//
+// restoreMissing marks the row the destination deleted outright (the
+// delete lost under ACCEPT): nothing at the old key remains to UPDATE, so
+// the lineage is restored with one direct INSERT at its landed key — the
+// exact shape the direct update path uses for ordinary restores. The
+// authorized victim delete at the new key still runs first when a
+// destination row reoccupied it, and no where-key preflight applies:
+// absence is the point of the restore.
+func execKeyMovingUpdate(
+	ctx context.Context,
+	ses *Session,
+	bh BackgroundExec,
+	writeFile func([]byte) error,
+	tblStuff tableStuff,
+	row []any,
+	whereRow []any,
+	victimAuthorized bool,
+	restoreMissing bool,
+	tmpValsBuffer *bytes.Buffer,
+) (err error) {
+	var statements []string
+	if restoreMissing {
+		if statements, err = dataBranchRestoreInsertSQL(
+			ctx, ses, tblStuff, row, tmpValsBuffer,
+		); err != nil {
+			return err
+		}
+	} else {
+		if statements, err = dataBranchKeyMovingUpdateSQL(
+			ctx, ses, tblStuff, row, whereRow, tmpValsBuffer,
+		); err != nil {
+			return err
+		}
+	}
+	var newKeyStr, whereKeyStr string
+	if newKeyStr, err = formatPKValuesAsString(ses, tblStuff, row); err != nil {
+		return err
+	}
+	if whereKeyStr, err = formatPKValuesAsString(ses, tblStuff, whereRow); err != nil {
+		return err
+	}
+	sameKey := newKeyStr == whereKeyStr
+	var victimDelete string
+	if !sameKey && victimAuthorized {
+		if victimDelete, err = dataBranchDeleteRowByExactKeySQL(
+			ctx, ses, tblStuff, row, tmpValsBuffer,
+		); err != nil {
+			return err
+		}
+	}
+	if !restoreMissing && writeFile == nil {
+		// Preflight the where-key match: exactly one destination row may be
+		// rewritten by this move.
+		countBuf := acquireBuffer(tblStuff.bufPool)
+		defer releaseBuffer(tblStuff.bufPool, countBuf)
+		countBuf.WriteString("select count(*) from ")
+		countBuf.WriteString(qualifiedTableName(
+			tblStuff.baseRel.GetTableDef(ctx).DbName,
+			tblStuff.baseRel.GetTableDef(ctx).Name,
+		))
+		countBuf.WriteString(" where ")
+		if err = writeExactDataBranchKeyPredicate(ses, tblStuff, whereRow, countBuf); err != nil {
+			return err
+		}
+		ret, qErr := runSql(ctx, ses, bh, countBuf.String(), nil, nil)
+		if qErr != nil {
+			return qErr
+		}
+		matched := int64(-1)
+		ret.ReadRows(func(rowCnt int, cols []*vector.Vector) bool {
+			if rowCnt > 0 && len(cols) == 1 {
+				matched = vector.MustFixedColNoTypeCheck[int64](cols[0])[0]
+			}
+			return false
+		})
+		ret.Close()
+		if matched != 1 {
+			return moerr.NewInternalErrorNoCtxf(
+				"data branch key-moving update cannot apply the accepted row: expected exactly one destination row at key (%s), found %d",
+				whereKeyStr, matched,
+			)
+		}
+	}
+	if victimDelete != "" {
+		statements = append([]string{victimDelete}, statements...)
+	}
+	return execSQLStatements(ctx, ses, bh, writeFile, statements)
+}
+
+// dataBranchKeyMovingUpdateSQL renders one native UPDATE for a pk-moving
+// source row. Unlike dataBranchDirectUpdateSQL, the primary key columns are
+// part of the SET list (they change), and the predicate reads the OLD key
+// values from oldRow rather than the row's own (new) key.
+func dataBranchKeyMovingUpdateSQL(
+	ctx context.Context,
+	ses *Session,
+	tblStuff tableStuff,
+	row []any,
+	oldRow []any,
+	buf *bytes.Buffer,
+) ([]string, error) {
+	writableIdxes := tblStuff.def.writableIdxes
+	if len(tblStuff.def.tarOnlyIdxes) > 0 {
+		writableIdxes = tblStuff.def.commonWritableIdxes
+	}
+	qualifiedName := qualifiedTableName(
+		tblStuff.baseRel.GetTableDef(ctx).DbName,
+		tblStuff.baseRel.GetTableDef(ctx).Name,
+	)
+
+	buf.Reset()
+	buf.WriteString("update ")
+	buf.WriteString(qualifiedName)
+	buf.WriteString(" set ")
+	written := 0
+	for _, idx := range writableIdxes {
+		if written > 0 {
+			buf.WriteString(",")
+		}
+		buf.WriteString(quoteIdentifierForSQL(tblStuff.def.baseColNames[idx]))
+		buf.WriteString(" = ")
+		if err := formatValIntoString(ses, row[idx], tblStuff.def.colTypes[idx], buf); err != nil {
+			return nil, err
+		}
+		written++
+	}
+	if written == 0 {
+		return nil, moerr.NewInternalErrorNoCtx("Data Branch key-moving update has no writable columns")
+	}
+	buf.WriteString(" where ")
+	if err := writeExactDataBranchKeyPredicate(ses, tblStuff, oldRow, buf); err != nil {
+		return nil, err
+	}
+	buf.WriteString(" limit 1")
+	return []string{buf.String()}, nil
+}
+
+// dataBranchDeleteRowByExactKeySQL renders one single-row DELETE pinned to
+// the exact primary key held in row's pk positions. PICK uses it to remove
+// a preserved ACCEPT conflict victim that claims the key a recorded pk move
+// is about to write.
+func dataBranchDeleteRowByExactKeySQL(
+	ctx context.Context,
+	ses *Session,
+	tblStuff tableStuff,
+	row []any,
+	buf *bytes.Buffer,
+) (string, error) {
+	buf.Reset()
+	buf.WriteString("delete from ")
+	buf.WriteString(qualifiedTableName(
+		tblStuff.baseRel.GetTableDef(ctx).DbName,
+		tblStuff.baseRel.GetTableDef(ctx).Name,
+	))
+	buf.WriteString(" where ")
+	if err := writeExactDataBranchKeyPredicate(ses, tblStuff, row, buf); err != nil {
+		return "", err
+	}
+	buf.WriteString(" limit 1")
+	return buf.String(), nil
 }
 
 func dataBranchDirectUpdateBatch(
@@ -2238,10 +2504,29 @@ func dataBranchDirectUpdateSQL(
 	if !restoreMissing {
 		return []string{updateSQL}, nil
 	}
+	return dataBranchRestoreInsertSQL(ctx, ses, tblStuff, row, buf)
+}
 
+// dataBranchRestoreInsertSQL renders the single direct INSERT that
+// restores one row the destination is known to have deleted: the full
+// writable column list, primary key included, from the row's own values.
+func dataBranchRestoreInsertSQL(
+	ctx context.Context,
+	ses *Session,
+	tblStuff tableStuff,
+	row []any,
+	buf *bytes.Buffer,
+) ([]string, error) {
+	writableIdxes := tblStuff.def.writableIdxes
+	if len(tblStuff.def.tarOnlyIdxes) > 0 {
+		writableIdxes = tblStuff.def.commonWritableIdxes
+	}
 	buf.Reset()
 	buf.WriteString("insert into ")
-	buf.WriteString(qualifiedName)
+	buf.WriteString(qualifiedTableName(
+		tblStuff.baseRel.GetTableDef(ctx).DbName,
+		tblStuff.baseRel.GetTableDef(ctx).Name,
+	))
 	buf.WriteString(" (")
 	buf.WriteString(strings.Join(quotedBaseColumnNamesByIdxes(tblStuff, writableIdxes), ","))
 	buf.WriteString(") values ")

@@ -1,0 +1,36 @@
+create database branch_linkfree_lfr;
+use branch_linkfree_lfr;
+create table lfr_stash (k varchar(16) primary key, v bigint);
+create table lfr_p (id int primary key, v varchar(32));
+insert into lfr_p values (1, 'one');
+data branch create table lfr_b from lfr_p;
+set @lfrp1 = (select rel_id from mo_catalog.mo_tables where relname = 'lfr_p' and reldatabase = 'branch_linkfree_lfr');
+replace into lfr_stash values ('p1', @lfrp1);
+select count(*) from mo_catalog.mo_data_branch_update_link where table_id = @lfrp1;
+➤ count(*)[-5,64,0]  𝄀
+0
+drop table lfr_p;
+drop table lfr_b;
+select count(*) from mo_catalog.mo_data_branch_update_link where table_id = (select v from lfr_stash where k = 'p1');
+➤ count(*)[-5,64,0]  𝄀
+0
+select count(*) from mo_catalog.mo_data_branch_link_retention where table_id = (select v from lfr_stash where k = 'p1');
+➤ count(*)[-5,64,0]  𝄀
+0
+create table lfr_q (id int primary key, v varchar(32));
+insert into lfr_q values (1, 'one');
+data branch create table lfr_c from lfr_q;
+set @lfrp2 = (select rel_id from mo_catalog.mo_tables where relname = 'lfr_q' and reldatabase = 'branch_linkfree_lfr');
+replace into lfr_stash values ('p2', @lfrp2);
+drop table lfr_q;
+drop table lfr_c;
+select count(*) from mo_catalog.mo_data_branch_update_link where table_id = (select v from lfr_stash where k = 'p2');
+➤ count(*)[-5,64,0]  𝄀
+0
+select count(*) from mo_catalog.mo_data_branch_link_retention where table_id = (select v from lfr_stash where k = 'p2');
+➤ count(*)[-5,64,0]  𝄀
+0
+select count(*) from mo_catalog.mo_data_branch_link_retention where table_id in (select v from lfr_stash);
+➤ count(*)[-5,64,0]  𝄀
+0
+drop database branch_linkfree_lfr;

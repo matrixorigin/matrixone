@@ -1030,6 +1030,12 @@ func TestBindUpdateForeignKeyRoutingByAffectedColumns(t *testing.T) {
 				}
 				if len(node.UpdateCtxList) > 0 && node.UpdateCtxList[0].ObjRef.ObjName == "dept" {
 					for _, updateCtx := range node.UpdateCtxList {
+						if IsDataBranchUpdateLinkPlanCtx(updateCtx) {
+							// the synthetic pk-move link ctx carries no user
+							// rows of its own and is exempt from the cascade
+							// affected-rows invariant
+							continue
+						}
 						require.False(t, updateCtx.IgnoreAffectedRows)
 					}
 				}

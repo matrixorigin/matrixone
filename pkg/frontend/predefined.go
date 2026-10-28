@@ -422,6 +422,41 @@ var (
     	primary key(table_id)
 	)`, catalog.MO_BRANCH_METADATA)
 
+	MoCatalogDataBranchUpdateLinkDDL = fmt.Sprintf(`create table mo_catalog.%s(
+		link_id binary(%d) not null comment 'cat(big-endian table_id, sha256(old_pk), old row id); dedup key only',
+		table_id bigint unsigned not null comment 'id of the table whose row was updated',
+		old_pk_sha binary(32) not null comment 'sha256 of the packer-encoded primary key before the update',
+		old_row_id binary(24) not null comment 'row id of the row before the update',
+		old_pk varbinary(65535) not null comment 'packer-encoded primary key before the update',
+		new_pk_sha binary(32) not null comment 'sha256 of the packer-encoded primary key after the update',
+		new_pk varbinary(65535) not null comment 'packer-encoded primary key after the update',
+		new_row_id binary(24) null comment 'row id assigned to the replacement row; null when the replacement identity was not recorded',
+		write_ts bigint unsigned not null comment 'physical ns of the updating transaction creation timestamp',
+		txn_id binary(%d) not null comment 'recording transaction identity; namespaces workspace-minted link ids and same-transaction matching',
+		primary key(link_id)
+	)`, catalog.MO_DATA_BRANCH_UPDATE_LINK, catalog.DataBranchUpdateLinkIDBytes, catalog.DataBranchUpdateLinkTxnIDBytes)
+
+	// MoCatalogDataBranchLinkRetentionDDL mirrors the tenant-upgrade entry
+	// in pkg/bootstrap/versions/v4_0_19: the per-account ledger of retained
+	// dead tables whose pk-move links survived their own drop. Identity is
+	// captured at link-row genesis from the producing relation and at the
+	// drop-lifecycle funnels before physical drop; an empty
+	// database_name/table_name pair marks the explicit operator-visible
+	// residue class the reaps never reclaim. row_kind splits the primary
+	// key space: 0 keys the retained identity rows above, 1 keys the
+	// fencing protocol's scratch rows, so the two spaces stay disjoint by
+	// primary-key prefix for every allocator watermark or restore patch.
+	MoCatalogDataBranchLinkRetentionDDL = fmt.Sprintf(`create table mo_catalog.%s(
+		row_kind tinyint not null comment 'row kind: 0 = retained dead-table identity, 1 = fencing scratch row (key spaces disjoint by primary-key prefix)',
+		table_id bigint unsigned not null comment 'id of the retained dead table; fencing scratch rows draw a fresh per-round value',
+		database_name text comment 'identity captured at the drop; empty only outside the production capture chain',
+		table_name text comment 'identity captured at the drop; empty only outside the production capture chain',
+		obj_id bigint unsigned not null comment 'physical table id (kept so pre-rename snapshots still match by id)',
+		created_ts bigint unsigned not null comment 'physical ns of this address first registration; immutable on refresh',
+		logical_id bigint unsigned not null default 0 comment 'durable rel_logical_id of the producing relation; 0 marks a legacy or unresolved identity (catalog relation ids are never 0)',
+		primary key(row_kind, table_id)
+	)`, catalog.MO_DATA_BRANCH_LINK_RETENTION)
+
 	MoCatalogFeatureLimitDDL = fmt.Sprintf(`create table mo_catalog.%s(
     	account_id bigint unsigned not null comment 'this limit applies on this account',
     	feature_code varchar(50) NOT NULL comment 'snapshot/branch/...',

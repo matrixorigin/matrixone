@@ -85,7 +85,7 @@ func TestCatalogVisibilityIgnoresNoopWorkspaceDump(t *testing.T) {
 	txn.engine.config.insertEntryMaxCount = 100
 	before, _ := txn.CatalogVisibility()
 	for _, offset := range []int{0, -1} {
-		require.NoError(t, txn.dumpBatchLocked(context.Background(), offset))
+		require.NoError(t, txn.dumpBatchLocked(context.Background(), offset, -1))
 		after, stable := txn.CatalogVisibility()
 		require.True(t, stable)
 		require.Equal(t, before, after)

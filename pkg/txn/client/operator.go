@@ -259,6 +259,12 @@ type txnOperator struct {
 	timestampWaiter     TimestampWaiter
 	terminalCall        atomic.Uint32
 	catalogReadRevision atomic.Uint64
+	// expectedConflictMark is the D206(B.1) volatile, txn-scoped, CN-local
+	// annotation: set by the pk-move fabric's setter sites when the
+	// transaction first stages fabric-owned protocol artifacts. Never
+	// persisted, never on the wire, never SQL- or session-settable;
+	// consulted FIRST by the commit watchdog arm below.
+	expectedConflictMark atomic.Bool
 
 	mu struct {
 		sync.RWMutex
@@ -898,6 +904,52 @@ func (tc *txnOperator) TxnRef() *txn.TxnMeta {
 	tc.mu.RLock()
 	defer tc.mu.RUnlock()
 	return &tc.mu.txn
+}
+
+// MarkExpectedConflict sets the volatile expected-conflict annotation
+// (D206(B.1)): idempotent, txn-scoped, CN-local. The pk-move fabric's
+// setter sites reach it through the optional-interface assertion
+// (MarkTxnExpectedConflictIfSupported), so the base TxnOperator interface
+// carries no new method.
+func (tc *txnOperator) MarkExpectedConflict() {
+	tc.expectedConflictMark.Store(true)
+}
+
+// ExpectedConflictMarked reports the annotation's state (D206(B.2)):
+// consulted by the commit watchdog arm and compile's fatalLog before any
+// fatal decision; unmarked transactions keep the verifier's posture
+// verbatim.
+func (tc *txnOperator) ExpectedConflictMarked() bool {
+	return tc.expectedConflictMark.Load()
+}
+
+// expectedConflictMarkDisabled is the mark-disabled defect flag (the
+// D206(C.2)-(C.4)/D208(C.1)/D211(C.1)/D212(C.2) RED twins; D155-C
+// discipline): harness-only installers, never enabled on any production
+// path, never referenced from production flows except the single check
+// inside MarkTxnExpectedConflictIfSupported.
+var expectedConflictMarkDisabled atomic.Bool
+
+// DisableExpectedConflictMarkForTest flips the mark-disabled defect flag
+// and returns a restore func; harness-only.
+func DisableExpectedConflictMarkForTest(disabled bool) (restore func()) {
+	prev := expectedConflictMarkDisabled.Swap(disabled)
+	return func() { expectedConflictMarkDisabled.Store(prev) }
+}
+
+// MarkTxnExpectedConflictIfSupported is the shared setter the fabric's mark
+// sites invoke on a resolved operator (D206(B.1) sites (1)-(6)): one
+// idempotent optional-interface assertion. A nil or unmarkable operator is
+// a no-op here; fail-closed sites resolve and reject nil before calling.
+// The mark-disabled defect flag suppresses every site together so the RED
+// twins reproduce the mark-free disposition deterministically.
+func MarkTxnExpectedConflictIfSupported(op TxnOperator) {
+	if op == nil || expectedConflictMarkDisabled.Load() {
+		return
+	}
+	if m, ok := op.(interface{ MarkExpectedConflict() }); ok {
+		m.MarkExpectedConflict()
+	}
 }
 
 func (tc *txnOperator) SnapshotTS() timestamp.Timestamp {
@@ -1823,8 +1875,15 @@ func (tc *txnOperator) handleErrorResponse(ctx context.Context, resp txn.TxnResp
 				})
 		}
 
-		if moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict) ||
-			moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry) {
+		// D206(B.2): the mark consult comes FIRST - a fabric-marked
+		// transaction's expected internal conflict returns to the caller
+		// with the byte-identical checker-DISABLED disposition (the
+		// pessimism gate above, the error codes, rollback membership,
+		// retry classification and refusal transitions are unchanged);
+		// unmarked transactions keep the verifier's posture verbatim.
+		if !tc.expectedConflictMark.Load() &&
+			(moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict) ||
+				moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry)) {
 			v, ok := commonruntime.ServiceRuntime(tc.sid).GetGlobalVariables(commonruntime.EnableCheckInvalidRCErrors)
 			if ok && v.(bool) {
 				tc.logger.Fatal("failed",

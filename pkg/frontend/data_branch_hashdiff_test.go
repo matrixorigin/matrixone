@@ -682,6 +682,105 @@ func TestDiffDataHelperFakePKUsesCommonVisibleColumnsAsKey(t *testing.T) {
 	require.Empty(t, got)
 }
 
+// TestBuildHashmapForTablePreservesPkMoveEvidence pins the interplay the
+// pk-move chain walk depends on: buildHashmapForTable's per-key
+// reconciliation nets an in-window born-and-died generation out of the
+// hash maps (the correct net effect for replay), while the pre-
+// reconciliation evidence capture must still carry that generation's
+// tombstone ref and birth timestamp. Without it a cross-transaction hop
+// (2->3->5 with 3 deleted inside the window) is unprovable and the move
+// replays as a loud delete+insert.
+func TestBuildHashmapForTablePreservesPkMoveEvidence(t *testing.T) {
+	ses := newValidateSession(t)
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	tblStuff := newTestBranchTableStuff(ctrl)
+	tblStuff.def.pkColIdx = 0
+	tblStuff.def.pkColIdxes = []int{0}
+	tblStuff.hashmapAllocator = newBranchHashmapAllocator(dataBranchHashmapLimitRate)
+	worker, err := ants.NewPool(1)
+	require.NoError(t, err)
+	defer worker.Release()
+	tblStuff.worker = worker
+
+	movedRid := buildHashDiffRowID(t, 21)
+	liveRid := buildHashDiffRowID(t, 22)
+	birthTS := types.BuildTS(20, 0)
+	deleteTS := types.BuildTS(30, 0)
+
+	// Stream layout: data [rowid, pk, cols..., commit ts], tombstone
+	// [rowid, pk, commit ts]. Key 3 is born at 20 and deleted at 30 inside
+	// the window; key 5 is the surviving control row.
+	dataBat := buildIntDataBatch(
+		t, ses.proc.Mp(),
+		[]string{catalog.Row_ID, "id", "name", "hidden", "cts"},
+		[]types.Type{
+			types.T_Rowid.ToType(), types.T_int64.ToType(),
+			types.T_varchar.ToType(), types.T_varchar.ToType(),
+			types.T_TS.ToType(),
+		},
+		[][]any{
+			{movedRid, int64(3), "three", "h", birthTS},
+			{liveRid, int64(5), "five", "h", types.BuildTS(25, 0)},
+		},
+	)
+	tombBat := buildIntDataBatch(
+		t, ses.proc.Mp(),
+		[]string{catalog.Row_ID, "id", "cts"},
+		[]types.Type{
+			types.T_Rowid.ToType(), types.T_int64.ToType(), types.T_TS.ToType(),
+		},
+		[][]any{{movedRid, int64(3), deleteTS}},
+	)
+
+	dataHashmap, tombstoneHashmap, evidence, err := buildHashmapForTable(
+		context.Background(),
+		ses.proc.Mp(),
+		&tblStuff,
+		[]engine.ChangesHandle{&stubEngineChangesHandle{
+			responses: []stubEngineChangesHandleResponse{{data: dataBat, tombstone: tombBat}},
+		}},
+		"target",
+		nil,
+		true,
+	)
+	require.NoError(t, err)
+	defer func() {
+		require.NoError(t, dataHashmap.Close())
+		require.NoError(t, tombstoneHashmap.Close())
+	}()
+
+	// The reconciliation netted the generation out of both maps.
+	key3 := pkMoveTestKey(t, 3)
+	data3, err := dataHashmap.GetByEncodedKey(key3)
+	require.NoError(t, err)
+	require.False(t, data3.Exists)
+	tomb3, err := tombstoneHashmap.GetByEncodedKey(key3)
+	require.NoError(t, err)
+	require.False(t, tomb3.Exists)
+
+	// The pre-reconciliation evidence still carries it: the tombstone ref
+	// under its key and the birth timestamp it paired with.
+	require.Equal(t,
+		[]pkMoveTombRef{{rowID: movedRid, cts: deleteTS}},
+		evidence.tombs[string(key3)],
+	)
+	// Departures are keyed by (rowID, tombstone commit ts): workspace rowids
+	// restart per transaction, so the tombstone's cts scopes the identity.
+	require.Equal(t,
+		map[pkMoveDepartKey]types.TS{{rowID: movedRid, cts: deleteTS}: birthTS},
+		evidence.departed,
+	)
+
+	// The surviving row is untouched.
+	key5 := pkMoveTestKey(t, 5)
+	data5, err := dataHashmap.GetByEncodedKey(key5)
+	require.NoError(t, err)
+	require.True(t, data5.Exists)
+	require.Len(t, data5.Rows, 1)
+}
+
 func TestBuildHashmapForTableProjectsBaseRowsBeforeKeying(t *testing.T) {
 	ses := newValidateSession(t)
 	ctrl := gomock.NewController(t)
@@ -713,7 +812,7 @@ func TestBuildHashmapForTableProjectsBaseRowsBeforeKeying(t *testing.T) {
 		[]types.Type{types.T_Rowid.ToType(), types.T_int64.ToType(), types.T_int64.ToType()},
 		[][]any{{baseRowID, int64(1), int64(1)}},
 	)
-	baseDataHashmap, baseTombstoneHashmap, err := buildHashmapForTable(
+	baseDataHashmap, baseTombstoneHashmap, _, err := buildHashmapForTable(
 		context.Background(),
 		ses.proc.Mp(),
 		&tblStuff,
@@ -722,6 +821,7 @@ func TestBuildHashmapForTableProjectsBaseRowsBeforeKeying(t *testing.T) {
 		}},
 		"base",
 		nil,
+		false,
 	)
 	require.NoError(t, err)
 	defer func() {
@@ -735,7 +835,7 @@ func TestBuildHashmapForTableProjectsBaseRowsBeforeKeying(t *testing.T) {
 		[]types.Type{types.T_Rowid.ToType(), types.T_int64.ToType(), types.T_int64.ToType(), types.T_int64.ToType()},
 		[][]any{{targetRowID, int64(1), int64(99), int64(0)}},
 	)
-	targetDataHashmap, targetTombstoneHashmap, err := buildHashmapForTable(
+	targetDataHashmap, targetTombstoneHashmap, _, err := buildHashmapForTable(
 		context.Background(),
 		ses.proc.Mp(),
 		&tblStuff,
@@ -744,6 +844,7 @@ func TestBuildHashmapForTableProjectsBaseRowsBeforeKeying(t *testing.T) {
 		}},
 		"target",
 		nil,
+		false,
 	)
 	require.NoError(t, err)
 	defer func() {
@@ -1137,6 +1238,12 @@ func newTestBranchTableStuff(ctrl *gomock.Controller) tableStuff {
 	baseRel.EXPECT().GetTableName().Return("base").AnyTimes()
 	tarRel.EXPECT().GetTableDef(gomock.Any()).Return(tarTableDef).AnyTimes()
 	baseRel.EXPECT().GetTableDef(gomock.Any()).Return(baseTableDef).AnyTimes()
+	// Zero table IDs keep pk-move link loading disabled in diff tests:
+	// the fixture leaves pkMoveTarWindows/pkMoveBaseWindows nil, and the
+	// endpoint-table fallback in findDeleteAndUpdateBat ignores a zero
+	// table ID, so no link window is built and the provider stays nil.
+	tarRel.EXPECT().GetTableID(gomock.Any()).Return(uint64(0)).AnyTimes()
+	baseRel.EXPECT().GetTableID(gomock.Any()).Return(uint64(0)).AnyTimes()
 
 	var tblStuff tableStuff
 	tblStuff.tarRel = tarRel
@@ -4192,5 +4299,509 @@ func TestHashDiffOnlineApplyOrdersLCAChunks(t *testing.T) {
 			}
 			require.Equal(t, int32(wantProbes), probes.Load())
 		})
+	}
+}
+
+// buildFoldedKeyMovingMoveBatch builds a folded key-moving insert batch for
+// the SKIP-dependency cascade tests: batch rows hold the NEW keys and the
+// returned old-key sidecar holds full-width rows with the OLD key at pk
+// index 0, exactly as the fold path fills batchWithKind.keyMovingOldKeys.
+func buildFoldedKeyMovingMoveBatch(
+	t *testing.T,
+	ses *Session,
+	moves [][2]int64,
+) (*batch.Batch, [][]any) {
+	mp := ses.proc.Mp()
+	bat := batch.NewWithSize(2)
+	bat.SetAttributes([]string{"id", "payload"})
+	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
+	oldKeys := make([][]any, 0, len(moves))
+	for i, mv := range moves {
+		require.NoError(t, vector.AppendFixed(bat.Vecs[0], mv[1], false, mp))
+		require.NoError(t, vector.AppendBytes(bat.Vecs[1], []byte(fmt.Sprintf("row%d", i)), false, mp))
+		oldKeys = append(oldKeys, []any{mv[0], nil})
+	}
+	bat.SetRowCount(len(moves))
+	return bat, oldKeys
+}
+
+func foldedKeyMovingTestStuff(ctrl *gomock.Controller) tableStuff {
+	tblStuff := newTestBranchTableStuff(ctrl)
+	tblStuff.def.colNames = []string{"id", "payload"}
+	tblStuff.def.colTypes = []types.Type{types.T_int64.ToType(), types.T_varchar.ToType()}
+	tblStuff.def.pkColIdx = 0
+	tblStuff.def.pkColIdxes = []int{0}
+	return tblStuff
+}
+
+// TestCascadeKeyMovingFoldKeep covers the r24 pre-PR review finding 1: when
+// SKIP removes a folded move, every move that depends on the dropped move's
+// vacated key (its landed key equals the dropped move's old key) must drop
+// too, transitively. Otherwise the surviving destination row at the skipped
+// move's old key would face the dependent move's authorized victim delete
+// and its UPDATE would rewrite the dependent lineage onto the kept row.
+func TestCascadeKeyMovingFoldKeep(t *testing.T) {
+	ses := newValidateSession(t)
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	// Chain A: rows (old->new) (1->2), (2->3), (3->4); batch rows hold the
+	// NEW keys. Dropping any move whose successor vacated its landed key
+	// walks the chain back toward the root move.
+	chainMoves := [][2]int64{{1, 2}, {2, 3}, {3, 4}}
+
+	t.Run("dropping the last move cascades through the whole chain", func(t *testing.T) {
+		bat, oldKeys := buildFoldedKeyMovingMoveBatch(t, ses, chainMoves)
+		defer bat.Clean(ses.proc.Mp())
+		keep, err := cascadeKeyMovingFoldKeep(ses, foldedKeyMovingTestStuff(ctrl), bat, oldKeys, []int64{2})
+		require.NoError(t, err)
+		require.Empty(t, keep, "dropping 3->4 keeps key 3 occupied, killing 2->3, which keeps 2 occupied, killing 1->2")
+	})
+
+	t.Run("dropping the root move leaves dependents whose landed keys stay free", func(t *testing.T) {
+		bat, oldKeys := buildFoldedKeyMovingMoveBatch(t, ses, chainMoves)
+		defer bat.Clean(ses.proc.Mp())
+		keep, err := cascadeKeyMovingFoldKeep(ses, foldedKeyMovingTestStuff(ctrl), bat, oldKeys, []int64{0})
+		require.NoError(t, err)
+		require.Equal(t, []int64{1, 2}, keep, "no move lands at key 1, so dropping 1->2 does not cascade")
+	})
+
+	t.Run("dropping a middle move only cascades to moves landing at its old key", func(t *testing.T) {
+		bat, oldKeys := buildFoldedKeyMovingMoveBatch(t, ses, chainMoves)
+		defer bat.Clean(ses.proc.Mp())
+		keep, err := cascadeKeyMovingFoldKeep(ses, foldedKeyMovingTestStuff(ctrl), bat, oldKeys, []int64{1})
+		require.NoError(t, err)
+		require.Equal(t, []int64{2}, keep, "dropping 2->3 kills 1->2 (lands at 2) but not 3->4 (lands at 4)")
+	})
+
+	t.Run("dependencies never leak between disjoint chains", func(t *testing.T) {
+		// Chain B: (10->20), (20->30); key spaces of A and B do not overlap.
+		moves := append(append([][2]int64{}, chainMoves...), [][2]int64{{10, 20}, {20, 30}}...)
+		bat, oldKeys := buildFoldedKeyMovingMoveBatch(t, ses, moves)
+		defer bat.Clean(ses.proc.Mp())
+		keep, err := cascadeKeyMovingFoldKeep(ses, foldedKeyMovingTestStuff(ctrl), bat, oldKeys, []int64{4})
+		require.NoError(t, err)
+		require.Equal(t, []int64{0, 1, 2}, keep, "dropping 20->30 kills 10->20 inside chain B only")
+	})
+
+	t.Run("no initial drops keeps every row", func(t *testing.T) {
+		bat, oldKeys := buildFoldedKeyMovingMoveBatch(t, ses, chainMoves)
+		defer bat.Clean(ses.proc.Mp())
+		keep, err := cascadeKeyMovingFoldKeep(ses, foldedKeyMovingTestStuff(ctrl), bat, oldKeys, nil)
+		require.NoError(t, err)
+		require.Equal(t, []int64{0, 1, 2}, keep)
+	})
+
+	t.Run("initial drop with a missing old key fails closed", func(t *testing.T) {
+		bat, oldKeys := buildFoldedKeyMovingMoveBatch(t, ses, chainMoves)
+		defer bat.Clean(ses.proc.Mp())
+		oldKeys[2] = nil
+		_, err := cascadeKeyMovingFoldKeep(ses, foldedKeyMovingTestStuff(ctrl), bat, oldKeys, []int64{2})
+		require.Error(t, err)
+	})
+
+	t.Run("dependent row with a missing old key fails closed", func(t *testing.T) {
+		bat, oldKeys := buildFoldedKeyMovingMoveBatch(t, ses, chainMoves)
+		defer bat.Clean(ses.proc.Mp())
+		oldKeys[1] = nil
+		_, err := cascadeKeyMovingFoldKeep(ses, foldedKeyMovingTestStuff(ctrl), bat, oldKeys, []int64{2})
+		require.Error(t, err, "row 1 lands at the dropped row 2's old key, so its old key is needed for the cascade")
+	})
+}
+
+// TestCascadeKeyMovingFoldKeepScalesLinearly bounds the work the SKIP
+// dependency cascade spends on long move chains (r54 review F4): the
+// pre-fix fixpoint rescanned every surviving row once per dropped move,
+// so an ascending chain whose last move drops cost ~N(N-1)/2 key
+// extractions. The reverse-dependency closure must stay linear in the
+// batch size in both row orders and keep the exact same survivors.
+func TestCascadeKeyMovingFoldKeepScalesLinearly(t *testing.T) {
+	ses := newValidateSession(t)
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	const N = 256
+	ascending := func() [][2]int64 {
+		moves := make([][2]int64, 0, N)
+		for i := 0; i < N; i++ {
+			moves = append(moves, [2]int64{int64(i + 1), int64(i + 2)})
+		}
+		return moves
+	}
+	reversed := func(moves [][2]int64) [][2]int64 {
+		out := make([][2]int64, 0, len(moves))
+		for i := len(moves) - 1; i >= 0; i-- {
+			out = append(out, moves[i])
+		}
+		return out
+	}
+
+	t.Run("dropping the last move of an ascending chain stays linear", func(t *testing.T) {
+		bat, oldKeys := buildFoldedKeyMovingMoveBatch(t, ses, ascending())
+		defer bat.Clean(ses.proc.Mp())
+		cascadeKeyMovingFoldKeyOps.Store(0)
+		keep, err := cascadeKeyMovingFoldKeep(
+			ses, foldedKeyMovingTestStuff(ctrl), bat, oldKeys, []int64{N - 1})
+		require.NoError(t, err)
+		require.Empty(t, keep, "dropping N->N+1 keeps key N+1 occupied, cascading back to the root")
+		require.LessOrEqual(t, cascadeKeyMovingFoldKeyOps.Load(), uint64(3*N),
+			"a per-pass fixpoint needs ~N(N-1)/2 = %d key operations on this shape", N*(N-1)/2)
+	})
+
+	t.Run("the same chain in reverse row order folds identically", func(t *testing.T) {
+		bat, oldKeys := buildFoldedKeyMovingMoveBatch(t, ses, reversed(ascending()))
+		defer bat.Clean(ses.proc.Mp())
+		cascadeKeyMovingFoldKeyOps.Store(0)
+		keep, err := cascadeKeyMovingFoldKeep(
+			ses, foldedKeyMovingTestStuff(ctrl), bat, oldKeys, []int64{N - 1})
+		require.NoError(t, err)
+		// Row N-1 of the reversed batch is (1->2): no move lands at key
+		// 1, so only the dropped move leaves.
+		want := make([]int64, 0, N-1)
+		for i := int64(0); i < N-1; i++ {
+			want = append(want, i)
+		}
+		require.Equal(t, want, keep)
+		require.LessOrEqual(t, cascadeKeyMovingFoldKeyOps.Load(), uint64(3*N))
+	})
+
+	t.Run("a mid-chain drop cascades to exactly the upstream prefix in both orders", func(t *testing.T) {
+		for _, moves := range [][][2]int64{ascending(), reversed(ascending())} {
+			// Drop the (101->102) row wherever it sits: every move
+			// landing at a key the cascade vacates (100->101, 99->100,
+			// ...) must drop with it, and nothing downstream may.
+			dropIdx := int64(-1)
+			for i, mv := range moves {
+				if mv[0] == 101 {
+					dropIdx = int64(i)
+				}
+			}
+			require.NotEqual(t, int64(-1), dropIdx)
+			bat, oldKeys := buildFoldedKeyMovingMoveBatch(t, ses, moves)
+			cascadeKeyMovingFoldKeyOps.Store(0)
+			keep, err := cascadeKeyMovingFoldKeep(
+				ses, foldedKeyMovingTestStuff(ctrl), bat, oldKeys, []int64{dropIdx})
+			require.NoError(t, err)
+			var want []int64
+			for i, mv := range moves {
+				if mv[0] > 101 {
+					want = append(want, int64(i))
+				}
+			}
+			require.Equal(t, want, keep)
+			require.LessOrEqual(t, cascadeKeyMovingFoldKeyOps.Load(), uint64(3*N))
+			bat.Clean(ses.proc.Mp())
+		}
+	})
+}
+
+// TestShrinkKeyMovingFoldCascade verifies the shrink wrapper keeps batch rows
+// and every aligned sidecar consistent under the cascaded keep set, and
+// reports no survivors by emptying the batch and nil-ing the sidecars.
+func TestShrinkKeyMovingFoldCascade(t *testing.T) {
+	ses := newValidateSession(t)
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	newWrapped := func(t *testing.T, moves [][2]int64) batchWithKind {
+		bat, oldKeys := buildFoldedKeyMovingMoveBatch(t, ses, moves)
+		return batchWithKind{
+			kind:             diffInsert,
+			keyMovingUpdate:  true,
+			batch:            bat,
+			keyMovingOldKeys: oldKeys,
+			keyMovingWhereKeys: [][]any{
+				{int64(101), nil}, {int64(102), nil}, {int64(103), nil}, {int64(104), nil},
+			},
+			keyMovingVictimAuth:   []bool{true, false, true, false},
+			keyMovingUnchangedOcc: []bool{false, true, false, true},
+		}
+	}
+
+	t.Run("cascaded keep set survives with aligned rows and sidecars", func(t *testing.T) {
+		wrapped := newWrapped(t, [][2]int64{{1, 2}, {2, 3}, {3, 4}, {10, 20}})
+		defer wrapped.batch.Clean(ses.proc.Mp())
+		// Dropping the middle chain move (2->3) cascades to (1->2); (3->4)
+		// and the independent (10->20) survive.
+		shrunk, alive, err := shrinkKeyMovingFoldCascade(ses, foldedKeyMovingTestStuff(ctrl), wrapped, []int64{1})
+		require.NoError(t, err)
+		require.True(t, alive)
+		require.Equal(t, 2, shrunk.batch.RowCount())
+		require.Equal(t, int64(4), vector.GetFixedAtNoTypeCheck[int64](shrunk.batch.Vecs[0], 0))
+		require.Equal(t, int64(20), vector.GetFixedAtNoTypeCheck[int64](shrunk.batch.Vecs[0], 1))
+		require.Len(t, shrunk.keyMovingOldKeys, 2)
+		require.Equal(t, int64(3), shrunk.keyMovingOldKeys[0][0])
+		require.Equal(t, int64(10), shrunk.keyMovingOldKeys[1][0])
+		require.Len(t, shrunk.keyMovingWhereKeys, 2)
+		require.Equal(t, int64(103), shrunk.keyMovingWhereKeys[0][0])
+		require.Equal(t, []bool{true, false}, shrunk.keyMovingVictimAuth)
+		require.Equal(t, []bool{false, true}, shrunk.keyMovingUnchangedOcc)
+	})
+
+	t.Run("drop of every row empties the batch and nils the sidecars", func(t *testing.T) {
+		wrapped := newWrapped(t, [][2]int64{{1, 2}, {2, 3}, {3, 4}, {10, 20}})
+		defer wrapped.batch.Clean(ses.proc.Mp())
+		shrunk, alive, err := shrinkKeyMovingFoldCascade(ses, foldedKeyMovingTestStuff(ctrl), wrapped, []int64{2, 3})
+		require.NoError(t, err)
+		require.False(t, alive, "dropping 3->4 cascades through the chain; 10->20 drops directly")
+		require.Zero(t, shrunk.batch.RowCount())
+		require.Nil(t, shrunk.keyMovingOldKeys)
+		require.Nil(t, shrunk.keyMovingWhereKeys)
+		require.Nil(t, shrunk.keyMovingVictimAuth)
+		require.Nil(t, shrunk.keyMovingUnchangedOcc)
+	})
+
+	t.Run("absent where-key sidecar stays absent", func(t *testing.T) {
+		wrapped := newWrapped(t, [][2]int64{{1, 2}, {2, 3}, {3, 4}, {10, 20}})
+		defer wrapped.batch.Clean(ses.proc.Mp())
+		wrapped.keyMovingWhereKeys = nil
+		shrunk, alive, err := shrinkKeyMovingFoldCascade(ses, foldedKeyMovingTestStuff(ctrl), wrapped, []int64{0})
+		require.NoError(t, err)
+		require.True(t, alive)
+		require.Equal(t, 3, shrunk.batch.RowCount())
+		require.Nil(t, shrunk.keyMovingWhereKeys)
+		require.Len(t, shrunk.keyMovingOldKeys, 3)
+	})
+}
+
+// substitutingStubHandle simulates the dispatcher swapping a range to the
+// visible-state recovery handle mid-drain (r53 D156(E) certification
+// signal (c)): one observer notification while its batches serve under
+// the ordinary tail hint, exactly as the production visible-state handle
+// reports.
+type substitutingStubHandle struct {
+	inner     *stubEngineChangesHandle
+	resources *dataBranchVisibleStateRecoveryResources
+	fired     bool
+}
+
+func (s *substitutingStubHandle) Next(
+	ctx context.Context, mp *mpool.MPool,
+) (*batch.Batch, *batch.Batch, engine.ChangesHandle_Hint, error) {
+	if !s.fired {
+		s.fired = true
+		s.resources.OnVisibleStateRecoverySubstitution()
+	}
+	return s.inner.Next(ctx, mp)
+}
+
+func (s *substitutingStubHandle) Close() error { return nil }
+
+// TestBuildHashmapForTableTaintsSyntheticWindowEnds pins the r53 D156(E)
+// serving-mode certification at the drain: a window served from an empty
+// lower bound (the end-stamping state read), under a Snapshot hint, or
+// through a visible-state recovery substitution has its END instant
+// tainted in the captured evidence, while an exactly served per-version
+// window taints nothing — and the synthetic windows' rows still serve
+// net-effect replay evidence unchanged.
+func TestBuildHashmapForTableTaintsSyntheticWindowEnds(t *testing.T) {
+	ses := newValidateSession(t)
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	tblStuff := newTestBranchTableStuff(ctrl)
+	tblStuff.def.pkColIdx = 0
+	tblStuff.def.pkColIdxes = []int{0}
+	tblStuff.hashmapAllocator = newBranchHashmapAllocator(dataBranchHashmapLimitRate)
+	worker, err := ants.NewPool(1)
+	require.NoError(t, err)
+	defer worker.Release()
+	tblStuff.worker = worker
+	resources := &dataBranchVisibleStateRecoveryResources{
+		allocator: tblStuff.hashmapAllocator,
+	}
+	tblStuff.recoveryResources = resources
+
+	emptyFromEnd := types.BuildTS(90, 0)
+	snapshotEnd := types.BuildTS(80, 0)
+	substitutedEnd := types.BuildTS(70, 0)
+	exactEnd := types.BuildTS(40, 0)
+	// Handles drain in window order: constructChangeHandles appends the
+	// window metadata under the same condition that appends the handle.
+	tblStuff.tarWindowEnds = []types.TS{emptyFromEnd, snapshotEnd, substitutedEnd, exactEnd}
+	tblStuff.tarWindowFromEmpty = []bool{true, false, false, false}
+
+	birthTS := types.BuildTS(20, 0)
+	deleteTS := types.BuildTS(30, 0)
+	mkResponses := func(ridSeq, key int, hint engine.ChangesHandle_Hint) []stubEngineChangesHandleResponse {
+		dataBat := buildIntDataBatch(
+			t, ses.proc.Mp(),
+			[]string{catalog.Row_ID, "id", "name", "hidden", "cts"},
+			[]types.Type{
+				types.T_Rowid.ToType(), types.T_int64.ToType(),
+				types.T_varchar.ToType(), types.T_varchar.ToType(),
+				types.T_TS.ToType(),
+			},
+			[][]any{{buildHashDiffRowID(t, ridSeq), int64(key), "n", "h", birthTS}},
+		)
+		tombBat := buildIntDataBatch(
+			t, ses.proc.Mp(),
+			[]string{catalog.Row_ID, "id", "cts"},
+			[]types.Type{
+				types.T_Rowid.ToType(), types.T_int64.ToType(), types.T_TS.ToType(),
+			},
+			[][]any{{buildHashDiffRowID(t, ridSeq), int64(key), deleteTS}},
+		)
+		return []stubEngineChangesHandleResponse{{data: dataBat, tombstone: tombBat, hint: hint}}
+	}
+
+	handles := []engine.ChangesHandle{
+		// (a) empty lower bound: tail hints, certified by the marker.
+		&stubEngineChangesHandle{responses: mkResponses(21, 3, engine.ChangesHandle_Tail_done)},
+		// (b) Snapshot hint.
+		&stubEngineChangesHandle{responses: mkResponses(22, 4, engine.ChangesHandle_Snapshot)},
+		// (c) recovery substitution mid-drain, tail hints throughout.
+		&substitutingStubHandle{
+			inner:     &stubEngineChangesHandle{responses: mkResponses(23, 5, engine.ChangesHandle_Tail_done)},
+			resources: resources,
+		},
+		// Exact per-version control: no certification signal fires.
+		&stubEngineChangesHandle{responses: mkResponses(24, 6, engine.ChangesHandle_Tail_done)},
+	}
+
+	_, _, evidence, err := buildHashmapForTable(
+		context.Background(), ses.proc.Mp(), &tblStuff, handles, "target", nil, true,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, evidence)
+
+	require.Equal(t, map[types.TS]struct{}{
+		emptyFromEnd:   {},
+		snapshotEnd:    {},
+		substitutedEnd: {},
+	}, evidence.tainted)
+
+	// The synthetic windows' rows still serve net-effect replay: their
+	// tombstone evidence is captured exactly like the exact window's.
+	for _, key := range []int64{3, 4, 5, 6} {
+		require.NotEmpty(t, evidence.tombs[string(pkMoveTestKey(t, key))],
+			"window serving key %d keeps its replay evidence", key)
+	}
+}
+
+// TestCollectWindowSyntheticAtConstruct pins the capture half of
+// certification signal (c) extending across handle CONSTRUCTION (r53
+// D156(E)): the partition dispatcher installs the end-stamping recovery
+// reader (and notifies the observer) while NewPartitionChangesHandle
+// splits the range — before any drain-side substitution baseline exists —
+// so the window metadata must carry the swap. Attribution is the
+// per-window counter delta: an earlier window's substitution never taints
+// a quiet neighbor, and a failed construction certifies nothing.
+func TestCollectWindowSyntheticAtConstruct(t *testing.T) {
+	resources := &dataBranchVisibleStateRecoveryResources{}
+
+	// A swap during construction is attributed to the window being built.
+	h, subst, err := collectWindowSyntheticAtConstruct(
+		resources,
+		func() (engine.ChangesHandle, error) {
+			resources.OnVisibleStateRecoverySubstitution()
+			return &stubEngineChangesHandle{}, nil
+		},
+	)
+	require.NoError(t, err)
+	require.NotNil(t, h)
+	require.True(t, subst, "construction-time substitution certifies this window synthetic")
+
+	// Attribution is a delta, never the absolute count: the next quiet
+	// window reads false although the counter is already nonzero.
+	_, subst, err = collectWindowSyntheticAtConstruct(
+		resources,
+		func() (engine.ChangesHandle, error) {
+			return &stubEngineChangesHandle{}, nil
+		},
+	)
+	require.NoError(t, err)
+	require.False(t, subst, "a neighbor window's substitution must not leak into this window")
+
+	// A failed construction propagates its error and certifies nothing.
+	wantErr := moerr.NewInternalErrorNoCtx("construct failed")
+	_, subst, err = collectWindowSyntheticAtConstruct(
+		resources,
+		func() (engine.ChangesHandle, error) {
+			resources.OnVisibleStateRecoverySubstitution()
+			return nil, wantErr
+		},
+	)
+	require.Equal(t, wantErr, err)
+	require.False(t, subst)
+}
+
+// TestBuildHashmapForTableTaintsConstructSubstitutedWindow pins the
+// verdict half: a window whose handle CONSTRUCTION substituted the
+// visible-state recovery reader (its rows arrive tail-hinted, stamped
+// with the window's end instant) is certified synthetic from the window
+// metadata constructChangeHandle records — the drain observes no signal
+// of its own — while its rows still serve net-effect replay unchanged.
+func TestBuildHashmapForTableTaintsConstructSubstitutedWindow(t *testing.T) {
+	ses := newValidateSession(t)
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	tblStuff := newTestBranchTableStuff(ctrl)
+	tblStuff.def.pkColIdx = 0
+	tblStuff.def.pkColIdxes = []int{0}
+	tblStuff.hashmapAllocator = newBranchHashmapAllocator(dataBranchHashmapLimitRate)
+	worker, err := ants.NewPool(1)
+	require.NoError(t, err)
+	defer worker.Release()
+	tblStuff.worker = worker
+	tblStuff.recoveryResources = &dataBranchVisibleStateRecoveryResources{
+		allocator: tblStuff.hashmapAllocator,
+	}
+
+	constructSubstEnd := types.BuildTS(70, 0)
+	exactEnd := types.BuildTS(40, 0)
+	tblStuff.tarWindowEnds = []types.TS{constructSubstEnd, exactEnd}
+	tblStuff.tarWindowFromEmpty = []bool{false, false}
+	// The metadata constructChangeHandle records: the first window's
+	// handle construction swapped to the end-stamping recovery reader.
+	tblStuff.tarWindowSubstConstruct = []bool{true, false}
+
+	birthTS := types.BuildTS(20, 0)
+	deleteTS := types.BuildTS(30, 0)
+	mkResponses := func(ridSeq, key int) []stubEngineChangesHandleResponse {
+		dataBat := buildIntDataBatch(
+			t, ses.proc.Mp(),
+			[]string{catalog.Row_ID, "id", "name", "hidden", "cts"},
+			[]types.Type{
+				types.T_Rowid.ToType(), types.T_int64.ToType(),
+				types.T_varchar.ToType(), types.T_varchar.ToType(),
+				types.T_TS.ToType(),
+			},
+			[][]any{{buildHashDiffRowID(t, ridSeq), int64(key), "n", "h", birthTS}},
+		)
+		tombBat := buildIntDataBatch(
+			t, ses.proc.Mp(),
+			[]string{catalog.Row_ID, "id", "cts"},
+			[]types.Type{
+				types.T_Rowid.ToType(), types.T_int64.ToType(), types.T_TS.ToType(),
+			},
+			[][]any{{buildHashDiffRowID(t, ridSeq), int64(key), deleteTS}},
+		)
+		// Both windows drain under plain tail hints with no drain-time
+		// signal of their own — exactly what the recovery handle serves.
+		return []stubEngineChangesHandleResponse{{data: dataBat, tombstone: tombBat, hint: engine.ChangesHandle_Tail_done}}
+	}
+
+	handles := []engine.ChangesHandle{
+		&stubEngineChangesHandle{responses: mkResponses(25, 7)},
+		&stubEngineChangesHandle{responses: mkResponses(26, 8)},
+	}
+
+	_, _, evidence, err := buildHashmapForTable(
+		context.Background(), ses.proc.Mp(), &tblStuff, handles, "target", nil, true,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, evidence)
+
+	require.Equal(t, map[types.TS]struct{}{
+		constructSubstEnd: {},
+	}, evidence.tainted, "the drain observes no signal; the construct-time metadata alone certifies the window")
+
+	// Net-effect replay evidence is captured identically for both windows.
+	for _, key := range []int64{7, 8} {
+		require.NotEmpty(t, evidence.tombs[string(pkMoveTestKey(t, key))],
+			"window serving key %d keeps its replay evidence", key)
 	}
 }

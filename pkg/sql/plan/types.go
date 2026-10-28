@@ -53,6 +53,7 @@ type TableDef = plan.TableDef
 type ColDef = plan.ColDef
 type ObjectRef = plan.ObjectRef
 type ColRef = plan.ColRef
+type UpdateCtx = plan.UpdateCtx
 type Stats = plan.Stats
 type Const = plan.Literal
 type MaxValue = plan.MaxValue

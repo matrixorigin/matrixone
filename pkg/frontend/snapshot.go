@@ -178,6 +178,19 @@ var (
 		// permanently block DROP MONGODB CONNECTION. Snapshot and PITR share this
 		// system-table policy.
 		sqlmongodb.TableMappings: systemCatalogRestoreSkip,
+
+		// Pk-move provenance keys on the source incarnation's table IDs and
+		// rowids, which a restore invalidates; like the other runtime-owned
+		// provenance catalogs the table is left untouched instead of copying
+		// historical rows whose identifiers no longer match live data.
+		catalog.MO_DATA_BRANCH_UPDATE_LINK: systemCatalogRestoreSkip,
+		// The retention ledger rides the identical policy as its sibling
+		// link catalog: restores never import historical ledger rows and
+		// never clear current rows, so the two catalogs always survive a
+		// restore as one pair. Post-restore rows stay consumable through
+		// as-of-ts table-id resolution against surviving owners and are
+		// reclaimed by the ordinary owner-removal reaps.
+		catalog.MO_DATA_BRANCH_LINK_RETENTION: systemCatalogRestoreSkip,
 	}
 )
 
@@ -867,12 +880,34 @@ func doDropSnapshot(ctx context.Context, ses *Session, stmt *tree.DropSnapShot) 
 				return err
 			}
 		}
+		// D155-B: classify the owner rows this statement deletes BEFORE
+		// the delete, inside the same pessimistic transaction, so the
+		// classification cannot race the removal.
+		var removedScopes []dataBranchRemovedOwnerScope
+		if removedScopes, err = readDroppedSnapshotOwnerScopes(ctx, bh, string(stmt.Name)); err != nil {
+			return err
+		}
 		sql = getSqlForDropSnapshot(string(stmt.Name))
 		err = bh.Exec(ctx, sql)
 		if err != nil {
 			return err
 		}
 		if err = compactHistoricalAlterLineageWithBH(ctx, bh, time.Now().UTC()); err != nil {
+			return err
+		}
+		// D155-C: the final-owner gated reap rides this transaction; any
+		// error fails the DROP atomically and an identical retry redrives
+		// the whole removal (there is no commit-with-WARN class: once the
+		// owner is gone, DROP SNAPSHOT IF EXISTS early-returns before any
+		// maintenance could resume).
+		callerID, accountErr := defines.GetAccountId(ctx)
+		if accountErr != nil {
+			return accountErr
+		}
+		if err = reapDataBranchLinksAfterOwnerRemoval(
+			ctx, bh, ses.GetService(), pkMoveGenesisRetireSinkOf(ses),
+			removedScopes, callerID,
+		); err != nil {
 			return err
 		}
 	}

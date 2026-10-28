@@ -808,6 +808,8 @@ information_schema  ¦  views  ¦  v  ¦  accountadmin  𝄀
 mo_catalog  ¦  mo_cache  ¦  v  ¦  accountadmin  𝄀
 mo_catalog  ¦  mo_columns  ¦  r  ¦  -  𝄀
 mo_catalog  ¦  mo_configurations  ¦  v  ¦  accountadmin  𝄀
+mo_catalog  ¦  mo_data_branch_link_retention  ¦  r  ¦  accountadmin  𝄀
+mo_catalog  ¦  mo_data_branch_update_link  ¦  r  ¦  accountadmin  𝄀
 mo_catalog  ¦  mo_database  ¦  r  ¦  -  𝄀
 mo_catalog  ¦  mo_database_defaults  ¦  r  ¦  accountadmin  𝄀
 mo_catalog  ¦  mo_foreign_keys  ¦  r  ¦  accountadmin  𝄀

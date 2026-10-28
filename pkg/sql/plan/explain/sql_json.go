@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 )
 
 type sqlJSONPlan struct {
@@ -449,7 +450,8 @@ func (b *sqlJSONPlanBuilder) addNodeDetails(item *sqlJSONNode, node *plan.Node) 
 		}
 	case plan.Node_MULTI_UPDATE:
 		for _, update := range node.UpdateCtxList {
-			if update == nil {
+			if update == nil || plan2.IsDataBranchUpdateLinkPlanCtx(update) {
+				// internal pk-move provenance write: keep EXPLAIN output stable
 				continue
 			}
 			if name := sqlJSONTargetName(update.ObjRef, update.TableDef); name != "" {

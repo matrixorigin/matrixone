@@ -14,6 +14,8 @@ mo_cdc_task    r
 mo_cdc_watermark    r
 mo_columns    r
 mo_configurations    v
+mo_data_branch_link_retention    r
+mo_data_branch_update_link    r
 mo_data_key    r
 mo_database    r
 mo_database_defaults    r

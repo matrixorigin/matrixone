@@ -9573,6 +9573,25 @@ func (c *Compile) compileMultiUpdate(node *plan.Node, ss []*Scope) ([]*Scope, er
 	// Determine whether to Write S3
 	toWriteS3 := node.Stats.GetOutcnt()*float64(SingleLineSizeEstimate) >
 		float64(DistributedThreshold) || c.anal.qry.LoadWriteS3
+	if !toWriteS3 {
+		// Test-only route override: the FJ_CNFlushSmallObjs fault point
+		// (add_fault_point with sarg 'db.tbl', also consulted by the S3
+		// delegate for its flush threshold) drives small updates through
+		// the UpdateWriteS3 producer path so bounded fixtures can exercise
+		// it. The MultiUpdate node itself carries no TableDef; the update
+		// contexts do. Never armed in production.
+		for _, updateCtx := range node.UpdateCtxList {
+			if updateCtx.TableDef == nil {
+				continue
+			}
+			injected, _ := objectio.LogCNFlushSmallObjsInjected(
+				updateCtx.TableDef.DbName, updateCtx.TableDef.Name)
+			if injected {
+				toWriteS3 = true
+				break
+			}
+		}
+	}
 
 	currentFirstFlag := c.anal.isFirst
 	if toWriteS3 {
@@ -11509,6 +11528,17 @@ func (c *Compile) fatalLog(retry int, err error) {
 		(moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) ||
 			moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged)) {
 		return
+	}
+
+	// D206(B.2): the mark consult comes before the fatal arm - a fabric-
+	// marked transaction's expected internal conflict returns to the caller
+	// with the byte-identical checker-disabled disposition.
+	if op := c.proc.GetTxnOperator(); op != nil {
+		if m, mok := op.(interface {
+			ExpectedConflictMarked() bool
+		}); mok && m.ExpectedConflictMarked() {
+			return
+		}
 	}
 
 	v, ok := moruntime.ServiceRuntime(c.proc.GetService()).

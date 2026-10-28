@@ -971,57 +971,59 @@ var (
 	}
 	// predefined tables of the database mo_catalog in every account
 	predefinedTables = map[string]int8{
-		"mo_database":                   0,
-		"mo_tables":                     0,
-		"mo_columns":                    0,
-		"mo_account":                    0,
-		"mo_user":                       0,
-		"mo_role":                       0,
-		"mo_user_grant":                 0,
-		"mo_role_grant":                 0,
-		"mo_role_privs":                 0,
-		"mo_user_defined_function":      0,
-		"mo_stored_procedure":           0,
-		"mo_mysql_compatibility_mode":   0,
-		catalog.MODatabaseDefaults:      0,
-		catalog.MOAutoIncrTable:         0,
-		"mo_indexes":                    0,
-		"mo_table_partitions":           0,
-		"mo_pubs":                       0,
-		"mo_stages":                     0,
-		"mo_sessions":                   0,
-		"mo_configurations":             0,
-		"mo_locks":                      0,
-		"mo_variables":                  0,
-		"mo_transactions":               0,
-		"mo_cache":                      0,
-		"mo_foreign_keys":               0,
-		"mo_snapshots":                  0,
-		"mo_subs":                       0,
-		"mo_shards":                     0,
-		"mo_shards_metadata":            0,
-		"mo_cdc_task":                   0,
-		"mo_cdc_watermark":              0,
-		"mo_cdc_snapshot":               0,
-		catalog.MO_TABLE_STATS:          0,
-		catalog.MO_ACCOUNT_LOCK:         0,
-		catalog.MO_MERGE_SETTINGS:       0,
-		catalog.MO_ISCP_LOG:             0,
-		catalog.MO_INDEX_UPDATE:         0,
-		catalog.MO_BRANCH_METADATA:      0,
-		catalog.MO_FEATURE_LIMIT:        0,
-		catalog.MO_FEATURE_REGISTRY:     0,
-		catalog.MO_ROLE_RULE:            0,
-		icebergsql.TableCatalogs:        0,
-		icebergsql.TablePrincipalMap:    0,
-		icebergsql.TableResidencyPolicy: 0,
-		icebergsql.TableTables:          0,
-		icebergsql.TableRefs:            0,
-		icebergsql.TablePublishJobs:     0,
-		icebergsql.TableOrphanFiles:     0,
-		icebergsql.TableMaintenanceJobs: 0,
-		mongodb.TableConnections:        0,
-		mongodb.TableMappings:           0,
+		"mo_database":                         0,
+		"mo_tables":                           0,
+		"mo_columns":                          0,
+		"mo_account":                          0,
+		"mo_user":                             0,
+		"mo_role":                             0,
+		"mo_user_grant":                       0,
+		"mo_role_grant":                       0,
+		"mo_role_privs":                       0,
+		"mo_user_defined_function":            0,
+		"mo_stored_procedure":                 0,
+		"mo_mysql_compatibility_mode":         0,
+		catalog.MODatabaseDefaults:            0,
+		catalog.MOAutoIncrTable:               0,
+		"mo_indexes":                          0,
+		"mo_table_partitions":                 0,
+		"mo_pubs":                             0,
+		"mo_stages":                           0,
+		"mo_sessions":                         0,
+		"mo_configurations":                   0,
+		"mo_locks":                            0,
+		"mo_variables":                        0,
+		"mo_transactions":                     0,
+		"mo_cache":                            0,
+		"mo_foreign_keys":                     0,
+		"mo_snapshots":                        0,
+		"mo_subs":                             0,
+		"mo_shards":                           0,
+		"mo_shards_metadata":                  0,
+		"mo_cdc_task":                         0,
+		"mo_cdc_watermark":                    0,
+		"mo_cdc_snapshot":                     0,
+		catalog.MO_TABLE_STATS:                0,
+		catalog.MO_ACCOUNT_LOCK:               0,
+		catalog.MO_MERGE_SETTINGS:             0,
+		catalog.MO_ISCP_LOG:                   0,
+		catalog.MO_INDEX_UPDATE:               0,
+		catalog.MO_BRANCH_METADATA:            0,
+		"mo_data_branch_update_link":          0,
+		catalog.MO_DATA_BRANCH_LINK_RETENTION: 0,
+		catalog.MO_FEATURE_LIMIT:              0,
+		catalog.MO_FEATURE_REGISTRY:           0,
+		catalog.MO_ROLE_RULE:                  0,
+		icebergsql.TableCatalogs:              0,
+		icebergsql.TablePrincipalMap:          0,
+		icebergsql.TableResidencyPolicy:       0,
+		icebergsql.TableTables:                0,
+		icebergsql.TableRefs:                  0,
+		icebergsql.TablePublishJobs:           0,
+		icebergsql.TableOrphanFiles:           0,
+		icebergsql.TableMaintenanceJobs:       0,
+		mongodb.TableConnections:              0,
+		mongodb.TableMappings:                 0,
 	}
 	createDbInformationSchemaSql = "create database information_schema;"
 	createAutoTableSql           = MoCatalogMoAutoIncrTableDDL
@@ -1069,6 +1071,8 @@ var (
 		MoCatalogMoISCPLogDDL,
 		MoCatalogMoIndexUpdateDDL,
 		MoCatalogBranchMetadataDDL,
+		MoCatalogDataBranchUpdateLinkDDL,
+		MoCatalogDataBranchLinkRetentionDDL,
 		MoCatalogMoCcprLogDDL,
 		MoCatalogMoCcprTablesDDL,
 		MoCatalogMoCcprDbsDDL,
@@ -1123,11 +1127,18 @@ var (
 	}
 	dropMoMysqlCompatibilityModeSql = `drop table if exists mo_catalog.mo_mysql_compatibility_mode;`
 	dropAutoIcrColSql               = fmt.Sprintf("drop table if exists mo_catalog.`%s`;", catalog.MOAutoIncrTable)
-	dropMoIndexes                   = fmt.Sprintf("drop table if exists `%s`.`%s`;", catalog.MO_CATALOG, catalog.MO_INDEXES)
-	dropMoTablePartitions           = fmt.Sprintf("drop table if exists `%s`.`%s`;", catalog.MO_CATALOG, catalog.MO_TABLE_PARTITIONS)
-	dropMoForeignKeys               = `drop table if exists mo_catalog.mo_foreign_keys;`
-	dropPartitionMetadata           = fmt.Sprintf("drop table if exists mo_catalog.`%s`;", catalog.MOPartitionMetadata)
-	dropPartitionTables             = fmt.Sprintf("drop table if exists mo_catalog.`%s`;", catalog.MOPartitionTables)
+	// The per-account pk-move link table and its retention ledger are created
+	// for every general tenant by createSqls (neither is sys-only per
+	// isSysOnlyCatalogRelationSQL), while existing tenants receive them from
+	// the v4.0.8 tenant upgrade. DROP ACCOUNT must retire both physical
+	// tables, or their mo_catalog.mo_tables rows outlive the account.
+	dropDataBranchUpdateLink    = fmt.Sprintf("drop table if exists mo_catalog.`%s`;", catalog.MO_DATA_BRANCH_UPDATE_LINK)
+	dropDataBranchLinkRetention = fmt.Sprintf("drop table if exists mo_catalog.`%s`;", catalog.MO_DATA_BRANCH_LINK_RETENTION)
+	dropMoIndexes               = fmt.Sprintf("drop table if exists `%s`.`%s`;", catalog.MO_CATALOG, catalog.MO_INDEXES)
+	dropMoTablePartitions       = fmt.Sprintf("drop table if exists `%s`.`%s`;", catalog.MO_CATALOG, catalog.MO_TABLE_PARTITIONS)
+	dropMoForeignKeys           = `drop table if exists mo_catalog.mo_foreign_keys;`
+	dropPartitionMetadata       = fmt.Sprintf("drop table if exists mo_catalog.`%s`;", catalog.MOPartitionMetadata)
+	dropPartitionTables         = fmt.Sprintf("drop table if exists mo_catalog.`%s`;", catalog.MOPartitionTables)
 
 	initMoMysqlCompatibilityModeFormat = `insert into mo_catalog.mo_mysql_compatibility_mode(
 		account_id,
@@ -4365,6 +4376,18 @@ func doDropAccount(ctx context.Context, bh BackgroundExec, ses *Session, da *dro
 			}
 		}
 
+		// Retire the per-account data-branch catalogs after the tenant's
+		// databases are gone: the drop funnels still consult the link and
+		// retention tables while each database is being dropped, and both
+		// tables must vanish with the account itself.
+		for _, sql = range []string{dropDataBranchUpdateLink, dropDataBranchLinkRetention} {
+			ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, sql)
+			rtnErr = bh.Exec(deleteCtx, sql)
+			if rtnErr != nil {
+				return rtnErr
+			}
+		}
+
 		for _, sql = range dropIcebergSqls {
 			ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, sql)
 			rtnErr = bh.Exec(deleteCtx, sql)
@@ -7461,6 +7484,17 @@ func extractPrivilegeTipsFromPlan(p *plan2.Plan) (privilegeTipsArray, error) {
 			} else if node.NodeType == plan.Node_MULTI_UPDATE {
 				for _, updateCtx := range node.UpdateCtxList {
 					if updateCtx == nil || updateCtx.ObjRef == nil || updateCtx.TableDef == nil {
+						continue
+					}
+					if plan2.IsDataBranchUpdateLinkPlanCtx(updateCtx) {
+						// The recorded pk-move link is an internal side
+						// effect of a pk-moving UPDATE (like index
+						// maintenance), so the SYNTHETIC ctx (no
+						// InsertCols/DeleteCols) must not demand
+						// privileges on the catalog table. A user-directed
+						// write to it (e.g. INSERT ... SELECT, whose ctx
+						// carries populated columns) is not exempt and
+						// falls through to the ordinary target check.
 						continue
 					}
 					viewPath := node.GetViewPath()

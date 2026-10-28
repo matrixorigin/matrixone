@@ -19,6 +19,7 @@ import (
 	"cmp"
 	"context"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"math"
 	"runtime"
@@ -37,6 +38,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio/mergeutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -69,6 +71,13 @@ func (txn *Transaction) accountWorkspaceEntryLocked(entry *Entry) {
 
 	entry.accountedSize = uint64(entry.bat.Size())
 	txn.workspaceSize += entry.accountedSize
+	if entry.typ == INSERT &&
+		isPkMoveLinkTableInsert(entry.databaseName, entry.tableName) {
+		// Link batches dodge every pre-commit dump, so the workspace
+		// totals alone never bound them: track their retained bytes
+		// exactly for the admission check in writeBatch.
+		txn.pkMoveLinkStagedBytes += int64(entry.accountedSize)
+	}
 	if entry.fileName != "" || catalog.IsSystemTable(entry.tableId) {
 		return
 	}
@@ -90,13 +99,24 @@ func (txn *Transaction) unaccountWorkspaceEntryLocked(entry *Entry) {
 		return
 	}
 	if entry.accountedSize != uint64(entry.bat.Size()) {
-		panic("BUG: workspace entry changed outside accounting helpers")
+		panic(fmt.Sprintf(
+			"BUG: workspace entry changed outside accounting helpers: %s.%s typ=%d rows=%d accounted=%d actual=%d",
+			entry.databaseName, entry.tableName, entry.typ, entry.bat.RowCount(),
+			entry.accountedSize, entry.bat.Size(),
+		))
 	}
 	if txn.workspaceSize < entry.accountedSize {
 		panic("BUG: workspace size accounting underflow")
 	}
 
 	txn.workspaceSize -= entry.accountedSize
+	if entry.typ == INSERT &&
+		isPkMoveLinkTableInsert(entry.databaseName, entry.tableName) {
+		txn.pkMoveLinkStagedBytes -= int64(entry.accountedSize)
+		if txn.pkMoveLinkStagedBytes < 0 {
+			panic("BUG: pk-move link staged-bytes accounting underflow")
+		}
+	}
 	if entry.fileName == "" && !catalog.IsSystemTable(entry.tableId) {
 		switch entry.typ {
 		case INSERT:
@@ -343,26 +363,76 @@ func (txn *Transaction) releaseWorkspaceEntryBatchLocked(idx int) {
 	entry.bat = nil
 }
 
-func (txn *Transaction) shrinkWorkspaceEntryBatchLocked(idx int, sels []int64) {
+func (txn *Transaction) shrinkWorkspaceEntryBatchLocked(idx int, sels []int64) error {
 	entry := &txn.writes[idx]
 	if entry.bat == nil {
-		return
+		return nil
 	}
 	txn.beginCatalogMutation()
 	defer txn.endCatalogMutation()
 	bat := entry.bat
 	if len(sels) == 0 {
 		delete(txn.batchSelectList, bat)
-		return
+		return nil
 	}
 
 	slices.Sort(sels)
 	sels = slices.Compact(sels)
+	// shrinkBatchWithRowids renumbers the SURVIVORS' row offsets inside the
+	// same block, so every pk-move provenance cell naming a survivor must
+	// travel to the new identity: link old/new row ids, the origin ledger,
+	// and the pending-heal bindings. Without the carry the next prune reads
+	// the stale identity as dead and retires a perfectly live link, and the
+	// apply side replays the move as DELETE+INSERT — declared ON DELETE
+	// actions would destroy dependents of a row that moved. Capture the
+	// survivor identities BEFORE the shrink rewrites them; the renumbering
+	// makes the pre-shrink values unreadable afterwards.
+	var oldRowIds []types.Rowid
+	var deadRowIds map[types.Rowid]struct{}
+	if entry.typ == INSERT && len(bat.Vecs) > 0 &&
+		bat.Vecs[0].GetType().Oid == types.T_Rowid {
+		if n := min(bat.RowCount(), bat.Vecs[0].Length()); n > 0 {
+			ids := vector.MustFixedColNoTypeCheck[types.Rowid](bat.Vecs[0])[:n]
+			gone := make(map[int32]struct{}, len(sels))
+			for _, s := range sels {
+				gone[int32(s)] = struct{}{}
+			}
+			oldRowIds = make([]types.Rowid, 0, n-len(gone))
+			deadRowIds = make(map[types.Rowid]struct{}, len(gone))
+			for i := int32(0); i < int32(n); i++ {
+				if _, dead := gone[i]; !dead {
+					oldRowIds = append(oldRowIds, ids[i])
+					continue
+				}
+				// The victims' rowids are re-minted for the survivors by
+				// the renumbering, so provenance still keyed by them must
+				// retire instead of grafting onto an unrelated row.
+				deadRowIds[ids[i]] = struct{}{}
+			}
+		}
+	}
 	txn.unaccountWorkspaceEntryLocked(entry)
 	txn.unaccountInsertKeyOffsetsLocked(entry)
 	shrinkBatchWithRowids(bat, sels)
 	txn.accountWorkspaceEntryLocked(entry)
+	if len(oldRowIds) > 0 {
+		vec := bat.Vecs[0]
+		n := min(bat.RowCount(), vec.Length())
+		newRowIds := vector.MustFixedColNoTypeCheck[types.Rowid](vec)[:n]
+		// A remap failure is returned, never swallowed: the surviving user
+		// rows are already renumbered, so silently continuing would let the
+		// prune retire now-dangling links and commit the update without its
+		// provenance. Failing the boundary discards the whole workspace
+		// region through statement rollback instead.
+		if err := txn.remapPkMoveLinkRowIDsLocked(oldRowIds, newRowIds, deadRowIds); err != nil {
+			return err
+		}
+		// Row identities the folded harvest caches built on moved: force a
+		// rebuild exactly like the compaction re-key does.
+		txn.pkMoveHarvestGen++
+	}
 	delete(txn.batchSelectList, bat)
+	return nil
 }
 
 func (txn *Transaction) mergeWorkspaceEntryBatchesLocked(
@@ -533,11 +603,16 @@ func (txn *Transaction) writeBatchWithAutoIncrEpochKnown(
 
 	pkCheckPos := -1
 	pkCheckReady := false
+	// r26 review F2 (D109): provenance harvest needs the pk vector even for
+	// composite keys, which duplicate checks deliberately reject. Resolve
+	// both positions in ONE table lookup so the hot write path pays for a
+	// single getTable.
+	pkMovePkPos := -1
 	if typ == INSERT || typ == DELETE {
-		// resolvePKCheckPosForWrite may reach Engine.Database, which can craft an
+		// resolvePKPositionsForWrite may reach Engine.Database, which can craft an
 		// internal SQL on the current txn and reenter txn.Lock via
-		// UpdateSnapshotWriteOffset. Resolve the PK position before taking txn.Lock.
-		pkCheckPos, pkCheckReady, err = txn.resolvePKCheckPosForWrite(
+		// UpdateSnapshotWriteOffset. Resolve the PK positions before taking txn.Lock.
+		pkCheckPos, pkCheckReady, pkMovePkPos, err = txn.resolvePKPositionsForWrite(
 			ctx,
 			typ,
 			accountId,
@@ -549,9 +624,34 @@ func (txn *Transaction) writeBatchWithAutoIncrEpochKnown(
 		if err != nil {
 			return nil, err
 		}
-		if typ == INSERT && pkCheckPos >= 0 {
+		if typ == INSERT {
 			// WriteBatch prepends rowid at attr 0 for inserts after this metadata lookup.
-			pkCheckPos++
+			if pkCheckPos >= 0 {
+				pkCheckPos++
+			}
+			if pkMovePkPos >= 0 {
+				pkMovePkPos++
+			}
+		}
+	}
+
+	// Retention-ledger genesis: the producer's marked identity batch pays the
+	// keyed committed-state probe here, before the workspace lock — per
+	// address and registration epoch exactly once (D159/D161/D165). The
+	// locked admission re-consults the epoch map as the authority.
+	var pkMoveGenesisVerdicts map[uint64]pkMoveGenesisProbeVerdict
+	pkMoveGenesisMarked := typ == INSERT && bat != nil && bat.RowCount() > 0 &&
+		isPkMoveRetentionTableInsert(databaseName, tableName) &&
+		PkMoveGenesisWriteMarked(ctx)
+	if pkMoveGenesisMarked {
+		// D206(B.1) SETTER SITE (1): the genesis registration insert is the
+		// first fabric-owned protocol artifact this transaction stages, so
+		// its expected internal conflicts are protocol-expected; idempotent,
+		// so repeat touches fold to a no-op.
+		client.MarkTxnExpectedConflictIfSupported(txn.op)
+		if pkMoveGenesisVerdicts, err = txn.probePkMoveGenesis(
+			ctx, accountId, bat); err != nil {
+			return nil, err
 		}
 	}
 
@@ -590,6 +690,58 @@ func (txn *Transaction) writeBatchWithAutoIncrEpochKnown(
 			}
 		}
 		bat.InsertVector(0, objectio.PhysicalAddr_Attr, genRowidVec)
+
+		if pkMoveGenesisMarked {
+			// Retention-ledger genesis: dedup through the epoch map, memo the
+			// probe-hit registrations EXTERNAL, and stage only fresh misses as
+			// OWNED. An all-deduped batch stages nothing — mirroring the
+			// zero-row link path below, the caller discards the returned
+			// (empty) row-id vector.
+			if err := txn.admitPkMoveGenesisBatchLocked(accountId, bat, pkMoveGenesisVerdicts); err != nil {
+				return nil, err
+			}
+			if bat.RowCount() == 0 {
+				bat.Clean(txn.proc.Mp())
+				genRowidVec = vector.NewVec(types.T_Rowid.ToType())
+				return genRowidVec, nil
+			}
+		}
+		if isPkMoveLinkTableInsert(databaseName, tableName) {
+			// Back-fill the link's new_row_id from this transaction's staged
+			// inserts: the replacement row's identity only exists here, and
+			// the diff consumer refuses to fold provenance without it. A
+			// fill failure fails the statement so incomplete provenance
+			// never commits; the statement rollback restores whatever the
+			// failed pass already changed.
+			if err := txn.fillPkMoveLinkNewRowIDsLocked(accountId, bat); err != nil {
+				return nil, err
+			}
+			if bat.RowCount() == 0 {
+				// Every row was a same-key continuity marker this fill
+				// consumed: staging the shrunken batch would retain its
+				// varlena payloads (Shrink does not release areas, see
+				// vector.go) and charge the coordinator budget for zero
+				// visible rows — an ordinary bulk payload UPDATE that
+				// moves no primary key would fail on provenance bytes
+				// that ceased to exist. Release the buffers and skip
+				// admission and retention: dump, prune and request
+				// generation all skip zero-row entries, and the marker's
+				// healing evidence already lives in the per-statement
+				// ledger entries the fill recorded. Callers of WriteBatch
+				// discard the returned workspace row id vector, so
+				// returning a fresh empty one keeps the contract.
+				bat.Clean(txn.proc.Mp())
+				genRowidVec = vector.NewVec(types.T_Rowid.ToType())
+				return genRowidVec, nil
+			}
+			// The batch enters the workspace next and link batches ride no
+			// pre-commit dump: fail the statement BEFORE it lands when the
+			// retained provenance would cross the coordinator budget, so a
+			// multi-wave ferry cannot accumulate without bound.
+			if err := txn.admitPkMoveLinkBatchLocked(bat); err != nil {
+				return nil, err
+			}
+		}
 
 	}
 
@@ -657,6 +809,7 @@ func (txn *Transaction) writeBatchWithAutoIncrEpochKnown(
 		note:               note,
 		pkCheckPos:         pkCheckPos,
 		pkCheckReady:       pkCheckReady,
+		pkMovePkPos:        pkMovePkPos,
 	}
 	txn.computeInsertKeyRangeLocked(&e)
 	txn.appendWorkspaceEntryLocked(e)
@@ -668,7 +821,7 @@ func (txn *Transaction) writeBatchWithAutoIncrEpochKnown(
 func (txn *Transaction) dumpBatch(ctx context.Context, offset int) error {
 	txn.Lock()
 	defer txn.Unlock()
-	return txn.dumpBatchLocked(ctx, offset)
+	return txn.dumpBatchLocked(ctx, offset, -1)
 }
 
 func checkPKDupGeneric[T comparable](
@@ -1107,7 +1260,13 @@ func (txn *Transaction) scanInMemInsertSize(from int) uint64 {
 	return size
 }
 
-func (txn *Transaction) dumpBatchLocked(ctx context.Context, offset int) error {
+// stmtStart pins the statement start used by the workspace force-dump
+// safety valve; a negative value derives today's value from
+// txn.offsets[txn.statementID-1]. The statement boundary (D120)
+// establishes the rollback point — and with it the statementID — before
+// dumping, so it passes the finished statement's pre-establishment start
+// explicitly to keep the valve's semantics unchanged.
+func (txn *Transaction) dumpBatchLocked(ctx context.Context, offset int, stmtStart int) error {
 	var size uint64
 	var pkCount int
 
@@ -1144,9 +1303,11 @@ func (txn *Transaction) dumpBatchLocked(ctx context.Context, offset int) error {
 			// (not 0) to avoid compacting prior statements' entries, which would
 			// break offsets[] used by RollbackLastStatement.
 			if txn.approximateInMemInsertSize >= txn.engine.config.extraWorkspaceThreshold {
-				stmtStart := 0
-				if txn.statementID > 0 {
-					stmtStart = txn.offsets[txn.statementID-1]
+				if stmtStart < 0 {
+					stmtStart = 0
+					if txn.statementID > 0 {
+						stmtStart = txn.offsets[txn.statementID-1]
+					}
 				}
 				logutil.Info(
 					"WORKSPACE-FORCE-DUMP",
@@ -1197,7 +1358,7 @@ func (txn *Transaction) dumpBatchLocked(ctx context.Context, offset int) error {
 		return err
 	}
 
-	if err := txn.dumpInsertBatchLocked(ctx, fs, offset, &pkCount); err != nil {
+	if err := txn.dumpInsertBatchLocked(ctx, fs, offset, &pkCount, dumpAll); err != nil {
 		return err
 	}
 	// release the extra quota
@@ -1238,6 +1399,12 @@ func (txn *Transaction) dumpBatchLocked(ctx context.Context, offset int) error {
 		// compaction dropped at least one entry.
 		clearVacatedWriteSlots(txn.writes, len(writes), len(txn.writes))
 		txn.writes = writes
+	} else if txn.maintWindow != nil {
+		// D129: the windowed boundary dump keeps its spilled slots live
+		// until the adoption husks them; move the pkCount subtraction
+		// there so the counter keeps matching the in-memory rows at
+		// every instant of the window.
+		txn.maintWindow.spilledRows += pkCount
 	} else {
 		txn.pkCount -= pkCount
 	}
@@ -1308,6 +1475,7 @@ func (txn *Transaction) dumpInsertBatchLocked(
 	fs fileservice.FileService,
 	offset int,
 	pkCount *int,
+	dumpAll bool,
 ) error {
 
 	// Check if force flush is enabled
@@ -1315,10 +1483,44 @@ func (txn *Transaction) dumpInsertBatchLocked(
 
 	_, _, skipTable := txn.dumpInsertTableSelectionLocked(offset, forceFlush)
 
+	// Rows any staged pk-move provenance names by workspace row id:
+	// dumping one of them mid-transaction would convert that pinned
+	// identity into a durable object row id the provenance cannot name,
+	// severing every in-transaction chain through the row. The pin is
+	// row-based, so batches without any pinned row still dump, and the
+	// commit dump flushes everything after the final prune.
+	var pinnedRowIDs map[types.Rowid]struct{}
+	if !dumpAll {
+		pinnedRowIDs = txn.pkMoveStagedLinkPinnedRowIDsLocked()
+		// Charge what the pin rule is about to retain, here at the only
+		// point where that retention is decided: the keep predicate below
+		// is batch-wide, so one pinned wide row holds its whole batch in
+		// memory, and repeated small updates of wide rows spilled nothing
+		// while the coordinator budget saw only the bookkeeping measure.
+		// The measure is derived from the live workspace at this gate and
+		// at every later budget check instead of being cached, so the
+		// charge tracks the batches the workspace actually still holds.
+		// Failing the check fails the dumping statement before any
+		// workspace mutation below; a zero budget disables it.
+		if len(pinnedRowIDs) > 0 && txn.pkMoveHasLiveStagedLinksLocked() {
+			// Participation, the same predicate as the fill and delete
+			// boundaries: the pin set names only link/heal-bound
+			// identities now (origin-keyed rows ride the dump shadow
+			// instead, r24 review F3), so a live staged link is the
+			// cheapest sufficient predicate. A transaction whose only
+			// provenance is origin bookkeeping — an ordinary bulk
+			// non-key UPDATE — keeps an empty pin set and nothing here
+			// is refused (r23 review F3).
+			if err := txn.checkPkMoveBookkeepBudgetForPinnedLocked(pinnedRowIDs); err != nil {
+				return err
+			}
+		}
+	}
+
 	// Resolve every table that will be flushed BEFORE mutating txn.writes:
 	// getTable must never run while this goroutine holds the lock. See
 	// resolveDumpTablesLocked for the window contract.
-	tables, ok, err := txn.resolveDumpTablesLocked(ctx, offset, skipTable, INSERT)
+	tables, ok, err := txn.resolveDumpTablesLocked(ctx, offset, skipTable, INSERT, !dumpAll)
 	if err != nil {
 		return err
 	}
@@ -1329,6 +1531,12 @@ func (txn *Transaction) dumpInsertBatchLocked(
 	lastWriteIndex := offset
 	writes := txn.writes
 	mp := make(map[workspaceTableKey][]*batch.Batch)
+	// Spilling origin-keyed rows re-mints their workspace identities as
+	// object row ids: shadow them so the durable-origin ledger can be
+	// translated after the object lands (r24 review F3). Skipped at the
+	// commit dump — no later statement can still name those identities.
+	var shadows map[workspaceTableKey][]pkMoveDumpShadowRow
+	captureShadow := !dumpAll && len(txn.pkMoveRowidOrigins) > 0
 	for i := offset; i < len(txn.writes); i++ {
 		if skipTable[txn.writes[i].tableId] {
 			writes[lastWriteIndex] = writes[i]
@@ -1344,6 +1552,56 @@ func (txn *Transaction) dumpInsertBatchLocked(
 			writes[lastWriteIndex] = writes[i]
 			lastWriteIndex++
 			continue
+		}
+		if !dumpAll && txn.writes[i].typ == INSERT &&
+			isPkMoveLinkTableInsert(txn.writes[i].databaseName, txn.writes[i].tableName) {
+			// Mid-transaction (statement-boundary) dumps must keep pk-move
+			// link rows in memory: the fixpoint prune has to re-evaluate
+			// every staged link whenever a later statement kills a
+			// recorded replacement, and a spilled link can no longer be
+			// shrunk. The commit dump (dumpAll) flushes them after the
+			// final prune.
+			writes[lastWriteIndex] = writes[i]
+			lastWriteIndex++
+			continue
+		}
+		if !dumpAll && txn.writes[i].typ == INSERT &&
+			isPkMoveRetentionTableInsert(txn.writes[i].databaseName, txn.writes[i].tableName) &&
+			txn.pkMoveGenesisAnyOwnedRowLocked(&txn.writes[i]) {
+			// Retention genesis rows (D164/D166): an address's staged
+			// identity row rides the SAME boundary keep lane as its links —
+			// the prune cancellation shrinks staged rows physically, and a
+			// spilled row could no longer die. The lane is a conjunction:
+			// name-match AND membership in this transaction's OWNED genesis
+			// set, so funnel KEEP/refresh upserts staged through ordinary
+			// internal SQL never join the lane — they spill and stay
+			// cancelable by the ordinary statement cut. TOMBSTONE-only
+			// semantics are unaffected: ordinary INSERT staging keeps
+			// spilling freely.
+			writes[lastWriteIndex] = writes[i]
+			lastWriteIndex++
+			continue
+		}
+		if !dumpAll && txn.writes[i].typ == INSERT && txn.writes[i].fileName == "" &&
+			len(pinnedRowIDs) > 0 {
+			if pkMoveBatchHasPinnedRowID(txn.writes[i].bat, pinnedRowIDs) {
+				// Keep the workspace identities the staged provenance
+				// names: the successor pin matches departure and arrival
+				// by exact row id, so a link- or heal-named row must
+				// still be a workspace row when a later statement of
+				// this transaction moves the same lineage onward.
+				// Origin-ledger rows deliberately fall through: the
+				// shadow above records them and the ledger translates
+				// onto object identities (r24 review F3). Batches of
+				// the same table without a pinned row keep spilling
+				// normally, keeping retention bounded by the
+				// provenance-relevant rows only. The commit dump flushes
+				// the batch after the final prune, once intra-transaction
+				// identity matching is settled.
+				writes[lastWriteIndex] = writes[i]
+				lastWriteIndex++
+				continue
+			}
 		}
 
 		keepElement := true
@@ -1365,17 +1623,41 @@ func (txn *Transaction) dumpInsertBatchLocked(
 			if _, ok := tables[tbKey.tableKey]; ok {
 				bat := txn.writes[i].bat
 				*pkCount += bat.RowCount()
-				txn.unaccountInsertKeyOffsetsLocked(&txn.writes[i])
-				txn.unaccountWorkspaceEntryLocked(&txn.writes[i])
+				if captureShadow {
+					var shadowErr error
+					if shadows, shadowErr = txn.recordPkMoveDumpShadowLocked(shadows, tbKey, &txn.writes[i]); shadowErr != nil {
+						return shadowErr
+					}
+				}
+				if txn.maintWindow == nil {
+					// The windowed dump keeps the spilled slot's batch live
+					// and accounted (append-only, D129): its workspace
+					// charge AND its hydrated key-offset charge stay.
+					txn.unaccountInsertKeyOffsetsLocked(&txn.writes[i])
+					txn.unaccountWorkspaceEntryLocked(&txn.writes[i])
+				}
 				// skip rowid
 				newBatch := batch.NewWithSize(len(bat.Vecs) - 1)
 				newBatch.SetAttributes(bat.Attrs[1:])
 				newBatch.Vecs = bat.Vecs[1:]
 				newBatch.SetRowCount(bat.Vecs[0].Length())
 				mp[tbKey] = append(mp[tbKey], newBatch)
-				defer bat.Clean(txn.proc.GetMPool())
+				if txn.maintWindow != nil {
+					// r31 review F1 (D129): the windowed boundary dump is
+					// APPEND-ONLY — the spilled slot keeps its live,
+					// accounted batch in place (the appended spill-file
+					// entry carries the boundary tail's copy), the batch
+					// memory is NOT cleaned here, and the slot index is
+					// journaled for the adoption's husk. A rollback of
+					// this boundary truncates the tail — spill files and
+					// entries — and leaves this slot byte-identical to
+					// the pre-maintenance state, whatever preceded it.
+					txn.maintWindow.dumpedIdxs = append(txn.maintWindow.dumpedIdxs, i)
+				} else {
+					defer bat.Clean(txn.proc.GetMPool())
 
-				keepElement = false
+					keepElement = false
+				}
 			}
 		}
 
@@ -1406,22 +1688,67 @@ func (txn *Transaction) dumpInsertBatchLocked(
 		tbl := tables[tbKey.tableKey]
 
 		tableDef := tbl.GetTableDef(txn.proc.Ctx)
+		// r35 review F2 (D140): bounded producer admission reaches the
+		// dump at the persistence choke point. The sinker runs this
+		// observer after each output object reserves its name and before
+		// its first byte reaches storage — including the threshold-driven
+		// flushes inside Write — so an ownership refusal aborts the dump
+		// BEFORE any byte exists instead of growing retained inventory
+		// past the hard bound across retries and closes. Every booked
+		// slot reconciles on exactly one terminal below: released on the
+		// healthy registration, released or carried into
+		// failedWaveOrphans by the failure paths.
+		booked := 0
 		s3Writer = colexec.NewCNS3DataWriterForService(
 			txn.proc.GetService(), txn.proc.GetMPool(), fs, tableDef, -1, false,
+			ioutil.WithUnpublishedNameObserver(func(octx context.Context, name string) error {
+				if err := reserveDurableOrphanOwnership(txn.engine.fs, 1); err != nil {
+					return err
+				}
+				booked++
+				return nil
+			}),
 		)
 
 		for _, bat = range mp[tbKey] {
 			if err = s3Writer.Write(txn.proc.Ctx, bat); err != nil {
+				txn.reclaimDumpWriterOutputLocked(s3Writer, booked)
 				return err
 			}
 		}
 
 		if stats, err = s3Writer.Sync(txn.proc.Ctx); err != nil {
+			txn.reclaimDumpWriterOutputLocked(s3Writer, booked)
 			return err
+		}
+
+		if len(shadows[tbKey]) != 0 {
+			// The writer sorted the wave by pk on flush, so join the
+			// shadow against the written objects by pk value and
+			// translate the durable-origin ledger onto the derived
+			// identities; parity loss here fails the dump loudly.
+			mapping, shadowErr := txn.resolvePkMoveDumpShadowLocked(
+				ctx, fs, stats, tableDef, shadows[tbKey])
+			if shadowErr != nil {
+				// r34 review F2 (D138): the Sync above already
+				// persisted stats; reclaim them before exiting.
+				txn.reclaimUnregisteredDumpLocked(fs, stats)
+				return shadowErr
+			}
+			if transErr := txn.translatePkMoveOriginDumpShadowLocked(mapping); transErr != nil {
+				// r38 review F2 (D144): a carry-journal admission
+				// refusal fails the dump before any provenance map
+				// mutates; the persisted stats are reclaimed exactly
+				// like a parity loss above.
+				txn.reclaimUnregisteredDumpLocked(fs, stats)
+				return transErr
+			}
 		}
 
 		fileName = stats[0].ObjectLocation().String()
 		if bat, err = s3Writer.FillBlockInfoBat(); err != nil {
+			// r34 review F2 (D138): same unregistered interval.
+			txn.reclaimUnregisteredDumpLocked(fs, stats)
 			return err
 		}
 
@@ -1445,8 +1772,17 @@ func (txn *Transaction) dumpInsertBatchLocked(
 			tbKey.autoIncrEpoch,
 			tbKey.autoIncrEpochKnown,
 		); err != nil {
+			// r34 review F2 (D138): the registration failed after the
+			// output persisted; it is still unowned. Its D140 admission
+			// bookings reconcile inside the reclaim.
+			txn.reclaimUnregisteredDumpLocked(fs, stats)
 			return err
 		}
+
+		// r35 review F2 (D140): the registration adopted this wave's
+		// output into the workspace lifecycle — it is orphanable no
+		// longer, so the admission bookings return unused.
+		releaseDurableOrphanReservation(txn.engine.fs, booked)
 
 		s3Writer.Close()
 
@@ -1464,7 +1800,7 @@ func (txn *Transaction) dumpDeleteBatchLocked(
 
 	// See the comment in dumpInsertBatchLocked: tables must be resolved
 	// while txn.writes is still consistent, with the lock released.
-	tables, ok, err := txn.resolveDumpTablesLocked(ctx, offset, nil, DELETE)
+	tables, ok, err := txn.resolveDumpTablesLocked(ctx, offset, nil, DELETE, false)
 	if err != nil {
 		return err
 	}
@@ -1621,6 +1957,7 @@ func (txn *Transaction) resolveDumpTablesLocked(
 	offset int,
 	skipTable map[uint64]bool,
 	typ int,
+	midTxn bool,
 ) (tables map[tableKey]engine.Relation, ok bool, err error) {
 	var keys []tableKey
 	seen := make(map[tableKey]bool)
@@ -1637,6 +1974,15 @@ func (txn *Transaction) resolveDumpTablesLocked(
 		}
 		if e.typ != typ || e.fileName != "" {
 			continue
+		}
+		if typ == INSERT && midTxn {
+			// Statement-boundary dumps keep these entries in memory (the
+			// callers' keep guards), so resolving them through the
+			// catalog is wasted work — and for the link table itself an
+			// unnecessary catalog round-trip on every moving statement.
+			if isPkMoveLinkTableInsert(e.databaseName, e.tableName) {
+				continue
+			}
 		}
 		k := tableKey{
 			accountId:  e.accountId,
@@ -1744,6 +2090,10 @@ func physicalCatalogTableName(databaseId, tableId uint64, tableName string) stri
 	return tableName
 }
 
+// resolvePKCheckPosForWrite resolves the pk position duplicate checks use.
+// Semantics unchanged: composite primary keys are deliberately NOT resolved
+// here (duplicate checks reject composite batches). The provenance position
+// lives in resolvePKPositionsForWrite (r26 review F2).
 func (txn *Transaction) resolvePKCheckPosForWrite(
 	ctx context.Context,
 	typ int,
@@ -1752,61 +2102,101 @@ func (txn *Transaction) resolvePKCheckPosForWrite(
 	tableId uint64,
 	bat *batch.Batch,
 ) (int, bool, error) {
+	pos, ready, _, err := txn.resolvePKPositionsForWrite(
+		ctx, typ, accountId, databaseName, tableName, tableId, bat)
+	return pos, ready, err
+}
+
+// resolvePKPositionsForWrite resolves, in one table lookup, both pk vector
+// positions of a write batch: the duplicate-check position (composite keys
+// stay -1, exactly as resolved before r26) and the pk-move provenance
+// position pkMovePkPos, which ALSO resolves the materialized __mo_cpkey
+// column of composite-keyed tables (r26 review F2 / D109). Non-keyed and
+// fake-pk tables resolve -1 for both.
+func (txn *Transaction) resolvePKPositionsForWrite(
+	ctx context.Context,
+	typ int,
+	accountId uint32,
+	databaseName, tableName string,
+	tableId uint64,
+	bat *batch.Batch,
+) (int, bool, int, error) {
 	if bat == nil || bat.RowCount() == 0 {
-		return -1, true, nil
+		return -1, true, -1, nil
 	}
 
 	if typ != INSERT && typ != DELETE {
-		return -1, true, nil
+		return -1, true, -1, nil
 	}
 
 	if tableId == catalog.MO_TABLES_ID ||
 		tableId == catalog.MO_COLUMNS_ID ||
 		tableId == catalog.MO_DATABASE_ID {
-		return -1, true, nil
+		return -1, true, -1, nil
 	}
 	if txn.engine == nil {
-		return -1, false, nil
+		return -1, false, -1, nil
 	}
 
 	tbl, err := txn.getTable(ctx, accountId, databaseName, tableName)
 	if err != nil {
-		return -1, false, err
+		return -1, false, -1, err
 	}
 	tableDef := tbl.GetTableDef(defines.AttachAccountId(ctx, accountId))
 	if tableDef == nil || tableDef.Pkey == nil {
-		return -1, true, nil
+		return -1, true, -1, nil
 	}
 
 	pkName := tableDef.Pkey.PkeyColName
 	if pkName == "" ||
-		pkName == catalog.FakePrimaryKeyColName ||
-		pkName == catalog.CPrimaryKeyColName {
-		return -1, true, nil
+		pkName == catalog.FakePrimaryKeyColName {
+		return -1, true, -1, nil
 	}
+
+	// Provenance also harvests composite keys: their batches materialize
+	// the composed pk column, which is exactly what the fold/shadow
+	// readers encode (r26 review F2).
+	isCPKey := pkName == catalog.CPrimaryKeyColName
 
 	if typ == DELETE {
 		if len(bat.Vecs) < 2 {
 			logutil.Warnf("delete has no pk vector, database:%s, table:%s", databaseName, tableName)
-			return -1, false, nil
+			return -1, false, -1, nil
 		}
-		return 1, true, nil
+		// the delete batch layout is [rowid, pk]
+		if isCPKey {
+			return -1, true, 1, nil
+		}
+		return 1, true, 1, nil
 	}
 
+	pkPos := -1
 	for i, attr := range bat.Attrs {
 		if attr == pkName {
-			return i, true, nil
+			pkPos = i
+			break
 		}
 	}
-	for i, attr := range bat.Attrs {
-		if strings.EqualFold(attr, pkName) {
-			return i, true, nil
+	if pkPos < 0 {
+		for i, attr := range bat.Attrs {
+			if strings.EqualFold(attr, pkName) {
+				pkPos = i
+				break
+			}
 		}
+	}
+	if pkPos >= 0 {
+		if isCPKey {
+			// duplicate checks keep rejecting composite batches; only the
+			// provenance readers consume this position.
+			return -1, true, pkPos, nil
+		}
+		return pkPos, true, pkPos, nil
 	}
 
 	logutil.Warnf("pk column %s not found in write attrs, database:%s, table:%s, attrs:%v",
 		pkName, databaseName, tableName, bat.Attrs)
-	return -1, false, nil
+	return -1, false, -1, nil
 }
 
 // vec contains block infos.
@@ -1927,6 +2317,7 @@ func (txn *Transaction) writeFileLockedWithAutoIncrEpochKnown(
 		tnStore:            tnStore,
 		pkCheckPos:         -1,
 		pkCheckReady:       true,
+		pkMovePkPos:        -1,
 		autoIncrEpoch:      autoIncrEpoch,
 		autoIncrEpochKnown: autoIncrEpochKnown,
 	}
@@ -2119,7 +2510,7 @@ func (txn *Transaction) writeFileWithAutoIncrEpochKnown(
 func (txn *Transaction) deleteBatch(
 	bat *batch.Batch,
 	databaseId, tableId uint64,
-) *batch.Batch {
+) (*batch.Batch, error) {
 	txn.beginCatalogMutation()
 	defer txn.endCatalogMutation()
 	var (
@@ -2132,6 +2523,17 @@ func (txn *Transaction) deleteBatch(
 	)
 	server := colexec.MustGetServer(txn.engine.service)
 
+	// r29 review F2 (D124): every diverted deletion is tagged with the
+	// statement that executed it, so a failed statement boundary keeps the
+	// finished statements' pending deletions for its retry while a
+	// statement rollback drops only the rolled statement's own. deleteBatch
+	// runs without the workspace lock (parallel producers on one
+	// transaction, see below), and statement boundaries never interleave
+	// with a statement's own producers, so read the id under a short lock.
+	txn.Lock()
+	deleteStmtID := txn.statementID
+	txn.Unlock()
+
 	for i, rowid := range rowids {
 
 		blkid := rowid.CloneBlockID()
@@ -2140,7 +2542,7 @@ func (txn *Transaction) deleteBatch(
 		rowOffset := rowid.GetRowOffset()
 
 		if server.GetCnSegmentType(rowid.BorrowSegmentID(), tableId, txn.op.Txn().ID) == colexec.TxnWorkspaceUnCommitType {
-			txn.deletedBlocks.addDeletedBlocks(&blkid, []int64{int64(rowOffset)})
+			txn.deletedBlocks.addDeletedBlocks(&blkid, []int64{int64(rowOffset)}, deleteStmtID)
 			cnRowIdOffsets = append(cnRowIdOffsets, int64(i))
 			continue
 		}
@@ -2154,10 +2556,19 @@ func (txn *Transaction) deleteBatch(
 		}
 		// update workspace
 	}
-	// cn rowId antiShrink
+	// cn rowId antiShrink: the diverted rows' pk deaths are recorded by
+	// the divert/delete boundary behind a single lock hold. The pk-move
+	// provenance maps are shared with the update pipeline's link staging,
+	// which holds txn.Lock; deleteBatch itself runs without it (parallel
+	// UpdateWriteS3 producers on one transaction can each reach
+	// source.Delete), so the divert hook gets its own critical section
+	// instead of racing the staging writers.
+	if err := txn.notePkMoveDivertedDeletes(tableId, bat, cnRowIdOffsets); err != nil {
+		return bat, err
+	}
 	bat.Shrink(cnRowIdOffsets, true)
 	if bat.RowCount() == 0 {
-		return bat
+		return bat, nil
 	}
 	sels := vector.GetSels()
 	txn.deleteTableWrites(databaseId, tableId, sels, deleteBlkId, min1, max1, mp)
@@ -2170,15 +2581,28 @@ func (txn *Transaction) deleteBatch(
 			sels = append(sels, int64(k))
 		}
 	}
+	// The rows about to be Shrunk away were raw-workspace deaths: they
+	// excluded rows from uncommitted INSERT batches and leave neither a
+	// tombstone nor a diverted-death record. Note them through the same
+	// provenance boundary as the diverted rows above so a by-key lineage
+	// binding cannot outlive the generation it names.
+	if err := txn.notePkMoveSwallowedDeletes(tableId, bat, sels); err != nil {
+		vector.PutSels(sels)
+		return bat, err
+	}
 	bat.Shrink(sels, true)
 	vector.PutSels(sels)
-	return bat
+	return bat, nil
 }
 
 func (txn *Transaction) addBatchSelectionsLocked(bat *batch.Batch, sels []int64) {
 	selections := append(txn.batchSelectList[bat], sels...)
 	slices.Sort(selections)
 	txn.batchSelectList[bat] = slices.Compact(selections)
+	// Newly excluded rows invalidate every incremental provenance fold
+	// that already harvested them (the pk-move harvest cache versions on
+	// this counter).
+	txn.batchSelectListGen++
 }
 
 func (txn *Transaction) selectAllBatchRowsLocked(bat *batch.Batch) {
@@ -2187,6 +2611,8 @@ func (txn *Transaction) selectAllBatchRowsLocked(bat *batch.Batch) {
 		selections = append(selections, int64(i))
 	}
 	txn.batchSelectList[bat] = selections
+	// See addBatchSelectionsLocked.
+	txn.batchSelectListGen++
 }
 
 // Delete rows belongs to uncommitted raw data batch in txn's workspace.
@@ -2326,7 +2752,9 @@ func (txn *Transaction) mergeTxnWorkspaceLocked(ctx context.Context) error {
 	if len(txn.batchSelectList) > 0 {
 		for i := range txn.writes {
 			if sels, ok := txn.batchSelectList[txn.writes[i].bat]; ok {
-				txn.shrinkWorkspaceEntryBatchLocked(i, sels)
+				if err := txn.shrinkWorkspaceEntryBatchLocked(i, sels); err != nil {
+					return err
+				}
 			}
 		}
 	}
@@ -2422,11 +2850,25 @@ func (txn *Transaction) mergeTxnWorkspaceLocked(ctx context.Context) error {
 				}
 
 				rowIds := vector.MustFixedColNoTypeCheck[types.Rowid](rowIdVector)
+				oldRowIds := append([]types.Rowid(nil),
+					vector.MustFixedColNoTypeCheck[types.Rowid](a.bat.Vecs[0])...)
 				for x := range a.bat.RowCount() {
 					if err = vector.SetFixedAtWithTypeCheck[objectio.Rowid](a.bat.Vecs[0], x, rowIds[x]); err != nil {
 						rowIdVector.Free(txn.proc.GetMPool())
 						return err
 					}
+				}
+				// Recorded pk-move replacement identities name the
+				// pre-merge workspace row ids of these rows: carry the
+				// links through the re-key so liveness keeps matching the
+				// rows it was recorded against.
+				// A remap failure must abort the merge: these user rows are
+				// already re-keyed, and continuing would let the prune retire
+				// the now-dangling links and commit the update without
+				// provenance.
+				if err = txn.remapPkMoveLinkRowIDsLocked(oldRowIds[:a.bat.RowCount()], rowIds[:a.bat.RowCount()], nil); err != nil {
+					rowIdVector.Free(txn.proc.GetMPool())
+					return err
 				}
 
 				rowIdVector.Free(txn.proc.GetMPool())
@@ -2438,6 +2880,9 @@ func (txn *Transaction) mergeTxnWorkspaceLocked(ctx context.Context) error {
 
 	// this threshold may have a bad effect on the performance
 	if inserts.Count()+deletes.Count() >= 30 {
+		// Compaction re-keys merged INSERT batches and drops their source
+		// entries: any folded pk->rowid harvest is stale from here on.
+		txn.pkMoveHarvestGen++
 		arr := vector.GetSels()
 		defer func() {
 			vector.PutSels(arr)
@@ -2453,22 +2898,31 @@ func (txn *Transaction) mergeTxnWorkspaceLocked(ctx context.Context) error {
 			return err
 		}
 
-		n := 0
-		for i := range txn.writes {
-			if txn.writes[i].bat == nil {
-				continue
+		if txn.maintWindow != nil {
+			// r31 review F1 (D129): the merge fold's husks keep their
+			// slots for the whole window — compacting here would move
+			// acknowledged entries while the boundary's rollback cut
+			// still separates regions by place. The adoption (or, after
+			// the tail cut, the rollback) compacts instead.
+			txn.maintWindow.mergeHusked = true
+		} else {
+			n := 0
+			for i := range txn.writes {
+				if txn.writes[i].bat == nil {
+					continue
+				}
+				txn.writes[n] = txn.writes[i]
+				n++
 			}
-			txn.writes[n] = txn.writes[i]
-			n++
-		}
 
-		clearVacatedWriteSlots(txn.writes, n, len(txn.writes))
-		txn.writes = txn.writes[:n]
+			clearVacatedWriteSlots(txn.writes, n, len(txn.writes))
+			txn.writes = txn.writes[:n]
+		}
 
 		var sortBuf []int64
 		var shuffleBuf []byte
 		for i := range txn.writes {
-			if txn.writes[i].typ == DELETE && txn.writes[i].bat.RowCount() > 1 {
+			if txn.writes[i].bat != nil && txn.writes[i].typ == DELETE && txn.writes[i].bat.RowCount() > 1 {
 				if err := mergeutil.SortColumnsByIndexWithBuf(
 					txn.writes[i].bat.Vecs, 0, txn.proc.Mp(), &sortBuf, &shuffleBuf); err != nil {
 					return err
@@ -2532,6 +2986,89 @@ func (txn *Transaction) resolveCompactTablesLocked(ctx context.Context) (map[tab
 	}
 }
 
+// r27 review F2/F5 (D115): a compaction slot is the boundary's
+// ownership record for ONE dirty object's rewrite. Workers fill slots
+// through the pure rewrite pipeline (persist replacement, provenance
+// shadow, read-back resolve) but touch NOTHING transaction-visible:
+// they never register into txn.writes, never release an original
+// batch, and never reclaim files. The boundary publishes replacements
+// and releases originals only after the COMPLETE wave succeeded, so a
+// failed wave leaves the staged data of every earlier statement
+// byte-stable and recoverable by the ordinary statement rollback; the
+// slot's fileName makes the boundary the explicit cleanup owner of a
+// persisted-but-unpublished replacement until publication lands.
+type compactSlot struct {
+	stats     objectio.ObjectStats
+	tbl       *txnTable
+	tbKey     workspaceTableKey
+	writeName string
+	bat       *batch.Batch
+	newStats  []objectio.ObjectStats
+	fileName  string
+	mig       pkMoveRewriteMigration
+	err       error
+	// orphans names persisted replacement files whose in-writer
+	// reclaim failed (r28 review F3): the failed-wave cleanup reclaims
+	// them with a background context, so every unpublished file keeps
+	// a cleanup owner from writer defer to boundary end.
+	orphans []string
+}
+
+// runCompactWave submits one compaction worker per slot and returns every
+// worker abort as a collected error. r26 review F1: a failed worker panics
+// via panicWhenFailed, and the ants pool's default recovery swallows it —
+// the boundary then carried a partial migration, reclaimed the original
+// objects and reported success, silently discarding surviving rows. Every
+// worker abort (panic or submit failure) becomes a collected error so the
+// boundary fails BEFORE any provenance carry or object reclaim; the caller
+// aborts the enclosing statement/commit atomically and the original
+// objects stay registered and protected.
+//
+// finishSlot runs exactly once per submitted slot and appends the abort
+// BEFORE Done releases the parent wait, on every completion path. The
+// panic path reaches finishSlot through the pool's PanicHandler: ants runs
+// it synchronously in the aborted worker's goroutine while it recovers the
+// panic (ants v2.12.0 worker.go:57-66), so recovery lives in the pool
+// library and no in-code recover() is needed (checkrecover policy).
+func (txn *Transaction) runCompactWave(slots []compactSlot, compactFunc func(*compactSlot)) []error {
+	var workerErrs []error
+	var workerErrMu sync.Mutex
+	var waiter sync.WaitGroup
+	finishSlot := func(err error) {
+		if err != nil {
+			workerErrMu.Lock()
+			workerErrs = append(workerErrs, err)
+			workerErrMu.Unlock()
+		}
+		waiter.Done()
+	}
+
+	if txn.compactWorker == nil {
+		txn.compactWorker, _ = ants.NewPool(min(runtime.NumCPU(), 4),
+			ants.WithPanicHandler(func(r any) {
+				finishSlot(moerr.NewInternalErrorNoCtx(
+					fmt.Sprintf("compaction worker aborted: %v", r)))
+			}))
+		defer func() {
+			txn.compactWorker.Release()
+			txn.compactWorker = nil
+		}()
+	}
+
+	for i := range slots {
+		waiter.Add(1)
+		if submitErr := txn.compactWorker.Submit(func() {
+			compactFunc(&slots[i])
+			finishSlot(nil)
+		}); submitErr != nil {
+			finishSlot(moerr.NewInternalErrorNoCtx(
+				fmt.Sprintf("compaction worker submit failed: %v", submitErr)))
+		}
+	}
+	waiter.Wait()
+	return workerErrs
+}
+
 // CN blocks compaction for txn
 func (txn *Transaction) compactDeletionOnObjsLocked(ctx context.Context) error {
 
@@ -2550,15 +3087,25 @@ func (txn *Transaction) compactDeletionOnObjsLocked(ctx context.Context) error {
 		return nil
 	}
 
+	// Identities the pk-move bookkeeping names must ride the dirty-object
+	// rewrites below: the rewrite re-mints every surviving row's id, and
+	// a stale origin/link/heal key would sever the lineage of every later
+	// move of that row. nil for ordinary transactions — zero reads then
+	// (r25 review F2).
+	migrateRelevant := txn.pkMoveRewriteMigrationRelevantLocked()
+	var migrations pkMoveRewriteMigration
+
 	// object --> blk id --> deletion
 	objBlkDeletion := make(map[objectio.ObjectId]map[objectio.Blockid][]int64)
 	objTables := make(map[objectio.ObjectId]workspaceTableKey)
 
 	affectedBats := make(map[*batch.Batch]struct{})
 
-	defer func() {
-		txn.deletedBlocks.clean()
-	}()
+	// r29 review F2 (D124): the ledger is NOT cleared on exit anymore. A
+	// failed wave consumed nothing, so its deletions stay pending; on
+	// success the drain moves into the staged boundary finalization below,
+	// and only the boundary's adoption (or its rollback, which restores
+	// the drained entries) decides their fate.
 
 	txn.deletedBlocks.iter(
 		func(blkId *types.Blockid, offsets []int64) bool {
@@ -2589,18 +3136,33 @@ func (txn *Transaction) compactDeletionOnObjsLocked(ctx context.Context) error {
 			return true
 		})
 
-	waiter := sync.WaitGroup{}
 	locker := sync.Mutex{}
 
-	compactFunc := func(stats objectio.ObjectStats) {
-		defer func() {
-			waiter.Done()
-		}()
+	// stagedCarry is the wave-staged form of a clean-object carry (r28
+	// review F2, D121): the cloned result batch plus the index of the
+	// source entry every registration field is read from at publication
+	// time. Until publication the ORIGINAL entry remains the only
+	// reference to the carried object file, so a failed wave cleans the
+	// clone batch and never touches the file.
+	type stagedCarry struct {
+		bat      *batch.Batch
+		stats    objectio.ObjectStats
+		entryIdx int
+	}
+
+	compactFunc := func(slot *compactSlot) {
+		// waiter accounting belongs to runCompactWave's submitter: on a
+		// panic its error collection must complete BEFORE Done releases
+		// the parent wait (r26 review F1 follow-up — the r26 race gate
+		// caught the waiter observing the error slice mid-append); see
+		// runCompactWave for the recovery-boundary contract.
 
 		// need to rewrite the whole object
+		stats := slot.stats
 		objId := stats.ObjectName().ObjectId()
 
 		tbKey := objTables[*objId]
+		slot.tbKey = tbKey
 
 		panicWhenFailed := func(err error, hint string) {
 			logutil.Panic(hint,
@@ -2626,44 +3188,103 @@ func (txn *Transaction) compactDeletionOnObjsLocked(ctx context.Context) error {
 			delegate := rel.(*txnTableDelegate)
 			tbl = delegate.origin
 		}
+		slot.tbl = tbl
 
 		locker.Lock()
 		tbl.ensureSeqnumsAndTypesExpectRowid()
 		locker.Unlock()
 
-		bat, fileName, err := tbl.rewriteObjectByDeletion(ctx, stats, objBlkDeletion[*objId])
+		bat, newStats, orphans, fileName, err := tbl.rewriteObjectByDeletion(ctx, stats, objBlkDeletion[*objId])
 		if err != nil {
-			panicWhenFailed(err, "rewrite object by deletion failed")
+			// r28 review F3 (D122): the writer ran its reclaim on a
+			// cancellation-decoupled context; any files it could not
+			// delete arrive here as orphans so the failed-wave cleanup
+			// reclaims them — every unpublished file keeps a cleanup
+			// owner from writer defer to boundary end.
+			slot.err = moerr.NewInternalErrorNoCtx(
+				fmt.Sprintf("rewrite object by deletion failed: %v", err))
+			slot.orphans = orphans
+			return
+		}
+		// From here on the replacement object can already exist in the
+		// shared FS; the slot name makes the boundary its cleanup owner
+		// until publication (r27 review F5).
+		slot.bat = bat
+		slot.newStats = newStats
+		slot.fileName = fileName
+
+		// Shadow the provenance-named survivors of THIS object before and
+		// after the rewrite, joining by pk value: positional assumptions
+		// are impossible because the writer re-sorts the wave, and a
+		// parity loss must fail loudly instead of publishing severed
+		// lineage (r25 review F2). Pure computation — no txn state.
+		if migrateRelevant != nil {
+			proc := tbl.proc.Load()
+			shadow, shErr := recordPkMoveRewriteShadow(
+				ctx, proc.GetMPool(), tbl.getTxn().engine.fs, stats,
+				tbl.tableDef, objBlkDeletion[*objId], migrateRelevant)
+			if shErr != nil {
+				slot.err = moerr.NewInternalErrorNoCtx(
+					fmt.Sprintf("pk-move rewrite shadow failed: %v", shErr))
+				return
+			}
+			if len(shadow) != 0 {
+				sharedFS, fsErr := colexec.GetSharedFSFromProc(proc)
+				if fsErr != nil {
+					slot.err = moerr.NewInternalErrorNoCtx(
+						fmt.Sprintf("pk-move rewrite resolve lost its filesystem: %v", fsErr))
+					return
+				}
+				mapping, rsErr := resolvePkMoveDumpShadow(
+					ctx, proc.GetMPool(), sharedFS, slot.newStats, tbl.tableDef, shadow)
+				if rsErr != nil {
+					slot.err = moerr.NewInternalErrorNoCtx(
+						fmt.Sprintf("pk-move rewrite resolve failed: %v", rsErr))
+					return
+				}
+				slot.mig.add(mapping)
+			}
 		}
 
-		locker.Lock()
-		defer locker.Unlock()
 		writeName := tbl.tableName
 		if tbl.db.databaseId == catalog.MO_CATALOG_ID && tbl.tableId == catalog.MO_COLUMNS_ID &&
 			tbKey.name == catalog.MO_COLUMNS_UPDATE {
 			writeName = tbKey.name
 		}
-		if err = txn.writeFileLockedWithAutoIncrEpochKnown(
-			INSERT,
-			tbl.accountId,
-			tbl.db.databaseId,
-			tbl.tableId,
-			tbl.db.databaseName,
-			writeName,
-			fileName,
-			bat,
-			txn.tnStores[0],
-			tbKey.autoIncrEpoch,
-			tbKey.autoIncrEpochKnown,
-		); err != nil {
-			bat.Clean(txn.proc.Mp())
-			panicWhenFailed(err, "write txn file failed")
-		}
-
-		bat.Clean(txn.proc.Mp())
+		slot.writeName = writeName
 	}
 
 	dirtyObject := make([]objectio.ObjectStats, 0, 1)
+	// Batches of every phase-1-scanned INSERT entry the boundary releases
+	// after — and ONLY after — the complete wave succeeds (r27 review
+	// F2). Releasing inside the scan (the pre-r27 shape) destructively
+	// modified whichever earlier statement wrote the entry when a later
+	// worker failure aborted the boundary: statement rollback truncates
+	// only the current tail and can never restore a released batch. The
+	// staging holds the batch IDENTITY, not the entry index (r30 review
+	// F1, D126): the boundary dump and the workspace-merge compaction
+	// compact txn.writes in place before adoption, so a stored index
+	// silently aliases a neighbour.
+	releaseBats := make([]*batch.Batch, 0, 1)
+
+	// r28 review F2 (D121): a clean-object carry re-registers an object
+	// that a scanned (soon released) batch references while its dirty
+	// siblings get rewritten. Stage carries during the scan and publish
+	// them inside the SAME atomic wave as the dirty replacements: the
+	// pre-r28 immediate registration outlived a worker failure until
+	// statement rollback, whose range GC then deleted files the retained
+	// ORIGINAL entries still referenced, severing earlier acknowledged
+	// statements. A staged carry holds only its clone batch; its file
+	// stays owned by the original entry until publication.
+	stagedCarries := make([]stagedCarry, 0, 1)
+	cleanStagedCarryBats := func() {
+		for k := range stagedCarries {
+			if stagedCarries[k].bat != nil {
+				stagedCarries[k].bat.Clean(txn.proc.Mp())
+				stagedCarries[k].bat = nil
+			}
+		}
+	}
 
 	ll := len(txn.writes)
 	for i, entry := range txn.writes[:ll] {
@@ -2689,38 +3310,33 @@ func (txn *Transaction) compactDeletionOnObjsLocked(ctx context.Context) error {
 			stats := objectio.ObjectStats(col[j].GetByteSlice(area))
 
 			if objBlkDeletion[*stats.ObjectName().ObjectId()] == nil {
-				// clean object, no deletion on it
+				// clean object, no deletion on it: stage the carry for
+				// publication inside the same atomic wave as the dirty
+				// replacements below (r28 review F2, D121). Publication
+				// happens only after the complete wave succeeds; until
+				// then the staged clone is the only allocation, so a
+				// staging failure cleans every staged clone and leaves
+				// the original entries — the file owners — untouched.
 				bat := colexec.AllocCNS3ResultBat(false)
 				if err := bat.Vecs[0].UnionBatch(entry.bat.Vecs[0],
 					int64(offset), int(stats.BlkCnt()), nil, txn.proc.Mp()); err != nil {
+					bat.Clean(txn.proc.Mp())
+					cleanStagedCarryBats()
 					return err
 				}
 				if err := vector.AppendBytes(
 					bat.Vecs[1], stats.Marshal(), false, txn.proc.Mp()); err != nil {
-					return nil
-				}
-
-				bat.SetRowCount(bat.Vecs[0].Length())
-
-				if err := txn.writeFileLockedWithAutoIncrEpochKnown(
-					INSERT,
-					entry.accountId,
-					entry.databaseId,
-					entry.tableId,
-					entry.databaseName,
-					entry.tableName,
-					stats.ObjectName().String(),
-					bat,
-					entry.tnStore,
-					entry.autoIncrEpoch,
-					entry.autoIncrEpochKnown,
-				); err != nil {
 					bat.Clean(txn.proc.Mp())
+					cleanStagedCarryBats()
 					return err
 				}
 
-				//_ = txn.GCObjsByStats(stats)
-				bat.Clean(txn.proc.Mp())
+				bat.SetRowCount(bat.Vecs[0].Length())
+				stagedCarries = append(stagedCarries, stagedCarry{
+					bat:      bat,
+					stats:    stats,
+					entryIdx: i,
+				})
 
 			} else {
 				dirtyObject = append(dirtyObject, stats)
@@ -2729,27 +3345,245 @@ func (txn *Transaction) compactDeletionOnObjsLocked(ctx context.Context) error {
 			offset += int(stats.BlkCnt())
 		}
 
-		txn.releaseWorkspaceEntryBatchLocked(i)
+		// r27 review F2 (D115): do NOT release the original batch here —
+		// the wave has not produced its replacements yet, and releasing
+		// now would destructively modify whatever (possibly earlier)
+		// statement wrote this entry if a later worker failure aborts the
+		// boundary. The release happens only after the complete wave
+		// succeeded, by batch identity at the adoption site (r30 review
+		// F1, D126).
+		releaseBats = append(releaseBats, entry.bat)
 	}
 
-	if txn.compactWorker == nil {
-		txn.compactWorker, _ = ants.NewPool(min(runtime.NumCPU(), 4))
-		defer func() {
-			txn.compactWorker.Release()
-			txn.compactWorker = nil
-		}()
+	// r32 review F2 (D133): book cleanup ownership for the wave's
+	// orphanable replacements BEFORE any worker persists one. The wave
+	// emits at most one replacement file per dirty object (publication
+	// registers stats[0], matching rewriteObjectByDeletion's single
+	// output object), so len(dirtyObject) is the exact production bound.
+	// Exhaustion fails the boundary before any replacement file exists —
+	// sustained storage failure backpressures the producing statement
+	// instead of growing retained orphan state without bound. Every exit
+	// below reconciles exactly: published/reclaimed/never-produced slots
+	// release, registry-retained slots convert at the close drain.
+	waveReserved := len(dirtyObject)
+	if waveReserved > 0 {
+		if err := reserveDurableOrphanOwnership(txn.engine.fs, waveReserved); err != nil {
+			cleanStagedCarryBats()
+			return err
+		}
 	}
 
-	for _, stats := range dirtyObject {
-		waiter.Add(1)
-		txn.compactWorker.Submit(func() {
-			compactFunc(stats)
-		})
+	slots := make([]compactSlot, len(dirtyObject))
+	for i := range slots {
+		slots[i].stats = dirtyObject[i]
 	}
 
-	waiter.Wait()
-	txn.unprotectUnreferencedTxnLocalSharedFilesLocked(dirtyObject, nil)
-	_ = txn.GCObjsByStats(dirtyObject...)
+	// r26 review F1: a panicking or unsubmittable compaction worker is
+	// collected as an error (see runCompactWave) and fails this boundary
+	// atomically below, BEFORE any provenance carry or object reclaim.
+	workerErrs := txn.runCompactWave(slots, compactFunc)
+
+	// cleanFailedWave disposes slots [from, len): cleans their replacement
+	// batches and reclaims the replacement files that were persisted but
+	// never published into txn.writes (r27 review F5). Slots before `from`
+	// were already registered; statement rollback's tail-cut owns those.
+	// The reclaim names the plain object file (ObjectName): entry fileName
+	// strings are objectio locations (name_extent_rows_id) and would miss
+	// the real file with a tolerated not-found.
+	// The cleanup owns every file its wave persisted until proven
+	// otherwise. The returned retained count is the number of orphan
+	// names handed to the durable registry through failedWaveOrphans —
+	// their D133 reservations stay booked (the close drain converts them
+	// name-for-name); every other reserved slot reconciles by release at
+	// the call sites below (r32 review F2).
+	cleanFailedWave := func(from int) (retained int) {
+		orphans := make([]string, 0, len(slots)-from)
+		for i := from; i < len(slots); i++ {
+			if slots[i].bat != nil {
+				slots[i].bat.Clean(txn.proc.Mp())
+				slots[i].bat = nil
+			}
+			for j := range slots[i].newStats {
+				orphans = append(orphans, slots[i].newStats[j].ObjectName().String())
+			}
+			slots[i].newStats = nil
+			slots[i].fileName = ""
+			// Persisted replacements whose in-writer reclaim failed
+			// arrive from the writer defer (r28 review F3, D122); this
+			// background-context cleanup is their remaining owner.
+			orphans = append(orphans, slots[i].orphans...)
+			slots[i].orphans = nil
+		}
+		// Unpublished staged carries own only their clone batches; their
+		// object files belong to the original entries, which this cleanup
+		// must never reclaim (r28 review F2, D121). Published carries
+		// already dropped their clones, so this is a no-op for them.
+		cleanStagedCarryBats()
+		if len(orphans) == 0 {
+			return 0
+		}
+		sharedFS, fsErr := colexec.GetSharedFSFromProc(txn.proc)
+		if fsErr != nil {
+			// r29 review F3 (D125): the wave was the last local owner, and
+			// its cleanup failed before it began — retain the inventory so
+			// the transaction close's GC drain reclaims it instead of
+			// leaking ownerless files.
+			txn.failedWaveOrphans = append(txn.failedWaveOrphans, orphans...)
+			logutil.Warn("compact wave cleanup lost its filesystem; unpublished replacements retained",
+				zap.String("txn", txn.op.Txn().DebugString()),
+				zap.Strings("objs", orphans),
+				zap.Error(fsErr))
+			return len(orphans)
+		}
+		// Cleanup must survive query cancellation, mirroring gcFiles.
+		if _, dErr := ioutil.DeleteUnpublishedObjects(context.Background(), sharedFS, orphans...); dErr != nil {
+			// r29 review F3 (D125): retain the inventory for the close-time
+			// GC drain. The drain tolerates already-deleted names, so
+			// retaining the whole batch is safe even if this attempt
+			// stopped partway through it.
+			txn.failedWaveOrphans = append(txn.failedWaveOrphans, orphans...)
+			logutil.Warn("compact wave cleanup could not reclaim unpublished replacements",
+				zap.String("txn", txn.op.Txn().DebugString()),
+				zap.Strings("objs", orphans),
+				zap.Error(dErr))
+			return len(orphans)
+		}
+		return 0
+	}
+
+	var waveErr error
+	if len(workerErrs) > 0 {
+		waveErr = errors.Join(workerErrs...)
+	}
+	for i := range slots {
+		if slots[i].err != nil {
+			waveErr = errors.Join(waveErr, slots[i].err)
+		}
+	}
+	if waveErr != nil {
+		// Nothing was published and no original was released: return with
+		// every staged entry untouched, so the enclosing statement rollback
+		// restores the pre-boundary state exactly (r27 review F2).
+		releaseDurableOrphanReservation(txn.engine.fs,
+			waveReserved-cleanFailedWave(0))
+		return waveErr
+	}
+
+	// Publish the staged clean-object carries first, mirroring the
+	// pre-r28 scan registration order inside the same atomic wave (r28
+	// review F2, D121). A failure here leaves the remaining carries
+	// staged — cleanFailedWave cleans their clones — while carries
+	// already published belong to the current statement's tail; the
+	// statement-rollback range GC excludes files still referenced by
+	// the retained original entries (D121), so their files survive the
+	// tail cut.
+	for k := range stagedCarries {
+		c := &stagedCarries[k]
+		entry := &txn.writes[c.entryIdx]
+		if err := txn.writeFileLockedWithAutoIncrEpochKnown(
+			INSERT,
+			entry.accountId,
+			entry.databaseId,
+			entry.tableId,
+			entry.databaseName,
+			entry.tableName,
+			c.stats.ObjectName().String(),
+			c.bat,
+			entry.tnStore,
+			entry.autoIncrEpoch,
+			entry.autoIncrEpochKnown,
+		); err != nil {
+			pubErr := moerr.NewInternalErrorNoCtx(
+				fmt.Sprintf("write txn file failed: %v", err))
+			releaseDurableOrphanReservation(txn.engine.fs,
+				waveReserved-cleanFailedWave(0))
+			return pubErr
+		}
+		c.bat.Clean(txn.proc.Mp())
+		c.bat = nil
+	}
+
+	// Publish the replacements in dirty-object order. Slots published
+	// before a failure belong to the current statement's tail — the
+	// statement rollback tail-cut reclaims them; the rest are reclaimed
+	// here.
+	for i := range slots {
+		slot := &slots[i]
+		if err := txn.writeFileLockedWithAutoIncrEpochKnown(
+			INSERT,
+			slot.tbl.accountId,
+			slot.tbl.db.databaseId,
+			slot.tbl.tableId,
+			slot.tbl.db.databaseName,
+			slot.writeName,
+			slot.fileName,
+			slot.bat,
+			txn.tnStores[0],
+			slot.tbKey.autoIncrEpoch,
+			slot.tbKey.autoIncrEpochKnown,
+		); err != nil {
+			pubErr := moerr.NewInternalErrorNoCtx(
+				fmt.Sprintf("write txn file failed: %v", err))
+			releaseDurableOrphanReservation(txn.engine.fs,
+				waveReserved-cleanFailedWave(i))
+			return pubErr
+		}
+		slot.bat.Clean(txn.proc.Mp())
+		slot.bat = nil
+		migrations.oldIds = append(migrations.oldIds, slot.mig.oldIds...)
+		migrations.newIds = append(migrations.newIds, slot.mig.newIds...)
+	}
+
+	// D133: the complete wave succeeded — every replacement file is now
+	// published and owned by the statement tail, so the orphan registry
+	// never needs this wave's reserved slots (no orphan was retained).
+	releaseDurableOrphanReservation(txn.engine.fs, waveReserved)
+
+	// r36 review F1 (D141, folded by r38 review F1/F2 into D143/D144):
+	// journal the wave's migration pairs — effective-only, coalesced, and
+	// budget-admitted BEFORE the remap mutates any bookkeeping — in the
+	// transaction-level carry journal. D123's staged pre-carry map
+	// snapshot is gone: RollbackLastStatement's walker applies the exact
+	// inverse against the CURRENT maps, so a boundary failure after the
+	// carry composes with the dump's translations and the transfer's
+	// carries instead of pitching the ledger back over them, and the
+	// retry re-runs this wave on byte-identical inputs. An admission
+	// refusal aborts the boundary statement-atomically — the just-
+	// published replacements die in the statement rollback's tail cut,
+	// and no map has mutated yet.
+	effOld, effNew, admErr := txn.pkMoveCarryJournalAdmitLocked(
+		migrations.oldIds, migrations.newIds)
+	if admErr != nil {
+		return admErr
+	}
+	txn.pkMoveCarryJournalAppendLocked(pkMoveCarryWave, effOld, effNew)
+
+	// One bookkeeping remap for the whole compaction wave; a failure
+	// aborts the boundary (and its statement/commit) rather than
+	// committing rows whose provenance dangles (r25 review F2).
+	if err := txn.carryPkMoveProvenanceThroughRekeyLocked(
+		migrations.oldIds, migrations.newIds); err != nil {
+		return err
+	}
+
+	// The complete wave succeeded. Its destructive tail — releasing the
+	// original batches, reclaiming the superseded dirty objects, and
+	// draining the consumed deletion ledger — stays STAGED rather than
+	// applied (r29 review F1, D123): the enclosing boundary still has
+	// fallible work below (the workspace dump and, on RC, the snapshot
+	// transfer), and a failure there runs RollbackLastStatement, which
+	// truncates the replacement registrations this wave just published.
+	// Applying the releases now would destroy acknowledged originals with
+	// no live replacement and no compensation. The boundary applies the
+	// tail at adoption (IncrStatementID, or the final dump in Commit); a
+	// rollback discards it and restores the drained ledger (r29 review
+	// F2, D124), so the retry re-runs this wave on byte-identical inputs.
+	pending := &boundaryFinalization{
+		releaseBats: releaseBats,
+		dirtyObject: dirtyObject,
+	}
+	pending.ledger, pending.ledgerStmts = txn.deletedBlocks.drain()
+	txn.pendingBoundaryFinalization = pending
 
 	return nil
 }
@@ -3001,14 +3835,26 @@ func (txn *Transaction) Commit(ctx context.Context) (reqs []txn.TxnRequest, err 
 	// around metadata resolution, so it must run with the lock held — same
 	// as the IncrStatementID path.
 	txn.Lock()
+	// Retire pk-move link rows whose staged replacement died inside this
+	// transaction BEFORE compaction re-keys staged inserts: the prune
+	// matches recorded replacement identities against staged row ids, and
+	// mergeTxnWorkspaceLocked rewrites exactly those identities. The
+	// consumer's commit-timestamp claiming must never meet a link whose
+	// landed generation the moving transaction itself removed.
+	txn.pruneDeadPkMoveLinkRowsLocked()
 	if err := txn.mergeTxnWorkspaceLocked(ctx); err != nil {
 		txn.Unlock()
 		return nil, err
 	}
-	if err := txn.dumpBatchLocked(ctx, -1); err != nil {
+	if err := txn.dumpBatchLocked(ctx, -1, -1); err != nil {
 		txn.Unlock()
 		return nil, err
 	}
+	// r29 review F1 (D123): the commit path runs no later adoption for a
+	// compaction tail staged by the merge above; this final dump is its
+	// irrevocability point. A commit failure after this rolls back the
+	// whole transaction, applied tail included.
+	txn.applyPendingBoundaryFinalizationLocked()
 	txn.Unlock()
 
 	if msg, injected := objectio.CNCommitAfterWorkspaceDumpFailedInjected(); injected {
@@ -3233,6 +4079,10 @@ func (txn *Transaction) transferTombstones(
 		return err
 	}
 
+	if msg, injected := objectio.CNIncrStmtRCTransferObjectsFailedInjected(); injected {
+		return moerr.NewInternalErrorNoCtx("rc statement-boundary tombstone object transfer failed by injection: " + msg)
+	}
+
 	return transferTombstoneObjects(ctx, txn, tables, start, end)
 }
 
@@ -3296,6 +4146,26 @@ func (txn *Transaction) delTransaction() {
 	txn.tableCache = nil
 	txn.tableOps = nil
 	txn.databaseOps = nil
+
+	// r26 review F3 (D113): transfer-retired tombstone objects never reached
+	// commit serialization in any outcome, so their files are unpublished
+	// garbage to collect exactly once here, on every close path.
+	txn.gcRetiredTransferFiles()
+	// r29 review F3 (D125): unpublished compaction replacements whose
+	// in-writer and failed-wave reclaims both failed are unpublished
+	// garbage in every close outcome as well; this drain is their last
+	// owner.
+	txn.gcFailedWaveOrphans()
+	// r29 review F1 (D123): a compaction tail staged but never adopted
+	// dies with the transaction — the close-range GC (rollback) or the
+	// commit itself already owns every file it names.
+	txn.pendingBoundaryFinalization = nil
+	// r31 review F1 (D129): the close also consumes any maintenance
+	// window a failed boundary left open (the transaction-level rollback
+	// path never runs RollbackLastStatement). The journal only names
+	// slots this very loop below unaccounts and cleans, so dropping it
+	// loses nothing.
+	txn.maintWindow = nil
 
 	txn.cn_flushed_s3_tombstone_object_stats_list = nil
 	txn.deletedBlocks = nil

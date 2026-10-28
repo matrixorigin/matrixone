@@ -2300,17 +2300,14 @@ func (tbl *txnTable) rewriteObjectByDeletion(
 	ctx context.Context,
 	obj objectio.ObjectStats,
 	blockDeletes map[objectio.Blockid][]int64,
-) (*batch.Batch, string, error) {
+) (ret *batch.Batch, stats []objectio.ObjectStats, orphans []string, fileName string, err error) {
 
 	proc := tbl.proc.Load()
 
-	var (
-		err error
-		fs  fileservice.FileService
-	)
+	var fs fileservice.FileService
 
 	if fs, err = colexec.GetSharedFSFromProc(proc); err != nil {
-		return nil, "", err
+		return nil, nil, nil, "", err
 	}
 
 	s3Writer := colexec.NewCNS3DataWriterForService(
@@ -2319,11 +2316,42 @@ func (tbl *txnTable) rewriteObjectByDeletion(
 
 	defer func() { s3Writer.Close() }()
 
-	var (
-		bat      *batch.Batch
-		stats    []objectio.ObjectStats
-		fileName string
-	)
+	// r27 review F5 (D118): every error return after this point can leave
+	// replacement object files persisted in the shared FS while nothing in
+	// txn.writes names them (publication happens only after a successful
+	// return, on the caller side). Close alone drops the persisted
+	// bookkeeping without deleting files, and transaction GC discovers
+	// only registered names, so reclaim the writer's persisted inventory
+	// here; DeletePersisted tolerates partially staged state and repeats.
+	// Registered to run BEFORE the Close defer above (LIFO).
+	// r28 review F3 (D122): the reclaim must survive request cancellation —
+	// a persisted-then-cancelled rewrite still owns its files — so run it on
+	// a context decoupled from ctx (WithoutCancel); DeleteUnpublishedObjects
+	// applies its own per-batch bound on top. When the delete itself fails,
+	// DeletePersisted retains the references only until Close drops them, so
+	// transfer the exact inventory to the caller here: the returned orphans
+	// ride the error path into the compaction slot, whose failed-wave
+	// cleanup reclaims them with a background context.
+	defer func() {
+		if err != nil {
+			files, dErr := s3Writer.DeletePersisted(context.WithoutCancel(ctx))
+			if dErr != nil {
+				orphans = files
+				logutil.Warn("compact rewrite reclaim of persisted replacements failed; ownership transferred to the caller",
+					zap.String("txn", tbl.getTxn().op.Txn().DebugString()),
+					zap.String("tbl", tbl.tableName),
+					zap.Strings("orphans", files),
+					zap.Error(dErr))
+			}
+		}
+	}()
+
+	// The scratch batch — including the writer's internal block-info batch
+	// returned by FillBlockInfoBat — is local: this defer releases it. The
+	// named `ret` receives only the deep copy handed to the caller, whose
+	// cleanup is the caller-side slot lifecycle; the deferred Clean must
+	// never touch it.
+	var bat *batch.Batch
 
 	defer func() {
 		if bat != nil {
@@ -2369,24 +2397,24 @@ func (tbl *txnTable) rewriteObjectByDeletion(
 	)
 
 	if err != nil {
-		return nil, fileName, err
+		return nil, nil, nil, fileName, err
 	}
 
 	if stats, err = s3Writer.Sync(ctx); err != nil {
-		return nil, fileName, err
+		return nil, nil, nil, fileName, err
 	}
 
 	if bat, err = s3Writer.FillBlockInfoBat(); err != nil {
-		return nil, fileName, err
+		return nil, nil, nil, fileName, err
 	}
 
 	if len(stats) != 0 {
 		fileName = stats[0].ObjectLocation().String()
 	}
 
-	ret, err := bat.Dup(proc.Mp())
+	ret, err = bat.Dup(proc.Mp())
 
-	return ret, fileName, err
+	return ret, stats, nil, fileName, err
 }
 
 func (tbl *txnTable) Delete(
@@ -2408,7 +2436,11 @@ func (tbl *txnTable) Delete(
 
 	switch deletionTyp {
 	case catalog.Row_ID:
-		bat = tbl.getTxn().deleteBatch(bat, tbl.db.databaseId, tbl.tableId)
+		var err error
+		bat, err = tbl.getTxn().deleteBatch(bat, tbl.db.databaseId, tbl.tableId)
+		if err != nil {
+			return err
+		}
 		if bat.RowCount() == 0 {
 			return nil
 		}

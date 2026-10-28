@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/util/sysview"
 )
@@ -53,6 +54,41 @@ var tenantUpgEntries = []versions.UpgradeEntry{
 	upgradeInformationSchemaMetadataVisibilityView("SCHEMATA", sysview.InformationSchemaSchemataDDL),
 	upgradeDatabaseDefaultsColumns(),
 	versions.InformationSchemaTablesUpgradeEntry(),
+	// Tenants that predate the data-branch provenance work lack
+	// mo_catalog.mo_data_branch_update_link, so data-branch diff reading
+	// cannot recover update provenance for primary-key moves and must
+	// keep failing closed (delete+insert replay). Creating the table for
+	// existing tenants lets the pk-move recorder persist update
+	// provenance for statements executed after the upgrade. The sibling
+	// retention ledger mo_catalog.mo_data_branch_link_retention records
+	// the identity of every retained dead table whose links a funnel
+	// verdict kept alive; tenants predating the ledger simply keep no
+	// ledger rows, which reaps treat as the empty fast path. The catalog
+	// creations carry no protocol gate: the repository supports shutdown
+	// upgrade only, so every service runs the binary that maintains
+	// these tables and the CheckFunc-gated idempotent creation needs no
+	// cluster-wide protocol check. Unpublished 4.0.8..4.0.19 identities
+	// may not be registered as upgrade steps
+	// (docs/design/20261028-catalog-upgrade-407.md), so these creations
+	// append to the unpublished 4.0.7 handler and raise its offset.
+	{
+		Schema:    catalog.MO_CATALOG,
+		TableName: catalog.MO_DATA_BRANCH_UPDATE_LINK,
+		UpgType:   versions.CREATE_NEW_TABLE,
+		UpgSql:    frontend.MoCatalogDataBranchUpdateLinkDDL,
+		CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+			return versions.CheckTableDefinition(txn, accountId, catalog.MO_CATALOG, catalog.MO_DATA_BRANCH_UPDATE_LINK)
+		},
+	},
+	{
+		Schema:    catalog.MO_CATALOG,
+		TableName: catalog.MO_DATA_BRANCH_LINK_RETENTION,
+		UpgType:   versions.CREATE_NEW_TABLE,
+		UpgSql:    frontend.MoCatalogDataBranchLinkRetentionDDL,
+		CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+			return versions.CheckTableDefinition(txn, accountId, catalog.MO_CATALOG, catalog.MO_DATA_BRANCH_LINK_RETENTION)
+		},
+	},
 }
 
 func upgradeDatabaseDefaultsColumns() versions.UpgradeEntry {

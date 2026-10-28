@@ -352,6 +352,84 @@ const (
 	MO_FEATURE_LIMIT    = "mo_feature_limit"
 	MO_FEATURE_REGISTRY = "mo_feature_registry"
 
+	// MO_DATA_BRANCH_UPDATE_LINK records, per user table and old row id, the
+	// old->new primary key of an UPDATE that moved a primary key. DATA BRANCH
+	// diff reading uses it to re-associate such a delete+insert pair back into a
+	// single pk-moving update so that MERGE/PICK can apply it as one native
+	// destination UPDATE (letting ON UPDATE actions fire) instead of an
+	// independent DELETE plus INSERT.
+	MO_DATA_BRANCH_UPDATE_LINK = "mo_data_branch_update_link"
+	// DataBranchUpdateLinkIDBytes is the fixed width of the link id column:
+	// an 8-byte big-endian table id, the 32-byte sha256 of the packer-encoded
+	// old primary key, then the 24-byte old row id. The sha keeps the catalog
+	// primary key bounded while link probes point-lookup by full bytes.
+	DataBranchUpdateLinkIDBytes = 64
+	// DataBranchUpdateLinkPKShaBytes is the sha256 width stored beside every
+	// packer-encoded pk so probes stay index-bound; exact pk equality is
+	// always checked against the stored old_pk/new_pk bytes as well.
+	DataBranchUpdateLinkPKShaBytes = 32
+	// DataBranchUpdateLinkTxnIDBytes is the normalized width of the
+	// recording transaction's id (a 16-byte UUID).
+	DataBranchUpdateLinkTxnIDBytes  = 16
+	DataBranchUpdateLinkColLinkID   = "link_id"
+	DataBranchUpdateLinkColTableID  = "table_id"
+	DataBranchUpdateLinkColOldPKSha = "old_pk_sha"
+	DataBranchUpdateLinkColOldRow   = "old_row_id"
+	DataBranchUpdateLinkColOldPK    = "old_pk"
+	DataBranchUpdateLinkColNewPKSha = "new_pk_sha"
+	DataBranchUpdateLinkColNewPK    = "new_pk"
+	// DataBranchUpdateLinkColNewRow is the workspace-stage row id the txn
+	// layer assigned to the replacement row: a pre-commit placeholder the
+	// consumer uses to chain same-transaction generations netted out of
+	// the committed stream. The committed row carries the id TN assigns
+	// at precommit; claims run on the commit-timestamp tie.
+	DataBranchUpdateLinkColNewRow  = "new_row_id"
+	DataBranchUpdateLinkColWriteTS = "write_ts"
+	// DataBranchUpdateLinkColTxnID is the recording transaction's durable
+	// identity: workspace-minted link ids and the consumer's
+	// same-transaction matching key off it, because a create timestamp's
+	// physical component is not a transaction namespace (two transactions
+	// created inside one physical instant differ only in the HLC logical
+	// component). An all-zero value marks "identity unknown" (defensive;
+	// the recorder always has its operator id) and falls back to the
+	// create-timestamp namespace.
+	DataBranchUpdateLinkColTxnID = "txn_id"
+
+	// MO_DATA_BRANCH_LINK_RETENTION records, per table id, the catalog
+	// identity of every retained dead table whose pk-move links a
+	// drop-lifecycle funnel verdict kept alive. It is the complete
+	// candidate set for the owner-removal reap in the frontend: when the
+	// final historical owner disappears, each ledger row is re-evaluated
+	// against the live owner set and the branch lineage, and covered rows
+	// retire together with their links. Rows held by identity-unresolved
+	// keep paths carry empty names and are an explicit operator-visible
+	// residue (never auto-reclaimed); every other row dies only with its
+	// links or the account.
+	MO_DATA_BRANCH_LINK_RETENTION          = "mo_data_branch_link_retention"
+	DataBranchLinkRetentionColTableID      = "table_id"
+	DataBranchLinkRetentionColDatabaseName = "database_name"
+	DataBranchLinkRetentionColTableName    = "table_name"
+	DataBranchLinkRetentionColObjID        = "obj_id"
+	DataBranchLinkRetentionColCreatedTS    = "created_ts"
+	// logical_id carries the producing relation's durable rel_logical_id;
+	// 0 is the explicit legacy/unresolved marker (catalog relation ids are
+	// never 0).
+	DataBranchLinkRetentionColLogicalID = "logical_id"
+	// row_kind prefixes the (row_kind, table_id) primary key: real retained
+	// identity rows write 0, fencing scratch rows write 1, keeping the two
+	// key spaces disjoint by primary-key prefix for every allocator
+	// watermark, restore patch, and forced context id.
+	DataBranchLinkRetentionColRowKind = "row_kind"
+)
+
+const (
+	// DataBranchLinkRetentionRowKindReal selects the retained dead-table
+	// identity rows the drop-lifecycle funnels and genesis admission write.
+	DataBranchLinkRetentionRowKindReal int64 = 0
+	// DataBranchLinkRetentionRowKindFencingScratch selects the fencing
+	// round's scratch rows; only the fencing pair writes them.
+	DataBranchLinkRetentionRowKindFencingScratch int64 = 1
+
 	MO_CCPR_TABLES = "mo_ccpr_tables"
 	MO_CCPR_DBS    = "mo_ccpr_dbs"
 )
