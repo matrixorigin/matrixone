@@ -1261,6 +1261,8 @@ func TestMarkedAccountRestorePreflightsBeforeDestructiveWorkBelowCapability(t *t
 		t.Run(test.name, func(t *testing.T) {
 			bh := &backgroundExecTest{}
 			bh.init()
+			cdcSQL := fmt.Sprintf("select attname from mo_catalog.mo_columns {MO_TS = %d} where account_id = 0 and att_database = 'mo_catalog' and att_relname = 'mo_cdc_watermark' and attname in ('source_table_id','owner_generation','pending_source_table_id','target_identity')", ts)
+			bh.sql2result[cdcSQL] = newMrsForRestoreStringRows([]string{"attname"}, [][]interface{}{{"source_table_id"}, {"owner_generation"}, {"pending_source_table_id"}, {"target_identity"}})
 			bh.sql2result[test.showSQL] = newMrsForSqlForShowDatabases([][]interface{}{{dbName}})
 			bh.sql2result[test.createSQL] = newMrsForRestoreStringRows(
 				[]string{"datname", "dat_createsql", "dat_type"},
@@ -1269,7 +1271,11 @@ func TestMarkedAccountRestorePreflightsBeforeDestructiveWorkBelowCapability(t *t
 
 			err := test.run(bh)
 			require.ErrorContains(t, err, "requires MORPC protocol version 75")
-			require.Equal(t, []string{test.showSQL, test.createSQL}, bh.executedSQLs)
+			expected := []string{test.showSQL, test.createSQL}
+			if test.name == "pitr account" {
+				expected = append([]string{cdcSQL}, expected...)
+			}
+			require.Equal(t, expected, bh.executedSQLs)
 		})
 	}
 }
@@ -1306,6 +1312,14 @@ func TestClusterRestorePreflightsBeforeAccountSideEffects(t *testing.T) {
 		[]string{"account_id", "account_name", "admin_name", "comments"},
 		[][]interface{}{{"1", "source", "admin", ""}},
 	)
+	icebergTablesSQL := "select relname from mo_catalog.mo_tables {MO_TS = 100} where account_id = 1 and reldatabase = 'mo_catalog' and relname in ('mo_iceberg_catalogs','mo_iceberg_principal_map','mo_iceberg_residency_policy','mo_iceberg_tables','mo_iceberg_refs','mo_iceberg_publish_jobs','mo_iceberg_orphan_files','mo_iceberg_maintenance_jobs')"
+	bh.sql2result[icebergTablesSQL] = newMrsForRestoreStringRows([]string{"relname"}, nil)
+	targetIcebergQueries := make([]string, 0, 8)
+	for _, table := range []string{"mo_iceberg_catalogs", "mo_iceberg_principal_map", "mo_iceberg_residency_policy", "mo_iceberg_tables", "mo_iceberg_refs", "mo_iceberg_publish_jobs", "mo_iceberg_orphan_files", "mo_iceberg_maintenance_jobs"} {
+		query := fmt.Sprintf("select '1' from %s limit 1", qualifiedTableName(moCatalog, table))
+		targetIcebergQueries = append(targetIcebergQueries, query)
+		bh.sql2result[query] = newMrsForRestoreStringRows([]string{"1"}, nil)
+	}
 	bh.sql2result[showDatabasesSQL] = newMrsForSqlForShowDatabases(
 		[][]interface{}{{dbName}},
 	)
@@ -1320,12 +1334,11 @@ func TestClusterRestorePreflightsBeforeAccountSideEffects(t *testing.T) {
 	)
 	require.ErrorContains(t, err, "requires MORPC protocol version 75")
 	require.Empty(t, retiredAccountIDs)
-	require.Equal(t, []string{
-		currentAccountsSQL,
-		pastAccountsSQL,
-		showDatabasesSQL,
-		createDatabaseSQL,
-	}, bh.executedSQLs)
+	expected := make([]string, 0, 5+len(targetIcebergQueries))
+	expected = append(expected, currentAccountsSQL, pastAccountsSQL, icebergTablesSQL)
+	expected = append(expected, targetIcebergQueries...)
+	expected = append(expected, showDatabasesSQL, createDatabaseSQL)
+	require.Equal(t, expected, bh.executedSQLs)
 }
 
 func TestMarkedTableSnapshotRestorePreflightsBeforeFkSideEffects(t *testing.T) {
@@ -1343,6 +1356,10 @@ func TestMarkedTableSnapshotRestorePreflightsBeforeFkSideEffects(t *testing.T) {
 		"select datname, dat_createsql, dat_type from mo_catalog.mo_database {MO_TS = %d} where datname = '%s' and account_id = 0",
 		snapshotTS, dbName,
 	)
+	historicalIcebergSQL := "select relname, rel_createsql from mo_catalog.mo_tables {MO_TS = 100} where account_id = 0 and reldatabase = 'marked_branch' and relkind = 'e' and relname = 'child'"
+	currentIcebergSQL := "select relname, rel_createsql from mo_catalog.mo_tables where account_id = 0 and reldatabase = 'marked_branch' and relkind = 'e' and relname = 'child'"
+	bh.sql2result[historicalIcebergSQL] = newMrsForRestoreStringRows([]string{"relname", "rel_createsql"}, nil)
+	bh.sql2result[currentIcebergSQL] = newMrsForRestoreStringRows([]string{"relname", "rel_createsql"}, nil)
 	fkSQL := "select db_name, table_name, refer_db_name, refer_table_name from " +
 		"mo_catalog.mo_foreign_keys where db_name = 'marked_branch' and table_name = 'child'"
 	bh.sql2result[snapshotSQL] = newMrsForSnapshotRecord(
@@ -1680,6 +1697,10 @@ func TestRestoreTableRejectsReferencedTableBeforeMutation(t *testing.T) {
 	)
 	// Source metadata validation precedes destructive work at every protocol;
 	// this legacy snapshot has no durable-default relation yet.
+	const historicalIcebergSQL = "select relname, rel_createsql from mo_catalog.mo_tables {MO_TS = 100} where account_id = 0 and reldatabase = 'db1' and relkind = 'e' and relname = 'parent'"
+	const currentIcebergSQL = "select relname, rel_createsql from mo_catalog.mo_tables where account_id = 0 and reldatabase = 'db1' and relkind = 'e' and relname = 'parent'"
+	bh.sql2result[historicalIcebergSQL] = newMrsForRestoreStringRows([]string{"relname", "rel_createsql"}, nil)
+	bh.sql2result[currentIcebergSQL] = newMrsForRestoreStringRows([]string{"relname", "rel_createsql"}, nil)
 	const sourceSQL = "select datname, dat_createsql, dat_type from mo_catalog.mo_database {MO_TS = 100} where datname = 'db1' and account_id = 0"
 	const defaultsSQL = "select relname from mo_catalog.mo_tables {MO_TS = 100} where account_id = 0 and reldatabase = 'mo_catalog' and relname = 'mo_database_defaults'"
 	bh.sql2result[sourceSQL] = newMrsForRestoreStringRows([]string{"datname", "dat_createsql", "dat_type"}, [][]interface{}{{dbName, "create database db1", ""}})
@@ -1708,6 +1729,8 @@ func TestRestoreTableRejectsReferencedTableBeforeMutation(t *testing.T) {
 		catalog.SnapshotLifecycleGateSQL,
 		catalog.ViewMetadataLifecycleGateSQL,
 		snapshotSQL,
+		historicalIcebergSQL,
+		currentIcebergSQL,
 		sourceSQL,
 		defaultsSQL,
 		masterSQL,
@@ -1970,31 +1993,39 @@ func TestRecreateUserDefinedFunctionCatalogPreservesCurrentSchema(t *testing.T) 
 		snapshotName  = "udf_snapshot"
 		snapshotTS    = int64(123)
 	)
-	legacyCreateSQL := "create table mo_catalog.mo_user_defined_function (function_id int auto_increment, name varchar(100), args json)"
+	historicalCreateSQL := "create table mo_catalog.mo_user_defined_function (function_id int auto_increment, name varchar(100), args json, sql_mode varchar(1024))"
 	udfTable := &tableInfo{
 		dbName:    moCatalog,
 		tblName:   "mo_user_defined_function",
-		createSql: legacyCreateSQL,
+		createSql: historicalCreateSQL,
+	}
+	modeQuery := func(snapshot string) string {
+		return "select attname from mo_catalog.mo_columns" + snapshot + " where account_id = 10 and att_database = 'mo_catalog' and att_relname = 'mo_user_defined_function' and attname = 'sql_mode' limit 2"
+	}
+	newExec := func(snapshot string) *backgroundExecTest {
+		bh := &backgroundExecTest{}
+		bh.init()
+		bh.sql2result[modeQuery(snapshot)] = newMrsForSqlForShowDatabases([][]interface{}{{"sql_mode"}})
+		return bh
 	}
 
 	t.Run("same account timestamp snapshot", func(t *testing.T) {
-		bh := &backgroundExecTest{}
-		bh.init()
+		bh := newExec(" {MO_TS = 123}")
 		ctx := defines.AttachAccountId(t.Context(), sourceAccount)
 		require.NoError(t, recreateTable(ctx, "", bh, snapshotName, udfTable, sourceAccount, snapshotTS, false))
 		require.Equal(t, []string{
+			modeQuery(" {MO_TS = 123}"),
 			dropTableIfExistsSQL(moCatalog, udfTable.tblName),
 			MoCatalogMoUserDefinedFunctionDDL,
 			"insert into `mo_catalog`.`mo_user_defined_function` (" + userDefinedFunctionCatalogColumns +
 				") select " + userDefinedFunctionCatalogSourceColumns +
 				" from `mo_catalog`.`mo_user_defined_function` {MO_TS = 123}",
 		}, bh.executedSQLs)
-		require.NotContains(t, strings.Join(bh.executedSQLs, "\n"), legacyCreateSQL)
+		require.NotContains(t, strings.Join(bh.executedSQLs, "\n"), historicalCreateSQL)
 	})
 
 	t.Run("cross account named snapshot", func(t *testing.T) {
-		bh := &backgroundExecTest{}
-		bh.init()
+		bh := newExec(" {SNAPSHOT = 'udf_snapshot'}")
 		ctx := defines.AttachAccountId(t.Context(), sourceAccount)
 		require.NoError(t, recreateTable(ctx, "", bh, snapshotName, udfTable, targetAccount, snapshotTS, false))
 		require.Equal(t,
@@ -2003,12 +2034,11 @@ func TestRecreateUserDefinedFunctionCatalogPreservesCurrentSchema(t *testing.T) 
 				" from `mo_catalog`.`mo_user_defined_function` {SNAPSHOT = 'udf_snapshot'}",
 			bh.executedSQLs[len(bh.executedSQLs)-1],
 		)
-		require.NotContains(t, strings.Join(bh.executedSQLs, "\n"), legacyCreateSQL)
+		require.NotContains(t, strings.Join(bh.executedSQLs, "\n"), historicalCreateSQL)
 	})
 
 	t.Run("cross account timestamp restore", func(t *testing.T) {
-		bh := &backgroundExecTest{}
-		bh.init()
+		bh := newExec(" {MO_TS = 123}")
 		require.NoError(t, recreateTableFromTS(
 			t.Context(), "", bh, udfTable, snapshotTS, sourceAccount, targetAccount,
 		))
@@ -2018,12 +2048,11 @@ func TestRecreateUserDefinedFunctionCatalogPreservesCurrentSchema(t *testing.T) 
 				" from `mo_catalog`.`mo_user_defined_function` {MO_TS = 123}",
 			bh.executedSQLs[len(bh.executedSQLs)-1],
 		)
-		require.NotContains(t, strings.Join(bh.executedSQLs, "\n"), legacyCreateSQL)
+		require.NotContains(t, strings.Join(bh.executedSQLs, "\n"), historicalCreateSQL)
 	})
 
 	t.Run("point in time recovery", func(t *testing.T) {
-		bh := &backgroundExecTest{}
-		bh.init()
+		bh := newExec(" {MO_TS = 123}")
 		ctx := defines.AttachAccountId(t.Context(), sourceAccount)
 		require.NoError(t, reCreateTableWithPitr(ctx, "", bh, "udf_pitr", snapshotTS, udfTable))
 		require.Equal(t,
@@ -2032,7 +2061,36 @@ func TestRecreateUserDefinedFunctionCatalogPreservesCurrentSchema(t *testing.T) 
 				" from `mo_catalog`.`mo_user_defined_function` {MO_TS = 123}",
 			bh.executedSQLs[len(bh.executedSQLs)-1],
 		)
-		require.NotContains(t, strings.Join(bh.executedSQLs, "\n"), legacyCreateSQL)
+		require.NotContains(t, strings.Join(bh.executedSQLs, "\n"), historicalCreateSQL)
+	})
+	t.Run("legacy snapshot uses released default", func(t *testing.T) {
+		bh := newExec(" {MO_TS = 123}")
+		bh.sql2result[modeQuery(" {MO_TS = 123}")] = newMrsForSqlForShowDatabases(nil)
+		ctx := defines.AttachAccountId(t.Context(), sourceAccount)
+		require.NoError(t, recreateTable(ctx, "", bh, snapshotName, udfTable, sourceAccount, snapshotTS, false))
+		copySQL := bh.executedSQLs[len(bh.executedSQLs)-1]
+		require.Contains(t, copySQL, "database_collation, 'PIPES_AS_CONCAT' from")
+		require.Equal(t, sourceAccount, bh.executionAccountIDs[0], "inspect the source account")
+	})
+	t.Run("source metadata error precedes mutation", func(t *testing.T) {
+		bh := newExec(" {MO_TS = 123}")
+		wantErr := errors.New("historical metadata unavailable")
+		bh.sql2err[modeQuery(" {MO_TS = 123}")] = wantErr
+		ctx := defines.AttachAccountId(t.Context(), sourceAccount)
+		require.ErrorIs(t, recreateTable(ctx, "", bh, snapshotName, udfTable, sourceAccount, snapshotTS, false), wantErr)
+		require.Equal(t, []string{modeQuery(" {MO_TS = 123}")}, bh.executedSQLs)
+	})
+	t.Run("legacy procedure uses current schema", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		query := "select attname from mo_catalog.mo_columns {MO_TS = 123} where account_id = 10 and att_database = 'mo_catalog' and att_relname = 'mo_stored_procedure' and attname = 'sql_mode' limit 2"
+		bh.sql2result[query] = newMrsForSqlForShowDatabases(nil)
+		ctx := defines.AttachAccountId(t.Context(), sourceAccount)
+		table := &tableInfo{dbName: moCatalog, tblName: "mo_stored_procedure"}
+		require.NoError(t, recreateTable(ctx, "", bh, snapshotName, table, sourceAccount, snapshotTS, false))
+		require.Equal(t, MoCatalogMoStoredProcedureDDL, bh.executedSQLs[2])
+		require.Contains(t, bh.executedSQLs[3], "lang, body, 'PIPES_AS_CONCAT', db")
+		require.Equal(t, sourceAccount, bh.executionAccountIDs[0])
 	})
 }
 
