@@ -195,7 +195,7 @@ func TestCSVFramingRejectsAmbiguousBareSeparators(t *testing.T) {
 				ep.userConfig.Fields.EnclosedBy.Value = '"'
 				require.NoError(t, ep.validateCSVFraming(context.Background()))
 				var buf bytes.Buffer
-				require.NoError(t, formatOutputString(ep, []byte(separator), []byte(lineTerm), '"', false, &buf))
+				require.NoError(t, formatOutputString(ep, []byte(separator), []byte(lineTerm), '"', false, true, &buf))
 				parser, err := csvparser.NewCSVParser(&csvparser.CSVConfig{
 					FieldsTerminatedBy: fieldTerm, FieldsEnclosedBy: `"`,
 					FieldsEscapedBy: "\\", LinesTerminatedBy: lineTerm,
