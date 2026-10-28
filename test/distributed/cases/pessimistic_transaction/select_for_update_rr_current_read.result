@@ -265,3 +265,4 @@ select id, extra from su_fu_rr_cov where extra = 5 order by id;
 ➤ id[4,32,0]  ¦  extra[4,32,0]  𝄀
 1  ¦  5  𝄀
 2  ¦  5
+set session transaction_isolation=default;

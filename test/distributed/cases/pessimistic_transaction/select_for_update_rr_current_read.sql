@@ -258,3 +258,12 @@ where extra = 5 order by extra, id for update;
 select id, extra from su_fu_rr_cov where extra = 5 order by id;
 commit;
 select id, extra from su_fu_rr_cov where extra = 5 order by id;
+
+-- Return the shared default session to its default state: mo-tester reuses
+-- one default connection across every case file of a run, and the
+-- object-lifecycle gate in frontend/txn.go refuses DDL inside an active
+-- transaction that is not pessimistic READ-COMMITTED, so leaving this
+-- session at REPEATABLE READ would break every later case that runs DDL
+-- inside BEGIN (special.sql was the first CI victim). Same restore
+-- convention as locking_read_limit_retry.sql.
+set session transaction_isolation=default;
