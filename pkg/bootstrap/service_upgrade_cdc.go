@@ -19,6 +19,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -65,4 +66,40 @@ func rejectLegacyCDCTasks(tx executor.TxnExecutor) error {
 		suffix = "; more tasks exist; list all with SELECT account_id, task_id, task_name, state FROM mo_catalog.mo_cdc_task"
 	}
 	return &terminalUpgradeError{moerr.NewInternalErrorNoCtxf("legacy CDC tasks must be exported and removed using the source version before upgrade: %s%s; if new logservice has started, restore the pre-upgrade backup before restarting the source version; stop all old CNs, then recreate CDC with a clean target after upgrade", strings.Join(tasks, "; "), suffix)}
+}
+
+// Later catalog repairs still have to complete the frozen 4.0.7 step. Inspect
+// durable steps rather than the final target to preserve its admission fence.
+func validateV407UpgradeSteps(steps []versions.VersionUpgrade) (bool, error) {
+	pending := false
+	for _, step := range steps {
+		if step.ToVersion != "4.0.7" {
+			continue
+		}
+		if step.FromVersion == "4.0.7" {
+			return false, &terminalUpgradeError{moerr.NewInvalidStateNoCtx("unsupported in-progress 4.0.7 offset-only upgrade; 4.0.7 is frozen and further migrations require a new catalog version")}
+		}
+		pending = pending || step.State != versions.StateReady
+	}
+	return pending, nil
+}
+
+func (s *service) checkPendingV407Upgrade(target versions.Version, tx executor.TxnExecutor) error {
+	steps, err := versions.GetUpgradeVersions(target.Version, target.VersionOffset, tx, false, false)
+	if err != nil {
+		return err
+	}
+	for _, step := range steps {
+		if err := s.checkRetiredCatalogSource(step.FromVersion); err != nil {
+			return err
+		}
+	}
+	pending, err := validateV407UpgradeSteps(steps)
+	if err != nil {
+		return err
+	}
+	if pending {
+		return rejectLegacyCDCTasks(tx)
+	}
+	return nil
 }

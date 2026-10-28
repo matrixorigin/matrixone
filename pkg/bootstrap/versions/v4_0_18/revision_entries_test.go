@@ -4,7 +4,7 @@
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//     http://www.apache.org/licenses/LICENSE-2.0
+//      http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -12,33 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package v4_0_7
+package v4_0_18
 
 import (
-	"strings"
-	"testing"
-
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/defines"
+	"strings"
+	"testing"
 )
 
-func TestPythonFunctionRevisionUpgradeContract(t *testing.T) {
-	metadata := Handler.Metadata()
-	if metadata.Version != "4.0.7" || metadata.MinUpgradeVersion != "4.0.6" {
-		t.Fatalf("unexpected version metadata: %+v", metadata)
-	}
-	if metadata.UpgradeCluster != versions.Yes || metadata.UpgradeTenant != versions.Yes {
-		t.Fatalf("4.0.7 must run both cluster and tenant upgrades: %+v", metadata)
-	}
-	if metadata.VersionOffset != 0 || len(tenantUpgEntries) != 0 {
-		t.Fatalf("historical 4.0.7 identity changed: offset=%d entries=%d", metadata.VersionOffset, len(tenantUpgEntries))
-	}
-	if metadata.RequiredProtocolVersion != defines.MORPCVersion61 {
-		t.Fatalf("unexpected 4.0.7 protocol gate: %v", metadata.RequiredProtocolVersion)
-	}
-
-	entries := PythonRevisionUpgradeEntries()
+func TestSharedRoutineRevisionUpgradeContract(t *testing.T) {
+	entries := tenantUpgEntries
 	for _, entry := range entries {
 		if entry.RequiredProtocolVersion != 0 {
 			t.Fatalf("Python repair must not probe a feature protocol: %+v", entry)
