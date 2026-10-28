@@ -382,6 +382,7 @@ type ViewData struct {
 }
 
 type QueryBuilder struct {
+	integerPrecision      *integerPrecisionBuilder
 	correlationRouteNodes map[int32]bool
 	dependentRelations    map[int32]bool
 	preparedBindingProof  *bool
@@ -868,8 +869,13 @@ type orderResolutionMetadata struct {
 }
 
 type BindContext struct {
-	existentialBlock     uint64
-	subqueryNestingDepth uint32
+	// The grouping/window rewrite owns this exact generated source. Neither
+	// field is inherited by NewBindContext: genuine SQL boundaries stay real.
+	integerPrecisionGeneratedSource     *tree.Select
+	integerPrecisionTransparentBoundary bool
+	integerPrecision                    *integerPrecisionBuilder
+	existentialBlock                    uint64
+	subqueryNestingDepth                uint32
 
 	binder Binder
 

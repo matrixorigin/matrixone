@@ -1419,10 +1419,10 @@ CREATE TABLE indup_overflow(
 INSERT INTO indup_overflow VALUES (1, 100, 30000, 9223372036854775807, 3.14, 2.718281828);
 SELECT * FROM indup_overflow;
 
--- 测试 24.1: TINYINT 溢出（100 + 50 = 150 溢出为 -106）
+-- 测试 24.1: 64 位加法得到 150，赋值到 TINYINT 时拒绝越界并保持原行
 INSERT INTO indup_overflow VALUES (1, 50, 1000, 500, 2.0, 3.0)
 ON DUPLICATE KEY UPDATE 
-    tiny = tiny + VALUES(tiny),  -- 100 + 50 = 150，溢出为 -106
+    tiny = tiny + VALUES(tiny),  -- 100 + 50 = 150，赋值越界
     small = small - VALUES(small),
     flt = flt * VALUES(flt),
     dbl = dbl / VALUES(dbl);

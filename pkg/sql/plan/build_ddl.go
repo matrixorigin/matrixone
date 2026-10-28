@@ -61,6 +61,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 )
 
@@ -350,6 +351,11 @@ func inferViewColumns(
 		return nil, moerr.NewViewWrongList(ctx.GetContext())
 	}
 	cols := make([]*plan.ColDef, len(projectList))
+	var integerValues []function.IntegerLogicalPrecision
+	if query.IntegerPrecision != nil {
+		integerValues = evaluateIntegerPrecision(query.IntegerPrecision)
+	}
+
 	for idx, expr := range projectList {
 		name := query.Headings[idx]
 		originName := ""
@@ -371,6 +377,10 @@ func inferViewColumns(
 		if idx < len(outputColumnProvenance) {
 			narrowed := decimalDivSchemaType(*typ, outputColumnProvenance[idx])
 			typ = &narrowed
+		}
+		if g := query.IntegerPrecision; g != nil && idx < len(g.Outputs) {
+			adjusted := integerSchemaType(*typ, g, g.Outputs[idx], true, integerValues)
+			typ = &adjusted
 		}
 		defaultDef := &plan.Default{NullAbility: !expr.Typ.NotNullable}
 		if idx < len(outputColumnProvenance) {
@@ -1615,6 +1625,11 @@ func RefreshPreparedCTASInferredColumns(ctx context.Context, p, original *Plan, 
 	if len(targetColumns) < targetOnlyCount+len(originalColumns) {
 		return moerr.NewInternalError(ctx, "prepared CTAS source columns are missing from target")
 	}
+	g := p.GetDdl().Query.IntegerPrecision
+	var integerValues []function.IntegerLogicalPrecision
+	if g != nil {
+		integerValues = evaluateIntegerPrecision(g)
+	}
 	for i, source := range runtimeColumns {
 		if source == nil || originalColumns[i] == nil ||
 			!strings.EqualFold(source.Name, originalColumns[i].Name) {
@@ -1639,6 +1654,9 @@ func RefreshPreparedCTASInferredColumns(ctx context.Context, p, original *Plan, 
 				"prepared CTAS inferred column %q has a type-dependent default", target.Name)
 		}
 		target.Typ = ctasTemporalSchemaType(source.Typ)
+		if g != nil && i < len(g.Outputs) {
+			target.Typ = integerSchemaType(target.Typ, g, g.Outputs[i], false, integerValues)
+		}
 	}
 	return nil
 }
@@ -1684,6 +1702,11 @@ func genAsSelectCols(
 	rootNode := query.Nodes[query.Steps[query.MainOutputStep()]]
 
 	cols := make([]*plan.ColDef, len(rootNode.ProjectList))
+	var integerValues []function.IntegerLogicalPrecision
+	if query.IntegerPrecision != nil {
+		integerValues = evaluateIntegerPrecision(query.IntegerPrecision)
+	}
+
 	for i, expr := range rootNode.ProjectList {
 		typ := expr.Typ
 		provenance := outputColumnProvenance[i]
@@ -1694,6 +1717,10 @@ func genAsSelectCols(
 			}
 		}
 		typ = ctasTemporalSchemaType(decimalDivSchemaType(typ, provenance))
+		if g := query.IntegerPrecision; g != nil && i < len(g.Outputs) {
+			typ = integerSchemaType(typ, g, g.Outputs[i], false, integerValues)
+		}
+
 		// CTAS creates a new table from the query result.  A source column's
 		// AUTO_INCREMENT attribute is not part of that result schema and must
 		// not be copied to the new table.

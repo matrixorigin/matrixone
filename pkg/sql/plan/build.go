@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
 
@@ -1000,6 +1001,11 @@ func GetResultColumnsFromPlan(p *Plan) []*ColDef {
 			return nil
 		}
 		columns := make([]*ColDef, len(lastNode.ProjectList))
+		var integerValues []function.IntegerLogicalPrecision
+		if query.IntegerPrecision != nil {
+			integerValues = evaluateIntegerPrecision(query.IntegerPrecision)
+		}
+
 		// Only BOOLEAN wire metadata consumes expression kind. Keep all other
 		// result types on the existing origin/key path.
 		var kinds *resultColumnKinds
@@ -1009,6 +1015,16 @@ func GetResultColumnsFromPlan(p *Plan) []*ColDef {
 				Typ:  expr.Typ,
 			}
 
+			if graph := query.IntegerPrecision; graph != nil && idx < len(graph.Outputs) {
+				out := graph.Outputs[idx]
+				if out.Node != 0 && graph.Nodes[out.Node-1].Arithmetic {
+					p := integerValues[out.Node-1]
+					oid := types.T(expr.Typ.Id)
+					if p.Known && (oid == types.T_int64 || oid == types.T_uint64) && p.Unsigned == oid.IsUnsignedInt() {
+						columns[idx].IntegerResultPresentation = &plan.IntegerResultPresentation{DisplayLength: uint32(p.DisplayLength())}
+					}
+				}
+			}
 			if exprCol, ok := expr.Expr.(*plan.Expr_Col); ok {
 				if col := exprCol.Col; col != nil {
 					columns[idx].TblName = col.TblName
