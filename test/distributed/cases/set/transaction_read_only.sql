@@ -320,5 +320,25 @@ select count(*) from t;
 delete from t where a = 9;
 drop procedure dcl_wp;
 
+-- CREATE/DROP ACCOUNT issue their generated catalog writes (the mo_account
+-- insert, account-init schema creation, drop-time catalog deletes) through
+-- trusted internal executors and stay usable under READ ONLY, like the rest
+-- of account administration; SET DEFAULT ROLE, role rewrite rules and
+-- publication administration are the same class.
+set session transaction_read_only = 1;
+create account ro_acct admin_name = 'ro_admin' identified by 'Test@1234';
+drop account ro_acct;
+create role ro_r6;
+create user ro_u6 identified by 'Test@1234';
+grant ro_r6 to ro_u6;
+set default role ro_r6 to ro_u6;
+alter role ro_r6 add rule 'select a from txn_readonly.t where a > 0' on table txn_readonly.t;
+alter role ro_r6 drop rule on table txn_readonly.t;
+create publication ro_pub database txn_readonly account all;
+drop publication ro_pub;
+drop user ro_u6;
+drop role ro_r6;
+set session transaction_read_only = 0;
+
 drop table t;
 drop database txn_readonly;
