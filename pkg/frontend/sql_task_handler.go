@@ -62,6 +62,9 @@ var (
 )
 
 func handleCreateSQLTask(ctx context.Context, ses *Session, stmt *tree.CreateSQLTask) error {
+	if ses.GetDatabaseName() == "" {
+		return moerr.NewNoDB(ctx)
+	}
 	ts, err := getSQLTaskService(ctx, ses)
 	if err != nil {
 		return err
@@ -202,13 +205,17 @@ func handleExecuteSQLTask(ctx context.Context, ses *Session, stmt *tree.ExecuteS
 	executor := taskservice.NewSQLTaskExecutor(func() ie.InternalExecutor {
 		return NewInternalExecutor(ses.GetService())
 	}, ts, ses.GetService())
-	if err := executor.ExecuteContext(detachSQLTaskExecuteContext(ctx), spec, true); err != nil {
+	executionContext := detachSQLTaskExecuteContext(ctx)
+	executionErr := executor.ExecuteContext(executionContext, spec, true)
+	// Completion metadata may commit on another CN, including on body failure.
+	// Fence the caller's next snapshot before returning the original result.
+	syncSQLTaskMetadataCommitTimestamp(executionContext, ses)
+	if err := executionErr; err != nil {
 		if err == taskservice.ErrSQLTaskOverlap {
 			return moerr.NewInternalError(ctx, "sql task is already running")
 		}
 		return err
 	}
-	syncSQLTaskMetadataCommitTimestamp(ctx, ses)
 	return nil
 }
 
@@ -343,7 +350,7 @@ func normalizeSQLTaskTimezone(timezone string) string {
 }
 
 func getSQLTaskService(ctx context.Context, ses *Session) (taskservice.TaskService, error) {
-	ts := getPu(ses.GetService()).TaskService
+	ts := getPu(ses.GetService()).GetTaskService()
 	if ts == nil {
 		return nil, moerr.NewInternalError(ctx, "task service not ready yet, please try again later.")
 	}

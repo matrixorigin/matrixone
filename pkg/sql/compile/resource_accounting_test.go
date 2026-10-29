@@ -22,7 +22,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
 	"github.com/matrixorigin/matrixone/pkg/sql/models"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -77,6 +80,35 @@ func TestExecutionResourceRecorder(t *testing.T) {
 	require.Equal(t, uint64(80), summary.Memory.MaxDomainPeakLiveBytes)
 	require.Zero(t, summary.Quality&resource.QualityMissingMemoryDomain)
 	require.Zero(t, summary.Quality&resource.QualityMissingFragment)
+}
+
+func TestRemoteODKUResultFromProcess(t *testing.T) {
+	require.Nil(t, remoteODKUResultFromProcess(process.ODKUResultSummary{}))
+
+	summary := process.ODKUResultSummary{
+		HasGenerated:          true,
+		FirstGeneratedOrdinal: 2,
+		FirstGeneratedID:      11,
+		HasAction:             true,
+		LastActionOrdinal:     5,
+		LastActionID:          13,
+		HasSuccessfulAction:   true,
+		LastSuccessfulOrdinal: 4,
+		LastSuccessfulID:      12,
+	}
+	got := remoteODKUResultFromProcess(summary)
+	require.NotNil(t, got)
+	require.Equal(t, &remoteODKUResultSummary{
+		HasGenerated:          true,
+		FirstGeneratedOrdinal: 2,
+		FirstGeneratedID:      11,
+		HasAction:             true,
+		LastActionOrdinal:     5,
+		LastActionID:          13,
+		HasSuccessfulAction:   true,
+		LastSuccessfulOrdinal: 4,
+		LastSuccessfulID:      12,
+	}, got)
 }
 
 func TestExecutionResourceRecorderPublishesAllocationTerminal(t *testing.T) {
@@ -436,6 +468,66 @@ func TestRemoteTerminalEnvelopeDecodesLegacyPlan(t *testing.T) {
 	emptySender := &messageSenderOnClient{anal: &AnalyzeModule{}}
 	require.NoError(t, emptySender.dealRemoteTerminal(empty))
 	require.Empty(t, emptySender.anal.remotePhyPlans)
+}
+
+func TestRemoteTerminalScanWork(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		remoteRows   int64
+		remoteBlocks int64
+		localRows    int64
+		localBlocks  int64
+		legacy       bool
+	}{
+		{name: "remote", remoteRows: 32768, remoteBlocks: 4},
+		{name: "empty"},
+		{name: "envelope-omitted-blocks", remoteRows: 32768},
+		{name: "legacy-omitted-blocks", remoteRows: 32768, legacy: true},
+		{name: "local-and-remote", remoteRows: 32768, remoteBlocks: 4, localRows: 8192, localBlocks: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			scan := func(rows, blocks int64) models.PhyScope {
+				return models.PhyScope{
+					Magic: "Merge",
+					RootOperator: &models.PhyOperator{
+						OpName: "TableScan", NodeIdx: 0, IsFirst: true, IsLast: true,
+						OpStats: &process.OperatorStats{InputRows: rows, InputBlocks: blocks},
+					},
+				}
+			}
+			message := &pipeline.Message{}
+			receiver := &messageReceiverOnServer{phyPlan: &models.PhyPlan{
+				Version: "1.0", LocalScope: []models.PhyScope{scan(tc.remoteRows, tc.remoteBlocks)},
+			}}
+			require.NoError(t, receiver.setTerminalAnalysis(message))
+			if tc.legacy {
+				// Older senders omitted InputBlocks. Missing diagnostic data must
+				// remain zero, not be inferred from rows or a presumed block size.
+				message.SetAnalysis([]byte(`{"version":"1.0","scope":[{"Magic":"Merge","RootOperator":{"OpName":"TableScan","NodeIdx":0,"IsFirst":true,"IsLast":true,"OpStats":{"InputRows":32768}}}]}`))
+			}
+			if tc.remoteBlocks == 0 {
+				require.NotContains(t, string(message.GetAnalyse()), `"InputBlocks"`)
+			}
+			anal := &AnalyzeModule{qry: &plan.Query{Nodes: []*plan.Node{{NodeId: 0, NodeType: plan.Node_TABLE_SCAN}}}}
+			sender := &messageSenderOnClient{anal: anal}
+			require.NoError(t, sender.dealRemoteTerminal(message.GetAnalyse()))
+			require.NoError(t, sender.dealRemoteTerminal(message.GetAnalyse()))
+			require.Len(t, anal.remotePhyPlans, 1)
+			remoteStats := anal.remotePhyPlans[0].LocalScope[0].RootOperator.OpStats
+			require.Equal(t, tc.remoteRows, remoteStats.InputRows)
+			require.Equal(t, tc.remoteBlocks, remoteStats.InputBlocks)
+
+			compiled := &Compile{anal: anal}
+			compiled.GenPhyPlan(compiled)
+			if tc.localRows != 0 {
+				anal.phyPlan.LocalScope = []models.PhyScope{scan(tc.localRows, tc.localBlocks)}
+			}
+			compiled.fillPlanNodeAnalyzeInfo(statistic.NewStatsInfo())
+			got := anal.qry.Nodes[0].AnalyzeInfo
+			require.Equal(t, tc.localRows+tc.remoteRows, got.InputRows)
+			require.Equal(t, tc.localBlocks+tc.remoteBlocks, got.InputBlocks)
+		})
+	}
 }
 
 func TestRemoteTerminalV3OwnerGapRemainsPartialAcrossV4Hop(t *testing.T) {
@@ -848,4 +940,40 @@ func TestAnalyzeModuleRemoteResourceConcurrentAccess(t *testing.T) {
 	require.LessOrEqual(t, snapshot.DirectReportCount, uint64(400))
 	require.LessOrEqual(t, snapshot.MissingFragmentCount, uint64(400))
 	require.LessOrEqual(t, snapshot.MissingMemoryDomainCount, uint64(400))
+}
+
+func TestRemoteODKUTerminalFailureCancellationAndRetry(t *testing.T) {
+	for _, outcome := range []string{"success", "participant-error", "canceled", "late-retry"} {
+		t.Run(outcome, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			sender := &messageSenderOnClient{proc: proc, ctx: ctx,
+				odkuGeneration: proc.ODKUResultGeneration()}
+			data, err := json.Marshal(remoteTerminalEnvelope{ODKUResult: &remoteODKUResultSummary{
+				HasGenerated: true, FirstGeneratedOrdinal: 3, FirstGeneratedID: 17}})
+			require.NoError(t, err)
+			message := &pipeline.Message{Analyse: data}
+			if outcome == "participant-error" {
+				message.SetMoError(ctx, moerr.NewTxnNeedRetry(ctx))
+			}
+			if outcome == "canceled" {
+				cancel()
+			}
+			if outcome == "late-retry" {
+				proc.ResetODKUResult()
+			}
+			err = sender.finishRemoteTerminal(message)
+			if outcome == "participant-error" {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
+			require.Equal(t, outcome == "success", proc.GetODKUResultSummary().HasGenerated)
+			// The terminal owner consumes at most once, even after retry/reset.
+			proc.ResetODKUResult()
+			require.NoError(t, sender.dealRemoteTerminal(data))
+			require.False(t, proc.GetODKUResultSummary().HasGenerated)
+		})
+	}
 }

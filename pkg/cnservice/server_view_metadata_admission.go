@@ -76,10 +76,12 @@ func (s *service) closeViewMetadataAdmission() {
 		return
 	}
 	s.viewMetadataEpochFence.Close()
-	runtime.ServiceRuntime(s.cfg.UUID).CompareAndDeleteGlobalVariables(
-		compile.ViewMetadataEpochFenceRuntimeKey,
-		s.viewMetadataEpochFence,
-	)
+	if rt := runtime.ServiceRuntime(s.cfg.UUID); rt != nil {
+		rt.CompareAndDeleteGlobalVariables(
+			compile.ViewMetadataEpochFenceRuntimeKey,
+			s.viewMetadataEpochFence,
+		)
+	}
 }
 
 func (s *service) notifyViewMetadataAdmissionUpdated() {
@@ -297,6 +299,7 @@ func (s *service) fenceViewMetadataCatalog(
 	}
 	if snapshot.CatalogFencedEpoch >= snapshot.Epoch {
 		s.viewMetadataCatalogFencedEpoch.Store(snapshot.Epoch)
+		s.notifyHeartbeat()
 		return nil
 	}
 	if !s.viewMetadataCatalogFenceReady.Load() || s.sqlExecutor == nil {
@@ -306,10 +309,19 @@ func (s *service) fenceViewMetadataCatalog(
 		return err
 	}
 	s.viewMetadataCatalogFencedEpoch.Store(snapshot.Epoch)
+	s.notifyHeartbeat()
 	return nil
 }
 
 func viewMetadataCatalogFenceRetryable(err error, upgradeOwnerActive bool) bool {
+	// AttachCause adds a diagnostic leaf to an expired refresh. It must not
+	// turn an eligible deadline into an independent failure. Keep every real
+	// error branch subject to the existing retry policy.
+	refreshDiagnostic := upgradeOwnerActive && errors.Is(err, context.DeadlineExceeded)
+	return classifyViewMetadataCatalogFenceError(err, upgradeOwnerActive, refreshDiagnostic)
+}
+
+func classifyViewMetadataCatalogFenceError(err error, upgradeOwnerActive, refreshDiagnostic bool) bool {
 	if err == nil {
 		return false
 	}
@@ -319,7 +331,7 @@ func viewMetadataCatalogFenceRetryable(err error, upgradeOwnerActive bool) bool 
 			if child == nil {
 				continue
 			}
-			if !viewMetadataCatalogFenceRetryable(child, upgradeOwnerActive) {
+			if !classifyViewMetadataCatalogFenceError(child, upgradeOwnerActive, refreshDiagnostic) {
 				return false
 			}
 			retryable = true
@@ -328,8 +340,11 @@ func viewMetadataCatalogFenceRetryable(err error, upgradeOwnerActive bool) bool 
 	}
 	if wrapped, ok := err.(interface{ Unwrap() error }); ok {
 		if child := wrapped.Unwrap(); child != nil {
-			return viewMetadataCatalogFenceRetryable(child, upgradeOwnerActive)
+			return classifyViewMetadataCatalogFenceError(child, upgradeOwnerActive, refreshDiagnostic)
 		}
+	}
+	if errors.Is(err, moerr.CauseRefresh) {
+		return refreshDiagnostic
 	}
 	if errors.Is(err, context.DeadlineExceeded) {
 		return upgradeOwnerActive
@@ -477,7 +492,7 @@ func (s *service) waitForViewMetadataAdmissionHandoff(publishIngress bool, minim
 	if timeout <= 0 {
 		timeout = 30 * time.Second
 	}
-	discoveryCtx, cancel := context.WithTimeout(context.Background(), timeout)
+	discoveryCtx, cancel := context.WithTimeout(s.startContext(), timeout)
 	defer cancel()
 
 	operationCtx := discoveryCtx
@@ -658,6 +673,9 @@ func (s *service) waitForViewMetadataAdmissionHandoff(publishIngress bool, minim
 		}
 		select {
 		case <-discoveryDone:
+			if discoveryCtx.Err() == context.Canceled {
+				return discoveryCtx.Err()
+			}
 			return moerr.NewInternalErrorf(
 				context.Background(),
 				"CN %s was not admitted before startup deadline: %v",

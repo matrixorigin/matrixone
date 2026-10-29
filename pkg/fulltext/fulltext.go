@@ -66,7 +66,7 @@ func NewSearchAccum(srctbl string, tblname string, pattern string, mode int64, p
 }
 
 // parserFromParams extracts the "parser" field from a JSON params string
-// (the same payload threaded through fulltext_index_scan / _tokenize).
+// (the same payload threaded through the search scan / fulltext_index_tokenize).
 // An empty params string returns "".
 func parserFromParams(params string) (string, error) {
 	if len(params) == 0 {
@@ -299,49 +299,6 @@ func (p *Pattern) EvalOR(s *SearchAccum, docvec []uint8, aggcnt []int64, arg, re
 
 	return result, nil
 }
-
-/*
-func (p *Pattern) EvalPhrase(s *SearchAccum, arg map[any]float32) (map[any]float32, error) {
-	// check word order here
-
-	result := make(map[any]float32)
-
-	for docid := range arg {
-		var pos []int32
-		for j, c := range p.Children {
-			wacc := s.WordAccums[c.Text]
-			word := wacc.Words[docid]
-			currpos := word.Position
-			if j == 0 {
-				pos = word.Position
-			} else {
-				retpos := make([]int32, 0, len(pos))
-				// always compare with the first word offset '0'
-				for _, p1 := range pos {
-					for _, p2 := range currpos {
-						diff := p2 - p1
-						if c.Position == diff {
-							retpos = append(retpos, p1)
-						}
-					}
-				}
-				if len(retpos) == 0 {
-					pos = nil
-					break
-				} else {
-					pos = retpos
-				}
-			}
-		}
-
-		if len(pos) > 0 {
-			result[docid] = arg[docid]
-		}
-	}
-
-	return result, nil
-}
-*/
 
 // Get the weight for compute the TFIDF
 // LESSTHAN is lower the ranking
@@ -595,14 +552,6 @@ func GetOp(op rune) int {
 		return GREATERTHAN
 	case '~':
 		return RANKLESS
-	/*
-		case '*':
-			return STAR
-		case '"':
-			return PHRASE
-		case '(':
-			return GROUP
-	*/
 	default:
 		return TEXT
 	}
@@ -811,7 +760,11 @@ func parsePhraseJieba(pattern string) ([]*Pattern, error) {
 // Parse the search string in boolean mode
 func ParsePatternInBooleanMode(pattern string, parser string) ([]*Pattern, error) {
 
-	if strings.HasPrefix(pattern, "\"") && strings.HasSuffix(pattern, "\"") {
+	// len(pattern) >= 2 is required: a lone `"` satisfies both HasPrefix and
+	// HasSuffix (the same byte), and pattern[1:len(pattern)-1] would be
+	// pattern[1:0] -- a slice-out-of-range panic (#29896). A single `"` is not a
+	// phrase; it falls through to ordinary boolean token handling.
+	if len(pattern) >= 2 && strings.HasPrefix(pattern, "\"") && strings.HasSuffix(pattern, "\"") {
 		// phrase here
 		ss := strings.Trim(pattern[1:len(pattern)-1], " ")
 		if len(ss) == 0 {

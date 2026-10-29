@@ -41,29 +41,6 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 _original_modules = {}
 
 
-def setup_sqlalchemy_mocks():
-    """Setup SQLAlchemy mocks for this test class"""
-    global _original_modules
-    _original_modules['pymysql'] = sys.modules.get('pymysql')
-    _original_modules['sqlalchemy'] = sys.modules.get('sqlalchemy')
-    _original_modules['sqlalchemy.engine'] = sys.modules.get('sqlalchemy.engine')
-
-    sys.modules['pymysql'] = Mock()
-    sys.modules['sqlalchemy'] = Mock()
-    sys.modules['sqlalchemy.engine'] = Mock()
-    sys.modules['sqlalchemy.engine'].Engine = Mock()
-
-
-def teardown_sqlalchemy_mocks():
-    """Restore original modules"""
-    global _original_modules
-    for module_name, original_module in _original_modules.items():
-        if original_module is not None:
-            sys.modules[module_name] = original_module
-        elif module_name in sys.modules:
-            del sys.modules[module_name]
-
-
 # Import after path setup
 from matrixone.snapshot import SnapshotManager, Snapshot, SnapshotLevel
 from matrixone.exceptions import (
@@ -78,11 +55,11 @@ class TestSnapshotEnum(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        setup_sqlalchemy_mocks()
+        pass
 
     @classmethod
     def tearDownClass(cls):
-        teardown_sqlalchemy_mocks()
+        pass
 
     def test_snapshot_level_values(self):
         """Test SnapshotLevel enum values"""
@@ -120,11 +97,11 @@ class TestSnapshot(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        setup_sqlalchemy_mocks()
+        pass
 
     @classmethod
     def tearDownClass(cls):
-        teardown_sqlalchemy_mocks()
+        pass
 
     def test_snapshot_creation_with_enum(self):
         """Test snapshot object creation with enum"""
@@ -176,11 +153,11 @@ class TestSnapshotManager(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        setup_sqlalchemy_mocks()
+        pass
 
     @classmethod
     def tearDownClass(cls):
-        teardown_sqlalchemy_mocks()
+        pass
 
     def setUp(self):
         """Set up test fixtures"""
@@ -222,9 +199,13 @@ class TestSnapshotManager(unittest.TestCase):
 
     def test_create_table_snapshot(self):
         """Test creating table snapshot"""
-        mock_snapshot = Snapshot("table_snap", SnapshotLevel.TABLE, datetime.now(), database="test_db", table="test_table")
+        mock_snapshot = Snapshot(
+            "table_snap", SnapshotLevel.TABLE, datetime.now(), database="test_db", table="test_table"
+        )
         with patch.object(self.snapshot_manager, 'get', return_value=mock_snapshot):
-            result = self.snapshot_manager.create("table_snap", SnapshotLevel.TABLE, database="test_db", table="test_table")
+            result = self.snapshot_manager.create(
+                "table_snap", SnapshotLevel.TABLE, database="test_db", table="test_table"
+            )
 
             self.mock_client.execute.assert_called_once_with("CREATE SNAPSHOT table_snap FOR TABLE test_db test_table")
             self.assertEqual(result, mock_snapshot)
@@ -275,11 +256,11 @@ class TestTransactionSnapshot(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        setup_sqlalchemy_mocks()
+        pass
 
     @classmethod
     def tearDownClass(cls):
-        teardown_sqlalchemy_mocks()
+        pass
 
     def setUp(self):
         """Set up test fixtures"""
@@ -333,11 +314,11 @@ class TestSnapshotErrorHandling(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        setup_sqlalchemy_mocks()
+        pass
 
     @classmethod
     def tearDownClass(cls):
-        teardown_sqlalchemy_mocks()
+        pass
 
     def setUp(self):
         """Set up test fixtures"""

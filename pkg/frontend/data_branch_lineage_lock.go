@@ -90,11 +90,11 @@ func writePendingDataBranchLineageOwnerLifecycle(
 }
 
 func backgroundExecTxnOperator(bh BackgroundExec) client.TxnOperator {
-	backExec, ok := bh.(*backExec)
-	if !ok || backExec == nil || backExec.backSes == nil || backExec.backSes.GetTxnHandler() == nil {
+	owner, ok := bh.(interface{ getTxn() TxnOperator })
+	if !ok {
 		return nil
 	}
-	return backExec.backSes.GetTxnHandler().GetTxn()
+	return owner.getTxn()
 }
 
 func validateDataBranchLineageOwnerLifecycleAtCommit(
@@ -198,7 +198,7 @@ func getDataBranchComponentExecutor(ctx context.Context, ses *Session, useTxnHan
 		handedOff = true
 		return nil, nil, nil, finish(err)
 	}
-	admission, err := beginLifecycleRCAdmission(ctx, ses, bh)
+	admission, err := beginLifecycleRCAdmission(ctx, ses, bh, lockpb.LockMode_Shared)
 	if err != nil {
 		handedOff = true
 		return nil, nil, nil, finish(err)

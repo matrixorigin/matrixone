@@ -18,6 +18,8 @@ import (
 	"bytes"
 	"fmt"
 	"sort"
+	"strings"
+	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -56,6 +58,55 @@ type MemPKFilter struct {
 	FilterHint engine.FilterHint
 	HasBF      bool
 	BFSeqNum   int16
+
+	// clusterKey is the optional composite cluster-by filter derived from the
+	// same scan expression. It is set only by NewReader for tables whose sort
+	// key is a composite cluster-by column. Every primary-key accessor --
+	// Valid, Exact, RecordExactHit, FilterVector -- deliberately ignores it:
+	// the cluster filter selects a separate nonunique replay iterator and
+	// takes no part in primary-key semantics.
+	clusterKey *MemClusterKeyFilter
+}
+
+// SetClusterKeyFilter attaches the cluster-key filter. It must be called
+// before the filter is published to a data source.
+func (f *MemPKFilter) SetClusterKeyFilter(cluster *MemClusterKeyFilter) {
+	f.clusterKey = cluster
+}
+
+// ClusterKeyFilter returns the attached cluster-key filter, or nil.
+func (f *MemPKFilter) ClusterKeyFilter() *MemClusterKeyFilter {
+	return f.clusterKey
+}
+
+// ClusterKeyValid reports whether the attached cluster-key filter can prune
+// the committed replay iteration.
+func (f *MemPKFilter) ClusterKeyValid() bool {
+	return f.clusterKey != nil && f.clusterKey.Valid()
+}
+
+// ClusterKeySpecs returns the cluster-key filter specs, or nil when absent.
+func (f *MemPKFilter) ClusterKeySpecs() []MemPKFilterSpec {
+	if f.clusterKey == nil {
+		return nil
+	}
+	return f.clusterKey.Specs()
+}
+
+// ClusterKeyTS returns the snapshot timestamp of the attached cluster-key
+// filter.
+func (f *MemPKFilter) ClusterKeyTS() types.TS {
+	if f.clusterKey == nil {
+		return types.TS{}
+	}
+	return f.clusterKey.TS
+}
+
+func (f *MemPKFilter) ClusterKeyDescriptor() ClusterKeyDescriptor {
+	if f.clusterKey == nil {
+		return ClusterKeyDescriptor{}
+	}
+	return f.clusterKey.Descriptor
 }
 
 func (f *MemPKFilter) Valid() bool {
@@ -101,6 +152,12 @@ func NewMemPKFilter(
 	// The membership filter selects a separate key column for IVF/fulltext and
 	// remains useful even when the SQL predicate cannot produce a PK fast path.
 	filter.setFilterHint(tableDef, filterHint)
+	if tablePrimaryKeyUsesUnicodeCollation(tableDef) {
+		// The in-memory primary-key iterator also compares packed original bytes;
+		// do not publish a raw probe for a UCA text key. The independent
+		// membership hint above remains available for index/fulltext readers.
+		return filter, nil
+	}
 
 	if !basePKFilter.Valid || tableDef.Pkey == nil || packerPool == nil {
 		return
@@ -136,12 +193,27 @@ func NewMemPKFilter(
 		return
 	}
 
-	var lbVal, ubVal any
-	var packed [][]byte
 	var packer *types.Packer
 	put := packerPool.Get(&packer)
 	defer put.Put()
 
+	op, packed, isVec, ok := encodeMemSortKeySpecs(basePKFilter, packer)
+	if !ok {
+		return
+	}
+	filter.SetFullData(op, isVec, packed...)
+
+	return
+}
+
+// encodeMemSortKeySpecs packs a base sort-key filter into the encoded-key
+// domain shared by the in-memory replay indexes. ok is false when the filter
+// shape is not representable; callers fail open to full row iteration.
+func encodeMemSortKeySpecs(
+	basePKFilter BasePKFilter,
+	packer *types.Packer,
+) (op int, packed [][]byte, isVec bool, ok bool) {
+	var lbVal, ubVal any
 	if basePKFilter.Op != function.IN && basePKFilter.Op != function.PREFIX_IN {
 		switch basePKFilter.Oid {
 		case types.T_bool:
@@ -263,11 +335,10 @@ func NewMemPKFilter(
 				ubVal = types.DecodeUuid(basePKFilter.UB)
 			}
 		default:
-			logutil.Warn("NewMemPKFilter skipped data type",
+			logutil.Warn("encodeMemSortKeySpecs skipped data type",
 				zap.Int("expr op", basePKFilter.Op),
 				zap.String("data type", basePKFilter.Oid.String()))
-			return
-			//panic(basePKFilter.Oid.String())
+			return 0, nil, false, false
 		}
 	}
 
@@ -283,7 +354,7 @@ func NewMemPKFilter(
 			//
 			packed[0] = packed[0][0 : len(packed[0])-1]
 		}
-		filter.SetFullData(basePKFilter.Op, false, packed...)
+		return basePKFilter.Op, packed, false, true
 
 	case function.IN, function.PREFIX_IN:
 		packed = EncodePrimaryKeyVector(basePKFilter.Vec, packer)
@@ -293,11 +364,11 @@ func NewMemPKFilter(
 				packed[x] = packed[x][0 : len(packed[x])-1]
 			}
 		}
-		filter.SetFullData(basePKFilter.Op, true, packed...)
+		return basePKFilter.Op, packed, true, true
 
 	case function.LESS_THAN, function.LESS_EQUAL, function.GREAT_THAN, function.GREAT_EQUAL:
 		packed = append(packed, EncodePrimaryKey(lbVal, packer))
-		filter.SetFullData(basePKFilter.Op, false, packed...)
+		return basePKFilter.Op, packed, false, true
 
 	case function.PREFIX_BETWEEN, function.BETWEEN,
 		RangeLeftOpen, RangeRightOpen, RangeBothOpen,
@@ -311,12 +382,10 @@ func NewMemPKFilter(
 			packed[0] = packed[0][0 : len(packed[0])-1]
 			packed[1] = packed[1][0 : len(packed[1])-1]
 		}
-		filter.SetFullData(basePKFilter.Op, false, packed...)
+		return basePKFilter.Op, packed, false, true
 	default:
-		return
+		return 0, nil, false, false
 	}
-
-	return
 }
 
 func (f *MemPKFilter) setFilterHint(tableDef *plan.TableDef, filterHint engine.FilterHint) {
@@ -324,9 +393,12 @@ func (f *MemPKFilter) setFilterHint(tableDef *plan.TableDef, filterHint engine.F
 	if f.FilterHint.BF != nil && f.FilterHint.BF.Valid() {
 		f.HasBF = true
 		f.BFSeqNum = -1
-		// For IVF entries table, use __mo_index_pri_col for BF filtering.
+		// For IVF entries, origin_pk is the source key domain used to build this
+		// filter; the hidden composite PK must remain available only for ordinary
+		// PK pruning. Do not infer this from Pkey.Names: copied physical tables
+		// can expose only their hidden composite key there.
 		for _, col := range tableDef.Cols {
-			if col.Name == catalog.IndexTablePrimaryColName {
+			if strings.EqualFold(col.Name, catalog.IndexTablePrimaryColName) {
 				f.BFSeqNum = int16(col.Seqnum)
 				break
 			}
@@ -471,10 +543,173 @@ func (f *MemPKFilter) FilterVector(
 	packer *types.Packer,
 	skipMask *objectio.Bitmap,
 ) {
+	filterVectorRowsForTest.Add(uint64(vec.Length()))
 	keys := EncodePrimaryKeyVector(vec, packer)
 	for i := 0; i < len(keys); i++ {
 		if !f.matches(keys[i]) {
 			skipMask.Add(uint64(i))
 		}
+	}
+}
+
+// filterVectorRowsForTest counts rows that FilterVector encoded. Production
+// code never reads it; size-scaling tests use it to assert that per-statement
+// work stays bounded as a transaction's workspace grows.
+var filterVectorRowsForTest atomic.Uint64
+
+// encodePKRowsForTest counts every row that EncodePrimaryKeyVector encoded:
+// legacy FilterVector passes, write-time envelope computation, and exact-key
+// index construction all share that encoder, so the counter observes the whole
+// per-statement key-encoding work, not just one path.
+var encodePKRowsForTest atomic.Uint64
+
+// indexProbesForTest counts reads that answered from a per-batch exact-key
+// index; indexBuildsForTest counts index (re)constructions. Deltas separate
+// warm probe reuse (probes grow, builds do not) from cold rebuilding after a
+// batching mutation. Production code never reads them.
+var indexProbesForTest atomic.Uint64
+var indexBuildsForTest atomic.Uint64
+
+// FilterVectorRowsForTest returns the number of rows encoded by FilterVector
+// so far.
+func FilterVectorRowsForTest() uint64 {
+	return filterVectorRowsForTest.Load()
+}
+
+// ResetFilterVectorRowsForTest zeroes the FilterVector row counter.
+func ResetFilterVectorRowsForTest() {
+	filterVectorRowsForTest.Store(0)
+}
+
+// EncodePKRowsForTest returns the number of rows encoded by
+// EncodePrimaryKeyVector so far, regardless of caller.
+func EncodePKRowsForTest() uint64 {
+	return encodePKRowsForTest.Load()
+}
+
+// ResetEncodePKRowsForTest zeroes the shared key-encoding row counter.
+func ResetEncodePKRowsForTest() {
+	encodePKRowsForTest.Store(0)
+}
+
+// IndexProbesForTest returns how many reads have been answered through a
+// per-batch exact-key index.
+func IndexProbesForTest() uint64 {
+	return indexProbesForTest.Load()
+}
+
+// ResetIndexProbesForTest zeroes the index-probe counter.
+func ResetIndexProbesForTest() {
+	indexProbesForTest.Store(0)
+}
+
+// RecordIndexProbeForTest records one index-answered read. Called by the
+// workspace reader when it answers a batch from the exact-key index.
+func RecordIndexProbeForTest() {
+	indexProbesForTest.Add(1)
+}
+
+// IndexBuildsForTest returns how many exact-key indexes have been built.
+func IndexBuildsForTest() uint64 {
+	return indexBuildsForTest.Load()
+}
+
+// ResetIndexBuildsForTest zeroes the index-build counter.
+func ResetIndexBuildsForTest() {
+	indexBuildsForTest.Store(0)
+}
+
+// RecordIndexBuildForTest records one exact-key index construction.
+func RecordIndexBuildForTest() {
+	indexBuildsForTest.Add(1)
+}
+
+// HasMemberFilter reports whether an independent membership filter is
+// attached to this scan and bound to a membership column. While attached,
+// keeping a row needs more than a primary-key match: the membership
+// predicate can bind a different column (e.g. __mo_index_pri_col) and its
+// set can be exact, so callers must keep the FilterVector plus membership
+// path instead of answering from a primary-key index alone.
+func (f *MemPKFilter) HasMemberFilter() bool {
+	return f.HasBF && f.BFSeqNum != -1
+}
+
+// ExactPointKey returns the single encoded key when this filter is a valid
+// exact single-key point probe (EQUAL with no disjuncts). Callers use it to
+// answer batches through per-batch key indexes instead of filtering every row.
+func (f *MemPKFilter) ExactPointKey() ([]byte, bool) {
+	if !f.isValid || len(f.disjuncts) > 0 {
+		return nil, false
+	}
+	if f.op != function.EQUAL || len(f.packed) != 1 {
+		return nil, false
+	}
+	return f.packed[0], true
+}
+
+// MayMatchKeyRange reports whether any canonical-encoded primary key in the
+// byte range [lo, hi] could satisfy this filter. Callers pass a batch's
+// encoded-key envelope: a false return proves that every key of the batch
+// falls outside the filter's matching set, so the batch can be skipped
+// without calling FilterVector. The predicate must fail open: for any
+// operator whose matching set cannot be proven disjoint from [lo, hi], it
+// returns true and the batch takes the unpruned path.
+func (f *MemPKFilter) MayMatchKeyRange(lo, hi []byte) bool {
+	if !f.isValid || len(lo) == 0 || len(hi) == 0 || bytes.Compare(lo, hi) > 0 {
+		return true
+	}
+
+	if len(f.disjuncts) > 0 {
+		for idx := range f.disjuncts {
+			if f.disjuncts[idx].MayMatchKeyRange(lo, hi) {
+				return true
+			}
+		}
+		return false
+	}
+
+	switch f.op {
+	case function.EQUAL:
+		// The single key must lie inside the envelope.
+		return len(f.packed) == 1 &&
+			bytes.Compare(f.packed[0], lo) >= 0 &&
+			bytes.Compare(f.packed[0], hi) <= 0
+
+	case function.IN:
+		// f.packed is sorted ascending (SetFullData); any set key inside [lo, hi].
+		if len(f.packed) == 0 {
+			return true
+		}
+		idx := sort.Search(len(f.packed), func(i int) bool {
+			return bytes.Compare(f.packed[i], lo) >= 0
+		})
+		return idx < len(f.packed) && bytes.Compare(f.packed[idx], hi) <= 0
+
+	case function.BETWEEN, RangeLeftOpen, RangeRightOpen, RangeBothOpen:
+		// A closed envelope [lo, hi] intersects [lb, ub] unless they are
+		// fully apart; openness only removes boundary keys, so the closed
+		// test stays conservative.
+		if len(f.packed) != 2 {
+			return true
+		}
+		return bytes.Compare(hi, f.packed[0]) >= 0 &&
+			bytes.Compare(lo, f.packed[1]) <= 0
+
+	case function.GREAT_EQUAL:
+		return len(f.packed) == 1 && bytes.Compare(hi, f.packed[0]) >= 0
+
+	case function.GREAT_THAN:
+		return len(f.packed) == 1 && bytes.Compare(hi, f.packed[0]) > 0
+
+	case function.LESS_EQUAL:
+		return len(f.packed) == 1 && bytes.Compare(lo, f.packed[0]) <= 0
+
+	case function.LESS_THAN:
+		return len(f.packed) == 1 && bytes.Compare(lo, f.packed[0]) < 0
+
+	default:
+		// PREFIX_* operators compare with column-sensitive prefix rules and
+		// any unmodeled operator must keep the unpruned path.
+		return true
 	}
 }

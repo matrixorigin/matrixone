@@ -15,6 +15,9 @@
 package hnsw
 
 import (
+	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -112,29 +115,31 @@ func mock_runTxn(sqlproc *sqlexec.SqlProcess, fn func(exec executor.TxnExecutor)
 	return err
 }
 
-func TestSyncRunSqls(t *testing.T) {
-	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", m)
-	sqlproc := sqlexec.NewSqlProcess(proc)
-
+func TestSyncSaveTransactionFailure(t *testing.T) {
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
+	sp := sqlexec.NewSqlProcess(proc)
+	path := filepath.Join(t.TempDir(), "model")
+	require.NoError(t, os.WriteFile(path, []byte("owned model"), 0600))
+	idx := &HnswModel[float32]{Id: "idx", Path: path}
+	idx.Dirty.Store(true)
+	cfg := vectorindex.IndexTableConfig{DbName: "db", IndexTable: "store", MetadataTable: "meta_save_failure"}
+	sqlexec.MarkProvenanceColumns(cfg.DbName, cfg.MetadataTable)
+	t.Cleanup(func() { sqlexec.ForgetProvenanceShape(cfg.DbName, cfg.MetadataTable) })
+	syncer := &HnswSync[float32]{indexes: []*HnswModel[float32]{idx}, tblcfg: cfg}
+	old := runTxn
+	t.Cleanup(func() { runTxn = old })
+	fail := errors.New("transaction failed")
+	runTxn = func(*sqlexec.SqlProcess, func(executor.TxnExecutor) error) error { return fail }
+	require.ErrorIs(t, syncer.Save(sp), fail)
+	require.True(t, idx.Dirty.Load(), "failed persistence remains retryable")
 	runTxn = mock_runTxn
-
-	sync := &HnswSync[float32]{}
-	defer sync.Destroy()
-
-	sqls := []string{"fake"}
-	err := sync.runSqls(sqlproc, sqls)
-	require.NotNil(t, err)
-
-	sqls = []string{"sql"}
-	err = sync.runSqls(sqlproc, sqls)
-	require.Nil(t, err)
+	require.NoError(t, syncer.Save(sp))
 }
 
 func TestSyncEmptyCatalogError(t *testing.T) {
 
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	runSql = mock_runSql_empty
@@ -164,7 +169,7 @@ func TestSyncEmptyCatalogError(t *testing.T) {
 func TestSyncUpsertWithEmpty(t *testing.T) {
 
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	oldRunSQL := runSql
@@ -213,7 +218,7 @@ func TestSyncUpsertWithEmpty(t *testing.T) {
 
 func TestSyncVariableError(t *testing.T) {
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	runSql = mock_runSql_2files
@@ -269,7 +274,7 @@ func TestSyncVariableError(t *testing.T) {
 func TestSyncUpsert(t *testing.T) {
 
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	runSql = mock_runSql
@@ -301,7 +306,7 @@ func TestSyncUpsert(t *testing.T) {
 func TestSyncDelete(t *testing.T) {
 
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	runSql = mock_runSql
@@ -329,7 +334,7 @@ func TestSyncDelete(t *testing.T) {
 func TestSyncDeleteAndInsert(t *testing.T) {
 
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	runSql = mock_runSql
@@ -366,7 +371,7 @@ func TestSyncDeleteAndInsert(t *testing.T) {
 func TestSyncUpdate(t *testing.T) {
 
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	runSql = mock_runSql
@@ -395,7 +400,7 @@ func TestSyncUpdate(t *testing.T) {
 func TestSyncDeleteAndUpsert(t *testing.T) {
 
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	runSql = mock_runSql
@@ -433,7 +438,7 @@ func TestSyncDeleteAndUpsert(t *testing.T) {
 func TestSyncAddOneModel(t *testing.T) {
 
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	proc.SetResolveVariableFunc(func(key string, b1 bool, b2 bool) (any, error) {
@@ -482,7 +487,7 @@ func TestSyncAddOneModel(t *testing.T) {
 func TestSyncDelete2Files(t *testing.T) {
 
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	runSql = mock_runSql_2files
@@ -510,7 +515,7 @@ func TestSyncDelete2Files(t *testing.T) {
 func TestSyncDeleteShuffle2Files(t *testing.T) {
 
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	runSql = mock_runSql_2files
@@ -543,7 +548,7 @@ func TestSyncDeleteShuffle2Files(t *testing.T) {
 func TestSyncUpdateShuffle2Files(t *testing.T) {
 
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	runSql = mock_runSql_2files
@@ -575,7 +580,7 @@ func TestSyncUpdateShuffle2Files(t *testing.T) {
 
 func runSyncUpdateInsertShuffle2Files[T types.RealNumbers](t *testing.T) {
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	runSql = mock_runSql_2files
@@ -623,7 +628,7 @@ func TestSyncUpdateInsertShuffle2FilesF64(t *testing.T) {
 
 func runSyncUpdateInsertShuffle2FilesWithSmallCap[T types.RealNumbers](t *testing.T) {
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	proc.SetResolveVariableFunc(func(key string, b1 bool, b2 bool) (any, error) {
@@ -679,7 +684,7 @@ func TestSyncUpdateInsertShuffle2FilesF32WithSmallCap(t *testing.T) {
 
 func runSyncContinuousUpdateInsertShuffle2FilesWithSmallCap[T types.RealNumbers](t *testing.T) {
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	proc.SetResolveVariableFunc(func(key string, b1 bool, b2 bool) (any, error) {
@@ -774,7 +779,7 @@ func TestSyncContinuousUpdateInsertShuffle2FilesF32WithSmallCap(t *testing.T) {
 // so the logical Len does not diverge from the physical index size.
 func TestSyncInsertDuplicateKeyFailsCleanly(t *testing.T) {
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	proc.SetResolveVariableFunc(func(key string, b1 bool, b2 bool) (any, error) {

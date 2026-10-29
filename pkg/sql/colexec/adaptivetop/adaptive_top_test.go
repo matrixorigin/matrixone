@@ -48,7 +48,7 @@ type adaptiveFixture struct {
 
 func newAdaptiveFixture(t *testing.T, limit uint64) *adaptiveFixture {
 	t.Helper()
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	t.Cleanup(func() {
 		proc.Free()
 		require.Zero(t, proc.Mp().CurrNB())

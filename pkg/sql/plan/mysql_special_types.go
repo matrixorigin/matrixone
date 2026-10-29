@@ -19,9 +19,9 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
-	"unicode"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/geo"
@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 // validateGeometrySRID rejects SRIDs that cannot be stored in the type Width
@@ -156,6 +157,182 @@ func isDirectPreparedGeometrySRIDArg(expr *plan.Expr) bool {
 	return isImplicitPreparedParamCast(expr)
 }
 
+// isGeometrySRIDConstFunction reports whether name is one of the geometry
+// functions whose trailing argument the binder decodes as a constant
+// integer SRID: the constructors that record the SRID in the geometry
+// result type, and the ST_SRID setter. The decode treats the last bound
+// argument of these calls identically, so the argument-level fold below
+// addresses exactly that position.
+func isGeometrySRIDConstFunction(name string) bool {
+	switch strings.ToLower(name) {
+	case "st_geomfromtext", "st_geomfromwkb", "st_geomfrombinary", "st_geometryfromtext",
+		"st_geometryfromwkb", "st_pointfromtext", "st_linefromtext", "st_polygonfromtext",
+		"st_mpointfromtext", "st_mlinefromtext", "st_mpolyfromtext", "st_geomcollfromtext",
+		"st_pointfromgeohash", "st_geomfromgeojson", "st_srid":
+		return true
+	default:
+		return false
+	}
+}
+
+// isGeometrySRIDConstFoldSafe reports whether the whole SRID argument tree
+// is built from literals, the same operator set the binder's own
+// constant-fold switch covers (plus the conversion nodes the resolver adds
+// inside those operators, down to their target-type metadata), and nested
+// functions the function registry positively proves side-effect-free. Only
+// such a tree may be folded here: every node is the pure number or typing
+// machinery of those operators, or a curated pure-value builtin whose
+// evaluation has no effect outside the expression tree, so the fold below
+// cannot execute anything else of a stored definition, and the curated
+// set's reserved entry conditions - the internal-machinery registration bit
+// (plain or combined with other class flags, the python UDF builtin among
+// them) and the volatile and real-time-related overload flags - exclude
+// exactly the machinery and non-determinism the walk must not run.
+// Anything else - a parameter, a column, an unproven builtin (llm_chat is
+// registered STRICT without any excluded flag and still performs an HTTP
+// request through its executor), a volatile or real-time-related builtin,
+// internal machinery, or a function unresolved in the builtin registry (a
+// caller-named user-defined function binds through the separate UDF path
+// and its own marker veto instead) - keeps the argument untouched and the
+// decode reports its own constant-integer error, exactly like an ordinary
+// build of a non-constant definition.
+func isGeometrySRIDConstFoldSafe(expr *plan.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	switch node := expr.Expr.(type) {
+	case *plan.Expr_Lit:
+		// Any literal atom is admissible: the fold result still has to
+		// decode as a constant integer, so a folded fraction or string meets
+		// the decode's own rejection, the same verdict ordinary binding
+		// gives it.
+		return true
+	case *plan.Expr_T:
+		// Expr_T is the conversion operators' target-type metadata: the
+		// resolver appends it as the trailing argument of every cast node it
+		// builds (appendCastBeforeExprWithOverload in base_binder.go), it
+		// cannot be written from SQL, and nothing executes it - the fold
+		// executor consumes it as a type descriptor. Accepting exactly this
+		// structural leaf lets the implicit casts of otherwise safe
+		// arithmetic ('4325' + 1) pass the walk, while every executable node
+		// keeps requiring the operator whitelist above.
+		return true
+	case *plan.Expr_F:
+		switch node.F.GetFunc().GetObjName() {
+		case "+", "-", "*", "/", "div", "%", "mod", "unary_minus", "unary_plus",
+			"unary_tilde", "cast", "serial", "serial_full":
+			for _, arg := range node.F.GetArgs() {
+				if !isGeometrySRIDConstFoldSafe(arg) {
+					return false
+				}
+			}
+			return true
+		default:
+			// A nested function is admissible only through the function
+			// registry's positively proven pure set - never through the
+			// absence of a flag: llm_chat is registered STRICT without the
+			// internal bit and without a volatile or real-time-related
+			// overload, so a negative-only test admits it and the guarded
+			// fold executes its HTTP request. The curated set keeps a pure
+			// deterministic builtin inside the arithmetic (ABS of a
+			// literal) folding exactly as ordinary binding folds it, while
+			// rand and sleep stay out through the volatile and real-time
+			// flags, the relation resolvers, the fault-injection machinery
+			// and the LLM, starlark and UDF executors stay out through the
+			// internal bit or pure-set membership, and nothing of any of
+			// them executes here.
+			if !function.GetFunctionIsProvenPureFoldableById(node.F.GetFunc().GetObj()) {
+				return false
+			}
+			for _, arg := range node.F.GetArgs() {
+				if !isGeometrySRIDConstFoldSafe(arg) {
+					return false
+				}
+			}
+			return true
+		}
+	default:
+		return false
+	}
+}
+
+// isGeometrySRIDFoldableRoot reports whether the SRID argument's own root
+// can reach the fold the ordinary binder applies. Only the fold-switch
+// operator names fold there: an arithmetic root binds as a function
+// expression and meets the post-bind fold switch, so an ordinary build
+// folds its whole constant subtree - a nested pure function like ABS folds
+// through that switch's recursion, never as the root itself. The explicit
+// CAST root does not fold either: CAST syntax binds through the dedicated
+// CastExpr path, which wraps its operand with the cast node directly and
+// never visits the fold switch, so an ordinary build leaves a cast-rooted
+// SRID argument unfolded and the decode rejects it with the
+// constant-integer verdict. With the walk accepting deterministic builtins
+// and the resolver's target-type metadata (Expr_T) as subtrees, this root
+// check keeps the probe on the ordinary admission rule's side of both
+// boundaries: it must not start folding at a root ordinary binding itself
+// never folds.
+func isGeometrySRIDFoldableRoot(expr *Expr) bool {
+	fn := expr.GetF()
+	if fn == nil {
+		return true
+	}
+	switch strings.ToLower(fn.GetFunc().GetObjName()) {
+	case "+", "-", "*", "/", "div", "%", "mod", "unary_minus", "unary_plus",
+		"unary_tilde", "serial", "serial_full":
+		return true
+	default:
+		return false
+	}
+}
+
+// foldGeometrySRIDConstArg pre-folds a geometry function's constant
+// expression SRID argument before the bind decodes it. An ordinary build
+// folds the argument during its own nested binding (the post-bind
+// arithmetic constant-fold switch runs for the argument expression), so the
+// decode only ever meets a literal there and a definition with a constant
+// expression SRID is a valid, creatable view. The publication binding
+// marker returns in front of that switch, so the marked probe would meet
+// the still un-folded argument and misclassify the same valid stored
+// definition as broken. This fold runs the same executor-backed
+// ConstantFold over the same already-bound argument, and only after
+// isGeometrySRIDConstFoldSafe proved the tree is literals, that switch's
+// own operator slice, the conversion metadata the resolver added inside it,
+// and nested builtins the registry positively proves side-effect-free (see
+// GetFunctionIsProvenPureFoldableById), and only when
+// isGeometrySRIDFoldableRoot kept the argument on the
+// ordinary admission rule's side of the explicit CAST and non-operator root
+// boundaries - so the probe's admission and rejection verdicts keep
+// matching the ordinary build for proven pure trees, nothing beyond that
+// constant machinery and the curated pure
+// set can execute during validation, and prepared SRID markers keep their own
+// admission path.
+func foldGeometrySRIDConstArg(proc *process.Process, name string, args []*Expr) {
+	if proc == nil || len(args) < 2 || !isGeometrySRIDConstFunction(name) {
+		return
+	}
+	sridArg := args[len(args)-1]
+	if _, ok := sridArg.Expr.(*plan.Expr_Lit); ok {
+		return
+	}
+	if isDirectPreparedGeometrySRIDArg(sridArg) {
+		return
+	}
+	if !isGeometrySRIDFoldableRoot(sridArg) {
+		return
+	}
+	if !isGeometrySRIDConstFoldSafe(sridArg) {
+		return
+	}
+	folded, err := ConstantFold(batch.EmptyForConstFoldBatch, DeepCopyExpr(sridArg), proc, false, true)
+	if err != nil || folded == nil {
+		return
+	}
+	if _, ok := folded.Expr.(*plan.Expr_Lit); !ok {
+		return
+	}
+	args[len(args)-1] = folded
+}
+
 // SRID lives in the geometry type, so bind its value before a parent function
 // or assignment consumes that type. Only the configuration marker becomes a
 // literal; geometry data and unrelated parameters keep their references.
@@ -280,7 +457,7 @@ func geometrySRIDSourceIsNull(ctx context.Context, expr *plan.Expr) bool {
 }
 
 func isEnumPlanType(typ *plan.Type) bool {
-	return typ != nil && typ.Id == int32(types.T_enum) && len(typ.GetEnumvalues()) > 0
+	return typ != nil && typ.Id == int32(types.T_enum)
 }
 
 // isSetPlanType identifies a SET column. SET is stored as T_uint64 with a non-empty
@@ -296,9 +473,9 @@ func isEnumOrSetPlanType(typ *plan.Type) bool {
 }
 
 // makeInsertIgnoreMySQLSpecialTypeConstExpr implements MySQL's INSERT IGNORE
-// coercion for literal YEAR, ENUM, and SET values. BIT coercion stays in the
-// shared literal parser. Regular INSERT keeps the existing strict conversion
-// path; only IGNORE reaches this helper.
+// coercion for literal YEAR values. ENUM/SET use runtime conversion so their
+// diagnostics and the current execution's SQL mode are preserved. BIT coercion
+// stays in the shared literal parser; only IGNORE reaches this helper.
 func makeInsertIgnoreMySQLSpecialTypeConstExpr(
 	ctx context.Context,
 	value *tree.NumVal,
@@ -308,29 +485,6 @@ func makeInsertIgnoreMySQLSpecialTypeConstExpr(
 		return nil, false, nil
 	}
 
-	if isEnumPlanType(&targetType) {
-		index, err := mysqlEnumLiteralIndex(targetType.Enumvalues, value)
-		if err != nil {
-			index = 0 // invalid ENUM values are stored as the empty-error member
-		}
-		return &plan.Expr{
-			Typ: targetType,
-			Expr: &plan.Expr_Lit{Lit: &plan.Literal{
-				Value: &plan.Literal_EnumVal{EnumVal: uint32(index)},
-			}},
-		}, true, nil
-	}
-
-	if isSetPlanType(&targetType) {
-		bits := mysqlSetIgnoreLiteralBits(targetType.Enumvalues, value)
-		return &plan.Expr{
-			Typ: targetType,
-			Expr: &plan.Expr_Lit{Lit: &plan.Literal{
-				Value: &plan.Literal_U64Val{U64Val: bits},
-			}},
-		}, true, nil
-	}
-
 	if types.T(targetType.Id) == types.T_year && !mysqlYearLiteralIsValid(value) {
 		zero := makePlan2Int64ConstExprWithType(0)
 		expr, err := appendCastBeforeExpr(ctx, zero, targetType)
@@ -338,55 +492,6 @@ func makeInsertIgnoreMySQLSpecialTypeConstExpr(
 	}
 
 	return nil, false, nil
-}
-
-func mysqlEnumLiteralIndex(enumValues string, value *tree.NumVal) (types.Enum, error) {
-	switch value.ValType {
-	case tree.P_int64:
-		v, ok := value.Int64()
-		if !ok || v < 0 || v > int64(^uint16(0)) {
-			return 0, moerr.NewInvalidInputNoCtx("invalid ENUM index")
-		}
-		return types.ParseEnumValue(enumValues, uint16(v))
-	case tree.P_uint64:
-		v, ok := value.Uint64()
-		if !ok || v > uint64(^uint16(0)) {
-			return 0, moerr.NewInvalidInputNoCtx("invalid ENUM index")
-		}
-		return types.ParseEnumValue(enumValues, uint16(v))
-	default:
-		return types.ParseEnum(enumValues, value.String())
-	}
-}
-
-func mysqlSetIgnoreLiteralBits(setValues string, value *tree.NumVal) uint64 {
-	if value.ValType == tree.P_int64 {
-		if v, ok := value.Int64(); ok && v >= 0 {
-			return uint64(v) & mysqlSetValidBitmap(setValues)
-		}
-	}
-	if value.ValType == tree.P_uint64 {
-		if v, ok := value.Uint64(); ok {
-			return v & mysqlSetValidBitmap(setValues)
-		}
-	}
-
-	bits := uint64(0)
-	for _, member := range strings.Split(value.String(), ",") {
-		memberBits, err := types.ParseSet(setValues, member)
-		if err == nil {
-			bits |= memberBits
-		}
-	}
-	return bits
-}
-
-func mysqlSetValidBitmap(setValues string) uint64 {
-	memberCount := len(strings.Split(setValues, ","))
-	if memberCount >= types.MaxSetMembers {
-		return ^uint64(0)
-	}
-	return (uint64(1) << uint(memberCount)) - 1
 }
 
 func mysqlYearLiteralIsValid(value *tree.NumVal) bool {
@@ -430,6 +535,19 @@ func arrayPlanTypeString(typ *plan.Type) string {
 		return metadata
 	}
 	return ""
+}
+
+func typedArrayTypeHasMediumInt(typ *plan.Type) bool {
+	if !isTypedArrayPlanType(typ) {
+		return false
+	}
+	normalized := strings.ToLower(strings.NewReplacer("(", " ", ")", " ", ",", " ").Replace(arrayPlanTypeString(typ)))
+	for _, token := range strings.Fields(normalized) {
+		if token == "mediumint" || token == "int3" {
+			return true
+		}
+	}
+	return false
 }
 
 func validateTypedArrayElementType(ctx context.Context, elem *tree.T) error {
@@ -734,26 +852,10 @@ func mysqlSpecialOrderTypesCompatible(left, right *plan.Type) bool {
 	return left != nil && right != nil && left.Id == right.Id && left.Enumvalues == right.Enumvalues
 }
 
-// enumFoldKey produces the same equivalence classes used by strings.EqualFold
-// without an O(n^2) comparison across the maximum 65,535 ENUM members.
-func enumFoldKey(value string) string {
-	var folded strings.Builder
-	for _, r := range value {
-		min := r
-		for next := unicode.SimpleFold(r); next != r; next = unicode.SimpleFold(next) {
-			if next < min {
-				min = next
-			}
-		}
-		folded.WriteRune(min)
-	}
-	return folded.String()
-}
-
 func mysqlSpecialOrderTypeReversible(typ *plan.Type) bool {
 	switch {
 	case isSetPlanType(typ):
-		values, err := types.NormalizeSetValues(strings.Split(typ.Enumvalues, ","))
+		values, err := types.NormalizeSetValues(types.DecodeSetValues(typ.Enumvalues))
 		if err != nil {
 			return false
 		}
@@ -766,7 +868,7 @@ func mysqlSpecialOrderTypeReversible(typ *plan.Type) bool {
 	case isEnumPlanType(typ):
 		seen := make(map[string]struct{})
 		for _, value := range strings.Split(typ.Enumvalues, ",") {
-			key := enumFoldKey(value)
+			key := equalFoldKey(value)
 			if _, exists := seen[key]; exists {
 				return false
 			}
@@ -807,6 +909,33 @@ func (b *baseBinder) useStoredMySQLSpecialTypesForNumericContractWithProvenance(
 	name string,
 	args []*plan.Expr,
 ) ([]*plan.Expr, error) {
+	// SET storage is UINT64, but MySQL SUM/AVG return DOUBLE. Select that
+	// domain while the operand still carries SET identity; the structural
+	// rewrite below deliberately clears it from the recovered bitmap.
+	if (name == "sum" || name == "avg") && len(args) == 1 && args[0] != nil {
+		bitmap, isSet := storedSetBitmapExpr(args[0])
+		if !isSet && isSetPlanType(&args[0].Typ) {
+			bitmap = DeepCopyExpr(args[0])
+			bitmap.Typ.Enumvalues = ""
+			isSet = true
+		}
+		if !isSet && b != nil && b.ctx != nil && isSetPlanType(b.ctx.mysqlSpecialOrderTypeForExpr(args[0])) {
+			var err error
+			bitmap, err = b.mysqlSpecialNumericOperand(ctx, args[0])
+			if err != nil {
+				return nil, err
+			}
+			isSet = true
+		}
+		if isSet {
+			doubleType := types.T_float64.ToType()
+			value, err := forceCastExpr(ctx, bitmap, makePlan2Type(&doubleType))
+			if err != nil {
+				return nil, err
+			}
+			return []*plan.Expr{value}, nil
+		}
+	}
 	result := useStoredMySQLSpecialTypesForNumericContract(ctx, name, args)
 	if b == nil || b.ctx == nil {
 		return result, nil
@@ -825,7 +954,7 @@ func (b *baseBinder) useStoredMySQLSpecialTypesForNumericContractWithProvenance(
 	if !hasProvenanceCandidate {
 		return result, nil
 	}
-	if (name == "sum" || name == "avg") && len(args) == 1 {
+	if usesMySQLSpecialNumericInput(name, len(args)) {
 		recovered, err := b.mysqlSpecialNumericOperand(ctx, args[0])
 		if err != nil {
 			return nil, err
@@ -1027,7 +1156,7 @@ func setTypeHasEmptyMember(typ *plan.Type) bool {
 	if !isSetPlanType(typ) {
 		return false
 	}
-	values, err := types.NormalizeSetValues(strings.Split(typ.Enumvalues, ","))
+	values, err := types.NormalizeSetValues(types.DecodeSetValues(typ.Enumvalues))
 	if err != nil {
 		return false
 	}
@@ -1051,6 +1180,11 @@ func newNonReversibleMySQLSpecialOrderError(ctx context.Context) error {
 func makeMySQLSpecialOrderKey(ctx context.Context, displayExpr *plan.Expr, storageType *plan.Type) (*plan.Expr, error) {
 	if !mysqlSpecialOrderTypeReversible(storageType) {
 		return nil, newNonReversibleMySQLSpecialOrderError(ctx)
+	}
+	if isEnumPlanType(storageType) && mysqlSpecialNumericTypeReversible(storageType) {
+		// An empty display in this domain is the stored error member, not an
+		// invalid assignment. Reuse the safe label/typed-zero restoration.
+		return makeMySQLSpecialNumericValue(ctx, displayExpr, storageType)
 	}
 	_, valueToIndex, _, err := mysqlSpecialTypeFuncNames(storageType)
 	if err != nil {
@@ -1187,19 +1321,27 @@ func funcCastForTypedArrayType(ctx context.Context, expr *Expr, targetType Type)
 		return expr, nil
 	}
 	targetType.NotNullable = expr.Typ.NotNullable
-	if types.T(expr.Typ.Id) == types.T_any || isNullLiteralExpr(expr) {
+	mediumIntArray := typedArrayTypeHasMediumInt(&targetType)
+	if isNullLiteralExpr(expr) || (types.T(expr.Typ.Id) == types.T_any && !mediumIntArray) {
 		expr.Typ = targetType
 		return expr, nil
 	}
-	if isTypedArrayPlanType(&expr.Typ) && expr.Typ.GetEnumvalues() == targetType.GetEnumvalues() {
+	if isTypedArrayPlanType(&expr.Typ) && expr.Typ.GetEnumvalues() == targetType.GetEnumvalues() && !mediumIntArray {
 		expr.Typ = targetType
 		return expr, nil
 	}
 
 	jsonType := plan.Type{Id: int32(types.T_json), NotNullable: expr.Typ.NotNullable}
-	jsonExpr, err := forceCastExpr(ctx, expr, jsonType)
-	if err != nil {
-		return nil, err
+	var jsonExpr *Expr
+	if types.T(expr.Typ.Id) == types.T_json || types.T(expr.Typ.Id) == types.T_any {
+		jsonExpr = DeepCopyExpr(expr)
+		jsonExpr.Typ = jsonType
+	} else {
+		var err error
+		jsonExpr, err = forceCastExpr(ctx, expr, jsonType)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	args := make([]*Expr, 2)

@@ -20,176 +20,15 @@ import (
 	"fmt"
 	"runtime"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
 	mruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
-	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
-
-type delayedTaskServiceGetter struct {
-	mu      sync.RWMutex
-	service taskservice.TaskService
-	called  chan struct{}
-	once    sync.Once
-}
-
-func newDelayedTaskServiceGetter() *delayedTaskServiceGetter {
-	return &delayedTaskServiceGetter{called: make(chan struct{})}
-}
-
-func (g *delayedTaskServiceGetter) GetTaskService() (taskservice.TaskService, bool) {
-	g.once.Do(func() { close(g.called) })
-	g.mu.RLock()
-	defer g.mu.RUnlock()
-	return g.service, g.service != nil
-}
-
-func (g *delayedTaskServiceGetter) set(service taskservice.TaskService) {
-	g.mu.Lock()
-	g.service = service
-	g.mu.Unlock()
-}
-
-func (g *delayedTaskServiceGetter) Start() error { return nil }
-func (g *delayedTaskServiceGetter) Close() error { return nil }
-
-func TestWaitTaskServiceReadyObservesOwnedService(t *testing.T) {
-	getter := newDelayedTaskServiceGetter()
-	service := taskservice.NewTaskService(
-		mruntime.DefaultRuntime(), taskservice.NewMemTaskStorage())
-	defer func() { require.NoError(t, service.Close()) }()
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	done := make(chan error, 1)
-	go func() {
-		done <- waitTaskServiceReady(ctx, getter, time.Millisecond)
-	}()
-	<-getter.called
-	getter.set(service)
-	require.NoError(t, <-done)
-}
-
-func TestWaitTaskServiceReadyHonorsCancellation(t *testing.T) {
-	getter := newDelayedTaskServiceGetter()
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan error, 1)
-	go func() {
-		done <- waitTaskServiceReady(ctx, getter, time.Hour)
-	}()
-	<-getter.called
-	cancel()
-	require.ErrorIs(t, <-done, context.Canceled)
-}
-
-type readinessTaskStorage struct {
-	taskservice.TaskStorage
-	query func(context.Context) error
-}
-
-func (s *readinessTaskStorage) QueryDaemonTask(ctx context.Context, _ ...taskservice.Condition) ([]task.DaemonTask, error) {
-	return nil, s.query(ctx)
-}
-
-func TestWaitTaskServiceReadyObservesStorage(t *testing.T) {
-	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
-	defer cancel()
-	queried, release := make(chan struct{}), make(chan struct{})
-	store := taskservice.NewMemTaskStorage()
-	calls := 0
-	service := taskservice.NewTaskService(mruntime.DefaultRuntime(), &readinessTaskStorage{
-		TaskStorage: store,
-		query: func(ctx context.Context) error {
-			calls++
-			if calls == 1 {
-				return fmt.Errorf("initial refresh: %w", taskservice.ErrNotReady)
-			}
-			close(queried)
-			select {
-			case <-release:
-				return nil
-			case <-ctx.Done():
-				return ctx.Err()
-			}
-		},
-	})
-	defer func() { require.NoError(t, service.Close()) }()
-	getter := newDelayedTaskServiceGetter()
-	getter.set(service)
-	done := make(chan error, 1)
-	go func() {
-		err := waitTaskServiceReady(ctx, getter, 0)
-		if err == nil {
-			_, err = store.AddDaemonTask(ctx, task.DaemonTask{Metadata: task.TaskMetadata{ID: "once"}})
-		}
-		done <- err
-	}()
-	joined := false
-	defer func() {
-		cancel()
-		if !joined {
-			<-done
-		}
-	}()
-	select {
-	case <-queried:
-	case err := <-done:
-		joined = true
-		t.Fatalf("fixture admitted before storage observation: %v", err)
-	case <-ctx.Done():
-		t.Fatal("storage observation did not start")
-	}
-	rows, err := store.QueryDaemonTask(ctx)
-	require.NoError(t, err)
-	require.Empty(t, rows, "no business write before readiness")
-	close(release)
-	err = <-done
-	joined = true
-	require.NoError(t, err)
-	require.Equal(t, 2, calls)
-	rows, err = store.QueryDaemonTask(ctx)
-	require.NoError(t, err)
-	require.Len(t, rows, 1, "one business write after readiness")
-}
-
-func TestWaitTaskServiceReadyStorageErrors(t *testing.T) {
-	for _, name := range []string{"fatal", "cancel during read", "cancel while not ready"} {
-		t.Run(name, func(t *testing.T) {
-			ctx, cancel := context.WithCancel(t.Context())
-			defer cancel()
-			want := errors.New("storage failure")
-			calls := 0
-			service := taskservice.NewTaskService(mruntime.DefaultRuntime(), &readinessTaskStorage{
-				TaskStorage: taskservice.NewMemTaskStorage(),
-				query: func(context.Context) error {
-					calls++
-					if name == "fatal" {
-						return want
-					}
-					cancel()
-					if name == "cancel while not ready" {
-						return taskservice.ErrNotReady
-					}
-					return nil
-				},
-			})
-			defer func() { require.NoError(t, service.Close()) }()
-			getter := newDelayedTaskServiceGetter()
-			getter.set(service)
-			if name != "fatal" {
-				want = context.Canceled
-			}
-			require.ErrorIs(t, waitTaskServiceReady(ctx, getter, time.Hour), want)
-			require.Equal(t, 1, calls, "fatal errors and cancellation must not be retried")
-		})
-	}
-}
 
 func TestWaitBasicClusterTaskServicesRejectsMissingCN(t *testing.T) {
 	err := waitBasicClusterTaskServices(context.Background(), &cluster{}, 1)
@@ -197,11 +36,11 @@ func TestWaitBasicClusterTaskServicesRejectsMissingCN(t *testing.T) {
 }
 
 func TestWaitBasicClusterTaskServicesHonorsCNCount(t *testing.T) {
-	getter := newDelayedTaskServiceGetter()
+	getter := &basicTaskServiceStub{}
 	service := taskservice.NewTaskService(
 		mruntime.DefaultRuntime(), taskservice.NewMemTaskStorage())
 	defer func() { require.NoError(t, service.Close()) }()
-	getter.set(service)
+	getter.TaskService = service
 
 	cn := &operator{sid: "cn-0", serviceType: metadata.ServiceType_CN}
 	cn.reset.svc = getter
@@ -221,7 +60,7 @@ func TestWaitBasicClusterTaskServicesRejectsUnsupportedService(t *testing.T) {
 }
 
 func TestWaitBasicClusterTaskServicesReportsReadinessCancellation(t *testing.T) {
-	getter := newDelayedTaskServiceGetter()
+	getter := &basicTaskServiceStub{}
 	cn := &operator{sid: "cn-0", serviceType: metadata.ServiceType_CN}
 	cn.reset.svc = getter
 	c := &cluster{services: []*operator{cn}}
@@ -247,8 +86,14 @@ func TestBasicClusterUsesShortStartupRetryIntervals(t *testing.T) {
 			assert.Equal(t, 500*time.Millisecond, cfg.LogService.HAKeeperBootstrapRetryInterval.Duration)
 		case metadata.ServiceType_TN:
 			assert.Equal(t, 100*time.Millisecond, cfg.HAKeeperRunningRetryInterval.Duration)
+			assert.Equal(t, 100_000, cfg.getTNServiceConfig().GCCfg.GCestimateRows)
+			assert.Equal(t, 5*time.Second, cfg.getTNServiceConfig().LockService.KeepBindTimeout.Duration)
 		case metadata.ServiceType_CN:
 			assert.Equal(t, 100*time.Millisecond, cfg.TNShardReadyRetryInterval.Duration)
+			assert.Equal(t, 100*time.Millisecond, cfg.CN.LockService.KeepBindDuration.Duration)
+			// Retention keeps its zero-valued production defaults until service validation.
+			assert.Zero(t, cfg.CN.LockService.KeepRemoteLockDuration.Duration)
+			assert.Zero(t, cfg.CN.LockService.RemoteLockTimeout.Duration)
 			assert.True(t, cfg.CN.AutoIncrement.EnableAutoIDCache)
 		}
 		return true
@@ -284,7 +129,11 @@ func TestSharedTestClusterCompletedErrorDropsOwnership(t *testing.T) {
 					state.Run(panicTestReporter{}, func() (Cluster, error) { return value, failure }, func(Cluster) { t.Fatal("failed init callback") })
 				})
 				require.Nil(t, state.cluster)
-				require.ErrorIs(t, state.err, failure)
+				require.NoError(t, state.err, "completed rollback must not poison the next root")
+				initialized := false
+				state.Run(panicTestReporter{}, func() (Cluster, error) { initialized = true; return &cluster{}, nil }, func(Cluster) {})
+				require.True(t, initialized)
+				require.NoError(t, state.Close())
 			}
 			require.True(t, value.CloseComplete())
 			require.NoError(t, value.Close())
@@ -353,6 +202,8 @@ func TestSharedTestClusterFailureCleanupCannotCloseReplacement(t *testing.T) {
 	require.Len(t, firstReporter.cleanups, 2)
 	oldCleanup := firstReporter.cleanups[0]
 	require.NoError(t, state.CloseIfActive(), "an outer defer must not close before callback cleanup")
+	require.Same(t, first, state.cluster)
+	require.ErrorContains(t, state.closeIfActive(false), "callback cleanup is still pending")
 	require.Same(t, first, state.cluster)
 	for index := len(firstReporter.cleanups) - 1; index >= 0; index-- {
 		firstReporter.cleanups[index]()
@@ -626,7 +477,7 @@ func TestSharedTestClusterReportsInitializationError(t *testing.T) {
 			},
 		)
 	}
-	require.Equal(t, 1, initCalls)
+	require.Equal(t, 2, initCalls)
 	require.Zero(t, testCalls)
 }
 
@@ -700,14 +551,19 @@ func TestSharedTestClusterRetainsFailedCleanupOwner(t *testing.T) {
 	require.Equal(t, int32(1), service.closeCount.Load())
 
 	service.closeErr = nil
-	require.Panics(t, func() {
+	require.PanicsWithValue(t, "shared cluster is closed", func() {
 		state.Run(panicTestReporter{}, init, func(Cluster) {
-			t.Fatal("test callback must not run")
+			t.Fatal("test callback must not run before explicit cleanup")
 		})
 	})
 	require.Equal(t, 1, initCalls)
+	require.Equal(t, int32(1), service.closeCount.Load())
+	require.NoError(t, state.CloseIfActive())
 	require.Equal(t, int32(2), service.closeCount.Load())
 	require.Nil(t, state.cluster)
+	called := false
+	state.Run(panicTestReporter{}, func() (Cluster, error) { return &cluster{}, nil }, func(Cluster) { called = true })
+	require.True(t, called)
 	require.NoError(t, state.Close())
 }
 
@@ -800,6 +656,20 @@ func TestSharedTestClusterCloseIfActiveLeavesUnusedFixtureReusable(t *testing.T)
 	require.NoError(t, state.CloseIfActive())
 }
 
+func TestSharedTestClusterTopologySwitchRejectsActiveCallback(t *testing.T) {
+	state := SharedTestCluster{}
+	fixture := &cluster{}
+	t.Cleanup(func() { require.NoError(t, state.CloseIfActive()) })
+	state.Run(panicTestReporter{}, func() (Cluster, error) {
+		return fixture, nil
+	}, func(Cluster) {
+		require.ErrorContains(t, state.closeIfActive(false), "callback is still active")
+		require.Same(t, fixture, state.cluster)
+	})
+	require.NoError(t, state.closeIfActive(false))
+	require.Nil(t, state.cluster)
+}
+
 func TestSharedTestClusterDisposableGeneration(t *testing.T) {
 	for _, outcome := range []string{"success", "canceled", "partial-setup-goexit"} {
 		t.Run(outcome, func(t *testing.T) {
@@ -883,7 +753,7 @@ func TestSharedTestClusterCloseIfActiveBlocksReuseAfterFailure(t *testing.T) {
 	state.Run(panicTestReporter{}, func() (Cluster, error) {
 		return value, nil
 	}, func(Cluster) {})
-	require.ErrorIs(t, state.CloseIfActive(), closeErr)
+	require.ErrorIs(t, state.closeIfActive(false), closeErr)
 	require.True(t, state.closed)
 	require.Same(t, value, state.cluster)
 	require.PanicsWithValue(t, "shared cluster is closed", func() {
@@ -898,3 +768,84 @@ func TestSharedTestClusterCloseIfActiveBlocksReuseAfterFailure(t *testing.T) {
 	require.False(t, state.closed)
 	require.Nil(t, state.cluster)
 }
+
+func TestSharedTestClusterReplacesFullyReleasedInitializationFailure(t *testing.T) {
+	for _, partial := range []bool{false, true} {
+		t.Run(fmt.Sprint(partial), func(t *testing.T) {
+			state := SharedTestCluster{}
+			failed := errors.New("startup failed")
+			value := &cluster{}
+			require.PanicsWithValue(t, "failed to initialize shared cluster: startup failed", func() {
+				state.Run(panicTestReporter{}, func() (Cluster, error) {
+					if partial {
+						return value, failed
+					}
+					return nil, failed
+				}, func(Cluster) { t.Fatal("failed initialization entered callback") })
+			})
+			require.Equal(t, uint64(1), state.generation)
+			called := false
+			state.Run(panicTestReporter{}, func() (Cluster, error) { return &cluster{}, nil }, func(Cluster) { called = true })
+			require.True(t, called)
+			require.Equal(t, uint64(2), state.generation)
+			require.NoError(t, state.Close())
+		})
+	}
+}
+
+func TestSharedTestClusterInitializerPanicClosesAdmission(t *testing.T) {
+	state := SharedTestCluster{}
+	require.PanicsWithValue(t, "initializer panic", func() {
+		state.Run(panicTestReporter{}, func() (Cluster, error) { panic("initializer panic") }, func(Cluster) { t.Fatal("uninitialized callback") })
+	})
+	require.PanicsWithValue(t, "shared cluster is closed", func() {
+		state.Run(panicTestReporter{}, func() (Cluster, error) { t.Fatal("initializer must not retry"); return nil, nil }, func(Cluster) {})
+	})
+}
+
+type panickingRollbackCluster struct {
+	Cluster
+	closeCalls int
+	panicClose bool
+	complete   bool
+}
+
+func (c *panickingRollbackCluster) Close() error {
+	c.closeCalls++
+	if c.panicClose {
+		panic("rollback panic")
+	}
+	return nil
+}
+func (c *panickingRollbackCluster) CloseComplete() bool { return c.complete }
+
+func TestSharedTestClusterRollbackPanicRetainsClosedAdmission(t *testing.T) {
+	owner := &panickingRollbackCluster{panicClose: true}
+	state := SharedTestCluster{}
+	require.PanicsWithValue(t, "rollback panic", func() {
+		state.Run(panicTestReporter{}, func() (Cluster, error) { return owner, errors.New("startup failed") }, func(Cluster) { t.Fatal("failed startup entered callback") })
+	})
+	require.Same(t, owner, state.cluster)
+	require.PanicsWithValue(t, "shared cluster is closed", func() {
+		state.Run(panicTestReporter{}, func() (Cluster, error) { t.Fatal("initializer retried before cleanup"); return nil, nil }, func(Cluster) {})
+	})
+	require.Equal(t, 1, owner.closeCalls, "later roots must not implicitly retry rollback")
+	owner.panicClose = false
+	// Nil Close is not completion when the owner says resources remain.
+	require.ErrorContains(t, state.CloseIfActive(), "cleanup is incomplete")
+	require.Same(t, owner, state.cluster)
+	owner.complete = true
+	require.NoError(t, state.CloseIfActive())
+	called := false
+	state.Run(panicTestReporter{}, func() (Cluster, error) { return &cluster{}, nil }, func(Cluster) { called = true })
+	require.True(t, called)
+	require.NoError(t, state.Close())
+}
+
+type basicTaskServiceStub struct{ taskservice.TaskService }
+
+func (g *basicTaskServiceStub) GetTaskService() (taskservice.TaskService, bool) {
+	return g.TaskService, g.TaskService != nil
+}
+func (g *basicTaskServiceStub) Start() error { return nil }
+func (g *basicTaskServiceStub) Close() error { return nil }

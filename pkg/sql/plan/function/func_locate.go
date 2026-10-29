@@ -30,7 +30,7 @@ func buildInLocate2Args(parameters []*vector.Vector, result vector.FunctionResul
 	substrVs := vector.GenerateFunctionStrParameter(parameters[0])
 	strVs := vector.GenerateFunctionStrParameter(parameters[1])
 	uniformBinary, perRow := stringDomainMode(parameters[1])
-	caseInsensitive := parameters[1].GetType().Charset == types.CharsetUTF8
+	caseInsensitive := types.IsCaseInsensitiveCollation(parameters[1].GetType().Charset)
 
 	for row := uint64(0); row < uint64(length); row++ {
 		if functionRowSkipped(selectList, row) {
@@ -60,7 +60,7 @@ func buildInLocate3Args(parameters []*vector.Vector, result vector.FunctionResul
 	strVs := vector.GenerateFunctionStrParameter(parameters[1])
 	posVs := vector.GenerateFunctionFixedTypeParameter[int64](parameters[2])
 	uniformBinary, perRow := stringDomainMode(parameters[1])
-	caseInsensitive := parameters[1].GetType().Charset == types.CharsetUTF8
+	caseInsensitive := types.IsCaseInsensitiveCollation(parameters[1].GetType().Charset)
 
 	for row := uint64(0); row < uint64(length); row++ {
 		if functionRowSkipped(selectList, row) {
@@ -134,17 +134,6 @@ func runeByteOffset(value string, runeIndex int64) (int, bool) {
 		offset += size
 	}
 	return offset, true
-}
-
-// Locate2Args is retained for direct callers and follows the existing text
-// general-ci approximation.
-func Locate2Args(str string, subStr string) int64 {
-	return locateString([]byte(subStr), []byte(str), 1, false, false)
-}
-
-// Locate3Args is retained for direct callers and uses character positions.
-func Locate3Args(str string, subStr string, pos int64) int64 {
-	return locateString([]byte(subStr), []byte(str), pos, false, false)
 }
 
 // getSubstring returns a suffix whose start is measured in characters.

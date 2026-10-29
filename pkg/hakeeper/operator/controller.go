@@ -21,6 +21,8 @@
 package operator
 
 import (
+	"slices"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
@@ -122,29 +124,6 @@ func (c *Controller) GetNonVotingExecutingReplicas() ExecutingReplicas {
 	return executing
 }
 
-func (c *Controller) GetExecutingNonVotingReplicas() ExecutingReplicas {
-	executing := ExecutingReplicas{
-		Adding:   make(map[uint64][]uint64),
-		Removing: make(map[uint64][]uint64),
-		Starting: make(map[uint64][]uint64),
-	}
-	for shardID, operators := range c.operators {
-		for _, op := range operators {
-			for _, step := range op.steps {
-				switch step := step.(type) {
-				case RemoveLogService:
-					executing.Removing[shardID] = append(executing.Removing[shardID], step.ReplicaID)
-				case AddLogService:
-					executing.Adding[shardID] = append(executing.Adding[shardID], step.ReplicaID)
-				case StartLogService:
-					executing.Starting[shardID] = append(executing.Starting[shardID], step.ReplicaID)
-				}
-			}
-		}
-	}
-	return executing
-}
-
 func (c *Controller) RemoveFinishedOperator(
 	logState pb.LogState, tnState pb.TNState, cnState pb.CNState, proxyState pb.ProxyState,
 ) {
@@ -159,11 +138,49 @@ func (c *Controller) RemoveFinishedOperator(
 	}
 }
 
+// HasTNStartRetry identifies the extra batch requested by an owned TN start.
+func (c *Controller) HasTNStartRetry(ops []*Operator) bool {
+	for _, op := range ops {
+		if op != nil && !op.IsEnd() && len(op.steps) == 1 {
+			if _, ok := op.steps[0].(AddTnReplica); ok && slices.Contains(c.operators[op.shardID], op) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func (c *Controller) Dispatch(ops []*Operator, logState pb.LogState,
 	tnState pb.TNState, cnState pb.CNState, proxyState pb.ProxyState) (commands []pb.ScheduleCommand) {
+	// Only retry cohorts contain previously registered Log pointers. Ordinary
+	// fresh batches keep constant-time admission, including NoopShardID tasks.
+	var owned, emitted map[*Operator]bool
+	if c.HasTNStartRetry(ops) {
+		owned = make(map[*Operator]bool)
+		emitted = make(map[*Operator]bool, len(ops))
+		for _, existing := range c.operators {
+			for _, op := range existing {
+				owned[op] = true
+			}
+		}
+	}
 	for _, op := range ops {
-		c.operators[op.shardID] = append(c.operators[op.shardID], op)
-		if step := op.Check(logState, tnState, cnState, proxyState); step != nil {
+		if op == nil || op.IsEnd() {
+			continue
+		}
+		if owned != nil {
+			if emitted[op] {
+				continue
+			}
+			emitted[op] = true
+			if !owned[op] {
+				c.operators[op.shardID] = append(c.operators[op.shardID], op)
+				owned[op] = true
+			}
+		} else {
+			c.operators[op.shardID] = append(c.operators[op.shardID], op)
+		}
+		if step := op.Check(logState, tnState, cnState, proxyState); step != nil && !op.IsEnd() {
 			commands = append(commands, generateScheduleCommand(step))
 		}
 	}

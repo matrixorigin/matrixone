@@ -176,7 +176,7 @@ func TestPrepareRestoreOwnershipRetainsPrincipalIDs(t *testing.T) {
 func TestPartialRestoreFKSourceScope(t *testing.T) {
 	ctx := defines.AttachAccountId(t.Context(), 10)
 	info := &tableInfo{dbName: "app", tblName: "t"}
-	source := &partialRestoreSource{tables: []*tableInfo{info}, byName: map[restoreObjectName]*tableInfo{{"app", "t"}: info}}
+	source := newPartialRestoreSource([]*tableInfo{info})
 	bh := &backgroundExecTest{}
 	bh.init()
 	keys := []string{genKey("app", "t"), genKey("app", "hidden"), genKey("other", "t")}

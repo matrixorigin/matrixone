@@ -25,6 +25,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/collation"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -132,6 +133,8 @@ func alterCopyKeyColumnValueUnchanged(oldCol, newCol *ColDef) bool {
 	}
 	oldTyp, newTyp := oldCol.Typ, newCol.Typ
 	return oldTyp.Id == newTyp.Id &&
+		oldTyp.Charset == newTyp.Charset &&
+		oldTyp.CollationVersion == newTyp.CollationVersion &&
 		oldTyp.NotNullable == newTyp.NotNullable &&
 		oldTyp.AutoIncr == newTyp.AutoIncr &&
 		oldTyp.Width == newTyp.Width &&
@@ -239,7 +242,7 @@ func autoIncrementValueToOffset(value uint64) uint64 {
 	return 0
 }
 
-func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, error) {
+func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext, bindings alterColumnBindings, pureAddColumns bool) (*Plan, error) {
 	ctx := cctx.GetContext()
 	// 1. get origin table name and Schema name
 	schemaName, tableName := string(stmt.Table.Schema()), string(stmt.Table.Name())
@@ -282,11 +285,18 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 	if err := reconcileIndexVisibility(cctx, tableDef.TblId, copyTableDef, nil); err != nil {
 		return nil, err
 	}
+	pendingChecks, err := prepareAlterCopyChecks(cctx, copyTableDef, stmt.Options)
+	if err != nil {
+		return nil, err
+	}
 	// The copied definition contains the source allocator's cached offset. It
 	// is not a user request and can be far ahead of the actual rows. The copy
 	// executor reconciles the explicit request, copied maximum, and source
 	// allocator state after the rows are visible in this transaction.
 	copyTableDef.AutoIncrOffset = 0
+	if err := applyAlterTableCharsetDefault(cctx, copyTableDef, stmt.Options); err != nil {
+		return nil, err
+	}
 	alterTableCtx := initAlterTableContext(tableDef, copyTableDef, schemaName)
 
 	// 3. check alter_option list
@@ -316,6 +326,7 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 
 		affectedCols             = make([]string, 0, len(tableDef.Cols))
 		affectedIndexes          = make([]string, 0, len(tableDef.Indexes))
+		rebuildIndexNames        = make(map[string]struct{})
 		pendingAddIndexes        = make([]tree.TableDef, 0)
 		generatedDependencySeeds = make(map[string]struct{})
 		pendingForeignKeys       = make([]*tree.ForeignKey, 0)
@@ -336,10 +347,16 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 		}
 	}
 
-	for _, spec := range validAlterSpecs {
+	for ordinal, spec := range validAlterSpecs {
+		if isIgnoredStorageTableOption(spec) {
+			continue
+		}
 		switch option := spec.(type) {
 		case *tree.AlterOptionAdd:
 			switch optionAdd := option.Def.(type) {
+			case *tree.CheckIndex:
+				// Names and drops were applied before column mutations. Bind
+				// surviving new expressions against the final schema below.
 			case *tree.PrimaryKeyIndex:
 				err = AddPrimaryKey(cctx, alterTablePlan, optionAdd, alterTableCtx)
 				affectedAllIdxCols()
@@ -359,8 +376,39 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 			}
 		case *tree.AlterOptionDrop:
 			switch option.Typ {
+			case tree.AlterTableDropCheck:
+				// Already applied by prepareAlterCopyChecks.
+			case tree.AlterTableDropIndex, tree.AlterTableDropKey:
+				found := false
+				for i, index := range copyTableDef.Indexes {
+					if !IndexNamesEqual(index.IndexName, string(option.Name)) {
+						continue
+					}
+					cols := functionalIndexColumns(copyTableDef, index)
+					if len(cols) == 0 {
+						return nil, moerr.NewNotSupported(ctx, "combined COPY DROP INDEX requires a functional index")
+					}
+					// A same-statement DROP/ADD can reuse the index name while
+					// changing its key expression. The replacement must be rebuilt
+					// from base rows; cloning the old hidden index table by name
+					// would retain stale keys from the dropped definition.
+					rebuildIndexNames[indexNameKey(index.IndexName)] = struct{}{}
+					copyTableDef.Indexes = append(copyTableDef.Indexes[:i], copyTableDef.Indexes[i+1:]...)
+					for _, col := range cols {
+						if err = handleDropColumnPosition(ctx, copyTableDef, col); err != nil {
+							return nil, err
+						}
+						delete(alterTableCtx.alterColMap, col.Name)
+						delete(alterTableCtx.changColDefMap, col.ColId)
+					}
+					found = true
+					break
+				}
+				if !found {
+					return nil, moerr.NewErrCantDropFieldOrKey(ctx, string(option.Name))
+				}
 			case tree.AlterTableDropColumn:
-				pkAffected, err = DropColumn(cctx, alterTablePlan, string(option.Name), alterTableCtx)
+				pkAffected, err = DropColumn(cctx, alterTablePlan, string(option.Name), alterTableCtx, bindings.clauses[ordinal].preserveIndexes)
 				affectedCols = append(affectedCols, string(option.Name))
 			case tree.AlterTableDropPrimaryKey:
 				err = DropPrimaryKey(cctx, alterTablePlan, alterTableCtx)
@@ -422,6 +470,9 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 			for _, order := range option.AlterOrderByList {
 				affectedCols = append(affectedCols, order.Column.ColName())
 			}
+		case *tree.TableOptionCharset, *tree.TableOptionCollate:
+			// Defaults were applied before binding any column. Conversion runs
+			// once against the final schema, including columns added by this DDL.
 		case *tree.AlterOptionAlgorithm:
 			// algorithm hint parsed for compatibility; the actual algorithm
 			// is resolved by ResolveAlterTableAlgorithm via the full options list
@@ -434,6 +485,18 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 		if err != nil {
 			return nil, err
 		}
+	}
+	conversion, conversionErr := alterTableCharsetConversion(cctx, stmt.Options)
+	if conversionErr != nil {
+		return nil, conversionErr
+	}
+	if conversion != nil {
+		if err = convertAlterTableCharacterColumns(cctx, alterTablePlan, alterTableCtx, conversion); err != nil {
+			return nil, err
+		}
+		// Converted values and generated dependents cannot reuse old index
+		// bytes, PK dedup proofs, or hidden secondary tables.
+		affectedAllIdxCols()
 	}
 	// Normalize the final COPY definition, after all ALTER clauses. Keeping a
 	// table cache policy without a visible auto column would make its internal
@@ -515,9 +578,25 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 	); err != nil {
 		return nil, err
 	}
+	// A surviving SET NULL constraint must remain executable over the final
+	// schema: reject an ALTER that tightens its child column to NOT NULL
+	// (#30282 review).
+	if err = checkAlterSurvivingFkSetNull(cctx, tableName, droppedFkNames(validAlterSpecs), tableDef, copyTableDef); err != nil {
+		return nil, err
+	}
+	for _, check := range pendingChecks {
+		if err = appendCheckDef(cctx, copyTableDef, check.ConstraintSymbol, check.Expr, -1); err != nil {
+			return nil, err
+		}
+	}
+
+	if err := validateAlterColumnCount(ctx, tableDef, copyTableDef); err != nil {
+		return nil, err
+	}
 
 	createTmpDdl, _, err := constructCreateTableSQL(
 		cctx, copyTableDef, snapshot, true, nil, true, nil,
+		false, "", // Internal SQL is parsed in ordinary mode.
 	)
 	if err != nil {
 		return nil, err
@@ -548,6 +627,16 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 			}
 		}
 	}
+	// DROP INDEX followed by ADD INDEX in the same COPY ALTER creates a new
+	// logical index even when the catalog name is reused. Override the normal
+	// affected-column calculation for those identities so both copy-side
+	// maintenance and cloneUnaffectedIndexes rebuild them instead of reusing
+	// the old hidden index table.
+	for _, idxCol := range tableDef.Indexes {
+		if _, ok := rebuildIndexNames[indexNameKey(idxCol.IndexName)]; ok {
+			opt.SkipIndexesCopy[idxCol.IndexName] = false
+		}
+	}
 
 	alterTablePlan.Options = opt
 	logutil.Info("alter copy option",
@@ -564,6 +653,25 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 
 	alterTablePlan.ChangeTblColIdMap = alterTableCtx.changColDefMap
 	alterTablePlan.UpdateFkSqls = append(alterTablePlan.UpdateFkSqls, alterTableCtx.UpdateSqls...)
+	if pureAddColumns && len(alterTablePlan.Actions) == 0 {
+		// COPY markers describe the final layout, not a sequence of engine ADDs.
+		// Purity was established from the complete original option list, before
+		// constraint resolution can remove no-op clauses.
+		for pos, col := range copyTableDef.Cols {
+			if FindColumn(tableDef.Cols, col.Name) != nil {
+				continue
+			}
+			previous := ""
+			if pos > 0 {
+				previous = copyTableDef.Cols[pos-1].Name
+			}
+			alterTablePlan.Actions = append(alterTablePlan.Actions, &plan.AlterTable_Action{
+				Action: &plan.AlterTable_Action_AddColumn{AddColumn: &plan.AlterAddColumn{
+					Name: col.Name, Type: *DeepCopyType(&col.Typ), Pos: int32(pos), PreName: previous,
+				}},
+			})
+		}
+	}
 	return &Plan{
 		Plan: &plan.Plan_Ddl{
 			Ddl: &plan.DataDefinition{
@@ -604,6 +712,16 @@ func addAlterCopyForeignKeys(
 		}
 	}
 
+	// #30254: MySQL installs a FOREIGN KEY declared under
+	// foreign_key_checks=0 without validating pre-existing rows; orphans
+	// survive until later DML fails. Skip the existing-row detect SQLs in
+	// that mode; constraint definitions, catalog updates and parent
+	// existence checks below are unaffected.
+	fkChecksEnabled, err := IsForeignKeyChecksEnabled(cctx)
+	if err != nil {
+		return err
+	}
+
 	for _, foreignKey := range foreignKeys {
 		if err := adjustConstraintName(ctx, foreignKey); err != nil {
 			return err
@@ -617,6 +735,13 @@ func addAlterCopyForeignKeys(
 			cctx, alterTablePlan.Database, finalTableDef, foreignKey,
 		)
 		if err != nil {
+			return err
+		}
+		// #30282: reject ON DELETE/ON UPDATE SET NULL declared over NOT NULL
+		// child columns (MySQL error 1830). The check runs against the final
+		// schema view so a NOT NULL column introduced by an earlier action of
+		// this same ALTER statement is caught as well.
+		if err = checkFkSetNullColumnsRequireNullable(ctx, finalTableDef.Cols, fkData.Def, fkData.Cols.Cols); err != nil {
 			return err
 		}
 		if fkData.IsSelfRefer {
@@ -654,6 +779,12 @@ func addAlterCopyForeignKeys(
 			},
 		})
 		alterTableCtx.UpdateSqls = append(alterTableCtx.UpdateSqls, fkData.UpdateSql)
+
+		if !fkChecksEnabled {
+			// Checks-disabled declarations skip existing-row validation
+			// entirely; the constraint is installed as declared.
+			continue
+		}
 
 		if fkData.IsSelfRefer {
 			detectSQLs, err := genSqlsForCheckFKSelfRefer(
@@ -767,6 +898,14 @@ func buildAlterCopyAddIndex(
 		}
 
 	case *tree.Index:
+		lowered, err := lowerFunctionalIndex(ctx, copyTableDef, index)
+		if err != nil {
+			return nil, "", err
+		}
+		index = lowered
+		for _, col := range copyTableDef.Cols {
+			colMap[col.Name] = col
+		}
 		if err := checkIndexKeypartSupportability(ctx.GetContext(), index.KeyParts); err != nil {
 			return nil, "", err
 		}
@@ -1234,6 +1373,24 @@ func initAlterTableContext(originTableDef *TableDef, copyTableDef *TableDef, sch
 	}
 }
 
+// droppedFkNames collects the FOREIGN KEY constraints the statement drops, so
+// surviving-constraint validation does not raise error 1830 for a definition
+// this same ALTER is removing anyway.
+func droppedFkNames(specs []tree.AlterTableOption) map[string]bool {
+	var out map[string]bool
+	for _, spec := range specs {
+		drop, ok := spec.(*tree.AlterOptionDrop)
+		if !ok || drop.Typ != tree.AlterTableDropForeignKey {
+			continue
+		}
+		if out == nil {
+			out = make(map[string]bool)
+		}
+		out[strings.ToLower(string(drop.Name))] = true
+	}
+	return out
+}
+
 func buildCopyTableDef(ctx context.Context, tableDef *TableDef) (*TableDef, error) {
 	replicaTableDef := DeepCopyTableDef(tableDef, true)
 
@@ -1324,6 +1481,21 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 	if objRef.PubInfo != nil {
 		return nil, moerr.NewInternalError(ctx.GetContext(), "cannot alter table in subscription database")
 	}
+	pureAddColumns := pureAlterAddColumns(stmt.Options)
+	bindings := analyzeAlterColumnBindings(tableDef, stmt.Options)
+	options, err := resolveAlterConstraintOptions(ctx, tableDef, stmt.Options, bindings)
+	if err != nil {
+		return nil, err
+	}
+	// Preserve the parser-owned AST: prepared statements may plan it again.
+	resolvedStmt := *stmt
+	resolvedStmt.Options = options
+	stmt = &resolvedStmt
+	// Generic CONSTRAINT drops must obey the same physical-key admission
+	// as the constraint-specific operations they resolve to.
+	if tableDef.KeyFormat == collation.KeyFormatV1 && hasVersionedIndexMutation(stmt.Options) {
+		return nil, rejectVersionedIndexMutation(ctx.GetContext(), tableDef)
+	}
 	isClusterTable := util.TableIsClusterTable(tableDef.GetTableType())
 	accountId, err := ctx.GetAccountId()
 	if err != nil {
@@ -1340,7 +1512,14 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 		return buildAlterTableInplace(stmt, ctx)
 	}
 
-	algorithm, err := ResolveAlterTableAlgorithm(ctx.GetContext(), stmt.Options, tableDef)
+	// MODIFY/CHANGE inherit the statement's final default, just as COPY and
+	// INPLACE binding do. Admit metadata-only changes against that same domain,
+	// without rewriting the resolved source columns or catalog definition.
+	effectiveTableDef := *tableDef
+	if err := applyAlterTableCharsetDefault(ctx, &effectiveTableDef, stmt.Options); err != nil {
+		return nil, err
+	}
+	algorithm, err := ResolveAlterTableAlgorithm(ctx.GetContext(), stmt.Options, &effectiveTableDef)
 	if err != nil {
 		return nil, err
 	}
@@ -1350,34 +1529,113 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 	}
 
 	if algorithm == plan.AlterTable_COPY {
-		return buildAlterTableCopy(stmt, ctx)
+		return buildAlterTableCopy(stmt, ctx, bindings, pureAddColumns)
 	} else {
 		return buildAlterTableInplace(stmt, ctx)
 	}
 }
 
-// Charset options remain compatibility no-ops, not conversions. Admit requests
-// before either ALTER algorithm can ignore, rewrite, or discard their metadata.
-func validateAlterTableCharsetOptions(ctx CompilerContext, options []tree.AlterTableOption) error {
-	var charsetOptions []tree.TableOption
+// Only the validated algorithm/lock hints may accompany a pure ADD certificate.
+// Call this before filtering or resolving the parser's option list.
+func pureAlterAddColumns(options []tree.AlterTableOption) bool {
+	added := false
 	for _, option := range options {
-		switch opt := option.(type) {
-		case *tree.TableOptionCharset:
-			if !opt.NonCharsetSyntax {
-				charsetOptions = append(charsetOptions, opt)
-				if opt.Collate != "" {
-					charsetOptions = append(charsetOptions, &tree.TableOptionCollate{Collate: opt.Collate})
-				}
+		switch value := option.(type) {
+		case *tree.AlterAddCol:
+			if value == nil || value.Column == nil {
+				return false
 			}
-		case *tree.TableOptionCollate:
-			charsetOptions = append(charsetOptions, opt)
+			added = true
+		case *tree.AlterOptionAlgorithm:
+			if value == nil {
+				return false
+			}
+		case *tree.AlterOptionLock:
+			if value == nil {
+				return false
+			}
+		default:
+			return false
 		}
 	}
-	if len(charsetOptions) != 0 {
-		_, err := tableDefaultCharset(ctx, charsetOptions)
+	return added
+}
+
+func hasVersionedIndexMutation(options []tree.AlterTableOption) bool {
+	for _, option := range options {
+		switch option := option.(type) {
+		case *tree.AlterOptionAlterIndex, *tree.AlterOptionAlterReIndex:
+			return true
+		case *tree.AlterOptionDrop:
+			if option.Typ == tree.AlterTableDropIndex ||
+				option.Typ == tree.AlterTableDropKey ||
+				option.Typ == tree.AlterTableDropPrimaryKey ||
+				option.Typ == tree.AlterTableDropColumn {
+				return true
+			}
+		case *tree.AlterOptionAdd:
+			switch option.Def.(type) {
+			case *tree.PrimaryKeyIndex, *tree.Index, *tree.UniqueIndex, *tree.FullTextIndex:
+				return true
+			case *tree.ColumnTableDef:
+				if columnDefHasIndexAttribute(option.Def.(*tree.ColumnTableDef)) {
+					return true
+				}
+			}
+		case *tree.AlterAddCol:
+			if columnDefHasIndexAttribute(option.Column) {
+				return true
+			}
+		case *tree.AlterTableAddColumnClause:
+			for _, column := range option.NewColumns {
+				if columnDefHasIndexAttribute(column) {
+					return true
+				}
+			}
+		case *tree.AlterTableModifyColumnClause,
+			*tree.AlterTableChangeColumnClause,
+			*tree.AlterTableRenameColumnClause:
+			// The current in-place column mutation code does not prove that an
+			// indexed source column retains the V1 physical-key contract.  Keep
+			// every such mutation fail-closed until it can rebind and validate
+			// the affected index definitions atomically.
+			return true
+		case *tree.AlterTableAlterColumnClause:
+			return true
+		}
+	}
+	return false
+}
+
+func columnDefHasIndexAttribute(column *tree.ColumnTableDef) bool {
+	if column == nil {
+		return false
+	}
+	for _, attr := range column.Attributes {
+		switch attr.(type) {
+		case *tree.AttributePrimaryKey, *tree.AttributeKey,
+			*tree.AttributeUnique, *tree.AttributeUniqueKey:
+			return true
+		}
+	}
+	return false
+}
+
+// Validate both default changes and conversions before algorithm selection.
+func validateAlterTableCharsetOptions(ctx CompilerContext, options []tree.AlterTableOption) error {
+	_, err := alterTableCharsetConversion(ctx, options)
+	if err != nil {
 		return err
 	}
-	return nil
+	defaults := alterTableCharsetDefaultOptions(options)
+	if len(defaults) == 0 {
+		return nil
+	}
+	_, err = tableDefaultCharset(ctx, defaults)
+	if err != nil {
+		return err
+	}
+	return RequireDatabaseDefaults(ctx.GetContext(), ctx.GetProcess().GetService())
 }
 
 func validateAlterTableIdentifierDestinations(ctx context.Context, options []tree.AlterTableOption) error {
@@ -1442,6 +1700,8 @@ func allowTempTableAlter(stmt *tree.AlterTable) bool {
 			default:
 				return false
 			}
+		case *tree.TableOptionCharset, *tree.TableOptionCollate:
+			// Charset ALTER uses the session table's existing DDL/COPY owner.
 		case *tree.AlterAddCol, *tree.AlterTableModifyColumnClause,
 			*tree.AlterTableRenameColumnClause,
 			*tree.AlterOptionTableName:
@@ -1453,12 +1713,56 @@ func allowTempTableAlter(stmt *tree.AlterTable) bool {
 	return true
 }
 
+// isIgnoredStorageTableOption reports MySQL storage-engine table options that
+// CREATE TABLE accepts and ignores (see buildCreateTable); ALTER TABLE ignores
+// them the same way. CHARSET/COLLATE/COMMENT/AUTO_INCREMENT have real effects
+// and are handled separately.
+func isIgnoredStorageTableOption(option tree.AlterTableOption) bool {
+	switch option.(type) {
+	case *tree.TableOptionAUTOEXTEND_SIZE, *tree.TableOptionAvgRowLength,
+		*tree.TableOptionChecksum, *tree.TableOptionCompression,
+		*tree.TableOptionConnection, *tree.TableOptionDataDirectory, *tree.TableOptionIndexDirectory,
+		*tree.TableOptionDelayKeyWrite, *tree.TableOptionEncryption, *tree.TableOptionEngine, *tree.TableOptionEngineAttr,
+		*tree.TableOptionKeyBlockSize, *tree.TableOptionMaxRows, *tree.TableOptionMinRows, *tree.TableOptionPackKeys,
+		*tree.TableOptionPassword, *tree.TableOptionRowFormat, *tree.TableOptionStartTrans, *tree.TableOptionSecondaryEngineAttr,
+		*tree.TableOptionStatsAutoRecalc, *tree.TableOptionStatsPersistent, *tree.TableOptionStatsSamplePages,
+		*tree.TableOptionTablespace, *tree.TableOptionUnion:
+		return true
+	}
+	return false
+}
+
 func ResolveAlterTableAlgorithm(
 	ctx context.Context,
 	validAlterSpecs []tree.AlterTableOption,
 	tableDef *TableDef,
 ) (algorithm plan.AlterTable_AlgorithmType, err error) {
 	algorithm = plan.AlterTable_COPY
+	functionalCopy := false
+	for _, spec := range validAlterSpecs {
+		switch spec.(type) {
+		case *tree.AlterTableModifyColumnClause, *tree.AlterTableChangeColumnClause, *tree.AlterTableRenameColumnClause:
+			// Even an in-place source widening changes the functional key's
+			// inferred type. Rebind and rebuild it together with the base rows.
+			for _, index := range tableDef.Indexes {
+				if functionalIndexColumn(tableDef, index) != nil {
+					functionalCopy = true
+				}
+			}
+		}
+		if add, ok := spec.(*tree.AlterOptionAdd); ok {
+			if index, ok := add.Def.(*tree.Index); ok && hasFunctionalKey(index.KeyParts) {
+				functionalCopy = true
+			}
+		}
+		if drop, ok := spec.(*tree.AlterOptionDrop); ok && (drop.Typ == tree.AlterTableDropIndex || drop.Typ == tree.AlterTableDropKey) {
+			for _, index := range tableDef.Indexes {
+				if IndexNamesEqual(index.IndexName, string(drop.Name)) && functionalIndexColumn(tableDef, index) != nil {
+					functionalCopy = true
+				}
+			}
+		}
+	}
 
 	// First pass: resolve algorithm based on operations, skipping ALGORITHM/LOCK hints.
 Loop:
@@ -1468,6 +1772,8 @@ Loop:
 			continue
 		case *tree.AlterOptionAdd:
 			switch option.Def.(type) {
+			case *tree.CheckIndex:
+				algorithm = plan.AlterTable_COPY
 			case *tree.PrimaryKeyIndex:
 				algorithm = plan.AlterTable_COPY
 			case *tree.ForeignKey:
@@ -1481,6 +1787,8 @@ Loop:
 			}
 		case *tree.AlterOptionDrop:
 			switch option.Typ {
+			case tree.AlterTableDropCheck:
+				algorithm = plan.AlterTable_COPY
 			case tree.AlterTableDropColumn:
 				algorithm = plan.AlterTable_COPY
 			case tree.AlterTableDropIndex:
@@ -1540,7 +1848,12 @@ Loop:
 			algorithm = plan.AlterTable_COPY
 		case *tree.AlterTableOrderByColumnClause:
 			algorithm = plan.AlterTable_COPY
-		case *tree.TableOptionAutoIncrement:
+		case *tree.TableOptionCharset:
+			algorithm = plan.AlterTable_INPLACE
+			if option.Convert {
+				algorithm = plan.AlterTable_COPY
+			}
+		case *tree.TableOptionCollate, *tree.TableOptionAutoIncrement:
 			algorithm = plan.AlterTable_INPLACE
 		default:
 			algorithm = plan.AlterTable_INPLACE
@@ -1550,6 +1863,9 @@ Loop:
 		}
 	}
 
+	if functionalCopy {
+		algorithm = plan.AlterTable_COPY
+	}
 	requiredAlgorithm := algorithm // stable baseline for hint validation; algorithm is mutated below
 
 	// Second pass: apply ALGORITHM hint (takes precedence over operation-based resolution).
@@ -1695,12 +2011,8 @@ func storageAgnosticType(
 	defaultCharset uint32,
 ) (ok bool, err error) {
 
-	nTy, err := getTypeFromAst(ctx, nCol.Type)
+	nTy, err := getColumnTypeFromAst(ctx, nCol, defaultCharset, nil)
 	if err != nil {
-		return
-	}
-	nTy.Charset = uint32(types.CharsetType(types.T(nTy.Id)))
-	if err = applyDefaultAndColumnAttributesToType(ctx, &nTy, defaultCharset, nCol.Attributes); err != nil {
 		return
 	}
 
@@ -1710,7 +2022,8 @@ func storageAgnosticType(
 		oTy.Scale != nTy.Scale ||
 		oTy.Enumvalues != nTy.Enumvalues ||
 		oTy.AutoIncr != nTy.AutoIncr ||
-		oTy.Charset != nTy.Charset {
+		oTy.Charset != nTy.Charset ||
+		oTy.CollationVersion != nTy.CollationVersion {
 		return
 	}
 
@@ -1812,7 +2125,7 @@ func buildNotNullColumnVal(col *ColDef) string {
 		defaultValue = "'{}'"
 	} else if isEnumPlanType(&col.Typ) {
 		enumvalues := strings.Split(col.Typ.Enumvalues, ",")
-		defaultValue = enumvalues[0]
+		defaultValue = "'" + formatStrInSingleQuotes(enumvalues[0]) + "'"
 	} else if types.T(col.Typ.Id).IsArrayRelate() {
 		// IsArrayRelate covers all six vector types. Enumerating only f32/f64
 		// here made ALTER TABLE ... ADD v VECF16(n) NOT NULL fall through to

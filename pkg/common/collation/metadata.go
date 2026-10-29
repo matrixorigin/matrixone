@@ -181,6 +181,35 @@ func ResolveSQL(name string) (Identity, bool) {
 	return d.LegacyIdentity, ok && d.LegacyIdentity != LegacyIdentity
 }
 
+// ResolveSession resolves a collation name for a live SQL session.  Legacy
+// compatibility spellings keep their historical identity and revision-zero
+// contract.  The native UCA400 collations are executable session domains, so
+// they retain their native identity and require the version-one metadata
+// contract.  Other native definitions remain closed until their complete
+// session and storage contracts are implemented.
+func ResolveSession(name string) (Identity, uint8, bool) {
+	d, ok := Lookup(name)
+	if !ok {
+		return LegacyIdentity, RevisionLegacy, false
+	}
+	if d.LegacyIdentity != LegacyIdentity {
+		return d.LegacyIdentity, RevisionLegacy, true
+	}
+	if d.Semantics == UCA400 {
+		return d.Identity, RevisionV1, true
+	}
+	return LegacyIdentity, RevisionLegacy, false
+}
+
+// IsProtocolAdmitted reports whether a protocol collation is backed by the
+// runtime session contract.  Native UCA400 collations are admitted because
+// their key/comparison implementation and revisioned metadata are complete;
+// other native/versioned definitions remain rejected rather than being
+// silently mapped to a different collation.
+func IsProtocolAdmitted(d Definition) bool {
+	return d.LegacyIdentity != LegacyIdentity || d.Semantics == UCA400
+}
+
 // ResolveDDLCollation preserves DDL-only compatibility spellings without
 // advertising a native UTF-32 domain or enabling them for session requests.
 func ResolveDDLCollation(name string) (Identity, bool) {
@@ -245,14 +274,42 @@ func ValidateKeyFormat(format uint32) error {
 	return nil
 }
 
-// RequireLegacy is a production fence, not a feature switch. C11 owns future
-// cluster activation; knowing a backend or protocol ID cannot enable a domain.
+// ValidateKeyFormatPair validates the physical-key contract shared by a base
+// relation and one of its index relations.  A key producer and its probe must
+// agree on the format; treating a missing index format as legacy while the
+// base relation carries a versioned format would make the two sides generate
+// different bytes.  The admission policy remains owned by RequireLegacy; this
+// helper only validates the metadata relationship.
+func ValidateKeyFormatPair(tableFormat, indexFormat uint32) error {
+	if err := ValidateKeyFormat(tableFormat); err != nil {
+		return err
+	}
+	if err := ValidateKeyFormat(indexFormat); err != nil {
+		return err
+	}
+	if tableFormat != indexFormat {
+		return moerr.NewInvalidInputNoCtxf(
+			"index collation key format %d does not match table format %d",
+			indexFormat, tableFormat)
+	}
+	return nil
+}
+
+// RequireLegacy is the production metadata fence. Legacy identities keep their
+// revision-zero contract, while the executable UCA400 identities are admitted
+// only with their explicit revision and the legacy physical key format. Other
+// versioned identities remain closed until their complete storage/upgrade
+// contract is implemented.
 func RequireLegacy(identity, revision, format uint32) error {
 	if err := ValidateMetadata(identity, revision); err != nil {
 		return err
 	}
 	if err := ValidateKeyFormat(format); err != nil {
 		return err
+	}
+	if (identity == uint32(UTF8UnicodeCIIdentity) || identity == uint32(UTF8MB4UnicodeCIIdentity)) &&
+		revision == uint32(RevisionV1) && format == uint32(KeyFormatLegacy) {
+		return nil
 	}
 	if identity > uint32(UTF8MB4GeneralCIIdentity) || revision != 0 || format != 0 {
 		return moerr.NewNotSupportedNoCtx("versioned collations and key formats are disabled until SQL, storage and upgrade gates pass")
@@ -263,9 +320,16 @@ func RequireLegacy(identity, revision, format uint32) error {
 // Advertised returns compatibility spellings with EFFECTIVE padding/semantics.
 // Charset and ProtocolID describe the spelling, not the admitted runtime type.
 func Advertised() []Definition {
-	result := make([]Definition, 0, 6)
+	result := make([]Definition, 0, 8)
 	for _, d := range definitions {
 		if d.LegacyIdentity == LegacyIdentity {
+			// Native UCA400 definitions are now backed by the executable
+			// comparison/key implementation. They are advertised with their
+			// own identity and revision rather than being silently mapped to a
+			// legacy general-ci definition.
+			if d.Semantics == UCA400 {
+				result = append(result, d)
+			}
 			continue
 		}
 		effective, _ := EffectiveDefinition(uint32(d.LegacyIdentity), 0)

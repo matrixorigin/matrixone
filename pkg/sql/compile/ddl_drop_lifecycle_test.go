@@ -97,11 +97,14 @@ func dropTableScope(tables ...*plan.DropTable) *Scope {
 func TestDropDatabaseRelationsStopsAfterMemberFailure(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	wantErr := errors.New("second table cleanup failed")
-	var fkCleanups, mergeCleanups int
+	var fkCleanups, mergeCleanups, indexCleanups int
 	exec := &dropDDLExecutor{}
 	exec.exec = func(_ context.Context, sql string, _ executor.Options) (executor.Result, error) {
 		if strings.Contains(sql, "mo_foreign_keys") {
 			fkCleanups++
+		}
+		if strings.HasPrefix(sql, "delete from mo_catalog.mo_indexes") {
+			indexCleanups++
 		}
 		if strings.Contains(sql, "mo_merge_settings") {
 			mergeCleanups++
@@ -116,7 +119,7 @@ func TestDropDatabaseRelationsStopsAfterMemberFailure(t *testing.T) {
 	db := mock_frontend.NewMockDatabase(ctrl)
 	resolved := make(map[string]engine.Relation)
 	for i, name := range []string{"first", "second"} {
-		def := &plan.TableDef{TblId: uint64(i + 1), Name: name}
+		def := &plan.TableDef{TblId: uint64(i + 1), Name: name, Pkey: &plan.PrimaryKeyDef{PkeyColName: "id"}}
 		rel := mock_frontend.NewMockRelation(ctrl)
 		rel.EXPECT().GetTableID(gomock.Any()).Return(def.TblId).AnyTimes()
 		rel.EXPECT().GetTableDef(gomock.Any()).Return(def).AnyTimes()
@@ -130,16 +133,48 @@ func TestDropDatabaseRelationsStopsAfterMemberFailure(t *testing.T) {
 		})
 	}
 	tables := []*plan.DropTable{
-		{Database: "db", Table: "first", TableId: 1, TableDef: &plan.TableDef{TblId: 1, Name: "first"}},
-		{Database: "db", Table: "second", TableId: 2, TableDef: &plan.TableDef{TblId: 2, Name: "second"}},
+		{Database: "db", Table: "first", TableId: 1, TableDef: &plan.TableDef{TblId: 1, Name: "first", Pkey: &plan.PrimaryKeyDef{PkeyColName: "id"}}},
+		{Database: "db", Table: "second", TableId: 2, TableDef: &plan.TableDef{TblId: 2, Name: "second", Pkey: &plan.PrimaryKeyDef{PkeyColName: "id"}}},
 		{Database: "db", Table: "third", TableId: 3, TableDef: &plan.TableDef{TblId: 3, Name: "third"}},
 	}
 	err := c.dropDatabaseRelations(db, tables, resolved, true)
 	require.ErrorIs(t, err, wantErr)
 	require.Zero(t, fkCleanups)
+	require.Zero(t, indexCleanups, "database recursion must leave index catalog cleanup to its owner")
 	require.Equal(t, 1, mergeCleanups)
 	require.Same(t, originalCtx, c.proc.Ctx)
 	require.False(t, c.ignorePublish)
+}
+
+func TestDropDatabaseIndexCleanupUsesResolvedIdentityAndPropagatesFailure(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	wantErr := errors.New("database index cleanup failed")
+	var indexDeletes []string
+	exec := &dropDDLExecutor{exec: func(_ context.Context, sql string, _ executor.Options) (executor.Result, error) {
+		if strings.HasPrefix(sql, "delete from mo_catalog.mo_indexes") {
+			indexDeletes = append(indexDeletes, sql)
+			return executor.Result{}, wantErr
+		}
+		return executor.Result{}, nil
+	}}
+	c, eng := newDropDDLCompile(t, ctrl, exec)
+	stubs := gostub.Stub(&lockMoDatabase, func(*Compile, string, lock.LockMode) error { return nil })
+	t.Cleanup(stubs.Reset)
+	c.db = "session_default"
+	c.proc.Ctx = context.WithValue(c.proc.Ctx, defines.IgnoreForeignKey{}, true)
+	db := mock_frontend.NewMockDatabase(ctrl)
+	eng.EXPECT().Database(gomock.Any(), "db", c.proc.GetTxnOperator()).Return(db, nil).AnyTimes()
+	db.EXPECT().IsSubscription(gomock.Any()).Return(false).AnyTimes()
+	db.EXPECT().GetDatabaseId(gomock.Any()).Return("42").AnyTimes()
+	db.EXPECT().Relations(gomock.Any()).Return(nil, nil)
+	eng.EXPECT().Delete(gomock.Any(), "db", c.proc.GetTxnOperator()).Return(nil)
+	pn := &plan.Plan{Plan: &plan.Plan_Ddl{Ddl: &plan.DataDefinition{
+		DdlType:    plan.DataDefinition_DROP_DATABASE,
+		Definition: &plan.DataDefinition_DropDatabase{DropDatabase: &plan.DropDatabase{Database: "db", DatabaseId: 17}},
+	}}}
+	c.pn = pn
+	require.ErrorIs(t, (&Scope{Plan: pn}).DropDatabase(c), wantErr)
+	require.Equal(t, []string{fmt.Sprintf(deleteMoIndexesWithDatabaseIdFormat, 42)}, indexDeletes)
 }
 
 func TestDropDatabasePhysicalTemporaryRunsAllocatorCleanup(t *testing.T) {
@@ -188,9 +223,13 @@ func TestDropTableLifecycleAdmission(t *testing.T) {
 		t.Run(fmt.Sprintf("persistent=%d", count), func(t *testing.T) {
 			ctrl := gomock.NewController(t)
 			var order []string
+			var indexCleanups int
 			failGate := true
 			gateErr := errors.New("admission failed")
 			exec := &dropDDLExecutor{exec: func(_ context.Context, sql string, _ executor.Options) (executor.Result, error) {
+				if strings.HasPrefix(sql, "delete from mo_catalog.mo_indexes") {
+					indexCleanups++
+				}
 				if sql == databranchutils.LineageOwnerLifecycleLockSQL() {
 					order = append(order, "admit")
 					if failGate {
@@ -203,12 +242,15 @@ func TestDropTableLifecycleAdmission(t *testing.T) {
 				return executor.Result{}, nil
 			}}
 			c, eng := newDropDDLCompile(t, ctrl, exec)
+			// Internal replacement bypasses FK/publication checks but still owns
+			// its table-level index cleanup.
+			c.proc.Ctx = context.WithValue(c.proc.Ctx, defines.IgnoreForeignKey{}, true)
 			db := mock_frontend.NewMockDatabase(ctrl)
 			eng.EXPECT().Database(gomock.Any(), "db", c.proc.GetTxnOperator()).Return(db, nil).AnyTimes()
 			var tables []*plan.DropTable
 			for i := 0; i < count; i++ {
 				name := fmt.Sprintf("t%d", i)
-				def := &plan.TableDef{TblId: uint64(i + 1), Name: name}
+				def := &plan.TableDef{TblId: uint64(i + 1), Name: name, Pkey: &plan.PrimaryKeyDef{PkeyColName: "id"}}
 				rel := mock_frontend.NewMockRelation(ctrl)
 				rel.EXPECT().GetTableID(gomock.Any()).Return(def.TblId).AnyTimes()
 				rel.EXPECT().GetTableDef(gomock.Any()).Return(def).AnyTimes()
@@ -233,6 +275,7 @@ func TestDropTableLifecycleAdmission(t *testing.T) {
 				require.Equal(t, want, order, "each invocation admits once and finishes a member before the next")
 				order = nil
 			}
+			require.Equal(t, 2*count, indexCleanups)
 		})
 	}
 }
@@ -266,7 +309,7 @@ func TestDropTableMixedTemporaryFailureOrder(t *testing.T) {
 			c, eng := newDropDDLCompile(t, ctrl, exec)
 			c.proc.Base.IsFrontend = true
 			c.temporaryDDLInExecutorTxn = tc.executorTxn
-			owner := &sessionTemporaryDDLTestOwner{trackingTempTableSession: trackingTempTableSession{tables: map[string]string{catalog.MO_CATALOG + ".tmp": "physical"}}}
+			owner := &sessionTemporaryDDLTestOwner{trackingTempTableSession: trackingTempTableSession{tables: map[string]string{defines.TempTableAliasKey(catalog.MO_CATALOG, "tmp"): "physical"}}}
 			c.proc.Session = owner
 			rt := moruntime.ServiceRuntime(c.proc.GetService())
 			old, exists := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
@@ -350,7 +393,7 @@ func TestDropTableMixedTemporaryRCAdmissionFailureOrder(t *testing.T) {
 			c.proc.Base.IsFrontend = true
 			c.temporaryDDLInExecutorTxn = tc.executorTxn
 			owner := &sessionTemporaryDDLTestOwner{trackingTempTableSession: trackingTempTableSession{
-				tables: map[string]string{catalog.MO_CATALOG + ".tmp": "physical"},
+				tables: map[string]string{defines.TempTableAliasKey(catalog.MO_CATALOG, "tmp"): "physical"},
 			}}
 			c.proc.Session = owner
 			rt := moruntime.ServiceRuntime(c.proc.GetService())
@@ -418,7 +461,7 @@ func TestDropTableRCStagedTemporaryDuplicateName(t *testing.T) {
 			)
 			c.proc.Base.IsFrontend = true
 			owner := &sessionTemporaryDDLTestOwner{trackingTempTableSession: trackingTempTableSession{
-				tables: map[string]string{catalog.MO_CATALOG + ".tmp": "physical"},
+				tables: map[string]string{defines.TempTableAliasKey(catalog.MO_CATALOG, "tmp"): "physical"},
 			}}
 			c.proc.Session = owner
 			rt := moruntime.ServiceRuntime(c.proc.GetService())
@@ -462,7 +505,7 @@ func TestCompileRunDropTableRetryPlanFailurePublishesTemporaryPrefix(t *testing.
 	c.proc.Base.TxnOperator.(*mock_frontend.MockTxnOperator).EXPECT().SnapshotTS().Return(timestamp.Timestamp{}).AnyTimes()
 	c.proc.Base.IsFrontend = true
 	owner := &sessionTemporaryDDLTestOwner{trackingTempTableSession: trackingTempTableSession{
-		tables: map[string]string{catalog.MO_CATALOG + ".tmp": "physical"},
+		tables: map[string]string{defines.TempTableAliasKey(catalog.MO_CATALOG, "tmp"): "physical"},
 	}}
 	c.proc.Session = owner
 	rt := moruntime.ServiceRuntime(c.proc.GetService())
@@ -504,7 +547,7 @@ func TestCompileRunDropTablePublishesTemporaryOnSuccess(t *testing.T) {
 	)
 	c.proc.Base.IsFrontend = true
 	owner := &sessionTemporaryDDLTestOwner{trackingTempTableSession: trackingTempTableSession{
-		tables: map[string]string{catalog.MO_CATALOG + ".tmp": "physical"},
+		tables: map[string]string{defines.TempTableAliasKey(catalog.MO_CATALOG, "tmp"): "physical"},
 	}}
 	c.proc.Session = owner
 	rt := moruntime.ServiceRuntime(c.proc.GetService())
@@ -536,7 +579,7 @@ func TestDropDatabaseSelectsParentOwnedTables(t *testing.T) {
 		return executor.Result{}, nil
 	}}
 	c, eng := newDropDDLCompile(t, ctrl, exec)
-	c.proc.Session = &trackingTempTableSession{tables: map[string]string{"db.shadowed": "__mo_tmp_db_shadowed"}}
+	c.proc.Session = &trackingTempTableSession{tables: map[string]string{defines.TempTableAliasKey("db", "shadowed"): "__mo_tmp_db_shadowed"}}
 	c.proc.Ctx = context.WithValue(c.proc.Ctx, defines.IgnoreForeignKey{}, true)
 	c.skipDataBranchReclaim = true
 	stubs := gostub.Stub(&lockMoDatabase, func(*Compile, string, lock.LockMode) error { return nil })
@@ -777,7 +820,7 @@ func TestDropTableTemporaryAndNoopMembersDoNotAdmit(t *testing.T) {
 					ctrl, txn.TxnMode_Pessimistic, txn.TxnIsolation_RC,
 				)
 			}
-			c.proc.Session = &trackingTempTableSession{tables: map[string]string{catalog.MO_CATALOG + ".tmp": "physical"}}
+			c.proc.Session = &trackingTempTableSession{tables: map[string]string{defines.TempTableAliasKey(catalog.MO_CATALOG, "tmp"): "physical"}}
 			db := newStubDatabase(catalog.MO_CATALOG)
 			db.rels["physical"] = &stubRelation{tableDef: &plan.TableDef{IsTemporary: true}}
 			eng.EXPECT().Database(gomock.Any(), catalog.MO_CATALOG, c.proc.GetTxnOperator()).Return(db, nil)

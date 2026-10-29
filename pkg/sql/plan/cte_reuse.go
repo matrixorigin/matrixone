@@ -54,9 +54,7 @@ func (builder *QueryBuilder) reuseMultiReferenceCTEs(rootID int32) int32 {
 		}
 
 		producer := cteRef.occurrences[0]
-		sinkID := appendSinkNodeWithTag(builder, producer.ctx, producerRootID, producer.rootTag)
-		builder.qry.Nodes[sinkID].ExtraOptions = materialized.CTESinkOption
-		sourceStep := builder.appendStep(sinkID)
+		sourceStep := builder.appendCTEProducer(producerRootID, producer.ctx, producer.rootTag)
 
 		replacements := make(map[int32]int32, len(cteRef.occurrences))
 		for _, occurrence := range cteRef.occurrences {
@@ -72,13 +70,20 @@ func (builder *QueryBuilder) reusableCTEProducer(
 	cteRef *CTERef,
 	rootID int32,
 ) (int32, map[int32]bool, bool) {
-	if cteRef == nil || cteRef.isRecursive || len(cteRef.occurrences) < 2 {
+	if cteRef == nil || cteRef.isRecursive || builder.boundCTEs[cteRef] != nil || len(cteRef.occurrences) < 2 {
 		return 0, nil, false
 	}
 
 	first := cteRef.occurrences[0]
 	allOccurrencesAreCurrentRoleClosures := currentRoleClosureOutput(first.types)
 	for _, occurrence := range cteRef.occurrences {
+		// Scalar reaggregation can forward a private native identity through
+		// an inline occurrence. Its captured visible transport schema cannot
+		// carry that column, so keep every occurrence of this CTE inline.
+		if occurrence.rootID < 0 || int(occurrence.rootID) >= len(builder.qry.Nodes) ||
+			len(builder.qry.Nodes[occurrence.rootID].ProjectList) != len(occurrence.types) {
+			return 0, nil, false
+		}
 		if occurrence.isCorrelated || !sameCTEOutput(first, occurrence) ||
 			!builder.cteSubtreeIsDeterministic(occurrence.rootID, make(map[int32]bool)) {
 			return 0, nil, false
@@ -280,14 +285,8 @@ func (builder *QueryBuilder) cteProducerEvaluationIsTotal(
 			}
 		}
 	}
-	if node.VectorIndexScan != nil {
-		for _, expr := range append([]*planpb.Expr{
-			node.VectorIndexScan.QueryVector,
-			node.VectorIndexScan.CandidateLimit,
-			node.VectorIndexScan.FirstRoundLimit,
-			distRangeLowerBound(node.VectorIndexScan.DistanceRange),
-			distRangeUpperBound(node.VectorIndexScan.DistanceRange),
-		}, node.VectorIndexScan.PreFilters...) {
+	if node.IndexSearchScan != nil {
+		for _, expr := range IndexSearchScanExprs(node.IndexSearchScan) {
 			if expr != nil && !builder.cteExprIsTotal(rootID, expr, ctx, make(map[[2]int32]bool)) {
 				return false
 			}
@@ -344,11 +343,21 @@ func (builder *QueryBuilder) cteStorageOutputTypes(
 	required := make([]bool, len(occurrences[0].types))
 	requiredCount := 0
 	for _, consumerRequired := range requiredByOccurrence {
+		hasDemand := false
 		for colPos, keep := range consumerRequired {
-			if keep && !required[colPos] {
+			if !keep {
+				continue
+			}
+			hasDemand = true
+			if !required[colPos] {
 				required[colPos] = true
 				requiredCount++
 			}
+		}
+		// A reader with no explicit demand emits its full fallback projection.
+		// Admission must account for those materialized columns as well.
+		if !hasDemand {
+			return occurrences[0].types, false
 		}
 	}
 	if requiredCount == 0 || requiredCount == len(required) {
@@ -646,13 +655,10 @@ func countCTEConsumerNodeColRefs(node *planpb.Node, colRefCnt map[[2]int32]int) 
 			}
 		}
 	}
-	if node.VectorIndexScan != nil {
-		increaseCTERefCnt(node.VectorIndexScan.QueryVector, colRefCnt)
-		increaseCTERefCnt(node.VectorIndexScan.CandidateLimit, colRefCnt)
-		increaseCTERefCnt(node.VectorIndexScan.FirstRoundLimit, colRefCnt)
-		increaseCTERefCnt(distRangeLowerBound(node.VectorIndexScan.DistanceRange), colRefCnt)
-		increaseCTERefCnt(distRangeUpperBound(node.VectorIndexScan.DistanceRange), colRefCnt)
-		increaseRefCntForExprList(node.VectorIndexScan.PreFilters, 1, colRefCnt)
+	if node.IndexSearchScan != nil {
+		for _, expr := range IndexSearchScanExprs(node.IndexSearchScan) {
+			increaseCTERefCnt(expr, colRefCnt)
+		}
 	}
 	if node.DedupJoinCtx != nil {
 		increaseRefCntForExprList(node.DedupJoinCtx.UpdateColExprList, 1, colRefCnt)
@@ -914,6 +920,18 @@ func (builder *QueryBuilder) cteSubtreeIsDeterministic(nodeID int32, seen map[in
 	return builder.subtreeIsDeterministic(nodeID, seen, true)
 }
 
+// IndexSearchScanExprs returns every expression of scan; nil entries are kept.
+func IndexSearchScanExprs(scan *planpb.IndexSearchScan) []*planpb.Expr {
+	if scan == nil {
+		return nil
+	}
+	exprs := make([]*planpb.Expr, 0, 4+len(scan.AlgoExprs)+len(scan.PreFilters))
+	exprs = append(exprs, scan.QueryPayload, scan.CandidateLimit,
+		distRangeLowerBound(scan.DistanceRange), distRangeUpperBound(scan.DistanceRange))
+	exprs = append(exprs, scan.AlgoExprs...)
+	return append(exprs, scan.PreFilters...)
+}
+
 func distRangeLowerBound(distRange *planpb.DistRange) *planpb.Expr {
 	if distRange == nil {
 		return nil
@@ -1028,14 +1046,8 @@ func (builder *QueryBuilder) subtreeIsDeterministic(nodeID int32, seen map[int32
 			}
 		}
 	}
-	if node.VectorIndexScan != nil {
-		for _, expr := range append([]*planpb.Expr{
-			node.VectorIndexScan.QueryVector,
-			node.VectorIndexScan.CandidateLimit,
-			node.VectorIndexScan.FirstRoundLimit,
-			distRangeLowerBound(node.VectorIndexScan.DistanceRange),
-			distRangeUpperBound(node.VectorIndexScan.DistanceRange),
-		}, node.VectorIndexScan.PreFilters...) {
+	if node.IndexSearchScan != nil {
+		for _, expr := range IndexSearchScanExprs(node.IndexSearchScan) {
 			if expr != nil && !exprCanRemoveProject(expr) {
 				return false
 			}
@@ -1888,6 +1900,13 @@ func (builder *QueryBuilder) appendSharedCTEScan(
 		node.ExtraOptions = materialized.CTEHashBuildScanOption
 	}
 	nodeID := builder.appendNode(node, occurrence.ctx)
+	// Readers keep original producer ordinals until all SINK outputs have been
+	// compacted. Their independently pruned output positions do not identify
+	// the corresponding slots in the materialized producer.
+	if builder.positionalSinkScans == nil {
+		builder.positionalSinkScans = make(map[int32]struct{})
+	}
+	builder.positionalSinkScans[nodeID] = struct{}{}
 	if len(occurrence.headingProvenance) > 0 {
 		if builder.headingProvenanceByNode == nil {
 			builder.headingProvenanceByNode = make(map[int32]headingProvenanceMap)

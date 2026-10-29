@@ -20,6 +20,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -195,7 +196,7 @@ func TestCallPropagatesLoadLockTableBindCheckError(t *testing.T) {
 	require.Equal(t, 1, op.calls)
 }
 
-func TestGetColDataParallelLoadEmptyNumericAsZero(t *testing.T) {
+func TestGetColDataParallelLoadEmptyNumericAndJSONNull(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
 
@@ -241,8 +242,7 @@ func TestGetColDataParallelLoadEmptyNumericAsZero(t *testing.T) {
 		proc,
 	)
 	require.NoError(t, err)
-	require.False(t, bat.Vecs[0].GetNulls().Contains(0))
-	require.Equal(t, "0", string(bat.Vecs[0].GetBytesAt(0)))
+	require.True(t, bat.Vecs[0].GetNulls().Contains(0))
 
 	bat.CleanOnlyData()
 	err = getColData(
@@ -1671,7 +1671,7 @@ func Test_CALL3(t *testing.T) {
 }
 
 func TestReadDirSymlink(t *testing.T) {
-	ctx := context.Background()
+	ctx := fileservice.WithSQLFileAccess(t.Context(), "sys", "moadmin")
 
 	root, err := os.MkdirTemp("", "*")
 	assert.Nil(t, err)
@@ -2696,4 +2696,234 @@ func TestMakeTypeParallelLoadKeepsVectorType(t *testing.T) {
 	require.Equal(t, types.T_array_float32, vectorType.Oid)
 	require.Equal(t, int32(3), vectorType.Width)
 	require.Equal(t, types.T_varchar, makeType(&plan.Type{Id: int32(types.T_int64)}, true).Oid)
+}
+
+func TestGetColDataEmptyDomains(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	for _, tc := range []struct {
+		name    string
+		oid     types.T
+		domain  string
+		input   string
+		null    bool
+		want    uint64
+		invalid bool
+	}{
+		{"empty enum", types.T_enum, "", "", false, 1, false}, {"enum null", types.T_enum, "", "", true, 0, false},
+		{"enum ordinal", types.T_enum, "", "1", false, 1, false}, {"enum invalid", types.T_enum, "", "2", false, 0, true},
+		{"empty set", types.T_uint64, ",", "", false, 0, false}, {"set bitmap", types.T_uint64, ",", "1", false, 1, false},
+		{"set null", types.T_uint64, ",", "", true, 0, false}, {"set invalid", types.T_uint64, ",", "2", false, 0, true},
+		{"uint64 control", types.T_uint64, "", "2", false, 2, false},
+	} {
+		for _, parallel := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/parallel=%v", tc.name, parallel), func(t *testing.T) {
+				col := &plan.ColDef{Name: "v", Typ: plan.Type{Id: int32(tc.oid), Enumvalues: tc.domain}}
+				param := &ExternalParam{ExParamConst: ExParamConst{ParallelLoad: parallel, Cols: []*plan.ColDef{col}, Extern: &tree.ExternParam{ExParam: tree.ExParam{ExternType: int32(plan.ExternType_LOAD)}}}, ExParam: ExParam{Fileparam: &ExFileparam{}}}
+				typ := tc.oid.ToType()
+				if parallel {
+					typ = types.T_varchar.ToType()
+				}
+				bat := batch.NewWithSize(1)
+				bat.Vecs[0] = vector.NewVec(typ)
+				defer bat.Clean(proc.Mp())
+				field := csvparser.Field{Val: tc.input, IsNull: tc.null}
+				err := getColData(bat, []csvparser.Field{field}, 0, param, proc.Mp(), plan.ExternAttr{ColName: "v", ColIndex: 0, ColFieldIndex: 0}, proc)
+				if !parallel && tc.invalid {
+					require.Error(t, err)
+					return
+				}
+				require.NoError(t, err)
+				require.Equal(t, tc.null, bat.Vecs[0].IsNull(0))
+				if tc.null {
+					return
+				}
+				if parallel {
+					require.Equal(t, tc.input, bat.Vecs[0].GetStringAt(0))
+				} else if tc.oid == types.T_enum {
+					require.Equal(t, types.Enum(tc.want), vector.GetFixedAtWithTypeCheck[types.Enum](bat.Vecs[0], 0))
+				} else {
+					require.Equal(t, tc.want, vector.GetFixedAtWithTypeCheck[uint64](bat.Vecs[0], 0))
+				}
+				require.Equal(t, !tc.invalid, isLegalLine(param.Extern, []*plan.ColDef{col}, []csvparser.Field{field}))
+			})
+		}
+	}
+}
+
+func TestExternalOwnerPreservesCloseError(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	cause := errors.New("source terminal failure")
+	op := &External{reader: &closeErrorExternalReader{err: cause}, fileOpened: true}
+	require.ErrorIs(t, op.CloseReader(), cause)
+	require.NoError(t, op.CloseReader())
+	op.Reset(proc, true, cause)
+	op.Free(proc, true, cause)
+	require.Nil(t, op.reader)
+	require.False(t, op.fileOpened)
+}
+
+func TestGetColDataExternalCSVIntegerRounding(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	for _, typ := range []types.Type{
+		types.T_int8.ToType(), types.T_int16.ToType(), types.T_int32.ToType(), types.T_int64.ToType(),
+		types.T_uint8.ToType(), types.T_uint16.ToType(), types.T_uint32.ToType(), types.T_uint64.ToType(),
+		types.New(types.T_int32, 24, 0), types.New(types.T_uint32, 24, 0),
+	} {
+		name := typ.String()
+		if typ.IsMediumInt() {
+			name += "_mediumint"
+		}
+		t.Run(name, func(t *testing.T) {
+			type testCase struct {
+				value, want     string
+				quoted, wantErr bool
+			}
+			cases := []testCase{
+				{value: "1.9", want: "2"}, {value: "2.4", want: "2"}, {value: "2.5", want: "3"},
+				{value: "1e2", want: "100"}, {value: "2.5e0", want: "3"}, {value: ".5", want: "1"},
+				{value: "1000e-3", want: "1"}, {value: "42949672960e-10", want: "4"},
+				{value: "1000000000000000000000e-21", want: "1"},
+				{value: "1.", want: "1"}, {value: "+1.9", want: "2"}, {value: " 1.9 ", want: "2"},
+				{value: "7", want: "7", quoted: true}, {value: "1.9", quoted: true, wantErr: true},
+				{value: "1e2", quoted: true, wantErr: true}, {value: "NaN", wantErr: true},
+				{value: "1000000000000000000000e-21", quoted: true, wantErr: true},
+				{value: "+Inf", wantErr: true}, {value: "-Inf", wantErr: true}, {value: "1e+", wantErr: true},
+				{value: "1 2", wantErr: true}, {value: "1+2", wantErr: true}, {value: "1.9tail", wantErr: true},
+				{value: "0x1p2", wantErr: true}, {value: "1_0.5", wantErr: true},
+				{value: "1e999999999999999999", wantErr: true}, {value: "1e-999999999999999999", want: "0"},
+				{value: "0.10000000000000000000000000000000000000000e1", want: "1"},
+			}
+			if typ.Oid.IsUnsignedInt() {
+				cases = append(cases, testCase{value: "-0.1", wantErr: true},
+					testCase{value: "-1000000000000000000000e-21", wantErr: true},
+					testCase{value: "-1.9", wantErr: true},
+					testCase{value: "-0.0", want: "0"},
+					testCase{value: "-0e2", want: "0"})
+			} else {
+				cases = append(cases, testCase{value: "-1.9", want: "-2"},
+					testCase{value: "-1000000000000000000000e-21", want: "-1"},
+					testCase{value: "-2.5", want: "-3"},
+					testCase{value: "-0.49", want: "0"})
+			}
+			var min, max string
+			switch typ.Oid {
+			case types.T_int8:
+				min, max = "-128", "127"
+			case types.T_int16:
+				min, max = "-32768", "32767"
+			case types.T_int32:
+				min, max = "-2147483648", "2147483647"
+			case types.T_int64:
+				min, max = "-9223372036854775808", "9223372036854775807"
+			case types.T_uint8:
+				max = "255"
+			case types.T_uint16:
+				max = "65535"
+			case types.T_uint32:
+				max = "4294967295"
+			case types.T_uint64:
+				max = "18446744073709551615"
+			}
+			if typ.IsMediumInt() {
+				if typ.Oid.IsUnsignedInt() {
+					max = "16777215"
+				} else {
+					min, max = "-8388608", "8388607"
+				}
+			}
+			cases = append(cases, testCase{value: max, want: max},
+				testCase{value: max + "0", wantErr: true},
+				testCase{value: max + "0e-1", want: max},
+				testCase{value: max + ".0", want: max},
+				testCase{value: max + ".4", want: max},
+				testCase{value: max + ".5", wantErr: true})
+			if min != "" {
+				cases = append(cases, testCase{value: min + ".4", want: min},
+					testCase{value: min + "0e-1", want: min},
+					testCase{value: min + ".5", wantErr: true})
+			}
+			if typ.Oid == types.T_int64 || typ.Oid == types.T_uint64 {
+				cases = append(cases,
+					testCase{value: "9007199254740993.0", want: "9007199254740993"})
+			}
+			for _, tc := range cases {
+				t.Run(fmt.Sprintf("%s_quoted_%t", tc.value, tc.quoted), func(t *testing.T) {
+					bat := batch.NewWithSize(1)
+					bat.Vecs[0] = vector.NewVec(typ)
+					defer bat.Clean(proc.Mp())
+					param := &ExternalParam{ExParamConst: ExParamConst{Ctx: context.Background(),
+						Cols: []*plan.ColDef{{Name: "i", Typ: plan.Type{Id: int32(typ.Oid), Width: typ.Width}}},
+						Extern: &tree.ExternParam{ExParamConst: tree.ExParamConst{Format: tree.CSV},
+							ExParam: tree.ExParam{ExternType: int32(plan.ExternType_EXTERNAL_TB)}}}, ExParam: ExParam{Fileparam: &ExFileparam{}}}
+					err := getColData(bat, []csvparser.Field{{Val: tc.value, HasStringQuote: tc.quoted}}, 0, param, proc.Mp(),
+						plan.ExternAttr{ColName: "i", ColIndex: 0, ColFieldIndex: 0}, proc)
+					if tc.wantErr {
+						require.Error(t, err)
+						require.Zero(t, bat.Vecs[0].Length())
+						return
+					}
+					require.NoError(t, err)
+					require.Equal(t, 1, bat.Vecs[0].Length())
+					var got string
+					switch typ.Oid {
+					case types.T_int8:
+						got = fmt.Sprint(vector.GetFixedAtWithTypeCheck[int8](bat.Vecs[0], 0))
+					case types.T_int16:
+						got = fmt.Sprint(vector.GetFixedAtWithTypeCheck[int16](bat.Vecs[0], 0))
+					case types.T_int32:
+						got = fmt.Sprint(vector.GetFixedAtWithTypeCheck[int32](bat.Vecs[0], 0))
+					case types.T_int64:
+						got = fmt.Sprint(vector.GetFixedAtWithTypeCheck[int64](bat.Vecs[0], 0))
+					case types.T_uint8:
+						got = fmt.Sprint(vector.GetFixedAtWithTypeCheck[uint8](bat.Vecs[0], 0))
+					case types.T_uint16:
+						got = fmt.Sprint(vector.GetFixedAtWithTypeCheck[uint16](bat.Vecs[0], 0))
+					case types.T_uint32:
+						got = fmt.Sprint(vector.GetFixedAtWithTypeCheck[uint32](bat.Vecs[0], 0))
+					case types.T_uint64:
+						got = fmt.Sprint(vector.GetFixedAtWithTypeCheck[uint64](bat.Vecs[0], 0))
+					}
+					require.Equal(t, tc.want, got)
+				})
+			}
+		})
+	}
+}
+
+func TestGetColDataIntegerRoundingScope(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	for _, tc := range []struct {
+		name, format      string
+		externType        int32
+		enumValues, value string
+		want              uint64
+		wantErr           bool
+	}{
+		{"load csv", tree.CSV, int32(plan.ExternType_LOAD), "", "1.9", 1, false},
+		{"external jsonline", tree.JSONLINE, int32(plan.ExternType_EXTERNAL_TB), "", "1.9", 1, false},
+		{"external set", tree.CSV, int32(plan.ExternType_EXTERNAL_TB), "1.9,two", "1.9", 1, false},
+		{"load csv overflow mantissa", tree.CSV, int32(plan.ExternType_LOAD), "", "1000000000000000000000e-21", 0, true},
+		{"external jsonline overflow mantissa", tree.JSONLINE, int32(plan.ExternType_EXTERNAL_TB), "", "1000000000000000000000e-21", 0, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			bat := batch.NewWithSize(1)
+			bat.Vecs[0] = vector.NewVec(types.T_uint64.ToType())
+			defer bat.Clean(proc.Mp())
+			param := &ExternalParam{ExParamConst: ExParamConst{Ctx: context.Background(), StrictSqlMode: true,
+				Cols:   []*plan.ColDef{{Name: "i", Typ: plan.Type{Id: int32(types.T_uint64), Enumvalues: tc.enumValues}}},
+				Extern: &tree.ExternParam{ExParamConst: tree.ExParamConst{Format: tc.format}, ExParam: tree.ExParam{ExternType: tc.externType}}}, ExParam: ExParam{Fileparam: &ExFileparam{}}}
+			err := getColData(bat, []csvparser.Field{{Val: tc.value}}, 0, param, proc.Mp(), plan.ExternAttr{ColName: "i"}, proc)
+			if tc.wantErr {
+				require.Error(t, err)
+				require.Zero(t, bat.Vecs[0].Length())
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, []uint64{tc.want}, vector.MustFixedColWithTypeCheck[uint64](bat.Vecs[0]))
+		})
+	}
 }

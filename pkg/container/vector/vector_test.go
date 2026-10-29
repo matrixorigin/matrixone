@@ -429,35 +429,6 @@ func TestConst(t *testing.T) {
 	require.Equal(t, int64(0), mp.CurrNB())
 }
 
-/*
-func TestWindowWithNulls(t *testing.T) {
-	v0 := NewVec(types.T_int8.ToType())
-	mp := mpool.MustNewZero()
-
-	_ = AppendFixed(v0, int8(0), false, mp)
-	_ = AppendFixed(v0, int8(1), false, mp)
-	_ = AppendFixed(v0, int8(2), false, mp)
-	_ = AppendFixed(v0, int8(-1), true, mp) // v0[3] = null
-	_ = AppendFixed(v0, int8(6), false, mp)
-	_ = AppendFixed(v0, int8(-1), true, mp) // v0[5] = null
-	_ = AppendFixed(v0, int8(-1), true, mp) // v0[6] = null
-	_ = AppendFixed(v0, int8(6), false, mp)
-	_ = AppendFixed(v0, int8(7), false, mp)
-	_ = AppendFixed(v0, int8(8), false, mp)
-
-	require.Equal(t, []uint64{3, 5, 6}, v0.GetNulls().Np.ToArray())
-
-	start, end := 1, 7
-	v0Window := NewVec(types.T_int8.ToType())
-	//v0Window = Window(v0, start, end, v0Window)
-	require.Equal(t, MustFixedColWithTypeCheck[int8](v0)[start:end], MustFixedColWithTypeCheck[int8](v0Window))
-	require.Equal(t, []uint64{2, 4, 5}, v0Window.GetNulls().Np.ToArray())
-
-	//t.Log(v0.String())
-	//t.Log(v0Window.String())
-}
-*/
-
 func TestAppend(t *testing.T) {
 	mp := mpool.MustNewZero()
 	vec := NewVec(types.T_int8.ToType())
@@ -6426,7 +6397,7 @@ func TestUnionOneEmptyMarkerSets(t *testing.T) {
 }
 
 func TestUnionOneSourceMarkerLookup(t *testing.T) {
-	for _, scenario := range []string{"source_null", "source_all_null", "source_grouping", "null_prefix", "grouping_prefix", "source_const", "destination_const", "nil_mpool"} {
+	for _, scenario := range []string{"source_null", "source_all_null", "source_grouping", "null_prefix", "grouping_prefix", "source_const", "source_const_null", "source_const_null_with_data", "destination_const", "nil_mpool"} {
 		t.Run(scenario, func(t *testing.T) {
 			mp := mpool.MustNewZero()
 			t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
@@ -6454,11 +6425,17 @@ func TestUnionOneSourceMarkerLookup(t *testing.T) {
 				require.NoError(t, AppendFixed(destination, int64(44), false, mp))
 				destination.GetGrouping().Set(0)
 				offset = 1
-			case "source_const":
+			case "source_const_null":
+				source.Free(mp)
+				source = NewConstNull(types.T_int64.ToType(), 3, mp)
+			case "source_const", "source_const_null_with_data":
 				source.Free(mp)
 				var err error
 				source, err = NewConstFixed(types.T_int64.ToType(), int64(77), 3, mp)
 				require.NoError(t, err)
+				if scenario == "source_const_null_with_data" {
+					source.GetNulls().Set(0)
+				}
 			case "destination_const":
 				destination.SetClass(CONSTANT)
 			case "nil_mpool":
@@ -7211,4 +7188,91 @@ func TestBoolMinMax(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestCloneWindowToConstNullReuse(t *testing.T) {
+	for _, typ := range []types.Type{types.T_int64.ToType(), types.T_varchar.ToType()} {
+		for _, nilMP := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/nilMP=%v", typ.Oid, nilMP), func(t *testing.T) {
+				mp := mpool.MustNewZero()
+				src := NewConstNull(typ, 2, mp)
+				t.Cleanup(func() { src.Free(mp) })
+				dst := NewOffHeapVecWithType(typ)
+				t.Cleanup(func() { dst.Free(mp) })
+				require.NoError(t, dst.PreExtend(2, mp))
+				if typ.IsVarlen() {
+					src.SetPrepareParamKind(PrepareParamInteger)
+					require.NoError(t, src.SetStringSource(types.StringSourceSQLPrepare))
+					dst.SetIsBinaryString(true)
+				}
+				backing := dst.GetData()
+				before := mp.CurrNB()
+				require.Positive(t, before)
+				cloneMP := mp
+				if nilMP {
+					cloneMP = nil
+				}
+				require.NoError(t, src.CloneWindowTo(dst, 0, 2, cloneMP))
+				require.True(t, dst.IsConstNull())
+				require.Equal(t, 2, dst.Length())
+				require.Empty(t, dst.GetData())
+				require.Equal(t, cap(backing), cap(dst.GetData()))
+				require.Equal(t, before, mp.CurrNB())
+				if typ.IsVarlen() {
+					require.Equal(t, PrepareParamInteger, dst.GetPrepareParamKind())
+					require.Equal(t, types.StringSourceSQLPrepare, dst.GetStringSource())
+					require.False(t, dst.HasBinaryStringMetadata(), "NULL cloning must clear stale binary provenance")
+				}
+				encoded, err := dst.MarshalBinary()
+				require.NoError(t, err)
+				decoded := NewVec(typ)
+				t.Cleanup(func() { decoded.Free(mp) })
+				require.NoError(t, decoded.UnmarshalBinary(encoded))
+				require.True(t, decoded.IsConstNull())
+				require.Equal(t, 2, decoded.Length())
+
+				dst.ResetWithNewType(&typ)
+				require.Equal(t, PrepareParamNone, dst.GetPrepareParamKind())
+				require.Equal(t, types.StringSourceExpression, dst.GetStringSource())
+				require.False(t, dst.HasBinaryStringMetadata())
+				if typ.IsVarlen() {
+					require.NoError(t, AppendBytes(dst, []byte("next"), false, mp))
+					require.Equal(t, []byte("next"), dst.GetBytesAt(0))
+				} else {
+					require.NoError(t, AppendFixed(dst, int64(7), false, mp))
+					require.Equal(t, int64(7), GetFixedAtNoTypeCheck[int64](dst, 0))
+				}
+				require.True(t, &backing[:cap(backing)][0] == &dst.GetData()[0])
+				dst.Free(mp)
+				require.Zero(t, mp.CurrNB())
+			})
+		}
+	}
+}
+
+func TestCloneWindowToConstNullBorrowedData(t *testing.T) {
+	mp := mpool.MustNewZero()
+	typ := types.T_int64.ToType()
+	owner := NewOffHeapVecWithType(typ)
+	t.Cleanup(func() { owner.Free(mp) })
+	require.NoError(t, AppendFixed(owner, int64(9), false, mp))
+	dst, err := owner.Window(0, 1)
+	require.NoError(t, err)
+	t.Cleanup(func() { dst.Free(mp) })
+	src := NewConstNull(typ, 1, mp)
+	t.Cleanup(func() { src.Free(mp) })
+	before := mp.CurrNB()
+	require.NoError(t, src.CloneWindowTo(dst, 0, 1, mp))
+	require.True(t, dst.IsConstNull())
+	require.Nil(t, dst.GetData())
+	require.False(t, dst.cantFreeData)
+	require.True(t, dst.cantFreeArea, "data cleanup must preserve independent area ownership")
+	require.Equal(t, before, mp.CurrNB())
+	require.Equal(t, int64(9), GetFixedAtNoTypeCheck[int64](owner, 0))
+	dst.ResetWithNewType(&typ)
+	require.NoError(t, AppendFixed(dst, int64(4), false, mp))
+	require.Equal(t, int64(9), GetFixedAtNoTypeCheck[int64](owner, 0))
+	dst.Free(mp)
+	owner.Free(mp)
+	require.Zero(t, mp.CurrNB())
 }

@@ -33,7 +33,6 @@ func buildInM0ExplainPhy(parameters []*vector.Vector, result vector.FunctionResu
 
 func buildInM0ExplainPhyWithCfg(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, cfg *config.OBCUConfig) error {
 	var phyplan string
-	var planData models.ExplainData
 	rs := vector.MustFunctionResult[types.Varlena](result)
 
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
@@ -57,32 +56,32 @@ func buildInM0ExplainPhyWithCfg(parameters []*vector.Vector, result vector.Funct
 			continue
 		}
 
+		var planData models.ExplainData
 		if err := json.Unmarshal(planJson, &planData); err != nil {
 			if err = rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
-			//return moerr.NewInternalError(proc.Ctx, "failed to parse json arr: %v", err)
-
-			if len(planData.PhyPlan.LocalScope) == 0 {
-				if err := rs.AppendBytes(nil, true); err != nil {
-					return err
-				}
-				continue
-			}
+			continue
 		}
 		format := util.UnsafeBytesToString(target)
+		var option models.ExplainOption
 		switch strings.ToLower(format) {
 		case "normal":
-			phyplan = models.ExplainPhyPlan(&planData.PhyPlan, &planData.NewPlanStats, models.NormalOption)
+			option = models.NormalOption
 		case "verbose":
-			phyplan = models.ExplainPhyPlan(&planData.PhyPlan, &planData.NewPlanStats, models.VerboseOption)
+			option = models.VerboseOption
 		case "analyze":
-			phyplan = models.ExplainPhyPlan(&planData.PhyPlan, &planData.NewPlanStats, models.AnalyzeOption)
+			option = models.AnalyzeOption
 		default:
 			if err := rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
 			continue
+		}
+		if planData.StatementDiagnostics != nil {
+			phyplan = models.RenderStatementDiagnostics(planData.StatementDiagnostics, option)
+		} else {
+			phyplan = models.ExplainPhyPlan(&planData.PhyPlan, &planData.NewPlanStats, option)
 		}
 		if err := rs.AppendBytes(functionUtil.QuickStrToBytes(phyplan), false); err != nil {
 			return err

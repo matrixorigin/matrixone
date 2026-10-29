@@ -15,6 +15,7 @@
 package hashjoin
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -85,7 +86,7 @@ func installHashJoinTestAllocation(
 // TestGetSpilledInputBatchNoBuckets verifies that getSpilledInputBatch
 // returns nil when the engine has no buckets.
 func TestGetSpilledInputBatchNoBuckets(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 
 	engine := newAccountedTestSpillEngine(t, spillutil.SpillEngineConfig{})
@@ -197,7 +198,7 @@ func TestAsofBuildLeftAcrossSpilledBuckets(t *testing.T) {
 // (ctr.mp == nil) without panicking. This is the path taken when a spill
 // bucket returns BucketEmptyBuild for outer joins.
 func TestEmptyProbeDoesNotPanic(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 
 	hashJoin := &HashJoin{
@@ -660,7 +661,10 @@ func TestShuffleJoinHardBudgetRejectTransitionsToSpill(t *testing.T) {
 			break
 		}
 	}
-	require.ElementsMatch(t, values, resultValues)
+	// Values are generated in order. Sort the owned output copy to compare
+	// the complete multiset without quadratic pairwise matching.
+	slices.Sort(resultValues)
+	require.Equal(t, values, resultValues)
 	require.Positive(t, tc.barg.OpAnalyzer.GetOpStats().ExtraStats["HashBuildSpillStarts"])
 	require.LessOrEqual(t, account.Snapshot().Peak, account.Snapshot().Limit)
 	require.Greater(t, promtestutil.ToFloat64(metricv2.HashBuildSpillDepthCounter.WithLabelValues("spill", "1")), spillBefore)

@@ -1,0 +1,52 @@
+drop database if exists fk_alter_rename;
+create database fk_alter_rename;
+use fk_alter_rename;
+create table p(id int primary key);
+insert into p values(1);
+create table child_before(id int primary key, v int);
+insert into child_before values(1,1);
+alter table child_before rename to renamed_before,
+add constraint fk_before foreign key(v) references p(id);
+select id,v from renamed_before;
+➤ id[4,32,0]  ¦  v[4,32,0]  𝄀
+1  ¦  1
+create table child_after(id int primary key, v int);
+insert into child_after values(1,1);
+alter table child_after add constraint fk_after foreign key(v) references p(id),
+rename to renamed_after;
+select id,v from renamed_after;
+➤ id[4,32,0]  ¦  v[4,32,0]  𝄀
+1  ¦  1
+select constraint_name,table_name,refer_table_name from mo_catalog.mo_foreign_keys
+where db_name='fk_alter_rename' order by constraint_name;
+➤ constraint_name[12,5000,0]  ¦  table_name[12,5000,0]  ¦  refer_table_name[12,5000,0]  𝄀
+fk_after  ¦  renamed_after  ¦  p  𝄀
+fk_before  ¦  renamed_before  ¦  p
+select count(*) from information_schema.tables
+where table_schema='fk_alter_rename' and table_name in ('child_before','child_after');
+➤ count(*)[-5,64,0]  𝄀
+0
+insert into renamed_after values(2,999);
+Cannot add or update a child row: a foreign key constraint fails
+create table invalid_child(id int primary key, v int);
+insert into invalid_child values(1,999);
+alter table invalid_child rename to invalid_new,
+add constraint fk_invalid foreign key(v) references p(id);
+Cannot add or update a child row: a foreign key constraint fails
+select id,v from invalid_child;
+➤ id[4,32,0]  ¦  v[4,32,0]  𝄀
+1  ¦  999
+select count(*) from information_schema.tables
+where table_schema='fk_alter_rename' and table_name='invalid_new';
+➤ count(*)[-5,64,0]  𝄀
+0
+select count(*) from mo_catalog.mo_foreign_keys
+where db_name='fk_alter_rename' and constraint_name='fk_invalid';
+➤ count(*)[-5,64,0]  𝄀
+0
+alter table renamed_before drop foreign key fk_before;
+alter table renamed_after drop foreign key fk_after;
+select count(*) from mo_catalog.mo_foreign_keys where db_name='fk_alter_rename';
+➤ count(*)[-5,64,0]  𝄀
+0
+drop database fk_alter_rename;

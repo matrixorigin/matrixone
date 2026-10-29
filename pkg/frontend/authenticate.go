@@ -68,6 +68,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/stage"
 	"github.com/matrixorigin/matrixone/pkg/stage/stageutil"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/util/metric/mometric"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/sysview"
@@ -75,6 +77,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 type TenantInfo struct {
@@ -938,6 +941,7 @@ var (
 		"mo_user_defined_function":    0,
 		"mo_stored_procedure":         0,
 		"mo_mysql_compatibility_mode": 0,
+		catalog.MODatabaseDefaults:    0,
 		"mo_stages":                   0,
 		catalog.MOAutoIncrTable:       0,
 		"mo_sessions":                 0,
@@ -979,6 +983,7 @@ var (
 		"mo_user_defined_function":      0,
 		"mo_stored_procedure":           0,
 		"mo_mysql_compatibility_mode":   0,
+		catalog.MODatabaseDefaults:      0,
 		catalog.MOAutoIncrTable:         0,
 		"mo_indexes":                    0,
 		"mo_table_partitions":           0,
@@ -1039,6 +1044,7 @@ var (
 		MoCatalogMoRolePrivsDDL,
 		MoCatalogMoUserDefinedFunctionDDL,
 		MoCatalogMoMysqlCompatibilityModeDDL,
+		catalog.MoDatabaseDefaultsDDL,
 		MoCatalogMoSnapshotsDDL,
 		MoCatalogMoPubsDDL,
 		MoCatalogMoSubsDDL,
@@ -1571,6 +1577,8 @@ const (
 	deleteRoleFromMoRoleGrantFormat = `delete from mo_catalog.mo_role_grant where granted_id = %d or grantee_id = %d;`
 
 	deleteRoleFromMoRolePrivsFormat = `delete from mo_catalog.mo_role_privs where role_id = %d;`
+
+	deleteRoleFromMoRoleRuleFormat = `delete from mo_catalog.mo_role_rule where role_id = %d;`
 
 	// grant ownership on database
 	grantOwnershipOnDatabaseFormat = "grant ownership on database `%s` to `%s`;"
@@ -2225,6 +2233,7 @@ func getSqlForCheckViewMetaWithSnapshot(
 
 func getSqlForDeleteRole(roleId int64) []string {
 	return []string{
+		fmt.Sprintf(deleteRoleFromMoRoleRuleFormat, roleId),
 		fmt.Sprintf(deleteRoleFromMoRoleFormat, roleId),
 		fmt.Sprintf(deleteRoleFromMoUserGrantFormat, roleId),
 		fmt.Sprintf(deleteRoleFromMoRoleGrantFormat, roleId, roleId),
@@ -3199,7 +3208,7 @@ func doAlterUser(ctx context.Context, ses *Session, au *alterUser) (err error) {
 		}
 	}
 
-	bh := ses.GetBackgroundExec(ctx)
+	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{internalExecution: true})
 	defer bh.Close()
 
 	// put it into the single transaction
@@ -3425,7 +3434,7 @@ func doAlterAccount(ctx context.Context, ses *Session, aa *alterAccount) (err er
 	}
 
 	alterAccountFunc := func() (rtnErr error) {
-		bh := ses.GetBackgroundExec(ctx)
+		bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{internalExecution: true})
 		defer bh.Close()
 
 		rtnErr = bh.Exec(ctx, "begin")
@@ -3670,7 +3679,7 @@ func doSwitchRole(ctx context.Context, ses *Session, sr *tree.SetRole) (err erro
 		// step1 : check the role exists or not;
 
 		switchRoleFunc := func() (rtnErr error) {
-			bh := ses.GetBackgroundExec(ctx)
+			bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{internalExecution: true})
 			defer bh.Close()
 
 			rtnErr = bh.Exec(ctx, "begin;")
@@ -3738,6 +3747,11 @@ func doSwitchRole(ctx context.Context, ses *Session, sr *tree.SetRole) (err erro
 		// then, reset secondary role to none
 		account.SetUseSecondaryRole(false)
 		ses.InvalidatePrivilegeCache()
+		// Resolve the new active role's mandatory row rules before leaving the
+		// role switch. If the request was captured under an empty role, this
+		// current-policy check invalidates old handles only when the new role has
+		// rules; a failed load is treated as unknown and fails closed.
+		ses.refreshRewritePolicyAndValidatePrepared(ctx)
 		// SET ROLE validated membership in the transaction above, but a session
 		// with privilege caching disabled must not leave a grant decision behind
 		// for a later OFF -> ON transition to reuse after REVOKE.
@@ -3831,6 +3845,9 @@ func doCreateStage(ctx context.Context, ses *Session, cs *tree.CreateStage) (err
 		credentials = formatCredentials(cs.Credentials)
 
 		StageStatus = "in_use"
+		if cs.Status.Exist {
+			StageStatus = cs.Status.Option.String()
+		}
 
 		if cs.Comment.Exist {
 			comment = cs.Comment.Comment
@@ -3933,9 +3950,10 @@ func doCheckFilePath(ctx context.Context, ses *Session, ep *tree.ExportParam) (e
 
 	if ok {
 		ses.ep.userConfig.StageFilePath = filePath
+	} else {
+		filePath = ep.FilePath
 	}
-
-	return
+	return process.AuthorizeSQLFileAccess(ses.proc, filePath)
 }
 
 func doAlterStage(ctx context.Context, ses *Session, as *tree.AlterStage) (err error) {
@@ -4111,17 +4129,12 @@ func doDropAccount(ctx context.Context, bh BackgroundExec, ses *Session, da *dro
 		handler.backSes.txnCompileCtx.dbName = catalog.MO_CATALOG
 	}
 
-	var sql, db, table string
-	var erArray []ExecResult
-	var databases map[string]int8
-	var dbSql, prefix string
-	var sqlsForDropDatabases = make([]string, 0, 5)
-
-	var deleteCtx context.Context
 	var accountId int64
 	var version uint64
 	var hasAccount = true
-	clusterTables := make(map[string]int)
+	var targetAccountID int64
+	var targetResolved bool
+	var retry bool
 
 	da.Name, err = normalizeName(ctx, da.Name)
 	if err != nil {
@@ -4133,6 +4146,8 @@ func doDropAccount(ctx context.Context, bh BackgroundExec, ses *Session, da *dro
 	}
 
 	checkAccount := func(accountName string) (accountId int64, version uint64, ok bool, err error) {
+		var sql string
+		var erArray []ExecResult
 		if sql, err = getSqlForCheckTenant(ctx, accountName); err != nil {
 			return
 		}
@@ -4160,14 +4175,40 @@ func doDropAccount(ctx context.Context, bh BackgroundExec, ses *Session, da *dro
 	}
 
 	dropAccountFunc := func() (rtnErr error) {
+		var sql, db, table string
+		var erArray []ExecResult
+		var databases map[string]int8
+		var dbSql, prefix string
+		var deleteCtx context.Context
+		sqlsForDropDatabases := make([]string, 0, 5)
+		clusterTables := make(map[string]int)
+		accountId, version, hasAccount = 0, 0, false
+		retry = false
 		// If already in a transaction (e.g., restore scenario), don't create a new one
 		if !inTxn {
 			rtnErr = bh.Exec(ctx, "begin;")
 			if rtnErr != nil {
 				return rtnErr
 			}
+			txnOp := backgroundExecTxnOperator(bh)
+			var txnID []byte
+			if txnOp != nil {
+				txnID = slices.Clone(txnOp.Txn().ID)
+			}
 			defer func() {
-				rtnErr = finishTxn(ctx, bh, rtnErr)
+				if rtnErr == nil {
+					// Commit errors, including an unknown outcome, are never replayed.
+					rtnErr = finishTxn(ctx, bh, nil)
+					return
+				}
+				cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Minute)
+				defer cancel()
+				rtnErr = finishTxn(cleanupCtx, bh, rtnErr)
+				// A fatal statement can already have rolled back and invalidated
+				// the frontend handle. A subsequent no-op ROLLBACK is not proof.
+				outcome, ok := txnOp.(client.AbortedTxnCleanupObserver)
+				retry = retry && moerr.IsMoErrCode(rtnErr, moerr.ErrLockConflict) &&
+					ok && outcome.IsAbortedTxnCleanupComplete(txnID)
 			}()
 			// Standalone DROP ACCOUNT owns this transaction and must enter the
 			// lineage-owner lifecycle before locking mo_account or deleting any
@@ -4202,6 +4243,11 @@ func doDropAccount(ctx context.Context, bh BackgroundExec, ses *Session, da *dro
 			}
 			return
 		}
+
+		if targetResolved && accountId != targetAccountID {
+			return moerr.NewInternalErrorf(ctx, "account %s was replaced during DROP ACCOUNT", da.Name)
+		}
+		targetAccountID, targetResolved = accountId, true
 
 		// Retire SQL tasks before dropping tenant-owned catalog objects. This is
 		// part of the account-drop transaction, so a later failure restores the
@@ -4302,6 +4348,7 @@ func doDropAccount(ctx context.Context, bh BackgroundExec, ses *Session, da *dro
 			ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, sql)
 			rtnErr = bh.Exec(deleteCtx, sql)
 			if rtnErr != nil {
+				retry = !inTxn && moerr.IsMoErrCode(rtnErr, moerr.ErrLockConflict)
 				return rtnErr
 			}
 		}
@@ -4343,6 +4390,10 @@ func doDropAccount(ctx context.Context, bh BackgroundExec, ses *Session, da *dro
 
 		ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, dropMoMysqlCompatibilityModeSql)
 		// drop table mo_mysql_compatibility_mode
+		rtnErr = bh.Exec(deleteCtx, "drop table if exists mo_catalog.mo_database_defaults")
+		if rtnErr != nil {
+			return rtnErr
+		}
 		rtnErr = bh.Exec(deleteCtx, dropMoMysqlCompatibilityModeSql)
 		if rtnErr != nil {
 			return rtnErr
@@ -4493,9 +4544,28 @@ func doDropAccount(ctx context.Context, bh BackgroundExec, ses *Session, da *dro
 	// disable foreign key checks
 	ctx = context.WithValue(ctx, defines.DisableFkCheck{}, true)
 
-	err = dropAccountFunc()
-	if err != nil {
-		return err
+	// Lifecycle admission must fail fast while this transaction holds other
+	// catalog locks. Only its owner may release them and replay the whole drop.
+	const maxAttempts = 5
+	for attempt := 0; ; attempt++ {
+		if err = ctx.Err(); err != nil {
+			return err
+		}
+		err = dropAccountFunc()
+		if err == nil {
+			break
+		}
+		if !retry || attempt+1 == maxAttempts {
+			return err
+		}
+		bh.ClearExecResultSet()
+		timer := time.NewTimer(25 * time.Millisecond << attempt)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
 	}
 
 	if !hasAccount {
@@ -4621,7 +4691,7 @@ func doDropUser(ctx context.Context, ses *Session, du *tree.DropUser) (err error
 	}
 
 	// Retain creator-row locks held by partial restore through recreation.
-	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{forcePessimisticRC: true})
+	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{forcePessimisticRC: true, internalExecution: true})
 	defer bh.Close()
 
 	// put it into the single transaction
@@ -4699,6 +4769,7 @@ func doDropUser(ctx context.Context, ses *Session, du *tree.DropUser) (err error
 func doDropRole(ctx context.Context, ses *Session, dr *tree.DropRole) (err error) {
 	var vr *verifiedRole
 	var sql string
+	var roleDeleted bool
 	account := ses.GetTenantInfo()
 	err = normalizeNamesOfRoles(ctx, dr.Roles)
 	if err != nil {
@@ -4706,15 +4777,21 @@ func doDropRole(ctx context.Context, ses *Session, dr *tree.DropRole) (err error
 	}
 
 	// Honor grant-row locks retained by catalog restore through replay.
-	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{forcePessimisticRC: true})
+	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{forcePessimisticRC: true, internalExecution: true})
 	defer bh.Close()
 
 	// put it into the single transaction
 	err = bh.Exec(ctx, "begin;")
 	defer func() {
 		err = finishTxn(ctx, bh, err)
+		if err == nil && roleDeleted {
+			invalidateRoleRuleCaches(ses)
+		}
 	}()
 	if err != nil {
+		return err
+	}
+	if err = lockRoleRuleLifecycleInBackground(ctx, bh); err != nil {
 		return err
 	}
 
@@ -4736,10 +4813,11 @@ func doDropRole(ctx context.Context, ses *Session, dr *tree.DropRole) (err error
 			}
 		}
 
-		// step2 : delete mo_role
-		// step3 : delete mo_user_grant
-		// step4 : delete mo_role_grant
-		// step5 : delete mo_role_privs
+		// step2 : delete role rewrite rules
+		// step3 : delete mo_role
+		// step4 : delete mo_user_grant
+		// step5 : delete mo_role_grant
+		// step6 : delete mo_role_privs
 		if vr == nil {
 			continue
 		}
@@ -4758,6 +4836,7 @@ func doDropRole(ctx context.Context, ses *Session, dr *tree.DropRole) (err error
 				return err
 			}
 		}
+		roleDeleted = true
 	}
 
 	return err
@@ -4786,7 +4865,7 @@ func doAlterRole(ctx context.Context, ses *Session, ar *tree.AlterRole) (err err
 		return moerr.NewInternalErrorf(ctx, "the new role name is the same as the old role name")
 	}
 
-	bh := ses.GetBackgroundExec(ctx)
+	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{internalExecution: true})
 	defer bh.Close()
 
 	// put it into the single transaction
@@ -6003,7 +6082,7 @@ func doRevokeRole(ctx context.Context, ses *Session, rr *tree.RevokeRole) (err e
 	// semantics used by active-session authorization refreshes. Otherwise an
 	// SI snapshot can make a committed REVOKE temporarily invisible even to a
 	// fresh private authorization transaction.
-	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{forcePessimisticRC: true})
+	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{forcePessimisticRC: true, internalExecution: true})
 	defer bh.Close()
 
 	// step1 : check Roles exists or not
@@ -6163,7 +6242,7 @@ func doGrantRole(ctx context.Context, ses *Session, gr *tree.GrantRole) (err err
 	}
 
 	account := ses.GetTenantInfo()
-	bh := ses.GetBackgroundExec(ctx)
+	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{internalExecution: true})
 	defer bh.Close()
 
 	// step1 : check Roles exists or not
@@ -6469,6 +6548,8 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 	case *tree.AlterUser:
 		typs = append(typs, PrivilegeTypeAlterUser, PrivilegeTypeAccountAll /*, PrivilegeTypeAccountOwnership, PrivilegeTypeUserOwnership*/)
 		canExecInPasswordExpired = true
+	case *tree.SetDefaultRole:
+		typs = append(typs, PrivilegeTypeAlterUser, PrivilegeTypeAccountAll)
 	case *tree.CreateRole:
 		typs = append(typs, PrivilegeTypeCreateRole, PrivilegeTypeAccountAll /*, PrivilegeTypeAccountOwnership*/)
 	case *tree.DropRole:
@@ -6509,6 +6590,12 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		typs = append(typs, PrivilegeTypeCreateDatabase, PrivilegeTypeAccountAll /*, PrivilegeTypeAccountOwnership*/)
 		needMatchedRole = true
 		writeDatabaseTargets = append(writeDatabaseTargets, string(st.Name))
+	case *tree.AlterDatabase:
+		objType = objectTypeDatabase
+		typs = append(typs, PrivilegeTypeAlterObject, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
+		writeDatabaseAndTableDirectly = true
+		dbName = string(st.Name)
+		writeDatabaseTargets = append(writeDatabaseTargets, dbName)
 	case *tree.DropDatabase:
 		typs = append(typs, PrivilegeTypeDropDatabase, PrivilegeTypeAccountAll /*, PrivilegeTypeAccountOwnership*/)
 		writeDatabaseAndTableDirectly = true
@@ -6528,7 +6615,12 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 	case *tree.Use:
 		typs = append(typs, PrivilegeTypeConnect, PrivilegeTypeAccountAll /*, PrivilegeTypeAccountOwnership*/)
 		canExecInRestricted = true
-	case *tree.ShowTables, *tree.ShowCreateTable, *tree.ShowColumns, *tree.ShowCreateView, *tree.ShowCreateDatabase,
+	case *tree.ShowTables, *tree.ShowCreateTable, *tree.ShowColumns:
+		objType = objectTypeDatabase
+		typs = append(typs, PrivilegeTypeShowTables, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
+		dbName, _, _, _ = showMetadataTarget(stmt)
+		canExecInRestricted = true
+	case *tree.ShowCreateView, *tree.ShowCreateDatabase,
 		*tree.ShowCreatePublications:
 		objType = objectTypeDatabase
 		typs = append(typs, PrivilegeTypeShowTables, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
@@ -6764,6 +6856,7 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		*tree.PauseDaemonTask, *tree.CancelDaemonTask, *tree.ResumeDaemonTask, *tree.ShowRecoveryWindow,
 		*tree.ShowSQLTasks, *tree.ShowSQLTaskRuns,
 		*tree.CheckTableStmt, *tree.ShowProfileStmt,
+		*tree.CreateExtension, *tree.LoadExtension,
 		*tree.AnalyzeStmt:
 		objType = objectTypeNone
 		kind = privilegeKindNone
@@ -6813,7 +6906,7 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		objType = objectTypeNone
 		kind = privilegeKindNone
 		canExecInRestricted = true
-	case *tree.SetDefaultRole, *tree.SetRole, *tree.SetPassword:
+	case *tree.SetRole, *tree.SetPassword:
 		objType = objectTypeNone
 		kind = privilegeKindNone
 	case *tree.PrepareStmt, *tree.PrepareString, *tree.PrepareVar, *tree.Deallocate, *tree.Reset:
@@ -8226,16 +8319,19 @@ func determineUserHasPrivilegeSet(ctx context.Context, ses *Session, priv *privi
 		}
 	}
 
-	var backgroundExecOptions []*BackgroundExecOption
+	backgroundExecOption := &BackgroundExecOption{}
 	if roleGrantNeedsCheck && !roleGrantCached {
 		// Active role membership is external authorization state. Revalidate it
 		// in a private RC transaction so a user transaction opened before REVOKE
 		// cannot continue authorizing through its older catalog snapshot.
-		backgroundExecOptions = append(backgroundExecOptions, &BackgroundExecOption{
-			forcePessimisticRC: true,
-		})
+		backgroundExecOption.forcePessimisticRC = true
 	}
-	bh := ses.GetBackgroundExec(ctx, backgroundExecOptions...)
+	backgroundExecOption, err = authorizationReadOption(ctx, ses, backgroundExecOption)
+	if err != nil {
+		return false, stats, err
+	}
+	_, _, _ = fault.TriggerFaultInDomainWithContext(ctx, fault.DomainFrontend, "authorization_before_grant_read")
+	bh := ses.GetBackgroundExec(ctx, backgroundExecOption)
 	defer func() {
 		stats = bh.GetExecStatsArray()
 		bh.Close()
@@ -8517,7 +8613,11 @@ func validateActiveRoleGrantForAuthorization(
 
 	// WITH GRANT OPTION authorization can bypass the general privilege walk,
 	// but must use the same latest-committed membership semantics.
-	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{forcePessimisticRC: true})
+	readOption, err := authorizationReadOption(ctx, ses, &BackgroundExecOption{forcePessimisticRC: true})
+	if err != nil {
+		return false, stats, err
+	}
+	bh := ses.GetBackgroundExec(ctx, readOption)
 	defer func() {
 		stats = bh.GetExecStatsArray()
 		bh.Close()
@@ -8712,7 +8812,11 @@ func determineUserCanGrantRolesToOthers(ctx context.Context, ses *Session, fromR
 	}
 
 	// step2: decide the current user
-	bh := ses.GetBackgroundExec(ctx)
+	readOption, err := authorizationReadOption(ctx, ses, &BackgroundExecOption{})
+	if err != nil {
+		return false, stats, err
+	}
+	bh := ses.GetBackgroundExec(ctx, readOption)
 	defer func() {
 		stats = bh.GetExecStatsArray()
 		bh.Close()
@@ -8806,6 +8910,15 @@ func authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ctx con
 	if priv.objectType() != objectTypeAccount && priv.objectType() != objectTypeDatabase { // do nothing
 		return true, stats, nil
 	}
+	if st, isSetDefaultRole := stmt.(*tree.SetDefaultRole); isSetDefaultRole && ses.GetFromRealUser() {
+		self, selfErr := setDefaultRoleTargetsAreCurrentUser(ctx, ses, st)
+		if selfErr != nil {
+			return false, stats, selfErr
+		}
+		if self {
+			return true, stats, nil
+		}
+	}
 	if !checkProtectedDatabaseWriteByPrivilege(ctx, ses, priv) {
 		return false, stats, nil
 	}
@@ -8822,6 +8935,16 @@ func authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ctx con
 		ok, delta, err = authenticateMultiDropTableTargets(ctx, ses, st)
 		stats.Add(&delta)
 		return ok, stats, err
+	}
+
+	// Only a normal denial may use object visibility. Errors (including revoked
+	// active-role membership) have already returned above.
+	if !ok && ses.GetFromRealUser() && ses.GetTenantInfo() != nil {
+		if _, _, _, supported := showMetadataTarget(stmt); supported {
+			allowed, delta, err := authenticateShowMetadata(ctx, ses, stmt)
+			stats.Add(&delta)
+			return allowed, stats, err
+		}
 	}
 
 	// double check privilege of drop table
@@ -9242,18 +9365,23 @@ func authenticateUserCanExecuteStatementWithObjectTypeDatabaseAndTable(ctx conte
 			arr = appendMergeActionPrivilegeTips(ses, mergeStmt, p, arr)
 		}
 		if len(arr) == 0 {
-			if ins, ok := stmt.(*tree.Insert); ok {
-				dbName, tableName, ok := getInsertTargetTableName(ins, ses)
-				if ok {
-					arr = append(arr, privilegeTips{
-						typ:                   PrivilegeTypeInsert,
-						objType:               objectTypeTable,
-						databaseName:          dbName,
-						tableName:             tableName,
-						isClusterTable:        isClusterTable(dbName, tableName),
-						clusterTableOperation: clusterTableModify,
-					})
-				}
+			var dbName, tableName string
+			var ok bool
+			switch st := stmt.(type) {
+			case *tree.Insert:
+				dbName, tableName, ok = getInsertTargetTableName(st, ses)
+			case *tree.Load:
+				dbName, tableName, ok = getLoadTargetTableName(st, ses)
+			}
+			if ok {
+				arr = append(arr, privilegeTips{
+					typ:                   PrivilegeTypeInsert,
+					objType:               objectTypeTable,
+					databaseName:          dbName,
+					tableName:             tableName,
+					isClusterTable:        isClusterTable(dbName, tableName),
+					clusterTableOperation: clusterTableModify,
+				})
 			}
 		}
 		if len(arr) == 0 {
@@ -9295,6 +9423,79 @@ func getInsertTargetTableName(stmt *tree.Insert, ses *Session) (string, string, 
 		return "", "", false
 	}
 	return dbName, tableName, true
+}
+
+func getLoadTargetTableName(stmt *tree.Load, ses *Session) (string, string, bool) {
+	if stmt == nil || stmt.Table == nil {
+		return "", "", false
+	}
+	dbName := string(stmt.Table.SchemaName)
+	if dbName == "" {
+		dbName = ses.GetDatabaseName()
+	}
+	tableName := string(stmt.Table.ObjectName)
+	if dbName == "" || tableName == "" {
+		return "", "", false
+	}
+	return dbName, tableName, true
+}
+
+// loadStatementForPrePlanAuth finds a LOAD nested in a prepared or executable
+// EXPLAIN wrapper whose planner recursively builds the inner statement.
+func loadStatementForPrePlanAuth(stmt tree.Statement) *tree.Load {
+	for stmt != nil {
+		switch st := stmt.(type) {
+		case *tree.Load:
+			return st
+		case *tree.PrepareStmt:
+			stmt = st.Stmt
+		case *tree.ExplainStmt:
+			stmt = st.Statement
+		case *tree.ExplainAnalyze:
+			stmt = st.Statement
+		case *tree.ExplainPhyPlan:
+			stmt = st.Statement
+		default:
+			return nil
+		}
+	}
+	return nil
+}
+
+// authenticateLoadBeforePlan checks the target-table privilege using the LOAD
+// AST before planning can probe an external source. The plan-level check still
+// runs after planning because it is the authoritative check for rewritten DML
+// and any additional target information discovered by the planner.
+func authenticateLoadBeforePlan(
+	ctx context.Context,
+	ses *Session,
+	stmt *tree.Load,
+	defaultDatabase string,
+) (statistic.StatsArray, error) {
+	var stats statistic.StatsArray
+	stats.Reset()
+	if ses == nil || ses.GetTenantInfo() == nil || ses.IsBackgroundSession() {
+		return stats, nil
+	}
+	if stmt == nil {
+		return stats, nil
+	}
+	if getPu(ses.GetService()).SV.SkipCheckPrivilege || ses.skipAuthForSpecialUser() {
+		return stats, nil
+	}
+
+	restoreDatabase := bindSessionDatabaseForStatement(ses, defaultDatabase)
+	defer restoreDatabase()
+
+	ok, delta, err := authenticateUserCanExecuteStatementWithObjectTypeDatabaseAndTable(ctx, ses, stmt, nil)
+	stats.Add(&delta)
+	if err != nil {
+		return stats, err
+	}
+	if !ok {
+		return stats, moerr.NewInternalError(ctx, "do not have privilege to execute the statement")
+	}
+	return stats, nil
 }
 
 func appendMergeActionPrivilegeTips(
@@ -9401,7 +9602,15 @@ func authenticateCreateTableAsSelectSourcePrivilege(
 
 	// Rebuild source-select plan and reuse normal table-scan privilege extraction,
 	// instead of manually parsing AST table references.
-	sourcePlan, err := buildPlan(ctx, ses, ses.GetTxnCompileCtx(), st.AsSource)
+	compilerContext := ses.GetTxnCompileCtx()
+	originalContext := compilerContext.GetContext()
+	planningContext := originalContext
+	if planningContext == nil {
+		planningContext = ctx
+	}
+	compilerContext.SetContext(plan2.WithJSONMergeWarningOrigin(planningContext, plan2.JSONMergeWarningInternalReprepare))
+	defer compilerContext.SetContext(originalContext)
+	sourcePlan, err := buildPlan(ctx, ses, compilerContext, plan2.DeepCopySelect(st.AsSource))
 	if err != nil {
 		return false, stats, err
 	}
@@ -10056,7 +10265,11 @@ func determineUserCanGrantPrivilegesToOthers(ctx context.Context, ses *Session, 
 	// step1: normalize the names of roles and users
 	// step2: decide the current user
 	account := ses.GetTenantInfo()
-	bh := ses.GetBackgroundExec(ctx)
+	readOption, err := authorizationReadOption(ctx, ses, &BackgroundExecOption{})
+	if err != nil {
+		return false, stats, err
+	}
+	bh := ses.GetBackgroundExec(ctx, readOption)
 	defer func() {
 		stats = bh.GetExecStatsArray()
 		bh.Close()
@@ -10303,8 +10516,8 @@ func authenticateUserCanExecuteStatementWithObjectTypeNone(ctx context.Context, 
 		}
 
 		checkBackUpStartPrivilege := func() (bool, error) {
-			// only the moAdmin can execute the backup statement
-			return tenant.IsSysTenant(), nil
+			// Backup operates on server-owned files and requires system authority.
+			return verifyAccountCanExecMoCtrl(tenant), nil
 		}
 
 		checkCdcTaskPrivilege := func() (bool, error) {
@@ -10626,7 +10839,11 @@ func InitGeneralTenant(ctx context.Context, bh BackgroundExec, ses *Session, ca 
 		if rtnErr != nil {
 			return rtnErr
 		}
-		rtnErr = createTablesInInformationSchemaOfGeneralTenant(newTenantCtx, bh, ses.GetService())
+		protocolVersion, protocolErr := protocolVersionForTenantInitializationWithContext(ctx, ses.GetService(), ses.GetProc())
+		if protocolErr != nil {
+			return protocolErr
+		}
+		rtnErr = createTablesInInformationSchemaOfGeneralTenantWithProtocol(newTenantCtx, bh, protocolVersion)
 		if rtnErr != nil {
 			return rtnErr
 		}
@@ -10809,6 +11026,85 @@ func createTablesInMoCatalogOfGeneralTenant(ctx context.Context, bh BackgroundEx
 	return newTenant, newTenantCtx, err
 }
 
+// isSysOnlyCatalogRelationSQL classifies the createSqls statements whose
+// relation stays with the system account: the general-tenant account
+// initialization skips them, so a relation whose only row is the system
+// account's can never resolve inside a general account. The publication
+// system-relation availability rules rely on the same classification.
+func isSysOnlyCatalogRelationSQL(sql string) bool {
+	// only the SYS tenant has the table mo_account/mo_subs
+	if strings.HasPrefix(sql, "create table mo_catalog.mo_account") {
+		return true
+	}
+	if strings.HasPrefix(sql, "create table mo_catalog.mo_pubs") {
+		return true
+	}
+	if strings.HasPrefix(sql, "create table mo_catalog.mo_subs") {
+		return true
+	}
+	if strings.HasPrefix(sql, "create cluster table mo_catalog.mo_view_depend") ||
+		strings.HasPrefix(sql, "create cluster table mo_catalog.mo_view_refresh") {
+		return true
+	}
+	if strings.HasPrefix(sql, "create table mo_catalog.mo_cdc_task") {
+		return true
+	}
+	if strings.HasPrefix(sql, "create table mo_catalog.mo_cdc_watermark") {
+		return true
+	}
+	if strings.HasPrefix(sql, "create table mo_catalog.mo_cdc_snapshot") {
+		return true
+	}
+	if strings.HasPrefix(sql, "create table mo_catalog.mo_data_key") {
+		return true
+	}
+	if strings.HasPrefix(sql, fmt.Sprintf("create table mo_catalog.%s", catalog.MO_TABLE_STATS)) {
+		return true
+	}
+	if strings.HasPrefix(sql, fmt.Sprintf("create table mo_catalog.%s", catalog.MO_MERGE_SETTINGS)) {
+		return true
+	}
+	if strings.HasPrefix(sql, fmt.Sprintf("insert into mo_catalog.%s", catalog.MO_MERGE_SETTINGS)) {
+		return true
+	}
+	if strings.HasPrefix(sql, fmt.Sprintf("create table mo_catalog.%s", catalog.MO_ACCOUNT_LOCK)) {
+		return true
+	}
+	if strings.HasPrefix(sql, fmt.Sprintf("CREATE TABLE mo_catalog.%s", catalog.MO_ISCP_LOG)) {
+		return true
+	}
+	if strings.HasPrefix(sql, fmt.Sprintf("CREATE TABLE mo_catalog.%s", catalog.MO_CCPR_LOG)) {
+		return true
+	}
+	if strings.HasPrefix(sql, fmt.Sprintf("CREATE TABLE %s.%s", catalog.MO_CATALOG, catalog.MO_CCPR_TABLES)) {
+		return true
+	}
+	if strings.HasPrefix(sql, fmt.Sprintf("CREATE TABLE %s.%s", catalog.MO_CATALOG, catalog.MO_CCPR_DBS)) {
+		return true
+	}
+	// The MoCatalogMoIndexUpdateDDL statement opens with uppercase CREATE
+	// TABLE: the case-sensitive precondition must keep the original casing,
+	// or the statement stops classifying as sys-only and general-tenant
+	// account initialization executes a catalog DDL upstream leaves with the
+	// system account.
+	if strings.HasPrefix(sql, fmt.Sprintf("CREATE TABLE mo_catalog.%s", catalog.MO_INDEX_UPDATE)) {
+		return true
+	}
+	if strings.HasPrefix(sql, fmt.Sprintf("create table mo_catalog.%s", catalog.MO_BRANCH_METADATA)) {
+		return true
+	}
+
+	if strings.HasPrefix(sql, fmt.Sprintf("create table mo_catalog.%s", catalog.MO_FEATURE_LIMIT)) {
+		return true
+	}
+
+	if strings.Contains(sql, fmt.Sprintf("mo_catalog.%s", catalog.MO_FEATURE_REGISTRY)) {
+		return true
+	}
+
+	return false
+}
+
 func createTablesInMoCatalogOfGeneralTenant2(bh BackgroundExec, ca *createAccount, newTenantCtx context.Context, newTenant *TenantInfo, pu *config.ParameterUnit) error {
 	start := time.Now()
 	defer func() {
@@ -10819,83 +11115,16 @@ func createTablesInMoCatalogOfGeneralTenant2(bh BackgroundExec, ca *createAccoun
 	newTenantCtx, span := trace.Debug(newTenantCtx, "createTablesInMoCatalogOfGeneralTenant2")
 	defer span.End()
 
-	isSysOnlyDb := func(sql string) bool {
-		// only the SYS tenant has the table mo_account/mo_subs
-		if strings.HasPrefix(sql, "create table mo_catalog.mo_account") {
-			return true
-		}
-		if strings.HasPrefix(sql, "create table mo_catalog.mo_pubs") {
-			return true
-		}
-		if strings.HasPrefix(sql, "create table mo_catalog.mo_subs") {
-			return true
-		}
-		if strings.HasPrefix(sql, "create cluster table mo_catalog.mo_view_depend") ||
-			strings.HasPrefix(sql, "create cluster table mo_catalog.mo_view_refresh") {
-			return true
-		}
-		if strings.HasPrefix(sql, "create table mo_catalog.mo_cdc_task") {
-			return true
-		}
-		if strings.HasPrefix(sql, "create table mo_catalog.mo_cdc_watermark") {
-			return true
-		}
-		if strings.HasPrefix(sql, "create table mo_catalog.mo_cdc_snapshot") {
-			return true
-		}
-		if strings.HasPrefix(sql, "create table mo_catalog.mo_data_key") {
-			return true
-		}
-		if strings.HasPrefix(sql, fmt.Sprintf("create table mo_catalog.%s", catalog.MO_TABLE_STATS)) {
-			return true
-		}
-		if strings.HasPrefix(sql, fmt.Sprintf("create table mo_catalog.%s", catalog.MO_MERGE_SETTINGS)) {
-			return true
-		}
-		if strings.HasPrefix(sql, fmt.Sprintf("insert into mo_catalog.%s", catalog.MO_MERGE_SETTINGS)) {
-			return true
-		}
-		if strings.HasPrefix(sql, fmt.Sprintf("create table mo_catalog.%s", catalog.MO_ACCOUNT_LOCK)) {
-			return true
-		}
-		if strings.HasPrefix(sql, fmt.Sprintf("CREATE TABLE mo_catalog.%s", catalog.MO_ISCP_LOG)) {
-			return true
-		}
-		if strings.HasPrefix(sql, fmt.Sprintf("CREATE TABLE mo_catalog.%s", catalog.MO_CCPR_LOG)) {
-			return true
-		}
-		if strings.HasPrefix(sql, fmt.Sprintf("CREATE TABLE %s.%s", catalog.MO_CATALOG, catalog.MO_CCPR_TABLES)) {
-			return true
-		}
-		if strings.HasPrefix(sql, fmt.Sprintf("CREATE TABLE %s.%s", catalog.MO_CATALOG, catalog.MO_CCPR_DBS)) {
-			return true
-		}
-		if strings.HasPrefix(sql, fmt.Sprintf("CREATE TABLE mo_catalog.%s", catalog.MO_INDEX_UPDATE)) {
-			return true
-		}
-		if strings.HasPrefix(sql, fmt.Sprintf("create table mo_catalog.%s", catalog.MO_BRANCH_METADATA)) {
-			return true
-		}
-
-		if strings.HasPrefix(sql, fmt.Sprintf("create table mo_catalog.%s", catalog.MO_FEATURE_LIMIT)) {
-			return true
-		}
-
-		if strings.Contains(sql, fmt.Sprintf("mo_catalog.%s", catalog.MO_FEATURE_REGISTRY)) {
-			return true
-		}
-
-		return false
-	}
-
 	start1 := time.Now()
 
-	// create tables for the tenant
+	// Only these binary-owned catalog declarations use internal DDL admission;
+	// do not pass the marker to the tenant's subsequent data or user statements.
+	internalDDL := context.WithValue(newTenantCtx, defines.InternalExecutorKey{}, true)
 	for _, sql := range createSqls {
-		if isSysOnlyDb(sql) {
+		if isSysOnlyCatalogRelationSQL(sql) {
 			continue
 		}
-		if err = bh.Exec(newTenantCtx, sql); err != nil {
+		if err = bh.Exec(internalDDL, sql); err != nil {
 			return err
 		}
 	}
@@ -11000,7 +11229,24 @@ func createTablesInSystemOfGeneralTenant(ctx context.Context, bh BackgroundExec,
 }
 
 // createTablesInInformationSchemaOfGeneralTenant creates the database information_schema and the views or tables.
-func createTablesInInformationSchemaOfGeneralTenant(ctx context.Context, bh BackgroundExec, service string) error {
+func createTablesInInformationSchemaOfGeneralTenant(
+	ctx context.Context,
+	bh BackgroundExec,
+	service string,
+	proc *process.Process,
+) error {
+	protocolVersion, err := protocolVersionForTenantInitializationWithContext(ctx, service, proc)
+	if err != nil {
+		return err
+	}
+	return createTablesInInformationSchemaOfGeneralTenantWithProtocol(ctx, bh, protocolVersion)
+}
+
+func createTablesInInformationSchemaOfGeneralTenantWithProtocol(
+	ctx context.Context,
+	bh BackgroundExec,
+	protocolVersion int64,
+) error {
 	start := time.Now()
 	defer func() {
 		v2.CreateTablesInInfoSchemaDurationHistogram.Observe(time.Since(start).Seconds())
@@ -11010,16 +11256,18 @@ func createTablesInInformationSchemaOfGeneralTenant(ctx context.Context, bh Back
 	// with new tenant
 	// TODO: when we have the auto_increment column, we need new strategy.
 
-	var err error
-	protocol := protocolVersionForTenantInitialization(service)
-	if protocol >= defines.MORPCVersion100 {
-		// A new CN can already speak 96 while an older CN still serves the
-		// cluster. Do not persist a View using a function that peer cannot plan.
-		if err := requireCommonViewColumnsProtocol(ctx, bh); err != nil {
+	// COLUMNS keeps its independent protocol contract even when VIEWS falls back.
+	if protocolVersion >= defines.MORPCVersion100 {
+		requiredProtocol := defines.MORPCVersion100
+		if protocolVersion >= defines.MORPCVersion109 {
+			requiredProtocol = defines.MORPCVersion109
+		}
+		if err := requireCommonViewColumnsProtocol(ctx, bh, requiredProtocol); err != nil {
 			return err
 		}
 	}
-	informationSchemaTables := sysview.InitInformationSchemaSysTablesForProtocol(protocol)
+	informationSchemaTables := sysview.InitInformationSchemaSysTablesForProtocol(protocolVersion)
+	var err error
 	sqls := make([]string, 0, len(informationSchemaTables)+len(sysview.InitMysqlSysTables)+4)
 
 	sqls = append(sqls, "use information_schema;")
@@ -11037,7 +11285,83 @@ func createTablesInInformationSchemaOfGeneralTenant(ctx context.Context, bh Back
 	return err
 }
 
-func requireCommonViewColumnsProtocol(ctx context.Context, bh BackgroundExec) error {
+func protocolVersionForTenantInitialization(service string, proc *process.Process) (int64, error) {
+	return protocolVersionForTenantInitializationWithContext(context.Background(), service, proc)
+}
+
+func protocolVersionForTenantInitializationWithContext(
+	ctx context.Context,
+	service string,
+	proc *process.Process,
+) (int64, error) {
+	// Account creation must remain available while the cluster is rolling out
+	// the parser-derived VIEWS functions. The v109 fallback preserves the
+	// native COLUMNS contract; an admitted v118 predecessor also retains TABLES.
+	// Bootstrap maintenance revisits the final-version account row once the
+	// VIEWS capability becomes available.
+	legacyVersion := defines.MORPCMinVersion
+	predecessorViewsVersion := defines.MORPCVersion109
+	rt := moruntime.ServiceRuntime(service)
+	if rt == nil {
+		return legacyVersion, nil
+	}
+	value, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	if !ok {
+		return legacyVersion, nil
+	}
+	version, ok := value.(int64)
+	if !ok {
+		return legacyVersion, nil
+	}
+	if version < defines.MORPCVersion126 {
+		// Preserve every pre-existing protocol-specific information_schema
+		// contract. Only the new VIEWS function needs the predecessor
+		// fallback; promoting an older known protocol would also install newer
+		// TABLES/COLUMNS and role-closure definitions.
+		return version, nil
+	}
+	// Admission for TABLES v118 and VIEWS v126 is independent. Keep TABLES
+	// when both its local authoring fence and the current peers support it.
+	floorValue, hasFloor := rt.GetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor)
+	floor, validFloor := floorValue.(int64)
+	fallbackProtocol := func() (int64, error) {
+		if err := ctx.Err(); err != nil {
+			return 0, err
+		}
+		if hasFloor && (!validFloor || floor < defines.MORPCVersion118) {
+			return predecessorViewsVersion, nil
+		}
+		supported, err := compile.AllCNsSupportProtocolWithContext(ctx, proc, defines.MORPCVersion118)
+		if ctx.Err() != nil {
+			return 0, ctx.Err()
+		}
+		if err == nil && supported {
+			return defines.MORPCVersion118, nil
+		}
+		return predecessorViewsVersion, nil
+	}
+	// A missing key retains standalone runtimes' existing capability behavior.
+	if hasFloor && (!validFloor || floor < defines.MORPCVersion126) {
+		return fallbackProtocol()
+	}
+	supported, err := compile.AllCNsSupportProtocolWithContext(ctx, proc, defines.MORPCVersion126)
+	if err != nil {
+		// Capability discovery is deliberately best-effort for account
+		// creation. Do not turn a temporary inventory/RPC failure into a
+		// failed CREATE ACCOUNT, but preserve cancellation of the owning
+		// process so shutdown and request cancellation still propagate.
+		if ctx.Err() != nil {
+			return 0, ctx.Err()
+		}
+		return fallbackProtocol()
+	}
+	if !supported {
+		return fallbackProtocol()
+	}
+	return version, nil
+}
+
+func requireCommonViewColumnsProtocol(ctx context.Context, bh BackgroundExec, requiredProtocol int64) error {
 	bh.ClearExecResultSet()
 	// This fixed cluster probe is system-authored; subsequent tenant DDL keeps its original identity.
 	probeCtx := defines.AttachAccount(ctx, catalog.System_Account, catalog.System_User, catalog.System_Role)
@@ -11049,29 +11373,13 @@ func requireCommonViewColumnsProtocol(ctx context.Context, bh BackgroundExec) er
 		return err
 	}
 	if len(results) == 0 || results[0].GetRowCount() == 0 {
-		return versions.CheckProtocolVersionResponse("", defines.MORPCVersion100)
+		return versions.CheckProtocolVersionResponse("", requiredProtocol)
 	}
 	encoded, err := results[0].GetString(ctx, 0, 0)
 	if err != nil {
 		return err
 	}
-	return versions.CheckProtocolVersionResponse(encoded, defines.MORPCVersion100)
-}
-
-func protocolVersionForTenantInitialization(service string) int64 {
-	rt := moruntime.ServiceRuntime(service)
-	if rt == nil {
-		return defines.MORPCMinVersion
-	}
-	value, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
-	if !ok {
-		return defines.MORPCMinVersion
-	}
-	version, ok := value.(int64)
-	if !ok {
-		return defines.MORPCMinVersion
-	}
-	return version
+	return versions.CheckProtocolVersionResponse(encoded, requiredProtocol)
 }
 
 // createSubscription insert records into mo_subs of To-All-Publications
@@ -11170,7 +11478,7 @@ func InitUser(ctx context.Context, ses *Session, tenant *TenantInfo, cu *createU
 	}
 	defer mpool.DeleteMPool(mp)
 
-	bh := ses.GetBackgroundExec(ctx)
+	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{internalExecution: true})
 	defer bh.Close()
 
 	err = bh.Exec(ctx, "begin;")
@@ -11402,7 +11710,7 @@ func InitRole(ctx context.Context, ses *Session, tenant *TenantInfo, cr *tree.Cr
 		return err
 	}
 
-	bh := ses.GetBackgroundExec(ctx)
+	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{internalExecution: true})
 	defer bh.Close()
 
 	err = bh.Exec(ctx, "begin;")
@@ -12373,6 +12681,19 @@ func doInterpretCall(
 		}
 		defer freeStatements(stmt)
 
+		// Procedure bodies run on background executors that open and commit
+		// their own transactions. When the caller is in READ ONLY mode the
+		// whole call must therefore be rejected up front if any body
+		// statement could write; otherwise the procedure's writes would
+		// persist outside the caller's read-only transaction.
+		if err = enforceReadOnlyOnProcedureBody(ctx, ses, stmt, dbName); err != nil {
+			return nil, err
+		}
+
+		interpreter.ctx, err = enterSQLProcedure(ctx, ses, dbName, string(call.Name.Name.ObjectName))
+		if err != nil {
+			return nil, err
+		}
 		err = interpreter.ExecuteSp(stmt[0], dbName, bg)
 		if err != nil {
 			return nil, err
@@ -12381,6 +12702,21 @@ func doInterpretCall(
 		return interpreter.GetResult(), nil
 
 	case "starlark":
+		// Starlark bodies embed SQL in a non-SQL grammar whose statements
+		// cannot be classified statically; fail closed under a read-only
+		// caller rather than let embedded writes commit on their own
+		// transaction.
+		readOnly, readErr := callerTxnReadOnly(ses)
+		if readErr != nil {
+			return nil, readErr
+		}
+		if readOnly {
+			return nil, moerr.NewCantExecuteInReadOnlyTransaction(ctx)
+		}
+		interpreter.ctx, err = enterSQLProcedure(ctx, ses, dbName, string(call.Name.Name.ObjectName))
+		if err != nil {
+			return nil, err
+		}
 		err = interpreter.ExecuteStarlark(spBody, dbName, bg)
 		if err != nil {
 			return nil, err
@@ -12559,7 +12895,11 @@ func doSetGlobalSystemVariables(
 ) (err error) {
 	accountId := uint64(ses.GetTenantInfo().TenantID)
 	accountName := ses.GetTenantName()
-	bh := ses.GetBackgroundExec(ctx)
+	// The generated catalog INSERT/UPDATE below is trusted implementation
+	// SQL of the SET GLOBAL statement itself, not caller-authored work: mark
+	// the executor internal so client-facing gates (e.g. the READ ONLY
+	// transaction enforcement) never observe it as user writes.
+	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{internalExecution: true})
 	defer bh.Close()
 
 	if err = bh.Exec(ctx, "begin;"); err != nil {

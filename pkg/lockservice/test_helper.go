@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"go.uber.org/zap/zapcore"
 )
@@ -37,6 +38,22 @@ func RunLockServicesForTest(
 	serviceIDs []string,
 	lockTableBindTimeout time.Duration,
 	fn func(LockTableAllocator, []LockService),
+	adjustConfig func(*Config),
+	opts ...Option,
+) {
+	runLockServicesForTest(level, serviceIDs, lockTableBindTimeout,
+		func(allocator LockTableAllocator, services []LockService, _ func(...AllocatorOption) (LockTableAllocator, error)) {
+			fn(allocator, services)
+		}, adjustConfig, opts...)
+}
+
+// runLockServicesForTest keeps replacement allocators under the same teardown
+// owner as the original. Restart is called only by the scenario goroutine.
+func runLockServicesForTest(
+	level zapcore.Level,
+	serviceIDs []string,
+	lockTableBindTimeout time.Duration,
+	fn func(LockTableAllocator, []LockService, func(...AllocatorOption) (LockTableAllocator, error)),
 	adjustConfig func(*Config),
 	opts ...Option,
 ) {
@@ -96,22 +113,122 @@ func RunLockServicesForTest(
 
 	// Service keepers start during construction and may immediately contact the
 	// allocator. Publish its listener first so initial RPCs cannot race startup.
-	allocator := NewLockTableAllocator(
-		"",
-		testSockets,
-		lockTableBindTimeout,
-		morpc.Config{},
-		func(lta *lockTableAllocator) {
+	constructAllocator := func(extra ...AllocatorOption) LockTableAllocator {
+		allocatorOpts := make([]AllocatorOption, 0, 1+len(extra))
+		allocatorOpts = append(allocatorOpts, func(lta *lockTableAllocator) {
 			lta.options.removeDisconnectDuration = removeDisconnectDuration
-		},
-	)
-	cleanup.allocatorCloser = allocator.Close
+		})
+		allocatorOpts = append(allocatorOpts, extra...)
+		return NewLockTableAllocator("", testSockets, lockTableBindTimeout, morpc.Config{},
+			func(owner LockTableAllocator) { cleanup.allocatorCloser = owner.Close }, allocatorOpts...)
+	}
+	allocator := constructAllocator()
+	restart := func(extra ...AllocatorOption) (LockTableAllocator, error) {
+		if err := cleanup.allocatorCloser(); err != nil {
+			return nil, err
+		}
+		// The closed allocator leaves every service with at least one pooled
+		// rpc backend whose connection the close severed. Probe each service in
+		// the dead-listener window until the probe provably reaches the dialer,
+		// so the first scenario RPC after restart cannot ride the dead
+		// connection while the rebind is still unpublished to the client.
+		if err := drainPooledAllocatorBackends(services); err != nil {
+			return nil, err
+		}
+		return constructAllocator(extra...), nil
+	}
 	for _, cfg := range configs {
 		lockService := NewLockService(cfg, opts...)
 		services = append(services, lockService)
 		cleanup.serviceClosers = append(cleanup.serviceClosers, lockService.Close)
 	}
-	fn(allocator.(*lockTableAllocator), services)
+	fn(allocator, services, restart)
+}
+
+const (
+	// restartDrainDeadline bounds one restart's wait for every service to
+	// observe the closed allocator. Healthy legs resolve in microseconds, so
+	// the bound only guards a wedged backend against hanging a restart.
+	restartDrainDeadline = 10 * time.Second
+	// restartDrainInterval is the pause between drain probes. It trades a
+	// little latency for giving the rpc client's read loop the first chance
+	// to observe the severed connection itself.
+	restartDrainInterval = time.Millisecond
+	// allocatorDrainProbeTable names a table far outside every scenario's
+	// range so drain probes stay distinguishable from real fixtures even when
+	// a probe is issued outside the dead-listener window.
+	allocatorDrainProbeTable = uint64(1) << 62
+)
+
+// drainPooledAllocatorBackends removes every service's pooled connection to
+// the just-closed allocator. It must run between the old allocator's close and
+// the new allocator's construction, the only window in which the probe below
+// cannot reach any server and therefore has no allocator-visible effect. The
+// raw write error a severed backend first reports ("write: broken pipe") is
+// not distinguishable from a backend the client has already retired, so the
+// loop continues until a probe returns the dialer's typed verdict
+// (moerr.ErrBackendCannotConnect on the unbound socket path). That verdict
+// proves the stale backend has left the client pool, so the next
+// allocator-directed RPC dials the replacement listener instead of writing
+// through the dead connection.
+func drainPooledAllocatorBackends(services []LockService) error {
+	ctx, cancel := context.WithTimeout(context.Background(), restartDrainDeadline)
+	defer cancel()
+	for _, s := range services {
+		if err := drainPooledAllocatorBackendForService(ctx, s.(*service)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func drainPooledAllocatorBackendForService(ctx context.Context, s *service) error {
+	return drainUntilProbeDials(ctx, func() error {
+		return sendAllocatorDrainProbe(ctx, s)
+	})
+}
+
+// drainUntilProbeDials keeps issuing one dead-path probe until the probe
+// error proves a fresh dial failed. Any connection-level failure on the old
+// backend leads to a retry; only the dialer's verdict completes the drain.
+func drainUntilProbeDials(ctx context.Context, probe func() error) error {
+	var lastErr error
+	for {
+		lastErr = probe()
+		if lastErr == nil {
+			return moerr.NewInternalErrorNoCtx(
+				"allocator drain probe unexpectedly succeeded before the replacement listener was constructed")
+		}
+		if moerr.IsMoErrCode(lastErr, moerr.ErrBackendCannotConnect) {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return errors.Join(ctx.Err(), lastErr)
+		case <-time.After(restartDrainInterval):
+		}
+	}
+}
+
+// sendAllocatorDrainProbe issues one allocator get-bind request through the
+// service's own client. During the drain window the allocator socket path has
+// no listener, so the request can only fail on the connection or dial leg and
+// can never reach an allocator.
+func sendAllocatorDrainProbe(ctx context.Context, s *service) error {
+	req := acquireRequest()
+	defer releaseRequest(req)
+	req.Method = pb.Method_GetBind
+	req.GetBind.ServiceID = s.serviceID
+	req.GetBind.Table = allocatorDrainProbeTable
+	req.GetBind.OriginTable = allocatorDrainProbeTable
+	req.GetBind.Group = 0
+	req.GetBind.Sharding = pb.Sharding_None
+	resp, err := s.remote.client.Send(ctx, req)
+	if err != nil {
+		return err
+	}
+	defer releaseResponse(resp)
+	return nil
 }
 
 type testTopologyCleanup struct {

@@ -20,7 +20,9 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"io"
 	"math"
 	"os"
 	"path/filepath"
@@ -2720,10 +2722,10 @@ func TestDerivedGeometryRejectsMalformedCollectionMember(t *testing.T) {
 		{name: "is_simple", fn: StIsSimple, resultType: types.T_bool, input: "GEOMETRYCOLLECTION(POINT(1 1),LINESTRING(0 0))", errText: "invalid linestring payload"},
 		{name: "envelope", fn: StEnvelope, resultType: types.T_geometry, input: "GEOMETRYCOLLECTION(POINT(1 1),LINESTRING(0 0))", errText: "invalid linestring payload"},
 		{name: "centroid", fn: StCentroid, resultType: types.T_geometry, input: "GEOMETRYCOLLECTION(POINT(1 1),LINESTRING(0 0))", errText: "invalid linestring payload"},
-		{name: "is_simple_malformed_polygon_after_false", fn: StIsSimple, resultType: types.T_bool, input: "GEOMETRYCOLLECTION(MULTIPOINT(0 0,0 0),POLYGON((0 0,1 0,0 0)))", errText: "invalid polygon payload"},
-		{name: "is_simple_malformed_polygon_first", fn: StIsSimple, resultType: types.T_bool, input: "GEOMETRYCOLLECTION(POLYGON((0 0,1 0,0 0)),MULTIPOINT(0 0,0 0))", errText: "invalid polygon payload"},
-		{name: "is_simple_malformed_polygon_nested", fn: StIsSimple, resultType: types.T_bool, input: "GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(MULTIPOINT(0 0,0 0),POLYGON((0 0,1 0,0 0))))", errText: "invalid polygon payload"},
-		{name: "envelope_malformed_polygon_after_false", fn: StEnvelope, resultType: types.T_geometry, input: "GEOMETRYCOLLECTION(MULTIPOINT(0 0,0 0),POLYGON((0 0,1 0,0 0)))", errText: "invalid polygon payload"},
+		{name: "is_simple_malformed_polygon_after_false", fn: StIsSimple, resultType: types.T_bool, input: "GEOMETRYCOLLECTION(MULTIPOINT(0 0,0 0),POLYGON((0 0,1 0,0 0)))", errText: "invalid geometry payload"},
+		{name: "is_simple_malformed_polygon_first", fn: StIsSimple, resultType: types.T_bool, input: "GEOMETRYCOLLECTION(POLYGON((0 0,1 0,0 0)),MULTIPOINT(0 0,0 0))", errText: "invalid geometry payload"},
+		{name: "is_simple_malformed_polygon_nested", fn: StIsSimple, resultType: types.T_bool, input: "GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(MULTIPOINT(0 0,0 0),POLYGON((0 0,1 0,0 0))))", errText: "invalid geometry payload"},
+		{name: "envelope_malformed_polygon_after_false", fn: StEnvelope, resultType: types.T_geometry, input: "GEOMETRYCOLLECTION(MULTIPOINT(0 0,0 0),POLYGON((0 0,1 0,0 0)))", errText: "invalid geometry payload"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -3861,6 +3863,21 @@ func initDateStringToDateTestCase() []tcTemp {
 				[]types.Date{t.ToDate()},
 				[]bool{false}),
 		},
+		{
+			info: "invalid rows do not abort later dates",
+			inputs: []FunctionTestInput{NewFunctionTestInput(types.T_varchar.ToType(),
+				[]string{"2026-02-30", "2026-13-01", "not a date", "", " ", "ignored", "2024-02-29"},
+				[]bool{false, false, false, false, false, true, false})},
+			expect: NewFunctionTestResult(types.T_date.ToType(), false,
+				[]types.Date{0, 0, 0, 0, 0, 0, types.DateFromCalendar(2024, 2, 29)},
+				[]bool{true, true, true, true, true, true, false}),
+		},
+		{
+			info: "invalid constant",
+			inputs: []FunctionTestInput{NewFunctionTestConstInput(types.T_char.ToType(),
+				[]string{"not a date"}, nil)},
+			expect: NewFunctionTestResult(types.T_date.ToType(), false, []types.Date{0}, []bool{true}),
+		},
 	}
 }
 
@@ -3870,10 +3887,24 @@ func TestDateStringToDate(t *testing.T) {
 	// do the test work.
 	proc := testutil.NewProcess(t)
 	for _, tc := range testCases {
-		fcTC := NewFunctionTestCase(proc,
-			tc.inputs, tc.expect, DateStringToDate)
-		s, info := fcTC.RunAndFree()
-		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+		t.Run(tc.info, func(t *testing.T) {
+			fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, DateStringToDate)
+			s, info := fcTC.RunAndFree()
+			require.True(t, s, info)
+		})
+	}
+	for _, sqlMode := range []string{"", "NO_ZERO_DATE"} {
+		t.Run("zero and masked rows/"+sqlMode, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) { return sqlMode, nil })
+			fc := NewFunctionTestCase(proc, []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"bad", "0000-00-00", "2024-02-29"}, nil),
+			}, NewFunctionTestResult(types.T_date.ToType(), false,
+				[]types.Date{0, types.ZeroDate, types.DateFromCalendar(2024, 2, 29)}, []bool{true, sqlMode != "", false}),
+				DateStringToDate).WithSelectList(&FunctionSelectList{AnyNull: true, SelectList: []bool{false, true, true}})
+			ok, info := fc.RunAndFree()
+			require.True(t, ok, info)
+		})
 	}
 }
 
@@ -3968,9 +3999,16 @@ func initDayOfYearTestCase() []tcTemp {
 					[]types.Date{types.Date(20040403), types.Date(20211003), types.Date(20200823)},
 					[]bool{false, false, false}),
 			},
-			expect: NewFunctionTestResult(types.T_uint16.ToType(), false,
-				[]uint16{278, 311, 358},
+			expect: NewFunctionTestResult(types.T_int32.ToType(), false,
+				[]int32{278, 311, 358},
 				[]bool{false, false, false}),
+		},
+		{
+			info: "leap boundary, zero date and NULL",
+			inputs: []FunctionTestInput{NewFunctionTestInput(types.T_date.ToType(),
+				[]types.Date{types.DateFromCalendar(2024, 12, 31), types.DateFromCalendar(2025, 1, 1), types.ZeroDate, types.DateFromCalendar(2024, 1, 1)},
+				[]bool{false, false, false, true})},
+			expect: NewFunctionTestResult(types.T_int32.ToType(), false, []int32{366, 1, 0, 0}, []bool{false, false, true, true}),
 		},
 	}
 }
@@ -4171,6 +4209,23 @@ func initJsonUnquoteTestCase() []tcTemp {
 
 func TestJsonUnquote(t *testing.T) {
 	testCases := initJsonUnquoteTestCase()
+	documents := []string{"123", "true", "null", `[1,"two"]`, `{"a":"b"}`}
+	jsonInputs := make([]string, len(documents))
+	for i, document := range documents {
+		bj, err := types.ParseStringToByteJson(document)
+		require.NoError(t, err)
+		encoded, err := bj.Marshal()
+		require.NoError(t, err)
+		jsonInputs[i] = string(encoded)
+	}
+	testCases = append(testCases, tcTemp{
+		info: "native JSON scalar and composite text",
+		inputs: []FunctionTestInput{
+			NewFunctionTestInput(types.T_json.ToType(), jsonInputs, nil),
+		},
+		expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+			[]string{"123", "true", "null", `[1, "two"]`, `{"a": "b"}`}, nil),
+	})
 
 	// do the test work.
 	proc := testutil.NewProcess(t)
@@ -4331,6 +4386,7 @@ func TestJsonUnquoteUsesEvaluatedRowStringDomain(t *testing.T) {
 
 func TestJsonUnquotePreservesPayloadBoundaryQuotes(t *testing.T) {
 	values := []string{
+		"",
 		"plain",
 		"a\"b",
 		"\"leading",
@@ -4339,6 +4395,9 @@ func TestJsonUnquotePreservesPayloadBoundaryQuotes(t *testing.T) {
 		"\"",
 		"\"\"",
 		"\"你好\"",
+		"slashes\\and\nlines",
+		strings.Repeat("a", types.VarlenaInlineSize),
+		strings.Repeat("a", types.VarlenaInlineSize+1),
 	}
 	inputs := make([]string, len(values))
 	for i, value := range values {
@@ -4365,22 +4424,76 @@ func TestJsonUnquotePreservesPayloadBoundaryQuotes(t *testing.T) {
 		require.NoError(t, err)
 		jsonInputs[i] = string(encoded)
 	}
-	jsonTC := NewFunctionTestCase(proc,
-		[]FunctionTestInput{
-			NewFunctionTestInput(types.T_json.ToType(), jsonInputs,
-				make([]bool, len(jsonInputs))),
-		},
-		NewFunctionTestResult(types.T_varchar.ToType(), false, values,
-			make([]bool, len(values))),
-		JsonUnquote)
-	s, info = jsonTC.RunAndFree()
-	require.True(t, s, info)
+	for _, scenario := range []struct {
+		name     string
+		constant bool
+		masked   bool
+		valueRow int
+	}{
+		{name: "flat"},
+		{name: "flat NULL and masked rows", masked: true},
+		{name: "constant inline", constant: true, valueRow: 5},
+		{name: "constant area", constant: true, valueRow: len(values) - 1},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			input, wanted := jsonInputs, values
+			inputNulls := make([]bool, len(input))
+			wantedNulls := make([]bool, len(wanted))
+			var selected *FunctionSelectList
+			if scenario.masked {
+				inputNulls[1], wantedNulls[1], wantedNulls[2] = true, true, true
+				selected = &FunctionSelectList{AnyNull: true, SelectList: make([]bool, len(input))}
+				for row := range selected.SelectList {
+					selected.SelectList[row] = row != 2
+				}
+			}
+			inputCase := NewFunctionTestInput(types.T_json.ToType(), input, inputNulls)
+			if scenario.constant {
+				input = []string{jsonInputs[scenario.valueRow]}
+				wanted = []string{values[scenario.valueRow], values[scenario.valueRow]}
+				wantedNulls = nil
+				inputCase = NewFunctionTestConstInput(types.T_json.ToType(), input, nil)
+			}
+			jsonTC := NewFunctionTestCase(proc, []FunctionTestInput{inputCase},
+				NewFunctionTestResult(types.T_varchar.ToType(), false, wanted, wantedNulls), JsonUnquote).
+				WithSelectList(selected)
+			defer jsonTC.Free()
+			jsonTC.fnLength = len(wanted)
+			source := jsonTC.parameters[0]
+			source.SetLength(len(wanted))
+			s, info := jsonTC.Run()
+			require.True(t, s, info)
+			assertOwnedResult := func() {
+				result := vector.GenerateFunctionStrParameter(jsonTC.GetResultVectorDirectly())
+				for row, want := range wanted {
+					got, isNull := result.GetStrValue(uint64(row))
+					wantNull := len(wantedNulls) > 0 && wantedNulls[row]
+					require.Equal(t, wantNull, isNull, "row %d", row)
+					if !wantNull {
+						require.Equal(t, want, string(got), "row %d aliases input", row)
+					}
+				}
+			}
+			// Overwrite both inline and area-backed input before releasing it.
+			// The repeated-constant append must also own its first payload copy.
+			for row := range input {
+				stored := source.GetBytesAt(row)
+				for i := range stored {
+					stored[i] = '?'
+				}
+			}
+			assertOwnedResult()
+			source.Free(proc.Mp())
+			jsonTC.parameters[0] = nil
+			assertOwnedResult()
+		})
+	}
 }
 
 func TestLoadFile(t *testing.T) {
 	dir := t.TempDir()
-	proc := testutil.NewProc(t)
-	ctx := context.Background()
+	proc := newSQLFileAccessTestProc(t)
+	ctx := proc.Ctx
 	filePath1 := filepath.Join(dir, "test1")
 	filePath2 := filepath.Join(dir, "test2")
 	writeFile := func(filePath string, data []byte) {
@@ -4433,8 +4546,307 @@ func TestLoadFile(t *testing.T) {
 	}
 }
 
+func TestReadFromParsedPathOwnedService(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "owned.txt")
+	require.NoError(t, os.WriteFile(path, []byte("owned content"), 0o600))
+	proc := newSQLFileAccessTestProc(t)
+	parsed, err := fileservice.ParsePath(path)
+	require.NoError(t, err)
+	r, err := readFromParsedPath(proc.Ctx, path, parsed, proc.GetFileService(), 0, -1)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = r.Close() })
+	data, err := io.ReadAll(r)
+	require.NoError(t, err)
+	require.Equal(t, "owned content", string(data))
+	require.NoError(t, r.Close())
+	require.NoError(t, r.Close())
+}
+
+type borrowedSQLReadService struct {
+	*fileservice.MemoryFS
+	readErr, closeErr error
+	closes            int
+	readerCloses      int
+}
+
+func (f *borrowedSQLReadService) Close(context.Context) { f.closes++ }
+
+func (f *borrowedSQLReadService) Read(ctx context.Context, v *fileservice.IOVector) error {
+	if err := f.MemoryFS.Read(ctx, v); err != nil {
+		return err
+	}
+	for _, entry := range v.Entries {
+		if entry.ReadCloserForRead != nil && *entry.ReadCloserForRead != nil {
+			*entry.ReadCloserForRead = &borrowedSQLReadCloser{ReadCloser: *entry.ReadCloserForRead, service: f}
+		}
+	}
+	return nil
+}
+
+type borrowedSQLReadCloser struct {
+	io.ReadCloser
+	service *borrowedSQLReadService
+}
+
+func (r *borrowedSQLReadCloser) Read(p []byte) (int, error) {
+	if r.service.readErr != nil {
+		return 0, r.service.readErr
+	}
+	return r.ReadCloser.Read(p)
+}
+
+func (r *borrowedSQLReadCloser) Close() error {
+	r.service.readerCloses++
+	return errors.Join(r.ReadCloser.Close(), r.service.closeErr)
+}
+
+func TestLoadFileBorrowedServiceLifetime(t *testing.T) {
+	readErr, closeErr := errors.New("read failed"), errors.New("reader close failed")
+	for _, tc := range []struct {
+		name                   string
+		readErr, closeErr, err error
+	}{
+		{name: "success"},
+		{name: "close error", closeErr: closeErr, err: closeErr},
+		{name: "read error", readErr: readErr, err: readErr},
+		{name: "read error takes precedence", readErr: readErr, closeErr: closeErr, err: readErr},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			memory, err := fileservice.NewMemoryFS("shared", fileservice.DisabledCacheConfig, nil)
+			require.NoError(t, err)
+			t.Cleanup(func() { memory.Close(t.Context()) })
+			service := &borrowedSQLReadService{MemoryFS: memory, readErr: tc.readErr, closeErr: tc.closeErr}
+			proc := testutil.NewProcess(t, testutil.WithFileService(service))
+			proc.Base.SessionInfo.Account = "sys"
+			proc.Base.SessionInfo.Role = "moadmin"
+			require.NoError(t, memory.Write(proc.Ctx, fileservice.IOVector{FilePath: "owned.txt", Entries: []fileservice.IOEntry{{Data: []byte("owned"), Size: 5}}}))
+			data, err := readLoadFileContents("shared:owned.txt", proc)
+			require.ErrorIs(t, err, tc.err)
+			if tc.err == nil {
+				require.Equal(t, "owned", string(data))
+			} else {
+				require.Nil(t, data)
+			}
+			require.Equal(t, 1, service.readerCloses)
+			require.Zero(t, service.closes, "load_file must close its reader, not the borrowed service")
+			service.readErr, service.closeErr = nil, nil
+			data, err = readLoadFileContents("shared:owned.txt", proc)
+			require.NoError(t, err)
+			require.Equal(t, "owned", string(data))
+			require.Zero(t, service.closes)
+		})
+	}
+}
+
+func TestReadLoadFileContentsHonorsContext(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "owned.txt")
+	require.NoError(t, os.WriteFile(path, []byte("owned"), 0o600))
+	proc := newSQLFileAccessTestProc(t)
+	ctx, cancel := context.WithCancel(proc.Ctx)
+	cancel()
+	proc.Ctx = ctx
+
+	r, err := readLoadFileContents(path, proc)
+	require.Nil(t, r)
+	require.ErrorIs(t, err, context.Canceled)
+}
+
+func TestDatalinkFileFunctionsSkipSelectedRows(t *testing.T) {
+	proc := newSQLFileAccessTestProc(t)
+	dir := t.TempDir()
+	input := filepath.Join(dir, "input.txt")
+	output := filepath.Join(dir, "output.txt")
+	require.NoError(t, os.WriteFile(input, []byte("selected content"), 0o600))
+
+	// The masked row is intentionally an invalid local target.  Selection must
+	// suppress both stage resolution and authorization for that row while the
+	// live row still follows the normal read path.
+	loadTextCase := NewFunctionTestCase(
+		proc,
+		[]FunctionTestInput{NewFunctionTestInput(types.T_varchar.ToType(), []string{
+			filepath.Join(dir, "masked.txt"),
+			"file://" + input,
+		}, nil)},
+		NewFunctionTestResult(types.T_text.ToType(), false,
+			[]string{"", "selected content"}, []bool{true, false}),
+		LoadText,
+	).WithSelectList(&FunctionSelectList{AnyNull: true, SelectList: []bool{false, true}})
+	s, info := loadTextCase.RunAndFree()
+	require.True(t, s, info)
+
+	// The same mask must prevent a write side effect. The second row is a
+	// valid owned target and proves that the function still writes selected-in
+	// rows and reports their byte count after Close succeeds.
+	writeCase := NewFunctionTestCase(
+		proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{
+				filepath.Join(dir, "masked-output.txt"),
+				"file://" + output,
+			}, nil),
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"masked", "written"}, nil),
+		},
+		NewFunctionTestResult(types.T_int64.ToType(), false,
+			[]int64{0, int64(len("written"))}, []bool{true, false}),
+		WriteFileDatalink,
+	).WithSelectList(&FunctionSelectList{AnyNull: true, SelectList: []bool{false, true}})
+	s, info = writeCase.RunAndFree()
+	require.True(t, s, info)
+	data, err := os.ReadFile(output)
+	require.NoError(t, err)
+	require.Equal(t, "written", string(data))
+	_, err = os.Stat(filepath.Join(dir, "masked-output.txt"))
+	require.ErrorIs(t, err, os.ErrNotExist)
+}
+
+func TestWriteFileDatalinkSkipsNullAndZeroRows(t *testing.T) {
+	proc := newSQLFileAccessTestProc(t)
+	dir := t.TempDir()
+
+	t.Run("NULL content does not admit or create the target", func(t *testing.T) {
+		output := filepath.Join(dir, "null-content.txt")
+		tc := NewFunctionTestCase(
+			proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{output}, nil),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"ignored"}, []bool{true}),
+			},
+			NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0}, []bool{true}),
+			WriteFileDatalink,
+		)
+		s, info := tc.RunAndFree()
+		require.True(t, s, info)
+		_, err := os.Stat(output)
+		require.ErrorIs(t, err, os.ErrNotExist)
+	})
+
+	t.Run("zero rows do not touch a target", func(t *testing.T) {
+		tc := NewFunctionTestCase(
+			proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{}, []bool{}),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{}, []bool{}),
+			},
+			NewFunctionTestResult(types.T_int64.ToType(), false, []int64{}, []bool{}),
+			WriteFileDatalink,
+		)
+		s, info := tc.RunAndFree()
+		require.True(t, s, info)
+	})
+}
+
+func TestWriteFileDatalinkCancellationDoesNotReportSuccess(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	memory, err := fileservice.NewMemoryFS("shared", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	service := &blockingSQLFileService{MemoryFS: memory, started: make(chan struct{})}
+	proc := testutil.NewProcess(t, testutil.WithFileService(service))
+	proc.Base.SessionInfo.Account = "sys"
+	proc.Base.SessionInfo.Role = "moadmin"
+	proc.ReplaceTopCtx(ctx)
+	proc.BuildPipelineContext(ctx)
+
+	tc := NewFunctionTestCase(
+		proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"file://shared:80/cancelled.txt"}, nil),
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"must not persist"}, nil),
+		},
+		NewFunctionTestResult(types.T_int64.ToType(), false, nil, nil),
+		WriteFileDatalink,
+	)
+	defer tc.Free()
+	require.NoError(t, tc.result.PreExtendAndReset(tc.fnLength))
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- WriteFileDatalink(tc.parameters, tc.result, proc, tc.fnLength, nil)
+	}()
+	select {
+	case <-service.started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("SQL file writer did not reach the in-flight service write")
+	}
+	cancel()
+	select {
+	case err = <-errCh:
+	case <-time.After(5 * time.Second):
+		t.Fatal("SQL file writer did not terminate after cancellation")
+	}
+	require.Error(t, err)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Equal(t, int32(1), service.writes.Load())
+	require.Zero(t, vector.GetFixedAtWithTypeCheck[int64](tc.result.GetResultVector(), 0),
+		"cancellation must not report a successful byte count")
+	_, err = memory.StatFile(context.Background(), "80/cancelled.txt")
+	require.Error(t, err, "cancellation must not leave a persisted file")
+}
+
+type blockingSQLFileService struct {
+	*fileservice.MemoryFS
+	started chan struct{}
+	writes  atomic.Int32
+}
+
+func (f *blockingSQLFileService) Write(ctx context.Context, vector fileservice.IOVector) error {
+	f.writes.Add(1)
+	close(f.started)
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+type completionFailingSQLFileService struct {
+	*fileservice.MemoryFS
+	err    error
+	writes atomic.Int32
+}
+
+func (f *completionFailingSQLFileService) Write(ctx context.Context, vector fileservice.IOVector) error {
+	f.writes.Add(1)
+	for _, entry := range vector.Entries {
+		if entry.ReaderForWrite == nil {
+			continue
+		}
+		if _, err := io.Copy(io.Discard, entry.ReaderForWrite); err != nil {
+			return err
+		}
+	}
+	return f.err
+}
+
+func TestWriteFileDatalinkCompletionFailureIsNotReportedAsSuccess(t *testing.T) {
+	completionErr := errors.New("completion failed")
+	memory, err := fileservice.NewMemoryFS("shared", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	service := &completionFailingSQLFileService{MemoryFS: memory, err: completionErr}
+	proc := testutil.NewProcess(t, testutil.WithFileService(service))
+	proc.Base.SessionInfo.Account = "sys"
+	proc.Base.SessionInfo.Role = "moadmin"
+
+	fc := NewFunctionTestCase(
+		proc,
+		[]FunctionTestInput{
+			// The numeric port keeps this a valid file URL while ParseDatalink's
+			// host+path representation still selects the named "shared" service.
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"file://shared:80/completion.txt"}, nil),
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"must not persist"}, nil),
+		},
+		NewFunctionTestResult(types.T_int64.ToType(), false, nil, nil),
+		WriteFileDatalink,
+	)
+	defer fc.Free()
+	require.NoError(t, fc.result.PreExtendAndReset(fc.fnLength))
+	err = WriteFileDatalink(fc.parameters, fc.result, proc, fc.fnLength, nil)
+	require.ErrorIs(t, err, completionErr)
+	require.Equal(t, int32(1), service.writes.Load(), "the SQL path must reach the configured service")
+	require.Zero(t, vector.GetFixedAtWithTypeCheck[int64](fc.result.GetResultVector(), 0),
+		"a completion failure must not report the content length")
+	_, err = memory.StatFile(context.Background(), "80/completion.txt")
+	require.Error(t, err, "save_file must not report success or leave output after completion failure")
+}
+
 func TestLoadFileRejectsEmptyPath(t *testing.T) {
-	proc := testutil.NewProc(t)
+	proc := newSQLFileAccessTestProc(t)
 	_, err := readLoadFileContents("", proc)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound), "got %v", err)
 }
@@ -4481,8 +4893,8 @@ func requireLoadFileResult(t *testing.T, result *vector.Vector, values []string,
 
 func TestLoadFileCardinalityAndSelection(t *testing.T) {
 	dir := t.TempDir()
-	proc := testutil.NewProc(t)
-	ctx := context.Background()
+	proc := newSQLFileAccessTestProc(t)
+	ctx := proc.Ctx
 	valuePath := filepath.Join(dir, "value")
 	largeValuePath := filepath.Join(dir, "large-value")
 	emptyPath := filepath.Join(dir, "empty")
@@ -4569,7 +4981,7 @@ func TestLoadFileCardinalityAndSelection(t *testing.T) {
 
 func TestLoadFileDatalink(t *testing.T) {
 	dir := t.TempDir()
-	proc := testutil.NewProc(t)
+	proc := newSQLFileAccessTestProc(t)
 	filePath := filepath.Join(dir, "test")
 
 	err := os.WriteFile(filePath, []byte("12345678"), 0o600)
@@ -4600,7 +5012,7 @@ func TestLoadFileDatalink(t *testing.T) {
 
 func TestLoadFileDatalinkCardinalityAndSelection(t *testing.T) {
 	dir := t.TempDir()
-	proc := testutil.NewProc(t)
+	proc := newSQLFileAccessTestProc(t)
 	emptyPath := filepath.Join(dir, "empty")
 	valuePath := filepath.Join(dir, "value")
 	largeValuePath := filepath.Join(dir, "large-value")
@@ -4687,7 +5099,7 @@ func TestLoadFileDatalinkCardinalityAndSelection(t *testing.T) {
 
 func TestLoadFileDatalinkErrors(t *testing.T) {
 	dir := t.TempDir()
-	proc := testutil.NewProc(t)
+	proc := newSQLFileAccessTestProc(t)
 	filePath := filepath.Join(dir, "test")
 
 	err := os.WriteFile(filePath, []byte("1234"), 0o600)
@@ -4824,22 +5236,85 @@ func TestSpace(t *testing.T) {
 func TestSpaceHonorsStringLimitAndNegativeCount(t *testing.T) {
 	require.Len(t, mustFillSpaceNumber(t, uint64(MaxAllowedValue)), MaxAllowedValue)
 	require.Empty(t, mustFillSpaceNumber(t, int64(-1)))
-	_, err := FillSpaceNumber(uint64(MaxAllowedValue + 1))
-	require.Error(t, err)
+	require.Empty(t, mustFillSpaceNumber(t, int64(math.MinInt64)))
+	for _, value := range []uint64{MaxAllowedValue + 1, math.MaxInt64, math.MaxUint64} {
+		_, err := FillSpaceNumber(value)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput), "count %d: %v", value, err)
+	}
+	for _, value := range []float64{MaxAllowedValue + 1, math.NaN(), math.Inf(1)} {
+		_, err := FillSpaceNumber(value)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput), "count %v: %v", value, err)
+	}
 
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
+	counts := []uint64{0, 8000, 8001, 10000, 65535, 65536, 100000}
+	want := make([]string, len(counts))
+	for i, count := range counts {
+		want[i] = strings.Repeat(" ", int(count))
+	}
 	testCase := NewFunctionTestCase(
 		proc,
 		[]FunctionTestInput{
-			NewFunctionTestInput(types.T_uint64.ToType(), []uint64{8000, 8001, 10000},
-				[]bool{false, false, false}),
+			NewFunctionTestInput(types.T_uint64.ToType(), counts, nil),
 		},
-		NewFunctionTestResult(types.T_varchar.ToType(), false,
-			[]string{strings.Repeat(" ", 8000), strings.Repeat(" ", 8001), strings.Repeat(" ", 10000)},
-			[]bool{false, false, false}),
+		NewFunctionTestResult(types.New(types.T_text, types.MaxLongTextLen, 0), false, want, nil),
 		SpaceNumber[uint64],
 	)
+	succeeded, info := testCase.RunAndFree()
+	require.True(t, succeeded, info)
+}
+
+func TestSpaceLargeResultTypesAndDecimalCounts(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	for id, oid := range []types.T{types.T_uint64, types.T_int64, types.T_decimal64, types.T_decimal128, types.T_decimal256} {
+		t.Run(oid.String(), func(t *testing.T) {
+			overload, err := GetFunctionById(proc.Ctx, encodeOverloadID(SPACE, int32(id)))
+			require.NoError(t, err)
+			resultType := overload.retType([]types.Type{oid.ToType()})
+			require.Equal(t, types.New(types.T_text, types.MaxLongTextLen, 0), resultType)
+			if !oid.IsDecimal() {
+				return
+			}
+			inputType := types.New(oid, 18, 1)
+			var values any
+			switch oid {
+			case types.T_decimal64:
+				value, err := types.ParseDecimal64("65535.5", 18, 1)
+				require.NoError(t, err)
+				values = []types.Decimal64{value}
+			case types.T_decimal128:
+				value, err := types.ParseDecimal128("65535.5", 18, 1)
+				require.NoError(t, err)
+				values = []types.Decimal128{value}
+			case types.T_decimal256:
+				value, err := types.ParseDecimal256("65535.5", 18, 1)
+				require.NoError(t, err)
+				values = []types.Decimal256{value}
+			}
+			testCase := NewFunctionTestCase(proc,
+				[]FunctionTestInput{NewFunctionTestInput(inputType, values, nil)},
+				NewFunctionTestResult(resultType, false, []string{strings.Repeat(" ", 65536)}, nil),
+				overload.newOp())
+			succeeded, info := testCase.RunAndFree()
+			require.True(t, succeeded, info)
+		})
+	}
+}
+
+func TestSpaceSkipsNullAndMaskedLargeCounts(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	testCase := NewFunctionTestCase(proc,
+		[]FunctionTestInput{NewFunctionTestInput(types.T_int64.ToType(),
+			[]int64{65536, MaxAllowedValue + 1, MaxAllowedValue + 1, -1},
+			[]bool{false, true, false, false})},
+		NewFunctionTestResult(types.New(types.T_text, types.MaxLongTextLen, 0), false,
+			[]string{strings.Repeat(" ", 65536), "", "", ""}, []bool{false, true, true, false}),
+		SpaceNumber[int64]).WithSelectList(&FunctionSelectList{
+		AnyNull: true, SelectList: []bool{true, true, false, true},
+	})
 	succeeded, info := testCase.RunAndFree()
 	require.True(t, succeeded, info)
 }
@@ -5124,26 +5599,31 @@ func initToTimestampCase() []tcTemp {
 	}
 }
 
-func TestToTimeStamp(t *testing.T) {
-	testCases := initToTimestampCase()
-
-	// do the test work.
+// Released stored plans can still request the original TIMESTAMP vector.
+func TestUnaryTimestampLegacyResultVector(t *testing.T) {
 	proc := testutil.NewProcess(t)
-	for _, tc := range testCases {
-		var fcTC FunctionTestCase
-		switch tc.typ {
+	for _, tc := range initToTimestampCase() {
+		var oid int32
+		switch tc.inputs[0].typ.Oid {
 		case types.T_date:
-			fcTC = NewFunctionTestCase(proc,
-				tc.inputs, tc.expect, DateToTimestamp)
+			oid = 0
 		case types.T_datetime:
-			fcTC = NewFunctionTestCase(proc,
-				tc.inputs, tc.expect, DatetimeToTimestamp)
+			oid = 1
+		case types.T_timestamp:
+			oid = 2
 		case types.T_varchar:
-			fcTC = NewFunctionTestCase(proc,
-				tc.inputs, tc.expect, DateStringToTimestamp)
+			oid = 3
+		case types.T_char:
+			oid = 4
+		default:
+			t.Fatalf("unexpected legacy TIMESTAMP input %s", tc.inputs[0].typ)
 		}
-		s, info := fcTC.RunAndFree()
-		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+		overload, err := GetFunctionById(proc.Ctx, EncodeOverloadID(TIMESTAMP, oid))
+		require.NoError(t, err)
+		exec, _, _, _ := overload.GetExecuteMethod()
+		fc := NewFunctionTestCase(proc, tc.inputs, tc.expect, exec)
+		ok, info := fc.RunAndFree()
+		require.True(t, ok, info)
 	}
 }
 
@@ -6377,6 +6857,29 @@ func TestUnhex(t *testing.T) {
 		s, info := fcTC.RunAndFree()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
+}
+
+// Issue #30230: MySQL reports warning 1411 (ER_WRONG_VALUE_FOR_TYPE) when
+// UNHEX receives malformed hexadecimal input, while still returning NULL.
+func TestUnhexWarningForInvalidHex(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	warnings := &numericWarningSession{}
+	proc.WarningSink = warnings
+
+	caseData := NewFunctionTestCase(
+		proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"zz", "4d"}, []bool{false, false}),
+		},
+		NewFunctionTestResult(types.T_blob.ToType(), false,
+			[]string{"", "M"}, []bool{true, false}),
+		Unhex,
+	)
+	succeed, info := caseData.RunAndFree()
+	require.True(t, succeed, info)
+	require.Len(t, warnings.warnings, 1)
+	require.Equal(t, uint16(moerr.ER_WRONG_VALUE_FOR_TYPE), warnings.warnings[0].code)
+	require.Equal(t, "Incorrect string value: 'zz' for function unhex", warnings.warnings[0].msg)
 }
 
 // ToBase64
@@ -8403,8 +8906,8 @@ func initDateToWeekTestCase() []tcTemp {
 					[]bool{false, false, false, false}),
 			},
 			// Mode 0 (default): Week starts on Sunday, range 0-53
-			expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
-				[]uint8{52, 0, 52, 0},
+			expect: NewFunctionTestResult(types.T_int32.ToType(), false,
+				[]int32{52, 0, 52, 0},
 				[]bool{false, false, false, false}),
 		},
 		{
@@ -8415,8 +8918,8 @@ func initDateToWeekTestCase() []tcTemp {
 					[]bool{false, false, false, false}),
 			},
 			// Mode 0 (default): Week starts on Sunday, range 0-53
-			expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
-				[]uint8{6, 25, 38, 49},
+			expect: NewFunctionTestResult(types.T_int32.ToType(), false,
+				[]int32{6, 25, 38, 49},
 				[]bool{false, false, false, false}),
 		},
 		{
@@ -8426,8 +8929,8 @@ func initDateToWeekTestCase() []tcTemp {
 					[]types.Date{d11},
 					[]bool{true}),
 			},
-			expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
-				[]uint8{0},
+			expect: NewFunctionTestResult(types.T_int32.ToType(), false,
+				[]int32{0},
 				[]bool{true}),
 		},
 		//TODO: Ignoring Scalar Nulls: Original code:https://github.com/m-schen/matrixone/blob/749eb739130decdbbf3dcc3dd5b21f656620edd9/pkg/sql/plan/function/builtin/unary/week_test.go#L52
@@ -8591,8 +9094,8 @@ func initDateTimeToWeekTestCase() []tcTemp {
 					[]bool{false, false, false, false}),
 			},
 			// Mode 0 (default): Week starts on Sunday, range 0-53
-			expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
-				[]uint8{52, 0, 52, 0},
+			expect: NewFunctionTestResult(types.T_int32.ToType(), false,
+				[]int32{52, 0, 52, 0},
 				[]bool{false, false, false, false}),
 		},
 		{
@@ -8603,8 +9106,8 @@ func initDateTimeToWeekTestCase() []tcTemp {
 					[]bool{false, false, false, false}),
 			},
 			// Mode 0 (default): Week starts on Sunday, range 0-53
-			expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
-				[]uint8{6, 25, 38, 49},
+			expect: NewFunctionTestResult(types.T_int32.ToType(), false,
+				[]int32{6, 25, 38, 49},
 				[]bool{false, false, false, false}),
 		},
 		{
@@ -8615,8 +9118,8 @@ func initDateTimeToWeekTestCase() []tcTemp {
 					[]bool{true}),
 			},
 			// null input returns null, value doesn't matter but should match mode 0
-			expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
-				[]uint8{52},
+			expect: NewFunctionTestResult(types.T_int32.ToType(), false,
+				[]int32{52},
 				[]bool{true}),
 		},
 	}
@@ -8642,9 +9145,9 @@ func TestWeekUsesPerRowMode(t *testing.T) {
 		types.DateFromCalendar(2008, 12, 31),
 	}
 	modes := []int64{0, 1, 2, -1}
-	wanted := make([]uint8, len(dates))
+	wanted := make([]int32, len(dates))
 	for i := range dates {
-		wanted[i] = uint8(dates[i].Week(normalizeWeekMode(modes[i])))
+		wanted[i] = int32(dates[i].Week(normalizeWeekMode(modes[i])))
 	}
 
 	proc := testutil.NewProcess(t)
@@ -8653,7 +9156,7 @@ func TestWeekUsesPerRowMode(t *testing.T) {
 			NewFunctionTestInput(types.T_date.ToType(), dates, nil),
 			NewFunctionTestInput(types.T_int64.ToType(), modes, nil),
 		},
-		NewFunctionTestResult(types.T_uint8.ToType(), false, wanted, nil),
+		NewFunctionTestResult(types.T_int32.ToType(), false, wanted, nil),
 		DateToWeek)
 	ok, info := caseWithRows.RunAndFree()
 	require.True(t, ok, info)
@@ -8663,8 +9166,8 @@ func TestWeekUsesPerRowMode(t *testing.T) {
 			NewFunctionTestInput(types.T_date.ToType(), dates[:3], nil),
 			NewFunctionTestInput(types.T_int64.ToType(), []int64{0, 1, 2}, []bool{false, true, false}),
 		},
-		NewFunctionTestResult(types.T_uint8.ToType(), false,
-			[]uint8{wanted[0], 1, wanted[2]}, nil),
+		NewFunctionTestResult(types.T_int32.ToType(), false,
+			[]int32{wanted[0], 1, wanted[2]}, nil),
 		DateToWeek)
 	ok, info = caseWithNullMode.RunAndFree()
 	require.True(t, ok, info)
@@ -8676,7 +9179,7 @@ func TestWeekUsesPerRowMode(t *testing.T) {
 			}, nil),
 			NewFunctionTestInput(types.T_int64.ToType(), modes, nil),
 		},
-		NewFunctionTestResult(types.T_uint8.ToType(), false, wanted, nil),
+		NewFunctionTestResult(types.T_int32.ToType(), false, wanted, nil),
 		DatetimeToWeek)
 	ok, info = caseDatetime.RunAndFree()
 	require.True(t, ok, info)
@@ -8828,6 +9331,36 @@ func TestMicrosecond(t *testing.T) {
 		s, info := fcTC.RunAndFree()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
+}
+
+// Issue #30239: MySQL reports the nonnegative fractional part (0-999999)
+// even for negative TIME values; Time.MicroSec keeps the raw int64 sign
+// and must not leak it into the MICROSECOND result.
+func TestMicrosecondNegativeTime(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	// -00:00:01.123456 stored as raw microseconds
+	timeCase := NewFunctionTestCase(
+		proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_time.ToType(), []types.Time{types.Time(-1123456)}, []bool{false}),
+		},
+		NewFunctionTestResult(types.T_int64.ToType(), false, []int64{123456}, []bool{false}),
+		TimeToMicrosecond,
+	)
+	succeed, info := timeCase.RunAndFree()
+	require.True(t, succeed, info)
+
+	stringCase := NewFunctionTestCase(
+		proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"-00:00:01.123456"}, []bool{false}),
+		},
+		NewFunctionTestResult(types.T_int64.ToType(), false, []int64{123456}, []bool{false}),
+		StringToMicrosecond,
+	)
+	succeed, info = stringCase.RunAndFree()
+	require.True(t, succeed, info)
 }
 
 // TestStringToMicrosecond tests StringToMicrosecond function with string inputs
@@ -13355,4 +13888,190 @@ func TestLastDayDateResultContracts(t *testing.T) {
 		require.Equal(t, types.T_date, f.GetReturnType().Oid)
 		require.False(t, DeduceNotNullable(f.GetEncodedOverloadID(), []*plan.Expr{{Typ: plan.Type{Id: int32(typ.Oid), NotNullable: true}}}))
 	}
+}
+
+func TestCalendarNumericMaskedResults(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	for _, tc := range []struct {
+		name  string
+		input FunctionTestInput
+		fn    executeLogicOfOverload
+		want  []int32
+	}{
+		{"dayofyear", NewFunctionTestInput(types.T_date.ToType(), []types.Date{types.DateFromCalendar(2024, 12, 31), types.DateFromCalendar(2025, 1, 1)}, nil), DayOfYear, []int32{0, 1}},
+		{"week date", NewFunctionTestInput(types.T_date.ToType(), []types.Date{types.DateFromCalendar(2024, 12, 31), types.DateFromCalendar(2025, 1, 1)}, nil), DateToWeek, []int32{0, 1}},
+		{"week datetime", NewFunctionTestInput(types.T_datetime.ToType(), []types.Datetime{types.DateFromCalendar(2024, 12, 31).ToDatetime(), types.DateFromCalendar(2025, 1, 1).ToDatetime()}, nil), DatetimeToWeek, []int32{0, 1}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			inputs := []FunctionTestInput{tc.input}
+			if tc.name != "dayofyear" {
+				inputs = append(inputs, NewFunctionTestConstInput(types.T_int64.ToType(), []int64{3}, nil))
+			}
+			fc := NewFunctionTestCase(proc, inputs, NewFunctionTestResult(types.T_int32.ToType(), false, tc.want, []bool{true, false}), tc.fn).WithSelectList(&FunctionSelectList{AnyNull: true, SelectList: []bool{false, true}})
+			ok, info := fc.RunAndFree()
+			require.True(t, ok, info)
+		})
+	}
+}
+
+func TestStIsValidRepeatedVertices(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	for _, oid := range []types.T{types.T_geometry, types.T_geometry32} {
+		inputs := []FunctionTestInput{NewFunctionTestInput(oid.ToType(), []string{"LINESTRING(0 0,0 0,1 0,1 0)", "LINESTRING(0 0,1 0,0 0)", "LINESTRING(0 0,0 0)", "LINESTRING(0 0,0.0000000001 0)", "LINESTRING(0 0,1 0)"}, []bool{false, false, false, false, true})}
+		fc := NewFunctionTestCase(proc, inputs, NewFunctionTestResult(types.T_bool.ToType(), false, []bool{true, true, false, true, false}, []bool{false, false, false, false, true}), StIsValid)
+		ok, info := fc.RunAndFree()
+		require.True(t, ok, info)
+	}
+}
+
+func TestGeometryStandardWKBPreservesStoredStructure(t *testing.T) {
+	// Previously admitted malformed WKB remains exportable. Constructors must
+	// reject re-admission, rather than silently repairing the historical ring.
+	malformed := geo.Polygon{Rings: [][]geo.Coord{{{X: 0, Y: 0}, {X: 1, Y: 0}, {X: 1, Y: 1}}}}
+	payload := geo.WriteWKB(malformed)
+	standard, srid, err := GeometryPayloadToStandardWKB(payload, types.T_geometry.ToType())
+	require.NoError(t, err)
+	require.Zero(t, srid)
+	require.Equal(t, payload, standard)
+	require.Error(t, validateGeometryTextForStorage(geo.WriteWKT(malformed), defaultMaxPointsInGeometry))
+	// An empty child does not justify trying the wrong coordinate codec first.
+	g := geo.GeometryCollection{Geometries: []geo.Geometry{geo.Point{IsEmpty: true}, geo.Point{X: 1.0000001192092896, Y: -2.5}}}
+	compact, err := geo.WriteWKBFloat32(g)
+	require.NoError(t, err)
+	typ := types.T_geometry32.ToType()
+	typ.Width = 4327
+	standard, srid, err = GeometryPayloadToStandardWKB(compact, typ)
+	require.NoError(t, err)
+	require.Equal(t, uint32(4326), srid)
+	decoded, err := geo.ReadWKB(standard)
+	require.NoError(t, err)
+	require.Equal(t, g, decoded)
+	_, _, err = GeometryPayloadToStandardWKB(compact, types.T_geometry.ToType())
+	require.Error(t, err)
+}
+
+func TestGeometryStandardWKBPreservesHistoricalText(t *testing.T) {
+	ring := []geo.Coord{{X: 0, Y: 0}, {X: 1, Y: 0}, {X: 1, Y: 1}}
+	polygon := geo.Polygon{Rings: [][]geo.Coord{ring}}
+	for _, g := range []geo.Geometry{polygon, geo.GeometryCollection{Geometries: []geo.Geometry{geo.Point{IsEmpty: true}, geo.MultiPolygon{Polygons: []geo.Polygon{{}, polygon}}}}} {
+		for _, oid := range []types.T{types.T_geometry, types.T_geometry32} {
+			for _, srid := range []int32{0, 4326} {
+				typ := oid.ToType()
+				typ.Width = srid + 1
+				wkb := geo.WriteWKB(g)
+				if oid == types.T_geometry32 {
+					var err error
+					wkb, err = geo.WriteWKBFloat32(g)
+					require.NoError(t, err)
+				}
+				for _, payload := range [][]byte{wkb, []byte(geo.WriteWKT(g)), []byte("SRID=999;" + geo.WriteWKT(g))} {
+					original := bytes.Clone(payload)
+					standard, gotSRID, err := GeometryPayloadToStandardWKB(payload, typ)
+					require.NoError(t, err)
+					require.Equal(t, uint32(srid), gotSRID)
+					decoded, err := geo.ReadWKB(standard)
+					require.NoError(t, err)
+					require.Equal(t, g, decoded)
+					require.Equal(t, original, payload)
+					_, _, _, _, err = validateGeometryPayload(payload, defaultMaxPointsInGeometry)
+					require.Error(t, err, "re-admission stays strict")
+				}
+			}
+		}
+	}
+	for _, text := range []string{"POLYGON((0 0,1 0,1))", "POINT(1 2) trailing", "POINT(1 2 3)", "LINESTRING(0 0,)"} {
+		_, _, err := GeometryPayloadToStandardWKB([]byte(text), types.T_geometry.ToType())
+		require.Error(t, err)
+	}
+}
+
+func TestAppendGeometryStandardWKB(t *testing.T) {
+	point, err := hex.DecodeString("0101000000000000000000f03f0000000000000040")
+	require.NoError(t, err)
+	for _, tc := range []struct {
+		name, payload string
+		oid           types.T
+	}{
+		{"standard", "0101000000000000000000f03f0000000000000040", types.T_geometry},
+		{"big endian", "00000000013ff00000000000004000000000000000", types.T_geometry},
+		{"float32", "01010000000000803f00000040", types.T_geometry32},
+		{"cached WKT", "POINT(1 2)", types.T_geometry},
+		{"cached EWKT", "SRID=999;POINT(1 2)", types.T_geometry32},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			payload := []byte(tc.payload)
+			if strings.Contains(tc.name, "endian") || tc.name == "standard" || tc.name == "float32" {
+				payload, err = hex.DecodeString(tc.payload)
+				require.NoError(t, err)
+			}
+			original := bytes.Clone(payload)
+			typ := tc.oid.ToType()
+			typ.Width = 4327
+			dst := make([]byte, 4, 4+len(point))
+			copy(dst, []byte{1, 2, 3, 4})
+			out, srid, err := AppendGeometryPayloadToStandardWKB(dst, payload, typ)
+			require.NoError(t, err)
+			require.Equal(t, uint32(4326), srid)
+			require.Same(t, &dst[0], &out[0])
+			require.Equal(t, append([]byte{1, 2, 3, 4}, point...), out)
+			require.Equal(t, original, payload)
+		})
+	}
+	// Mixed byte orders and a noncanonical NaN payload still normalize through
+	// the existing reader/emitter, rather than passing stored bytes through.
+	payload, err := hex.DecodeString("01070000000200000000000000013ff000000000000040000000000000000101000000000000000000f87f000000000000f87f")
+	require.NoError(t, err)
+	want, err := hex.DecodeString("0107000000020000000101000000000000000000f03f00000000000000400101000000010000000000f87f010000000000f87f")
+	require.NoError(t, err)
+	out, _, err := AppendGeometryPayloadToStandardWKB(nil, payload, types.T_geometry.ToType())
+	require.NoError(t, err)
+	require.Equal(t, want, out)
+}
+
+func TestAppendGeometryStandardWKBErrorAtomicity(t *testing.T) {
+	point, err := hex.DecodeString("0101000000000000000000f03f0000000000000040")
+	require.NoError(t, err)
+	countInvalid, err := hex.DecodeString("0102000000ffffffff")
+	require.NoError(t, err)
+	for _, tc := range []struct {
+		name    string
+		payload []byte
+		oid     types.T
+	}{
+		{"missing type", point, types.T_varchar},
+		{"truncated", point[:len(point)-1], types.T_geometry},
+		{"invalid count", countInvalid, types.T_geometry},
+		{"trailing", append(bytes.Clone(point), 42), types.T_geometry},
+		{"malformed text", []byte("POLYGON((0 0,1 0,1))"), types.T_geometry32},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			backing := bytes.Repeat([]byte{0xaa}, 64)
+			original := bytes.Clone(backing)
+			dst := backing[:4]
+			out, srid, err := AppendGeometryPayloadToStandardWKB(dst, tc.payload, tc.oid.ToType())
+			require.Error(t, err)
+			require.Zero(t, srid)
+			require.Equal(t, dst, out)
+			require.Same(t, &dst[0], &out[0])
+			require.Equal(t, original, backing, "including spare capacity")
+		})
+	}
+}
+
+func TestCheckAsyncDatalinkSourceEligibility(t *testing.T) {
+	proc := newSQLFileAccessTestProc(t)
+	fc := NewFunctionTestCase(proc, []FunctionTestInput{
+		NewFunctionTestInput(types.T_datalink.ToType(), []string{"file:///owned/not-opened", "://invalid", ""}, []bool{false, false, true}),
+		NewFunctionTestInput(types.T_bool.ToType(), []bool{false, false, true}, nil),
+	}, NewFunctionTestResult(types.T_bool.ToType(), false, []bool{true, true, true}, nil), CheckAsyncDatalinkSource)
+	defer fc.Free()
+	ok, info := fc.Run()
+	require.True(t, ok, info)
+	denied := NewFunctionTestCase(proc, []FunctionTestInput{
+		NewFunctionTestInput(types.T_datalink.ToType(), []string{"file:///owned/not-opened"}, nil),
+		NewFunctionTestInput(types.T_bool.ToType(), []bool{true}, nil),
+	}, NewFunctionTestResult(types.T_bool.ToType(), false, nil, nil), CheckAsyncDatalinkSource)
+	defer denied.Free()
+	require.NoError(t, denied.result.PreExtendAndReset(denied.fnLength))
+	require.ErrorContains(t, denied.fn(denied.parameters, denied.result, proc, denied.fnLength, nil), "asynchronous indexes require remote Datalink sources")
 }

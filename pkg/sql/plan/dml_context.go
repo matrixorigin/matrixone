@@ -47,6 +47,10 @@ func checkCatalogDMLTarget(ctx context.Context, obj *plan.ObjectRef, allowColumn
 }
 
 type DMLContext struct {
+	// Indexed source names survive modern DML's removal of async index definitions.
+	// Allocated only for targets that actually index Datalink columns asynchronously.
+	asyncDatalinkColumns map[int][]string
+
 	objRefs         []*plan.ObjectRef
 	tableDefs       []*plan.TableDef
 	aliases         []string
@@ -108,7 +112,9 @@ func (dmlCtx *DMLContext) ResolveUpdateTables(ctx CompilerContext, stmt *tree.Up
 	for alias, idx := range dmlCtx.aliasMap {
 		allColumns[alias] = make(map[string]bool)
 		for _, col := range dmlCtx.tableDefs[idx].Cols {
-			allColumns[alias][col.Name] = true
+			if !col.Hidden {
+				allColumns[alias][col.Name] = true
+			}
 		}
 	}
 
@@ -518,6 +524,17 @@ func (dmlCtx *DMLContext) resolveSingleTable(
 	}
 
 	nowIdx := len(dmlCtx.tableDefs)
+	columns, err := asyncDatalinkColumns(tableDef)
+	if err != nil {
+		return err
+	}
+	if len(columns) > 0 {
+		if dmlCtx.asyncDatalinkColumns == nil {
+			dmlCtx.asyncDatalinkColumns = make(map[int][]string)
+		}
+		dmlCtx.asyncDatalinkColumns[nowIdx] = columns
+	}
+
 	dmlCtx.isClusterTable = append(dmlCtx.isClusterTable, isClusterTable)
 	dmlCtx.objRefs = append(dmlCtx.objRefs, objRef)
 	dmlCtx.tableDefs = append(dmlCtx.tableDefs, tableDef)

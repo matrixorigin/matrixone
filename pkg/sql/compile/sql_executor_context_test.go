@@ -16,7 +16,10 @@ package compile
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -34,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 
@@ -399,7 +403,7 @@ func TestInternalExecutorViewChildWithoutDelegateIsIsolated(t *testing.T) {
 
 func TestInternalExecutorSubscriptionViewWithoutFrontendDelegate(t *testing.T) {
 	ctrl := gomock.NewController(t)
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	relation := mock_frontend.NewMockRelation(ctrl)
 	relation.EXPECT().GetTableDef(gomock.Any()).Return(&plan.TableDef{Name: "v"})
 	relation.EXPECT().GetTableID(gomock.Any()).Return(uint64(42))
@@ -430,7 +434,7 @@ func TestCompilerContext_Database(t *testing.T) {
 	engine.EXPECT().Database(gomock.Any(), "", nil).Return(database, nil).Times(2)
 
 	c := &compilerContext{
-		proc:   testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()),
+		proc:   testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero()),
 		engine: engine,
 	}
 
@@ -446,7 +450,7 @@ func TestCompilerContext_Database(t *testing.T) {
 
 func TestCompilerContextBuildTableDefByMoColumns(t *testing.T) {
 	ctrl := gomock.NewController(t)
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	tableDef := &plan.TableDef{
 		Name: "src",
 		Cols: []*plan.ColDef{
@@ -473,9 +477,46 @@ func TestCompilerContextBuildTableDefByMoColumns(t *testing.T) {
 	require.NotSame(t, tableDef, actual)
 }
 
+func TestInternalResolverNormalizesPersistedDecimalCoercions(t *testing.T) {
+	data, err := os.ReadFile("../plan/testdata/legacy_decimal_catalog_63a964a82f.json")
+	require.NoError(t, err)
+	var fixtures map[string][]byte
+	require.NoError(t, json.Unmarshal(data, &fixtures))
+	catalogDef := new(plan.TableDef)
+	require.NoError(t, catalogDef.Unmarshal(fixtures["signed_compare"]))
+	wire, err := catalogDef.Marshal()
+	require.NoError(t, err)
+	ctrl := gomock.NewController(t)
+	proc := testutil.NewProcess(t)
+	requestCtx := proc.GetTopContext()
+	pipelineCtx, cancel := context.WithCancel(requestCtx)
+	cancel()
+	proc.Ctx = pipelineCtx
+	relation := mock_frontend.NewMockRelation(ctrl)
+	relation.EXPECT().GetTableDef(gomock.Any()).Return(catalogDef).Times(2)
+	relation.EXPECT().GetTableID(gomock.Any()).Return(uint64(42)).Times(2)
+	database := mock_frontend.NewMockDatabase(ctrl)
+	database.EXPECT().Relation(gomock.Any(), "legacy_cmp", nil).Return(relation, nil).Times(2)
+	eng := mock_frontend.NewMockEngine(ctrl)
+	eng.EXPECT().Database(gomock.Any(), "db", gomock.Any()).Return(database, nil).Times(2)
+	c := &compilerContext{ctx: requestCtx, defaultDB: "db", engine: eng, proc: proc}
+	for range 2 {
+		_, resolved, err := c.Resolve("db", "legacy_cmp", nil)
+		require.NoError(t, err)
+		require.NotSame(t, catalogDef.Checks[0], resolved.Checks[0])
+		for _, arg := range resolved.Checks[0].Check.GetF().Args {
+			require.Equal(t, int32(types.T_decimal128), arg.Typ.Id)
+			require.Equal(t, int32(19), arg.Typ.Width)
+		}
+	}
+	after, err := catalogDef.Marshal()
+	require.NoError(t, err)
+	require.Equal(t, wire, after)
+}
+
 func TestCompilerContextBuildTableDefByMoColumnsPropagatesRelationError(t *testing.T) {
 	ctrl := gomock.NewController(t)
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	relationErr := moerr.NewInternalErrorNoCtx("relation failed")
 
 	database := mock_frontend.NewMockDatabase(ctrl)
@@ -495,7 +536,7 @@ func TestCompilerContextBuildTableDefByMoColumnsPropagatesRelationError(t *testi
 
 func TestCompilerContextBuildTableDefByMoColumnsNoSuchTable(t *testing.T) {
 	ctrl := gomock.NewController(t)
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 
 	database := mock_frontend.NewMockDatabase(ctrl)
 	database.EXPECT().Relation(gomock.Any(), "src", nil).Return(nil, nil)
@@ -531,7 +572,7 @@ func TestCompilerContextResolveDatabaseErrors(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctrl := gomock.NewController(t)
-			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 			eng := mock_frontend.NewMockEngine(ctrl)
 			eng.EXPECT().Database(gomock.Any(), "db", gomock.Any()).Return(nil, tc.databaseErr)
 
@@ -556,7 +597,7 @@ func TestCompilerContextResolveDatabaseErrors(t *testing.T) {
 
 func TestInternalCompilerContextDropTableIfExistsExpectedEOBNoop(t *testing.T) {
 	ctrl := gomock.NewController(t)
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	eng := mock_frontend.NewMockEngine(ctrl)
 	eng.EXPECT().Database(gomock.Any(), "gone", gomock.Any()).
 		Return(nil, moerr.GetOkExpectedEOB())
@@ -636,7 +677,7 @@ func TestCompilerContextResolveVariableDelegatesToAttachedSession(t *testing.T) 
 	require.Equal(t, int64(10), value)
 	// Internal SQL callers can install a resolver for only a subset of
 	// session variables. Unrelated planner lookups retain their nil default.
-	value, err = processOnly.ResolveVariable("foreign_key_checks", true, false)
+	value, err = processOnly.ResolveVariable("sql_mode", true, false)
 	require.NoError(t, err)
 	require.Nil(t, value)
 	value, err = processOnly.ResolveVariable("other", false, true)
@@ -670,6 +711,30 @@ func TestCompilerContextResolveVariableDelegatesToAttachedSession(t *testing.T) 
 	declared, err = selfAttached.ResolveVariableType("fraction", false, false)
 	require.NoError(t, err)
 	require.Equal(t, plan.Type{}, declared)
+}
+
+func TestCompilerContextDelegatesRegexpNullHistory(t *testing.T) {
+	delegate := plan.NewMockCompilerContext(false, testutil.NewProcess(t))
+	delegate.ResolveVariableRegexpStringResultFunc = func(name string) (bool, error) {
+		if name == "history" {
+			return true, nil
+		}
+		return false, moerr.NewInternalErrorNoCtx("history resolver failed")
+	}
+	attached := &compilerContext{ctx: attachInternalExecutorCompilerContext(context.Background(), delegate)}
+	stringResult, err := attached.ResolveVariableRegexpStringResult("history")
+	require.NoError(t, err)
+	require.True(t, stringResult)
+	_, err = attached.ResolveVariableRegexpStringResult("other")
+	require.ErrorContains(t, err, "history resolver failed")
+	detached := &compilerContext{ctx: context.Background()}
+	stringResult, err = detached.ResolveVariableRegexpStringResult("history")
+	require.NoError(t, err)
+	require.False(t, stringResult)
+	detached.ctx = attachInternalExecutorCompilerContext(context.Background(), detached)
+	stringResult, err = detached.ResolveVariableRegexpStringResult("history")
+	require.NoError(t, err)
+	require.False(t, stringResult)
 }
 
 func TestInternalCompilerPlanConsumesScopedDOP(t *testing.T) {
@@ -728,7 +793,7 @@ func TestInternalCompilerPlanConsumesScopedDOP(t *testing.T) {
 	}{
 		{"max_dop", false, false}, {"max_dop", true, true},
 		{"div_precision_increment", false, false}, {"div_precision_increment", true, true},
-		{"foreign_key_checks", true, false},
+		{"sql_mode", true, false},
 	} {
 		v, err := compiler.ResolveVariable(tc.name, tc.system, tc.global)
 		require.NoError(t, err)
@@ -821,4 +886,113 @@ func TestInternalCompilerStatsCacheObservations(t *testing.T) {
 	_, err = ctx.StatsWithTableDef(obj, tableDef, nil)
 	require.NoError(t, err)
 	require.Equal(t, before+1, calls, "anonymous overlays cannot retain the 3s fast hit")
+}
+
+type failingStatementWorkspace struct {
+	Ws
+	err      error
+	prepared int
+}
+
+func (w *failingStatementWorkspace) IncrStatementID(context.Context, bool) error {
+	w.prepared++
+	return w.err
+}
+
+type deferredRollbackTxn struct {
+	client.TxnOperator
+	sealed error
+}
+
+func (op *deferredRollbackTxn) RollbackAfterRunningSQL(err error) { op.sealed = err }
+
+func (op *deferredRollbackTxn) TryEnterRunSqlWithTokenAndSQL(context.CancelFunc, string) (uint64, error) {
+	if op.sealed != nil {
+		return 0, moerr.NewTxnClosedNoCtx(nil)
+	}
+	return 1, nil
+}
+func (op *deferredRollbackTxn) ExitRunSqlWithToken(uint64) {}
+
+func TestBorrowedExecutorSealsFatalErrorBeforeCallbackCanSuppressIt(t *testing.T) {
+	for _, fatal := range []bool{false, true} {
+		t.Run(map[bool]string{false: "statement error", true: "joined fatal error"}[fatal], func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			mock := mock_frontend.NewMockTxnOperator(ctrl)
+			failure := error(moerr.NewInternalErrorNoCtx("statement failed"))
+			if fatal {
+				failure = errors.Join(failure, fmt.Errorf("lock owner: %w", moerr.NewLockConflictNoCtx()))
+			}
+			mock.EXPECT().Txn().Return(txn.TxnMeta{Mode: txn.TxnMode_Pessimistic}).AnyTimes()
+			workspace := &failingStatementWorkspace{err: failure}
+			mock.EXPECT().GetWorkspace().Return(workspace).AnyTimes()
+			owner := &deferredRollbackTxn{TxnOperator: mock}
+			exec := &txnExecutor{ctx: context.Background(), opts: executor.Options{}.WithTxn(owner)}
+			// Simulate a callback that catches Exec's error and returns success.
+			callback := func() error {
+				_, err := exec.Exec("select 1", executor.StatementOption{})
+				require.ErrorIs(t, err, failure)
+				if fatal {
+					require.ErrorIs(t, owner.sealed, failure)
+				} else {
+					require.NoError(t, owner.sealed)
+				}
+				if fatal {
+					_, nextErr := exec.Exec("select 2", executor.StatementOption{})
+					require.True(t, moerr.IsMoErrCode(nextErr, moerr.ErrTxnClosed))
+					require.Equal(t, 1, workspace.prepared, "sealed transaction cannot prepare another statement")
+				}
+				return nil
+			}
+			require.NoError(t, callback())
+		})
+	}
+}
+
+// Internal COPY INSERT compilation must use the session's FK-check mode,
+// while absent resolvers keep the enabled default and resolution errors fail.
+func TestInternalCompilerForeignKeyChecks(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	compiler := &compilerContext{ctx: context.Background(), proc: proc}
+	for _, value := range []any{int64(0), int64(1), int8(0), int8(1), nil} {
+		proc.SetResolveVariableFunc(func(name string, system, global bool) (any, error) {
+			require.Equal(t, "foreign_key_checks", name)
+			require.True(t, system)
+			require.False(t, global)
+			return value, nil
+		})
+		enabled, err := plan.IsForeignKeyChecksEnabled(compiler)
+		require.NoError(t, err)
+		require.Equal(t, value != int64(0) && value != int8(0), enabled)
+	}
+	proc.SetResolveVariableFunc(nil)
+	enabled, err := plan.IsForeignKeyChecksEnabled(compiler)
+	require.NoError(t, err)
+	require.True(t, enabled)
+	sentinel := errors.New("foreign key mode unavailable")
+	proc.SetResolveVariableFunc(func(string, bool, bool) (any, error) { return nil, sentinel })
+	_, err = plan.IsForeignKeyChecksEnabled(compiler)
+	require.ErrorIs(t, err, sentinel)
+	proc.ReplaceTopCtx(context.WithValue(proc.GetTopContext(), defines.IgnoreForeignKey{}, true))
+	enabled, err = plan.IsForeignKeyChecksEnabled(compiler)
+	require.NoError(t, err)
+	require.False(t, enabled, "explicit internal ignore takes precedence over session resolver")
+}
+
+func TestInternalCompilerLoadPrimaryKeyPolicy(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	compiler := &compilerContext{ctx: context.Background(), proc: proc}
+	for _, value := range []any{nil, int8(0), int8(1)} {
+		proc.SetResolveVariableFunc(func(name string, system, global bool) (any, error) {
+			require.Equal(t, "mo_pk_check_by_cn", name)
+			require.True(t, system)
+			require.False(t, global)
+			return value, nil
+		})
+		got, err := compiler.ResolveVariable("mo_pk_check_by_cn", true, false)
+		require.NoError(t, err)
+		require.Equal(t, value, got)
+	}
 }

@@ -86,6 +86,23 @@ func TestRespStatusInsertUsesStatementGeneratedKey(t *testing.T) {
 	require.Equal(t, uint64(11), ses.GetLastInsertID())
 }
 
+func TestRespStatusLoadUsesStatementGeneratedKey(t *testing.T) {
+	ses, proc, writer, resper, execCtx := newLastInsertIDHarness(t, 0)
+	execCtx.stmt = &tree.Load{}
+	ses.SetLastInsertID(7)
+	proc.SetLastInsertID(7)
+
+	proc.SetStatementLastInsertID(11)
+	require.NoError(t, resper.respStatus(ses, execCtx))
+	require.Equal(t, uint64(11), writer.responses[0].lastInsertId)
+	require.Equal(t, uint64(11), ses.GetLastInsertID())
+
+	proc.SetStatementLastInsertID(0)
+	require.NoError(t, resper.respStatus(ses, execCtx))
+	require.Zero(t, writer.responses[1].lastInsertId)
+	require.Equal(t, uint64(11), ses.GetLastInsertID())
+}
+
 func TestSessionLastFoundRows(t *testing.T) {
 	ses := &Session{}
 	require.Equal(t, uint64(0), ses.GetLastFoundRows())
@@ -305,6 +322,10 @@ func (e *evalCondResult) GetRowCount() uint64 {
 
 func (e *evalCondResult) GetColumnCount() uint64 {
 	return 1
+}
+
+func (e *evalCondResult) ColumnIsNull(context.Context, uint64, uint64) (bool, error) {
+	return false, nil
 }
 
 func (e *evalCondResult) GetString(context.Context, uint64, uint64) (string, error) {

@@ -17,13 +17,17 @@ package hnsw
 import (
 	"context"
 	"fmt"
+	"math"
 	"os"
+	"slices"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	fallocate "github.com/detailyang/go-fallocate"
+	"github.com/matrixorigin/matrixone/pkg/common/docfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -90,7 +94,7 @@ func mock_runSql_streaming_2files(
 
 func TestHnswSearchFloat32(t *testing.T) {
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	idxcfg := vectorindex.IndexConfig{Type: "hnsw", Usearch: usearch.DefaultConfig(3)}
@@ -142,7 +146,7 @@ func TestHnswSearchFloat32(t *testing.T) {
 
 func TestHnswSearchFloat64Overflow(t *testing.T) {
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	idxcfg := vectorindex.IndexConfig{Type: "hnsw", Usearch: usearch.DefaultConfig(3)}
@@ -176,7 +180,7 @@ func TestHnswSearchFloat64Overflow(t *testing.T) {
 
 func TestHnswSearchFloat32_BadQueryType(t *testing.T) {
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	idxcfg := vectorindex.IndexConfig{Type: "hnsw", Usearch: usearch.DefaultConfig(3)}
@@ -193,7 +197,7 @@ func TestHnswSearchFloat32_BadQueryType(t *testing.T) {
 
 func TestHnswSearchCosineRejected(t *testing.T) {
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	idxcfg := vectorindex.IndexConfig{Type: "hnsw", Usearch: usearch.DefaultConfig(3)}
@@ -223,6 +227,32 @@ func TestHnswSearchCosineRejected(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, keys)
 	require.Empty(t, dists)
+}
+
+// A cosine query is checked in the element type the index stores: a query that is normal in
+// float32 but zero once narrowed to float16 is rejected; bfloat16 keeps the float32 exponent.
+func TestHnswSearchCosineNarrowedQuery(t *testing.T) {
+	m := mpool.MustNewZero()
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
+	sqlproc := sqlexec.NewSqlProcess(proc)
+	rt := vectorindex.RuntimeConfig{Limit: 1, OrigFuncName: "cosine_distance"}
+	query := []float32{1e-9, -2e-9, 3e-9}
+
+	for _, kind := range []usearch.Quantization{usearch.F32, usearch.BF16, usearch.F16} {
+		idxcfg := vectorindex.IndexConfig{Type: "hnsw", Usearch: usearch.DefaultConfig(3)}
+		idxcfg.Usearch.Metric = usearch.Cosine
+		idxcfg.Usearch.Quantization = kind
+		s := NewHnswSearch[float32](idxcfg, vectorindex.IndexTableConfig{})
+		_, _, err := s.Search(sqlproc, query, rt)
+		if kind == usearch.F16 {
+			require.ErrorContains(t, err, "normalized", kind.String())
+		} else {
+			require.NoError(t, err, kind.String())
+		}
+		negZero := float32(math.Copysign(0, -1))
+		_, _, err = s.Search(sqlproc, []float32{negZero, negZero, negZero}, rt)
+		require.ErrorContains(t, err, "normalized", kind.String())
+	}
 }
 
 func TestBoundedHnswSearchLimits(t *testing.T) {
@@ -267,7 +297,7 @@ func TestHnswSearchUnlockSynchronizesWithWaitPredicate(t *testing.T) {
 
 func TestHnsw(t *testing.T) {
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	oldRunSQL := runSql
@@ -682,4 +712,88 @@ func TestHnswEmptyGeneration(t *testing.T) {
 	_, err := unreadable.Empty()
 	require.Error(t, err, "a nil usearch handle is what makes this model unreadable")
 	require.False(t, (&HnswSearch[float32]{Indexes: []*HnswModel[float32]{e3, unreadable}}).EmptyGeneration())
+}
+
+// A membership of at most ExactThreshold keys is searched by scanning its vectors, which
+// returns the exact nearest members even on a graph too sparse for the traversal to find
+// them; a larger membership, or a zero threshold, traverses the graph.
+func TestHnswSearchMembershipExactThreshold(t *testing.T) {
+	const dimensions = 32
+	const perModel = 1000
+	const limit = 10
+	m := mpool.MustNewZero()
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
+	sqlproc := sqlexec.NewSqlProcess(proc)
+
+	idxcfg := vectorindex.IndexConfig{Type: "hnsw", Usearch: usearch.DefaultConfig(dimensions)}
+	idxcfg.Usearch.Metric = usearch.L2sq
+	idxcfg.Usearch.Connectivity = 2
+	idxcfg.Usearch.ExpansionAdd = 4
+	s := NewHnswSearch[float32](idxcfg, vectorindex.IndexTableConfig{})
+
+	var vectors [][]float32
+	state := uint32(1)
+	for model := 0; model < 2; model++ {
+		idx, err := usearch.NewIndex(idxcfg.Usearch)
+		require.NoError(t, err)
+		defer idx.Destroy()
+		require.NoError(t, idx.Reserve(perModel))
+		for i := 0; i < perModel; i++ {
+			v := make([]float32, dimensions)
+			for d := range v {
+				state = state*1664525 + 1013904223
+				v[d] = float32(state>>8) / float32(1<<24)
+			}
+			require.NoError(t, idx.Add(usearch.Key(len(vectors)), v))
+			vectors = append(vectors, v)
+		}
+		s.Indexes = append(s.Indexes, &HnswModel[float32]{Id: fmt.Sprintf("m%d", model), Index: idx})
+	}
+
+	members := vector.NewVec(types.T_int64.ToType())
+	defer members.Free(m)
+	var keys []int64
+	for k := int64(0); k < int64(len(vectors)); k += 7 {
+		keys = append(keys, k)
+		require.NoError(t, vector.AppendFixed(members, k, false, m))
+	}
+	membership, err := docfilter.NewForC(members, nil)
+	require.NoError(t, err)
+	defer membership.Free()
+
+	search := func(query []float32, threshold uint64, iterative bool) []int64 {
+		got, _, err := s.Search(sqlproc, query, vectorindex.RuntimeConfig{
+			Limit:           limit,
+			ResultLimit:     limit,
+			OrigFuncName:    metric.DistFn_L2Distance,
+			Membership:      membership,
+			MembershipCount: uint64(len(keys)),
+			ExactThreshold:  threshold,
+			Iterative:       iterative,
+		})
+		require.NoError(t, err)
+		return got.([]int64)
+	}
+
+	traversalMissed := false
+	for q := 0; q < len(vectors); q += 97 {
+		query := vectors[q]
+		truth := append([]int64(nil), keys...)
+		sort.Slice(truth, func(a, b int) bool {
+			da, _ := usearch.Distance(query, vectors[truth[a]], dimensions, usearch.L2sq)
+			db, _ := usearch.Distance(query, vectors[truth[b]], dimensions, usearch.L2sq)
+			return da < db
+		})
+		truth = truth[:limit]
+
+		require.Equal(t, truth, search(query, uint64(len(keys)), false))
+		require.Equal(t, truth, search(query, uint64(len(keys)), true))
+
+		graph := search(query, uint64(len(keys))-1, false)
+		require.Equal(t, graph, search(query, 0, false))
+		if !slices.Equal(truth, graph) {
+			traversalMissed = true
+		}
+	}
+	require.True(t, traversalMissed, "the sparse graph must make the traversal miss neighbors the scan finds")
 }

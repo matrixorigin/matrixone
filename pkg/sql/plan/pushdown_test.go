@@ -305,8 +305,8 @@ func TestPreparedJoinDiagnosticProofOnlyRelaxesCurrentExecution(t *testing.T) {
 	require.False(t, safe, "block filters are part of the predicate proof")
 	builder.qry.Nodes[0].BlockFilterList = nil
 	builder.qry.Nodes = append(builder.qry.Nodes, &plan.Node{
-		NodeType:        plan.Node_VECTOR_INDEX_SCAN,
-		VectorIndexScan: &plan.VectorIndexScan{PreFilters: []*plan.Expr{whereClock}},
+		NodeType:        plan.Node_INDEX_SEARCH_SCAN,
+		IndexSearchScan: &plan.IndexSearchScan{PreFilters: []*plan.Expr{whereClock}},
 	})
 	safe, err = ProbePreparedJoinParameterDiagnostics(proc, template)
 	require.NoError(t, err)

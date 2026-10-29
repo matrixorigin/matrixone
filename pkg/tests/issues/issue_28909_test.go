@@ -172,7 +172,7 @@ func TestIssue28909DirectFunctionWireMetadata(t *testing.T) {
 			require.Equal(t, uint16(20105), mysqlErr.Number)
 			require.Contains(t, mysqlErr.Message, fmt.Sprintf("CN %q: local protocol=71, authoring floor=", cn.GetServiceConfig().CN.UUID))
 			var count int
-			require.NoError(t, db.QueryRowContext(ctx, "select count(*) from information_schema.tables where table_schema=? and table_name='rejected'", schema).Scan(&count))
+			require.NoError(t, db.QueryRowContext(ctx, "select count(*) from mo_catalog.mo_tables where account_id=0 and reldatabase=? and relname='rejected'", schema).Scan(&count))
 			require.Zero(t, count)
 			require.NoError(t, db.QueryRowContext(ctx, "select count(*) from "+schema+".src").Scan(&count))
 			require.Equal(t, 4, count, "rejection does not affect existing data or ordinary SQL")

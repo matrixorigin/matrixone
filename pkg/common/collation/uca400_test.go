@@ -216,6 +216,34 @@ func TestUCA400Errors(t *testing.T) {
 	}
 }
 
+func TestUCA400ValidateValue(t *testing.T) {
+	for _, d := range []Domain{UTF8MB4UnicodeCI, UTF8MB3UnicodeCI} {
+		if err := d.ValidateValue([]byte("Straße")); err != nil {
+			t.Fatalf("valid value rejected for %d: %v", d, err)
+		}
+		if err := d.ValidateValue([]byte{0xff}); err != ErrUTF8 {
+			t.Fatalf("invalid UTF-8 for %d: %v", d, err)
+		}
+	}
+	if err := UTF8MB4UnicodeCI.ValidateValue([]byte("😀")); err != nil {
+		t.Fatal(err)
+	}
+	if err := UTF8MB3UnicodeCI.ValidateValue([]byte("😀")); err != ErrRepertoire {
+		t.Fatalf("accepted supplementary character: %v", err)
+	}
+	if err := Raw.ValidateValue([]byte{0xff}); err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range []Domain{UTF8MB4Bin, UTF8MB4GeneralCI, UTF8MB40900AI, UTF8MB40900Bin} {
+		if err := d.ValidateValue([]byte{0xff}); err != ErrUTF8 {
+			t.Fatalf("invalid UTF-8 for %d: %v", d, err)
+		}
+	}
+	if err := Domain(255).ValidateValue([]byte("ok")); err != ErrDomain {
+		t.Fatalf("unknown domain accepted: %v", err)
+	}
+}
+
 func BenchmarkUCA400Key(b *testing.B) {
 	for name, v := range map[string][]byte{"ascii": []byte("User.name@example.com"), "expansion": []byte("Straße æther ﬀ"), "spaces": []byte(" a  b   c ")} {
 		b.Run(name, func(b *testing.B) {

@@ -15,14 +15,20 @@
 package export
 
 import (
+	"bytes"
 	"context"
+	"database/sql"
+	"encoding/csv"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/DATA-DOG/go-sqlmock"
 	"path"
 	"reflect"
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -320,73 +326,75 @@ func initSingleLogsFile(ctx context.Context, fs fileservice.FileService, tbl *ta
 
 func TestMergeTaskExecutorFactory(t *testing.T) {
 	defer leaktest.AfterTest(t)()
-	t.Logf("tmpDir: %s/%s", t.TempDir(), t.Name())
-	fs := testutil.NewSharedFS()
-	targetDate := "2021-01-01"
-	ts, err := time.Parse("2006-01-02 15:04:05", targetDate+" 00:00:00")
-	require.Nil(t, err)
-
-	ctx := trace.Generate(context.TODO())
-
-	type args struct {
-		ctx  context.Context
-		opts []MergeOption
-		task *task.AsyncTask
-	}
-	tests := []struct {
-		name string
-		args args
-		want func(ctx context.Context, task task.Task) error
+	for _, tc := range []struct {
+		name     string
+		exists   bool
+		checkErr error
 	}{
-		{
-			name: "normal",
-			args: args{
-				ctx:  ctx,
-				opts: []MergeOption{WithFileService(fs)},
-				task: &task.AsyncTask{
-					Metadata: task.TaskMetadata{
-						ID:                   "",
-						Executor:             0,
-						Context:              []byte(strings.Join([]string{dummyTable.GetIdentify(), targetDate}, ParamSeparator)),
-						Options:              task.TaskOptions{},
-						XXX_NoUnkeyedLiteral: struct{}{},
-						XXX_unrecognized:     nil,
-						XXX_sizecache:        0,
-					},
-				},
-			},
-			want: nil,
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-
-			_, err := initSingleLogsFile(tt.args.ctx, fs, dummyTable, ts, table.CsvExtension)
-			require.Nil(t, err)
-
-			got := MergeTaskExecutorFactory("", tt.args.opts...)
-			require.NotNil(t, got)
-
-			err = got(tt.args.ctx, tt.args.task)
-			require.Nilf(t, err, "err: %v", err)
-
-			files := make([]string, 0, 1)
-			dir := []string{"/"}
-			for len(dir) > 0 {
-				entrys, err := fileservice.SortedList(fs.List(tt.args.ctx, dir[0]))
-				require.Nil(t, err)
-				for _, e := range entrys {
-					p := path.Join(dir[0], e.Name)
-					if e.IsDir {
-						dir = append(dir, p)
-					} else {
-						files = append(files, p)
-					}
+		{name: "already uploaded", exists: true},
+		{name: "lookup failure retains file", checkErr: errors.New("controlled lookup failure")},
+		{name: "upload failure retains file"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				ctx, cancel := context.WithCancel(trace.Generate(context.Background()))
+				defer cancel()
+				fs := testutil.NewSharedFS()
+				defer fs.Close(context.Background())
+				ts, err := time.Parse(time.DateOnly, "2021-01-01")
+				require.NoError(t, err)
+				filePath, err := initSingleLogsFile(ctx, fs, dummyTable, ts, table.CsvExtension)
+				require.NoError(t, err)
+				readSource := func() string {
+					vector := fileservice.IOVector{FilePath: filePath, Entries: []fileservice.IOEntry{{Size: -1}}}
+					defer vector.Release()
+					require.NoError(t, fs.Read(ctx, &vector))
+					return string(vector.Entries[0].Data)
 				}
-				dir = dir[1:]
-			}
-			require.Equal(t, 1, len(files))
-			t.Logf("%v", files)
+				original := readSource()
+				if !tc.exists && tc.checkErr == nil {
+					// Retain the original unconfigured-writer upload path. Stop
+					// before executing if this package ever configures a real DB.
+					_, err := db_holder.GetSQLWriterDBUser()
+					require.Error(t, err)
+				}
+				checked := 0
+				execute := MergeTaskExecutorFactory("", WithFileService(fs), func(m *Merge) {
+					m.isRecordExisted = func(_ context.Context, row []string, tbl *table.Table, _ db_holder.DBConnProvider) (bool, error) {
+						checked++
+						require.Equal(t, dummyTable, tbl)
+						require.Equal(t, "row1", row[0])
+						return tc.exists, tc.checkErr
+					}
+				})
+				require.ErrorContains(t, execute(ctx, &task.CronTask{}), "invalid task type")
+				require.NoError(t, execute(ctx, &task.AsyncTask{Metadata: task.TaskMetadata{
+					Context: []byte(strings.Join([]string{dummyTable.GetIdentify(), "2021-01-01"}, ParamSeparator)),
+				}}))
+				require.Equal(t, 1, checked, "factory must process the fixture, not return vacuously")
+
+				var files []string
+				dirs := []string{"/"}
+				for len(dirs) > 0 {
+					entries, err := fileservice.SortedList(fs.List(ctx, dirs[0]))
+					require.NoError(t, err)
+					for _, entry := range entries {
+						p := path.Join(dirs[0], entry.Name)
+						if entry.IsDir {
+							dirs = append(dirs, p)
+						} else {
+							files = append(files, p)
+						}
+					}
+					dirs = dirs[1:]
+				}
+				if !tc.exists {
+					require.Equal(t, []string{path.Join("/", filePath)}, files)
+					require.Equal(t, original, readSource(), "failed merge must retain the entire original CSV")
+				} else {
+					require.Empty(t, files, "already uploaded file must be removed")
+				}
+			})
 		})
 	}
 }
@@ -620,4 +628,68 @@ func TestInitMerge(t *testing.T) {
 			tt.wantErr(t, InitMerge(tt.args.ctx, tt.args.SV), fmt.Sprintf("InitMerge(%v, %v)", tt.args.ctx, tt.args.SV))
 		})
 	}
+}
+
+func TestMergeStatementInfoOversizedCSVRecovery(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	fs := testutil.NewFS(t)
+	t.Cleanup(func() { fs.Close(context.Background()) })
+	tbl := &table.Table{Database: "system", Table: "statement_info", Columns: []table.Column{table.TextColumn("statement", ""), table.TextColumn("error", ""), table.TextColumn("exec_plan", "")}}
+	var content bytes.Buffer
+	writer := csv.NewWriter(&content)
+	require.NoError(t, writer.Write([]string{strings.Repeat("s", 65536), strings.Repeat("e", 65536), `{"plan":"` + strings.Repeat("p", 65536) + `"}`}))
+	writer.Flush()
+	require.NoError(t, writer.Error())
+	filePath := "etl:sys/logs/oversized-statement-info.csv"
+	require.NoError(t, fs.Write(ctx, fileservice.IOVector{FilePath: filePath, Entries: []fileservice.IOEntry{{Size: int64(content.Len()), Data: content.Bytes()}}}))
+	fail := true
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherFunc(func(_, query string) error {
+		const prefix = "LOAD DATA INLINE FORMAT='csv', DATA='"
+		const suffix = "' INTO TABLE system.statement_info FIELDS TERMINATED BY ','"
+		if !strings.HasPrefix(query, prefix) || !strings.HasSuffix(query, suffix) {
+			return fmt.Errorf("unexpected LOAD envelope")
+		}
+		decoded, err := csv.NewReader(strings.NewReader(strings.TrimSuffix(strings.TrimPrefix(query, prefix), suffix))).ReadAll()
+		if err != nil {
+			return err
+		}
+		require.Len(t, decoded, 1)
+		for _, value := range decoded[0] {
+			require.LessOrEqual(t, len(value), 65535)
+		}
+		require.True(t, strings.HasSuffix(decoded[0][0], db_holder.StatementInfoTruncationMarker))
+		require.True(t, strings.HasSuffix(decoded[0][1], db_holder.StatementInfoTruncationMarker))
+		var summary map[string]any
+		require.NoError(t, json.Unmarshal([]byte(decoded[0][2]), &summary))
+		require.Equal(t, true, summary["truncated"])
+		require.Equal(t, float64(65547), summary["original_bytes"])
+		if fail {
+			cancel()
+		}
+		return nil
+	})))
+	require.NoError(t, err)
+	defer db.Close()
+	oldProvider := db_holder.GetOrInitDBConn
+	oldBackoff := db_holder.DBConnErrCount
+	db_holder.DBConnErrCount = db_holder.NewReConnectionBackOff(time.Minute, db_holder.DBConnRetryThreshold)
+	db_holder.GetOrInitDBConn = func(bool, bool) (*sql.DB, error) { return db, nil }
+	t.Cleanup(func() { db_holder.GetOrInitDBConn = oldProvider; db_holder.DBConnErrCount = oldBackoff })
+	merge, err := NewMerge(context.Background(), "", WithFileService(fs), WithTable(tbl))
+	require.NoError(t, err)
+	defer merge.Stop()
+	merge.isRecordExisted = func(context.Context, []string, *table.Table, db_holder.DBConnProvider) (bool, error) {
+		return false, nil
+	}
+	mock.ExpectExec("load").WillReturnError(errors.New("temporary DB failure"))
+	require.ErrorIs(t, merge.doMergeFiles(ctx, []*FileMeta{{FilePath: filePath}}), context.Canceled)
+	_, err = fs.StatFile(context.Background(), filePath)
+	require.NoError(t, err, "failed upload must retain original CSV")
+	fail = false
+	mock.ExpectExec("load").WillReturnResult(sqlmock.NewResult(0, 1))
+	require.NoError(t, merge.doMergeFiles(context.Background(), []*FileMeta{{FilePath: filePath}}))
+	_, err = fs.StatFile(context.Background(), filePath)
+	require.Error(t, err, "successful upload must remove source CSV")
+	require.NoError(t, mock.ExpectationsWereMet())
 }

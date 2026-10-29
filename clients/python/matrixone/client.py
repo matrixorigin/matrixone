@@ -18,6 +18,8 @@ MatrixOne Client - Basic implementation
 
 from __future__ import annotations
 
+import operator
+
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any, Callable, Dict, Generator, List, Optional, Tuple, Union
 
@@ -25,17 +27,19 @@ if TYPE_CHECKING:
     from sqlalchemy.engine import Connection
 
 from sqlalchemy import create_engine
-from sqlalchemy.engine import Engine, URL
+from sqlalchemy.engine import URL, Engine
 from sqlalchemy.orm import Session as SQLAlchemySession
 
+from ._utils import discard_unrestored_connection, is_non_transactional_statement, result_returns_rows
 from .account import AccountManager
 from .base_client import BaseMatrixOneClient, BaseMatrixOneExecutor
+from .branch import BranchManager
+from .cdc import CDCManager
+from .clone import CloneManager
 from .connection_hooks import ConnectionAction, ConnectionHook, create_connection_hook
 from .exceptions import ConnectionError, QueryError
 from .fulltext_manager import FulltextIndexManager
 from .load_data import LoadDataManager
-from .stage import StageManager
-from .cdc import CDCManager
 from .logger import MatrixOneLogger, create_default_logger
 from .metadata import MetadataManager
 from .moctl import MoCtlManager
@@ -43,11 +47,9 @@ from .pitr import PitrManager
 from .pubsub import PubSubManager
 from .restore import RestoreManager
 from .snapshot import SnapshotManager
-from .clone import CloneManager
-from .branch import BranchManager
 from .sqlalchemy_ext import MatrixOneDialect
+from .stage import StageManager
 from .vector_manager import VectorManager
-from .version import get_version_manager
 
 _VALID_LOG_MODES = frozenset(('off', 'auto', 'simple', 'full', None))
 
@@ -117,7 +119,17 @@ _MO_DB_ALREADY_EXISTS = 20420  # Database already exists
 _MO_PRIMARY_KEY_DUP = 20623  # Primary key duplicated
 
 
-def _classify_db_error(exc: Exception, sql_or_stmt: Any = None) -> QueryError:
+def _classify_db_error(exc: Union[Exception, str], sql_or_stmt: Any = None) -> QueryError:
+    """Keep the original driver boundary and errno alongside stable diagnostics."""
+    if isinstance(exc, QueryError):
+        return exc
+    error = _query_error_message(exc, sql_or_stmt)
+    error.orig = exc if isinstance(exc, Exception) else None
+    error.errno = _extract_errno(exc) if not isinstance(exc, str) else None
+    return error
+
+
+def _query_error_message(exc: Union[Exception, str], sql_or_stmt: Any = None) -> QueryError:
     """Classify a database error into a user-friendly QueryError.
 
     Uses the numeric error code (MySQL or moerr) as the primary classifier,
@@ -407,7 +419,7 @@ class Client(BaseMatrixOneClient):
         self._cdc = None
 
         # Initialize version manager
-        self._version_manager = get_version_manager()
+        self._reset_compatibility()
         self._backend_version = None
 
         # Auto-connect if connection parameters are provided
@@ -426,6 +438,15 @@ class Client(BaseMatrixOneClient):
                 role=role,
             )
 
+    def get_capabilities(self, refresh=False):
+        """Observe this server/session without enabling features or mutating data."""
+        from .connection_hooks import assert_not_in_hook
+
+        assert_not_in_hook(self)
+        from .capabilities import get_capabilities
+
+        return get_capabilities(self, refresh)
+
     def connect(
         self,
         *,
@@ -441,9 +462,11 @@ class Client(BaseMatrixOneClient):
         account: Optional[str] = None,
         role: Optional[str] = None,
         charset: str = "utf8mb4",
-        connection_timeout: int = 30,
+        connection_timeout: Optional[int] = None,
         auto_commit: bool = True,
         on_connect: Optional[Union[ConnectionHook, List[Union[ConnectionAction, str]], Callable]] = None,
+        capability_overrides: Optional[dict] = None,
+        local_infile: bool = False,
     ) -> None:
         """
         Connect to MatrixOne database using SQLAlchemy engine
@@ -463,7 +486,7 @@ class Client(BaseMatrixOneClient):
             account: Optional account name (will be combined with user if user doesn't contain '#' or ':')
             role: Optional role name (will be combined with user if user doesn't contain '#' or ':')
             charset: Character set for the connection (default: utf8mb4)
-            connection_timeout: Connection timeout in seconds (default: 30)
+            connection_timeout: Override constructor connection timeout; None inherits it
             auto_commit: Enable autocommit (default: True)
             on_connect: Connection hook to execute after successful connection.
                        Can be:
@@ -489,6 +512,25 @@ class Client(BaseMatrixOneClient):
             client.connect(host, port, user, password, database,
                           on_connect=my_callback)
         """
+        if not isinstance(local_infile, bool):
+            raise TypeError('local_infile must be a boolean')
+        from .connection_hooks import assert_not_in_hook
+
+        assert_not_in_hook(self)
+        from .capabilities import validate_overrides
+
+        overrides = validate_overrides(capability_overrides)
+        from ._connection_options import positive_timeout
+
+        positive_timeout(self.query_timeout, 'query_timeout')
+        timeout = self.connection_timeout if connection_timeout is None else connection_timeout
+        positive_timeout(timeout, 'connection_timeout')
+        if ssl_mode not in ('disabled', 'preferred', 'required'):
+            raise ValueError('ssl_mode must be disabled, preferred or required')
+        if self._engine is not None:
+            self.disconnect()
+        self._reset_compatibility(overrides)
+        self.connection_timeout = timeout
         # Build final login info based on user parameter and optional account/role
         final_user, parsed_info = self._build_login_info(user, account, role)
 
@@ -502,8 +544,10 @@ class Client(BaseMatrixOneClient):
             "password": password,
             "database": database,
             "charset": charset,
-            "connect_timeout": connection_timeout,
+            "connect_timeout": timeout,
+            "ssl_mode": ssl_mode,
             "autocommit": auto_commit,
+            "local_infile": local_infile,
             "ssl_disabled": ssl_mode == "disabled",
             "ssl_verify_cert": ssl_mode == "required",
             "ssl_verify_identity": ssl_mode == "required",
@@ -520,7 +564,15 @@ class Client(BaseMatrixOneClient):
         try:
             # Create SQLAlchemy engine with connection pooling
             self._engine = self._create_engine()
-            self.logger.log_connection(host, port, final_user, database, success=True)
+            if on_connect is None:
+                on_connect = [ConnectionAction.ENABLE_ALL]
+            if on_connect:
+                self._setup_connection_hook(on_connect)
+
+            # Engine construction is lazy; do not report success until an
+            # authenticated connection has completed a real query.
+            with self._engine.connect() as connection:
+                connection.exec_driver_sql("SELECT 1")
 
             # Initialize managers after engine is created
             self._initialize_managers()
@@ -531,30 +583,35 @@ class Client(BaseMatrixOneClient):
             except Exception as e:
                 self.logger.warning(f"Failed to detect backend version: {e}")
 
-            # Setup connection hook (default to ENABLE_ALL if not provided)
-            # Allow empty list [] to explicitly disable hooks
-            if on_connect is None:
-                on_connect = [ConnectionAction.ENABLE_ALL]
+            # Report success only after initialization returns. Unhandled
+            # initialization failures are fatal, but ordinary callback errors
+            # retain ConnectionHook's existing logged, best-effort policy.
+            self.logger.log_connection(host, port, final_user, database, success=True)
 
-            if on_connect:  # Only setup if not empty list
-                self._setup_connection_hook(on_connect)
-                # Execute the hook once immediately for the initial connection
-                self._execute_connection_hook_immediately(on_connect)
+        except BaseException as e:
+            engine, self._engine = self._engine, None
+            if engine is not None:
+                try:
+                    engine.dispose()
+                except Exception:
+                    pass  # Preserve the primary connection failure.
+            if not isinstance(e, Exception):
+                raise
+            from ._connection_options import redact_error
 
-        except Exception as e:
+            error_msg = redact_error(e, password)
             self.logger.log_connection(host, port, final_user, database, success=False)
-            self.logger.log_error(e, context="Connection")
+            self.logger.log_error(ConnectionError(error_msg), context="Connection")
 
             # Provide user-friendly error messages for common issues
-            error_msg = str(e)
             if 'Unknown database' in error_msg or '1049' in error_msg:
                 raise ConnectionError(
                     f"Database '{database}' does not exist. Please create it first:\n"
-                    f"  mysql -h{host} -P{port} -u{user.split('#')[0] if '#' in user else user} -p{password} "
+                    f"  mysql -h{host} -P{port} -u{user.split('#')[0] if '#' in user else user} -p "
                     f"-e \"CREATE DATABASE {database}\""
-                ) from e
+                ) from None
             else:
-                raise ConnectionError(f"Failed to connect to MatrixOne: {e}") from e
+                raise ConnectionError(f"Failed to connect to MatrixOne: {error_msg}") from None
 
     def _setup_connection_hook(
         self, on_connect: Union[ConnectionHook, List[Union[ConnectionAction, str]], Callable]
@@ -656,23 +713,9 @@ class Client(BaseMatrixOneClient):
         # Set the provided engine
         client._engine = engine
 
-        # Wrap the dialect with MatrixOne dialect for proper vector type support
-        # Instead of replacing, we create a new MatrixOne dialect that delegates to the original
-        if not isinstance(engine.dialect, MatrixOneDialect):
-            original_dialect = engine.dialect
-            original_dbapi = engine.dialect.dbapi
+        from .sqlalchemy_ext.dialect import adapt_engine_dialect
 
-            # Create MatrixOne dialect with same configuration
-            mo_dialect = MatrixOneDialect()
-            mo_dialect.dbapi = original_dbapi
-
-            # Copy important attributes from original dialect
-            if hasattr(original_dialect, '_connection_charset'):
-                mo_dialect._connection_charset = original_dialect._connection_charset
-
-            # Replace dialect (this is still a limitation of SQLAlchemy's design)
-            # but we've preserved the original configuration
-            engine.dialect = mo_dialect
+        adapt_engine_dialect(engine)
 
         # Initialize managers after engine is set
         client._initialize_managers()
@@ -722,13 +765,16 @@ class Client(BaseMatrixOneClient):
         """Create SQLAlchemy engine with connection pooling"""
         # Build connection URL using SQLAlchemy's URL.create() for proper escaping
         # of special characters in user/password (e.g., @, #, %, etc.)
-        connect_args = {}
-        if self._connection_params.get("ssl_ca"):
-            connect_args["ssl"] = {"ca": self._connection_params["ssl_ca"]}
-            if self._connection_params.get("ssl_cert"):
-                connect_args["ssl"]["cert"] = self._connection_params["ssl_cert"]
-            if self._connection_params.get("ssl_key"):
-                connect_args["ssl"]["key"] = self._connection_params["ssl_key"]
+        from ._connection_options import tls_options
+
+        connect_args = {
+            'connect_timeout': self._connection_params['connect_timeout'],
+            'read_timeout': self.query_timeout,
+            'write_timeout': self.query_timeout,
+            'local_infile': self._connection_params.get('local_infile', False),
+            'charset': self._connection_params['charset'],
+            **tls_options(self._connection_params),
+        }
 
         url = URL.create(
             drivername="mysql+pymysql",
@@ -751,9 +797,16 @@ class Client(BaseMatrixOneClient):
         )
 
         # Replace the dialect with MatrixOne dialect for proper vector type support
-        original_dbapi = engine.dialect.dbapi
-        engine.dialect = MatrixOneDialect()
-        engine.dialect.dbapi = original_dbapi
+        if self._connection_params.get('ssl_mode') == 'required':
+            from sqlalchemy import event
+
+            from ._connection_options import connect_required_tls
+
+            event.listen(engine, 'do_connect', connect_required_tls)
+
+        from .sqlalchemy_ext.dialect import adapt_engine_dialect
+
+        adapt_engine_dialect(engine)
 
         return engine
 
@@ -794,10 +847,14 @@ class Client(BaseMatrixOneClient):
                 >>> # ... perform database operations ...
                 >>> client.disconnect()  # Clean up resources
         """
+        from .connection_hooks import assert_not_in_hook
+
+        assert_not_in_hook(self)
+        self._reset_compatibility()
         if self._engine:
             try:
-                self._engine.dispose()
-                self._engine = None
+                engine, self._engine = self._engine, None
+                engine.dispose()
                 self.logger.log_disconnection(success=True)
             except Exception as e:
                 self.logger.log_disconnection(success=False)
@@ -834,13 +891,19 @@ class Client(BaseMatrixOneClient):
 
     def _escape_identifier(self, identifier: str) -> str:
         """Escapes an identifier to prevent SQL injection."""
-        return f"`{identifier}`"
+        from ._sql_literals import sql_identifier
+
+        return sql_identifier(identifier, force=True)
 
     def _escape_string(self, value: str) -> str:
         """Escapes a string value for SQL queries."""
-        return f"'{value}'"
+        from ._sql_literals import sql_string_token
 
-    def _build_login_info(self, user: str, account: Optional[str] = None, role: Optional[str] = None) -> tuple[str, dict]:
+        return sql_string_token(value, context='Administrative SQL')
+
+    def _build_login_info(
+        self, user: str, account: Optional[str] = None, role: Optional[str] = None
+    ) -> tuple[str, dict]:
         """
         Build final login info based on user parameter and optional account/role
 
@@ -986,7 +1049,21 @@ class Client(BaseMatrixOneClient):
             execution_time = time.time() - start_time
             self.logger.log_query(sql, execution_time, success=False, log_mode=log_mode)
             self.logger.log_error(e, context=context)
-            raise _classify_db_error(e, sql) from None
+            classified = _classify_db_error(e, sql)
+            if classified is e:
+                raise
+            raise classified from e
+
+    @property
+    def analytics(self):
+        """Optional file-query and Arrow APIs; requires the ``analytics`` extra.
+
+        Use ``with client.analytics.query(sql) as batches`` for bounded result
+        reads and ``read_parquet/read_csv/read_json`` for managed external scans.
+        """
+        from .analytics import AnalyticsManager
+
+        return AnalyticsManager(self)
 
     def execute(self, sql_or_stmt, params: Optional[Tuple] = None, log_mode: str = None) -> "ResultSet":
         """
@@ -1246,6 +1323,9 @@ class Client(BaseMatrixOneClient):
             - Session.execute(): Execute within transaction context
             - AsyncClient.execute(): Async version for async/await workflows
         """
+        from .connection_hooks import assert_not_in_hook
+
+        assert_not_in_hook(self)
         if not self._engine:
             raise ConnectionError("Not connected to database")
 
@@ -1264,7 +1344,7 @@ class Client(BaseMatrixOneClient):
                     result = session.execute(sql_or_stmt, params, log_mode='off')
 
                     # Convert SQLAlchemy result to ResultSet
-                    if hasattr(result, 'returns_rows') and result.returns_rows:
+                    if result_returns_rows(result):
                         # SELECT query
                         columns = list(result.keys())
                         rows = result.fetchall()
@@ -1292,20 +1372,65 @@ class Client(BaseMatrixOneClient):
                         return result_set
 
             # String SQL - original implementation
-            final_sql = self._substitute_parameters(sql_or_stmt, params)
+            mode_sensitive = params is not None and '\\' in sql_or_stmt
+            final_sql = None if mode_sensitive else self._substitute_parameters(sql_or_stmt, params)
 
-            with self._engine.begin() as conn:
-                # Use exec_driver_sql() to bypass SQLAlchemy's bind parameter parsing
-                # This prevents JSON strings like {"a":1} from being parsed as :1 bind params
-                if hasattr(conn, 'exec_driver_sql'):
-                    # Escape % to %% for pymysql's format string handling in exec_driver_sql
-                    escaped_sql = final_sql.replace('%', '%%')
-                    result = conn.exec_driver_sql(escaped_sql)
-                else:
-                    # Fallback for testing or older SQLAlchemy versions
-                    from sqlalchemy import text
+            # MERGE/PICK require autocommit outside explicit sessions. Change
+            # only this checkout, restoring its baseline before pool reuse.
+            # Ordinary SQL retains the engine.begin() transaction path.
+            non_transactional = is_non_transactional_statement(sql_or_stmt)
+            with self._engine.connect() if non_transactional else self._engine.begin() as conn:
+                restore_autocommit = False
+                prev_autocommit = None
+                if non_transactional:
+                    prev_autocommit = conn.exec_driver_sql("SELECT @@autocommit").scalar()
+                    if isinstance(prev_autocommit, bytes):
+                        prev_autocommit = prev_autocommit.decode()
+                execution_failed = False
+                try:
+                    if mode_sensitive:
+                        from ._sql_literals import connection_sql_mode
 
-                    result = conn.execute(text(final_sql))
+                        mode = connection_sql_mode(conn)
+                        final_sql = self._substitute_parameters(sql_or_stmt, params, sql_mode=mode)
+                    if non_transactional and str(prev_autocommit).strip().lower() not in ("1", "true", "on"):
+                        # Record restoration responsibility BEFORE flipping, so a
+                        # SET whose result read dies after the server applied it
+                        # is still restored (or the connection invalidated).
+                        restore_autocommit = True
+                        conn.exec_driver_sql("SET autocommit = 1")
+                    # Use exec_driver_sql() to bypass SQLAlchemy's bind parameter parsing
+                    # This prevents JSON strings like {"a":1} from being parsed as :1 bind params
+                    if hasattr(conn, 'exec_driver_sql'):
+                        # Escape % to %% for pymysql's format string handling in exec_driver_sql
+                        escaped_sql = final_sql.replace('%', '%%')
+                        result = conn.exec_driver_sql(escaped_sql)
+                    else:
+                        # Fallback for testing or older SQLAlchemy versions
+                        from sqlalchemy import text
+
+                        result = conn.execute(text(final_sql.replace(':', r'\:')))
+                except BaseException:
+                    execution_failed = True
+                    raise
+                finally:
+                    if restore_autocommit:
+                        try:
+                            conn.exec_driver_sql("SET autocommit = 0")
+                        except BaseException as restore_error:
+                            try:
+                                discard_unrestored_connection(conn)
+                            except BaseException as discard_error:
+                                # Preserve an in-flight SQL error/cancellation.
+                                # A new interrupt after successful SQL still propagates.
+                                if (
+                                    not execution_failed
+                                    and isinstance(restore_error, Exception)
+                                    and not isinstance(discard_error, Exception)
+                                ):
+                                    raise
+                            if not execution_failed and not isinstance(restore_error, Exception):
+                                raise
 
                 execution_time = time.time() - start_time
 
@@ -1328,7 +1453,9 @@ class Client(BaseMatrixOneClient):
             # Log error FIRST, before any error processing
             # Wrap in try-except to ensure logging failure doesn't hide the real error
             try:
-                sql_display = sql_or_stmt if isinstance(sql_or_stmt, str) else f"<SQLAlchemy {type(sql_or_stmt).__name__}>"
+                sql_display = (
+                    sql_or_stmt if isinstance(sql_or_stmt, str) else f"<SQLAlchemy {type(sql_or_stmt).__name__}>"
+                )
                 self.logger.log_query(sql_display, execution_time, success=False)
                 self.logger.log_error(e, context="Query execution")
             except Exception as log_err:
@@ -1337,7 +1464,10 @@ class Client(BaseMatrixOneClient):
 
                 print(f"Warning: Error logging failed: {log_err}", file=sys.stderr)
 
-            raise _classify_db_error(e, sql_or_stmt) from None
+            classified = _classify_db_error(e, sql_or_stmt)
+            if classified is e:
+                raise
+            raise classified from e
 
     def insert(self, table_name_or_model, data: dict) -> "ResultSet":
         """
@@ -1469,66 +1599,11 @@ class Client(BaseMatrixOneClient):
         executor = ClientExecutor(self)
         return executor.batch_insert(table_name, data_list)
 
-    def _substitute_parameters(self, sql: str, params=None) -> str:
-        """
-        Substitute ? placeholders or named parameters with actual values since MatrixOne
-        doesn't support prepared statements
+    def _substitute_parameters(self, sql: str, params=None, *, sql_mode='') -> str:
+        """Render legacy parameters outside SQL literals, identifiers and comments."""
+        from ._sql_literals import substitute_parameters
 
-        Args::
-
-            sql: SQL query string with ? placeholders or named parameters (:name)
-            params: Tuple of parameter values or dict of named parameters
-
-        Returns::
-
-            SQL string with parameters substituted
-        """
-        if not params:
-            return sql
-
-        final_sql = sql
-
-        # Handle named parameters (dict)
-        if isinstance(params, dict):
-            for key, value in params.items():
-                placeholder = f":{key}"
-                if placeholder in final_sql:
-                    if isinstance(value, str):
-                        # Escape single quotes in string values
-                        escaped_value = value.replace("'", "''")
-                        final_sql = final_sql.replace(placeholder, f"'{escaped_value}'")
-                    elif value is None:
-                        final_sql = final_sql.replace(placeholder, "NULL")
-                    else:
-                        final_sql = final_sql.replace(placeholder, str(value))
-        # Handle positional parameters (tuple/list)
-        elif isinstance(params, (tuple, list)):
-            for param in params:
-                # Skip empty lists that might come from CTE queries
-                if isinstance(param, list) and len(param) == 0:
-                    continue
-                elif isinstance(param, str):
-                    # Escape single quotes in string values
-                    escaped_param = param.replace("'", "''")
-                    # Handle both ? and %s placeholders
-                    if "?" in final_sql:
-                        final_sql = final_sql.replace("?", f"'{escaped_param}'", 1)
-                    elif "%s" in final_sql:
-                        final_sql = final_sql.replace("%s", f"'{escaped_param}'", 1)
-                elif param is None:
-                    # Handle both ? and %s placeholders
-                    if "?" in final_sql:
-                        final_sql = final_sql.replace("?", "NULL", 1)
-                    elif "%s" in final_sql:
-                        final_sql = final_sql.replace("%s", "NULL", 1)
-                else:
-                    # Handle both ? and %s placeholders
-                    if "?" in final_sql:
-                        final_sql = final_sql.replace("?", str(param), 1)
-                    elif "%s" in final_sql:
-                        final_sql = final_sql.replace("%s", str(param), 1)
-
-        return final_sql
+        return substitute_parameters(sql, params, sql_mode=sql_mode)
 
     def get_sqlalchemy_engine(self) -> Engine:
         """
@@ -1538,6 +1613,9 @@ class Client(BaseMatrixOneClient):
 
             SQLAlchemy Engine
         """
+        from .connection_hooks import assert_not_in_hook
+
+        assert_not_in_hook(self)
         if not self._engine:
             raise ConnectionError("Not connected to database")
         return self._engine
@@ -1661,246 +1739,64 @@ class Client(BaseMatrixOneClient):
 
     @contextmanager
     def session(self) -> Generator[Session, None, None]:
+        """Synchronous SQLAlchemy session with MatrixOne managers.
+
+        Use ``client.session()`` to begin a server transaction before the first
+        operation. The context commits on success, rolls back on errors (including
+        cancellation), and closes the session. Explicit commits end that transaction;
+        further SQL follows SQLAlchemy's transaction rules.
+
+        A session belongs to one task. Await operations sequentially within an
+        AsyncSession. Parallel transactions require separate sessions, each owned
+        by its own task; they do not commit atomically together.
+
+        Example::
+
+            with client.session() as session:
+                result = session.execute("SELECT * FROM users")
+                session.execute("UPDATE users SET active = 1 WHERE id = 1")
+
+        Managers execute through the session's connection. Server transaction
+        restrictions still apply: manager availability does not make every DDL or
+        administrative command transactional. Create snapshots through
+        ``client.snapshots`` outside the transaction. CLONE and DML rollback are
+        covered by the supported-server contract suite.
+
+        Directly constructed or wrapped sessions retain their caller's transaction
+        ownership; use the client context for explicit server BEGIN and cleanup.
         """
-        Create a transaction-aware session for atomic database operations.
+        from .connection_hooks import assert_not_in_hook
 
-        This method returns a MatrixOne Session that extends SQLAlchemy Session with
-        MatrixOne-specific features. All operations within the session are executed
-        atomically - they either all succeed or all fail together.
-
-        The session is a context manager that automatically handles transaction lifecycle:
-        - Commits the transaction when the context exits normally
-        - Rolls back the transaction if any exception occurs
-        - Cleans up database resources automatically
-
-        Key Features:
-
-        - **Full SQLAlchemy ORM**: All standard SQLAlchemy Session methods (add, delete, query, etc.)
-        - **Atomic transactions**: Multiple operations commit or rollback together
-        - **MatrixOne managers**: Access to snapshots, clones, vector ops, etc.
-        - **ORM-style operations**: Use SQLAlchemy select(), insert(), update(), delete()
-        - **Automatic cleanup**: Transaction and connection resources managed automatically
-        - **Query logging**: Integrated query logging with performance tracking
-
-        Available Managers (transaction-aware):
-
-        - session.snapshots: SnapshotManager for creating/managing snapshots
-        - session.clone: CloneManager for cloning databases and tables
-        - session.restore: RestoreManager for restoring from snapshots
-        - session.pitr: PitrManager for point-in-time recovery
-        - session.pubsub: PubSubManager for publish-subscribe operations
-        - session.account: AccountManager for account/user management
-        - session.vector_ops: VectorManager for vector operations and indexing
-        - session.fulltext_index: FulltextIndexManager for fulltext search
-        - session.metadata: MetadataManager for table metadata analysis
-        - session.load_data: LoadDataManager for bulk data loading
-        - session.stage: StageManager for external stage management
-
-        Returns:
-            Generator[Session, None, None]: Context manager that yields a MatrixOne Session
-
-        Raises:
-            ConnectionError: If client is not connected to database
-
-        Usage Examples::
-
-            from matrixone import Client
-            from sqlalchemy import select, insert, update, delete
-            from sqlalchemy.orm import declarative_base
-
-            Base = declarative_base()
-
-            class User(Base):
-                __tablename__ = 'users'
-                id = Column(Integer, primary_key=True)
-                name = Column(String(100))
-                email = Column(String(255))
-                age = Column(Integer)
-
-            client = Client(host='localhost', port=6001, user='root', password='111', database='test')
-
-            # ========================================
-            # Example 1: Basic Transaction with ORM-style SQL
-            # ========================================
-            with client.session() as session:
-                # Insert using SQLAlchemy insert()
-                session.execute(insert(User).values(name='John', email='john@example.com', age=30))
-
-                # Update using SQLAlchemy update()
-                session.execute(update(User).where(User.age < 18).values(status='minor'))
-
-                # Select using SQLAlchemy select()
-                stmt = select(User).where(User.age > 25)
-                result = session.execute(stmt)
-                for user in result.scalars():
-                    print(f"User: {user.name}")
-
-                # Delete using SQLAlchemy delete()
-                session.execute(delete(User).where(User.status == 'inactive'))
-                # All operations commit atomically
-
-            # ========================================
-            # Example 2: SQLAlchemy ORM Operations
-            # ========================================
-            with client.session() as session:
-                # Create new objects
-                user1 = User(name='Alice', email='alice@example.com', age=28)
-                user2 = User(name='Bob', email='bob@example.com', age=35)
-
-                # Add to session
-                session.add(user1)
-                session.add(user2)
-
-                # Query using ORM
-                stmt = select(User).where(User.name == 'Alice')
-                result = session.execute(stmt)
-                alice = result.scalar_one()
-
-                # Update object
-                alice.email = 'newemail@example.com'
-
-                # Commit (or let context manager do it)
-                session.commit()
-
-            # ========================================
-            # Example 3: MatrixOne Snapshot Operations
-            # ========================================
-            with client.session() as session:
-                # Create snapshot within transaction
-                from matrixone import SnapshotLevel
-
-                snapshot = session.snapshots.create(
-                    name='daily_backup',
-                    level=SnapshotLevel.DATABASE,
-                    database='production'
-                )
-
-                # Clone database using snapshot
-                session.clone.clone_database(
-                    target_db='prod_copy',
-                    source_db='production',
-                    snapshot_name='daily_backup'
-                )
-                # Both operations commit atomically
-
-            # ========================================
-            # Example 4: Bulk Data Loading with Stages
-            # ========================================
-            with client.session() as session:
-                # Create stage using simple interface
-                session.stage.create_local('import_stage', '/data/imports/')
-
-                # Load data from stage using ORM model
-                session.load_data.from_stage_csv('import_stage', 'users.csv', User)
-
-                # Update statistics after loading
-                session.execute("ANALYZE TABLE users")
-                # All operations are atomic
-
-            # ========================================
-            # Example 5: Error Handling and Rollback
-            # ========================================
-            try:
-                with client.session() as session:
-                    session.execute(insert(User).values(name='Charlie', age=40))
-                    session.execute(insert(InvalidTable).values(data='test'))  # This fails
-                    # Transaction automatically rolls back - Charlie is NOT inserted
-            except Exception as e:
-                print(f"Transaction failed and rolled back: {e}")
-
-            # ========================================
-            # Example 6: Manual Transaction Control
-            # ========================================
-            with client.session() as session:
-                try:
-                    session.execute(insert(User).values(name='David', age=25))
-                    session.execute(update(Account).values(balance=Account.balance - 100))
-
-                    # Verify before committing
-                    stmt = select(Account.balance)
-                    balance = session.execute(stmt).scalar()
-
-                    if balance >= 0:
-                        session.commit()  # Explicit commit
-                    else:
-                        session.rollback()  # Explicit rollback
-                        print("Insufficient balance")
-                except Exception as e:
-                    session.rollback()
-                    raise
-
-            # ========================================
-            # Example 7: Complex Multi-Manager Transaction
-            # ========================================
-            with client.session() as session:
-                # Create publication
-                session.pubsub.create_database_publication(
-                    name='analytics_pub',
-                    database='analytics',
-                    account='subscriber_account'
-                )
-
-                # Create S3 stage for exports
-                session.stage.create_s3(
-                    name='export_stage',
-                    bucket='my-bucket',
-                    path='exports/',
-                    aws_key_id='key',
-                    aws_secret_key='secret'
-                )
-
-                # Load fresh data using ORM model
-                session.load_data.from_csv('/data/latest.csv', Analytics)
-
-                # Create snapshot after load
-                session.snapshots.create(
-                    name='post_load_snapshot',
-                    level=SnapshotLevel.DATABASE,
-                    database='analytics'
-                )
-                # All operations commit together
-
-        Best Practices:
-
-        1. **Always use context manager**: Use `with client.session()` for automatic cleanup
-        2. **Keep transactions short**: Long transactions can block other operations
-        3. **Handle exceptions**: Wrap session code in try-except for error handling
-        4. **Use ORM-style SQL**: Prefer SQLAlchemy insert(), update(), select(), delete()
-        5. **Avoid nested sessions**: SQLAlchemy doesn't support true nested transactions
-        6. **Test rollback behavior**: Ensure your application handles rollbacks correctly
-
-        See Also:
-
-            - Session: The session class returned by this method
-            - AsyncClient.session(): Async version for async/await workflows
-            - Client.execute(): Non-transactional query execution
-        """
+        assert_not_in_hook(self)
         if not self._engine:
             raise ConnectionError("Not connected to database")
 
         session_wrapper = None
+        failed = False
         try:
-            # Create session from engine (standard SQLAlchemy pattern)
-            # Session will automatically acquire connection from pool
             session_wrapper = Session(bind=self._engine, client=self)
-
-            # Begin transaction explicitly
             session_wrapper.begin()
-
+            # Logical SQLAlchemy begin alone does not start MatrixOne's DDL
+            # transaction. Admit work only after BEGIN on this Session's owner.
+            session_wrapper.connection().exec_driver_sql('BEGIN')
             yield session_wrapper
-
-            # Commit the transaction on success
             session_wrapper.commit()
-
-        except Exception:
-            # Rollback on error
-            if session_wrapper:
-                session_wrapper.rollback()
+        except BaseException:
+            failed = True
+            if session_wrapper is not None:
+                try:
+                    session_wrapper.rollback()
+                except BaseException:
+                    self.logger.warning('Session rollback failed while preserving the original error')
             raise
         finally:
-            # Close session (returns connection to pool)
-            if session_wrapper:
-                session_wrapper.close()
+            if session_wrapper is not None:
+                try:
+                    session_wrapper.close()
+                except BaseException:
+                    if not failed:
+                        raise
+                    self.logger.warning('Session close failed while preserving the original error')
 
     @property
     def snapshots(self) -> Optional[SnapshotManager]:
@@ -2185,34 +2081,7 @@ class Client(BaseMatrixOneClient):
 
             Semantic version string or None if parsing fails
         """
-        import re
-
-        if not version_string:
-            return None
-
-        # Pattern 1: Development version "8.0.30-MatrixOne-v" (v followed by nothing)
-        dev_pattern = r"(\d+\.\d+\.\d+)-MatrixOne-v$"
-        dev_match = re.search(dev_pattern, version_string.strip())
-        if dev_match:
-            # Development version - assign highest version number
-            return "999.0.0"
-
-        # Pattern 2: Release version "8.0.30-MatrixOne-v3.0.0" (v followed by version number)
-        release_pattern = r"(\d+\.\d+\.\d+)-MatrixOne-v(\d+\.\d+\.\d+)"
-        release_match = re.search(release_pattern, version_string.strip())
-        if release_match:
-            # Extract the semantic version part
-            semantic_version = release_match.group(2)
-            return semantic_version
-
-        # Pattern 3: Fallback format "MatrixOne 3.0.1"
-        fallback_pattern = r"(\d+\.\d+\.\d+)"
-        fallback_match = re.search(fallback_pattern, version_string)
-        if fallback_match:
-            return fallback_match.group(1)
-
-        self.logger.warning(f"Could not parse version string: {version_string}")
-        return None
+        return self._version_manager._parse_matrixone_version(version_string)
 
     def set_backend_version(self, version: str) -> None:
         """
@@ -2359,29 +2228,43 @@ class Client(BaseMatrixOneClient):
             table_name = model_class.__tablename__
             table = model_class.__table__
 
+            from contextlib import contextmanager
+
             from sqlalchemy.schema import CreateIndex, CreateTable
 
+            from ._connection_options import redact_error
             from .sqlalchemy_ext import FulltextIndex, VectorIndex
 
-            try:
-                engine_context = self.get_sqlalchemy_engine().begin()
-            except Exception as e:
-                # Handle database connection errors with user-friendly messages
-                error_msg = str(e)
-                if 'Unknown database' in error_msg or '1049' in error_msg:
-                    db_name = self._connection_params.get('database', 'unknown')
-                    raise ConnectionError(
-                        f"Database '{db_name}' does not exist. Please create it first:\n"
-                        f"  mysql -h{self._connection_params.get('host', 'localhost')} "
-                        f"-P{self._connection_params.get('port', 6001)} "
-                        f"-u{self._connection_params.get('user', 'root')} "
-                        f"-p{self._connection_params.get('password', '***')} "
-                        f"-e \"CREATE DATABASE {db_name}\""
-                    ) from e
-                else:
-                    raise ConnectionError(f"Failed to connect to database: {error_msg}") from e
+            password = self._connection_params.get('password') or ''
 
-            with engine_context as conn:
+            @contextmanager
+            def table_connection():
+                entered = False
+                try:
+                    # SQLAlchemy begin() is lazy. Guard acquisition, execution
+                    # and commit/rollback, while retaining its cleanup owner.
+                    with self.get_sqlalchemy_engine().begin() as connection:
+                        entered = True
+                        yield connection
+                except Exception as e:
+                    error_msg = redact_error(e, password)
+                    if entered:
+                        if isinstance(e, QueryError):
+                            raise QueryError(error_msg) from None
+                        raise QueryError(f"Failed to create table '{table_name}': {error_msg}") from None
+                    if 'Unknown database' in error_msg or '1049' in error_msg:
+                        db_name = self._connection_params.get('database', 'unknown')
+                        raise ConnectionError(
+                            f"Database '{db_name}' does not exist. Please create it first:\n"
+                            f"  mysql -h{self._connection_params.get('host', 'localhost')} "
+                            f"-P{self._connection_params.get('port', 6001)} "
+                            f"-u{self._connection_params.get('user', 'root')} "
+                            f"-p "
+                            f"-e \"CREATE DATABASE {db_name}\""
+                        ) from None
+                    raise ConnectionError(f"Failed to connect to database: {error_msg}") from None
+
+            with table_connection() as conn:
                 # Create table without indexes first
                 # Build CREATE TABLE statement without indexes
                 create_table_sql = str(CreateTable(table).compile(dialect=conn.dialect))
@@ -2400,16 +2283,18 @@ class Client(BaseMatrixOneClient):
                     _exec_sql(create_table_sql)
                     self.logger.info(f"✓ Created table '{table_name}'")
                 except Exception as e:
-                    # Log the error before processing
+                    # Redact before logging and wrapping: driver text may echo
+                    # the configured password (#30062).
+                    error_msg = redact_error(e, password)
+
+                    # Log the sanitized message; the raw exception must not
+                    # reach the handler or the traceback chain.
                     try:
-                        self.logger.log_error(e, context=f"Creating table '{table_name}'")
+                        self.logger.log_error(QueryError(error_msg), context=f"Creating table '{table_name}'")
                     except Exception as log_err:
                         import sys
 
-                        print(f"Warning: Error logging failed: {log_err}", file=sys.stderr)
-
-                    # Extract user-friendly error message
-                    error_msg = str(e)
+                        print(f"Warning: Error logging failed: {redact_error(log_err, password)}", file=sys.stderr)
 
                     # Handle common errors with helpful messages
                     if 'already exists' in error_msg.lower() or '1050' in error_msg:
@@ -2441,7 +2326,9 @@ class Client(BaseMatrixOneClient):
                             _exec_sql(fulltext_sql)
                             self.logger.info(f"✓ Created fulltext index '{index.name}'")
                         except Exception as e:
-                            self.logger.warning(f"Failed to create fulltext index {index.name}: {e}")
+                            self.logger.warning(
+                                f"Failed to create fulltext index {index.name}: {redact_error(e, password)}"
+                            )
                     elif isinstance(index, VectorIndex):
                         # Create vector index using custom method
                         try:
@@ -2449,7 +2336,9 @@ class Client(BaseMatrixOneClient):
                             _exec_sql(vector_sql)
                             self.logger.info(f"✓ Created vector index '{index.name}'")
                         except Exception as e:
-                            self.logger.warning(f"Failed to create vector index {index.name}: {e}")
+                            self.logger.warning(
+                                f"Failed to create vector index {index.name}: {redact_error(e, password)}"
+                            )
                     else:
                         # Create regular index using manual SQL to avoid dialect issues
                         try:
@@ -2459,7 +2348,7 @@ class Client(BaseMatrixOneClient):
                             _exec_sql(index_sql)
                             self.logger.info(f"✓ Created index '{index.name}'")
                         except Exception as e:
-                            self.logger.warning(f"Failed to create index {index.name}: {e}")
+                            self.logger.warning(f"Failed to create index {index.name}: {redact_error(e, password)}")
 
             return self
 
@@ -3194,6 +3083,9 @@ class ResultSet:
 
     def fetchmany(self, size: int = 1) -> List[Tuple[Any, ...]]:
         """Fetch many rows"""
+        size = operator.index(size)
+        if size < 0:
+            raise ValueError('size must be non-negative')
         start = self._cursor
         end = min(start + size, len(self.rows))
         rows = self.rows[start:end]
@@ -3226,76 +3118,37 @@ class SnapshotClient:
 
     def execute(self, sql: str, params: Optional[Tuple] = None) -> ResultSet:
         """Execute SQL with snapshot"""
-        # Insert snapshot hint after the first table name in FROM clause
-        import re
+        from ._snapshot_sql import rewrite_snapshot
 
-        # Find the first table name after FROM and insert snapshot hint
-        pattern = r"(\bFROM\s+)(\w+)(\s|$)"
-
-        def replace_func(match):
-            return f"{match.group(1)}{match.group(2)}{{snapshot = '{self.snapshot_name}'}}{match.group(3)}"
-
-        snapshot_sql = re.sub(pattern, replace_func, sql, count=1)
-
-        # Handle parameter substitution for MatrixOne compatibility
-        final_sql = self.client._substitute_parameters(snapshot_sql, params)
-
-        return self.client.execute(final_sql)
+        return self.client.execute(rewrite_snapshot(sql, self.snapshot_name), params)
 
 
 class Session(SQLAlchemySession):
-    """
-    MatrixOne Session - extends SQLAlchemy Session with MatrixOne features.
+    """Synchronous SQLAlchemy session with MatrixOne managers.
 
-    This class inherits from SQLAlchemy Session and provides a transaction context
-    for executing multiple database operations atomically, while adding MatrixOne-specific
-    capabilities like snapshots, clones, vector operations, and fulltext search.
+    Use ``client.session()`` to begin a server transaction before the first
+    operation. The context commits on success, rolls back on errors (including
+    cancellation), and closes the session. Explicit commits end that transaction;
+    further SQL follows SQLAlchemy's transaction rules.
 
-    Key Features:
+    A session belongs to one task. Await operations sequentially within an
+    AsyncSession. Parallel transactions require separate sessions, each owned
+    by its own task; they do not commit atomically together.
 
-    - **Full SQLAlchemy Session API** - All inherited methods work as expected
-    - Atomic transaction execution with automatic rollback on errors
-    - Access to all MatrixOne managers within session context
-    - Support for both SQLAlchemy statements and string SQL
-    - Automatic commit/rollback handling
+    Example::
 
-    Available Managers:
-    - snapshots: SnapshotManager for snapshot operations
-    - clone: CloneManager for clone operations
-    - restore: RestoreManager for restore operations
-    - pitr: PitrManager for point-in-time recovery
-    - pubsub: PubSubManager for pub/sub operations
-    - account: AccountManager for account operations
-    - vector_ops: TransactionVectorIndexManager for vector operations
-    - fulltext_index: TransactionFulltextIndexManager for fulltext operations
+        with client.session() as session:
+            result = session.execute("SELECT * FROM users")
+            session.execute("UPDATE users SET active = 1 WHERE id = 1")
 
-    Usage Examples
+    Managers execute through the session's connection. Server transaction
+    restrictions still apply: manager availability does not make every DDL or
+    administrative command transactional. Create snapshots through
+    ``client.snapshots`` outside the transaction. CLONE and DML rollback are
+    covered by the supported-server contract suite.
 
-    .. code-block:: python
-
-            # Standard SQLAlchemy usage
-            from sqlalchemy import select
-            with client.session() as session:
-                # Execute SQLAlchemy statements
-                stmt = select(User).where(User.age > 25)
-                result = session.execute(stmt)
-                users = result.scalars().all()  # Returns ORM objects
-
-                # ORM operations
-                user = User(name="John", age=30)
-                session.add(user)
-                session.commit()
-
-            # MatrixOne features
-            with client.session() as session:
-                # Snapshot operations
-                session.snapshots.create("backup", SnapshotLevel.DATABASE, database="mydb")
-
-                # Clone operations
-                session.clone.clone_database("new_db", "source_db")
-
-    Note: This class is automatically created by the Client's session()
-    context manager and should not be instantiated directly.
+    Directly constructed or wrapped sessions retain their caller's transaction
+    ownership; use the client context for explicit server BEGIN and cleanup.
     """
 
     def __init__(self, bind=None, client=None, wrap_session=None, **kwargs):
@@ -3386,13 +3239,11 @@ class Session(SQLAlchemySession):
             # Check if this is a string SQL
             if isinstance(sql_or_stmt, str):
                 # String SQL - apply MatrixOne parameter substitution
-                final_sql = self.client._substitute_parameters(sql_or_stmt, params)
                 original_sql = sql_or_stmt
 
-                from sqlalchemy import text
+                from ._session_execution import execute_session_sql
 
-                # Call parent's execute() with text()
-                result = super().execute(text(final_sql), **kwargs)
+                result = execute_session_sql(super().execute, sql_or_stmt, client=self.client, params=params, **kwargs)
             else:
                 # SQLAlchemy statement - call parent's execute() directly
                 result = super().execute(sql_or_stmt, params, **kwargs)
@@ -3401,7 +3252,7 @@ class Session(SQLAlchemySession):
             execution_time = time.time() - start_time
 
             # Log query
-            if hasattr(result, 'returns_rows') and result.returns_rows:
+            if result_returns_rows(result):
                 self.client.logger.log_query(original_sql, execution_time, None, success=True, log_mode=log_mode)
             else:
                 self.client.logger.log_query(
@@ -3423,7 +3274,10 @@ class Session(SQLAlchemySession):
                 log_mode=log_mode,
             )
             self.client.logger.log_error(e, context="Session query execution")
-            raise _classify_db_error(e, sql_or_stmt) from None
+            classified = _classify_db_error(e, sql_or_stmt)
+            if classified is e:
+                raise
+            raise classified from e
 
     def get_connection(self):
         """

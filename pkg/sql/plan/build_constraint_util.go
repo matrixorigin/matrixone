@@ -41,15 +41,13 @@ const (
 type dmlSelectInfo struct {
 	typ string
 
-	projectList    []*Expr
-	tblInfo        *dmlTableInfo
-	idx            int32
-	rootId         int32
-	derivedTableId int32
+	projectList []*Expr
+	tblInfo     *dmlTableInfo
+	idx         int32
+	rootId      int32
 
-	onDuplicateIdx      []int32
-	onDuplicateExpr     map[string]*Expr
-	onDuplicateIsIgnore bool
+	onDuplicateIdx  []int32
+	onDuplicateExpr map[string]*Expr
 }
 
 type dmlTableInfo struct {
@@ -785,7 +783,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 		return false, nil, nil, moerr.NewInvalidInput(builder.GetContext(), "insert has unknown select statement")
 	}
 
-	if err = builder.addBinding(info.rootId, tree.AliasClause{Alias: derivedTableName}, bindCtx); err != nil {
+	if err = builder.addBinding(info.rootId, tree.AliasClause{Alias: derivedTableName}, bindCtx, ""); err != nil {
 		return false, nil, nil, err
 	}
 
@@ -836,7 +834,6 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 	}
 
 	tag := builder.qry.Nodes[info.rootId].BindingTags[0]
-	info.derivedTableId = info.rootId
 	oldProject := append([]*Expr{}, lastNode.ProjectList...)
 
 	insertColToExpr := make(map[string]*Expr)
@@ -935,17 +932,6 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 				materializeCols[int32(colIdx)] = true
 				materializeOrder = append(materializeOrder, int32(colIdx))
 			}
-			// if col.Typ.AutoIncr {
-			// if _, ok := pkCols[col.Name]; ok {
-			// 	uniqueCheckOnAutoIncr, err = builder.compCtx.GetDbLevelConfig(dbName, "unique_check_on_autoincr")
-			// 	if err != nil {
-			// 		return false, nil, err
-			// 	}
-			// 	if uniqueCheckOnAutoIncr == "Error" {
-			// 		return false, nil, moerr.NewInvalidInput(builder.GetContext(), "When unique_check_on_autoincr is set to error, insertion of the specified value into auto-incr pk column is not allowed.")
-			// 	}
-			// }
-			// }
 		} else {
 			defExpr, err := getDefaultExprForAssignment(builder.GetContext(), col, builder.compCtx.GetProcess(), builder.isInsertIgnore)
 			if err != nil {
@@ -989,7 +975,6 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 	}
 
 	info.projectList = make([]*Expr, 0, len(projectList))
-	info.derivedTableId = info.rootId
 	for i, e := range projectList {
 		info.projectList = append(info.projectList, &plan.Expr{
 			Typ: e.Typ,
@@ -1174,7 +1159,6 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 			info.rootId = newRootId
 			info.onDuplicateIdx = idxs
 			info.onDuplicateExpr = updateExprs
-			info.onDuplicateIsIgnore = stmt.IsIgnore()
 
 			// append ProjectNode
 			info.rootId = builder.appendNode(&plan.Node{
@@ -1285,15 +1269,6 @@ func checkNotNull(ctx context.Context, expr *Expr, tableDef *TableDef, col *ColD
 	// 	return moerr.NewConstraintViolation(ctx, fmt.Sprintf("Column '%s' cannot be null", col.Name))
 	// }
 
-	// if tableDef.Pkey != nil && len(tableDef.Pkey.Names) > 1 {
-	// 	names := tableDef.Pkey.Names
-	// 	for _, name := range names {
-	// 		if name == col.Name {
-	// 			return moerr.NewConstraintViolation(ctx, fmt.Sprintf("Column '%s' cannot be null", name))
-	// 		}
-	// 	}
-	// }
-
 	return nil
 }
 
@@ -1302,6 +1277,9 @@ var ForceCastExpr = forceCastExpr
 var ForceAssignmentCastExpr = forceAssignmentCastExpr
 
 func useAssignmentStrictCast(targetType Type) bool {
+	if isMediumIntPlanType(targetType) {
+		return true
+	}
 	switch targetType.Id {
 	case int32(types.T_char), int32(types.T_varchar), int32(types.T_date), int32(types.T_time), int32(types.T_datetime), int32(types.T_timestamp), int32(types.T_year):
 		return true
@@ -1321,8 +1299,14 @@ func useSqlModeStringAssignmentCast(targetType Type) bool {
 
 func useSqlModeAssignmentCast(targetType Type) bool {
 	return useSqlModeStringAssignmentCast(targetType) ||
+		targetType.Id == int32(types.T_float32) || targetType.Id == int32(types.T_float64) ||
+		isMediumIntPlanType(targetType) ||
 		targetType.Id == int32(types.T_year) ||
 		targetType.Id == int32(types.T_time)
+}
+
+func isMediumIntPlanType(targetType Type) bool {
+	return (targetType.Id == int32(types.T_int32) || targetType.Id == int32(types.T_uint32)) && targetType.Width == 24
 }
 
 // useIgnoreConversionAssignmentCast identifies conversions whose lexical
@@ -1361,7 +1345,8 @@ func assignmentCastProtocolSupported(proc *process.Process) bool {
 // 固定维度向量的实际载荷长度也可能不符合其声明宽度。
 // 这些类型都不能仅根据元数据相等省略赋值检查。
 func needsSameTypeAssignmentCast(targetType Type) bool {
-	return targetType.Id == int32(types.T_blob) ||
+	return isMediumIntPlanType(targetType) ||
+		targetType.Id == int32(types.T_blob) ||
 		targetType.Id == int32(types.T_text) ||
 		targetType.Id == int32(types.T_time) ||
 		(types.T(targetType.Id).IsArrayRelate() && targetType.Width > 0 && targetType.Width != types.MaxArrayDimension)
@@ -1390,6 +1375,9 @@ func forceCastExpr2WithProcess(
 	if targetType.Typ.Id == 0 {
 		return expr, nil
 	}
+	if err := requireMediumIntProtocolForAuthoring(ctx, proc, targetType.Typ); err != nil {
+		return nil, err
+	}
 	var err error
 	var rewritten bool
 	expr, rewritten, err = rewriteMySQLSpecialTypeDisplayCast(ctx, expr, targetType.Typ)
@@ -1403,7 +1391,7 @@ func forceCastExpr2WithProcess(
 		return funcCastForTypedArrayType(ctx, expr, targetType.Typ)
 	}
 	t1 := makeTypeByPlan2Expr(expr)
-	if t1.Eq(t2) && !needsSameTypeAssignmentCast(targetType.Typ) {
+	if t1.Eq(t2) && !needsSameTypeAssignmentCast(targetType.Typ) && !alterCopyBinaryAssignment(ctx, targetType.Typ) {
 		return expr, nil
 	}
 
@@ -1411,7 +1399,7 @@ func forceCastExpr2WithProcess(
 	// SQL-mode-sensitive assignments use the protocol-gated runtime assignment
 	// cast. Other temporal assignments retain cast_strict behavior, while the
 	// remaining conversions continue to use the generic cast.
-	funcName := assignmentCastFunctionNameForSource(expr, targetType.Typ, isIgnore, proc)
+	funcName := assignmentCastFunctionNameForSource(ctx, expr, targetType.Typ, isIgnore, proc)
 	fGet, err := function.GetFunctionByName(ctx, funcName, []types.Type{t1, t2})
 	if err != nil {
 		return nil, err
@@ -1487,11 +1475,35 @@ func forceAssignmentCastExprWithProcess(
 	isIgnore bool,
 	proc *process.Process,
 ) (*Expr, error) {
+	if err := requireMediumIntProtocolForAuthoring(ctx, proc, targetType); err != nil {
+		return nil, err
+	}
 	return forceAssignmentCastExprWithName(ctx, expr, targetType,
-		assignmentCastFunctionNameForSource(expr, targetType, isIgnore, proc))
+		assignmentCastFunctionNameForSource(ctx, expr, targetType, isIgnore, proc))
 }
 
-func assignmentCastFunctionNameForSource(expr *Expr, targetType Type, isIgnore bool, proc *process.Process) string {
+func requireMediumIntProtocolForAuthoring(ctx context.Context, proc *process.Process, targetType Type) error {
+	if proc == nil || (!isMediumIntPlanType(targetType) && !typedArrayTypeHasMediumInt(&targetType)) {
+		return nil
+	}
+	return RequirePersistedProtocolVersionForAuthoring(ctx, proc, defines.MORPCVersion110)
+}
+
+// The existing private COPY scope owns the target write. Check final binary
+// values at that assignment boundary, including recomputed generated columns;
+// ordinary DML and explicit CAST retain their released selection policy.
+func alterCopyBinaryAssignment(ctx context.Context, target Type) bool {
+	if target.Id != int32(types.T_binary) && target.Id != int32(types.T_varbinary) {
+		return false
+	}
+	option, ok := ctx.Value(defines.AlterCopyOpt{}).(*plan.AlterCopyOpt)
+	return ok && option != nil && option.TargetTableName != ""
+}
+
+func assignmentCastFunctionNameForSource(ctx context.Context, expr *Expr, targetType Type, isIgnore bool, proc *process.Process) string {
+	if alterCopyBinaryAssignment(ctx, targetType) {
+		return "cast_strict"
+	}
 	name := assignmentCastFunctionName(targetType, isIgnore, proc)
 	if types.T(targetType.Id).IsInteger() &&
 		(types.T(expr.Typ.Id).IsFloat() ||
@@ -1520,11 +1532,24 @@ func (builder *QueryBuilder) forceProjectedAssignmentCastExpr(
 	targetType Type,
 	isIgnore bool,
 ) (*Expr, error) {
+	if err := requireMediumIntProtocolForAuthoring(
+		builder.GetContext(), builder.compCtx.GetProcess(), targetType,
+	); err != nil {
+		return nil, err
+	}
 	var err error
 	var rewritten bool
 	expr, rewritten, err = builder.rewriteProjectedMySQLSpecialTypeDisplayCast(expr, sourceExpr, targetType)
 	if err != nil || rewritten {
 		return expr, err
+	}
+	if alterCopyBinaryAssignment(builder.GetContext(), targetType) && sourceExpr.GetCol() != nil &&
+		makeTypeByPlan2Expr(sourceExpr).Eq(makeTypeByPlan2Type(targetType)) {
+		// A direct, same-domain source column carries its stored value unchanged.
+		// Key/index-only COPY must not reinterpret historical binary payloads.
+		// New expressions/type changes and recomputed generated columns still
+		// pass through their strict destination-assignment owners.
+		return expr, nil
 	}
 	if types.T(targetType.Id).IsInteger() && preparedExprContainsParam(sourceExpr) &&
 		makeTypeByPlan2Expr(expr).Eq(makeTypeByPlan2Type(targetType)) {
@@ -1884,7 +1909,7 @@ func forceCastExprWithName(ctx context.Context, expr *Expr, targetType Type, fun
 }
 
 func forceAssignmentCastExprWithName(ctx context.Context, expr *Expr, targetType Type, funcName string) (*Expr, error) {
-	return forceCastExprWithNameAndAssignment(ctx, expr, targetType, funcName, true, false)
+	return forceCastExprWithNameAndAssignment(ctx, expr, targetType, funcName, true, alterCopyBinaryAssignment(ctx, targetType))
 }
 
 func forceCastExprWithNameAndAssignment(
@@ -1948,6 +1973,17 @@ func MakeInsertValueConstExpr(proc *process.Process, numVal *tree.NumVal, colTyp
 	if isIgnore && numVal.ValType == tree.P_char && useIgnoreConversionAssignmentCast(makePlan2Type(colType)) {
 		expr := MakePlan2StringConstExprWithType(numVal.String())
 		return forceAssignmentCastExprWithProcess(proc.Ctx, expr, makePlan2Type(colType), true, proc)
+	}
+	// MEDIUMINT's 24-bit domain is narrower than its int32/uint32 storage.
+	// Keep the literal's original source type so assignment checking cannot be
+	// bypassed by the VALUES fast path.
+	if colType.IsMediumInt() {
+		binder := NewDefaultBinder(proc.Ctx, nil, nil, plan.Type{}, nil)
+		source, err := binder.BindExpr(numVal, 0, true)
+		if err != nil {
+			return nil, err
+		}
+		return forceAssignmentCastExprWithProcess(proc.Ctx, source, makePlan2Type(colType), isIgnore, proc)
 	}
 	// Integer assignment must consume the literal's source type, not parse its
 	// spelling as an integer or truncate it in the VALUES fast path.
@@ -2396,7 +2432,7 @@ func buildValueScan(
 	}
 
 	info.rootId = builder.appendNode(scanNode, bindCtx)
-	if err = builder.addBinding(info.rootId, tree.AliasClause{Alias: "_valuescan"}, bindCtx); err != nil {
+	if err = builder.addBinding(info.rootId, tree.AliasClause{Alias: "_valuescan"}, bindCtx, ""); err != nil {
 		return nil, err
 	}
 
@@ -2458,10 +2494,11 @@ func appendForeignConstrantPlan(
 				if err != nil {
 					return err
 				}
-				assertArgs := []*Expr{nullCheckExpr, errExpr}
-				if isUpdate {
-					assertArgs = append(assertArgs, makePlan2StringConstExprWithType(foreignKeyNoReferencedRowAssert))
-				}
+				// the typed assert reports ErrFKNoReferencedRow2 for both
+				// insert and update so the client receives MySQL errno 1452
+				// (ER_NO_REFERENCED_ROW_2) instead of an internal error
+				assertArgs := []*Expr{nullCheckExpr, errExpr,
+					makePlan2StringConstExprWithType(foreignKeyNoReferencedRowAssert)}
 				filterExpr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "assert", assertArgs)
 				if err != nil {
 					return err
@@ -2512,9 +2549,10 @@ func appendPrimaryConstraintPlan(
 	// need more comments here to explain checkCondition, for example, why updatePkCol is needed
 	// we should not checkInsertPkDup any more, insert into t values (1) checkInsertPkDup is false, however it may still conflict with pk already exists
 	if pkPos, pkTyp := getPkPos(tableDef, true); pkPos != -1 {
-		// needCheck := true
-		needCheck := !builder.qry.LoadTag
-		useFuzzyFilter := config.CNPrimaryCheck.Load()
+		needCheck := !builder.qry.LoadTag || builder.checkLoadPrimaryKey
+		// The legacy LOAD fallback must check both input and snapshot keys,
+		// including when CNPrimaryCheck selects a different path for other DML.
+		useFuzzyFilter := config.CNPrimaryCheck.Load() || builder.checkLoadPrimaryKey
 		if isUpdate {
 			needCheck = updatePkCol
 			useFuzzyFilter = false

@@ -205,10 +205,10 @@ variable_name    value
 tx_isolation    REPEATABLE-READ
 /* save_result */show columns from tt;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    YES        null        
+a    int    YES        null        
 select * from result_scan(last_query_id()) as u;
 field    type    null    key    default    extra    comment
-a    INT(32)    YES        null        
+a    int    YES        null        
 /* save_result */show grants;
 Grants for admin@localhost
 GRANT create user ON account  `admin`@`localhost`
@@ -463,7 +463,7 @@ select * from result_scan(last_query_id()) as u;
 no configure: save query result
 /* save_result */show columns from tt;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    YES        null        
+a    int    YES        null        
 select * from result_scan(last_query_id()) as u;
 no configure: save query result
 /* save_result */show grants;
@@ -613,3 +613,120 @@ select * from result_scan(last_query_id()) as u;
 no configure: save query result
 drop table time_window01;
 drop account abc;
+set save_query_result = on;
+drop table if exists t_30553;
+create table t_30553 (a int, b varchar(20), c double, d date, e timestamp(3), f decimal(10,2), g bool);
+/* save_result */select * from t_30553;
+a    b    c    d    e    f    g
+select * from result_scan(last_query_id()) as u;
+a    b    c    d    e    f    g
+/* save_result */select * from t_30553 where a > 100;
+a    b    c    d    e    f    g
+select count(*) from result_scan(last_query_id()) as u;
+count(*)
+0
+/* save_result */select a, b from t_30553;
+a    b
+select * from result_scan(last_query_id()) as u;
+a    b
+/* save_result */select 1 as x, 's' as y where 1 > 2;
+x    y
+select * from result_scan(last_query_id()) as u;
+x    y
+drop table t_30553;
+set save_query_result = off;
+set save_query_result = on;
+drop table if exists t_30571;
+create table t_30571 (id int primary key, name varchar(20), price decimal(10,2), qty int, tag varchar(10));
+insert into t_30571 values (1,'apple',1.50,10,'a'),(2,'banana',2.25,20,null),(3,'cherry',3.00,null,'c'),(4,null,null,40,null);
+/* save_result */select * from t_30571 order by id;
+id    name    price    qty    tag
+1    apple    1.50    10    a
+2    banana    2.25    20    null
+3    cherry    3.00    null    c
+4    null    null    40    null
+select name from result_scan(last_query_id()) as u order by id;
+name
+apple
+banana
+cherry
+null
+/* save_result */select * from t_30571 order by id;
+id    name    price    qty    tag
+1    apple    1.50    10    a
+2    banana    2.25    20    null
+3    cherry    3.00    null    c
+4    null    null    40    null
+select id, price from result_scan(last_query_id()) as u order by id;
+id    price
+1    1.50
+2    2.25
+3    3.00
+4    null
+/* save_result */select * from t_30571 order by id;
+id    name    price    qty    tag
+1    apple    1.50    10    a
+2    banana    2.25    20    null
+3    cherry    3.00    null    c
+4    null    null    40    null
+select sum(price) from result_scan(last_query_id()) as u;
+sum(price)
+6.75
+/* save_result */select * from t_30571 order by id;
+id    name    price    qty    tag
+1    apple    1.50    10    a
+2    banana    2.25    20    null
+3    cherry    3.00    null    c
+4    null    null    40    null
+select avg(price), min(price), max(price), count(price) from result_scan(last_query_id()) as u;
+avg(price)    min(price)    max(price)    count(price)
+2.250000    1.50    3.00    3
+/* save_result */select * from t_30571 order by id;
+id    name    price    qty    tag
+1    apple    1.50    10    a
+2    banana    2.25    20    null
+3    cherry    3.00    null    c
+4    null    null    40    null
+select sum(qty), max(qty) from result_scan(last_query_id()) as u;
+sum(qty)    max(qty)
+70    40
+/* save_result */select * from t_30571 order by id;
+id    name    price    qty    tag
+1    apple    1.50    10    a
+2    banana    2.25    20    null
+3    cherry    3.00    null    c
+4    null    null    40    null
+select name from result_scan(last_query_id()) as u where price > 2.00 order by id;
+name
+banana
+cherry
+/* save_result */select * from t_30571 order by id;
+id    name    price    qty    tag
+1    apple    1.50    10    a
+2    banana    2.25    20    null
+3    cherry    3.00    null    c
+4    null    null    40    null
+select id from result_scan(last_query_id()) as u where name is null;
+id
+4
+/* save_result */select * from t_30571 order by id;
+id    name    price    qty    tag
+1    apple    1.50    10    a
+2    banana    2.25    20    null
+3    cherry    3.00    null    c
+4    null    null    40    null
+select id, name, tag from result_scan(last_query_id()) as u where tag is null order by id;
+id    name    tag
+2    banana    null
+4    null    null
+/* save_result */select * from t_30571 order by id;
+id    name    price    qty    tag
+1    apple    1.50    10    a
+2    banana    2.25    20    null
+3    cherry    3.00    null    c
+4    null    null    40    null
+select id, qty from result_scan(last_query_id()) as u where qty is null;
+id    qty
+3    null
+drop table t_30571;
+set save_query_result = off;

@@ -23,6 +23,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"unicode"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/collation"
@@ -74,6 +75,11 @@ func applyLockTableFallback(builder *QueryBuilder) {
 			continue
 		}
 		for _, target := range node.LockTargets {
+			// Nonblocking reads require exact row targets. Physical admission owns
+			// their resource limits; estimates must not select coarse locks.
+			if target.NoWait || target.SkipLocked {
+				continue
+			}
 			_, fullUpdateTarget := builder.fullTableUpdateLockTargets[target]
 			estimatedRows := node.Stats.Outcnt
 			if fullUpdateTarget && fullUpdateRows > estimatedRows {
@@ -147,10 +153,108 @@ func getTypeFromAst(ctx context.Context, typ tree.ResolvableTypeReference) (plan
 	if err != nil {
 		return plan.Type{}, err
 	}
+	if astType, ok := typ.(*tree.T); ok && astType.InternalType.CastCharsetSpecified {
+		name := astType.InternalType.CastCharsetName
+		identity, ok := collation.ResolveCharset(name)
+		if !ok || (identity != collation.BinaryIdentity && identity != collation.UTF8MB4GeneralCIIdentity) {
+			return plan.Type{}, moerr.NewInvalidInputf(ctx, "unsupported character set '%s' for CHAR cast", name)
+		}
+		// This is an expression target, not a DDL column declaration. In
+		// particular, CHAR(N) CHARACTER SET binary must stay variable length;
+		// mapping it through the DDL CHAR->BINARY helper would pad short values.
+		if identity == collation.BinaryIdentity {
+			ret.Id = int32(types.T_varbinary)
+			ret.Charset = uint32(types.CharsetBinary)
+		} else {
+			// utf8 and utf8mb3 retain MatrixOne's existing utf8mb4 alias.
+			applyTextCharsetToPlanType(&ret, uint32(identity))
+		}
+		return ret, nil
+	}
 	// AST-authored types are new metadata. Assign their explicit charset here so
 	// CharsetLegacy remains reserved for types decoded from pre-collation catalogs.
 	ret.Charset = uint32(types.CharsetType(types.T(ret.Id)))
 	return ret, nil
+}
+
+// getColumnTypeFromAst resolves a DDL declaration before applying its charset's
+// byte budget. Expression and CAST types deliberately keep their wider domain.
+func getColumnTypeFromAst(
+	ctx context.Context,
+	column *tree.ColumnTableDef,
+	tableCharset uint32,
+	replay *persistedDDLReplay,
+) (plan.Type, error) {
+	astType, isVarchar := column.Type.(*tree.T)
+	isVarchar = isVarchar && strings.EqualFold(astType.InternalType.FamilyString, "varchar")
+	internal := defines.IsInternalExecutor(ctx)
+	parseType := column.Type
+	if isVarchar && !internal && astType.InternalType.DisplayWith > types.MaxVarcharLen {
+		// Resolve all other type properties through the common parser, but leave
+		// DDL VARCHAR capacity errors to the final charset-aware admission rule.
+		// Copy the AST so CAST/expression consumers and reconstruction are untouched.
+		bounded := *astType
+		bounded.InternalType.DisplayWith = types.MaxVarcharLen
+		parseType = &bounded
+	}
+	typ, err := getTypeFromAst(ctx, parseType)
+	if err != nil {
+		return plan.Type{}, err
+	}
+	if isVarchar && astType.InternalType.DisplayWith > types.MaxVarcharLen {
+		typ.Width = astType.InternalType.DisplayWith
+	}
+	if err = applyDefaultAndColumnAttributesToType(ctx, &typ, tableCharset, column.Attributes); err != nil {
+		return plan.Type{}, err
+	}
+	if internal {
+		// Trusted internal DDL includes bootstrap and versioned catalog upgrades.
+		// Preserve those schemas and their historical omitted-length defaults.
+		return typ, nil
+	}
+	maxWidth := int32(types.MaxVarcharLen)
+	switch types.T(typ.Id) {
+	case types.T_varchar:
+		charset := typ.Charset
+		if charset == uint32(types.CharsetLegacy) {
+			// Legacy catalogs lack a charset identity, but text is still UTF-8.
+			charset = uint32(types.CharsetUTF8)
+		}
+		definition, err := collation.EffectiveDefinition(charset, typ.CollationVersion)
+		if err != nil {
+			return plan.Type{}, err
+		}
+		maxWidth /= definition.Charset.MaxBytes()
+	case types.T_varbinary:
+		if !isVarchar {
+			return typ, nil
+		}
+	default:
+		return typ, nil
+	}
+	if astType, ok := column.Type.(*tree.T); ok && astType.InternalType.DisplayWith == -1 {
+		// Preserve MO's omitted-length syntax without publishing an oversized
+		// default column. This must happen after binary charset conversion.
+		typ.Width = maxWidth
+	}
+	if typ.Width > maxWidth {
+		if replay != nil && typ.Width <= types.MaxVarcharLen {
+			if preserved := replay.columns[strings.ToLower(column.Name.ColName())]; preserved != nil {
+				old := preserved.columnType
+				// Internal LIKE/COPY reconstruction may retain a pre-existing
+				// oversized column, never a new or changed declaration. LIKE
+				// renders legacy bytewise text as explicit utf8mb4_bin.
+				if old.Id == typ.Id && old.Width == typ.Width &&
+					old.CollationVersion == typ.CollationVersion &&
+					(old.Charset == typ.Charset || old.Charset == uint32(types.CharsetLegacy) &&
+						typ.Charset == uint32(types.CharsetUTF8MB4Bin)) {
+					return typ, nil
+				}
+			}
+		}
+		return plan.Type{}, moerr.NewTooBigFieldLength(ctx, column.Name.ColNameOrigin(), maxWidth)
+	}
+	return typ, nil
 }
 
 func getTypeFromAstWithoutCharset(ctx context.Context, typ tree.ResolvableTypeReference) (plan.Type, error) {
@@ -168,7 +272,12 @@ func getTypeFromAstWithoutCharset(ctx context.Context, typ tree.ResolvableTypeRe
 				return plan.Type{Id: int32(types.T_uint16), Width: n.InternalType.Width, Scale: -1}, nil
 			}
 			return plan.Type{Id: int32(types.T_int16), Width: n.InternalType.Width, Scale: -1}, nil
-		case defines.MYSQL_TYPE_LONG, defines.MYSQL_TYPE_INT24:
+		case defines.MYSQL_TYPE_INT24:
+			if n.InternalType.Unsigned || n.InternalType.Zerofill {
+				return plan.Type{Id: int32(types.T_uint32), Width: n.InternalType.Width, Scale: -1}, nil
+			}
+			return plan.Type{Id: int32(types.T_int32), Width: n.InternalType.Width, Scale: -1}, nil
+		case defines.MYSQL_TYPE_LONG:
 			if n.InternalType.Unsigned {
 				return plan.Type{Id: int32(types.T_uint32), Width: n.InternalType.Width, Scale: -1}, nil
 			}
@@ -360,12 +469,12 @@ func getTypeFromAstWithoutCharset(ctx context.Context, typ tree.ResolvableTypeRe
 
 			return plan.Type{Id: int32(types.T_enum), Enumvalues: strings.Join(n.InternalType.EnumValues, ",")}, nil
 		case defines.MYSQL_TYPE_SET:
-			setValues, err := types.NormalizeSetValues(n.InternalType.EnumValues)
+			setValues, err := types.EncodeSetValues(n.InternalType.EnumValues)
 			if err != nil {
 				return plan.Type{}, err
 			}
 
-			return plan.Type{Id: int32(types.T_uint64), Enumvalues: strings.Join(setValues, ",")}, nil
+			return plan.Type{Id: int32(types.T_uint64), Enumvalues: setValues}, nil
 		default:
 			return plan.Type{}, moerr.NewNYIf(ctx, "data type: '%s'", tree.String(&n.InternalType, dialect.MYSQL))
 		}
@@ -482,6 +591,10 @@ func applyTextCharsetToPlanType(typ *plan.Type, charset uint32) {
 	switch types.T(typ.Id) {
 	case types.T_char, types.T_varchar, types.T_text:
 		typ.Charset = charset
+		typ.CollationVersion = uint32(types.CollationVersionLegacy)
+		if types.IsUnicodeCollation(uint8(charset)) {
+			typ.CollationVersion = uint32(types.CollationVersionV1)
+		}
 	}
 }
 
@@ -504,6 +617,7 @@ func applyCharsetToPlanType(typ *plan.Type, charset uint32) {
 		return
 	}
 	typ.Charset = uint32(types.CharsetBinary)
+	typ.CollationVersion = uint32(types.CollationVersionLegacy)
 }
 
 func charsetForName(name string) (uint32, bool) {
@@ -512,6 +626,13 @@ func charsetForName(name string) (uint32, bool) {
 }
 
 func collationForName(name string) (uint32, bool) {
+	// Native Unicode collations are executable only through their versioned
+	// identity. Resolve them directly instead of the legacy SQL admission path,
+	// which intentionally maps compatible spellings such as utf8mb4_0900_ai_ci
+	// to general_ci.
+	if definition, ok := collation.Lookup(name); ok && definition.Semantics == collation.UCA400 {
+		return uint32(definition.Identity), true
+	}
 	identity, ok := collation.ResolveDDLCollation(name)
 	return uint32(identity), ok
 }
@@ -523,10 +644,7 @@ func unsupportedCollationError(ctx context.Context, name string) error {
 	// keeping the rejected spelling would falsely promise MySQL UCA semantics.
 	var replacement string
 	switch strings.ToLower(name) {
-	case "utf8_unicode_ci", "utf8mb3_unicode_ci":
-		replacement = "utf8_general_ci"
-	case "utf8mb4_unicode_ci",
-		"utf8mb4_de_pb_0900_ai_ci", "utf8mb4_is_0900_ai_ci", "utf8mb4_lv_0900_ai_ci":
+	case "utf8mb4_de_pb_0900_ai_ci", "utf8mb4_is_0900_ai_ci", "utf8mb4_lv_0900_ai_ci":
 		replacement = "utf8mb4_general_ci"
 	case "utf8mb4_0900_bin":
 		replacement = "utf8mb4_bin"
@@ -544,11 +662,26 @@ func applyTableDefaultCharsetToPlanType(typ *plan.Type, charset uint32) {
 }
 
 func charsetAndCollationCompatible(charset, collation string) bool {
-	charset = canonicalCharsetName(charset)
+	rawCharset := strings.ToLower(charset)
 	collation = strings.ToLower(collation)
-	if charset == "binary" || collation == "binary" {
-		return charset == collation
+	if rawCharset == "binary" || collation == "binary" {
+		return rawCharset == collation
 	}
+	// The native UCA 4.0.0 identities retain MySQL's distinct utf8mb3 and
+	// utf8mb4 repertoire contracts. Do not let the compatibility canonicalizer
+	// collapse them into one general_ci family.
+	if separator := strings.IndexByte(collation, '_'); separator > 0 {
+		collationCharset := collation[:separator]
+		if strings.HasSuffix(collation, "_unicode_ci") {
+			switch collationCharset {
+			case "utf8", "utf8mb3":
+				return rawCharset == "utf8" || rawCharset == "utf8mb3"
+			case "utf8mb4":
+				return rawCharset == "utf8mb4"
+			}
+		}
+	}
+	charset = canonicalCharsetName(rawCharset)
 	if separator := strings.IndexByte(collation, '_'); separator > 0 {
 		return canonicalCharsetName(collation[:separator]) == charset
 	}
@@ -623,6 +756,38 @@ func tableDefaultCharset(ctx CompilerContext, options []tree.TableOption) (uint3
 
 func buildDefaultExpr(bindCtx context.Context, col *tree.ColumnTableDef, typ plan.Type, proc *process.Process) (*plan.Default, error) {
 	return buildDefaultExprWithColumns(bindCtx, col, typ, proc, nil)
+}
+
+// MySQL treats an integer zero column default as the zero date for temporal
+// columns. Keep this conversion at the DDL boundary: ordinary numeric casts
+// and expressions have different semantics.
+func zeroTemporalDefaultLiteral(expr tree.Expr, typ plan.Type) (string, bool) {
+	num, ok := expr.(*tree.NumVal)
+	if !ok {
+		return "", false
+	}
+	switch num.ValType {
+	case tree.P_int64:
+		value, _ := num.Int64()
+		if value != 0 {
+			return "", false
+		}
+	case tree.P_uint64:
+		value, _ := num.Uint64()
+		if value != 0 {
+			return "", false
+		}
+	default:
+		return "", false
+	}
+	switch types.T(typ.Id) {
+	case types.T_date:
+		return "0000-00-00", true
+	case types.T_datetime, types.T_timestamp:
+		return "0000-00-00 00:00:00", true
+	default:
+		return "", false
+	}
 }
 
 func legacyImplicitTimestampDefaults(ctx CompilerContext) bool {
@@ -759,6 +924,32 @@ func buildDefaultExprWithColumns(
 	proc *process.Process,
 	columns []*ColDef,
 ) (*plan.Default, error) {
+	return buildDefaultExprWithColumnsObserved(bindCtx, col, typ, proc, columns, defaultExprForDDL, nil)
+}
+
+// Dump verification needs resolved session dependencies before folding removes
+// them. Ordinary DDL uses the same owner without retaining an extra tree.
+// Persisted origins already passed their authoring session's zero-date admission.
+// Verification still binds, folds and compares the complete expression under the
+// reader's conversion semantics; it does not re-admit a newly authored default.
+type defaultExprBindingPurpose uint8
+
+const (
+	defaultExprForDDL defaultExprBindingPurpose = iota
+	defaultExprForPersistedVerification
+	// Reproduce defaults admitted before integer-zero temporal normalization.
+	defaultExprForPersistedLegacyZero
+)
+
+func buildDefaultExprWithColumnsObserved(
+	bindCtx context.Context,
+	col *tree.ColumnTableDef,
+	typ plan.Type,
+	proc *process.Process,
+	columns []*ColDef,
+	purpose defaultExprBindingPurpose,
+	observe func(source, assigned *plan.Expr),
+) (*plan.Default, error) {
 	nullAbility := true
 	var expr tree.Expr = nil
 	for _, attr := range col.Attributes {
@@ -811,6 +1002,9 @@ func buildDefaultExprWithColumns(
 	if err != nil {
 		return nil, err
 	}
+	if zeroValue, ok := zeroTemporalDefaultLiteral(semanticExpr, typ); ok && purpose != defaultExprForPersistedLegacyZero {
+		planExpr = makePlan2StringConstExprWithType(zeroValue)
+	}
 	if err = preservePersistedFormatCompatibility(bindCtx, planExpr); err != nil {
 		return nil, err
 	}
@@ -829,6 +1023,9 @@ func buildDefaultExprWithColumns(
 		}
 	}
 
+	if observe != nil {
+		observe(planExpr, nil)
+	}
 	defaultExpr, err := makePlan2AssignmentCastExpr(bindCtx, planExpr, typ)
 	if err != nil {
 		return nil, err
@@ -838,14 +1035,52 @@ func buildDefaultExprWithColumns(
 	if err = requireHexMySQLNumericProtocol(proc, defaultExpr); err != nil {
 		return nil, err
 	}
+	if observe != nil {
+		observe(planExpr, defaultExpr)
+	}
 
 	// try to calculate default value, return err if fails
 	newExpr, err := ConstantFold(batch.EmptyForConstFoldBatch, DeepCopyExpr(defaultExpr), proc, false, true)
+	// cast_assign remains an executable expression because its behavior depends
+	// on sql_mode, so function.IsConstant rejects the outer function. Validate when
+	// its source value is constant, without eagerly evaluating volatile defaults.
+	constantMediumIntDefault := false
+	if err == nil && isMediumIntPlanType(typ) && newExpr.GetLit() == nil {
+		if cast := newExpr.GetF(); cast != nil && len(cast.Args) > 0 {
+			constantMediumIntDefault = function.IsConstant(cast.Args[0], false)
+		}
+	}
+	if constantMediumIntDefault {
+		cast := newExpr.GetF()
+		strictExpr, strictErr := forceAssignmentCastExprWithName(
+			bindCtx, cast.Args[0], typ, "cast_strict")
+		if strictErr != nil {
+			err = strictErr
+		} else if strictExecutor, strictExecErr := colexec.NewExpressionExecutor(proc, strictExpr); strictExecErr != nil {
+			err = strictExecErr
+		} else {
+			_, err = strictExecutor.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
+			strictExecutor.Free()
+		}
+	}
 	if err != nil {
+		if constantMediumIntDefault && moerr.IsMoErrCode(err, moerr.ErrOutOfRange) {
+			return nil, moerr.NewErrInvalidDefault(bindCtx, colNameOrigin)
+		}
 		return nil, mapDDLAssignmentCastError(bindCtx, typ, colNameOrigin, err)
 	}
-	if typ.Id == int32(types.T_timestamp) && newExpr.GetLit() != nil &&
-		!newExpr.GetLit().Isnull && newExpr.GetLit().GetTimestampval() == int64(types.ZeroTimestamp) {
+	zeroTemporalDefault := false
+	if lit := newExpr.GetLit(); lit != nil && !lit.Isnull {
+		switch types.T(typ.Id) {
+		case types.T_date:
+			zeroTemporalDefault = lit.GetDateval() == int32(types.ZeroDate)
+		case types.T_datetime:
+			zeroTemporalDefault = lit.GetDatetimeval() == int64(types.ZeroDatetime)
+		case types.T_timestamp:
+			zeroTemporalDefault = lit.GetTimestampval() == int64(types.ZeroTimestamp)
+		}
+	}
+	if purpose == defaultExprForDDL && zeroTemporalDefault {
 		var mode interface{} = proc.GetSessionInfo().SqlMode
 		if resolve := proc.GetResolveVariableFunc(); resolve != nil {
 			mode, err = resolve("sql_mode", true, false)
@@ -1088,7 +1323,7 @@ func checkExprForVolatileFunc(ctx context.Context, expr *plan.Expr) error {
 	switch e := expr.Expr.(type) {
 	case *plan.Expr_F:
 		ov, exists := function.GetFunctionByIdWithoutError(e.F.Func.Obj)
-		if exists && (ov.CannotFold() || ov.IsRealTimeRelated()) {
+		if exists && (ov.IsVolatile() || ov.IsRealTimeRelated()) {
 			return moerr.NewInvalidInputf(ctx,
 				"expression of generated column cannot refer to a non-deterministic function '%s'", e.F.Func.ObjName)
 		}
@@ -2190,6 +2425,16 @@ func (builder *QueryBuilder) applyGeneratedColumnAssignmentCast(expr *plan.Expr,
 		return expr, nil
 	}
 	f := expr.GetF()
+	if alterCopyBinaryAssignment(builder.GetContext(), expr.Typ) {
+		target := expr.Typ
+		// Replace the persisted assignment wrapper, not a user-written
+		// explicit CAST inside the expression. Validate its final value once.
+		if f != nil && f.Func != nil && len(f.Args) > 0 &&
+			(f.Func.ObjName == "cast" || f.Func.ObjName == "cast_assign" || f.Func.ObjName == "cast_strict" || f.Func.ObjName == "cast_ignore") {
+			expr = f.Args[0]
+		}
+		return builder.forceAssignmentCastExpr(expr, target, isIgnore)
+	}
 	if types.T(expr.Typ.Id).IsArrayRelate() && needsSameTypeAssignmentCast(expr.Typ) {
 		// 旧目录中的生成列表达式可能没有赋值 CAST；执行新 DML 时补齐，
 		// 已有的根 CAST 则继续复用，避免重复复制每个向量。
@@ -2338,65 +2583,6 @@ func getFunctionObjRef(funcID int64, name string) *ObjectRef {
 		ObjName: name,
 	}
 }
-
-// getAccountIds transforms the account names into account ids.
-// if accounts is nil, return the id of the sys account.
-// func getAccountIds(ctx CompilerContext, accounts tree.IdentifierList) ([]uint32, error) {
-// 	var accountIds []uint32
-// 	var err error
-// 	if len(accounts) != 0 {
-// 		accountNames := make([]string, len(accounts))
-// 		for i, account := range accounts {
-// 			accountNames[i] = string(account)
-// 		}
-// 		accountIds, err = ctx.ResolveAccountIds(accountNames)
-// 		if err != nil {
-// 			return nil, err
-// 		}
-// 	} else {
-// 		accountIds = []uint32{catalog.System_Account}
-// 	}
-// 	if len(accountIds) == 0 {
-// 		return nil, moerr.NewInternalError(ctx.GetContext(), "need specify account for the cluster tables")
-// 	}
-// 	return accountIds, err
-// }
-
-// func getAccountInfoOfClusterTable(ctx CompilerContext, accounts tree.IdentifierList, tableDef *TableDef, isClusterTable bool) (*plan.ClusterTable, error) {
-// 	var accountIds []uint32
-// 	var columnIndexOfAccountId int32 = -1
-// 	var err error
-// 	if isClusterTable {
-// 		accountIds, err = getAccountIds(ctx, accounts)
-// 		if err != nil {
-// 			return nil, err
-// 		}
-// 		for i, col := range tableDef.GetCols() {
-// 			if util.IsClusterTableAttribute(col.Name) {
-// 				if columnIndexOfAccountId >= 0 {
-// 					return nil, moerr.NewInternalError(ctx.GetContext(), "there are two account_ids in the cluster table")
-// 				} else {
-// 					columnIndexOfAccountId = int32(i)
-// 				}
-// 			}
-// 		}
-
-// 		if columnIndexOfAccountId == -1 {
-// 			return nil, moerr.NewInternalError(ctx.GetContext(), "there is no account_id in the cluster table")
-// 		} else if columnIndexOfAccountId >= int32(len(tableDef.GetCols())) {
-// 			return nil, moerr.NewInternalError(ctx.GetContext(), "the index of the account_id in the cluster table is invalid")
-// 		}
-// 	} else {
-// 		if len(accounts) != 0 {
-// 			return nil, moerr.NewInvalidInput(ctx.GetContext(), "can not specify the accounts for the non cluster table")
-// 		}
-// 	}
-// 	return &plan.ClusterTable{
-// 		IsClusterTable:         isClusterTable,
-// 		AccountIDs:             accountIds,
-// 		ColumnIndexOfAccountId: columnIndexOfAccountId,
-// 	}, nil
-// }
 
 // getDefaultExprForAssignment restores a catalog default under the current
 // statement policy. The column owns the byte limit, including for legacy
@@ -2864,4 +3050,20 @@ func RewriteCountNotNullColToStarcount(node *plan.Node, tableDef *plan.TableDef)
 		agg.Func.ObjName = "starcount"
 		agg.Func.Obj = function.EncodeOverloadID(int32(function.STARCOUNT), 0)
 	}
+}
+
+// equalFoldKey produces the same equivalence classes used by strings.EqualFold
+// so callers can detect duplicates without pairwise comparisons.
+func equalFoldKey(value string) string {
+	var folded strings.Builder
+	for _, r := range value {
+		min := r
+		for next := unicode.SimpleFold(r); next != r; next = unicode.SimpleFold(next) {
+			if next < min {
+				min = next
+			}
+		}
+		folded.WriteRune(min)
+	}
+	return folded.String()
 }

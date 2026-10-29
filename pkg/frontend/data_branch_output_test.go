@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -34,6 +35,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -43,6 +45,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pbtimestamp "github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/stage"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/panjf2000/ants/v2"
@@ -1506,8 +1509,8 @@ func TestDataBranchOutputWriteDeleteRowSQLFull(t *testing.T) {
 	require.Equal(t,
 		"delete from `db1`.`t1` where serial(`f32`) = serial(bit_cast(unhex('0100c07f') as float)) and "+
 			"serial(`f64`) = serial(bit_cast(unhex('010000000000f87f') as double)) and `nullable` is null and "+
-			"serial(`pos_inf`) = serial(cast('+Inf' as float)) and "+
-			"serial(`neg_inf`) = serial(cast('-Inf' as double)) limit 1;\n",
+			"serial(`pos_inf`) = serial(bit_cast(unhex('0000807f') as float)) and "+
+			"serial(`neg_inf`) = serial(bit_cast(unhex('000000000000f0ff') as double)) limit 1;\n",
 		buf.String(),
 	)
 }
@@ -2231,7 +2234,7 @@ func TestDataBranchOutputNewSingleWriteAppenderNilWorker(t *testing.T) {
 }
 
 func TestDataBranchOutputNewSingleWriteAppenderSuccess(t *testing.T) {
-	ctx := context.Background()
+	ctx := fileservice.WithSQLFileAccess(t.Context(), "sys", "moadmin")
 	dir := t.TempDir()
 	filePath := filepath.Join(dir, "diff.sql")
 
@@ -2303,13 +2306,259 @@ func (m *closeFailingMutator) Close() error {
 type closeFailingMutableFS struct {
 	fileservice.MutableFileService
 	mutator fileservice.Mutator
+	closes  int
 }
+
+func (fs *closeFailingMutableFS) Close(context.Context) { fs.closes++ }
 
 func (fs *closeFailingMutableFS) NewMutator(
 	context.Context,
 	string,
 ) (fileservice.Mutator, error) {
 	return fs.mutator, nil
+}
+
+// borrowedDiffFS stands in for the process-owned shared file service. Delete
+// and Close calls are counted, streamed writes are drained and captured, and
+// delete/write failures can be injected so every terminal diff path is
+// observable without touching the real registry service.
+type borrowedDiffFS struct {
+	fileservice.FileService
+	failDelete bool
+	failWrite  bool
+	deletes    int
+	closes     int
+	written    bytes.Buffer
+}
+
+func (fs *borrowedDiffFS) Delete(context.Context, ...string) error {
+	fs.deletes++
+	if fs.failDelete {
+		return moerr.NewInternalErrorNoCtx("injected delete failure")
+	}
+	return nil
+}
+
+func (fs *borrowedDiffFS) Close(context.Context) { fs.closes++ }
+
+func (fs *borrowedDiffFS) Write(_ context.Context, vector fileservice.IOVector) error {
+	if fs.failWrite {
+		return moerr.NewInternalErrorNoCtx("injected streaming write failure")
+	}
+	for _, entry := range vector.Entries {
+		if entry.ReaderForWrite != nil {
+			if _, err := io.Copy(&fs.written, entry.ReaderForWrite); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// borrowedMutableDiffFS advertises a mutator so prepareFSForDiffAsFile takes
+// the mutable append path against the borrowed shared service. The embedded
+// MutableFileService supplies the raw os.File API of the real service, while
+// the overrides keep deletion, close, and append observable.
+type borrowedMutableDiffFS struct {
+	fileservice.MutableFileService
+	deletes int
+	closes  int
+	written bytes.Buffer
+	mutator *recordedDiffMutator
+}
+
+func (fs *borrowedMutableDiffFS) Delete(context.Context, ...string) error {
+	fs.deletes++
+	return nil
+}
+
+func (fs *borrowedMutableDiffFS) Close(context.Context) { fs.closes++ }
+
+func (fs *borrowedMutableDiffFS) Write(_ context.Context, vector fileservice.IOVector) error {
+	for _, entry := range vector.Entries {
+		if entry.ReaderForWrite != nil {
+			if _, err := io.Copy(&fs.written, entry.ReaderForWrite); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func (fs *borrowedMutableDiffFS) NewMutator(context.Context, string) (fileservice.Mutator, error) {
+	fs.mutator = &recordedDiffMutator{fs: fs}
+	return fs.mutator, nil
+}
+
+type recordedDiffMutator struct {
+	fs     *borrowedMutableDiffFS
+	closes int
+}
+
+func (m *recordedDiffMutator) Mutate(context.Context, ...fileservice.IOEntry) error {
+	return nil
+}
+
+func (m *recordedDiffMutator) Append(_ context.Context, entries ...fileservice.IOEntry) error {
+	for _, entry := range entries {
+		m.fs.written.Write(entry.Data)
+	}
+	return nil
+}
+
+func (m *recordedDiffMutator) Close() error {
+	m.closes++
+	return nil
+}
+
+func newSharedDiffDataBranchStmt() *tree.DataBranchDiff {
+	return &tree.DataBranchDiff{
+		OutputOpt: &tree.DiffOutputOpt{DirPath: defines.SharedFileServiceName + ":/diff"},
+	}
+}
+
+func TestDataBranchOutputPrepFailureKeepsBorrowedSharedService(t *testing.T) {
+	ctx := context.Background()
+	ses := newValidateSession(t)
+
+	localFS, err := fileservice.NewLocalETLFS(defines.SharedFileServiceName, t.TempDir())
+	require.NoError(t, err)
+	shared := &borrowedDiffFS{FileService: localFS, failDelete: true}
+	installDataBranchTestFileService(t, ses, shared)
+
+	ctrl := gomock.NewController(t)
+	_, _, _, _, _, err = prepareFSForDiffAsFile(ctx, ses, newSharedDiffDataBranchStmt(), newTestBranchTableStuff(ctrl))
+	require.ErrorContains(t, err, "injected delete failure")
+	require.Equal(t, 2, shared.deletes, "preparation delete and failure cleanup delete both run")
+	require.Zero(t, shared.closes, "the process registry owns the borrowed shared file service")
+}
+
+func TestDataBranchOutputStreamingReleaseKeepsBorrowedSharedService(t *testing.T) {
+	ctx := context.Background()
+	ses := newValidateSession(t)
+
+	localFS, err := fileservice.NewLocalETLFS(defines.SharedFileServiceName, t.TempDir())
+	require.NoError(t, err)
+	shared := &borrowedDiffFS{FileService: localFS}
+	installDataBranchTestFileService(t, ses, shared)
+
+	pool, err := ants.NewPool(1)
+	require.NoError(t, err)
+	defer pool.Release()
+
+	ctrl := gomock.NewController(t)
+	tblStuff := newTestBranchTableStuff(ctrl)
+	tblStuff.worker = pool
+
+	_, _, writeFile, release, cleanup, err := prepareFSForDiffAsFile(ctx, ses, newSharedDiffDataBranchStmt(), tblStuff)
+	require.NoError(t, err)
+	require.NoError(t, writeFile([]byte("BEGIN;\n")))
+	require.NoError(t, writeFile([]byte("COMMIT;\n")))
+	require.NoError(t, release())
+	require.Equal(t, "BEGIN;\nCOMMIT;\n", shared.written.String(), "the writer task finished before release returned")
+	cleanup()
+	require.Equal(t, 2, shared.deletes, "preparation delete and cleanup delete both run")
+	require.Zero(t, shared.closes, "the process registry owns the borrowed shared file service")
+	// The borrowed service stays usable after the diff release.
+	require.NoError(t, shared.Write(ctx, fileservice.IOVector{
+		FilePath: defines.SharedFileServiceName + ":/diff/still-usable.sql",
+		Entries:  []fileservice.IOEntry{{Size: 1, Data: []byte("x")}},
+	}))
+}
+
+func TestDataBranchOutputStreamingWriteFailureKeepsBorrowedSharedService(t *testing.T) {
+	ctx := context.Background()
+	ses := newValidateSession(t)
+
+	localFS, err := fileservice.NewLocalETLFS(defines.SharedFileServiceName, t.TempDir())
+	require.NoError(t, err)
+	shared := &borrowedDiffFS{FileService: localFS, failWrite: true}
+	installDataBranchTestFileService(t, ses, shared)
+
+	pool, err := ants.NewPool(1)
+	require.NoError(t, err)
+	defer pool.Release()
+
+	ctrl := gomock.NewController(t)
+	tblStuff := newTestBranchTableStuff(ctrl)
+	tblStuff.worker = pool
+
+	_, _, writeFile, release, cleanup, err := prepareFSForDiffAsFile(ctx, ses, newSharedDiffDataBranchStmt(), tblStuff)
+	require.NoError(t, err)
+	require.ErrorContains(t, writeFile([]byte("BEGIN;\n")), "injected streaming write failure")
+	require.ErrorContains(t, release(), "injected streaming write failure")
+	cleanup()
+	require.Equal(t, 2, shared.deletes, "preparation delete and failed-output cleanup delete both run")
+	require.Zero(t, shared.closes, "the process registry owns the borrowed shared file service")
+}
+
+func TestDataBranchOutputMutableReleaseKeepsBorrowedSharedService(t *testing.T) {
+	ctx := context.Background()
+	ses := newValidateSession(t)
+
+	localFS, err := fileservice.NewLocalETLFS(defines.SharedFileServiceName, t.TempDir())
+	require.NoError(t, err)
+	shared := &borrowedMutableDiffFS{MutableFileService: localFS}
+	installDataBranchTestFileService(t, ses, shared)
+
+	ctrl := gomock.NewController(t)
+	_, _, writeFile, release, cleanup, err := prepareFSForDiffAsFile(
+		ctx, ses, newSharedDiffDataBranchStmt(), newTestBranchTableStuff(ctrl),
+	)
+	require.NoError(t, err)
+	require.NoError(t, writeFile([]byte("BEGIN;\nCOMMIT;\n")))
+	require.NoError(t, release())
+	require.Equal(t, 1, shared.mutator.closes, "the owned mutator still closes on release")
+	require.Equal(t, "BEGIN;\nCOMMIT;\n", shared.written.String())
+	cleanup()
+	require.Equal(t, 2, shared.deletes, "preparation delete and cleanup delete both run")
+	require.Zero(t, shared.closes, "the process registry owns the borrowed shared file service")
+}
+
+// TestReleaseDiffTargetFSOwnership pins the release policy for both service
+// owners: the owned writers release first, then the operation closes the ETL
+// service it created exactly once, while a borrowed shared service is never
+// closed.
+func TestReleaseDiffTargetFSOwnership(t *testing.T) {
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name    string
+		owned   bool
+		writers error
+	}{{
+		name:  "borrowed shared service stays open",
+		owned: false,
+	}, {
+		name:    "borrowed shared service stays open on writer failure",
+		owned:   false,
+		writers: moerr.NewInternalErrorNoCtx("writer join failure"),
+	}, {
+		name:  "owned ETL service closes once after its writers",
+		owned: true,
+	}, {
+		name:    "owned ETL service closes once despite writer failure",
+		owned:   true,
+		writers: moerr.NewInternalErrorNoCtx("writer join failure"),
+	}} {
+		t.Run(tc.name, func(t *testing.T) {
+			target := &borrowedDiffFS{}
+			release := releaseDiffTargetFS(ctx, target, tc.owned, func() error {
+				require.Zero(t, target.closes, "the target service closes only after the owned writers finished")
+				return tc.writers
+			})
+			err := release()
+			if tc.writers != nil {
+				require.ErrorIs(t, err, tc.writers)
+			} else {
+				require.NoError(t, err)
+			}
+			if tc.owned {
+				require.Equal(t, 1, target.closes, "the operation closes exactly the ETL service it created")
+			} else {
+				require.Zero(t, target.closes, "the process registry owns the borrowed shared file service")
+			}
+		})
+	}
 }
 
 func installDataBranchTestFileService(
@@ -2327,7 +2576,7 @@ func installDataBranchTestFileService(
 }
 
 func TestDataBranchOutputNewSingleWriteAppenderReturnsLateWriteFailure(t *testing.T) {
-	ctx := context.Background()
+	ctx := fileservice.WithSQLFileAccess(t.Context(), "sys", "moadmin")
 	etlFS, _, err := fileservice.GetForETL(ctx, nil, filepath.Join(t.TempDir(), "diff.sql"))
 	require.NoError(t, err)
 
@@ -2415,11 +2664,12 @@ func TestDataBranchOutputMutableAppenderReturnsCloseFailure(t *testing.T) {
 	require.NoError(t, writeFile([]byte("BEGIN;\nCOMMIT;\n")))
 	require.EqualError(t, release(), "internal error: mock mutator close failure")
 	require.Equal(t, 1, mutator.closeCalls)
+	require.Zero(t, targetFS.closes, "the process registry owns the borrowed shared file service")
 	cleanup()
 }
 
 func TestDataBranchOutputNewSingleWriteAppenderWriteFail(t *testing.T) {
-	ctx := context.Background()
+	ctx := fileservice.WithSQLFileAccess(t.Context(), "sys", "moadmin")
 	dir := t.TempDir()
 	filePath := filepath.Join(dir, "diff.sql")
 
@@ -2443,7 +2693,7 @@ func TestDataBranchOutputNewSingleWriteAppenderWriteFail(t *testing.T) {
 }
 
 func TestDataBranchOutputNewSingleWriteAppenderSubmitFail(t *testing.T) {
-	ctx := context.Background()
+	ctx := fileservice.WithSQLFileAccess(t.Context(), "sys", "moadmin")
 	dir := t.TempDir()
 	filePath := filepath.Join(dir, "diff.sql")
 
@@ -2511,16 +2761,176 @@ func TestNewApplyBatchInfoExcludesGeneratedColumns(t *testing.T) {
 	require.Equal(t, []string{"id", "value"}, info.writableNames)
 }
 
+// Exercise the real CSV owner/opener/writer; only inject the late finalization
+// failure after the original closer has made the output visible.
+func TestDataBranchCSVFinalizationCleanup(t *testing.T) {
+	for _, kind := range []string{"local", "stage"} {
+		for _, mode := range []string{"success", "finalization", "canceled", "role changed", "denied"} {
+			t.Run(kind+"/"+mode, func(t *testing.T) {
+				ses := newValidateSession(t)
+				ses.pool = ses.proc.Mp()
+				ses.SetMysqlResultSet(&MysqlResultSet{})
+				dir := t.TempDir()
+				outputDir := dir
+				if kind == "stage" {
+					u, err := url.Parse("file://" + dir)
+					require.NoError(t, err)
+					ses.proc.GetStageCache().Set("csv_cleanup", stage.StageDef{Name: "csv_cleanup", Url: u})
+					outputDir = "stage://csv_cleanup"
+				}
+				ctx, cancel := context.WithCancel(t.Context())
+				defer cancel()
+				if mode == "denied" {
+					ses.proc.Base.SessionInfo.Role = "public"
+					// A stale grant on the request cannot override the current role.
+					ctx = fileservice.WithSQLFileAccess(ctx, "sys", "moadmin")
+				}
+
+				bat := buildPickStreamingBatch(t, ses.proc.Mp(), []types.Type{types.T_int64.ToType(), types.T_varchar.ToType()}, [][]any{{int64(1), "one"}})
+				exec := &pickStreamingExecutor{result: executor.Result{Batches: []*batch.Batch{bat}, Mp: ses.proc.Mp()}}
+				previousRuntime := moruntime.ServiceRuntime(ses.GetService())
+				bh := newPickStreamingBackExecForTest(t, ses, exec)
+				installedRuntime := moruntime.ServiceRuntime(ses.GetService())
+				t.Cleanup(func() {
+					if previousRuntime != nil {
+						moruntime.SetupServiceBasedRuntime(ses.GetService(), previousRuntime)
+					} else {
+						moruntime.CompareAndDeleteServiceBasedRuntime(ses.GetService(), installedRuntime)
+					}
+					if exec.sql == "" {
+						bat.Clean(ses.proc.Mp()) // ownership never passed to the writer
+					}
+				})
+				pool, err := ants.NewPool(1) // coordination must not occupy the conversion pool
+				require.NoError(t, err)
+				defer pool.Release()
+				tbl := newTestBranchTableStuff(gomock.NewController(t))
+				tbl.worker = pool
+				injected := moerr.NewInternalErrorNoCtx("injected CSV finalization failure")
+				originalClose := Close
+				t.Cleanup(func() { Close = originalClose })
+				var completed []string
+				var contents []byte
+				Close = func(ep *ExportConfig) error {
+					if err := originalClose(ep); err != nil {
+						return err
+					}
+					var err error
+					completed, err = filepath.Glob(filepath.Join(dir, "*.csv"))
+					if err != nil {
+						return err
+					}
+					if len(completed) == 1 {
+						contents, err = os.ReadFile(completed[0])
+						if err != nil {
+							return err
+						}
+					}
+					if mode == "canceled" {
+						cancel()
+					}
+					if mode == "role changed" {
+						ses.proc.Base.SessionInfo.Role = "public"
+					}
+					if mode != "success" {
+						return injected
+					}
+					return nil
+				}
+				err = writeCSV(ctx, ses, tbl, bh, &tree.DataBranchDiff{OutputOpt: &tree.DiffOutputOpt{DirPath: outputDir}})
+				if mode == "denied" {
+					require.ErrorContains(t, err, "only the sys account moadmin role")
+					require.Empty(t, completed)
+					entries, err := os.ReadDir(dir)
+					require.NoError(t, err)
+					require.Empty(t, entries)
+					return
+				}
+				require.Len(t, completed, 1, "original writer must finish a real file before injection")
+				require.Contains(t, string(contents), "one")
+				if mode == "success" {
+					require.NoError(t, err)
+					got, err := os.ReadFile(completed[0])
+					require.NoError(t, err)
+					require.Equal(t, contents, got)
+				} else {
+					require.ErrorIs(t, err, injected)
+					_, err := os.Stat(completed[0])
+					require.True(t, os.IsNotExist(err), "failed CSV output must be removed")
+				}
+			})
+		}
+	}
+}
+
+type csvCleanupFileService struct {
+	fileservice.FileService
+	deletes, closes int
+	contextErr      error
+	remaining       time.Duration
+}
+
+func (fs *csvCleanupFileService) Delete(ctx context.Context, paths ...string) error {
+	fs.deletes++
+	fs.contextErr = ctx.Err()
+	if deadline, ok := ctx.Deadline(); ok {
+		fs.remaining = time.Until(deadline)
+	}
+	return fs.FileService.Delete(ctx, paths...)
+}
+
+func (fs *csvCleanupFileService) Close(context.Context) { fs.closes++ }
+
 func TestDataBranchOutputRemoveFileIgnoreError(t *testing.T) {
-	ctx := context.Background()
-	filePath := filepath.Join(t.TempDir(), "diff.sql")
-	require.NoError(t, os.WriteFile(filePath, []byte("x"), 0o644))
+	for _, mode := range []string{"authorized", "canceled", "expired", "public", "missing policy"} {
+		t.Run(mode, func(t *testing.T) {
+			ctx := fileservice.WithSQLFileAccess(t.Context(), "sys", "moadmin")
+			switch mode {
+			case "canceled":
+				canceled, cancel := context.WithCancel(ctx)
+				cancel()
+				ctx = canceled
+			case "expired":
+				expired, cancel := context.WithDeadline(ctx, time.Unix(1, 0))
+				defer cancel()
+				ctx = expired
+			case "public":
+				ctx = fileservice.WithSQLFileAccess(ctx, "sys", "public")
+			case "missing policy":
+				ctx = t.Context()
+			}
+			filePath := filepath.Join(t.TempDir(), "diff.csv")
+			require.NoError(t, os.WriteFile(filePath, []byte("x"), 0o600))
+			removeFileIgnoreError(ctx, "", filePath)
+			_, err := os.Stat(filePath)
+			if mode == "public" || mode == "missing policy" {
+				require.NoError(t, err, "cleanup must retain factory admission")
+			} else {
+				require.True(t, os.IsNotExist(err))
+			}
+		})
+	}
 
-	removeFileIgnoreError(ctx, "", filePath)
-
-	_, err := os.Stat(filePath)
-	require.Error(t, err)
-	require.True(t, os.IsNotExist(err))
+	t.Run("borrowed SHARED retains owner and bounded context", func(t *testing.T) {
+		ses := newValidateSession(t)
+		local, err := fileservice.NewLocalETLFS(defines.SharedFileServiceName, t.TempDir())
+		require.NoError(t, err)
+		defer local.Close(t.Context())
+		fs := &csvCleanupFileService{FileService: local}
+		installDataBranchTestFileService(t, ses, fs)
+		ctx := fileservice.WithSQLFileAccess(t.Context(), "sys", "moadmin")
+		require.NoError(t, local.Write(ctx, fileservice.IOVector{FilePath: "failed.csv", Entries: []fileservice.IOEntry{{Data: []byte("x"), Size: 1}}}))
+		canceled, cancel := context.WithCancel(ctx)
+		cancel()
+		removeFileIgnoreError(canceled, ses.GetService(), defines.SharedFileServiceName+":/failed.csv")
+		require.Equal(t, 1, fs.deletes)
+		require.NoError(t, fs.contextErr)
+		require.Greater(t, fs.remaining, time.Duration(0))
+		require.LessOrEqual(t, fs.remaining, diffOutputCleanupTimeout)
+		require.Zero(t, fs.closes, "registry owns the borrowed file service")
+		_, err = local.StatFile(ctx, "failed.csv")
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound))
+	})
 }
 
 func TestDataBranchOutputAppendBatchRowsAsSQLValues(t *testing.T) {
@@ -2672,6 +3082,10 @@ func TestDataBranchOutputAppendBatchRowsAsSQLValues(t *testing.T) {
 		require.Equal(t, []string{"payload"}, staged)
 		require.Equal(t, []string{"value"}, special)
 
+		emptyEnumTable, emptyEnumDef := newSpecialTable(types.T_enum.ToType(), "")
+		staged, special = dataBranchStagedUpdateColumnNames(emptyEnumTable, emptyEnumDef, emptyEnumTable.def.writableIdxes)
+		require.Equal(t, []string{"payload"}, staged)
+		require.Equal(t, []string{"value"}, special)
 		geometryTable, geometryDef := newSpecialTable(types.T_geometry32.ToType(), "")
 		staged, special = dataBranchStagedUpdateColumnNames(geometryTable, geometryDef, geometryTable.def.writableIdxes)
 		require.Equal(t, []string{"payload"}, staged)
@@ -2951,4 +3365,90 @@ func buildFakePKInsertBatchWithoutFakePKValue(t *testing.T, mp *mpool.MPool, row
 	}
 	bat.SetRowCount(len(rows))
 	return bat
+}
+
+func TestOnlineBranchApplyOrdersPreparationProductionAndCleanup(t *testing.T) {
+	for _, pick := range []bool{false, true} {
+		for _, failure := range []string{"", "init", "producer", "apply", "cancel"} {
+			t.Run(fmt.Sprintf("pick=%v/%s", pick, failure), func(t *testing.T) {
+				ses := newValidateSession(t)
+				ctrl := gomock.NewController(t)
+				tblStuff := newTestBranchTableStuff(ctrl)
+				tblStuff.def.baseColNames = append([]string(nil), tblStuff.def.colNames...)
+				defer tblStuff.retPool.freeAllRetBatches(ses.proc.Mp())
+				ctx, cancel := context.WithCancel(t.Context())
+				defer cancel()
+				injected := errors.New("injected " + failure)
+				var events []string
+				creates, applies := 0, 0
+				produced := false
+				bh := mock_frontend.NewMockBackgroundExec(ctrl)
+				bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, sql string) error {
+					events = append(events, sql)
+					if strings.HasPrefix(sql, "create table") {
+						require.False(t, produced, "stage refresh/drain precedes producer SQL")
+						creates++
+						if failure == "init" {
+							return injected
+						}
+					}
+					if strings.HasPrefix(sql, "insert into") {
+						applies++
+						if failure == "apply" {
+							return injected
+						}
+					}
+					return nil
+				}).AnyTimes()
+				bh.EXPECT().GetExecResultSet().Return(nil).AnyTimes()
+				bh.EXPECT().ClearExecResultSet().AnyTimes()
+				produce := func(emit emitFunc) error {
+					produced = true
+					require.Equal(t, 3, creates)
+					for _, fromUpdate := range []bool{false, true} {
+						bat := tblStuff.retPool.acquireRetBatch(tblStuff, false)
+						require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(1), false, ses.proc.Mp()))
+						for _, vec := range bat.Vecs[1:] {
+							require.NoError(t, vector.AppendBytes(vec, []byte("row"), false, ses.proc.Mp()))
+						}
+						bat.SetRowCount(1)
+						if _, err := emitBatch(emit, batchWithKind{kind: diffInsert, fromUpdate: fromUpdate, side: diffSideTarget, name: "target", batch: bat}, false, tblStuff.retPool); err != nil {
+							return err
+						}
+						if failure == "producer" {
+							return injected
+						}
+						if failure == "cancel" {
+							cancel()
+						}
+					}
+					// Starting an update flushes inserts inline, before the next probe.
+					require.Positive(t, applies)
+					return nil
+				}
+				var err error
+				if pick {
+					err = pickMergeDiffs(ctx, cancel, ses, bh, &tree.DataBranchPick{ConflictOpt: &tree.ConflictOpt{Opt: tree.CONFLICT_ACCEPT}}, tblStuff, produce)
+				} else {
+					err = mergeDiffs(ctx, cancel, ses, bh, tblStuff, produce)
+				}
+				switch failure {
+				case "":
+					require.NoError(t, err)
+				case "cancel":
+					require.ErrorIs(t, err, context.Canceled)
+				default:
+					require.ErrorIs(t, err, injected)
+				}
+				if failure == "init" {
+					require.False(t, produced)
+				} else {
+					require.True(t, strings.HasPrefix(events[len(events)-1], "drop table if exists"), "cleanup runs after production returns")
+				}
+				if failure == "producer" || failure == "cancel" {
+					require.Zero(t, applies, "failed production must not flush buffered rows")
+				}
+			})
+		}
+	}
 }

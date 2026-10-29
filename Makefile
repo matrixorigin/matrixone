@@ -281,6 +281,13 @@ ifneq ($(ARCHSIMD_ARCH),)
   endif
 endif
 
+# Keep unchanged amd64 hot loops at the same cache-line offset when other Go
+# functions change size. Other architectures retain their existing alignment.
+MO_GO_FUNCTION_ALIGNMENT_FLAG :=
+ifeq ($(ARCHSIMD_ARCH),amd64)
+  MO_GO_FUNCTION_ALIGNMENT_FLAG := -funcalign=64
+endif
+
 ifeq ($(MO_CL_CUDA),1)
 	include $(ROOT_DIR)/cgo/gpu-toolchain.mk
 	CUDA_CFLAGS := $(MO_GPU_CFLAGS)
@@ -297,8 +304,8 @@ SIRIUS_BUILD_MODE ?= release
 SIRIUS_MERGED_REF ?=
 SIRIUS_PREPARED := $(ROOT_DIR)/.sirius-sdk
 ifeq ($(MO_SIRIUS),1)
-ifneq ($(UNAME_S)/$(UNAME_M),linux/x86_64)
-$(error MO_SIRIUS=1 requires Linux amd64)
+ifeq ($(filter linux/x86_64 linux/aarch64 linux/arm64,$(UNAME_S)/$(UNAME_M)),)
+$(error MO_SIRIUS=1 requires Linux amd64 or arm64)
 endif
 ifeq ($(strip $(SIRIUS_SDK)),)
 $(error MO_SIRIUS=1 requires a generated SIRIUS_SDK directory)
@@ -328,10 +335,10 @@ endif
 endif
 
 CGO_OPTS :=$(SIRIUS_CGO_ENV) CGO_CFLAGS="-I$(CGO_DIR) -I$(THIRDPARTIES_INSTALL_DIR)/include $(CUDA_CFLAGS) $(SIRIUS_CFLAGS)"
-GOLDFLAGS=-ldflags="$(SIRIUS_EXTLD) -extldflags '$(CUDA_LDFLAGS) -L$(CGO_DIR) -lmo -L$(THIRDPARTIES_INSTALL_DIR)/lib $(SIRIUS_LDFLAGS) -Wl,-rpath,\$${ORIGIN}/lib -fopenmp' $(VERSION_INFO)"
+GOLDFLAGS=-ldflags="$(MO_GO_FUNCTION_ALIGNMENT_FLAG) $(SIRIUS_EXTLD) -extldflags '$(CUDA_LDFLAGS) -L$(CGO_DIR) -lmo -L$(THIRDPARTIES_INSTALL_DIR)/lib $(SIRIUS_LDFLAGS) -Wl,-rpath,\$${ORIGIN}/lib -fopenmp' $(VERSION_INFO)"
 
 ifeq ("$(UNAME_S)","darwin")
-GOLDFLAGS:=-ldflags="-extldflags '-L$(CGO_DIR) -lmo -L$(THIRDPARTIES_INSTALL_DIR)/lib -Wl,-rpath,@executable_path/lib' $(VERSION_INFO)"
+GOLDFLAGS:=-ldflags="$(MO_GO_FUNCTION_ALIGNMENT_FLAG) -extldflags '-L$(CGO_DIR) -lmo -L$(THIRDPARTIES_INSTALL_DIR)/lib -Wl,-rpath,@executable_path/lib' $(VERSION_INFO)"
 endif
 
 # Keep all mo-service build variants on one compiler/feature contract. Targets
@@ -500,7 +507,7 @@ musl-thirdparties: musl-install
 	
 .PHONY: musl
 musl: override CGO_OPTS += CC=$(MUSL_CC)
-musl: override GOLDFLAGS:=-ldflags="--linkmode 'external' --extldflags '-static -L$(THIRDPARTIES_INSTALL_DIR)/lib -lstdc++ -Wl,-rpath,\$${ORIGIN}/lib' $(VERSION_INFO)"
+musl: override GOLDFLAGS:=-ldflags="$(MO_GO_FUNCTION_ALIGNMENT_FLAG) --linkmode 'external' --extldflags '-static -L$(THIRDPARTIES_INSTALL_DIR)/lib -lstdc++ -Wl,-rpath,\$${ORIGIN}/lib' $(VERSION_INFO)"
 musl: override TAGS := -tags musl
 musl: musl-install musl-cgo config musl-thirdparties jieba-dict
 musl:
@@ -598,15 +605,42 @@ UT_SHARD ?= all
 UT_HARD_TIMEOUT ?= 120m
 # Emit one bounded progress heartbeat per interval while UT is running.
 UT_HEARTBEAT_INTERVAL ?= 60
-# Build embedded race binaries with one compiler while the exclusive issues
-# fixture runs, then execute those exact binaries serially. Build or admission
-# failures fall back before any prebuilt binary executes.
-UT_PREBUILD_EMBEDDED ?= 1
+# Optional: build embedded race binaries with one compiler while the issues
+# fixture runs, then execute those exact binaries through the bounded embedded
+# pool. High-footprint packages remain exclusive; build or admission failures
+# fall back before any prebuilt binary executes.
 UT_PREBUILD_MIN_FREE_KB ?= 6291456
 UT_EMBEDDED_HARD_TIMEOUT_SECONDS ?= 0
+# Split issues roots under one shared package deadline.
+# Shorter process lifetimes bound catalog and race-detector retention. The
+# eight-batch pool gives each process two Go execution cores. Linux runners
+# requesting at least eight tasks use four complete clusters; smaller budgets
+# and unmeasured platforms retain two. One/four batches retain serial rollback.
+UT_ISSUES_BATCHES ?= 8
+UT_ISSUES_BATCH_PARALLEL ?= $(if $(filter 8,$(UT_ISSUES_BATCHES)),$(if $(and $(filter linux,$(UNAME_S)),$(filter-out 1 2 3 4 5 6 7,$(UT_PARALLEL))),4,2),1)
+# The audited embedded batches use the same two-core child budget. Enable four
+# processes only for measured Linux eight-task runs; preserve smaller rollbacks.
+UT_EMBEDDED_PACKAGE_PARALLEL ?= $(if $(filter 8:2 8:3 8:4,$(UT_ISSUES_BATCHES):$(UT_ISSUES_BATCH_PARALLEL)),$(if $(and $(filter linux,$(UNAME_S)),$(filter-out 1 2 3 4 5 6 7,$(UT_PARALLEL))),4,2),1)
+# Audited batching mode applies only to the non-prebuild path. Four-worker
+# pkg/embed uses eight process generations; other audited packages use four.
+UT_EMBEDDED_BATCHES ?= 4
+# A compiler overlapping cluster processes increases the memory peak. The new
+# issues default prepares embedded packages on demand instead. Preserve
+# the prebuild policy for rollback modes; overlapping compilation remains an
+# explicit opt-in for the bounded issues pool.
+UT_PREBUILD_EMBEDDED ?= $(if $(filter 8:2 8:3 8:4,$(UT_ISSUES_BATCHES):$(UT_ISSUES_BATCH_PARALLEL)),0,1)
 # Reuse released engine slots for plan while resource-heavy work finishes.
 # The heavy process budget is unchanged; set 0 for a sequential A/B baseline.
 UT_OVERLAP_PLAN ?= 1
+# Two independent plan processes shorten the long planner tail within the
+# existing heavy-wave budget. Limit the default to the measured Linux 8-task
+# runner; other budgets, a one-slot heavy cap, and a single requested shard
+# stay serial. An explicit PLAN_RACE_PARALLEL remains an override.
+PLAN_RACE_PARALLEL ?= $(if $(filter 1,$(HEAVY_RACE_PARALLEL) $(PLAN_RACE_SHARDS)),1,$(if $(and $(filter linux,$(UNAME_S)),$(filter 8,$(UT_PARALLEL))),2,1))
+# The table-dump plan cases marked independent may run three at a time inside
+# each fresh plan race process. Keep 1 or 2 as explicit rollbacks for
+# constrained or diagnostic runs.
+PLAN_TEST_PARALLEL ?= 3
 # Keep light/issues overlap opt-in: the measured treatment was slower than the
 # serial baseline and left insufficient cgroup memory headroom. Re-enable only
 # when a new schedule has same-runner timing and memory evidence.
@@ -615,7 +649,8 @@ UT_OVERLAP_LIGHT_PARALLEL ?= 2
 # Parent cancellation waits long enough for helper-owned child process groups
 # to receive TERM and bounded KILL cleanup in sequence.
 UT_HELPER_TERM_GRACE_TICKS ?= 60
-export UT_SHARD UT_HARD_TIMEOUT UT_HEARTBEAT_INTERVAL UT_PREBUILD_EMBEDDED UT_PREBUILD_MIN_FREE_KB UT_EMBEDDED_HARD_TIMEOUT_SECONDS UT_OVERLAP_PLAN UT_OVERLAP_LIGHT UT_OVERLAP_LIGHT_PARALLEL UT_LIGHT_PARALLEL UT_LINK_PARALLEL UT_HELPER_TERM_GRACE_TICKS
+export UT_EMBEDDED_BATCHES
+export UT_SHARD UT_HARD_TIMEOUT UT_HEARTBEAT_INTERVAL UT_PREBUILD_EMBEDDED UT_PREBUILD_MIN_FREE_KB UT_EMBEDDED_HARD_TIMEOUT_SECONDS UT_ISSUES_BATCHES UT_ISSUES_BATCH_PARALLEL UT_EMBEDDED_PACKAGE_PARALLEL UT_OVERLAP_PLAN PLAN_RACE_PARALLEL PLAN_TEST_PARALLEL UT_OVERLAP_LIGHT UT_OVERLAP_LIGHT_PARALLEL UT_LIGHT_PARALLEL UT_LINK_PARALLEL UT_HELPER_TERM_GRACE_TICKS
 # Native compilation runs before Go tests, so it can use an explicit UT CPU
 # budget without increasing peak race-test memory. With the default UT value,
 # omit -j and preserve recursive make's jobserver contract: a plain make stays
@@ -1512,30 +1547,65 @@ fmt:
 .PHONY: install-static-check-tools
 install-static-check-tools:
 	@GOBIN="$(GOPATH)/bin" go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.14.0
-	@go install github.com/matrixorigin/linter/cmd/molint@v0.0.0-20260602145143-222a0b8adf07
+	@go install github.com/matrixorigin/linter/cmd/molint@v0.0.0-20261028130237-35bd4d9a4055
 	@go install github.com/apache/skywalking-eyes/cmd/license-eye@v0.4.0
+
+FRONTEND_MOCKGEN = $(CGO_OPTS) CGO_LDFLAGS="-L$(THIRDPARTIES_INSTALL_DIR)/lib -L$(CGO_DIR) -Wl,-rpath,$(CGO_DIR) -Wl,-rpath,$(THIRDPARTIES_INSTALL_DIR)/lib" GOWORK=off $(GOPATH)/bin/mockgen -build_flags="$(GO_MODULE_MODE)"
+
+.PHONY: generate-frontend-mocks
+# Reflection mode selects the interfaces actually used by these shared mocks.
+generate-frontend-mocks: cgo
+	@if [ "$$($(GOPATH)/bin/mockgen -version 2>/dev/null)" != v1.6.0 ]; then \
+		GOBIN="$(GOPATH)/bin" go install github.com/golang/mock/mockgen@v1.6.0; \
+	fi
+	$(FRONTEND_MOCKGEN) -destination pkg/frontend/test/engine_mock.go -package mock_frontend github.com/matrixorigin/matrixone/pkg/vm/engine ChangesHandle,Relation,Reader,Database,Engine
+	$(FRONTEND_MOCKGEN) -destination pkg/frontend/test/txn_mock.go -package mock_frontend github.com/matrixorigin/matrixone/pkg/txn/client TxnClient,TxnOperator,Workspace
+	$(FRONTEND_MOCKGEN) -destination pkg/frontend/test/types_mock.go -package mock_frontend github.com/matrixorigin/matrixone/pkg/frontend ComputationRunner,ComputationWrapper,ExecResult,BackgroundExec
+	$(FRONTEND_MOCKGEN) -destination pkg/frontend/test/incrservice_mock.go -package mock_frontend github.com/matrixorigin/matrixone/pkg/incrservice AutoIncrementService
+	$(FRONTEND_MOCKGEN) -destination pkg/frontend/test/mock_lock/types.go -package mock_lock github.com/matrixorigin/matrixone/pkg/lockservice LockService
+	$(FRONTEND_MOCKGEN) -destination pkg/frontend/test/mock_moserver/server_mock.go -package mock_moserver github.com/matrixorigin/matrixone/pkg/frontend Server
+	$(FRONTEND_MOCKGEN) -destination pkg/frontend/test/mock_shard/types.go -package mock_shard github.com/matrixorigin/matrixone/pkg/shardservice ShardService
+	$(FRONTEND_MOCKGEN) -destination pkg/frontend/test/mock_task/types.go -package mock_task github.com/matrixorigin/matrixone/pkg/taskservice TaskRunner
 
 .PHONY: static-check static-check-analysis static-check-golangci
 GOLANGCI_LINT_CONCURRENCY ?=
 GOLANGCI_LINT_CONCURRENCY_FLAG := $(if $(strip $(GOLANGCI_LINT_CONCURRENCY)),--concurrency $(strip $(GOLANGCI_LINT_CONCURRENCY)))
-STATIC_CHECK_MOLINT = $(CGO_OPTS) go vet $(GO_MODULE_MODE) -vettool=`which molint` ./...
-STATIC_CHECK_GOLANGCI = $(CGO_OPTS) golangci-lint run -v $(GOLANGCI_LINT_CONCURRENCY_FLAG) -c .golangci.yml ./...
+STATIC_CHECK_PACKAGES ?= ./...
+STATIC_CHECK_MOLINT = $(CGO_OPTS) molint check $(GO_MODULE_MODE) $(STATIC_CHECK_PACKAGES)
+STATIC_CHECK_GOLANGCI = $(CGO_OPTS) golangci-lint run -v $(GOLANGCI_LINT_CONCURRENCY_FLAG) -c .golangci.yml $(STATIC_CHECK_PACKAGES)
+static-check: override STATIC_CHECK_PACKAGES = ./...
 static-check: config err-check
 	$(STATIC_CHECK_MOLINT)
 	$(CGO_OPTS) license-eye -c .licenserc.yml header check
 	$(CGO_OPTS) license-eye -c .licenserc.yml dep check
 	$(STATIC_CHECK_GOLANGCI)
 
-# Keep the complete local/release entry point above. PR CI owns license scope
-# selection, but still analyzes the full package graph through content-addressed
-# Go and golangci-lint caches.
-static-check-analysis: config err-check
+# PR CI selects complete affected packages using the verified Go test/import
+# graph. Local use and CI hosts without Node retain the full checks.
+# Both analyzers consume the same package list and their failures stay fatal.
+static-check-analysis: err-check
+	@set -e; packages='./...'; \
+	if [ "$${GITHUB_ACTIONS:-}" = true ] && command -v node >/dev/null 2>&1; then \
+		packages=$$($(CGO_OPTS) node .github/ci/static-analysis.cjs); \
+	else \
+		if [ "$${GITHUB_ACTIONS:-}" = true ]; then \
+			echo "SCA selection: full graph (Node unavailable on PATH in CI)" >&2; \
+		else \
+			echo "SCA selection: full graph (local invocation)" >&2; \
+		fi; \
+		$(MAKE) --no-print-directory config; \
+	fi; \
+	$(MAKE) --no-print-directory static-check-selected STATIC_CHECK_PACKAGES="$$packages"
+
+.PHONY: static-check-selected
+static-check-selected:
 	$(STATIC_CHECK_MOLINT)
 	$(STATIC_CHECK_GOLANGCI)
 
 # Trusted cache producers only need to populate golangci-lint's analysis
 # cache. This is not a reduced validation gate; PR and local SCA continue to
 # use static-check-analysis or static-check above.
+static-check-golangci: override STATIC_CHECK_PACKAGES = ./...
 static-check-golangci:
 	$(STATIC_CHECK_GOLANGCI)
 

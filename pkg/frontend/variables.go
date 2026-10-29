@@ -1193,8 +1193,18 @@ func canonicalSystemVariableName(name string) string {
 		return transactionIsolationSystemVariable
 	case transactionReadOnlySystemVariableAlias:
 		return transactionReadOnlySystemVariable
+	case "innodb_lock_wait_timeout":
+		return "lock_wait_timeout"
 	}
 	return name
+}
+
+func init() {
+	// The compatibility spelling shares the native scope, validator and default.
+	// SystemVariables resolves both names to the same lock_wait_timeout state.
+	alias := gSysVarsDefs["lock_wait_timeout"]
+	alias.Name = "innodb_lock_wait_timeout"
+	gSysVarsDefs[alias.Name] = alias
 }
 
 func isTransactionIsolationSystemVariable(name string) bool {
@@ -1680,6 +1690,16 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Dynamic:           true,
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableBoolType("mo_rollback_txn_on_error"),
+		Default:           int8(0),
+	},
+	// CN primary-key validation for ordinary LOAD only. INSERT keeps its
+	// existing checks; TN validation is controlled independently below.
+	"mo_pk_check_by_cn": {
+		Name:              "mo_pk_check_by_cn",
+		Scope:             ScopeSession,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableBoolType("mo_pk_check_by_cn"),
 		Default:           int8(0),
 	},
 	//whether TN does primary key uniqueness check against transaction's workspace or not.
@@ -2312,8 +2332,12 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Default:           "",
 	},
 	"information_schema_stats_expiry": {
-		Name:              "information_schema_stats_expiry",
-		Scope:             ScopeGlobal,
+		Name: "information_schema_stats_expiry",
+		// MySQL 8.0 declares this variable in both global and session
+		// scopes, and tools like mysqldump issue
+		// `SET SESSION information_schema_stats_expiry=0`.
+		// Rejecting the session-scope assignment breaks mysqldump.
+		Scope:             ScopeBoth,
 		Dynamic:           true,
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableIntType("information_schema_stats_expiry", 0, 86400, false),
@@ -3817,6 +3841,22 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Type:              InitSystemVariableStringType("version_compile_zlib"),
 		Default:           "",
 	},
+	"window_partition_algorithm": {
+		Name:              "window_partition_algorithm",
+		Scope:             ScopeSession,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemSystemEnumType("window_partition_algorithm", "COST", "SORT", "HASH"),
+		Default:           "SORT",
+	},
+	"rollup_algorithm": {
+		Name:              "rollup_algorithm",
+		Scope:             ScopeSession,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemSystemEnumType("rollup_algorithm", "COST", "SORT", "HASH"),
+		Default:           "COST",
+	},
 	"windowing_use_high_precision": {
 		Name:              "windowing_use_high_precision",
 		Scope:             ScopeBoth,
@@ -3862,6 +3902,14 @@ var gSysVarsDefs = map[string]SystemVariable{
 	// TODO(retire-txn-trace, #29249): remove this declaration and its inert-setting
 	// tests once the rollback window excludes collector-bearing versions and
 	// client/session initialization no longer sends this setting.
+	"mo_sirius_campaign_evidence": {
+		Name:              "mo_sirius_campaign_evidence",
+		Scope:             ScopeSession,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableBoolType("mo_sirius_campaign_evidence"),
+		Default:           int64(0),
+	},
 	"disable_txn_trace": {
 		Name:              "disable_txn_trace",
 		Scope:             ScopeSession,
@@ -4071,6 +4119,30 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Type:              InitSystemVariableIntType("probe_limit", 1, 80000, false),
 		Default:           int64(5),
 	},
+	"vector_itopk": {
+		Name:              "vector_itopk",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableIntType("vector_itopk", 0, math.MaxInt32, false),
+		Default:           int64(0),
+	},
+	"vector_max_itopk": {
+		Name:              "vector_max_itopk",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableIntType("vector_max_itopk", 0, math.MaxInt32, false),
+		Default:           int64(0),
+	},
+	"vector_max_nprobe": {
+		Name:              "vector_max_nprobe",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableIntType("vector_max_nprobe", 0, math.MaxInt32, false),
+		Default:           int64(0),
+	},
 	"kmeans_train_percent": {
 		Name:              "kmeans_train_percent",
 		Scope:             ScopeBoth,
@@ -4151,13 +4223,45 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Type:              InitSystemVariableIntType("hnsw_threads_search", 0, 1024, false),
 		Default:           int64(0),
 	},
+	"hnsw_prefilter_exact_threshold": {
+		Name:              "hnsw_prefilter_exact_threshold",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableIntType("hnsw_prefilter_exact_threshold", 0, 1000000000, false),
+		Default:           int64(5000),
+	},
+	"fulltext2_threads_search": {
+		Name:              "fulltext2_threads_search",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableIntType("fulltext2_threads_search", 0, 1024, false),
+		Default:           int64(0),
+	},
+	"fulltext2_threads_build": {
+		Name:              "fulltext2_threads_build",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableIntType("fulltext2_threads_build", 0, 1024, false),
+		Default:           int64(0),
+	},
+	"fulltext2_search_df_cutoff": {
+		Name:              "fulltext2_search_df_cutoff",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableDoubleType("fulltext2_search_df_cutoff", 0, 1),
+		Default:           float64(0),
+	},
 	"hnsw_max_index_capacity": {
 		Name:              "hnsw_max_index_capacity",
 		Scope:             ScopeBoth,
 		Dynamic:           true,
 		SetVarHintApplies: false,
-		Type:              InitSystemVariableIntType("hnsw_max_index_capacity", 1, 5000000000, false),
-		Default:           int64(1000000),
+		Type:              InitSystemVariableIntType("hnsw_max_index_capacity", 0, 5000000000, false),
+		Default:           int64(0),
 	},
 	"experimental_cagra_index": {
 		Name:              "experimental_cagra_index",
@@ -4459,14 +4563,6 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Type:              InitSystemVariableIntType("max_dop", 0, math.MaxInt32, false),
 		Default:           int64(0),
 	},
-	"sidecar_url": {
-		Name:              "sidecar_url",
-		Scope:             ScopeBoth,
-		Dynamic:           true,
-		SetVarHintApplies: false,
-		Type:              InitSystemVariableStringType("sidecar_url"),
-		Default:           "",
-	},
 }
 
 func updateTimeZone(ctx context.Context, sess *Session, sv *SystemVariables, name string, val interface{}) error {
@@ -4577,12 +4673,24 @@ type UserDefinedVar struct {
 	// compatibility, but MySQL fixes their effective type at statement start.
 	// Keeping the assignment type here prevents a numeric sibling operand from
 	// silently narrowing a decimal or floating-point variable.
-	Type                planpb.Type
+	Type planpb.Type
+	// RegexpStringResult retains only the assignment result-category history
+	// needed by unsized binary CAST compatibility. It never supplies the
+	// ordinary SQL or prepared-parameter conversion type of a NULL value.
+	RegexpStringResult  bool
 	PrepareParamKind    vector.PrepareParamKind
 	RuntimeStringDomain types.RuntimeStringDomain
 	// Replayable is true only when the proxy can replay the assignment as a
 	// captured raw COM_QUERY SET statement during legacy migration.
 	Replayable bool
+}
+
+// userVariableRegexpStringResult models MySQL's user-variable result category,
+// not its physical SQL type. JSON and temporal values are string results too;
+// numeric, Boolean, BIT and YEAR values are not.
+func userVariableRegexpStringResult(typ planpb.Type) bool {
+	oid := types.T(typ.Id)
+	return oid != types.T_any && oid != types.T_bool && oid != types.T_year && !oid.ToType().IsNumeric()
 }
 
 // inferUserDefinedVarType supplies a conservative type for callers which set

@@ -344,7 +344,7 @@ func (ctr *container) appendSortedChunk(
 	for i := range sels {
 		sels[i] = int64(i)
 	}
-	mosort.SortByVectors(sels, orderCols, desc, nullsLast)
+	mosort.SortByVectorsWithTypes(sels, orderCols, desc, nullsLast, ctr.orderTypes)
 	if err = chunk.Shuffle(sels, proc.Mp()); err != nil {
 		freeOrderColumns(proc.Mp(), chunk, orderCols)
 		chunk.Clean(proc.Mp())

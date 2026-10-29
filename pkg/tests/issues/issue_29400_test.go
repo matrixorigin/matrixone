@@ -18,22 +18,28 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/go-sql-driver/mysql"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
+	lockpb "github.com/matrixorigin/matrixone/pkg/pb/lock"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/tests/testutils"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/stretchr/testify/require"
 )
 
 func TestIssue29400CopyAlterRetainedGatePromotionFastFails(t *testing.T) {
 	runAuthenticatedClusterTest(t, func(cluster embed.Cluster) {
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-		defer cancel()
 		cn0, err := cluster.GetCNService(0)
 		require.NoError(t, err)
 		cn1, err := cluster.GetCNService(1)
@@ -44,6 +50,295 @@ func TestIssue29400CopyAlterRetainedGatePromotionFastFails(t *testing.T) {
 		db1, err := sql.Open("mysql", issue27487DSN(cn1.GetServiceConfig().CN.Frontend.Port))
 		require.NoError(t, err)
 		defer db1.Close()
+		t.Run("replacement_revalidation", func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
+			defer cancel()
+			const database = "issue29400_revalidation"
+			execSQLRequire(t, ctx, db0, "create database "+database)
+			defer func() {
+				cleanupCtx, stop := context.WithTimeout(context.Background(), 20*time.Second)
+				defer stop()
+				_, _ = db0.ExecContext(cleanupCtx, "drop database if exists "+database)
+			}()
+			idOf := func(table string) uint64 {
+				var id uint64
+				require.NoError(t, db0.QueryRowContext(ctx, "select rel_id from mo_catalog.mo_tables where reldatabase=? and relname=?", database, table).Scan(&id))
+				return id
+			}
+			var registryID uint64
+			require.NoError(t, db0.QueryRowContext(ctx, "select rel_id from mo_catalog.mo_tables where reldatabase='mo_catalog' and relname='mo_feature_registry'").Scan(&registryID))
+			for _, indexed := range []bool{false, true} {
+				t.Run(fmt.Sprintf("retired_definition_fence/indexed_%t", indexed), func(t *testing.T) {
+					table := fmt.Sprintf("fence_%t", indexed)
+					ddl := "create table " + database + "." + table + "(id int primary key,v int"
+					if indexed {
+						ddl += ", index idx(v)"
+					}
+					execSQLRequire(t, ctx, db0, ddl+")")
+					oldID := idOf(table)
+					before := timestamp.Timestamp{PhysicalTime: time.Now().UnixNano()}
+					execSQLRequire(t, ctx, db0, "truncate table "+database+"."+table)
+					require.NotEqual(t, oldID, idOf(table))
+					ls := lockservice.GetLockServiceByServiceID(cn1.ServiceID())
+					txnID := []byte(fmt.Sprintf("issue29400-fence-%t", indexed))
+					result, err := ls.Lock(ctx, oldID, [][]byte{[]byte("review-row")}, txnID, lockpb.LockOptions{
+						Mode: lockpb.LockMode_Exclusive, Granularity: lockpb.Granularity_Row,
+						Policy: lockpb.WaitPolicy_FastFail, SnapShotTs: before,
+					})
+					defer func() { require.NoError(t, ls.Unlock(ctx, txnID, timestamp.Timestamp{})) }()
+					require.NoError(t, err)
+					require.NotNil(t, result.TableDefChangedAt, "a physical replacement must publish the definition-change fence for stale lock callers")
+				})
+			}
+			for _, dropped := range []bool{false, true} {
+				t.Run(fmt.Sprintf("fk_parent_changed_while_waiting/dropped_%t", dropped), func(t *testing.T) {
+					parent, child := fmt.Sprintf("parent_%t", dropped), fmt.Sprintf("child_%t", dropped)
+					execSQLRequire(t, ctx, db0, "create table "+database+"."+parent+"(id int primary key, v int)")
+					oldID := idOf(parent)
+					// CN1 must resolve the parent created on CN0 before joining the gate.
+					execSQLRequire(t, ctx, db1, "select mo_ctl('cn', 'SYNCCOMMIT', '')")
+					holder, err := db0.BeginTx(ctx, nil)
+					require.NoError(t, err)
+					defer holder.Rollback()
+					query := "alter table " + database + "." + parent + " modify column v bigint"
+					if dropped {
+						query = "drop table " + database + "." + parent
+					}
+					_, err = holder.ExecContext(ctx, query)
+					require.NoError(t, err)
+					queued := make(chan struct{}, 1)
+					restore := lockservice.SetWaiterEnqueuedHookForTest(func(id uint64, _ []byte, _ [][]byte) {
+						if id == registryID {
+							select {
+							case queued <- struct{}{}:
+							default:
+							}
+						}
+					})
+					defer restore()
+					// Start the operation budget after preparing its blocker and session.
+					operationCtx, stop := context.WithTimeout(ctx, 20*time.Second)
+					defer stop()
+					done := make(chan error, 1)
+					finished := false
+					defer func() {
+						stop()
+						_ = holder.Rollback()
+						if !finished {
+							select {
+							case <-done:
+							case <-ctx.Done():
+								t.Error("CREATE did not terminate")
+							}
+						}
+					}()
+					go func() {
+						_, err := db1.ExecContext(operationCtx, "create table "+database+"."+child+"(id int primary key,pid int,foreign key(pid) references "+database+"."+parent+"(id))")
+						done <- err
+					}()
+					select {
+					case <-queued:
+					case err := <-done:
+						finished = true
+						t.Fatalf("CREATE must wait on G: %v", err)
+					case <-operationCtx.Done():
+						t.Fatal("CREATE did not enqueue")
+					}
+					require.NoError(t, holder.Commit())
+					select {
+					case err = <-done:
+					case <-operationCtx.Done():
+						t.Fatal("operation did not terminate after releasing its blocker")
+					}
+					finished = true
+					if dropped {
+						require.Error(t, err)
+						var n int
+						require.NoError(t, db0.QueryRowContext(ctx, "select count(*) from mo_catalog.mo_tables where reldatabase=? and relname=?", database, child).Scan(&n))
+						require.Zero(t, n)
+						require.NoError(t, db0.QueryRowContext(ctx, "select count(*) from mo_catalog.mo_foreign_keys where db_name=? and table_name=?", database, child).Scan(&n))
+						require.Zero(t, n)
+					} else {
+						require.NoError(t, err)
+						// The child CREATE committed on CN1; later CN0 statements consume it.
+						execSQLRequire(t, ctx, db0, "select mo_ctl('cn', 'SYNCCOMMIT', '')")
+						require.NotEqual(t, oldID, idOf(parent))
+						execSQLRequire(t, ctx, db0, "insert into "+database+"."+parent+" values(1,7)")
+						execSQLRequire(t, ctx, db0, "insert into "+database+"."+child+" values(1,1)")
+						_, err = db0.ExecContext(ctx, "insert into "+database+"."+child+" values(2,999)")
+						require.Error(t, err)
+					}
+				})
+			}
+			for _, protection := range []string{"snapshot", "fk"} {
+				t.Run("late_"+protection, func(t *testing.T) {
+					table := "late_" + protection
+					execSQLRequire(t, ctx, db0, "create table "+database+"."+table+"(id int primary key,v int)")
+					execSQLRequire(t, ctx, db0, "insert into "+database+"."+table+" values(1,7)")
+					oldID := idOf(table)
+					// Establish CN0 -> CN1 visibility before the negative preflight.
+					execSQLRequire(t, ctx, db1, "select mo_ctl('cn', 'SYNCCOMMIT', '')")
+					rt := moruntime.ServiceRuntime(cn1.GetServiceConfig().CN.UUID)
+					original, ok := rt.GetGlobalVariables(moruntime.InternalSQLExecutor)
+					require.True(t, ok)
+					gate := &issue29400NegativeProbeGate{SQLExecutor: original.(executor.SQLExecutor), match: fmt.Sprintf("'__mo_branch_%d'", oldID), entered: make(chan struct{}), release: make(chan struct{})}
+					operationCtx, stop := context.WithTimeout(ctx, 20*time.Second)
+					defer stop()
+					done := make(chan error, 1)
+					finished, released := false, false
+					rt.SetGlobalVariables(moruntime.InternalSQLExecutor, gate)
+					defer func() {
+						stop()
+						if !released {
+							close(gate.release)
+						}
+						if !finished {
+							select {
+							case <-done:
+							case <-ctx.Done():
+								t.Error("TRUNCATE did not terminate")
+							}
+						}
+						rt.SetGlobalVariables(moruntime.InternalSQLExecutor, original)
+					}()
+					go func() { _, err := db1.ExecContext(operationCtx, "truncate table "+database+"."+table); done <- err }()
+					select {
+					case <-gate.entered:
+					case err := <-done:
+						finished = true
+						t.Fatalf("negative preflight was not intercepted: %v", err)
+					case <-operationCtx.Done():
+						t.Fatal("negative preflight not reached")
+					}
+					if protection == "snapshot" {
+						execSQLRequire(t, ctx, db0, "create snapshot issue29400_history for table "+database+" "+table)
+						defer func() { _, _ = db0.ExecContext(ctx, "drop snapshot issue29400_history") }()
+					} else {
+						execSQLRequire(t, ctx, db0, "create table "+database+".late_fk_child(id int primary key,pid int,foreign key(pid) references "+database+"."+table+"(id))")
+					}
+					close(gate.release)
+					released = true
+					select {
+					case err = <-done:
+					case <-operationCtx.Done():
+						t.Fatal("operation did not terminate after releasing its blocker")
+					}
+					finished = true
+					var n int
+					if protection == "snapshot" {
+						require.NoError(t, err)
+						// TRUNCATE committed on CN1. CN0 has no cross-session freshness
+						// guarantee until it consumes that commit through the existing fence.
+						execSQLRequire(t, ctx, db0, "select mo_ctl('cn', 'SYNCCOMMIT', '')")
+						require.NotEqual(t, oldID, idOf(table))
+						require.NoError(t, db0.QueryRowContext(ctx, "select count(*) from "+database+"."+table).Scan(&n))
+						require.Zero(t, n)
+						require.NoError(t, db0.QueryRowContext(ctx, "select count(*) from "+database+"."+table+"{snapshot='issue29400_history'} where id=1 and v=7").Scan(&n))
+						require.Equal(t, 1, n)
+						require.NoError(t, db0.QueryRowContext(ctx, "select count(*) from mo_catalog.mo_branch_metadata where table_id=? and p_table_id=? and level='alter' and not table_deleted", idOf(table), oldID).Scan(&n))
+						require.Equal(t, 1, n, "late protection must publish a successor edge from the original root")
+						require.NoError(t, db0.QueryRowContext(ctx, "select count(*) from mo_catalog.mo_snapshots where sname=? and kind='branch'", fmt.Sprintf("__mo_branch_%d", idOf(table))).Scan(&n))
+						require.Equal(t, 1, n, "successor edge must have its protection snapshot")
+					} else {
+						require.Error(t, err, "fresh planner must reject TRUNCATE of referenced parent")
+						require.Equal(t, oldID, idOf(table))
+						require.NoError(t, db0.QueryRowContext(ctx, "select v from "+database+"."+table+" where id=1").Scan(&n))
+						require.Equal(t, 7, n)
+						execSQLRequire(t, ctx, db0, "insert into "+database+".late_fk_child values(1,1)")
+					}
+				})
+			}
+		})
+		t.Run("tenant_logical_snapshot_uses_broad_gate", func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
+			defer cancel()
+			const account = "issue29400_history_tenant"
+			execSQLRequire(t, ctx, db0, "create account "+account+" admin_name 'admin' identified by '111'")
+			defer func() {
+				cleanupCtx, done := context.WithTimeout(context.Background(), 20*time.Second)
+				defer done()
+				_, _ = db0.ExecContext(cleanupCtx, "drop account if exists "+account)
+			}()
+			tenant, err := sql.Open("mysql", fmt.Sprintf("%s#admin#accountadmin:111@tcp(127.0.0.1:%d)/", account, cn0.GetServiceConfig().CN.Frontend.Port))
+			require.NoError(t, err)
+			defer tenant.Close()
+			for _, query := range []string{
+				"create database scoped",
+				"create table scoped.t(id int primary key,v int)",
+				"truncate table scoped.t",
+				"insert into scoped.t values(2,20)",
+				"create snapshot issue29400_history for table scoped t",
+				"alter table scoped.t rename to renamed",
+			} {
+				execSQLRequire(t, ctx, tenant, query)
+			}
+			const guard = "issue29400_history_guard"
+			execSQLRequire(t, ctx, db0, "create database "+guard)
+			defer func() { _, _ = db0.ExecContext(ctx, "drop database if exists "+guard) }()
+			execSQLRequire(t, ctx, db0, "create table "+guard+".t(id int)")
+			var registryID uint64
+			require.NoError(t, db0.QueryRowContext(ctx,
+				"select rel_id from mo_catalog.mo_tables where reldatabase='mo_catalog' and relname='mo_feature_registry'").Scan(&registryID))
+			holder, err := db0.BeginTx(ctx, nil)
+			require.NoError(t, err)
+			defer holder.Rollback()
+			_, err = holder.ExecContext(ctx, "drop table "+guard+".t")
+			require.NoError(t, err)
+			queued := make(chan struct{}, 1)
+			restore := lockservice.SetWaiterEnqueuedHookForTest(func(tableID uint64, _ []byte, _ [][]byte) {
+				if tableID == registryID {
+					select {
+					case queued <- struct{}{}:
+					default:
+					}
+				}
+			})
+			defer restore()
+			// Start the operation budget after preparing its blocker and session.
+			truncateCtx, stop := context.WithTimeout(ctx, 15*time.Second)
+			defer stop()
+			done := make(chan error, 1)
+			finished := false
+			defer func() {
+				stop()
+				_ = holder.Rollback()
+				if !finished {
+					select {
+					case <-done:
+					case <-ctx.Done():
+						t.Error("tenant TRUNCATE did not terminate during cleanup")
+					}
+				}
+			}()
+			go func() {
+				_, err := tenant.ExecContext(truncateCtx, "truncate table scoped.renamed")
+				done <- err
+			}()
+			select {
+			case <-queued:
+			case err := <-done:
+				finished = true
+				t.Fatalf("tenant history bypassed broad G admission: %v", err)
+			case <-truncateCtx.Done():
+				t.Fatal("tenant TRUNCATE did not enter broad G wait")
+			}
+			require.NoError(t, holder.Commit())
+			err = <-done
+			finished = true
+			require.NoError(t, err)
+
+			var count int
+			require.NoError(t, tenant.QueryRowContext(ctx, "select count(*) from scoped.renamed").Scan(&count))
+			require.Zero(t, count)
+			require.NoError(t, tenant.QueryRowContext(ctx, "select count(*) from scoped.t{snapshot='issue29400_history'} where id=2 and v=20").Scan(&count))
+			require.Equal(t, 1, count)
+
+			execSQLRequire(t, ctx, tenant, "drop snapshot issue29400_history")
+		})
+		// The promotion setup and each independent scenario own their deadlines.
+		// Time spent in earlier subtests must not consume a later waiter's budget.
+		ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
+		defer cancel()
 		const target, witness, solo = "issue_29400_promotion", "issue_29400_promotion_witness", "issue_29400_promotion_solo"
 		defer func() {
 			cleanupCtx, done := context.WithTimeout(context.Background(), 20*time.Second)
@@ -143,22 +438,278 @@ func TestIssue29400CopyAlterRetainedGatePromotionFastFails(t *testing.T) {
 		require.NoError(t, db0.QueryRowContext(ctx, "select count(*) from "+solo+".v").Scan(&rows))
 		require.Zero(t, rows)
 
-		// Public TRUNCATE starts a fresh transaction, but still must fail
-		// promptly if another transaction holds the shared lifecycle gate.
-		execSQLRequire(t, ctx, db0, "create table "+solo+".w (i int)")
-		holder, err := db0.BeginTx(ctx, nil)
-		require.NoError(t, err)
-		defer holder.Rollback()
-		_, err = holder.ExecContext(ctx, "drop table "+solo+".w")
-		require.NoError(t, err)
-		truncateCtx, truncateCancel := context.WithTimeout(ctx, 10*time.Second)
-		defer truncateCancel()
-		_, err = db1.ExecContext(truncateCtx, "truncate table "+solo+".v")
-		require.ErrorAs(t, err, &mysqlErr)
-		require.Equal(t, moerr.ErrLockConflict, mysqlErr.Number)
-		require.NoError(t, holder.Commit())
-		_, err = db1.ExecContext(ctx, "truncate table "+solo+".v")
-		require.NoError(t, err, "TRUNCATE should succeed after the competing gate owner commits")
+		// Each public TRUNCATE commits its preceding transaction before G.
+		// Observe the actual G waiter rather than using sleep as a phase trigger.
+		var registryID uint64
+		require.NoError(t, db0.QueryRowContext(ctx,
+			"select rel_id from mo_catalog.mo_tables where reldatabase='mo_catalog' and relname='mo_feature_registry'").Scan(&registryID))
+		for index, terminal := range []string{"commit", "rollback", "cancel", "timeout"} {
+			t.Run("fresh_truncate/"+terminal, func(t *testing.T) {
+				ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
+				defer cancel()
+				execSQLRequire(t, ctx, db0, "drop table if exists "+solo+".w")
+				execSQLRequire(t, ctx, db0, "create table "+solo+".w (i int)")
+				execSQLRequire(t, ctx, db0, "truncate table "+solo+".v")
+				execSQLRequire(t, ctx, db0, "insert into "+solo+".v values (1)")
+				var oldID uint64
+				require.NoError(t, db0.QueryRowContext(ctx,
+					"select rel_id from mo_catalog.mo_tables where reldatabase=? and relname='v'", solo).Scan(&oldID))
+				conn, err := db1.Conn(ctx)
+				require.NoError(t, err)
+				defer conn.Close()
+				if terminal == "timeout" {
+					_, err = conn.ExecContext(ctx, "set session lock_wait_timeout=1")
+					require.NoError(t, err)
+					defer func() { _, _ = conn.ExecContext(ctx, "set session lock_wait_timeout=120") }()
+				}
+				_, err = conn.ExecContext(ctx, "begin")
+				require.NoError(t, err)
+				defer func() {
+					cleanupCtx, cancelCleanup := context.WithTimeout(context.Background(), 5*time.Second)
+					defer cancelCleanup()
+					_, _ = conn.ExecContext(cleanupCtx, "rollback")
+				}()
+				_, err = conn.ExecContext(ctx, "insert into "+witness+".marker values (?)", index+1)
+				require.NoError(t, err)
+				holder, err := db0.BeginTx(ctx, nil)
+				require.NoError(t, err)
+				defer holder.Rollback()
+				_, err = holder.ExecContext(ctx, "alter table "+solo+".w modify column i bigint")
+				require.NoError(t, err)
+				queued := make(chan struct{}, 1)
+				restoreGateHook := lockservice.SetWaiterEnqueuedHookForTest(func(tableID uint64, _ []byte, _ [][]byte) {
+					if tableID == registryID {
+						select {
+						case queued <- struct{}{}:
+						default:
+						}
+					}
+				})
+				defer restoreGateHook()
+				// Start the operation budget after preparing its blocker and session.
+				truncateCtx, truncateCancel := context.WithTimeout(ctx, 15*time.Second)
+				defer truncateCancel()
+				done := make(chan error, 1)
+				finished := false
+				defer func() {
+					truncateCancel()
+					_ = holder.Rollback()
+					if !finished {
+						select {
+						case <-done:
+						case <-ctx.Done():
+							t.Error("TRUNCATE did not terminate during cleanup")
+						}
+					}
+				}()
+				go func() {
+					_, err := conn.ExecContext(truncateCtx, "truncate table "+solo+".v")
+					done <- err
+				}()
+				select {
+				case <-queued:
+				case earlyErr := <-done:
+					finished = true
+					t.Fatalf("fresh TRUNCATE did not wait for G: %v", earlyErr)
+				case <-truncateCtx.Done():
+					t.Fatal("TRUNCATE never entered the lifecycle wait")
+				}
+				var markerRows int
+				require.NoError(t, db0.QueryRowContext(ctx,
+					"select count(*) from "+witness+".marker where i=?", index+1).Scan(&markerRows))
+				require.Equal(t, 1, markerRows, "the preceding transaction must commit before admission")
+				switch terminal {
+				case "commit":
+					require.NoError(t, holder.Commit())
+				case "rollback":
+					require.NoError(t, holder.Rollback())
+				case "cancel":
+					truncateCancel()
+				}
+				result := <-done
+				finished = true
+				if terminal == "commit" || terminal == "rollback" {
+					require.NoError(t, result)
+					// TRUNCATE commits on CN1. A successful response does not
+					// advance CN0's snapshot in sacrificing-freshness mode.
+					// Fence only the final reads, after the admission race.
+					commitTS := cn1.RawService().(cnservice.Service).GetTxnClient().GetLatestCommitTS()
+					require.False(t, commitTS.IsEmpty())
+					testutils.WaitLogtailApplied(t, commitTS, cn0)
+				}
+				var newID uint64
+				require.NoError(t, db0.QueryRowContext(ctx,
+					"select rel_id from mo_catalog.mo_tables where reldatabase=? and relname='v'", solo).Scan(&newID))
+				require.NoError(t, db0.QueryRowContext(ctx, "select count(*) from "+solo+".v").Scan(&rows))
+				if terminal == "cancel" || terminal == "timeout" {
+					require.Error(t, result)
+					if terminal == "timeout" {
+						require.ErrorAs(t, result, &mysqlErr)
+						require.Equal(t, uint16(moerr.ER_LOCK_WAIT_TIMEOUT), mysqlErr.Number)
+					}
+					require.Equal(t, oldID, newID, "failed admission must not replace the target")
+					require.Equal(t, 1, rows)
+					require.NoError(t, holder.Rollback())
+					_, err = db1.ExecContext(ctx, "truncate table "+solo+".v")
+					require.NoError(t, err, "cancelled/timed-out waiter must not prevent subsequent progress")
+				} else {
+					require.NotEqual(t, oldID, newID)
+					require.Zero(t, rows)
+				}
+			})
+		}
+
+		t.Run("same_table_dml", func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
+			defer cancel()
+			execSQLRequire(t, ctx, db0, "create table "+solo+".same (i int primary key)")
+			execSQLRequire(t, ctx, db0, "insert into "+solo+".same values (1)")
+			var oldID, oldLogicalID uint64
+			require.NoError(t, db0.QueryRowContext(ctx,
+				"select rel_id, rel_logical_id from mo_catalog.mo_tables where reldatabase=? and relname='same'", solo).Scan(&oldID, &oldLogicalID))
+			holder, err := db0.BeginTx(ctx, nil)
+			require.NoError(t, err)
+			defer holder.Rollback()
+			_, err = holder.ExecContext(ctx, "update "+solo+".same set i=2 where i=1")
+			require.NoError(t, err)
+			// DML can retain catalog T, so TRUNCATE may wait there before
+			// reaching its physical table lock.
+			queued := make(chan struct{}, 1)
+			restoreTableHook := lockservice.SetWaiterEnqueuedHookForTest(func(tableID uint64, _ []byte, _ [][]byte) {
+				if tableID == oldID || tableID == catalog.MO_TABLES_ID {
+					select {
+					case queued <- struct{}{}:
+					default:
+					}
+				}
+			})
+			defer restoreTableHook()
+			truncateCtx, truncateCancel := context.WithTimeout(ctx, 15*time.Second)
+			defer truncateCancel()
+			done := make(chan error, 1)
+			finished := false
+			defer func() {
+				truncateCancel()
+				_ = holder.Rollback()
+				if !finished {
+					select {
+					case <-done:
+					case <-ctx.Done():
+						t.Error("same-table TRUNCATE did not terminate during cleanup")
+					}
+				}
+			}()
+			go func() {
+				_, err := db1.ExecContext(truncateCtx, "truncate table "+solo+".same")
+				done <- err
+			}()
+			select {
+			case <-queued:
+			case err := <-done:
+				finished = true
+				t.Fatalf("TRUNCATE did not wait for same-table DML: %v", err)
+			case <-truncateCtx.Done():
+				t.Fatal("TRUNCATE never entered the same-table wait")
+			}
+			require.NoError(t, holder.Rollback())
+			result := <-done
+			finished = true
+			require.NoError(t, result)
+			// The same-table waiter also completes its TRUNCATE on CN1.
+			commitTS := cn1.RawService().(cnservice.Service).GetTxnClient().GetLatestCommitTS()
+			require.False(t, commitTS.IsEmpty())
+			testutils.WaitLogtailApplied(t, commitTS, cn0)
+			var newID, newLogicalID uint64
+			require.NoError(t, db0.QueryRowContext(ctx,
+				"select rel_id, rel_logical_id from mo_catalog.mo_tables where reldatabase=? and relname='same'", solo).Scan(&newID, &newLogicalID))
+			require.NotEqual(t, oldID, newID)
+			require.Equal(t, oldLogicalID, newLogicalID)
+			require.NoError(t, db0.QueryRowContext(ctx, "select count(*) from "+solo+".same").Scan(&rows))
+			require.Zero(t, rows)
+		})
+
+		for _, forward := range []bool{false, true} {
+			t.Run(fmt.Sprintf("fk_publication/forward_%t", forward), func(t *testing.T) {
+				ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
+				defer cancel()
+				parent := fmt.Sprintf("fk_parent_%t", forward)
+				child := fmt.Sprintf("fk_child_%t", forward)
+				if !forward {
+					execSQLRequire(t, ctx, db0, "create table "+solo+"."+parent+"(id int primary key)")
+				}
+				execSQLRequire(t, ctx, db0, "create table "+solo+".fk_guard(i int)")
+				holder, err := db0.BeginTx(ctx, nil)
+				require.NoError(t, err)
+				defer holder.Rollback()
+				_, err = holder.ExecContext(ctx, "drop table "+solo+".fk_guard")
+				require.NoError(t, err)
+				conn, err := db1.Conn(ctx)
+				require.NoError(t, err)
+				defer conn.Close()
+				if forward {
+					_, err = conn.ExecContext(ctx, "set foreign_key_checks=0")
+					require.NoError(t, err)
+				}
+				queued := make(chan struct{}, 1)
+				restore := lockservice.SetWaiterEnqueuedHookForTest(func(tableID uint64, _ []byte, _ [][]byte) {
+					if tableID == registryID {
+						select {
+						case queued <- struct{}{}:
+						default:
+						}
+					}
+				})
+				defer restore()
+				// Start the operation budget after preparing its blocker and session.
+				operationCtx, cancelOperation := context.WithTimeout(ctx, 15*time.Second)
+				defer cancelOperation()
+				done := make(chan error, 1)
+				finished := false
+				defer func() {
+					cancelOperation()
+					_ = holder.Rollback()
+					if !finished {
+						select {
+						case <-done:
+						case <-ctx.Done():
+							t.Error("FK CREATE did not terminate")
+						}
+					}
+				}()
+				go func() {
+					_, err := conn.ExecContext(operationCtx, "create table "+solo+"."+child+"(id int primary key,pid int,constraint fk_p foreign key(pid) references "+solo+"."+parent+"(id))")
+					done <- err
+				}()
+				select {
+				case <-queued:
+				case err := <-done:
+					finished = true
+					t.Fatalf("FK CREATE bypassed lifecycle admission: %v", err)
+				case <-operationCtx.Done():
+					t.Fatal("FK CREATE never entered admission")
+				}
+				var count int
+				require.NoError(t, db0.QueryRowContext(ctx, "select count(*) from mo_catalog.mo_tables where reldatabase=? and relname=?", solo, child).Scan(&count))
+				require.Zero(t, count)
+				require.NoError(t, db0.QueryRowContext(ctx, "select count(*) from mo_catalog.mo_foreign_keys where db_name=? and table_name=?", solo, child).Scan(&count))
+				require.Zero(t, count)
+				require.NoError(t, holder.Commit())
+				createErr := <-done
+				finished = true
+				require.NoError(t, createErr)
+				if forward {
+					_, err = conn.ExecContext(ctx, "set foreign_key_checks=1")
+					require.NoError(t, err)
+				}
+				if forward {
+					execSQLRequire(t, ctx, db0, "create table "+solo+"."+parent+"(id int primary key)")
+				}
+				execSQLRequire(t, ctx, db0, "insert into "+solo+"."+parent+" values(1)")
+				execSQLRequire(t, ctx, db0, "insert into "+solo+"."+child+" values(1,1)")
+				_, err = db0.ExecContext(ctx, "insert into "+solo+"."+child+" values(2,999)")
+				require.Error(t, err, "FK must bind to the current parent generation")
+			})
+		}
 
 		// A DML statement can retain T without having crossed G. Either G mode
 		// would form a wait cycle if A's next lifecycle statement queued behind
@@ -170,6 +721,8 @@ func TestIssue29400CopyAlterRetainedGatePromotionFastFails(t *testing.T) {
 			{"exclusive_gate", "alter table %s.t modify column v bigint", "drop table %s.u"},
 		} {
 			t.Run(scenario.name, func(t *testing.T) {
+				ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
+				defer cancel()
 				database := "issue_29400_prior_dml_" + scenario.name
 				unrelated := database + "_other"
 				for _, query := range []string{
@@ -188,6 +741,14 @@ func TestIssue29400CopyAlterRetainedGatePromotionFastFails(t *testing.T) {
 					_, _ = db0.ExecContext(cleanupCtx, "drop database if exists "+database)
 					_, _ = db0.ExecContext(cleanupCtx, "drop database if exists "+unrelated)
 				}()
+				var progressConn *sql.Conn
+				if scenario.name == "shared_gate" {
+					conn, err := db0.Conn(ctx)
+					require.NoError(t, err)
+					defer conn.Close()
+					require.NoError(t, conn.PingContext(ctx))
+					progressConn = conn
+				}
 				owner, err := db0.BeginTx(ctx, nil)
 				require.NoError(t, err)
 				defer owner.Rollback()
@@ -227,16 +788,43 @@ func TestIssue29400CopyAlterRetainedGatePromotionFastFails(t *testing.T) {
 				case <-time.After(15 * time.Second):
 					t.Fatal("competing lifecycle owner did not wait for the prior UPDATE lock")
 				}
-				select {
-				case earlyErr := <-otherDone:
-					t.Fatalf("competing lifecycle owner finished before the reciprocal wait: %v", earlyErr)
-				default:
+				requireOtherWaiting := func() {
+					t.Helper()
+					require.NoError(t, otherCtx.Err(), "competing lifecycle owner must remain live")
+					select {
+					case earlyErr := <-otherDone:
+						otherFinished = true
+						t.Fatalf("competing lifecycle owner finished before the reciprocal wait: %v", earlyErr)
+					default:
+					}
 				}
+				requireOtherWaiting()
 				if scenario.name == "shared_gate" {
-					fastCtx, cancelFast := context.WithTimeout(ctx, 2*time.Second)
-					defer cancelFast()
-					_, err = db0.ExecContext(fastCtx, "drop table "+unrelated+".u")
+					// Prove independent progress while B still waits for A's T,
+					// not a two-second SQL/commit latency on the test runner.
+					execSQLRequire(t, ctx, db0, "insert into "+unrelated+".u values(1)")
+					var oldID, oldLogicalID uint64
+					require.NoError(t, db0.QueryRowContext(ctx,
+						"select rel_id,rel_logical_id from mo_catalog.mo_tables where reldatabase=? and relname='u'", unrelated).Scan(&oldID, &oldLogicalID))
+					_, err = progressConn.ExecContext(ctx, "truncate table "+unrelated+".u")
+					require.NoError(t, err, "independent TRUNCATE must finish before the UPDATE owner releases")
+					requireOtherWaiting()
+					var newID, newLogicalID uint64
+					require.NoError(t, db0.QueryRowContext(ctx,
+						"select rel_id,rel_logical_id from mo_catalog.mo_tables where reldatabase=? and relname='u'", unrelated).Scan(&newID, &newLogicalID))
+					require.NotEqual(t, oldID, newID)
+					require.Equal(t, oldLogicalID, newLogicalID)
+					var remaining int
+					require.NoError(t, db0.QueryRowContext(ctx, "select count(*) from "+unrelated+".u").Scan(&remaining))
+					require.Zero(t, remaining)
+					_, err = progressConn.ExecContext(ctx, "drop table "+unrelated+".u")
 					require.NoError(t, err, "unrelated DROP must progress while target DROP waits for T")
+					select {
+					case earlyErr := <-otherDone:
+						otherFinished = true
+						t.Fatalf("competing lifecycle owner finished before unrelated DROP proved progress: %v", earlyErr)
+					default:
+					}
 				}
 				nextCtx, cancelNext := context.WithTimeout(ctx, 10*time.Second)
 				defer cancelNext()
@@ -246,12 +834,13 @@ func TestIssue29400CopyAlterRetainedGatePromotionFastFails(t *testing.T) {
 				if ownerErr != nil {
 					var deadlock *mysql.MySQLError
 					require.ErrorAs(t, ownerErr, &deadlock)
-					require.Equal(t, moerr.ErrDeadLockDetected, deadlock.Number)
+					require.Equal(t, moerr.ErrLockConflict, deadlock.Number)
 					require.NoError(t, otherErr, "the competing owner must finish after victim rollback")
 				} else {
 					var deadlock *mysql.MySQLError
 					require.ErrorAs(t, otherErr, &deadlock)
-					require.Equal(t, moerr.ErrDeadLockDetected, deadlock.Number)
+					require.Equal(t, uint16(1213), deadlock.Number)
+					require.Equal(t, "40001", string(deadlock.SQLState[:]))
 					require.NoError(t, owner.Commit(), "the surviving owner must commit")
 					var value int
 					require.NoError(t, db0.QueryRowContext(ctx,
@@ -269,6 +858,346 @@ func TestIssue29400CopyAlterRetainedGatePromotionFastFails(t *testing.T) {
 				}
 			})
 		}
+	})
+}
+
+func TestIssue29400IndependentCopyAltersProgressInPessimisticRC(t *testing.T) {
+	runAuthenticatedClusterTest(t, func(cluster embed.Cluster) {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+		cn0, err := cluster.GetCNService(0)
+		require.NoError(t, err)
+		cn1, err := cluster.GetCNService(1)
+		require.NoError(t, err)
+		db0, err := sql.Open("mysql", issue27487DSN(cn0.GetServiceConfig().CN.Frontend.Port))
+		require.NoError(t, err)
+		defer db0.Close()
+		db1, err := sql.Open("mysql", issue27487DSN(cn1.GetServiceConfig().CN.Frontend.Port))
+		require.NoError(t, err)
+		defer db1.Close()
+		conn0, err := db0.Conn(ctx)
+		require.NoError(t, err)
+		defer conn0.Close()
+		conn1, err := db1.Conn(ctx)
+		require.NoError(t, err)
+		defer conn1.Close()
+		conn2, err := db1.Conn(ctx)
+		require.NoError(t, err)
+		defer conn2.Close()
+		for _, conn := range []*sql.Conn{conn0, conn1, conn2} {
+			_, err = conn.ExecContext(ctx, "set session transaction_isolation='READ-COMMITTED'")
+			require.NoError(t, err)
+			_, err = conn.ExecContext(ctx, "set experimental_ivf_index=1")
+			require.NoError(t, err)
+			var isolation string
+			require.NoError(t, conn.QueryRowContext(ctx, "select @@transaction_isolation").Scan(&isolation))
+			require.Equal(t, "READ-COMMITTED", isolation)
+		}
+		var registryID uint64
+		require.NoError(t, conn0.QueryRowContext(ctx,
+			"select rel_id from mo_catalog.mo_tables where reldatabase='mo_catalog' and relname='mo_feature_registry'").Scan(&registryID))
+
+		t.Run("held_explicit_transaction", func(t *testing.T) {
+			const database = "issue_29400_rc_held_publisher"
+			execSQLRequire(t, ctx, db0, "create database "+database)
+			defer func() {
+				cleanupCtx, done := context.WithTimeout(context.Background(), 20*time.Second)
+				defer done()
+				_, _ = conn0.ExecContext(cleanupCtx, "drop database if exists "+database)
+			}()
+
+			// Each independent publisher must wait behind the held gate instead
+			// of failing FastFail on locks retained by preparation. The victim
+			// layouts select every service-owned catalog write COPY triggers:
+			// an unaffected IVF-FLAT index (hidden-table cleanup), a HASH
+			// partitioned source (partition-service metadata writes), and an
+			// AUTO_INCREMENT source (allocator column writes).
+			for _, victim := range []struct {
+				name       string
+				table      string
+				setup      []string
+				afterAlter string
+			}{
+				{
+					name:  "unaffected_ivfflat_index",
+					table: "t2_ivfflat",
+					setup: []string{
+						"create table %s(id int primary key, v vecf32(2))",
+						"create index idx using ivfflat on %s(v) lists=1 op_type 'vector_l2_ops'",
+						"insert into %s values(1, '[1,0]')",
+					},
+					afterAlter: "insert into %s values(2, '[2,0]', 2)",
+				},
+				{
+					name:  "hash_partitioned",
+					table: "t2_hash",
+					setup: []string{
+						"create table %s(id int primary key, v int) partition by hash(id) partitions 2",
+						"insert into %s values(1, 1)",
+					},
+					afterAlter: "insert into %s values(2, 2, 2)",
+				},
+				{
+					name:  "auto_increment",
+					table: "t2_autoinc",
+					setup: []string{
+						"create table %s(id int primary key auto_increment, v int)",
+						"insert into %s(v) values(1)",
+					},
+					afterAlter: "insert into %s(v) values(2)",
+				},
+			} {
+				t.Run(victim.name, func(t *testing.T) {
+					execSQLRequire(t, ctx, db0, "drop table if exists "+database+".t1")
+					execSQLRequire(t, ctx, db0, "drop table if exists "+database+"."+victim.table)
+					execSQLRequire(t, ctx, db0, "create table "+database+".t1(id int primary key, v int)")
+					execSQLRequire(t, ctx, db0, "insert into "+database+".t1 values(1, 1)")
+					for _, query := range victim.setup {
+						execSQLRequire(t, ctx, db0, fmt.Sprintf(query, database+"."+victim.table))
+					}
+
+					holder, err := conn0.BeginTx(ctx, nil)
+					require.NoError(t, err)
+					defer holder.Rollback()
+					// Use a mixed COPY: pure scalar ADD now owns only G S.
+					_, err = holder.ExecContext(ctx,
+						"alter table "+database+".t1 algorithm=copy, modify column v bigint, add column extra int")
+					require.NoError(t, err, "the explicit COPY ALTER must complete while retaining publication admission")
+
+					waitingAtGate := make(chan struct{}, 1)
+					restoreHook := lockservice.SetWaiterEnqueuedHookForTest(func(tableID uint64, _ []byte, _ [][]byte) {
+						if tableID == registryID {
+							select {
+							case waitingAtGate <- struct{}{}:
+							default:
+							}
+						}
+					})
+					defer restoreHook()
+					otherCtx, cancelOther := context.WithTimeout(ctx, 30*time.Second)
+					defer cancelOther()
+					otherDone := make(chan error, 1)
+					go func() {
+						_, otherErr := conn1.ExecContext(otherCtx,
+							"alter table "+database+"."+victim.table+" algorithm=copy, add column extra int")
+						otherDone <- otherErr
+					}()
+					select {
+					case <-waitingAtGate:
+					case otherErr := <-otherDone:
+						t.Fatalf("independent COPY ALTER finished before the holder committed: %v", otherErr)
+					case <-time.After(15 * time.Second):
+						t.Fatal("independent COPY ALTER never waited at the publication gate")
+					}
+					select {
+					case otherErr := <-otherDone:
+						t.Fatalf("independent COPY ALTER failed while the holder retained the gate: %v", otherErr)
+					default:
+					}
+					require.NoError(t, holder.Commit())
+					select {
+					case otherErr := <-otherDone:
+						require.NoError(t, otherErr)
+					case <-time.After(15 * time.Second):
+						t.Fatal("independent COPY ALTER did not finish after the holder committed")
+					}
+					execSQLRequire(t, ctx, db0,
+						"insert into "+database+".t1 values(2, 2, 2)")
+					execSQLRequire(t, ctx, db0,
+						fmt.Sprintf(victim.afterAlter, database+"."+victim.table))
+				})
+			}
+		})
+
+		t.Run("overlapping_autocommit_publishers", func(t *testing.T) {
+			const database = "issue_29400_rc_autocommit_publishers"
+			execSQLRequire(t, ctx, db0, "create database "+database)
+			defer func() {
+				cleanupCtx, done := context.WithTimeout(context.Background(), 20*time.Second)
+				defer done()
+				_, _ = conn0.ExecContext(cleanupCtx, "drop database if exists "+database)
+			}()
+			for _, query := range []string{
+				"create table " + database + ".t1(id int primary key, v int)",
+				"create table " + database + ".t2(id int primary key, v vecf32(2))",
+				"insert into " + database + ".t1 values(1, 1)",
+				"create index idx using ivfflat on " + database +
+					".t2(v) lists=1 op_type 'vector_l2_ops'",
+				"insert into " + database + ".t2 values(1, '[1,0]')",
+			} {
+				execSQLRequire(t, ctx, db0, query)
+			}
+
+			holder, err := conn0.BeginTx(ctx, nil)
+			require.NoError(t, err)
+			defer holder.Rollback()
+			_, err = holder.ExecContext(ctx, "update "+database+".t1 set v=2 where id=1")
+			require.NoError(t, err)
+
+			waitingForSource := make(chan struct{}, 1)
+			waitingAtGate := make(chan struct{}, 1)
+			restoreHook := lockservice.SetWaiterEnqueuedHookForTest(func(tableID uint64, _ []byte, _ [][]byte) {
+				switch tableID {
+				case catalog.MO_TABLES_ID:
+					select {
+					case waitingForSource <- struct{}{}:
+					default:
+					}
+				case registryID:
+					select {
+					case waitingAtGate <- struct{}{}:
+					default:
+					}
+				}
+			})
+			defer restoreHook()
+			firstCtx, cancelFirst := context.WithTimeout(ctx, 30*time.Second)
+			defer cancelFirst()
+			firstDone := make(chan error, 1)
+			go func() {
+				_, firstErr := conn1.ExecContext(firstCtx,
+					"alter table "+database+".t1 algorithm=copy, modify column v bigint, add column extra int")
+				firstDone <- firstErr
+			}()
+			select {
+			case <-waitingForSource:
+			case firstErr := <-firstDone:
+				t.Fatalf("source COPY ALTER bypassed the UPDATE holder: %v", firstErr)
+			case <-time.After(15 * time.Second):
+				t.Fatal("source COPY ALTER never waited for the UPDATE holder")
+			}
+			select {
+			case firstErr := <-firstDone:
+				t.Fatalf("source COPY ALTER failed before the UPDATE holder released: %v", firstErr)
+			default:
+			}
+
+			secondCtx, cancelSecond := context.WithTimeout(ctx, 30*time.Second)
+			defer cancelSecond()
+			secondDone := make(chan error, 1)
+			go func() {
+				_, secondErr := conn2.ExecContext(secondCtx,
+					"alter table "+database+".t2 algorithm=copy, add column extra int")
+				secondDone <- secondErr
+			}()
+			select {
+			case <-waitingAtGate:
+			case secondErr := <-secondDone:
+				t.Fatalf("independent COPY ALTER finished before the source waiter released: %v", secondErr)
+			case <-time.After(15 * time.Second):
+				t.Fatal("independent COPY ALTER never waited at the publication gate")
+			}
+			select {
+			case secondErr := <-secondDone:
+				t.Fatalf("independent COPY ALTER failed while the source waiter retained the gate: %v", secondErr)
+			default:
+			}
+
+			require.NoError(t, holder.Rollback())
+			for _, result := range []struct {
+				name string
+				done chan error
+			}{
+				{name: "source", done: firstDone},
+				{name: "independent", done: secondDone},
+			} {
+				select {
+				case err := <-result.done:
+					require.NoError(t, err, result.name+" COPY ALTER must finish after the holder rolls back")
+				case <-time.After(15 * time.Second):
+					t.Fatal(result.name + " COPY ALTER did not finish after the holder rolled back")
+				}
+			}
+			var value int
+			require.NoError(t, conn0.QueryRowContext(ctx,
+				"select v from "+database+".t1 where id=1").Scan(&value))
+			require.Equal(t, 1, value, "the blocking UPDATE must roll back")
+			execSQLRequire(t, ctx, db0,
+				"insert into "+database+".t1 values(2, 2, 2)")
+			execSQLRequire(t, ctx, db0,
+				"insert into "+database+".t2 values(2, '[2,0]', 2)")
+		})
+	})
+}
+
+// TestIssue29400CopyAlterKeepsRelocatedWorkspaceDeletesAfterReturn covers the
+// workspace-owned snapshot advancement on the ALTER COPY return boundary with
+// real storage: a pessimistic-RC transaction owns uncommitted in-memory DELETEs
+// whose underlying committed rows a forced DN flush relocates. ALTER COPY on an
+// unrelated table advances the shared workspace, and when it returns the
+// transaction must keep the advanced (transferred) snapshot so the deleted rows
+// stay deleted. A timestamp-only rewind leaves the workspace and the snapshot in
+// different generations and resurrects the relocated deletes.
+func TestIssue29400CopyAlterKeepsRelocatedWorkspaceDeletesAfterReturn(t *testing.T) {
+	runAuthenticatedClusterTest(t, func(cluster embed.Cluster) {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+		cn0, err := cluster.GetCNService(0)
+		require.NoError(t, err)
+		cn1, err := cluster.GetCNService(1)
+		require.NoError(t, err)
+		db0, err := sql.Open("mysql", issue27487DSN(cn0.GetServiceConfig().CN.Frontend.Port))
+		require.NoError(t, err)
+		defer db0.Close()
+		db1, err := sql.Open("mysql", issue27487DSN(cn1.GetServiceConfig().CN.Frontend.Port))
+		require.NoError(t, err)
+		defer db1.Close()
+		conn0, err := db0.Conn(ctx)
+		require.NoError(t, err)
+		defer conn0.Close()
+		flushConn, err := db1.Conn(ctx)
+		require.NoError(t, err)
+		defer flushConn.Close()
+		for _, conn := range []*sql.Conn{conn0, flushConn} {
+			_, err = conn.ExecContext(ctx, "set session transaction_isolation='READ-COMMITTED'")
+			require.NoError(t, err)
+		}
+
+		const database = "issue_29400_copy_return_deletes"
+		execSQLRequire(t, ctx, db0, "create database "+database)
+		defer func() {
+			cleanupCtx, done := context.WithTimeout(context.Background(), 20*time.Second)
+			defer done()
+			_, _ = conn0.ExecContext(cleanupCtx, "drop database if exists "+database)
+		}()
+		execSQLRequire(t, ctx, db0,
+			"create table "+database+".src(id int primary key, v int)")
+		execSQLRequire(t, ctx, db0,
+			"create table "+database+".victim(id int primary key, v int)")
+		execSQLRequire(t, ctx, db0,
+			"insert into "+database+".src select result, result from generate_series(1, 8) g")
+		execSQLRequire(t, ctx, db0,
+			"insert into "+database+".victim select result, result from generate_series(1, 20) g")
+
+		tx, err := conn0.BeginTx(ctx, nil)
+		require.NoError(t, err)
+		defer tx.Rollback()
+		_, err = tx.ExecContext(ctx,
+			"delete from "+database+".victim where id <= 10")
+		require.NoError(t, err)
+
+		// Relocate the committed victim rows behind the uncommitted deletes so
+		// the workspace advancement inside ALTER COPY transfers those deletes
+		// to their post-flush row locations.
+		_, err = flushConn.ExecContext(ctx,
+			"select mo_ctl('dn', 'flush', '"+database+".victim')")
+		require.NoError(t, err)
+
+		_, err = tx.ExecContext(ctx,
+			"alter table "+database+".src algorithm=copy, add column extra int")
+		require.NoError(t, err,
+			"the COPY ALTER must complete inside the pessimistic-RC transaction")
+
+		var remaining int
+		require.NoError(t, tx.QueryRowContext(ctx,
+			"select count(*) from "+database+".victim").Scan(&remaining))
+		require.Equal(t, 10, remaining,
+			"the relocated uncommitted deletes must survive the ALTER COPY return")
+
+		require.NoError(t, tx.Commit())
+		require.NoError(t, conn0.QueryRowContext(ctx,
+			"select count(*) from "+database+".victim").Scan(&remaining))
+		require.Equal(t, 10, remaining)
 	})
 }
 
@@ -334,7 +1263,10 @@ func TestIssue29400DropDatabaseDoesNotHoldBranchDAGAfterTable(t *testing.T) {
 			_, _ = fault.RemoveFaultPoint(context.Background(), probe)
 		}
 		defer release()
-		dropCtx, dropCancel := context.WithTimeout(ctx, 30*time.Second)
+		// Use the shared, bounded test context for both transactions. A shorter
+		// deadline on A can release its locks and make B's progress a false
+		// positive; a short deadline on B instead measures WAL/runner latency.
+		dropCtx, dropCancel := context.WithCancel(ctx)
 		defer dropCancel()
 		dropA := make(chan error, 1)
 		go func() {
@@ -352,10 +1284,8 @@ func TestIssue29400DropDatabaseDoesNotHoldBranchDAGAfterTable(t *testing.T) {
 			t.Fatalf("A finished before the post-table barrier was released: %v", err)
 		default:
 		}
-		fastCtx, fastCancel := context.WithTimeout(ctx, 10*time.Second)
-		defer fastCancel()
-		_, err = db1.ExecContext(fastCtx, "drop table "+b+".b_child")
-		require.NoError(t, err, "unrelated branch DROP waited for A's post-table work")
+		_, err = db1.ExecContext(ctx, "drop table "+b+".b_child")
+		require.NoError(t, err, "unrelated branch DROP failed while A remained at the post-table barrier")
 		// Completion must precede A leaving the barrier. The deadline bounds
 		// the test; it must never turn A's cancellation into apparent progress.
 		require.NoError(t, dropCtx.Err())
@@ -371,10 +1301,11 @@ func TestIssue29400DropDatabaseDoesNotHoldBranchDAGAfterTable(t *testing.T) {
 		require.NoError(t, <-dropA)
 		// A now retains all statement locks until COMMIT. Its component must
 		// not pin B's root during this explicit transaction tail.
-		otherCtx, otherCancel := context.WithTimeout(ctx, 10*time.Second)
-		defer otherCancel()
-		_, err = db1.ExecContext(otherCtx, "drop table "+b+".a_root")
-		require.NoError(t, err, "unrelated branch DROP waited for A's COMMIT")
+		_, err = db1.ExecContext(ctx, "drop table "+b+".a_root")
+		require.NoError(t, err, "unrelated branch DROP failed while A remained uncommitted")
+		// Do not credit B with independence if the watchdog cancelled A.
+		// A's successful COMMIT below also proves it stayed open through B.
+		require.NoError(t, ctx.Err())
 		require.NoError(t, tx.Commit())
 		var deleted bool
 		require.NoError(t, db0.QueryRowContext(ctx,
@@ -522,8 +1453,12 @@ func TestIssue29400DropDatabaseRCReclaimFailureRollsBackWholeDatabase(t *testing
 			require.NoError(t, err, query)
 		}
 		var laterID, hiddenID, jobID uint64
+		var indexRowsBefore int
 		require.NoError(t, conn.QueryRowContext(ctx,
 			"select rel_id from mo_catalog.mo_tables where reldatabase=? and relname='later'", name).Scan(&laterID))
+		require.NoError(t, conn.QueryRowContext(ctx,
+			"select count(*) from mo_catalog.mo_indexes where table_id=?", laterID).Scan(&indexRowsBefore))
+		require.Positive(t, indexRowsBefore)
 		var hiddenName string
 		require.NoError(t, conn.QueryRowContext(ctx,
 			"select index_table_name from mo_catalog.mo_indexes where table_id=? and name='ft_tail' and algo='fulltext2' and algo_table_type='ftv2_index'", laterID).Scan(&hiddenName))
@@ -577,6 +1512,10 @@ func TestIssue29400DropDatabaseRCReclaimFailureRollsBackWholeDatabase(t *testing
 			require.NoError(t, conn.QueryRowContext(ctx, check.query).Scan(&count), check.query)
 			require.Equal(t, check.want, count, check.query)
 		}
+		var indexRowsAfter int
+		require.NoError(t, conn.QueryRowContext(ctx,
+			"select count(*) from mo_catalog.mo_indexes where table_id=?", laterID).Scan(&indexRowsAfter))
+		require.Equal(t, indexRowsBefore, indexRowsAfter, "late DROP failure must restore index catalog rows")
 		var survivingID uint64
 		require.NoError(t, conn.QueryRowContext(ctx,
 			"select rel_id from mo_catalog.mo_tables where reldatabase=? and relname='later'", name).Scan(&survivingID))
@@ -677,5 +1616,93 @@ func TestIssue29400BranchCloneFromForeignKeyBranch(t *testing.T) {
 		require.NoError(t, db.QueryRowContext(ctx,
 			"select count(*) from mo_catalog.mo_foreign_keys where db_name=? and table_name='c2' and refer_table_name='p'", name).Scan(&count))
 		require.Equal(t, 1, count)
+	})
+}
+
+// issue29400NegativeProbeGate pauses after a real negative protection probe,
+// before lifecycle locks, so another CN can publish protection deterministically.
+type issue29400NegativeProbeGate struct {
+	executor.SQLExecutor
+	match   string
+	entered chan struct{}
+	release chan struct{}
+	used    atomic.Bool
+}
+
+func (g *issue29400NegativeProbeGate) Exec(ctx context.Context, query string, opts executor.Options) (executor.Result, error) {
+	res, err := g.SQLExecutor.Exec(ctx, query, opts)
+	if err == nil && strings.HasPrefix(query, "select 1 from mo_catalog.mo_snapshots where kind='branch'") && strings.Contains(query, g.match) && g.used.CompareAndSwap(false, true) {
+		close(g.entered)
+		select {
+		case <-g.release:
+		case <-ctx.Done():
+			res.Close()
+			return executor.Result{}, ctx.Err()
+		}
+	}
+	return res, err
+}
+
+func TestIssue29400OrdinaryIndexedCreateRegistersTasksAfterCopyPreparation(t *testing.T) {
+	runAuthenticatedClusterTest(t, func(cluster embed.Cluster) {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+		cn0, err := cluster.GetCNService(0)
+		require.NoError(t, err)
+		db0, err := sql.Open("mysql", issue27487DSN(cn0.GetServiceConfig().CN.Frontend.Port))
+		require.NoError(t, err)
+		defer db0.Close()
+		// One connection keeps every statement on the same CN, so the private
+		// preparation Compiles and the later frontend Compiles share one pool.
+		conn0, err := db0.Conn(ctx)
+		require.NoError(t, err)
+		defer conn0.Close()
+		_, err = conn0.ExecContext(ctx, "set experimental_ivf_index=1")
+		require.NoError(t, err)
+
+		const database = "issue_29400_index_registration_after_copy"
+		execSQLRequire(t, ctx, db0, "create database "+database)
+		defer func() {
+			cleanupCtx, done := context.WithTimeout(context.Background(), 20*time.Second)
+			defer done()
+			_, _ = conn0.ExecContext(cleanupCtx, "drop database if exists "+database)
+		}()
+
+		registeredUpdates := func(table string) int {
+			var count int
+			require.NoError(t, conn0.QueryRowContext(ctx,
+				"select count(*) from mo_catalog.mo_index_update where db_name='"+database+
+					"' and table_name='"+table+"' and index_name='idx' and action='ivfflat_reindex'").
+				Scan(&count))
+			return count
+		}
+
+		// Control: an ordinary inline indexed CREATE registers the maintenance
+		// task through the createTable path before any private preparation ran.
+		execSQLRequire(t, ctx, db0,
+			"create table "+database+".ctrl(id bigint primary key, v vecf32(2), "+
+				"index idx using ivfflat(v) lists=1 op_type 'vector_l2_ops')")
+		require.Positive(t, registeredUpdates("ctrl"),
+			"an ordinary indexed create must register its idxcron maintenance task")
+
+		// Private preparation: ALTER COPY on the indexed table runs the replica
+		// create with WithSkipIndexTaskRegistration on the nested compiler, and
+		// publication re-registers the replacement's final maintenance task.
+		execSQLRequire(t, ctx, db0, "insert into "+database+".ctrl values(1, '[1,0]')")
+		execSQLRequire(t, ctx, db0,
+			"alter table "+database+".ctrl algorithm=copy, add column extra int")
+		require.Positive(t, registeredUpdates("ctrl"),
+			"publication must re-register the cloned index's maintenance task")
+
+		// The boundary the pool regression protects: an ordinary indexed CREATE
+		// following private preparation must still register its tasks. A leaked
+		// pooled policy would silently skip CreateAllIndexUpdateTasks here.
+		for _, table := range []string{"after_copy_a", "after_copy_b", "after_copy_c"} {
+			execSQLRequire(t, ctx, db0,
+				"create table "+database+"."+table+"(id bigint primary key, v vecf32(2), "+
+					"index idx using ivfflat(v) lists=1 op_type 'vector_l2_ops')")
+			require.Positive(t, registeredUpdates(table),
+				"an ordinary indexed create must not inherit the private preparation policy")
+		}
 	})
 }

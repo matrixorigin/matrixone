@@ -23,6 +23,49 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestOperatorStrInRetainsOwnedKeys(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	for _, typ := range []types.Type{types.T_varchar.ToType(), types.New(types.T_char, 64, 0)} {
+		t.Run(typ.Oid.String(), func(t *testing.T) {
+			tuple := vector.NewVec(typ)
+			defer tuple.Free(proc.Mp())
+			value := []byte("membership key longer than inline vector storage   ")
+			require.NoError(t, vector.AppendBytes(tuple, value, false, proc.Mp()))
+			op := newOpOperatorStrIn()
+			op.init(nil, tuple)
+			probe := append([]byte(nil), tuple.GetBytesAt(0)...)
+			// Reusing the list vector must not alter a retained map key.
+			tuple.GetBytesAt(0)[0] = 'X'
+			require.True(t, op.containsKey(probe))
+			require.False(t, op.containsKey(tuple.GetBytesAt(0)))
+		})
+	}
+}
+
+func TestOperatorStrInBinaryProbeAllocations(t *testing.T) {
+	key := "membership key longer than the compiler's short-string buffer"
+	op := &opOperatorStrIn{typ: types.T_varchar.ToType(), mp: map[string]bool{key: true}}
+	probe := []byte(key)
+	require.Zero(t, testing.AllocsPerRun(1000, func() {
+		if !op.containsKey(probe) {
+			t.Fatal("known key was not found")
+		}
+	}))
+}
+
+func BenchmarkOperatorStrInBinaryProbe(b *testing.B) {
+	key := "membership key longer than the compiler's short-string buffer"
+	op := &opOperatorStrIn{typ: types.T_varchar.ToType(), mp: map[string]bool{key: true}}
+	probe := []byte(key)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if !op.containsKey(probe) {
+			b.Fatal("known key was not found")
+		}
+	}
+}
+
 func TestOperatorInNullableListUsesThreeValuedLogic(t *testing.T) {
 	proc := testutil.NewProcess(t)
 
@@ -86,6 +129,53 @@ func TestOperatorCharInUsesPadSpaceKeys(t *testing.T) {
 	}
 }
 
+func TestOperatorUnicodeInUsesCollationKeys(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	unicodeType := types.NewWithCharset(types.T_varchar, 64, 0, types.CharsetUTF8MB4UnicodeCI)
+
+	for _, test := range []struct {
+		name string
+		fn   executeLogicOfOverload
+		want []bool
+	}{
+		{name: "in", fn: newOpOperatorStrIn().operatorIn, want: []bool{true, true, false}},
+		{name: "not in", fn: newOpOperatorStrIn().operatorNotIn, want: []bool{false, false, true}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			tc := NewFunctionTestCase(
+				proc,
+				[]FunctionTestInput{
+					NewFunctionTestInput(unicodeType, []string{"A", "ß", "b"}, nil),
+					NewFunctionTestInput(unicodeType, []string{"a", "ss"}, nil),
+				},
+				NewFunctionTestResult(types.T_bool.ToType(), false, test.want, nil),
+				test.fn,
+			)
+			ok, errInfo := tc.RunAndFree()
+			require.True(t, ok, errInfo)
+		})
+	}
+}
+
+func TestOperatorUnicodeInUsesLeftComparisonDomain(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	leftType := types.NewWithCharset(types.T_varchar, 64, 0, types.CharsetUTF8MB4UnicodeCI)
+	// Prepared/literal list vectors can carry the transport charset even when
+	// the left column owns a native Unicode collation.
+	listType := types.T_varchar.ToType()
+	tc := NewFunctionTestCase(
+		proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(leftType, []string{"A", "ß", "b"}, nil),
+			NewFunctionTestInput(listType, []string{"a", "ss"}, nil),
+		},
+		NewFunctionTestResult(types.T_bool.ToType(), false, []bool{true, true, false}, nil),
+		newOpOperatorStrIn().operatorIn,
+	)
+	ok, errInfo := tc.RunAndFree()
+	require.True(t, ok, errInfo)
+}
+
 func TestOperatorCharBetweenUsesPadSpaceOrdering(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	charType := types.New(types.T_char, 8, 0)
@@ -104,7 +194,7 @@ func TestOperatorCharBetweenUsesPadSpaceOrdering(t *testing.T) {
 	require.True(t, ok, errInfo)
 }
 
-func TestOperatorFixedInConstListUsesThreeValuedLogic(t *testing.T) {
+func TestOperatorIntegerInConstListUsesThreeValuedLogic(t *testing.T) {
 	proc := testutil.NewProcess(t)
 
 	tc := NewFunctionTestCase(
@@ -114,14 +204,14 @@ func TestOperatorFixedInConstListUsesThreeValuedLogic(t *testing.T) {
 			NewFunctionTestConstInput(types.T_int32.ToType(), []int32{1}, []bool{false}),
 		},
 		NewFunctionTestResult(types.T_bool.ToType(), false, []bool{true, false, false}, []bool{false, false, true}),
-		newOpOperatorFixedIn[int32]().operatorIn,
+		newOpOperatorIntegerIn[int32]().operatorIn,
 	)
 
 	ok, errInfo := tc.RunAndFree()
 	require.True(t, ok, errInfo)
 }
 
-func TestOperatorFixedInConstNullListUsesThreeValuedLogic(t *testing.T) {
+func TestOperatorIntegerInConstNullListUsesThreeValuedLogic(t *testing.T) {
 	proc := testutil.NewProcess(t)
 
 	tc := NewFunctionTestCase(
@@ -131,7 +221,7 @@ func TestOperatorFixedInConstNullListUsesThreeValuedLogic(t *testing.T) {
 			NewFunctionTestConstInput(types.T_int32.ToType(), []int32{0}, []bool{true}),
 		},
 		NewFunctionTestResult(types.T_bool.ToType(), false, []bool{false, false}, []bool{true, true}),
-		newOpOperatorFixedIn[int32]().operatorIn,
+		newOpOperatorIntegerIn[int32]().operatorIn,
 	)
 
 	ok, errInfo := tc.RunAndFree()

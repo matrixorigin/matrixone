@@ -18,11 +18,13 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/fagongzi/goetty/v2/buf"
 	"github.com/golang/mock/gomock"
+	"github.com/google/uuid"
 	"github.com/prashantv/gostub"
 	"github.com/smartystreets/goconvey/convey"
 	"github.com/stretchr/testify/assert"
@@ -797,6 +799,7 @@ func TestSession_Migrate(t *testing.T) {
 			TenantID: GetSysTenantId(),
 		}
 		session.ruleCache = map[string]string{}
+		seedRewriteRuleCacheProofForTest(session)
 		session.txnCompileCtx.execCtx = &ExecCtx{reqCtx: ctx, proc: testutil.NewProc(t), ses: session}
 		proto.ses = session
 		session.setRoutineManager(rm)
@@ -857,6 +860,10 @@ func TestSession_Migrate(t *testing.T) {
 		for _, name := range []string{"a-b", "select", "a`b", "from"} {
 			assert.Contains(t, s.prepareStmts, name)
 		}
+		for name, stmt := range s.prepareStmts {
+			require.NotNil(t, stmt, name)
+			require.True(t, stmt.rewritePolicyCaptured, name)
+		}
 		assert.Equal(t, int64(7), s.GetLastAffectedRows())
 		assert.Equal(t, int64(7), s.GetProc().GetAffectedRows())
 		assert.Equal(t, uint64(13), s.GetLastInsertID())
@@ -905,6 +912,8 @@ func TestSession_Migrate(t *testing.T) {
 
 		bh := &backgroundExecTest{}
 		bh.init()
+		bh.sql2result[getSqlForInheritedRoleIDsForRuleCache(0)] = newMrsForInheritedRoleIdOfRoleId(nil)
+		bh.sql2result[getSqlForRoleRulesOfRoleIDs([]int64{0})] = newMrsForRewriteRules(nil)
 		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
@@ -944,14 +953,11 @@ func TestSession_Migrate(t *testing.T) {
 
 		target := genSession(ctrl, "d1", nil)
 		require.NoError(t, Migrate(context.Background(), target, &query.MigrateConnToRequest{
-			ConnID:               88,
-			DB:                   exported.DB,
-			LastInsertIDExported: true,
-			SetVarStmts:          []string{"set sql_mode = @mode"},
-			PrepareStmts: append(exported.PrepareStmts, &query.PrepareStmt{
-				Name: "pending_isolation_prepare",
-				SQL:  "select ?",
-			}),
+			ConnID:                  88,
+			DB:                      exported.DB,
+			LastInsertIDExported:    true,
+			SetVarStmts:             []string{"set sql_mode = @mode"},
+			PrepareStmts:            []*query.PrepareStmt{{Name: "pending_isolation_prepare", SQL: "select ?"}},
 			LastAffectedRows:        exported.LastAffectedRows,
 			UserDefinedVars:         exported.UserDefinedVars,
 			UserDefinedVarsExported: exported.UserDefinedVarsExported,
@@ -978,6 +984,9 @@ func TestSession_Migrate(t *testing.T) {
 		nextIsolation, hasNextIsolation := target.GetTxnHandler().nextTxnIsolationSnapshot()
 		require.True(t, hasNextIsolation)
 		require.Equal(t, txn.TxnIsolation_RC, nextIsolation)
+		prepared, err := target.GetPrepareStmt(context.Background(), "pending_isolation_prepare")
+		require.NoError(t, err)
+		require.Equal(t, "select ?", prepared.Sql)
 		require.Equal(t, "d1", target.GetDatabaseName())
 		require.Equal(t, int64(7), target.GetLastAffectedRows())
 
@@ -1556,6 +1565,186 @@ func TestSessionTempTableMap(t *testing.T) {
 	assert.Equal(t, uint64(5), ses.GetTempTableVersion())
 }
 
+func TestSessionTempTableMapKeepsDottedIdentitiesDistinct(t *testing.T) {
+	ses := &Session{
+		tempTables:    make(map[string]string),
+		tempTablesRev: make(map[string]string),
+	}
+
+	ses.AddTempTable("x", "y.t", "physical-one")
+	ses.AddTempTable("x.y", "t", "physical-two")
+
+	name, ok := ses.GetTempTable("x", "y.t")
+	require.True(t, ok)
+	require.Equal(t, "physical-one", name)
+	name, ok = ses.GetTempTable("x.y", "t")
+	require.True(t, ok)
+	require.Equal(t, "physical-two", name)
+
+	ses.RemoveTempTableByRealName("physical-one")
+	_, ok = ses.GetTempTable("x", "y.t")
+	require.False(t, ok)
+	name, ok = ses.GetTempTable("x.y", "t")
+	require.True(t, ok)
+	require.Equal(t, "physical-two", name)
+
+	ses.RemoveTempTable("x.y", "t")
+	_, ok = ses.GetTempTable("x.y", "t")
+	require.False(t, ok)
+	require.Empty(t, ses.tempTablesRev)
+
+	// Publishing a committed schema must preserve the same dotted identities,
+	// including hidden index ownership and retirement.
+	ses.PublishTemporaryTable("x", "y.t", "root-one", map[string]string{"y.i": "index-one"})
+	ses.PublishTemporaryTable("x.y", "t", "root-two", map[string]string{"i": "index-two"})
+	for _, tc := range []struct{ db, alias, physical string }{
+		{"x", "y.t", "root-one"}, {"x.y", "t", "root-two"},
+		{"x", "y.i", "index-one"}, {"x.y", "i", "index-two"},
+	} {
+		name, ok := ses.GetTempTable(tc.db, tc.alias)
+		require.True(t, ok)
+		require.Equal(t, tc.physical, name)
+		require.True(t, ses.OwnsTemporaryTable(tc.db, tc.physical))
+	}
+	require.False(t, ses.OwnsTemporaryTable("x.y", "index-one"))
+	ses.RetireTemporaryTable("x", "y.t", "root-one", []string{"index-one"})
+	require.False(t, ses.OwnsTemporaryTable("x", "index-one"))
+	require.True(t, ses.OwnsTemporaryTable("x.y", "root-two"))
+	require.True(t, ses.OwnsTemporaryTable("x.y", "index-two"))
+}
+
+func TestRetireTemporaryTableRemovesUnknownIndexAliases(t *testing.T) {
+	for _, generated := range []bool{true, false} {
+		t.Run(fmt.Sprint(generated), func(t *testing.T) {
+			ses := &Session{}
+			prefix := ""
+			if generated {
+				prefix = uuid.NewString() + "_"
+			}
+			root := defines.GenTempTableName(ses.GetSessId(), "db", prefix+"root")
+			index := defines.GenTempTableName(ses.GetSessId(), "db", prefix+"index")
+			siblingIndex := defines.GenTempTableName(ses.GetSessId(), "db", uuid.NewString()+"_other_index")
+			ses.PublishTemporaryTable("db", "root", root, nil)
+			ses.AddTempIndexTable("db", "index", index)
+			ses.AddTempIndexTable("db", "other_index", siblingIndex)
+			sibling := defines.GenTempTableName(ses.GetSessId(), "db", prefix+"sibling")
+			ses.PublishTemporaryTable("db", "sibling", sibling, nil)
+			ses.addTempIndexTable("other_db", "index", index+"_other", "txn", "stmt")
+			ses.RetireTemporaryTable("db", "root", root, nil)
+			_, ok := ses.GetTempTable("db", "root")
+			require.False(t, ok)
+			_, ok = ses.GetTempTable("db", "index")
+			require.Equal(t, !generated, ok)
+			name, ok := ses.GetTempTable("db", "sibling")
+			require.True(t, ok)
+			require.Equal(t, sibling, name)
+			name, ok = ses.GetTempTable("db", "other_index")
+			require.True(t, ok)
+			require.Equal(t, siblingIndex, name)
+			ses.rollbackTempTableTransaction("txn")
+			_, ok = ses.GetTempTable("other_db", "index")
+			require.False(t, ok, "unrelated child rollback history must survive")
+		})
+	}
+}
+
+func TestForgetMissingTemporaryTableCleansOwnedChildren(t *testing.T) {
+	for _, generated := range []bool{true, false} {
+		t.Run(fmt.Sprint(generated), func(t *testing.T) {
+			ses := &Session{}
+			prefix := ""
+			if generated {
+				prefix = uuid.NewString() + "_"
+			}
+			root := defines.GenTempTableName(ses.GetSessId(), "db", prefix+"root")
+			child := defines.GenTempTableName(ses.GetSessId(), "db", prefix+"child")
+			sibling := defines.GenTempTableName(ses.GetSessId(), "db", uuid.NewString()+"_sibling")
+			ses.PublishTemporaryTable("db", "root", root, nil)
+			ses.AddTempIndexTable("db", "child", child)
+			// A journal containing a removal could otherwise resurrect the dead child.
+			ses.removeTempTable("db", "child", "txn", "remove")
+			ses.addTempIndexTable("db", "child", child, "txn", "create")
+			ses.PublishTemporaryTable("db", "user", defines.GenTempTableName(ses.GetSessId(), "db", prefix+"user"), nil)
+			ses.addTempIndexTable("db", "sibling", sibling, "txn", "other")
+			ses.addTempIndexTable("other_db", "foreign", child+"_foreign", "txn", "other")
+			ses.ForgetMissingTemporaryTable("db", "root", root)
+			_, ok := ses.GetTempTable("db", "root")
+			require.False(t, ok)
+			_, ok = ses.GetTempTable("db", "child")
+			require.Equal(t, !generated, ok)
+			expected := 4
+			if generated {
+				expected--
+			}
+			require.Len(t, ses.tempTables, expected)
+			require.Len(t, ses.tempTablesRev, len(ses.tempTables))
+			require.Len(t, ses.tempTableIdentities, len(ses.tempTables))
+			require.Empty(t, ses.retiredTempTables)
+			ses.rollbackTempTableStatement("txn", "create")
+			ses.rollbackTempTableStatement("txn", "remove")
+			ses.rollbackTempTableTransaction("txn")
+			_, ok = ses.GetTempTable("db", "child")
+			require.Equal(t, !generated, ok, "rollback cannot resurrect confirmed-dead child")
+			_, ok = ses.GetTempTable("db", "sibling")
+			require.False(t, ok, "unrelated rollback history must remain intact")
+			_, ok = ses.GetTempTable("other_db", "foreign")
+			require.False(t, ok)
+			_, ok = ses.GetTempTable("db", "user")
+			require.True(t, ok, "prefix cannot authorize cleanup of a user table")
+		})
+	}
+	// Admission counts root generations. Reclaim the missing root and its
+	// hidden child while leaving every other admitted generation intact.
+	ses := &Session{}
+	generation := uuid.NewString() + "_"
+	root := defines.GenTempTableName(ses.GetSessId(), "db", generation+"root")
+	ses.PublishTemporaryTable("db", "root", root, nil)
+	ses.AddTempIndexTable("db", "index", defines.GenTempTableName(ses.GetSessId(), "db", generation+"index"))
+	for i := 0; i < maxSessionTemporaryTableGenerations-1; i++ {
+		alias := fmt.Sprint("other", i)
+		ses.PublishTemporaryTable("db", alias, defines.GenTempTableName(ses.GetSessId(), "db", generation+alias), nil)
+	}
+	require.Error(t, ses.CheckTemporaryTableCapacity(context.Background()))
+	// Stale lookup of a different generation must leave the whole family alone.
+	ses.ForgetMissingTemporaryTable("db", "root", root+"_old")
+	require.Len(t, ses.tempTables, maxSessionTemporaryTableGenerations+1)
+	ses.ForgetMissingTemporaryTable("db", "root", root)
+	require.Len(t, ses.tempTables, maxSessionTemporaryTableGenerations-1)
+	require.Len(t, ses.tempTablesRev, len(ses.tempTables))
+	require.Len(t, ses.tempTableIdentities, len(ses.tempTables))
+	require.Empty(t, ses.retiredTempTables)
+	require.NoError(t, ses.CheckTemporaryTableCapacity(context.Background()))
+}
+
+func TestForgetMissingTemporaryTableDoesNotRetireReusedName(t *testing.T) {
+	ses := &Session{tempTables: make(map[string]string), tempTablesRev: make(map[string]string)}
+	physical := defines.GenTempTableName(ses.GetSessId(), "db", "t")
+	ses.AddTempTable("db", "t", physical)
+	ses.removeTempTable("db", "t", "txn", "remove")
+	ses.addTempTable("db", "t", physical, "txn", "create")
+	ses.ForgetMissingTemporaryTable("db", "t", physical)
+	ses.rollbackTempTableTransaction("txn")
+	_, ok := ses.GetTempTable("db", "t")
+	require.False(t, ok, "rollback cannot restore confirmed dead ownership")
+	ses.addTempTable("db", "t", physical, "newtxn", "recreate")
+	ses.commitTempTableTransaction("newtxn")
+	ses.cleanupRetiredTempTables(context.Background())
+	name, ok := ses.GetTempTable("db", "t")
+	require.True(t, ok)
+	require.Equal(t, physical, name)
+	require.Empty(t, ses.retiredTempTables, "commit must not DROP a reused physical identity")
+	// A lookup of the previous generation cannot erase replacement or its undo.
+	ses.addTempTable("db", "t", "replacement", "txn2", "replace")
+	ses.ForgetMissingTemporaryTable("db", "t", physical)
+	name, ok = ses.GetTempTable("db", "t")
+	require.True(t, ok)
+	require.Equal(t, "replacement", name)
+	ses.rollbackTempTableTransaction("txn2")
+	name, ok = ses.GetTempTable("db", "t")
+	require.True(t, ok)
+	require.Equal(t, physical, name)
+}
+
 func TestSessionTempTableMigrationSnapshot(t *testing.T) {
 	ses := &Session{
 		tempTables:          make(map[string]string),
@@ -1920,17 +2109,35 @@ func TestSessionTemporaryDDLLifetime(t *testing.T) {
 	t.Run("published schema survives unrelated transaction rollback", func(t *testing.T) {
 		ses := newSession()
 		ses.addTempTable("db", "internal", "internal-physical", "txn", "stmt")
-		ses.PublishTemporaryTable("db", "public", "public-generation")
+		ses.PublishTemporaryTable("db", "public", "public-generation", nil)
 		ses.rollbackTempTableTransaction("txn")
 		name, ok := ses.GetTempTable("db", "public")
 		require.True(t, ok)
 		require.Equal(t, "public-generation", name)
 		require.True(t, ses.OwnsTemporaryTable("db", name))
+		ses.PublishTemporaryTable("db", "generated", "public-generation_t", nil)
+		require.True(t, ses.OwnsTemporaryTable("db", "public-generation"))
 		require.False(t, ses.OwnsTemporaryTable("other-db", name))
 		require.False(t, ses.OwnsTemporaryTable("db", "__mo_tmp_unowned"))
 		_, ok = ses.GetTempTable("db", "internal")
 		require.False(t, ok)
 	})
+	t.Run("exact index ownership survives root rename and rollback", func(t *testing.T) {
+		ses := newSession()
+		ses.PublishTemporaryTable("db", "t", "__mo_tmp_generation_t", map[string]string{"idx": "index-physical"})
+		require.False(t, ses.OwnsTemporaryTable("db", "__mo_tmp"))
+		require.False(t, ses.OwnsTemporaryTable("db", "__mo_tmp_generation"))
+		ses.removeTempTable("db", "t", "txn", "stmt")
+		ses.addTempTable("db", "renamed", "renamed-physical", "txn", "stmt")
+		require.True(t, ses.OwnsTemporaryTable("db", "index-physical"))
+		ses.rollbackTempTableTransaction("txn")
+		require.True(t, ses.OwnsTemporaryTable("db", "__mo_tmp_generation_t"))
+		require.True(t, ses.OwnsTemporaryTable("db", "index-physical"))
+		require.Len(t, ses.snapshotTempTables(), 1, "hidden indexes must not become migration roots")
+		ses.RetireTemporaryTable("db", "t", "__mo_tmp_generation_t", []string{"index-physical"})
+		require.False(t, ses.OwnsTemporaryTable("db", "index-physical"))
+	})
+
 	t.Run("retirement cannot be undone or overwrite replacement", func(t *testing.T) {
 		ses := newSession()
 		ses.addTempTable("db", "t", "old", "", "")
@@ -1942,7 +2149,7 @@ func TestSessionTemporaryDDLLifetime(t *testing.T) {
 		ses.rollbackTempTableStatement("txn", "stmt")
 		_, ok := ses.GetTempTable("db", "t")
 		require.False(t, ok)
-		ses.PublishTemporaryTable("db", "t", "new-generation")
+		ses.PublishTemporaryTable("db", "t", "new-generation", nil)
 		ses.rollbackTempTableTransaction("txn")
 		name, ok := ses.GetTempTable("db", "t")
 		require.True(t, ok)
@@ -1959,7 +2166,7 @@ func TestSessionTemporaryDDLLifetime(t *testing.T) {
 		for i := 0; i < maxSessionTemporaryTableGenerations; i++ {
 			name := fmt.Sprintf("generation-%d", i)
 			require.NoError(t, ses.CheckTemporaryTableCapacity(context.Background()))
-			ses.PublishTemporaryTable("db", "t", name)
+			ses.PublishTemporaryTable("db", "t", name, nil)
 			ses.RetireTemporaryTable("db", "t", name, nil)
 		}
 		require.Error(t, ses.CheckTemporaryTableCapacity(context.Background()))
@@ -2046,7 +2253,7 @@ func TestSessionResetTempTablesIsSynchronousAndRetryable(t *testing.T) {
 
 	ses := NewSession(context.Background(), service, &testMysqlWriter{}, nil)
 	ses.SetTenantInfo(&TenantInfo{Tenant: "tenant", TenantID: 42})
-	ses.AddTempTable("db", "alias", "physical")
+	ses.PublishTemporaryTable("db", "alias", "physical", map[string]string{"idx": "physical-index"})
 	t.Cleanup(ses.Close)
 
 	err := ses.resetTempTables(context.Background())
@@ -2054,17 +2261,19 @@ func TestSessionResetTempTablesIsSynchronousAndRetryable(t *testing.T) {
 	realName, ok := ses.GetTempTable("db", "alias")
 	require.True(t, ok, "failed cleanup must retain an owner for retry")
 	require.Equal(t, "physical", realName)
+	require.True(t, ses.OwnsTemporaryTable("db", "physical-index"))
 
 	require.NoError(t, ses.resetTempTables(context.Background()))
 	_, ok = ses.GetTempTable("db", "alias")
 	require.False(t, ok)
+	require.False(t, ses.OwnsTemporaryTable("db", "physical-index"))
 	require.Equal(t, []string{
 		"DROP TABLE IF EXISTS " + sqlquote.QualifiedIdent("db", "physical"),
 		"DROP TABLE IF EXISTS " + sqlquote.QualifiedIdent("db", "physical"),
 	}, exec.sql)
 	// A failed reset preserves reclamation ownership, not logical visibility.
 	exec.failures = 1
-	ses.PublishTemporaryTable("db", "alias", "retired-generation")
+	ses.PublishTemporaryTable("db", "alias", "retired-generation", nil)
 	ses.RetireTemporaryTable("db", "alias", "retired-generation", nil)
 	require.ErrorIs(t, ses.resetTempTables(context.Background()), assert.AnError)
 	_, ok = ses.GetTempTable("db", "alias")
@@ -2078,7 +2287,7 @@ func TestSessionResetTempTablesIsSynchronousAndRetryable(t *testing.T) {
 	// generation. A cancelled user request does not discard cleanup ownership.
 	exec.failures = 1
 	ses.RetireTemporaryTable("db", "alias", "retired-again", nil)
-	ses.PublishTemporaryTable("db", "alias", "replacement")
+	ses.PublishTemporaryTable("db", "alias", "replacement", nil)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	ses.cleanupRetiredTempTables(ctx)
@@ -2106,6 +2315,196 @@ func TestRemoveAllPrepareStmts(t *testing.T) {
 	// safe to call again on an already-empty session
 	ses.RemoveAllPrepareStmts()
 	assert.Equal(t, 0, len(ses.prepareStmts))
+}
+
+func TestInvalidatePrivilegeCacheInvalidatesRewritePreparedStatements(t *testing.T) {
+	ctx := context.Background()
+	oldStmt := &PrepareStmt{Name: "old"}
+	ses := &Session{
+		cache:        &privilegeCache{},
+		prepareStmts: map[string]*PrepareStmt{"old": oldStmt},
+	}
+	ses.rewriteEnabled.Store(true)
+
+	ses.InvalidatePrivilegeCache()
+
+	_, err := ses.GetPrepareStmt(ctx, "old")
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNeedReprepare))
+	require.Equal(t, moerr.ER_NEED_REPREPARE, err.(*moerr.Error).MySQLCode())
+	// Explicit cleanup remains available for an invalidated handle.
+	got, err := ses.getPrepareStmtAllowInvalidated(ctx, "old")
+	require.NoError(t, err)
+	require.Same(t, oldStmt, got)
+
+	// A fresh PREPARE replaces the invalidated handle and is executable.
+	newStmt := &PrepareStmt{Name: "old"}
+	require.NoError(t, ses.SetPrepareStmt(ctx, "old", newStmt))
+	got, err = ses.GetPrepareStmt(ctx, "old")
+	require.NoError(t, err)
+	require.Same(t, newStmt, got)
+}
+
+func TestInvalidatePrivilegeCacheInvalidatesMandatoryRoleRulePreparedStatements(t *testing.T) {
+	stmt := &PrepareStmt{
+		Name:                  "role_rule",
+		rewritePolicyCaptured: true,
+		rewritePolicyEnabled:  true,
+	}
+	ses := &Session{
+		cache:        &privilegeCache{},
+		ruleCache:    map[string]string{"db.t": "select * from db.t where tenant = 1"},
+		prepareStmts: map[string]*PrepareStmt{"role_rule": stmt},
+	}
+	// Mandatory role rules remain active when the optional rewrite switch is
+	// disabled.
+	ses.rewriteEnabled.Store(false)
+
+	ses.InvalidatePrivilegeCache()
+
+	require.True(t, stmt.rewritePolicyInvalidated.Load())
+}
+
+func TestInvalidatePrivilegeCachePreservesPreparedStatementsWithoutRewrite(t *testing.T) {
+	ctx := context.Background()
+	stmt := &PrepareStmt{Name: "stmt"}
+	ses := &Session{
+		cache:        &privilegeCache{},
+		prepareStmts: map[string]*PrepareStmt{"stmt": stmt},
+	}
+
+	ses.InvalidatePrivilegeCache()
+
+	got, err := ses.GetPrepareStmt(ctx, "stmt")
+	require.NoError(t, err)
+	require.Same(t, stmt, got)
+}
+
+func TestSetPrepareStmtRejectsStaleRewritePolicyGeneration(t *testing.T) {
+	ctx := context.Background()
+	for _, testCase := range []struct {
+		name            string
+		capturedEnabled bool
+		currentEnabled  bool
+		currentRoleRule bool
+		invalidated     bool
+	}{
+		{name: "enabled to enabled", capturedEnabled: true, currentEnabled: true, invalidated: true},
+		{name: "enabled to disabled", capturedEnabled: true, currentEnabled: false, invalidated: true},
+		{name: "disabled to enabled", capturedEnabled: false, currentEnabled: true, invalidated: true},
+		{name: "disabled to disabled", capturedEnabled: false, currentEnabled: false},
+		{name: "disabled to mandatory role rule", capturedEnabled: false, currentRoleRule: true, invalidated: true},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			ses := &Session{
+				cache:                   &privilegeCache{},
+				ruleCache:               map[string]string{},
+				prepareStmts:            make(map[string]*PrepareStmt),
+				rewritePolicyGeneration: 1,
+			}
+			if testCase.currentRoleRule {
+				ses.ruleCache["db.t"] = "select * from db.t where tenant = 1"
+			}
+			ses.rewriteEnabled.Store(testCase.currentEnabled)
+			stale := &PrepareStmt{
+				Name:                    "stale",
+				rewritePolicyCaptured:   true,
+				rewritePolicyEnabled:    testCase.capturedEnabled,
+				rewritePolicyGeneration: 0,
+			}
+			require.NoError(t, ses.SetPrepareStmt(ctx, stale.Name, stale))
+			require.Equal(t, testCase.invalidated, stale.rewritePolicyInvalidated.Load())
+			got, err := ses.GetPrepareStmt(ctx, stale.Name)
+			if testCase.invalidated {
+				require.Error(t, err)
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrNeedReprepare))
+				return
+			}
+			require.NoError(t, err)
+			require.Same(t, stale, got)
+		})
+	}
+
+	ses := &Session{
+		cache:                   &privilegeCache{},
+		prepareStmts:            make(map[string]*PrepareStmt),
+		rewritePolicyGeneration: 1,
+	}
+	ses.rewriteEnabled.Store(true)
+	fresh := &PrepareStmt{
+		Name:                    "fresh",
+		rewritePolicyCaptured:   true,
+		rewritePolicyEnabled:    true,
+		rewritePolicyGeneration: 1,
+	}
+	require.NoError(t, ses.SetPrepareStmt(ctx, fresh.Name, fresh))
+	got, err := ses.GetPrepareStmt(ctx, fresh.Name)
+	require.NoError(t, err)
+	require.Same(t, fresh, got)
+}
+
+func TestPreparedStatementsValidateRefreshedRewritePolicy(t *testing.T) {
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name       string
+		enabled    bool
+		refreshErr error
+		generation uint64
+		invalid    bool
+	}{
+		{name: "disabled to mandatory", enabled: true, generation: 1, invalid: true},
+		{name: "disabled to disabled", generation: 1},
+		{name: "failed load", refreshErr: assert.AnError, generation: 1, invalid: true},
+		{name: "concurrent invalidation", generation: 0, invalid: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			old := &PrepareStmt{Name: "old", rewritePolicyCaptured: true}
+			fresh := &PrepareStmt{Name: "fresh", rewritePolicyCaptured: true, rewritePolicyGeneration: 1}
+			ses := &Session{
+				cache:        &privilegeCache{},
+				ruleCache:    map[string]string{},
+				prepareStmts: map[string]*PrepareStmt{"old": old},
+			}
+			ses.InvalidatePrivilegeCache()
+			require.False(t, old.rewritePolicyInvalidated.Load(), "disabled handle awaits the refreshed policy")
+			// Model the cache reload after an error path such as failed SET ROLE.
+			ses.ruleCache = map[string]string{}
+			if tc.enabled {
+				ses.ruleCache["db.t"] = "select * from db.t where tenant = 1"
+			}
+			ses.prepareStmts["fresh"] = fresh
+			ses.validatePreparedStatementsAfterRewritePolicyRefresh(
+				&rewritePolicySnapshot{generation: tc.generation, enabled: tc.enabled}, tc.refreshErr)
+			got, err := ses.GetPrepareStmt(ctx, "old")
+			require.Same(t, old, got)
+			if tc.invalid {
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrNeedReprepare))
+			} else {
+				require.NoError(t, err)
+			}
+			_, err = ses.GetPrepareStmt(ctx, "fresh")
+			if tc.refreshErr != nil || tc.generation != 1 {
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrNeedReprepare))
+			} else {
+				require.NoError(t, err, "refresh must preserve handles captured in the current generation")
+			}
+		})
+	}
+}
+
+func TestGetPrepareStmtRejectsStaleGenerationWithCurrentMandatoryRules(t *testing.T) {
+	stmt := &PrepareStmt{Name: "old", rewritePolicyCaptured: true}
+	ses := &Session{
+		ruleCache:               map[string]string{"db.t": "select * from db.t where tenant = 1"},
+		rewritePolicyGeneration: 1,
+		prepareStmts:            map[string]*PrepareStmt{"old": stmt},
+	}
+	got, err := ses.GetPrepareStmt(context.Background(), "old")
+	require.Same(t, stmt, got)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNeedReprepare))
+	got, err = ses.getPrepareStmtAllowInvalidated(context.Background(), "old")
+	require.NoError(t, err, "explicit cleanup must remain available")
+	require.Same(t, stmt, got)
 }
 
 func TestPrepareStmtNamesAreCaseInsensitive(t *testing.T) {
@@ -2185,4 +2584,20 @@ func TestSession_Cleanup(t *testing.T) {
 	rt.ses = ses
 	ctx4 := rt.getCleanupContext()
 	assert.Equal(t, ses.txnHandler.txnCtx, ctx4)
+}
+
+func BenchmarkSessionOwnsTemporaryTableOrdinary(b *testing.B) {
+	ses := &Session{}
+	for i := 0; i < 1024; i++ {
+		alias := fmt.Sprintf("t%d", i)
+		ses.PublishTemporaryTable("db", alias, "__mo_tmp_00112233445566778899aabbccddeeff_db_"+alias, nil)
+	}
+	ordinary := strings.Repeat("ordinary", 8)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if ses.OwnsTemporaryTable("db", ordinary) {
+			b.Fatal("ordinary table claimed as temporary")
+		}
+	}
 }

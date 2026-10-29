@@ -724,18 +724,21 @@ Table    Create Table
 enum01    CREATE TABLE `enum01` (\n  `id` int DEFAULT NULL,\n  `name` enum('A','B','C') DEFAULT NULL\n)
 desc enum01;
 Field    Type    Null    Key    Default    Extra    Comment
-id    INT(32)    YES        null        
-name    ENUM('A','B','C')    YES        null        
+id    int    YES        null        
+name    enum('A','B','C')    YES        null        
 select * from enum01;
 id    name
 1    null
 insert into enum01 values (2,'B');
+set @add_drop_enum_saved_sql_mode = @@session.sql_mode;
+set session sql_mode = 'STRICT_TRANS_TABLES';
 insert into enum01 values (3,'D');
-internal error: convert to MySQL enum failed: item D is not in enum [A B C]
+Data truncated for ENUM value: 'D'
 select * from enum01;
 id    name
 1    null
 2    B
+set session sql_mode = @add_drop_enum_saved_sql_mode;
 alter table enum01 drop column name;
 show create table enum01;
 Table    Create Table

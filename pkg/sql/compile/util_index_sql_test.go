@@ -21,6 +21,7 @@ import (
 
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/collation"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -62,6 +63,75 @@ func TestGenInsertIndexTableSql_QuotesReservedKeywordColumn(t *testing.T) {
 	require.Contains(t, sql, "select serial_full(`order`,`id`), `id` from `test`.`files_related_mph`;")
 }
 
+// Issue #31080: db/table/column identifiers may legitimately contain backticks
+// (`tick“table`). The default-ALGORITHM backfill SQL is re-parsed by the
+// internal executor, so every identifier spliced into the format templates must
+// carry doubled backticks; previously only ALGORITHM=COPY worked.
+func TestGenInsertIndexTableSql_EscapesBacktickIdentifiers(t *testing.T) {
+	pkeyTableDef := &planpb.TableDef{
+		Name: "tick`table",
+		Pkey: &planpb.PrimaryKeyDef{
+			PkeyColName: "p`k",
+			Names:       []string{"p`k"},
+		},
+	}
+
+	// Secondary index with multi parts and primary key (the exact failing shape
+	// from the issue report).
+	secondary := &planpb.IndexDef{
+		IndexTableName: "__mo_index_secondary_fixed",
+		Parts:          []string{"v`1", "v2"},
+		Unique:         false,
+	}
+	sql, err := genInsertIndexTableSql(pkeyTableDef, secondary, "db`1", false)
+	require.NoError(t, err)
+	require.Contains(t, sql, "insert into  `db``1`.`__mo_index_secondary_fixed`")
+	require.Contains(t, sql, "serial_full(`v``1`,`v2`)")
+	require.Contains(t, sql, "`p``k` from `db``1`.`tick``table`;")
+
+	// Multi part index on a table without primary key.
+	noKeyTableDef := &planpb.TableDef{
+		Name: "tick`table",
+		Pkey: &planpb.PrimaryKeyDef{},
+	}
+	sql, err = genInsertIndexTableSql(noKeyTableDef, secondary, "db`1", false)
+	require.NoError(t, err)
+	require.Contains(t, sql, "insert into  `db``1`.`__mo_index_secondary_fixed`")
+	require.Contains(t, sql, "select serial(`v``1`,`v2`) from `db``1`.`tick``table` where serial(`v``1`,`v2`) is not null;")
+
+	// Single part index with primary key (parenthesized key expression branch).
+	singlePart := &planpb.IndexDef{
+		IndexTableName: "__mo_index_secondary_single",
+		Parts:          []string{"v`1"},
+		Unique:         false,
+	}
+	sql, err = genInsertIndexTableSql(pkeyTableDef, singlePart, "db`1", false)
+	require.NoError(t, err)
+	require.Contains(t, sql, "select (`v``1`), `p``k` from `db``1`.`tick``table` where (`v``1`) is not null;")
+
+	// Master index backfill goes through a separate generator that must apply
+	// the same quoting.
+	masterPkeyTableDef := &planpb.TableDef{
+		Name: "tick`table",
+		Cols: []*planpb.ColDef{
+			{Name: "p`k", Seqnum: 11},
+			{Name: "v`1", Seqnum: 12},
+		},
+		Pkey: &planpb.PrimaryKeyDef{
+			PkeyColName: "p`k",
+			Names:       []string{"p`k"},
+		},
+	}
+	master := &planpb.IndexDef{
+		IndexTableName: "__mo_index_master",
+		Parts:          []string{"v`1"},
+	}
+	sqls := genInsertIndexTableSqlForMasterIndex(masterPkeyTableDef, master, "db`1")
+	require.Len(t, sqls, 1)
+	require.Contains(t, sqls[0], "insert into  `db``1`.`__mo_index_master`")
+	require.Contains(t, sqls[0], "serial_full('12', `v``1`, `p``k`), `p``k` from `db``1`.`tick``table`;")
+}
+
 func TestGenInsertIndexTableSql_UsesPrefixExpression(t *testing.T) {
 	originTableDef := &planpb.TableDef{
 		Name: "orders",
@@ -81,6 +151,74 @@ func TestGenInsertIndexTableSql_UsesPrefixExpression(t *testing.T) {
 	require.NoError(t, err)
 
 	require.Equal(t, "insert into  `test`.`__mo_index_unique_test` select (substring(`order`, 1, 5)), `id` from `test`.`orders` where (substring(`order`, 1, 5)) is not null;", sql)
+}
+
+func TestGenInsertIndexTableSqlUsesVersionedPhysicalKeys(t *testing.T) {
+	originTableDef := &planpb.TableDef{
+		Name: "orders",
+		Cols: []*planpb.ColDef{{
+			Name: "name",
+			Typ:  planpb.Type{Id: int32(types.T_varchar), Charset: uint32(types.CharsetUTF8MB4UnicodeCI)},
+		}},
+		Pkey: &planpb.PrimaryKeyDef{
+			PkeyColName: "id",
+			Names:       []string{"id"},
+		},
+	}
+
+	t.Run("single-part unique", func(t *testing.T) {
+		indexDef := &planpb.IndexDef{
+			IndexTableName: "__mo_index_unique_v1",
+			Parts:          []string{"name"},
+			Unique:         true,
+			KeyFormat:      collation.KeyFormatV1,
+		}
+		sql, err := genInsertIndexTableSql(originTableDef, indexDef, "test", true)
+		require.NoError(t, err)
+		require.Contains(t, sql, "physical_collation_key(`name`)")
+	})
+
+	t.Run("composite unique", func(t *testing.T) {
+		indexDef := &planpb.IndexDef{
+			IndexTableName: "__mo_index_unique_v1",
+			Parts:          []string{"name", catalog.CreateAlias("id")},
+			Unique:         true,
+			KeyFormat:      collation.KeyFormatV1,
+		}
+		sql, err := genInsertIndexTableSql(originTableDef, indexDef, "test", true)
+		require.NoError(t, err)
+		require.Contains(t, sql, "physical_serial(`name`,`id`)")
+	})
+
+	t.Run("composite secondary", func(t *testing.T) {
+		indexDef := &planpb.IndexDef{
+			IndexTableName: "__mo_index_secondary_v1",
+			Parts:          []string{"name", catalog.CreateAlias("id")},
+			KeyFormat:      collation.KeyFormatV1,
+		}
+		sql, err := genInsertIndexTableSql(originTableDef, indexDef, "test", false)
+		require.NoError(t, err)
+		require.Contains(t, sql, "physical_serial_full(`name`,`id`)")
+	})
+}
+
+func TestGenInsertIndexTableSqlWithoutPrimaryKeyKeepsSerialContract(t *testing.T) {
+	originTableDef := &planpb.TableDef{
+		Name: "orders",
+		Pkey: &planpb.PrimaryKeyDef{},
+	}
+	indexDef := &planpb.IndexDef{
+		IndexTableName: "__mo_index_secondary_no_pk",
+		Parts:          []string{"name", "region"},
+	}
+	sql, err := genInsertIndexTableSql(originTableDef, indexDef, "test", false)
+	require.NoError(t, err)
+	require.Equal(t, "insert into  `test`.`__mo_index_secondary_no_pk` select serial(`name`,`region`) from `test`.`orders` where serial(`name`,`region`) is not null;", sql)
+
+	indexDef.KeyFormat = collation.KeyFormatV1
+	sql, err = genInsertIndexTableSql(originTableDef, indexDef, "test", false)
+	require.NoError(t, err)
+	require.Equal(t, "insert into  `test`.`__mo_index_secondary_no_pk` select physical_serial(`name`,`region`) from `test`.`orders` where physical_serial(`name`,`region`) is not null;", sql)
 }
 
 func TestGenInsertIndexTableSql_SpatialIndexUsesRawGeometryColumn(t *testing.T) {
@@ -149,6 +287,61 @@ func TestBuildCreateUniqueIndexDuplicateCheckSQL(t *testing.T) {
 		require.NoError(t, err)
 
 		require.Equal(t, "SELECT substring(`order`, 1, 5) FROM `test`.`orders` WHERE substring(`order`, 1, 5) IS NOT NULL GROUP BY substring(`order`, 1, 5) HAVING count(*) > 1 LIMIT 1", sql)
+	})
+
+	t.Run("v1 native single column groups by physical key", func(t *testing.T) {
+		tableDef := &planpb.TableDef{
+			Name: "orders",
+			Cols: []*planpb.ColDef{{
+				Name: "name",
+				Typ:  planpb.Type{Id: int32(types.T_varchar), Charset: uint32(types.CharsetUTF8MB4UnicodeCI)},
+			}},
+		}
+		indexDef := &planpb.IndexDef{
+			IndexName: "u_name",
+			Parts:     []string{"name"},
+			Unique:    true,
+			KeyFormat: collation.KeyFormatV1,
+		}
+
+		sql, err := buildCreateUniqueIndexDuplicateCheckSQL("test", tableDef, indexDef)
+		require.NoError(t, err)
+		require.Equal(t, "SELECT `name` FROM `test`.`orders` WHERE `name` IS NOT NULL AND physical_collation_key(`name`) IN (SELECT physical_collation_key(`name`) FROM `test`.`orders` WHERE `name` IS NOT NULL GROUP BY physical_collation_key(`name`) HAVING count(*) > 1 LIMIT 1) LIMIT 1", sql)
+	})
+
+	t.Run("v1 composite key keeps source values for diagnostics", func(t *testing.T) {
+		tableDef := &planpb.TableDef{Name: "orders"}
+		indexDef := &planpb.IndexDef{
+			IndexName: "u_order_id",
+			Parts:     []string{"order", catalog.CreateAlias("id")},
+			Unique:    true,
+			KeyFormat: collation.KeyFormatV1,
+		}
+
+		sql, err := buildCreateUniqueIndexDuplicateCheckSQL("test", tableDef, indexDef)
+		require.NoError(t, err)
+		require.Equal(t, "SELECT `order`,`id` FROM `test`.`orders` WHERE `order` IS NOT NULL AND `id` IS NOT NULL AND physical_serial(`order`,`id`) IN (SELECT physical_serial(`order`,`id`) FROM `test`.`orders` WHERE `order` IS NOT NULL AND `id` IS NOT NULL GROUP BY physical_serial(`order`,`id`) HAVING count(*) > 1 LIMIT 1) LIMIT 1", sql)
+	})
+
+	t.Run("v1 prefix key applies prefix before collation key", func(t *testing.T) {
+		tableDef := &planpb.TableDef{
+			Name: "orders",
+			Cols: []*planpb.ColDef{{
+				Name: "name",
+				Typ:  planpb.Type{Id: int32(types.T_varchar), Charset: uint32(types.CharsetUTF8MB4UnicodeCI)},
+			}},
+		}
+		indexDef := &planpb.IndexDef{
+			IndexName:       "u_name",
+			Parts:           []string{"name"},
+			Unique:          true,
+			KeyFormat:       collation.KeyFormatV1,
+			IndexAlgoParams: `{"prefix_lengths":"name:5"}`,
+		}
+
+		sql, err := buildCreateUniqueIndexDuplicateCheckSQL("test", tableDef, indexDef)
+		require.NoError(t, err)
+		require.Equal(t, "SELECT substring(`name`, 1, 5) FROM `test`.`orders` WHERE substring(`name`, 1, 5) IS NOT NULL AND physical_collation_key(substring(`name`, 1, 5)) IN (SELECT physical_collation_key(substring(`name`, 1, 5)) FROM `test`.`orders` WHERE substring(`name`, 1, 5) IS NOT NULL GROUP BY physical_collation_key(substring(`name`, 1, 5)) HAVING count(*) > 1 LIMIT 1) LIMIT 1", sql)
 	})
 
 	t.Run("invalid prefix params", func(t *testing.T) {

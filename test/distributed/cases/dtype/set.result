@@ -12,15 +12,15 @@ set01  ¦  CREATE TABLE `set01` (
 )
 desc set01;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-id  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
-colors  ¦  SET('red','green','blue')  ¦  YES  ¦    ¦  null  ¦    ¦  
+id  ¦  int  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
+colors  ¦  set('red','green','blue')  ¦  YES  ¦    ¦  null  ¦    ¦  
 select table_name, column_name, data_type, column_type, is_nullable
 from information_schema.columns
 where table_name = 'set01' and column_name not like '__mo%'
 order by column_name;
 ➤ table_name[12,-1,0]  ¦  column_name[12,-1,0]  ¦  data_type[12,-1,0]  ¦  column_type[12,-1,0]  ¦  is_nullable[12,-1,0]  𝄀
-set01  ¦  colors  ¦  set  ¦  SET('red','green','blue')  ¦  YES  𝄀
-set01  ¦  id  ¦  int  ¦  INT(32)  ¦  NO
+set01  ¦  colors  ¦  set  ¦  set('red','green','blue')  ¦  YES  𝄀
+set01  ¦  id  ¦  int  ¦  int  ¦  NO
 insert into set01 values
 (1, 'red'),
 (2, 'blue,red'),
@@ -213,7 +213,7 @@ select * from set01 order by id;
 4  ¦  red,blue  𝄀
 5  ¦  null
 insert into set01 values (6, 'yellow');
-internal error: convert to MySQL set failed: item yellow is not in set [red,green,blue]
+Data truncated for SET value: 'yellow'
 drop table if exists set02;
 create table set02 as select colors from set01;
 show create table set02;
@@ -252,7 +252,7 @@ drop table if exists set_modify;
 create table set_modify (id int primary key, tags set('a','b','c'));
 insert into set_modify values (1, 'a,c'), (2, 'b');
 alter table set_modify modify column tags set('a','b');
-internal error: convert to MySQL set failed: item a,c is not in set [a,b]
+Data truncated for SET value: 'a,c'
 drop table set_modify;
 drop table if exists set_modify2;
 create table set_modify2 (id int primary key, tags set('a','b'));
@@ -280,8 +280,8 @@ xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 select colors, count(*) as cnt from set01 group by colors order by colors;
 ➤ colors[12,-1,0]  ¦  cnt[-5,64,0]  𝄀
 null  ¦  1  𝄀
-red,blue  ¦  2  𝄀
-red,green  ¦  2
+red,green  ¦  2  𝄀
+red,blue  ¦  2
 drop table if exists set_load_err;
 create table set_load_err (id int primary key, colors set('red','green','blue'));
 load data infile '$resources/load_data/set_bad.csv'

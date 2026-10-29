@@ -47,10 +47,11 @@ type S3FS struct {
 	rawStorage ObjectStorage
 	keyPrefix  string
 
-	memCache    *MemCache
-	diskCache   *DiskCache
-	remoteCache *RemoteCache
-	asyncUpdate bool
+	memCache       *MemCache
+	diskCache      *DiskCache
+	indexFileCache *IndexFileCache
+	remoteCache    *RemoteCache
+	asyncUpdate    bool
 
 	perfCounterSets []*perfcounter.CounterSet
 
@@ -66,6 +67,35 @@ type S3FS struct {
 var _ FileService = new(S3FS)
 var _ ObjectIdentityFileService = new(S3FS)
 
+type objectStorageBackend uint8
+
+const (
+	objectStorageAWS objectStorageBackend = iota
+	objectStorageHDFS
+	objectStorageMinio
+	objectStorageQCloud
+	objectStorageAliyun
+	objectStorageDisk
+)
+
+// Provider construction and SQL admission must use the same precedence.
+func selectObjectStorageBackend(args ObjectStorageArguments) objectStorageBackend {
+	switch {
+	case args.IsHDFS || strings.HasPrefix(strings.ToLower(args.Endpoint), "hdfs"):
+		return objectStorageHDFS
+	case args.IsMinio || strings.Contains(args.Endpoint, "ctyunapi.cn"):
+		return objectStorageMinio
+	case strings.Contains(args.Endpoint, "myqcloud.com"):
+		return objectStorageQCloud
+	case strings.Contains(args.Endpoint, "aliyuncs.com"):
+		return objectStorageAliyun
+	case strings.EqualFold(args.Endpoint, "disk"):
+		return objectStorageDisk
+	default:
+		return objectStorageAWS
+	}
+}
+
 func NewS3FS(
 	ctx context.Context,
 	args ObjectStorageArguments,
@@ -75,7 +105,7 @@ func NewS3FS(
 	noDefaultCredential bool,
 ) (*S3FS, error) {
 
-	args.NoDefaultCredentials = noDefaultCredential
+	args.NoDefaultCredentials = args.NoDefaultCredentials || noDefaultCredential || args.callerCredentialsOnly
 
 	fs := &S3FS{
 		name:            args.Name,
@@ -87,39 +117,37 @@ func NewS3FS(
 	}
 
 	var err error
-	switch {
+	switch selectObjectStorageBackend(args) {
 
-	case args.IsHDFS || strings.HasPrefix(strings.ToLower(args.Endpoint), "hdfs"):
+	case objectStorageHDFS:
 		// HDFS
 		fs.storage, err = NewHDFS(ctx, args, perfCounterSets)
 		if err != nil {
 			return nil, err
 		}
 
-	case args.IsMinio ||
-		// 天翼云，使用SignatureV2验证，其他SDK不再支持
-		strings.Contains(args.Endpoint, "ctyunapi.cn"):
+	case objectStorageMinio:
 		// MinIO SDK
 		fs.storage, err = NewMinioSDK(ctx, args, perfCounterSets)
 		if err != nil {
 			return nil, err
 		}
 
-	case strings.Contains(args.Endpoint, "myqcloud.com"):
+	case objectStorageQCloud:
 		// 腾讯云
 		fs.storage, err = NewQCloudSDK(ctx, args, perfCounterSets)
 		if err != nil {
 			return nil, err
 		}
 
-	case strings.Contains(args.Endpoint, "aliyuncs.com"):
+	case objectStorageAliyun:
 		// 阿里云
 		fs.storage, err = NewAliyunSDK(ctx, args, perfCounterSets)
 		if err != nil {
 			return nil, err
 		}
 
-	case strings.EqualFold(args.Endpoint, "disk"):
+	case objectStorageDisk:
 		// disk based
 		fs.storage, err = newDiskObjectStorage(ctx, args, perfCounterSets)
 		if err != nil {
@@ -297,6 +325,7 @@ func (s *S3FS) initCaches(ctx context.Context, config CacheConfig) error {
 	s.remoteCache = caches.remote
 	s.memCache = caches.memory
 	s.diskCache = caches.disk
+	s.indexFileCache = caches.index
 	if s.memCache != nil {
 		s.decodedReads = newDecodedReadRegistry(min(int64(*config.MemoryCapacity), s.memCache.cache.Capacity()))
 	}
@@ -532,7 +561,10 @@ func (s *S3FS) Write(ctx context.Context, vector IOVector) (err error) {
 	}
 	key := s.pathToKey(path.File)
 	existsStart := time.Now()
-	exists, err := s.storage.Exists(ctx, key)
+	exists := false
+	if !exclusiveWrite(ctx) {
+		exists, err = s.storage.Exists(ctx, key)
+	}
 	metric.FSWriteDurationExists.Observe(time.Since(existsStart).Seconds())
 	if err != nil {
 		return err
@@ -609,7 +641,7 @@ func (s *S3FS) write(ctx context.Context, vector IOVector) (bytesWritten int, er
 	}
 
 	if pmw, ok := s.storage.(ParallelMultipartWriter); ok && pmw.SupportsParallelMultipart() &&
-		enableParallel {
+		enableParallel && !exclusiveWrite(ctx) {
 		opt := &ParallelMultipartOption{
 			PartSize:    defaultParallelMultipartPartSize,
 			Concurrency: runtime.NumCPU(),
@@ -1617,8 +1649,13 @@ func (*S3FS) ETLCompatible() {}
 
 var _ CachingFileService = new(S3FS)
 
+// IndexFileCache returns the index-file cache, or nil.
+func (s *S3FS) IndexFileCache() *IndexFileCache {
+	return s.indexFileCache
+}
+
 func (s *S3FS) Close(ctx context.Context) {
-	caches := fileServiceCaches{memory: s.memCache, disk: s.diskCache}
+	caches := fileServiceCaches{memory: s.memCache, disk: s.diskCache, index: s.indexFileCache}
 	if s.decodedReads != nil {
 		s.decodedReads.close(func() { caches.close(ctx) })
 	} else {

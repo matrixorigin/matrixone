@@ -26,8 +26,10 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/embed"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/tests/testutils"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -111,25 +113,37 @@ func TestIntersectAllParallelMultiplicity(t *testing.T) {
 			require.NoError(t, err, "merge pause: %s", last)
 		}
 
-		// Sixteen physical blocks on each side cross calcDOP's block threshold.
-		// Unmatched filler keys do not change the issue's 3-row intersection.
-		for _, input := range []struct {
-			table       string
-			values      []string
-			fillerStart int
-			fillerCount int
-		}{
-			{"left_bag", []string{"1", "1", "2", "null", "null", "3"}, 100, 10},
-			{"right_bag", []string{"1", "1", "1", "null", "4"}, 200, 11},
-		} {
-			for i := range input.fillerCount {
-				input.values = append(input.values, strconv.Itoa(input.fillerStart+i))
+		// Each autocommit insert writes one CN object, avoiding a separate TN
+		// flush for every row. Sixteen blocks cross calcDOP's threshold; the
+		// layout is checked below after restoring the injection state.
+		func() {
+			if fault.Enable() {
+				defer func() { require.True(t, fault.Disable()) }()
 			}
-			for _, value := range input.values {
-				execSQLDB(t, ctx, db, "insert into "+input.table+" values("+value+")")
-				execSQLDB(t, ctx, db, "select mo_ctl('dn','flush','"+name+"."+input.table+"')")
+			require.NoError(t, fault.AddFaultPoint(context.Background(),
+				objectio.FJ_CNWorkspaceForceFlush, ":::", "echo", 0, "", true))
+			defer func() {
+				removed, err := fault.RemoveFaultPoint(context.Background(), objectio.FJ_CNWorkspaceForceFlush)
+				require.NoError(t, err)
+				require.True(t, removed)
+			}()
+			for _, input := range []struct {
+				table       string
+				values      []string
+				fillerStart int
+				fillerCount int
+			}{
+				{"left_bag", []string{"1", "1", "2", "null", "null", "3"}, 100, 10},
+				{"right_bag", []string{"1", "1", "1", "null", "4"}, 200, 11},
+			} {
+				for i := range input.fillerCount {
+					input.values = append(input.values, strconv.Itoa(input.fillerStart+i))
+				}
+				for _, value := range input.values {
+					execSQLDB(t, ctx, db, "insert into "+input.table+" values("+value+")")
+				}
 			}
-		}
+		}()
 
 		for _, table := range []string{"left_bag", "right_bag"} {
 			var rows, blocks, objects int64

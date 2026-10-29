@@ -70,6 +70,11 @@ func TestArrowLoadBVT(t *testing.T) {
 	t.Run("CorruptInputRollback", func(t *testing.T) { testArrowCorruptInputRollback(t, db) })
 	t.Run("ExplicitTransactionVisibility", func(t *testing.T) { testArrowExplicitTransaction(t, c) })
 	t.Run("TwoSessionIsolation", func(t *testing.T) { testArrowTwoSessionIsolation(t, c) })
+	t.Run("PreparedDatabaseBinding", func(t *testing.T) {
+		for _, run := range []string{"Initial", "SameInstance"} {
+			t.Run(run, func(t *testing.T) { testArrowLoadPreparedDatabaseBinding(t, c, db) })
+		}
+	})
 	t.Run("DifferentialVsInsert", func(t *testing.T) { testArrowDifferentialVsInsert(t, db) })
 	t.Run("CommitPhaseFailureRollback", func(t *testing.T) { testArrowCommitPhaseFailureRollback(t, db) })
 	t.Run("LocalMinIO", func(t *testing.T) { testArrowLoadLocalMinIO(t, db) })
@@ -693,7 +698,7 @@ func testArrowClusterRestart(t *testing.T, c embed.Cluster, db *sql.DB) {
 	require.Equal(t, int64(1), queryCount(t, db, "select count(*) from restart_persistence"))
 
 	require.NoError(t, db.Close())
-	require.NoError(t, c.Close())
+	require.NoError(t, c.Stop())
 	require.NoError(t, c.Start())
 
 	restartedDB := openArrowLoadDB(t, c, 0)

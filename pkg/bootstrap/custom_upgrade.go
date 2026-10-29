@@ -22,6 +22,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
+	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_7"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -91,6 +92,7 @@ func (s *service) UpgradeOneTenant(ctx context.Context, tenantID int32) error {
 		WithMinCommittedTS(s.now()).
 		WithWaitCommittedLogApplied().
 		WithTimeZone(time.Local)
+	pendingV407 := false
 	err := s.exec.ExecTxn(
 		ctx,
 		func(txn executor.TxnExecutor) error {
@@ -114,13 +116,19 @@ func (s *service) UpgradeOneTenant(ctx context.Context, tenantID int32) error {
 				return err
 			}
 			if latestVersion.Version != currentCN.Version {
-				s.logger.Fatal("BUG: current cn's version(" +
-					currentCN.Version +
-					") must equal cluster latest version(" +
-					latestVersion.Version +
-					")")
+				// A newer CN may still be recovering the retained target. Let
+				// the caller retry after its cluster route has been created.
+				return moerr.NewInvalidStateNoCtxf(
+					"tenant upgrade requires current cn version %s to match cluster latest version %s",
+					currentCN.Version, latestVersion.Version)
 			}
 			if currentCN.Version == version {
+				if s.getFinalVersionHandle() == v4_0_7.Handler {
+					if latestVersion.VersionOffset != currentCN.VersionOffset {
+						return moerr.NewInvalidStateNoCtx("4.0.7 offset-only upgrades are not supported")
+					}
+					return nil
+				}
 				if latestVersion.VersionOffset != currentCN.VersionOffset {
 					return nil
 				}
@@ -143,13 +151,20 @@ func (s *service) UpgradeOneTenant(ctx context.Context, tenantID int32) error {
 				if err != nil {
 					return err
 				}
+				if len(upgrades) == 0 {
+					return moerr.NewInvalidStateNoCtx("tenant upgrade route is unavailable")
+				}
 				// latest cluster is already upgrade completed
 				if upgrades[len(upgrades)-1].State == versions.StateUpgradingTenant ||
 					upgrades[len(upgrades)-1].State == versions.StateReady {
 					break
 				}
 
-				time.Sleep(time.Second)
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				case <-time.After(time.Second):
+				}
 			}
 
 			// upgrade in current goroutine immediately
@@ -161,6 +176,10 @@ func (s *service) UpgradeOneTenant(ctx context.Context, tenantID int32) error {
 			for _, v := range s.handles {
 				if versions.Compare(v.Metadata().Version, from) >= 0 &&
 					v.Metadata().CanDirectUpgrade(from) {
+					if v == v4_0_7.Handler {
+						pendingV407 = versions.Compare(from, v.Metadata().Version) < 0
+						break
+					}
 					if err := v.HandleTenantUpgrade(ctx, tenantID, txn); err != nil {
 						return err
 					}
@@ -175,6 +194,11 @@ func (s *service) UpgradeOneTenant(ctx context.Context, tenantID int32) error {
 		opts)
 	if err != nil {
 		return moerr.AttachCause(ctx, err)
+	}
+	if pendingV407 {
+		if _, err := s.upgradeV407TenantOnDemand(ctx, tenantID); err != nil {
+			return err
+		}
 	}
 	s.mu.Lock()
 	s.mu.tenants[tenantID] = true
@@ -232,6 +256,7 @@ func GetAccountIdByName(accountName string, txn executor.TxnExecutor) (int32, er
 // UpgradePreCheck Manual upgrade environment pre check, check if there are any unready upgrade tasks in upgrade environment.
 // If there are, the unready upgrade tasks need to be processed first
 func (s *service) UpgradePreCheck(ctx context.Context) error {
+	var unReady bool
 	opts := executor.Options{}.
 		WithDatabase(catalog.MO_CATALOG).
 		WithMinCommittedTS(s.now()).
@@ -251,40 +276,39 @@ func (s *service) UpgradePreCheck(ctx context.Context) error {
 			}
 
 			final := s.getFinalVersionHandle().Metadata()
-			unReady, err := checkUpgradePerVersionUnready(txn, final)
+			unReady, err = checkUpgradePerVersionUnready(txn, final)
 			if err != nil {
-				s.logger.Error("failed to check task status in pgrade environment", zap.Error(err))
-				return err
+				s.logger.Error("failed to check task status in upgrade environment", zap.Error(err))
 			}
-
-			if unReady {
-				s.logger.Info("There are unexecuted tenant upgrade tasks in upgrade environment, start asynchronous supplementary execution")
-				s.adjustUpgrade()
-				if err := s.stopper.RunTask(s.asyncUpgradeTask); err != nil {
-					return err
-				}
-				for i := 0; i < s.upgrade.upgradeTenantTasks; i++ {
-					if err := s.stopper.RunTask(s.asyncUpgradeTenantTask); err != nil {
-						return err
-					}
-				}
-				return moerr.NewInternalError(ctx, "There is an untrigged upgrade tasks in the system, execution started, Please try again later")
-			}
-			return nil
+			return err
 		},
 		opts)
-	return err
+	if err != nil || !unReady {
+		return err
+	}
+
+	// A retained route needs both cluster and tenant consumers, even when
+	// automatic upgrade is disabled. Validate it through the normal admission
+	// path, outside the completed pre-check transaction, before starting workers.
+	s.logger.Info("There are unfinished upgrade tasks in upgrade environment, start asynchronous supplementary execution")
+	if err := s.BootstrapUpgrade(ctx); err != nil {
+		return err
+	}
+	return moerr.NewInternalError(ctx, "There is an untrigged upgrade tasks in the system, execution started, Please try again later")
 }
 
-// checkUpgradeEnvUnReady Check if the upgrade environment is ready
+// The version record owns target completion. Tenant workers can commit every
+// step as Ready before the cluster worker marks the target Ready, so steps alone
+// cannot decide whether a single-tenant request still needs recovery workers.
 func checkUpgradePerVersionUnready(txn executor.TxnExecutor, final versions.Version) (bool, error) {
-	sql := fmt.Sprintf("select id, from_version, to_version, final_version, final_version_offset from %s.%s "+
-		"where state = 1 and final_version != '%s' and final_version_offset != %d",
-		catalog.MO_CATALOG, catalog.MOUpgradeTable, final.Version, final.VersionOffset)
+	sql := fmt.Sprintf("select 1 from %s.%s "+
+		"where state != %d and (version != '%s' or version_offset != %d) limit 1",
+		catalog.MO_CATALOG, catalog.MOVersionTable, versions.StateReady, final.Version, final.VersionOffset)
 	res, err := txn.Exec(sql, executor.StatementOption{})
 	if err != nil {
 		return false, err
 	}
+	defer res.Close()
 
 	var loaded bool
 	res.ReadRows(func(rows int, cols []*vector.Vector) bool {

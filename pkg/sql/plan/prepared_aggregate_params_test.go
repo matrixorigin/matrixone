@@ -976,20 +976,41 @@ func TestNtileRequiresIntegerArgument(t *testing.T) {
 	}
 }
 
-func TestPreparedNumericAggregateDoesNotCoerceStrings(t *testing.T) {
-	tests := []string{
-		"select sum(n_name) from nation",
-		"select avg(n_name) over () from nation",
-		"select sum(cast(? as char)) from nation",
-		"with recursive r(n) as (select \"x\" union all select n from r where n = \"never\") select sum(n) from r",
-		"with recursive r(n) as (select cast(? as char) union all select n from r where n = \"never\") select sum(n) from r",
-	}
-	for _, sql := range tests {
-		t.Run(sql, func(t *testing.T) {
-			mock := NewMockOptimizer(false, newPlanTestProcess(t))
-			_, err := runOneStmt(mock, t, fmt.Sprintf("prepare stmt1 from '%s'", sql))
-			require.ErrorContains(t, err, "invalid argument aggregate function")
-		})
+func TestPreparedNumericAggregateCoercesStringsWithoutChangingSourceDomain(t *testing.T) {
+	for _, name := range []string{"sum", "avg"} {
+		for _, sql := range []string{
+			"select " + name + "(n_name) from nation",
+			"select " + name + "(n_name) over () from nation",
+			"select " + name + "(cast(? as char)) from nation",
+			"with recursive r(n) as (select \"x\" union all select n from r where n = \"never\") select " + name + "(n) from r",
+			"with recursive r(n) as (select cast(? as char) union all select n from r where n = \"never\") select " + name + "(n) from r",
+		} {
+			t.Run(sql, func(t *testing.T) {
+				prepare := buildPreparedAggregatePlan(t, sql)
+				agg := sumAvgTestExpression(t, prepare.Plan, name)
+				require.Equal(t, int32(types.T_float64), agg.Typ.Id)
+				arg := agg.GetF().Args[0]
+				require.Equal(t, int32(types.T_float64), arg.Typ.Id)
+				require.True(t, isCastOverload(arg, 0))
+				require.True(t, types.T(arg.GetF().Args[0].Typ.Id).IsMySQLString(),
+					"aggregate coercion must not retype the column, recursive CTE, or explicit CHAR cast")
+				if len(prepare.ParamTypes) == 0 {
+					return
+				}
+				require.Equal(t, []int32{0}, preparedParamPositions(prepare))
+				require.True(t, types.T(preparedEffectiveParamTypes(t, prepare)[0].Id).IsMySQLString(),
+					"the explicit CHAR cast must keep its parameter in the string domain")
+				snapshot := prepare.Plan.String()
+				for _, value := range []any{int64(2), float64(2.5), nil} {
+					filled, err := FillValuesOfParamsInPlan(t.Context(), prepare.Plan, []any{value})
+					require.NoError(t, err)
+					require.Equal(t, snapshot, prepare.Plan.String(), "EXECUTE must not mutate the cached plan")
+					filledAgg := sumAvgTestExpression(t, filled, name)
+					require.Equal(t, int32(types.T_float64), filledAgg.Typ.Id)
+					require.Equal(t, int32(types.T_float64), filledAgg.GetF().Args[0].Typ.Id)
+				}
+			})
+		}
 	}
 }
 
@@ -1091,4 +1112,44 @@ func TestWindowExpressionKeysRetainParameterOffsets(t *testing.T) {
 	second := testWindowFuncExpr("min", tree.FUNC_TYPE_DEFAULT, windowSpec(), testScalarFuncExpr("abs", tree.NewParamExpr(1)))
 
 	require.NotEqual(t, windowExprAstKey(first), windowExprAstKey(second))
+}
+
+// TestPreparedQuantileExactWeightedParameters covers the flat three-argument
+// weighted percentile through the plan binder: the prepared level forces the
+// per-EXECUTE physical aggregate rebuild exactly as the ordered-set
+// percentiles do, a literal level does not, and the binder enforces the
+// level-must-be-configuration and three-argument contracts.
+func TestPreparedQuantileExactWeightedParameters(t *testing.T) {
+	t.Run("prepared level forces a fresh physical aggregate", func(t *testing.T) {
+		prepare := buildPreparedAggregatePlan(t,
+			"select quantileExactWeighted(n_nationkey, n_regionkey, ?) from nation")
+		require.Equal(t, []int32{0}, preparedParamPositions(prepare))
+		require.True(t, PreparedPlanHasPercentileParams(prepare.Plan))
+		fn := findAggregateByName(prepare.Plan.GetQuery(), NameQuantileExactWeighted)
+		require.NotNil(t, fn)
+		require.Len(t, fn.Args, 3)
+	})
+
+	t.Run("literal level keeps the plan cacheable", func(t *testing.T) {
+		prepare := buildPreparedAggregatePlan(t,
+			"select quantileExactWeighted(n_nationkey, n_regionkey, 0.25) from nation")
+		require.False(t, PreparedPlanHasPercentileParams(prepare.Plan))
+		fn := findAggregateByName(prepare.Plan.GetQuery(), NameQuantileExactWeighted)
+		require.NotNil(t, fn)
+		require.Len(t, fn.Args, 3)
+	})
+
+	t.Run("the level argument must be configuration", func(t *testing.T) {
+		_, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
+			"select quantileExactWeighted(n_nationkey, n_regionkey, n_regionkey) from nation")
+		require.ErrorContains(t, err,
+			"level argument of quantileexactweighted must be a non-null constant or parameter")
+	})
+
+	t.Run("three arguments are required", func(t *testing.T) {
+		_, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
+			"select quantileExactWeighted(n_nationkey, n_regionkey) from nation")
+		require.ErrorContains(t, err,
+			"quantileexactweighted requires a value, a weight, and a level argument")
+	})
 }

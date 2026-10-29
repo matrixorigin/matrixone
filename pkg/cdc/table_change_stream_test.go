@@ -85,6 +85,8 @@ type watermarkUpdaterStub struct {
 	removeErr        error
 	skipRemove       bool
 	getFromCacheHook func() error
+	getOrAddErr      error
+	errMsgErr        error
 	updateCalls      atomic.Int32
 	updateNotifies   chan struct{}
 }
@@ -120,7 +122,7 @@ func (m *watermarkUpdaterStub) UpdateWatermarkErrMsg(ctx context.Context, key *W
 	m.mu.Lock()
 	m.errMsgs = append(m.errMsgs, errMsg)
 	m.mu.Unlock()
-	return nil
+	return m.errMsgErr
 }
 
 func (m *watermarkUpdaterStub) GetFromCache(ctx context.Context, key *WatermarkKey) (types.TS, error) {
@@ -149,6 +151,9 @@ func (m *watermarkUpdaterStub) setSkipRemove(skip bool) {
 func (m *watermarkUpdaterStub) GetOrAddCommitted(ctx context.Context, key *WatermarkKey, watermark *types.TS) (types.TS, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.getOrAddErr != nil {
+		return types.TS{}, m.getOrAddErr
+	}
 	keyStr := m.keyString(key)
 	if ts, ok := m.watermarks[keyStr]; ok {
 		return ts, nil
@@ -428,7 +433,9 @@ func TestTableChangeStream_HandleSnapshotNoProgress_WarningThrottle(t *testing.T
 func TestTableChangeStream_Run_DuplicateReader(t *testing.T) {
 	runningReaders := &sync.Map{}
 
-	h1 := newTableStreamHarness(t, withHarnessRunningReaders(runningReaders))
+	h1 := newTableStreamHarness(t,
+		withHarnessRunningReaders(runningReaders),
+	)
 	defer h1.Close()
 
 	ready := make(chan struct{})
@@ -440,21 +447,21 @@ func TestTableChangeStream_Run_DuplicateReader(t *testing.T) {
 	errCh1, done1 := h1.RunStreamAsync(ar1)
 	defer done1()
 
-	require.Eventually(t, func() bool {
-		select {
-		case <-ready:
-			return true
-		default:
-			_, ok := runningReaders.Load(h1.Stream().runningReaderKey)
-			return ok
-		}
-	}, time.Second, 10*time.Millisecond, "first stream should register as running")
+	// Registration precedes watermark initialization. Wait for the collector
+	// to block so cancellation exercises an active reader, not startup timing.
+	select {
+	case <-ready:
+	case <-time.After(2 * time.Second):
+		t.Fatal("first reader did not reach the collector")
+	}
 
 	stored, ok := runningReaders.Load(h1.Stream().runningReaderKey)
 	require.True(t, ok, "first stream should occupy running readers slot")
 	require.Equal(t, h1.Stream(), stored)
 
-	h2 := newTableStreamHarness(t, withHarnessRunningReaders(runningReaders))
+	h2 := newTableStreamHarness(t,
+		withHarnessRunningReaders(runningReaders),
+	)
 	defer h2.Close()
 
 	ar2 := h2.NewActiveRoutine()
@@ -473,46 +480,53 @@ func TestTableChangeStream_Run_DuplicateReader(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("first stream did not exit after cancellation")
 	}
-	if runErr != nil {
-		require.ErrorIs(t, runErr, context.Canceled)
-	}
+	require.ErrorIs(t, runErr, context.Canceled)
+	_, ok = runningReaders.Load(h1.Stream().runningReaderKey)
+	require.False(t, ok, "first reader should release its slot after cancellation")
 }
 
-func TestTableChangeStreamCleanupDoesNotDeleteReplacedReader(t *testing.T) {
-	runningReaders := &sync.Map{}
-
-	key := "db1.t1"
-	oldStream := &TableChangeStream{
-		accountId:               1,
-		taskId:                  "task1",
-		tableInfo:               &DbTableInfo{SourceDbName: "db1", SourceTblName: "t1", SourceTblId: 1},
-		sinker:                  newTableStreamRecordingSinker(),
-		watermarkUpdater:        newWatermarkUpdaterStub(),
-		watermarkKey:            &WatermarkKey{AccountId: 1, TaskId: "task1", DBName: "db1", TableName: "t1"},
-		runningReaders:          runningReaders,
-		runningReaderKey:        key,
-		progressTracker:         nil,
-		watermarkStallThreshold: defaultWatermarkStallThreshold,
+func TestTableChangeStreamCleanupReaderOwnership(t *testing.T) {
+	for _, replaced := range []bool{false, true} {
+		for _, failure := range []string{"none", "persist", "remove"} {
+			name := failure + "/owner"
+			if replaced {
+				name = failure + "/replacement"
+			}
+			t.Run(name, func(t *testing.T) {
+				runningReaders := &sync.Map{}
+				updater := newWatermarkUpdaterStub()
+				if failure == "persist" {
+					updater.errMsgErr = errors.New("diagnostic persistence failed")
+				} else if failure == "remove" {
+					updater.removeErr = errors.New("watermark removal failed")
+				}
+				streamErr := errors.New("reader failed")
+				stream := &TableChangeStream{
+					tableInfo:        &DbTableInfo{SourceDbName: "db1", SourceTblName: "t1"},
+					sinker:           newTableStreamRecordingSinker(),
+					watermarkUpdater: updater,
+					watermarkKey:     &WatermarkKey{AccountId: 1, TaskId: "task1", DBName: "db1", TableName: "t1"},
+					runningReaders:   runningReaders,
+					runningReaderKey: "db1.t1",
+					lastError:        streamErr,
+				}
+				runningReaders.Store(stream.runningReaderKey, stream)
+				replacement := &TableChangeStream{}
+				if replaced {
+					runningReaders.Store(stream.runningReaderKey, replacement)
+				}
+				stream.wg.Add(1)
+				stream.cleanup(context.Background())
+				stream.Wait()
+				stored, ok := runningReaders.Load(stream.runningReaderKey)
+				require.Equal(t, replaced, ok)
+				if replaced {
+					require.Same(t, replacement, stored, "old cleanup must preserve the new owner")
+				}
+				require.ErrorIs(t, stream.lastError, streamErr)
+			})
+		}
 	}
-	newStream := &TableChangeStream{
-		accountId:        1,
-		taskId:           "task1",
-		tableInfo:        &DbTableInfo{SourceDbName: "db1", SourceTblName: "t1", SourceTblId: 1},
-		sinker:           newTableStreamRecordingSinker(),
-		watermarkUpdater: newWatermarkUpdaterStub(),
-		watermarkKey:     &WatermarkKey{AccountId: 1, TaskId: "task1", DBName: "db1", TableName: "t1"},
-		runningReaders:   runningReaders,
-		runningReaderKey: key,
-	}
-	runningReaders.Store(key, oldStream)
-	runningReaders.Store(key, newStream)
-
-	oldStream.wg.Add(1)
-	oldStream.cleanup(context.Background())
-
-	stored, ok := runningReaders.Load(key)
-	require.True(t, ok, "replaced reader ownership should remain")
-	require.Same(t, newStream, stored, "old cleanup must not delete a newer reader")
 }
 
 func TestTableChangeStreamCleanupKeepsOwnershipUntilCloseFinishes(t *testing.T) {
@@ -536,6 +550,11 @@ func TestTableChangeStreamCleanupKeepsOwnershipUntilCloseFinishes(t *testing.T) 
 
 	stream.wg.Add(1)
 	cleanupDone := make(chan struct{})
+	releaseClose := sync.OnceFunc(func() { close(sinker.unblockClose) })
+	t.Cleanup(func() {
+		releaseClose()
+		<-cleanupDone
+	})
 	go func() {
 		stream.cleanup(context.Background())
 		close(cleanupDone)
@@ -551,7 +570,7 @@ func TestTableChangeStreamCleanupKeepsOwnershipUntilCloseFinishes(t *testing.T) 
 	require.True(t, ok, "reader ownership should remain while cleanup is still closing")
 	require.Same(t, stream, stored, "old stream should keep ownership until cleanup finishes")
 
-	close(sinker.unblockClose)
+	releaseClose()
 	select {
 	case <-cleanupDone:
 	case <-time.After(time.Second):
@@ -565,9 +584,8 @@ func TestTableChangeStreamCleanupKeepsOwnershipUntilCloseFinishes(t *testing.T) 
 // Integration: commit failure triggers EnsureCleanup rollback, then recovery succeeds
 func TestTableChangeStream_CommitFailure_EnsureCleanup_ThenRecover(t *testing.T) {
 	updaterStub := newWatermarkUpdaterStub()
-	noopStop := func() {}
 	h := newTableStreamHarness(t,
-		withHarnessWatermarkUpdater(updaterStub, noopStop),
+		withHarnessWatermarkUpdater(updaterStub),
 		withHarnessFrequency(1*time.Millisecond),
 	)
 	defer h.Close()
@@ -608,11 +626,10 @@ func TestTableChangeStream_CommitFailure_EnsureCleanup_ThenRecover(t *testing.T)
 
 	// Second run: use a fresh harness to avoid reusing internal goroutine counters
 	h2 := newTableStreamHarness(t,
-		withHarnessWatermarkUpdater(updaterStub, noopStop),
+		withHarnessWatermarkUpdater(updaterStub),
 		withHarnessFrequency(1*time.Millisecond),
 	)
 	defer h2.Close()
-	h2.Sinker().reset()
 	// Use pausable handle to deterministically exit within one round:
 	// start blocked, then cancel context and unblock to let Run exit immediately.
 	proceed := make(chan struct{})
@@ -646,9 +663,8 @@ func TestTableChangeStream_CommitFailure_EnsureCleanup_ThenRecover(t *testing.T)
 // Recovery path: successful begin/commit after a clean setup (no cancellation)
 func TestTableChangeStream_Recovery_BeginCommit(t *testing.T) {
 	updaterStub := newWatermarkUpdaterStub()
-	noopStop := func() {}
 	h := newTableStreamHarness(t,
-		withHarnessWatermarkUpdater(updaterStub, noopStop),
+		withHarnessWatermarkUpdater(updaterStub),
 		withHarnessFrequency(1*time.Millisecond),
 	)
 	defer h.Close()
@@ -1019,7 +1035,7 @@ func TestTableChangeStream_StaleReadRetry_WatermarkUpdateFailure(t *testing.T) {
 	h := newTableStreamHarness(
 		t,
 		withHarnessNoFull(true),
-		withHarnessWatermarkUpdater(updater, nil),
+		withHarnessWatermarkUpdater(updater),
 	)
 	defer h.Close()
 
@@ -1044,7 +1060,7 @@ func TestTableChangeStream_StaleReadRetry_MultipleAttempts(t *testing.T) {
 	h := newTableStreamHarness(
 		t,
 		withHarnessNoFull(true),
-		withHarnessWatermarkUpdater(updater, nil),
+		withHarnessWatermarkUpdater(updater),
 		withHarnessFrequency(5*time.Millisecond),
 	)
 	defer h.Close()
@@ -1183,7 +1199,7 @@ func TestTableChangeStream_ConcurrentStopSignalsCleanup(t *testing.T) {
 	h := newTableStreamHarness(
 		t,
 		withHarnessRunningReaders(runningReaders),
-		withHarnessWatermarkUpdater(updater, nil),
+		withHarnessWatermarkUpdater(updater),
 	)
 	defer h.Close()
 	zero := types.TS{}
@@ -1235,7 +1251,7 @@ func TestTableChangeStream_ConcurrentStopSignalsCleanup(t *testing.T) {
 	h2 := newTableStreamHarness(
 		t,
 		withHarnessRunningReaders(runningReaders),
-		withHarnessWatermarkUpdater(updater2, nil),
+		withHarnessWatermarkUpdater(updater2),
 	)
 	defer h2.Close()
 	_, _ = updater2.GetOrAddCommitted(context.Background(), h2.Stream().watermarkKey, &zero)
@@ -1430,27 +1446,11 @@ func TestTableChangeStream_CommitFailureTriggersEnsureCleanup(t *testing.T) {
 	require.Error(t, runErr)
 	require.Equal(t, commitErr, runErr)
 
-	var ops []string
-	require.Eventually(t, func() bool {
-		ops = h.Sinker().opsSnapshot()
-		hasBegin := false
-		hasCommit := false
-		hasClear := false
-		hasRollback := false
-		for _, op := range ops {
-			switch op {
-			case "begin":
-				hasBegin = true
-			case "commit":
-				hasCommit = true
-			case "clear":
-				hasClear = true
-			case "rollback":
-				hasRollback = true
-			}
-		}
-		return hasBegin && hasCommit && hasClear && hasRollback
-	}, time.Second, 10*time.Millisecond, "EnsureCleanup should clear error and rollback")
+	ops := h.Sinker().opsSnapshot()
+	require.Contains(t, ops, "begin")
+	require.Contains(t, ops, "commit")
+	require.Contains(t, ops, "clear")
+	require.Contains(t, ops, "rollback")
 
 	rollbackCount := 0
 	for _, op := range ops {
@@ -1471,84 +1471,40 @@ func TestTableChangeStream_CommitFailureTriggersEnsureCleanup(t *testing.T) {
 	require.False(t, tracker.NeedsRollback(), "tracker should be clean after EnsureCleanup")
 }
 
-func TestTableChangeStream_BeginFailureDoesNotRollback(t *testing.T) {
-	h := newTableStreamHarness(t)
-	defer h.Close()
+func TestTableChangeStream_BeginFailure(t *testing.T) {
+	for _, tc := range []struct {
+		name, message string
+		retryable     bool
+	}{
+		{name: "state", message: "begin failure"},
+		{name: "network", message: "begin transaction failed: connection timeout", retryable: true},
+		{name: "service", message: "begin transaction failed: service unavailable", retryable: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newTableStreamHarness(t)
+			beginErr := moerr.NewInternalError(h.Context(), tc.message)
+			h.Sinker().setBeginError(beginErr)
+			tail := createTestBatch(t, h.MP(), types.BuildTS(100, 0), []int32{1})
+			h.SetCollectBatches([]changeBatch{
+				{insert: tail, hint: engine.ChangesHandle_Tail_done},
+				{hint: engine.ChangesHandle_Tail_done},
+			})
 
-	beginErr := moerr.NewInternalError(h.Context(), "begin failure")
-	h.Sinker().setBeginError(beginErr)
-
-	tailBatch := createTestBatch(t, h.MP(), types.BuildTS(100, 0), []int32{1})
-	h.SetCollectBatches([]changeBatch{
-		{insert: tailBatch, hint: engine.ChangesHandle_Tail_done},
-		{insert: nil, hint: engine.ChangesHandle_Tail_done},
-	})
-
-	ar := h.NewActiveRoutine()
-	err := h.RunStream(ar)
-
-	require.Error(t, err)
-	require.Equal(t, beginErr, err)
-	require.Equal(t, beginErr, h.Sinker().Error(), "sinker error should remain set after begin failure")
-	// "begin failure" without network context is non-retryable (state-related)
-	require.False(t, h.Stream().GetRetryable(), "state-related begin failure should not mark stream retryable")
-
-	ops := h.Sinker().opsSnapshot()
-	require.Contains(t, ops, "begin", "Begin should be attempted even though it fails")
-	require.NotContains(t, ops, "commit", "Commit should not be attempted after begin failure")
-	require.NotContains(t, ops, "rollback", "Rollback should not occur when begin fails before start")
-
-	tracker := h.Stream().txnManager.GetTracker()
-	require.NotNil(t, tracker, "tracker should be created even if begin fails")
-	require.False(t, tracker.NeedsRollback(), "tracker should not require rollback when begin fails")
-	require.False(t, tracker.IsCompleted(), "tracker should remain incomplete after begin failure")
-	require.Zero(t, h.MP().OnHeapCurrNB()+h.MP().CurrNB(), "failed TailDone must have one cleanup owner")
-}
-
-func TestTableChangeStream_BeginFailure_NetworkError_Retryable(t *testing.T) {
-	h := newTableStreamHarness(t)
-	defer h.Close()
-
-	// Network-related begin failure should be retryable
-	beginErr := moerr.NewInternalError(h.Context(), "begin transaction failed: connection timeout")
-	h.Sinker().setBeginError(beginErr)
-
-	tailBatch := createTestBatch(t, h.MP(), types.BuildTS(100, 0), []int32{1})
-	h.SetCollectBatches([]changeBatch{
-		{insert: tailBatch, hint: engine.ChangesHandle_Tail_done},
-		{insert: nil, hint: engine.ChangesHandle_Tail_done},
-	})
-
-	ar := h.NewActiveRoutine()
-	err := h.RunStream(ar)
-
-	require.Error(t, err)
-	require.Equal(t, beginErr, err)
-	// Network-related begin failure should be retryable
-	require.True(t, h.Stream().GetRetryable(), "network-related begin failure should mark stream retryable")
-}
-
-func TestTableChangeStream_BeginFailure_ServiceUnavailable_Retryable(t *testing.T) {
-	h := newTableStreamHarness(t)
-	defer h.Close()
-
-	// Service unavailable begin failure should be retryable
-	beginErr := moerr.NewInternalError(h.Context(), "begin transaction failed: service unavailable")
-	h.Sinker().setBeginError(beginErr)
-
-	tailBatch := createTestBatch(t, h.MP(), types.BuildTS(100, 0), []int32{1})
-	h.SetCollectBatches([]changeBatch{
-		{insert: tailBatch, hint: engine.ChangesHandle_Tail_done},
-		{insert: nil, hint: engine.ChangesHandle_Tail_done},
-	})
-
-	ar := h.NewActiveRoutine()
-	err := h.RunStream(ar)
-
-	require.Error(t, err)
-	require.Equal(t, beginErr, err)
-	// Service unavailable begin failure should be retryable
-	require.True(t, h.Stream().GetRetryable(), "service unavailable begin failure should mark stream retryable")
+			err := h.RunStream(h.NewActiveRoutine())
+			require.ErrorIs(t, err, beginErr)
+			require.ErrorIs(t, h.Sinker().Error(), beginErr)
+			require.Equal(t, tc.retryable, h.Stream().GetRetryable())
+			ops := h.Sinker().opsSnapshot()
+			require.Contains(t, ops, "begin")
+			require.NotContains(t, ops, "commit")
+			require.NotContains(t, ops, "rollback")
+			tracker := h.Stream().txnManager.GetTracker()
+			require.NotNil(t, tracker)
+			require.False(t, tracker.NeedsRollback())
+			require.False(t, tracker.IsCompleted())
+			require.Zero(t, h.MP().OnHeapCurrNB()+h.MP().CurrNB(), "failed TailDone must have one cleanup owner")
+		})
+	}
 }
 
 func TestTableChangeStream_EnsureCleanup_WatermarkMismatch(t *testing.T) {
@@ -1560,7 +1516,7 @@ func TestTableChangeStream_EnsureCleanup_WatermarkMismatch(t *testing.T) {
 	// Create harness with custom watermark updater
 	h := newTableStreamHarness(
 		t,
-		withHarnessWatermarkUpdater(updaterStub, func() {}),
+		withHarnessWatermarkUpdater(updaterStub),
 	)
 	defer h.Close()
 
@@ -1603,25 +1559,11 @@ func TestTableChangeStream_EnsureCleanup_WatermarkMismatch(t *testing.T) {
 	require.Error(t, runErr)
 	require.Equal(t, commitErr, runErr)
 
-	// Wait for EnsureCleanup to complete
-	var ops []string
-	require.Eventually(t, func() bool {
-		ops = h.Sinker().opsSnapshot()
-		hasBegin := false
-		hasCommit := false
-		hasRollback := false
-		for _, op := range ops {
-			switch op {
-			case "begin":
-				hasBegin = true
-			case "commit":
-				hasCommit = true
-			case "rollback":
-				hasRollback = true
-			}
-		}
-		return hasBegin && hasCommit && hasRollback
-	}, time.Second, 10*time.Millisecond, "EnsureCleanup should detect watermark mismatch and trigger rollback")
+	// Run has returned, including deferred cleanup.
+	ops := h.Sinker().opsSnapshot()
+	require.Contains(t, ops, "begin")
+	require.Contains(t, ops, "commit")
+	require.Contains(t, ops, "rollback")
 
 	// Verify rollback occurred due to watermark mismatch
 	rollbackCount := 0
@@ -1652,7 +1594,7 @@ func TestTableChangeStream_EnsureCleanup_GetFromCacheFails(t *testing.T) {
 	// Create harness with custom watermark updater
 	h := newTableStreamHarness(
 		t,
-		withHarnessWatermarkUpdater(updaterStub, func() {}),
+		withHarnessWatermarkUpdater(updaterStub),
 	)
 	defer h.Close()
 
@@ -1704,26 +1646,12 @@ func TestTableChangeStream_EnsureCleanup_GetFromCacheFails(t *testing.T) {
 	require.Equal(t, commitErr, runErr,
 		"error should be the original commit failure, not auxiliary cache error, got: %v", runErr)
 
-	// Wait for EnsureCleanup to complete
+	// Run has returned, including deferred cleanup.
 	// When GetFromCache fails, EnsureCleanup should fallback to tracker state
-	var ops []string
-	require.Eventually(t, func() bool {
-		ops = h.Sinker().opsSnapshot()
-		hasBegin := false
-		hasCommit := false
-		hasRollback := false
-		for _, op := range ops {
-			switch op {
-			case "begin":
-				hasBegin = true
-			case "commit":
-				hasCommit = true
-			case "rollback":
-				hasRollback = true
-			}
-		}
-		return hasBegin && hasCommit && hasRollback
-	}, time.Second, 10*time.Millisecond, "EnsureCleanup should fallback to tracker state when GetFromCache fails")
+	ops := h.Sinker().opsSnapshot()
+	require.Contains(t, ops, "begin")
+	require.Contains(t, ops, "commit")
+	require.Contains(t, ops, "rollback")
 
 	// Verify rollback occurred (fallback to tracker state)
 	rollbackCount := 0
@@ -1770,30 +1698,12 @@ func TestTableChangeStream_RollbackFailure(t *testing.T) {
 	require.Equal(t, commitErr, runErr, "original commit error should propagate even if rollback fails")
 	require.False(t, h.Stream().GetRetryable(), "rollback failure should not mark stream retryable")
 
-	var ops []string
-	require.Eventually(t, func() bool {
-		ops = h.Sinker().opsSnapshot()
-		hasBegin := false
-		hasCommit := false
-		hasClear := false
-		hasRollback := false
-		hasDummy := false
-		for _, op := range ops {
-			switch op {
-			case "begin":
-				hasBegin = true
-			case "commit":
-				hasCommit = true
-			case "clear":
-				hasClear = true
-			case "rollback":
-				hasRollback = true
-			case "dummy":
-				hasDummy = true
-			}
-		}
-		return hasBegin && hasCommit && hasClear && hasRollback && hasDummy
-	}, time.Second, 10*time.Millisecond, "EnsureCleanup should attempt rollback even if it fails")
+	ops := h.Sinker().opsSnapshot()
+	require.Contains(t, ops, "begin")
+	require.Contains(t, ops, "commit")
+	require.Contains(t, ops, "clear")
+	require.Contains(t, ops, "rollback")
+	require.Contains(t, ops, "dummy")
 
 	require.Equal(t, rollbackErr, h.Sinker().Error(), "sinker should retain rollback error for inspection")
 
@@ -1811,13 +1721,12 @@ func TestTableChangeStream_RollbackFailure(t *testing.T) {
 	require.True(t, tracker.IsCompleted(), "tracker should mark transaction as completed after rollback attempt")
 }
 
-// TestTableChangeStream_FullPipeline_RandomDelaysAndErrors verifies the entire pipeline
+// TestTableChangeStream_StaleReadThenCommitAndRollbackFailure verifies the entire pipeline
 // with deterministic error injection, ensuring recovery and terminal cleanup.
-func TestTableChangeStream_FullPipeline_RandomDelaysAndErrors(t *testing.T) {
+func TestTableChangeStream_StaleReadThenCommitAndRollbackFailure(t *testing.T) {
 	updaterStub := newWatermarkUpdaterStub()
-	noopStop := func() {}
 	h := newTableStreamHarness(t,
-		withHarnessWatermarkUpdater(updaterStub, noopStop),
+		withHarnessWatermarkUpdater(updaterStub),
 		withHarnessFrequency(1*time.Millisecond),
 		withHarnessNoFull(true),
 	)
@@ -2057,7 +1966,6 @@ type tableStreamHarnessConfig struct {
 	tableDef               *plan.TableDef
 	tableInfo              *DbTableInfo
 	watermarkUpdater       WatermarkUpdater
-	updaterStop            func()
 	runningReaders         *sync.Map
 	// Retry configuration for testing (use shorter delays to speed up tests)
 	retryOptions []TableChangeStreamOption
@@ -2134,10 +2042,9 @@ func withHarnessInitialSnapshotPending(pending bool) tableStreamHarnessOption {
 	}
 }
 
-func withHarnessWatermarkUpdater(updater WatermarkUpdater, stop func()) tableStreamHarnessOption {
+func withHarnessWatermarkUpdater(updater WatermarkUpdater) tableStreamHarnessOption {
 	return func(cfg *tableStreamHarnessConfig) {
 		cfg.watermarkUpdater = updater
-		cfg.updaterStop = stop
 	}
 }
 
@@ -2156,10 +2063,8 @@ type tableStreamHarness struct {
 	mp         *mpool.MPool
 	packerPool *fileservice.Pool[*types.Packer]
 
-	sinker      *tableStreamRecordingSinker
-	updater     WatermarkUpdater
-	updaterStop func()
-	stream      *TableChangeStream
+	sinker *tableStreamRecordingSinker
+	stream *TableChangeStream
 
 	stubs     []*gostub.Stubs
 	closeOnce sync.Once
@@ -2199,18 +2104,11 @@ func newTableStreamHarness(t *testing.T, opts ...tableStreamHarnessOption) *tabl
 
 	sinker := newTableStreamRecordingSinker()
 
-	var (
-		updater     WatermarkUpdater
-		updaterStop func()
-	)
-	if cfg.watermarkUpdater != nil {
-		updater = cfg.watermarkUpdater
-		updaterStop = cfg.updaterStop
-	} else {
-		defaultUpdater, _ := InitCDCWatermarkUpdaterForTest(t)
-		defaultUpdater.Start()
-		updater = defaultUpdater
-		updaterStop = defaultUpdater.Stop
+	// Updater persistence and scheduling have their own tests. Stream tests
+	// need only deterministic watermark state, not SQL mocks or cron workers.
+	updater := cfg.watermarkUpdater
+	if updater == nil {
+		updater = newWatermarkUpdaterStub()
 	}
 
 	runningReaders := cfg.runningReaders
@@ -2259,21 +2157,18 @@ func newTableStreamHarness(t *testing.T, opts ...tableStreamHarnessOption) *tabl
 	)
 
 	h := &tableStreamHarness{
-		t:           t,
-		ctx:         ctx,
-		cancel:      cancel,
-		mp:          mp,
-		packerPool:  packerPool,
-		sinker:      sinker,
-		updater:     updater,
-		updaterStop: updaterStop,
-		stream:      stream,
+		t:          t,
+		ctx:        ctx,
+		cancel:     cancel,
+		mp:         mp,
+		packerPool: packerPool,
+		sinker:     sinker,
+		stream:     stream,
 	}
 
-	if cfg.watermarkUpdater != nil {
-		zero := types.TS{}
-		_, _ = updater.GetOrAddCommitted(context.Background(), stream.watermarkKey, &zero)
-	}
+	zero := types.TS{}
+	_, err := updater.GetOrAddCommitted(ctx, stream.watermarkKey, &zero)
+	require.NoError(t, err)
 
 	h.getTxnOp = func(context.Context, engine.Engine, client.TxnClient, string) (client.TxnOperator, error) {
 		return newNoopTxnOperator(), nil
@@ -2342,11 +2237,6 @@ func (h *tableStreamHarness) Close() {
 		for _, stub := range h.stubs {
 			stub.Reset()
 		}
-		if h.updaterStop != nil {
-			h.updaterStop()
-		} else if u, ok := h.updater.(*CDCWatermarkUpdater); ok {
-			u.Stop()
-		}
 		if h.mp != nil {
 			mpool.DeleteMPool(h.mp)
 			h.mp = nil
@@ -2368,10 +2258,6 @@ func (h *tableStreamHarness) MP() *mpool.MPool {
 
 func (h *tableStreamHarness) Sinker() *tableStreamRecordingSinker {
 	return h.sinker
-}
-
-func (h *tableStreamHarness) WatermarkUpdater() WatermarkUpdater {
-	return h.updater
 }
 
 func (h *tableStreamHarness) Cancel() {
@@ -2455,7 +2341,7 @@ func TestTableChangeStream_StableInitialSnapshotEpochAndTailBoundary(t *testing.
 		t,
 		withHarnessInitSnapshotSplitTxn(true),
 		withHarnessInitialSnapshotEpoch(epoch),
-		withHarnessWatermarkUpdater(updater, nil),
+		withHarnessWatermarkUpdater(updater),
 	)
 	h.Stream().start.Done() // The test invokes processOneRound directly, not Run.
 
@@ -2482,7 +2368,6 @@ func TestTableChangeStream_StableSnapshotRecordsTransferredRows(t *testing.T) {
 		t,
 		withHarnessInitSnapshotSplitTxn(true),
 		withHarnessInitialSnapshotEpoch(types.BuildTS(80, 0)),
-		withHarnessWatermarkUpdater(newWatermarkUpdaterStub(), nil),
 	)
 	h.Stream().start.Done() // The test invokes processOneRound directly, not Run.
 	h.SetCollectFactory(func(_, to types.TS) (engine.ChangesHandle, error) {
@@ -2501,7 +2386,6 @@ func TestTableChangeStream_SnapshotRotationFailureCleansIncomingBatch(t *testing
 		t,
 		withHarnessInitSnapshotSplitTxn(true),
 		withHarnessInitialSnapshotEpoch(types.BuildTS(80, 0)),
-		withHarnessWatermarkUpdater(newWatermarkUpdaterStub(), nil),
 	)
 	h.Stream().start.Done() // The test invokes processOneRound directly, not Run.
 
@@ -2541,7 +2425,7 @@ func TestTableChangeStream_RecreatedGenerationStartsFromEmptyPosition(t *testing
 		withHarnessInitSnapshotSplitTxn(true),
 		withHarnessInitialSnapshotEpoch(epoch),
 		withHarnessInitialSnapshotPending(true),
-		withHarnessWatermarkUpdater(updater, nil),
+		withHarnessWatermarkUpdater(updater),
 	)
 	h.Stream().start.Done()
 
@@ -2598,7 +2482,7 @@ func TestTableChangeStream_StableInitialSnapshotEpochHonorsEndTs(t *testing.T) {
 		withHarnessInitSnapshotSplitTxn(true),
 		withHarnessInitialSnapshotEpoch(types.BuildTS(80, 0)),
 		withHarnessEndTs(end),
-		withHarnessWatermarkUpdater(updater, nil),
+		withHarnessWatermarkUpdater(updater),
 	)
 	h.Stream().start.Done() // The test invokes processOneRound directly, not Run.
 
@@ -2613,7 +2497,7 @@ func TestTableChangeStream_LegacySplitTaskFallsBackToAtomicCurrentSnapshot(t *te
 	h := newTableStreamHarness(
 		t,
 		withHarnessInitSnapshotSplitTxn(true),
-		withHarnessWatermarkUpdater(updater, nil),
+		withHarnessWatermarkUpdater(updater),
 	)
 	h.Stream().start.Done() // The test invokes processOneRound directly, not Run.
 
@@ -2664,7 +2548,7 @@ func TestTableChangeStream_WaitsForStableEpochVisibility(t *testing.T) {
 		t,
 		withHarnessInitSnapshotSplitTxn(true),
 		withHarnessInitialSnapshotEpoch(types.BuildTS(120, 0)),
-		withHarnessWatermarkUpdater(updater, nil),
+		withHarnessWatermarkUpdater(updater),
 	)
 	h.Stream().start.Done() // The test invokes processOneRound directly, not Run.
 	h.SetGetSnapshotTS(func(client.TxnOperator) timestamp.Timestamp {
@@ -2682,7 +2566,7 @@ func TestTableChangeStreamPreservesLogicalStartBoundary(t *testing.T) {
 	h := newTableStreamHarness(t,
 		withHarnessNoFull(true),
 		withHarnessStartTs(start),
-		withHarnessWatermarkUpdater(updater, nil),
+		withHarnessWatermarkUpdater(updater),
 	)
 	h.Stream().start.Done() // invoke processOneRound directly
 	require.NoError(t, updater.RemoveCachedWM(h.Context(), h.Stream().watermarkKey, WatermarkCleanupAll))
@@ -2717,7 +2601,7 @@ func TestTableChangeStreamNoFullAdmissionBoundaryLifecycle(t *testing.T) {
 		withHarnessNoFull(true),
 		withHarnessStartTs(start),
 		withHarnessFrequency(time.Millisecond),
-		withHarnessWatermarkUpdater(updater, nil),
+		withHarnessWatermarkUpdater(updater),
 	)
 	// The harness seeds a zero watermark for custom updaters. Replace it with
 	// the durable CREATE boundary before starting the executor.
@@ -2963,18 +2847,6 @@ func (s *tableStreamRecordingSinker) releaseOutputs() {
 	}
 }
 
-func (s *tableStreamRecordingSinker) reset() {
-	s.mu.Lock()
-	s.err = nil
-	s.rollbackErr = nil
-	s.commitErr = nil
-	s.beginErr = nil
-	s.sinkCalls = nil
-	s.resetCnt = 0
-	s.mu.Unlock()
-	s.resetOps()
-}
-
 func (s *tableStreamRecordingSinker) sinkCallsSnapshot() []*DecoderOutput {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -2991,22 +2863,9 @@ func (s *tableStreamRecordingSinker) ResetCountSnapshot() int {
 
 // TestTableChangeStream_GetTableInfo verifies GetTableInfo returns correct table information
 func TestTableChangeStream_GetTableInfo(t *testing.T) {
-	mp := mpool.MustNewZero()
-	defer mpool.DeleteMPool(mp)
-
-	tableInfo := &DbTableInfo{
-		SourceDbName:  "db1",
-		SourceTblName: "t1",
-		SourceTblId:   1,
-	}
-
-	stream := createTestStream(mp, tableInfo)
-	info := stream.GetTableInfo()
-
-	require.NotNil(t, info)
-	require.Equal(t, tableInfo.SourceDbName, info.SourceDbName)
-	require.Equal(t, tableInfo.SourceTblName, info.SourceTblName)
-	require.Equal(t, tableInfo.SourceTblId, info.SourceTblId)
+	tableInfo := &DbTableInfo{SourceDbName: "db1", SourceTblName: "t1", SourceTblId: 1}
+	stream := &TableChangeStream{tableInfo: tableInfo}
+	require.Same(t, tableInfo, stream.GetTableInfo())
 }
 
 // TestTableChangeStream_GetRelationByIdFailure verifies handling of GetRelationById failure
@@ -3041,111 +2900,73 @@ func TestTableChangeStream_GetRelationByIdFailure(t *testing.T) {
 	require.True(t, h.Stream().GetRetryable(), "relation error should mark stream retryable")
 }
 
-// TestTableChangeStream_ReachedEndTs verifies graceful termination when endTs is reached
+// A completed range must not collect or sink another batch.
 func TestTableChangeStream_ReachedEndTs(t *testing.T) {
-	updaterStub := newWatermarkUpdaterStub()
-	noopStop := func() {}
-	endTs := types.BuildTS(100, 0)
-
-	h := newTableStreamHarness(t,
-		withHarnessWatermarkUpdater(updaterStub, noopStop),
-		withHarnessEndTs(endTs),
-		withHarnessFrequency(1*time.Millisecond),
-	)
-	defer h.Close()
-
-	// Initialize watermark to endTs (stream should detect and exit)
-	key := h.Stream().txnManager.watermarkKey
-	_, _ = updaterStub.GetOrAddCommitted(h.Context(), key, &endTs)
-
-	ar := h.NewActiveRoutine()
-	errCh, done := h.RunStreamAsync(ar)
-
-	// Stream should detect endTs quickly and exit, but we'll cancel after a short wait
-	// to ensure test completes quickly
-	select {
-	case <-time.After(200 * time.Millisecond):
-		// Timeout reached, cancel to exit
-		h.Cancel()
-	case err := <-errCh:
-		// Stream exited early (detected endTs)
-		require.NoError(t, err, "stream should exit gracefully when endTs is reached")
-		done()
-		return
+	for _, tc := range []struct {
+		name string
+		from int64
+	}{
+		{name: "before", from: 99},
+		{name: "equal", from: 100},
+		{name: "after", from: 101},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newTableStreamHarness(t, withHarnessEndTs(types.BuildTS(100, 0)))
+			h.Stream().start.Done() // Invoke processOneRound directly, not Run.
+			from := types.BuildTS(tc.from, 0)
+			require.NoError(t, h.Stream().watermarkUpdater.UpdateWatermarkOnly(h.Context(), h.Stream().watermarkKey, &from))
+			require.NoError(t, h.Stream().processOneRound(h.Context(), h.NewActiveRoutine()))
+			if tc.from < 100 {
+				calls := h.CollectCallsSnapshot()
+				require.Len(t, calls, 1)
+				require.Equal(t, from, calls[0].from)
+				require.Equal(t, types.BuildTS(100, 0), calls[0].to)
+			} else {
+				require.Empty(t, h.CollectCallsSnapshot())
+				require.Empty(t, h.Sinker().opsSnapshot())
+				require.False(t, h.Stream().initialSyncPending.Load())
+			}
+			require.False(t, h.Stream().GetRetryable())
+		})
 	}
-	done()
-
-	var runErr error
-	select {
-	case runErr = <-errCh:
-	case <-time.After(2 * time.Second):
-		t.Fatal("stream did not exit")
-	}
-
-	// Stream should exit gracefully (either nil or context.Canceled)
-	if runErr != nil {
-		require.ErrorIs(t, runErr, context.Canceled)
-	}
-	require.False(t, h.Stream().GetRetryable(), "reaching endTs should not mark stream retryable")
 }
 
-// TestTableChangeStream_CalculateInitialDelay_GetLastSyncTimeFailure verifies
-// calculateInitialDelay handles getLastSyncTime failure gracefully (non-fatal)
-func TestTableChangeStream_CalculateInitialDelay_GetLastSyncTimeFailure(t *testing.T) {
-	updaterStub := newWatermarkUpdaterStub()
-	noopStop := func() {}
-
-	h := newTableStreamHarness(t,
-		withHarnessWatermarkUpdater(updaterStub, noopStop),
-		withHarnessFrequency(1*time.Millisecond),
-	)
-	defer h.Close()
-
-	// Initialize watermark first
-	key := h.Stream().txnManager.watermarkKey
-	initial := types.BuildTS(1, 0)
-	_, _ = updaterStub.GetOrAddCommitted(h.Context(), key, &initial)
-
-	// Inject GetFromCache error only for the first call (simulating getLastSyncTime failure)
-	// Subsequent calls should succeed
-	var callCount atomic.Int32
-	updaterStub.setGetFromCacheHook(func() error {
-		call := callCount.Add(1)
-		if call == 1 {
-			// First call fails (getLastSyncTime in calculateInitialDelay)
-			return moerr.NewInternalError(context.Background(), "cache error")
+func TestTableChangeStream_CalculateInitialDelay_CacheFallback(t *testing.T) {
+	for _, failCommitted := range []bool{false, true} {
+		name := "committed_available"
+		if failCommitted {
+			name = "committed_unavailable"
 		}
-		// Subsequent calls succeed (processWithTxn needs it)
-		return nil
-	})
+		t.Run(name, func(t *testing.T) {
+			updater := newWatermarkUpdaterStub()
+			h := newTableStreamHarness(t, withHarnessWatermarkUpdater(updater))
+			h.Stream().start.Done() // Invoke startup and processing directly, not Run.
+			cacheErr := errors.New("cache unavailable")
+			updater.setGetFromCacheHook(func() error { return cacheErr })
+			if failCommitted {
+				updater.getOrAddErr = errors.New("committed watermark unavailable")
+			}
+			_, err := h.Stream().getLastSyncTime(h.Context())
+			if failCommitted {
+				require.ErrorIs(t, err, updater.getOrAddErr)
+			} else {
+				require.NoError(t, err)
+			}
+			// Startup lookup failure is non-fatal and must preserve the default tick.
+			require.NoError(t, h.Stream().calculateInitialDelay(h.Context()))
+			require.Equal(t, !failCommitted, h.Stream().force)
 
-	// Provide data so stream can process
-	snap := createTestBatch(t, h.MP(), types.BuildTS(100, 0), []int32{1})
-	h.SetCollectBatches([]changeBatch{
-		{insert: snap, hint: engine.ChangesHandle_Snapshot},
-		{insert: nil, hint: engine.ChangesHandle_Tail_done},
-	})
-
-	ar := h.NewActiveRoutine()
-	errCh, done := h.RunStreamAsync(ar)
-
-	// Stream should continue processing despite getLastSyncTime failure in calculateInitialDelay
-	require.Eventually(t, func() bool {
-		ops := h.Sinker().opsSnapshot()
-		return len(ops) > 0
-	}, 2*time.Second, 10*time.Millisecond, "stream should continue processing despite getLastSyncTime failure")
-
-	h.Cancel()
-	done()
-
-	var runErr error
-	select {
-	case runErr = <-errCh:
-	case <-time.After(2 * time.Second):
-		t.Fatal("stream did not exit")
-	}
-	if runErr != nil {
-		require.ErrorIs(t, runErr, context.Canceled)
+			// Once the transient lookup failure clears, processing must still commit.
+			updater.setGetFromCacheHook(nil)
+			updater.getOrAddErr = nil
+			bat := createTestBatch(t, h.MP(), types.BuildTS(100, 0), []int32{1})
+			h.SetCollectBatches([]changeBatch{
+				{insert: bat, hint: engine.ChangesHandle_Snapshot},
+				{hint: engine.ChangesHandle_Tail_done},
+			})
+			require.NoError(t, h.Stream().processOneRound(h.Context(), h.NewActiveRoutine()))
+			require.Contains(t, h.Sinker().opsSnapshot(), "commit")
+		})
 	}
 }
 

@@ -109,6 +109,11 @@ type Config struct {
 	LogService struct {
 		// ConnectTimeout timeout for connect to logservice. Default is 30s.
 		ConnectTimeout toml.Duration `toml:"connect-timeout"`
+		// MaxWALRecordSize bounds a complete WAL record sent to Log Service.
+		// Set it at least 1 MiB below the Log Service RPC max-message-size
+		// when that limit differs from the default 100 MiB. This leaves room
+		// for the LogRecord and RPC envelope. Zero uses the default 99 MiB.
+		MaxWALRecordSize toml.ByteSize `toml:"max-wal-record-size"`
 	}
 
 	// RPC configuration
@@ -127,6 +132,8 @@ type Config struct {
 	}
 
 	GCCfg struct {
+		// Zero uses the engine's default catalog GC cadence.
+		CatalogGCInterval toml.Duration `toml:"catalog-gc-interval"`
 		GCTTL             toml.Duration `toml:"gc-ttl"`
 		GCInMemoryTTL     toml.Duration `toml:"gc-in-memory-ttl"`
 		ScanGCInterval    toml.Duration `toml:"scan-gc-interval"`
@@ -204,6 +211,9 @@ type Config struct {
 func (c *Config) Validate() error {
 	if c.UUID == "" {
 		return moerr.NewInternalError(context.Background(), "Config.UUID not set")
+	}
+	if c.GCCfg.CatalogGCInterval.Duration < 0 {
+		return moerr.NewBadConfigNoCtx("catalog GC interval must not be negative")
 	}
 	if c.DataDir == "" {
 		c.DataDir = defaultDataDir

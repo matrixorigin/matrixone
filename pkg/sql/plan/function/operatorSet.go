@@ -204,6 +204,53 @@ func binaryStringCommonType(source []types.Type) (types.Type, bool) {
 	return types.New(types.T_varbinary, width, 0), true
 }
 
+// MixedTextBinaryCommonType returns a binary common type only when a set
+// column contains both character and binary strings. Other combinations keep
+// their existing common-type rules.
+func MixedTextBinaryCommonType(source []types.Type) (types.Type, bool) {
+	hasText, hasBinary := false, false
+	needsBlob, unknownWidth := false, false
+	var byteWidth int64
+	for _, typ := range source {
+		switch typ.Oid {
+		case types.T_char, types.T_varchar:
+			hasText = true
+			// Character widths count code points; TEXT widths count bytes.
+			if typ.Width > 0 {
+				byteWidth = max(byteWidth, int64(typ.Width)*utf8.UTFMax)
+			}
+		case types.T_text:
+			hasText, needsBlob = true, true
+			byteWidth = max(byteWidth, int64(typ.Width))
+		case types.T_binary, types.T_varbinary, types.T_blob:
+			hasBinary = true
+			needsBlob = needsBlob || typ.Oid == types.T_blob
+			byteWidth = max(byteWidth, int64(typ.Width))
+		case types.T_any:
+			// An untyped NULL contributes no width.
+		default:
+			return types.Type{}, false
+		}
+		unknownWidth = unknownWidth || typ.Oid != types.T_any && typ.Width <= 0
+	}
+	if !hasText || !hasBinary {
+		return types.Type{}, false
+	}
+	if unknownWidth || byteWidth > types.MaxVarBinaryLen || needsBlob {
+		// A zero width is unknown, not empty. Keep the materialized BLOB/TEXT
+		// capacity large enough for the largest possible input byte value.
+		capacity := int32(types.MaxStringSize)
+		switch {
+		case unknownWidth || byteWidth > types.MaxMediumTextLen:
+			capacity = types.MaxLongTextLen
+		case byteWidth > types.MaxStringSize:
+			capacity = types.MaxMediumTextLen
+		}
+		return types.New(types.T_blob, capacity, 0), true
+	}
+	return binaryStringCommonType(source)
+}
+
 func needDecimalMetadataCast(source []types.Type, target types.Type) bool {
 	if !target.Oid.IsDecimal() {
 		return false
@@ -243,6 +290,9 @@ func textStringCommonType(source []types.Type) (types.Type, bool, bool) {
 		case types.T_text:
 			hasString = true
 			hasText = true
+		case types.T_uuid:
+			// A real text branch selects text; UUID/NULL-only stays native.
+			aligned = false
 		case types.T_any:
 			aligned = false
 		case types.T_char, types.T_varchar:
@@ -356,39 +406,10 @@ func caseCheck(_ []overload, inputs []types.Type) checkResult {
 			}
 		}
 
-		// Y should be cast to a same type.
-		//allYSame := true
-		//t := inputs[1]
-		//
-		//if l%2 == 1 {
-		//	if inputs[l-1].Oid != t.Oid {
-		//		allYSame = false
-		//	}
-		//}
-		//if allYSame {
-		//	for i := 1; i < l; i += 2 {
-		//		if t.Oid != inputs[i].Oid {
-		//			allYSame = false
-		//			break
-		//		}
-		//	}
-		//}
-
 		// XXX choose a supported Y type.
 		var source []types.Type
 		minCost := math.MaxInt32
 		retType := types.Type{}
-		//if allYSame {
-		//	source = []types.Type{inputs[1]}
-		//} else {
-		//	source = make([]types.Type, 0, (l+1)/2)
-		//	for j := 1; j < l; j += 2 {
-		//		source = append(source, inputs[j])
-		//	}
-		//	if l%2 == 1 {
-		//		source = append(source, inputs[l-1])
-		//	}
-		//}
 
 		source = make([]types.Type, 0, (l+1)/2)
 		for j := 1; j < l; j += 2 {
@@ -396,6 +417,25 @@ func caseCheck(_ []overload, inputs []types.Type) checkResult {
 		}
 		if l%2 == 1 {
 			source = append(source, inputs[l-1])
+		}
+
+		if retType, ok := CommonMediumIntType(source); ok {
+			finalTypes := make([]types.Type, len(inputs))
+			shouldCast := needCast
+			for i := range inputs {
+				isValue := i%2 == 1 || (len(inputs)%2 == 1 && i == len(inputs)-1)
+				if !isValue {
+					finalTypes[i] = types.T_bool.ToType()
+					shouldCast = shouldCast || inputs[i].Oid != types.T_bool
+					continue
+				}
+				finalTypes[i] = retType
+				shouldCast = shouldCast || !sameMediumIntCommonType(inputs[i], retType)
+			}
+			if !shouldCast {
+				return newCheckResultWithSuccess(0)
+			}
+			return newCheckResultWithCast(0, finalTypes)
 		}
 
 		if retType, ok := conditionalTemporalCommonType(source); ok {
@@ -751,6 +791,16 @@ func iffCheck(_ []overload, inputs []types.Type) checkResult {
 		}
 
 		source := []types.Type{inputs[1], inputs[2]}
+		if retType, ok := CommonMediumIntType(source); ok {
+			finalTypes := []types.Type{conditionType, retType, retType}
+			shouldCast := needCast ||
+				!sameMediumIntCommonType(source[0], retType) ||
+				!sameMediumIntCommonType(source[1], retType)
+			if shouldCast {
+				return newCheckResultWithCast(0, finalTypes)
+			}
+			return newCheckResultWithSuccess(0)
+		}
 		if retType, ok := conditionalTemporalCommonType(source); ok {
 			finalTypes := []types.Type{conditionType, retType, retType}
 			shouldCast := needCast

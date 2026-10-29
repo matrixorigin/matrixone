@@ -1,0 +1,72 @@
+-- @case
+-- @desc: Bound pagination preserves results, found rows and reuse.
+-- @label:bvt
+
+drop database if exists issue_30042;
+create database issue_30042;
+use issue_30042;
+create table t(k int primary key);
+insert into t values(1),(2),(3);
+prepare z from 'select a.k as k from t a join t b on a.k=b.k order by a.k limit ?';
+set @n=2;
+execute z using @n;
+set @n=0;
+execute z using @n;
+set @n=1;
+execute z using @n;
+set @n=0;
+execute z using @n;
+set @n=2;
+execute z using @n;
+deallocate prepare z;
+prepare counted from 'select sql_calc_found_rows k from t order by k limit ?';
+set @n=0;
+execute counted using @n;
+select found_rows();
+deallocate prepare counted;
+prepare parent_single from '(select a.k as k from t a join t b on a.k=b.k order by a.k limit ?)';
+set @n=2;
+execute parent_single using @n;
+set @n=0;
+execute parent_single using @n;
+set @n=1;
+execute parent_single using @n;
+set @n=0;
+execute parent_single using @n;
+set @n=2;
+execute parent_single using @n;
+deallocate prepare parent_single;
+prepare parent_nested from '((select a.k as k from t a join t b on a.k=b.k order by a.k limit ?))';
+set @n=2;
+execute parent_nested using @n;
+set @n=0;
+execute parent_nested using @n;
+set @n=1;
+execute parent_nested using @n;
+set @n=0;
+execute parent_nested using @n;
+set @n=2;
+execute parent_nested using @n;
+deallocate prepare parent_nested;
+-- Rebind both bounds on one prepared statement, including NULL and an offset
+-- beyond the data. SQL_CALC_FOUND_ROWS must still count the complete input.
+prepare page from 'select k from t order by k limit ? offset ?';
+set @n=2, @off=0;
+execute page using @n, @off;
+set @off=1;
+execute page using @n, @off;
+set @off=5;
+execute page using @n, @off;
+set @n=1, @off=0;
+execute page using @n, @off;
+set @off=null;
+execute page using @n, @off;
+set @n=null, @off=1;
+execute page using @n, @off;
+deallocate prepare page;
+prepare counted_page from 'select sql_calc_found_rows k from t order by k limit ? offset ?';
+set @n=1, @off=1;
+execute counted_page using @n, @off;
+select found_rows();
+deallocate prepare counted_page;
+drop database issue_30042;

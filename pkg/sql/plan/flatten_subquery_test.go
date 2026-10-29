@@ -16,6 +16,7 @@ package plan
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"testing"
 
@@ -93,7 +94,7 @@ func TestFlattenOuterJoinConditionSubqueriesList(t *testing.T) {
 	}
 
 	leftID, rightID, rewritten, err := builder.flattenOuterJoinConditionSubqueries(
-		1, 2, expr, nil, nil, nil, nil, JoinSideLeft, true)
+		1, 2, expr, nil, nil, nil, nil, JoinSideLeft, true, false)
 	require.NoError(t, err)
 	require.Equal(t, int32(1), leftID)
 	require.Equal(t, int32(2), rightID)
@@ -429,8 +430,8 @@ func TestCorrelatedLimitIsPartitionedByCorrelationKey(t *testing.T) {
 	assertReachablePlanHasNoCorrelatedExpr(t, query)
 }
 
-func TestCorrelatedLimitRejectsNonPartitionablePredicate(t *testing.T) {
-	_, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t, `
+func TestCorrelatedLimitKeepsNonPartitionableRelation(t *testing.T) {
+	p, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t, `
 		SELECT n1.N_NATIONKEY,
 		       (SELECT n2.N_NATIONKEY
 		          FROM NATION n2
@@ -438,7 +439,9 @@ func TestCorrelatedLimitRejectsNonPartitionablePredicate(t *testing.T) {
 		         ORDER BY n2.N_NATIONKEY DESC
 		         LIMIT 1)
 		  FROM NATION n1`)
-	require.ErrorContains(t, err, "correlated LIMIT with non-equality predicates")
+	require.NoError(t, err)
+	require.NotNil(t, p.GetQuery().Correlation)
+	require.NoError(t, p.GetQuery().ValidateCorrelation())
 }
 
 func TestCorrelatedLimitRejectsProjectedCorrelatedOrdering(t *testing.T) {
@@ -944,6 +947,7 @@ func TestNestedCorrelatedScalarAggregatePullsUpGroupingKey(t *testing.T) {
 
 	query := logicPlan.GetQuery()
 	require.NotNil(t, query)
+	require.Nil(t, query.Correlation, "the established aggregate decorrelation must remain a set plan")
 	require.NotEmpty(t, query.Steps)
 
 	visited := make(map[int32]bool)
@@ -1117,7 +1121,7 @@ func TestTransparentCorrelatedDerivedTableChain(t *testing.T) {
 	}
 }
 
-func TestTransparentCorrelatedDerivedTableRejectsUnsafeShapes(t *testing.T) {
+func TestCorrelatedDerivedTableLexicalVisibility(t *testing.T) {
 	for _, tt := range []struct {
 		name    string
 		sql     string
@@ -1243,16 +1247,18 @@ func TestTransparentCorrelatedDerivedTableRejectsUnsafeShapes(t *testing.T) {
 		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t, tt.sql)
-			if tt.wantErr == "" {
-				tt.wantErr = "correlated subquery in FROM clause is not yet implemented"
+			p, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t, tt.sql)
+			if tt.wantErr != "" {
+				require.ErrorContains(t, err, tt.wantErr)
+				return
 			}
-			require.ErrorContains(t, err, tt.wantErr)
+			require.NoError(t, err)
+			require.NoError(t, p.GetQuery().ValidateCorrelation())
 		})
 	}
 }
 
-func TestTransparentCorrelatedDerivedTableRejectsDeepAncestor(t *testing.T) {
+func TestCorrelatedDerivedTableForwardsDeepAncestor(t *testing.T) {
 	immediateParent := `SELECT n1.N_NATIONKEY
 		FROM NATION n1
 		WHERE EXISTS (
@@ -1353,8 +1359,9 @@ func TestTransparentCorrelatedDerivedTableRejectsDeepAncestor(t *testing.T) {
 		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t, tt.sql)
-			require.ErrorContains(t, err, "correlated subquery in FROM clause is not yet implemented")
+			p, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t, tt.sql)
+			require.NoError(t, err)
+			require.NoError(t, p.GetQuery().ValidateCorrelation())
 		})
 	}
 }
@@ -1441,7 +1448,7 @@ func TestTransparentCorrelatedDerivedTableNormalizationIsAtomic(t *testing.T) {
 		require.True(t, ctx.isCorrelated)
 	})
 
-	t.Run("binder-backed empty ancestor is rejected atomically", func(t *testing.T) {
+	t.Run("binder-backed empty ancestor is forwarded", func(t *testing.T) {
 		corr := &plan.CorrColRef{RelPos: outerTag, Depth: 3}
 		nodes := newNodes(corr, &plan.Node{NodeType: plan.Node_TABLE_SCAN})
 		nodes[1].Children[0] = 0
@@ -1452,12 +1459,12 @@ func TestTransparentCorrelatedDerivedTableNormalizationIsAtomic(t *testing.T) {
 		emptyQuery.binder = NewWhereBinder(builder, emptyQuery)
 		ctx := NewBindContext(nil, emptyQuery)
 		err := builder.normalizeTransparentCorrelatedDerivedTable(3, ctx)
-		require.ErrorContains(t, err, "correlated subquery in FROM clause is not yet implemented")
+		require.NoError(t, err)
 		require.Equal(t, int32(3), corr.Depth)
-		require.False(t, ctx.isCorrelated)
+		require.True(t, ctx.isCorrelated)
 	})
 
-	t.Run("deeper ancestor is rejected atomically", func(t *testing.T) {
+	t.Run("deeper ancestor is forwarded", func(t *testing.T) {
 		corr := &plan.CorrColRef{RelPos: outerTag, Depth: 3}
 		nodes := newNodes(corr, &plan.Node{NodeType: plan.Node_TABLE_SCAN})
 		nodes[1].Children[0] = 0
@@ -1467,13 +1474,13 @@ func TestTransparentCorrelatedDerivedTableNormalizationIsAtomic(t *testing.T) {
 		intermediate.bindingByTag[42] = nil
 		ctx := NewBindContext(nil, intermediate)
 		err := newBuilder(nodes).normalizeTransparentCorrelatedDerivedTable(3, ctx)
-		require.ErrorContains(t, err, "correlated subquery in FROM clause is not yet implemented")
+		require.NoError(t, err)
 		require.Equal(t, int32(3), corr.Depth)
-		require.False(t, ctx.isCorrelated)
+		require.True(t, ctx.isCorrelated)
 	})
 }
 
-func TestNestedCorrelatedScalarStillRejectsUnsafeShapes(t *testing.T) {
+func TestNestedCorrelatedScalarUsesDependentPrograms(t *testing.T) {
 	for _, sql := range []string{
 		`SELECT n1.N_NATIONKEY,
 		        (SELECT MAX(n2.N_REGIONKEY)
@@ -1549,8 +1556,10 @@ func TestNestedCorrelatedScalarStillRejectsUnsafeShapes(t *testing.T) {
 		                 LIMIT 1 OFFSET 1))
 		   FROM NATION n1`,
 	} {
-		_, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t, sql)
-		require.ErrorContains(t, err, "correlated columns in SCALAR subquery deeper than 1 level")
+		p, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t, sql)
+		require.NoError(t, err)
+		require.NotNil(t, p.GetQuery().Correlation)
+		require.NoError(t, p.GetQuery().ValidateCorrelation())
 	}
 }
 
@@ -1718,26 +1727,89 @@ func TestFilteringOrOfExistsRewriteControls(t *testing.T) {
 }
 
 func TestFallibleExistsPredicateKeepsIsTrueBarrier(t *testing.T) {
-	logicPlan, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t, `select exists (
-		select 1 from tpch.region r
-		where hll_cardinality(cast(r.r_comment as varbinary)) = n.n_regionkey
-	) from tpch.nation n`)
-	require.NoError(t, err)
-
-	var mark *plan.Node
-	for _, node := range logicPlan.GetQuery().Nodes {
-		if node.NodeType == plan.Node_JOIN && node.JoinType == plan.Node_MARK {
-			mark = node
-			break
-		}
+	for _, tc := range []struct {
+		name, sql string
+		want      int32
+	}{
+		{"direct fallible key", `select exists (select 1 from tpch.region r where hll_cardinality(cast(r.r_comment as varbinary)) = n.n_regionkey) from tpch.nation n`, function.ISTRUE},
+		{"sorted fallible key", `select exists (select r.r_regionkey from tpch.region r where hll_cardinality(cast(r.r_comment as varbinary)) = n.n_regionkey order by r.r_regionkey) from tpch.nation n`, function.ISTRUE},
+		{"derived sorted fallible key", `select exists (select d.k from (select r.r_regionkey as k, hll_cardinality(cast(r.r_comment as varbinary)) as v from tpch.region r) d where d.v = n.n_regionkey order by d.k) from tpch.nation n`, function.ISTRUE},
+		{"sorted non-null fallible key", `select exists (select r.r_regionkey from tpch.region r where coalesce(hll_cardinality(cast(r.r_comment as varbinary)), 0) = coalesce(n.n_regionkey, 0) order by r.r_regionkey) from tpch.nation n`, function.ISTRUE},
+		{"sorted stored key", `select exists (select r.r_regionkey from tpch.region r where r.r_regionkey = n.n_regionkey order by r.r_regionkey) from tpch.nation n`, function.EQUAL},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			logicPlan, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t, tc.sql)
+			require.NoError(t, err)
+			var mark *plan.Node
+			for _, node := range logicPlan.GetQuery().Nodes {
+				if node.NodeType == plan.Node_JOIN && node.JoinType == plan.Node_MARK {
+					mark = node
+					break
+				}
+			}
+			require.NotNil(t, mark)
+			require.Len(t, mark.OnList, 1)
+			condition := mark.OnList[0].GetF()
+			require.NotNil(t, condition)
+			funcID, _ := function.DecodeOverloadID(condition.Func.GetObj())
+			require.Equal(t, tc.want, funcID, "only proven-total existential keys may be exposed")
+		})
 	}
-	require.NotNil(t, mark)
-	require.Len(t, mark.OnList, 1)
-	condition := mark.OnList[0].GetF()
-	require.NotNil(t, condition)
-	funcID, _ := function.DecodeOverloadID(condition.Func.GetObj())
-	require.Equal(t, int32(function.ISTRUE), funcID,
-		"a fallible existential predicate must not become a raw hash key")
+}
+
+func TestExistentialKeyOriginsAreTotalAndReadOnly(t *testing.T) {
+	col := func(tag int32) *plan.Expr {
+		return &plan.Expr{Typ: plan.Type{Id: int32(types.T_int64)}, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: tag}}}
+	}
+	for _, tc := range []struct {
+		name       string
+		mutate     func(*plan.Query)
+		key, input int32
+		want       bool
+	}{
+		{"unreferenced fallible slot", nil, 30, 4, true},
+		{"referenced fallible slot", func(q *plan.Query) { q.Nodes[2].ProjectList[0] = q.Nodes[2].ProjectList[1] }, 30, 4, false},
+		{"distinct forwarding", func(q *plan.Query) { q.Nodes[3].NodeType = plan.Node_DISTINCT }, 30, 4, true},
+		{"partition forwarding", func(q *plan.Query) { q.Nodes[3].NodeType = plan.Node_PARTITION }, 30, 4, true},
+		{"join forwarding", func(q *plan.Query) {
+			q.Nodes = append(q.Nodes, &plan.Node{NodeType: plan.Node_JOIN, Children: []int32{4, 1}})
+		}, 30, 5, true},
+		{"unknown producer", func(q *plan.Query) {
+			q.Nodes = append(q.Nodes, &plan.Node{NodeType: plan.Node_AGG, BindingTags: []int32{40}, Children: []int32{4}})
+		}, 40, 5, false},
+		{"unknown tag", nil, 99, 4, false},
+		{"origin cycle", func(q *plan.Query) { q.Nodes[2].ProjectList[0] = col(30) }, 30, 4, false},
+		{"input cycle", func(q *plan.Query) { q.Nodes[3].Children[0] = 4 }, 30, 4, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			q := &plan.Query{Nodes: []*plan.Node{
+				{NodeType: plan.Node_TABLE_SCAN, BindingTags: []int32{10}, TableDef: &plan.TableDef{Cols: []*plan.ColDef{{Typ: col(10).Typ}}}},
+				{NodeType: plan.Node_TABLE_SCAN, BindingTags: []int32{11}, TableDef: &plan.TableDef{Cols: []*plan.ColDef{{Typ: col(11).Typ}}}},
+				{NodeType: plan.Node_PROJECT, BindingTags: []int32{20}, Children: []int32{1}, ProjectList: []*plan.Expr{col(11), {Typ: col(11).Typ, Expr: &plan.Expr_F{F: &plan.Function{Func: &plan.ObjectRef{ObjName: "fallible"}}}}}},
+				{NodeType: plan.Node_SORT, Children: []int32{2}},
+				{NodeType: plan.Node_PROJECT, BindingTags: []int32{30}, Children: []int32{3}, ProjectList: []*plan.Expr{col(20)}},
+			}}
+			if tc.mutate != nil {
+				tc.mutate(q)
+			}
+			predicate, err := BindFuncExprImplByPlanExpr(context.Background(), "=", []*plan.Expr{col(10), col(tc.key)})
+			require.NoError(t, err)
+			before, err := q.Marshal()
+			require.NoError(t, err)
+			predBefore, err := predicate.Marshal()
+			require.NoError(t, err)
+			builder := &QueryBuilder{qry: q}
+			require.Equal(t, tc.want, builder.existentialJoinPredicatesAreTotal([]*plan.Expr{predicate}, 0, tc.input))
+			// Both sides must be inspected, independent of input ordering.
+			require.Equal(t, tc.want, builder.existentialJoinPredicatesAreTotal([]*plan.Expr{predicate}, tc.input, 0))
+			after, err := q.Marshal()
+			require.NoError(t, err)
+			require.Equal(t, before, after)
+			predAfter, err := predicate.Marshal()
+			require.NoError(t, err)
+			require.Equal(t, predBefore, predAfter)
+		})
+	}
 }
 
 func TestNullableNotExistsJoinPredicateNormalization(t *testing.T) {
@@ -2531,7 +2603,20 @@ func TestMixedCorrelatedScalarProjectionUsesPerOuterLimit(t *testing.T) {
 	}
 }
 
-func TestUnsafeWrappedCorrelatedScalarProjectionEqualityFailsClosed(t *testing.T) {
+func TestWrappedCorrelatedScalarProjectionAdmission(t *testing.T) {
+	t.Run("deep projection uses dependent execution", func(t *testing.T) {
+		p, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t, `SELECT n.n_nationkey,
+		        (SELECT (SELECT CASE WHEN n.n_regionkey > 0 THEN n.n_regionkey ELSE 0 END
+		                          FROM region r
+		                          LIMIT 1)
+		           FROM region r2
+		          LIMIT 1)
+		   FROM nation n`)
+		require.NoError(t, err)
+		require.NotNil(t, p.GetQuery().Correlation)
+		require.NoError(t, p.GetQuery().ValidateCorrelation())
+	})
+
 	for _, sql := range []string{
 		`SELECT n.n_nationkey,
 		        (SELECT CASE WHEN r.r_regionkey > 0 THEN n.n_regionkey ELSE 0 END
@@ -2569,13 +2654,6 @@ func TestUnsafeWrappedCorrelatedScalarProjectionEqualityFailsClosed(t *testing.T
 		           FROM region r
 		          WHERE r.r_regionkey = n.n_regionkey
 		          GROUP BY r.r_regionkey
-		          LIMIT 1)
-		   FROM nation n`,
-		`SELECT n.n_nationkey,
-		        (SELECT (SELECT CASE WHEN n.n_regionkey > 0 THEN n.n_regionkey ELSE 0 END
-		                          FROM region r
-		                          LIMIT 1)
-		           FROM region r2
 		          LIMIT 1)
 		   FROM nation n`,
 		`DELETE FROM nation n
@@ -2630,6 +2708,7 @@ func TestUnsafeWrappedCorrelatedScalarProjectionEqualityFailsClosed(t *testing.T
 		         LIMIT 1)
 		  FROM nation n`, 1)
 	require.NoError(t, err)
+	defer preparedStmt.Free()
 	_, err = BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), preparedStmt, true)
 	require.ErrorContains(t, err, "wrapped correlated scalar projection cannot be safely decorrelated")
 
@@ -2944,4 +3023,66 @@ func newTransparentDerivedEquality(corr *plan.CorrColRef, localTag int32) *plan.
 			},
 		},
 	}
+}
+
+func TestPullupPreservesFoldableScalars(t *testing.T) {
+	target := &plan.Expr{Typ: plan.Type{Id: int32(types.T_varchar), Width: 20}, Expr: &plan.Expr_T{T: &plan.TargetType{}}}
+	constant, err := BindFuncExprImplByPlanExpr(context.Background(), "cast", []*plan.Expr{makePlan2StringConstExprWithType("change", false), target})
+	require.NoError(t, err)
+	volatile, err := BindFuncExprImplByPlanExpr(context.Background(), "rand", nil)
+	require.NoError(t, err)
+	inner := &plan.Expr{Typ: plan.Type{Id: int32(types.T_int64)}, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 7}}}
+	computed, err := BindFuncExprImplByPlanExpr(context.Background(), "abs", []*plan.Expr{inner})
+	require.NoError(t, err)
+	for _, agg := range []bool{false, true} {
+		for _, tc := range []struct {
+			name   string
+			expr   *plan.Expr
+			inline bool
+		}{
+			{"literal cast", constant, true}, {"inner function", computed, false}, {"volatile", volatile, false},
+		} {
+			t.Run(fmt.Sprintf("agg=%t/%s", agg, tc.name), func(t *testing.T) {
+				builder := &QueryBuilder{nameByColRef: make(map[[2]int32]string)}
+				node := &plan.Node{}
+				var got *plan.Expr
+				if agg {
+					got = builder.pullupThroughAgg(nil, node, 9, tc.expr)
+				} else {
+					got = builder.pullupThroughProj(nil, node, 9, tc.expr)
+				}
+				if tc.inline {
+					require.Same(t, tc.expr, got)
+					require.Empty(t, node.GroupBy)
+					require.Empty(t, node.ProjectList)
+				} else {
+					require.Equal(t, int32(9), got.GetCol().RelPos)
+					require.Equal(t, 1, len(node.GroupBy)+len(node.ProjectList))
+				}
+			})
+		}
+	}
+}
+
+func TestCorrelatedCaseLimitKeepsConstantOwnership(t *testing.T) {
+	logicPlan, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t, `
+		SELECT n1.N_NATIONKEY,
+		       (SELECT n2.N_NATIONKEY FROM NATION n2
+		         WHERE n2.N_NAME = concat_ws('', CASE WHEN n1.N_NAME = 'edit'
+		                                      THEN 'change' ELSE n1.N_NAME END, '_page')
+		         ORDER BY n2.N_NAME LIMIT 1)
+		FROM NATION n1`)
+	require.NoError(t, err)
+	query := logicPlan.GetQuery()
+	partitioned := false
+	for _, node := range reachableFlattenSubqueryNodes(query) {
+		require.Nil(t, node.Limit)
+		for _, expr := range node.WinSpecList {
+			if window := expr.GetW(); window != nil && window.Name == "row_number" && len(window.PartitionBy) > 0 {
+				partitioned = true
+			}
+		}
+	}
+	require.True(t, partitioned)
+	assertReachablePlanHasNoCorrelatedExpr(t, query)
 }

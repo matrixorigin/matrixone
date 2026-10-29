@@ -53,7 +53,7 @@ func (b *HavingBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*p
 	astStr := windowExprAstKey(astExpr)
 
 	if !b.insideAgg {
-		if colPos, ok := lookupGroupByAst(b.ctx, astExpr, astStr); ok {
+		if colPos, ok := b.lookupGroupByExpr(astExpr, astStr); ok {
 			return &plan.Expr{
 				Typ: b.ctx.groupOutputType(colPos),
 				Expr: &plan.Expr_Col{
@@ -133,14 +133,58 @@ func (b *HavingBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*p
 	return b.baseBindExpr(astExpr, depth, isRoot)
 }
 
+func (b *HavingBinder) resolvesAggregateAliases() bool {
+	return b.ctx.aggregateQueryForFullGroupBy() &&
+		(b.builder.mysqlFullGroupByCompat || b.builder.mysqlCompatible)
+}
+
+// Alias deferral leaves bare names intact until HAVING can choose between a
+// group and a projected alias. A FULL JOIN USING name represents COALESCE of
+// both inputs, including when it is part of a larger grouping expression.
+func (b *HavingBinder) lookupGroupByExpr(astExpr tree.Expr, astStr string) (int32, bool) {
+	if len(b.ctx.outerUsingCols) == 0 || len(b.ctx.groupByAst) == 0 || !b.resolvesAggregateAliases() {
+		return lookupGroupByAst(b.ctx, astExpr, astStr)
+	}
+	mergedAlias := false
+	walkGroupingSetOrderByExpr(astExpr, func(expr tree.Expr) bool {
+		if mergedAlias {
+			return false
+		}
+		switch node := expr.(type) {
+		case *tree.Subquery:
+			return false // A child query owns its own name resolution.
+		case *tree.FuncExpr:
+			name, _ := node.Func.FunctionReference.(*tree.UnresolvedName)
+			if node.WindowSpec != nil || name != nil && function.GetFunctionIsAggregateByName(strings.ToLower(name.ColName())) {
+				return false // Aggregate/window arguments already use source scope.
+			}
+		case *tree.UnresolvedName:
+			if !node.Star && node.NumParts == 1 && len(b.ctx.outerUsingCols[node.ColName()]) >= 2 {
+				_, mergedAlias = b.ctx.aliasMap[node.ColName()]
+			}
+		}
+		return true
+	})
+	if mergedAlias {
+		qualified, err := b.ctx.qualifyColumnNames(cloneTreeExpr(astExpr), NoAlias)
+		if err != nil {
+			return 0, false // Let ordinary alias/source binding report the error.
+		}
+		// Do not fall back to the bare key: it can identify just one join arm.
+		return lookupGroupByAst(b.ctx, qualified, windowExprAstKey(qualified))
+	}
+	return lookupGroupByAst(b.ctx, astExpr, astStr)
+}
+
 func (b *HavingBinder) BindColRef(astExpr *tree.UnresolvedName, depth int32, isRoot bool) (*plan.Expr, error) {
-	if !b.insideAgg && !b.bindingProjectedAlias && b.builder.mysqlFullGroupByCompat &&
-		b.ctx != nil && !b.ctx.aggregateQueryForFullGroupBy() && !astExpr.Star {
+	aggregateQuery := b.ctx.aggregateQueryForFullGroupBy()
+	if !b.insideAgg && !b.bindingProjectedAlias && b.ctx != nil && !astExpr.Star &&
+		(depth == 0 && b.resolvesAggregateAliases() || b.builder.mysqlFullGroupByCompat && !aggregateQuery) {
 		var projected tree.Expr
 		var found, ambiguous bool
 		if astExpr.NumParts == 1 {
 			projected, found, ambiguous = b.ctx.havingOutputExpr(astExpr.ColName())
-			if !found && !ambiguous {
+			if !found && !ambiguous && !aggregateQuery {
 				// MySQL also keeps the unqualified source spelling visible when
 				// the source column is directly projected under a different alias
 				// (for example SELECT a AS x ... HAVING a). Resolve this only after
@@ -148,7 +192,7 @@ func (b *HavingBinder) BindColRef(astExpr *tree.UnresolvedName, depth int32, isR
 				// output names remain ambiguous.
 				projected, found, ambiguous = b.ctx.havingProjectedColumnExpr(astExpr)
 			}
-		} else {
+		} else if !aggregateQuery {
 			projected, found, ambiguous = b.ctx.havingProjectedColumnExpr(astExpr)
 		}
 		if ambiguous {
@@ -177,6 +221,12 @@ func (b *HavingBinder) BindColRef(astExpr *tree.UnresolvedName, depth int32, isR
 		}
 
 		if corr, ok := expr.Expr.(*plan.Expr_Corr); ok {
+			if depth > 0 && b.subqueryInAggregateInput {
+				// This lookup comes from the subquery used as an aggregate
+				// argument. Its ancestor reference belongs to that subquery,
+				// not to a direct outer-column aggregate in this query block.
+				return expr, nil
+			}
 			if b.builder.mysqlFullGroupByCompat && b.corrColRefTargetsCurrentQueryInput(corr.Corr) {
 				return expr, nil
 			}
@@ -342,6 +392,15 @@ func (b *HavingBinder) BindAggFunc(funcName string, astExpr *tree.FuncExpr, dept
 
 	if err := validateCountArgs(b.GetContext(), funcName, astExpr); err != nil {
 		return nil, err
+	}
+
+	// Exact weighted percentiles are rejected in time-window contexts, the
+	// same contract the ordered-set percentile aggregates keep (decision D9
+	// of the exact weighted percentile design).
+	if b.ctx != nil && b.ctx.timeTag > 0 &&
+		strings.EqualFold(funcName, NameQuantileExactWeighted) {
+		return nil, moerr.NewNotSupported(b.GetContext(),
+			"exact weighted percentile aggregates in time windows")
 	}
 
 	b.insideAgg = true

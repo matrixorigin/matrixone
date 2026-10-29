@@ -41,7 +41,7 @@ t1  ¦  CREATE TABLE `t1` (
   `col1` date NOT NULL,
   `col2` datetime DEFAULT NULL,
   `col3` timestamp NULL DEFAULT NULL,
-  `col4` bool DEFAULT NULL
+  `col4` boolean DEFAULT NULL
 )
 drop table t1;
 drop stage stage01;
@@ -431,7 +431,7 @@ create database db01;
 use db01;
 drop table if exists t11;
 create table t11 (col1 int);
-load data infile '$resources/load_data/test_character.csv' into table t11 CHARACTER SET utf8 FIELDS TERMINATED BY ',' ENCLOSED BY '"' LINES TERMINATED BY '\n';
+load data local infile '$resources/load_data/test_character.csv' into table t11 CHARACTER SET utf8 FIELDS TERMINATED BY ',' ENCLOSED BY '"' LINES TERMINATED BY '\n';
 select * from t11;
 ➤ col1[4,32,0]  𝄀
 1  𝄀
@@ -450,13 +450,12 @@ show stages;
 stage11  ¦  file:////mnt/fastdata/temp/matrixone/test/distributed/resources/into_outfile  ¦  in_use  ¦  stage11  𝄀
 substage11  ¦  stage://stage11/stage  ¦  in_use  ¦  
 select * from t11 into outfile 'stage://substage11/local_stage_t11.csv';
+internal error: only the sys account moadmin role can access SQL file paths
 truncate t11;
 load data infile 'stage://substage11/local_stage_t11.csv' into table t11 CHARACTER SET utf8 FIELDS TERMINATED BY ',' ENCLOSED BY '"' LINES TERMINATED BY '\n' ignore 1 lines;
+internal error: only the sys account moadmin role can access SQL file paths
 select * from t11;
-➤ col1[4,32,0]  𝄀
-1  𝄀
-2  𝄀
-3
+➤ col1[4,32,0]
 drop table t11;
 drop stage stage11;
 drop stage substage11;
@@ -592,7 +591,7 @@ ex_table_1  ¦  CREATE EXTERNAL TABLE `ex_table_1` (
   `date_1` date DEFAULT NULL,
   `date_2` datetime DEFAULT NULL,
   `date_3` timestamp NULL DEFAULT NULL
-) INFILE{'FILEPATH'='','COMPRESSION'='auto','FORMAT'='csv','JSONDATA'=''} FIELDS TERMINATED BY ',' ENCLOSED BY '"' LINES TERMINATED BY '\n' IGNORE 1 LINES
+) INFILE{'FILEPATH'='stage://sub_stage01/external_t01.csv','COMPRESSION'='auto','FORMAT'='csv'} FIELDS TERMINATED BY ',' ENCLOSED BY '"' LINES TERMINATED BY '\n' IGNORE 1 LINES
 drop table ex_table_1;
 drop stage ex_stage01;
 drop stage sub_stage01;
@@ -670,7 +669,7 @@ ex_table_2  ¦  CREATE EXTERNAL TABLE `ex_table_2` (
   `col10` double DEFAULT NULL,
   `col11` varchar(255) COLLATE utf8mb4_general_ci DEFAULT NULL,
   `col12` date DEFAULT NULL
-) INFILE{'FILEPATH'='','COMPRESSION'='auto','FORMAT'='csv','JSONDATA'=''} FIELDS TERMINATED BY ',' ENCLOSED BY '' LINES TERMINATED BY '\n' IGNORE 1 LINES
+) INFILE{'FILEPATH'='stage://sub_stage02/external_t02.csv','COMPRESSION'='auto','FORMAT'='csv'} FIELDS TERMINATED BY ',' ENCLOSED BY '' LINES TERMINATED BY '\n' IGNORE 1 LINES
 drop table ex_table_2;
 drop stage ex_stage02;
 drop stage sub_stage02;
@@ -688,7 +687,7 @@ col6 smallint unsigned,
 col7 int unsigned,
 col8 bigint unsigned
 );
-load data infile{'filepath'='$resources/load_data/integer_numbers_1.jl','format'='jsonline','jsondata'='object'}into table jsonline_t1;
+load data local infile{'filepath'='$resources/load_data/integer_numbers_1.jl','format'='jsonline','jsondata'='object'}into table jsonline_t1;
 select * from jsonline_t1;
 ➤ col1[-6,8,0]  ¦  col2[5,16,0]  ¦  col3[4,32,0]  ¦  col4[-5,64,0]  ¦  col5[-6,8,0]  ¦  col6[5,16,0]  ¦  col7[4,32,0]  ¦  col8[-5,64,0]  𝄀
 127  ¦  32767  ¦  2147483647  ¦  9223372036854775807  ¦  255  ¦  65535  ¦  4294967295  ¦  18446744073709551615  𝄀
@@ -708,6 +707,7 @@ show stages;
 ex_stage03  ¦  file:////mnt/fastdata/temp/matrixone/test/distributed/resources/into_outfile  ¦  in_use  ¦  ex_stage03  𝄀
 sub_stage03  ¦  stage://ex_stage03/stage  ¦  in_use  ¦  
 select * from jsonline_t1 into outfile 'stage://sub_stage03/external_t03.csv';
+internal error: only the sys account moadmin role can access SQL file paths
 drop table jsonline_t1;
 use acc_test;
 create external table jsonline_t1 (
@@ -721,11 +721,7 @@ col7 int unsigned,
 col8 bigint unsigned
 ) infile 'stage://sub_stage03/external_t03.csv' fields terminated by ',' ignore 1 lines;
 select * from jsonline_t1;
-➤ col1[-6,8,0]  ¦  col2[5,16,0]  ¦  col3[4,32,0]  ¦  col4[-5,64,0]  ¦  col5[-6,8,0]  ¦  col6[5,16,0]  ¦  col7[4,32,0]  ¦  col8[-5,64,0]  𝄀
-127  ¦  32767  ¦  2147483647  ¦  9223372036854775807  ¦  255  ¦  65535  ¦  4294967295  ¦  18446744073709551615  𝄀
--128  ¦  -32768  ¦  -2147483648  ¦  -9223372036854775808  ¦  0  ¦  0  ¦  0  ¦  0  𝄀
-40  ¦  0  ¦  60  ¦  50  ¦  100  ¦  0  ¦  90  ¦  20  𝄀
-null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null
+internal error: only the sys account moadmin role can access SQL file paths
 drop table jsonline_t1;
 drop stage ex_stage03;
 drop stage sub_stage03;

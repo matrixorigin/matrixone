@@ -316,6 +316,8 @@ message Expr {
     MaxValue max = 13;
     LiteralVec vec = 14;
     FoldVal fold = 15;
+    DependentExpr dependent = 24;
+    CorrelationSlot slot = 25;
   }
 
   int32 aux_id = 16;
@@ -328,6 +330,57 @@ message Expr {
   // refresh its ColRef type after the inner projection is rebound.
   PreparedNumericMetadata prepared_numeric = 19;
   reserved 20 to 23;
+}
+
+// A parameter read from the current invocation, never a SQL prepared marker.
+// Program ids are one-based indexes into CorrelationSpec.programs.
+message CorrelationSlot {
+  uint32 program_id = 1;
+  uint32 ordinal = 2;
+}
+
+// A demand-owned invocation. Inputs are evaluated in the caller's stage;
+// comparison consumes the once-evaluated lhs (relation 0) and an output tuple
+// (relation 1). No executable Go state is stored in the plan.
+message DependentExpr {
+  uint32 program_id = 1;
+  uint32 occurrence_id = 2;
+  uint32 stage_id = 3;
+  SubqueryRef.Type reducer = 4;
+  repeated Expr inputs = 5;
+  repeated Expr lhs = 6;
+  Expr comparison = 7;
+}
+
+message CorrelationProgram {
+  int32 root_node = 1;
+  repeated Type input_types = 2 [(gogoproto.nullable) = false];
+  repeated Type output_types = 3 [(gogoproto.nullable) = false];
+}
+
+message CorrelationStage {
+  enum Kind {
+    INPUT = 0;
+    JOIN_PAIR = 1;
+    GROUP = 2;
+    WINDOW_SETUP = 3;
+    WINDOW_ROW = 4;
+    ASSIGNMENT = 5;
+    ROUTE = 6;
+  }
+  int32 owner_node = 1;
+  Kind kind = 2;
+  uint32 image_version = 3;
+}
+
+// Steps remain a stable global catalog. Owner 0 is the main execution;
+// owner n is program n. A program's steps activate only with its invocation.
+message CorrelationSpec {
+  uint32 version = 1;
+  int32 main_output_step = 2;
+  repeated uint32 step_owners = 3;
+  repeated CorrelationProgram programs = 4;
+  repeated CorrelationStage stages = 5;
 }
 
 message FoldVal {
@@ -369,6 +422,12 @@ message ResultColDef {
   repeated ColDef ResultCols = 1;
 }
 
+enum ResultColumnKind {
+  RESULT_COLUMN_KIND_UNKNOWN = 0;
+  RESULT_COLUMN_KIND_STORED = 1;
+  RESULT_COLUMN_KIND_COMPUTED = 2;
+}
+
 message ColDef {
   uint64 col_id = 1;
   // letter case: lower
@@ -401,6 +460,13 @@ message ColDef {
   // Physical table name for result-column origin metadata. tbl_name is the
   // visible table name (and can therefore be an alias).
   string origin_tbl_name = 22;
+  // Whether a result column is produced by evaluating an expression rather
+  // than retaining a stored table column. This is intentionally independent
+  // of origin/key metadata, which can be lost across set operations. UNKNOWN
+  // preserves compatibility with plans produced before this field existed.
+  ResultColumnKind result_column_kind = 23;
+  // Result publication only; never persisted as a table/view schema attribute.
+  IntegerResultPresentation integer_result_presentation = 24;
 }
 
 message Default {
@@ -616,11 +682,8 @@ message TableFunction {
   string name = 1;
   bytes param = 2;
   bool is_single = 3;
-  // Planner-resolved references for an internal FULLTEXT scan over a
-  // subscription. SQL arguments remain user-visible data and must never carry
-  // the publisher execution identity.
-  ObjectRef fulltext_source_ref = 4;
-  ObjectRef fulltext_index_ref = 5;
+  reserved 4, 5;
+  reserved "fulltext_source_ref", "fulltext_index_ref";
 }
 
 enum ShuffleType {
@@ -778,6 +841,14 @@ message DedupJoinCtx {
   bool emit_action_rows = 10;
   ColRef action_final_col = 11;
   repeated ODKUForeignKeyCheck foreign_key_checks = 12 [(gogoproto.nullable) = false];
+  // ODKU result tracking is explicit plan metadata.  The target column is
+  // read from the old/probe row; the generated and ordinal columns are read
+  // from the input/build row.  Presence is restricted to the main UPDATE
+  // dedup join and survives projection/remap like the other metadata refs.
+  ColRef odku_target_auto_increment_col = 13;
+  ColRef odku_generated_col = 14;
+  ColRef odku_ordinal_col = 15;
+  ColRef odku_generated_auto_increment_col = 16;
 }
 
 message UpdateCtx {
@@ -903,25 +974,25 @@ message IndexReaderParam {
   uint64 over_fetch_limit = 7;
 }
 
-// VectorIndexTableRef identifies one hidden relation owned by a vector index.
+// IndexHiddenTableRef identifies one hidden relation owned by a vector index.
 // Role is the algorithm-declared hidden-table type (for example metadata,
 // centroids, or entries).  Carrying resolved object/table metadata makes the
 // access path self-contained on remote CNs without rebuilding SQL text.
-message VectorIndexTableRef {
+message IndexHiddenTableRef {
   string role = 1;
   ObjectRef object = 2;
   TableDef table = 3;
 }
 
-// VectorIndexScan is the optimizer-visible contract for an ANN access path.
+// IndexSearchScan is the optimizer-visible contract for an ANN access path.
 // Algorithm mechanics (including adaptive IVF rounds) remain inside the
 // plugin reader; query semantics stay typed and visible in the outer plan.
-message VectorIndexScan {
+message IndexSearchScan {
   ObjectRef source_table = 1;
   TableDef source_table_def = 2;
   IndexDef index = 3;
-  repeated VectorIndexTableRef hidden_tables = 4;
-  Expr query_vector = 5;
+  repeated IndexHiddenTableRef hidden_tables = 4;
+  Expr query_payload = 5;
   string distance_function = 6;
   OrderBySpec.OrderByFlag direction = 7;
   // Semantic result window k (including OFFSET compensation). Execution
@@ -930,16 +1001,32 @@ message VectorIndexScan {
   DistRange distance_range = 9;
   repeated Expr pre_filters = 10;
   repeated string included_columns = 11;
-  uint32 initial_probe_count = 12;
-  Expr first_round_limit = 13;
-  uint32 bucket_expand_step = 14;
-  int64 threads_search = 15;
+  // 12-15 carried ivfflat settings before MORPCVersion107; they live in
+  // algo_options/algo_exprs now.
+  reserved 12, 13, 14, 15;
   Snapshot scan_snapshot = 16;
   // The execution binder expands candidate_limit after prepared parameters are
   // available; readers receive both k and the bound candidate budget.
   bool post_filter_over_fetch = 17;
   // Advisory local scan work. Absent when local DOP is not opted in.
-  VectorIndexScanWork scan_work = 18;
+  IndexSearchScanWork scan_work = 18;
+  // Static settings of the index algorithm, encoded by the algorithm's plan
+  // hook and decoded only by the same algorithm's reader.
+  bytes algo_options = 19;
+  // Row-dependent algorithm expressions, bound and evaluated like
+  // candidate_limit and handed to the reader by algo_expr_names[i].
+  repeated Expr algo_exprs = 20;
+  repeated string algo_expr_names = 21;
+  // Internal top-k of the search (BY RANK option itopk; 0 = unset): the number of
+  // candidates the index search returns before filtering, at least the result limit.
+  // The compiler fills unset knobs from the session variables vector_itopk,
+  // vector_max_itopk and vector_max_nprobe.
+  uint64 internal_topk = 22;
+  // Cap on internal_topk while the search widens (BY RANK option max_itopk; 0 = unset).
+  uint64 max_internal_topk = 23;
+  // Cap on the lists an IVF search probes while it widens (BY RANK option max_nprobe;
+  // 0 = unset). Graph indexes ignore it.
+  uint64 max_nprobe = 24;
 }
 
 message Node {
@@ -956,7 +1043,7 @@ message Node {
     reserved 6; // former SOURCE_SCAN
     reserved "SOURCE_SCAN";
     EXTERNAL_FUNCTION = 7;
-    VECTOR_INDEX_SCAN = 8;
+    INDEX_SEARCH_SCAN = 8;
 
     // Proper Relational Operators
     PROJECT = 10;
@@ -1250,8 +1337,8 @@ message Node {
   // row count carries the complete join multiplicity.
   bool emit_compressed_row_count = 84;
 
-  // VECTOR_INDEX_SCAN only: typed vector-index access-path description.
-  VectorIndexScan vector_index_scan = 85;
+  // INDEX_SEARCH_SCAN only: typed vector-index access-path description.
+  IndexSearchScan index_search_scan = 85;
 
   // Physical equality expressions used by set operations and DISTINCT to
   // compare rows without changing the user-visible projected representation.
@@ -1280,6 +1367,11 @@ message Node {
 
   // Ordered binding contexts used by view authorization.
   repeated ViewStep view_path = 94;
+
+  // DEDUP only: lossless logical index parts from the incoming row. These
+  // survive pruning and are evaluated only when rendering a diagnostic;
+  // on_list continues to use the opaque physical comparison key.
+  repeated Expr dedup_key_exprs = 95;
 }
 
 message SnapshotExtraInfo {
@@ -1516,6 +1608,10 @@ message LockTarget {
   ObjectRef obj_ref = 15;
   int32 partition_col_idx_in_bat = 16;
   bool has_partition_col = 17;
+  // no_wait is a physical row-lock acquisition policy. It is separate from
+  // the SQL error outcome; SkipLocked targets also use nonblocking acquisition.
+  bool no_wait = 18;
+  bool skip_locked = 19;
 }
 
 message PreInsertUkCtx {
@@ -1558,6 +1654,8 @@ message PreInsertUkCtx {
   repeated string key_names = 16;
   repeated Type key_types = 17;
   repeated int32 key_type_counts = 18;
+  // Parallel to key_columns. Empty lists retain legacy diagnostic rendering.
+  repeated ExprList key_diagnostic_exprs = 19;
 }
 
 message PreInsertCtx {
@@ -1577,6 +1675,13 @@ message PreInsertCtx {
   // INSERT IGNORE arbiter must distinguish generated from explicit values.
   bool track_auto_increment_generated = 13;
   int32 auto_increment_generated_column = 14;
+  // ODKU keeps the generated marker and a statement-local source ordinal so
+  // the DEDUP action owner can publish first-generated/last-action results.
+  bool track_odku_result = 15;
+  int32 odku_ordinal_column = 16;
+  // ODKU provenance names the user-visible AUTO_INCREMENT source column.
+  // Hidden fake-primary-key allocations must not be treated as the source.
+  int32 odku_auto_increment_column = 17;
 }
 
 // RuntimeFilterKeyEncoding records the versioned producer-side closure
@@ -1669,6 +1774,50 @@ message PostDmlCtx {
   PostDmlFullTextCtx full_text = 8;
 }
 
+// Logical metadata only. Executors never consult this graph for values or vector
+// types. One-based edges are topologically ordered; zero means unknown.
+message IntegerPrecisionNode {
+  enum Kind {
+    DECLARED = 0;
+    SQL_LITERAL = 1;
+    EXPLICIT_CAST = 2;
+    PARAMETER = 3;
+    ADD = 4;
+    MUL = 5;
+    REFERENCE = 6;
+    COMMON_INTEGER = 7;
+  }
+  Kind kind = 1;
+  uint32 precision = 2;
+  bool unsigned = 3;
+  repeated uint32 inputs = 4;
+  int32 param_pos = 5;
+  bool arithmetic = 6;
+}
+
+message IntegerPrecisionOutput {
+  enum RootClass {
+    DECLARED_SOURCE = 0;
+    DIRECT_FUNCTION = 1;
+    SQL_REFERENCE = 2;
+    SQL_LITERAL = 3;
+  }
+  uint32 node = 1;
+  RootClass root_class = 2;
+}
+
+message IntegerPrecisionGraph {
+  repeated IntegerPrecisionNode nodes = 1;
+  repeated IntegerPrecisionOutput outputs = 2;
+  // Covers all admitted source tokens, including imported persisted view bodies.
+  uint64 source_budget = 3;
+  uint32 parameter_count = 4;
+}
+
+message IntegerResultPresentation {
+  uint32 display_length = 1;
+}
+
 message Query {
   enum StatementType {
     UNKNOWN = 0;
@@ -1747,6 +1896,8 @@ message Query {
 
   // Logical access paths, not grants or resolved security roles.
   repeated ViewReference view_references = 18;
+  CorrelationSpec correlation = 19;
+  IntegerPrecisionGraph integer_precision = 20;
 }
 
 message TransationControl {
@@ -1917,11 +2068,13 @@ message CreateDatabase {
   string database = 2;
   SubscriptionOption subscription_option = 3;
   string sql = 4;
+  DatabaseDefaults defaults = 5;
 }
 
 message AlterDatabase {
   bool if_exists = 1;
   string database = 2;
+  DatabaseDefaults defaults = 3;
 }
 
 message DropDatabase {
@@ -1990,6 +2143,14 @@ message CreateTable {
 
   reserved 14;
   string RawSQL = 15;
+  // Names remain dependencies even when checks=0 permits an absent parent.
+  repeated ObjectRef unresolved_fk_parents = 16;
+  // Cached metadata-name owner observed before catalog-dependent planning.
+  lock.LockTable fk_name_binding = 17;
+  DatabaseDefaults database_defaults = 18;
+  // Execution-only requirement for retained CTAS population SQL.
+  // Zero means no additional requirement; this is not a catalog format floor.
+  int64 ctas_execution_protocol_version = 19;
 }
 
 message AlterTableDrop {
@@ -2390,6 +2551,12 @@ enum AlterPartitionType {
 
 message RankOption {
   string mode = 1; // "pre", "post", "force", or "auto"
+  // Index search knobs (0 = unset). itopk/max_itopk apply to every vector index;
+  // nprobe/max_nprobe to IVF indexes only.
+  uint64 nprobe = 2;
+  uint64 itopk = 3;
+  uint64 max_itopk = 4;
+  uint64 max_nprobe = 5;
 }
 
 message AlterTableAutoIncrement {
@@ -2406,7 +2573,7 @@ message ODKUForeignKeyCheck {
 
 // Physical input work is separate from the scan's narrow output cardinality.
 // These estimates affect scheduling only, never filtering or authorization.
-message VectorIndexScanWork {
+message IndexSearchScanWork {
   double rows = 1;
   int32 blocks = 2;
   double vector_bytes_per_row = 3;
@@ -2430,4 +2597,15 @@ message ViewStep {
   string view_name = 2;
   Snapshot snapshot = 3;
   string subscription_name = 4;
+}
+
+// A zero version represents a legacy database without a persisted default.
+// Names are derived display values; identity/revision own the effective domain.
+message DatabaseDefaults {
+  uint64 database_id = 1;
+  string character_set = 2;
+  string collation = 3;
+  uint64 version = 4;
+  uint32 collation_id = 5;
+  uint32 collation_revision = 6;
 }

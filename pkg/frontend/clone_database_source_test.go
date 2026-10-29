@@ -17,18 +17,92 @@ package frontend
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/stretchr/testify/require"
 
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
+
+func TestCollectCloneDatabaseSourceReusesFKDefinitions(t *testing.T) {
+	for _, ts := range []int64{0, 42} {
+		t.Run(fmt.Sprint(ts), func(t *testing.T) {
+			const database = "source_db"
+			ctx := defines.AttachAccountId(t.Context(), 7)
+			ses := newFeatureLimitTestSession(t)
+			ses.txnCompileCtx = &TxnCompilerContext{}
+			ses.txnCompileCtx.SetQueryingSubscription(&plan.SubscriptionMeta{DbName: database, AccountId: 7})
+			accounts := &cloneDatabaseAccountResolution{opAccountId: 7, toAccountId: 7}
+			spec := ""
+			if ts != 0 {
+				accounts.snapshot = &plan.Snapshot{TS: &timestamp.Timestamp{PhysicalTime: ts}}
+				spec = fmt.Sprintf(" {MO_TS = %d}", ts)
+			}
+			bh := &backgroundExecTest{}
+			bh.init()
+			bh.sql2result["SELECT 1 FROM mo_catalog.mo_database"+spec+" WHERE datname = 'source_db' AND account_id = 7 LIMIT 1"] = newMrsForCheckDatabase([][]interface{}{{1}})
+			listSQL := buildTableInfoListSQL(database, "", ts, 7)
+			bh.sql2result[listSQL] = newMrsForRestoreStringRows([]string{"name", "type", "kind", "view"}, [][]interface{}{
+				{"child", "BASE TABLE", catalog.SystemOrdinaryRel, ""},
+				{"parent", "BASE TABLE", catalog.SystemOrdinaryRel, ""},
+			})
+			for table, ddl := range map[string]string{
+				"parent": "create table source_db.parent (id int primary key)",
+				"child":  "create table source_db.child (id int primary key, parent_id int, foreign key (parent_id) references source_db.parent(id))",
+			} {
+				bh.sql2result["show create table `source_db`.`"+table+"`"+spec] = newMrsForRestoreStringRows([]string{"table", "sql"}, [][]interface{}{{table, ddl}})
+				bh.sql2result[buildTableInfoListSQL(database, table, ts, 7)] = newMrsForRestoreStringRows([]string{"name", "type", "kind", "view"}, [][]interface{}{{table, "BASE TABLE", catalog.SystemOrdinaryRel, ""}})
+			}
+			bh.sql2result["select db_name, table_name, refer_db_name, refer_table_name from mo_catalog.mo_foreign_keys"+spec+" where db_name = 'source_db'"] = newMrsForRestoreStringRows([]string{"db", "table", "ref_db", "ref_table"}, nil)
+			stmt := &tree.CloneDatabase{SrcDatabase: database, DstDatabase: "target_db"}
+			source, err := collectCloneDatabaseSource(ctx, ses, bh, stmt, accounts)
+			require.NoError(t, err)
+			require.Equal(t, []string{genKey(database, "parent"), genKey(database, "child")}, source.sortedFkTbls)
+			for _, info := range source.srcTblInfos {
+				require.Same(t, info, source.fkTableMap[genKey(database, info.tblName)])
+			}
+			// One extra snapshot/account-local read establishes database defaults
+			// before collecting and sorting the source table definitions.
+			require.Len(t, bh.executedSQLs, 6)
+			require.Len(t, source.fkTableMap, 2)
+			for _, account := range bh.executionAccountIDs {
+				require.Equal(t, uint32(7), account)
+			}
+
+			t.Run("fresh collection does not reuse the admitted predecessor", func(t *testing.T) {
+				next, err := collectCloneDatabaseSource(ctx, ses, bh, stmt, accounts)
+				require.NoError(t, err)
+				require.Len(t, bh.executedSQLs, 12)
+				require.NotSame(t, source.srcTblInfos[0], next.srcTblInfos[0])
+				require.Same(t, next.srcTblInfos[0], next.fkTableMap[genKey(database, "child")])
+			})
+			t.Run("no foreign keys", func(t *testing.T) {
+				bh.sql2result["show create table `source_db`.`child`"+spec] = newMrsForRestoreStringRows([]string{"table", "sql"}, [][]interface{}{{"child", "create table source_db.child (id int primary key)"}})
+				next, err := collectCloneDatabaseSource(ctx, ses, bh, stmt, accounts)
+				require.NoError(t, err)
+				require.Len(t, bh.executedSQLs, 18)
+				require.Len(t, next.srcTblInfos, 2)
+				require.Empty(t, next.sortedFkTbls)
+				require.Empty(t, next.fkTableMap)
+			})
+			t.Run("schema lookup failure is preserved", func(t *testing.T) {
+				want := moerr.NewInternalErrorNoCtx("schema lookup failed")
+				bh.sql2err["show create table `source_db`.`child`"+spec] = want
+				_, err := collectCloneDatabaseSource(ctx, ses, bh, stmt, accounts)
+				require.ErrorIs(t, err, want)
+			})
+		})
+	}
+}
 
 type accountRecordingBackgroundExec struct {
 	*backgroundExecTest
@@ -90,8 +164,10 @@ func TestGetStoredProcedureInfosUsesSnapshotAndTenant(t *testing.T) {
 		Tenant: &plan.SnapshotTenant{TenantID: 7},
 	}
 	querySQL := "select name, args, lang, body, sql_mode from mo_catalog.mo_stored_procedure {MO_TS = 42} where db = 'source_db' order by name"
+	modeSQL := "select attname from mo_catalog.mo_columns {MO_TS = 42} where account_id = 7 and att_database = 'mo_catalog' and att_relname = 'mo_stored_procedure' and attname = 'sql_mode' limit 2"
 	base := &backgroundExecTest{}
 	base.init()
+	base.sql2result[modeSQL] = newMrsForSqlForShowDatabases([][]interface{}{{"sql_mode"}})
 	base.sql2result[querySQL] = newStoredProcedureMetadataResultSet([][]interface{}{
 		{"p_answer", "[]", "sql", "begin select 42; end", "PIPES_AS_CONCAT"},
 	})
@@ -112,12 +188,27 @@ func TestGetStoredProcedureInfosUsesSnapshotAndTenant(t *testing.T) {
 	t.Run("catalog query failure is propagated", func(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
+		bh.sql2result[modeSQL] = newMrsForSqlForShowDatabases([][]interface{}{{"sql_mode"}})
 		wantErr := errors.New("stored procedure query failed")
 		bh.sql2err[querySQL] = wantErr
 
 		procedures, err := getStoredProcedureInfos(context.Background(), bh, snapshot, dbName)
 		require.ErrorIs(t, err, wantErr)
 		require.Nil(t, procedures)
+	})
+	t.Run("legacy snapshot has no sql_mode", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		bh.sql2result[modeSQL] = newMrsForSqlForShowDatabases(nil)
+		legacySQL := strings.Replace(querySQL, "sql_mode", "'PIPES_AS_CONCAT'", 1)
+		bh.sql2result[legacySQL] = newStoredProcedureMetadataResultSet([][]interface{}{
+			{"p_answer", "[]", "sql", "begin select 42; end", "PIPES_AS_CONCAT"},
+		})
+		procedures, err := getStoredProcedureInfos(context.Background(), bh, snapshot, dbName)
+		require.NoError(t, err)
+		require.Len(t, procedures, 1)
+		require.Equal(t, "PIPES_AS_CONCAT", procedures[0].sqlMode)
+		require.Equal(t, []string{modeSQL, legacySQL}, bh.executedSQLs)
 	})
 }
 
@@ -128,8 +219,10 @@ func TestGetUserDefinedFunctionInfosUsesSnapshotAndTenant(t *testing.T) {
 		Tenant: &plan.SnapshotTenant{TenantID: 7},
 	}
 	querySQL := "select name, args, retType, body, language, sql_mode from mo_catalog.mo_user_defined_function {MO_TS = 42} where db = 'source_db' order by name"
+	modeSQL := "select attname from mo_catalog.mo_columns {MO_TS = 42} where account_id = 7 and att_database = 'mo_catalog' and att_relname = 'mo_user_defined_function' and attname = 'sql_mode' limit 2"
 	base := &backgroundExecTest{}
 	base.init()
+	base.sql2result[modeSQL] = newMrsForSqlForShowDatabases([][]interface{}{{"sql_mode"}})
 	base.sql2result[querySQL] = newUserDefinedFunctionMetadataResultSet([][]interface{}{
 		{"f_answer", `[{"name":"arg","type":"int"}]`, "int", "select 42", "sql", "PIPES_AS_CONCAT"},
 	})
@@ -152,12 +245,36 @@ func TestGetUserDefinedFunctionInfosUsesSnapshotAndTenant(t *testing.T) {
 	t.Run("catalog query failure is propagated", func(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
+		bh.sql2result[modeSQL] = newMrsForSqlForShowDatabases([][]interface{}{{"sql_mode"}})
 		wantErr := errors.New("user defined function query failed")
 		bh.sql2err[querySQL] = wantErr
 
 		functions, err := getUserDefinedFunctionInfos(context.Background(), bh, snapshot, dbName)
 		require.ErrorIs(t, err, wantErr)
 		require.Nil(t, functions)
+	})
+	t.Run("legacy snapshot has no sql_mode", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		bh.sql2result[modeSQL] = newMrsForSqlForShowDatabases(nil)
+		legacySQL := strings.Replace(querySQL, "sql_mode", "'PIPES_AS_CONCAT'", 1)
+		bh.sql2result[legacySQL] = newUserDefinedFunctionMetadataResultSet([][]interface{}{
+			{"f_answer", `[{"name":"arg","type":"int"}]`, "int", "select 42", "sql", "PIPES_AS_CONCAT"},
+		})
+		functions, err := getUserDefinedFunctionInfos(context.Background(), bh, snapshot, dbName)
+		require.NoError(t, err)
+		require.Len(t, functions, 1)
+		require.Equal(t, "PIPES_AS_CONCAT", functions[0].sqlMode)
+		require.Equal(t, []string{modeSQL, legacySQL}, bh.executedSQLs)
+	})
+	t.Run("metadata error prevents routine query", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		wantErr := errors.New("historical column lookup failed")
+		bh.sql2err[modeSQL] = wantErr
+		_, err := getUserDefinedFunctionInfos(context.Background(), bh, snapshot, dbName)
+		require.ErrorIs(t, err, wantErr)
+		require.Equal(t, []string{modeSQL}, bh.executedSQLs)
 	})
 }
 

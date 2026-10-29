@@ -15,10 +15,9 @@
 // fulltext2-specific pieces of the MATCH query rewrite. fulltext2 reuses the
 // classic MATCH(col) AGAINST(...) surface (fulltext_match), so it is resolved by
 // findMatchFullTextIndex and chained by applyJoinFullTextIndices exactly like a
-// classic fulltext index — the only difference is the per-match TVF: this file's
-// buildFulltext2SearchTableFunc emits a fulltext2_search TVF (WAND positional
-// engine) instead of fulltext_index_scan. Both emit (doc_id, score), so the
-// downstream join/sort/limit is unchanged.
+// classic fulltext index — the only difference is the per-match scan: this file's
+// buildFulltext2SearchScan emits a fulltext2 INDEX_SEARCH_SCAN (WAND positional
+// engine). Both emit (doc_id, score), so the downstream join/sort/limit is unchanged.
 package plan
 
 import (
@@ -28,7 +27,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/fulltext"
 	fulltext2engine "github.com/matrixorigin/matrixone/pkg/fulltext2"
+	ft2plan "github.com/matrixorigin/matrixone/pkg/fulltext2/plugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
@@ -83,10 +84,8 @@ func fulltext2PeelablePkColName(scanNode *plan.Node) string {
 	return ""
 }
 
-const fulltext2_search_func_name = "fulltext2_search"
-
 // buildFulltext2SearchCfg validates a MATCH against a fulltext2 index and returns
-// the fulltext2_search config JSON ({db,index,metadata[,parser]}). It resolves the
+// the fulltext2 search config JSON ({db,index,metadata[,parser]}). It resolves the
 // storage/metadata hidden tables and rejects NL/BOOLEAN modes on a POSITION_FREE
 // index (which has no positions — only IN BM25 MODE bag-of-words is valid).
 func (builder *QueryBuilder) buildFulltext2SearchCfg(scanNode *plan.Node, idxdef *plan.IndexDef, mode int64) (string, error) {
@@ -111,6 +110,10 @@ func (builder *QueryBuilder) buildFulltext2SearchCfg(scanNode *plan.Node, idxdef
 			idxdef.IndexName)
 	}
 
+	// token_filter requires POSITION_FREE (enforced at CREATE), so the POSITION_FREE
+	// rejection above already blocks NL / BOOLEAN on a token_filter index; no separate
+	// check is needed here. The filter is carried in cfgMap below for the BM25 path.
+
 	cfgMap := map[string]any{
 		"db":       scanNode.ObjRef.SchemaName,
 		"index":    storeTbl,
@@ -118,6 +121,11 @@ func (builder *QueryBuilder) buildFulltext2SearchCfg(scanNode *plan.Node, idxdef
 	}
 	if parser := fulltext2ParserFromParams(idxdef.IndexAlgoParams); parser != "" {
 		cfgMap["parser"] = parser
+	}
+	// Carry the token_filter analyzer chain so the search strips the SAME tokens the
+	// build stripped (as a []string → TableConfig.TokenFilters).
+	if filters := fulltext2TokenFiltersFromParams(idxdef.IndexAlgoParams); len(filters) > 0 {
+		cfgMap["token_filter"] = filters
 	}
 	// Carry the INCLUDE column NAMES so the engine can map a covering query's requested
 	// columns (by name) to each result's positional Include values (search_cache
@@ -157,10 +165,10 @@ func (builder *QueryBuilder) buildFulltext2SearchCfg(scanNode *plan.Node, idxdef
 	return string(cfgBytes), nil
 }
 
-// ft2SearchBaseColDefs returns the fulltext2_search TVF's built-in output coldefs: the same
+// ft2SearchBaseColDefs returns the fulltext2 search scan's built-in output coldefs: the same
 // (pk, relevance) shape and types as classic fulltext's ftIndexColdefs, but RENAMED to the
 // reserved __mo_ft_* aliases. The covered path emits INCLUDE columns as sibling outputs and
-// the runtime (fulltext2_search.go start()) classifies the output batch BY NAME, so the pk/
+// the runtime (fulltext2/plugin/search) classifies the output batch BY NAME, so the pk/
 // score outputs must use names no user INCLUDE column can equal — otherwise an INCLUDE column
 // named "doc_id"/"score" collides and is misrouted (silent wrong output / shuffle panic).
 // This is also what decouples fulltext2 from classic fulltext's coldef list (it only borrowed
@@ -173,63 +181,82 @@ func ft2SearchBaseColDefs() []*plan.ColDef {
 	return cds
 }
 
-// buildFulltext2SearchNode builds the fulltext2_search FUNCTION_SCAN node for a MATCH
-// resolved to a fulltext2 index. exprs are the TVF args [cfg(const), pattern, mode];
-// pattern is passed as an expression, so a prepared-statement '?' parameter is bound
-// and evaluated at execution time (the TVF reads it per row). The node emits the reserved
-// (__mo_ft_doc_id, __mo_ft_score) shape, so the downstream join/sort binds by position.
-func (builder *QueryBuilder) buildFulltext2SearchNode(ctx *BindContext, exprs []*plan.Expr, children []int32) (int32, error) {
-	colDefs := ft2SearchBaseColDefs()
-	node := &plan.Node{
-		NodeType: plan.Node_FUNCTION_SCAN,
-		Stats:    &plan.Stats{},
-		TableDef: &plan.TableDef{
-			TableType: "func_table",
-			TblFunc: &plan.TableFunction{
-				Name: fulltext2_search_func_name,
-			},
-			Cols: colDefs,
+// buildFulltext2SearchScan builds the INDEX_SEARCH_SCAN of a MATCH resolved to the
+// fulltext2 index idxdef of scanNode. pattern is the MATCH pattern expression, so a
+// prepared-statement '?' parameter is bound and evaluated at execution. guard, when not
+// nil, is the zero-relevance guard of a score threshold known only at execution. The
+// scan emits colDefs: the reserved (__mo_ft_doc_id, __mo_ft_score) shape, plus the
+// INCLUDE columns on the covered path, so the downstream join/sort binds by position.
+func (builder *QueryBuilder) buildFulltext2SearchScan(
+	ctx *BindContext,
+	scanNode *plan.Node,
+	idxdef *plan.IndexDef,
+	opts ft2plan.ScanOptions,
+	pattern, guard *plan.Expr,
+	colDefs []*plan.ColDef,
+) (int32, error) {
+	opts.ThreadsSearch = builder.fulltext2ThreadsSearch()
+	// The high-df cutoff is a BM25 bag-of-words knob only: NL/BOOLEAN/json-probe modes never
+	// consume it (runTopK/stream apply it solely on the BagOfWords branch), so don't even
+	// emit it into their algo_options.
+	if opts.Mode == int64(tree.FULLTEXT_BM25) {
+		opts.SearchDFCutoff = builder.fulltext2SearchDFCutoff()
+	}
+	algoOptions, err := ft2plan.EncodeScanOptions(opts)
+	if err != nil {
+		return -1, err
+	}
+	storeTbl, metaTbl, _ := builder.findFulltext2IndexTables(scanNode, idxdef)
+	spec := &plan.IndexSearchScan{
+		SourceTable:    DeepCopyObjectRef(scanNode.ObjRef),
+		SourceTableDef: DeepCopyTableDef(scanNode.TableDef, true),
+		ScanSnapshot:   DeepCopySnapshot(scanNode.ScanSnapshot),
+		Index:          DeepCopyIndexDef(idxdef),
+		QueryPayload:   DeepCopyExpr(pattern),
+		AlgoOptions:    algoOptions,
+		HiddenTables: []*plan.IndexHiddenTableRef{
+			{Role: catalog.FullText2Index_TblType_Storage, Object: &plan.ObjectRef{SchemaName: scanNode.ObjRef.SchemaName, ObjName: storeTbl}},
+			{Role: catalog.FullText2Index_TblType_Metadata, Object: &plan.ObjectRef{SchemaName: scanNode.ObjRef.SchemaName, ObjName: metaTbl}},
 		},
-		BindingTags:     []int32{builder.genNewBindTag()},
-		TblFuncExprList: exprs,
-		Children:        children,
+	}
+	if guard != nil {
+		spec.AlgoExprs = []*plan.Expr{guard}
+		spec.AlgoExprNames = []string{fulltext.ZeroRelevanceGuardExpr}
+	}
+	node := &plan.Node{
+		NodeType: plan.Node_INDEX_SEARCH_SCAN,
+		Stats:    &plan.Stats{},
+		ObjRef:   DeepCopyObjectRef(scanNode.ObjRef),
+		TableDef: &plan.TableDef{
+			Name:      scanNode.TableDef.Name,
+			TableType: "fulltext_index_scan",
+			Cols:      colDefs,
+		},
+		BindingTags: []int32{builder.genNewBindTag()},
+		// Named-snapshot read TS; DeepCopySnapshot(nil) is nil (#27941).
+		ScanSnapshot:    DeepCopySnapshot(scanNode.ScanSnapshot),
+		IndexSearchScan: spec,
 	}
 	return builder.appendNode(node, ctx), nil
 }
 
-// buildFulltext2SearchNodeCovered builds the fulltext2_search FUNCTION_SCAN node for the
-// COVERED fast path: its output coldefs are [doc_id, score] PLUS one column per INCLUDE
-// column (at positions 2+), so a fully-covered projection reads pk/score/include straight
-// from the TVF with NO base-table JOIN. includeCols are the INCLUDE column NAMES in the
-// SAME order as the cfg's include_columns (= the order decodeInclude returns), so output
-// col 2+j maps to the j-th include value. Each include coldef takes the base column's real
-// type (looked up from scanNode.TableDef.Cols by name). Everything else matches the plain
-// buildFulltext2SearchNode (used by the JOIN path).
-func (builder *QueryBuilder) buildFulltext2SearchNodeCovered(ctx *BindContext, exprs []*plan.Expr, children []int32, scanNode *plan.Node, includeCols []string) (int32, error) {
+// ft2CoveredColDefs returns the covered-path output coldefs: [doc_id, score] PLUS one
+// column per INCLUDE column (at positions 2+), so a fully-covered projection reads
+// pk/score/include straight from the scan with NO base-table JOIN. includeCols are the
+// INCLUDE column NAMES in the SAME order as the cfg's include_columns (= the order
+// decodeInclude returns), so output col 2+j maps to the j-th include value. Each include
+// coldef takes the base column's real type (looked up from scanNode.TableDef.Cols by name).
+func (builder *QueryBuilder) ft2CoveredColDefs(scanNode *plan.Node, includeCols []string) ([]*plan.ColDef, error) {
 	colDefs := ft2SearchBaseColDefs()
 	for _, name := range includeCols {
 		colTyp, ok := baseColTypeByName(scanNode, name)
 		if !ok {
-			return -1, moerr.NewInternalErrorf(builder.GetContext(),
+			return nil, moerr.NewInternalErrorf(builder.GetContext(),
 				"fulltext2 covered path: INCLUDE column %q not found on base table %q", name, scanNode.TableDef.Name)
 		}
 		colDefs = append(colDefs, &plan.ColDef{Name: name, Typ: colTyp})
 	}
-	node := &plan.Node{
-		NodeType: plan.Node_FUNCTION_SCAN,
-		Stats:    &plan.Stats{},
-		TableDef: &plan.TableDef{
-			TableType: "func_table",
-			TblFunc: &plan.TableFunction{
-				Name: fulltext2_search_func_name,
-			},
-			Cols: colDefs,
-		},
-		BindingTags:     []int32{builder.genNewBindTag()},
-		TblFuncExprList: exprs,
-		Children:        children,
-	}
-	return builder.appendNode(node, ctx), nil
+	return colDefs, nil
 }
 
 // baseColTypeByName returns the plan type of the named column on scanNode's base table
@@ -259,6 +286,21 @@ func fulltext2ParserFromParams(params string) string {
 		return ""
 	}
 	return p.Parser
+}
+
+// fulltext2TokenFiltersFromParams extracts the token_filter analyzer chain from an
+// index's IndexAlgoParams JSON so the search strips the same tokens the build did.
+func fulltext2TokenFiltersFromParams(params string) []string {
+	if len(params) == 0 {
+		return nil
+	}
+	var p struct {
+		TokenFilter string `json:"token_filter"`
+	}
+	if err := json.Unmarshal([]byte(params), &p); err != nil {
+		return nil
+	}
+	return fulltext2engine.ParseTokenFilterNames(p.TokenFilter)
 }
 
 // fulltext2PositionFreeFromParams reports whether the index was built POSITION_FREE
@@ -295,4 +337,28 @@ func (builder *QueryBuilder) findFulltext2IndexTables(scanNode *plan.Node, idxde
 		}
 	}
 	return storeTbl, metaTbl, storeTbl != "" && metaTbl != ""
+}
+
+// fulltext2ThreadsSearch resolves the fulltext2_threads_search session variable
+// that sizes the multi-segment parallel top-k search. 0 (the default) is the
+// NEUTRAL value, which the search site (vectorindex.GetConcurrency) resolves to
+// the deployment's effective parallelism (GOMAXPROCS) — NOT serial. A positive
+// value caps the worker count.
+func (builder *QueryBuilder) fulltext2ThreadsSearch() int64 {
+	n, err := builder.resolveInt64Variable("fulltext2_threads_search", 0)
+	if err != nil {
+		return 0
+	}
+	return n
+}
+
+// fulltext2SearchDFCutoff resolves the fulltext2_search_df_cutoff session variable:
+// the global df/N fraction at or above which a ranked bag-of-words term is dropped from
+// the BM25 search. 0 (the default) disables the cutoff.
+func (builder *QueryBuilder) fulltext2SearchDFCutoff() float64 {
+	v, err := builder.resolveFloat64Variable("fulltext2_search_df_cutoff", 0)
+	if err != nil {
+		return 0
+	}
+	return v
 }

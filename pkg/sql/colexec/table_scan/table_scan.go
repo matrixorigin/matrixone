@@ -63,6 +63,7 @@ func (tableScan *TableScan) Prepare(proc *process.Process) (err error) {
 		if err != nil {
 			return
 		}
+		tableScan.ctr.subjectReuseAdmissionDone = false
 	}
 
 	// runtime filters are set fresh by handleRuntimeFilters before each Prepare call
@@ -95,12 +96,18 @@ func (tableScan *TableScan) Prepare(proc *process.Process) (err error) {
 	}
 
 	err = tableScan.PrepareProjection(proc)
+	if err != nil {
+		return err
+	}
 	if tableScan.ctr.buf == nil {
 		tableScan.ctr.buf = batch.NewOffHeapWithSize(len(tableScan.Types))
 		tableScan.ctr.buf.Attrs = append(tableScan.ctr.buf.Attrs, tableScan.Attrs...)
 		for i := range tableScan.Types {
 			tableScan.ctr.buf.Vecs[i] = vector.NewOffHeapVecWithType(plan.MakeTypeByPlan2Type(tableScan.Types[i]))
 		}
+	}
+	if tableScan.OutputAllocation != nil {
+		err = tableScan.ctr.buf.SetAllocationAccount(tableScan.OutputAllocation)
 	}
 	return
 }
@@ -287,6 +294,11 @@ func (tableScan *TableScan) evalFilter(
 	bat *batch.Batch,
 	loadedColumns []int,
 ) (engine.ReaderFilterResult, error) {
+	firstInvocation := false
+	if !bat.IsEmpty() {
+		firstInvocation = !tableScan.ctr.subjectReuseAdmissionDone
+		tableScan.ctr.subjectReuseAdmissionDone = true
+	}
 	if tableScan.ctr.padCharToFullLength {
 		if err := padCharColumnsToFullLength(bat, proc); err != nil {
 			return engine.ReaderFilterResult{}, err
@@ -309,6 +321,12 @@ func (tableScan *TableScan) evalFilter(
 		if bat.IsEmpty() {
 			break
 		}
+		if firstInvocation && i >= len(tableScan.ctr.runtimeFilterExecutors) {
+			staticIndex := i - len(tableScan.ctr.runtimeFilterExecutors)
+			executor := colexec.ReuseFilterExpressionExecutor(tableScan.FilterExprs[staticIndex], tableScan.ctr.filterExecutors[staticIndex], bat.RowCount())
+			tableScan.ctr.filterExecutors[staticIndex] = executor
+			tableScan.ctr.allFilterExecutors[i] = executor
+		}
 
 		vec, err := tableScan.ctr.allFilterExecutors[i].Eval(proc, []*batch.Batch{bat}, nil)
 		if err != nil {
@@ -324,18 +342,13 @@ func (tableScan *TableScan) evalFilter(
 			return engine.ReaderFilterResult{}, moerr.NewInvalidInput(proc.Ctx, "filter condition is not boolean")
 		}
 
-		if tableScan.ctr.filterBs == nil {
-			tableScan.ctr.filterBs = vector.GenerateFunctionFixedTypeParameter[bool](vec)
-		} else {
-			ok := vector.ReuseFunctionFixedTypeParameter[bool](vec, tableScan.ctr.filterBs)
-			if !ok {
+		if vec.IsConst() {
+			if tableScan.ctr.filterBs == nil {
+				tableScan.ctr.filterBs = vector.GenerateFunctionFixedTypeParameter[bool](vec)
+			} else if !vector.ReuseFunctionFixedTypeParameter[bool](vec, tableScan.ctr.filterBs) {
 				tableScan.ctr.filterBs = vector.GenerateFunctionFixedTypeParameter[bool](vec)
 			}
-		}
-		bs := tableScan.ctr.filterBs
-
-		if vec.IsConst() {
-			v, null := bs.GetValue(0)
+			v, null := tableScan.ctr.filterBs.GetValue(0)
 			if null || !v {
 				tableScan.clearLoadedFilterColumns(bat, loadedColumns)
 				tableScan.ctr.filterRows = tableScan.ctr.filterRows[:0]
@@ -348,17 +361,16 @@ func (tableScan *TableScan) evalFilter(
 			}
 			sels = sels[:0]
 
-			l := uint64(vec.Length())
-			if bs.WithAnyNullValue() {
-				for j := uint64(0); j < l; j++ {
-					v, null := bs.GetValue(j)
-					if !null && v {
+			values := vector.MustFixedColNoTypeCheck[bool](vec)
+			nulls := vec.GetNulls()
+			if !nulls.EmptyByFlag() {
+				for j, v := range values {
+					if v && !nulls.Contains(uint64(j)) {
 						sels = append(sels, int64(j))
 					}
 				}
 			} else {
-				for j := uint64(0); j < l; j++ {
-					v, _ := bs.GetValue(j)
+				for j, v := range values {
 					if v {
 						sels = append(sels, int64(j))
 					}

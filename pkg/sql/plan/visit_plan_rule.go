@@ -98,6 +98,27 @@ func applyRuleToWindowSpec(rule VisitPlanRule, window *plan.WindowSpec) error {
 	return nil
 }
 
+func applyDependentOperands(e *plan.Expr, apply func(*plan.Expr) (*plan.Expr, error)) (*plan.Expr, error) {
+	d := e.GetDependent()
+	for _, operands := range [][]*plan.Expr{d.Inputs, d.Lhs} {
+		for i, operand := range operands {
+			next, err := apply(operand)
+			if err != nil {
+				return nil, err
+			}
+			operands[i] = next
+		}
+	}
+	if d.Comparison != nil {
+		var err error
+		d.Comparison, err = apply(d.Comparison)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return e, nil
+}
+
 func NewGetParamRule() *GetParamRule {
 	return &GetParamRule{
 		params:   make(map[int]int),
@@ -194,6 +215,8 @@ func (rule *GetParamRule) ApplyExpr(e *plan.Expr) (*plan.Expr, error) {
 
 func (rule *GetParamRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 	switch exprImpl := e.Expr.(type) {
+	case *plan.Expr_Dependent:
+		return applyDependentOperands(e, rule.ApplyExpr)
 	case *plan.Expr_F:
 		for i := range exprImpl.F.Args {
 			exprImpl.F.Args[i], _ = rule.ApplyExpr(exprImpl.F.Args[i])
@@ -204,14 +227,6 @@ func (rule *GetParamRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 	case *plan.Expr_P:
 		pos := int(exprImpl.P.Pos)
 		rule.params[pos] = 0
-		/*
-			if e.Typ.Id == int32(types.T_any) && e.Typ.NotNullable {
-				// is not null, use string
-				rule.mapTypes[pos] = int32(types.T_varchar)
-			} else {
-				rule.mapTypes[pos] = e.Typ.Id
-			}
-		*/
 		return e, nil
 	case *plan.Expr_List:
 		for i := range exprImpl.List.List {
@@ -301,6 +316,8 @@ func (rule *ResetParamOrderRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 		}
 	}
 	switch exprImpl := e.Expr.(type) {
+	case *plan.Expr_Dependent:
+		return applyDependentOperands(e, rule.ApplyExpr)
 	case *plan.Expr_F:
 		for i := range exprImpl.F.Args {
 			exprImpl.F.Args[i], _ = rule.ApplyExpr(exprImpl.F.Args[i])
@@ -390,6 +407,8 @@ func (rule *decrementParamOrdinalRule) ApplyExpr(e *plan.Expr) (*plan.Expr, erro
 		}
 	}
 	switch exprImpl := e.Expr.(type) {
+	case *plan.Expr_Dependent:
+		return applyDependentOperands(e, rule.ApplyExpr)
 	case *plan.Expr_F:
 		for i := range exprImpl.F.Args {
 			var err error
@@ -1772,7 +1791,7 @@ func (rule *ResetParamRefRule) rebindPreparedNumericExprWithBound(
 				// coerce the completed integer operand before choosing an overload.
 				for i, original := range fn.Args {
 					coerced, _, err := rule.coercePreparedTemporalIntegerOperand(
-						original, copy.GetF().Args[i], temporalPeer,
+						name, original, copy.GetF().Args[i], temporalPeer,
 						len(preparedNumericValueParamPositions(original)) > 0)
 					if err != nil {
 						return nil, false, err
@@ -1781,7 +1800,11 @@ func (rule *ResetParamRefRule) rebindPreparedNumericExprWithBound(
 				}
 			}
 		}
-		bound, err := BindFuncExprImplByPlanExpr(rule.ctx, name, copy.GetF().Args)
+		var originalBoundExpr *Expr
+		if name == "+" || name == "-" || name == "*" {
+			originalBoundExpr = expr
+		}
+		bound, err := bindFuncExprImplByPlanExpr(rule.ctx, nil, name, copy.GetF().Args, true, nil, originalBoundExpr, false)
 		if err != nil {
 			return nil, false, err
 		}
@@ -1922,21 +1945,29 @@ func restorePreparedIntegerArithmeticOperands(name string, args []*Expr) {
 }
 
 func preparedTemporalNumericPeer(expr *Expr) (types.Type, bool) {
-	if expr == nil {
+	if expr == nil || !types.T(expr.Typ.Id).IsDecimal() {
 		return types.Type{}, false
 	}
-	if metadata := expr.GetPreparedNumeric(); metadata.GetProvisionalResultPeer() &&
-		metadata.GetProvisionalResultPeerTypeId() == int32(types.T_time) {
-		return makeTypeByPlan2Expr(expr), true
-	}
-	if literal := expr.GetLit(); literal != nil && literal.Src != nil &&
-		types.T(literal.Src.Typ.Id) == types.T_time {
-		return makeTypeByPlan2Expr(expr), true
-	}
-	if fn := expr.GetF(); fn != nil && fn.Func != nil &&
-		strings.EqualFold(fn.Func.GetObjName(), "cast") && !isExplicitPreparedCast(expr) && len(fn.Args) > 0 &&
-		types.T(fn.Args[0].Typ.Id) == types.T_time {
-		return makeTypeByPlan2Expr(expr), true
+	for current := expr; current != nil; {
+		if metadata := current.GetPreparedNumeric(); metadata.GetProvisionalResultPeer() {
+			if metadata.GetProvisionalResultPeerTypeId() == int32(types.T_time) {
+				return types.New(types.T_decimal64, 18, metadata.GetProvisionalResultPeerScale()), true
+			}
+			// An explicit numeric peer owns its domain, even if its source was TIME.
+			return types.Type{}, false
+		}
+		if types.T(current.Typ.Id) == types.T_time {
+			return types.New(types.T_decimal64, 18, current.Typ.Scale), true
+		}
+		if literal := current.GetLit(); literal != nil {
+			current = literal.Src
+			continue
+		}
+		fn := current.GetF()
+		if fn == nil || fn.Func == nil || !strings.EqualFold(fn.Func.GetObjName(), "cast") || isExplicitPreparedCast(current) || len(fn.Args) == 0 {
+			break
+		}
+		current = fn.Args[0]
 	}
 	return types.Type{}, false
 }
@@ -1965,8 +1996,9 @@ func isPreparedTemporalIntegerArithmetic(name string) bool {
 // parameter leaves would move the TIME scale into an inner integer operation
 // and can change both its overflow behavior and its result. Keep the inner
 // expression in its execute-time integer domain, then cast the whole integer
-// result to the TIME peer's DECIMAL64 domain with scale zero.
+// result to the same decimal domain selected for ordinary TIME arithmetic.
 func (rule *ResetParamRefRule) coercePreparedTemporalIntegerOperand(
+	functionName string,
 	original, bound *Expr,
 	temporalPeer types.Type,
 	hasNumericValueParam bool,
@@ -1976,9 +2008,28 @@ func (rule *ResetParamRefRule) coercePreparedTemporalIntegerOperand(
 		!types.T(bound.Typ.Id).IsInteger() || !temporalPeer.Oid.IsDecimal() {
 		return bound, false, nil
 	}
-	temporalPeer.Scale = 0
-	coerced, err := appendCastBeforeExpr(rule.ctx, bound, makePlan2Type(&temporalPeer))
+	target, err := rule.preparedTemporalIntegerTarget(functionName, temporalPeer, makeTypeByPlan2Expr(bound))
+	if err != nil {
+		return nil, false, err
+	}
+	coerced, err := appendCastBeforeExpr(rule.ctx, bound, makePlan2Type(&target))
 	return coerced, true, err
+}
+
+func (rule *ResetParamRefRule) preparedTemporalIntegerTarget(functionName string, peer, integer types.Type) (types.Type, error) {
+	// The decimal peer is a PREPARE-time envelope, not the original TIME
+	// domain. Resolve from TIME so a BIGINT/UINT64 is never narrowed to
+	// DECIMAL(18,0), while inner integer operations retain their own domain.
+	resolved, err := planfunction.GetFunctionByName(rule.ctx, functionName,
+		[]types.Type{types.New(types.T_time, 0, peer.Scale), integer})
+	if err != nil {
+		return types.Type{}, err
+	}
+	targets, cast := resolved.ShouldDoImplicitTypeCast()
+	if !cast {
+		return integer, nil
+	}
+	return targets[1], nil
 }
 
 // preparedTemporalStrictNullNestedArithmetic reports whether expr is a nested
@@ -2156,22 +2207,15 @@ func (rule *ResetParamRefRule) preparedTemporalNullEnvelopeType(
 	argTypes := make([]types.Type, len(originalArgs))
 	for i, arg := range originalArgs {
 		if peer, ok := preparedTemporalNumericPeer(arg); ok && peer.Oid.IsDecimal() {
-			argTypes[i] = peer
+			argTypes[i] = types.New(types.T_time, 0, peer.Scale)
 			continue
 		}
 		typ, ok, err := rule.inferPreparedTemporalNullExpr(arg)
 		if err != nil || !ok {
 			return plan.Type{}, false, err
 		}
-		// The executable TIME boundary first coerces a completed integer
-		// operand into the TIME peer's DECIMAL64 domain. Reproduce that boundary
-		// in the type-only inference as well; resolving DECIMAL64 + INT directly
-		// would widen an explicit CAST(... AS SIGNED/UNSIGNED) to DECIMAL128.
-		if types.T(typ.Oid).IsInteger() {
-			integerPeer := temporalPeer
-			integerPeer.Scale = 0
-			typ = integerPeer
-		}
+		// Infer from the original integer domain, just as executable lookup
+		// does before the synthesized boundary cast is applied.
 		argTypes[i] = typ
 	}
 	resolved, err := planfunction.GetFunctionByName(rule.ctx, functionName, argTypes)
@@ -2398,6 +2442,8 @@ func (rule *ResetParamRefRule) ApplyExpr(e *plan.Expr) (*plan.Expr, error) {
 		fallbackSource = nil
 		rewritten, err = rule.integerArgumentRuntimeSource(e)
 		rule.specialized = true
+	} else if fn := e.GetF(); fn != nil && fn.Func != nil && fn.Func.ObjName == "timestampadd_second_interval" && len(fn.Args) == 1 {
+		rewritten, err = rule.rebindTimestampAddSecondInterval(e)
 	} else if hasSourceDependentIntegerArguments(e) {
 		fallbackSource = nil
 		rewritten, err = rule.rebindSourceDependentIntegerArguments(e)
@@ -2527,6 +2573,8 @@ func (rule *ResetParamRefRule) applyExprPreservingRoot(e *plan.Expr) (*plan.Expr
 		}
 	}
 	switch exprImpl := e.Expr.(type) {
+	case *plan.Expr_Dependent:
+		return applyDependentOperands(e, rule.ApplyExpr)
 	case *plan.Expr_P:
 		return e, nil
 	case *plan.Expr_F:
@@ -2815,7 +2863,13 @@ func preparedRegexpLookupDomains(ctx context.Context, name string, args []*Expr,
 		if err != nil {
 			return nil, nil, err
 		}
-		if domainless {
+		declared := regexpDeclaredStringType(args[i])
+		if regexpOwnsBinaryCast(args[i]) && declared.Oid == types.T_varbinary &&
+			!preparedRegexpMarkerOperand(args[i]) {
+			modes[i] = planfunction.StringDomainCheckBinaryCast
+		} else if regexpOwnsBinaryCast(args[i]) && declared.Oid == types.T_blob {
+			modes[i] = planfunction.StringDomainCheckBinaryBlob
+		} else if domainless {
 			modes[i] = planfunction.StringDomainCheckDomainless
 		} else if _, direct := preparedParamPosition(args[i]); direct ||
 			(preparedBindingState(ctx) != nil && preparedRegexpMarkerOperand(args[i])) {
@@ -2869,14 +2923,9 @@ func (rule *ResetParamRefRule) resolvePreparedRegexpStringDomainCheckModes(name 
 func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 	var err error
 	switch exprImpl := e.Expr.(type) {
+	case *plan.Expr_Dependent:
+		return applyDependentOperands(e, rule.ApplyExpr)
 	case *plan.Expr_F:
-		var originalTemporalExpr *Expr
-		if exprImpl.F.Func != nil {
-			switch strings.ToLower(exprImpl.F.Func.GetObjName()) {
-			case "date_add", "date_sub", "str_to_date", "to_date", "addtime", "subtime", "timediff", "time":
-				originalTemporalExpr = DeepCopyExpr(e)
-			}
-		}
 		functionName := ""
 		if exprImpl.F.Func != nil {
 			functionName = exprImpl.F.Func.GetObjName()
@@ -3129,7 +3178,7 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 			var rewrittenArg *plan.Expr
 			numericTemporalArg := false
 			switch functionName {
-			case "to_interval_microsecond", "time", "from_unixtime", "sec_to_time":
+			case "to_interval_microsecond", "to_calendar_interval", "timestampadd_second_interval", "time", "from_unixtime", "sec_to_time":
 				numericTemporalArg = i == 0
 			case "date_add", "date_sub":
 				numericTemporalArg = i == 1 && len(originalArgs) == 3 &&
@@ -3146,7 +3195,24 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 							param.SourceType.Oid == types.T_float64)
 				}
 			}
-			if nestedPreparedBitwiseSource != nil {
+			if (functionName == "timestamp" && len(originalArgs) == 1 && temporalDirectMarker(originalArgs[i])) ||
+				((functionName == "date_add" || functionName == "date_sub") && i == 0 &&
+					rawPreparedCalendarMarker(originalArgs[i])) {
+				var known bool
+				rewrittenArg, known, err = rule.preparedRuntimeSourceExpr(paramPos, false)
+				if err != nil {
+					return nil, err
+				}
+				if !known {
+					rewrittenArg, err = rule.ApplyExpr(unwrapPreparedImplicitCast(arg, true))
+					if err != nil {
+						return nil, err
+					}
+				}
+				needResetFunction = true
+				compareArgTypes = true
+				rule.specialized = true
+			} else if nestedPreparedBitwiseSource != nil {
 				var applyErr error
 				rewrittenArg, applyErr = rule.ApplyExpr(DeepCopyExpr(nestedPreparedBitwiseSource))
 				if applyErr != nil {
@@ -3155,6 +3221,30 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 				needResetFunction = true
 				compareArgTypes = true
 				rule.specialized = true
+			} else if hasParamPos && !isExplicitPreparedCast(arg) && functionName == "tmrank" && i == 1 &&
+				len(originalArgs) == 3 {
+				// tmrank's retained width marker (issue #29947, decision D19):
+				// SQL EXECUTE transports most markers as TEXT, which would
+				// collapse the width's source domain (window text grammar for
+				// strings, MySQL nearest-integer for numerics). Route the count
+				// slot through the same source-domain reconstruction owner raw
+				// frame bounds use, so cached plan restoration still interprets
+				// the next value in the original unit.
+				source, known, sourceErr := rule.preparedRuntimeSourceExpr(paramPos, true)
+				if sourceErr != nil {
+					return nil, sourceErr
+				}
+				if known {
+					rewrittenArg = source
+					needResetFunction = true
+					compareArgTypes = true
+					rule.specialized = true
+				} else {
+					rewrittenArg, err = rule.ApplyExpr(arg)
+					if err != nil {
+						return nil, err
+					}
+				}
 			} else if hasParamPos && !isExplicitPreparedCast(arg) &&
 				((functionName == "json_arrayagg" && i == 0) ||
 					(functionName == "json_objectagg" && i == 1)) {
@@ -3387,7 +3477,7 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 			}
 			if !implicitParamCast && hasPreparedNumericValue {
 				coerced, coercedChanged, coercedErr := rule.coercePreparedTemporalIntegerOperand(
-					originalArgs[i], rewrittenArg, temporalPeer, hasPreparedNumericValue)
+					functionName, originalArgs[i], rewrittenArg, temporalPeer, hasPreparedNumericValue)
 				if coercedErr != nil {
 					return nil, coercedErr
 				}
@@ -3450,7 +3540,7 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 						if hasPreparedNumericValue {
 							coerced, coercedChanged, coercedErr :=
 								rule.coercePreparedTemporalIntegerOperand(
-									originalArgs[i], typed, temporalPeer, hasPreparedNumericValue)
+									functionName, originalArgs[i], typed, temporalPeer, hasPreparedNumericValue)
 							if coercedErr != nil {
 								return nil, coercedErr
 							}
@@ -3798,9 +3888,21 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 				rewritten, err = rebindExplicitPreparedCast(rule.ctx, e, boundArgs)
 				rule.specialized = true
 			} else {
+				var originalBoundExpr *Expr
+				switch functionName {
+				case "+", "-", "*", "date_add", "date_sub", "str_to_date", "to_date", "addtime", "subtime", "timediff", "time", "timestamp", "timestampadd":
+					// The saved operands already own immutable provenance. Share
+					// them only when rebinding, without copying the tree again.
+					originalFunction := *exprImpl.F
+					originalFunction.Args = originalArgs
+					original := *e
+					original.Typ = originalTyp
+					original.Expr = &plan.Expr_F{F: &originalFunction}
+					originalBoundExpr = &original
+				}
 				rewritten, err = bindPreparedFuncExprImplByPlanExpr(
 					rule.ctx,
-					originalTemporalExpr,
+					originalBoundExpr,
 					exprImpl.F.Func.GetObjName(),
 					boundArgs,
 					stringDomainModes,
@@ -3884,6 +3986,26 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 		}
 		return rewritten, nil
 	case *plan.Expr_List:
+		// A raw window interval keeps its original string unit until operator
+		// Prepare. Specialize its source domain without normalizing its value:
+		// cached plan restoration must continue to interpret the next value in
+		// the original unit (e.g. seconds, not already-scaled microseconds).
+		if e.Typ.Id == int32(types.T_interval) && exprImpl.List != nil && len(exprImpl.List.List) == 2 &&
+			exprImpl.List.List[1].GetLit() != nil && types.T(exprImpl.List.List[1].Typ.Id).IsMySQLString() {
+			if param := exprImpl.List.List[0].GetP(); param != nil {
+				pos := int(param.Pos)
+				if source, handled, sourceErr := rule.preparedRuntimeSourceExpr(pos, true); sourceErr != nil {
+					return nil, sourceErr
+				} else if handled {
+					exprImpl.List.List[0] = source
+					return e, nil
+				}
+				if pos >= 0 && pos < len(rule.params) && rule.params[pos] != nil {
+					exprImpl.List.List[0] = DeepCopyExpr(rule.params[pos])
+					return e, nil
+				}
+			}
+		}
 		dependent := false
 		for i, arg := range exprImpl.List.List {
 			exprImpl.List.List[i], err = rule.ApplyExpr(arg)
@@ -4522,6 +4644,7 @@ func preparedFixedDecimalCommonType(
 func preparedNumericCommonType(operands []*plan.Expr) (types.Type, bool) {
 	hasDecimal := false
 	hasFloat := false
+	decimalCarrier := types.T_decimal64
 	maxIntegralWidth := int32(0)
 	maxScale := int32(0)
 	for _, operand := range operands {
@@ -4536,6 +4659,9 @@ func preparedNumericCommonType(operands []*plan.Expr) (types.Type, bool) {
 			hasFloat = true
 		case typ.Oid.IsDecimal():
 			hasDecimal = true
+			if typ.Oid.TypeLen() > decimalCarrier.TypeLen() {
+				decimalCarrier = typ.Oid
+			}
 			width := typ.Width
 			if width <= 0 {
 				width = typ.Oid.ToType().Width
@@ -4563,9 +4689,12 @@ func preparedNumericCommonType(operands []*plan.Expr) (types.Type, bool) {
 		width = 1
 	}
 	switch {
-	case width <= types.T_decimal64.ToType().Width:
+	// Keep an exact source's physical carrier even when its declared domain
+	// fits a smaller one. Narrowing a native column adds an unnecessary cast
+	// and hides it from block/index filters without changing width or scale.
+	case width <= types.T_decimal64.ToType().Width && decimalCarrier == types.T_decimal64:
 		return types.New(types.T_decimal64, width, maxScale), true
-	case width <= types.T_decimal128.ToType().Width:
+	case width <= types.T_decimal128.ToType().Width && decimalCarrier != types.T_decimal256:
 		return types.New(types.T_decimal128, width, maxScale), true
 	case width <= types.T_decimal256.ToType().Width:
 		return types.New(types.T_decimal256, width, maxScale), true

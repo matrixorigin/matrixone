@@ -92,9 +92,60 @@ func TestStageFail(t *testing.T) {
 // state a repeated lookup reaches in production, and the state in which a cycle spins without
 // issuing any SQL.
 func setStage(t *testing.T, proc *process.Process, name, rawurl string) {
+	setStageWithStatus(t, proc, name, rawurl, "")
+}
+
+func setStageWithStatus(t *testing.T, proc *process.Process, name, rawurl, status string) {
 	u, err := url.Parse(rawurl)
 	require.NoError(t, err)
-	proc.GetStageCache().Set(name, stage.StageDef{Id: 1, Name: name, Url: u})
+	proc.GetStageCache().Set(name, stage.StageDef{Id: 1, Name: name, Url: u, Status: status})
+}
+
+func TestStageStatus(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		status   string
+		rejected bool
+	}{
+		{name: "empty legacy fixture", status: ""},
+		{name: "legacy in_use", status: "in_use"},
+		{name: "enabled", status: "enabled"},
+		{name: "disabled", status: "disabled", rejected: true},
+		{name: "disabled with whitespace and case", status: " DISABLED ", rejected: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			setStageWithStatus(t, proc, "status_stage", "file:///tmp", tc.status)
+
+			resolved, err := UrlToStageDef("stage://status_stage/file.csv", proc)
+			if tc.rejected {
+				require.Error(t, err)
+				require.Contains(t, err.Error(), "stage status_stage is disabled")
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, "file:///tmp/file.csv", resolved.Url.String())
+		})
+	}
+}
+
+func TestDisabledSubStageAndExportRejected(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	setStageWithStatus(t, proc, "disabled_stage", "file:///tmp", "disabled")
+	setStage(t, proc, "outer_stage", "stage://disabled_stage/prefix")
+
+	_, err := UrlToStageDef("stage://outer_stage/file.csv", proc)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "stage disabled_stage is disabled")
+
+	_, err = UrlToStageDefForExport("stage://disabled_stage/file-%U.csv", proc)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "stage disabled_stage is disabled")
+
+	setStageWithStatus(t, proc, "disabled_stage", "file:///tmp", "enabled")
+	resolved, err := UrlToStageDef("stage://outer_stage/file.csv", proc)
+	require.NoError(t, err)
+	require.Equal(t, "file:///tmp/prefix/file.csv", resolved.Url.String())
 }
 
 // TestStageCyclicReference: a stage:// cycle has no concrete URL to resolve to, so resolution must
@@ -160,6 +211,45 @@ func TestStageChainNoFalseCycle(t *testing.T) {
 	require.Equal(t, "file:///tmp/one/one/a.csv", s.Url.String())
 }
 
+func TestUrlToStageDefForExportDoesNotMutateCachedURL(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	dir := t.TempDir()
+	u, err := url.Parse("file://" + dir)
+	require.NoError(t, err)
+	proc.GetStageCache().Set("exportstage", stage.StageDef{Id: 1, Name: "exportstage", Url: u})
+
+	expectedFirst := path.Join(dir, "first_%03d.parquet")
+	expectedSecond := path.Join(dir, "second_%03d.parquet")
+	first, err := UrlToStageDefForExport("stage://exportstage/first_%03d.parquet", proc)
+	require.NoError(t, err)
+	firstSnapshot := first.Url.String()
+	require.Equal(t, expectedFirst, first.Url.Path)
+	cached, ok := proc.GetStageCache().Get("exportstage")
+	require.True(t, ok)
+	require.Equal(t, dir, cached.Url.Path)
+
+	second, err := UrlToStageDefForExport("stage://exportstage/second_%03d.parquet", proc)
+	require.NoError(t, err)
+	require.Equal(t, expectedSecond, second.Url.Path)
+	require.Equal(t, expectedFirst, first.Url.Path)
+	require.Equal(t, firstSnapshot, first.Url.String())
+	cached, ok = proc.GetStageCache().Get("exportstage")
+	require.True(t, ok)
+	require.Equal(t, dir, cached.Url.Path)
+
+	input, err := url.Parse("stage://exportstage/child.txt?offset=1&size=2")
+	require.NoError(t, err)
+	snapshot := *input
+	resolved, err := UrlToStageDefFromURL(input, proc)
+	require.NoError(t, err)
+	require.Equal(t, path.Join(dir, "child.txt"), resolved.Url.Path)
+	require.Equal(t, "offset=1&size=2", resolved.Url.RawQuery)
+	require.Equal(t, snapshot, *input)
+	cached, ok = proc.GetStageCache().Get("exportstage")
+	require.True(t, ok)
+	require.Equal(t, dir, cached.Url.Path)
+}
+
 func Test_runSql(t *testing.T) {
 	rt := moruntime.DefaultRuntime()
 	moruntime.SetupServiceBasedRuntime("", rt)
@@ -174,6 +264,8 @@ func Test_runSql(t *testing.T) {
 
 func TestDeleteStageFiles(t *testing.T) {
 	proc := testutil.NewProcess(t)
+	proc.Base.SessionInfo.Account = "sys"
+	proc.Base.SessionInfo.Role = "moadmin"
 	cache := proc.GetStageCache()
 
 	dir := t.TempDir()
@@ -212,6 +304,8 @@ func TestDeleteStageFiles(t *testing.T) {
 
 func TestDeleteStageFilesErrors(t *testing.T) {
 	proc := testutil.NewProcess(t)
+	proc.Base.SessionInfo.Account = "sys"
+	proc.Base.SessionInfo.Role = "moadmin"
 	cache := proc.GetStageCache()
 
 	dir := t.TempDir()
@@ -238,6 +332,8 @@ func TestDeleteStageFilesErrors(t *testing.T) {
 
 func TestStageListWithPatternNoWildcard(t *testing.T) {
 	proc := testutil.NewProcess(t)
+	proc.Base.SessionInfo.Account = "sys"
+	proc.Base.SessionInfo.Role = "moadmin"
 	dir := t.TempDir()
 	filePath := filepath.Join(dir, "a.txt")
 	require.NoError(t, os.WriteFile(filePath, []byte("a"), 0600))
@@ -245,4 +341,33 @@ func TestStageListWithPatternNoWildcard(t *testing.T) {
 	list, err := StageListWithPattern("", dir, proc)
 	require.NoError(t, err)
 	require.ElementsMatch(t, []string{path.Join(dir, "a.txt")}, list)
+}
+
+func TestStagePatternsAuthorizeBeforeExpansion(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.Base.SessionInfo.Account = "sys"
+	proc.Base.SessionInfo.Role = "moadmin"
+	dir := t.TempDir()
+	for _, name := range []string{"part_a1.txt", "part_b2.txt", "part_c3.txt"} {
+		require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(name), 0600))
+	}
+	proc.GetStageCache().Set("patterns", stage.StageDef{Id: 1, Name: "patterns", Url: &url.URL{Scheme: stage.FILE_PROTOCOL, Path: dir}})
+	for _, pattern := range []string{"part_[ab]*.txt", "part_[ab]?.txt", "part_[ab][12].txt"} {
+		files, err := StageListWithPattern("", path.Join(dir, pattern), proc)
+		require.NoError(t, err)
+		require.ElementsMatch(t, []string{path.Join(dir, "part_a1.txt"), path.Join(dir, "part_b2.txt")}, files)
+	}
+	proc.Base.SessionInfo.Role = "public"
+	_, err := StageListWithPattern("", path.Join(dir, "part_[ab]*.txt"), proc)
+	require.ErrorContains(t, err, "only the sys account moadmin role")
+	_, err = DeleteStageFiles(t.Context(), proc, "stage://patterns/part_[ab]*.txt", false)
+	require.ErrorContains(t, err, "only the sys account moadmin role")
+	_, err = os.Stat(filepath.Join(dir, "part_a1.txt"))
+	require.NoError(t, err)
+	proc.Base.SessionInfo.Role = "moadmin"
+	n, err := DeleteStageFiles(t.Context(), proc, "stage://patterns/part_[ab]%3F.txt", false)
+	require.NoError(t, err)
+	require.Equal(t, 2, n)
+	_, err = os.Stat(filepath.Join(dir, "part_c3.txt"))
+	require.NoError(t, err)
 }

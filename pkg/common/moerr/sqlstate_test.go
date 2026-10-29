@@ -15,6 +15,7 @@
 package moerr
 
 import (
+	"context"
 	"strings"
 	"testing"
 
@@ -40,11 +41,9 @@ func TestSqlStateMatchesMySQL(t *testing.T) {
 			continue
 		}
 		want := mysqlRef.SqlStates[0]
-		// SQLSTATE class 01 is the WARNING class. MySQL attaches it to a
-		// warning, never to an ERR packet, and a client that sees class 01
-		// reads it as "succeeded, with a warning". MO delivers these as
-		// errors, so copying the warning SQLSTATE would misreport them;
-		// HY000 is the honest answer here.
+		// Warning-class SQLSTATEs need per-error checks: strict ENUM/SET
+		// truncation is a real ERR packet with 01000, while legacy warnings
+		// retain their existing mappings. See the dedicated truncation test.
 		if strings.HasPrefix(want, "01") {
 			continue
 		}
@@ -98,4 +97,23 @@ func TestIsRealError(t *testing.T) {
 	// boundary is exactly ErrStart
 	require.False(t, (&Error{code: ErrStart - 1}).IsRealError())
 	require.True(t, (&Error{code: ErrStart}).IsRealError())
+}
+
+func TestEnumSetValueTruncatedIsRealError(t *testing.T) {
+	for _, constructor := range []func(context.Context, string) *Error{NewEnumSetValueTruncated, NewAssignmentValueTruncated} {
+		err := constructor(context.Background(), "Data truncated for DOUBLE value: 'inf'")
+		require.Equal(t, uint16(20210), err.ErrorCode())
+		require.Equal(t, uint16(WARN_DATA_TRUNCATED), err.MySQLCode())
+		require.Equal(t, "01000", err.SqlState())
+		require.True(t, err.IsRealError())
+		data, encodeErr := err.MarshalBinary()
+		require.NoError(t, encodeErr)
+		var decoded Error
+		require.NoError(t, decoded.UnmarshalBinary(data))
+		require.Equal(t, err.ErrorCode(), decoded.ErrorCode())
+		require.Equal(t, err.MySQLCode(), decoded.MySQLCode())
+		require.Equal(t, err.SqlState(), decoded.SqlState())
+		require.Equal(t, err.Error(), decoded.Error())
+		require.True(t, decoded.IsRealError())
+	}
 }

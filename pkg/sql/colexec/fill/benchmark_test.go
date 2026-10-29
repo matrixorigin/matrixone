@@ -32,7 +32,7 @@ func BenchmarkFillNextResident(b *testing.B) {
 }
 
 func BenchmarkFillNextResidentAccounted(b *testing.B) {
-	proc := testutil.NewProcessWithMPool(b, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(b, "", mpool.MustNewZero())
 	proc.Base.Lim.Size = 64 << 20
 	generation, err := proc.GetExecutionResourceBudget()
 	require.NoError(b, err)
@@ -53,7 +53,7 @@ func benchmarkFillNextResident(
 	b *testing.B,
 	account *mpool.AllocationAccount,
 ) {
-	proc := testutil.NewProcessWithMPool(b, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(b, "", mpool.MustNewZero())
 	defer proc.Free()
 	benchmarkFillNextResidentWithProcess(b, proc, account)
 	require.Zero(b, proc.Mp().CurrNB())

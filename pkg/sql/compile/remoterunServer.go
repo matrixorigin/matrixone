@@ -251,7 +251,7 @@ func waitUntilPipelineBatchFlowDrained(
 	if connectionCtx != nil && connectionCtx.Err() != nil {
 		return moerr.NewStreamClosed(messageCtx)
 	}
-	if flow.wasStoppedByReceiver() && isScopeCancellationError(err) {
+	if flow.wasStoppedByReceiver() && process.IsPipelineCancellationError(err) {
 		return nil
 	}
 	return err
@@ -395,6 +395,7 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) (err error) {
 		}
 		var allocationAttempt *statementAllocationAttempt
 		var allocationParticipant *remoteAllocationStatementParticipant
+		var boardOwnedByGroup bool
 		var allocationGroupKey string
 		var localAllocation resource.AllocationAccountTotals
 		var localAllocationQuality resource.QualityFlags
@@ -437,6 +438,10 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) (err error) {
 					moerr.ConvertPanicError(receiver.messageCtx, recovered),
 				)
 			}
+			allocationParticipant.recordFailure(err)
+			if cause := allocationParticipant.failureCause(); cause != nil {
+				receiver.statementError = cause
+			}
 			// Capture operator and descendant facts before cleanup. The MPool
 			// snapshot intentionally follows Compile.clear so temporary execution
 			// allocations are released before LiveBytesAtSeal is measured. The
@@ -468,7 +473,8 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) (err error) {
 					// owns the shared multi-CN board. Detach it before clear resets the
 					// fragment-local Compile state. A fragment rejected before it joins a
 					// group is terminal for the statement, so it closes its unowned board.
-					if allocationParticipant == nil {
+					if allocationParticipant == nil && !boardOwnedByGroup &&
+						sealUnownedRemoteAllocationStatementBoard(sharedMessageBoard) {
 						sharedMessageBoard.CloseAndDrain()
 					}
 					runCompile.MessageBoard = message.NewMessageBoard()
@@ -481,12 +487,25 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) (err error) {
 					receiver.groupConcatReportingIncomplete = receiver.warningSession.incompleteGroupConcatReporting()
 				}
 				receiver.statementLastInsertID = runCompile.proc.GetStatementLastInsertID()
+				// A terminal envelope can accompany an error response. ODKU facts
+				// are publishable only for a fully successful statement; do not let
+				// an invalidated attempt leak its partial action summary to the
+				// initiating CN.
+				if err == nil {
+					receiver.odkuResult = remoteODKUResultFromProcess(
+						runCompile.proc.GetODKUResultSummary())
+				} else {
+					receiver.odkuResult = nil
+				}
 				runCompile.clear()
 				return nil
 			}))
 			terminal, terminalErr := allocationParticipant.finish(err)
 			participantFinished = true
 			err = joinAllocationLifecycleErrors(err, terminalErr)
+			if err != nil {
+				receiver.odkuResult = nil
+			}
 			for _, snapshot := range terminal.allocation {
 				localAllocationQuality |= addAllocationAccountTerminal(
 					&localAllocation,
@@ -529,6 +548,9 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) (err error) {
 			receiver.resourceMissingMemoryDomains = aggregate.MissingMemoryDomainCount
 			receiver.resourcePendingAllocationGroups = aggregate.PendingAllocationGroups
 			receiver.resourceCompletedAllocationGroups = aggregate.CompletedAllocationGroups
+			if err != nil {
+				receiver.odkuResult = nil
+			}
 		}()
 		if statementGroupEnabled {
 			expectedFragments, ok := runCompile.remoteFragmentCounts[runCompile.addr]
@@ -548,7 +570,7 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) (err error) {
 				runCompile.remoteExecutionID,
 				runCompile.addr,
 			)
-			allocationParticipant, runErr = acquireRemoteAllocationStatementParticipant(
+			allocationParticipant, boardOwnedByGroup, runErr = acquireRemoteAllocationStatementParticipant(
 				allocationGroupKey,
 				runCompile.MessageBoard,
 				expectedFragments,
@@ -559,6 +581,9 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) (err error) {
 				},
 			)
 			if runErr != nil {
+				if native, ok := runErr.(*moerr.Error); ok {
+					receiver.statementError = native
+				}
 				return runErr
 			}
 		}
@@ -838,10 +863,13 @@ type processHelper struct {
 	//analysisNodeList []int32
 	StmtId                     uuid.UUID
 	statementRuntimeIgnore     bool
+	statementRuntimeSelect     bool
+	statementRuntimeDML        bool
 	planSnapshotTS             timestamp.Timestamp
 	hasPlanSnapshotTS          bool
 	planGenerationReused       bool
 	stringShuffleHashAlgorithm process.StringShuffleHashAlgorithm
+	odkuOrdinalBase            uint64
 	prepareParams              pipeline.PrepareParamInfo
 	affectedRows               int64
 	remoteFragmentCounts       map[string]uint32
@@ -850,8 +878,9 @@ type processHelper struct {
 
 // messageReceiverOnServer supported a series methods to write back results.
 type messageReceiverOnServer struct {
-	messageCtx    context.Context
-	connectionCtx context.Context
+	statementError *moerr.Error // Immutable causal snapshot; cleanup diagnostics stay in handlerErr.
+	messageCtx     context.Context
+	connectionCtx  context.Context
 
 	messageId   uint64
 	messageTyp  pipeline.Method
@@ -890,6 +919,7 @@ type messageReceiverOnServer struct {
 	groupConcatCutMessage             string
 	groupConcatReportingIncomplete    bool
 	statementLastInsertID             uint64
+	odkuResult                        *remoteODKUResultSummary
 }
 
 func newMessageReceiverOnServer(
@@ -984,6 +1014,9 @@ func (receiver *messageReceiverOnServer) acquireMessage() (*pipeline.Message, er
 
 // newCompile make and return a new compile to run a pipeline.
 func (receiver *messageReceiverOnServer) newCompile() (*Compile, error) {
+	if err := process.ValidateODKUInputOrdinalBase(receiver.procBuildHelper.odkuOrdinalBase); err != nil {
+		return nil, err
+	}
 	// A remote compile used to have an unlimited local pool. HashBuild could
 	// therefore grow until the CN was killed even though the process limitation
 	// was already present on the wire. Keep a finite physical backstop while the
@@ -1017,6 +1050,9 @@ func (receiver *messageReceiverOnServer) newCompile() (*Compile, error) {
 	proc.Base.Lim = pHelper.lim
 	proc.Base.SessionInfo = pHelper.sessionInfo
 	proc.Base.SessionInfo.StorageEngine = cnInfo.storeEngine
+	proc.SetLastInsertID(pHelper.sessionInfo.LastInsertID)
+	// The range was checked before constructing the process.
+	_ = proc.SetODKUInputOrdinalBase(pHelper.odkuOrdinalBase)
 	warningLimit := process.WarningDiagnosticLegacyRetentionLimit
 	if proc.Base.SessionInfo.MaxErrorCountSet {
 		warningLimit = proc.Base.SessionInfo.MaxErrorCount
@@ -1112,6 +1148,11 @@ func (receiver *messageReceiverOnServer) newCompile() (*Compile, error) {
 		txnId := txn.GetID()
 		stmtProfile := process.NewStmtProfile(uuid.UUID(txnId), pHelper.StmtId)
 		stmtProfile.SetStatementRuntimeProfile("", "", pHelper.statementRuntimeIgnore)
+		if pHelper.statementRuntimeSelect {
+			stmtProfile.SetStatementRuntimeProfile("Select", "DQL", pHelper.statementRuntimeIgnore)
+		} else if pHelper.statementRuntimeDML {
+			stmtProfile.SetStatementRuntimeProfile("", "DML", pHelper.statementRuntimeIgnore)
+		}
 		proc.Base.StmtProfile = stmtProfile
 	}
 
@@ -1194,7 +1235,11 @@ func (receiver *messageReceiverOnServer) sendError(
 	message.SetMessageType(receiver.messageTyp)
 	message.AcceptedTeardownMode = receiver.acceptedTeardownMode
 	if errInfo != nil {
-		message.SetMoError(receiver.messageCtx, process.UnwrapPipelineFailure(errInfo))
+		wireErr := process.UnwrapPipelineFailure(errInfo)
+		if receiver.statementError != nil && !errors.Is(errInfo, mpool.ErrAllocationAccountInvariant) {
+			wireErr = receiver.statementError
+		}
+		message.SetMoError(receiver.messageCtx, wireErr)
 	}
 	if err = receiver.setTerminalAnalysis(message); err != nil {
 		return err
@@ -1326,6 +1371,7 @@ func (receiver *messageReceiverOnServer) setTerminalAnalysis(message *pipeline.M
 	envelope := remoteTerminalEnvelope{
 		TerminalResourceVersion:   remoteTerminalResourceVersion,
 		StatementLastInsertID:     receiver.statementLastInsertID,
+		ODKUResult:                receiver.odkuResult,
 		WarningCount:              receiver.warningCount,
 		GroupConcatCut:            receiver.groupConcatCut,
 		GroupConcatCutMessage:     receiver.groupConcatCutMessage,
@@ -1387,6 +1433,9 @@ func generateProcessHelper(ctx context.Context, data []byte, cli client.TxnClien
 	if err != nil {
 		return processHelper{}, err
 	}
+	if err := process.ValidateStatementRuntimeClassification(procInfo.StatementRuntimeSelect, procInfo.StatementRuntimeDml); err != nil {
+		return processHelper{}, err
+	}
 	stringShuffleHashAlgorithm, err := process.DecodeStringShuffleHashAlgorithm(
 		procInfo.StringShuffleHashAlgorithm,
 	)
@@ -1402,7 +1451,10 @@ func generateProcessHelper(ctx context.Context, data []byte, cli client.TxnClien
 		txnClient:                  cli,
 		affectedRows:               procInfo.AffectedRows,
 		statementRuntimeIgnore:     procInfo.StatementRuntimeIgnore,
+		statementRuntimeSelect:     procInfo.StatementRuntimeSelect,
+		statementRuntimeDML:        procInfo.StatementRuntimeDml,
 		stringShuffleHashAlgorithm: stringShuffleHashAlgorithm,
+		odkuOrdinalBase:            procInfo.OdkuOrdinalBase,
 		remoteFragmentCounts:       maps.Clone(procInfo.RemoteFragmentCounts),
 	}
 	if procInfo.PlanSnapshotTs != nil {

@@ -88,9 +88,9 @@ col1    col3    col4
 2    2    2
 show columns from foreign01;
 Field    Type    Null    Key    Default    Extra    Comment
-col1    INT(32)    NO    PRI    null        
-col3    INT(32)    YES        null        
-col4    BIGINT(64)    YES        null        
+col1    int    NO    PRI    null        
+col3    int    YES        null        
+col4    bigint    YES        null        
 drop table foreign02;
 drop table foreign01;
 select disable_fault_injection();

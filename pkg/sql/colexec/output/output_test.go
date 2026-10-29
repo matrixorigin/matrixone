@@ -119,7 +119,7 @@ func TestOutput(t *testing.T) {
 }
 
 func TestOutputCallbackCPUIsNotOutputWait(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	arg := &Output{
 		Func: func(_ *batch.Batch, _ *perfcounter.CounterSet) error {
 			time.Sleep(time.Millisecond)

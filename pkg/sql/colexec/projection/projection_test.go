@@ -98,7 +98,7 @@ func TestProjection(t *testing.T) {
 }
 
 func TestGroupingSetProjectionExpandsOneInputBatch(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	input := batch.NewWithSize(3)
 	input.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 2}, nil, proc.Mp())
 	input.Vecs[1] = testutil.MakeInt32Vector([]int32{10, 20}, nil, proc.Mp())
@@ -168,7 +168,7 @@ func TestGroupingSetProjectionExpandsOneInputBatch(t *testing.T) {
 }
 
 func TestGroupingSetProjectionEmitsEmptySetOnRuntimeEmptyInput(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	childCalls := 0
 	child := colexec.NewMockOperator().
 		WithBatchCallback(func(int) { childCalls++ })
@@ -220,7 +220,7 @@ func TestGroupingSetProjectionEmitsEmptySetOnRuntimeEmptyInput(t *testing.T) {
 }
 
 func TestGroupingSetProjectionRejectsInvalidMetadata(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	arg := NewArgument()
 	arg.ProjectList = []*plan.Expr{makeProjectionCol(0, types.T_int32)}
 	arg.GroupingSetCount = 2

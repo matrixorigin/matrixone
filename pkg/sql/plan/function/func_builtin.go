@@ -24,14 +24,18 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/google/uuid"
 
 	"github.com/matrixorigin/matrixone/pkg/common/collation"
+	"github.com/matrixorigin/matrixone/pkg/common/collation/encoding"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
@@ -41,7 +45,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/geo"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionUtil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
@@ -556,6 +563,29 @@ func geometryShowColumnType(typ *types.Type) string {
 	return ts
 }
 
+// columnDefaultValue renders a stored default for information_schema.COLUMNS
+// and SHOW COLUMNS / DESC: DEFAULT NULL is SQL NULL and a string literal is
+// its value, like MySQL. Other defaults keep their origin text.
+func columnDefaultValue(origin string) []byte {
+	if origin == "" || strings.EqualFold(origin, "null") {
+		return nil
+	}
+	n := len(origin)
+	if n < 2 || origin[0] != '\'' || origin[n-1] != '\'' {
+		return functionUtil.QuickStrToBytes(origin)
+	}
+	// OriginString uses the persisted formatter's escapes, independently of
+	// the querying session's SQL mode. Keep lexical decoding with its owner.
+	scanner := mysql.NewScanner(dialect.MYSQL, origin)
+	defer mysql.PutScanner(scanner)
+	token, value := scanner.Scan()
+	if token != mysql.STRING || scanner.Pos != n {
+		return functionUtil.QuickStrToBytes(origin)
+	}
+	// A decoded empty literal is a non-NULL value, unlike an absent default.
+	return []byte(value)
+}
+
 func builtInMoShowVisibleBin(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
 	p2 := vector.GenerateFunctionFixedTypeParameter[uint8](parameters[1])
@@ -587,7 +617,7 @@ func builtInMoShowVisibleBin(parameters []*vector.Vector, result vector.Function
 			if err != nil {
 				return nil, err
 			}
-			return functionUtil.QuickStrToBytes(def.OriginString), nil
+			return columnDefaultValue(def.OriginString), nil
 		}
 	case typNormal:
 		f = func(s []byte) ([]byte, error) {
@@ -614,86 +644,32 @@ func builtInMoShowVisibleBin(parameters []*vector.Vector, result vector.Function
 			if err != nil {
 				return nil, err
 			}
-
-			ts := typ.String()
-			ret := ""
-			// after decimal fix, remove this
-			if typ.Oid.IsDecimal() {
-				ts = "DECIMAL"
-				ret = fmt.Sprintf("%s(%d,%d)", ts, typ.Width, typ.Scale)
+			var ret string
+			// Public metadata queries use this path for ENUM with an empty
+			// attr_enum, which represents the single empty-string member.
+			if typ.Oid == types.T_enum {
+				ret = "enum('')"
+			} else if formatted, ok := types.FormatSQLColumnType(*typ); ok {
+				ret = strings.ToLower(formatted)
 			} else if typ.Oid == types.T_geometry || typ.Oid == types.T_geometry32 {
 				ret = geometryShowColumnType(typ)
-			} else if typ.Oid == types.T_text {
-				switch typ.Width {
-				case types.MaxTinyTextLen:
-					ret = "TINYTEXT"
-				case types.MaxMediumTextLen:
-					ret = "MEDIUMTEXT"
-				case types.MaxLongTextLen:
-					ret = "LONGTEXT"
-				case 0, types.MaxStringSize:
-					ret = "TEXT"
-				default:
-					ret = fmt.Sprintf("%s(%d)", ts, typ.Width)
-				}
-			} else if typ.Oid == types.T_blob {
-				switch typ.Width {
-				case types.MaxTinyTextLen:
-					ret = "TINYBLOB"
-				case types.MaxMediumTextLen:
-					ret = "MEDIUMBLOB"
-				case types.MaxLongTextLen:
-					ret = "LONGBLOB"
-				case types.MaxStringSize:
-					ret = "BLOB"
-				default:
-					ret = fmt.Sprintf("%s(%d)", ts, typ.Width)
-				}
-			} else if typ.IsIntOrUint() && typ.Width == 0 {
-				// Width is the physical type width for stored integer columns, but
-				// expression-only integer types may leave it unset. Do not expose
-				// that internal zero as a MySQL display width.
-				ret = ts
 			} else {
-				ret = fmt.Sprintf("%s(%d)", ts, typ.Width)
+				ret = fmt.Sprintf("%s(%d)", typ.String(), typ.Width)
 			}
 
 			return functionUtil.QuickStrToBytes(ret), nil
 		}
 	case defExprInShowColumns:
-		formatStr := func(str string) string {
-			tmp := strings.Replace(str, "`", "``", -1)
-			strLen := len(tmp)
-			if strLen < 2 {
-				return tmp
-			}
-			if tmp == "''" {
-				return ""
-			}
-			if tmp[0] == '\'' && tmp[strLen-1] == '\'' {
-				return strings.Replace(tmp[1:strLen-1], "'", "''", -1)
-			}
-			return strings.Replace(tmp, "'", "''", -1)
-		}
+		// Same display as information_schema.COLUMNS.COLUMN_DEFAULT: decode a
+		// string literal via the MySQL scanner. OriginString is already SQL text,
+		// so re-escaping (the old formatStr) doubled quotes/backticks.
 		f = func(s []byte) ([]byte, error) {
 			def := new(plan.Default)
 			err := types.Decode(s, def)
 			if err != nil {
 				return nil, err
 			}
-			if strings.EqualFold(def.OriginString, "null") || len(def.OriginString) == 0 {
-				return nil, nil
-			}
-			trimmed := strings.TrimSpace(def.OriginString)
-			if strings.HasPrefix(trimmed, "(") && strings.HasSuffix(trimmed, ")") {
-				return functionUtil.QuickStrToBytes(trimmed), nil
-			}
-
-			fStr := formatStr(def.OriginString)
-			if len(fStr) == 0 {
-				return []byte{}, nil
-			}
-			return functionUtil.QuickStrToBytes(fStr), nil
+			return columnDefaultValue(def.OriginString), nil
 		}
 	case generatedExprOrigin:
 		f = func(s []byte) ([]byte, error) {
@@ -756,11 +732,11 @@ func builtInMoShowVisibleBinEnum(parameters []*vector.Vector, result vector.Func
 		if err != nil {
 			return nil, err
 		}
-		typeName := "ENUM"
+		typeName := "enum"
 		if typ.Oid == types.T_json && strings.HasPrefix(strings.ToLower(strings.TrimSpace(enumStr)), "array(") {
 			return functionUtil.QuickStrToBytes(enumStr), nil
 		} else if typ.Oid == types.T_uint64 {
-			typeName = "SET"
+			typeName = "set"
 		} else if typ.Oid == types.T_geometry {
 			subtype := ""
 			sridDefined := false
@@ -793,23 +769,25 @@ func builtInMoShowVisibleBinEnum(parameters []*vector.Vector, result vector.Func
 			return nil, moerr.NewNotSupportedf(proc.Ctx, "show visible bin enum, the type must be enum/set, but got %s", typ.String())
 		}
 
-		// get enum values
-		enums := strings.Split(enumStr, ",")
-		enumVal := ""
-		for i, e := range enums {
-			enumVal += fmt.Sprintf("'%s'", e)
-			if i < len(enums)-1 {
-				enumVal += ","
+		members := strings.Split(enumStr, ",")
+		if typ.Oid == types.T_uint64 {
+			if enumStr == "" {
+				return nil, nil
 			}
+			members = types.DecodeSetValues(enumStr)
 		}
-		ret := fmt.Sprintf("%s(%s)", typeName, enumVal)
+		for i := range members {
+			members[i] = sqlquote.String(members[i])
+		}
+		ret := typeName + "(" + strings.Join(members, ",") + ")"
+
 		return functionUtil.QuickStrToBytes(ret), nil
 	}
 
 	for i := uint64(0); i < uint64(length); i++ {
 		v1, null1 := p1.GetStrValue(i)
 		enumStr, null2 := enumVal.GetStrValue(i)
-		if null1 || null2 || len(v1) == 0 || len(enumStr) == 0 {
+		if null1 || null2 || len(v1) == 0 {
 			if err := rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
@@ -1175,6 +1153,10 @@ func builtInInternalCharacterSet(parameters []*vector.Vector, result vector.Func
 					identity = 1
 				case types.CharsetUTF8:
 					identity = 3
+				case types.CharsetUTF8MB3UnicodeCI:
+					identity = 4
+				case types.CharsetUTF8MB4UnicodeCI:
+					identity = 5
 				}
 				if err := rs.Append(identity, false); err != nil {
 					return err
@@ -1218,23 +1200,85 @@ func builtInConcatCheck(_ []overload, inputs []types.Type) checkResult {
 
 // JSON stores an encoded value; concatenation consumes its JSON text, including
 // quotes around JSON strings. Keep assignment CAST's unquoting contract separate.
-func concatStringValue(source types.T, value []byte) ([]byte, error) {
+func concatStringValue(ctx context.Context, source types.T, value []byte) ([]byte, error) {
 	if source != types.T_json {
 		return value, nil
 	}
-	return types.DecodeJson(value).MarshalJSON()
+	return marshalJSONForFloatStringProof(ctx, types.DecodeJson(value))
 }
 
 func builtInConcat(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	ps := make([]vector.FunctionParameterWrapper[types.Varlena], len(parameters))
+	direct := !rs.GetResultVector().IsConst()
 	for i := range ps {
 		ps[i] = vector.GenerateFunctionStrParameter(parameters[i])
+		// JSON conversion can fail before a later NULL argument is visited.
+		// Keep that left-to-right behavior on the existing conversion path.
+		direct = direct && parameters[i].GetType().Oid != types.T_json
 	}
+	allocationLimit := mpool.MaxAllocationSize()
+	var inline [types.VarlenaInlineSize]byte
 
 	for i := uint64(0); i < uint64(length); i++ {
 		if functionRowSkipped(selectList, i) {
 			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		if direct {
+			var size int64
+			isNull, tooLarge := false, false
+			for _, p := range ps {
+				value, null := p.GetStrValue(i)
+				if null {
+					isNull = true
+					break
+				}
+				if int64(len(value)) > allocationLimit-size {
+					tooLarge = true
+				} else if !tooLarge {
+					size += int64(len(value))
+				}
+			}
+			if isNull {
+				if err := rs.AppendBytes(nil, true); err != nil {
+					return err
+				}
+				continue
+			}
+			// Check both the row length and cumulative area before arithmetic in
+			// the writer. A later NULL above still takes precedence over size.
+			if tooLarge || (size > types.VarlenaInlineSize &&
+				size > allocationLimit-int64(len(rs.GetResultVector().GetArea()))) {
+				return mpool.ErrAllocationAllocatorLimit
+			}
+			if size <= types.VarlenaInlineSize {
+				// Reuse bounded scratch for inline values. Passing a descriptor
+				// through the writer callback would allocate it on every row.
+				dst := inline[:int(size)]
+				offset := 0
+				for _, p := range ps {
+					value, _ := p.GetStrValue(i)
+					offset += copy(dst[offset:], value)
+				}
+				if err := rs.AppendBytes(dst, false); err != nil {
+					return err
+				}
+				continue
+			}
+			// Inputs remain owned by the child expressions. The synchronous
+			// writer reserves the result's storage before copying into it, so
+			// no intermediate concatenation escapes mpool admission.
+			if err := rs.AppendBytesWithWriter(int(size), func(dst []byte) error {
+				offset := 0
+				for _, p := range ps {
+					value, _ := p.GetStrValue(i)
+					offset += copy(dst[offset:], value)
+				}
+				return nil
+			}); err != nil {
 				return err
 			}
 			continue
@@ -1251,7 +1295,7 @@ func builtInConcat(parameters []*vector.Vector, result vector.FunctionResultWrap
 				apv = false
 				break
 			} else {
-				v, err := concatStringValue(parameters[j].GetType().Oid, v)
+				v, err := concatStringValue(proc.Ctx, parameters[j].GetType().Oid, v)
 				if err != nil {
 					return err
 				}
@@ -1745,7 +1789,7 @@ func builtInMoLogDate(parameters []*vector.Vector, result vector.FunctionResultW
 				}
 			} else {
 				generalTime.ResetTime()
-				success := coreStrToDate(proc.Ctx, generalTime, parsedInput, formatMask)
+				success, _ := coreStrToDate(proc.Ctx, generalTime, parsedInput, formatMask)
 				if success && types.ValidDate(int32(generalTime.year), generalTime.month, generalTime.day) {
 					val := types.DateFromCalendar(int32(generalTime.year), generalTime.month, generalTime.day)
 					if err = rs.Append(val, false); err != nil {
@@ -1884,9 +1928,11 @@ func builtInPurgeLog(parameters []*vector.Vector, result vector.FunctionResultWr
 func builtInDatabase(_ []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[types.Varlena](result)
 
+	// MySQL: DATABASE() / SCHEMA() return NULL when there is no default database.
+	db := proc.GetSessionInfo().GetDatabase()
+	isNull := len(db) == 0
 	for i := uint64(0); i < uint64(length); i++ {
-		db := proc.GetSessionInfo().GetDatabase()
-		if err := rs.AppendBytes(functionUtil.QuickStrToBytes(db), false); err != nil {
+		if err := rs.AppendBytes(functionUtil.QuickStrToBytes(db), isNull); err != nil {
 			return err
 		}
 	}
@@ -2244,6 +2290,45 @@ func builtInUUID(_ []*vector.Vector, result vector.FunctionResultWrapper, proc *
 	return generateUUIDs(result, proc, length, uuid.NewV7)
 }
 
+// All accounts and CNs share one durable namespace, separate from internal IDs.
+const uuidShortAllocationKey = "__mo_sql_uuid_short"
+
+// Reserve one normal block of IDs to amortize SQL allocation refills.
+const uuidShortAllocationBatchSize uint64 = objectio.BlockMaxRows
+
+func builtInUUIDShort(_ []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	rs := vector.MustFunctionResult[uint64](result)
+	var ctx context.Context
+	for i := 0; i < length; i++ {
+		if selectList.IgnoreAllRow() || (!selectList.ShouldEvalAllRow() && selectList.Contains(uint64(i))) {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+		client := proc.GetHaKeeper()
+		if client == nil {
+			return moerr.NewInternalError(proc.Ctx, "UUID_SHORT requires HAKeeper")
+		}
+		if ctx == nil {
+			var cancel context.CancelFunc
+			ctx, cancel = context.WithTimeout(proc.Ctx, 30*time.Second)
+			defer cancel()
+		}
+		id, err := client.AllocateIDByKeyWithBatch(ctx, uuidShortAllocationKey, uuidShortAllocationBatchSize)
+		if err != nil {
+			return err
+		}
+		if id == 0 {
+			return moerr.NewInternalError(proc.Ctx, "UUID_SHORT received an invalid allocation")
+		}
+		if err = rs.Append(id, false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // seconds from the UUID Gregorian epoch (1582-10-15) to the unix epoch
 const uuidGregorianToUnixSecs = 12219292800
 
@@ -2573,7 +2658,7 @@ func builtInUUIDToBin(parameters []*vector.Vector, result vector.FunctionResultW
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
 	var getSwapFlag func(uint64) (bool, bool, error)
 	if len(parameters) == 2 {
-		getSwapFlag = makeBoolParamGetter(parameters[1])
+		getSwapFlag = makeUUIDSwapFlagGetter(parameters[1])
 	}
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	for i := uint64(0); i < uint64(length); i++ {
@@ -2592,12 +2677,7 @@ func builtInUUIDToBin(parameters []*vector.Vector, result vector.FunctionResultW
 			if err != nil {
 				return err
 			}
-			if null2 {
-				if err := rs.AppendBytes(nil, true); err != nil {
-					return err
-				}
-				continue
-			}
+			swapFlag = swapFlag && !null2
 		}
 		u, err := parseUUIDString(functionUtil.QuickBytesToStr(uuidBytes))
 		if err != nil {
@@ -2615,7 +2695,7 @@ func builtInBinToUUID(parameters []*vector.Vector, result vector.FunctionResultW
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
 	var getSwapFlag func(uint64) (bool, bool, error)
 	if len(parameters) == 2 {
-		getSwapFlag = makeBoolParamGetter(parameters[1])
+		getSwapFlag = makeUUIDSwapFlagGetter(parameters[1])
 	}
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	for i := uint64(0); i < uint64(length); i++ {
@@ -2634,12 +2714,7 @@ func builtInBinToUUID(parameters []*vector.Vector, result vector.FunctionResultW
 			if err != nil {
 				return err
 			}
-			if null2 {
-				if err := rs.AppendBytes(nil, true); err != nil {
-					return err
-				}
-				continue
-			}
+			swapFlag = swapFlag && !null2
 		}
 		if len(bin) != 16 {
 			return moerr.NewInvalidArg(proc.Ctx, "bin_to_uuid", len(bin))
@@ -2656,7 +2731,7 @@ func builtInBinToUUID(parameters []*vector.Vector, result vector.FunctionResultW
 	return nil
 }
 
-func makeBoolParamGetter(param *vector.Vector) func(uint64) (bool, bool, error) {
+func makeUUIDSwapFlagGetter(param *vector.Vector) func(uint64) (bool, bool, error) {
 	switch param.GetType().Oid {
 	case types.T_bool:
 		p := vector.GenerateFunctionFixedTypeParameter[bool](param)
@@ -2749,11 +2824,14 @@ func makeBoolParamGetter(param *vector.Vector) func(uint64) (bool, bool, error) 
 			if null {
 				return false, true, nil
 			}
-			f, err := strconv.ParseFloat(strings.TrimSpace(functionUtil.QuickBytesToStr(v)), 64)
-			if err != nil {
-				return false, false, moerr.NewInvalidInputNoCtxf("'%s' cannot be converted into boolean value", v)
+			// Swap flags use MySQL decimal-prefix coercion, including for
+			// strings resembling native hexadecimal or NaN/Inf extensions.
+			prefix, _, ok := scanDecimalFloatPrefix(functionUtil.QuickBytesToStr(v))
+			if !ok {
+				return false, false, nil
 			}
-			return f != 0, false, nil
+			f, err := parseStringToFloat(prefix, SQLCompatibilityMySQL)
+			return f != 0, false, err
 		}
 	}
 }
@@ -2902,6 +2980,53 @@ func builtInUnixTimestamp(parameters []*vector.Vector, result vector.FunctionRes
 			if err := rs.Append(val, false); err != nil {
 				return err
 			}
+		}
+	}
+	return nil
+}
+
+// DATETIME is a wall-clock value. Convert it directly using the session time
+// zone so a DST gap follows UNIX_TIMESTAMP's normalization policy instead of
+// the strict DATETIME-to-TIMESTAMP assignment cast.
+func builtInUnixTimestampDatetime(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	p1 := vector.GenerateFunctionFixedTypeParameter[types.Datetime](parameters[0])
+	zone := proc.GetSessionInfo().TimeZone
+	if result.GetResultVector().GetType().Oid == types.T_decimal128 {
+		rs := vector.MustFunctionResult[types.Decimal128](result)
+		for i := uint64(0); i < uint64(length); i++ {
+			value, null := p1.GetValue(i)
+			if null || value == types.ZeroDatetime {
+				if err := rs.Append(types.Decimal128{}, true); err != nil {
+					return err
+				}
+				continue
+			}
+			unixMicro := int64(value.ToTimestamp(zone)) - int64(types.UnixToTimestamp(0))
+			if unixMicro < 0 {
+				unixMicro = 0
+			}
+			if err := rs.Append(types.Decimal128{B0_63: uint64(unixMicro)}, false); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	rs := vector.MustFunctionResult[int64](result)
+	for i := uint64(0); i < uint64(length); i++ {
+		value, null := p1.GetValue(i)
+		if null || value == types.ZeroDatetime {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+		unix := value.ToTimestamp(zone).Unix()
+		if unix < 0 {
+			unix = 0
+		}
+		if err := rs.Append(unix, false); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -3269,8 +3394,21 @@ func builtInHashPartition(parameters []*vector.Vector, result vector.FunctionRes
 // input vec is [[1, 1, 1], [2, 2, null], [3, 3, 3]]
 // result vec is [serial(1, 2, 3), serial(1, 2, 3), null]
 func (op *opSerial) BuiltInSerial(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return op.builtInSerial(parameters, result, proc, length, selectList, false)
+}
+
+func (op *opSerial) BuiltInPhysicalSerial(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return op.builtInSerial(parameters, result, proc, length, selectList, true)
+}
+
+func (op *opSerial) builtInSerial(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList, physicalKey bool) error {
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	var err error
+	if physicalKey {
+		if err = validatePhysicalSerialValues(parameters, length); err != nil {
+			return err
+		}
+	}
 
 	bitMap := new(nulls.Nulls)
 	for _, v := range parameters {
@@ -3284,7 +3422,7 @@ func (op *opSerial) BuiltInSerial(parameters []*vector.Vector, result vector.Fun
 	if len(op.funcs) == 0 {
 		op.funcs = make([]func(v *vector.Vector, idx int, ps *types.Packer), len(parameters))
 		for i, p := range parameters {
-			op.funcs[i], err = getPackFun(p)
+			op.funcs[i], err = getPackFunWithPhysical(p, physicalKey)
 			if err != nil {
 				return err
 			}
@@ -3322,14 +3460,27 @@ func (op *opSerial) BuiltInSerial(parameters []*vector.Vector, result vector.Fun
 }
 
 func (op *opSerial) BuiltInSerialFull(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return op.builtInSerialFull(parameters, result, proc, length, selectList, false)
+}
+
+func (op *opSerial) BuiltInPhysicalSerialFull(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return op.builtInSerialFull(parameters, result, proc, length, selectList, true)
+}
+
+func (op *opSerial) builtInSerialFull(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList, physicalKey bool) error {
 	rs := vector.MustFunctionResult[types.Varlena](result)
 
 	var err error
+	if physicalKey {
+		if err = validatePhysicalSerialValues(parameters, length); err != nil {
+			return err
+		}
+	}
 	if len(op.funcs) == 0 {
 		op.funcs = make([]func(v *vector.Vector, idx int, ps *types.Packer), len(parameters))
 		for i, p := range parameters {
 			if !p.IsConstNull() {
-				op.funcs[i], err = getPackFun(p)
+				op.funcs[i], err = getPackFunWithPhysical(p, physicalKey)
 				if err != nil {
 					return err
 				}
@@ -3353,7 +3504,33 @@ func (op *opSerial) BuiltInSerialFull(parameters []*vector.Vector, result vector
 	return nil
 }
 
+// validatePhysicalSerialValues is the abortable admission boundary for the
+// SQL physical_serial and physical_serial_full functions. Their pack closures
+// intentionally share the legacy no-error serializer, so validate every
+// native Unicode value before any output row is published. This keeps invalid
+// UTF-8 and out-of-repertoire values from becoming a second raw-byte identity.
+func validatePhysicalSerialValues(parameters []*vector.Vector, length int) error {
+	for _, v := range parameters {
+		if v == nil || !types.IsUnicodeCollation(v.GetType().Charset) || !v.GetType().Oid.IsMySQLString() {
+			continue
+		}
+		for i := 0; i < length; i++ {
+			if v.IsNull(uint64(i)) {
+				continue
+			}
+			if err := types.ValidateCollationValue(*v.GetType(), v.GetBytesAt(i)); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 func getPackFun(v *vector.Vector) (func(v *vector.Vector, idx int, ps *types.Packer), error) {
+	return getPackFunWithPhysical(v, false)
+}
+
+func getPackFunWithPhysical(v *vector.Vector, physicalKey bool) (func(v *vector.Vector, idx int, ps *types.Packer), error) {
 	switch v.GetType().Oid {
 	case types.T_bool:
 		return func(v *vector.Vector, idx int, ps *types.Packer) {
@@ -3472,6 +3649,9 @@ func getPackFun(v *vector.Vector) (func(v *vector.Vector, idx int, ps *types.Pac
 		types.T_datalink:
 		return func(v *vector.Vector, idx int, ps *types.Packer) {
 			val := v.GetBytesAt(idx)
+			if physicalKey && types.IsUnicodeCollation(v.GetType().Charset) {
+				val = types.CollationKeyOrOriginal(v.GetType().Charset, val)
+			}
 			ps.EncodeStringType(val)
 		}, nil
 	}
@@ -3479,10 +3659,84 @@ func getPackFun(v *vector.Vector) (func(v *vector.Vector, idx int, ps *types.Pac
 	return nil, moerr.NewInternalErrorNoCtxf("not supported type %s", v.GetType().String())
 }
 
-// SerialHelper is unified function used in builtInSerial and BuiltInSerialFull
-// To use it inside builtInSerial, pass the bitMap pointer and set isFull false
-// To use it inside BuiltInSerialFull, pass the bitMap as nil and set isFull to true
+// BuiltInPhysicalCollationKey materializes the one-part key used by a
+// secondary index. Unlike generic SERIAL this is intentionally an opaque
+// comparison-key value; callers must not expose it as the source string.
+func BuiltInPhysicalCollationKey(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
+	if len(parameters) != 1 {
+		return moerr.NewInvalidInputNoCtx("physical_collation_key expects one argument")
+	}
+	from := vector.GenerateFunctionStrParameter(parameters[0])
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	typ := *parameters[0].GetType()
+	for i := 0; i < length; i++ {
+		if functionRowSkipped(selectList, uint64(i)) {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		value, null := from.GetStrValue(uint64(i))
+		if null {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		var err error
+		value, err = types.PhysicalCollationKey(typ, value)
+		if err != nil {
+			return err
+		}
+		if err := rs.AppendBytes(value, false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// SerialHelper encodes original values for the generic SERIAL/SERIAL_FULL
+// contract.  Generic serialization is intentionally lossless: transformed
+// comparison keys belong only to the physical index-key boundary.
+//
+// To use it inside builtInSerial, pass the bitMap pointer and set isFull false.
+// To use it inside BuiltInSerialFull, pass the bitMap as nil and set isFull to
+// true.
 func SerialHelper(v *vector.Vector, bitMap *nulls.Nulls, ps []*types.Packer, isFull bool) {
+	serialHelper(v, bitMap, ps, isFull, false)
+}
+
+// PhysicalSerialHelper is the schema-aware serializer used by secondary
+// index producers.  It keeps the generic SERIAL value contract separate from
+// the opaque UCA comparison-key domain used for native Unicode index parts.
+func PhysicalSerialHelper(v *vector.Vector, bitMap *nulls.Nulls, ps []*types.Packer, isFull bool) {
+	serialHelper(v, bitMap, ps, isFull, true)
+}
+
+// PhysicalSerialHelperChecked validates native Unicode values before building
+// an index key.  The historical helper has no error return because it is also
+// used by generic planner-only paths; index producers that can abort a batch
+// should use this wrapper so malformed/repertoire-invalid bytes cannot become
+// a tagged raw fallback in a persisted key.
+func PhysicalSerialHelperChecked(v *vector.Vector, bitMap *nulls.Nulls, ps []*types.Packer, isFull bool) error {
+	if v == nil || !types.IsUnicodeCollation(v.GetType().Charset) || !v.GetType().Oid.IsMySQLString() {
+		PhysicalSerialHelper(v, bitMap, ps, isFull)
+		return nil
+	}
+	values, area := vector.MustVarlenaRawData(v)
+	for i := range values {
+		if v.IsNull(uint64(i)) {
+			continue
+		}
+		if err := types.ValidateCollationValue(*v.GetType(), values[i].GetByteSlice(area)); err != nil {
+			return err
+		}
+	}
+	PhysicalSerialHelper(v, bitMap, ps, isFull)
+	return nil
+}
+
+func serialHelper(v *vector.Vector, bitMap *nulls.Nulls, ps []*types.Packer, isFull, physicalKey bool) {
 
 	if !isFull && bitMap == nil {
 		// if you are using it inside the builtInSerial then, you should pass bitMap
@@ -3919,15 +4173,22 @@ func SerialHelper(v *vector.Vector, bitMap *nulls.Nulls, ps []*types.Packer, isF
 					}
 					continue
 				}
-				ps[i].EncodeStringType(value)
+				ps[i].EncodeStringType(serialStringValue(*v.GetType(), value, physicalKey))
 			}
 		} else {
 			vs := vector.ExpandBytesCol(v)
 			for i := range vs {
-				ps[i].EncodeStringType(vs[i])
+				ps[i].EncodeStringType(serialStringValue(*v.GetType(), vs[i], physicalKey))
 			}
 		}
 	}
+}
+
+func serialStringValue(typ types.Type, value []byte, physicalKey bool) []byte {
+	if physicalKey && types.IsUnicodeCollation(typ.Charset) {
+		return types.CollationKeyOrOriginal(typ.Charset, value)
+	}
+	return value
 }
 
 // builtInSerialExtract is used to extract a tupleElement from the serial vector.
@@ -4452,18 +4713,6 @@ func builtInToSeconds(parameters []*vector.Vector, result vector.FunctionResultW
 	return nil
 }
 
-// CalcToSeconds: CalcToDays is used to return a day number (the number of days since year 0)
-func CalcToSeconds(ctx context.Context, datetimes []types.Datetime, ns *nulls.Nulls) ([]int64, error) {
-	res := make([]int64, len(datetimes))
-	for idx, datetime := range datetimes {
-		if nulls.Contains(ns, uint64(idx)) {
-			continue
-		}
-		res[idx] = DateTimeDiff(intervalUnitSECOND, types.DatetimeEpoch, datetime) + ADZeroSeconds
-	}
-	return res, nil
-}
-
 func builtInSin(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	p1 := vector.GenerateFunctionFixedTypeParameter[float64](parameters[0])
 	rs := vector.MustFunctionResult[float64](result)
@@ -4506,6 +4755,47 @@ func builtInSinh(parameters []*vector.Vector, result vector.FunctionResultWrappe
 		}
 	}
 	return nil
+}
+
+func builtInTanh(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryFixedToFixed[float64, float64](parameters, result, proc, length, math.Tanh, selectList)
+}
+
+func builtInCosh(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryFixedToFixedWithErrorCheck[float64, float64](parameters, result, proc, length, func(v float64) (float64, error) {
+		r := math.Cosh(v)
+		if math.IsInf(r, 0) && !math.IsInf(v, 0) {
+			// 标准库的 Exp(abs(v))/2 可能提前溢出；先缩放再相乘，保留可表示的 COSH 结果。
+			e := math.Exp(math.Abs(v) / 2)
+			r = (e / 2) * e
+		}
+		if math.IsInf(r, 0) {
+			return 0, moerr.NewOutOfRangeNoCtxf("float64", "DOUBLE value is out of range in 'cosh(%v)'", v)
+		}
+		return r, nil
+	}, selectList)
+}
+
+func builtInASinh(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryFixedToFixed[float64, float64](parameters, result, proc, length, math.Asinh, selectList)
+}
+
+func builtInACosh(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryFixedToFixedWithNullCheck[float64, float64](parameters, result, length, func(v float64) (float64, bool) {
+		if v < 1 {
+			return 0, true
+		}
+		return math.Acosh(v), false
+	}, selectList)
+}
+
+func builtInATanh(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryFixedToFixedWithNullCheck[float64, float64](parameters, result, length, func(v float64) (float64, bool) {
+		if v <= -1 || v >= 1 {
+			return 0, true
+		}
+		return math.Atanh(v), false
+	}, selectList)
 }
 
 func builtInCos(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -4657,13 +4947,21 @@ func builtInRadians(parameters []*vector.Vector, result vector.FunctionResultWra
 }
 
 func builtInLn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryFixedToFixedWithNullOnError[float64, float64](parameters, result, proc, length, func(v float64) (float64, error) {
+	// The LN/LOG kernel returns NULL for invalid arguments (executed for both
+	// LN(x) and the unary LOG(x) overload). Per-row warning 3020 diagnostics
+	// are reported by the shared post-pass, which also keeps folded scalar
+	// calls from collapsing the per-row warning count (#30214).
+	if err := opUnaryFixedToFixedWithNullOnError[float64, float64](parameters, result, proc, length, func(v float64) (float64, error) {
 		return momath.Ln(v)
-	}, selectList)
+	}, selectList); err != nil {
+		return err
+	}
+	appendLogarithmArgWarnings(parameters, result.GetResultVector(), proc, length, selectList)
+	return nil
 }
 
 func builtInLog(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opBinaryFixedFixedToFixedWithNullOnError[float64, float64, float64](parameters, result, proc, length, func(v1, v2 float64) (float64, error) {
+	if err := opBinaryFixedFixedToFixedWithNullOnError[float64, float64, float64](parameters, result, proc, length, func(v1, v2 float64) (float64, error) {
 		if v1 == 1 {
 			return 0, moerr.NewInvalidArg(proc.Ctx, "log base", 1)
 		}
@@ -4676,19 +4974,31 @@ func builtInLog(parameters []*vector.Vector, result vector.FunctionResultWrapper
 			return 0, moerr.NewInvalidArg(proc.Ctx, "log input", "<= 0")
 		}
 		return tempV2 / tempV1, nil
-	}, selectList)
+	}, selectList); err != nil {
+		return err
+	}
+	appendLogarithmArgWarnings(parameters, result.GetResultVector(), proc, length, selectList)
+	return nil
 }
 
 func builtInLog2(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryFixedToFixedWithNullOnError[float64, float64](parameters, result, proc, length, func(v float64) (float64, error) {
+	if err := opUnaryFixedToFixedWithNullOnError[float64, float64](parameters, result, proc, length, func(v float64) (float64, error) {
 		return momath.Log2(v)
-	}, selectList)
+	}, selectList); err != nil {
+		return err
+	}
+	appendLogarithmArgWarnings(parameters, result.GetResultVector(), proc, length, selectList)
+	return nil
 }
 
 func builtInLog10(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryFixedToFixedWithNullOnError[float64, float64](parameters, result, proc, length, func(v float64) (float64, error) {
+	if err := opUnaryFixedToFixedWithNullOnError[float64, float64](parameters, result, proc, length, func(v float64) (float64, error) {
 		return momath.Lg(v)
-	}, selectList)
+	}, selectList); err != nil {
+		return err
+	}
+	appendLogarithmArgWarnings(parameters, result.GetResultVector(), proc, length, selectList)
+	return nil
 }
 
 type opBuiltInRand struct {
@@ -4737,7 +5047,7 @@ func (op *opBuiltInRand) builtInRand(parameters []*vector.Vector, result vector.
 	return nil
 }
 
-func builtInConvertUsingCharset(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
+func builtInConvertUsingCharset(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	result.UseOptFunctionParamFrame(2)
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	p1 := vector.OptGetBytesParamFromWrapper(rs, 0, parameters[0])
@@ -4758,6 +5068,7 @@ func builtInConvertUsingCharset(parameters []*vector.Vector, result vector.Funct
 			}
 		}
 	}
+	borrower := encoding.NewBorrowedConvertUsing(proc.Ctx)
 	for i := uint64(0); i < uint64(length); i++ {
 		if selectList != nil && !selectList.ShouldEvalAllRow() && selectList.Contains(i) {
 			if err := rs.AppendMustNullForBytesResult(); err != nil {
@@ -4790,18 +5101,30 @@ func builtInConvertUsingCharset(parameters []*vector.Vector, result vector.Funct
 				return err
 			}
 		}
-		if identity != collation.BinaryIdentity && !utf8.Valid(value) {
-			if err := rs.AppendMustNullForBytesResult(); err != nil {
-				return err
-			}
-			continue
+		dst := collation.CharsetUTF8MB4
+		if identity == collation.BinaryIdentity {
+			dst = collation.CharsetBinary
 		}
-
-		if err := rs.AppendMustBytesValue(value); err != nil {
+		// The existing evaluator interprets internal bytes in the target
+		// repertoire. SQL admission above still resolves utf8 aliases to MB4.
+		limit := mpool.MaxAllocationSize()
+		if len(value) > types.VarlenaInlineSize {
+			limit -= int64(len(rs.GetResultVector().GetArea()))
+		}
+		isNull, err := borrower.Borrow(dst, value, limit)
+		if err != nil {
+			return err
+		}
+		if isNull {
+			err = rs.AppendMustNullForBytesResult()
+		} else {
+			err = rs.AppendMustBytesValue(value)
+		}
+		if err != nil {
 			return err
 		}
 	}
-	return nil
+	return borrower.Finish()
 }
 
 func resolveConvertCharset(charset []byte) (collation.Identity, error) {
@@ -4818,8 +5141,71 @@ func builtInToUpper(parameters []*vector.Vector, result vector.FunctionResultWra
 }
 
 func builtInToLower(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryBytesToBytesByStringDomain(
-		parameters, result, proc, length, bytes.ToLower, func(value []byte) []byte { return value }, selectList)
+	if length <= 1 {
+		return opUnaryBytesToBytesByStringDomain(
+			parameters, result, proc, length, bytes.ToLower, func(value []byte) []byte { return value }, selectList)
+	}
+	input := parameters[0]
+	binary, perRow := stringDomainMode(input)
+	if input.IsConst() || result.GetResultVector().IsConst() || input.HasNull() ||
+		binary || perRow || !selectList.ShouldEvalAllRow() || selectList.IgnoreAllRow() {
+		return opUnaryBytesToBytesByStringDomain(
+			parameters, result, proc, length, bytes.ToLower, func(value []byte) []byte { return value }, selectList)
+	}
+
+	// Reuse only within this evaluation; power-of-two growth stays below 128KiB total.
+	const maxScratch = 64 << 10
+	result.UseOptFunctionParamFrame(1)
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	param := vector.OptGetBytesParamFromWrapper(rs, 0, input)
+	var inline [types.VarlenaInlineSize]byte
+	scratch := inline[:]
+	for row := uint64(0); row < uint64(length); row++ {
+		value, _ := param.GetStrValue(row)
+		if len(value) > maxScratch {
+			if err := rs.AppendBytes(bytes.ToLower(value), false); err != nil {
+				return err
+			}
+			continue
+		}
+		isASCII, hasUpper := true, false
+		for _, c := range value {
+			if c >= utf8.RuneSelf {
+				isASCII = false
+				break
+			}
+			hasUpper = hasUpper || ('A' <= c && c <= 'Z')
+		}
+
+		var err error
+		switch {
+		case !isASCII:
+			err = rs.AppendBytes(bytes.Map(unicode.ToLower, value), false)
+		case !hasUpper:
+			err = rs.AppendBytes(value, false)
+		default:
+			if len(value) > cap(scratch) {
+				size := 32
+				for size < len(value) {
+					size *= 2
+				}
+				scratch = make([]byte, size)
+			}
+			dst := scratch[:len(value)]
+			for i := range dst {
+				c := value[i]
+				if 'A' <= c && c <= 'Z' {
+					c += 'a' - 'A'
+				}
+				dst[i] = c
+			}
+			err = rs.AppendBytes(dst, false)
+		}
+		if err != nil {
+			return err
+		}
+	}
+	return setSelectedStringResultDomain(input, result, proc)
 }
 
 // buildInMOCU extract cu or calculate cu from parameters

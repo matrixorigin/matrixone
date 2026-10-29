@@ -17,8 +17,10 @@ package frontend
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 
+	"github.com/gogo/protobuf/proto"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -43,29 +45,34 @@ func preparedExecutionBindings(ctx context.Context, values []any, protocolTypes 
 			continue
 		}
 		if param.IsBinaryProtocol {
-			if i*2+1 >= len(protocolTypes) {
-				return nil, moerr.NewInvalidInput(ctx, "prepared parameter has no protocol source type")
-			}
-			mysqlType := defines.MysqlType(protocolTypes[i*2])
 			if param.Value == nil {
-				if binaryProtocolPrepareParamIsBinaryString(mysqlType) {
+				// NULL bitmap entries need no source type. Connector/J can omit
+				// the entire type vector on an initial all-NULL execution.
+				if i*2+1 < len(protocolTypes) &&
+					binaryProtocolPrepareParamIsBinaryString(defines.MysqlType(protocolTypes[i*2])) {
 					binding.Type = types.T_blob.ToType()
 				}
-			} else if param.PrepareParamKind == vector.PrepareParamBoolean {
-				binding.Type = types.T_bool.ToType()
-			} else if mysqlType == defines.MYSQL_TYPE_DECIMAL || mysqlType == defines.MYSQL_TYPE_NEWDECIMAL {
-				binding.Type, binding.NumericType = param.DirectResultType, param.RuntimeType
-				if !param.HasDirectResultType || !param.HasRuntimeType {
-					return nil, invalidBinaryDecimalParameter(ctx, param.Value)
-				}
 			} else {
-				oid, supported := binaryProtocolPrepareParamConcreteType(mysqlType, protocolTypes[i*2+1]&0x80 != 0)
-				if !supported {
-					return nil, moerr.NewInvalidInput(ctx, "unsupported prepared parameter source type")
+				if i*2+1 >= len(protocolTypes) {
+					return nil, moerr.NewInvalidInput(ctx, "prepared parameter has no protocol source type")
 				}
-				binding.Type = oid.ToType()
-				if binaryProtocolTemporalMysqlType(mysqlType) {
-					binding.Type = binaryProtocolTemporalParamType(oid, fmt.Sprint(param.Value))
+				mysqlType := defines.MysqlType(protocolTypes[i*2])
+				if param.PrepareParamKind == vector.PrepareParamBoolean {
+					binding.Type = types.T_bool.ToType()
+				} else if mysqlType == defines.MYSQL_TYPE_DECIMAL || mysqlType == defines.MYSQL_TYPE_NEWDECIMAL {
+					binding.Type, binding.NumericType = param.DirectResultType, param.RuntimeType
+					if !param.HasDirectResultType || !param.HasRuntimeType {
+						return nil, invalidBinaryDecimalParameter(ctx, param.Value)
+					}
+				} else {
+					oid, supported := binaryProtocolPrepareParamConcreteType(mysqlType, protocolTypes[i*2+1]&0x80 != 0)
+					if !supported {
+						return nil, moerr.NewInvalidInput(ctx, "unsupported prepared parameter source type")
+					}
+					binding.Type = oid.ToType()
+					if binaryProtocolTemporalMysqlType(mysqlType) {
+						binding.Type = binaryProtocolTemporalParamType(oid, fmt.Sprint(param.Value))
+					}
 				}
 			}
 		} else if param.HasSourceType {
@@ -84,22 +91,46 @@ func preparedExecutionBindings(ctx context.Context, values []any, protocolTypes 
 // inspect spelling mark their plan value-dependent instead of extending this
 // key with value hashes or parser-specific categories.
 func preparedExecutionBindingKey(bindings []plan2.PreparedSourceBinding, values []any) string {
+	// Keep the existing framed identity without allocating formatting arguments.
 	var key strings.Builder
+	var number [20]byte
+	writeInt := func(value int64, separator byte) {
+		key.Write(strconv.AppendInt(number[:0], value, 10))
+		key.WriteByte(separator)
+	}
+	writeBool := func(value bool, separator byte) {
+		key.WriteString(strconv.FormatBool(value))
+		key.WriteByte(separator)
+	}
 	writeType := func(typ types.Type) {
-		fmt.Fprintf(&key, "%d:%d:%d:%d;", typ.Oid, typ.Charset, typ.Width, typ.Scale)
+		writeInt(int64(typ.Oid), ':')
+		writeInt(int64(typ.Charset), ':')
+		writeInt(int64(typ.Width), ':')
+		writeInt(int64(typ.Scale), ';')
 	}
 	for i, binding := range bindings {
-		fmt.Fprintf(&key, "%d;", binding.Position)
+		writeInt(int64(binding.Position), ';')
 		writeType(binding.Type)
 		writeType(binding.NumericType)
 		writeType(binding.BitCountType)
 		if param, ok := values[i].(plan2.ParamValue); ok {
-			fmt.Fprintf(&key, "%d:%t:%t:%t:%d:%t:%t;", param.PrepareParamKind,
-				param.IsBinaryProtocol, param.IsBin, param.IsBinaryString,
-				param.RuntimeStringDomain, param.EnableNumericPrefix, param.Value == nil)
+			writeInt(int64(param.PrepareParamKind), ':')
+			writeBool(param.IsBinaryProtocol, ':')
+			writeBool(param.IsBin, ':')
+			writeBool(param.IsBinaryString, ':')
+			writeInt(int64(param.RuntimeStringDomain), ':')
+			writeBool(param.EnableNumericPrefix, ':')
+			writeBool(param.Value == nil, ';')
 		}
 	}
 	return key.String()
+}
+
+func preparedFieldBindingKey(key string, state *plan2.PreparedFieldTypes) string {
+	if state == nil {
+		return key
+	}
+	return key + "field:" + strconv.FormatUint(state.Revision(), 10)
 }
 
 func (prepareStmt *PrepareStmt) rememberBitCountSourceTypes(values []any) {
@@ -138,7 +169,11 @@ func buildPreparedBoundQuery(ctx context.Context, ses FeSession, compiler plan2.
 	var bound *plan2.PreparedExecutionPlan
 	_, err := buildPlanWithStats(planning, ses, compiler, func() (*plan2.Plan, error) {
 		var buildErr error
-		bound, buildErr = plan2.BuildPreparedExecutionPlan(compiler, stmt, bindings, values)
+		var selected bool
+		bound, selected, buildErr = buildViewSchemaValidationPreparedPlan(planning, ses, compiler, stmt, bindings, values)
+		if !selected {
+			bound, buildErr = plan2.BuildPreparedExecutionPlan(compiler, stmt, bindings, values)
+		}
 		if buildErr != nil {
 			return nil, buildErr
 		}
@@ -152,13 +187,64 @@ func (cwft *TxnComputationWrapper) preparedExecutionRetry() *preparedExecutionRe
 		return nil
 	}
 	var preparedPlan *plan2.Plan
+	var fieldTypes *plan2.PreparedFieldTypes
+	var fieldSchemas []*plan2.ObjectRef
+	if cwft.preparedStmt != nil {
+		fieldTypes = cwft.preparedStmt.fieldTypes
+		if fieldTypes != nil {
+			// Keep immutable declaration facts, not another retained plan graph
+			// or a later EXECUTE's mutable handle, as the retry generation proof.
+			schemas := cwft.preparedStmt.PreparePlan.GetDcl().GetPrepare().GetSchemas()
+			fieldSchemas = make([]*plan2.ObjectRef, len(schemas))
+			for i, schema := range schemas {
+				if schema != nil {
+					fieldSchemas[i] = proto.Clone(schema).(*plan2.ObjectRef)
+				}
+			}
+		}
+	}
 	if cwft.preparedStmt != nil && strings.IndexByte(cwft.preparedStmt.Sql, '@') >= 0 {
 		preparedPlan = cwft.preparedStmt.PreparePlan.GetDcl().GetPrepare().Plan
 	}
 	return &preparedExecutionRetry{
+		fieldTypes:         fieldTypes,
+		fieldSchemas:       fieldSchemas,
 		paramVals:          append([]any(nil), cwft.paramVals...),
 		bindings:           append([]plan2.PreparedSourceBinding(nil), cwft.paramBindings...),
 		preparedPlan:       preparedPlan,
 		diagnosticFreeJoin: cwft.preparedJoinDiagnosticFree,
+	}
+}
+
+// Keep inferred domains only for markers owned by integer +/* metadata. NULL
+// retains the previous effective domain; a valid non-NULL source replaces it,
+// including decimal/string transitions. This state belongs to the statement,
+// and is committed before SQL evaluation (an arithmetic error does not undo it).
+func (prepareStmt *PrepareStmt) rememberIntegerArithmeticBindings(p *plan2.Plan, bindings []plan2.PreparedSourceBinding, values []any) {
+	defaults := plan2.IntegerPrecisionParameterBindings(p)
+	if len(defaults) == 0 {
+		return
+	}
+	if len(prepareStmt.integerArithmeticBindings) != len(bindings) {
+		prepareStmt.integerArithmeticBindings = make([]plan2.PreparedSourceBinding, len(bindings))
+	}
+	for _, initial := range defaults {
+		pos := int(initial.Position)
+		if pos < 0 || pos >= len(bindings) || pos >= len(values) {
+			continue
+		}
+		value := values[pos]
+		if param, ok := value.(plan2.ParamValue); ok {
+			value = param.Value
+		}
+		if value == nil {
+			previous := prepareStmt.integerArithmeticBindings[pos]
+			if previous.Type.Oid == types.T_any {
+				previous = initial
+			}
+			bindings[pos] = previous
+		} else {
+			prepareStmt.integerArithmeticBindings[pos] = bindings[pos]
+		}
 	}
 }

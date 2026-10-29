@@ -107,7 +107,7 @@ INSERTED  ¦  0  ¦  0  𝄀
 DELETED  ¦  0  ¦  0  𝄀
 UPDATED  ¦  1  ¦  1
 data branch merge geometry32_branch into geometry32_base;
-internal error: conflict: geometry32_branch DELETE and geometry32_base DELETE on pk(1) with different values
+internal error: conflict: geometry32_branch UPDATE and geometry32_base UPDATE on pk(1)
 data branch merge geometry32_branch into geometry32_base when conflict accept;
 select id,
 st_astext(g) as g,
@@ -146,6 +146,10 @@ constraint fk_child_parent foreign key(parent_id) references parent(id)
 ) comment = 'branch constraint table';
 insert into child(parent_id, code, qty) values (1, 'base-a', 10.00), (2, 'base-b', 20.00);
 data branch create table child_branch from child;
+insert into child_branch(parent_id, code, qty) values (1, 'bad-check', -1.00);
+constraint violation: Check constraint 'child_branch_chk_1' is violated
+insert into child(parent_id, code, qty) values (1, 'bad-check', -1.00);
+constraint violation: Check constraint 'chk_qty' is violated
 update child_branch set qty = qty + 5 where code = 'base-a';
 insert into child_branch(parent_id, qty) values (2, 77.75);
 insert into child_branch(parent_id, code, qty) values (1, null, 1.00);
@@ -156,7 +160,7 @@ insert into child_branch(parent_id, code, qty) values (1, 'base-a', 1.00);
 Duplicate entry 'base-a' for key 'code'
 insert into child_branch(parent_id, code, qty) values (99, 'bad-fk', 1.00);
 -- @regex("foreign key constraint fails", true)
-internal error: Cannot add or update a child row: a foreign key constraint fails
+Cannot add or update a child row: a foreign key constraint fails
 data branch merge child_branch into child;
 select count(*) as child_rows from child;
 ➤ child_rows[-5,64,0]  𝄀

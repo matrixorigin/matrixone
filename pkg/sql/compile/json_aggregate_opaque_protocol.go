@@ -32,7 +32,7 @@ import (
 // predecessor v106 peer cannot be admitted as an aggregate worker. This is a
 // candidate allocation after main v106; it must be reassigned at landing if
 // another capability extends the cumulative main prefix first.
-const jsonAggregateOpaqueCapabilityVersion = defines.MORPCVersion107
+const jsonAggregateOpaqueCapabilityVersion = defines.MORPCVersion137
 
 func (c *Compile) constrainJSONAggregateOpaqueWorkers(qry *plan.Query) error {
 	if c.execType != plan2.ExecTypeAP_MULTICN {

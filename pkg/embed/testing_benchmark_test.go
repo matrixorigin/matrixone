@@ -86,15 +86,23 @@ func BenchmarkCheckerStateCopy(b *testing.B) {
 					return true
 				})
 			}
-			b.ReportAllocs()
-			b.ResetTimer()
-			for i := 0; i < b.N; i++ {
-				if _, err := state.Lookup(&hakeeper.StateQuery{}); err != nil {
-					b.Fatal(err)
+			for _, scheduling := range []bool{false, true} {
+				label := "full"
+				if scheduling {
+					label = "scheduling"
 				}
+				b.Run(label, func(b *testing.B) {
+					b.ReportAllocs()
+					b.ResetTimer()
+					for i := 0; i < b.N; i++ {
+						if _, err := state.Lookup(&hakeeper.StateQuery{Scheduling: scheduling}); err != nil {
+							b.Fatal(err)
+						}
+					}
+					b.StopTimer()
+					b.ReportMetric(float64(items), "config-items")
+				})
 			}
-			b.StopTimer()
-			b.ReportMetric(float64(items), "config-items")
 		})
 	}
 }

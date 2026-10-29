@@ -14,7 +14,10 @@
 
 package bytejsonvalidate
 
-import "encoding/binary"
+import (
+	"encoding/binary"
+	"encoding/json"
+)
 
 const (
 	typeObject   byte = 0x01
@@ -46,12 +49,37 @@ const (
 
 // UvarintPayload accepts the exact, shortest uvarint-prefixed payload.
 func UvarintPayload(data []byte) ([]byte, bool) {
+	if len(data) > 0 && data[0] < 0x80 {
+		if int(data[0]) != len(data)-1 {
+			return nil, false
+		}
+		return data[1:], true
+	}
 	payloadLength, prefixLength := binary.Uvarint(data)
-	if prefixLength <= 0 || prefixLength != uvarintSize(payloadLength) ||
+	// A successful multi-byte unsigned varint is shortest exactly when its
+	// final group is nonzero. All one-byte encodings returned above.
+	if prefixLength <= 0 || data[prefixLength-1] == 0 ||
 		payloadLength != uint64(len(data)-prefixLength) {
 		return nil, false
 	}
 	return data[prefixLength:], true
+}
+
+// DecimalJSONPayload validates one complete JSON number in the exact,
+// uvarint-prefixed decimal representation. The scan is linear in input bytes;
+// even an enormous exponent never allocates an unbounded numeric intermediate.
+func DecimalJSONPayload(data []byte) bool {
+	payload, ok := UvarintPayload(data)
+	if !ok || len(payload) == 0 ||
+		(payload[0] != '-' && (payload[0] < '0' || payload[0] > '9')) {
+		return false
+	}
+	for _, ch := range payload {
+		if ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n' {
+			return false
+		}
+	}
+	return json.Valid(payload)
 }
 
 // Container validates the bounds and every descendant of one binary JSON

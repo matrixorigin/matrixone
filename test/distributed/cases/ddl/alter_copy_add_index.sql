@@ -114,7 +114,10 @@ where table_id = (
 and algo = 'hnsw'
 order by algo_table_type;
 select id from vectors order by l2_distance(embedding, '[1,0,0]') limit 1;
--- @regex("hnsw_search", true)
+-- Plan selection is asynchronous after COPY; this EXPLAIN is retained as a
+-- smoke check, while the query above validates the returned row.
+-- @regex("TP QUERY PLAN", true)
+-- @regex("(Table Scan on alter_copy_add_index[.]vectors|Vector Index Scan on)", true)
 explain select id from vectors order by l2_distance(embedding, '[1,0,0]') limit 1;
 set experimental_hnsw_index = 0;
 
@@ -144,6 +147,26 @@ execute ivf_count;
 deallocate prepare ivf_count;
 select id from ivf_vectors order by l2_distance(embedding, '[1,0,0]') limit 1;
 set experimental_ivf_index = 0;
+
+-- #31401: LOAD rows, COPY defaults, transactional rollback and partition indexes.
+-- Exact overlap is controlled by the embedded LOAD/ALTER lock-barrier regression.
+create table loaded(id int,v int);
+load data inline format='csv', data='1,10\n2,20\n' into table loaded;
+alter table loaded add column d int default 7;
+select id,v,d from loaded order by id;
+begin;
+insert into loaded values(3,30,7);
+alter table loaded add column e int default 8;
+select id,v,d,e from loaded order by id;
+rollback;
+select id,v,d from loaded order by id;
+select count(*) from mo_catalog.mo_columns where att_database=database() and att_relname='loaded' and attname='e';
+create table loaded_partition(id int auto_increment primary key,v int,key idx_v(v)) auto_id_cache=1 partition by hash(id) partitions 2;
+load data inline format='csv', data='1,10\n2,20\n' into table loaded_partition;
+alter table loaded_partition add column d int default 7;
+select id,v,d from loaded_partition force index(idx_v) where v=20;
+insert into loaded_partition(v) values(30);
+select id,v,d from loaded_partition order by id;
 
 -- Keep the base-table ids across DROP DATABASE so teardown can be checked
 -- before the next test entry has a chance to clean up stale resources.

@@ -19,6 +19,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"reflect"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -242,6 +243,9 @@ func TestIcebergSQLEngineEmbeddedHarness(t *testing.T) {
 			{name: "import native pins snapshot", run: runIcebergSQLEngineEmbeddedImportNativePinsSnapshot},
 			{name: "branch ref read and append write intent", run: runIcebergSQLEngineEmbeddedBranchRefReadAndAppendWriteIntent},
 			{name: "write DML and maintenance SQL", run: runIcebergSQLEngineEmbeddedWriteDMLAndMaintenanceSQL},
+			{name: "native schema evolution", run: runIcebergSQLEngineEmbeddedSchemaEvolution},
+			{name: "native snapshot-less table", run: runIcebergSQLEngineEmbeddedSnapshotlessTable},
+			{name: "native typed refs", run: runIcebergSQLEngineEmbeddedTypedRefs},
 			// This scenario replaces the fixture's object provider and disables its
 			// residency row, so keep it last while the suite shares catalog state.
 			{name: "credential security and redaction", run: runIcebergSQLEngineEmbeddedCredentialSecurityAndRedaction},
@@ -903,6 +907,7 @@ func installEmbeddedIcebergPlanner(t *testing.T, c Cluster, planner api.ScanPlan
 		value     any
 		pu        *config.ParameterUnit
 		protected bool
+		enabled   bool
 	}
 	restores := make([]restore, 0)
 	c.ForeachServices(func(svc ServiceOperator) bool {
@@ -920,6 +925,7 @@ func installEmbeddedIcebergPlanner(t *testing.T, c Cluster, planner api.ScanPlan
 			if pu, ok := puValue.(*config.ParameterUnit); ok && pu != nil && pu.SV != nil {
 				r.pu = pu
 				r.protected = pu.SV.Iceberg.ProtectedCNToCN
+				r.enabled = pu.SV.Iceberg.Enable
 				pu.SV.Iceberg.ProtectedCNToCN = true
 				pu.SV.Iceberg.Enable = true
 			}
@@ -930,14 +936,11 @@ func installEmbeddedIcebergPlanner(t *testing.T, c Cluster, planner api.ScanPlan
 	t.Cleanup(func() {
 		for _, r := range restores {
 			if rt := moruntime.ServiceRuntime(r.serviceID); rt != nil {
-				if r.hadValue {
-					rt.SetGlobalVariables(sqlicompile.IcebergScanPlannerRuntimeKey, r.value)
-				} else {
-					rt.SetGlobalVariables(sqlicompile.IcebergScanPlannerRuntimeKey, nil)
-				}
+				restoreEmbeddedRuntimeVariable(rt, sqlicompile.IcebergScanPlannerRuntimeKey, r.hadValue, r.value, planner)
 			}
 			if r.pu != nil && r.pu.SV != nil {
 				r.pu.SV.Iceberg.ProtectedCNToCN = r.protected
+				r.pu.SV.Iceberg.Enable = r.enabled
 			}
 		}
 	})
@@ -951,6 +954,76 @@ func installEmbeddedIcebergWriteCoordinator(t *testing.T, c Cluster, factory ice
 func installEmbeddedIcebergMaintenanceExecutor(t *testing.T, c Cluster, executor frontend.IcebergMaintenanceCallExecutor) {
 	t.Helper()
 	installEmbeddedRuntimeVariable(t, c, frontend.IcebergMaintenanceCallExecutorRuntimeKey, executor)
+}
+
+// restoreEmbeddedRuntimeVariable restores both values and absence. Storing a
+// nil value when the key was previously absent changes the runtime's state and
+// can make a later test observe a configured variable with an invalid type.
+// Compare-and-delete also avoids deleting or overwriting a replacement
+// installed by a newer fixture generation after a stale cleanup callback runs.
+func restoreEmbeddedRuntimeVariable(rt moruntime.Runtime, key string, hadValue bool, value, installed any) {
+	current, ok := rt.GetGlobalVariables(key)
+	if !ok || !sameEmbeddedRuntimeValue(current, installed) {
+		return
+	}
+	if hadValue {
+		rt.SetGlobalVariables(key, value)
+		return
+	}
+	rt.CompareAndDeleteGlobalVariables(key, installed)
+}
+
+func sameEmbeddedRuntimeValue(current, installed any) (same bool) {
+	if current == nil || installed == nil {
+		return current == nil && installed == nil
+	}
+	if reflect.TypeOf(current) != reflect.TypeOf(installed) {
+		return false
+	}
+	// A comparable struct can still contain an interface whose dynamic value is
+	// not comparable. Keep stale cleanup from turning that case into a panic;
+	// the fixture installers use pointer owners when they need ownership cleanup
+	// for values containing maps or slices.
+	defer func() {
+		if recover() != nil {
+			same = false
+		}
+	}()
+	return current == installed
+}
+
+func TestRestoreEmbeddedRuntimeVariablePreservesOwnership(t *testing.T) {
+	rt := moruntime.DefaultRuntime()
+	const key = "test-embedded-runtime-variable"
+	t.Cleanup(func() {
+		rt.CompareAndDeleteGlobalVariables(key, "old")
+	})
+
+	rt.SetGlobalVariables(key, "replacement")
+	restoreEmbeddedRuntimeVariable(rt, key, false, nil, "owned")
+	got, ok := rt.GetGlobalVariables(key)
+	require.True(t, ok)
+	require.Equal(t, "replacement", got)
+	restoreEmbeddedRuntimeVariable(rt, key, true, "old", "owned")
+	got, ok = rt.GetGlobalVariables(key)
+	require.True(t, ok)
+	require.Equal(t, "replacement", got)
+
+	restoreEmbeddedRuntimeVariable(rt, key, false, nil, "replacement")
+	_, ok = rt.GetGlobalVariables(key)
+	require.False(t, ok)
+
+	rt.SetGlobalVariables(key, "new")
+	restoreEmbeddedRuntimeVariable(rt, key, true, "old", "new")
+	got, ok = rt.GetGlobalVariables(key)
+	require.True(t, ok)
+	require.Equal(t, "old", got)
+}
+
+func TestSameEmbeddedRuntimeValueHandlesUncomparableValues(t *testing.T) {
+	left := struct{ Payload any }{Payload: map[string]int{"left": 1}}
+	right := struct{ Payload any }{Payload: map[string]int{"left": 1}}
+	require.False(t, sameEmbeddedRuntimeValue(left, right))
 }
 
 func installEmbeddedRuntimeVariable(t *testing.T, c Cluster, key string, value any) {
@@ -985,11 +1058,7 @@ func installEmbeddedRuntimeVariable(t *testing.T, c Cluster, key string, value a
 	t.Cleanup(func() {
 		for _, r := range restores {
 			if rt := moruntime.ServiceRuntime(r.serviceID); rt != nil {
-				if r.hadValue {
-					rt.SetGlobalVariables(key, r.value)
-				} else {
-					rt.SetGlobalVariables(key, nil)
-				}
+				restoreEmbeddedRuntimeVariable(rt, key, r.hadValue, r.value, value)
 			}
 		}
 	})

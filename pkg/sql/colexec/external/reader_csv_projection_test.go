@@ -25,9 +25,182 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/util/csvparser"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
+
+// matrixone#30635: JSONLINE OUTFILE exports binary columns wrapped as
+// {"$binary":"<base64>"} objects; the jsonline loader decodes only that
+// explicit wrapper so export->load round-trips byte-exact. Bare JSON strings
+// pass through byte-exact (historical plain-text files), even when they are
+// valid base64 such as "test". Non-binary columns are untouched.
+func TestJsonLineBinaryBase64Roundtrip(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+
+	attrs := []plan.ExternAttr{{ColName: "raw", ColIndex: 0, ColFieldIndex: 0}}
+	for _, tc := range []struct {
+		name     string
+		jsonData string
+		typeId   int32
+		line     string
+		want     string
+		legacy   bool
+	}{
+		// Wrapped MO-exported payloads decode to the original bytes.
+		{name: "varbinary wrapped object", jsonData: tree.OBJECT, typeId: int32(types.T_varbinary), line: `{"raw":{"$binary":"AP8="}}`, want: "\x00\xff"},
+		{name: "varbinary wrapped array", jsonData: tree.ARRAY, typeId: int32(types.T_varbinary), line: `[{"$binary":"AP8="}]`, want: "\x00\xff"},
+		{name: "blob wrapped object", jsonData: tree.OBJECT, typeId: int32(types.T_blob), line: `{"raw":{"$binary":"qwA="}}`, want: "\xab\x00"},
+		{name: "blob wrapped array", jsonData: tree.ARRAY, typeId: int32(types.T_blob), line: `[{"$binary":"qwA="}]`, want: "\xab\x00"},
+		{name: "binary wrapped object", jsonData: tree.OBJECT, typeId: int32(types.T_binary), line: `{"raw":{"$binary":"AP8="}}`, want: "\x00\xff"},
+		{name: "binary wrapped array", jsonData: tree.ARRAY, typeId: int32(types.T_binary), line: `[{"$binary":"AP8="}]`, want: "\x00\xff"},
+		// Bare strings pass through byte-exact, even valid base64.
+		{name: "plain text object", jsonData: tree.OBJECT, typeId: int32(types.T_varbinary), line: `{"raw":"test"}`, want: "test"},
+		{name: "plain text array", jsonData: tree.ARRAY, typeId: int32(types.T_varbinary), line: `["test"]`, want: "test"},
+		{name: "bare base64 passthrough object", jsonData: tree.OBJECT, typeId: int32(types.T_binary), line: `{"raw":"AP8="}`, want: "AP8="},
+		{name: "bare base64 passthrough array", jsonData: tree.ARRAY, typeId: int32(types.T_blob), line: `["AP8="]`, want: "AP8="},
+		{name: "not base64 falls through", jsonData: tree.OBJECT, typeId: int32(types.T_varbinary), line: `{"raw":"not-base64!"}`, want: "not-base64!"},
+		// Non-binary columns never decode.
+		{name: "varchar untouched", jsonData: tree.OBJECT, typeId: int32(types.T_varchar), line: `{"raw":"AP8="}`, want: "AP8="},
+		{name: "text untouched", jsonData: tree.OBJECT, typeId: int32(types.T_text), line: `{"raw":"AP8="}`, want: "AP8="},
+		{name: "legacy varbinary object", jsonData: tree.OBJECT, typeId: int32(types.T_varbinary), line: `{"raw":"AP8="}`, want: "\x00\xff", legacy: true},
+		{name: "legacy binary array", jsonData: tree.ARRAY, typeId: int32(types.T_binary), line: `["AP8="]`, want: "\x00\xff", legacy: true},
+		{name: "legacy blob object", jsonData: tree.OBJECT, typeId: int32(types.T_blob), line: `{"raw":"qwA="}`, want: "\xab\x00", legacy: true},
+		{name: "legacy varbinary array", jsonData: tree.ARRAY, typeId: int32(types.T_varbinary), line: `["qwA="]`, want: "\xab\x00", legacy: true},
+		{name: "legacy binary object", jsonData: tree.OBJECT, typeId: int32(types.T_binary), line: `{"raw":"AP8="}`, want: "\x00\xff", legacy: true},
+		{name: "legacy blob array", jsonData: tree.ARRAY, typeId: int32(types.T_blob), line: `["qwA="]`, want: "\xab\x00", legacy: true},
+		{name: "legacy empty bytes", jsonData: tree.OBJECT, typeId: int32(types.T_varbinary), line: `{"raw":""}`, want: "", legacy: true},
+		{name: "legacy decoded sentinel", jsonData: tree.ARRAY, typeId: int32(types.T_varbinary), line: `["XE4="]`, want: `\N`, legacy: true},
+		{name: "legacy wrapper still supported", jsonData: tree.OBJECT, typeId: int32(types.T_varbinary), line: `{"raw":{"$binary":"AP8="}}`, want: "\x00\xff", legacy: true},
+		{name: "legacy text remains text", jsonData: tree.OBJECT, typeId: int32(types.T_text), line: `{"raw":"AP8="}`, want: "AP8=", legacy: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cols := []*plan.ColDef{{Name: "raw", Typ: plan.Type{Id: tc.typeId}}}
+			reader := &CsvReader{}
+			if tc.legacy {
+				reader.param = &ExternalParam{ExParamConst: ExParamConst{Extern: &tree.ExternParam{
+					ExParam: tree.ExParam{JsonBinary: plan2.JSONBinaryLegacyBase64},
+				}}}
+			}
+			line, err := reader.transJson2Lines(proc.Ctx, tc.line, attrs, cols, tc.jsonData)
+			require.NoError(t, err)
+			require.Len(t, line, 1)
+			require.False(t, line[0].IsNull)
+			require.Equal(t, tc.want, line[0].Val)
+		})
+	}
+}
+
+func TestJSONLineLegacyBinaryRejectsMalformedValues(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	attrs := []plan.ExternAttr{{ColName: "raw", ColIndex: 0, ColFieldIndex: 0}}
+	cols := []*plan.ColDef{{Name: "raw", Typ: plan.Type{Id: int32(types.T_varbinary)}}}
+	reader := &CsvReader{param: &ExternalParam{ExParamConst: ExParamConst{Extern: &tree.ExternParam{
+		ExParam: tree.ExParam{JsonBinary: plan2.JSONBinaryLegacyBase64},
+	}}}}
+	for _, value := range []string{`"not-base64!"`, `123`, `true`, `[]`, `{}`, `{"$binary":123}`} {
+		t.Run(value, func(t *testing.T) {
+			_, err := reader.transJson2Lines(proc.Ctx, `{"raw":`+value+`}`, attrs, cols, tree.OBJECT)
+			require.Error(t, err)
+			_, err = reader.transJson2Lines(proc.Ctx, `[`+value+`]`, attrs, cols, tree.ARRAY)
+			require.Error(t, err)
+		})
+	}
+	for _, shape := range []string{tree.OBJECT, tree.ARRAY} {
+		line := `{"raw":null}`
+		if shape == tree.ARRAY {
+			line = `[null]`
+		}
+		fields, err := reader.transJson2Lines(proc.Ctx, line, attrs, cols, shape)
+		require.NoError(t, err)
+		require.True(t, fields[0].IsNull)
+	}
+}
+
+// JSON null alone sets IsNull. Raw JSON strings remain text, including bytes
+// 5C4E, and wrapped base64 payloads remain byte-exact. Both jsondata shapes are
+// covered through getOneRowData materialization.
+func TestJsonLineBinaryNullMetadataSeparated(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		jsonData string
+		line     string
+		wantNull bool
+		want     []byte
+	}{
+		{name: "object wrapped sentinel bytes", jsonData: tree.OBJECT, line: `{"raw":{"$binary":"XE4="}}`, wantNull: false, want: []byte{0x5c, 0x4e}},
+		{name: "array wrapped sentinel bytes", jsonData: tree.ARRAY, line: `[{"$binary":"XE4="}]`, wantNull: false, want: []byte{0x5c, 0x4e}},
+		{name: "object raw sentinel text", jsonData: tree.OBJECT, line: `{"raw":"\\N"}`, wantNull: false, want: []byte{0x5c, 0x4e}},
+		{name: "array raw sentinel text", jsonData: tree.ARRAY, line: `["\\N"]`, wantNull: false, want: []byte{0x5c, 0x4e}},
+		{name: "object json null", jsonData: tree.OBJECT, line: `{"raw":null}`, wantNull: true},
+		{name: "array json null", jsonData: tree.ARRAY, line: `[null]`, wantNull: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			defer proc.Free()
+
+			attrs := []plan.ExternAttr{{ColName: "raw", ColIndex: 0, ColFieldIndex: 0}}
+			cols := []*plan.ColDef{{Name: "raw", Typ: plan.Type{Id: int32(types.T_varbinary)}}}
+			reader := &CsvReader{}
+			line, err := reader.transJson2Lines(proc.Ctx, tc.line, attrs, cols, tc.jsonData)
+			require.NoError(t, err)
+			require.Len(t, line, 1)
+			require.Equal(t, tc.wantNull, line[0].IsNull)
+
+			bat := batch.NewWithSize(1)
+			bat.Vecs[0] = vector.NewVec(types.T_varbinary.ToType())
+			defer bat.Clean(proc.Mp())
+
+			param := &ExternalParam{
+				ExParamConst: ExParamConst{
+					ParallelLoad:  true,
+					ColumnListLen: 1,
+					StrictSqlMode: true,
+					Attrs:         attrs,
+					Cols:          cols,
+					Extern: &tree.ExternParam{
+						ExParamConst: tree.ExParamConst{Format: tree.JSONLINE},
+						ExParam:      tree.ExParam{ExternType: int32(plan.ExternType_LOAD), JsonData: tc.jsonData},
+					},
+				},
+				ExParam: ExParam{Fileparam: &ExFileparam{}},
+			}
+
+			require.NoError(t, getOneRowData(proc, bat, line, 0, param))
+			require.Equal(t, tc.wantNull, bat.Vecs[0].GetNulls().Contains(0))
+			if !tc.wantNull {
+				require.Equal(t, tc.want, bat.Vecs[0].GetBytesAt(0))
+			}
+		})
+	}
+}
+
+// matrixone#30635: an explicit "$binary" wrapper with an invalid base64
+// payload is rejected instead of being silently reinterpreted.
+func TestJsonLineBinaryWrapperRejectsInvalidBase64(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+
+	attrs := []plan.ExternAttr{{ColName: "raw", ColIndex: 0, ColFieldIndex: 0}}
+	cols := []*plan.ColDef{{Name: "raw", Typ: plan.Type{Id: int32(types.T_varbinary)}}}
+	for _, tc := range []struct {
+		name     string
+		jsonData string
+		line     string
+	}{
+		{name: "object", jsonData: tree.OBJECT, line: `{"raw":{"$binary":"***"}}`},
+		{name: "array", jsonData: tree.ARRAY, line: `[{"$binary":"***"}]`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			reader := &CsvReader{}
+			_, err := reader.transJson2Lines(proc.Ctx, tc.line, attrs, cols, tc.jsonData)
+			require.Error(t, err)
+			require.Contains(t, err.Error(), JsonBinaryKey)
+		})
+	}
+}
 
 func TestJSONLineObjectProjectionUsesPhysicalFieldIndex(t *testing.T) {
 	const jsonLine = `{"a":"one","b":"two","c":"three","d":"four","e":"five","f":"six"}`
@@ -73,6 +246,100 @@ func TestJSONLineObjectProjectionUsesPhysicalFieldIndex(t *testing.T) {
 
 			require.NoError(t, getOneRowData(proc, bat, line, 0, param))
 			require.Equal(t, values[fieldIdx], string(bat.Vecs[0].GetBytesAt(0)))
+		})
+	}
+}
+
+func TestJSONLineNullRemainsNullWithParallelLoad(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		jsonData string
+		line     string
+	}{
+		{name: "object", jsonData: tree.OBJECT, line: `{"d":null}`},
+		{name: "array", jsonData: tree.ARRAY, line: `[null]`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			defer proc.Free()
+
+			attrs := []plan.ExternAttr{{ColName: "d", ColIndex: 0, ColFieldIndex: 0}}
+			cols := []*plan.ColDef{{Name: "d", Typ: plan.Type{Id: int32(types.T_int32)}}}
+			reader := &CsvReader{}
+			line, err := reader.transJson2Lines(proc.Ctx, tc.line, attrs, cols, tc.jsonData)
+			require.NoError(t, err)
+			require.Equal(t, []csvparser.Field{{IsNull: true}}, line)
+
+			bat := batch.NewWithSize(1)
+			bat.Vecs[0] = vector.NewVec(types.T_int32.ToType())
+			defer bat.Clean(proc.Mp())
+
+			param := &ExternalParam{
+				ExParamConst: ExParamConst{
+					ParallelLoad:  true,
+					ColumnListLen: 1,
+					Attrs:         attrs,
+					Cols:          cols,
+					Extern: &tree.ExternParam{
+						ExParamConst: tree.ExParamConst{Format: tree.JSONLINE},
+						ExParam:      tree.ExParam{ExternType: int32(plan.ExternType_LOAD), JsonData: tc.jsonData},
+					},
+				},
+				ExParam: ExParam{Fileparam: &ExFileparam{}},
+			}
+
+			require.NoError(t, getOneRowData(proc, bat, line, 0, param))
+			require.True(t, bat.Vecs[0].GetNulls().Contains(0))
+		})
+	}
+}
+
+func TestJSONLineNullSentinelTextRemainsNonNull(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		jsonData string
+		line     string
+	}{
+		{name: "object", jsonData: tree.OBJECT, line: `{"s":"\\N"}`},
+		{name: "array", jsonData: tree.ARRAY, line: `["\\N"]`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			defer proc.Free()
+
+			attrs := []plan.ExternAttr{{ColName: "s", ColIndex: 0, ColFieldIndex: 0}}
+			cols := []*plan.ColDef{{Name: "s", Typ: plan.Type{Id: int32(types.T_varchar)}}}
+			line, err := (&CsvReader{}).transJson2Lines(proc.Ctx, tc.line, attrs, cols, tc.jsonData)
+			require.NoError(t, err)
+			require.Equal(t, []csvparser.Field{{Val: `\N`}}, line)
+
+			param := &ExternalParam{
+				ExParamConst: ExParamConst{
+					ParallelLoad:  true,
+					ColumnListLen: 1,
+					Attrs:         attrs,
+					Cols:          cols,
+					Extern: &tree.ExternParam{
+						ExParamConst: tree.ExParamConst{Format: tree.JSONLINE},
+						ExParam:      tree.ExParam{ExternType: int32(plan.ExternType_LOAD), JsonData: tc.jsonData},
+					},
+				},
+				ExParam: ExParam{Fileparam: &ExFileparam{}},
+			}
+			bat := batch.NewWithSize(1)
+			bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+			defer bat.Clean(proc.Mp())
+			require.NoError(t, getOneRowData(proc, bat, line, 0, param))
+			require.False(t, bat.Vecs[0].GetNulls().Contains(0))
+			require.Equal(t, []byte{0x5c, 0x4e}, bat.Vecs[0].GetBytesAt(0))
+
+			// An explicit user NULL map remains an opt-in conversion of this text.
+			mappedBat := batch.NewWithSize(1)
+			mappedBat.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+			defer mappedBat.Clean(proc.Mp())
+			param.Extern.NullMap = map[string][]string{"s": {`\N`}}
+			require.NoError(t, getOneRowData(proc, mappedBat, line, 0, param))
+			require.True(t, mappedBat.Vecs[0].GetNulls().Contains(0))
 		})
 	}
 }
@@ -142,4 +409,164 @@ func TestJSONLineObjectProjectionRejectsMissingColumnDefinition(t *testing.T) {
 	_, err := (&CsvReader{}).transJsonObject2Lines(
 		context.Background(), `{"c":"three"}`, attrs, nil)
 	require.ErrorContains(t, err, "missing external column definition")
+}
+
+func TestJSONLineVectorArrayValues(t *testing.T) {
+	for _, shape := range []string{tree.OBJECT, tree.ARRAY} {
+		for _, tc := range []struct {
+			typ  types.T
+			want []byte
+		}{
+			{types.T_array_float32, types.ArrayToBytes([]float32{4, 5, 6})},
+			{types.T_array_float64, types.ArrayToBytes([]float64{4, 5, 6})},
+			{types.T_array_bf16, types.ArrayToBytes([]types.BF16{types.BF16FromFloat32(4), types.BF16FromFloat32(5), types.BF16FromFloat32(6)})},
+			{types.T_array_float16, types.ArrayToBytes([]types.Float16{types.Float16FromFloat32(4), types.Float16FromFloat32(5), types.Float16FromFloat32(6)})},
+			{types.T_array_int8, types.ArrayToBytes([]int8{4, 5, 6})},
+			{types.T_array_uint8, types.ArrayToBytes([]uint8{4, 5, 6})},
+		} {
+			t.Run(shape+"/"+tc.typ.String(), func(t *testing.T) {
+				for _, value := range []string{`[4,5,6]`, `"[4,5,6]"`, `null`} {
+					t.Run(value, func(t *testing.T) {
+						proc := testutil.NewProcess(t)
+						defer proc.Free()
+						fieldIdx := int32(0)
+						input := "[" + value + "]"
+						if shape == tree.OBJECT {
+							// The target is projected from the third physical field.
+							fieldIdx = 2
+							input = `{"unused":0,"other":"text","v":` + value + "}"
+						}
+						attrs := []plan.ExternAttr{{ColName: "v", ColIndex: 0, ColFieldIndex: fieldIdx}}
+						cols := []*plan.ColDef{{Name: "v", Typ: plan.Type{Id: int32(tc.typ), Width: 3}}}
+						line, err := (&CsvReader{}).transJson2Lines(proc.Ctx, input, attrs, cols, shape)
+						require.NoError(t, err)
+						bat := batch.NewWithSize(1)
+						bat.Vecs[0] = vector.NewVec(types.New(tc.typ, 3, 0))
+						defer bat.Clean(proc.Mp())
+						param := &ExternalParam{
+							ExParamConst: ExParamConst{
+								Ctx: proc.Ctx, Attrs: attrs, Cols: cols, ColumnListLen: fieldIdx + 1, StrictSqlMode: true,
+								Extern: &tree.ExternParam{
+									ExParamConst: tree.ExParamConst{Format: tree.JSONLINE},
+									ExParam:      tree.ExParam{ExternType: int32(plan.ExternType_EXTERNAL_TB), JsonData: shape},
+								},
+							},
+							ExParam: ExParam{Fileparam: &ExFileparam{}},
+						}
+						require.NoError(t, getOneRowData(proc, bat, line, 0, param))
+						require.Equal(t, 1, bat.Vecs[0].Length())
+						if value == "null" {
+							require.True(t, bat.Vecs[0].GetNulls().Contains(0))
+						} else {
+							require.False(t, bat.Vecs[0].GetNulls().Contains(0))
+							require.Equal(t, tc.want, bat.Vecs[0].GetBytesAt(0))
+						}
+					})
+				}
+			})
+		}
+	}
+}
+
+func TestJSONLineVectorArrayLexemesAndInvalidElements(t *testing.T) {
+	for _, shape := range []string{tree.OBJECT, tree.ARRAY} {
+		t.Run(shape, func(t *testing.T) {
+			attrs := []plan.ExternAttr{{ColName: "v", ColIndex: 0, ColFieldIndex: 0}}
+			cols := []*plan.ColDef{{Name: "v", Typ: plan.Type{Id: int32(types.T_array_float64)}}}
+			reader := &CsvReader{}
+			convert := func(value string) ([]csvparser.Field, error) {
+				input := "[" + value + "]"
+				if shape == tree.OBJECT {
+					input = `{"v":` + value + "}"
+				}
+				return reader.transJson2Lines(context.Background(), input, attrs, cols, shape)
+			}
+			// Numeric text must not pass through a float64 intermediate.
+			for _, value := range []string{`[-1.5,0,2.5e+2]`, `[1.0000000596046447753906250000000001]`, `[1e400]`, `[]`} {
+				line, err := convert(value)
+				require.NoError(t, err)
+				require.Equal(t, value, line[0].Val)
+			}
+			for _, value := range []string{`["4"]`, `["NaN"]`, `[true]`, `[null]`, `[[4,5]]`, `[{"x":4}]`, `[4,"5",6]`} {
+				t.Run(value, func(t *testing.T) {
+					_, err := convert(value)
+					require.Error(t, err)
+					require.Empty(t, reader.prevStr)
+					line, err := convert(`[4,5,6]`)
+					require.NoError(t, err)
+					require.Equal(t, "[4,5,6]", line[0].Val)
+				})
+			}
+		})
+	}
+}
+
+func TestJSONLineVectorArrayConsumerErrors(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		typ   types.T
+		value string
+		width int32
+	}{
+		{"empty", types.T_array_float32, `[]`, 3},
+		{"dimension", types.T_array_float64, `[4,5]`, 3},
+		{"float_overflow", types.T_array_float32, `[1e400]`, 1},
+		{"int8_overflow", types.T_array_int8, `[128]`, 1},
+		{"uint8_negative", types.T_array_uint8, `[-1]`, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			defer proc.Free()
+			attrs := []plan.ExternAttr{{ColName: "v", ColIndex: 0, ColFieldIndex: 0}}
+			cols := []*plan.ColDef{{Name: "v", Typ: plan.Type{Id: int32(tc.typ), Width: tc.width}}}
+			line, err := (&CsvReader{}).transJsonObject2Lines(proc.Ctx, `{"v":`+tc.value+`}`, attrs, cols)
+			require.NoError(t, err) // Type/range/dimension validation belongs to the consumer.
+			bat := batch.NewWithSize(1)
+			bat.Vecs[0] = vector.NewVec(types.New(tc.typ, tc.width, 0))
+			defer bat.Clean(proc.Mp())
+			param := &ExternalParam{
+				ExParamConst: ExParamConst{
+					Ctx: proc.Ctx, Attrs: attrs, Cols: cols, ColumnListLen: 1, StrictSqlMode: true,
+					Extern: &tree.ExternParam{
+						ExParamConst: tree.ExParamConst{Format: tree.JSONLINE},
+						ExParam:      tree.ExParam{ExternType: int32(plan.ExternType_EXTERNAL_TB)},
+					},
+				},
+				ExParam: ExParam{Fileparam: &ExFileparam{}},
+			}
+			require.Error(t, getOneRowData(proc, bat, line, 0, param))
+			require.Zero(t, bat.Vecs[0].Length())
+		})
+	}
+}
+
+func TestJSONLineVectorArrayErrorModeRecovery(t *testing.T) {
+	for _, shape := range []string{tree.OBJECT, tree.ARRAY} {
+		t.Run(shape, func(t *testing.T) {
+			param, proc, bat := errorModeParam(t, tree.JSONLINE, shape, numTestCols)
+			param.Cols[1].Typ = plan.Type{Id: int32(types.T_array_float32), Width: 3}
+			bat.Vecs[1].Free(proc.Mp())
+			bat.Vecs[1] = vector.NewVec(types.New(types.T_array_float32, 3, 0))
+			invalid := `{"a":1,"s":[4,"5",6]}`
+			wrongDim := `{"a":2,"s":[4,5]}`
+			valid := `{"a":3,"s":[4,5,6]}`
+			if shape == tree.ARRAY {
+				invalid, wrongDim, valid = `[1,[4,"5",6]]`, `[2,[4,5]]`, `[3,[4,5,6]]`
+			}
+			require.NoError(t, readAllText(t, param, proc, bat, invalid+"\n"+wrongDim+"\n"+valid+"\n"))
+			for _, vec := range bat.Vecs {
+				require.Equal(t, 3, vec.Length())
+			}
+			for row, raw := range []string{invalid, wrongDim} {
+				require.True(t, bat.Vecs[0].GetNulls().Contains(uint64(row)))
+				require.True(t, bat.Vecs[1].GetNulls().Contains(uint64(row)))
+				require.NotEmpty(t, bat.Vecs[3].GetBytesAt(row))
+				require.Equal(t, raw, string(bat.Vecs[4].GetBytesAt(row)))
+			}
+			require.Equal(t, int32(3), vector.GetFixedAtNoTypeCheck[int32](bat.Vecs[0], 2))
+			require.Equal(t, []float32{4, 5, 6}, types.BytesToArray[float32](bat.Vecs[1].GetBytesAt(2)))
+			require.True(t, bat.Vecs[3].GetNulls().Contains(2))
+			require.True(t, bat.Vecs[4].GetNulls().Contains(2))
+		})
+	}
 }

@@ -114,6 +114,8 @@ class MatrixOneLogger:
             exc_info: optional exception info tuple for tracebacks
             stack_depth: how many frames to skip (default 2 = caller of caller)
         """
+        if not self.logger.isEnabledFor(level):
+            return
         frame = sys._getframe(stack_depth)
         record = self.logger.makeRecord(
             self.logger.name,

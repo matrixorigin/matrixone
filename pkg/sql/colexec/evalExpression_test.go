@@ -69,6 +69,20 @@ func bindTestCast(t *testing.T, proc *process.Process, overload int32, source *p
 	}}}
 }
 
+func TestSemanticParameterVectorsRestoresUnicodeMetadataWithoutMutatingInput(t *testing.T) {
+	mp := mpool.MustNewZero()
+	physical := vector.NewVec(types.T_varchar.ToType())
+	defer physical.Free(mp)
+	require.NoError(t, vector.AppendBytes(physical, []byte("A"), false, mp))
+
+	semantic := types.NewWithCharset(types.T_varchar, 64, 0, types.CharsetUTF8MB4UnicodeCI)
+	expr := &FunctionExpressionExecutor{parameterTypes: []types.Type{semantic}}
+	view := expr.semanticParameterVectors([]*vector.Vector{physical})[0]
+	require.Equal(t, semantic, *view.GetType())
+	require.Equal(t, types.T_varchar.ToType(), *physical.GetType())
+	require.Equal(t, []byte("A"), view.GetBytesAt(0))
+}
+
 // evalTestTextParameter scopes transport ownership and restores the exact prior state.
 func evalTestTextParameter(t *testing.T, proc *process.Process, executor ExpressionExecutor, value string, isNull bool, kind vector.PrepareParamKind, batches []*batch.Batch, mask []bool) *vector.Vector {
 	t.Helper()
@@ -1249,7 +1263,7 @@ func TestFlowControlFolding(t *testing.T) {
 				require.NoError(t, expr.Init(proc, len(argTypes), test.resultType))
 				expr.fid = test.fid
 				expr.overloadID = resolved.GetEncodedOverloadID()
-				expr.evalFn, expr.resetFn, expr.freeFn, expr.retainedBytesFn = overload.GetExecuteMethod()
+				expr.evalFn, expr.resetFn, expr.freeFn, _ = overload.GetExecuteMethod()
 				expr.folded.needFoldingCheck = true
 				offset := 0
 				if test.fid != function.COALESCE {
@@ -2836,7 +2850,7 @@ func TestPreparedJSONComparisonSelection(t *testing.T) {
 		typ                        types.T
 		reject                     bool
 	}{
-		{name: "string JSON uses parameter conversion", parameter: "1", jsonValue: `"1"`, typ: types.T_int64},
+		{name: "JSON string differs from numeric parameter", parameter: "1", jsonValue: `"1"`, typ: types.T_int64},
 		{name: "narrow parameter retains range rejection", parameter: "127", jsonValue: `128`, typ: types.T_int8, reject: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -2876,11 +2890,11 @@ func TestPreparedJSONComparisonSelection(t *testing.T) {
 				} else {
 					require.NoError(t, err)
 					require.Equal(t, 2, result.Length())
-					require.True(t, vector.GetFixedAtNoTypeCheck[bool](result, 1))
+					require.False(t, vector.GetFixedAtNoTypeCheck[bool](result, 1))
 					require.False(t, result.IsNull(1))
 					require.Equal(t, selection != nil, result.IsNull(0))
 					if selection == nil {
-						require.True(t, vector.GetFixedAtNoTypeCheck[bool](result, 0))
+						require.False(t, vector.GetFixedAtNoTypeCheck[bool](result, 0))
 					}
 				}
 			}
@@ -2952,7 +2966,7 @@ func TestPreparedJSONComparisonSelection(t *testing.T) {
 					selected1 := selection == nil || selection[1]
 					require.Equal(t, !selected0, result.IsNull(0))
 					if selected0 {
-						require.True(t, vector.GetFixedAtNoTypeCheck[bool](result, 0))
+						require.False(t, vector.GetFixedAtNoTypeCheck[bool](result, 0))
 					}
 					require.Equal(t, !selected1 || op == "=", result.IsNull(1))
 					if selected1 && op == "<=>" {
@@ -2970,7 +2984,7 @@ func TestPreparedJSONComparisonSelection(t *testing.T) {
 				result, err := executor.Eval(proc, []*batch.Batch{bat}, []bool{true, false})
 				require.NoError(t, err)
 				require.False(t, result.IsNull(0))
-				require.True(t, vector.GetFixedAtNoTypeCheck[bool](result, 0))
+				require.False(t, vector.GetFixedAtNoTypeCheck[bool](result, 0))
 				require.True(t, result.IsNull(1))
 			})
 		}
@@ -3568,6 +3582,70 @@ func TestFlowControlShortCircuitInvalidCast(t *testing.T) {
 		require.Equal(t, []bool{false, true, false}, vector.MustFixedColWithTypeCheck[bool](result))
 	})
 
+	t.Run("integer in-list compaction and reset", func(t *testing.T) {
+		list := vector.NewVec(types.T_int64.ToType())
+		defer list.Free(proc.Mp())
+		for i := int64(0); i < 32; i += 2 {
+			require.NoError(t, vector.AppendFixed(list, i, false, proc.Mp()))
+		}
+		list.SetSorted(true)
+		data, err := list.MarshalBinary()
+		require.NoError(t, err)
+		values := []int64{-1, 0, 1, 2, 30, 31}
+		input := testutil.NewBatchWithVectors([]*vector.Vector{
+			testutil.NewVector(6, types.T_bool.ToType(), proc.Mp(), false, []bool{false, true, true, true, true, true}),
+			testutil.NewVector(6, types.T_int64.ToType(), proc.Mp(), false, values),
+		}, nil)
+		defer input.Clean(proc.Mp())
+		input.Vecs[1].GetNulls().Add(5)
+		for _, name := range []string{"in", "not_in"} {
+			t.Run(name, func(t *testing.T) {
+				listExpr := &plan.Expr{Typ: plan.Type{Id: int32(types.T_int64)}, Expr: &plan.Expr_Vec{Vec: &plan.LiteralVec{Len: 16, Data: data}}}
+				expr := bindTestFunction(t, proc, "if", column(0, types.T_bool.ToType()), bindTestFunction(t, proc, name, column(1, types.T_int64.ToType()), listExpr), makePlan2BoolConstExprWithType(false))
+				executor, err := NewExpressionExecutor(proc, expr)
+				require.NoError(t, err)
+				defer executor.Free()
+				for _, mask := range [][]bool{nil, {true, false, true, true, true, true}, {false, false, false, false, false, false}, nil} {
+					result, err := executor.Eval(proc, []*batch.Batch{input}, mask)
+					require.NoError(t, err)
+					for i, v := range values {
+						wantNull := i == 5 || mask != nil && !mask[i]
+						require.Equal(t, wantNull, result.IsNull(uint64(i)), "row %d", i)
+						if !wantNull {
+							want := false
+							if i > 0 {
+								want = (v >= 0 && v < 32 && v%2 == 0) != (name == "not_in")
+							}
+							require.Equal(t, want, vector.GetFixedAtWithTypeCheck[bool](result, i), "row %d", i)
+						}
+					}
+					executor.ResetForNextQuery()
+				}
+			})
+		}
+	})
+	t.Run("integer in-list refreshes prepared values", func(t *testing.T) {
+		input := testutil.NewBatchWithVectors([]*vector.Vector{
+			testutil.NewVector(3, types.T_int64.ToType(), proc.Mp(), false, []int64{1, 2, 3}),
+		}, nil)
+		defer input.Clean(proc.Mp())
+		param := &plan.Expr{Typ: plan.Type{Id: int32(types.T_text)}, Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}}}
+		list := &plan.Expr{Typ: plan.Type{Id: int32(types.T_int64)}, Expr: &plan.Expr_List{List: &plan.ExprList{List: []*plan.Expr{
+			bindTestCast(t, proc, 0, param, types.T_int64.ToType()), makePlan2Int64ConstExprWithType(2),
+		}}}}
+		executor, err := NewExpressionExecutor(proc, bindTestFunction(t, proc, "in", column(0, types.T_int64.ToType()), list))
+		require.NoError(t, err)
+		defer executor.Free()
+		for _, tc := range []struct {
+			value string
+			want  []bool
+		}{{"1", []bool{true, true, false}}, {"3", []bool{false, true, true}}, {"1", []bool{true, true, false}}} {
+			result := evalTestTextParameter(t, proc, executor, tc.value, false, vector.PrepareParamNone, []*batch.Batch{input}, nil)
+			require.Equal(t, tc.want, vector.MustFixedColWithTypeCheck[bool](result))
+			executor.ResetForNextQuery()
+		}
+	})
+
 	t.Run("case preserves first match across multiple when clauses and reuse", func(t *testing.T) {
 		expr := bindTestFunction(t, proc, "case",
 			column(0, types.T_bool.ToType()),
@@ -4088,6 +4166,168 @@ func TestPreparedCastLifecycle(t *testing.T) {
 	})
 }
 
+func TestExplicitDecimalCastRowDiagnostics(t *testing.T) {
+	for _, targetOID := range []types.T{types.T_decimal64, types.T_decimal128, types.T_decimal256} {
+		for _, source := range []struct {
+			name string
+			typ  types.Type
+			lit  *plan.Literal
+		}{
+			{"integer", types.T_int64.ToType(), &plan.Literal{Value: &plan.Literal_I64Val{I64Val: 1000}}},
+			{"float", types.T_float64.ToType(), &plan.Literal{Value: &plan.Literal_Dval{Dval: 1000}}},
+			{"decimal", types.New(types.T_decimal64, 7, 3), &plan.Literal{Value: &plan.Literal_Decimal64Val{Decimal64Val: &plan.Decimal64{A: 1000000}}}},
+			{"string control", types.T_varchar.ToType(), &plan.Literal{Value: &plan.Literal_Sval{Sval: "1000"}}},
+			{"prepared integer transport", types.T_text.ToType(), nil},
+		} {
+			t.Run(fmt.Sprintf("%s/%s", targetOID, source.name), func(t *testing.T) {
+				proc := testutil.NewProcess(t, testutil.WithFileService(nil))
+				checkExpressionStorageAfterCleanup(t, proc)
+				proc.SetBaseProcessRunningStatus(true)
+				sink := &decimalCastWarningSink{}
+				proc.WarningSink = sink
+				arg := &plan.Expr{Typ: source.typ.PlanType(), Expr: &plan.Expr_Lit{Lit: source.lit}}
+				if source.lit == nil {
+					arg.Expr = &plan.Expr_P{P: &plan.ParamRef{Pos: 0}}
+				}
+				expr := bindTestCast(t, proc, 1, arg, types.New(targetOID, 5, 2))
+				executor, err := NewExpressionExecutor(proc, expr)
+				require.NoError(t, err)
+				t.Cleanup(executor.Free)
+				input := batch.New(nil)
+				t.Cleanup(func() { input.Clean(proc.Mp()) })
+				eval := func(rows int, mask []bool) *vector.Vector {
+					t.Helper()
+					input.SetRowCount(rows)
+					if source.lit == nil {
+						return evalTestTextParameter(t, proc, executor, "1000", false, vector.PrepareParamInteger, []*batch.Batch{input}, mask)
+					}
+					result, err := executor.Eval(proc, []*batch.Batch{input}, mask)
+					require.NoError(t, err)
+					return result
+				}
+				result := eval(4, []bool{false, false, false, false})
+				require.Empty(t, sink.codes)
+				for row := range 4 {
+					require.True(t, result.IsNull(uint64(row)))
+				}
+				for _, stage := range []struct {
+					rows int
+					mask []bool
+					want int
+				}{
+					{4, []bool{true, false, true, false}, 2},
+					{3, nil, 5},
+				} {
+					result = eval(stage.rows, stage.mask)
+					require.Len(t, sink.codes, stage.want)
+					for row := range stage.rows {
+						if stage.mask != nil && !stage.mask[row] {
+							require.True(t, result.IsNull(uint64(row)))
+							continue
+						}
+						require.False(t, result.IsNull(uint64(row)))
+						var value string
+						switch targetOID {
+						case types.T_decimal64:
+							value = vector.GetFixedAtNoTypeCheck[types.Decimal64](result, row).Format(2)
+						case types.T_decimal128:
+							value = vector.GetFixedAtNoTypeCheck[types.Decimal128](result, row).Format(2)
+						case types.T_decimal256:
+							value = vector.GetFixedAtNoTypeCheck[types.Decimal256](result, row).Format(2)
+						}
+						require.Equal(t, "999.99", value)
+					}
+				}
+				executor.ResetForNextQuery()
+				eval(1, nil)
+				require.Equal(t, []uint16{1264, 1264, 1264, 1264, 1264, 1264}, sink.codes)
+			})
+		}
+	}
+}
+
+type decimalCastWarningSink struct{ codes []uint16 }
+
+func (s *decimalCastWarningSink) AppendWarningDiagnostic(code uint16, _ string) {
+	s.codes = append(s.codes, code)
+}
+
+func TestDecimalCastFoldingBoundaries(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		overload int32
+		null     bool
+		fold     bool
+	}{
+		{"silent implicit cast", 0, false, true},
+		{"silent explicit cast", 1, false, false},
+		{"NULL explicit cast", 1, true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t, testutil.WithFileService(nil))
+			checkExpressionStorageAfterCleanup(t, proc)
+			sink := &decimalCastWarningSink{}
+			proc.WarningSink = sink
+			source := &plan.Expr{Typ: types.T_int64.ToType().PlanType(), Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+				Isnull: tc.null, Value: &plan.Literal_I64Val{I64Val: 999},
+			}}}
+			executor, err := NewExpressionExecutor(proc, bindTestCast(t, proc, tc.overload, source, types.New(types.T_decimal64, 5, 2)))
+			require.NoError(t, err)
+			t.Cleanup(executor.Free)
+			input := batch.New(nil)
+			t.Cleanup(func() { input.Clean(proc.Mp()) })
+			input.SetRowCount(2)
+			result, err := executor.Eval(proc, []*batch.Batch{input}, nil)
+			require.NoError(t, err)
+			require.Equal(t, tc.fold, executor.(*FunctionExpressionExecutor).folded.canFold)
+			for row := range 2 {
+				require.Equal(t, tc.null, result.IsNull(uint64(row)))
+				if !tc.null {
+					require.Equal(t, types.Decimal64(99900), vector.GetFixedAtNoTypeCheck[types.Decimal64](result, row))
+				}
+			}
+			require.Empty(t, sink.codes)
+		})
+	}
+
+	for _, joinBuild := range []bool{false, true} {
+		t.Run(fmt.Sprintf("diagnostic owner/join=%v", joinBuild), func(t *testing.T) {
+			proc := testutil.NewProcess(t, testutil.WithFileService(nil))
+			checkExpressionStorageAfterCleanup(t, proc)
+			sink := &decimalCastWarningSink{}
+			proc.WarningSink = sink
+			source := &plan.Expr{Typ: types.T_int64.ToType().PlanType(), Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_I64Val{I64Val: 1000}}}}
+			cast := bindTestCast(t, proc, 1, source, types.New(types.T_decimal64, 5, 2))
+			expr := bindTestFunction(t, proc, "abs", cast)
+			owner := new(DeferredJoinDiagnostic)
+			owner.Prepare(proc)
+			t.Cleanup(owner.Reset)
+			var executors []ExpressionExecutor
+			var err error
+			if joinBuild {
+				executors, err = NewJoinBuildExpressionExecutors(proc, []*plan.Expr{expr}, nil, owner)
+			} else {
+				executors, err = NewOwnedConstantFilterExecutors(proc, []*plan.Expr{expr})
+			}
+			require.NoError(t, err)
+			for _, executor := range executors {
+				t.Cleanup(executor.Free)
+			}
+			input := batch.New(nil)
+			t.Cleanup(func() { input.Clean(proc.Mp()) })
+			for _, rows := range []int{2, 3} {
+				input.SetRowCount(rows)
+				_, err := executors[0].Eval(proc, []*batch.Batch{input}, nil)
+				require.NoError(t, err)
+			}
+			require.Equal(t, []uint16{1264, 1264, 1264, 1264, 1264}, sink.codes,
+				"the owner must not fold or defer a nested row-scoped conversion")
+			require.NoError(t, owner.Activate(proc))
+			require.Len(t, sink.codes, 5, "activation must not replay row diagnostics")
+		})
+	}
+}
+
 type preparedCastWarningSession struct {
 	warningCount int
 }
@@ -4571,4 +4811,299 @@ func TestRegisteredXorSelectionAndFolding(t *testing.T) {
 			require.True(t, vector.GetFixedAtWithTypeCheck[bool](result, 1))
 		}
 	})
+}
+
+func TestJSONStringEltEvaluatesOnlySelectedSubtree(t *testing.T) {
+	proc := testutil.NewProcess(t, testutil.WithFileService(nil))
+	checkExpressionStorageAfterCleanup(t, proc)
+	input := batch.NewWithSize(3)
+	defer input.Clean(proc.Mp())
+	input.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	input.Vecs[1] = vector.NewVec(types.T_json.ToType())
+	input.Vecs[2] = vector.NewVec(types.T_varchar.ToType())
+	for _, n := range []int64{1, 2} {
+		require.NoError(t, vector.AppendFixed(input.Vecs[0], n, false, proc.Mp()))
+	}
+	for _, value := range []string{`{"p":1}`, `{"p":2}`} {
+		encoded, err := types.ParseStringToByteJson(value)
+		require.NoError(t, err)
+		data, err := encoded.Marshal()
+		require.NoError(t, err)
+		require.NoError(t, vector.AppendBytes(input.Vecs[1], data, false, proc.Mp()))
+	}
+	for _, value := range []string{`not json`, `{"q":3}`} {
+		require.NoError(t, vector.AppendBytes(input.Vecs[2], []byte(value), false, proc.Mp()))
+	}
+	input.SetRowCount(2)
+	column := func(pos int32, typ types.Type) *plan.Expr {
+		return &plan.Expr{Typ: typ.PlanType(), Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: pos}}}
+	}
+	cast := bindTestCast(t, proc, 1, column(2, types.T_varchar.ToType()), types.T_json.ToType())
+	bound := bindTestFunction(t, proc, "elt", column(0, types.T_int64.ToType()), column(1, types.T_json.ToType()), cast)
+	_, overload := function.DecodeOverloadID(bound.GetF().GetFunc().GetObj())
+	require.Equal(t, int32(1), overload)
+	executor, err := NewExpressionExecutor(proc, bound)
+	require.NoError(t, err)
+	defer executor.Free()
+	result, err := executor.Eval(proc, []*batch.Batch{input}, nil)
+	require.NoError(t, err)
+	require.Equal(t, `{"p": 1}`, string(result.GetBytesAt(0)))
+	require.Equal(t, `{"q": 3}`, string(result.GetBytesAt(1)))
+	executor.ResetForNextQuery()
+	// Selecting the malformed conversion must still report its error.
+	vector.MustFixedColNoTypeCheck[int64](input.Vecs[0])[0] = 2
+	_, err = executor.Eval(proc, []*batch.Batch{input}, nil)
+	require.Error(t, err)
+	executor.ResetForNextQuery()
+	// The masked bad row cannot poison a valid selected row.
+	result, err = executor.Eval(proc, []*batch.Batch{input}, []bool{false, true})
+	require.NoError(t, err)
+	require.True(t, result.IsNull(0))
+	require.Equal(t, `{"q": 3}`, string(result.GetBytesAt(1)))
+	executor.ResetForNextQuery()
+	// Invalid selectors do not evaluate any value subtree.
+	indices := vector.MustFixedColNoTypeCheck[int64](input.Vecs[0])
+	indices[0], indices[1] = 0, 3
+	result, err = executor.Eval(proc, []*batch.Batch{input}, nil)
+	require.NoError(t, err)
+	require.True(t, result.IsNull(0))
+	require.True(t, result.IsNull(1))
+}
+
+func TestJSONStringEltDoesNotFoldUnselectedCast(t *testing.T) {
+	proc := testutil.NewProcess(t, testutil.WithFileService(nil))
+	checkExpressionStorageAfterCleanup(t, proc)
+	input := batch.NewWithSize(2)
+	defer input.Clean(proc.Mp())
+	input.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	input.Vecs[1] = vector.NewVec(types.T_json.ToType())
+	require.NoError(t, vector.AppendFixed(input.Vecs[0], int64(1), false, proc.Mp()))
+	value, err := types.ParseStringToByteJson(`{"p":1}`)
+	require.NoError(t, err)
+	data, err := value.Marshal()
+	require.NoError(t, err)
+	require.NoError(t, vector.AppendBytes(input.Vecs[1], data, false, proc.Mp()))
+	input.SetRowCount(1)
+	column := func(pos int32, typ types.Type) *plan.Expr {
+		return &plan.Expr{Typ: typ.PlanType(), Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: pos}}}
+	}
+	malformed := &plan.Expr{Typ: types.T_varchar.ToType().PlanType(), Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Sval{Sval: "not json"}}}}
+	cast := bindTestCast(t, proc, 1, malformed, types.T_json.ToType())
+	expression := bindTestFunction(t, proc, "elt", column(0, types.T_int64.ToType()), column(1, types.T_json.ToType()), cast)
+	executor, err := NewExpressionExecutor(proc, expression)
+	require.NoError(t, err)
+	defer executor.Free()
+	result, err := executor.Eval(proc, []*batch.Batch{input}, nil)
+	require.NoError(t, err)
+	require.Equal(t, `{"p": 1}`, string(result.GetBytesAt(0)))
+	executor.ResetForNextQuery()
+	vector.MustFixedColNoTypeCheck[int64](input.Vecs[0])[0] = 2
+	_, err = executor.Eval(proc, []*batch.Batch{input}, nil)
+	require.Error(t, err)
+}
+
+// Exercise the registered overload through runtime folding, rather than calling
+// its kernel directly: literal diagnostics belong to every selected input row.
+func TestBitCountDiagnosticFolding(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		source *plan.Expr
+		want   uint64
+		fold   bool
+	}{
+		{"text", &plan.Expr{Typ: plan.Type{Id: int32(types.T_varchar)}, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Sval{Sval: "3x"}}}}, 2, false},
+		{"valid_text", &plan.Expr{Typ: plan.Type{Id: int32(types.T_varchar)}, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Sval{Sval: "3 "}}}}, 2, true},
+		{"binary", &plan.Expr{Typ: plan.Type{Id: int32(types.T_varbinary)}, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Sval{Sval: "3x"}}}}, 8, true},
+		{"numeric", makePlan2Int64ConstExprWithType(3), 2, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t, testutil.WithFileService(nil))
+			checkExpressionStorageAfterCleanup(t, proc)
+			session := &preparedCastWarningSession{}
+			proc.Session = session
+			executor, err := NewExpressionExecutor(proc, bindTestFunction(t, proc, "bit_count", tc.source))
+			if executor != nil {
+				t.Cleanup(executor.Free)
+			}
+			require.NoError(t, err)
+			input := batch.New(nil)
+			t.Cleanup(func() { input.Clean(proc.Mp()) })
+			input.SetRowCount(3)
+			for _, mask := range [][]bool{nil, {false, true, true}, {false, false, false}} {
+				executor.ResetForNextQuery()
+				session.warningCount = 0
+				result, err := executor.Eval(proc, []*batch.Batch{input}, mask)
+				require.NoError(t, err)
+				require.Equal(t, 3, result.Length())
+				selected := 0
+				for row := 0; row < 3; row++ {
+					if mask == nil || mask[row] {
+						selected++
+						require.False(t, result.IsNull(uint64(row)))
+						require.Equal(t, tc.want, vector.GetFixedAtNoTypeCheck[uint64](result, row))
+					}
+				}
+				if tc.fold {
+					require.Zero(t, session.warningCount)
+				} else {
+					require.Equal(t, selected, session.warningCount)
+				}
+				if selected > 0 {
+					require.Equal(t, tc.fold, executor.(*FunctionExpressionExecutor).folded.canFold)
+					require.True(t, result.IsConst(), "value constancy must survive diagnostics")
+				}
+			}
+			executor.ResetForNextQuery()
+			session.warningCount = 0
+			input.SetRowCount(0)
+			result, err := executor.Eval(proc, []*batch.Batch{input}, nil)
+			require.NoError(t, err)
+			require.Zero(t, result.Length())
+			require.Zero(t, session.warningCount)
+		})
+	}
+}
+
+func TestDiagnosticScalarValues(t *testing.T) {
+	proc := testutil.NewProcess(t, testutil.WithFileService(nil))
+	checkExpressionStorageAfterCleanup(t, proc)
+	sink := &preparedCastWarningSession{}
+	proc.WarningSink = sink
+	text := func(value string) *plan.Expr {
+		return &plan.Expr{Typ: plan.Type{Id: int32(types.T_varchar)}, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Sval{Sval: value}}}}
+	}
+	bits := bindTestFunction(t, proc, "bit_count", text("3x"))
+	converted := bindTestCast(t, proc, 0, bits, types.T_varchar.ToType())
+	joined := bindTestFunction(t, proc, "concat", text("["), converted, text("]"))
+	decimal := bindTestCast(t, proc, 1, bits, types.New(types.T_decimal64, 18, 0))
+	decimalText := bindTestCast(t, proc, 0, decimal, types.T_varchar.ToType())
+	for _, expr := range []*plan.Expr{
+		joined,
+		bindTestFunction(t, proc, "concat", text("["), decimalText, text("]")),
+		bindTestFunction(t, proc, "if", makePlan2BoolConstExprWithType(true), joined, text("unused")),
+	} {
+		func() {
+			executor, err := NewExpressionExecutor(proc, expr)
+			require.NoError(t, err)
+			defer executor.Free()
+			input := batch.New(nil)
+			defer input.Clean(proc.Mp())
+			input.SetRowCount(3)
+			// Reuse without reset: a scalar output must never cache away effects.
+			for _, mask := range [][]bool{nil, {false, true, true}, nil, {false, false, false}} {
+				sink.warningCount = 0
+				got, err := executor.Eval(proc, []*batch.Batch{input}, mask)
+				require.NoError(t, err)
+				selected := 0
+				for row := 0; row < 3; row++ {
+					if mask == nil || mask[row] {
+						selected++
+						require.Equal(t, "[2]", got.GetStringAt(row))
+					}
+				}
+				require.Equal(t, selected, sink.warningCount)
+				require.False(t, executor.(*FunctionExpressionExecutor).folded.canFold)
+				if selected > 0 {
+					require.True(t, got.IsConst())
+				}
+			}
+		}()
+	}
+
+	// Physical batch constancy does not make a column a scalar SQL expression.
+	column := &plan.Expr{Typ: plan.Type{Id: int32(types.T_varchar)}, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}}
+	executor, err := NewExpressionExecutor(proc, bindTestFunction(t, proc, "bit_count", column))
+	require.NoError(t, err)
+	defer executor.Free()
+	input := batch.NewWithSize(1)
+	defer input.Clean(proc.Mp())
+	input.Vecs[0], err = vector.NewConstBytes(types.T_varchar.ToType(), []byte("3x"), 3, proc.Mp())
+	require.NoError(t, err)
+	input.SetRowCount(3)
+	sink.warningCount = 0
+	got, err := executor.Eval(proc, []*batch.Batch{input}, nil)
+	require.NoError(t, err)
+	require.False(t, got.IsConst())
+	require.Equal(t, 3, sink.warningCount)
+	for row := 0; row < 3; row++ {
+		require.Equal(t, uint64(2), vector.GetFixedAtNoTypeCheck[uint64](got, row))
+	}
+
+	conditions := batch.NewWithSize(1)
+	defer conditions.Clean(proc.Mp())
+	conditions.Vecs[0] = vector.NewVec(types.T_bool.ToType())
+	require.NoError(t, vector.AppendFixedList(conditions.Vecs[0], []bool{true, false, true}, nil, proc.Mp()))
+	conditions.SetRowCount(3)
+	condition := &plan.Expr{Typ: plan.Type{Id: int32(types.T_bool)}, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}}
+	for _, tc := range []struct {
+		name     string
+		expr     *plan.Expr
+		warnings int
+	}{
+		{"volatile", bindTestFunction(t, proc, "rand"), 0},
+		{"column_condition", bindTestFunction(t, proc, "if", condition, bits, bindTestFunction(t, proc, "bit_count", text("3"))), 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			executor, err := NewExpressionExecutor(proc, tc.expr)
+			require.NoError(t, err)
+			defer executor.Free()
+			sink.warningCount = 0
+			got, err := executor.Eval(proc, []*batch.Batch{conditions}, nil)
+			require.NoError(t, err)
+			require.False(t, got.IsConst())
+			require.Equal(t, tc.warnings, sink.warningCount)
+			if tc.name == "column_condition" {
+				for row := 0; row < 3; row++ {
+					require.Equal(t, uint64(2), vector.GetFixedAtNoTypeCheck[uint64](got, row))
+				}
+			}
+		})
+	}
+}
+
+func TestBitCountDiagnosticFoldPreparedReuse(t *testing.T) {
+	proc := testutil.NewProcess(t, testutil.WithFileService(nil))
+	checkExpressionStorageAfterCleanup(t, proc)
+	wasRunning := proc.GetBaseProcessRunningStatus()
+	t.Cleanup(func() { proc.SetBaseProcessRunningStatus(wasRunning) })
+	proc.SetBaseProcessRunningStatus(true)
+	sink := &preparedCastWarningSession{}
+	proc.WarningSink = sink
+	parameter := &plan.Expr{Typ: plan.Type{Id: int32(types.T_text)}, Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}}}
+	// Bind the text overload explicitly; untyped BIT_COUNT markers keep their
+	// separate binary dispatch contract in the binder.
+	executor, err := NewExpressionExecutor(proc, bindTestFunction(t, proc, "bit_count", parameter))
+	if executor != nil {
+		t.Cleanup(executor.Free)
+	}
+	require.NoError(t, err)
+	input := batch.New(nil)
+	t.Cleanup(func() { input.Clean(proc.Mp()) })
+	input.SetRowCount(3)
+	for _, tc := range []struct {
+		value string
+		null  bool
+		fold  bool
+	}{
+		{"3", false, true}, {"3x", false, false}, {"", true, true}, {"3 ", false, true}, {"3x", false, false},
+	} {
+		executor.ResetForNextQuery()
+		sink.warningCount = 0
+		result := evalTestTextParameter(t, proc, executor, tc.value, tc.null, vector.PrepareParamNone, []*batch.Batch{input}, nil)
+		require.Equal(t, tc.fold, executor.(*FunctionExpressionExecutor).folded.canFold, tc.value)
+		require.True(t, result.IsConst(), tc.value)
+		require.Equal(t, 3, result.Length())
+		for row := 0; row < 3; row++ {
+			require.Equal(t, tc.null, result.IsNull(uint64(row)))
+			if !tc.null {
+				require.Equal(t, uint64(2), vector.GetFixedAtNoTypeCheck[uint64](result, row))
+			}
+		}
+		if tc.fold {
+			require.Zero(t, sink.warningCount)
+		} else {
+			require.Equal(t, 3, sink.warningCount, "the scalar probe must not leak a fourth warning")
+		}
+		require.Same(t, sink, proc.WarningSink)
+	}
 }

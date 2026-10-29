@@ -16,29 +16,23 @@
 #include "sorted64.h"
 #include <stdint.h>
 
-// Per-candidate membership predicate. `data` is a membership_filter_t carrying
+// Per-candidate membership predicate. `data` is a mo_membership_t carrying
 // the docfilter C handle + its kind; each usearch key (a uint64) is tested
 // against the structure matching that kind. A NULL handle keeps every key.
-typedef struct membership_filter_t {
-    void *filter;
-    int kind;
-} membership_filter_t;
-
 static int filtered_search_membership_cb(usearch_key_t key, void *data) {
-    membership_filter_t *mf = (membership_filter_t *)data;
-    if (!mf || !mf->filter) {
+    const mo_membership_t *m = (const mo_membership_t *)data;
+    if (!m || !m->filter) {
         return 1; // no filter -> keep all
     }
-    switch (mf->kind) {
-        case USEARCHEX_FILTER_BLOOM:
-            return bloomfilter_test((bloomfilter_t *)mf->filter,
+    switch (m->kind) {
+        case MO_MEMBERSHIP_BLOOM:
+            return bloomfilter_test((bloomfilter_t *)m->filter,
                                     (const char *)&key, sizeof(usearch_key_t));
-        case USEARCHEX_FILTER_CBITMAP:
-            return mo_cbitmap_contain(mf->filter, (uint64_t)key) ? 1 : 0;
-        case USEARCHEX_FILTER_CROARING:
-            return mo_croaring_contains(mf->filter, (uint64_t)key) ? 1 : 0;
-        case USEARCHEX_FILTER_SORTED64:
-            return mo_sorted64_contains(mf->filter, (uint64_t)key) ? 1 : 0;
+        case MO_MEMBERSHIP_CROARING:
+            return mo_croaring_contains((void *)m->filter, (uint64_t)key) ? 1 : 0;
+        case MO_MEMBERSHIP_CBITMAP:
+        case MO_MEMBERSHIP_SORTED64:
+            return mo_membership_exact_contains(m, (uint64_t)key) ? 1 : 0;
         default:
             // Unknown kind: fail CLOSED (exclude). Keeping the candidate here
             // would silently disable filtering for the whole search. The Go
@@ -51,19 +45,20 @@ static int filtered_search_membership_cb(usearch_key_t key, void *data) {
 size_t usearchex_filtered_search_with_membership(
     usearch_index_t index,
     void const* query_vector, usearch_scalar_kind_t query_kind, size_t count,
-    void *filter, int filter_kind,
+    void *filter, int filter_kind, int exact,
     usearch_key_t* keys, usearch_distance_t* distances, usearch_error_t* error) {
 
-    membership_filter_t mf;
-    mf.filter = filter;
-    mf.kind = filter_kind;
+    mo_membership_t m;
+    m.filter = filter;
+    m.kind = filter_kind;
 
     return usearch_filtered_search((usearch_index_t)index,
             query_vector,
             (usearch_scalar_kind_t)query_kind,
             count,
             filtered_search_membership_cb,
-            &mf,
+            &m,
+            exact != 0,
             keys,
             distances,
             error);

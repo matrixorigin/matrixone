@@ -27,6 +27,12 @@ import (
 
 func timestampPairTypeCheck(overloads []overload, inputs []types.Type) checkResult {
 	if len(inputs) == 1 {
+		if inputs[0].Oid == types.T_any || isTimestampPairString(inputs[0].Oid) {
+			// String/unknown input must not pass through a provisional DATE cast.
+			matched := fixedTypeMatch(overloads[3:5], inputs)
+			matched.idx += 3
+			return matched
+		}
 		return fixedTypeMatch(overloads, inputs)
 	}
 	if len(inputs) != 2 || len(overloads) <= 5 {

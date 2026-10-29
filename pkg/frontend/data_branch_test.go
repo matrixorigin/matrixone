@@ -280,7 +280,7 @@ func TestFormatValIntoString_ControlByteRoundTrip(t *testing.T) {
 
 func TestFormatValIntoString_BinaryHexLiteral(t *testing.T) {
 	val := []byte{'x', 0x00, '\\', 0x07, '\''}
-	for _, oid := range []types.T{types.T_binary, types.T_varbinary, types.T_blob} {
+	for _, oid := range []types.T{types.T_varbinary, types.T_blob} {
 		t.Run(oid.String(), func(t *testing.T) {
 			var buf bytes.Buffer
 			require.NoError(t, formatValIntoString(&Session{}, val, types.New(oid, 0, 0), &buf))
@@ -295,6 +295,26 @@ func TestFormatValIntoString_BinaryHexLiteral(t *testing.T) {
 			require.Equal(t, `x'7800'`, buf.String())
 		})
 	}
+}
+
+func TestFormatValIntoString_BinaryTypedLiteral(t *testing.T) {
+	for _, width := range []int32{1, 255} {
+		for _, tc := range []struct {
+			value any
+			hex   string
+		}{
+			{[]byte{}, ""},
+			{[]byte{0xff, 0x00, '\\', '\''}, "ff005c27"},
+			{"AB\x00", "414200"},
+		} {
+			var buf bytes.Buffer
+			require.NoError(t, formatValIntoString(&Session{}, tc.value, types.New(types.T_binary, width, 0), &buf))
+			require.Equal(t, fmt.Sprintf("serial_extract(serial(x'%s'),0 as BINARY(%d))", tc.hex, width), buf.String())
+		}
+	}
+	var buf bytes.Buffer
+	require.NoError(t, formatValIntoString(&Session{}, nil, types.New(types.T_binary, 255, 0), &buf))
+	require.Equal(t, "NULL", buf.String())
 }
 
 func TestFormatValIntoString_Time(t *testing.T) {
@@ -380,14 +400,14 @@ func TestFormatValIntoString_FloatLiterals(t *testing.T) {
 		{"float32 negative zero", math.Float32frombits(0x80000000), types.T_float32.ToType(), "bit_cast(unhex('00000080') as float)"},
 		{"float32 NaN payload 0", math.Float32frombits(0x7fc00000), types.T_float32.ToType(), "bit_cast(unhex('0000c07f') as float)"},
 		{"float32 NaN payload 1", math.Float32frombits(0x7fc00001), types.T_float32.ToType(), "bit_cast(unhex('0100c07f') as float)"},
-		{"float32 positive infinity", float32(math.Inf(1)), types.T_float32.ToType(), "cast('+Inf' as float)"},
-		{"float32 negative infinity", float32(math.Inf(-1)), types.T_float32.ToType(), "cast('-Inf' as float)"},
+		{"float32 positive infinity", float32(math.Inf(1)), types.T_float32.ToType(), "bit_cast(unhex('0000807f') as float)"},
+		{"float32 negative infinity", float32(math.Inf(-1)), types.T_float32.ToType(), "bit_cast(unhex('000080ff') as float)"},
 		{"float64 finite", 1.25, types.T_float64.ToType(), "1.25"},
 		{"float64 negative zero", math.Float64frombits(0x8000000000000000), types.T_float64.ToType(), "bit_cast(unhex('0000000000000080') as double)"},
 		{"float64 NaN payload 0", math.Float64frombits(0x7ff8000000000000), types.T_float64.ToType(), "bit_cast(unhex('000000000000f87f') as double)"},
 		{"float64 NaN payload 1", math.Float64frombits(0x7ff8000000000001), types.T_float64.ToType(), "bit_cast(unhex('010000000000f87f') as double)"},
-		{"float64 positive infinity", math.Inf(1), types.T_float64.ToType(), "cast('+Inf' as double)"},
-		{"float64 negative infinity", math.Inf(-1), types.T_float64.ToType(), "cast('-Inf' as double)"},
+		{"float64 positive infinity", math.Inf(1), types.T_float64.ToType(), "bit_cast(unhex('000000000000f07f') as double)"},
+		{"float64 negative infinity", math.Inf(-1), types.T_float64.ToType(), "bit_cast(unhex('000000000000f0ff') as double)"},
 	}
 
 	for _, tt := range tests {
@@ -410,7 +430,7 @@ func TestFormatValIntoStringWithFloatCast(t *testing.T) {
 		{"float32 NaN", math.Float32frombits(0x7fc00001), types.T_float32.ToType(), "bit_cast(unhex('0100c07f') as float)"},
 		{"float32 negative zero", math.Float32frombits(0x80000000), types.T_float32.ToType(), "bit_cast(unhex('00000080') as float)"},
 		{"float64 finite", 1.25, types.T_float64.ToType(), "cast(1.25 as double)"},
-		{"float64 infinity", math.Inf(1), types.T_float64.ToType(), "cast('+Inf' as double)"},
+		{"float64 infinity", math.Inf(1), types.T_float64.ToType(), "bit_cast(unhex('000000000000f07f') as double)"},
 		{"float64 negative zero", math.Float64frombits(0x8000000000000000), types.T_float64.ToType(), "bit_cast(unhex('0000000000000080') as double)"},
 		{"non-float unchanged", int64(7), types.T_int64.ToType(), "7"},
 	}
@@ -1225,6 +1245,8 @@ func newValidateSession(t testing.TB) *Session {
 	t.Helper()
 
 	proc := testutil.NewProcess(t)
+	proc.Base.SessionInfo.Account = sysAccountName
+	proc.Base.SessionInfo.Role = moAdminRoleName
 	service := "validate-output-dir"
 
 	InitServerLevelVars(service)

@@ -35,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
@@ -44,6 +45,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"github.com/matrixorigin/matrixone/pkg/util/sysview"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -82,6 +84,7 @@ type TxnCompilerContext struct {
 	tcw     ComputationWrapper
 	execCtx *ExecCtx
 	// cached backExec for subscription meta queries, reused within the same transaction
+	viewSchemaRead bool
 	cachedBackExec BackgroundExec
 	mu             sync.Mutex
 }
@@ -342,6 +345,11 @@ func (tcc *TxnCompilerContext) resolvePhysicalObjectAccount(
 	snapshot *plan2.Snapshot,
 ) uint32 {
 	accountID := tcc.execCtx.ses.GetAccountId()
+	if tcc.viewSchemaRead {
+		if current, err := defines.GetAccountId(tcc.GetContext()); err == nil {
+			accountID = current
+		}
+	}
 	if snapshot != nil && snapshot.Tenant != nil {
 		accountID = snapshot.Tenant.TenantID
 	}
@@ -621,7 +629,10 @@ func (tcc *TxnCompilerContext) recoverLegacyTinyText(
 	}); err != nil {
 		return err
 	}
-	return plan2.MigrateLegacyHexTableDef(tcc.GetProcess(), tableDef)
+	if err := plan2.MigrateLegacyFloatStringTableDef(tcc, tableDef); err != nil {
+		return err
+	}
+	return plan2.MigrateLegacyCatalogTableDef(ctx, tcc.GetProcess(), tableDef)
 }
 
 func (tcc *TxnCompilerContext) ensureDatabaseIsNotEmpty(dbName string, checkSub bool, snapshot *plan2.Snapshot) (string, *plan.SubscriptionMeta, error) {
@@ -710,6 +721,28 @@ func (tcc *TxnCompilerContext) ResolveSubscriptionTableById(tableId uint64, subM
 	return obj, tableDef, nil
 }
 
+// ResolveForDrop also forgets a stale session alias when planning cannot find
+// its physical relation. General resolution must remain free of DDL side effects.
+func (tcc *TxnCompilerContext) ResolveForDrop(dbName, tableName string) (*plan2.ObjectRef, *plan2.TableDef, error) {
+	ses := tcc.GetSession()
+	physical, temporary := ses.GetTempTable(dbName, tableName)
+	obj, def, err := tcc.Resolve(dbName, tableName, nil)
+	missing := func(err error) bool {
+		return moerr.IsMoErrCode(err, moerr.ErrBadDB) || moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) || moerr.IsMoErrCode(err, moerr.OkExpectedEOB)
+	}
+	if temporary && def == nil && (err == nil || missing(err)) {
+		// Resolve can hide a relation for subscription/view scope reasons.
+		// Confirm absence in the session's own database before changing ownership.
+		_, relation, lookupErr := tcc.getRelation(dbName, physical, nil, nil)
+		if (lookupErr == nil && relation == nil) || missing(lookupErr) {
+			if owner, ok := ses.(process.MissingTemporaryTableForgetter); ok {
+				owner.ForgetMissingTemporaryTable(dbName, tableName, physical)
+			}
+		}
+	}
+	return obj, def, err
+}
+
 func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string, snapshot *plan2.Snapshot) (*plan2.ObjectRef, *plan2.TableDef, error) {
 	start := time.Now()
 	defer func() {
@@ -739,10 +772,32 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string, snapshot
 		}
 	}
 
-	// Check if it is a temporary table in the current session
-	realName, isTmpTable := tcc.GetSession().GetTempTable(dbName, tableName)
-	if isTmpTable {
-		tableName = realName
+	// Session temporary names belong to its account, not to a publisher (or
+	// historical foreign tenant) whose catalog this private View reader uses.
+	useSessionTemporary := true
+	if tcc.viewSchemaRead {
+		identity := &plan2.ObjectRef{SchemaName: dbName, ObjName: tableName}
+		if sub != nil {
+			identity.SchemaName = sub.DbName
+			identity.PubInfo = &plan.PubInfo{TenantId: sub.AccountId}
+		}
+		useSessionTemporary = tcc.resolvePhysicalObjectAccount(identity, nil, snapshot) == tcc.GetSession().GetAccountId()
+	}
+	if useSessionTemporary && tcc.execCtx != nil &&
+		defines.IsPublicationViewBinding(tcc.execCtx.reqCtx) {
+		// Publication scope validation binds persisted objects only. A
+		// temporary table of the validating session would not merely shadow
+		// the persisted schema here (admitting the declaration a subscriber
+		// can never bind), it can also false-reject a healthy persisted
+		// schema, so it stays out of resolution entirely.
+		useSessionTemporary = false
+	}
+	isTmpTable := false
+	if useSessionTemporary {
+		realName, temporary := tcc.GetSession().GetTempTable(dbName, tableName)
+		if temporary {
+			tableName, isTmpTable = realName, true
+		}
 	}
 
 	ctx, table, err := tcc.getRelation(dbName, tableName, sub, snapshot)
@@ -757,8 +812,15 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string, snapshot
 		return nil, nil, err
 	}
 	ownedTemporary := false
-	if owner, ok := tcc.GetSession().(process.TemporaryTableDDL); ok {
+	if owner, ok := tcc.GetSession().(process.TemporaryTableDDL); ok && useSessionTemporary {
 		ownedTemporary = owner.OwnsTemporaryTable(dbName, tableName)
+	}
+	var extraInfo *api.SchemaExtra
+	if tableDef.TableType == catalog.SystemOrdinaryRel && defines.IsTempTableName(tableName) {
+		extraInfo = table.GetExtraInfo()
+	}
+	if !plan2.TemporaryTableAccessAllowed(tcc.GetContext(), tcc.GetSession(), dbName, tableName, tableDef, extraInfo, isTmpTable) {
+		return nil, nil, nil
 	}
 	tableDef.IsTemporary = isTmpTable || ownedTemporary
 
@@ -809,10 +871,15 @@ func (tcc *TxnCompilerContext) ResolveIndexTableByRef(
 		}
 	}
 
-	// Check if it is a temporary table in the current session
-	realName, isTmpTable := tcc.GetSession().GetTempTable(ref.SchemaName, tblName)
-	if isTmpTable {
-		tblName = realName
+	// The caller's temporary index names cannot replace a foreign publisher's
+	// physical index relation in a private View read.
+	isTmpTable := false
+	if !tcc.viewSchemaRead || tcc.resolvePhysicalObjectAccount(ref, nil, snapshot) == tcc.GetSession().GetAccountId() {
+		realName, ok := tcc.GetSession().GetTempTable(ref.SchemaName, tblName)
+		if ok {
+			tblName = realName
+			isTmpTable = true
+		}
 	}
 
 	ctx, table, err := tcc.getRelation(ref.SchemaName, tblName, subMeta, snapshot)
@@ -836,6 +903,13 @@ func (tcc *TxnCompilerContext) ResolveIndexTableByRef(
 	tableDef := plan2.CloneTableDefForPlan(table.GetTableDef(ctx), true)
 	if err := tcc.recoverLegacyTinyText(ctx, ref.SchemaName, tableDef, subMeta, snapshot); err != nil {
 		return nil, nil, err
+	}
+	var extraInfo *api.SchemaExtra
+	if tableDef.TableType == catalog.SystemOrdinaryRel && defines.IsTempTableName(tblName) {
+		extraInfo = table.GetExtraInfo()
+	}
+	if !plan2.TemporaryTableAccessAllowed(tcc.GetContext(), tcc.GetSession(), ref.SchemaName, tblName, tableDef, extraInfo, isTmpTable) {
+		return nil, nil, moerr.NewNoSuchTable(ctx, ref.SchemaName, tblName)
 	}
 	if tableDef.IsTemporary {
 		tableDef.Name = tblName
@@ -1068,8 +1142,11 @@ func (tcc *TxnCompilerContext) ResolveVariable(varName string, isSystemVar, isGl
 
 	ctx := tcc.execCtx.reqCtx
 
-	if val, ok := resolveStoredProcedureVariable(ctx, varName); ok {
-		return val, nil
+	// Procedure locals share ordinary variable lookup, never the system namespace.
+	if !isSystemVar {
+		if val, ok := resolveStoredProcedureVariable(ctx, varName); ok {
+			return val, nil
+		}
 	}
 
 	if isSystemVar {
@@ -1128,6 +1205,24 @@ func (tcc *TxnCompilerContext) ResolveVariableType(varName string, isSystemVar, 
 		return udVar.Type, nil
 	}
 	return inferUserDefinedVarType(udVar.Value), nil
+}
+
+// ResolveVariableRegexpStringResult exposes compatibility-only history without
+// changing ResolveVariableType or general numeric/parameter binding.
+func (tcc *TxnCompilerContext) ResolveVariableRegexpStringResult(varName string) (bool, error) {
+	if tcc.execCtx != nil {
+		if value, typ, declared, ok := resolveStoredProcedureVariableWithType(tcc.execCtx.reqCtx, varName); ok {
+			if !declared {
+				typ = inferUserDefinedVarType(value)
+			}
+			return userVariableRegexpStringResult(typ), nil
+		}
+	}
+	variable, err := tcc.GetSession().GetUserDefinedVar(varName)
+	if err != nil {
+		return false, nil // An absent variable has no assignment history.
+	}
+	return variable.RegexpStringResult || userVariableRegexpStringResult(variable.Type), nil
 }
 
 func (tcc *TxnCompilerContext) ResolveVariableIsBin(varName string, isSystemVar, _ bool) (bool, error) {
@@ -1476,7 +1571,9 @@ func (tcc *TxnCompilerContext) GetSubscriptionMeta(dbName string, snapshot *plan
 		v2.GetSubMetaDurationHistogram.Observe(time.Since(start).Seconds())
 	}()
 
-	tempCtx := tcc.execCtx.reqCtx
+	// Subscription metadata SQL is a trusted catalog read, including when
+	// executed in a cloned historical transaction, not another user root.
+	tempCtx := plan2.ViewSchemaCatalogContext(tcc.execCtx.reqCtx)
 	txn := tcc.GetTxnHandler().GetTxn()
 	if plan2.IsSnapshotValid(snapshot) && snapshot.TS.Less(txn.Txn().SnapshotTS) {
 		txn = txn.CloneSnapshotOp(*snapshot.TS)
@@ -1486,6 +1583,15 @@ func (tcc *TxnCompilerContext) GetSubscriptionMeta(dbName string, snapshot *plan
 		}
 	}
 
+	if tcc.viewSchemaRead && plan2.IsSnapshotValid(snapshot) && snapshot.TS.Less(tcc.GetTxnHandler().GetTxn().SnapshotTS()) {
+		ses := tcc.GetSession()
+		bh := ses.InitBackExec(txn, ses.GetDatabaseName(), fakeDataSetFetcher2)
+		if back, ok := bh.(*backExec); ok {
+			back.backSes.ReplaceDerivedStmt(true)
+		}
+		defer bh.Close()
+		return getSubscriptionMeta(tempCtx, dbName, ses, txn, bh)
+	}
 	bh := tcc.getOrCreateBackExec(tempCtx)
 	bh.ClearExecResultSet()
 	return getSubscriptionMeta(tempCtx, dbName, tcc.GetSession(), txn, bh)
@@ -1499,7 +1605,7 @@ func (tcc *TxnCompilerContext) GetSubscriptionMetadata(
 	snapshot *plan2.Snapshot,
 	maxCandidates int,
 ) ([]*plan2.SubscriptionMetadata, error) {
-	tempCtx := tcc.execCtx.reqCtx
+	tempCtx := plan2.ViewSchemaCatalogContext(tcc.execCtx.reqCtx)
 	txn := tcc.GetTxnHandler().GetTxn()
 	var bh BackgroundExec
 	if plan2.IsSnapshotValid(snapshot) && snapshot.TS.Less(txn.Txn().SnapshotTS) {
@@ -1528,6 +1634,16 @@ func (tcc *TxnCompilerContext) GetSubscriptionMetadata(
 	}
 
 	metas, err := subscriptionMetasFromSubInfos(tempCtx, subInfos)
+	if err != nil {
+		return nil, err
+	}
+	// Statement paths resolve the physical source through
+	// checkSubscriptionValidCommon; the metadata enumeration path must agree,
+	// or statistics and other metadata consumers would read the publisher's
+	// catalog for a foreign-source publication. Unauthorized foreign-source
+	// rows are dropped rather than enumerated through the publisher identity,
+	// which would substitute a same-named publisher database for the source.
+	metas, err = resolveSubscriptionSourceAccounts(tempCtx, bh, metas)
 	if err != nil {
 		return nil, err
 	}
@@ -1652,59 +1768,17 @@ func getVisibleSubscriptionMetadata(
 	return visible, nil
 }
 
-// subscriptionMetadataVisibilitySQL mirrors the canonical
-// information_schema table visibility rules using only subscriber-local
-// objects. Subscription tables are virtual in the subscriber catalog, so the
-// supported grant surface is database/global scope; exact table grants cannot
-// be resolved there. Subscriber role IDs are never evaluated in the publisher
-// account.
 func subscriptionMetadataVisibilitySQL(subscriptionNames string, protocolVersion int64) string {
-	activeRolesSQL := "SELECT role_id FROM mo_current_roles() role_closure"
-	if protocolVersion < defines.MORPCVersion41 {
-		// Match the persisted information_schema compatibility view during a
-		// rolling deployment. The full local table-function closure is available
-		// only after every CN supports protocol v41.
-		activeRolesSQL = "SELECT current_role_id() UNION " +
-			"SELECT rg.granted_id FROM mo_catalog.mo_role_grant rg " +
-			"WHERE rg.grantee_id = current_role_id()"
-	}
-	return fmt.Sprintf(`WITH __subscription_active_roles(role_id) AS (
-    %s
-), __subscription_databases AS (
-    SELECT dat_id, datname, owner
-    FROM mo_catalog.mo_database
-    WHERE account_id = current_account_id() AND datname IN (%s)
-), __subscription_broad_visibility AS (
-    SELECT db.dat_id, db.datname
-    FROM __subscription_databases db
-    WHERE db.owner IN (SELECT role_id FROM __subscription_active_roles)
-       OR EXISTS (
-            SELECT 1
-            FROM mo_catalog.mo_role_privs rp
-            JOIN __subscription_active_roles ar ON rp.role_id = ar.role_id
-            WHERE rp.obj_type IN ('table','view') AND (
-                (rp.privilege_level = '*.*' AND rp.obj_id = 0)
-                OR (rp.privilege_level IN ('d.*','*') AND rp.obj_id = db.dat_id)
-            )
-       )
-       OR EXISTS (
-            SELECT 1
-            FROM mo_catalog.mo_role_privs rp
-            JOIN __subscription_active_roles ar ON rp.role_id = ar.role_id
-            WHERE rp.obj_type = 'database'
-              AND rp.privilege_name IN ('show tables','database all','database ownership')
-              AND ((rp.privilege_level IN ('*','*.*') AND rp.obj_id = 0)
-                   OR (rp.privilege_level = 'd' AND rp.obj_id = db.dat_id))
-       )
-)
-SELECT datname, 1 AS all_tables, 0 AS table_id
-FROM __subscription_broad_visibility`, activeRolesSQL, subscriptionNames)
+	return sysview.SubscriptionMetadataVisibilitySQL(subscriptionNames, protocolVersion)
 }
 
 func (tcc *TxnCompilerContext) CheckSubscriptionValid(subName, accName, pubName string) error {
 	bh := tcc.getOrCreateBackExec(tcc.GetContext())
 	bh.ClearExecResultSet()
-	_, err := checkSubscriptionValidCommon(tcc.GetContext(), tcc.GetSession(), subName, accName, pubName, bh)
+	// The create-only admission variant: CREATE DATABASE ... FROM must prove
+	// the subscriber can resolve every published view, while runtime resolves
+	// stay on the metadata-only checks.
+	_, err := checkSubscriptionValidForCreate(tcc.GetContext(), tcc.GetSession(), subName, accName, pubName, bh)
 	return err
 }
 

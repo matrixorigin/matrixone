@@ -17,7 +17,7 @@
 // # Phase 4a (current)
 //
 // Skeleton landed. Catalog hooks (HiddenTableTypes, ParamsFromTree,
-// DefaultOptions, SupportedOpTypes, ExperimentalFlag, SyncDescriptor)
+// SupportedOpTypes, ExperimentalFlag, SyncDescriptor)
 // are fully implemented in runtime/. Compile and plan hooks are STUBS
 // (see compile/compile.go and plan/plan.go). The plugin is intentionally
 // NOT registered in pkg/indexplugin/all/all.go yet — the

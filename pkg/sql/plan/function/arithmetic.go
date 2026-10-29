@@ -112,9 +112,14 @@ func decimal256BatchArith(parameters []*vector.Vector, result vector.FunctionRes
 		return err
 	}
 
-	resultVector := result.GetResultVector()
+	return checkDecimal256ResultPrecision(result.GetResultVector(), proc)
+}
+
+// checkDecimal256ResultPrecision is shared by the generic arithmetic wrapper
+// and the direct multiply driver. It never changes the declared result type.
+func checkDecimal256ResultPrecision(resultVector *vector.Vector, proc *process.Process) error {
 	resultType := resultVector.GetType()
-	if resultType.Width <= 0 || resultType.Width >= types.T_decimal256.ToType().Width {
+	if resultType.Width <= 0 || resultType.Width >= 76 {
 		return nil
 	}
 	limit := types.Decimal256{B0_63: 1}
@@ -138,6 +143,70 @@ func decimal256BatchArith(parameters []*vector.Vector, result vector.FunctionRes
 		}
 	}
 	return nil
+}
+
+// decimal256Multiply uses the already resolved Decimal256 storage directly.
+// No capture callback, cached type proof or temporary scalar slice is needed.
+func decimal256Multiply(parameters []*vector.Vector, result vector.FunctionResultWrapper,
+	proc *process.Process, length int, selectList *FunctionSelectList) error {
+	if length == 0 {
+		return nil
+	}
+	left, right := parameters[0], parameters[1]
+	output := result.GetResultVector()
+	resultNulls := output.GetNulls()
+	if left.IsConstNull() || right.IsConstNull() {
+		nulls.AddRange(resultNulls, 0, uint64(length))
+		return nil
+	}
+	leftConstant, rightConstant := left.IsConst(), right.IsConst()
+	leftNulls, rightNulls := left.GetNulls(), right.GetNulls()
+	// Non-NULL constants broadcast physical row zero. Unused bitmap bits
+	// outside that row do not belong to the logical evaluation domain.
+	if leftConstant {
+		leftNulls = nil
+	}
+	if rightConstant {
+		rightNulls = nil
+	}
+	nulls.Or(leftNulls, rightNulls, resultNulls)
+	done, _ := maskUnselectedRows(resultNulls, selectList, length)
+	if done || !hasEvaluableRows(resultNulls, length) {
+		return nil
+	}
+	v1 := vector.MustFixedColNoTypeCheck[types.Decimal256](left)
+	v2 := vector.MustFixedColNoTypeCheck[types.Decimal256](right)
+	values := vector.MustFixedColNoTypeCheck[types.Decimal256](output)
+	leftRange, rightRange := decimalRangeUnknown, decimalRangeUnknown
+	if len(v1) > 1 {
+		leftRange = decimal256OperandRange(*left.GetType())
+	}
+	if len(v2) > 1 {
+		rightRange = decimal256OperandRange(*right.GetType())
+	}
+	var err error
+	if leftConstant && rightConstant && length > 1 {
+		// A mask on logical row zero must not suppress a value needed elsewhere.
+		var value [1]types.Decimal256
+		var noNulls nulls.Nulls
+		err = d256Mul(v1, v2, value[:], left.GetType().Scale, right.GetType().Scale, &noNulls, leftRange, rightRange)
+		if err == nil {
+			for row := range values {
+				if !resultNulls.Contains(uint64(row)) {
+					values[row] = value[0]
+				}
+			}
+		}
+	} else {
+		err = d256Mul(v1, v2, values, left.GetType().Scale, right.GetType().Scale, resultNulls, leftRange, rightRange)
+	}
+	if err != nil {
+		if moerr.IsMoErrCode(err, moerr.ErrInvalidInput) {
+			return moerr.NewOutOfRange(proc.Ctx, "DECIMAL", err.Error())
+		}
+		return err
+	}
+	return checkDecimal256ResultPrecision(output, proc)
 }
 
 func divOperatorSupportsVectorScalar(typ1, typ2 types.Type) bool {
@@ -549,7 +618,7 @@ func multiFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 	case types.T_decimal128:
 		return decimalBatchArith[types.Decimal128, types.Decimal128](parameters, result, proc, length, d128Mul, selectList)
 	case types.T_decimal256:
-		return decimal256BatchArith(parameters, result, proc, length, d256Mul, selectList)
+		return decimal256Multiply(parameters, result, proc, length, selectList)
 
 	case types.T_array_float32:
 		return opBinaryBytesBytesToBytesWithErrorCheck(parameters, result, proc, length, multiFnArray[float32], selectList)
@@ -573,7 +642,7 @@ func divFnVectorScalar(parameters []*vector.Vector, result vector.FunctionResult
 	}
 }
 
-func divFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func divFnImpl(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	paramType := parameters[0].GetType()
 	switch paramType.Oid {
 	case types.T_float32:
@@ -611,7 +680,7 @@ func divFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, pro
 	panic("unreached code")
 }
 
-func integerDivFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func integerDivFnImpl(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	if integerDivBitResolvedTypes(*parameters[0].GetType(), *parameters[1].GetType()) {
 		if parameters[1].GetType().Oid == types.T_int64 {
 			return integerDivBitSigned(parameters, result, proc, length, selectList)
@@ -1110,7 +1179,7 @@ func integerDivUnsigned(parameters []*vector.Vector, result vector.FunctionResul
 	return nil
 }
 
-func modFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func modFnImpl(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	paramType := parameters[0].GetType()
 	switch paramType.Oid {
 	case types.T_bit:

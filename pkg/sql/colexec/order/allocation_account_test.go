@@ -153,7 +153,7 @@ func newOrderRecoveryTest(
 	specs ...*plan.OrderBySpec,
 ) (*process.Process, *Order, orderTestAllocation) {
 	t.Helper()
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	t.Cleanup(func() {
 		proc.Free()
 		require.Zero(t, proc.Mp().CurrNB())
@@ -210,7 +210,7 @@ func runOrderPair(
 }
 
 func TestAccountedOrderResidentMultiKeyAndExpressionLifecycle(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	computed, err := plan2.BindFuncExprImplByPlanExpr(
 		proc.Ctx,
 		"+",
@@ -262,7 +262,7 @@ func TestAccountedOrderResidentMultiKeyAndExpressionLifecycle(t *testing.T) {
 }
 
 func TestAccountedOrderPreservesChildCapacityErrorAttribution(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	op := newAccountedOrder(
 		&plan.OrderBySpec{Expr: newOrderColumnExpression(0, types.T_int64)},
 	)
@@ -290,7 +290,7 @@ func TestAccountedOrderPreservesChildCapacityErrorAttribution(t *testing.T) {
 }
 
 func TestAccountedOrderVariableProjectionAcrossBatches(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	proc.SetResolveVariableFunc(func(name string, system, global bool) (interface{}, error) {
 		require.Equal(t, "time_zone", name)
 		require.True(t, system)
@@ -477,7 +477,7 @@ func TestAccountedOrderExactCapacityBoundary(t *testing.T) {
 		peak uint64
 	}
 	build := func(t *testing.T, limit uint64) (boundary, error) {
-		proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+		proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 		op := newAccountedOrder(
 			&plan.OrderBySpec{Expr: newOrderColumnExpression(0, types.T_int64)},
 			&plan.OrderBySpec{Expr: newOrderColumnExpression(1, types.T_int64)},
@@ -515,7 +515,7 @@ func TestAccountedOrderExactCapacityBoundary(t *testing.T) {
 }
 
 func TestAccountedOrderCapacityFailureIsControlledAndCleans(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	proc.Base.Lim.Size = 1
 	op := newAccountedOrder(
 		&plan.OrderBySpec{Expr: newOrderColumnExpression(0, types.T_int64)},
@@ -615,10 +615,9 @@ func TestAccountedOrderDynamicShareUsesAllocatedCapacity(t *testing.T) {
 }
 
 func TestAccountedOrderMultiColumnAppendFailureRollsBack(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZeroNoFixed())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZeroNoFixed())
 	defer func() {
 		proc.Free()
-		mpool.DeleteMPool(proc.Mp())
 	}()
 	op := newAccountedOrder(
 		&plan.OrderBySpec{Expr: newOrderColumnExpression(0, types.T_int64)},
@@ -657,7 +656,7 @@ func TestAccountedOrderMultiColumnAppendFailureRollsBack(t *testing.T) {
 }
 
 func TestAccountedOrderPreservesNonemptyZeroColumnBatch(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	op := newAccountedOrder()
 	state := installOrderTestAllocation(t, op, 64<<20, nil)
 	input := batch.NewWithSize(0)
@@ -678,7 +677,7 @@ func TestAccountedOrderPreservesNonemptyZeroColumnBatch(t *testing.T) {
 }
 
 func TestAccountedOrderCancellationCleans(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	op := newAccountedOrder(
 		&plan.OrderBySpec{Expr: newOrderColumnExpression(0, types.T_int64)},
 	)
@@ -704,7 +703,7 @@ func TestAccountedOrderCancellationCleans(t *testing.T) {
 }
 
 func TestAccountedOrderResetClosesAllocationGeneration(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	op := newAccountedOrder(
 		&plan.OrderBySpec{Expr: newOrderColumnExpression(0, types.T_int64)},
 	)
@@ -751,8 +750,8 @@ func TestAccountedOrderResetClosesAllocationGeneration(t *testing.T) {
 }
 
 func TestAccountedOrderResetFreesSlicesThroughOriginalMPool(t *testing.T) {
-	firstProc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
-	secondProc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	firstProc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
+	secondProc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	op := newAccountedOrder(
 		&plan.OrderBySpec{Expr: newOrderColumnExpression(0, types.T_int64)},
 		&plan.OrderBySpec{Expr: newOrderColumnExpression(1, types.T_int64)},
@@ -779,7 +778,7 @@ func TestAccountedOrderResetFreesSlicesThroughOriginalMPool(t *testing.T) {
 }
 
 func TestAccountedOrderDoesNotInheritSealedInputAccount(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	inputRegistry, err := mpool.NewAllocationAccountRegistry(1, 16)
 	require.NoError(t, err)
 	inputAccount, err := inputRegistry.Open(1 << 20)
@@ -870,7 +869,7 @@ func TestOrderAllocationBindingAndTerminalErrorContracts(t *testing.T) {
 }
 
 func TestOrderAllocationHelperBoundaryMatrix(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	registry, err := mpool.NewAllocationAccountRegistry(1, 64)
 	require.NoError(t, err)
 	account, err := registry.Open(1 << 20)
@@ -937,7 +936,7 @@ func TestOrderAllocationHelperBoundaryMatrix(t *testing.T) {
 }
 
 func TestAccountedOrderPrepareFailureRollsBackExecutors(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	op := newAccountedOrder(
 		&plan.OrderBySpec{Expr: newOrderColumnExpression(0, types.T_int64)},
 		&plan.OrderBySpec{Expr: &plan.Expr{Typ: plan.Type{Id: int32(types.T_int64)}}},
@@ -957,7 +956,7 @@ func TestAccountedOrderPrepareFailureRollsBackExecutors(t *testing.T) {
 }
 
 func TestAccountedOrderRejectsExtraBufferBeforeRetainingInput(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	op := newAccountedOrder(
 		&plan.OrderBySpec{Expr: newOrderColumnExpression(0, types.T_int64)},
 	)
@@ -988,7 +987,7 @@ func BenchmarkOrderUnaccountedResident(b *testing.B) {
 }
 
 func benchmarkOrderResident(b *testing.B, accounted bool) {
-	proc := testutil.NewProcessWithMPool(b, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(b, "", mpool.MustNewZero())
 	defer proc.Free()
 	first := make([]int64, BenchmarkRows)
 	second := make([]int64, BenchmarkRows)

@@ -15,6 +15,7 @@
 package function
 
 import (
+	"context"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -35,6 +36,55 @@ type numericTypeResolution struct {
 	left   types.Type
 	right  types.Type
 	result types.Type
+}
+
+// CommonMediumIntType resolves only same-signed 32-bit integer branches that
+// include MEDIUMINT. The physical OID stays int32/uint32, while Width preserves
+// the narrower domain only when every value-bearing branch has it.
+func CommonMediumIntType(source []types.Type) (types.Type, bool) {
+	var result types.Type
+	hasType := false
+	hasMediumInt := false
+	hasOrdinaryInt := false
+	for _, typ := range source {
+		if typ.Oid == types.T_any {
+			continue
+		}
+		if typ.Oid != types.T_int32 && typ.Oid != types.T_uint32 {
+			return types.Type{}, false
+		}
+		if hasType && typ.Oid != result.Oid {
+			return types.Type{}, false
+		}
+		if !hasType {
+			result = typ
+			hasType = true
+		}
+		if typ.IsMediumInt() {
+			hasMediumInt = true
+		} else {
+			hasOrdinaryInt = true
+		}
+	}
+	if !hasType || !hasMediumInt {
+		return types.Type{}, false
+	}
+	if hasOrdinaryInt {
+		result.Width = 32
+	} else {
+		result.Width = 24
+	}
+	return result, true
+}
+
+func sameMediumIntCommonType(left, right types.Type) bool {
+	if left.Oid != right.Oid {
+		return false
+	}
+	if left.Oid == types.T_int32 || left.Oid == types.T_uint32 {
+		return left.Width == right.Width && left.Scale == right.Scale
+	}
+	return left.Eq(right)
 }
 
 // InferNumericParameterType selects the computation type for unresolved
@@ -242,11 +292,17 @@ func ResolveNumericBinaryTypes(
 	right types.Type,
 	outer *types.Type,
 ) (types.Type, types.Type, types.Type, bool) {
+	return ResolveNumericBinaryTypesWithContext(context.Background(), name, left, right, outer)
+}
+
+// ResolveNumericBinaryTypesWithContext preserves the dump-only historical DIV
+// policy when nested numeric consumers resolve operands before function binding.
+func ResolveNumericBinaryTypesWithContext(ctx context.Context, name string, left, right types.Type, outer *types.Type) (types.Type, types.Type, types.Type, bool) {
 	op, ok := numericBinaryOpByName(name)
 	if !ok {
 		return types.Type{}, types.Type{}, types.Type{}, false
 	}
-	resolved, ok := resolveNumericBinaryTypes(op, left, right, outer)
+	resolved, ok := resolveNumericBinaryTypesMode(op, left, right, outer, LegacyDecimalIntegerDiv(ctx))
 	return resolved.left, resolved.right, resolved.result, ok
 }
 
@@ -278,6 +334,10 @@ func resolveNumericBinaryTypes(
 	right types.Type,
 	outer *types.Type,
 ) (numericTypeResolution, bool) {
+	return resolveNumericBinaryTypesMode(op, left, right, outer, false)
+}
+
+func resolveNumericBinaryTypesMode(op numericBinaryOp, left, right types.Type, outer *types.Type, legacyDecimalDiv bool) (numericTypeResolution, bool) {
 	// Resolve the BIT dividend before T_any inference and generic coercion so
 	// its unsigned result domain and declared width are not lost.
 	if op == numericOpIntegerDiv {
@@ -289,6 +349,9 @@ func resolveNumericBinaryTypes(
 	if !ok {
 		return numericTypeResolution{}, false
 	}
+	if operands, result, _, ok := resolveIntegerAddMulExecution(op, left, right); ok {
+		return numericTypeResolution{left: operands[0], right: operands[1], result: result}, true
+	}
 	if (op == numericOpAdd || op == numericOpSub || op == numericOpMul) &&
 		isMixedUnsignedInteger(left, right) {
 		return numericTypeResolution{
@@ -298,6 +361,22 @@ func resolveNumericBinaryTypes(
 		}, true
 	}
 
+	if op == numericOpIntegerDiv && !legacyDecimalDiv {
+		if result, scoped := DecimalIntegerDivReturnType([]types.Type{left, right}); scoped {
+			if operands, unsigned := decimalIntegerDivUnsignedTypes([]types.Type{left, right}); unsigned {
+				return numericTypeResolution{left: operands[0], right: operands[1], result: result}, true
+			}
+			cast, physicalLeft, physicalRight := integerDivTypeCastRule(left, right)
+			if cast {
+				left, right = physicalLeft, physicalRight
+			}
+			if !integerDivOperatorSupports(left, right) {
+				return numericTypeResolution{}, false
+			}
+			return numericTypeResolution{left: left, right: right, result: result}, true
+		}
+	}
+	original := []types.Type{left, right}
 	var cast bool
 	var castLeft, castRight types.Type
 	switch op {
@@ -311,8 +390,11 @@ func resolveNumericBinaryTypes(
 			left, right = mixedLeft, mixedRight
 		} else if exactLeft, exactRight, exact := integerDivExactTypes(left, right); exact {
 			left, right = exactLeft, exactRight
-		} else {
+		} else if legacyDecimalDiv {
+			// Historical catalog verification compares the original cast tree.
 			cast, castLeft, castRight = fixedTypeCastRule2(left, right)
+		} else {
+			cast, castLeft, castRight = integerDivTypeCastRule(left, right)
 		}
 	case numericOpDiv:
 		cast, castLeft, castRight = fixedTypeCastRule2(left, right)
@@ -326,11 +408,11 @@ func resolveNumericBinaryTypes(
 		return numericTypeResolution{}, false
 	}
 
-	return numericTypeResolution{
-		left:   left,
-		right:  right,
-		result: numericBinaryResultType(op, left, right),
-	}, true
+	result := numericBinaryResultType(op, left, right)
+	if op == numericOpMod {
+		result = DecimalModReturnType(original, result)
+	}
+	return numericTypeResolution{left: left, right: right, result: result}, true
 }
 
 func resolveUnknownNumericOperands(left, right types.Type, outer *types.Type) (types.Type, types.Type, bool) {

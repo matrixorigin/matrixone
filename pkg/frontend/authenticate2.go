@@ -152,28 +152,6 @@ var checkPrivilegeInCache = func(ctx context.Context, ses *Session, priv *privil
 					for _, mi := range entry.compound.items {
 						yes = false
 						if mi.privilegeTyp == PrivilegeTypeCanGrantRoleToOthersInCreateUser {
-							//TODO: normalize the name
-							//TODO: simplify the logic
-							// yes, err = determineUserCanGrantRolesToOthersInternal(ctx, bh, ses, []*tree.Role{mi.role})
-							// if err != nil {
-							// 	return false, err
-							// }
-							// if yes {
-							// 	from := &verifiedRole{
-							// 		typ:  roleType,
-							// 		name: mi.role.UserName,
-							// 	}
-							// 	for _, user := range mi.users {
-							// 		to := &verifiedRole{
-							// 			typ:  userType,
-							// 			name: user.Username,
-							// 		}
-							// 		err = verifySpecialRolesInGrant(ctx, ses.GetTenantInfo(), from, to)
-							// 		if err != nil {
-							// 			return false, err
-							// 		}
-							// 	}
-							// }
 							yes = false
 						} else {
 							if len(mi.viewPath) > 0 {

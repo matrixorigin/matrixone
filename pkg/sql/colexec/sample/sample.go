@@ -71,7 +71,6 @@ func (sample *Sample) Prepare(proc *process.Process) (err error) {
 
 	sample.ctr = &container{
 		isGroupBy:     len(sample.GroupExprs) != 0,
-		isMultiSample: len(sample.SampleExprs) > 1,
 		tempBatch1:    make([]*batch.Batch, 1),
 		sampleVectors: make([]*vector.Vector, len(sample.SampleExprs)),
 	}
@@ -122,6 +121,9 @@ func (sample *Sample) Call(proc *process.Process) (vm.CallResult, error) {
 	result, lastErr := vm.ChildrenCall(sample.GetChildren(0), proc, analyzer)
 	if lastErr != nil {
 		return result, lastErr
+	}
+	if result.Status == vm.ExecYield {
+		return result, nil
 	}
 
 	if sample.ctr.buf != nil {

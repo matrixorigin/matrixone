@@ -62,29 +62,7 @@ func TestIssue28079ConcurrentCreateAccountsShareLifecycleGate(t *testing.T) {
 		const accountB = "issue_28079_account_b"
 		accounts := []string{accountA, accountB}
 		cleanupAccounts := func() error {
-			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 45*time.Second)
-			defer cleanupCancel()
-			for _, account := range accounts {
-				if _, err := db0.ExecContext(
-					cleanupCtx,
-					"drop account if exists `"+account+"`",
-				); err != nil {
-					return fmt.Errorf("drop account %s: %w", account, err)
-				}
-			}
-			var remaining int
-			if err := db0.QueryRowContext(
-				cleanupCtx,
-				"select count(*) from mo_catalog.mo_account where account_name in (?, ?)",
-				accountA,
-				accountB,
-			).Scan(&remaining); err != nil {
-				return fmt.Errorf("verify account cleanup: %w", err)
-			}
-			if remaining != 0 {
-				return fmt.Errorf("account cleanup left %d rows", remaining)
-			}
-			return nil
+			return cleanupIssueAccounts(db0, accounts...)
 		}
 		require.NoError(t, cleanupAccounts())
 		t.Cleanup(func() {
@@ -373,15 +351,17 @@ func TestIssue28079LifecycleRefreshAndViewFailure(t *testing.T) {
 		const successful = "issue_28079_refresh_success"
 		const rejected = "issue_28079_refresh_rejected"
 		cleanup := func() error {
-			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
-			defer cleanupCancel()
 			var cleanupErr error
 			for _, account := range []string{successful, rejected} {
+				cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
 				_, dropErr := db0.ExecContext(cleanupCtx, "drop account if exists `"+account+"`")
+				cleanupCancel()
 				if dropErr != nil {
 					cleanupErr = errors.Join(cleanupErr, fmt.Errorf("drop %s: %w", account, dropErr))
 				}
 			}
+			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cleanupCancel()
 			var count int
 			if err := db0.QueryRowContext(cleanupCtx,
 				"select count(*) from mo_catalog.mo_account where account_name in (?, ?)",

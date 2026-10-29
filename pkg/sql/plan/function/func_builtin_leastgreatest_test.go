@@ -243,6 +243,37 @@ func TestLeastGreatestPromoteVarcharMetadataWhenWidthsDiffer(t *testing.T) {
 	}
 }
 
+func TestLeastGreatestNativeCollationPreservesValue(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	typ := types.NewWithCharset(types.T_varchar, 20, 0, types.CharsetUTF8MB4UnicodeCI)
+	typ.CollationVersion = 1
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(typ, []string{"a", "Á", "a "}, []bool{false, false, false}),
+		NewFunctionTestInput(typ, []string{"B", "a", "a"}, []bool{false, false, false}),
+	}
+	for _, tc := range []struct {
+		name     string
+		id       int32
+		overload int32
+		want     []string
+	}{
+		{"collated least", LEAST, LeastGreatestCollationOverload, []string{"a", "Á", "a "}},
+		{"collated greatest", GREATEST, LeastGreatestCollationOverload, []string{"B", "Á", "a "}},
+		{"legacy least", LEAST, 0, []string{"B", "a", "a"}},
+		{"legacy greatest", GREATEST, 0, []string{"a", "Á", "a "}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fn, err := GetFunctionById(t.Context(), EncodeOverloadID(tc.id, tc.overload))
+			require.NoError(t, err)
+			result := NewFunctionTestResult(typ, false, tc.want, []bool{false, false, false})
+			fc := NewFunctionTestCase(proc, inputs, result, fn.newOp())
+			ok, info := fc.RunAndFree()
+			require.True(t, ok, info)
+		})
+	}
+}
+
 func initGreatestTestCase() []tcTemp {
 	return []tcTemp{
 		// Test int8
@@ -1134,6 +1165,11 @@ func TestLeastGreatestHighPriorityResolution(t *testing.T) {
 }
 
 func TestLeastGreatestSupportedOidResolution(t *testing.T) {
+	for _, oid := range []types.T{types.T_int64, types.T_varbinary, types.T_json, types.T_datetime} {
+		_, ok := resolveLeastGreatestType([]types.Type{types.T_uuid.ToType(), oid.ToType()})
+		require.False(t, ok, oid.String())
+	}
+
 	sameOidCases := []struct {
 		name string
 		typ  types.Type
@@ -1153,8 +1189,14 @@ func TestLeastGreatestSupportedOidResolution(t *testing.T) {
 			require.Empty(t, resolution.castTypes)
 		})
 		t.Run(tc.name+" mixed oid", func(t *testing.T) {
-			_, ok := resolveLeastGreatestType([]types.Type{tc.typ, types.T_varchar.ToType()})
-			require.False(t, ok)
+			resolution, ok := resolveLeastGreatestType([]types.Type{tc.typ, types.T_varchar.ToType()})
+			if tc.typ.Oid == types.T_uuid {
+				require.True(t, ok)
+				require.Equal(t, types.T_varchar, resolution.resultType.Oid)
+				require.GreaterOrEqual(t, resolution.resultType.Width, int32(36))
+			} else {
+				require.False(t, ok)
+			}
 		})
 	}
 
@@ -1886,4 +1928,40 @@ func TestLeastGreatestDecimal256(t *testing.T) {
 		greatestFn)
 	ok, info = tcGreatest.RunAndFree()
 	require.True(t, ok, info)
+}
+
+func TestLeastGreatestStringCollationRevisionPreserved(t *testing.T) {
+	native := types.NewWithCharset(
+		types.T_varchar, 64, 0, types.CharsetUTF8MB4UnicodeCI,
+	)
+	narrow := types.NewWithCharset(
+		types.T_varchar, 1, 0, types.CharsetUTF8MB4UnicodeCI,
+	)
+
+	for _, name := range []string{"least", "greatest"} {
+		t.Run(name, func(t *testing.T) {
+			resolved, err := GetFunctionByName(
+				context.Background(), name, []types.Type{native, narrow},
+			)
+			require.NoError(t, err)
+			result := resolved.GetReturnType()
+			require.Equal(t, types.CharsetUTF8MB4UnicodeCI, result.Charset)
+			require.Equal(t, uint8(types.CollationVersionV1), result.CollationVersion)
+
+			castTypes, shouldCast := resolved.ShouldDoImplicitTypeCast()
+			require.True(t, shouldCast)
+			for _, typ := range castTypes {
+				require.Equal(t, types.CharsetUTF8MB4UnicodeCI, typ.Charset)
+				require.Equal(t, uint8(types.CollationVersionV1), typ.CollationVersion)
+			}
+		})
+	}
+
+	// Mixed-width promotion is not the only path that rebuilds the result;
+	// mixed collations also use the shared merged-string resolver.
+	merged := leastGreatestMergedStringType(
+		[]types.Type{native, types.New(types.T_varchar, 1, 0)}, types.T_varchar,
+	)
+	require.Equal(t, types.CharsetUTF8MB4UnicodeCI, merged.Charset)
+	require.Equal(t, uint8(types.CollationVersionV1), merged.CollationVersion)
 }

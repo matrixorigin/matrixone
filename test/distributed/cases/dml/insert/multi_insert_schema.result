@@ -122,7 +122,7 @@ insert all
 into with_check (id, amount) values (id, amount)
 into no_pk (id, name) values (id + 1000, name)
 select id, name, amount from src;
-constraint violation: Check constraint '__mo_chk_1' is violated
+constraint violation: Check constraint 'with_check_chk_1' is violated
 select count(*) from with_check;
 ➤ count(*)[-5,64,0]  𝄀
 0
@@ -157,11 +157,14 @@ select id, j, e, hex(b), d, t, f from conv order by id;
 3  ¦  {"amount": -30.125, "name": "gamma"}  ¦  gamma  ¦  67616D6D61  ¦  2024-03-03  ¦  12:45:00  ¦  -30.125  𝄀
 4  ¦  [4, "delta"]  ¦  other  ¦  78  ¦  2024-04-04  ¦  00:00:00  ¦  0.0  𝄀
 5  ¦  [5, "epsilon"]  ¦  other  ¦  78  ¦  2024-05-05  ¦  23:59:59  ¦  100000.0
+set @mi_schema_saved_sql_mode = @@session.sql_mode;
+set session sql_mode = 'STRICT_TRANS_TABLES';
 insert all into conv (id, e) values (id + 10, name) select id, name from src where name = 'delta';
-internal error: convert to MySQL enum failed: item delta is not in enum [alpha beta gamma other]
+Data truncated for ENUM value: 'delta'
 select count(*) from conv;
 ➤ count(*)[-5,64,0]  𝄀
 5
+set session sql_mode = @mi_schema_saved_sql_mode;
 create table tight (id int primary key, name varchar(3));
 insert all into tight (id, name) values (id, name) select id, name from src where id = 1;
 Data truncation: Can't cast column from VARCHAR type to VARCHAR type because of one or more values in that column. Src length 5 is larger than Dest length 3

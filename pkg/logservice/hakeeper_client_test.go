@@ -15,6 +15,9 @@
 package logservice
 
 import (
+	"fmt"
+	"math"
+
 	"context"
 	"errors"
 	"io"
@@ -22,7 +25,9 @@ import (
 	"os"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/google/uuid"
@@ -1369,6 +1374,8 @@ func TestHAKeeperClientRetryableError(t *testing.T) {
 		{name: "backend cannot connect", err: moerr.NewBackendCannotConnect(ctx), want: true},
 		{name: "no available backend", err: moerr.NewNoAvailableBackend(ctx), want: true},
 		{name: "connection reset", err: moerr.NewConnectionReset(ctx), want: true},
+		{name: "raw connection reset", err: &net.OpError{Op: "read", Net: "tcp", Err: syscall.ECONNRESET}, want: true},
+		{name: "connection reset text is not a transport error", err: errors.New("connection reset by peer"), want: false},
 		{name: "context canceled", err: context.Canceled, want: false},
 		{name: "context deadline", err: context.DeadlineExceeded, want: false},
 		{name: "invalid input", err: moerr.NewInvalidInput(ctx, "invalid"), want: false},
@@ -1434,39 +1441,44 @@ func TestAllocateIDRetriesPrepareClientErrorUntilContextDone(t *testing.T) {
 		err  error
 	}{
 		{name: "normalized eof", err: net.ErrClosed},
+		{name: "raw connection reset", err: &net.OpError{Op: "read", Net: "tcp", Err: syscall.ECONNRESET}},
 		{name: "backend closed", err: moerr.NewBackendClosed(context.Background())},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			originalNew := newHAKeeperClientFunc
-			originalRetryInterval := hakeeperClientRetryInterval
-			defer func() {
-				newHAKeeperClientFunc = originalNew
-				hakeeperClientRetryInterval = originalRetryInterval
-			}()
+			// Retry cadence and cancellation are logical clock behavior; do not
+			// make the assertion depend on CPU scheduling within 55ms.
+			synctest.Test(t, func(t *testing.T) {
+				originalNew := newHAKeeperClientFunc
+				originalRetryInterval := hakeeperClientRetryInterval
+				defer func() {
+					newHAKeeperClientFunc = originalNew
+					hakeeperClientRetryInterval = originalRetryInterval
+				}()
 
-			attempts := 0
-			newHAKeeperClientFunc = func(
-				context.Context,
-				string,
-				HAKeeperClientConfig,
-			) (*hakeeperClient, error) {
-				attempts++
-				return nil, tt.err
-			}
-			hakeeperClientRetryInterval = 20 * time.Millisecond
+				attempts := 0
+				newHAKeeperClientFunc = func(
+					context.Context,
+					string,
+					HAKeeperClientConfig,
+				) (*hakeeperClient, error) {
+					attempts++
+					return nil, tt.err
+				}
+				hakeeperClientRetryInterval = 20 * time.Millisecond
 
-			c := &managedHAKeeperClient{
-				cfg: HAKeeperClientConfig{AllocateIDBatch: 2},
-			}
-			ctx, cancel := context.WithTimeout(context.Background(), 55*time.Millisecond)
-			defer cancel()
+				c := &managedHAKeeperClient{
+					cfg: HAKeeperClientConfig{AllocateIDBatch: 2},
+				}
+				ctx, cancel := context.WithTimeout(context.Background(), 55*time.Millisecond)
+				defer cancel()
 
-			_, err := c.AllocateID(ctx)
-			require.ErrorIs(t, err, context.DeadlineExceeded)
-			require.GreaterOrEqual(t, attempts, 2)
-			require.Less(t, attempts, 10)
+				_, err := c.AllocateID(ctx)
+				require.ErrorIs(t, err, context.DeadlineExceeded)
+				require.GreaterOrEqual(t, attempts, 2)
+				require.Less(t, attempts, 10)
+			})
 		})
 	}
 }
@@ -1477,6 +1489,7 @@ func TestAllocateIDRetriesTransportSendError(t *testing.T) {
 		err  error
 	}{
 		{name: "eof", err: io.EOF},
+		{name: "raw connection reset", err: &net.OpError{Op: "read", Net: "tcp", Err: syscall.ECONNRESET}},
 		{name: "backend closed", err: moerr.NewBackendClosed(context.Background())},
 	}
 
@@ -2345,42 +2358,25 @@ func TestAllocateIDByKeyWaiterRetriesAfterRefillFailure(t *testing.T) {
 
 func TestAllocateIDConsumesEntireBatch(t *testing.T) {
 	originalSend := sendCNAllocateIDFunc
-	defer func() {
-		sendCNAllocateIDFunc = originalSend
-	}()
+	t.Cleanup(func() { sendCNAllocateIDFunc = originalSend })
 
 	tests := []struct {
-		name        string
-		key         string
-		allocateIDs func(context.Context, *managedHAKeeperClient) ([]uint64, error)
+		name       string
+		key        string
+		configured uint64
+		allocateID func(*managedHAKeeperClient, context.Context) (uint64, error)
 	}{
 		{
-			name: "shared",
-			allocateIDs: func(ctx context.Context, c *managedHAKeeperClient) ([]uint64, error) {
-				ids := make([]uint64, 0, 3)
-				for range 3 {
-					id, err := c.AllocateID(ctx)
-					if err != nil {
-						return nil, err
-					}
-					ids = append(ids, id)
-				}
-				return ids, nil
-			},
+			name:       "shared",
+			configured: 3,
+			allocateID: (*managedHAKeeperClient).AllocateID,
 		},
 		{
-			name: "keyed",
-			key:  "key",
-			allocateIDs: func(ctx context.Context, c *managedHAKeeperClient) ([]uint64, error) {
-				ids := make([]uint64, 0, 3)
-				for range 3 {
-					id, err := c.AllocateIDByKeyWithBatch(ctx, "key", 3)
-					if err != nil {
-						return nil, err
-					}
-					ids = append(ids, id)
-				}
-				return ids, nil
+			name:       "keyed_explicit_batch",
+			key:        "key",
+			configured: 1,
+			allocateID: func(c *managedHAKeeperClient, ctx context.Context) (uint64, error) {
+				return c.AllocateIDByKeyWithBatch(ctx, "key", 3)
 			},
 		},
 	}
@@ -2401,17 +2397,22 @@ func TestAllocateIDConsumesEntireBatch(t *testing.T) {
 			}
 
 			c := &managedHAKeeperClient{
-				cfg: HAKeeperClientConfig{AllocateIDBatch: 3},
+				cfg: HAKeeperClientConfig{AllocateIDBatch: tt.configured},
 			}
 			c.mu.client = &hakeeperClient{}
-			c.allocMu.allocIDByKey = make(map[string]*allocID)
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 			defer cancel()
 
-			ids, err := tt.allocateIDs(ctx, c)
-			require.NoError(t, err)
-			require.Equal(t, []uint64{1, 2, 3}, ids)
-			require.Equal(t, 1, sendCalls)
+			for want := uint64(1); want <= 4; want++ {
+				id, err := tt.allocateID(c, ctx)
+				require.NoError(t, err)
+				require.Equal(t, want, id)
+				if want <= 3 {
+					require.Equal(t, 1, sendCalls)
+				} else {
+					require.Equal(t, 2, sendCalls)
+				}
+			}
 		})
 	}
 }
@@ -2849,4 +2850,77 @@ func Test_NewLogHAKeeperClientWithRetry(t *testing.T) {
 	case <-time.After(time.Second):
 		require.FailNow(t, "retry backoff did not observe context cancellation")
 	}
+}
+
+func TestAllocateIDRejectsInvalidReservation(t *testing.T) {
+	original := sendCNAllocateIDFunc
+	t.Cleanup(func() { sendCNAllocateIDFunc = original })
+	for _, first := range []uint64{0, math.MaxUint64} {
+		t.Run(fmt.Sprint(first), func(t *testing.T) {
+			calls := 0
+			sendCNAllocateIDFunc = func(_ *hakeeperClient, _ context.Context, _ string, _ uint64) (uint64, error) {
+				calls++
+				if calls == 1 {
+					return first, nil
+				}
+				return 10, nil
+			}
+			c := &managedHAKeeperClient{cfg: HAKeeperClientConfig{AllocateIDBatch: 2}}
+			c.mu.client = &hakeeperClient{}
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			_, err := c.AllocateIDByKey(ctx, "__mo_sql_uuid_short")
+			require.Error(t, err)
+			ids := c.getAllocID("__mo_sql_uuid_short")
+			require.Zero(t, ids.nextID)
+			require.Nil(t, ids.refill)
+			id, err := c.AllocateIDByKey(ctx, "__mo_sql_uuid_short")
+			require.NoError(t, err)
+			require.Equal(t, uint64(10), id)
+			id, err = c.AllocateIDByKey(ctx, "__mo_sql_uuid_short")
+			require.NoError(t, err)
+			require.Equal(t, uint64(11), id)
+			require.Equal(t, 2, calls)
+		})
+	}
+}
+
+func TestAllocateIDTerminalRangeAndNewClient(t *testing.T) {
+	original := sendCNAllocateIDFunc
+	t.Cleanup(func() { sendCNAllocateIDFunc = original })
+	next := uint64(math.MaxUint64 - 3)
+	sendCNAllocateIDFunc = func(_ *hakeeperClient, _ context.Context, key string, batch uint64) (uint64, error) {
+		require.Equal(t, "__mo_sql_uuid_short", key)
+		require.Equal(t, uint64(2), batch)
+		if next == 0 {
+			return 0, errors.New("exhausted")
+		}
+		first := next
+		next += batch
+		return first, nil
+	}
+	newClient := func() *managedHAKeeperClient {
+		c := &managedHAKeeperClient{cfg: HAKeeperClientConfig{AllocateIDBatch: 2}}
+		c.mu.client = &hakeeperClient{}
+		return c
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	a := newClient()
+	id, err := a.AllocateIDByKey(ctx, "__mo_sql_uuid_short")
+	require.NoError(t, err)
+	require.Equal(t, uint64(math.MaxUint64-3), id)
+	// A fresh client cannot reuse the abandoned reservation in the old client.
+	b := newClient()
+	id, err = b.AllocateIDByKey(ctx, "__mo_sql_uuid_short")
+	require.NoError(t, err)
+	require.Equal(t, uint64(math.MaxUint64-1), id)
+	id, err = b.AllocateIDByKey(ctx, "__mo_sql_uuid_short")
+	require.NoError(t, err)
+	require.Equal(t, uint64(math.MaxUint64), id)
+	_, err = b.AllocateIDByKey(ctx, "__mo_sql_uuid_short")
+	require.Error(t, err)
+	id, err = a.AllocateIDByKey(ctx, "__mo_sql_uuid_short")
+	require.NoError(t, err)
+	require.Equal(t, uint64(math.MaxUint64-2), id)
 }

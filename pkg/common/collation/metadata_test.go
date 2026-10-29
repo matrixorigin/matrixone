@@ -55,7 +55,11 @@ func TestCollationIdentityAndCompatibility(t *testing.T) {
 			identity, ok := ResolveSQL(tc.name)
 			require.Equal(t, tc.admitted != 0, ok)
 			require.Equal(t, tc.admitted, identity)
-			require.Error(t, RequireLegacy(uint32(d.Identity), 1, 0))
+			if d.Semantics == UCA400 {
+				require.NoError(t, RequireLegacy(uint32(d.Identity), 1, 0))
+			} else {
+				require.Error(t, RequireLegacy(uint32(d.Identity), 1, 0))
+			}
 		})
 	}
 	for _, name := range []string{"utf8", "utf8mb3", "UTF8MB4"} {
@@ -123,6 +127,43 @@ func TestDDLCompatibilityAliasesDoNotActivateSessionDomains(t *testing.T) {
 	require.Len(t, Definitions(), 12)
 }
 
+func TestSessionResolutionAdmitsOnlyImplementedNativeCollations(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		identity Identity
+		revision uint8
+	}{
+		{name: "utf8_general_ci", identity: UTF8MB4GeneralCIIdentity, revision: RevisionLegacy},
+		{name: "utf8mb4_0900_ai_ci", identity: UTF8MB4GeneralCIIdentity, revision: RevisionLegacy},
+		{name: "utf8_unicode_ci", identity: UTF8UnicodeCIIdentity, revision: RevisionV1},
+		{name: "utf8mb4_unicode_ci", identity: UTF8MB4UnicodeCIIdentity, revision: RevisionV1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			identity, revision, ok := ResolveSession(tc.name)
+			require.True(t, ok)
+			require.Equal(t, tc.identity, identity)
+			require.Equal(t, tc.revision, revision)
+			definition, err := EffectiveDefinition(uint32(identity), uint32(revision))
+			require.NoError(t, err)
+			require.True(t, IsProtocolAdmitted(definition))
+		})
+	}
+	for _, name := range []string{"utf8mb4_0900_bin", "ascii_bin", "gbk_bin", "unknown"} {
+		_, _, ok := ResolveSession(name)
+		require.False(t, ok, name)
+	}
+	for _, id := range []uint16{192, 224} {
+		definition, ok := LookupProtocol(id)
+		require.True(t, ok)
+		require.True(t, IsProtocolAdmitted(definition))
+	}
+	for _, id := range []uint16{28, 65, 87, 309} {
+		definition, ok := LookupProtocol(id)
+		require.True(t, ok)
+		require.False(t, IsProtocolAdmitted(definition), "protocol ID %d", id)
+	}
+}
+
 func TestCollationMetadataClosedDomain(t *testing.T) {
 	for _, pair := range [][2]uint32{{0, 1}, {4, 0}, {13, 1}, {255, 0}, {257, 0}, {3, 256}, {3, 2}} {
 		require.Error(t, ValidateMetadata(pair[0], pair[1]), "%v", pair)
@@ -134,6 +175,17 @@ func TestCollationMetadataClosedDomain(t *testing.T) {
 		require.Error(t, RequireLegacy(id, 0, 256))
 	}
 	require.NoError(t, ValidateKeyFormat(1))
+	for _, format := range []uint32{KeyFormatLegacy, KeyFormatV1} {
+		require.NoError(t, ValidateKeyFormatPair(format, format))
+	}
+	require.ErrorContains(t,
+		ValidateKeyFormatPair(KeyFormatLegacy, KeyFormatV1),
+		"does not match table format")
+	require.ErrorContains(t,
+		ValidateKeyFormatPair(KeyFormatV1, KeyFormatLegacy),
+		"does not match table format")
+	require.Error(t, ValidateKeyFormatPair(KeyFormatV1+1, KeyFormatLegacy))
+	require.Error(t, ValidateKeyFormatPair(KeyFormatLegacy, KeyFormatV1+1))
 	for c, expected := range map[Charset]int32{CharsetUnspecified: 0, CharsetBinary: 1, CharsetASCII: 1, CharsetUTF8MB3: 3, CharsetUTF8MB4: 4, CharsetGBK: 2} {
 		require.Equal(t, expected, c.MaxBytes())
 		if c == CharsetUnspecified {
@@ -154,14 +206,24 @@ func TestCollationMetadataClosedDomain(t *testing.T) {
 
 func TestAdvertisedCollationsUseEffectiveSemantics(t *testing.T) {
 	rows := Advertised()
-	require.Len(t, rows, 6)
+	require.Len(t, rows, 8)
 	for _, row := range rows {
-		id, ok := ResolveSQL(row.Name)
-		require.True(t, ok)
-		effective, err := EffectiveDefinition(uint32(id), 0)
+		revision := uint8(RevisionLegacy)
+		id := row.Identity
+		if row.LegacyIdentity == LegacyIdentity {
+			revision = RevisionV1
+		} else {
+			id = row.LegacyIdentity
+		}
+		effective, err := EffectiveDefinition(uint32(id), uint32(revision))
 		require.NoError(t, err)
 		require.Equal(t, effective.Semantics, row.Semantics)
 		require.Equal(t, effective.PadSpace, row.PadSpace)
+		if row.LegacyIdentity != LegacyIdentity {
+			admitted, ok := ResolveSQL(row.Name)
+			require.True(t, ok)
+			require.Equal(t, row.LegacyIdentity, admitted)
+		}
 		if row.Name == "utf8mb4_0900_ai_ci" {
 			native, _ := Lookup(row.Name)
 			require.False(t, native.PadSpace)

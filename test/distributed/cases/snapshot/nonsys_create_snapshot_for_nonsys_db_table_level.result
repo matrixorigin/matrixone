@@ -110,24 +110,24 @@ select * from aff01;
 7499  ¦  ALLEN  ¦  SALESMAN  ¦  7698  ¦  1981-02-20  ¦  1600.00  ¦  300.00  ¦  30
 desc test_sp01;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-col1  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-col2  ¦  DECIMAL(6,0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-col3  ¦  VARCHAR(30)  ¦  YES  ¦    ¦  null  ¦    ¦  
+col1  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+col2  ¦  decimal(6,0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+col3  ¦  varchar(30)  ¦  YES  ¦    ¦  null  ¦    ¦  
 desc aff01;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-empno  ¦  INT UNSIGNED(32)  ¦  NO  ¦  PRI  ¦  null  ¦  auto_increment  ¦  雇员编号  𝄀
-ename  ¦  VARCHAR(15)  ¦  YES  ¦    ¦  null  ¦    ¦  雇员姓名  𝄀
-job  ¦  VARCHAR(10)  ¦  YES  ¦    ¦  null  ¦    ¦  雇员职位  𝄀
-mgr  ¦  INT UNSIGNED(32)  ¦  YES  ¦    ¦  null  ¦    ¦  雇员对应的领导的编号  𝄀
-hiredate  ¦  DATE(0)  ¦  YES  ¦    ¦  null  ¦    ¦  雇员的雇佣日期  𝄀
-sal  ¦  DECIMAL(7,2)  ¦  YES  ¦    ¦  null  ¦    ¦  雇员的基本工资  𝄀
-comm  ¦  DECIMAL(7,2)  ¦  YES  ¦    ¦  null  ¦    ¦  奖金  𝄀
-deptno  ¦  INT UNSIGNED(32)  ¦  YES  ¦  MUL  ¦  null  ¦    ¦  所在部门
+empno  ¦  int unsigned  ¦  NO  ¦  PRI  ¦  null  ¦  auto_increment  ¦  雇员编号  𝄀
+ename  ¦  varchar(15)  ¦  YES  ¦    ¦  null  ¦    ¦  雇员姓名  𝄀
+job  ¦  varchar(10)  ¦  YES  ¦    ¦  null  ¦    ¦  雇员职位  𝄀
+mgr  ¦  int unsigned  ¦  YES  ¦    ¦  null  ¦    ¦  雇员对应的领导的编号  𝄀
+hiredate  ¦  date  ¦  YES  ¦    ¦  null  ¦    ¦  雇员的雇佣日期  𝄀
+sal  ¦  decimal(7,2)  ¦  YES  ¦    ¦  null  ¦    ¦  雇员的基本工资  𝄀
+comm  ¦  decimal(7,2)  ¦  YES  ¦    ¦  null  ¦    ¦  奖金  𝄀
+deptno  ¦  int unsigned  ¦  YES  ¦  MUL  ¦  null  ¦    ¦  所在部门
 desc pri01;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-deptno  ¦  INT UNSIGNED(32)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦  部门编号  𝄀
-dname  ¦  VARCHAR(15)  ¦  YES  ¦    ¦  null  ¦    ¦  部门名称  𝄀
-loc  ¦  VARCHAR(50)  ¦  YES  ¦    ¦  null  ¦    ¦  部门所在位置
+deptno  ¦  int unsigned  ¦  NO  ¦  PRI  ¦  null  ¦    ¦  部门编号  𝄀
+dname  ¦  varchar(15)  ¦  YES  ¦    ¦  null  ¦    ¦  部门名称  𝄀
+loc  ¦  varchar(50)  ¦  YES  ¦    ¦  null  ¦    ¦  部门所在位置
 drop database sp_test;
 drop snapshot spsp01;
 show snapshots;
@@ -339,15 +339,15 @@ select * from pri01;
 2  ¦  37829901k3d  ¦  2  ¦  2
 desc aff01;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-col1  ¦  INT(32)  ¦  YES  ¦  MUL  ¦  null  ¦    ¦    𝄀
-col2  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-col3  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦  
+col1  ¦  int  ¦  YES  ¦  MUL  ¦  null  ¦    ¦    𝄀
+col2  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+col3  ¦  int  ¦  NO  ¦  PRI  ¦  null  ¦    ¦  
 desc pri01;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-col1  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
-col2  ¦  VARCHAR(20)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-col3  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-col4  ¦  BIGINT(64)  ¦  YES  ¦    ¦  null  ¦    ¦  
+col1  ¦  int  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
+col2  ¦  varchar(20)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+col3  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+col4  ¦  bigint  ¦  YES  ¦    ¦  null  ¦    ¦  
 drop database db06;
 drop snapshot spsp06;
 drop database if exists db07;
@@ -460,10 +460,7 @@ drop table if exists test01;
 create table test01 (col1 int, col2 datalink);
 insert into test01 values (1, 'file://$resources/load_data/time_date_1.csv');
 select col1, load_file(col2) from test01;
-➤ col1[4,32,0]  ¦  load_file(col2)[12,0,0]  𝄀
-1  ¦  1000-01-01,0001-01-01,1970-01-02 00:00:01,0
-9999-12-31,9999-12-31,2038-01-19,1
-
+internal error: only the sys account moadmin role can access SQL file paths
 select * from test01;
 ➤ col1[4,32,0]  ¦  col2[12,0,0]  𝄀
 1  ¦  file:///mnt/fastdata/temp/matrixone/test/distributed/resources/load_data/time_date_1.csv
@@ -471,6 +468,11 @@ drop snapshot if exists spsp10;
 create snapshot spsp10 for database db10;
 drop table test01;
 restore table db10.test01{snapshot="spsp10"};
+select col1, col2 = cast('file://$resources/load_data/time_date_1.csv' as datalink) as uri_preserved from test01;
+➤ col1[4,32,0]  ¦  uri_preserved[-7,1,0]  𝄀
+1  ¦  1
+select col1, load_file(col2) from test01;
+internal error: only the sys account moadmin role can access SQL file paths
 select * from db10.test01;
 ➤ col1[4,32,0]  ¦  col2[12,0,0]  𝄀
 1  ¦  file:///mnt/fastdata/temp/matrixone/test/distributed/resources/load_data/time_date_1.csv

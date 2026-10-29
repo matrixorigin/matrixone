@@ -49,9 +49,10 @@ const (
 )
 
 type container struct {
-	bat    *batch.Batch
-	colCnt int
-	i      int
+	allocation colexec.AnalyticAllocation
+	bat        *batch.Batch
+	colCnt     int
+	i          int
 
 	aggExe []colexec.ExprEvalVector
 	aggVec [][][]*vector.Vector
@@ -123,9 +124,6 @@ type container struct {
 	// currently being accumulated belongs to; -1 before the first window.
 	partIdx int
 	partRow int
-	// partEnd mirrors `end` but for one partition: its rows are exhausted, so
-	// windows keep sliding until they pass the partition's last value.
-	partEnd bool
 	// breakVecIdx / breakRowIdx hold the first row of the next partition, the
 	// row the restart re-anchors on.
 	breakVecIdx int
@@ -172,6 +170,13 @@ type TimeWin struct {
 	vm.OperatorBase
 }
 
+func (timeWin *TimeWin) SetAllocationAccount(account *mpool.AllocationAccount) error {
+	return timeWin.ctr.allocation.Set(account)
+}
+func (timeWin *TimeWin) ClearAllocationAccount(account *mpool.AllocationAccount) error {
+	return timeWin.ctr.allocation.Clear(account)
+}
+
 func (timeWin *TimeWin) GetOperatorBase() *vm.OperatorBase {
 	return &timeWin.OperatorBase
 }
@@ -216,6 +221,12 @@ func (ctr *container) hasGapFillBounds(timeWin *TimeWin) bool {
 }
 
 func (timeWin *TimeWin) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	defer func() {
+		if timeWin.ctr.allocation.Account != nil {
+			timeWin.Free(proc, pipelineFailed, err)
+		}
+	}()
+
 	ctr := &timeWin.ctr
 	ctr.resetExes()
 	releaseInheritedAccount := ctr.hasAccountedBufferedVector()
@@ -313,11 +324,9 @@ func (timeWin *TimeWin) Free(proc *process.Process, pipelineFailed bool, err err
 	ctr.freeVector(proc.Mp())
 	ctr.freeExes()
 	ctr.freeAgg()
+	ctr.clearWindowBounds()
+	ctr.allocation.FreeMetadata()
 	ctr.prepareParamKind.Reset(nil)
-}
-
-func (timeWin *TimeWin) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
-	return input, nil
 }
 
 func (ctr *container) resetExes() {
@@ -359,8 +368,7 @@ func (ctr *container) resetParam(timeWin *TimeWin) {
 	ctr.i = 0
 	ctr.end = false
 	ctr.group = -1
-	ctr.wStart = nil
-	ctr.wEnd = nil
+	ctr.clearWindowBounds()
 	ctr.startVecInBatch = false
 	ctr.endVecInBatch = false
 
@@ -379,7 +387,6 @@ func (ctr *container) resetParam(timeWin *TimeWin) {
 
 	ctr.partIdx = -1
 	ctr.partRow = 0
-	ctr.partEnd = false
 	ctr.breakVecIdx = 0
 	ctr.breakRowIdx = 0
 	ctr.partLastVal = 0
@@ -397,9 +404,10 @@ func (ctr *container) resetParam(timeWin *TimeWin) {
 }
 
 func (ctr *container) freeExes() {
-	for _, exe := range ctr.aggExe {
-		exe.Free()
+	for i := range ctr.aggExe {
+		ctr.aggExe[i].Free()
 	}
+	ctr.aggExe = nil
 	for _, exe := range ctr.partExe {
 		if exe != nil {
 			exe.Free()
@@ -420,11 +428,15 @@ func (ctr *container) freeExes() {
 	if ctr.gapFillEndExe != nil {
 		ctr.gapFillEndExe.Free()
 	}
+	ctr.partExe = nil
+	ctr.tsExe, ctr.startExe, ctr.endExe = nil, nil, nil
+	ctr.gapFillStartExe, ctr.gapFillEndExe = nil, nil
 }
 
 func (ctr *container) freeBatch(mp *mpool.MPool) {
 	if ctr.bat != nil {
 		ctr.bat.Clean(mp)
+		ctr.bat = nil
 	}
 	if ctr.startVecInBatch {
 		ctr.startVec = nil
@@ -442,6 +454,7 @@ func (ctr *container) freeAgg() {
 			a.Free()
 		}
 	}
+	ctr.aggs = nil
 }
 
 func (ctr *container) freeVector(mp *mpool.MPool) {

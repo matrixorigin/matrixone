@@ -1,9 +1,12 @@
 SELECT DATE(0.0124);
-Data truncation: data out of range: data type date, '0.0124'
+➤ DATE(0.0124)[91,10,0]  𝄀
+null
 SELECT DATE("2112123");
-Data truncation: data out of range: data type date, '2112123'
+➤ DATE(2112123)[91,10,0]  𝄀
+null
 SELECT DATE(1231241.4513);
-Data truncation: data out of range: data type date, '1231241.4513'
+➤ DATE(1231241.4513)[91,10,0]  𝄀
+null
 SELECT DATE("2017-06-15");
 ➤ DATE(2017-06-15)[91,64,0]  𝄀
 2017-06-15
@@ -14,7 +17,8 @@ SELECT DATE("2023-11-08 15:38");
 ➤ DATE(2023-11-08 15:38)[91,64,0]  𝄀
 2023-11-08
 SELECT DATE("The date is 2017-06-15");
-Data truncation: data out of range: data type date, 'The date is 2017-06-15'
+➤ DATE(The date is 2017-06-15)[91,10,0]  𝄀
+null
 SELECT DATE('2008-05-17 11:31:31') as required_DATE;
 ➤ required_DATE[91,64,0]  𝄀
 2008-05-17
@@ -46,18 +50,21 @@ CREATE TABLE t1 (d1 datetime);
 INSERT INTO t1(d1) VALUES ('2007-07-19 08:30:00'), (NULL),
 ('2007-07-19 08:34:00'), (NULL), ('2007-07-19 08:36:00');
 SELECT sum(date(d1)) FROM t1;
-invalid argument aggregate function sum, bad value [DATE]
+➤ sum(date(d1))[3,60,0]  𝄀
+60212157
 drop table t1;
 select date("1997-12-31 23:59:59.000001");
 ➤ date(1997-12-31 23:59:59.000001)[91,64,0]  𝄀
 1997-12-31
 select date("1997-13-31 23:59:59.000001");
-Data truncation: data out of range: data type date, '1997-13-31 23:59:59.000001'
+➤ date(1997-13-31 23:59:59.000001)[91,10,0]  𝄀
+null
 SELECT DATE(20110512154559.6 + 0e0);
 ➤ DATE(20110512154559.6 + 0e0)[91,64,0]  𝄀
 2011-05-12
 SELECT DATE(concat_ws('a', 0));
-Data truncation: data out of range: data type date, '0'
+➤ DATE(concat_ws(a, 0))[91,10,0]  𝄀
+null
 CREATE TABLE t1 (a timestamp);
 INSERT INTO t1 VALUES ("2020-12-31 12:01:32");
 SELECT DATE(MIN(a)) FROM t1;
@@ -327,3 +334,90 @@ SELECT t1.a, t2.a FROM t1 JOIN t2 ON (date(t1.b) = date(t2.b));
 1  ¦  4
 drop table t1;
 drop table t2;
+set @date_conversion_saved_mode = @@sql_mode;
+set session sql_mode = '';
+drop table if exists date_conversion_inputs;
+create table date_conversion_inputs (id int primary key, v varchar(64) not null);
+insert into date_conversion_inputs values (1, '2026-02-30'), (2, 'not a date'), (3, '2024-02-29 12:34:56.123456');
+select date('2026-02-30') as invalid_date, date('2026-13-01') as invalid_month, date('') as empty_date, date(NULL) as null_date;
+➤ invalid_date[91,10,0]  ¦  invalid_month[91,10,0]  ¦  empty_date[91,10,0]  ¦  null_date[91,10,0]  𝄀
+null  ¦  null  ¦  null  ¦  null
+select cast('2026-02-30' as datetime) as invalid_datetime, cast('not a date' as datetime) as junk_datetime;
+➤ invalid_datetime[93,19,0]  ¦  junk_datetime[93,19,0]  𝄀
+null  ¦  null
+select id, date(v) as d, cast(v as datetime(6)) as dt, date_format(v, '%Y-%m-%d') as formatted from date_conversion_inputs order by id;
+➤ id[4,32,0]  ¦  d[91,10,0]  ¦  dt[93,26,0]  ¦  formatted[12,10,0]  𝄀
+1  ¦  null  ¦  null  ¦  null  𝄀
+2  ¦  null  ¦  null  ¦  null  𝄀
+3  ¦  2024-02-29  ¦  2024-02-29 12:34:56.123456000  ¦  2024-02-29
+select id from date_conversion_inputs where date(v) = '2024-02-29' order by id;
+➤ id[4,32,0]  𝄀
+3
+select id from date_conversion_inputs where date(v) is null order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2
+select id from date_conversion_inputs where cast(v as datetime) is null order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2
+select count(date(v)) as dates, count(cast(v as datetime)) as datetimes from date_conversion_inputs;
+➤ dates[-5,64,0]  ¦  datetimes[-5,64,0]  𝄀
+1  ¦  1
+select id, coalesce(date(v), date('2000-01-01')) as d, coalesce(cast(v as datetime(6)), cast('2000-01-01' as datetime(6))) as dt from date_conversion_inputs order by id;
+➤ id[4,32,0]  ¦  d[91,10,0]  ¦  dt[93,26,0]  𝄀
+1  ¦  2000-01-01  ¦  2000-01-01 00:00:00  𝄀
+2  ¦  2000-01-01  ¦  2000-01-01 00:00:00  𝄀
+3  ¦  2024-02-29  ¦  2024-02-29 12:34:56.123456000
+select id, case when id = 3 then date(v) else date('2000-01-01') end as d from date_conversion_inputs order by id;
+➤ id[4,32,0]  ¦  d[91,10,0]  𝄀
+1  ¦  2000-01-01  𝄀
+2  ¦  2000-01-01  𝄀
+3  ¦  2024-02-29
+select id from date_conversion_inputs where cast(v as datetime(6)) = cast('2024-02-29 12:34:56.123456' as datetime(6)) order by id;
+➤ id[4,32,0]  𝄀
+3
+select dt from (select cast(v as datetime(6)) as dt from date_conversion_inputs union all select cast('2024-02-29 12:34:56.123456' as datetime(6))) u order by dt;
+➤ dt[93,26,0]  𝄀
+null  𝄀
+null  𝄀
+2024-02-29 12:34:56.123456000  𝄀
+2024-02-29 12:34:56.123456000
+select dt from (select cast(v as datetime(6)) as dt from date_conversion_inputs union select cast('2024-02-29 12:34:56.123456' as datetime(6))) u order by dt;
+➤ dt[93,26,0]  𝄀
+null  𝄀
+2024-02-29 12:34:56.123456000
+prepare date_conversion_stmt from 'select date(?) as d, cast(? as datetime(6)) as dt';
+set @date_conversion_value = 'not a date';
+execute date_conversion_stmt using @date_conversion_value, @date_conversion_value;
+➤ d[91,10,0]  ¦  dt[93,26,0]  𝄀
+null  ¦  null
+set @date_conversion_value = '2024-02-29 12:34:56.123456';
+execute date_conversion_stmt using @date_conversion_value, @date_conversion_value;
+➤ d[91,10,0]  ¦  dt[93,26,0]  𝄀
+2024-02-29  ¦  2024-02-29 12:34:56.123456000
+set @date_conversion_value = NULL;
+execute date_conversion_stmt using @date_conversion_value, @date_conversion_value;
+➤ d[91,10,0]  ¦  dt[93,26,0]  𝄀
+null  ¦  null
+set session sql_mode = 'STRICT_TRANS_TABLES,NO_ZERO_DATE,NO_ZERO_IN_DATE';
+select date('2026-02-30') as invalid_date, cast('not a date' as datetime) as invalid_datetime;
+➤ invalid_date[91,10,0]  ¦  invalid_datetime[93,19,0]  𝄀
+null  ¦  null
+select count(date(v)) as dates, count(cast(v as datetime)) as datetimes from date_conversion_inputs;
+➤ dates[-5,64,0]  ¦  datetimes[-5,64,0]  𝄀
+1  ¦  1
+set @date_conversion_value = '2026-02-30';
+execute date_conversion_stmt using @date_conversion_value, @date_conversion_value;
+➤ d[91,10,0]  ¦  dt[93,26,0]  𝄀
+null  ¦  null
+deallocate prepare date_conversion_stmt;
+create table date_conversion_target (d datetime);
+insert into date_conversion_target select v from date_conversion_inputs where id = 1;
+invalid input: invalid datetime value 2026-02-30
+select count(*) as persisted_rows from date_conversion_target;
+➤ persisted_rows[-5,64,0]  𝄀
+0
+drop table date_conversion_target;
+drop table date_conversion_inputs;
+set session sql_mode = @date_conversion_saved_mode;

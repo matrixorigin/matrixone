@@ -214,12 +214,17 @@ func doCreatePublication(ctx context.Context, ses *Session, cp *tree.CreatePubli
 		v2.CreatePubHistogram.Observe(time.Since(start).Seconds())
 	}()
 
-	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{forcePessimisticRC: true})
+	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{forcePessimisticRC: true, internalExecution: true})
 	defer bh.Close()
 
 	tenantInfo := ses.GetTenantInfo()
 	if !tenantInfo.IsAdminRole() {
 		return moerr.NewInternalError(ctx, "only admin can create publication")
+	}
+
+	lowerCaseTableNames, err := publicationSessionLowerCaseTableNames(ctx, ses)
+	if err != nil {
+		return
 	}
 
 	if err = bh.Exec(ctx, "begin;"); err != nil {
@@ -230,11 +235,34 @@ func doCreatePublication(ctx context.Context, ses *Session, cp *tree.CreatePubli
 	}()
 
 	ctx = defines.AttachAccount(ctx, tenantInfo.TenantID, tenantInfo.GetUserID(), tenantInfo.GetDefaultRoleID())
-	return createPublication(ctx, bh, cp)
+	return createPublication(ctx, bh, cp, lowerCaseTableNames)
+}
+
+// publicationCreateValidatesTableScope reports whether createPublication runs
+// validatePublicationTableScope for this CREATE: only a non-account-level
+// publication that names an explicit table list certifies its views' relation
+// dependencies under the caller-provided lower_case_table_names mode.
+// Account-level publications (DATABASE *) reject tables outright and TABLE *
+// selects every relation of the database by construction, so neither reaches
+// scope validation and neither consumes a mode. Replay callers (PITR and
+// snapshot restore) resolve the replay executor's mode only when this
+// predicate holds, so replaying a publication that certifies nothing cannot
+// be refused by a replay executor unable to name a mode it would never use.
+func publicationCreateValidatesTableScope(cp *tree.CreatePublication) bool {
+	return len(cp.Table) > 0 &&
+		string(cp.Database) != pubsub.TableAll &&
+		!pubTablesAllSelected(cp.Table)
 }
 
 // createPublication creates a publication, bh should be in a transaction
-func createPublication(ctx context.Context, bh BackgroundExec, cp *tree.CreatePublication) (err error) {
+func createPublication(ctx context.Context, bh BackgroundExec, cp *tree.CreatePublication, sessionLowerCaseTableNames int64) (err error) {
+	return createPublicationWithTableSelection(ctx, bh, cp, len(cp.Table) == 0, sessionLowerCaseTableNames)
+}
+
+// Public CREATE retains the omitted-TABLE-means-ALL contract. Restore also
+// admits an explicit empty selection left by DROP TABLE, without widening it
+// to ALL or bypassing the usual database/account checks and subscriber updates.
+func createPublicationWithTableSelection(ctx context.Context, bh BackgroundExec, cp *tree.CreatePublication, allTables bool, sessionLowerCaseTableNames int64) (err error) {
 	var (
 		sql             string
 		dbId            uint64
@@ -318,23 +346,55 @@ func createPublication(ctx context.Context, bh BackgroundExec, cp *tree.CreatePu
 	}
 
 	tablesStr := pubsub.TableAll
-	if len(cp.Table) > 0 {
+	if !allTables {
 		if isAccountLevel {
 			// Account level publication cannot specify tables
 			err = moerr.NewInternalErrorf(ctx, "account level publication (DATABASE *) cannot specify tables")
 			return
 		}
-		if tablesStr, err = genPubTablesStr(ctx, bh, dbName, cp.Table); err != nil {
-			return
+		if pubTablesAllSelected(cp.Table) {
+			// TABLE * selects every relation of the database, so every view
+			// dependency is inside the publication scope by construction.
+			tablesStr = pubsub.TableAll
+		} else {
+			var tableNames []string
+			if tableNames, err = resolvePubTableNames(ctx, bh, dbName, cp.Table); err != nil {
+				return
+			}
+			targetAccountIDs := publicationTargetAccountIDs(subAccounts)
+			if cp.AccountsSet.All {
+				// ACCOUNT ALL includes accounts created after the publication;
+				// judge system-relation availability for a general subscriber.
+				targetAccountIDs = []uint32{publicationTargetAnyGeneralAccount}
+			}
+			if err = validatePublicationTableScope(ctx, bh, dbName, tableNames, targetAccountIDs, sessionLowerCaseTableNames); err != nil {
+				return
+			}
+			tablesStr = strings.Join(tableNames, pubsub.Sep)
 		}
 	}
 
-	sql, err = getSqlForInsertIntoMoPubs(ctx, accountId, accountName, pubName, dbName, dbId, len(cp.Table) == 0, tablesStr, accountNamesStr, comment, true)
+	sql, err = getSqlForInsertIntoMoPubs(ctx, accountId, accountName, pubName, dbName, dbId, allTables, tablesStr, accountNamesStr, comment, true)
 	if err != nil {
 		return
 	}
 
+	if cp.IfNotExists {
+		// Database resolution may switch ctx to the source account; the publication
+		// still belongs to the account that issued CREATE.
+		pubInfo, lookupErr := getPubInfo(defines.AttachAccountId(ctx, accountId), bh, pubName)
+		if lookupErr != nil {
+			return lookupErr
+		}
+		if pubInfo != nil {
+			return nil
+		}
+	}
+
 	if err = bh.Exec(defines.AttachAccountId(ctx, catalog.System_Account), sql); err != nil {
+		if cp.IfNotExists && moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry) {
+			return nil
+		}
 		return
 	}
 
@@ -410,12 +470,17 @@ func doAlterPublication(ctx context.Context, ses *Session, ap *tree.AlterPublica
 		dbType          string
 		sql             string
 	)
-	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{forcePessimisticRC: true})
+	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{forcePessimisticRC: true, internalExecution: true})
 	defer bh.Close()
 
 	tenantInfo := ses.GetTenantInfo()
 	if !tenantInfo.IsAdminRole() {
 		return moerr.NewInternalError(ctx, "only admin can alter publication")
+	}
+
+	lowerCaseTableNames, err := publicationSessionLowerCaseTableNames(ctx, ses)
+	if err != nil {
+		return
 	}
 
 	if err = bh.Exec(ctx, "begin;"); err != nil {
@@ -525,6 +590,28 @@ func doAlterPublication(ctx context.Context, ses *Session, ap *tree.AlterPublica
 			if databaseAccountID, _, err = getDbAccountIdAndTypeById(ctx, bh, dbName, pub.DbId); err != nil {
 				return err
 			}
+			// The inherited source database keeps its physical owner; the
+			// same foreign-source authorization CREATE enforces applies to
+			// every ALTER that keeps or reuses that database, judged on the
+			// ALTER's final account set: the sys account and the owner stay
+			// permitted, and any other publisher keeps the source only while
+			// the final targets grant no account visibility the owner lacks.
+			publisherAccountID, accErr := defines.GetAccountId(ctx)
+			if accErr != nil {
+				return accErr
+			}
+			authorized := publisherAccountID == databaseAccountID ||
+				publisherAccountID == sysAccountID
+			if !authorized && accountNamesStr != pubsub.AccountAll {
+				finalTargets := make([]uint32, 0, len(newSubAccounts))
+				for accountID := range newSubAccounts {
+					finalTargets = append(finalTargets, uint32(accountID))
+				}
+				authorized = publicationSourceOwnerAuthorized(publisherAccountID, databaseAccountID, finalTargets)
+			}
+			if !authorized {
+				return publicationForeignSourceUnauthorizedError(ctx, publisherAccountID, databaseAccountID, dbName)
+			}
 			dbId = pub.DbId
 			databaseCtx = defines.AttachAccountId(ctx, databaseAccountID)
 		} else {
@@ -551,10 +638,46 @@ func doAlterPublication(ctx context.Context, ses *Session, ap *tree.AlterPublica
 	}
 
 	// alter tables
+	targetAccountIDs := publicationTargetAccountIDs(newSubAccounts)
+	if accountNamesStr == pubsub.AccountAll {
+		// The final account set is ALL: judge system-relation availability for
+		// the general accounts that may subscribe, including future ones.
+		targetAccountIDs = []uint32{publicationTargetAnyGeneralAccount}
+	}
 	tablesStr := pub.TablesStr
 	if len(ap.Table) > 0 {
-		if tablesStr, err = genPubTablesStr(databaseCtx, bh, dbName, ap.Table); err != nil {
-			return
+		if pubTablesAllSelected(ap.Table) {
+			tablesStr = pubsub.TableAll
+		} else {
+			var tableNames []string
+			if tableNames, err = resolvePubTableNames(databaseCtx, bh, dbName, ap.Table); err != nil {
+				return
+			}
+			if err = validatePublicationTableScope(databaseCtx, bh, dbName, tableNames, targetAccountIDs, lowerCaseTableNames); err != nil {
+				return
+			}
+			tablesStr = strings.Join(tableNames, pubsub.Sep)
+		}
+	} else if (ap.DbName != "" || ap.AccountsSet != nil) &&
+		dbName != pubsub.TableAll && pub.TablesStr != pubsub.TableAll {
+		// The explicit table list is inherited while the source database or
+		// the account set changes; validate the final effective scope so an
+		// account-only ALTER cannot widen the publication to subscribers that
+		// cannot resolve a published view's relations.
+		if ap.DbName == "" && ap.AccountsSet != nil &&
+			publicationAccountsReduceOnly(accountNamesStr, newSubAccounts, oldSubAccounts) {
+			// An account-only change that cannot add authorization must not be
+			// blocked by a view the publisher has since broken: revocation is
+			// an authorization reduction, and refusing it would strand the
+			// removed account's access behind the broken view. ACCOUNT ALL can
+			// add authorization - subscription rights extend to accounts
+			// created after the change - so it keeps validating below, as do
+			// expansions and source changes.
+		} else {
+			inheritedTables := splitPublicationPersistedTableList(pub.TablesStr)
+			if err = validatePublicationTableScope(databaseCtx, bh, dbName, inheritedTables, targetAccountIDs, lowerCaseTableNames); err != nil {
+				return
+			}
 		}
 	}
 
@@ -649,7 +772,7 @@ func doDropPublication(ctx context.Context, ses *Session, dp *tree.DropPublicati
 		v2.DropPubHistogram.Observe(time.Since(start).Seconds())
 	}()
 
-	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{forcePessimisticRC: true})
+	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{forcePessimisticRC: true, internalExecution: true})
 	defer bh.Close()
 
 	tenantInfo := ses.GetTenantInfo()
@@ -676,7 +799,7 @@ func doDropPublication(ctx context.Context, ses *Session, dp *tree.DropPublicati
 	return dropPublication(ctx, bh, dp.IfExists, tenantInfo.Tenant, string(dp.Name))
 }
 
-func invalidatePublicationViewMetadata(
+var invalidatePublicationViewMetadata = func(
 	ctx context.Context,
 	bh BackgroundExec,
 	service string,
@@ -695,7 +818,7 @@ func invalidatePublicationViewMetadata(
 }
 
 func doDropCcprSubscription(ctx context.Context, ses *Session, dcs *tree.DropCcprSubscription) (err error) {
-	bh := ses.GetBackgroundExec(ctx)
+	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{internalExecution: true})
 	defer bh.Close()
 
 	accountId, err := defines.GetAccountId(ctx)
@@ -767,7 +890,7 @@ func doDropCcprSubscription(ctx context.Context, ses *Session, dcs *tree.DropCcp
 }
 
 func doResumeCcprSubscription(ctx context.Context, ses *Session, rcs *tree.ResumeCcprSubscription) (err error) {
-	bh := ses.GetBackgroundExec(ctx)
+	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{internalExecution: true})
 	defer bh.Close()
 
 	accountId, err := defines.GetAccountId(ctx)
@@ -837,7 +960,7 @@ func doResumeCcprSubscription(ctx context.Context, ses *Session, rcs *tree.Resum
 }
 
 func doPauseCcprSubscription(ctx context.Context, ses *Session, pcs *tree.PauseCcprSubscription) (err error) {
-	bh := ses.GetBackgroundExec(ctx)
+	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{internalExecution: true})
 	defer bh.Close()
 
 	accountId, err := defines.GetAccountId(ctx)
@@ -1194,7 +1317,7 @@ func extractPubInfosFromExecResult(ctx context.Context, erArray []ExecResult) (p
 	return
 }
 
-func getPubInfo(ctx context.Context, bh BackgroundExec, pubName string) (pubInfo *pubsub.PubInfo, err error) {
+var getPubInfo = func(ctx context.Context, bh BackgroundExec, pubName string) (pubInfo *pubsub.PubInfo, err error) {
 	accountId, err := defines.GetAccountId(ctx)
 	if err != nil {
 		return
@@ -1238,9 +1361,12 @@ func getPubInfo(ctx context.Context, bh BackgroundExec, pubName string) (pubInfo
 	return
 }
 
-// getPubInfoByName gets publication info by name only, without filtering by account_id.
-// This allows non-sys tenants to query publications created by any account (e.g., sys tenant).
-func getPubInfoByName(ctx context.Context, bh BackgroundExec, pubName string) (pubInfo *pubsub.PubInfo, err error) {
+// getPubInfosByName gets all publication infos by name only, without filtering by
+// account_id. This allows non-sys tenants to query publications created by any
+// account (e.g., sys tenant). Publication names are unique per account (the
+// primary key of mo_pubs is (account_id, pub_name)) but not across accounts, so
+// callers must resolve which same-named publication applies to them.
+func getPubInfosByName(ctx context.Context, bh BackgroundExec, pubName string) (pubInfos []*pubsub.PubInfo, err error) {
 	accountNameColExists, err := checkColExists(ctx, bh, "mo_catalog", "mo_pubs", "account_name")
 	if err != nil {
 		return
@@ -1266,7 +1392,6 @@ func getPubInfoByName(ctx context.Context, bh BackgroundExec, pubName string) (p
 		return
 	}
 
-	var pubInfos []*pubsub.PubInfo
 	if accountNameColExists {
 		if pubInfos, err = extractPubInfosFromExecResult(ctx, erArray); err != nil {
 			return
@@ -1275,9 +1400,6 @@ func getPubInfoByName(ctx context.Context, bh BackgroundExec, pubName string) (p
 		if pubInfos, err = extractPubInfosFromExecResultOld(ctx, erArray); err != nil {
 			return
 		}
-	}
-	if len(pubInfos) > 0 {
-		pubInfo = pubInfos[0]
 	}
 	return
 }
@@ -2221,6 +2343,25 @@ func doShowCcprSubscriptions(ctx context.Context, ses *Session, scs *tree.ShowCc
 	return trySaveQueryResult(ctx, ses, rs)
 }
 
+// newAmbiguousPublicationCoverageError reports that a bare publication name
+// matches several publications accessible to the caller, so SHOW PUBLICATION
+// COVERAGE cannot resolve it deterministically. The owner list is sorted to
+// keep the message independent of catalog row order.
+func newAmbiguousPublicationCoverageError(ctx context.Context, pubName, accountName string, accessible []*pubsub.PubInfo) error {
+	owners := make([]string, 0, len(accessible))
+	for _, candidate := range accessible {
+		if candidate.PubAccountName != "" {
+			owners = append(owners, fmt.Sprintf("'%s'", candidate.PubAccountName))
+		} else {
+			owners = append(owners, fmt.Sprintf("account_id %d", candidate.PubAccountId))
+		}
+	}
+	slices.Sort(owners)
+	return moerr.NewInternalErrorf(ctx,
+		"publication name '%s' is ambiguous: %d publications with this name owned by accounts %s are accessible to account '%s'",
+		pubName, len(accessible), strings.Join(owners, ", "), accountName)
+}
+
 func doShowPublicationCoverage(ctx context.Context, ses *Session, spc *tree.ShowPublicationCoverage) (err error) {
 	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
@@ -2232,18 +2373,49 @@ func doShowPublicationCoverage(ctx context.Context, ses *Session, spc *tree.Show
 	}
 	accountName := tenantInfo.GetTenant()
 
-	// Get publication info by name only (without filtering by current account_id)
-	// This allows non-sys tenants to query publications created by sys tenant
-	pubInfo, err := getPubInfoByName(ctx, bh, spc.Name)
+	// Get candidate publications by name only (without filtering by current
+	// account_id). This allows non-sys tenants to query publications created
+	// by any account (e.g., sys tenant).
+	pubInfos, err := getPubInfosByName(ctx, bh, spc.Name)
 	if err != nil {
 		return err
 	}
-	if pubInfo == nil {
+	if len(pubInfos) == 0 {
 		return moerr.NewInternalErrorf(ctx, "publication '%s' does not exist", spc.Name)
 	}
 
-	// Check if current account is in subscribed accounts
-	if !pubInfo.InSubAccounts(accountName) {
+	// Resolve which same-named publication the statement refers to and
+	// authorize the access in one pass. The publication's owning account wins
+	// over subscriber access: the mo_pubs primary key (account_id, pub_name)
+	// makes that match unique. Otherwise every candidate the caller may access
+	// is collected: any publication for the sys account, otherwise the ones
+	// whose subscriber list contains the caller. Exactly one accessible
+	// candidate resolves the reference; several make the name ambiguous because
+	// the statement cannot qualify the owning account, so a deterministic
+	// result is impossible; none rejects the caller, and an identically named
+	// publication it cannot access must not shadow one it can.
+	var pubInfo *pubsub.PubInfo
+	var accessible []*pubsub.PubInfo
+	for _, candidate := range pubInfos {
+		if candidate.PubAccountId == tenantInfo.TenantID {
+			pubInfo = candidate
+			break
+		}
+		if tenantInfo.TenantID == catalog.System_Account || candidate.InSubAccounts(accountName) {
+			accessible = append(accessible, candidate)
+		}
+	}
+	if pubInfo == nil {
+		switch len(accessible) {
+		case 1:
+			pubInfo = accessible[0]
+		case 0:
+			// pubInfo stays nil; the caller is rejected below.
+		default:
+			return newAmbiguousPublicationCoverageError(ctx, spc.Name, accountName, accessible)
+		}
+	}
+	if pubInfo == nil {
 		return moerr.NewInternalErrorf(ctx, "account '%s' is not allowed to access publication '%s'", accountName, spc.Name)
 	}
 
@@ -2356,6 +2528,73 @@ func getDbIdAndType(ctx context.Context, bh BackgroundExec, dbName string) (dbId
 	return
 }
 
+// publicationSourceOwnerAuthorized reports whether publisherAccountID may
+// publish a database physically owned by ownerAccountID under the given
+// final target account ids. An ordinary publication publishes the
+// publisher's own database; the sys account, the one cross-account actor
+// every flow already trusts, may source any account's database. Any other
+// publisher may source another account's database only when the publication
+// grants no account visibility the owner lacks: its entire target set is the
+// owner itself. A wider target set would let a general administrator expose
+// the owner's data to third accounts without the owner granting anything,
+// so it is rejected here at CREATE, ALTER and subscription admission, and
+// runtime resolution keeps the publisher identity for such rows, which
+// fails closed.
+func publicationSourceOwnerAuthorized(publisherAccountID, ownerAccountID uint32, targetAccountIDs []uint32) bool {
+	if publisherAccountID == ownerAccountID || publisherAccountID == sysAccountID {
+		return true
+	}
+	for _, targetAccountID := range targetAccountIDs {
+		if targetAccountID != ownerAccountID {
+			return false
+		}
+	}
+	return true
+}
+
+// publicationForeignSourceUnauthorizedError is the stable rejection of a
+// foreign source that would expose the owner's database beyond the owner.
+func publicationForeignSourceUnauthorizedError(
+	ctx context.Context,
+	publisherAccountID, ownerAccountID uint32,
+	dbName string,
+) error {
+	return moerr.NewInternalErrorf(ctx,
+		"account %d cannot publish database '%s' owned by account %d: a foreign source may be published by the sys account, or to the owner account alone",
+		publisherAccountID, dbName, ownerAccountID)
+}
+
+// publicationTargetsAdmitForeignSource reports whether a persisted
+// publication's target accounts keep a general publisher's foreign source
+// inside the owner's existing visibility: every target must be the physical
+// owner itself. An ACCOUNT ALL publication includes every account, so it
+// never admits a general publisher's foreign source.
+func publicationTargetsAdmitForeignSource(
+	ctx context.Context,
+	bh BackgroundExec,
+	pubInfo *pubsub.PubInfo,
+	ownerAccountID uint32,
+) (bool, error) {
+	if pubInfo.SubAccountsStr == pubsub.AccountAll {
+		return false, nil
+	}
+	for _, accountName := range pubInfo.GetSubAccountNames() {
+		accountID, _, err := getAccountIdAndStatusByName(
+			defines.AttachAccountId(ctx, catalog.System_Account), bh, accountName)
+		if err != nil {
+			return false, err
+		}
+		if uint32(accountID) != ownerAccountID {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
+// resolvePublicationDatabaseByName resolves the publication's source database.
+// The publisher's own database wins; only when it does not exist is the
+// database searched among the target accounts, and such a foreign source is
+// restricted by publicationSourceOwnerAuthorized.
 func resolvePublicationDatabaseByName(
 	ctx context.Context,
 	bh BackgroundExec,
@@ -2368,9 +2607,18 @@ func resolvePublicationDatabaseByName(
 		return
 	}
 
+	publisherAccountID, pubErr := defines.GetAccountId(ctx)
+	if pubErr != nil {
+		err = pubErr
+		return
+	}
 	for _, accountID := range targetAccountIDs {
 		dbId, dbType, err = getDbIdAndTypeForAccount(ctx, bh, dbName, accountID)
 		if err == nil {
+			if !publicationSourceOwnerAuthorized(publisherAccountID, accountID, targetAccountIDs) {
+				err = publicationForeignSourceUnauthorizedError(ctx, publisherAccountID, accountID, dbName)
+				return
+			}
 			databaseCtx = defines.AttachAccountId(ctx, accountID)
 			return
 		}
@@ -2504,7 +2752,14 @@ func showTablesFromDb(ctx context.Context, bh BackgroundExec, dbName string) (ta
 	sql := "show tables from " + sqlquote.Ident(dbName)
 
 	bh.ClearExecResultSet()
-	if err = bh.Exec(ctx, sql); err != nil {
+	// A foreign-source publication stamps this read to the database owner's
+	// account while a SHOW TABLES plan additionally applies the DDL session's
+	// role metadata-visibility filter, which never contains that foreign
+	// owner's objects - the read would come back empty and every explicit
+	// table list would fail with "table not exists". Publication admission
+	// already authorized the statement, so the read is trusted internal
+	// discovery, like the other catalog-inspection paths.
+	if err = bh.Exec(defines.AttachInternalExecutor(ctx), sql); err != nil {
 		return
 	}
 
@@ -2527,17 +2782,19 @@ func showTablesFromDb(ctx context.Context, bh BackgroundExec, dbName string) (ta
 	return
 }
 
-func genPubTablesStr(ctx context.Context, bh BackgroundExec, dbName string, table tree.TableNames) (pubTablesStr string, err error) {
-	if len(table) == 1 && string(table[0].ObjectName) == pubsub.TableAll {
-		return pubsub.TableAll, nil
-	}
+// pubTablesAllSelected reports whether an explicit table list selects every
+// relation of the database (TABLE *).
+func pubTablesAllSelected(table tree.TableNames) bool {
+	return len(table) == 1 && string(table[0].ObjectName) == pubsub.TableAll
+}
 
+func resolvePubTableNames(ctx context.Context, bh BackgroundExec, dbName string, table tree.TableNames) (tablesNames []string, err error) {
 	tablesInDb, err := showTablesFromDb(ctx, bh, dbName)
 	if err != nil {
 		return
 	}
 
-	tablesNames := make([]string, 0, len(table))
+	tablesNames = make([]string, 0, len(table))
 	seenTables := make(map[string]struct{}, len(table))
 	for _, tableName := range table {
 		tblName := string(tableName.ObjectName)
@@ -2553,8 +2810,27 @@ func genPubTablesStr(ctx context.Context, bh BackgroundExec, dbName string, tabl
 	}
 	slices.Sort(tablesNames)
 
-	pubTablesStr = strings.Join(tablesNames, pubsub.Sep)
 	return
+}
+
+// splitPublicationPersistedTableList reproduces the exact name sequence of a
+// persisted publication table list. The list is written by strings.Join with
+// pubsub.Sep and no filler bytes, and publication and subscription statements
+// accept quoted identifiers whose bytes include leading or trailing spaces:
+// the parser preserves those bytes, resolvePubTableNames stores them verbatim,
+// and the subscriber's InSubMetaTables compares the exact names. Splitting
+// must preserve every byte too - trimming here would validate a different
+// name than the one published (' t' becomes 't', which fails admission or
+// silently inspects a same-named trimmed relation instead) - so only
+// genuinely empty segments are dropped.
+func splitPublicationPersistedTableList(tables string) []string {
+	names := make([]string, 0, 4)
+	for _, name := range strings.Split(tables, pubsub.Sep) {
+		if name != "" {
+			names = append(names, name)
+		}
+	}
+	return names
 }
 
 func getSetAccounts(
@@ -2736,16 +3012,51 @@ func getSubscriptionMeta(ctx context.Context, dbName string, ses FeSession, txn 
 	return nil, nil
 }
 
+// getAccountIdAndStatusByName resolves one account's id and status through
+// the system account's catalog, so the caller's own tenant context cannot
+// hide the account. The publication metadata paths resolve the publisher
+// account id this way.
+func getAccountIdAndStatusByName(ctx context.Context, bh BackgroundExec, pubAccountName string) (accId int64, accStatus string, err error) {
+	sql, err := getSqlForAccountIdAndStatus(ctx, pubAccountName, true)
+	if err != nil {
+		return
+	}
+
+	bh.ClearExecResultSet()
+	if err = bh.Exec(ctx, sql); err != nil {
+		return
+	}
+
+	erArray, err := getResultSet(ctx, bh)
+	if err != nil {
+		return
+	}
+
+	if !execResultArrayHasData(erArray) {
+		err = moerr.NewInternalErrorf(ctx, "there is no publication account %s", pubAccountName)
+		return
+	}
+	if accId, err = erArray[0].GetInt64(ctx, 0, 0); err != nil {
+		return
+	}
+
+	if accStatus, err = erArray[0].GetString(ctx, 0, 1); err != nil {
+		return
+	}
+
+	if accStatus == tree.AccountStatusSuspend.String() {
+		err = moerr.NewInternalErrorf(ctx, "the account %s is suspended", pubAccountName)
+		return
+	}
+
+	return
+}
+
 func checkSubscriptionValidCommon(ctx context.Context, ses FeSession, subName, pubAccountName, pubName string, bh BackgroundExec) (subMeta *plan.SubscriptionMeta, err error) {
 	start := time.Now()
 	defer func() {
 		v2.CheckSubValidDurationHistogram.Observe(time.Since(start).Seconds())
 	}()
-	var (
-		sql, accStatus string
-		erArray        []ExecResult
-		accId          int64
-	)
 
 	tenantInfo := ses.GetTenantInfo()
 	if tenantInfo != nil && pubAccountName == tenantInfo.GetTenant() {
@@ -2755,33 +3066,8 @@ func checkSubscriptionValidCommon(ctx context.Context, ses FeSession, subName, p
 
 	newCtx := defines.AttachAccountId(ctx, catalog.System_Account)
 	//get pubAccountId from publication info
-	if sql, err = getSqlForAccountIdAndStatus(newCtx, pubAccountName, true); err != nil {
-		return
-	}
-
-	bh.ClearExecResultSet()
-	if err = bh.Exec(newCtx, sql); err != nil {
-		return
-	}
-
-	if erArray, err = getResultSet(newCtx, bh); err != nil {
-		return
-	}
-
-	if !execResultArrayHasData(erArray) {
-		err = moerr.NewInternalErrorf(newCtx, "there is no publication account %s", pubAccountName)
-		return
-	}
-	if accId, err = erArray[0].GetInt64(newCtx, 0, 0); err != nil {
-		return
-	}
-
-	if accStatus, err = erArray[0].GetString(newCtx, 0, 1); err != nil {
-		return
-	}
-
-	if accStatus == tree.AccountStatusSuspend.String() {
-		err = moerr.NewInternalErrorf(newCtx, "the account %s is suspended", pubAccountName)
+	var accId int64
+	if accId, _, err = getAccountIdAndStatusByName(newCtx, bh, pubAccountName); err != nil {
 		return
 	}
 
@@ -2817,7 +3103,215 @@ func checkSubscriptionValidCommon(ctx context.Context, ses FeSession, subName, p
 		SubName:     subName,
 		Tables:      pubInfo.TablesStr,
 	}
+	if pubInfo.DbId != 0 {
+		// The subscription must resolve its published objects in the account
+		// that physically owns the published database - the same identity
+		// CREATE, ALTER and subscription admission validate. It coincides
+		// with the publisher for ordinary publications; a publication can
+		// also source a database owned by one of its target accounts, and
+		// those relations must resolve against that account at query, SHOW
+		// and clone time too, because every consumer of this metadata
+		// routes relations through it. Legacy publications without a
+		// persisted database identity keep resolving through the publisher.
+		// Foreign sources follow publicationSourceOwnerAuthorized: the sys
+		// account and owner-only target sets resolve through the physical
+		// owner, and any other general-publisher row is rejected with the
+		// stable authorization error instead of silently resolving a
+		// same-named publisher database.
+		sourceAccountID, _, dbErr := getDbAccountIdAndTypeById(newCtx, bh, pubInfo.DbName, pubInfo.DbId)
+		if dbErr != nil {
+			err = dbErr
+			return
+		}
+		resolvePhysicalSource := uint32(accId) == sourceAccountID || accId == sysAccountID
+		if !resolvePhysicalSource {
+			admitted, admErr := publicationTargetsAdmitForeignSource(newCtx, bh, pubInfo, sourceAccountID)
+			if admErr != nil {
+				err = admErr
+				return
+			}
+			resolvePhysicalSource = admitted
+		}
+		if !resolvePhysicalSource {
+			// Keeping the publisher identity would silently resolve a
+			// same-named database of the publisher instead of the persisted
+			// source, so the unauthorized row fails closed with the stable
+			// authorization error on every statement path (query, USE, SHOW,
+			// clone) and subscription admission alike.
+			err = publicationForeignSourceUnauthorizedError(newCtx, uint32(accId), sourceAccountID, pubInfo.DbName)
+			return
+		}
+		subMeta.AccountId = int32(sourceAccountID)
+	}
 	return
+}
+
+// checkSubscriptionValidForCreate is the admission path of CREATE DATABASE
+// ... FROM account PUBLICATION: besides the runtime metadata checks it
+// revalidates the publication's explicit table list against the subscribing
+// account. Publications created before scope validation existed, or whose
+// views were redefined after creation, may otherwise hand the subscriber a
+// database with unusable views. Runtime resolves (query, USE) keep the
+// metadata-only checks of checkSubscriptionValidCommon so one broken view
+// cannot fail queries of healthy tables in the same subscription.
+func checkSubscriptionValidForCreate(
+	ctx context.Context,
+	ses FeSession,
+	subName, pubAccountName, pubName string,
+	bh BackgroundExec,
+) (subMeta *plan.SubscriptionMeta, err error) {
+	subMeta, err = checkSubscriptionValidCommon(ctx, ses, subName, pubAccountName, pubName, bh)
+	if err != nil || subMeta == nil {
+		return
+	}
+	// Whole-database publications carry no explicit list to revalidate. The
+	// source-owner authorization of checkSubscriptionValidCommon has already
+	// run at this point: an unauthorized persisted foreign source fails there,
+	// before this early return can admit a subscription to it.
+	if strings.ToLower(subMeta.Tables) == pubsub.TableAll {
+		return
+	}
+	subscriberAccountID, err := defines.GetAccountId(ctx)
+	if err != nil {
+		return
+	}
+	tableNames := splitPublicationPersistedTableList(subMeta.Tables)
+	// The publication owner is not necessarily the owner of the published
+	// database: CREATE and ALTER resolve the source database into one of the
+	// target accounts and keep its physical identity in the catalog. Resolve
+	// that identity the same way ALTER does, and validate the table list in
+	// the physical source account - the same catalog those paths validated.
+	// The publication row itself stays readable through its publisher, whose
+	// id the subscription metadata carried before the physical identity was
+	// resolved into it.
+	publisherAccountID, _, accErr := getAccountIdAndStatusByName(
+		defines.AttachAccountId(ctx, catalog.System_Account), bh, pubAccountName)
+	if accErr != nil {
+		err = accErr
+		return
+	}
+	pubInfo, err := getPubInfo(defines.AttachAccountId(ctx, uint32(publisherAccountID)), bh, pubName)
+	if err != nil {
+		return
+	}
+	if pubInfo == nil {
+		err = moerr.NewInternalErrorf(ctx, "publication '%s' is no longer valid", pubName)
+		return
+	}
+	sourceAccountID := uint32(subMeta.AccountId)
+	if pubInfo.DbId != 0 {
+		physicalAccountID, _, dbErr := getDbAccountIdAndTypeById(ctx, bh, pubInfo.DbName, pubInfo.DbId)
+		if dbErr != nil {
+			err = dbErr
+			return
+		}
+		// Foreign sources follow publicationSourceOwnerAuthorized even for
+		// rows created before the CREATE-time rule existed: the sys account
+		// and owner-only target sets stay admitted, and a general publisher's
+		// row that would expose the owner's database beyond the owner is
+		// rejected here instead of creating an unusable subscription.
+		authorized := uint32(publisherAccountID) == physicalAccountID ||
+			publisherAccountID == sysAccountID
+		if !authorized {
+			var admitErr error
+			authorized, admitErr = publicationTargetsAdmitForeignSource(ctx, bh, pubInfo, physicalAccountID)
+			if admitErr != nil {
+				err = admitErr
+				return
+			}
+		}
+		if !authorized {
+			err = publicationForeignSourceUnauthorizedError(ctx, uint32(publisherAccountID), physicalAccountID, pubInfo.DbName)
+			return
+		}
+		sourceAccountID = physicalAccountID
+	}
+	var lowerCaseTableNames int64
+	if lowerCaseTableNames, err = publicationSessionLowerCaseTableNames(ctx, ses); err != nil {
+		return
+	}
+	err = validatePublicationTableScope(
+		defines.AttachAccountId(ctx, sourceAccountID), bh, pubInfo.DbName, tableNames,
+		[]uint32{subscriberAccountID}, lowerCaseTableNames)
+	return
+}
+
+// resolveSubscriptionSourceAccounts rewrites the account identity of every
+// subscription metadata entry to the account that physically owns its
+// published database, the same identity checkSubscriptionValidCommon resolves
+// for the direct statement paths. The metadata enumeration path feeds every
+// subscription-aware metadata consumer - the INFORMATION_SCHEMA.STATISTICS
+// publisher branches, SHOW and snapshot recovery - so those consumers must
+// read the physical source catalog too, or a foreign-source publication would
+// answer data queries from its owner while reporting statistics from a
+// same-named database of the publisher. Authorization follows
+// publicationSourceOwnerAuthorized: ordinary publications keep the publisher
+// (which is also the owner) and admitted foreign sources resolve to the
+// physical owner. An unauthorized foreign-source row is dropped from the
+// enumeration rather than left on the publisher identity, which would let a
+// same-named publisher database substitute its objects for the persisted
+// source; that subscription already fails closed on every statement path.
+// The authorized entries are returned.
+func resolveSubscriptionSourceAccounts(
+	ctx context.Context,
+	bh BackgroundExec,
+	metas []*plan.SubscriptionMeta,
+) ([]*plan.SubscriptionMeta, error) {
+	pubInfos := make(map[uint32]map[string]*pubsub.PubInfo)
+	owners := make(map[uint64]uint32)
+	authorized := make([]*plan.SubscriptionMeta, 0, len(metas))
+	for _, meta := range metas {
+		if meta == nil {
+			continue
+		}
+		publisherAccountID := uint32(meta.AccountId)
+		byName, ok := pubInfos[publisherAccountID]
+		if !ok {
+			byName = make(map[string]*pubsub.PubInfo)
+			pubInfos[publisherAccountID] = byName
+		}
+		pubInfo, ok := byName[meta.Name]
+		if !ok {
+			var pubErr error
+			pubInfo, pubErr = getPubInfo(defines.AttachAccountId(ctx, publisherAccountID), bh, meta.Name)
+			if pubErr != nil {
+				return nil, pubErr
+			}
+			byName[meta.Name] = pubInfo
+		}
+		if pubInfo == nil || pubInfo.DbId == 0 {
+			// Account-level publications and rows whose publication vanished
+			// keep the publisher identity; nothing is substituted.
+			authorized = append(authorized, meta)
+			continue
+		}
+		owner, ok := owners[pubInfo.DbId]
+		if !ok {
+			var dbErr error
+			owner, _, dbErr = getDbAccountIdAndTypeById(ctx, bh, pubInfo.DbName, pubInfo.DbId)
+			if dbErr != nil {
+				return nil, dbErr
+			}
+			owners[pubInfo.DbId] = owner
+		}
+		resolveOwner := publisherAccountID == owner || publisherAccountID == sysAccountID
+		if !resolveOwner {
+			admittedByTargets, admErr := publicationTargetsAdmitForeignSource(ctx, bh, pubInfo, owner)
+			if admErr != nil {
+				return nil, admErr
+			}
+			resolveOwner = admittedByTargets
+		}
+		if !resolveOwner {
+			// An unauthorized foreign source must not enumerate through the
+			// publisher identity: a same-named publisher database would
+			// substitute its objects for the persisted source.
+			continue
+		}
+		meta.AccountId = int32(owner)
+		authorized = append(authorized, meta)
+	}
+	return authorized, nil
 }
 
 func checkSubscriptionValid(ctx context.Context, ses FeSession, dbName string, bh BackgroundExec) (*plan.SubscriptionMeta, error) {
@@ -3084,7 +3578,7 @@ func checkUpstreamPublicationCoverage(
 }
 
 func doCreateSubscription(ctx context.Context, ses *Session, cs *tree.CreateSubscription) (err error) {
-	bh := ses.GetBackgroundExec(ctx)
+	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{internalExecution: true})
 	defer bh.Close()
 
 	tenantInfo := ses.GetTenantInfo()

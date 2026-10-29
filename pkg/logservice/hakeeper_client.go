@@ -20,8 +20,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"math/rand"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/gogo/protobuf/proto"
@@ -679,6 +681,9 @@ func (c *managedHAKeeperClient) allocateID(
 		// RPC without an allocation lock, then publishes the batch and wakes all
 		// waiters exactly once on either success or failure.
 		firstID, err := c.allocateIDBatch(ctx, key, batchSize)
+		if err == nil && (firstID == 0 || batchSize == 0 || batchSize-1 > math.MaxUint64-firstID) {
+			err = moerr.NewInternalError(ctx, "HAKeeper returned an invalid ID reservation")
+		}
 		ids.Lock()
 		if err == nil {
 			ids.nextID = firstID + 1
@@ -1205,6 +1210,7 @@ func (c *managedHAKeeperClient) isRetryableError(err error) bool {
 	// applies while the replacement generation is being connected or admitted.
 	return errors.Is(err, io.EOF) ||
 		errors.Is(err, io.ErrUnexpectedEOF) ||
+		errors.Is(err, syscall.ECONNRESET) ||
 		logutil.IsExpectedConnectionCloseError(err) ||
 		moerr.IsMoErrCode(err, moerr.ErrBackendClosed) ||
 		moerr.IsMoErrCode(err, moerr.ErrBackendCannotConnect) ||

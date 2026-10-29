@@ -171,6 +171,13 @@ type RoleIDKey struct{}
 type DDLOwnerRoleIDKey struct{}
 type NodeIDKey struct{}
 type InternalExecutorKey struct{}
+
+// TemporaryTableAccessKey marks trusted internal catalog maintenance that must
+// resolve a temporary table by its exact physical name. It is intentionally
+// separate from InternalExecutorKey: ordinary internal SQL keeps the same
+// session-isolation rules as user SQL unless its owner explicitly attaches
+// this capability.
+type TemporaryTableAccessKey struct{}
 type LockWriterFairKey struct{}
 
 func IsInternalExecutor(ctx context.Context) bool {
@@ -178,6 +185,33 @@ func IsInternalExecutor(ctx context.Context) bool {
 		return v.(bool)
 	}
 	return false
+}
+
+// AttachInternalExecutor marks statements derived from ctx as trusted internal
+// discovery. Metadata-visibility filters that scope catalog rows to the
+// caller session's active roles exempt such reads: their admission was already
+// authorized at the statement level, and the inspecting session's account or
+// roles may deliberately differ from the account that owns the rows, as when
+// a DDL path resolves the owner account before reading a catalog it must not
+// see through its own session roles.
+func AttachInternalExecutor(ctx context.Context) context.Context {
+	return context.WithValue(ctx, InternalExecutorKey{}, true)
+}
+
+// AttachTemporaryTableAccess grants the narrow capability used by session
+// reset/disconnect, orphan-GC cleanup, and validated ISCP index maintenance.
+// Ordinary SQL cannot set context
+// values, and InternalExecutorKey alone does not grant this access.
+func AttachTemporaryTableAccess(ctx context.Context) context.Context {
+	return context.WithValue(ctx, TemporaryTableAccessKey{}, true)
+}
+
+func HasTemporaryTableAccess(ctx context.Context) bool {
+	if ctx == nil {
+		return false
+	}
+	v, _ := ctx.Value(TemporaryTableAccessKey{}).(bool)
+	return v
 }
 
 // AttachLockWriterFair marks lock requests derived from ctx as writer-fair.
@@ -280,6 +314,21 @@ type IsMoLogger struct{}
 
 type IgnoreForeignKey struct{}
 
+// TrustedCheckConstraintNames bridges StatementOption.WithTrustedCheckConstraintNames
+// to Scope.createTable: the statement intentionally keeps CHECK names inherited
+// from an owned source (ALTER ... COPY replica, partition backing table, TRUNCATE
+// recreate), so the schema-wide duplicate-name scan is skipped.
+type TrustedCheckConstraintNames struct{}
+
+// TrustedForeignKeyLayout bridges StatementOption.WithTrustedForeignKeyLayout to
+// the planner's CREATE validation: the statement physically reconstructs an
+// existing table unchanged (TRUNCATE's drop-and-recreate, including the
+// truncate-optimized unfiltered DELETE), so foreign-key layout rules that gate
+// NEWLY authored constraints — like #30282's 1830 for SET NULL over a NOT NULL
+// column — must not reject the historical layout being reinstalled. Never
+// propagate this into user-visible CREATE TABLE planning.
+type TrustedForeignKeyLayout struct{}
+
 type AlterCopyOpt struct{}
 
 // OptimizerHints carries a per-statement optimizer_hints string (same key=value
@@ -289,6 +338,27 @@ type OptimizerHints struct{}
 
 // Determine if now is a bg sql.
 type BgKey struct{}
+
+// PublicationViewBinding marks a background statement whose only job is
+// binding the persisted metadata of a published view: identifiers keep their
+// source case in parsing, the compile stops after binding (no optimizer rule
+// evaluates expressions and no pipeline is built or run), session temporary
+// tables stay out of name resolution, and user-defined function binding is
+// refused with a distinguishable error.
+type PublicationViewBinding struct{}
+
+// WithPublicationViewBinding marks ctx as a publication-view metadata binding
+// statement.
+func WithPublicationViewBinding(ctx context.Context) context.Context {
+	return context.WithValue(ctx, PublicationViewBinding{}, true)
+}
+
+// IsPublicationViewBinding reports whether ctx carries the publication-view
+// metadata binding marker.
+func IsPublicationViewBinding(ctx context.Context) bool {
+	value, _ := ctx.Value(PublicationViewBinding{}).(bool)
+	return value
+}
 
 // Sp variable scope
 type VarScopeKey struct{}

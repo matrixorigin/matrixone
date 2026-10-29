@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	mosort "github.com/matrixorigin/matrixone/pkg/sort"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -89,6 +90,7 @@ type container struct {
 
 	desc      []bool // ds[i] == true: the attrs[i] are in descending order
 	nullsLast []bool
+	sortTypes []types.Type // semantic types for SQL ordering/comparison domains
 
 	sortExprExecutor       []colexec.ExpressionExecutor
 	sortVectors            []*vector.Vector
@@ -522,10 +524,6 @@ func orderTerminalCapacityError(ctx context.Context, err error) error {
 		)
 	}
 	return err
-}
-
-func (order *Order) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
-	return input, nil
 }
 
 func (order *Order) cleanBatch(proc *process.Process) {

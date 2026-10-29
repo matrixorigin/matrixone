@@ -1,3 +1,5 @@
+set @enum_1_saved_sql_mode = @@session.sql_mode;
+set session sql_mode = 'STRICT_TRANS_TABLES';
 create table typec(a int,b enum('4','3','2','1'));
 insert into typec values(1,1);
 insert into typec values(2,'1');
@@ -55,7 +57,7 @@ select * from orders;
 3  ¦  333  ¦  null  𝄀
 5  ¦  555  ¦  null
 insert into orders values(6,'666','New');
-internal error: convert to MySQL enum failed: item New is not in enum [Pending Processing Completed Cancelled]
+Data truncated for ENUM value: 'New'
 select count(*),status from orders group by status;
 ➤ count(*)[-5,64,0]  ¦  status[12,-1,0]  𝄀
 2  ¦  Pending  𝄀
@@ -78,7 +80,7 @@ null
 drop table orders;
 create table t4 (a enum('abc', 'def'));
 insert into t4 values (0);
-internal error: convert to MySQL enum failed: number 0 overflow enum boundary [1, 2]
+Data truncated for ENUM value: '0'
 insert into t4 values (1);
 insert into t4 values (2);
 select * from t4;
@@ -107,10 +109,16 @@ def
 delete from t4;
 insert into t5 values(3);
 insert into t4 select * from t5;
-internal error: convert to MySQL enum failed: number 3 overflow enum boundary [1, 2]
+Data truncated for ENUM value: '3'
+select count(*) from t4;
+➤ count(*)[-5,64,0]  𝄀
+0
 insert into t6 values('pkg');
 insert into t4 select * from t6;
-internal error: convert to MySQL enum failed: item pkg is not in enum [abc def]
+Data truncated for ENUM value: 'pkg'
+select count(*) from t4;
+➤ count(*)[-5,64,0]  𝄀
+0
 drop table t4;
 drop table t5;
 drop table t6;
@@ -162,7 +170,7 @@ table03  ¦  CREATE TABLE `table03` (
 )
 desc table03;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-type  ¦  ENUM('1','2','3','4','5')  ¦  NO  ¦    ¦  null  ¦    ¦  type
+type  ¦  enum('1','2','3','4','5')  ¦  NO  ¦    ¦  null  ¦    ¦  type
 drop table table03;
 create table t3 (id int);
 insert into t3 values (1);
@@ -172,7 +180,7 @@ select * from t3;
 1  ¦  null
 insert into t3 values (2,'B');
 insert into t3 values (3,'D');
-internal error: convert to MySQL enum failed: item D is not in enum [A B C]
+Data truncated for ENUM value: 'D'
 select * from t3;
 ➤ id[4,32,0]  ¦  name[12,-1,0]  𝄀
 1  ¦  null  𝄀
@@ -186,7 +194,12 @@ A  𝄀
 B  𝄀
 C
 alter table t1 modify column name enum('A','B');
-internal error: convert to MySQL enum failed: item C is not in enum [A B]
+Data truncated for ENUM value: 'C'
+select * from t1 order by name;
+➤ name[12,-1,0]  𝄀
+A  𝄀
+B  𝄀
+C
 alter table t1 modify column name enum('A','B','C');
 select * from t1;
 ➤ name[12,-1,0]  𝄀
@@ -194,3 +207,4 @@ A  𝄀
 B  𝄀
 C
 drop table t1;
+set session sql_mode = @enum_1_saved_sql_mode;

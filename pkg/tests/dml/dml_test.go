@@ -235,8 +235,8 @@ func TestForcedMultiCNDeleteAndInsertIgnore(t *testing.T) {
 func TestDataBranchDiffAsFile(t *testing.T) {
 	embed.RunBaseClusterTests(t,
 		func(c embed.Cluster) {
-			ctx, cancel := context.WithTimeout(context.Background(), time.Second*240)
-			defer cancel()
+			setupCtx, cancelSetup := context.WithTimeout(t.Context(), 240*time.Second)
+			defer cancelSetup()
 
 			cn1, err := c.GetCNService(0)
 			require.NoError(t, err)
@@ -250,8 +250,9 @@ func TestDataBranchDiffAsFile(t *testing.T) {
 
 			dbName := testutils.GetDatabaseName(t)
 			defer cleanupTestDatabases(t, sqlDB, dbName)
-			execSQLDB(t, ctx, sqlDB, fmt.Sprintf("create database `%s`", dbName))
-			execSQLDB(t, ctx, sqlDB, fmt.Sprintf("use `%s`", dbName))
+			execSQLDB(t, setupCtx, sqlDB, fmt.Sprintf("create database `%s`", dbName))
+			execSQLDB(t, setupCtx, sqlDB, fmt.Sprintf("use `%s`", dbName))
+			cancelSetup()
 
 			cases := []struct {
 				name string
@@ -303,8 +304,10 @@ func TestDataBranchDiffAsFile(t *testing.T) {
 						require.NoError(t, openErr)
 						defer subDB.Close()
 						subDB.SetMaxOpenConns(1)
-						subCtx, subCancel := context.WithTimeout(ctx, time.Second*240)
-						defer subCancel()
+						// Waiting for an execution slot must not spend this case's
+						// SQL budget or inherit an expired setup/sibling deadline.
+						subCtx, subCancel := dataBranchDiffScenarioContext(t)
+						defer subCancel() // Cancel active work before closing subDB.
 						execSQLDB(t, subCtx, subDB, fmt.Sprintf("use `%s`", dbName))
 						tc.run(t, subCtx, subDB, dbName)
 					})
@@ -1656,12 +1659,12 @@ func assertTablesEqual(t *testing.T, ctx context.Context, db *sql.DB, schema, le
 	check := func(query string) {
 		rows, err := db.QueryContext(ctx, query)
 		require.NoErrorf(t, err, "sql: %s", query)
-		require.NoErrorf(t, rows.Err(), "sql: %s", query)
 		defer rows.Close()
 		rowCount := 0
 		for rows.Next() {
 			rowCount++
 		}
+		require.NoErrorf(t, rows.Err(), "sql: %s", query)
 		require.Equalf(t, 0, rowCount, "expected no rows for query %s", query)
 	}
 

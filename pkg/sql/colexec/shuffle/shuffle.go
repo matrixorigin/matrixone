@@ -17,6 +17,7 @@ package shuffle
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"fmt"
 
 	moerr "github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -554,9 +555,13 @@ func shuffleConstVectorByHash(ap *Shuffle, bat *batch.Batch) uint64 {
 	case types.T_uint16:
 		groupByCol := vector.MustFixedColNoTypeCheck[uint16](groupByVec)
 		return plan2.SimpleInt64HashToRange(uint64(groupByCol[0]), lenRegs)
-	case types.T_char, types.T_varchar, types.T_text:
+	case types.T_char, types.T_varchar, types.T_text,
+		types.T_binary, types.T_varbinary, types.T_blob, types.T_datalink:
 		groupByCol, area := vector.MustVarlenaRawData(groupByVec)
-		return stringHashToRange(ap, groupByCol[0].GetByteSlice(area), lenRegs)
+		return stringHashToRangeForType(ap, *groupByVec.GetType(), groupByCol[0].GetByteSlice(area), lenRegs)
+	case types.T_uuid:
+		groupByCol := vector.MustFixedColNoTypeCheck[types.Uuid](groupByVec)
+		return plan2.SimpleInt64HashToRange(uuidHash(groupByCol[0]), lenRegs)
 	default:
 		panic("unsupported shuffle type, wrong plan!") //something got wrong here!
 	}
@@ -621,9 +626,19 @@ func getShuffledSelsByHashWithNull(ap *Shuffle, bat *batch.Batch) [][]int32 {
 			}
 			sels[regIndex] = append(sels[regIndex], int32(row))
 		}
-	case types.T_char, types.T_varchar, types.T_text:
+	case types.T_char, types.T_varchar, types.T_text,
+		types.T_binary, types.T_varbinary, types.T_blob, types.T_datalink:
 		groupByCol, area := vector.MustVarlenaRawData(groupByVec)
 		appendStringHashSels(ap, sels, groupByVec, groupByCol, area, lenRegs, true)
+	case types.T_uuid:
+		groupByCol := vector.MustFixedColNoTypeCheck[types.Uuid](groupByVec)
+		for row, v := range groupByCol {
+			var regIndex uint64 = 0
+			if !groupByVec.IsNull(uint64(row)) {
+				regIndex = plan2.SimpleInt64HashToRange(uuidHash(v), lenRegs)
+			}
+			sels[regIndex] = append(sels[regIndex], int32(row))
+		}
 	default:
 		panic("unsupported shuffle type, wrong plan!") //something got wrong here!
 	}
@@ -683,9 +698,16 @@ func getShuffledSelsByHashWithoutNull(ap *Shuffle, bat *batch.Batch) [][]int32 {
 			regIndex := plan2.SimpleInt64HashToRange(uint64(v.B0_63^v.B64_127), bucketNum)
 			sels[regIndex] = append(sels[regIndex], int32(row))
 		}
-	case types.T_char, types.T_varchar, types.T_text:
+	case types.T_char, types.T_varchar, types.T_text,
+		types.T_binary, types.T_varbinary, types.T_blob, types.T_datalink:
 		groupByCol, area := vector.MustVarlenaRawData(groupByVec)
 		appendStringHashSels(ap, sels, groupByVec, groupByCol, area, bucketNum, false)
+	case types.T_uuid:
+		groupByCol := vector.MustFixedColNoTypeCheck[types.Uuid](groupByVec)
+		for row, v := range groupByCol {
+			regIndex := plan2.SimpleInt64HashToRange(uuidHash(v), bucketNum)
+			sels[regIndex] = append(sels[regIndex], int32(row))
+		}
 	default:
 		panic(fmt.Sprintf("unsupported shuffle type %v, wrong plan!", groupByVec.GetType())) //something got wrong here!
 	}
@@ -1142,7 +1164,7 @@ func shuffleConstVecByHash(ap *Shuffle, vec *vector.Vector) uint64 {
 		return plan2.SimpleInt64HashToRange(uint64(vector.MustFixedColNoTypeCheck[uint16](vec)[0]), lenRegs)
 	case types.T_char, types.T_varchar, types.T_text:
 		groupByCol, area := vector.MustVarlenaRawData(vec)
-		return stringHashToRange(ap, groupByCol[0].GetByteSlice(area), lenRegs)
+		return stringHashToRangeForType(ap, *vec.GetType(), groupByCol[0].GetByteSlice(area), lenRegs)
 	default:
 		panic("unsupported shuffle type, wrong plan!")
 	}
@@ -1493,6 +1515,12 @@ func hashShuffleVecWithoutNull(ap *Shuffle, sels [][]int32, vec *vector.Vector, 
 	}
 }
 
+// uuidHash reduces a UUID to one uint64 for bucket selection, the same
+// fold used for DECIMAL128 above. Bucketing only partitions rows.
+func uuidHash(v types.Uuid) uint64 {
+	return binary.LittleEndian.Uint64(v[0:8]) ^ binary.LittleEndian.Uint64(v[8:16])
+}
+
 func appendStringHashSels(
 	ap *Shuffle,
 	sels [][]int32,
@@ -1505,10 +1533,17 @@ func appendStringHashSels(
 	for row := range col {
 		regIndex := uint64(0)
 		if !withNull || !vec.IsNull(uint64(row)) {
-			regIndex = stringHashToRange(ap, col[row].GetByteSlice(area), bucketNum)
+			regIndex = stringHashToRangeForType(ap, *vec.GetType(), col[row].GetByteSlice(area), bucketNum)
 		}
 		sels[regIndex] = append(sels[regIndex], int32(row))
 	}
+}
+
+func stringHashToRangeForType(ap *Shuffle, typ types.Type, value []byte, bucketNum uint64) uint64 {
+	if types.IsUnicodeCollation(typ.Charset) {
+		value = types.CollationKeyOrOriginal(typ.Charset, value)
+	}
+	return stringHashToRange(ap, value, bucketNum)
 }
 
 func stringHashToRange(ap *Shuffle, value []byte, bucketNum uint64) uint64 {

@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -59,7 +60,9 @@ func (m *identityCapturingSQLExecutor) Exec(ctx context.Context, _ string, opts 
 	return executor.Result{}, nil
 }
 
-func (m *identityCapturingSQLExecutor) ExecTxn(context.Context, func(executor.TxnExecutor) error, executor.Options) error {
+func (m *identityCapturingSQLExecutor) ExecTxn(ctx context.Context, _ func(executor.TxnExecutor) error, opts executor.Options) error {
+	m.ctx = ctx
+	m.opts = opts
 	return nil
 }
 
@@ -75,11 +78,14 @@ func TestSqlProcessExecutionIdentityOverride(t *testing.T) {
 	moruntime.SetupServiceBasedRuntime(uuid, rt)
 
 	subscriberCtx := defines.AttachAccountId(context.Background(), 7)
+	session := &struct{ process.Session }{}
+	subscriberCtx = process.ContextWithInternalExecutorSession(subscriberCtx, session)
 	sqlctx := NewSqlContext(subscriberCtx, uuid, nil, 7, nil)
 	sqlproc := NewSqlProcessWithContext(sqlctx).WithExecutionIdentity(42, "publisher_db")
 
 	_, err := RunSql(sqlproc, "select 1")
 	require.NoError(t, err)
+	require.Nil(t, process.InternalExecutorSessionFromContext(spy.ctx))
 	accountID, err := defines.GetAccountId(spy.ctx)
 	require.NoError(t, err)
 	require.Equal(t, uint32(42), accountID)
@@ -88,6 +94,9 @@ func TestSqlProcessExecutionIdentityOverride(t *testing.T) {
 	require.True(t, spy.opts.StatementOption().HasAccountID())
 	require.Equal(t, uint32(42), spy.opts.StatementOption().AccountID())
 
+	require.NoError(t, RunTxn(sqlproc, func(executor.TxnExecutor) error { return nil }))
+	require.Equal(t, uint32(42), spy.opts.AccountID())
+	require.Equal(t, "publisher_db", spy.opts.Database())
 	streamCh := make(chan executor.Result, 1)
 	errCh := make(chan error, 1)
 	_, err = RunStreamingSql(subscriberCtx, sqlproc, "select 1", streamCh, errCh)
@@ -104,6 +113,7 @@ func TestSqlProcessExecutionIdentityOverride(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, uint32(7), subscriberID)
 	require.Equal(t, uint32(7), sqlctx.AccountId)
+	require.Same(t, session, process.InternalExecutorSessionFromContext(subscriberCtx))
 }
 
 func TestSqlProcessExecutionIdentityOverrideFromProcess(t *testing.T) {
@@ -125,14 +135,20 @@ func TestSqlProcessExecutionIdentityOverrideFromProcess(t *testing.T) {
 	key := contextKey{}
 	subscriberCtx := context.WithValue(context.Background(), key, "subscriber")
 	subscriberCtx = defines.AttachAccountId(subscriberCtx, 7)
-	proc := testutil.NewProcessWithMPool(t, uuid, mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, uuid, mpool.MustNewZero())
 	proc.Base.LockService = lockService
 	proc.Ctx = subscriberCtx
 	proc.ReplaceTopCtx(subscriberCtx)
 	proc.Base.TxnOperator = txnOp
 	proc.Base.SessionInfo.Database = "subscriber_db"
+	proc.Base.SessionInfo.Account = "sys"
+	proc.Base.SessionInfo.Role = "moadmin"
 	proc.Base.SessionInfo.TimeZone = time.FixedZone("subscriber-zone", 8*60*60)
 	proc.Base.IsFrontend = true
+	session := &struct{ process.Session }{}
+	proc.Session = session
+	subscriberCtx = process.ContextWithInternalExecutorSession(subscriberCtx, session)
+	proc.ReplaceTopCtx(subscriberCtx)
 	resolveVariable := func(varName string, _, _ bool) (interface{}, error) {
 		return "resolved:" + varName, nil
 	}
@@ -140,6 +156,7 @@ func TestSqlProcessExecutionIdentityOverrideFromProcess(t *testing.T) {
 
 	sqlproc := NewSqlProcess(proc).WithExecutionIdentity(42, "publisher_db")
 	assertExecutionIdentity := func(expectedContextValue string) {
+		require.Nil(t, process.InternalExecutorSessionFromContext(spy.ctx), "foreign execution must mask the caller's aliases")
 		accountID, err := defines.GetAccountId(spy.ctx)
 		require.NoError(t, err)
 		require.Equal(t, uint32(42), accountID)
@@ -153,10 +170,15 @@ func TestSqlProcessExecutionIdentityOverrideFromProcess(t *testing.T) {
 		require.Equal(t, "resolved:test_variable", value)
 		require.True(t, spy.opts.StatementOption().HasAccountID())
 		require.Equal(t, uint32(42), spy.opts.StatementOption().AccountID())
+		accountName, roleName := spy.opts.StatementOption().SessionIdentity()
+		require.Equal(t, "sys", accountName)
+		require.Equal(t, "moadmin", roleName)
 	}
 
 	_, err := RunSql(sqlproc, "select 1")
 	require.NoError(t, err)
+	assertExecutionIdentity("subscriber")
+	require.NoError(t, RunTxn(sqlproc, func(executor.TxnExecutor) error { return nil }))
 	assertExecutionIdentity("subscriber")
 
 	streamCtx := context.WithValue(context.Background(), key, "stream")
@@ -176,12 +198,31 @@ func TestSqlProcessExecutionIdentityOverrideFromProcess(t *testing.T) {
 	require.Same(t, txnOp, proc.GetTxnOperator())
 	require.Equal(t, "subscriber_db", proc.Base.SessionInfo.Database)
 	require.Equal(t, "subscriber", proc.GetTopContext().Value(key))
+	require.Same(t, session, process.InternalExecutorSessionFromContext(subscriberCtx))
+
+	// Removing the foreign override restores the originating session in every
+	// nested execution mode, without granting an unrestricted access capability.
+	sqlproc.AccountIDOverride = nil
+	for _, run := range []struct {
+		name string
+		call func() error
+	}{
+		{"batch", func() error { _, err := RunSql(sqlproc, "select 1"); return err }},
+		{"stream", func() error { _, err := RunStreamingSql(streamCtx, sqlproc, "select 1", streamCh, errCh); return err }},
+		{"txn", func() error { return RunTxn(sqlproc, func(executor.TxnExecutor) error { return nil }) }},
+	} {
+		t.Run(run.name, func(t *testing.T) {
+			require.NoError(t, run.call())
+			require.Same(t, session, process.InternalExecutorSessionFromContext(spy.ctx))
+			require.False(t, defines.HasTemporaryTableAccess(spy.ctx))
+		})
+	}
 }
 
 func TestSqlTxnError(t *testing.T) {
 
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 	sqlproc := NewSqlProcess(proc)
 	assert.Panics(t, func() {
 		RunTxn(sqlproc, func(exec executor.TxnExecutor) error {
@@ -202,7 +243,7 @@ func TestSqlTxn(t *testing.T) {
 	moruntime.SetupServiceBasedRuntime(uuid, rt)
 
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 	proc.Base.SessionInfo.Buf = buffer.New()
 	proc.Ctx = context.Background()
 	proc.Ctx = context.WithValue(proc.Ctx, defines.TenantIDKey{}, uint32(0))
@@ -275,7 +316,7 @@ func TestFinishTxnWithCleanupContextCommitsWithFreshContext(t *testing.T) {
 // cache freshness check (captured at load to re-query in the background).
 func TestSqlProcessServiceAndAccount(t *testing.T) {
 	// Proc-backed: just exercise the branch (values depend on the test proc).
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	sp := NewSqlProcess(proc)
 	_ = sp.GetService()
 	_, _ = sp.GetAccountID()

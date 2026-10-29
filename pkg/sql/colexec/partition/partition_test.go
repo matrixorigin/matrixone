@@ -41,7 +41,7 @@ type partitionTestCase struct {
 func makeTestCases(t *testing.T) []partitionTestCase {
 	return []partitionTestCase{
 		{
-			proc: testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()),
+			proc: testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero()),
 			arg: &Partition{
 				OrderBySpecs: []*plan.OrderBySpec{{Expr: newExpression(0, types.T_int32), Flag: 0}},
 			},
@@ -86,7 +86,7 @@ func TestPartition(t *testing.T) {
 }
 
 func TestPartitionOutputHonorsCancellation(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	arg := &Partition{
 		OrderBySpecs: []*plan.OrderBySpec{{Expr: newExpression(0, types.T_int32)}},
 	}
@@ -123,7 +123,7 @@ func (c *countedPartitionCompare) Set(i int, vec *vector.Vector) {
 }
 
 func TestPartitionGroupSearchDoesNotRevisitEarlierHeads(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	arg := &Partition{OrderBySpecs: []*plan.OrderBySpec{{Expr: newExpression(0, types.T_int32)}}}
 	t.Cleanup(func() {
 		arg.Reset(proc, false, nil)
@@ -157,13 +157,25 @@ func TestPartitionGroupSearchDoesNotRevisitEarlierHeads(t *testing.T) {
 }
 
 func TestPartitionGroupSearchPreservesGroupsAndReset(t *testing.T) {
+	nullKey := &plan.OrderBySpec{Expr: &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_any)}, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Isnull: true}},
+	}}
+	literalKey := &plan.OrderBySpec{Expr: &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_int32)}, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_I32Val{I32Val: 7}}},
+	}}
+	idKey := &plan.OrderBySpec{Expr: newExpression(0, types.T_int32)}
 	for _, tc := range []struct {
-		name  string
-		flag  plan.OrderBySpec_OrderByFlag
-		keys  [][]int32
-		nulls [][]bool
+		name     string
+		flag     plan.OrderBySpec_OrderByFlag
+		keys     [][]int32
+		nulls    [][]bool
+		specs    []*plan.OrderBySpec
+		oneGroup bool
 	}{
 		{name: "ascending", keys: [][]int32{{2, 2, 4}, {2, 3}, {1, 1, 1, 2, 4}}},
+		{name: "null_before_id", keys: [][]int32{{2, 2, 4}, {2, 3}, {1, 1, 1, 2, 4}}, specs: []*plan.OrderBySpec{nullKey, idKey}},
+		{name: "literals_after_id", keys: [][]int32{{2, 2, 4}, {2, 3}, {1, 1, 1, 2, 4}}, specs: []*plan.OrderBySpec{idKey, literalKey, nullKey}},
+		{name: "only_literals", keys: [][]int32{{2, 2, 4}, {2, 3}, {1, 1, 1, 2, 4}}, specs: []*plan.OrderBySpec{nullKey, literalKey}, oneGroup: true},
 		{
 			name: "descending_nulls_last", flag: plan.OrderBySpec_DESC | plan.OrderBySpec_NULLS_LAST,
 			keys:  [][]int32{{2, 2, 0}, {2, 1}, {3, 3, 3, 2, 0}},
@@ -171,8 +183,12 @@ func TestPartitionGroupSearchPreservesGroupsAndReset(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
-			arg := &Partition{OrderBySpecs: []*plan.OrderBySpec{{Expr: newExpression(0, types.T_int32), Flag: tc.flag}}}
+			proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
+			specs := tc.specs
+			if specs == nil {
+				specs = []*plan.OrderBySpec{{Expr: newExpression(0, types.T_int32), Flag: tc.flag}}
+			}
+			arg := &Partition{OrderBySpecs: specs}
 			t.Cleanup(func() {
 				arg.Reset(proc, false, nil)
 				arg.Free(proc, false, nil)
@@ -198,7 +214,11 @@ func TestPartitionGroupSearchPreservesGroupsAndReset(t *testing.T) {
 					require.NoError(t, err)
 					groups = append(groups, append([]int64(nil), vector.MustFixedColWithTypeCheck[int64](result.Batch.Vecs[1])...))
 				}
-				require.Equal(t, [][]int64{{5, 6, 7}, {0, 1, 3, 8}, {4}, {2, 9}}, groups)
+				if tc.oneGroup {
+					require.Equal(t, [][]int64{{0, 1, 2, 3, 4, 5, 6, 7, 8, 9}}, groups)
+				} else {
+					require.Equal(t, [][]int64{{5, 6, 7}, {0, 1, 3, 8}, {4}, {2, 9}}, groups)
+				}
 				arg.Reset(proc, false, nil)
 			}
 		})

@@ -531,7 +531,7 @@ func updateRelationAutoIncrement(
 	databaseID := rel.GetDBID(ctx)
 	epochReqs := make([]*api.AlterTableReq, 0)
 	setOffset := func(col incrservice.AutoColumn, offset uint64) error {
-		if err := incrservice.ValidateAutoColumnOffset(ctx, typs[col.ColIndex].Oid, offset); err != nil {
+		if err := incrservice.ValidateAutoColumnOffset(ctx, typs[col.ColIndex], offset); err != nil {
 			return err
 		}
 		if err := proc.GetIncrService().SetOffset(
@@ -596,10 +596,6 @@ func (tc *TableClone) Release() {
 
 func (tc *TableClone) GetOperatorBase() *vm.OperatorBase {
 	return &tc.OperatorBase
-}
-
-func (tc *TableClone) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
-	return input, nil
 }
 
 func (tc *TableClone) TypeName() string {

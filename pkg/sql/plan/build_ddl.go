@@ -26,11 +26,14 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/gogo/protobuf/proto"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/collation"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/objectkey"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -55,6 +58,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 )
 
@@ -223,15 +227,25 @@ func validateViewDefinitionPlugins(ctx CompilerContext, query *plan.Query) error
 	return nil
 }
 
-func genViewTableDef(
+// viewColumnInference is the common output of View authoring and description.
+// It owns its columns; definition publication is deliberately a separate step.
+type viewColumnInference struct {
+	headings            []string
+	columns             []*plan.ColDef
+	provenance          []OutputColumnProvenance
+	dependencies        []ViewDependency
+	requiredProtocol    int64
+	expandedSelectLists map[*tree.SelectClause]tree.SelectExprs
+}
+
+func inferViewColumns(
 	ctx CompilerContext,
 	stmt *tree.Select,
 	colNames tree.IdentifierList,
 	viewDatabase string,
 	viewName string,
 	forAuthoring bool,
-) (*plan.TableDef, error) {
-	var tableDef plan.TableDef
+) (*viewColumnInference, error) {
 	dependencyCapture := newViewDependencyCaptureContext(ctx)
 	dependencyCapture.metadataBudget = !forAuthoring
 	ctx = dependencyCapture
@@ -241,6 +255,9 @@ func genViewTableDef(
 	var preOptimizeViewRequiredProtocol int64
 	validate := func(query *Query) error {
 		for _, node := range query.Nodes {
+			if node != nil && node.NodeType == plan.Node_FUNCTION_SCAN && node.TableDef.GetTblFunc().GetName() == "json_table" {
+				return moerr.NewNotSupported(ctx.GetContext(), "JSON_TABLE views require the view compatibility gate")
+			}
 			if node == nil || node.NodeType != plan.Node_TABLE_SCAN || node.TableDef == nil {
 				continue
 			}
@@ -326,11 +343,16 @@ func genViewTableDef(
 			return nil, err
 		}
 	}
-	projectList := query.Nodes[query.Steps[len(query.Steps)-1]].ProjectList
+	projectList := query.Nodes[query.Steps[query.MainOutputStep()]].ProjectList
 	if len(colNames) > 0 && len(colNames) != len(projectList) {
 		return nil, moerr.NewViewWrongList(ctx.GetContext())
 	}
 	cols := make([]*plan.ColDef, len(projectList))
+	var integerValues []function.IntegerLogicalPrecision
+	if query.IntegerPrecision != nil {
+		integerValues = evaluateIntegerPrecision(query.IntegerPrecision)
+	}
+
 	for idx, expr := range projectList {
 		name := query.Headings[idx]
 		originName := ""
@@ -338,11 +360,24 @@ func genViewTableDef(
 			originName = string(colNames[idx])
 			name = originName
 		}
+		if forAuthoring {
+			if err := validateIdentifier(ctx.GetContext(), name); err != nil {
+				return nil, err
+			}
+		}
 		typ := &expr.Typ
 		if idx < len(outputColumnProvenance) {
 			if sourceType := mysqlSpecialTypeFromProvenance(outputColumnProvenance[idx]); sourceType != nil {
 				typ = sourceType
 			}
+		}
+		if idx < len(outputColumnProvenance) {
+			narrowed := decimalDivSchemaType(*typ, outputColumnProvenance[idx])
+			typ = &narrowed
+		}
+		if g := query.IntegerPrecision; g != nil && idx < len(g.Outputs) {
+			adjusted := integerSchemaType(*typ, g, g.Outputs[idx], true, integerValues)
+			typ = &adjusted
 		}
 		defaultDef := &plan.Default{NullAbility: !expr.Typ.NotNullable}
 		if idx < len(outputColumnProvenance) {
@@ -361,7 +396,30 @@ func genViewTableDef(
 			Default:    defaultDef,
 		}
 	}
-	tableDef.Cols = cols
+	return &viewColumnInference{
+		columns:             cols,
+		headings:            query.Headings,
+		provenance:          outputColumnProvenance,
+		dependencies:        dependencyCapture.dependencies(),
+		requiredProtocol:    viewRequiredProtocol,
+		expandedSelectLists: expandedSelectLists,
+	}, nil
+}
+
+func genViewTableDef(
+	ctx CompilerContext,
+	stmt *tree.Select,
+	colNames tree.IdentifierList,
+	viewDatabase string,
+	viewName string,
+	checkOption string,
+	forAuthoring bool,
+) (*plan.TableDef, error) {
+	inferred, err := inferViewColumns(ctx, stmt, colNames, viewDatabase, viewName, forAuthoring)
+	if err != nil {
+		return nil, err
+	}
+	tableDef := plan.TableDef{Cols: inferred.columns}
 
 	// Check alter and change the viewsql.
 	rootSQL := ctx.GetRootSql()
@@ -377,23 +435,45 @@ func genViewTableDef(
 		}
 	}
 	persistedCreateSQL := rootSQL
-	if stableViewSQL, rewritten := stableViewSQLWithExpandedStars(ctx, stmt, viewSql, expandedSelectLists); rewritten {
-		viewSql = stableViewSQL
-		persistedCreateSQL = stableViewSQL
+	definitionStmt := cloneTreeSelect(stmt)
+	if stableViewSQL, stableSelect, rewritten := stableViewSQLWithExpandedStarsAndSelect(ctx, stmt, viewSql, inferred.expandedSelectLists); stableSelect != nil {
+		// Keep the bound, expanded SELECT for the parser-derived definition even
+		// when rootSQL contains additional statements and cannot be rewritten as a
+		// single CREATE VIEW statement. The legacy Stmt field still retains the
+		// original request for compatibility and first-statement parsing.
+		definitionStmt = stableSelect
+		if rewritten {
+			viewSql = stableViewSQL
+			persistedCreateSQL = stableViewSQL
+		}
+	} else if stableSelect, ok := viewSelectWithExpandedStars(stmt, inferred.expandedSelectLists); ok {
+		// The capture contains resolved names for every bound query block, even
+		// without stars. Nested projections need these names before qualified
+		// identifiers or canonical literals are formatted for metadata replay.
+		definitionStmt = stableSelect
 	}
+	if len(colNames) == 0 {
+		definitionStmt = viewSelectWithStableOutputHeadings(definitionStmt, inferred.headings)
+	}
+	definitionStmt = tree.WithViewColumnNames(definitionStmt, colNames)
 
 	lowerCaseTableNames := ctx.GetLowerCaseTableNames()
 	var persistedRequiredProtocol *int64
-	if viewRequiredProtocol > 0 {
-		persistedRequiredProtocol = &viewRequiredProtocol
+	if inferred.requiredProtocol > 0 {
+		persistedRequiredProtocol = &inferred.requiredProtocol
 	}
 	viewData, err := json.Marshal(ViewData{
-		Stmt:                    viewSql,
+		Stmt: viewSql,
+		// Definition must be generated from the same star-expanded SELECT that is
+		// persisted in Stmt. Formatting the original AST would let metadata replay
+		// a later schema's columns even though the View itself remains frozen.
+		Definition:              tree.StringWithOpts(definitionStmt, dialect.MYSQL, tree.WithViewDefinition()),
+		CheckOption:             strings.ToUpper(checkOption),
 		DefaultDatabase:         ctx.DefaultDatabase(),
 		SQLMode:                 parserSQLModeFromContext(ctx),
 		SecurityType:            getViewSecurityTypeFromContext(ctx),
 		LowerCaseTableNames:     &lowerCaseTableNames,
-		Dependencies:            dependencyCapture.dependencies(),
+		Dependencies:            inferred.dependencies,
 		RequiredProtocolVersion: persistedRequiredProtocol,
 	})
 	if err != nil {
@@ -429,16 +509,26 @@ func stableViewSQLWithExpandedStars(
 	viewSql string,
 	expandedSelectLists map[*tree.SelectClause]tree.SelectExprs,
 ) (string, bool) {
+	stableSQL, _, rewritten := stableViewSQLWithExpandedStarsAndSelect(ctx, stmt, viewSql, expandedSelectLists)
+	return stableSQL, rewritten
+}
+
+func stableViewSQLWithExpandedStarsAndSelect(
+	ctx CompilerContext,
+	stmt *tree.Select,
+	viewSql string,
+	expandedSelectLists map[*tree.SelectClause]tree.SelectExprs,
+) (string, *tree.Select, bool) {
 	// SAMPLE(*) expands to a sampling operator during binding. The rewriter
 	// leaves that query block intact while still stabilizing ordinary stars in
 	// unrelated query blocks.
 	if viewSql == "" || len(expandedSelectLists) == 0 || !viewSelectHasStar(stmt) {
-		return viewSql, false
+		return viewSql, nil, false
 	}
 
 	stableSelect, ok := viewSelectWithExpandedStars(stmt, expandedSelectLists)
 	if !ok {
-		return viewSql, false
+		return viewSql, nil, false
 	}
 
 	parserSQLMode := ""
@@ -447,7 +537,7 @@ func stableViewSQLWithExpandedStars(
 	}
 	stmts, err := mysql.ParseWithSQLMode(ctx.GetContext(), viewSql, ctx.GetLowerCaseTableNames(), parserSQLMode)
 	if err != nil {
-		return viewSql, false
+		return viewSql, stableSelect, false
 	}
 	defer func() {
 		for _, statement := range stmts {
@@ -455,23 +545,23 @@ func stableViewSQLWithExpandedStars(
 		}
 	}()
 	if len(stmts) != 1 {
-		return viewSql, false
+		return viewSql, stableSelect, false
 	}
 
 	switch viewStmt := stmts[0].(type) {
 	case *tree.CreateView:
 		stableStmt := *viewStmt
 		stableStmt.AsSource = stableSelect
-		return formatStableViewSQL(&stableStmt), true
+		return formatStableViewSQL(&stableStmt), stableSelect, true
 	case *tree.AlterView:
 		stableStmt := &tree.CreateView{
 			Name:     viewStmt.Name,
 			ColNames: viewStmt.ColNames,
 			AsSource: stableSelect,
 		}
-		return formatStableViewSQL(stableStmt), true
+		return formatStableViewSQL(stableStmt), stableSelect, true
 	default:
-		return viewSql, false
+		return viewSql, nil, false
 	}
 }
 
@@ -976,6 +1066,72 @@ func viewSelectExprsWithExpandedStars(
 	return stableExprs, rewritten
 }
 
+// viewSelectWithStableOutputHeadings keeps the public names assigned during
+// CREATE VIEW stable after binding has qualified identifiers. A bare column
+// already derives the same heading from its final identifier, while a
+// compound expression such as `a + 1` would otherwise replay as `t.a + 1`.
+// Aliases are added only when the expression's actual mode-independent
+// persisted rendering differs from the resolved heading, preserving the
+// existing SQL shape for stable column and literal projections.
+func viewSelectWithStableOutputHeadings(stmt *tree.Select, headings []string) *tree.Select {
+	if stmt == nil || len(headings) == 0 {
+		return stmt
+	}
+	clause := viewTopLevelSelectClause(stmt.Select)
+	if clause == nil || len(clause.Exprs) != len(headings) {
+		return stmt
+	}
+	clause.Exprs = viewSelectExprsWithStableOutputHeadings(clause.Exprs, headings)
+	return stmt
+}
+
+func viewTopLevelSelectClause(stmt tree.SelectStatement) *tree.SelectClause {
+	switch selectStmt := stmt.(type) {
+	case *tree.SelectClause:
+		return selectStmt
+	case *tree.Select:
+		return viewTopLevelSelectClause(selectStmt.Select)
+	case *tree.ParenSelect:
+		if selectStmt.Select == nil {
+			return nil
+		}
+		return viewTopLevelSelectClause(selectStmt.Select)
+	case *tree.UnionClause:
+		return viewTopLevelSelectClause(selectStmt.Left)
+	default:
+		return nil
+	}
+}
+
+func viewSelectExprsWithStableOutputHeadings(
+	exprs tree.SelectExprs,
+	headings []string,
+) tree.SelectExprs {
+	stableExprs := cloneTreeSelectExprs(exprs)
+	for i := range stableExprs {
+		if stableExprs[i].As != nil && !stableExprs[i].As.Empty() {
+			continue
+		}
+		if i >= len(headings) || !viewExprNeedsHeadingAlias(stableExprs[i].Expr, headings[i]) {
+			continue
+		}
+		stableExprs[i].As = tree.NewCStr(headings[i], 1)
+	}
+	return stableExprs
+}
+
+func viewExprNeedsHeadingAlias(expr tree.Expr, heading string) bool {
+	if heading == "" {
+		return false
+	}
+	if _, ok := unwrapParenExpr(expr).(*tree.UnresolvedName); ok {
+		return false
+	}
+	return tree.StringWithOpts(expr, dialect.MYSQL,
+		tree.WithSingleQuoteString(), tree.WithQuoteIdentifier(),
+		tree.WithModeIndependentStringLiterals()) != heading
+}
+
 func viewSelectExprsWithExpandedStableHeadings(
 	originalExprs tree.SelectExprs,
 	expandedExprs tree.SelectExprs,
@@ -991,6 +1147,13 @@ func viewSelectExprsWithExpandedStableHeadings(
 		}
 		if i >= len(originalExprs) {
 			continue
+		}
+		// Capture records every resolved heading, but a stable expression such
+		// as a bare column or integer does not need a synthetic alias. Retain
+		// explicit aliases and only publish captured names that formatting needs.
+		if (originalExprs[i].As == nil || originalExprs[i].As.Empty()) &&
+			stableExprs[i].As != nil && !viewExprNeedsHeadingAlias(stableExprs[i].Expr, stableExprs[i].As.Origin()) {
+			stableExprs[i].As = nil
 		}
 		if rewriteClonedExprSubqueriesWithExpandedStars(
 			reflect.ValueOf(originalExprs[i].Expr),
@@ -1402,6 +1565,18 @@ func viewJoinCondWithExpandedStars(
 	return &stableCond, rewritten
 }
 
+// CTAS writes the temporal fractional precision into both plan fields used
+// by schema metadata. Expression types may carry the precision only in Scale.
+func ctasTemporalSchemaType(typ plan.Type) plan.Type {
+	switch types.T(typ.Id) {
+	case types.T_time, types.T_datetime, types.T_timestamp:
+		if typ.Scale >= 0 && typ.Scale <= MaxFsp {
+			typ.Width = typ.Scale
+		}
+	}
+	return typ
+}
+
 // RefreshPreparedCTASInferredColumns aligns columns inferred from AS SELECT
 // with the execute-time query. Explicit column definitions remain the user's
 // schema contract even when a parameter changes the source domain.
@@ -1447,6 +1622,11 @@ func RefreshPreparedCTASInferredColumns(ctx context.Context, p, original *Plan, 
 	if len(targetColumns) < targetOnlyCount+len(originalColumns) {
 		return moerr.NewInternalError(ctx, "prepared CTAS source columns are missing from target")
 	}
+	g := p.GetDdl().Query.IntegerPrecision
+	var integerValues []function.IntegerLogicalPrecision
+	if g != nil {
+		integerValues = evaluateIntegerPrecision(g)
+	}
 	for i, source := range runtimeColumns {
 		if source == nil || originalColumns[i] == nil ||
 			!strings.EqualFold(source.Name, originalColumns[i].Name) {
@@ -1470,7 +1650,10 @@ func RefreshPreparedCTASInferredColumns(ctx context.Context, p, original *Plan, 
 			return moerr.NewNotSupportedf(ctx,
 				"prepared CTAS inferred column %q has a type-dependent default", target.Name)
 		}
-		target.Typ = source.Typ
+		target.Typ = ctasTemporalSchemaType(source.Typ)
+		if g != nil && i < len(g.Outputs) {
+			target.Typ = integerSchemaType(target.Typ, g, g.Outputs[i], false, integerValues)
+		}
 	}
 	return nil
 }
@@ -1480,17 +1663,24 @@ func genAsSelectCols(
 	stmt *tree.Select,
 	isPrepareStmt bool,
 	explicitTargetColumns map[string]struct{},
-) ([]*ColDef, *Query, error) {
+) ([]*ColDef, *Query, int64, error) {
 	var err error
 	var rootId int32
 	builder := NewQueryBuilder(plan.Query_SELECT, ctx, isPrepareStmt, false)
 	bindCtx := NewBindContext(builder, nil)
+	if IsSnapshotValid(ctx.GetSnapshot()) {
+		bindCtx.snapshot = ctx.GetSnapshot()
+	}
+	var executionProtocol int64
+	if !isPrepareStmt {
+		bindCtx.ctasExecutionProtocolRequirement = &executionProtocol
+	}
 
 	if s, ok := stmt.Select.(*tree.ParenSelect); ok {
 		stmt = s.Select
 	}
 	if rootId, err = builder.bindSelect(stmt, bindCtx, true); err != nil {
-		return nil, nil, err
+		return nil, nil, 0, err
 	}
 	outputColumnProvenance := make([]OutputColumnProvenance, len(bindCtx.headings))
 	for i := range outputColumnProvenance {
@@ -1501,14 +1691,19 @@ func genAsSelectCols(
 	// subqueries can synthesize NULLs even when their source columns are NOT NULL.
 	query, err := builder.createQuery()
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, 0, err
 	}
 	if err = ValidateUnresolvedIndexHints(ctx.GetContext(), query); err != nil {
-		return nil, nil, err
+		return nil, nil, 0, err
 	}
-	rootNode := query.Nodes[query.Steps[len(query.Steps)-1]]
+	rootNode := query.Nodes[query.Steps[query.MainOutputStep()]]
 
 	cols := make([]*plan.ColDef, len(rootNode.ProjectList))
+	var integerValues []function.IntegerLogicalPrecision
+	if query.IntegerPrecision != nil {
+		integerValues = evaluateIntegerPrecision(query.IntegerPrecision)
+	}
+
 	for i, expr := range rootNode.ProjectList {
 		typ := expr.Typ
 		provenance := outputColumnProvenance[i]
@@ -1518,6 +1713,11 @@ func genAsSelectCols(
 				typ.NotNullable = expr.Typ.NotNullable
 			}
 		}
+		typ = ctasTemporalSchemaType(decimalDivSchemaType(typ, provenance))
+		if g := query.IntegerPrecision; g != nil && i < len(g.Outputs) {
+			typ = integerSchemaType(typ, g, g.Outputs[i], false, integerValues)
+		}
+
 		// CTAS creates a new table from the query result.  A source column's
 		// AUTO_INCREMENT attribute is not part of that result schema and must
 		// not be copied to the new table.
@@ -1541,7 +1741,7 @@ func genAsSelectCols(
 						defaultDef, err = buildCTASDefaultFromOrigin(
 							ctx, typ, nullAbility, defaultDef.OriginString)
 						if err != nil {
-							return nil, nil, err
+							return nil, nil, 0, err
 						}
 					}
 				}
@@ -1554,7 +1754,7 @@ func genAsSelectCols(
 		if provenance.CTASDefaultPolicy == CTASDefaultUseTypeDefault {
 			defaultDef, err = buildCTASDefaultForView(ctx, typ, nullAbility)
 			if err != nil {
-				return nil, nil, err
+				return nil, nil, 0, err
 			}
 		}
 
@@ -1566,10 +1766,13 @@ func genAsSelectCols(
 		if inheritedAutoIncr && defaultDef.Expr == nil && defaultDef.OriginString == "" {
 			defaultDef, err = buildCTASDefaultForView(ctx, typ, nullAbility)
 			if err != nil {
-				return nil, nil, err
+				return nil, nil, 0, err
 			}
 		}
 
+		if err := validateIdentifier(ctx.GetContext(), bindCtx.headings[i]); err != nil {
+			return nil, nil, 0, err
+		}
 		cols[i] = &plan.ColDef{
 			Name: normalizeCTASColumnName(
 				bindCtx.headings[i], bindCtx.headingProvenanceFor(i)),
@@ -1585,9 +1788,18 @@ func genAsSelectCols(
 	if err := remapCTASSourceDefaultsToOutput(
 		ctx.GetContext(), cols, outputColumnProvenance, explicitTargetColumns,
 	); err != nil {
-		return nil, nil, err
+		return nil, nil, 0, err
 	}
-	return cols, query, nil
+	if !isPrepareStmt && executionProtocol == 0 {
+		features, featureErr := plan.RequiredRemoteExpressionFeatures(query)
+		if featureErr != nil {
+			return nil, nil, 0, featureErr
+		}
+		if features.TimestampDatetimeResultContracts || features.DynamicTimeResultContracts {
+			executionProtocol = defines.MORPCVersion122
+		}
+	}
+	return cols, query, executionProtocol, nil
 }
 
 // remapCTASSourceDefaultsToOutput converts inherited source-table column
@@ -2003,8 +2215,16 @@ func buildCreateView(stmt *tree.CreateView, ctx CompilerContext) (*Plan, error) 
 		defer ctx.SetBuildingAlterView(false, "", "")
 	}
 
+	creationContext, err := restoredViewCreationContext(ctx, createView.Database, string(viewName))
+	if err != nil {
+		return nil, err
+	}
 	tableDef, err := genViewTableDef(
-		ctx, stmt.AsSource, stmt.ColNames, createView.Database, string(viewName), true)
+		creationContext, stmt.AsSource, stmt.ColNames, createView.Database, string(viewName), stmt.CheckOption, true)
+	if err != nil {
+		return nil, err
+	}
+	tableDef.ViewSql.View, err = preserveRestoredViewDefinition(ctx.GetContext(), createView.Database, string(viewName), tableDef.ViewSql.View)
 	if err != nil {
 		return nil, err
 	}
@@ -2291,6 +2511,10 @@ func buildAlterSequence(stmt *tree.AlterSequence, ctx CompilerContext) (*Plan, e
 }
 
 func buildCreateSequence(stmt *tree.CreateSequence, ctx CompilerContext) (*Plan, error) {
+	// Sequences historically support names beyond the table identifier length limit.
+	if err := validateIdentifierEncoding(ctx.GetContext(), string(stmt.Name.ObjectName)); err != nil {
+		return nil, err
+	}
 	createSequence := &plan.CreateSequence{
 		IfNotExists: stmt.IfNotExists,
 		TableDef: &TableDef{
@@ -2642,6 +2866,14 @@ func buildCreateTable(
 		}
 		tableDef.IsTemporary = stmt.Temporary
 
+		// MySQL regenerates CHECK constraint names for CREATE TABLE LIKE; copied
+		// names would collide in (CONSTRAINT_SCHEMA, CONSTRAINT_NAME) and let
+		// metadata joins attribute the source table's expression to the target.
+		//
+		if !preserveCheckNamesForRestore(ctx, cloneStmt) {
+			renameCheckConstraintsForClone(tableDef)
+		}
+
 		// CHECK expressions are stored in source-session SQL syntax. Exclude them
 		// from the temporary SQL skeleton because the rewrite parser uses the
 		// current/default SQL mode, then restore the structured metadata below.
@@ -2657,6 +2889,7 @@ func buildCreateTable(
 			cloneStmt,
 			recoveredLegacyChecks,
 			sub,
+			false, *parserSQLModeFromContext(ctx),
 		)
 		if err != nil {
 			return nil, err
@@ -2689,7 +2922,11 @@ func buildCreateTable(
 			if err := preserveIndexSessionVars(p, tableDef); err != nil {
 				return nil, err
 			}
-			preserveChecksForCreateLike(p, tableDef)
+			// The skeleton contains the final names: ordinary LIKE/CLONE has
+			// regenerated names, while restore retains the source identities.
+			// Reattaching the pre-rewrite tableDef here would undo that choice
+			// for data-branch clones and recreate schema-wide name collisions.
+			preserveChecksForCreateLike(p, likeSkeletonDef)
 			return p, nil
 		}
 
@@ -2731,13 +2968,19 @@ func buildCreateTable(
 	var asSelectCols []*ColDef
 	var asSelectQuery *Query
 	if stmt.IsAsSelect {
+		// Binding qualifies and rewrites SELECT nodes in place. Keep the caller's
+		// source intact for admission retries and prepared execution, while using
+		// the same private source for inferred columns and the follow-up INSERT.
+		private := *stmt
+		private.AsSource = DeepCopySelect(stmt.AsSource)
+		stmt = &private
 		explicitTargetColumns := make(map[string]struct{})
 		for _, item := range stmt.Defs {
 			if colDef, ok := item.(*tree.ColumnTableDef); ok && colDef.Name != nil {
 				explicitTargetColumns[strings.ToLower(colDef.Name.ColName())] = struct{}{}
 			}
 		}
-		if asSelectCols, asSelectQuery, err = genAsSelectCols(
+		if asSelectCols, asSelectQuery, createTable.CtasExecutionProtocolVersion, err = genAsSelectCols(
 			ctx, stmt.AsSource, isPrepareStmt, explicitTargetColumns,
 		); err != nil {
 			return nil, err
@@ -2746,6 +2989,15 @@ func buildCreateTable(
 
 	if err = buildTableDefs(stmt, ctx, createTable, asSelectCols); err != nil {
 		return nil, err
+	}
+	// The catalog stores MEDIUMINT using the existing 32-bit OIDs plus Width=24.
+	// Old CNs can deserialize that metadata but do not enforce the narrower write
+	// domain, so only author the schema after the cluster protocol fence opens.
+	for _, col := range createTable.TableDef.Cols {
+		if err = requireMediumIntProtocolForAuthoring(
+			ctx.GetContext(), ctx.GetProcess(), col.Typ); err != nil {
+			return nil, err
+		}
 	}
 
 	// set option
@@ -2950,7 +3202,7 @@ func buildCreateTable(
 	} else if stmt.Param != nil {
 		for i := 0; i < len(stmt.Param.Option); i += 2 {
 			switch strings.ToLower(stmt.Param.Option[i]) {
-			case "endpoint", "region", "access_key_id", "secret_access_key", "bucket", "filepath", "compression", "format", "jsondata", "provider", "role_arn", "external_id", "hive_partitioning", "hive_partition_columns", "arrow_container", ExternalWriteFilePatternKey, CSVCommentKey:
+			case "endpoint", "region", "access_key_id", "secret_access_key", "bucket", "filepath", "compression", "format", "jsondata", "provider", "role_arn", "external_id", "hive_partitioning", "hive_partition_columns", "arrow_container", JSONBinaryOptionKey, ExternalWriteFilePatternKey, CSVCommentKey:
 			default:
 				return nil, moerr.NewBadConfigf(ctx.GetContext(), "the keyword '%s' is not support", strings.ToLower(stmt.Param.Option[i]))
 			}
@@ -2960,11 +3212,14 @@ func buildCreateTable(
 			return nil, moerr.NewNotSupported(ctx.GetContext(), "Arrow format is supported only by LOAD DATA")
 		}
 
+		if err := initJSONBinaryOption(stmt.Param); err != nil {
+			return nil, err
+		}
 		if err := validateWriteFilePattern(ctx.GetContext(), stmt.Param, createTable.TableDef); err != nil {
 			return nil, err
 		}
 
-		if err := validateAndSetHivePartitionOptions(ctx.GetContext(), stmt, createTable); err != nil {
+		if err := validateAndSetHivePartitionOptions(ctx.GetContext(), ctx.GetProcess(), stmt, createTable); err != nil {
 			return nil, err
 		}
 
@@ -3050,7 +3305,7 @@ func buildCreateTable(
 			BindingTags: []int32{builder.genNewBindTag()},
 		}, bindContext)
 
-		err = builder.addBinding(nodeID, tree.AliasClause{}, bindContext)
+		err = builder.addBinding(nodeID, tree.AliasClause{}, bindContext, createTable.Database)
 		if err != nil {
 			return nil, err
 		}
@@ -3090,7 +3345,17 @@ func buildCreateTable(
 	}, nil
 }
 
+func validateIdentifierEncoding(ctx context.Context, name string) error {
+	if !utf8.ValidString(name) {
+		return moerr.NewInvalidInputf(ctx, "identifier %q is not valid UTF-8", name)
+	}
+	return nil
+}
+
 func validateIdentifier(ctx context.Context, name string) error {
+	if err := validateIdentifierEncoding(ctx, name); err != nil {
+		return err
+	}
 	if getNumOfCharacters(name) <= MaxIdentifierLength {
 		return nil
 	}
@@ -3106,7 +3371,8 @@ func validateCreateTableIdentifier(ctx CompilerContext, name string) error {
 
 	// Internal DDL and session-scoped temporary tables can materialize generated
 	// physical names with UUID prefixes or suffixes.
-	if defines.IsInternalExecutor(ctx.GetContext()) || isGeneratedSessionTempTableName(ctx, name) {
+	if moerr.IsMoErrCode(err, moerr.ErrTooLongIdent) &&
+		(defines.IsInternalExecutor(ctx.GetContext()) || isGeneratedSessionTempTableName(ctx, name)) {
 		return nil
 	}
 
@@ -3206,7 +3472,7 @@ func validateUniquePersistedTableColumns(ctx context.Context, tableDef *plan.Tab
 	}
 
 	// Column lookup is case-insensitive even when lower_case_table_names is 0.
-	columnNames := make([]string, 0, len(tableDef.Cols))
+	columnNames := make(map[string]struct{}, len(tableDef.Cols))
 	for _, col := range tableDef.Cols {
 		if col == nil || col.Hidden {
 			continue
@@ -3216,12 +3482,11 @@ func validateUniquePersistedTableColumns(ctx context.Context, tableDef *plan.Tab
 		if compareName == "" {
 			compareName = name
 		}
-		for _, existingName := range columnNames {
-			if strings.EqualFold(existingName, compareName) {
-				return moerr.NewErrDupFieldName(ctx, name)
-			}
+		key := equalFoldKey(compareName)
+		if _, exists := columnNames[key]; exists {
+			return moerr.NewErrDupFieldName(ctx, name)
 		}
-		columnNames = append(columnNames, compareName)
+		columnNames[key] = struct{}{}
 	}
 	return nil
 }
@@ -3301,7 +3566,73 @@ func makeClusterTableAttributeDefault(colType plan.Type) *plan.Default {
 	}
 }
 
+func isNativeUnicodeStringType(typ Type) bool {
+	return types.T(typ.Id).IsMySQLString() &&
+		types.IsUnicodeCollation(uint8(typ.Charset)) &&
+		typ.CollationVersion == uint32(collation.RevisionV1)
+}
+
+func hasNativeUnicodeUniqueIndex(indexInfos []*tree.UniqueIndex, colMap map[string]*ColDef) bool {
+	for _, indexInfo := range indexInfos {
+		if indexInfo == nil {
+			continue
+		}
+		for _, keyPart := range indexInfo.KeyParts {
+			if keyPart == nil || keyPart.ColName == nil {
+				continue
+			}
+			if col, ok := colMap[keyPart.ColName.ColName()]; ok && isNativeUnicodeStringType(col.Typ) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// userColumnCount excludes MO-owned columns, including the cluster-table
+// account column, while counting user-defined generated columns normally.
+func userColumnCount(cols []*ColDef, clusterTable bool) int {
+	count := 0
+	for _, col := range cols {
+		if !col.Hidden && !(clusterTable && col.Name == util.GetClusterTableAttributeName()) {
+			count++
+		}
+	}
+	return count
+}
+
+func validateAlterColumnCount(ctx context.Context, original, target *TableDef) error {
+	limit := max(TableColumnCountLimit, userColumnCount(original.Cols, util.TableIsClusterTable(original.TableType)))
+	if userColumnCount(target.Cols, util.TableIsClusterTable(target.TableType)) > limit {
+		return moerr.NewErrTooManyFields(ctx)
+	}
+	return nil
+}
+
 func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *plan.CreateTable, asSelectCols []*ColDef) error {
+	columnLimit := TableColumnCountLimit
+	columnLimit = max(columnLimit, defines.AlterCopyColumnLimit(ctx.GetContext(), createTable.Database, string(stmt.Table.ObjectName)))
+	if userColumnCount(asSelectCols, stmt.IsClusterTable) > columnLimit {
+		return moerr.NewErrTooManyFields(ctx.GetContext())
+	}
+
+	// Observe the name-lock generation before reading FK catalog facts. A
+	// cache miss remains unknown and forces execution to refresh before effects.
+	if proc := ctx.GetProcess(); proc != nil && !createTable.Temporary && !IsFkBannedDatabase(createTable.Database) {
+		if txn := proc.GetTxnOperator(); txn != nil && txn.Txn().IsPessimistic() && txn.Txn().IsRCIsolation() {
+			if service := proc.GetLockService(); service != nil {
+				actor, err := ctx.GetAccountId()
+				if err != nil {
+					return err
+				}
+				binding, err := service.GetLockTableBind(actor, catalog.MO_TABLES_ID)
+				if err != nil {
+					return err
+				}
+				createTable.FkNameBinding = &binding
+			}
+		}
+	}
 	replay := ddlReplayForTable(ctx.GetContext(), string(stmt.Table.ObjectName))
 	// all below fields' key is lower case
 	// Keep the SELECT output schema in its original coordinate system. The
@@ -3323,13 +3654,31 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 		enforced   bool
 	}
 	pendingChecks := make([]pendingCheckDef, 0)
-	tableCharset, err := tableDefaultCharset(ctx, stmt.Options)
+	defaults, err := tableDatabaseDefaults(ctx, createTable.Database, stmt.Options)
 	if err != nil {
 		return err
 	}
+	createTable.DatabaseDefaults = defaults
+	var tableCharset uint32
+	if defaults != nil && defaults.Version != 0 {
+		// Inheritance carries the resolved identity and must not consult an
+		// unrelated (possibly unsupported) server default first.
+		tableCharset = defaults.CollationId
+	} else {
+		tableCharset, err = tableDefaultCharset(ctx, stmt.Options)
+		if err != nil {
+			return err
+		}
+	}
 	createTable.TableDef.DefaultCharset = tableCharset
+	if types.IsUnicodeCollation(uint8(tableCharset)) {
+		createTable.TableDef.CollationVersion = uint32(types.CollationVersionV1)
+	} else {
+		createTable.TableDef.CollationVersion = uint32(types.CollationVersionLegacy)
+	}
 
-	if stmt.Param != nil || stmt.IcebergParam != nil || stmt.MongoDBParam != nil {
+	if stmt.Param != nil || stmt.IcebergParam != nil || stmt.MongoDBParam != nil ||
+		stmt.DataStreamParam != nil || stmt.ForeignParam != nil || stmt.KafkaParam != nil {
 		if err := rejectExternalTableInlineIndexes(ctx.GetContext(), stmt); err != nil {
 			return err
 		}
@@ -3344,14 +3693,17 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 	// base columns defined later in the CREATE TABLE statement (forward reference).
 	var allColDefs []*ColDef
 	var isGeneratedCol []bool
+	explicitColumnCount := 0
 	for _, item := range stmt.Defs {
 		if def, ok := item.(*tree.ColumnTableDef); ok {
-			cType, err := getTypeFromAst(ctx.GetContext(), def.Type)
-			if err != nil {
-				return err
+			if !stmt.IsClusterTable || def.Name.ColName() != util.GetClusterTableAttributeName() {
+				explicitColumnCount++
+				if explicitColumnCount > columnLimit {
+					return moerr.NewErrTooManyFields(ctx.GetContext())
+				}
 			}
-			cType.Charset = uint32(types.CharsetType(types.T(cType.Id)))
-			if err = applyDefaultAndColumnAttributesToType(ctx.GetContext(), &cType, tableCharset, def.Attributes); err != nil {
+			cType, err := getColumnTypeFromAst(ctx.GetContext(), def, tableCharset, replay)
+			if err != nil {
 				return err
 			}
 			isGen := false
@@ -3377,12 +3729,8 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 	for _, item := range stmt.Defs {
 		switch def := item.(type) {
 		case *tree.ColumnTableDef:
-			colType, err := getTypeFromAst(ctx.GetContext(), def.Type)
+			colType, err := getColumnTypeFromAst(ctx.GetContext(), def, tableCharset, replay)
 			if err != nil {
-				return err
-			}
-			colType.Charset = uint32(types.CharsetType(types.T(colType.Id)))
-			if err = applyDefaultAndColumnAttributesToType(ctx.GetContext(), &colType, tableCharset, def.Attributes); err != nil {
 				return err
 			}
 			firstLegacyTimestamp := types.T(colType.Id) == types.T_timestamp && !legacyTimestampFirstSeen
@@ -3432,6 +3780,9 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 				case *tree.AttributeGeneratedAlways:
 					isGenerated = true
 				case *tree.AttributePrimaryKey, *tree.AttributeKey:
+					if err := rejectNativeUnicodePrimaryKey(ctx.GetContext(), colType, colNameOrigin); err != nil {
+						return err
+					}
 					if colType.GetId() == int32(types.T_blob) {
 						return moerr.NewNotSupported(ctx.GetContext(), "blob type in primary key")
 					}
@@ -3666,6 +4017,13 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 				pksMap[name] = true
 			}
 		case *tree.Index:
+			if hasFunctionalKey(def.KeyParts) {
+				if stmt.Temporary || stmt.IsClusterTable || stmt.IsAsSelect || stmt.Param != nil || stmt.IcebergParam != nil || stmt.MongoDBParam != nil {
+					return moerr.NewNotSupported(ctx.GetContext(), "functional indexes require ordinary persistent tables")
+				}
+				secondaryIndexInfos = append(secondaryIndexInfos, def)
+				continue
+			}
 			err := checkIndexKeypartSupportability(ctx.GetContext(), def.KeyParts)
 			if err != nil {
 				return err
@@ -3695,7 +4053,11 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 				name := key.ColName.ColName()
 
 				if col, ok := colMap[name]; ok {
-					if err := checkIndexColumnSupportability(ctx.GetContext(), col, key, "unique"); err != nil {
+					keyFormat := collation.KeyFormatLegacy
+					if isNativeUnicodeStringType(col.Typ) {
+						keyFormat = collation.KeyFormatV1
+					}
+					if err := checkIndexColumnSupportabilityWithKeyFormat(ctx.GetContext(), col, key, "unique", keyFormat); err != nil {
 						return err
 					}
 				}
@@ -3750,6 +4112,11 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 			}
 			dedupFkName.Insert(fkData.Def.Name)
 
+			if fkData.ForwardRefer {
+				createTable.UnresolvedFkParents = append(createTable.UnresolvedFkParents, &plan.ObjectRef{
+					DbName: fkData.ParentDbName, ObjName: fkData.ParentTableName,
+				})
+			}
 			// only setups foreign key without forward reference
 			if !fkData.ForwardRefer {
 				createTable.FkDbs = append(createTable.FkDbs, fkData.ParentDbName)
@@ -3782,6 +4149,12 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 		default:
 			return moerr.NewNYIf(ctx.GetContext(), "table def: '%v'", def)
 		}
+	}
+
+	// Matching explicit CTAS definitions replace SELECT slots; only target-only
+	// columns are in TableDef.Cols here. Check their union before CTAS remapping.
+	if userColumnCount(createTable.TableDef.Cols, stmt.IsClusterTable)+userColumnCount(asSelectCols, stmt.IsClusterTable) > columnLimit {
+		return moerr.NewErrTooManyFields(ctx.GetContext())
 	}
 
 	if err := validateDefaultColumnDependencies(ctx.GetContext(), allColDefs); err != nil {
@@ -3944,7 +4317,15 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 				)
 			}
 		}
-		if err := appendCheckDef(ctx, createTable.TableDef, check.name, check.expr, columnPos); err != nil {
+		checkName := check.name
+		if checkName == "" {
+			// Unnamed CHECKs are named <table>_chk_<n>, unique to the owning
+			// table.  Prefixing with the table name keeps names unique within
+			// the schema, so information_schema metadata joins cannot associate
+			// one table's expression with another table.
+			checkName = nextUnnamedCheckConstraintName(createTable.TableDef)
+		}
+		if err := appendCheckDef(ctx, createTable.TableDef, checkName, check.expr, columnPos); err != nil {
 			return err
 		}
 	}
@@ -3995,6 +4376,9 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 			}
 			// Reject VIRTUAL generated columns in PRIMARY KEY
 			col := colMap[primaryKey]
+			if err := rejectNativeUnicodePrimaryKey(ctx.GetContext(), col.Typ, col.OriginName); err != nil {
+				return err
+			}
 			if col.GeneratedCol != nil && !col.GeneratedCol.IsStored {
 				return moerr.NewNotSupported(ctx.GetContext(),
 					fmt.Sprintf("defining a virtual generated column '%s' as primary key", col.OriginName))
@@ -4118,9 +4502,49 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 	}
 
 	// check Constraint Name (include index/ unique)
+	for i, index := range secondaryIndexInfos {
+		lowered, lowerErr := lowerFunctionalIndex(ctx, createTable.TableDef, index)
+		if lowerErr != nil {
+			return lowerErr
+		}
+		secondaryIndexInfos[i] = lowered
+	}
+	for _, col := range createTable.TableDef.Cols {
+		colMap[col.Name] = col
+	}
 	err = checkConstraintNames(uniqueIndexInfos, secondaryIndexInfos, ctx.GetContext())
 	if err != nil {
 		return err
+	}
+	// Native UCA unique keys use the canonical physical comparison-key format.
+	// This is a new-table-only capability: existing-table ALTER/CREATE INDEX
+	// paths still call the legacy supportability wrapper and remain rejected.
+	if hasNativeUnicodeUniqueIndex(uniqueIndexInfos, colMap) {
+		if stmt.Temporary || stmt.IsClusterTable || stmt.IsAsSelect ||
+			stmt.Param != nil || stmt.IcebergParam != nil || stmt.MongoDBParam != nil ||
+			stmt.DataStreamParam != nil || stmt.ForeignParam != nil || stmt.KafkaParam != nil {
+			return moerr.NewNotSupported(
+				ctx.GetContext(),
+				"native Unicode unique indexes require ordinary persistent tables",
+			)
+		}
+		if len(secondaryIndexInfos) != 0 || len(fullTextIndexInfos) != 0 {
+			return moerr.NewNotSupported(
+				ctx.GetContext(),
+				"native Unicode unique indexes cannot be combined with secondary or fulltext indexes yet",
+			)
+		}
+		if err := RequirePersistedProtocolVersionForAuthoring(
+			ctx.GetContext(), ctx.GetProcess(), defines.MORPCVersion114,
+		); err != nil {
+			return err
+		}
+		createTable.TableDef.KeyFormat = collation.KeyFormatV1
+		// Keep the native-unique contract visible after optimizer projection
+		// prunes unrelated table columns from DML/scan shells.  This is the
+		// durable schema revision marker; the indexed column itself remains the
+		// authoritative proof on complete catalog definitions.
+		createTable.TableDef.CollationVersion = uint32(collation.RevisionV1)
 	}
 
 	// build index table
@@ -4172,7 +4596,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 			return err
 		}
 		if existingTableDef == nil {
-			fks, catalogLayout, err := getFkReferredToWithCatalogLayout(ctx, createTable.Database, createTable.TableDef.Name)
+			fks, _, err := getFkReferredToWithCatalogLayout(ctx, createTable.Database, createTable.TableDef.Name)
 			if err != nil {
 				return err
 			}
@@ -4182,18 +4606,14 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 				def.ColId = uint64(i)
 			}
 			for rkey, fkDefs := range fks {
+				// Self references are reconstructed by the outgoing sentinel owner.
+				if rkey.Db == createTable.Database && rkey.Tbl == createTable.TableDef.Name {
+					continue
+				}
 				for constraintName, defs := range fkDefs {
 					data, err := buildFkDataOfForwardRefer(ctx, constraintName, defs, createTable)
 					if err != nil {
 						return err
-					}
-					// The child was created while foreign_key_checks was disabled, so
-					// its catalog row has no parent key name. Persist the selected key
-					// when the metadata column exists; an old-layout row is reconciled
-					// by the tenant migration after the columns are committed.
-					if catalogLayout == foreignKeyCatalogExtended {
-						createTable.UpdateFkSqls = append(createTable.UpdateFkSqls,
-							getSqlForUpdateFkReferencedIndex(rkey.Db, rkey.Tbl, constraintName, data.Def.ReferencedIndexName))
 					}
 					info := &plan.ForeignKeyInfo{
 						Db:           rkey.Db,
@@ -4207,7 +4627,35 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 		}
 	}
 
+	// #30282: reject ON DELETE/ON UPDATE SET NULL declared over NOT NULL child
+	// columns (MySQL error 1830). Runs after the primary-key pass so implied
+	// NOT NULL columns are caught as well. Recovery replay keeps the
+	// historical (already accepted) layout buildable; a trusted physical
+	// reconstruction of an owned table (TRUNCATE's drop-and-recreate and the
+	// truncate-optimized unfiltered DELETE) reinstalls that same unchanged
+	// layout and is not a newly authored constraint.
+	if replay == nil && !trustedForeignKeyLayoutRebuild(ctx.GetContext()) {
+		for i, fk := range createTable.TableDef.Fkeys {
+			if i >= len(createTable.FkCols) || createTable.FkCols[i] == nil {
+				break
+			}
+			if err := checkFkSetNullColumnsRequireNullable(ctx.GetContext(), createTable.TableDef.Cols, fk, createTable.FkCols[i].Cols); err != nil {
+				return err
+			}
+		}
+	}
+
 	return nil
+}
+
+// trustedForeignKeyLayoutRebuild reports whether the current CREATE physically
+// reconstructs an owned table unchanged (TRUNCATE / truncate-optimized DELETE
+// recreate reaching the internal executor with the bridge from
+// StatementOption.WithTrustedForeignKeyLayout). Such statements reinstall a
+// historical foreign-key layout rather than author a new constraint (#30282).
+func trustedForeignKeyLayoutRebuild(gctx context.Context) bool {
+	trusted, _ := gctx.Value(defines.TrustedForeignKeyLayout{}).(bool)
+	return trusted
 }
 
 func findCTASColumn(cols []*ColDef, name string) *ColDef {
@@ -4255,6 +4703,53 @@ func ctasNeedsExplicitSourceProjection(cols, sourceCols []*ColDef) bool {
 		}
 	}
 	return false
+}
+
+// nextUnnamedCheckConstraintName names an unnamed CHECK the way MySQL does:
+// <table>_chk_<ordinal> counting this table's CHECK definitions from one.
+func nextUnnamedCheckConstraintName(tableDef *TableDef) string {
+	return fmt.Sprintf("%s_chk_%d", tableDef.Name, len(tableDef.Checks)+1)
+}
+
+// Ordinary data-branch clones also run through ExecRestore, which sets both
+// statement and process restore markers. The outer operation's clone level is
+// authoritative: only a genuine restore should keep captured CHECK identities.
+// Retain the marker fallback for callers without an outer clone context.
+func preserveCheckNamesForRestore(ctx CompilerContext, cloneStmt *tree.CloneTable) bool {
+	marked := cloneStmt != nil && cloneStmt.IsRestore
+	if proc := ctx.GetProcess(); proc != nil && proc.GetSessionInfo() != nil {
+		marked = marked || proc.GetSessionInfo().IsRestore
+	}
+	return IsCheckConstraintRestoreReplay(ctx.GetContext(), marked)
+}
+
+// IsCheckConstraintRestoreReplay shares the restore identity decision with
+// execution. Ordinary data-branch clones also carry restore session markers;
+// the outer clone level distinguishes a new owner from historical replay.
+func IsCheckConstraintRestoreReplay(ctx context.Context, marked bool) bool {
+	switch ctx.Value(tree.CloneLevelCtxKey{}) {
+	case tree.NormalCloneLevelTable, tree.NormalCloneLevelDatabase,
+		tree.NormalCloneLevelAccount, tree.NormalCloneLevelCluster:
+		return false
+	case tree.RestoreCloneLevelTable, tree.RestoreCloneLevelDatabase,
+		tree.RestoreCloneLevelAccount, tree.RestoreCloneLevelCluster:
+		return true
+	}
+	return marked
+}
+
+// renameCheckConstraintsForClone regenerates CHECK names for a table created
+// from an existing table definition (CREATE TABLE LIKE): every CHECK from the
+// source receives a fresh <target>_chk_<ordinal> name in definition order, so
+// names stay unique per schema even when the source named its CHECKs
+// explicitly.
+func renameCheckConstraintsForClone(tableDef *plan.TableDef) {
+	for i, check := range tableDef.Checks {
+		if check == nil {
+			continue
+		}
+		check.Name = fmt.Sprintf("%s_chk_%d", tableDef.Name, i+1)
+	}
 }
 
 func appendCheckDef(
@@ -4343,6 +4838,9 @@ func appendCheckDef(
 	}
 	if name == "" {
 		name = fmt.Sprintf("__mo_chk_%d", len(tableDef.Checks)+1)
+	}
+	if err := validateIdentifier(ctx.GetContext(), name); err != nil {
+		return err
 	}
 	for _, check := range tableDef.Checks {
 		if check.Name == name {
@@ -4617,6 +5115,16 @@ func buildFullTextIndexTable(createTable *plan.CreateTable, indexInfos []*tree.F
 		if err != nil {
 			return err
 		}
+		for _, def := range idxDefs {
+			if def != nil {
+				def.KeyFormat = createTable.TableDef.KeyFormat
+			}
+		}
+		for _, def := range tblDefs {
+			if def != nil {
+				def.KeyFormat = createTable.TableDef.KeyFormat
+			}
+		}
 		// Capture the plugin's build-time session vars (BuildSessionVars) into each
 		// index def's algo_params.session_vars — mirroring CreateIndexDef's vector
 		// path — so background builds (idxcron reindex, ISCP async, clone/restore)
@@ -4701,8 +5209,10 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 			return err
 		}
 		tableDef := &TableDef{
-			Name: indexTableName,
+			Name:      indexTableName,
+			KeyFormat: createTable.TableDef.KeyFormat,
 		}
+		indexDef.KeyFormat = createTable.TableDef.KeyFormat
 		indexParts := make([]string, 0)
 
 		for _, keyPart := range indexInfo.KeyParts {
@@ -4711,7 +5221,9 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 			if _, ok := colMap[name]; !ok {
 				return moerr.NewInvalidInputf(ctx.GetContext(), "column '%s' is not exist", nameOrigin)
 			}
-			if err := checkIndexColumnSupportability(ctx.GetContext(), colMap[name], keyPart, "unique"); err != nil {
+			if err := checkIndexColumnSupportabilityWithKeyFormat(
+				ctx.GetContext(), colMap[name], keyPart, "unique", tableDef.KeyFormat,
+			); err != nil {
 				return err
 			}
 
@@ -4726,7 +5238,7 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 			colDef := &ColDef{
 				Name: keyName,
 				Alg:  plan.CompressType_Lz4,
-				Typ:  indexTableKeyTypeForSinglePart(colMap[colName], keyPart),
+				Typ:  indexTableKeyTypeForSinglePartWithFormat(colMap[colName], keyPart, tableDef.KeyFormat),
 				Default: &plan.Default{
 					NullAbility:  false,
 					Expr:         nil,
@@ -4864,9 +5376,9 @@ func buildSecondaryIndexDef(createTable *plan.CreateTable, indexInfos []*tree.In
 		var tableDef []*TableDef
 		switch indexInfo.KeyType {
 		case tree.INDEX_TYPE_BTREE, tree.INDEX_TYPE_INVALID, tree.INDEX_TYPE_RTREE:
-			indexDef, tableDef, err = buildRegularSecondaryIndexDef(ctx, indexInfo, colMap, pkeyName)
+			indexDef, tableDef, err = buildRegularSecondaryIndexDef(ctx, indexInfo, colMap, pkeyName, createTable.TableDef.KeyFormat)
 		case tree.INDEX_TYPE_MASTER:
-			indexDef, tableDef, err = buildMasterSecondaryIndexDef(ctx, indexInfo, colMap, pkeyName)
+			indexDef, tableDef, err = buildMasterSecondaryIndexDef(ctx, indexInfo, colMap, pkeyName, createTable.TableDef.KeyFormat)
 		default:
 			// Vector-index algorithms live in pkg/vectorindex/<algo>/plugin/plan
 			// (BuildSecondaryIndexDefs). Any KeyType registered with the
@@ -4880,6 +5392,16 @@ func buildSecondaryIndexDef(createTable *plan.CreateTable, indexInfos []*tree.In
 
 		if err != nil {
 			return err
+		}
+		for _, def := range indexDef {
+			if def != nil {
+				def.KeyFormat = createTable.TableDef.KeyFormat
+			}
+		}
+		for _, def := range tableDef {
+			if def != nil {
+				def.KeyFormat = createTable.TableDef.KeyFormat
+			}
 		}
 		setIndexDefsVisibility(indexDef, indexInfo.IndexOption)
 		createTable.IndexTables = append(createTable.IndexTables, tableDef...)
@@ -4928,7 +5450,7 @@ func checkSpatialIndexColumnSupport(ctx CompilerContext, indexInfo *tree.Index, 
 //	primary key __mo_index_idx_col,
 //
 // )
-func buildMasterSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, colMap map[string]*ColDef, pkeyName string) ([]*plan.IndexDef, []*TableDef, error) {
+func buildMasterSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, colMap map[string]*ColDef, pkeyName string, keyFormat uint32) ([]*plan.IndexDef, []*TableDef, error) {
 	// 1. indexDef init
 	indexDef := &plan.IndexDef{}
 	indexDef.Unique = false
@@ -4939,8 +5461,10 @@ func buildMasterSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, co
 		return nil, nil, err
 	}
 	tableDef := &TableDef{
-		Name: indexTableName,
+		Name:      indexTableName,
+		KeyFormat: keyFormat,
 	}
+	indexDef.KeyFormat = keyFormat
 
 	nameCount := make(map[string]int)
 	// Note: Index Parts will store the ColName, as Parts is used to populate mo_index_table.
@@ -5071,7 +5595,7 @@ func buildMasterSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, co
 //	primary key __mo_index_idx_col,
 //
 // )
-func buildRegularSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, colMap map[string]*ColDef, pkeyName string) ([]*plan.IndexDef, []*TableDef, error) {
+func buildRegularSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, colMap map[string]*ColDef, pkeyName string, keyFormat uint32) ([]*plan.IndexDef, []*TableDef, error) {
 
 	// 1. indexDef init
 	indexDef := &plan.IndexDef{}
@@ -5084,8 +5608,10 @@ func buildRegularSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, c
 		return nil, nil, err
 	}
 	tableDef := &TableDef{
-		Name: indexTableName,
+		Name:      indexTableName,
+		KeyFormat: keyFormat,
 	}
+	indexDef.KeyFormat = keyFormat
 
 	nameCount := make(map[string]int)
 	indexParts := make([]string, 0)
@@ -5121,17 +5647,11 @@ func buildRegularSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, c
 		colDef := &ColDef{
 			Name: keyName,
 			Alg:  plan.CompressType_Lz4,
-			Typ: plan.Type{
-				// don't copy auto increment
-				Id:                       colMap[pkeyName].Typ.Id,
-				Width:                    colMap[pkeyName].Typ.Width,
-				Scale:                    colMap[pkeyName].Typ.Scale,
-				Charset:                  colMap[pkeyName].Typ.Charset,
-				CollationVersion:         colMap[pkeyName].Typ.CollationVersion,
-				CollationCoercibility:    colMap[pkeyName].Typ.CollationCoercibility,
-				CollationCoercibilitySet: colMap[pkeyName].Typ.CollationCoercibilitySet,
-				CollationMergeConflict:   colMap[pkeyName].Typ.CollationMergeConflict,
-			},
+			// Keep legacy primary-key payloads unchanged. A versioned
+			// Unicode key is opaque binary, just like the unique-index
+			// hidden table above; otherwise a storage consumer can apply the
+			// source collation a second time.
+			Typ: indexTablePrimaryKeyTypeWithFormat(colMap[pkeyName], keyFormat),
 			Default: &plan.Default{
 				NullAbility:  false,
 				Expr:         nil,
@@ -5394,22 +5914,19 @@ func CreateIndexDef(ctx planplugin.CompilerContext, indexInfo *tree.Index,
 		}
 		indexDef.IndexAlgoParams = params
 	} else {
-		// default indexInfo.IndexOption values
 		indexDef.Comment = ""
 		indexDef.IndexAlgoParams = ""
-		if p, ok := indexplugin.Get(indexInfo.KeyType.ToString()); ok {
-			// Vector-index algorithms supply their default params via the
-			// plugin (DefaultOptions). Non-vector algos miss the registry
-			// and leave the empty defaults set above.
-			if defaults := p.Catalog().DefaultOptions(); len(defaults) > 0 {
-				params, err := catalog.IndexParamsMapToJsonString(defaults)
-				if err != nil {
-					return nil, err
-				}
-				indexDef.IndexAlgoParams = params
+		if _, ok := indexplugin.Get(indexInfo.KeyType.ToString()); ok {
+			// An index without options takes the plugin's ParamsFromTree of an
+			// empty option list, as CREATE INDEX does.
+			noOptions := *indexInfo
+			noOptions.IndexOption = &tree.IndexOption{}
+			params, err := buildIndexAlgoParams(&noOptions)
+			if err != nil {
+				return nil, err
 			}
+			indexDef.IndexAlgoParams = params
 		}
-
 	}
 
 	// Capture the plugin's build-time session vars (BuildSessionVars) into the
@@ -5638,7 +6155,16 @@ func buildDropTableSingle(ifExists bool, temporary bool, name *tree.TableName, c
 
 	dropTable.Table = string(name.ObjectName)
 
-	obj, tableDef, err := ctx.Resolve(dropTable.Database, dropTable.Table, nil)
+	var obj *plan.ObjectRef
+	var tableDef *plan.TableDef
+	var err error
+	if resolver, ok := ctx.(interface {
+		ResolveForDrop(string, string) (*plan.ObjectRef, *plan.TableDef, error)
+	}); ok {
+		obj, tableDef, err = resolver.ResolveForDrop(dropTable.Database, dropTable.Table)
+	} else {
+		obj, tableDef, err = ctx.Resolve(dropTable.Database, dropTable.Table, nil)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -5655,7 +6181,6 @@ func buildDropTableSingle(ifExists bool, temporary bool, name *tree.TableName, c
 	if err := validateTableIndexDefinitions(tableDef); err != nil {
 		return nil, err
 	}
-
 	if obj.PubInfo != nil {
 		return nil, moerr.NewInternalErrorf(ctx.GetContext(), "can not drop subscription table %s", dropTable.Table)
 	}
@@ -5842,6 +6367,20 @@ func buildCreateDatabase(stmt *tree.CreateDatabase, ctx CompilerContext) (*Plan,
 		}
 	}
 	createDB.Sql = stmt.Sql
+	if !DatabaseDefaultsSystemDatabase(createDB.Database) && createDB.SubscriptionOption == nil {
+		if DatabaseDefaultsEnabled(ctx.GetProcess().GetService()) {
+			fallback, err := databaseServerCollation(ctx)
+			if err != nil {
+				return nil, err
+			}
+			createDB.Defaults, err = NormalizeDatabaseDefaults(ctx.GetContext(), stmt.CreateOptions, fallback)
+			if err != nil {
+				return nil, err
+			}
+		} else if len(stmt.CreateOptions) > 0 {
+			return nil, RequireDatabaseDefaults(ctx.GetContext(), ctx.GetProcess().GetService())
+		}
+	}
 
 	return &Plan{
 		Plan: &plan.Plan_Ddl{
@@ -5893,6 +6432,16 @@ func buildDropDatabase(stmt *tree.DropDatabase, ctx CompilerContext) (*Plan, err
 
 // In MySQL, the CREATE INDEX syntax can only create one index instance at a time
 func buildCreateIndex(stmt *tree.CreateIndex, ctx CompilerContext) (*Plan, error) {
+	if hasFunctionalKey(stmt.KeyParts) {
+		if stmt.IndexCat != tree.INDEX_CATEGORY_NONE {
+			return nil, moerr.NewNotSupported(ctx.GetContext(), "unique or special functional indexes")
+		}
+		index := &tree.Index{Name: string(stmt.Name), KeyParts: stmt.KeyParts, IndexOption: stmt.IndexOption}
+		if stmt.IndexOption != nil {
+			index.KeyType = stmt.IndexOption.IType
+		}
+		return buildAlterTable(&tree.AlterTable{Table: stmt.Table, Options: tree.AlterTableOptions{&tree.AlterOptionAdd{Def: index}}}, ctx)
+	}
 	if err := validateIdentifier(ctx.GetContext(), string(stmt.Name)); err != nil {
 		return nil, err
 	}
@@ -5912,6 +6461,9 @@ func buildCreateIndex(stmt *tree.CreateIndex, ctx CompilerContext) (*Plan, error
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), createIndex.Database, tableName)
 	}
 	if err := validateTableIndexDefinitions(tableDef); err != nil {
+		return nil, err
+	}
+	if err := rejectVersionedIndexMutation(ctx.GetContext(), tableDef); err != nil {
 		return nil, err
 	}
 	if err := checkCreateIndexTableType(ctx.GetContext(), tableDef); err != nil {
@@ -6039,6 +6591,18 @@ func checkCreateIndexTableType(ctx context.Context, tableDef *TableDef) error {
 	return nil
 }
 
+// Native Unicode UNIQUE tables use a versioned physical-key domain. Existing
+// index mutation paths still build legacy index metadata and cannot safely
+// extend or remove that domain, so fail closed until their complete migration
+// and backfill contract is implemented.
+func rejectVersionedIndexMutation(ctx context.Context, tableDef *TableDef) error {
+	if tableDef != nil && tableDef.KeyFormat == collation.KeyFormatV1 {
+		return moerr.NewNotSupported(ctx,
+			"index mutation on native Unicode unique tables is not supported yet")
+	}
+	return nil
+}
+
 func rejectExternalTableInlineIndexes(ctx context.Context, stmt *tree.CreateTable) error {
 	for _, item := range stmt.Defs {
 		switch def := item.(type) {
@@ -6085,6 +6649,14 @@ func checkDropReferencedKeyForeignKeyDependency(
 	indexName string,
 	ignoredSelfForeignKeys map[string]struct{},
 ) error {
+	return CheckDropReferencedKeyForeignKeyDependency(ctx.GetContext(), parentTableDef, indexName, ignoredSelfForeignKeys,
+		func(id uint64) (*plan.TableDef, error) { _, def, err := ctx.ResolveById(id, nil); return def, err })
+}
+
+// CheckDropReferencedKeyForeignKeyDependency protects the selected key using
+// the current parent definition and child resolver supplied by its owner.
+func CheckDropReferencedKeyForeignKeyDependency(ctx context.Context, parentTableDef *plan.TableDef, indexName string,
+	ignoredSelfForeignKeys map[string]struct{}, resolve func(uint64) (*plan.TableDef, error)) error {
 	var targetColumns []string
 	if indexName == "PRIMARY" && parentTableDef.Pkey != nil {
 		targetColumns = parentTableDef.Pkey.Names
@@ -6104,12 +6676,12 @@ func checkDropReferencedKeyForeignKeyDependency(
 		selfReference := childTableID == 0 || childTableID == parentTableDef.TblId
 		childTableDef := parentTableDef
 		if !selfReference {
-			_, resolved, err := ctx.ResolveById(childTableID, nil)
+			resolved, err := resolve(childTableID)
 			if err != nil {
 				return err
 			}
 			if resolved == nil {
-				return moerr.NewInternalErrorf(ctx.GetContext(),
+				return moerr.NewInternalErrorf(ctx,
 					"The reference foreign key table %d does not exist", childTableID)
 			}
 			childTableDef = resolved
@@ -6131,19 +6703,19 @@ func checkDropReferencedKeyForeignKeyDependency(
 				for i, columnID := range fk.ForeignCols {
 					column := FindColumnByColId(parentTableDef.Cols, columnID)
 					if column == nil {
-						return moerr.NewInternalErrorf(ctx.GetContext(),
+						return moerr.NewInternalErrorf(ctx,
 							"foreign key %s references missing column id %d", fk.Name, columnID)
 					}
 					referredColumns[i] = column.Name
 				}
 				if foreignKeyReferencedColumnsMatch(targetColumns, referredColumns) {
-					return moerr.NewErrDropIndexNeededInForeignKey(ctx.GetContext(), indexName)
+					return moerr.NewErrDropIndexNeededInForeignKey(ctx, indexName)
 				}
 				continue
 			}
 
 			if referencedIndexName == indexName {
-				return moerr.NewErrDropIndexNeededInForeignKey(ctx.GetContext(), indexName)
+				return moerr.NewErrDropIndexNeededInForeignKey(ctx, indexName)
 			}
 		}
 	}
@@ -6175,6 +6747,9 @@ func buildDropIndex(stmt *tree.DropIndex, ctx CompilerContext) (*Plan, error) {
 	if err := validateTableIndexDefinitions(tableDef); err != nil {
 		return nil, err
 	}
+	if err := rejectVersionedIndexMutation(ctx.GetContext(), tableDef); err != nil {
+		return nil, err
+	}
 
 	if obj.PubInfo != nil {
 		return nil, moerr.NewInternalError(ctx.GetContext(), "cannot drop index in subscription database")
@@ -6183,6 +6758,15 @@ func buildDropIndex(stmt *tree.DropIndex, ctx CompilerContext) (*Plan, error) {
 	// check index
 	requestedIndexName := string(stmt.Name)
 	resolvedIndexName, found := resolveIndexName(tableDef.Indexes, requestedIndexName)
+	if found {
+		for _, index := range tableDef.Indexes {
+			if IndexNamesEqual(index.IndexName, resolvedIndexName) && functionalIndexColumn(tableDef, index) != nil {
+				return buildAlterTable(&tree.AlterTable{Table: stmt.TableName, Options: tree.AlterTableOptions{
+					&tree.AlterOptionDrop{Typ: tree.AlterTableDropIndex, Name: tree.Identifier(resolvedIndexName)},
+				}}, ctx)
+			}
+		}
+	}
 	dropIndex.IndexName = resolvedIndexName
 
 	if !found {
@@ -6255,7 +6839,7 @@ func buildAlterView(stmt *tree.AlterView, ctx CompilerContext) (*Plan, error) {
 	defer func() {
 		ctx.SetBuildingAlterView(false, "", "")
 	}()
-	tableDef, err := genViewTableDef(ctx, stmt.AsSource, stmt.ColNames, alterView.Database, viewName, true)
+	tableDef, err := genViewTableDef(ctx, stmt.AsSource, stmt.ColNames, alterView.Database, viewName, "NONE", true)
 	if err != nil {
 		return nil, err
 	}
@@ -6490,8 +7074,20 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 	}
 	unsupportedErrFmt := "unsupported alter option in inplace mode: %s"
 
+	// FK data checks run after all ALTER actions. Keep the original name for
+	// binding and execution, but use the final relation name for those checks.
+	finalTableName := tableDef.Name
+	for _, option := range stmt.Options {
+		if rename, ok := option.(*tree.AlterOptionTableName); ok {
+			if name := string(rename.Name.ToTableName().ObjectName); name != tableDef.Name {
+				finalTableName = name
+			}
+		}
+	}
+
 	var detectSqls []string
 	var updateSqls []string
+	var renameFkSqls []string
 	uniqueIndexInfos := make([]*tree.UniqueIndex, 0)
 	secondaryIndexInfos := make([]*tree.Index, 0)
 	// Planning must consume ALTER actions in statement order without mutating
@@ -6499,6 +7095,14 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 	// list drives pre-DDL locking. currentTableDef is the planner-owned evolving
 	// schema used by every subsequent existence and semantic check.
 	currentTableDef := DeepCopyTableDef(tableDef, true)
+	if err := applyAlterTableCharsetDefault(ctx, currentTableDef, stmt.Options); err != nil {
+		return nil, err
+	}
+	if currentTableDef.DefaultCharset != tableDef.DefaultCharset || currentTableDef.CollationVersion != tableDef.CollationVersion {
+		// Default/schema replacement and index actions must share the same
+		// evolving definition; otherwise replacement resurrects dropped indexes.
+		alterTable.CopyTableDef = currentTableDef
+	}
 	currentIndexNames := make(map[string]bool, len(currentTableDef.Indexes))
 	for _, indexDef := range currentTableDef.Indexes {
 		currentIndexNames[indexNameKey(indexDef.IndexName)] = true
@@ -6512,6 +7116,9 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 	droppedIndexNames := make(map[string]bool)
 	droppedForeignKeyNames := make(map[string]bool)
 	for i, option := range stmt.Options {
+		if isIgnoredStorageTableOption(option) {
+			continue
+		}
 		switch opt := option.(type) {
 		case *tree.AlterOptionDrop:
 			alterTableDrop := new(plan.AlterTableDrop)
@@ -6610,6 +7217,11 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 				if err != nil {
 					return nil, err
 				}
+				// #30282: reject ON DELETE/ON UPDATE SET NULL declared over
+				// NOT NULL child columns (MySQL error 1830).
+				if err = checkFkSetNullColumnsRequireNullable(ctx.GetContext(), currentTableDef.Cols, fkData.Def, fkData.Cols.Cols); err != nil {
+					return nil, err
+				}
 				currentTableDef.Fkeys = append(currentTableDef.Fkeys, fkData.Def)
 				alterTable.Actions[i] = &plan.AlterTable_Action{
 					Action: &plan.AlterTable_Action_AddFk{
@@ -6621,8 +7233,12 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 						},
 					},
 				}
-				// for new fk in this alter table, the data in the table must
-				// be checked to confirm that it is compliant with foreign key constraints.
+				// Declarations with checks disabled install metadata without
+				// validating historical rows, just as COPY ALTER does.
+				fkChecksEnabled, err := IsForeignKeyChecksEnabled(ctx)
+				if err != nil {
+					return nil, err
+				}
 				if fkData.IsSelfRefer {
 					// fk self refer.
 					// check columns of fk self refer are valid
@@ -6630,17 +7246,19 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 					if err != nil {
 						return nil, err
 					}
-					sqls, err := genSqlsForCheckFKSelfRefer(
-						ctx.GetContext(),
-						databaseName,
-						currentTableDef.Name,
-						currentTableDef.Cols,
-						[]*plan.ForeignKeyDef{fkData.Def},
-					)
-					if err != nil {
-						return nil, err
+					if fkChecksEnabled {
+						sqls, err := genSqlsForCheckFKSelfRefer(
+							ctx.GetContext(),
+							databaseName,
+							finalTableName,
+							currentTableDef.Cols,
+							[]*plan.ForeignKeyDef{fkData.Def},
+						)
+						if err != nil {
+							return nil, err
+						}
+						detectSqls = append(detectSqls, sqls...)
 					}
-					detectSqls = append(detectSqls, sqls...)
 					if !slices.ContainsFunc(currentTableDef.RefChildTbls, func(tableID uint64) bool {
 						return tableID == 0 || tableID == currentTableDef.TblId
 					}) {
@@ -6649,6 +7267,15 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 						// but later actions in this statement must already observe it.
 						currentTableDef.RefChildTbls = append(currentTableDef.RefChildTbls, 0)
 					}
+					// Self-references cannot bind the parent key until the final
+					// table definition is assembled, but the catalog row must still
+					// be written for INPLACE ALTER just as it is for CREATE/COPY.
+					fkData.UpdateSql = getSqlForAddFkWithCatalogLayout(
+						databaseName,
+						currentTableDef.Name,
+						fkData,
+						fkData.catalogLayout,
+					)
 				} else {
 					// get table def of parent table
 					_, parentTableDef, err := ctx.Resolve(
@@ -6666,18 +7293,20 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 							fkData.ParentTableName,
 						)
 					}
-					sql, err := genSqlForCheckFKConstraints(
-						ctx.GetContext(),
-						fkData.Def,
-						databaseName, tableDef.Name, tableDef.Cols,
-						fkData.ParentDbName,
-						fkData.ParentTableName,
-						parentTableDef.Cols,
-					)
-					if err != nil {
-						return nil, err
+					if fkChecksEnabled {
+						sql, err := genSqlForCheckFKConstraints(
+							ctx.GetContext(),
+							fkData.Def,
+							databaseName, finalTableName, tableDef.Cols,
+							fkData.ParentDbName,
+							fkData.ParentTableName,
+							parentTableDef.Cols,
+						)
+						if err != nil {
+							return nil, err
+						}
+						detectSqls = append(detectSqls, sql)
 					}
-					detectSqls = append(detectSqls, sql)
 				}
 				updateSqls = append(updateSqls, fkData.UpdateSql)
 			case *tree.UniqueIndex:
@@ -6974,7 +7603,7 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 			}
 
 			if !tableDef.IsTemporary {
-				updateSqls = append(updateSqls, getSqlForRenameTable(databaseName, oldName, newName)...)
+				renameFkSqls = append(renameFkSqls, getSqlForRenameTable(databaseName, oldName, newName)...)
 			}
 		case *tree.TableOptionAutoIncrement:
 			if !tableHasAutoIncrementColumn(tableDef) {
@@ -6996,12 +7625,18 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 			// lock already validated by resolveAndValidateLock
 			alterTable.Actions[i] = nil
 
-		case *tree.AlterOptionAlterCheck, *tree.TableOptionCharset:
+		case *tree.TableOptionCharset:
+			if opt.Convert {
+				return nil, moerr.NewNotSupported(ctx.GetContext(), "character set conversion requires ALGORITHM=COPY")
+			}
+			continue
+		case *tree.AlterOptionAlterCheck, *tree.TableOptionCollate:
 			continue
 
 		case *tree.AlterTableModifyColumnClause:
-			// defensively check again
-			ok, _ := isInplaceModifyColumn(ctx.GetContext(), opt, tableDef)
+			// Recheck against the same final default used by algorithm admission
+			// and column binding, not the source table's future default.
+			ok, _ := isInplaceModifyColumn(ctx.GetContext(), opt, currentTableDef)
 			if !ok {
 				return nil, moerr.NewInvalidInputf(
 					ctx.GetContext(),
@@ -7011,7 +7646,7 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 			}
 
 			if alterTable.CopyTableDef == nil {
-				alterTable.CopyTableDef = DeepCopyTableDef(tableDef, true)
+				alterTable.CopyTableDef = currentTableDef
 			}
 
 			// update new column info to copy_table_def
@@ -7028,7 +7663,8 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 		case *tree.AlterTableChangeColumnClause:
 			// A same-name CHANGE with an unchanged storage layout has the same
 			// execution semantics as MODIFY, but historically took the COPY path.
-			ok, _ := isInplaceChangeColumn(ctx.GetContext(), opt, tableDef)
+			// Its defensive check must also use the final inherited domain.
+			ok, _ := isInplaceChangeColumn(ctx.GetContext(), opt, currentTableDef)
 			if !ok {
 				return nil, moerr.NewInvalidInputf(
 					ctx.GetContext(),
@@ -7038,7 +7674,7 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 			}
 
 			if alterTable.CopyTableDef == nil {
-				alterTable.CopyTableDef = DeepCopyTableDef(tableDef, true)
+				alterTable.CopyTableDef = currentTableDef
 			}
 
 			_, err := updateNewColumnInTableDef(
@@ -7057,7 +7693,7 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 			}
 
 			if alterTable.CopyTableDef == nil {
-				alterTable.CopyTableDef = DeepCopyTableDef(tableDef, true)
+				alterTable.CopyTableDef = currentTableDef
 			}
 
 			col := FindColumn(
@@ -7168,7 +7804,9 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 	}
 
 	alterTable.DetectSqls = detectSqls
-	alterTable.UpdateFkSqls = updateSqls
+	// Ordered ADD/DROP catalog mutations use the original identity. Rename
+	// their surviving rows and incoming references only after all mutations.
+	alterTable.UpdateFkSqls = append(updateSqls, renameFkSqls...)
 	return &Plan{
 		Plan: &plan.Plan_Ddl{
 			Ddl: &plan.DataDefinition{
@@ -7430,7 +8068,7 @@ type foreignKeyReferencedKey struct {
 // FK creation and by DDL lifecycle checks. A reference may use an ordered
 // leading prefix of a PRIMARY/UNIQUE key. PRIMARY wins ties; otherwise the
 // lexicographically first named UNIQUE key wins.
-func selectForeignKeyReferencedIndex(parentTableDef *TableDef, referredColumns []string) (string, bool) {
+func selectForeignKeyReferencedIndex(parentTableDef *TableDef, referredColumns []string, preferred ...string) (string, bool) {
 	keys := make([]foreignKeyReferencedKey, 0, len(parentTableDef.Indexes)+1)
 	if parentTableDef.Pkey != nil {
 		keys = append(keys, foreignKeyReferencedKey{name: "PRIMARY", columns: parentTableDef.Pkey.Names})
@@ -7448,11 +8086,32 @@ func selectForeignKeyReferencedIndex(parentTableDef *TableDef, referredColumns [
 	})
 
 	for _, key := range keys {
+		if len(preferred) > 0 && key.name != preferred[0] {
+			continue
+		}
 		if foreignKeyReferencedColumnsMatch(key.columns, referredColumns) {
 			return key.name, true
 		}
 	}
 	return "", false
+}
+
+// ForeignKeyReferencedIndexMatches validates an explicitly retained key without
+// selecting a different compatible key during physical table reconstruction.
+func ForeignKeyReferencedIndexMatches(parent *plan.TableDef, columns []uint64, name string) bool {
+	if parent == nil || name == "" || len(columns) == 0 {
+		return false
+	}
+	names := make([]string, len(columns))
+	for i, id := range columns {
+		col := FindColumnByColId(parent.Cols, id)
+		if col == nil {
+			return false
+		}
+		names[i] = col.Name
+	}
+	_, matched := selectForeignKeyReferencedIndex(parent, names, name)
+	return matched
 }
 
 func foreignKeyReferencedColumnsMatch(keyColumns, referredColumns []string) bool {
@@ -7486,6 +8145,133 @@ otherwise the lexicographically first named UNIQUE key is selected. Persisting
 this selected name makes information_schema.REFERENTIAL_CONSTRAINTS deterministic.
 */
 func checkFkColsAreValid(ctx CompilerContext, fkData *FkData, parentTableDef *TableDef) error {
+	return checkForeignKeyColumns(ctx.GetContext(), fkData, parentTableDef)
+}
+
+// checkFkSetNullColumnsRequireNullable enforces MySQL error 1830
+// (ER_FK_COLUMN_NOT_NULL): a foreign key declared with an ON DELETE or
+// ON UPDATE SET NULL action must not name a NOT NULL child column, because the
+// action could never write NULL into it at runtime. MySQL rejects the
+// definition at CREATE TABLE and ALTER TABLE ADD [CONSTRAINT] time; without
+// the check, the invalid ON DELETE action silently keeps the old child value
+// (leaving an orphan) and the ON UPDATE action fails only when the parent
+// row is updated, far away from the DDL that created the trap.
+//
+// The caller must hand over the final column list. Primary-key implied NOT
+// NULL is applied only after the whole CREATE TABLE column pass, so a
+// validation running mid-loop would miss it.
+func checkFkSetNullColumnsRequireNullable(gctx context.Context, tableCols []*plan.ColDef, fkDef *plan.ForeignKeyDef, fkColNames []string) error {
+	if fkDef == nil ||
+		(fkDef.OnDelete != plan.ForeignKeyDef_SET_NULL &&
+			fkDef.OnUpdate != plan.ForeignKeyDef_SET_NULL) {
+		return nil
+	}
+	name2Col := make(map[string]*plan.ColDef, len(tableCols))
+	for _, col := range tableCols {
+		name2Col[col.Name] = col
+	}
+	for _, colName := range fkColNames {
+		col, ok := name2Col[strings.ToLower(colName)]
+		if !ok || col == nil {
+			// The accurate "column does not exist" error is raised elsewhere.
+			continue
+		}
+		// fkColumnNotNullable documents the predicate origin (explicit NOT
+		// NULL attribute, primary-key implication and catalog-loaded flag).
+		if fkColumnNotNullable(col) {
+			name := col.Name
+			if col.OriginName != "" {
+				name = col.OriginName
+			}
+			return moerr.NewErrFkColumnNotNull(gctx, name, fkDef.Name)
+		}
+	}
+	return nil
+}
+
+// fkColumnNotNullable is the shared nullability predicate used by the FK
+// SET NULL validation: Default.NullAbility is the authoritative flag (it
+// carries both the explicit NOT NULL attribute and the primary-key implied
+// NOT NULL), while NotNull/Typ.NotNullable cover catalog-loaded definitions
+// whose Default slot may be unset.
+func fkColumnNotNullable(col *plan.ColDef) bool {
+	notNull := col.NotNull || col.Typ.NotNullable
+	if col.Default != nil {
+		notNull = notNull || !col.Default.NullAbility
+	}
+	return notNull
+}
+
+// checkAlterSurvivingFkSetNull rejects an ALTER that makes a child column of
+// a SURVIVING SET NULL foreign key NOT NULL — MODIFY/CHANGE ... NOT NULL or
+// ADD PRIMARY KEY would leave the constraint impossible to execute (MySQL
+// error 1830, #30282 review). Only columns whose NOT NULL status is newly
+// introduced by this ALTER are tightened; columns that were already NOT NULL
+// keep their previously validated constraint, constraints dropped by the
+// same statement are ignored, and the historical-restore replay keeps the
+// legacy layout buildable.
+//
+// The pre-ALTER nullability is compared by ColId identity, never by column
+// name: CHANGE/RENAME preserve a column's ColId, while a name can be reused
+// by a different physical column inside one ALTER (DROP COLUMN old, CHANGE
+// col old ... NOT NULL) — a name-keyed comparison would inherit the dropped
+// column's NOT NULL exemption and reinstall an impossible SET NULL
+// constraint (#30282 review round 3).
+func checkAlterSurvivingFkSetNull(cctx CompilerContext, tableName string, droppedFks map[string]bool, oldDef, newDef *plan.TableDef) error {
+	if ddlReplayForTable(cctx.GetContext(), tableName) != nil {
+		// historical-restore exception
+		return nil
+	}
+	if len(newDef.Fkeys) == 0 {
+		return nil
+	}
+	oldNotNull := make(map[uint64]bool, len(oldDef.Cols))
+	for _, col := range oldDef.Cols {
+		if col == nil {
+			continue
+		}
+		if fkColumnNotNullable(col) {
+			oldNotNull[col.ColId] = true
+		}
+	}
+	id2col := make(map[uint64]*plan.ColDef, len(newDef.Cols))
+	for _, col := range newDef.Cols {
+		if col == nil {
+			continue
+		}
+		id2col[col.ColId] = col
+	}
+	for _, fk := range newDef.Fkeys {
+		if fk == nil ||
+			(fk.OnDelete != plan.ForeignKeyDef_SET_NULL &&
+				fk.OnUpdate != plan.ForeignKeyDef_SET_NULL) {
+			continue
+		}
+		if droppedFks[strings.ToLower(fk.Name)] {
+			continue
+		}
+		for _, id := range fk.Cols {
+			col, ok := id2col[id]
+			if !ok || col == nil {
+				continue
+			}
+			// no entry in oldNotNull for this ColId means either the column
+			// was nullable before or it did not exist at all — both leave the
+			// NOT NULL status attributable to this ALTER.
+			if !fkColumnNotNullable(col) || oldNotNull[col.ColId] {
+				continue
+			}
+			name := col.Name
+			if col.OriginName != "" {
+				name = col.OriginName
+			}
+			return moerr.NewErrFkColumnNotNull(cctx.GetContext(), name, fk.Name)
+		}
+	}
+	return nil
+}
+
+func checkForeignKeyColumns(ctx context.Context, fkData *FkData, parentTableDef *TableDef) error {
 	// colId in parent table-> position in parent table
 	columnIdPos := make(map[uint64]int)
 	// columnName in parent table -> position in parent table
@@ -7499,23 +8285,23 @@ func checkFkColsAreValid(ctx CompilerContext, fkData *FkData, parentTableDef *Ta
 	// 2. check if the referred column does not exist in the parent table
 	for _, colName := range fkData.ColsReferred.Cols {
 		if _, exists := columnNamePos[colName]; !exists { // column exists in parent table
-			return moerr.NewBadFieldErrorf(ctx.GetContext(), "internal error: column '%v' no exists in table '%v'", colName, fkData.ParentTableName)
+			return moerr.NewBadFieldErrorf(ctx, "internal error: column '%v' no exists in table '%v'", colName, fkData.ParentTableName)
 		}
 	}
-	if err := checkFkVirtualGeneratedColumns(ctx.GetContext(), parentTableDef, fkData.ColsReferred.Cols); err != nil {
+	if err := checkFkVirtualGeneratedColumns(ctx, parentTableDef, fkData.ColsReferred.Cols); err != nil {
 		return err
 	}
 
 	indexName, matched := selectForeignKeyReferencedIndex(parentTableDef, fkData.ColsReferred.Cols)
 	if !matched {
-		return moerr.NewInternalError(ctx.GetContext(), "failed to add the foreign key constraint")
+		return moerr.NewInternalError(ctx, "failed to add the foreign key constraint")
 	}
 
 	matchCols := make([]uint64, len(fkData.ColsReferred.Cols))
 	for i, referredColName := range fkData.ColsReferred.Cols {
 		colID := parentTableDef.Cols[columnNamePos[referredColName]].ColId
 		if parentTableDef.Cols[columnIdPos[colID]].Typ.Id != fkData.ColTyps[i].Id {
-			return moerr.NewInternalErrorf(ctx.GetContext(), "type of reference column '%v' is not match for column '%v'", referredColName, fkData.Cols.Cols[i])
+			return moerr.NewInternalErrorf(ctx, "type of reference column '%v' is not match for column '%v'", referredColName, fkData.Cols.Cols[i])
 		}
 		matchCols[i] = colID
 	}
@@ -7540,10 +8326,29 @@ func checkFkVirtualGeneratedColumns(ctx context.Context, parentTableDef *TableDe
 // buildFkDataOfForwardRefer rebuilds the fk relationships based on
 // the mo_catalog.mo_foreign_keys.
 func buildFkDataOfForwardRefer(ctx CompilerContext,
-	constraintName string,
-	fkDefs []*FkReferDef,
-	createTable *plan.CreateTable) (*FkData, error) {
+	constraintName string, fkDefs []*FkReferDef, createTable *plan.CreateTable) (*FkData, error) {
+	if len(fkDefs) == 0 {
+		return nil, moerr.NewInternalError(ctx.GetContext(), "empty forward foreign key declaration")
+	}
+	_, childTableDef, err := ctx.Resolve(fkDefs[0].Db, fkDefs[0].Tbl, nil)
+	if err != nil {
+		return nil, err
+	}
+	if childTableDef == nil {
+		return nil, moerr.NewNoSuchTable(ctx.GetContext(), fkDefs[0].Db, fkDefs[0].Tbl)
+	}
+	return BindForwardForeignKey(ctx.GetContext(), constraintName, fkDefs, childTableDef, createTable.TableDef)
+}
+
+// BindForwardForeignKey applies the same semantic rules to plan previews and
+// execution-time definitions. Column IDs always come from the supplied owners.
+func BindForwardForeignKey(ctx context.Context, constraintName string,
+	fkDefs []*FkReferDef, childTableDef, parentTableDef *plan.TableDef) (*FkData, error) {
+	if len(fkDefs) == 0 || childTableDef == nil || parentTableDef == nil {
+		return nil, moerr.NewInternalError(ctx, "incomplete forward foreign key binding")
+	}
 	fkData := FkData{
+		ParentTableName: parentTableDef.Name,
 		Def: &plan.ForeignKeyDef{
 			Name:                constraintName,
 			Cols:                make([]uint64, len(fkDefs)),
@@ -7554,14 +8359,6 @@ func buildFkDataOfForwardRefer(ctx CompilerContext,
 			OnDeleteOrigin:      convertIntoReferActionOrigin(fkDefs[0].OnDeleteOrigin),
 			OnUpdateOrigin:      convertIntoReferActionOrigin(fkDefs[0].OnUpdateOrigin),
 		},
-	}
-	// 1. get tableDef of the child table
-	_, childTableDef, err := ctx.Resolve(fkDefs[0].Db, fkDefs[0].Tbl, nil)
-	if err != nil {
-		return nil, err
-	}
-	if childTableDef == nil {
-		return nil, moerr.NewNoSuchTable(ctx.GetContext(), fkDefs[0].Db, fkDefs[0].Tbl)
 	}
 	// 2. fill fkdata
 	fkData.Cols = &plan.FkColName{
@@ -7582,7 +8379,7 @@ func buildFkDataOfForwardRefer(ctx CompilerContext,
 			// column type from tableDef
 			fkData.ColTyps[i] = &colDef.Typ
 		} else {
-			return nil, moerr.NewInternalErrorf(ctx.GetContext(), "column '%v' no exists in table '%v'", fkDef.Col, fkDefs[0].Tbl)
+			return nil, moerr.NewInternalErrorf(ctx, "column '%v' no exists in table '%v'", fkDef.Col, fkDefs[0].Tbl)
 		}
 	}
 
@@ -7594,7 +8391,14 @@ func buildFkDataOfForwardRefer(ctx CompilerContext,
 	}
 
 	// 3. check fk valid or not
-	if err := checkFkColsAreValid(ctx, &fkData, createTable.TableDef); err != nil {
+	if err := checkForeignKeyColumns(ctx, &fkData, parentTableDef); err != nil {
+		return nil, err
+	}
+	// #30282 forward-binding parity: an unresolved declaration admitted under
+	// foreign_key_checks=0 over a NOT NULL child column must not bind when the
+	// parent table is created either (MySQL error 1830); a SET NULL action
+	// could never write NULL there.
+	if err := checkFkSetNullColumnsRequireNullable(ctx, childTableDef.Cols, fkData.Def, fkData.Cols.Cols); err != nil {
 		return nil, err
 	}
 	return &fkData, nil
@@ -7844,7 +8648,7 @@ func constructAddedPartitionDefs(
 			TableDef:    tableDef,
 			BindingTags: []int32{partBuilder.genNewBindTag()},
 		}, partBindCtx)
-		if err := partBuilder.addBinding(nodeID, tree.AliasClause{}, partBindCtx); err != nil {
+		if err := partBuilder.addBinding(nodeID, tree.AliasClause{}, partBindCtx, tableDef.DbName); err != nil {
 			return nil, err
 		}
 		partitionBinder := NewPartitionBinder(partBuilder, partBindCtx)
@@ -8158,7 +8962,7 @@ func validateWritableEscape(ctx context.Context, tail *tree.TailParameter) error
 
 // validateAndSetHivePartitionOptions parses and validates hive_partitioning options from the DDL,
 // normalizes partition column names, extracts column types, and strips hive keys from Option[].
-func validateAndSetHivePartitionOptions(ctx context.Context, stmt *tree.CreateTable, createTable *plan.CreateTable) error {
+func validateAndSetHivePartitionOptions(ctx context.Context, proc *process.Process, stmt *tree.CreateTable, createTable *plan.CreateTable) error {
 	raw := stmt.Param.Option
 
 	if err := rejectDuplicateKeys(ctx, raw, []string{"hive_partitioning", "hive_partition_columns"}); err != nil {
@@ -8189,7 +8993,12 @@ func validateAndSetHivePartitionOptions(ctx context.Context, stmt *tree.CreateTa
 
 	if len(hiveCols) == 0 || (len(hiveCols) == 1 && strings.EqualFold(strings.TrimSpace(hiveCols[0]), "auto")) {
 		prepareHiveInferenceParam(stmt.Param, raw)
-		hiveCols, err = inferHivePartitionColumns(ctx, stmt.Param)
+		if err := AuthorizeExternalFileAccess(stmt.Param, proc); err != nil {
+			return err
+		}
+		scoped := *stmt.Param
+		scoped.Ctx = process.SQLFileAccessContext(ctx, proc)
+		hiveCols, err = inferHivePartitionColumns(scoped.Ctx, &scoped)
 		if err != nil {
 			return err
 		}
@@ -8517,4 +9326,32 @@ func findColInTableDefCaseInsensitive(cols []*plan.ColDef, name string) *plan.Co
 		}
 	}
 	return nil
+}
+
+// MySQL materializes integer function results as INT when their display length
+// is below nine. Keep this separate from DIV's 64-bit evaluation domain.
+func decimalDivSchemaType(typ plan.Type, provenance OutputColumnProvenance) plan.Type {
+	if provenance.DecimalDivDisplayLength == 0 {
+		return typ
+	}
+	switch types.T(typ.Id) {
+	case types.T_int64:
+		if provenance.DecimalDivDisplayLength < 9 {
+			typ.Id = int32(types.T_int32)
+			typ.Width = 32
+		} else {
+			typ.Width = 64
+		}
+	case types.T_uint64:
+		if provenance.DecimalDivDisplayLength < 9 {
+			typ.Id = int32(types.T_uint32)
+			typ.Width = 32
+		} else {
+			typ.Width = 64
+		}
+	default:
+		return typ
+	}
+	typ.Scale = -1
+	return typ
 }

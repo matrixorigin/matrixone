@@ -31,7 +31,7 @@ func TestIndexBuildApplyOwnsCoordinatorWorkspace(t *testing.T) {
 		{Id: "cn-local", Addr: "cn-local:6001", Mcpu: 4},
 		{Id: "cn-remote", Addr: "cn-remote:6001", Mcpu: 4},
 	}
-	for _, name := range []string{"fulltext2_create", "hnsw_create", "mo_view_columns"} {
+	for _, name := range []string{"fulltext2_create", "hnsw_create", "mo_view_columns", "mo_subscription_view_columns"} {
 		for _, applyType := range []plan.Node_ApplyType{plan.Node_CROSSAPPLY, plan.Node_OUTERAPPLY} {
 			t.Run(name+"/"+applyType.String(), func(t *testing.T) {
 				c := newCompileForShuffleJoinTest(t, nodes)
@@ -45,6 +45,9 @@ func TestIndexBuildApplyOwnsCoordinatorWorkspace(t *testing.T) {
 				right := &plan.Node{TableDef: &plan.TableDef{TblFunc: &plan.TableFunction{
 					Name: name, IsSingle: true,
 				}}}
+				if name == "mo_subscription_view_columns" {
+					right.TblFuncExprList = []*plan.Expr{plan2.MakePlan2Uint64ConstExprWithType(0), plan2.MakePlan2Uint64ConstExprWithType(0), plan2.MakePlan2Uint64ConstExprWithType(0)}
+				}
 				result := c.compileApply(&plan.Node{ApplyType: applyType}, right, inputs)
 				require.Len(t, result, 1, "one transaction-owning builder, not one per input CN")
 				scope := result[0]
@@ -71,7 +74,7 @@ func TestSearchApplyPreservesInputPlacement(t *testing.T) {
 		{Id: "cn-local", Addr: "cn-local:6001", Mcpu: 4},
 		{Id: "cn-remote", Addr: "cn-remote:6001", Mcpu: 4},
 	}
-	for _, name := range []string{"fulltext2_search", "hnsw_search", "ivf_search", "generate_series"} {
+	for _, name := range []string{"unnest", "generate_series", "mo_subscription_view_columns"} {
 		t.Run(name, func(t *testing.T) {
 			c := newCompileForShuffleJoinTest(t, nodes)
 			inputs := []*Scope{
@@ -97,7 +100,7 @@ func TestTableFunctionWriterPlacement(t *testing.T) {
 		{Id: "cn-local", Addr: "cn-local:6001", Mcpu: 4},
 		{Id: "cn-remote", Addr: "cn-remote:6001", Mcpu: 4},
 	}
-	for _, name := range []string{"fulltext2_create", "hnsw_create", "fulltext2_search"} {
+	for _, name := range []string{"fulltext2_create", "hnsw_create", "unnest"} {
 		for _, withInput := range []bool{false, true} {
 			inputName := "/standalone"
 			if withInput {
@@ -116,7 +119,7 @@ func TestTableFunctionWriterPlacement(t *testing.T) {
 				require.Len(t, result, 1)
 				_, ok := result[0].RootOp.(*table_function.TableFunction)
 				require.True(t, ok)
-				if withInput && name == "fulltext2_search" {
+				if withInput && name == "unnest" {
 					require.Equal(t, inputs, result, "search retains the remote input")
 					return
 				}

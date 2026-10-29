@@ -21,6 +21,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -33,7 +34,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
-	catalog2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 )
 
@@ -227,7 +228,8 @@ func mock_mo_indexes(
 	if err = txn.Commit(ctx); err != nil {
 		return err
 	}
-	return err
+	// CREATE DATABASE now persists defaults in this tenant catalog table.
+	return exec_sql(de, ctx, catalog.MoDatabaseDefaultsDDL)
 }
 func mock_mo_foreign_keys(
 	de *testutil.TestDisttaeEngine,
@@ -290,44 +292,6 @@ func execSql(
 		return result, err
 	}
 	return result, nil
-}
-
-func CreateDBAndTableForHNSWAndGetAppendData(
-	t *testing.T,
-	de *testutil.TestDisttaeEngine,
-	ctx context.Context,
-	databaseName string,
-	tableName string,
-	rowCount int,
-) *containers.Batch {
-	// int64 is column 3, array_float32 is column 18
-	schema := catalog2.MockSchemaAll(20, 3)
-	txn, err := de.NewTxnOperator(ctx, de.Now())
-	assert.NoError(t, err)
-
-	err = de.Engine.Create(ctx, databaseName, txn)
-	assert.NoError(t, err)
-
-	database, err := de.Engine.Database(ctx, databaseName, txn)
-	assert.NoError(t, err)
-
-	engineTblDef, err := testutil.EngineTableDefBySchema(schema)
-	assert.NoError(t, err)
-
-	// add index
-	indexColName := schema.ColDefs[18].Name
-	engineTblDef = testutil.EngineDefAddIndex(engineTblDef, indexColName)
-
-	err = database.Create(ctx, tableName, engineTblDef)
-	assert.NoError(t, err)
-
-	_, err = database.Relation(ctx, tableName, nil)
-	assert.NoError(t, err)
-
-	err = txn.Commit(ctx)
-	assert.NoError(t, err)
-
-	return catalog2.MockBatch(schema, rowCount)
 }
 
 func CreateDBAndTableForCNConsumerAndGetAppendData(

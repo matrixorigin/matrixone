@@ -20,6 +20,8 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -89,6 +91,243 @@ func TestShouldUseFixedAlterCopySnapshot(t *testing.T) {
 	require.False(t, shouldUseFixedAlterCopySnapshot(true, true))
 	require.False(t, shouldUseFixedAlterCopySnapshot(false, false))
 	require.False(t, shouldUseFixedAlterCopySnapshot(false, true))
+}
+
+func TestAlterTableHasRename(t *testing.T) {
+	rename := func(oldName, newName string) *plan2.AlterTable_Action {
+		return &plan2.AlterTable_Action{
+			Action: &plan2.AlterTable_Action_AlterName{
+				AlterName: &plan2.AlterTableName{OldName: oldName, NewName: newName},
+			},
+		}
+	}
+
+	require.False(t, alterTableHasRename(nil))
+	require.False(t, alterTableHasRename(&plan2.AlterTable{}))
+	require.False(t, alterTableHasRename(&plan2.AlterTable{
+		Actions: []*plan2.AlterTable_Action{rename("t", "t")},
+	}))
+	require.True(t, alterTableHasRename(&plan2.AlterTable{
+		Actions: []*plan2.AlterTable_Action{rename("t", "t2")},
+	}))
+}
+
+func TestIsClusterTableRename(t *testing.T) {
+	rename := &plan2.AlterTable_Action{
+		Action: &plan2.AlterTable_Action_AlterName{
+			AlterName: &plan2.AlterTableName{OldName: "t", NewName: "t2"},
+		},
+	}
+
+	require.True(t, isClusterTableRename(&plan2.AlterTable{
+		IsClusterTable: true,
+		Actions:        []*plan2.AlterTable_Action{rename},
+	}))
+	require.False(t, isClusterTableRename(&plan2.AlterTable{
+		Actions: []*plan2.AlterTable_Action{rename},
+	}))
+	require.False(t, isClusterTableRename(&plan2.AlterTable{
+		IsClusterTable: true,
+		Actions: []*plan2.AlterTable_Action{{
+			Action: &plan2.AlterTable_Action_AlterName{
+				AlterName: &plan2.AlterTableName{OldName: "t", NewName: "t"},
+			},
+		}},
+	}))
+
+	proc := testutil.NewProcess(t)
+	err := checkRoleRuleRenameAdmission(&Compile{proc: proc}, &plan2.AlterTable{
+		IsClusterTable: true,
+		Actions:        []*plan2.AlterTable_Action{rename},
+	})
+	require.ErrorContains(t, err, "renaming a cluster table")
+}
+
+func TestRoleRuleRenameAdmissionProtocol(t *testing.T) {
+	rename := &plan2.AlterTable{
+		Database: "db",
+		Actions: []*plan2.AlterTable_Action{{
+			Action: &plan2.AlterTable_Action_AlterName{
+				AlterName: &plan2.AlterTableName{OldName: "t", NewName: "t2"},
+			},
+		}},
+	}
+	frontier := timestamp.Timestamp{PhysicalTime: 20}
+
+	t.Run("non-rename is a no-op", func(t *testing.T) {
+		err := checkRoleRuleRenameAdmissionWithHooks(
+			t.Context(),
+			[]*plan2.AlterTable{{}},
+			true,
+			true,
+			roleRuleRenameAdmissionHooks{},
+		)
+		require.NoError(t, err)
+	})
+
+	t.Run("cluster rename is rejected before transaction access", func(t *testing.T) {
+		err := checkRoleRuleRenameAdmissionWithHooks(
+			t.Context(),
+			[]*plan2.AlterTable{{IsClusterTable: true, Actions: rename.Actions}},
+			false,
+			false,
+			roleRuleRenameAdmissionHooks{},
+		)
+		require.ErrorContains(t, err, "renaming a cluster table")
+	})
+
+	t.Run("temporary rename is excluded from role-rule admission", func(t *testing.T) {
+		temporaryRename := &plan2.AlterTable{
+			TableDef: &plan2.TableDef{IsTemporary: true},
+			Actions:  rename.Actions,
+		}
+		err := checkRoleRuleRenameAdmissionWithHooks(
+			t.Context(), []*plan2.AlterTable{temporaryRename}, false, false, roleRuleRenameAdmissionHooks{},
+		)
+		require.NoError(t, err)
+	})
+
+	t.Run("unsupported transaction mode fails closed", func(t *testing.T) {
+		err := checkRoleRuleRenameAdmissionWithHooks(
+			t.Context(), []*plan2.AlterTable{rename}, false, true, roleRuleRenameAdmissionHooks{},
+		)
+		require.ErrorContains(t, err, "pessimistic read-committed")
+		err = checkRoleRuleRenameAdmissionWithHooks(
+			t.Context(), []*plan2.AlterTable{rename}, true, false, roleRuleRenameAdmissionHooks{
+				hasRoleRules: func(context.Context) (bool, error) { return false, nil },
+			},
+		)
+		require.ErrorContains(t, err, "pessimistic read-committed")
+	})
+
+	t.Run("lock and barrier precede the catalog existence query", func(t *testing.T) {
+		var (
+			events   []string
+			snapshot = timestamp.Timestamp{PhysicalTime: 10}
+		)
+		hooks := roleRuleRenameAdmissionHooks{
+			lockRoleRules: func(context.Context) error {
+				events = append(events, "lock")
+				// Model a rule commit that completed before the lock was acquired.
+				return nil
+			},
+			acquireReadBarrier: func(context.Context) (timestamp.Timestamp, error) {
+				events = append(events, "barrier")
+				return frontier, nil
+			},
+			currentSnapshot: func() timestamp.Timestamp { return snapshot },
+			updateSnapshot: func(_ context.Context, ts timestamp.Timestamp) error {
+				events = append(events, "update-snapshot")
+				snapshot = ts
+				return nil
+			},
+			hasRoleRules: func(_ context.Context) (bool, error) {
+				events = append(events, "query")
+				return true, nil
+			},
+		}
+		err := checkRoleRuleRenameAdmissionWithHooks(t.Context(), []*plan2.AlterTable{rename}, true, true, hooks)
+		require.ErrorContains(t, err, "role rewrite rules exist")
+		require.Equal(t, []string{"lock", "barrier", "update-snapshot", "query"}, events)
+		require.Equal(t, frontier, snapshot)
+	})
+
+	t.Run("barrier and query failures are fail-closed", func(t *testing.T) {
+		barrierErr := errors.New("barrier failed")
+		err := checkRoleRuleRenameAdmissionWithHooks(
+			t.Context(), []*plan2.AlterTable{rename}, true, true,
+			roleRuleRenameAdmissionHooks{
+				lockRoleRules: func(context.Context) error { return nil },
+				acquireReadBarrier: func(context.Context) (timestamp.Timestamp, error) {
+					return timestamp.Timestamp{}, barrierErr
+				},
+				currentSnapshot: func() timestamp.Timestamp { return timestamp.Timestamp{PhysicalTime: 10} },
+				updateSnapshot: func(context.Context, timestamp.Timestamp) error {
+					t.Fatal("snapshot update after barrier failure")
+					return nil
+				},
+				hasRoleRules: func(context.Context) (bool, error) {
+					t.Fatal("query after barrier failure")
+					return false, nil
+				},
+			},
+		)
+		require.ErrorIs(t, err, barrierErr)
+
+		err = checkRoleRuleRenameAdmissionWithHooks(
+			t.Context(), []*plan2.AlterTable{rename}, true, true,
+			roleRuleRenameAdmissionHooks{
+				lockRoleRules:      func(context.Context) error { return nil },
+				acquireReadBarrier: func(context.Context) (timestamp.Timestamp, error) { return timestamp.Timestamp{}, nil },
+				currentSnapshot:    func() timestamp.Timestamp { return timestamp.Timestamp{PhysicalTime: 10} },
+				updateSnapshot: func(context.Context, timestamp.Timestamp) error {
+					t.Fatal("snapshot update after empty barrier")
+					return nil
+				},
+				hasRoleRules: func(context.Context) (bool, error) {
+					t.Fatal("query after empty barrier")
+					return false, nil
+				},
+			},
+		)
+		require.ErrorContains(t, err, "empty timestamp")
+	})
+
+	t.Run("snapshot update and query failures are fail-closed", func(t *testing.T) {
+		updateErr := errors.New("snapshot update failed")
+		err := checkRoleRuleRenameAdmissionWithHooks(
+			t.Context(), []*plan2.AlterTable{rename}, true, true,
+			roleRuleRenameAdmissionHooks{
+				lockRoleRules:      func(context.Context) error { return nil },
+				acquireReadBarrier: func(context.Context) (timestamp.Timestamp, error) { return frontier, nil },
+				currentSnapshot:    func() timestamp.Timestamp { return timestamp.Timestamp{PhysicalTime: 10} },
+				updateSnapshot:     func(context.Context, timestamp.Timestamp) error { return updateErr },
+				hasRoleRules: func(context.Context) (bool, error) {
+					t.Fatal("query after snapshot failure")
+					return false, nil
+				},
+			},
+		)
+		require.ErrorIs(t, err, updateErr)
+
+		queryErr := errors.New("role-rule query failed")
+		snapshot := frontier
+		err = checkRoleRuleRenameAdmissionWithHooks(
+			t.Context(), []*plan2.AlterTable{rename}, true, true,
+			roleRuleRenameAdmissionHooks{
+				lockRoleRules:      func(context.Context) error { return nil },
+				acquireReadBarrier: func(context.Context) (timestamp.Timestamp, error) { return frontier, nil },
+				currentSnapshot:    func() timestamp.Timestamp { return snapshot },
+				updateSnapshot:     func(context.Context, timestamp.Timestamp) error { return nil },
+				hasRoleRules:       func(context.Context) (bool, error) { return false, queryErr },
+			},
+		)
+		require.ErrorIs(t, err, queryErr)
+	})
+
+	t.Run("snapshot non-advancement and cancellation are fail-closed", func(t *testing.T) {
+		err := checkRoleRuleRenameAdmissionWithHooks(
+			t.Context(), []*plan2.AlterTable{rename}, true, true,
+			roleRuleRenameAdmissionHooks{
+				lockRoleRules:      func(context.Context) error { return nil },
+				acquireReadBarrier: func(context.Context) (timestamp.Timestamp, error) { return frontier, nil },
+				currentSnapshot:    func() timestamp.Timestamp { return timestamp.Timestamp{PhysicalTime: 10} },
+				updateSnapshot:     func(context.Context, timestamp.Timestamp) error { return nil },
+				hasRoleRules: func(context.Context) (bool, error) {
+					t.Fatal("query after non-advancement")
+					return false, nil
+				},
+			},
+		)
+		require.ErrorContains(t, err, "snapshot did not advance")
+
+		ctx, cancel := context.WithCancel(t.Context())
+		cancel()
+		err = checkRoleRuleRenameAdmissionWithHooks(ctx, []*plan2.AlterTable{rename}, true, true, roleRuleRenameAdmissionHooks{
+			lockRoleRules: func(context.Context) error { t.Fatal("lock after cancellation"); return nil },
+		})
+		require.ErrorIs(t, err, context.Canceled)
+	})
 }
 
 func TestAlterCopySQLAtLineageSnapshot(t *testing.T) {
@@ -226,7 +465,7 @@ func TestAlterTableHasLatestHistoricalBranchSourceUsesFreshUnlockedProbe(t *test
 	spyExec := &alterCopyInsertSpyExecutor{results: make(map[string]executor.Result)}
 	c := newAlterCopyPrecheckCompile(t, ctrl, spyExec)
 	snapshotSQL := alterDataBranchHistoricalSnapshotSourceProbeSQL(
-		"", database, table, oldTableID, false,
+		"", database, table, oldTableID, false, 0,
 	)
 	spyExec.results[snapshotSQL] = newAlterCopyFixedResult(
 		t, c.proc.Mp(), types.T_int32.ToType(), []int32{1},
@@ -407,6 +646,62 @@ func TestPrepareAlterDataBranchLineageAllowsHistoricalSourceTxn(t *testing.T) {
 	}
 }
 
+func TestInspectAlterDataBranchLineageSeesBranchCreatedAfterPreflight(t *testing.T) {
+	const (
+		oldTableID    = uint64(42)
+		parentTableID = uint64(41)
+		database      = "test"
+		table         = "dept"
+	)
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	spyExec := &alterCopyInsertSpyExecutor{
+		resultSequences: make(map[string][]executor.Result),
+		results:         make(map[string]executor.Result),
+	}
+	c := newAlterCopyPrecheckCompile(t, ctrl, spyExec)
+	txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOperator.EXPECT().TxnOptions().Return(txn.TxnOptions{Autocommit: true}).AnyTimes()
+	txnOperator.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
+	c.proc.Base.TxnOperator = txnOperator
+	participationSQL := alterDataBranchParticipationSQL(oldTableID)
+	metadataSQL := "select table_id, p_table_id, clone_ts, creator, level, table_deleted from mo_catalog.mo_branch_metadata"
+	emptyParticipation := newAlterCopyFixedResult(
+		t, c.proc.Mp(), types.T_int32.ToType(), []int32{},
+	)
+	liveParticipation := newAlterCopyFixedResult(
+		t, c.proc.Mp(), types.T_int32.ToType(), []int32{1},
+	)
+	spyExec.resultSequences[participationSQL] = []executor.Result{
+		emptyParticipation, liveParticipation,
+	}
+	spyExec.results[metadataSQL] = newAlterLineageMetadataResult(
+		t, c.proc.Mp(), []uint64{oldTableID}, []uint64{parentTableID}, []int64{100},
+		[]uint64{uint64(catalog.System_Account)}, []string{"table"}, []bool{false},
+	)
+
+	preflight, err := c.inspectAlterDataBranchLineage(
+		oldTableID, database, table, "ALTER", false,
+	)
+	require.NoError(t, err)
+	require.False(t, preflight.participates)
+	require.False(t, preflight.plan.enabled)
+
+	afterGate, err := c.inspectAlterDataBranchLineage(
+		oldTableID, database, table, "ALTER", true,
+	)
+	require.NoError(t, err)
+	require.True(t, afterGate.participates)
+	require.True(t, afterGate.plan.enabled)
+	require.Equal(t, []string{
+		participationSQL,
+		alterDataBranchHistoricalSnapshotSourceProbeSQL("", database, table, oldTableID, false, 0),
+		alterDataBranchHistoricalPitrSourceProbeSQL("", database, table, oldTableID, false, 0),
+		participationSQL,
+		metadataSQL,
+	}, spyExec.executedSQLs)
+}
+
 func TestPrepareAlterDataBranchLineageAllowsHistoricalOnlyGenerationInExplicitTxn(t *testing.T) {
 	const (
 		oldTableID    = uint64(42)
@@ -493,6 +788,95 @@ func TestAdvanceAlterDataBranchLineageSnapshotUsesWorkspace(t *testing.T) {
 	cloneTS, err := (&Compile{proc: proc}).advanceAlterDataBranchLineageSnapshot()
 	require.NoError(t, err)
 	require.Equal(t, int64(2000), cloneTS)
+}
+
+// TestAlterCopyRetainsWorkspaceAdvancedSnapshotOnEveryReturn pins the ownership
+// contract of databranchutils.AdvanceLineageSnapshot inside ALTER COPY: once
+// the workspace has advanced (relocating transaction-local tombstones to their
+// post-flush row locations), every ALTER COPY return path must retain that
+// workspace-owned snapshot. Rewinding only the transaction timestamp leaves the
+// workspace and the snapshot in different generations and resurrects relocated
+// deletes, the defect removed from main by #29539.
+func TestAlterCopyRetainsWorkspaceAdvancedSnapshotOnEveryReturn(t *testing.T) {
+	const initialSnapshot = int64(1000)
+	advanceErr := errors.New("workspace advance failed")
+	copyErr := errors.New("stop after physical ALTER COPY")
+	for _, tc := range []struct {
+		name string
+		// advanceFails returns before any physical work; otherwise the physical
+		// row copy fails, exercising the post-advancement error return.
+		advanceFails bool
+	}{
+		{name: "advance failure", advanceFails: true},
+		{name: "physical copy failure"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			defer ctrl.Finish()
+
+			exec := &alterCopyInsertSpyExecutor{
+				createSQL: "create table dept_copy",
+				insertSQL: "insert into dept_copy select * from dept",
+				insertErr: copyErr,
+			}
+			stubAlterCopySourceLocks(t, nil)
+			scope, compile := newAlterCopyGateConcurrencyFixture(
+				t, ctrl, exec, "rc-snapshot-retain", initialSnapshot,
+			)
+
+			current := timestamp.Timestamp{PhysicalTime: initialSnapshot}
+			advances := 0
+			ws := &Ws{advanceSnapshot: func(_ context.Context, ts timestamp.Timestamp) error {
+				if tc.advanceFails {
+					return advanceErr
+				}
+				// The workspace owns the transfer: relocated tombstones and the
+				// operator snapshot move to the advanced generation together.
+				current = timestamp.Timestamp{PhysicalTime: ts.PhysicalTime + 1}
+				advances++
+				return nil
+			}}
+			txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
+			txnOperator.EXPECT().GetWorkspace().Return(ws).AnyTimes()
+			txnOperator.EXPECT().Txn().Return(txn.TxnMeta{
+				Mode:      txn.TxnMode_Pessimistic,
+				Isolation: txn.TxnIsolation_RC,
+			}).AnyTimes()
+			txnOperator.EXPECT().TxnOptions().Return(txn.TxnOptions{}).AnyTimes()
+			txnOperator.EXPECT().SnapshotTS().DoAndReturn(
+				func() timestamp.Timestamp { return current },
+			).AnyTimes()
+			txnOperator.EXPECT().SetSnapshotTS(gomock.Any()).DoAndReturn(
+				func(ts timestamp.Timestamp) {
+					t.Errorf(
+						"ALTER COPY rewound the transaction snapshot to %d after the workspace owned the advancement",
+						ts.PhysicalTime,
+					)
+				},
+			).AnyTimes()
+			txnOperator.EXPECT().Snapshot().Return(txn.CNTxnSnapshot{}, nil).AnyTimes()
+			txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
+			txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
+			txnOperator.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
+			txnOperator.EXPECT().TryEnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).
+				Return(uint64(1), nil).AnyTimes()
+			txnOperator.EXPECT().ExitRunSqlWithToken(gomock.Any()).Return().AnyTimes()
+			txnOperator.EXPECT().CheckLockTableBinds(gomock.Any()).Return(nil).AnyTimes()
+			compile.proc.Base.TxnOperator = txnOperator
+
+			err := scope.AlterTableCopy(compile)
+			if tc.advanceFails {
+				require.ErrorIs(t, err, advanceErr)
+				require.Equal(t, initialSnapshot, current.PhysicalTime)
+			} else {
+				require.ErrorIs(t, err, copyErr)
+				require.Greater(t, advances, 0,
+					"the pre-copy workspace advancement must run before physical work")
+				require.Greater(t, current.PhysicalTime, initialSnapshot,
+					"ALTER COPY must retain the workspace-owned advanced snapshot after returning")
+			}
+		})
+	}
 }
 
 func TestIsAlterAffectedPluginIndexMatchesIndexNamePartsAndIncludedColumns(t *testing.T) {
@@ -1332,6 +1716,75 @@ func TestAlterCopyAutoIncrementCleanupDiscardsTrackedReset(t *testing.T) {
 	require.ErrorIs(t, statementErr, cleanupErr)
 }
 
+func TestAlterCopyRetiredResetCleanup(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	c := newAlterCopyPrecheckCompile(t, ctrl, &alterCopyInsertSpyExecutor{})
+	svc := mock_frontend.NewMockAutoIncrementService(ctrl)
+	failure := errors.New("discard failed")
+	gomock.InOrder(
+		svc.EXPECT().DiscardOffsetReset(c.proc.Ctx, uint64(11), c.proc.GetTxnOperator()).Return(failure),
+		svc.EXPECT().DiscardOffsetReset(c.proc.Ctx, uint64(11), c.proc.GetTxnOperator()).Return(nil),
+		svc.EXPECT().DiscardOffsetReset(gomock.Any(), uint64(12), c.proc.GetTxnOperator()).Return(nil),
+	)
+	incrservice.SetAutoIncrementServiceByID(c.proc.GetService(), svc)
+	cleanup := newAlterAutoIncrementResetCleanup(c)
+	cleanup.track(11)
+	require.ErrorIs(t, cleanup.discard(11), failure)
+	require.Equal(t, []uint64{11}, cleanup.tableIDs, "failed retirement keeps its cleanup owner")
+	require.NoError(t, cleanup.discard(11))
+	require.NoError(t, cleanup.discard(11), "retirement is idempotent")
+	cleanup.track(12)
+	err := errors.New("replacement failed")
+	cleanup.finish(&err)
+	require.ErrorContains(t, err, "replacement failed")
+}
+
+type alterCopyHistoryWorkspace struct {
+	*Ws
+	offset uint64
+}
+
+func (w alterCopyHistoryWorkspace) WriteOffset() uint64 { return w.offset }
+
+func TestAlterCopyBorrowedWorkspaceHistory(t *testing.T) {
+	for _, offset := range []uint64{0, 1} {
+		t.Run(fmt.Sprint(offset), func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			op := mock_frontend.NewMockTxnOperator(ctrl)
+			op.EXPECT().TxnOptions().Return(txn.TxnOptions{Autocommit: true})
+			op.EXPECT().GetWorkspace().Return(alterCopyHistoryWorkspace{Ws: &Ws{}, offset: offset})
+			require.Equal(t, offset != 0, alterCopyHasWorkspaceHistory(op, false),
+				"a borrowed autocommit-marked operator must retain caller-local writes")
+		})
+	}
+}
+
+func TestAlterCopyReplicaOwnershipFailsBeforeDrop(t *testing.T) {
+	for _, child := range []bool{false, true} {
+		t.Run(fmt.Sprint("public_child_", child), func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			spy := &alterCopyInsertSpyExecutor{}
+			c := newAlterCopyPrecheckCompile(t, ctrl, spy)
+			op := mock_frontend.NewMockTxnOperator(ctrl)
+			op.EXPECT().GetWorkspace().Return(creationViewWorkspace{created: map[uint64]bool{2: child}})
+			c.proc.Base.TxnOperator = op
+			db := mock_frontend.NewMockDatabase(ctrl)
+			rel := mock_frontend.NewMockRelation(ctrl)
+			rel.EXPECT().GetTableID(gomock.Any()).Return(uint64(2)).AnyTimes()
+			db.EXPECT().Relation(gomock.Any(), "replica", nil).Return(rel, nil)
+			if child {
+				rel.EXPECT().GetTableDef(gomock.Any()).Return(&plan.TableDef{Indexes: []*plan.IndexDef{{TableExist: true, IndexTableName: "idx"}}})
+				index := mock_frontend.NewMockRelation(ctrl)
+				index.EXPECT().GetTableID(gomock.Any()).Return(uint64(3))
+				db.EXPECT().Relation(gomock.Any(), "idx", nil).Return(index, nil)
+			}
+			err := c.retireAlterCopyReplica(db, "test", "replica", rel, 1, newAlterAutoIncrementResetCleanup(c))
+			require.ErrorContains(t, err, "not owned by this preparation")
+			require.Empty(t, spy.executedSQLs, "no private DROP before ownership is proven")
+		})
+	}
+}
+
 type partitionAlterTestExecutor struct {
 	executedSQLs []string
 	failAt       int
@@ -1437,6 +1890,9 @@ func TestAlterPartitionTablesKeepsAutoIncrementCleanupAtStatementBoundary(t *tes
 }
 
 type alterCopyInsertSpyExecutor struct {
+	createSQL       string
+	createCtx       context.Context
+	createErr       error
 	insertSQL       string
 	insertErr       error
 	insertCtx       context.Context
@@ -2119,6 +2575,10 @@ func (e *alterCopyInsertSpyExecutor) Exec(
 	opts executor.Options,
 ) (executor.Result, error) {
 	e.executedSQLs = append(e.executedSQLs, sql)
+	if sql == e.createSQL {
+		e.createCtx = ctx
+		return executor.Result{}, e.createErr
+	}
 	if sql == e.insertSQL {
 		e.insertCtx = ctx
 		e.insertOption = opts.StatementOption()
@@ -2151,6 +2611,1105 @@ func (e *alterCopyInsertSpyExecutor) ExecTxn(
 	}, opts.Txn()))
 }
 
+type alterCopyGateConcurrencyCoordinator struct {
+	insertStarted     chan struct{}
+	allowInsertReturn chan struct{}
+	gateMu            sync.Mutex
+	releaseGate       chan struct{}
+}
+
+type alterCopyGateConcurrencyExecutor struct {
+	insertSQL   string
+	insertErr   error
+	coordinator *alterCopyGateConcurrencyCoordinator
+}
+
+type alterCopySourceDefVersionProvider interface {
+	alterCopySourceDefVersion() uint32
+}
+
+type alterCopyCreatedInCurrentTxnRelation struct {
+	engine.Relation
+	sourceCommitTSCalled bool
+}
+
+type alterCopyTransactionLocalWritesRelation struct {
+	engine.Relation
+	sourceCommitTSCalled bool
+}
+
+func (rel *alterCopyCreatedInCurrentTxnRelation) SourceCommitTS(
+	context.Context, types.TS,
+) (types.TS, error) {
+	rel.sourceCommitTSCalled = true
+	return types.TS{}, errors.New("created-in-current-txn relation has no committed source timestamp")
+}
+
+func (rel *alterCopyCreatedInCurrentTxnRelation) CreatedInCurrentTxn(
+	_ context.Context,
+) (bool, error) {
+	return true, nil
+}
+
+func (rel *alterCopyTransactionLocalWritesRelation) SourceCommitTS(
+	context.Context, types.TS,
+) (types.TS, error) {
+	rel.sourceCommitTSCalled = true
+	return types.TS{}, errors.New("transaction-local relation has no committed source timestamp")
+}
+
+func (rel *alterCopyTransactionLocalWritesRelation) SourceCommitTSAfterCopy(
+	_ context.Context, mustExceed types.TS,
+) (types.TS, error) {
+	rel.sourceCommitTSCalled = true
+	return mustExceed.Next(), nil
+}
+
+type alterCopySourceCommitTSRelation struct {
+	engine.Relation
+	sourceCommitTS func(context.Context, types.TS) (types.TS, error)
+}
+
+func (rel *alterCopySourceCommitTSRelation) SourceCommitTS(
+	ctx context.Context, mustExceed types.TS,
+) (types.TS, error) {
+	return rel.sourceCommitTS(ctx, mustExceed)
+}
+
+func (rel *alterCopySourceCommitTSRelation) SourceCommitTSAfterCopy(
+	ctx context.Context, mustExceed types.TS,
+) (types.TS, error) {
+	return rel.sourceCommitTS(ctx, mustExceed)
+}
+
+type alterCopySourceCommitTSProvider interface {
+	alterCopySourceCommitTS(context.Context, types.TS) (types.TS, error)
+}
+
+func (e *alterCopyGateConcurrencyExecutor) Exec(
+	_ context.Context,
+	sql string,
+	opts executor.Options,
+) (executor.Result, error) {
+	if sql == e.insertSQL {
+		e.coordinator.insertStarted <- struct{}{}
+		<-e.coordinator.allowInsertReturn
+		return executor.Result{}, e.insertErr
+	}
+	if sql == databranchutils.LineageOwnerLifecycleLockSQL() {
+		e.coordinator.gateMu.Lock()
+		<-e.coordinator.releaseGate
+		e.coordinator.gateMu.Unlock()
+	}
+	return executor.Result{}, nil
+}
+
+func (e *alterCopyGateConcurrencyExecutor) ExecTxn(
+	ctx context.Context,
+	execFunc func(executor.TxnExecutor) error,
+	opts executor.Options,
+) error {
+	return execFunc(executor.NewMemTxnExecutor(func(sql string) (executor.Result, error) {
+		return e.Exec(ctx, sql, opts)
+	}, opts.Txn()))
+}
+
+func newAlterCopyGateConcurrencyFixture(
+	t *testing.T,
+	ctrl *gomock.Controller,
+	exec executor.SQLExecutor,
+	serviceSuffix string,
+	snapshotTS int64,
+	sourceIDProviders ...func() uint64,
+) (*Scope, *Compile) {
+	c := newAlterCopyPrecheckCompile(t, ctrl, exec, serviceSuffix)
+	c.proc.GetTxnOperator().(*mock_frontend.MockTxnOperator).EXPECT().SnapshotTS().
+		Return(timestamp.Timestamp{PhysicalTime: snapshotTS}).AnyTimes()
+	tableDef := &plan.TableDef{
+		TblId: 1,
+		Name:  "dept",
+	}
+	sourceID := func() uint64 { return 1 }
+	if len(sourceIDProviders) > 0 {
+		sourceID = sourceIDProviders[0]
+	}
+	sourceDefVersion := func() uint32 { return 7 }
+	if provider, ok := exec.(alterCopySourceDefVersionProvider); ok {
+		sourceDefVersion = provider.alterCopySourceDefVersion
+	}
+	copyTableDef := &plan.TableDef{
+		TblId: 2,
+		Name:  "dept_copy",
+	}
+	alterTable := &plan2.AlterTable{
+		Database:          "test",
+		TableDef:          tableDef,
+		CopyTableDef:      copyTableDef,
+		CreateTmpTableSql: "create table dept_copy",
+		InsertTmpDataSql:  "insert into dept_copy select * from dept",
+		Options:           &plan2.AlterCopyOpt{SkipPkDedup: true},
+	}
+	scope := &Scope{
+		Magic: AlterTable,
+		Plan: &plan.Plan{
+			Plan: &plan2.Plan_Ddl{
+				Ddl: &plan2.DataDefinition{
+					DdlType: plan2.DataDefinition_ALTER_TABLE,
+					Definition: &plan2.DataDefinition_AlterTable{
+						AlterTable: alterTable,
+					},
+				},
+			},
+		},
+	}
+	originMock := mock_frontend.NewMockRelation(ctrl)
+	originMock.EXPECT().GetTableID(gomock.Any()).DoAndReturn(
+		func(context.Context) uint64 { return sourceID() },
+	).AnyTimes()
+	originMock.EXPECT().GetTableDef(gomock.Any()).DoAndReturn(
+		func(context.Context) *plan2.TableDef {
+			return &plan2.TableDef{
+				TblId:   sourceID(),
+				Name:    "dept",
+				Version: sourceDefVersion(),
+			}
+		},
+	).AnyTimes()
+	originMock.EXPECT().TableDefs(gomock.Any()).Return(nil, nil).AnyTimes()
+	originMock.EXPECT().CopyTableDef(gomock.Any()).
+		Return(plan.DeepCopyTableDef(tableDef, true)).AnyTimes()
+	originRel := engine.Relation(originMock)
+	if provider, ok := exec.(alterCopySourceCommitTSProvider); ok {
+		originRel = &alterCopySourceCommitTSRelation{
+			Relation:       originMock,
+			sourceCommitTS: provider.alterCopySourceCommitTS,
+		}
+	}
+	copyRel := mock_frontend.NewMockRelation(ctrl)
+	copyRel.EXPECT().CopyTableDef(gomock.Any()).Return(copyTableDef).AnyTimes()
+	copyRel.EXPECT().GetTableDef(gomock.Any()).Return(copyTableDef).AnyTimes()
+	copyRel.EXPECT().GetTableID(gomock.Any()).Return(uint64(2)).AnyTimes()
+	copyRel.EXPECT().TableRenameInTxn(gomock.Any(), gomock.Any()).DoAndReturn(
+		func(context.Context, [][]byte) error {
+			if renameRecorder, ok := exec.(interface{ markSourceRenamed() }); ok {
+				renameRecorder.markSourceRenamed()
+			}
+			return nil
+		},
+	).AnyTimes()
+	mockDb := mock_frontend.NewMockDatabase(ctrl)
+	mockDb.EXPECT().Relation(gomock.Any(), "dept", gomock.Any()).Return(originRel, nil).AnyTimes()
+	mockDb.EXPECT().Relation(gomock.Any(), "dept_copy", gomock.Any()).Return(copyRel, nil).AnyTimes()
+	eng := c.e.(*mock_frontend.MockEngine)
+	eng.EXPECT().Database(gomock.Any(), "test", gomock.Any()).Return(mockDb, nil).AnyTimes()
+	c.pn = scope.Plan
+	return scope, c
+}
+
+func TestAlterCopyPhysicalWorkDoesNotWaitForLineageOwnerGate(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	coordinator := &alterCopyGateConcurrencyCoordinator{
+		insertStarted:     make(chan struct{}, 2),
+		allowInsertReturn: make(chan struct{}),
+		releaseGate:       make(chan struct{}),
+	}
+	insertErr := errors.New("stop after physical ALTER COPY")
+	type alterCopyFixture struct {
+		scope   *Scope
+		compile *Compile
+	}
+	fixtures := make([]alterCopyFixture, 2)
+	for index := range fixtures {
+		exec := &alterCopyGateConcurrencyExecutor{
+			insertSQL:   "insert into dept_copy select * from dept",
+			insertErr:   insertErr,
+			coordinator: coordinator,
+		}
+		scope, compile := newAlterCopyGateConcurrencyFixture(
+			t, ctrl, exec, fmt.Sprint(index), 0,
+		)
+		fixtures[index] = alterCopyFixture{scope: scope, compile: compile}
+	}
+
+	done := make(chan error, len(fixtures))
+	for _, fixture := range fixtures {
+		scope := fixture.scope
+		compile := fixture.compile
+		go func() {
+			done <- scope.AlterTableCopy(compile)
+		}()
+	}
+
+	started := 0
+	deadline := time.After(2 * time.Second)
+	for started < len(fixtures) {
+		select {
+		case <-coordinator.insertStarted:
+			started++
+		case <-deadline:
+			started = len(fixtures) + 1
+		}
+	}
+	if started != len(fixtures) {
+		t.Errorf("independent ALTER COPY physical work waited for the global lineage gate")
+	}
+	close(coordinator.allowInsertReturn)
+	close(coordinator.releaseGate)
+	for range fixtures {
+		require.ErrorIs(t, <-done, insertErr)
+	}
+}
+
+func newAlterCopyPessimisticGateConcurrencyFixture(
+	t *testing.T,
+	ctrl *gomock.Controller,
+	exec executor.SQLExecutor,
+	serviceSuffix string,
+	snapshotTS int64,
+) (*Scope, *Compile) {
+	scope, c := newAlterCopyGateConcurrencyFixture(
+		t, ctrl, exec, serviceSuffix, snapshotTS,
+	)
+	txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
+	txnOperator.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
+	txnOperator.EXPECT().GetWorkspace().Return(&Ws{}).AnyTimes()
+	txnOperator.EXPECT().Txn().Return(txn.TxnMeta{
+		Mode:      txn.TxnMode_Pessimistic,
+		Isolation: txn.TxnIsolation_SI,
+	}).AnyTimes()
+	txnOperator.EXPECT().TxnOptions().Return(txn.TxnOptions{}).AnyTimes()
+	txnOperator.EXPECT().TryEnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).
+		Return(uint64(1), nil).AnyTimes()
+	txnOperator.EXPECT().ExitRunSqlWithToken(gomock.Any()).Return().AnyTimes()
+	txnOperator.EXPECT().CheckLockTableBinds(gomock.Any()).Return(nil).AnyTimes()
+	txnOperator.EXPECT().Snapshot().Return(txn.CNTxnSnapshot{}, nil).AnyTimes()
+	txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
+	txnOperator.EXPECT().SnapshotTS().
+		Return(timestamp.Timestamp{PhysicalTime: snapshotTS}).AnyTimes()
+	c.proc.Base.TxnOperator = txnOperator
+	return scope, c
+}
+
+type alterCopyLockOrderRecorder struct {
+	mu     sync.Mutex
+	events []string
+}
+
+func (r *alterCopyLockOrderRecorder) record(event string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.events = append(r.events, event)
+}
+
+func (r *alterCopyLockOrderRecorder) snapshot() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return slices.Clone(r.events)
+}
+
+type alterCopyLockOrderCoordinator struct {
+	gateMu                sync.Mutex
+	recorder              *alterCopyLockOrderRecorder
+	dropGateEntered       chan struct{}
+	releaseDropGate       chan struct{}
+	truncateGateEntered   chan struct{}
+	releaseTruncateGate   chan struct{}
+	alterGateEntered      chan struct{}
+	releaseAlterGate      chan struct{}
+	dropSourceEntered     chan struct{}
+	releaseDropSource     chan struct{}
+	truncateSourceEntered chan struct{}
+	releaseTruncateSource chan struct{}
+	physicalStarted       chan struct{}
+}
+
+type alterCopyLockOrderExecutor struct {
+	role        string
+	insertSQL   string
+	coordinator *alterCopyLockOrderCoordinator
+}
+
+func (e *alterCopyLockOrderExecutor) Exec(
+	_ context.Context,
+	sql string,
+	_ executor.Options,
+) (executor.Result, error) {
+	if sql == e.insertSQL {
+		e.coordinator.recorder.record("alter:physical")
+		e.coordinator.physicalStarted <- struct{}{}
+		return executor.Result{}, nil
+	}
+	if sql == databranchutils.LineageOwnerLifecycleLockSQL() ||
+		sql == databranchutils.LineageOwnerLifecyclePessimisticLockSQL() {
+		e.coordinator.gateMu.Lock()
+		e.coordinator.recorder.record(e.role + ":gate")
+		if e.role == "drop" {
+			e.coordinator.dropGateEntered <- struct{}{}
+			<-e.coordinator.releaseDropGate
+		} else if e.role == "truncate" {
+			e.coordinator.truncateGateEntered <- struct{}{}
+			<-e.coordinator.releaseTruncateGate
+		} else {
+			e.coordinator.alterGateEntered <- struct{}{}
+			<-e.coordinator.releaseAlterGate
+		}
+		e.coordinator.gateMu.Unlock()
+		return executor.Result{}, nil
+	}
+	return executor.Result{}, nil
+}
+
+func (e *alterCopyLockOrderExecutor) ExecTxn(
+	ctx context.Context,
+	execFunc func(executor.TxnExecutor) error,
+	opts executor.Options,
+) error {
+	return execFunc(executor.NewMemTxnExecutor(func(sql string) (executor.Result, error) {
+		return e.Exec(ctx, sql, opts)
+	}, opts.Txn()))
+}
+
+func TestAlterCopyAndDropUseGateBeforeSourceLocks(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	coordinator := &alterCopyLockOrderCoordinator{
+		recorder:          &alterCopyLockOrderRecorder{},
+		dropGateEntered:   make(chan struct{}, 1),
+		releaseDropGate:   make(chan struct{}),
+		alterGateEntered:  make(chan struct{}, 1),
+		releaseAlterGate:  make(chan struct{}),
+		dropSourceEntered: make(chan struct{}, 1),
+		releaseDropSource: make(chan struct{}),
+		physicalStarted:   make(chan struct{}, 1),
+	}
+	dropExec := &alterCopyLockOrderExecutor{
+		role:        "drop",
+		coordinator: coordinator,
+	}
+	alterExec := &alterCopyLockOrderExecutor{
+		role:        "alter",
+		insertSQL:   "insert into dept_copy select * from dept",
+		coordinator: coordinator,
+	}
+	dropScope, dropCompile := newAlterCopyPessimisticGateConcurrencyFixture(
+		t, ctrl, dropExec, "drop", 0,
+	)
+	dropCompile.originSQL = "drop table dept"
+	alterScope, alterCompile := newAlterCopyPessimisticGateConcurrencyFixture(
+		t, ctrl, alterExec, "alter", 0,
+	)
+
+	dropSourceErr := errors.New("stop drop after source lock")
+	alterSourceErr := errors.New("stop alter after source lock")
+	stubs := gostub.New()
+	stubs.Stub(&lockMoDatabase, func(c *Compile, _ string, _ lock.LockMode) error {
+		if c == dropCompile {
+			coordinator.recorder.record("drop:source-db")
+			coordinator.dropSourceEntered <- struct{}{}
+			<-coordinator.releaseDropSource
+			return dropSourceErr
+		}
+		coordinator.recorder.record("alter:source-db")
+		return alterSourceErr
+	})
+	stubs.Stub(&lockMoTable, func(*Compile, string, string, lock.LockMode) error {
+		return errors.New("unexpected catalog table lock")
+	})
+	stubs.Stub(&lockTable, func(context.Context, engine.Engine, *process.Process, engine.Relation, string, bool) error {
+		return errors.New("unexpected physical table lock")
+	})
+	defer stubs.Reset()
+
+	dropDone := make(chan error, 1)
+	alterDone := make(chan error, 1)
+	dropScope.Plan = &plan.Plan{Plan: &plan2.Plan_Ddl{Ddl: &plan2.DataDefinition{
+		DdlType: plan2.DataDefinition_DROP_TABLE,
+		Definition: &plan2.DataDefinition_DropTable{DropTable: &plan2.DropTable{
+			Database: "test",
+			Table:    "dept",
+			TableDef: &plan2.TableDef{},
+		}},
+	}}}
+	go func() {
+		dropDone <- dropScope.DropTable(dropCompile)
+	}()
+	requireRecv(t, coordinator.dropGateEntered, "drop gate")
+	go func() { alterDone <- alterScope.AlterTableCopy(alterCompile) }()
+	requireRecv(t, coordinator.physicalStarted, "alter physical work")
+	requireNoEvent(t, coordinator.recorder.snapshot(), "alter:source")
+
+	close(coordinator.releaseDropGate)
+	requireRecv(t, coordinator.dropSourceEntered, "drop source lock")
+	close(coordinator.releaseAlterGate)
+	requireRecv(t, coordinator.alterGateEntered, "alter gate")
+	coordinator.releaseDropSource <- struct{}{}
+
+	require.ErrorIs(t, <-dropDone, dropSourceErr)
+	require.ErrorIs(t, <-alterDone, alterSourceErr)
+	require.Eventually(t, func() bool {
+		return slices.Contains(coordinator.recorder.snapshot(), "alter:source-db")
+	}, time.Second, 10*time.Millisecond)
+	events := coordinator.recorder.snapshot()
+	gateIndex := slices.Index(events, "alter:gate")
+	sourceIndex := slices.Index(events, "alter:source-db")
+	require.GreaterOrEqual(t, gateIndex, 0)
+	require.GreaterOrEqual(t, sourceIndex, 0)
+	require.Less(t, gateIndex, sourceIndex)
+}
+
+func TestAlterCopyAndTruncateUseGateBeforeSourceLocks(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	coordinator := &alterCopyLockOrderCoordinator{
+		recorder:              &alterCopyLockOrderRecorder{},
+		truncateGateEntered:   make(chan struct{}, 1),
+		releaseTruncateGate:   make(chan struct{}),
+		alterGateEntered:      make(chan struct{}, 1),
+		releaseAlterGate:      make(chan struct{}),
+		truncateSourceEntered: make(chan struct{}, 1),
+		releaseTruncateSource: make(chan struct{}),
+		physicalStarted:       make(chan struct{}, 1),
+	}
+	truncateExec := &alterCopyLockOrderExecutor{
+		role:        "truncate",
+		coordinator: coordinator,
+	}
+	alterExec := &alterCopyLockOrderExecutor{
+		role:        "alter",
+		insertSQL:   "insert into dept_copy select * from dept",
+		coordinator: coordinator,
+	}
+	truncateScope, truncateCompile := newAlterCopyPessimisticGateConcurrencyFixture(
+		t, ctrl, truncateExec, "truncate", 0,
+	)
+	truncateCompile.originSQL = "truncate table dept"
+	truncateScope.Plan.GetDdl().Definition = &plan2.DataDefinition_TruncateTable{
+		TruncateTable: &plan2.TruncateTable{
+			Database: "test",
+			Table:    "dept",
+			TableId:  1,
+		},
+	}
+	alterScope, alterCompile := newAlterCopyPessimisticGateConcurrencyFixture(
+		t, ctrl, alterExec, "alter", 0,
+	)
+
+	truncateSourceErr := errors.New("stop truncate after source lock")
+	alterSourceErr := errors.New("stop alter after source lock")
+	stubs := gostub.New()
+	stubs.Stub(&lockMoDatabase, func(*Compile, string, lock.LockMode) error {
+		return nil
+	})
+	stubs.Stub(&lockMoTable, func(c *Compile, _ string, _ string, _ lock.LockMode) error {
+		if c == truncateCompile {
+			coordinator.recorder.record("truncate:source-table")
+			coordinator.truncateSourceEntered <- struct{}{}
+			<-coordinator.releaseTruncateSource
+			return truncateSourceErr
+		}
+		coordinator.recorder.record("alter:source-table")
+		return alterSourceErr
+	})
+	stubs.Stub(&lockTable, func(context.Context, engine.Engine, *process.Process, engine.Relation, string, bool) error {
+		return errors.New("unexpected physical table lock")
+	})
+	defer stubs.Reset()
+
+	truncateDone := make(chan error, 1)
+	alterDone := make(chan error, 1)
+	go func() {
+		truncateDone <- truncateScope.TruncateTable(truncateCompile)
+	}()
+	requireRecv(t, coordinator.truncateGateEntered, "truncate gate")
+	go func() { alterDone <- alterScope.AlterTableCopy(alterCompile) }()
+	requireRecv(t, coordinator.physicalStarted, "alter physical work")
+	requireNoEvent(t, coordinator.recorder.snapshot(), "alter:source")
+
+	close(coordinator.releaseTruncateGate)
+	select {
+	case err := <-truncateDone:
+		t.Fatalf("truncate returned before source lock: %v", err)
+	default:
+	}
+	select {
+	case <-coordinator.truncateSourceEntered:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("timed out waiting for truncate source lock")
+	}
+	close(coordinator.releaseAlterGate)
+	requireRecv(t, coordinator.alterGateEntered, "alter gate")
+	coordinator.releaseTruncateSource <- struct{}{}
+
+	require.ErrorIs(t, <-truncateDone, truncateSourceErr)
+	require.ErrorIs(t, <-alterDone, alterSourceErr)
+	events := coordinator.recorder.snapshot()
+	truncateGateIndex := slices.Index(events, "truncate:gate")
+	truncateSourceIndex := slices.Index(events, "truncate:source-table")
+	alterGateIndex := slices.Index(events, "alter:gate")
+	alterSourceIndex := slices.Index(events, "alter:source-table")
+	require.GreaterOrEqual(t, truncateGateIndex, 0)
+	require.GreaterOrEqual(t, truncateSourceIndex, 0)
+	require.Less(t, truncateGateIndex, truncateSourceIndex)
+	require.GreaterOrEqual(t, alterGateIndex, 0)
+	require.GreaterOrEqual(t, alterSourceIndex, 0)
+	require.Less(t, alterGateIndex, alterSourceIndex)
+}
+
+func TestAlterCopyFailsAfterPhysicalWorkWithoutReleasingGate(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		gateErr   error
+		sourceErr error
+		wantErr   error
+	}{
+		{
+			name:    "gate failure",
+			gateErr: errors.New("lifecycle gate failed"),
+			wantErr: errors.New("lifecycle gate failed"),
+		},
+		{
+			name:      "source lock failure",
+			sourceErr: errors.New("source lock failed"),
+			wantErr:   errors.New("source lock failed"),
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			defer ctrl.Finish()
+			exec := &alterCopyInsertSpyExecutor{
+				insertSQL: "insert into dept_copy select * from dept",
+				errs: map[string]error{
+					databranchutils.LineageOwnerLifecyclePessimisticLockSQL(): tc.gateErr,
+				},
+			}
+			scope, c := newAlterCopyPessimisticGateConcurrencyFixture(
+				t, ctrl, exec, tc.name, 0,
+			)
+			stubs := gostub.New()
+			stubs.Stub(&lockMoDatabase, func(*Compile, string, lock.LockMode) error {
+				return tc.sourceErr
+			})
+			defer stubs.Reset()
+
+			err := scope.AlterTableCopy(c)
+			require.ErrorContains(t, err, tc.wantErr.Error())
+			insertIndex := slices.Index(exec.executedSQLs, exec.insertSQL)
+			gateIndex := slices.Index(
+				exec.executedSQLs, databranchutils.LineageOwnerLifecyclePessimisticLockSQL(),
+			)
+			require.GreaterOrEqual(t, insertIndex, 0)
+			require.GreaterOrEqual(t, gateIndex, 0)
+			require.Less(t, insertIndex, gateIndex)
+			if tc.gateErr != nil {
+				require.Len(t, exec.executedSQLs, gateIndex+1)
+			}
+		})
+	}
+}
+
+func requireRecv(t *testing.T, ch <-chan struct{}, what string) {
+	t.Helper()
+	select {
+	case <-ch:
+		return
+	case <-time.After(2 * time.Second):
+		t.Fatalf("timed out waiting for %s", what)
+	}
+}
+
+func requireNoEvent(t *testing.T, events []string, prefix string) {
+	t.Helper()
+	for _, event := range events {
+		if strings.HasPrefix(event, prefix) {
+			t.Fatalf("unexpected event before gate: %s", event)
+		}
+	}
+}
+
+func stubAlterCopySourceLocks(t *testing.T, err error) {
+	t.Helper()
+	stubs := gostub.New()
+	stubs.Stub(&lockMoDatabase, func(*Compile, string, lock.LockMode) error { return err })
+	stubs.Stub(&lockMoTable, func(*Compile, string, string, lock.LockMode) error { return err })
+	stubs.Stub(&lockTable, func(context.Context, engine.Engine, *process.Process, engine.Relation, string, bool) error {
+		return err
+	})
+	t.Cleanup(stubs.Reset)
+}
+
+func TestLockAlterCopySourceRetryContracts(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	for _, tc := range []struct {
+		name          string
+		optimistic    bool
+		tableErr      error
+		relationErr   error
+		wantLockCalls []string
+	}{
+		{
+			name:       "optimistic transaction does not take source locks",
+			optimistic: true,
+		},
+		{
+			name:          "catalog table retry is reported as definition change",
+			tableErr:      moerr.NewTxnNeedRetryNoCtx(),
+			wantLockCalls: []string{"database", "table", "relation"},
+		},
+		{
+			name:          "physical table retry is reported as definition change",
+			relationErr:   moerr.NewTxnNeedRetryNoCtx(),
+			wantLockCalls: []string{"database", "table", "relation"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			exec := &alterCopyLateOwnerExecutor{t: t}
+			c := newAlterCopyPrecheckCompile(t, ctrl, exec)
+			txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
+			txnMode := txn.TxnMode_Pessimistic
+			if tc.optimistic {
+				txnMode = txn.TxnMode_Optimistic
+			}
+			txnOperator.EXPECT().Txn().Return(txn.TxnMeta{
+				Mode:      txnMode,
+				Isolation: txn.TxnIsolation_SI,
+			}).AnyTimes()
+			c.proc.Base.TxnOperator = txnOperator
+
+			var lockCalls []string
+			stubs := gostub.New()
+			stubs.Stub(&lockMoDatabase, func(*Compile, string, lock.LockMode) error {
+				lockCalls = append(lockCalls, "database")
+				return nil
+			})
+			stubs.Stub(&lockMoTable, func(*Compile, string, string, lock.LockMode) error {
+				lockCalls = append(lockCalls, "table")
+				return tc.tableErr
+			})
+			stubs.Stub(&lockTable,
+				func(context.Context, engine.Engine, *process.Process, engine.Relation, string, bool) error {
+					lockCalls = append(lockCalls, "relation")
+					return tc.relationErr
+				},
+			)
+			t.Cleanup(stubs.Reset)
+
+			qry := &plan2.AlterTable{TableDef: &plan.TableDef{Name: "dept"}}
+			err := c.lockAlterCopySource(
+				mock_frontend.NewMockDatabase(ctrl), "test", "dept",
+				mock_frontend.NewMockRelation(ctrl), qry,
+			)
+
+			if tc.optimistic {
+				require.NoError(t, err)
+			} else {
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged))
+			}
+			require.Equal(t, tc.wantLockCalls, lockCalls)
+		})
+	}
+}
+
+type alterCopyLateOwnerExecutor struct {
+	t                *testing.T
+	mp               *mpool.MPool
+	ownerPublished   bool
+	physicalStarted  bool
+	metadataSQL      string
+	snapshotSQL      string
+	dropSourceSQL    string
+	sourceRenamed    bool
+	onGate           func()
+	sourceChanged    bool
+	sourceCommitErr  error
+	sourceDefVersion uint32
+}
+
+func (e *alterCopyLateOwnerExecutor) alterCopySourceCommitTS(
+	_ context.Context, mustExceed types.TS,
+) (types.TS, error) {
+	if e.sourceCommitErr != nil {
+		return types.TS{}, e.sourceCommitErr
+	}
+	if e.sourceChanged {
+		return mustExceed.Next(), nil
+	}
+	return mustExceed, nil
+}
+
+func (e *alterCopyLateOwnerExecutor) alterCopySourceDefVersion() uint32 {
+	if e.sourceDefVersion == 0 {
+		return 7
+	}
+	return e.sourceDefVersion
+}
+
+func (e *alterCopyLateOwnerExecutor) markSourceRenamed() {
+	e.sourceRenamed = true
+}
+
+func (e *alterCopyLateOwnerExecutor) historyResult() executor.Result {
+	return newAlterCopyFixedResult(
+		e.t, e.mp, types.T_int32.ToType(), []int32{1},
+	)
+}
+
+func (e *alterCopyLateOwnerExecutor) historySQL(sql string) bool {
+	return sql == alterDataBranchHistoricalSnapshotSourceSQL("", "test", "dept", 1) ||
+		sql == alterDataBranchHistoricalSnapshotSourceProbeSQL("", "test", "dept", 1, false, 0) ||
+		sql == alterDataBranchHistoricalPitrSourceSQL("", "test", "dept", 1) ||
+		sql == alterDataBranchHistoricalPitrSourceProbeSQL("", "test", "dept", 1, false, 0)
+}
+
+func (e *alterCopyLateOwnerExecutor) Exec(
+	_ context.Context,
+	sql string,
+	_ executor.Options,
+) (executor.Result, error) {
+	if sql == "insert into dept_copy select * from dept" {
+		e.physicalStarted = true
+	}
+	if sql == databranchutils.LineageOwnerLifecyclePessimisticLockSQL() ||
+		sql == databranchutils.LineageOwnerLifecycleLockSQL() {
+		if !e.ownerPublished {
+			e.ownerPublished = true
+			if e.onGate != nil {
+				e.onGate()
+			}
+		}
+		return executor.Result{}, nil
+	}
+	if e.ownerPublished && e.historySQL(sql) {
+		return e.historyResult(), nil
+	}
+	if strings.HasPrefix(sql, "drop table `test`.`dept`") {
+		e.dropSourceSQL = sql
+	}
+	if strings.HasPrefix(sql, "insert into mo_catalog.mo_branch_metadata") {
+		e.metadataSQL = sql
+		return executor.Result{}, nil
+	}
+	if strings.HasPrefix(sql, "insert into mo_catalog.mo_snapshots") {
+		e.snapshotSQL = sql
+		return executor.Result{}, errors.New("stop after snapshot lineage publication")
+	}
+	return executor.Result{}, nil
+}
+
+func (e *alterCopyLateOwnerExecutor) ExecTxn(
+	ctx context.Context,
+	execFunc func(executor.TxnExecutor) error,
+	opts executor.Options,
+) error {
+	return execFunc(executor.NewMemTxnExecutor(func(sql string) (executor.Result, error) {
+		return e.Exec(ctx, sql, opts)
+	}, opts.Txn()))
+}
+
+func TestAlterCopyLateLineagePublicationUsesCopyTimestamp(t *testing.T) {
+	const copyTS = int64(123456789)
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	exec := &alterCopyLateOwnerExecutor{t: t}
+	stubAlterCopySourceLocks(t, nil)
+	scope, compile := newAlterCopyGateConcurrencyFixture(t, ctrl, exec, "late-owner", copyTS)
+	exec.mp = compile.proc.Mp()
+
+	err := scope.AlterTableCopy(compile)
+	require.ErrorContains(t, err, "stop after snapshot lineage publication")
+	require.Equal(
+		t,
+		"insert into mo_catalog.mo_branch_metadata values(2, 123456789, 1, 0, 'alter', false)",
+		exec.metadataSQL,
+	)
+	require.Contains(t, exec.snapshotSQL, "'__mo_branch_2', 123456789")
+}
+
+func TestAlterCopyRejectsSourceReplacementAfterGate(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	sourceChanged := &atomic.Bool{}
+	exec := &alterCopyLateOwnerExecutor{
+		t:      t,
+		onGate: func() { sourceChanged.Store(true) },
+	}
+	stubAlterCopySourceLocks(t, nil)
+	scope, compile := newAlterCopyGateConcurrencyFixture(
+		t, ctrl, exec, "source-replaced", 123456789,
+		func() uint64 {
+			if sourceChanged.Load() {
+				return 99
+			}
+			return 1
+		},
+	)
+	exec.mp = compile.proc.Mp()
+
+	err := scope.AlterTableCopy(compile)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnWriteConflict))
+	require.Empty(t, exec.metadataSQL)
+	require.Empty(t, exec.snapshotSQL)
+}
+
+func TestAlterCopyRejectsSourceDataChangeAfterCopy(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	stubAlterCopySourceLocks(t, nil)
+	exec := &alterCopyLateOwnerExecutor{
+		t:             t,
+		sourceChanged: true,
+	}
+	scope, compile := newAlterCopyGateConcurrencyFixture(
+		t, ctrl, exec, "source-data-changed", 123456789,
+	)
+	exec.mp = compile.proc.Mp()
+
+	err := scope.AlterTableCopy(compile)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnWriteConflict))
+	require.Empty(t, exec.metadataSQL)
+	require.Empty(t, exec.snapshotSQL)
+}
+
+func TestAlterCopyRejectsPostCopySourceLockRetry(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	exec := &alterCopyLateOwnerExecutor{t: t}
+	stubAlterCopySourceLocks(t, moerr.NewTxnNeedRetryWithDefChangedNoCtx())
+	scope, compile := newAlterCopyGateConcurrencyFixture(
+		t, ctrl, exec, "post-copy-source-lock-retry", 123456789,
+	)
+	exec.mp = compile.proc.Mp()
+
+	err := scope.AlterTableCopy(compile)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnWriteConflict))
+	require.True(t, exec.physicalStarted)
+	require.Empty(t, exec.metadataSQL)
+	require.Empty(t, exec.snapshotSQL)
+}
+
+func TestCloneUnaffectedIndexesRetriesWhenSourceIndexDisappears(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	c := newAlterCopyPrecheckCompile(t, ctrl, &alterCopyInsertSpyExecutor{})
+	indexDef := &plan.IndexDef{
+		IndexName:          "ix",
+		IndexTableName:     "__mo_index_ix",
+		TableExist:         true,
+		Unique:             true,
+		IndexAlgoTableType: "secondary",
+	}
+	sourceDef := &plan.TableDef{Name: "dept", Indexes: []*plan.IndexDef{indexDef}}
+	copyDef := &plan.TableDef{Name: "dept_copy", Indexes: []*plan.IndexDef{indexDef}}
+	copyRel := mock_frontend.NewMockRelation(ctrl)
+	copyRel.EXPECT().GetTableDef(gomock.Any()).Return(copyDef)
+
+	db := mock_frontend.NewMockDatabase(ctrl)
+	db.EXPECT().Relation(gomock.Any(), indexDef.IndexTableName, nil).
+		Return(nil, moerr.NewNoSuchTable(c.proc.Ctx, "test", indexDef.IndexTableName))
+	eng := c.e.(*mock_frontend.MockEngine)
+	eng.EXPECT().Database(gomock.Any(), "test", gomock.Any()).Return(db, nil)
+
+	err := cloneUnaffectedIndexes(
+		c, "test", map[string]bool{"ix": true}, nil, copyRel, sourceDef, nil,
+	)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged))
+}
+
+func TestAlterCopySkipsSourceChangesForRelationCreatedInCurrentTxn(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	compile := &Compile{proc: proc}
+	rel := &alterCopyCreatedInCurrentTxnRelation{}
+
+	changed, err := compile.alterCopySourceChangedSinceCopy(rel, 123456789)
+	require.NoError(t, err)
+	require.False(t, changed)
+	require.False(t, rel.sourceCommitTSCalled)
+}
+
+func TestAlterCopyChecksCommittedChangesDespiteTransactionLocalWrites(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	compile := &Compile{proc: proc}
+	rel := &alterCopyTransactionLocalWritesRelation{}
+
+	changed, err := compile.alterCopySourceChangedSinceCopy(rel, 123456789)
+	require.NoError(t, err)
+	require.True(t, changed)
+	require.True(t, rel.sourceCommitTSCalled)
+}
+
+func TestAlterCopyCreateOptionsDisablesNestedCreateLock(t *testing.T) {
+	opts := alterCopyCreateOptions(&plan2.AlterTable{
+		TableDef: &plan2.TableDef{LogicalId: 7, TableType: "rel"},
+	})
+	require.True(t, opts.DisableLock())
+	require.True(t, opts.IgnoreForeignKey())
+	require.True(t, opts.SkipIndexTaskRegistration())
+	require.Equal(t, uint64(7), opts.KeepLogicalId())
+	kind, hasKind := opts.KeepRelKind()
+	require.True(t, hasKind)
+	require.Equal(t, "rel", kind)
+}
+
+func TestAlterCopyStatementOptionsDisableNestedStatementLock(t *testing.T) {
+	require.True(t, alterCopyStatementOption(nil).DisableLock())
+	require.True(t, alterCopyStatementOption(&plan2.AlterCopyOpt{}).DisableLock())
+}
+
+func TestCompileInternalStatementOptionInheritsDisableLock(t *testing.T) {
+	require.False(t, (&Compile{}).internalStatementOption(executor.StatementOption{}).DisableLock())
+	require.True(t, (&Compile{disableLock: true}).internalStatementOption(executor.StatementOption{}).DisableLock())
+	require.True(t, (&Compile{disableLock: true}).internalStatementOption(
+		executor.StatementOption{}.WithDisableLog(),
+	).DisableLog())
+}
+
+func TestAlterCopySourceChangedSinceCopyUsesSourceCommitTS(t *testing.T) {
+	compile := &Compile{proc: testutil.NewProcess(t)}
+	cases := []struct {
+		name      string
+		sourceTS  func(types.TS) types.TS
+		want      bool
+		wantError bool
+	}{
+		{name: "unchanged", sourceTS: func(ts types.TS) types.TS { return ts }},
+		{name: "changed", sourceTS: func(ts types.TS) types.TS { return ts.Next() }, want: true},
+		{name: "provider failure", wantError: true},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			rel := &alterCopySourceCommitTSRelation{
+				sourceCommitTS: func(_ context.Context, mustExceed types.TS) (types.TS, error) {
+					if testCase.sourceTS == nil {
+						return types.TS{}, errors.New("source timestamp unavailable")
+					}
+					return testCase.sourceTS(mustExceed), nil
+				},
+			}
+			changed, err := compile.alterCopySourceChangedSinceCopy(rel, 123456789)
+			if testCase.wantError {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, testCase.want, changed)
+		})
+	}
+}
+
+func TestAlterCopySourceChangedSinceCopyFailsClosedWithoutProvider(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	compile := &Compile{proc: testutil.NewProcess(t)}
+
+	_, err := compile.alterCopySourceChangedSinceCopy(
+		mock_frontend.NewMockRelation(ctrl), 123456789,
+	)
+	require.ErrorContains(t, err, "does not support source commit timestamp validation")
+}
+
+func TestAlterCopyPostPublicationConflictIsNotStatementRetryable(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	proc := testutil.NewProcess(t)
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOp.EXPECT().Txn().Return(txn.TxnMeta{
+		Mode:      txn.TxnMode_Pessimistic,
+		Isolation: txn.TxnIsolation_RC,
+	}).AnyTimes()
+	proc.Base.TxnOperator = txnOp
+	compile := &Compile{proc: proc}
+
+	err := compile.alterCopyPostPublicationConflict("source data changed")
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnWriteConflict))
+	require.False(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged))
+	require.False(t, compile.isRetryErr(err))
+	require.False(t, compile.canRetry(err))
+}
+
+func TestAlterCopyPostPublicationRetryConflictIsNotStatementRetryable(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	proc := testutil.NewProcess(t)
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOp.EXPECT().Txn().Return(txn.TxnMeta{
+		Mode:      txn.TxnMode_Pessimistic,
+		Isolation: txn.TxnIsolation_RC,
+	}).AnyTimes()
+	proc.Base.TxnOperator = txnOp
+	compile := &Compile{proc: proc}
+
+	err := compile.alterCopyPostPublicationRetryConflict(
+		moerr.NewTxnNeedRetryWithDefChangedNoCtx(),
+	)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnWriteConflict))
+	require.False(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged))
+	require.False(t, compile.isRetryErr(err))
+	require.False(t, compile.canRetry(err))
+}
+
+func TestAlterCopyRejectsSameIDSourceDefChangeAfterGate(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	exec := &alterCopyLateOwnerExecutor{t: t}
+	exec.onGate = func() { exec.sourceDefVersion = 8 }
+	stubAlterCopySourceLocks(t, nil)
+	scope, compile := newAlterCopyGateConcurrencyFixture(
+		t, ctrl, exec, "same-id-def-changed", 123456789,
+	)
+	exec.mp = compile.proc.Mp()
+
+	err := scope.AlterTableCopy(compile)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnWriteConflict))
+	require.True(t, exec.physicalStarted)
+	require.True(t, exec.ownerPublished)
+	require.Empty(t, exec.dropSourceSQL)
+	require.False(t, exec.sourceRenamed)
+	require.Empty(t, exec.metadataSQL)
+	require.Empty(t, exec.snapshotSQL)
+}
+
+func TestAlterCopyRejectsSameStatementReplacementDiscoveredAfterGate(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	exec := &alterCopyLateOwnerExecutor{t: t}
+	stubAlterCopySourceLocks(t, nil)
+	scope, compile := newAlterCopyGateConcurrencyFixture(
+		t, ctrl, exec, "late-replacement", 123456789,
+	)
+	exec.mp = compile.proc.Mp()
+	alterTable := scope.Plan.GetDdl().GetAlterTable()
+	alterTable.TableDef.Cols = []*plan.ColDef{
+		{Name: "a", ColId: 1, Seqnum: 0},
+		{Name: "b", ColId: 2, Seqnum: 1},
+	}
+	alterTable.CopyTableDef.Cols = []*plan.ColDef{
+		{Name: "a", ColId: 1, Seqnum: 0},
+		{Name: "c", ColId: ^uint64(0), Seqnum: 0},
+	}
+	alterTable.ChangeTblColIdMap = map[uint64]*plan.ColDef{1: {Name: "a"}}
+	columnName, replaced := alterCopySameStatementColumnReplacement(alterTable)
+	require.True(t, replaced)
+	require.Equal(t, "c", columnName)
+
+	err := scope.AlterTableCopy(compile)
+	require.ErrorContains(t, err, "cannot drop and add column 'c' in the same statement")
+	require.Empty(t, exec.metadataSQL)
+	require.Empty(t, exec.snapshotSQL)
+}
+
 func TestScopeAlterTableCopyInsertTmpDataPipelineFlush(t *testing.T) {
 	insertErr := errors.New("stop after insert-copy")
 	lockDatabaseStub := gostub.Stub(&lockMoDatabase,
@@ -2170,7 +3729,13 @@ func TestScopeAlterTableCopyInsertTmpDataPipelineFlush(t *testing.T) {
 		skipPkDedup        bool
 		nilCtxBeforeInsert bool
 		wantPipelineFlush  bool
+		wide               bool
+		stale              bool
+		createErr          error
 	}{
+		{name: "wide create error restores context", wide: true, createErr: errors.New("create-copy failed")},
+		{name: "wide cancellation restores context", wide: true, createErr: context.Canceled},
+		{name: "wide stale generation rejects before CREATE", wide: true, stale: true},
 		{
 			name:               "skip pk dedup false",
 			skipPkDedup:        false,
@@ -2214,6 +3779,8 @@ func TestScopeAlterTableCopyInsertTmpDataPipelineFlush(t *testing.T) {
 			)
 			proc.Base.TxnClient = txnCli
 			proc.Base.TxnOperator = txnOp
+			txnOp.(*mock_frontend.MockTxnOperator).EXPECT().SnapshotTS().
+				Return(timestamp.Timestamp{}).AnyTimes()
 
 			tableDef := &plan.TableDef{
 				TblId: 1,
@@ -2222,6 +3789,16 @@ func TestScopeAlterTableCopyInsertTmpDataPipelineFlush(t *testing.T) {
 			copyTableDef := &plan.TableDef{
 				TblId: 2,
 				Name:  "dept_copy",
+			}
+			if tc.wide {
+				tableDef.Version = 1
+				for i := 0; i < 4098; i++ {
+					col := &plan.ColDef{Name: fmt.Sprintf("c%d", i), ColId: uint64(i + 1), Typ: plan.Type{Id: int32(types.T_int32)}}
+					tableDef.Cols = append(tableDef.Cols, col)
+					if i < 4097 {
+						copyTableDef.Cols = append(copyTableDef.Cols, plan.DeepCopyColDef(col))
+					}
+				}
 			}
 			alterTable := &plan2.AlterTable{
 				Database:          "test",
@@ -2247,40 +3824,60 @@ func TestScopeAlterTableCopyInsertTmpDataPipelineFlush(t *testing.T) {
 
 			originRel := mock_frontend.NewMockRelation(ctrl)
 			originRel.EXPECT().GetTableID(gomock.Any()).Return(uint64(1)).AnyTimes()
+			originRel.EXPECT().GetTableDef(gomock.Any()).Return(tableDef).AnyTimes()
 			originRel.EXPECT().TableDefs(gomock.Any()).Return(nil, nil).AnyTimes()
-			originRel.EXPECT().CopyTableDef(gomock.Any()).
-				Return(plan.DeepCopyTableDef(tableDef, true)).Times(1)
+			liveTableDef := plan.DeepCopyTableDef(tableDef, true)
+			if tc.stale {
+				liveTableDef.Version++
+			}
+			originRel.EXPECT().CopyTableDef(gomock.Any()).Return(liveTableDef).Times(1)
 
 			copyRel := mock_frontend.NewMockRelation(ctrl)
-			if tc.nilCtxBeforeInsert {
-				copyRel.EXPECT().CopyTableDef(gomock.Any()).DoAndReturn(func(context.Context) *plan.TableDef {
-					proc.Ctx = nil
-					return &plan.TableDef{
-						TblId: 2,
-						Name:  "dept_copy",
-					}
-				})
-			} else {
-				copyRel.EXPECT().CopyTableDef(gomock.Any()).Return(&plan.TableDef{
-					TblId: 2,
-					Name:  "dept_copy",
-				}).AnyTimes()
-			}
 
 			mockDb := mock_frontend.NewMockDatabase(ctrl)
-			mockDb.EXPECT().Relation(gomock.Any(), "dept", gomock.Any()).Return(originRel, nil).AnyTimes()
-			mockDb.EXPECT().Relation(gomock.Any(), "dept_copy", gomock.Any()).Return(copyRel, nil).AnyTimes()
+			mockDb.EXPECT().Relation(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(
+				func(_ context.Context, name string, _ any) (engine.Relation, error) {
+					if name == "dept_copy" {
+						if tc.nilCtxBeforeInsert {
+							proc.Ctx = nil
+						}
+						return copyRel, nil
+					}
+					if name == "dept" {
+						return originRel, nil
+					}
+					return nil, moerr.NewInternalError(context.Background(), "unexpected relation "+name)
+				},
+			).AnyTimes()
 
 			eng := mock_frontend.NewMockEngine(ctrl)
 			eng.EXPECT().Database(gomock.Any(), "test", gomock.Any()).Return(mockDb, nil).AnyTimes()
 
 			spyExec := &alterCopyInsertSpyExecutor{
+				createSQL: alterTable.CreateTmpTableSql,
+				createErr: tc.createErr,
 				insertSQL: alterTable.InsertTmpDataSql,
 				insertErr: insertErr,
 			}
 			rt := moruntime.DefaultRuntime()
+			priorExecutor, hadExecutor := rt.GetGlobalVariables(moruntime.InternalSQLExecutor)
+			priorRuntime := moruntime.ServiceRuntime(proc.GetService())
 			rt.SetGlobalVariables(moruntime.InternalSQLExecutor, spyExec)
+			t.Cleanup(func() {
+				if hadExecutor {
+					rt.SetGlobalVariables(moruntime.InternalSQLExecutor, priorExecutor)
+				} else {
+					rt.CompareAndDeleteGlobalVariables(moruntime.InternalSQLExecutor, spyExec)
+				}
+			})
 			moruntime.SetupServiceBasedRuntime(proc.GetService(), rt)
+			t.Cleanup(func() {
+				if priorRuntime != nil {
+					moruntime.SetupServiceBasedRuntime(proc.GetService(), priorRuntime)
+				} else {
+					moruntime.CompareAndDeleteServiceBasedRuntime(proc.GetService(), rt)
+				}
+			})
 
 			c := NewCompile("test", "test", "alter table dept", "", "", eng, proc, nil, false, nil, time.Now())
 			c.pn = s.Plan
@@ -2288,6 +3885,20 @@ func TestScopeAlterTableCopyInsertTmpDataPipelineFlush(t *testing.T) {
 			origCtx := proc.Ctx
 
 			err := s.AlterTableCopy(c)
+			if tc.stale {
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged), "%v", err)
+				require.NotContains(t, spyExec.executedSQLs, alterTable.CreateTmpTableSql)
+				require.Same(t, origCtx, proc.Ctx)
+				return
+			}
+			require.NotNil(t, spyExec.createCtx)
+			require.NotSame(t, origCtx, spyExec.createCtx)
+			if tc.createErr != nil {
+				require.ErrorIs(t, err, tc.createErr)
+				require.Same(t, origCtx, proc.Ctx)
+				require.Nil(t, spyExec.insertCtx, "failed CREATE must not start copying rows")
+				return
+			}
 			require.ErrorIs(t, err, insertErr)
 			require.NotNil(t, spyExec.insertCtx)
 			assert.Equal(t, tc.wantPipelineFlush, spyExec.insertCtx.Value(ioutil.PipelineFlushKey) == true)
@@ -2488,6 +4099,8 @@ func TestScopeAlterTableCopyPrecheckPrimaryKeyThenSkipDedup(t *testing.T) {
 	)
 	proc.Base.TxnClient = txnCli
 	proc.Base.TxnOperator = txnOp
+	txnOp.(*mock_frontend.MockTxnOperator).EXPECT().SnapshotTS().
+		Return(timestamp.Timestamp{}).AnyTimes()
 
 	tableDef := &plan.TableDef{
 		TblId: 1,
@@ -2533,6 +4146,7 @@ func TestScopeAlterTableCopyPrecheckPrimaryKeyThenSkipDedup(t *testing.T) {
 
 	originRel := mock_frontend.NewMockRelation(ctrl)
 	originRel.EXPECT().GetTableID(gomock.Any()).Return(uint64(1)).AnyTimes()
+	originRel.EXPECT().GetTableDef(gomock.Any()).Return(tableDef).AnyTimes()
 	originRel.EXPECT().TableDefs(gomock.Any()).Return(nil, nil).AnyTimes()
 	originRel.EXPECT().CopyTableDef(gomock.Any()).
 		Return(plan.DeepCopyTableDef(tableDef, true)).Times(1)
@@ -2569,13 +4183,11 @@ func TestScopeAlterTableCopyPrecheckPrimaryKeyThenSkipDedup(t *testing.T) {
 	require.True(t, spyExec.insertOption.AlterCopyDedupOpt().SkipPkDedup)
 	require.Equal(t, alterTable.Options.TargetTableName, spyExec.insertOption.AlterCopyDedupOpt().TargetTableName)
 	assert.Equal(t, []string{
-		databranchutils.LineageOwnerLifecyclePessimisticLockSQL(),
-		databranchutils.LineageOwnerLifecycleLockSQL(),
 		alterDataBranchParticipationSQL(1),
-		alterDataBranchHistoricalSnapshotSourceSQL("", "test", "dept", 1),
-		alterDataBranchHistoricalPitrSourceSQL("", "test", "dept", 1),
-		alterDataBranchHistoricalSnapshotSourceProbeSQL("", "test", "dept", 1, false),
-		alterDataBranchHistoricalPitrSourceProbeSQL("", "test", "dept", 1, false),
+		alterDataBranchHistoricalSnapshotSourceProbeSQL("", "test", "dept", 1, false, 0),
+		alterDataBranchHistoricalPitrSourceProbeSQL("", "test", "dept", 1, false, 0),
+		alterDataBranchHistoricalSnapshotSourceProbeSQL("", "test", "dept", 1, false, 0),
+		alterDataBranchHistoricalPitrSourceProbeSQL("", "test", "dept", 1, false, 0),
 		alterTable.CreateTmpTableSql,
 		alterCopyTestPkNullCheckSQL,
 		alterCopyTestPkDuplicateCheckSQL,
@@ -2697,12 +4309,16 @@ func newAlterCopyPrecheckCompile(
 	t *testing.T,
 	ctrl *gomock.Controller,
 	exec executor.SQLExecutor,
+	serviceSuffix ...string,
 ) *Compile {
 	proc := testutil.NewProcess(t)
 	proc.Base.SessionInfo.Buf = buffer.New()
 	proc.Base.SessionInfo.TimeZone = time.Local
 
 	serviceID := "alter-copy-precheck-" + t.Name()
+	if len(serviceSuffix) > 0 {
+		serviceID += "-" + serviceSuffix[0]
+	}
 	lockSvc := mock_lock.NewMockLockService(ctrl)
 	lockSvc.EXPECT().GetConfig().Return(lockservice.Config{ServiceID: serviceID}).AnyTimes()
 	proc.Base.LockService = lockSvc
@@ -3283,6 +4899,63 @@ func TestDataBranchLineageGCExecutorDoesNotSuppressOtherErrors(t *testing.T) {
 			require.Equal(t, []uint64{1}, spyExec.remaining)
 		})
 	}
+}
+
+// TestAlterCopyStaleRefreshTerminatingError pins the stale-refresh error
+// policy of a source-changed ALTER COPY for the actual defer consumer in
+// alterCopy for every MustRollbackTxn family, after the lock-wait-timeout
+// codes became statement-scoped in the shared policy: a lock wait timeout on
+// the refresh path cannot leak to the frontend as a statement-scoped error -
+// at this point the transaction must still terminate, so it resolves into the
+// written-conflict family the shared policy already treats as fatal and
+// non-retryable. Genuine fatal infrastructure errors keep their identity, and
+// the retry family is converted too: this COPY is never retried under
+// retained locks.
+func TestAlterCopyStaleRefreshTerminatingError(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	c := newAlterCopyPrecheckCompile(t, ctrl, &alterCopyInsertSpyExecutor{})
+
+	for _, tc := range []struct {
+		name string
+		err  error
+	}{
+		{"lock wait timeout", moerr.NewLockWaitTimeoutNoCtx()},
+		{"remote owner timeout", moerr.NewRemoteLockWaitTimeoutNoCtx()},
+		{"ordinary execution failure", moerr.NewInternalErrorNoCtx("boom")},
+		{"retry family", moerr.NewTxnNeedRetryNoCtx()},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			wrapped := c.alterCopyStaleRefreshTerminatingError(tc.err)
+			require.True(t, moerr.IsMoErrCode(wrapped, moerr.ErrTxnWriteConflict),
+				"must resolve to the terminating write-conflict family, got %v", wrapped)
+			require.ErrorContains(t, wrapped, "stale source refresh failed")
+			require.True(t, moerr.MustRollbackTxn(wrapped),
+				"the verdict must remain fatal to the whole transaction")
+			require.False(t, c.isRetryErr(wrapped),
+				"the COPY must never be retried under retained locks")
+		})
+	}
+
+	for _, tc := range []struct {
+		name string
+		err  error
+	}{
+		{"deadlock keeps identity", moerr.NewDeadLockDetectedNoCtx()},
+		{"lock table bind changed keeps identity", moerr.NewLockTableBindChangedNoCtx()},
+		{"lock conflict keeps identity", moerr.NewLockConflictNoCtx()},
+		{"write conflict keeps identity", moerr.NewTxnWriteConflictNoCtx("concurrent source change")},
+		{"backend closed keeps identity", moerr.NewBackendClosedNoCtx()},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			kept := c.alterCopyStaleRefreshTerminatingError(tc.err)
+			require.Same(t, tc.err, kept,
+				"fatal non-retry infrastructure errors keep their own identity")
+			require.True(t, moerr.MustRollbackTxn(kept))
+		})
+	}
+
+	require.NoError(t, c.alterCopyStaleRefreshTerminatingError(nil))
 }
 
 func TestOwnerCatalogDropEntryPointsStopAtLifecycleAdmissionFailure(t *testing.T) {
@@ -4216,4 +5889,68 @@ func TestScope_AlterTableCopy(t *testing.T) {
 		c := NewCompile("test", "test", sql, "", "", eng, proc, nil, false, nil, time.Now())
 		assert.Error(t, s.AlterTableCopy(c))
 	})
+}
+
+func TestUpdateNewTableColID(t *testing.T) {
+	readErr := errors.New("read replacement schema")
+	for _, test := range []struct {
+		name string
+		err  error
+	}{
+		{name: "catalog IDs"},
+		{name: "catalog read failure", err: readErr},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			relation := mock_frontend.NewMockRelation(gomock.NewController(t))
+			relation.EXPECT().TableDefs(proc.Ctx).Return([]engine.TableDef{
+				&engine.CommentDef{Comment: "not a column"},
+				&engine.AttributeDef{Attr: engine.Attribute{Name: "Mixed", ID: 101}},
+				&engine.AttributeDef{Attr: engine.Attribute{Name: "plain", ID: 0}},
+				&engine.AttributeDef{Attr: engine.Attribute{Name: "case", ID: 103}},
+			}, test.err).Times(1)
+			columns := map[uint64]*plan2.ColDef{
+				1: {Name: "mixed", OriginName: "Mixed", ColId: 1},
+				2: {Name: "plain", ColId: 2},
+				3: {Name: "Case", ColId: 3},
+				4: {Name: "absent", ColId: 4},
+			}
+			err := updateNewTableColId(&Compile{proc: proc}, relation, columns)
+			if test.err != nil {
+				require.ErrorIs(t, err, test.err)
+				require.Equal(t, uint64(1), columns[1].ColId)
+				require.Equal(t, uint64(2), columns[2].ColId)
+			} else {
+				require.NoError(t, err)
+				require.Equal(t, uint64(101), columns[1].ColId, "match the persisted original spelling")
+				require.Zero(t, columns[2].ColId, "zero is a valid replacement ID")
+			}
+			require.Equal(t, uint64(3), columns[3].ColId, "name matching remains case sensitive")
+			require.Equal(t, uint64(4), columns[4].ColId, "unmatched columns remain unchanged")
+		})
+	}
+}
+
+func BenchmarkUpdateNewTableColID(b *testing.B) {
+	for _, width := range []int{2, 32, 4096} {
+		b.Run(fmt.Sprint(width), func(b *testing.B) {
+			proc := testutil.NewProcess(b)
+			relation := mock_frontend.NewMockRelation(gomock.NewController(b))
+			defs := make([]engine.TableDef, width)
+			columns := make(map[uint64]*plan2.ColDef, width)
+			for i := range width {
+				name := fmt.Sprintf("c%d", i)
+				defs[i] = &engine.AttributeDef{Attr: engine.Attribute{Name: name, ID: uint64(i + 1)}}
+				columns[uint64(i)] = &plan2.ColDef{Name: name}
+			}
+			relation.EXPECT().TableDefs(proc.Ctx).Return(defs, nil).AnyTimes()
+			b.ReportAllocs()
+			b.ResetTimer()
+			for b.Loop() {
+				if err := updateNewTableColId(&Compile{proc: proc}, relation, columns); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
 }

@@ -41,6 +41,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/fulltext"
+	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -1334,7 +1337,7 @@ func TestCompileExternScanParallelReadWrite(t *testing.T) {
 	testCompile.addr = "cn1:6001"
 	testCompile.execType = plan2.ExecTypeAP_MULTICN
 	testCompile.anal = &AnalyzeModule{qry: &plan.Query{}}
-	ctx := context.TODO()
+	ctx := fileservice.WithSQLFileAccess(t.Context(), "sys", "moadmin")
 	param := &tree.ExternParam{
 		ExParamConst: tree.ExParamConst{
 			Filepath: "test.csv",
@@ -1355,11 +1358,22 @@ func TestCompileExternScanParallelReadWrite(t *testing.T) {
 	_, err := testCompile.compileExternScanParallelReadWrite(n, param, []string{filePath}, fileSize, true)
 	require.NoError(t, err)
 	param.Strict = false
-	_, err = testCompile.compileExternScanParallelReadWrite(n, param, []string{filePath}, fileSize, false)
+	ss, err := testCompile.compileExternScanParallelReadWrite(n, param, []string{filePath}, fileSize, false)
 	require.NoError(t, err)
+	// This fixture is shorter than the nominal split, so the fast probe
+	// reaches EOF. The compiler must pass on only the remaining whole range.
+	require.NotEmpty(t, ss)
+	ext := ss[0].RootOp.(*external.External)
+	require.Equal(t, []int64{0, -1}, ext.Es.FileOffsetTotal[0].Offset)
 	fileSize = []int64{int64(colexec.WriteS3Threshold) * 3}
 	_, err = testCompile.compileExternScanParallelReadWrite(n, param, []string{filePath}, fileSize, false)
 	require.NoError(t, err)
+	fileSize = []int64{int64(colexec.WriteS3Threshold) * 8}
+	ss, err = testCompile.compileExternScanParallelReadWrite(n, param, []string{filePath}, fileSize, false)
+	require.NoError(t, err)
+	require.Len(t, ss, 2)
+	require.Equal(t, []int64{0, -1}, ss[0].RootOp.(*external.External).Es.FileOffsetTotal[0].Offset)
+	require.Empty(t, ss[1].RootOp.(*external.External).Es.FileOffsetTotal[0].Offset)
 
 	// Compressed files should not be split for parallel read.
 	gzPath := fmt.Sprintf("%s/../../../test/distributed/resources/load_data/parallel_1.txt.gz", GetFilePath())
@@ -1577,6 +1591,8 @@ func TestCompileExternScanParquetLoadFileFanout(t *testing.T) {
 
 func TestCompileExternScanParquetLoadDefaultAtThresholdUsesFileFanoutWithoutFooterReads(t *testing.T) {
 	testCompile := NewMockCompile(t)
+	testCompile.proc.Base.SessionInfo.Account = "sys"
+	testCompile.proc.Base.SessionInfo.Role = "moadmin"
 	testCompile.addr = "cn1:6001"
 	testCompile.ncpu = 2
 	testCompile.anal = &AnalyzeModule{qry: &plan.Query{}}
@@ -1654,6 +1670,8 @@ func (op *parquetFanoutCancellationProbe) Call(proc *process.Process) (vm.CallRe
 
 func TestCompileExternScanParquetLoadDefaultFanoutContextCancellationTerminatesAllShards(t *testing.T) {
 	testCompile := NewMockCompile(t)
+	testCompile.proc.Base.SessionInfo.Account = "sys"
+	testCompile.proc.Base.SessionInfo.Role = "moadmin"
 	testCompile.addr = "cn1:6001"
 	testCompile.ncpu = 2
 	testCompile.anal = &AnalyzeModule{qry: &plan.Query{}}
@@ -2090,7 +2108,7 @@ func TestReadLoadParquetRowGroupMetadataLocalFile(t *testing.T) {
 			Format:   tree.PARQUET,
 		},
 		ExParam: tree.ExParam{
-			Ctx: context.Background(),
+			Ctx: fileservice.WithSQLFileAccess(t.Context(), "sys", "moadmin"),
 		},
 	}
 
@@ -2178,6 +2196,8 @@ func TestReadLoadParquetRowGroupMetadataSkipsUnusedIndexSections(t *testing.T) {
 
 func TestCompileExternScanParquetLoadUsesRowGroupMetadata(t *testing.T) {
 	testCompile := NewMockCompile(t)
+	testCompile.proc.Base.SessionInfo.Account = "sys"
+	testCompile.proc.Base.SessionInfo.Role = "moadmin"
 	testCompile.ncpu = 3 // Logical capacity for three independent row-group scopes.
 	testCompile.addr = "cn1:6001"
 	testCompile.anal = &AnalyzeModule{qry: &plan.Query{}}
@@ -2244,6 +2264,8 @@ func TestCompileExternScanParquetLoadUsesRowGroupMetadata(t *testing.T) {
 
 func TestCompileExternScanParquetLoadUsesRowGroupFanoutWithEmptyFiles(t *testing.T) {
 	testCompile := NewMockCompile(t)
+	testCompile.proc.Base.SessionInfo.Account = "sys"
+	testCompile.proc.Base.SessionInfo.Role = "moadmin"
 	testCompile.ncpu = 3 // Leave capacity beyond two files so footer planning is exercised.
 	testCompile.addr = "cn1:6001"
 	testCompile.anal = &AnalyzeModule{qry: &plan.Query{}}
@@ -2313,6 +2335,8 @@ func TestCompileExternScanParquetLoadUsesRowGroupFanoutWithEmptyFiles(t *testing
 
 func TestCompileExternScanParquetRowGroupFanoutValidatesEmptyFileColumnCount(t *testing.T) {
 	testCompile := NewMockCompile(t)
+	testCompile.proc.Base.SessionInfo.Account = "sys"
+	testCompile.proc.Base.SessionInfo.Role = "moadmin"
 	testCompile.ncpu = 3 // Leave capacity beyond two files so footer validation is exercised.
 	testCompile.addr = "cn1:6001"
 	testCompile.anal = &AnalyzeModule{qry: &plan.Query{}}
@@ -2369,6 +2393,8 @@ func TestCompileExternScanParquetRowGroupFanoutValidatesEmptyFileColumnCount(t *
 
 func TestCompileExternScanParquetLoadUsesFileFanoutMainPath(t *testing.T) {
 	testCompile := NewMockCompile(t)
+	testCompile.proc.Base.SessionInfo.Account = "sys"
+	testCompile.proc.Base.SessionInfo.Role = "moadmin"
 	testCompile.addr = "cn1:6001"
 	testCompile.anal = &AnalyzeModule{qry: &plan.Query{}}
 	testCompile.proc.SetResolveVariableFunc(func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error) {
@@ -3405,6 +3431,24 @@ func TestRequiredVectorDomainRejectsMalformedPayload(t *testing.T) {
 	}
 }
 
+func TestRequiredVectorDomainAcceptsNormalizedCharMembership(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	keys := vector.NewVec(types.T_varchar.ToType())
+	defer keys.Free(proc.Mp())
+	require.NoError(t, vector.AppendBytes(keys, []byte("c1      "), false, proc.Mp()))
+	data, err := keys.MarshalBinary()
+	require.NoError(t, err)
+	spec := &plan.RuntimeFilterSpec{
+		Expr: plan2.GetColExpr(plan.Type{Id: int32(types.T_char), Width: 8}, 1, 0),
+	}
+	err = validateRequiredVectorMembership(spec, message.RuntimeFilterMessage{
+		Typ:  message.RuntimeFilter_UNIQUEJOINKEYS,
+		Card: 1,
+		Data: data,
+	})
+	require.NoError(t, err)
+}
+
 func TestWaitForRuntimeFiltersRejectsCanceledRequiredFilter(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	board := message.NewMessageBoard()
@@ -3445,28 +3489,46 @@ func TestVectorScanMembershipFilterExtractsInPayload(t *testing.T) {
 	require.Equal(t, payload, membership)
 }
 
+// noSearchTestAlgo is a registered index algorithm without a scan reader.
+const noSearchTestAlgo = "no_search_test"
+
+// noSearchPlugin has the hooks of the fulltext plugin but no Search.
+type noSearchPlugin struct{ indexplugin.AlgoPlugin }
+
+func (noSearchPlugin) Algo() string { return noSearchTestAlgo }
+
+// Registered from init(): indexplugin.Register panics on a duplicate algo and the
+// registry has no Unregister, so registering in a test body fails a -count=2 rerun.
+func init() {
+	fulltextPlugin, ok := indexplugin.Get(catalog.MOIndexFullTextAlgo.ToString())
+	if !ok {
+		panic("fulltext index plugin is not registered")
+	}
+	indexplugin.Register(noSearchPlugin{fulltextPlugin})
+}
+
 func TestBuildVectorIndexReadersRejectsIncompleteRuntimeState(t *testing.T) {
 	proc := testutil.NewProcess(t)
-	newScopeFor := func(spec *plan.VectorIndexScan) *Scope {
+	newScopeFor := func(spec *plan.IndexSearchScan) *Scope {
 		return &Scope{
 			Proc: proc,
 			DataSource: &Source{node: &plan.Node{
-				NodeType:        plan.Node_VECTOR_INDEX_SCAN,
-				VectorIndexScan: spec,
+				NodeType:        plan.Node_INDEX_SEARCH_SCAN,
+				IndexSearchScan: spec,
 			}},
 		}
 	}
 
-	_, err := newScopeFor(nil).buildVectorIndexReaders(nil)
+	_, err := newScopeFor(nil).buildVectorIndexReaders(nil, false)
 	require.ErrorContains(t, err, "missing index metadata")
-	_, err = newScopeFor(&plan.VectorIndexScan{}).buildVectorIndexReaders(nil)
+	_, err = newScopeFor(&plan.IndexSearchScan{}).buildVectorIndexReaders(nil, false)
 	require.ErrorContains(t, err, "missing index metadata")
 
-	nullQuery := &plan.VectorIndexScan{
-		Index:       &plan.IndexDef{IndexAlgo: "ivfflat"},
-		QueryVector: &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Isnull: true}}},
+	nullQuery := &plan.IndexSearchScan{
+		Index:        &plan.IndexDef{IndexAlgo: "ivfflat"},
+		QueryPayload: &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Isnull: true}}},
 	}
-	readers, err := newScopeFor(nullQuery).buildVectorIndexReaders(nil)
+	readers, err := newScopeFor(nullQuery).buildVectorIndexReaders(nil, false)
 	require.NoError(t, err)
 	require.Len(t, readers, 1)
 
@@ -3476,44 +3538,44 @@ func TestBuildVectorIndexReadersRejectsIncompleteRuntimeState(t *testing.T) {
 			Value: &plan.Literal_VecVal{VecVal: string(types.ArrayToBytes([]float32{1, 2}))},
 		}},
 	}
-	nullLimit := &plan.VectorIndexScan{
+	nullLimit := &plan.IndexSearchScan{
 		Index:          &plan.IndexDef{IndexAlgo: "ivfflat"},
-		QueryVector:    query,
+		QueryPayload:   query,
 		CandidateLimit: &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Isnull: true}}},
 	}
-	_, err = newScopeFor(nullLimit).buildVectorIndexReaders(nil)
+	_, err = newScopeFor(nullLimit).buildVectorIndexReaders(nil, false)
 	require.ErrorContains(t, err, "result limit did not fold")
 
-	wrongLimitType := &plan.VectorIndexScan{
+	wrongLimitType := &plan.IndexSearchScan{
 		Index:          &plan.IndexDef{IndexAlgo: "ivfflat"},
-		QueryVector:    query,
+		QueryPayload:   query,
 		CandidateLimit: plan2.MakePlan2Int64ConstExprWithType(1),
 	}
-	_, err = newScopeFor(wrongLimitType).buildVectorIndexReaders(nil)
+	_, err = newScopeFor(wrongLimitType).buildVectorIndexReaders(nil, false)
 	require.ErrorContains(t, err, "result limit is not uint64")
 
-	noReaderPlugin := &plan.VectorIndexScan{
-		Index:          &plan.IndexDef{IndexAlgo: "hnsw"},
-		QueryVector:    query,
+	noReaderPlugin := &plan.IndexSearchScan{
+		Index:          &plan.IndexDef{IndexAlgo: noSearchTestAlgo},
+		QueryPayload:   query,
 		CandidateLimit: plan2.MakePlan2Uint64ConstExprWithType(1),
 	}
-	_, err = newScopeFor(noReaderPlugin).buildVectorIndexReaders(nil)
+	_, err = newScopeFor(noReaderPlugin).buildVectorIndexReaders(nil, false)
 	require.ErrorContains(t, err, "has no scan reader")
 
-	ivfflatPlugin := &plan.VectorIndexScan{
+	ivfflatPlugin := &plan.IndexSearchScan{
 		Index:          &plan.IndexDef{IndexAlgo: "ivfflat"},
-		QueryVector:    query,
+		QueryPayload:   query,
 		CandidateLimit: plan2.MakePlan2Uint64ConstExprWithType(1),
 	}
-	_, err = newScopeFor(ivfflatPlugin).buildVectorIndexReaders(nil)
+	_, err = newScopeFor(ivfflatPlugin).buildVectorIndexReaders(nil, false)
 	require.ErrorContains(t, err, "requires a process, transaction, and storage engine")
 
-	unknownPlugin := &plan.VectorIndexScan{
+	unknownPlugin := &plan.IndexSearchScan{
 		Index:          &plan.IndexDef{IndexAlgo: "missing"},
-		QueryVector:    query,
+		QueryPayload:   query,
 		CandidateLimit: plan2.MakePlan2Uint64ConstExprWithType(1),
 	}
-	_, err = newScopeFor(unknownPlugin).buildVectorIndexReaders(nil)
+	_, err = newScopeFor(unknownPlugin).buildVectorIndexReaders(nil, false)
 	require.ErrorContains(t, err, "is not registered")
 
 	membership, hasMembership, required := vectorScanMembershipFilter(nil)
@@ -3604,4 +3666,79 @@ func TestAttachShuffleDispatchSourceFallsBackToFirstReceiver(t *testing.T) {
 	unmatched := []*Scope{{NodeInfo: engine.Node{Id: "cn-local", Addr: "cn-local:6001", Mcpu: 1}}}
 	attachShuffleDispatchSource(unmatched, remoteSource, false)
 	require.Empty(t, unmatched[0].PreScopes)
+}
+
+// A dropped scan and a NULL query return no rows without searching, after the
+// plugin's EmptyScanHooks checked the request.
+func TestBuildVectorIndexReadersRunsEmptyScanHooks(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	scope := func(spec *plan.IndexSearchScan) *Scope {
+		return &Scope{
+			Proc:       proc,
+			NodeInfo:   engine.Node{Mcpu: 2},
+			DataSource: &Source{node: &plan.Node{NodeType: plan.Node_INDEX_SEARCH_SCAN, IndexSearchScan: spec}},
+		}
+	}
+	spec := func(pattern *plan.Expr, guard bool) *plan.IndexSearchScan {
+		return &plan.IndexSearchScan{
+			Index:         &plan.IndexDef{IndexAlgo: catalog.MoIndexFullText2Algo.ToString()},
+			QueryPayload:  pattern,
+			AlgoExprs:     []*plan.Expr{{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Bval{Bval: guard}}}}},
+			AlgoExprNames: []string{fulltext.ZeroRelevanceGuardExpr},
+		}
+	}
+	pattern := plan2.MakePlan2StringConstExprWithType("apple")
+	nullPattern := &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Isnull: true}}}
+
+	readers, err := scope(spec(pattern, false)).buildVectorIndexReaders(nil, true)
+	require.NoError(t, err)
+	require.Len(t, readers, 2)
+	_, err = scope(spec(pattern, true)).buildVectorIndexReaders(nil, true)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), "a dropped scan still checks the guard")
+
+	readers, err = scope(spec(nullPattern, false)).buildVectorIndexReaders(nil, false)
+	require.NoError(t, err)
+	require.Len(t, readers, 2)
+	_, err = scope(spec(nullPattern, true)).buildVectorIndexReaders(nil, false)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), "a NULL query still checks the guard")
+}
+
+func TestHasMembershipFilterSpec(t *testing.T) {
+	require.False(t, hasMembershipFilterSpec(nil))
+	require.False(t, hasMembershipFilterSpec([]*plan.RuntimeFilterSpec{nil, {}}))
+	require.True(t, hasMembershipFilterSpec([]*plan.RuntimeFilterSpec{{}, {UseMembershipFilter: true}}))
+}
+
+func TestPrepareIndexSearchScanForExecutionRejects(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	_, err := prepareIndexSearchScanForExecution(nil, proc)
+	require.ErrorContains(t, err, "missing its specification")
+	_, err = prepareIndexSearchScanForExecution(&Source{node: &plan.Node{IndexSearchScan: &plan.IndexSearchScan{
+		Index:         &plan.IndexDef{},
+		QueryPayload:  plan2.MakePlan2StringConstExprWithType("apple"),
+		AlgoExprs:     []*plan.Expr{plan2.MakePlan2Uint64ConstExprWithType(1)},
+		AlgoExprNames: nil,
+	}}}, proc)
+	require.ErrorContains(t, err, "not all named")
+
+	c := &Compile{proc: proc}
+	err = c.compileIndexSearchScanDataSource(&Scope{DataSource: &Source{node: &plan.Node{}}})
+	require.ErrorContains(t, err, "missing its specification")
+	err = c.compileIndexSearchScanDataSource(&Scope{DataSource: &Source{node: &plan.Node{IndexSearchScan: &plan.IndexSearchScan{}}}})
+	require.Error(t, err)
+}
+
+func TestRetainedExternalSourceRechecksRole(t *testing.T) {
+	c := NewMockCompile(t)
+	c.proc.Base.SessionInfo.Account = "sys"
+	c.proc.Base.SessionInfo.Role = "moadmin"
+	param := &tree.ExternParam{ExParamConst: tree.ExParamConst{ScanType: tree.INFILE, Filepath: "/owned/source.csv", Tail: &tree.TailParameter{}}}
+	encoded, err := json.Marshal(param)
+	require.NoError(t, err)
+	scan := &plan.ExternScan{Type: int32(plan.ExternType_LOAD)}
+	_, err = c.getExternParam(c.proc, scan, string(encoded))
+	require.NoError(t, err)
+	c.proc.Base.SessionInfo.Role = "public"
+	_, err = c.getExternParam(c.proc, scan, string(encoded))
+	require.ErrorContains(t, err, "only the sys account moadmin role")
 }

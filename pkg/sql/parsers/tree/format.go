@@ -39,11 +39,23 @@ type FmtCtx struct {
 	// as hex-to-varchar casts so the SQL reparses identically with or without
 	// NO_BACKSLASH_ESCAPES.
 	modeIndependentStringLiterals bool
+	viewDefinition                bool
 	paramExprOffset               bool
 	detectDateTimeFormat          bool
 	sawDateTimeFormat             bool
 	stringLiteralPositions        *[]StringLiteralPosition
 	parameterCount                *int
+	caseExpressions               *[]*CaseExpr
+}
+
+// CaseExpressions enumerates syntax producers before binding can duplicate or
+// prune them. The ordinal is independent of values and physical binding tags.
+func CaseExpressions(node NodeFormatter) []*CaseExpr {
+	var cases []*CaseExpr
+	ctx := NewFmtCtx(dialect.MYSQL)
+	ctx.caseExpressions = &cases
+	node.Format(ctx)
+	return cases
 }
 
 // ParameterCount returns the parser's original parameter slot count. Use the
@@ -122,6 +134,20 @@ func WithModeIndependentStringLiterals() FmtCtxOption {
 
 func (ctx *FmtCtx) ModeIndependentStringLiterals() bool {
 	return ctx.modeIndependentStringLiterals
+}
+
+// WithViewDefinition exports executable SELECT metadata. NAME_CONST values that
+// require mode-independent string spelling are emitted as literals with their
+// named output preserved, including inside derived tables. Text literals retain
+// their inferred character width without a CAST size limit. Normal binding
+// remains strict.
+func WithViewDefinition() FmtCtxOption {
+	return FmtCtxOption(func(ctx *FmtCtx) {
+		ctx.viewDefinition = true
+		ctx.modeIndependentStringLiterals = true
+		ctx.singleQuoteString = true
+		ctx.quoteIdentifier = true
+	})
 }
 
 // WithParamExprOffset includes a parameter's parser-assigned offset in its

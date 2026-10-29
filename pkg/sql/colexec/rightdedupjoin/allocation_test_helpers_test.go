@@ -42,7 +42,7 @@ func installTestAllocation(t testing.TB, owners ...testAllocationOwner) *mpool.A
 }
 
 func TestRightDedupJoinResultBatchUsesAllocationAccount(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 	arg := &RightDedupJoin{
 		Result:    []colexec.ResultPos{{Rel: 0, Pos: 0}},
@@ -64,7 +64,7 @@ func TestRightDedupJoinResultBatchUsesAllocationAccount(t *testing.T) {
 }
 
 func TestRightDedupJoinResultBatchHonorsAllocationCapacity(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 	registry, err := mpool.NewAllocationAccountRegistry(1, 16)
 	require.NoError(t, err)

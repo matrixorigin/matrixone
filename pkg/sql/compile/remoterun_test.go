@@ -134,7 +134,7 @@ func Test_EncodeProcessInfo(t *testing.T) {
 		Host:         "",
 		Role:         "",
 		ConnectionID: 0,
-		LastInsertID: 0,
+		LastInsertID: 500,
 		Database:     "",
 		Version:      "",
 		// Pin to UTC: time.Time{}.In(time.Local).MarshalBinary() can fail
@@ -150,12 +150,13 @@ func Test_EncodeProcessInfo(t *testing.T) {
 		SeqLastValue:   nil,
 		SqlHelper:      nil,
 	}
+	proc.SetLastInsertID(500)
 
 	remoteExecutionID := uuid.New()
 	data, err := encodeProcessInfo(proc, "", map[string]uint32{
 		"cn-a:6001": 2,
 		"cn-b:6001": 1,
-	}, remoteExecutionID)
+	}, remoteExecutionID, 1<<32)
 	require.Nil(t, err)
 	restored := new(pipeline.ProcessInfo)
 	require.NoError(t, restored.Unmarshal(data))
@@ -166,6 +167,8 @@ func Test_EncodeProcessInfo(t *testing.T) {
 	restoredExecutionID, err := uuid.FromBytes(restored.RemoteExecutionId)
 	require.NoError(t, err)
 	require.Equal(t, remoteExecutionID, restoredExecutionID)
+	require.Equal(t, uint64(1<<32), restored.OdkuOrdinalBase)
+	require.Equal(t, uint64(500), restored.SessionInfo.LastInsertId)
 }
 
 func TestGenerateProcessHelperRejectsIncompleteRemoteLifecycleMetadata(t *testing.T) {
@@ -643,6 +646,14 @@ func TestRemoteRunOperatorCodecRoundTrip(t *testing.T) {
 		require.True(t, restored.(*group.Group).DynamicGrouping)
 	})
 
+	t.Run("SortRollupIsCoordinatorOnly", func(t *testing.T) {
+		original := group.NewArgument()
+		original.SortRollup = true
+		defer original.Release()
+		_, _, err := convertToPipelineInstruction(original, nil, &scopeContext{}, 1)
+		require.ErrorContains(t, err, "sort rollup cannot be serialized")
+	})
+
 	t.Run("GroupingSetProjectionMetadata", func(t *testing.T) {
 		original := projection.NewArgument()
 		original.ProjectList = []*planpb.Expr{plan.MakePlan2Int64ConstExprWithType(1)}
@@ -1104,6 +1115,83 @@ func TestRemoteAutoIncrementStatementLastInsertIDProtocolValidation(t *testing.T
 	require.True(t, instruction.PreInsert.HasAutoCol)
 	require.NoError(t,
 		validateRemoteStatementLastInsertIDPipelineProtocol(proc, autoPipeline))
+}
+
+func TestRemoteODKUResultTrackingProtocolValidation(t *testing.T) {
+	ctx := &scopeContext{id: 1, root: &scopeContext{}, parent: &scopeContext{}}
+	proc := testutil.NewProcess(t)
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	oldVersion, hadVersion := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	t.Cleanup(func() {
+		if hadVersion {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, oldVersion)
+		} else {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+	})
+
+	pre := &preinsert.PreInsert{
+		HasAutoCol:                   true,
+		TrackAutoIncrementGenerated:  true,
+		AutoIncrementGeneratedColumn: 0,
+		TrackODKUResult:              true,
+		ODKUOrdinalColumn:            1,
+		ODKUAutoIncrementColumn:      0,
+	}
+	pipelinePre := &pipeline.Pipeline{Children: []*pipeline.Pipeline{{
+		InstructionList: []*pipeline.Instruction{{
+			Op: int32(vm.PreInsert),
+			PreInsert: &pipeline.PreInsert{
+				HasAutoCol:                  true,
+				TrackAutoIncrementGenerated: true,
+				TrackOdkuResult:             true,
+				OdkuOrdinalColumn:           1,
+				OdkuAutoIncrementColumn:     0,
+			},
+		}},
+	}}}
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion133)
+	_, _, err := convertToPipelineInstruction(pre, proc, ctx, 1)
+	require.ErrorContains(t, err, "requires MORPC protocol version 134")
+	require.ErrorContains(t,
+		validateRemoteStatementLastInsertIDPipelineProtocol(proc, pipelinePre),
+		"requires MORPC protocol version 134")
+	dedup := &dedupjoin.DedupJoin{
+		ODKUResultTracking: true,
+		Conditions:         [][]*planpb.Expr{{}, {}},
+	}
+	dedupPipeline := &pipeline.Pipeline{Children: []*pipeline.Pipeline{{
+		InstructionList: []*pipeline.Instruction{{
+			Op:        int32(vm.DedupJoin),
+			DedupJoin: &pipeline.DedupJoin{OdkuResultTracking: true},
+		}},
+	}}}
+	_, _, err = convertToPipelineInstruction(dedup, proc, ctx, 1)
+	require.ErrorContains(t, err, "requires MORPC protocol version 134")
+	require.ErrorContains(t,
+		validateRemoteStatementLastInsertIDPipelineProtocol(proc, dedupPipeline),
+		"requires MORPC protocol version 134")
+
+	// Presence is independently checked on the receiver, including zero.
+	require.ErrorContains(t, validateRemoteODKUBaselinePresence(proc, pipelinePre), "baseline")
+	proc.Base.SessionInfo.LastInsertIDSet = true
+	proc.Base.SessionInfo.LastInsertID = 0
+	require.NoError(t, validateRemoteODKUBaselinePresence(proc, pipelinePre))
+	require.NoError(t, validateRemoteODKUBaselinePresence(proc, dedupPipeline))
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion134)
+	_, instruction, err := convertToPipelineInstruction(pre, proc, ctx, 1)
+	require.NoError(t, err)
+	require.True(t, instruction.PreInsert.TrackOdkuResult)
+	require.Equal(t, int32(0), instruction.PreInsert.OdkuAutoIncrementColumn)
+	require.NoError(t,
+		validateRemoteStatementLastInsertIDPipelineProtocol(proc, pipelinePre))
+	_, instruction, err = convertToPipelineInstruction(dedup, proc, ctx, 1)
+	require.NoError(t, err)
+	require.True(t, instruction.DedupJoin.OdkuResultTracking)
+	require.NoError(t,
+		validateRemoteStatementLastInsertIDPipelineProtocol(proc, dedupPipeline))
 }
 
 func TestChangedRowsUpdateRemoteProtocolValidation(t *testing.T) {
@@ -2477,115 +2565,11 @@ func Test_DMLOperatorSerializationRoundtrip(t *testing.T) {
 			spec.KeyEncoding)
 	})
 
-	t.Run("TableFunction_IndexReaderParam", func(t *testing.T) {
-		limit := plan.MakePlan2Int64ConstExprWithType(17)
-		op := &table_function.TableFunction{
-			FuncName: "unnest",
-			FulltextSourceRef: &planpb.ObjectRef{
-				SchemaName: "publisher", ObjName: "source", SubscriptionName: "subscriber_alias",
-				PubInfo: &planpb.PubInfo{TenantId: 42},
-			},
-			FulltextIndexRef: &planpb.ObjectRef{
-				SchemaName: "publisher", ObjName: "index", SubscriptionName: "subscriber_alias",
-				PubInfo: &planpb.PubInfo{TenantId: 42},
-			},
-			RuntimeFilterSpecs: []*planpb.RuntimeFilterSpec{
-				{
-					Tag:         42,
-					MatchPrefix: true,
-					UpperLimit:  128,
-					NotOnPk:     true,
-					KeyEncoding: planpb.RuntimeFilterKeyEncoding_RUNTIME_FILTER_KEY_FLOAT_ZERO_CLOSED_V1,
-					ProbeType: &planpb.Type{
-						Id: int32(types.T_float64),
-					},
-				},
-			},
-			IndexReaderParam: &planpb.IndexReaderParam{
-				PartitionCnCnt: 2,
-				PartitionCnIdx: 1,
-				Limit:          limit,
-			},
-		}
-		_, pipeInstr, err := convertToPipelineInstruction(op, proc, ctx, 1)
-		require.NoError(t, err)
-		require.Equal(t, int32(2), pipeInstr.TableFunction.GetIndexReaderParam().GetPartitionCnCnt())
-		require.Equal(t, int32(1), pipeInstr.TableFunction.GetIndexReaderParam().GetPartitionCnIdx())
-		require.Equal(t, int64(17), pipeInstr.TableFunction.GetIndexReaderParam().GetLimit().GetLit().GetI64Val())
-		require.Equal(t, op.FulltextSourceRef, pipeInstr.TableFunction.FulltextSourceRef)
-		require.Equal(t, op.FulltextIndexRef, pipeInstr.TableFunction.FulltextIndexRef)
-		require.Len(t, pipeInstr.TableFunction.GetRuntimeFilterProbeList(), 1)
-		require.Equal(t, int32(42), pipeInstr.TableFunction.GetRuntimeFilterProbeList()[0].GetTag())
-		require.True(t, pipeInstr.TableFunction.GetRuntimeFilterProbeList()[0].GetMatchPrefix())
-		require.Equal(t, int32(128), pipeInstr.TableFunction.GetRuntimeFilterProbeList()[0].GetUpperLimit())
-		require.True(t, pipeInstr.TableFunction.GetRuntimeFilterProbeList()[0].GetNotOnPk())
-		require.Equal(t, planpb.RuntimeFilterKeyEncoding_RUNTIME_FILTER_KEY_FLOAT_ZERO_CLOSED_V1,
-			pipeInstr.TableFunction.GetRuntimeFilterProbeList()[0].GetKeyEncoding())
-		require.Equal(t, int32(types.T_float64),
-			pipeInstr.TableFunction.GetRuntimeFilterProbeList()[0].GetProbeType().GetId())
-
-		wireBytes, err := pipeInstr.Marshal()
-		require.NoError(t, err)
-		wireInstr := new(pipeline.Instruction)
-		require.NoError(t, wireInstr.Unmarshal(wireBytes))
-		require.NotSame(t, pipeInstr.TableFunction.IndexReaderParam, wireInstr.TableFunction.IndexReaderParam)
-		require.NotSame(t, pipeInstr.TableFunction.RuntimeFilterProbeList[0], wireInstr.TableFunction.RuntimeFilterProbeList[0])
-		require.NotSame(t, pipeInstr.TableFunction.FulltextSourceRef, wireInstr.TableFunction.FulltextSourceRef)
-		require.NotSame(t, pipeInstr.TableFunction.FulltextIndexRef, wireInstr.TableFunction.FulltextIndexRef)
-
-		restored, err := convertToVmOperator(wireInstr, ctx, nil)
-		require.NoError(t, err)
-		restoredOp := restored.(*table_function.TableFunction)
-		require.Equal(t, int32(2), restoredOp.IndexReaderParam.GetPartitionCnCnt())
-		require.Equal(t, int32(1), restoredOp.IndexReaderParam.GetPartitionCnIdx())
-		require.Equal(t, int64(17), restoredOp.IndexReaderParam.GetLimit().GetLit().GetI64Val())
-		require.Equal(t, op.FulltextSourceRef, restoredOp.FulltextSourceRef)
-		require.Equal(t, op.FulltextIndexRef, restoredOp.FulltextIndexRef)
-		require.Len(t, restoredOp.RuntimeFilterSpecs, 1)
-		require.Equal(t, int32(42), restoredOp.RuntimeFilterSpecs[0].GetTag())
-		require.True(t, restoredOp.RuntimeFilterSpecs[0].GetMatchPrefix())
-		require.Equal(t, int32(128), restoredOp.RuntimeFilterSpecs[0].GetUpperLimit())
-		require.True(t, restoredOp.RuntimeFilterSpecs[0].GetNotOnPk())
-		require.Equal(t, planpb.RuntimeFilterKeyEncoding_RUNTIME_FILTER_KEY_FLOAT_ZERO_CLOSED_V1,
-			restoredOp.RuntimeFilterSpecs[0].GetKeyEncoding())
-		require.Equal(t, int32(types.T_float64),
-			restoredOp.RuntimeFilterSpecs[0].GetProbeType().GetId())
-	})
-
-	t.Run("Apply_FulltextReferences", func(t *testing.T) {
-		sourceRef := &planpb.ObjectRef{
-			SchemaName: "publisher", ObjName: "source", SubscriptionName: "subscriber_alias",
-			PubInfo: &planpb.PubInfo{TenantId: 42},
-		}
-		indexRef := &planpb.ObjectRef{
-			SchemaName: "publisher", ObjName: "index", SubscriptionName: "subscriber_alias",
-			PubInfo: &planpb.PubInfo{TenantId: 42},
-		}
-		op := &apply.Apply{TableFunction: &table_function.TableFunction{
-			FuncName:          "fulltext_index_scan",
-			FulltextSourceRef: sourceRef,
-			FulltextIndexRef:  indexRef,
-		}}
-
-		_, pipeInstr, err := convertToPipelineInstruction(op, proc, ctx, 1)
-		require.NoError(t, err)
-		wireBytes, err := pipeInstr.Marshal()
-		require.NoError(t, err)
-		wireInstr := new(pipeline.Instruction)
-		require.NoError(t, wireInstr.Unmarshal(wireBytes))
-
-		restored, err := convertToVmOperator(wireInstr, ctx, nil)
-		require.NoError(t, err)
-		restoredOp := restored.(*apply.Apply)
-		require.Equal(t, sourceRef, restoredOp.TableFunction.FulltextSourceRef)
-		require.Equal(t, indexRef, restoredOp.TableFunction.FulltextIndexRef)
-	})
-
-	t.Run("Apply_VectorIndexScan", func(t *testing.T) {
+	t.Run("Apply_IndexSearchScan", func(t *testing.T) {
 		op := apply.NewArgument()
 		op.VectorAttrs = []string{"pkid", "score"}
 		op.TxnOffset = 19
-		op.VectorIndexScan = &planpb.VectorIndexScan{
+		op.IndexSearchScan = &planpb.IndexSearchScan{
 			Index:            &planpb.IndexDef{IndexName: "idx", IndexAlgo: "ivfflat"},
 			DistanceFunction: "l2_distance",
 			CandidateLimit:   plan.MakePlan2Uint64ConstExprWithType(8),
@@ -2603,8 +2587,8 @@ func Test_DMLOperatorSerializationRoundtrip(t *testing.T) {
 		require.NoError(t, err)
 		restoredOp := restored.(*apply.Apply)
 		require.Equal(t, op.VectorAttrs, restoredOp.VectorAttrs)
-		require.Equal(t, "idx", restoredOp.VectorIndexScan.GetIndex().GetIndexName())
-		require.Equal(t, uint64(8), restoredOp.VectorIndexScan.GetCandidateLimit().GetLit().GetU64Val())
+		require.Equal(t, "idx", restoredOp.IndexSearchScan.GetIndex().GetIndexName())
+		require.Equal(t, uint64(8), restoredOp.IndexSearchScan.GetCandidateLimit().GetLit().GetU64Val())
 		require.Equal(t, 19, restoredOp.TxnOffset)
 	})
 
@@ -2612,19 +2596,10 @@ func Test_DMLOperatorSerializationRoundtrip(t *testing.T) {
 		op := table_function.NewArgument()
 		op.FuncName = "unnest"
 		op.Limit = plan.MakePlan2Uint64ConstExprWithType(4)
-		op.RuntimeFilterSpecs = []*planpb.RuntimeFilterSpec{
-			{Tag: 9, UseMembershipFilter: true, MustApply: true},
-		}
-		op.IndexReaderParam = &planpb.IndexReaderParam{
-			Limit:        plan.MakePlan2Uint64ConstExprWithType(4),
-			OrigFuncName: "l2_distance",
-		}
 
 		_, pipeInstr, err := convertToPipelineInstruction(op, proc, ctx, 1)
 		require.NoError(t, err)
 		require.Equal(t, uint64(4), pipeInstr.Limit.GetLit().GetU64Val())
-		require.Len(t, pipeInstr.TableFunction.RuntimeFilterProbeList, 1)
-		require.NotNil(t, pipeInstr.TableFunction.IndexReaderParam)
 
 		data, err := pipeInstr.Marshal()
 		require.NoError(t, err)
@@ -2635,9 +2610,6 @@ func Test_DMLOperatorSerializationRoundtrip(t *testing.T) {
 		require.NoError(t, err)
 		restoredOp := restored.(*table_function.TableFunction)
 		require.Equal(t, uint64(4), restoredOp.Limit.GetLit().GetU64Val())
-		require.Equal(t, op.RuntimeFilterSpecs, restoredOp.RuntimeFilterSpecs)
-		require.Equal(t, uint64(4), restoredOp.IndexReaderParam.GetLimit().GetLit().GetU64Val())
-		require.Equal(t, "l2_distance", restoredOp.IndexReaderParam.GetOrigFuncName())
 	})
 
 	t.Run("MultiUpdate_PartitionCols", func(t *testing.T) {
@@ -4456,13 +4428,8 @@ func TestPrepareRemoteRunSendingDataKeepsConnectorChildTableFunctionParams(t *te
 
 	tf := &table_function.TableFunction{
 		FuncName: "unnest",
-		RuntimeFilterSpecs: []*planpb.RuntimeFilterSpec{
-			{Tag: 42},
-		},
-		IndexReaderParam: &planpb.IndexReaderParam{
-			PartitionCnCnt: 2,
-			PartitionCnIdx: 1,
-		},
+		Params:   []byte(`{"path":"$"}`),
+		Limit:    plan.MakePlan2Uint64ConstExprWithType(42),
 	}
 	conn := connector.NewArgument()
 	conn.AppendChild(tf)
@@ -4478,10 +4445,9 @@ func TestPrepareRemoteRunSendingDataKeepsConnectorChildTableFunctionParams(t *te
 	restored, err := decodeScope(scopeData, proc, true, nil)
 	require.NoError(t, err)
 	restoredOp := restored.RootOp.(*table_function.TableFunction)
-	require.Equal(t, int32(2), restoredOp.IndexReaderParam.GetPartitionCnCnt())
-	require.Equal(t, int32(1), restoredOp.IndexReaderParam.GetPartitionCnIdx())
-	require.Len(t, restoredOp.RuntimeFilterSpecs, 1)
-	require.Equal(t, int32(42), restoredOp.RuntimeFilterSpecs[0].GetTag())
+	require.Equal(t, "unnest", restoredOp.FuncName)
+	require.Equal(t, []byte(`{"path":"$"}`), restoredOp.Params)
+	require.Equal(t, uint64(42), restoredOp.Limit.GetLit().GetU64Val())
 }
 
 func TestGetScopeForRemoteRunEncodingDoesNotMutateOriginalScope(t *testing.T) {
@@ -5513,4 +5479,95 @@ func TestNotifyLateErrorSurvivesSuccessfulStop(t *testing.T) {
 			require.Zero(t, proc.Mp().CurrNB())
 		})
 	}
+}
+
+func TestRemoteStatementSendErrorPreservesCauseWithoutMaskingInvariant(t *testing.T) {
+	native := moerr.NewOutOfRangeNoCtx("int8", "1000")
+	for _, tc := range []struct {
+		name       string
+		diagnostic error
+		wantNative bool
+	}{
+		{"cleanup-cancellation", context.Canceled, true},
+		{"cleanup-error", errors.New("cleanup failed"), true},
+		{"allocation-invariant", mpool.ErrAllocationAccountInvariant, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			session := mock_morpc.NewMockClientSession(ctrl)
+			var response *pipeline.Message
+			session.EXPECT().Write(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, m morpc.Message) error {
+				response = m.(*pipeline.Message)
+				return nil
+			})
+			receiver := &messageReceiverOnServer{
+				messageCtx:      context.Background(),
+				clientSession:   session,
+				statementError:  snapshotRemoteStatementError(native),
+				messageAcquirer: func() morpc.Message { return new(pipeline.Message) },
+			}
+			require.NoError(t, receiver.sendError(errors.Join(native, tc.diagnostic)))
+			require.NotNil(t, response)
+			got := new(moerr.Error)
+			require.NoError(t, got.UnmarshalBinary(response.Err))
+			if tc.wantNative {
+				require.Equal(t, native.MySQLCode(), got.MySQLCode())
+				require.Equal(t, native.SqlState(), got.SqlState())
+			} else {
+				require.NotEqual(t, native.MySQLCode(), got.MySQLCode())
+				require.Contains(t, got.Error(), mpool.ErrAllocationAccountInvariant.Error())
+			}
+		})
+	}
+}
+
+func TestDedupDiagnosticExpressionsRemoteRoundTrip(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	ctx := &scopeContext{id: 1, root: &scopeContext{}, parent: &scopeContext{}}
+	exprs := []*planpb.Expr{{Typ: types.T_varchar.ToType().PlanType(), Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 1, ColPos: 3}}}}
+	diagnosticExprs := func(op vm.Operator) []*planpb.Expr {
+		switch arg := op.(type) {
+		case *dedupjoin.DedupJoin:
+			return arg.DedupKeyExprs
+		case *rightdedupjoin.RightDedupJoin:
+			return arg.DedupKeyExprs
+		case *hashbuild.HashBuild:
+			return arg.DedupKeyExprs
+		}
+		t.Fatalf("unexpected operator %T", op)
+		return nil
+	}
+	for _, op := range []vm.Operator{
+		&dedupjoin.DedupJoin{Conditions: [][]*planpb.Expr{nil, nil}, DedupKeyExprs: exprs},
+		&rightdedupjoin.RightDedupJoin{Conditions: [][]*planpb.Expr{nil, nil}, DedupKeyExprs: exprs},
+		&hashbuild.HashBuild{DedupKeyExprs: exprs},
+	} {
+		t.Run(fmt.Sprintf("%T", op), func(t *testing.T) {
+			require.Equal(t, exprs, diagnosticExprs(dupOperator(op, 0, 1)))
+			_, instruction, err := convertToPipelineInstruction(op, proc, ctx, 1)
+			require.NoError(t, err)
+			wire, err := instruction.Marshal()
+			require.NoError(t, err)
+			decoded := new(pipeline.Instruction)
+			require.NoError(t, decoded.Unmarshal(wire))
+			restored, err := convertToVmOperator(decoded, ctx, nil)
+			require.NoError(t, err)
+			require.Equal(t, exprs, diagnosticExprs(restored))
+		})
+	}
+	op := &preinsertunique.PreInsertUnique{PreInsertCtx: &planpb.PreInsertUkCtx{KeyDiagnosticExprs: []*planpb.ExprList{{List: exprs}}}}
+	_, instruction, err := convertToPipelineInstruction(op, proc, ctx, 1)
+	require.NoError(t, err)
+	wire, err := instruction.Marshal()
+	require.NoError(t, err)
+	decoded := new(pipeline.Instruction)
+	require.NoError(t, decoded.Unmarshal(wire))
+	restored, err := convertToVmOperator(decoded, ctx, nil)
+	require.NoError(t, err)
+	require.Equal(t, exprs, restored.(*preinsertunique.PreInsertUnique).PreInsertCtx.KeyDiagnosticExprs[0].List)
+	// New diagnostic metadata is optional; older plans continue to decode.
+	legacy := &pipeline.Instruction{Op: int32(vm.DedupJoin), DedupJoin: &pipeline.DedupJoin{}}
+	restored, err = convertToVmOperator(legacy, ctx, nil)
+	require.NoError(t, err)
+	require.Empty(t, restored.(*dedupjoin.DedupJoin).DedupKeyExprs)
 }

@@ -336,6 +336,8 @@ func newExpressionExecutorWithAllocation(
 		return &memoExpressionExecutor{state: state}, nil
 	}
 	switch t := planExpr.Expr.(type) {
+	case *plan.Expr_Slot:
+		return newDependentSlotExecutor(proc, t.Slot, typ, selection)
 	case *plan.Expr_Lit:
 		vec, err := generateConstExpressionExecutor(proc, typ, t.Lit, selection)
 		if err != nil {
@@ -454,6 +456,23 @@ func newExpressionExecutorWithAllocation(
 
 	case *plan.Expr_F:
 		overloadID := t.F.GetFunc().GetObj()
+		// Validate before allocating the result wrapper, including plans retained
+		// from the pre-versioned unary TIMESTAMP implementation.
+		fid, oid := function.DecodeOverloadID(overloadID)
+		if fid == function.LOAD_FK_IGNORE_CHECK {
+			if err := function.RequireLoadFKIgnoreProtocol(proc.Ctx, proc); err != nil {
+				return nil, err
+			}
+		}
+		if fid == function.TIMESTAMP && oid >= 0 && oid <= 10 {
+			want := types.T_timestamp
+			if oid >= 5 {
+				want = types.T_datetime
+			}
+			if typ.Oid != want {
+				return nil, moerr.NewNotSupportedNoCtx("TIMESTAMP result vector contract mismatch requires rebinding")
+			}
+		}
 		overload, err := function.GetFunctionById(proc.Ctx, overloadID)
 		if err != nil {
 			return nil, err
@@ -471,14 +490,20 @@ func newExpressionExecutorWithAllocation(
 			// coordinator filter may fold a literal cast once per execution.
 			executor.stringToNumericCast = !overload.CannotFold() &&
 				isStringToNumericCast(planExpr, buildCtx.foldOwnedLiteralNumericCast)
-			executor.volatile = overload.CannotFold() || executor.stringToNumericCast
+			executor.rowScopedDecimalCast = function.IsExplicitDecimalCast(planExpr)
+			executor.volatile = overload.IsVolatile() || executor.stringToNumericCast || executor.rowScopedDecimalCast
+			executor.rowScopedDiagnostics = overload.HasRowScopedDiagnostics()
 			executor.timeDependent = overload.IsRealTimeRelated()
 			executor.fid, _ = function.DecodeOverloadID(overloadID)
-			executor.evalFn, executor.resetFn, executor.freeFn, executor.retainedBytesFn = overload.GetExecuteMethod()
+			executor.evalFn, executor.resetFn, executor.freeFn, _ = overload.GetExecuteMethod()
 		}
 		if err = executor.init(proc, len(t.F.Args), typ, selection); err != nil {
 			executor.Free()
 			return nil, err
+		}
+		executor.parameterTypes = make([]types.Type, len(t.F.Args))
+		for i, arg := range t.F.Args {
+			executor.parameterTypes[i] = types.MustTypeFromPlan(arg.Typ)
 		}
 
 		deferDiagnostic := buildCtx.joinBuildDiagnosticOwner != nil &&
@@ -490,7 +515,8 @@ func newExpressionExecutorWithAllocation(
 			defer func() { buildCtx.joinBuildDiagnosticOwner = owner }()
 		}
 		conditional := !deferDiagnostic &&
-			(executor.fid == function.IFF || executor.fid == function.CASE || executor.fid == function.COALESCE)
+			(executor.fid == function.IFF || executor.fid == function.CASE || executor.fid == function.COALESCE ||
+				(executor.fid == function.ELT && int32(executor.overloadID) == 1))
 		if conditional {
 			buildCtx.conditionalJoinDepth++
 			defer func() { buildCtx.conditionalJoinDepth-- }()
@@ -626,6 +652,11 @@ type FunctionExpressionExecutor struct {
 	// runtime, so reusable result vectors must start each evaluation from this
 	// stable type before the function applies the current runtime metadata.
 	resultType types.Type
+	// parameterTypes retain the plan's semantic argument domains. Materialized
+	// column vectors can carry only their physical OID after scan/materialization,
+	// so Unicode string consumers need this metadata restored at the function
+	// boundary.
+	parameterTypes []types.Type
 	functionInformationForEval
 	folded      functionFolding
 	selectList1 []bool
@@ -1186,6 +1217,50 @@ func (expr *FunctionExpressionExecutor) EvalIff(proc *process.Process, batches [
 	return err
 }
 
+// EvalJSONStringElt evaluates the selector first and masks each value subtree.
+// Only overload 1 has this JSON-aware, selected-consumer execution contract.
+func (expr *FunctionExpressionExecutor) EvalJSONStringElt(proc *process.Process, batches []*batch.Batch, selectList []bool) error {
+	index, err := expr.parameterExecutor[0].Eval(proc, batches, selectList)
+	if err != nil {
+		return err
+	}
+	expr.parameterResults[0] = index
+	rowCount := expressionRowCount(batches)
+	if len(expr.selectList1) < rowCount {
+		expr.selectList1 = make([]bool, rowCount)
+	}
+	selected := expr.selectList1[:rowCount]
+	var signedIndex vector.FunctionParameterWrapper[int64]
+	var unsignedIndex vector.FunctionParameterWrapper[uint64]
+	switch index.GetType().Oid {
+	case types.T_int64:
+		signedIndex = vector.GenerateFunctionFixedTypeParameter[int64](index)
+	case types.T_uint64, types.T_bit:
+		unsignedIndex = vector.GenerateFunctionFixedTypeParameter[uint64](index)
+	}
+	for branch := 1; branch < len(expr.parameterExecutor); branch++ {
+		for row := range selected {
+			selected[row] = false
+			if selectList != nil && !selectList[row] {
+				continue
+			}
+			switch {
+			case signedIndex != nil:
+				value, isNull := signedIndex.GetValue(uint64(row))
+				selected[row] = !isNull && value == int64(branch)
+			case unsignedIndex != nil:
+				value, isNull := unsignedIndex.GetValue(uint64(row))
+				selected[row] = !isNull && value == uint64(branch)
+			}
+		}
+		expr.parameterResults[branch], err = expr.parameterExecutor[branch].Eval(proc, batches, selected)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func hasSelectedRows(selectList []bool) bool {
 	for _, selected := range selectList {
 		if selected {
@@ -1411,6 +1486,45 @@ func (expr *FunctionExpressionExecutor) hasScalarIntegerArgumentSource() bool {
 		return false
 	}
 	return scalarIntegerArgumentSource(expr.parameterExecutor[0])
+}
+
+// scalarExpressionValue proves a row-independent value and tracks whether its
+// tree owns row-scoped diagnostics. Neither property permits skipping execution.
+// Use executor ancestry rather than vector shape: a column can happen to contain
+// a constant vector in one batch.
+func scalarExpressionValue(executor ExpressionExecutor) (scalar, diagnostic bool) {
+	switch source := executor.(type) {
+	case *memoExpressionExecutor:
+		return scalarExpressionValue(source.state.executor)
+	case *memoRootExpressionExecutor:
+		return scalarExpressionValue(source.executor)
+	case *FixedVectorExpressionExecutor:
+		return source.resultVector.IsConst(), false
+	case *ParamExpressionExecutor, *VarExpressionExecutor:
+		return true, false
+	case *FunctionExpressionExecutor:
+		// CAST's row-evaluation flags protect diagnostics, rather than
+		// declaring its converted value nondeterministic.
+		if source.timeDependent || (source.volatile && !source.stringToNumericCast && !source.rowScopedDecimalCast) {
+			return false, false
+		}
+		diagnostic = source.rowScopedDiagnostics
+		for _, parameter := range source.parameterExecutor {
+			parameterScalar, parameterDiagnostic := scalarExpressionValue(parameter)
+			if !parameterScalar {
+				return false, false
+			}
+			diagnostic = diagnostic || parameterDiagnostic
+		}
+		return true, diagnostic
+	default:
+		return false, false
+	}
+}
+
+func (expr *FunctionExpressionExecutor) hasScalarDiagnosticValue() bool {
+	scalar, diagnostic := scalarExpressionValue(expr)
+	return scalar && diagnostic
 }
 
 func applyTransparentStringSource(
@@ -1653,7 +1767,7 @@ func (expr *FunctionExpressionExecutor) evalSelectedRows(
 		return nil, err
 	}
 	if err := expr.evalFn(
-		expr.selectedParameterResults, expr.selectedResult, proc, selectedCount, nil); err != nil {
+		expr.semanticParameterVectors(expr.selectedParameterResults), expr.selectedResult, proc, selectedCount, nil); err != nil {
 		return nil, err
 	}
 	if expr.isImplicitCast() && len(expr.selectedParameterResults) > 0 {
@@ -1673,7 +1787,7 @@ func (expr *FunctionExpressionExecutor) evalSelectedRows(
 	result := expr.resultVector.GetResultVector()
 	result.SetType(runtimeType)
 	result.ResetWithSameType()
-	if selectedCount > 0 && expr.hasScalarIntegerArgumentSource() {
+	if selectedCount > 0 && (expr.hasScalarIntegerArgumentSource() || expr.hasScalarDiagnosticValue()) {
 		// The compact result was evaluated only for selected rows. A scalar
 		// source gives every selected row the same converted value; publish the
 		// first selected value through our owned result wrapper before widening
@@ -1759,6 +1873,11 @@ func (expr *FunctionExpressionExecutor) Eval(proc *process.Process, batches []*b
 		if err != nil {
 			return nil, err
 		}
+	} else if expr.fid == function.ELT && int32(expr.overloadID) == 1 {
+		err = expr.EvalJSONStringElt(proc, batches, selectList)
+		if err != nil {
+			return nil, err
+		}
 	} else if expr.fid == function.COALESCE {
 		err = expr.EvalCoalesce(proc, batches, selectList)
 		if err != nil {
@@ -1812,12 +1931,13 @@ func (expr *FunctionExpressionExecutor) Eval(proc *process.Process, batches []*b
 	}
 
 	if err = expr.evalFn(
-		expr.parameterResults, expr.resultVector, proc, rowCount, &expr.selectList); err != nil {
+		expr.semanticParameterVectors(expr.parameterResults), expr.resultVector, proc, rowCount, &expr.selectList); err != nil {
 		return nil, err
 	}
 	// Partial selections returned through evalSelectedRows above.
-	// Runtime CASTs can flatten an otherwise scalar source.
-	if rowCount > 0 && expr.hasScalarIntegerArgumentSource() {
+	// Publish value constancy only after real execution has emitted all effects.
+	// This does not set canFold: parents must still evaluate this subtree.
+	if rowCount > 0 && (expr.hasScalarIntegerArgumentSource() || expr.hasScalarDiagnosticValue()) {
 		expr.resultVector.GetResultVector().ToConst()
 	}
 	if expr.isImplicitCast() && len(expr.parameterResults) > 0 {
@@ -1834,6 +1954,44 @@ func (expr *FunctionExpressionExecutor) Eval(proc *process.Process, batches []*b
 	}
 
 	return expr.resultVector.GetResultVector(), nil
+}
+
+// semanticParameterVectors creates short-lived read-only metadata views for
+// native Unicode string arguments. Column vectors are shared with their input
+// batch and may retain only a physical OID after scan/materialization; using
+// the plan domain here keeps equality, IN and other string kernels on the same
+// collation without mutating the batch or reinterpreting fixed-width storage.
+func (expr *FunctionExpressionExecutor) semanticParameterVectors(parameters []*vector.Vector) []*vector.Vector {
+	if len(expr.parameterTypes) == 0 || len(expr.parameterTypes) != len(parameters) {
+		return parameters
+	}
+	var views []*vector.Vector
+	for i, vec := range parameters {
+		if vec == nil {
+			continue
+		}
+		typ := expr.parameterTypes[i]
+		if !types.IsUnicodeCollation(typ.Charset) || vec.GetType().Oid != typ.Oid {
+			continue
+		}
+		switch typ.Oid {
+		case types.T_char, types.T_varchar, types.T_blob, types.T_text:
+			if *vec.GetType() == typ {
+				continue
+			}
+			if views == nil {
+				views = make([]*vector.Vector, len(parameters))
+				copy(views, parameters)
+			}
+			view := *vec
+			view.SetType(typ)
+			views[i] = &view
+		}
+	}
+	if views == nil {
+		return parameters
+	}
+	return views
 }
 
 func (expr *FunctionExpressionExecutor) EvalWithoutResultReusing(proc *process.Process, batches []*batch.Batch, _ []bool) (*vector.Vector, error) {

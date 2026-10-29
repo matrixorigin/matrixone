@@ -67,9 +67,15 @@ const (
 )
 
 type container struct {
-	state    int
-	probeIdx int
-	batIdx   int
+	// conditionPending preserves the partially filled result across a same-lane
+	// predicate suspension. It is distinct from an output batch boundary.
+	conditionPending bool
+	probeScanStarted bool
+	probeScanBatch   int
+	probeScanRow     int
+	state            int
+	probeIdx         int
+	batIdx           int
 	// batRowIdx is the next row to consume from batIdx. A JoinMap batch is not
 	// required to fit in DefaultBatchSize, so loop join must be able to yield
 	// in the middle of one instead of materializing the whole batch at once.
@@ -127,6 +133,9 @@ type container struct {
 }
 
 type LoopJoin struct {
+	// PairCondition evaluates one actual candidate pair. A nil result requests
+	// ExecYield; the caller retains both inputs until the next Call resumes it.
+	PairCondition                 func(*process.Process, *batch.Batch, int, *batch.Batch, int) (*vector.Vector, error)
 	ctr                           container
 	LeftTypes                     []types.Type
 	RightTypes                    []types.Type
@@ -248,10 +257,7 @@ func (loopJoin *LoopJoin) Reset(proc *process.Process, pipelineFailed bool, err 
 	// of carrying generation-bound storage across Reset.
 	ctr.cleanNonEqCondExecutor()
 	ctr.cleanHashMap()
-	if ctr.resBat != nil {
-		ctr.resBat.Clean(proc.GetMPool())
-		ctr.resBat = nil
-	}
+	ctr.cleanBatch(proc.Mp())
 	ctr.state = Build
 	ctr.inBat = nil
 	ctr.probeIdx = 0
@@ -268,6 +274,7 @@ func (loopJoin *LoopJoin) Free(proc *process.Process, pipelineFailed bool, err e
 	ctr.cleanBatch(proc.Mp())
 	ctr.cleanNonEqCondExecutor()
 	ctr.cleanRightMatchState(proc)
+	ctr.cleanHashMap()
 
 }
 
@@ -298,6 +305,10 @@ func (ctr *container) clearConditionResult() {
 }
 
 func (ctr *container) clearProbeResume() {
+	ctr.conditionPending = false
+	ctr.probeScanStarted = false
+	ctr.probeScanBatch = 0
+	ctr.probeScanRow = 0
 	ctr.probeMatched = false
 	ctr.clearConditionResult()
 	ctr.probeScanValid = false
@@ -306,10 +317,6 @@ func (ctr *container) clearProbeResume() {
 	ctr.probeScanFirstBatch = 0
 	ctr.probeScanFirstRow = 0
 	ctr.probeScanHasNull = false
-}
-
-func (loopJoin *LoopJoin) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
-	return input, nil
 }
 
 func (ctr *container) cleanBatch(mp *mpool.MPool) {
@@ -322,6 +329,7 @@ func (ctr *container) cleanBatch(mp *mpool.MPool) {
 		ctr.joinBat.Clean(mp)
 		ctr.joinBat = nil
 	}
+	ctr.cfs = nil
 }
 
 func (ctr *container) cleanNonEqCondExecutor() {

@@ -109,7 +109,7 @@ func ExecuteIterationWithRuntime(
 	}
 
 	statuses := make([]*JobStatus, len(iterCtx.jobNames))
-	jobSpecs, prevStatus, err := GetJobSpecs(
+	jobSpecs, prevStatus, committedWatermark, err := GetJobSpecs(
 		ctx,
 		cnUUID,
 		cnTxnClient,
@@ -221,6 +221,11 @@ func ExecuteIterationWithRuntime(
 	if rel.GetTableID(ctxWithAccount) != iterCtx.tableID {
 		return moerr.NewInternalErrorNoCtx("table id mismatch")
 	}
+	if tableDef.TableType == catalog.SystemTemporaryTable {
+		// The source identity was validated against the scheduled job above.
+		// Tail/snapshot index consumers need the same internal access as InitSQL.
+		ctxWithoutTimeout = defines.AttachTemporaryTableAccess(ctxWithoutTimeout)
+	}
 
 	if iterCtx.fromTS.IsEmpty() {
 		iterCtx.toTS = types.TimestampToTS(txnOp.SnapshotTS())
@@ -235,7 +240,10 @@ func ExecuteIterationWithRuntime(
 		}
 		statuses[i].StartAt = startAt
 	}
-	changes, err := CollectChanges(ctxWithoutTimeout, rel, iterCtx.fromTS, iterCtx.toTS, mp)
+	changes, err := CollectChanges(
+		collectChangesCtxForJobs(ctxWithoutTimeout, jobSpecs, prevStatus, committedWatermark),
+		rel, iterCtx.fromTS, iterCtx.toTS, mp,
+	)
 	if err != nil {
 		return
 	}
@@ -374,6 +382,59 @@ func jobNeedsInitSQL(jobSpec *JobSpec, status *JobStatus) bool {
 		status != nil &&
 		status.Stage == JobStage_Init &&
 		jobSpec.ConsumerInfo.InitSQL != ""
+}
+
+// collectChangesCtxForJobs returns the context one iteration must read its
+// change range with.
+//
+// A key that is both inserted and deleted inside the range is normally
+// coalesced away as "no net change" (filterBatch Case 2.2). Index consumers
+// must receive the trailing DELETE: their materialized base can already hold
+// the key even when its INSERT falls inside the collected range. This happens
+// after COPY ALTER's inline index build as well as when a copied index is
+// re-armed at a DDL transaction's pre-commit snapshot (#28847, #30335).
+//
+// An InitSQL-seeded non-index consumer uses the same mode only until its first
+// range is durably applied. Index consumers use it for every range, including
+// generations with no InitSQL; deleting an absent key is semantically
+// idempotent. Append-only index sinks still retain the extra tombstones.
+func collectChangesCtxForJobs(
+	ctx context.Context,
+	jobSpecs []*JobSpec,
+	prevStatus []*JobStatus,
+	committedWatermark []types.TS,
+) context.Context {
+	for i := range prevStatus {
+		if jobSpecs[i] != nil && prevStatus[i] != nil &&
+			jobSpecs[i].ConsumerInfo.ConsumerType == int8(ConsumerType_IndexSync) ||
+			jobStateMayLagRangeStart(jobSpecs[i], prevStatus[i], committedWatermark[i]) {
+			return engine.WithCollectChangesKeepTrailingDeletes(ctx)
+		}
+	}
+	return ctx
+}
+
+// jobStateMayLagRangeStart reports whether a job generation was seeded by
+// InitSQL and its materialized state may still predate the range start.
+//
+// A selected range is not evidence of consumption. ExecuteIterationWithRuntime
+// persists statuses[i].To with ISCPJobState_Running before the consumers run,
+// and repairAbandonedJobs turns such an abandoned row into Completed while
+// leaving To and the zero ErrorCode untouched, so a populated To alone would
+// switch the option off after a stop that consumed nothing. Only the sink
+// transaction's UpdateWatermark advances mo_iscp_log.watermark to that To -- the
+// Snapshot path's final flush does the same -- which makes the watermark the
+// durable commit boundary. The ErrorCode arm stays separate: a maintenance
+// watermark flush advances the column without replacing job_status, so a failed
+// range keeps its retry opt-in even if the column later moves past it.
+func jobStateMayLagRangeStart(jobSpec *JobSpec, status *JobStatus, committed types.TS) bool {
+	if jobSpec == nil || status == nil || jobSpec.ConsumerInfo.InitSQL == "" {
+		return false
+	}
+	if status.ErrorCode != 0 {
+		return true
+	}
+	return status.To.IsEmpty() || !committed.GE(&status.To)
 }
 
 func atomicInitCompletionStatus(previous *JobStatus, nextLSN uint64) JobStatus {
@@ -756,9 +817,11 @@ var GetJobSpecs = func(
 	watermark types.TS,
 	jobStatuses []*JobStatus,
 	jobIDs []uint64,
-) (jobSpec []*JobSpec, prevStatus []*JobStatus, err error) {
+) (jobSpec []*JobSpec, prevStatus []*JobStatus, committedWatermark []types.TS, err error) {
 	var buf bytes.Buffer
-	buf.WriteString("SELECT job_name, job_id, job_spec, job_status FROM mo_catalog.mo_iscp_log WHERE")
+	// watermark is the durable consumption boundary: only the transaction that
+	// applies a range advances it to that range's job_status.To.
+	buf.WriteString("SELECT job_name, job_id, job_spec, job_status, watermark FROM mo_catalog.mo_iscp_log WHERE")
 	for i, jobName := range jobName {
 		if i > 0 {
 			buf.WriteString(" OR")
@@ -782,6 +845,7 @@ var GetJobSpecs = func(
 	}
 	jobSpec = make([]*JobSpec, len(jobName))
 	prevStatus = make([]*JobStatus, len(jobName))
+	committedWatermark = make([]types.TS, len(jobName))
 	var foundRows int
 	var permanentErrMsg string
 	execResult.ReadRows(func(rows int, cols []*vector.Vector) bool {
@@ -807,6 +871,7 @@ var GetJobSpecs = func(
 				permanentErrMsg = err.Error()
 				return false
 			}
+			committedWatermark[jobIdx] = types.StringToTS(cols[4].GetStringAt(i))
 			foundRows++
 		}
 		return true
@@ -833,7 +898,7 @@ var GetJobSpecs = func(
 		if err == nil {
 			err = errPermanent
 		}
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	return
 }
@@ -965,21 +1030,21 @@ func NewIterationContext(accountID uint32, tableID uint64, jobNames []string, jo
 // parse error are returned so the caller can fail the InitSQL rather than
 // silently rebuild with defaults; an absent blob (no index match, or no
 // session_vars key) is (nil, nil) — legitimate, skip the overlay.
-func initSQLSessionVars(ctx context.Context, cnEngine engine.Engine, txnOp client.TxnOperator, dbName, tableName, indexName string) ([]byte, error) {
+func initSQLSessionVars(ctx context.Context, cnEngine engine.Engine, txnOp client.TxnOperator, dbName, tableName, indexName string) (context.Context, []byte, error) {
 	if dbName == "" || tableName == "" || indexName == "" {
-		return nil, nil
+		return ctx, nil, nil
 	}
 	db, err := cnEngine.Database(ctx, dbName, txnOp)
 	if err != nil {
-		return nil, err
+		return ctx, nil, err
 	}
 	rel, err := db.Relation(ctx, tableName, nil)
 	if err != nil {
-		return nil, err
+		return ctx, nil, err
 	}
 	tableDef := rel.CopyTableDef(ctx)
 	if tableDef == nil {
-		return nil, nil
+		return ctx, nil, nil
 	}
 	for _, idx := range tableDef.Indexes {
 		if idx.IndexName != indexName {
@@ -987,11 +1052,18 @@ func initSQLSessionVars(ctx context.Context, cnEngine engine.Engine, txnOp clien
 		}
 		sv, serr := catalog.IndexParamsSessionVars(idx.IndexAlgoParams)
 		if serr != nil {
-			return nil, serr
+			return ctx, nil, serr
 		}
-		return sv, nil
+		// InitSQL is trusted index-maintenance SQL generated for this source.
+		// Its background executor has no frontend session. Scope the existing
+		// internal capability to this initialization transaction only, after
+		// resolving both the source and the named index in its tenant.
+		if tableDef.TableType == catalog.SystemTemporaryTable {
+			ctx = defines.AttachTemporaryTableAccess(ctx)
+		}
+		return ctx, sv, nil
 	}
-	return nil, nil
+	return ctx, nil, nil
 }
 
 // initSQLResolver builds the system-variable resolver for an InitSQL build.
@@ -1182,7 +1254,7 @@ func processInitSQL(
 			// through this process's resolver; overlaying the captured values lets the
 			// background rebuild reproduce the create-time config instead of process
 			// defaults. A load/parse failure is surfaced; an absent blob yields nil.
-			sessionVars, err := initSQLSessionVars(runCtx, cnEngine, txn, dbName, tableName, indexName)
+			runCtx, sessionVars, err := initSQLSessionVars(runCtx, cnEngine, txn, dbName, tableName, indexName)
 			if err != nil {
 				return err
 			}

@@ -106,15 +106,23 @@ func TestDecimal256IntervalPreservesFractionalSeconds(t *testing.T) {
 		{unit: "SECOND", want: 1250000},
 		{unit: "MINUTE", want: 75000000},
 		{unit: "HOUR", want: 4500000000},
-		{unit: "DAY", want: 108000000000},
+		{unit: "DAY", want: 1},
 	} {
 		t.Run("date arithmetic "+tc.unit, func(t *testing.T) {
 			args, err := resetDateFunctionArgs(ctx, dateExpr, makeIntervalExpr(
 				makeWideDecimalIntervalExpr(t, value), tc.unit))
 			require.NoError(t, err)
-			require.Equal(t, tc.want, extractInt64Value(args[1]))
-			require.Equal(t, int64(types.MicroSecond), extractInt64Value(args[2]))
-			require.True(t, args[1].GetLit().GetDecimalLiteralRequiresV82())
+			require.Equal(t, tc.want, foldedIntervalInt64(t, args[1]))
+			wantUnit := types.MicroSecond
+			if tc.unit == "DAY" {
+				wantUnit = types.Day
+			}
+			require.Equal(t, int64(wantUnit), extractInt64Value(args[2]))
+			if tc.unit == "DAY" || tc.unit == "SECOND" {
+				requireDecimalCalendarProtocol(t, args[1])
+			} else {
+				require.True(t, decimalIntervalRequiresProtocol(args[1]))
+			}
 		})
 	}
 
@@ -165,7 +173,7 @@ func TestDecimal256IntervalUnarySignPreservesFractionalSeconds(t *testing.T) {
 			name: "nested float cast uses float rounding",
 			sql: "select date_add(cast('2026-01-01 00:00:00' as datetime(6)), " +
 				"interval cast(cast(1.005e0 as decimal(10,2)) as decimal(40,2)) second)",
-			want: 1000000,
+			want: 1010000,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -176,7 +184,7 @@ func TestDecimal256IntervalUnarySignPreservesFractionalSeconds(t *testing.T) {
 			fn := root.ProjectList[0].GetF()
 			require.NotNil(t, fn, root.ProjectList[0].String())
 			require.Len(t, fn.Args, 3, root.ProjectList[0].String())
-			require.Equal(t, tc.want, extractInt64FromExpr(fn.Args[1]),
+			require.Equal(t, tc.want, foldedIntervalInt64(t, fn.Args[1]),
 				root.ProjectList[0].String())
 			require.Equal(t, int64(types.MicroSecond), extractInt64FromExpr(fn.Args[2]),
 				root.ProjectList[0].String())
@@ -232,8 +240,8 @@ func TestDecimal256IntervalHandlesFloatAndNestedCasts(t *testing.T) {
 		width int32
 		want  int64
 	}{
-		{name: "decimal64 follows float conversion", id: types.T_decimal64, width: 10, want: 1000000},
-		{name: "decimal128 follows float conversion", id: types.T_decimal128, width: 30, want: 1000000},
+		{name: "decimal64 follows float conversion", id: types.T_decimal64, width: 10, want: 1010000},
+		{name: "decimal128 follows float conversion", id: types.T_decimal128, width: 30, want: 1010000},
 		{name: "decimal256 keeps direct float conversion", id: types.T_decimal256, width: 40, want: 1010000},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -259,8 +267,8 @@ func TestNarrowNormalizedDecimalIntervalPreservesProtocolMarker(t *testing.T) {
 	dateArgs, err := resetDateFunctionArgs(context.Background(), dateExpr,
 		makeIntervalExpr(narrow, "SECOND"))
 	require.NoError(t, err)
-	require.Equal(t, int64(1250000), extractInt64FromExpr(dateArgs[1]))
-	require.True(t, dateArgs[1].GetLit().GetDecimalLiteralRequiresV82())
+	require.Equal(t, int64(1250000), foldedIntervalInt64(t, dateArgs[1]))
+	requireDecimalCalendarProtocol(t, dateArgs[1])
 
 	d64, err := types.ParseDecimal64("1.25", 10, 2)
 	require.NoError(t, err)
@@ -484,7 +492,7 @@ func TestDecimal256IntervalRejectsInt64OverflowAfterRounding(t *testing.T) {
 		makeWideDecimalIntervalExpr(t, "9223372036854.77580800000000000000000000000000000000"),
 		"SECOND"))
 	require.NoError(t, err)
-	require.Equal(t, "to_interval_microsecond", args[1].GetF().GetFunc().GetObjName(),
+	require.Equal(t, "to_calendar_interval", args[1].GetF().GetFunc().GetObjName(),
 		"overflow is decided at execution, after branch selection")
 }
 

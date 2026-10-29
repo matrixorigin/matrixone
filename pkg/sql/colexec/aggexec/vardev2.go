@@ -17,7 +17,6 @@ package aggexec
 import (
 	"math"
 	"slices"
-	"strconv"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -28,7 +27,7 @@ import (
 
 type varStdDevExec[
 	T float64 | types.Decimal128,
-	A types.Ints | types.UInts | types.Floats | types.Decimal64 | types.Decimal128 | types.Decimal256] struct {
+	A types.Ints | types.UInts | types.Floats | types.MoYear | types.Decimal64 | types.Decimal128 | types.Decimal256] struct {
 	aggExec
 	isVar       bool
 	isPop       bool
@@ -37,7 +36,7 @@ type varStdDevExec[
 	f2t         func(float64, int32) (T, error)
 }
 
-func numericToFloat64[A types.Ints | types.UInts | types.Floats](a A, scale int32) float64 {
+func numericToFloat64[A types.Ints | types.UInts | types.Floats | types.MoYear](a A, scale int32) float64 {
 	return float64(a)
 }
 
@@ -57,36 +56,10 @@ func dec256ToF(d types.Decimal256, scale int32) float64 {
 	return types.Decimal256ToFloat64(d, scale)
 }
 
-func fToDec128(f float64, scale int32) (types.Decimal128, error) {
-	if math.IsInf(f, 0) || math.IsNaN(f) || scale < 0 || scale > 38 {
-		return types.Decimal128FromFloat64(f, 38, scale)
-	}
-
-	// Decimal variance is accumulated in float64, but materializing its binary
-	// ULP tail as decimal digits makes large otherwise-stable results diverge
-	// from MySQL. Parse the shortest round-trip decimal representation instead.
-	// Parse the magnitude first so positive and negative precision bounds remain
-	// symmetric, then restore the sign.
-	result, err := types.ParseDecimal128(
-		strconv.FormatFloat(math.Abs(f), 'g', -1, 64), 38, scale)
-	if err != nil {
-		return types.Decimal128{}, err
-	}
-	if math.Signbit(f) {
-		result = result.Minus()
-	}
-	return result, nil
-}
-
-func VarStdDevReturnType(typs []types.Type) types.Type {
-	switch typs[0].Oid {
-	case types.T_decimal64, types.T_decimal128:
-		scale := max(int32(12), typs[0].Scale)
-		scale = min(scale, typs[0].Scale+6)
-		return types.New(types.T_decimal128, 38, scale)
-	default:
-		return types.T_float64.ToType()
-	}
+// Variance is measured in squared input units; its fractional precision is
+// independent of the argument scale. MySQL statistical aggregates return DOUBLE.
+func VarStdDevReturnType(_ []types.Type) types.Type {
+	return types.T_float64.ToType()
 }
 
 func (exec *varStdDevExec[T, A]) Fill(groupIndex int, row int, vectors []*vector.Vector) error {
@@ -296,7 +269,7 @@ func (exec *varStdDevExec[T, A]) batchMergeLegacy(other *varStdDevExec[T, A], of
 // case, use the finite float64 operands instead. This fallback is only used
 // when the exact subtraction cannot be represented, so it does not affect
 // the small-deviation path above.
-func decimalDeviationToFloat64[A types.Ints | types.UInts | types.Floats | types.Decimal64 | types.Decimal128 | types.Decimal256](value, origin A, oid types.T, scale int32) (float64, error) {
+func decimalDeviationToFloat64[A types.Ints | types.UInts | types.Floats | types.MoYear | types.Decimal64 | types.Decimal128 | types.Decimal256](value, origin A, oid types.T, scale int32) (float64, error) {
 	switch oid {
 	case types.T_decimal64:
 		value64 := any(value).(types.Decimal64)
@@ -341,7 +314,7 @@ func hasExactVarianceOrigin(oid types.T) bool {
 // after subtracting the operands in their native domain. This preserves small
 // integer variation above 2^53 while still allowing the stable floating-point
 // recurrence to represent very large signed and unsigned ranges.
-func exactVarianceDeviationToFloat64[A types.Ints | types.UInts | types.Floats | types.Decimal64 | types.Decimal128 | types.Decimal256](
+func exactVarianceDeviationToFloat64[A types.Ints | types.UInts | types.Floats | types.MoYear | types.Decimal64 | types.Decimal128 | types.Decimal256](
 	value, origin A, oid types.T, scale int32,
 ) (float64, error) {
 	switch oid {
@@ -636,8 +609,35 @@ func (exec *varStdDevExec[T, A]) getResult(variance float64, varianceExponent, c
 		result = scaledVarianceSqrt(state)
 	}
 
+	// A non-finite final result means the exact aggregate overflowed the
+	// finite DOUBLE range (for example VARIANCE over +/-1e200 requires
+	// 2e400). The scaled state representation is what keeps finite STDDEV
+	// results available at these magnitudes; where the true value cannot be
+	// represented, return MySQL's ER_DATA_OUT_OF_RANGE rather than the raw
+	// "+Infinity" token that downstream consumers such as JSON
+	// serialization cannot express (issue 31355).
+	if math.IsInf(result, 0) {
+		var z T
+		return z, moerr.NewOutOfRangeNoCtxf("float64",
+			"DOUBLE value is out of range in '%s(...)'", exec.aggregateName())
+	}
+
 	z, err := exec.f2t(result, exec.aggInfo.retType.Scale)
 	return z, err
+}
+
+// aggregateName returns the canonical SQL spelling for its error messages.
+func (exec *varStdDevExec[T, A]) aggregateName() string {
+	switch {
+	case exec.isVar && exec.isPop:
+		return "variance"
+	case exec.isVar:
+		return "var_samp"
+	case exec.isPop:
+		return "stddev"
+	default:
+		return "stddev_samp"
+	}
 }
 
 func (exec *varStdDevExec[T, A]) getLegacyResult(sum, sumsq float64, cnt int64) (T, error) {
@@ -652,6 +652,18 @@ func (exec *varStdDevExec[T, A]) getLegacyResult(sum, sumsq float64, cnt int64) 
 	}
 	if !exec.isVar {
 		result = math.Sqrt(result)
+	}
+	// Same out-of-range contract as the modern finalize path (issue 31355):
+	// ER_DATA_OUT_OF_RANGE, never the unrepresentable "+Infinity" token.
+	// A NaN is reachable in this legacy formula with finite same-sign large
+	// inputs: sumsq overflows to +Inf while avg*avg*cnt/denominator is +Inf
+	// as well, so their difference is Inf-Inf (for example VAR_POP over
+	// 1e200, 1e200). NaN likewise cannot be delivered to SQL consumers
+	// (JSON serialization rejects it), so it takes the same error branch.
+	if math.IsInf(result, 0) || math.IsNaN(result) {
+		var z T
+		return z, moerr.NewOutOfRangeNoCtxf("float64",
+			"DOUBLE value is out of range in '%s(...)'", exec.aggregateName())
 	}
 	return exec.f2t(result, exec.aggInfo.retType.Scale)
 }
@@ -873,14 +885,16 @@ func makeVarStdDevExec(mp *mpool.MPool,
 		return newVarStdDevExec[float64, uint64](mp, isVar, isPop, aggID, isDistinct, param, numericToFloat64, float64ToResult, legacyState)
 	case types.T_bit:
 		return newVarStdDevExec[float64, uint64](mp, isVar, isPop, aggID, isDistinct, param, numericToFloat64, float64ToResult, legacyState)
+	case types.T_year:
+		return newVarStdDevExec[float64, types.MoYear](mp, isVar, isPop, aggID, isDistinct, param, numericToFloat64, float64ToResult, legacyState)
 	case types.T_float32:
 		return newVarStdDevExec[float64, float32](mp, isVar, isPop, aggID, isDistinct, param, numericToFloat64, float64ToResult, legacyState)
 	case types.T_float64:
 		return newVarStdDevExec[float64, float64](mp, isVar, isPop, aggID, isDistinct, param, numericToFloat64, float64ToResult, legacyState)
 	case types.T_decimal64:
-		return newVarStdDevExec[types.Decimal128, types.Decimal64](mp, isVar, isPop, aggID, isDistinct, param, dec64ToF, fToDec128, legacyState)
+		return newVarStdDevExec[float64, types.Decimal64](mp, isVar, isPop, aggID, isDistinct, param, dec64ToF, float64ToResult, legacyState)
 	case types.T_decimal128:
-		return newVarStdDevExec[types.Decimal128, types.Decimal128](mp, isVar, isPop, aggID, isDistinct, param, dec128ToF, fToDec128, legacyState)
+		return newVarStdDevExec[float64, types.Decimal128](mp, isVar, isPop, aggID, isDistinct, param, dec128ToF, float64ToResult, legacyState)
 	case types.T_decimal256:
 		return newVarStdDevExec[float64, types.Decimal256](mp, isVar, isPop, aggID, isDistinct, param, dec256ToF, float64ToResult, legacyState)
 	default:
@@ -888,7 +902,7 @@ func makeVarStdDevExec(mp *mpool.MPool,
 	}
 }
 
-func newVarStdDevExec[T float64 | types.Decimal128, A types.Ints | types.UInts | types.Floats | types.Decimal64 | types.Decimal128 | types.Decimal256](mp *mpool.MPool, isVar bool, isPop bool, aggID int64, isDistinct bool, param types.Type, a2f func(A, int32) float64, f2t func(float64, int32) (T, error), legacyState bool) AggFuncExec {
+func newVarStdDevExec[T float64 | types.Decimal128, A types.Ints | types.UInts | types.Floats | types.MoYear | types.Decimal64 | types.Decimal128 | types.Decimal256](mp *mpool.MPool, isVar bool, isPop bool, aggID int64, isDistinct bool, param types.Type, a2f func(A, int32) float64, f2t func(float64, int32) (T, error), legacyState bool) AggFuncExec {
 	var exec varStdDevExec[T, A]
 	exec.mp = mp
 	exec.isVar = isVar

@@ -264,7 +264,7 @@ func TestFilter(t *testing.T) {
 }
 
 func TestAssertFilterFastPath(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	message := &plan.Expr{
 		Typ: plan.Type{Id: int32(types.T_varchar)},
 		Expr: &plan.Expr_Lit{Lit: &plan.Literal{
@@ -327,7 +327,7 @@ func TestFilterReturnsSelectionOnLaterExecutorError(t *testing.T) {
 }
 
 func TestAssertFilterStillAppliesRuntimeFilter(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	assertions := makeCheckConstraintAssertExprs(
 		t,
 		[]*plan.Expr{plan2.MakePlan2BoolConstExprWithType(true)},
@@ -494,7 +494,7 @@ func MakeFilterMockBatchs(mp *mpool.MPool) *batch.Batch {
 
 func TestIssue18454(t *testing.T) {
 	mp := mpool.MustNew("")
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	proc.SetBaseProcessRunningStatus(true)
 	newParamForFoldCase2(proc)
 	expr := generateFoldCase2()
@@ -529,7 +529,7 @@ func TestIssue18454(t *testing.T) {
 
 func BenchmarkPlanConstandFold1(b *testing.B) {
 	mp := mpool.MustNew("test")
-	proc := testutil.NewProcessWithMPool(b, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(b, "", mp)
 	expr := generateFoldCase1()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -544,7 +544,7 @@ func BenchmarkPlanConstandFold1(b *testing.B) {
 
 func BenchmarkExecutorConstandFold1(b *testing.B) {
 	mp := mpool.MustNew("")
-	proc := testutil.NewProcessWithMPool(b, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(b, "", mp)
 	expr := generateFoldCase1()
 	proc.SetBaseProcessRunningStatus(true)
 	b.ResetTimer()
@@ -558,7 +558,7 @@ func BenchmarkExecutorConstandFold1(b *testing.B) {
 
 func BenchmarkExecutorConstandFold2_Reuse(b *testing.B) {
 	mp := mpool.MustNew("test")
-	proc := testutil.NewProcessWithMPool(b, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(b, "", mp)
 	proc.SetBaseProcessRunningStatus(true)
 	newParamForFoldCase2(proc)
 	expr := generateFoldCase2()
@@ -582,7 +582,7 @@ func BenchmarkExecutorConstandFold2_Reuse(b *testing.B) {
 
 func BenchmarkExecutorConstandFold2_NoFree(b *testing.B) {
 	mp := mpool.MustNew("test")
-	proc := testutil.NewProcessWithMPool(b, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(b, "", mp)
 	newParamForFoldCase2(proc)
 	expr := generateFoldCase2()
 	proc.SetBaseProcessRunningStatus(true)
@@ -835,7 +835,7 @@ func TestConstantTranspose(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer func() { require.Equal(t, int64(0), mp.CurrNB()) }()
 
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	int32Type := types.T_int32.ToType()
 	boolType := types.T_bool.ToType()
 
@@ -1129,12 +1129,23 @@ func TestConstantTranspose(t *testing.T) {
 	target := &plan.Expr{Typ: colExpr.Typ, Expr: &plan.Expr_T{T: &plan.TargetType{}}}
 	wideParam := plan2.DeepCopyExpr(param)
 	wideParam.Typ.Id = int32(types.T_int64)
-	for _, peer := range []*plan.Expr{makeConstExpr(42), makeAddExpr(makeConstExpr(40), makeConstExpr(2)), bind(t, "cast", wideParam, target)} {
+	for _, peer := range []*plan.Expr{makeConstExpr(42), bind(t, "cast", makeAddExpr(makeConstExpr(40), makeConstExpr(2)), target), bind(t, "cast", wideParam, target)} {
 		input := bind(t, "<=", peer, colExpr)
 		result, err := plan2.ConstantTranspose(input, proc)
 		require.NoError(t, err)
 		require.Equal(t, bind(t, ">=", colExpr, peer), result, "peer domain must stay executable")
 	}
+	t.Run("widened_arithmetic_keeps_column_cast", func(t *testing.T) {
+		peer := makeAddExpr(makeConstExpr(40), makeConstExpr(2))
+		require.Equal(t, int32(types.T_int64), peer.Typ.Id)
+		input := bind(t, "<=", peer, colExpr)
+		require.Equal(t, "cast", input.GetF().Args[1].GetF().Func.ObjName)
+		before := plan2.DeepCopyExpr(input)
+		result, err := plan2.ConstantTranspose(input, proc)
+		require.NoError(t, err)
+		require.Same(t, input, result, "a widened comparison has no bare column to transpose")
+		require.Equal(t, before, input)
+	})
 
 	// Equality direction must preserve typed NULL and executable parameter/cast domains.
 	nullPeer := makeConstExpr(0)

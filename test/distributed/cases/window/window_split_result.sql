@@ -52,4 +52,15 @@ from (
     from t_win_split
 ) w;
 
+-- A peer spans the output-chunk boundary; the full frame and cumulative
+-- RANGE must both retain their aggregate state across chunks.
+select id, total, peer_count
+from (
+    select id, sum(v) over () as total,
+           count(*) over (order by (id - 1) div 3) as peer_count
+    from t_win_split
+) w
+where peer_count in (3, 8193, 9000) and id in (1, 8192, 8193, 9000)
+order by id;
+
 drop database window_split_result;

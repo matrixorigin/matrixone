@@ -16,6 +16,10 @@ package catalog
 
 import (
 	"bytes"
+	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"math"
 	"testing"
 
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
@@ -493,4 +497,88 @@ func TestCoverage_SystemSchemas_Init(t *testing.T) {
 func TestCoverage_Constants(t *testing.T) {
 	assert.Equal(t, uint32(0), TenantSysID)
 	assert.Equal(t, "_ModelSchema", ModelSchemaName)
+}
+
+func TestDomainSchemaRoundTrip(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		oid    types.T
+		domain string
+	}{
+		{"empty enum", types.T_enum, ""}, {"empty set", types.T_uint64, ","}, {"enum", types.T_enum, "red,blue"}, {"set", types.T_uint64, "red,blue"}, {"uint64", types.T_uint64, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			source := NewEmptySchema("domains")
+			require.NoError(t, source.AppendPKCol("id", types.T_int32.ToType(), 0))
+			col := colDefFromPlan(&plan.ColDef{Name: "value", Typ: plan.Type{Id: int32(tc.oid), Enumvalues: tc.domain}, Default: &plan.Default{NullAbility: true}}, 1, 1)
+			require.Equal(t, tc.domain, col.EnumValues)
+			require.NoError(t, source.AppendColDef(col))
+			require.NoError(t, source.Finalize(false))
+			encoded, err := source.Marshal()
+			require.NoError(t, err)
+			recovered := NewEmptySchema("")
+			_, err = recovered.ReadFromWithVersion(bytes.NewReader(encoded), IOET_WALTxnCommand_Table_CurrVer)
+			require.NoError(t, err)
+			for _, schema := range []*Schema{source, source.Clone(), recovered} {
+				defs, err := SchemaToDefs(schema)
+				require.NoError(t, err)
+				restored, err := DefsToSchema("domains", defs)
+				require.NoError(t, err)
+				require.Equal(t, tc.domain, restored.ColDefs[1].EnumValues)
+				require.Equal(t, tc.oid, restored.ColDefs[1].Type.Oid)
+			}
+		})
+	}
+}
+
+func TestSchemaSequenceLimit(t *testing.T) {
+	schema := NewEmptySchema("wide")
+	for i := 0; i < objectio.SEQNUM_UPPER; i++ {
+		require.NoError(t, schema.AppendCol(fmt.Sprintf("c%d", i), types.T_int32.ToType()))
+	}
+	schema.ColDefs[len(schema.ColDefs)-1].Hidden = true
+	require.NoError(t, schema.Finalize(false))
+	require.Equal(t, uint16(objectio.SEQNUM_UPPER-1), schema.ColDefs[objectio.SEQNUM_UPPER-1].SeqNum)
+	require.Equal(t, uint16(objectio.SEQNUM_ROWID), schema.PhyAddrKey.SeqNum)
+	encoded, err := schema.Marshal()
+	require.NoError(t, err)
+	restored := NewEmptySchema("")
+	_, err = restored.ReadFromWithVersion(bytes.NewReader(encoded), IOET_WALTxnCommand_Table_CurrVer)
+	require.NoError(t, err)
+	require.Equal(t, schema.AllSeqnums(), restored.AllSeqnums())
+	// Recovery validates ordinary IDs rather than applying the SQL quota.
+	restored.ColDefs[0].SeqNum = objectio.SEQNUM_UPPER
+	require.True(t, moerr.IsMoErrCode(restored.Finalize(true), moerr.ErrTooManyFields))
+	overflow := NewEmptySchema("overflow")
+	overflow.ColDefs = make([]*ColDef, objectio.SEQNUM_UPPER+1)
+	for i := range overflow.ColDefs {
+		overflow.ColDefs[i] = &ColDef{Name: fmt.Sprintf("c%d", i), Idx: i, Type: types.T_int32.ToType()}
+	}
+	require.True(t, moerr.IsMoErrCode(overflow.Finalize(false), moerr.ErrTooManyFields))
+	require.Len(t, overflow.ColDefs, objectio.SEQNUM_UPPER+1)
+	require.Empty(t, overflow.SeqnumMap, "rejected initialization must not publish partial mappings")
+}
+
+func TestSchemaAddColumnSequenceExhaustion(t *testing.T) {
+	for _, next := range []uint32{objectio.SEQNUM_UPPER - 1, objectio.SEQNUM_UPPER, 65536, math.MaxUint32} {
+		t.Run(fmt.Sprint(next), func(t *testing.T) {
+			schema := MockSchema(2, 0)
+			schema.Extra.NextColSeqnum = next
+			before, err := schema.Marshal()
+			require.NoError(t, err)
+			err = schema.ApplyAlterTable(api.NewAddColumnReq(0, 0, "extra", types.NewProtoType(types.T_int32), 2))
+			if next < objectio.SEQNUM_UPPER {
+				require.NoError(t, err)
+				require.Equal(t, uint16(next), schema.GetSeqnum("extra"))
+				require.Equal(t, uint32(objectio.SEQNUM_UPPER), schema.Extra.NextColSeqnum)
+			} else {
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrTooManyFields))
+				after, e := schema.Marshal()
+				require.NoError(t, e)
+				require.Equal(t, before, after, "exhausted ADD must leave schema unchanged")
+				require.NoError(t, schema.ApplyAlterTable(api.NewRemoveColumnReq(0, 0, 1, 1)))
+				require.Equal(t, next, schema.Extra.NextColSeqnum, "DROP cannot recycle IDs")
+			}
+		})
+	}
 }

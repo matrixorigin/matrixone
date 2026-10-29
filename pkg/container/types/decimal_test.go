@@ -15,6 +15,7 @@
 package types
 
 import (
+	"bytes"
 	"fmt"
 	"math"
 	"math/big"
@@ -716,12 +717,12 @@ func TestDecimal128FromFloat64KeepsDecimalRoundingAndRangeChecks(t *testing.T) {
 	for _, width := range []int32{18, 19} {
 		result, err = Decimal128FromFloat64(1.005, width, 2)
 		require.NoError(t, err)
-		require.Equal(t, "1.00", result.Format(2))
+		require.Equal(t, "1.01", result.Format(2))
 	}
 
 	result, err = Decimal128FromFloat64(1.0000000000000002, 38, 18)
 	require.NoError(t, err)
-	require.Equal(t, "1.000000000000000256", result.Format(18))
+	require.Equal(t, "1.000000000000000200", result.Format(18))
 
 	_, err = Decimal128FromFloat64(1000000000001, 18, 6)
 	require.Error(t, err)
@@ -1618,6 +1619,65 @@ func TestDecimalFromCoefficient(t *testing.T) {
 			}
 		})
 	}
+	t.Run("128-words-and-input", func(t *testing.T) {
+		for _, tc := range []struct {
+			name    string
+			digits  []byte
+			invalid bool
+		}{
+			{name: "nil"},
+			{name: "empty", digits: []byte{}},
+			{name: "zero18", digits: []byte(strings.Repeat("0", 18))},
+			{name: "leading-zero18", digits: []byte("001732206349000167")},
+			{name: "microseconds16", digits: []byte("1732206349000167")},
+			{name: "max18", digits: []byte(strings.Repeat("9", 18))},
+			{name: "min19", digits: []byte("1000000000000000000")},
+			{name: "max19", digits: []byte(strings.Repeat("9", 19))},
+			{name: "low-word-carry20", digits: []byte("18446744073709551616")},
+			{name: "leading-zero38", digits: []byte(strings.Repeat("0", 22) + "1732206349000167")},
+			{name: "max38", digits: []byte(strings.Repeat("9", 38))},
+			{name: "zero39-rejected-by-width", digits: []byte(strings.Repeat("0", 39)), invalid: true},
+			{name: "max39-rejected-by-width", digits: []byte(strings.Repeat("9", 39)), invalid: true},
+			{name: "below-digit", digits: []byte("/"), invalid: true},
+			{name: "above-digit", digits: []byte(":"), invalid: true},
+			{name: "invalid-last18", digits: []byte(strings.Repeat("1", 17) + "x"), invalid: true},
+			{name: "invalid-first18", digits: []byte("x" + strings.Repeat("1", 17)), invalid: true},
+			{name: "invalid-middle18", digits: []byte("12345678x123456789"), invalid: true},
+			{name: "plus-not-a-coefficient", digits: []byte("+1"), invalid: true},
+			{name: "minus-not-a-coefficient", digits: []byte("-1"), invalid: true},
+			{name: "point-not-a-coefficient", digits: []byte("1.2"), invalid: true},
+			{name: "exponent-not-a-coefficient", digits: []byte("1e2"), invalid: true},
+			{name: "space-not-ignored", digits: []byte("1 "), invalid: true},
+			{name: "NUL-not-ignored", digits: []byte{'1', 0, '2'}, invalid: true},
+			{name: "fullwidth-not-ASCII", digits: []byte("１２"), invalid: true},
+			{name: "Arabic-not-ASCII", digits: []byte("١٢"), invalid: true},
+			{name: "invalid-UTF8", digits: []byte{0xff}, invalid: true},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				before := bytes.Clone(tc.digits)
+				var want Decimal128
+				if !tc.invalid && len(tc.digits) > 0 {
+					// Standard-library integer arithmetic is independent of the
+					// production decimal parser, formatter and digit accumulator.
+					value, ok := new(big.Int).SetString(string(tc.digits), 10)
+					require.True(t, ok)
+					want = Decimal128{B0_63: value.Uint64(), B64_127: new(big.Int).Rsh(new(big.Int).Set(value), 64).Uint64()}
+				}
+				got, err := Decimal128FromCoefficient(tc.digits)
+				require.Equal(t, before, tc.digits, "coefficient input must not be modified")
+				if tc.invalid {
+					code, ok := moerr.GetMoErrCode(err)
+					require.True(t, ok)
+					require.Equal(t, uint16(20301), code)
+					require.EqualError(t, err, "invalid input: invalid Decimal128 coefficient")
+					require.Equal(t, Decimal128{}, got, "invalid input must not return a partial coefficient")
+				} else {
+					require.NoError(t, err)
+					require.Equal(t, want, got)
+				}
+			})
+		}
+	})
 }
 
 func TestDecimal64DivWidenedScale(t *testing.T) {
@@ -1691,5 +1751,169 @@ func BenchmarkDecimal256UnsignedDivision(b *testing.B) {
 				decimal256DivisionSink, _ = tc.x.Mod256(tc.y)
 			}
 		})
+	}
+}
+
+// Leading zeros of the integer part must not count toward the 38-digit
+// Decimal128 limit (issue #29841).
+func TestParseDecimal128LeadingZeroDoesNotConsumePrecision(t *testing.T) {
+	tiny := "0." + strings.Repeat("0", 37) + "1"
+	nines := "0." + strings.Repeat("9", 38)
+	for _, tc := range []struct {
+		input, want string
+	}{
+		{tiny, "0." + strings.Repeat("0", 37) + "1"},
+		{"." + strings.Repeat("0", 37) + "1", "0." + strings.Repeat("0", 37) + "1"},
+		{"000" + tiny, "0." + strings.Repeat("0", 37) + "1"},
+		{nines, nines},
+		{"-" + nines, "-" + nines},
+		{"-0." + strings.Repeat("0", 37) + "1", "-0." + strings.Repeat("0", 37) + "1"},
+		{"0", "0." + strings.Repeat("0", 38)},
+	} {
+		got, err := ParseDecimal128(tc.input, 38, 38)
+		if err != nil {
+			t.Fatalf("ParseDecimal128(%q, 38, 38) error: %v", tc.input, err)
+		}
+		if s := got.Format(38); s != tc.want {
+			t.Fatalf("ParseDecimal128(%q, 38, 38) = %s, want %s", tc.input, s, tc.want)
+		}
+	}
+	for _, tc := range []struct {
+		input string
+		width int32
+		scale int32
+		want  string
+	}{
+		{"00123.45", 10, 2, "123.45"},
+		{"0x1A", 10, 0, "26"},
+		{"007", 5, 0, "7"},
+	} {
+		got, err := ParseDecimal128(tc.input, tc.width, tc.scale)
+		if err != nil || got.Format(tc.scale) != tc.want {
+			t.Fatalf("ParseDecimal128(%q) = %s, %v; want %s", tc.input, got.Format(tc.scale), err, tc.want)
+		}
+	}
+	if _, err := ParseDecimal128("1."+strings.Repeat("0", 38), 38, 38); err == nil {
+		t.Fatal("1.0 must stay out of range for DECIMAL(38,38)")
+	}
+}
+
+// Discarded fractional digits must be rounded once to the column scale,
+// not first at the 38-digit parser limit and again at the scale.
+func TestParseDecimal128RoundsOnceWhenDownscaling(t *testing.T) {
+	zeros := strings.Repeat("0", 36)
+	ones := strings.Repeat("1", 38)
+	for _, tc := range []struct {
+		input string
+		width int32
+		scale int32
+		want  string
+	}{
+		// These inputs retain 38 significant digits before reaching the tail.
+		{"0." + ones + "4", 38, 38, "0." + ones},
+		{"0." + ones + "5", 38, 38, "0." + ones[:37] + "2"},
+		{"-0." + ones + "5", 38, 38, "-0." + ones[:37] + "2"},
+		{"0." + ones + "054e0", 38, 38, "0." + ones},
+		{"0." + ones[:37] + "45", 38, 37, "0." + ones[:37]},
+		{"-0." + ones[:37] + "45", 38, 37, "-0." + ones[:37]},
+		{"0." + strings.Repeat("9", 38) + "5", 38, 37, "1." + strings.Repeat("0", 37)},
+		{"0." + ones + "4e-1", 38, 38, "0.0" + ones[:37]},
+		{"0." + ones + "4 e-1", 38, 38, "0.0" + ones[:37]},
+		{"-0." + ones + "4+e-1", 38, 38, "-0.0" + ones[:37]},
+		{"0." + zeros + "145", 38, 37, "0." + zeros + "1"},
+		{"-0." + zeros + "145", 38, 37, "-0." + zeros + "1"},
+		{"0." + zeros + "149", 38, 37, "0." + zeros + "1"},
+		{"-0." + zeros + "149", 38, 37, "-0." + zeros + "1"},
+		{"0." + zeros + "144", 38, 37, "0." + zeros + "1"},
+		{"0." + zeros + "150", 38, 37, "0." + zeros + "2"},
+		{"0." + zeros + "15", 38, 37, "0." + zeros + "2"},
+		{"1.2345", 10, 2, "1.23"},
+		{"1.235", 10, 2, "1.24"},
+		{"-1.235", 10, 2, "-1.24"},
+		{"1.2349999999999999999999999999999999999999", 10, 2, "1.23"},
+		{"12.5e-1", 10, 1, "1.3"},
+		// exponent spellings of the same values must round once as well
+		{"0." + zeros + "145e0", 38, 37, "0." + zeros + "1"},
+		{"-0." + zeros + "145e0", 38, 37, "-0." + zeros + "1"},
+		{"0." + zeros + "149E+0", 38, 37, "0." + zeros + "1"},
+		{"-0." + zeros + "149E+0", 38, 37, "-0." + zeros + "1"},
+		{"0." + zeros + "144e0", 38, 37, "0." + zeros + "1"},
+		{"0." + zeros + "150e0", 38, 37, "0." + zeros + "2"},
+		{"0." + zeros + "0145e1", 38, 37, "0." + zeros + "1"},
+		{"145e-39", 38, 37, "0." + zeros + "1"},
+		{"-14.9e-38", 38, 37, "-0." + zeros + "1"},
+		// an exponent after more than 38 digits is still applied
+		{"0." + zeros + "145e1", 38, 37, "0." + zeros[1:] + "15"},
+		{"0." + zeros + "145e1", 38, 38, "0." + zeros[1:] + "145"},
+		{"0.1234" + strings.Repeat("9", 40), 10, 3, "0.123"},
+		{"0.1234" + strings.Repeat("9", 40) + "e1", 10, 2, "1.23"},
+	} {
+		got, err := ParseDecimal128(tc.input, tc.width, tc.scale)
+		require.NoError(t, err, tc.input)
+		require.Equal(t, tc.want, got.Format(tc.scale), tc.input)
+	}
+}
+
+func TestParseDecimal128PostRoundingRange(t *testing.T) {
+	max := strings.Repeat("9", 38)
+	for _, sign := range []string{"", "-"} {
+		got, err := ParseDecimal128(sign+max+".4", 38, 0)
+		require.NoError(t, err)
+		require.Equal(t, sign+max, got.Format(0))
+		got, err = ParseDecimal128(sign+"0."+max+"4", 38, 38)
+		require.NoError(t, err)
+		require.Equal(t, sign+"0."+max, got.Format(38))
+		for _, tail := range []string{"5", "7"} {
+			_, err = ParseDecimal128(sign+max+"."+tail, 38, 0)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+			_, err = ParseDecimal128(sign+"0."+max+tail, 38, 38)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+		}
+	}
+	for _, suffix := range []string{"4 e-", "4z"} {
+		_, err := ParseDecimal128("0."+strings.Repeat("1", 38)+suffix, 38, 38)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+	}
+}
+
+func TestFloatDecimalShortestRounding(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		value float64
+		scale int32
+		want  string
+	}{
+		{"positive tie", 1.005, 2, "1.01"},
+		{"next tie", 1.015, 2, "1.02"},
+		{"negative tie", -1.005, 2, "-1.01"},
+		{"negative next tie", -1.015, 2, "-1.02"},
+		{"below tie", math.Nextafter(1.005, 0), 2, "1.00"},
+		{"above tie", math.Nextafter(1.005, 2), 2, "1.01"},
+		{"binary tie", 0.125, 2, "0.13"},
+		{"ordinary fraction", 2.675, 2, "2.68"},
+		{"integer scale", -2.5, 0, "-3"},
+		{"small scientific", 1e-18, 18, "0.000000000000000001"},
+		{"leading zeros", 0.00010000000000000002, 18, "0.000100000000000000"},
+		{"subnormal", math.SmallestNonzeroFloat64, 18, "0.000000000000000000"},
+		{"negative zero", math.Copysign(0, -1), 2, "0.00"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a, err := Decimal64FromFloat64(tc.value, 18, tc.scale)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, a.Format(tc.scale))
+			b, err := Decimal128FromFloat64(tc.value, 38, tc.scale)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, b.Format(tc.scale))
+		})
+	}
+	for _, value := range []float64{999.995, -999.995, math.Inf(1), math.Inf(-1), math.NaN(), math.MaxFloat64} {
+		_, err := Decimal64FromFloat64(value, 5, 2)
+		require.Error(t, err)
+		_, err = Decimal128FromFloat64(value, 5, 2)
+		require.Error(t, err)
+	}
+	for _, target := range [][2]int32{{0, 0}, {19, 0}, {6, -1}, {5, 6}} {
+		_, err := Decimal64FromFloat64(1.234, target[0], target[1])
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
 	}
 }

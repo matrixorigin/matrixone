@@ -338,8 +338,8 @@ func (s *Scope) initDataSource(c *Compile) (err error) {
 		return nil
 	}
 
-	if s.DataSource.node != nil && s.DataSource.node.NodeType == plan.Node_VECTOR_INDEX_SCAN {
-		return c.compileVectorIndexScanDataSource(s)
+	if s.DataSource.node != nil && s.DataSource.node.NodeType == plan.Node_INDEX_SEARCH_SCAN {
+		return c.compileIndexSearchScanDataSource(s)
 	}
 	return c.compileTableScanDataSource(s)
 }
@@ -361,7 +361,7 @@ func (s *Scope) Run(c *Compile) (err error) {
 				zap.String("sql", commonutil.Abbreviate(c.sql, 500)),
 				zap.String("error", err.Error()))
 		}
-		err, _ = normalizeScopeRunError(err, s.Proc.Ctx, scopeRunQueryContext(s.Proc))
+		err, _ = process.NormalizePipelineRunError(err, s.Proc.Ctx, scopeRunQueryContext(s.Proc))
 		if p != nil {
 			p.Cleanup(s.Proc, err != nil, c.isPrepare, err)
 			// The pipeline owns and closes the execution reader. A prepared
@@ -910,7 +910,7 @@ func (s *Scope) RemoteRun(c *Compile) error {
 
 	p := pipeline.New(0, nil, s.RootOp)
 	sender, err := s.remoteRun(c)
-	runErr, _ := normalizeScopeRunError(err, s.Proc.Ctx, scopeRunQueryContext(s.Proc))
+	runErr, _ := process.NormalizePipelineRunError(err, s.Proc.Ctx, scopeRunQueryContext(s.Proc))
 	// Publish the immediate outcome before waiting for remote cleanup or
 	// canceling this scope. Consumers can participate in that cleanup; late
 	// failures remain in the joined scope result below.
@@ -1046,12 +1046,12 @@ func (s *Scope) ParallelRun(c *Compile) (err error) {
 			rawErr := err
 			queryCtx := scopeRunQueryContext(s.Proc)
 			var normalized bool
-			err, normalized = normalizeScopeRunError(
+			err, normalized = process.NormalizePipelineRunError(
 				err,
 				s.Proc.Ctx,
 				queryCtx,
 			)
-			if isScopeCancellationError(rawErr) {
+			if process.IsPipelineCancellationError(rawErr) {
 				reportParallelScopeBuildCancellation(s, rawErr, err, normalized, queryCtx)
 			}
 			if err == nil {
@@ -1362,7 +1362,8 @@ func validateRequiredVectorMembership(spec *plan.RuntimeFilterSpec, msg message.
 	if err := keys.UnmarshalBinary(msg.Data); err != nil {
 		return err
 	}
-	if keys.Length() != int(msg.Card) || keys.HasNull() || keys.GetType().Oid != types.T(spec.Expr.Typ.Id) {
+	if keys.Length() != int(msg.Card) || keys.HasNull() ||
+		!types.MembershipKeyTypeCompatible(keys.GetType().Oid, types.T(spec.Expr.Typ.Id)) {
 		return moerr.NewInvalidStateNoCtx("required vector membership has invalid cardinality or key type")
 	}
 	return nil
@@ -1636,7 +1637,7 @@ func (s *Scope) sendNotifyMessageWithFactory(
 ) {
 	// if context has done, it means the user or other part of the pipeline stops this query.
 	closeWithError := func(err error, reg *process.WaitRegister, sender *messageSenderOnClient) {
-		err, _ = normalizeScopeRunError(err, s.Proc.Ctx, scopeRunQueryContext(s.Proc))
+		err, _ = process.NormalizePipelineRunError(err, s.Proc.Ctx, scopeRunQueryContext(s.Proc))
 		// Publish durable terminal evidence before waking canceled consumers.
 		sendRemoteNotifyCleanupTerminal(s.Proc, reg, err)
 		err = finalizeRemoteResult(err, sender)
@@ -1900,11 +1901,8 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 	if err != nil {
 		return
 	}
-	if s.DataSource.node != nil && s.DataSource.node.NodeType == plan.Node_VECTOR_INDEX_SCAN {
-		if emptyScan {
-			return emptyScanReaders(s.NodeInfo.Mcpu), nil
-		}
-		return s.buildVectorIndexReaders(runtimeFilterList)
+	if s.DataSource.node != nil && s.DataSource.node.NodeType == plan.Node_INDEX_SEARCH_SCAN {
+		return s.buildVectorIndexReaders(runtimeFilterList, emptyScan)
 	}
 	for i := range s.DataSource.FilterList {
 		if plan2.IsFalseExpr(s.DataSource.FilterList[i]) {
@@ -2114,9 +2112,11 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 	return
 }
 
-func (s *Scope) buildVectorIndexReaders(runtimeFilters []receivedRuntimeFilter) ([]engine.Reader, error) {
+// buildVectorIndexReaders builds the readers of an index search scan; dropped
+// means a runtime filter proved the scan empty.
+func (s *Scope) buildVectorIndexReaders(runtimeFilters []receivedRuntimeFilter, dropped bool) ([]engine.Reader, error) {
 	node := s.DataSource.node
-	spec := node.GetVectorIndexScan()
+	spec := node.GetIndexSearchScan()
 	if spec == nil || spec.GetIndex() == nil {
 		return nil, moerr.NewInvalidInputNoCtx("vector index scan is missing index metadata")
 	}
@@ -2146,7 +2146,16 @@ func (s *Scope) buildVectorIndexReaders(runtimeFilters []receivedRuntimeFilter) 
 	if err != nil {
 		return nil, err
 	}
-	if !hasQuery {
+	if err := vectorscan.ApplySearchKnobs(&req, spec, s.Proc.GetResolveVariableFunc()); err != nil {
+		return nil, err
+	}
+	req.MembershipFilterPassed = !hasMembership && hasMembershipFilterSpec(s.DataSource.RuntimeFilterSpecs)
+	if dropped || !hasQuery {
+		if hooks, ok := searcher.Search().(searchplugin.EmptyScanHooks); ok {
+			if err := hooks.EmptyScan(s.Proc, spec, req); err != nil {
+				return nil, err
+			}
+		}
 		return emptyScanReaders(s.NodeInfo.Mcpu), nil
 	}
 	if factory, ok := searcher.Search().(searchplugin.ParallelHooks); ok && req.MembershipFilterRequired {
@@ -2172,6 +2181,16 @@ func (s *Scope) buildVectorIndexReaders(runtimeFilters []receivedRuntimeFilter) 
 		return nil, err
 	}
 	return []engine.Reader{reader}, nil
+}
+
+// hasMembershipFilterSpec reports whether specs plan a membership runtime filter.
+func hasMembershipFilterSpec(specs []*plan.RuntimeFilterSpec) bool {
+	for _, spec := range specs {
+		if spec != nil && spec.UseMembershipFilter {
+			return true
+		}
+	}
+	return false
 }
 
 func emptyScanReaders(count int) []engine.Reader {

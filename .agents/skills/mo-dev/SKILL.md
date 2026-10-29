@@ -52,6 +52,7 @@ Read a reference when its trigger applies:
 | Need | Read |
 |---|---|
 | Change/risk map, efficient validation order, CI/local evidence reuse | [references/validation-evidence.md](references/validation-evidence.md) |
+| Create/update a GitHub PR or issue, or diagnose a PR-description/commit-message check | [references/github-delivery.md](references/github-delivery.md) |
 | Credible shared-state/lifecycle/synchronization/timing failure mode | [references/race-validation.md](references/race-validation.md) |
 | Large/complex feature or major refactor; design document review (RFC optional) | [references/feature-design-review.md](references/feature-design-review.md) |
 | UT/BVT purpose, orthogonality, fixture reuse, cost/flakiness, result and execution evidence | [references/testing-contract.md](references/testing-contract.md) |
@@ -59,6 +60,7 @@ Read a reference when its trigger applies:
 | `colexec`/`process`/pipeline lifecycle, typed terminal signals, distributed dispatch/receiver hangs | [references/operator-pipeline.md](references/operator-pipeline.md) |
 | Planner/explain/rewrite correctness, public reachability, independent black-/white-box oracles | [references/counterexample-testing.md](references/counterexample-testing.md) |
 | Vector/fulltext algorithm registry, build-tag registration, ISCP/CDC and index-plugin review | [references/index-plugin.md](references/index-plugin.md) |
+| RPC/plan/pipeline encoding, persisted-state format, upgrade steps, `MORPCVersion` (shutdown upgrade only; when to bump) | [references/upgrade-compatibility.md](references/upgrade-compatibility.md) |
 
 ## Enforcement gates
 
@@ -239,6 +241,7 @@ Before delivery, the record must show:
 □ UT/BVT and specialized-domain decisions recorded
 □ every required proof is validly reused or passed; gaps/pending work are explicit
 □ generated/delivery artifacts, diff stat, and unintended files checked
+□ PR/issue delivery in scope: current-template and LF-body preflight passed; verify remote body after publication
 □ `mo-self-review` has zero unresolved blockers
 ```
 

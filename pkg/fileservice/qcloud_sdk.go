@@ -359,7 +359,7 @@ func (a *QCloudSDK) Write(
 				sizeHint,
 				expire,
 			)
-		}, maxRetryAttemps, IsRetryableError)
+		}, maxRetryAttemps, isRetryableQCloudPutError)
 		if err != nil {
 			return err
 		}
@@ -392,13 +392,32 @@ func (a *QCloudSDK) Write(
 				sizeHint,
 				expire,
 			)
-		}, maxRetryAttemps, IsRetryableError)
+		}, maxRetryAttemps, isRetryableQCloudPutError)
 		if err != nil {
 			return err
 		}
 	}
 
 	return
+}
+
+// Only Write owns a replayable PUT body. Keep HTTP EOF recovery local to it,
+// without making source-reader EOF or state-creating multipart POST retryable.
+func isRetryableQCloudPutError(err error) bool {
+	if IsRetryableError(err) {
+		return true
+	}
+	var retryErr *cos.RetryError
+	if errors.As(err, &retryErr) {
+		for _, innerErr := range retryErr.Errs {
+			if isRetryableQCloudPutError(innerErr) {
+				return true
+			}
+		}
+		return false
+	}
+	var httpErr *url.Error
+	return errors.As(err, &httpErr) && httpErr.Op == "Put" && errors.Is(httpErr.Err, io.EOF)
 }
 
 func (a *QCloudSDK) SupportsParallelMultipart() bool {
@@ -999,11 +1018,9 @@ func (a *QCloudSDK) getObjectWithIdentity(
 					}
 					return &readCloser{
 						r: resp.Body,
-						closeFunc: func() error {
-							// drain
-							io.Copy(io.Discard, resp.Body)
-							return resp.Body.Close()
-						},
+						// A caller may stop after a boundary probe. Let the transport
+						// manage connection reuse instead of downloading the remaining object.
+						closeFunc: resp.Body.Close,
 					}, nil
 				},
 			)

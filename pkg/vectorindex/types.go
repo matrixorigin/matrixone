@@ -18,6 +18,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"github.com/bytedance/sonic"
+	"github.com/matrixorigin/matrixone/pkg/common/docfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/common/system"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -150,6 +151,7 @@ type IndexTableConfig struct {
 	SrcTable      string `json:"src"`
 	MetadataTable string `json:"metadata"`
 	IndexTable    string `json:"index"`
+	DictTable     string `json:"dict,omitempty"`
 	PKey          string `json:"pkey"`
 	KeyPart       string `json:"part"`
 	OrigFuncName  string `json:"orig_func_name"`
@@ -162,6 +164,7 @@ type IndexTableConfig struct {
 	Nprobe             uint     `json:"nprobe"`
 	PKeyType           int32    `json:"pktype"`
 	KeyPartType        int32    `json:"parttype"`
+	KeyPartWidth       int32    `json:"partwidth,omitempty"`
 	KmeansTrainPercent float64  `json:"kmeans_train_percent"`
 	KmeansMaxIteration int64    `json:"kmeans_max_iteration"`
 	Limit              uint64   `json:"limit"`
@@ -171,14 +174,6 @@ type IndexTableConfig struct {
 	UpperBound         float64  `json:"upper_bound"`
 	IncludeColumns     []string `json:"include_columns,omitempty"`
 	IncludeColumnTypes []int32  `json:"include_column_types,omitempty"`
-
-	// PostFilterOverFetch tells the search to grow the candidate budget so that
-	// k rows still survive a residual filter applied after the search. The plan
-	// sets it when a residual post-filter is present but the LIMIT is a prepared
-	// parameter (LIMIT ?), whose value is unknown until EXECUTE — the search
-	// resolves k there and over-fetches via pkg/vectorindex/overfetch. A literal
-	// LIMIT is over-fetched at plan time instead, and leaves this false.
-	PostFilterOverFetch bool `json:"post_filter_overfetch,omitempty"`
 
 	// GPU related
 	BatchWindow int64 `json:"batch_window"`
@@ -196,6 +191,7 @@ type HnswParam struct {
 	EfSearch         string `json:"ef_search"`
 	Async            string `json:"async"`
 	MaxIndexCapacity string `json:"max_index_capacity"`
+	Quantization     string `json:"quantization"`
 }
 
 // IVF specified parameters
@@ -317,6 +313,21 @@ type RuntimeConfig struct {
 	OrigFuncName      string
 	BackgroundQueries []*plan.Query
 
+	// Membership, when non-nil, restricts an HNSW, CAGRA or IVF-PQ search to the
+	// primary keys it holds; MembershipCount is the number of keys. With Iterative (mode=iterative)
+	// an HNSW membership search, or a CAGRA / IVF-PQ search, widens in rounds: ResultLimit is the
+	// number of rows the query returns, MaxLimit caps Limit (0 = the algorithm's
+	// default) and MaxProbe caps Probe (0 = every list).
+	Membership      docfilter.MembershipFilter
+	MembershipCount uint64
+	// ExactThreshold, when non-zero, is the largest MembershipCount an HNSW search scans
+	// instead of traversing the graph.
+	ExactThreshold uint64
+	Iterative      bool
+	ResultLimit    uint
+	MaxLimit       uint
+	MaxProbe       uint
+
 	// FilterJSON is a JSON predicate array forwarded verbatim to CGo
 	// (gpu_<idx>_search_with_filter). Empty → unfiltered search path.
 	// Go never parses this payload; it's produced by the SQL layer and
@@ -353,18 +364,17 @@ type RuntimeConfig struct {
 	//
 	// RuntimeConfig is passed to Search by value. Pointer fields such as
 	// IncludeResult and SearchCursor can be mutated by Search and observed by
-	// the caller. Value fields such as SearchRoundLimit and BucketExpandStep are
+	// the caller. Value fields such as SearchRoundLimit are
 	// copied into Search and do not propagate caller-visible mutations back out.
 	RequestedIncludeColumns []string
 	PushdownFilterSQL       string
-	// PushdownFilters is the typed VECTOR_INDEX_SCAN equivalent of
+	// PushdownFilters is the typed INDEX_SEARCH_SCAN equivalent of
 	// PushdownFilterSQL. Expressions are already rebound to entries-table
 	// columns and are applied before the physical round top-k.
 	PushdownFilters  []*plan.Expr
 	IncludeResult    *IvfIncludeResult
 	TargetRows       uint
 	SearchRoundLimit uint
-	BucketExpandStep uint
 	SearchCursor     *IvfSearchCursor
 	// IvfPrepareRouteOnly seals centroid routing without opening entry readers.
 	IvfPrepareRouteOnly bool
@@ -384,6 +394,13 @@ type RuntimeConfig struct {
 	// captured under the cache entry's read lock during Search/SearchInto. The cache reads
 	// it back to decide eviction without touching the underlying algo unsynchronized.
 	EmptyGeneration *bool
+
+	// SearchDFCutoff is the fulltext2 high-df term cutoff for this query: a ranked
+	// bag-of-words term whose global df/N reaches this fraction is dropped from the BM25
+	// search (0 = off). It is query-scoped and MUST travel here, not be cached on the shared
+	// index object, because different sessions/queries can set different cutoffs against the
+	// same warm cache entry. Other algorithms ignore it.
+	SearchDFCutoff float64
 }
 
 type IvfIncludeResult struct {
@@ -425,11 +442,11 @@ type IvfSearchCursor struct {
 // ColumnBuffer (the typed, box-free streaming key batch used by Emit) lives in
 // columnbuffer.go.
 
-type VectorIndexCdc[T types.RealNumbers] struct {
+type VectorIndexCdc[T types.ArrayElement] struct {
 	Data []VectorIndexCdcEntry[T] `json:"cdc"`
 }
 
-func NewVectorIndexCdc[T types.RealNumbers](capacity int) *VectorIndexCdc[T] {
+func NewVectorIndexCdc[T types.ArrayElement](capacity int) *VectorIndexCdc[T] {
 	return &VectorIndexCdc[T]{
 		Data: make([]VectorIndexCdcEntry[T], 0, capacity),
 	}
@@ -491,7 +508,7 @@ func (h *VectorIndexCdc[T]) ToJson() (string, error) {
 	return string(b), nil
 }
 
-type VectorIndexCdcEntry[T types.RealNumbers] struct {
+type VectorIndexCdcEntry[T types.ArrayElement] struct {
 	Type string `json:"t"` // I - INSERT, D - DELETE, U - UPSERT
 	PKey int64  `json:"pk"`
 	Vec  []T    `json:"v,omitempty"`

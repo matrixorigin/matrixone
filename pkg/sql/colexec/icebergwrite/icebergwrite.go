@@ -79,6 +79,9 @@ func (w *IcebergWrite) Call(proc *process.Process) (vm.CallResult, error) {
 	if err != nil {
 		return result, err
 	}
+	if result.Status == vm.ExecYield {
+		return result, nil
+	}
 	if result.Batch == nil {
 		if w.ctr.opened && !w.ctr.finished {
 			if err := w.Coordinator.Commit(proc.Ctx); err != nil {
@@ -131,10 +134,6 @@ func (w *IcebergWrite) Free(proc *process.Process, pipelineFailed bool, err erro
 	w.input = vm.CallResult{}
 	w.Coordinator = nil
 	w.coordinatorFromFactory = false
-}
-
-func (w *IcebergWrite) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
-	return input, nil
 }
 
 func (w *IcebergWrite) abortOpen(proc *process.Process, cause error) {

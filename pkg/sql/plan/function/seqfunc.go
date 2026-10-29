@@ -195,6 +195,9 @@ func requireSequence(ctx context.Context, rel engine.Relation) error {
 // Return advanced last_seq_num.
 
 func Nextval(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	if err = rejectSequenceMutationInReadOnly(proc); err != nil {
+		return err
+	}
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	ivec := vector.GenerateFunctionStrParameter(ivecs[0])
 	var databases vector.FunctionParameterWrapper[types.Varlena]
@@ -240,6 +243,27 @@ func Nextval(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *
 				return
 			}
 		}
+	}
+	return nil
+}
+
+// rejectSequenceMutationInReadOnly enforces the READ ONLY transaction access
+// mode at the sequence mutation boundary. Frontend admission cannot see every
+// carrier of a sequence builtin — a temporary-target INSERT keeps its target
+// exemption even when NEXTVAL hides in its SELECT arm, and stored views
+// expand only at binding — so the frontend gate stamps the effective caller
+// access mode (active transaction's declared mode, else the session
+// transaction_read_only default) onto the shared process Base for every
+// user statement. A stamped read-only mode rejects the mutation with
+// ERROR 1792 before any counter write; an unstamped (zero-value) mode —
+// internal, background or remote execution — keeps its previous behavior,
+// and session-local CURRVAL/LASTVAL do not pass through here.
+func rejectSequenceMutationInReadOnly(proc *process.Process) error {
+	if proc == nil || proc.Ctx == nil {
+		return nil
+	}
+	if proc.ReadOnlyTxnAccessMode() {
+		return moerr.NewCantExecuteInReadOnlyTransaction(proc.Ctx)
 	}
 	return nil
 }
@@ -441,6 +465,9 @@ func setIsCalled[T constraints.Integer](proc *process.Process, rel engine.Relati
 }
 
 func Setval(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	if err = rejectSequenceMutationInReadOnly(proc); err != nil {
+		return err
+	}
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	tblnames := vector.GenerateFunctionStrParameter(ivecs[0])
 	setnums := vector.GenerateFunctionStrParameter(ivecs[1])
@@ -521,6 +548,10 @@ func setval(tblname, setnum string, iscalled bool, db string, proc *process.Proc
 		return "", moerr.NewInternalError(proc.Ctx, "Failed to get sequence meta data.")
 	}
 	values := _values[0]
+	prevCalled, _ := values[6].(bool)
+	// Preserve the established called-state contract. The third argument may
+	// mark a fresh sequence called, but cannot reset an already-called one.
+	storedCalled := prevCalled || !iscalled
 
 	switch values[0].(type) {
 	case int16:
@@ -530,20 +561,20 @@ func setval(tblname, setnum string, iscalled bool, db string, proc *process.Proc
 		if err != nil {
 			return "", err
 		}
-		if setnum < int64(minv) || setnum > int64(maxv) {
+		if setnum < math.MinInt16 || setnum > math.MaxInt16 || setnum < int64(minv) || setnum > int64(maxv) {
 			return "", moerr.NewInternalError(proc.Ctx, "Set value is not in range (minvalue, maxvlue).")
 		}
-		return setVal(proc, int16(setnum), iscalled, rel, db, tblname)
+		return setVal(proc, int16(setnum), iscalled, storedCalled, rel, db, tblname)
 	case int32:
 		minv, maxv := values[1].(int32), values[2].(int32)
 		setnum, err := strconv.ParseInt(setnum, 10, 64)
 		if err != nil {
 			return "", err
 		}
-		if setnum < int64(minv) || setnum > int64(maxv) {
+		if setnum < math.MinInt32 || setnum > math.MaxInt32 || setnum < int64(minv) || setnum > int64(maxv) {
 			return "", moerr.NewInternalError(proc.Ctx, "Set value is not in range (minvalue, maxvlue).")
 		}
-		return setVal(proc, int32(setnum), iscalled, rel, db, tblname)
+		return setVal(proc, int32(setnum), iscalled, storedCalled, rel, db, tblname)
 	case int64:
 		minv, maxv := values[1].(int64), values[2].(int64)
 		setnum, err := strconv.ParseInt(setnum, 10, 64)
@@ -553,27 +584,27 @@ func setval(tblname, setnum string, iscalled bool, db string, proc *process.Proc
 		if setnum < minv || setnum > maxv {
 			return "", moerr.NewInternalError(proc.Ctx, "Set value is not in range (minvalue, maxvlue).")
 		}
-		return setVal(proc, setnum, iscalled, rel, db, tblname)
+		return setVal(proc, setnum, iscalled, storedCalled, rel, db, tblname)
 	case uint16:
 		minv, maxv := values[1].(uint16), values[2].(uint16)
 		setnum, err := strconv.ParseUint(setnum, 10, 64)
 		if err != nil {
 			return "", err
 		}
-		if setnum < uint64(minv) || setnum > uint64(maxv) {
+		if setnum > math.MaxUint16 || setnum < uint64(minv) || setnum > uint64(maxv) {
 			return "", moerr.NewInternalError(proc.Ctx, "Set value is not in range (minvalue, maxvlue).")
 		}
-		return setVal(proc, uint16(setnum), iscalled, rel, db, tblname)
+		return setVal(proc, uint16(setnum), iscalled, storedCalled, rel, db, tblname)
 	case uint32:
 		minv, maxv := values[1].(uint32), values[2].(uint32)
 		setnum, err := strconv.ParseUint(setnum, 10, 64)
 		if err != nil {
 			return "", err
 		}
-		if setnum < uint64(minv) || setnum > uint64(maxv) {
+		if setnum > math.MaxUint32 || setnum < uint64(minv) || setnum > uint64(maxv) {
 			return "", moerr.NewInternalError(proc.Ctx, "Set value is not in range (minvalue, maxvlue).")
 		}
-		return setVal(proc, uint32(setnum), iscalled, rel, db, tblname)
+		return setVal(proc, uint32(setnum), iscalled, storedCalled, rel, db, tblname)
 	case uint64:
 		minv, maxv := values[1].(uint64), values[2].(uint64)
 		setnum, err := strconv.ParseUint(setnum, 10, 64)
@@ -583,13 +614,17 @@ func setval(tblname, setnum string, iscalled bool, db string, proc *process.Proc
 		if setnum < minv || setnum > maxv {
 			return "", moerr.NewInternalError(proc.Ctx, "Set value is not in range (minvalue, maxvlue).")
 		}
-		return setVal(proc, setnum, iscalled, rel, db, tblname)
+		return setVal(proc, setnum, iscalled, storedCalled, rel, db, tblname)
 	}
 	return "", moerr.NewInternalError(proc.Ctx, "Wrong types of sequence number or failed to read the sequence table")
 }
 
-func setVal[T constraints.Integer](proc *process.Process, setv T, setisCalled bool, rel engine.Relation, db, tbl string) (string, error) {
-	_, err := sequenceSQL(proc, db, fmt.Sprintf("update %s set last_seq_num = %d", sequenceTableName(db, tbl), setv))
+func setVal[T constraints.Integer](proc *process.Process, setv T, setisCalled, storedCalled bool, rel engine.Relation, db, tbl string) (string, error) {
+	// Assign the value and called flag atomically in the caller's transaction.
+	// NEXTVAL advances when storedCalled is true. SETVAL(n, true) returns n on
+	// the next NEXTVAL only while the sequence was still uncalled; once marked
+	// called, both third-argument values retain the existing advancing behavior.
+	_, err := sequenceSQL(proc, db, fmt.Sprintf("update %s set last_seq_num = %d, is_called = %t", sequenceTableName(db, tbl), setv, storedCalled))
 	if err != nil {
 		return "", err
 	}

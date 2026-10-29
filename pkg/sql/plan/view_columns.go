@@ -38,12 +38,23 @@ func (builder *QueryBuilder) buildViewColumns(tbl *tree.TableFunction, ctx *Bind
 	if functionName == SubscriptionViewColumnsFunctionName {
 		wantArgs = 2
 	}
+	derived := HasViewMetadataRequest(builder.GetContext())
+	if derived {
+		wantArgs = 3 // caller-visible database/name and snapshot-visible identity
+	}
 	if len(exprs) != wantArgs {
 		return 0, moerr.NewInvalidInputf(builder.GetContext(), "%s requires %d arguments", functionName, wantArgs)
 	}
 	args := make([]*Expr, wantArgs)
 	var err error
-	if wantArgs == 2 {
+	if derived {
+		for i := 0; i < 2; i++ {
+			args[i], err = forceCastExpr(builder.GetContext(), exprs[i], Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen})
+			if err != nil {
+				return 0, err
+			}
+		}
+	} else if wantArgs == 2 {
 		args[0], err = forceCastExpr(builder.GetContext(), exprs[0], Type{Id: int32(types.T_uint32)})
 		if err != nil {
 			return 0, err
@@ -69,6 +80,6 @@ func (builder *QueryBuilder) buildViewColumns(tbl *tree.TableFunction, ctx *Bind
 	node := &planpb.Node{NodeType: planpb.Node_FUNCTION_SCAN, Stats: &planpb.Stats{},
 		TableDef:    &TableDef{TableType: "func_table", TblFunc: &planpb.TableFunction{Name: functionName, IsSingle: true}, Cols: defs},
 		BindingTags: []int32{builder.genNewBindTag()}, Children: children, TblFuncExprList: args,
-		ScanSnapshot: DeepCopySnapshot(ctx.snapshot)}
+		ScanSnapshot: DeepCopySnapshot(ctx.snapshot), NotCacheable: derived}
 	return builder.appendNode(node, ctx), nil
 }

@@ -38,14 +38,15 @@ import (
 )
 
 type MinioSDK struct {
-	name                 string
-	endpoint             string
-	bucket               string
-	core                 *minio.Core
-	client               *minio.Client
-	copyCredentialDomain objectStorageCopyCredentialDomain
-	perfCounterSets      []*perfcounter.CounterSet
-	listMaxKeys          int
+	name                   string
+	endpoint               string
+	supportsConditionalPut bool
+	bucket                 string
+	core                   *minio.Core
+	client                 *minio.Client
+	copyCredentialDomain   objectStorageCopyCredentialDomain
+	perfCounterSets        []*perfcounter.CounterSet
+	listMaxKeys            int
 }
 
 var _ objectStorageCopier = new(MinioSDK)
@@ -176,7 +177,21 @@ func NewMinioSDK(
 		}
 	}
 
-	options.Creds = credentials.NewChainCredentials(credentialProviders)
+	if args.callerCredentialsOnly && args.RoleARN != "" {
+		// A requested role must never fall back to static or anonymous credentials.
+		client := newHTTPClient(args)
+		client.Transport = sqlMinioSTSTransport{ctx: ctx, next: client.Transport}
+		provider := &credentials.STSAssumeRole{
+			Client: client, STSEndpoint: args.Endpoint,
+			Options: credentials.STSAssumeRoleOptions{AccessKey: keyID, SecretKey: keySecret, SessionToken: sessionToken, RoleARN: args.RoleARN, RoleSessionName: args.RoleSessionName, ExternalID: args.ExternalID, Location: args.Region},
+		}
+		options.Creds = credentials.New(provider)
+		if _, err := options.Creds.Get(); err != nil {
+			return nil, err
+		}
+	} else {
+		options.Creds = credentials.NewChainCredentials(credentialProviders)
+	}
 
 	// region
 	if args.Region != "" {
@@ -229,16 +244,36 @@ func NewMinioSDK(
 	}
 
 	return &MinioSDK{
-		name:     args.Name,
-		endpoint: args.Endpoint,
-		bucket:   args.Bucket,
-		client:   client,
-		core:     core,
+		name:                   args.Name,
+		endpoint:               args.Endpoint,
+		supportsConditionalPut: args.IsMinio && !minioEndpointIsKnownUnsupported(args.Endpoint),
+		bucket:                 args.Bucket,
+		client:                 client,
+		core:                   core,
 		copyCredentialDomain: newObjectStorageCopyCredentialDomain(
 			keyID, keySecret, sessionToken, args.RoleARN, args.ExternalID,
 		),
 		perfCounterSets: perfCounterSets,
 	}, nil
+}
+
+// MinIO's STS provider creates requests without a context. SQL dynamic services
+// belong to one operation, so initial credentials and refresh borrow its lifetime.
+// This transport is used only for STS, not ordinary object requests or native services.
+type sqlMinioSTSTransport struct {
+	ctx  context.Context
+	next http.RoundTripper
+}
+
+func (t sqlMinioSTSTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	return t.next.RoundTrip(req.WithContext(t.ctx))
+}
+
+func minioEndpointIsKnownUnsupported(endpoint string) bool {
+	endpoint = strings.ToLower(endpoint)
+	return strings.Contains(endpoint, "ctyunapi.cn") ||
+		strings.Contains(endpoint, "myqcloud.com") ||
+		strings.Contains(endpoint, "aliyuncs.com")
 }
 
 var _ ObjectStorage = new(MinioSDK)
@@ -420,7 +455,7 @@ func (a *MinioSDK) Write(
 		}
 	}
 
-	if sizeHint != nil && *sizeHint < smallObjectThreshold {
+	if sizeHint != nil && (*sizeHint < smallObjectThreshold || exclusiveWrite(ctx)) {
 		data, err := io.ReadAll(r)
 		if err != nil {
 			return err
@@ -614,16 +649,24 @@ func (a *MinioSDK) putObject(
 	if sizeHint != nil {
 		size = *sizeHint
 	}
+	opts := minio.PutObjectOptions{}
+	if exclusiveWrite(ctx) {
+		opts.DisableMultipart = true
+		opts.SetMatchETagExcept("*")
+	}
 	info, err := a.client.PutObject(
 		ctx,
 		a.bucket,
 		key,
 		r,
 		size,
-		minio.PutObjectOptions{},
+		opts,
 	)
 	if err == nil {
 		recordS3AcceptedBytes(ctx, info.Size, a.perfCounterSets...)
+	}
+	if exclusiveWrite(ctx) && minio.ToErrorResponse(err).StatusCode == 412 {
+		err = moerr.NewFileAlreadyExistsNoCtx(key)
 	}
 	return info, err
 }

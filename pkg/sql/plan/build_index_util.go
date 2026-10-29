@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/matrixorigin/matrixone/pkg/common/collation"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
@@ -95,6 +96,18 @@ func checkDuplicateConstraint(namesMap map[string]bool, name string, foreign boo
 	return nil
 }
 
+// Inline column constraints are built immediately by COPY, before deferred
+// table-level indexes. Share their naming policy with constraint resolution.
+func newAlterColumnUniqueIndex(tableDef *TableDef, column *tree.ColumnTableDef) *tree.UniqueIndex {
+	index := &tree.UniqueIndex{KeyParts: []*tree.KeyPart{{ColName: column.Name}}}
+	names := make(map[string]bool, len(tableDef.Indexes))
+	for _, existing := range tableDef.Indexes {
+		names[indexNameKey(existing.IndexName)] = true
+	}
+	setEmptyUniqueIndexName(names, index)
+	return index
+}
+
 // setEmptyUniqueIndexName Set name for unqiue index constraint with an empty name
 func setEmptyUniqueIndexName(namesMap map[string]bool, indexConstr *tree.UniqueIndex) {
 	if indexConstr.Name == "" && len(indexConstr.KeyParts) > 0 {
@@ -166,12 +179,26 @@ func checkIndexKeypartSupportability(context context.Context, keyParts []*tree.K
 	return nil
 }
 
-func indexTableKeyTypeForSinglePart(col *ColDef, keyPart *tree.KeyPart) Type {
+// indexTableKeyTypeForSinglePartWithFormat describes the physical payload of
+// a hidden one-part index column.  Legacy indexes retain the source type and
+// bytes.  A future versioned collation format stores opaque comparison keys,
+// so its hidden column must be a binary varlena column; otherwise storage and
+// hash consumers could apply the source collation a second time. Admission is
+// handled by the owning CREATE TABLE path and the persisted-plan protocol fence.
+func indexTableKeyTypeForSinglePartWithFormat(col *ColDef, keyPart *tree.KeyPart, keyFormat uint32) Type {
 	if col == nil {
 		return Type{}
 	}
+	if keyFormat == collation.KeyFormatV1 &&
+		types.IsUnicodeCollation(uint8(col.Typ.Charset)) && types.T(col.Typ.Id).IsMySQLString() {
+		return Type{
+			Id:      int32(types.T_varbinary),
+			Width:   types.MaxVarBinaryLen,
+			Charset: uint32(types.CharsetBinary),
+		}
+	}
 	if keyPart != nil && keyPart.Length > 0 {
-		if prefixType, ok := indexTableKeyTypeForPrefix(col.Typ); ok {
+		if prefixType, ok := indexTableKeyTypeForPrefixWithFormat(col.Typ, keyFormat); ok {
 			return prefixType
 		}
 	}
@@ -194,9 +221,48 @@ func indexTableKeyTypeForSinglePart(col *ColDef, keyPart *tree.KeyPart) Type {
 	}
 }
 
+// indexTablePrimaryKeyTypeWithFormat preserves the historical primary-key
+// hidden-column projection. It intentionally does not copy auto-increment or
+// enum metadata; the regular secondary-index path has always used this
+// narrower schema than the unique-index path.
+func indexTablePrimaryKeyTypeWithFormat(col *ColDef, keyFormat uint32) Type {
+	if col == nil {
+		return Type{}
+	}
+	if keyFormat == collation.KeyFormatV1 &&
+		types.IsUnicodeCollation(uint8(col.Typ.Charset)) && types.T(col.Typ.Id).IsMySQLString() {
+		return Type{
+			Id:      int32(types.T_varbinary),
+			Width:   types.MaxVarBinaryLen,
+			Charset: uint32(types.CharsetBinary),
+		}
+	}
+	return Type{
+		Id:                       col.Typ.Id,
+		Width:                    col.Typ.Width,
+		Scale:                    col.Typ.Scale,
+		Charset:                  col.Typ.Charset,
+		CollationVersion:         col.Typ.CollationVersion,
+		CollationCoercibility:    col.Typ.CollationCoercibility,
+		CollationCoercibilitySet: col.Typ.CollationCoercibilitySet,
+		CollationMergeConflict:   col.Typ.CollationMergeConflict,
+	}
+}
+
 func indexTableKeyTypeForPrefix(colType Type) (Type, bool) {
+	return indexTableKeyTypeForPrefixWithFormat(colType, collation.KeyFormatLegacy)
+}
+
+func indexTableKeyTypeForPrefixWithFormat(colType Type, keyFormat uint32) (Type, bool) {
 	switch colType.Id {
 	case int32(types.T_text):
+		if keyFormat == collation.KeyFormatV1 && types.IsUnicodeCollation(uint8(colType.Charset)) {
+			return Type{
+				Id:      int32(types.T_varbinary),
+				Width:   types.MaxVarBinaryLen,
+				Charset: uint32(types.CharsetBinary),
+			}, true
+		}
 		return Type{
 			Id:                       int32(types.T_varchar),
 			Width:                    types.MaxVarcharLen,
@@ -234,11 +300,38 @@ func indexColumnCheckKind(indexType tree.IndexType) string {
 }
 
 func checkIndexColumnSupportability(ctx context.Context, col *ColDef, keyPart *tree.KeyPart, indexKind string) error {
+	return checkIndexColumnSupportabilityWithKeyFormat(ctx, col, keyPart, indexKind, collation.KeyFormatLegacy)
+}
+
+// checkIndexColumnSupportabilityWithKeyFormat validates the logical column
+// restrictions and the physical key contract for one index part.  Native UCA
+// unique keys are only admitted when the owning new table has explicitly
+// selected the versioned physical key format; all callers that do not own that
+// decision retain the legacy fail-closed behavior through the wrapper above.
+func checkIndexColumnSupportabilityWithKeyFormat(
+	ctx context.Context,
+	col *ColDef,
+	keyPart *tree.KeyPart,
+	indexKind string,
+	keyFormat uint32,
+) error {
 	if col == nil || keyPart == nil || keyPart.ColName == nil {
 		return moerr.NewInternalError(ctx, "index column definition is nil")
 	}
 
 	colName := keyPart.ColName.ColNameOrigin()
+	switch indexKind {
+	case "primary":
+		if err := rejectNativeUnicodePrimaryKey(ctx, col.Typ, colName); err != nil {
+			return err
+		}
+	case "unique":
+		if keyFormat != collation.KeyFormatV1 {
+			if err := rejectNativeUnicodeUniqueKey(ctx, col.Typ, colName); err != nil {
+				return err
+			}
+		}
+	}
 
 	switch col.Typ.Id {
 	case int32(types.T_blob):
@@ -288,6 +381,30 @@ func checkIndexColumnSupportability(ctx context.Context, col *ColDef, keyPart *t
 		default:
 			return moerr.NewNotSupported(ctx, fmt.Sprintf("GEOMETRY column '%s' cannot be in index", colName))
 		}
+	}
+	return nil
+}
+
+// Do not add a native-Unicode exception to the legacy wrapper: ALTER/CREATE
+// INDEX and ordinary secondary-index callers remain closed until their
+// existing-table backfill and mixed-version gates are ready.
+
+// Native Unicode primary-key bytes are not yet canonicalized by the storage
+// index and lock paths. Native Unicode UNIQUE keys use the V1 path only when
+// their owning CREATE TABLE selected that format; this helper remains the
+// fail-closed guard for primary keys and existing-table index changes.
+func rejectNativeUnicodePrimaryKey(ctx context.Context, typ planpb.Type, columnName string) error {
+	if types.IsUnicodeCollation(uint8(typ.GetCharset())) {
+		return moerr.NewNotSupported(ctx,
+			fmt.Sprintf("native Unicode collation column '%s' cannot be in primary key until collation-aware primary-key deduplication is supported", columnName))
+	}
+	return nil
+}
+
+func rejectNativeUnicodeUniqueKey(ctx context.Context, typ planpb.Type, columnName string) error {
+	if types.IsUnicodeCollation(uint8(typ.GetCharset())) {
+		return moerr.NewNotSupported(ctx,
+			fmt.Sprintf("native Unicode collation column '%s' cannot be in unique index without the versioned unique-key format", columnName))
 	}
 	return nil
 }

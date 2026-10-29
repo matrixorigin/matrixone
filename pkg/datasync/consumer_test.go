@@ -26,6 +26,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/lni/goutils/leaktest"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/logservice"
@@ -731,6 +732,111 @@ func TestCleanState(t *testing.T) {
 		assert.NoError(t, err)
 		assert.Equal(t, uint64(0), requiredLsn)
 	})
+	t.Run("canceled before cleanup", func(t *testing.T) {
+		c := createTestConsumer(nil, nil)
+		defer c.Close()
+		lc := c.logClient.(*mockLogClient)
+		c.syncedLsn.Store(7)
+		require.NoError(t, lc.setRequiredLsn(context.Background(), 99))
+		lc.failNext("getLatestLsn", 0)
+		lc.failNext("setRequiredLsn", 0)
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		c.cleanState(ctx, time.Millisecond)
+		latestCalls, _ := lc.callStats("getLatestLsn")
+		requiredCalls, _ := lc.callStats("setRequiredLsn")
+		require.Zero(t, latestCalls)
+		require.Zero(t, requiredCalls)
+		require.Equal(t, uint64(7), c.syncedLsn.Load())
+		required, err := lc.getRequiredLsn(context.Background())
+		require.NoError(t, err)
+		require.Equal(t, uint64(99), required)
+	})
+
+	t.Run("canceled during cleanup backoff", func(t *testing.T) {
+		for _, fault := range []string{"getLatestLsn", "setRequiredLsn"} {
+			t.Run(fault, func(t *testing.T) {
+				c := createTestConsumer(nil, nil)
+				parent, cancel := context.WithCancel(context.Background())
+				ctx := &cleanupWaitContext{Context: parent, waiting: make(chan struct{})}
+				var done chan struct{}
+				defer func() {
+					cancel()
+					if done == nil {
+						c.Close()
+						return
+					}
+					select {
+					case <-done:
+						c.Close()
+					case <-time.After(35 * time.Second):
+						t.Error("cleanup did not stop; retaining live dependencies")
+					}
+				}()
+				lc := c.logClient.(*mockLogClient)
+				_, err := lc.write(context.Background(), nil)
+				require.NoError(t, err)
+				require.NoError(t, lc.setRequiredLsn(context.Background(), 99))
+				lc.failNext("getLatestLsn", 0)
+				lc.failNext("setRequiredLsn", 0)
+				lc.fakeError(fault)
+				c.logClient = &cancellationLogClient{
+					LogClient: lc,
+					getLatest: func(ctxArg context.Context) (uint64, error) {
+						lsn, err := lc.getLatestLsnWithRetry(ctxArg)
+						if err != nil {
+							ctx.armed.Store(true)
+						}
+						return lsn, err
+					},
+					setRequired: func(ctxArg context.Context, lsn uint64) error {
+						err := lc.setRequiredLsnWithRetry(ctxArg, lsn)
+						if err != nil {
+							ctx.armed.Store(true)
+						}
+						return err
+					},
+				}
+				done = make(chan struct{})
+				go func() {
+					c.cleanState(ctx, 30*time.Second)
+					close(done)
+				}()
+				select {
+				case <-ctx.waiting:
+				case <-done:
+					t.Fatal("cleanup returned before entering retry wait")
+				case <-time.After(time.Second):
+					t.Fatal("cleanup did not enter retry wait")
+				}
+				require.NoError(t, parent.Err())
+				select {
+				case <-done:
+					t.Fatal("cleanup returned before cancellation")
+				default:
+				}
+				cancel()
+				select {
+				case <-done:
+				case <-time.After(time.Second):
+					t.Fatal("cleanup wait ignored cancellation")
+				}
+				latestCalls, _ := lc.callStats("getLatestLsn")
+				requiredCalls, _ := lc.callStats("setRequiredLsn")
+				require.Equal(t, 1, latestCalls)
+				wantRequired := 0
+				var wantSynced uint64
+				if fault == "setRequiredLsn" {
+					wantRequired, wantSynced = 1, 1
+				}
+				require.Equal(t, wantRequired, requiredCalls)
+				require.Equal(t, wantSynced, c.syncedLsn.Load())
+				required, err := lc.getRequiredLsn(context.Background())
+				require.NoError(t, err)
+				require.Equal(t, uint64(99), required)
+			})
+		}
+	})
 }
 
 func TestInitSyncedLsn(t *testing.T) {
@@ -781,12 +887,9 @@ func TestWaitPermission(t *testing.T) {
 		c := createTestConsumer(nil, nil)
 		assert.NotNil(t, c)
 		defer c.Close()
-		go func() {
-			time.Sleep(time.Millisecond * 200)
-			c.common.setShardReplicaID(logShardID, 10)
-			lc := c.logClient.(*mockLogClient)
-			lc.setLeaderID(10)
-		}()
+		c.common.setShardReplicaID(logShardID, 10)
+		lc := c.logClient.(*mockLogClient)
+		lc.setLeaderID(10)
 		assert.NoError(t, c.waitPermission(ctx, time.Millisecond*10))
 	})
 }
@@ -817,20 +920,44 @@ func TestLoopWork(t *testing.T) {
 		defer cancel()
 		c := createTestConsumer(nil, nil)
 		assert.NotNil(t, c)
-		defer c.Close()
 		// set role
 		c.common.setShardReplicaID(logShardID, 10)
 		lc := c.logClient.(*mockLogClient)
 		lc.setLeaderID(10)
 
 		c.syncedLsn.Store(10)
+		c.writeLsn.Store(20)
+		readEntries := make(chan struct{}, 1)
+		lc.readEntriesEvent = readEntries
+		loopDone := make(chan struct{})
+		var loopErr error
 		go func() {
-			time.Sleep(time.Millisecond * 200)
-			c.writeLsn.Store(20)
-			time.Sleep(time.Millisecond * 200)
-			cancel()
+			loopErr = c.loop(ctx, time.Millisecond)
+			close(loopDone)
 		}()
-		assert.Equal(t, context.Canceled, c.loop(ctx, time.Millisecond*10))
+		defer func() {
+			cancel()
+			select {
+			case <-loopDone:
+				c.Close()
+			case <-time.After(time.Second):
+				t.Error("consumer loop did not stop")
+			}
+		}()
+		select {
+		case <-readEntries:
+		case <-loopDone:
+			t.Fatal("consumer exited before reading")
+		case <-time.After(time.Second):
+			t.Fatal("consumer did not read")
+		}
+		cancel()
+		select {
+		case <-loopDone:
+			assert.Equal(t, context.Canceled, loopErr)
+		case <-time.After(time.Second):
+			t.Fatal("consumer loop did not stop after cancellation")
+		}
 	})
 
 	t.Run("file not found entries", func(t *testing.T) {
@@ -853,12 +980,7 @@ func TestLoopWork(t *testing.T) {
 		}
 
 		c.syncedLsn.Store(10)
-		go func() {
-			time.Sleep(time.Millisecond * 200)
-			c.writeLsn.Store(20)
-			time.Sleep(time.Millisecond * 200)
-			cancel()
-		}()
+		c.writeLsn.Store(20)
 		assert.True(t, moerr.IsMoErrCode(c.loop(ctx, time.Millisecond), moerr.ErrFileNotFound))
 		assert.Equal(t, uint64(10), c.syncedLsn.Load())
 		requiredLsn, err := c.logClient.getRequiredLsn(ctx)
@@ -871,23 +993,46 @@ func TestLoopWork(t *testing.T) {
 		defer cancel()
 		c := createTestConsumer(nil, nil)
 		assert.NotNil(t, c)
-		defer c.Close()
 		// set role
 		c.common.setShardReplicaID(logShardID, 10)
 		lc := c.logClient.(*mockLogClient)
 		lc.setLeaderID(10)
 
 		c.syncedLsn.Store(10)
+		lc.fakeError("readEntries")
+		defer lc.clearFakeError("readEntries")
+		c.writeLsn.Store(20)
+		readEntries := make(chan struct{}, 1)
+		lc.readEntriesEvent = readEntries
+		loopDone := make(chan struct{})
+		var loopErr error
 		go func() {
-			time.Sleep(time.Millisecond * 200)
-			time.Sleep(time.Millisecond * 200)
-			lc.fakeError("readEntries")
-			defer lc.clearFakeError("readEntries")
-			c.writeLsn.Store(20)
-			time.Sleep(time.Millisecond * 200)
-			cancel()
+			loopErr = c.loop(ctx, time.Millisecond)
+			close(loopDone)
 		}()
-		assert.Equal(t, context.Canceled, c.loop(ctx, time.Millisecond))
+		defer func() {
+			cancel()
+			select {
+			case <-loopDone:
+				c.Close()
+			case <-time.After(time.Second):
+				t.Error("consumer loop did not stop")
+			}
+		}()
+		select {
+		case <-readEntries:
+		case <-loopDone:
+			t.Fatal("consumer exited before reading")
+		case <-time.After(time.Second):
+			t.Fatal("consumer did not read")
+		}
+		cancel()
+		select {
+		case <-loopDone:
+			assert.Equal(t, context.Canceled, loopErr)
+		case <-time.After(time.Second):
+			t.Fatal("consumer loop did not stop after cancellation")
+		}
 		assert.Equal(t, uint64(10), c.syncedLsn.Load())
 		requiredLsn, err := c.logClient.getRequiredLsn(ctx)
 		assert.NoError(t, err)
@@ -1155,36 +1300,148 @@ func TestConsumerStart(t *testing.T) {
 		defer cancel()
 		c := createTestConsumer(nil, nil)
 		assert.NotNil(t, c)
-		defer c.Close()
 		// set role
 		c.common.setShardReplicaID(logShardID, 10)
 		lc := c.logClient.(*mockLogClient)
 		lc.setLeaderID(10)
+		c.writeLsn.Store(1)
+		c.loopWorkInterval = time.Millisecond
+		readEntries := make(chan struct{}, 1)
+		lc.readEntriesEvent = readEntries
+		done := make(chan struct{})
 		go func() {
-			time.Sleep(time.Second)
-			cancel()
+			c.Start(ctx)
+			close(done)
 		}()
-		c.Start(ctx)
+		defer func() {
+			cancel()
+			select {
+			case <-done:
+				c.Close()
+			case <-time.After(time.Second):
+				t.Error("consumer did not stop")
+			}
+		}()
+		select {
+		case <-readEntries:
+		case <-done:
+			t.Fatal("consumer exited before phase notification")
+		case <-time.After(time.Second):
+			t.Fatal("consumer phase notification missing")
+		}
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			t.Fatal("consumer did not stop after cancellation")
+		}
 	})
 
 	t.Run("init failed", func(t *testing.T) {
-		ctx, cancel := context.WithCancel(context.Background())
-		defer cancel()
-		c := createTestConsumer(nil, nil)
-		assert.NotNil(t, c)
-		defer c.Close()
-		// set role
-		c.common.setShardReplicaID(logShardID, 10)
-		lc := c.logClient.(*mockLogClient)
-		lc.setLeaderID(10)
-
-		lc.fakeError("getTruncatedLsn")
-		defer lc.clearFakeError("getTruncatedLsn")
-		go func() {
-			time.Sleep(time.Second)
-			cancel()
-		}()
-		c.Start(ctx)
+		for _, phase := range []string{"initialization", "latest LSN", "required LSN"} {
+			t.Run(phase, func(t *testing.T) {
+				c := createTestConsumer(nil, nil)
+				st := stopper.NewStopper("failed-consumer", stopper.WithLogger(c.log.RawLogger()))
+				workerDone, stopped := make(chan struct{}), make(chan struct{})
+				stopStarted := false
+				stop := func() {
+					stopStarted = true
+					go func() {
+						st.Stop()
+						close(stopped)
+					}()
+				}
+				defer func() {
+					if !stopStarted {
+						stop()
+					}
+					select {
+					case <-stopped:
+						c.Close()
+					case <-time.After(time.Second):
+						t.Error("consumer task did not drain; retaining live dependencies")
+					}
+				}()
+				c.cleanStateInterval = 30 * time.Second
+				c.common.setShardReplicaID(logShardID, 10)
+				lc := c.logClient.(*mockLogClient)
+				lc.setLeaderID(10)
+				_, err := lc.write(context.Background(), nil)
+				require.NoError(t, err)
+				require.NoError(t, lc.setRequiredLsn(context.Background(), 99))
+				entered := make(chan struct{}, 1)
+				var initCalls, latestCalls, requiredCalls int
+				waitCanceled := func(ctx context.Context) error {
+					select {
+					case entered <- struct{}{}:
+					default:
+					}
+					<-ctx.Done()
+					return ctx.Err()
+				}
+				c.logClient = &cancellationLogClient{
+					LogClient: lc,
+					getTruncated: func(ctx context.Context) (uint64, error) {
+						initCalls++
+						if phase == "initialization" {
+							return 0, waitCanceled(ctx)
+						}
+						return 0, fakeError
+					},
+					getLatest: func(ctx context.Context) (uint64, error) {
+						latestCalls++
+						if phase == "latest LSN" {
+							return 0, waitCanceled(ctx)
+						}
+						return lc.getLatestLsnWithRetry(ctx)
+					},
+					setRequired: func(ctx context.Context, lsn uint64) error {
+						requiredCalls++
+						if phase == "required LSN" {
+							return waitCanceled(ctx)
+						}
+						return lc.setRequiredLsnWithRetry(ctx, lsn)
+					},
+				}
+				require.NoError(t, st.RunNamedTask("consumer", func(ctx context.Context) {
+					c.Start(ctx)
+					close(workerDone)
+				}))
+				select {
+				case <-entered:
+				case <-workerDone:
+					t.Fatal("consumer returned before the failing RPC")
+				case <-time.After(time.Second):
+					t.Fatal("consumer did not enter the failing RPC")
+				}
+				stop()
+				select {
+				case <-stopped:
+				case <-time.After(time.Second):
+					t.Fatal("Stopper did not drain after RPC cancellation")
+				}
+				select {
+				case <-workerDone:
+				default:
+					t.Fatal("Stopper returned before its consumer worker")
+				}
+				require.Equal(t, 1, initCalls)
+				wantLatest, wantRequired := 0, 0
+				var wantSynced uint64
+				if phase != "initialization" {
+					wantLatest = 1
+				}
+				if phase == "required LSN" {
+					wantRequired, wantSynced = 1, 1
+				}
+				require.Equal(t, wantLatest, latestCalls)
+				require.Equal(t, wantRequired, requiredCalls)
+				require.Equal(t, wantSynced, c.syncedLsn.Load())
+				required, err := lc.getRequiredLsn(context.Background())
+				require.NoError(t, err)
+				require.Equal(t, uint64(99), required)
+			})
+		}
 	})
 
 	t.Run("role changed", func(t *testing.T) {
@@ -1192,19 +1449,74 @@ func TestConsumerStart(t *testing.T) {
 		defer cancel()
 		c := createTestConsumer(nil, nil)
 		assert.NotNil(t, c)
-		defer c.Close()
 		// set role
 		c.common.setShardReplicaID(logShardID, 10)
 		lc := c.logClient.(*mockLogClient)
 		lc.setLeaderID(10)
-
+		c.writeLsn.Store(1)
+		c.loopWorkInterval = time.Millisecond
+		leaderChecks := make(chan uint64)
+		lc.getLeaderIDEvent = leaderChecks
+		readEntries := make(chan struct{}, 1)
+		lc.readEntriesEvent = readEntries
+		initialized := make(chan struct{}, 1)
+		lc.getTruncatedLsnEvent = initialized
+		done := make(chan struct{})
 		go func() {
-			time.Sleep(time.Second)
-			lc.setLeaderID(20)
-			time.Sleep(time.Second)
-			cancel()
+			c.Start(ctx)
+			close(done)
 		}()
-		c.Start(ctx)
+		defer func() {
+			cancel()
+			select {
+			case <-done:
+				c.Close()
+			case <-time.After(time.Second):
+				t.Error("consumer did not stop")
+			}
+		}()
+		waitLeader := func(want uint64) {
+			t.Helper()
+			timer := time.NewTimer(time.Second)
+			defer timer.Stop()
+			for {
+				select {
+				case leader := <-leaderChecks:
+					if leader == want {
+						return
+					}
+				case <-done:
+					t.Fatal("consumer exited before observing leader")
+				case <-timer.C:
+					t.Fatalf("consumer did not observe leader %d", want)
+				}
+			}
+		}
+		waitPhase := func(event <-chan struct{}) {
+			t.Helper()
+			select {
+			case <-event:
+			case <-done:
+				t.Fatal("consumer exited before phase notification")
+			case <-time.After(time.Second):
+				t.Fatal("consumer phase notification missing")
+			}
+		}
+		waitLeader(10) // permission granted
+		waitPhase(initialized)
+		waitLeader(10) // consuming loop entered
+		waitPhase(readEntries)
+		lc.setLeaderID(20)
+		waitLeader(20)
+		lc.setLeaderID(10)
+		waitLeader(10)         // permission regained
+		waitPhase(initialized) // proves demotion actually left the old loop
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			t.Fatal("consumer did not stop after role change")
+		}
 	})
 }
 
@@ -1221,4 +1533,41 @@ func TestCreateConsumer(t *testing.T) {
 	)
 	assert.NotNil(t, w)
 	w.Close()
+}
+
+// cancellationLogClient adds fault boundaries without changing shared mock behavior.
+type cancellationLogClient struct {
+	LogClient
+	getTruncated func(context.Context) (uint64, error)
+	getLatest    func(context.Context) (uint64, error)
+	setRequired  func(context.Context, uint64) error
+}
+
+func (c *cancellationLogClient) getTruncatedLsnWithRetry(ctx context.Context) (uint64, error) {
+	return c.getTruncated(ctx)
+}
+
+func (c *cancellationLogClient) getLatestLsnWithRetry(ctx context.Context) (uint64, error) {
+	return c.getLatest(ctx)
+}
+
+func (c *cancellationLogClient) setRequiredLsnWithRetry(ctx context.Context, lsn uint64) error {
+	return c.setRequired(ctx, lsn)
+}
+
+// The mock RPCs do not observe Done. Arming after their error makes the next
+// observation belong to cleanState's retry delay, not permission or RPC setup.
+type cleanupWaitContext struct {
+	context.Context
+	armed   atomic.Bool
+	waiting chan struct{}
+	once    sync.Once
+}
+
+func (c *cleanupWaitContext) Done() <-chan struct{} {
+	done := c.Context.Done()
+	if c.armed.Load() {
+		c.once.Do(func() { close(c.waiting) })
+	}
+	return done
 }

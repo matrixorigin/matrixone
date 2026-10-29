@@ -1,0 +1,87 @@
+drop database if exists issue_29849;
+create database issue_29849;
+use issue_29849;
+create table load_user_variable (
+id int primary key,
+region_id int not null,
+label varchar(32) not null,
+payload_legacy varchar(64),
+payload varchar(64),
+payload_empty varchar(64),
+payload_json json
+);
+load data inline format='csv', data='1,10,unknown,legacy,value,true'
+into table load_user_variable
+fields terminated by ','
+(id, region_id, label, payload_legacy)
+set payload = nullif(@missing_variable, 'NULL');
+invalid input: LOAD DATA SET variable '@missing_variable' is not present in the column list
+load data infile '$resources/load_data/issue_29849_user_variables.csv'
+into table load_user_variable
+fields terminated by ','
+(id, region_id, label, payload_legacy, @user_variable, @json_value)
+set payload_legacy = nullif(payload_legacy, 'NULL'),
+payload = nullif(@user_variable, 'NULL'),
+payload_empty = nullif(@user_variable, ''),
+payload_json = nullif(@json_value, 'null');
+select id, region_id, label,
+payload_legacy is null as legacy_is_null, payload_legacy,
+payload is null as payload_is_null, payload,
+payload_empty is null as empty_is_null, payload_empty,
+payload_json is null as json_is_null, payload_json
+from load_user_variable
+order by id;
+➤ id[4,32,0]  ¦  region_id[4,32,0]  ¦  label[12,32,0]  ¦  legacy_is_null[-7,1,0]  ¦  payload_legacy[12,64,0]  ¦  payload_is_null[-7,1,0]  ¦  payload[12,64,0]  ¦  empty_is_null[-7,1,0]  ¦  payload_empty[12,64,0]  ¦  json_is_null[-7,1,0]  ¦  payload_json[-1,2147483647,0]  𝄀
+1  ¦  10  ¦  null-source  ¦  1  ¦  null  ¦  1  ¦  null  ¦  1  ¦  null  ¦  1  ¦  null  𝄀
+2  ¦  20  ¦  ordinary-value  ¦  0  ¦  kept  ¦  0  ¦  kept  ¦  0  ¦  kept  ¦  0  ¦  true  𝄀
+3  ¦  30  ¦  empty-value  ¦  0  ¦  empty  ¦  0  ¦    ¦  1  ¦  null  ¦  0  ¦  false  𝄀
+4  ¦  40  ¦  similar-value  ¦  0  ¦  marker  ¦  0  ¦  NULLish  ¦  0  ¦  NULLish  ¦  0  ¦  1  𝄀
+5  ¦  50  ¦  sql-null  ¦  1  ¦  null  ¦  1  ¦  null  ¦  1  ¦  null  ¦  1  ¦  null
+create table load_collated_nullif (
+id int primary key,
+payload varchar(32) default 'fallback'
+);
+load data inline format='csv', data='1,keep\n2,sentinel'
+into table load_collated_nullif fields terminated by ',' (id, @v)
+set payload = nullif(@v, 'sentinel');
+load data inline format='csv', data='3,keep\n4,sentinel'
+into table load_collated_nullif fields terminated by ',' (id, @v)
+set payload = nullif(@v, 'sentinel') collate utf8mb4_bin;
+select id, payload, payload is null as is_sql_null
+from load_collated_nullif order by id;
+➤ id[4,32,0]  ¦  payload[12,32,0]  ¦  is_sql_null[-7,1,0]  𝄀
+1  ¦  keep  ¦  0  𝄀
+2  ¦  null  ¦  1  𝄀
+3  ¦  keep  ¦  0  𝄀
+4  ¦  null  ¦  1
+load data inline format='csv', data='5,keep'
+into table load_collated_nullif fields terminated by ',' (id, @v)
+set payload = nullif(@v, 'sentinel') collate no_such_load_collation;
+-- @regex("Unknown collation", true)
+Unknown collation: 'no_such_load_collation'
+load data inline format='csv', data='6,keep'
+into table load_collated_nullif fields terminated by ',' (id, @v)
+set payload = nullif(@v, 'sentinel') collate utf8_unicode_ci;
+-- @regex("COLLATION.*not valid for CHARACTER SET", true)
+COLLATION 'utf8_unicode_ci' is not valid for CHARACTER SET 'utf8mb4'
+load data inline format='csv', data='7,keep'
+into table load_collated_nullif fields terminated by ','
+set payload = nullif(payload, 'sentinel') collate utf8mb4_bin;
+-- @regex("not supported: COLLATE on column NULLIF", true)
+not supported: COLLATE on column NULLIF in LOAD/external SET requires an expression projection
+select count(*) as rows_after_rejected_assignments from load_collated_nullif;
+➤ rows_after_rejected_assignments[-5,64,0]  𝄀
+4
+create external table rejected_collated_external(payload varchar(32))
+infile{'filepath'='$resources/load_data/issue_29849_user_variables.csv'}
+fields terminated by ','
+set payload = nullif(payload, 'sentinel') collate utf8mb4_bin;
+-- @regex("not supported: COLLATE on column NULLIF", true)
+not supported: COLLATE on column NULLIF in LOAD/external SET requires an expression projection
+select count(*) as rejected_external_count from information_schema.tables
+where table_schema = database() and table_name = 'rejected_collated_external';
+➤ rejected_external_count[-5,64,0]  𝄀
+0
+drop database issue_29849;
+show databases like 'issue_29849';
+➤ Database[12,5000,0]

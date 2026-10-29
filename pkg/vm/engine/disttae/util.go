@@ -33,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -653,6 +654,7 @@ type concurrentExecutor struct {
 	stopCh    chan struct{}
 	stopCause atomic.Pointer[concurrentExecutorStop]
 	workers   sync.WaitGroup
+	done      chan struct{}
 
 	// submitMu closes the race between a producer admitting work and shutdown
 	// draining the queue. Shutdown signals stopCh before taking the write lock,
@@ -676,6 +678,7 @@ func newConcurrentExecutor(concurrency int) ConcurrentExecutor {
 		concurrency: concurrency,
 		tasks:       make(chan queuedConcurrentTask, 2048),
 		stopCh:      make(chan struct{}),
+		done:        make(chan struct{}),
 	}
 }
 
@@ -752,6 +755,7 @@ func (e *concurrentExecutor) runWorker() {
 }
 
 func (e *concurrentExecutor) stopWhenDone(ctx context.Context) {
+	defer close(e.done)
 	<-ctx.Done()
 	cause := context.Cause(ctx)
 	if cause == nil {
@@ -778,6 +782,10 @@ func (e *concurrentExecutor) stopWhenDone(ctx context.Context) {
 			return
 		}
 	}
+}
+
+func (e *concurrentExecutor) Wait() {
+	<-e.done
 }
 
 func (e *concurrentExecutor) stoppedError() error {
@@ -848,7 +856,11 @@ func execReadSql(
 	if disableLog {
 		opts = opts.WithStatementOption(executor.StatementOption{}.WithDisableLog())
 	}
-	return exec.Exec(ctx, sql, opts)
+	// Engine catalog reads must see every physical relation in the already
+	// authorized tenant/transaction. User-session visibility filters would
+	// otherwise hide roots from DROP DATABASE and rowids from schema updates.
+	// Keep this capability local to the internal catalog execution.
+	return exec.Exec(defines.AttachTemporaryTableAccess(ctx), sql, opts)
 }
 
 func fillTsVecForSysTableQueryBatch(bat *batch.Batch, ts types.TS, m *mpool.MPool) error {

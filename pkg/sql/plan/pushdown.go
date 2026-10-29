@@ -17,6 +17,7 @@ package plan
 import (
 	"fmt"
 
+	"github.com/gogo/protobuf/proto"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -338,6 +339,14 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 
 	switch node.NodeType {
 	case plan.Node_AGG:
+		// Sort ROLLUP materializes one ordered stream and synthesizes subtotal
+		// rows after the input has been consumed. A predicate from above the
+		// aggregate must remain above that boundary; pushing it into the child
+		// would filter the input before the grand total is produced.
+		if IsSortRollupOption(node.ExtraOptions) {
+			node.FilterList = append(node.FilterList, filters...)
+			return originalNodeID, nil
+		}
 		// Legacy positional aggregates have no global binding tags. Keep filters
 		// above them because tag-based replacement cannot address their outputs.
 		if len(node.BindingTags) < 2 {
@@ -372,8 +381,24 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 			// happen after set-operation columns are replaced by branch literals.
 			if len(node.GroupBy) == 0 && !exprHasColRef(filter) {
 				node.FilterList = append(node.FilterList, filter)
-			} else if !containsTag(filter, aggregateTag) && !containGrouping(filter) &&
+				continue
+			}
+			hasAggregate := containsTag(filter, aggregateTag)
+			hasGrouping := false
+			if !hasAggregate {
+				hasGrouping = containGrouping(filter)
+				if hasGrouping {
+					// Only revisit predicates already blocked by GROUPING. Ordinary
+					// aggregate filters keep their existing expression walks.
+					filter = simplifyActiveGroupingFilter(filter, groupTag, len(node.GroupBy), node.GroupingFlag)
+					hasGrouping = containGrouping(filter)
+				}
+			}
+			if !hasAggregate && !hasGrouping &&
 				!referencesSyntheticGroupKey(filter, groupTag, len(node.GroupBy), node.GroupingFlag) {
+				if fullTextProjectsMatch(node.GroupBy) {
+					filter = fullTextProjectedScoreAsBool(builder.GetContext(), DeepCopyExpr(filter), groupTag, node.GroupBy)
+				}
 				canPushdown = append(canPushdown, replaceColRefs(filter, groupTag, node.GroupBy))
 			} else {
 				node.FilterList = append(node.FilterList, filter)
@@ -400,6 +425,9 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 			if builder.filterPushdownBarrier(filter) {
 				node.FilterList = append(node.FilterList, filter)
 			} else if !containsTag(filter, sampleTag) {
+				if fullTextProjectsMatch(node.GroupBy) {
+					filter = fullTextProjectedScoreAsBool(builder.GetContext(), DeepCopyExpr(filter), groupTag, node.GroupBy)
+				}
 				canPushdown = append(canPushdown, replaceColRefs(filter, groupTag, node.GroupBy))
 			} else {
 				node.FilterList = append(node.FilterList, filter)
@@ -957,8 +985,15 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 				cantPushdown = append(cantPushdown, filter)
 				continue
 			}
-			canPushdown = append(canPushdown, replaceColRefsForSet(DeepCopyExpr(filter), leftChild.ProjectList))
-			canPushDownRight = append(canPushDownRight, replaceColRefsForSet(filter, rightChild.ProjectList))
+			left, right := filter, filter
+			if fullTextProjectsMatch(leftChild.ProjectList) {
+				left = fullTextProjectedScoreAsBool(builder.GetContext(), DeepCopyExpr(filter), -1, leftChild.ProjectList)
+			}
+			if fullTextProjectsMatch(rightChild.ProjectList) {
+				right = fullTextProjectedScoreAsBool(builder.GetContext(), DeepCopyExpr(filter), -1, rightChild.ProjectList)
+			}
+			canPushdown = append(canPushdown, replaceColRefsForSet(DeepCopyExpr(left), leftChild.ProjectList))
+			canPushDownRight = append(canPushDownRight, replaceColRefsForSet(right, rightChild.ProjectList))
 		}
 
 		childID, cantPushdownChild := builder.pushdownFilters(node.Children[0], canPushdown, separateNonEquiConds)
@@ -993,7 +1028,11 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 		}
 		projectTag := node.BindingTags[0]
 
+		projectsMatch := fullTextProjectsMatch(node.ProjectList)
 		for _, filter := range filters {
+			if projectsMatch {
+				filter = fullTextProjectedScoreAsBool(builder.GetContext(), DeepCopyExpr(filter), projectTag, node.ProjectList)
+			}
 			introducesVolatile := replaceColRefsIntroducesVolatile(filter, projectTag, node.ProjectList)
 			rewritten := replaceColRefs(DeepCopyExpr(filter), projectTag, node.ProjectList)
 			if introducesVolatile {
@@ -1026,7 +1065,7 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 				cantPushdown = append(cantPushdown, filter)
 			}
 		}
-	case plan.Node_FUNCTION_SCAN, plan.Node_VECTOR_INDEX_SCAN:
+	case plan.Node_FUNCTION_SCAN, plan.Node_INDEX_SEARCH_SCAN:
 		downFilters := make([]*plan.Expr, 0)
 		selfFilters := make([]*plan.Expr, 0)
 		for _, filter := range filters {
@@ -1127,10 +1166,10 @@ type existenceJoinKey struct {
 // the OR can be evaluated, even though a WHERE predicate only needs to know
 // whether any branch has a match.
 //
-// The rule deliberately accepts only a consecutive MARK prefix whose branches
-// have the same deterministic outer equality keys.  Projected markers,
-// NOT EXISTS, IN/ANY three-valued markers, non-equality correlations, and mixed
-// outer keys retain the original MARK semantics.
+// The rule accepts a consecutive MARK prefix with proven-total equality keys.
+// Shared keys become hash keys; branch-specific keys remain residual conditions.
+// Projected markers, NOT EXISTS, IN/ANY three-valued markers, non-equality
+// correlations, and branches without a shared key retain their MARK semantics.
 func (builder *QueryBuilder) rewriteFilteringOrOfExists(
 	nodeID int32,
 	filters []*plan.Expr,
@@ -1205,98 +1244,10 @@ func (builder *QueryBuilder) rewriteOneFilteringOrOfExists(
 		if !ok {
 			return nodeID, false
 		}
-		if i == 0 {
-			branchKeys[i] = keys
-			continue
-		}
-
-		ordered := make([]existenceJoinKey, len(branchKeys[0]))
-		used := make([]bool, len(keys))
-		for keyIdx, reference := range branchKeys[0] {
-			match := -1
-			for candidateIdx, candidate := range keys {
-				if !used[candidateIdx] && exprStructuralEqual(reference.outer, candidate.outer) {
-					if match != -1 {
-						return nodeID, false
-					}
-					match = candidateIdx
-				}
-			}
-			if match == -1 || !makeTypeByPlan2Expr(reference.inner).Eq(makeTypeByPlan2Expr(keys[match].inner)) {
-				return nodeID, false
-			}
-			used[match] = true
-			ordered[keyIdx] = keys[match]
-		}
-		if len(keys) != len(ordered) {
-			return nodeID, false
-		}
-		branchKeys[i] = ordered
+		branchKeys[i] = keys
 	}
 
-	branchIDs := make([]int32, len(markNodes))
-	branchTags := make([]int32, len(markNodes))
-	for i, markNode := range markNodes {
-		projectList := make([]*plan.Expr, len(branchKeys[i]))
-		for keyIdx, key := range branchKeys[i] {
-			projectList[keyIdx] = DeepCopyExpr(key.inner)
-		}
-		branchTags[i] = builder.genNewBindTag()
-		branchIDs[i] = builder.appendNode(&plan.Node{
-			NodeType:    plan.Node_PROJECT,
-			Children:    []int32{markNode.Children[1]},
-			ProjectList: projectList,
-			BindingTags: []int32{branchTags[i]},
-		}, nil)
-	}
-
-	unionID := branchIDs[0]
-	unionTag := branchTags[0]
-	for i := 1; i < len(branchIDs); i++ {
-		leftProject := builder.qry.Nodes[unionID].ProjectList
-		rightProject := builder.qry.Nodes[branchIDs[i]].ProjectList
-		unionProject := make([]*plan.Expr, len(leftProject))
-		for keyIdx, leftExpr := range leftProject {
-			unionProject[keyIdx] = &plan.Expr{
-				Typ: setOperationOutputType(plan.Node_UNION_ALL, leftExpr.Typ, rightProject[keyIdx].Typ),
-				Expr: &plan.Expr_Col{Col: &plan.ColRef{
-					RelPos: unionTag,
-					ColPos: int32(keyIdx),
-				}},
-			}
-		}
-		unionTag = builder.genNewBindTag()
-		unionID = builder.appendNode(&plan.Node{
-			NodeType:    plan.Node_UNION_ALL,
-			Children:    []int32{unionID, branchIDs[i]},
-			ProjectList: unionProject,
-			BindingTags: []int32{unionTag},
-		}, nil)
-	}
-
-	unionProject := builder.qry.Nodes[unionID].ProjectList
-	joinPredicates := make([]*plan.Expr, len(branchKeys[0]))
-	for keyIdx, key := range branchKeys[0] {
-		equality := DeepCopyExpr(key.equality)
-		unionKey := &plan.Expr{
-			Typ: unionProject[keyIdx].Typ,
-			Expr: &plan.Expr_Col{Col: &plan.ColRef{
-				RelPos: unionTag,
-				ColPos: int32(keyIdx),
-			}},
-		}
-		equality.GetF().Args[key.innerArgIdx] = unionKey
-		equality.Typ.NotNullable = key.outer.Typ.NotNullable && unionKey.Typ.NotNullable
-		joinPredicates[keyIdx] = equality
-	}
-
-	return builder.appendNode(&plan.Node{
-		NodeType: plan.Node_JOIN,
-		Children: []int32{baseID, unionID},
-		JoinType: plan.Node_SEMI,
-		OnList:   joinPredicates,
-		SpillMem: builder.joinSpillMem,
-	}, nil), true
+	return builder.rewriteFilteringExistenceUnion(nodeID, baseID, markNodes, branchKeys)
 }
 
 func collectPositiveExistenceMarkTags(expr *plan.Expr, tags *[]int32) bool {
@@ -1379,7 +1330,8 @@ func (builder *QueryBuilder) planSubtreeContainsVolatile(nodeID int32) bool {
 }
 
 func (builder *QueryBuilder) extractExistenceJoinKeys(markNode *plan.Node) ([]existenceJoinKey, bool) {
-	if len(markNode.OnList) == 0 {
+	if len(markNode.OnList) == 0 ||
+		!builder.existentialJoinPredicatesAreTotal(markNode.OnList, markNode.Children...) {
 		return nil, false
 	}
 	leftTags := make(map[int32]bool)
@@ -1393,9 +1345,6 @@ func (builder *QueryBuilder) extractExistenceJoinKeys(markNode *plan.Node) ([]ex
 
 	keys := make([]existenceJoinKey, 0, len(markNode.OnList))
 	for _, predicate := range markNode.OnList {
-		if !isTruncationSafePredicateExpr(predicate) {
-			return nil, false
-		}
 		fn := predicate.GetF()
 		if fn == nil || fn.Func == nil || len(fn.Args) != 2 || !IsEqualFunc(fn.Func.GetObj()) {
 			return nil, false
@@ -1462,6 +1411,82 @@ func unwrapIsTrueFromMarkJoinEqualities(
 	}
 
 	return conditions
+}
+
+// simplifyActiveGroupingFilter removes output NULL normalization only for this
+// static branch's active-key expressions. Their GROUPING bit is zero, making
+// the wrapper a value identity in a predicate. Keep synthetic/dynamic keys and
+// real GROUPING observers intact; output projections retain their boundary.
+func simplifyActiveGroupingFilter(expr *plan.Expr, groupTag int32, groupCount int, flags []bool) *plan.Expr {
+	if len(flags) == 0 {
+		return expr
+	}
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil {
+		return expr
+	}
+	id, _ := function.DecodeOverloadID(fn.Func.Obj)
+	if id == function.GROUPING {
+		return expr
+	}
+	if id == function.IFF && len(fn.Args) == 3 {
+		key := fn.Args[2]
+		probe := fn.Args[0].GetF()
+		null := fn.Args[1]
+		if key != nil &&
+			probe != nil && probe.Func != nil && len(probe.Args) == 1 &&
+			proto.Equal(probe.Args[0], key) && null.GetLit() != nil && null.GetLit().Isnull {
+			probeID, _ := function.DecodeOverloadID(probe.Func.Obj)
+			keyType, nullType, resultType := key.Typ, null.Typ, expr.Typ
+			keyType.NotNullable, nullType.NotNullable, resultType.NotNullable = false, false, false
+			if probeID == function.GROUPING && proto.Equal(&keyType, &nullType) && proto.Equal(&keyType, &resultType) &&
+				containsTag(key, groupTag) && groupingFilterHasOnlyActiveKeys(key, groupTag, groupCount, flags) &&
+				exprCanRemoveProject(key) && !function.ContainsRowScopedConversion(key) {
+				return key
+			}
+		}
+	}
+	for i, arg := range fn.Args {
+		fn.Args[i] = simplifyActiveGroupingFilter(arg, groupTag, groupCount, flags)
+	}
+	return expr
+}
+
+// Ordinary literals and scalar operations on active keys cannot introduce a
+// grouping sentinel. Prove every input's ownership and scalar shape;
+// unknown expression forms and foreign/inactive keys retain the boundary.
+func groupingFilterHasOnlyActiveKeys(expr *plan.Expr, groupTag int32, groupCount int, flags []bool) bool {
+	if expr == nil || groupCount == 0 || len(flags) != groupCount {
+		return false
+	}
+	switch e := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		return e.Col != nil && e.Col.RelPos == groupTag && e.Col.ColPos >= 0 &&
+			int(e.Col.ColPos) < groupCount && flags[e.Col.ColPos]
+	case *plan.Expr_Lit:
+		return e.Lit != nil
+	case *plan.Expr_T:
+		return e.T != nil
+	case *plan.Expr_P:
+		return e.P != nil && e.P.Pos >= 0
+	case *plan.Expr_F:
+		if e.F == nil || e.F.Func == nil {
+			return false
+		}
+		id, _ := function.DecodeOverloadID(e.F.Func.Obj)
+		overload, ok := function.GetFunctionByIdWithoutError(e.F.Func.Obj)
+		if !ok || id == function.GROUPING || overload.IsAgg() || overload.IsWin() {
+			return false
+		}
+		for _, arg := range e.F.Args {
+			if !groupingFilterHasOnlyActiveKeys(arg, groupTag, groupCount, flags) {
+				return false
+			}
+		}
+		return true
+	default:
+		return false
+	}
 }
 
 // referencesSyntheticGroupKey reports whether expr cannot be rewritten below
@@ -1583,7 +1608,7 @@ func (builder *QueryBuilder) pushdownLimitToTableScan(nodeID int32) {
 	if node.NodeType == plan.Node_PROJECT && len(node.Children) > 0 &&
 		(node.Limit != nil || node.Offset != nil) {
 		child := builder.qry.Nodes[node.Children[0]]
-		if child.NodeType == plan.Node_TABLE_SCAN {
+		if child.NodeType == plan.Node_TABLE_SCAN && !scanHasFullTextBooleanComposition(child) {
 			if limit, offset, ok := composePagination(
 				child.Limit, child.Offset, node.Limit, node.Offset,
 			); ok {

@@ -20,8 +20,10 @@ import (
 	"math"
 	"strconv"
 	"strings"
+	"unicode"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	commonutil "github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
@@ -31,6 +33,32 @@ type MySQLParser struct {
 	lexer   Lexer
 	// use this will save some memory allocation
 	// parser  yyParserImpl
+}
+
+// MayHaveMultipleStatements is a conservative lexical preflight, not a syntax
+// validator or statement splitter. Strings, identifiers and comments follow the
+// same scanner and SQL mode as parsing. Compound statements and lexical errors
+// can return true; only the parser can decide their actual statement boundaries.
+func MayHaveMultipleStatements(sql, sqlMode string) bool {
+	scanner := NewScannerWithSQLMode(dialect.MYSQL, sql, ParseSQLModeFlags(sqlMode))
+	defer PutScanner(scanner)
+	seenToken, delimiter := false, false
+	for {
+		token, _ := scanner.Scan()
+		switch token {
+		case 0, EofChar():
+			return false
+		case LEX_ERROR:
+			return true
+		case int(';'):
+			delimiter = seenToken
+		default:
+			if delimiter {
+				return true
+			}
+			seenToken = true
+		}
+	}
 }
 
 func integralToUint64(v any) uint64 {
@@ -96,7 +124,32 @@ func (p *MySQLParser) ParseWithSQLMode(ctx context.Context, sql string, lower in
 // byte offset immediately after its delimiter. It stops the lexer as soon as
 // the first statement is reduced, so compound statements are scanned once.
 func (p *MySQLParser) ParseFirstWithSQLMode(ctx context.Context, sql string, lower int64, sqlMode string) (tree.Statement, int, error) {
+	return p.parseFirstWithSQLMode(ctx, sql, lower, sqlMode, false)
+}
+
+// SQLContinuation retains the original unconsumed SQL and its lexical context.
+// Keeping the suffix as a slice avoids copying it for every staged statement.
+type SQLContinuation struct {
+	SQL                 string
+	InExecutableComment bool
+}
+
+// ParseFirstStatementWithSQLMode returns independently parseable statement text
+// and the original continuation. Callers can execute SET sql_mode before parsing
+// the continuation under the new mode, without scanning future SQL prematurely.
+func (p *MySQLParser) ParseFirstStatementWithSQLMode(ctx context.Context, input SQLContinuation, lower int64, sqlMode string) (tree.Statement, string, SQLContinuation, error) {
+	stmt, end, err := p.parseFirstWithSQLMode(ctx, input.SQL, lower, sqlMode, input.InExecutableComment)
+	if err != nil {
+		return nil, "", input, err
+	}
+	inComment := p.scanner.CommentFlag
+	first := balanceExecutableComment(input.SQL[:end], input.InExecutableComment, inComment)
+	return stmt, first, SQLContinuation{SQL: input.SQL[end:], InExecutableComment: inComment}, nil
+}
+
+func (p *MySQLParser) parseFirstWithSQLMode(ctx context.Context, sql string, lower int64, sqlMode string, inComment bool) (tree.Statement, int, error) {
 	p.scanner.setSql(sql)
+	p.scanner.CommentFlag = inComment
 	p.scanner.setSQLMode(ParseSQLModeFlags(sqlMode))
 	p.lexer.setScanner(&p.scanner, lower, ParseSQLModeFlags(sqlMode))
 	p.lexer.parseFirst = true
@@ -137,9 +190,32 @@ func Parse(ctx context.Context, sql string, lower int64) ([]tree.Statement, erro
 	return ParseWithSQLMode(ctx, sql, lower, "")
 }
 
-func ParseWithSQLMode(ctx context.Context, sql string, lower int64, sqlMode string) ([]tree.Statement, error) {
+func ParseWithSQLMode(ctx context.Context, sql string, lower int64, sqlMode string) (statements []tree.Statement, err error) {
 	lexer := NewLexerWithSQLMode(dialect.MYSQL, sql, lower, ParseSQLModeFlags(sqlMode))
 	defer PutScanner(lexer.scanner)
+	if limits, ok := ctx.Value(parseLimitsKey{}).(ParseLimits); ok {
+		if cause := context.Cause(ctx); cause != nil {
+			return nil, cause
+		}
+		if len(sql) > limits.Input {
+			return nil, ErrParseLimit
+		}
+		control := &parseControl{ctx: ctx, limits: limits}
+		lexer.scanner.parseControl = control
+		defer func() {
+			if failure := recover(); failure != nil {
+				abort, own := failure.(parseAbort)
+				if !own || abort.control != control {
+					panic(failure)
+				}
+				for _, statement := range lexer.stmts {
+					statement.Free()
+				}
+				statements, err = nil, abort.err
+			}
+		}()
+	}
+
 	if yyParse(lexer) != 0 {
 		for _, s := range lexer.stmts {
 			s.Free()
@@ -312,10 +388,17 @@ func (l *Lexer) GetParamIndex() int {
 }
 
 func (l *Lexer) Lex(lval *yySymType) int {
+	l.scanner.parseControl.token()
 	if l.stopLexing {
 		return 0
 	}
-	typ, str := l.scanner.Scan()
+	var typ int
+	var str string
+	if l.lastToken == int('.') {
+		typ, str = l.scanner.ScanAfterDot()
+	} else {
+		typ, str = l.scanner.Scan()
+	}
 	lval.pos = l.scanner.Pos
 	l.scanner.LastToken = str
 	// yacc precedence is static, so HIGH_NOT_PRECEDENCE uses a distinct token
@@ -349,8 +432,15 @@ func (l *Lexer) Lex(lval *yySymType) int {
 		*l.scanner = snapshot
 	}
 
+	if l.lastToken == FOR && (typ == UPDATE || typ == SHARE) {
+		str = l.scanLockModePhrase(str)
+		lval.pos = l.scanner.Pos
+		l.scanner.LastToken = str
+	}
+
 	switch typ {
 	case INTEGRAL:
+		lval.str = str // Preserve lexical precision independently of the integer value.
 		l.recordSyntaxToken(typ)
 		return l.toInt(lval, str)
 	case FLOAT:
@@ -374,7 +464,7 @@ func (l *Lexer) Lex(lval *yySymType) int {
 	// native join or whether ASOF still occupies the current table's alias slot.
 	// This preserves legacy `t asof JOIN u`, while an already completed alias or
 	// table-factor suffix makes the same phrase a native ASOF JOIN.
-	if typ == ID && strings.EqualFold(str, "asof") && l.asofJoinPhraseAhead() {
+	if typ == ID && l.lastToken != int('.') && strings.EqualFold(str, "asof") && l.asofJoinPhraseAhead() {
 		typ = ASOF
 	}
 
@@ -383,6 +473,33 @@ func (l *Lexer) Lex(lval *yySymType) int {
 	lval.str = str
 	l.recordSyntaxToken(typ)
 	return typ
+}
+
+// scanLockModePhrase keeps modifiers contextual without new global keywords or
+// parser states. Failed speculation leaves the scanner in its original state;
+// shared parse-control accounting still charges the lookahead work.
+func (l *Lexer) scanLockModePhrase(mode string) string {
+	lookahead := *l.scanner
+	token, word := lookahead.Scan()
+	consumed := 1
+	switch {
+	case token == ID && strings.EqualFold(word, "nowait"):
+		mode += " nowait"
+	case token == CONFLICT_SKIP && strings.EqualFold(mode, "share"):
+		token, word = lookahead.Scan()
+		if token != ID || !strings.EqualFold(word, "locked") {
+			return mode
+		}
+		mode += " skip locked"
+		consumed++
+	default:
+		return mode
+	}
+	for range consumed {
+		lookahead.parseControl.token()
+	}
+	*l.scanner = lookahead
+	return mode
 }
 
 func (l *Lexer) alterAccountConfigPhraseAhead() bool {
@@ -511,8 +628,9 @@ func (l *Lexer) Error(err string) {
 	var lenStr string
 	if len(near) > 1024 {
 		lenStr = " (total length " + strconv.Itoa(len(lenStr)) + ")"
-		near = near[:1024]
+		near = near[:commonutil.UTF8PrefixLen(near, 1024)]
 	}
+	near = commonutil.Abbreviate(near, -1)
 	l.scanner.LastError = PositionedErr{Err: errMsg, Line: l.scanner.Line, Col: l.scanner.Col, Near: near, LenStr: lenStr}
 }
 
@@ -533,6 +651,57 @@ func SplitSqlByStatement(ctx context.Context, sql string, lower int64) ([]string
 }
 
 func SplitSqlByStatementWithSQLMode(ctx context.Context, sql string, lower int64, sqlMode string) ([]string, error) {
+	fragments, err := SplitSqlByStatementFragmentsWithSQLMode(ctx, sql, lower, sqlMode)
+	if err != nil {
+		return nil, err
+	}
+	parts := make([]string, len(fragments))
+	for i, fragment := range fragments {
+		parts[i] = fragment.SQL
+	}
+	return parts, nil
+}
+
+// SQLFragment pairs standalone executable text with its trimmed raw source span.
+// Only executable-comment wrappers may be synthesized at the span endpoints.
+type SQLFragment struct {
+	SQL                            string
+	Start, End                     int
+	startsInComment, endsInComment bool
+}
+
+// MatchesSource verifies the raw source without allocating another balanced copy.
+func (f SQLFragment) MatchesSource(sql string) bool {
+	if f.Start < 0 || f.End < f.Start || f.End > len(sql) {
+		return false
+	}
+	text := f.SQL
+	if f.startsInComment {
+		if !strings.HasPrefix(text, "/*! ") {
+			return false
+		}
+		text = text[len("/*! "):]
+	}
+	if f.endsInComment {
+		if !strings.HasSuffix(text, " */") {
+			return false
+		}
+		text = text[:len(text)-len(" */")]
+	}
+	return text == sql[f.Start:f.End]
+}
+
+func balanceExecutableComment(sql string, startsInside, endsInside bool) string {
+	if startsInside {
+		sql = "/*! " + sql
+	}
+	if endsInside {
+		sql += " */"
+	}
+	return sql
+}
+
+func SplitSqlByStatementFragmentsWithSQLMode(ctx context.Context, sql string, lower int64, sqlMode string) ([]SQLFragment, error) {
 	lexer := NewLexerWithSQLMode(dialect.MYSQL, sql, lower, ParseSQLModeFlags(sqlMode))
 	defer PutScanner(lexer.scanner)
 	if yyParse(lexer) != 0 {
@@ -553,34 +722,40 @@ func SplitSqlByStatementWithSQLMode(ctx context.Context, sql string, lower int64
 		}
 	}()
 
-	// A MySQL executable comment is SQL lexical space, so a statement-ending
-	// semicolon can occur before the raw /*! ... */ wrapper closes. The parser
-	// records that semicolon's byte offset, but slicing there would turn one
-	// statement into two invalid raw fragments ("/*! ..." and "*/"). Extend
-	// only a comment's final semicolon through its terminator. Earlier
-	// semicolons, if any, remain genuine statement boundaries.
+	// Grammar semicolons are real AST boundaries even inside executable comments.
+	// Preserve their raw spans, but balance wrappers so each SQL fragment can be
+	// reparsed independently. Only the final inner delimiter extends to the close.
 	var executableCommentEnds map[int]int
 	if lexer.scanner.executableCommentEnd != 0 {
-		executableCommentEnds = executableCommentEndsByFinalSemicolon(sql, sqlMode)
+		executableCommentEnds = executableCommentSemicolonEnds(sql, sqlMode)
 	}
-	fragments := make([]string, 0, len(lexer.topLevelSemicolonEnds)+1)
+	fragments := make([]SQLFragment, 0, len(lexer.topLevelSemicolonEnds)+1)
 	start := 0
+	startsInComment := false
+	appendFragment := func(end int, endsInComment bool) {
+		raw := sql[start:end]
+		trimmed := strings.TrimSpace(raw)
+		trimStart := start + len(raw) - len(strings.TrimLeftFunc(raw, unicode.IsSpace))
+		fragments = append(fragments, SQLFragment{
+			SQL:   balanceExecutableComment(trimmed, startsInComment, endsInComment),
+			Start: trimStart, End: trimStart + len(trimmed),
+			startsInComment: startsInComment, endsInComment: endsInComment,
+		})
+	}
 	for _, end := range lexer.topLevelSemicolonEnds {
-		fragmentEnd := end - 1
-		nextStart := end
-		if commentEnd, ok := executableCommentEnds[end]; ok {
-			fragmentEnd = commentEnd
-			nextStart = commentEnd
+		fragmentEnd, nextStart := end-1, end
+		commentEnd, insideComment := executableCommentEnds[end]
+		endsInComment := insideComment && commentEnd == 0
+		if commentEnd != 0 {
+			fragmentEnd, nextStart = commentEnd, commentEnd
 		}
-		fragments = append(fragments, strings.TrimSpace(sql[start:fragmentEnd]))
+		appendFragment(fragmentEnd, endsInComment)
 		start = nextStart
+		startsInComment = endsInComment
 	}
 	tail := strings.TrimSpace(sql[start:])
 	if len(lexer.topLevelSemicolonEnds) == 0 || tail != "" {
-		fragments = append(fragments, tail)
-	}
-	if len(fragments) == 0 {
-		return []string{""}, nil
+		appendFragment(len(sql), false)
 	}
 	return fragments, nil
 }
@@ -599,18 +774,27 @@ func validateSelectIntoStatements(lexer *Lexer) error {
 	return nil
 }
 
-// executableCommentEndsByFinalSemicolon maps the final semicolon inside each
-// executable comment to the byte offset immediately after its closing */. The
-// scanner supplies both SQL-mode-aware tokenization and a terminator offset
-// that is not confused by comment-looking text inside quoted values.
-func executableCommentEndsByFinalSemicolon(sql string, sqlMode string) map[int]int {
+// executableCommentSemicolonEnds records every inner semicolon. A zero value
+// means the boundary still needs balancing; a nonzero value extends the final
+// inner delimiter through the real closing wrapper. Quoted terminators and
+// qualification use the same SQL-mode-aware scanner as the parser.
+func executableCommentSemicolonEnds(sql string, sqlMode string) map[int]int {
 	scanner := NewScannerWithSQLMode(dialect.MYSQL, sql, ParseSQLModeFlags(sqlMode))
 	defer PutScanner(scanner)
 
 	var ends map[int]int
 	finalSemicolonEnd := 0
+	previousToken := 0
 	for {
-		typ, _ := scanner.Scan()
+		// Match Lex's qualification context before keyword-specific lookahead
+		// so accepted names such as t.begin cannot stop this boundary rescan.
+		var typ int
+		if previousToken == int('.') {
+			typ, _ = scanner.ScanAfterDot()
+		} else {
+			typ, _ = scanner.Scan()
+		}
+		previousToken = typ
 		if commentEnd := scanner.TakeExecutableCommentEnd(); commentEnd != 0 {
 			if finalSemicolonEnd != 0 && commentEnd >= 2 && finalSemicolonEnd <= commentEnd-2 &&
 				strings.TrimSpace(sql[finalSemicolonEnd:commentEnd-2]) == "" {
@@ -623,6 +807,10 @@ func executableCommentEndsByFinalSemicolon(sql string, sqlMode string) map[int]i
 		}
 		if typ == ';' && scanner.CommentFlag {
 			finalSemicolonEnd = scanner.Pos
+			if ends == nil {
+				ends = make(map[int]int)
+			}
+			ends[finalSemicolonEnd] = 0
 		}
 		if typ == 0 || typ == EofChar() || typ == LEX_ERROR {
 			break

@@ -56,6 +56,15 @@ func (idx *MutIndex) BatchUpsert(
 	return
 }
 
+func (idx *MutIndex) DeleteAt(key any, row uint32) error {
+	encoded := types.EncodeValue(key, idx.zonemap.GetType())
+	err := idx.art.DeleteAt(encoded, row)
+	if err == index.ErrNotFound {
+		return nil
+	}
+	return err
+}
+
 func (idx *MutIndex) GetActiveRow(key any) (row []uint32, err error) {
 	defer func() {
 		err = TranslateError(err)
@@ -71,6 +80,39 @@ func (idx *MutIndex) GetActiveRow(key any) (row []uint32, err error) {
 	row, err = idx.art.Search(ikey)
 	err = TranslateError(err)
 	return
+}
+
+// ForeachRowsByKeys calls fn for every ART row whose key is present and
+// non-null in keys. It does not perform MVCC filtering or mutate keys.
+func (idx *MutIndex) ForeachRowsByKeys(
+	keys *vector.Vector,
+	keysZM index.ZM,
+	fn func(row uint32),
+) error {
+	if keysZM.Valid() {
+		if !idx.zonemap.FastIntersect(keysZM) {
+			return nil
+		}
+	} else if !idx.zonemap.FastContainsAny(keys) {
+		return nil
+	}
+	op := func(v []byte, isNull bool, _ int) error {
+		if isNull {
+			return nil
+		}
+		rows, err := idx.art.Search(v)
+		if err == index.ErrNotFound {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		for _, row := range rows {
+			fn(row)
+		}
+		return nil
+	}
+	return containers.ForeachWindowBytes(keys, 0, keys.Length(), op, nil)
 }
 
 func (idx *MutIndex) String() string {
@@ -145,7 +187,7 @@ func (idx *MutIndex) GetDuplicatedRows(
 	keysZM index.ZM,
 	blkID *types.Blockid,
 	rowIDs *vector.Vector,
-	getRowOffsetFn func() (min, max int32, err error),
+	rowInWindowFn func(row uint32) bool,
 	skipFn func(row uint32) error,
 	mp *mpool.MPool,
 ) (err error) {
@@ -159,10 +201,6 @@ func (idx *MutIndex) GetDuplicatedRows(
 			return
 		}
 	}
-	minVisibleRow, maxVisibleRow, err := getRowOffsetFn()
-	if err != nil {
-		return
-	}
 	op := func(v []byte, _ bool, offset int) error {
 		if !rowIDs.IsNull(uint64(offset)) {
 			return nil
@@ -171,9 +209,10 @@ func (idx *MutIndex) GetDuplicatedRows(
 		if err == index.ErrNotFound {
 			return nil
 		}
-		// Preserve the conflict check against the newest non-aborted owner even
-		// when that row is newer than this transaction's snapshot. Aborted
-		// append nodes remain in the index as rollback holes and must be skipped.
+		// Check the newest valid owner even when it is outside the dedup window. Rows
+		// without an eligible append node (aborted, missing, or still
+		// unprepared) are stale/future candidates, so keep walking toward older
+		// owners instead of exposing the skip signal to the caller.
 		if skipFn != nil {
 			for i := len(rows) - 1; i >= 0; i-- {
 				err = skipFn(rows[i])
@@ -189,23 +228,21 @@ func (idx *MutIndex) GetDuplicatedRows(
 		var maxRow uint32
 		exist := false
 		for i := len(rows) - 1; i >= 0; i-- {
-			if int32(rows[i]) <= minVisibleRow {
-				break
+			if !rowInWindowFn(rows[i]) {
+				continue
 			}
-			if int32(rows[i]) < maxVisibleRow {
-				if skipFn != nil {
-					err = skipFn(rows[i])
-					if err == index.ErrNotFound {
-						continue
-					}
-					if err != nil {
-						return err
-					}
+			if skipFn != nil {
+				err = skipFn(rows[i])
+				if err == index.ErrNotFound {
+					continue
 				}
-				maxRow = rows[i]
-				exist = true
-				break
+				if err != nil {
+					return err
+				}
 			}
+			maxRow = rows[i]
+			exist = true
+			break
 		}
 		if !exist {
 			return nil
@@ -246,15 +283,18 @@ func (idx *MutIndex) Contains(
 		if err == index.ErrNotFound {
 			return nil
 		}
+		// Concurrent deletes may temporarily add more than one tombstone for the
+		// same rowid. Walk from the newest candidate to the oldest and ignore
+		// candidates whose append node is aborted or still has UncommitTS; the
+		// caller reports both cases as index.ErrNotFound. A prepared conflicting
+		// candidate still propagates its write-write conflict.
 		for i := len(rows) - 1; i >= 0; i-- {
-			if skipFn != nil {
-				err = skipFn(rows[i])
-				if err == index.ErrNotFound {
-					continue
-				}
-				if err != nil {
-					return err
-				}
+			err = skipFn(rows[i])
+			if err == index.ErrNotFound {
+				continue
+			}
+			if err != nil {
+				return err
 			}
 			containers.UpdateValue(keys, uint32(offset), nil, true, mp)
 			return nil

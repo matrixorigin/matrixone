@@ -251,10 +251,13 @@ type ExternParam struct {
 }
 
 type ExParamConst struct {
-	ScanType       int
-	FileSize       int64
-	FileStartOff   int64
-	Filepath       string
+	ScanType     int
+	FileSize     int64
+	FileStartOff int64
+	Filepath     string
+	// StageFilepath preserves the original dependency after binding resolves
+	// Filepath to a backing source. Prepared LOAD must revalidate it on execution.
+	StageFilepath  string `json:",omitempty"`
 	CompressType   string
 	Format         string
 	ArrowContainer string
@@ -289,6 +292,7 @@ type HivePartColType struct {
 type ExParam struct {
 	ExternType            int32
 	JsonData              string
+	JsonBinary            string
 	FileService           fileservice.FileService
 	NullMap               map[string]([]string)
 	S3Param               *S3Parameter
@@ -471,6 +475,8 @@ func formatS3option(ctx *FmtCtx, option []string) {
 			ctx.WriteString("'format'='" + option[i+1] + "'")
 		case "jsondata":
 			ctx.WriteString("'jsondata'='" + option[i+1] + "'")
+		case "json_binary":
+			ctx.WriteString("'json_binary'='" + option[i+1] + "'")
 		case "role_arn":
 			ctx.WriteString("'role_arn'='" + option[i+1] + "'")
 		case "external_id":
@@ -654,30 +660,49 @@ type ExportParam struct {
 func (ep *ExportParam) String() string {
 	buf := bytes.Buffer{}
 	if ep.Fields != nil {
-		buf.WriteString("FIELDS TERMINATED BY ")
-		buf.WriteString(escapeExportParamLiteral(ep.Fields.Terminated.Value))
-		buf.WriteString(" ")
+		if ep.Fields.Terminated != nil {
+			buf.WriteString("FIELDS TERMINATED BY ")
+			buf.WriteString(escapeExportParamLiteral(ep.Fields.Terminated.Value))
+			buf.WriteString(" ")
+		}
 
-		buf.WriteString("ENCLOSED BY ")
-		buf.WriteString(escapeExportParamLiteral(string(ep.Fields.EnclosedBy.Value)))
-		buf.WriteString(" ")
+		if ep.Fields.EnclosedBy != nil {
+			buf.WriteString("ENCLOSED BY ")
+			buf.WriteString(escapeExportParamLiteral(string(ep.Fields.EnclosedBy.Value)))
+			buf.WriteString(" ")
+		}
 
-		buf.WriteString("ESCAPED BY ")
-		buf.WriteString(escapeExportParamLiteral(string(ep.Fields.EscapedBy.Value)))
-		buf.WriteString(" ")
+		// ESCAPED BY is optional in the grammar: nil means "not specified"
+		// (both reader and writer then fall back to '\\'), not "disabled".
+		if ep.Fields.EscapedBy != nil {
+			buf.WriteString("ESCAPED BY ")
+			buf.WriteString(escapeExportParamLiteral(string(ep.Fields.EscapedBy.Value)))
+			buf.WriteString(" ")
+		}
 	}
 
 	if ep.Lines != nil {
-		buf.WriteString("LINES TERMINATED BY ")
-		buf.WriteString(escapeExportParamLiteral(ep.Lines.TerminatedBy.Value))
+		// STARTING BY is optional; an empty value is omitted.
+		if ep.Lines.StartingBy != "" {
+			buf.WriteString("LINES STARTING BY ")
+			buf.WriteString(escapeExportParamLiteral(ep.Lines.StartingBy))
+			buf.WriteString(" ")
+		}
+		if ep.Lines.TerminatedBy != nil {
+			buf.WriteString("LINES TERMINATED BY ")
+			buf.WriteString(escapeExportParamLiteral(ep.Lines.TerminatedBy.Value))
+		}
 	}
 
 	return buf.String()
 }
 
 func escapeExportParamLiteral(val string) string {
-	if val == "" {
-		return ""
+	if val == "" || val == "\x00" {
+		// A NUL byte is the tree representation of an explicit '' clause
+		// (e.g. ENCLOSED BY '' / ESCAPED BY ''): render it as that clause,
+		// not as a quoted literal NUL.
+		return "''"
 	}
 
 	var b strings.Builder

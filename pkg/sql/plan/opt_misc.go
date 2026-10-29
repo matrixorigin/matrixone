@@ -25,7 +25,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
 )
 
 func (builder *QueryBuilder) countColRefs(nodeID int32, colRefCnt map[[2]int32]int) {
@@ -33,6 +32,12 @@ func (builder *QueryBuilder) countColRefs(nodeID int32, colRefCnt map[[2]int32]i
 
 	increaseRefCntForExprList(node.ProjectList, 1, colRefCnt)
 	increaseRefCntForExprList(node.OnList, 1, colRefCnt)
+	increaseRefCntForExprList(node.DedupKeyExprs, 1, colRefCnt)
+	if node.PreInsertUkCtx != nil {
+		for _, exprs := range node.PreInsertUkCtx.KeyDiagnosticExprs {
+			increaseRefCntForExprList(exprs.GetList(), 1, colRefCnt)
+		}
+	}
 	increaseRefCntForExprList(node.FilterList, 1, colRefCnt)
 	increaseRefCntForExprList(node.GroupBy, 1, colRefCnt)
 	increaseRefCntForExprList(node.PhysicalEqualityKeyList, 1, colRefCnt)
@@ -156,8 +161,13 @@ func (builder *QueryBuilder) removeSimpleProjections(nodeID int32, parentType pl
 		}
 
 	default:
+		childParentType := node.NodeType
+		if isSetOperation(parentType) && isSetOperationInputWrapper(node) {
+			// Keep the operand's positional schema boundary through identity wrappers.
+			childParentType = parentType
+		}
 		for i, childID := range node.Children {
-			newChildID, childProjMap := builder.removeSimpleProjections(childID, node.NodeType, flag, colRefCnt)
+			newChildID, childProjMap := builder.removeSimpleProjections(childID, childParentType, flag, colRefCnt)
 			node.Children[i] = newChildID
 			for ref, expr := range childProjMap {
 				projMap[ref] = expr
@@ -216,6 +226,9 @@ func increaseRefCntForColRefList(cols []plan.ColRef, inc int, colRefCnt map[[2]i
 
 // FIXME: We should remove PROJECT node for more cases, but keep them now to avoid intricate issues.
 func (builder *QueryBuilder) canRemoveProject(parentType plan.Node_NodeType, node *plan.Node) bool {
+	if builder.isFullTextBooleanScoreProject(node) {
+		return false
+	}
 	if _, protected := builder.existentialGateProjects[node.NodeId]; protected {
 		// Inlining its TRUE slot would turn an ANTI hash key back into a
 		// residual and enumerate every duplicate-key match.
@@ -287,7 +300,7 @@ func exprCanRemoveProject(expr *Expr) bool {
 	switch ne := expr.Expr.(type) {
 	case *plan.Expr_F:
 		// fulltext_match is a planner placeholder: applyIndices replaces it
-		// with the score column produced by fulltext_index_scan.  Inlining a
+		// with the score column produced by the fulltext search scan.  Inlining a
 		// projection that contains it can move the placeholder into a WINDOW
 		// (for example through a multi-CTE query) where the fulltext rewrite
 		// cannot associate it with the source scan anymore.  Keep that PROJECT
@@ -333,6 +346,12 @@ func exprCanRemoveProject(expr *Expr) bool {
 func replaceColumnsForNode(node *plan.Node, projMap map[[2]int32]*plan.Expr) {
 	replaceColumnsForExprList(node.ProjectList, projMap)
 	replaceColumnsForExprList(node.OnList, projMap)
+	replaceColumnsForExprList(node.DedupKeyExprs, projMap)
+	if node.PreInsertUkCtx != nil {
+		for _, exprs := range node.PreInsertUkCtx.KeyDiagnosticExprs {
+			replaceColumnsForExprList(exprs.GetList(), projMap)
+		}
+	}
 	replaceColumnsForExprList(node.FilterList, projMap)
 	replaceColumnsForExprList(node.GroupBy, projMap)
 	replaceColumnsForExprList(node.PhysicalEqualityKeyList, projMap)
@@ -653,7 +672,7 @@ func (builder *QueryBuilder) removeRedundantJoinCond(nodeID int32, colMap map[[2
 	newOnList := make([]*plan.Expr, 0)
 	for _, expr := range node.OnList {
 		if exprf := expr.GetF(); exprf != nil {
-			if IsEqualFunc(exprf.Func.GetObj()) {
+			if IsEqualFunc(exprf.Func.GetObj()) && !isJSONNumericComparisonArgs(exprf.Args) {
 				leftcol := exprf.Args[0].GetCol()
 				rightcol := exprf.Args[1].GetCol()
 				if leftcol != nil && rightcol != nil {
@@ -706,6 +725,12 @@ func (builder *QueryBuilder) removeEffectlessLeftJoins(nodeID int32, tagCnt map[
 
 	increaseTagCntForExprList(node.ProjectList, 1, tagCnt)
 	increaseTagCntForExprList(node.OnList, 1, tagCnt)
+	increaseTagCntForExprList(node.DedupKeyExprs, 1, tagCnt)
+	if node.PreInsertUkCtx != nil {
+		for _, exprs := range node.PreInsertUkCtx.KeyDiagnosticExprs {
+			increaseTagCntForExprList(exprs.GetList(), 1, tagCnt)
+		}
+	}
 	increaseTagCntForExprList(node.FilterList, 1, tagCnt)
 	increaseTagCntForExprList(node.GroupBy, 1, tagCnt)
 	increaseTagCntForExprList(node.AggList, 1, tagCnt)
@@ -768,6 +793,12 @@ func (builder *QueryBuilder) removeEffectlessLeftJoins(nodeID int32, tagCnt map[
 
 END:
 	increaseTagCntForExprList(node.ProjectList, -1, tagCnt)
+	increaseTagCntForExprList(node.DedupKeyExprs, -1, tagCnt)
+	if node.PreInsertUkCtx != nil {
+		for _, exprs := range node.PreInsertUkCtx.KeyDiagnosticExprs {
+			increaseTagCntForExprList(exprs.GetList(), -1, tagCnt)
+		}
+	}
 	increaseTagCntForExprList(node.FilterList, -1, tagCnt)
 	increaseTagCntForExprList(node.GroupBy, -1, tagCnt)
 	increaseTagCntForExprList(node.AggList, -1, tagCnt)
@@ -806,8 +837,9 @@ END:
 }
 
 func dedupJoinMetadataCols(ctx *plan.DedupJoinCtx) []*plan.ColRef {
-	cols := make([]*plan.ColRef, 0, 3+len(ctx.ForeignKeyChecks))
+	cols := make([]*plan.ColRef, 0, 7+len(ctx.ForeignKeyChecks))
 	cols = append(cols, ctx.AffectedRowsCol, ctx.PhysicalChangedRowsCol, ctx.ActionFinalCol)
+	cols = append(cols, ctx.OdkuTargetAutoIncrementCol, ctx.OdkuGeneratedCol, ctx.OdkuOrdinalCol, ctx.OdkuGeneratedAutoIncrementCol)
 	for i := range ctx.ForeignKeyChecks {
 		cols = append(cols, ctx.ForeignKeyChecks[i].EligibilityCol)
 	}
@@ -1121,48 +1153,52 @@ func checkExprInTags(expr *plan.Expr, tags []int32) bool {
 	return false
 }
 
-func (builder *QueryBuilder) rewriteDistinctToAGG(nodeID int32) {
+func (builder *QueryBuilder) rewriteDistinctToAGG(nodeID int32) error {
 	node := builder.qry.Nodes[nodeID]
 	if len(node.Children) > 0 {
 		for _, child := range node.Children {
-			builder.rewriteDistinctToAGG(child)
+			if err := builder.rewriteDistinctToAGG(child); err != nil {
+				return err
+			}
 		}
 	}
 	if node.NodeType != plan.Node_DISTINCT {
-		return
+		return nil
 	}
 	project := builder.qry.Nodes[node.Children[0]]
 	if project.NodeType != plan.Node_PROJECT {
-		return
+		return nil
 	}
 	if builder.qry.Nodes[project.Children[0]].NodeType == plan.Node_VALUE_SCAN {
-		return
+		return nil
 	}
 
+	groupBy, hashKeys, err := CompactPhysicalGroupKeys(project.ProjectList, node.PhysicalEqualityKeyList)
+	if err != nil {
+		return err
+	}
 	node.NodeType = plan.Node_AGG
-	node.GroupBy = project.ProjectList
+	node.GroupBy, node.GroupByHashKey = groupBy, hashKeys
 	if len(node.PhysicalEqualityKeyList) > 0 {
-		visibleCount := len(node.GroupBy)
+		visibleCount := len(project.ProjectList)
 		node.ProjectList = make([]*plan.Expr, visibleCount)
 		for i, expr := range project.ProjectList {
 			node.ProjectList[i] = GetColExpr(expr.Typ, -1, int32(i))
 		}
-		for i, key := range node.PhysicalEqualityKeyList {
-			node.GroupBy = append(node.GroupBy, DeepCopyExpr(key))
-			node.GroupByHashKey = append(node.GroupByHashKey, int32(visibleCount+i))
-		}
 	}
+	node.PhysicalEqualityKeyList = nil
 	node.BindingTags = project.BindingTags
 	node.BindingTags = append(node.BindingTags, builder.genNewBindTag())
 	node.Children[0] = project.Children[0]
 	node.SpillMem = builder.aggSpillMem
+	return nil
 }
 
 // reuse removeSimpleProjections to delete this plan node
 func (builder *QueryBuilder) rewriteEffectlessAggToProject(nodeID int32) int32 {
 	remap := make(map[[2]int32]*plan.Expr)
 	rewritten := make(map[int32]struct{})
-	builder.rewriteEffectlessAggToProjectImpl(nodeID, false, remap, rewritten)
+	builder.rewriteEffectlessAggToProjectImpl(nodeID, false, false, remap, rewritten)
 	if len(rewritten) == 0 {
 		return nodeID
 	}
@@ -1175,11 +1211,13 @@ func (builder *QueryBuilder) rewriteEffectlessAggToProject(nodeID int32) int32 {
 func (builder *QueryBuilder) rewriteEffectlessAggToProjectImpl(
 	nodeID int32,
 	limitDemand bool,
+	rollupCountGuard bool,
 	remap map[[2]int32]*plan.Expr,
 	rewritten map[int32]struct{},
 ) {
 	node := builder.qry.Nodes[nodeID]
 	childLimitDemand := false
+	childRollupCountGuard := false
 	if len(node.Children) == 1 {
 		boundedDemand := limitDemand || node.Limit != nil
 		switch node.NodeType {
@@ -1190,6 +1228,7 @@ func (builder *QueryBuilder) rewriteEffectlessAggToProjectImpl(
 			// boundary and accidentally rewrite an unrelated aggregate.
 			childLimitDemand = boundedDemand
 		case plan.Node_FILTER:
+			childRollupCountGuard = builder.isSingletonRollupCountGuard(node, builder.qry.Nodes[node.Children[0]])
 			// A HAVING Filter is above Aggregate on the first rewrite pass. If
 			// Aggregate is removed, filter pushdown can move that predicate onto
 			// the scan before the second pass. Carry demand through only when the
@@ -1202,7 +1241,18 @@ func (builder *QueryBuilder) rewriteEffectlessAggToProjectImpl(
 	}
 	if len(node.Children) > 0 {
 		for _, child := range node.Children {
-			builder.rewriteEffectlessAggToProjectImpl(child, childLimitDemand, remap, rewritten)
+			builder.rewriteEffectlessAggToProjectImpl(child, childLimitDemand, childRollupCountGuard, remap, rewritten)
+		}
+	}
+	if childRollupCountGuard {
+		if _, singleton := rewritten[node.Children[0]]; singleton &&
+			builder.qry.Nodes[node.Children[0]].NodeType == plan.Node_PROJECT {
+			// All uniqueness, active-key and expression proofs succeeded for
+			// this direct child. COUNT(*) is one on every surviving row, so
+			// its sole guard is true. Remove it before normal filter/projection
+			// cleanup, which can also discard an otherwise unused hidden count.
+			node.FilterList = nil
+			node.RollupFilter = false
 		}
 	}
 	if node.NodeType != plan.Node_AGG {
@@ -1231,10 +1281,10 @@ func (builder *QueryBuilder) rewriteEffectlessAggToProjectImpl(
 		// that every logical key is active in this grouping-set branch.
 		return
 	}
-	if len(node.AggList) > 0 && !limitDemand {
-		// Aggregate-bearing rewrites are a limit-aware optimization, not a
-		// general plan-shape canonicalization.  Requiring a bounded demand
-		// keeps unlimited queries on their established physical path.
+	if len(node.AggList) > 0 && !limitDemand && !rollupCountGuard {
+		// Ordinary aggregate-bearing rewrites require bounded demand. The
+		// singleton ROLLUP count guard has a separate row-equivalence proof;
+		// other unlimited queries keep their established physical path.
 		return
 	}
 	scan := builder.qry.Nodes[node.Children[0]]
@@ -1290,7 +1340,7 @@ func (builder *QueryBuilder) rewriteEffectlessAggToProjectImpl(
 	if !containsCompleteUniqueKey {
 		return
 	}
-	if limitDemand {
+	if limitDemand || rollupCountGuard {
 		for _, expr := range node.GroupBy {
 			if !isTruncationSafeRowExpr(expr) {
 				return
@@ -1371,6 +1421,41 @@ func (builder *QueryBuilder) rewriteEffectlessAggToProjectImpl(
 	node.GroupByHashKey = nil
 	node.SpillMem = 0
 	rewritten[nodeID] = struct{}{}
+}
+
+// A ROLLUP detail group proven unique below has exactly one input row. Its
+// COUNT(*) guard is therefore row-equivalent even without bounded demand.
+// Recognize only that guard; do not carry LIMIT through a grouping-set UNION
+// or relax the established gate for ordinary unbounded aggregates.
+func (builder *QueryBuilder) isSingletonRollupCountGuard(filter, agg *plan.Node) bool {
+	if !filter.RollupFilter || filter.IsEnd || filter.FilterIsBarrier ||
+		filter.Limit != nil || filter.Offset != nil || filter.RankOption != nil ||
+		len(filter.FilterList) != 1 || agg.NodeType != plan.Node_AGG ||
+		len(agg.FilterList) != 0 || len(agg.GroupingFlag) == 0 || len(agg.AggList) != 1 ||
+		!groupingSetPositiveCountFilter(filter.FilterList[0], agg) ||
+		!areTruncationSafePredicates(filter.FilterList) {
+		return false
+	}
+	predicate := filter.FilterList[0]
+	fn := predicate.GetF()
+	rebound, err := BindFuncExprImplByPlanExpr(builder.GetContext(), ">", DeepCopyExprList(fn.Args))
+	if err != nil || rebound == nil || rebound.GetF() == nil || rebound.GetF().Func == nil ||
+		rebound.GetF().Func.Obj != fn.Func.Obj ||
+		!isSameColumnType(rebound.Typ, predicate.Typ) || rebound.Typ.NotNullable != predicate.Typ.NotNullable {
+		return false
+	}
+	count := agg.AggList[0].GetF()
+	if len(count.Args) != 1 || count.Args[0] == nil || count.Args[0].GetLit() == nil ||
+		types.T(count.Args[0].Typ.Id) != types.T_int64 {
+		return false
+	}
+	one := count.Args[0].GetLit()
+	value, ok := one.Value.(*plan.Literal_I64Val)
+	if one.Isnull || !ok || value.I64Val != 1 {
+		return false
+	}
+	_, valid := builder.singleRowAggregateExpr(agg.AggList[0])
+	return valid
 }
 
 // removeConstantSortAfterSingletonGroup removes only Sorts whose complete key
@@ -1469,7 +1554,7 @@ func (builder *QueryBuilder) isConstantSingletonGroupOrderExpr(
 		nodeID = node.Children[0]
 	}
 
-	if !rule.IsConstant(resolved, false) {
+	if !function.IsConstant(resolved, false) {
 		return false, usesSingletonGroup
 	}
 	if resolved.GetLit() != nil {
@@ -2305,7 +2390,7 @@ func handleOptimizerHints(str string, builder *QueryBuilder) {
 	}
 	switch key {
 	case "vectorLocalDOP":
-		builder.optimizerHints.vectorLocalDOP = value
+		// Read directly by VectorLocalDOPEnabled at planning and compilation.
 	case "pushDownLimitToScan":
 		builder.optimizerHints.pushDownLimitToScan = value
 	case "pushDownTopThroughLeftJoin":
@@ -2356,6 +2441,8 @@ func handleOptimizerHints(str string, builder *QueryBuilder) {
 		builder.optimizerHints.skipDedup = value
 	case "outerAntiPlanning":
 		builder.optimizerHints.outerAntiPlanning = value
+	case "rollupSort":
+		builder.optimizerHints.rollupSort = value
 	}
 }
 
@@ -2393,6 +2480,20 @@ func (builder *QueryBuilder) parseOptimizeHints() {
 	}
 }
 
+// sortRollupMode is retained as an internal compatibility adapter. New code
+// should use rollup_algorithm through rollupAlgorithmMode, which mirrors the
+// COST/SORT/HASH session variable used by the window partition implementation.
+func (builder *QueryBuilder) sortRollupMode() int {
+	switch builder.rollupAlgorithmMode() {
+	case rollupAlgorithmSort:
+		return 1
+	case rollupAlgorithmHash:
+		return 2
+	default:
+		return 0
+	}
+}
+
 func (builder *QueryBuilder) optimizeFilters(rootID int32) (int32, error) {
 	rootID, _ = builder.pushdownFilters(rootID, nil, false)
 	transposeTableScanFilters(builder.compCtx.GetProcess(), builder.qry, rootID)
@@ -2402,8 +2503,8 @@ func (builder *QueryBuilder) optimizeFilters(rootID int32) (int32, error) {
 	}
 	ReCalcNodeStats(rootID, builder, true, true, true)
 	builder.rewriteInDomainNotInFilters(rootID)
-	compositePartBlockFilters := builder.collectCompositePartBlockFilters(rootID)
-	builder.mergeFiltersOnCompositeKey(rootID)
+	compositePartBlockFilters, _ := builder.collectCompositePartBlockFilters(rootID, false)
+	builder.mergeFiltersOnCompositeKey(rootID, true)
 	builder.retainConsumedCompositePartBlockFilters(compositePartBlockFilters)
 	foldTableScanFilters(builder.compCtx.GetProcess(), builder.qry, rootID, true)
 	builder.optimizeDateFormatExpr(rootID)
@@ -2492,20 +2593,21 @@ func (builder *QueryBuilder) lockTableIfLockNoRowsAtTheEndForDelAndUpdate() (err
 
 		for _, expr := range baseNode.FilterList {
 			if e, ok := expr.Expr.(*plan.Expr_F); ok {
-				if e.F.Func.GetObjName() == "=" {
+				// Mixed JSON/numeric equality does not identify a physical PK value.
+				if e.F.Func.GetObjName() == "=" && !isJSONNumericComparisonArgs(e.F.Args) {
 					//update t1 set a = 1 where pk = 1; then we allays lock rows pk=1, even pk=1 is not exists
 					//delete from where pk = 1; then we allays lock rows pk=1, even pk=1 is not exists
-					if checkIsPkColExpr(e.F.Args[0]) && rule.IsConstant(e.F.Args[1], true) {
+					if checkIsPkColExpr(e.F.Args[0]) && function.IsConstant(e.F.Args[1], true) {
 						lockRows = e.F.Args[1]
-					} else if checkIsPkColExpr(e.F.Args[1]) && rule.IsConstant(e.F.Args[0], true) {
+					} else if checkIsPkColExpr(e.F.Args[1]) && function.IsConstant(e.F.Args[0], true) {
 						lockRows = e.F.Args[0]
 					}
 				} else if e.F.Func.GetObjName() == "in" {
 					//update t1 set a = 1 where pk in (1,2); then we allays lock rows pk in (1,2), even pk=1 is not exists
 					//delete from where pk in (1,2); then we allays lock rows pk in (1,2), even pk in (1,2) is not exists
-					if checkIsPkColExpr(e.F.Args[0]) && rule.IsConstant(e.F.Args[1], true) {
+					if checkIsPkColExpr(e.F.Args[0]) && function.IsConstant(e.F.Args[1], true) {
 						lockRows = e.F.Args[1]
-					} else if checkIsPkColExpr(e.F.Args[1]) && rule.IsConstant(e.F.Args[0], true) {
+					} else if checkIsPkColExpr(e.F.Args[1]) && function.IsConstant(e.F.Args[0], true) {
 						lockRows = e.F.Args[0]
 					}
 				}

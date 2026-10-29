@@ -24,6 +24,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 
@@ -37,9 +38,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
+	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -257,8 +260,10 @@ func TestCNViewMetadataAdmissionFencesCatalogBeforeReady(t *testing.T) {
 		viewMetadataAdmissionGeneration: 7,
 		viewMetadataEpochFence:          compile.NewViewMetadataEpochFence(),
 		viewMetadataAdmissionUpdated:    make(chan struct{}, 1),
+		heartbeatWakeup:                 make(chan struct{}, 1),
 	}
 	s.sqlExecutor = executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+		require.Empty(t, s.heartbeatWakeup, "catalog work must complete before its success notification")
 		statements.Add(1)
 		if sql == catalog.ViewMetadataLifecycleGateSQL {
 			return viewMetadataLifecycleGateTestResult(), nil
@@ -280,6 +285,7 @@ func TestCNViewMetadataAdmissionFencesCatalogBeforeReady(t *testing.T) {
 	require.Equal(t, uint64(3), s.viewMetadataEpochFence.Epoch())
 	require.Equal(t, uint64(3), s.viewMetadataCatalogFencedEpoch.Load())
 	require.Positive(t, statements.Load())
+	require.Len(t, s.heartbeatWakeup, 1)
 }
 
 func TestCNViewMetadataCatalogFenceShortcuts(t *testing.T) {
@@ -289,17 +295,24 @@ func TestCNViewMetadataCatalogFenceShortcuts(t *testing.T) {
 	}
 
 	t.Run("authority already fenced", func(t *testing.T) {
-		s := &service{}
+		s := &service{heartbeatWakeup: make(chan struct{}, 1)}
 		copy := *snapshot
 		copy.CatalogFencedEpoch = copy.Epoch
 		require.NoError(t, s.fenceViewMetadataCatalog(context.Background(), &copy))
 		require.Equal(t, copy.Epoch, s.viewMetadataCatalogFencedEpoch.Load())
+		require.Len(t, s.heartbeatWakeup, 1, "publish the newly observed epoch without waiting for the periodic heartbeat")
+		<-s.heartbeatWakeup
+		require.NoError(t, s.fenceViewMetadataCatalog(context.Background(), &copy))
+		copy.Epoch--
+		require.NoError(t, s.fenceViewMetadataCatalog(context.Background(), &copy))
+		require.Empty(t, s.heartbeatWakeup, "unchanged or older snapshots must not create a heartbeat loop")
 	})
 
 	t.Run("executor not ready", func(t *testing.T) {
-		s := &service{}
+		s := &service{heartbeatWakeup: make(chan struct{}, 1)}
 		require.NoError(t, s.fenceViewMetadataCatalog(context.Background(), snapshot))
 		require.Zero(t, s.viewMetadataCatalogFencedEpoch.Load())
+		require.Empty(t, s.heartbeatWakeup)
 	})
 }
 
@@ -550,6 +563,9 @@ func TestCNViewMetadataAdmissionPendingActivationClosesAuthoringAfterRecovery(t 
 }
 
 func TestViewMetadataCatalogFenceRetryable(t *testing.T) {
+	refreshCtx, cancel := context.WithTimeoutCause(t.Context(), 0, moerr.CauseRefresh)
+	defer cancel()
+	refreshDeadline := moerr.AttachCause(refreshCtx, refreshCtx.Err())
 	missingTable := moerr.NewNoSuchTableNoCtx("mo_catalog", "t")
 	missingDatabase := moerr.NewBadDBNoCtx("mo_catalog")
 	txnRetry := moerr.NewTxnNeedRetryNoCtx()
@@ -567,6 +583,17 @@ func TestViewMetadataCatalogFenceRetryable(t *testing.T) {
 		{name: "wrapped rollback join", err: fmt.Errorf("transaction failed: %w", errors.Join(missingDatabase, nil)), want: true},
 		{name: "deadline without owner", err: context.DeadlineExceeded, want: false},
 		{name: "deadline with owner", err: context.DeadlineExceeded, upgradeOwnerActive: true, want: true},
+		{name: "attached refresh deadline", err: refreshDeadline, upgradeOwnerActive: true, want: true},
+		{name: "wrapped refresh deadline", err: fmt.Errorf("fence: %w", refreshDeadline), upgradeOwnerActive: true, want: true},
+		{name: "repeated attachment", err: moerr.AttachCause(refreshCtx, refreshDeadline), upgradeOwnerActive: true, want: true},
+		{name: "wrapped diagnostic", err: errors.Join(context.DeadlineExceeded, fmt.Errorf("refresh: %w", moerr.CauseRefresh)), upgradeOwnerActive: true, want: true},
+		{name: "attached deadline without owner", err: refreshDeadline, want: false},
+		{name: "diagnostic alone", err: moerr.CauseRefresh, upgradeOwnerActive: true, want: false},
+		{name: "wrapped diagnostic alone", err: fmt.Errorf("refresh: %w", moerr.CauseRefresh), upgradeOwnerActive: true, want: false},
+		{name: "same text is not a diagnostic", err: errors.Join(context.DeadlineExceeded, moerr.NewInternalErrorNoCtx("cluster refresh")), upgradeOwnerActive: true, want: false},
+		{name: "refresh and rollback failure", err: errors.Join(refreshDeadline, rollbackErr), upgradeOwnerActive: true, want: false},
+		{name: "refresh and cancellation", err: errors.Join(refreshDeadline, context.Canceled), upgradeOwnerActive: true, want: false},
+		{name: "refresh and uncertain commit", err: errors.Join(refreshDeadline, moerr.NewTxnUnknown(t.Context(), "fence")), upgradeOwnerActive: true, want: false},
 		{name: "backend unavailable without owner", err: moerr.NewBackendCannotConnectNoCtx("departed lock owner"), want: true},
 		{name: "txn retry without owner", err: txnRetry, want: false},
 		{name: "txn retry with owner", err: txnRetry, upgradeOwnerActive: true, want: true},
@@ -576,6 +603,8 @@ func TestViewMetadataCatalogFenceRetryable(t *testing.T) {
 			upgradeOwnerActive: true,
 			want:               true,
 		},
+		{name: "unknown commit without owner", err: moerr.NewTxnUnknown(context.Background(), "fence"), want: false},
+		{name: "unknown commit with owner", err: moerr.NewTxnUnknown(context.Background(), "fence"), upgradeOwnerActive: true, want: false},
 		{name: "owner cancellation", err: context.Canceled, upgradeOwnerActive: true, want: false},
 		{name: "other failure", err: errors.New("executor failed"), upgradeOwnerActive: true, want: false},
 		{
@@ -994,11 +1023,14 @@ func TestServiceStartWaitsForCatalogUpgradePastDiscoveryDeadline(t *testing.T) {
 }
 
 func TestServiceStartRetriesTransientCatalogFenceErrors(t *testing.T) {
+	refreshCtx, cancel := context.WithTimeoutCause(t.Context(), 0, moerr.CauseRefresh)
+	defer cancel()
 	tests := []struct {
 		name string
 		err  error
 	}{
 		{name: "deadline", err: context.DeadlineExceeded},
+		{name: "attached refresh deadline", err: moerr.AttachCause(refreshCtx, refreshCtx.Err())},
 		{name: "backend unavailable", err: moerr.NewBackendCannotConnectNoCtx("departed lock owner")},
 		{name: "txn retry", err: moerr.NewTxnNeedRetryNoCtx()},
 		{name: "txn retry with definition change", err: moerr.NewTxnNeedRetryWithDefChangedNoCtx()},
@@ -1055,34 +1087,62 @@ func TestServiceStartRetriesTransientCatalogFenceErrors(t *testing.T) {
 }
 
 func TestServiceStartRejectsMixedCatalogFenceRollbackFailure(t *testing.T) {
-	rollbackErr := errors.New("catalog fence rollback failed")
-	mixedErr := errors.Join(moerr.NewTxnNeedRetryNoCtx(), rollbackErr)
-	catalogAttempted := make(chan struct{})
-	var attemptOnce sync.Once
-	sqlExecutor := &admissionRollbackJoiningExecutor{
-		SQLExecutor: executor.NewMemExecutor(func(string) (executor.Result, error) {
-			attemptOnce.Do(func() { close(catalogAttempted) })
-			return executor.Result{}, mixedErr
-		}),
-	}
-	s := newViewMetadataAdmissionStartService(t, &testBootService{}, sqlExecutor, time.Second)
-	startDone := make(chan error, 1)
-	go func() { startDone <- s.Start() }()
-	t.Cleanup(func() { _ = s.Close() })
+	refreshCtx, cancel := context.WithTimeoutCause(t.Context(), 0, moerr.CauseRefresh)
+	defer cancel()
+	for _, test := range []struct {
+		name string
+		err  error
+	}{
+		{"transaction retry", moerr.NewTxnNeedRetryNoCtx()},
+		{"attached refresh deadline", moerr.AttachCause(refreshCtx, refreshCtx.Err())},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			rollbackErr := errors.New("catalog fence rollback failed")
+			mixedErr := errors.Join(test.err, rollbackErr)
+			catalogAttempted := make(chan struct{})
+			var attemptOnce sync.Once
+			sqlExecutor := &admissionRollbackJoiningExecutor{
+				SQLExecutor: executor.NewMemExecutor(func(string) (executor.Result, error) {
+					attemptOnce.Do(func() { close(catalogAttempted) })
+					return executor.Result{}, mixedErr
+				}),
+			}
+			s := newViewMetadataAdmissionStartService(t, &testBootService{}, sqlExecutor, time.Second)
+			startDone := make(chan error, 1)
+			go func() { startDone <- s.Start() }()
+			t.Cleanup(func() { _ = s.Close() })
 
-	select {
-	case <-catalogAttempted:
-	case <-time.After(time.Second):
-		t.Fatal("Start did not execute the catalog fence")
+			select {
+			case <-catalogAttempted:
+			case <-time.After(time.Second):
+				t.Fatal("Start did not execute the catalog fence")
+			}
+			select {
+			case err := <-startDone:
+				require.ErrorIs(t, err, rollbackErr)
+			case <-time.After(time.Second):
+				t.Fatal("mixed rollback failure did not fail closed")
+			}
+			require.False(t, s.viewMetadataIngressReady.Load())
+			require.Zero(t, s.viewMetadataCatalogFencedEpoch.Load())
+		})
 	}
-	select {
-	case err := <-startDone:
-		require.ErrorIs(t, err, rollbackErr)
-	case <-time.After(time.Second):
-		t.Fatal("mixed rollback failure did not fail closed")
-	}
-	require.False(t, s.viewMetadataIngressReady.Load())
+}
+
+func TestCNViewMetadataCatalogFenceCancellationRetainsClosedIngress(t *testing.T) {
+	refreshCtx, cancelRefresh := context.WithTimeoutCause(t.Context(), 0, moerr.CauseRefresh)
+	defer cancelRefresh()
+	owner, cancelOwner := context.WithCancel(t.Context())
+	defer cancelOwner()
+	s := newAdmissionOwnerTestService(t, owner, make(chan error, 1))
+	s.sqlExecutor = executor.NewMemExecutor(func(string) (executor.Result, error) {
+		cancelOwner()
+		return executor.Result{}, moerr.AttachCause(refreshCtx, refreshCtx.Err())
+	})
+	err := s.waitForViewMetadataIngressAdmission()
+	require.ErrorIs(t, err, context.Canceled)
 	require.Zero(t, s.viewMetadataCatalogFencedEpoch.Load())
+	require.False(t, s.viewMetadataIngressReady.Load())
 }
 
 func TestServiceStartPropagatesBootstrapUpgradeFailure(t *testing.T) {
@@ -1459,6 +1519,7 @@ func TestCNViewMetadataAdmissionDoesNotAckFailedCatalogFence(t *testing.T) {
 		viewMetadataAdmissionGeneration: 13,
 		viewMetadataEpochFence:          compile.NewViewMetadataEpochFence(),
 		viewMetadataAdmissionUpdated:    make(chan struct{}, 1),
+		heartbeatWakeup:                 make(chan struct{}, 1),
 	}
 	t.Cleanup(s.viewMetadataEpochFence.Close)
 	var statements int
@@ -1486,6 +1547,7 @@ func TestCNViewMetadataAdmissionDoesNotAckFailedCatalogFence(t *testing.T) {
 	require.Equal(t, 1, statements)
 	require.Equal(t, uint64(6), s.viewMetadataEpochFence.Epoch())
 	require.Zero(t, s.viewMetadataCatalogFencedEpoch.Load())
+	require.Empty(t, s.heartbeatWakeup, "failed catalog repair must not request a success heartbeat")
 	proc := &process.Process{Base: &process.BaseProcess{}}
 	require.NoError(t, plan.RequirePersistedProtocolVersion(nil, proc, defines.MORPCVersion72), "durable read floor is independent of authoring")
 	err = plan.RequirePersistedProtocolVersionForAuthoring(nil, proc, defines.MORPCVersion72)
@@ -1498,6 +1560,8 @@ func TestCNViewMetadataAdmissionDoesNotAckFailedCatalogFence(t *testing.T) {
 	require.NoError(t, s.applyViewMetadataAdmission(context.Background(), snapshot))
 	require.Greater(t, statements, 1)
 	require.Equal(t, uint64(6), s.viewMetadataCatalogFencedEpoch.Load())
+	require.Len(t, s.heartbeatWakeup, 1)
+	<-s.heartbeatWakeup
 	require.True(t, moerr.IsMoErrCode(plan.RequirePersistedProtocolVersionForAuthoring(nil, proc, defines.MORPCVersion72), moerr.ErrNotSupported))
 
 	snapshot.Preparing = false
@@ -1507,6 +1571,7 @@ func TestCNViewMetadataAdmissionDoesNotAckFailedCatalogFence(t *testing.T) {
 	before := statements
 	require.NoError(t, s.applyViewMetadataAdmission(context.Background(), snapshot))
 	require.Equal(t, before, statements, "the successful catalog fence is not executed twice")
+	require.Empty(t, s.heartbeatWakeup, "the unchanged epoch must not schedule another heartbeat")
 	require.False(t, snapshot.Ready, "authoring does not depend on public routing readiness")
 	require.NoError(t, plan.RequirePersistedProtocolVersionForAuthoring(nil, proc, defines.MORPCLatestVersion))
 	require.Equal(t, uint64(6), s.viewMetadataEpochFence.Epoch())
@@ -1518,11 +1583,15 @@ func TestCNCompletesSystemViewsAfterAdmissionBeforeIngress(t *testing.T) {
 			failure := errors.New("derived view creation failed")
 			var s *service
 			var creates int
-			exec := executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+			op := mock_frontend.NewMockTxnOperator(gomock.NewController(t))
+			op.EXPECT().TxnOptions().DoAndReturn(func() txn.TxnOptions {
+				return txn.TxnOptions{CN: s.cfg.UUID}
+			}).AnyTimes()
+			exec := executor.NewMemExecutor2(func(sql string) (executor.Result, error) {
 				if sql == catalog.ViewMetadataLifecycleGateSQL {
 					return viewMetadataLifecycleGateTestResult(), nil
 				}
-				if strings.HasPrefix(sql, "CREATE VIEW") {
+				if strings.HasPrefix(sql, "CREATE VIEW ") || strings.HasPrefix(sql, "CREATE OR REPLACE VIEW ") {
 					require.Equal(t, uint64(5), s.viewMetadataCatalogFencedEpoch.Load())
 					require.False(t, s.viewMetadataIngressReady.Load())
 					creates++
@@ -1531,12 +1600,12 @@ func TestCNCompletesSystemViewsAfterAdmissionBeforeIngress(t *testing.T) {
 					}
 				}
 				return executor.Result{}, nil
-			})
+			}, op)
 			s = newViewMetadataAdmissionStartService(t, &testBootService{}, exec, time.Second)
 			s.sqlExecutor = exec
 			snapshot := *s.viewMetadataAdmission.Load()
 			snapshot.Ready = false
-			snapshot.PersistedExpressionRequiredProtocolVersion = uint64(defines.MORPCVersion98)
+			snapshot.PersistedExpressionRequiredProtocolVersion = uint64(defines.MORPCVersion118)
 			snapshot.CatalogFencedEpoch = 5
 			s.viewMetadataAdmission.Store(&snapshot)
 			t.Cleanup(func() { _ = s.Close() })
@@ -1548,7 +1617,7 @@ func TestCNCompletesSystemViewsAfterAdmissionBeforeIngress(t *testing.T) {
 				require.Equal(t, 1, creates)
 			} else {
 				require.NoError(t, err)
-				require.Equal(t, 4, creates)
+				require.Equal(t, 5, creates, "TABLES plus the four trace views")
 				require.True(t, s.viewMetadataIngressReady.Load())
 			}
 		})
@@ -1577,20 +1646,25 @@ func TestCNDerivedViewsWaitForAuthoringProtocol(t *testing.T) {
 		floor   uint64
 		pending bool
 		want    bool
+		minimum uint64
 	}{
-		{"lower floor", 97, false, false}, {"activation pending", 98, true, false}, {"ready", 98, false, true},
+		{"lower floor", 97, false, false, 98}, {"activation pending", 98, true, false, 98}, {"ready", 98, false, true, 98},
+		{"C03 main113", 113, false, false, 118}, {"C03 native UNIQUE", 114, false, false, 118},
+		{"C03 calendar interval", 115, false, false, 118}, {"C03 division warnings", 116, false, false, 118},
+		{"C03 least greatest", 117, false, false, 118},
+		{"C03 activation pending", 118, true, false, 118}, {"C03 ready", 118, false, true, 118},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			current := *ready
 			current.PersistedExpressionRequiredProtocolVersion = tc.floor
 			current.PersistedExpressionProtocolActivationPending = tc.pending
 			s.viewMetadataAdmission.Store(&current)
-			accepted, _, err := s.acceptViewMetadataAdmissionSnapshot(ready, false, false, nil, 98)
+			accepted, _, err := s.acceptViewMetadataAdmissionSnapshot(ready, false, false, nil, tc.minimum)
 			require.NoError(t, err)
 			require.Equal(t, tc.want, accepted, "check current authority, not the older fenced snapshot")
 			current.Preparing = true
 			s.viewMetadataAdmission.Store(&current)
-			accepted, _, err = s.acceptViewMetadataAdmissionSnapshot(ready, false, false, nil, 98)
+			accepted, _, err = s.acceptViewMetadataAdmissionSnapshot(ready, false, false, nil, tc.minimum)
 			require.NoError(t, err)
 			require.False(t, accepted, "a preparing epoch cannot authorize writes")
 		})

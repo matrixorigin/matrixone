@@ -22,6 +22,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"syscall"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/log"
@@ -81,7 +82,7 @@ type remoteLockTable struct {
 	client                      Client
 	bindChangedHandler          func(pb.LockTable)
 	allocatorStateProvider      func() allocatorState
-	allocatorBindChangedHandler func(string, pb.LockTable, pb.LockTable, allocatorState, allocatorState) error
+	allocatorBindChangedHandler func(context.Context, string, pb.LockTable, pb.LockTable, allocatorState, allocatorState) error
 }
 
 func newRemoteLockTable(
@@ -135,7 +136,10 @@ func (l *remoteLockTable) lock(
 		req.Lock.Rows = opts.originalRows
 		req.Lock.Options = opts.originalOptions
 	}
-	writerFairAdmission := req.Lock.Options.Mode == pb.LockMode_Shared &&
+	if req.Lock.Options.NoWait {
+		req.Method = pb.Method_TryLock
+	}
+	writerFairAdmission := !req.Lock.Options.NoWait && req.Lock.Options.Mode == pb.LockMode_Shared &&
 		req.Lock.Options.Granularity == pb.Granularity_Row &&
 		req.Lock.Options.WriterFair
 	if writerFairAdmission {
@@ -180,6 +184,35 @@ func (l *remoteLockTable) lock(
 		req.Lock.Options.WriterFair = false
 		resp, err = l.client.Send(rpcCtx, req)
 	}
+	if resp != nil {
+		defer releaseResponse(resp)
+	}
+	noWaitConflictAck := req.Method == pb.Method_TryLock && err == nil &&
+		resp != nil && resp.Lock.NoWaitConflict
+	noWaitAckHasBinding := noWaitConflictAck && resp.NewBind == nil &&
+		resp.Lock.Result.LockedOn.Valid &&
+		!resp.Lock.Result.LockedOn.Changed(l.bind)
+	noWaitAckComplete := noWaitAckHasBinding &&
+		resp.Lock.TxnWaitingListOnLockTableSupported &&
+		resp.Lock.BatchUnlockSupported
+	if req.Method == pb.Method_TryLock {
+		if noWaitConflictAck {
+			// The method-specific response is the only wire proof that a FastFail
+			// conflict is settled and that any prefix grants are known. Preserve
+			// the physical result for cleanup even if a required capability is
+			// missing; the caller will fail closed instead of exposing NOWAIT.
+			if noWaitAckComplete {
+				err = ErrLockConflict
+			} else {
+				err = ErrLockTableBindChanged
+			}
+		} else if err != nil && moerr.IsMoErrCode(err, moerr.ErrLockConflict) {
+			// Old or malformed peers must not turn a generic application error
+			// into the recoverable 3572 path. Ownership is indeterminate, so retain
+			// a cleanup witness and fence the transaction below.
+			err = errors.Join(ErrLockTableBindChanged, err)
+		}
+	}
 
 	txn.Lock()
 
@@ -189,13 +222,65 @@ func (l *remoteLockTable) lock(
 		cb(pb.Result{}, ErrTxnNotFound)
 		return
 	}
+	// A complete negative acknowledgement may follow a partial grant. Record
+	// the physical cleanup route before any origin-side bind fence can suppress
+	// it. The table-scoped route is bounded and the owner remains authoritative
+	// for the exact prefix that was acquired.
+	if noWaitConflictAck {
+		bind := l.bind
+		confirmed := noWaitAckHasBinding
+		if noWaitAckHasBinding {
+			bind = resp.Lock.Result.LockedOn
+		}
+		txn.markRemoteUnlockRequiredLocked(bind.Group, bind.Table)
+		txn.setBatchUnlockSupportedLocked(
+			bind.Group,
+			bind.Table,
+			noWaitAckHasBinding && resp.Lock.BatchUnlockSupported,
+		)
+		if noWaitAckHasBinding && resp.Lock.TxnWaitingListOnLockTableSupported {
+			txn.markOwnerLocalWaitSnapshotLocked(bind.Group, bind.Table)
+		}
+		trackErr := txn.ensureRemoteLockTableTracked(
+			bind.Group,
+			bind,
+			req.Lock.Rows,
+			req.Lock.Options,
+			confirmed,
+			l.logger,
+		)
+		if trackErr != nil {
+			err = errors.Join(ErrLockTableBindChanged, err, trackErr)
+		}
+		if !noWaitAckComplete {
+			txn.markBindChangedLocked(l.logger)
+			if err == ErrLockTableBindChanged {
+				err = errors.Join(ErrLockTableBindChanged, trackErr)
+			}
+		}
+	}
 	if txn.bindChanged {
-		cb(pb.Result{}, ErrLockTableBindChanged)
+		result := pb.Result{}
+		if noWaitAckHasBinding {
+			result = resp.Lock.Result
+		} else if req.Method == pb.Method_TryLock {
+			result.LockedOn = l.bind
+		}
+		cb(result, ErrLockTableBindChanged)
+		return
+	}
+
+	if noWaitConflictAck {
+		logRemoteLockFailed(l.logger, txn, rows, opts, l.bind, err)
+		if noWaitAckComplete && err == ErrLockConflict {
+			cb(resp.Lock.Result, ErrLockConflict)
+		} else {
+			cb(pb.Result{}, err)
+		}
 		return
 	}
 
 	if err == nil {
-		defer releaseResponse(resp)
 		if resp.NewBind != nil {
 			txn.Unlock()
 			err = l.maybeHandleBindChanged(ctx, resp)
@@ -352,6 +437,28 @@ func (l *remoteLockTable) lock(
 		return
 	}
 
+	// A TryLock conflict without the typed capability acknowledgement is not a
+	// recoverable NOWAIT result. Retain only an unconfirmed table cleanup route;
+	// the physical owner remains authoritative for grants after a lost reply.
+	if req.Method == pb.Method_TryLock &&
+		moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged) {
+		txn.markRemoteUnlockRequiredLocked(l.bind.Group, l.bind.Table)
+		if trackingErr := txn.ensureRemoteLockTableTracked(
+			l.bind.Group,
+			l.bind,
+			req.Lock.Rows,
+			req.Lock.Options,
+			false,
+			l.logger,
+		); trackingErr != nil {
+			err = errors.Join(err, trackingErr)
+		}
+		txn.markBindChangedLocked(l.logger)
+		logRemoteLockFailed(l.logger, txn, rows, opts, l.bind, err)
+		cb(pb.Result{LockedOn: l.bind}, err)
+		return
+	}
+
 	// Transport failures are indeterminate. Keep one unconfirmed witness for
 	// cleanup; remote unlock releases the owner's complete table ownership by
 	// transaction ID. Unconfirmed rows are excluded from wait-for traversal, so
@@ -370,6 +477,13 @@ func (l *remoteLockTable) lock(
 		); trackingErr != nil {
 			err = errors.Join(err, trackingErr)
 		}
+	}
+	if req.Method == pb.Method_TryLock && err != nil {
+		// A no-wait request can fail after its physical-owner RPC was sent. Return
+		// the known proxy binding so the coordinator can retain its transaction
+		// unlock route even when the remote result was lost.
+		cb(pb.Result{LockedOn: l.bind}, err)
+		return
 	}
 	logRemoteLockFailed(l.logger, txn, rows, opts, l.bind, err)
 	if moerr.IsMoErrCode(err, moerr.ErrRemoteLockWaitTimeout) {
@@ -461,7 +575,7 @@ func (l *remoteLockTable) unlockWithContext(
 			if moerr.IsMoErrCode(err, moerr.ErrLockTableNotFound) {
 				// A missing table can race allocator reassignment. Resolve that one
 				// ambiguity, but do not loop if the allocator still reports this bind.
-				if handledErr := l.handleErrorWithContext(ctx, err, false); handledErr == nil {
+				if handledErr := l.refreshBindWithContext(ctx, err, false, true); handledErr == nil {
 					return nil
 				} else {
 					return handledErr
@@ -480,7 +594,7 @@ func (l *remoteLockTable) unlockWithContext(
 		// handleError returns nil meaning bind changed, then all locks
 		// will be released. If handleError returns any error, it means
 		// that the current bind is valid, retry unlock.
-		if err := l.handleErrorWithContext(ctx, err, false); err == nil {
+		if err := l.refreshBindWithContext(ctx, err, false, true); err == nil {
 			return nil
 		}
 		if err := waitRemoteRetryBackoffWithContext(ctx, backoff); err != nil {
@@ -491,8 +605,14 @@ func (l *remoteLockTable) unlockWithContext(
 }
 
 func retryRemoteUnlockError(err error) bool {
+	// A connection can break without timing out. This does not establish that
+	// the owner rejected unlock: refresh its binding before retrying or declaring
+	// old-generation cleanup complete. Keep deterministic owner errors terminal.
 	return retryRemoteLockError(err) ||
+		errors.Is(err, syscall.EPIPE) ||
+		errors.Is(err, syscall.ECONNRESET) ||
 		errors.Is(err, morpc.ErrBackendCreateTimeout) ||
+		moerr.IsMoErrCode(err, moerr.ErrConnectionReset) ||
 		moerr.IsMoErrCode(err, moerr.ErrRPCTimeout) ||
 		moerr.IsMoErrCode(err, moerr.ErrBackendCannotConnect) ||
 		moerr.IsMoErrCode(err, moerr.ErrBackendClosed)
@@ -534,9 +654,9 @@ func (l *remoteLockTable) getLock(
 
 		// why use loop is similar to unlock
 		if err = l.handleErrorWithContext(ctx, err, false); err == nil {
-			// The bind-change handler replaces this table in service.tableGroups.
-			// Let the caller reacquire it instead of treating the stale snapshot as
-			// an empty waiting list.
+			// The handler retires this generation; its replacement may remain
+			// uncached. Let the caller reacquire the route instead of treating
+			// the stale snapshot as an empty waiting list.
 			return ErrLockTableBindChanged
 		}
 		if err := waitRemoteRetryBackoffWithContext(ctx, backoff); err != nil {
@@ -560,9 +680,9 @@ func (l *remoteLockTable) getLockHolder(ctx context.Context, key []byte) (pb.Wai
 			return pb.WaitTxn{}, false, err
 		}
 		if err = l.handleErrorWithContext(ctx, err, false); err == nil {
-			// The bind-change handler replaces the lock-table object in service.tableGroups.
-			// This in-flight remote table still carries the stale bind, so let the service
-			// reacquire the current table before retrying the holder lookup.
+			// This in-flight table is retired even if its replacement remains
+			// uncached. Let the service reacquire the route before retrying the
+			// holder lookup.
 			return pb.WaitTxn{}, false, ErrLockTableBindChanged
 		}
 		if err := waitRemoteRetryBackoffWithContext(ctx, backoff); err != nil {
@@ -655,7 +775,7 @@ func (l *remoteLockTable) doUnlock(
 	resp, err := l.client.Send(ctx, req)
 	if err == nil {
 		defer releaseResponse(resp)
-		return l.maybeHandleBindChanged(ctx, resp)
+		return l.handleReturnedBind(ctx, resp, true)
 	}
 	return moerr.AttachCause(ctx, err)
 }
@@ -794,6 +914,15 @@ func (l *remoteLockTable) handleErrorWithContext(
 	err error,
 	mustHandleLockBindChangedErr bool,
 ) error {
+	return l.refreshBindWithContext(ctx, err, mustHandleLockBindChangedErr, false)
+}
+
+func (l *remoteLockTable) refreshBindWithContext(
+	ctx context.Context,
+	err error,
+	mustHandleLockBindChangedErr bool,
+	lookupOnly bool,
+) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -814,15 +943,10 @@ func (l *remoteLockTable) handleErrorWithContext(
 	if l.allocatorStateProvider != nil {
 		requestAllocator = l.allocatorStateProvider()
 	}
-	new, allocator, err := getLockTableBindWithContext(
-		ctx,
-		l.client,
-		l.bind.Group,
-		l.bind.Table,
-		l.bind.OriginTable,
-		l.serviceID,
-		l.bind.Sharding,
-	)
+	new, allocator, err := requestLockTableBind(ctx, l.client, pb.GetBindRequest{
+		Group: l.bind.Group, Table: l.bind.Table, OriginTable: l.bind.OriginTable,
+		ServiceID: l.serviceID, Sharding: l.bind.Sharding, LookupOnly: lookupOnly,
+	})
 	if err != nil {
 		logGetRemoteBindFailed(l.logger, l.bind.Table, err)
 		if ctxErr := ctx.Err(); ctxErr != nil {
@@ -833,6 +957,7 @@ func (l *remoteLockTable) handleErrorWithContext(
 	if new.Changed(l.bind) {
 		if l.allocatorBindChangedHandler != nil {
 			return l.allocatorBindChangedHandler(
+				ctx,
 				"remote-bind-refresh",
 				l.bind,
 				new,
@@ -850,7 +975,10 @@ func retryRemoteLockError(err error) bool {
 	if errors.As(err, &netErr) && netErr.Timeout() {
 		return true
 	}
-	if errors.Is(err, io.EOF) ||
+	if errors.Is(err, syscall.EPIPE) ||
+		errors.Is(err, syscall.ECONNRESET) ||
+		errors.Is(err, net.ErrClosed) ||
+		errors.Is(err, io.EOF) ||
 		errors.Is(err, io.ErrUnexpectedEOF) ||
 		errors.Is(err, os.ErrDeadlineExceeded) ||
 		errors.Is(err, context.DeadlineExceeded) ||
@@ -864,6 +992,14 @@ func (l *remoteLockTable) maybeHandleBindChanged(
 	ctx context.Context,
 	resp *pb.Response,
 ) error {
+	return l.handleReturnedBind(ctx, resp, false)
+}
+
+func (l *remoteLockTable) handleReturnedBind(
+	ctx context.Context,
+	resp *pb.Response,
+	lookupOnly bool,
+) error {
 	if resp.NewBind == nil {
 		return nil
 	}
@@ -875,15 +1011,10 @@ func (l *remoteLockTable) maybeHandleBindChanged(
 		// service may have observed a newer allocator while the RPC was in
 		// flight, so only publish a bind refreshed from the current allocator.
 		requestAllocator := l.allocatorStateProvider()
-		refreshedBind, allocator, err := getLockTableBindWithContext(
-			ctx,
-			l.client,
-			l.bind.Group,
-			l.bind.Table,
-			l.bind.OriginTable,
-			l.serviceID,
-			l.bind.Sharding,
-		)
+		refreshedBind, allocator, err := requestLockTableBind(ctx, l.client, pb.GetBindRequest{
+			Group: l.bind.Group, Table: l.bind.Table, OriginTable: l.bind.OriginTable,
+			ServiceID: l.serviceID, Sharding: l.bind.Sharding, LookupOnly: lookupOnly,
+		})
 		if err != nil {
 			logGetRemoteBindFailed(l.logger, l.bind.Table, err)
 			if ctxErr := ctx.Err(); ctxErr != nil {
@@ -895,6 +1026,7 @@ func (l *remoteLockTable) maybeHandleBindChanged(
 			return ErrLockTableBindChanged
 		}
 		if err := l.allocatorBindChangedHandler(
+			ctx,
 			"remote-new-bind",
 			l.bind,
 			refreshedBind,

@@ -100,7 +100,7 @@ WHERE
 pk <> CONCAT_WS( ':','%I','%m' )+CONCAT_WS('-','%y','%H','%V','%k','%k' )
 OR
 year(col_datetime_5) < year(utc_timestamp())
-ORDER BY 1;
+ORDER BY 1, 2;
 DROP TABLE t1;
 #SET timestamp=DEFAULT;
 

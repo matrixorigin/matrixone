@@ -237,7 +237,7 @@ func (s *Segment) matchPhraseFallback(slots []phraseSlot) []docTf {
 
 // slotPostings resolves one phrase slot to doc-sorted postings (docs parallel to pos).
 // An exact slot reuses the term's stored, already-ascending positions directly (no copy,
-// no re-sort). A star slot expands its prefix: a LONE star slot (single-slot phrase) is
+// no re-sort). A star slot streams its prefix: a LONE star slot (single-slot phrase) is
 // presence-only — it unions just the doc IDs (pos==nil) so a hot 2-char prefix cannot
 // materialize millions of positions; an embedded star slot (rare) merges positions.
 func (s *Segment) slotPostings(sl phraseSlot, single bool) ([]int64, [][]int32, bool) {
@@ -248,44 +248,40 @@ func (s *Segment) slotPostings(sl phraseSlot, single bool) ([]int64, [][]int32, 
 		}
 		return pl.materializeDocIDs(), pl.materializePositions(), true
 	}
-	terms, err := s.prefixTerms(sl.term)
-	if err != nil || len(terms) == 0 {
-		return nil, nil, false
-	}
 	if single {
-		docs := s.unionDocIDs(terms)
-		if len(docs) == 0 {
-			return nil, nil, false
-		}
-		return docs, nil, true
+		docs, err := s.unionDocIDs(sl.term)
+		return docs, nil, err == nil && len(docs) != 0
 	}
-	return s.mergeStarPostings(terms)
+	docs, pos, err := s.mergeStarPostings(sl.term)
+	return docs, pos, err == nil && len(docs) != 0
 }
 
-// unionDocIDs returns the ascending union of the doc IDs of the given terms — no
+// unionDocIDs returns the ascending union of the doc IDs of a prefix's terms — no
 // positions (the presence-only path for a lone prefix slot). It unions into a doc-ord
 // BITSET rather than a map: a hot 2-char prefix (e.g. 中文*) expands to many trigrams
 // covering most of the corpus, and a growing map[int64]struct{} rehashed itself to death
 // (the dominant cost once matchPhrase's own map was removed). A bitset is O(N/8) with no
 // per-doc allocation or rehash, and the bit walk yields docs already ascending.
-func (s *Segment) unionDocIDs(terms []string) []int64 {
+func (s *Segment) unionDocIDs(prefix string) ([]int64, error) {
 	if s.N == 0 {
-		return nil
+		return nil, nil
 	}
-	bset := make([]uint64, (s.N+63)/64)
+	var bset []uint64
 	any := false
-	for _, t := range terms {
-		pl, ok := s.lookup(t)
-		if !ok {
-			continue
+	err := s.forEachPrefixPosting(prefix, func(_ string, pl *termPostings) {
+		if bset == nil {
+			bset = make([]uint64, (s.N+63)/64)
 		}
 		for _, ord := range pl.materializeDocIDs() {
 			bset[ord>>6] |= uint64(1) << (uint64(ord) & 63)
 			any = true
 		}
+	})
+	if err != nil {
+		return nil, err
 	}
 	if !any {
-		return nil
+		return nil, nil
 	}
 	docs := make([]int64, 0, 256)
 	for w, word := range bset {
@@ -295,28 +291,28 @@ func (s *Segment) unionDocIDs(terms []string) []int64 {
 			word &= word - 1
 		}
 	}
-	return docs
+	return docs, nil
 }
 
 // mergeStarPostings merges the doc-sorted postings of a prefix expansion into one
 // (docs, positions) with per-doc positions sorted (they come from different terms). This
-// is the rare embedded-prefix path (a 1-2 char CJK run inside a longer phrase), so the
-// map here is bounded and off the hot path.
-func (s *Segment) mergeStarPostings(terms []string) ([]int64, [][]int32, bool) {
+// is the embedded-prefix fallback (a 1-2 char CJK run inside a longer phrase).
+// It can be expensive for a dense prefix; a separate change must address that
+// without altering this path's positional semantics.
+func (s *Segment) mergeStarPostings(prefix string) ([]int64, [][]int32, error) {
 	m := make(map[int64][]int32)
-	for _, t := range terms {
-		pl, ok := s.lookup(t)
-		if !ok {
-			continue
-		}
+	err := s.forEachPrefixPosting(prefix, func(_ string, pl *termPostings) {
 		docs := pl.materializeDocIDs()
 		pos := pl.materializePositions()
 		for di, ord := range docs {
 			m[ord] = append(m[ord], pos[di]...)
 		}
+	})
+	if err != nil {
+		return nil, nil, err
 	}
 	if len(m) == 0 {
-		return nil, nil, false
+		return nil, nil, nil
 	}
 	docs := make([]int64, 0, len(m))
 	for ord := range m {
@@ -329,7 +325,7 @@ func (s *Segment) mergeStarPostings(terms []string) ([]int64, [][]int32, bool) {
 		slices.Sort(p)
 		pos[i] = p
 	}
-	return docs, pos, true
+	return docs, pos, nil
 }
 
 // sortedIndexInt64 returns the index of v in the ascending slice a, or -1 if absent.

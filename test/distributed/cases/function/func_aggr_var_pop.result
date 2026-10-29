@@ -28,17 +28,17 @@ select var_pop(g) from t1;
 ➤ var_pop(g)[8,54,0]  𝄀
 32502.248712250002
 select var_pop(h) from t1;
-➤ var_pop(h)[3,38,12]  𝄀
-2254.078700000000
+➤ var_pop(h)[8,53,31]  𝄀
+2254.0787
 select var_pop(i) from t1;
-➤ var_pop(i)[3,38,6]  𝄀
-18517722.000000
+➤ var_pop(i)[8,53,31]  𝄀
+1.8517722E7
 select var_pop(k) from t1;
-➤ var_pop(k)[3,38,6]  𝄀
-718750000000000102400.000000
+➤ var_pop(k)[8,53,31]  𝄀
+7.1875E20
 select var_pop(l) from t1;
-➤ var_pop(l)[3,38,6]  𝄀
-12268750007374997504000.000000
+➤ var_pop(l)[8,53,31]  𝄀
+1.2268750007375E22
 select var_pop(m) from t1;
 ➤ var_pop(m)[8,53,31]  𝄀
 1.6875
@@ -47,23 +47,23 @@ select var_pop(n) from t1;
 1.6875
 drop table t1;
 select var_pop(99999999999999999.99999);
-➤ var_pop(99999999999999999.99999)[3,38,11]  𝄀
-0E-11
+➤ var_pop(99999999999999999.99999)[8,53,31]  𝄀
+0.0
 select var_pop(999999999999999933193939.99999);
-➤ var_pop(999999999999999933193939.99999)[3,38,11]  𝄀
-0E-11
+➤ var_pop(999999999999999933193939.99999)[8,53,31]  𝄀
+0.0
 select var_pop(9999999999999999999999999999999999.9999999999999);
-➤ var_pop(9999999999999999999999999999999999.9999999999999)[3,38,9]  𝄀
-0E-9
+➤ var_pop(9999999999999999999999999999999999.9999999999999)[8,53,31]  𝄀
+0.0
 select var_pop(-99999999999999999.99999);
-➤ var_pop(-99999999999999999.99999)[3,38,11]  𝄀
-0E-11
+➤ var_pop(-99999999999999999.99999)[8,53,31]  𝄀
+0.0
 select var_pop(-999999999999999933193939.99999);
-➤ var_pop(-999999999999999933193939.99999)[3,38,11]  𝄀
-0E-11
+➤ var_pop(-999999999999999933193939.99999)[8,53,31]  𝄀
+0.0
 select var_pop(-9999999999999999999999999999999999.9999999999999);
-➤ var_pop(-9999999999999999999999999999999999.9999999999999)[3,38,9]  𝄀
-0E-9
+➤ var_pop(-9999999999999999999999999999999999.9999999999999)[8,53,31]  𝄀
+0.0
 create table t1(a bigint);
 select var_pop(a) from t1;
 ➤ var_pop(a)[8,54,0]  𝄀
@@ -145,8 +145,8 @@ insert into decimal01 values(23413432.32423);
 insert into decimal01 values(0);
 insert into decimal01 values(-13421.34234);
 select var_pop(col1) from decimal01;
-➤ var_pop(col1)[3,38,7]  𝄀
-99500475119008.2150400
+➤ var_pop(col1)[8,53,31]  𝄀
+9.950047511900822E13
 drop table decimal01;
 drop table if exists decimal02;
 create table decimal02(col1 decimal(38,0));
@@ -155,22 +155,22 @@ insert into decimal02 values(99999999999999999999999999999999999999);
 insert into decimal02 values(10000000000000000000000000000000000000);
 insert into decimal02 values(32482438247328742831193201993219039203);
 insert into decimal02 values(99999999999999999999999999999999999999.73289342);
+invalid input: 99999999999999999999999999999999999999.73289342 beyond the range, can't be converted to Decimal128(38,0).
 insert into decimal02 values(-298432432433242412313123321231321313);
 insert into decimal02 values(-34243214324324342321313321321342342343.123143);
 insert into decimal02 values(-0.12813218391321939921391929391293912);
 select * from decimal02;
-➤ col1[3,39,0]  𝄀
+➤ col1[3,38,0]  𝄀
 12312312312314565789874569874512456879  𝄀
 99999999999999999999999999999999999999  𝄀
 10000000000000000000000000000000000000  𝄀
 32482438247328742831193201993219039203  𝄀
-10000000000000000000000000000000000000  𝄀
 -298432432433242412313123321231321313  𝄀
 -34243214324324342321313321321342342343  𝄀
 0
 select var_pop(col1) from decimal02;
--- @regex("invalid input: [0-9.e+-]+ beyond the range, can't be converted to Decimal128\(38,6\)\.", true)
-invalid input: 1.3073318421075215e+75 beyond the range, can't be converted to Decimal128(38,6).
+➤ var_pop(col1)[8,53,31]  𝄀
+1.4876512520978215E75
 drop table decimal02;
 drop table if exists test02;
 create table test02(col1 decimal(37));
@@ -187,8 +187,8 @@ select * from test02;
 -123  𝄀
 9932129321093029302930290439029432424
 select var_pop(col1) from test02;
--- @regex("invalid input: [0-9.e+-]+ beyond the range, can't be converted to Decimal128\(38,6\)\.", true)
-invalid input: 2.6542815629556115e+73 beyond the range, can't be converted to Decimal128(38,6).
+➤ var_pop(col1)[8,53,31]  𝄀
+2.6542815629556115E73
 drop table test02;
 drop table if exists test03;
 create table test03(a decimal(38,2));
@@ -196,8 +196,8 @@ insert into test03 values(9999999999999999999999999999999.1);
 insert into test03 values(-0.00001);
 insert into test03 values(NULL);
 select var_pop(a) from test03;
--- @regex("invalid input: [0-9.e+-]+ beyond the range, can't be converted to Decimal128\(38,8\)\.", true)
-invalid input: 2.4999999999999998e+61 beyond the range, can't be converted to Decimal128(38,8).
+➤ var_pop(a)[8,53,31]  𝄀
+2.4999999999999998E61
 drop table test03;
 drop table if exists test04;
 create table test04(a decimal(38,20));
@@ -214,8 +214,8 @@ select * from test04;
 -999999999999999999.90000000000000000000  𝄀
 -1E-20
 select var_pop(a) from test04;
--- @regex("invalid input: [0-9.e+-]+ beyond the range, can't be converted to Decimal128\(38,20\)\.", true)
-invalid input: 4.030405073118543e+35 beyond the range, can't be converted to Decimal128(38,20).
+➤ var_pop(a)[8,53,31]  𝄀
+4.030405073118543E35
 drop table test04;
 drop table if exists test05;
 create table test05(a decimal(20,10));
@@ -230,8 +230,8 @@ select * from test05;
 7382184932.3892039843  𝄀
 0.3029302394
 select var_pop(a) from test05;
-➤ var_pop(a)[3,38,12]  𝄀
-60218122690068090880.000000000000
+➤ var_pop(a)[8,53,31]  𝄀
+6.021812269006809E19
 drop table test05;
 drop table if exists test06;
 create table test06(a decimal(20,10));
@@ -246,8 +246,8 @@ select * from test06;
 null  𝄀
 0.3029302394
 select var_pop(a) from test06;
-➤ var_pop(a)[3,38,12]  𝄀
-66666666660682035200.000000000000
+➤ var_pop(a)[8,53,31]  𝄀
+6.666666666068204E19
 drop table test06;
 drop database test;
 SELECT variance(null);
@@ -292,23 +292,23 @@ No database selected
 drop table t1;
 No database selected
 select variance(99999999999999999.99999);
-➤ variance(99999999999999999.99999)[3,38,11]  𝄀
-0E-11
+➤ variance(99999999999999999.99999)[8,53,31]  𝄀
+0.0
 select variance(999999999999999933193939.99999);
-➤ variance(999999999999999933193939.99999)[3,38,11]  𝄀
-0E-11
+➤ variance(999999999999999933193939.99999)[8,53,31]  𝄀
+0.0
 select variance(9999999999999999999999999999999999.9999999999999);
-➤ variance(9999999999999999999999999999999999.9999999999999)[3,38,9]  𝄀
-0E-9
+➤ variance(9999999999999999999999999999999999.9999999999999)[8,53,31]  𝄀
+0.0
 select variance(-99999999999999999.99999);
-➤ variance(-99999999999999999.99999)[3,38,11]  𝄀
-0E-11
+➤ variance(-99999999999999999.99999)[8,53,31]  𝄀
+0.0
 select variance(-999999999999999933193939.99999);
-➤ variance(-999999999999999933193939.99999)[3,38,11]  𝄀
-0E-11
+➤ variance(-999999999999999933193939.99999)[8,53,31]  𝄀
+0.0
 select variance(-9999999999999999999999999999999999.9999999999999);
-➤ variance(-9999999999999999999999999999999999.9999999999999)[3,38,9]  𝄀
-0E-9
+➤ variance(-9999999999999999999999999999999999.9999999999999)[8,53,31]  𝄀
+0.0
 create table t1(a bigint);
 No database selected
 select variance(a) from t1;
@@ -378,22 +378,22 @@ insert into test01 values(99999999999999999999999999999999999999);
 insert into test01 values(10000000000000000000000000000000000000);
 insert into test01 values(32482438247328742831193201993219039203);
 insert into test01 values(99999999999999999999999999999999999999.73289342);
+invalid input: 99999999999999999999999999999999999999.73289342 beyond the range, can't be converted to Decimal128(38,0).
 insert into test01 values(-298432432433242412313123321231321313);
 insert into test01 values(-34243214324324342321313321321342342343.123143);
 insert into test01 values(-0.12813218391321939921391929391293912);
 select * from test01;
-➤ a[3,39,0]  𝄀
+➤ a[3,38,0]  𝄀
 12312312312314565789874569874512456879  𝄀
 99999999999999999999999999999999999999  𝄀
 10000000000000000000000000000000000000  𝄀
 32482438247328742831193201993219039203  𝄀
-10000000000000000000000000000000000000  𝄀
 -298432432433242412313123321231321313  𝄀
 -34243214324324342321313321321342342343  𝄀
 0
 select variance(a) from test01;
--- @regex("invalid input: [0-9.e+-]+ beyond the range, can't be converted to Decimal128\(38,6\)\.", true)
-invalid input: 1.3073318421075215e+75 beyond the range, can't be converted to Decimal128(38,6).
+➤ variance(a)[8,53,31]  𝄀
+1.4876512520978215E75
 drop table test01;
 drop table if exists test02;
 create table test02(a decimal(37));
@@ -410,8 +410,8 @@ select * from test02;
 -123  𝄀
 9932129321093029302930290439029432424
 select variance(a) from test02;
--- @regex("invalid input: [0-9.e+-]+ beyond the range, can't be converted to Decimal128\(38,6\)\.", true)
-invalid input: 2.6542815629556115e+73 beyond the range, can't be converted to Decimal128(38,6).
+➤ variance(a)[8,53,31]  𝄀
+2.6542815629556115E73
 drop table test02;
 drop table if exists test03;
 create table test03(a decimal(38,2));
@@ -419,8 +419,8 @@ insert into test03 values(9999999999999999999999999999999.1);
 insert into test03 values(-0.00001);
 insert into test03 values(NULL);
 select variance(a) from test03;
--- @regex("invalid input: [0-9.e+-]+ beyond the range, can't be converted to Decimal128\(38,8\)\.", true)
-invalid input: 2.4999999999999998e+61 beyond the range, can't be converted to Decimal128(38,8).
+➤ variance(a)[8,53,31]  𝄀
+2.4999999999999998E61
 drop table test03;
 drop table if exists test04;
 create table test04(a decimal(38,20));
@@ -437,8 +437,8 @@ select * from test04;
 -999999999999999999.90000000000000000000  𝄀
 -1E-20
 select variance(a) from test04;
--- @regex("invalid input: [0-9.e+-]+ beyond the range, can't be converted to Decimal128\(38,20\)\.", true)
-invalid input: 4.030405073118543e+35 beyond the range, can't be converted to Decimal128(38,20).
+➤ variance(a)[8,53,31]  𝄀
+4.030405073118543E35
 drop table test04;
 drop table if exists test05;
 create table test05(a decimal(20,10));
@@ -453,8 +453,8 @@ select * from test05;
 7382184932.3892039843  𝄀
 0.3029302394
 select variance(a) from test05;
-➤ variance(a)[3,38,12]  𝄀
-60218122690068090880.000000000000
+➤ variance(a)[8,53,31]  𝄀
+6.021812269006809E19
 drop table test05;
 drop table if exists test06;
 create table test06(a decimal(20,10));
@@ -469,7 +469,36 @@ select * from test06;
 null  𝄀
 0.3029302394
 select variance(a) from test06;
-➤ variance(a)[3,38,12]  𝄀
-66666666660682035200.000000000000
+➤ variance(a)[8,53,31]  𝄀
+6.666666666068204E19
 drop table test06;
+drop table if exists test_year;
+create table test_year(y year);
+insert into test_year values (2020), (2021), (2022);
+select var_pop(y) from test_year;
+➤ var_pop(y)[8,53,31]  𝄀
+0.6666666666666666
+select var_samp(y) from test_year;
+➤ var_samp(y)[8,53,31]  𝄀
+1
+select stddev_pop(y) from test_year;
+➤ stddev_pop(y)[8,53,31]  𝄀
+0.816496580927726
+select stddev_samp(y) from test_year;
+➤ stddev_samp(y)[8,53,31]  𝄀
+1
+select variance(y) from test_year;
+➤ variance(y)[8,53,31]  𝄀
+0.6666666666666666
+select var_pop(distinct y) from test_year;
+➤ var_pop(distinct y)[8,53,31]  𝄀
+0.6666666666666666
+insert into test_year values (NULL);
+select var_pop(y) from test_year;
+➤ var_pop(y)[8,53,31]  𝄀
+0.6666666666666666
+select var_pop(y) from test_year where 1=0;
+➤ var_pop(y)[8,53,31]  𝄀
+null
+drop table test_year;
 drop database test;

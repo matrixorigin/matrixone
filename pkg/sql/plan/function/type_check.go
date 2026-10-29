@@ -127,7 +127,54 @@ func arithmeticTypeCastRule1(s1, s2 types.Type) (bool, types.Type, types.Type) {
 		s2.Oid = types.T_uint64
 	}
 	cast, left, right := fixedTypeCastRule1(s1, s2)
+	left, right = widenArithmeticDecimalIntegerTargets(s1, s2, left, right)
 	return cast || hasJSON, left, right
+}
+
+// Arithmetic operands need an executable common physical decimal type, but
+// retain their individual scales (unlike comparison coefficient alignment).
+// Only widen an integer's insufficient synthesized target; declared assignment
+// casts and already sufficient arithmetic targets keep their existing domains.
+func widenArithmeticDecimalIntegerTargets(s1, s2, left, right types.Type) (types.Type, types.Type) {
+	if !left.Oid.IsDecimal() || !right.Oid.IsDecimal() {
+		return left, right
+	}
+	targets := [2]types.Type{left, right}
+	widen := false
+	for i, source := range [2]types.Type{s1, s2} {
+		source = decimalComparisonSource(source)
+		if source.IsIntOrUint() && targets[i].Width > 0 {
+			required := integerIntegralWidth(source.Oid) + targets[i].Scale
+			if required > targets[i].Width {
+				targets[i].Width = required
+				widen = true
+			}
+		}
+	}
+	if !widen {
+		return left, right
+	}
+	oid := left.Oid
+	if right.Oid.TypeLen() > oid.TypeLen() {
+		oid = right.Oid
+	}
+	for _, target := range targets {
+		var ok bool
+		oid, ok = decimalTypeForRequiredWidth(oid, target.Width)
+		if !ok {
+			return left, right
+		}
+	}
+	// A promoted pair shares its precision envelope as well as its physical
+	// representation, just like the existing fixed decimal coercions. Keep
+	// the operand scales separate: arithmetic aligns them in its own kernel.
+	width := max(targets[0].Width, targets[1].Width)
+	for i := range targets {
+		targets[i].Oid = oid
+		targets[i].Size = int32(oid.TypeLen())
+		targets[i].Width = width
+	}
+	return targets[0], targets[1]
 }
 
 func temporalArithmeticUsesFloat(left, right types.Type) bool {
@@ -194,6 +241,15 @@ func fixedTypeCastRule2(s1, s2 types.Type) (bool, types.Type, types.Type) {
 	return hasJSON, s1, s2
 }
 
+// Integer division needs the same full integer input domain as +, -, * and %.
+// Keep this separate from /, whose decimal_division rules choose operand
+// precision from the original packed temporal types.
+func integerDivTypeCastRule(s1, s2 types.Type) (bool, types.Type, types.Type) {
+	cast, left, right := fixedTypeCastRule2(s1, s2)
+	left, right = widenArithmeticDecimalIntegerTargets(s1, s2, left, right)
+	return cast, left, right
+}
+
 func numericJSONType(source types.Type) types.Type {
 	if source.Oid == types.T_json {
 		return types.T_float64.ToType()
@@ -212,6 +268,16 @@ const (
 // a fixed type match method.
 func fixedTypeMatch(overloads []overload, inputs []types.Type) checkResult {
 	return fixedTypeMatchExcept(overloads, inputs, -1)
+}
+
+// The DATETIME overload is for native DATETIME values. In particular, an
+// implicit TIME -> DATETIME cast uses the host date and cannot supply a valid
+// UNIX epoch for the statement's date.
+func unixTimestampTypeMatch(overloads []overload, inputs []types.Type) checkResult {
+	if len(inputs) == 1 && inputs[0].Oid == types.T_datetime {
+		return fixedTypeMatchOnly(overloads, inputs, 4)
+	}
+	return fixedTypeMatch(overloads[:4], inputs)
 }
 
 // Native temporal inputs avoid formatting and reparsing. Other inputs retain
@@ -258,12 +324,18 @@ func subTimeTypeMatch(overloads []overload, inputs []types.Type) checkResult {
 
 func timeArithmeticTypeMatch(overloads []overload, inputs []types.Type, legacyCount int) checkResult {
 	r := fixedTypeMatch(overloads[:legacyCount], inputs)
-	if len(inputs) == 2 && (inputs[1].Oid == types.T_float32 || inputs[1].Oid == types.T_float64) &&
-		r.status == succeedWithCast && len(r.finalType) == 2 &&
+	if len(inputs) == 2 && r.status == succeedWithCast && len(r.finalType) == 2 &&
 		(r.finalType[1].Oid == types.T_varchar || r.finalType[1].Oid == types.T_char) {
-		// FLOAT has no declared decimal scale, but its duration can carry
-		// microseconds. The implicit text cast must not force FSP 0.
-		r.finalType[1].Scale = 6
+		switch inputs[1].Oid {
+		case types.T_time:
+			// Preserve the duration's declared precision through the text cast
+			// so the result scale and operand parser retain fractional seconds.
+			r.finalType[1].Scale = inputs[1].Scale
+		case types.T_float32, types.T_float64:
+			// FLOAT has no declared decimal scale, but its duration can carry
+			// microseconds. The implicit text cast must not force FSP 0.
+			r.finalType[1].Scale = 6
+		}
 	}
 	if (r.status == succeedMatched || r.status == succeedWithCast) && r.idx >= 6 {
 		// The input signatures are unchanged; string results are appended
@@ -498,6 +570,105 @@ func fixedTypeMatchWithBoolNumericCast(overloads []overload, inputs []types.Type
 	return newCheckResultWithCast(matched.idx, finalTypes)
 }
 
+// isLogicalBoolOperand reports whether one type can serve as an operand of the
+// logical operators AND/OR/XOR/NOT, whose arguments are a boolean context. It
+// accepts every type the fixed implicit-cast table converts to BOOL and,
+// additionally, BIT: MySQL evaluates BIT as a number in a boolean context
+// (non-zero is TRUE, zero is FALSE, NULL stays NULL), and the execution layer
+// already provides the bit->bool cast for every bit width.
+//
+// The BIT acceptance is deliberately kept inside these boolean argument
+// positions: adding BIT->BOOL to the global implicit-cast table would also
+// change overload and value-result selection in CASE/IF/COALESCE, where BOOL
+// is the only type reachable from both BIT and BOOL (BOOL has no implicit
+// numeric target), so a non-zero BIT value would silently collapse to TRUE.
+func isLogicalBoolOperand(t types.Type) bool {
+	if t.Oid == types.T_bool || t.Oid == types.T_bit {
+		return true
+	}
+	can, _ := fixedImplicitTypeCast(t, types.T_bool)
+	return can
+}
+
+// logicalOperatorTypeCheck is the shared checker for the multiary logical
+// operators AND/OR: every argument must be a boolean-context operand (see
+// isLogicalBoolOperand), and non-BOOL arguments are cast to BOOL. Non-BIT
+// inputs resolve exactly as before; BIT inputs are the only newly accepted
+// domain.
+func logicalOperatorTypeCheck(overloads []overload, inputs []types.Type) checkResult {
+	cost := 0
+	for _, source := range inputs {
+		if source.Oid != types.T_bool {
+			if !isLogicalBoolOperand(source) {
+				return newCheckResultWithFailure(failedFunctionParametersWrong)
+			}
+			cost++
+		}
+	}
+
+	if cost == 0 {
+		return newCheckResultWithSuccess(0)
+	}
+
+	castTypes := make([]types.Type, len(inputs))
+	boolType := types.T_bool.ToType()
+	for i := range castTypes {
+		castTypes[i] = boolType
+	}
+	return newCheckResultWithCast(0, castTypes)
+}
+
+// logicalFixedTypeMatch resolves the fixed-arity logical operators NOT and
+// XOR through the ordinary fixed matcher, normalizing BIT arguments to BOOL
+// first so a BIT operand uses the existing boolean overload with a real
+// bit->bool cast at execution. For every non-BIT input the resolution, cost
+// mechanics, arity handling, and overload selection are exactly those of
+// fixedTypeMatch; only BIT operands are newly accepted (see
+// isLogicalBoolOperand for why BIT stays out of the global cast table).
+func logicalFixedTypeMatch(overloads []overload, inputs []types.Type) checkResult {
+	hasBit := false
+	for _, input := range inputs {
+		if input.Oid == types.T_bit {
+			hasBit = true
+			break
+		}
+	}
+	if !hasBit {
+		return fixedTypeMatch(overloads, inputs)
+	}
+
+	normalized := append([]types.Type(nil), inputs...)
+	for i := range normalized {
+		if normalized[i].Oid == types.T_bit {
+			normalized[i] = types.T_bool.ToType()
+		}
+	}
+	matched := fixedTypeMatch(overloads, normalized)
+	if matched.status != succeedMatched && matched.status != succeedWithCast {
+		return matched
+	}
+
+	boolType := types.T_bool.ToType()
+	if matched.status == succeedWithCast {
+		finalTypes := append([]types.Type(nil), matched.finalType...)
+		for i, input := range inputs {
+			if input.Oid == types.T_bit {
+				finalTypes[i] = boolType
+			}
+		}
+		return newCheckResultWithCast(matched.idx, finalTypes)
+	}
+
+	finalTypes := make([]types.Type, len(inputs))
+	for i, input := range inputs {
+		finalTypes[i] = input
+		if input.Oid == types.T_bit {
+			finalTypes[i] = boolType
+		}
+	}
+	return newCheckResultWithCast(matched.idx, finalTypes)
+}
+
 // stringDomainFixedTypeMatch keeps every MySQL string input in its original
 // OID/width/charset while applying the ordinary fixed matcher to control
 // arguments. Varlena string executors can consume every string family; casting
@@ -607,7 +778,13 @@ func regexpStringDomainFixedTypeMatchN(
 		if mode == StringDomainCheckDeferred || mode == StringDomainCheckDomainless {
 			continue
 		}
-		domain := types.StaticStringDomain(inputs[i])
+		operand := inputs[i]
+		if mode == StringDomainCheckBinaryCast {
+			operand.Oid, operand.Charset = types.T_varbinary, types.CharsetBinary
+		} else if mode == StringDomainCheckBinaryBlob {
+			operand.Oid, operand.Charset = types.T_blob, types.CharsetBinary
+		}
+		domain := types.StaticStringDomain(operand)
 		if domain == types.StringDomainNone {
 			// T_any is the binder-visible representation of both an ordinary
 			// untyped NULL and a parameter marker. Non-string scalars are also
@@ -618,25 +795,26 @@ func regexpStringDomainFixedTypeMatchN(
 		case types.StringDomainText:
 			if hasBinaryTrigger {
 				return newCheckResultWithCharacterSetMismatch(
-					regexpCharsetName(firstBinaryTrigger), regexpCharsetName(inputs[i]))
+					regexpCharsetName(firstBinaryTrigger), regexpCharsetName(operand))
 			}
 			if !hasText {
-				firstText, hasText = inputs[i], true
+				firstText, hasText = operand, true
 			}
 		case types.StringDomainBinary:
 			// MySQL's is_binary_string() is narrower than its binary-compatible
 			// domain: only MYSQL_TYPE_VARCHAR with the binary charset is a 3995
-			// trigger. BINARY (MYSQL_TYPE_STRING), BLOB, and direct PARAM_ITEM
-			// values remain byte-domain operands without making text peers illegal.
-			if mode == StringDomainCheckParamMarker || inputs[i].Oid != types.T_varbinary {
+			// trigger. Physical BINARY (MYSQL_TYPE_STRING), BLOB, and direct
+			// PARAM_ITEM values do not trigger it. CAST AS BINARY is a VARCHAR
+			// expression in MySQL even though MO executes it with T_binary.
+			if mode == StringDomainCheckParamMarker || operand.Oid != types.T_varbinary {
 				continue
 			}
 			if hasText {
 				return newCheckResultWithCharacterSetMismatch(
-					regexpCharsetName(firstText), regexpCharsetName(inputs[i]))
+					regexpCharsetName(firstText), regexpCharsetName(operand))
 			}
 			if !hasBinaryTrigger {
-				firstBinaryTrigger, hasBinaryTrigger = inputs[i], true
+				firstBinaryTrigger, hasBinaryTrigger = operand, true
 			}
 		default:
 			continue
@@ -656,6 +834,10 @@ func regexpCharsetName(typ types.Type) string {
 	switch typ.Charset {
 	case types.CharsetUTF8:
 		return "utf8mb4_general_ci"
+	case types.CharsetUTF8MB3UnicodeCI:
+		return "utf8_unicode_ci"
+	case types.CharsetUTF8MB4UnicodeCI:
+		return "utf8mb4_unicode_ci"
 	case types.CharsetUTF8MB4Bin, types.CharsetLegacy:
 		return "utf8mb4_bin"
 	default:
@@ -1181,6 +1363,7 @@ func initFixed1() {
 	// cast [0] + [1] ==> [2] + [3]
 	ru := [][4]types.T{
 		{types.T_any, types.T_any, types.T_int64, types.T_int64},
+		{types.T_any, types.T_uuid, types.T_uuid, types.T_uuid},
 		{types.T_any, types.T_bool, types.T_bool, types.T_bool},
 		{types.T_any, types.T_int8, types.T_int8, types.T_int8},
 		{types.T_any, types.T_int16, types.T_int16, types.T_int16},
@@ -1707,6 +1890,7 @@ func initFixed1() {
 		{types.T_json, types.T_varbinary, types.T_json, types.T_json},
 		{types.T_json, types.T_blob, types.T_varchar, types.T_varchar},
 		{types.T_json, types.T_text, types.T_varchar, types.T_varchar},
+		{types.T_uuid, types.T_any, types.T_uuid, types.T_uuid},
 		{types.T_uuid, types.T_char, types.T_uuid, types.T_uuid},
 		{types.T_uuid, types.T_varchar, types.T_uuid, types.T_uuid},
 		{types.T_uuid, types.T_binary, types.T_uuid, types.T_uuid},
@@ -3181,4 +3365,51 @@ func addFixedImplicitTypeCastRule(fromType types.T, toType types.T, preferLevel 
 	fixedCanImplicitCastRule[fromType].from = fromType
 	fixedCanImplicitCastRule[fromType].toList[toType].canCast = true
 	fixedCanImplicitCastRule[fromType].toList[toType].preferLevel = preferLevel
+}
+
+// Strings must reach their function before calendar conversion can erase zero
+// components. Restrict non-string inputs to released overloads so numeric and
+// typed temporal coercion does not change when adding the string signatures.
+func incompleteCalendarTypeMatch(overloads []overload, inputs []types.Type, legacy int, positions ...int) checkResult {
+	for _, position := range positions {
+		if position < len(inputs) && (inputs[position].Oid.IsMySQLString() || inputs[position].Oid == types.T_any) {
+			r := fixedTypeMatch(overloads[legacy:], inputs)
+			if r.status == succeedMatched || r.status == succeedWithCast {
+				r.idx += legacy
+			}
+			return r
+		}
+	}
+	return fixedTypeMatch(overloads[:legacy], inputs)
+}
+func incompleteDateFormatTypeMatch(o []overload, i []types.Type) checkResult {
+	return incompleteCalendarTypeMatch(o, i, 2, 0)
+}
+func incompleteToDaysTypeMatch(o []overload, i []types.Type) checkResult {
+	return incompleteCalendarTypeMatch(o, i, 1, 0)
+}
+func incompleteToSecondsTypeMatch(o []overload, i []types.Type) checkResult {
+	return incompleteCalendarTypeMatch(o, i, 1, 0)
+}
+func incompleteDayofweekTypeMatch(o []overload, i []types.Type) checkResult {
+	return incompleteCalendarTypeMatch(o, i, 3, 0)
+}
+func incompleteWeekTypeMatch(o []overload, i []types.Type) checkResult {
+	return incompleteCalendarTypeMatch(o, i, 4, 0)
+}
+func incompleteDatediffTypeMatch(o []overload, i []types.Type) checkResult {
+	if len(i) != 2 {
+		return newCheckResultWithFailure(failedFunctionParametersWrong)
+	}
+	raw := func(t types.T) bool { return t.IsMySQLString() || t == types.T_any }
+	a, b := raw(i[0].Oid), raw(i[1].Oid)
+	selected := 0
+	if a && b {
+		selected = 1
+	} else if a {
+		selected = 2
+	} else if b {
+		selected = 3
+	}
+	return fixedTypeMatchOnly(o, i, selected)
 }

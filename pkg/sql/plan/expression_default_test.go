@@ -16,18 +16,105 @@ package plan
 
 import (
 	"context"
+	"encoding/hex"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/stretchr/testify/require"
 )
+
+func TestExpressionDefaultNullIfStringSource(t *testing.T) {
+	for _, tc := range []struct {
+		name, sourceType, expression, input, wantHex string
+		nullInput, nullResult, integerResult         bool
+		wantLength                                   int64
+	}{
+		{name: "selected text", sourceType: "varchar(16)", expression: "reverse(nullif(coalesce(txt,_binary ''),''))", input: "你a", wantHex: "61e4bda0"},
+		{name: "without NULLIF", sourceType: "varchar(16)", expression: "reverse(coalesce(txt,_binary ''))", input: "你a", wantHex: "61e4bda0"},
+		{name: "independent text owner", sourceType: "varchar(16)", expression: "reverse(nullif(txt,''))", input: "你a", wantHex: "61e4bda0"},
+		{name: "independent binary owner", sourceType: "varbinary(16)", expression: "reverse(nullif(coalesce(txt,_binary ''),''))", input: "你a", wantHex: "61a0bde4"},
+		{name: "CASE selected text through NULLIF", sourceType: "varchar(16)", expression: "reverse(nullif(case when txt is not null then txt else _binary '' end,''))", input: "你a", wantHex: "61e4bda0"},
+		{name: "CASE pure text LPAD", sourceType: "varchar(16)", expression: "reverse(case when txt is not null then lpad(txt,3,'z') else _binary '' end)", input: "你a", wantHex: "61e4bda07a"},
+		{name: "CASE binary LPAD", sourceType: "varbinary(16)", expression: "reverse(case when txt is not null then lpad(txt,3,_binary 'z') else _binary '' end)", input: "你a", wantHex: "a0bde4"},
+		{name: "CASE pure text LPAD numeric DEFAULT", sourceType: "varchar(16)", expression: "char_length(case when txt is not null then lpad(txt,3,'z') else _binary '0' end)", input: "你a", integerResult: true, wantLength: 3},
+		{name: "CASE selected text", sourceType: "varchar(16)", expression: "reverse(case when txt is not null then txt else _binary '' end)", input: "你a", wantHex: "61e4bda0"},
+		{name: "IF selected text", sourceType: "varchar(16)", expression: "reverse(if(txt is not null,txt,_binary ''))", input: "你a", wantHex: "61e4bda0"},
+		{name: "IF length with numeric DEFAULT target", sourceType: "varchar(16)", expression: "char_length(if(txt is not null,txt,_binary ''))", input: "你a", integerResult: true, wantLength: 2},
+		{name: "CASE length with numeric DEFAULT target", sourceType: "varchar(16)", expression: "char_length(case when txt is not null then txt else _binary '0' end)", input: "你a", integerResult: true, wantLength: 2},
+		{name: "IF length of empty text", sourceType: "varchar(16)", expression: "char_length(if(txt is not null,txt,_binary '0'))", integerResult: true},
+		{name: "IF length with numeric compatible fallback", sourceType: "varchar(16)", expression: "char_length(if(txt is not null,txt,_binary '0'))", nullInput: true, integerResult: true, wantLength: 1},
+		{name: "IF length of binary column", sourceType: "varbinary(16)", expression: "char_length(if(txt is not null,txt,_binary '0'))", input: "你a", integerResult: true, wantLength: 4},
+		{name: "CASE length with explicit binary peer", sourceType: "varchar(16)", expression: "char_length(case when txt is not null then txt else cast('' as binary(4)) end)", input: "你a", integerResult: true, wantLength: 4},
+		{name: "CASE explicit binary COLLATE", sourceType: "varchar(16)", expression: "reverse(case when txt is not null then txt else _binary '' collate binary end)", input: "你a", wantHex: "61a0bde4"},
+		{name: "CASE explicit text COLLATE", sourceType: "varchar(16)", expression: "reverse(case when txt is not null then txt collate utf8mb4_bin else _binary '' end)", input: "你a", wantHex: "61e4bda0"},
+		{name: "CASE explicit binary peer", sourceType: "varchar(16)", expression: "reverse(case when txt is not null then txt else cast('' as binary(4)) end)", input: "你a", wantHex: "61a0bde4"},
+		{name: "CASE explicit binary NULL", sourceType: "varchar(16)", expression: "reverse(case when txt is not null then txt else cast(null as binary(4)) end)", input: "你a", wantHex: "61a0bde4"},
+		{name: "CASE hex literal peer", sourceType: "varchar(16)", expression: "reverse(case when txt is not null then txt else X'ff' end)", input: "你a", wantHex: "61e4bda0"},
+		{name: "CASE selected binary column", sourceType: "varbinary(16)", expression: "reverse(case when txt is not null then txt else '' end)", input: "你a", wantHex: "61a0bde4"},
+		{name: "CASE NULL input", sourceType: "varchar(16)", expression: "reverse(nullif(case when txt is not null then txt else _binary '' end,''))", nullInput: true, nullResult: true},
+		{name: "nested NULLIF", sourceType: "varchar(16)", expression: "reverse(nullif(nullif(coalesce(txt,_binary ''),''),'x'))", input: "你a", wantHex: "61e4bda0"},
+		{name: "matching value", sourceType: "varchar(16)", expression: "reverse(nullif(coalesce(txt,_binary ''),''))", nullResult: true},
+		{name: "NULL input", sourceType: "varchar(16)", expression: "reverse(nullif(coalesce(txt,_binary ''),''))", nullInput: true, nullResult: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := newPlanTestProcess(t)
+			ctx := NewMockCompilerContext(false, proc)
+			resultType, resultOID := "varbinary(64)", types.T_varbinary
+			if tc.integerResult {
+				resultType, resultOID = "bigint", types.T_int64
+			}
+			stmt, err := mysql.ParseOne(proc.Ctx, "create table t(txt "+tc.sourceType+
+				", result "+resultType+" default ("+tc.expression+"))", 1)
+			require.NoError(t, err)
+			t.Cleanup(stmt.Free)
+			bound, err := BuildPlan(ctx, stmt, false)
+			require.NoError(t, err)
+			original := DeepCopyPlan(bound)
+			require.Equal(t, bound.GetDdl().GetCreateTable().TableDef.Cols[1].Default.Expr,
+				original.GetDdl().GetCreateTable().TableDef.Cols[1].Default.Expr)
+			encoded, err := bound.Marshal()
+			require.NoError(t, err)
+			restored := &planpb.Plan{}
+			require.NoError(t, restored.Unmarshal(encoded))
+			cols := restored.GetDdl().GetCreateTable().TableDef.Cols
+			expr := DeepCopyExpr(cols[1].Default.Expr)
+			require.Equal(t, original.GetDdl().GetCreateTable().TableDef.Cols[1].Default.Expr, expr)
+			require.Equal(t, int32(resultOID), expr.Typ.Id)
+			require.Equal(t, int32(64), expr.Typ.Width)
+			snapshot := DeepCopyExpr(expr)
+
+			input := batch.NewWithSize(1)
+			t.Cleanup(func() { input.Clean(proc.Mp()) })
+			input.Vecs[0] = vector.NewVec(makeTypeByPlan2Expr(&Expr{Typ: cols[0].Typ}))
+			require.NoError(t, vector.AppendBytes(input.Vecs[0], []byte(tc.input), tc.nullInput, proc.Mp()))
+			input.SetRowCount(1)
+			executor, err := colexec.NewExpressionExecutor(proc, expr)
+			require.NoError(t, err)
+			t.Cleanup(executor.Free)
+			result, err := executor.Eval(proc, []*batch.Batch{input}, nil)
+			require.NoError(t, err)
+			require.Equal(t, tc.nullResult, result.IsNull(0))
+			if !tc.nullResult {
+				if tc.integerResult {
+					require.Equal(t, tc.wantLength, vector.MustFixedColNoTypeCheck[int64](result)[0])
+				} else {
+					require.Equal(t, tc.wantHex, hex.EncodeToString(result.GetBytesAt(0)))
+				}
+			}
+			require.Equal(t, snapshot, expr, "executing a DEFAULT must not mutate its bound declaration or source proof")
+		})
+	}
+}
 
 func TestExpressionDefaultProtocolAdmission(t *testing.T) {
 	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
@@ -239,14 +326,14 @@ func TestLoadDefaultMaterialization(t *testing.T) {
 		node := &planpb.Node{NodeType: planpb.Node_PROJECT, Children: []int32{child}}
 		load := &tree.Load{Table: &tree.TableName{}, Param: &tree.ExternParam{}}
 		supplied := map[string]int32{"b": 0, "a": 1}
-		_, err = getProjectNode(load, ctx, node, table, supplied)
+		_, err = getProjectNode(load, ctx, node, table, supplied, nil)
 		require.NoError(t, err)
 		if parallel {
 			before := node.ProjectList[2]
 			node.ProjectList = makeCastExpr(load, "row.csv", table, node, supplied)
 			require.Same(t, before, node.ProjectList[2], "default is already typed")
 		}
-		id, err := builder.appendLoadDefaultProjections(bindCtx, node, table, supplied)
+		id, err := builder.appendLoadDefaultProjections(bindCtx, node, table, supplied, nil)
 		require.NoError(t, err)
 		last := builder.qry.Nodes[id]
 		require.Equal(t, []int32{2}, collectRefColPos(last.ProjectList[3]))
@@ -1143,6 +1230,36 @@ func TestDefaultBinderWithColumnsUsesSourceTypeAndRejectsInvalidNames(t *testing
 
 	_, err = binder.BindColRef(tree.NewUnresolvedColName("missing"), 0, true)
 	require.ErrorContains(t, err, "does not exist")
+}
+
+func TestDefaultBinderColumnScopes(t *testing.T) {
+	ctx := context.Background()
+	source := planpb.Type{Id: int32(types.T_int32), Width: 32}
+	target := planpb.Type{Id: int32(types.T_varchar), Width: 64}
+	cols := []*ColDef{nil, {Name: "First", Typ: source}, {Name: "FIRST", Typ: target}}
+	binder := NewDefaultBinderWithColumns(ctx, target, cols)
+	expr, err := binder.BindColRef(tree.NewUnresolvedColName("first"), 0, true)
+	require.NoError(t, err)
+	require.Equal(t, source, expr.Typ)
+	require.Equal(t, int32(1), expr.GetCol().ColPos)
+	_, err = binder.BindColRef(tree.NewUnresolvedColName("missing"), 0, true)
+	require.ErrorContains(t, err, "does not exist")
+	require.Nil(t, cols[0])
+	require.Equal(t, "First", cols[1].Name)
+	require.Equal(t, source, cols[1].Typ)
+
+	for _, empty := range [][]*ColDef{nil, {}} {
+		_, err = NewDefaultBinderWithColumns(ctx, target, empty).BindColRef(
+			tree.NewUnresolvedColName("missing"), 0, true)
+		require.ErrorContains(t, err, "does not exist")
+	}
+
+	// SHOW VARIABLES and SHOW COLLATION use names with a common result type.
+	expr, err = NewDefaultBinder(ctx, nil, nil, target, []string{"name", "value"}).BindColRef(
+		tree.NewUnresolvedColName("VALUE"), 0, true)
+	require.NoError(t, err)
+	require.Equal(t, target, expr.Typ)
+	require.Equal(t, int32(1), expr.GetCol().ColPos)
 }
 
 func TestRemapExpressionDefaultsAndReferencesAfterColumnChanges(t *testing.T) {

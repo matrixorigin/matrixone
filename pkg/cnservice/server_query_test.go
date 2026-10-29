@@ -20,7 +20,6 @@ import (
 	"math"
 	goruntime "runtime"
 	"runtime/debug"
-	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -38,7 +37,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
-	"github.com/matrixorigin/matrixone/pkg/frontend/test/mock_incr"
 	"github.com/matrixorigin/matrixone/pkg/frontend/test/mock_lock"
 	"github.com/matrixorigin/matrixone/pkg/frontend/test/mock_moserver"
 	"github.com/matrixorigin/matrixone/pkg/frontend/test/mock_query"
@@ -151,38 +149,10 @@ func Test_service_handleISCPDrainConsumerRenewFenceOnly(t *testing.T) {
 	require.False(t, exec.IsJobFenced(key))
 }
 
-func Test_service_handleISCPDrainConsumerWaitsForExecutorRuntime(t *testing.T) {
-	oldTimeout := iscpExecutorReadyTimeout
-	iscpExecutorReadyTimeout = time.Second
-	oldLookup := iscpGetExecutorRuntimeFn
-	defer func() {
-		iscpExecutorReadyTimeout = oldTimeout
-		iscpGetExecutorRuntimeFn = oldLookup
-	}()
-
+func Test_service_handleISCPDrainConsumerFencesBeforeExecutorRuntime(t *testing.T) {
 	const runnerCN = "late-runner-cn"
 	key := iscp.NewJobRuntimeKey(1, 42, "index_idx1", 7)
 	defer iscp.RemoveCNJobFence(runnerCN, key)
-	exec := &iscp.ISCPTaskExecutor{}
-	defer iscp.UnregisterExecutorRuntime(runnerCN, exec)
-	firstLookup := make(chan struct{})
-	var once sync.Once
-	iscpGetExecutorRuntimeFn = func(cnUUID string) (*iscp.ISCPTaskExecutor, bool) {
-		missing := false
-		once.Do(func() {
-			missing = true
-			close(firstLookup)
-		})
-		if missing {
-			return nil, false
-		}
-		return iscp.GetExecutorRuntime(cnUUID)
-	}
-	go func() {
-		<-firstLookup
-		iscp.RegisterExecutorRuntime(runnerCN, exec)
-	}()
-
 	s := &service{cfg: &Config{UUID: runnerCN}}
 	resp := &query.Response{}
 	require.NoError(t, s.handleISCPDrainConsumer(context.Background(), &query.Request{
@@ -194,26 +164,29 @@ func Test_service_handleISCPDrainConsumerWaitsForExecutorRuntime(t *testing.T) {
 		},
 	}, resp, nil))
 	require.True(t, resp.ISCPDrainConsumerResponse.Success)
+	exec := &iscp.ISCPTaskExecutor{}
+	iscp.RegisterExecutorRuntime(runnerCN, exec)
+	defer iscp.UnregisterExecutorRuntime(runnerCN, exec)
+	require.True(t, exec.IsJobFenced(key), "a later executor must inherit the CN fence")
+	_, admitted := exec.RegisterRunningConsumer(key, key.JobID, 1, nil, nil)
+	require.False(t, admitted, "the later executor must not start the dropped consumer")
 }
 
-func Test_service_handleISCPDrainConsumerReturnsRetryableNotReady(t *testing.T) {
-	oldTimeout := iscpExecutorReadyTimeout
-	iscpExecutorReadyTimeout = time.Millisecond
-	defer func() { iscpExecutorReadyTimeout = oldTimeout }()
-
+func Test_service_handleISCPDrainConsumerMissingRuntimeFenceRollback(t *testing.T) {
 	const runnerCN = "not-ready-runner-cn"
 	key := iscp.NewJobRuntimeKey(0, 42, "index_idx1", 7)
 	defer iscp.RemoveCNJobFence(runnerCN, key)
 	s := &service{cfg: &Config{UUID: runnerCN}}
-	err := s.handleISCPDrainConsumer(context.Background(), &query.Request{
+	resp := &query.Response{}
+	require.NoError(t, s.handleISCPDrainConsumer(context.Background(), &query.Request{
 		ISCPDrainConsumerRequest: &query.ISCPDrainConsumerRequest{
 			TableID: 42,
 			JobName: "index_idx1",
 			JobID:   7,
 		},
-	}, &query.Response{}, nil)
-	require.True(t, moerr.IsMoErrCode(err, moerr.ErrRetryForCNRollingRestart))
-	resp := &query.Response{}
+	}, resp, nil))
+	require.True(t, resp.ISCPDrainConsumerResponse.Success)
+	resp = &query.Response{}
 	require.NoError(t, s.handleISCPDrainConsumer(context.Background(), &query.Request{
 		ISCPDrainConsumerRequest: &query.ISCPDrainConsumerRequest{
 			TableID:        key.TableID,
@@ -223,7 +196,7 @@ func Test_service_handleISCPDrainConsumerReturnsRetryableNotReady(t *testing.T) 
 		},
 	}, resp, nil))
 	require.True(t, resp.ISCPDrainConsumerResponse.Success,
-		"the pending CN fence must remain renewable before executor publication")
+		"the CN fence must remain renewable before executor publication")
 	require.True(t, iscp.RenewCNJobFence(runnerCN, key, time.Second))
 
 	resp = &query.Response{}
@@ -236,6 +209,41 @@ func Test_service_handleISCPDrainConsumerReturnsRetryableNotReady(t *testing.T) 
 		},
 	}, resp, nil))
 	require.False(t, iscp.RenewCNJobFence(runnerCN, key, time.Second))
+	exec := &iscp.ISCPTaskExecutor{}
+	iscp.RegisterExecutorRuntime(runnerCN, exec)
+	defer iscp.UnregisterExecutorRuntime(runnerCN, exec)
+	require.False(t, exec.IsJobFenced(key), "rollback must remove the fence before publication")
+}
+
+func Test_service_handleISCPDrainConsumerRuntimeStopsDuringWait(t *testing.T) {
+	oldTimeout, oldLookup := iscpExecutorReadyTimeout, iscpGetExecutorRuntimeFn
+	iscpExecutorReadyTimeout = 20 * time.Millisecond
+	defer func() {
+		iscpExecutorReadyTimeout, iscpGetExecutorRuntimeFn = oldTimeout, oldLookup
+	}()
+	const runnerCN = "stopping-runner-cn"
+	key := iscp.NewJobRuntimeKey(1, 42, "index_idx1", 7)
+	defer iscp.RemoveCNJobFence(runnerCN, key)
+	exec := &iscp.ISCPTaskExecutor{}
+	iscp.RegisterExecutorRuntime(runnerCN, exec)
+	defer iscp.UnregisterExecutorRuntime(runnerCN, exec)
+	lookups := 0
+	iscpGetExecutorRuntimeFn = func(string) (*iscp.ISCPTaskExecutor, bool) {
+		lookups++
+		if lookups == 2 {
+			iscp.UnregisterExecutorRuntime(runnerCN, exec)
+		}
+		return nil, false
+	}
+	s := &service{cfg: &Config{UUID: runnerCN}}
+	resp := &query.Response{}
+	require.NoError(t, s.handleISCPDrainConsumer(context.Background(), &query.Request{
+		ISCPDrainConsumerRequest: &query.ISCPDrainConsumerRequest{
+			AccountID: 1, TableID: 42, JobName: "index_idx1", JobID: 7,
+		},
+	}, resp, nil))
+	require.True(t, resp.ISCPDrainConsumerResponse.Success)
+	require.GreaterOrEqual(t, lookups, 2)
 }
 
 func Test_service_handleISCPDrainConsumerRetriesInjectedStartupGap(t *testing.T) {
@@ -322,8 +330,10 @@ func Test_service_handleGoMaxProcs(t *testing.T) {
 
 func Test_service_handleGoMemLimit(t *testing.T) {
 	ctx := context.Background()
-	// set no limit
-	_ = debug.SetMemoryLimit(-1)
+	// A negative value only queries the limit. Establish this test's baseline
+	// explicitly and restore the process limit before the next test.
+	previous := debug.SetMemoryLimit(math.MaxInt64)
+	defer debug.SetMemoryLimit(previous)
 	type fields struct{}
 	type args struct {
 		ctx  context.Context
@@ -349,7 +359,7 @@ func Test_service_handleGoMemLimit(t *testing.T) {
 			want:    &query.Response{GoMemLimitResponse: query.GoMemLimitResponse{MemLimitBytes: math.MaxInt64}},
 		},
 		{
-			name:   "set_no_limit",
+			name:   "query_current_limit",
 			fields: fields{},
 			args: args{
 				ctx:  ctx,
@@ -367,6 +377,7 @@ func Test_service_handleGoMemLimit(t *testing.T) {
 			require.Equal(t, tt.wantErr, err)
 			require.Equalf(t, tt.want, tt.args.resp,
 				"handleGoMemLimit(%v, %v, %v, %v)", tt.args.ctx, tt.args.req, tt.args.resp, nil)
+			require.Equal(t, int64(4<<30), debug.SetMemoryLimit(-1), "a query must preserve the current limit")
 		})
 	}
 }
@@ -558,7 +569,7 @@ func Test_service_handleFileServiceCacheEvictRequest(t *testing.T) {
 func Test_service_handleReloadAutoIncrementCache(t *testing.T) {
 
 	ctl := gomock.NewController(t)
-	incSvc := mock_incr.NewMockAutoIncrementService(ctl)
+	incSvc := mock_frontend.NewMockAutoIncrementService(ctl)
 	incSvc.EXPECT().Reload(gomock.Any(), gomock.Any()).AnyTimes()
 
 	ctx := context.Background()
@@ -1454,12 +1465,19 @@ func Test_service_handleMigrateConnTo(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			s := &service{mo: tt.fields.mo}
+			s.viewMetadataIngressReady.Store(true)
 			err := s.handleMigrateConnTo(tt.args.ctx, tt.args.req, tt.args.resp, nil)
 			require.Equal(t, tt.wantErr, err)
 			require.Equalf(t, tt.want, tt.args.resp,
 				"handleMigrateConnTo(%v, %v, %v, %v)", tt.args.ctx, tt.args.req, tt.args.resp, nil)
 		})
 	}
+	t.Run("not admitted", func(t *testing.T) {
+		server := mock_moserver.NewMockServer(gomock.NewController(t))
+		s := &service{mo: server}
+		err := s.handleMigrateConnTo(ctx, &query.Request{MigrateConnToRequest: &query.MigrateConnToRequest{}}, &query.Response{}, nil)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrServiceUnavailable))
+	})
 }
 
 func Test_service_handleGetReplicaCount(t *testing.T) {
@@ -1789,4 +1807,66 @@ type fakeIcebergCacheInvalidationHandler struct {
 func (h *fakeIcebergCacheInvalidationHandler) InvalidateIcebergCache(ctx context.Context, req api.CacheInvalidationRequest) (int, error) {
 	h.req = req
 	return h.removed, nil
+}
+
+func TestSessionControlHandlers(t *testing.T) {
+	ctl := gomock.NewController(t)
+	server := mock_moserver.NewMockServer(ctl)
+	server.EXPECT().GetRoutineManager().Return(&frontend.RoutineManager{}).AnyTimes()
+	sid := "session-control-handlers"
+	rt := moruntime.DefaultRuntime()
+	moruntime.SetupServiceBasedRuntime(sid, rt)
+	t.Cleanup(func() { moruntime.CompareAndDeleteServiceBasedRuntime(sid, rt) })
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion120)
+	s := &service{mo: server, cfg: &Config{UUID: sid}}
+	ctx := context.Background()
+	for _, req := range []*query.Request{nil, {}} {
+		require.Error(t, s.handleKillSession(ctx, req, &query.Response{}, nil))
+		require.Error(t, s.handleDisconnectSession(ctx, req, &query.Response{}, nil))
+	}
+	req := &query.Request{CmdMethod: query.CmdMethod_KillSession, KillSessionRequest: &query.KillSessionRequest{ConnID: 123}}
+	require.Error(t, s.handleKillSession(ctx, req, &query.Response{}, nil))
+	req.KillSessionRequest.Principal = &query.KillSessionPrincipal{Account: "sys", User: "root", Role: "moadmin"}
+	rsp := &query.Response{}
+	require.NoError(t, s.handleKillSession(ctx, req, rsp, nil))
+	require.NotNil(t, rsp.KillSessionResponse)
+	require.False(t, rsp.KillSessionResponse.Found)
+	req.KillSessionRequest.ConnID = 1<<32 + 123
+	require.Error(t, s.handleKillSession(ctx, req, &query.Response{}, nil))
+	rsp = &query.Response{}
+	require.NoError(t, s.handleDisconnectSession(ctx, &query.Request{CmdMethod: query.CmdMethod_DisconnectSession, DisconnectSessionRequest: &query.DisconnectSessionRequest{ConnID: 123}}, rsp, nil))
+	require.NotNil(t, rsp.DisconnectSessionResponse)
+}
+
+// A receiver must reject rollback before looking up or acting on any routine.
+// Leaving mo nil makes an accidentally admitted operation fail this test.
+func TestSessionControlHandlersRejectRollback(t *testing.T) {
+	sid := "session-control-rollback"
+	rt := moruntime.DefaultRuntime()
+	moruntime.SetupServiceBasedRuntime(sid, rt)
+	t.Cleanup(func() { moruntime.CompareAndDeleteServiceBasedRuntime(sid, rt) })
+	s := &service{cfg: &Config{UUID: sid}}
+	ctx := context.Background()
+	kill := &query.Request{CmdMethod: query.CmdMethod_KillSession, KillSessionRequest: &query.KillSessionRequest{ConnID: 123}}
+	disconnect := &query.Request{CmdMethod: query.CmdMethod_DisconnectSession, DisconnectSessionRequest: &query.DisconnectSessionRequest{ConnID: 123}}
+	for _, version := range []int64{defines.MORPCVersion119, defines.MORPCVersion120, defines.MORPCVersion119} {
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
+		if version == defines.MORPCVersion120 {
+			s.mo = mock_moserver.NewMockServer(gomock.NewController(t))
+			s.mo.(*mock_moserver.MockServer).EXPECT().GetRoutineManager().Return(&frontend.RoutineManager{}).Times(2)
+			rsp := &query.Response{}
+			kill.KillSessionRequest.Principal = &query.KillSessionPrincipal{Account: "sys", User: "root", Role: "moadmin"}
+			require.NoError(t, s.handleKillSession(ctx, kill, rsp, nil))
+			require.NotNil(t, rsp.KillSessionResponse)
+			require.NoError(t, s.handleDisconnectSession(ctx, disconnect, rsp, nil))
+			require.NotNil(t, rsp.DisconnectSessionResponse)
+			s.mo = nil
+			continue
+		}
+		rsp := &query.Response{}
+		require.ErrorContains(t, s.handleKillSession(ctx, kill, rsp, nil), "unsupported protocol version 120")
+		require.Nil(t, rsp.KillSessionResponse)
+		require.ErrorContains(t, s.handleDisconnectSession(ctx, disconnect, rsp, nil), "unsupported protocol version 120")
+		require.Nil(t, rsp.DisconnectSessionResponse)
+	}
 }

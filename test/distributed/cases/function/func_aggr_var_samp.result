@@ -28,17 +28,17 @@ select VAR_SAMP(g) from t1;
 ➤ VAR_SAMP(g)[8,54,0]  𝄀
 43336.331616333344
 select VAR_SAMP(h) from t1;
-➤ VAR_SAMP(h)[3,38,12]  𝄀
-3005.438266666667
+➤ VAR_SAMP(h)[8,53,31]  𝄀
+3005.4382666666666
 select VAR_SAMP(i) from t1;
-➤ VAR_SAMP(i)[3,38,6]  𝄀
-24690296.000000
+➤ VAR_SAMP(i)[8,53,31]  𝄀
+2.4690296E7
 select VAR_SAMP(k) from t1;
-➤ VAR_SAMP(k)[3,38,6]  𝄀
-958333333333333401600.000000
+➤ VAR_SAMP(k)[8,53,31]  𝄀
+9.583333333333334E20
 select VAR_SAMP(l) from t1;
-➤ VAR_SAMP(l)[3,38,6]  𝄀
-16358333343166664704000.000000
+➤ VAR_SAMP(l)[8,53,31]  𝄀
+1.6358333343166666E22
 select VAR_SAMP(m) from t1;
 ➤ VAR_SAMP(m)[8,53,31]  𝄀
 2.25
@@ -47,22 +47,22 @@ select VAR_SAMP(n) from t1;
 2.25
 drop table t1;
 select VAR_SAMP(99999999999999999.99999);
-➤ VAR_SAMP(99999999999999999.99999)[3,38,11]  𝄀
+➤ VAR_SAMP(99999999999999999.99999)[8,53,31]  𝄀
 null
 select VAR_SAMP(999999999999999933193939.99999);
-➤ VAR_SAMP(999999999999999933193939.99999)[3,38,11]  𝄀
+➤ VAR_SAMP(999999999999999933193939.99999)[8,53,31]  𝄀
 null
 select VAR_SAMP(9999999999999999999999999999999999.9999999999999);
-➤ VAR_SAMP(9999999999999999999999999999999999.9999999999999)[3,38,9]  𝄀
+➤ VAR_SAMP(9999999999999999999999999999999999.9999999999999)[8,53,31]  𝄀
 null
 select VAR_SAMP(-99999999999999999.99999);
-➤ VAR_SAMP(-99999999999999999.99999)[3,38,11]  𝄀
+➤ VAR_SAMP(-99999999999999999.99999)[8,53,31]  𝄀
 null
 select VAR_SAMP(-999999999999999933193939.99999);
-➤ VAR_SAMP(-999999999999999933193939.99999)[3,38,11]  𝄀
+➤ VAR_SAMP(-999999999999999933193939.99999)[8,53,31]  𝄀
 null
 select VAR_SAMP(-9999999999999999999999999999999999.9999999999999);
-➤ VAR_SAMP(-9999999999999999999999999999999999.9999999999999)[3,38,9]  𝄀
+➤ VAR_SAMP(-9999999999999999999999999999999999.9999999999999)[8,53,31]  𝄀
 null
 create table t1(a bigint);
 select VAR_SAMP(a) from t1;
@@ -170,8 +170,8 @@ insert into decimal01 values(23413432.32423, 23413432.32423);
 insert into decimal01 values(0, 0);
 insert into decimal01 values(-13421.34234, -13421.34234);
 select VAR_SAMP(fcol), VAR_SAMP(col1) from decimal01;
-➤ VAR_SAMP(fcol)[8,54,0]  ¦  VAR_SAMP(col1)[3,38,7]  𝄀
-1.3266730056751762E14  ¦  132667300158677.6268800
+➤ VAR_SAMP(fcol)[8,54,0]  ¦  VAR_SAMP(col1)[8,53,31]  𝄀
+1.3266730056751762E14  ¦  1.3266730015867762E14
 drop table decimal01;
 drop table if exists decimal02;
 create table decimal02(col1 decimal(38,0));
@@ -180,22 +180,22 @@ insert into decimal02 values(99999999999999999999999999999999999999);
 insert into decimal02 values(10000000000000000000000000000000000000);
 insert into decimal02 values(32482438247328742831193201993219039203);
 insert into decimal02 values(99999999999999999999999999999999999999.73289342);
+invalid input: 99999999999999999999999999999999999999.73289342 beyond the range, can't be converted to Decimal128(38,0).
 insert into decimal02 values(-298432432433242412313123321231321313);
 insert into decimal02 values(-34243214324324342321313321321342342343.123143);
 insert into decimal02 values(-0.12813218391321939921391929391293912);
 select * from decimal02;
-➤ col1[3,39,0]  𝄀
+➤ col1[3,38,0]  𝄀
 12312312312314565789874569874512456879  𝄀
 99999999999999999999999999999999999999  𝄀
 10000000000000000000000000000000000000  𝄀
 32482438247328742831193201993219039203  𝄀
-10000000000000000000000000000000000000  𝄀
 -298432432433242412313123321231321313  𝄀
 -34243214324324342321313321321342342343  𝄀
 0
 select VAR_SAMP(col1) from decimal02;
--- @regex("invalid input: [0-9.e+-]+ beyond the range, can't be converted to Decimal128\(38,6\)\.", true)
-invalid input: 1.4940935338371673e+75 beyond the range, can't be converted to Decimal128(38,6).
+➤ VAR_SAMP(col1)[8,53,31]  𝄀
+1.7355931274474585E75
 drop table decimal02;
 drop table if exists test02;
 create table test02(col1 decimal(37));
@@ -212,8 +212,8 @@ select * from test02;
 -123  𝄀
 9932129321093029302930290439029432424
 select VAR_SAMP(col1) from test02;
--- @regex("invalid input: [0-9.e+-]+ beyond the range, can't be converted to Decimal128\(38,6\)\.", true)
-invalid input: 3.317851953694514e+73 beyond the range, can't be converted to Decimal128(38,6).
+➤ VAR_SAMP(col1)[8,53,31]  𝄀
+3.317851953694514E73
 drop table test02;
 drop table if exists test03;
 create table test03(a decimal(38,2));
@@ -221,8 +221,8 @@ insert into test03 values(9999999999999999999999999999999.1);
 insert into test03 values(-0.00001);
 insert into test03 values(NULL);
 select VAR_SAMP(a) from test03;
--- @regex("invalid input: [0-9.e+-]+ beyond the range, can't be converted to Decimal128\(38,8\)\.", true)
-invalid input: 4.9999999999999996e+61 beyond the range, can't be converted to Decimal128(38,8).
+➤ VAR_SAMP(a)[8,53,31]  𝄀
+4.9999999999999996E61
 drop table test03;
 drop table if exists test04;
 create table test04(a decimal(38,20));
@@ -239,8 +239,8 @@ select * from test04;
 -999999999999999999.90000000000000000000  𝄀
 -1E-20
 select VAR_SAMP(a) from test04;
--- @regex("invalid input: [0-9.e+-]+ beyond the range, can't be converted to Decimal128\(38,20\)\.", true)
-invalid input: 5.038006341398178e+35 beyond the range, can't be converted to Decimal128(38,20).
+➤ VAR_SAMP(a)[8,53,31]  𝄀
+5.038006341398178E35
 drop table test04;
 drop table if exists test05;
 create table test05(a decimal(20,10));
@@ -255,8 +255,8 @@ select * from test05;
 7382184932.3892039843  𝄀
 0.3029302394
 select VAR_SAMP(a) from test05;
-➤ VAR_SAMP(a)[3,38,12]  𝄀
-80290830253424128000.000000000000
+➤ VAR_SAMP(a)[8,53,31]  𝄀
+8.029083025342412E19
 drop table test05;
 drop table if exists test06;
 create table test06(a decimal(20,10));
@@ -271,7 +271,7 @@ select * from test06;
 null  𝄀
 0.3029302394
 select VAR_SAMP(a) from test06;
-➤ VAR_SAMP(a)[3,38,12]  𝄀
-99999999991023042560.000000000000
+➤ VAR_SAMP(a)[8,53,31]  𝄀
+9.999999999102306E19
 drop table test06;
 drop database test;

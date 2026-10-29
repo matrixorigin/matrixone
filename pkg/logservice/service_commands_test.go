@@ -157,6 +157,7 @@ func TestHandleStartReplica(t *testing.T) {
 			},
 		}
 		s.handleCommands([]pb.ScheduleCommand{cmd})
+		s.handleCommands([]pb.ScheduleCommand{cmd}) // Retry before the next report.
 		mustHaveReplica(t, s.store, 1, 1)
 
 		has, err := hasMetadataRec(s.store.cfg.DataDir, logMetadataFilename, 1, 1, s.store.cfg.FS)
@@ -190,6 +191,7 @@ func TestHandleAddNonVotingReplica(t *testing.T) {
 		},
 	}
 	service1.handleCommands([]pb.ScheduleCommand{cmd})
+	service1.handleCommands([]pb.ScheduleCommand{cmd}) // Ordered epoch rejects a repeated membership mutation.
 	count, ok := checkReplicaCount(store1, 1)
 	require.True(t, ok)
 	assert.Equal(t, 2, count)
@@ -199,7 +201,6 @@ func TestHandleAddNonVotingReplica(t *testing.T) {
 }
 
 func TestHandleStartNonVotingReplica(t *testing.T) {
-	t.Skip() // pls re-open after https://github.com/matrixorigin/matrixone/pull/19025
 	fn := func(t *testing.T, s *Service) {
 		var cfg Config
 		genCfg := func() Config {
@@ -324,6 +325,7 @@ func TestHandleAddReplica(t *testing.T) {
 		},
 	}
 	service1.handleCommands([]pb.ScheduleCommand{cmd})
+	service1.handleCommands([]pb.ScheduleCommand{cmd}) // Ordered epoch rejects a repeated membership mutation.
 	count, ok := checkReplicaCount(store1, 1)
 	require.True(t, ok)
 	assert.Equal(t, 3, count)
@@ -352,6 +354,7 @@ func TestHandleRemoveReplica(t *testing.T) {
 		},
 	}
 	service1.handleCommands([]pb.ScheduleCommand{cmd})
+	service1.handleCommands([]pb.ScheduleCommand{cmd}) // Ordered epoch rejects a repeated membership mutation.
 	count, ok := checkReplicaCount(store1, 1)
 	require.True(t, ok)
 	assert.Equal(t, 1, count)
@@ -469,6 +472,7 @@ func TestServiceBootstrapShard(t *testing.T) {
 		},
 	}
 	service.handleCommands([]pb.ScheduleCommand{cmd})
+	service.handleCommands([]pb.ScheduleCommand{cmd}) // Same initial members and replica ID.
 
 	testServiceAddress := cfg.LogServiceServiceAddr()
 	done := false

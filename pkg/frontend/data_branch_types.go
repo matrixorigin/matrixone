@@ -15,6 +15,7 @@
 package frontend
 
 import (
+	"context"
 	"sync"
 	"sync/atomic"
 
@@ -84,6 +85,19 @@ type collectRange struct {
 	end              []types.TS
 	rel              []engine.Relation
 	startBoundaryRel []engine.Relation
+	// idents carries the physical identity each segment was opened under
+	// (design §6): the walking side's endpoint identity for the endpoint
+	// segment and the winning candidate identity for reopened lineage
+	// nodes. A nil slice means every segment runs under the caller
+	// context, the pre-routing behavior local-local diffs rely on.
+	idents []branchIdentity
+}
+
+func (r collectRange) segmentIdentity(i int, fallback branchIdentity) branchIdentity {
+	if i >= 0 && i < len(r.idents) {
+		return r.idents[i]
+	}
+	return fallback
 }
 
 func (r collectRange) startBoundary(i int) engine.Relation {
@@ -224,9 +238,20 @@ type tableStuff struct {
 	tarSnap  *plan.Snapshot
 	baseSnap *plan.Snapshot
 
+	// tarOperand/baseOperand are the operand descriptors of design §6.1,
+	// nil in unit tests that construct tableStuff directly. Their
+	// identities drive every catalog read that targets an operand's
+	// physical owner (design §6, I6).
+	tarOperand  *branchOperand
+	baseOperand *branchOperand
+
 	lcaRel            engine.Relation
 	lcaCTS            types.TS
 	lcaHasZeroHistory bool
+	// lcaIdent is the winning owner identity lcaRel was reopened under
+	// (design §6.4). Nil when the LCA is an endpoint of a legacy
+	// local-local diff; identity accessors fall back to the session.
+	lcaIdent *branchIdentity
 
 	def struct {
 		colNames      []string     // all columns
@@ -281,6 +306,44 @@ func (t *tableStuff) resolvedSnapshots(ses *Session) (tarSP, baseSP types.TS) {
 	return
 }
 
+// endpointIdentities resolves the physical owner identity of each endpoint
+// (design §6.1). Descriptors carry the routed identity; a nil descriptor
+// (unit tests, pre-routing constructions) falls back to the session
+// identity, which keeps local-local behavior unchanged.
+func (t *tableStuff) endpointIdentities(ctx context.Context, ses *Session) (tarIdent, baseIdent branchIdentity) {
+	if t.tarOperand != nil {
+		tarIdent = t.tarOperand.identity()
+	} else {
+		tarIdent = localOperandIdentity(ctx, ses.GetAccountId())
+	}
+	if t.baseOperand != nil {
+		baseIdent = t.baseOperand.identity()
+	} else {
+		baseIdent = localOperandIdentity(ctx, ses.GetAccountId())
+	}
+	return
+}
+
+// resolvedLCAIdentity returns the owner identity lcaRel was resolved
+// under (design §6.4), falling back to the session identity for legacy
+// constructions that never set it.
+func (t *tableStuff) resolvedLCAIdentity(ctx context.Context, ses *Session) branchIdentity {
+	if t.lcaIdent != nil {
+		return *t.lcaIdent
+	}
+	if t.lcaRel != nil {
+		if t.tarOperand != nil && t.tarRel != nil &&
+			t.lcaRel.GetTableID(ctx) == t.tarRel.GetTableID(ctx) {
+			return t.tarOperand.identity()
+		}
+		if t.baseOperand != nil && t.baseRel != nil &&
+			t.lcaRel.GetTableID(ctx) == t.baseRel.GetTableID(ctx) {
+			return t.baseOperand.identity()
+		}
+	}
+	return localOperandIdentity(ctx, ses.GetAccountId())
+}
+
 type batchWithKind struct {
 	name       string
 	kind       string
@@ -294,6 +357,16 @@ type batchWithKind struct {
 	// a row to replace the destination conflict victim.
 	hasReplacement bool
 	batch          *batch.Batch
+}
+
+// logicalOperation returns the SQL-level operation represented by this diff
+// batch. Expanded UPDATEs use DELETE/INSERT batches internally, but retain
+// their original operation for diagnostics through fromUpdate.
+func (b batchWithKind) logicalOperation() string {
+	if b.fromUpdate {
+		return diffUpdate
+	}
+	return b.kind
 }
 
 type emitFunc func(batchWithKind) (stop bool, err error)
@@ -316,6 +389,8 @@ type retBatchList struct {
 }
 
 type compositeOption struct {
+	// onlineApply orders transaction probes and retry-capable MERGE/PICK writes.
+	onlineApply           bool
 	conflictOpt           *tree.ConflictOpt
 	outputSQL             bool
 	expandUpdate          bool

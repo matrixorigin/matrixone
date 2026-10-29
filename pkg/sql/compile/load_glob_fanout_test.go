@@ -15,22 +15,111 @@
 package compile
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
+	"net/url"
 	"testing"
 
 	"github.com/golang/mock/gomock"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/lockop"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/stage"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
+
+func TestPreparedLoadStageAuthorization(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		scanType int
+		nested   bool
+	}{
+		{"local stage", tree.INFILE, false},
+		{"S3 stage", tree.S3, false},
+		{"nested stage", tree.INFILE, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := process.NewTopProcess(context.Background(), nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+			name := "load_stage"
+			if tc.nested {
+				proc.GetStageCache().Set(name, stage.StageDef{Name: name, Url: &url.URL{Scheme: "stage", Host: "inner_stage"}})
+				name = "inner_stage"
+			}
+			proc.GetStageCache().Set(name, stage.StageDef{Name: name, Status: "disabled"})
+			bound := &tree.ExternParam{ExParamConst: tree.ExParamConst{
+				ScanType: tc.scanType, Filepath: "/bound/input.csv", StageFilepath: "stage://load_stage/input.csv",
+			}}
+			payload, err := json.Marshal(bound)
+			require.NoError(t, err)
+			c := &Compile{proc: proc}
+			param, err := c.getExternParam(proc, &plan.ExternScan{Type: int32(plan.ExternType_LOAD)}, string(payload))
+			require.ErrorContains(t, err, "stage "+name+" is disabled")
+			require.Nil(t, param, "authorization must reject before a LOAD source can be used")
+		})
+	}
+
+	t.Run("bound source metadata is retained", func(t *testing.T) {
+		proc := process.NewTopProcess(context.Background(), nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+		proc.GetStageCache().Set("load_stage", stage.StageDef{Name: "load_stage", Url: &url.URL{Scheme: "file", Path: "/new-source/"}})
+		bound := &tree.ExternParam{ExParamConst: tree.ExParamConst{
+			ScanType: tree.S3, Filepath: "bound/input.csv", StageFilepath: "stage://load_stage/input.csv",
+			FileSize: 123, FileStartOff: 17, Format: tree.CSV, Tail: &tree.TailParameter{IgnoredLines: 2},
+		}, ExParam: tree.ExParam{S3Param: &tree.S3Parameter{Bucket: "bound", APIKey: "bound-key", APISecret: "bound-secret"}}}
+		payload, err := json.Marshal(bound)
+		require.NoError(t, err)
+		c := &Compile{proc: proc}
+		param, err := c.getExternParam(proc, &plan.ExternScan{Type: int32(plan.ExternType_LOAD)}, string(payload))
+		require.NoError(t, err)
+		require.Equal(t, bound.ExParamConst, param.ExParamConst)
+		require.Equal(t, bound.S3Param, param.S3Param)
+		// Prepared external scans cannot retain a physical compilation that
+		// would skip getExternParam on the next EXECUTE.
+		c.isPrepare = true
+		_, err = c.compileExternScan(&plan.Node{ExternScan: &plan.ExternScan{Type: int32(plan.ExternType_LOAD)}})
+		require.ErrorIs(t, err, cantCompileForPrepareErr)
+	})
+
+	t.Run("catalog errors reject the retained source", func(t *testing.T) {
+		ctx := defines.AttachAccountId(context.Background(), 0)
+		proc := process.NewTopProcess(ctx, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+		rt := runtime.ServiceRuntime(proc.GetService())
+		old, hadOld := rt.GetGlobalVariables(runtime.InternalSQLExecutor)
+		lookups := 0
+		catalogErr := errors.New("catalog unavailable")
+		catalogExec := executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+			lookups++
+			require.Contains(t, sql, "stage_name = 'load_stage'")
+			return executor.Result{}, catalogErr
+		})
+		rt.SetGlobalVariables(runtime.InternalSQLExecutor, catalogExec)
+		t.Cleanup(func() {
+			if hadOld {
+				rt.SetGlobalVariables(runtime.InternalSQLExecutor, old)
+			} else {
+				rt.CompareAndDeleteGlobalVariables(runtime.InternalSQLExecutor, catalogExec)
+			}
+		})
+		c := &Compile{proc: proc}
+		param, err := c.getExternParam(proc, &plan.ExternScan{Type: int32(plan.ExternType_LOAD)},
+			`{"Filepath":"/bound/input.csv","StageFilepath":"stage://load_stage/input.csv"}`)
+		require.ErrorIs(t, err, catalogErr)
+		require.Nil(t, param)
+		require.Equal(t, 1, lookups)
+	})
+}
 
 func csvLoadFanoutParam(compress string) *tree.ExternParam {
 	return &tree.ExternParam{
@@ -378,6 +467,30 @@ func TestCompileLockMergesMultiScopeTpPlan(t *testing.T) {
 	require.Equal(t, single, got)
 	_, ok = got[0].RootOp.(*lockop.LockOp)
 	require.True(t, ok)
+
+	// A single remote scan is still gathered before a nonblocking LockOp so
+	// lock acquisition and transaction bookkeeping stay on the coordinator.
+	c = newCompile()
+	remote := &Scope{
+		Magic:    Remote,
+		Proc:     c.proc.NewNoContextChildProc(0),
+		NodeInfo: engine.Node{Addr: "cn2:6001", Mcpu: 1},
+		RootOp:   table_scan.NewArgument(),
+	}
+	nonblocking := &plan.Node{LockTargets: []*plan.LockTarget{{
+		TableId:       42,
+		PrimaryColTyp: plan.Type{Id: int32(types.T_int64)},
+		NoWait:        true,
+	}}}
+	got, err = c.compileLock(nonblocking, []*Scope{remote})
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	_, ok = got[0].RootOp.(*lockop.LockOp)
+	require.True(t, ok)
+	require.Len(t, got[0].PreScopes, 1)
+	require.Same(t, remote, got[0].PreScopes[0])
+	_, isLock := remote.RootOp.(*lockop.LockOp)
+	require.False(t, isLock, "remote workers must not execute a nonblocking LockOp")
 }
 
 // A remote whole-file shard is rebuilt on another CN from CreateSql alone.  For
@@ -519,10 +632,10 @@ func TestFileFanoutHonorsMaxDop(t *testing.T) {
 		ExParam: tree.ExParam{ExternType: int32(plan.ExternType_EXTERNAL_TB)},
 	}
 
-	require.Len(t, newCompile(0).getHiveFileFanoutNodes(extTable, 6), 6)
-	require.Len(t, newCompile(3).getHiveFileFanoutNodes(extTable, 6), 3)
-	require.Len(t, newCompile(1).getHiveFileFanoutNodes(extTable, 6), 1)
-	require.Equal(t, 1, newCompile(1).parquetLoadFileFanoutDOP(extTable))
+	require.Len(t, newCompile(0).getHiveFileFanoutNodes(nil, extTable, 6), 6)
+	require.Len(t, newCompile(3).getHiveFileFanoutNodes(nil, extTable, 6), 3)
+	require.Len(t, newCompile(1).getHiveFileFanoutNodes(nil, extTable, 6), 1)
+	require.Equal(t, 1, newCompile(1).parquetLoadFileFanoutDOP(nil, extTable))
 
 	n := &plan.Node{
 		TableDef: &plan.TableDef{},
@@ -546,11 +659,11 @@ func TestFileFanoutHonorsMaxDop(t *testing.T) {
 	c := newCompile(2)
 	c.execType = plan2.ExecTypeAP_MULTICN
 	c.cnList = engine.Nodes{{Addr: "cn1:6001", Mcpu: 8}, {Addr: "cn2:6001", Mcpu: 8}}
-	nodes := c.getHiveFileFanoutNodes(&s3, 16)
+	nodes := c.getHiveFileFanoutNodes(nil, &s3, 16)
 	perCN := make(map[string]int)
 	for _, node := range nodes {
 		perCN[node.Addr]++
 	}
 	require.Equal(t, map[string]int{"cn1:6001": 2, "cn2:6001": 2}, perCN)
-	require.Equal(t, len(nodes), c.parquetLoadFileFanoutDOP(&s3))
+	require.Equal(t, len(nodes), c.parquetLoadFileFanoutDOP(nil, &s3))
 }

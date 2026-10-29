@@ -30,7 +30,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
 
@@ -67,6 +69,12 @@ func (b *stubWindowBinder) mysqlSpecialOrderKey(expr *planpb.Expr, typ *planpb.T
 
 func (b *stubWindowBinder) GetContext() context.Context {
 	return context.Background()
+}
+
+// GetProcess reports no process: the stub contexts used by these unit tests
+// carry the literal-only fallback of the indicator period validation.
+func (b *stubWindowBinder) GetProcess() *process.Process {
+	return nil
 }
 
 func testNumVal(v int64) tree.Expr {
@@ -200,6 +208,53 @@ func TestBuildPlanRejectsNegativeTemporalWindowBounds(t *testing.T) {
 	}
 }
 
+func TestWindowFrameOrderingDiagnostics(t *testing.T) {
+	const orderError = "SQL parser error: Window '<unnamed window>': frame start cannot be after frame end."
+	const valueError = "SQL parser error: Window '<unnamed window>': frame start or end is negative, NULL or of non-integral type"
+	tests := []struct {
+		name    string
+		frame   string
+		orderBy string
+		wantErr string
+	}{
+		{name: "rows following preceding", frame: "rows between 1 following and 1 preceding", wantErr: orderError},
+		{name: "rows following current", frame: "rows between 1 following and current row", wantErr: orderError},
+		{name: "range current preceding", frame: "range between current row and 1 preceding", wantErr: orderError},
+		{name: "ordering before unbounded end", frame: "range between current row and unbounded preceding", wantErr: orderError},
+		{name: "unbounded start priority", frame: "rows between unbounded following and 1 preceding", wantErr: "SQL parser error: Window '<unnamed window>': frame start cannot be UNBOUNDED FOLLOWING."},
+		{name: "unbounded end", frame: "rows between unbounded preceding and unbounded preceding", wantErr: "SQL parser error: Window '<unnamed window>': frame end cannot be UNBOUNDED PRECEDING."},
+		// Keep the ordering domain valid so this case reaches value validation.
+		{name: "negative interval", frame: "range between interval -1 day preceding and current row", orderBy: "cast('2026-01-01' as datetime)", wantErr: valueError},
+		{name: "valid rows", frame: "rows between 1 preceding and current row"},
+		{name: "valid range", frame: "range between current row and 1 following"},
+		{name: "same direction preceding", frame: "rows between 2 preceding and 3 preceding"},
+		{name: "same direction following", frame: "rows between 3 following and 2 following"},
+	}
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			orderBy := tc.orderBy
+			if orderBy == "" {
+				orderBy = "x"
+			}
+			sql := "select sum(x) over (order by " + orderBy + " " + tc.frame + ") from (select 1 x) t"
+			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			_, err = BuildPlan(ctx, stmt, false)
+			if tc.wantErr == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.EqualError(t, err, tc.wantErr)
+			var moErr *moerr.Error
+			require.ErrorAs(t, err, &moErr)
+			require.Equal(t, moerr.ER_PARSE_ERROR, moErr.MySQLCode())
+			require.Equal(t, "42000", moErr.SqlState())
+		})
+	}
+}
+
 func TestNthValueRequiresConstantPositiveOffset(t *testing.T) {
 	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	tests := []struct {
@@ -210,6 +265,19 @@ func TestNthValueRequiresConstantPositiveOffset(t *testing.T) {
 		{
 			name: "constant positive expression",
 			sql:  "select nth_value(a, 1 + 1) over (order by a) from select_test.bind_select",
+		},
+		{
+			name: "warning-free speculative constant",
+			sql:  "select nth_value(a, bit_count('3 ')) over (order by a) from select_test.bind_select",
+		},
+		{
+			name: "warning-free scalar constant",
+			sql:  "select nth_value(1, bit_count('3 ')) over (order by 1)",
+		},
+		{
+			name:    "warningful constant stays executable",
+			sql:     "select nth_value(a, bit_count('3x')) over (order by a) from select_test.bind_select",
+			wantErr: true,
 		},
 		{
 			name:    "zero offset",
@@ -358,7 +426,7 @@ func TestPreparedWindowRangeFrameMarkers(t *testing.T) {
 	queryPlan, err := BuildPlan(optimizer.CurrentContext(), stmts[0], true)
 	require.NoError(t, err)
 	window := firstWindowSpec(t, queryPlan)
-	requirePreparedWindowFrameParam(t, window.Frame.Start.Val, types.T_int32, 1)
+	requirePreparedWindowFrameParam(t, window.Frame.Start.Val, types.T_int64, 1)
 	require.Equal(t, planpb.FrameBound_CURRENT_ROW, window.Frame.End.Type)
 	require.Nil(t, window.Frame.End.Val)
 }
@@ -376,8 +444,8 @@ func TestPreparedWindowRangeFrameMarkersInBothBounds(t *testing.T) {
 	queryPlan, err := BuildPlan(optimizer.CurrentContext(), stmts[0], true)
 	require.NoError(t, err)
 	window := firstWindowSpec(t, queryPlan)
-	requirePreparedWindowFrameParam(t, window.Frame.Start.Val, types.T_int32, 1)
-	requirePreparedWindowFrameParam(t, window.Frame.End.Val, types.T_int32, 2)
+	requirePreparedWindowFrameParam(t, window.Frame.Start.Val, types.T_int64, 1)
+	requirePreparedWindowFrameParam(t, window.Frame.End.Val, types.T_int64, 2)
 }
 
 func TestPreparedWindowRangeFrameMarkerRequiresNumericOrder(t *testing.T) {
@@ -394,21 +462,54 @@ func TestPreparedWindowRangeFrameMarkerRequiresNumericOrder(t *testing.T) {
 	require.ErrorContains(t, err, "parameterized RANGE frame requires a numeric ORDER BY expression")
 }
 
-func TestPreparedWindowIntervalFrameMarkersAreUnsupported(t *testing.T) {
-	for _, frameType := range []string{"rows", "range"} {
-		t.Run(frameType, func(t *testing.T) {
-			optimizer := NewMockOptimizer(false, newPlanTestProcess(t))
-			stmts, err := parsers.Parse(
-				optimizer.CurrentContext().GetContext(),
-				dialect.MYSQL,
-				"select sum(n_nationkey) over (order by n_nationkey "+frameType+" between interval ? day preceding and current row) from nation",
-				1,
-			)
-			require.NoError(t, err)
+func TestPreparedWindowIntervalFrameMarkers(t *testing.T) {
+	ctx := context.Background()
+	prepared, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
+		"prepare frame_interval from select sum(n_nationkey) over (order by cast('2026-01-01' as datetime) range between interval ? second preceding and interval ? day following) from nation")
+	require.NoError(t, err)
+	prepare := prepared.GetDcl().GetPrepare()
+	require.Len(t, prepare.ParamTypes, 2)
+	original := prepare.Plan.String()
+	for _, tc := range []struct {
+		value  string
+		typ    types.Type
+		binary bool
+	}{
+		{"1", types.T_int64.ToType(), false},
+		{"1.5", types.New(types.T_decimal64, 2, 1), false},
+		{"0.000001", types.T_text.ToType(), true},
+		{"2", types.T_int64.ToType(), true},
+	} {
+		param := ParamValue{Value: tc.value, SourceType: tc.typ, HasSourceType: true, RuntimeType: tc.typ, HasRuntimeType: true, IsBinaryProtocol: tc.binary, RetainParamRef: true}
+		filled, _, err := FillValuesOfParamsInPlanWithSpecialization(ctx, prepare.Plan, []any{param, param})
+		require.NoError(t, err)
+		window := firstWindowSpec(t, filled)
+		for i, bound := range []*planpb.FrameBound{window.Frame.Start, window.Frame.End} {
+			list := bound.Val.GetList().List
+			require.Equal(t, int32(tc.typ.Oid), list[0].Typ.Id)
+			require.Equal(t, []string{"second", "day"}[i], strings.ToLower(list[1].GetLit().GetSval()))
+		}
+		require.NoError(t, RestorePreparedRuntimeParamRefs(ctx, filled))
+		for _, bound := range []*planpb.FrameBound{window.Frame.Start, window.Frame.End} {
+			require.True(t, preparedExprContainsParam(bound.Val))
+		}
+		require.Equal(t, original, prepare.Plan.String())
+	}
+}
 
+func TestWindowIntervalFrameRequiresTemporalRange(t *testing.T) {
+	for _, tc := range []struct{ frame, order, errorText string }{
+		{"rows", "cast('2026-01-01' as datetime)", "INTERVAL can only be used with RANGE"},
+		{"range", "n_nationkey", "requires a temporal ORDER BY"},
+	} {
+		for _, value := range []string{"?", "1", "-1"} {
+			optimizer := NewMockOptimizer(false, newPlanTestProcess(t))
+			stmts, err := parsers.Parse(optimizer.CurrentContext().GetContext(), dialect.MYSQL,
+				"select sum(n_nationkey) over (order by "+tc.order+" "+tc.frame+" interval "+value+" day preceding) from nation", 1)
+			require.NoError(t, err)
 			_, err = BuildPlan(optimizer.CurrentContext(), stmts[0], true)
-			require.ErrorContains(t, err, "prepared parameter markers in interval window frames")
-		})
+			require.ErrorContains(t, err, tc.errorText)
+		}
 	}
 }
 
@@ -1064,6 +1165,7 @@ func TestBuildPlanRejectsInvalidNamedWindows(t *testing.T) {
 		sql       string
 		wantErr   string
 		mysqlCode uint16
+		sqlState  string
 	}{
 		{
 			name:      "unknown",
@@ -1118,6 +1220,13 @@ func TestBuildPlanRejectsInvalidNamedWindows(t *testing.T) {
 			wantErr: "cannot use the window function",
 		},
 		{
+			name:      "unused inverted frame",
+			sql:       "select 1 from nation window w as (rows between 1 following and 1 preceding)",
+			wantErr:   "frame start cannot be after frame end.",
+			mysqlCode: moerr.ER_PARSE_ERROR,
+			sqlState:  "42000",
+		},
+		{
 			name:    "unused illegal frame",
 			sql:     "select 1 from nation window w as (rows between unbounded following and current row)",
 			wantErr: "frame start cannot be UNBOUNDED FOLLOWING",
@@ -1131,7 +1240,11 @@ func TestBuildPlanRejectsInvalidNamedWindows(t *testing.T) {
 			if test.mysqlCode != 0 {
 				moErr := err.(*moerr.Error)
 				require.Equal(t, test.mysqlCode, moErr.MySQLCode())
-				require.Equal(t, moerr.MySQLDefaultSqlState, moErr.SqlState())
+				sqlState := test.sqlState
+				if sqlState == "" {
+					sqlState = moerr.MySQLDefaultSqlState
+				}
+				require.Equal(t, sqlState, moErr.SqlState())
 			}
 		})
 	}
@@ -1904,4 +2017,190 @@ func TestContainsTagCoversWindowSubAndCorrBranches(t *testing.T) {
 		},
 	}, 4))
 	require.False(t, containsTag(makePlan2Int64ConstExprWithType(1), 5))
+}
+
+func TestWindowScalarInputsAreLowered(t *testing.T) {
+	for _, tc := range []struct {
+		name, sql string
+		noJoin    bool
+	}{
+		{"null key", "select row_number() over(partition by n_regionkey order by (select null)) from nation", true},
+		{"nested key", "select row_number() over(order by coalesce((select 1),0)) from nation", true},
+		{"partition key", "select row_number() over(partition by (select n_regionkey) order by n_nationkey) from nation", true},
+		{"function argument", "select sum((select n_nationkey)) over(partition by n_regionkey) from nation", true},
+		{"table key", "select row_number() over(order by (select max(n_nationkey) from nation)) from nation", false},
+		{"grouped input", "select n_regionkey,sum(n_nationkey),sum(sum(n_nationkey)) over(order by (select max(n_nationkey) from nation)) from nation group by n_regionkey", false},
+		{"named window", "select row_number() over w from nation window w as (partition by n_regionkey order by (select 1))", true},
+		{"stacked windows", "select row_number() over(order by (select 1)),sum((select n_nationkey)) over(partition by n_regionkey) from nation", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			opt := NewMockOptimizer(false, newPlanTestProcess(t))
+			stmts, err := parsers.Parse(opt.CurrentContext().GetContext(), dialect.MYSQL, tc.sql, 1)
+			require.NoError(t, err)
+			p, err := BuildPlan(opt.CurrentContext(), stmts[0], false)
+			require.NoError(t, err)
+			windows := allWindowSpecs(p)
+			require.NotEmpty(t, windows)
+			for _, w := range windows {
+				require.False(t, hasSubquery(w.WindowFunc), "window argument")
+				for _, key := range w.PartitionBy {
+					require.False(t, hasSubquery(key), "window partition key")
+				}
+				for _, key := range w.OrderBy {
+					require.False(t, hasSubquery(key.Expr), "window order key")
+				}
+			}
+			if tc.noJoin {
+				for _, node := range p.GetQuery().Nodes {
+					require.NotEqual(t, planpb.Node_JOIN, node.NodeType,
+						"no-FROM scalars must reuse their expressions without runtime joins")
+				}
+			}
+		})
+	}
+}
+
+func TestScalarInputsRejectMultipleColumns(t *testing.T) {
+	for _, sql := range []string{
+		"select (select 1,2)",
+		"select (select n_nationkey,n_regionkey from nation limit 1)",
+		"select row_number() over(order by (select 1,2)) from nation",
+		"select row_number() over(partition by (select 1,2)) from nation",
+		"select row_number() over(order by (select n_nationkey,n_regionkey from nation limit 1)) from nation",
+	} {
+		ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
+		stmts, err := parsers.Parse(ctx.GetContext(), dialect.MYSQL, sql, 1)
+		require.NoError(t, err)
+		_, err = BuildPlan(ctx, stmts[0], false)
+		require.ErrorContains(t, err, "subquery should return 1 column")
+	}
+	// Multi-column row comparisons and EXISTS do not consume a scalar value.
+	for _, sql := range []string{
+		"select (1,2)=(select 1,2)",
+		"select (1,2)=(select n_nationkey,n_regionkey from nation limit 1)",
+		"select exists(select n_nationkey,n_regionkey from nation)",
+	} {
+		ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
+		stmts, err := parsers.Parse(ctx.GetContext(), dialect.MYSQL, sql, 1)
+		require.NoError(t, err)
+		_, err = BuildPlan(ctx, stmts[0], false)
+		require.NoError(t, err, sql)
+	}
+}
+
+func TestNtileRequiresRowIndependentBuckets(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		sql     string
+		invalid bool
+	}{
+		{"column", "select ntile(n_nationkey) over (order by n_nationkey) from nation", true},
+		{"expression", "select ntile(n_nationkey + 1) over (order by n_nationkey) from nation", true},
+		{"partitioned", "select ntile(n_nationkey) over (partition by n_regionkey order by n_nationkey) from nation", true},
+		{"empty input", "select ntile(n_nationkey) over (order by n_nationkey) from nation where false", true},
+		{"volatile", "select ntile(cast(rand() * 3 + 1 as signed)) over (order by n_nationkey) from nation", true},
+		{"subquery", "select ntile((select max(n_regionkey) from nation)) over (order by n_nationkey) from nation", true},
+		{"literal", "select ntile(2) over (order by n_nationkey) from nation", false},
+		{"constant expression", "select ntile(1 + 1) over (order by n_nationkey) from nation", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := NewMockOptimizer(false, newPlanTestProcess(t))
+			_, err := runOneStmt(mock, t, tc.sql)
+			if tc.invalid {
+				require.EqualError(t, err, "Incorrect arguments to ntile")
+				require.Equal(t, moerr.ER_WRONG_ARGUMENTS, err.(*moerr.Error).MySQLCode())
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
+}
+
+// TestQuantileExactWeightedDistinctWindowBinding proves the one DISTINCT
+// window aggregate: quantileExactWeighted windows bind successfully and
+// record the DISTINCT modifier in the bound plan function's obj bits (the
+// same encoding constructWindow reads), while every other DISTINCT window
+// aggregate (here sum, covered also by the validation subtests above)
+// stays NYI.
+func TestQuantileExactWeightedDistinctWindowBinding(t *testing.T) {
+	const quantileObj = int64(1234)
+	quantileWindowFunc := func() *planpb.Expr {
+		return &planpb.Expr{
+			Typ: planpb.Type{Id: int32(types.T_float64)},
+			Expr: &planpb.Expr_F{F: &planpb.Function{
+				Func: &planpb.ObjectRef{Obj: quantileObj},
+			}},
+		}
+	}
+	binder := &stubWindowBinder{
+		bindExprFunc: func(tree.Expr, int32, bool) (*planpb.Expr, error) {
+			return makePlan2Int64ConstExprWithType(1), nil
+		},
+		bindFuncExprFunc: func(string, []tree.Expr, int32) (*planpb.Expr, error) {
+			return quantileWindowFunc(), nil
+		},
+		makeFrameValueFunc: func(tree.Expr, *planpb.Type) (*planpb.Expr, error) {
+			return makePlan2Int64ConstExprWithType(1), nil
+		},
+	}
+	bindQuantileWindow := func(funcType tree.FuncType) (*BindContext, *planpb.Expr, error) {
+		ctx := &BindContext{windowTag: 9, windowByAst: make(map[string]int32)}
+		_, err := bindWindowFuncExpr(
+			binder, ctx, "quantileExactWeighted",
+			testWindowFuncExpr(
+				"quantileExactWeighted",
+				funcType,
+				&tree.WindowSpec{
+					OrderBy:  tree.OrderBy{tree.NewOrder(testNumVal(1), tree.Ascending, tree.DefaultNullsPosition, false)},
+					HasFrame: true,
+					Frame: &tree.FrameClause{
+						Type:  tree.Rows,
+						Start: &tree.FrameBound{Type: tree.Preceding},
+						End:   &tree.FrameBound{Type: tree.CurrentRow},
+					},
+				},
+				testNumVal(1), testNumVal(2), testNumVal(3),
+			),
+			0,
+			true,
+		)
+		return ctx, nil, err
+	}
+
+	ctx, _, err := bindQuantileWindow(tree.FUNC_TYPE_DISTINCT)
+	require.NoError(t, err)
+	require.Len(t, ctx.windows, 1)
+	windowFunc := ctx.windows[0].Expr.(*planpb.Expr_W).W.WindowFunc.Expr.(*planpb.Expr_F)
+	require.EqualValues(t, uint64(quantileObj)|uint64(function.Distinct),
+		uint64(windowFunc.F.Func.Obj),
+		"the DISTINCT window binding must carry the distinct bit into the plan function")
+	require.EqualValues(t, quantileObj,
+		uint64(windowFunc.F.Func.Obj)&uint64(function.DistinctMask),
+		"the aggregate id below the flag bits must be preserved")
+
+	plainCtx, _, err := bindQuantileWindow(tree.FUNC_TYPE_DEFAULT)
+	require.NoError(t, err)
+	plainFunc := plainCtx.windows[0].Expr.(*planpb.Expr_W).W.WindowFunc.Expr.(*planpb.Expr_F)
+	require.EqualValues(t, quantileObj, uint64(plainFunc.F.Func.Obj),
+		"a plain window binding must stay unflagged")
+}
+
+func TestRangeFrameBoundTypeWidening(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		orderType types.T
+		boundType types.T
+	}{
+		{name: "tinyint", orderType: types.T_int8, boundType: types.T_int64},
+		{name: "smallint", orderType: types.T_int16, boundType: types.T_int64},
+		{name: "int", orderType: types.T_int32, boundType: types.T_int64},
+		{name: "bigint", orderType: types.T_int64, boundType: types.T_int64},
+		{name: "uint", orderType: types.T_uint32, boundType: types.T_uint32},
+		{name: "decimal", orderType: types.T_decimal64, boundType: types.T_decimal64},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := rangeFrameBoundType(tc.orderType.ToType().PlanType())
+			require.Equal(t, int32(tc.boundType), got.Id)
+		})
+	}
 }

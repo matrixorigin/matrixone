@@ -74,7 +74,7 @@ class TestUnifiedFilter(unittest.TestCase):
         query = self.user_query.filter("age < 30")
         sql, params = query._build_sql()
 
-        expected_sql = "SELECT * FROM users WHERE age < 30"
+        expected_sql = 'SELECT * FROM users WHERE age < 30'
         self.assertEqual(sql, expected_sql)
         self.assertEqual(params, [])
 
@@ -83,7 +83,7 @@ class TestUnifiedFilter(unittest.TestCase):
         query = self.product_query.filter(Product.category == "电子产品")
         sql, params = query._build_sql()
 
-        expected_sql = "SELECT * FROM products WHERE category = '电子产品'"
+        expected_sql = "SELECT * FROM products WHERE products.category = '电子产品'"
         self.assertEqual(sql, expected_sql)
         self.assertEqual(params, [])
 
@@ -92,7 +92,7 @@ class TestUnifiedFilter(unittest.TestCase):
         query = self.user_query.filter(or_(User.age < 30, User.city == "北京"))
         sql, params = query._build_sql()
 
-        expected_sql = "SELECT * FROM users WHERE age < 30 OR city = '北京'"
+        expected_sql = "SELECT * FROM users WHERE users.age < 30 OR users.city = '北京'"
         self.assertEqual(sql, expected_sql)
         self.assertEqual(params, [])
 
@@ -101,18 +101,20 @@ class TestUnifiedFilter(unittest.TestCase):
         query = self.product_query.filter(and_(Product.category == "电子产品", Product.price > 1000))
         sql, params = query._build_sql()
 
-        expected_sql = "SELECT * FROM products WHERE category = '电子产品' AND price > 1000"
+        expected_sql = "SELECT * FROM products WHERE products.category = '电子产品' AND products.price > 1000"
         self.assertEqual(sql, expected_sql)
         self.assertEqual(params, [])
 
     def test_multiple_filter_calls(self):
         """Test multiple filter calls (AND relationship)"""
         query = (
-            self.product_query.filter(Product.category == "电子产品").filter(Product.price > 1000).filter(Product.stock > 50)
+            self.product_query.filter(Product.category == "电子产品")
+            .filter(Product.price > 1000)
+            .filter(Product.stock > 50)
         )
         sql, params = query._build_sql()
 
-        expected_sql = "SELECT * FROM products WHERE category = '电子产品' AND price > 1000 AND stock > 50"
+        expected_sql = "SELECT * FROM products WHERE products.category = '电子产品' AND products.price > 1000 AND products.stock > 50"
         self.assertEqual(sql, expected_sql)
         self.assertEqual(params, [])
 
@@ -126,9 +128,7 @@ class TestUnifiedFilter(unittest.TestCase):
         )
         sql, params = query._build_sql()
 
-        expected_sql = (
-            "SELECT * FROM products WHERE category = '电子产品' AND price > 2000 OR category = '图书' AND stock > 400"
-        )
+        expected_sql = "SELECT * FROM products WHERE products.category = '电子产品' AND products.price > 2000 OR products.category = '图书' AND products.stock > 400"
         self.assertEqual(sql, expected_sql)
         self.assertEqual(params, [])
 
@@ -137,7 +137,7 @@ class TestUnifiedFilter(unittest.TestCase):
         query = self.product_query.filter(not_(Product.category == "电子产品"))
         sql, params = query._build_sql()
 
-        expected_sql = "SELECT * FROM products WHERE category != '电子产品'"
+        expected_sql = "SELECT * FROM products WHERE products.category != '电子产品'"
         self.assertEqual(sql, expected_sql)
         self.assertEqual(params, [])
 
@@ -150,7 +150,7 @@ class TestUnifiedFilter(unittest.TestCase):
         )
         sql, params = query._build_sql()
 
-        expected_sql = "SELECT * FROM users WHERE age > 25 AND city != '深圳' AND name LIKE '张%' OR name LIKE '李%'"
+        expected_sql = "SELECT * FROM users WHERE age > 25 AND users.city != '深圳' AND (users.name LIKE '张%' OR users.name LIKE '李%')"
         self.assertEqual(sql, expected_sql)
         self.assertEqual(params, [])
 
@@ -178,7 +178,7 @@ class TestUnifiedFilter(unittest.TestCase):
         query = self.user_query.filter(User.city.in_(["北京", "上海", "广州"]))
         sql, params = query._build_sql()
 
-        expected_sql = "SELECT * FROM users WHERE city IN ('北京', '上海', '广州')"
+        expected_sql = "SELECT * FROM users WHERE users.city IN ('北京', '上海', '广州')"
         self.assertEqual(sql, expected_sql)
         self.assertEqual(params, [])
 
@@ -187,8 +187,8 @@ class TestUnifiedFilter(unittest.TestCase):
         query = self.user_query.filter(User.email.like("%example.com%"))
         sql, params = query._build_sql()
 
-        # SQLAlchemy compiles LIKE with single quotes, but our regex removes them
-        expected_sql = "SELECT * FROM users WHERE email LIKE '%com%'"
+        # Literal dots must remain data rather than being treated as table qualifiers
+        expected_sql = "SELECT * FROM users WHERE users.email LIKE '%example.com%'"
         self.assertEqual(sql, expected_sql)
         self.assertEqual(params, [])
 
@@ -197,7 +197,7 @@ class TestUnifiedFilter(unittest.TestCase):
         query = self.user_query.filter(User.age.between(25, 35))
         sql, params = query._build_sql()
 
-        expected_sql = "SELECT * FROM users WHERE age BETWEEN 25 AND 35"
+        expected_sql = 'SELECT * FROM users WHERE users.age BETWEEN 25 AND 35'
         self.assertEqual(sql, expected_sql)
         self.assertEqual(params, [])
 
@@ -206,7 +206,7 @@ class TestUnifiedFilter(unittest.TestCase):
         query = self.product_query.filter(Product.price > 1000)
         sql, params = query._build_sql()
 
-        expected_sql = "SELECT * FROM products WHERE price > 1000"
+        expected_sql = 'SELECT * FROM products WHERE products.price > 1000'
         self.assertEqual(sql, expected_sql)
         self.assertEqual(params, [])
 
@@ -215,7 +215,7 @@ class TestUnifiedFilter(unittest.TestCase):
         query = self.product_query.filter(Product.stock < 100)
         sql, params = query._build_sql()
 
-        expected_sql = "SELECT * FROM products WHERE stock < 100"
+        expected_sql = 'SELECT * FROM products WHERE products.stock < 100'
         self.assertEqual(sql, expected_sql)
         self.assertEqual(params, [])
 
@@ -224,7 +224,7 @@ class TestUnifiedFilter(unittest.TestCase):
         query = self.user_query.filter(User.age >= 25)
         sql, params = query._build_sql()
 
-        expected_sql = "SELECT * FROM users WHERE age >= 25"
+        expected_sql = 'SELECT * FROM users WHERE users.age >= 25'
         self.assertEqual(sql, expected_sql)
         self.assertEqual(params, [])
 
@@ -233,7 +233,7 @@ class TestUnifiedFilter(unittest.TestCase):
         query = self.user_query.filter(User.age <= 35)
         sql, params = query._build_sql()
 
-        expected_sql = "SELECT * FROM users WHERE age <= 35"
+        expected_sql = 'SELECT * FROM users WHERE users.age <= 35'
         self.assertEqual(sql, expected_sql)
         self.assertEqual(params, [])
 
@@ -242,7 +242,7 @@ class TestUnifiedFilter(unittest.TestCase):
         query = self.user_query.filter(User.city != "深圳")
         sql, params = query._build_sql()
 
-        expected_sql = "SELECT * FROM users WHERE city != '深圳'"
+        expected_sql = "SELECT * FROM users WHERE users.city != '深圳'"
         self.assertEqual(sql, expected_sql)
         self.assertEqual(params, [])
 
@@ -256,7 +256,7 @@ class TestUnifiedFilter(unittest.TestCase):
         )
         sql, params = query._build_sql()
 
-        expected_sql = "SELECT * FROM users WHERE (age >= 25 OR city IN ('北京', '上海')) AND email NOT LIKE '%test%'"
+        expected_sql = "SELECT * FROM users WHERE (users.age >= 25 OR users.city IN ('北京', '上海')) AND users.email NOT LIKE '%test%'"
         self.assertEqual(sql, expected_sql)
         self.assertEqual(params, [])
 
@@ -265,7 +265,7 @@ class TestUnifiedFilter(unittest.TestCase):
         query = self.user_query.filter(or_(User.city == "北京", User.city == "上海", User.age > 30))
         sql, params = query._build_sql()
 
-        expected_sql = "SELECT * FROM users WHERE city = '北京' OR city = '上海' OR age > 30"
+        expected_sql = "SELECT * FROM users WHERE users.city = '北京' OR users.city = '上海' OR users.age > 30"
         self.assertEqual(sql, expected_sql)
         self.assertEqual(params, [])
 
@@ -280,7 +280,7 @@ class TestUnifiedFilter(unittest.TestCase):
         sql, params = query._build_sql()
 
         # SQLAlchemy preserves parentheses for nested OR conditions
-        expected_sql = "SELECT * FROM products WHERE category = '电子产品' AND (price > 2000 OR stock < 100) OR category = '图书' AND stock > 400"
+        expected_sql = "SELECT * FROM products WHERE products.category = '电子产品' AND (products.price > 2000 OR products.stock < 100) OR products.category = '图书' AND products.stock > 400"
         self.assertEqual(sql, expected_sql)
         self.assertEqual(params, [])
 
@@ -288,12 +288,11 @@ class TestUnifiedFilter(unittest.TestCase):
         """Test string condition with parameters"""
         # Add parameters before calling filter
         query = self.user_query
-        query._where_params.append(25)
-        query = query.filter("age > ?")
+        query = query.filter("age > ?", 25)
         sql, params = query._build_sql()
 
         # Parameters are processed during filter() call
-        expected_sql = "SELECT * FROM users WHERE age > 25"
+        expected_sql = 'SELECT * FROM users WHERE age > 25'
         self.assertEqual(sql, expected_sql)
         self.assertEqual(params, [])
 
@@ -301,12 +300,11 @@ class TestUnifiedFilter(unittest.TestCase):
         """Test string condition with multiple parameters"""
         # Add parameters before calling filter
         query = self.user_query
-        query._where_params.extend([25, 35])
-        query = query.filter("age BETWEEN ? AND ?")
+        query = query.filter("age BETWEEN ? AND ?", 25, 35)
         sql, params = query._build_sql()
 
         # Parameters are processed during filter() call
-        expected_sql = "SELECT * FROM users WHERE age BETWEEN 25 AND 35"
+        expected_sql = 'SELECT * FROM users WHERE age BETWEEN 25 AND 35'
         self.assertEqual(sql, expected_sql)
         self.assertEqual(params, [])
 
@@ -314,8 +312,7 @@ class TestUnifiedFilter(unittest.TestCase):
         """Test string condition with string parameters"""
         # Add parameters before calling filter
         query = self.user_query
-        query._where_params.append("北京")
-        query = query.filter("city = ?")
+        query = query.filter("city = ?", "北京")
         sql, params = query._build_sql()
 
         # Parameters are processed during filter() call
@@ -328,7 +325,7 @@ class TestUnifiedFilter(unittest.TestCase):
         query = self.user_query
         sql, params = query._build_sql()
 
-        expected_sql = "SELECT * FROM users"
+        expected_sql = 'SELECT * FROM users'
         self.assertEqual(sql, expected_sql)
         self.assertEqual(params, [])
 
@@ -337,7 +334,7 @@ class TestUnifiedFilter(unittest.TestCase):
         query = self.product_query.filter(Product.price > 1000).order_by("price DESC")
         sql, params = query._build_sql()
 
-        expected_sql = "SELECT * FROM products WHERE price > 1000 ORDER BY price DESC"
+        expected_sql = 'SELECT * FROM products WHERE products.price > 1000 ORDER BY price DESC'
         self.assertEqual(sql, expected_sql)
         self.assertEqual(params, [])
 
@@ -346,7 +343,7 @@ class TestUnifiedFilter(unittest.TestCase):
         query = self.user_query.filter(User.age > 25).limit(10)
         sql, params = query._build_sql()
 
-        expected_sql = "SELECT * FROM users WHERE age > 25 LIMIT 10"
+        expected_sql = 'SELECT * FROM users WHERE users.age > 25 LIMIT 10'
         self.assertEqual(sql, expected_sql)
         self.assertEqual(params, [])
 
@@ -355,7 +352,7 @@ class TestUnifiedFilter(unittest.TestCase):
         query = self.user_query.filter(User.age > 25).offset(5)
         sql, params = query._build_sql()
 
-        expected_sql = "SELECT * FROM users WHERE age > 25 OFFSET 5"
+        expected_sql = 'SELECT * FROM users WHERE users.age > 25 OFFSET 5'
         self.assertEqual(sql, expected_sql)
         self.assertEqual(params, [])
 
@@ -364,16 +361,18 @@ class TestUnifiedFilter(unittest.TestCase):
         query = self.user_query.select("name", "email").filter(User.age > 25)
         sql, params = query._build_sql()
 
-        expected_sql = "SELECT name, email FROM users WHERE age > 25"
+        expected_sql = 'SELECT name, email FROM users WHERE users.age > 25'
         self.assertEqual(sql, expected_sql)
         self.assertEqual(params, [])
 
     def test_filter_with_group_by(self):
         """Test filter combined with group by"""
-        query = self.product_query.select("category", "COUNT(*) as count").filter(Product.price > 100).group_by("category")
+        query = (
+            self.product_query.select("category", "COUNT(*) as count").filter(Product.price > 100).group_by("category")
+        )
         sql, params = query._build_sql()
 
-        expected_sql = "SELECT category, COUNT(*) as count FROM products WHERE price > 100 GROUP BY category"
+        expected_sql = 'SELECT category, COUNT(*) as count FROM products WHERE products.price > 100 GROUP BY category'
         self.assertEqual(sql, expected_sql)
         self.assertEqual(params, [])
 
@@ -387,9 +386,7 @@ class TestUnifiedFilter(unittest.TestCase):
         )
         sql, params = query._build_sql()
 
-        expected_sql = (
-            "SELECT category, COUNT(*) as count FROM products WHERE price > 100 GROUP BY category HAVING count(*) > 1"
-        )
+        expected_sql = "SELECT category, COUNT(*) as count FROM products WHERE products.price > 100 GROUP BY category HAVING count('*') > 1"
         self.assertEqual(sql, expected_sql)
         self.assertEqual(params, [])
 

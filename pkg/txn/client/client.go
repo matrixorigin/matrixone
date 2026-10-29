@@ -15,7 +15,6 @@
 package client
 
 import (
-	"bytes"
 	"context"
 	"encoding/hex"
 	"errors"
@@ -87,13 +86,6 @@ func waitTxnRateLimit(limiter *rate.Limiter, ctx context.Context) error {
 		return context.DeadlineExceeded
 	}
 	return err
-}
-
-// WithTxnIDGenerator setup txn id generator
-func WithTxnIDGenerator(generator TxnIDGenerator) TxnClientCreateOption {
-	return func(tc *txnClient) {
-		tc.generator = generator
-	}
 }
 
 // WithLockService setup lock service
@@ -304,7 +296,7 @@ type txnClient struct {
 		// user active txns
 		users int
 		// FIFO queue for ready to active txn
-		waitActiveTxns            []*txnOperator
+		waitActiveTxns            activeTxnQueue
 		waitMarkAllActiveAbortedC chan struct{}
 	}
 
@@ -448,8 +440,8 @@ func (client *txnClient) GetState() TxnState {
 	})
 
 	client.mu.RLock()
-	wt := make([]string, 0, len(client.mu.waitActiveTxns))
-	for _, v := range client.mu.waitActiveTxns {
+	wt := make([]string, 0, client.mu.waitActiveTxns.size)
+	for v := client.mu.waitActiveTxns.head; v != nil; v = v.reset.waiter.next {
 		wt = append(wt, hex.EncodeToString(v.reset.txnID))
 	}
 	state := client.mu.state
@@ -541,11 +533,16 @@ func (client *txnClient) New(
 	minTS timestamp.Timestamp,
 	options ...TxnOption,
 ) (TxnOperator, error) {
+	meta, err := client.snapshotTxnMeta()
+	if err != nil {
+		return nil, err
+	}
 	op := newTxnOperator(
 		client.sid,
+		client.logger,
 		client.clock,
 		client.sender,
-		client.newTxnMeta(),
+		meta,
 		client.getTxnOptions(options)...,
 	)
 	return client.doCreateTxn(
@@ -561,12 +558,16 @@ func (client *txnClient) RestartTxn(
 	minTS timestamp.Timestamp,
 	options ...TxnOption,
 ) (TxnOperator, error) {
+	meta, err := client.snapshotTxnMeta()
+	if err != nil {
+		return nil, err
+	}
 	op := txnOp.(*txnOperator)
 	if err := op.claimRestart(); err != nil {
 		return nil, err
 	}
 	op.initForRestart(
-		client.newTxnMeta(),
+		meta,
 		client.getTxnOptions(options)...,
 	)
 	restarted, err := client.doCreateTxn(
@@ -616,15 +617,37 @@ func (client *txnClient) doCreateTxn(
 		v2.TxnCreateTotalDurationHistogram.Observe(time.Since(start).Seconds())
 	}()
 
-	// Admission throttling obeys both the caller's cancellation and client
-	// shutdown. No client ownership exists yet, so failure closes only this
-	// unadmitted operator generation.
-	if err = client.limiter.Wait(ctx, client.closeCtx); err != nil {
-		if client.isClosed() {
-			err = moerr.NewClientClosedNoCtx()
-		}
+	admission := op.opts.snapshotAdmission
+	authorization := op.opts.authorizationSnapshot
+	// Creation-only capabilities never survive into a RestartTxn generation or
+	// retain a completed statement's context for the data transaction's lifetime.
+	explicitSnapshot := op.opts.explicitSnapshot
+	op.opts.snapshotAdmission, op.opts.authorizationSnapshot, op.opts.explicitSnapshot = nil, nil, false
+	if (admission != nil && authorization != nil) ||
+		((admission != nil || authorization != nil) && explicitSnapshot) ||
+		(authorization != nil && op.opts.options.CacheWriteEnabled()) {
+		err = moerr.NewInternalError(ctx, "conflicting snapshot admission options")
 		op.closeUnadmitted(err)
 		return nil, err
+	}
+	if authorization != nil {
+		// Apply after every option so option order cannot restore RC advancement.
+		op.mu.txn.Isolation = txn.TxnIsolation_SI
+		op.opts.options = op.opts.options.WithReadOnly()
+	}
+	var admittedSnapshot timestamp.Timestamp
+	if admission != nil || authorization != nil {
+		capability := admission
+		if authorization != nil {
+			capability = authorization
+			admittedSnapshot, err = capability.Snapshot(ctx, client, minTS)
+		} else {
+			admittedSnapshot, err = capability.claim(ctx, client, minTS)
+		}
+		if err != nil {
+			op.closeUnadmitted(err)
+			return nil, err
+		}
 	}
 
 	op.timestampWaiter = client.timestampWaiter
@@ -636,9 +659,36 @@ func (client *txnClient) doCreateTxn(
 	}
 	op.setDefaultEventCallbacks(&client.sharedEventCallbacks)
 
-	if err = client.openTxn(ctx, op); err != nil {
-		op.closeUnadmitted(err)
-		return nil, err
+	// A direct data admission with an already applied native frontier has no
+	// cancellation-dependent wait. Transfer ownership under the readiness lock;
+	// final capability validation below still rejects End racing publication.
+	// Every potentially waiting path retains the combined creation context.
+	opened := admission != nil && client.tryOpenAdmittedTxn(ctx, op, admittedSnapshot)
+	if !opened {
+		capability := admission
+		if capability == nil {
+			capability = authorization
+		}
+		if capability != nil {
+			var finishCreation func()
+			ctx, finishCreation = capability.creationContext(ctx)
+			defer finishCreation()
+		}
+		// Authorization readers still pay ordinary admission. No ownership has
+		// transferred on this path until openTxn succeeds.
+		if admission == nil {
+			err = client.limiter.Wait(ctx, client.closeCtx)
+		}
+		if err == nil {
+			err = client.openTxn(ctx, op)
+		}
+		if err != nil {
+			if client.isClosed() {
+				err = moerr.NewClientClosedNoCtx()
+			}
+			op.closeUnadmitted(err)
+			return nil, err
+		}
 	}
 	// Direct admission is already published. Queued admission may still be
 	// unpublished, but recording an older abort observation is safe and preserves
@@ -664,7 +714,10 @@ func (client *txnClient) doCreateTxn(
 		return nil, err
 	}
 
-	ts := client.determineTxnSnapshot(minTS)
+	ts := admittedSnapshot
+	if ts.IsEmpty() {
+		ts = client.determineTxnSnapshot(minTS)
+	}
 	if !op.opts.skipWaitPushClient {
 		snapshotCtx := ctx
 		var closeC <-chan struct{}
@@ -676,7 +729,14 @@ func (client *txnClient) doCreateTxn(
 				defer cancelOnClose()
 			}
 		}
-		if err := op.updateSnapshotWithClose(snapshotCtx, ts, closeC); err != nil {
+		waitMinimum := ts
+		if !admittedSnapshot.IsEmpty() {
+			// Snapshot A is exclusive: its completed admission proves logtail
+			// application through A.Prev(). Waiting for A would unnecessarily
+			// require the next notification before every transaction creation.
+			waitMinimum = admittedSnapshot.Prev()
+		}
+		if err := op.updateSnapshotWithClose(snapshotCtx, waitMinimum, closeC); err != nil {
 			if op.reset.waiter != nil {
 				if waitErr, completed := op.reset.waiter.result(); completed && waitErr != nil {
 					return nil, waitErr
@@ -693,6 +753,11 @@ func (client *txnClient) doCreateTxn(
 			// be relied on to release active/queued client ownership.
 			return nil, createErr
 		}
+	}
+	if !admittedSnapshot.IsEmpty() {
+		// A waiter may return a later applied timestamp. Authorization reads
+		// must remain at exactly A; ordinary RC data advancement happens later.
+		op.SetSnapshotTS(admittedSnapshot)
 	}
 
 	util.LogTxnSnapshotTimestamp(
@@ -721,6 +786,17 @@ func (client *txnClient) doCreateTxn(
 	if closed {
 		err := moerr.NewClientClosedNoCtx()
 		return nil, err
+	}
+	if admission != nil || authorization != nil {
+		capability := admission
+		if capability == nil {
+			capability = authorization
+		}
+		capability.mu.RLock()
+		defer capability.mu.RUnlock()
+		if err = capability.validate(ctx, client, minTS); err != nil {
+			return nil, err
+		}
 	}
 	admissionComplete = true
 	return op, nil
@@ -780,7 +856,7 @@ func (client *txnClient) NewWithSnapshot(
 }
 
 func (client *txnClient) Close() error {
-	var waiting []*txnOperator
+	var waiting []*activeTxnWaiter
 	client.lifecycle.gate.Lock()
 	if client.lifecycle.closeDone == nil {
 		client.lifecycle.closeDone = make(chan struct{})
@@ -805,12 +881,11 @@ func (client *txnClient) Close() error {
 	if client.closeCancel != nil {
 		client.closeCancel()
 	}
-	waiting = client.mu.waitActiveTxns
-	client.mu.waitActiveTxns = nil
+	waiting = client.mu.waitActiveTxns.drain()
 	client.mu.Unlock()
 	client.lifecycle.gate.Unlock()
-	for _, op := range waiting {
-		op.failActiveWait(moerr.NewClientClosedNoCtx())
+	for _, waiter := range waiting {
+		waiter.complete(moerr.NewClientClosedNoCtx())
 	}
 
 	client.stopper.Stop()
@@ -876,6 +951,46 @@ func (client *txnClient) WaitLogTailAppliedAt(
 		return timestamp.Timestamp{}, moerr.NewClientClosedNoCtx()
 	}
 	return value, err
+}
+
+// GetLatestSnapshot observes an admitted logtail snapshot without creating a
+// transaction. Snapshot selection and readiness use the same owners as New.
+func (client *txnClient) GetLatestSnapshot(
+	ctx context.Context, minimum timestamp.Timestamp,
+) (timestamp.Timestamp, error) {
+	if client.isClosed() {
+		return timestamp.Timestamp{}, moerr.NewClientClosedNoCtx()
+	}
+	if err := client.limiter.Wait(ctx, client.closeCtx); err != nil {
+		if client.isClosed() {
+			err = moerr.NewClientClosedNoCtx()
+		}
+		return timestamp.Timestamp{}, err
+	}
+	client.mu.Lock()
+	err := client.waitForReadyLocked(ctx, false, false, nil)
+	client.mu.Unlock()
+	if err != nil {
+		return timestamp.Timestamp{}, err
+	}
+	snapshot, err := client.WaitLogTailAppliedAt(ctx, client.determineTxnSnapshot(minimum))
+	if err != nil {
+		if moerr.IsMoErrCode(err, moerr.ErrClientClosed) {
+			return timestamp.Timestamp{}, err
+		}
+		return timestamp.Timestamp{}, errors.Join(err, moerr.NewTxnError(ctx, "update txn snapshot"))
+	}
+	// A waiter may select success before Close, then return after it. Publish
+	// only while holding the existing lifecycle gate; never hold it while waiting.
+	client.lifecycle.gate.RLock()
+	defer client.lifecycle.gate.RUnlock()
+	if client.isClosed() {
+		return timestamp.Timestamp{}, moerr.NewClientClosedNoCtx()
+	}
+	if err := ctx.Err(); err != nil {
+		return timestamp.Timestamp{}, err
+	}
+	return snapshot, nil
 }
 
 func (client *txnClient) getTxnIsolation() txn.TxnIsolation {
@@ -970,48 +1085,45 @@ func (client *txnClient) GetSyncLatestCommitTSTimes() uint64 {
 	return client.atomic.forceSyncCommitTimes.Load()
 }
 
-func (client *txnClient) openTxn(ctx context.Context, op *txnOperator) error {
-	client.mu.Lock()
+// waitForReadyLocked retains client.mu on every return, dropping it only
+// while waiting on the existing readiness and shutdown channels.
+func (client *txnClient) waitForReadyLocked(
+	ctx context.Context, skipWaitPushClient, waitPausedDisabled bool, txnID []byte,
+) error {
 	if client.isClosed() {
-		client.mu.Unlock()
 		return moerr.NewClientClosedNoCtx()
 	}
 
 	if err := client.waitMarkAllActiveAbortedLocked(ctx); err != nil {
-		client.mu.Unlock()
 		return err
 	}
 
-	if !op.opts.skipWaitPushClient {
+	if !skipWaitPushClient {
 		for client.mu.state == paused {
 			if client.isClosed() {
-				client.mu.Unlock()
 				return moerr.NewClientClosedNoCtx()
 			}
 			if err := ctx.Err(); err != nil {
-				client.mu.Unlock()
 				return err
 			}
 			if client.normalStateNoWait {
 				activeCount := client.atomic.activeTxnCount.Load()
-				waitQueueSize := len(client.mu.waitActiveTxns)
-				client.mu.Unlock()
+				waitQueueSize := client.mu.waitActiveTxns.size
 				v2.TxnActiveQueueSizeGauge.Set(float64(activeCount))
 				v2.TxnWaitActiveQueueSizeGauge.Set(float64(waitQueueSize))
 				return moerr.NewInternalErrorNoCtx("cn service is not ready, retry later")
 			}
 
-			if op.opts.options.WaitPausedDisabled() {
+			if waitPausedDisabled {
 				activeCount := client.atomic.activeTxnCount.Load()
-				waitQueueSize := len(client.mu.waitActiveTxns)
-				client.mu.Unlock()
+				waitQueueSize := client.mu.waitActiveTxns.size
 				v2.TxnActiveQueueSizeGauge.Set(float64(activeCount))
 				v2.TxnWaitActiveQueueSizeGauge.Set(float64(waitQueueSize))
 				return moerr.NewInvalidStateNoCtx("txn client is in pause state")
 			}
 
 			client.logger.Warn("txn client is in pause state, wait for it to be ready",
-				zap.String("txn ID", hex.EncodeToString(op.reset.txnID)))
+				zap.String("txn ID", hex.EncodeToString(txnID)))
 			if client.mu.pausedC == nil {
 				client.mu.pausedC = make(chan struct{})
 			}
@@ -1020,48 +1132,91 @@ func (client *txnClient) openTxn(ctx context.Context, op *txnOperator) error {
 			client.mu.Unlock()
 			select {
 			case <-ctx.Done():
+				client.mu.Lock()
 				return ctx.Err()
 			case <-closedC:
+				client.mu.Lock()
 				return moerr.NewClientClosedNoCtx()
 			case <-pausedC:
 			}
 			client.mu.Lock()
 			client.logger.Warn("txn client is in ready state",
-				zap.String("txn ID", hex.EncodeToString(op.reset.txnID)))
+				zap.String("txn ID", hex.EncodeToString(txnID)))
 		}
 	}
 	if client.isClosed() {
-		client.mu.Unlock()
 		return moerr.NewClientClosedNoCtx()
 	}
 	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (client *txnClient) openTxn(ctx context.Context, op *txnOperator) error {
+	client.mu.Lock()
+	if err := client.waitForReadyLocked(ctx, op.opts.skipWaitPushClient,
+		op.opts.options.WaitPausedDisabled(), op.reset.txnID); err != nil {
 		client.mu.Unlock()
 		return err
 	}
+	client.openReadyTxnLocked(op)
+	return nil
+}
+
+// tryOpenAdmittedTxn only succeeds when no creation wait can follow. The native
+// frontier is monotonic; A.Prev() therefore remains applied after this check.
+// Readiness/capacity and the actual admission transition share one lock, so a
+// pause, abort barrier or queue cannot appear between the proof and opening.
+func (client *txnClient) tryOpenAdmittedTxn(ctx context.Context, op *txnOperator, snapshot timestamp.Timestamp) bool {
+	if op.timestampWaiter != nil {
+		waiter, native := op.timestampWaiter.(*timestampWaiter)
+		if !native {
+			return false
+		}
+		latest := waiter.latestTS.Load()
+		if latest == nil || latest.Less(snapshot.Prev()) {
+			return false
+		}
+	}
+	client.mu.Lock()
+	if client.isClosed() || ctx.Err() != nil || client.mu.state == paused ||
+		client.mu.waitMarkAllActiveAbortedC != nil || op.reset.waiter != nil ||
+		(op.opts.options.UserTxn() && client.mu.users >= client.maxActiveTxn) {
+		client.mu.Unlock()
+		return false
+	}
+	client.openReadyTxnLocked(op)
+	return true
+}
+
+// openReadyTxnLocked consumes client.mu and performs the sole admission
+// transition, shared by ordinary creation and the proven non-waiting path.
+func (client *txnClient) openReadyTxnLocked(op *txnOperator) {
 
 	if !op.opts.options.UserTxn() ||
 		client.mu.users < client.maxActiveTxn {
 		if op.opts.options.UserTxn() {
 			client.mu.users++
 		}
-		waitQueueSize := len(client.mu.waitActiveTxns)
+		waitQueueSize := client.mu.waitActiveTxns.size
 		client.mu.Unlock()
 		// Add to sharded map outside mu lock.
 		client.addActiveTxn(op)
 		// Update metrics after actual operation
 		v2.TxnActiveQueueSizeGauge.Set(float64(client.atomic.activeTxnCount.Load()))
 		v2.TxnWaitActiveQueueSizeGauge.Set(float64(waitQueueSize))
-		return nil
+		return
 	}
 
 	op.reset.waiter = newActiveTxnWaiter()
-	client.mu.waitActiveTxns = append(client.mu.waitActiveTxns, op)
+	client.mu.waitActiveTxns.pushBack(op)
 	activeCount := client.atomic.activeTxnCount.Load()
-	waitQueueSize := len(client.mu.waitActiveTxns)
+	waitQueueSize := client.mu.waitActiveTxns.size
 	client.mu.Unlock()
 	v2.TxnActiveQueueSizeGauge.Set(float64(activeCount))
 	v2.TxnWaitActiveQueueSizeGauge.Set(float64(waitQueueSize))
-	return nil
 }
 
 func (client *txnClient) closeTxn(ctx context.Context, txnOp TxnOperator, event TxnEvent, value any) (err error) {
@@ -1090,28 +1245,28 @@ func (client *txnClient) closeTxn(ctx context.Context, txnOp TxnOperator, event 
 
 		if !op.opts.options.UserTxn() {
 			v2.TxnActiveQueueSizeGauge.Set(float64(client.atomic.activeTxnCount.Load()))
-			v2.TxnWaitActiveQueueSizeGauge.Set(float64(len(client.mu.waitActiveTxns)))
+			v2.TxnWaitActiveQueueSizeGauge.Set(float64(client.mu.waitActiveTxns.size))
 			client.mu.Unlock()
 			return
 		}
 		if op.reset.unknownCommitResolutionTransferred &&
 			op.reset.unknownCommitResolved != nil {
 			v2.TxnActiveQueueSizeGauge.Set(float64(client.atomic.activeTxnCount.Load()))
-			v2.TxnWaitActiveQueueSizeGauge.Set(float64(len(client.mu.waitActiveTxns)))
+			v2.TxnWaitActiveQueueSizeGauge.Set(float64(client.mu.waitActiveTxns.size))
 			client.mu.Unlock()
 			return
 		}
 		toActivate := client.releaseUserTxnLocked()
 
 		v2.TxnActiveQueueSizeGauge.Set(float64(client.atomic.activeTxnCount.Load() + int64(len(toActivate))))
-		v2.TxnWaitActiveQueueSizeGauge.Set(float64(len(client.mu.waitActiveTxns)))
+		v2.TxnWaitActiveQueueSizeGauge.Set(float64(client.mu.waitActiveTxns.size))
 		client.mu.Unlock()
 
 		client.activateWaitActiveTxns(toActivate)
 		return
 	}
 
-	if ok = client.removeFromWaitActiveLocked(txn.ID); ok {
+	if ok = client.mu.waitActiveTxns.remove(txnOp.(*txnOperator)); ok {
 		client.removeFromLeakCheck(txn.ID)
 	} else if txnOp.(*txnOperator).reset.waiter != nil &&
 		txnOp.(*txnOperator).reset.waiter.canceled() {
@@ -1124,7 +1279,7 @@ func (client *txnClient) closeTxn(ctx context.Context, txnOp TxnOperator, event 
 	}
 
 	v2.TxnActiveQueueSizeGauge.Set(float64(client.atomic.activeTxnCount.Load()))
-	v2.TxnWaitActiveQueueSizeGauge.Set(float64(len(client.mu.waitActiveTxns)))
+	v2.TxnWaitActiveQueueSizeGauge.Set(float64(client.mu.waitActiveTxns.size))
 	client.mu.Unlock()
 	return
 }
@@ -1136,7 +1291,7 @@ func (client *txnClient) releaseUnknownCommitAdmission() {
 	client.mu.Lock()
 	toActivate := client.releaseUserTxnLocked()
 	v2.TxnActiveQueueSizeGauge.Set(float64(client.atomic.activeTxnCount.Load() + int64(len(toActivate))))
-	v2.TxnWaitActiveQueueSizeGauge.Set(float64(len(client.mu.waitActiveTxns)))
+	v2.TxnWaitActiveQueueSizeGauge.Set(float64(client.mu.waitActiveTxns.size))
 	client.mu.Unlock()
 
 	client.activateWaitActiveTxns(toActivate)
@@ -1185,36 +1340,24 @@ func (client *txnClient) activateWaitActiveTxns(ops []*txnOperator) {
 	}
 }
 
-// claimWaitActiveOpsLocked performs one stable O(n) queue compaction. It drops
-// canceled ownership, claims at most limit live entries in FIFO order, retains
-// the rest, and clears detached backing-array references.
+// claimWaitActiveOpsLocked consumes only the FIFO prefix needed for admission.
+// Cancellation owns untouched suffix removal through ClosedEvent; neither path
+// scans or locks unrelated waiters.
 func (client *txnClient) claimWaitActiveOpsLocked(limit int) []*txnOperator {
-	queued := client.mu.waitActiveTxns
-	remaining := queued[:0]
-	capacity := limit
-	if capacity < 0 {
-		capacity = 0
+	q := &client.mu.waitActiveTxns
+	if limit <= 0 || q.size == 0 {
+		return nil
 	}
-	if capacity > len(queued) {
-		capacity = len(queued)
-	}
+	capacity := min(limit, q.size)
 	claimed := make([]*txnOperator, 0, capacity)
-	for _, waitOp := range queued {
-		if len(claimed) < limit {
-			if waitOp.reset.waiter.claimPromotion() {
-				claimed = append(claimed, waitOp)
-			}
-			// A failed claim means cancellation already owns terminal cleanup;
-			// either way this entry no longer belongs in the queue.
-			continue
+	for q.head != nil && len(claimed) < limit {
+		op := q.head
+		promoted := op.reset.waiter.claimPromotion()
+		q.remove(op)
+		if promoted {
+			claimed = append(claimed, op)
 		}
-		if waitOp.reset.waiter.canceled() {
-			continue
-		}
-		remaining = append(remaining, waitOp)
 	}
-	clear(queued[len(remaining):])
-	client.mu.waitActiveTxns = remaining
 	return claimed
 }
 
@@ -1289,8 +1432,8 @@ func (client *txnClient) IterTxnIDs(fn func([]byte) bool) {
 	}
 
 	client.mu.RLock()
-	waitActiveTxnIDs := make([][]byte, 0, len(client.mu.waitActiveTxns))
-	for _, op := range client.mu.waitActiveTxns {
+	waitActiveTxnIDs := make([][]byte, 0, client.mu.waitActiveTxns.size)
+	for op := client.mu.waitActiveTxns.head; op != nil; op = op.reset.waiter.next {
 		waitActiveTxnIDs = append(waitActiveTxnIDs, append([]byte(nil), op.reset.txnID...))
 	}
 	client.mu.RUnlock()
@@ -1307,10 +1450,21 @@ func (client *txnClient) getAllTxnOperators() []*txnOperator {
 
 	// Also include waiting txns
 	client.mu.RLock()
-	ops = append(ops, client.mu.waitActiveTxns...)
+	ops = client.mu.waitActiveTxns.appendTo(ops)
 	client.mu.RUnlock()
 
 	return ops
+}
+
+// Snapshot only metadata under the existing shutdown gate. Admission waits and
+// operator locks remain outside it; a later Close is checked by doCreateTxn.
+func (client *txnClient) snapshotTxnMeta() (txn.TxnMeta, error) {
+	client.lifecycle.gate.RLock()
+	defer client.lifecycle.gate.RUnlock()
+	if client.isClosed() {
+		return txn.TxnMeta{}, moerr.NewClientClosedNoCtx()
+	}
+	return client.newTxnMeta(), nil
 }
 
 func (client *txnClient) newTxnMeta() txn.TxnMeta {
@@ -1395,21 +1549,6 @@ func (client *txnClient) handleMarkActiveTxnAborted(
 			}
 		}
 	}
-}
-
-func (client *txnClient) removeFromWaitActiveLocked(txnID []byte) bool {
-	var ok bool
-	values := client.mu.waitActiveTxns[:0]
-	for _, op := range client.mu.waitActiveTxns {
-		if bytes.Equal(op.reset.txnID, txnID) {
-			ok = true
-			continue
-		}
-		values = append(values, op)
-	}
-	clear(client.mu.waitActiveTxns[len(values):])
-	client.mu.waitActiveTxns = values
-	return ok
 }
 
 func (client *txnClient) waitMarkAllActiveAbortedLocked(ctx context.Context) error {

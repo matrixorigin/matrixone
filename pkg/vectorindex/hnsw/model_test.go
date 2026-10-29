@@ -24,10 +24,18 @@ import (
 	"testing"
 	"time"
 
+	"github.com/golang/mock/gomock"
+	"github.com/matrixorigin/matrixone/pkg/common/docfilter"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	executortest "github.com/matrixorigin/matrixone/pkg/util/executor/test"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
@@ -157,7 +165,7 @@ func TestModelStreamError(t *testing.T) {
 	var err error
 
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	// stub runSql function
@@ -205,7 +213,7 @@ func TestModelStreamError(t *testing.T) {
 
 func TestHnswWaitsPreserveCancellationCause(t *testing.T) {
 	newSQLProcess := func(t *testing.T) *sqlexec.SqlProcess {
-		proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+		proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 		proc.BuildPipelineContext(context.Background())
 		t.Cleanup(func() {
 			proc.Cancel(nil)
@@ -271,7 +279,7 @@ func TestModelFromBuffer(t *testing.T) {
 	fp32a := []float32{0, 1, 2}
 
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	// stub runSql function
@@ -317,7 +325,7 @@ func TestModelFromFileViewTrue(t *testing.T) {
 	fp32a := []float32{0, 1, 2}
 
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	// stub runSql function
@@ -364,7 +372,7 @@ func TestModel(t *testing.T) {
 	v1000 := []float32{1000, 2000, 3000}
 
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	// stub runSql function
@@ -374,7 +382,7 @@ func TestModel(t *testing.T) {
 	models, _, err := LoadMetadata[float32](sqlproc, "db", "meta")
 	require.Nil(t, err)
 
-	idxcfg := vectorindex.IndexConfig{Type: "hnsw", Usearch: usearch.DefaultConfig(3)}
+	idxcfg := vectorindex.IndexConfig{Type: "hnsw", Usearch: usearch.DefaultConfig(3), IndexCapacity: 1024}
 	idxcfg.Usearch.Metric = usearch.L2sq
 	tblcfg := vectorindex.IndexTableConfig{DbName: "db", SrcTable: "src", MetadataTable: "__secondary_meta", IndexTable: "__secondary_index"}
 
@@ -396,6 +404,7 @@ func TestModel(t *testing.T) {
 	err = idx.Unload()
 	require.Nil(t, err)
 
+	idx.Headroom = 10
 	err = idx.LoadIndex(sqlproc, idxcfg, tblcfg, 0, view)
 	require.Nil(t, err)
 
@@ -457,9 +466,8 @@ func TestModel(t *testing.T) {
 	fmt.Printf("%v\n", deletesqls)
 
 	// ToSql will release the index so index is nil
-	sqls, err := idx.ToSql(tblcfg)
-	require.Nil(t, err)
-	fmt.Printf("%v\n", sqls)
+	err = idx.PreparePersistence()
+	require.NoError(t, err)
 
 	// unload with nil index will output error
 	err = idx.Unload()
@@ -479,18 +487,51 @@ func TestModel(t *testing.T) {
 
 }
 
+func TestModelPersistenceValuesRemainData(t *testing.T) {
+	for _, tc := range []struct{ name, id, file string }{
+		{"plain", "model-id", "model.bin"},
+		{"quoted ID", "model'\\id", "model.bin"},
+		{"quoted path", "model-id", "model'\\file.bin"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), tc.file)
+			data := []byte{0, 255, '\'', '\\', 0}
+			require.NoError(t, os.WriteFile(path, data, 0600))
+			model := HnswModel[float32]{Id: tc.id, Path: path}
+			require.NoError(t, model.PreparePersistence())
+			txn := executortest.NewMockTxnExecutor(gomock.NewController(t))
+			txn.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(func(sql string, opts executor.StatementOption) (executor.Result, error) {
+				stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
+				require.NoError(t, err)
+				insert := stmt.(*tree.Insert)
+				require.Len(t, insert.Rows.Select.(*tree.ValuesClause).Rows, 1)
+				require.NotContains(t, sql, path)
+				mp := mpool.MustNewZero()
+				vec, err := opts.Params(mp)
+				require.NoError(t, err)
+				defer vec.Free(mp)
+				require.Equal(t, tc.id, string(vec.GetRawBytesAt(0)))
+				require.Equal(t, data, vec.GetRawBytesAt(1))
+				return executor.Result{}, nil
+			})
+			w, err := sqlexec.NewChunkInserter(t.Context(), txn, executor.StatementOption{}, "db", "store", 2000)
+			require.NoError(t, err)
+			require.NoError(t, model.PersistChunks(w))
+		})
+	}
+}
+
 func TestModelNil(t *testing.T) {
 
 	var err error
-	var tblcfg vectorindex.IndexTableConfig
 
 	idx := HnswModel[float32]{}
 	err = idx.SaveToFile()
 	require.Nil(t, err)
 
-	sqls, err := idx.ToSql(tblcfg)
-	require.Nil(t, err)
-	require.Equal(t, len(sqls), 0)
+	err = idx.PreparePersistence()
+	require.NoError(t, err)
+	require.Zero(t, idx.FileSize)
 
 	_, err = idx.Empty()
 	require.NotNil(t, err)
@@ -546,7 +587,7 @@ func TestNewHnswModelForBuild(t *testing.T) {
 	cfg := vectorindex.IndexConfig{Type: "hnsw", Usearch: usearch.DefaultConfig(3)}
 	cfg.Usearch.Metric = usearch.L2sq
 
-	idx, err := NewHnswModelForBuild[float32]("build-test", cfg, 1, 64, "")
+	idx, err := NewHnswModelForBuild[float32]("build-test", cfg, 1, 64, 0, "")
 	require.NoError(t, err)
 	require.NotNil(t, idx.Index)
 	defer idx.Destroy()
@@ -568,10 +609,56 @@ func TestNewHnswModelForBuild(t *testing.T) {
 	require.True(t, found)
 }
 
+// SearchWithMembership keeps only the keys of a C membership: a CRoaring bitmap (keys one
+// in 100 apart) and a C sorted64 (keys one in 2^32 apart).
+func TestSearchWithCMembership(t *testing.T) {
+	cfg := vectorindex.IndexConfig{Type: "hnsw", Usearch: usearch.DefaultConfig(3)}
+	cfg.Usearch.Metric = usearch.L2sq
+	idx, err := NewHnswModelForBuild[float32]("membership-test", cfg, 1, 4096, 0, "")
+	require.NoError(t, err)
+	defer idx.Destroy()
+	for i := int64(0); i < 2000; i++ {
+		require.NoError(t, idx.Add(i*100, []float32{float32(i), 0, 0}))
+	}
+	mp := mpool.MustNewZero()
+	build := func(keys []int64) docfilter.MembershipFilter {
+		v := vector.NewVec(types.T_int64.ToType())
+		defer v.Free(mp)
+		for _, k := range keys {
+			require.NoError(t, vector.AppendFixed(v, k, false, mp))
+		}
+		f, err := docfilter.NewForC(v, nil)
+		require.NoError(t, err)
+		return f
+	}
+
+	var roaringKeys []int64
+	for i := int64(500); i < 2000; i += 1 {
+		roaringKeys = append(roaringKeys, i*100)
+	}
+	roaring := build(roaringKeys)
+	defer roaring.Free()
+	require.Equal(t, docfilter.TagCRoaring, roaring.(docfilter.CFilter).CKind())
+	keys, _, err := idx.SearchWithMembership([]float32{0, 0, 0}, 5, roaring, false)
+	require.NoError(t, err)
+	require.Len(t, keys, 5)
+	for _, k := range keys {
+		require.GreaterOrEqual(t, int64(k), int64(500*100), "key %d is not a member", k)
+	}
+	require.Equal(t, usearch.Key(500*100), keys[0])
+
+	sorted := build([]int64{700 * 100, 1 << 40, 1 << 50})
+	defer sorted.Free()
+	require.Equal(t, docfilter.TagSorted64, sorted.(docfilter.CFilter).CKind())
+	keys, _, err = idx.SearchWithMembership([]float32{0, 0, 0}, 5, sorted, false)
+	require.NoError(t, err)
+	require.Equal(t, []usearch.Key{700 * 100}, keys)
+}
+
 // TestLoadIndex_EmptyChecksum covers the "checksum is empty" guard (lines 657-660).
 func TestLoadIndex_EmptyChecksum(t *testing.T) {
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	idxcfg := vectorindex.IndexConfig{Type: "hnsw", Usearch: usearch.DefaultConfig(3)}
@@ -589,7 +676,7 @@ func TestLoadIndex_EmptyChecksum(t *testing.T) {
 // TestLoadIndex_NewlyCreated covers the FileSize==0 + Path=="" → initIndex path (lines 652-655).
 func TestLoadIndex_NewlyCreated(t *testing.T) {
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	idxcfg := vectorindex.IndexConfig{Type: "hnsw", Usearch: usearch.DefaultConfig(3)}
@@ -616,7 +703,7 @@ func TestSearch_WrongDimension(t *testing.T) {
 	cfg := vectorindex.IndexConfig{Type: "hnsw", Usearch: usearch.DefaultConfig(3)}
 	cfg.Usearch.Metric = usearch.L2sq
 
-	idx, err := NewHnswModelForBuild[float32]("dim-test", cfg, 1, 16, "")
+	idx, err := NewHnswModelForBuild[float32]("dim-test", cfg, 1, 16, 0, "")
 	require.NoError(t, err)
 	defer idx.Destroy()
 
@@ -631,7 +718,7 @@ func TestSearch_WrongDimension(t *testing.T) {
 // must be drained and closed after an error cancels the producer.
 func TestStreamingDrain(t *testing.T) {
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	runSql = mock_runSql
@@ -672,7 +759,7 @@ func TestStreamingDrain(t *testing.T) {
 
 func TestTempFileCleanup_ChecksumMismatch(t *testing.T) {
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	// Good streaming so the file is written, but we corrupt the checksum.
@@ -719,7 +806,7 @@ func TestTempFileCleanup_ChecksumMismatch(t *testing.T) {
 // valid usearch index (e.g. disk corruption, truncated write).
 func TestCorruptedIndexFile(t *testing.T) {
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	idxcfg := vectorindex.IndexConfig{Type: "hnsw", Usearch: usearch.DefaultConfig(3)}

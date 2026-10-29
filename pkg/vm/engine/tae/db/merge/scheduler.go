@@ -704,7 +704,6 @@ type todoSupporter struct {
 	objectOperations       int
 	totalDataMergeCnt      int
 	totalTombstoneMergeCnt int
-	totalVacuumCheckCnt    int
 	paused                 bool
 	nextDue                time.Duration
 	lastMergeTime          time.Time
@@ -1308,7 +1307,6 @@ func (a *MergeScheduler) doSched(
 				return
 			}
 			supp.lastVacuumCheckTime = afterGather
-			supp.totalVacuumCheckCnt++
 		}
 	}
 
@@ -1492,12 +1490,6 @@ func (p *launchPad) gatherByTrigger(ctx context.Context,
 	if len(trigger.assigns) > 0 {
 		p.revisedResults = append(p.revisedResults,
 			controlTaskMemInPlace(trigger.assigns, rc, 1)...)
-	}
-	if trigger.table.ID() == MergeHeroID {
-		logutil.Infof(
-			"MergeHero: lastMergeTime: %s",
-			p.lastMergeTime,
-		)
 	}
 	return p.revisedResults
 }

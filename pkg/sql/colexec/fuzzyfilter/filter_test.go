@@ -121,7 +121,7 @@ func newArgument(typ types.Type) *FuzzyFilter {
 }
 
 func newProcess(t *testing.T) *process.Process {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	return proc
 }
 
@@ -136,6 +136,60 @@ func setProcForTest(fuzzyFilter *FuzzyFilter, proc *process.Process, typs []type
 
 	fuzzyFilter.AppendChild(leftChild)
 	fuzzyFilter.AppendChild(rightChild)
+}
+
+func TestFuzzyAccountedFilterLifetime(t *testing.T) {
+	for _, typ := range []types.Type{types.T_uint32.ToType(), types.T_varchar.ToType()} {
+		t.Run(typ.String(), func(t *testing.T) {
+			proc := testutil.NewProcessWithOwnedMPool(t, t.Name(), mpool.MustNewZero())
+			defer proc.Free()
+			budget, err := proc.GetExecutionResourceBudget()
+			require.NoError(t, err)
+			registry, err := mpool.NewAllocationAccountRegistry(1, 64)
+			require.NoError(t, err)
+			account, err := registry.OpenWithController(1<<20, budget)
+			require.NoError(t, err)
+			defer func() {
+				account.Seal()
+				_, err := registry.Finalize(account)
+				require.NoError(t, err)
+			}()
+			arg := newArgument(typ)
+			defer arg.Release()
+			defer arg.Free(proc, false, nil)
+			arg.N, arg.BuildIdx = 1, 0
+			require.NoError(t, arg.SetAllocationAccount(account))
+			input := vector.NewVec(typ)
+			defer input.Free(proc.Mp())
+			if typ.Oid == types.T_uint32 {
+				require.NoError(t, vector.AppendFixedList(input, []uint32{1, 65537}, nil, proc.Mp()))
+			} else {
+				require.NoError(t, vector.AppendBytesList(input, [][]byte{[]byte("key-a"), []byte("key-b")}, nil, proc.Mp()))
+			}
+			for range 2 {
+				require.NoError(t, arg.Prepare(proc))
+				filler, err := budget.ReserveTransientMemory(budget.Cap() - budget.Used())
+				require.NoError(t, err)
+				func() {
+					defer filler.Release()
+					require.Error(t, arg.handleBuild(proc, input))
+				}()
+				require.NoError(t, arg.handleBuild(proc, input))
+				require.Positive(t, arg.filterCharge)
+				if typ.Oid == types.T_uint32 {
+					require.ErrorContains(t, arg.handleProbe(proc, input), "Duplicate entry")
+				} else {
+					require.NoError(t, arg.handleProbe(proc, input))
+					require.Equal(t, 2, arg.ctr.collisionCnt)
+					require.Positive(t, account.Snapshot().Used)
+				}
+				arg.Reset(proc, false, nil)
+				require.Zero(t, budget.Used())
+				require.Zero(t, account.Snapshot().Used)
+			}
+			require.NoError(t, arg.ClearAllocationAccount(account))
+		})
+	}
 }
 
 func TestString(t *testing.T) {
@@ -270,7 +324,7 @@ func TestFuzzyRuntimeFilterCopyFailureFailsOpen(t *testing.T) {
 		mpool.NoFixed,
 	)
 	require.NoError(t, err)
-	proc := testutil.NewProcessWithMPool(t, "", limited)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", limited)
 	proc.SetMessageBoard(message.NewMessageBoard())
 	arg := newArgument(typ)
 	arg.N = 1
@@ -333,7 +387,7 @@ func TestFuzzyRuntimeFilterClosureFailureFailsOpen(t *testing.T) {
 		mpool.NoFixed,
 	)
 	require.NoError(t, err)
-	proc := testutil.NewProcessWithMPool(t, "", limited)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", limited)
 	proc.SetMessageBoard(message.NewMessageBoard())
 	arg := newArgument(typ)
 	arg.N = 1

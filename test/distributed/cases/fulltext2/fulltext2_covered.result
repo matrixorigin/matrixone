@@ -23,7 +23,8 @@ explain select id, status, prio from docs where match(body) against('fox');
 Project  𝄀
   ->  Sort  𝄀
         Sort Key: mo_fulltext_alias_0.__mo_ft_score DESC  𝄀
-        ->  Table Function on fulltext2_search
+        ->  Fulltext Index Scan on ftidx  𝄀
+              Fulltext Index: ftidx
 select id, status, prio from docs where match(body) against('silver');
 ➤ id[-5,64,0]  ¦  status[12,20,0]  ¦  prio[4,32,0]  𝄀
 6  ¦  null  ¦  60
@@ -110,27 +111,25 @@ select id, status, prio from docs where match(body) against('fox') and status = 
 4  ¦  active  ¦  40  𝄀
 3  ¦  active  ¦  30
 explain select id from docs where match(body) against('fox') order by status;
-➤ TP QUERY PLAN[12,0,0]  𝄀
+➤ TP QUERY PLAN[12,-1,0]  𝄀
 Project  𝄀
   ->  Sort  𝄀
         Sort Key: mo_fulltext_alias_0.status INTERNAL  𝄀
-        ->  Sort  𝄀
-              Sort Key: mo_fulltext_alias_0.__mo_ft_score DESC  𝄀
-              ->  Table Function on fulltext2_search
+        ->  Fulltext Index Scan on ftidx  𝄀
+              Fulltext Index: ftidx
 explain select id, status from docs where match(body) against('fox') order by category;
-➤ TP QUERY PLAN[12,0,0]  𝄀
+➤ TP QUERY PLAN[12,-1,0]  𝄀
 Project  𝄀
   ->  Sort  𝄀
         Sort Key: docs.category INTERNAL  𝄀
-        ->  Sort  𝄀
-              Sort Key: mo_fulltext_alias_0.__mo_ft_score DESC  𝄀
-              ->  Join  𝄀
-                    Join Type: INNER  𝄀
-                    Join Cond: (docs.id = mo_fulltext_alias_0.__mo_ft_doc_id)  𝄀
-                    Runtime Filter Build: #[-1,0]  𝄀
-                    ->  Table Scan on fulltext2_covered.docs  𝄀
-                          Runtime Filter Probe: docs.id  𝄀
-                    ->  Table Function on fulltext2_search
+        ->  Join  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (docs.id = mo_fulltext_alias_0.__mo_ft_doc_id)  𝄀
+              Runtime Filter Build: #[-1,0]  𝄀
+              ->  Table Scan on fulltext2_covered.docs  𝄀
+                    Runtime Filter Probe: docs.id  𝄀
+              ->  Fulltext Index Scan on ftidx  𝄀
+                    Fulltext Index: ftidx
 select id, status, category from docs where match(body) against('fox') order by category, id;
 ➤ id[-5,64,0]  ¦  status[12,20,0]  ¦  category[12,20,0]  𝄀
 2  ¦  archived  ¦  food  𝄀
@@ -148,4 +147,11 @@ select id, tag from cs where match(body) against('fox') and tag like 'Act%' orde
 ➤ id[-5,64,0]  ¦  tag[12,10,0]  𝄀
 1  ¦  Active
 drop table cs;
+create table topk_docs (id bigint primary key, body text not null, prio int);
+insert into topk_docs values (1, 'fox rare rare', 1), (2, 'fox', null), (3, 'cat', null);
+create fulltext2 index topk_idx on topk_docs (body) include (prio);
+select id from topk_docs where match(body) against('fox rare' in boolean mode) and prio is null order by match(body) against('fox rare' in boolean mode) desc limit 1;
+➤ id[-5,64,0]  𝄀
+2
+drop table topk_docs;
 drop database fulltext2_covered;

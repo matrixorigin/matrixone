@@ -18,10 +18,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/golang/mock/gomock"
@@ -834,14 +836,6 @@ func TestDoCheckUpgrade(t *testing.T) {
 	runtime.RunTest(
 		sid,
 		func(rt runtime.Runtime) {
-			defer func() {
-				if r := recover(); r != nil {
-					assert.Equal(t, "cannot upgrade to version 2.0.0, because version 1.2.3 is in upgrading", r)
-				} else {
-					t.Errorf("Expected panic but did not occur")
-				}
-			}()
-
 			txnOp := &testTxnOperator{}
 			exec := executor.NewMemExecutor2(func(sql string) (executor.Result, error) {
 				if strings.HasPrefix(sql, "SELECT reldatabase, relname, account_id FROM mo_catalog.mo_tables") {
@@ -853,7 +847,7 @@ func TestDoCheckUpgrade(t *testing.T) {
 					return memRes.GetResult(), nil
 				}
 
-				if strings.EqualFold(sql, "select version, version_offset, state from mo_version order by create_at desc limit 1") {
+				if strings.EqualFold(sql, versions.LatestVersionSQL) {
 					typs := []types.Type{
 						types.New(types.T_varchar, 50, 0),
 						types.New(types.T_uint32, 32, 0),
@@ -889,21 +883,16 @@ func TestDoCheckUpgrade(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 			defer cancel()
 
-			b.doCheckUpgrade(ctx)
+			err := b.doCheckUpgrade(ctx)
+			require.ErrorContains(t, err, "cannot upgrade to version 2.0.0, because version 1.2.3 is in upgrading")
+			var terminal *terminalUpgradeError
+			require.ErrorAs(t, err, &terminal)
 		},
 	)
 
 	runtime.RunTest(
 		sid,
 		func(rt runtime.Runtime) {
-			defer func() {
-				if r := recover(); r != nil {
-					assert.Equal(t, "cannot upgrade to version 2.0.0 with versionOffset[2], because version 2.0.0 with versionOffset[1] is in upgrading", r)
-				} else {
-					t.Errorf("Expected panic but did not occur")
-				}
-			}()
-
 			txnOp := &testTxnOperator{}
 			exec := executor.NewMemExecutor2(func(sql string) (executor.Result, error) {
 				if strings.HasPrefix(sql, "SELECT reldatabase, relname, account_id FROM mo_catalog.mo_tables") {
@@ -915,7 +904,7 @@ func TestDoCheckUpgrade(t *testing.T) {
 					return memRes.GetResult(), nil
 				}
 
-				if strings.EqualFold(sql, "select version, version_offset, state from mo_version order by create_at desc limit 1") {
+				if strings.EqualFold(sql, versions.LatestVersionSQL) {
 					typs := []types.Type{
 						types.New(types.T_varchar, 50, 0),
 						types.New(types.T_uint32, 32, 0),
@@ -951,7 +940,10 @@ func TestDoCheckUpgrade(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 			defer cancel()
 
-			b.doCheckUpgrade(ctx)
+			err := b.doCheckUpgrade(ctx)
+			require.ErrorContains(t, err, "cannot upgrade to version 2.0.0 with versionOffset[2], because version 2.0.0 with versionOffset[1] is in upgrading")
+			var terminal *terminalUpgradeError
+			require.ErrorAs(t, err, &terminal)
 		},
 	)
 }
@@ -1006,7 +998,7 @@ func TestDoUpgrade(t *testing.T) {
 				UpgradeTenant:      versions.No,
 			}
 
-			_, err := b.doUpgrade(ctx, versionUpg, txnExecutor)
+			_, err := b.doUpgrade(ctx, versionUpg, txnExecutor, false)
 			assert.NoError(t, err)
 		},
 	)
@@ -1030,7 +1022,8 @@ func TestDoUpgradeWaitsForTenantSnapshotProtocol(t *testing.T) {
 			protocol: `{"method":"GETPROTOCOLVERSION","result":"cn-a:32,cn-b:32"}`,
 			wantPrefix: []string{
 				"SELECT mo_ctl('cn', 'GetProtocolVersion', '')",
-				"select account_id from mo_account where account_id > -1 order by account_id limit 16",
+				"select to_account_id from mo_upgrade_tenant where upgrade_id = 0 order by to_account_id desc limit 1",
+				"select account_id from mo_account where account_id > -1 order by account_id limit 128",
 			},
 		},
 	} {
@@ -1071,7 +1064,7 @@ func TestDoUpgradeWaitsForTenantSnapshotProtocol(t *testing.T) {
 						State:          versions.StateCreated,
 						UpgradeTenant:  versions.Yes,
 						UpgradeCluster: versions.No,
-					}, txnExecutor)
+					}, txnExecutor, false)
 					if test.wantErr {
 						require.ErrorContains(t, err, "node")
 					} else {
@@ -1130,58 +1123,183 @@ func TestPerformUpgradeReturnsWhenTenantUpgradeInProgress(t *testing.T) {
 				}
 			}, txnOperator)
 
-			completed, err := b.performUpgrade(context.Background(), txnExecutor)
+			completed, _, _, err := b.performUpgrade(context.Background(), b.getFinalVersionHandle().Metadata(), txnExecutor, 0)
 			require.NoError(t, err)
 			require.False(t, completed)
 		},
 	)
 }
 
+func TestDoUpgradeRequiresReadyTasksAsWellAsCounts(t *testing.T) {
+	for _, pending := range []bool{true, false} {
+		t.Run(fmt.Sprintf("pending=%t", pending), func(t *testing.T) {
+			var updates int
+			txn := executor.NewMemTxnExecutor(func(sql string) (executor.Result, error) {
+				switch {
+				case strings.HasPrefix(sql, "select 1 from mo_upgrade_tenant"):
+					if pending {
+						res := buildExistsResult()
+						t.Cleanup(func() { mpool.DeleteMPool(res.Mp) })
+						return res, nil
+					}
+					return executor.Result{}, nil
+				case strings.HasPrefix(sql, "update mo_upgrade set state = 2"):
+					updates++
+					return executor.Result{}, nil
+				default:
+					return executor.Result{}, fmt.Errorf("unexpected SQL: %s", sql)
+				}
+			}, nil)
+			u := versions.VersionUpgrade{ID: 7, State: versions.StateUpgradingTenant,
+				UpgradeCluster: versions.Yes, UpgradeTenant: versions.Yes, TotalTenant: 1, ReadyTenant: 1}
+			state, err := (&service{}).doUpgrade(t.Context(), u, txn, false)
+			require.NoError(t, err)
+			if pending {
+				require.Equal(t, versions.StateUpgradingTenant, state)
+				require.Zero(t, updates)
+			} else {
+				require.Equal(t, versions.StateReady, state)
+				require.Equal(t, 1, updates)
+			}
+		})
+	}
+}
+
+func TestDoUpgradeResumesTenantEnumerationFromCommittedRanges(t *testing.T) {
+	runtime.RunTest("", func(runtime.Runtime) {
+		var accounts []int32
+		for id := int32(0); id < 260; id += 2 {
+			accounts = append(accounts, id)
+		}
+		var ranges [][2]int32
+		var total int32
+		intRows := func(values []int32) executor.Result {
+			if len(values) == 0 {
+				return executor.Result{}
+			}
+			mp := mpool.MustNewZero()
+			t.Cleanup(func() { mpool.DeleteMPool(mp) })
+			result := executor.NewMemResult([]types.Type{types.T_int32.ToType()}, mp)
+			result.NewBatchWithRowCount(len(values))
+			require.NoError(t, executor.AppendFixedRows(result, 0, values))
+			return result.GetResult()
+		}
+		txn := executor.NewMemTxnExecutor(func(sql string) (executor.Result, error) {
+			switch {
+			case strings.HasPrefix(sql, "select to_account_id from mo_upgrade_tenant"):
+				if len(ranges) == 0 {
+					return executor.Result{}, nil
+				}
+				return intRows([]int32{ranges[len(ranges)-1][1]}), nil
+			case strings.HasPrefix(sql, "select account_id from mo_account"):
+				var after int32
+				var limit int
+				_, err := fmt.Sscanf(sql, "select account_id from mo_account where account_id > %d order by account_id limit %d", &after, &limit)
+				require.NoError(t, err)
+				var page []int32
+				for _, id := range accounts {
+					if id > after && len(page) < limit {
+						page = append(page, id)
+					}
+				}
+				return intRows(page), nil
+			case strings.HasPrefix(sql, "insert into mo_upgrade_tenant"):
+				parts := strings.SplitN(sql, "values (", 2)
+				require.Len(t, parts, 2)
+				fields := strings.Split(parts[1], ",")
+				from, err := strconv.ParseInt(strings.TrimSpace(fields[2]), 10, 32)
+				require.NoError(t, err)
+				to, err := strconv.ParseInt(strings.TrimSpace(fields[3]), 10, 32)
+				require.NoError(t, err)
+				ranges = append(ranges, [2]int32{int32(from), int32(to)})
+				return executor.Result{}, nil
+			case strings.HasPrefix(sql, "update mo_upgrade set total_tenant"):
+				var ready int32
+				_, err := fmt.Sscanf(sql, "update mo_upgrade set total_tenant = %d, ready_tenant = %d", &total, &ready)
+				require.NoError(t, err)
+				require.Zero(t, ready)
+				require.NotContains(t, sql, "state =")
+				return executor.Result{}, nil
+			case strings.HasPrefix(sql, "update mo_upgrade set state = 1"):
+				return executor.Result{}, nil
+			default:
+				return executor.Result{}, fmt.Errorf("unexpected SQL: %s", sql)
+			}
+		}, &testTxnOperator{})
+		h := newTestVersionHandler("4.0.7", "4.0.6", versions.No, versions.Yes, 1)
+		s := newServiceForTest("", &memLocker{}, clock.NewHLCClock(func() int64 { return 0 }, 0), nil, nil,
+			func(s *service) { s.handles = []VersionHandle{h}; s.upgrade.upgradeTenantBatch = 16 })
+		defer s.stopper.Stop()
+		u := versions.VersionUpgrade{ID: 42, ToVersion: "4.0.7", FinalVersion: "4.0.7",
+			State: versions.StateCreated, UpgradeTenant: versions.Yes}
+
+		state, err := s.doUpgrade(t.Context(), u, txn, false)
+		require.NoError(t, err)
+		require.Equal(t, versions.StateCreated, state)
+		require.Equal(t, int32(128), total)
+		require.Len(t, ranges, 8)
+		require.Equal(t, [2]int32{224, 254}, ranges[7])
+
+		// Simulate losing the first response after its transaction committed:
+		// the next invocation derives the prefix from persisted task ranges.
+		u.TotalTenant = total
+		state, err = s.doUpgrade(t.Context(), u, txn, false)
+		require.NoError(t, err)
+		require.Equal(t, versions.StateCreated, state)
+		require.Equal(t, int32(130), total)
+		require.Len(t, ranges, 9)
+		require.Equal(t, [2]int32{256, 258}, ranges[8])
+		u.TotalTenant = total
+		state, err = s.doUpgrade(t.Context(), u, txn, false)
+		require.NoError(t, err)
+		require.Equal(t, versions.StateUpgradingTenant, state)
+		require.Len(t, ranges, 9)
+	})
+}
+
 // tolerance test
 func TestUpgradeTenant(t *testing.T) {
-	sid := ""
-	runtime.RunTest(
-		sid,
-		func(rt runtime.Runtime) {
-			defer func() {
-				if r := recover(); r != nil {
-					t.Errorf("Expected no panic")
-				}
-			}()
+	synctest.Test(t, func(t *testing.T) {
+		sid := ""
+		runtime.RunTest(
+			sid,
+			func(rt runtime.Runtime) {
+				attempts := 0
+				txnOp := &testTxnOperator{}
+				sqlExecutor := executor.NewMemExecutor2(func(sql string) (executor.Result, error) {
+					target := versions.LatestVersionSQL
+					if sql == target {
+						attempts++
+						return executor.Result{}, moerr.NewInternalErrorNoCtx("test err")
+					}
+					return executor.Result{}, nil
+				}, txnOp)
 
-			txnOp := &testTxnOperator{}
-			sqlExecutor := executor.NewMemExecutor2(func(sql string) (executor.Result, error) {
-				target := fmt.Sprintf(`select version, version_offset, state from %s order by create_at desc limit 1`, catalog.MOVersionTable)
-				if sql == target {
-					return executor.Result{}, moerr.NewInternalErrorNoCtx("test err")
-				}
-				return executor.Result{}, nil
-			}, txnOp)
+				b := newServiceForTest(
+					sid,
+					&memLocker{},
+					clock.NewHLCClock(func() int64 { return 0 }, 0),
+					nil,
+					sqlExecutor,
+					func(s *service) {
+						h1 := newTestVersionHandler("1.2.0", "1.1.0", versions.Yes, versions.No, 10)
+						h2 := newTestVersionHandler("2.0.0", "1.2.0", versions.Yes, versions.No, 2)
+						s.handles = append(s.handles, h1)
+						s.handles = append(s.handles, h2)
+					},
+				)
 
-			b := newServiceForTest(
-				sid,
-				&memLocker{},
-				clock.NewHLCClock(func() int64 { return 0 }, 0),
-				nil,
-				sqlExecutor,
-				func(s *service) {
-					h1 := newTestVersionHandler("1.2.0", "1.1.0", versions.Yes, versions.No, 10)
-					h2 := newTestVersionHandler("2.0.0", "1.2.0", versions.Yes, versions.No, 2)
-					s.handles = append(s.handles, h1)
-					s.handles = append(s.handles, h2)
-				},
-			)
+				defer b.Close()
 
-			txnOperator := mock_frontend.NewMockTxnOperator(gomock.NewController(t))
-			txnOperator.EXPECT().TxnOptions().Return(txn.TxnOptions{CN: sid}).AnyTimes()
+				ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+				defer cancel()
 
-			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
-			defer cancel()
-
-			_, err := b.UpgradeTenant(ctx, "sys", 0, true)
-			assert.Error(t, err)
-		},
-	)
+				_, err := b.UpgradeTenant(ctx, "sys", 0, true)
+				require.ErrorIs(t, err, context.DeadlineExceeded)
+				require.Greater(t, attempts, 1, "upgrade must retry before its deadline")
+			},
+		)
+	})
 }
 
 func newServiceForTest(

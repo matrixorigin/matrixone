@@ -99,6 +99,225 @@ select cast('7e0' as signed), cast('7e+2' as signed), cast('1.5e0' as signed), c
 select cast('.5e0' as signed), cast('-.5e0' as signed), cast('+.5e+2' as signed);
 ➤ cast(.5e0 as signed)[-5,64,0]  ¦  cast(-.5e0 as signed)[-5,64,0]  ¦  cast(+.5e+2 as signed)[-5,64,0]  𝄀
 0  ¦  0  ¦  0
+set @cast_range_saved_sql_mode = @@session.sql_mode;
+set session sql_mode = '';
+select cast(999.995 as decimal(5,2)) as d;
+➤ d[3,5,2]  𝄀
+999.99
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1264  ¦  Out of range value for column 'decimal' at row 1
+select @@warning_count;
+➤ @@warning_count[-1,16383,0]  𝄀
+1
+select cast(999.994 as decimal(5,2)) as d;
+➤ d[3,5,2]  𝄀
+999.99
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]
+select @@warning_count;
+➤ @@warning_count[-1,16383,0]  𝄀
+0
+select cast('9223372036854775808' as signed) as s, cast('-9223372036854775809' as signed) as n,
+cast('-1' as unsigned) as u, cast('18446744073709551616' as unsigned) as o;
+➤ s[-5,64,0]  ¦  n[-5,64,0]  ¦  u[-5,64,0]  ¦  o[-5,64,0]  𝄀
+-9223372036854775808  ¦  -9223372036854775808  ¦  18446744073709551615  ¦  18446744073709551615
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1105  ¦  Cast to signed converted positive out-of-range integer to its negative complement  𝄀
+Warning  ¦  1292  ¦  Truncated incorrect INTEGER value: '-9223372036854775809'  𝄀
+Warning  ¦  1105  ¦  Cast to unsigned converted negative integer to its positive complement  𝄀
+Warning  ¦  1292  ¦  Truncated incorrect INTEGER value: '18446744073709551616'
+select @@warning_count;
+➤ @@warning_count[-1,16383,0]  𝄀
+4
+select cast('-9223372036854775809' as unsigned) as u;
+➤ u[-5,64,0]  𝄀
+9223372036854775807
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1292  ¦  Truncated incorrect INTEGER value: '-9223372036854775809'
+select @@warning_count;
+➤ @@warning_count[-1,16383,0]  𝄀
+1
+select cast('9223372036854775807' as signed) as s, cast('18446744073709551615' as unsigned) as u;
+➤ s[-5,64,0]  ¦  u[-5,64,0]  𝄀
+9223372036854775807  ¦  18446744073709551615
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]
+select @@warning_count;
+➤ @@warning_count[-1,16383,0]  𝄀
+0
+set session sql_mode = 'STRICT_TRANS_TABLES';
+select cast(999.995 as decimal(5,2)) as d, cast('9223372036854775808' as signed) as s, cast('-1' as unsigned) as u;
+➤ d[3,5,2]  ¦  s[-5,64,0]  ¦  u[-5,64,0]  𝄀
+999.99  ¦  -9223372036854775808  ¦  18446744073709551615
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1264  ¦  Out of range value for column 'decimal' at row 1  𝄀
+Warning  ¦  1105  ¦  Cast to signed converted positive out-of-range integer to its negative complement  𝄀
+Warning  ¦  1105  ¦  Cast to unsigned converted negative integer to its positive complement
+select @@warning_count;
+➤ @@warning_count[-1,16383,0]  𝄀
+3
+set @cast_range_saved_max_error_count = @@session.max_error_count;
+set session max_error_count = 1;
+select cast('9223372036854775808' as signed) as s, cast('-1' as unsigned) as u;
+➤ s[-5,64,0]  ¦  u[-5,64,0]  𝄀
+-9223372036854775808  ¦  18446744073709551615
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1105  ¦  Cast to signed converted positive out-of-range integer to its negative complement
+select @@warning_count;
+➤ @@warning_count[-1,16383,0]  𝄀
+2
+set session max_error_count = @cast_range_saved_max_error_count;
+drop table if exists cast_range_warning_rows;
+create table cast_range_warning_rows(id int primary key, s varchar(32), d decimal(6,3));
+insert into cast_range_warning_rows values
+(1, '9223372036854775808', 999.995), (2, '9223372036854775807', 999.994), (3, null, null);
+select cast(s as signed) as s from cast_range_warning_rows order by id;
+➤ s[-5,64,0]  𝄀
+-9223372036854775808  𝄀
+9223372036854775807  𝄀
+null
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1105  ¦  Cast to signed converted positive out-of-range integer to its negative complement
+select @@warning_count;
+➤ @@warning_count[-1,16383,0]  𝄀
+1
+select cast(d as decimal(5,2)) as d from cast_range_warning_rows where id = 1;
+➤ d[3,5,2]  𝄀
+999.99
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1264  ¦  Out of range value for column 'decimal' at row 1
+select @@warning_count;
+➤ @@warning_count[-1,16383,0]  𝄀
+1
+select cast(d as decimal(5,2)) as d from cast_range_warning_rows where id > 1 order by id;
+➤ d[3,5,2]  𝄀
+999.99  𝄀
+null
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]
+select @@warning_count;
+➤ @@warning_count[-1,16383,0]  𝄀
+0
+delete from cast_range_warning_rows;
+insert into cast_range_warning_rows(id, s) values (1, 'abc'), (2, '42'), (3, null);
+select cast(s as signed) as lexical_signed from cast_range_warning_rows order by id;
+➤ lexical_signed[-5,64,0]  𝄀
+0  𝄀
+42  𝄀
+null
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1292  ¦  Truncated incorrect INTEGER value: 'abc'
+select @@warning_count;
+➤ @@warning_count[-1,16383,0]  𝄀
+1
+select cast(s as unsigned) as lexical_unsigned from cast_range_warning_rows order by id;
+➤ lexical_unsigned[-5,64,0]  𝄀
+0  𝄀
+42  𝄀
+null
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1292  ¦  Truncated incorrect INTEGER value: 'abc'
+select @@warning_count;
+➤ @@warning_count[-1,16383,0]  𝄀
+1
+select cast(s as signed) as lexical_signed, cast(s as unsigned) as lexical_unsigned from cast_range_warning_rows where id > 1 order by id;
+➤ lexical_signed[-5,64,0]  ¦  lexical_unsigned[-5,64,0]  𝄀
+42  ¦  42  𝄀
+null  ¦  null
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]
+select @@warning_count;
+➤ @@warning_count[-1,16383,0]  𝄀
+0
+drop table cast_range_warning_rows;
+prepare cast_range_signed from 'select cast(? as signed) as s';
+set @cast_range_value = '9223372036854775808';
+execute cast_range_signed using @cast_range_value;
+➤ s[-5,64,0]  𝄀
+-9223372036854775808
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1105  ¦  Cast to signed converted positive out-of-range integer to its negative complement
+select @@warning_count;
+➤ @@warning_count[-1,16383,0]  𝄀
+1
+set @cast_range_value = '9223372036854775807';
+execute cast_range_signed using @cast_range_value;
+➤ s[-5,64,0]  𝄀
+9223372036854775807
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]
+select @@warning_count;
+➤ @@warning_count[-1,16383,0]  𝄀
+0
+set @cast_range_value = '9223372036854775808';
+execute cast_range_signed using @cast_range_value;
+➤ s[-5,64,0]  𝄀
+-9223372036854775808
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1105  ¦  Cast to signed converted positive out-of-range integer to its negative complement
+select @@warning_count;
+➤ @@warning_count[-1,16383,0]  𝄀
+1
+deallocate prepare cast_range_signed;
+prepare cast_range_decimal from 'select cast(? as decimal(5,2)) as d';
+set @cast_range_value = '999.995';
+execute cast_range_decimal using @cast_range_value;
+➤ d[3,5,2]  𝄀
+999.99
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1264  ¦  Out of range value for column 'decimal' at row 1
+select @@warning_count;
+➤ @@warning_count[-1,16383,0]  𝄀
+1
+set @cast_range_value = '999.994';
+execute cast_range_decimal using @cast_range_value;
+➤ d[3,5,2]  𝄀
+999.99
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]
+select @@warning_count;
+➤ @@warning_count[-1,16383,0]  𝄀
+0
+deallocate prepare cast_range_decimal;
+select cast('abc' as signed) as lexical_signed;
+➤ lexical_signed[-5,64,0]  𝄀
+0
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1292  ¦  Truncated incorrect INTEGER value: 'abc'
+select @@warning_count;
+➤ @@warning_count[-1,16383,0]  𝄀
+1
+select cast('abc' as unsigned) as lexical_unsigned;
+➤ lexical_unsigned[-5,64,0]  𝄀
+0
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1292  ¦  Truncated incorrect INTEGER value: 'abc'
+select @@warning_count;
+➤ @@warning_count[-1,16383,0]  𝄀
+1
+select cast(NULL as signed) as lexical_null;
+➤ lexical_null[-5,64,0]  𝄀
+null
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]
+select @@warning_count;
+➤ @@warning_count[-1,16383,0]  𝄀
+0
+set session sql_mode = @cast_range_saved_sql_mode;
 select cast('+123' as signed);
 ➤ cast(+123 as signed)[-5,64,0]  𝄀
 123
@@ -235,35 +454,50 @@ select cast('  -0x123  ' as signed);
 ➤ cast(  -0x123   as signed)[-5,64,0]  𝄀
 -291
 select cast('+-1' as signed);
-invalid argument cast to int, bad value +-1
+➤ cast(+-1 as signed)[-5,64,0]  𝄀
+0
 select cast('++1' as signed);
-invalid argument cast to int, bad value ++1
+➤ cast(++1 as signed)[-5,64,0]  𝄀
+0
 select cast('--1' as signed);
-invalid argument cast to int, bad value --1
+➤ cast(--1 as signed)[-5,64,0]  𝄀
+0
 select cast('- 1' as signed);
-invalid argument cast to int, bad value - 1
+➤ cast(- 1 as signed)[-5,64,0]  𝄀
+0
 select cast('+ 1' as signed);
-invalid argument cast to int, bad value + 1
+➤ cast(+ 1 as signed)[-5,64,0]  𝄀
+0
 select cast('+' as signed);
-invalid argument cast to int, bad value +
+➤ cast(+ as signed)[-5,64,0]  𝄀
+0
 select cast('-' as signed);
-invalid argument cast to int, bad value -
+➤ cast(- as signed)[-5,64,0]  𝄀
+0
 select cast('0b' as signed);
-invalid argument cast to int, bad value 0b
+➤ cast(0b as signed)[-5,64,0]  𝄀
+0
 select cast('0b102' as signed);
-invalid argument cast to int, bad value 0b102
+➤ cast(0b102 as signed)[-5,64,0]  𝄀
+0
 select cast('0o' as signed);
-invalid argument cast to int, bad value 0o
+➤ cast(0o as signed)[-5,64,0]  𝄀
+0
 select cast('0o18' as signed);
-invalid argument cast to int, bad value 0o18
+➤ cast(0o18 as signed)[-5,64,0]  𝄀
+0
 select cast('0x' as signed);
-invalid argument cast to int, bad value 0x
+➤ cast(0x as signed)[-5,64,0]  𝄀
+0
 select cast('0x12g' as signed);
-invalid argument cast to int, bad value 0x12g
+➤ cast(0x12g as signed)[-5,64,0]  𝄀
+0
 select cast('x123' as signed);
-invalid argument cast to int, bad value x123
+➤ cast(x123 as signed)[-5,64,0]  𝄀
+0
 select cast('abc' as signed);
-invalid argument cast to int, bad value abc
+➤ cast(abc as signed)[-5,64,0]  𝄀
+0
 select cast('1a' as signed);
 ➤ cast(1a as signed)[-5,64,0]  𝄀
 1
@@ -299,7 +533,7 @@ select cast(-5 as unsigned) -1, cast(-5 as unsigned) + 1;
 ➤ cast(-5 as unsigned) - 1[3,38,0]  ¦  cast(-5 as unsigned) + 1[3,38,0]  𝄀
 18446744073709551610  ¦  18446744073709551612
 select cast(5 as unsigned) -6.0;
-➤ cast(5 as unsigned) - 6.0[3,38,1]  𝄀
+➤ cast(5 as unsigned) - 6.0[3,22,1]  𝄀
 -1.0
 select cast(NULL as signed);
 ➤ cast(null as signed)[-5,64,0]  𝄀
@@ -371,7 +605,7 @@ select 1.0 * (_binary X'312E35' | X'312E35');
 ➤ 1.0 * (0x312E35 | 0x312E35)[8,53,1]  𝄀
 1.5
 select 1.0 * (X'312E35' | X'312E35');
-➤ 1.0 * (0x312E35 | 0x312E35)[3,38,1]  𝄀
+➤ 1.0 * (0x312E35 | 0x312E35)[3,22,1]  𝄀
 3223093.0
 select (_binary X'31' | NULL) + 0;
 ➤ (0x31 | null) + 0[-5,64,0]  𝄀
@@ -392,11 +626,16 @@ select cast('-10a' as signed integer);
 ➤ cast(-10a as integer)[-5,64,0]  𝄀
 -10
 select cast('a10' as unsigned integer);
-invalid argument cast to uint64, bad value a10
+➤ cast(a10 as integer unsigned)[-5,64,0]  𝄀
+0
 select 10+'a';
 invalid argument cast to int, bad value a
 select 10.0+cast('a' as decimal(38,0));
-invalid input: "a" is invalid decimal string
+➤ 10.0 + cast(a as decimal(38))[3,40,1]  𝄀
+10.0
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1292  ¦  Truncated incorrect DECIMAL value: 'a'
 select 10E+0+'a';
 ➤ 10e+0 + a[8,54,0]  𝄀
 10.0
@@ -413,12 +652,14 @@ select cast('-1' as unsigned);
 ➤ cast(-1 as unsigned)[-5,64,0]  𝄀
 18446744073709551615
 select cast('abc' as signed);
-invalid argument cast to int, bad value abc
+➤ cast(abc as signed)[-5,64,0]  𝄀
+0
 select cast('1a' as signed);
 ➤ cast(1a as signed)[-5,64,0]  𝄀
 1
 select cast('' as signed);
-invalid argument cast to int, bad value 
+➤ cast( as signed)[-5,64,0]  𝄀
+0
 select cast("2001-1-1" as date) = "2001-01-01";
 ➤ cast(2001-1-1 as date) = 2001-01-01[-7,1,0]  𝄀
 1
@@ -550,18 +791,22 @@ SELECT CAST(1/3 AS FLOAT) as float_col,CAST(1/3 AS DOUBLE) as double_col, CAST(1
 SELECT CAST(DATE'2000-01-01' AS FLOAT), CAST(DATE'2000-01-01' AS DOUBLE);
 invalid argument operator cast, bad value [DATE FLOAT]
 SELECT CAST(TIMESTAMP'2000-01-01 23:59:59' AS FLOAT), CAST(TIMESTAMP'2000-01-01 23:59:59' AS DOUBLE);
-invalid argument operator cast, bad value [TIMESTAMP FLOAT]
+invalid argument operator cast, bad value [DATETIME FLOAT]
 SELECT CAST(TIMESTAMP'2000-01-01 23:59:59.123456' AS FLOAT), CAST(TIMESTAMP'2000-01-01 23:59:59.123456' AS DOUBLE);
-invalid argument operator cast, bad value [TIMESTAMP FLOAT]
+invalid argument operator cast, bad value [DATETIME FLOAT]
 SELECT CAST(NULL AS REAL), CAST(NULL AS FLOAT), CAST(NULL AS DOUBLE);
 ➤ cast(null as real)[8,54,0]  ¦  cast(null as float)[7,24,0]  ¦  cast(null as double)[8,54,0]  𝄀
 null  ¦  null  ¦  null
 CREATE TABLE t (col_datetime datetime, col_date date, col_char char);
 insert into t values ('2013-03-15 18:35:20', '2013-03-15','L'),('2003-01-10 00:00:23', '2003-01-10', NULL);
 SELECT CAST(col_char AS DATETIME) FROM t;
-invalid input: invalid datetime value L
+➤ cast(col_char as datetime)[93,19,0]  𝄀
+null  𝄀
+null
 SELECT col_char <> col_datetime FROM t;
-invalid input: invalid datetime value L
+➤ col_char != col_datetime[-7,1,0]  𝄀
+null  𝄀
+null
 SELECT CAST(col_char AS DATE) FROM t;
 ➤ cast(col_char as date)[91,64,0]  𝄀
 null  𝄀
@@ -577,7 +822,8 @@ INSERT INTO `BB` VALUES ('X');
 INSERT INTO `CC` VALUES (1,'2027-03-17 00:10:00'), (2,'2004-11-14 12:46:43');
 SELECT COUNT(table1.pk) FROM `CC` table1 JOIN `BB` table3 JOIN `CC` table2
 WHERE (table3.col_char_key < table2.col_datetime_key);
-invalid input: invalid datetime value X
+➤ COUNT(table1.pk)[-5,64,0]  𝄀
+0
 DROP TABLE `BB`;
 DROP TABLE `CC`;
 create table t1(f1 date, f2 timestamp, f3 datetime);
@@ -702,3 +948,85 @@ hex(_binary X'F0' | _binary X'0F'),
 hex(_binary X'FF' ^ _binary X'0F');
 ➤ hex(0xFF & 0x0F)[12,-1,0]  ¦  hex(0xF0 | 0x0F)[12,-1,0]  ¦  hex(0xFF ^ 0x0F)[12,-1,0]  𝄀
 0F  ¦  FF  ¦  F0
+select cast('' as decimal(10,2));
+➤ cast( as decimal(10, 2))[3,10,2]  𝄀
+0.00
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1292  ¦  Truncated incorrect DECIMAL value: ''
+select cast('   ' as decimal(10,2));
+➤ cast(    as decimal(10, 2))[3,10,2]  𝄀
+0.00
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1292  ¦  Truncated incorrect DECIMAL value: '   '
+select cast('  -123x' as decimal(10,2));
+➤ cast(  -123x as decimal(10, 2))[3,10,2]  𝄀
+-123.00
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1292  ¦  Truncated incorrect DECIMAL value: '  -123x'
+select cast('756e' as decimal(10,2));
+➤ cast(756e as decimal(10, 2))[3,10,2]  𝄀
+756.00
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1292  ¦  Truncated incorrect DECIMAL value: '756e'
+select cast('abc' as decimal(10,2));
+➤ cast(abc as decimal(10, 2))[3,10,2]  𝄀
+0.00
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1292  ¦  Truncated incorrect DECIMAL value: 'abc'
+select cast(cast('abc' as binary) as decimal(10,2));
+➤ cast(cast(abc as binary) as decimal(10, 2))[3,10,2]  𝄀
+0.00
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1292  ¦  Truncated incorrect DECIMAL value: 'abc'
+select cast('0x2e' as decimal(10,2));
+➤ cast(0x2e as decimal(10, 2))[3,10,2]  𝄀
+46.00
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]
+select cast(null as decimal(10,2));
+➤ cast(null as decimal(10, 2))[3,10,2]  𝄀
+NULL
+set session sql_mode = 'STRICT_TRANS_TABLES';
+select cast('abc' as decimal(10,2));
+➤ cast(abc as decimal(10, 2))[3,10,2]  𝄀
+0.00
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1292  ¦  Truncated incorrect DECIMAL value: 'abc'
+set session sql_mode = @@global.sql_mode;
+
+drop database if exists dml_cast_guard;
+create database dml_cast_guard;
+use dml_cast_guard;
+create table own(id int primary key, v decimal(10,2));
+insert into own values (1, 42.42);
+set session sql_mode = 'STRICT_TRANS_TABLES';
+insert into own values (2, cast('abc' as decimal(10,2)));
+invalid input: "abc" is invalid decimal string
+insert into own select 3, cast('abc' as decimal(10,2));
+invalid input: "abc" is invalid decimal string
+update own set v = cast('abc' as decimal(10,2)) where id = 1;
+invalid input: "abc" is invalid decimal string
+select id, v from own order by id;
+➤ id[4,32,0]  ¦  v[3,10,2]  𝄀
+1  ¦  42.42
+insert ignore into own values (4, cast('abc' as decimal(10,2)));
+select id, v from own order by id;
+➤ id[4,32,0]  ¦  v[3,10,2]  𝄀
+1  ¦  42.42  𝄀
+4  ¦  0.00
+set session sql_mode = '';
+insert into own values (5, cast('abc' as decimal(10,2)));
+select id, v from own order by id;
+➤ id[4,32,0]  ¦  v[3,10,2]  𝄀
+1  ¦  42.42  𝄀
+4  ¦  0.00  𝄀
+5  ¦  0.00
+set session sql_mode = @@global.sql_mode;
+drop database dml_cast_guard;

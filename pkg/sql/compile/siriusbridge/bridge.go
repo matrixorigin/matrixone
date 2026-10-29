@@ -82,7 +82,6 @@ type Request struct {
 	Columns   []Column
 	Reads     []Read
 	Deadline  time.Time
-	Release   func(context.Context) error
 }
 
 type Vector struct {
@@ -222,22 +221,6 @@ func (l *InputLease) Release() error {
 	return err
 }
 
-// Push synchronously copies into a capacity-reserved native allocation. The
-// producer may reuse its Go buffers when Push returns. Production MO readers
-// acquire before materializing payload and do not use this compatibility API.
-func (i *Input) Push(ctx context.Context, rows uint32, vectors []Vector) (err error) {
-	total, err := vectorPayloadBytes(vectors)
-	if err != nil {
-		return err
-	}
-	lease, err := i.Acquire(ctx, total)
-	if err != nil {
-		return err
-	}
-	defer func() { err = errors.Join(err, lease.Release()) }()
-	return lease.Publish(ctx, rows, vectors)
-}
-
 func vectorPayloadBytes(vectors []Vector) (uint64, error) {
 	if len(vectors) == 0 {
 		return 0, moerr.NewInvalidInputNoCtx("empty Sirius input schema")
@@ -257,6 +240,7 @@ func vectorPayloadBytes(vectors []Vector) (uint64, error) {
 type Runtime struct {
 	mu             sync.Mutex
 	native         driver
+	capabilities   uint64 // Immutable after New publishes the runtime.
 	closing        bool
 	queries        map[*Query]struct{}
 	inflight       int
@@ -268,6 +252,15 @@ type Runtime struct {
 	closeDone      chan struct{}
 	maxQueries     int
 	cleanupTimeout time.Duration
+}
+
+// Capabilities returns the native ABI snapshot taken before runtime publication.
+// Query admission never polls or mutates process-global native capabilities.
+func (r *Runtime) Capabilities() uint64 {
+	if r == nil {
+		return 0
+	}
+	return r.capabilities
 }
 
 func newRuntime(d driver) *Runtime {
@@ -361,57 +354,22 @@ func (r *Runtime) finishInflightLocked() {
 	}
 }
 
-func (r *Runtime) releaseBeforeNative(ctx context.Context, release func(context.Context) error) error {
-	if release == nil {
-		return nil
-	}
-	cleanupCtx, cancel := context.WithTimeoutCause(context.WithoutCancel(ctx), r.cleanupTimeout,
-		moerr.NewInternalErrorNoCtx("timed out cleaning up Sirius preparation"))
-	defer cancel()
-	return callCleanup("release callback", func() error { return release(cleanupCtx) })
-}
-
-func (r *Runtime) retainFailedReleaseLocked(release func(context.Context) error) {
-	q := &Query{runtime: r, release: release, closing: true, idle: make(chan struct{})}
-	close(q.idle)
-	r.queries[q] = struct{}{}
-}
-
-func (r *Runtime) finishPreNative(ctx context.Context, req Request, resultErr error) error {
-	releaseErr := r.releaseBeforeNative(ctx, req.Release)
+func (r *Runtime) finishPreNative(resultErr error) error {
 	r.mu.Lock()
-	if releaseErr != nil {
-		r.retainFailedReleaseLocked(req.Release)
-		r.closing = true
-	}
 	r.finishInflightLocked()
 	r.mu.Unlock()
-	if releaseErr != nil {
-		r.seal(context.Background())
-	}
-	return errors.Join(resultErr, releaseErr)
+	return resultErr
 }
 
 // Prepare claims ownership before inspecting caller-controlled state. Close can
 // therefore wait for every call admitted before its seal, including validation
-// failures whose Release callback is still running. The native wait queue is
+// and native preparation. The native wait queue is
 // bounded and readers are not started here.
 func (r *Runtime) Prepare(ctx context.Context, req Request) (*Query, error) {
 	r.mu.Lock()
 	if r.closing || r.native == nil {
-		// The closing check is this call's admission linearization point. A
-		// Close already beyond it need not wait for this post-seal request, but
-		// Prepare still owns Release by contract: retain a failed callback so a
-		// future Close can retry it even after the engine handle is gone.
 		r.mu.Unlock()
-		var err error = moerr.NewInvalidStateNoCtx("Sirius runtime is closing")
-		releaseErr := r.releaseBeforeNative(ctx, req.Release)
-		if releaseErr != nil {
-			r.mu.Lock()
-			r.retainFailedReleaseLocked(req.Release)
-			r.mu.Unlock()
-		}
-		return nil, errors.Join(err, releaseErr)
+		return nil, moerr.NewInvalidStateNoCtx("Sirius runtime is closing")
 	}
 	if r.inflight == 0 {
 		r.inflightDone = make(chan struct{})
@@ -425,22 +383,22 @@ func (r *Runtime) Prepare(ctx context.Context, req Request) (*Query, error) {
 	ctx, cancelDeadline := context.WithDeadlineCause(ctx, req.Deadline, moerr.NewInternalErrorNoCtx("Sirius query deadline exceeded"))
 	defer cancelDeadline()
 	if err := ctx.Err(); err != nil {
-		return nil, r.finishPreNative(ctx, req, err)
+		return nil, r.finishPreNative(err)
 	}
 	if overCapacity {
-		return nil, r.finishPreNative(ctx, req, moerr.NewInvalidStateNoCtx("Sirius query capacity reached"))
+		return nil, r.finishPreNative(moerr.NewInvalidStateNoCtx("Sirius query capacity reached"))
 	}
 	if err := validateRequest(req); err != nil {
-		return nil, r.finishPreNative(ctx, req, err)
+		return nil, r.finishPreNative(err)
 	}
 	native, err := callPrepare(d, ctx, req)
 	if native == nil && err == nil {
 		err = moerr.NewInternalErrorNoCtx("Sirius native preparation returned no query")
 	}
-	q := &Query{runtime: r, native: native, reads: producerReads(req.Reads), idle: make(chan struct{}), release: req.Release, deadline: req.Deadline}
+	q := &Query{runtime: r, native: native, reads: producerReads(req.Reads), idle: make(chan struct{}), deadline: req.Deadline}
 	close(q.idle)
 	r.mu.Lock()
-	if native != nil || req.Release != nil {
+	if native != nil {
 		r.queries[q] = struct{}{}
 	}
 	r.finishInflightLocked()
@@ -450,7 +408,7 @@ func (r *Runtime) Prepare(ctx context.Context, req Request) (*Query, error) {
 		err = moerr.NewInvalidStateNoCtx("Sirius runtime is closing")
 	}
 	if err != nil {
-		if native != nil || req.Release != nil {
+		if native != nil {
 			err = errors.Join(err, r.cleanupPreparation(ctx, q))
 		}
 		return nil, err
@@ -587,7 +545,6 @@ type Query struct {
 	idle             chan struct{}
 	cleanupRunning   bool
 	cleanupDone      chan struct{}
-	release          func(context.Context) error
 	deadline         time.Time
 }
 
@@ -725,7 +682,7 @@ func (q *Query) Close(ctx context.Context) (resultErr error) {
 	for {
 		q.mu.Lock()
 		q.closing = true
-		if q.native == nil && q.release == nil {
+		if q.native == nil {
 			q.mu.Unlock()
 			q.runtime.mu.Lock()
 			delete(q.runtime.queries, q)
@@ -753,7 +710,7 @@ func (q *Query) Close(ctx context.Context) (resultErr error) {
 
 		err := q.closeAttempt(ctx, native, idle)
 		q.mu.Lock()
-		closed := q.native == nil && q.release == nil
+		closed := q.native == nil
 		q.cleanupRunning = false
 		close(done)
 		q.mu.Unlock()
@@ -766,7 +723,7 @@ func (q *Query) Close(ctx context.Context) (resultErr error) {
 	}
 }
 
-// closeAttempt owns cancel, the Run join, native destruction, and read release.
+// closeAttempt owns cancel, the Run join, and native destruction.
 // It never holds q.mu across a native call or join. Even an interrupted attempt
 // returns to Close's common completion path, which wakes retrying competitors.
 func (q *Query) closeAttempt(ctx context.Context, native queryDriver, idle <-chan struct{}) error {
@@ -790,19 +747,6 @@ func (q *Query) closeAttempt(ctx context.Context, native queryDriver, idle <-cha
 		if closeErr == nil {
 			q.mu.Lock()
 			q.native = nil
-			q.mu.Unlock()
-		}
-	}
-	q.mu.Lock()
-	release := q.release
-	canRelease := q.native == nil
-	q.mu.Unlock()
-	if canRelease && release != nil {
-		releaseErr := callCleanup("release callback", func() error { return release(ctx) })
-		err = errors.Join(err, releaseErr)
-		if releaseErr == nil {
-			q.mu.Lock()
-			q.release = nil
 			q.mu.Unlock()
 		}
 	}

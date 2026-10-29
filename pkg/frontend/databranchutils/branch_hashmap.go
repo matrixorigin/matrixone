@@ -941,6 +941,24 @@ func (bh *branchHashmap) ForEachShardParallel(fn func(cursor ShardCursor) error,
 		parallelism = shardCount
 	}
 
+	// A serial caller may apply writes inline. Stop at the first error instead
+	// of starting later shards after the transaction's failure is known.
+	if parallelism == 1 {
+		for _, shard := range bh.shards {
+			if shard == nil {
+				continue
+			}
+			if err := func() error {
+				shard.beginIteration()
+				defer shard.endIteration()
+				return fn(&shardCursor{shard: shard})
+			}(); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
 	pool, err := ants.NewPool(parallelism)
 	if err != nil {
 		return err
@@ -2504,7 +2522,6 @@ type spillStats struct {
 	spilledEntries      uint64
 	spilledPayloadBytes uint64
 	spilledBytes        uint64
-	segmentsCreated     uint64
 
 	bucketScans       uint64
 	bucketScanBytes   uint64
@@ -2839,7 +2856,6 @@ func (ss *spillStore) createSegment(bucket *spillBucket, bucketID uint32) (*spil
 	}
 	seg := &spillSegment{path: path}
 	bucket.segments = append(bucket.segments, seg)
-	ss.stats.segmentsCreated++
 	return seg, file, bufio.NewWriter(file), nil
 }
 

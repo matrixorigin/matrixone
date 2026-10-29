@@ -130,6 +130,12 @@ func TestNew_MyErrorCode(t *testing.T) {
 	require.Equal(t, MySQLDefaultSqlState, err.SqlState())
 	require.Equal(t, "Cannot convert string 'A\\xffB' from binary to utf8mb4", err.Error())
 
+	err = NewTooBigFieldLength(context.TODO(), "v", 16383)
+	require.Equal(t, ErrTooBigFieldLength, err.ErrorCode())
+	require.Equal(t, ER_TOO_BIG_FIELDLENGTH, err.MySQLCode())
+	require.Equal(t, "42000", err.SqlState())
+	require.Equal(t, "Column length too big for column 'v' (max = 16383); use BLOB or TEXT instead", err.Error())
+
 	err = NewPreparedParamOutOfRange(context.TODO(), "unsigned integer", "EXECUTE")
 	require.Equal(t, ErrPreparedParamOutOfRange, err.ErrorCode())
 	require.Equal(t, ER_DATA_OUT_OF_RANGE, err.MySQLCode())
@@ -144,6 +150,53 @@ func TestNew_MyErrorCode(t *testing.T) {
 		"Unknown prepared statement handler (stmt1) given to DEALLOCATE PREPARE",
 		err.Error(),
 	)
+
+	err = NewNeedReprepare(context.TODO())
+	require.Equal(t, ErrNeedReprepare, err.ErrorCode())
+	require.Equal(t, ER_NEED_REPREPARE, err.MySQLCode())
+	require.Equal(t, MySQLDefaultSqlState, err.SqlState())
+	require.Equal(t, "Prepared statement needs to be re-prepared", err.Error())
+}
+
+func TestCollationErrorCodeContracts(t *testing.T) {
+	ctx := context.Background()
+	for _, tc := range []struct {
+		err     *Error
+		code    uint16
+		mysql   uint16
+		state   string
+		message string
+	}{
+		{NewIllegalMixOfCollations(ctx, "utf8mb4_bin", "EXPLICIT", "utf8mb4_unicode_ci", "EXPLICIT", "="),
+			20338, ER_CANT_AGGREGATE_2COLLATIONS, MySQLDefaultSqlState,
+			"Illegal mix of collations (utf8mb4_bin,EXPLICIT) and (utf8mb4_unicode_ci,EXPLICIT) for operation '='"},
+		{NewUnknownCollation(ctx, "no_such_collation"), 20339, ER_UNKNOWN_COLLATION, MySQLDefaultSqlState,
+			"Unknown collation: 'no_such_collation'"},
+		{NewCollationCharsetMismatch(ctx, "utf8mb4_general_ci", "binary"), 20341, ER_COLLATION_CHARSET_MISMATCH, "42000",
+			"COLLATION 'utf8mb4_general_ci' is not valid for CHARACTER SET 'binary'"},
+	} {
+		t.Run(tc.message, func(t *testing.T) {
+			require.Equal(t, tc.code, tc.err.ErrorCode())
+			require.NotEqual(t, ErrInvalidJSONPathWildcard, tc.err.ErrorCode())
+			require.Equal(t, tc.mysql, tc.err.MySQLCode())
+			require.Equal(t, tc.state, tc.err.SqlState())
+			require.Equal(t, tc.message, tc.err.Error())
+			data, err := tc.err.MarshalBinary()
+			require.NoError(t, err)
+			decoded := new(Error)
+			require.NoError(t, decoded.UnmarshalBinary(data))
+			require.Equal(t, tc.err, decoded)
+		})
+	}
+}
+
+// TestFKRowIsReferencedMySQLError pins the client-visible wire pairing for
+// parent-side FK rejections (issue #31453): MySQL 8.0 reports errno 1451
+// (ER_ROW_IS_REFERENCED_2) with SQLSTATE 23000 for parent DELETE/UPDATE blocks.
+func TestFKRowIsReferencedMySQLError(t *testing.T) {
+	err := NewErrFKRowIsReferenced(context.Background())
+	require.Equal(t, ErrFKRowIsReferenced, err.ErrorCode())
+	require.Equal(t, ER_ROW_IS_REFERENCED_2, err.MySQLCode())
 }
 
 func TestWrongArgumentsMySQLError(t *testing.T) {
@@ -152,6 +205,14 @@ func TestWrongArgumentsMySQLError(t *testing.T) {
 	require.Equal(t, ER_WRONG_ARGUMENTS, err.MySQLCode())
 	require.Equal(t, MySQLDefaultSqlState, err.SqlState())
 	require.Equal(t, "Incorrect arguments to nth_value", err.Error())
+}
+
+func TestSPRecursionLimitMySQLError(t *testing.T) {
+	err := NewSPRecursionLimit(context.Background(), 1, "self_rec")
+	require.Equal(t, ErrSPRecursionLimit, err.ErrorCode())
+	require.Equal(t, uint16(1456), err.MySQLCode())
+	require.Equal(t, "HY000", err.SqlState())
+	require.Equal(t, "Recursive limit 1 (as set by the max_sp_recursion_depth variable) was exceeded for routine self_rec", err.Error())
 }
 
 func TestWindowInvalidUseMySQLError(t *testing.T) {
@@ -170,12 +231,55 @@ func TestInvalidGroupFuncUseMySQLError(t *testing.T) {
 	require.Equal(t, "Invalid use of group function", err.Error())
 }
 
+func TestNewInvalidJSONPathWildcard(t *testing.T) {
+	err := NewInvalidJSONPathWildcard(context.Background())
+	// The digest prerequisite reserves 20338 and 20339 on its own branch.
+	require.Equal(t, uint16(20340), err.ErrorCode())
+	require.Equal(t, ErrInvalidJSONPathWildcard, err.ErrorCode())
+	require.Equal(t, ER_INVALID_JSON_PATH_WILDCARD, err.MySQLCode())
+	require.Equal(t, "42000", err.SqlState())
+	require.Equal(t,
+		"In this situation, path expressions may not contain the * and ** tokens or an array range.",
+		err.Error())
+
+	data, marshalErr := err.MarshalBinary()
+	require.NoError(t, marshalErr)
+	decoded := new(Error)
+	require.NoError(t, decoded.UnmarshalBinary(data))
+	require.Equal(t, err, decoded)
+}
+
 func TestViewSelectTmpTableMySQLError(t *testing.T) {
 	err := NewViewSelectTmpTable(context.Background(), "temp_for_view")
 	require.Equal(t, ErrViewSelectTmpTable, err.ErrorCode())
 	require.Equal(t, ER_VIEW_SELECT_TMPTABLE, err.MySQLCode())
 	require.Equal(t, MySQLDefaultSqlState, err.SqlState())
 	require.Equal(t, "View's SELECT refers to a temporary table 'temp_for_view'", err.Error())
+}
+
+func TestDeadLockDetectedMySQLError(t *testing.T) {
+	for name, err := range map[string]*Error{
+		"context":    NewDeadLockDetected(context.Background()),
+		"no context": NewDeadLockDetectedNoCtx(),
+	} {
+		t.Run(name, func(t *testing.T) {
+			check := func(err *Error) {
+				t.Helper()
+				require.Equal(t, ErrDeadLockDetected, err.ErrorCode())
+				require.Equal(t, uint16(1213), err.MySQLCode())
+				require.Equal(t, "40001", err.SqlState())
+				require.Equal(t, "deadlock detected", err.Error())
+				require.True(t, IsMoErrCode(err, ErrDeadLockDetected))
+				require.True(t, MustRollbackTxn(err))
+			}
+			check(err)
+			data, encodeErr := err.MarshalBinary()
+			require.NoError(t, encodeErr)
+			var decoded Error
+			require.NoError(t, decoded.UnmarshalBinary(data))
+			check(&decoded)
+		})
+	}
 }
 
 func TestLockWaitTimeoutMySQLError(t *testing.T) {

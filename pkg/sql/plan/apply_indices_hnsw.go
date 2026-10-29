@@ -15,14 +15,13 @@
 package plan
 
 import (
-	"fmt"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	hnswplan "github.com/matrixorigin/matrixone/pkg/vectorindex/hnsw/plugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 )
@@ -31,6 +30,7 @@ type hnswIndexContext struct {
 	vecCtx       *vectorSortContext
 	metaDef      *plan.IndexDef
 	idxDef       *plan.IndexDef
+	dictDef      *plan.IndexDef
 	vecLitArg    *plan.Expr
 	origFuncName string
 	partPos      int32
@@ -38,13 +38,6 @@ type hnswIndexContext struct {
 	pkType       plan.Type
 	params       string
 	nThread      int64
-}
-
-func buildHnswTableFuncArgs(tblCfgStr string, vecLitArg *plan.Expr) []*plan.Expr {
-	return []*plan.Expr{
-		makePlan2StringConstExprWithType(tblCfgStr),
-		DeepCopyExpr(vecLitArg),
-	}
 }
 
 func (builder *QueryBuilder) prepareHnswIndexContext(vecCtx *vectorSortContext, multiTableIndex *MultiTableIndex) (*hnswIndexContext, error) {
@@ -58,10 +51,17 @@ func (builder *QueryBuilder) prepareHnswIndexContext(vecCtx *vectorSortContext, 
 	// RankOption.Mode controls vector index behavior:
 	// - "force": Disable vector index, force full table scan (for debugging/comparison)
 	// - nil/other: Enable vector index with default behavior
+	//
+	// WARNING: TOXIC. Do not fall back to a full table scan, or widen the search, when the
+	// async index lags the source. Decision (#30987, @cpegeric, 2026-10-24): the search
+	// returns the candidates found in the usearch index, joined to the source table by primary
+	// key; only mode=force scans the table. Accepted consequence, for uncommitted writes of
+	// this transaction and for commits ISCP has not applied: rows not in the index are not
+	// returned, rows deleted from the source are dropped by the join (fewer than LIMIT rows),
+	// and rows whose vector changed are ranked and returned with the indexed vector's distance.
 	if vecCtx.rankOption != nil && vecCtx.rankOption.Mode == "force" {
 		return nil, nil
 	}
-
 	rewriteAllowed, err := builder.validateVectorIndexSortRewrite(vecCtx)
 	if err != nil || !rewriteAllowed {
 		return nil, err
@@ -113,26 +113,96 @@ func (builder *QueryBuilder) prepareHnswIndexContext(vecCtx *vectorSortContext, 
 	pkPos := vecCtx.scanNode.TableDef.Name2ColIndex[vecCtx.scanNode.TableDef.Pkey.PkeyColName]
 	pkType := vecCtx.scanNode.TableDef.Cols[pkPos].Typ
 
-	nThread, err := builder.compCtx.ResolveVariable("hnsw_threads_search", true, false)
+	nThread, err := builder.resolveInt64Variable("hnsw_threads_search", 0)
 	if err != nil {
 		return nil, err
 	}
 
+	// Checked once the index is known to serve the query: another index on the table may.
+	if err := checkVectorSearchMode(builder.GetContext(), vecCtx, catalog.MoIndexHnswAlgo.ToString()); err != nil {
+		return nil, err
+	}
 	return &hnswIndexContext{
 		vecCtx:       vecCtx,
 		metaDef:      metaDef,
 		idxDef:       idxDef,
+		dictDef:      multiTableIndex.IndexDefs[catalog.Hnsw_TblType_Dict],
 		vecLitArg:    vecLitArg,
 		origFuncName: origFuncName,
 		partPos:      partPos,
 		pkPos:        pkPos,
 		pkType:       pkType,
 		params:       idxDef.IndexAlgoParams,
-		nThread:      nThread.(int64),
+		nThread:      nThread,
 	}, nil
 }
 
+// resolveInt64Variable reads an int64 system variable. Some execution
+// contexts (stored procedures, Starlark mo.sql) resolve variables through a
+// background session that can return nil for a variable it does not carry,
+// so a nil value falls back to the variable's default instead of panicking
+// on a type assertion.
+func (builder *QueryBuilder) resolveInt64Variable(name string, def int64) (int64, error) {
+	value, err := builder.compCtx.ResolveVariable(name, true, false)
+	if err != nil {
+		return 0, err
+	}
+	if value == nil {
+		return def, nil
+	}
+	v, ok := value.(int64)
+	if !ok {
+		return 0, moerr.NewInternalErrorNoCtxf("ResolveVariable: %s is not int64 but %T", name, value)
+	}
+	return v, nil
+}
+
+func (builder *QueryBuilder) resolveFloat64Variable(name string, def float64) (float64, error) {
+	value, err := builder.compCtx.ResolveVariable(name, true, false)
+	if err != nil {
+		return 0, err
+	}
+	if value == nil {
+		return def, nil
+	}
+	switch v := value.(type) {
+	case float64:
+		return v, nil
+	case int64:
+		return float64(v), nil
+	default:
+		return 0, moerr.NewInternalErrorNoCtxf("ResolveVariable: %s is not float64 but %T", name, value)
+	}
+}
+
 func (builder *QueryBuilder) applyIndicesForSortUsingHnsw(nodeID int32, vecCtx *vectorSortContext, multiTableIndex *MultiTableIndex, idxColMap map[[2]int32]*plan.Expr) (int32, error) {
+	return builder.applyIndicesForSortUsingHnswWithColRefCnt(nodeID, vecCtx, multiTableIndex, nil, idxColMap)
+}
+
+// hnswUsesPreFilter reports whether the hnsw search of vecCtx is restricted to the keys
+// of a filtered copy of its scan: under a membership join, a fulltext MATCH filter, or
+// mode=pre or mode=iterative with a filter.
+func (builder *QueryBuilder) hnswUsesPreFilter(vecCtx *vectorSortContext) bool {
+	if vecCtx.hasMembership || builder.scanHasMatchedFullTextFilter(vecCtx.scanNode) {
+		return true
+	}
+	mode := vectorRankMode(vecCtx)
+	return (mode == "pre" || mode == "iterative") && len(vecCtx.scanNode.FilterList) > 0
+}
+
+// buildAdaptiveHnswTop builds mode=auto as ADAPTIVE_TOP [post, pre, force]. The pre
+// branch is left out when it would equal post: without a filter, or with a fulltext
+// MATCH filter, under which post already searches the matching keys. A region that is
+// small, not replay-safe or not supported by ADAPTIVE_TOP runs force.
+func (builder *QueryBuilder) buildAdaptiveHnswTop(nodeID int32, vecCtx *vectorSortContext, multiTableIndex *MultiTableIndex, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) (int32, error) {
+	branch := func(root int32, branchCtx *vectorSortContext, branchMap map[[2]int32]*plan.Expr) (int32, error) {
+		return builder.applyIndicesForSortUsingHnswWithColRefCnt(root, branchCtx, multiTableIndex, colRefCnt, branchMap)
+	}
+	withPre := len(vecCtx.scanNode.FilterList) > 0 && !builder.scanHasMatchedFullTextFilter(vecCtx.scanNode)
+	return builder.buildAdaptiveModeTop(nodeID, vecCtx, idxColMap, branch, withPre)
+}
+
+func (builder *QueryBuilder) applyIndicesForSortUsingHnswWithColRefCnt(nodeID int32, vecCtx *vectorSortContext, multiTableIndex *MultiTableIndex, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) (int32, error) {
 
 	if !hasCompleteVectorPagination(vecCtx) || vecCtx.sortNode == nil || vecCtx.scanNode == nil {
 		return nodeID, nil
@@ -148,114 +218,143 @@ func (builder *QueryBuilder) applyIndicesForSortUsingHnsw(nodeID int32, vecCtx *
 	if err != nil || hnswCtx == nil {
 		return nodeID, err
 	}
+	if vectorRankMode(vecCtx) == "auto" {
+		return builder.buildAdaptiveHnswTop(nodeID, vecCtx, multiTableIndex, colRefCnt, idxColMap)
+	}
 
 	// With a residual filter the hnsw search is JOIN-ed against the scan and the
-	// filter drops index candidates, so the search must over-fetch (fetch k' > k)
-	// to still return k rows. The over-fetch is done once at EXECUTE by the TVF
-	// (flag below), for literal AND parameterized limits alike (#26869).
-	postFilterOverFetch := len(scanNode.FilterList) > 0
+	// filter drops index candidates, so execution over-fetches the candidate
+	// budget from k (#26869). A PRE search returns only qualifying keys.
+	usePreFilter := builder.hnswUsesPreFilter(vecCtx)
+	if usePreFilter && (vecCtx.providerNodeID >= 0 || !builder.vectorPreFilterReplaySafe(vecCtx)) {
+		// A per-row query vector runs the search in APPLY, which receives no membership
+		// runtime filter, and a sequence or volatile filter cannot run in both PRE scans:
+		// leave the query to the exact sort.
+		return nodeID, nil
+	}
+	postFilterOverFetch := len(scanNode.FilterList) > 0 && !usePreFilter
 
-	// The TVF must NOT over-fetch again at EXECUTE: node.Limit below already carries
-	// the over-fetched k', for the parameterized case as much as the literal one, so
-	// a second application would compound the factor. The flag stays in the config
-	// for the other algorithms and for older plans that still rely on it.
-	const runtimeOverFetch = false
+	var exactThreshold int64
+	if usePreFilter {
+		if exactThreshold, err = builder.resolveInt64Variable("hnsw_prefilter_exact_threshold", 5000); err != nil {
+			return 0, err
+		}
+	}
+	algoOptions, err := hnswplan.EncodeScanOptions(hnswplan.ScanOptions{
+		ThreadsSearch:           hnswCtx.nThread,
+		Iterative:               usePreFilter && vectorRankMode(vecCtx) == "iterative",
+		PrefilterExactThreshold: exactThreshold,
+	})
+	if err != nil {
+		return 0, err
+	}
 
-	tblCfgStr := fmt.Sprintf(`{"db": "%s", "src": "%s", "metadata":"%s", "index":"%s", "threads_search": %d, "orig_func_name": "%s", "post_filter_overfetch": %t}`,
-		scanNode.ObjRef.SchemaName,
-		scanNode.TableDef.Name,
-		hnswCtx.metaDef.IndexTableName,
-		hnswCtx.idxDef.IndexTableName,
-		hnswCtx.nThread,
-		hnswCtx.origFuncName,
-		runtimeOverFetch)
-
-	// JOIN between source table and hnsw_search table function
+	// JOIN between source table and the hnsw index search
 	tableFuncTag := builder.genNewBindTag()
 	tableFuncNode := &plan.Node{
-		NodeType: plan.Node_FUNCTION_SCAN,
-		Stats:    &plan.Stats{},
+		NodeType: plan.Node_INDEX_SEARCH_SCAN,
+		// The search reads the whole cached index; it is not partitioned, so it
+		// runs in one local scope (IndexSearchScanPartitioned).
+		Stats:  &plan.Stats{},
+		ObjRef: DeepCopyObjectRef(scanNode.ObjRef),
 		TableDef: &plan.TableDef{
-			TableType: "func_table", //test if ok
-			//Name:               tbl.String(),
-			TblFunc: &plan.TableFunction{
-				Name:  hnswplan.HNSWSearchFuncName,
-				Param: []byte(hnswCtx.params),
-			},
-			Cols: DeepCopyColDefList(hnswplan.HNSWSearchColDefs),
+			Name:      scanNode.TableDef.Name,
+			TableType: "vector_index_scan",
+			Cols:      DeepCopyColDefList(hnswplan.HNSWSearchColDefs),
 		},
-		BindingTags:     []int32{tableFuncTag},
-		Children:        vectorSearchProviderChildren(vecCtx),
-		TblFuncExprList: buildHnswTableFuncArgs(tblCfgStr, hnswCtx.vecLitArg),
-		// Named-snapshot read TS for the TVF; DeepCopySnapshot(nil) is nil (#27927).
-		ScanSnapshot: DeepCopySnapshot(vecCtx.scanNode.ScanSnapshot),
+		BindingTags: []int32{tableFuncTag},
+		Children:    vectorSearchProviderChildren(vecCtx),
+		// Named-snapshot read TS; DeepCopySnapshot(nil) is nil (#27927).
+		ScanSnapshot: DeepCopySnapshot(scanNode.ScanSnapshot),
+		IndexSearchScan: &plan.IndexSearchScan{
+			SourceTable:         DeepCopyObjectRef(scanNode.ObjRef),
+			SourceTableDef:      DeepCopyTableDef(scanNode.TableDef, true),
+			ScanSnapshot:        DeepCopySnapshot(scanNode.ScanSnapshot),
+			Index:               DeepCopyIndexDef(hnswCtx.idxDef),
+			QueryPayload:        DeepCopyExpr(hnswCtx.vecLitArg),
+			DistanceFunction:    hnswCtx.origFuncName,
+			Direction:           vecCtx.sortDirection,
+			CandidateLimit:      DeepCopyExpr(limit),
+			PostFilterOverFetch: postFilterOverFetch,
+			AlgoOptions:         algoOptions,
+			HiddenTables: []*plan.IndexHiddenTableRef{
+				{Role: catalog.Hnsw_TblType_Metadata, Object: &plan.ObjectRef{SchemaName: scanNode.ObjRef.SchemaName, ObjName: hnswCtx.metaDef.IndexTableName}},
+				{Role: catalog.Hnsw_TblType_Storage, Object: &plan.ObjectRef{SchemaName: scanNode.ObjRef.SchemaName, ObjName: hnswCtx.idxDef.IndexTableName}},
+			},
+		},
 	}
+	if hnswCtx.dictDef != nil {
+		tableFuncNode.IndexSearchScan.HiddenTables = append(tableFuncNode.IndexSearchScan.HiddenTables,
+			&plan.IndexHiddenTableRef{Role: catalog.Hnsw_TblType_Dict, Object: &plan.ObjectRef{SchemaName: scanNode.ObjRef.SchemaName, ObjName: hnswCtx.dictDef.IndexTableName}})
+	}
+	setIndexSearchScanKnobs(tableFuncNode.IndexSearchScan, vecCtx)
 	tableFuncNodeID := builder.appendNode(tableFuncNode, ctx)
 
-	err = builder.addBinding(tableFuncNodeID, tree.AliasClause{Alias: tree.Identifier("mo_hnsw_alias_0")}, ctx)
+	err = builder.addBinding(tableFuncNodeID, tree.AliasClause{Alias: tree.Identifier(indexSearchAlias(ctx, "mo_hnsw_alias"))}, ctx, "")
 	if err != nil {
 		return 0, err
+	}
+	// A provider row supplies the query vector: run the search per row.
+	candidateNodeID := tableFuncNodeID
+	if len(tableFuncNode.Children) == 1 {
+		providerNodeID := tableFuncNode.Children[0]
+		tableFuncNode.Children = nil
+		candidateNodeID = builder.appendNode(&plan.Node{
+			NodeType:  plan.Node_APPLY,
+			Children:  []int32{providerNodeID, tableFuncNodeID},
+			ApplyType: plan.Node_CROSSAPPLY,
+			Stats:     DeepCopyStats(tableFuncNode.Stats),
+		}, ctx)
 	}
 
-	// The raw candidate limit (k) is carried on IndexReaderParam.Limit; the TVF
-	// takes its budget from there and over-fetches k -> k' at EXECUTE when a
-	// residual filter drops candidates (post_filter_overfetch flag).
-	tableFuncNode.IndexReaderParam = &plan.IndexReaderParam{
-		Limit:          DeepCopyExpr(limit),
-		OrigFuncName:   hnswCtx.origFuncName,
-		OverFetchLimit: overFetchDisplayLimit(limit, postFilterOverFetch, false),
-	}
-	// node.Limit carries the OVER-FETCHED budget k', never the raw k. The #26869
-	// bug was a plan-level top truncating candidates to k before the post-filter
-	// JOIN; truncating at k' instead is exactly the budget the search wants, so the
-	// fix holds while node.Limit stays the channel an old CN can still read.
-	//
-	// This matters because a vector provider child gives the FUNCTION_SCAN a child,
-	// so compileTableFunction attaches the search operator to already-compiled child
-	// scopes that may be Remote: during a rolling upgrade a new coordinator can ship
-	// it to a pre-change CN, whose Prepare reads arg.Limit alone and would default to
-	// one candidate on a nil. Because k' is computed by an expression built from
-	// functions that long predate any CN we can be mixed with, this needs no protocol
-	// capability and no low-version fallback. See BuildOverFetchLimitExpr.
-	overFetchLimit, err := BuildOverFetchLimitExpr(builder.GetContext(), limit, false)
-	if err != nil {
-		return 0, err
-	}
-	if postFilterOverFetch {
-		tableFuncNode.Limit = overFetchLimit
+	var joinNodeID int32
+	if usePreFilter {
+		preJoinID, ok, err := builder.buildVectorPreFilterJoin(vecCtx, vectorPreFilterInput{
+			ctx:             ctx,
+			scanNode:        scanNode,
+			colRefCnt:       colRefCnt,
+			idxColMap:       idxColMap,
+			pkPos:           hnswCtx.pkPos,
+			pkType:          hnswCtx.pkType,
+			tableFuncTag:    tableFuncTag,
+			tableFuncNodeID: tableFuncNodeID,
+			candidateNodeID: candidateNodeID,
+		})
+		if err != nil || !ok {
+			return nodeID, err
+		}
+		joinNodeID = preJoinID
 	} else {
-		tableFuncNode.Limit = DeepCopyExpr(limit)
+		// oncond
+		wherePkEqPk, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{
+			{
+				Typ: hnswCtx.pkType,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: scanNode.BindingTags[0],
+						ColPos: hnswCtx.pkPos, // tbl.pk
+					},
+				},
+			},
+			{
+				Typ: hnswCtx.pkType,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: tableFuncTag, // last idxTbl (may be join) relPos
+						ColPos: 0,            // idxTbl.pk
+					},
+				},
+			},
+		})
+
+		joinNodeID = builder.appendNode(&plan.Node{
+			NodeType: plan.Node_JOIN,
+			Children: []int32{scanNode.NodeId, candidateNodeID},
+			JoinType: plan.Node_INNER,
+			OnList:   []*Expr{wherePkEqPk},
+			// Don't set Limit/Offset on JOIN - they should be applied after SORT
+		}, ctx)
 	}
-
-	// oncond
-	wherePkEqPk, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{
-		{
-			Typ: hnswCtx.pkType,
-			Expr: &plan.Expr_Col{
-				Col: &plan.ColRef{
-					RelPos: scanNode.BindingTags[0],
-					ColPos: hnswCtx.pkPos, // tbl.pk
-				},
-			},
-		},
-		{
-			Typ: hnswCtx.pkType,
-			Expr: &plan.Expr_Col{
-				Col: &plan.ColRef{
-					RelPos: tableFuncTag, // last idxTbl (may be join) relPos
-					ColPos: 0,            // idxTbl.pk
-				},
-			},
-		},
-	})
-
-	joinNodeID := builder.appendNode(&plan.Node{
-		NodeType: plan.Node_JOIN,
-		Children: []int32{scanNode.NodeId, tableFuncNodeID},
-		JoinType: plan.Node_INNER,
-		OnList:   []*Expr{wherePkEqPk},
-		// Don't set Limit/Offset on JOIN - they should be applied after SORT
-	}, ctx)
 
 	// Keep FilterList on scanNode so filters are applied during table scan
 	// Clear Limit/Offset from scanNode since they should be applied after SORT
@@ -328,7 +427,7 @@ func (builder *QueryBuilder) getArgsFromDistFn(distFnExpr *plan.Function, partPo
 	if vecColArg.GetCol() == nil {
 		return
 	}
-	if !rule.IsConstant(vecLitArg, true) {
+	if !function.IsConstant(vecLitArg, true) {
 		return
 	}
 

@@ -43,10 +43,11 @@ type container struct {
 	rbat  *batch.Batch
 	inbat *batch.Batch
 
-	batIdx   int
-	tfFinish bool
-	tfNull   bool
-	sels     []int32
+	batIdx              int
+	tfFinish            bool
+	tfNull              bool
+	preserveSourceBatch bool
+	sels                []int32
 }
 
 type Apply struct {
@@ -56,7 +57,7 @@ type Apply struct {
 	Typs      []types.Type
 
 	TableFunction   *table_function.TableFunction
-	VectorIndexScan *plan.VectorIndexScan
+	IndexSearchScan *plan.IndexSearchScan
 	VectorAttrs     []string
 	// TxnOffset is the statement boundary used by correlated vector scans.
 	// APPLY must preserve it across every provider row and remote generation.
@@ -140,10 +141,6 @@ func (apply *Apply) Free(proc *process.Process, pipelineFailed bool, err error) 
 	} else if apply.TableFunction != nil {
 		apply.TableFunction.Free(proc, pipelineFailed, err)
 	}
-}
-
-func (apply *Apply) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
-	return input, nil
 }
 
 func (ctr *container) cleanBatch(mp *mpool.MPool) {

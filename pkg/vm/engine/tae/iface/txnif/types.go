@@ -19,9 +19,8 @@ import (
 	"io"
 	"sync"
 
-	"github.com/RoaringBitmap/roaring/v2"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -166,19 +165,6 @@ type AsyncTxn interface {
 	TxnChanger
 }
 
-type DeleteChain interface {
-	sync.Locker
-	RLock()
-	RUnlock()
-	RemoveNodeLocked(DeleteNode)
-
-	AddNodeLocked(txn AsyncTxn, deleteType handle.DeleteType) DeleteNode
-	AddMergeNode() DeleteNode
-
-	PrepareRangeDelete(start, end uint32, ts types.TS) error
-	DepthLocked() int
-	CollectDeletesLocked(txn TxnReader, rwlocker *sync.RWMutex) (*nulls.Bitmap, error)
-}
 type BaseNode[T any] interface {
 	Update(o T)
 	CloneData() T
@@ -227,20 +213,6 @@ type AppendNode interface {
 	IsTombstone() bool
 	SetIsMergeCompact()
 	IsMergeCompact() bool
-}
-
-type DeleteNode interface {
-	BaseMVCCNode
-	TxnEntry
-	IsPersistedDeletedNode() bool
-	StringLocked() string
-	GetChain() DeleteChain
-	DeletedRows() []uint32
-	DeletedPK() map[uint32]containers.Vector
-	RangeDeleteLocked(start, end uint32, pk containers.Vector, mp *mpool.MPool)
-	GetCardinalityLocked() uint32
-	GetRowMaskRefLocked() *roaring.Bitmap
-	OnApply() error
 }
 
 type Tracer interface {

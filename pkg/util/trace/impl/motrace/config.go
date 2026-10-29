@@ -19,7 +19,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
@@ -74,7 +73,8 @@ type tracerProviderConfig struct {
 
 	exportInterval time.Duration //  WithExportInterval
 	// longQueryTime unit ns
-	longQueryTime int64 //  WithLongQueryTime
+	longQueryTime               int64 //  WithLongQueryTime
+	compactStatementDiagnostics bool  // immutable after provider initialization
 	// skipRunningStmt
 	skipRunningStmt bool // set by WithSkipRunningStmt
 
@@ -173,6 +173,15 @@ func WithExportInterval(secs int) tracerProviderOption {
 	})
 }
 
+func WithStatementDiagnosticsFormat(format string) tracerProviderOption {
+	return func(cfg *tracerProviderConfig) { cfg.compactStatementDiagnostics = format == "compact-v1" }
+}
+
+// UseCompactStatementDiagnostics follows the immutable provider configuration.
+var UseCompactStatementDiagnostics = func() bool {
+	return GetTracerProvider().compactStatementDiagnostics
+}
+
 func WithLongQueryTime(secs float64) tracerProviderOption {
 	return tracerProviderOption(func(cfg *tracerProviderConfig) {
 		cfg.longQueryTime = int64(float64(time.Second) * secs)
@@ -242,14 +251,6 @@ func WithTCPPacket(count bool) tracerProviderOption {
 func WithMaxLogMessageSize(size int) tracerProviderOption {
 	return func(cfg *tracerProviderConfig) {
 		cfg.MaxLogMessageSize = size
-	}
-}
-
-func WithMaxStatementSize(service string) tracerProviderOption {
-	return func(cfg *tracerProviderConfig) {
-		if s, exist := runtime.ServiceRuntime(service).GetGlobalVariables(MaxStatementSize); exist {
-			cfg.MaxStatementSize = s.(int)
-		}
 	}
 }
 

@@ -534,6 +534,50 @@ func TestIffCheck_PreservesVectorResultTypes(t *testing.T) {
 	}
 }
 
+func TestMediumIntCommonResultTypeIsOrderIndependent(t *testing.T) {
+	medium := types.New(types.T_int32, 24, -1)
+	ordinary := types.New(types.T_int32, 32, -1)
+
+	for _, inputs := range [][]types.Type{
+		{medium, ordinary},
+		{ordinary, medium},
+		{medium, types.T_any.ToType(), ordinary},
+	} {
+		resolved, err := GetFunctionByName(context.Background(), "coalesce", inputs)
+		require.NoError(t, err)
+		require.Equal(t, types.T_int32, resolved.GetReturnType().Oid)
+		require.False(t, resolved.GetReturnType().IsMediumInt())
+		targets, shouldCast := resolved.ShouldDoImplicitTypeCast()
+		require.True(t, shouldCast)
+		require.Len(t, targets, len(inputs))
+		for _, target := range targets {
+			require.Equal(t, types.T_int32, target.Oid)
+			require.Equal(t, int32(32), target.Width)
+		}
+	}
+
+	for _, inputs := range [][]types.Type{
+		{types.T_bool.ToType(), medium, ordinary},
+		{types.T_bool.ToType(), ordinary, medium},
+	} {
+		caseResult := caseCheck(nil, inputs)
+		require.Equal(t, succeedWithCast, caseResult.status)
+		require.Equal(t, int32(32), caseResult.finalType[1].Width)
+		require.Equal(t, int32(32), caseResult.finalType[2].Width)
+
+		ifResult := iffCheck(nil, inputs)
+		require.Equal(t, succeedWithCast, ifResult.status)
+		require.Equal(t, int32(32), ifResult.finalType[1].Width)
+		require.Equal(t, int32(32), ifResult.finalType[2].Width)
+	}
+
+	pure, ok := CommonMediumIntType([]types.Type{medium, types.T_any.ToType(), medium})
+	require.True(t, ok)
+	require.Equal(t, int32(24), pure.Width)
+	_, ok = CommonMediumIntType([]types.Type{medium, types.T_uint32.ToType()})
+	require.False(t, ok, "mixed signedness keeps the existing integer promotion path")
+}
+
 func TestCaseCheckVectorResultTypes(t *testing.T) {
 	vectorTypes := []types.Type{
 		types.New(types.T_array_float32, 3, 0),
@@ -798,13 +842,16 @@ func TestIffConditionTruthyAt(t *testing.T) {
 			".5xyz", "1e2foo", "1eabc", "-0suffix", "   ",
 		}, nil)
 	for row, want := range []bool{
-		false, true, true, true, true, true, false, false,
+		false, true, true, true, false, true, false, false,
 		true, true, true, false, false,
 	} {
 		got, err := IffConditionTruthyAt(stringVec, uint64(row), SQLCompatibilityMySQL)
 		require.NoError(t, err)
 		require.Equal(t, want, got)
 	}
+	got, err := IffConditionTruthyAt(stringVec, 4, SQLCompatibilityMatrixOne)
+	require.NoError(t, err)
+	require.True(t, got, "native mode retains NaN truthiness")
 	for _, row := range []uint64{5, 6, 7, 8, 9, 10, 11, 12} {
 		_, err := IffConditionTruthyAt(stringVec, row, SQLCompatibilityMatrixOne)
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
@@ -1163,6 +1210,10 @@ func TestCoalesceSignedUnsignedIntegerCommonType(t *testing.T) {
 			inputs: []types.Type{types.T_uint32.ToType(), types.T_uint64.ToType(), types.T_int64.ToType()},
 		},
 		{
+			name:   "narrow unsigned and both bigint domains",
+			inputs: []types.Type{types.T_uint8.ToType(), types.T_int64.ToType(), types.T_uint64.ToType()},
+		},
+		{
 			name:   "multiple integers reversed",
 			inputs: []types.Type{types.T_uint64.ToType(), types.T_uint32.ToType(), types.T_int64.ToType()},
 		},
@@ -1186,6 +1237,32 @@ func TestCoalesceSignedUnsignedIntegerCommonType(t *testing.T) {
 	}
 }
 
+func TestCoalesceNarrowUnsignedBigintCommonType(t *testing.T) {
+	for _, unsigned := range []types.T{types.T_uint8, types.T_uint16, types.T_uint32} {
+		for _, inputs := range [][]types.Type{
+			{unsigned.ToType(), types.T_int64.ToType()},
+			{types.T_int64.ToType(), unsigned.ToType()},
+			{types.T_any.ToType(), unsigned.ToType(), types.T_int64.ToType()},
+			{unsigned.ToType(), types.T_any.ToType(), types.T_int64.ToType(), types.T_any.ToType()},
+			{unsigned.ToType(), types.T_int64.ToType(), types.T_uint32.ToType()},
+			{types.T_int64.ToType(), unsigned.ToType(), types.T_uint16.ToType()},
+			{unsigned.ToType(), types.T_uint16.ToType(), types.T_int64.ToType()},
+		} {
+			t.Run(fmt.Sprint(inputs), func(t *testing.T) {
+				resolved, err := GetFunctionByName(context.Background(), "coalesce", inputs)
+				require.NoError(t, err)
+				require.Equal(t, types.T_int64, resolved.GetReturnType().Oid)
+				castTypes, shouldCast := resolved.ShouldDoImplicitTypeCast()
+				require.True(t, shouldCast)
+				require.Len(t, castTypes, len(inputs))
+				for _, typ := range castTypes {
+					require.Equal(t, types.T_int64, typ.Oid)
+				}
+			})
+		}
+	}
+}
+
 func TestCoalesceSignedUnsignedIntegerRequiresDecimalOverload(t *testing.T) {
 	result := coalesceCheck(
 		[]overload{
@@ -1197,6 +1274,17 @@ func TestCoalesceSignedUnsignedIntegerRequiresDecimalOverload(t *testing.T) {
 	require.Equal(t, failedFunctionParametersWrong, result.status)
 }
 
+func TestCoalesceNarrowUnsignedBigintRequiresIntegerOverload(t *testing.T) {
+	result := coalesceCheck(
+		[]overload{
+			{args: []types.T{types.T_float64}},
+			{args: []types.T{types.T_decimal128}},
+		},
+		[]types.Type{types.T_uint8.ToType(), types.T_int64.ToType()},
+	)
+	require.Equal(t, failedFunctionParametersWrong, result.status)
+}
+
 func TestCoalesceSignedUnsignedIntegerRuleScope(t *testing.T) {
 	overloads := []overload{{args: []types.T{types.T_decimal128}}}
 	for _, test := range []struct {
@@ -1204,8 +1292,8 @@ func TestCoalesceSignedUnsignedIntegerRuleScope(t *testing.T) {
 		inputs []types.Type
 	}{
 		{
-			name:   "without uint64",
-			inputs: []types.Type{types.T_int64.ToType(), types.T_uint32.ToType()},
+			name:   "without bigint",
+			inputs: []types.Type{types.T_int32.ToType(), types.T_uint16.ToType()},
 		},
 		{
 			name:   "without signed integer",
@@ -1218,6 +1306,14 @@ func TestCoalesceSignedUnsignedIntegerRuleScope(t *testing.T) {
 		{
 			name:   "non integer branch",
 			inputs: []types.Type{types.T_int64.ToType(), types.T_uint64.ToType(), types.T_float64.ToType()},
+		},
+		{
+			name:   "narrow unsigned with float branch",
+			inputs: []types.Type{types.T_int64.ToType(), types.T_uint8.ToType(), types.T_float64.ToType()},
+		},
+		{
+			name:   "narrow unsigned with decimal branch",
+			inputs: []types.Type{types.T_int64.ToType(), types.T_uint16.ToType(), types.New(types.T_decimal64, 10, 2)},
 		},
 		{
 			name:   "decimal branch",
@@ -1298,6 +1394,35 @@ func TestBinaryStringCommonTypeCapsUTF8MB4Width(t *testing.T) {
 			require.True(t, ok)
 			require.Equal(t, types.T_varbinary, result.Oid)
 			require.Equal(t, test.wantWidth, result.Width)
+		})
+	}
+}
+
+func TestMixedTextBinaryCommonTypeDoesNotNarrowUnknownOrLargeInputs(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		inputs []types.Type
+		oid    types.T
+		width  int32
+		ok     bool
+	}{
+		{"known widths", []types.Type{types.New(types.T_char, 1, 0), types.New(types.T_varbinary, 10, 0)}, types.T_varbinary, 10, true},
+		{"character bytes", []types.Type{types.New(types.T_binary, 1, 0), types.New(types.T_varchar, 3, 0)}, types.T_varbinary, 12, true},
+		{"unknown binary width", []types.Type{types.New(types.T_char, 1, 0), types.New(types.T_binary, 0, 0)}, types.T_blob, types.MaxLongTextLen, true},
+		{"character bytes exceed varbinary", []types.Type{types.New(types.T_varchar, types.MaxVarBinaryLen/utf8.UTFMax+1, 0), types.New(types.T_binary, 1, 0)}, types.T_blob, types.MaxMediumTextLen, true},
+		{"large utf8 value needs medium capacity", []types.Type{types.New(types.T_varchar, 20000, 0), types.New(types.T_binary, 1, 0)}, types.T_blob, types.MaxMediumTextLen, true},
+		{"nested blob remains binary", []types.Type{types.New(types.T_char, 1, 0), types.New(types.T_blob, types.MaxLongTextLen, 0)}, types.T_blob, types.MaxLongTextLen, true},
+		{"text and binary remain materializable", []types.Type{types.New(types.T_text, types.MaxMediumTextLen, 0), types.New(types.T_binary, 1, 0)}, types.T_blob, types.MaxMediumTextLen, true},
+		{"bare null contributes no width", []types.Type{types.T_any.ToType(), types.New(types.T_char, 1, 0), types.New(types.T_varbinary, 10, 0)}, types.T_varbinary, 10, true},
+		{"pure binary uses existing rule", []types.Type{types.New(types.T_binary, 1, 0), types.New(types.T_varbinary, 10, 0)}, 0, 0, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			result, ok := MixedTextBinaryCommonType(tc.inputs)
+			require.Equal(t, tc.ok, ok)
+			if ok {
+				require.Equal(t, tc.oid, result.Oid)
+				require.Equal(t, tc.width, result.Width)
+			}
 		})
 	}
 }
@@ -1768,6 +1893,54 @@ func TestConditionalTextFamilyMarkersStayBounded(t *testing.T) {
 	result := caseCheck(nil, []types.Type{types.T_bool.ToType(), types.T_text.ToType(), medium})
 	require.NotEqual(t, failedFunctionParametersWrong, result.status)
 	require.Zero(t, caseReturnType([]types.Type{types.T_bool.ToType(), types.T_text.ToType(), medium}).Width)
+}
+
+func TestConditionalStringCollationRevisionPreserved(t *testing.T) {
+	native := types.NewWithCharset(
+		types.T_varchar, 64, 0, types.CharsetUTF8MB4UnicodeCI,
+	)
+	// This is the ordinary general-ci literal/branch that is merged with the
+	// native column by the conditional type resolver. Its narrower width also
+	// exercises the result-type widening path.
+	general := types.New(types.T_varchar, 1, 0)
+	wantCharset := types.CharsetUTF8MB4UnicodeCI
+	wantVersion := uint8(types.CollationVersionV1)
+
+	for _, tc := range []struct {
+		name   string
+		result types.Type
+	}{
+		{
+			name:   "common conditional",
+			result: commonConditionalStringType(types.T_varchar.ToType(), []types.Type{native, general}),
+		},
+		{
+			name: "case",
+			result: caseReturnType([]types.Type{
+				types.T_bool.ToType(), native, general,
+			}),
+		},
+		{
+			name:   "if",
+			result: iffReturnType([]types.Type{types.T_bool.ToType(), native, general}),
+		},
+		{
+			name:   "coalesce",
+			result: coalesceStringReturnType(types.T_varchar, []types.Type{native, general}),
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, wantCharset, tc.result.Charset)
+			require.Equal(t, wantVersion, tc.result.CollationVersion)
+		})
+	}
+
+	// An untyped NULL branch must not erase the native identity either.
+	withNull := commonConditionalStringType(
+		types.T_varchar.ToType(), []types.Type{native, types.T_any.ToType()},
+	)
+	require.Equal(t, wantCharset, withNull.Charset)
+	require.Equal(t, wantVersion, withNull.CollationVersion)
 }
 
 func Test_CoalesceCheck_MixedStringNumeric(t *testing.T) {

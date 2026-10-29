@@ -15,81 +15,17 @@
 package substrait
 
 import (
-	"context"
 	"fmt"
-	"os"
-	"path/filepath"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	planbuilder "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/stretchr/testify/require"
-	spb "github.com/substrait-io/substrait-protobuf/go/substraitpb"
-	"google.golang.org/protobuf/proto"
 )
-
-func TestExportCanonicalTPCHPlans(t *testing.T) {
-	mock := planbuilder.NewMockOptimizer(false, newPlanTestProcess(t))
-	// Exact DECIMAL arithmetic and SUM widening make these plans contain
-	// Decimal256 expressions. Substrait decimal is capped at precision 38, so
-	// declining Sirius offload preserves MatrixOne's wider arithmetic semantics.
-	decimal256Plans := map[int]EligibilityReason{
-		1: EligibilityExpression, 3: EligibilityExpression, 5: EligibilityExpression,
-		6: EligibilityType, 7: EligibilityExpression, 8: EligibilityExpression,
-		9: EligibilityExpression, 10: EligibilityExpression, 11: EligibilityType,
-		14: EligibilityExpression, 15: EligibilityExpression, 17: EligibilityExpression,
-		19: EligibilityExpression, 20: EligibilityExpression,
-	}
-	for queryNumber := 1; queryNumber <= 22; queryNumber++ {
-		t.Run(fmt.Sprintf("q%d", queryNumber), func(t *testing.T) {
-			path := filepath.Join("..", "tpch", fmt.Sprintf("q%d.sql", queryNumber))
-			wire, err := os.ReadFile(path)
-			require.NoError(t, err)
-			statements, err := parsers.Parse(context.Background(), dialect.MYSQL, string(wire), 1)
-			require.NoError(t, err)
-			query, err := mock.Optimize(statements[0])
-			require.NoError(t, err)
-
-			// MockOptimizer shares catalog pointers between equivalent scans. One
-			// harmless identity keeps those aliases internally consistent while the
-			// test remains about the logical Substrait coverage, not catalog setup.
-			for _, read := range query.Nodes {
-				if read == nil || read.TableDef == nil || read.ObjRef == nil {
-					continue
-				}
-				read.TableDef.DbId = 7
-				read.TableDef.TblId = 42
-				read.ObjRef.Obj = 42
-			}
-
-			candidate, err := Export(query)
-			if expectedReason, expectedIneligible := decimal256Plans[queryNumber]; expectedIneligible {
-				require.Error(t, err)
-				require.True(t, IsNotEligible(err))
-				reason, ok := NotEligibleReason(err)
-				require.True(t, ok)
-				require.Equal(t, expectedReason, reason)
-				if expectedReason == EligibilityType {
-					require.ErrorContains(t, err, "unsupported type DECIMAL256")
-				}
-				return
-			}
-			require.NoError(t, err)
-			readValues := make(map[int32][]byte, len(candidate.Reads()))
-			for _, read := range candidate.Reads() {
-				readValues[read.NodeID] = []byte{1}
-			}
-			wirePlan, err := candidate.Build(readValues)
-			require.NoError(t, err)
-			require.LessOrEqual(t, len(wirePlan), MaxPlanBytes)
-			plan := new(spb.Plan)
-			require.NoError(t, proto.Unmarshal(wirePlan, plan))
-			require.Len(t, plan.Relations, len(query.Steps))
-			require.Equal(t, query.Headings, plan.Relations[len(plan.Relations)-1].GetRoot().Names)
-		})
-	}
-}
 
 func TestExportExtractSemanticBoundary(t *testing.T) {
 	for _, tc := range []struct {
@@ -99,7 +35,7 @@ func TestExportExtractSemanticBoundary(t *testing.T) {
 		{"extract(year from l_shipdate)", true},
 		{"extract(month from l_shipdate)", true},
 		{"extract(day from l_shipdate)", true},
-		{"extract(quarter from l_shipdate)", true},
+		{"extract(quarter from l_shipdate)", false},
 		{"extract(week from l_shipdate)", false}, // MO mode 0, backend ISO
 		{"extract(year_month from l_shipdate)", false},
 		{"extract(year from l_comment)", false}, // tolerant text vs no overload
@@ -118,7 +54,7 @@ func TestExportExtractSemanticBoundary(t *testing.T) {
 					node.TableDef.DbId, node.TableDef.TblId, node.ObjRef.Obj = 7, 42, 42
 				}
 			}
-			candidate, err := Export(query)
+			candidate, err := ExportEmbeddedMO(query, NewEmbeddedExportProfile(0))
 			if tc.eligible {
 				require.NoError(t, err)
 				require.NotNil(t, candidate)
@@ -129,6 +65,46 @@ func TestExportExtractSemanticBoundary(t *testing.T) {
 				require.True(t, ok)
 				require.Equal(t, EligibilityExpression, reason)
 			}
+			embedded, embeddedErr := ExportEmbeddedMO(query, NewEmbeddedExportProfile(31))
+			if tc.eligible && tc.expression != "extract(quarter from l_shipdate)" {
+				require.NoError(t, embeddedErr)
+				require.NotNil(t, embedded)
+			} else {
+				require.Nil(t, embedded)
+				require.True(t, IsNotEligible(embeddedErr), "%v", embeddedErr)
+			}
 		})
+	}
+}
+
+func TestEmbeddedDATEExtractGuardsZeroDate(t *testing.T) {
+	for _, unit := range []string{"year", "month", "day"} {
+		for _, required := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/%t", unit, required), func(t *testing.T) {
+				args := []*planpb.Expr{
+					{Typ: planpb.Type{Id: int32(types.T_varchar), NotNullable: true}, Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_Sval{Sval: unit}}}},
+					{Typ: planpb.Type{Id: int32(types.T_date), NotNullable: required}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}}},
+				}
+				bound, err := function.GetFunctionByName(t.Context(), "extract", []types.Type{types.T_varchar.ToType(), types.T_date.ToType()})
+				require.NoError(t, err)
+				result := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_int64), NotNullable: function.DeduceNotNullable(bound.GetEncodedOverloadID(), args)}}
+				call := &planpb.Function{Func: &planpb.ObjectRef{ObjName: "extract", Obj: bound.GetEncodedOverloadID()}, Args: args}
+				e := exporter{profile: NewEmbeddedExportProfile(31)}
+				wire, err := e.extractExpr(result, call, []int{1})
+				require.NoError(t, err)
+				guard := wire.GetIfThen()
+				require.NotNil(t, guard)
+				require.Len(t, guard.Ifs, 1)
+				equality := guard.Ifs[0].If.GetScalarFunction()
+				require.Equal(t, e.functions["equal"], equality.FunctionReference)
+				require.Equal(t, types.ZeroDate.DaysSinceUnixEpoch(), equality.Arguments[1].GetValue().GetLiteral().GetDate())
+				require.Equal(t, int64(0), guard.Ifs[0].Then.GetLiteral().GetI64())
+				require.NotNil(t, guard.Else.GetCast().Type.GetI64())
+				component := guard.Else.GetCast().Input.GetCast()
+				require.NotNil(t, component.Type.GetI32())
+				require.Equal(t, e.functions[unit], component.Input.GetScalarFunction().FunctionReference)
+
+			})
+		}
 	}
 }

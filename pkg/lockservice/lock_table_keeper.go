@@ -17,6 +17,7 @@ package lockservice
 import (
 	"cmp"
 	"context"
+	"errors"
 	"math/rand"
 	"slices"
 	"sort"
@@ -55,6 +56,14 @@ type lockTableKeeper struct {
 	keepRemoteLockRefreshOffset uint64
 	keepRemoteLockBindOffsets   map[string]uint64
 	keepRemoteLockPeerScratch   []keepRemoteLockPeerWork
+	// The remote keeper owns this snapshot and its finite eviction worklist.
+	// Idle routes do not participate in remote-lock heartbeats.
+	routeOwnersKnown      bool
+	routeOwners           []string
+	routeOwnerScratch     []string
+	idleRouteScanPending  bool
+	idleRemoteRoutes      []pb.LockTable
+	idleRemoteRouteOffset int
 }
 
 // NewLockTableKeeper create a locktable keeper, an internal timer is started
@@ -111,6 +120,14 @@ func (k *lockTableKeeper) keepLockTableBind(ctx context.Context) {
 
 func (k *lockTableKeeper) keepRemoteLock(ctx context.Context) {
 	defer k.service.logger.InfoAction("keep remote locks task")()
+	defer func() {
+		k.routeOwnersKnown = false
+		k.routeOwners = nil
+		k.routeOwnerScratch = nil
+		k.idleRouteScanPending = false
+		k.idleRemoteRoutes = nil
+		k.idleRemoteRouteOffset = 0
+	}()
 
 	timer := time.NewTimer(jitterKeeperInterval(k.keepRemoteLockInterval))
 	defer timer.Stop()
@@ -201,6 +218,8 @@ func (k *lockTableKeeper) doKeepRemoteLock(
 	ctx context.Context,
 	futures []*morpc.Future,
 	binds []pb.LockTable) ([]*morpc.Future, []pb.LockTable) {
+	k.keepIdleRemoteRoutes(ctx)
+
 	type bindKey struct {
 		group     uint32
 		table     uint64
@@ -404,6 +423,13 @@ func (k *lockTableKeeper) doKeepRemoteLock(
 	}
 	handleResult := func(result keepResult) {
 		if result.err != nil {
+			// Caller cancellation is not evidence that a remote owner failed. Do
+			// not log it or queue one allocator refresh per cancelled request.
+			// Successful responses carrying a newer bind, and explicit bind-change
+			// errors, still take the fencing path.
+			if callerErr := ctx.Err(); callerErr != nil && errors.Is(result.err, callerErr) {
+				return
+			}
 			recordFailure(result.bind, result.err)
 		}
 		if result.refresh {
@@ -469,6 +495,14 @@ func (k *lockTableKeeper) maybeHandleRemoteBindChanged(
 	bind pb.LockTable,
 	invalidateAfterRefresh bool,
 ) {
+	if ctx.Err() != nil {
+		// An ended round cannot refresh from the allocator. Keep the
+		// authoritative fencing side effect for a bind-change response.
+		if invalidateAfterRefresh {
+			k.invalidateRemoteBind(bind)
+		}
+		return
+	}
 	requestAllocator := k.service.allocatorStateSnapshot()
 	newBind, allocator, err := getLockTableBindWithContext(
 		ctx,
@@ -488,6 +522,7 @@ func (k *lockTableKeeper) maybeHandleRemoteBindChanged(
 	}
 	if newBind.Changed(bind) {
 		if err := k.service.handleBindChangedFromAllocator(
+			ctx,
 			"keep-remote-refresh",
 			bind,
 			newBind,

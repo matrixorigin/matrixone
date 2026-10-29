@@ -60,7 +60,11 @@ func TestPreparedIntervalMarkerRebindsInternalDateFunction(t *testing.T) {
 					dateFunction := findPlanFunctionExpr(preparedPlan, name)
 					require.NotNil(t, dateFunction, preparedPlan.String())
 					require.Len(t, dateFunction.GetF().GetArgs(), 3, dateFunction.String())
-					require.NotNil(t, findPlanFunctionExpr(preparedPlan, "to_interval_microsecond"), preparedPlan.String())
+					normalizerName := "to_interval_microsecond"
+					if tc.unit == "second" {
+						normalizerName = "to_calendar_interval"
+					}
+					require.NotNil(t, findPlanFunctionExpr(preparedPlan, normalizerName), preparedPlan.String())
 
 					filled, _, err := FillValuesOfParamsInPlanWithSpecialization(
 						ctx,
@@ -74,7 +78,7 @@ func TestPreparedIntervalMarkerRebindsInternalDateFunction(t *testing.T) {
 					require.Equal(t, int32(types.T_int64), dateFunction.GetF().GetArgs()[1].Typ.Id, dateFunction.String())
 					require.Equal(t, int64(tc.expectedUnit), dateFunction.GetF().GetArgs()[2].GetLit().GetI64Val(), dateFunction.String())
 					if tc.normalized {
-						normalizer := findPlanFunctionExpr(filled, "to_interval_microsecond")
+						normalizer := findPlanFunctionExpr(filled, normalizerName)
 						require.NotNil(t, normalizer, filled.String())
 						if tc.sourceType != 0 {
 							require.Equal(t, int32(tc.sourceType), normalizer.GetF().GetArgs()[0].Typ.Id)
@@ -137,14 +141,17 @@ func TestPreparedTimeIntervalMarkerKeepsNumericSource(t *testing.T) {
 	}
 }
 
-func TestPreparedImplicitTemporalCastTracksNestedFSP(t *testing.T) {
+func TestPreparedUnixTimestampTracksNestedFSP(t *testing.T) {
 	for _, tc := range []struct {
-		name      string
-		sql       string
-		wantScale int32
+		name           string
+		sql            string
+		wantArgName    string
+		wantArgType    types.T
+		wantReturnType types.T
+		wantScale      int32
 	}{
-		{"implicit", "prepare p from select unix_timestamp(from_unixtime(?))", 6},
-		{"explicit", "prepare p from select unix_timestamp(cast(from_unixtime(?) as timestamp(0)))", 0},
+		{"implicit", "prepare p from select unix_timestamp(from_unixtime(?))", "from_unixtime", types.T_datetime, types.T_decimal128, 6},
+		{"explicit", "prepare p from select unix_timestamp(cast(from_unixtime(?) as timestamp(0)))", "cast", types.T_timestamp, types.T_int64, 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			prepared, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, tc.sql)
@@ -155,10 +162,14 @@ func TestPreparedImplicitTemporalCastTracksNestedFSP(t *testing.T) {
 			require.NoError(t, err)
 			outer := findPlanFunctionExpr(filled, "unix_timestamp")
 			require.NotNil(t, outer)
-			cast := outer.GetF().GetArgs()[0]
-			require.Equal(t, "cast", cast.GetF().GetFunc().GetObjName())
-			require.Equal(t, tc.wantScale, cast.GetF().GetArgs()[1].Typ.Scale)
-			require.Equal(t, tc.wantScale, cast.Typ.Scale)
+			require.Equal(t, int32(tc.wantReturnType), outer.Typ.Id)
+			arg := outer.GetF().GetArgs()[0]
+			require.Equal(t, tc.wantArgName, arg.GetF().GetFunc().GetObjName())
+			require.Equal(t, int32(tc.wantArgType), arg.Typ.Id)
+			require.Equal(t, tc.wantScale, arg.Typ.Scale)
+			if tc.wantArgName == "cast" {
+				require.Equal(t, tc.wantScale, arg.GetF().GetArgs()[1].Typ.Scale)
+			}
 			require.True(t, preparedExprContainsParam(findPlanFunctionExpr(original, "from_unixtime")))
 		})
 	}
@@ -325,10 +336,10 @@ func TestScalarNumericColumnPreservesFractionalUnit(t *testing.T) {
 				require.Equal(t, value, args[1], "TIME executor retains nullable typed input")
 				continue
 			}
-			require.Equal(t, int64(types.MicroSecond), args[2].GetLit().GetI64Val(), unit)
+			require.Equal(t, int64(types.Day), args[2].GetLit().GetI64Val(), unit)
 			normalizer := args[1].GetF()
 			require.NotNil(t, normalizer, unit)
-			require.Equal(t, "to_interval_microsecond", normalizer.Func.ObjName, unit)
+			require.Equal(t, "to_calendar_interval", normalizer.Func.ObjName, unit)
 			require.Equal(t, sourceType.Id, normalizer.Args[0].Typ.Id, unit)
 		}
 	}

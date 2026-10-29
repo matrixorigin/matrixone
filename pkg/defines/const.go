@@ -142,8 +142,40 @@ const (
 	MORPCVersion104    int64 = 104 // preserve typed JSON scalar literals across CNs
 	MORPCVersion105    int64 = 105 // instance-bound lock-service drain confirmation
 	MORPCVersion106    int64 = 106 // CDC durable target identity and generation-aware task admission
-	MORPCVersion107    int64 = 107 // JSON aggregate opaque value execution
-	MORPCLatestVersion       = MORPCVersion107
+	MORPCVersion107    int64 = 107 // functional-index metadata and generated-key maintenance
+	MORPCVersion108    int64 = 108 // isolated user-variable NULL regexp history in connection migration
+	MORPCVersion109    int64 = 109 // native Unicode collation identities in persisted information_schema.COLUMNS metadata
+	MORPCVersion110    int64 = 110 // MEDIUMINT assignment bounds for mixed-version CN safety
+	MORPCVersion111    int64 = 111 // IndexSearchScan for every vector and fulltext index, algo_options/algo_exprs
+	MORPCVersion112    int64 = 112 // signed INT WEEK/DAYOFYEAR result vectors
+	MORPCVersion113    int64 = 113 // DOUBLE results for DECIMAL variance/stddev aggregates
+	MORPCVersion114    int64 = 114 // native Unicode UNIQUE key format and duplicate-admission semantics
+	MORPCVersion115    int64 = 115 // type-sensitive calendar DAY and truncating SECOND intervals
+	MORPCVersion116    int64 = 116 // SELECT scalar division warning diagnostics
+	MORPCVersion117    int64 = 117 // versioned collation-aware LEAST/GREATEST ordering
+	MORPCVersion118    int64 = 118 // transactional database defaults and table charset alteration
+	MORPCVersion119    int64 = 119 // coordinator-owned parameterized subquery programs
+	MORPCVersion120    int64 = 120 // current-session KILL authorization and proxy disconnect cleanup
+	MORPCVersion121    int64 = 121 // exact unsigned DECIMAL DIV result domain
+	MORPCVersion122    int64 = 122 // unary TIMESTAMP and dynamic TIME result contracts
+	MORPCVersion123    int64 = 123 // capability-gated nonblocking row-lock admission
+	MORPCVersion124    int64 = 124 // exact fractional TIMESTAMPADD SECOND intervals
+	MORPCVersion125    int64 = 125 // LOAD IGNORE foreign-key row rejection diagnostics
+	MORPCVersion126    int64 = 126 // parser-derived information_schema.VIEWS definitions
+	MORPCVersion127    int64 = 127 // IndexSearchScan internal_topk / max_internal_topk search knobs
+	MORPCVersion128    int64 = 128 // category-preserving mixed JSON/numeric comparisons
+	MORPCVersion129    int64 = 129 // selected JSON ELT and opaque text expression execution
+	MORPCVersion130    int64 = 130 // incomplete temporal string overloads and rejection diagnostics
+	MORPCVersion131    int64 = 131 // exact weighted percentile aggregate remote dispatch
+	MORPCVersion132    int64 = 132 // decimal float rounding and strict textual float conversions
+	MORPCVersion133    int64 = 133 // typed JSON MIN/MAX aggregate comparison
+	MORPCVersion134    int64 = 134 // ordered ODKU result summary and captured session LAST_INSERT_ID baseline
+	// 135 and 136 are not used here: they are claimed by in-flight changes
+	// (matrixorigin/matrixone#31492 and the JSON_SEARCH branch of PR #30833).
+	// JSON aggregate opaque execution takes the next unclaimed number;
+	// renumber on merge if one of those lands first.
+	MORPCVersion137    int64 = 137 // JSON aggregate opaque value execution
+	MORPCLatestVersion       = MORPCVersion137
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by

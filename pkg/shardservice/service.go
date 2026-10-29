@@ -88,6 +88,9 @@ type service struct {
 		server  morpc.MethodBasedServer[*pb.Request, *pb.Response]
 	}
 
+	closeOnce sync.Once
+	closeErr  error
+
 	atomic struct {
 		abort   atomic.Uint64
 		skip    atomic.Uint64
@@ -106,9 +109,13 @@ type service struct {
 func NewService(
 	cfg Config,
 	storage ShardStorage,
+	publish func(ShardService),
 	opts ...Option,
 ) ShardService {
 	logger := runtime.ServiceRuntime(cfg.ServiceID).Logger().With(zap.String("service", cfg.ServiceID))
+	if publish == nil {
+		panic("shard service requires an owner")
+	}
 	s := &service{
 		logger:  logger,
 		cfg:     cfg,
@@ -124,6 +131,13 @@ func NewService(
 	s.cache.read.Store(newReadCache())
 	s.cache.allocate.Store(newAllocatedCache())
 	s.cache.noneSharding.Store(roaring64.New())
+	constructed := false
+	defer func() {
+		if !constructed {
+			_ = s.Close()
+		}
+	}()
+	publish(s)
 
 	for _, opt := range opts {
 		opt(s)
@@ -134,6 +148,7 @@ func NewService(
 	if err := s.stopper.RunTask(s.doTask); err != nil {
 		panic(err)
 	}
+	constructed = true
 	return s
 }
 
@@ -145,10 +160,24 @@ func (s *service) validate() {
 }
 
 func (s *service) Close() error {
-	s.stopper.Stop()
-	close(s.createC)
-	close(s.deleteC)
-	return s.remote.client.Close()
+	s.closeOnce.Do(func() {
+		if s.remote.server != nil {
+			s.closeErr = errors.Join(s.closeErr, s.remote.server.Close())
+		}
+		if s.stopper != nil {
+			s.stopper.Stop()
+		}
+		if s.createC != nil {
+			close(s.createC)
+		}
+		if s.deleteC != nil {
+			close(s.deleteC)
+		}
+		if s.remote.client != nil {
+			s.closeErr = errors.Join(s.closeErr, s.remote.client.Close())
+		}
+	})
+	return s.closeErr
 }
 
 func (s *service) Config() Config {
@@ -286,9 +315,10 @@ func (s *service) HasAllLocalReplicas(
 		) bool {
 			total = int(metadata.ShardsCount)
 			for _, replica := range shard.Replicas {
-				s.isLocalReplica(replica)
-				local++
-				break
+				if s.isLocalReplica(replica) {
+					local++
+					break
+				}
 			}
 
 			return true
@@ -375,14 +405,17 @@ func (s *service) TableReplicaCount(tableID uint64) int64 {
 func (s *service) removeReadCache(
 	table uint64,
 ) {
-	old := s.getReadCache()
-	if !old.hasTableCache(table) {
-		return
+	for {
+		old := s.getReadCache()
+		if !old.hasTableCache(table) {
+			return
+		}
+		new := old.clone()
+		delete(new.shards, table)
+		if s.cache.read.CompareAndSwap(old, new) {
+			return
+		}
 	}
-
-	new := old.clone()
-	delete(new.shards, table)
-	s.cache.read.CompareAndSwap(old, new)
 }
 
 func (s *service) getShards(
@@ -420,10 +453,14 @@ OUT:
 				continue OUT
 			}
 		}
-		cache = s.cache.read.Load()
-		cache = cache.clone()
-		cache.addShards(table, metadata, shards)
-		s.cache.read.Store(cache)
+		for {
+			old := s.cache.read.Load()
+			cache = old.clone()
+			cache.addShards(table, metadata, shards)
+			if s.cache.read.CompareAndSwap(old, cache) {
+				break
+			}
+		}
 		s.logger.Info("add read cache",
 			zap.Uint64("table", table),
 			zap.String("metadata", metadata.String()),
@@ -782,11 +819,7 @@ func (s *service) handleCheckChanged() error {
 func (s *service) removeCache(
 	tableID uint64,
 ) {
-	cache := s.cache.read.Load()
-	if cache != nil {
-		cache.delete(tableID)
-		s.cache.read.Store(cache)
-	}
+	s.removeReadCache(tableID)
 }
 
 func (s *service) maybeRemoveReadCache(
@@ -1025,12 +1058,6 @@ func (c *readCache) addShards(
 		shards:   shards,
 		ops:      make([]uint64, len(shards)),
 	}
-}
-
-func (c *readCache) delete(
-	tableID uint64,
-) {
-	delete(c.shards, tableID)
 }
 
 func getTNAddress(

@@ -383,18 +383,39 @@ func TestAbs(t *testing.T) {
 			args:    args{argF64: []float64{-1, 0, 3}},
 			wantF64: []float64{1, 0, 3},
 		},
+		{
+			name: "signed zero",
+			args: args{
+				argF32: []float32{float32(math.Copysign(0, -1)), 0, -2.5},
+				argF64: []float64{math.Copysign(0, -1), 0, -2.5},
+			},
+			wantF32: []float32{0, 0, 2.5},
+			wantF64: []float64{0, 0, 2.5},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 
 			if tt.args.argF32 != nil {
-				if gotRes, err := Abs[float32](tt.args.argF32); err != nil || !reflect.DeepEqual(gotRes, tt.wantF32) {
+				gotRes, err := Abs[float32](tt.args.argF32)
+				if err != nil || !reflect.DeepEqual(gotRes, tt.wantF32) {
 					t.Errorf("Abs() = %v, want %v", gotRes, tt.wantF32)
+				}
+				for _, v := range gotRes {
+					if math.Signbit(float64(v)) {
+						t.Errorf("Abs() returned a negative sign for %g", v)
+					}
 				}
 			}
 			if tt.args.argF64 != nil {
-				if gotRes, err := Abs[float64](tt.args.argF64); err != nil || !assertx.InEpsilonF64Slice(tt.wantF64, gotRes) {
+				gotRes, err := Abs[float64](tt.args.argF64)
+				if err != nil || !assertx.InEpsilonF64Slice(tt.wantF64, gotRes) {
 					t.Errorf("Abs() = %v, want %v", gotRes, tt.wantF64)
+				}
+				for _, v := range gotRes {
+					if math.Signbit(v) {
+						t.Errorf("Abs() returned a negative sign for %g", v)
+					}
 				}
 			}
 		})

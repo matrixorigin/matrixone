@@ -40,10 +40,10 @@ select * from t1 order by a desc, big asc;
 1  ¦  12.34567891235  𝄀
 1  ¦  92.23372036855
 select min(big),max(big),max(big)-1 from t1;
-➤ min(big)[3,29,11]  ¦  max(big)[3,29,11]  ¦  max(big) - 1[3,38,11]  𝄀
+➤ min(big)[3,29,11]  ¦  max(big)[3,29,11]  ¦  max(big) - 1[3,31,11]  𝄀
 -1.00000000000  ¦  92.23372036855  ¦  91.23372036855
 select min(big),avg(big),max(big)-1 from t1 group by a order by 1+2;
-➤ min(big)[3,29,11]  ¦  avg(big)[3,38,12]  ¦  max(big) - 1[3,38,11]  𝄀
+➤ min(big)[3,29,11]  ¦  avg(big)[3,33,15]  ¦  max(big) - 1[3,31,11]  𝄀
 -1.00000000000  ¦  34.526466426967  ¦  91.23372036855
 drop table t1;
 create table t1 ( a int not null default 1, big decimal(20,4) primary key);
@@ -64,10 +64,10 @@ select * from t1 order by big limit 2 offset 1;
 1  ¦  184462.0000  𝄀
 1  ¦  184467.1300
 select min(big),max(big),max(big)-1 from t1;
-➤ min(big)[3,20,4]  ¦  max(big)[3,20,4]  ¦  max(big) - 1[3,38,4]  𝄀
+➤ min(big)[3,20,4]  ¦  max(big)[3,20,4]  ¦  max(big) - 1[3,24,4]  𝄀
 0.0000  ¦  18446744073.0000  ¦  18446744072.0000
 select min(big),count(big),max(big)-1 from t1 group by a;
-➤ min(big)[3,20,4]  ¦  count(big)[-5,64,0]  ¦  max(big) - 1[3,38,4]  𝄀
+➤ min(big)[3,20,4]  ¦  count(big)[-5,64,0]  ¦  max(big) - 1[3,24,4]  𝄀
 0.0000  ¦  5  ¦  18446744072.0000
 drop table if exists t1;
 drop table if exists t2;
@@ -566,22 +566,22 @@ drop table if exists t1;
 create table t1 (a decimal(12,2));
 insert into t1 values (301934.27);
 select a * 4589.6 from t1;
-➤ a * 4589.6[3,38,3]  𝄀
+➤ a * 4589.6[3,17,3]  𝄀
 1385757525.592
 select a * 4589.60 from t1;
-➤ a * 4589.60[3,38,4]  𝄀
+➤ a * 4589.60[3,18,4]  𝄀
 1385757525.5920
 select a * 54545.5 from t1;
-➤ a * 54545.5[3,38,3]  𝄀
+➤ a * 54545.5[3,18,3]  𝄀
 16469155724.285
 select a * 54545.50 from t1;
-➤ a * 54545.50[3,38,4]  𝄀
+➤ a * 54545.50[3,19,4]  𝄀
 16469155724.2850
 select a * 54545.8 from t1;
-➤ a * 54545.8[3,38,3]  𝄀
+➤ a * 54545.8[3,18,3]  𝄀
 16469246304.566
 select a * 54545.80 from t1;
-➤ a * 54545.80[3,38,4]  𝄀
+➤ a * 54545.80[3,19,4]  𝄀
 16469246304.5660
 drop table t1;
 drop table if exists t1;
@@ -633,7 +633,7 @@ UPDATE decimal01 set a = -0.00000000000 WHERE a = -1.1;
 DELETE FROM decimal01 WHERE a = -3278.389284;
 DELETE FROM decimal01 WHERE a = 0.372817;
 SELECT a + 7382121 FROM decimal01;
-➤ a + 7382121[3,38,6]  𝄀
+➤ a + 7382121[3,26,6]  𝄀
 7382244.372840  𝄀
 7385903.300000  𝄀
 7382449.000000  𝄀
@@ -657,7 +657,7 @@ SELECT a - 0.27832 FROM decimal01;
 0.721680  𝄀
 -0.278320
 SELECT a * 0 FROM decimal01;
-➤ a * 0[3,38,6]  𝄀
+➤ a * 0[3,11,6]  𝄀
 0.000000  𝄀
 0.000000  𝄀
 0.000000  𝄀
@@ -681,7 +681,7 @@ SELECT a / 6 FROM decimal01;
 0.1666666667  𝄀
 0E-10
 SELECT a * a FROM decimal01;
-➤ a * a[3,38,12]  𝄀
+➤ a * a[3,20,12]  𝄀
 15220.857649665600  𝄀
 14305793.290000000000  𝄀
 107584.000000000000  𝄀
@@ -740,7 +740,7 @@ SELECT * FROM decimal07;
 3  ¦  -3728  𝄀
 4  ¦  12345678909876543212345678909876543243
 SELECT a, a * b FROM decimal07;
-➤ a[4,32,0]  ¦  a * b[3,39,0]  𝄀
+➤ a[4,32,0]  ¦  a * b[3,49,0]  𝄀
 1  ¦  3728193  𝄀
 2  ¦  0  𝄀
 3  ¦  -11184  𝄀
@@ -752,7 +752,7 @@ SELECT a, a + b FROM decimal07;
 3  ¦  -3725  𝄀
 4  ¦  12345678909876543212345678909876543247
 SELECT a, a - b - b FROM decimal07;
-➤ a[4,32,0]  ¦  a - b - b[3,39,0]  𝄀
+➤ a[4,32,0]  ¦  a - b - b[3,40,0]  𝄀
 1  ¦  -7456385  𝄀
 2  ¦  2  𝄀
 3  ¦  7459  𝄀
@@ -836,7 +836,7 @@ SELECT a + 1 FROM decimal08;
 1  𝄀
 -99999999999999999999999999999999999998
 SELECT a * 2 FROM decimal08;
-➤ a * 2[3,39,0]  𝄀
+➤ a * 2[3,40,0]  𝄀
 43474374767574547659678369865687844262  𝄀
 199999999999999999999999999999999999998  𝄀
 2000000000000000  𝄀
@@ -965,7 +965,7 @@ SELECT SUM(a) FROM decimal10;
 ➤ SUM(a)[3,38,8]  𝄀
 -3712679.56746709
 SELECT AVG(a + b) FROM decimal10;
-➤ AVG(a + b)[3,38,12]  𝄀
+➤ AVG(a + b)[3,25,12]  𝄀
 -1248495.261766666667
 SELECT COUNT(a) FROM decimal10;
 ➤ COUNT(a)[-5,64,0]  𝄀
@@ -974,7 +974,7 @@ SELECT MAX(a) FROM decimal10;
 ➤ MAX(a)[3,20,8]  𝄀
 12323.38290000
 SELECT MIN(a) + MAX(b) FROM decimal10;
-➤ MIN(a) + MAX(b)[3,38,8]  𝄀
+➤ MIN(a) + MAX(b)[3,21,8]  𝄀
 -3728832.39820000
 SELECT * FROM decimal10 ORDER BY a DESC;
 ➤ a[3,20,8]  ¦  b[5,16,0]  ¦  c[7,24,0]  ¦  d[8,54,0]  𝄀
@@ -1096,7 +1096,7 @@ SELECT a,b,c FROM decimal10 WHERE a NOT IN(1,9);
 0.389932000  ¦  78  ¦  38238293232  𝄀
 -2.220000000  ¦  0  ¦  32783232
 SELECT a * b FROM decimal10 WHERE a NOT BETWEEN 2 AND 9;
-➤ a * b[3,38,9]  𝄀
+➤ a * b[3,13,9]  𝄀
 0E-9  𝄀
 30.414696000  𝄀
 0E-9
@@ -1121,7 +1121,7 @@ SELECT CAST((a * b) AS DECIMAL(20,10)) FROM decimal11;
 9999999999.9999999999  𝄀
 -9999999999.9999999999
 SELECT a * b FROM decimal11;
-➤ a * b[3,38,13]  𝄀
+➤ a * b[3,64,13]  𝄀
 1521164449490.9642986411848  𝄀
 -1242186698641.5250726367777
 DROP TABLE IF EXISTS decimal12;
@@ -1313,7 +1313,7 @@ SELECT col1 / col2 FROM decimal19;
 -32015808253987387864.1718  𝄀
 -17600769189777557874.2143
 SELECT col1 * col2 FROM decimal19;
-➤ col1 * col2[3,57,0]  𝄀
+➤ col1 * col2[3,58,0]  𝄀
 15252648937299048915481570967878540994653304360546135439  𝄀
 -312345698745698745599999999999999999996876543012543012544  𝄀
 -568156987445068703163403000002099999994318430125430000001
@@ -1368,7 +1368,8 @@ SELECT CAST(NULL AS decimal(6));
 ➤ cast(null as decimal(6))[3,7,0]  𝄀
 null
 SELECT 10.0 + CAST('aaa' AS decimal(38,0));
-invalid input: "aaa" is invalid decimal string
+➤ 10.0 + cast(aaa as decimal(38))[3,40,1]  𝄀
+10.0
 SELECT CAST('101010101001' AS decimal(38,0));
 ➤ cast(101010101001 as decimal(38))[3,39,0]  𝄀
 101010101001
@@ -1379,7 +1380,8 @@ SELECT CAST('0101010' AS decimal(38,0));
 ➤ cast(0101010 as decimal(38))[3,39,0]  𝄀
 101010
 SELECT CAST('' AS decimal(38,0));
-invalid input: "" is invalid numeric string
+➤ cast( as decimal(38))[3,38,0]  𝄀
+0
 DROP TABLE IF EXISTS decimal20;
 CREATE TABLE decimal20(v varchar(40), tt tinytext, t text, mt mediumtext, lt longtext);
 INSERT INTO decimal20 VALUES('1.01415', '2.02115', '-3.03', '444.04', '4515.05');
@@ -1728,19 +1730,19 @@ SELECT * FROM float_precision_test WHERE f64_col = 1000000;
 1  ¦  1000000.0  ¦  1000000.0
 DROP TABLE float_precision_test;
 SELECT CAST(8000.00 AS DECIMAL(12,2)) - 1299 AS dec_minus_int_positive;
-➤ dec_minus_int_positive[3,38,2]  𝄀
+➤ dec_minus_int_positive[3,22,2]  𝄀
 6701.00
 SELECT CAST(300.00 AS DECIMAL(12,2)) - 300 AS dec_minus_int_zero;
-➤ dec_minus_int_zero[3,38,2]  𝄀
+➤ dec_minus_int_zero[3,22,2]  𝄀
 0.00
 SELECT CAST(300.00 AS DECIMAL(12,2)) - 301 AS dec_minus_int_negative_one;
-➤ dec_minus_int_negative_one[3,38,2]  𝄀
+➤ dec_minus_int_negative_one[3,22,2]  𝄀
 -1.00
 SELECT CAST(100.00 AS DECIMAL(12,2)) - 200 AS dec_minus_int_negative_hundred;
-➤ dec_minus_int_negative_hundred[3,38,2]  𝄀
+➤ dec_minus_int_negative_hundred[3,22,2]  𝄀
 -100.00
 SELECT CAST(300.00 AS DECIMAL(12,2)) - 3999 AS dec_minus_int_large_negative;
-➤ dec_minus_int_large_negative[3,38,2]  𝄀
+➤ dec_minus_int_large_negative[3,22,2]  𝄀
 -3699.00
 SELECT CAST(300.00 AS DECIMAL(12,2)) - 3999.00 AS dec_minus_decimal_large_negative;
 ➤ dec_minus_decimal_large_negative[3,18,2]  𝄀
@@ -1749,7 +1751,7 @@ DROP TABLE IF EXISTS decimal_minus_int_regression;
 CREATE TABLE decimal_minus_int_regression(bal DECIMAL(12,2));
 INSERT INTO decimal_minus_int_regression VALUES (300.00);
 SELECT bal - 3999 AS bal_minus_int FROM decimal_minus_int_regression;
-➤ bal_minus_int[3,38,2]  𝄀
+➤ bal_minus_int[3,22,2]  𝄀
 -3699.00
 DROP TABLE decimal_minus_int_regression;
 DROP TABLE IF EXISTS decimal_minus_int_rhs_vector;
@@ -1758,7 +1760,7 @@ INSERT INTO decimal_minus_int_rhs_vector VALUES (300), (301), (3999);
 SELECT CAST(300.00 AS DECIMAL(12,2)) - i AS dec_minus_int_col
 FROM decimal_minus_int_rhs_vector
 ORDER BY i;
-➤ dec_minus_int_col[3,38,2]  𝄀
+➤ dec_minus_int_col[3,13,2]  𝄀
 0.00  𝄀
 -1.00  𝄀
 -3699.00
@@ -1769,23 +1771,23 @@ INSERT INTO decimal_minus_int_rhs_null VALUES (1, 300), (2, NULL), (3, 301), (4,
 SELECT id, CAST(300.00 AS DECIMAL(12,2)) - i AS dec_minus_nullable_int_col
 FROM decimal_minus_int_rhs_null
 ORDER BY id;
-➤ id[4,32,0]  ¦  dec_minus_nullable_int_col[3,38,2]  𝄀
+➤ id[4,32,0]  ¦  dec_minus_nullable_int_col[3,13,2]  𝄀
 1  ¦  0.00  𝄀
 2  ¦  null  𝄀
 3  ¦  -1.00  𝄀
 4  ¦  -3699.00
 DROP TABLE decimal_minus_int_rhs_null;
 SELECT CAST(300.00 AS DECIMAL(20,2)) - 301 AS dec128_minus_int_negative_one;
-➤ dec128_minus_int_negative_one[3,38,2]  𝄀
+➤ dec128_minus_int_negative_one[3,22,2]  𝄀
 -1.00
 SELECT CAST(300.00 AS DECIMAL(20,2)) - 3999 AS dec128_minus_int_large_negative;
-➤ dec128_minus_int_large_negative[3,38,2]  𝄀
+➤ dec128_minus_int_large_negative[3,22,2]  𝄀
 -3699.00
 SELECT 301 - CAST(300.00 AS DECIMAL(12,2)) AS int_minus_decimal_positive_one;
-➤ int_minus_decimal_positive_one[3,38,2]  𝄀
+➤ int_minus_decimal_positive_one[3,22,2]  𝄀
 1.00
 SELECT 200 - CAST(300.00 AS DECIMAL(12,2)) AS int_minus_decimal_negative_hundred;
-➤ int_minus_decimal_negative_hundred[3,38,2]  𝄀
+➤ int_minus_decimal_negative_hundred[3,22,2]  𝄀
 -100.00
 DROP TABLE IF EXISTS decimal_join_left;
 DROP TABLE IF EXISTS decimal_join_right;

@@ -17,16 +17,19 @@ package plan
 import (
 	"encoding/json"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 func (builder *QueryBuilder) bindLoad(stmt *tree.Load, bindCtx *BindContext) (int32, error) {
 	// LOAD never carries INSERT's duplicate-key ignore policy. Reset the
 	// statement-local flag in case a QueryBuilder is reused across DML binds.
 	builder.isInsertIgnore = false
+	builder.checkLoadPrimaryKey = false
 	assignmentIgnore := loadAssignmentIgnore(stmt)
 	dmlCtx := NewDMLContext()
 	builder.qry.LoadTag = true
@@ -39,6 +42,10 @@ func (builder *QueryBuilder) bindLoad(stmt *tree.Load, bindCtx *BindContext) (in
 	// strips them from the 1:1 dedup+MULTI_UPDATE plan; LOAD maintains them with
 	// the same modern sink-fanout the INSERT path uses (see bindInsert).
 	tableDef := dmlCtx.tableDefs[0]
+	builder.checkLoadPrimaryKey, err = loadPrimaryKeyCheckEnabled(builder.compCtx, stmt, tableDef)
+	if err != nil {
+		return -1, err
+	}
 
 	// Capture irregular (IVF/fulltext/master) indexes before appendNodesForInsertStmt
 	// strips them. HNSW/CAGRA/IVF-PQ are cron-maintained and ride the modern path.
@@ -52,7 +59,7 @@ func (builder *QueryBuilder) bindLoad(stmt *tree.Load, bindCtx *BindContext) (in
 	// LOAD never carries ON DUPLICATE KEY UPDATE, so the irregular-index
 	// maintenance source is the pre-dedup new-row image set up inside
 	// appendDedupAndMultiUpdateNodesForBindInsert (insert-only, no old-row delete).
-	return builder.appendDedupAndMultiUpdateNodesForBindInsert(bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx, nil, irregularIndexes, autoIncrementGeneratedColumn)
+	return builder.appendDedupAndMultiUpdateNodesForBindInsert(bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx, nil, irregularIndexes, autoIncrementGeneratedColumn, tree.IsIgnoreStatement(stmt))
 }
 
 func (builder *QueryBuilder) bindExternalScan(
@@ -61,14 +68,40 @@ func (builder *QueryBuilder) bindExternalScan(
 	dmlCtx *DMLContext,
 	assignmentIgnore bool) (int32, map[string]*plan.Expr, error) {
 	externalScanTag := builder.genNewBindTag()
-	err := dmlCtx.ResolveTables(builder.compCtx, tree.TableExprs{stmt.Table}, nil, nil, true)
+	err := dmlCtx.resolveTables(builder.compCtx, tree.TableExprs{stmt.Table}, nil, nil, foreignKeyResolveDeferred, false)
 	if err != nil {
 		return -1, nil, err
+	}
+
+	builder.qry.HasForeignKeyAction = len(dmlCtx.tableDefs[0].Fkeys) > 0
+
+	// Self references still need legacy LOAD's post-execution DetectSqls.
+	// Decide before file/column binding mutates the LOAD AST used by fallback.
+	for _, fk := range dmlCtx.tableDefs[0].Fkeys {
+		if fk == nil {
+			return -1, nil, moerr.NewInternalError(builder.GetContext(), "malformed foreign-key metadata")
+		}
+		if fk.ForeignTbl == 0 {
+			enabled, err := IsForeignKeyChecksEnabled(builder.compCtx)
+			if err != nil {
+				return -1, nil, err
+			}
+			if enabled {
+				return -1, nil, moerr.NewUnsupportedDML(builder.GetContext(), foreignKeyUnsupportedDMLCause)
+			}
+		}
 	}
 
 	ctx := builder.compCtx
 	stmt.Param.Local = stmt.Local
 	fileName, err := checkFileExist(stmt.Param, ctx)
+	if err != nil {
+		return -1, nil, err
+	}
+	if err := validateLoadSetAssignments(stmt.Param, ctx, dmlCtx.tableDefs[0]); err != nil {
+		return -1, nil, err
+	}
+	userVariableAssignments, err := loadUserVariableNullIfAssignments(stmt.Param, ctx)
 	if err != nil {
 		return -1, nil, err
 	}
@@ -81,7 +114,8 @@ func (builder *QueryBuilder) bindExternalScan(
 	}
 	defaultParquetLoadParallel(stmt.Param, ctx)
 
-	tableDef := DeepCopyTableDef(dmlCtx.tableDefs[0], true)
+	originTableDef := dmlCtx.tableDefs[0]
+	tableDef := DeepCopyTableDef(originTableDef, true)
 	objRef := dmlCtx.objRefs[0]
 
 	// load with columnlist will copy a new tableDef
@@ -97,17 +131,17 @@ func (builder *QueryBuilder) bindExternalScan(
 				switch realCol := col.(type) {
 				case *tree.UnresolvedName:
 					colName := realCol.ColName()
-					if _, ok := tableDef.Name2ColIndex[colName]; !ok {
+					tbColIdx, ok := tableDef.Name2ColIndex[colName]
+					if !ok || tableDef.Cols[tbColIdx].Hidden {
 						return -1, nil, moerr.NewBadFieldErrorf(ctx.GetContext(), "internal error: column '%s' does not exist", colName)
 					}
-					tbColIdx := tableDef.Name2ColIndex[colName]
 					if tableDef.Cols[tbColIdx].GeneratedCol != nil {
 						return -1, nil, moerr.NewInvalidInputf(ctx.GetContext(),
 							"the value specified for generated column '%s' in table '%s' is not allowed",
 							colName, tableDef.Name)
 					}
 					colExpr := &plan.Expr{
-						Typ: tableDef.Cols[tbColIdx].Typ,
+						Typ: loadTimeInputType(stmt.Param.Format, tableDef.Cols[tbColIdx].Typ),
 						Expr: &plan.Expr_Col{
 							Col: &plan.ColRef{
 								RelPos: externalScanTag,
@@ -122,9 +156,8 @@ func (builder *QueryBuilder) bindExternalScan(
 					tbColToDataCol[colName] = int32(i)
 					newCols = append(newCols, tableDef.Cols[tbColIdx])
 				case *tree.VarExpr:
-					//NOTE:variable like '@abc' will be passed by.
-					name := realCol.Name
-					tbColToDataCol[name] = -1 // when in external call, can use len of the map to check load data row whether valid
+					// Row-variable slots are recorded after target columns so
+					// referenced values can be exposed to the LOAD assignment projection.
 				default:
 					return -1, nil, moerr.NewInternalErrorf(ctx.GetContext(), "unsupported column type %v", realCol)
 				}
@@ -133,6 +166,10 @@ func (builder *QueryBuilder) bindExternalScan(
 			tableDef.Name2ColIndex = colToIndex
 		}
 	}
+	userVariableColumns := appendLoadUserVariableScanColumns(
+		stmt.Param.Tail.ColumnList, userVariableAssignments, originTableDef,
+		tableDef, &tbColToDataCol, nil,
+	)
 
 	if len(tbColToDataCol) == 0 {
 		idx := 0
@@ -141,7 +178,7 @@ func (builder *QueryBuilder) bindExternalScan(
 				tbColToDataCol[col.Name] = int32(len(insertColToExpr))
 
 				insertColToExpr[col.Name] = &plan.Expr{
-					Typ: col.Typ,
+					Typ: loadTimeInputType(stmt.Param.Format, col.Typ),
 					Expr: &plan.Expr_Col{
 						Col: &plan.ColRef{
 							RelPos: externalScanTag,
@@ -153,9 +190,18 @@ func (builder *QueryBuilder) bindExternalScan(
 			}
 		}
 	}
+	setExpressions, err := builder.bindLoadUserVariableAssignments(
+		stmt, userVariableAssignments, originTableDef, tableDef, userVariableColumns, externalScanTag,
+	)
+	if err != nil {
+		return -1, nil, err
+	}
+	for target, expr := range setExpressions {
+		insertColToExpr[target] = expr
+	}
 
-	// External scans expose target-typed columns. For BLOB/TEXT, equal type
-	// metadata does not prove that the runtime payload fits the target family.
+	// Textual TIME inputs retain their original value. Typed TIME and BLOB/TEXT
+	// metadata also do not prove that the value fits the target domain.
 	if err = builder.applyLoadAssignmentCasts(tableDef, insertColToExpr, assignmentIgnore); err != nil {
 		return -1, nil, err
 	}
@@ -181,9 +227,10 @@ func (builder *QueryBuilder) bindExternalScan(
 	}
 	stmt.Param.ArrowMatchByPosition = stmt.Param.Format == tree.ARROW &&
 		stmt.Param.Tail != nil && len(stmt.Param.Tail.ColumnList) > 0
-	applyLoadParallelAdmission(stmt.Param, offset)
+	applyLoadParallelAdmission(stmt.Param, offset, ctx.GetProcess().GetService())
 
 	stmt.Param.Tail.ColumnList = nil
+	stmt.Param.Tail.Assignments = nil
 	if stmt.Param.ScanType != tree.INLINE {
 		json_byte, err := json.Marshal(stmt.Param)
 		if err != nil {
@@ -213,7 +260,7 @@ func (builder *QueryBuilder) bindExternalScan(
 
 	externalScanNode := &plan.Node{
 		NodeType: plan.Node_EXTERNAL_SCAN,
-		Stats:    makeLoadExternalStats(stmt.Param, tableDef, offset, ctx.GetContext()),
+		Stats:    makeLoadExternalStats(stmt.Param, tableDef, offset, process.SQLFileAccessContext(ctx.GetContext(), ctx.GetProcess())),
 		ObjRef:   objRef,
 		TableDef: tableDef,
 		ExternScan: &plan.ExternScan{
@@ -235,6 +282,45 @@ func (builder *QueryBuilder) bindExternalScan(
 	return lastNodeId, insertColToExpr, nil
 }
 
+// LOAD IGNORE/REPLACE conflict resolution is separate from ordinary LOAD's
+// primary-key validation. Keep those modes on their existing path.
+func loadChecksPrimaryKey(stmt *tree.Load, tableDef *plan.TableDef) bool {
+	if stmt == nil || tableDef.Pkey == nil || tableDef.Pkey.PkeyColName == catalog.FakePrimaryKeyColName {
+		return false
+	}
+	switch stmt.DuplicateHandling.(type) {
+	case nil, *tree.DuplicateKeyError:
+		return true
+	default:
+		return false
+	}
+}
+
+// loadPrimaryKeyCheckEnabled resolves the owning session's LOAD policy once
+// during planning. Internal contexts without a session use the OFF default.
+func loadPrimaryKeyCheckEnabled(ctx CompilerContext, stmt *tree.Load, tableDef *plan.TableDef) (bool, error) {
+	if !loadChecksPrimaryKey(stmt, tableDef) {
+		return false, nil
+	}
+	value, err := ctx.ResolveVariable("mo_pk_check_by_cn", true, false)
+	if err != nil {
+		return false, err
+	}
+	switch v := value.(type) {
+	case nil:
+		return false, nil
+	case int8:
+		if v == 0 || v == 1 {
+			return v == 1, nil
+		}
+	case int64:
+		if v == 0 || v == 1 {
+			return v == 1, nil
+		}
+	}
+	return false, moerr.NewInternalErrorf(ctx.GetContext(), "invalid mo_pk_check_by_cn value: %v", value)
+}
+
 func loadAssignmentIgnore(stmt *tree.Load) bool {
 	if stmt == nil {
 		return false
@@ -242,11 +328,10 @@ func loadAssignmentIgnore(stmt *tree.Load) bool {
 	if tree.IsIgnoreStatement(stmt) {
 		return true
 	}
-	if !stmt.Local {
-		return false
-	}
+	// Assignment policy is distinct from decoder/global IGNORE. In particular,
+	// LOCAL must not relax strict parsing of unrelated input column types.
 	_, replace := stmt.DuplicateHandling.(*tree.DuplicateKeyReplace)
-	return !replace
+	return stmt.Local && !replace
 }
 
 func (builder *QueryBuilder) applyLoadAssignmentCasts(
@@ -256,7 +341,8 @@ func (builder *QueryBuilder) applyLoadAssignmentCasts(
 ) error {
 	for _, col := range tableDef.Cols {
 		expr, ok := insertColToExpr[col.Name]
-		if !ok || (col.Typ.Id != int32(types.T_blob) && col.Typ.Id != int32(types.T_text)) {
+		if !ok || (col.Typ.Id != int32(types.T_blob) && col.Typ.Id != int32(types.T_text) &&
+			col.Typ.Id != int32(types.T_time) && !isMediumIntPlanType(col.Typ)) {
 			continue
 		}
 		casted, err := builder.forceAssignmentCastExpr(expr, col.Typ, assignmentIgnore)

@@ -80,6 +80,26 @@ func TestCheckEnumPrimaryKeyPartType(t *testing.T) {
 	require.NoError(t, checkPrimaryKeyPartType(context.Background(), typ, "source"))
 }
 
+func TestCheckNativeUnicodePrimaryKeyPartType(t *testing.T) {
+	typ := plan.Type{
+		Id:      int32(types.T_varchar),
+		Charset: uint32(types.CharsetUTF8MB4UnicodeCI),
+	}
+	err := checkPrimaryKeyPartType(context.Background(), typ, "source")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "native Unicode collation column 'source'")
+}
+
+func TestCheckNativeUnicodeUniqueKeyPartType(t *testing.T) {
+	typ := plan.Type{
+		Id:      int32(types.T_varchar),
+		Charset: uint32(types.CharsetUTF8MB4UnicodeCI),
+	}
+	err := checkUniqueKeyPartType(context.Background(), typ, "source")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "native Unicode collation column 'source'")
+}
+
 func TestCheckAddColumnWithUniqueKeyVisibility(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -153,4 +173,22 @@ func TestCheckIndexedColumnTypeChangeGeometry(t *testing.T) {
 	err = checkIndexedColumnTypeChange(context.Background(), tableDef, pkOldCol, pkNewCol)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "GEOMETRY column 'id' cannot be in primary key")
+}
+
+func TestDropColumnAfterDroppingPrimaryKeyInSameAlter(t *testing.T) {
+	t.Run("previous action removed primary key", func(t *testing.T) {
+		tableDef := &TableDef{Pkey: nil}
+		require.NoError(t, handleDropColumnWithPrimaryKey(context.Background(), "b", tableDef))
+		require.Nil(t, tableDef.Pkey)
+	})
+
+	t.Run("unrelated dropped column retains existing primary key", func(t *testing.T) {
+		tableDef := &TableDef{
+			Pkey: &plan.PrimaryKeyDef{Names: []string{"id"}, PkeyColName: "id"},
+			Cols: []*ColDef{{Name: "id"}, {Name: "b"}},
+		}
+		require.NoError(t, handleDropColumnWithPrimaryKey(context.Background(), "b", tableDef))
+		require.Equal(t, []string{"id"}, tableDef.Pkey.Names)
+		require.Equal(t, "id", tableDef.Pkey.PkeyColName)
+	})
 }

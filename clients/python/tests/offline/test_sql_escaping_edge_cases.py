@@ -24,9 +24,25 @@ various edge cases including:
 - Double escaping scenarios
 """
 
-import pytest
 from unittest.mock import Mock
+
+import pytest
+
+from matrixone import AsyncClient, Client
+from matrixone.account import BaseAccountManager
 from matrixone.base_client import BaseMatrixOneClient
+
+
+@pytest.mark.parametrize('client_factory', [Client, AsyncClient])
+def test_client_helpers_escape_mysql_identifiers(client_factory):
+    """Client-side DDL helpers must not let names terminate quoted identifiers."""
+    client = client_factory()
+    account_name = "tenant` ; DROP DATABASE prod; --"
+
+    assert client._escape_identifier(account_name) == "`tenant`` ; DROP DATABASE prod; --`"
+    assert BaseAccountManager(client)._build_drop_account_sql(account_name) == (
+        "DROP ACCOUNT `tenant`` ; DROP DATABASE prod; --`"
+    )
 
 
 class TestSQLEscapingEdgeCases:
@@ -378,12 +394,9 @@ class TestSQLEscapingEdgeCases:
 
         sql = client._build_batch_insert_sql("test_table", data_list)
 
-        # Verify backslashes are preserved
-        assert "C:\\\\Users" in sql or "C:\\Users" in sql
-        assert "\\\\d+" in sql or "\\d+" in sql
-
-        print(f"Generated SQL with backslashes:\n{sql}\n")
-        print("⚠️  WARNING: Backslash handling may need review for SQL injection safety.\n")
+        # Hex UTF-8 text preserves exact bytes in both backslash SQL modes.
+        for row in data_list:
+            assert "CONVERT(X'%s' USING utf8mb4)" % row['text'].encode().hex() in sql
 
     def test_sql_injection_attempt_in_json(self):
         """Test potential SQL injection in JSON strings"""
@@ -425,15 +438,38 @@ class TestSQLEscapingEdgeCases:
         sql = client._build_batch_insert_sql("my_table", data_list)
 
         # Expected format
-        expected = "INSERT INTO my_table (id, json_col) VALUES ('1', '{\"key\":\"value\"}')"
+        expected = "INSERT INTO my_table (id, json_col) VALUES (1, '{\"key\":\"value\"}')"
 
         # Verify structure
         assert "INSERT INTO my_table (id, json_col) VALUES" in sql
-        assert "'1'" in sql
+        assert sql == expected
         assert 'key' in sql and 'value' in sql
 
         print(f"Generated SQL:\n{sql}")
         print(f"\nExpected pattern:\n{expected}\n")
+
+    def test_batch_preserves_scalar_types_and_text_encoding(self):
+        from decimal import Decimal
+
+        import numpy as np
+
+        row = {
+            'integer': np.int64(7),
+            'floating': np.float32(1.0),
+            'precise': Decimal('12345678901234567890.125'),
+            'flag': True,
+            'numpy_flag': np.bool_(False),
+            'text': '1.0',
+            'quoted': "O'Brien",
+            'json': {'name': "O'Brien"},
+            'vector': [1, 2],
+            'missing': None,
+        }
+        assert BaseMatrixOneClient()._build_batch_insert_sql('t', [row]) == (
+            'INSERT INTO t (`integer`, floating, precise, flag, numpy_flag, text, quoted, json, vector, missing) '
+            'VALUES (7, 1.0, 12345678901234567890.125, 1, 0, '
+            "'1.0', 'O''Brien', '{\"name\": \"O''Brien\"}', '[1,2]', NULL)"
+        )
 
     def test_percent_in_insert_then_exec_driver_sql(self):
         """

@@ -22,6 +22,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/collation"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -251,6 +252,104 @@ func TestGetTypeFromAstAssignsExplicitStringCharset(t *testing.T) {
 			require.Equal(t, testCase.wantCharset, typ.Charset)
 		})
 	}
+}
+
+func TestGetTypeFromAstCharCastCharset(t *testing.T) {
+	ctx := context.Background()
+	for _, tc := range []struct {
+		charset   string
+		id        types.T
+		width     int32
+		charsetID uint32
+	}{
+		{charset: "utf8mb4", id: types.T_char, width: 3, charsetID: uint32(types.CharsetUTF8)},
+		{charset: "utf8", id: types.T_char, width: 3, charsetID: uint32(types.CharsetUTF8)},
+		{charset: "utf8mb3", id: types.T_char, width: 3, charsetID: uint32(types.CharsetUTF8)},
+		{charset: "binary", id: types.T_varbinary, width: 3, charsetID: uint32(types.CharsetBinary)},
+	} {
+		t.Run(tc.charset, func(t *testing.T) {
+			stmt, err := mysql.ParseOne(ctx,
+				"select cast('abc' as char(3) character set "+tc.charset+")", 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+
+			selectStmt := stmt.(*tree.Select)
+			selectClause := selectStmt.Select.(*tree.SelectClause)
+			cast := selectClause.Exprs[0].Expr.(*tree.CastExpr)
+			typ, err := getTypeFromAst(ctx, cast.Type)
+			require.NoError(t, err)
+			require.Equal(t, int32(tc.id), typ.Id)
+			require.Equal(t, tc.width, typ.Width)
+			require.Equal(t, tc.charsetID, typ.Charset)
+			if tc.charset == "utf8mb4" || tc.charset == "utf8" || tc.charset == "utf8mb3" {
+				identity, ok := collation.ResolveCharset(tc.charset)
+				require.True(t, ok)
+				require.Equal(t, collation.UTF8MB4GeneralCIIdentity, identity)
+			}
+		})
+	}
+}
+
+func TestGetTypeFromAstCharCastCharsetRejectsUnsupportedCharsets(t *testing.T) {
+	ctx := context.Background()
+	for _, charset := range []string{"", "ascii", "latin1", "unknown_charset"} {
+		t.Run(charset, func(t *testing.T) {
+			charsetSQL := charset
+			if charsetSQL == "" {
+				charsetSQL = "''"
+			}
+			stmt, err := mysql.ParseOne(ctx,
+				"select cast('abc' as char(3) character set "+charsetSQL+")", 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+
+			selectStmt := stmt.(*tree.Select)
+			selectClause := selectStmt.Select.(*tree.SelectClause)
+			cast := selectClause.Exprs[0].Expr.(*tree.CastExpr)
+			_, err = getTypeFromAst(ctx, cast.Type)
+			require.ErrorContains(t, err, "unsupported character set '"+charset+"' for CHAR cast")
+		})
+	}
+}
+
+func TestGetTypeFromAstBuildsMediumIntAliases(t *testing.T) {
+	testCases := []struct {
+		definition string
+		wantOID    types.T
+		wantWidth  int32
+	}{
+		{definition: "mediumint", wantOID: types.T_int32, wantWidth: 24},
+		{definition: "mediumint unsigned", wantOID: types.T_uint32, wantWidth: 24},
+		{definition: "int3", wantOID: types.T_int32, wantWidth: 24},
+		{definition: "int3 unsigned", wantOID: types.T_uint32, wantWidth: 24},
+		{definition: "mediumint zerofill", wantOID: types.T_uint32, wantWidth: 24},
+		// Integer display width is not physical width and must not make INT(24)
+		// acquire MEDIUMINT semantics.
+		{definition: "int(24)", wantOID: types.T_int32, wantWidth: 32},
+		{definition: "int(24) unsigned", wantOID: types.T_uint32, wantWidth: 32},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.definition, func(t *testing.T) {
+			stmt, err := mysql.ParseOne(context.Background(),
+				"create table t (v "+testCase.definition+")", 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+
+			column := stmt.(*tree.CreateTable).Defs[0].(*tree.ColumnTableDef)
+			typ, err := getTypeFromAst(context.Background(), column.Type)
+			require.NoError(t, err)
+			require.Equal(t, int32(testCase.wantOID), typ.Id)
+			require.Equal(t, testCase.wantWidth, typ.Width)
+		})
+	}
+}
+
+func TestBuildCastToMediumIntIsRejected(t *testing.T) {
+	_, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, "SELECT CAST(1 AS MEDIUMINT)")
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNYI), err)
+	require.Contains(t, strings.ToLower(err.Error()), "mediumint")
 }
 
 func TestGetTypeFromAstGeometrySubtype(t *testing.T) {
@@ -783,6 +882,73 @@ func TestBuildDefaultExprFitsVarchar(t *testing.T) {
 	require.Equal(t, "abc", defaultValue.Expr.GetLit().GetSval())
 }
 
+func TestBuildZeroTemporalDefaultRespectsSQLMode(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		mode       string
+		wantReject bool
+	}{
+		{name: "empty"},
+		{name: "strict only", mode: "STRICT_TRANS_TABLES"},
+		{name: "no zero date only", mode: "NO_ZERO_DATE"},
+		{name: "strict and no zero date", mode: "STRICT_TRANS_TABLES,NO_ZERO_DATE", wantReject: true},
+		{name: "strict all and no zero date", mode: "STRICT_ALL_TABLES,NO_ZERO_DATE", wantReject: true},
+		{name: "traditional", mode: "TRADITIONAL", wantReject: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
+				if name == "sql_mode" {
+					return tc.mode, nil
+				}
+				return "", nil
+			})
+			for _, target := range []struct {
+				name      string
+				typ       types.T
+				canonical string
+			}{
+				{name: "date", typ: types.T_date, canonical: "0000-00-00"},
+				{name: "datetime", typ: types.T_datetime, canonical: "0000-00-00 00:00:00"},
+				{name: "timestamp", typ: types.T_timestamp, canonical: "0000-00-00 00:00:00"},
+			} {
+				t.Run(target.name, func(t *testing.T) {
+					for _, source := range []struct {
+						name string
+						expr tree.Expr
+						text string
+					}{
+						{name: "numeric", expr: tree.NewNumVal(int64(0), "0", false, tree.P_int64), text: "0"},
+						{name: "canonical string", expr: tree.NewNumVal(target.canonical, target.canonical, false, tree.P_char), text: "'" + target.canonical + "'"},
+					} {
+						t.Run(source.name, func(t *testing.T) {
+							col := tree.NewColumnTableDef(tree.NewUnresolvedColName("zero_col"), nil,
+								[]tree.ColumnAttribute{&tree.AttributeDefault{Expr: source.expr}})
+							def, err := buildDefaultExpr(proc.Ctx, col, plan.Type{Id: int32(target.typ)}, proc)
+							if tc.wantReject {
+								require.Error(t, err)
+								require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidDefault), "%v", err)
+								return
+							}
+							require.NoError(t, err)
+							require.Equal(t, source.text, def.OriginString)
+							require.NotNil(t, def.Expr.GetLit())
+							switch target.typ {
+							case types.T_date:
+								require.Equal(t, int32(types.ZeroDate), def.Expr.GetLit().GetDateval())
+							case types.T_datetime:
+								require.Equal(t, int64(types.ZeroDatetime), def.Expr.GetLit().GetDatetimeval())
+							case types.T_timestamp:
+								require.Equal(t, int64(types.ZeroTimestamp), def.Expr.GetLit().GetTimestampval())
+							}
+						})
+					}
+				})
+			}
+		})
+	}
+}
+
 func TestBuildPlanFencesHexDefaultBeforeConstantFold(t *testing.T) {
 	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	proc := mock.CurrentContext().GetProcess()
@@ -1129,7 +1295,7 @@ func TestBuildGeneratedExprUsesStrictForCharVarchar(t *testing.T) {
 	require.Equal(t, "cast", genInt.Expr.GetF().GetFunc().GetObjName())
 }
 
-func TestBuildGeneratedExprIPFunctionsAreDeterministic(t *testing.T) {
+func TestBuildGeneratedExprFunctionsAreDeterministic(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	cases := []struct {
 		name             string
@@ -1140,6 +1306,9 @@ func TestBuildGeneratedExprIPFunctionsAreDeterministic(t *testing.T) {
 		generatedSQLType string
 		generatedType    plan.Type
 	}{
+		{name: "bit_count_text", expr: "bit_count(v)", baseColumn: "v", baseSQLType: "varchar(16)", baseType: plan.Type{Id: int32(types.T_varchar), Width: 16}, generatedSQLType: "bigint unsigned", generatedType: plan.Type{Id: int32(types.T_uint64)}},
+		{name: "bit_count_numeric", expr: "bit_count(v)", baseColumn: "v", baseSQLType: "int", baseType: plan.Type{Id: int32(types.T_int32)}, generatedSQLType: "bigint unsigned", generatedType: plan.Type{Id: int32(types.T_uint64)}},
+		{name: "bit_count_binary", expr: "bit_count(v)", baseColumn: "v", baseSQLType: "varbinary(16)", baseType: plan.Type{Id: int32(types.T_varbinary), Width: 16}, generatedSQLType: "bigint unsigned", generatedType: plan.Type{Id: int32(types.T_uint64)}},
 		{name: "inet_aton", expr: "inet_aton(ip_text)", baseColumn: "ip_text", baseSQLType: "varchar(39)", baseType: plan.Type{Id: int32(types.T_varchar), Width: 39}, generatedSQLType: "bigint unsigned", generatedType: plan.Type{Id: int32(types.T_uint64)}},
 		{name: "inet_ntoa", expr: "inet_ntoa(ip_number)", baseColumn: "ip_number", baseSQLType: "bigint unsigned", baseType: plan.Type{Id: int32(types.T_uint64)}, generatedSQLType: "varchar(39)", generatedType: plan.Type{Id: int32(types.T_varchar), Width: 39}},
 		{name: "inet6_aton", expr: "inet6_aton(ip_text)", baseColumn: "ip_text", baseSQLType: "varchar(39)", baseType: plan.Type{Id: int32(types.T_varchar), Width: 39}, generatedSQLType: "varbinary(16)", generatedType: plan.Type{Id: int32(types.T_varbinary), Width: 16}},
@@ -1442,5 +1611,37 @@ func TestDefaultBlobTextAssignmentPolicy(t *testing.T) {
 		null, err := getDefaultExprForAssignment(proc.Ctx, &plan.ColDef{Typ: target}, proc, true)
 		require.NoError(t, err)
 		require.True(t, null.GetLit().GetIsnull())
+	}
+}
+
+func TestEmptyDomainTypeReplay(t *testing.T) {
+	for _, tc := range []struct {
+		ddl               string
+		oid               types.T
+		domain, formatted string
+	}{
+		{"enum('')", types.T_enum, "", "ENUM('')"}, {"set('')", types.T_uint64, ",", "SET('')"}, {"set('   ')", types.T_uint64, ",", "SET('')"}, {"bigint unsigned", types.T_uint64, "", "BIGINT UNSIGNED"},
+	} {
+		t.Run(tc.ddl, func(t *testing.T) {
+			stmt, err := mysql.ParseOne(context.Background(), "create table t(v "+tc.ddl+")", 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			typ, err := getTypeFromAst(context.Background(), stmt.(*tree.CreateTable).Defs[0].(*tree.ColumnTableDef).Type)
+			require.NoError(t, err)
+			require.Equal(t, int32(tc.oid), typ.Id)
+			require.Equal(t, tc.domain, typ.Enumvalues)
+			require.Equal(t, tc.formatted, FormatColType(typ))
+			encoded, err := typ.Marshal()
+			require.NoError(t, err)
+			var recovered plan.Type
+			require.NoError(t, recovered.Unmarshal(encoded))
+			require.Equal(t, typ, recovered)
+			replay, err := mysql.ParseOne(context.Background(), "create table replay(v "+FormatColType(recovered)+")", 1)
+			require.NoError(t, err)
+			defer replay.Free()
+			replayType, err := getTypeFromAst(context.Background(), replay.(*tree.CreateTable).Defs[0].(*tree.ColumnTableDef).Type)
+			require.NoError(t, err)
+			require.Equal(t, typ, replayType)
+		})
 	}
 }

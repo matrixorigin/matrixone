@@ -17,8 +17,10 @@ package function
 import (
 	"bytes"
 	"cmp"
+	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"math"
 	"math/big"
 	"slices"
@@ -237,12 +239,39 @@ func (op *opBuiltInJq) appendJqConstResult(
 func (op *opBuiltInJq) jqImpl(jsonStr []byte, code *gojq.Code) error {
 	// first, turn jsonstr to any
 	var jv any
-	err := json.Unmarshal(jsonStr, &jv)
-	if err != nil {
+	decoder := json.NewDecoder(bytes.NewReader(jsonStr))
+	decoder.UseNumber()
+	if err := decoder.Decode(&jv); err != nil {
+		var validated any
+		if syntaxErr := json.Unmarshal(jsonStr, &validated); syntaxErr != nil {
+			return syntaxErr
+		}
 		return err
+	}
+	// json.Decoder accepts multiple top-level values, while jq() accepts one
+	// JSON document. Preserve that contract and its existing syntax errors.
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		var validated any
+		if syntaxErr := json.Unmarshal(jsonStr, &validated); syntaxErr != nil {
+			return syntaxErr
+		}
+		if err == nil {
+			return moerr.NewInvalidInputNoCtx("multiple top-level JSON values")
+		}
+		return err
+	}
+	if jqJSONNumberOutOfFloat64Range(jsonStr) {
+		// Keep json.Unmarshal's historical range error while retaining the
+		// original json.Number values for integers that float64 can represent.
+		var validated any
+		if err := json.Unmarshal(jsonStr, &validated); err != nil {
+			return err
+		}
 	}
 
 	iter := code.Run(jv)
+	first := true
 	for {
 		v, ok := iter.Next()
 		if !ok {
@@ -253,12 +282,56 @@ func (op *opBuiltInJq) jqImpl(jsonStr []byte, code *gojq.Code) error {
 			return verr
 		}
 
+		if !first {
+			op.enc.w.WriteByte('\n')
+		}
 		if err := op.enc.encode(v); err != nil {
 			op.enc.done()
 			return err
 		}
+		first = false
 	}
 	return nil
+}
+
+func jqJSONNumberOutOfFloat64Range(data []byte) bool {
+	// The decoder above has already validated the JSON grammar. Scan the source
+	// so duplicate object keys cannot discard an out-of-range number before it
+	// is checked, while avoiding a second decoded object tree on the common path.
+	for i := 0; i < len(data); {
+		if data[i] == '"' {
+			i++
+			for i < len(data) {
+				if data[i] == '\\' {
+					i += 2
+					continue
+				}
+				if data[i] == '"' {
+					i++
+					break
+				}
+				i++
+			}
+			continue
+		}
+		if data[i] != '-' && (data[i] < '0' || data[i] > '9') {
+			i++
+			continue
+		}
+
+		start := i
+		for i < len(data) {
+			b := data[i]
+			if (b < '0' || b > '9') && b != '-' && b != '+' && b != '.' && b != 'e' && b != 'E' {
+				break
+			}
+			i++
+		}
+		if _, err := strconv.ParseFloat(string(data[start:i]), 64); err != nil {
+			return true
+		}
+	}
+	return false
 }
 
 func (op *opBuiltInJq) getJqCode(jq string) (*gojq.Code, error) {
@@ -545,6 +618,11 @@ func (op *opBuiltInJsonRow) grow(length int) {
 func (op *opBuiltInJsonRow) jsonRow(params []*vector.Vector, result vector.FunctionResultWrapper,
 	proc *process.Process, length int, selectList *FunctionSelectList) error {
 	op.grow(length)
+	defer func() {
+		for i := range op.enc[:length] {
+			op.enc[i].done()
+		}
+	}()
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	ulen := uint64(length)
 
@@ -626,7 +704,7 @@ func (op *opBuiltInJsonRow) jsonRow(params []*vector.Vector, result vector.Funct
 		case types.T_uuid:
 			encodeFixedStringer[types.Uuid](op, params[i], ulen)
 		case types.T_json:
-			if err := encodeJson(op, params[i], ulen); err != nil {
+			if err := encodeJson(proc.Ctx, op, params[i], ulen); err != nil {
 				return err
 			}
 		default:
@@ -637,11 +715,14 @@ func (op *opBuiltInJsonRow) jsonRow(params []*vector.Vector, result vector.Funct
 	for j := 0; j < length; j++ {
 		op.enc[j].w.WriteByte(']')
 		if selectList.Contains(uint64(j)) {
-			rs.AppendBytes(nil, true)
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
 		} else {
-			rs.AppendBytes(op.enc[j].bytes(), false)
+			if err := rs.AppendBytes(op.enc[j].bytes(), false); err != nil {
+				return err
+			}
 		}
-		op.enc[j].done()
 	}
 	return nil
 }
@@ -775,7 +856,7 @@ func encodeNarrowArray[T types.ArrayElement](op *opBuiltInJsonRow, v *vector.Vec
 	}
 }
 
-func encodeJson(op *opBuiltInJsonRow, v *vector.Vector, length uint64) error {
+func encodeJson(ctx context.Context, op *opBuiltInJsonRow, v *vector.Vector, length uint64) error {
 	// GenStrParam: json is varlena also.
 	p := vector.GenerateFunctionStrParameter(v)
 	for i := uint64(0); i < length; i++ {
@@ -784,7 +865,7 @@ func encodeJson(op *opBuiltInJsonRow, v *vector.Vector, length uint64) error {
 			op.enc[i].w.WriteString("null")
 		} else {
 			bj := types.DecodeJson(v)
-			val, err := bj.MarshalJSON()
+			val, err := marshalJSONForFloatStringProof(ctx, bj)
 			// this should a valid json and we should never
 			// error here.   Check it anyway.
 			if err != nil {

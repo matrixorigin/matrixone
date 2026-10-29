@@ -1,0 +1,4 @@
+target/
+!src/main/
+!src/main/**
+!test/drop_commit_ok_proxy.py

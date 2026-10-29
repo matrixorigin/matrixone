@@ -20,6 +20,7 @@ import (
 	"reflect"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/monlp/llm"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -44,6 +45,38 @@ type starlarkInterpreter struct {
 }
 
 func convertToStarlarkValue(ctx context.Context, v any) (starlark.Value, error) {
+	if v == nil {
+		return starlark.None, nil
+	}
+	// Non-nil SQL vectors are stored as typed slices but enter Starlark through
+	// their existing SQL string representation. Keep nil slices unsupported.
+	switch v := v.(type) {
+	case []float32:
+		if v != nil {
+			return starlark.String(types.ArrayToString[float32](v)), nil
+		}
+	case []float64:
+		if v != nil {
+			return starlark.String(types.ArrayToString[float64](v)), nil
+		}
+	case []types.BF16:
+		if v != nil {
+			return starlark.String(types.ArrayToString[types.BF16](v)), nil
+		}
+	case []types.Float16:
+		if v != nil {
+			return starlark.String(types.ArrayToString[types.Float16](v)), nil
+		}
+	case []int8:
+		if v != nil {
+			return starlark.String(types.ArrayToString[int8](v)), nil
+		}
+	case []uint8:
+		if v != nil {
+			return starlark.String(types.ArrayToString[uint8](v)), nil
+		}
+	}
+
 	val := reflect.ValueOf(v)
 	kind := val.Kind()
 	if kind == reflect.Pointer {
@@ -100,11 +133,36 @@ func convertFromStarlarkValue(ctx context.Context, v starlark.Value) (any, error
 	return nil, moerr.NewInvalidInputf(ctx, "type %s is not a supported starlark type", v.Type())
 }
 
-func (interpreter *Interpreter) ExecuteStarlark(spBody string, dbName string, bg bool) error {
+// starlarkOutputExpr preserves the source literal until SQL assignment coercion.
+// In particular, Starlark integers may exceed both int64 and uint64.
+func starlarkOutputExpr(ctx context.Context, value starlark.Value) (tree.Expr, error) {
+	switch value := value.(type) {
+	case starlark.NoneType:
+		return tree.NewNumVal("", "", false, tree.P_null), nil
+	case starlark.Bool:
+		return tree.NewNumVal(bool(value), value.String(), false, tree.P_bool), nil
+	case starlark.Int:
+		if v, ok := value.Int64(); ok {
+			return tree.NewNumVal(v, value.String(), false, tree.P_int64), nil
+		}
+		if v, ok := value.Uint64(); ok {
+			return tree.NewNumVal(v, value.String(), false, tree.P_uint64), nil
+		}
+		return tree.NewNumVal(value.String(), value.String(), false, tree.P_decimal), nil
+	case starlark.Float:
+		return tree.NewNumVal(float64(value), value.String(), false, tree.P_float64), nil
+	case starlark.String:
+		return tree.NewNumVal(string(value), string(value), false, tree.P_char), nil
+	default:
+		return nil, moerr.NewInvalidInputf(ctx, "type %s is not a supported SQL parameter value", value.Type())
+	}
+}
+
+func (interpreter *Interpreter) ExecuteStarlark(spBody string, dbName string, bg bool) (err error) {
 	// preamble
 	interpreter.bh.ClearExecResultSet()
 	// use current database
-	err := interpreter.bh.Exec(interpreter.ctx, "use "+dbName)
+	err = interpreter.bh.Exec(interpreter.ctx, "use "+dbName)
 	if err != nil {
 		return err
 	}
@@ -185,20 +243,35 @@ func (interpreter *Interpreter) ExecuteStarlark(spBody string, dbName string, bg
 		return err
 	}
 
-	// bind out variables
+	// Validate every declaration before publishing any caller variables, including
+	// parameters that alias the same @variable. Missing out_ globals keep their
+	// historical behavior of leaving the caller value unchanged.
+	type outputValue struct {
+		name  string
+		value any
+	}
+	outputs := make([]outputValue, 0, len(interpreter.outParamMap))
 	for k := range interpreter.outParamMap {
 		gv := globals[k]
 		if gv != nil {
-			av, err := convertFromStarlarkValue(interpreter.ctx, gv)
+			expr, err := starlarkOutputExpr(interpreter.ctx, gv)
 			if err != nil {
 				return err
 			}
-
-			varName := interpreter.outParamMap[k].(string)
-			err = interpreter.ses.SetUserDefinedVar(varName, av, "")
+			declaredType, ok := interpreter.argsType[k[len("out_"):]]
+			if !ok {
+				return moerr.NewInternalErrorf(interpreter.ctx, "missing declared type for parameter %s", k)
+			}
+			av, err := interpreter.evaluateExprInContext(interpreter.ctx, expr, &declaredType)
 			if err != nil {
 				return err
 			}
+			outputs = append(outputs, outputValue{interpreter.outParamMap[k].(string), av})
+		}
+	}
+	for _, output := range outputs {
+		if err = interpreter.ses.SetUserDefinedVar(output.name, output.value, ""); err != nil {
+			return err
 		}
 	}
 
@@ -317,6 +390,15 @@ func (si *starlarkInterpreter) moSql(thread *starlark.Thread, b *starlark.Builti
 	for i := range rows {
 		rowsi := make(starlark.Tuple, er.GetColumnCount())
 		for j := range rowsi {
+			isNull, err := er.ColumnIsNull(si.interp.ctx, uint64(i), uint64(j))
+			if err != nil {
+				ret[1] = si.failed(err)
+				return starlark.NewList(ret), nil
+			}
+			if isNull {
+				rowsi[j] = starlark.None
+				continue
+			}
 			v, err := er.GetString(si.interp.ctx, uint64(i), uint64(j))
 			if err != nil {
 				ret[1] = si.failed(err)
@@ -415,28 +497,43 @@ func (si *starlarkInterpreter) moSetVar(thread *starlark.Thread, b *starlark.Bui
 	return starlark.NewList(ret), nil
 }
 
-func (si *starlarkInterpreter) llmGetVar(name, orig string) string {
-	if orig == "" {
-		value, err := si.interp.ses.GetUserDefinedVar(name)
-		if err != nil {
-			return ""
-		}
-		return value.Value.(string)
+func (si *starlarkInterpreter) llmGetVar(name, orig string) (string, error) {
+	if orig != "" {
+		return orig, nil
 	}
-	return orig
+	value, err := si.interp.ses.GetUserDefinedVar(name)
+	if err != nil || value == nil {
+		return "", nil
+	}
+	// Session variables are untyped; validate instead of asserting so a
+	// numeric/boolean value is a normal error rather than a Go panic.
+	switch v := value.Value.(type) {
+	case nil:
+		return "", nil
+	case string:
+		return v, nil
+	case []byte:
+		return string(v), nil
+	default:
+		return "", moerr.NewInvalidInputf(si.interp.ctx, "session variable @%s must be a string, got %T", name, v)
+	}
 }
 
 func (si *starlarkInterpreter) llmConnect(server, addr, model, options string) (llm.LLMClient, error) {
-	server = si.llmGetVar("llm_server", server)
-	addr = si.llmGetVar("llm_addr", addr)
-	model = si.llmGetVar("llm_model", model)
-	options = si.llmGetVar("llm_options", options)
+	var err error
+	for _, v := range []struct {
+		name  string
+		value *string
+	}{{"llm_server", &server}, {"llm_addr", &addr}, {"llm_model", &model}, {"llm_options", &options}} {
+		if *v.value, err = si.llmGetVar(v.name, *v.value); err != nil {
+			return nil, err
+		}
+	}
 	return llm.NewLLMClient(server, addr, model, options)
 }
 
 func (si *starlarkInterpreter) moLlmConnect(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
 	si.beginCall()
-	var err error
 	var server, addr, model, options string
 	var ret = []starlark.Value{starlark.None, starlark.None}
 	if err := starlark.UnpackPositionalArgs("llm_connect", args, kwargs, 3, &server, &addr, &model, &options); err != nil {
@@ -444,17 +541,18 @@ func (si *starlarkInterpreter) moLlmConnect(thread *starlark.Thread, b *starlark
 		return starlark.NewList(ret), nil
 	}
 
-	si.llm, err = si.llmConnect(server, addr, model, options)
+	client, err := si.llmConnect(server, addr, model, options)
 	if err != nil {
+		si.llm = nil
 		ret[1] = si.failed(err)
 		return starlark.NewList(ret), nil
 	}
+	si.llm = client
 	return starlark.NewList(ret), nil
 }
 
 func (si *starlarkInterpreter) moLlmChat(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
 	si.beginCall()
-	var err error
 	var prompt string
 	var ret = []starlark.Value{starlark.None, starlark.None}
 	if err := starlark.UnpackPositionalArgs("llm_chat", args, kwargs, 1, &prompt); err != nil {
@@ -463,11 +561,12 @@ func (si *starlarkInterpreter) moLlmChat(thread *starlark.Thread, b *starlark.Bu
 	}
 
 	if si.llm == nil {
-		si.llm, err = si.llmConnect("", "", "", "")
+		client, err := si.llmConnect("", "", "", "")
 		if err != nil {
 			ret[1] = si.failed(err)
 			return starlark.NewList(ret), nil
 		}
+		si.llm = client
 	}
 
 	reply, err := si.llm.Chat(si.interp.ctx, prompt)

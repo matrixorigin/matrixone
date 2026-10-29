@@ -156,6 +156,7 @@ func (builder *QueryBuilder) bindMultiInsert(stmt *tree.MultiInsert, bindCtx *Bi
 	// on this builder.
 	builder.insertInputKeysUnique = false
 	builder.isInsertIgnore = false
+	builder.isODKU = false
 
 	if stmt.Source == nil {
 		return moerr.NewInternalError(builder.GetContext(), "multi-table insert has no source query")
@@ -329,7 +330,7 @@ func (builder *QueryBuilder) appendMultiInsertSelectors(
 	// context carries exactly that, and the source's columns stay reachable
 	// only through the alias added below.
 	condCtx := newCTEDeclarationContext(builder, bindCtx)
-	if err := builder.addBinding(srcID, tree.AliasClause{Alias: multiInsertSourceAlias}, condCtx); err != nil {
+	if err := builder.addBinding(srcID, tree.AliasClause{Alias: multiInsertSourceAlias}, condCtx, ""); err != nil {
 		return out, err
 	}
 	if len(condCtx.bindings) != 1 {
@@ -349,25 +350,20 @@ func (builder *QueryBuilder) appendMultiInsertSelectors(
 		if err != nil {
 			return out, err
 		}
-		// A subquery is flattened into a JOIN below the selector projections,
-		// and a join processes the whole batch: no projection-level mask can
-		// stop it running for rows an earlier WHEN already claimed. Masking the
-		// column the join produces does not restore first-match semantics, so
-		// refuse the shape instead of silently violating it. The first WHEN is
-		// fine — it applies to every row by definition — and INSERT ALL has no
-		// first-match rule at all.
+		// A later FIRST condition belongs inside the route's false branch.
+		// Keep its subquery as a demand so a previously claimed row never
+		// starts that program.
 		if first && i > 0 && exprHasSubquery(cond) {
-			return out, moerr.NewNotSupportedf(builder.GetContext(),
-				"INSERT FIRST with a subquery in WHEN #%d: it cannot be skipped for rows an earlier WHEN already matched", i+1)
+			cond, err = builder.bindDependentJoinCondition(cond)
+		} else {
+			lastNodeID, cond, err = builder.flattenSubqueries(lastNodeID, cond, condCtx)
 		}
-		var nodeID int32
-		if nodeID, cond, err = builder.flattenSubqueries(lastNodeID, cond, condCtx); err != nil {
+		if err != nil {
 			return out, err
 		}
 		if cond == nil {
 			return out, moerr.NewInternalError(builder.GetContext(), "multi-table insert WHEN condition vanished during binding")
 		}
-		lastNodeID = nodeID
 		conds = append(conds, cond)
 	}
 
@@ -390,6 +386,10 @@ func (builder *QueryBuilder) appendMultiInsertSelectors(
 			ProjectList: projList,
 			BindingTags: []int32{builder.genNewBindTag()},
 		}, condCtx)
+		if builder.correlationRouteNodes == nil {
+			builder.correlationRouteNodes = make(map[int32]bool)
+		}
+		builder.correlationRouteNodes[out.nodeID] = true
 		return out, nil
 	}
 
@@ -426,6 +426,10 @@ func (builder *QueryBuilder) appendMultiInsertSelectors(
 		ProjectList: projList,
 		BindingTags: []int32{builder.genNewBindTag()},
 	}, condCtx)
+	if builder.correlationRouteNodes == nil {
+		builder.correlationRouteNodes = make(map[int32]bool)
+	}
+	builder.correlationRouteNodes[out.nodeID] = true
 	out.selectorBase = -1
 	out.routePos = len(srcCols)
 	return out, nil
@@ -625,7 +629,7 @@ func (builder *QueryBuilder) bindMultiInsertGroup(
 	}
 
 	rootID, err := builder.appendDedupAndMultiUpdateNodesForBindInsert(
-		tCtx, group.dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx, nil, irregularIndexes, autoIncrementGeneratedColumn)
+		tCtx, group.dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx, nil, irregularIndexes, autoIncrementGeneratedColumn, false)
 	if err != nil {
 		return err
 	}
@@ -966,7 +970,7 @@ func (builder *QueryBuilder) bindMultiInsertBranchSource(
 		builder.positionalSinkScans = make(map[int32]struct{})
 	}
 	builder.positionalSinkScans[scanID] = struct{}{}
-	if err := builder.addBinding(scanID, tree.AliasClause{Alias: multiInsertSourceAlias}, bCtx); err != nil {
+	if err := builder.addBinding(scanID, tree.AliasClause{Alias: multiInsertSourceAlias}, bCtx, ""); err != nil {
 		return 0, err
 	}
 	// addBinding registers a SINK_SCAN only under its table name; expose its
@@ -1064,19 +1068,13 @@ func (builder *QueryBuilder) bindMultiInsertBranchSource(
 			if err != nil {
 				return 0, err
 			}
-			// A subquery in the VALUES of a CONDITIONAL clause has the same
-			// unmaskable-join problem as one in a later WHEN: flattenSubqueries
-			// rewrites it into a join whose build side is attached as a PreScope,
-			// and MergeRun starts PreScopes even when the filtered probe selects
-			// no rows. The subquery would therefore run — and could fail — for a
-			// clause the row never reached. The FILTER below cannot prevent it,
-			// so refuse the shape rather than evaluate an unreachable value.
-			// Unconditional clauses are unaffected: every row reaches them.
+			// The branch FILTER owns route selection. Its projection may
+			// start subqueries only after that filter supplies a selected row.
 			if (branch.condIdx >= 0 || branch.isElse) && exprHasSubquery(expr) {
-				return 0, moerr.NewNotSupported(sysCtx,
-					"multi-table INSERT with a subquery in the VALUES of a conditional INTO clause: it cannot be skipped for rows the clause does not select")
+				expr, err = builder.bindDependentJoinCondition(expr)
+			} else {
+				lastNodeID, expr, err = builder.flattenSubqueries(lastNodeID, expr, bCtx)
 			}
-			lastNodeID, expr, err = builder.flattenSubqueries(lastNodeID, expr, bCtx)
 			if err != nil {
 				return 0, err
 			}

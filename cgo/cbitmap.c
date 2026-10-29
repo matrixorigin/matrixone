@@ -34,12 +34,6 @@
 // structure is sized to the value SPAN, not the max value. When the builder is
 // told not to offset, base is 0 and bit i == value i (legacy layout). words
 // holds bitmap_size(nbits) uint64s; NULL when nbits == 0 (matches nothing).
-typedef struct {
-  uint64_t base;
-  uint64_t nbits;
-  uint64_t *words;
-} mo_cbitmap_t;
-
 // Decode elemsz little-endian bytes (1/2/4/8) of a fixed integer into uint64 by
 // zero-extension. MUST match mo_decode_uint in croaring.c and rawIntToUint64 in
 // Go so the build and probe sides map a value to the same bit.
@@ -123,15 +117,6 @@ void mo_cbitmap_free(void *f) {
   mo_cbitmap_t *b = (mo_cbitmap_t *)f;
   free(b->words);
   free(b);
-}
-
-bool mo_cbitmap_contain(void *f, uint64_t val) {
-  if (!f) return false;
-  mo_cbitmap_t *b = (mo_cbitmap_t *)f;
-  if (val < b->base) return false;  // below base also guards the subtraction
-  uint64_t idx = val - b->base;
-  if (idx >= b->nbits) return false;
-  return bitmap_test(b->words, idx);
 }
 
 void mo_cbitmap_test_fixed(void *f, const void *key, size_t len, size_t elemsz,

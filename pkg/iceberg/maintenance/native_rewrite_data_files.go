@@ -284,7 +284,7 @@ func (p NativeRewriteDataFilesPlanner) BuildMaintenanceCommit(ctx context.Contex
 			preservedManifestFiles(preservedDataManifests)...,
 		),
 		Summary: map[string]string{
-			"operation":           string(OperationRewriteDataFiles),
+			"operation":           "replace",
 			"engine":              "matrixone",
 			"idempotency-key":     firstNonEmptyString(req.IdempotencyKey, req.JobID),
 			"base-snapshot":       strconv.FormatInt(snapshot.SnapshotID, 10),
@@ -554,7 +554,10 @@ func (s RewriteDataFilesSelector) Select(ctx context.Context, req RewriteDataFil
 		}
 		memoryUsed += entryWeight
 		for idx := range entries {
-			entries[idx].DataFile.SpecID = manifest.PartitionSpecID
+			entries[idx], err = metadata.NormalizeManifestEntry(entries[idx], manifest)
+			if err != nil {
+				return nil, err
+			}
 		}
 		selection.ScannedManifestCount++
 		// PreservedDataManifests owns a second entry slice. Nested immutable maps
@@ -1072,7 +1075,7 @@ func buildRewriteDataFilesCommitAttempt(req RewriteDataFilesMaterializeRequest, 
 	if summary == nil {
 		summary = make(map[string]string)
 	}
-	summary["operation"] = string(OperationRewriteDataFiles)
+	summary["operation"] = "replace"
 	summary["engine"] = "matrixone"
 	summary["idempotency-key"] = req.IdempotencyKey
 	summary["base-snapshot"] = strconv.FormatInt(req.Snapshot.SnapshotID, 10)

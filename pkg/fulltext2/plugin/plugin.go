@@ -24,6 +24,7 @@ package plugin
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/fulltext2"
 	ft2coverage "github.com/matrixorigin/matrixone/pkg/fulltext2/plugin/coverage"
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	catalogplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/catalog"
@@ -31,11 +32,13 @@ import (
 	coverageplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/coverage"
 	idxcronplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/idxcron"
 	planplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/plan"
+	searchplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/search"
 
 	ft2compile "github.com/matrixorigin/matrixone/pkg/fulltext2/plugin/compile"
 	ft2idxcron "github.com/matrixorigin/matrixone/pkg/fulltext2/plugin/idxcron"
 	ft2plan "github.com/matrixorigin/matrixone/pkg/fulltext2/plugin/plan"
 	ft2runtime "github.com/matrixorigin/matrixone/pkg/fulltext2/plugin/runtime"
+	ft2search "github.com/matrixorigin/matrixone/pkg/fulltext2/plugin/search"
 )
 
 // Plugin is the fulltext2 AlgoPlugin.
@@ -44,6 +47,7 @@ type Plugin struct {
 	compileHooks compileplugin.Hooks
 	planHooks    planplugin.Hooks
 	idxcronHooks idxcronplugin.Hooks
+	searchHooks  searchplugin.Hooks
 }
 
 func New() *Plugin {
@@ -52,6 +56,7 @@ func New() *Plugin {
 		compileHooks: ft2compile.Hooks{},
 		planHooks:    ft2plan.Hooks{},
 		idxcronHooks: ft2idxcron.Hooks{},
+		searchHooks:  ft2search.Hooks{},
 	}
 }
 
@@ -60,13 +65,23 @@ func (p *Plugin) Catalog() catalogplugin.Hooks { return p.catalogHooks }
 func (p *Plugin) Compile() compileplugin.Hooks { return p.compileHooks }
 func (p *Plugin) Plan() planplugin.Hooks       { return p.planHooks }
 func (p *Plugin) Idxcron() idxcronplugin.Hooks { return p.idxcronHooks }
+func (p *Plugin) Search() searchplugin.Hooks   { return p.searchHooks }
 
 // Coverage implements the OPTIONAL indexplugin.CoveragePlugin capability.
 // fulltext2 is always-async, so the optimizer may only use it as a mandatory
 // filter when its ISCP watermark has reached the read snapshot.
 func (*Plugin) Coverage() coverageplugin.Hooks { return ft2coverage.Hooks{} }
 
+// Injected JSON probes must recheck the transaction-local-write guard on each
+// EXECUTE. User MATCH searches are freshness-tolerant and can reuse their plan.
+func (*Plugin) PreparedPlanDependsOnIndexCoverage(options []byte) bool {
+	opts, err := ft2plan.DecodeScanOptions(options)
+	return err == nil && opts.Mode == fulltext2.JSONProbeMode
+}
+
 var _ indexplugin.AlgoPlugin = (*Plugin)(nil)
+var _ indexplugin.SearchPlugin = (*Plugin)(nil)
+var _ indexplugin.PreparedPlanCoveragePlugin = (*Plugin)(nil)
 
 // init registers fulltext2. CREATE FULLTEXT2 INDEX now creates the hidden tables;
 // build-from-source / MATCH search / CDC / reindex land in the following steps.

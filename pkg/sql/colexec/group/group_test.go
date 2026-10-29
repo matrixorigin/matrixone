@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -82,8 +83,25 @@ func colExpr(pos int32, t types.T) *plan.Expr {
 	}
 }
 
+func colExprWithType(pos int32, typ types.Type) *plan.Expr {
+	return &plan.Expr{
+		Typ: plan.Type{
+			Id:      int32(typ.Oid),
+			Width:   typ.Width,
+			Scale:   typ.Scale,
+			Charset: uint32(typ.Charset),
+		},
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: pos}},
+	}
+}
+
 func sumAgg(pos int32) aggexec.AggFuncExecExpression {
 	e, _ := function.GetFunctionByName(context.Background(), "sum", []types.Type{types.T_int32.ToType()})
+	return aggexec.MakeAggFunctionExpression(e.GetEncodedOverloadID(), false, []*plan.Expr{colExpr(pos, types.T_int32)}, nil)
+}
+
+func avgAgg(pos int32) aggexec.AggFuncExecExpression {
+	e, _ := function.GetFunctionByName(context.Background(), "avg", []types.Type{types.T_int32.ToType()})
 	return aggexec.MakeAggFunctionExpression(e.GetEncodedOverloadID(), false, []*plan.Expr{colExpr(pos, types.T_int32)}, nil)
 }
 
@@ -725,6 +743,24 @@ func collectBatches(t *testing.T, op vm.Operator, proc *process.Process) []*batc
 			return result
 		}
 		result = append(result, ret.Batch)
+	}
+}
+
+// collectSortRollupBatches copies each result before asking the streaming
+// operator for the next one. SortRollup owns the batch returned by Call and
+// reclaims it at the next call, just like the production output callback does
+// after it has synchronously consumed the batch.
+func collectSortRollupBatches(t *testing.T, op vm.Operator, proc *process.Process) []*batch.Batch {
+	t.Helper()
+
+	var result []*batch.Batch
+	for {
+		ret, err := vm.Exec(op, proc)
+		require.NoError(t, err)
+		if ret.Status == vm.ExecStop || ret.Batch == nil {
+			return result
+		}
+		result = append(result, cloneBatch(t, proc, ret.Batch))
 	}
 }
 
@@ -1572,6 +1608,622 @@ func TestGroupByWithSum(t *testing.T) {
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
 
+func TestSortRollupProducesGroupingSentinelsAndAggregates(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	first := batch.NewWithSize(3)
+	first.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 1}, nil, proc.Mp())
+	first.Vecs[1] = testutil.MakeInt32Vector([]int32{10, 20}, nil, proc.Mp())
+	first.Vecs[2] = testutil.MakeInt32Vector([]int32{1, 2}, nil, proc.Mp())
+	first.SetRowCount(2)
+	second := batch.NewWithSize(3)
+	second.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 2, 2}, nil, proc.Mp())
+	second.Vecs[1] = testutil.MakeInt32Vector([]int32{20, 10, 20}, nil, proc.Mp())
+	second.Vecs[2] = testutil.MakeInt32Vector([]int32{3, 4, 5}, nil, proc.Mp())
+	second.SetRowCount(3)
+
+	g := newGroupOp(proc,
+		[]*plan.Expr{colExpr(0, types.T_int32), colExpr(1, types.T_int32)},
+		[]aggexec.AggFuncExecExpression{sumAgg(2)})
+	g.SortRollup = true
+	g.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{first, second}))
+	require.NoError(t, g.Prepare(proc))
+	results := collectSortRollupBatches(t, g, proc)
+
+	type resultKey struct {
+		a, b         int32
+		aRoll, bRoll bool
+	}
+	actual := make(map[resultKey]int64)
+	for _, result := range results {
+		as := vector.MustFixedColNoTypeCheck[int32](result.Vecs[0])
+		bs := vector.MustFixedColNoTypeCheck[int32](result.Vecs[1])
+		sums := vector.MustFixedColNoTypeCheck[int64](result.Vecs[2])
+		for row := 0; row < result.RowCount(); row++ {
+			actual[resultKey{
+				a:     as[row],
+				b:     bs[row],
+				aRoll: result.Vecs[0].GetGrouping().Contains(uint64(row)),
+				bRoll: result.Vecs[1].GetGrouping().Contains(uint64(row)),
+			}] = sums[row]
+		}
+	}
+
+	want := map[resultKey]int64{
+		{a: 1, b: 10}:              1,
+		{a: 1, b: 20}:              5,
+		{a: 2, b: 10}:              4,
+		{a: 2, b: 20}:              5,
+		{a: 1, bRoll: true}:        6,
+		{a: 2, bRoll: true}:        9,
+		{aRoll: true, bRoll: true}: 15,
+	}
+	require.Equal(t, want, actual)
+	for _, result := range results {
+		result.Clean(proc.Mp())
+	}
+
+	g.Free(proc, false, nil)
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
+func TestSortRollupEmptyInputAndNullRow(t *testing.T) {
+	for _, name := range []string{"immediate-eof", "empty-batch", "source-null-row"} {
+		t.Run(name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			child := colexec.NewMockOperator()
+			g := newGroupOp(proc,
+				[]*plan.Expr{colExpr(0, types.T_int32), colExpr(1, types.T_int32)},
+				[]aggexec.AggFuncExecExpression{countStarAgg(), sumAgg(2)})
+			g.SortRollup = true
+			g.AppendChild(child)
+			t.Cleanup(func() {
+				g.Free(proc, false, nil)
+				child.Free(proc, false, nil)
+				proc.Free()
+				require.Zero(t, proc.Mp().CurrNB())
+			})
+			if name != "immediate-eof" {
+				var values []int32
+				var nullRows []uint64
+				if name == "source-null-row" {
+					values = []int32{0}
+					nullRows = []uint64{0}
+				}
+				input := batch.NewWithSize(3)
+				for i := range input.Vecs {
+					input.Vecs[i] = testutil.MakeInt32Vector(values, nullRows, proc.Mp())
+				}
+				input.SetRowCount(len(values))
+				child.WithBatchs([]*batch.Batch{input})
+			}
+
+			require.NoError(t, g.Prepare(proc))
+			results := collectSortRollupBatches(t, g, proc)
+			for _, result := range results {
+				t.Cleanup(func() { result.Clean(proc.Mp()) })
+			}
+			if name != "source-null-row" {
+				require.Empty(t, results, "ROLLUP must not synthesize a group from empty input")
+				return
+			}
+			// One real NULL row contributes detail, subtotal and grand total.
+			// NULL keys must not be confused with having observed no input.
+			require.Len(t, results, 1)
+			result := results[0]
+			require.Equal(t, 3, result.RowCount())
+			counts := vector.MustFixedColNoTypeCheck[int64](result.Vecs[2])
+			for row := 0; row < result.RowCount(); row++ {
+				require.Equal(t, int64(1), counts[row])
+				require.True(t, result.Vecs[3].IsNull(uint64(row)))
+				require.Equal(t, row == 2, result.Vecs[0].GetGrouping().Contains(uint64(row)))
+				require.Equal(t, row >= 1, result.Vecs[1].GetGrouping().Contains(uint64(row)))
+			}
+		})
+	}
+}
+
+type sortRollupYieldInput struct {
+	*colexec.MockOperator
+	yieldNext bool
+}
+
+func (input *sortRollupYieldInput) Call(proc *process.Process) (vm.CallResult, error) {
+	if input.yieldNext {
+		input.yieldNext = false
+		return vm.CallResult{Status: vm.ExecYield}, nil
+	}
+	input.yieldNext = true
+	return input.MockOperator.Call(proc)
+}
+
+func TestSortRollupPropagatesChildYield(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	child := &sortRollupYieldInput{MockOperator: colexec.NewMockOperator(), yieldNext: true}
+	g := newGroupOp(proc, []*plan.Expr{colExpr(0, types.T_int32)},
+		[]aggexec.AggFuncExecExpression{countStarAgg()})
+	g.SortRollup = true
+	g.AppendChild(child)
+	t.Cleanup(func() {
+		g.Free(proc, false, nil)
+		child.Free(proc, false, nil)
+		proc.Free()
+		require.Zero(t, proc.Mp().CurrNB())
+	})
+	// Sorted batches, with a continuation yield before each batch and EOF.
+	// The last yield also exercises preservation of buffered detail output.
+	for _, key := range []int32{1, 2} {
+		input := batch.NewWithSize(1)
+		input.Vecs[0] = testutil.MakeInt32Vector([]int32{key}, nil, proc.Mp())
+		input.SetRowCount(1)
+		child.WithBatchs([]*batch.Batch{input})
+	}
+	require.NoError(t, g.Prepare(proc))
+	yields := 0
+	actual := make(map[int32]int64)
+	var total int64
+	for calls := 0; ; calls++ {
+		require.Less(t, calls, 8, "yielding child must eventually reach EOF")
+		result, err := vm.Exec(g, proc)
+		require.NoError(t, err)
+		if result.Status == vm.ExecYield {
+			yields++
+			require.Nil(t, result.Batch)
+			require.False(t, g.ctr.inputDone, "yield is not EOF")
+			continue
+		}
+		if result.Batch == nil {
+			break
+		}
+		keys := vector.MustFixedColNoTypeCheck[int32](result.Batch.Vecs[0])
+		counts := vector.MustFixedColNoTypeCheck[int64](result.Batch.Vecs[1])
+		for row := 0; row < result.Batch.RowCount(); row++ {
+			if result.Batch.Vecs[0].GetGrouping().Contains(uint64(row)) {
+				require.Zero(t, total, "grand total must be published exactly once")
+				total = counts[row]
+			} else {
+				_, duplicate := actual[keys[row]]
+				require.False(t, duplicate)
+				actual[keys[row]] = counts[row]
+			}
+		}
+	}
+	require.Equal(t, 3, yields)
+	require.Equal(t, map[int32]int64{1: 1, 2: 1}, actual)
+	require.Equal(t, int64(2), total)
+}
+
+func TestSortRollupDoesNotPublishAfterEOFCancellation(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	baseCtx := proc.Ctx
+	ctx, cancel := context.WithCancel(baseCtx)
+	proc.Ctx = ctx
+
+	input := batch.NewWithSize(1)
+	input.Vecs[0] = testutil.MakeInt32Vector([]int32{7}, nil, proc.Mp())
+	input.SetRowCount(1)
+	child := colexec.NewMockOperator().
+		WithBatchs([]*batch.Batch{input}).
+		WithEndOfDataCallback(cancel)
+	g := newGroupOp(proc, []*plan.Expr{colExpr(0, types.T_int32)},
+		[]aggexec.AggFuncExecExpression{countStarAgg()})
+	g.SortRollup = true
+	g.AppendChild(child)
+	require.NoError(t, g.Prepare(proc))
+
+	t.Cleanup(func() {
+		proc.Ctx = baseCtx
+		if g.ctr.mp != nil {
+			g.Free(proc, true, context.Canceled)
+		}
+		child.Free(proc, true, context.Canceled)
+		proc.Free()
+		require.Zero(t, proc.Mp().CurrNB())
+	})
+
+	result, err := vm.Exec(g, proc)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Nil(t, result.Batch,
+		"EOF cancellation must not publish a finalized rollup batch")
+
+	// Cancellation must release the first generation before the operator is
+	// reused for a fresh statement.
+	g.Reset(proc, true, context.Canceled)
+	child.Free(proc, true, context.Canceled)
+	g.Children = nil
+	proc.Ctx = baseCtx
+
+	fresh := batch.NewWithSize(1)
+	fresh.Vecs[0] = testutil.MakeInt32Vector([]int32{8}, nil, proc.Mp())
+	fresh.SetRowCount(1)
+	child = colexec.NewMockOperator().WithBatchs([]*batch.Batch{fresh})
+	g.AppendChild(child)
+	require.NoError(t, g.Prepare(proc))
+	results := collectSortRollupBatches(t, g, proc)
+	require.Len(t, results, 1)
+	require.Equal(t, 2, results[0].RowCount())
+	for _, result := range results {
+		result.Clean(proc.Mp())
+	}
+}
+
+func TestSortRollupStreamsMultipleOutputBatches(t *testing.T) {
+	for _, fast := range []bool{true, false} {
+		name := "fallback-min"
+		aggs := []aggexec.AggFuncExecExpression{countStarAgg()}
+		if fast {
+			name = "reuse"
+		} else {
+			aggs = append(aggs, aggexec.MakeAggFunctionExpression(
+				aggexec.AggIdOfMin, false, []*plan.Expr{colExpr(0, types.T_int32)}, nil))
+		}
+		t.Run(name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			const rows = aggBatchSize + 1
+			values := make([]int32, rows)
+			for i := range values {
+				values[i] = int32(i)
+			}
+
+			input := batch.NewWithSize(1)
+			input.Vecs[0] = testutil.MakeInt32Vector(values, nil, proc.Mp())
+			input.SetRowCount(rows)
+			child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
+			g := newGroupOp(proc,
+				[]*plan.Expr{colExpr(0, types.T_int32)},
+				aggs)
+			g.SortRollup = true
+			g.AppendChild(child)
+			t.Cleanup(func() {
+				g.Free(proc, false, nil)
+				child.Free(proc, false, nil)
+				proc.Free()
+				require.Zero(t, proc.Mp().CurrNB())
+			})
+			require.NoError(t, g.Prepare(proc))
+			require.Equal(t, fast, g.ctr.sortRollup.reuseSingleGroup)
+			results := collectSortRollupBatches(t, g, proc)
+			require.Greater(t, len(results), 1,
+				"streaming rollup must publish a full batch before EOF")
+
+			var outputRows int
+			var grandTotal int64
+			for _, result := range results {
+				outputRows += result.RowCount()
+				counts := vector.MustFixedColNoTypeCheck[int64](result.Vecs[1])
+				for row := 0; row < result.RowCount(); row++ {
+					if result.Vecs[0].GetGrouping().Contains(uint64(row)) {
+						grandTotal = counts[row]
+					}
+				}
+			}
+			require.Equal(t, rows+1, outputRows)
+			require.Equal(t, int64(rows), grandTotal)
+
+			for _, result := range results {
+				result.Clean(proc.Mp())
+			}
+		})
+	}
+}
+
+func TestSortRollupDoesNotRepeatCrossBatchBoundary(t *testing.T) {
+	for _, fast := range []bool{true, false} {
+		name := "fallback-min"
+		aggs := []aggexec.AggFuncExecExpression{countStarAgg()}
+		if fast {
+			name = "reuse"
+		} else {
+			aggs = append(aggs, aggexec.MakeAggFunctionExpression(
+				aggexec.AggIdOfMin, false, []*plan.Expr{colExpr(0, types.T_int32)}, nil))
+		}
+		t.Run(name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			const firstRows = aggBatchSize
+
+			firstValues := make([]int32, firstRows)
+			for i := range firstValues {
+				firstValues[i] = int32(i)
+			}
+			first := batch.NewWithSize(1)
+			first.Vecs[0] = testutil.MakeInt32Vector(firstValues, nil, proc.Mp())
+			first.SetRowCount(firstRows)
+			second := batch.NewWithSize(1)
+			second.Vecs[0] = testutil.MakeInt32Vector([]int32{firstRows}, nil, proc.Mp())
+			second.SetRowCount(1)
+
+			child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{first, second})
+			g := newGroupOp(proc, []*plan.Expr{colExpr(0, types.T_int32)},
+				aggs)
+			g.SortRollup = true
+			g.AppendChild(child)
+			t.Cleanup(func() {
+				g.Free(proc, false, nil)
+				child.Free(proc, false, nil)
+				proc.Free()
+				require.Zero(t, proc.Mp().CurrNB())
+			})
+			require.NoError(t, g.Prepare(proc))
+			require.Equal(t, fast, g.ctr.sortRollup.reuseSingleGroup)
+			results := collectSortRollupBatches(t, g, proc)
+
+			detailCounts := make(map[int32]int64, firstRows+1)
+			var grandTotal int64
+			for _, result := range results {
+				keys := vector.MustFixedColNoTypeCheck[int32](result.Vecs[0])
+				counts := vector.MustFixedColNoTypeCheck[int64](result.Vecs[1])
+				for row := 0; row < result.RowCount(); row++ {
+					if result.Vecs[0].GetGrouping().Contains(uint64(row)) {
+						grandTotal = counts[row]
+					} else {
+						detailCounts[keys[row]]++
+						require.Equal(t, int64(1), counts[row],
+							"a cross-batch boundary must close each detail group once")
+					}
+				}
+			}
+			require.Len(t, detailCounts, firstRows+1)
+			require.Equal(t, int64(firstRows+1), grandTotal)
+			for _, result := range results {
+				result.Clean(proc.Mp())
+			}
+		})
+	}
+}
+
+func TestSortRollupReclaimsPublishedOutputBatches(t *testing.T) {
+	for _, fast := range []bool{true, false} {
+		name := "fallback-min"
+		aggs := []aggexec.AggFuncExecExpression{countStarAgg()}
+		if fast {
+			name = "reuse"
+		} else {
+			aggs = append(aggs, aggexec.MakeAggFunctionExpression(
+				aggexec.AggIdOfMin, false, []*plan.Expr{colExpr(0, types.T_int32)}, nil))
+		}
+		t.Run(name, func(t *testing.T) {
+			measurePeak := func(rows int) int64 {
+				proc := testutil.NewProcess(t)
+				values := make([]int32, rows)
+				for i := range values {
+					values[i] = int32(i)
+				}
+				input := batch.NewWithSize(1)
+				input.Vecs[0] = testutil.MakeInt32Vector(values, nil, proc.Mp())
+				input.SetRowCount(rows)
+				child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
+				g := newGroupOp(proc, []*plan.Expr{colExpr(0, types.T_int32)},
+					aggs)
+				g.SortRollup = true
+				g.AppendChild(child)
+				defer func() {
+					g.Free(proc, false, nil)
+					child.Free(proc, false, nil)
+					proc.Free()
+					require.Zero(t, proc.Mp().CurrNB())
+				}()
+				require.NoError(t, g.Prepare(proc))
+				require.Equal(t, fast, g.ctr.sortRollup.reuseSingleGroup)
+
+				var peak int64
+				for {
+					result, err := vm.Exec(g, proc)
+					require.NoError(t, err)
+					if result.Batch != nil {
+						if used := g.ctr.mp.CurrNB(); used > peak {
+							peak = used
+						}
+					}
+					if result.Status == vm.ExecStop || result.Batch == nil {
+						break
+					}
+					// Deliberately do not clean result.Batch. The next Call must reclaim
+					// the synchronously consumed batch on behalf of the pipeline.
+				}
+				return peak
+			}
+
+			smallPeak := measurePeak(aggBatchSize + 1)
+			largePeak := measurePeak(8*aggBatchSize + 1)
+			require.Positive(t, smallPeak)
+			require.LessOrEqual(t, largePeak, smallPeak*2,
+				"published output batches must not accumulate linearly")
+		})
+	}
+}
+
+func TestSortRollupDistinguishesInputNullFromRollupNull(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	input := batch.NewWithSize(3)
+	input.Vecs[0] = testutil.MakeInt32Vector(
+		[]int32{0, 0, 1, 2}, []uint64{0, 1}, proc.Mp())
+	input.Vecs[1] = testutil.MakeInt32Vector([]int32{1, 2, 1, 1}, nil, proc.Mp())
+	input.Vecs[2] = testutil.MakeInt32Vector([]int32{2, 3, 1, 4}, nil, proc.Mp())
+	input.SetRowCount(4)
+
+	g := newGroupOp(proc,
+		[]*plan.Expr{colExpr(0, types.T_int32), colExpr(1, types.T_int32)},
+		[]aggexec.AggFuncExecExpression{sumAgg(2)})
+	g.SortRollup = true
+	child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
+	g.AppendChild(child)
+	require.NoError(t, g.Prepare(proc))
+	results := collectSortRollupBatches(t, g, proc)
+
+	var inputNullDetail, inputNullSubtotal, grandTotal bool
+	for _, result := range results {
+		as := result.Vecs[0]
+		bs := vector.MustFixedColNoTypeCheck[int32](result.Vecs[1])
+		sums := vector.MustFixedColNoTypeCheck[int64](result.Vecs[2])
+		for row := 0; row < result.RowCount(); row++ {
+			aRoll := as.GetGrouping().Contains(uint64(row))
+			bRoll := result.Vecs[1].GetGrouping().Contains(uint64(row))
+			if as.IsNull(uint64(row)) && !aRoll && !bRoll && bs[row] == 1 {
+				require.Equal(t, int64(2), sums[row])
+				inputNullDetail = true
+			}
+			if as.IsNull(uint64(row)) && !aRoll && bRoll {
+				require.Equal(t, int64(5), sums[row])
+				inputNullSubtotal = true
+			}
+			if aRoll && bRoll {
+				require.Equal(t, int64(10), sums[row])
+				grandTotal = true
+			}
+		}
+	}
+	require.True(t, inputNullDetail)
+	require.True(t, inputNullSubtotal)
+	require.True(t, grandTotal)
+	for _, result := range results {
+		result.Clean(proc.Mp())
+	}
+
+	g.Free(proc, false, nil)
+	child.Free(proc, false, nil)
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
+func TestSortRollupRejectsUnprovenFloat32Equality(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	floatType := types.New(types.T_float32, 5, 2)
+
+	input := batch.NewWithSize(2)
+	input.Vecs[0] = testutil.NewFloat32Vector(
+		3, floatType, proc.Mp(), false, nil,
+		[]float32{1.230, 1.234, 1.236})
+	input.Vecs[1] = testutil.MakeInt32Vector([]int32{1, 1, 1}, nil, proc.Mp())
+	input.SetRowCount(3)
+	child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
+	g := newGroupOp(proc,
+		[]*plan.Expr{colExprWithType(0, floatType)},
+		[]aggexec.AggFuncExecExpression{countStarAgg()})
+	g.SortRollup = true
+	g.AppendChild(child)
+	require.Error(t, g.Prepare(proc))
+
+	g.Free(proc, false, nil)
+	child.Free(proc, false, nil)
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
+func TestSortRollupCapacityFailureCleansUp(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	input := batch.NewWithSize(1)
+	input.Vecs[0] = testutil.MakeInt32Vector([]int32{1}, nil, proc.Mp())
+	input.SetRowCount(1)
+	child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
+	g := newGroupOp(proc,
+		[]*plan.Expr{colExpr(0, types.T_int32)},
+		[]aggexec.AggFuncExecExpression{countStarAgg()})
+	g.SortRollup = true
+	// A tiny explicit resident-state limit must fail before output is exposed.
+	g.SpillMem = 1
+	g.AppendChild(child)
+	require.NoError(t, g.Prepare(proc))
+	_, err := vm.Exec(g, proc)
+	require.Error(t, err)
+
+	g.Free(proc, true, err)
+	child.Free(proc, true, err)
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
+func TestSortRollupCapacityUsesByteThreshold(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	const rows = 2048
+	values := make([]int32, rows)
+	for i := range values {
+		values[i] = int32(i)
+	}
+	input := batch.NewWithSize(1)
+	input.Vecs[0] = testutil.MakeInt32Vector(values, nil, proc.Mp())
+	input.SetRowCount(rows)
+	child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
+	g := newGroupOp(proc, []*plan.Expr{colExpr(0, types.T_int32)}, nil)
+	g.SortRollup = true
+	// 10K selects the real byte limit. The key/output vectors for the 2048
+	// distinct rows exceed this limit even though the aggregate state streams.
+	g.SpillMem = 10 << 10
+	g.AppendChild(child)
+	require.NoError(t, g.Prepare(proc))
+	require.Equal(t, int64(10<<10), g.ctr.spillMem)
+	_, err := vm.Exec(g, proc)
+	require.Error(t, err)
+
+	g.Free(proc, true, err)
+	child.Free(proc, true, err)
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
+func TestSortRollupAutoCapacityHasMinimum(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	g := newGroupOp(proc, []*plan.Expr{colExpr(0, types.T_int32)}, nil)
+	g.SortRollup = true
+	// Zero means auto configuration. Keep this assertion at the contract
+	// boundary rather than depending on the host's total memory.
+	require.NoError(t, g.Prepare(proc))
+	require.GreaterOrEqual(t, g.ctr.spillMem, int64(128<<20))
+
+	g.Free(proc, false, nil)
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
+func TestSortRollupPrepareFailureCanResetAndPrepare(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	var badChild, goodChild *colexec.MockOperator
+	g := NewArgument()
+	t.Cleanup(func() {
+		g.Free(proc, false, nil)
+		if badChild != nil {
+			badChild.Free(proc, false, nil)
+		}
+		if goodChild != nil {
+			goodChild.Free(proc, false, nil)
+		}
+		proc.Free()
+	})
+
+	floatType := types.New(types.T_float32, 5, 2)
+	badInput := batch.NewWithSize(1)
+	badInput.Vecs[0] = testutil.NewFloat32Vector(
+		1, floatType, proc.Mp(), false, nil, []float32{1.25})
+	badInput.SetRowCount(1)
+	badChild = colexec.NewMockOperator().WithBatchs([]*batch.Batch{badInput})
+	g.GroupBy = []*plan.Expr{colExprWithType(0, floatType)}
+	g.Aggs = []aggexec.AggFuncExecExpression{countStarAgg()}
+	g.NeedEval = true
+	g.SortRollup = true
+	g.AppendChild(badChild)
+	require.Error(t, g.Prepare(proc))
+
+	// A failed init must release the first execution's container so the same
+	// operator can be reset and prepared for a later statement.
+	g.Reset(proc, true, nil)
+	g.Children = nil
+	goodInput := batch.NewWithSize(1)
+	goodInput.Vecs[0] = testutil.MakeInt32Vector([]int32{7}, nil, proc.Mp())
+	goodInput.SetRowCount(1)
+	goodChild = colexec.NewMockOperator().WithBatchs([]*batch.Batch{goodInput})
+	g.GroupBy = []*plan.Expr{colExpr(0, types.T_int32)}
+	g.AppendChild(goodChild)
+	require.NoError(t, g.Prepare(proc))
+	results := collectSortRollupBatches(t, g, proc)
+	require.Len(t, results, 1)
+	require.Equal(t, 2, results[0].RowCount())
+	for _, result := range results {
+		result.Clean(proc.Mp())
+	}
+}
+
 // TestGroupNoGroupBy: no GROUP BY, just COUNT(*) → single row result.
 func TestGroupNoGroupBy(t *testing.T) {
 	proc := testutil.NewProcess(t)
@@ -1778,6 +2430,7 @@ func BenchmarkGroupAccountedPhysicalHashKey(b *testing.B) {
 			b.ReportAllocs()
 			b.SetBytes(rows)
 
+			var generation *process.ExecutionResourceGeneration
 			for b.Loop() {
 				b.StopTimer()
 				input := batch.NewWithSize(5)
@@ -1795,7 +2448,8 @@ func BenchmarkGroupAccountedPhysicalHashKey(b *testing.B) {
 					[]aggexec.AggFuncExecExpression{countStarAgg()})
 				g.GroupByHashKey = test.hashKey
 				g.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{input}))
-				allocation := installGroupTestAllocation(b, g, proc, 1<<30)
+				allocation := installGroupTestAllocation(b, g, proc, 1<<30, generation)
+				generation = allocation.generation
 				b.StartTimer()
 
 				if err := g.Prepare(proc); err != nil {
@@ -2260,9 +2914,11 @@ func TestMergeGroupUsesReducedHashKey(t *testing.T) {
 	defer proc.Free()
 
 	makeInput := func(payload int32) *batch.Batch {
-		input := batch.NewWithSize(2)
+		input := batch.NewWithSize(4)
 		input.Vecs[0] = testutil.MakeInt32Vector([]int32{1}, nil, proc.Mp())
 		input.Vecs[1] = testutil.MakeInt32Vector([]int32{payload}, nil, proc.Mp())
+		input.Vecs[2] = testutil.MakeInt32Vector([]int32{2}, nil, proc.Mp())
+		input.Vecs[3] = testutil.MakeInt32Vector([]int32{3}, nil, proc.Mp())
 		input.SetRowCount(1)
 		return input
 	}
@@ -2271,10 +2927,10 @@ func TestMergeGroupUsesReducedHashKey(t *testing.T) {
 	for _, payload := range []int32{10, 11} {
 		input := makeInput(payload)
 		partial := newGroupOp(proc,
-			[]*plan.Expr{colExpr(0, types.T_int32), colExpr(1, types.T_int32)},
+			[]*plan.Expr{colExpr(0, types.T_int32), colExpr(1, types.T_int32), colExpr(2, types.T_int32), colExpr(3, types.T_int32)},
 			[]aggexec.AggFuncExecExpression{countStarAgg()})
 		partial.NeedEval = false
-		partial.GroupByHashKey = []int32{0}
+		partial.GroupByHashKey = []int32{0, 2, 3}
 		partial.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{input}))
 		require.NoError(t, partial.Prepare(proc))
 		outputs := collectBatches(t, partial, proc)
@@ -2285,7 +2941,7 @@ func TestMergeGroupUsesReducedHashKey(t *testing.T) {
 	}
 
 	merge := newMergeGroupOp([]aggexec.AggFuncExecExpression{countStarAgg()})
-	merge.GroupByHashKey = []int32{0}
+	merge.GroupByHashKey = []int32{0, 2, 3}
 	merge.AppendChild(colexec.NewMockOperator().WithBatchs(partials))
 	require.NoError(t, merge.Prepare(proc))
 	finals := collectBatches(t, merge, proc)
@@ -2293,7 +2949,7 @@ func TestMergeGroupUsesReducedHashKey(t *testing.T) {
 	require.Equal(t, 1, finals[0].RowCount())
 	require.Equal(t, int32(1), vector.MustFixedColNoTypeCheck[int32](finals[0].Vecs[0])[0])
 	require.Equal(t, int32(10), vector.MustFixedColNoTypeCheck[int32](finals[0].Vecs[1])[0])
-	require.Equal(t, int64(2), vector.MustFixedColNoTypeCheck[int64](finals[0].Vecs[2])[0])
+	require.Equal(t, int64(2), vector.MustFixedColNoTypeCheck[int64](finals[0].Vecs[4])[0])
 	merge.Free(proc, false, nil)
 	for _, partial := range partials {
 		partial.Clean(proc.Mp())
@@ -2349,22 +3005,25 @@ func TestGroupSpillReloadUsesReducedHashKey(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
 
-	const groups = 8192
+	// Cross the explicit 64-group spill threshold; larger inputs repeat the same reduced-key oracle.
+	const groups = 65
 	keys := make([]int32, groups*2)
 	payloads := make([]int32, groups*2)
 	for i := range groups {
 		keys[i], keys[i+groups] = int32(i), int32(i)
 		payloads[i], payloads[i+groups] = int32(i), int32(i+groups)
 	}
-	input := batch.NewWithSize(2)
+	input := batch.NewWithSize(4)
 	input.Vecs[0] = testutil.MakeInt32Vector(keys, nil, proc.Mp())
 	input.Vecs[1] = testutil.MakeInt32Vector(payloads, nil, proc.Mp())
+	input.Vecs[2] = testutil.MakeInt32Vector(keys, nil, proc.Mp())
+	input.Vecs[3] = testutil.MakeInt32Vector(keys, nil, proc.Mp())
 	input.SetRowCount(len(keys))
 
 	g := newGroupOp(proc,
-		[]*plan.Expr{colExpr(0, types.T_int32), colExpr(1, types.T_int32)},
+		[]*plan.Expr{colExpr(0, types.T_int32), colExpr(1, types.T_int32), colExpr(2, types.T_int32), colExpr(3, types.T_int32)},
 		[]aggexec.AggFuncExecExpression{countStarAgg()})
-	g.GroupByHashKey = []int32{0}
+	g.GroupByHashKey = []int32{0, 2, 3}
 	g.SpillMem = 64
 	g.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{input}))
 	require.NoError(t, g.Prepare(proc))
@@ -2377,7 +3036,7 @@ func TestGroupSpillReloadUsesReducedHashKey(t *testing.T) {
 			break
 		}
 		rows += result.Batch.RowCount()
-		for _, count := range vector.MustFixedColNoTypeCheck[int64](result.Batch.Vecs[2]) {
+		for _, count := range vector.MustFixedColNoTypeCheck[int64](result.Batch.Vecs[4]) {
 			require.Equal(t, int64(2), count)
 		}
 	}
@@ -3070,7 +3729,8 @@ func TestGroupSpillReloadCancellationCleansAndReuses(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	baseCtx := proc.Ctx
 
-	const rows = 65536
+	// Trigger the explicit 4096-group threshold while retaining all 32 buckets.
+	const rows = 4097
 	g := newGroupOp(proc, []*plan.Expr{colExpr(0, types.T_int32)}, []aggexec.AggFuncExecExpression{countStarAgg()})
 	g.SpillMem = 4096
 	var spillFiles []*os.File
@@ -3895,6 +4555,7 @@ func TestMergeGroupAccountedOrderedPercentileSpillModes(t *testing.T) {
 				orderedPercentileAgg(aggexec.AggIdOfPercentileCont, valueCol, []byte("0.5"), false),
 				orderedPercentileAgg(aggexec.AggIdOfPercentileDisc, valueCol, []byte("0.95"), true),
 			}
+			var generation *process.ExecutionResourceGeneration
 			var partials []*batch.Batch
 			for producer := 0; producer < producers; producer++ {
 				input := batch.NewWithSize(int(valueCol) + 1)
@@ -3922,7 +4583,8 @@ func TestMergeGroupAccountedOrderedPercentileSpillModes(t *testing.T) {
 				partial.NeedEval = false
 				partial.SpillMem = 536870912
 				partial.AppendChild(child)
-				allocation := installGroupTestAllocation(t, partial, proc, 128<<20)
+				allocation := installGroupTestAllocation(t, partial, proc, 128<<20, generation)
+				generation = allocation.generation
 				require.NoError(t, partial.Prepare(proc))
 				for _, bat := range collectBatches(t, partial, proc) {
 					partials = append(partials, cloneBatch(t, proc, bat))
@@ -3941,7 +4603,7 @@ func TestMergeGroupAccountedOrderedPercentileSpillModes(t *testing.T) {
 			merge := newMergeGroupOp(aggs)
 			merge.SpillMem = 1
 			merge.AppendChild(child)
-			allocation := installGroupTestAllocation(t, merge, proc, 128<<20)
+			allocation := installGroupTestAllocation(t, merge, proc, 128<<20, generation)
 			t.Cleanup(func() {
 				merge.Free(proc, false, nil)
 				child.Free(proc, false, nil)
@@ -5026,4 +5688,130 @@ func TestGroupConcatSourceRowProtocolGates(t *testing.T) {
 				"remote producers still need the v66 trust marker")
 		})
 	}
+}
+
+func TestJSONMinMaxGroupAndMergeGroupPhysicalSpillReload(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	aggs := []aggexec.AggFuncExecExpression{
+		aggexec.MakeAggFunctionExpression(aggexec.AggIdOfMin, false, []*plan.Expr{colExpr(1, types.T_json)}, nil),
+		aggexec.MakeAggFunctionExpression(aggexec.AggIdOfMax, false, []*plan.Expr{colExpr(1, types.T_json)}, nil),
+	}
+	encode := func(value int64) []byte {
+		bj, err := bytejson.CreateByteJSONWithCheck(value)
+		require.NoError(t, err)
+		raw, err := bj.Marshal()
+		require.NoError(t, err)
+		return raw
+	}
+	var partials []*batch.Batch
+	t.Cleanup(func() {
+		for _, partial := range partials {
+			partial.Clean(proc.Mp())
+		}
+		proc.Free()
+		require.Zero(t, proc.Mp().CurrNB())
+	})
+	for _, value := range []int64{1, 256} {
+		input := batch.NewWithSize(2)
+		input.Vecs[0] = vector.NewVec(types.T_int32.ToType())
+		input.Vecs[1] = vector.NewVec(types.T_json.ToType())
+		for key := int32(0); key < 64; key++ {
+			require.NoError(t, vector.AppendFixed(input.Vecs[0], key, false, proc.Mp()))
+			require.NoError(t, vector.AppendBytes(input.Vecs[1], encode(value), false, proc.Mp()))
+		}
+		input.SetRowCount(64)
+		child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
+		g := newGroupOp(proc, []*plan.Expr{colExpr(0, types.T_int32)}, aggs)
+		g.NeedEval = false
+		g.SpillMem = 2
+		g.AppendChild(child)
+		require.NoError(t, g.Prepare(proc))
+		for {
+			result, err := vm.Exec(g, proc)
+			require.NoError(t, err)
+			if result.Status == vm.ExecStop || result.Batch == nil {
+				break
+			}
+			partials = append(partials, cloneBatch(t, proc, result.Batch))
+		}
+		// Partial groups emit encoded states instead of writing finalized spill files.
+		g.Free(proc, false, nil)
+		child.Free(proc, false, nil)
+	}
+	child := colexec.NewMockOperator().WithBatchs(partials)
+	mg := newMergeGroupOp(aggs)
+	mg.SpillMem = 2
+	mg.AppendChild(child)
+	t.Cleanup(func() { mg.Free(proc, false, nil) })
+	require.NoError(t, mg.Prepare(proc))
+	seen := make(map[int32]bool)
+	for {
+		result, err := vm.Exec(mg, proc)
+		require.NoError(t, err)
+		if result.Status == vm.ExecStop || result.Batch == nil {
+			break
+		}
+		for row := 0; row < result.Batch.RowCount(); row++ {
+			key := vector.MustFixedColNoTypeCheck[int32](result.Batch.Vecs[0])[row]
+			require.False(t, seen[key])
+			seen[key] = true
+			require.Equal(t, encode(1), result.Batch.Vecs[1].GetBytesAt(row))
+			require.Equal(t, encode(256), result.Batch.Vecs[2].GetBytesAt(row))
+		}
+	}
+	require.Len(t, seen, 64)
+	require.Positive(t, mg.OpAnalyzer.GetOpStats().SpillRows, "mergegroup must physically spill")
+}
+
+func TestJSONMinMaxFinalGroupPhysicalSpillReload(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	inputs := make([]*batch.Batch, 0, 2)
+	for _, value := range []int64{1, 256} {
+		input := batch.NewWithSize(2)
+		input.Vecs[0] = vector.NewVec(types.T_int32.ToType())
+		input.Vecs[1] = vector.NewVec(types.T_json.ToType())
+		bj, err := bytejson.CreateByteJSONWithCheck(value)
+		require.NoError(t, err)
+		raw, err := bj.Marshal()
+		require.NoError(t, err)
+		for key := int32(0); key < 64; key++ {
+			require.NoError(t, vector.AppendFixed(input.Vecs[0], key, false, proc.Mp()))
+			require.NoError(t, vector.AppendBytes(input.Vecs[1], raw, false, proc.Mp()))
+		}
+		input.SetRowCount(64)
+		inputs = append(inputs, input)
+	}
+	aggs := []aggexec.AggFuncExecExpression{aggexec.MakeAggFunctionExpression(aggexec.AggIdOfMin, false, []*plan.Expr{colExpr(1, types.T_json)}, nil), aggexec.MakeAggFunctionExpression(aggexec.AggIdOfMax, false, []*plan.Expr{colExpr(1, types.T_json)}, nil)}
+	child := colexec.NewMockOperator().WithBatchs(inputs)
+	g := newGroupOp(proc, []*plan.Expr{colExpr(0, types.T_int32)}, aggs)
+	g.SpillMem = 2
+	g.AppendChild(child)
+	t.Cleanup(func() {
+		g.Free(proc, false, nil)
+		child.Free(proc, false, nil)
+		proc.Free()
+		require.Zero(t, proc.Mp().CurrNB())
+	})
+	require.NoError(t, g.Prepare(proc))
+	seen := make(map[int32]bool)
+	for {
+		result, err := vm.Exec(g, proc)
+		require.NoError(t, err)
+		if result.Status == vm.ExecStop || result.Batch == nil {
+			break
+		}
+		for row := 0; row < result.Batch.RowCount(); row++ {
+			key := vector.MustFixedColNoTypeCheck[int32](result.Batch.Vecs[0])[row]
+			require.False(t, seen[key])
+			seen[key] = true
+			minJSON, err := types.DecodeJson(result.Batch.Vecs[1].GetBytesAt(row)).MarshalJSON()
+			require.NoError(t, err)
+			require.Equal(t, "1", string(minJSON))
+			maxJSON, err := types.DecodeJson(result.Batch.Vecs[2].GetBytesAt(row)).MarshalJSON()
+			require.NoError(t, err)
+			require.Equal(t, "256", string(maxJSON))
+		}
+	}
+	require.Len(t, seen, 64)
+	require.Positive(t, g.OpAnalyzer.GetOpStats().SpillRows, "final group must physically spill")
 }

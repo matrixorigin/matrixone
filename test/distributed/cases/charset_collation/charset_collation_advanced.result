@@ -313,7 +313,7 @@ FOREIGN KEY (parent_code) REFERENCES t_fk_parent(code)
 INSERT INTO t_fk_parent VALUES (1, 'CODE001');
 INSERT INTO t_fk_child VALUES (1, 'CODE001');
 INSERT INTO t_fk_child VALUES (2, 'code001');
-internal error: Cannot add or update a child row: a foreign key constraint fails
+Cannot add or update a child row: a foreign key constraint fails
 SELECT * FROM t_fk_parent;
 ➤ id[4,32,0]  ¦  code[12,-1,0]  𝄀
 1  ¦  CODE001

@@ -140,7 +140,6 @@ type Cleaner interface {
 	GetCheckpointGCWaterMark() *types.TS
 	GetScannedWindow() *GCWindow
 	Stop()
-	GetMinMerged() *checkpoint.CheckpointEntry
 	DoCheck(context.Context) error
 	GetPITRs() (*logtail.PitrInfo, error)
 	SetTid(tid uint64)
@@ -212,16 +211,6 @@ func init() {
 		false,
 		ObjectTableVersion,
 	)
-}
-
-func NewObjectTableBatch() *batch.Batch {
-	ret := batch.New(ObjectTableAttrs)
-	ret.SetVector(0, vector.NewVec(ObjectTableTypes[0]))
-	ret.SetVector(1, vector.NewVec(ObjectTableTypes[1]))
-	ret.SetVector(2, vector.NewVec(ObjectTableTypes[2]))
-	ret.SetVector(3, vector.NewVec(ObjectTableTypes[3]))
-	ret.SetVector(4, vector.NewVec(ObjectTableTypes[4]))
-	return ret
 }
 
 func addObjectToBatch(

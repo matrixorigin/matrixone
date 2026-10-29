@@ -298,39 +298,49 @@ const (
 	internalJSONComparisonFunctionID int32 = 577
 	planBooleanTypeID                int32 = 10
 	planJSONTypeID                   int32 = 62
-	binFunctionID                    int32 = 270
-	convFunctionID                   int32 = 367
-	asciiFunctionID                  int32 = 52
-	asciiInt32ResultTypeID           int32 = 22
-	findInSetFunctionID              int32 = 101
-	lengthUTF8FunctionID             int32 = 125
-	strCmpFunctionID                 int32 = 344
-	uncompressedLengthFunctionID     int32 = 389
-	crc32FunctionID                  int32 = 81
-	coalesceFunctionID               int32 = 74
-	caseFunctionID                   int32 = 71
-	iffFunctionID                    int32 = 113
-	leftFunctionID                   int32 = 123
-	rightFunctionID                  int32 = 166
-	substringFunctionID              int32 = 210
-	stringNumericInt32ResultTypeID   int32 = 22
-	stringNumericInt64ResultTypeID   int32 = 23
-	stringNumericUint64ResultTypeID  int32 = 28
-	planVarcharTypeID                int32 = 61
-	planBinaryTypeID                 int32 = 64
-	planVarbinaryTypeID              int32 = 65
-	planBlobTypeID                   int32 = 70
-	planTextTypeID                   int32 = 71
-	ipInt32ResultTypeID              int32 = 22
-	planCharTypeID                   int32 = 60
-	planDateTypeID                   int32 = 50
-	planTimeTypeID                   int32 = 51
-	planDatetimeTypeID               int32 = 52
-	planTimestampTypeID              int32 = 53
-	planInt64TypeID                  int32 = 23
-	planUint32TypeID                 int32 = 27
-	planAnyTypeID                    int32 = 0
-	maxVarcharWidth                  int32 = 65535
+	planInt32TypeID                  int32 = 22
+	// These stable function IDs are mirrored from pkg/sql/plan/function to
+	// avoid a dependency cycle. The generic CAST operator is not an assignment
+	// bounds check; these three internal assignment casts are.
+	mediumIntStrictCastFunctionID     int32 = 541
+	mediumIntAssignmentCastFunctionID int32 = 554
+	mediumIntIgnoreCastFunctionID     int32 = 555
+	castJSONToArrayFunctionID         int32 = 513
+	binFunctionID                     int32 = 270
+	convFunctionID                    int32 = 367
+	asciiFunctionID                   int32 = 52
+	asciiInt32ResultTypeID            int32 = 22
+	findInSetFunctionID               int32 = 101
+	lengthUTF8FunctionID              int32 = 125
+	strCmpFunctionID                  int32 = 344
+	uncompressedLengthFunctionID      int32 = 389
+	crc32FunctionID                   int32 = 81
+	coalesceFunctionID                int32 = 74
+	caseFunctionID                    int32 = 71
+	iffFunctionID                     int32 = 113
+	leftFunctionID                    int32 = 123
+	rightFunctionID                   int32 = 166
+	substringFunctionID               int32 = 210
+	stringNumericInt32ResultTypeID    int32 = 22
+	stringNumericInt64ResultTypeID    int32 = 23
+	stringNumericUint64ResultTypeID   int32 = 28
+	planVarcharTypeID                 int32 = 61
+	planBinaryTypeID                  int32 = 64
+	planVarbinaryTypeID               int32 = 65
+	planBlobTypeID                    int32 = 70
+	planTextTypeID                    int32 = 71
+	ipInt32ResultTypeID               int32 = 22
+	planCharTypeID                    int32 = 60
+	planDateTypeID                    int32 = 50
+	planTimeTypeID                    int32 = 51
+	planDatetimeTypeID                int32 = 52
+	planTimestampTypeID               int32 = 53
+	planInt64TypeID                   int32 = 23
+	planUint32TypeID                  int32 = 27
+	planAnyTypeID                     int32 = 0
+	internalTableCollationFunctionID  int32 = 600
+	loadFKIgnoreCheckFunctionID       int32 = 602
+	maxVarcharWidth                   int32 = 65535
 )
 
 // RemoteExpressionFeatures is the complete set of versioned expression
@@ -374,7 +384,37 @@ const (
 // execution contracts.
 // JSONScalarLiteralContracts requires MORPC v104 because older executors
 // decode JSON-typed Sval literals as VARCHAR rather than encoded JSON.
+// MediumIntAssignmentBounds requires MORPC v110 because older executors treat
+// the shared INT32 storage type as a full-width INT rather than a 24-bit value.
+// DateNumericResultContracts requires MORPC v112 for signed INT WEEK and
+// DAYOFYEAR vectors; historical narrow serialized results remain supported.
+// DecimalStatisticalResultContracts requires MORPC v113 for DOUBLE output
+// from native DECIMAL64/128 variance and standard deviation.
+// TableCollationFunction requires MORPC v118 for INTERNAL_TABLE_COLLATION's
+// execution identity, including directly authored catalog expressions.
+// CalendarIntervalNormalization requires MORPC v115 for the new normalization identity.
+// TimestampDatetimeResultContracts requires MORPC v122 for appended unary
+// TIMESTAMP identities; released unary identities retain TIMESTAMP vectors.
+// DynamicTimeResultContracts uses the same epoch for prepared TIME results
+// over string/calendar ADDTIME/SUBTIME inputs; native TIME inputs are unchanged.
+// IncompleteTemporalStrings requires MORPC v130 for raw-calendar string
+// overloads and incomplete-input rejection diagnostics.
 type RemoteExpressionFeatures struct {
+	SessionLastInsertIDBaseline   bool
+	ODKUStatementResult           bool
+	JSONMinMaxTypedComparison     bool
+	FloatConversionSemantics      bool // v132: decimal rounding, MySQL text parsing and DML context
+	JSONStringConsumerOverload    bool
+	JSONOpaqueTextContracts       bool
+	LoadFKIgnoreCheck             bool // v125: LOAD IGNORE FK admission and diagnostics
+	JSONNumericComparisons        bool
+	DependentPrograms             bool
+	CalendarIntervalNormalization bool
+	// ScalarDivision is syntactic only. SELECT warning policy supplies its
+	// execution-only floor; persisted expression contracts remain unchanged.
+	ScalarDivision bool
+	// ViewMetadataFunctions requires v126 for MO_VIEW_DEFINITION/CHECK_OPTION.
+	ViewMetadataFunctions           bool
 	JSONScalarLiteralContracts      bool
 	JSONInputContracts              bool
 	YearBitCast                     bool
@@ -398,17 +438,31 @@ type RemoteExpressionFeatures struct {
 	SpatialDistanceSemantics          bool
 	PreparedPrecisionScalar           bool
 	DecimalDivisionSemantics          bool
+	DecimalIntegerDivisionSemantics   bool // v121: unsigned DIV overload and display precision
 	// SpecialIntegerConsumers requires v98 independently of private CASTs.
-	SpecialIntegerConsumers       bool
-	TemporalResultContracts       bool
-	InvalidTemporalResultContract bool
-	NormalizedIntervalUnits       bool
-	LegacyIntervalUnits           bool
-	WeekSessionDefault            bool
+	SpecialIntegerConsumers                 bool
+	TemporalResultContracts                 bool
+	InvalidTemporalResultContract           bool
+	NormalizedIntervalUnits                 bool
+	TimestampAddSecondIntervals             bool
+	LegacyIntervalUnits                     bool
+	WeekSessionDefault                      bool
+	MediumIntAssignmentBounds               bool
+	DateNumericResultContracts              bool
+	TimestampDatetimeResultContracts        bool
+	DynamicTimeResultContracts              bool
+	IncompleteTemporalStrings               bool
+	DecimalStatisticalResultContracts       bool
+	TableCollationFunction                  bool
+	InvalidDecimalStatisticalResultContract bool
+	// LeastGreatestCollationSemantics requires v117 for appended overload 4.
+	// Released overload 0 retains its historical byte-order contract.
+	LeastGreatestCollationSemantics bool
 }
 
 func (features RemoteExpressionFeatures) Any() bool {
-	return features.JSONScalarLiteralContracts || features.JSONInputContracts || features.YearBitCast || features.NumericPrefix ||
+	return features.FloatConversionSemantics || features.JSONStringConsumerOverload || features.JSONOpaqueTextContracts || features.JSONNumericComparisons || features.LoadFKIgnoreCheck || features.DependentPrograms || features.CalendarIntervalNormalization || features.ViewMetadataFunctions || features.JSONScalarLiteralContracts || features.JSONInputContracts || features.YearBitCast || features.NumericPrefix ||
+		features.ODKUStatementResult || features.SessionLastInsertIDBaseline || features.JSONMinMaxTypedComparison ||
 		features.JSONComparisonParam ||
 		features.MixedJSONBooleanEquality ||
 		features.FormatNumericArguments ||
@@ -428,11 +482,46 @@ func (features RemoteExpressionFeatures) Any() bool {
 		features.PreparedPrecisionScalar ||
 		features.SpecialIntegerConsumers ||
 		features.DecimalDivisionSemantics ||
+		features.DecimalIntegerDivisionSemantics ||
 		features.TemporalResultContracts ||
 		features.InvalidTemporalResultContract ||
 		features.NormalizedIntervalUnits ||
+		features.TimestampAddSecondIntervals ||
 		features.LegacyIntervalUnits ||
-		features.WeekSessionDefault
+		features.WeekSessionDefault ||
+		features.MediumIntAssignmentBounds ||
+		features.TimestampDatetimeResultContracts || features.DynamicTimeResultContracts ||
+		features.DateNumericResultContracts ||
+		features.IncompleteTemporalStrings ||
+		features.DecimalStatisticalResultContracts ||
+		features.TableCollationFunction ||
+		features.InvalidDecimalStatisticalResultContract || features.ScalarDivision ||
+		features.LeastGreatestCollationSemantics
+}
+
+func isPlanMediumIntType(typ Type) bool {
+	return typ.Width == 24 && (typ.Id == planInt32TypeID || typ.Id == planUint32TypeID)
+}
+
+func hasMediumIntTypeName(typeName string) bool {
+	normalized := strings.ToLower(strings.NewReplacer("(", " ", ")", " ", ",", " ").Replace(typeName))
+	for _, token := range strings.Fields(normalized) {
+		if token == "mediumint" || token == "int3" {
+			return true
+		}
+	}
+	return false
+}
+
+func isMediumIntArrayCast(current *Expr, fn *Function) bool {
+	if current != nil && hasMediumIntTypeName(current.Typ.Enumvalues) {
+		return true
+	}
+	if fn == nil || len(fn.Args) == 0 || fn.Args[0] == nil || fn.Args[0].GetLit() == nil {
+		return false
+	}
+	literal, ok := fn.Args[0].GetLit().Value.(*Literal_Sval)
+	return ok && hasMediumIntTypeName(literal.Sval)
 }
 
 func hasPrivateIntegerPrecisionCast(expr *Expr) bool {
@@ -852,6 +941,12 @@ func isExpressionResultMetadataContract(expr *Expr) bool {
 func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatures, err error) {
 	err = walkExpressionsInOwner(owner, func(expr *Expr) error {
 		return VisitExprTree(expr, func(current *Expr) error {
+			// Typed prepared FLOAT parameters still arrive through TEXT transport
+			// and execute a private cast in the parameter executor.
+			if current.GetP() != nil && (current.Typ.Id == 30 || current.Typ.Id == 31) {
+				features.FloatConversionSemantics = true
+			}
+			features.DependentPrograms = features.DependentPrograms || current.GetDependent() != nil || current.GetSlot() != nil
 			if literal := current.GetLit(); literal != nil && !literal.Isnull && current.Typ.Id == planJSONTypeID {
 				_, encodedJSON := literal.Value.(*Literal_Sval)
 				features.JSONScalarLiteralContracts = features.JSONScalarLiteralContracts || encodedJSON
@@ -866,7 +961,59 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 			}
 			fn := current.GetF()
 			if fn != nil && fn.Func != nil {
+				features.JSONMinMaxTypedComparison = features.JSONMinMaxTypedComparison || IsJSONMinMaxAggregate(fn.Func.Obj, fn.Args)
 				id, overload := int32(fn.Func.Obj>>32), int32(fn.Func.Obj)
+				// LAST_INSERT_ID() is function237/overload0; remote evaluation
+				// needs the captured session baseline, not a worker-local zero.
+				features.SessionLastInsertIDBaseline = features.SessionLastInsertIDBaseline || (id == 237 && overload == 0)
+				features.FloatConversionSemantics = features.FloatConversionSemantics || isFloatConversionContract(current, id)
+				features.JSONStringConsumerOverload = features.JSONStringConsumerOverload || isRemoteJSONStringConsumerOverload(id, overload)
+				features.JSONOpaqueTextContracts = features.JSONOpaqueTextContracts || isJSONOpaqueTextContract(current, fn, id)
+				if id == loadFKIgnoreCheckFunctionID {
+					features.LoadFKIgnoreCheck = true
+				}
+				features.JSONNumericComparisons = features.JSONNumericComparisons ||
+					isMixedJSONNumericComparison(fn) || ((id == 546 || id == internalJSONComparisonFunctionID) && overload == 1)
+
+				if id == internalTableCollationFunctionID {
+					features.TableCollationFunction = true
+				}
+				if (id == 104 || id == 122) && overload == 4 { // GREATEST/LEAST collation-aware ordering
+					features.LeastGreatestCollationSemantics = true
+				}
+				if id == 598 { // TO_CALENDAR_INTERVAL; append-only execution identity
+					features.CalendarIntervalNormalization = true
+				}
+				// Scalar /, DIV and MOD use function IDs 13..15. Numeric
+				// storage domains are 20..34; BIT uses the uint64 domain.
+				if id >= 13 && id <= 15 && len(fn.Args) == 2 && fn.Args[1] != nil {
+					denominator := fn.Args[1].Typ.Id
+					features.ScalarDivision = features.ScalarDivision || (denominator >= 20 && denominator <= 34) || denominator == 11
+				}
+				// Aliases and DISTINCT share these aggregate IDs. Inspect the
+				// argument domain even for legacy DECIMAL-typed result plans.
+				statisticalID := id & 0x7fffffff // remove the DISTINCT flag
+				if (statisticalID == 180 || statisticalID == 181 || statisticalID == 199 || statisticalID == 200) &&
+					len(fn.Args) == 1 && fn.Args[0] != nil &&
+					(fn.Args[0].Typ.Id == 32 || fn.Args[0].Typ.Id == 33) {
+					features.DecimalStatisticalResultContracts = true
+					features.InvalidDecimalStatisticalResultContract = features.InvalidDecimalStatisticalResultContract || current.Typ.Id != 31
+				}
+				mediumIntAssignmentTarget := len(fn.Args) > 1 && fn.Args[1] != nil &&
+					isPlanMediumIntType(fn.Args[1].Typ)
+				if (id == mediumIntStrictCastFunctionID ||
+					id == mediumIntAssignmentCastFunctionID ||
+					id == mediumIntIgnoreCastFunctionID) && mediumIntAssignmentTarget {
+					features.MediumIntAssignmentBounds = true
+				}
+				if id == castJSONToArrayFunctionID && isMediumIntArrayCast(current, fn) {
+					features.MediumIntAssignmentBounds = true
+				}
+				// The planner depends on this package, so registry IDs cannot be
+				// imported here. Compile tests bind these IDs to the registry.
+				if id == 603 || id == 604 { // MO_VIEW_DEFINITION / MO_VIEW_CHECK_OPTION
+					features.ViewMetadataFunctions = true
+				}
 				if id == 21 && current.Typ.Id == 11 && len(fn.Args) > 0 &&
 					fn.Args[0] != nil && fn.Args[0].Typ.Id == 55 { // CAST YEAR -> BIT
 					features.YearBitCast = true
@@ -893,10 +1040,16 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 					(current.Typ.Id == 32 || current.Typ.Id == 33 || current.Typ.Id == 34) {
 					features.DecimalDivisionSemantics = true
 				}
+				if id == 14 && (overload == 1 || (overload == 0 && current.Typ.Width > 0 && current.Typ.Width <= 20 && current.Typ.Scale == 0)) {
+					features.DecimalIntegerDivisionSemantics = true
+				}
 				// Function IDs live in the function registry, which cannot be
 				// imported here because the planner depends on this package.
 				if id == 189 { // legacy TO_INTERVAL: ambiguous across pre-v97 and v97 binaries
 					features.LegacyIntervalUnits = true
+				}
+				if id == 601 { // TIMESTAMPADD_SECOND_INTERVAL
+					features.TimestampAddSecondIntervals = true
 				}
 				if id == 583 { // TO_INTERVAL_MICROSECOND
 					features.NormalizedIntervalUnits = true
@@ -907,8 +1060,35 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 				if (id == 205 || id == 218 || id == 141) && overload == 2 { // DAY/YEAR/MONTH(VARCHAR) raw field contract
 					features.TemporalResultContracts = true
 				}
-				if id == 216 && (overload == 0 || overload == 1) { // one-arg WEEK
+				if current.Typ.Id == planInt32TypeID &&
+					((id == 216 && overload >= 0 && overload <= 5) || (id == 206 && overload == 0)) {
+					features.DateNumericResultContracts = true
+				}
+				if id == 216 && (overload == 0 || overload == 1 || overload == 4) { // one-arg WEEK: DATE/DATETIME/VARCHAR
 					features.WeekSessionDefault = true
+				}
+				timestamp, dynamicTime := TemporalResultContractFeatures(current)
+				features.TimestampDatetimeResultContracts = features.TimestampDatetimeResultContracts || timestamp
+				features.DynamicTimeResultContracts = features.DynamicTimeResultContracts || dynamicTime
+				if id == 250 && overload >= 0 && overload <= 10 { // TIMESTAMP
+					want := planTimestampTypeID
+					if overload >= 5 {
+						want = planDatetimeTypeID
+					}
+					features.InvalidTemporalResultContract = features.InvalidTemporalResultContract || current.Typ.Id != want
+				}
+				// New string identities cannot execute on pre-v127 workers.
+				// Released LAST_DAY and DATE_ADD/SUB string identities also
+				// need the new incomplete-calendar warning contract.
+				if (id == 251 && overload == 2) || // DATE_FORMAT
+					(id == 93 && overload >= 1 && overload <= 3) || // DATEDIFF
+					((id == 222 || id == 223) && overload == 1) || // TO_DAYS/TO_SECONDS
+					(id == 216 && (overload == 4 || overload == 5)) || // WEEK
+					(id == 360 && overload == 3) || // DAYOFWEEK
+					(id == 201 && (overload == 0 || overload == 1)) || // LAST_DAY
+					(id == 224 && (overload == 2 || overload == 3 || overload == 6)) || // DATE_ADD
+					(id == 225 && (overload == 2 || overload == 3 || overload == 5)) { // DATE_SUB
+					features.IncompleteTemporalStrings = true
 				}
 				// Released overloads retain their physical vector ABI. The new
 				// numeric EXTRACT and string ADDTIME/SUBTIME results use appended
@@ -1060,6 +1240,19 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 			}
 			return nil
 		})
+	}, func(owner any) {
+		// The same owner walk sees lowered protobuf tracking metadata even
+		// when there are no session-function expressions. Getter interfaces
+		// avoid coupling plan to pipeline, which already imports plan.
+		switch metadata := owner.(type) {
+		case interface{ GetTrackOdkuResult() bool }:
+			features.ODKUStatementResult = features.ODKUStatementResult || metadata.GetTrackOdkuResult()
+		case interface{ GetOdkuResultTracking() bool }:
+			features.ODKUStatementResult = features.ODKUStatementResult || metadata.GetOdkuResultTracking()
+		case *DedupJoinCtx:
+			features.ODKUStatementResult = features.ODKUStatementResult ||
+				(metadata.OdkuOrdinalCol != nil && metadata.OdkuGeneratedCol != nil)
+		}
 	})
 	return
 }
@@ -1467,60 +1660,61 @@ func VisitExprTree(expr *Expr, visitor func(*Expr) error) error {
 	if expr == nil {
 		return nil
 	}
-	if err := visitor(expr); err != nil {
-		return err
-	}
-	if lit := expr.GetLit(); lit != nil {
-		if err := VisitExprTree(lit.Src, visitor); err != nil {
+	pending := []*Expr{expr}
+	for len(pending) > 0 {
+		current := pending[len(pending)-1]
+		pending = pending[:len(pending)-1]
+		if current == nil {
+			continue
+		}
+		if err := visitor(current); err != nil {
 			return err
 		}
-	}
-	if fn := expr.GetF(); fn != nil {
-		for _, arg := range fn.Args {
-			if err := VisitExprTree(arg, visitor); err != nil {
-				return err
+		// Push in reverse visitation order; dependent operands are part of the
+		// caller expression while the program root belongs to the query graph.
+		if d := current.GetDependent(); d != nil {
+			pending = append(pending, d.Comparison)
+			for i := len(d.Lhs) - 1; i >= 0; i-- {
+				pending = append(pending, d.Lhs[i])
+			}
+			for i := len(d.Inputs) - 1; i >= 0; i-- {
+				pending = append(pending, d.Inputs[i])
 			}
 		}
-	}
-	if list := expr.GetList(); list != nil {
-		for _, item := range list.List {
-			if err := VisitExprTree(item, visitor); err != nil {
-				return err
-			}
-		}
-	}
-	if sub := expr.GetSub(); sub != nil {
-		if err := VisitExprTree(sub.Child, visitor); err != nil {
-			return err
-		}
-	}
-	if window := expr.GetW(); window != nil {
-		if err := VisitExprTree(window.WindowFunc, visitor); err != nil {
-			return err
-		}
-		for _, item := range window.PartitionBy {
-			if err := VisitExprTree(item, visitor); err != nil {
-				return err
-			}
-		}
-		for _, order := range window.OrderBy {
-			if order != nil {
-				if err := VisitExprTree(order.Expr, visitor); err != nil {
-					return err
+		if w := current.GetW(); w != nil {
+			if w.Frame != nil {
+				if w.Frame.End != nil {
+					pending = append(pending, w.Frame.End.Val)
+				}
+				if w.Frame.Start != nil {
+					pending = append(pending, w.Frame.Start.Val)
 				}
 			}
+			for i := len(w.OrderBy) - 1; i >= 0; i-- {
+				if w.OrderBy[i] != nil {
+					pending = append(pending, w.OrderBy[i].Expr)
+				}
+			}
+			for i := len(w.PartitionBy) - 1; i >= 0; i-- {
+				pending = append(pending, w.PartitionBy[i])
+			}
+			pending = append(pending, w.WindowFunc)
 		}
-		if window.Frame != nil {
-			if window.Frame.Start != nil {
-				if err := VisitExprTree(window.Frame.Start.Val, visitor); err != nil {
-					return err
-				}
+		if sub := current.GetSub(); sub != nil {
+			pending = append(pending, sub.Child)
+		}
+		if list := current.GetList(); list != nil {
+			for i := len(list.List) - 1; i >= 0; i-- {
+				pending = append(pending, list.List[i])
 			}
-			if window.Frame.End != nil {
-				if err := VisitExprTree(window.Frame.End.Val, visitor); err != nil {
-					return err
-				}
+		}
+		if fn := current.GetF(); fn != nil {
+			for i := len(fn.Args) - 1; i >= 0; i-- {
+				pending = append(pending, fn.Args[i])
 			}
+		}
+		if lit := current.GetLit(); lit != nil {
+			pending = append(pending, lit.Src)
 		}
 	}
 	return nil
@@ -1539,7 +1733,7 @@ func validateStringLiteralFormsInOwner(owner any) error {
 	})
 }
 
-func walkExpressionsInOwner(owner any, visitor func(*Expr) error) error {
+func walkExpressionsInOwner(owner any, visitor func(*Expr) error, metadataVisitors ...func(any)) error {
 	seen := make(map[uintptr]struct{})
 	var walk func(reflect.Value) error
 	walk = func(value reflect.Value) error {
@@ -1564,6 +1758,9 @@ func walkExpressionsInOwner(owner any, visitor func(*Expr) error) error {
 				return nil
 			}
 			seen[pointer] = struct{}{}
+			for _, observe := range metadataVisitors {
+				observe(value.Interface())
+			}
 			return walk(value.Elem())
 		}
 		switch value.Kind() {
@@ -1612,4 +1809,164 @@ func expressionOwnerContainer(kind reflect.Kind) bool {
 	default:
 		return false
 	}
+}
+
+// RequiresMORPCVersion129JSONStringConsumerOverload detects the distinct JSON-aware
+// ELT identity and the independent opaque producer/rendering contract.
+// CONCAT and CONCAT_WS keep overload 0 but require corrected visible text.
+func RequiresMORPCVersion129JSONStringConsumerOverload(owner any) (bool, error) {
+	features, err := RequiredRemoteExpressionFeatures(owner)
+	return features.JSONStringConsumerOverload || features.JSONOpaqueTextContracts, err
+}
+
+const (
+	remoteJSONStringConsumerELTFunctionID int32  = 384
+	remoteJSONStringGroupConcatFunctionID int32  = 185
+	remoteAggregateDistinctFlag           uint64 = 1 << 63
+)
+
+func isRemoteJSONStringConsumerOverload(functionID, overloadID int32) bool {
+	if overloadID != 1 {
+		return false
+	}
+	switch functionID {
+	case remoteJSONStringConsumerELTFunctionID:
+		return true
+	default:
+		return false
+	}
+}
+
+// IsJSONMinMaxAggregate identifies the unchanged MIN/MAX overload zero with a
+// physical JSON argument. DISTINCT sets the high bit of the aggregate identity.
+// Lowered pipelines retain Op and arguments but no outer function expression.
+func IsJSONMinMaxAggregate(op int64, args []*Expr) bool {
+	op = int64(uint64(op) & ^(uint64(1) << 63))
+	return (op == int64(139)<<32 || op == int64(137)<<32) &&
+		len(args) > 0 && args[0] != nil && args[0].Typ.Id == planJSONTypeID
+}
+
+// isJSONOpaqueTextContract fences operations that create subtype-preserving
+// opaque JSON or render its MySQL line-wrapped visible text. Stored JSON can
+// contain an opaque value at any nesting depth, without a CAST in this plan.
+func isJSONOpaqueTextContract(expr *Expr, fn *Function, id int32) bool {
+	stringType := func(id int32) bool {
+		switch id {
+		case 60, 61, 64, 65, 70, 71, 72:
+			return true
+		}
+		return false
+	}
+	// GROUP_CONCAT and its LISTAGG alias carry JSON arguments in the serialized
+	// aggregate descriptor. Older finalizers render stored opaque JSON
+	// differently, including at the truncation boundary.
+	if fn != nil && fn.Func != nil &&
+		int32((uint64(fn.Func.Obj)&^remoteAggregateDistinctFlag)>>32) == remoteJSONStringGroupConcatFunctionID {
+		for _, arg := range fn.Args {
+			if arg != nil && arg.Typ.Id == planJSONTypeID {
+				return true
+			}
+		}
+	}
+	switch id {
+	case 21, mediumIntStrictCastFunctionID, mediumIntAssignmentCastFunctionID, mediumIntIgnoreCastFunctionID:
+		if len(fn.Args) == 0 || fn.Args[0] == nil {
+			return false
+		}
+		source := fn.Args[0].Typ.Id
+		// A marker itself can be provisionally TEXT before binary binding.
+		// A deterministic numeric or explicit text conversion around a marker
+		// owns its result type; do not rescan its subtree or infer uncertainty.
+		parameterSource := fn.Args[0].GetP() != nil
+		if expr.Typ.Id == planJSONTypeID {
+			return parameterSource || source == 0 || source == 64 || source == 65 || source == 70
+		}
+		return source == planJSONTypeID && stringType(expr.Typ.Id)
+	case 326: // Python UDF transports JSON as its visible text, regardless of return type.
+		for _, arg := range fn.Args {
+			if arg != nil && arg.Typ.Id == planJSONTypeID {
+				return true
+			}
+		}
+		return false
+	case 366: // JSON_OBJECT renders typed keys; values retain their binary JSON.
+		for i := 0; i < len(fn.Args); i += 2 {
+			if arg := fn.Args[i]; arg != nil {
+				switch arg.Typ.Id {
+				case planJSONTypeID:
+					return true
+				}
+			}
+		}
+		return false
+	case 16, 76, 253, 256, 257, 459, 460, 461, 462: // JSON text renderers and schema validators
+		for _, arg := range fn.Args {
+			if arg != nil && arg.Typ.Id == planJSONTypeID {
+				return true
+			}
+		}
+		return false
+	default:
+		return false
+	}
+}
+
+// TemporalResultContractFeatures classifies one expression before folding.
+// Native TIME inputs keep their released physical result contract.
+func TemporalResultContractFeatures(expr *Expr) (timestampDatetime, dynamicTime bool) {
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil {
+		return false, false
+	}
+	id, overload := int32(fn.Func.Obj>>32), int32(fn.Func.Obj)
+	return id == 250 && overload >= 6 && overload <= 10,
+		(id == 41 || id == 378) && expr.Typ.Id == planTimeTypeID &&
+			len(fn.Args) == 2 && fn.Args[0] != nil && fn.Args[0].Typ.Id != planTimeTypeID
+}
+
+// Stable storage and registry identities avoid a dependency cycle with the
+// function package. INT128/UINT128 and BIT/YEAR/ENUM are not this domain.
+func isMixedJSONNumericComparison(fn *Function) bool {
+	if fn == nil || fn.Func == nil || len(fn.Args) != 2 || fn.Args[0] == nil || fn.Args[1] == nil {
+		return false
+	}
+	id := int32(fn.Func.Obj >> 32)
+	if !(id >= 0 && id <= 5 || id == nullSafeEqualFunctionID) {
+		return false
+	}
+	left, right := fn.Args[0].Typ.Id, fn.Args[1].Typ.Id
+	if left == planJSONTypeID {
+		left, right = right, left
+	}
+	return right == planJSONTypeID && ((left >= 20 && left <= 23) || (left >= 25 && left <= 28) || (left >= 30 && left <= 34))
+}
+
+// isFloatConversionContract follows stable execution IDs across binding and
+// assignment overloads; printed names and syntax aliases are irrelevant.
+func isFloatConversionContract(expr *Expr, id int32) bool {
+	if id == 585 { // JSON_AGG_TO_DOUBLE shares MySQL text-to-float parsing.
+		return true
+	}
+	if id != 21 && id != 541 && id != 554 && id != 555 && id != 113 {
+		return false
+	}
+	fn := expr.GetF()
+	if len(fn.Args) == 0 || fn.Args[0] == nil {
+		return false
+	}
+	source, target := fn.Args[0].Typ.Id, expr.Typ.Id
+	floatSource := source == 30 || source == 31
+	floatTarget := target == 30 || target == 31
+	if floatTarget || id == 113 {
+		if lit := fn.Args[0].GetLit(); lit != nil && (lit.IsBin || lit.LiteralForm == StringLiteralForm_STRING_LITERAL_HEX || lit.LiteralForm == StringLiteralForm_STRING_LITERAL_BIT) {
+			return false // raw binary payloads retain the released conversion
+		}
+	}
+	// IF/IFF keeps its string condition; both vector and dependent execution
+	// call the float parser directly instead of inserting a CAST node.
+	if id == 113 {
+		return isPlanStringType(source)
+	}
+	return (floatTarget && isPlanStringType(source)) ||
+		((target == 32 || target == 33) && (floatSource || source == planJSONTypeID))
 }

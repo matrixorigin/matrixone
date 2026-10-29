@@ -492,6 +492,19 @@ func TestMaintainOrphanObjectPrivilegesHandlesCommittedPostWaitError(t *testing.
 	require.Equal(t, 1, deleteCalls)
 }
 
+type maintenanceDeadlineCheckingExecutor struct {
+	executor.SQLExecutor
+	transactions int
+}
+
+func (e *maintenanceDeadlineCheckingExecutor) ExecTxn(ctx context.Context, fn func(executor.TxnExecutor) error, opts executor.Options) error {
+	if _, ok := ctx.Deadline(); !ok {
+		return errors.New("transaction has no deadline")
+	}
+	e.transactions++
+	return e.SQLExecutor.ExecTxn(ctx, fn, opts)
+}
+
 func TestTenantUpgradePassRunsMaintenanceOnlyAfterFinalVersion(t *testing.T) {
 	for _, test := range []struct {
 		name       string
@@ -503,22 +516,25 @@ func TestTenantUpgradePassRunsMaintenanceOnlyAfterFinalVersion(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			lookup := false
+			checkedExecutor := &maintenanceDeadlineCheckingExecutor{SQLExecutor: executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+				switch {
+				case sql == "SELECT mo_ctl('cn', 'GetProtocolVersion', '')":
+					return newBootstrapStringResult(`{"method":"GETPROTOCOLVERSION","result":"cn-a:73"}`), nil
+				case strings.Contains(sql, "from mo_upgrade") && strings.Contains(sql, "where state = 1"):
+					return executor.Result{}, nil
+				case strings.HasPrefix(sql, "select account_id from mo_catalog.mo_account"):
+					lookup = true
+					return executor.Result{}, nil
+				default:
+					return executor.Result{}, fmt.Errorf("unexpected sql: %s", sql)
+				}
+			})}
 			service := newServiceForTest(
 				"",
 				&memLocker{},
 				clock.NewHLCClock(func() int64 { return 0 }, 0),
 				nil,
-				executor.NewMemExecutor(func(sql string) (executor.Result, error) {
-					switch {
-					case strings.Contains(sql, "from mo_upgrade") && strings.Contains(sql, "where state = 1"):
-						return executor.Result{}, nil
-					case strings.HasPrefix(sql, "select account_id from mo_catalog.mo_account"):
-						lookup = true
-						return executor.Result{}, nil
-					default:
-						return executor.Result{}, fmt.Errorf("unexpected sql: %s", sql)
-					}
-				}),
+				checkedExecutor,
 				func(s *service) {},
 			)
 			service.upgrade.finalVersionCompleted.Store(test.final)
@@ -527,6 +543,11 @@ func TestTenantUpgradePassRunsMaintenanceOnlyAfterFinalVersion(t *testing.T) {
 			require.NoError(t, err)
 			require.False(t, hasUpgradeTenants)
 			require.Equal(t, test.wantLookup, lookup)
+			if test.final {
+				require.Equal(t, 4, checkedExecutor.transactions) // upgrade selection plus three maintenance owners
+			} else {
+				require.Equal(t, 1, checkedExecutor.transactions)
+			}
 		})
 	}
 }
@@ -540,6 +561,8 @@ func TestAsyncUpgradeTenantTaskKeepsSingleMaintenanceOwner(t *testing.T) {
 		nil,
 		executor.NewMemExecutor(func(sql string) (executor.Result, error) {
 			switch {
+			case sql == "SELECT mo_ctl('cn', 'GetProtocolVersion', '')":
+				return newBootstrapStringResult(`{"method":"GETPROTOCOLVERSION","result":"cn-a:73"}`), nil
 			case strings.Contains(sql, "from mo_upgrade") && strings.Contains(sql, "where state = 1"):
 				return executor.Result{}, nil
 			case strings.HasPrefix(sql, "select account_id from mo_catalog.mo_account"):

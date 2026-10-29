@@ -793,6 +793,19 @@ const (
 	APPROX_PERCENTILE = 557
 	// function `mo_is_legacy_temporary_table`
 	MO_IS_LEGACY_TEMPORARY_TABLE = 558
+	// function `mo_view_definition`
+	MO_VIEW_DEFINITION = 603
+	// function `mo_view_check_option`
+	MO_VIEW_CHECK_OPTION = 604
+
+	// Local sliding-window ranks (issue #29947): argument-windowed frame-local
+	// competition rank, registered as value-window functions. Renumbered
+	// 605/606/607 -> 616/617/618 when main's technical-indicator kernels
+	// (#31017) claimed 605..615; ids are referenced by name everywhere, so
+	// renumbering is safe, and the ranks stay below the sentinel.
+	MRANK   = 616
+	CUMRANK = 617
+	TMRANK  = 618
 
 	// onnx_run: evaluate an ONNX model. Renumbered as main merges claim ids
 	// (549->554->556); referenced by name only, so renumbering is safe.
@@ -851,19 +864,85 @@ const (
 	// JSON_AGG_TO_DOUBLE is the MySQL warning-conversion boundary used by
 	// numeric aggregates (SUM/AVG/VAR_*/STDDEV_*). It is not public SQL.
 	JSON_AGG_TO_DOUBLE = 585
+	// JSON_ARRAY_INSERT inserts values before array elements selected by paths.
+	// Keep main's allocated id stable when adding newer internal functions.
+	JSON_ARRAY_INSERT = 586
+	// Internal schema-aware serializers used by index maintenance. They are
+	// deliberately separate from generic SERIAL, whose value round trip must
+	// remain lossless for SQL callers.
+	// Keep UUID_SHORT's main-branch id stable. The physical serializers are
+	// internal functions introduced by this change and therefore follow it.
+	PHYSICAL_SERIAL        = 588
+	PHYSICAL_SERIAL_FULL   = 589
+	PHYSICAL_COLLATION_KEY = 590
 
 	EXTRACTVALUE            = 581
 	UPDATEXML               = 582
 	TO_INTERVAL_MICROSECOND = 583
+	// Technical-indicator window-function family (issue #29949): eleven
+	// native SQL window kernels with per-partition sequential state, per
+	// docs/design/technical_indicator_window_kernels.md section 5.1.
+	// IDs follow the upstream convention (newest id one below
+	// FUNCTION_END_NUMBER): 605..615 are the first free block above the
+	// internal helpers MO_VIEW_DEFINITION(603)/MO_VIEW_CHECK_OPTION(604);
+	// reusing those silently swaps their overloads and breaks the
+	// information_schema views maintenance.
+	SMA               = 605
+	WMA               = 606
+	TRIMA             = 607
+	EMA               = 608
+	WILDER            = 609
+	KAMA              = 610
+	DEMA              = 611
+	TEMA              = 612
+	T3                = 613
+	MMAXDRAWDOWN      = 614
+	CUMPOSITIVESTREAK = 615
 
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER = 586
+	UUID_SHORT = 587
+
+	TANH  = 591
+	COSH  = 592
+	ASINH = 593
+	ACOSH = 594
+	ATANH = 595
+
+	FORMAT_BYTES     = 596
+	FORMAT_PICO_TIME = 597
+
+	TO_CALENDAR_INTERVAL        = 598
+	CHECK_ASYNC_DATALINK_SOURCE = 599
+	INTERNAL_TABLE_COLLATION    = 600
+
+	TIMESTAMPADD_SECOND_INTERVAL = 601
+
+	// Internal LOAD IGNORE predicate; gated by cluster protocol 125.
+	LOAD_FK_IGNORE_CHECK = 602
+
+	// 616/617/618 hold the local sliding-window ranks (MRANK/CUMRANK/TMRANK)
+	// renumbered above main's 605..615 indicator block.
+
+	// SQL exact weighted percentile aggregate quantileExactWeighted; remote
+	// dispatch is gated by cluster protocol 131. Re-issued 616 -> 619 when
+	// main's #31020 claimed 616..618 first; every reference is by name, so
+	// renumbering is safe.
+	QUANTILE_EXACT_WEIGHTED = 619
+
+	// Keep FUNCTION_END_NUMBER one past the highest allocated function id.
+	FUNCTION_END_NUMBER = 620
 )
 
 // functionIdRegister is what function we have registered already.
 var functionIdRegister = map[string]int32{
+	"timestampadd_second_interval": TIMESTAMPADD_SECOND_INTERVAL,
+	"_check_async_datalink_source": CHECK_ASYNC_DATALINK_SOURCE,
+
+	"format_bytes":            FORMAT_BYTES,
+	"format_pico_time":        FORMAT_PICO_TIME,
 	"to_interval_microsecond": TO_INTERVAL_MICROSECOND,
+	"to_calendar_interval":    TO_CALENDAR_INTERVAL,
 	"extractvalue":            EXTRACTVALUE,
 	"updatexml":               UPDATEXML,
 	// operators
@@ -961,10 +1040,16 @@ var functionIdRegister = map[string]int32{
 	"median":                       MEDIAN,
 	"approx_percentile":            APPROX_PERCENTILE,
 	"mo_is_legacy_temporary_table": MO_IS_LEGACY_TEMPORARY_TABLE,
+	"mo_view_definition":           MO_VIEW_DEFINITION,
+	"mo_view_check_option":         MO_VIEW_CHECK_OPTION,
+	"mrank":                        MRANK,
+	"cumrank":                      CUMRANK,
+	"tmrank":                       TMRANK,
 	"max_by":                       MAX_BY,
 	"max_by_non_null":              MAX_BY_NON_NULL,
 	"percentile_cont":              PERCENTILE_CONT,
 	"percentile_disc":              PERCENTILE_DISC,
+	"quantileexactweighted":        QUANTILE_EXACT_WEIGHTED,
 	// count window
 	"rank":         RANK,
 	"row_number":   ROW_NUMBER,
@@ -1050,6 +1135,7 @@ var functionIdRegister = map[string]int32{
 	"asin":                           ASIN,
 	"assert":                         ASSERT,
 	"_check_constraint_assert":       CHECK_CONSTRAINT_ASSERT,
+	"_load_fk_ignore_check":          LOAD_FK_IGNORE_CHECK,
 	"bit_length":                     BIT_LENGTH,
 	"date":                           DATE,
 	"time":                           TIME,
@@ -1091,6 +1177,11 @@ var functionIdRegister = map[string]int32{
 	"sign":                           SIGN,
 	"sin":                            SIN,
 	"sinh":                           SINH,
+	"tanh":                           TANH,
+	"cosh":                           COSH,
+	"asinh":                          ASINH,
+	"acosh":                          ACOSH,
+	"atanh":                          ATANH,
 	"space":                          SPACE,
 	"tan":                            TAN,
 	"week":                           WEEK,
@@ -1155,6 +1246,7 @@ var functionIdRegister = map[string]int32{
 	"json_insert":                    JSON_INSERT,
 	"json_replace":                   JSON_REPLACE,
 	"json_array_append":              JSON_ARRAY_APPEND,
+	"json_array_insert":              JSON_ARRAY_INSERT,
 	"json_remove":                    JSON_REMOVE,
 	"hll_cardinality":                HLL_CARDINALITY,
 	"json_type":                      JSON_TYPE,
@@ -1195,6 +1287,7 @@ var functionIdRegister = map[string]int32{
 	"sql_tvf_disconnect":             SQL_TVF_DISCONNECT,
 	"last_kafka_message_id":          LAST_KAFKA_MESSAGE_ID,
 	"uuid_v7":                        UUID,
+	"uuid_short":                     UUID_SHORT,
 	"uuid_v1":                        UUID_V1,
 	"uuid_v4":                        UUID_V4,
 	"uuid_v6":                        UUID_V6,
@@ -1220,6 +1313,9 @@ var functionIdRegister = map[string]int32{
 	"serial":                         SERIAL,
 	"serial_full":                    SERIAL_FULL,
 	"serial_extract":                 SERIAL_EXTRACT,
+	"physical_serial":                PHYSICAL_SERIAL,
+	"physical_serial_full":           PHYSICAL_SERIAL_FULL,
+	"physical_collation_key":         PHYSICAL_COLLATION_KEY,
 	"hash_value":                     HASH,
 	"hash_partition":                 HASH_PARTITION,
 	"mo_tuple_expr":                  MO_TUPLE_EXPR,
@@ -1298,6 +1394,7 @@ var functionIdRegister = map[string]int32{
 	"internal_numeric_scale":         INTERNAL_NUMERIC_SCALE,
 	"internal_datetime_scale":        INTERNAL_DATETIME_SCALE,
 	"internal_column_character_set":  INTERNAL_COLUMN_CHARACTER_SET,
+	"internal_table_collation":       INTERNAL_TABLE_COLLATION,
 	"internal_auto_increment":        INTERNAL_AUTO_INCREMENT,
 	"nextval":                        NEXTVAL,
 	"setval":                         SETVAL,
@@ -1319,6 +1416,7 @@ var functionIdRegister = map[string]int32{
 	"st_geometryfromtext":            ST_GEOMFROMTEXT,
 	"st_geomfromwkb":                 ST_GEOMFROMWKB,
 	"st_geomfrombinary":              ST_GEOMFROMWKB,
+	"point":                          ST_POINT,
 	"st_point":                       ST_POINT,
 	"st_point32":                     ST_POINT32,
 	"st_pointfromtext":               ST_POINTFROMTEXT,
@@ -1498,4 +1596,17 @@ var functionIdRegister = map[string]int32{
 
 	// date_trunc function
 	"date_trunc": DATE_TRUNC,
+
+	// technical-indicator window functions (issue #29949)
+	"sma":               SMA,
+	"wma":               WMA,
+	"trima":             TRIMA,
+	"ema":               EMA,
+	"wilder":            WILDER,
+	"kama":              KAMA,
+	"dema":              DEMA,
+	"tema":              TEMA,
+	"t3":                T3,
+	"mmaxdrawdown":      MMAXDRAWDOWN,
+	"cumpositivestreak": CUMPOSITIVESTREAK,
 }

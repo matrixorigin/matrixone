@@ -15,13 +15,10 @@
 package merge
 
 import (
-	"bufio"
 	"context"
-	"encoding/base64"
-	"fmt"
-	"io"
+
 	"os"
-	"strings"
+
 	"testing"
 	"time"
 
@@ -35,7 +32,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
 	"github.com/stretchr/testify/require"
-	"github.com/tidwall/btree"
 )
 
 // region: test utils
@@ -97,116 +93,6 @@ func newTestObjectEntry(t *testing.T, size uint32, isTombstone bool) *catalog.Ob
 		ObjectMVCCNode: catalog.ObjectMVCCNode{ObjectStats: *stats},
 		ObjectNode:     catalog.ObjectNode{IsTombstone: isTombstone},
 	}
-}
-
-func StatsString(stats objectio.ObjectStats, zonemapKind common.ZonemapPrintKind) string {
-	zonemapStr := "nil"
-	if z := stats.SortKeyZoneMap(); z != nil {
-		switch zonemapKind {
-		case common.ZonemapPrintKindNormal:
-			zonemapStr = z.String()
-		case common.ZonemapPrintKindCompose:
-			zonemapStr = z.StringForCompose()
-		case common.ZonemapPrintKindHex:
-			zonemapStr = z.StringForHex()
-		}
-	}
-	return fmt.Sprintf(
-		"%s oSize:%s, cSzie:%s rows:%d, zm: %s",
-		stats.ObjectName().ObjectId().ShortStringEx(),
-		common.HumanReadableBytes(int(stats.OriginSize())),
-		common.HumanReadableBytes(int(stats.Size())),
-		stats.Rows(),
-		zonemapStr,
-	)
-}
-
-func DisplayPointEvents(events *btree.BTreeG[*pointEvent]) string {
-	iter := events.Iter()
-	var sb strings.Builder
-	sb.Grow(events.Len() * 50) // Pre-allocate buffer based on estimated size per event
-
-	for iter.Next() {
-		event := iter.Item()
-		sb.WriteString(event.String())
-		sb.WriteByte('\n')
-	}
-	return sb.String()
-}
-
-// func makeStringReader(content string) (io.Reader, func(), error) {
-//	return strings.NewReader(content), func() {}, nil
-// }
-
-func makeFileReader(filepath string) (io.Reader, func(), error) {
-	file, err := os.Open(filepath)
-	if err != nil {
-		return nil, nil, err
-	}
-	return file, func() { file.Close() }, nil
-}
-
-// parsing the output of `select mo_ctl('dn', 'inspect', 'object -t db.t -vvvv')` into a list of objectio.ObjectStats
-func parseObjectFile(reader io.Reader, isTombstone bool) ([]*objectio.ObjectStats, error) {
-	var resutls []*objectio.ObjectStats
-	scanner := bufio.NewScanner(reader)
-
-	section := 0
-	// Section constants for parsing object files
-	const (
-		SectionNone      = 0
-		SectionData      = 1
-		SectionTombstone = 2
-	)
-	targetSection := SectionData
-	if isTombstone {
-		targetSection = SectionTombstone
-	}
-
-	for scanner.Scan() {
-		line := scanner.Text()
-
-		// Check if we're entering the DATA section
-		if line == "DATA" {
-			section = SectionData
-			continue
-		}
-
-		// Check if we're entering the TOMBSTONES section
-		if line == "TOMBSTONES" {
-			section = SectionTombstone
-			continue
-		}
-
-		// Skip lines that are not in the DATA section or are summary lines
-		if section != targetSection || strings.HasPrefix(line, "summary:") || strings.TrimSpace(line) == "" {
-			continue
-		}
-
-		// Parse object entries
-		parts := strings.Fields(line)
-		if len(parts) >= 2 {
-			encodedData := parts[1]
-
-			// Decode base64 data
-			decodedData, err := base64.StdEncoding.DecodeString(encodedData)
-			if err != nil {
-				continue
-			}
-
-			// Create ObjectStats from decoded data
-			stats := objectio.ObjectStats(decodedData)
-			if stats.Rows() > 0 {
-				resutls = append(resutls, &stats)
-			}
-		}
-	}
-
-	if err := scanner.Err(); err != nil {
-		return nil, err
-	}
-
-	return resutls, nil
 }
 
 // endregion: test utils
@@ -351,49 +237,6 @@ func TestOverlapStats(t *testing.T) {
 	mergeTasks, err = GatherOverlapMergeTasks(context.Background(), stats, opts, 0)
 	require.NoError(t, err)
 	require.Equal(t, 0, len(mergeTasks))
-}
-
-func TestCalculateOverlapStats(t *testing.T) {
-	t.Skip("used to processing file")
-	// Path to the zout file
-	zoutFilePath := "/root/matrixone/zmtest/statement2.2-2.out"
-
-	reader, closer, err := makeFileReader(zoutFilePath)
-	if err != nil {
-		t.Fatalf("Failed to make file reader: %v", err)
-	}
-	defer closer()
-
-	statsList, err := parseObjectFile(reader, false)
-	if err != nil {
-		t.Fatalf("Failed to parse zout file: %v", err)
-	}
-
-	// Log the extracted entries
-	t.Logf("Extracted %d entries from zout file", len(statsList))
-	leveledObjects := [8][]*objectio.ObjectStats{}
-	for _, stat := range statsList {
-		lv := stat.GetLevel()
-		leveledObjects[lv] = append(leveledObjects[lv], stat)
-	}
-
-	for i, objects := range leveledObjects {
-		if len(objects) < 2 {
-			continue
-		}
-		t.Logf("level %d: %v", i, len(objects))
-		// Calculate overlap metrics
-		opts := NewOverlapOptions().WithFitPolynomialDegree(4).WithFurtherStat(true)
-		overlapStats, err := CalculateOverlapStats(context.Background(), objects, opts)
-		require.NoError(t, err)
-
-		mergeTasks, err := GatherOverlapMergeTasks(context.Background(), objects, opts, int8(i))
-		require.NoError(t, err)
-		for _, task := range mergeTasks {
-			t.Logf("merge tasks found: %v", task.String())
-		}
-		t.Logf("OverlapStats: %s", overlapStats.String())
-	}
 }
 
 // endregion: overlap test cases
@@ -545,24 +388,6 @@ func TestSizeLevel(t *testing.T) {
 	// Test with lower maxLevel (3)
 	result = sizeLevel(16*1024*1024, 3)
 	require.Equal(t, 3, result, "sizeLevel should return 3 for size 16MB when maxLevel is 3")
-}
-
-func TestShowCurve(t *testing.T) {
-	t.Skip("used to update comments")
-	opts := NewLayerZeroOpts()
-	s := ""
-	v := ""
-	for i := 1; i < 61; i++ {
-		s += fmt.Sprintf("%d\t", i)
-		v += fmt.Sprintf("%d\t", opts.CalcTolerance(time.Duration(i)*time.Minute))
-		if i%20 == 0 {
-			fmt.Printf("// time:\t%s\n", s)
-			fmt.Printf("// val :\t%s\n", v)
-			s = ""
-			v = ""
-			fmt.Println("//")
-		}
-	}
 }
 
 func TestTimeLevelSince(t *testing.T) {

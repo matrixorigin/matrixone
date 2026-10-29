@@ -16,6 +16,7 @@ package mysql
 
 import (
 	"bytes"
+	"encoding/hex"
 	"fmt"
 	"strconv"
 	"strings"
@@ -54,7 +55,11 @@ type Scanner struct {
 	buf                  string
 	executableCommentEnd int
 
-	strBuilder bytes.Buffer
+	strBuilder             bytes.Buffer
+	parseControl           *parseControl
+	aliasFollowerLookahead bool
+	soundsPhraseLookahead  bool
+	identifierAfterDot     bool
 }
 
 func (s *Scanner) reset(clearLargeOnly bool, oversized bool) {
@@ -70,6 +75,10 @@ func (s *Scanner) reset(clearLargeOnly bool, oversized bool) {
 	s.PrePos = 0
 	s.executableCommentEnd = 0
 	s.sqlMode = 0
+	s.parseControl = nil
+	s.aliasFollowerLookahead = false
+	s.soundsPhraseLookahead = false
+	s.identifierAfterDot = false
 
 	if clearLargeOnly {
 		if oversized {
@@ -117,18 +126,41 @@ func PutScanner(scanner *Scanner) {
 	scannerPool.Put(scanner)
 }
 
-func (s *Scanner) Scan() (int, string) {
-	return s.scan(false)
+const skippedScannerToken = -1
+
+func (s *Scanner) Scan() (int, string) { return s.scan(false) }
+
+// ScanAfterDot classifies identifier words before keyword-specific lookahead.
+// Keep this context scoped so standalone scanner consumers retain their rules.
+func (s *Scanner) ScanAfterDot() (int, string) {
+	return s.scanQualified(false)
 }
 
-// ScanWithComments uses the SQL lexer, including its quote and SQLMode rules,
-// but returns ordinary comments instead of skipping them. Executable comments
-// remain SQL lexical space, just as they are for Scan.
-func (s *Scanner) ScanWithComments() (int, string) {
-	return s.scan(true)
+// ScanWithCommentsAfterDot applies qualified-identifier rules while returning
+// ordinary comments. Callers must retain dot context across those comments.
+func (s *Scanner) ScanWithCommentsAfterDot() (int, string) {
+	return s.scanQualified(true)
 }
+
+func (s *Scanner) scanQualified(comments bool) (int, string) {
+	s.identifierAfterDot = true
+	defer func() { s.identifierAfterDot = false }()
+	return s.scan(comments)
+}
+
+// ScanWithComments retains the authoritative lexer rules while exposing ordinary comments.
+func (s *Scanner) ScanWithComments() (int, string) { return s.scan(true) }
 
 func (s *Scanner) scan(comments bool) (int, string) {
+	for {
+		s.scanCheckpoint()
+		token, value := s.scanToken(comments)
+		if token != skippedScannerToken {
+			return token, value
+		}
+	}
+}
+func (s *Scanner) scanToken(comments bool) (int, string) {
 	if s.MysqlSpecialComment != nil {
 		msc := s.MysqlSpecialComment
 		tok, val := msc.scan(comments)
@@ -208,8 +240,23 @@ func (s *Scanner) scan(comments bool) (int, string) {
 			if s.isCharsetIntroducer() {
 				s.incN(8)
 				s.skipBlank()
-				s.inc()
-				return s.scanString('\'', STRING)
+				if s.cur() == '\'' {
+					s.inc()
+					return s.scanString('\'', STRING)
+				}
+				// A character-set-introduced hex literal is text, not a
+				// binary HEXNUM or a width-constrained CAST. Decode through
+				// STRING so binding infers the original character width.
+				s.incN(2) // X'
+				token, value := s.scanHex()
+				if token != HEXNUM {
+					return token, value
+				}
+				decoded, err := hex.DecodeString(value[2:])
+				if err != nil {
+					return LEX_ERROR, value
+				}
+				return STRING, string(decoded)
 			}
 			return s.scanIdentifier(false)
 		}
@@ -254,7 +301,7 @@ func (s *Scanner) scan(comments bool) (int, string) {
 			if comments || id == LEX_ERROR {
 				return id, str
 			}
-			return s.scan(comments)
+			return skippedScannerToken, ""
 		case '*':
 			s.inc()
 			switch s.cur() {
@@ -264,13 +311,13 @@ func (s *Scanner) scan(comments bool) (int, string) {
 				if !s.readVersion() {
 					return LEX_ERROR, ""
 				}
-				return s.scan(comments)
+				return skippedScannerToken, ""
 			default:
 				id, str := s.scanCommentTypeBlock()
 				if comments || id == LEX_ERROR {
 					return id, str
 				}
-				return s.scan(comments)
+				return skippedScannerToken, ""
 			}
 		default:
 			return int(ch), ""
@@ -287,7 +334,7 @@ func (s *Scanner) scan(comments bool) (int, string) {
 			if s.executableCommentEnd == 0 {
 				s.executableCommentEnd = s.Pos
 			}
-			return s.scan(comments)
+			return skippedScannerToken, ""
 		default:
 			return s.stepBackOneChar(ch, comments)
 		}
@@ -301,7 +348,7 @@ func (s *Scanner) scan(comments bool) (int, string) {
 			s.inc()
 			switch s.cur() {
 			case '\'':
-				return s.scan(comments)
+				return skippedScannerToken, ""
 			default:
 				return s.scanStringAddPlus(ch, STRING)
 			}
@@ -316,7 +363,7 @@ func (s *Scanner) scan(comments bool) (int, string) {
 		case isDigit(s.cur()):
 			return s.scanString(ch, STRING)
 		default:
-			return s.scan(comments)
+			return skippedScannerToken, ""
 		}
 	case ch == '#':
 		s.inc()
@@ -324,7 +371,7 @@ func (s *Scanner) scan(comments bool) (int, string) {
 		if comments || id == LEX_ERROR {
 			return id, str
 		}
-		return s.scan(comments)
+		return skippedScannerToken, ""
 	default:
 		return s.stepBackOneChar(ch, comments)
 	}
@@ -339,12 +386,14 @@ func (s *Scanner) TakeExecutableCommentEnd() int {
 }
 
 func (s *Scanner) isCharsetIntroducer() bool {
-	if s.peek(1) != 'u' || s.peek(2) != 't' || s.peek(3) != 'f' || s.peek(4) != '8' ||
-		s.peek(5) != 'm' || s.peek(6) != 'b' || s.peek(7) != '4' {
+	// The introducer name is matched case-insensitively, like MySQL.
+	const charsetIntroducer = "_utf8mb4"
+	end := s.Pos + len(charsetIntroducer)
+	if end > len(s.buf) || !strings.EqualFold(s.buf[s.Pos:end], charsetIntroducer) {
 		return false
 	}
 
-	pos := s.Pos + len("_utf8mb4")
+	pos := end
 	for pos < len(s.buf) {
 		switch s.buf[pos] {
 		case ' ', '\n', '\r', '\t':
@@ -353,7 +402,8 @@ func (s *Scanner) isCharsetIntroducer() bool {
 		}
 		break
 	}
-	return pos < len(s.buf) && s.buf[pos] == '\''
+	return pos < len(s.buf) && (s.buf[pos] == '\'' ||
+		(pos > end && pos+1 < len(s.buf) && (s.buf[pos] == 'x' || s.buf[pos] == 'X') && s.buf[pos+1] == '\''))
 }
 
 // ScanComment finds all Comment (/*  */, //) until gets EOF or LEX_ERROR
@@ -449,7 +499,7 @@ func (s *Scanner) stepBackOneChar(ch uint16, comments bool) (int, string) {
 				if comments || id == LEX_ERROR {
 					return id, str
 				}
-				return s.scan(comments)
+				return skippedScannerToken, ""
 			}
 		case '>':
 			s.inc()
@@ -707,7 +757,7 @@ func (s *Scanner) scanCommentTypeBlock() (int, string) {
 
 	s.MysqlSpecialComment = NewScanner(s.dialectType, sql)
 
-	return s.Scan()
+	return skippedScannerToken, ""
 }*/
 
 // ExtractMysqlComment extracts the version and SQL from a comment-only query
@@ -860,6 +910,45 @@ exit:
 }
 
 func (s *Scanner) scanIdentifier(isVariable bool) (int, string) {
+	token, text := s.scanIdentifierToken(isVariable)
+	if token != BEGIN || s.aliasFollowerLookahead {
+		return token, text
+	}
+	// BEGIN's transaction/block lookahead used to recursively scan a chain of
+	// BEGIN identifiers. Only the first follower can make this token a plain
+	// transaction BEGIN; deeper success means SPBEGIN. Every error propagates
+	// without rewinding. Match the existing position-only rewind, including
+	// the intentionally unchanged Line/Col produced by lookahead.
+	position := s.Pos
+	nested := false
+	for {
+		s.scanCheckpoint()
+		s.skipBlank()
+		if s.cur() == ';' || s.cur() == eofChar {
+			s.Pos = position
+			if nested {
+				return SPBEGIN, text
+			}
+			return BEGIN, text
+		}
+		next, nextText := s.scanIdentifierToken(false)
+		if next == LEX_ERROR {
+			return next, nextText
+		}
+		if next == BEGIN {
+			nested = true
+			continue
+		}
+		s.Pos = position
+		if !nested && (next == WORK || next == TRANSACTION) {
+			return BEGIN, text
+		}
+		return SPBEGIN, text
+	}
+}
+
+// scanIdentifierToken recognizes one identifier without BEGIN lookahead.
+func (s *Scanner) scanIdentifierToken(isVariable bool) (int, string) {
 	start := s.Pos
 	if size := supplementaryUTF8SequenceSizeAt(s.buf, s.Pos); size != 0 {
 		s.incN(size)
@@ -877,6 +966,7 @@ func (s *Scanner) scanIdentifier(isVariable bool) (int, string) {
 	s.inc()
 
 	for {
+		s.scanCheckpoint()
 		ch := s.cur()
 		if ch == '$' && dollarFlag {
 			break
@@ -891,6 +981,11 @@ func (s *Scanner) scanIdentifier(isVariable bool) (int, string) {
 		s.inc()
 	}
 	keywordName := s.buf[start:s.Pos]
+	// MySQL permits even reserved words as unquoted qualified name components.
+	// Classify here so BEGIN and other contextual keywords cannot look ahead.
+	if s.identifierAfterDot && !isVariable {
+		return ID, keywordName
+	}
 	lower := strings.ToLower(keywordName)
 	if keywordID, found := keywords[lower]; found {
 		if isSQLModeSensitiveFunctionName(lower) && !s.sqlMode.Has(SQLModeIgnoreSpace) {
@@ -905,30 +1000,23 @@ func (s *Scanner) scanIdentifier(isVariable bool) (int, string) {
 			}
 			return ID, keywordName
 		}
-		if lower == "offset" && !s.offsetClauseAhead() {
+		// SOUNDS is non-reserved, including as an implicit SELECT alias.
+		// Only the two-word predicate needs the keyword token.
+		if lower == "sounds" {
+			if s.soundsPhraseLookahead {
+				return ID, keywordName
+			}
+			lookahead := *s
+			lookahead.soundsPhraseLookahead = true
+			next, _ := lookahead.Scan()
+			if next != LIKE {
+				return ID, keywordName
+			}
+		}
+		if lower == "offset" && !s.aliasFollowerLookahead && !s.offsetClauseAhead() {
 			return ID, keywordName
 		}
-		// make transaction statements coexist with plsql
-		if lower == "begin" {
-			cur := s.Pos
-			s.skipBlank()
-			if s.cur() == ';' || s.cur() == eofChar { // "begin ;" situation
-				s.Pos = cur
-				return keywordID, keywordName
-			}
-			typ, str := s.scanIdentifier(false) // "begin work / begin transaction" situation
-			if typ == LEX_ERROR {
-				return typ, str
-			}
-			if typ == WORK || typ == TRANSACTION {
-				s.Pos = cur
-				return keywordID, keywordName
-			}
-			s.Pos = cur
-			return SPBEGIN, keywordName
-		} else {
-			return keywordID, keywordName
-		}
+		return keywordID, keywordName
 	}
 	// dual must always be case-insensitive
 	if lower == "dual" {
@@ -942,22 +1030,28 @@ func (s *Scanner) scanIdentifier(isVariable bool) (int, string) {
 // or one followed by another clause must remain an identifier. If the next
 // token can start an expression, the parser receives the OFFSET keyword.
 func (s *Scanner) offsetClauseAhead() bool {
-	// Preserve OFFSET(...) as a non-reserved function name. OFFSET followed by
-	// a parenthesized clause expression remains available with whitespace, as
-	// in OFFSET (1).
-	if s.Pos < len(s.buf) && s.buf[s.Pos] == '(' {
-		return false
-	}
-
-	pos := s.skipBlankAndCommentsFrom(s.Pos)
-	if hasKeywordAt(s.buf, pos, "offset") {
-		return false
-	}
-
 	lookahead := *s
-	next, _ := lookahead.Scan()
-
-	return !isOffsetAliasFollower(next)
+	lookahead.aliasFollowerLookahead = true
+	negated := false
+	for {
+		// Preserve OFFSET(...) as a non-reserved function name. OFFSET
+		// followed by a parenthesized expression with whitespace is different.
+		if lookahead.Pos < len(lookahead.buf) && lookahead.buf[lookahead.Pos] == '(' {
+			return negated
+		}
+		pos := lookahead.skipBlankAndCommentsFrom(lookahead.Pos)
+		if hasKeywordAt(lookahead.buf, pos, "offset") {
+			return negated
+		}
+		next, _ := lookahead.Scan()
+		if next != OFFSET {
+			return (!isOffsetAliasFollower(next)) != negated
+		}
+		// The next OFFSET is a follower iff its own classification returns
+		// OFFSET rather than ID. Each deferred level therefore negates the
+		// next boolean; no input-sized Go call stack or work slice is needed.
+		negated = !negated
+	}
 }
 
 // isOffsetAliasFollower is the complete union of tokens that may immediately
@@ -1181,6 +1275,7 @@ func (s *Scanner) cur() uint16 {
 }
 
 func (s *Scanner) inc() {
+	s.scanCheckpoint()
 	if s.Pos >= len(s.buf) {
 		return
 	}

@@ -112,9 +112,9 @@ func (vq *VisitPlan) exploreNode(ctx context.Context, rule VisitPlanRule, node *
 		}
 	}
 
-	if scan := node.VectorIndexScan; scan != nil {
-		if scan.QueryVector != nil {
-			scan.QueryVector, err = rule.ApplyExpr(scan.QueryVector)
+	if scan := node.IndexSearchScan; scan != nil {
+		if scan.QueryPayload != nil {
+			scan.QueryPayload, err = rule.ApplyExpr(scan.QueryPayload)
 			if err != nil {
 				return err
 			}
@@ -125,8 +125,8 @@ func (vq *VisitPlan) exploreNode(ctx context.Context, rule VisitPlanRule, node *
 				return err
 			}
 		}
-		if scan.FirstRoundLimit != nil {
-			scan.FirstRoundLimit, err = rule.ApplyExpr(scan.FirstRoundLimit)
+		for i := range scan.AlgoExprs {
+			scan.AlgoExprs[i], err = rule.ApplyExpr(scan.AlgoExprs[i])
 			if err != nil {
 				return err
 			}
@@ -157,6 +157,23 @@ func (vq *VisitPlan) exploreNode(ctx context.Context, rule VisitPlanRule, node *
 		node.OnList[i], err = rule.ApplyExpr(node.OnList[i])
 		if err != nil {
 			return err
+		}
+	}
+
+	for i := range node.DedupKeyExprs {
+		node.DedupKeyExprs[i], err = rule.ApplyExpr(node.DedupKeyExprs[i])
+		if err != nil {
+			return err
+		}
+	}
+	if node.PreInsertUkCtx != nil {
+		for _, exprs := range node.PreInsertUkCtx.KeyDiagnosticExprs {
+			for i := range exprs.GetList() {
+				exprs.List[i], err = rule.ApplyExpr(exprs.List[i])
+				if err != nil {
+					return err
+				}
+			}
 		}
 	}
 

@@ -98,11 +98,6 @@ type Dynamic struct {
 
 // Config mo-service configuration
 type Config struct {
-	// benchmarkTNNoGC is launcher-owned proof propagated from the TN service
-	// config when a launch manifest starts CN and TN from separate files. It is
-	// never decoded from TOML and is consumed only by CN startup validation.
-	benchmarkTNNoGC bool
-
 	// DataDir data dir
 	DataDir string `toml:"data-dir"`
 	// Log log config
@@ -196,10 +191,11 @@ func parseConfigFromFile(file string, cfg any) error {
 }
 
 func parseFromString(data string, cfg any) error {
-	if _, err := toml.Decode(data, cfg); err != nil {
+	metadata, err := toml.Decode(data, cfg)
+	if err != nil {
 		return err
 	}
-	return nil
+	return cnservice.ValidateSiriusConfigKeys(metadata)
 }
 
 func (c *Config) validate() error {
@@ -389,6 +385,8 @@ func (c *Config) createFileServiceWithCreator(
 	metricScope := fileservice.ServiceMetricScope(serviceType.String(), nodeUUID)
 	for _, config := range c.FileServices {
 		config.Cache.MetricScope = metricScope
+		config.Cache.IndexFileCacheEnabled = serviceType == metadata.ServiceType_CN &&
+			strings.EqualFold(config.Name, defines.SharedFileServiceName)
 		counterSet := new(perfcounter.CounterSet)
 		service, err := creator(
 			ctx,

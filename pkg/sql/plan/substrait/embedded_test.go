@@ -25,7 +25,7 @@ import (
 
 func TestEmbeddedMOReadReplacesCompleteScan(t *testing.T) {
 	query := embeddedProjectedScanQuery()
-	candidate, err := Export(query)
+	candidate, err := ExportEmbeddedMO(query, NewEmbeddedExportProfile(0))
 	require.NoError(t, err)
 
 	reads, err := candidate.EmbeddedMOReads()
@@ -49,22 +49,18 @@ func TestEmbeddedMOReadReplacesCompleteScan(t *testing.T) {
 	require.Len(t, input.GetRead().BaseSchema.Struct.Types, 2)
 }
 
-func TestEmbeddedMOAdmissionPreservesReaderOrderingWithoutChangingFlight(t *testing.T) {
+func TestEmbeddedMOAdmissionPreservesReaderOrdering(t *testing.T) {
 	query := embeddedProjectedScanQuery()
 	query.Nodes[0].OrderBy = []*planpb.OrderBySpec{{Expr: col(0), Flag: planpb.OrderBySpec_ASC}}
-	_, err := Export(query)
-	require.ErrorContains(t, err, "sort semantics outside a SORT node")
-	candidate, err := ExportEmbeddedMO(query)
+	candidate, err := ExportEmbeddedMO(query, EmbeddedExportProfile{})
 	require.NoError(t, err)
-	_, err = candidate.Build(map[int32][]byte{0: {1}})
-	require.ErrorContains(t, err, "cannot be emitted as Flight")
 	wire, err := candidate.BuildEmbedded(map[int32]EmbeddedReadBinding{0: {BindingID: 1, Source: EmbeddedReadMO}})
 	require.NoError(t, err)
 	require.NotNil(t, embeddedPlan(t, wire).Relations[0].GetRoot().Input.GetRead())
 	require.Len(t, query.Nodes[0].OrderBy, 1, "the MO producer must still receive the original ordering hint")
 	query.Nodes = append(query.Nodes, &planpb.Node{NodeId: 1, NodeType: planpb.Node_PROJECT, Children: []int32{0}, ProjectList: []*planpb.Expr{col(0)}, OrderBy: query.Nodes[0].OrderBy})
 	query.Steps = []int32{1}
-	_, err = ExportEmbeddedMO(query)
+	_, err = ExportEmbeddedMO(query, EmbeddedExportProfile{})
 	require.ErrorContains(t, err, "sort semantics outside a SORT node", "only MO-owned scan annotations are admitted")
 }
 
@@ -73,7 +69,7 @@ func TestEmbeddedMOReadIdentityFallsBackToTableDefinition(t *testing.T) {
 	query.Nodes[0].ObjRef.DbName = ""
 	query.Nodes[0].ObjRef.ObjName = ""
 	query.Nodes[0].ObjRef.SchemaName = ""
-	candidate, err := Export(query)
+	candidate, err := ExportEmbeddedMO(query, NewEmbeddedExportProfile(0))
 	require.NoError(t, err)
 	reads, err := candidate.EmbeddedMOReads()
 	require.NoError(t, err)
@@ -84,9 +80,11 @@ func TestEmbeddedMOReadIdentityFallsBackToTableDefinition(t *testing.T) {
 
 func TestEmbeddedMOReadRejectsHiddenSuffixWithoutProjection(t *testing.T) {
 	query := embeddedProjectedScanQuery()
-	query.Nodes[0].ProjectList = nil
-	candidate, err := Export(query)
+	candidate, err := ExportEmbeddedMO(query, NewEmbeddedExportProfile(0))
 	require.NoError(t, err)
+	query.Nodes[0].ProjectList = nil
+	_, err = ExportEmbeddedMO(query, NewEmbeddedExportProfile(0))
+	require.ErrorContains(t, err, "projection to remove hidden columns")
 	_, err = candidate.EmbeddedMOReads()
 	require.ErrorContains(t, err, "projection to remove hidden columns")
 	_, err = candidate.BuildEmbedded(map[int32]EmbeddedReadBinding{0: {BindingID: 1, Source: EmbeddedReadMO}})
@@ -95,7 +93,7 @@ func TestEmbeddedMOReadRejectsHiddenSuffixWithoutProjection(t *testing.T) {
 	// Without hidden columns, the same empty projection describes exactly the
 	// rows MO emits and must remain admissible.
 	query.Nodes[0].TableDef.Cols = query.Nodes[0].TableDef.Cols[:2]
-	candidate, err = Export(query)
+	candidate, err = ExportEmbeddedMO(query, NewEmbeddedExportProfile(0))
 	require.NoError(t, err)
 	reads, err := candidate.EmbeddedMOReads()
 	require.NoError(t, err)
@@ -105,15 +103,15 @@ func TestEmbeddedMOReadRejectsHiddenSuffixWithoutProjection(t *testing.T) {
 	require.Len(t, embeddedPlan(t, wire).Relations[0].GetRoot().Input.GetRead().BaseSchema.Names, 2)
 }
 
-func TestEmbeddedTAESourceIsDeferred(t *testing.T) {
-	candidate, err := Export(embeddedProjectedScanQuery())
+func TestEmbeddedBindingRejectsUnknownSource(t *testing.T) {
+	candidate, err := ExportEmbeddedMO(embeddedProjectedScanQuery(), NewEmbeddedExportProfile(0))
 	require.NoError(t, err)
 	_, err = candidate.BuildEmbedded(map[int32]EmbeddedReadBinding{0: {BindingID: 1, Source: 2}})
 	require.ErrorContains(t, err, "unsupported source")
 }
 
 func TestBuildEmbeddedSupportsMultipleMOReads(t *testing.T) {
-	candidate, err := Export(embeddedJoinQuery(false))
+	candidate, err := ExportEmbeddedMO(embeddedJoinQuery(false), NewEmbeddedExportProfile(0))
 	require.NoError(t, err)
 	wire, err := candidate.BuildEmbedded(map[int32]EmbeddedReadBinding{
 		0: {BindingID: 1, Source: EmbeddedReadMO},
@@ -130,7 +128,7 @@ func TestBuildEmbeddedSupportsMultipleMOReads(t *testing.T) {
 }
 
 func TestBuildEmbeddedRejectsInvalidBindings(t *testing.T) {
-	candidate, err := Export(embeddedJoinQuery(false))
+	candidate, err := ExportEmbeddedMO(embeddedJoinQuery(false), NewEmbeddedExportProfile(0))
 	require.NoError(t, err)
 	tests := []struct {
 		name     string
@@ -154,7 +152,7 @@ func TestBuildEmbeddedRejectsInvalidBindings(t *testing.T) {
 
 func TestEmbeddedReadsRejectReplayAndUnsupportedMOProjection(t *testing.T) {
 	t.Run("replayed scan", func(t *testing.T) {
-		candidate, err := Export(embeddedJoinQuery(true))
+		candidate, err := ExportEmbeddedMO(embeddedJoinQuery(true), NewEmbeddedExportProfile(0))
 		require.NoError(t, err)
 		_, err = candidate.EmbeddedMOReads()
 		require.ErrorContains(t, err, "replayed")
@@ -164,10 +162,12 @@ func TestEmbeddedReadsRejectReplayAndUnsupportedMOProjection(t *testing.T) {
 
 	t.Run("computed scan projection", func(t *testing.T) {
 		query := embeddedProjectedScanQuery()
+		candidate, err := ExportEmbeddedMO(query, NewEmbeddedExportProfile(0))
+		require.NoError(t, err)
 		query.Nodes[0].ProjectList = []*planpb.Expr{i64(1)}
 		query.Headings = []string{"constant"}
-		candidate, err := Export(query)
-		require.NoError(t, err)
+		_, err = ExportEmbeddedMO(query, NewEmbeddedExportProfile(0))
+		require.ErrorContains(t, err, "not a direct source column")
 		_, err = candidate.EmbeddedMOReads()
 		require.ErrorContains(t, err, "not a direct source column")
 		_, err = candidate.BuildEmbedded(map[int32]EmbeddedReadBinding{0: {BindingID: 1, Source: EmbeddedReadMO}})
@@ -176,28 +176,16 @@ func TestEmbeddedReadsRejectReplayAndUnsupportedMOProjection(t *testing.T) {
 
 	t.Run("projection type mismatch", func(t *testing.T) {
 		query := embeddedProjectedScanQuery()
-		query.Nodes[0].ProjectList[0].Typ = f64Type()
-		candidate, err := Export(query)
+		candidate, err := ExportEmbeddedMO(query, NewEmbeddedExportProfile(0))
 		require.NoError(t, err)
+		query.Nodes[0].ProjectList[0].Typ = f64Type()
+		_, err = ExportEmbeddedMO(query, NewEmbeddedExportProfile(0))
+		require.ErrorContains(t, err, "type does not match source column")
 		_, err = candidate.EmbeddedMOReads()
 		require.ErrorContains(t, err, "type does not match source column")
 		_, err = candidate.BuildEmbedded(map[int32]EmbeddedReadBinding{0: {BindingID: 1, Source: EmbeddedReadMO}})
 		require.ErrorContains(t, err, "type does not match source column")
 	})
-}
-
-func TestEmbeddedBuilderDoesNotChangeDirectBuild(t *testing.T) {
-	candidate, err := Export(embeddedProjectedScanQuery())
-	require.NoError(t, err)
-	wire, err := candidate.Build(map[int32][]byte{0: {1, 2, 3}})
-	require.NoError(t, err)
-
-	input := embeddedPlan(t, wire).Relations[0].GetRoot().Input
-	require.NotNil(t, input.GetFetch())
-	read := input.GetFetch().Input.GetProject().Input.GetFilter().Input.GetRead()
-	require.NotNil(t, read.GetExtensionTable())
-	require.Equal(t, TaeReadTypeURL, read.GetExtensionTable().Detail.TypeUrl)
-	require.Equal(t, []string{"a", "b"}, read.BaseSchema.Names)
 }
 
 func embeddedProjectedScanQuery() *planpb.Query {
@@ -257,4 +245,40 @@ func embeddedPlan(t *testing.T, wire []byte) *spb.Plan {
 	plan := new(spb.Plan)
 	require.NoError(t, proto.Unmarshal(wire, plan))
 	return plan
+}
+
+func TestEmbeddedFetchIncludesBothConstantBounds(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		limit, offset *planpb.Expr
+		count, start  int64
+	}{
+		{name: "limit only", limit: u64(5), count: 5},
+		{name: "offset only", offset: u64(3), count: -1, start: 3},
+		{name: "zero limit", limit: u64(0)},
+		{name: "both", limit: u64(5), offset: u64(3), count: 5, start: 3},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := exporter{}
+			relation, err := e.fetch(&spb.Rel{}, &planpb.Node{Limit: tc.limit, Offset: tc.offset})
+			require.NoError(t, err)
+			wire, err := proto.Marshal(relation)
+			require.NoError(t, err)
+			decoded := new(spb.Rel)
+			require.NoError(t, proto.Unmarshal(wire, decoded))
+			fetch := decoded.GetFetch()
+			require.IsType(t, &spb.FetchRel_Count{}, fetch.CountMode)
+			require.IsType(t, &spb.FetchRel_Offset{}, fetch.OffsetMode)
+			require.Equal(t, tc.count, fetch.GetCount())
+			require.Equal(t, tc.start, fetch.GetOffset())
+		})
+	}
+	input := &spb.Rel{}
+	e := exporter{}
+	unchanged, err := e.fetch(input, &planpb.Node{})
+	require.NoError(t, err)
+	require.Same(t, input, unchanged)
+	fetched, err := e.fetch(input, &planpb.Node{Limit: u64(5)})
+	require.NoError(t, err)
+	require.IsType(t, &spb.FetchRel_Offset{}, fetched.GetFetch().OffsetMode)
 }

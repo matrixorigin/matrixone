@@ -15,17 +15,13 @@
 package compile
 
 import (
-	"bytes"
 	"context"
-	"errors"
 	"testing"
 	"time"
 
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/compile/sidecarflight"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/substrait"
@@ -34,123 +30,6 @@ import (
 	spb "github.com/substrait-io/substrait-protobuf/go/substraitpb"
 	"google.golang.org/protobuf/proto"
 )
-
-type siriusRuntimeTestProtector struct{ failUnregister bool }
-
-func (*siriusRuntimeTestProtector) Begin(context.Context) (
-	func(context.Context, []byte, []string, time.Time) error,
-	func(context.Context, []byte) error,
-	func(),
-	error,
-) {
-	return func(context.Context, []byte, []string, time.Time) error { return nil },
-		func(context.Context, []byte) error { return nil }, func() {}, nil
-}
-
-func (p *siriusRuntimeTestProtector) Unregister(context.Context, []byte) error {
-	if p.failUnregister {
-		return errors.New("test unregister failure")
-	}
-	return nil
-}
-
-type siriusRuntimeTestProvider struct{ schema []byte }
-
-func (p siriusRuntimeTestProvider) PrepareSnapshotRead(context.Context, substrait.Read, []byte) (substrait.SnapshotFacts, error) {
-	return substrait.SnapshotFacts{Manifest: []byte("manifest"), CanonicalSchema: p.schema}, nil
-}
-
-func TestSiriusRuntimeValidationAndLookup(t *testing.T) {
-	require.Error(t, (*SiriusRuntime)(nil).Validate())
-	require.NoError(t, (*SiriusRuntime)(nil).Close(context.Background()))
-
-	nondurable := substrait.NewLeaseManager(1, &siriusRuntimeTestProtector{})
-	invalid := &SiriusRuntime{
-		Backend: NewSiriusFlightBackend(&sidecarflight.Runtime{}), Leases: nondurable, Resolver: &substrait.ResolverServer{},
-		AuthorizedClientSPKIHash: make([]byte, 32), DataDir: t.TempDir(), LeaseTTL: time.Minute, CleanupTimeout: time.Second,
-	}
-	require.Error(t, invalid.Validate())
-	benchmark := *invalid
-	benchmark.BenchmarkNoGC = true
-	benchmark.Leases = substrait.NewBenchmarkLeaseManager(1, &siriusRuntimeTestProtector{})
-	require.NoError(t, benchmark.Validate())
-	require.False(t, nondurable.BenchmarkReady())
-	wrongNormalMode := benchmark
-	wrongNormalMode.BenchmarkNoGC = false
-	require.ErrorContains(t, wrongNormalMode.Validate(), "incomplete CN Sirius runtime")
-	leases := substrait.NewPersistentLeaseManager(1, &siriusRuntimeTestProtector{}, siriusJournalStub{})
-	require.NoError(t, leases.Replay(context.Background()))
-	valid := &SiriusRuntime{
-		Backend:  NewSiriusFlightBackend(&sidecarflight.Runtime{}),
-		Leases:   leases,
-		Resolver: &substrait.ResolverServer{}, AuthorizedClientSPKIHash: make([]byte, 32),
-		DataDir: t.TempDir(), LeaseTTL: time.Minute, CleanupTimeout: time.Second,
-	}
-	require.NoError(t, valid.Validate())
-	wrongBenchmarkMode := *valid
-	wrongBenchmarkMode.BenchmarkNoGC = true
-	require.ErrorContains(t, wrongBenchmarkMode.Validate(), "incomplete benchmark CN Sirius runtime")
-
-	service := "sirius-runtime-lookup-test"
-	rt := moruntime.NewRuntime(metadata.ServiceType_CN, service, nil)
-	moruntime.SetupServiceBasedRuntime(service, rt)
-	_, ok := lookupSiriusRuntime("sirius-runtime-missing")
-	require.False(t, ok)
-	rt.SetGlobalVariables(SiriusRuntimeKey, "wrong type")
-	_, ok = lookupSiriusRuntime(service)
-	require.False(t, ok)
-	rt.SetGlobalVariables(SiriusRuntimeKey, &SiriusRuntime{})
-	_, ok = lookupSiriusRuntime(service)
-	require.False(t, ok)
-	rt.SetGlobalVariables(SiriusRuntimeKey, valid)
-	actual, ok := lookupSiriusRuntime(service)
-	require.True(t, ok)
-	require.Same(t, valid, actual)
-	require.True(t, rt.CompareAndDeleteGlobalVariables(SiriusRuntimeKey, valid))
-}
-
-func TestRecoverAdmittedReadReleasesOrRetainsRetryableOwner(t *testing.T) {
-	require.Error(t, (*SiriusRuntime)(nil).recoverAdmittedRead(context.Background(), 0, nil, nil))
-	query := &planpb.Query{
-		StmtType: planpb.Query_SELECT, Steps: []int32{0}, Headings: []string{"a"},
-		Nodes: []*planpb.Node{{
-			NodeId: 0, NodeType: planpb.Node_TABLE_SCAN,
-			ObjRef: &planpb.ObjectRef{Obj: 42, ObjName: "t"},
-			TableDef: &planpb.TableDef{DbId: 7, TblId: 42, Version: 3, Name: "t", TableType: "r", Cols: []*planpb.ColDef{{
-				Name: "a", ColId: 11, Seqnum: 5, Typ: planpb.Type{Id: int32(types.T_int64)},
-			}}},
-		}},
-	}
-	candidate, err := substrait.Export(query)
-	require.NoError(t, err)
-	protector := &siriusRuntimeTestProtector{}
-	leases := substrait.NewLeaseManager(1, protector)
-	admitted, err := substrait.AdmitReads(context.Background(), substrait.AdmissionRequest{
-		Candidate: candidate, Provider: siriusRuntimeTestProvider{schema: candidate.Reads()[0].Schema}, Leases: leases,
-		AccountID: 1, QueryID: bytes.Repeat([]byte{'q'}, 16), SnapshotTS: make([]byte, 12),
-		AuthorizedClientSPKIHash: bytes.Repeat([]byte{1}, 32), TTL: time.Minute, ReadOnly: true,
-	})
-	require.NoError(t, err)
-	require.Len(t, leases.PendingExecutions(), 1)
-	runtime := &SiriusRuntime{Backend: NewSiriusFlightBackend(&sidecarflight.Runtime{}), Leases: leases, CleanupTimeout: time.Second}
-	plan := &SiriusReadPlan{ReadRefs: admitted.ReadRefs}
-	require.NoError(t, runtime.recoverAdmittedRead(nil, 1, bytes.Repeat([]byte{'q'}, 16), plan))
-	require.Empty(t, leases.PendingExecutions())
-
-	admitted, err = substrait.AdmitReads(context.Background(), substrait.AdmissionRequest{
-		Candidate: candidate, Provider: siriusRuntimeTestProvider{schema: candidate.Reads()[0].Schema}, Leases: leases,
-		AccountID: 1, QueryID: bytes.Repeat([]byte{'r'}, 16), SnapshotTS: make([]byte, 12),
-		AuthorizedClientSPKIHash: bytes.Repeat([]byte{1}, 32), TTL: time.Minute, ReadOnly: true,
-	})
-	require.NoError(t, err)
-	protector.failUnregister = true
-	err = runtime.recoverAdmittedRead(context.Background(), 0, nil, &SiriusReadPlan{ReadRefs: admitted.ReadRefs})
-	require.ErrorContains(t, err, "test unregister failure")
-	require.ErrorContains(t, err, "invalid replayed execution")
-	require.Len(t, leases.PendingExecutions(), 1)
-	protector.failUnregister = false
-	require.NoError(t, releaseReadRefs(context.Background(), leases, admitted.ReadRefs))
-}
 
 func TestSiriusCompileFastRejections(t *testing.T) {
 	require.True(t, siriusStatementEligible(&tree.Select{}))
@@ -185,18 +64,20 @@ func TestSiriusCompileFastRejections(t *testing.T) {
 }
 
 type siriusAdmissionBackend struct {
-	SiriusBackend
+	SiriusEngine
 	accepting bool
 }
 
 func (b *siriusAdmissionBackend) Accepting() bool { return b.accepting }
+
+func (*siriusAdmissionBackend) Capabilities() uint64 { return 0 }
 
 func TestEmbeddedSiriusAdmissionNeverSilentlyFallsBack(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	runtime := moruntime.ServiceRuntime(proc.GetService())
 	previous, existed := runtime.GetGlobalVariables(SiriusRuntimeKey)
 	backend := &siriusAdmissionBackend{accepting: true}
-	configured := &SiriusRuntime{EmbeddedMO: true, Backend: backend, CleanupTimeout: time.Second}
+	configured := &SiriusRuntime{Engine: backend, CleanupTimeout: time.Second}
 	runtime.SetGlobalVariables(SiriusRuntimeKey, configured)
 	t.Cleanup(func() {
 		if existed {
@@ -255,15 +136,18 @@ func TestSQLSelectLimitIsMaterializedBeforeSiriusExport(t *testing.T) {
 	require.False(t, query.ApplySqlSelectLimit)
 	require.Equal(t, uint64(3), query.Nodes[0].Limit.GetLit().GetU64Val())
 
-	candidate, err := substrait.Export(query)
+	candidate, err := substrait.ExportEmbeddedMO(query, substrait.EmbeddedExportProfile{})
 	require.NoError(t, err)
-	wire, err := candidate.Build(map[int32][]byte{0: {1}})
+	wire, err := candidate.BuildEmbedded(map[int32]substrait.EmbeddedReadBinding{0: {BindingID: 1, Source: substrait.EmbeddedReadMO}})
 	require.NoError(t, err)
 	offloadedPlan := new(spb.Plan)
 	require.NoError(t, proto.Unmarshal(wire, offloadedPlan))
-	fetch := offloadedPlan.Relations[0].GetRoot().Input.GetFetch()
-	require.NotNil(t, fetch)
-	require.Equal(t, int64(3), fetch.GetCount())
+	// The complete MO scan, including its session limit, feeds this binding.
+	require.NotEmpty(t, offloadedPlan.Relations[0].GetRoot().Input.GetRead().GetNamedTable().Names)
+	reads, err := candidate.EmbeddedMOReads()
+	require.NoError(t, err)
+	require.Len(t, reads, 1)
+	require.Equal(t, int32(0), reads[0].NodeID)
 
 	materialization.restore()
 	require.True(t, query.ApplySqlSelectLimit)

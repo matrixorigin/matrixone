@@ -52,9 +52,6 @@ const (
 // Mo function unit tests are not ported, because it is too heavy and does not test enough cases.
 // Mo functions are better tested with bvt.
 
-var MoTableRowsSizeUseOldImpl atomic.Bool
-var MoTableRowsSizeForceUpdate atomic.Bool
-
 const (
 	MoTableRowsSizeForceUpdateVarName    = "mo_table_stats.force_update"
 	MoTableRowSizeUseOldImplVarName      = "mo_table_stats.use_old_impl"
@@ -140,7 +137,7 @@ func MoTableSize(
 ) (err error) {
 
 	useOldStr := GetUseOldImplVariable(proc)
-	if (MoTableRowsSizeUseOldImpl.Load()) || useOldStr {
+	if useOldStr {
 		// the old implement
 		return MoTableSizeOld(iVecs, result, proc, length, selectList)
 	}
@@ -157,7 +154,7 @@ func MoTableRows(
 ) (err error) {
 
 	useOldStr := GetUseOldImplVariable(proc)
-	if (MoTableRowsSizeUseOldImpl.Load()) || useOldStr {
+	if useOldStr {
 		// the old implement
 		return MoTableRowsOld(iVecs, result, proc, length, selectList)
 	}
@@ -172,9 +169,13 @@ func MoTableRows(
 // some special cases:
 // 1. cluster table
 
-type GetMoTableSizeRowsFuncType = func() func(
-	context.Context, []uint64, []uint64, []uint64,
-	engine.Engine, bool, bool) ([]uint64, error)
+// MoTableStatsResolver is synchronous and must not be retained by the executor.
+type MoTableStatsResolver = func() (accs, dbs, tbls []uint64, err error)
+
+// GetMoTableSizeRowsFuncType dispatches to the caller engine. A nil error
+// with handled=false requests the existing old SQL implementation.
+type GetMoTableSizeRowsFuncType = func(
+	context.Context, engine.Engine, MoTableStatsResolver, bool, bool) (values []uint64, err error, handled bool)
 
 var GetMoTableSizeFunc atomic.Pointer[GetMoTableSizeRowsFuncType]
 var GetMoTableRowsFunc atomic.Pointer[GetMoTableSizeRowsFuncType]
@@ -294,6 +295,7 @@ func MoTableSizeRowsHelper(
 	length int,
 	selectList *FunctionSelectList,
 	executor *atomic.Pointer[GetMoTableSizeRowsFuncType],
+	fallback executeLogicOfOverload,
 ) (err error) {
 
 	var (
@@ -310,6 +312,7 @@ func MoTableSizeRowsHelper(
 		txn client.TxnOperator
 
 		ret                   []uint64
+		positions             []int
 		accIds, dbIds, tblIds []uint64
 
 		forceUpdate     = GetForceUpdateVariable(proc)
@@ -363,68 +366,89 @@ func MoTableSizeRowsHelper(
 
 	txn = proc.GetTxnOperator()
 
-	for i := uint64(0); i < uint64(length); i++ {
-		if dbName, tblName, ok = decodeNames(i); !ok {
-			if err = rs.Append(0, true); err != nil {
-				return err
+	resolve := func() ([]uint64, []uint64, []uint64, error) {
+		positions = make([]int, length)
+
+		for i := uint64(0); i < uint64(length); i++ {
+			if dbName, tblName, ok = decodeNames(i); !ok {
+				positions[i] = -1 // NULL
+				continue
 			}
-			continue
-		}
 
-		if ok, err = specialTableFilterForNonSys(proc.Ctx, dbName, tblName); ok && err == nil {
-			if err = rs.Append(int64(0), false); err != nil {
-				return err
+			if ok, err = specialTableFilterForNonSys(proc.Ctx, dbName, tblName); ok && err == nil {
+				positions[i] = -2 // special table
+				continue
 			}
-			continue
-		}
 
-		if err != nil {
-			return err
-		}
-
-		if db, err = eng.Database(proc.Ctx, dbName, txn); err != nil {
-			if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
-				return moerr.NewInternalErrorNoCtxf("db not exist: %s(%s)",
-					dbName, "OkExpectedEOB")
+			if err != nil {
+				return nil, nil, nil, err
 			}
-			return err
-		}
 
-		var sub subscription
-		if sub, err = isSubscribedTable(
-			proc, accountId, db, dbName, tblName); err != nil {
-			return err
-		} else if sub.valid {
-			// is subscription
-			accIds = append(accIds, sub.oriAccId)
-			dbIds = append(dbIds, sub.oriDatabaseId)
-			tblIds = append(tblIds, sub.oriTableId)
-		} else {
-			if rel, err = db.Relation(proc.Ctx, tblName, nil); err != nil {
+			if db, err = eng.Database(proc.Ctx, dbName, txn); err != nil {
 				if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
-					return moerr.NewInternalErrorNoCtxf("tbl not exist: %s-%s(%s)",
-						dbName, tblName, "OkExpectedEOB")
+					return nil, nil, nil, moerr.NewInternalErrorNoCtxf("db not exist: %s(%s)",
+						dbName, "OkExpectedEOB")
 				}
-				return err
+				return nil, nil, nil, err
 			}
 
-			accIds = append(accIds, uint64(accountId))
-			dbIds = append(dbIds, uint64(rel.GetDBID(proc.Ctx)))
-			tblIds = append(tblIds, uint64(rel.GetTableID(proc.Ctx)))
+			positions[i] = len(tblIds)
+			var sub subscription
+			if sub, err = isSubscribedTable(
+				proc, accountId, db, dbName, tblName); err != nil {
+				return nil, nil, nil, err
+			} else if sub.valid {
+				// is subscription
+				accIds = append(accIds, sub.oriAccId)
+				dbIds = append(dbIds, sub.oriDatabaseId)
+				tblIds = append(tblIds, sub.oriTableId)
+			} else {
+				if rel, err = db.Relation(proc.Ctx, tblName, nil); err != nil {
+					if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
+						return nil, nil, nil, moerr.NewInternalErrorNoCtxf("tbl not exist: %s-%s(%s)",
+							dbName, tblName, "OkExpectedEOB")
+					}
+					return nil, nil, nil, err
+				}
+
+				accIds = append(accIds, uint64(accountId))
+				dbIds = append(dbIds, uint64(rel.GetDBID(proc.Ctx)))
+				tblIds = append(tblIds, uint64(rel.GetTableID(proc.Ctx)))
+			}
 		}
+
+		return accIds, dbIds, tblIds, nil
 	}
 
-	ret, err = (*executor.Load())()(
-		proc.Ctx, accIds, dbIds, tblIds, eng,
-		forceUpdate || MoTableRowsSizeForceUpdate.Load(),
+	fn := executor.Load()
+	if fn == nil {
+		return moerr.NewInternalError(proc.Ctx, "MoTableSizeRows: statistics executor is nil")
+	}
+	var handled bool
+	ret, err, handled = (*fn)(
+		proc.Ctx, eng, resolve,
+		forceUpdate,
 		resetUpdateTime)
 
 	if err != nil {
 		return err
 	}
 
-	for _, val := range ret {
-		if err = rs.Append(int64(val), false); err != nil {
+	if !handled {
+		if err := proc.Ctx.Err(); err != nil {
+			return err
+		}
+		return fallback(iVecs, result, proc, length, selectList)
+	}
+	if len(ret) != len(tblIds) {
+		return moerr.NewInternalError(proc.Ctx, "MoTableSizeRows: invalid statistics cardinality")
+	}
+	for _, position := range positions {
+		var value int64
+		if position >= 0 {
+			value = int64(ret[position])
+		}
+		if err = rs.Append(value, position == -1); err != nil {
 			return err
 		}
 	}
@@ -440,7 +464,7 @@ func MoTableSizeNew(
 	selectList *FunctionSelectList,
 ) (err error) {
 
-	return MoTableSizeRowsHelper(iVecs, result, proc, length, selectList, &GetMoTableSizeFunc)
+	return MoTableSizeRowsHelper(iVecs, result, proc, length, selectList, &GetMoTableSizeFunc, MoTableSizeOld)
 }
 
 func MoTableRowsNew(
@@ -451,7 +475,7 @@ func MoTableRowsNew(
 	selectList *FunctionSelectList,
 ) (err error) {
 
-	return MoTableSizeRowsHelper(iVecs, result, proc, length, selectList, &GetMoTableRowsFunc)
+	return MoTableSizeRowsHelper(iVecs, result, proc, length, selectList, &GetMoTableRowsFunc, MoTableRowsOld)
 }
 
 //#endregion MoTableSizeRows New Implements
@@ -948,6 +972,7 @@ const (
 
 var (
 	predefinedTables = map[string]int8{
+		catalog.MODatabaseDefaults:    0,
 		"mo_database":                 0,
 		"mo_tables":                   0,
 		"mo_columns":                  0,
@@ -1007,16 +1032,6 @@ func CastIndexToValue(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 
 			enumVlaue, err := types.ParseEnumIndex(typeEnumVal, indexVal)
 			if err != nil {
-				// Ordinal zero is MySQL's ENUM error member.  INSERT IGNORE can
-				// store it for an invalid label and it is displayed as the empty
-				// string, regardless of whether the declaration also has an empty
-				// member at a non-zero ordinal.
-				if indexVal == 0 {
-					if err = rs.AppendBytes([]byte{}, false); err != nil {
-						return err
-					}
-					continue
-				}
 				return err
 			}
 
@@ -1035,14 +1050,18 @@ func CastValueToIndex(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 	typeEnums := vector.GenerateFunctionStrParameter(ivecs[0])
 	enumValues := vector.GenerateFunctionStrParameter(ivecs[1])
 	var valueIndex *enumValueIndex
-	if length >= enumValueIndexMinRows && ivecs[0].IsConst() && !ivecs[0].IsConstNull() {
-		typeEnum, typeEnumNull := typeEnums.GetStrValue(0)
-		if !typeEnumNull {
-			valueIndex = buildEnumValueIndexForBatch(functionUtil.QuickBytesToStr(typeEnum), length)
-		}
-	}
+	indexAttempted := false
+	allowAdjustment := allowEnumSetAdjustment(proc)
+	var warnings process.WarningAccumulator
+	defer warnings.Reset()
 
 	for i := uint64(0); i < uint64(length); i++ {
+		if enumSetConversionSkipped(selectList, i) {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
 		typeEnum, typeEnumNull := typeEnums.GetStrValue(i)
 		enumValue, enumValNull := enumValues.GetStrValue(i)
 		if typeEnumNull || enumValNull {
@@ -1052,23 +1071,28 @@ func CastValueToIndex(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 		} else {
 			typeEnumVal := functionUtil.QuickBytesToStr(typeEnum)
 			enumStr := functionUtil.QuickBytesToStr(enumValue)
+			if !indexAttempted && ivecs[0].IsConst() {
+				indexAttempted = true
+				valueIndex = buildEnumValueIndexForBatch(typeEnumVal, length)
+			}
 
 			var (
-				index types.Enum
-				err   error
+				index     types.Enum
+				truncated bool
+				err       error
 			)
 			if valueIndex != nil {
-				index, err = valueIndex.parse(enumStr)
+				index, truncated, err = valueIndex.parse(enumStr)
 			} else {
-				index, err = types.ParseEnum(typeEnumVal, enumStr)
+				index, truncated, err = types.ParseEnumAssignment(typeEnumVal, enumStr)
 			}
 			if err != nil {
-				if !statementIgnore(proc) {
+				return err
+			}
+			if truncated {
+				if err := recordEnumSetTruncation(proc, &warnings, allowAdjustment, "ENUM", enumStr); err != nil {
 					return err
 				}
-				// MySQL INSERT IGNORE stores the ENUM error member (ordinal 0)
-				// for an unrecognized label instead of rejecting the row.
-				index = 0
 			}
 
 			if err := rs.Append(index, false); err != nil {
@@ -1076,6 +1100,7 @@ func CastValueToIndex(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 			}
 		}
 	}
+	warnings.Flush(proc)
 	return nil
 }
 
@@ -1093,7 +1118,7 @@ func buildEnumValueIndexForBatch(enumValues string, length int) *enumValueIndex 
 		return nil
 	}
 	labelCount := strings.Count(enumValues, ",") + 1
-	if labelCount < enumValueIndexMinLabels {
+	if labelCount < enumValueIndexMinLabels || labelCount > types.MaxEnumLen {
 		return nil
 	}
 	return buildEnumValueIndex(enumValues)
@@ -1114,6 +1139,9 @@ func buildEnumValueIndex(enumValues string) *enumValueIndex {
 	}
 
 	values := strings.Split(enumValues, ",")
+	if len(values) > types.MaxEnumLen {
+		return nil
+	}
 	index := &enumValueIndex{
 		values:        values,
 		exactIndexes:  make(map[string]types.Enum, len(values)),
@@ -1131,27 +1159,20 @@ func buildEnumValueIndex(enumValues string) *enumValueIndex {
 	return index
 }
 
-func (index *enumValueIndex) parse(value string) (types.Enum, error) {
-	if enumIndex := index.exactIndexes[value]; enumIndex != 0 {
-		return enumIndex, nil
-	}
-	if enumIndex := index.foldedIndexes[enumEqualFoldKey(value)]; enumIndex != 0 {
-		return enumIndex, nil
-	}
-
-	num, err := strconv.ParseUint(value, 0, 64)
-	if err == nil {
-		number := uint16(num)
-		if number == 0 || int(number) > len(index.values) {
-			return 0, moerr.NewInternalErrorNoCtxf(
-				"convert to MySQL enum failed: number %d overflow enum boundary [1, %d]",
-				number, len(index.values))
+func (index *enumValueIndex) parse(value string) (types.Enum, bool, error) {
+	for {
+		if enumIndex := index.exactIndexes[value]; enumIndex != 0 {
+			return enumIndex, false, nil
 		}
-		return types.Enum(number), nil
+		if enumIndex := index.foldedIndexes[enumEqualFoldKey(value)]; enumIndex != 0 {
+			return enumIndex, false, nil
+		}
+		trimmed := strings.TrimRight(value, " ")
+		if trimmed == value {
+			return types.ParseEnumNumericText(value, len(index.values))
+		}
+		value = trimmed
 	}
-
-	return 0, moerr.NewInternalErrorNoCtxf(
-		"convert to MySQL enum failed: item %s is not in enum %v", value, index.values)
 }
 
 func enumEqualFoldKey(value string) string {
@@ -1171,11 +1192,24 @@ func enumEqualFoldKey(value string) string {
 // enum("a","b","c") -> CastIndexValueToIndex(1) -> 1
 // CastIndexValueToIndex returns enum type index according to the index value
 func CastIndexValueToIndex(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return castIntegerToEnum[uint16](ivecs, result, proc, length, selectList)
+}
+
+func castIntegerToEnum[T uint16 | uint64 | int64](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[types.Enum](result)
 	typeEnums := vector.GenerateFunctionStrParameter(ivecs[0])
-	enumIndexValues := vector.GenerateFunctionFixedTypeParameter[uint16](ivecs[1])
+	enumIndexValues := vector.GenerateFunctionFixedTypeParameter[T](ivecs[1])
+	allowAdjustment := allowEnumSetAdjustment(proc)
+	var warnings process.WarningAccumulator
+	defer warnings.Reset()
 
 	for i := uint64(0); i < uint64(length); i++ {
+		if enumSetConversionSkipped(selectList, i) {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
 		typeEnum, typeEnumNull := typeEnums.GetStrValue(i)
 		enumValueIndex, enumValNull := enumIndexValues.GetValue(i)
 		if typeEnumNull || enumValNull {
@@ -1184,15 +1218,14 @@ func CastIndexValueToIndex(ivecs []*vector.Vector, result vector.FunctionResultW
 			}
 		} else {
 			typeEnumVal := functionUtil.QuickBytesToStr(typeEnum)
-			var index types.Enum
-
-			index, err := types.ParseEnumValue(typeEnumVal, enumValueIndex)
+			index, truncated, err := types.ParseEnumNumberAssignment(typeEnumVal, uint64(enumValueIndex))
 			if err != nil {
-				if !statementIgnore(proc) {
+				return err
+			}
+			if truncated {
+				if err := recordEnumSetTruncation(proc, &warnings, allowAdjustment, "ENUM", enumValueIndex); err != nil {
 					return err
 				}
-				// Invalid numeric ENUM input is adjusted to the error member.
-				index = 0
 			}
 
 			if err = rs.Append(index, false); err != nil {
@@ -1200,6 +1233,7 @@ func CastIndexValueToIndex(ivecs []*vector.Vector, result vector.FunctionResultW
 			}
 		}
 	}
+	warnings.Flush(proc)
 	return nil
 }
 
@@ -1235,8 +1269,17 @@ func CastSetValueToIndex(ivecs []*vector.Vector, result vector.FunctionResultWra
 	rs := vector.MustFunctionResult[uint64](result)
 	typeSets := vector.GenerateFunctionStrParameter(ivecs[0])
 	setValues := vector.GenerateFunctionStrParameter(ivecs[1])
+	allowAdjustment := allowEnumSetAdjustment(proc)
+	var warnings process.WarningAccumulator
+	defer warnings.Reset()
 
 	for i := uint64(0); i < uint64(length); i++ {
+		if enumSetConversionSkipped(selectList, i) {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
 		typeSet, typeSetNull := typeSets.GetStrValue(i)
 		setValue, setValueNull := setValues.GetStrValue(i)
 		if typeSetNull || setValueNull {
@@ -1246,51 +1289,84 @@ func CastSetValueToIndex(ivecs []*vector.Vector, result vector.FunctionResultWra
 			continue
 		}
 
-		index, err := types.ParseSet(functionUtil.QuickBytesToStr(typeSet), functionUtil.QuickBytesToStr(setValue))
+		input := functionUtil.QuickBytesToStr(setValue)
+		index, truncated, err := types.ParseSetAssignment(functionUtil.QuickBytesToStr(typeSet), input)
 		if err != nil {
-			if !statementIgnore(proc) {
+			return err
+		}
+		if truncated {
+			if err := recordEnumSetTruncation(proc, &warnings, allowAdjustment, "SET", input); err != nil {
 				return err
-			}
-			// INSERT IGNORE retains the valid SET members and drops invalid
-			// members, matching MySQL's partial-value adjustment.
-			index = 0
-			setDef := functionUtil.QuickBytesToStr(typeSet)
-			for _, member := range strings.Split(functionUtil.QuickBytesToStr(setValue), ",") {
-				memberBits, memberErr := types.ParseSet(setDef, member)
-				if memberErr == nil {
-					index |= memberBits
-				}
 			}
 		}
 		if err = rs.Append(index, false); err != nil {
 			return err
 		}
 	}
+	warnings.Flush(proc)
 	return nil
 }
 
 func statementIgnore(proc *process.Process) bool {
-	return proc != nil && proc.GetStmtProfile() != nil && proc.GetStmtProfile().GetStatementIgnore()
+	return proc != nil && proc.Base != nil && proc.GetStmtProfile().GetStatementIgnore()
 }
 
-func setMemberBitmap(definition string) uint64 {
-	var bitmap uint64
-	for bit := uint(0); bit < 64; bit++ {
-		member := uint64(1) << bit
-		if _, err := types.ParseSetValue(definition, member); err == nil {
-			bitmap |= member
+func allowEnumSetAdjustment(proc *process.Process) bool {
+	return proc != nil && proc.Base != nil && (statementIgnore(proc) || !isStrictSqlMode(proc))
+}
+
+func enumSetConversionSkipped(selection *FunctionSelectList, row uint64) bool {
+	return selection != nil && (selection.IgnoreAllRow() || (!selection.ShouldEvalAllRow() && selection.Contains(row)))
+}
+
+func recordEnumSetTruncation(proc *process.Process, warnings *process.WarningAccumulator, allowAdjustment bool, typ string, value any) error {
+	if allowAdjustment {
+		if warnings.Total == 0 {
+			warnings.SetWarningRetentionForProcess(proc)
+		}
+		if !warnings.NeedsDiagnostic() {
+			warnings.AddCount()
+			return nil
 		}
 	}
-	return bitmap
+	text, ok := value.(string)
+	if !ok {
+		text = fmt.Sprint(value)
+	}
+	// BoundWarningMessage caps bytes, clips at UTF-8 boundaries and clones
+	// borrowed input so a retained diagnostic cannot pin a large source vector.
+	message := fmt.Sprintf("Data truncated for %s value: '%s'", typ, process.BoundWarningMessage(text, 128))
+	if allowAdjustment {
+		warnings.Add(moerr.WARN_DATA_TRUNCATED, message)
+		return nil
+	}
+	ctx := moerr.Context()
+	if proc != nil && proc.Ctx != nil {
+		ctx = proc.Ctx
+	}
+	return moerr.NewEnumSetValueTruncated(ctx, message)
 }
 
 // set("a","b","c") -> CastSetIndexValueToIndex(3) -> 3
 func CastSetIndexValueToIndex(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return castIntegerToSet[uint64](ivecs, result, proc, length, selectList)
+}
+
+func castIntegerToSet[T uint64 | int64](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[uint64](result)
 	typeSets := vector.GenerateFunctionStrParameter(ivecs[0])
-	setIndexValues := vector.GenerateFunctionFixedTypeParameter[uint64](ivecs[1])
+	setIndexValues := vector.GenerateFunctionFixedTypeParameter[T](ivecs[1])
+	allowAdjustment := allowEnumSetAdjustment(proc)
+	var warnings process.WarningAccumulator
+	defer warnings.Reset()
 
 	for i := uint64(0); i < uint64(length); i++ {
+		if enumSetConversionSkipped(selectList, i) {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
 		typeSet, typeSetNull := typeSets.GetStrValue(i)
 		setIndexValue, setIndexNull := setIndexValues.GetValue(i)
 		if typeSetNull || setIndexNull {
@@ -1300,18 +1376,21 @@ func CastSetIndexValueToIndex(ivecs []*vector.Vector, result vector.FunctionResu
 			continue
 		}
 
-		index, err := types.ParseSetValue(functionUtil.QuickBytesToStr(typeSet), setIndexValue)
+		bitmap, err := types.SetValidBitmap(functionUtil.QuickBytesToStr(typeSet))
 		if err != nil {
-			if !statementIgnore(proc) {
+			return err
+		}
+		index := uint64(setIndexValue) & bitmap
+		if index != uint64(setIndexValue) {
+			if err := recordEnumSetTruncation(proc, &warnings, allowAdjustment, "SET", setIndexValue); err != nil {
 				return err
 			}
-			// Numeric SET input keeps only bits represented by declared members.
-			index = setIndexValue & setMemberBitmap(functionUtil.QuickBytesToStr(typeSet))
 		}
 		if err = rs.Append(index, false); err != nil {
 			return err
 		}
 	}
+	warnings.Flush(proc)
 	return nil
 }
 
@@ -1524,7 +1603,9 @@ func typedArrayElementCompatible(spec typedArrayElementSpec, elem bytejson.ByteJ
 		return jsonIntegerFits(elem, -128, 127, spec.unsigned, 255)
 	case "smallint":
 		return jsonIntegerFits(elem, -32768, 32767, spec.unsigned, 65535)
-	case "mediumint", "int":
+	case "mediumint":
+		return jsonIntegerFits(elem, -1<<23, 1<<23-1, spec.unsigned, 1<<24-1)
+	case "int":
 		return jsonIntegerFits(elem, -2147483648, 2147483647, spec.unsigned, 4294967295)
 	case "bigint":
 		return jsonIntegerFits(elem, -1<<63, 1<<63-1, spec.unsigned, ^uint64(0))

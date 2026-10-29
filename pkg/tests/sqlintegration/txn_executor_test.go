@@ -16,16 +16,110 @@ package sqlintegration
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_7"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/tests/testutils"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/stretchr/testify/require"
 )
+
+func TestInformationSchemaViewsUpgradeIsIdempotent(t *testing.T) {
+	// Reuse the SQL fixture: one real catalog view, two upgrade transactions,
+	// and no timer or polling are needed to prove the durable repair marker.
+	runSQLIntegration(t, func(c embed.Cluster) {
+		cn, err := c.GetCNService(0)
+		require.NoError(t, err)
+		exec := testutils.GetSQLExecutor(cn)
+		ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
+		defer cancel()
+		upgrade := func() {
+			t.Helper()
+			require.NoError(t, exec.ExecTxn(ctx, func(txn executor.TxnExecutor) error {
+				return v4_0_7.UpgradeInformationSchemaViewsAfterProtocolCheck(txn, 0)
+			}, executor.Options{}.WithWaitCommittedLogApplied()))
+		}
+		viewID := func() uint64 {
+			t.Helper()
+			res, err := exec.Exec(ctx, "select rel_id from mo_catalog.mo_tables where account_id=0 and reldatabase='information_schema' and lower(relname)='views' and relkind='v'", executor.Options{})
+			require.NoError(t, err)
+			defer res.Close()
+			var ids []uint64
+			res.ReadRows(func(_ int, cols []*vector.Vector) bool {
+				ids = append(ids, executor.GetFixedRows[uint64](cols[0])...)
+				return true
+			})
+			require.Len(t, ids, 1)
+			return ids[0]
+		}
+		upgrade()
+		installedID := viewID()
+		upgrade()
+		require.Equal(t, installedID, viewID(), "an installed VIEWS definition must not be dropped and recreated")
+
+		t.Run("aggregate_metadata_replay", func(t *testing.T) {
+			// Exercise the installed public catalog through MySQL on this same
+			// CN: three rows, two views, and no extra cluster or readiness poll.
+			db, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/", cn.GetServiceConfig().CN.Frontend.Port))
+			require.NoError(t, err)
+			defer db.Close()
+			conn, err := db.Conn(ctx)
+			require.NoError(t, err)
+			defer conn.Close()
+			const schema = "view_aggregate_metadata_replay"
+			defer cleanupSQLIntegration(t, cn, "drop database if exists "+schema)
+			execSQL := func(statement string) {
+				t.Helper()
+				_, err := conn.ExecContext(ctx, statement)
+				require.NoError(t, err, statement)
+			}
+			execSQL("drop database if exists " + schema)
+			for round := 0; round < 2; round++ {
+				t.Logf("aggregate metadata replay round %d", round+1)
+				execSQL("create database " + schema)
+				execSQL("use " + schema)
+				execSQL("create table t(a int, b int)")
+				execSQL("insert into t values (1, 10), (1, 20), (2, 30)")
+				execSQL("create view agg_v as select a, count(*) cnt from t group by a")
+				var definition, updatable string
+				require.NoError(t, conn.QueryRowContext(ctx,
+					"select view_definition, is_updatable from information_schema.views where table_schema=? and table_name='agg_v'", schema).Scan(&definition, &updatable))
+				require.Equal(t, "select `t`.`a`, count(*) as `cnt` from `t` group by `a`", definition)
+				require.Equal(t, "NO", updatable)
+				execSQL("create view replay_v as " + definition)
+				for _, view := range []string{"agg_v", "replay_v"} {
+					func() {
+						rows, err := conn.QueryContext(ctx, "select a, cnt from "+view+" order by a")
+						require.NoError(t, err)
+						defer rows.Close()
+						var got [][2]int64
+						for rows.Next() {
+							var row [2]int64
+							require.NoError(t, rows.Scan(&row[0], &row[1]))
+							got = append(got, row)
+						}
+						require.NoError(t, rows.Err())
+						require.Equal(t, [][2]int64{{1, 2}, {2, 1}}, got, view)
+					}()
+				}
+				_, err = conn.ExecContext(ctx, "update agg_v set cnt=1")
+				require.ErrorContains(t, err, "cannot insert/update/delete from view")
+				execSQL("drop database " + schema)
+				var remaining int
+				require.NoError(t, conn.QueryRowContext(ctx,
+					"select count(*) from mo_catalog.mo_tables where reldatabase=? and account_id=0", schema).Scan(&remaining))
+				require.Zero(t, remaining, "verify cleanup before reusing the same CN, round %d", round+1)
+			}
+		})
+	})
+}
 
 func Test_TxnExecutorExec(t *testing.T) {
 	// Reuse the single-CN fixture used by TestPreparedParams; this case only reads the catalog.
@@ -46,6 +140,62 @@ func Test_TxnExecutorExec(t *testing.T) {
 			return nil
 		}, executor.Options{}.WithWaitCommittedLogApplied())
 		require.NoError(t, err)
+
+		t.Run("result_limit", func(t *testing.T) {
+			// Cross the executor's real batch boundary. The exact limit is
+			// measured from the produced vectors, not from a guessed row size.
+			const query = "select result from generate_series(1, 8193) g"
+			result, err := exec.Exec(ctx, query, executor.Options{})
+			require.NoError(t, err)
+			require.Greater(t, len(result.Batches), 1)
+			var size uint64
+			for _, bat := range result.Batches {
+				size += uint64(bat.Size())
+			}
+			result.Close()
+			require.Greater(t, size, uint64(1))
+			database := strings.ToLower(strings.ReplaceAll(testutils.GetDatabaseName(t), "/", "_"))
+			defer cleanupSQLIntegration(t, svc, "drop database if exists "+database)
+			testutils.CreateTestDatabase(t, database, svc)
+			result, err = exec.Exec(ctx, "create table "+database+".marker (v int)", executor.Options{})
+			require.NoError(t, err)
+			result.Close()
+
+			err = exec.ExecTxn(ctx, func(txn executor.TxnExecutor) error {
+				result, err := txn.Exec(query, executor.StatementOption{}.WithMaxResultBytes(size))
+				if err != nil {
+					return err
+				}
+				defer result.Close()
+				require.Greater(t, len(result.Batches), 1)
+				return nil
+			}, executor.Options{})
+			require.NoError(t, err)
+
+			err = exec.ExecTxn(ctx, func(txn executor.TxnExecutor) error {
+				result, err := txn.Exec("insert into "+database+".marker values (1)", executor.StatementOption{})
+				if err != nil {
+					return err
+				}
+				result.Close()
+				result, err = txn.Exec(query, executor.StatementOption{}.WithMaxResultBytes(size-1))
+				result.Close()
+				return err
+			}, executor.Options{})
+			var limitErr *executor.ResultLimitError
+			require.True(t, errors.As(err, &limitErr), "%v", err)
+			require.Equal(t, size-1, limitErr.Limit)
+
+			result, err = exec.Exec(ctx, "select count(*) from "+database+".marker", executor.Options{})
+			require.NoError(t, err, "the failed statement must not strand the executor")
+			var count int64
+			result.ReadRows(func(_ int, cols []*vector.Vector) bool {
+				count = vector.GetFixedAtWithTypeCheck[int64](cols[0], 0)
+				return false
+			})
+			result.Close()
+			require.Zero(t, count, "a result-limit failure must roll back prior writes")
+		})
 	})
 }
 

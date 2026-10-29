@@ -45,6 +45,7 @@ import (
 
 type operator struct {
 	sync.RWMutex
+	startup startControl
 
 	sid         string
 	cfg         ServiceConfig
@@ -52,6 +53,10 @@ type operator struct {
 	serviceType metadata.ServiceType
 	state       state
 	testing     bool
+
+	// Test-owned bootstrap handlers allow a real CN restart to cross an
+	// interrupted upgrade target without rewriting persisted upgrade records.
+	testingCNOptions []cnservice.Option
 
 	reset struct {
 		svc        service
@@ -129,13 +134,16 @@ func (op *operator) RawService() interface{} {
 }
 
 func (op *operator) Close() error {
+	op.startup.stop()
+	defer op.startup.stopped()
 	op.Lock()
 	defer op.Unlock()
 
 	if op.state == stopped &&
 		op.reset.svc == nil &&
 		op.reset.stopper == nil &&
-		op.reset.fs == nil {
+		op.reset.fs == nil &&
+		op.reset.rt == nil {
 		return nil
 	}
 
@@ -158,6 +166,10 @@ func (op *operator) Close() error {
 	if op.reset.fs != nil {
 		op.reset.fs.Close(context.Background())
 		op.reset.fs = nil
+	}
+	if op.reset.rt != nil {
+		runtime.CompareAndDeleteServiceBasedRuntime(op.sid, op.reset.rt)
+		op.reset.rt = nil
 	}
 	op.reset.shutdownC = nil
 	op.state = stopped
@@ -182,12 +194,23 @@ func (op *operator) needsCleanup() bool {
 func (op *operator) needsCleanupLocked() bool {
 	return op.reset.svc != nil ||
 		op.reset.stopper != nil ||
-		op.reset.fs != nil
+		op.reset.fs != nil ||
+		op.reset.rt != nil
 }
 
-func (op *operator) Start() error {
+func (op *operator) Start() error { return op.StartContext(context.Background()) }
+
+func (op *operator) StartContext(parent context.Context) (err error) {
+	startCtx, err := op.startup.begin(parent)
+	if err != nil {
+		return err
+	}
+	defer func() { op.startup.finish(startCtx, err) }()
 	op.Lock()
 	defer op.Unlock()
+	if err = startCtx.Err(); err != nil {
+		return err
+	}
 
 	if op.state == started {
 		return moerr.NewInvalidStateNoCtx("service already started")
@@ -212,13 +235,15 @@ func (op *operator) Start() error {
 	if err := op.cfg.validateClockConfiguration(); err != nil {
 		return err
 	}
-	if err := op.cfg.validateAuthenticationClockBudgetFor(op.serviceType); err != nil {
-		return err
+	// Authentication validation applies frontend defaults. Preserve an explicit
+	// testing socket choice, including empty (TCP-only), on either outcome.
+	unixAddress := op.cfg.CN.Frontend.UnixSocketAddress
+	authErr := op.cfg.validateAuthenticationClockBudgetFor(op.serviceType)
+	if op.testing && op.serviceType == metadata.ServiceType_CN {
+		op.cfg.CN.Frontend.UnixSocketAddress = unixAddress
 	}
-	if op.serviceType == metadata.ServiceType_CN {
-		if err := op.verifySiriusBenchmarkNoGC(); err != nil {
-			return err
-		}
+	if authErr != nil {
+		return authErr
 	}
 
 	if err := op.init(); err != nil {
@@ -226,7 +251,7 @@ func (op *operator) Start() error {
 	}
 
 	fs, err := op.cfg.createFileService(
-		context.Background(),
+		startCtx,
 		op.serviceType,
 		op.sid,
 	)
@@ -304,6 +329,16 @@ func (op *operator) startTNServiceLocked(
 	if err := op.waitClusterConditionLocked(op.waitHAKeeperRunningLocked); err != nil {
 		return err
 	}
+	return op.startTNServiceAfterReadyLocked(fs)
+}
+
+// startTNServiceAfterReadyLocked is the construction handoff after the
+// HAKeeper readiness gate. Keeping the constructor path separate lets tests
+// exercise the production owner publication and rollback boundary without
+// manufacturing a second constructor flow.
+func (op *operator) startTNServiceAfterReadyLocked(
+	fs fileservice.FileService,
+) error {
 	op.cfg.initMetaCache()
 	c := op.cfg.getTNServiceConfig()
 	//notify the tn service it is in the standalone cluster
@@ -314,6 +349,7 @@ func (op *operator) startTNServiceLocked(
 		op.reset.rt,
 		fs,
 		op.reset.shutdownC,
+		func(owner tnservice.Service) { op.reset.svc = owner },
 		tnservice.WithConfigData(commonConfigKVMap),
 	)
 	if err != nil {
@@ -328,23 +364,30 @@ func (op *operator) startTNServiceLocked(
 func (op *operator) startCNServiceLocked(
 	fs fileservice.FileService,
 ) error {
-	if err := op.verifySiriusBenchmarkNoGC(); err != nil {
-		return err
-	}
 	c := op.cfg.getCNServiceConfig()
 	if err := op.waitClusterConditionLocked(op.waitAnyShardReadyLocked); err != nil {
 		return err
 	}
 	op.cfg.initMetaCache()
 	commonConfigKVMap, _ := dumpCommonConfig(op.cfg)
-	s, err := cnservice.NewService(
-		&c,
-		context.Background(),
-		fs,
-		op.reset.gossipNode,
+	options := []cnservice.Option{
 		cnservice.WithLogger(op.reset.logger),
 		cnservice.WithMessageHandle(compile.CnServerMessageHandler),
 		cnservice.WithConfigData(commonConfigKVMap),
+	}
+	if op.testing {
+		options = append(options, op.testingCNOptions...)
+		// CN construction defaults the configuration again. Apply the caller's
+		// testing choice after those defaults, before frontend listeners exist.
+		options = append(options, cnservice.WithFrontendUnixSocketAddress(c.Frontend.UnixSocketAddress))
+	}
+	s, err := cnservice.NewService(
+		&c,
+		op.startup.context(),
+		fs,
+		op.reset.gossipNode,
+		func(owner cnservice.Service) { op.reset.svc = owner },
+		options...,
 	)
 	if err != nil {
 		return err
@@ -355,21 +398,14 @@ func (op *operator) startCNServiceLocked(
 	return nil
 }
 
-func (op *operator) verifySiriusBenchmarkNoGC() error {
-	// An individual embedded CN operator neither owns nor observes the TN that
-	// serves its snapshots. A sibling TN config is therefore not proof that GC
-	// is disabled on the actual TN, so embedded benchmark mode fails closed.
-	return cnservice.VerifySiriusBenchmarkNoGC(
-		&op.cfg.CN,
-		false,
-	)
-}
-
 func (op *operator) startConstructedServiceLocked(s service) error {
 	// Start may fail after the concrete service has opened listeners or started
 	// goroutines. Transfer ownership before calling it so rollback can always
 	// reach Close.
 	op.reset.svc = s
+	if starter, ok := s.(interface{ StartContext(context.Context) error }); ok {
+		return starter.StartContext(op.startup.context())
+	}
 	return s.Start()
 }
 
@@ -500,7 +536,7 @@ func (op *operator) waitHAKeeperRunningLocked(
 	client logservice.CNHAKeeperClient,
 ) error {
 	ctx, cancel := context.WithTimeoutCause(
-		context.TODO(),
+		op.startup.context(),
 		op.hakeeperRunningTimeout(),
 		moerr.CauseWaitHAKeeperRunningLocked,
 	)
@@ -540,7 +576,7 @@ func (op *operator) hakeeperRunningTimeout() time.Duration {
 
 func (op *operator) waitAnyShardReadyLocked(client logservice.CNHAKeeperClient) error {
 	ctx, cancel := context.WithTimeoutCause(
-		context.TODO(),
+		op.startup.context(),
 		op.anyShardReadyTimeout(),
 		moerr.CauseWaitAnyShardReadyLocked,
 	)
@@ -607,7 +643,7 @@ func waitStartupRetry(ctx context.Context, interval time.Duration) error {
 }
 
 func (op *operator) waitHAKeeperReadyLocked() (logservice.CNHAKeeperClient, error) {
-	ctx, cancel := context.WithTimeoutCause(context.Background(), time.Minute*5, moerr.CauseWaitHAKeeperReadyLocked2)
+	ctx, cancel := context.WithTimeoutCause(op.startup.context(), time.Minute*5, moerr.CauseWaitHAKeeperReadyLocked2)
 	defer cancel()
 	return waitHAKeeperClient(ctx, func(ctx context.Context) (logservice.CNHAKeeperClient, error) {
 		client, err := logservice.NewCNHAKeeperClient(
@@ -633,16 +669,19 @@ func waitHAKeeperClient(ctx context.Context, create func(context.Context) (logse
 	for {
 		select {
 		case <-ctx.Done():
-			return nil, errors.Join(moerr.NewInternalErrorNoCtx("wait hakeeper ready timeout"), moerr.CauseWaitHAKeeperReadyLocked2)
+			return nil, moerr.AttachCause(ctx, ctx.Err())
 		default:
 			attempt, cancel := context.WithTimeoutCause(ctx, 5*time.Second, moerr.CauseWaitHAKeeperReadyLocked)
 			client, err := create(attempt)
 			cancel()
 			if err == nil {
+				if ctx.Err() != nil {
+					return nil, errors.Join(moerr.AttachCause(ctx, ctx.Err()), client.Close())
+				}
 				return client, nil
 			}
 			if err := waitStartupRetry(ctx, time.Second); err != nil {
-				return nil, errors.Join(moerr.NewInternalErrorNoCtx("wait hakeeper ready timeout"), moerr.CauseWaitHAKeeperReadyLocked2)
+				return nil, err
 			}
 		}
 	}

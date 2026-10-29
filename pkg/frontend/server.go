@@ -310,6 +310,7 @@ func (mo *MOServer) cleanOrphanTempTables() error {
 	}
 
 	ctx, cancel = context.WithTimeoutCause(ctx, time.Second*60, context.DeadlineExceeded)
+	ctx = defines.AttachTemporaryTableAccess(ctx)
 	defer func() {
 		cancel()
 	}()
@@ -504,7 +505,7 @@ func (mo *MOServer) handshake(rs *Conn) error {
 				ts[TSUpgradeTLSStart] = time.Now()
 				ses.Debugf(tempCtx, "upgrade to TLS")
 				// do upgradeTls
-				tlsConn := tls.Server(rs.RawConn(), rm.getTlsConfig())
+				tlsConn := tls.Server(rs.connForTLS(), rm.getTlsConfig())
 				ses.Debugf(tempCtx, "get TLS conn ok")
 				tlsCtx, cancelFun := context.WithTimeoutCause(tempCtx, 20*time.Second, moerr.CauseHandshake2)
 				if err = tlsConn.HandshakeContext(tlsCtx); err != nil {
@@ -550,7 +551,7 @@ func (mo *MOServer) handshake(rs *Conn) error {
 				ts[TSUpgradeTLSStart] = time.Now()
 				ses.Debugf(tempCtx, "upgrade to TLS")
 				// do upgradeTls
-				tlsConn := tls.Server(rs.RawConn(), rm.getTlsConfig())
+				tlsConn := tls.Server(rs.connForTLS(), rm.getTlsConfig())
 				ses.Debugf(tempCtx, "get TLS conn ok")
 				tlsCtx, cancelFun := context.WithTimeoutCause(tempCtx, 20*time.Second, moerr.CauseHandshake2)
 				if err = tlsConn.HandshakeContext(tlsCtx); err != nil {
@@ -919,7 +920,12 @@ func (mo *MOServer) handleRequest(rs *Conn) error {
 	err = mo.rm.Handler(rs, msg)
 	if err != nil {
 		if skipClientQuit(err.Error()) {
-			return nil
+			// COM_QUIT is terminal on the wire: the client has finished the
+			// session and waits for the server to close the connection, so
+			// the read loop must not keep waiting for a next command.
+			// Ending like a clean EOF lets handleConn close the connection
+			// and run the routine/session cleanup once, on the owning path.
+			return io.EOF
 		} else {
 			logutil.LogConnectionCloseEvent(frontendSessionHandleEvents, err)
 		}
