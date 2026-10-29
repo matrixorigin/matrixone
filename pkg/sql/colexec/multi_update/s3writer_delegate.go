@@ -698,12 +698,15 @@ func (writer *s3WriterDelegate) sortAndSyncOneTable(
 			owned, writeErr := process.MeasureFilesystemWait(analyzer, func() (bool, error) {
 				return s3Writer.WriteOwned(writeCtx, bats[i])
 			})
+			// Ownership may transfer even when the subsequent spill fails.
+			if owned {
+				bats[i] = nil
+			}
 			if writeErr != nil {
 				err = writeErr
 				return
 			}
 			if owned {
-				bats[i] = nil
 				continue
 			}
 			// WriteOwned returned false: data was already copied inside
