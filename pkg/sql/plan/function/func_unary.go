@@ -6409,10 +6409,18 @@ func Int64ToTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 
 func DateStringToTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	scale := result.GetResultVector().GetType().Scale
-	return opUnaryBytesToFixedWithErrorCheck[types.Time](ivecs, result, proc, length, func(v []byte) (types.Time, error) {
+	return opUnaryBytesToFixedWithNullOnError[types.Time](ivecs, result, proc, length, func(v []byte) (types.Time, error) {
 		t, e := types.ParseTime(string(v), scale)
 		if e != nil {
-			return 0, moerr.NewOutOfRangeNoCtxf("time", "'%s'", string(v))
+			// MySQL doctrine: TIME() yields NULL with a truncation warning for
+			// an invalid argument instead of failing the whole statement.
+			if proc != nil {
+				if appender, ok := proc.GetWarningSink().(warningDiagnosticAppender); ok {
+					appender.AppendWarningDiagnostic(moerr.ER_TRUNCATED_WRONG_VALUE,
+						fmt.Sprintf("Truncated incorrect time value: '%s'", string(v)))
+				}
+			}
+			return 0, e
 		}
 		return clampPublicTimeResult(proc, t, scale), nil
 	}, selectList)
