@@ -557,54 +557,54 @@ func (c *Conn) DiscardLoadLocalPacket(timeout time.Duration, deadline time.Time,
 	if c.loadLocalFrameBroken.Load() && !f.interrupted {
 		return 0, false, moerr.NewInvalidInputNoCtx("LOCAL packet framing is broken")
 	}
-	defer func() {
-		if rErr := recover(); rErr != nil {
-			err = errors.Join(err, moerr.ConvertPanicError(context.Background(), rErr))
+	// Keep packet I/O and allocation panics inside the existing frontend
+	// recovery boundary, then invalidate framing just as for returned errors.
+	err, _ = ExecuteFuncWithRecover(func() error {
+		if f.headerBytes < HeaderLengthOfTheProtocol {
+			var n int
+			n, err = c.ReadNBytesIntoBufWithTimeout(c.header[f.headerBytes:], HeaderLengthOfTheProtocol-f.headerBytes, timeout, deadline)
+			f.headerBytes += n
+			if err != nil {
+				return err
+			}
 		}
-		if err != nil {
-			c.loadLocalFrameBroken.Store(true)
-			f.interrupted = false
+		if !f.decoded {
+			f.payloadLength = int(uint32(c.header[0]) | uint32(c.header[1])<<8 | uint32(c.header[2])<<16)
+			c.sequenceId = c.header[3] + 1
+			f.decoded = true
+			if err = c.CheckAllowedPacketSize(f.payloadLength); err != nil {
+				return err
+			}
 		}
-	}()
-	if f.headerBytes < HeaderLengthOfTheProtocol {
-		var n int
-		n, err = c.ReadNBytesIntoBufWithTimeout(c.header[f.headerBytes:], HeaderLengthOfTheProtocol-f.headerBytes, timeout, deadline)
-		f.headerBytes += n
-		if err != nil {
-			return
+		remaining := f.payloadLength - f.payloadBytes
+		if int64(remaining) > budget {
+			return moerr.NewInvalidInputNoCtx("LOCAL upload exceeds drain byte budget")
 		}
+		if remaining > 0 && len(c.loadLocalBuf.data) == 0 {
+			c.loadLocalBuf.data, err = c.allocator.Alloc(min(remaining, 32*1024))
+			if err != nil {
+				return err
+			}
+		}
+		for remaining > 0 {
+			var n int
+			n, err = c.ReadNBytesIntoBufWithTimeout(c.loadLocalBuf.data, min(remaining, len(c.loadLocalBuf.data)), timeout, deadline)
+			f.payloadBytes += n
+			discarded += int64(n)
+			remaining -= n
+			if err != nil {
+				return err
+			}
+		}
+		eof = f.payloadLength == 0
+		*f = loadLocalFrameProgress{}
+		c.loadLocalFrameBroken.Store(false) // a complete frame, not an interrupt clear, proves this boundary
+		return nil
+	})
+	if err != nil {
+		c.loadLocalFrameBroken.Store(true)
+		f.interrupted = false
 	}
-	if !f.decoded {
-		f.payloadLength = int(uint32(c.header[0]) | uint32(c.header[1])<<8 | uint32(c.header[2])<<16)
-		c.sequenceId = c.header[3] + 1
-		f.decoded = true
-		if err = c.CheckAllowedPacketSize(f.payloadLength); err != nil {
-			return
-		}
-	}
-	remaining := f.payloadLength - f.payloadBytes
-	if int64(remaining) > budget {
-		return 0, false, moerr.NewInvalidInputNoCtx("LOCAL upload exceeds drain byte budget")
-	}
-	if remaining > 0 && len(c.loadLocalBuf.data) == 0 {
-		c.loadLocalBuf.data, err = c.allocator.Alloc(min(remaining, 32*1024))
-		if err != nil {
-			return
-		}
-	}
-	for remaining > 0 {
-		var n int
-		n, err = c.ReadNBytesIntoBufWithTimeout(c.loadLocalBuf.data, min(remaining, len(c.loadLocalBuf.data)), timeout, deadline)
-		f.payloadBytes += n
-		discarded += int64(n)
-		remaining -= n
-		if err != nil {
-			return
-		}
-	}
-	eof = f.payloadLength == 0
-	*f = loadLocalFrameProgress{}
-	c.loadLocalFrameBroken.Store(false) // a complete frame, not an interrupt clear, proves this boundary
 	return
 }
 

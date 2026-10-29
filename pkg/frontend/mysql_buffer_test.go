@@ -1056,6 +1056,51 @@ func newTestConn(t *testing.T, leakAlloc *LeakCheckAllocator) (*testConn, *Conn)
 	return tConn, conn
 }
 
+func TestConn_DiscardLoadLocalPacketPanic(t *testing.T) {
+	for _, phase := range []string{"header", "allocation", "payload"} {
+		t.Run(phase, func(t *testing.T) {
+			alloc := NewLeakCheckAllocator()
+			wire := &testConn{mod: testConnModReadPanic}
+			conn := &Conn{
+				conn:              wire,
+				allocator:         &BufferAllocator{allocator: alloc},
+				allowedPacketSize: 10,
+			}
+			t.Cleanup(func() {
+				conn.FreeLoadLocal()
+				require.True(t, alloc.CheckBalance())
+			})
+			if phase != "header" {
+				// Resume a previously interrupted frame at its payload boundary.
+				conn.loadLocalFrame = loadLocalFrameProgress{
+					headerBytes: HeaderLengthOfTheProtocol, payloadLength: 1,
+					decoded: true, interrupted: true,
+				}
+				conn.loadLocalFrameBroken.Store(true)
+			}
+			message := "test conn read panic"
+			if phase == "allocation" {
+				alloc.mod = leakCheckAllocatorModeAllocPanic
+				message = "leak check allocator panic"
+			}
+			n, eof, err := conn.DiscardLoadLocalPacket(time.Second, time.Now().Add(time.Second), 10)
+			var panicErr *moerr.Error
+			require.ErrorAs(t, err, &panicErr)
+			require.True(t, moerr.IsMoErrCode(panicErr, moerr.ErrInternal))
+			require.ErrorContains(t, err, message)
+			require.Zero(t, n)
+			require.False(t, eof)
+			require.True(t, conn.LoadLocalFramingBroken())
+			require.False(t, conn.loadLocalFrame.interrupted)
+			// A panic must not authorize another drain or normal packet read.
+			_, _, err = conn.DiscardLoadLocalPacket(time.Second, time.Now().Add(time.Second), 10)
+			require.ErrorContains(t, err, "framing is broken")
+			_, err = conn.ReadLoadLocalPacket()
+			require.ErrorContains(t, err, "unfinished LOCAL frame")
+		})
+	}
+}
+
 func TestConn_ReadLoadLocalPacketErr(t *testing.T) {
 	leakAlloc := NewLeakCheckAllocator()
 	var err error
