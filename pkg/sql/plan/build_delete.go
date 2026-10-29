@@ -27,11 +27,12 @@ func buildDelete(stmt *tree.Delete, ctx CompilerContext, isPrepareStmt bool) (*P
 	defer func() {
 		v2.TxnStatementBuildDeleteHistogram.Observe(time.Since(start).Seconds())
 	}()
-	aliasMap := make(map[string][2]string)
-	for _, tbl := range stmt.TableRefs {
-		getAliasToName(ctx, tbl, "", aliasMap)
+	aliasMap, err := resolveDeleteTargetAliases(ctx, stmt)
+	if err != nil {
+		return nil, err
 	}
-	tblInfo, err := getDmlTableInfo(ctx, stmt.Tables, stmt.With, aliasMap, "delete")
+	// Share target validation with the modern planner; retain WITH on the SELECT.
+	tblInfo, err := getDmlTableInfo(ctx, stmt.Tables, nil, aliasMap, "delete")
 	if err != nil {
 		return nil, err
 	}
@@ -67,9 +68,7 @@ func buildDelete(stmt *tree.Delete, ctx CompilerContext, isPrepareStmt bool) (*P
 	}
 	// append delete plans
 	beginIdx := 0
-	// needLockTable := !tblInfo.isMulti && stmt.Where == nil && stmt.Limit == nil
-	// todo will do not lock table now.
-	isDeleteWithoutFilters := !tblInfo.isMulti && stmt.Where == nil && stmt.Limit == nil
+	isDeleteWithoutFilters := isUnrestrictedDelete(stmt, len(tblInfo.tableDefs))
 	needLockTable := isDeleteWithoutFilters
 	for i, tableDef := range tblInfo.tableDefs {
 		deleteBindCtx := NewBindContext(builder, nil)

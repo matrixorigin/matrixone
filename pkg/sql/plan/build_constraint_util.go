@@ -74,23 +74,79 @@ func init() {
 	constTextType = makePlan2Type(&typ)
 }
 
-func getAliasToName(ctx CompilerContext, expr tree.TableExpr, alias string, aliasMap map[string][2]string) {
+// resolveDeleteTargetAliases validates writable identity before either DELETE
+// planner resolves catalog tables. CTE names belong to the FROM source scope,
+// not to the target alias scope; keep source qualification until after that check.
+func resolveDeleteTargetAliases(ctx CompilerContext, stmt *tree.Delete) (map[string][2]string, error) {
+	aliases := make(map[string][2]string)
+	for _, source := range stmt.TableRefs {
+		collectDeleteSourceNames(source, "", aliases)
+	}
+	var ctes map[string]bool
+	if stmt.With != nil {
+		ctes = make(map[string]bool, len(stmt.With.CTEs))
+		for _, cte := range stmt.With.CTEs {
+			ctes[string(cte.Name.Alias)] = true
+		}
+	}
+	for _, target := range stmt.Tables {
+		if aliased, ok := target.(*tree.AliasedTableExpr); ok {
+			target = aliased.Expr
+		}
+		name, ok := target.(*tree.TableName)
+		if !ok {
+			return nil, moerr.NewInvalidInput(ctx.GetContext(), "unsupported DELETE target")
+		}
+		dbName, tableName := string(name.SchemaName), string(name.ObjectName)
+		source := [2]string{dbName, tableName}
+		if len(stmt.TableRefs) != 0 {
+			var found bool
+			source, found = aliases[tableName]
+			if !found {
+				return nil, moerr.NewInvalidInputf(ctx.GetContext(), "DELETE target %s is not a writable source", tableName)
+			}
+		}
+		if source[0] == "" && ctes[source[1]] {
+			return nil, moerr.NewInvalidInputf(ctx.GetContext(), "cannot delete from CTE %s", source[1])
+		}
+		if dbName != "" {
+			sourceDB := source[0]
+			if sourceDB == "" {
+				sourceDB = ctx.DefaultDatabase()
+			}
+			if dbName != sourceDB || tableName != source[1] {
+				return nil, moerr.NewInvalidInputf(ctx.GetContext(), "DELETE target %s.%s does not match its source", dbName, tableName)
+			}
+		}
+	}
+	return aliases, nil
+}
+
+func collectDeleteSourceNames(expr tree.TableExpr, alias string, aliases map[string][2]string) {
 	switch t := expr.(type) {
 	case *tree.TableName:
-		dbName := string(t.SchemaName)
-		if dbName == "" {
-			dbName = ctx.DefaultDatabase()
+		tableName := string(t.ObjectName)
+		if alias == "" {
+			alias = tableName
 		}
-		tblName := string(t.ObjectName)
-		if alias != "" {
-			aliasMap[alias] = [2]string{dbName, tblName}
-		}
+		aliases[alias] = [2]string{string(t.SchemaName), tableName}
 	case *tree.AliasedTableExpr:
-		alias := string(t.As.Alias)
-		getAliasToName(ctx, t.Expr, alias, aliasMap)
+		if t.As.Alias != "" {
+			alias = string(t.As.Alias)
+		}
+		collectDeleteSourceNames(t.Expr, alias, aliases)
+	case *tree.ParenTableExpr:
+		collectDeleteSourceNames(t.Expr, alias, aliases)
+	case *tree.ApplyTableExpr:
+		if alias == "" {
+			collectDeleteSourceNames(t.Left, "", aliases)
+		}
 	case *tree.JoinTableExpr:
-		getAliasToName(ctx, t.Left, alias, aliasMap)
-		getAliasToName(ctx, t.Right, alias, aliasMap)
+		// A group alias never identifies an individual writable table.
+		if alias == "" {
+			collectDeleteSourceNames(t.Left, "", aliases)
+			collectDeleteSourceNames(t.Right, "", aliases)
+		}
 	}
 }
 
