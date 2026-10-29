@@ -13,8 +13,12 @@
 # limitations under the License.
 
 """INSERT builders own their column and row containers."""
+
 from contextlib import closing
 import sqlite3
+from types import MappingProxyType
+
+import pytest
 
 from matrixone.sql_builder import MatrixOneSQLBuilder
 
@@ -47,3 +51,21 @@ def test_input_container_changes_do_not_rewrite_pending_insert():
     rows[0][1] = 'changed'
     rows.append([2, 'extra'])
     assert execute_rows(builder) == [(1, 'first')]
+
+
+@pytest.mark.parametrize('row', [{'id': 9, 'label': 'mapped'}, MappingProxyType({'id': 9, 'label': 'mapped'})])
+def test_mapping_rows_are_rejected_without_replacing_pending_values(row):
+    builder = MatrixOneSQLBuilder().insert_into('items').insert_values(['id', 'label'], [[1, 'first']])
+    before = builder.build()
+
+    with pytest.raises(TypeError, match=r'insert_values\(\) rows must be positional, not mappings'):
+        builder.insert_values(['id', 'label'], [row])
+
+    assert builder.build() == before
+
+
+def test_outer_generator_rows_are_not_consumed_by_mapping_validation():
+    rows = ([1, 'first'], [2, 'second'])
+    builder = MatrixOneSQLBuilder().insert_into('items').insert_values(['id', 'label'], (row for row in rows))
+
+    assert execute_rows(builder) == [(1, 'first'), (2, 'second')]
