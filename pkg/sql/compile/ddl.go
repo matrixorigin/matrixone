@@ -1415,7 +1415,7 @@ func (s *Scope) alterTableInplace(c *Compile, cleanup *alterAutoIncrementResetCl
 			for _, multiTableIndex := range multiTableIndexes {
 				if p, ok := indexplugin.Get(multiTableIndex.IndexAlgo); ok {
 					if cctx == nil {
-						cctx = newPluginCompileCtx(s, c, tblId, extra, dbSource, qry.Database, oTableDef, indexInfo)
+						cctx = newPluginCompileCtx(s, c, tblId, extra, dbSource, qry.Database, oTableDef, indexInfo, nil)
 					}
 					err = p.Compile().HandleCreateIndex(cctx, multiTableIndex.IndexDefs)
 				}
@@ -1541,7 +1541,7 @@ func (s *Scope) alterTableInplace(c *Compile, cleanup *alterAutoIncrementResetCl
 					// background idxcron job — the existing task's
 					// captured metadata is authoritative.
 					desc := p.Catalog().SyncDescriptor()
-					cctx := newPluginCompileCtx(s, c, tblId, extra, dbSource, qry.Database, oTableDef, nil)
+					cctx := newPluginCompileCtx(s, c, tblId, extra, dbSource, qry.Database, oTableDef, nil, nil)
 					if !cctx.IsFrontend() {
 						continue
 					}
@@ -1645,7 +1645,7 @@ func (s *Scope) alterTableInplace(c *Compile, cleanup *alterAutoIncrementResetCl
 			for _, multiTableIndex := range multiTableIndexes {
 				if p, ok := indexplugin.Get(multiTableIndex.IndexAlgo); ok {
 					if cctx == nil {
-						cctx = newPluginCompileCtx(s, c, tblId, extra, dbSource, qry.Database, oTableDef, nil)
+						cctx = newPluginCompileCtx(s, c, tblId, extra, dbSource, qry.Database, oTableDef, nil, nil)
 					}
 					err = p.Compile().HandleReindex(cctx, multiTableIndex.IndexDefs, tableAlterIndex.ForceSync, tableAlterIndex.Merge)
 				}
@@ -3556,7 +3556,7 @@ func (s *Scope) doCreateIndex(
 		// (HiddenTableTypes, ParamsFromTree, SyncDescriptor, ...).
 		if p, ok := indexplugin.Get(multiTableIndex.IndexAlgo); ok {
 			if cctx == nil {
-				cctx = newPluginCompileCtx(s, c, tableId, extra, dbSource, qry.Database, originalTableDef, indexInfo)
+				cctx = newPluginCompileCtx(s, c, tableId, extra, dbSource, qry.Database, originalTableDef, indexInfo, nil)
 			}
 			err = p.Compile().HandleCreateIndex(cctx, multiTableIndex.IndexDefs)
 		}
@@ -3885,7 +3885,7 @@ func dispatchPluginDropIndexes(
 		return
 	}
 
-	dctx := newPluginCompileCtx(s, c, tableDef.TblId, nil, d, dbName, tableDef, nil)
+	dctx := newPluginCompileCtx(s, c, tableDef.TblId, nil, d, dbName, tableDef, nil, nil)
 	for _, key := range order {
 		mti := groups[key]
 		p, ok := indexplugin.Get(mti.IndexAlgo)
@@ -5602,7 +5602,7 @@ func (s *Scope) RestoreTable(c *Compile, clonePlan *plan.CloneTable) error {
 			continue
 		}
 		if cctx == nil {
-			cctx = newPluginCompileCtx(s, c, tableDef.GetTblId(), nil, nil, dbName, tableDef, nil)
+			cctx = newPluginCompileCtx(s, c, tableDef.GetTblId(), nil, nil, dbName, tableDef, nil, nil)
 		}
 		startFromNow, initSQL, err := p.Compile().RestoreInitSQL(cctx, mti.IndexDefs)
 		if err != nil {

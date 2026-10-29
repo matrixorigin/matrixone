@@ -22,7 +22,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -38,7 +37,8 @@ const (
 // ignoredRows tracks, during one iteration, the source rows an index cannot store. The
 // index's ignored table holds exactly the source rows that exist and are not in the index:
 // a row is added when its value cannot be stored, and removed when it is deleted or
-// replaced by a value the index stores.
+// replaced by a value the index stores. It never reads the table's rows: its memory is
+// bounded by the iteration's own changes, never by the size of the table.
 type ignoredRows struct {
 	db     string
 	tbl    string
@@ -46,10 +46,9 @@ type ignoredRows struct {
 	pkType *types.Type
 	// reset replaces the whole table, for an iteration that rebuilds the index.
 	reset bool
-	// repr is how the paired writer receives primary keys.
-	repr ValueRepr
-	// present holds the keys in the table when the iteration started.
-	present map[any]struct{}
+	// stored reports whether the table had a row when the iteration started; while it had
+	// none, a row the index stores needs no removal and is not recorded.
+	stored  bool
 	changes map[any]ignoredChange
 	ts      types.TS
 }
@@ -101,41 +100,30 @@ func (g *ignoredRows) ignore(pk any, reason string) {
 // indexed records that the row with key pk is in the index or no longer exists.
 func (g *ignoredRows) indexed(pk any) {
 	key := ignoredKey(pk)
-	if _, ok := g.changes[key]; ok {
-		g.changes[key] = ignoredChange{pk: pk}
-		return
-	}
-	if _, ok := g.present[key]; ok {
+	if _, ok := g.changes[key]; ok || g.stored {
 		g.changes[key] = ignoredChange{pk: pk}
 	}
 }
 
-// load reads the keys of the table, or starts from an empty table when the iteration
-// rebuilds the index.
+// load starts an iteration: it reads whether the table has a row, or starts from an empty
+// table when the iteration rebuilds the index.
 func (g *ignoredRows) load(ctx context.Context, service string, txn client.TxnOperator, rebuild bool) error {
-	g.present = make(map[any]struct{})
 	clear(g.changes)
-	g.reset = rebuild
+	g.reset, g.stored = rebuild, false
 	if rebuild {
 		return nil
 	}
-	sql := fmt.Sprintf("SELECT `%s` FROM %s", catalog.IndexIgnored_TblCol_Pk, g.table)
-	res, err := ExecWithResult(ctx, sql, service, txn)
+	res, err := ExecWithResult(ctx, fmt.Sprintf("SELECT 1 FROM %s LIMIT 1", g.table), service, txn)
 	if err != nil {
 		return err
 	}
 	defer res.Close()
-	row := make([]any, 1)
-	res.ReadRows(func(rows int, cols []*vector.Vector) bool {
-		for i := 0; i < rows; i++ {
-			if err = extractRowFromVector(ctx, cols[0], 0, row, i, g.repr); err != nil {
-				return false
-			}
-			g.present[ignoredKey(row[0])] = struct{}{}
+	for _, b := range res.Batches {
+		if b != nil && b.RowCount() > 0 {
+			g.stored = true
 		}
-		return true
-	})
-	return err
+	}
+	return nil
 }
 
 // flush writes the changes of the iteration in the transaction that commits it.

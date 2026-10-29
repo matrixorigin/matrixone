@@ -31,13 +31,15 @@ import (
 // entry-log line.
 type stubCtx struct {
 	isFrontend bool
+	indexInfo  *plan.CreateTable
+	newIndexes map[string]bool
 }
 
 func (s *stubCtx) Ctx() compileplugin.Context             { return nil }
 func (s *stubCtx) Database() engine.Database              { return nil }
 func (s *stubCtx) QryDatabase() string                    { return "" }
 func (s *stubCtx) OriginalTableDef() *plan.TableDef       { return nil }
-func (s *stubCtx) IndexInfo() *plan.CreateTable           { return nil }
+func (s *stubCtx) IndexInfo() *plan.CreateTable           { return s.indexInfo }
 func (s *stubCtx) MainTableID() uint64                    { return 0 }
 func (s *stubCtx) MainExtra() *api.SchemaExtra            { return nil }
 func (s *stubCtx) RunSql(_ string) error                  { return nil }
@@ -47,6 +49,7 @@ func (s *stubCtx) ResolveVariable(_ string, _, _ bool) (any, error) {
 }
 func (s *stubCtx) IsFrontend() bool                             { return s.isFrontend }
 func (s *stubCtx) IsTableClone() bool                           { return false }
+func (s *stubCtx) IsNewIndex(name string) bool                  { return s.newIndexes[name] }
 func (s *stubCtx) IsExperimentalEnabled(_ string) (bool, error) { return true, nil }
 func (s *stubCtx) IsCCPRTaskTransaction() bool                  { return false }
 func (s *stubCtx) IsTableFromPublication(_ *plan.TableDef) bool { return false }
@@ -99,4 +102,24 @@ func TestHnswIdxcronMetadata_NoOp(t *testing.T) {
 	got, err := Hooks{}.IdxcronMetadata(&stubCtx{})
 	require.NoError(t, err)
 	require.Nil(t, got)
+}
+
+// A build rejects a row the index cannot store only for a new index its user's statement adds,
+// including one a copying ALTER adds; a rebuild of an existing index records the row instead.
+func TestRejectUnstorableRows(t *testing.T) {
+	added := map[string]bool{"new": true, "old": false}
+	for _, c := range []struct {
+		name   string
+		ctx    *stubCtx
+		index  string
+		reject bool
+	}{
+		{"create index", &stubCtx{isFrontend: true, indexInfo: &plan.CreateTable{}}, "new", true},
+		{"copying alter adds the index", &stubCtx{isFrontend: true, newIndexes: added}, "new", true},
+		{"copying alter rebuilds an existing index", &stubCtx{isFrontend: true, newIndexes: added}, "old", false},
+		{"reindex", &stubCtx{isFrontend: true}, "new", false},
+		{"background", &stubCtx{newIndexes: added}, "new", false},
+	} {
+		require.Equal(t, c.reject, compileplugin.RejectUnstorableRows(c.ctx, c.index), c.name)
+	}
 }

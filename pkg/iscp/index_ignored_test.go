@@ -16,6 +16,8 @@ package iscp
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -65,7 +67,8 @@ func TestHnswWriterIgnoresUnstorableVectors(t *testing.T) {
 	require.NoError(t, err)
 	ignored := newIgnoredRows("test_db", tabledef, tabledef.Indexes)
 	require.NotNil(t, ignored)
-	ignored.present = map[any]struct{}{int64(4): {}, int64(5): {}}
+	// the table holds rows 4 and 5
+	ignored.stored = true
 	writer.(ignoredRowWriter).setIgnored(ignored)
 	ignored.setTs(types.BuildTS(7, 0))
 
@@ -85,7 +88,7 @@ func TestHnswWriterIgnoresUnstorableVectors(t *testing.T) {
 	sqls := captureIgnoredSql(t)
 	require.NoError(t, ignored.flush(ctx, "", nil, "hnsw_idx"))
 	require.Equal(t, []string{
-		"DELETE FROM `test_db`.`ignored_tbl` WHERE `__mo_index_pk` IN (4,5)",
+		"DELETE FROM `test_db`.`ignored_tbl` WHERE `__mo_index_pk` IN (1,4,5)",
 		"REPLACE INTO `test_db`.`ignored_tbl` (`__mo_index_pk`, `__mo_index_reason`, `__mo_index_ts`) VALUES " +
 			"(2, 'data out of range: data type hnsw quantization, vector element 100000 cannot be stored as F16', 7), " +
 			"(3, 'data out of range: data type hnsw quantization, vector element 70000 cannot be stored as F16', 7)",
@@ -96,9 +99,8 @@ func TestIgnoredRowsTransitions(t *testing.T) {
 	ctx := context.Background()
 	tabledef := newTestHnswIgnoredTableDef("float16")
 	ignored := newIgnoredRows("db", tabledef, tabledef.Indexes)
-	ignored.present = map[any]struct{}{int64(1): {}}
 
-	// a row not in the table that is indexed needs no change
+	// while the table is empty, a row that is indexed needs no change
 	ignored.indexed(int64(9))
 	// ignored, then stored: the last change wins
 	ignored.ignore(int64(2), "bad")
@@ -143,33 +145,61 @@ func TestNewIgnoredRowsWithoutTable(t *testing.T) {
 	require.False(t, writer.Empty())
 }
 
-func TestIgnoredRowsLoadsKeysAsTheWriterSeesThem(t *testing.T) {
+// An iteration never reads the ignored table's rows: it only asks whether there is one, and
+// records the keys it touches only then, so its memory follows its own changes. Removals are
+// written in bounded statements.
+func TestIgnoredRowsLoadIsBounded(t *testing.T) {
 	ctx := context.Background()
 	mp := mpool.MustNewZero()
 	tabledef := newTestTableDef("pk", types.T_varbinary, "vec", types.T_array_float32, 2)
 	tabledef.Indexes = newTestHnswIgnoredTableDef("float16").Indexes
 	ignored := newIgnoredRows("db", tabledef, tabledef.Indexes)
 
-	bat := batch.NewWithSize(1)
-	bat.Vecs[0] = vector.NewVec(types.T_varbinary.ToType())
-	for _, k := range []string{"a\x00", "b\x01"} {
-		require.NoError(t, vector.AppendBytes(bat.Vecs[0], []byte(k), false, mp))
-	}
-	bat.SetRowCount(2)
+	var sqls []string
+	rows := 0
 	old := ExecWithResult
-	ExecWithResult = func(context.Context, string, string, client.TxnOperator, ...executor.StatementOption) (executor.Result, error) {
+	ExecWithResult = func(_ context.Context, sql string, _ string, _ client.TxnOperator, _ ...executor.StatementOption) (executor.Result, error) {
+		sqls = append(sqls, sql)
+		bat := batch.NewWithSize(1)
+		bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+		for i := 0; i < rows; i++ {
+			require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(1), false, mp))
+		}
+		bat.SetRowCount(rows)
 		return executor.Result{Mp: mp, Batches: []*batch.Batch{bat}}, nil
 	}
 	t.Cleanup(func() { ExecWithResult = old })
-	require.NoError(t, ignored.load(ctx, "", nil, false))
-	require.Len(t, ignored.present, 2)
 
-	// a writer delivers a key as a new byte slice; it still finds the recorded row
-	ignored.indexed([]byte("a\x00"))
+	require.NoError(t, ignored.load(ctx, "", nil, false))
+	require.Equal(t, []string{"SELECT 1 FROM `db`.`ignored_tbl` LIMIT 1"}, sqls)
+	require.False(t, ignored.stored)
+	for i := 0; i < 10000; i++ {
+		ignored.indexed([]byte(fmt.Sprint(i)))
+	}
+	require.Empty(t, ignored.changes, "an empty table records nothing for indexed rows")
+
+	rows = 1
+	require.NoError(t, ignored.load(ctx, "", nil, false))
+	require.True(t, ignored.stored)
+	n := 2*ignoredSqlBatch + 1
+	for i := 0; i < n; i++ {
+		ignored.indexed([]byte(fmt.Sprint(i)))
+	}
+	require.Len(t, ignored.changes, n, "only the keys the iteration touched")
+	// a writer delivers a key as a new byte slice; it still finds the recorded change
 	ignored.ignore([]byte("c"), "bad")
-	sqls := captureIgnoredSql(t)
+	ignored.indexed([]byte("c"))
+
+	sqls = nil
+	rows = 0
 	require.NoError(t, ignored.flush(ctx, "", nil, "idx"))
-	require.Len(t, *sqls, 2)
-	require.Contains(t, (*sqls)[0], "DELETE FROM `db`.`ignored_tbl` WHERE `__mo_index_pk` IN (")
-	require.Contains(t, (*sqls)[1], "'bad'")
+	require.Len(t, sqls, 3)
+	total := 0
+	for _, sql := range sqls {
+		require.Contains(t, sql, "DELETE FROM `db`.`ignored_tbl` WHERE `__mo_index_pk` IN (")
+		keys := strings.Count(sql, ",") + 1
+		require.LessOrEqual(t, keys, ignoredSqlBatch)
+		total += keys
+	}
+	require.Equal(t, n+1, total)
 }

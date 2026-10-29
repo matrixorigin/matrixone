@@ -15,6 +15,7 @@
 package hnsw
 
 import (
+	"fmt"
 	"math"
 	"sort"
 	"testing"
@@ -417,4 +418,56 @@ func testNarrowModelSearch[T types.ArrayElement](t *testing.T, storage usearch.Q
 		require.EqualValues(t, i, keys[0], "%T stored as %v", v, storage)
 		require.InDelta(t, 0, distances[0], 1e-3)
 	}
+}
+
+// CheckStorable rejects exactly the vectors ToStorage rejects, for every column element type
+// and every storage kind: an unstorable row is recorded as ignored instead of failing the sync.
+func TestCheckStorableMatchesToStorage(t *testing.T) {
+	values := []float64{0, 1.5, -2, 65504, 65520, -65520, 1e5, -1e5, 3.3e38, 3.4e38, 1e39}
+	kinds := []usearch.Quantization{usearch.F32, usearch.F64, usearch.F16, usearch.BF16, usearch.I8, usearch.U8}
+	bounds := QuantizeBounds{Min: -1e5, Max: 1e5, Set: true}
+	check := func(t *testing.T, name string, vec any) {
+		for _, kind := range kinds {
+			var checkErr, convErr error
+			switch v := vec.(type) {
+			case []float32:
+				checkErr = CheckStorable(v, kind)
+				_, _, convErr = ToStorage(v, kind, bounds)
+			case []float64:
+				checkErr = CheckStorable(v, kind)
+				_, _, convErr = ToStorage(v, kind, bounds)
+			case []types.Float16:
+				checkErr = CheckStorable(v, kind)
+				_, _, convErr = ToStorage(v, kind, bounds)
+			case []types.BF16:
+				checkErr = CheckStorable(v, kind)
+				_, _, convErr = ToStorage(v, kind, bounds)
+			case []int8:
+				checkErr = CheckStorable(v, kind)
+				_, _, convErr = ToStorage(v, kind, bounds)
+			case []uint8:
+				checkErr = CheckStorable(v, kind)
+				_, _, convErr = ToStorage(v, kind, bounds)
+			}
+			require.Equal(t, convErr == nil, checkErr == nil, "%s into %s: check %v, conversion %v", name, kind.String(), checkErr, convErr)
+		}
+	}
+	for _, x := range values {
+		check(t, fmt.Sprintf("f64 %g", x), []float64{x, 1})
+		if f := float32(x); !math.IsInf(float64(f), 0) {
+			check(t, fmt.Sprintf("f32 %g", x), []float32{f, 1})
+		}
+		if b := types.Float32ToBF16Slice([]float32{float32(x)})[0]; !math.IsInf(float64(b.ToFloat32()), 0) {
+			check(t, fmt.Sprintf("bf16 %g", x), []types.BF16{b, types.Float32ToBF16Slice([]float32{1})[0]})
+		}
+		if h := types.Float32ToFloat16Slice([]float32{float32(x)})[0]; !math.IsInf(float64(h.ToFloat32()), 0) {
+			check(t, fmt.Sprintf("f16 %g", x), []types.Float16{h, types.Float32ToFloat16Slice([]float32{1})[0]})
+		}
+	}
+	check(t, "int8", []int8{-128, 127})
+	check(t, "uint8", []uint8{0, 255})
+
+	// the case from the review: a bf16 value beyond the float16 range
+	big := types.Float32ToBF16Slice([]float32{100000, 1})
+	require.Error(t, CheckStorable(big, usearch.F16))
 }

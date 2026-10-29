@@ -48,6 +48,7 @@ func (c *subCompileCtx) ResolveVariable(name string, isSystemVar, isGlobalVar bo
 }
 func (c *subCompileCtx) IsFrontend() bool                 { return true }
 func (c *subCompileCtx) IsTableClone() bool               { return true }
+func (c *subCompileCtx) IsNewIndex(string) bool           { return false }
 func (c *subCompileCtx) OriginalTableDef() *plan.TableDef { return c.tableDef }
 
 func (c *subCompileCtx) RegisterIdxcronUpdate(_ uint64, _, _, _, _ string, metadata []byte) error {
