@@ -421,13 +421,15 @@ func rssPressureCacheTarget(state rssPressureState) int64 {
 */
 
 func (m *memThrottler) Available() int64 {
-	//avail := m.limit.Load() - m.rss.Load() - m.reserved.Load()
+	return m.availableForReserved(m.reserved.Load())
+}
+
+func (m *memThrottler) availableForReserved(reserved int64) int64 {
 
 	var (
-		avail    int64
-		limit    = m.limit.Load()
-		rss      = m.rss.Load()
-		reserved = m.reserved.Load()
+		avail int64
+		limit = m.limit.Load()
+		rss   = m.rss.Load()
 
 		actualMaxMemory = int64(m.actualTotalMemory.Load())
 	)
@@ -601,20 +603,25 @@ func WithAcquirePolicy(
 
 func defaultAcquirePolicy(m *memThrottler, ask int64) (int64, bool) {
 	for {
-		avail := m.Available()
-		if !m.options.allowOutOfMemoryAcquire && avail < ask {
-			return avail, false
-		}
-
-		currReserved := m.reserved.Load()
-		if currReserved < 0 {
-			currReserved = 0
-		}
-		newReserved := currReserved + ask
-		if m.reserved.CompareAndSwap(currReserved, newReserved) {
-			return avail - ask, true
+		observed := m.reserved.Load()
+		left, granted, retry := m.tryAcquire(ask, observed)
+		if !retry {
+			return left, granted
 		}
 	}
+}
+
+// tryAcquire binds the availability check to the reservation committed by CAS.
+func (m *memThrottler) tryAcquire(ask, observed int64) (left int64, granted, retry bool) {
+	reserved := max(0, observed)
+	avail := m.availableForReserved(reserved)
+	if !m.options.allowOutOfMemoryAcquire && avail < ask {
+		return avail, false, false
+	}
+	if !m.reserved.CompareAndSwap(observed, reserved+ask) {
+		return 0, false, true
+	}
+	return avail - ask, true, false
 }
 
 const (
