@@ -1757,6 +1757,32 @@ func TestRewriteHintLayersAndModes(t *testing.T) {
 	}
 }
 
+func TestRewriteHintBackslashModeSemantics(t *testing.T) {
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name, mode, rule string
+	}{
+		{"default", "", `select * from db.t where 'a\\*/b' = 'a\\*/b'`},
+		{"no backslash escapes", "NO_BACKSLASH_ESCAPES", `select * from db.t where 'a\*/b' = 'a\*/b'`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			original, err := parsers.ParseOneWithSQLMode(ctx, dialect.MYSQL, tc.rule, 1, tc.mode)
+			require.NoError(t, err)
+			defer original.Free()
+			hint, err := formatRewriteHintChains(ctx, map[string][]string{"db.t": {tc.rule}}, nil)
+			require.NoError(t, err)
+			sql := hint + "select * from db.t"
+			stmts, err := parsers.ParseWithSQLMode(ctx, dialect.MYSQL, sql, 1, tc.mode)
+			require.NoError(t, err)
+			defer freeStatements(stmts)
+			require.NoError(t, parsers.AddRewriteHintsWithSQLMode(ctx, stmts, sql, tc.mode))
+			chain := stmts[0].(*tree.Select).RewriteOption.Rewrites["db.t"]
+			require.Len(t, chain, 1)
+			require.Equal(t, tree.String(original, dialect.MYSQL), tree.String(chain[0].Stmt, dialect.MYSQL))
+		})
+	}
+}
+
 // TestFormatRewriteHintChains verifies that a single-layer chain is emitted as
 // a plain string (backward compatible) and a multi-layer chain is emitted as an
 // ordered JSON array (innermost first, outermost last).
