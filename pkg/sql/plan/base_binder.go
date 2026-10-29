@@ -4906,6 +4906,18 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 			}
 			b.markPreparedResultCastsProvisional(
 				b.GetContext(), name, astArgs, preparedPeerSources, e, preparedNumericProvenance)
+			// Materialize temporal constants before relocation checks see their
+			// diagnostic flag, without folding unrelated enclosing functions.
+			// PREPARE retains sources for EXECUTE-time zero-date policy.
+			if !b.builder.isPrepareStatement && !defines.IsPublicationViewBinding(b.GetContext()) {
+				proc := b.builder.compCtx.GetProcess()
+				e = foldTemporalTextConstant(proc, e)
+				if fn := e.GetF(); fn != nil {
+					for i, arg := range fn.Args {
+						fn.Args[i] = foldTemporalTextConstant(proc, arg)
+					}
+				}
+			}
 			return e, nil
 		}
 		if !strings.Contains(err.Error(), "not supported") {
@@ -5659,6 +5671,19 @@ func rewriteFindInSetSetProvenance(
 	rewritten = append(rewritten, args[0], bitmap)
 	rewritten = append(rewritten, makePlan2StringConstExprWithType(storageType.Enumvalues))
 	return rewritten, true, nil
+}
+
+// Children were already bound; only the temporal call itself and casts added
+// by the current overload resolver need a warning-free materialization proof.
+func foldTemporalTextConstant(proc *process.Process, expr *Expr) *Expr {
+	if !function.IsTemporalTextDiagnosticCall(expr) {
+		return expr
+	}
+	folded, err := ConstantFold(batch.EmptyForConstFoldBatch, DeepCopyExpr(expr), proc, false, true)
+	if err != nil || folded == nil {
+		return expr
+	}
+	return folded
 }
 
 func bindFuncExprAndConstFold(ctx context.Context, proc *process.Process, name string, args []*Expr) (*plan.Expr, error) {
@@ -9101,6 +9126,11 @@ func bindFuncExprImplByPlanExpr(
 				}
 				if isPadSpaceComparisonFunction(name) &&
 					argsType[idx].Oid == types.T_char && castType.Oid == types.T_varchar {
+					args[idx], err = appendComparisonCastBeforeExpr(ctx, args[idx], typ)
+				} else if (isDecimalComparisonOperator(name) || name == "between") &&
+					argsType[idx].Oid.IsMySQLString() && castType.Oid == types.T_time {
+					// A TIME column's string boundary retains comparison policy;
+					// expression CAST's invalid-to-NULL behavior does not apply.
 					args[idx], err = appendComparisonCastBeforeExpr(ctx, args[idx], typ)
 				} else if name == "char" &&
 					(argsType[idx].Oid == types.T_float32 || argsType[idx].Oid == types.T_float64) &&

@@ -506,3 +506,94 @@ func TestScalarWarningUTF8Boundary(t *testing.T) {
 		})
 	}
 }
+
+func TestTemporalTextWarnings(t *testing.T) {
+	for _, mode := range []string{"", "STRICT_TRANS_TABLES"} {
+		for _, tc := range []struct {
+			name   string
+			fn     executeLogicOfOverload
+			format bool
+		}{
+			{"date", DateStringToDate, false}, {"date_format", DateFormat, true},
+		} {
+			t.Run(mode+"/"+tc.name, func(t *testing.T) {
+				proc := testutil.NewProcess(t)
+				defer proc.Free()
+				proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) { return mode, nil })
+				sink := &numericWarningSession{}
+				proc.WarningSink = sink
+				inputs := []FunctionTestInput{NewFunctionTestInput(types.T_varchar.ToType(), []string{"", "2024-02-30", "2024-02-29", ""}, []bool{false, false, false, true})}
+				if tc.format {
+					inputs = append(inputs, NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"%Y-%m-%d"}, nil))
+				}
+				var result FunctionTestResult
+				if tc.format {
+					result = NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"", "", "2024-02-29", ""}, []bool{true, true, false, true})
+				} else {
+					result = NewFunctionTestResult(types.T_date.ToType(), false, []types.Date{0, 0, types.DateFromCalendar(2024, 2, 29), 0}, []bool{true, true, false, true})
+				}
+				test := NewFunctionTestCase(proc, inputs, result, tc.fn)
+				ok, info := test.RunAndFree()
+				require.True(t, ok, info)
+				require.Len(t, sink.warnings, 2)
+				for i, value := range []string{"", "2024-02-30"} {
+					require.Equal(t, uint16(moerr.ER_TRUNCATED_WRONG_VALUE), sink.warnings[i].code)
+					require.Equal(t, "Incorrect datetime value: '"+value+"'", sink.warnings[i].msg)
+				}
+			})
+		}
+	}
+}
+
+func TestTemporalCastWarnings(t *testing.T) {
+	for _, mode := range []string{"", "STRICT_TRANS_TABLES"} {
+		for _, tc := range []struct {
+			name   string
+			fn     executeLogicOfOverload
+			target types.T
+		}{
+			{"date", NewCast, types.T_date}, {"date explicit", NewExplicitCast, types.T_date},
+			{"datetime", NewCast, types.T_datetime}, {"datetime explicit", NewExplicitCast, types.T_datetime},
+			{"time", NewCast, types.T_time}, {"time explicit", NewExplicitCast, types.T_time},
+		} {
+			t.Run(mode+"/"+tc.name, func(t *testing.T) {
+				proc := testutil.NewProcess(t)
+				defer proc.Free()
+				proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) { return mode, nil })
+				sink := &numericWarningSession{}
+				proc.WarningSink = sink
+				values := []string{"", "bad", "2024-02-29"}
+				if tc.target == types.T_time {
+					values[2] = "12:34:56xyz"
+				}
+				input := testutil.MakeVarcharVector(values, nil, proc.Mp())
+				defer input.Free(proc.Mp())
+				typ := tc.target.ToType()
+				target := vector.NewConstNull(typ, 3, proc.Mp())
+				defer target.Free(proc.Mp())
+				result := vector.NewFunctionResultWrapper(typ, proc.Mp())
+				defer result.Free()
+				require.NoError(t, result.PreExtendAndReset(3))
+				require.NoError(t, tc.fn([]*vector.Vector{input, target}, result, proc, 3, nil))
+				v := result.GetResultVector()
+				require.True(t, v.GetNulls().Contains(0))
+				require.True(t, v.GetNulls().Contains(1))
+				require.False(t, v.GetNulls().Contains(2))
+				want := 2
+				prefix := "Incorrect datetime value"
+				if tc.target == types.T_time {
+					want = 3
+					prefix = "Truncated incorrect time value"
+					parsed, err := types.ParseTime("12:34:56", 0)
+					require.NoError(t, err)
+					require.Equal(t, parsed, vector.MustFixedColNoTypeCheck[types.Time](v)[2])
+				}
+				require.Len(t, sink.warnings, want)
+				for i := 0; i < want; i++ {
+					require.Equal(t, uint16(moerr.ER_TRUNCATED_WRONG_VALUE), sink.warnings[i].code)
+					require.Equal(t, prefix+": '"+values[i]+"'", sink.warnings[i].msg)
+				}
+			})
+		}
+	}
+}
