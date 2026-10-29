@@ -815,10 +815,13 @@ class BaseMatrixOneQuery:
                 self._table_name = model_class
                 self._columns = {}
             elif self._is_sqlalchemy_model:
-                self._table_name = _model_table_name(model_class)
                 from sqlalchemy import inspect
 
-                mapper = inspect(model_class).mapper
+                inspected = inspect(model_class)
+                # The selectable owns alias identity and is rendered only when
+                # building a statement, inside its binding scope.
+                self._table_name = None if inspected.is_aliased_class else _model_table_name(model_class)
+                mapper = inspected.mapper
                 self._columns = {prop.key: getattr(model_class, prop.key) for prop in mapper.column_attrs}
             else:
                 # Fallback to class name for non-SQLAlchemy model objects.
@@ -918,6 +921,20 @@ class BaseMatrixOneQuery:
             compiler_dialect=dialect,
         )
         if predicate:
+            if type(expression) is LogicalIn:
+                if params:
+                    raise ValueError('SQLAlchemy expressions carry their own parameters')
+
+                def source():
+                    return self._table_target() if self._root_selectable is not None else None
+
+                return expression.compile(
+                    model=self.model_class,
+                    alias=self._table_alias,
+                    table=self._table_name,
+                    _table_supplier=source,
+                    _column_compiler=lambda column: self._compile(column, join_limit=join_limit),
+                )
             return compile_predicate(expression, params, self.model_class, self._table_alias, **context)
         return compile_expression(expression, self.model_class, self._table_alias, projection, **context)
 
@@ -1160,13 +1177,7 @@ class BaseMatrixOneQuery:
         return self.filter(condition, *params)
 
     def logical_in(self, column, values):
-        self._append_clause(
-            '_where_conditions',
-            lambda: LogicalIn(column, values).compile(
-                model=self.model_class, alias=self._table_alias, table=self._table_name
-            ),
-        )
-        return self
+        return self.filter(LogicalIn(column, values))
 
     def order_by(self, *columns):
         for column in columns:
@@ -2160,16 +2171,21 @@ class LogicalIn:
     def compile_for_query(self, model, alias):
         return self.compile(model=model, alias=alias, table=model if isinstance(model, str) else None)
 
-    def compile(self, compile_kwargs=None, model=None, alias=None, table=None):
-        column = compile_expression(self.column, model, alias) if hasattr(self.column, 'compile') else str(self.column)
+    def compile(
+        self, compile_kwargs=None, model=None, alias=None, table=None, _table_supplier=None, _column_compiler=None
+    ):
+        if hasattr(self.column, 'compile'):
+            column = (
+                _column_compiler(self.column) if _column_compiler else compile_expression(self.column, model, alias)
+            )
+        else:
+            column = str(self.column)
         values = self.values
         if hasattr(values, 'query_builder'):
-            body = (
-                'SELECT id FROM '
-                + sql_identifier(table or getattr(model, '__tablename__', None) or 'table', qualified=True)
-                + ' WHERE '
-                + compile_expression(values)
-            )
+            source = _table_supplier() if _table_supplier is not None else None
+            if source is None:
+                source = sql_identifier(table or getattr(model, '__tablename__', None) or 'table', qualified=True)
+            body = 'SELECT id FROM ' + source + ' WHERE ' + compile_expression(values)
         elif hasattr(values, '_build_sql'):
             sql, params = values._build_sql()
             body = substitute_parameters(sql, params)

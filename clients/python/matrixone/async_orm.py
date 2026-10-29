@@ -38,7 +38,10 @@ class AsyncMatrixOneQuery(BaseMatrixOneQuery):
         from ._sql_literals import sql_identifier
 
         if self._source_selectable is not None:
+            from sqlalchemy import table as sqlalchemy_table
+            from sqlalchemy.sql.elements import _anonymous_label, quoted_name
             from sqlalchemy.sql.selectable import AliasedReturnsRows, TableClause
+            from ._query_compilation import compile_from
 
             physical = self._source_selectable
             while isinstance(physical, AliasedReturnsRows):
@@ -47,9 +50,15 @@ class AsyncMatrixOneQuery(BaseMatrixOneQuery):
                 raise ValueError('Explicit database requires a physical table source')
             if physical.schema and physical.schema != self.database:
                 raise ValueError('Explicit database conflicts with mapped table schema')
-            qualified = sql_identifier(self.database) + '.' + sql_identifier(physical.name)
+            database_sql, table_sql = sql_identifier(self.database), sql_identifier(physical.name)
+            qualified = database_sql + '.' + table_sql
             if self._root_selectable is not physical:
-                qualified += ' AS ' + sql_identifier(self._root_selectable.name)
+                name = self._root_selectable.name
+                if not isinstance(name, _anonymous_label):
+                    return qualified + ' AS ' + sql_identifier(name)
+                name_in_db = quoted_name(str(physical.name), table_sql.startswith('`'))
+                database = quoted_name(str(self.database), database_sql.startswith('`'))
+                return compile_from(sqlalchemy_table(name_in_db, schema=database).alias(name))
             return qualified
         table = super()._qualified_table_name()
         if not table:

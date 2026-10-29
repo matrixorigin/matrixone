@@ -3,6 +3,7 @@
 """Compare builder semantics with SQLAlchemy using one immutable SQLite fixture."""
 
 import asyncio
+from inspect import isawaitable
 from unittest.mock import Mock
 
 import pytest
@@ -11,7 +12,8 @@ from sqlalchemy.exc import InvalidRequestError
 from sqlalchemy.orm import aliased, declarative_base
 
 from matrixone import AsyncClient, Client
-from matrixone.client import Session as LegacySession
+from matrixone.client import ResultSet, Session as LegacySession
+from matrixone.orm import LogicalIn, logical_in
 from matrixone.session import AsyncSession, Session
 from matrixone._query_compilation import compile_expression, statement_compilation
 
@@ -76,6 +78,334 @@ def owner(request):
 def execute(rows, query):
     sql, parameters = query._build_sql()
     return rows.exec_driver_sql(sql, tuple(parameters)).all()
+
+
+def connect_owner_to_rows(owner, rows):
+    calls = []
+
+    def dispatch(sql, parameters=None):
+        calls.append(sql)
+        result = rows.exec_driver_sql(sql, tuple(parameters or ()))
+        return ResultSet(list(result.keys()), result.all())
+
+    async def async_dispatch(sql, parameters=None):
+        return dispatch(sql, parameters)
+
+    owner.execute = async_dispatch if isinstance(owner, (AsyncClient, AsyncSession)) else dispatch
+    return calls
+
+
+async def resolve(value):
+    return await value if isawaitable(value) else value
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('alias_form', ['named', 'anonymous', 'realias'])
+async def test_derived_alias_binds_are_deferred_and_refreshed_per_public_execution(rows, owner, alias_form):
+    calls = []
+    bound = bindparam('threshold', callable_=lambda: calls.append(len(calls) + 1) or calls[-1], type_=Integer)
+    name = None if alias_form == 'anonymous' else 'derived'
+    parent = aliased(Parent, select(Parent).where(Parent.id > bound).subquery(name))
+    connect_owner_to_rows(owner, rows)
+    query = owner.query(parent).order_by(parent.id)
+    if alias_form == 'realias':
+        query.alias('renamed')
+    assert calls == []
+    assert [row.id for row in await resolve(query.all())] == [2, 3]
+    assert calls == [1]
+    assert [row.id for row in await resolve(query.all())] == [3]
+    assert calls == [1, 2]
+
+
+@pytest.mark.asyncio
+async def test_derived_alias_required_default_and_null_binds(rows, owner):
+    calls = []
+
+    def dispatch(sql, parameters=None):
+        calls.append(sql)
+        result = rows.exec_driver_sql(sql, tuple(parameters or ()))
+        return ResultSet(list(result.keys()), result.all())
+
+    async def async_dispatch(sql, parameters=None):
+        return dispatch(sql, parameters)
+
+    owner.execute = async_dispatch if isinstance(owner, (AsyncClient, AsyncSession)) else dispatch
+
+    def mapped_alias(bound):
+        return aliased(Parent, select(Parent).where(Parent.id > bound).subquery('derived'))
+
+    missing = mapped_alias(bindparam('threshold', required=True, type_=Integer))
+    query = owner.query(missing)
+    with pytest.raises(InvalidRequestError, match='threshold'):
+        await resolve(query.all())
+    assert calls == []
+    for value, expected in ((1, [2, 3]), (None, [])):
+        parent = mapped_alias(bindparam('threshold', value, type_=Integer))
+        query = owner.query(parent).order_by(parent.id)
+        assert [row.id for row in await resolve(query.all())] == expected
+    assert len(calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_derived_alias_mutations_reject_before_callable_or_dispatch(rows, owner):
+    calls = []
+    bound = bindparam('threshold', callable_=lambda: calls.append('bind') or 1, type_=Integer)
+    parent = aliased(Parent, select(Parent).where(Parent.id > bound).subquery('derived'))
+    owner.execute = Mock(side_effect=AssertionError('must reject before execution'))
+    for operation in ('update', 'delete'):
+        query = owner.query(parent)
+        with pytest.raises(ValueError, match='Derived query sources'):
+            await resolve(query.update(id=9).execute() if operation == 'update' else query.delete())
+    assert calls == []
+    owner.execute.assert_not_called()
+    assert rows.exec_driver_sql('SELECT id FROM context_parent ORDER BY id').all() == [(1,), (2,), (3,)]
+
+
+def test_derived_alias_shares_bind_and_isolates_reentrant_query(rows):
+    client = Client()
+    connect_owner_to_rows(client, rows)
+    calls, inner_values = [], []
+
+    def value():
+        inner_values.append(client.query(Parent).select(bindparam('threshold', 9)).filter(Parent.id == 1).scalar())
+        calls.append(len(calls) + 1)
+        return calls[-1]
+
+    shared = bindparam('threshold', callable_=value, type_=Integer)
+    parent = aliased(Parent, select(Parent).where(Parent.id > shared).subquery('derived'))
+    query = client.query(parent, shared.label('value')).order_by(parent.id)
+    assert calls == inner_values == []
+    assert [tuple(row) for row in query.all()] == [(2, 1), (3, 1)]
+    assert [tuple(row) for row in query.all()] == [(3, 2)]
+    assert calls == [1, 2] and inner_values == [9, 9]
+
+
+def test_derived_alias_failed_callable_does_not_leak_scope(rows):
+    client = Client()
+    dispatches = connect_owner_to_rows(client, rows)
+    calls = []
+
+    def value():
+        calls.append('called')
+        if len(calls) == 1:
+            raise RuntimeError('callable failed')
+        return 1
+
+    parent = aliased(Parent, select(Parent).where(Parent.id > bindparam('threshold', callable_=value)).subquery('s'))
+    query = client.query(parent).order_by(parent.id)
+    assert calls == []
+    with pytest.raises(RuntimeError, match='callable failed'):
+        query.all()
+    assert dispatches == []
+    assert [row.id for row in query.all()] == [2, 3]
+    assert calls == ['called', 'called']
+    assert len(dispatches) == 1
+
+
+def test_derived_alias_logical_in_does_not_compile_list_source_twice(rows):
+    calls = []
+    bound = bindparam('threshold', callable_=lambda: calls.append(1) or 1, type_=Integer)
+    parent = aliased(Parent, select(Parent).where(Parent.id > bound).subquery('derived'))
+    query = Client().query(parent).logical_in(parent.id, [2, 3])
+    assert calls == []
+    assert execute(rows, query) == [(2,), (3,)]
+    assert calls == [1]
+
+
+def test_derived_alias_fulltext_source_uses_the_statement_bind_scope():
+    from matrixone.sqlalchemy_ext.fulltext_search import boolean_match
+
+    calls = []
+    bound = bindparam('threshold', callable_=lambda: calls.append(len(calls) + 1) or calls[-1], type_=Integer)
+    parent = aliased(Parent, select(Parent).where(Parent.id > bound).subquery('derived'))
+    query = Client().query(parent).logical_in(parent.id, boolean_match('id').must('term'))
+    assert calls == []
+    sql, _ = query._build_sql()
+    assert 'MATCH(id)' in sql and calls == [1]
+    sql, _ = query._build_sql()
+    assert 'MATCH(id)' in sql and calls == [1, 2]
+
+
+def test_alias_fulltext_filter_attribute_is_checked_once():
+    from matrixone.sqlalchemy_ext.fulltext_search import boolean_match
+
+    class Filter:
+        def __init__(self):
+            self.filter = boolean_match('id').must('term')
+            self.lookups = 0
+
+        @property
+        def query_builder(self):
+            self.lookups += 1
+            if self.lookups > 1:
+                raise RuntimeError('query_builder accessed twice')
+            return self.filter.query_builder
+
+        def compile(self, **kwargs):
+            return self.filter.compile(**kwargs)
+
+    parent, value = aliased(Parent, name='p'), Filter()
+    query = Client().query(parent).logical_in(parent.id, value)
+    assert 'MATCH(id)' in query.to_sql()
+    assert value.lookups == 1
+
+
+@pytest.mark.parametrize('inferred', [False, True])
+@pytest.mark.parametrize('method', ['logical_in', 'filter'])
+@pytest.mark.parametrize('realias', [False, True])
+@pytest.mark.parametrize('column_kind', ['expression', 'string'])
+def test_logical_in_uses_current_derived_source(rows, inferred, method, realias, column_kind):
+    class Predicate:
+        query_builder = object()
+
+        def compile(self, **kwargs):
+            return 'id > 11'
+
+    calls = []
+    bound = bindparam('threshold', callable_=lambda: calls.append(len(calls) + 1) or calls[-1], type_=Integer)
+    source = select((Parent.id + 10).label('id')).where(Parent.id > bound).subquery('derived')
+    parent = aliased(Parent, source, adapt_on_names=True)
+    query = Client().query(parent.id if inferred else parent).select(parent.id).order_by(parent.id)
+    column = parent.id if column_kind == 'expression' else 'id'
+    if method == 'logical_in':
+        query.logical_in(column, Predicate())
+    else:
+        query.filter(logical_in(column, Predicate()))
+    if realias:
+        query.alias('renamed')
+    assert calls == []
+    assert execute(rows, query) == [(12,), (13,)] and calls == [1]
+    assert execute(rows, query) == [(13,)] and calls == [1, 2]
+
+
+def test_logical_in_fulltext_alias_rendering_and_extension_controls():
+    from matrixone.sqlalchemy_ext.fulltext_search import boolean_match
+
+    parent = aliased(Parent, name='p')
+    for method in ('logical_in', 'filter'):
+        query = Client().query(parent)
+        condition = boolean_match('id').must('term')
+        query = (
+            query.logical_in('id', condition) if method == 'logical_in' else query.filter(logical_in('id', condition))
+        )
+        sql = query.to_sql()
+        assert 'SELECT id FROM context_parent AS p WHERE MATCH(id)' in sql
+
+    class CustomLogicalIn(LogicalIn):
+        def compile_for_query(self, model, alias):
+            return '1=1'
+
+    assert 'WHERE 1=1' in Client().query(Parent).filter(CustomLogicalIn('id', [])).to_sql()
+    with pytest.raises(ValueError, match='carry their own parameters'):
+        Client().query(Parent).filter(logical_in('id', [1]), 1).to_sql()
+    sql = Client().query('odd;table').logical_in('id', boolean_match('id').must('term')).to_sql()
+    assert 'SELECT id FROM `odd;table` WHERE MATCH(id)' in sql
+
+
+@pytest.mark.parametrize('method', ['logical_in', 'filter'])
+def test_logical_in_retains_quoted_schema_and_table(rows, method):
+    class Predicate:
+        query_builder = object()
+
+        def compile(self, **kwargs):
+            return 'id > 1'
+
+    base = declarative_base()
+
+    class Dotted(base):
+        __tablename__ = 'odd.table'
+        __table_args__ = {'schema': 'main'}
+        id = Column(Integer, primary_key=True)
+
+    base.metadata.create_all(rows)
+    try:
+        rows.execute(Dotted.__table__.insert(), [{'id': 1}, {'id': 2}])
+        source = aliased(Dotted, name='order')
+        query = Client().query(source).select(source.id)
+        if method == 'logical_in':
+            query.logical_in(source.id, Predicate())
+        else:
+            query.filter(logical_in(source.id, Predicate()))
+        sql, _ = query._build_sql()
+        assert 'SELECT id FROM main.`odd.table` AS `order` WHERE' in sql
+        assert execute(rows, query) == [(2,)]
+    finally:
+        base.metadata.drop_all(rows)
+
+
+@pytest.mark.parametrize('alias_name', [None, 'named', 'order', 'name.with.dot'])
+@pytest.mark.parametrize('realias', [False, True])
+def test_async_explicit_database_renders_physical_alias_identity(rows, alias_name, realias):
+    from matrixone.async_orm import AsyncMatrixOneQuery
+
+    parent = aliased(Parent, name=alias_name)
+    query = AsyncMatrixOneQuery(parent, AsyncClient(), database='main').select(parent.id).order_by(parent.id)
+    if realias:
+        query.alias('renamed')
+    assert execute(rows, query) == [(1,), (2,), (3,)]
+
+
+@pytest.mark.asyncio
+async def test_async_explicit_database_anonymous_alias_public_result(rows):
+    from matrixone.async_orm import AsyncMatrixOneQuery
+
+    parent = aliased(Parent)
+    client = AsyncClient()
+    connect_owner_to_rows(client, rows)
+    query = AsyncMatrixOneQuery(parent, client, database='main').order_by(parent.id)
+    assert [row.id for row in await query.all()] == [1, 2, 3]
+
+
+def test_async_explicit_database_quotes_reserved_physical_name(rows):
+    from sqlalchemy.sql.elements import quoted_name
+    from matrixone.async_orm import AsyncMatrixOneQuery
+
+    base = declarative_base()
+
+    class Reserved(base):
+        __tablename__ = quoted_name('select', False)
+        id = Column(Integer, primary_key=True)
+
+    rows.exec_driver_sql('CREATE TABLE "select" (id INTEGER PRIMARY KEY)')
+    try:
+        rows.exec_driver_sql('INSERT INTO "select" VALUES (1)')
+        for name in ('p', None):
+            parent = aliased(Reserved, name=name)
+            assert execute(rows, AsyncMatrixOneQuery(parent, AsyncClient(), database='main')) == [(1,)]
+    finally:
+        rows.exec_driver_sql('DROP TABLE "select"')
+
+
+def test_async_explicit_database_keeps_explicit_alias_identifier_quoting(rows):
+    from sqlalchemy.sql.elements import quoted_name
+    from matrixone.async_orm import AsyncMatrixOneQuery
+
+    parent = aliased(Parent, name=quoted_name('alias; select 1', False))
+    query = AsyncMatrixOneQuery(parent, AsyncClient(), database='main').select('id')
+    sql, _ = query._build_sql()
+    assert 'AS `alias; select 1`' in sql
+    assert execute(rows, query) == [(1,), (2,), (3,)]
+
+
+def test_async_explicit_database_accepts_long_anonymous_source(rows):
+    from matrixone.async_orm import AsyncMatrixOneQuery
+
+    base = declarative_base()
+
+    class LongName(base):
+        __tablename__ = 't' * 64
+        id = Column(Integer, primary_key=True)
+
+    base.metadata.create_all(rows)
+    try:
+        rows.execute(LongName.__table__.insert(), [{'id': 1}])
+        parent = aliased(LongName)
+        query = AsyncMatrixOneQuery(parent, AsyncClient(), database='main').select(parent.id)
+        assert execute(rows, query) == [(1,)]
+        with pytest.raises(ValueError, match='1..64'):
+            execute(rows, AsyncMatrixOneQuery(aliased(LongName, name='x' * 65), AsyncClient(), database='main'))
+    finally:
+        base.metadata.drop_all(rows)
 
 
 def test_alias_root_target_chain_and_realias_share_one_identity(rows, owner):
