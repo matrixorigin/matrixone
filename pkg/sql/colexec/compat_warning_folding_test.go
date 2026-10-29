@@ -148,6 +148,37 @@ func TestTemporalWarningsFollowSelectedRows(t *testing.T) {
 	require.Equal(t, 3, sink.warningCount)
 }
 
+func TestTemporalMixedRowsWithSelection(t *testing.T) {
+	proc := testutil.NewProcess(t, testutil.WithFileService(nil))
+	defer proc.Free()
+	proc.SetStmtProfile(&process.StmtProfile{})
+	proc.GetStmtProfile().SetStatementRuntimeProfile("Select", "DQL", false)
+	proc.SetBaseProcessRunningStatus(true)
+	sink := &preparedCastWarningSession{}
+	proc.WarningSink = sink
+	col := &plan.Expr{Typ: types.T_varchar.ToType().PlanType(), Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}}
+	expr := bindTestCast(t, proc, 0, col, types.T_time.ToType())
+	executor, err := NewExpressionExecutor(proc, expr)
+	require.NoError(t, err)
+	defer executor.Free()
+	b := batch.NewWithSize(1)
+	defer b.Clean(proc.Mp())
+	b.Vecs[0] = testutil.MakeVarcharVector([]string{"bad", "12:34:56", "", "bad"}, []uint64{2}, proc.Mp())
+	b.SetRowCount(4)
+	result, err := executor.Eval(proc, []*batch.Batch{b}, []bool{true, true, true, false})
+	require.NoError(t, err)
+	require.True(t, result.GetNulls().Contains(0))
+	require.False(t, result.GetNulls().Contains(1))
+	require.True(t, result.GetNulls().Contains(2))
+	want, err := types.ParseTime("12:34:56", 0)
+	require.NoError(t, err)
+	require.Equal(t, want, vector.MustFixedColNoTypeCheck[types.Time](result)[1])
+	require.Equal(t, 1, sink.warningCount)
+	_, err = executor.Eval(proc, []*batch.Batch{b}, nil)
+	require.NoError(t, err)
+	require.Equal(t, 3, sink.warningCount)
+}
+
 func TestTemporalOwnedFilterRespectsRowGuard(t *testing.T) {
 	proc := testutil.NewProcess(t, testutil.WithFileService(nil))
 	defer proc.Free()
