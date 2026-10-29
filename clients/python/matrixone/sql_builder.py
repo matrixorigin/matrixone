@@ -20,6 +20,7 @@ code duplication across different interfaces (ORM, Vector Search, Pinecone, etc.
 """
 
 from ._query_compilation import conjoin_conditions
+from ._sql_literals import sql_string_token
 
 from enum import Enum
 from typing import Any, Dict, List, Optional, Tuple, Union
@@ -440,7 +441,7 @@ class MatrixOneSQLBuilder:
         if self._from_table:
             from_clause = f"FROM {self._from_table}"
             if self._from_snapshot:
-                from_clause += f"{{snapshot = '{self._from_snapshot}'}}"
+                from_clause += f"{{snapshot = {sql_string_token(self._from_snapshot, context='Snapshot')}}}"
             sql_parts.append(from_clause)
 
         # Build JOIN clauses
