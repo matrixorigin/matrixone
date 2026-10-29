@@ -6,6 +6,20 @@ optional: core imports, ordinary queries and sessions do not import it. Install
 Core Python 3.8 does not provide Arrow analytics. File paths are shared paths,
 not an implicit file transfer, Arrow Flight or a zero-copy transport.
 
+Query builders preserve SQLAlchemy aliases and correlated subqueries. Required
+binds need a value; an explicit `None` sends SQL NULL. Reusing one callable bind
+across clauses evaluates it once per statement, including through CTEs, and
+reevaluates it on the next execution. Conflicting same-name bind definitions
+across fragments reject before execution: use distinct names, reuse one bind,
+or execute a complete SQLAlchemy statement for its binding precedence. Supply
+SQLAlchemy join targets when a subquery needs JOIN correlation; the builder
+cannot infer that context from raw JOIN strings.
+
+Shorthand table definitions preserve `datetime(6)`, `timestamp(3)` and `time(6)`.
+`database.table` and explicitly quoted atomic names address the same object for
+creation and DROP. SQLAlchemy reflection also recognizes existing F16, BF16,
+INT8 and UINT8 vectors; Arrow support is qualified separately.
+
 SQLAlchemy 1.4.24 or newer is required: projection inference uses
 `Select.get_final_froms()` (1.4.23), and native async streams use the public
 `driver_connection` accessor (1.4.24). SQLAlchemy 2.1 itself requires Python

@@ -176,8 +176,10 @@ class Stage:
                     # Fallback to generic file loading
                     from .load_data import LoadDataManager
 
-                    results[filepath] = LoadDataManager(self._client).from_stage(
-                        self.name, filepath, table_model, **kwargs
+                    from ._utils import stage_file_uri
+
+                    results[filepath] = LoadDataManager(self._client).from_file(
+                        stage_file_uri(self.name, filepath), table_model, **kwargs
                     )
             except Exception as e:
                 # Store error in results for debugging

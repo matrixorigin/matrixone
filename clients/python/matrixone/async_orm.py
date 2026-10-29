@@ -33,26 +33,37 @@ class AsyncMatrixOneQuery(BaseMatrixOneQuery):
         self.database = database
 
     def _qualified_table_name(self):
-        table = super()._qualified_table_name()
         if not self.database:
-            return table
+            return super()._qualified_table_name()
         from ._sql_literals import sql_identifier
 
-        if any((cte.get('name') if isinstance(cte, dict) else cte.name) == table for cte in self._ctes):
-            return table  # A CTE is a statement-local relation, not a schema table.
+        if self._source_selectable is not None:
+            from sqlalchemy.sql.selectable import AliasedReturnsRows, TableClause
+
+            physical = self._source_selectable
+            while isinstance(physical, AliasedReturnsRows):
+                physical = physical.element
+            if not isinstance(physical, TableClause):
+                raise ValueError('Explicit database requires a physical table source')
+            if physical.schema and physical.schema != self.database:
+                raise ValueError('Explicit database conflicts with mapped table schema')
+            qualified = sql_identifier(self.database) + '.' + sql_identifier(physical.name)
+            if self._root_selectable is not physical:
+                qualified += ' AS ' + sql_identifier(self._root_selectable.name)
+            return qualified
+        table = super()._qualified_table_name()
         if not table:
             return table
-        mapped_table = getattr(self.model_class, '__table__', None)
-        if mapped_table is not None:
-            if mapped_table.schema and mapped_table.schema != self.database:
-                raise ValueError('Explicit database conflicts with mapped table schema')
-            return sql_identifier(self.database) + '.' + sql_identifier(mapped_table.name)
-        parts = table.split('.')
+        if any(sql_identifier(cte.get('name') if isinstance(cte, dict) else cte.name) == table for cte in self._ctes):
+            return table  # A CTE is statement-local, never a database table.
+        from ._sql_literals import identifier_parts
+
+        parts = identifier_parts(table, qualified=True)
         if len(parts) > 1:
             if len(parts) != 2 or parts[0] != self.database:
                 raise ValueError('Explicit database conflicts with qualified table name')
-            return sql_identifier(table, qualified=True)
-        return sql_identifier(self.database) + '.' + sql_identifier(table)
+            return '.'.join(sql_identifier(part) for part in parts)
+        return sql_identifier(self.database) + '.' + sql_identifier(parts[0])
 
     async def _execute(self, sql, params=None):
         """Execute SQL using either transaction wrapper or client asynchronously"""

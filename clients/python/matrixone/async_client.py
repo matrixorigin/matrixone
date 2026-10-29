@@ -2088,13 +2088,9 @@ class AsyncClient(BaseMatrixOneClient):
         if not self._engine:
             raise ConnectionError("Not connected to database")
 
-        # Handle model class input
-        if hasattr(table_name_or_model, '__tablename__'):
-            # It's a model class
-            table_name = table_name_or_model.__tablename__
-        else:
-            # It's a table name string
-            table_name = table_name_or_model
+        from ._utils import get_table_name
+
+        table_name = get_table_name(table_name_or_model, quoted=True)
 
         sql = f"DROP TABLE IF EXISTS {table_name}"
         await self.execute(sql)

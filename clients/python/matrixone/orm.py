@@ -29,7 +29,16 @@ This provides better type safety and integration with SQLAlchemy.
 from __future__ import annotations
 
 import logging
-from ._query_compilation import conjoin_conditions, compile_expression, compile_predicate, compile_from
+from ._query_compilation import (
+    conjoin_conditions,
+    compile_expression,
+    compile_predicate,
+    compile_from,
+    selectable_of,
+    statement_compilation,
+    compile_cte,
+    normalize_expression,
+)
 from ._sql_literals import sql_identifier, sql_literal, substitute_parameters
 from copy import copy
 from typing import Any, Dict, List, Optional, TypeVar
@@ -129,7 +138,7 @@ def create_query(query_type, client, columns, snapshot=None, transaction_wrapper
                 getattr(item, inspected.mapper.get_property_by_column(c).key) for c in inspected.mapper.columns
             )
         else:
-            projection.append(item)
+            projection.append(normalize_expression(item))
     query = query_type(model, client, transaction_wrapper=transaction_wrapper, snapshot=snapshot)
     if len(columns) == 1 and model is first:
         return query
@@ -138,7 +147,8 @@ def create_query(query_type, client, columns, snapshot=None, transaction_wrapper
         expressions = [item for item in projection if not isinstance(item, str)]
         sources = select(*expressions).get_final_froms() if expressions else []
         if len(sources) == 1:
-            query._table_name = compile_from(sources[0])
+            query._source_selectable = query._root_selectable = sources[0]
+            query._table_name = getattr(sources[0], 'name', None)
         elif len(sources) > 1:
             raise ValueError('Ambiguous query sources; provide a model and explicit JOIN')
         else:
@@ -728,23 +738,12 @@ class CTE:
         self.name = name
         self.query = query
         self.recursive = recursive
-        self._sql = None
-        self._params = None
 
     def _compile(self):
         """Compile the CTE query to SQL"""
-        if self._sql is None:
-            if hasattr(self.query, "_build_sql"):
-                # This is a BaseMatrixOneQuery object
-                self._sql, self._params = self.query._build_sql()
-            elif isinstance(self.query, str):
-                # This is a raw SQL string
-                self._sql = self.query
-                self._params = []
-            else:
-                raise ValueError("CTE query must be a BaseMatrixOneQuery object or SQL string")
-        return self._sql, self._params
+        return compile_cte(self)
 
+    @statement_compilation
     def as_sql(self) -> tuple[str, list]:
         """Get the compiled SQL and parameters for this CTE"""
         return self._compile()
@@ -785,7 +784,9 @@ class BaseMatrixOneQuery:
         self._where_conditions = []
         self._where_params = []
         self._group_by_columns = []
-        self._clause_sources = []
+        self._source_selectable = selectable_of(model_class)
+        self._root_selectable = self._source_selectable
+        self._joined_selectables = []
         self._having_conditions = []
         self._having_params = []
         self._order_by_columns = []
@@ -825,26 +826,109 @@ class BaseMatrixOneQuery:
                 self._columns = getattr(model_class, "_columns", {})
 
     def _qualified_table_name(self):
+        if self._root_selectable is not None:
+            return compile_from(self._root_selectable)
         return self._table_name
 
     def _table_target(self):
         table = self._qualified_table_name()
         if not table:
             raise ValueError("Table name is required. Provide a model class or set table name manually.")
+        if self._root_selectable is not None:
+            return table
         return f"{table} AS {sql_identifier(self._table_alias)}" if self._table_alias else table
 
     def _append_clause(self, attribute, render):
-        clauses = getattr(self, attribute)
-        value = render()
-        self._clause_sources.append((attribute, len(clauses), render))
-        clauses.append(value)
+        # One source of truth. SQLAlchemy expressions are compiled only when
+        # their enclosing statement and all its sources are known.
+        getattr(self, attribute).append(render)
 
-    def _refresh_clauses(self):
-        # Recompile original expressions, never replace identifiers inside SQL
-        # strings or literals, when the query's table context changes.
-        values = [(attribute, index, render()) for attribute, index, render in self._clause_sources]
-        for attribute, index, value in values:
-            getattr(self, attribute)[index] = value
+    def _clauses(self, attribute):
+        return [value() if callable(value) else value for value in getattr(self, attribute)]
+
+    def _compile(self, expression, params=(), *, projection=False, predicate=False, join_limit=None, dialect=None):
+        from sqlalchemy import table
+        from sqlalchemy.sql import visitors
+        from sqlalchemy.sql.elements import ClauseElement
+        from sqlalchemy.sql.selectable import FromClause, ScalarSelect, Select, TableClause
+        from ._sql_literals import identifier_parts
+
+        if not (predicate and hasattr(expression, 'compile_for_query')):
+            expression = normalize_expression(expression)
+        contextual_root = self._root_selectable
+        if isinstance(self.model_class, str):
+            nodes = list(visitors.iterate(expression)) if isinstance(expression, ClauseElement) else []
+            try:
+                parts = identifier_parts(self._table_name, qualified=True)
+            except ValueError:
+                if any(isinstance(node, ScalarSelect) for node in nodes):
+                    raise ValueError('Correlated expressions require an unambiguous table or mapped source')
+            else:
+                candidates = {}
+                for node in nodes:
+                    candidate = node if isinstance(node, FromClause) else getattr(node, 'table', None)
+                    if candidate is not None and getattr(candidate, 'name', None) == parts[-1]:
+                        if getattr(candidate, 'schema', None) == (parts[0] if len(parts) == 2 else None):
+                            if not isinstance(candidate, TableClause):
+                                raise ValueError('String table names cannot be replaced by derived or aliased sources')
+                            candidates[id(candidate._deannotate())] = candidate._deannotate()
+                if len(candidates) > 1:
+                    raise ValueError('Ambiguous SQLAlchemy source for string table')
+                if candidates:
+                    selected = next(iter(candidates.values()))
+                    if self._source_selectable is not None and selected is not self._source_selectable:
+                        raise ValueError('Ambiguous SQLAlchemy source for string table')
+                    if self._source_selectable is None:
+                        self._source_selectable = selected
+                        self._root_selectable = selected.alias(self._table_alias) if self._table_alias else selected
+                    contextual_root = self._root_selectable
+                elif self._root_selectable is None:
+                    contextual_root = table(parts[-1], schema=parts[0] if len(parts) == 2 else None)
+                    if self._table_alias:
+                        contextual_root = contextual_root.alias(self._table_alias)
+        visible = ([] if contextual_root is None else [contextual_root]) + [
+            source for source in self._joined_selectables[:join_limit] if source is not None
+        ]
+        if any(source is None for source in self._joined_selectables[:join_limit]):
+            known = {
+                id(source._deannotate())
+                for source in visible + ([] if self._source_selectable is None else [self._source_selectable])
+            }
+            if isinstance(expression, ClauseElement):
+                for node in visitors.iterate(expression):
+                    if not isinstance(node, Select) or not node.get_final_froms():
+                        continue
+                    explicit = node._correlate
+                    excluded = node._correlate_except
+                    if node._auto_correlate:
+                        unsafe = True
+                    elif excluded is not None:
+                        excluded_ids = {id(source._deannotate()) for source in excluded}
+                        unsafe = any(
+                            id(source._deannotate()) not in known | excluded_ids for source in node.get_final_froms()
+                        )
+                    else:
+                        unsafe = any(id(source._deannotate()) not in known for source in explicit)
+                    if unsafe:
+                        raise ValueError('Correlated subqueries with raw JOIN sources require SQLAlchemy selectables')
+        context = dict(
+            outer_froms=visible,
+            source=self._source_selectable,
+            target=self._root_selectable,
+            compiler_dialect=dialect,
+        )
+        if predicate:
+            return compile_predicate(expression, params, self.model_class, self._table_alias, **context)
+        return compile_expression(expression, self.model_class, self._table_alias, projection, **context)
+
+    def _check_mutation_source(self):
+        from sqlalchemy.sql.selectable import AliasedReturnsRows, TableClause
+
+        source = self._source_selectable
+        while isinstance(source, AliasedReturnsRows):
+            source = source.element
+        if source is not None and not isinstance(source, TableClause):
+            raise ValueError('Derived query sources cannot mutate a physical table')
 
     def _execute(self, sql, params=None):
         """Execute SQL using either transaction wrapper or client"""
@@ -876,7 +960,7 @@ class BaseMatrixOneQuery:
 
     def select(self, *columns) -> "BaseMatrixOneQuery":
         """Add SELECT columns - SQLAlchemy style"""
-        self._select_columns = list(columns)
+        self._select_columns = [normalize_expression(column) for column in columns]
         return self
 
     def cte(self, name: str, recursive: bool = False) -> CTE:
@@ -909,15 +993,29 @@ class BaseMatrixOneQuery:
         return self._join(target, onclause, kind)
 
     def _join(self, target, onclause, kind):
-        if onclause is None:
+        if onclause is not None and not hasattr(onclause, 'compile_for_query'):
+            onclause = normalize_expression(onclause)
+        right = selectable_of(target)
+        index = len(self._joined_selectables)
+
+        def inferred_condition():
+            from sqlalchemy import inspect
             from sqlalchemy.sql.util import join_condition
             from sqlalchemy.exc import NoForeignKeysError, AmbiguousForeignKeysError
 
-            root = getattr(self.model_class, '__table__', None)
-            right = getattr(target, '__table__', None)
+            root = self._root_selectable
+            root_info = inspect(self.model_class, raiseerr=False)
+            target_info = inspect(target, raiseerr=False)
+            if (
+                root_info is not None
+                and target_info is not None
+                and getattr(root_info, 'mapper', None) is getattr(target_info, 'mapper', None)
+                and getattr(root_info, 'mapper', None) is not None
+            ):
+                raise ValueError('Self JOIN inference requires an explicit ON clause')
             if root is None or right is None:
                 raise ValueError('JOIN requires an explicit ON clause without mapped foreign keys')
-            sources = [root] + getattr(self, '_joined_selectables', [])
+            sources = [root] + [source for source in self._joined_selectables[:index] if source is not None]
             if any(right is source for source in sources):
                 raise ValueError('Self JOIN inference requires distinct selectables and an explicit ON clause')
             candidates = []
@@ -930,26 +1028,26 @@ class BaseMatrixOneQuery:
                     raise ValueError('JOIN has ambiguous foreign keys; provide ON explicitly') from error
             if len(candidates) != 1:
                 raise ValueError('JOIN requires one unambiguous foreign key relationship; provide ON explicitly')
-            onclause = candidates[0]
-        if isinstance(target, CTE):
-            source = sql_identifier(target.name)
-        elif hasattr(target, '__table__') or hasattr(target, '_compiler_dispatch'):
-            source = compile_from(target)
-        else:
-            name = getattr(target, '_table_name', str(target))
-            source = name if isinstance(target, str) else sql_identifier(name, qualified=True)
+            return candidates[0]
+
+        if onclause is None:
+            inferred_condition()  # Reject invalid admission before changing the query.
 
         def render():
+            if isinstance(target, CTE):
+                source = sql_identifier(target.name)
+            elif right is not None:
+                source = compile_from(right)
+            else:
+                name = getattr(target, '_table_name', str(target))
+                source = name if isinstance(target, str) else sql_identifier(name, qualified=True)
             clause = f'{kind} {source}'
-            if onclause is not None:
-                clause += ' ON ' + compile_predicate(onclause, model=self.model_class, alias=self._table_alias)
+            condition = inferred_condition() if onclause is None else onclause
+            clause += ' ON ' + self._compile(condition, predicate=True, join_limit=index + 1)
             return clause
 
         self._append_clause('_joins', render)
-        selectable = getattr(target, '__table__', None)
-        if selectable is not None:
-            self._joined_selectables = getattr(self, '_joined_selectables', []) + [selectable]
-        self._refresh_clauses()
+        self._joined_selectables.append(right)
         return self
 
     def innerjoin(self, target, onclause=None) -> "BaseMatrixOneQuery":
@@ -974,20 +1072,19 @@ class BaseMatrixOneQuery:
 
     def group_by(self, *columns):
         for column in columns:
+            column = normalize_expression(column)
             if hasattr(column, 'compile'):
-                self._append_clause(
-                    '_group_by_columns', lambda c=column: compile_expression(c, self.model_class, self._table_alias)
-                )
+                self._append_clause('_group_by_columns', lambda c=column: self._compile(c))
             else:
                 self._group_by_columns.append(str(column))
         return self
 
     def having(self, condition, *params):
         """Append one validated predicate without consuming another clause's values."""
+        if not hasattr(condition, 'compile_for_query'):
+            condition = normalize_expression(condition)
         if hasattr(condition, 'compile'):
-            self._append_clause(
-                '_having_conditions', lambda: compile_predicate(condition, params, self.model_class, self._table_alias)
-            )
+            self._append_clause('_having_conditions', lambda: self._compile(condition, params, predicate=True))
         else:
             self._having_conditions.append(compile_predicate(condition, params))
         return self
@@ -1000,7 +1097,8 @@ class BaseMatrixOneQuery:
     def alias(self, alias_name: str) -> "BaseMatrixOneQuery":
         """Set table alias for this query - SQLAlchemy style chaining"""
         self._table_alias = alias_name
-        self._refresh_clauses()
+        if self._source_selectable is not None:
+            self._root_selectable = self._source_selectable.alias(alias_name)
         return self
 
     def subquery(self, alias_name: str = None) -> str:
@@ -1014,10 +1112,10 @@ class BaseMatrixOneQuery:
 
     def filter(self, condition, *params):
         """Append one validated predicate without consuming another clause's values."""
+        if not hasattr(condition, 'compile_for_query'):
+            condition = normalize_expression(condition)
         if hasattr(condition, 'compile'):
-            self._append_clause(
-                '_where_conditions', lambda: compile_predicate(condition, params, self.model_class, self._table_alias)
-            )
+            self._append_clause('_where_conditions', lambda: self._compile(condition, params, predicate=True))
         else:
             self._where_conditions.append(compile_predicate(condition, params))
         return self
@@ -1040,8 +1138,12 @@ class BaseMatrixOneQuery:
                     value = processor(value)
             suffix = ' IS NULL' if value is None else ' = ' + sql_literal(value)
 
-            def render(name=physical_name, suffix=suffix):
+            def render(name=physical_name, suffix=suffix, mapped=self._columns.get(key)):
                 column = sql_identifier(name)
+                if self._is_sqlalchemy_model and (
+                    self._table_alias or self._joins or self._source_selectable is not self.model_class.__table__
+                ):
+                    return self._compile(mapped) + suffix
                 if self._table_alias:
                     column = sql_identifier(self._table_alias) + '.' + column
                 elif self._joins and not isinstance(self.model_class, str):
@@ -1068,10 +1170,9 @@ class BaseMatrixOneQuery:
 
     def order_by(self, *columns):
         for column in columns:
+            column = normalize_expression(column)
             if hasattr(column, 'compile'):
-                self._append_clause(
-                    '_order_by_columns', lambda c=column: compile_expression(c, self.model_class, self._table_alias)
-                )
+                self._append_clause('_order_by_columns', lambda c=column: self._compile(c))
             else:
                 self._order_by_columns.append(str(column))
         return self
@@ -1086,6 +1187,7 @@ class BaseMatrixOneQuery:
         self._offset_count = count
         return self
 
+    @statement_compilation
     def _build_sql(self) -> tuple[str, List[Any]]:
         """Build SQL query using unified SQL builder"""
         from .sql_builder import MatrixOneSQLBuilder
@@ -1106,18 +1208,11 @@ class BaseMatrixOneQuery:
 
         if self._select_columns:
             builder._select_columns = [
-                (
-                    compile_expression(col, self.model_class, self._table_alias, projection=True)
-                    if hasattr(col, 'compile')
-                    else str(col)
-                )
+                (self._compile(col, projection=True) if hasattr(col, 'compile') else str(col))
                 for col in self._select_columns
             ]
         elif self._is_sqlalchemy_model:
-            builder._select_columns = [
-                compile_expression(column, self.model_class, self._table_alias, projection=True)
-                for column in self._columns.values()
-            ]
+            builder._select_columns = [self._compile(column, projection=True) for column in self._columns.values()]
         else:
             builder.select_all()
 
@@ -1127,23 +1222,23 @@ class BaseMatrixOneQuery:
         builder._from_snapshot = None
 
         # Add JOIN clauses
-        builder._joins = self._joins.copy()
+        builder._joins = self._clauses('_joins')
 
         # Add WHERE conditions and parameters
-        builder._where_conditions = self._where_conditions.copy()
+        builder._where_conditions = self._clauses('_where_conditions')
         builder._where_params = self._where_params.copy()
 
         # Add GROUP BY columns
         if self._group_by_columns:
-            builder.group_by(*self._group_by_columns)
+            builder.group_by(*self._clauses('_group_by_columns'))
 
         # Add HAVING conditions and parameters
-        builder._having_conditions = self._having_conditions.copy()
+        builder._having_conditions = self._clauses('_having_conditions')
         builder._having_params = self._having_params.copy()
 
         # Add ORDER BY columns
         if self._order_by_columns:
-            builder.order_by(*self._order_by_columns)
+            builder.order_by(*self._clauses('_order_by_columns'))
 
         # Add LIMIT and OFFSET
         if self._limit_count is not None:
@@ -1182,16 +1277,16 @@ class BaseMatrixOneQuery:
 
         return RowData(row, select_cols)
 
-    def _extract_select_columns(self):
+    def _extract_select_columns(self, result_names=None):
         """Extract column names from select columns"""
         select_cols = []
-        for col in self._select_columns:
+        for position, col in enumerate(self._select_columns):
             # Check if this is a SQLAlchemy function with label
             if hasattr(col, "compile") and hasattr(col, "name") and col.name:
                 # Special handling for DISTINCT function to avoid reserved keyword issues
                 if hasattr(col, "name") and col.name.upper() == "DISTINCT":
                     # For DISTINCT functions, use the original logic to extract column name
-                    col_str = str(col.compile(compile_kwargs={"literal_binds": True}))
+                    col_str = str(col.compile())
                     if "(" in col_str and ")" in col_str:
                         func_name = col_str.split("(")[0].strip()
                         col_name = col_str.split("(")[1].split(")")[0].strip()
@@ -1205,7 +1300,11 @@ class BaseMatrixOneQuery:
             else:
                 # Convert SQLAlchemy function objects to strings first
                 if hasattr(col, "compile"):
-                    col_str = str(col.compile(compile_kwargs={"literal_binds": True}))
+                    if result_names is not None and position < len(result_names):
+                        select_cols.append(str(result_names[position]))
+                        continue
+                    # Naming a result must never evaluate a callable/default.
+                    col_str = str(col.compile())
                 else:
                     col_str = str(col)
 
@@ -1301,14 +1400,13 @@ class BaseMatrixOneQuery:
 
         # Handle both SQLAlchemy expressions and simple values
         for key, value in kwargs.items():
+            value = normalize_expression(value)
             if hasattr(value, "compile"):  # SQLAlchemy expression
                 physical_name = self._columns[key].name if self._is_sqlalchemy_model else key
                 self._append_clause(
                     '_update_set_columns',
                     lambda key=physical_name, value=value: f"{sql_identifier(key)} = "
-                    + compile_expression(
-                        value, self.model_class, self._table_alias, compiler_dialect=self._result_dialect()
-                    ),
+                    + self._compile(value, dialect=self._result_dialect()),
                 )
             elif self._is_sqlalchemy_model:
                 from sqlalchemy import bindparam
@@ -1327,6 +1425,7 @@ class BaseMatrixOneQuery:
 
         return self
 
+    @statement_compilation
     def _build_update_sql(self) -> tuple[str, List[Any]]:
         """
         Build UPDATE SQL query directly to handle SQLAlchemy expressions
@@ -1342,6 +1441,7 @@ class BaseMatrixOneQuery:
         if self._snapshot_name:
             raise ValueError('Snapshot queries are read-only')
         _require_single_table_mutation(self._joins)
+        self._check_mutation_source()
         if not self._update_set_columns:
             raise ValueError("No SET clauses provided for UPDATE")
 
@@ -1350,11 +1450,11 @@ class BaseMatrixOneQuery:
         # Assignment SQL and bound values are already recorded at construction;
         # marker-looking text inside a compiled literal is never a placeholder.
         builder = MatrixOneSQLBuilder().update(self._table_target())
-        builder._update_set_columns = self._update_set_columns.copy()
+        builder._update_set_columns = self._clauses('_update_set_columns')
         builder._update_set_values = self._update_set_values.copy()
-        builder._where_conditions = self._where_conditions.copy()
+        builder._where_conditions = self._clauses('_where_conditions')
         builder._where_params = self._where_params.copy()
-        builder.order_by(*self._order_by_columns)
+        builder.order_by(*self._clauses('_order_by_columns'))
         if self._limit_count is not None:
             builder.limit(self._limit_count)
         return builder.build()
@@ -1365,18 +1465,20 @@ class BaseMatrixOneQuery:
         sql, params = self._build_delete_sql()
         return self._execute(sql, params)
 
+    @statement_compilation
     def _build_delete_sql(self) -> tuple[str, List[Any]]:
         """Build DELETE SQL query using unified SQL builder"""
         if self._snapshot_name:
             raise ValueError('Snapshot queries are read-only')
         _require_single_table_mutation(self._joins)
+        self._check_mutation_source()
         from .sql_builder import build_delete_query
 
         return build_delete_query(
             table_name=self._table_target(),
-            where_conditions=self._where_conditions,
+            where_conditions=self._clauses('_where_conditions'),
             where_params=self._where_params,
-            order_by=self._order_by_columns,
+            order_by=self._clauses('_order_by_columns'),
             limit=self._limit_count,
         )
 
@@ -1443,7 +1545,7 @@ class BaseMatrixOneQuery:
             for row in rows
         ]
         if self._select_columns:
-            columns = self._extract_select_columns()
+            columns = self._extract_select_columns(names)
         elif isinstance(self.model_class, str):
             columns = getattr(result, 'columns', None)
             if columns is None or callable(columns):

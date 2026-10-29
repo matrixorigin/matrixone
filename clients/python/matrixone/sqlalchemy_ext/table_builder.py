@@ -47,9 +47,20 @@ def simplified_table(name, columns, primary_key=None, **kwargs):
     import re
     from sqlalchemy.dialects import mysql
     from sqlalchemy.types import TypeEngine
+    from .._sql_literals import identifier_parts
 
     if not columns:
         raise ValueError('columns must contain at least one column')
+    parts = identifier_parts(name, qualified=True, preserve_quoting=True)
+    schema = kwargs.get('schema')
+    if isinstance(schema, str):
+        schema = identifier_parts(schema, preserve_quoting=True)[0]
+        kwargs['schema'] = schema
+    if len(parts) == 2:
+        if schema is not None and schema != parts[0]:
+            raise ValueError('Explicit schema conflicts with qualified table name')
+        kwargs['schema'] = parts[0] if schema is None else schema
+    name = parts[-1]
     keys = [primary_key] if isinstance(primary_key, str) else list(primary_key or ())
     if any(key not in columns for key in keys):
         raise ValueError('primary_key must name existing columns')
@@ -95,7 +106,21 @@ def simplified_table(name, columns, primary_key=None, **kwargs):
                 if constructor is None or kind in ('enum', 'set'):
                     raise ValueError('Unsupported simplified column type: ' + definition)
                 type_options = {'unsigned': True} if unsigned else {}
-                dtype = constructor(*(int(arg) for arg in args), **type_options)
+                if kind in ('datetime', 'timestamp', 'time'):
+                    if unsigned or (arguments is not None and len(args) != 1):
+                        raise ValueError('Temporal precision must be one integer in 0..6')
+                    if arguments is None:
+                        dtype = constructor()
+                    else:
+                        try:
+                            precision = int(args[0])
+                        except ValueError as error:
+                            raise ValueError('Temporal precision must be one integer in 0..6') from error
+                        if not 0 <= precision <= 6:
+                            raise ValueError('Temporal precision must be one integer in 0..6')
+                        dtype = constructor(fsp=precision)
+                else:
+                    dtype = constructor(*(int(arg) for arg in args), **type_options)
         elif isinstance(definition, TypeEngine) or (
             isinstance(definition, type) and issubclass(definition, TypeEngine)
         ):

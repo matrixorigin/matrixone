@@ -11,7 +11,7 @@ except ImportError:
     SQLALCHEMY_AVAILABLE = False
 
 
-def get_table_name(table: Union[str, Type]) -> str:
+def get_table_name(table: Union[str, Type], *, quoted=False) -> str:
     """Extract table name from string or ORM model.
 
     Supports:
@@ -19,19 +19,28 @@ def get_table_name(table: Union[str, Type]) -> str:
     - "db.table_name"
     - ORM model's resolved table name and schema for db.table
     """
+    from ._sql_literals import sql_identifier, sql_object_name
+
     if isinstance(table, str):
-        return table
+        return sql_object_name(table, qualified=True) if quoted else table
     if SQLALCHEMY_AVAILABLE:
         mapped_table = getattr(table, '__table__', None)
         if isinstance(mapped_table, Table):
+            if quoted:
+                name = sql_identifier(mapped_table.name)
+                return sql_identifier(mapped_table.schema) + '.' + name if mapped_table.schema else name
             return mapped_table.fullname
     if SQLALCHEMY_AVAILABLE and hasattr(table, '__tablename__'):
         name = table.__tablename__
         if hasattr(table, '__table_args__'):
             args = table.__table_args__
             if isinstance(args, dict) and 'schema' in args:
-                return f"{args['schema']}.{name}"
-        return name
+                return (
+                    sql_identifier(args['schema']) + '.' + sql_identifier(name)
+                    if quoted
+                    else f"{args['schema']}.{name}"
+                )
+        return sql_identifier(name) if quoted else name
     raise ValueError(f"Invalid table parameter: {table}. Expected string or ORM model.")
 
 

@@ -20,7 +20,7 @@ code duplication across different interfaces (ORM, Vector Search, Pinecone, etc.
 """
 
 from ._query_compilation import conjoin_conditions
-from ._sql_literals import sql_string_token
+from ._sql_literals import sql_string_token, sql_identifier
 
 from collections.abc import Mapping, Set
 from enum import Enum
@@ -442,7 +442,7 @@ class MatrixOneSQLBuilder:
         if self._ctes:
             with_parts = []
             for cte in self._ctes:
-                with_parts.append(f"{cte['name']} AS ({cte['sql']})")
+                with_parts.append(f"{sql_identifier(cte['name'])} AS ({cte['sql']})")
                 all_params.extend(cte["params"])
             prefix = "WITH RECURSIVE " if any(cte.get("recursive", False) for cte in self._ctes) else "WITH "
             sql_parts.append(prefix + ", ".join(with_parts))

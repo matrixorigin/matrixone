@@ -66,6 +66,7 @@ _RESERVED = MySQLIdentifierPreparer.reserved_words
 def sql_identifier(name, qualified=False, *, force=False) -> str:
     if not isinstance(name, str):
         raise TypeError('SQL identifier must be a string')
+    force = force or getattr(name, 'quote', None) is True
     parts = name.split('.') if qualified else [name]
     quoted = []
     for part in parts:
@@ -78,12 +79,15 @@ def sql_identifier(name, qualified=False, *, force=False) -> str:
     return '.'.join(quoted)
 
 
-def identifier_parts(name, qualified=False):
+def identifier_parts(name, qualified=False, *, preserve_quoting=False):
     """Normalize complete legacy quoted names, never trailing SQL fragments."""
     if not isinstance(name, str):
         raise TypeError('SQL identifier must be a string')
     if not name or len(name) > (261 if qualified else 130):
         raise ValueError('Invalid SQL object name')
+    if getattr(name, 'quote', None) is True:
+        sql_identifier(name)
+        return (name if preserve_quoting else str(name),)
     parts = []
     offset = 0
     while offset < len(name):
@@ -96,6 +100,10 @@ def identifier_parts(name, qualified=False):
             offset += match.end()
             if offset < len(name) and name[offset] != '.':
                 raise ValueError('Unexpected SQL after quoted identifier')
+            if preserve_quoting:
+                from sqlalchemy.sql.elements import quoted_name
+
+                part = quoted_name(part, True)
         else:
             end = name.find('.', offset) if qualified else -1
             if end < 0:

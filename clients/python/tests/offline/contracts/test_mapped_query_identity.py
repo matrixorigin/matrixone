@@ -140,6 +140,9 @@ def test_typed_update_uses_mapping_and_bind_processors():
         ('char(4)', 'CHAR(4)'),
         ('decimal(20,6)', 'DECIMAL(20, 6)'),
         ('boolean', 'BOOL'),
+        ('datetime(6)', 'DATETIME(6)'),
+        ('timestamp(3)', 'TIMESTAMP(3)'),
+        ('time(6)', 'TIME(6)'),
     ],
 )
 def test_simplified_types_and_primary_keys(definition, expected):
@@ -151,6 +154,66 @@ def test_simplified_types_and_primary_keys(definition, expected):
 def test_unknown_primary_key_fails_instead_of_being_ignored():
     with pytest.raises(ValueError, match='existing columns'):
         simplified_table('typed', {'key': 'int'}, primary_key='missing')
+
+
+@pytest.mark.parametrize('kind', ['datetime', 'timestamp', 'time'])
+@pytest.mark.parametrize('precision', [0, 3, 6])
+def test_temporal_shorthand_uses_fractional_precision(kind, precision):
+    from sqlalchemy.dialects import mysql
+
+    actual = simplified_table('typed', {'value': '%s(%d)' % (kind, precision)}).c.value.type
+    expected = getattr(mysql, kind.upper())(fsp=precision)
+    assert actual.compile(dialect=MatrixOneDialect()) == expected.compile(dialect=MatrixOneDialect())
+    assert actual.fsp == precision and actual.timezone is False
+
+
+@pytest.mark.parametrize('definition', ['datetime()', 'timestamp(7)', 'time(-1)', 'time(2,3)', 'datetime(bad)'])
+def test_invalid_temporal_precision_is_rejected(definition):
+    with pytest.raises(ValueError, match='Temporal precision'):
+        simplified_table('typed', {'value': definition})
+
+
+def test_table_names_keep_schema_quoted_dots_and_metadata_defaults():
+    from sqlalchemy import MetaData
+    from sqlalchemy.sql.elements import quoted_name
+
+    metadata = MetaData(schema='default_db')
+    for name in ['archive.events', '`archive`.`events`', '"archive"."events"']:
+        actual = simplified_table(name, {'id': 'int'}, metadata=metadata, extend_existing=True)
+        assert (actual.schema, actual.name) == ('archive', 'events')
+    for name in ['`atomic.dot`', quoted_name('atomic.dot', True)]:
+        actual = simplified_table(name, {'id': 'int'})
+        assert actual.schema is None and actual.name == 'atomic.dot' and actual.name.quote
+    assert simplified_table('plain', {'id': 'int'}, metadata=metadata).schema == 'default_db'
+    assert simplified_table('archive.same', {'id': 'int'}, schema='`archive`').schema == 'archive'
+    with pytest.raises(ValueError, match='conflicts'):
+        simplified_table('archive.wrong', {'id': 'int'}, schema='other')
+
+
+@pytest.mark.asyncio
+async def test_async_qualified_create_drop_and_precise_ddl():
+    from sqlalchemy.ext.asyncio import create_async_engine
+    from sqlalchemy import event
+
+    engine = create_async_engine('sqlite+aiosqlite://')
+    client = AsyncClient()
+    client._engine = engine
+    emitted = []
+    event.listen(engine.sync_engine, 'before_execute', lambda conn, stmt, *args: emitted.append(stmt))
+    try:
+        async with engine.begin() as connection:
+            await connection.exec_driver_sql("ATTACH DATABASE ':memory:' AS archive")
+        await client.create_table('archive.events', {'id': 'int', 'occurred_at': 'datetime(6)'})
+        statement = next(stmt for stmt in emitted if isinstance(stmt, CreateTable))
+        assert 'DATETIME(6)' in str(statement.compile(dialect=MatrixOneDialect()))
+        async with engine.connect() as connection:
+            assert (await connection.exec_driver_sql('SELECT name FROM main.sqlite_master')).all() == []
+            assert (await connection.exec_driver_sql('SELECT name FROM archive.sqlite_master')).all() == [('events',)]
+        await client.drop_table('archive.events')
+        async with engine.connect() as connection:
+            assert (await connection.exec_driver_sql('SELECT name FROM archive.sqlite_master')).all() == []
+    finally:
+        await engine.dispose()
 
 
 @pytest.mark.parametrize('factory', [Client, AsyncClient])

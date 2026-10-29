@@ -539,7 +539,9 @@ class Session(SQLAlchemySession):
 
             Session: Self for chaining
         """
-        sql = f"DROP TABLE IF EXISTS {table_name}"
+        from ._utils import get_table_name
+
+        sql = 'DROP TABLE IF EXISTS ' + get_table_name(table_name, quoted=True)
         self.execute(sql)
         return self
 
@@ -903,6 +905,8 @@ class AsyncSession(SQLAlchemyAsyncSession):
 
             Self for chaining
         """
-        sql = f"DROP TABLE IF EXISTS {table_name}"
+        from ._utils import get_table_name
+
+        sql = 'DROP TABLE IF EXISTS ' + get_table_name(table_name, quoted=True)
         await self.execute(sql)
         return self

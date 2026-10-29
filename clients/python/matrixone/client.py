@@ -2312,13 +2312,9 @@ class Client(BaseMatrixOneClient):
                 # Drop table by model class
                 client.drop_table(UserModel)
         """
-        # Handle model class input
-        if hasattr(table_name_or_model, '__tablename__'):
-            # It's a model class
-            table_name = table_name_or_model.__tablename__
-        else:
-            # It's a table name string
-            table_name = table_name_or_model
+        from ._utils import get_table_name
+
+        table_name = get_table_name(table_name_or_model, quoted=True)
 
         with self.get_sqlalchemy_engine().begin() as conn:
             sql = f"DROP TABLE IF EXISTS {table_name}"
@@ -3097,7 +3093,9 @@ class Session(SQLAlchemySession):
 
             Session: Self for chaining
         """
-        sql = f"DROP TABLE IF EXISTS {table_name}"
+        from ._utils import get_table_name
+
+        sql = 'DROP TABLE IF EXISTS ' + get_table_name(table_name, quoted=True)
         self.execute(sql)
         return self
 

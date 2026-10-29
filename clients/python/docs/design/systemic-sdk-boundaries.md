@@ -1,4 +1,4 @@
-# Systemic SDK boundaries — revision 2.3
+# Systemic SDK boundaries — revision 2.4
 
 This revision extends the existing synchronous file/Arrow designs. Its scope is
 shared query/type/DDL behavior, async analytics, capability/outcome observation,
@@ -22,6 +22,28 @@ physical identity, explicit projection and bind/result processors; SDK text
 binding uses the existing lexical owner. Results preserve ordinals even when
 labels duplicate. Snapshot mutations fail before dispatch. Table shorthand and
 index compilation have shared owners across sync/async entry points.
+
+Mapped and inferred query sources retain their actual SQLAlchemy selectables.
+FROM, implicit JOIN, re-aliasing and correlated expressions use that same
+identity. The expression compiler supplies an enclosing SELECT when SQLAlchemy
+needs correlation context. A correlated subquery depending on an opaque string
+JOIN rejects before execution; explicitly uncorrelated expressions still work.
+String table roots cannot silently become same-named derived sources.
+
+Required binds reject before execution; explicit NULL remains valid. One
+statement-scoped owner shares callable-bind values and query-backed CTE
+compilation across fragments, then discards them. User callable, type-processor
+and normalization callbacks execute outside that scope, so an independent query
+inside a callback owns its bindings. Conflicting definitions or overrides for
+the same non-unique name across separate fragments reject: use distinct names,
+reuse one bind, or execute a complete SQLAlchemy statement when its
+last-definition-wins semantics are needed. Unique binds stay independent.
+
+The shared shorthand builder preserves temporal precision using named `fsp`
+arguments and separates schema from table identity through the existing name
+parser. Quoted atomic dots survive both creation and DROP. Native reflection
+registers all six existing VectorType precisions; this does not add narrow-vector
+Arrow support.
 
 The supplied Session retains its connection and transaction. Client calls use
 their existing execution path. Administrative statements unsupported in active
@@ -129,7 +151,9 @@ the name. Dot-only names use the existing host form. The SDK's shared Stage URI
 builder and file/staging consumers preserve that identity. Nested resolution
 uses the same owner. Export filename templates retain their percent syntax while
 RawQuery bytes remain unchanged. Legacy host userinfo/fragment behavior remains
-unchanged; the new path form rejects ambiguous fields.
+unchanged; the new path form rejects ambiguous fields. Stage batch loading
+delegates unrecognized suffixes through the existing generic file loader and
+Stage URI encoder, preserving per-file results and async awaitables.
 
 Upgrade all CNs before using the new Stage name/URI contract; mixed old/new CNs
 cannot guarantee routing compatibility. Released 4.2.5 remains a separately

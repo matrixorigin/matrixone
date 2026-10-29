@@ -22,6 +22,38 @@ from unittest.mock import Mock, AsyncMock
 from matrixone.stage import StageManager, AsyncStageManager
 
 
+@pytest.mark.parametrize('asynchronous', [False, True])
+@pytest.mark.asyncio
+async def test_load_files_text_fallback_reuses_generic_stage_load(asynchronous):
+    import inspect
+    from matrixone import AsyncClient, Client
+    from matrixone.stage import Stage
+
+    client = AsyncClient() if asynchronous else Client()
+    acknowledged = object()
+
+    def execute(sql, *args, **kwargs):
+        if 'missing' in sql:
+            raise FileNotFoundError('missing input')
+        return acknowledged
+
+    client.execute = AsyncMock(side_effect=execute) if asynchronous else Mock(side_effect=execute)
+    stage = Stage(name='two words', url='file:///owned', _client=client)
+    results = stage.load_files({'data.csv': 'csv_target', 'data.txt': 'txt_target', 'missing.txt': 'empty_target'})
+    for path in ('data.csv', 'data.txt'):
+        result = results[path]
+        if asynchronous:
+            assert inspect.isawaitable(result)
+            result = await result
+        assert result is acknowledged
+    if asynchronous:
+        with pytest.raises(FileNotFoundError):
+            await results['missing.txt']
+    else:
+        assert 'missing input' in results['missing.txt']
+    assert any('stage:///two%20words/data.txt' in str(call) for call in client.execute.call_args_list)
+
+
 class TestStageSQLConsistency(unittest.TestCase):
     """Test SQL generation consistency across sync/async/session interfaces"""
 
