@@ -1494,3 +1494,17 @@ func TestUnterminatedEnclosureAfterRecords(t *testing.T) {
 	_, err = p.Read(nil)
 	require.ErrorIs(t, err, io.EOF)
 }
+
+func TestUnterminatedEnclosureWithMatchingEscapeAndDoubledQuote(t *testing.T) {
+	// MySQL 8.0 LOAD DATA returns HEX 22612262 for this input and configuration.
+	cfg := CSVConfig{FieldsTerminatedBy: ",", FieldsEnclosedBy: "\"", FieldsEscapedBy: "\"", AllowUnterminatedEnclosureAtEOF: true}
+	for _, size := range []int64{1, 128} {
+		t.Run(fmt.Sprint(size), func(t *testing.T) {
+			p, err := NewCSVParser(&cfg, strings.NewReader("1,\"a\"\"b"), size, false)
+			require.NoError(t, err)
+			row, err := p.Read(nil)
+			require.NoError(t, err)
+			require.Equal(t, []Field{{Val: "1"}, {Val: "\"a\"b"}}, row)
+		})
+	}
+}
