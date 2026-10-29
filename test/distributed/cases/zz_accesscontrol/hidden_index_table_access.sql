@@ -13,6 +13,9 @@ create unique index uidx_y on hit_t(y);
 create role hit_role_bvt;
 grant select,insert,update,delete on table hit_db_bvt.* to hit_role_bvt;
 grant alter view on database hit_db_bvt to hit_role_bvt;
+-- CALL currently uses the create-view database privilege.
+grant create view on database hit_db_bvt to hit_role_bvt;
+grant connect on account * to hit_role_bvt;
 create user hit_user_bvt identified by '123456' default role hit_role_bvt;
 grant hit_role_bvt to hit_user_bvt;
 select name,column_name from mo_catalog.mo_indexes where table_id = (select rel_id from mo_catalog.mo_tables where reldatabase = 'hit_db_bvt' and relname = 'hit_t') order by name, ordinal_position;
@@ -31,10 +34,49 @@ create table hit_db_bvt.`__mo_index_unique_hit_probe` (a int, b int);
 insert into hit_db_bvt.`__mo_index_unique_hit_probe` values (1,2),(3,4);
 select count(*) from hit_db_bvt.`__mo_index_secondary_hit_probe`;
 create view hit_db_bvt.hit_view_bvt as select x from hit_db_bvt.hit_t;
+create procedure hit_db_bvt.hit_read() 'begin select count(*) as hidden_rows from hit_db_bvt.__mo_index_secondary_hit_probe; end';
+create procedure hit_db_bvt.hit_nested() 'begin call hit_db_bvt.hit_read(); end';
+create procedure hit_db_bvt.hit_prepare() 'begin prepare hit_sp from "select count(*) from hit_db_bvt.__mo_index_secondary_hit_probe"; execute hit_sp; deallocate prepare hit_sp; end';
+create procedure hit_db_bvt.hit_execute() 'begin execute hit_cached; end';
+create procedure hit_db_bvt.hit_write() 'begin insert into hit_db_bvt.hit_t values (4,40); delete from hit_db_bvt.__mo_index_secondary_hit_probe; end';
+create procedure hit_db_bvt.hit_cond() 'begin if (select count(*) from hit_db_bvt.__mo_index_secondary_hit_probe) > 0 then select 123; end if; end';
+create procedure hit_db_bvt.hit_expr() 'begin declare n bigint default (select count(*) from hit_db_bvt.__mo_index_secondary_hit_probe); select n; end';
+create procedure hit_db_bvt.hit_base() 'begin insert into hit_db_bvt.hit_t values (4,40); select x,y from hit_db_bvt.hit_t where y=40; delete from hit_db_bvt.hit_t where x=4; end';
+create procedure hit_db_bvt.hit_dynamic(out status varchar) language 'starlark'
+$$
+rs, err = mo.sql("select count(*) from hit_db_bvt.__mo_index_secondary_hit_probe")
+rs2, err2 = mo.sql("select 1")
+out_status = "denied_then_ok" if err != None and "hidden internal table" in err and err2 == None else "unexpected"
+$$;
+-- The administrative exemption applies to stored SQL as well.
+call hit_db_bvt.hit_nested();
 
 -- index access for an ordinary user goes through the base table
 -- @session:id=1&user=sys:hit_user_bvt:hit_role_bvt&password=123456
+use hit_db_bvt;
 select x,y from hit_db_bvt.hit_t where y = 20;
+
+-- Stored SQL retains its caller's policy, including nested/dynamic SQL and
+-- expressions evaluated outside the ordinary statement executor.
+-- @regex("do not have privilege to access the hidden internal table",true)
+call hit_db_bvt.hit_read();
+-- @regex("do not have privilege to access the hidden internal table",true)
+call hit_db_bvt.hit_nested();
+-- @regex("do not have privilege to access the hidden internal table",true)
+call hit_db_bvt.hit_prepare();
+-- @regex("do not have privilege to access the hidden internal table",true)
+call hit_db_bvt.hit_write();
+-- A late denial rolls back earlier base-table work in the same CALL.
+select x,y from hit_db_bvt.hit_t order by x;
+-- @regex("do not have privilege to access the hidden internal table",true)
+call hit_db_bvt.hit_cond();
+-- @regex("do not have privilege to access the hidden internal table",true)
+call hit_db_bvt.hit_expr();
+call hit_db_bvt.hit_dynamic(@hit_status);
+select @hit_status as stored_sql_status;
+-- Normal procedure DML still maintains its secondary and unique indexes.
+call hit_db_bvt.hit_base();
+select x,y from hit_db_bvt.hit_t order by x;
 
 -- Existing view DDL must not turn an internal table into a readable view.
 alter view hit_db_bvt.hit_view_bvt as select y from hit_db_bvt.hit_t;
@@ -92,6 +134,10 @@ deallocate prepare deny_pl;
 -- the escape hatch lifts the guard for debugging (session scope)
 set session allow_hidden_index_table_access = on;
 show session variables like 'allow_hidden_index_table_access';
+call hit_db_bvt.hit_nested();
+call hit_db_bvt.hit_prepare();
+prepare hit_cached from 'select count(*) from hit_db_bvt.__mo_index_secondary_hit_probe';
+call hit_db_bvt.hit_execute();
 select count(*) from hit_db_bvt.`__mo_index_secondary_hit_probe`;
 prepare hatch_pl from 'select count(*) from hit_db_bvt.`__mo_index_unique_hit_probe`';
 execute hatch_pl;
@@ -101,6 +147,12 @@ select count(*) from hit_db_bvt.`__mo_index_secondary_hit_probe`;
 
 -- guarded again after the session variable is reset
 set session allow_hidden_index_table_access = off;
+-- @regex("do not have privilege to access the hidden internal table",true)
+call hit_db_bvt.hit_nested();
+-- Recheck handles prepared earlier with diagnostic access enabled.
+-- @regex("do not have privilege to access the hidden internal table",true)
+call hit_db_bvt.hit_execute();
+deallocate prepare hit_cached;
 -- @regex("do not have privilege to access the hidden internal table",true)
 select count(*) from hit_db_bvt.`__mo_index_secondary_hit_probe`;
 -- @session

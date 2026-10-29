@@ -28,6 +28,34 @@ import (
 // which is only intended for debugging. It defaults to OFF.
 const allowHiddenIndexTableAccessVariable = "allow_hidden_index_table_access"
 
+// A procedure executes user-authored SQL using internal background sessions.
+// Keep the original caller across nested CALLs, without applying its policy to
+// the generated catalog/index-maintenance SQL those sessions also execute.
+type storedSQLCallerKey struct{}
+
+func storedSQLCaller(ctx context.Context, ses FeSession) *Session {
+	if ctx != nil {
+		if caller, ok := ctx.Value(storedSQLCallerKey{}).(*Session); ok {
+			return caller
+		}
+	}
+	return upstreamUserSession(ses)
+}
+
+// Prepared SQL is unwrapped/rebuilt after the Interpreter's initial check.
+// Recheck its resolved AST at those boundaries, but leave non-procedure
+// background/catalog work on its existing maintenance policy.
+func verifyStoredSQLAgainstHiddenIndexTables(ctx context.Context, stmt tree.Statement) error {
+	if ctx == nil {
+		return nil
+	}
+	caller, ok := ctx.Value(storedSQLCallerKey{}).(*Session)
+	if !ok {
+		return nil
+	}
+	return verifyRealUserStatementAgainstHiddenIndexTables(ctx, caller, stmt)
+}
+
 // isHiddenIndexTableName reports whether the given table name belongs to a
 // hidden physical index table ("__mo_index_secondary_*", "__mo_index_unique_*"
 // and the other index-algorithm hidden tables). Index table names are minted
@@ -85,12 +113,16 @@ func verifyRealUserStatementAgainstHiddenIndexTables(ctx context.Context, ses *S
 	}
 	finder := &hiddenIndexTableRefFinder{}
 	finder.scanStatement(stmt)
-	if !finder.found {
+	return finder.accessError(ctx)
+}
+
+func (f *hiddenIndexTableRefFinder) accessError(ctx context.Context) error {
+	if !f.found {
 		return nil
 	}
-	qualified := finder.table
-	if finder.schema != "" {
-		qualified = finder.schema + "." + finder.table
+	qualified := f.table
+	if f.schema != "" {
+		qualified = f.schema + "." + f.table
 	}
 	return moerr.NewInternalErrorf(ctx,
 		"do not have privilege to access the hidden internal table %q", qualified)

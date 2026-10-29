@@ -546,6 +546,9 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 				cwft.stmtBorrowed = true
 			}
 		}
+		if err := verifyStoredSQLAgainstHiddenIndexTables(execCtx.reqCtx, stmt); err != nil {
+			return nil, err
+		}
 		refreshProcessStmtProfileForPreparedStmt(cwft.proc, stmt)
 		originSQL = sql
 		cwft.ifIsExeccute = true

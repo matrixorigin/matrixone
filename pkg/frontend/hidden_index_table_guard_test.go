@@ -362,3 +362,84 @@ func TestAuthenticateUserCanExecuteStatementHiddenIndexTable(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "hidden internal table")
 }
+
+func TestStoredSQLHiddenIndexCallerPolicy(t *testing.T) {
+	ctx := context.Background()
+	ses := newTestSession(t, gomock.NewController(t))
+	t.Cleanup(ses.Close)
+	ses.SetFromRealUser(true)
+	ses.SetTenantInfo(&TenantInfo{Tenant: "acc1", DefaultRole: "accountadmin"})
+	// A nested background session has no real-user identity of its own. Its
+	// routine must retain the outer caller instead of gaining internal access.
+	parent := &backSession{feSessionImpl: feSessionImpl{upstream: ses}}
+	child := &backSession{parentBackSession: parent}
+	callCtx := context.WithValue(ctx, storedSQLCallerKey{}, storedSQLCaller(ctx, ses))
+	require.Same(t, ses, storedSQLCaller(callCtx, child))
+	const hidden = "__mo_index_secondary_probe"
+	prepared := parseOneGuardTestStmt(t, "select * from "+hidden)
+	t.Cleanup(prepared.Free)
+	require.ErrorContains(t, verifyStoredSQLAgainstHiddenIndexTables(callCtx, prepared), "hidden internal table")
+	require.NoError(t, verifyStoredSQLAgainstHiddenIndexTables(ctx, prepared), "maintenance is not a stored SQL call")
+
+	for _, tc := range []struct {
+		name string
+		run  func(*Interpreter) error
+	}{
+		{"read", func(i *Interpreter) error { _, err := i.executeSQL("select * from " + hidden); return err }},
+		{"write", func(i *Interpreter) error { _, err := i.executeSQL("delete from " + hidden); return err }},
+		{"condition", func(i *Interpreter) error {
+			_, err := i.EvalCond("(select count(*) from " + hidden + ") > 0")
+			return err
+		}},
+		{"starlark SQL boundary", func(i *Interpreter) error { return i.execStoredSQL(i.ctx, "select * from "+hidden) }},
+		{"declaration expression", func(i *Interpreter) error {
+			stmt := parseOneGuardTestStmt(t, "select (select count(*) from "+hidden+")")
+			defer stmt.Free()
+			expr := stmt.(*tree.Select).Select.(*tree.SelectClause).Exprs[0].Expr
+			_, err := i.evaluateStoredProcedureExpr(expr, nil)
+			return err
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			back := &backgroundExecTest{}
+			back.init()
+			interpreter := &Interpreter{ctx: callCtx, ses: child, bh: back}
+			err := tc.run(interpreter)
+			require.ErrorContains(t, err, "hidden internal table")
+			require.Empty(t, back.currentSql, "denial must precede background execution")
+		})
+	}
+
+	back := &backgroundExecTest{}
+	back.init()
+	interpreter := &Interpreter{ctx: callCtx, ses: child, bh: back}
+	require.NoError(t, interpreter.execStoredSQL(callCtx, "insert into base values (1)"))
+	require.Equal(t, "insert into base values (1)", back.currentSql)
+	require.Error(t, interpreter.execStoredSQL(callCtx, "select * from"))
+	// Maintenance/catalog callers still use the unwrapped executor.
+	require.NoError(t, back.Exec(callCtx, "delete from "+hidden))
+
+	for _, tc := range []struct {
+		name   string
+		real   bool
+		tenant *TenantInfo
+		hatch  int64
+	}{
+		{"debug", true, &TenantInfo{Tenant: "acc1", DefaultRole: "developer"}, 1},
+		{"system admin", true, &TenantInfo{Tenant: sysAccountName, DefaultRole: moAdminRoleName}, 0},
+		{"internal", false, &TenantInfo{Tenant: "acc1", DefaultRole: "accountadmin"}, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ses.SetFromRealUser(tc.real)
+			ses.SetTenantInfo(tc.tenant)
+			require.NoError(t, ses.SetSessionSysVar(ctx, allowHiddenIndexTableAccessVariable, tc.hatch))
+			require.NoError(t, interpreter.execStoredSQL(callCtx, "select * from "+hidden))
+			require.NoError(t, verifyStoredSQLAgainstHiddenIndexTables(callCtx, prepared))
+			require.Equal(t, "select * from "+hidden, back.currentSql)
+		})
+	}
+	ses.SetFromRealUser(true)
+	ses.SetTenantInfo(&TenantInfo{Tenant: "acc1", DefaultRole: "accountadmin"})
+	require.NoError(t, ses.SetSessionSysVar(ctx, allowHiddenIndexTableAccessVariable, int64(0)))
+	require.ErrorContains(t, interpreter.execStoredSQL(callCtx, "select * from "+hidden), "hidden internal table")
+}

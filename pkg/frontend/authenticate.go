@@ -12660,6 +12660,7 @@ func doInterpretCall(
 	}
 
 	var interpreter Interpreter
+	ctx = context.WithValue(ctx, storedSQLCallerKey{}, storedSQLCaller(ctx, ses))
 	interpreter.ctx = ctx
 	interpreter.fmtctx = fmtctx
 	interpreter.ses = ses

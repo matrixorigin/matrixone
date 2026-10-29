@@ -3086,6 +3086,9 @@ func createPrepareStmtInSession(
 	if !preparedOwnerPolicyCaptured(execCtx) {
 		return nil, moerr.NewInvalidState(execCtx.reqCtx, "prepared statement requires a captured owner policy before planning")
 	}
+	if err := verifyStoredSQLAgainstHiddenIndexTables(execCtx.reqCtx, saveStmt); err != nil {
+		return nil, err
+	}
 	// Nested planning may change the session's current statement. Capture the
 	// owner statement now; neighboring statements in the request are irrelevant.
 	nonuser := executionSes.GetStmtProfile().GetSqlSourceType() == constant.CloudNoUserSql

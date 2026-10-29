@@ -365,7 +365,7 @@ func (si *starlarkInterpreter) moSql(thread *starlark.Thread, b *starlark.Builti
 	}
 
 	si.interp.bh.ClearExecResultSet()
-	err := si.interp.bh.Exec(si.interp.ctx, sql)
+	err := si.interp.execStoredSQL(si.interp.ctx, sql)
 	si.interp.recordAffectedRows()
 	if err != nil {
 		ret[1] = si.failed(err)
