@@ -30,6 +30,19 @@ func TestMustRollbackTxnPreservesInfrastructurePolicy(t *testing.T) {
 	for _, err := range []error{nil, ordinary, errors.New("ordinary"), errors.Join(ordinary, fmt.Errorf("wrapped: %w", ordinary))} {
 		require.False(t, MustRollbackTxn(err))
 	}
+	// The lock-wait-timeout family is statement-scoped, matching MySQL's
+	// innodb_rollback_on_timeout=OFF default: an expired lock wait must not doom
+	// the owning transaction however it is wrapped or joined, while a deadlock
+	// keeps InnoDB's whole-transaction scope.
+	for _, err := range []error{
+		NewLockWaitTimeoutNoCtx(),
+		NewRemoteLockWaitTimeoutNoCtx(),
+		fmt.Errorf("statement %d: %w", 1, NewLockWaitTimeoutNoCtx()),
+		errors.Join(NewInternalErrorNoCtx("ordinary"), NewRemoteLockWaitTimeoutNoCtx()),
+	} {
+		require.False(t, MustRollbackTxn(err))
+	}
+	require.True(t, MustRollbackTxn(NewDeadLockDetectedNoCtx()))
 	codes := WholeTxnRollbackCodes()
 	codes[0] = 0
 	require.NotEqual(t, uint16(0), WholeTxnRollbackCodes()[0])
