@@ -16,6 +16,7 @@ package txnbase
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math/rand"
 	"runtime"
@@ -37,6 +38,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/sm"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/wal"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 )
 
@@ -732,6 +734,24 @@ func (mgr *TxnManager) onWal(op *OpTxn) bool {
 	err := op.Txn.PrepareWAL()
 	v2.TxnTNPrepareWalDurationHistogram.Observe(time.Since(started).Seconds())
 	if err != nil {
+		var tooLarge *wal.RecordTooLargeError
+		if errors.As(err, &tooLarge) {
+			// No WAL LSN or driver DSN has been allocated. Unlike an append
+			// failure, this outcome is known and the prepared txn can roll back.
+			// Keep the moerr itself as the client-visible result; RPC error
+			// conversion does not recognize a wrapper as a native moerr.
+			op.Txn.SetError(tooLarge.MoErr())
+			op.Op = OpRollback
+			prepareTS := op.Txn.GetPrepareTS()
+			op.Txn.Lock()
+			stateErr := op.Txn.ToRollbackingLocked(prepareTS)
+			op.Txn.Unlock()
+			if stateErr != nil {
+				panic(stateErr)
+			}
+			mgr.onPreparRollback(op.Txn)
+			return false
+		}
 		panic(err)
 	}
 

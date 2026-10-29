@@ -84,6 +84,7 @@ type Options struct {
 	LocalFs           fileservice.FileService                  `toml:"-"`
 	TmpFs             *fileservice.TmpFileService              `toml:"-"`
 	WalClientFactory  logservicedriver.LogServiceClientFactory `toml:"-"`
+	MaxWALRecordSize  int                                      `toml:"-"`
 	Ctx               context.Context                          `toml:"-"`
 	Shard             metadata.TNShard                         `toml:"-"`
 	Clock             clock.Clock                              `toml:"-"`

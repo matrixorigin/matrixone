@@ -3486,7 +3486,7 @@ func handleCreateAccount(ses FeSession, execCtx *ExecCtx, ca *tree.CreateAccount
 
 	bh := ses.GetBackgroundExec(
 		execCtx.reqCtx,
-		&BackgroundExecOption{forcePessimisticRC: true},
+		&BackgroundExecOption{forcePessimisticRC: true, internalExecution: true},
 	)
 	defer bh.Close()
 
@@ -3517,7 +3517,7 @@ func handleDropAccount(ses FeSession, execCtx *ExecCtx, da *tree.DropAccount, pr
 
 	bh := ses.GetBackgroundExec(
 		execCtx.reqCtx,
-		&BackgroundExecOption{forcePessimisticRC: true},
+		&BackgroundExecOption{forcePessimisticRC: true, internalExecution: true},
 	)
 	defer bh.Close()
 
@@ -3773,7 +3773,7 @@ func handleGrantPrivilege(ses FeSession, execCtx *ExecCtx, gp *tree.GrantPrivile
 	// Object lifecycle locks are part of GRANT's correctness contract. Force the
 	// private transaction into the same pessimistic RC protocol as DROP even on
 	// optimistic deployments; LockOp intentionally skips optimistic txns.
-	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{forcePessimisticRC: true})
+	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{forcePessimisticRC: true, internalExecution: true})
 	defer bh.Close()
 
 	// put it into the single transaction
@@ -3791,7 +3791,7 @@ func handleGrantPrivilege(ses FeSession, execCtx *ExecCtx, gp *tree.GrantPrivile
 // handleRevokePrivilege revokes the privilege from the user or role
 func handleRevokePrivilege(ses FeSession, execCtx *ExecCtx, rp *tree.RevokePrivilege) (err error) {
 	ctx := execCtx.reqCtx
-	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{forcePessimisticRC: true})
+	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{forcePessimisticRC: true, internalExecution: true})
 	defer bh.Close()
 
 	// put it into the single transaction
@@ -5886,6 +5886,16 @@ func executeStmtWithTxn(ses FeSession,
 		execCtx.proc.SetIncrStatementDisabled(true)
 		defer execCtx.proc.SetIncrStatementDisabled(wasDisabled)
 
+		// Derived statements on a shared-transaction background executor
+		// (e.g. nested procedure bodies) skip executeStmtWithWorkspace, so
+		// the READ ONLY admission runs here before dispatch instead. The gate
+		// evaluates the originating user session and the temporary bindings
+		// live at this moment; origin-less maintenance executions stay
+		// exempt inside it.
+		if err = enforceReadOnlyTxnAccessMode(ses, execCtx, execCtx.stmt, ses.GetDatabaseName()); err != nil {
+			return err
+		}
+
 		err = dispatchStmt(ses, statsArr, execCtx)
 		recordSessionDDL(ses, execCtx, err)
 	}
@@ -6012,6 +6022,15 @@ func executeStmtWithWorkspace(ses FeSession,
 		return moerr.NewInternalError(execCtx.reqCtx, "savepoint has not been implemented yet. please rollback the transaction.")
 	}
 
+	// Reject writes in a READ ONLY transaction (MySQL ERROR 1792). This runs
+	// before TxnHandler.Create so a DDL statement inside an explicit read-only
+	// transaction is rejected before its implicit commit, and the rejection
+	// leaves the transaction fully usable for reads.
+	if err = enforceReadOnlyTxnAccessMode(
+		ses, execCtx, effectiveStmt, effectiveDefaultDatabase); err != nil {
+		return err
+	}
+
 	//in session migration, the txn forced to be autocommit.
 	//then the txn can be committed.
 	if execCtx.inMigration {
@@ -6051,6 +6070,16 @@ func executeStmtWithWorkspace(ses FeSession,
 	err = disttae.CheckTxnIsValid(txnOp)
 	if err != nil {
 		return err
+	}
+	if execCtx.deferReadOnlyOwnership {
+		// The pre-Create admission deferred an unqualified multi-source
+		// UPDATE verdict (READ ONLY path without an active transaction):
+		// re-run the gate now that a catalog transaction is attached.
+		execCtx.deferReadOnlyOwnership = false
+		if err = enforceReadOnlyTxnAccessMode(
+			ses, execCtx, effectiveStmt, effectiveDefaultDatabase); err != nil {
+			return err
+		}
 	}
 	if backSes, ok := ses.(*backSession); ok {
 		if hook := backSes.processHook; hook != nil {
@@ -6880,6 +6909,19 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		// completion and must not commit the new transaction opened by BEGIN.
 		_, replacementBegin := stmt.(*tree.BeginTransaction)
 		replacementBegin = replacementBegin && isTopLevelClientStatement(ses, execCtx, currentInput) && !ses.GetIsInternal()
+		if execCtx.implicitCommitBefore {
+			// A writing implicit-commit statement (TRUNCATE, RENAME) would
+			// commit an active READ ONLY transaction below and then execute in
+			// a fresh write-capable transaction. MySQL instead rejects the
+			// statement with ERROR 1792 and keeps the transaction alive for
+			// reads, so gate before the implicit commit happens.
+			execCtx.txnOpt.activeTxnAtStart = ses.GetTxnHandler().InActiveTxn()
+			execCtx.txnOpt.activeTxnAtStartKnown = true
+			if err = enforceReadOnlyTxnAccessMode(ses, execCtx, effectiveStmt, effectiveDefaultDatabase); err != nil {
+				logStatementStatus(execCtx.reqCtx, ses, stmt, fail, err)
+				return err
+			}
+		}
 		if execCtx.implicitCommitBefore || replacementBegin {
 			beforeCommit := ses.getLastCommitTS()
 			if err = ses.GetTxnHandler().commitBeforeStatement(execCtx); err != nil {

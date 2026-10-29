@@ -94,6 +94,12 @@ func (w *StoreInfo) nextLSN(gid uint32) uint64 {
 	return 1
 }
 
+func (w *StoreInfo) peekNextLSN(gid uint32) uint64 {
+	w.watermark.mu.Lock()
+	defer w.watermark.mu.Unlock()
+	return w.watermark.allocatedLSN[gid] + 1
+}
+
 func (w *StoreInfo) logDSN(driverEntry *driverEntry.Entry) {
 	info := driverEntry.Info
 	w.lsn2dsn.mu.Lock()

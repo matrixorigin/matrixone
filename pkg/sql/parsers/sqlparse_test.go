@@ -527,6 +527,15 @@ func TestHandleSqlForRecord(t *testing.T) {
 	// plausible the anonymous/empty/suffix shapes look.
 	t.Run("set password eq after invalid target stays fail closed", func(t *testing.T) {
 		for _, mode := range []string{"", "NO_BACKSLASH_ESCAPES", "ANSI_QUOTES,NO_BACKSLASH_ESCAPES"} {
+			// An invalid earlier delimiter must permanently taint the target:
+			// later literals cannot repair a missing user or host and let the
+			// next '=' hide a credential that has already been skipped.
+			for _, prefix := range []string{"FOR", "FOR ordinary_user @"} {
+				raw := "SET PASSWORD " + prefix + " = 'BrokenTargetSecret42' = ''"
+				fragments, secrets := MaskSecretLiteralsWithSQLMode(raw, mode)
+				require.Equal(t, []string{"******"}, fragments, mode+"/"+prefix)
+				require.Equal(t, []string{raw}, secrets)
+			}
 			// leak vector from the review: IDENTIFIED BY phrase then '= ''.
 			raw := "SET PASSWORD FOR ordinary_user IDENTIFIED BY 'ProbeSecret42' = ''"
 			fragments, secrets := MaskSecretLiteralsWithSQLMode(raw, mode)

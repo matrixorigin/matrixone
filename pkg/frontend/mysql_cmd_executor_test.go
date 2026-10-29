@@ -211,6 +211,8 @@ func TestDoComQuerySetPasswordTargetNameRedaction(t *testing.T) {
 		{"identified then nonempty assignment", "ordinary_user", "IDENTIFIED BY 'EchoGuardSecret42' = PASSWORD('%s')", "", true},
 		{"identified assignment no backslash", "ordinary_user", "IDENTIFIED BY '%s' = ''", "NO_BACKSLASH_ESCAPES", true},
 		{"identified assignment ansi", "ordinary_user", "IDENTIFIED BY '%s' = ''", "ANSI_QUOTES,NO_BACKSLASH_ESCAPES", true},
+		{"assignment before user", "", "= '%s' = ''", "", true},
+		{"assignment before host", "ordinary_user @", "= '%s' = ''", "", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := defines.AttachAccountId(t.Context(), catalog.System_Account)
@@ -624,6 +626,45 @@ func TestStmtClosePreservesDiagnostics(t *testing.T) {
 	warnings, errors := ses.diagnosticsCounts()
 	require.Zero(t, warnings)
 	require.Zero(t, errors)
+}
+
+func TestShowDiagnosticCountPublishesUnsignedMetadata(t *testing.T) {
+	// Issue #31498's producer contract, asserted where default CI can see it:
+	// SHOW COUNT(*) WARNINGS/ERRORS must publish an unsigned LONGLONG column
+	// holding a uint64 count. A reverted SetSigned(false) or an int64 count
+	// would silently regress the wire behavior that result saving trips over;
+	// the converter-focused tests cannot see that, so the producer is pinned
+	// here without the batch-protocol external fixture.
+	newSes := func() *Session {
+		return &Session{
+			feSessionImpl: feSessionImpl{mrs: &MysqlResultSet{}},
+			errInfo:       &errInfo{maxCnt: MoDefaultErrorCount},
+		}
+	}
+	execCtx := &ExecCtx{reqCtx: context.Background(), stmt: &tree.ShowWarnings{}}
+
+	warnings := newSes()
+	warnings.appendWarningDiagnostic(1329, "No data")
+	require.NoError(t, doShowDiagnosticCount(warnings, execCtx, false))
+	mrs := warnings.GetMysqlResultSet()
+	require.Equal(t, uint64(1), mrs.GetRowCount())
+	require.Len(t, mrs.Columns, 1)
+	column := mrs.Columns[0]
+	require.Equal(t, "@@session.warning_count", column.Name())
+	require.Equal(t, defines.MYSQL_TYPE_LONGLONG, column.ColumnType())
+	require.False(t, column.IsSigned())
+	require.Equal(t, uint64(1), mrs.Data[0][0])
+
+	errorsCount := newSes()
+	require.NoError(t, doShowDiagnosticCount(errorsCount, execCtx, true))
+	mrs = errorsCount.GetMysqlResultSet()
+	require.Equal(t, uint64(1), mrs.GetRowCount())
+	require.Len(t, mrs.Columns, 1)
+	column = mrs.Columns[0]
+	require.Equal(t, "@@session.error_count", column.Name())
+	require.Equal(t, defines.MYSQL_TYPE_LONGLONG, column.ColumnType())
+	require.False(t, column.IsSigned())
+	require.Equal(t, uint64(0), mrs.Data[0][0])
 }
 
 func TestShowErrorsFiltersWarningDiagnostics(t *testing.T) {

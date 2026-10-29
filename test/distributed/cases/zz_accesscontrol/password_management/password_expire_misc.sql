@@ -106,6 +106,11 @@ select 1;
 -- @session
 set global default_password_lifetime = @pe_password_lifetime;
 
+-- Invalid password targets must not echo credentials through the real client.
+SET PASSWORD FOR ordinary_user IDENTIFIED BY 'ProbeSecret42' =;
+SET PASSWORD FOR = 'BrokenTargetSecret42' = '';
+SET PASSWORD FOR ordinary_user @ = 'BrokenHostSecret42' = '';
+
 drop user if exists pe_u1;
 drop user if exists pe_u2;
 drop user if exists pe_u3;

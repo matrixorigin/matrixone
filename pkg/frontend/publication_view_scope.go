@@ -364,12 +364,16 @@ func validatePublicationViewBindings(
 // as an execution- or transaction-layer condition the probe's caller must
 // handle with the error's own identity: context cancellation and deadlines,
 // query interruption, the transaction retry and write-conflict family, and
-// every code moerr.MustRollbackTxn already treats as fatal to the owning
-// transaction (deadlocks, lock timeouts, backend loss). Everything else from
-// the probe is a semantic property of the stored definition - a missing
-// relation, a missing column, a resolution failure - and keeps receiving the
-// stable broken-view verdict below; only forwarding infrastructure conditions
-// with their own code keeps that message truthful.
+// every code moerr.MustRollbackTxn treats as fatal to the owning transaction
+// (deadlocks, backend loss). The lock-wait-timeout family is matched
+// separately because the shared policy deliberately keeps it statement-scoped:
+// the timeout is still an infrastructure condition, not a property of the
+// stored definition, so the probe forwards its identity instead of verdicting
+// a broken view. Everything else from the probe is a semantic property of the
+// stored definition - a missing relation, a missing column, a resolution
+// failure - and keeps receiving the stable broken-view verdict below; only
+// forwarding infrastructure conditions with their own code keeps that message
+// truthful.
 func isPublicationProbeInfrastructureError(err error) bool {
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return true
@@ -386,7 +390,39 @@ func isPublicationProbeInfrastructureError(err error) bool {
 			return true
 		}
 	}
+	// The lock-wait-timeout family is statement-scoped in the shared rollback
+	// policy, so MustRollbackTxn no longer surfaces it, and errors.As only
+	// yields the first error of matched type: match the two codes through
+	// every wrapped and joined cause to keep the probe's identity behavior
+	// for this family unchanged.
+	if isLockWaitTimeoutIdentity(err) {
+		return true
+	}
 	return moerr.MustRollbackTxn(err)
+}
+
+// isLockWaitTimeoutIdentity reports whether err carries a local or owner-side
+// lock-wait-timeout code anywhere in its wrapped or joined error tree. Every
+// element of a joined chain is checked, so a timeout joined behind another
+// error keeps its infrastructure identity.
+func isLockWaitTimeoutIdentity(err error) bool {
+	if e, ok := err.(*moerr.Error); ok && e != nil {
+		switch e.ErrorCode() {
+		case moerr.ErrLockWaitTimeout, moerr.ErrRemoteLockWaitTimeout:
+			return true
+		}
+	}
+	switch e := err.(type) {
+	case interface{ Unwrap() []error }:
+		for _, cause := range e.Unwrap() {
+			if isLockWaitTimeoutIdentity(cause) {
+				return true
+			}
+		}
+	case interface{ Unwrap() error }:
+		return isLockWaitTimeoutIdentity(e.Unwrap())
+	}
+	return false
 }
 
 // publicationViewBindingSQL is the empty-result statement whose executed form

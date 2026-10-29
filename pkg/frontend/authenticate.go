@@ -3314,7 +3314,7 @@ func doAlterUser(ctx context.Context, ses *Session, au *alterUser) (err error) {
 		}
 	}
 
-	bh := ses.GetBackgroundExec(ctx)
+	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{internalExecution: true})
 	defer bh.Close()
 
 	// passwordUpdated tracks whether the password of the session user was
@@ -3560,7 +3560,7 @@ func doAlterAccount(ctx context.Context, ses *Session, aa *alterAccount) (err er
 	}
 
 	alterAccountFunc := func() (rtnErr error) {
-		bh := ses.GetBackgroundExec(ctx)
+		bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{internalExecution: true})
 		defer bh.Close()
 
 		rtnErr = bh.Exec(ctx, "begin")
@@ -3805,7 +3805,7 @@ func doSwitchRole(ctx context.Context, ses *Session, sr *tree.SetRole) (err erro
 		// step1 : check the role exists or not;
 
 		switchRoleFunc := func() (rtnErr error) {
-			bh := ses.GetBackgroundExec(ctx)
+			bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{internalExecution: true})
 			defer bh.Close()
 
 			rtnErr = bh.Exec(ctx, "begin;")
@@ -4817,7 +4817,7 @@ func doDropUser(ctx context.Context, ses *Session, du *tree.DropUser) (err error
 	}
 
 	// Retain creator-row locks held by partial restore through recreation.
-	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{forcePessimisticRC: true})
+	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{forcePessimisticRC: true, internalExecution: true})
 	defer bh.Close()
 
 	// put it into the single transaction
@@ -4903,7 +4903,7 @@ func doDropRole(ctx context.Context, ses *Session, dr *tree.DropRole) (err error
 	}
 
 	// Honor grant-row locks retained by catalog restore through replay.
-	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{forcePessimisticRC: true})
+	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{forcePessimisticRC: true, internalExecution: true})
 	defer bh.Close()
 
 	// put it into the single transaction
@@ -4991,7 +4991,7 @@ func doAlterRole(ctx context.Context, ses *Session, ar *tree.AlterRole) (err err
 		return moerr.NewInternalErrorf(ctx, "the new role name is the same as the old role name")
 	}
 
-	bh := ses.GetBackgroundExec(ctx)
+	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{internalExecution: true})
 	defer bh.Close()
 
 	// put it into the single transaction
@@ -6208,7 +6208,7 @@ func doRevokeRole(ctx context.Context, ses *Session, rr *tree.RevokeRole) (err e
 	// semantics used by active-session authorization refreshes. Otherwise an
 	// SI snapshot can make a committed REVOKE temporarily invisible even to a
 	// fresh private authorization transaction.
-	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{forcePessimisticRC: true})
+	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{forcePessimisticRC: true, internalExecution: true})
 	defer bh.Close()
 
 	// step1 : check Roles exists or not
@@ -6368,7 +6368,7 @@ func doGrantRole(ctx context.Context, ses *Session, gr *tree.GrantRole) (err err
 	}
 
 	account := ses.GetTenantInfo()
-	bh := ses.GetBackgroundExec(ctx)
+	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{internalExecution: true})
 	defer bh.Close()
 
 	// step1 : check Roles exists or not
@@ -11610,7 +11610,7 @@ func InitUser(ctx context.Context, ses *Session, tenant *TenantInfo, cu *createU
 	}
 	defer mpool.DeleteMPool(mp)
 
-	bh := ses.GetBackgroundExec(ctx)
+	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{internalExecution: true})
 	defer bh.Close()
 
 	err = bh.Exec(ctx, "begin;")
@@ -11851,7 +11851,7 @@ func InitRole(ctx context.Context, ses *Session, tenant *TenantInfo, cr *tree.Cr
 		return err
 	}
 
-	bh := ses.GetBackgroundExec(ctx)
+	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{internalExecution: true})
 	defer bh.Close()
 
 	err = bh.Exec(ctx, "begin;")
@@ -12822,6 +12822,15 @@ func doInterpretCall(
 		}
 		defer freeStatements(stmt)
 
+		// Procedure bodies run on background executors that open and commit
+		// their own transactions. When the caller is in READ ONLY mode the
+		// whole call must therefore be rejected up front if any body
+		// statement could write; otherwise the procedure's writes would
+		// persist outside the caller's read-only transaction.
+		if err = enforceReadOnlyOnProcedureBody(ctx, ses, stmt, dbName); err != nil {
+			return nil, err
+		}
+
 		interpreter.ctx, err = enterSQLProcedure(ctx, ses, dbName, string(call.Name.Name.ObjectName))
 		if err != nil {
 			return nil, err
@@ -12834,6 +12843,17 @@ func doInterpretCall(
 		return interpreter.GetResult(), nil
 
 	case "starlark":
+		// Starlark bodies embed SQL in a non-SQL grammar whose statements
+		// cannot be classified statically; fail closed under a read-only
+		// caller rather than let embedded writes commit on their own
+		// transaction.
+		readOnly, readErr := callerTxnReadOnly(ses)
+		if readErr != nil {
+			return nil, readErr
+		}
+		if readOnly {
+			return nil, moerr.NewCantExecuteInReadOnlyTransaction(ctx)
+		}
 		interpreter.ctx, err = enterSQLProcedure(ctx, ses, dbName, string(call.Name.Name.ObjectName))
 		if err != nil {
 			return nil, err
@@ -13016,7 +13036,11 @@ func doSetGlobalSystemVariables(
 ) (err error) {
 	accountId := uint64(ses.GetTenantInfo().TenantID)
 	accountName := ses.GetTenantName()
-	bh := ses.GetBackgroundExec(ctx)
+	// The generated catalog INSERT/UPDATE below is trusted implementation
+	// SQL of the SET GLOBAL statement itself, not caller-authored work: mark
+	// the executor internal so client-facing gates (e.g. the READ ONLY
+	// transaction enforcement) never observe it as user writes.
+	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{internalExecution: true})
 	defer bh.Close()
 
 	if err = bh.Exec(ctx, "begin;"); err != nil {

@@ -265,6 +265,8 @@ func handleSQLForRecordFragmentWithSecrets(sql string, mode mysql.SQLModeFlags) 
 					(sawFor && targetTokens == 1) ||
 					(sawFor && targetTokens == 3 && sawAt))
 			if !validPrefix {
+				// Later tokens cannot repair an already malformed target.
+				prefixBad = true
 				continue
 			}
 			sawSet, sawSetPassword = false, false
@@ -307,7 +309,7 @@ func handleSQLForRecordFragmentWithSecrets(sql string, mode mysql.SQLModeFlags) 
 		}
 	}
 	if sawSetPassword {
-		// Without the assignment delimiter, target and secret cannot be
+		// Without a trustworthy assignment delimiter, target and secret cannot be
 		// separated reliably. Retain no raw fragment, and preserve its full
 		// provenance so frontend parser-error echoes are scrubbed as well.
 		return "******", []string{sql}
