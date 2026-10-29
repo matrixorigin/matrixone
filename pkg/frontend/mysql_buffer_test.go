@@ -1078,9 +1078,12 @@ func TestConn_ReadLoadLocalPacketErr(t *testing.T) {
 	tConn, conn = newTestConn(t, leakAlloc)
 
 	resetFunc := func() {
+		// A fatal allocation/transport error retires that framing generation.
+		// Each independent failure scenario starts on a fresh connection.
+		_ = conn.Close()
+		assert.True(t, leakAlloc.CheckBalance())
 		leakAlloc.mod = 0
-		tConn.mod = 0
-		tConn.data = nil
+		tConn, conn = newTestConn(t, leakAlloc)
 	}
 
 	for loop := 0; loop < 2; loop++ {
@@ -1180,9 +1183,11 @@ func TestConn_ReadLoadLocalPacketErr(t *testing.T) {
 					assert.NotNil(t, err)
 					assert.Nil(t, read)
 					assert.Nil(t, conn.loadLocalBuf.data)
-					//skip payload1 data
-					buf := make([]byte, payload1Len)
-					_, _ = tConn.Read(buf)
+					// A failed allocation consumed the header; do not reuse its
+					// unfinished frame by manually skipping untracked bytes.
+					assert.True(t, conn.LoadLocalFramingBroken())
+					resetFunc()
+					_, _ = tConn.Write(makePacket(payload2, 3))
 				} else if i == 1 {
 					assert.Nil(t, err)
 					assert.True(t, bytes.Equal(payload2, read))

@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
 )
 
 const (
@@ -185,6 +186,13 @@ func (block *MemBlock) Adjust() {
 	}
 }
 
+// loadLocalFrameProgress belongs to the single LOCAL upload reader, including
+// its drain phase. It outlives a socket interrupt and contains no payload data.
+type loadLocalFrameProgress struct {
+	headerBytes, payloadBytes, payloadLength int
+	decoded, interrupted                     bool
+}
+
 type Conn struct {
 	id                    uint64
 	conn                  net.Conn
@@ -230,16 +238,10 @@ type Conn struct {
 	// owner clears it, after the watcher is joined, before draining or
 	// reusing the socket.
 	loadLocalIOInterrupt atomic.Bool
-	// loadLocalFrameBroken records that a load-local packet read failed after
-	// consuming only part of a frame (a partial header, a complete header
-	// whose payload was never read, or a partial payload). From that failure
-	// on, the first byte of what looks like the next packet still belongs to
-	// the interrupted frame: the packet boundary of the connection is unknown
-	// and file bytes can re-frame as an empty upload packet (a fake EOF) or a
-	// later command. The flag is deliberately sticky — no interrupt clear and
-	// no later successful read may revive a boundary that was already lost —
-	// so it can never again authorize connection reuse; the upload owner must
-	// retire the connection instead of draining it.
+	// Only the upload owner reads/writes frame progress. The watcher changes
+	// socket deadlines, never framing. An interrupted read keeps its exact
+	// prefix until the owner discards the remainder or retires the connection.
+	loadLocalFrame       loadLocalFrameProgress
 	loadLocalFrameBroken atomic.Bool
 	// loadLocalMu serializes deadline installs with InterruptLoadLocalIO and
 	// ClearLoadLocalIOInterrupt: a deadline is chosen and armed atomically
@@ -498,60 +500,112 @@ func (c *Conn) ReadLoadLocalPacket() ([]byte, error) {
 // deadline additionally caps every single network read of this packet at that
 // absolute point, so one stalling header or payload cannot outlive the drain.
 func (c *Conn) ReadLoadLocalPacketWithTimeout(timeout time.Duration, deadline time.Time) (_ []byte, err error) {
-	var packetLength int
-	// consumed counts the bytes of THIS frame already taken off the wire. An
-	// error after any of them (partial header, a complete header whose payload
-	// was never read, or a partial payload) means the next unread byte is not
-	// a packet boundary: the interrupted frame's remainder still owns it.
-	var consumed int
+	if c.loadLocalFrameBroken.Load() {
+		return nil, moerr.NewInvalidInputNoCtx("unfinished LOCAL frame requires discard or disconnect")
+	}
+	f := &c.loadLocalFrame
 	defer func() {
 		if rErr := recover(); rErr != nil {
-			_, ok := rErr.(*moerr.Error)
-			if !ok {
-				err = errors.Join(err, moerr.ConvertPanicError(context.Background(), rErr))
-			} else {
-				err = errors.Join(err, rErr.(error))
-			}
+			err = errors.Join(err, moerr.ConvertPanicError(context.Background(), rErr))
 		}
 		if err != nil {
-			if consumed > 0 {
+			// Counts include n>0 together with an error. Only our own deadline
+			// interrupt is resumable; EOF, ordinary timeout and invalid framing
+			// remain terminal even if some bytes were delivered.
+			var netErr net.Error
+			f.interrupted = c.loadLocalIOInterrupt.Load() && errors.As(err, &netErr) && netErr.Timeout()
+			if f.headerBytes+f.payloadBytes > 0 {
 				c.loadLocalFrameBroken.Store(true)
 			}
 			c.FreeLoadLocal()
 		}
 	}()
-	var n int
-	n, err = c.ReadNBytesIntoBufWithTimeout(c.header[:], HeaderLengthOfTheProtocol, timeout, deadline)
-	consumed += n
+	f.headerBytes, err = c.ReadNBytesIntoBufWithTimeout(c.header[:], HeaderLengthOfTheProtocol, timeout, deadline)
 	if err != nil {
-		return
+		return nil, err
 	}
-	packetLength = int(uint32(c.header[0]) | uint32(c.header[1])<<8 | uint32(c.header[2])<<16)
-	sequenceId := c.header[3]
-	c.sequenceId = sequenceId + 1
-	if err = c.CheckAllowedPacketSize(packetLength); err != nil {
-		return
+	f.payloadLength = int(uint32(c.header[0]) | uint32(c.header[1])<<8 | uint32(c.header[2])<<16)
+	c.sequenceId = c.header[3] + 1
+	f.decoded = true
+	if err = c.CheckAllowedPacketSize(f.payloadLength); err != nil {
+		return nil, err
 	}
-
-	if c.loadLocalBuf.data == nil {
-		c.loadLocalBuf.data, err = c.allocator.Alloc(packetLength)
-		if err != nil {
-			return
-		}
-	} else if len(c.loadLocalBuf.data) < packetLength {
+	if len(c.loadLocalBuf.data) < f.payloadLength {
 		c.loadLocalBuf.freeBuffUnsafe(c.allocator)
-		c.loadLocalBuf.data, err = c.allocator.Alloc(packetLength)
+		c.loadLocalBuf.data, err = c.allocator.Alloc(f.payloadLength)
+		if err != nil {
+			return nil, err
+		}
+	}
+	// Test barrier: the upload owns a complete header but no payload yet.
+	_, _, _ = fault.TriggerFault("load-local-packet-header")
+	f.payloadBytes, err = c.ReadNBytesIntoBufWithTimeout(c.loadLocalBuf.data, f.payloadLength, timeout, deadline)
+	if err != nil {
+		return nil, err
+	}
+	payload := c.loadLocalBuf.data[:f.payloadLength]
+	*f = loadLocalFrameProgress{}
+	return payload, nil
+}
+
+// DiscardLoadLocalPacket completes an interrupted frame before reading another
+// header. It never exposes payload to SQL and allocates at most 32 KiB of
+// reusable scratch, irrespective of a client's declared packet size. The byte
+// budget and absolute deadline include the interrupted frame's remainder.
+func (c *Conn) DiscardLoadLocalPacket(timeout time.Duration, deadline time.Time, budget int64) (discarded int64, eof bool, err error) {
+	f := &c.loadLocalFrame
+	if c.loadLocalFrameBroken.Load() && !f.interrupted {
+		return 0, false, moerr.NewInvalidInputNoCtx("LOCAL packet framing is broken")
+	}
+	defer func() {
+		if rErr := recover(); rErr != nil {
+			err = errors.Join(err, moerr.ConvertPanicError(context.Background(), rErr))
+		}
+		if err != nil {
+			c.loadLocalFrameBroken.Store(true)
+			f.interrupted = false
+		}
+	}()
+	if f.headerBytes < HeaderLengthOfTheProtocol {
+		var n int
+		n, err = c.ReadNBytesIntoBufWithTimeout(c.header[f.headerBytes:], HeaderLengthOfTheProtocol-f.headerBytes, timeout, deadline)
+		f.headerBytes += n
 		if err != nil {
 			return
 		}
 	}
-
-	n, err = c.ReadNBytesIntoBufWithTimeout(c.loadLocalBuf.data, packetLength, timeout, deadline)
-	consumed += n
-	if err != nil {
-		return
+	if !f.decoded {
+		f.payloadLength = int(uint32(c.header[0]) | uint32(c.header[1])<<8 | uint32(c.header[2])<<16)
+		c.sequenceId = c.header[3] + 1
+		f.decoded = true
+		if err = c.CheckAllowedPacketSize(f.payloadLength); err != nil {
+			return
+		}
 	}
-	return c.loadLocalBuf.data[:packetLength], err
+	remaining := f.payloadLength - f.payloadBytes
+	if int64(remaining) > budget {
+		return 0, false, moerr.NewInvalidInputNoCtx("LOCAL upload exceeds drain byte budget")
+	}
+	if remaining > 0 && len(c.loadLocalBuf.data) == 0 {
+		c.loadLocalBuf.data, err = c.allocator.Alloc(min(remaining, 32*1024))
+		if err != nil {
+			return
+		}
+	}
+	for remaining > 0 {
+		var n int
+		n, err = c.ReadNBytesIntoBufWithTimeout(c.loadLocalBuf.data, min(remaining, len(c.loadLocalBuf.data)), timeout, deadline)
+		f.payloadBytes += n
+		discarded += int64(n)
+		remaining -= n
+		if err != nil {
+			return
+		}
+	}
+	eof = f.payloadLength == 0
+	*f = loadLocalFrameProgress{}
+	c.loadLocalFrameBroken.Store(false) // a complete frame, not an interrupt clear, proves this boundary
+	return
 }
 
 // ReadNBytesIntoBufWithTimeout reads n bytes from the network into buf with a
@@ -576,14 +630,9 @@ func (c *Conn) ReadNBytesIntoBufWithTimeout(buf []byte, n int, timeout time.Dura
 	return readLength, nil
 }
 
-// LoadLocalFramingBroken reports whether a load-local packet read on this
-// connection failed after consuming only part of a frame (a partial header, a
-// complete header whose payload was never read, or a partial payload). Once
-// true, the packet boundary is permanently unknown: any later file byte can
-// re-frame as an empty upload packet (a fake EOF) or a subsequent command, so
-// the upload owner must retire the connection instead of draining or reusing
-// it. The flag is sticky by design — ClearLoadLocalIOInterrupt lifts only the
-// I/O interrupt, never the framing state.
+// LoadLocalFramingBroken reports an unfinished or invalid LOCAL frame. Only
+// a successful discard from recorded progress can restore its packet boundary;
+// clearing I/O deadlines alone cannot do so.
 func (c *Conn) LoadLocalFramingBroken() bool {
 	return c.loadLocalFrameBroken.Load()
 }
