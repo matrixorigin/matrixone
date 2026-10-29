@@ -55,6 +55,7 @@ func (s *stubCtx) ResolveVariable(_ string, _, _ bool) (any, error) {
 }
 func (s *stubCtx) IsFrontend() bool                             { return s.isFrontend }
 func (s *stubCtx) IsTableClone() bool                           { return false }
+func (s *stubCtx) IsNewIndex(string) bool                       { return false }
 func (s *stubCtx) IsExperimentalEnabled(_ string) (bool, error) { return true, nil }
 func (s *stubCtx) IsCCPRTaskTransaction() bool                  { return false }
 func (s *stubCtx) IsTableFromPublication(_ *plan.TableDef) bool { return false }

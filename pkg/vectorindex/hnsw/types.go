@@ -261,6 +261,13 @@ func CheckStorable[T types.ArrayElement](vec []T, kind usearch.Quantization) err
 				return narrowedError(e, overflows)
 			}
 		}
+	default:
+		// bf16/f16/int8/uint8 elements widen to float32 exactly; bf16 can exceed f16
+		for _, f := range toFloat32(vec) {
+			if f >= limit || f <= -limit {
+				return narrowedError(float64(f), overflows)
+			}
+		}
 	}
 	return nil
 }

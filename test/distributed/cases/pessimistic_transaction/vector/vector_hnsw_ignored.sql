@@ -12,8 +12,14 @@ create table t(id bigint primary key, v vecf32(2));
 insert into t values (1,'[1,1]'),(4,'[100000,1]');
 create index i using hnsw on t(v) op_type 'vector_l2_ops' quantization 'float16';
 alter table t add index i using hnsw (v) op_type 'vector_l2_ops' quantization 'float16';
+-- a copying ALTER TABLE that adds the index fails too
+alter table t add column c0 int, add index i using hnsw (v) op_type 'vector_l2_ops' quantization 'float16';
 show index ignored from t;
 select count(*) from mo_catalog.mo_indexes where name = 'i' and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = 'hnsw_ignored' and relname = 't');
+-- a vecbf16 value beyond the float16 range
+create table b(id bigint primary key, v vecbf16(2));
+insert into b values (1,'[1,1]'),(2,'[100000,1]');
+create index ib using hnsw on b(v) op_type 'vector_l2_ops' quantization 'float16';
 
 -- ---------------- I1: a row that cannot be stored does not hold back later rows -----
 delete from t where id = 4;
@@ -27,6 +33,14 @@ show index ignored from t;
 -- @wait_expect(2, 60)
 select id from t order by l2_distance(v,'[2,2]') limit 3 by rank with option 'mode=pre';
 select id from t order by l2_distance(v,'[2,2]') limit 3 by rank with option 'mode=force';
+-- a vecbf16 value beyond the float16 range, kept by an asynchronous index
+create index ib using hnsw on b(v) op_type 'vector_l2_ops' quantization 'float16' async;
+insert into b values (3,'[2,2]'),(4,'[1,99999]');
+-- @ignore:3
+-- @wait_expect(2, 60)
+show index ignored from b;
+-- @wait_expect(2, 60)
+select id from b order by l2_distance(v,'[2,2]') limit 2 by rank with option 'mode=pre';
 
 -- ---------------- I2: the ignored rows follow the source rows -----
 -- id 2 becomes storable and is indexed; id 3 becomes unstorable and leaves the index;

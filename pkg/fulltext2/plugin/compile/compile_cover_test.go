@@ -74,8 +74,9 @@ func (s *stubCtx) ResolveVariable(name string, _, _ bool) (any, error) {
 	}
 	return int64(0), nil
 }
-func (s *stubCtx) IsFrontend() bool   { return s.isFrontend }
-func (s *stubCtx) IsTableClone() bool { return false }
+func (s *stubCtx) IsFrontend() bool       { return s.isFrontend }
+func (s *stubCtx) IsTableClone() bool     { return false }
+func (s *stubCtx) IsNewIndex(string) bool { return false }
 func (s *stubCtx) IsExperimentalEnabled(_ string) (bool, error) {
 	return s.experimental, s.expErr
 }

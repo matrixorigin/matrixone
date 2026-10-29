@@ -160,10 +160,6 @@ func NewIndexConsumer(cnUUID string,
 		ignored:     ignored,
 		//sqlBufSendCh: make(chan []byte),
 	}
-	if ignored != nil {
-		ignored.repr = c.valueRepr()
-	}
-
 	return c, nil
 }
 

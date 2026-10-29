@@ -82,6 +82,10 @@ type CompileContext interface {
 	// executor.DefaultResolveVariable).
 	IsFrontend() bool
 
+	// IsNewIndex reports whether the statement being compiled adds index name, as opposed to
+	// rebuilding an index the table already had (a copying ALTER rebuilds both kinds).
+	IsNewIndex(name string) bool
+
 	// IsTableClone reports whether this compile runs inside a table-clone scope
 	// (`create table … clone`) — which is how snapshot/restore replays a table.
 	// Lets an index plugin restore a prebuilt model verbatim instead of
@@ -298,9 +302,9 @@ func MergeReindexParams(old map[string]string, update ReindexParamUpdate, algo s
 	return out, nil
 }
 
-// RejectUnstorableRows reports whether the build of an index fails on a row the index cannot
-// store instead of recording it as ignored: only a new index built by the user's statement,
-// whose user is waiting on it, rejects such a row.
-func RejectUnstorableRows(ctx CompileContext) bool {
-	return ctx.IndexInfo() != nil && ctx.IsFrontend()
+// RejectUnstorableRows reports whether the build of index name fails on a row the index
+// cannot store instead of recording it as ignored: only a new index built by the user's
+// statement, whose user is waiting on it, rejects such a row.
+func RejectUnstorableRows(ctx CompileContext, name string) bool {
+	return ctx.IsFrontend() && (ctx.IndexInfo() != nil || ctx.IsNewIndex(name))
 }

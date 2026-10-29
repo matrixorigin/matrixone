@@ -1,6 +1,6 @@
 # Rows an index cannot store
 
-Status: proposed.
+Status: proposed; revised 2026-10-29 after review (consistency, recovery and bounds).
 Issue: #31583 (fixes #31493).
 
 ## Problem
@@ -28,11 +28,11 @@ the field name is recorded in the document's `_ignored` metadata.
 - **A synchronous CREATE INDEX rejects the row instead.** The user is waiting on the statement
   and it rolls back as a whole, so the error reaches the person who can fix the data, as
   Elasticsearch rejects a malformed document at write. This covers `CREATE INDEX`,
-  `ALTER TABLE ... ADD INDEX` and an index declared in `CREATE TABLE`, when they build the index
-  synchronously.
+  `ALTER TABLE ... ADD INDEX`, including an ALTER TABLE that copies the table, and an index
+  declared in `CREATE TABLE`, when they build the index synchronously.
 - **Every other path ignores and records the row**, by the same rule: an asynchronous build,
   incremental sync, REINDEX (including `FORCE_SYNC` and the rebuild after a restore) and the
-  rebuild of ALTER TABLE. These run without a user to answer, or on an index that already exists
+  rebuild of an index the table already had by an ALTER TABLE that copies the table. These run without a user to answer, or on an index that already exists
   and may already hold ignored rows, so failing them would stop the index again. REINDEX and
   TRUNCATE start the ignored rows over.
 - **Only the value of one row is ignored.** An error that does not belong to one row's value,
@@ -41,6 +41,29 @@ the field name is recorded in the document's `_ignored` metadata.
 - **A search vector is not a row.** A query vector the index cannot store is rejected.
 - Each sync step that ignores rows writes one log line with the index, the count, a few primary
   keys and the reason.
+
+## Consistency, recovery and bounds
+
+- **One commit.** An incremental sync of an HNSW index writes the index, its ignored rows and
+  the advanced watermark in one transaction. If the sync fails or the CN stops before that
+  commit, nothing of it is visible and the next sync replays the same changes from the old
+  watermark, recomputing the same ignored rows. A build writes its ignored rows in the
+  statement that builds the index.
+- **Restart.** The ignored rows are only in the table; a sync keeps no state of them between
+  iterations, so a restart needs nothing beyond the watermark.
+- **Clone and restore.** The ignored table is one of the index's hidden tables. A clone, and a
+  restore that copies the hidden tables, copies the ignored rows with the index as of the same
+  snapshot; a restore that rebuilds the index records them anew.
+- **Retry.** A row is ignored only for a value the index cannot store, which fails the same way
+  on every retry, so no automatic retry is made. If a row was ignored because of a defect of
+  MatrixOne that is later fixed, REINDEX retries every row: it reads all source rows again and
+  starts the ignored rows over.
+- **Memory and work.** A sync never reads the ignored rows. It reads only whether the table has
+  one, and then records the primary keys of the rows it changes, so its memory follows the
+  changes of the iteration, which it holds anyway, never the number of ignored rows. A build,
+  and a sync that rebuilds the index, hold the rows they ignore until they write them: a
+  primary key and a reason each, a fraction of the vectors they hold for the same rows. Writes
+  to the table go in statements of at most 1024 rows.
 
 ## Interface
 
@@ -75,10 +98,10 @@ Each claim heads a section of the black-box suite
 
 | # | Claim | Unit proof |
 |---|---|---|
-| I1 | A row an HNSW index cannot store does not stop later rows from being indexed. | `TestHnswWriterIgnoresUnstorableVectors` |
-| I2 | The ignored rows follow the source rows: a delete, or an update to a storable value, removes a row; an update to another value the index cannot store changes its reason. | `TestIgnoredRowsTransitions`, `TestIgnoredRowsLoadsKeysAsTheWriterSeesThem` |
-| I3 | An asynchronous build, REINDEX (with and without `FORCE_SYNC`) and the ALTER TABLE rebuild ignore and record the rows; REINDEX and TRUNCATE start them over. | `TestHnswCreateIgnoresUnstorableRows`, `TestCheckStorable` |
-| I4 | A synchronous `CREATE INDEX` or `ALTER TABLE ... ADD INDEX` fails on a row the index cannot store and leaves no index. | `TestHnswCreateIgnoresUnstorableRows`, `TestGenBuildSQL` |
+| I1 | A row an HNSW index cannot store, of any column type, does not stop later rows from being indexed. | `TestHnswWriterIgnoresUnstorableVectors`, `TestCheckStorableMatchesToStorage` |
+| I2 | The ignored rows follow the source rows: a delete, or an update to a storable value, removes a row; an update to another value the index cannot store changes its reason. | `TestIgnoredRowsTransitions`, `TestIgnoredRowsLoadIsBounded` |
+| I3 | An asynchronous build, REINDEX (with and without `FORCE_SYNC`) and the ALTER TABLE rebuild ignore and record the rows; REINDEX and TRUNCATE start them over. | `TestHnswCreateIgnoresUnstorableRows`, `TestCheckStorable`, `TestRejectUnstorableRows` |
+| I4 | A synchronous `CREATE INDEX` or `ALTER TABLE ... ADD INDEX`, including one that copies the table, fails on a row the index cannot store and leaves no index. | `TestHnswCreateIgnoresUnstorableRows`, `TestGenBuildSQL`, `TestRejectUnstorableRows` |
 | I5 | A search vector the index cannot store is rejected. | `TestToStorage` |
 | I6 | `SHOW INDEX IGNORED` lists the ignored rows of every index and partition of a table, and `WHERE` filters them. | `TestShowIndexIgnored` |
 | I7 | `SHOW INDEX IGNORED` requires `SELECT` on the table. | `TestShowIndexIgnored` |
