@@ -372,19 +372,21 @@ func TestSqlAutoIsNullDerivedTableNullExtendedColumnNotRewritten(t *testing.T) {
 	require.False(t, sqlAutoIsNullAnyNodeNotCacheable(qry))
 }
 
-// TestSqlAutoIsNullDerivedTableMixPreservedColumnStillRewritten pins the
-// per-column boundary of the same derived table: the preserved side's
-// AUTO_INCREMENT column keeps its rewrite even though a null-extended column
-// is projected right next to it.
-func TestSqlAutoIsNullDerivedTableMixPreservedColumnStillRewritten(t *testing.T) {
+// TestSqlAutoIsNullDerivedTableMixPreservedColumnNotRewritten pins the
+// per-column boundary of the same derived table under the MySQL 8.4
+// FIELD_ITEM gate: the outer statement sees d.d1 through the mergeable
+// derived table, an Item_view_ref (REF_ITEM) in MySQL terms, which the
+// sql_auto_is_null gate in Item_func_isnull::fix_fields rejects; the
+// predicate keeps plain IS NULL semantics even for the preserved join side.
+func TestSqlAutoIsNullDerivedTableMixPreservedColumnNotRewritten(t *testing.T) {
 	cc := newSqlAutoIsNullTestContext(t, int64(1), nil)
 	qry := buildSqlAutoIsNullQuery(t, cc,
 		"select d.d1 from (select m.seq as d1, s.seq as d2 from auto_t m "+
 			"left join auto_t s on m.seq = s.seq) d where d.d1 is null")
-	require.True(t, sqlAutoIsNullQueryHasFunction(qry, "last_insert_id"),
-		"a preserved-side AUTO_INCREMENT column keeps the rewrite")
-	require.False(t, sqlAutoIsNullQueryHasFunction(qry, "isnull"))
-	require.True(t, sqlAutoIsNullAnyNodeNotCacheable(qry))
+	require.False(t, sqlAutoIsNullQueryHasFunction(qry, "last_insert_id"),
+		"a derived-table column reference is not a FIELD_ITEM and must keep plain IS NULL semantics")
+	require.True(t, sqlAutoIsNullQueryHasFunction(qry, "isnull"))
+	require.False(t, sqlAutoIsNullAnyNodeNotCacheable(qry))
 }
 
 // TestSqlAutoIsNullNestedDerivedNullSideNotRewritten walks the lineage one
@@ -401,17 +403,19 @@ func TestSqlAutoIsNullNestedDerivedNullSideNotRewritten(t *testing.T) {
 	require.False(t, sqlAutoIsNullAnyNodeNotCacheable(qry))
 }
 
-// TestSqlAutoIsNullDerivedTablePlainProjectionStillRewritten guards the
-// opposite direction: with no outer join anywhere in the lineage, the
-// projected AUTO_INCREMENT column keeps the MySQL rewrite; over-excluding
-// here would silently break the ODBC consumer pattern behind derived tables.
-func TestSqlAutoIsNullDerivedTablePlainProjectionStillRewritten(t *testing.T) {
+// TestSqlAutoIsNullDerivedTablePlainProjectionNotRewritten pins the MySQL
+// 8.4 FIELD_ITEM gate for the mergeable plain projection: a reference to a
+// derived-table column resolves to Item_view_ref (REF_ITEM), never
+// Item_field, so Item_func_isnull::fix_fields skips the sql_auto_is_null
+// rewrite and the predicate keeps plain IS NULL semantics.
+func TestSqlAutoIsNullDerivedTablePlainProjectionNotRewritten(t *testing.T) {
 	cc := newSqlAutoIsNullTestContext(t, int64(1), nil)
 	qry := buildSqlAutoIsNullQuery(t, cc,
 		"select d.seq from (select seq from auto_t) d where d.seq is null")
-	require.True(t, sqlAutoIsNullQueryHasFunction(qry, "last_insert_id"),
-		"a plain derived projection must keep the rewrite")
-	require.True(t, sqlAutoIsNullAnyNodeNotCacheable(qry))
+	require.False(t, sqlAutoIsNullQueryHasFunction(qry, "last_insert_id"),
+		"a mergeable derived-table column reference is not a FIELD_ITEM and must keep plain IS NULL semantics")
+	require.True(t, sqlAutoIsNullQueryHasFunction(qry, "isnull"))
+	require.False(t, sqlAutoIsNullAnyNodeNotCacheable(qry))
 }
 
 // The grouped family pins the aggregate boundary (review 5690740934's

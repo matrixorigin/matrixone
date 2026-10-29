@@ -9653,6 +9653,15 @@ func (builder *QueryBuilder) rewriteSqlAutoIsNull(
 	if !colExpr.Typ.AutoIncr || !colExpr.Typ.NotNullable {
 		return boundFilters, false, nil
 	}
+	// MySQL gates the sql_auto_is_null rewrite on the IS NULL argument being
+	// a FIELD_ITEM (Item_func_isnull::fix_fields, item_cmpfunc.cc): a column
+	// reference that resolves through a mergeable derived table or view
+	// binding is an Item_view_ref (REF_ITEM) there, never a FIELD_ITEM, so
+	// every outer derived/view reference keeps plain IS NULL semantics
+	// (review 5693247633). Only a raw base-table binding stays eligible.
+	if !builder.sqlAutoIsNullBaseFieldRef(fromNodeID, colExpr.GetCol()) {
+		return boundFilters, false, nil
+	}
 	if builder.colRefOnOuterJoinNullSide(fromNodeID, colExpr.GetCol()) {
 		// References reached through the null-extended side of an outer join
 		// never participate in the rewrite: per MySQL's odbc.result they keep
@@ -9894,6 +9903,29 @@ func sqlAutoIsNullRawScanNode(t plan.Node_NodeType) bool {
 		plan.Node_FUNCTION_SCAN, plan.Node_VALUE_SCAN, plan.Node_SINK_SCAN,
 		plan.Node_RECURSIVE_SCAN:
 		return true
+	}
+	return false
+}
+
+// sqlAutoIsNullBaseFieldRef reports whether the bound column reference lands
+// on a raw base-table binding: the MySQL FIELD_ITEM case. MySQL's
+// Item_func_isnull::fix_fields enters the sql_auto_is_null rewrite only when
+// args[0]->type() == FIELD_ITEM; a reference to a derived-table or view
+// column resolves to an Item_view_ref (REF_ITEM) even when the derived table
+// is mergeable, so every outer reference to a projected binding keeps plain
+// IS NULL semantics (review 5693247633).
+func (builder *QueryBuilder) sqlAutoIsNullBaseFieldRef(fromNodeID int32, col *plan.ColRef) bool {
+	if col == nil || fromNodeID < 0 || int(fromNodeID) >= len(builder.qry.Nodes) {
+		return false
+	}
+	node := builder.qry.Nodes[fromNodeID]
+	if slices.Contains(node.BindingTags, col.RelPos) {
+		return len(node.ProjectList) == 0 && sqlAutoIsNullRawScanNode(node.NodeType)
+	}
+	for _, child := range node.Children {
+		if builder.sqlAutoIsNullBaseFieldRef(child, col) {
+			return true
+		}
 	}
 	return false
 }

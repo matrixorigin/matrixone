@@ -52,16 +52,24 @@ execute st30717on;
 set sql_auto_is_null=0;
 execute st30717on;
 deallocate prepare st30717on;
--- Derived-table projections carry the lineage of their producers: a
--- projected column of the null-extended side keeps plain IS NULL semantics
--- (mo-bot review 5690740934), while the preserved side of the same derived
--- table and a plain derived projection keep the MySQL rewrite.
+-- Derived-table columns resolve in MySQL to view refs (REF_ITEM), never
+-- FIELD_ITEMs, so the sql_auto_is_null gate in Item_func_isnull rejects
+-- every outer derived/view reference even when the derived table is
+-- mergeable (reviews 5690740934, 5692189512, 5693247633): the null-extended
+-- side, the preserved join side and a plain derived projection all keep
+-- plain IS NULL semantics.
 set sql_auto_is_null=1;
 create table u30717(id bigint auto_increment primary key, b int);
 insert into u30717(b) values (1),(2);
 select d.ti, d.ui from (select t.id as ti, u.id as ui from t30717 t left join u30717 u on u.id=t.id) d where d.ui is null order by d.ti;
 select d.ti, d.ui from (select t.id as ti, u.id as ui from t30717 t left join u30717 u on u.id=t.id) d where d.ti is null order by d.ti;
 select d.id from (select id from t30717) d where d.id is null;
+-- Views resolve to view refs (REF_ITEM) in MySQL exactly like mergeable
+-- derived columns (review 5693247633): the FIELD_ITEM gate keeps plain
+-- IS NULL semantics through a view too, while a direct base reference
+-- (the earlier part of this file) keeps the MySQL rewrite.
+create view v30717 as select id from t30717;
+select id from v30717 where id is null;
 -- Grouped derived tables cross an aggregate boundary: MySQL materializes
 -- them (derived-table merge is impossible with GROUP BY), so the projected
 -- column no longer resolves to the AUTO_INCREMENT definition and the

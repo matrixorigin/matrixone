@@ -82,11 +82,12 @@ select d.ti, d.ui from (select t.id as ti, u.id as ui from t30717 t left join u3
 103  ¦  null  𝄀
 104  ¦  null
 select d.ti, d.ui from (select t.id as ti, u.id as ui from t30717 t left join u30717 u on u.id=t.id) d where d.ti is null order by d.ti;
-➤ ti[-5,64,0]  ¦  ui[-5,64,0]  𝄀
-1  ¦  1
+➤ ti[-5,64,0]  ¦  ui[-5,64,0]
 select d.id from (select id from t30717) d where d.id is null;
-➤ id[-5,64,0]  𝄀
-1
+➤ id[-5,64,0]
+create view v30717 as select id from t30717;
+select id from v30717 where id is null;
+➤ id[-5,64,0]
 select d.ui from (select u.id as ui from t30717 t left join u30717 u on u.id=t.id group by u.id) d where d.ui is null;
 ➤ ui[-5,64,0]  𝄀
 null
