@@ -6028,3 +6028,138 @@ artifacts):
   the external engine-test drivers and the race leg stand unchanged —
   this round edits no production byte; the round-59 commit's own
   corpus rerun above re-covers the package on the fixed tree.
+
+## 10 design review record - round 60 (implementation follow-up): the accepted GC worker transfers a FAILED delete batch to the bounded retry owner instead of settling it
+
+The request-changes review on PR #30988 head `a52b906996` (2026-10-29
+15:23Z, the review's single finding): an accepted GC worker treated an
+UNSUCCESSFUL DeleteUnpublishedObjects call as a completed deletion —
+it logged the storage error, then unconditionally settled the whole
+ledger batch (settleUnpublishedPendingDeleted retires the membership,
+`live` and the engine-owned accepted-job claim, i.e. the capacity) and
+retired the submitter's recorded-name copy — although the helper stops
+at its own first failing storage sub-batch and proves nothing about
+the rest, so a storage outage (timeout, transient storage error) could
+leave the objects on storage with the last enumerable owner dropped:
+the capacity unit returned to the bound, no recorded member, no queue
+entry, and nothing would ever retry the lost names. The pre-PR worker
+also logged and dropped failures, but this PR's ledger promises
+lossless ownership until physical deletion (I2), so settling on an
+unproven deletion violates the PR's own new contract. The reviewer
+directed: transfer failed or uncertain names to the bounded retry
+owner, keep their capacity until deletion or not-found is established,
+and test an accepted-worker failure followed by recovery, including
+partial-batch behavior.
+
+Trigger analysis (design gate): no design-revision trigger applies.
+This is an ordinary implementation follow-up inside the approved design
+— the exact class of rounds 55-59, each of which enforced an invariant
+the design's own contract already states, and it adds no feature, no
+boundary, no new owner and no new state class. I2 states every
+persisted-but-unpublished name "is owned by exactly one enumerable
+owner at every instant (transaction `pendingObjectCleanup` -> engine
+queue -> physical deletion)", and §5.1's queue (I2) is already the
+design's bounded retry owner for exactly the failed-delete state: names
+whose deletion is unproven, retried by the drain ladder behind the GC
+tick, settled only at deletion or not-found. The r58 record pinned the
+accepted job's capacity claim but never defined the settle's trigger;
+the implementation had conflated "the worker's storage call returned"
+with "the deletion is proven". The r57/r58 settle classes are
+whole-membership ON A PROOF; the correction restores that trigger. The
+PR-body round-60 work (the RC tombstone transfer, head `19358d2881`) is
+the round-59 review's own follow-up and needed no design record of its
+own; the numbering below continues the review sequence.
+
+Decision (inside the approved I2/I4 terms):
+
+1. The accepted worker's failed storage call transfers the WHOLE batch
+   to the engine's queue instead of settling it. The transfer
+   (`requeueFailedGCUnpublishedPending`) runs in ONE queue-mutex
+   section, because the worker races every concurrent terminal: the
+   section releases the batch's engine-owned `gcAccepted` references
+   (the queue owns the obligation now, and the queue's settle never
+   reads the refcount — a phantom claim could never retire), moves
+   each name's owned membership whole into the queue's own slot (the
+   capacity unit is HELD, the enqueue class r57/r58 already define:
+   capacity moved, never freed), and registers the recorded-name
+   HOLDER the worker captured (round-40/41) per name, so the queue's
+   settle retires the recorded copy exactly at a proven deletion or
+   not-found. Recovery is the queue's own machinery: the bounded retry
+   ladder (r9/r10) behind the GC-scheduler tick deletes what remains;
+   a name the failed call had already deleted returns not-found — the
+   documented success — on the next retry.
+2. The settle's trigger is the returned-nil storage call alone: every
+   sub-batch deleted the names or reported them absent. The `has()`
+   read, the pending-cleanup handoff and the reserve funnels keep the
+   recorded member ONLY while the file provably exists, so an open
+   transaction's recorded set keeps tracking live obligations exactly
+   as r37/r38 pin.
+3. The recordedOwners side channel is re-keyed from `*Transaction` to
+   the `*txnRecordedUnpublished` holder: the worker's transfer must
+   register the owner AFTER the submitting transaction may have already
+   ended (round-40/41), the drain's retire needs only the holder, and
+   no queued obligation may retain the completed transaction's graph.
+   The three registration producers (statement-rollback handoff, GC
+   pool-failure tail, the failed-delete transfer), the drain-settle
+   consumer and the terminal detach keep their exact semantics on the
+   stable holder pointer (holder is installed before any name this
+   batch could settle was recorded, r41; nil holders register nothing
+   as before). The `retireSettledRecordedUnpublishedObjectNames`
+   Transaction wrapper became a direct holder call and was removed.
+
+Deliberately unchanged, recorded for round completeness:
+
+- The bound reads (queued + owned + in-flight) and the
+  one-unit-per-name rule are byte-identical: the failed transfer moves
+  the unit (owned -> queued) and returns it only at the queue's proven
+  settle — the overshoot protection r58 priced stays, now on the
+  failure leg too.
+- The settle classes stay whole-membership on proofs only; the queue's
+  drain ladder, the shutdown join (r10/r11), the submit-failure unwind
+  (r13's lossless tail), the per-workspace claim sets (r57) and the
+  terminals' detach (r40) are untouched.
+- A failed batch that races a concurrent same-name enqueue keeps
+  exactly one queue slot (the dedupe r38's duplicate-delivery rule
+  already pins); the transfer's single section releases the claim
+  refcount and refreshes the holder registration on the deduped name
+  in the same pass.
+
+Validation (logs under `/tmp/issue25590-r60/`, the round's handler
+artifacts):
+
+- RED on the pre-fix head (the three round-60 regressions with the
+  production + helper diff stashed aside, i.e. the reviewed head
+  `a52b906996` tree minus the round-60 changes): all three fail at the
+  review's own sentence — the accepted worker's failed delete never
+  reached the queue (`red-r60.log`, exit 1: each regression fails its
+  `Eventually` on the queue membership with the batch settled, `live`
+  0 and the name lost).
+- GREEN on the fixed tree, same three regressions (`green-r60.log`,
+  exit 0, all `--- PASS`): the whole-batch failure requeues losslessly
+  (both names queued, `live` 0, capacity held: a further reservation
+  is refused at the bound of two while the files exist), the
+  recorded-name holder keeps tracking through the outage, the recovery
+  drain deletes both objects and retires the ledger, the recorded
+  copies and the full bound; the mid-batch order applies the first
+  file, fails the whole unproven call, requeues all three names,
+  tolerates the absent prefix on recovery and settles the whole batch
+  per file; the terminal order proves the queued obligation survives
+  the commit with the completed transaction's owner entries detached
+  and the emptied holder settling nothing while the drain still
+  deletes and closes the ledger whole.
+- Owning corpora on the fixed tree: the full disttae `TestIssue25590`
+  corpus passes on the extended head (`p1-disttae-issue25590.log`,
+  `ok 44.407s`, exit 0 — the new three are part of the corpus); the
+  verbose name-proof of every touched ledger family passes
+  (`p2-verbose-touched.log`, 13 `--- PASS`: the three round-60
+  regressions, the full r58 family and its refcount matrix, the r40
+  detached-ownerpair, the r41 worker-stall collection, the r57 claim
+  matrix and the round-8 handoff recovery); the race leg of the new
+  and affected families passes (`p3-race-touched.log`, `ok 4.147s`,
+  exit 0); `go vet` on the package closure passes through the CGo
+  environment (`p4-static-vet.log`, exit 0 — the worktree checkout
+  ships only the `mo-cgo-test` wrapper, so the vet ran through an
+  environment-equivalent scratch wrapper outside the repository);
+  the external `pkg/vm/engine/test` issue-25590 drivers pass
+  (`p5-engine-test.log`, `ok 5.871s`, exit 0); `gofmt -l` clean on the
+  changed closure.

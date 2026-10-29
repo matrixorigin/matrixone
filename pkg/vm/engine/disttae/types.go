@@ -1478,12 +1478,33 @@ func gcFiles(txn *Transaction, scope cloneGCScope, names ...string) error {
 			// within the round-11 shutdown budget (issue #25590).
 			if _, err := ioutil.DeleteUnpublishedObjects(context.Background(), fs, batch...); err != nil {
 				logutil.Warnf("failed to delete objects:%v, err:%v", batch, err)
+				// Round-60 (issue #25590 review of 2026-10-29): an
+				// unsuccessful delete call is NOT a completed deletion.
+				// The helper stops at its own first failing storage
+				// sub-batch, so an unknown prefix of the batch may
+				// already be gone while the remainder may still exist,
+				// and the settle below would retire the ledger
+				// membership (the capacity) and the recorded-name copy
+				// on exactly that unproven state - the last enumerable
+				// owner dropped while the objects may still exist, the
+				// loss class the ledger's lossless-ownership contract
+				// (design I2) removed from every other move. The whole
+				// batch therefore transfers to the engine's bounded
+				// retry owner instead: the transfer holds every name's
+				// unit through the outage - deletion or not-found is the
+				// only proof that may retire it - registers the holder
+				// for the queue's settle, and the queue's own machinery
+				// (r9/r10 ladder behind the GC tick) deletes what
+				// remains once storage recovers, tolerating the prefix
+				// the failure already took.
+				e.requeueFailedGCUnpublishedPending(recordedSets, batch)
+				return
 			}
-			// The batch left the caller's hands for good — deleted, or
-			// dropped with this worker's own pre-existing loss class — so
-			// its ledger membership retires here and the capacity the
-			// names held at creation returns to the bound (issue #25590
-			// round-18 review).
+			// The delete returned is PROVEN — every storage sub-batch
+			// deleted its names or reported them absent — so the batch
+			// left the caller's hands for good and its ledger membership
+			// retires here, returning the capacity the names held at
+			// creation to the bound (issue #25590 round-18 review).
 			e.settleUnpublishedPendingDeleted(batch)
 			// round-37 (issue #25590 review of 2026-10-24, finding 1):
 			// ending the obligation also retires the TRANSACTION's

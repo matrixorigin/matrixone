@@ -55,26 +55,30 @@ import (
 )
 
 // issue25590QueuedOwnerEntriesFor counts the queue's recorded-owner
-// registry entries still pointing at owner - the exact retention the
-// round-40 detach must end at every terminal.
+// registry entries still pointing at owner's recorded-name holder - the
+// exact retention the round-40 detach must end at every terminal. The
+// registry is holder-keyed (round-60), so the probe reads through the
+// transaction's stable holder pointer.
 func issue25590QueuedOwnerEntriesFor(e *Engine, owner *Transaction) int {
 	e.unpublishedPending.mu.Lock()
 	defer e.unpublishedPending.mu.Unlock()
-	if e.unpublishedPending.recordedOwners == nil {
+	holder := owner.recordedUnpublishedObjects
+	if holder == nil || e.unpublishedPending.recordedOwners == nil {
 		return 0
 	}
 	n := 0
 	for _, o := range e.unpublishedPending.recordedOwners {
-		if o == owner {
+		if o == holder {
 			n++
 		}
 	}
 	return n
 }
 
-// issue25590RecordOwnerOf returns the registry's owner for a queued
-// name, or nil when the name carries no recorded-copy entry.
-func issue25590RecordOwnerOf(e *Engine, name string) *Transaction {
+// issue25590RecordOwnerOf returns the registered recorded-name holder
+// for a queued name, or nil when the name carries no recorded-copy
+// entry (round-60 keys the registry by the holder).
+func issue25590RecordOwnerOf(e *Engine, name string) *txnRecordedUnpublished {
 	e.unpublishedPending.mu.Lock()
 	defer e.unpublishedPending.mu.Unlock()
 	return e.unpublishedPending.recordedOwners[name]
@@ -229,7 +233,7 @@ func TestIssue25590CommitTerminalDetachesQueuedRecordedOwners(t *testing.T) {
 		"the statement rollback's owner-carrying handoff queued the recorded object")
 	require.Equal(t, 1, issue25590QueuedOwnerEntriesFor(e, txn),
 		"the OPEN transaction is the queued name's recorded-copy owner - the entry the drain's settle needs while the file exists")
-	require.Same(t, txn, issue25590RecordOwnerOf(e, name))
+	require.Same(t, txn.recordedUnpublishedObjects, issue25590RecordOwnerOf(e, name))
 	issue25590RequireKept(t, failFS, name,
 		"the handed-off object's file exists while the outage parks the settle")
 	txn.Lock()

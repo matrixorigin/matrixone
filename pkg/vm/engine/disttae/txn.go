@@ -1505,24 +1505,30 @@ type unpublishedPendingQueue struct {
 	arrivalSeq uint64
 	// recordedOwners is the per-name side channel of the recorded-name
 	// queue handoffs (issue #25590 round-38 review): it maps a QUEUED
-	// name to the transaction whose recordedUnpublishedObjectNames
-	// member still tracks it — the rolled-back statement's
-	// gcFilesToOwner transfer and the gcFiles pool-failure tail, the
-	// only two producers that enqueue names a recording transaction
-	// still records. The entry lives exactly as long as the name's
-	// queue membership OWNERSHIP: the once-drain pops it in the same
-	// compaction pass that retires the name and retires the owning
-	// transaction's recorded-name copy in the same worker step — with
-	// no transaction lock, exactly the round-37 gcFiles rule — and the
-	// TERMINAL that drops the recorded-name copy detaches the expired
-	// transaction's entries with it, so an outage parking the queue
-	// can never retain a completed transaction's graph behind a name
-	// waiting for its delete (issue #25590 round-40 review, finding 1).
-	// Owner-less queued names (orphan funnels, writer tails, test
-	// enqueues) simply carry no entry. A duplicate delivery while the
-	// name is still queued refreshes the owner — the retire semantic is
-	// per FILE, so the last transfer wins.
-	recordedOwners map[string]*Transaction
+	// name to the recorded-name HOLDER whose member still tracks it —
+	// the rolled-back statement's gcFilesToOwner transfer, the gcFiles
+	// pool-failure tail and the gcFiles worker's failed-delete transfer
+	// (round-60), every producer that moves names a recording
+	// transaction still records toward the queue. Round-60 keys the
+	// entry by the holder itself — never the *Transaction — because
+	// the accepted worker transfers a failed batch after the submitting
+	// transaction may have already ended (round-40/41): the retire the
+	// drain performs needs only the holder, and no queued obligation
+	// may retain the completed transaction's graph. The entry lives
+	// exactly as long as the name's queue membership OWNERSHIP: the
+	// once-drain pops it in the same compaction pass that retires the
+	// name and retires the owning holder's recorded-name copy in the
+	// same worker step — with no transaction lock, exactly the
+	// round-37 gcFiles rule — and the TERMINAL that drops the
+	// recorded-name copy detaches the expired transaction's entries
+	// with it, so an outage parking the queue can never retain a
+	// completed transaction's graph behind a name waiting for its
+	// delete (issue #25590 round-40 review, finding 1). Owner-less
+	// queued names (orphan funnels, writer tails, test enqueues)
+	// simply carry no entry. A duplicate delivery while the name is
+	// still queued refreshes the owner — the retire semantic is per
+	// FILE, so the last transfer wins.
+	recordedOwners map[string]*txnRecordedUnpublished
 }
 
 // unpublishedPendingDrainRounds bounds one drain task's retry ladder; the
@@ -1657,19 +1663,41 @@ func (e *Engine) enqueueUnpublishedPending(names []string) {
 // enqueue (issue #25590 round-38 review): a handoff that moves names a
 // recording transaction still records — the rolled-back statement's
 // gcFilesToOwner transfer and the gcFiles pool-failure tail — registers
-// the transaction per name INSIDE the same queue-mutex section as the
-// transfer, so a queued recorded name can never sit without its
-// recorded-copy owner between the handoff and the drain's settle. The
+// the transaction's recorded-name HOLDER per name INSIDE the same
+// queue-mutex section as the transfer, so a queued recorded name can
+// never sit without its recorded-copy owner between the handoff and the
+// drain's settle. Round-60 re-keys the registration by the holder alone,
+// so the accepted worker's failed-delete transfer can register exactly
+// the independently owned settle state it captured (round-40/41). The
 // registration only ever ADDS an owner; an owner-less enqueue never
 // clears an existing entry, so the test and orphan enqueues cannot
 // dissolve the protection of a still-recorded member.
 func (e *Engine) enqueueUnpublishedPendingFrom(
 	owner *Transaction, names []string,
 ) {
+	var holder *txnRecordedUnpublished
+	if owner != nil {
+		holder = owner.recordedUnpublishedObjects
+	}
+	e.unpublishedPending.mu.Lock()
+	e.enqueueUnpublishedPendingHolderLocked(holder, names)
+	e.unpublishedPending.mu.Unlock()
+	e.scheduleUnpublishedPendingDrain()
+}
+
+// enqueueUnpublishedPendingHolderLocked moves names into the lossless
+// queue under the queue mutex: a name new to the queue takes its slot
+// and drops any owned-ledger membership in the same section (capacity
+// moves, never freed), a duplicated name keeps exactly one queue slot,
+// and a live holder registers per name for the drain's settle to retire
+// the recorded copy at proof of deletion. The caller holds the queue
+// mutex.
+func (e *Engine) enqueueUnpublishedPendingHolderLocked(
+	holder *txnRecordedUnpublished, names []string,
+) {
 	if len(names) == 0 {
 		return
 	}
-	e.unpublishedPending.mu.Lock()
 	if e.unpublishedPending.nameSet == nil {
 		e.unpublishedPending.nameSet = make(map[string]struct{}, len(names))
 	}
@@ -1697,17 +1725,55 @@ func (e *Engine) enqueueUnpublishedPendingFrom(
 				}
 			}
 		}
-		if owner != nil {
+		if holder != nil {
 			if e.unpublishedPending.recordedOwners == nil {
 				e.unpublishedPending.recordedOwners = make(
-					map[string]*Transaction, len(names))
+					map[string]*txnRecordedUnpublished, len(names))
 			}
-			e.unpublishedPending.recordedOwners[n] = owner
+			e.unpublishedPending.recordedOwners[n] = holder
 		}
 	}
 	if added > 0 {
 		e.unpublishedPending.arrivalSeq++
 	}
+}
+
+// requeueFailedGCUnpublishedPending hands a FAILED accepted delete batch
+// back to the engine's bounded retry owner (issue #25590 round-60
+// review): ioutil.DeleteUnpublishedObjects stops at its own first
+// failing storage sub-batch and proves nothing about the rest, so the
+// settled treatment — retiring the ledger membership and the
+// recorded-name copy — would free capacity and drop the last enumerable
+// owner while the objects may still exist, the exact loss class the
+// ledger's lossless-ownership contract (design I2) forbids. The whole
+// batch transfers in ONE queue-mutex section: the accepted job's
+// engine-owned claim releases exactly there (otherwise the settle the
+// queue performs never reads the refcount and the claim would linger),
+// each name's owned membership moves whole into the queue's own slot
+// (the unit stays counted through the outage), and the holder the
+// worker captured registers per name so the drain's settle retires the
+// recorded copy only at a proven deletion or not-found. Recovery — the
+// drain's ladder and the GC tick behind it — deletes what remains,
+// tolerates the names the failure had already taken, and retires the
+// unit and the copy per name at the same proof point. The bounded
+// section runs on the pool worker without the transaction.
+func (e *Engine) requeueFailedGCUnpublishedPending(
+	holder *txnRecordedUnpublished, batch []string,
+) {
+	if len(batch) == 0 {
+		return
+	}
+	e.unpublishedPending.mu.Lock()
+	// The queue takes over the obligation, so no phantom accepted-job
+	// claim may stay behind names the queue now owns (issue #25590
+	// round-58 review, the same unwind the refused submission takes) -
+	// and the release shares the section with the enqueue below, so a
+	// concurrent published-class release cannot observe a claim-less
+	// membership between the two and free the retained unit (the
+	// single-section linearization every accounting transition shares,
+	// round-13).
+	e.releaseUnpublishedPendingGCNamesLocked(batch)
+	e.enqueueUnpublishedPendingHolderLocked(holder, batch)
 	e.unpublishedPending.mu.Unlock()
 	e.scheduleUnpublishedPendingDrain()
 }
@@ -1941,8 +2007,12 @@ func (e *Engine) detachTerminalRecordedUnpublishedObjectOwners(
 	}
 	e.unpublishedPending.mu.Lock()
 	for _, n := range names {
+		// Round-60: the entry registered the recorded-name HOLDER, so
+		// the identity condition reads the transaction's own holder -
+		// a transaction whose workspaces never installed one can own no
+		// entry to detach.
 		if owner, ok := e.unpublishedPending.recordedOwners[n]; ok &&
-			owner == txn {
+			owner == txn.recordedUnpublishedObjects {
 			delete(e.unpublishedPending.recordedOwners, n)
 		}
 	}
@@ -2004,8 +2074,11 @@ func (e *Engine) abandonUnpublishedPendingReservations(names []string) {
 // is keyed by name alone, never by the Transaction, so the completed
 // transaction's graph stays collectible exactly as round-40/41 pinned.
 // Registration runs on the submitting goroutine BEFORE pool.Submit, so
-// no worker settle can race the refcount in; the settle and the
-// submit-failure unwind are the only two paths that retire it.
+// no worker settle can race the refcount in; the settle, the
+// failed-delete transfer's claim release and the submit-failure unwind
+// are the only paths that retire it (round-60 adds the transfer: a
+// worker whose delete failed may no longer settle, so it hands the
+// claim back with the names).
 func (e *Engine) retainUnpublishedPendingGCNames(names []string) {
 	if len(names) == 0 {
 		return
@@ -2058,12 +2131,14 @@ func (e *Engine) releaseUnpublishedPendingGCNamesLocked(names []string) {
 }
 
 // settleUnpublishedPendingDeleted retires the ledger membership of
-// names an admitted GC caller finished with - successfully deleted or
-// dropped with the caller's own pre-existing loss class - so capacity
-// held for a name a workspace recorded cannot stay frozen behind a
-// caller whose whole batch already left the caller's hands (issue
-// #25590 round-18 review). The retire is the WHOLE membership with its
-// claim set: the file is gone for every claimant, so no later
+// names an admitted GC caller PROVED finished — every name deleted or
+// returned not-found by the storage call that just returned nil (round-
+// 60 removed the failure class: a failed delete now requeues through
+// requeueFailedGCUnpublishedPending and never settles here) — so
+// capacity held for a name a workspace recorded cannot stay frozen
+// behind a caller whose whole batch already left the caller's hands
+// (issue #25590 round-18 review). The retire is the WHOLE membership
+// with its claim set: the file is gone for every claimant, so no later
 // published-class release may resurrect or retain capacity behind it
 // (issue #25590 round-57 review). Round-58 adds the settle's own
 // guarantee to the same section: the accepted delete job that held the
@@ -2254,14 +2329,15 @@ func (e *Engine) deleteQueuedUnpublishedPendingOnce(ctx context.Context) error {
 		e.unpublishedPending.mu.Unlock()
 		// The settle ended every cleanup ownership the recorded copies
 		// of these names were protecting — the files are gone for good —
-		// so the drain retires the owning transactions' recorded-name
-		// members in the same worker step, through the recorded-name
-		// guard alone and NO transaction lock (issue #25590 round-38
-		// review): the open transaction that keeps failing statements
-		// keeps its set at the LIVE obligations, exactly the round-37
-		// gcFiles rule, now on the queue's settle too.
-		for owner, ownerNames := range settledOwners {
-			owner.retireSettledRecordedUnpublishedObjectNames(ownerNames)
+		// so the drain retires the owning recorded-name holders' members
+		// in the same worker step, through the recorded-name guard
+		// alone and NO transaction lock (issue #25590 round-38 review,
+		// holder-keyed by round-60): the open transaction that keeps
+		// failing statements keeps its set at the LIVE obligations,
+		// exactly the round-37 gcFiles rule, now on the queue's settle
+		// too.
+		for holder, holderNames := range settledOwners {
+			holder.retireSettled(holderNames)
 		}
 	}
 	return failed
@@ -2284,22 +2360,22 @@ func (e *Engine) deleteQueuedUnpublishedPendingOnce(ctx context.Context) error {
 //
 // round-38 (issue #25590 review of 2026-10-24, finding 1): the same pass
 // pops every retired name's recordedOwners entry and returns the
-// per-owner done batches, so the caller can retire the owning
-// transaction's recorded-name copy in the same settle — the queue-side
-// handoffs of STILL-RECORDED names carried no gcFiles worker whose
-// settle could retire the copy before, and an open transaction would
-// keep the whole failed-statement history in its recorded set until
-// termination despite the empty ledger, empty queue and deleted files.
-// The map is returned, never applied here: the retire takes the
-// recorded-name guard WITHOUT the queue mutex.
+// per-holder done batches, so the caller can retire the owning holder's
+// recorded-name copy in the same settle — the queue-side handoffs of
+// STILL-RECORDED names carried no gcFiles worker whose settle could
+// retire the copy before, and an open transaction would keep the whole
+// failed-statement history in its recorded set until termination
+// despite the empty ledger, empty queue and deleted files. The map is
+// returned, never applied here: the retire takes the recorded-name
+// guard WITHOUT the queue mutex.
 func (e *Engine) retireQueuedUnpublishedPendingLocked(
 	done []string,
-) map[*Transaction][]string {
+) map[*txnRecordedUnpublished][]string {
 	doneSet := make(map[string]struct{}, len(done))
 	for _, n := range done {
 		doneSet[n] = struct{}{}
 	}
-	var settledOwners map[*Transaction][]string
+	var settledOwners map[*txnRecordedUnpublished][]string
 	kept := e.unpublishedPending.names[:0]
 	for _, n := range e.unpublishedPending.names {
 		if _, ok := doneSet[n]; ok {
@@ -2309,7 +2385,7 @@ func (e *Engine) retireQueuedUnpublishedPendingLocked(
 			if owner, ok := e.unpublishedPending.recordedOwners[n]; ok {
 				delete(e.unpublishedPending.recordedOwners, n)
 				if settledOwners == nil {
-					settledOwners = make(map[*Transaction][]string)
+					settledOwners = make(map[*txnRecordedUnpublished][]string)
 				}
 				settledOwners[owner] = append(settledOwners[owner], n)
 			}
@@ -3960,31 +4036,6 @@ func (txn *Transaction) mergeRecordedUnpublishedObjectNames(names []string) {
 // (issue #25590 round-37 review).
 func (txn *Transaction) hasRecordedUnpublishedObjectName(name string) bool {
 	return txn.recordedUnpublishedObjects.has(name)
-}
-
-// retireSettledRecordedUnpublishedObjectNames retires the transaction's
-// recorded-name copy of names whose cleanup ownership JUST ENDED: the
-// gcFiles pool worker calls it through the INDEPENDENTLY OWNED holder
-// (round-41) for exactly the batch whose ledger membership the settle
-// above retired, and the queue drain calls it for exactly the batch whose
-// names its delete retired — the two settle owners of this copy (issue
-// #25590 round-37 review, finding 1; round-38 review, finding 1) — so
-// the copy keeps tracking the LIVE obligations of a long transaction
-// instead of its whole spill history. Both callers hold NO transaction
-// lock, so the prune takes the recorded-name guard instead — a GC worker
-// behind any transaction's lock would put pool callers through ants'
-// worker wait again, the exact admission-chain the round-13 decoupling
-// removed. Names never recorded simply no-op, and a member that a
-// concurrent choke re-registered after its settle follows the new
-// record's own lifecycle like every fresh recording; a terminal that
-// already dropped the copy finds an empty holder and retires nothing.
-func (txn *Transaction) retireSettledRecordedUnpublishedObjectNames(
-	names []string,
-) {
-	if len(names) == 0 {
-		return
-	}
-	txn.recordedUnpublishedObjects.retireSettled(names)
 }
 
 // releaseRecordedUnpublishedObjectsLocked retires the still-owned ledger

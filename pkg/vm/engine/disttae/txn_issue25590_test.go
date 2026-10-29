@@ -1479,6 +1479,15 @@ type issue25590PostPersistFailFS struct {
 	// context-blind deletions.
 	deleteIgnoreCtx chan struct{}
 	ignoredDeletes  int
+	// failAfterDeletesArmed/failAfterDeletes make the NEXT delete call
+	// apply exactly its first failAfterDeletes paths to the wrapped file
+	// service and then return the injected failure for the whole call —
+	// the mid-batch storage failure of LocalFS's sequential single-file
+	// deletes: a prefix of the batch is physically gone while the call
+	// still reports the whole batch unproven (issue #25590 round-60
+	// review). One-shot, so the recovery retry runs cleanly.
+	failAfterDeletesArmed bool
+	failAfterDeletes      int
 }
 
 // armPostPersistFailure installs the post-persist write failure trigger.
@@ -1505,6 +1514,18 @@ func (fs *issue25590PostPersistFailFS) armDeleteFailures(once bool, shots int) {
 	defer fs.mu.Unlock()
 	fs.failDeleteOnce = once
 	fs.failDeleteShots = shots
+}
+
+// armDeleteFailAfter applies exactly the first n paths of the NEXT delete
+// call to the wrapped file service and then fails that whole call: the
+// mid-batch storage failure whose prefix deletion already succeeded —
+// the LocalFS deleteSingle shape the round-60 accepted-worker transfer
+// must survive without losing the unproven remainder.
+func (fs *issue25590PostPersistFailFS) armDeleteFailAfter(n int) {
+	fs.mu.Lock()
+	defer fs.mu.Unlock()
+	fs.failAfterDeletesArmed = true
+	fs.failAfterDeletes = n
 }
 
 // gateDeletesAfter arcs the deletion barrier: once allow deletes have
@@ -1604,6 +1625,12 @@ func (fs *issue25590PostPersistFailFS) Delete(ctx context.Context, paths ...stri
 	fs.deleteCalls++
 	fs.deleted = append(fs.deleted, paths...)
 	fail := false
+	applyPrefix := -1
+	if fs.failAfterDeletesArmed {
+		fs.failAfterDeletesArmed = false
+		applyPrefix = min(fs.failAfterDeletes, len(paths))
+		fail = true
+	}
 	if failPath != "" && slices.Contains(paths, failPath) {
 		fail = true
 	}
@@ -1616,6 +1643,18 @@ func (fs *issue25590PostPersistFailFS) Delete(ctx context.Context, paths ...stri
 		fail = true
 	}
 	fs.mu.Unlock()
+	if applyPrefix >= 0 {
+		// The sequential prefix LocalFS's deleteSingle order already
+		// applied when the storage error struck: those files are
+		// physically gone while the call still reports the batch
+		// unproven, exactly the mid-batch failure the round-60
+		// transfer must requeue whole.
+		for _, p := range paths[:applyPrefix] {
+			_ = fs.FileService.Delete(ctx, p)
+		}
+		return moerr.NewInternalErrorNoCtx(
+			"issue25590 injected mid-batch fs delete failure")
+	}
 	if fail {
 		return moerr.NewInternalErrorNoCtx(
 			"issue25590 injected fs delete failure")
