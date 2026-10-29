@@ -8444,8 +8444,9 @@ func unionT[T int32 | int64](v, w *Vector, sels []T, mp *mpool.MPool) error {
 			fillSlice(col, oldLen, v.length, va)
 		} else {
 			tlen := v.GetType().TypeSize()
-			copy(v.data[oldLen*tlen:(oldLen+1)*tlen], w.data[:tlen])
-			broadcastFixed(v.data[oldLen*tlen:v.length*tlen], tlen)
+			dst := v.data[oldLen*tlen : v.length*tlen]
+			copy(dst[:tlen], w.data[:tlen])
+			broadcastFixed(dst, tlen)
 		}
 
 		if err := propagatePrepareParamKindsSelection(v, w, oldLen, sels, mp); err != nil {
@@ -8518,33 +8519,32 @@ func unionT[T int32 | int64](v, w *Vector, sels []T, mp *mpool.MPool) error {
 				copy(v.data[dstOffset:dstOffset+tlen], w.data[srcOffset:srcOffset+tlen])
 			}
 		} else {
+			// Cases are payload widths in bytes; len(sels) is the output row count.
+			// The profiled 4/8-byte paths copy the first row directly, then
+			// check the tail once. The 1/2-byte paths retain their scalar loops.
 			switch tlen {
 			case 8:
-				if len(sels) == 1 {
-					p1 := unsafe.Pointer(&v.data[oldLen*8])
-					p2 := unsafe.Pointer(&w.data[int(sels[0])*8])
-					*(*uint64)(p1) = *(*uint64)(p2)
-				} else {
-					// Admit the entire destination span once. Every row pointer
-					// below remains within it, including the complete value.
-					dst := v.data[oldLen*8 : (oldLen+len(sels))*8]
-					for i, sel := range sels {
-						p1 := unsafe.Add(unsafe.Pointer(unsafe.SliceData(dst)), i*8)
-						p2 := unsafe.Pointer(&w.data[int(sel)*8])
-						*(*uint64)(p1) = *(*uint64)(p2)
+				dst := unsafe.Pointer(&v.data[oldLen*8])
+				src := unsafe.Pointer(&w.data[int(sels[0])*8])
+				*(*uint64)(dst) = *(*uint64)(src)
+				if len(sels) > 1 {
+					// The first store uses the original checked indexes.
+					// Admit the tail before deriving the remaining pointers.
+					_ = v.data[(oldLen+len(sels))*8-1]
+					for i := 1; i < len(sels); i++ {
+						src = unsafe.Pointer(&w.data[int(sels[i])*8])
+						*(*uint64)(unsafe.Add(dst, i*8)) = *(*uint64)(src)
 					}
 				}
 			case 4:
-				if len(sels) == 1 {
-					p1 := unsafe.Pointer(&v.data[oldLen*4])
-					p2 := unsafe.Pointer(&w.data[int(sels[0])*4])
-					*(*uint32)(p1) = *(*uint32)(p2)
-				} else {
-					dst := v.data[oldLen*4 : (oldLen+len(sels))*4]
-					for i, sel := range sels {
-						p1 := unsafe.Add(unsafe.Pointer(unsafe.SliceData(dst)), i*4)
-						p2 := unsafe.Pointer(&w.data[int(sel)*4])
-						*(*uint32)(p1) = *(*uint32)(p2)
+				dst := unsafe.Pointer(&v.data[oldLen*4])
+				src := unsafe.Pointer(&w.data[int(sels[0])*4])
+				*(*uint32)(dst) = *(*uint32)(src)
+				if len(sels) > 1 {
+					_ = v.data[(oldLen+len(sels))*4-1]
+					for i := 1; i < len(sels); i++ {
+						src = unsafe.Pointer(&w.data[int(sels[i])*4])
+						*(*uint32)(unsafe.Add(dst, i*4)) = *(*uint32)(src)
 					}
 				}
 			case 2:
