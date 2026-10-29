@@ -1389,8 +1389,19 @@ func (c *Compile) compileQuery(qry *plan.Query) ([]*Scope, error) {
 	c.foundRowsOwnerNode = c.selectFoundRowsOwnerNode(qry)
 	c.auxiliaryProductScopes = nil
 	c.compiledLocalRuntimeFilterNodes = nil
+	deepTags, deepLogicalSafe := plan2.DeepOrdinaryRuntimeFilterTags(qry)
+	c.deepRuntimeFilterTags = nil
+	c.completeDeepRuntimeFilterBuilds = nil
+	if len(deepTags) > 0 {
+		c.deepRuntimeFilterTags = make(map[int32]bool, len(deepTags))
+		for _, tag := range deepTags {
+			c.deepRuntimeFilterTags[tag] = true
+		}
+	}
 	defer func() {
 		c.compiledLocalRuntimeFilterNodes = nil
+		c.deepRuntimeFilterTags = nil
+		c.completeDeepRuntimeFilterBuilds = nil
 	}()
 
 	start := time.Now()
@@ -1468,6 +1479,7 @@ func (c *Compile) compileQuery(qry *plan.Query) ([]*Scope, error) {
 	if err = validateLocalRuntimeFilterTopology(qry, c.compiledLocalRuntimeFilterNodes, steps); err != nil {
 		return nil, err
 	}
+	c.validateDeepRuntimeFilterTopology(deepTags, deepLogicalSafe, steps)
 	if queryNeedsGroupingTransport(qry) {
 		attachGroupingTransportPlan(steps, &plan.Plan{Plan: &plan.Plan_Query{Query: qry}})
 	}
@@ -7280,8 +7292,8 @@ func (c *Compile) compileBuildSideForBroadcastJoin(node *plan.Node, rs, buildSco
 	}
 
 	if len(rs) == 1 { // broadcast join on single cn
-		buildScopes[0].setRootOperator(constructJoinBuildOperator(
-			c, rs[0].RootOp, int32(rs[0].NodeInfo.Mcpu), node.RuntimeFilterBuildList))
+		buildScopes[0].setRootOperator(c.noteCompleteBroadcastRuntimeFilterBuild(constructJoinBuildOperator(
+			c, rs[0].RootOp, int32(rs[0].NodeInfo.Mcpu), node.RuntimeFilterBuildList)))
 		rs[0].PreScopes = append(rs[0].PreScopes, buildScopes[0])
 		return rs
 	}
@@ -7331,8 +7343,8 @@ func (c *Compile) compileBuildSideForBroadcastJoin(node *plan.Node, rs, buildSco
 			c.hasMergeOp = true
 			mergeOp.SetAnalyzeControl(c.anal.curNodeIdx, false)
 			bs.setRootOperator(mergeOp)
-			bs.setRootOperator(constructJoinBuildOperator(
-				c, tmp[0].RootOp, probeWorkers, node.RuntimeFilterBuildList))
+			bs.setRootOperator(c.noteCompleteBroadcastRuntimeFilterBuild(constructJoinBuildOperator(
+				c, tmp[0].RootOp, probeWorkers, node.RuntimeFilterBuildList)))
 			tmp[0].PreScopes = append(tmp[0].PreScopes, bs)
 			buildOpScopes = append(buildOpScopes, bs)
 		}
@@ -7355,8 +7367,8 @@ func (c *Compile) compileBuildSideForBroadcastJoin(node *plan.Node, rs, buildSco
 		c.hasMergeOp = true
 		mergeOp.SetAnalyzeControl(c.anal.curNodeIdx, false)
 		bs.setRootOperator(mergeOp)
-		bs.setRootOperator(constructJoinBuildOperator(
-			c, rs[i].RootOp, int32(rs[i].NodeInfo.Mcpu), node.RuntimeFilterBuildList))
+		bs.setRootOperator(c.noteCompleteBroadcastRuntimeFilterBuild(constructJoinBuildOperator(
+			c, rs[i].RootOp, int32(rs[i].NodeInfo.Mcpu), node.RuntimeFilterBuildList)))
 		rs[i].PreScopes = append(rs[i].PreScopes, bs)
 		buildOpScopes = append(buildOpScopes, bs)
 	}
@@ -7387,7 +7399,7 @@ func (c *Compile) compileSharedBroadcastJoin(node *plan.Node, probes []*Scope, s
 		mergeOp := merge.NewArgument()
 		mergeOp.SetAnalyzeControl(c.anal.curNodeIdx, false)
 		build.setRootOperator(mergeOp)
-		build.setRootOperator(constructJoinBuildOperator(c, group[0].RootOp, 0, node.RuntimeFilterBuildList))
+		build.setRootOperator(c.noteCompleteBroadcastRuntimeFilterBuild(constructJoinBuildOperator(c, group[0].RootOp, 0, node.RuntimeFilterBuildList)))
 		pending.builds = append(pending.builds, build)
 	}
 	// Dispatch is wired now, while the probe still owns the join-node analysis.
