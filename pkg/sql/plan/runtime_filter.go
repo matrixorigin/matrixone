@@ -478,12 +478,17 @@ func (builder *QueryBuilder) makeSerializedExactRuntimeFilterPair(
 }
 
 func (builder *QueryBuilder) generateRuntimeFilters(nodeID int32) {
-	node := builder.qry.Nodes[nodeID]
-	sid := builder.compCtx.GetProcess().GetService()
-
-	for _, childID := range node.Children {
+	for _, childID := range builder.qry.Nodes[nodeID].Children {
 		builder.generateRuntimeFilters(childID)
 	}
+	builder.generateNodeRuntimeFilter(nodeID, 0)
+}
+
+// keyBound is used only by the late, already-local DELETE maintenance pass.
+// It bounds distinct keys, never build rows or the mandatory join map.
+func (builder *QueryBuilder) generateNodeRuntimeFilter(nodeID int32, keyBound float64) {
+	node := builder.qry.Nodes[nodeID]
+	sid := builder.compCtx.GetProcess().GetService()
 
 	if node.NodeType == plan.Node_FUZZY_FILTER {
 		builder.finalizeFuzzyRuntimeFilter(node)
@@ -692,11 +697,21 @@ func (builder *QueryBuilder) generateRuntimeFilters(nodeID int32) {
 				//maybe not flushed yet, set at least 100 to continue calculation
 				probeNdv = 100
 			}
-			if node.Stats.HashmapStats.HashmapSize/probeNdv >= 0.1 {
+			buildSize := node.Stats.HashmapStats.HashmapSize
+			if keyBound > 0 {
+				buildSize = keyBound
+			}
+			if buildSize/probeNdv >= 0.1 {
+				if keyBound == 0 {
+					builder.recordDeleteIndexCostRejection(node, leftChild)
+				}
 				return
 			}
 			if sortOrder != 0 {
-				if node.Stats.HashmapStats.HashmapSize/probeNdv >= 0.1*probeNdv/leftChild.Stats.TableCnt {
+				if buildSize/probeNdv >= 0.1*probeNdv/leftChild.Stats.TableCnt {
+					if keyBound == 0 {
+						builder.recordDeleteIndexCostRejection(node, leftChild)
+					}
 					return
 				}
 			} else {
@@ -721,6 +736,9 @@ func (builder *QueryBuilder) generateRuntimeFilters(nodeID int32) {
 		inLimit := GetInFilterCardLimit(sid)
 		if sortOrder == 0 && !componentFilter {
 			inLimit = GetInFilterCardLimitOnPK(sid, leftChild.Stats.TableCnt)
+		}
+		if keyBound > 0 && keyBound > float64(inLimit) {
+			return
 		}
 		// Components need ordinary-column row filtering, not full-PK lookup.
 		// Keep its configured budget; a wrong low estimate still falls back to
@@ -755,7 +773,7 @@ func (builder *QueryBuilder) generateRuntimeFilters(nodeID int32) {
 		// SINGLE output cardinality belongs to its semantic preserved side.  Do
 		// not feed the existing probe-side RF heuristic into SINGLE stats here;
 		// preserved-side cardinality and cost selection are a separate phase.
-		if node.JoinType != plan.Node_SINGLE {
+		if node.JoinType != plan.Node_SINGLE && keyBound == 0 {
 			recalcStatsByRuntimeFilter(leftChild, node, builder)
 		}
 		return
