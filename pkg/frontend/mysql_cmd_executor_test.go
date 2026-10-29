@@ -206,6 +206,11 @@ func TestDoComQuerySetPasswordTargetNameRedaction(t *testing.T) {
 		{"missing assignment identified", "ordinary_user", "IDENTIFIED BY '%s'", "", true},
 		{"missing assignment no backslash", "ordinary_user", "'%s'", "NO_BACKSLASH_ESCAPES", true},
 		{"missing assignment ansi", "ordinary_user", "'%s'", "ANSI_QUOTES,NO_BACKSLASH_ESCAPES", true},
+		{"identified then empty assignment", "ordinary_user", "IDENTIFIED BY '%s' = ''", "", true},
+		{"identified then bare assignment", "ordinary_user", "IDENTIFIED BY '%s' =", "", true},
+		{"identified then nonempty assignment", "ordinary_user", "IDENTIFIED BY 'EchoGuardSecret42' = PASSWORD('%s')", "", true},
+		{"identified assignment no backslash", "ordinary_user", "IDENTIFIED BY '%s' = ''", "NO_BACKSLASH_ESCAPES", true},
+		{"identified assignment ansi", "ordinary_user", "IDENTIFIED BY '%s' = ''", "ANSI_QUOTES,NO_BACKSLASH_ESCAPES", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := defines.AttachAccountId(t.Context(), catalog.System_Account)

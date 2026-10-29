@@ -521,6 +521,43 @@ func TestHandleSqlForRecord(t *testing.T) {
 			require.NotEmpty(t, secrets, mode)
 		}
 	})
+	// A later '=' after a malformed prefix must not disarm the guard: the
+	// prefix before '=' is validated (nothing | FOR user | FOR user@host)
+	// and anything else keeps the fragment fail-closed regardless of how
+	// plausible the anonymous/empty/suffix shapes look.
+	t.Run("set password eq after invalid target stays fail closed", func(t *testing.T) {
+		for _, mode := range []string{"", "NO_BACKSLASH_ESCAPES", "ANSI_QUOTES,NO_BACKSLASH_ESCAPES"} {
+			// leak vector from the review: IDENTIFIED BY phrase then '= ''.
+			raw := "SET PASSWORD FOR ordinary_user IDENTIFIED BY 'ProbeSecret42' = ''"
+			fragments, secrets := MaskSecretLiteralsWithSQLMode(raw, mode)
+			require.Equal(t, []string{"******"}, fragments, mode)
+			require.Equal(t, []string{raw}, secrets, mode)
+
+			// trailing bare '='.
+			raw = "SET PASSWORD FOR ordinary_user IDENTIFIED BY 'ProbeSecret42' ="
+			fragments, secrets = MaskSecretLiteralsWithSQLMode(raw, mode)
+			require.Equal(t, []string{"******"}, fragments, mode)
+			require.Equal(t, []string{raw}, secrets, mode)
+
+			// nonempty suffix after an invalid prefix: no suffix-only mask.
+			raw = "SET PASSWORD FOR ordinary_user IDENTIFIED BY 'SecretA42' = PASSWORD('SecretB42')"
+			fragments, secrets = MaskSecretLiteralsWithSQLMode(raw, mode)
+			require.Equal(t, []string{"******"}, fragments, mode)
+			require.Equal(t, []string{raw}, secrets, mode)
+
+			// valid-target controls: value masked, target preserved.
+			for _, control := range []string{
+				"SET PASSWORD FOR u@'%' = 'ValidHostPw42'",
+				"SET PASSWORD FOR 'u2'@'h%.' = 'ValidQuotedPw42'",
+				"SET PASSWORD = 'BareFormPw42'",
+			} {
+				fragments, _ = MaskSecretLiteralsWithSQLMode(control, mode)
+				joined := strings.Join(fragments, ";")
+				require.NotContains(t, joined, "Pw42", mode+"/"+control)
+				require.NotEqual(t, []string{"******"}, fragments, mode+"/"+control)
+			}
+		}
+	})
 	t.Run("password keyword without set is not masked", func(t *testing.T) {
 		// ALTER USER ... PASSWORD EXPIRE has no secret literal to mask.
 		require.Equal(t, []string{"ALTER USER u1 PASSWORD EXPIRE INTERVAL 3 DAY"},

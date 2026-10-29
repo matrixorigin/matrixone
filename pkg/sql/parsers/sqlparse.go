@@ -205,6 +205,15 @@ func handleSQLForRecordFragmentWithSecrets(sql string, mode mysql.SQLModeFlags) 
 	// shape so its literal can be masked like the IDENTIFIED BY secrets.
 	sawSet := false
 	sawSetPassword := false
+	// While the guard is armed, skipped tokens are tallied into a target
+	// prefix: a legitimate prefix is exactly nothing (bare SET PASSWORD =
+	// form) or FOR plus one target token (user / 'user' / CURRENT_USER) or
+	// user @ host. IDENTIFIED / PASSWORD or any extra token invalidates the
+	// prefix, so a later '=' cannot detach attacker text from the guard.
+	sawFor := false
+	sawAt := false
+	prefixBad := false
+	targetTokens := 0
 	for scanner.Pos < len(sql) {
 		typ, s := scanSQLToken(scanner, &previousToken)
 		if typ == mysql.LEX_ERROR && ContainsCredentialWord(sql) {
@@ -218,6 +227,17 @@ func handleSQLForRecordFragmentWithSecrets(sql string, mode mysql.SQLModeFlags) 
 		// access_key_id/secret_access_key is a user, not a credential option:
 		// generic lookahead must not consume '=' or PASSWORD('secret').
 		if sawSetPassword && typ != eq {
+			if !sawFor && typ == mysql.FOR && targetTokens == 0 {
+				sawFor = true
+			} else {
+				targetTokens++
+				if typ == int('@') && targetTokens == 2 {
+					sawAt = true
+				}
+			}
+			if typ == mysql.IDENTIFIED || typ == mysql.PASSWORD {
+				prefixBad = true
+			}
 			continue
 		}
 		if typ == mysql.IDENTIFIED {
@@ -235,6 +255,18 @@ func handleSQLForRecordFragmentWithSecrets(sql string, mode mysql.SQLModeFlags) 
 				mask(scanner.Pos-len(s)-1, scanner.Pos-2)
 			}
 		} else if sawSetPassword && typ == eq {
+			// '=' only disarms the guard after a legitimate target prefix:
+			// [nothing] | FOR user | FOR user@host. Malformed prefix (an
+			// IDENTIFIED BY phrase, stray tokens) keeps the guard armed and
+			// this '=' is skipped like any other attacker character, so the
+			// end-of-fragment fallback below still fires.
+			validPrefix := !prefixBad &&
+				((!sawFor && targetTokens == 0) ||
+					(sawFor && targetTokens == 1) ||
+					(sawFor && targetTokens == 3 && sawAt))
+			if !validPrefix {
+				continue
+			}
 			sawSet, sawSetPassword = false, false
 			// SET PASSWORD [= 'secret' | FOR user = 'secret']: mask the
 			// password literal after the '='. MySQL also accepts the
