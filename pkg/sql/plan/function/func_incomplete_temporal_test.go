@@ -60,7 +60,9 @@ func TestIncompleteDateFormatFields(t *testing.T) {
 			require.True(t, ok, info)
 		})
 	}
-	require.Empty(t, session.warnings)
+	require.Len(t, session.warnings, 1)
+	require.Equal(t, "Incorrect datetime value: ''", session.warnings[0].msg)
+	session.warnings = nil
 	proc.GetSessionInfo().LCTimeNames = "fr_FR"
 	c := NewFunctionTestCase(proc, []FunctionTestInput{
 		NewFunctionTestInput(types.T_varchar.ToType(), []string{"2024-02-00", "2024-00-00", "2024-00-00", "bad"}, []bool{false, false, true, false}),
@@ -245,7 +247,8 @@ func TestIncompleteDateFormatKeepsConversionPolicy(t *testing.T) {
 			}, NewFunctionTestResult(types.T_varchar.ToType(), false, []string{""}, []bool{true}), DateFormat)
 			ok, info := c.RunAndFree()
 			require.True(t, ok, info)
-			require.Empty(t, session.warnings)
+			require.Len(t, session.warnings, 1)
+			require.Equal(t, "Incorrect datetime value: '"+text+"'", session.warnings[0].msg)
 		})
 	}
 	proc := testutil.NewProcess(t)
@@ -262,7 +265,9 @@ func TestIncompleteDateFormatKeepsConversionPolicy(t *testing.T) {
 			WithSelectList(&FunctionSelectList{AnyNull: true, SelectList: []bool{true, true, true, true, false}})
 		ok, info := c.RunAndFree()
 		require.True(t, ok, info)
-		require.Empty(t, session.warnings)
+		require.Len(t, session.warnings, 1)
+		require.Equal(t, "Incorrect datetime value: '2026-02-30'", session.warnings[0].msg)
+		session.warnings = nil
 	}
 
 	for _, tc := range []struct {
