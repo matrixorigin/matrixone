@@ -1167,6 +1167,9 @@ func DateStringToDate(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 			// ParseDatetime reports only invalid-input errors. Malformed strings
 			// share the input-NULL path without consulting the zero-date policy.
 			parsed, err = types.ParseDatetime(functionUtil.QuickBytesToStr(value), 6)
+			if err != nil && !ivecs[0].GetIsBin() && isTemporalTextSource(ivecs[0].GetType().Oid) {
+				appendStrToDateWarning(proc, moerr.ER_TRUNCATED_WRONG_VALUE, "Incorrect datetime value", "", value)
+			}
 			null = err != nil
 		}
 		if null {

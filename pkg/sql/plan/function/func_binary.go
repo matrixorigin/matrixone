@@ -4980,7 +4980,14 @@ func DateFormat(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 			fmt = functionUtil.QuickBytesToStr(fmtBytes)
 			null2 = null
 		}
-		if null1 || null2 || len(fmt) == 0 || (stringsInput != nil && len(value) == 0) {
+		if null1 || null2 || len(fmt) == 0 {
+			if err = rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+		} else if stringsInput != nil && len(value) == 0 {
+			if !ivecs[0].GetIsBin() && isTemporalTextSource(ivecs[0].GetType().Oid) {
+				appendStrToDateWarning(proc, moerr.ER_TRUNCATED_WRONG_VALUE, "Incorrect datetime value", "", value)
+			}
 			if err = rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
@@ -4996,9 +5003,10 @@ func DateFormat(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 				} else {
 					d, err = types.ParseDatetime(text, 6)
 					if err != nil {
-						// Keep the normal string-to-datetime expression cast policy:
-						// malformed values are NULL without statement diagnostics.
 						if isTemporalLexicalConversionError(err) {
+							if !ivecs[0].GetIsBin() && isTemporalTextSource(ivecs[0].GetType().Oid) {
+								appendStrToDateWarning(proc, moerr.ER_TRUNCATED_WRONG_VALUE, "Incorrect datetime value", "", value)
+							}
 							if err = rs.AppendBytes(nil, true); err != nil {
 								return err
 							}
