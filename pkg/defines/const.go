@@ -174,7 +174,7 @@ const (
 	// contracts change (matrixorigin/matrixone#31492). JSON_SEARCH takes the next
 	// unclaimed number; renumber on merge if that PR lands first.
 	MORPCVersion136    int64 = 136 // JSON_SEARCH path traversal and result contract
-	MORPCLatestVersion       = MORPCVersion136
+	MORPCLatestVersion       = MORPCVersion134
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by
