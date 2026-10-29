@@ -1,7 +1,8 @@
 -- vecbf16 / vecf16 / vecint8 narrow vector column types
 -- Scope (per design): distance functions + casts + storage only.
--- Elementwise arithmetic (+ - * / sqrt abs summation subvector) is NOT
--- supported on the narrow types and must require an explicit CAST to vecf32.
+-- Elementwise arithmetic (+ - * / sqrt abs) is NOT supported on the narrow
+-- types and must require an explicit CAST to vecf32. summation, l1_norm and
+-- l2_norm take them directly and return DOUBLE; subvector keeps their type.
 
 -- pre
 drop database if exists vecnarrowdb;
@@ -86,9 +87,27 @@ select bf - bf from nvec;
 select bf * bf from nvec;
 select sqrt(bf) from nvec;
 select abs(i8) from nvec;
-select summation(f16) from nvec;
 -- arithmetic IS allowed after an explicit cast to vecf32
 select cast(bf as vecf32(3)) + cast(bf as vecf32(3)) from nvec order by a;
+
+-- summation / l1_norm / l2_norm / subvector on the narrow types (#31666)
+drop table if exists nfn;
+create table nfn(a int, bf vecbf16(3), f16 vecf16(3), i8 vecint8(3));
+insert into nfn values(1, "[3,4,0]", "[3,4,0]", "[3,4,0]");
+insert into nfn values(2, "[-1.5,2,0.25]", "[-1.5,2,0.25]", "[-128,127,0]");
+insert into nfn values(3, null, null, null);
+select a, summation(bf), l1_norm(bf), l2_norm(bf) from nfn order by a;
+select a, summation(f16), l1_norm(f16), l2_norm(f16) from nfn order by a;
+select a, summation(i8), l1_norm(i8), l2_norm(i8) from nfn order by a;
+select a, subvector(bf, 2), subvector(f16, -1), subvector(i8, 1, 2) from nfn order by a;
+select a, subvector(i8, 0), subvector(i8, 4, 1), subvector(i8, -2, 1) from nfn order by a;
+-- the results match the explicit vecf32 cast
+select count(*) from nfn where summation(bf) = summation(cast(bf as vecf32(3))) and l2_norm(f16) = l2_norm(cast(f16 as vecf32(3))) and l1_norm(i8) = l1_norm(cast(i8 as vecf32(3)));
+-- subvector keeps the narrow type
+create table nfn_sub as select subvector(bf, 1, 2) as s_bf, subvector(f16, 2) as s_f16, subvector(i8, -1) as s_i8 from nfn where a = 1;
+desc nfn_sub;
+drop table nfn_sub;
+drop table nfn;
 
 -- narrow vector columns cannot be a primary key (inline declaration)
 create table pkbf(a int, v vecbf16(3) primary key);

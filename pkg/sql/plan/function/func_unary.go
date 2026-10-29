@@ -376,6 +376,30 @@ func L2NormArray[T types.RealNumbers](ivecs []*vector.Vector, result vector.Func
 	}, selectList)
 }
 
+// L1NormNarrowArray is l1_norm of a bf16/f16/int8/uint8 vector, computed on its float32
+// values, which hold every element exactly.
+func L1NormNarrowArray[T types.ArrayElement](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryBytesToFixedWithErrorCheck[float64](ivecs, result, proc, length, func(in []byte) (float64, error) {
+		return moarray.L1Norm(types.ToFloat32Array(types.BytesToArray[T](in)))
+	}, selectList)
+}
+
+// L2NormNarrowArray is l2_norm of a bf16/f16/int8/uint8 vector, computed on its float32
+// values.
+func L2NormNarrowArray[T types.ArrayElement](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryBytesToFixedWithErrorCheck[float64](ivecs, result, proc, length, func(in []byte) (float64, error) {
+		return moarray.L2Norm(types.ToFloat32Array(types.BytesToArray[T](in)))
+	}, selectList)
+}
+
+// SummationNarrowArray is summation of a bf16/f16/int8/uint8 vector, computed on its
+// float32 values.
+func SummationNarrowArray[T types.ArrayElement](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryBytesToFixedWithErrorCheck[float64](ivecs, result, proc, length, func(in []byte) (float64, error) {
+		return moarray.Summation(types.ToFloat32Array(types.BytesToArray[T](in)))
+	}, selectList)
+}
+
 func VectorDimsArray[T types.ArrayElement](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return opUnaryBytesToFixed[int64](ivecs, result, proc, length, func(in []byte) (out int64) {
 		_in := types.BytesToArray[T](in)
@@ -391,7 +415,7 @@ func SummationArray[T types.RealNumbers](ivecs []*vector.Vector, result vector.F
 	}, selectList)
 }
 
-func SubVectorWith2Args[T types.RealNumbers](ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
+func SubVectorWith2Args[T types.ArrayElement](ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	vs := vector.GenerateFunctionStrParameter(ivecs[0])
 	starts := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
@@ -421,7 +445,7 @@ func SubVectorWith2Args[T types.RealNumbers](ivecs []*vector.Vector, result vect
 	return nil
 }
 
-func SubVectorWith3Args[T types.RealNumbers](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
+func SubVectorWith3Args[T types.ArrayElement](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	vs := vector.GenerateFunctionStrParameter(ivecs[0])
 	starts := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
