@@ -1228,7 +1228,7 @@ func containsVolatileFunction(expr *plan.Expr) bool {
 			return true
 		}
 		overload, ok := function.GetFunctionByIdWithoutError(exprImpl.F.Func.Obj)
-		if !ok || overload.CannotFold() {
+		if !ok || overload.CannotFold() || function.IsTemporalTextDiagnosticCall(expr) {
 			return true
 		}
 		for _, arg := range exprImpl.F.Args {
@@ -1251,7 +1251,7 @@ func containsVolatileFunction(expr *plan.Expr) bool {
 }
 
 // ContainsVolatileFunction reports whether an expression can produce a new
-// value on repeated evaluation. Storage-side filtering uses it to keep such
+// value or diagnostics on repeated evaluation. Storage-side filtering uses it to keep such
 // predicates at the row-level execution boundary.
 func ContainsVolatileFunction(expr *plan.Expr) bool {
 	return containsVolatileFunction(expr)
