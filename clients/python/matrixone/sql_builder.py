@@ -152,12 +152,14 @@ class MatrixOneSQLBuilder:
         """Add multiple rows of values for INSERT"""
         if self._query_type != "INSERT":
             raise ValueError("insert_values() can only be used with INSERT operations")
-        rows = list(values)
-        if any(isinstance(row, Mapping) for row in rows):
-            raise TypeError("insert_values() rows must be positional, not mappings")
+        rows = []
+        for row in values:
+            if isinstance(row, Mapping):
+                raise TypeError("insert_values() rows must be positional, not mappings")
+            rows.append(list(row))
 
         self._insert_columns = list(columns)
-        self._insert_values = [list(row) for row in rows]
+        self._insert_values = rows
         return self
 
     # UPDATE methods

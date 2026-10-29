@@ -69,3 +69,15 @@ def test_outer_generator_rows_are_not_consumed_by_mapping_validation():
     builder = MatrixOneSQLBuilder().insert_into('items').insert_values(['id', 'label'], (row for row in rows))
 
     assert execute_rows(builder) == [(1, 'first'), (2, 'second')]
+
+
+def test_outer_generator_can_reuse_a_mutable_row_buffer():
+    def reused_buffer_rows():
+        row = [None, None]
+        for values in ((1, 'first'), (2, 'second')):
+            row[:] = values
+            yield row
+
+    builder = MatrixOneSQLBuilder().insert_into('items').insert_values(['id', 'label'], reused_buffer_rows())
+
+    assert execute_rows(builder) == [(1, 'first'), (2, 'second')]
