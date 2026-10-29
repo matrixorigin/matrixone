@@ -29,6 +29,31 @@ PROBES = {
 }
 NAMES = frozenset(PROBES) | {'snapshot', 'export_jsonline'}
 STATES = frozenset(('supported', 'disabled', 'unsupported', 'unknown'))
+_CACHE_SLOT = '_matrixone_capability_observation'
+_IDENTITY_SQL = 'SELECT VERSION(), git_version(), @@server_id'
+
+
+def _discard_observation(connection):
+    info = getattr(connection, 'info', None)
+    if isinstance(info, dict):
+        info.pop(_CACHE_SLOT, None)
+
+
+def _unknown_server_id(error):
+    args = getattr(error.orig, 'args', ())
+    return bool(args) and args[0] == 1193
+
+
+def _connection_cache(connection, client, policy, row):
+    info = getattr(connection, 'info', None)
+    server_id = str(row[2]) if len(row) > 2 and row[2] is not None else ''
+    if not isinstance(info, dict):
+        return None, None
+    if not server_id:
+        info.pop(_CACHE_SLOT, None)
+        return None, None
+    policy_token = (policy[0]._settings_token, policy[1]) if policy is not None else None
+    return info, (client._capability_cache_token, policy_token, server_id, tuple(row[:2]))
 
 
 def validate_overrides(overrides):
@@ -143,9 +168,20 @@ def get_capabilities(client, refresh=False):
     generation = client._compatibility_generation
     policy = pool_settings_version(engine)
     with engine.connect() as connection:
-        result = connection.exec_driver_sql('SELECT VERSION(), git_version()')
+        if refresh:
+            _discard_observation(connection)
         try:
-            identity = tuple(str(v) for v in result.fetchone())
+            result = connection.exec_driver_sql(_IDENTITY_SQL)
+        except DBAPIError as error:
+            if error.connection_invalidated:
+                raise
+            _discard_observation(connection)
+            if not _unknown_server_id(error):
+                raise
+            result = connection.exec_driver_sql('SELECT VERSION(), git_version()')
+        try:
+            row = result.fetchone()
+            identity = tuple(str(v) for v in row[:2])
         finally:
             result.close()
         if (
@@ -154,10 +190,12 @@ def get_capabilities(client, refresh=False):
             or pool_settings_version(engine) != policy
         ):
             raise RuntimeError('Connection changed during capability discovery; retry explicitly')
-        cached = client._capability_cache
-        cache_key = identity, policy, engine, generation
+        info, cache_key = _connection_cache(connection, client, policy, row)
+        cached = info.get(_CACHE_SLOT) if info is not None else None
         if not refresh and cached is not None and cached[0] == cache_key:
             return dict(cached[1])
+        if info is not None:
+            info.pop(_CACHE_SLOT, None)
         values = initial_capabilities(identity, client._capability_overrides)
         for name, sql in PROBES.items():
             if name in client._capability_overrides:
@@ -172,13 +210,14 @@ def get_capabilities(client, refresh=False):
                 values[name] = failed_observation(error, identity, name)
                 if error.connection_invalidated:
                     raise
-    if (
-        generation != client._compatibility_generation
-        or client._engine is not engine
-        or pool_settings_version(engine) != policy
-    ):
-        raise RuntimeError('Connection changed during capability discovery; retry explicitly')
-    client._capability_cache = (cache_key, values)
+        if (
+            generation != client._compatibility_generation
+            or client._engine is not engine
+            or pool_settings_version(engine) != policy
+        ):
+            raise RuntimeError('Connection changed during capability discovery; retry explicitly')
+        if info is not None:
+            info[_CACHE_SLOT] = (cache_key, values)
     return dict(values)
 
 
@@ -191,9 +230,20 @@ async def get_capabilities_async(client, refresh=False):
     generation = client._compatibility_generation
     policy = pool_settings_version(engine)
     async with engine.connect() as connection:
-        result = await connection.exec_driver_sql('SELECT VERSION(), git_version()')
+        if refresh:
+            _discard_observation(connection)
         try:
-            identity = tuple(str(v) for v in result.fetchone())
+            result = await connection.exec_driver_sql(_IDENTITY_SQL)
+        except DBAPIError as error:
+            if error.connection_invalidated:
+                raise
+            _discard_observation(connection)
+            if not _unknown_server_id(error):
+                raise
+            result = await connection.exec_driver_sql('SELECT VERSION(), git_version()')
+        try:
+            row = result.fetchone()
+            identity = tuple(str(v) for v in row[:2])
         finally:
             result.close()
         if (
@@ -202,10 +252,12 @@ async def get_capabilities_async(client, refresh=False):
             or pool_settings_version(engine) != policy
         ):
             raise RuntimeError('Connection changed during capability discovery; retry explicitly')
-        cached = client._capability_cache
-        cache_key = identity, policy, engine, generation
+        info, cache_key = _connection_cache(connection, client, policy, row)
+        cached = info.get(_CACHE_SLOT) if info is not None else None
         if not refresh and cached is not None and cached[0] == cache_key:
             return dict(cached[1])
+        if info is not None:
+            info.pop(_CACHE_SLOT, None)
         values = initial_capabilities(identity, client._capability_overrides)
         for name, sql in PROBES.items():
             if name in client._capability_overrides:
@@ -220,11 +272,12 @@ async def get_capabilities_async(client, refresh=False):
                 values[name] = failed_observation(error, identity, name)
                 if error.connection_invalidated:
                     raise
-    if (
-        generation != client._compatibility_generation
-        or client._engine is not engine
-        or pool_settings_version(engine) != policy
-    ):
-        raise RuntimeError('Connection changed during capability discovery; retry explicitly')
-    client._capability_cache = (cache_key, values)
+        if (
+            generation != client._compatibility_generation
+            or client._engine is not engine
+            or pool_settings_version(engine) != policy
+        ):
+            raise RuntimeError('Connection changed during capability discovery; retry explicitly')
+        if info is not None:
+            info[_CACHE_SLOT] = (cache_key, values)
     return dict(values)

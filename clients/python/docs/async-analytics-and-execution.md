@@ -151,7 +151,12 @@ are separate operations, excluding caller idle time from batch latency.
 `get_capabilities(refresh=False)` uses read-only observations, independent of the
 advertised version. Results distinguish supported, disabled, unsupported and
 unknown; privileges or a successful EXPLAIN do not certify actual Arrow LOAD.
-Public discovery checks server identity. Uploads do not treat an observation
+Public discovery checks the CN server ID in its existing metadata query and caches
+observations in one bounded slot on the selected physical connection. Same-build
+CNs and different pooled sessions do not share observations. Missing server IDs
+use fresh, uncached observations. Ordinary SQL performs no capability discovery.
+Use `refresh=True` after manual session-setting changes; these are point-in-time
+observations, not a guarantee about a later proxy-selected backend. Uploads do not treat an observation
 from a different pooled connection as a veto: they probe the actual selected
 write checkout before CREATE/LOAD. A bounded owned staging file may therefore
 be created and cleaned before an unavailable-server rejection. Explicit

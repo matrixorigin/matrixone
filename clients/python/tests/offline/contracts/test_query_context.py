@@ -119,17 +119,7 @@ async def test_derived_alias_binds_are_deferred_and_refreshed_per_public_executi
 
 @pytest.mark.asyncio
 async def test_derived_alias_required_default_and_null_binds(rows, owner):
-    calls = []
-
-    def dispatch(sql, parameters=None):
-        calls.append(sql)
-        result = rows.exec_driver_sql(sql, tuple(parameters or ()))
-        return ResultSet(list(result.keys()), result.all())
-
-    async def async_dispatch(sql, parameters=None):
-        return dispatch(sql, parameters)
-
-    owner.execute = async_dispatch if isinstance(owner, (AsyncClient, AsyncSession)) else dispatch
+    calls = connect_owner_to_rows(owner, rows)
 
     def mapped_alias(bound):
         return aliased(Parent, select(Parent).where(Parent.id > bound).subquery('derived'))

@@ -85,7 +85,7 @@ class BaseMatrixOneClient:
 
         checked = validate_overrides(overrides)
         self._compatibility_generation = getattr(self, '_compatibility_generation', 0) + 1
-        self._capability_cache = None
+        self._capability_cache_token = object()
         self._capability_overrides = checked
         self._version_manager = new_version_manager()
         self._backend_version = None
