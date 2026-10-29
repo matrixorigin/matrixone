@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -139,6 +140,113 @@ func TestLoadCSVStrictProbeFallback(t *testing.T) {
 					require.Equal(t, []int64{12, -1}, offsets)
 				}
 				t.Logf("requested_readers=%d ranges=%v rows=%d valid=%t", readers, offsets, rows, tc.valid)
+			})
+		}
+		exec(t, "create table long_records(payload longtext)")
+		for _, tc := range []struct {
+			name                  string
+			recordBytes           int
+			multiline, restartBOM bool
+			atSoftLimit           bool
+			wantRanges            int
+		}{
+			{name: "short record control", recordBytes: 400 * 1024, wantRanges: 2},
+			{name: "long record parallel", recordBytes: 600 * 1024, wantRanges: 2},
+			{name: "quoted multiline fallback", multiline: true, wantRanges: 1},
+			{name: "BOM restart fallback", recordBytes: 600 * 1024, restartBOM: true, wantRanges: 1},
+			{name: "soft limit plain control", atSoftLimit: true, wantRanges: 2},
+			{name: "soft limit BOM fallback", atSoftLimit: true, restartBOM: true, wantRanges: 1},
+			{name: "soft limit multiline fallback", atSoftLimit: true, multiline: true, wantRanges: 1},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				var values []string
+				if tc.atSoftLimit {
+					// IGNORE removes the header before computing the half-file guess.
+					// The suffix is exactly the former 256 KiB physical input cap.
+					const suffixBytes, lastBytes = 256 * 1024, 6144
+					const firstBytes = 2*suffixBytes - lastBytes
+					if tc.multiline {
+						values = []string{strings.Repeat("x", firstBytes-2) + "\n" + strings.Repeat("y", lastBytes-2)}
+					} else {
+						last := strings.Repeat("b", lastBytes-1)
+						if tc.restartBOM {
+							last = "\xef\xbb\xbf" + strings.Repeat("b", lastBytes-4)
+						}
+						values = []string{strings.Repeat("x", firstBytes-1), last}
+					}
+				} else {
+					values = make([]string, 5)
+					for i := range values {
+						if tc.multiline {
+							values[i] = strings.Repeat("x", 900*1024) + "\n" + strings.Repeat("y", 300*1024)
+						} else {
+							prefix := fmt.Sprintf("%d:", i)
+							if tc.restartBOM && i == 3 {
+								prefix = "\xef\xbb\xbf" + prefix
+							}
+							values[i] = prefix + strings.Repeat("x", tc.recordBytes-len(prefix)-1)
+						}
+					}
+				}
+				var content strings.Builder
+				content.WriteString("payload\n")
+				for _, value := range values {
+					if tc.multiline {
+						content.WriteByte('"')
+					}
+					content.WriteString(value)
+					if tc.multiline {
+						content.WriteByte('"')
+					}
+					content.WriteByte('\n')
+				}
+				rows := len(values)
+				sort.Strings(values)
+				path := filepath.Join(t.TempDir(), "long-records.csv")
+				require.NoError(t, os.WriteFile(path, []byte(content.String()), 0600))
+				var observed struct {
+					sync.Mutex
+					readers int
+					offsets []int64
+				}
+				previous := testingContext.SetLoadDataTestConfig(moruntime.LoadDataTestConfig{
+					Filepath: path, MinSize: int64(content.Len() / 2), OnRanges: func(n int, o []int64) {
+						observed.Lock()
+						defer observed.Unlock()
+						observed.readers = n
+						observed.offsets = append([]int64(nil), o...)
+					},
+				})
+				defer testingContext.SetLoadDataTestConfig(previous)
+				load := "load data infile '" + strings.ReplaceAll(path, "'", "''") + "' into table long_records fields terminated by ',' lines terminated by '\\n' ignore 1 lines parallel '"
+				for _, parallel := range []string{"false", "true"} {
+					exec(t, "truncate table long_records")
+					exec(t, load+parallel+"'")
+					func() {
+						got, err := conn.QueryContext(ctx, "select payload from long_records")
+						require.NoError(t, err)
+						defer got.Close()
+						var actual []string
+						for got.Next() {
+							var payload string
+							require.NoError(t, got.Scan(&payload))
+							actual = append(actual, payload)
+						}
+						require.NoError(t, got.Err())
+						require.Len(t, actual, rows)
+						sort.Strings(actual)
+						for i := range values {
+							require.True(t, values[i] == actual[i], "parallel=%s payload %d differs, bytes=%d/%d", parallel, i, len(values[i]), len(actual[i]))
+						}
+					}()
+				}
+				observed.Lock()
+				readers, offsets := observed.readers, append([]int64(nil), observed.offsets...)
+				observed.Unlock()
+				require.Equal(t, 2, readers)
+				require.Len(t, offsets, 2*tc.wantRanges)
+				require.Equal(t, int64(len("payload\n")), offsets[0])
+				t.Logf("requested_readers=%d ranges=%v rows=%d exact_serial_parallel_values=true", readers, offsets, rows)
 			})
 		}
 	})

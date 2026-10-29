@@ -1,0 +1,41 @@
+drop database if exists load_last_insert_id_bvt;
+create database load_last_insert_id_bvt;
+use load_last_insert_id_bvt;
+create table generated_ids (id int auto_increment primary key, value varchar(20));
+load data inline format='csv', data='first\nsecond' into table generated_ids fields terminated by ',' (value);
+select last_insert_id();
+➤ last_insert_id()[-5,64,0]  𝄀
+1
+select id, value from generated_ids order by id;
+➤ id[4,32,0]  ¦  value[12,20,0]  𝄀
+1  ¦  first  𝄀
+2  ¦  second
+insert into generated_ids (value) values ('third');
+select last_insert_id();
+➤ last_insert_id()[-5,64,0]  𝄀
+3
+load data infile '$resources/file_test/empty.txt' into table generated_ids fields terminated by ',' (value);
+select last_insert_id();
+➤ last_insert_id()[-5,64,0]  𝄀
+3
+load data inline format='csv', data='20,explicit' into table generated_ids fields terminated by ',';
+select last_insert_id();
+➤ last_insert_id()[-5,64,0]  𝄀
+3
+select id, value from generated_ids order by id;
+➤ id[4,32,0]  ¦  value[12,20,0]  𝄀
+1  ¦  first  𝄀
+2  ¦  second  𝄀
+3  ¦  third  𝄀
+20  ¦  explicit
+create table plain_values (value varchar(20));
+load data inline format='csv', data='plain' into table plain_values fields terminated by ',';
+select last_insert_id();
+➤ last_insert_id()[-5,64,0]  𝄀
+3
+select value from plain_values;
+➤ value[12,20,0]  𝄀
+plain
+drop database load_last_insert_id_bvt;
+show databases like 'load_last_insert_id_bvt';
+➤ Database[12,5000,0]

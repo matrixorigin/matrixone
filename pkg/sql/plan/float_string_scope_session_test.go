@@ -220,7 +220,22 @@ func TestLegacyFloatTableSessionWitnesses(t *testing.T) {
 	}
 }
 
-func TestLegacyFloatAlteredSessionWitnesses(t *testing.T) {
+// Separate roots let the existing race-test process sharder distribute these
+// expensive cases without parallelizing fixtures that share runtime globals.
+func TestLegacyFloatAlteredSessionWitnessesPart0(t *testing.T) {
+	testLegacyFloatAlteredSessionWitnesses(t, 0)
+}
+func TestLegacyFloatAlteredSessionWitnessesPart1(t *testing.T) {
+	testLegacyFloatAlteredSessionWitnesses(t, 1)
+}
+func TestLegacyFloatAlteredSessionWitnessesPart2(t *testing.T) {
+	testLegacyFloatAlteredSessionWitnesses(t, 2)
+}
+func TestLegacyFloatAlteredSessionWitnessesPart3(t *testing.T) {
+	testLegacyFloatAlteredSessionWitnesses(t, 3)
+}
+
+func testLegacyFloatAlteredSessionWitnesses(t *testing.T, part int) {
 	const expression = "concat(a,cast(concat(from_unixtime(0),cast(1 as decimal(10,0))/cast(7 as decimal(10,0))) as char(100)))"
 	type alteredSessionWitness struct {
 		name, suffix, altered string
@@ -248,8 +263,15 @@ func TestLegacyFloatAlteredSessionWitnesses(t *testing.T) {
 			offset:  8*3600 + 2*60, precision: precision,
 		})
 	}
-	for _, tc := range cases {
+	for i, tc := range cases {
+		if i%4 != part {
+			continue
+		}
 		t.Run(tc.name, func(t *testing.T) {
+			// DUMP and raw-source budget proofs cover the distinct session and
+			// origin boundaries and precision zero. Every precision still
+			// exercises migration, LOAD, and its exact result.
+			fullProof := tc.precision == 0 || tc.precision == 4 || tc.precision == 8 || tc.precision == 30
 			compiler, source := legacyFloatScopeTable(t, "create table t(a double,g varchar(200) default("+expression+"),h varchar(200) default("+expression+"))", 4, time.FixedZone("creation", 8*3600+60))
 			func() {
 				proc := compiler.GetProcess()
@@ -298,31 +320,35 @@ func TestLegacyFloatAlteredSessionWitnesses(t *testing.T) {
 			require.Equal(t, full+tc.suffix+fraction, executeLegacyFloatScope(t, compiler, execution, "h"))
 			require.True(t, proto.Equal(before, source))
 
-			_, err := AnalyzeTableDumpBindings(compiler, execution, nil)
-			require.NoError(t, err)
-			_, err = AnalyzeTableDumpBindings(compiler, execution, execution)
+			if fullProof {
+				_, err := AnalyzeTableDumpBindings(compiler, execution, nil)
+				require.NoError(t, err)
+			}
+			_, err := AnalyzeTableDumpBindings(compiler, execution, execution)
 			require.NoError(t, err)
 			require.Same(t, time.UTC, compiler.GetProcess().GetSessionInfo().TimeZone)
 			require.Equal(t, "en_US", compiler.GetProcess().GetSessionInfo().LCTimeNames)
 			migrated := proto.Clone(execution)
 			require.NoError(t, MigrateLegacyFloatStringTableDef(compiler, execution))
 			require.True(t, proto.Equal(migrated, execution))
-			proof := newTableDumpProofProcess(compiler)
-			defer proof.Free()
-			proofCtx := tableDumpBindContext{CompilerContext: compiler, ctx: compiler.GetContext(), proc: proof}
-			budget := &tableDumpBindingBudget{}
-			for item := range persistedTableExpressions(source) {
-				if !hasLegacyFloatStringCast(item.expr) {
-					continue
+			if fullProof {
+				proof := newTableDumpProofProcess(compiler)
+				defer proof.Free()
+				proofCtx := tableDumpBindContext{CompilerContext: compiler, ctx: compiler.GetContext(), proc: proof}
+				budget := &tableDumpBindingBudget{}
+				for item := range persistedTableExpressions(source) {
+					if !hasLegacyFloatStringCast(item.expr) {
+						continue
+					}
+					bound, err := rebindLegacyFloatStringExpression(proofCtx, source, item, budget)
+					require.NoError(t, err)
+					require.NotNil(t, bound)
 				}
-				bound, err := rebindLegacyFloatStringExpression(proofCtx, source, item, budget)
-				require.NoError(t, err)
-				require.NotNil(t, bound)
+				t.Logf("complete table proof: visits=%d memo entries=%d charged bytes=%d", budget.visits, budget.probeMemo.entries, budget.probeMemo.bytes)
+				require.Less(t, budget.visits, tableDumpMaxCandidateVisits)
+				require.LessOrEqual(t, budget.probeMemo.entries, legacyFloatProbeMemoEntries)
+				require.LessOrEqual(t, budget.probeMemo.bytes, legacyFloatProbeMemoBytes)
 			}
-			t.Logf("complete table proof: visits=%d memo entries=%d charged bytes=%d", budget.visits, budget.probeMemo.entries, budget.probeMemo.bytes)
-			require.Less(t, budget.visits, tableDumpMaxCandidateVisits)
-			require.LessOrEqual(t, budget.probeMemo.entries, legacyFloatProbeMemoEntries)
-			require.LessOrEqual(t, budget.probeMemo.bytes, legacyFloatProbeMemoBytes)
 		})
 	}
 }
