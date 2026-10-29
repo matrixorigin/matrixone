@@ -4374,6 +4374,9 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 		if b.ctx == nil {
 			return nil, moerr.NewInvalidInput(b.GetContext(), "invalid field reference to COUNT")
 		}
+		if len(astArgs) != 1 {
+			return nil, moerr.NewInvalidArg(b.GetContext(), "approx_count requires exactly one argument", len(astArgs))
+		}
 		name = "count"
 
 	case "trim":
