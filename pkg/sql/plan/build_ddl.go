@@ -8332,6 +8332,13 @@ func BindForwardForeignKey(ctx context.Context, constraintName string,
 	if len(fkDefs) == 0 || childTableDef == nil || parentTableDef == nil {
 		return nil, moerr.NewInternalError(ctx, "incomplete forward foreign key binding")
 	}
+
+	// #31317: declarations admitted earlier under foreign_key_checks=0 must
+	// not bind to a partitioned parent (MySQL error 1506); getForeignKeyData
+	// already rejects the same shape when the parent exists at declaration time.
+	if isPartitionedTableDef(parentTableDef) {
+		return nil, moerr.NewErrForeignKeyOnPartitioned(ctx)
+	}
 	fkData := FkData{
 		ParentTableName: parentTableDef.Name,
 		Def: &plan.ForeignKeyDef{

@@ -99,3 +99,46 @@ func TestForeignKeyRejectsPartitionedTables(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, uint64(42), data.Def.ForeignTbl)
 }
+
+// #31317 review follow-up: a declaration admitted under foreign_key_checks=0
+// while the parent is absent must not bind when the parent created later is
+// partitioned (MySQL error 1506). BindForwardForeignKey is the shared binding
+// point of the planner preview and the executor catalog path, so pinning it
+// there covers both entry points.
+func TestForwardForeignKeyRejectsPartitionedParent(t *testing.T) {
+	intType := plan.Type{Id: int32(types.T_int32)}
+	child := &plan.TableDef{
+		Name: "fkw_child",
+		Cols: []*plan.ColDef{{
+			ColId:   1,
+			Name:    "pid",
+			NotNull: true,
+			Typ:     intType,
+			Default: &plan.Default{NullAbility: false},
+		}},
+	}
+	fkDefs := []*FkReferDef{{
+		Db: "db", Tbl: "fkw_child", Col: "pid", ReferCol: "id",
+		OnDelete: "restrict", OnUpdate: "restrict",
+	}}
+	newParent := func(partitioned bool) *plan.TableDef {
+		def := &plan.TableDef{
+			Name:  "fkw_parent",
+			TblId: 42,
+			Cols:  []*plan.ColDef{{ColId: 9, Name: "id", Primary: true, NotNull: true, Typ: intType, Default: &plan.Default{}}},
+			Pkey:  &plan.PrimaryKeyDef{Names: []string{"id"}, PkeyColName: "id"},
+		}
+		if partitioned {
+			def.Partition = &plan.Partition{}
+		}
+		return def
+	}
+
+	_, err := BindForwardForeignKey(context.Background(), "fk_forward_part", fkDefs, child, newParent(true))
+	require.Error(t, err, "forward binding to a partitioned parent must be rejected")
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrForeignKeyOnPartitioned), "%v", err)
+
+	// Control: an unpartitioned parent still binds the same declaration.
+	_, err = BindForwardForeignKey(context.Background(), "fk_forward_part", fkDefs, child, newParent(false))
+	require.NoError(t, err)
+}
