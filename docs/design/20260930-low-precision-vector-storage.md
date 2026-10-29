@@ -710,7 +710,12 @@ within the fp32 GEMM's tolerance, rows closer than it in either order.
   take the last, nested keys are ignored, escapes, non-objects and invalid values with
   their texts); JSON query values round once (`1.00000005960464478` is `1.0000001`, also in
   BVT `vector/vector_matmul.sql`), with the parse's errors for non-numbers, nesting and
-  nulls.
+  nulls; ten million `[` in the queries or options fail with an error (the row scan's
+  depth limit, `json.Valid`); options followed by more text or a second object are
+  rejected, and an invalid duplicate key's error names the value it checked; a vecblock
+  cell's bound grows with its text (64 bytes per byte); a binary length bounds the float32
+  query count within the limit when its cell count is beyond it; the limits are reported
+  before the options with or without an account.
 - **Sort and hash keys** (`sort/vecblock_test.go`, `hashmap/strhashmap_test.go`): `ORDER BY k, v`
   over 150 peer groups sorts each group by the decoded values with under 64 KiB of Go heap
   (16.8 MB decoding the column per group); a `vecf8`/`vecf4(768)` hash key, flat, nullable
@@ -865,15 +870,19 @@ cosine divides the norm out and squared L2 includes it.
   executor holding the configuration charges its allocation account for the retained
   query storage and its score scratch, so a shared configuration is charged to each
   holder; a denial fails the aggregate's creation, and the charge returns when the
-  executor is freed. The account is attached before the configuration is parsed: it
-  first admits an upper bound of the parse (the decoded queries, the converted storage
-  and the score scratch, from the configuration's lengths and a non-allocating scan of
-  JSON queries that also checks the query count, `queries × topk` and the dimension),
+  executor is freed. Every aggregate factory attaches the account before the
+  configuration (as the window and time-window operators bind it), so the configuration
+  is parsed with the account in place: it first admits an upper bound of the parse (the
+  decoded queries, the converted storage and the score scratch, from the configuration's
+  lengths and a non-allocating scan of JSON queries that also checks the query count and
+  `queries × topk`; a vecblock cell's share grows with its JSON text, which its decoding
+  allocates for); the parse runs the same checks first without an account,
   then keeps only the retained bytes, so a configuration beyond the account is refused
   before its queries are decoded. The bound reads neither the options nor the query values,
   so it covers either query format. The options and JSON queries are parsed in one SAX pass
   (`sonic/ast.Preorder`) without building a map or nested slices: the options visitor keeps
-  the top-level `metric` and `query_format`, and the query visitor writes each value,
+  the top-level `metric` and `query_format` after `encoding/json.Valid` checks the whole
+  text (trailing text included) without recursion, and the query visitor writes each value,
   rounded once from its text to float32 (`strconv.ParseFloat(text, 32)`, as `encoding/json`
   does), into one backing sized by the row scan. Measured against `Unmarshal` (64 × 768
   queries; options with 10,002 keys): the SAX parse holds 197 KB against 610 KB to 3.15 MB
@@ -882,6 +891,9 @@ cosine divides the norm out and squared L2 includes it.
   on Go 1.27) for the queries and 0.8 to 1.2 ms against 1.6 to 3.5 ms for the options.
   Native sonic's `Unmarshal` into float32 rounds through float64 (1.00000005960464478 reads
   as 1, not 1.0000001); the SAX parse keeps the single rounding on any sonic version.
+  The row scan follows at most 8 levels of nesting and rejects deeper text, and the query
+  visitor rejects a value deeper than a query's coordinates, so nested input fails with
+  an error rather than deep recursion.
 - v1 is a function call per tile with no index, residency or dataset cache; the cuVS
   brute-force index is unchanged.
 - SQL surface = one aggregate, `vector_matmul`; partials per pipeline and the cross-CN

@@ -400,8 +400,10 @@ func (itr *strHashmapIterator) encodeHashKeys(vecs []*vector.Vector, start, coun
 	}
 }
 
-// hashKeyValueSize is the length appendVarlenaHashKey appends for a canonical value:
-// a JSON or vecf8/vecf4 key differs in length from the stored value.
+// hashKeyValueSize is the length appendVarlenaHashKey appends for a value already passed
+// through canonicalVarlenaHashValueForType: a JSON or vecf8/vecf4 key differs in length
+// from the stored value. keycodec.CanonicalValueSize takes the stored value instead and
+// would apply the collation key a second time.
 func hashKeyValueSize(oid types.T, value []byte) int {
 	switch {
 	case oid == types.T_json:

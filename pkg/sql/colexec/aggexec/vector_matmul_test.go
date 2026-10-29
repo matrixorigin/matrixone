@@ -2239,6 +2239,11 @@ func TestVectorMatmulOptions(t *testing.T) {
 		{`"x"`, 0, false, "options must be a JSON object"},
 		{`{"metric":"cosine"`, 0, false, "options must be a JSON object"},
 		{`not json`, 0, false, "options must be a JSON object"},
+		{`{"metric":"cosine"}{"metric":"l2sq"}`, 0, false, "options must be a JSON object"},
+		{`{"metric":"cosine"} x`, 0, false, "options must be a JSON object"},
+		{`{"metric":"cosine","metric":"bogus"}`, 0, false, `metric "bogus" is not inner_product`},
+		{`{"metric":"bogus","metric":"cosine","query_format":true}`, 0, false, "query_format true is not float32 or vecblock"},
+		{`{"a":` + strings.Repeat("[", 1_000_000) + strings.Repeat("]", 1_000_000) + `}`, 0, false, "options must be a JSON object"},
 	} {
 		m, vb, err := parseVectorMatmulOptions(tc.options)
 		if tc.err != "" {
@@ -2274,6 +2279,67 @@ func TestVectorMatmulJSONQueriesRoundOnce(t *testing.T) {
 	queries, err = decodeVectorMatmulJSONQueries(`[]`)
 	require.NoError(t, err)
 	require.Empty(t, queries)
+}
+
+// Nesting beyond what queries use is rejected by the row scan, without deep recursion.
+func TestVectorMatmulDeepNesting(t *testing.T) {
+	deep := strings.Repeat("[", 10_000_000)
+	_, ok := vectorMatmulJSONRows(deep, nil)
+	require.False(t, ok)
+	_, ok = vectorMatmulJSONRows(strings.Repeat("[", vectorMatmulJSONMaxDepth)+strings.Repeat("]", vectorMatmulJSONMaxDepth), nil)
+	require.True(t, ok)
+	_, ok = vectorMatmulJSONRows(strings.Repeat("[", vectorMatmulJSONMaxDepth+1)+strings.Repeat("]", vectorMatmulJSONMaxDepth+1), nil)
+	require.False(t, ok)
+	typ := types.New(types.T_array_float32, 2, 0)
+	for _, raw := range [][]byte{
+		EncodeVectorMatmulConfig(1, deep, "", false),
+		EncodeVectorMatmulConfig(1, "[[1,2]]", `{"a":`+deep, false),
+		EncodeVectorMatmulConfig(1, deep, `{"query_format":"vecblock"}`, false),
+	} {
+		_, err := parseVectorMatmulConfig(raw, typ)
+		require.Error(t, err)
+	}
+}
+
+// The vecblock JSON bound grows with a cell's text, which its JSON decoding allocates for,
+// not only with the column's dimension.
+func TestVectorMatmulParseBoundVecblockText(t *testing.T) {
+	typ := types.New(types.T_array_float8, 4, 0)
+	small := EncodeVectorMatmulConfig(1, `[{"g":1,"s":[1],"v":[0,0,0,0]}]`, `{"query_format":"vecblock"}`, false)
+	long := `[{"g":1,"s":[1],"v":[` + strings.Repeat("0,", 1_000_000) + `0]}]`
+	large := EncodeVectorMatmulConfig(1, long, `{"query_format":"vecblock"}`, false)
+	b1, err := vectorMatmulParseBound(small, typ)
+	require.NoError(t, err)
+	b2, err := vectorMatmulParseBound(large, typ)
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, b2, 64*uint64(len(long)))
+	require.Less(t, b1, uint64(64<<10))
+	_, err = parseVectorMatmulConfig(large, typ)
+	require.Error(t, err)
+}
+
+// A binary length whose float32 count is within the limit is bounded by that count even when
+// its cell count is not.
+func TestVectorMatmulParseBoundBinaryCount(t *testing.T) {
+	typ := types.New(types.T_array_float4, 4, 0)
+	cell := types.BlockScaledCellSize(types.BlockScaledNVFP4, 4) // 15 bytes, a float32 query 16
+	n := 3900                                                    // 3900 float32 queries; the same length holds 4160 cells
+	l := n * 16
+	require.Zero(t, l%cell)
+	require.Greater(t, l/cell, vectorMatmulMaxQueries)
+	b, err := vectorMatmulParseBound(EncodeVectorMatmulBinaryConfig(1, make([]byte, l), "", false), typ)
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, b, uint64(n)*uint64(4*cell+8*4))
+}
+
+// The limits come before the options with or without an account.
+func TestVectorMatmulParseErrorOrder(t *testing.T) {
+	typ := types.New(types.T_array_float32, 3, 0)
+	raw := EncodeVectorMatmulConfig(0, "[[1,2,3]]", `{"metric":"bad"}`, false)
+	_, err := parseVectorMatmulConfig(raw, typ)
+	require.ErrorContains(t, err, "topk 0 out of range")
+	_, err = vectorMatmulParseBound(raw, typ)
+	require.ErrorContains(t, err, "topk 0 out of range")
 }
 
 func TestVectorMatmulJSONRows(t *testing.T) {

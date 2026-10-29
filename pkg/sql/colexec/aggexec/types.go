@@ -523,9 +523,9 @@ func makeGroupAgg(
 			}
 		}
 	}
-	// an aggregate whose account admits its configuration parse takes the account first
-	_, accountFirst := groupExec.(configParseAdmitter)
-	if allocation != nil && accountFirst {
+	// the account first, as the window and time-window operators bind it, so an aggregate
+	// can admit its configuration's memory before parsing it
+	if allocation != nil {
 		if err := groupExec.SetAllocationAccount(allocation); err != nil {
 			groupExec.Free()
 			return nil, err
@@ -537,19 +537,7 @@ func makeGroupAgg(
 			return nil, err
 		}
 	}
-	if allocation != nil && !accountFirst {
-		if err := groupExec.SetAllocationAccount(allocation); err != nil {
-			groupExec.Free()
-			return nil, err
-		}
-	}
 	return groupExec, nil
-}
-
-// configParseAdmitter is an aggregate whose SetExtraInformation reserves the bound of its
-// configuration parse from the allocation account before parsing.
-type configParseAdmitter interface {
-	admitsConfigParse()
 }
 
 func makeAgg(

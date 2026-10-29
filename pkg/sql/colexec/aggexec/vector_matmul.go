@@ -205,8 +205,11 @@ func parseVectorMatmulOptions(options string) (metric int, vecblockQueries bool,
 	if options == "" {
 		return vectorMatmulInnerProduct, false, nil
 	}
+	// json.Valid checks the whole text, trailing text included, without recursion and with
+	// a nesting limit, so the visitor below walks a bounded document
 	v := &vectorMatmulOptionsVisitor{}
-	if err := ast.Preorder(options, v, vectorMatmulNumberText); err != nil || !v.object {
+	if !json.Valid(util.UnsafeStringToBytes(options)) ||
+		ast.Preorder(options, v, vectorMatmulNumberText) != nil || !v.object {
 		return 0, false, moerr.NewInvalidInputNoCtx("vector_matmul: options must be a JSON object")
 	}
 	metric = vectorMatmulInnerProduct
@@ -218,7 +221,7 @@ func parseVectorMatmulOptions(options string) (metric int, vecblockQueries bool,
 		case "l2sq":
 			metric = vectorMatmulL2sq
 		default:
-			return 0, false, moerr.NewInvalidInputNoCtxf("vector_matmul: metric %s is not inner_product, cosine or l2sq", vectorMatmulOptionText(options, "metric"))
+			return 0, false, moerr.NewInvalidInputNoCtxf("vector_matmul: metric %s is not inner_product, cosine or l2sq", v.metric.text(options, "metric"))
 		}
 	}
 	if v.format.set {
@@ -227,7 +230,7 @@ func parseVectorMatmulOptions(options string) (metric int, vecblockQueries bool,
 		case "vecblock":
 			vecblockQueries = true
 		default:
-			return 0, false, moerr.NewInvalidInputNoCtxf("vector_matmul: query_format %s is not float32 or vecblock", vectorMatmulOptionText(options, "query_format"))
+			return 0, false, moerr.NewInvalidInputNoCtxf("vector_matmul: query_format %s is not float32 or vecblock", v.format.text(options, "query_format"))
 		}
 	}
 	return metric, vecblockQueries, nil
@@ -237,10 +240,26 @@ func parseVectorMatmulOptions(options string) (metric int, vecblockQueries bool,
 var vectorMatmulNumberText = &ast.VisitorOptions{OnlyNumber: true}
 
 // vectorMatmulOption is one option's value as an options object last sets it: str is the
-// value when it is a JSON string, empty for any other value.
+// value when it is a JSON string, empty for any other value, and raw its JSON text when
+// it is a string or a scalar.
 type vectorMatmulOption struct {
 	set bool
 	str string
+	raw string
+}
+
+// text is the option's JSON text for an error message; an object or array value is read
+// from the options again.
+func (o vectorMatmulOption) text(options, key string) string {
+	if o.raw != "" {
+		return o.raw
+	}
+	if node, err := sonic.GetFromString(options, key); err == nil {
+		if raw, err := node.Raw(); err == nil {
+			return raw
+		}
+	}
+	return `""`
 }
 
 // vectorMatmulOptionsVisitor reads the options object in one pass without building it: it
@@ -252,24 +271,36 @@ type vectorMatmulOptionsVisitor struct {
 	metric, format vectorMatmulOption
 }
 
-// value records a value at depth; a value at depth 0 is the options itself.
-func (v *vectorMatmulOptionsVisitor) value(str string) {
+// value records a value at depth 1: str for a string, raw its JSON text when known.
+func (v *vectorMatmulOptionsVisitor) value(str, raw string) {
 	if v.depth != 1 {
 		return
 	}
 	switch v.key {
 	case "metric":
-		v.metric = vectorMatmulOption{set: true, str: str}
+		v.metric = vectorMatmulOption{set: true, str: str, raw: raw}
 	case "query_format":
-		v.format = vectorMatmulOption{set: true, str: str}
+		v.format = vectorMatmulOption{set: true, str: str, raw: raw}
 	}
 }
 
-func (v *vectorMatmulOptionsVisitor) OnNull() error                        { v.value(""); return nil }
-func (v *vectorMatmulOptionsVisitor) OnBool(bool) error                    { v.value(""); return nil }
-func (v *vectorMatmulOptionsVisitor) OnString(s string) error              { v.value(s); return nil }
-func (v *vectorMatmulOptionsVisitor) OnInt64(int64, json.Number) error     { v.value(""); return nil }
-func (v *vectorMatmulOptionsVisitor) OnFloat64(float64, json.Number) error { v.value(""); return nil }
+func (v *vectorMatmulOptionsVisitor) OnNull() error { v.value("", "null"); return nil }
+func (v *vectorMatmulOptionsVisitor) OnBool(b bool) error {
+	v.value("", strconv.FormatBool(b))
+	return nil
+}
+func (v *vectorMatmulOptionsVisitor) OnString(s string) error {
+	v.value(s, strconv.Quote(s))
+	return nil
+}
+func (v *vectorMatmulOptionsVisitor) OnInt64(_ int64, n json.Number) error {
+	v.value("", string(n))
+	return nil
+}
+func (v *vectorMatmulOptionsVisitor) OnFloat64(_ float64, n json.Number) error {
+	v.value("", string(n))
+	return nil
+}
 func (v *vectorMatmulOptionsVisitor) OnObjectKey(k string) error {
 	if v.depth == 1 {
 		v.key = k
@@ -280,27 +311,17 @@ func (v *vectorMatmulOptionsVisitor) OnObjectBegin(int) error {
 	if v.depth == 0 {
 		v.object = true
 	}
-	v.value("")
+	v.value("", "")
 	v.depth++
 	return nil
 }
 func (v *vectorMatmulOptionsVisitor) OnObjectEnd() error { v.depth--; return nil }
 func (v *vectorMatmulOptionsVisitor) OnArrayBegin(int) error {
-	v.value("")
+	v.value("", "")
 	v.depth++
 	return nil
 }
 func (v *vectorMatmulOptionsVisitor) OnArrayEnd() error { v.depth--; return nil }
-
-// vectorMatmulOptionText is the JSON text of the options' key, for an error message.
-func vectorMatmulOptionText(options, key string) string {
-	if node, err := sonic.GetFromString(options, key); err == nil {
-		if raw, err := node.Raw(); err == nil {
-			return raw
-		}
-	}
-	return `""`
-}
 
 // vectorMatmulConfigs shares a parsed configuration between the executors holding the same
 // configuration bytes for the same column type: a query's pipeline executors and the
@@ -381,25 +402,28 @@ func vectorMatmulParseBound(raw []byte, vecType types.Type) (uint64, error) {
 		// float32 values or cells: the larger count that divides the length; parsing
 		// reports a length that divides neither, and a count beyond the limit
 		for _, width := range []int{4 * dim, cellSize} {
-			if len(queries) > 0 && len(queries)%width == 0 {
-				nq = max(nq, len(queries)/width)
+			if n := len(queries) / width; len(queries)%width == 0 && n >= 1 && n <= vectorMatmulMaxQueries {
+				nq = max(nq, n)
 			}
 		}
-		if nq == 0 || nq > vectorMatmulMaxQueries {
+		if nq == 0 {
 			return bound, nil
 		}
 		// the decoded values and their slice headers
 		bound += uint64(len(queries)) + uint64(nq)*24
 	} else {
-		total := 0
-		rows, ok := vectorMatmulJSONRows(queries, func(_, n, _ int, _ string) { total += n })
+		var total, vecblock uint64
+		rows, ok := vectorMatmulJSONRows(queries, func(_, n, _ int, value string) {
+			total += uint64(n)
+			// a cell's JSON decoding grows with its text, the cell with the dimension
+			vecblock += max(2048+uint64(cellSize)+256*uint64(dim), 64*uint64(len(value)))
+		})
 		if !ok {
 			return bound, nil
 		}
 		nq = rows
-		// float queries: the values and the query views; vecblock queries: the element
-		// texts' JSON decoding and the cells built from them
-		bound += max(4*uint64(total)+24*uint64(nq), uint64(nq)*(2048+uint64(cellSize)+256*uint64(dim)))
+		// float queries: the values and the query views; vecblock queries: the cells
+		bound += max(4*total+24*uint64(nq), vecblock)
 	}
 	// JSON queries have the same count in either format; parsing checks binary ones
 	if !binaryQueries && (nq < 1 || nq > vectorMatmulMaxQueries) {
@@ -422,7 +446,7 @@ func vectorMatmulParseBound(raw []byte, vecType types.Type) (uint64, error) {
 // well-formed JSON of that shape; the decoder then reports the error. An element of the
 // outer array that is not an array counts as a row of one element; a null one has null at -2.
 func vectorMatmulJSONRows(text string, row func(i, n, null int, value string)) (rows int, ok bool) {
-	sc := vectorMatmulJSONScanner{text: text}
+	sc := vectorMatmulJSONScanner{text: text, depth: 1}
 	sc.ws()
 	if sc.i >= len(text) || text[sc.i] != '[' {
 		return 0, false
@@ -471,10 +495,15 @@ func vectorMatmulJSONRows(text string, row func(i, n, null int, value string)) (
 	}
 }
 
+// vectorMatmulJSONMaxDepth bounds the nesting the row scan follows: queries nest at most
+// three deep (vecblock cells are objects holding arrays); deeper text is rejected.
+const vectorMatmulJSONMaxDepth = 8
+
 // vectorMatmulJSONScanner walks JSON text at i without decoding it.
 type vectorMatmulJSONScanner struct {
-	text string
-	i    int
+	text  string
+	i     int
+	depth int
 	// firstNull is the index of the first null element of the array skipValue last left.
 	firstNull int
 }
@@ -531,6 +560,10 @@ func (sc *vectorMatmulJSONScanner) skipValue() (int, bool) {
 	case '"':
 		return 1, sc.skipString()
 	case '[', '{':
+		if sc.depth++; sc.depth > vectorMatmulJSONMaxDepth {
+			return 0, false
+		}
+		defer func() { sc.depth-- }()
 		open, closer := sc.text[sc.i], byte(']')
 		if open == '{' {
 			closer = '}'
@@ -594,6 +627,10 @@ func (sc *vectorMatmulJSONScanner) skipValue() (int, bool) {
 }
 
 func parseVectorMatmulConfig(raw []byte, vecType types.Type) (*vectorMatmulConfig, error) {
+	// the limits the bound checks come first, with or without an account
+	if _, err := vectorMatmulParseBound(raw, vecType); err != nil {
+		return nil, err
+	}
 	topk, queriesText, options, gpu, binaryQueries, err := decodeVectorMatmulConfig(raw)
 	if err != nil {
 		return nil, err
@@ -782,20 +819,6 @@ func (v *vectorMatmulQueryVisitor) OnArrayEnd() error {
 	return nil
 }
 
-// vectorMatmulJSONCheck validates text as JSON in one pass without building it.
-type vectorMatmulJSONCheck struct{}
-
-func (vectorMatmulJSONCheck) OnNull() error                        { return nil }
-func (vectorMatmulJSONCheck) OnBool(bool) error                    { return nil }
-func (vectorMatmulJSONCheck) OnString(string) error                { return nil }
-func (vectorMatmulJSONCheck) OnInt64(int64, json.Number) error     { return nil }
-func (vectorMatmulJSONCheck) OnFloat64(float64, json.Number) error { return nil }
-func (vectorMatmulJSONCheck) OnObjectBegin(int) error              { return nil }
-func (vectorMatmulJSONCheck) OnObjectKey(string) error             { return nil }
-func (vectorMatmulJSONCheck) OnObjectEnd() error                   { return nil }
-func (vectorMatmulJSONCheck) OnArrayBegin(int) error               { return nil }
-func (vectorMatmulJSONCheck) OnArrayEnd() error                    { return nil }
-
 // decodeVectorMatmulCells reads query_format vecblock queries for a vecf8/vecf4 column of
 // vecType: a BLOB of cells back to back, or a JSON array of vecblock JSON objects. Every
 // cell must be a valid cell of the column's format and dimension.
@@ -822,7 +845,7 @@ func decodeVectorMatmulCells(queries string, binaryQueries bool, vecType types.T
 	} else {
 		var texts []string
 		_, ok := vectorMatmulJSONRows(queries, func(_, _, _ int, value string) { texts = append(texts, value) })
-		if !ok || ast.Preorder(queries, vectorMatmulJSONCheck{}, vectorMatmulNumberText) != nil {
+		if !ok || !json.Valid(util.UnsafeStringToBytes(queries)) {
 			return nil, moerr.NewInvalidInputNoCtx("vector_matmul: vecblock queries must be a JSON array of vecblock JSON objects")
 		}
 		if len(texts) == 0 || len(texts) > vectorMatmulMaxQueries {
@@ -1729,8 +1752,8 @@ func (exec *vectorMatmulExec) newState(mp *mpool.MPool, allocation *AllocationAc
 }
 
 // SetExtraInformation parses the configuration. With an account attached, which the
-// aggregate factory attaches first (admitsConfigParse), the account admits the bound of the
-// parse before it allocates, and keeps the configuration's charge after it.
+// aggregate factories attach first, the account admits the bound of the parse before it
+// allocates, and keeps the configuration's charge after it.
 func (exec *vectorMatmulExec) SetExtraInformation(partialResult any, _ int) error {
 	raw, ok := partialResult.([]byte)
 	if !ok {
@@ -1771,9 +1794,6 @@ func (exec *vectorMatmulExec) SetExtraInformation(partialResult any, _ int) erro
 	}
 	return nil
 }
-
-// admitsConfigParse makes the aggregate factory attach the account before the configuration.
-func (exec *vectorMatmulExec) admitsConfigParse() {}
 
 // SetAllocationAccount attaches the account and charges it for a configuration set before.
 func (exec *vectorMatmulExec) SetAllocationAccount(allocation *AllocationAccount) error {
