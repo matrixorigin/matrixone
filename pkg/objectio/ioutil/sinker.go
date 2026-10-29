@@ -860,7 +860,8 @@ func (sinker *Sinker) trySpillMergeSortStreaming(
 	streamSinker := func(data *batch.Batch) (*batch.Batch, error) {
 		sinkStart := time.Now()
 		if err := fSinker.Sink(ctx, data); err != nil {
-			return nil, err
+			// Keep ownership of the merge buffer so the caller can recycle it.
+			return data, err
 		}
 		atomic.AddInt64(&sinker.timing.sinkNs, int64(time.Since(sinkStart)))
 		data.CleanOnlyData()
