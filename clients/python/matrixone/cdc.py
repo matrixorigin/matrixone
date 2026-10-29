@@ -60,6 +60,8 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence
 
 from dateutil.parser import isoparse
 
+from ._sql_literals import sql_literal, sql_object_name, sql_string_token
+
 
 class CDCSinkType(str, Enum):
     """Supported CDC sink types."""
@@ -248,11 +250,11 @@ class BaseCDCManager:
     ) -> str:
         sql_parts = [
             "CREATE CDC",
-            task_name,
-            f"'{source_uri}'",
-            f"'{sink_type}'",
-            f"'{sink_uri}'",
-            f"'{table_mapping}'",
+            sql_object_name(task_name),
+            sql_string_token(source_uri, context='CDC'),
+            sql_string_token(str(sink_type), context='CDC'),
+            sql_string_token(sink_uri, context='CDC'),
+            sql_string_token(table_mapping, context='CDC'),
         ]
 
         options_sql = self._build_options(options)
@@ -266,21 +268,21 @@ class BaseCDCManager:
             return "DROP CDC ALL"
         if not task_name:
             raise ValueError("task_name is required when all_tasks is False")
-        return f"DROP CDC TASK {task_name}"
+        return f"DROP CDC TASK {sql_object_name(task_name)}"
 
     def _build_pause_sql(self, task_name: Optional[str] = None, all_tasks: bool = False) -> str:
         if all_tasks:
             return "PAUSE CDC ALL"
         if not task_name:
             raise ValueError("task_name is required when all_tasks is False")
-        return f"PAUSE CDC TASK {task_name}"
+        return f"PAUSE CDC TASK {sql_object_name(task_name)}"
 
     def _build_resume_sql(self, task_name: str, restart: bool = False) -> str:
         if not task_name:
             raise ValueError("task_name is required")
         if restart:
-            return f"RESUME CDC TASK {task_name} 'restart'"
-        return f"RESUME CDC TASK {task_name}"
+            return f"RESUME CDC TASK {sql_object_name(task_name)} 'restart'"
+        return f"RESUME CDC TASK {sql_object_name(task_name)}"
 
     @staticmethod
     def _build_show_all_sql() -> str:
@@ -290,7 +292,7 @@ class BaseCDCManager:
     def _build_show_task_sql(task_name: str) -> str:
         if not task_name:
             raise ValueError("task_name is required")
-        return f"SHOW CDC TASK {task_name}"
+        return f"SHOW CDC TASK {sql_object_name(task_name)}"
 
     @staticmethod
     def _build_select_tasks_sql(task_name: Optional[str] = None) -> str:
@@ -301,7 +303,7 @@ class BaseCDCManager:
             "WHERE account_id = current_account_id()"
         )
         if task_name:
-            base_sql += f" AND task_name = '{task_name}'"
+            base_sql += f" AND task_name = {sql_literal(task_name)}"
         return base_sql
 
     @staticmethod
@@ -313,7 +315,7 @@ class BaseCDCManager:
             "WHERE w.account_id = current_account_id()"
         )
         if task_name:
-            base_sql += f" AND t.task_name = '{task_name}'"
+            base_sql += f" AND t.task_name = {sql_literal(task_name)}"
         return base_sql
 
     @staticmethod
@@ -382,7 +384,9 @@ class BaseCDCManager:
                 value_str = "true" if value else "false"
             else:
                 value_str = str(value)
-            option_pairs.append(f"'{key_str}'='{value_str}'")
+            option_pairs.append(
+                sql_string_token(key_str, context='CDC') + '=' + sql_string_token(value_str, context='CDC')
+            )
 
         return "{" + ", ".join(option_pairs) + "}"
 

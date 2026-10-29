@@ -709,7 +709,7 @@ func getUserDefinedFunctionInfos(
 	rows, err := getDatabaseRoutineMetadataRows(
 		ctx, bh, snapshot, dbName,
 		"mo_catalog.mo_user_defined_function",
-		"name, args, retType, body, language, sql_mode",
+		"name, args, retType, body, language",
 		0, 1, 2, 3, 4, 5,
 	)
 	if err != nil {
@@ -745,7 +745,7 @@ func getStoredProcedureInfos(
 	rows, err := getDatabaseRoutineMetadataRows(
 		ctx, bh, snapshot, dbName,
 		"mo_catalog.mo_stored_procedure",
-		"name, args, lang, body, sql_mode",
+		"name, args, lang, body",
 		0, 1, 2, 3, 4,
 	)
 	if err != nil {
@@ -776,15 +776,27 @@ func getDatabaseRoutineMetadataRows(
 	colIndices ...uint64,
 ) ([][]string, error) {
 	queryCtx := ctx
-	sql := fmt.Sprintf("select %s from %s", columns, catalogTable)
+	sourceSnapshot := ""
 	if snapshot != nil {
 		if snapshot.TS != nil {
-			sql += fmt.Sprintf(" {MO_TS = %d}", snapshot.TS.PhysicalTime)
+			sourceSnapshot = fmt.Sprintf(" {MO_TS = %d}", snapshot.TS.PhysicalTime)
 		}
 		if snapshot.Tenant != nil {
 			queryCtx = defines.AttachAccountId(queryCtx, snapshot.Tenant.TenantID)
 		}
 	}
+	mode := "sql_mode"
+	if sourceSnapshot != "" {
+		account, err := defines.GetAccountId(queryCtx)
+		if err != nil {
+			return nil, err
+		}
+		mode, err = historicalRoutineSQLModeExpression(queryCtx, bh, strings.TrimPrefix(catalogTable, "mo_catalog."), sourceSnapshot, account)
+		if err != nil {
+			return nil, err
+		}
+	}
+	sql := fmt.Sprintf("select %s, %s from %s%s", columns, mode, catalogTable, sourceSnapshot)
 	sql += fmt.Sprintf(" where db = %s order by name", quoteSQLStringLiteral(dbName))
 	return getStringColsList(queryCtx, bh, sql, colIndices...)
 }

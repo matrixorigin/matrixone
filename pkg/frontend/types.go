@@ -292,13 +292,14 @@ type PrepareStmt struct {
 	sqlModeFlagsSet bool
 	// divPrecisionIncrementSet distinguishes a captured default value from
 	// legacy and minimal in-memory prepared-statement fixtures.
-	divPrecisionIncrementSet bool
-	ParamTypes               []byte
-	ColDefData               [][]byte
-	IsCloudNonuser           bool
-	proc                     *process.Process
-	remapDb                  map[string]string
-	defaultDatabase          string
+	divPrecisionIncrementSet  bool
+	ParamTypes                []byte
+	integerArithmeticBindings []plan2.PreparedSourceBinding
+	ColDefData                [][]byte
+	IsCloudNonuser            bool
+	proc                      *process.Process
+	remapDb                   map[string]string
+	defaultDatabase           string
 
 	params              *vector.Vector
 	getFromSendLongData map[int]struct{}
@@ -879,6 +880,7 @@ func (prepareStmt *PrepareStmt) Close() {
 	if prepareStmt.PrepareStmt != nil {
 		prepareStmt.PrepareStmt.Free()
 	}
+	prepareStmt.integerArithmeticBindings = nil
 	if prepareStmt.ParamTypes != nil {
 		prepareStmt.ParamTypes = nil
 	}
@@ -1882,6 +1884,12 @@ func (ses *Session) setSessionSysVar(ctx context.Context, name string, val inter
 	if name == "div_precision_increment" {
 		oldDivPrecisionIncrement = ses.currentDivPrecisionIncrement()
 	}
+	oldRollupAlgorithm := ""
+	if name == "rollup_algorithm" {
+		if old, getErr := ses.GetSessionSysVar(name); getErr == nil {
+			oldRollupAlgorithm, _ = old.(string)
+		}
+	}
 
 	oldWindowPartitionAlgorithm := ""
 	if name == "window_partition_algorithm" {
@@ -1914,9 +1922,10 @@ func (ses *Session) setSessionSysVar(ctx context.Context, name string, val inter
 			return err
 		}
 	}
-	// These values shape bound defaults, constant-folded expressions or LOAD validation.
+	// These values shape bound defaults, constant-folded expressions, LOAD validation or planned index scan options.
 	// Compare converted values so equivalent SET spellings retain warm plans.
-	planDependencyVariable := name == "sql_mode" || name == "lc_time_names" || name == "explicit_defaults_for_timestamp" || name == "mo_pk_check_by_cn"
+	planDependencyVariable := name == "sql_mode" || name == "lc_time_names" || name == "explicit_defaults_for_timestamp" || name == "mo_pk_check_by_cn" ||
+		name == "fulltext2_search_df_cutoff" || name == "fulltext2_threads_search" || name == "fulltext_bloom_filter_pushdown"
 	var oldPlanDependency interface{}
 	if planDependencyVariable {
 		oldValue, getErr := ses.GetSessionSysVar(name)
@@ -2005,6 +2014,12 @@ func (ses *Session) setSessionSysVar(ctx context.Context, name string, val inter
 	if err == nil && name == "div_precision_increment" {
 		if increment, ok := val.(int64); ok && increment != oldDivPrecisionIncrement {
 			ses.cleanCache()
+		}
+	}
+	if err == nil && name == "rollup_algorithm" {
+		if newValue, ok := val.(string); ok && oldRollupAlgorithm != newValue {
+			ses.cleanCache()
+			ses.markPreparedPlansForRollupAlgorithmChange()
 		}
 	}
 	if err == nil && vectorModeVariable {

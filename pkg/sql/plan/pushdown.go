@@ -339,6 +339,14 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 
 	switch node.NodeType {
 	case plan.Node_AGG:
+		// Sort ROLLUP materializes one ordered stream and synthesizes subtotal
+		// rows after the input has been consumed. A predicate from above the
+		// aggregate must remain above that boundary; pushing it into the child
+		// would filter the input before the grand total is produced.
+		if IsSortRollupOption(node.ExtraOptions) {
+			node.FilterList = append(node.FilterList, filters...)
+			return originalNodeID, nil
+		}
 		// Legacy positional aggregates have no global binding tags. Keep filters
 		// above them because tag-based replacement cannot address their outputs.
 		if len(node.BindingTags) < 2 {
@@ -388,6 +396,9 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 			}
 			if !hasAggregate && !hasGrouping &&
 				!referencesSyntheticGroupKey(filter, groupTag, len(node.GroupBy), node.GroupingFlag) {
+				if fullTextProjectsMatch(node.GroupBy) {
+					filter = fullTextProjectedScoreAsBool(builder.GetContext(), DeepCopyExpr(filter), groupTag, node.GroupBy)
+				}
 				canPushdown = append(canPushdown, replaceColRefs(filter, groupTag, node.GroupBy))
 			} else {
 				node.FilterList = append(node.FilterList, filter)
@@ -414,6 +425,9 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 			if builder.filterPushdownBarrier(filter) {
 				node.FilterList = append(node.FilterList, filter)
 			} else if !containsTag(filter, sampleTag) {
+				if fullTextProjectsMatch(node.GroupBy) {
+					filter = fullTextProjectedScoreAsBool(builder.GetContext(), DeepCopyExpr(filter), groupTag, node.GroupBy)
+				}
 				canPushdown = append(canPushdown, replaceColRefs(filter, groupTag, node.GroupBy))
 			} else {
 				node.FilterList = append(node.FilterList, filter)
@@ -971,8 +985,15 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 				cantPushdown = append(cantPushdown, filter)
 				continue
 			}
-			canPushdown = append(canPushdown, replaceColRefsForSet(DeepCopyExpr(filter), leftChild.ProjectList))
-			canPushDownRight = append(canPushDownRight, replaceColRefsForSet(filter, rightChild.ProjectList))
+			left, right := filter, filter
+			if fullTextProjectsMatch(leftChild.ProjectList) {
+				left = fullTextProjectedScoreAsBool(builder.GetContext(), DeepCopyExpr(filter), -1, leftChild.ProjectList)
+			}
+			if fullTextProjectsMatch(rightChild.ProjectList) {
+				right = fullTextProjectedScoreAsBool(builder.GetContext(), DeepCopyExpr(filter), -1, rightChild.ProjectList)
+			}
+			canPushdown = append(canPushdown, replaceColRefsForSet(DeepCopyExpr(left), leftChild.ProjectList))
+			canPushDownRight = append(canPushDownRight, replaceColRefsForSet(right, rightChild.ProjectList))
 		}
 
 		childID, cantPushdownChild := builder.pushdownFilters(node.Children[0], canPushdown, separateNonEquiConds)
@@ -1007,7 +1028,11 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 		}
 		projectTag := node.BindingTags[0]
 
+		projectsMatch := fullTextProjectsMatch(node.ProjectList)
 		for _, filter := range filters {
+			if projectsMatch {
+				filter = fullTextProjectedScoreAsBool(builder.GetContext(), DeepCopyExpr(filter), projectTag, node.ProjectList)
+			}
 			introducesVolatile := replaceColRefsIntroducesVolatile(filter, projectTag, node.ProjectList)
 			rewritten := replaceColRefs(DeepCopyExpr(filter), projectTag, node.ProjectList)
 			if introducesVolatile {

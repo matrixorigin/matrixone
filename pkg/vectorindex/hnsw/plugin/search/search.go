@@ -25,20 +25,17 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/docfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	searchplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/search"
 	"github.com/matrixorigin/matrixone/pkg/indexplugin/search/planreader"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	veccache "github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/hnsw"
-	hnswcoverage "github.com/matrixorigin/matrixone/pkg/vectorindex/hnsw/plugin/coverage"
 	hnswplan "github.com/matrixorigin/matrixone/pkg/vectorindex/hnsw/plugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/overfetch"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	usearch "github.com/unum-cloud/usearch/golang"
 )
 
 type Hooks struct{}
@@ -76,6 +73,9 @@ func (Hooks) ExplainSettings(spec *plan.IndexSearchScan, detailed bool) ([]strin
 	settings := []string{
 		"ThreadsSearch: " + strconv.FormatInt(int64(opts.ThreadsSearch), 10),
 	}
+	if opts.PrefilterExactThreshold > 0 {
+		settings = append(settings, "PrefilterExactThreshold: "+strconv.FormatInt(opts.PrefilterExactThreshold, 10))
+	}
 	return settings, nil
 }
 
@@ -96,9 +96,18 @@ func (Hooks) NewReader(proc *process.Process, spec *plan.IndexSearchScan, req se
 }
 
 // newAlgo creates the usearch search of one query.
-var newAlgo = func(idxcfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig) veccache.VectorIndexSearchIf {
-	if idxcfg.Usearch.Quantization == usearch.F64 {
+var newAlgo = func(idxcfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig, queryType int32) veccache.VectorIndexSearchIf {
+	switch types.T(queryType) {
+	case types.T_array_float64:
 		return hnsw.NewHnswSearch[float64](idxcfg, tblcfg)
+	case types.T_array_float16:
+		return hnsw.NewHnswSearch[types.Float16](idxcfg, tblcfg)
+	case types.T_array_bf16:
+		return hnsw.NewHnswSearch[types.BF16](idxcfg, tblcfg)
+	case types.T_array_int8:
+		return hnsw.NewHnswSearch[int8](idxcfg, tblcfg)
+	case types.T_array_uint8:
+		return hnsw.NewHnswSearch[uint8](idxcfg, tblcfg)
 	}
 	return hnsw.NewHnswSearch[float32](idxcfg, tblcfg)
 }
@@ -117,12 +126,15 @@ type searcher struct {
 	iterative   bool
 	resultLimit uint64
 	maxLimit    uint64
+	// exactThreshold is the largest membership searched by scanning its vectors.
+	exactThreshold uint64
+	// queryType is the vector type of the query, searched as it is.
+	queryType int32
 	// membership holds the primary keys the search is restricted to, or nil.
 	// emptyMembership is an exact empty key set: the search returns no rows.
 	membership      docfilter.MembershipFilter
 	membershipCount uint64
 	emptyMembership bool
-	sourceID        uint64
 }
 
 func newSearcher(proc *process.Process, spec *plan.IndexSearchScan, req searchplugin.Request) (*searcher, error) {
@@ -136,8 +148,15 @@ func newSearcher(proc *process.Process, spec *plan.IndexSearchScan, req searchpl
 	if err != nil {
 		return nil, err
 	}
-	idxcfg.Usearch.Quantization, err = hnsw.QuantizationToUsearch(req.QueryType.Id)
+	quantization, err := hnswplan.Quantization(spec.Index.IndexAlgoParams)
 	if err != nil {
+		return nil, err
+	}
+	idxcfg.Usearch.Quantization, err = hnsw.StorageQuantization(quantization, req.QueryType.Id)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := hnsw.QuantizationToUsearch(req.QueryType.Id); err != nil {
 		return nil, err
 	}
 	idxcfg.Usearch.Dimensions = uint(req.QueryType.Width)
@@ -157,10 +176,17 @@ func newSearcher(proc *process.Process, spec *plan.IndexSearchScan, req searchpl
 			tblcfg.MetadataTable = table.GetObject().GetObjName()
 		case catalog.Hnsw_TblType_Storage:
 			tblcfg.IndexTable = table.GetObject().GetObjName()
+		case catalog.Hnsw_TblType_Dict:
+			tblcfg.DictTable = table.GetObject().GetObjName()
 		}
 	}
 	if tblcfg.MetadataTable == "" || tblcfg.IndexTable == "" {
 		return nil, moerr.NewInvalidInputNoCtx("hnsw index search is missing its hidden tables")
+	}
+	if len(spec.Index.Parts) > 0 {
+		if pos, ok := spec.SourceTableDef.Name2ColIndex[spec.Index.Parts[0]]; ok {
+			tblcfg.KeyPartType = spec.SourceTableDef.Cols[pos].Typ.Id
+		}
 	}
 	s := &searcher{
 		proc:        proc,
@@ -169,10 +195,13 @@ func newSearcher(proc *process.Process, spec *plan.IndexSearchScan, req searchpl
 		query:       req.QueryPayload,
 		limit:       max(req.CandidateBudget, 1),
 		snapshot:    spec.ScanSnapshot,
-		sourceID:    spec.SourceTableDef.TblId,
 		resultLimit: req.ResultLimit,
 		maxLimit:    req.MaxInternalTopK,
 		iterative:   opts.Iterative,
+		queryType:   req.QueryType.Id,
+	}
+	if opts.PrefilterExactThreshold > 0 {
+		s.exactThreshold = uint64(opts.PrefilterExactThreshold)
 	}
 	if req.HasMembershipFilter {
 		if err := s.setMembership(spec, req.MembershipFilter); err != nil {
@@ -201,9 +230,18 @@ func (s *searcher) Next(ctx context.Context) (planreader.Chunk, bool, error) {
 	var keys []int64
 	var distances []float64
 	var err error
-	if s.idxcfg.Usearch.Quantization == usearch.F64 {
+	switch types.T(s.queryType) {
+	case types.T_array_float64:
 		keys, distances, err = search[float64](s)
-	} else {
+	case types.T_array_float16:
+		keys, distances, err = search[types.Float16](s)
+	case types.T_array_bf16:
+		keys, distances, err = search[types.BF16](s)
+	case types.T_array_int8:
+		keys, distances, err = search[int8](s)
+	case types.T_array_uint8:
+		keys, distances, err = search[uint8](s)
+	default:
 		keys, distances, err = search[float32](s)
 	}
 	if err != nil {
@@ -220,7 +258,7 @@ func (s *searcher) Close() error {
 	return nil
 }
 
-func search[T types.RealNumbers](s *searcher) ([]int64, []float64, error) {
+func search[T types.ArrayElement](s *searcher) ([]int64, []float64, error) {
 	query := types.BytesToArray[T](s.query)
 	if uint(len(query)) != s.idxcfg.Usearch.Dimensions {
 		return nil, nil, moerr.NewInvalidInput(s.proc.Ctx, fmt.Sprintf(
@@ -233,22 +271,18 @@ func search[T types.RealNumbers](s *searcher) ([]int64, []float64, error) {
 	if ets := sp.ApplyScanSnapshot(s.snapshot); ets != nil {
 		cacheKey = veccache.SnapshotKey(s.tblcfg.IndexTable, *ets)
 	}
-	var searchedBuildTS int64
 	rt := vectorindex.RuntimeConfig{
 		Limit:           uint(s.limit),
 		OrigFuncName:    s.tblcfg.OrigFuncName,
 		Membership:      s.membership,
 		MembershipCount: s.membershipCount,
 		Iterative:       s.iterative,
+		ExactThreshold:  s.exactThreshold,
 		ResultLimit:     uint(s.resultLimit),
 		MaxLimit:        uint(s.maxLimit),
-		SearchedBuildTS: &searchedBuildTS,
 	}
-	keys, distances, err := veccache.Cache.Search(sp, cacheKey, newAlgo(s.idxcfg, s.tblcfg), query, rt)
+	keys, distances, err := veccache.Cache.Search(sp, cacheKey, newAlgo(s.idxcfg, s.tblcfg, s.queryType), query, rt)
 	if err != nil {
-		return nil, nil, err
-	}
-	if err := s.validateSearchedGeneration(searchedBuildTS); err != nil {
 		return nil, nil, err
 	}
 	ids, ok := keys.([]int64)
@@ -256,51 +290,4 @@ func search[T types.RealNumbers](s *searcher) ([]int64, []float64, error) {
 		return nil, nil, moerr.NewInternalError(s.proc.Ctx, "keys is not []int64")
 	}
 	return ids, distances, nil
-}
-
-// validateSearchedGeneration closes the planning-to-execution race. The cache
-// entry is protected while Search records the generation it actually used, so
-// this check cannot be fooled by a concurrent evict/reload publishing a
-// different generation after the search. An unsafe generation requests the
-// compiler's exact (pre-vector) retry instead of returning incomplete top-k
-// candidates.
-func (s *searcher) validateSearchedGeneration(buildTS int64) error {
-	if s == nil || s.proc == nil || s.sourceID == 0 || s.proc.GetTxnOperator() == nil {
-		// Synthetic reader tests do not have a catalog transaction or source ID.
-		return nil
-	}
-	if buildTS <= 0 || s.proc.GetSessionInfo() == nil || s.proc.GetSessionInfo().StorageEngine == nil {
-		return moerr.NewVectorIndexSnapshotChangedNoCtx()
-	}
-
-	sp := sqlexec.NewSqlProcess(s.proc)
-	snapshotTS := sp.ApplyScanSnapshot(s.snapshot)
-	readTxn := s.proc.GetTxnOperator()
-	readTS := types.TimestampToTS(readTxn.SnapshotTS())
-	if snapshotTS != nil {
-		readTS = types.TimestampToTS(*snapshotTS)
-	}
-	if !hnswcoverage.BuildPrecedesSnapshot(buildTS, readTS) {
-		return moerr.NewVectorIndexSnapshotChangedNoCtx()
-	}
-	if snapshotTS != nil {
-		readTxn = readTxn.CloneSnapshotOp(*snapshotTS)
-	}
-	ctx := s.proc.GetTopContext()
-	if accountID, err := sp.EffectiveAccountID(); err == nil {
-		ctx = defines.AttachAccountId(ctx, accountID)
-	}
-	_, _, rel, err := s.proc.GetSessionInfo().StorageEngine.GetRelationById(ctx, readTxn, s.sourceID)
-	if err != nil {
-		return moerr.NewVectorIndexSnapshotChangedNoCtx()
-	}
-	provider, ok := rel.(engine.SourceCommitTSProvider)
-	if !ok {
-		return moerr.NewVectorIndexSnapshotChangedNoCtx()
-	}
-	sourceTS, err := provider.SourceCommitTS(ctx, types.BuildTS(buildTS, 0))
-	if err != nil || !hnswcoverage.BuildCoversSnapshot(buildTS, readTS, sourceTS) {
-		return moerr.NewVectorIndexSnapshotChangedNoCtx()
-	}
-	return nil
 }

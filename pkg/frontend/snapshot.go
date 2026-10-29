@@ -124,7 +124,7 @@ var (
 		"mo_user":                       systemCatalogRestoreCopy,
 		"mo_role":                       systemCatalogRestoreCopy,
 		"mo_user_grant":                 systemCatalogRestoreCopy,
-		"mo_role_grant":                 systemCatalogRestoreCopy,
+		"mo_role_grant":                 systemCatalogRestoreRebuild,
 		"mo_role_privs":                 systemCatalogRestoreRebuild,
 		"mo_role_rule":                  systemCatalogRestoreCopy,
 		"mo_user_defined_function":      systemCatalogRestoreCopy,
@@ -1202,6 +1202,7 @@ func preflightRestoreSnapshotEntry(
 		// the first account mutation.
 		return nil
 	case tree.RESTORELEVELACCOUNT:
+		sourceAccount := uint32(snapshot.objId)
 		if snapshot.level == tree.RESTORELEVELCLUSTER.String() {
 			account, err := getAccountRecordByTs(
 				ctx, ses, bh, snapshot.snapshotName, snapshot.ts, string(stmt.AccountName),
@@ -1209,15 +1210,31 @@ func preflightRestoreSnapshotEntry(
 			if err != nil {
 				return err
 			}
-			accountID := uint32(account.accountId)
+			sourceAccount = uint32(account.accountId)
+		}
+		targetName := string(stmt.ToAccountName)
+		if targetName == "" {
+			targetName = string(stmt.AccountName)
+		}
+		targetAccount, targetExists, err := restoreTargetAccountID(ctx, bh, targetName)
+		if err != nil {
+			return err
+		}
+		if err = preflightRestoreAccountMetadata(ctx, bh, snapshot.ts, sourceAccount, targetAccount, targetExists); err != nil {
+			return err
+		}
+		if snapshot.level == tree.RESTORELEVELCLUSTER.String() {
 			return preflightLogicalRestoreAccountFromTS(
-				ctx, ses.GetService(), bh, snapshot.ts, accountID, accountID,
+				ctx, ses.GetService(), bh, snapshot.ts, sourceAccount, sourceAccount,
 			)
 		}
 		return preflightLogicalRestoreAccountFromSnapshot(
-			ctx, ses.GetService(), bh, snapshot.snapshotName, snapshot.ts, uint32(snapshot.objId),
+			ctx, ses.GetService(), bh, snapshot.snapshotName, snapshot.ts, sourceAccount,
 		)
 	case tree.RESTORELEVELDATABASE, tree.RESTORELEVELTABLE:
+		if err := preflightIcebergPartialRestore(ctx, bh, snapshot.ts, ses.GetTenantInfo().GetTenantID(), string(stmt.DatabaseName), string(stmt.TableName)); err != nil {
+			return err
+		}
 		return preflightLogicalRestoreDatabases(
 			ctx,
 			[]string{string(stmt.DatabaseName)},
@@ -2142,7 +2159,7 @@ func sortedViewInfos(
 
 		viewCtx.SetDatabase(viewEntry.dbName)
 		// build create sql to find dependent views
-		_, err = plan.BuildPlan(compCtx, stmts[0], false)
+		_, err = buildViewCreatePlanForRestore(compCtx, viewEntry, stmts[0])
 		freeStatements(stmts)
 		if err != nil {
 			getLogger(ses.GetService()).Debug(fmt.Sprintf("try to build view %v failed, try to build it again", viewEntry.tblName))
@@ -2150,7 +2167,7 @@ func sortedViewInfos(
 			if err != nil {
 				return nil, err
 			}
-			_, err = plan.BuildPlan(compCtx, stmts[0], false)
+			_, err = buildViewCreatePlanForRestore(compCtx, viewEntry, stmts[0])
 			freeStatements(stmts)
 			if err != nil {
 				// The dependency sort plans every view BEFORE the restore loop, so the
@@ -2199,7 +2216,7 @@ func recreateTable(
 	if isExternalTable(tblInfo) {
 		return newExternalTableRestoreError(ctx, tblInfo, "snapshot")
 	}
-	if isCurrentSchemaUserDefinedFunctionCatalog(tblInfo) {
+	if isCurrentSchemaRoutineCatalog(tblInfo) {
 		curAccountID, accountErr := defines.GetAccountId(ctx)
 		if accountErr != nil {
 			return accountErr
@@ -2208,8 +2225,8 @@ func recreateTable(
 		if curAccountID != toAccountId {
 			sourceSnapshot = fmt.Sprintf(" {SNAPSHOT = %s}", escapeSQLString(snapshotName))
 		}
-		return restoreUserDefinedFunctionCatalogWithCurrentSchema(
-			ctx, bh, sourceSnapshot, curAccountID, toAccountId,
+		return restoreRoutineCatalogWithCurrentSchema(
+			ctx, bh, tblInfo.tblName, sourceSnapshot, curAccountID, toAccountId,
 		)
 	}
 	ctx, err = restoreDDLContext(ctx, tblInfo.dbName, tblInfo.tblName)
@@ -2291,7 +2308,7 @@ func recreateTable(
 		}
 		getLogger(sid).Debug(fmt.Sprintf("[%s] insert select table: %v, cost: %v", snapshotName, tblInfo.tblName, time.Since(beginTime)))
 	}
-	return
+	return ensureRestoredIcebergAllocator(ctx, bh, tblInfo)
 }
 
 func needSkipDb(dbName string) bool {
@@ -3005,7 +3022,21 @@ func parseViewCreateSQLForRestore(ctx context.Context, tblInfo *tableInfo, lower
 		return nil, err
 	}
 
+	ctx = plan.WithRestoredViewDefinition(ctx, tblInfo.dbName, tblInfo.tblName, tblInfo.viewDef, tblInfo.createSql)
+	lowerCaseTableNames, err = plan.RestoredViewLowerCaseTableNames(ctx, tblInfo.createSql, lowerCaseTableNames)
+	if err != nil {
+		return nil, err
+	}
 	return parsers.ParseWithSQLMode(ctx, dialect.MYSQL, tblInfo.createSql, lowerCaseTableNames, parserSQLMode)
+}
+
+// The three restore dependency sorts own isolated mutable compiler contexts.
+// Their dependency discovery must use the same creation environment as replay.
+func buildViewCreatePlanForRestore(compCtx plan.CompilerContext, tblInfo *tableInfo, stmt tree.Statement) (*pbplan.Plan, error) {
+	original := compCtx.GetContext()
+	compCtx.SetContext(plan.WithRestoredViewDefinition(original, tblInfo.dbName, tblInfo.tblName, tblInfo.viewDef, tblInfo.createSql))
+	defer compCtx.SetContext(original)
+	return plan.BuildPlan(compCtx, stmt, false)
 }
 
 func executeViewCreateSQLForRestore(ctx context.Context, bh BackgroundExec, tblInfo *tableInfo) error {
@@ -3020,6 +3051,7 @@ func executeViewCreateSQLForRestore(ctx context.Context, bh BackgroundExec, tblI
 	if err != nil {
 		return err
 	}
+	ctx = plan.WithRestoredViewDefinition(ctx, tblInfo.dbName, tblInfo.tblName, tblInfo.viewDef, tblInfo.createSql)
 	return bh.ExecWithSQLMode(ctx, tblInfo.createSql, parserSQLMode)
 }
 
@@ -3488,11 +3520,19 @@ func restoreToCluster(ctx context.Context,
 	if err != nil {
 		return err
 	}
+	currentIDs := make(map[string]uint32, len(currentExistsAccount))
+	for _, account := range currentExistsAccount {
+		currentIDs[account.accountName] = uint32(account.accountId)
+	}
 	// Validate every source account before dropping an account that is absent
 	// from the snapshot. Account drop terminates sessions and sends cross-CN
 	// kill requests that a catalog transaction rollback cannot undo.
 	for _, account := range pastExistsAccount {
 		accountID := uint32(account.accountId)
+		targetID, exists := currentIDs[account.accountName]
+		if err = preflightRestoreAccountMetadata(ctx, bh, snapshotTs, accountID, targetID, exists); err != nil {
+			return err
+		}
 		if err = preflightLogicalRestoreAccountFromTS(
 			ctx, ses.GetService(), bh, snapshotTs, accountID, accountID,
 		); err != nil {
