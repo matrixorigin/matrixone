@@ -420,6 +420,33 @@ func TestExecutionGroupReleaseErrorCanBeRetried(t *testing.T) {
 	require.Equal(t, int32(2), attempts.Load())
 }
 
+func TestExecutionGroupReleasePanicCanBeRetried(t *testing.T) {
+	var attempts int
+	var interrupted chan struct{}
+	var group *ExecutionGroup
+	panicValue := errors.New("release callback panic")
+	group, err := NewExecutionGroup("panic", 1, 1, func() error {
+		attempts++
+		if attempts == 1 {
+			interrupted = group.releaseDone
+			panic(panicValue)
+		}
+		return nil
+	})
+	require.NoError(t, err)
+	require.PanicsWithValue(t, panicValue, func() { _ = group.Close(ReasonCancel) })
+	require.Equal(t, GroupDraining, group.State())
+	require.ErrorIs(t, group.releaseErr, ErrProtocol)
+	select {
+	case <-interrupted:
+	default:
+		t.Fatal("interrupted release did not notify waiters")
+	}
+	require.NoError(t, group.Close(ReasonCancel))
+	require.Equal(t, GroupReleased, group.State())
+	require.Equal(t, 2, attempts)
+}
+
 func TestExecutionGroupConcurrentReleaseWaitersObserveTheSameFailure(t *testing.T) {
 	releaseStarted := make(chan struct{})
 	releaseContinue := make(chan struct{})
