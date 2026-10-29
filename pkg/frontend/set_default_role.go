@@ -212,6 +212,7 @@ func doSetDefaultRole(ctx context.Context, ses *Session, stmt *tree.SetDefaultRo
 	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{
 		forcePessimisticRC:         true,
 		cancelTxnCreateWithRequest: true,
+		internalExecution:          true,
 	})
 	defer bh.Close()
 
