@@ -839,18 +839,23 @@ func decodeVectorMatmulCells(queries string, binaryQueries bool, vecType types.T
 			return nil, moerr.NewInvalidInputNoCtxf("vector_matmul: query count %d out of range [1, %d]", n, vectorMatmulMaxQueries)
 		}
 		b := []byte(queries)
+		cells = make([][]byte, 0, len(b)/size)
 		for off := 0; off < len(b); off += size {
 			cells = append(cells, b[off:off+size:off+size])
 		}
 	} else {
-		var texts []string
-		_, ok := vectorMatmulJSONRows(queries, func(_, _, _ int, value string) { texts = append(texts, value) })
+		// validate and count before collecting: a malformed or over-limit text allocates
+		// nothing for its elements
+		rows, ok := vectorMatmulJSONRows(queries, nil)
 		if !ok || !json.Valid(util.UnsafeStringToBytes(queries)) {
 			return nil, moerr.NewInvalidInputNoCtx("vector_matmul: vecblock queries must be a JSON array of vecblock JSON objects")
 		}
-		if len(texts) == 0 || len(texts) > vectorMatmulMaxQueries {
-			return nil, moerr.NewInvalidInputNoCtxf("vector_matmul: query count %d out of range [1, %d]", len(texts), vectorMatmulMaxQueries)
+		if rows == 0 || rows > vectorMatmulMaxQueries {
+			return nil, moerr.NewInvalidInputNoCtxf("vector_matmul: query count %d out of range [1, %d]", rows, vectorMatmulMaxQueries)
 		}
+		texts := make([]string, 0, rows)
+		vectorMatmulJSONRows(queries, func(_, _, _ int, value string) { texts = append(texts, value) })
+		cells = make([][]byte, 0, rows)
 		for i, text := range texts {
 			cell, err := types.BlockScaledFromJSON(format, text)
 			if err != nil {

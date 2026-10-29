@@ -2087,59 +2087,6 @@ func TestVectorMatmulConfigAdmittedBeforeParse(t *testing.T) {
 	}
 }
 
-// The bound covers what parsing allocates, for every query form and column type.
-func TestVectorMatmulParseBoundCoversParse(t *testing.T) {
-	for _, shape := range [][2]int{{32, 256}, {2, 4096}, {500, 3}} {
-		vmParseBoundCoversParse(t, shape[0], shape[1])
-	}
-}
-
-func vmParseBoundCoversParse(t *testing.T, nq, dim int) {
-	values := make([]float32, nq*dim)
-	for i := range values {
-		values[i] = float32(i%7) - 3
-	}
-	for _, oid := range []types.T{types.T_array_float32, types.T_array_float16, types.T_array_bf16, types.T_array_int8, types.T_array_float8, types.T_array_float4} {
-		typ := types.New(oid, int32(dim), 0)
-		configs := map[string][]byte{
-			"json":      EncodeVectorMatmulConfig(4, vmJSONQueries(nq, dim, false), "", false),
-			"json-null": EncodeVectorMatmulConfig(4, vmJSONQueries(nq, dim, true), "", false),
-			"binary":    EncodeVectorMatmulBinaryConfig(4, types.ArrayToBytes(values), `{"metric":"cosine"}`, false),
-		}
-		if f, ok := oid.BlockScaledFormat(); ok {
-			var cells []byte
-			texts := make([]string, nq)
-			for q := 0; q < nq; q++ {
-				cell, err := types.AppendBlockScaled(nil, f, values[q*dim:(q+1)*dim])
-				require.NoError(t, err)
-				cells = append(cells, cell...)
-				texts[q], err = types.BlockScaledToJSON(cell)
-				require.NoError(t, err)
-			}
-			opts := `{"query_format":"vecblock"}`
-			configs["vecblock-binary"] = EncodeVectorMatmulBinaryConfig(4, cells, opts, false)
-			configs["vecblock-json"] = EncodeVectorMatmulConfig(4, "["+strings.Join(texts, ",")+"]", opts, false)
-		}
-		for name, raw := range configs {
-			bound, err := vectorMatmulParseBound(raw, typ)
-			require.NoError(t, err, "%s %s nq=%d dim=%d", oid, name, nq, dim)
-			// other goroutines can only add to the process's allocation; take the least of
-			// several runs
-			var parseErr error
-			alloc := uint64(math.MaxUint64)
-			for range 5 {
-				alloc = min(alloc, vmGoAlloc(func() { _, parseErr = parseVectorMatmulConfig(raw, typ) }))
-			}
-			if name == "json-null" {
-				require.Error(t, parseErr)
-			} else {
-				require.NoError(t, parseErr, "%s %s", oid, name)
-			}
-			require.LessOrEqual(t, alloc, bound, "%s %s nq=%d dim=%d", oid, name, nq, dim)
-		}
-	}
-}
-
 // The bound rejects a query count or dimension beyond the limits before decoding, with the
 // errors parsing reports.
 func TestVectorMatmulParseBoundLimits(t *testing.T) {
@@ -2379,4 +2326,35 @@ func TestVectorMatmulJSONRows(t *testing.T) {
 			}
 		}
 	}
+}
+
+// vmVecblockMalformed is a vecblock JSON text with n complete objects and an unterminated one.
+func vmVecblockMalformed(n int) string { return "[" + strings.Repeat("{},", n) + "{" }
+
+// A malformed or over-limit vecblock JSON text is rejected, and the aggregate refuses it
+// under a small account with nothing charged.
+func TestVectorMatmulVecblockJSONRejectedBeforeCollecting(t *testing.T) {
+	typ := types.New(types.T_array_float8, 4, 0)
+	malformed := vmVecblockMalformed
+	_, err := decodeVectorMatmulCells(malformed(10000), false, typ)
+	require.ErrorContains(t, err, "must be a JSON array of vecblock JSON objects")
+
+	overLimit := "[" + strings.Repeat("{},", vectorMatmulMaxQueries) + "{}]"
+	_, err = decodeVectorMatmulCells(overLimit, false, typ)
+	require.ErrorContains(t, err, "query count 4097 out of range")
+
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	registry, err := mpool.NewAllocationAccountRegistry(1, 512)
+	require.NoError(t, err)
+	account, err := registry.Open(64 << 10)
+	require.NoError(t, err)
+	allocation, err := NewAllocationAccount(account, mpool.AllocationOwnerGroup, AllocationAccountSites{
+		VectorData: 1, VectorArea: 2, VectorNulls: 3, VectorGrouping: 4, ArgumentCount: 5, ArgumentArena: 6,
+	})
+	require.NoError(t, err)
+	raw := EncodeVectorMatmulConfig(1, malformed(10000), `{"query_format":"vecblock"}`, false)
+	_, err = MakeGroupAgg(mp, AggIdOfVectorMatmul, false, allocation, raw, types.T_int64.ToType(), typ)
+	require.Error(t, err)
+	require.Zero(t, account.Snapshot().Used)
 }

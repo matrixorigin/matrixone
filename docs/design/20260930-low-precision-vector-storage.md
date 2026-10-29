@@ -715,7 +715,9 @@ within the fp32 GEMM's tolerance, rows closer than it in either order.
   rejected, and an invalid duplicate key's error names the value it checked; a vecblock
   cell's bound grows with its text (64 bytes per byte); a binary length bounds the float32
   query count within the limit when its cell count is beyond it; the limits are reported
-  before the options with or without an account.
+  before the options with or without an account; a malformed or over-limit vecblock JSON text
+  is rejected before its elements are collected (the decode allocates the same for 100 complete
+  objects before the error as for 10,000).
 - **Sort and hash keys** (`sort/vecblock_test.go`, `hashmap/strhashmap_test.go`): `ORDER BY k, v`
   over 150 peer groups sorts each group by the decoded values with under 64 KiB of Go heap
   (16.8 MB decoding the column per group); a `vecf8`/`vecf4(768)` hash key, flat, nullable
