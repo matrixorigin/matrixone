@@ -5845,7 +5845,13 @@ func bindFuncExprAndConstFoldInternal(
 			}
 		}
 
-		retExpr, _ = ConstantFold(batch.EmptyForConstFoldBatch, retExpr, proc, false, true)
+		// The final fold can fail (e.g. '1.5' BETWEEN 1 AND 20 casts the
+		// string operand to INT). Surface the error like the >=/<= form does;
+		// discarding it would bind a nil expression.
+		retExpr, err = ConstantFold(batch.EmptyForConstFoldBatch, retExpr, proc, false, true)
+		if err != nil {
+			return nil, err
+		}
 
 	case "in_range":
 		if proc == nil {
