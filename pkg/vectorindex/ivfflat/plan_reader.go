@@ -873,9 +873,9 @@ func (s *relationScanner) ScanRelation(req sqlexec.RelationScanRequest) (res exe
 						ctx,
 						req.Columns,
 						earlyColumns,
-						func(filtered *batch.Batch, loadedColumns []int) (engine.ReaderFilterResult, error) {
+						&engine.ReaderFilterRequest{Apply: func(filtered *batch.Batch, loadedColumns []int) (engine.ReaderFilterResult, error) {
 							return filterRelationBatchRows(s.proc, filterExecutor, filtered, loadedColumns)
-						},
+						}},
 						req.IndexParam,
 						s.proc.Mp(),
 						bat,
@@ -886,9 +886,9 @@ func (s *relationScanner) ScanRelation(req sqlexec.RelationScanRequest) (res exe
 						ctx,
 						req.Columns,
 						earlyColumns,
-						func(filtered *batch.Batch, loadedColumns []int) (engine.ReaderFilterResult, error) {
+						&engine.ReaderFilterRequest{Apply: func(filtered *batch.Batch, loadedColumns []int) (engine.ReaderFilterResult, error) {
 							return filterRelationBatchRows(s.proc, filterExecutor, filtered, loadedColumns)
-						},
+						}},
 						s.proc.Mp(),
 						bat,
 					)

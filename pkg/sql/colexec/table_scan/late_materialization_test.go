@@ -54,7 +54,7 @@ func (r *lateMaterializationTestReader) ReadWithFilter(
 	_ context.Context,
 	_ []string,
 	earlyColumns []int,
-	filter engine.ReaderFilter,
+	filter *engine.ReaderFilterRequest,
 	mp *mpool.MPool,
 	bat *batch.Batch,
 ) (bool, error) {
@@ -68,7 +68,7 @@ func (r *lateMaterializationTestReader) ReadWithFilter(
 		}
 	}
 	bat.SetRowCount(4)
-	_, err := filter(bat, earlyColumns)
+	_, err := filter.Apply(bat, earlyColumns)
 	return false, err
 }
 
