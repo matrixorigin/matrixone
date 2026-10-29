@@ -19,10 +19,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	pbtimestamp "github.com/matrixorigin/matrixone/pkg/pb/timestamp"
-	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/stretchr/testify/require"
 )
@@ -172,48 +169,4 @@ func TestLockingReadRetryFloorPublicationCannotReacquireEarlierFrontier(t *testi
 		gotFrontier, executingFrontier)
 	require.True(t, c.execReadFrontierSet)
 	require.Equal(t, gotFrontier, c.execReadFrontier)
-}
-
-// Pre-PR review round 4, finding 4: the capacity-transition proof must
-// include the DROP window between the frontend protocol check and Run. This
-// member drives the production Run admission itself: the same marked plan
-// the frontend validator admitted while the capability was up is refused by
-// Run once the negotiated capability drops — every execution path recrosses
-// the Run validator, so a retained plan object can never execute marked
-// semantics under a lowered gate.
-func TestRunAdmissionRejectsMarkedPlanInDropWindow(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	rt := moruntime.ServiceRuntime(proc.GetService())
-	require.NotNil(t, rt)
-	orig, had := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
-	t.Cleanup(func() {
-		if had {
-			rt.SetGlobalVariables(moruntime.MOProtocolVersion, orig)
-		}
-	})
-
-	pn := presencePlan(reviewMarkedScan(0, "t"))
-	c := &Compile{proc: proc, ncpu: 1}
-	c.pn = pn
-
-	// The frontend protocol check admitted the marked plan while the
-	// negotiated capability was up.
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion135)
-	require.NoError(t, validateLockingCurrentReadCapability(proc, pn))
-
-	// The capability dropped between that check and Run: the Run admission
-	// rejects the SAME marked object with the recorded terminal error.
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, int64(128))
-	_, err := c.Run(0)
-	require.Error(t, err, "the drop window cannot ship a marked execution the cluster cannot run")
-	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), "%v", err)
-	require.ErrorContains(t, err, "requires rebinding",
-		"the residual past-the-guards error is the recorded NotSupported rebinding contract")
-	require.Nil(t, c.scopes)
-
-	// With capability restored, the same retained marked object re-passes the
-	// Run admission: the lowered-gate verdict is never sticky.
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion135)
-	require.NoError(t, validateLockingCurrentReadCapability(proc, pn),
-		"a retained marked plan re-admits once the negotiated capability rises again")
 }

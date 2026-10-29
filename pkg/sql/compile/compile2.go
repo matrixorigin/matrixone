@@ -185,9 +185,6 @@ func (c *Compile) Compile(
 	if err = validateIncompleteTemporalStringProtocol(c.proc, queryPlan); err != nil {
 		return err
 	}
-	if err = validateLockingCurrentReadCapability(c.proc, queryPlan); err != nil {
-		return err
-	}
 
 	c.proc.BeginFoundRowsStatement(statementHasSQLCalcFoundRows(c.stmt))
 	c.beginSchedulingTraceAttempt()
@@ -466,12 +463,6 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 		return nil, err
 	}
 	if err = validateIncompleteTemporalStringProtocol(c.proc, c.pn); err != nil {
-		return nil, err
-	}
-	// D-8 layer 3 (rev 14): crossed on EVERY execution path — this Run
-	// validator covers fresh compiles and retained prepared pipelines alike,
-	// closing the transition window behind the frontend protocol check.
-	if err = validateLockingCurrentReadCapability(c.proc, c.pn); err != nil {
 		return nil, err
 	}
 	var txnOperator = c.proc.GetTxnOperator()

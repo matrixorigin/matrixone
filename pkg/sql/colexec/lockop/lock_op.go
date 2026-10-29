@@ -560,6 +560,17 @@ func performLock(
 			lockOp.ctr.retryError = retryWithDefChangedError
 		}
 
+		// D-5 (rev 15, R15-F2): a marked floor converts at the point of
+		// recording. The post-loop conversion below is unreachable when a
+		// later target ends the batch on a direct SKIP LOCKED conflict, and
+		// callSkipLocked then reads nil retry state and silently skips the
+		// candidate. Persist the floor into operator state before the next
+		// target runs; a definition change detected in this same call keeps
+		// its precedence inside the conversion.
+		if !defChanged && !markingFloor.IsEmpty() {
+			lockOp.persistMarkingFloorRetry(proc, markingFloor)
+		}
+
 		// refreshTS is last commit ts + 1, because we need see the committed data.
 		// A definition change must rebuild the plan instead; forwarding only the
 		// refreshed row timestamp would keep the stale physical table ID.
@@ -594,20 +605,45 @@ func performLock(
 	if needRetry && lockOp.ctr.retryError == nil {
 		lockOp.ctr.retryError = retryError
 	}
-	// D-5 single surface: the whole performLock call raises at most one
-	// locking-read retry error, carrying the MAX floor any marked branch
-	// recorded. A definition rebuild keeps its existing precedence.
-	if markingFloor.Greater(timestamp.Timestamp{}) &&
-		!markingFloor.IsEmpty() &&
-		lockOp.ctr.retryError == nil {
-		lockOp.ctr.lockingReadFloor = markingFloor
-		lockOp.ctr.retryError = moerr.NewTxnNeedRetryLockingRead(
-			proc.Ctx, markingFloor.PhysicalTime, markingFloor.LogicalTime)
-	}
+	// D-5 single surface (rev 15, R15-F2): floors that only become visible
+	// after the loop (recorded by an unlocked-but-refreshing branch of this
+	// call) convert through the same max-aggregating, precedence-keeping
+	// path, so every terminal form of the lock batch surfaces the retry.
+	lockOp.persistMarkingFloorRetry(proc, markingFloor)
 	if lockOp.ctr.defChanged {
 		lockOp.ctr.retryError = retryWithDefChangedError
 	}
 	return nil
+}
+
+// persistMarkingFloorRetry converts doLock's recorded marking floor into
+// operator state (design D-5, rev 15, R15-F2). The conversion runs at the
+// point of recording, before another target of the same batch can end the
+// pass: a later direct SKIP LOCKED conflict exits performLock before any
+// post-loop conversion, and callSkipLocked treats a floor left only in the
+// call-local accumulator as no retry at all, silently skipping the
+// candidate. The floor MAX-aggregates with every floor this execution
+// already recorded, and the tokenized retry regenerates from that current
+// maximum; a definition rebuild keeps precedence in both orders — the
+// regeneration never overwrites fatal, plain-refresh or definition retry
+// state.
+func (lockOp *LockOp) persistMarkingFloorRetry(
+	proc *process.Process,
+	floor timestamp.Timestamp) {
+	if !floor.Greater(timestamp.Timestamp{}) || floor.IsEmpty() {
+		return
+	}
+	if floor.Greater(lockOp.ctr.lockingReadFloor) {
+		lockOp.ctr.lockingReadFloor = floor
+	}
+	if !lockOp.ctr.defChanged &&
+		(lockOp.ctr.retryError == nil ||
+			moerr.IsMoErrCode(lockOp.ctr.retryError, moerr.ErrTxnNeedRetryLockingRead)) {
+		lockOp.ctr.retryError = moerr.NewTxnNeedRetryLockingRead(
+			proc.Ctx,
+			lockOp.ctr.lockingReadFloor.PhysicalTime,
+			lockOp.ctr.lockingReadFloor.LogicalTime)
+	}
 }
 
 // SetLockingReadCurrentFrontier stamps this attempt's execution frontier

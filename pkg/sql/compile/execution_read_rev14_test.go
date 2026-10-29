@@ -20,8 +20,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	pbtxn "github.com/matrixorigin/matrixone/pkg/pb/txn"
@@ -302,66 +300,6 @@ func admissionFixtureTxn(t *testing.T, ts timestamp.Timestamp) (client.TxnOperat
 		cancel()
 		closeFn()
 	}
-}
-
-// The Run-admission validator (D-8 layer 3): an unmarked plan always passes
-// under ANY gate state; a presence plan below the allocated gate is rejected
-// with the single recorded new-error exception carrying the "requires
-// rebinding" terminal contract; at or above the gate the same plan passes
-// (single-binary clusters negotiate the default Latest version and admit
-// immediately).
-func TestValidateLockingCurrentReadCapability(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	rt := moruntime.ServiceRuntime(proc.GetService())
-	require.NotNil(t, rt)
-
-	orig, had := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
-	t.Cleanup(func() {
-		if had {
-			rt.SetGlobalVariables(moruntime.MOProtocolVersion, orig)
-		}
-	})
-
-	pn := presencePlan(&plan.Node{
-		NodeId:       0,
-		NodeType:     plan.Node_TABLE_SCAN,
-		TableDef:     &plan.TableDef{TableType: "r"},
-		ScanReadRole: plan.ScanReadRole_ScanOuterLocking,
-	})
-
-	require.NoError(t, validateLockingCurrentReadCapability(proc, (*plan.Plan)(nil)),
-		"a nil plan has no presence and always passes")
-	require.NoError(t, validateLockingCurrentReadCapability(proc, &plan.Plan{}),
-		"no LockTargets means no presence and no requirement")
-
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, int64(128))
-	err := validateLockingCurrentReadCapability(proc, pn)
-	require.Error(t, err, "a presence plan observed below the allocated gate is rejected")
-	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), "D-8's terminal error class")
-	require.Contains(t, err.Error(), "requires rebinding")
-	require.Contains(t, err.Error(), "MORPCVersion135")
-
-	// Every intervening upstream aisle keeps this feature disabled (design
-	// D-7's integration-time revalidation; pre-PR review round 8, finding 1):
-	// #31000 (commit 9a7e12a933) allocates 131 to exact weighted percentile
-	// aggregate remote dispatch, and origin/main
-	// c4946bb74d43f0f777977507a5a7d0105e628bf2 (MORPCLatestVersion = 134
-	// there) claims 132–134 for decimal float rounding and strict textual
-	// float conversions (commit 861a2c4cb68961d8b6b01f18e0aa6ac52a3a505f,
-	// #31191), typed JSON MIN/MAX aggregate comparison, and the ordered ODKU
-	// result summary — a mixed cluster negotiating one of those numbers
-	// carries other features only and never locking current reads.
-	for _, version := range []int64{131, 132, 133, 134} {
-		rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
-		err = validateLockingCurrentReadCapability(proc, pn)
-		require.Error(t, err,
-			"an upstream-only peer at %d keeps this feature disabled", version)
-		require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), "D-8's terminal error class")
-	}
-
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, int64(defines.MORPCVersion135))
-	require.NoError(t, validateLockingCurrentReadCapability(proc, pn),
-		"at or above the allocated gate the presence plan executes")
 }
 
 // The SI retry gating (D-5/D-8, round 7 finding 2): a marked locking

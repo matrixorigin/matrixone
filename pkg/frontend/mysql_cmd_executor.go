@@ -4512,15 +4512,6 @@ func cachedPlanForInput(ses *Session, input *UserInput) *cachedPlan {
 		return nil
 	}
 	cached := ses.getCachedPlan(input.getHash())
-	if cached != nil && cachedPlanMarkedBelowGate(cached.plans, ses.proc) {
-		// D-8 layer 2 (design rev 14): a cached marked plan observed while
-		// the live capability gate is down is eagerly evicted at lookup, on
-		// the same precedent as the reusable-generation rollout gate above —
-		// it cannot execute its marked semantics under the lowered gate and
-		// must not survive a rollback-and-reupgrade cycle.
-		ses.removeCachedPlan(input.getHash())
-		return nil
-	}
 	// SELECT ... INTO @var changes the type of a session variable as part of
 	// execution.  A cached SELECT-INTO plan can therefore never be reused: it
 	// may have been bound against the variable's pre-assignment type, and the
@@ -4531,23 +4522,6 @@ func cachedPlanForInput(ses *Session, input *UserInput) *cachedPlan {
 		return nil
 	}
 	return cached
-}
-
-// cachedPlanMarkedBelowGate reports whether any cached plan in this entry
-// carries bind-time locking-current-read presence while the live cluster
-// capability lives below the allocated gate (design D-8 layer 2, D-7).
-func cachedPlanMarkedBelowGate(pls []*plan.Plan, proc *process.Process) bool {
-	for _, pn := range pls {
-		if pn == nil {
-			continue
-		}
-		qry, _ := plan2.PlanLockingReadQuery(pn)
-		if !plan2.PlanHasLockingCurrentRead(qry) {
-			continue
-		}
-		return !plan2.ClusterHasLockingCurrentRead(proc)
-	}
-	return false
 }
 
 func containsSelectInto(stmts []tree.Statement) bool {
@@ -7032,17 +7006,6 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		tcw, ok := cw.(*TxnComputationWrapper)
 		if !ok || tcw.protocolVersion != cacheProtocolVersion {
 			return nil
-		}
-		// D-8 layer 2 (design rev 14): a marked locking-current-read plan is
-		// published only while the live ALLOCATED gate is up. The per-wrapper
-		// protocol version check narrows transitions but does not by itself
-		// close this window, because the gate is the allocated capability,
-		// not merely any protocol change.
-		if pn := tcw.Plan(); pn != nil {
-			if qry, _ := plan2.PlanLockingReadQuery(pn); plan2.PlanHasLockingCurrentRead(qry) &&
-				!plan2.ClusterHasLockingCurrentRead(proc) {
-				return nil
-			}
 		}
 		var hasPlanSnapshotTS bool
 		planSnapshotTS[i], hasPlanSnapshotTS = tcw.PlanSnapshotTS()

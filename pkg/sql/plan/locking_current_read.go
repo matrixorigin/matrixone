@@ -16,35 +16,8 @@ package plan
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/common/runtime"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
-
-// ClusterHasLockingCurrentRead reports whether every live service negotiates
-// at least MORPCVersion135, the locking-read current-read gate (design D-7;
-// the ClusterHasIndexProvenance pattern mirrored verbatim; the allocated
-// number sits strictly above the verified upstream high-water 134 per D-7's
-// revalidation rule — never the colliding 130–134). MOProtocolVersion
-// tracks the OLDEST live service and is read live at each decision rather
-// than memoized; an unavailable runtime answers false, which keeps below-gate
-// clusters on today's semantics uniformly.
-func ClusterHasLockingCurrentRead(proc *process.Process) bool {
-	if proc == nil {
-		return false
-	}
-	rt := runtime.ServiceRuntime(proc.GetService())
-	if rt == nil {
-		return false
-	}
-	value, ok := rt.GetGlobalVariables(runtime.MOProtocolVersion)
-	if !ok {
-		return false
-	}
-	version, ok := value.(int64)
-	return ok && version >= defines.MORPCVersion135
-}
 
 // PlanLockingReadQuery returns the SELECT query of a locking-current-read
 // presence plan (any LockTarget carries bind-time locking_read presence,

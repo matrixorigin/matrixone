@@ -1341,13 +1341,7 @@ func (builder *QueryBuilder) tryApplyCoveredFulltext2(nodeID int32, projNode, so
 	// own enum value, so the compile closure walk can tell it apart from a
 	// mark lost through an unknown rewrite and stage-1 declines the whole
 	// statement (search-generated scans are outside the admission set).
-	if builder.lockingCurrentReadGateActive() {
-		scanNode.ScanReadRole = plan.ScanReadRole_ScanCoveredPlanStrip
-	} else {
-		// Below the allocated capability gate (design D-7): the strip keeps
-		// the legacy unset form so below-gate plans stay wire-identical.
-		scanNode.ScanReadRole = plan.ScanReadRole_ScanNestedBlock
-	}
+	scanNode.ScanReadRole = plan.ScanReadRole_ScanCoveredPlanStrip
 	// All qualification now runs inside the search. Only its own score order
 	// permits early truncation; another ordering must keep the full stream.
 	searchLimit := builder.coveredFulltext2ScoreLimit(nodeID, projNode, sortNode,

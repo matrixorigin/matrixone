@@ -14,23 +14,20 @@
 
 package compile
 
-// rev-17 members (pre-PR review round 3): the dependent scratch-scope
-// lifetime (P1), terminal hard binding failures through the compile binding
-// caller (P1), and the capability-transition polarity member (P2).
+// rev-17 members (pre-PR review round 3, P1; the capability-transition
+// polarity member is removed with the gate by rev 15 R15-F1): the dependent
+// scratch-scope lifetime and terminal hard binding failures through the
+// compile binding caller.
 
 import (
-	"context"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	pbtxn "github.com/matrixorigin/matrixone/pkg/pb/txn"
-	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dependent"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/lockop"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
@@ -463,68 +460,4 @@ func TestExecutionReadDiscoveryBindsExclusiveFrontHandle(t *testing.T) {
 		"an unmarked discovery never binds a front handle")
 	require.Same(t, plainRel, gotPlain)
 	_ = execOp
-}
-
-// ---------------------------------------------------------------------------
-// P2 (round 3): capability transitions resolve the CURRENT runtime.
-
-// The capability gate is a PURE resolution over the CURRENT service runtime:
-// every check — the frontend validator and the cold Compile admission —
-// answers from the runtime it reads NOW, in BOTH directions. A below-gate
-// verdict is not sticky (low -> high rebinds: the same retained prepared
-// plan object, whose presence survives FillValuesOfParamsInPlan per the
-// plan-side member, becomes admissible once the negotiated capability
-// rises), and an above-gate verdict does not survive a drop between the
-// frontend check and the Run admission (high -> low: the Run site rejects
-// the same object the earlier check admitted). The drop window between the
-// check and Run is exactly this seam, and the Run rejection is the recorded
-// terminal contract.
-func TestLockingCurrentReadCapabilityGatePolarityIsPureAcrossTransitions(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	require.NotNil(t, moruntime.ServiceRuntime(proc.GetService()))
-
-	node := reviewMarkedScan(0, "t")
-	pn := presencePlan(node)
-	pn.GetQuery().Steps = []int32{1}
-
-	rt := moruntime.ServiceRuntime(proc.GetService())
-	orig, had := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
-	t.Cleanup(func() {
-		if had {
-			rt.SetGlobalVariables(moruntime.MOProtocolVersion, orig)
-		}
-	})
-
-	set := func(v int64) { rt.SetGlobalVariables(moruntime.MOProtocolVersion, v) }
-
-	// LOW: the frontend check rejects the presence plan under a
-	// below-the-gate runtime.
-	set(128)
-	require.Error(t, validateLockingCurrentReadCapability(proc, pn),
-		"below the gate the presence plan is rejected at the frontend check")
-
-	// HIGH: the SAME retained plan object re-validates — rebind, not refusal
-	// history. This is the retained-prepare shape: the plan is not rebuilt,
-	// only re-resolved against the CURRENT runtime.
-	set(int64(defines.MORPCVersion135))
-	require.NoError(t, validateLockingCurrentReadCapability(proc, pn),
-		"a retained presence plan rebinds once the negotiated capability rises: no sticky rejection")
-	require.NoError(t, validateLockingCurrentReadCapability(proc, pn),
-		"the high verdict is stable while the runtime stays high (actual reuse)")
-
-	// DROP between the frontend check and the Run admission: the Run site
-	// re-resolves and rejects the SAME object the high-gate check admitted —
-	// the check-to-Run drop window cannot ship a current read the cluster
-	// cannot execute.
-	set(128)
-	require.Error(t, validateLockingCurrentReadCapability(proc, pn),
-		"a capability drop re-rejects the plan the earlier high-gate check admitted")
-
-	c := &Compile{proc: proc, ncpu: 1, counterSet: &perfcounter.CounterSet{}}
-	err := c.Compile(context.Background(), pn, nil)
-	require.Error(t, err)
-	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), "%v", err)
-	require.ErrorContains(t, err, "requires rebinding")
-	require.Nil(t, c.scopes,
-		"the cold Run rejection precedes all scope construction on the dropped capability")
 }

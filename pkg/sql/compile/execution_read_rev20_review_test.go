@@ -18,9 +18,6 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -129,71 +126,4 @@ func TestCompileLockKeepsPromotedMarkedTargetsThroughPhysicalDisposition(t *test
 	require.Len(t, wireTargets, 1)
 	require.Equal(t, uint64(8), wireTargets[0].TableId,
 		"the operator's physical row list carries only the unpromoted target")
-}
-
-// The capability-drop half of the same finding: with the canonical presence
-// intact, the promoted Shared statement stays visible to the Run-time
-// capability validation — a single-binary gate drop below MORPCVersion135
-// must reject the compiled, promoted statement instead of silently
-// admitting the snapshot-read fallback the strip used to leave behind.
-func TestPromotedPresencePlanStaysVisibleToCapabilityDropAfterCompile(t *testing.T) {
-	sessionTS := timestamp.Timestamp{PhysicalTime: 100, LogicalTime: 1}
-	c, _, teardown := admissionFixture(t, sessionTS)
-	defer teardown()
-	c.anal = &AnalyzeModule{}
-	c.lockTables = make(map[uint64]*plan.LockTarget)
-
-	promoted := &plan.LockTarget{
-		TableId:     7,
-		Mode:        lock.LockMode_Shared,
-		LockingRead: true,
-		LockTable:   true,
-	}
-	lockNode := &plan.Node{
-		NodeType:    plan.Node_LOCK_OP,
-		LockTargets: []*plan.LockTarget{promoted},
-	}
-	markedScan := &plan.Node{
-		NodeId:       0,
-		NodeType:     plan.Node_TABLE_SCAN,
-		TableDef:     &plan.TableDef{TableType: "r", TblId: 7},
-		ScanReadRole: plan.ScanReadRole_ScanOuterLocking,
-	}
-	qry := &plan.Query{Nodes: []*plan.Node{markedScan, lockNode}}
-	c.pn = &plan.Plan{Plan: &plan.Plan_Query{Query: qry}}
-
-	rt := moruntime.ServiceRuntime(c.proc.GetService())
-	require.NotNil(t, rt)
-	orig, had := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
-	t.Cleanup(func() {
-		if had {
-			rt.SetGlobalVariables(moruntime.MOProtocolVersion, orig)
-		} else {
-			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
-		}
-	})
-
-	ss, err := c.compileLock(lockNode, []*Scope{{}})
-	require.NoError(t, err)
-	require.Len(t, ss, 1, "a fully promoted statement keeps its input scope as-is")
-	staged, seen := c.lockTables[7]
-	require.True(t, seen)
-	require.True(t, staged.GetLockTable())
-	require.Len(t, lockNode.LockTargets, 1,
-		"even a fully promoted statement keeps its canonical marked target")
-	require.True(t, lockNode.LockTargets[0].GetLockingRead())
-
-	// After compilation, the capability drop rejects the plan: presence is
-	// still visible at the Run gate, so a mixed-version cluster below the
-	// allocated gate cannot serve the promoted shared statement as a silent
-	// snapshot read.
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, int64(128))
-	dropErr := validateLockingCurrentReadCapability(c.proc, c.pn)
-	require.Error(t, dropErr, "the compiled promoted presence plan stays visible to the capability gate")
-	require.True(t, moerr.IsMoErrCode(dropErr, moerr.ErrNotSupported))
-	require.Contains(t, dropErr.Error(), "requires rebinding")
-
-	// At or above the allocated gate the same compiled statement passes.
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, int64(defines.MORPCVersion135))
-	require.NoError(t, validateLockingCurrentReadCapability(c.proc, c.pn))
 }

@@ -19,12 +19,9 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	pbtxn "github.com/matrixorigin/matrixone/pkg/pb/txn"
-	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dependent"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/lockop"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
@@ -660,77 +657,6 @@ func TestLockingReadRetryFrontierProgressMatrix(t *testing.T) {
 	require.Equal(t, sessionTS, op.Txn().SnapshotTS,
 		"the marked stamp leaves the transaction snapshot untouched")
 	require.Equal(t, sessionTS, c.proc.GetTxnOperator().Txn().SnapshotTS)
-}
-
-// The COLD Run-admission capability site (compile2.go Compile() calls
-// validateLockingCurrentReadCapability before scheduling): a presence plan
-// observed below the allocated gate is rejected with the recorded terminal
-// error at that earliest admission member — including on the upstream-only
-// aisles 131–134 (weighted percentile #31000, decimal float rounding
-// #31191 / commit 861a2c4cb689, typed JSON MIN/MAX and the ordered ODKU
-// summary at origin/main c4946bb74d43), keeping the mixed-version contract;
-// the rejection precedes all source/scope
-// construction.
-func TestCompileColdSiteRejectsPresencePlanBelowGate(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	require.NotNil(t, moruntime.ServiceRuntime(proc.GetService()))
-
-	pn := presencePlan(&plan.Node{
-		NodeId:       0,
-		NodeType:     plan.Node_TABLE_SCAN,
-		TableDef:     &plan.TableDef{TableType: "r", TblId: 42},
-		ScanReadRole: plan.ScanReadRole_ScanOuterLocking,
-	})
-	pn.GetQuery().Steps = []int32{1}
-
-	sessionTS := timestamp.Timestamp{PhysicalTime: 100, LogicalTime: 1}
-	op, closeFn := client.NewTestTxnOperator(proc.Ctx)
-	op.TxnRef().SnapshotTS = sessionTS
-	defer closeFn()
-	proc.Base.TxnOperator = op
-
-	for _, version := range []int64{128, 131, 132, 133, 134} {
-		require.Less(t, version, defines.MORPCVersion135,
-			"the corpus stays below the re-minted allocated gate")
-		label := "below-hole"
-		switch version {
-		case 131:
-			label = "weighted-percentile-131-peer"
-		case 132:
-			label = "decimal-float-132-peer"
-		case 133:
-			label = "json-minmax-133-peer"
-		case 134:
-			label = "odku-last-insert-id-134-peer"
-		}
-		t.Run(label, func(t *testing.T) {
-			// Resolve the runtime LATE: fixture setup (the test txn operator)
-			// may (re)install the service runtime, and the gate reads must
-			// observe the same instance the validator will resolve.
-			rt := moruntime.ServiceRuntime(proc.GetService())
-			orig, had := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
-			t.Cleanup(func() {
-				if had {
-					rt.SetGlobalVariables(moruntime.MOProtocolVersion, orig)
-				}
-			})
-			rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
-			// Stability anchor: the direct validator rejects the presence
-			// plan under this gate state before any pipeline work.
-			require.Error(t, validateLockingCurrentReadCapability(proc, pn))
-			// A full Compile must carry the SAME membership to its cold
-			// admission member: the rejection precedes all scheduling and
-			// never surfaces later compile-stage panics or scope state.
-			c := &Compile{proc: proc, ncpu: 1, counterSet: &perfcounter.CounterSet{}}
-			err := c.Compile(context.Background(), pn, nil)
-			require.Error(t, err)
-			require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), "%v", err)
-			require.ErrorContains(t, err, "requires rebinding")
-			require.ErrorContains(t, err, "MORPCVersion135")
-			require.Nil(t, c.scopes,
-				"the capability rejection precedes all scope construction")
-		})
-	}
 }
 
 // ---------------------------------------------------------------------------

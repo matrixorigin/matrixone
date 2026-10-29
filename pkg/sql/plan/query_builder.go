@@ -13404,30 +13404,10 @@ func SnapshotHasExplicitTS(snapshot *Snapshot) bool {
 // suppression stays bound to isForUpdate. An explicit snapshot on a locked
 // block stores the presence provenance value only: pairing it with
 // scan_snapshot resolves the effective role per execution at compile
-// admission, never at bind time.
-// lockingCurrentReadGateActive reports the live cluster capability for the
-// plan being bound (design D-7, the allocated MORPCVersion135 gate): the
-// binding-time presence summary and the explicit role representation are
-// captured only above the gate, so a below-gate cluster builds plans whose
-// roles and marks are wire- and semantics-identical to today's, and the
-// additive enum values never travel a below-gate fragment (D-1's
-// representation closure).
-func (builder *QueryBuilder) lockingCurrentReadGateActive() bool {
-	if builder == nil || builder.compCtx == nil {
-		return false
-	}
-	proc := builder.compCtx.GetProcess()
-	if proc == nil {
-		return false
-	}
-	return ClusterHasLockingCurrentRead(proc)
-}
-
+// admission, never at bind time. (rev 15, R15-F1: the capability-gated
+// below-gate branch is removed with the gate — a single-version cluster
+// always builds the explicit representation.)
 func (builder *QueryBuilder) lockingReadScanRole(snapshot *Snapshot) plan.ScanReadRole {
-	if !builder.lockingCurrentReadGateActive() {
-		// Below the gate: only the legacy unset form — byte-identical plans.
-		return plan.ScanReadRole_ScanNestedBlock
-	}
 	if !builder.isForUpdate && !builder.viewInheritLocking {
 		return plan.ScanReadRole_ScanNestedBlockExplicit
 	}

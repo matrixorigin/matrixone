@@ -20,9 +20,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
-	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/stretchr/testify/require"
@@ -181,7 +179,7 @@ func TestWalkLockingReadClosureUnsupportedOuterKind(t *testing.T) {
 	require.True(t, closure.UnsupportedOuterKind,
 		"an unmarked lock target provides no admission link")
 
-	// (f) Below the presence gate nothing is ever flagged.
+	// (f) A plan without locking-read presence is never flagged.
 	closure = WalkLockingReadClosure(&plan.Query{Nodes: []*plan.Node{
 		kindedScan(0, plan.ScanReadRole_ScanOuterLocking, "cluster"),
 	}})
@@ -196,21 +194,10 @@ func TestWalkLockingReadClosureUnsupportedOuterKind(t *testing.T) {
 // (derived tables, whether inside or outside a locking view) bind
 // explicit-nested and keep their snapshot reads.
 func TestViewChainLockingProvenance(t *testing.T) {
-	// Bind above the allocated capability gate (design D-7): roles and
-	// LockTarget presence only exist at/above MORPCVersion135, so the
-	// full-binder fixture runs with the gate armed exactly like the
-	// delivered single-binary cluster.
+	// The full-binder fixture runs exactly like the delivered single-version
+	// cluster (rev 15, R15-F1): roles and LockTarget presence are built for
+	// every locking statement, with no capability arming.
 	proc := newPlanTestProcess(t)
-	rt := moruntime.ServiceRuntime(proc.GetService())
-	require.NotNil(t, rt)
-	orig, had := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
-	t.Cleanup(func() {
-		if had {
-			rt.SetGlobalVariables(moruntime.MOProtocolVersion, orig)
-		}
-	})
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, int64(defines.MORPCVersion135))
-
 	ctx := NewMockCompilerContext(true, proc)
 	ctx.GetAccountIdFunc = func() (uint32, error) { return 0, nil }
 

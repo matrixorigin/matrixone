@@ -20,7 +20,6 @@ import (
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/require"
 
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_lock "github.com/matrixorigin/matrixone/pkg/frontend/test/mock_lock"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	lockpb "github.com/matrixorigin/matrixone/pkg/pb/lock"
@@ -94,7 +93,6 @@ func TestTableLockPromotionKeepsMarkedSharedTargetProvenance(t *testing.T) {
 // members prove the same statement survives compileLock's table promotion.
 func TestSharedHintedCoveringLockingScanCarriesSourceProvenance(t *testing.T) {
 	proc := newPlanTestProcess(t)
-	setLockingCurrentReadGate(t, proc, defines.MORPCVersion135)
 
 	const coveringSharedSQL = `
 		select id, a, b from index_hint_t force index for order by(idx_ab)
