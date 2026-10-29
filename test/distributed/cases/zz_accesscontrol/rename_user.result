@@ -1,0 +1,160 @@
+drop database if exists ru30467_db;
+drop user if exists ru30467_a, ru30467_b, ru30467_mid, ru30467_moved;
+drop role if exists ru30467_reader;
+create database ru30467_db;
+create table ru30467_db.marker (v int);
+insert into ru30467_db.marker values (42);
+create role ru30467_reader;
+grant connect on account * to ru30467_reader;
+grant select on table ru30467_db.marker to ru30467_reader;
+create user ru30467_a identified by 'ru30467_password', ru30467_b identified by 'ru30467_password';
+grant ru30467_reader to ru30467_a;
+set default role ru30467_reader to ru30467_a;
+select user_id from mo_catalog.mo_user where user_name='ru30467_a';
+select user_id from mo_catalog.mo_user where user_name='ru30467_b';
+select {{ru30467_a_id}} <> {{ru30467_b_id}} as distinct_ids;
+➤ distinct_ids[-6,8,0]  𝄀
+1
+set @ru30467_auth = (select authentication_string from mo_catalog.mo_user where user_id={{ru30467_a_id}});
+set @ru30467_default = (select default_role from mo_catalog.mo_user where user_id={{ru30467_a_id}});
+select connection_id();
+select current_user_id()={{ru30467_a_id}} as source_identity;
+➤ source_identity[-6,8,0]  𝄀
+1
+select current_role();
+➤ current_role()[12,65535,0]  𝄀
+ru30467_reader
+select v from ru30467_db.marker;
+➤ v[4,32,0]  𝄀
+42
+show grants;
+➤ Grants for current user[12,633,0]  𝄀
+GRANT connect ON account  `ru30467_a`@`localhost`  𝄀
+GRANT connect ON account  `ru30467_a`@`localhost`  𝄀
+GRANT select ON table d.t `ru30467_a`@`localhost`
+rename user ru30467_a to ru30467_mid, ru30467_b to ru30467_mid;
+invalid input: RENAME USER destination already exists
+select count(*)=1 as source_rolled_back from mo_catalog.mo_user where user_name='ru30467_a' and user_id={{ru30467_a_id}};
+➤ source_rolled_back[-6,8,0]  𝄀
+1
+select count(*)=1 as second_unchanged from mo_catalog.mo_user where user_name='ru30467_b' and user_id={{ru30467_b_id}};
+➤ second_unchanged[-6,8,0]  𝄀
+1
+select count(*)=0 as intermediate_absent from mo_catalog.mo_user where user_name='ru30467_mid';
+➤ intermediate_absent[-6,8,0]  𝄀
+1
+rename user ru30467_a to ru30467_mid, ru30467_mid to ru30467_moved;
+select count(*)=1 as identity_credential_default_preserved from mo_catalog.mo_user where user_name='ru30467_moved' and user_id={{ru30467_a_id}} and authentication_string=@ru30467_auth and default_role=@ru30467_default;
+➤ identity_credential_default_preserved[-6,8,0]  𝄀
+1
+select count(*)=1 as grant_preserved from mo_catalog.mo_user_grant g join mo_catalog.mo_role r on g.role_id=r.role_id where g.user_id={{ru30467_a_id}} and r.role_name='ru30467_reader';
+➤ grant_preserved[-6,8,0]  𝄀
+1
+select count(*)=0 as old_name_absent from mo_catalog.mo_user where user_name='ru30467_a';
+➤ old_name_absent[-6,8,0]  𝄀
+1
+select connection_id() <> {{ru30467_old_conn}} as fresh_login;
+➤ fresh_login[-6,8,0]  𝄀
+1
+select current_user_id()={{ru30467_a_id}} as moved_identity;
+➤ moved_identity[-6,8,0]  𝄀
+1
+select current_role();
+➤ current_role()[12,65535,0]  𝄀
+ru30467_reader
+select v from ru30467_db.marker;
+➤ v[4,32,0]  𝄀
+42
+select connection_id()={{ru30467_old_conn}} and current_user_id()={{ru30467_a_id}} as original_session;
+➤ original_session[-6,8,0]  𝄀
+1
+show grants;
+➤ Grants for current user[12,633,0]  𝄀
+GRANT connect ON account  `ru30467_moved`@`localhost`  𝄀
+GRANT connect ON account  `ru30467_moved`@`localhost`  𝄀
+GRANT select ON table d.t `ru30467_moved`@`localhost`
+show grants for current_user;
+➤ Grants for current user[12,633,0]  𝄀
+GRANT connect ON account  `ru30467_moved`@`localhost`  𝄀
+GRANT connect ON account  `ru30467_moved`@`localhost`  𝄀
+GRANT select ON table d.t `ru30467_moved`@`localhost`
+show grants for current_user();
+➤ Grants for current user[12,633,0]  𝄀
+GRANT connect ON account  `ru30467_moved`@`localhost`  𝄀
+GRANT connect ON account  `ru30467_moved`@`localhost`  𝄀
+GRANT select ON table d.t `ru30467_moved`@`localhost`
+rename user ru30467_b to ru30467_a;
+select connection_id() <> {{ru30467_old_conn}} as fresh_reused_name_login;
+➤ fresh_reused_name_login[-6,8,0]  𝄀
+1
+select current_user_id()={{ru30467_b_id}} as reused_name_identity;
+➤ reused_name_identity[-6,8,0]  𝄀
+1
+select current_role();
+➤ current_role()[12,65535,0]  𝄀
+public
+select v from ru30467_db.marker;
+internal error: do not have privilege to execute the statement
+rename user ru30467_moved to ru30467_b;
+internal error: do not have privilege to execute the statement
+select connection_id()={{ru30467_old_conn}} and current_user_id()={{ru30467_a_id}} as original_session_after_reuse;
+➤ original_session_after_reuse[-6,8,0]  𝄀
+1
+select v from ru30467_db.marker;
+➤ v[4,32,0]  𝄀
+42
+show grants;
+➤ Grants for current user[12,633,0]  𝄀
+GRANT connect ON account  `ru30467_moved`@`localhost`  𝄀
+GRANT connect ON account  `ru30467_moved`@`localhost`  𝄀
+GRANT select ON table d.t `ru30467_moved`@`localhost`
+show grants for current_user;
+➤ Grants for current user[12,633,0]  𝄀
+GRANT connect ON account  `ru30467_moved`@`localhost`  𝄀
+GRANT connect ON account  `ru30467_moved`@`localhost`  𝄀
+GRANT select ON table d.t `ru30467_moved`@`localhost`
+show grants for current_user();
+➤ Grants for current user[12,633,0]  𝄀
+GRANT connect ON account  `ru30467_moved`@`localhost`  𝄀
+GRANT connect ON account  `ru30467_moved`@`localhost`  𝄀
+GRANT select ON table d.t `ru30467_moved`@`localhost`
+show grants for 'ru30467_a';
+➤ Grants for ru30467_a@localhost[12,251,0]  𝄀
+GRANT connect ON account  `ru30467_a`@`localhost`
+show grants for 'ru30467_moved';
+➤ Grants for ru30467_moved@localhost[12,255,0]  𝄀
+GRANT connect ON account  `ru30467_moved`@`localhost`  𝄀
+GRANT connect ON account  `ru30467_moved`@`localhost`  𝄀
+GRANT select ON table d.t `ru30467_moved`@`localhost`
+show grants for 'ru30467_moved'@'%';
+➤ Grants for ru30467_moved@localhost[12,255,0]  𝄀
+GRANT connect ON account  `ru30467_moved`@`localhost`  𝄀
+GRANT connect ON account  `ru30467_moved`@`localhost`  𝄀
+GRANT select ON table d.t `ru30467_moved`@`localhost`
+show grants for role ru30467_reader;
+➤ Grants for ru30467_reader[12,244,0]  𝄀
+GRANT connect ON account  `ru30467_reader`  𝄀
+GRANT select ON table d.t `ru30467_reader`
+rename user ru30467_moved to ru30467_a;
+invalid input: RENAME USER destination already exists
+rename user ru30467_missing to ru30467_mid;
+invalid input: RENAME USER source does not exist
+rename user root to ru30467_mid;
+invalid input: cannot rename protected user
+rename user ru30467_moved to root;
+invalid input: cannot rename protected user
+rename user ru30467_moved@'remote' to ru30467_mid;
+invalid input: RENAME USER cannot change host
+rename user ru30467_moved to 'ru30467?invalid';
+invalid input: RENAME USER destination cannot reliably roundtrip through login
+select count(*)=1 as source_still_moved from mo_catalog.mo_user where user_name='ru30467_moved' and user_id={{ru30467_a_id}};
+➤ source_still_moved[-6,8,0]  𝄀
+1
+select count(*)=1 as reused_binding_still_b from mo_catalog.mo_user where user_name='ru30467_a' and user_id={{ru30467_b_id}};
+➤ reused_binding_still_b[-6,8,0]  𝄀
+1
+drop user if exists ru30467_a, ru30467_b, ru30467_mid, ru30467_moved;
+drop role if exists ru30467_reader;
+drop database if exists ru30467_db;
+set @ru30467_auth = null;
+set @ru30467_default = null;

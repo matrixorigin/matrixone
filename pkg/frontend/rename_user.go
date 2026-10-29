@@ -167,7 +167,7 @@ func doRenameUser(ctx context.Context, ses *Session, stmt *tree.RenameUser) (err
 			return err
 		}
 	}
-	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{forcePessimisticRC: true, cancelTxnCreateWithRequest: true})
+	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{forcePessimisticRC: true, cancelTxnCreateWithRequest: true, internalExecution: true})
 	defer bh.Close()
 	if err = bh.Exec(ctx, "begin;"); err != nil {
 		return err
