@@ -2667,6 +2667,38 @@ data branch pick xr2_s into xr2_p keys(3) when conflict accept;
 select id, v from xr2_p order by id;
 select id, pid from xr2_c order by id;
 
+-- r60 review P1 (I4): picking a moved key whose authorized victim delete
+-- cascades away the move target through a self-referencing ON DELETE
+-- CASCADE edge must abort loudly; the zero-match guard runs after the
+-- victim delete settles in the same transaction, so the destination
+-- keeps both rows atomically.
+create table casc_t (id int primary key, pid int, v varchar(32),
+    constraint fk_casc_self foreign key (pid) references casc_t(id) on delete cascade
+);
+insert into casc_t values (3, null, 'three'), (2, null, 'two');
+data branch create table casc_src from casc_t;
+-- The destination's own change links row 2 onto row 3; the source
+-- deletes key 3 and moves row 2 onto it.
+update casc_t set pid = 3 where id = 2;
+delete from casc_src where id = 3;
+update casc_src set id = 3 where id = 2;
+-- @regex("cannot apply the accepted row", true)
+data branch pick casc_src into casc_t keys(2,3) when conflict accept;
+select id, pid, v from casc_t order by id;
+
+-- SET NULL control: the victim delete only nulls the edge, the move
+-- target survives, and the move still lands as a native update.
+create table sn_t (id int primary key, pid int, v varchar(32),
+    constraint fk_sn_self foreign key (pid) references sn_t(id) on delete set null
+);
+insert into sn_t values (3, null, 'three'), (2, null, 'two');
+data branch create table sn_src from sn_t;
+update sn_t set pid = 3 where id = 2;
+delete from sn_src where id = 3;
+update sn_src set id = 3 where id = 2;
+data branch pick sn_src into sn_t keys(2,3) when conflict accept;
+select id, pid, v from sn_t order by id;
+
 drop database branch_pick_fk_pk_move;
 
 -- Restore the default isolation this file replaced above: mo-tester

@@ -6333,6 +6333,96 @@ func TestExecKeyMovingUpdateRestoreMissing(t *testing.T) {
 	})
 }
 
+// r60 review P1 (I4): the authorized victim delete at the move's NEW key
+// fires ON DELETE actions on the destination — a self-referencing ON
+// DELETE CASCADE edge from the move target onto the victim erases the
+// very row the move is about to rewrite. The zero-match preflight runs
+// after the victim delete inside the same transaction, so a cascaded-away
+// target aborts the apply instead of letting a zero-row UPDATE commit the
+// loss. The scripted destination below returns one row from the guard
+// count only while the query precedes the delete (pre-fix order), so the
+// cascade subtest is RED against the old ordering.
+func TestExecKeyMovingUpdateVictimDeletePrecedesGuard(t *testing.T) {
+	ctx := context.Background()
+	ses := newValidateSession(t)
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	tblStuff := newTestBranchTableStuff(ctrl)
+	tblStuff.def.baseColNames = []string{"id", "name", "hidden"}
+
+	row := []any{int64(3), "three", "h3"}
+	whereRow := []any{int64(2), "two", "h2"}
+
+	countResult := func(n int64) *MysqlResultSet {
+		mrs := &MysqlResultSet{}
+		col := &MysqlColumn{}
+		col.SetName("count(*)")
+		col.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
+		mrs.AddColumn(col)
+		mrs.AddRow([]interface{}{n})
+		return mrs
+	}
+
+	// cascadeErasesTarget scripts the destination's answer to the guard:
+	// once the victim delete has executed, the cascade has removed the
+	// move target, so the count reads zero.
+	newGuardedBh := func(cascadeErasesTarget bool, executed *[]string) *mock_frontend.MockBackgroundExec {
+		bh := mock_frontend.NewMockBackgroundExec(ctrl)
+		deleted := false
+		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(
+			func(_ context.Context, sql string) error {
+				*executed = append(*executed, sql)
+				if strings.HasPrefix(sql, "delete from") {
+					deleted = true
+				}
+				return nil
+			}).AnyTimes()
+		bh.EXPECT().GetExecResultSet().DoAndReturn(func() []interface{} {
+			if len(*executed) == 0 {
+				return nil
+			}
+			last := (*executed)[len(*executed)-1]
+			if !strings.HasPrefix(last, "select count(*)") {
+				return nil
+			}
+			if cascadeErasesTarget && deleted {
+				return []interface{}{countResult(0)}
+			}
+			return []interface{}{countResult(1)}
+		}).AnyTimes()
+		bh.EXPECT().ClearExecResultSet().AnyTimes()
+		return bh
+	}
+
+	t.Run("cascaded target aborts instead of updating zero rows", func(t *testing.T) {
+		var executed []string
+		bh := newGuardedBh(true, &executed)
+		err := execKeyMovingUpdate(ctx, ses, bh, nil, tblStuff,
+			row, whereRow, true, false, &bytes.Buffer{})
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "cannot apply the accepted row")
+		require.Len(t, executed, 2,
+			"victim delete then settled guard; the UPDATE must never run")
+		require.True(t, strings.HasPrefix(executed[0], "delete from"),
+			"the authorized victim delete must execute first: %q", executed[0])
+		require.True(t, strings.HasPrefix(executed[1], "select count(*)"),
+			"the guard preflight follows the settled delete: %q", executed[1])
+	})
+
+	t.Run("survived target still applies the move", func(t *testing.T) {
+		var executed []string
+		bh := newGuardedBh(false, &executed)
+		err := execKeyMovingUpdate(ctx, ses, bh, nil, tblStuff,
+			row, whereRow, true, false, &bytes.Buffer{})
+		require.NoError(t, err)
+		require.Len(t, executed, 3)
+		require.True(t, strings.HasPrefix(executed[0], "delete from"), executed[0])
+		require.True(t, strings.HasPrefix(executed[1], "select count(*)"), executed[1])
+		require.True(t, strings.HasPrefix(executed[2], "update "),
+			"the move runs only after the settled guard counts one: %q", executed[2])
+	})
+}
+
 // buildPkMovePickProbeResultSet renders link rows in the 4-column closure
 // probe projection (old_row_id, old_pk, new_pk, write_ts) used by
 // probePickWindowLinks and the overflow per-key fallback.

@@ -2116,7 +2116,12 @@ func keyMovingRowVictimAuthorized(wrapped batchWithKind, rowIdx int) bool {
 // destination row addressed by whereRow must exist exactly once: the merge
 // conflict resolver derives whereRow from proven lineage on both sides, so
 // a zero match means provenance and destination state disagree and the
-// accepted source version would be silently lost; that aborts loudly.
+// accepted source version would be silently lost; that aborts loudly. The
+// preflight runs in the apply transaction after the authorized victim
+// delete below, so an ON DELETE CASCADE triggered by that delete — for
+// example a self-referencing edge from the move target onto the new key's
+// occupant — settles first and turns into the required zero-match abort
+// rather than committing a silently emptying destination.
 //
 // A destination row already holding the move's NEW key is removed inline
 // first, but only when victimAuthorized: the fold plan authorized keys the
@@ -2178,9 +2183,24 @@ func execKeyMovingUpdate(
 			return err
 		}
 	}
+	if victimDelete != "" && writeFile == nil {
+		// Execute the authorized victim delete inside this transaction
+		// before the zero-match preflight. ON DELETE actions on the
+		// destination fire with it: a CASCADE can remove the very row
+		// this move is about to rewrite (e.g. a self-referencing edge
+		// from the where-key row onto the victim). Counting before the
+		// delete would pass the guard, then let the UPDATE match zero
+		// rows and commit the cascading loss silently. With the delete
+		// first, the guard below reads the settled state and aborts the
+		// whole apply when the target is gone (I4).
+		if err = execSQLStatements(ctx, ses, bh, nil, []string{victimDelete}); err != nil {
+			return err
+		}
+	}
 	if !restoreMissing && writeFile == nil {
-		// Preflight the where-key match: exactly one destination row may be
-		// rewritten by this move.
+		// Preflight the where-key match against the destination state
+		// settled by the victim delete above: exactly one destination
+		// row may be rewritten by this move.
 		countBuf := acquireBuffer(tblStuff.bufPool)
 		defer releaseBuffer(tblStuff.bufPool, countBuf)
 		countBuf.WriteString("select count(*) from ")
@@ -2211,7 +2231,11 @@ func execKeyMovingUpdate(
 			)
 		}
 	}
-	if victimDelete != "" {
+	if victimDelete != "" && writeFile != nil {
+		// File-output mode keeps the historical statement order: the
+		// victim delete is written ahead of the move it clears. The
+		// in-transaction preflight above is skipped there by design
+		// (D7), so no reordered execution applies.
 		statements = append([]string{victimDelete}, statements...)
 	}
 	return execSQLStatements(ctx, ses, bh, writeFile, statements)

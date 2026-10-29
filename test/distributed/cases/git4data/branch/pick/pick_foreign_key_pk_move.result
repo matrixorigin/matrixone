@@ -50,7 +50,7 @@ delete from delins_src where id = 3;
 insert into delins_src values (4, 'four');
 data branch pick delins_src into parent_t keys(3) when conflict accept;
 -- @regex("Cannot delete or update a parent row: a foreign key constraint fails", true)
-internal error: Cannot delete or update a parent row: a foreign key constraint fails
+Cannot delete or update a parent row: a foreign key constraint fails
 select id, payload from parent_t order by id;
 ➤ id[4,32,0]  ¦  payload[12,32,0]  𝄀
 3  ¦  two  𝄀
@@ -123,7 +123,7 @@ insert into tx_src values (5, 'five');
 commit;
 data branch pick tx_src into tx_p keys(2) when conflict accept;
 -- @regex("Cannot delete or update a parent row: a foreign key constraint fails", true)
-internal error: Cannot delete or update a parent row: a foreign key constraint fails
+Cannot delete or update a parent row: a foreign key constraint fails
 select id, v from tx_p order by id;
 ➤ id[4,32,0]  ¦  v[12,32,0]  𝄀
 2  ¦  two
@@ -277,7 +277,7 @@ insert into rip_src values (2, 'unrelated');
 update rip_src set id = 3 where id = 2;
 data branch pick rip_src into rip_p keys(2) when conflict accept;
 -- @regex("Cannot delete or update a parent row: a foreign key constraint fails", true)
-internal error: Cannot delete or update a parent row: a foreign key constraint fails
+Cannot delete or update a parent row: a foreign key constraint fails
 select id, v from rip_p order by id;
 ➤ id[4,32,0]  ¦  v[12,32,0]  𝄀
 2  ¦  two
@@ -475,7 +475,7 @@ select count(*) from mo_catalog.mo_data_branch_update_link where table_id = @pea
 0
 data branch pick pea_src into pea_p keys(2) when conflict accept;
 -- @regex("Cannot delete or update a parent row: a foreign key constraint fails", true)
-internal error: Cannot delete or update a parent row: a foreign key constraint fails
+Cannot delete or update a parent row: a foreign key constraint fails
 select id, v from pea_p order by id;
 ➤ id[4,32,0]  ¦  v[12,32,0]  𝄀
 2  ¦  two
@@ -671,7 +671,7 @@ select disable_fault_injection();
 1
 data branch pick psd_src into psd_p keys(2) when conflict accept;
 -- @regex("Cannot delete or update a parent row: a foreign key constraint fails", true)
-internal error: Cannot delete or update a parent row: a foreign key constraint fails
+Cannot delete or update a parent row: a foreign key constraint fails
 select count(*) from psd_p;
 ➤ count(*)[-5,64,0]  𝄀
 8
@@ -875,7 +875,7 @@ select count(*) from mo_catalog.mo_data_branch_update_link where table_id = @psp
 0
 data branch pick psp_src into psp_p keys(2) when conflict accept;
 -- @regex("Cannot delete or update a parent row: a foreign key constraint fails", true)
-internal error: Cannot delete or update a parent row: a foreign key constraint fails
+Cannot delete or update a parent row: a foreign key constraint fails
 select id, v from psp_p order by id;
 ➤ id[4,32,0]  ¦  v[12,32,0]  𝄀
 2  ¦  two
@@ -1324,7 +1324,7 @@ select count(*) from mo_catalog.mo_data_branch_update_link where table_id = @etr
 1
 data branch pick etrp_src into etrp_p keys(2) when conflict accept;
 -- @regex("a foreign key constraint fails", true)
-internal error: Cannot delete or update a parent row: a foreign key constraint fails
+Cannot delete or update a parent row: a foreign key constraint fails
 select id, v from etrp_p order by id;
 ➤ id[4,32,0]  ¦  v[12,32,0]  𝄀
 2  ¦  two
@@ -1432,7 +1432,7 @@ select count(*) from mo_catalog.mo_data_branch_update_link where table_id = @edr
 0
 data branch pick edrp_src into edrp_p keys(2, 3) when conflict accept;
 -- @regex("a foreign key constraint fails", true)
-internal error: Cannot delete or update a parent row: a foreign key constraint fails
+Cannot delete or update a parent row: a foreign key constraint fails
 select id, v from edrp_p order by id;
 ➤ id[4,32,0]  ¦  v[12,32,0]  𝄀
 2  ¦  two
@@ -1583,7 +1583,7 @@ update eszpr_src set id = 3 where id = 2;
 commit;
 data branch pick eszpr_src into eszpr_p keys(2) when conflict accept;
 -- @regex("Cannot delete or update a parent row: a foreign key constraint fails", true)
-internal error: Cannot delete or update a parent row: a foreign key constraint fails
+Cannot delete or update a parent row: a foreign key constraint fails
 select id, v from eszpr_p order by id;
 ➤ id[4,32,0]  ¦  v[12,32,0]  𝄀
 2  ¦  two
@@ -3284,5 +3284,32 @@ select id, v from xr2_p order by id;
 select id, pid from xr2_c order by id;
 ➤ id[4,32,0]  ¦  pid[4,32,0]  𝄀
 900  ¦  1
+create table casc_t (id int primary key, pid int, v varchar(32),
+constraint fk_casc_self foreign key (pid) references casc_t(id) on delete cascade
+);
+insert into casc_t values (3, null, 'three'), (2, null, 'two');
+data branch create table casc_src from casc_t;
+update casc_t set pid = 3 where id = 2;
+delete from casc_src where id = 3;
+update casc_src set id = 3 where id = 2;
+data branch pick casc_src into casc_t keys(2,3) when conflict accept;
+-- @regex("cannot apply the accepted row", true)
+internal error: data branch key-moving update cannot apply the accepted row: expected exactly one destination row at key (2), found 0
+select id, pid, v from casc_t order by id;
+➤ id[4,32,0]  ¦  pid[4,32,0]  ¦  v[12,32,0]  𝄀
+2  ¦  3  ¦  two  𝄀
+3  ¦  null  ¦  three
+create table sn_t (id int primary key, pid int, v varchar(32),
+constraint fk_sn_self foreign key (pid) references sn_t(id) on delete set null
+);
+insert into sn_t values (3, null, 'three'), (2, null, 'two');
+data branch create table sn_src from sn_t;
+update sn_t set pid = 3 where id = 2;
+delete from sn_src where id = 3;
+update sn_src set id = 3 where id = 2;
+data branch pick sn_src into sn_t keys(2,3) when conflict accept;
+select id, pid, v from sn_t order by id;
+➤ id[4,32,0]  ¦  pid[4,32,0]  ¦  v[12,32,0]  𝄀
+3  ¦  null  ¦  two
 drop database branch_pick_fk_pk_move;
 set session transaction isolation level read committed;
