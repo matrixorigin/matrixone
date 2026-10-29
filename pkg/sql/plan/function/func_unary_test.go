@@ -504,8 +504,8 @@ func initQuoteTestCase() []tcTemp {
 					[]bool{true}),
 			},
 			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{"NULL"},
-				[]bool{false}),
+				[]string{""},
+				[]bool{true}),
 		},
 		{
 			info: "test quote with carriage return",
