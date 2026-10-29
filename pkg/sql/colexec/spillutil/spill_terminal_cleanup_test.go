@@ -164,6 +164,66 @@ func TestJoinTerminalReaderRejectsInvalidFileAndReportsCleanup(t *testing.T) {
 	require.Equal(t, 1, fault.attempts)
 }
 
+func TestJoinTerminalReaderReplacementCleansBothOwnersOnError(t *testing.T) {
+	for _, incoming := range []bool{false, true} {
+		t.Run(map[bool]string{false: "no incoming file", true: "incoming file"}[incoming], func(t *testing.T) {
+			proc, fault, view, g, _ := joinTerminalFixture(t)
+			reader := BucketReader{}
+			t.Cleanup(func() { _ = reader.Close() })
+			makeFile := func(name string) *message.SpillFile {
+				writer := BucketWriter{Name: name, Budget: g}
+				t.Cleanup(func() { _ = writer.Close() })
+				require.NoError(t, writeBucketPayload(proc, []byte("payload"), 1, &writer, nil))
+				file, err := writer.handOffSpillFile(proc.Ctx)
+				require.NoError(t, err)
+				t.Cleanup(func() { _ = file.Close() })
+				return file
+			}
+			require.NoError(t, reader.ResetForSpillFile(proc, g, makeFile("old")))
+			var next *message.SpillFile
+			if incoming {
+				next = makeFile("next")
+			}
+			charged := g.SpillDiskUsed()
+			fault.blocked = true
+			require.ErrorIs(t, reader.ResetForSpillFile(proc, g, next), joinUnlinkFailure)
+			require.Nil(t, reader.spillFile)
+			require.Nil(t, reader.fd)
+			require.Zero(t, g.SpillFDUsed())
+			require.Equal(t, charged, g.SpillDiskUsed(), "failed replacement must not refund either file")
+			wantRemovals := 1
+			if incoming {
+				wantRemovals++
+			}
+			require.Equal(t, wantRemovals, fault.attempts)
+			require.NoError(t, reader.Close())
+			require.Equal(t, wantRemovals, fault.attempts)
+			_, err := view.CreateFile(context.Background(), "after-replacement")
+			require.ErrorIs(t, err, fileservice.ErrSpillRootFenced)
+		})
+	}
+}
+
+func TestJoinTerminalReaderFailedOpenReleasesFDAndDisk(t *testing.T) {
+	proc, fault, view, g, _ := joinTerminalFixture(t)
+	writer := BucketWriter{Name: "missing-before-open", Budget: g}
+	t.Cleanup(func() { _ = writer.Close() })
+	require.NoError(t, writeBucketPayload(proc, []byte("payload"), 1, &writer, nil))
+	file, err := writer.handOffSpillFile(proc.Ctx)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = file.Close() })
+	require.NoError(t, view.RemoveFile(proc.Ctx, "missing-before-open"))
+	reader := BucketReader{}
+	t.Cleanup(func() { _ = reader.Close() })
+	require.Error(t, reader.ResetForSpillFile(proc, g, file))
+	require.Nil(t, reader.spillFile)
+	require.Nil(t, reader.fdReservation)
+	require.Zero(t, g.SpillFDUsed())
+	require.Zero(t, g.SpillDiskUsed(), "confirmed missing file must release its disk reservation")
+	require.Equal(t, 2, fault.attempts, "failed open still closes its incoming owner once")
+	require.NoError(t, reader.Close())
+}
+
 func TestJoinTerminalWriterDoesNotRetainQuery(t *testing.T) {
 	proc, fault, _, g, base := joinTerminalFixture(t)
 	engineRef, queryRef := func() (weak.Pointer[SpillEngine], weak.Pointer[[1024]byte]) {

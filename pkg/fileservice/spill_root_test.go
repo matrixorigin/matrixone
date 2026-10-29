@@ -25,6 +25,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -55,6 +56,7 @@ func TestAnonymousSpillUnlinkFailure(t *testing.T) {
 		return opened, err
 	}, func(string) error { return failure })
 	require.ErrorIs(t, err, failure)
+	require.ErrorContains(t, err, "injected unlink failure")
 	require.Nil(t, file, "an unlinked descriptor must not be published on failure")
 	require.NotNil(t, opened)
 	_, err = opened.Write([]byte{1})
@@ -62,6 +64,189 @@ func TestAnonymousSpillUnlinkFailure(t *testing.T) {
 	info, err := os.Stat(name)
 	require.NoError(t, err)
 	require.Zero(t, info.Size())
+}
+
+func TestAnonymousSpillCreateFailureClosesUnpublishedDescriptor(t *testing.T) {
+	for _, state := range []string{"no descriptor", "open descriptor", "closed descriptor"} {
+		t.Run(state, func(t *testing.T) {
+			name := filepath.Join(t.TempDir(), "unpublished")
+			failure := errors.New("create failed before publication")
+			var opened *os.File
+			if state != "no descriptor" {
+				var err error
+				opened, err = os.Create(name)
+				require.NoError(t, err)
+				t.Cleanup(func() { _ = opened.Close() })
+				if state == "closed descriptor" {
+					require.NoError(t, opened.Close())
+				}
+			}
+			removed := false
+			file, err := createAndRemoveFile(name, func(string) (*os.File, error) {
+				return opened, failure
+			}, func(string) error { removed = true; return nil })
+			require.Nil(t, file)
+			require.ErrorIs(t, err, failure)
+			require.False(t, removed, "failed creation must not unlink an unowned pathname")
+			if opened != nil {
+				_, writeErr := opened.Write([]byte("not published"))
+				require.ErrorIs(t, writeErr, os.ErrClosed)
+				require.FileExists(t, name)
+			}
+			if state == "closed descriptor" {
+				require.ErrorIs(t, err, os.ErrClosed, "retain both create and close failures")
+			}
+		})
+	}
+}
+
+func TestSpillRootMutationAdmissionAndCleanup(t *testing.T) {
+	ctx := context.Background()
+	_, view := testSpillRoot(t)
+	write := func(ctx context.Context, name string) error {
+		return view.Write(ctx, IOVector{FilePath: name, Entries: []IOEntry{{Data: []byte("a"), Size: 1}}})
+	}
+	require.NoError(t, view.EnsureDir(ctx, "."))
+	require.NoError(t, write(ctx, "payload"))
+	mutator, err := view.NewMutator(ctx, "payload")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = mutator.Close() })
+	require.NoError(t, mutator.Append(ctx, IOEntry{Data: []byte("b"), Size: 1}))
+	require.NoError(t, mutator.Close())
+	fd, err := view.OpenFile(ctx, "payload")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = fd.Close() })
+	data, err := io.ReadAll(fd)
+	require.NoError(t, err)
+	require.Equal(t, "ab", string(data))
+	require.NoError(t, fd.Close())
+
+	for _, name := range []string{"../outside", "foreign:payload"} {
+		require.Error(t, write(ctx, name))
+		_, err := view.NewMutator(ctx, name)
+		require.Error(t, err)
+		_, err = view.OpenFile(ctx, name)
+		require.Error(t, err)
+		require.Error(t, view.EnsureDir(ctx, name))
+	}
+	require.NoError(t, view.root.Err(), "invalid input must not fence a healthy root")
+
+	canceled, cancel := context.WithCancel(ctx)
+	cancel()
+	for _, operation := range []func(context.Context) error{
+		func(ctx context.Context) error { return write(ctx, "not-created") },
+		func(ctx context.Context) error { _, err := view.NewMutator(ctx, "payload"); return err },
+		func(ctx context.Context) error { return view.EnsureDir(ctx, ".") },
+		func(ctx context.Context) error { _, err := view.OpenFile(ctx, "payload"); return err },
+		func(ctx context.Context) error { return view.Delete(ctx, "payload") },
+	} {
+		require.ErrorIs(t, operation(canceled), context.Canceled)
+	}
+	require.NoError(t, view.root.Err())
+	require.FileExists(t, filepath.Join(view.root.path, "payload"))
+
+	view.root.fence(errors.New("unlink failed"))
+	require.ErrorIs(t, write(ctx, "not-created"), ErrSpillRootFenced)
+	_, err = view.NewMutator(ctx, "payload")
+	require.ErrorIs(t, err, ErrSpillRootFenced)
+	require.ErrorIs(t, view.EnsureDir(ctx, "."), ErrSpillRootFenced)
+	// Existing names remain readable/removable while new creation is fenced.
+	fencedFD, err := view.OpenFile(ctx, "payload")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = fencedFD.Close() })
+	require.NoError(t, fencedFD.Close())
+	require.NoError(t, view.Delete(ctx, "payload"))
+	require.NoFileExists(t, filepath.Join(view.root.path, "payload"))
+	require.NoFileExists(t, filepath.Join(view.root.path, "not-created"))
+
+	view.root.close()
+	_, err = view.OpenFile(ctx, "payload")
+	require.ErrorIs(t, err, ErrSpillRootFenced)
+	require.Error(t, view.Delete(ctx, "payload"))
+}
+
+type spillDeleteFailure struct {
+	MutableFileService
+	err   error
+	calls int
+}
+
+func (f *spillDeleteFailure) Delete(context.Context, ...string) error {
+	f.calls++
+	return f.err
+}
+
+func TestSpillRootDeleteClassifiesMissingAndRemovalFailure(t *testing.T) {
+	for _, missing := range []bool{false, true} {
+		t.Run(fmt.Sprint("missing=", missing), func(t *testing.T) {
+			_, view := testSpillRoot(t)
+			failure := errors.New("delete failed")
+			if missing {
+				failure = os.ErrNotExist
+			}
+			fault := &spillDeleteFailure{MutableFileService: view.MutableFileService, err: failure}
+			view = &spillFileService{MutableFileService: fault, root: view.root}
+			err := view.Delete(context.Background(), "owned")
+			if missing {
+				require.NoError(t, err)
+				require.NoError(t, view.root.Err())
+			} else {
+				require.ErrorIs(t, err, failure)
+				require.ErrorIs(t, view.root.Err(), ErrSpillRootFenced)
+			}
+			require.Equal(t, 1, fault.calls)
+			view.root.close()
+			require.Error(t, view.Delete(context.Background(), "owned"))
+			require.Equal(t, 1, fault.calls, "closed roots must not reach storage")
+		})
+	}
+}
+
+func TestSpillRootDiagnosticIsBoundedAndFirstFailureWins(t *testing.T) {
+	for _, message := range []string{"", strings.Repeat("x", 2048)} {
+		root := &SpillRoot{}
+		root.fence(nil)
+		require.NoError(t, root.Err())
+		root.fence(emptyOrLongSpillError(message))
+		require.ErrorIs(t, root.Err(), ErrSpillRootFenced)
+		want := "spill removal failed"
+		if message != "" {
+			want = message[:1024]
+		}
+		require.Equal(t, want, root.failure)
+		root.fence(errors.New("later failure"))
+		require.Equal(t, want, root.failure)
+	}
+}
+
+type emptyOrLongSpillError string
+
+func (e emptyOrLongSpillError) Error() string { return string(e) }
+
+func TestSpillRootHolderCachesStartupFailureAndDirectory(t *testing.T) {
+	ctx := context.Background()
+	for _, directory := range []string{"spill", "../outside"} {
+		t.Run(directory, func(t *testing.T) {
+			local, err := NewLocalETLFS("local", t.TempDir())
+			require.NoError(t, err)
+			t.Cleanup(func() { local.Close(ctx) })
+			view, firstErr := GetSpillFileService(ctx, local, directory)
+			if directory == "spill" {
+				require.NoError(t, firstErr)
+				require.NotNil(t, view)
+			} else {
+				require.ErrorContains(t, firstErr, "invalid local spill directory")
+				retry, retryErr := GetSpillFileService(ctx, local, directory)
+				require.Nil(t, retry)
+				require.ErrorContains(t, retryErr, "invalid local spill directory")
+			}
+			_, err = GetSpillFileService(ctx, local, "different")
+			require.ErrorContains(t, err, "directory changed")
+			local.Close(ctx)
+			_, err = GetSpillFileService(ctx, local, directory)
+			require.ErrorIs(t, err, ErrSpillRootClosed)
+		})
+	}
 }
 
 func TestAnonymousSpillUnlinkPreservesCloseError(t *testing.T) {

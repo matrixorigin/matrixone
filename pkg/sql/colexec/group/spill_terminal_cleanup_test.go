@@ -142,6 +142,31 @@ func TestGroupTerminalDiscardedBuckets(t *testing.T) {
 	}
 }
 
+func TestGroupTerminalEmptyCurrentBucketRemovalFailure(t *testing.T) {
+	proc, fault, view, base := groupTerminalFixture(t)
+	generation, err := proc.GetExecutionResourceBudget()
+	require.NoError(t, err)
+	ctr := container{mp: proc.Mp(), budget: generation}
+	t.Cleanup(ctr.free)
+	bucket := &spillBucket{name: "empty-current"}
+	require.NoError(t, ctr.openSpillBucket(proc, view, bucket))
+	ctr.currentSpillBkt = []*spillBucket{bucket}
+	fault.blocked = true
+	_, err = ctr.loadSpilledData(proc, process.NewAnalyzer(0, false, false, "empty-current"), nil)
+	require.ErrorIs(t, err, groupUnlinkFailure)
+	require.Nil(t, ctr.currentSpillBkt[0], "discarded empty bucket must have no second terminal owner")
+	require.Nil(t, bucket.diskToken)
+	require.Nil(t, bucket.fileFS)
+	require.Nil(t, bucket.file)
+	require.Zero(t, generation.SpillFDUsed())
+	require.FileExists(t, filepath.Join(base, defines.SpillFileServiceName, "empty-current"))
+	_, err = view.CreateFile(context.Background(), "later-query")
+	require.ErrorIs(t, err, fileservice.ErrSpillRootFenced)
+	attempts := fault.attempts
+	ctr.freeSpillBkts()
+	require.Equal(t, attempts, fault.attempts, "terminal failure must not schedule a later retry")
+}
+
 func TestGroupTerminalDistinctMergeIntermediate(t *testing.T) {
 	proc, fault, view, base := groupTerminalFixture(t)
 	generation, err := proc.GetExecutionResourceBudget()
