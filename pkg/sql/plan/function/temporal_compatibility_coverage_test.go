@@ -583,9 +583,9 @@ func TestTemporalCompatibilityErrorAndBoundaryHelpers(t *testing.T) {
 		subtract      bool
 		want          types.Time
 	}{
-		{types.TimeFromClock(false, 2_000_000_000, 0, 0, 0), types.TimeFromClock(false, 2_000_000_000, 0, 0, 0), false, 0},
-		{types.TimeFromClock(false, 2_000_000_000, 0, 0, 0), types.TimeFromClock(true, 2_000_000_000, 0, 0, 0), true, 0},
-		{types.TimeFromClock(true, 2_000_000_000, 0, 0, 0), types.TimeFromClock(true, 2_000_000_000, 0, 0, 0), false, 0},
+		{types.TimeFromClock(false, 2_000_000_000, 0, 0, 0), types.TimeFromClock(false, 2_000_000_000, 0, 0, 0), false, types.MySQLTimeMax},
+		{types.TimeFromClock(false, 2_000_000_000, 0, 0, 0), types.TimeFromClock(true, 2_000_000_000, 0, 0, 0), true, types.MySQLTimeMax},
+		{types.TimeFromClock(true, 2_000_000_000, 0, 0, 0), types.TimeFromClock(true, 2_000_000_000, 0, 0, 0), false, -types.MySQLTimeMax},
 	} {
 		got, truncated := timeArithmeticResult(tc.first, tc.second, tc.subtract)
 		require.True(t, truncated, "first=%d second=%d subtract=%t got=%d", tc.first, tc.second, tc.subtract, got)
@@ -668,7 +668,7 @@ func TestTemporalCompatibilityAdditionalExecutionBranches(t *testing.T) {
 			want []string
 			null []bool
 		}{
-			{name: "add", fn: AddTime, want: []string{"13:00:00", "2024-02-29 13:00:00", "", ""}, null: []bool{false, false, true, true}},
+			{name: "add", fn: AddTime, want: []string{"13:00:00", "2024-02-29 13:00:00", "", "838:59:59"}, null: []bool{false, false, true, false}},
 			{name: "sub", fn: SubTime, want: []string{"11:00:00", "2024-02-29 11:00:00", "", "838:59:58"}, null: []bool{false, false, true, false}},
 		} {
 			t.Run(tc.name, func(t *testing.T) {
@@ -980,8 +980,8 @@ func TestTemporalArithmeticExactResultContract(t *testing.T) {
 		right FunctionTestInput
 		want  FunctionTestResult
 	}{
-		{"duration add", AddTime, NewFunctionTestInput(types.T_time.ToType(), []types.Time{types.MySQLTimeMax, 0, -types.MySQLTimeMax}, nil), NewFunctionTestInput(types.T_varchar.ToType(), []string{"00:00:01", "00:00:01", "-00:00:01"}, nil), NewFunctionTestResult(types.T_time.ToType(), false, []types.Time{0, types.Time(types.MicroSecsPerSec), 0}, []bool{true, false, true})},
-		{"duration sub", SubTime, NewFunctionTestInput(types.T_time.ToType(), []types.Time{types.MySQLTimeMax, 0, -types.MySQLTimeMax}, nil), NewFunctionTestInput(types.T_varchar.ToType(), []string{"-00:00:01", "-00:00:01", "00:00:01"}, nil), NewFunctionTestResult(types.T_time.ToType(), false, []types.Time{0, types.Time(types.MicroSecsPerSec), 0}, []bool{true, false, true})},
+		{"duration add", AddTime, NewFunctionTestInput(types.T_time.ToType(), []types.Time{types.MySQLTimeMax, 0, -types.MySQLTimeMax}, nil), NewFunctionTestInput(types.T_varchar.ToType(), []string{"00:00:01", "00:00:01", "-00:00:01"}, nil), NewFunctionTestResult(types.T_time.ToType(), false, []types.Time{types.MySQLTimeMax, types.Time(types.MicroSecsPerSec), -types.MySQLTimeMax}, []bool{false, false, false})},
+		{"duration sub", SubTime, NewFunctionTestInput(types.T_time.ToType(), []types.Time{types.MySQLTimeMax, 0, -types.MySQLTimeMax}, nil), NewFunctionTestInput(types.T_varchar.ToType(), []string{"-00:00:01", "-00:00:01", "00:00:01"}, nil), NewFunctionTestResult(types.T_time.ToType(), false, []types.Time{types.MySQLTimeMax, types.Time(types.MicroSecsPerSec), -types.MySQLTimeMax}, []bool{false, false, false})},
 		{"duration diff", TimeDiff[types.Time], NewFunctionTestInput(types.T_time.ToType(), []types.Time{types.MySQLTimeMax, 0, -types.MySQLTimeMax}, nil), NewFunctionTestInput(types.T_time.ToType(), []types.Time{-types.Time(types.MicroSecsPerSec), -types.Time(types.MicroSecsPerSec), types.Time(types.MicroSecsPerSec)}, nil), NewFunctionTestResult(types.T_time.ToType(), false, []types.Time{0, types.Time(types.MicroSecsPerSec), 0}, []bool{true, false, true})},
 		{"calendar sub", SubTime, NewFunctionTestInput(types.T_datetime.ToTypeWithScale(6), []types.Datetime{types.DatetimeEpoch, types.DatetimeFromClock(2024, 1, 1, 0, 0, 0, 0), types.DatetimeFromClock(9999, 12, 31, 23, 59, 59, 999999)}, nil), NewFunctionTestInput(types.T_varchar.ToType(), []string{"00:00:01", "-00:00:01", "-00:00:00.000001"}, nil), NewFunctionTestResult(types.T_datetime.ToTypeWithScale(6), false, []types.Datetime{0, types.DatetimeFromClock(2024, 1, 1, 0, 0, 1, 0), 0}, []bool{true, false, true})},
 	} {
@@ -1385,6 +1385,20 @@ func TestTimePublicNumericBoundary(t *testing.T) {
 	}
 }
 
+// The int64 TIME() overload still aborts the statement for values its parser
+// rejects; it never synthesizes a row-level NULL or a truncation warning.
+func TestTimeUnparseableNumericKeepsErroring(t *testing.T) {
+	proc := newTmpProcess(t)
+	warnings := &numericWarningSession{}
+	proc.WarningSink = warnings
+	tc := NewFunctionTestCase(proc,
+		[]FunctionTestInput{NewFunctionTestInput(types.T_int64.ToType(), []int64{99999999999}, nil)},
+		NewFunctionTestResult(types.T_time.ToType(), true, nil, nil), Int64ToTime)
+	ok, info := tc.RunAndFree()
+	require.True(t, ok, info)
+	require.Empty(t, warnings.warnings)
+}
+
 func TestPreparedTimeArithmeticTolerantInputs(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -1407,8 +1421,8 @@ func TestPreparedTimeArithmeticTolerantInputs(t *testing.T) {
 				"", tc.step, "bad", "bad", tc.step, tc.step, "", tc.step,
 			}, []bool{true, false, false, false, false, false, true, false})
 			want := NewFunctionTestResult(types.T_time.ToTypeWithScale(6), false,
-				[]types.Time{0, 0, 0, 0, types.TimeFromClock(false, 12, 0, 1, 123456), 0, 0, 0},
-				[]bool{true, true, true, true, false, true, true, true})
+				[]types.Time{0, 0, 0, 0, types.TimeFromClock(false, 12, 0, 1, 123456), types.MySQLTimeMax, 0, 0},
+				[]bool{true, true, true, true, false, false, true, true})
 			c := NewFunctionTestCase(proc, []FunctionTestInput{left, right}, want, tc.fn).
 				WithSelectList(&FunctionSelectList{AnyNull: true, SelectList: []bool{true, true, true, true, true, true, true, false}})
 			ok, info := c.RunAndFree()

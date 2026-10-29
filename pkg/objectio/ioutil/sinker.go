@@ -606,6 +606,9 @@ func (sinker *Sinker) fetchBuffer() (*batch.Batch, error) {
 	}
 
 	if err := bat.PreExtend(sinker.mp, objectio.BlockMaxRows); err != nil {
+		// Earlier vectors may already have allocated before a later one failed.
+		// The fetched batch is no longer owned by the freelist, so release it.
+		bat.Clean(sinker.mp)
 		return nil, err
 	}
 	return bat, nil
