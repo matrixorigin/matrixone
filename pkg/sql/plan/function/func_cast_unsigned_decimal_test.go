@@ -848,9 +848,11 @@ func TestUnsignedDecimalAdmissionTemporalEnumAndUnsupportedSources(t *testing.T)
 	vecTS := vector.MustFunctionResult[types.Timestamp](result).GetResultVector()
 	require.False(t, vecTS.GetNulls().Contains(0))
 
-	// Enum ordinals are non-negative by construction.
-	from = testutil.NewVector(1, types.T_enum.ToType(), proc.Mp(), false,
-		[]uint16{7})
+	// Enum ordinals are non-negative by construction. Append through
+	// types.Enum: testutil.NewVector appends plain uint16, which trips the
+	// race-build type check in container/vector for enum-typed vectors.
+	from = vector.NewVec(types.T_enum.ToType())
+	require.NoError(t, vector.AppendFixed(from, types.Enum(7), false, proc.Mp()))
 	result, err = runUnsignedDecimalAdmission(proc, from, target, types.T_enum.ToType(), 1,
 		unsignedDecimalAdmissionStrict, "d")
 	require.NoError(t, err)
