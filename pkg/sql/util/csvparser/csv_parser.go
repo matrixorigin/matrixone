@@ -377,7 +377,10 @@ func (parser *CSVParser) readRow(row []Field) ([]Field, error) {
 func (parser *CSVParser) decodeField(content string, i int) (string, bool, error) {
 	if parser.unterminatedAtEOF && i == len(parser.fieldIndexes)-1 {
 		prefix, suffix := content[:len(parser.quote)], content[len(parser.quote):]
-		if len(parser.escapedBy) > 0 {
+		// A single-byte enclosure takes precedence over the same escape byte
+		// in readQuotedToken. Its doubled instances have already been folded;
+		// unescaping them again would consume the following character.
+		if len(parser.escapedBy) > 0 && !(len(parser.quote) == 1 && parser.escapedBy == string(parser.quote)) {
 			suffix = unescape(suffix, "", parser.escFlavor, parser.escapedBy[0], parser.unescapeRegexp)
 		}
 		return prefix + suffix, false, nil
