@@ -42,7 +42,12 @@ func (c *Compile) constrainJSONAggregateOpaqueWorkers(qry *plan.Query) error {
 	if err != nil || !required {
 		return err
 	}
-	supported, err := remoteWorkersSupportProtocol(
+	// This constraint is optional placement: an unverifiable peer must fall
+	// back to the single-CN executor instead of failing the query. The
+	// placement variant only surfaces statement cancellation; required
+	// gates (pipeline encode and remote destination) keep their own
+	// error-propagating probe below.
+	supported, err := remoteWorkersSupportProtocolForPlacement(
 		c.proc, c.cnList, jsonAggregateOpaqueCapabilityVersion)
 	if err != nil {
 		return err

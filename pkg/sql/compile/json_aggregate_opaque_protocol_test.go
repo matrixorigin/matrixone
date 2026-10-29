@@ -326,6 +326,10 @@ func TestJSONAggregateOpaqueUnavailableDestination(t *testing.T) {
 				require.Zero(t, client.calls)
 			} else if name == "missing-node" {
 				require.ErrorContains(t, err, "target CN protocol capability")
+			} else if name == "probe-failure" {
+				// The send gate retains the probe cause rather than collapsing
+				// it into a version rejection: the send is still refused.
+				require.ErrorContains(t, err, "probe failed")
 			} else {
 				require.ErrorContains(t, err, fmt.Sprintf("MORPC protocol version %d", jsonAggregateOpaqueCapabilityVersion))
 			}
