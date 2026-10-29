@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
@@ -331,4 +332,60 @@ func TestControlledInsertReleaseCallbackPreservesPrepaidGrowth(t *testing.T) {
 	require.Zero(t, credits.balance)
 	require.Zero(t, s.dataMP.AllocatedBytes())
 	_ = proc
+}
+
+type blockedImportFS struct {
+	fileservice.FileService
+	entered chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (fs *blockedImportFS) Write(ctx context.Context, v fileservice.IOVector) error {
+	fs.once.Do(func() { close(fs.entered) })
+	select {
+	case <-fs.release:
+		return fs.FileService.Write(ctx, v)
+	case <-ctx.Done():
+		return context.Cause(ctx)
+	}
+}
+
+func TestControlledInsertDefaultImportPipelinesUpload(t *testing.T) {
+	credits := &controlledTestThrottler{t: t, grants: 1}
+	proc, op, ws := controlledInsertFixture(t, credits)
+	ctx, cancel := context.WithTimeout(proc.Ctx, 10*time.Second)
+	t.Cleanup(cancel)
+	proc.Ctx = ctx
+	require.Nil(t, ctx.Value(ioutil.PipelineFlushKey), "ordinary LOAD needs no backfill context flag")
+	s := op.ctr.controlled
+	fs := &blockedImportFS{FileService: s.fs, entered: make(chan struct{}), release: make(chan struct{})}
+	s.fs = fs
+	var once sync.Once
+	unblock := func() { once.Do(func() { close(fs.release) }) }
+	t.Cleanup(unblock)
+	b := batch.NewWithSize(2)
+	t.Cleanup(func() { b.Clean(proc.Mp()) })
+	b.Vecs[0] = testutil.MakeInt64Vector([]int64{2, 1}, nil, proc.Mp())
+	b.Vecs[1] = testutil.MakeVarcharVector([]string{"b", "a"}, nil, proc.Mp())
+	b.SetRowCount(2)
+	require.NoError(t, s.append(proc, op.OpAnalyzer, b))
+	require.NoError(t, s.flushPending(proc), "boundary flush submits instead of awaiting S3")
+	select {
+	case <-fs.entered:
+	case <-ctx.Done():
+		t.Fatal(context.Cause(ctx))
+	}
+	require.Zero(t, s.written, "an incomplete upload must not produce transaction metadata")
+	unblock()
+	require.NoError(t, s.flush(proc, op.OpAnalyzer))
+	frame, err := s.next()
+	require.NoError(t, err)
+	require.NotNil(t, frame)
+	stats := objectio.ObjectStats(frame.Vecs[1].GetBytesAt(0))
+	require.EqualValues(t, 2, stats.Rows())
+	require.Zero(t, credits.balance)
+	lease, err := ws.AcquireIO(ctx, ws.IOBytes())
+	require.NoError(t, err)
+	lease.Release()
 }

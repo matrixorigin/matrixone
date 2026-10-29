@@ -54,7 +54,7 @@ func admissionFixture(t *testing.T, total, limit, rss int64) (*memThrottler, *me
 		require.Zero(t, c.dataReserved.Load())
 		require.Zero(t, c.inputPromise.Load())
 		require.Zero(t, c.workspacePromise.Load())
-		require.False(t, c.ioBusy)
+		require.Zero(t, c.ioUsed)
 	})
 	return m, c, queued
 }
@@ -69,6 +69,87 @@ func await[T any](t *testing.T, ch <-chan T) T {
 		var zero T
 		return zero
 	}
+}
+
+func TestWorkingSetWeightedIOTransferAndShrink(t *testing.T) {
+	m, c, queued := admissionFixture(t, 1000, 900, 0)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	t.Cleanup(cancel)
+	w, err := m.ReserveWorkingSetCandidatesUntilFit(ctx, []WorkingSetSpec{{UnitBytes: 1, IOBytes: 300}})
+	require.NoError(t, err)
+	t.Cleanup(w.Close)
+	require.Equal(t, "working-set", await(t, queued))
+	first, err := w.AcquireIO(ctx, 200)
+	require.NoError(t, err)
+	t.Cleanup(first.Release)
+	require.Equal(t, "io", await(t, queued))
+	job := first.Transfer()
+	require.NotNil(t, job)
+	t.Cleanup(job.Release)
+	first.Release()
+	require.ErrorIs(t, first.Shrink(0), ErrWorkingSetClosed)
+	require.Error(t, job.Shrink(201))
+	done := make(chan *WorkspaceLease, 1)
+	joined := false
+	go func() {
+		lease, e := w.AcquireIO(ctx, 200)
+		if e == nil {
+			done <- lease
+		} else {
+			done <- nil
+		}
+	}()
+	t.Cleanup(func() {
+		cancel()
+		if !joined {
+			if lease := await(t, done); lease != nil {
+				lease.Release()
+			}
+		}
+	})
+	require.Equal(t, "io", await(t, queued))
+	try, err := w.TryAcquireIO(ctx, 1)
+	require.NoError(t, err)
+	require.Nil(t, try, "optional upload must not bypass the older request")
+	require.NoError(t, job.Shrink(100))
+	second := await(t, done)
+	joined = true
+	require.NotNil(t, second)
+	t.Cleanup(second.Release)
+	c.mu.Lock()
+	require.EqualValues(t, 300, c.ioUsed)
+	c.mu.Unlock()
+	w.Close()
+	_, err = w.TryAcquireIO(ctx, 1)
+	require.ErrorIs(t, err, ErrWorkingSetClosed)
+	job.Release()
+	require.EqualValues(t, 300, c.workspacePromise.Load(), "last upload still owns the promise")
+	second.Release()
+	require.Zero(t, c.workspacePromise.Load())
+
+	large, err := m.ReserveWorkingSetCandidatesUntilFit(ctx, []WorkingSetSpec{{UnitBytes: 1, IOBytes: 300}})
+	require.NoError(t, err)
+	t.Cleanup(large.Close)
+	small, err := m.ReserveWorkingSetCandidatesUntilFit(ctx, []WorkingSetSpec{{UnitBytes: 1, IOBytes: 100}})
+	require.NoError(t, err)
+	t.Cleanup(small.Close)
+	uploads := make([]*WorkspaceLease, 0, 3)
+	for range 3 {
+		lease, err := small.AcquireIO(ctx, 100)
+		require.NoError(t, err)
+		t.Cleanup(lease.Release)
+		uploads = append(uploads, lease)
+	}
+	large.Close()
+	require.EqualValues(t, 300, c.workspacePromise.Load(), "retiring maximum cannot uncharge live uploads")
+	require.NoError(t, uploads[0].Shrink(50))
+	require.EqualValues(t, 250, c.workspacePromise.Load())
+	for _, lease := range uploads {
+		lease.Release()
+	}
+	require.EqualValues(t, 100, c.workspacePromise.Load(), "the open small ticket retains its minimum workspace")
+	small.Close()
+	require.Zero(t, c.workspacePromise.Load())
 }
 
 func TestMemoryAdmissionFIFOAndCancellation(t *testing.T) {
@@ -240,7 +321,7 @@ func TestWorkingSetDataFullIOProgressAndTransfer(t *testing.T) {
 	require.Nil(t, io.Transfer(), "a transferred handle cannot transfer twice")
 	io.Release()
 	c.mu.Lock()
-	require.True(t, c.ioBusy, "releasing the sender cannot release the job's slot")
+	require.EqualValues(t, 200, c.ioUsed, "releasing the sender cannot release the job's bytes")
 	c.mu.Unlock()
 	w.Close()
 	c.mu.Lock()

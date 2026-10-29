@@ -129,6 +129,8 @@ type s3WriterDelegate struct {
 	outputFrameLimit int64
 	activeWorkspace  *rscthrottler.WorkspaceLease
 	activeMP         *mpool.MPool
+	writeUnit        int64
+	writeCounters    *perfcounter.CounterSet
 
 	batchSize      uint64
 	flushThreshold uint64
@@ -234,10 +236,7 @@ func (writer *s3WriterDelegate) ensureInsertSinkers(proc *process.Process) error
 		if len(updateCtx.InsertCols) == 0 {
 			continue
 		}
-		unit := rscthrottler.BatchBytes(writer.memController.throttler)
-		if proc.Base.ImportMemory != nil {
-			unit = min(unit, proc.Base.ImportMemory.UnitBytes)
-		}
+		unit := writer.writerUnit(proc)
 		opts := []ioutil.SinkerOption{
 			ioutil.WithBuffer(writer.insertFreeLists[i], false),
 			ioutil.WithBufferBytes(unit),
@@ -245,15 +244,52 @@ func (writer *s3WriterDelegate) ensureInsertSinkers(proc *process.Process) error
 		}
 		if proc.Base.ImportMemory != nil {
 			opts = append(opts, ioutil.WithMemoryWorkspace(proc.Base.ImportMemory.WorkingSet))
+			if writer.pipelineInsert(proc) {
+				opts = append(opts, ioutil.WithPipelineFlush())
+			}
 		}
 		if v, ok := proc.Ctx.Value(ioutil.PipelineFlushKey).(bool); ok && v {
 			opts = append(opts, ioutil.WithPipelineFlush())
 		}
+		threshold := -1
+		if writer.pipelineInsert(proc) {
+			threshold = int(unit)
+		}
 		writer.insertSinkers[i] = colexec.NewCNS3DataWriter(
-			writer.memoryPool(proc), fs, updateCtx.TableDef, -1, false,
+			writer.memoryPool(proc), fs, updateCtx.TableDef, threshold, false,
 			opts...)
 	}
 	return nil
+}
+
+func (writer *s3WriterDelegate) pipelineInsert(proc *process.Process) bool {
+	return proc.Base.ImportMemory != nil && writer.action == actionInsert && InsertOnlyOutput(writer.updateCtxs)
+}
+
+func (writer *s3WriterDelegate) insertWriteContext(ctx context.Context) context.Context {
+	if writer.writeCounters == nil {
+		writer.writeCounters = new(perfcounter.CounterSet)
+	}
+	return perfcounter.AttachS3RequestKey(ctx, writer.writeCounters)
+}
+
+func (writer *s3WriterDelegate) writerUnit(proc *process.Process) int64 {
+	unit := rscthrottler.BatchBytes(writer.memController.throttler)
+	if proc.Base.ImportMemory == nil {
+		return unit
+	}
+	if !writer.pipelineInsert(proc) {
+		return min(unit, proc.Base.ImportMemory.UnitBytes)
+	}
+	if writer.writeUnit == 0 {
+		schemas := make([][]types.Type, 0, len(writer.updateCtxs))
+		for _, update := range writer.updateCtxs {
+			_, schema, _, _, _ := colexec.GetSequmsAttrsSortKeyIdxFromTableDef(update.TableDef)
+			schemas = append(schemas, schema)
+		}
+		writer.writeUnit = ioutil.WriterBufferBytes(proc.Base.ImportMemory.WorkingSet, unit, schemas)
+	}
+	return writer.writeUnit
 }
 
 func (writer *s3WriterDelegate) cleanDeleteBatches(mp *mpool.MPool) {
@@ -525,10 +561,7 @@ func (writer *s3WriterDelegate) windowEnd(bat *batch.Batch, start int, unit int6
 func (writer *s3WriterDelegate) append(proc *process.Process, analyzer process.Analyzer, inBatch *batch.Batch) error {
 	writer.beginMemoryMutation()
 	defer writer.endMemoryMutation()
-	unit := rscthrottler.BatchBytes(writer.memController.throttler)
-	if proc.Base.ImportMemory != nil {
-		unit = min(unit, proc.Base.ImportMemory.UnitBytes)
-	}
+	unit := writer.writerUnit(proc)
 	if writer.flushThreshold > uint64(unit) {
 		writer.flushThreshold = uint64(unit)
 	}
@@ -604,10 +637,7 @@ func (writer *s3WriterDelegate) appendWindow(
 	defer writer.reconcileMemory()
 	// Reserve every projection before Write/Extend can copy it, including a
 	// single wide batch that already exceeds the normal flush threshold.
-	unit := rscthrottler.BatchBytes(writer.memController.throttler)
-	if proc.Base.ImportMemory != nil {
-		unit = min(unit, proc.Base.ImportMemory.UnitBytes)
-	}
+	unit := writer.writerUnit(proc)
 	// Keep the retained aggregate below one shared byte unit. Flush before a
 	// crossing window so W's bound need not include two complete units.
 	windowBytes := uint64(writer.windowFootprint(inBatch, 0, inBatch.RowCount()))
@@ -615,11 +645,13 @@ func (writer *s3WriterDelegate) appendWindow(
 		if err = writer.sortAndSync(proc, analyzer); err != nil {
 			return err
 		}
-		if err = writer.flushInsertSinkers(proc, analyzer); err != nil {
+		if err = writer.submitInsertSinkers(proc, analyzer); err != nil {
 			return err
 		}
-		if err = writer.closeInsertSinkers(writer.memoryPool(proc)); err != nil {
-			return err
+		if !writer.pipelineInsert(proc) {
+			if err = writer.closeInsertSinkers(writer.memoryPool(proc)); err != nil {
+				return err
+			}
 		}
 		if err = writer.spoolMetadata(proc, false); err != nil {
 			return err
@@ -642,7 +674,22 @@ func (writer *s3WriterDelegate) appendWindow(
 		if err = writer.ensureOutputSlot(proc); err != nil {
 			return err
 		}
-		ioLease, err = proc.Base.ImportMemory.AcquireIO(proc.Ctx)
+		need := proc.Base.ImportMemory.WorkingSet.IOBytes()
+		if writer.pipelineInsert(proc) {
+			need = 0
+			for _, update := range writer.updateCtxs {
+				if len(update.InsertCols) == 0 {
+					continue
+				}
+				projection := inBatch.SelectColumns(update.InsertCols, nil)
+				peak, _, boundErr := ioutil.BatchIOEnvelope(projection, unit)
+				if boundErr != nil {
+					return boundErr
+				}
+				need = max(need, peak)
+			}
+		}
+		ioLease, err = proc.Base.ImportMemory.WorkingSet.AcquireIO(proc.Ctx, need)
 		if err != nil {
 			return err
 		}
@@ -667,11 +714,15 @@ func (writer *s3WriterDelegate) appendWindow(
 	}
 
 	mp := writer.memoryPool(proc)
+	writeCtx := proc.Ctx
+	if writer.pipelineInsert(proc) {
+		writeCtx = writer.insertWriteContext(writeCtx)
+	}
 	writeProjection := func(w *colexec.CNS3Writer, b *batch.Batch) error {
 		if direct {
-			return w.WriteBorrowedToFile(proc.Ctx, b, ioLease)
+			return w.WriteBorrowedToFile(writeCtx, b, ioLease)
 		}
-		return w.Write(proc.Ctx, b)
+		return w.Write(writeCtx, b)
 	}
 
 	// Route insert columns directly to per-table sinkers (no clone).
@@ -791,6 +842,13 @@ func (writer *s3WriterDelegate) appendWindow(
 
 	writer.batchSize += windowBytes
 
+	if !direct && writer.pipelineInsert(proc) && writer.batchSize >= writer.flushThreshold {
+		if err = writer.submitInsertSinkers(proc, analyzer); err != nil {
+			return err
+		}
+		writer.batchSize = 0
+		return writer.spoolMetadata(proc, false)
+	}
 	if direct || writer.batchSize >= writer.flushThreshold {
 		if err = writer.sortAndSync(proc, analyzer); err != nil {
 			return err
@@ -1173,15 +1231,58 @@ func (writer *s3WriterDelegate) fillInsertBlockInfo(
 }
 
 func (writer *s3WriterDelegate) flushInsertSinkers(proc *process.Process, analyzer process.Analyzer) (err error) {
+	return writer.flushInsertSinkersMode(proc, analyzer, true)
+}
+
+func (writer *s3WriterDelegate) submitInsertSinkers(proc *process.Process, analyzer process.Analyzer) error {
+	wait := !writer.pipelineInsert(proc)
+	return writer.flushInsertSinkersMode(proc, analyzer, wait)
+}
+
+func (writer *s3WriterDelegate) flushInsertSinkersMode(proc *process.Process, analyzer process.Analyzer, wait bool) (err error) {
+	writer.beginMemoryMutation()
+	defer writer.endMemoryMutation()
+	bounded := writer.pipelineInsert(proc)
 	if err = writer.ensureOutputSlot(proc); err != nil {
 		return err
 	}
-	counterSet := analyzer.GetOpCounterSet()
-	writeCtx := perfcounter.AttachS3RequestKey(proc.Ctx, counterSet)
+	var counterSet *perfcounter.CounterSet
+	var writeCtx context.Context
+	if bounded {
+		writeCtx = writer.insertWriteContext(proc.Ctx)
+		counterSet = writer.writeCounters
+	} else {
+		counterSet = analyzer.GetOpCounterSet()
+		writeCtx = perfcounter.AttachS3RequestKey(proc.Ctx, counterSet)
+	}
+	if bounded {
+		for _, s3w := range writer.insertSinkers {
+			if s3w != nil {
+				if err := s3w.Flush(writeCtx); err != nil {
+					return err
+				}
+			}
+		}
+	}
 
 	// Sync all insert sinkers — flushes remaining in-memory data to S3.
 	for i, s3w := range writer.insertSinkers {
 		if s3w == nil {
+			continue
+		}
+		if bounded {
+			if wait {
+				if _, err := s3w.Sync(writeCtx); err != nil {
+					return err
+				}
+			}
+			stats, err := s3w.TakeCompletedStats()
+			if err != nil {
+				return err
+			}
+			if err := writer.spoolInsertStats(proc, i, stats); err != nil {
+				return err
+			}
 			continue
 		}
 		stats, syncErr := s3w.Sync(writeCtx)
@@ -1203,9 +1304,31 @@ func (writer *s3WriterDelegate) flushInsertSinkers(proc *process.Process, analyz
 			return
 		}
 	}
-	analyzer.AddS3RequestCount(counterSet)
-	analyzer.AddFileServiceCacheInfo(counterSet)
-	analyzer.AddDiskIO(counterSet)
+	if wait {
+		analyzer.AddS3RequestCount(counterSet)
+		analyzer.AddFileServiceCacheInfo(counterSet)
+		analyzer.AddDiskIO(counterSet)
+		counterSet.Reset()
+	}
+	return nil
+}
+
+func (writer *s3WriterDelegate) spoolInsertStats(proc *process.Process, idx int, stats []objectio.ObjectStats) error {
+	if len(stats) == 0 {
+		return nil
+	}
+	mp := writer.metadataPool()
+	metadata := colexec.AllocCNS3ResultBat(false, false)
+	defer metadata.Clean(mp)
+	for i := range stats {
+		if err := colexec.ExpandObjectStatsToBatch(mp, false, metadata, true, stats[i]); err != nil {
+			return err
+		}
+		if err := writer.spoolFrame(proc, actionInsert, idx, uint64(stats[i].Rows()), "", metadata); err != nil {
+			return err
+		}
+		metadata.CleanOnlyData()
+	}
 	return nil
 }
 
@@ -1411,6 +1534,8 @@ func (writer *s3WriterDelegate) closeMetadata() error {
 	writer.metadataRead = 0
 	writer.metadataPass = 0
 	writer.tailFlushed = false
+	writer.writeUnit = 0
+	writer.writeCounters = nil
 	return err
 }
 

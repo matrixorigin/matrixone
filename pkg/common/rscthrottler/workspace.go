@@ -78,7 +78,7 @@ type WorkingSetSpec struct {
 }
 
 // WorkingSet is admitted before execution locks and the first input read.
-// Input credits and the single process IO slot cannot borrow from each other.
+// Input credits and the process IO byte budget cannot borrow from each other.
 type WorkingSet struct {
 	coordinator   *memoryCoordinator
 	throttler     *memThrottler
@@ -277,14 +277,15 @@ func (w *WorkingSet) AcquireIO(ctx context.Context, need int64) (*WorkspaceLease
 			c.mu.Unlock()
 			return nil, err
 		}
-		if !c.ioBusy && len(c.ioQueue) > 0 && c.ioQueue[0] == n {
-			c.ioBusy = true
+		if need <= c.workspacePromise.Load()-c.ioUsed && len(c.ioQueue) > 0 && c.ioQueue[0] == n {
+			c.ioUsed += need
 			c.ioQueue = c.ioQueue[1:]
 			if len(c.ioQueue) == 0 {
 				c.ioQueue = nil
 			}
+			c.notifyIOLocked()
 			c.mu.Unlock()
-			return &WorkspaceLease{ticket: w, bytes: w.IOBytes(), valid: true}, nil
+			return &WorkspaceLease{ticket: w, bytes: need, valid: true}, nil
 		}
 		c.mu.Unlock()
 		select {
@@ -295,7 +296,56 @@ func (w *WorkingSet) AcquireIO(ctx context.Context, need int64) (*WorkspaceLease
 	}
 }
 
-func (l *WorkspaceLease) Capacity() int64 { return l.bytes }
+// TryAcquireIO is for a job already holding workspace. It must finish in its
+// current lease when another job owns the remaining bytes; it must never wait.
+func (w *WorkingSet) TryAcquireIO(ctx context.Context, need int64) (*WorkspaceLease, error) {
+	if need < 0 || need > w.IOBytes() {
+		return nil, &RequestTooLargeError{need, w.IOBytes()}
+	}
+	c := w.coordinator
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if err := context.Cause(ctx); err != nil {
+		return nil, err
+	}
+	if w.closed {
+		return nil, ErrWorkingSetClosed
+	}
+	if len(c.ioQueue) > 0 || need > c.workspacePromise.Load()-c.ioUsed {
+		return nil, nil
+	}
+	w.ioRefs++
+	c.ioUsed += need
+	return &WorkspaceLease{ticket: w, bytes: need, valid: true}, nil
+}
+
+func (l *WorkspaceLease) Capacity() int64 {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.bytes
+}
+
+// Shrink returns retired source/encoding capacity while the upload owner keeps
+// its complete remaining allocation bound. It never needs another admission.
+func (l *WorkspaceLease) Shrink(keep int64) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if !l.valid {
+		return ErrWorkingSetClosed
+	}
+	if keep < 0 || keep > l.bytes {
+		return &RequestTooLargeError{keep, l.bytes}
+	}
+	c := l.ticket.coordinator
+	c.mu.Lock()
+	c.ioUsed -= l.bytes - keep
+	l.bytes = keep
+	c.refreshWorkspaceLocked()
+	c.notifyIOLocked()
+	c.notifyAdmissionLocked()
+	c.mu.Unlock()
+	return nil
+}
 
 // Transfer invalidates this handle. The receiving job becomes the sole owner.
 func (l *WorkspaceLease) Transfer() *WorkspaceLease {
@@ -325,9 +375,10 @@ func (l *WorkspaceLease) Release() {
 	l.mu.Unlock()
 	c := w.coordinator
 	c.mu.Lock()
-	c.ioBusy = false
+	c.ioUsed -= l.bytes
 	w.ioRefs--
 	w.releasePromisesLocked()
+	c.refreshWorkspaceLocked()
 	c.notifyIOLocked()
 	c.mu.Unlock()
 }
@@ -354,16 +405,22 @@ func (w *WorkingSet) releasePromisesLocked() {
 	}
 	if w.closed && w.ioRefs == 0 && !w.ioReleased {
 		w.ioReleased = true
-		var maximum int64
-		for ticket := range c.tickets {
-			if !ticket.ioReleased {
-				maximum = max(maximum, ticket.IOBytes())
-			}
-		}
-		c.workspacePromise.Store(maximum)
+		c.refreshWorkspaceLocked()
 	}
 	if w.inputReleased && w.ioReleased {
 		delete(c.tickets, w)
 	}
 	c.notifyAdmissionLocked()
+}
+
+func (c *memoryCoordinator) refreshWorkspaceLocked() {
+	// Other tickets can still own several small leases admitted under a
+	// retiring ticket's larger shared maximum. Never retire their live bytes.
+	maximum := c.ioUsed
+	for ticket := range c.tickets {
+		if !ticket.ioReleased {
+			maximum = max(maximum, ticket.IOBytes())
+		}
+	}
+	c.workspacePromise.Store(maximum)
 }

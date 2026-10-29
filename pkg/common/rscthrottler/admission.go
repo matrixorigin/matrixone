@@ -50,7 +50,7 @@ type memoryCoordinator struct {
 	mu               sync.Mutex
 	queue            []*admissionWaiter
 	ioQueue          []*ioWaiter
-	ioBusy           bool
+	ioUsed           int64
 	tickets          map[*WorkingSet]struct{}
 	dataReserved     atomic.Int64
 	sampleCount      atomic.Uint64
@@ -573,7 +573,7 @@ func (m *memThrottler) reserveWorkingSetCandidates(ctx context.Context, specs []
 					break
 				}
 			}
-			hasOwners := len(c.tickets) > 0 || c.dataReserved.Load() > 0 || c.ioBusy
+			hasOwners := len(c.tickets) > 0 || c.dataReserved.Load() > 0 || c.ioUsed > 0
 			// An idle process can retain reclaimable cache/native pages from the
 			// previous statement. Before accepting a smaller unit, give its largest
 			// statically possible candidate one recovery attempt. Keep this FIFO

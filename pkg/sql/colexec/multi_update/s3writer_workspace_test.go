@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/binary"
 	"os"
+	"sync"
 	"testing"
 	"time"
 
@@ -25,6 +26,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -135,6 +138,85 @@ func TestS3WriterZeroDataCreditsSpillsUsingWorkspace(t *testing.T) {
 	lease, err := ws.AcquireIO(ctx, 128<<20)
 	require.NoError(t, err)
 	lease.Release()
+}
+
+type blockedWriterFS struct {
+	fileservice.FileService
+	entered chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (fs *blockedWriterFS) Write(ctx context.Context, v fileservice.IOVector) error {
+	fs.once.Do(func() { close(fs.entered) })
+	select {
+	case <-fs.release:
+		return fs.FileService.Write(ctx, v)
+	case <-ctx.Done():
+		return context.Cause(ctx)
+	}
+}
+
+func TestS3WriterDefaultImportPipelinesAllProjections(t *testing.T) {
+	_, ctrl, proc := prepareTestCtx(t, true)
+	fs := proc.GetFileService()
+	t.Cleanup(func() { fs.Close(context.Background()) })
+	t.Cleanup(proc.Free)
+	ctx, cancel := context.WithTimeout(proc.Ctx, 10*time.Second)
+	t.Cleanup(cancel)
+	proc.Ctx = ctx
+	require.Nil(t, ctx.Value(ioutil.PipelineFlushKey))
+	blocked := &blockedWriterFS{FileService: fs, entered: make(chan struct{}), release: make(chan struct{})}
+	proc.Base.FileService = blocked
+	var releaseOnce sync.Once
+	unblock := func() { releaseOnce.Do(func() { close(blocked.release) }) }
+	owner := rscthrottler.NewMemThrottler("projection-upload", 1, rscthrottler.WithConstLimit(8<<30))
+	ws, err := owner.(rscthrottler.WorkingSetThrottler).ReserveWorkingSetCandidatesUntilFit(ctx, []rscthrottler.WorkingSetSpec{{
+		UnitBytes: 1 << 20, Inputs: []rscthrottler.InputSlotSpec{{Name: "csv", Count: 1, Bytes: 8 << 20}, {Name: "output", Count: 1, Bytes: 8 << 20}}, IOBytes: 128 << 20,
+	}})
+	require.NoError(t, err)
+	t.Cleanup(ws.Close)
+	proc.Base.ImportMemory = &process.ImportMemory{WorkingSet: ws, UnitBytes: 1 << 20, OutputBytes: 8 << 20, IOBytes: 128 << 20}
+	tc := buildTestCase(prepareTestInsertMultiUpdateCtx(true, true), prepareTestEng(ctrl, false), nil, 0, UpdateWriteS3, false)
+	t.Cleanup(func() { tc.op.Free(proc, false, nil) })
+	t.Cleanup(unblock)
+	t.Cleanup(cancel)
+	require.NoError(t, tc.op.Prepare(proc))
+	w := tc.op.ctr.s3Writer
+	credits := &admissionThrottler{capacity: 1 << 20}
+	w.memController.throttler = credits
+	b := batch.NewWithSize(6)
+	t.Cleanup(func() { b.Clean(proc.Mp()) })
+	b.Vecs[0] = testutil.MakeInt64Vector([]int64{2, 1}, nil, proc.Mp())
+	b.Vecs[1] = testutil.MakeVarcharVector([]string{"b", "a"}, nil, proc.Mp())
+	b.Vecs[2] = testutil.MakeInt32Vector([]int32{20, 10}, nil, proc.Mp())
+	b.Vecs[3] = testutil.MakeInt32Vector([]int32{20, 10}, nil, proc.Mp())
+	b.Vecs[4] = testutil.MakeVarcharVector([]string{"u2", "u1"}, nil, proc.Mp())
+	b.Vecs[5] = testutil.MakeVarcharVector([]string{"s2", "s1"}, nil, proc.Mp())
+	b.SetRowCount(2)
+	require.NoError(t, w.append(proc, tc.op.OpAnalyzer, b))
+	require.NoError(t, w.submitInsertSinkers(proc, tc.op.OpAnalyzer))
+	select {
+	case <-blocked.entered:
+	case <-ctx.Done():
+		t.Fatal(context.Cause(ctx))
+	}
+	require.Zero(t, w.metadataWritten)
+	unblock()
+	var rows uint64
+	for {
+		require.NoError(t, w.flushTailAndWriteToOutput(proc, tc.op.OpAnalyzer))
+		if w.outputBat == nil {
+			break
+		}
+		for _, n := range vector.MustFixedColNoTypeCheck[uint64](w.outputBat.Vecs[2]) {
+			rows += n
+		}
+	}
+	require.EqualValues(t, 6, rows, "base, unique and regular index each persist both rows")
+	require.NoError(t, w.free(proc))
+	require.Zero(t, credits.reserved)
+	require.False(t, credits.invalidRelease)
 }
 
 func TestUncommittedDeleteDedupSpoolsAcrossWindows(t *testing.T) {

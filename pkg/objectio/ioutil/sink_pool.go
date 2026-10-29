@@ -36,9 +36,13 @@ import (
 //
 //	Main goroutine → [sinkChan] → N sink workers → [syncChan] → M sync workers
 //
-// Memory is bounded globally:
+// Legacy jobs are bounded by the existing worker and queue counts:
 //
 //	(sinkChan cap + N) × 128MB raw + (syncChan cap + M) × compressed size
+//
+// Admitted imports additionally transfer a byte-counted W lease before queue
+// publication. Workers never wait for another W. The shared byte bound remains
+// in force across both encoding and upload, including queued jobs.
 type SinkPool struct {
 	sinkChan chan *poolSinkJob
 	syncChan chan *poolSyncJob
@@ -56,16 +60,29 @@ type poolSinkJob struct {
 	mp             *mpool.MPool
 	fs             fileservice.FileService
 	result         *pipelineResult
-	workspace      *rscthrottler.WorkingSet
+	lease          *rscthrottler.WorkspaceLease
+	ioMP           *mpool.MPool
+	uploadBytes    int64
 	sourceReleased func()
 }
 
 func (job *poolSinkJob) releaseSource() {
 	freeBatches(job.data, job.mp)
 	job.data = nil
-	if job.sourceReleased != nil {
-		job.sourceReleased()
+	if fn := job.sourceReleased; fn != nil {
+		job.sourceReleased = nil
+		fn()
 	}
+}
+
+func (job *poolSinkJob) discard() {
+	job.releaseSource()
+	if job.ioMP != nil {
+		mpool.DeleteMPool(job.ioMP)
+		job.ioMP = nil
+	}
+	job.lease.Release()
+	job.lease = nil
 }
 
 type poolSyncJob struct {
@@ -153,25 +170,13 @@ func (p *SinkPool) runSinkWorker() {
 	for job := range p.sinkChan {
 		r := job.result
 		if r.hasError() {
-			job.releaseSource()
+			job.discard()
 			r.pending.Done()
 			continue
 		}
 
 		sinkStart := time.Now()
-		var workspace *rscthrottler.WorkspaceLease
-		var ioMP *mpool.MPool
-		if job.workspace != nil {
-			var err error
-			workspace, err = job.workspace.AcquireIO(r.ctx, job.workspace.IOBytes())
-			if err != nil {
-				job.releaseSource()
-				r.setError(err)
-				r.pending.Done()
-				continue
-			}
-			ioMP = mpool.MustNew("sink-pool-io")
-		}
+		workspace, ioMP := job.lease, job.ioMP
 		factoryMP := job.mp
 		if ioMP != nil {
 			factoryMP = ioMP
@@ -199,38 +204,54 @@ func (p *SinkPool) runSinkWorker() {
 
 		if sinkErr != nil {
 			fSinker.Close()
-			mpool.DeleteMPool(ioMP)
-			if workspace != nil {
-				workspace.Release()
-			}
+			job.discard()
 			r.setError(sinkErr)
 			r.pending.Done()
 			continue
+		}
+		if workspace != nil {
+			if err := workspace.Shrink(job.uploadBytes); err != nil {
+				fSinker.Close()
+				job.discard()
+				r.setError(err)
+				r.pending.Done()
+				continue
+			}
 		}
 
 		// Forward to sync worker. Do NOT call r.pending.Done() here;
 		// the sync worker calls it after completing the IO.
 		forwarded := workspace.Transfer()
+		job.lease, job.ioMP = nil, nil
+		_ = p.enqueueSync(&poolSyncJob{fSinker: fSinker, result: r, workspace: forwarded, ioMP: ioMP})
+	}
+}
+
+// The caller has already counted pending and transferred complete ownership.
+// Upload never acquires another workspace or ordinary-data grant.
+func (p *SinkPool) enqueueSync(job *poolSyncJob) (err error) {
+	r := job.result
+	p.closeMu.RLock()
+	defer p.closeMu.RUnlock()
+	select {
+	case <-p.done:
+		err = context.Canceled
+	default:
 		select {
-		case p.syncChan <- &poolSyncJob{fSinker: fSinker, result: r, workspace: forwarded, ioMP: ioMP}:
+		case p.syncChan <- job:
+			return nil
 		case <-r.ctx.Done():
-			fSinker.Close()
-			mpool.DeleteMPool(ioMP)
-			if forwarded != nil {
-				forwarded.Release()
-			}
-			r.setError(context.Cause(r.ctx))
-			r.pending.Done()
+			err = context.Cause(r.ctx)
 		case <-p.done:
-			fSinker.Close()
-			mpool.DeleteMPool(ioMP)
-			if forwarded != nil {
-				forwarded.Release()
-			}
-			r.setError(context.Canceled)
-			r.pending.Done()
+			err = context.Canceled
 		}
 	}
+	job.fSinker.Close()
+	mpool.DeleteMPool(job.ioMP)
+	job.workspace.Release()
+	r.setError(err)
+	r.pending.Done()
+	return err
 }
 
 func (p *SinkPool) runSyncWorker() {
@@ -273,7 +294,7 @@ func (p *SinkPool) runSyncWorker() {
 func (p *SinkPool) Submit(job *poolSinkJob) error {
 	r := job.result
 	if err := r.getError(); err != nil {
-		job.releaseSource()
+		job.discard()
 		return err
 	}
 	r.pending.Add(1)
@@ -287,8 +308,8 @@ func (p *SinkPool) Submit(job *poolSinkJob) error {
 	// while any RLock is held.
 	select {
 	case <-p.done:
+		job.discard()
 		r.pending.Done()
-		job.releaseSource()
 		return context.Canceled
 	default:
 	}
@@ -296,8 +317,8 @@ func (p *SinkPool) Submit(job *poolSinkJob) error {
 	// Fast path: if the pipeline context is already cancelled, don't enqueue.
 	select {
 	case <-r.ctx.Done():
+		job.discard()
 		r.pending.Done()
-		job.releaseSource()
 		if err := r.getError(); err != nil {
 			return err
 		}
@@ -309,15 +330,15 @@ func (p *SinkPool) Submit(job *poolSinkJob) error {
 	case p.sinkChan <- job:
 		return nil
 	case <-r.ctx.Done():
+		job.discard()
 		r.pending.Done()
-		job.releaseSource()
 		if err := r.getError(); err != nil {
 			return err
 		}
 		return context.Cause(r.ctx)
 	case <-p.done:
+		job.discard()
 		r.pending.Done()
-		job.releaseSource()
 		return context.Canceled
 	}
 }
@@ -331,7 +352,9 @@ func (p *SinkPool) Close() {
 	close(p.sinkChan)
 	p.closeMu.Unlock()
 	p.sinkWg.Wait()
+	p.closeMu.Lock()
 	close(p.syncChan)
+	p.closeMu.Unlock()
 	p.syncWg.Wait()
 }
 
