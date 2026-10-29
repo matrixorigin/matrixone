@@ -90,6 +90,15 @@ select y from hit_db_bvt.hit_view_bvt order by y;
 -- @session:id=1&user=sys:hit_user_bvt:hit_role_bvt&password=123456
 
 -- Nested expressions and ordering clauses share the direct-access boundary.
+-- COLLATE and every sampled column must preserve the same caller policy.
+-- @regex("do not have privilege to access the hidden internal table",true)
+select cast((select count(*) from hit_db_bvt.__mo_index_secondary_hit_probe) as char) collate utf8mb4_bin;
+-- @regex("do not have privilege to access the hidden internal table",true)
+select sample((select count(*) from hit_db_bvt.__mo_index_secondary_hit_probe), 1 rows) from hit_db_bvt.hit_t;
+-- @regex("do not have privilege to access the hidden internal table",true)
+select sample(x, (select count(*) from hit_db_bvt.__mo_index_secondary_hit_probe), 100 percent) from hit_db_bvt.hit_t;
+select cast((select count(*) from hit_db_bvt.hit_t) as char) collate utf8mb4_bin as base_count;
+select sample(y, 100 percent) as sample_y from hit_db_bvt.hit_t order by sample_y;
 -- @regex("do not have privilege to access the hidden internal table",true)
 select serial_extract((select serial(count(*)) from hit_db_bvt.`__mo_index_secondary_hit_probe`), 0 as bigint);
 -- @regex("do not have privilege to access the hidden internal table",true)
@@ -110,6 +119,26 @@ select count(*) from hit_db_bvt.`__mo_index_secondary_hit_probe`;
 show create table hit_db_bvt.`__mo_index_secondary_hit_probe`;
 -- @regex("do not have privilege to access the hidden internal table",true)
 show columns from hit_db_bvt.`__mo_index_secondary_hit_probe`;
+-- SHOW table operands and user-written filters are not internal maintenance.
+-- @regex("do not have privilege to access the hidden internal table",true)
+show table_values from hit_db_bvt.__mo_index_secondary_hit_probe;
+-- @regex("do not have privilege to access the hidden internal table",true)
+show column_number from hit_db_bvt.__mo_index_secondary_hit_probe;
+-- @regex("do not have privilege to access the hidden internal table",true)
+show tables from hit_db_bvt where (select count(*) from hit_db_bvt.__mo_index_secondary_hit_probe) > 0;
+-- @regex("do not have privilege to access the hidden internal table",true)
+show columns from hit_db_bvt.hit_t where (select count(*) from hit_db_bvt.__mo_index_secondary_hit_probe) > 0;
+-- @regex("do not have privilege to access the hidden internal table",true)
+show index from hit_db_bvt.hit_t where (select count(*) from hit_db_bvt.__mo_index_secondary_hit_probe) > 0;
+-- @regex("do not have privilege to access the hidden internal table",true)
+show databases where (select count(*) from hit_db_bvt.__mo_index_secondary_hit_probe) > 0;
+-- @regex("do not have privilege to access the hidden internal table",true)
+show table status from hit_db_bvt where (select count(*) from hit_db_bvt.__mo_index_secondary_hit_probe) > 0;
+-- @regex("do not have privilege to access the hidden internal table",true)
+show procedure status where (select count(*) from hit_db_bvt.__mo_index_secondary_hit_probe) > 0;
+-- @regex("do not have privilege to access the hidden internal table",true)
+show triggers from hit_db_bvt where (select count(*) from hit_db_bvt.__mo_index_secondary_hit_probe) > 0;
+show column_number from hit_db_bvt.hit_t;
 -- @regex("do not have privilege to access the hidden internal table",true)
 insert into hit_db_bvt.`__mo_index_secondary_hit_probe` values (5, 6);
 -- @regex("do not have privilege to access the hidden internal table",true)

@@ -222,8 +222,24 @@ func (f *hiddenIndexTableRefFinder) scanStatement(stmt tree.Statement) {
 		f.scanUnresolvedObjectName(st.Name)
 	case *tree.ShowColumns:
 		f.scanUnresolvedObjectName(st.Table)
+		f.scanWhere(st.Where)
+	case *tree.ShowTableValues:
+		f.scanUnresolvedObjectName(st.Table)
+	case *tree.ShowColumnNumber:
+		f.scanUnresolvedObjectName(st.Table)
 	case *tree.ShowIndex:
 		f.scanUnresolvedObjectName(st.TableName)
+		f.scanWhere(st.Where)
+	case *tree.ShowTables:
+		f.scanWhere(st.Where)
+	case *tree.ShowDatabases:
+		f.scanWhere(st.Where)
+	case *tree.ShowTableStatus:
+		f.scanWhere(st.Where)
+	case *tree.ShowFunctionOrProcedureStatus:
+		f.scanWhere(st.Where)
+	case *tree.ShowTarget:
+		f.scanWhere(st.Where)
 	case *tree.AnalyzeStmt:
 		for _, entry := range st.Entries {
 			if entry != nil {
@@ -559,6 +575,8 @@ func (f *hiddenIndexTableRefFinder) scanExpr(expr tree.Expr) {
 		f.scanExpr(e.Else)
 	case *tree.CastExpr:
 		f.scanExpr(e.Expr)
+	case *tree.CollateExpr:
+		f.scanExpr(e.Expr)
 	case *tree.BitCastExpr:
 		f.scanExpr(e.Expr)
 	case *tree.SerialExtractExpr:
@@ -574,5 +592,8 @@ func (f *hiddenIndexTableRefFinder) scanExpr(expr tree.Expr) {
 		f.scanExprs(e.Exprs)
 	case *tree.FullTextMatchExpr:
 		f.scanExpr(e.Pattern)
+	case *tree.SampleExpr:
+		columns, _ := e.GetColumns()
+		f.scanExprs(columns)
 	}
 }

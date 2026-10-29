@@ -101,6 +101,23 @@ select y from hit_db_bvt.hit_view_bvt order by y;
 10  𝄀
 20  𝄀
 30
+select cast((select count(*) from hit_db_bvt.__mo_index_secondary_hit_probe) as char) collate utf8mb4_bin;
+-- @regex("do not have privilege to access the hidden internal table", true)
+internal error: do not have privilege to access the hidden internal table "hit_db_bvt.__mo_index_secondary_hit_probe"
+select sample((select count(*) from hit_db_bvt.__mo_index_secondary_hit_probe), 1 rows) from hit_db_bvt.hit_t;
+-- @regex("do not have privilege to access the hidden internal table", true)
+internal error: do not have privilege to access the hidden internal table "hit_db_bvt.__mo_index_secondary_hit_probe"
+select sample(x, (select count(*) from hit_db_bvt.__mo_index_secondary_hit_probe), 100 percent) from hit_db_bvt.hit_t;
+-- @regex("do not have privilege to access the hidden internal table", true)
+internal error: do not have privilege to access the hidden internal table "hit_db_bvt.__mo_index_secondary_hit_probe"
+select cast((select count(*) from hit_db_bvt.hit_t) as char) collate utf8mb4_bin as base_count;
+➤ base_count[12,65535,0]  𝄀
+3
+select sample(y, 100 percent) as sample_y from hit_db_bvt.hit_t order by sample_y;
+➤ sample_y[4,32,0]  𝄀
+10  𝄀
+20  𝄀
+30
 select serial_extract((select serial(count(*)) from hit_db_bvt.`__mo_index_secondary_hit_probe`), 0 as bigint);
 -- @regex("do not have privilege to access the hidden internal table", true)
 internal error: do not have privilege to access the hidden internal table "hit_db_bvt.__mo_index_secondary_hit_probe"
@@ -133,6 +150,36 @@ internal error: do not have privilege to access the hidden internal table "hit_d
 show columns from hit_db_bvt.`__mo_index_secondary_hit_probe`;
 -- @regex("do not have privilege to access the hidden internal table", true)
 internal error: do not have privilege to access the hidden internal table "hit_db_bvt.__mo_index_secondary_hit_probe"
+show table_values from hit_db_bvt.__mo_index_secondary_hit_probe;
+-- @regex("do not have privilege to access the hidden internal table", true)
+internal error: do not have privilege to access the hidden internal table "hit_db_bvt.__mo_index_secondary_hit_probe"
+show column_number from hit_db_bvt.__mo_index_secondary_hit_probe;
+-- @regex("do not have privilege to access the hidden internal table", true)
+internal error: do not have privilege to access the hidden internal table "hit_db_bvt.__mo_index_secondary_hit_probe"
+show tables from hit_db_bvt where (select count(*) from hit_db_bvt.__mo_index_secondary_hit_probe) > 0;
+-- @regex("do not have privilege to access the hidden internal table", true)
+internal error: do not have privilege to access the hidden internal table "hit_db_bvt.__mo_index_secondary_hit_probe"
+show columns from hit_db_bvt.hit_t where (select count(*) from hit_db_bvt.__mo_index_secondary_hit_probe) > 0;
+-- @regex("do not have privilege to access the hidden internal table", true)
+internal error: do not have privilege to access the hidden internal table "hit_db_bvt.__mo_index_secondary_hit_probe"
+show index from hit_db_bvt.hit_t where (select count(*) from hit_db_bvt.__mo_index_secondary_hit_probe) > 0;
+-- @regex("do not have privilege to access the hidden internal table", true)
+internal error: do not have privilege to access the hidden internal table "hit_db_bvt.__mo_index_secondary_hit_probe"
+show databases where (select count(*) from hit_db_bvt.__mo_index_secondary_hit_probe) > 0;
+-- @regex("do not have privilege to access the hidden internal table", true)
+internal error: do not have privilege to access the hidden internal table "hit_db_bvt.__mo_index_secondary_hit_probe"
+show table status from hit_db_bvt where (select count(*) from hit_db_bvt.__mo_index_secondary_hit_probe) > 0;
+-- @regex("do not have privilege to access the hidden internal table", true)
+internal error: do not have privilege to access the hidden internal table "hit_db_bvt.__mo_index_secondary_hit_probe"
+show procedure status where (select count(*) from hit_db_bvt.__mo_index_secondary_hit_probe) > 0;
+-- @regex("do not have privilege to access the hidden internal table", true)
+internal error: do not have privilege to access the hidden internal table "hit_db_bvt.__mo_index_secondary_hit_probe"
+show triggers from hit_db_bvt where (select count(*) from hit_db_bvt.__mo_index_secondary_hit_probe) > 0;
+-- @regex("do not have privilege to access the hidden internal table", true)
+internal error: do not have privilege to access the hidden internal table "hit_db_bvt.__mo_index_secondary_hit_probe"
+show column_number from hit_db_bvt.hit_t;
+➤ Number of columns in hit_t[-5,64,0]  𝄀
+2
 insert into hit_db_bvt.`__mo_index_secondary_hit_probe` values (5, 6);
 -- @regex("do not have privilege to access the hidden internal table", true)
 internal error: do not have privilege to access the hidden internal table "hit_db_bvt.__mo_index_secondary_hit_probe"
