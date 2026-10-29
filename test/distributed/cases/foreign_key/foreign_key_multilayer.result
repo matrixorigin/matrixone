@@ -193,18 +193,18 @@ Cannot add or update a child row: a foreign key constraint fails
 insert into lineitem_fk values(1,200,10000,2,46,63179.16,0.08,0.06,"R","F","1993-09-16","1993-09-21","1993-10-02","COLLECT COD","RAIL","dolites wake");
 Cannot add or update a child row: a foreign key constraint fails
 drop table if exists region_fk;
-internal error: can not drop table 'region_fk' referenced by some foreign key constraint
+Cannot drop table 'region_fk' referenced by a foreign key constraint 'fk_n' on table 'nation_fk'.
 drop table if exists nation_fk;
-internal error: can not drop table 'nation_fk' referenced by some foreign key constraint
+Cannot drop table 'nation_fk' referenced by a foreign key constraint 'fk_s' on table 'supplier_fk'.
 drop table if exists part_fk;
-internal error: can not drop table 'part_fk' referenced by some foreign key constraint
+Cannot drop table 'part_fk' referenced by a foreign key constraint 'fk_p1' on table 'partsupp_fk'.
 drop table if exists supplier_fk;
-internal error: can not drop table 'supplier_fk' referenced by some foreign key constraint
+Cannot drop table 'supplier_fk' referenced by a foreign key constraint 'fk_p2' on table 'partsupp_fk'.
 drop table if exists partsupp_fk;
 drop table if exists customer_fk;
-internal error: can not drop table 'customer_fk' referenced by some foreign key constraint
+Cannot drop table 'customer_fk' referenced by a foreign key constraint 'fk_o' on table 'orders_fk'.
 drop table if exists orders_fk;
-internal error: can not drop table 'orders_fk' referenced by some foreign key constraint
+Cannot drop table 'orders_fk' referenced by a foreign key constraint 'fk_l1' on table 'lineitem_fk'.
 drop table if exists lineitem_fk;
 drop table if exists lineitem_fk;
 drop table if exists orders_fk;
