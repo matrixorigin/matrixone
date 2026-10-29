@@ -7886,10 +7886,10 @@ func bindFuncExprImplByPlanExpr(
 		} else if args[0].Typ.Id == int32(types.T_interval) && args[1].Typ.Id == int32(types.T_datetime) {
 			name = "date_add"
 			args, err = resetDateFunctionArgs(ctx, args[1], args[0])
-		} else if args[0].Typ.Id == int32(types.T_varchar) && args[1].Typ.Id == int32(types.T_interval) {
+		} else if intervalArithmeticTextOperand(args[0]) && args[1].Typ.Id == int32(types.T_interval) {
 			name = "date_add"
 			args, err = resetDateFunctionArgs(ctx, args[0], args[1])
-		} else if args[0].Typ.Id == int32(types.T_interval) && args[1].Typ.Id == int32(types.T_varchar) {
+		} else if args[0].Typ.Id == int32(types.T_interval) && intervalArithmeticTextOperand(args[1]) {
 			name = "date_add"
 			args, err = resetDateFunctionArgs(ctx, args[1], args[0])
 		} else if args[0].Typ.Id == int32(types.T_int32) && args[1].Typ.Id == int32(types.T_interval) && intervalUnitIsDayOrLarger(args[1]) {
@@ -7931,7 +7931,7 @@ func bindFuncExprImplByPlanExpr(
 		} else if args[0].Typ.Id == int32(types.T_timestamp) && args[1].Typ.Id == int32(types.T_interval) {
 			name = "date_sub"
 			args, err = resetDateFunctionArgs(ctx, args[0], args[1])
-		} else if args[0].Typ.Id == int32(types.T_varchar) && args[1].Typ.Id == int32(types.T_interval) {
+		} else if intervalArithmeticTextOperand(args[0]) && args[1].Typ.Id == int32(types.T_interval) {
 			name = "date_sub"
 			args, err = resetDateFunctionArgs(ctx, args[0], args[1])
 		} else if args[0].Typ.Id == int32(types.T_int32) && args[1].Typ.Id == int32(types.T_interval) && intervalUnitIsDayOrLarger(args[1]) {
@@ -13013,6 +13013,16 @@ func resetIntervalFunctionArgs(ctx context.Context, intervalExpr *Expr) ([]*Expr
 		numberExpr,
 		makePlan2Int64ConstExprWithType(int64(intervalType)),
 	}, nil
+}
+
+// intervalArithmeticTextOperand reports whether the non-INTERVAL operand of
+// `expr +/- INTERVAL n unit` is evaluated like DATE_ADD/DATE_SUB's first
+// argument: any MySQL string type (CHAR, VARCHAR, TEXT, BINARY, BLOB...) or a
+// prepared-statement parameter marker, whose value is only known at EXECUTE.
+// DATE_ADD/DATE_SUB already accept all of these; the operator spelling must
+// not depend on which string type or protocol supplied the value.
+func intervalArithmeticTextOperand(expr *Expr) bool {
+	return types.T(expr.Typ.Id).IsMySQLString() || temporalDirectMarker(expr)
 }
 
 func intervalUnitIsDayOrLarger(intervalExpr *Expr) bool {

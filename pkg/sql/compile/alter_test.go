@@ -4901,6 +4901,63 @@ func TestDataBranchLineageGCExecutorDoesNotSuppressOtherErrors(t *testing.T) {
 	}
 }
 
+// TestAlterCopyStaleRefreshTerminatingError pins the stale-refresh error
+// policy of a source-changed ALTER COPY for the actual defer consumer in
+// alterCopy for every MustRollbackTxn family, after the lock-wait-timeout
+// codes became statement-scoped in the shared policy: a lock wait timeout on
+// the refresh path cannot leak to the frontend as a statement-scoped error -
+// at this point the transaction must still terminate, so it resolves into the
+// written-conflict family the shared policy already treats as fatal and
+// non-retryable. Genuine fatal infrastructure errors keep their identity, and
+// the retry family is converted too: this COPY is never retried under
+// retained locks.
+func TestAlterCopyStaleRefreshTerminatingError(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	c := newAlterCopyPrecheckCompile(t, ctrl, &alterCopyInsertSpyExecutor{})
+
+	for _, tc := range []struct {
+		name string
+		err  error
+	}{
+		{"lock wait timeout", moerr.NewLockWaitTimeoutNoCtx()},
+		{"remote owner timeout", moerr.NewRemoteLockWaitTimeoutNoCtx()},
+		{"ordinary execution failure", moerr.NewInternalErrorNoCtx("boom")},
+		{"retry family", moerr.NewTxnNeedRetryNoCtx()},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			wrapped := c.alterCopyStaleRefreshTerminatingError(tc.err)
+			require.True(t, moerr.IsMoErrCode(wrapped, moerr.ErrTxnWriteConflict),
+				"must resolve to the terminating write-conflict family, got %v", wrapped)
+			require.ErrorContains(t, wrapped, "stale source refresh failed")
+			require.True(t, moerr.MustRollbackTxn(wrapped),
+				"the verdict must remain fatal to the whole transaction")
+			require.False(t, c.isRetryErr(wrapped),
+				"the COPY must never be retried under retained locks")
+		})
+	}
+
+	for _, tc := range []struct {
+		name string
+		err  error
+	}{
+		{"deadlock keeps identity", moerr.NewDeadLockDetectedNoCtx()},
+		{"lock table bind changed keeps identity", moerr.NewLockTableBindChangedNoCtx()},
+		{"lock conflict keeps identity", moerr.NewLockConflictNoCtx()},
+		{"write conflict keeps identity", moerr.NewTxnWriteConflictNoCtx("concurrent source change")},
+		{"backend closed keeps identity", moerr.NewBackendClosedNoCtx()},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			kept := c.alterCopyStaleRefreshTerminatingError(tc.err)
+			require.Same(t, tc.err, kept,
+				"fatal non-retry infrastructure errors keep their own identity")
+			require.True(t, moerr.MustRollbackTxn(kept))
+		})
+	}
+
+	require.NoError(t, c.alterCopyStaleRefreshTerminatingError(nil))
+}
+
 func TestOwnerCatalogDropEntryPointsStopAtLifecycleAdmissionFailure(t *testing.T) {
 	gateSQL := databranchutils.LineageOwnerLifecycleLockSQL()
 	wantErr := errors.New("lifecycle gate failed")
