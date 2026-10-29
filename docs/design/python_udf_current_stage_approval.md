@@ -5,7 +5,7 @@
 | Record | `python-udf-current-stage-r1-2026-09-24-approval` |
 | Issue | [MatrixOne #28132](https://github.com/matrixorigin/matrixone/issues/28132) |
 | Implementation PR | [MatrixOne #29152](https://github.com/matrixorigin/matrixone/pull/29152) |
-| Current-stage proposal | [`python-udf-current-stage-r36-2026-10-28`](python_udf_current_stage.md); historical r1 approval retained below |
+| Current-stage proposal | [`python-udf-current-stage-r37-2026-10-29`](python_udf_current_stage.md); historical r1 approval retained below |
 | Scope | Explicitly enabled test/development adapter; no production rollout or production-readiness claim |
 
 This record separates the immutable current-stage design artifact, the feature
@@ -54,7 +54,7 @@ The pending rows are external approval facts and are intentionally not replaced
 by feature-owner authorization, passing CI, or implementation review. They must
 remain separate from the test/development acceptance boundary. This PR does not
 authorize production tenant isolation, sandboxing, authenticated transport,
-Operator rollout, artifact garbage collection, total artifact quota, or
+Operator rollout, production artifact garbage collection/quota management, or
 cross-version downgrade/restore.
 
 ## Evidence boundary
@@ -772,3 +772,20 @@ The Query allocation, catalog row formats, external worker protocol and
 shutdown-only upgrade policy are unchanged. No feature MORPC gate, production
 isolation or Operator scope is introduced. Independent review of this revision
 is tracked separately; no owner decision is fabricated by this record.
+
+
+## r37 bounded artifact publication repair (2026-10-29)
+
+The current proposal validates worker definitions before persistent publication
+and adds a backing-store-wide lifetime admission budget of 1,024 account/digest
+identities (at most 1 MiB each). Immutable exclusive-create slots survive failed
+transactions, process restart and account/database changes. They are not
+reclaimed on REPLACE, DROP or restore, so no failed publisher can delete source
+shared by another revision or snapshot. Admission exhaustion fails closed for
+new objects; existing objects remain readable and republishable. Pre-r37 objects
+are preserved as a finite baseline; this bounds additional growth rather than
+performing retrospective garbage collection. The exact state/size/compatibility
+contract is in the governing r37 proposal. This is a resource-correctness repair
+within the existing development scope, not a production quota/GC service.
+Independent Architecture and SQL/Planner approval of r37 remains pending;
+implementation review and tests do not grant that approval.

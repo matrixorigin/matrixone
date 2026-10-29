@@ -171,6 +171,22 @@ func TestInitPythonFunctionValidatesArtifactBeforeCatalogReadiness(t *testing.T)
 		require.Empty(t, background.executedSqls, "failed replacement cannot mutate the prior revision")
 	}
 	createFunction.Body, createFunction.Replace = originalBody, false
+	// Invalid definitions never allocate persistent source or admission slots.
+	for attempt := 0; attempt < 2; attempt++ {
+		createFunction.Body = fmt.Sprintf("def broken( %d", attempt)
+		runtime.err = errors.New("USER_CODE: rejected definition")
+		background.executedSqls = nil
+		err = InitFunction(session, &ExecCtx{reqCtx: ctx}, tenant, createFunction)
+		require.ErrorContains(t, err, "rejected definition")
+		require.Empty(t, background.executedSqls)
+		for _, dir := range []string{"udf-artifacts", "udf-artifact-admission"} {
+			for _, err := range fs.List(ctx, dir) {
+				require.NoError(t, err)
+				t.Fatal("rejected definition left persistent state")
+			}
+		}
+	}
+	createFunction.Body, runtime.err = originalBody, nil
 	err = InitFunction(session, &ExecCtx{reqCtx: ctx}, tenant, createFunction)
 	require.ErrorContains(t, err, "Python UDF catalog contract is not ready")
 	require.ErrorContains(t, err, missingRevisionCatalog.Error())
