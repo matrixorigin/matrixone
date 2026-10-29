@@ -58,9 +58,9 @@ type columnsTablesMaintenanceFixture struct {
 	writes       []string
 	protocol     string
 	failProtocol bool
-	// failDrop makes every DROP VIEW fail once: the whole transactional page
+	// failReplace makes every view replacement fail once: the whole transactional page
 	// must roll back and the cursor must not advance.
-	failDrop bool
+	failReplace bool
 	// protocolEntered, when non-nil, receives a signal each time the mock
 	// protocol probe runs; protocolBlock, when non-nil, parks the probe
 	// until the channel is closed. The protocol probe executes strictly
@@ -109,15 +109,13 @@ func (f *columnsTablesMaintenanceFixture) mocker(sql string) (executor.Result, e
 		result.NewBatchWithRowCount(len(accounts))
 		executor.AppendFixedRows(result, 0, accounts)
 		return result.GetResult(), nil
-	case strings.HasPrefix(sql, "DROP VIEW IF EXISTS information_schema."):
-		if f.failDrop {
-			return executor.Result{}, fmt.Errorf("injected drop view failure")
+	case sql == strings.Replace(sysview.InformationSchemaColumnsDDL, "CREATE VIEW ", "CREATE OR REPLACE VIEW ", 1) || sql == strings.Replace(sysview.InformationSchemaTablesV118DDL, "CREATE VIEW ", "CREATE OR REPLACE VIEW ", 1):
+		if f.failReplace {
+			return executor.Result{}, fmt.Errorf("injected replace view failure")
 		}
 		f.writes = append(f.writes, sql)
 		return executor.Result{}, nil
-	case sql == sysview.InformationSchemaColumnsDDL || sql == sysview.InformationSchemaTablesV118DDL:
-		f.writes = append(f.writes, sql)
-		return executor.Result{}, nil
+
 	default:
 		return executor.Result{}, fmt.Errorf("unexpected sql: %.200s", sql)
 	}
@@ -132,7 +130,8 @@ func TestMaintainInformationSchemaColumnsTablesRepairsFinalVersionTenants(t *tes
 			"0/TABLES":  sysview.InformationSchemaTablesV118DDL,
 			// account 10: already at final version with pre-fix definitions
 			"10/COLUMNS": oldColumnsSelectorDefinition(),
-			"10/TABLES":  oldTablesV118Definition(),
+			"10/TABLES": strings.ReplaceAll(sysview.InformationSchemaTablesV118DDL,
+				"not startswith(tbl.relname, '__mo_index_')", "tbl.relname not like '__mo_index_%'"),
 			// account 20: tenant whose COLUMNS never got a fix but TABLES is fine
 			"20/COLUMNS": "CREATE VIEW information_schema.COLUMNS AS SELECT 1",
 			"20/TABLES":  sysview.InformationSchemaTablesV118DDL,
@@ -165,9 +164,9 @@ func TestMaintainInformationSchemaColumnsTablesRepairsFinalVersionTenants(t *tes
 
 	// pass 1: repairs exactly the stale definitions
 	require.NoError(t, service.maintainInformationSchemaColumnsTables(t.Context()))
-	require.Len(t, fixture.writes, 6, "expected DROP+CREATE for 10/COLUMNS, 10/TABLES, 20/COLUMNS")
-	require.Contains(t, fixture.writes, "DROP VIEW IF EXISTS information_schema.COLUMNS;")
-	require.Contains(t, fixture.writes, "DROP VIEW IF EXISTS information_schema.TABLES;")
+	require.Len(t, fixture.writes, 3, "expected replacement for 10/COLUMNS, 10/TABLES, 20/COLUMNS")
+	require.Contains(t, fixture.writes, versions.InformationSchemaColumnsUpgradeEntry().UpgSql)
+	require.Contains(t, fixture.writes, versions.InformationSchemaTablesUpgradeEntry().UpgSql)
 	fixture.definitions["10/COLUMNS"] = sysview.InformationSchemaColumnsDDL
 	fixture.definitions["10/TABLES"] = sysview.InformationSchemaTablesV118DDL
 	fixture.definitions["20/COLUMNS"] = sysview.InformationSchemaColumnsDDL
@@ -222,9 +221,9 @@ func TestMaintainInformationSchemaColumnsTablesProtocolGate(t *testing.T) {
 
 func TestInformationSchemaTablesUpgradeEntryMatchesVersionedContract(t *testing.T) {
 	entry := versions.InformationSchemaTablesUpgradeEntry()
-	require.Equal(t, sysview.InformationSchemaTablesV118DDL, entry.UpgSql)
+	require.Equal(t, strings.Replace(sysview.InformationSchemaTablesV118DDL, "CREATE VIEW ", "CREATE OR REPLACE VIEW ", 1), entry.UpgSql)
 	require.Equal(t, defines.MORPCVersion118, entry.RequiredProtocolVersion)
-	require.Equal(t, "DROP VIEW IF EXISTS information_schema.TABLES;", entry.PreSql)
+	require.Empty(t, entry.PreSql)
 	// the old definition must never pass the equality check
 	oldDef := oldTablesV118Definition()
 	require.NotEqual(t, entry.UpgSql, oldDef)
@@ -287,10 +286,10 @@ func TestMaintainInformationSchemaColumnsTablesProtocolQueryErrorRollsBack(t *te
 
 // A mid-page statement failure must roll the whole page back and hold the
 // cursor; clearing the fault lets the next pass repair the same accounts.
-func TestMaintainInformationSchemaColumnsTablesDropFailureRollsBackAndRetries(t *testing.T) {
+func TestMaintainInformationSchemaColumnsTablesReplacementFailureRollsBackAndRetries(t *testing.T) {
 	fixture := &columnsTablesMaintenanceFixture{
-		protocol: "126",
-		failDrop: true,
+		protocol:    "126",
+		failReplace: true,
 		definitions: map[string]string{
 			"10/COLUMNS": oldColumnsSelectorDefinition(),
 			"10/TABLES":  oldTablesV118Definition(),
@@ -304,9 +303,9 @@ func TestMaintainInformationSchemaColumnsTablesDropFailureRollsBackAndRetries(t 
 	require.Empty(t, fixture.writes)
 	require.Equal(t, before, service.upgrade.informationSchemaColumnsTablesMaintenanceState)
 
-	fixture.failDrop = false
+	fixture.failReplace = false
 	require.NoError(t, service.maintainInformationSchemaColumnsTables(t.Context()))
-	require.Len(t, fixture.writes, 4, "retry must re-issue DROP+CREATE for both stale views")
+	require.Len(t, fixture.writes, 2, "retry must replace for both stale views")
 	require.NotEqual(t, before, service.upgrade.informationSchemaColumnsTablesMaintenanceState)
 }
 
@@ -381,5 +380,5 @@ func TestMaintainInformationSchemaColumnsTablesCASBlocksConcurrentPass(t *testin
 		t.Fatal("first pass did not finish after barrier release")
 	}
 	require.NoError(t, pass1Err)
-	require.Len(t, fixture.writes, 2, "exactly one pass repaired the stale COLUMNS view")
+	require.Len(t, fixture.writes, 1, "exactly one pass repaired the stale COLUMNS view")
 }
