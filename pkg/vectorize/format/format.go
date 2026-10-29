@@ -240,6 +240,7 @@ func format(number string, scale string, comma, decimalPoint []byte) (string, er
 		buffer.Write([]byte{'-'})
 		number = number[1:]
 	}
+	signLen := buffer.Len()
 
 	// Check for scientific notition.
 	for _, v := range number {
@@ -289,7 +290,8 @@ func format(number string, scale string, comma, decimalPoint []byte) (string, er
 			} else if uint64(len(parts[1])) > position {
 				//need to cast decimal's length
 				if parts[1][position:position+1] >= "5" {
-					buffer.Reset()
+					// Keep the sign prefix when rebuilding the rounded magnitude.
+					buffer.Truncate(signLen)
 					floatVar, err := strconv.ParseFloat(parts[0]+"."+parts[1], 64)
 					if err != nil {
 						return "", moerr.NewInvalidArgNoCtx("format parser error", parts[0]+"."+parts[1])

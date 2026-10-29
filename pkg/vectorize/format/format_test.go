@@ -63,11 +63,66 @@ func TestForamtENUS(t *testing.T) {
 			scale:  "4",
 			want:   "20,000,000.0000",
 		},
+		{
+			name:   "negative_rounding",
+			number: "-1.2350000",
+			scale:  "2",
+			want:   "-1.24",
+		},
+		{
+			name:   "negative_grouped_rounding",
+			number: "-1234.5678901",
+			scale:  "2",
+			want:   "-1,234.57",
+		},
+		{
+			name:   "negative_without_rounding",
+			number: "-1234.5612345",
+			scale:  "2",
+			want:   "-1,234.56",
+		},
+		{
+			name:   "negative_integer_carry",
+			number: "-999.9950000",
+			scale:  "2",
+			want:   "-1,000.00",
+		},
+		{
+			name:   "positive_rounding_control",
+			number: "1234.5678901",
+			scale:  "2",
+			want:   "1,234.57",
+		},
+		{
+			name:   "negative_scientific_rounding",
+			number: "-1.235e0",
+			scale:  "2",
+			want:   "-1.24",
+		},
+		{
+			name:   "negative_without_integer_part",
+			number: "-.567",
+			scale:  "1",
+			want:   "-0.6",
+		},
+		{
+			name:   "negative_padding_control",
+			number: "-1.2",
+			scale:  "3",
+			want:   "-1.200",
+		},
+		{
+			name:   "negative_zero_scale_control",
+			number: "-1.2",
+			scale:  "0",
+			want:   "-1",
+		},
 	}
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got, _ := formatENUS(c.number, c.scale)
+			got, err := formatENUS(c.number, c.scale)
+			require.NoError(t, err)
 			require.Equal(t, c.want, got)
 		})
 	}
@@ -116,11 +171,18 @@ func TestForamtARSA(t *testing.T) {
 			scale:  "4",
 			want:   "20000000.0000",
 		},
+		{
+			name:   "negative_rounding_without_grouping",
+			number: "-1234.5678901",
+			scale:  "2",
+			want:   "-1234.57",
+		},
 	}
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got, _ := formatARSA(c.number, c.scale)
+			got, err := formatARSA(c.number, c.scale)
+			require.NoError(t, err)
 			require.Equal(t, c.want, got)
 		})
 	}
@@ -169,11 +231,18 @@ func TestForamtBEBY(t *testing.T) {
 			scale:  "4",
 			want:   "20.000.000,0000",
 		},
+		{
+			name:   "negative_rounding_with_decimal_comma",
+			number: "-1234.5678901",
+			scale:  "2",
+			want:   "-1.234,57",
+		},
 	}
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got, _ := formatBEBY(c.number, c.scale)
+			got, err := formatBEBY(c.number, c.scale)
+			require.NoError(t, err)
 			require.Equal(t, c.want, got)
 		})
 	}

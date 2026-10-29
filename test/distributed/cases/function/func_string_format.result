@@ -716,3 +716,32 @@ format(12332.2, 2, rm_CH)
 SELECT FORMAT("12332.2", "2","ro_RO");
 format(12332.2, 2, ro_RO)
 12.332,20
+SELECT FORMAT(CAST('-1.2350000' AS DECIMAL(38,7)), 2) AS formatted;
+➤ formatted[12,-1,0]  𝄀
+-1.24
+SELECT
+FORMAT(CAST('-1234.5678901' AS DECIMAL(38,7)), 2) AS rounds_up,
+FORMAT(CAST('-1234.5612345' AS DECIMAL(38,7)), 2) AS rounds_down,
+ROUND(CAST('-1234.5678901' AS DECIMAL(38,7)), 2) AS numeric_control;
+➤ rounds_up[12,-1,0]  ¦  rounds_down[12,-1,0]  ¦  numeric_control[3,38,2]  𝄀
+-1,234.57  ¦  -1,234.56  ¦  -1234.57
+DROP TABLE IF EXISTS format_negative_rounding;
+CREATE TABLE format_negative_rounding(id INT PRIMARY KEY, amount DECIMAL(38,7));
+INSERT INTO format_negative_rounding VALUES
+(1, '-1234.5678901'),
+(2, '-1234.5612345'),
+(3, '1234.5678901');
+SELECT id, FORMAT(amount, 2) AS formatted,
+FORMAT(amount, 2, 'en_US') AS formatted_locale,
+ROUND(amount, 2) AS numeric_control
+FROM format_negative_rounding ORDER BY id;
+➤ id[4,32,0]  ¦  formatted[12,-1,0]  ¦  formatted_locale[12,-1,0]  ¦  numeric_control[3,38,2]  𝄀
+1  ¦  -1,234.57  ¦  -1,234.57  ¦  -1234.57  𝄀
+2  ¦  -1,234.56  ¦  -1,234.56  ¦  -1234.56  𝄀
+3  ¦  1,234.57  ¦  1,234.57  ¦  1234.57
+SELECT FORMAT(SUM(amount), 2) AS formatted_sum,
+ROUND(SUM(amount), 2) AS numeric_sum
+FROM format_negative_rounding WHERE id = 1;
+➤ formatted_sum[12,-1,0]  ¦  numeric_sum[3,38,2]  𝄀
+-1,234.57  ¦  -1234.57
+DROP TABLE format_negative_rounding;
