@@ -450,7 +450,8 @@ func SubArrayFromLeft[T types.ArrayElement](s []T, offset int64) []T {
 // SubArrayFromRight Cut slices from right to left, starting from 1
 func SubArrayFromRight[T types.ArrayElement](s []T, offset int64) []T {
 	totalLen := int64(len(s))
-	if offset > totalLen {
+	// offset < 0 only when the caller negated math.MinInt64
+	if offset < 0 || offset > totalLen {
 		return []T{}
 	}
 	return s[totalLen-offset:]
@@ -483,13 +484,12 @@ func subArrayOffsetLen[T types.ArrayElement](s []T, offset int64, length int64) 
 
 	if length <= 0 {
 		return []T{}
-	} else {
-		end := offset + length
-		if end > totalLen {
-			end = totalLen
-		}
-		return s[offset:end]
 	}
+	// compare with what remains, as offset + length can overflow
+	if length > totalLen-offset {
+		length = totalLen - offset
+	}
+	return s[offset : offset+length]
 }
 
 /* ------------ [END] mat.VecDense not supported functions ------- */

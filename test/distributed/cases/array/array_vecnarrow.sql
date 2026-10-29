@@ -1,6 +1,6 @@
 -- vecbf16 / vecf16 / vecint8 narrow vector column types
--- Scope (per design): distance functions + casts + storage only.
--- Elementwise arithmetic (+ - * / sqrt abs) is NOT supported on the narrow
+-- Scope (per design): distance functions, casts, storage, and the reductions and
+-- slicing below. Elementwise arithmetic (+ - * / sqrt abs) is NOT supported on the narrow
 -- types and must require an explicit CAST to vecf32. summation, l1_norm and
 -- l2_norm take them directly and return DOUBLE; subvector keeps their type.
 

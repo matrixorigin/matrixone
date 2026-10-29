@@ -1,7 +1,8 @@
 -- vecuint8 narrow vector column type (unsigned 8-bit, [0,255]).
 -- Mirrors array_vecnarrow for the int8 sibling; scope (per design): distance
--- functions + casts + storage only. Elementwise arithmetic is NOT supported and
--- must go through an explicit CAST to vecf32.
+-- functions, casts, storage, summation/l1_norm/l2_norm (DOUBLE) and subvector
+-- (keeps vecuint8). Elementwise arithmetic is NOT supported and must go through
+-- an explicit CAST to vecf32.
 
 drop database if exists vecu8db;
 create database vecu8db;

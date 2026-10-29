@@ -91,6 +91,9 @@ func TestNarrowArrayReductionsAndSubvector(t *testing.T) {
 			{"start1_len2", []FunctionTestInput{vec(), i64(1), i64(2)}, s.first2},
 			{"start-2_len1", []FunctionTestInput{vec(), i64(-2), i64(1)}, s.mid},
 			{"start4_len1", []FunctionTestInput{vec(), i64(4), i64(1)}, s.none},
+			{"start2_lenMax", []FunctionTestInput{vec(), i64(2), i64(math.MaxInt64)}, s.from2},
+			{"startMin", []FunctionTestInput{vec(), i64(math.MinInt64)}, s.none},
+			{"startMin_len1", []FunctionTestInput{vec(), i64(math.MinInt64), i64(1)}, s.none},
 		} {
 			cases = append(cases, tc{
 				name: "subvector/" + s.typ.String() + "/" + c.name, function: "subvector",
