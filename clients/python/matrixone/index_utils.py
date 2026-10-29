@@ -93,6 +93,9 @@ def build_verify_counts_sql(table_name: str, index_tables: List[str]) -> str:
     Returns:
         SQL string
     """
+    table_name = table_name.replace("`", "``")
+    index_tables = [name.replace("`", "``") for name in index_tables]
+
     if not index_tables:
         return f"SELECT COUNT(*) FROM `{table_name}`"
 

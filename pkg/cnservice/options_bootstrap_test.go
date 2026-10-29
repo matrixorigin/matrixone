@@ -18,8 +18,8 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/bootstrap"
-	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_11"
-	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_12"
+	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_6"
+	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_7"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/stretchr/testify/require"
@@ -28,7 +28,7 @@ import (
 func TestBootstrapOptionsPreserveCallerHandlers(t *testing.T) {
 	runtime.RunTest("", func(runtime.Runtime) {
 		s := &service{}
-		WithBootstrapOptions(bootstrap.WithUpgradeHandles([]bootstrap.VersionHandle{v4_0_11.Handler}))(s)
+		WithBootstrapOptions(bootstrap.WithUpgradeHandles([]bootstrap.VersionHandle{v4_0_6.Handler}))(s)
 		// NewService appends these after applying caller options.
 		WithBootstrapOptions(bootstrap.WithUpgradeTenantBatch(16), bootstrap.WithKek("test"))(s)
 		require.Len(t, s.options.bootstrapOptions, 3)
@@ -37,9 +37,9 @@ func TestBootstrapOptionsPreserveCallerHandlers(t *testing.T) {
 			defer b.Close()
 			require.Equal(t, version, b.GetFinalVersion())
 		}
-		check("4.0.11")
+		check("4.0.6")
 		// Options still apply in order: a later explicit handler list wins.
-		WithBootstrapOptions(bootstrap.WithUpgradeHandles([]bootstrap.VersionHandle{v4_0_12.Handler}))(s)
-		check("4.0.12")
+		WithBootstrapOptions(bootstrap.WithUpgradeHandles([]bootstrap.VersionHandle{v4_0_7.Handler}))(s)
+		check("4.0.7")
 	})
 }

@@ -1,0 +1,47 @@
+# issue 31154: extreme ROUND/TRUNCATE on finite DOUBLE at boundary scales.
+# Exact decimal domain keeps magnitude; coarser positions give 0; only truly
+# unrepresentable rounded results raise ER_DATA_OUT_OF_RANGE.
+select round(1e308,-307);
+select round(1e308,-308);
+select round(1e308,-309);
+select round(-1e308,-307);
+select round(-1e308,-308);
+select truncate(1e308,-307);
+select truncate(1e308,-308);
+select truncate(1e308,-309);
+select truncate(-1e308,-308);
+select round(1e200,-308);
+select round(1.5e308,-307)/1e307;
+select round(1e308,-307)/1e307;
+select round(-1e308,-307)/1e307;
+select truncate(1e308,-307)/1e307;
+select truncate(-1e308,-307)/1e307;
+select round(1.5e308,-308);
+select round(1e308,10);
+select truncate(1e308,10);
+
+# review 5673058412: TRUNCATE/ROUND idempotence at negative-digit lattice
+# boundaries; both signs, nested application, adjacent representatives.
+select truncate(1.5e26,-25);
+select truncate(-1.5e26,-25);
+select truncate(1.4e26,-25);
+select truncate(1.5e24,-23);
+select truncate(truncate(1.5e26,-25),-25);
+select round(truncate(1.5e26,-25),-25);
+select round(1e20,-1);
+
+# issue 31355: VARIANCE family overflow -> 1690 (no +Inf to JSON consumers);
+# STDDEV finite capability preserved; NULL/singleton groups unaffected.
+drop database if exists bvt31355;
+create database bvt31355;
+use bvt31355;
+create table t(g int, x double);
+insert into t values (1,1e200),(1,-1e200),(2,null),(3,5.0);
+select variance(x) from t where g=1;
+select stddev(x) from t where g=1;
+select g, var_pop(x) from t where g in (2,3) group by g order by g;
+select g, stddev_pop(x) from t group by g order by g;
+select g, var_pop(x) from t group by g order by g;
+select json_object('v', variance(x)) from t where g=1;
+drop table t;
+drop database bvt31355;

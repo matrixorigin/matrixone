@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fulltext2"
+	"github.com/matrixorigin/matrixone/pkg/fulltext2/tokenfilter"
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -224,6 +225,7 @@ func NewFulltext2SqlWriter(algo string, jobID JobID, info *ConsumerInfo, tablede
 		cfg: fulltext2.TableConfig{
 			DbName: info.DBName, IndexTable: storage, MetadataTable: meta,
 			Parser:       flat["parser"],
+			TokenFilters: tokenfilter.ParseNames(flat[catalog.IndexAlgoParamTokenFilter]),
 			PositionFree: flat[catalog.IndexAlgoParamPositionFree] == "true",
 			// json term shape, from the same persisted algo param the CREATE
 			// build reads, so both halves of the index emit identical terms.

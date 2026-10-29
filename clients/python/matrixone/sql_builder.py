@@ -20,7 +20,9 @@ code duplication across different interfaces (ORM, Vector Search, Pinecone, etc.
 """
 
 from ._query_compilation import conjoin_conditions
+from ._sql_literals import sql_string_token
 
+from collections.abc import Mapping
 from enum import Enum
 from typing import Any, Dict, List, Optional, Tuple, Union
 
@@ -150,9 +152,14 @@ class MatrixOneSQLBuilder:
         """Add multiple rows of values for INSERT"""
         if self._query_type != "INSERT":
             raise ValueError("insert_values() can only be used with INSERT operations")
+        rows = []
+        for row in values:
+            if isinstance(row, Mapping):
+                raise TypeError("insert_values() rows must be positional, not mappings")
+            rows.append(list(row))
 
-        self._insert_columns = columns
-        self._insert_values = values
+        self._insert_columns = list(columns)
+        self._insert_values = rows
         return self
 
     # UPDATE methods
@@ -440,7 +447,7 @@ class MatrixOneSQLBuilder:
         if self._from_table:
             from_clause = f"FROM {self._from_table}"
             if self._from_snapshot:
-                from_clause += f"{{snapshot = '{self._from_snapshot}'}}"
+                from_clause += f"{{snapshot = {sql_string_token(self._from_snapshot, context='Snapshot')}}}"
             sql_parts.append(from_clause)
 
         # Build JOIN clauses

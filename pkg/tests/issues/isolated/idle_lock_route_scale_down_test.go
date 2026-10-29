@@ -28,6 +28,7 @@ import (
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -164,14 +165,15 @@ func testDropDatabaseAfterCNScaleDown(t *testing.T, cleanupDuringRetirement bool
 	}
 	// Observe cache eviction without refreshing it through a SQL probe.
 	// GetLockTableBind only reads local state and performs no allocation/RPC.
-	require.Eventually(t, func() bool {
+	require.EventuallyWithT(t, func(collect *assert.CollectT) {
 		for _, id := range catalogIDs {
 			current, err := locks[survivor].GetLockTableBind(0, id)
 			if err != nil || (current.Valid && current.ServiceID != locks[survivor].GetServiceID()) {
-				return false
+				collect.Errorf("catalog route table=%d bind=%s expected local owner=%s or no binding, error=%v",
+					id, current.DebugString(), locks[survivor].GetServiceID(), err)
+				return
 			}
 		}
-		return true
 	}, time.Minute, 50*time.Millisecond, "all cached catalog routes to both retired CNs must converge")
 	// Separately wait for TN's retirement authority. This probe may allocate
 	// the new TN binding, but deliberately does not publish a CN route.

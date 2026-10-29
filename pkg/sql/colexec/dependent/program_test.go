@@ -115,7 +115,8 @@ func TestPublicDependentStreamingExecution(t *testing.T) {
 			}()
 			require.NoError(t, op.SetAllocationAccount(account))
 			require.NoError(t, op.Prepare(proc))
-			var keys, results []int32
+			var keys []int32
+			var results []int64
 			var nulls []bool
 			for {
 				result, err := vm.Exec(op, proc)
@@ -124,17 +125,19 @@ func TestPublicDependentStreamingExecution(t *testing.T) {
 				if b == nil {
 					break
 				}
+				require.Equal(t, types.T_int32, b.Vecs[0].GetType().Oid)
+				require.Equal(t, types.T_int64, b.Vecs[1].GetType().Oid)
 				for row := 0; row < b.RowCount(); row++ {
 					keys = append(keys, vector.GetFixedAtNoTypeCheck[int32](b.Vecs[0], row))
 					null := b.Vecs[1].IsNull(uint64(row))
 					nulls = append(nulls, null)
 					if !null {
-						results = append(results, vector.GetFixedAtNoTypeCheck[int32](b.Vecs[1], row))
+						results = append(results, vector.GetFixedAtNoTypeCheck[int64](b.Vecs[1], row))
 					}
 				}
 			}
 			require.Equal(t, []int32{1, 2, 2, 4}, keys)
-			require.Equal(t, []int32{11, 22, 22}, results)
+			require.Equal(t, []int64{11, 22, 22}, results)
 			require.Equal(t, []bool{false, false, false, true}, nulls)
 			op.Reset(proc, false, nil)
 			require.Equal(t, opened, closed)

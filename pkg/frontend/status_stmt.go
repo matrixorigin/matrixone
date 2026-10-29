@@ -500,6 +500,10 @@ func (resper *MysqlResp) respStatus(ses *Session,
 			err = doDropProcedureWithDB(execCtx.reqCtx, ses, execCtx.stmt)
 
 		case *tree.Load:
+			res.lastInsertId = execCtx.proc.GetStatementLastInsertID()
+			if res.lastInsertId != 0 {
+				ses.SetLastInsertID(res.lastInsertId)
+			}
 			if st.Local && execCtx.isIssue3482 {
 				isIssue3482 = true
 				localFileName = st.Param.Filepath

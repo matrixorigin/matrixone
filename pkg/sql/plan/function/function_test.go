@@ -42,6 +42,42 @@ func TestGetFunctionByIdRejectsUnknownOverload(t *testing.T) {
 	require.False(t, GetFunctionIsWinOrderFunById(unknown))
 }
 
+func TestRegisteredArgumentType(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		input  types.T
+		want   types.T
+		legacy bool
+	}{
+		{"varchar", types.T_varchar, types.T_varchar, false},
+		{"canonical_char", types.T_char, types.T_varchar, false},
+		{"legacy_char", types.T_char, types.T_char, true},
+		{"text", types.T_text, types.T_text, false},
+		{"blob", types.T_blob, types.T_blob, false},
+		{"decimal", types.T_decimal64, types.T_decimal64, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			resolved, err := GetFunctionByName(t.Context(), "coalesce", []types.Type{test.input.ToType(), test.input.ToType()})
+			require.NoError(t, err)
+			identity := resolved.GetEncodedOverloadID()
+			if test.legacy {
+				// This retained registered CHAR identity predates canonical binding.
+				identity = encodeOverloadID(COALESCE, 1)
+			}
+			registered, ok := GetFunctionByIdWithoutError(identity)
+			require.True(t, ok)
+			argument, ok := registered.GetArgumentType(0)
+			require.True(t, ok)
+			require.Equal(t, test.want, argument)
+			for _, index := range []int{-1, 1} {
+				argument, ok = registered.GetArgumentType(index)
+				require.False(t, ok)
+				require.Equal(t, types.T_any, argument)
+			}
+		})
+	}
+}
+
 func TestDecimalFloatAdditionResolvesToDouble(t *testing.T) {
 	decimal := types.New(types.T_decimal64, 10, 2)
 	double := types.T_float64.ToType()
@@ -434,8 +470,8 @@ func Test_GetFunctionByName(t *testing.T) {
 			name: "+", args: []types.Type{types.T_int8.ToType(), types.T_int16.ToType()},
 			shouldErr:  false,
 			requireFid: PLUS, requireOid: 0,
-			shouldCast: true, requireTyp: []types.Type{types.T_int16.ToType(), types.T_int16.ToType()},
-			requireRet: types.T_int16.ToType(),
+			shouldCast: true, requireTyp: []types.Type{types.New(types.T_int64, 64, -1), types.New(types.T_int64, 64, -1)},
+			requireRet: types.New(types.T_int64, 64, -1),
 		},
 
 		{
@@ -1591,6 +1627,55 @@ func TestTypedDateConversionNullability(t *testing.T) {
 	require.False(t, DeduceNotNullable(EncodeOverloadID(CAST, 1), []*plan.Expr{dateSource, datetimeTarget}))
 }
 
+// TIME() string overloads synthesize NULL with a truncation warning for
+// invalid input even when the argument column is NOT NULL, so binding must
+// not promise a NOT NULL result for them. Typed and numeric overloads fail
+// the statement instead and keep their NOT NULL inference.
+func TestTimeStringConversionNullability(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		typ  types.T
+		oid  int32
+	}{
+		{"varchar", types.T_varchar, 5},
+		{"char", types.T_char, 6},
+		{"text", types.T_text, 7},
+		{"blob", types.T_blob, 8},
+	} {
+		t.Run("string/"+tt.name, func(t *testing.T) {
+			op, err := GetFunctionById(t.Context(), EncodeOverloadID(TIME, tt.oid))
+			require.NoError(t, err)
+			require.Len(t, op.args, 1)
+			require.Equal(t, tt.typ, op.args[0])
+			args := []*plan.Expr{{Typ: plan.Type{Id: int32(tt.typ), NotNullable: true}}}
+			require.False(t, DeduceNotNullable(EncodeOverloadID(TIME, tt.oid), args), "overload %d must stay nullable", tt.oid)
+		})
+	}
+	for _, tt := range []struct {
+		name string
+		typ  types.T
+		oid  int32
+	}{
+		{"time", types.T_time, 0},
+		{"date", types.T_date, 1},
+		{"datetime", types.T_datetime, 2},
+		{"int64", types.T_int64, 3},
+		{"decimal128", types.T_decimal128, 4},
+	} {
+		t.Run("typed/"+tt.name, func(t *testing.T) {
+			op, err := GetFunctionById(t.Context(), EncodeOverloadID(TIME, tt.oid))
+			require.NoError(t, err)
+			require.Len(t, op.args, 1)
+			require.Equal(t, tt.typ, op.args[0])
+			args := []*plan.Expr{{Typ: plan.Type{Id: int32(tt.typ), NotNullable: true}}}
+			require.True(t, DeduceNotNullable(EncodeOverloadID(TIME, tt.oid), args))
+		})
+	}
+	// A nullable argument keeps the result nullable through the default rule.
+	nullable := &plan.Expr{Typ: plan.Type{Id: int32(types.T_varchar)}}
+	require.False(t, DeduceNotNullable(EncodeOverloadID(TIME, 5), []*plan.Expr{nullable}))
+}
+
 func TestTemporalArithmeticOverflowNullability(t *testing.T) {
 	notNull := &plan.Expr{Typ: plan.Type{NotNullable: true}}
 	for _, tt := range []struct {
@@ -2155,6 +2240,10 @@ func TestHistoricalTemporalNullabilityBinding(t *testing.T) {
 	}{
 		{DATE, 3, []*plan.Expr{source}}, {DATE, 4, []*plan.Expr{source}},
 		{CAST, 0, []*plan.Expr{source, target}}, {CAST, 1, []*plan.Expr{source, target}},
+		// Pre-8dd releases also published NOT NULL TIME() string bindings;
+		// historical dump re-binding must reproduce them exactly.
+		{TIME, 5, []*plan.Expr{source}}, {TIME, 6, []*plan.Expr{source}},
+		{TIME, 7, []*plan.Expr{source}}, {TIME, 8, []*plan.Expr{source}},
 	} {
 		id := EncodeOverloadID(tc.fid, tc.oid)
 		require.False(t, DeduceNotNullable(id, tc.args))
@@ -2167,5 +2256,35 @@ func TestHistoricalTemporalNullabilityBinding(t *testing.T) {
 	for _, ctx := range []context.Context{context.Background(), historical} {
 		require.True(t, DeduceNotNullableForBinding(ctx, EncodeOverloadID(CAST, 3), []*plan.Expr{source, target}))
 		require.False(t, DeduceNotNullableForBinding(ctx, EncodeOverloadID(DATE, 0), []*plan.Expr{{Typ: plan.Type{Id: int32(types.T_datetime), NotNullable: true}}}))
+	}
+}
+
+func TestLegacyTimeNullabilityEraBinding(t *testing.T) {
+	source := &plan.Expr{Typ: plan.Type{Id: int32(types.T_varchar), NotNullable: true}}
+	intermediate := WithLegacyTimeNullability(context.Background())
+	pre8dd := WithLegacyTemporalNullability(context.Background())
+	// The intermediate post-8dd era reconstructed the published TIME()
+	// string binding metadata independently: TIME restores NOT NULL while
+	// DATE conversions keep their current nullable inference.
+	for _, oid := range []int32{5, 6, 7, 8} {
+		id := EncodeOverloadID(TIME, oid)
+		require.False(t, DeduceNotNullableForBinding(context.Background(), id, []*plan.Expr{source}))
+		require.True(t, DeduceNotNullableForBinding(intermediate, id, []*plan.Expr{source}))
+		require.True(t, DeduceNotNullableForBinding(pre8dd, id, []*plan.Expr{source}))
+	}
+	for _, tc := range []struct {
+		fid  int32
+		oid  int32
+		args []*plan.Expr
+	}{
+		{DATE, 3, []*plan.Expr{source}}, {DATE, 4, []*plan.Expr{source}},
+	} {
+		id := EncodeOverloadID(tc.fid, tc.oid)
+		require.False(t, DeduceNotNullableForBinding(context.Background(), id, tc.args))
+		source.Typ.NotNullable = false
+		require.False(t, DeduceNotNullableForBinding(intermediate, id, tc.args))
+		source.Typ.NotNullable = true
+		require.False(t, DeduceNotNullableForBinding(intermediate, id, tc.args))
+		require.True(t, DeduceNotNullableForBinding(pre8dd, id, tc.args))
 	}
 }

@@ -71,10 +71,10 @@ func f16AsU32(s []types.Float16) []uint32 {
 // individual args (see file header: a struct spills; args stay in registers).
 func f16dec(h, m7fff, m8000, mInf archsimd.Uint32x16, magic, infNan archsimd.Float32x16) archsimd.Float32x16 {
 	o := h.And(m7fff).ShiftAllLeft(13)
-	of := o.AsFloat32x16().Mul(magic)
-	ou := of.AsUint32x16()
+	of := o.BitsToFloat32().Mul(magic)
+	ou := of.ToBits()
 	ou = ou.Or(mInf).Merge(ou, of.GreaterEqual(infNan)) // ou|=inf where >=infNan
-	return ou.Or(h.And(m8000).ShiftAllLeft(16)).AsFloat32x16()
+	return ou.Or(h.And(m8000).ShiftAllLeft(16)).BitsToFloat32()
 }
 
 // f16Decode constants, built once per kernel as locals.
@@ -150,8 +150,8 @@ func l1DistanceF16SIMD(a, b []types.Float16) (float64, error) {
 		ub := archsimd.LoadUint32x16(bu[j : j+16])
 		dE := f16dec(ua.And(mLo), m7fff, m8000, mInf, magic, infNan).Sub(f16dec(ub.And(mLo), m7fff, m8000, mInf, magic, infNan))
 		dO := f16dec(ua.ShiftAllRight(16), m7fff, m8000, mInf, magic, infNan).Sub(f16dec(ub.ShiftAllRight(16), m7fff, m8000, mInf, magic, infNan))
-		acc0 = acc0.Add(dE.AsUint32x16().And(absMask).AsFloat32x16())
-		acc1 = acc1.Add(dO.AsUint32x16().And(absMask).AsFloat32x16())
+		acc0 = acc0.Add(dE.ToBits().And(absMask).BitsToFloat32())
+		acc1 = acc1.Add(dO.ToBits().And(absMask).BitsToFloat32())
 	}
 	sum := sumF32x16(acc0.Add(acc1))
 	for i := j * 2; i < n; i++ {
