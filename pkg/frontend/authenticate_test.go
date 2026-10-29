@@ -685,16 +685,6 @@ func containsSQL(sqls []string, expected string) bool {
 	return false
 }
 
-func informationSchemaDDL(sqls []string, view string) string {
-	prefix := "CREATE VIEW information_schema." + view + " AS"
-	for _, sql := range sqls {
-		if strings.HasPrefix(sql, prefix) {
-			return sql
-		}
-	}
-	return ""
-}
-
 func containsSQLFragment(sqls []string, fragment string) bool {
 	for _, sql := range sqls {
 		if strings.Contains(sql, fragment) {
