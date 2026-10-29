@@ -7185,6 +7185,86 @@ func TestPartitionCreateSQLIsModeIndependentForAddPartition(t *testing.T) {
 	require.Len(t, defs, 1)
 }
 
+func TestCompoundAlterSelfFkActionCarriesFinalBinding(t *testing.T) {
+	// Review 5699738215: a self-referencing FK added by the same ALTER that
+	// drops its recorded parent key must bind to the surviving equivalent key
+	// in the persisted AddFk action (the durable payload alterTableInplace
+	// materializes), not only in the catalog rows.
+	newSelfTarget := func(mock *MockOptimizer) *TableDef {
+		intType := plan.Type{Id: int32(types.T_int32)}
+		self := &TableDef{
+			Name:  "self_target",
+			TblId: 100,
+			Cols: []*plan.ColDef{
+				{ColId: 1, Name: "id", Typ: intType},
+				{ColId: 2, Name: "pid", Typ: intType},
+			},
+			Indexes: []*plan.IndexDef{
+				{IndexName: "uq_first", Unique: true, Parts: []string{"id"}},
+				{IndexName: "uq_second", Unique: true, Parts: []string{"id"}},
+			},
+		}
+		mock.ctxt.tables[self.Name] = self
+		mock.ctxt.objects[self.Name] = &ObjectRef{SchemaName: "tpch", ObjName: self.Name}
+		mock.ctxt.id2name[self.TblId] = self.Name
+		return self
+	}
+
+	t.Run("add then drop within one compound ALTER", func(t *testing.T) {
+		mock := NewMockOptimizer(true, newPlanTestProcess(t))
+		newSelfTarget(mock)
+		logicPlan, err := runOneStmt(mock, t,
+			"alter table self_target add constraint zfk_compound foreign key(pid) references self_target(id), drop index uq_first")
+		require.NoError(t, err)
+		alter := logicPlan.GetDdl().GetAlterTable()
+
+		rebound := false
+		for _, sql := range alter.GetUpdateFkSqls() {
+			if strings.Contains(sql, "referenced_index_name") &&
+				strings.Contains(sql, "zfk_compound") &&
+				strings.Contains(sql, "uq_second") {
+				rebound = true
+			}
+		}
+		require.True(t, rebound,
+			"the catalog rebinding must move the same-statement self FK to the survivor")
+
+		var addFk *plan.AlterTableAddFk
+		for _, action := range alter.GetActions() {
+			if candidate := action.GetAddFk(); candidate != nil {
+				addFk = candidate
+			}
+		}
+		require.NotNil(t, addFk)
+		require.NotNil(t, addFk.Fkey)
+		require.Equal(t, "zfk_compound", addFk.Fkey.Name)
+		require.Equal(t, uint64(0), addFk.Fkey.ForeignTbl,
+			"plan-time self references carry the durable zero sentinel; the executor materializes the relationship")
+		require.Equal(t, "uq_second", addFk.Fkey.ReferencedIndexName,
+			"the persisted AddFk action is the durable FK payload alterTableInplace writes; it must carry the surviving binding, not the removed key")
+	})
+
+	t.Run("reversed order binds the survivor naturally", func(t *testing.T) {
+		mock := NewMockOptimizer(true, newPlanTestProcess(t))
+		newSelfTarget(mock)
+		logicPlan, err := runOneStmt(mock, t,
+			"alter table self_target drop index uq_first, add constraint zfk_compound foreign key(pid) references self_target(id)")
+		require.NoError(t, err)
+		alter := logicPlan.GetDdl().GetAlterTable()
+
+		var addFk *plan.AlterTableAddFk
+		for _, action := range alter.GetActions() {
+			if candidate := action.GetAddFk(); candidate != nil {
+				addFk = candidate
+			}
+		}
+		require.NotNil(t, addFk)
+		require.NotNil(t, addFk.Fkey)
+		require.Equal(t, "uq_second", addFk.Fkey.ReferencedIndexName,
+			"with the drop applied before the add, the binding is chosen from the final key set")
+	})
+}
+
 func TestCheckFkColsAreValidRecordsReferencedKey(t *testing.T) {
 	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	ctx.SetContext(context.Background())

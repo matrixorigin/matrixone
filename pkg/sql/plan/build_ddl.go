@@ -7960,6 +7960,25 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 					}
 				}
 			}
+			// The AddFk action of this same statement is the durable payload
+			// the executor materializes into the stored constraints: with no
+			// CopyTableDef (INPLACE) it would otherwise keep the removed key
+			// while the catalog rebinds, and on COPY it feeds the
+			// replacement's added-FK collection alike. Propagate the final
+			// binding into every matching same-statement action so the
+			// persisted def and the catalog commit with the same survivor
+			// (review 5699738215).
+			for _, action := range alterTable.Actions {
+				addFk := action.GetAddFk()
+				if addFk == nil || addFk.Fkey == nil {
+					continue
+				}
+				if addFk.DbName == rebind.childDatabase &&
+					addFk.TableName == rebind.childTable &&
+					addFk.Fkey.Name == rebind.constraintName {
+					addFk.Fkey.ReferencedIndexName = rebind.newIndexName
+				}
+			}
 		}
 	}
 

@@ -1217,6 +1217,148 @@ func TestApplyAlterCopyForeignKeyStateCanonicalizesLegacySelfReference(t *testin
 	}
 }
 
+// Review 5699738215: the real in-place consumer must persist the planner's
+// ADD-self-FK payload verbatim into the durable UpdateConstraint request it
+// sends to the relation. The compound ALTER planner contract (ADD CONSTRAINT
+// ... REFERENCES self ... together with DROP INDEX of the recorded key)
+// lands on the surviving covering key binding after the fix; this witness
+// executes the actual production persistence path, captures the bytes passed
+// to engine Relation.AlterTable, and decodes them with the production codec.
+// The persisted ForeignKeyDef must carry the planner's ReferencedIndexName
+// unmodified and keep the plan-time self-reference sentinel, and a persist
+// failure must propagate instead of degrading to catalog-only success.
+func TestAlterTableInplacePersistsAddFkBindingToDurableRelationRequest(t *testing.T) {
+	runInplaceAddFk := func(t *testing.T, emittedBinding, wantBinding string, failPersist bool) error {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+		proc := testutil.NewProcess(t)
+		// The production in-place consumer gates its pessimistic lock section
+		// on the active transaction: an optimistic mock keeps the witness on
+		// the self-FK action persistence path under audit.
+		txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+		txnOp.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
+		// In-place DDL compiles its internal catalog statements through the
+		// workspace boundary; the established in-file zero fake workspace is
+		// the audit surface for that path.
+		txnOp.EXPECT().GetWorkspace().Return(&Ws{}).AnyTimes()
+		proc.Base.TxnOperator = txnOp
+
+		tableDef := &plan.TableDef{
+			TblId: 100,
+			Name:  "self_target",
+			Cols: []*plan.ColDef{
+				{ColId: 1, Name: "id", Typ: plan.Type{Id: int32(types.T_int32)}},
+				{ColId: 2, Name: "pid", Typ: plan.Type{Id: int32(types.T_int32)}},
+			},
+		}
+		alterTable := &plan2.AlterTable{
+			Database: "test",
+			TableDef: tableDef,
+			Actions: []*plan2.AlterTable_Action{
+				{Action: &plan2.AlterTable_Action_AddFk{AddFk: &plan2.AlterTableAddFk{
+					DbName:    "test",
+					TableName: "self_target",
+					Cols:      []string{"pid"},
+					Fkey: &plan2.ForeignKeyDef{
+						Name:                "zfk_compound",
+						Cols:                []uint64{2},
+						ForeignTbl:          0,
+						ForeignCols:         []uint64{1},
+						ReferencedIndexName: emittedBinding,
+					},
+				}}},
+			},
+		}
+		scope := &Scope{
+			Magic: AlterTable,
+			Plan: &plan.Plan{Plan: &plan2.Plan_Ddl{Ddl: &plan2.DataDefinition{
+				DdlType:    plan2.DataDefinition_ALTER_TABLE,
+				Definition: &plan2.DataDefinition_AlterTable{AlterTable: alterTable},
+			}}},
+		}
+
+		eng := mock_frontend.NewMockEngine(ctrl)
+		db := mock_frontend.NewMockDatabase(ctrl)
+		rel := mock_frontend.NewMockRelation(ctrl)
+		eng.EXPECT().Database(gomock.Any(), gomock.Any(), gomock.Any()).Return(db, nil).AnyTimes()
+		db.EXPECT().Relation(gomock.Any(), gomock.Any(), gomock.Any()).Return(rel, nil).AnyTimes()
+		db.EXPECT().GetDatabaseId(gomock.Any()).Return("1").AnyTimes()
+		rel.EXPECT().GetTableID(gomock.Any()).Return(uint64(100)).AnyTimes()
+		rel.EXPECT().GetExtraInfo().Return(&api.SchemaExtra{}).AnyTimes()
+		// The in-place consumer resolves the relation's owning database for
+		// the durable request identity before assembling UpdateConstraint.
+		rel.EXPECT().GetDBID(gomock.Any()).Return(uint64(1)).AnyTimes()
+
+		getConstraintDef := gostub.Stub(&GetConstraintDef, func(
+			_ context.Context, _ engine.Relation,
+		) (*engine.ConstraintDef, error) {
+			return &engine.ConstraintDef{Cts: []engine.Constraint{
+				&engine.RefChildTableDef{},
+			}}, nil
+		})
+		defer getConstraintDef.Reset()
+
+		persistErr := errors.New("durable persist failure")
+		rel.EXPECT().AlterTable(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(
+			func(_ context.Context, def *engine.ConstraintDef, reqs []*api.AlterTableReq) error {
+				var durable []byte
+				for _, req := range reqs {
+					if op, ok := req.Operation.(*api.AlterTableReq_UpdateCstr); ok {
+						durable = op.UpdateCstr.Constraints
+					}
+				}
+				require.NotEmpty(t, durable,
+					"the durable UpdateConstraint request must be sent to the relation")
+				decoded := &engine.ConstraintDef{}
+				require.NoError(t, decoded.UnmarshalBinary(durable))
+				var stored *plan2.ForeignKeyDef
+				for _, ct := range decoded.Cts {
+					if definition, ok := ct.(*engine.ForeignKeyDef); ok {
+						for _, candidate := range definition.Fkeys {
+							if candidate.Name == "zfk_compound" {
+								stored = candidate
+							}
+						}
+					}
+				}
+				require.NotNil(t, stored, "stored constraints must contain the added self FK")
+				require.Equal(t, wantBinding, stored.ReferencedIndexName,
+					"the durable request must carry the planner's binding verbatim")
+				require.Equal(t, uint64(0), stored.ForeignTbl,
+					"the plan-time self-reference sentinel must survive the consumer")
+				if failPersist {
+					return persistErr
+				}
+				return nil
+			}).AnyTimes()
+
+		c := NewCompile("test", "test",
+			"alter table self_target add constraint zfk_compound foreign key(pid) references self_target(id)",
+			"", "", eng, proc, nil, false, nil, time.Now())
+		return scope.AlterTableInplace(c)
+	}
+
+	t.Run("survivor binding and sentinel reach the durable request; persist failure propagates", func(t *testing.T) {
+		// The durable UpdateConstraint request is decoded from the exact
+		// bytes handed to the relation; asserting the survivor binding and
+		// the self0 sentinel there, and requiring the returned persist error
+		// to surface from AlterTableInplace, pins the review's durable
+		// contract in one production pass. The post-persist durable-alignment
+		// continuation (rel.UpdateConstraint) is exercised by the caller
+		// family below and kept out of this witness's boundary.
+		err := runInplaceAddFk(t, "uq_second", "uq_second", true)
+		require.ErrorContains(t, err, "durable persist failure")
+	})
+	t.Run("consumer persists planner binding verbatim without rebinding", func(t *testing.T) {
+		// The consumer owns no rebinding responsibility: a divergent payload
+		// (the legacy pre-review emission) must reach the durable request
+		// unchanged, so any future consumer-side rewrite fails here instead
+		// of silently mutating what the planner committed to.
+		err := runInplaceAddFk(t, "uq_first", "uq_first", true)
+		require.ErrorContains(t, err, "durable persist failure")
+	})
+}
+
 func TestAlterCopyRestoreThenDurableAlignmentBindsSurvivingSelfReferenceKey(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
