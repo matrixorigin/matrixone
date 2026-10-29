@@ -76,6 +76,7 @@ var (
 
 type Service interface {
 	Start() error
+	StartContext(context.Context) error
 	Close() error
 	// ID returns UUID of the service.
 	ID() string
@@ -306,7 +307,8 @@ type Config struct {
 	// PrimaryKeyCheck
 	PrimaryKeyCheck bool `toml:"primary-key-check"`
 
-	// LargestEntryLimit is the max size for reading file to buf
+	// LargestEntryLimit is the max raw size of one CSV record readable by the
+	// LOAD DATA / external-table CSV parser; see config.LargestEntryLimit.
 	LargestEntryLimit int `toml:"largest-entry-limit"`
 
 	// MaxPreparedStmtCount
@@ -325,10 +327,17 @@ type Config struct {
 	// Whether to automatically upgrade when system startup
 	AutomaticUpgrade       bool `toml:"auto-upgrade"`
 	UpgradeTenantBatchSize int  `toml:"upgrade-tenant-batch"`
+	// UpgradeCatalogObjectLimit bounds one indivisible catalog input in bytes.
+	UpgradeCatalogObjectLimit uint64 `toml:"upgrade-catalog-object-limit"`
 }
 
 func (c *Config) Validate() error {
 	foundMachineHost := ""
+	if c.UpgradeCatalogObjectLimit == 0 {
+		c.UpgradeCatalogObjectLimit = bootstrap.DefaultCatalogUpgradeObjectBytes
+	} else if c.UpgradeCatalogObjectLimit < bootstrap.CatalogUpgradePageBytes {
+		return moerr.NewBadConfigNoCtxf("cn.upgrade-catalog-object-limit must be at least %d bytes", bootstrap.CatalogUpgradePageBytes)
+	}
 	if c.UUID == "" {
 		panic("missing cn store UUID")
 	}
@@ -799,6 +808,10 @@ type service struct {
 	// close request issued after synchronous ingress revocation.
 	viewMetadataCloseFn func() error
 	aicm                *defines.AutoIncrCacheManager
+	startMu             sync.Mutex
+	startCtx            context.Context
+	startCancel         context.CancelFunc
+	startClosing        bool
 	lifecycleMu         sync.Mutex
 	frontendLifecycleMu sync.Mutex
 	lifecycle           serviceLifecycleState

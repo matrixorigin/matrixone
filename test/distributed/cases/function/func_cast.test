@@ -221,6 +221,7 @@ select cast(timestamp '2020-08-23 11:52:21' as char(4)), length(cast(timestamp '
 select cast(-5 as unsigned) | 1, cast(-5 as unsigned) & -1;
 
 select cast(-5 as unsigned) -1, cast(-5 as unsigned) + 1;
+-- @metacmp(true)
 select cast(5 as unsigned) -6.0;
 select cast(NULL as signed);
 select cast(1/2 as signed);
@@ -255,6 +256,7 @@ select (_binary X'31' | X'31');
 select _binary '1' + 0;
 select (_binary X'31' | X'31') + 0;
 select 1.0 * (_binary X'312E35' | X'312E35');
+-- @metacmp(true)
 select 1.0 * (X'312E35' | X'312E35');
 select (_binary X'31' | NULL) + 0;
 SELECT CAST(X'' AS SIGNED);
@@ -266,6 +268,7 @@ select cast('-10a' as signed integer);
 select cast('a10' as unsigned integer);
 select 10+'a';
 select 10.0+cast('a' as decimal(38,0));
+show warnings;
 select 10E+0+'a';
 
 # out-of-range cases
@@ -923,3 +926,49 @@ drop database test;
 select hex(_binary X'FF' & _binary X'0F'),
        hex(_binary X'F0' | _binary X'0F'),
        hex(_binary X'FF' ^ _binary X'0F');
+
+# Issue #30417: explicit CAST of lexically invalid text to DECIMAL converts the
+# numeric prefix (0.00 when none) and records warning 1292, also under strict
+# sql_mode. NULL is untouched and the MO hex-radix extension stays quiet.
+select cast('' as decimal(10,2));
+show warnings;
+select cast('   ' as decimal(10,2));
+show warnings;
+select cast('  -123x' as decimal(10,2));
+show warnings;
+select cast('756e' as decimal(10,2));
+show warnings;
+select cast('abc' as decimal(10,2));
+show warnings;
+select cast(cast('abc' as binary) as decimal(10,2));
+show warnings;
+select cast('0x2e' as decimal(10,2));
+show warnings;
+select cast(null as decimal(10,2));
+set session sql_mode = 'STRICT_TRANS_TABLES';
+select cast('abc' as decimal(10,2));
+show warnings;
+set session sql_mode = @@global.sql_mode;
+
+# Issue #30417 strict-DML guard: under STRICT_TRANS_TABLES, an explicit CAST of
+# lexically invalid text is a hard error in non-IGNORE data-modifying
+# statements (no zero row is written, UPDATE keeps the old value); INSERT
+# IGNORE and loose sql_mode keep the lenient 0.00+1292 conversion; strict
+# SELECT keeps the lenient conversion too.
+drop database if exists dml_cast_guard;
+create database dml_cast_guard;
+use dml_cast_guard;
+create table own(id int primary key, v decimal(10,2));
+insert into own values (1, 42.42);
+set session sql_mode = 'STRICT_TRANS_TABLES';
+insert into own values (2, cast('abc' as decimal(10,2)));
+insert into own select 3, cast('abc' as decimal(10,2));
+update own set v = cast('abc' as decimal(10,2)) where id = 1;
+select id, v from own order by id;
+insert ignore into own values (4, cast('abc' as decimal(10,2)));
+select id, v from own order by id;
+set session sql_mode = '';
+insert into own values (5, cast('abc' as decimal(10,2)));
+select id, v from own order by id;
+set session sql_mode = @@global.sql_mode;
+drop database dml_cast_guard;

@@ -432,9 +432,19 @@ func (resper *MysqlResp) respStatus(ses *Session,
 		localFileName := ""
 		switch st := execCtx.stmt.(type) {
 		case *tree.Insert:
-			res.lastInsertId = execCtx.proc.GetStatementLastInsertID()
-			if res.lastInsertId != 0 {
-				ses.SetLastInsertID(res.lastInsertId)
+			isODKU := len(st.OnDuplicateUpdate) > 0 &&
+				!(len(st.OnDuplicateUpdate) == 1 && st.OnDuplicateUpdate[0] == nil)
+			if isODKU && execCtx.cw != nil && execCtx.cw.Plan().GetQuery().HasODKUResultTracking() {
+				lastInsertID, generated := execCtx.proc.GetODKUProtocolIDForSource(st.IsValuesSource())
+				res.lastInsertId = lastInsertID
+				if generated {
+					ses.SetLastInsertID(res.lastInsertId)
+				}
+			} else {
+				res.lastInsertId = execCtx.proc.GetStatementLastInsertID()
+				if res.lastInsertId != 0 {
+					ses.SetLastInsertID(res.lastInsertId)
+				}
 			}
 		case *tree.Replace:
 			// REPLACE uses the same PRE_INSERT auto-increment pipeline as INSERT,
@@ -490,6 +500,10 @@ func (resper *MysqlResp) respStatus(ses *Session,
 			err = doDropProcedureWithDB(execCtx.reqCtx, ses, execCtx.stmt)
 
 		case *tree.Load:
+			res.lastInsertId = execCtx.proc.GetStatementLastInsertID()
+			if res.lastInsertId != 0 {
+				ses.SetLastInsertID(res.lastInsertId)
+			}
 			if st.Local && execCtx.isIssue3482 {
 				isIssue3482 = true
 				localFileName = st.Param.Filepath

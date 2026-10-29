@@ -22,7 +22,7 @@ from typing import Optional, Union, Any, Dict, List, Type
 from enum import Enum
 
 from .exceptions import BranchError, ConnectionError
-from .version import requires_version
+from ._sql_literals import sql_object_name, sql_string_token
 from ._utils import get_table_name
 
 
@@ -86,34 +86,42 @@ class BaseBranchManager:
         if snapshot_name is not None and not isinstance(snapshot_name, str):
             raise BranchError("snapshot_name must be a string or None")
 
-        if snapshot_name:
-            return f"data branch create table {target_table} from {source_table}{{snapshot=\"{snapshot_name}\"}}"
-        else:
-            return f"data branch create table {target_table} from {source_table}"
+        sql = f"data branch create table {sql_object_name(target_table, qualified=True)} from {sql_object_name(source_table, qualified=True)}"
+        if snapshot_name is not None:
+            if not snapshot_name:
+                raise BranchError('snapshot_name must be a nonempty string or None')
+            sql += '{snapshot=' + sql_string_token(snapshot_name, context='Snapshot') + '}'
+        return sql
 
     def _build_delete_table_branch_sql(self, table: str) -> str:
         """Build DATA BRANCH DELETE TABLE SQL statement"""
         if not table or not isinstance(table, str):
             raise BranchError("table must be a non-empty string")
-        return f"data branch delete table {table}"
+        return f"data branch delete table {sql_object_name(table, qualified=True)}"
 
     def _build_create_database_branch_sql(
         self,
         target_database: str,
         source_database: str,
+        snapshot_name: Optional[str] = None,
     ) -> str:
         """Build DATA BRANCH CREATE DATABASE SQL statement"""
         if not target_database or not isinstance(target_database, str):
             raise BranchError("target_database must be a non-empty string")
         if not source_database or not isinstance(source_database, str):
             raise BranchError("source_database must be a non-empty string")
-        return f"data branch create database {target_database} from {source_database}"
+        sql = f"data branch create database {sql_object_name(target_database)} from {sql_object_name(source_database)}"
+        if snapshot_name is not None:
+            if not isinstance(snapshot_name, str) or not snapshot_name:
+                raise BranchError('snapshot_name must be a nonempty string or None')
+            sql += '{snapshot=' + sql_string_token(snapshot_name, context='Snapshot') + '}'
+        return sql
 
     def _build_delete_database_branch_sql(self, database: str) -> str:
         """Build DATA BRANCH DELETE DATABASE SQL statement"""
         if not database or not isinstance(database, str):
             raise BranchError("database must be a non-empty string")
-        return f"data branch delete database {database}"
+        return f"data branch delete database {sql_object_name(database)}"
 
     def _build_diff_table_sql(
         self,
@@ -123,10 +131,12 @@ class BaseBranchManager:
         output: DiffOutput = DiffOutput.ROWS,
     ) -> str:
         """Build DATA BRANCH DIFF SQL statement"""
-        base_sql = f"data branch diff {table} against {against_table}"
+        base_sql = f"data branch diff {sql_object_name(table, qualified=True)} against {sql_object_name(against_table, qualified=True)}"
 
-        if snapshot_name:
-            base_sql += f"{{snapshot=\"{snapshot_name}\"}}"
+        if snapshot_name is not None:
+            if not snapshot_name:
+                raise BranchError('snapshot_name must be a nonempty string or None')
+            base_sql += '{snapshot=' + sql_string_token(snapshot_name, context='Snapshot') + '}'
 
         if output == DiffOutput.COUNT:
             base_sql += " output count"
@@ -151,7 +161,7 @@ class BaseBranchManager:
 
         if on_conflict not in ("skip", "accept"):
             raise BranchError(f"on_conflict must be 'skip' or 'accept', got '{on_conflict}'")
-        return f"data branch merge {source_table} into {target_table} when conflict {on_conflict}"
+        return f"data branch merge {sql_object_name(source_table, qualified=True)} into {sql_object_name(target_table, qualified=True)} when conflict {on_conflict}"
 
 
 class BranchManager(BaseBranchManager):
@@ -239,12 +249,6 @@ class BranchManager(BaseBranchManager):
         - SnapshotManager: For creating snapshots before branching
     """
 
-    @requires_version(
-        min_version="3.0.5",
-        feature_name="table_branching",
-        description="Table branching functionality",
-        alternative="Use CREATE TABLE and data migration instead",
-    )
     def create_table_branch(
         self,
         target_table: str,
@@ -294,16 +298,11 @@ class BranchManager(BaseBranchManager):
         except Exception as e:
             raise BranchError(f"Failed to delete table branch: {e}") from e
 
-    @requires_version(
-        min_version="3.0.5",
-        feature_name="database_branching",
-        description="Database branching functionality",
-        alternative="Use CREATE DATABASE and data migration instead",
-    )
     def create_database_branch(
         self,
         target_database: str,
         source_database: str,
+        snapshot_name: Optional[str] = None,
     ) -> None:
         """
         Create a database branch from another database.
@@ -319,7 +318,7 @@ class BranchManager(BaseBranchManager):
         if not self.client._engine:
             raise ConnectionError("Not connected to database")
 
-        sql = self._build_create_database_branch_sql(target_database, source_database)
+        sql = self._build_create_database_branch_sql(target_database, source_database, snapshot_name)
 
         try:
             self._get_executor().execute(sql)
@@ -347,12 +346,6 @@ class BranchManager(BaseBranchManager):
         except Exception as e:
             raise BranchError(f"Failed to delete database branch: {e}") from e
 
-    @requires_version(
-        min_version="3.0.5",
-        feature_name="table_diffing",
-        description="Table diffing functionality",
-        alternative="Use manual comparison instead",
-    )
     def diff_table(
         self,
         table: str,
@@ -387,12 +380,6 @@ class BranchManager(BaseBranchManager):
         except Exception as e:
             raise BranchError(f"Failed to diff tables: {e}") from e
 
-    @requires_version(
-        min_version="3.0.5",
-        feature_name="table_merging",
-        description="Table merging functionality",
-        alternative="Use manual merge instead",
-    )
     def merge_table(
         self,
         source_table: str,
@@ -451,7 +438,7 @@ class BranchManager(BaseBranchManager):
             client.branch.create('new_db', 'source_db', database=True)
         """
         if database:
-            self.create_database_branch(str(target), str(source))
+            self.create_database_branch(str(target), str(source), snapshot)
         else:
             target_name = self._get_table_name(target)
             source_name = self._get_table_name(source)
@@ -614,12 +601,6 @@ class AsyncBranchManager(BaseBranchManager):
         - AsyncSession: For async transaction management
     """
 
-    @requires_version(
-        min_version="3.0.5",
-        feature_name="table_branching",
-        description="Table branching functionality",
-        alternative="Use CREATE TABLE and data migration instead",
-    )
     async def create_table_branch(
         self,
         target_table: str,
@@ -669,16 +650,11 @@ class AsyncBranchManager(BaseBranchManager):
         except Exception as e:
             raise BranchError(f"Failed to delete table branch: {e}") from e
 
-    @requires_version(
-        min_version="3.0.5",
-        feature_name="database_branching",
-        description="Database branching functionality",
-        alternative="Use CREATE DATABASE and data migration instead",
-    )
     async def create_database_branch(
         self,
         target_database: str,
         source_database: str,
+        snapshot_name: Optional[str] = None,
     ) -> None:
         """
         Create a database branch from another database asynchronously.
@@ -694,7 +670,7 @@ class AsyncBranchManager(BaseBranchManager):
         if not self.client._engine:
             raise ConnectionError("Not connected to database")
 
-        sql = self._build_create_database_branch_sql(target_database, source_database)
+        sql = self._build_create_database_branch_sql(target_database, source_database, snapshot_name)
 
         try:
             await self._get_executor().execute(sql)
@@ -722,12 +698,6 @@ class AsyncBranchManager(BaseBranchManager):
         except Exception as e:
             raise BranchError(f"Failed to delete database branch: {e}") from e
 
-    @requires_version(
-        min_version="3.0.5",
-        feature_name="table_diffing",
-        description="Table diffing functionality",
-        alternative="Use manual comparison instead",
-    )
     async def diff_table(
         self,
         table: str,
@@ -762,12 +732,6 @@ class AsyncBranchManager(BaseBranchManager):
         except Exception as e:
             raise BranchError(f"Failed to diff tables: {e}") from e
 
-    @requires_version(
-        min_version="3.0.5",
-        feature_name="table_merging",
-        description="Table merging functionality",
-        alternative="Use manual merge instead",
-    )
     async def merge_table(
         self,
         source_table: str,
@@ -815,7 +779,7 @@ class AsyncBranchManager(BaseBranchManager):
             database: If True, create database branch; if False, create table branch
         """
         if database:
-            await self.create_database_branch(str(target), str(source))
+            await self.create_database_branch(str(target), str(source), snapshot)
         else:
             target_name = self._get_table_name(target)
             source_name = self._get_table_name(source)

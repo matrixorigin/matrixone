@@ -26,39 +26,6 @@ import os
 _original_modules = {}
 
 
-def setup_sqlalchemy_mocks():
-    """Setup SQLAlchemy mocks for this test class"""
-    global _original_modules
-    _original_modules['pymysql'] = sys.modules.get('pymysql')
-    _original_modules['sqlalchemy'] = sys.modules.get('sqlalchemy')
-    _original_modules['sqlalchemy.engine'] = sys.modules.get('sqlalchemy.engine')
-    _original_modules['sqlalchemy.orm'] = sys.modules.get('sqlalchemy.orm')
-
-    sys.modules['pymysql'] = Mock()
-    sys.modules['sqlalchemy'] = Mock()
-    sys.modules['sqlalchemy.engine'] = Mock()
-    sys.modules['sqlalchemy.engine'].Engine = Mock()
-    sys.modules['sqlalchemy.orm'] = Mock()
-    sys.modules['sqlalchemy.orm'].sessionmaker = Mock()
-    sys.modules['sqlalchemy.orm'].declarative_base = Mock()
-    sys.modules['sqlalchemy'].create_engine = Mock()
-    sys.modules['sqlalchemy'].text = Mock()
-    sys.modules['sqlalchemy'].Column = Mock()
-    sys.modules['sqlalchemy'].Integer = Mock()
-    sys.modules['sqlalchemy'].String = Mock()
-    sys.modules['sqlalchemy'].DateTime = Mock()
-
-
-def teardown_sqlalchemy_mocks():
-    """Restore original modules"""
-    global _original_modules
-    for module_name, original_module in _original_modules.items():
-        if original_module is not None:
-            sys.modules[module_name] = original_module
-        elif module_name in sys.modules:
-            del sys.modules[module_name]
-
-
 # Add the matrixone package to the path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'matrixone'))
 
@@ -72,12 +39,12 @@ class TestMoCtlManager(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         """Setup mocks for the entire test class"""
-        setup_sqlalchemy_mocks()
+        pass
 
     @classmethod
     def tearDownClass(cls):
         """Restore original modules after tests"""
-        teardown_sqlalchemy_mocks()
+        pass
 
     def setUp(self):
         """Set up test fixtures"""
@@ -162,6 +129,46 @@ class TestMoCtlManager(unittest.TestCase):
 
         self.assertIn("Failed to parse mo_ctl result", str(context.exception))
 
+    def test_execute_moctl_non_json_keeps_raw_output(self):
+        """Regression #31384: a non-JSON mo_ctl reply must not lose the server's raw text."""
+        mock_result = Mock()
+        mock_result.rows = [('plain text banner OK',)]
+        self.mock_client.execute.return_value = mock_result
+
+        with self.assertRaises(MoCtlError) as context:
+            self.moctl_manager._execute_moctl('dn', 'flush', 'db1.t')
+
+        self.assertIn("raw output: 'plain text banner OK'", str(context.exception))
+        self.assertEqual(context.exception.raw_output, 'plain text banner OK')
+
+    def test_execute_moctl_failed_return_str_is_not_double_wrapped(self):
+        """A failed returnStr is reported once, not re-wrapped by the generic handler."""
+        mock_result = Mock()
+        mock_result.rows = [(json.dumps({"result": [{"returnStr": "table not found"}]}),)]
+        self.mock_client.execute.return_value = mock_result
+
+        with self.assertRaises(MoCtlError) as context:
+            self.moctl_manager._execute_moctl('dn', 'flush', 'db1.t')
+
+        self.assertEqual(str(context.exception), "mo_ctl operation failed: table not found")
+
+    def test_async_execute_moctl_non_json_keeps_raw_output(self):
+        """Regression #31384: the async manager keeps the raw non-JSON reply too."""
+        import asyncio
+        from unittest.mock import AsyncMock
+
+        from matrixone.async_client import AsyncMoCtlManager
+        from matrixone.exceptions import MoCtlError as AsyncMoCtlError
+
+        client = Mock()
+        client.execute = AsyncMock(return_value=Mock(rows=[('plain text banner OK',)]))
+
+        with self.assertRaises(AsyncMoCtlError) as context:
+            asyncio.run(AsyncMoCtlManager(client)._execute_moctl('dn', 'flush', 'db1.t'))
+
+        self.assertIn("raw output: 'plain text banner OK'", str(context.exception))
+        self.assertEqual(context.exception.raw_output, 'plain text banner OK')
+
     def test_execute_moctl_exception(self):
         """Test mo_ctl execution with exception"""
         # Mock exception
@@ -231,12 +238,12 @@ class TestMoCtlIntegration(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         """Setup mocks for the entire test class"""
-        setup_sqlalchemy_mocks()
+        pass
 
     @classmethod
     def tearDownClass(cls):
         """Restore original modules after tests"""
-        teardown_sqlalchemy_mocks()
+        pass
 
     def setUp(self):
         """Set up test fixtures"""

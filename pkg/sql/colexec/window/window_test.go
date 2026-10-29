@@ -255,43 +255,47 @@ func TestWin(t *testing.T) {
 }
 
 func TestWindowFrameEvaluationHonorsCancellation(t *testing.T) {
-	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
-	const rows = cancellationCheckInterval * 2
-	values := make([]int32, rows)
-	bat := batch.NewWithSize(1)
-	bat.Vecs[0] = testutil.MakeInt32Vector(values, nil, proc.Mp())
-	bat.SetRowCount(rows)
+	for _, tc := range []struct {
+		name   string
+		frame  *plan.FrameClause
+		checks int32
+	}{
+		{"full partition", makeFullFrame(), 2},
+		{"ordinary frame", &plan.FrameClause{
+			Type:  plan.FrameClause_ROWS,
+			Start: &plan.FrameBound{Type: plan.FrameBound_CURRENT_ROW},
+			End:   &plan.FrameBound{Type: plan.FrameBound_FOLLOWING, UnBounded: true},
+		}, 3},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
+			const rows = cancellationCheckInterval * 2
+			values := make([]int32, rows)
+			bat := batch.NewWithSize(1)
+			bat.Vecs[0] = testutil.MakeInt32Vector(values, nil, proc.Mp())
+			bat.SetRowCount(rows)
 
-	arg := &Window{
-		WinSpecList: []*plan.Expr{makeWindowSpec()},
-		Aggs:        []aggexec.AggFuncExecExpression{newAggExpr()},
+			spec := makeWindowSpec()
+			spec.GetW().Frame = tc.frame
+			arg := &Window{
+				WinSpecList: []*plan.Expr{spec},
+				Aggs:        []aggexec.AggFuncExecExpression{newAggExpr()},
+			}
+			require.NoError(t, arg.Prepare(proc))
+			arg.ctr.bat = bat
+			require.NoError(t, arg.ctr.evalAggVector(bat, proc))
+
+			// Cancel after the first 1024 rows have been aggregated in either path.
+			proc.Ctx = newCancelAfterDoneChecksContext(proc.Ctx, tc.checks)
+
+			err := arg.ctr.processFunc(0, arg, proc, arg.OpAnalyzer)
+			require.ErrorIs(t, err, context.Canceled)
+
+			arg.Free(proc, true, err)
+			proc.Free()
+			require.Equal(t, int64(0), proc.Mp().CurrNB())
+		})
 	}
-	require.NoError(t, arg.Prepare(proc))
-	arg.ctr.bat = bat
-	require.NoError(t, arg.ctr.evalAggVector(bat, proc))
-
-	arg.ctr.batAggs = make([]aggexec.AggFuncExec, 1)
-	var err error
-	arg.ctr.batAggs[0], err = aggexec.MakeAgg(
-		proc.Mp(),
-		arg.Aggs[0].GetAggID(),
-		arg.Aggs[0].IsDistinct(),
-		types.T_int32.ToType(),
-	)
-	require.NoError(t, err)
-	require.NoError(t, arg.ctr.batAggs[0].GroupGrow(bat.RowCount()))
-
-	// processFunc checks once at the outer row, then every 1024 frame rows.
-	// Cancel on the third check so the test proves an already-running frame is
-	// interrupted, rather than only proving that a pre-canceled call is rejected.
-	proc.Ctx = newCancelAfterDoneChecksContext(proc.Ctx, 3)
-
-	err = arg.ctr.processFunc(0, arg, proc, arg.OpAnalyzer)
-	require.ErrorIs(t, err, context.Canceled)
-
-	arg.Free(proc, true, err)
-	proc.Free()
-	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
 
 func TestCumulativeWindowCancellationReleasesState(t *testing.T) {
@@ -1570,13 +1574,13 @@ func TestWindowOrderedPercentileSpills(t *testing.T) {
 		}
 		outputRows += len(got)
 		if outputRows < rows {
-			require.NotNil(t, arg.ctr.orderedSetPartitionResults,
+			require.NotNil(t, arg.ctr.fullPartitionResults,
 				"partition result must survive until the final output chunk")
 		}
 	}
 	require.Equal(t, rows, outputRows)
 	require.Equal(t, 3, outputChunks)
-	require.Nil(t, arg.ctr.orderedSetPartitionResults)
+	require.Nil(t, arg.ctr.fullPartitionResults)
 	// With a one-byte spill threshold every source row is reported once. A
 	// per-output-chunk recomputation would report 60,000 rows for this input.
 	require.Equal(t, int64(rows), arg.OpAnalyzer.GetOpStats().SpillRows)
@@ -1606,7 +1610,7 @@ func TestWindowOrderedPercentileFinalizationHonorsCancellation(t *testing.T) {
 	result, err := vm.Exec(arg, proc)
 	require.Nil(t, result.Batch)
 	require.ErrorIs(t, err, context.Canceled)
-	require.Nil(t, arg.ctr.orderedSetPartitionResults)
+	require.Nil(t, arg.ctr.fullPartitionResults)
 	require.Nil(t, arg.ctr.batAggs)
 
 	arg.Free(proc, true, err)
@@ -1644,7 +1648,7 @@ func TestWindowOrderedPercentileSpilledMergeCancellationClosesAndReuses(t *testi
 	require.Nil(t, result.Batch)
 	require.ErrorIs(t, err, context.Canceled)
 	require.Positive(t, arg.OpAnalyzer.GetOpStats().SpillRows)
-	require.Nil(t, arg.ctr.orderedSetPartitionResults)
+	require.Nil(t, arg.ctr.fullPartitionResults)
 	require.Nil(t, arg.ctr.batAggs)
 	spilledFiles := trackingFS.openedFiles()
 	require.NotEmpty(t, spilledFiles)
@@ -1668,7 +1672,7 @@ func TestWindowOrderedPercentileSpilledMergeCancellationClosesAndReuses(t *testi
 	require.NotNil(t, result.Batch)
 	require.Equal(t, []float64{20, 20, 20},
 		vector.MustFixedColWithTypeCheck[float64](result.Batch.Vecs[1]))
-	require.Nil(t, arg.ctr.orderedSetPartitionResults)
+	require.Nil(t, arg.ctr.fullPartitionResults)
 
 	arg.Free(proc, false, nil)
 	secondChild.Free(proc, false, nil)
@@ -1713,7 +1717,7 @@ func TestWindowOrderedPercentilePartitionCrossesOutputChunk(t *testing.T) {
 	}
 	require.Equal(t, wantFirst,
 		vector.MustFixedColWithTypeCheck[int32](first))
-	require.NotNil(t, ctr.orderedSetPartitionResults)
+	require.NotNil(t, ctr.fullPartitionResults)
 	first.Free(proc.Mp())
 
 	second, err := ctr.processAggregateFuncRange(
@@ -1728,7 +1732,7 @@ func TestWindowOrderedPercentilePartitionCrossesOutputChunk(t *testing.T) {
 		}
 	}
 	require.Equal(t, want, vector.MustFixedColWithTypeCheck[int32](second))
-	require.Nil(t, ctr.orderedSetPartitionResults)
+	require.Nil(t, ctr.fullPartitionResults)
 	second.Free(proc.Mp())
 
 	bat.Clean(proc.Mp())
@@ -1756,14 +1760,14 @@ func TestWindowOrderedPercentileCacheReleasesOnReset(t *testing.T) {
 	result, err := vm.Exec(arg, proc)
 	require.NoError(t, err)
 	require.NotNil(t, result.Batch)
-	require.NotNil(t, arg.ctr.orderedSetPartitionResults)
+	require.NotNil(t, arg.ctr.fullPartitionResults)
 
 	// Model a LIMIT consumer that stops before the cached partition's final
 	// chunk, then reuse the operator generation.
 	arg.Reset(proc, false, nil)
-	require.Nil(t, arg.ctr.orderedSetPartitionResults)
-	require.Zero(t, arg.ctr.orderedSetNextRow)
-	require.Zero(t, arg.ctr.orderedSetPartition)
+	require.Nil(t, arg.ctr.fullPartitionResults)
+	require.Zero(t, arg.ctr.fullPartitionNextRow)
+	require.Zero(t, arg.ctr.fullPartition)
 	child.Free(proc, false, nil)
 
 	secondBatch := makeInt32Batch(proc.Mp(), []int32{10, 20, 30})
@@ -1776,7 +1780,7 @@ func TestWindowOrderedPercentileCacheReleasesOnReset(t *testing.T) {
 	require.NotNil(t, result.Batch)
 	require.Equal(t, []float64{20, 20, 20},
 		vector.MustFixedColWithTypeCheck[float64](result.Batch.Vecs[1]))
-	require.Nil(t, arg.ctr.orderedSetPartitionResults)
+	require.Nil(t, arg.ctr.fullPartitionResults)
 
 	arg.Free(proc, false, nil)
 	secondChild.Free(proc, false, nil)

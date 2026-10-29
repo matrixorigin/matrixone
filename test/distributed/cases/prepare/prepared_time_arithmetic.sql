@@ -22,8 +22,8 @@ SET @p_time_numeric_v = CAST(10 AS SIGNED);
 EXECUTE p_time_numeric_0 USING @p_time_numeric_v;
 DEALLOCATE PREPARE p_time_numeric_0;
 
--- Integer rebinding must retain the DECIMAL64 temporal arithmetic domain for
--- addition, subtraction, and modulo instead of widening to DECIMAL128.
+-- Integer rebinding must use the same widened decimal domain as ordinary
+-- TIME arithmetic, including the full BIGINT range.
 PREPARE p_time_integer_add FROM
     'SELECT CAST(''00:00:01'' AS TIME(0)) + ? AS result';
 SET @p_time_numeric_v = CAST(10 AS SIGNED);
@@ -45,7 +45,7 @@ SET @p_time_numeric_v = CAST(10 AS SIGNED);
 EXECUTE p_time_integer_mod USING @p_time_numeric_v;
 DEALLOCATE PREPARE p_time_integer_mod;
 
--- The temporal DECIMAL64 provenance must also reach nested signed-integer
+-- The temporal numeric provenance must also reach nested signed-integer
 -- arithmetic, not only a direct parameter occurrence.
 PREPARE p_time_nested_add FROM
     'SELECT CAST(''00:00:01'' AS TIME(0)) + (? + ?) AS result';
@@ -65,7 +65,7 @@ SET @p_time_nested_right = CAST(9999999999999 AS SIGNED);
 EXECUTE p_time_nested_scale USING @p_time_nested_left, @p_time_nested_right;
 DEALLOCATE PREPARE p_time_nested_scale;
 
--- TIME plus an unsigned integer follows the ordinary DECIMAL64 domain too.
+-- TIME plus an unsigned integer follows the ordinary widened decimal domain too.
 PREPARE p_time_unsigned FROM
     'SELECT CAST(''00:00:01'' AS TIME(0)) + ? AS result';
 SET @p_time_numeric_v = CAST(10 AS UNSIGNED);

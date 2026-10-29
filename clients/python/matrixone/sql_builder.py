@@ -19,6 +19,10 @@ This module provides a centralized SQL building system that eliminates
 code duplication across different interfaces (ORM, Vector Search, Pinecone, etc.).
 """
 
+from ._query_compilation import conjoin_conditions
+from ._sql_literals import sql_string_token
+
+from collections.abc import Mapping
 from enum import Enum
 from typing import Any, Dict, List, Optional, Tuple, Union
 
@@ -148,9 +152,14 @@ class MatrixOneSQLBuilder:
         """Add multiple rows of values for INSERT"""
         if self._query_type != "INSERT":
             raise ValueError("insert_values() can only be used with INSERT operations")
+        rows = []
+        for row in values:
+            if isinstance(row, Mapping):
+                raise TypeError("insert_values() rows must be positional, not mappings")
+            rows.append(list(row))
 
-        self._insert_columns = columns
-        self._insert_values = values
+        self._insert_columns = list(columns)
+        self._insert_values = rows
         return self
 
     # UPDATE methods
@@ -353,9 +362,9 @@ class MatrixOneSQLBuilder:
         return self
 
     # CTE (Common Table Expression) methods
-    def with_cte(self, name: str, sql: str, *params: Any) -> "MatrixOneSQLBuilder":
+    def with_cte(self, name: str, sql: str, *params: Any, recursive: bool = False) -> "MatrixOneSQLBuilder":
         """Add CTE (Common Table Expression)"""
-        self._ctes.append({"name": name, "sql": sql, "params": list(params)})
+        self._ctes.append({"name": name, "sql": sql, "params": list(params), "recursive": recursive})
         return self
 
     # Vector query specific methods
@@ -424,7 +433,8 @@ class MatrixOneSQLBuilder:
             for cte in self._ctes:
                 with_parts.append(f"{cte['name']} AS ({cte['sql']})")
                 all_params.extend(cte["params"])
-            sql_parts.append("WITH " + ", ".join(with_parts))
+            prefix = "WITH RECURSIVE " if any(cte.get("recursive", False) for cte in self._ctes) else "WITH "
+            sql_parts.append(prefix + ", ".join(with_parts))
 
         # Build SELECT clause
         if self._select_columns:
@@ -437,7 +447,7 @@ class MatrixOneSQLBuilder:
         if self._from_table:
             from_clause = f"FROM {self._from_table}"
             if self._from_snapshot:
-                from_clause += f"{{snapshot = '{self._from_snapshot}'}}"
+                from_clause += f"{{snapshot = {sql_string_token(self._from_snapshot, context='Snapshot')}}}"
             sql_parts.append(from_clause)
 
         # Build JOIN clauses
@@ -446,7 +456,7 @@ class MatrixOneSQLBuilder:
 
         # Build WHERE clause
         if self._where_conditions:
-            where_clause = "WHERE " + " AND ".join(self._where_conditions)
+            where_clause = "WHERE " + conjoin_conditions(self._where_conditions)
             sql_parts.append(where_clause)
             all_params.extend(self._where_params)
 
@@ -457,7 +467,7 @@ class MatrixOneSQLBuilder:
 
         # Build HAVING clause
         if self._having_conditions:
-            having_clause = "HAVING " + " AND ".join(self._having_conditions)
+            having_clause = "HAVING " + conjoin_conditions(self._having_conditions)
             sql_parts.append(having_clause)
             all_params.extend(self._having_params)
 
@@ -544,7 +554,7 @@ class MatrixOneSQLBuilder:
         where_clause = ""
         params = self._update_set_values.copy()
         if self._where_conditions:
-            where_clause = "WHERE " + " AND ".join(self._where_conditions)
+            where_clause = "WHERE " + conjoin_conditions(self._where_conditions)
             params.extend(self._where_params)
 
         sql = f"UPDATE {self._from_table} SET {set_clause} {where_clause}"
@@ -560,7 +570,7 @@ class MatrixOneSQLBuilder:
         where_clause = ""
         params = []
         if self._where_conditions:
-            where_clause = "WHERE " + " AND ".join(self._where_conditions)
+            where_clause = "WHERE " + conjoin_conditions(self._where_conditions)
             params.extend(self._where_params)
 
         sql = f"DELETE FROM {self._from_table} {where_clause}"

@@ -243,7 +243,7 @@ func (builder *QueryBuilder) bindLoadUserVariableAssignments(
 		if target == nil {
 			return nil, moerr.NewBadFieldErrorf(builder.GetContext(), "internal error: column '%s' does not exist", assignment.target)
 		}
-		if target.Hidden || target.GeneratedCol != nil {
+		if target.GeneratedCol != nil {
 			return nil, moerr.NewInvalidInputf(builder.GetContext(),
 				"the value specified for generated column '%s' in table '%s' is not allowed",
 				assignment.target, targetTable.Name)

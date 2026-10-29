@@ -1568,6 +1568,11 @@ func (h *AObjectHandle) nextPrefetchTarget(
 			return nil, 0, false, nil
 		}
 		obj = h.objects[h.objectOffsetCursor]
+		if obj == nil || obj.BlkCnt() == 0 {
+			h.objectOffsetCursor++
+			h.blkOffsetCursor = 0
+			continue
+		}
 		blk = uint16(h.blkOffsetCursor)
 		h.blkOffsetCursor++
 		if h.blkOffsetCursor >= int(obj.BlkCnt()) {
@@ -3263,6 +3268,9 @@ func classifyCheckpointObject(
 	start, end types.TS,
 	selection checkpointObjectSelection,
 ) checkpointObjectKind {
+	if obj.GetAppendable() && obj.Rows() == 0 && obj.BlkCnt() == 0 {
+		return checkpointObjectKindIgnore
+	}
 	switch selection {
 	case checkpointObjectSelectionRange:
 		if obj.GetAppendable() {
@@ -3974,7 +3982,9 @@ func fillInInsertBatch(bat **batch.Batch, entry *RowEntry, retainRowID bool, log
 	}
 	dstOffset := 0
 	if retainRowID {
-		appendFromEntry(entry.Batch.Vecs[0], (*bat).Vecs[0], int(entry.Offset), mp)
+		if err := vector.AppendFixed((*bat).Vecs[0], entry.RowID, false, mp); err != nil {
+			panic(err)
+		}
 		dstOffset = 1
 	}
 	if len(logicalSeqnums) > 0 {
@@ -3995,11 +4005,21 @@ func fillInInsertBatch(bat **batch.Batch, entry *RowEntry, retainRowID bool, log
 			appendFromEntry(vec, (*bat).Vecs[i-2+dstOffset], int(entry.Offset), mp)
 		}
 	}
-	appendFromEntry(entry.Batch.Vecs[1], (*bat).Vecs[len((*bat).Vecs)-1], int(entry.Offset), mp)
+	if err := vector.AppendFixed((*bat).Vecs[len((*bat).Vecs)-1], entry.Time, false, mp); err != nil {
+		panic(err)
+	}
 
 }
 func fillInDeleteBatch(bat **batch.Batch, entry *RowEntry, retainRowID bool, mp *mpool.MPool) {
-	pkVec := entry.Batch.Vecs[2]
+	// Replayed delete entries retain only the PK vector. Older in-memory
+	// entries and test fixtures may still carry the original logtail layout.
+	compact := len(entry.Batch.Vecs) == 1
+	var pkVec *vector.Vector
+	if compact {
+		pkVec = entry.Batch.Vecs[0]
+	} else {
+		pkVec = entry.Batch.Vecs[2]
+	}
 	if *bat == nil {
 		vecCnt := 2
 		attrs := []string{objectio.TombstoneAttr_PK_Attr, objectio.DefaultCommitTS_Attr}
@@ -4021,7 +4041,13 @@ func fillInDeleteBatch(bat **batch.Batch, entry *RowEntry, retainRowID bool, mp 
 	pkIdx := 0
 	tsIdx := 1
 	if retainRowID {
-		appendFromEntry(entry.Batch.Vecs[0], (*bat).Vecs[0], int(entry.Offset), mp)
+		if compact {
+			if err := vector.AppendFixed((*bat).Vecs[0], entry.RowID, false, mp); err != nil {
+				panic(err)
+			}
+		} else {
+			appendFromEntry(entry.Batch.Vecs[0], (*bat).Vecs[0], int(entry.Offset), mp)
+		}
 		pkIdx = 1
 		tsIdx = 2
 	}
