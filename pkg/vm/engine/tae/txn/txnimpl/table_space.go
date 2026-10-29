@@ -163,6 +163,11 @@ func (space *tableSpace) prepareApplyANode(node *anode, startOffset uint32) erro
 	var vec containers.Vector
 	if startOffset == 0 {
 		vec = space.table.store.rt.VectorPool.Small.GetVector(&objectio.RowidType)
+		defer func() {
+			if vec != nil {
+				vec.Close()
+			}
+		}()
 	} else {
 		vec = node.data.Vecs[space.table.GetLocalSchema(space.isTombstone).PhyAddrKey.Idx]
 	}
@@ -252,6 +257,7 @@ func (space *tableSpace) prepareApplyANode(node *anode, startOffset uint32) erro
 	if startOffset == 0 {
 		node.data.Vecs[space.table.GetLocalSchema(space.isTombstone).PhyAddrKey.Idx].Close()
 		node.data.Vecs[space.table.GetLocalSchema(space.isTombstone).PhyAddrKey.Idx] = vec
+		vec = nil // node.data now owns the vector.
 	}
 	return nil
 }

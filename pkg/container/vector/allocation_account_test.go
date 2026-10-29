@@ -1478,3 +1478,28 @@ func TestUnmarshalBinaryReplacesBorrowedAliases(t *testing.T) {
 	target.Free(mp)
 	require.Zero(t, mp.CurrNB())
 }
+
+func TestVectorAllocationAccountConstNullCloneReuse(t *testing.T) {
+	state := newTestVectorAllocationAccount(t, 1<<20, 8)
+	t.Cleanup(func() { finalizeTestVectorAllocationAccount(t, state) })
+	mp := mpool.MustNewZero()
+	typ := types.T_int64.ToType()
+	dst := newAccountedTestVector(t, typ, state.selection)
+	t.Cleanup(func() { dst.Free(mp) })
+	src := NewConstNull(typ, 2, mp)
+	t.Cleanup(func() { src.Free(mp) })
+	require.NoError(t, dst.PreExtend(2, mp))
+	before := state.account.Snapshot().Used
+	require.Positive(t, before)
+	require.NoError(t, src.CloneWindowTo(dst, 0, 2, mp))
+	require.True(t, dst.IsConstNull())
+	require.Equal(t, before, state.account.Snapshot().Used)
+	require.Equal(t, uint64(1), state.registry.LiveAllocationMetadata())
+	dst.ResetWithNewType(&typ)
+	require.NoError(t, AppendFixed(dst, int64(7), false, mp))
+	require.Equal(t, before, state.account.Snapshot().Used)
+	dst.Free(mp)
+	require.Zero(t, state.account.Snapshot().Used)
+	require.Zero(t, state.registry.LiveAllocationMetadata())
+	require.Zero(t, mp.CurrNB())
+}
