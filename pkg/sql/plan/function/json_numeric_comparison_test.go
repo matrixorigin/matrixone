@@ -37,26 +37,30 @@ func TestJSONNumericComparisonDomains(t *testing.T) {
 	}{
 		{"int8 maximum", "127", "127", types.T_int8, 0, false},
 		{"int8 accepted fraction", "127.9", "127", types.T_int8, 1, false},
-		{"int8 overflow", "128", "1", types.T_int8, 0, true},
+		{"int8 overflow", "128", "1", types.T_int8, 1, false},
 		{"int8 minimum fraction", "-128.9", "-128", types.T_int8, -1, false},
-		{"int8 underflow", "-129", "1", types.T_int8, 0, true},
+		{"int8 underflow", "-129", "1", types.T_int8, -1, false},
 		{"int16 maximum", "32767", "32767", types.T_int16, 0, false},
-		{"int16 overflow", "32768", "1", types.T_int16, 0, true},
+		{"int16 overflow", "32768", "1", types.T_int16, 1, false},
 		{"int32 maximum", "2147483647", "2147483647", types.T_int32, 0, false},
-		{"int32 overflow", "2147483648", "1", types.T_int32, 0, true},
+		{"int32 overflow", "2147483648", "1", types.T_int32, 1, false},
 		{"int64 precision", "9007199254740993", "9007199254740992", types.T_int64, 1, false},
 		{"int64 maximum", "9223372036854775807", "9223372036854775807", types.T_int64, 0, false},
 		{"int64 minimum", "-9223372036854775808", "-9223372036854775808", types.T_int64, 0, false},
-		{"int64 overflow", "18446744073709551615", "1", types.T_int64, 0, true},
+		{"int64 wider unsigned", "18446744073709551615", "1", types.T_int64, 1, false},
 		{"uint8 maximum", "255", "255", types.T_uint8, 0, false},
 		{"uint8 accepted fraction", "255.9", "255", types.T_uint8, 1, false},
-		{"uint8 overflow", "256", "1", types.T_uint8, 0, true},
+		{"uint8 overflow", "256", "1", types.T_uint8, 1, false},
 		{"uint16 maximum", "65535", "65535", types.T_uint16, 0, false},
-		{"uint16 overflow", "65536", "1", types.T_uint16, 0, true},
+		{"uint16 overflow", "65536", "1", types.T_uint16, 1, false},
 		{"uint32 maximum", "4294967295", "4294967295", types.T_uint32, 0, false},
-		{"uint32 overflow", "4294967296", "1", types.T_uint32, 0, true},
+		{"uint32 overflow", "4294967296", "1", types.T_uint32, 1, false},
+		{"int64 exponent", "1e100", "1", types.T_int64, 1, false},
+		{"int64 negative exponent", "-1e100", "1", types.T_int64, -1, false},
+		{"uint64 exponent", "1e100", "1", types.T_uint64, 1, false},
+		{"uint64 negative", "-1", "1", types.T_uint64, -1, false},
 		{"uint64 maximum", "18446744073709551615", "18446744073709551615", types.T_uint64, 0, false},
-		{"unsigned negative fraction", "-0.5", "0", types.T_uint64, 0, true},
+		{"unsigned negative fraction", "-0.5", "0", types.T_uint64, -1, false},
 		{"negative fraction", "-1.5", "-1", types.T_int64, -1, false},
 		{"float32 rounding", "16777217", "16777216", types.T_float32, 0, false},
 		{"float32 overflow", "1e100", "1", types.T_float32, 0, true},
@@ -78,8 +82,26 @@ func TestJSONNumericComparisonDomains(t *testing.T) {
 			require.Equal(t, tc.want, got)
 		})
 	}
-	// Exact DECIMAL range validation retains the pre-existing truncation
-	// acceptance domain even when the original number is above the peer.
+	// Adapter metadata still constrains the numeric peer itself, even though
+	// the JSON row is compared without applying the peer's integer range.
+	for _, tc := range []struct {
+		name, value string
+		typ         types.T
+		kind        vector.PrepareParamKind
+	}{
+		{"signed peer range", "128", types.T_int8, vector.PrepareParamInteger},
+		{"unsigned peer range", "256", types.T_uint8, vector.PrepareParamInteger},
+		{"unsigned peer sign", "-1", types.T_uint64, vector.PrepareParamInteger},
+		{"legacy peer range", "1e100", types.T_any, vector.PrepareParamInteger},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := makeJSONNumericPeer(context.Background(), parse(tc.value), tc.typ, tc.kind)
+			require.Error(t, err)
+		})
+	}
+
+	// JSON decimal values also retain their full value above the integer peer
+	// range, without truncating or narrowing before comparison.
 	peer, err := makeJSONNumericPeer(context.Background(), parse("18446744073709551615"), types.T_uint64, vector.PrepareParamNone)
 	require.NoError(t, err)
 	cmp, _, err := compareJSONNumeric(context.Background(), newTypedByteJson(bytejson.TpCodeDecimal, "18446744073709551615.9"), &peer)
