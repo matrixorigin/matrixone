@@ -134,6 +134,51 @@ select column_name from information_schema.columns where table_schema = 'db1' an
 ➤ column_name[12,256,0]  𝄀
 id  𝄀
 amount
+show rules on role test_rule_role_columns;
+➤ rule_name[12,0,0]  ¦  rule[12,0,0]  𝄀
+db1.t_columns  ¦  select id, amount from db1.t_columns where tenant = 1
+set names utf8mb4;
+select * from db1.t_columns order by id;
+➤ id[4,32,0]  ¦  amount[4,32,0]  𝄀
+1  ¦  100
+alter role test_rule_role_columns add rule "select id, amount from db1.t_columns where tenant = 1 /* harmless */" on table db1.t_columns;
+show rules on role test_rule_role_columns;
+➤ rule_name[12,0,0]  ¦  rule[12,0,0]  𝄀
+db1.t_columns  ¦  select id, amount from db1.t_columns where tenant = 1 /* harmless */
+set names utf8mb4;
+select * from db1.t_columns order by id;
+➤ id[4,32,0]  ¦  amount[4,32,0]  𝄀
+1  ¦  100
+prepare rule_stmt from 'select * from db1.t_columns order by id';
+execute rule_stmt;
+➤ id[4,32,0]  ¦  amount[4,32,0]  𝄀
+1  ¦  100
+deallocate prepare rule_stmt;
+alter role test_rule_role_columns add rule "select id, amount from db1.t_columns where tenant = 1 and '*/' = '*/'" on table db1.t_columns;
+show rules on role test_rule_role_columns;
+➤ rule_name[12,0,0]  ¦  rule[12,0,0]  𝄀
+db1.t_columns  ¦  select id, amount from db1.t_columns where tenant = 1 and '*/' = '*/'
+set names utf8mb4;
+select * from db1.t_columns order by id;
+➤ id[4,32,0]  ¦  amount[4,32,0]  𝄀
+1  ¦  100
+alter role test_rule_role_columns add rule "select id, amount from db1.t_columns; select * from db1.t_columns" on table db1.t_columns;
+invalid input: invalid rewrite rule SQL "select id, amount from db1.t_columns; select * from db1.t_columns": SQL parser error: syntax error, or too many sql to parse
+show rules on role test_rule_role_columns;
+➤ rule_name[12,0,0]  ¦  rule[12,0,0]  𝄀
+db1.t_columns  ¦  select id, amount from db1.t_columns where tenant = 1 and '*/' = '*/'
+set names utf8mb4;
+select * from db1.t_columns order by id;
+➤ id[4,32,0]  ¦  amount[4,32,0]  𝄀
+1  ¦  100
+alter role test_rule_role_columns add rule "select id, amount from db1.t_columns where tenant = 1" on table db1.t_columns;
+show rules on role test_rule_role_columns;
+➤ rule_name[12,0,0]  ¦  rule[12,0,0]  𝄀
+db1.t_columns  ¦  select id, amount from db1.t_columns where tenant = 1
+set names utf8mb4;
+select * from db1.t_columns order by id;
+➤ id[4,32,0]  ¦  amount[4,32,0]  𝄀
+1  ¦  100
 alter table db1.t1 rename to db1.t1_renamed;
 not supported: renaming a table while any role rewrite rules exist is not supported; drop all rules first
 rename table db1.t1 to db1.t1_renamed;
