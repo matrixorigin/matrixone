@@ -292,8 +292,13 @@ func (s *controlledS3) appendWindow(proc *process.Process, analyzer process.Anal
 		if err != nil {
 			return err
 		}
-		// Sync can drain jobs/acquire W; the borrowed W is already released.
-		return s.flush(proc, analyzer)
+		// Detached uploads already own their complete W and need no source
+		// progress. Keep them running after returning the borrowed parent W.
+		stats, err := s.writer.TakeCompletedStats()
+		if err != nil {
+			return err
+		}
+		return s.spoolStats(stats)
 	}
 }
 

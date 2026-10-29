@@ -352,11 +352,25 @@ func (fs *blockedImportFS) Write(ctx context.Context, v fileservice.IOVector) er
 }
 
 func TestControlledInsertDefaultImportPipelinesUpload(t *testing.T) {
-	credits := &controlledTestThrottler{t: t, grants: 1}
+	for _, grants := range []int{0, 1} {
+		t.Run(fmt.Sprint(grants), func(t *testing.T) { checkControlledInsertPipeline(t, grants, false) })
+	}
+	t.Run("borrowed-cancel", func(t *testing.T) { checkControlledInsertPipeline(t, 0, true) })
+}
+
+func checkControlledInsertPipeline(t *testing.T, grants int, cancelUpload bool) {
+	credits := &controlledTestThrottler{t: t, grants: grants}
 	proc, op, ws := controlledInsertFixture(t, credits)
 	ctx, cancel := context.WithTimeout(proc.Ctx, 10*time.Second)
 	t.Cleanup(cancel)
 	proc.Ctx = ctx
+	// One parent and two ready uploads must fit independently in this test.
+	require.NoError(t, ws.TryGrow(ctx, rscthrottler.WorkingSetSpec{
+		UnitBytes: ws.UnitBytes(), Inputs: []rscthrottler.InputSlotSpec{
+			{Name: "csv", Count: 1, Bytes: ws.InputCapacity(0)},
+			{Name: "output", Count: 1, Bytes: ws.InputCapacity(1)},
+		}, IOBytes: 3 * ws.IOBytes(),
+	}))
 	require.Nil(t, ctx.Value(ioutil.PipelineFlushKey), "ordinary LOAD needs no backfill context flag")
 	s := op.ctr.controlled
 	fs := &blockedImportFS{FileService: s.fs, entered: make(chan struct{}), release: make(chan struct{})}
@@ -376,14 +390,52 @@ func TestControlledInsertDefaultImportPipelinesUpload(t *testing.T) {
 	case <-ctx.Done():
 		t.Fatal(context.Cause(ctx))
 	}
-	require.Zero(t, s.written, "an incomplete upload must not produce transaction metadata")
+	// Ready jobs keep their own W; the borrowed parent must be available again.
+	need, _, err := ioutil.BatchIOEnvelope(b, s.bufferBytes)
+	require.NoError(t, err)
+	available, err := ws.AcquireIO(ctx, need)
+	require.NoError(t, err)
+	available.Release()
+	ids := vector.MustFixedColNoTypeCheck[int64](b.Vecs[0])
+	ids[0], ids[1] = 4, 3
+	require.NoError(t, s.append(proc, op.OpAnalyzer, b), "a cold D retry must not join the first upload")
+	require.NoError(t, s.flushPending(proc))
+	require.Zero(t, s.written, "incomplete uploads must not produce transaction metadata")
+	if cancelUpload {
+		cancel()
+		require.ErrorIs(t, s.flush(proc, op.OpAnalyzer), context.Canceled)
+		dataMP := s.dataMP
+		require.NoError(t, s.close())
+		require.Zero(t, dataMP.AllocatedBytes())
+		require.Zero(t, credits.balance)
+		checkCtx, stop := context.WithTimeout(context.Background(), 10*time.Second)
+		defer stop()
+		lease, err := ws.AcquireInput(checkCtx, 1)
+		require.NoError(t, err)
+		lease.Release()
+		available, err := ws.AcquireIO(checkCtx, ws.IOBytes())
+		require.NoError(t, err)
+		available.Release()
+		return
+	}
 	unblock()
 	require.NoError(t, s.flush(proc, op.OpAnalyzer))
-	frame, err := s.next()
-	require.NoError(t, err)
-	require.NotNil(t, frame)
-	stats := objectio.ObjectStats(frame.Vecs[1].GetBytesAt(0))
-	require.EqualValues(t, 2, stats.Rows())
+	var rows uint32
+	var objects int
+	for {
+		frame, err := s.next()
+		require.NoError(t, err)
+		if frame == nil {
+			break
+		}
+		objects += frame.Vecs[1].Length()
+		for i := 0; i < frame.Vecs[1].Length(); i++ {
+			stats := objectio.ObjectStats(frame.Vecs[1].GetBytesAt(i))
+			rows += stats.Rows()
+		}
+	}
+	require.EqualValues(t, 4, rows)
+	require.Equal(t, 2, objects)
 	require.Zero(t, credits.balance)
 	lease, err := ws.AcquireIO(ctx, ws.IOBytes())
 	require.NoError(t, err)

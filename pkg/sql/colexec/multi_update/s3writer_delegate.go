@@ -484,19 +484,21 @@ func (writer *s3WriterDelegate) acquireMemory(proc *process.Process, analyzer pr
 		return nil
 	}
 
-	// Retire every destructible owner before waiting. Uncommitted delete
-	// batches and metadata remain charged until they are actually destroyed.
-	if err := writer.sortAndSync(proc, analyzer); err != nil {
-		return err
-	}
-	if err := writer.flushInsertSinkers(proc, analyzer); err != nil {
-		return err
-	}
-	if err := writer.closeInsertSinkers(writer.memoryPool(proc)); err != nil {
-		return err
-	}
-	if err := writer.spoolMetadata(proc, false); err != nil {
-		return err
+	// Retire actual D owners before retrying. Ready borrowed-upload jobs
+	// already own W; an empty INSERT writer need not join them to retry D.
+	if !writer.pipelineInsert(proc) || writer.chargedBytes() > 0 {
+		if err := writer.sortAndSync(proc, analyzer); err != nil {
+			return err
+		}
+		if err := writer.flushInsertSinkers(proc, analyzer); err != nil {
+			return err
+		}
+		if err := writer.closeInsertSinkers(writer.memoryPool(proc)); err != nil {
+			return err
+		}
+		if err := writer.spoolMetadata(proc, false); err != nil {
+			return err
+		}
 	}
 	writer.reconcileMemory()
 	if recompute != nil {
@@ -671,6 +673,12 @@ func (writer *s3WriterDelegate) appendWindow(
 	}
 	var ioLease *rscthrottler.WorkspaceLease
 	if direct {
+		// Persistent INSERT sinkers must not capture the one-window W pool.
+		if writer.pipelineInsert(proc) {
+			if err = writer.ensureInsertSinkers(proc); err != nil {
+				return err
+			}
+		}
 		if err = writer.ensureOutputSlot(proc); err != nil {
 			return err
 		}
@@ -697,9 +705,13 @@ func (writer *s3WriterDelegate) appendWindow(
 		ioMP := mpool.MustNew("multi-update-io")
 		writer.activeMP = ioMP
 		defer func() {
+			if writer.pipelineInsert(proc) {
+				writer.activeMP = nil
+				writer.activeWorkspace = nil
+			}
 			if err != nil {
 				err = errors.Join(err, writer.free(proc))
-			} else {
+			} else if !writer.pipelineInsert(proc) {
 				err = errors.Join(err, writer.closeInsertSinkers(ioMP))
 			}
 			writer.activeMP = nil
@@ -842,7 +854,7 @@ func (writer *s3WriterDelegate) appendWindow(
 
 	writer.batchSize += windowBytes
 
-	if !direct && writer.pipelineInsert(proc) && writer.batchSize >= writer.flushThreshold {
+	if writer.pipelineInsert(proc) && (direct || writer.batchSize >= writer.flushThreshold) {
 		if err = writer.submitInsertSinkers(proc, analyzer); err != nil {
 			return err
 		}

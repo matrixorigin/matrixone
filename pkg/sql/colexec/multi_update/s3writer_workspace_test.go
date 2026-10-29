@@ -17,6 +17,7 @@ package multi_update
 import (
 	"context"
 	"encoding/binary"
+	"fmt"
 	"os"
 	"sync"
 	"testing"
@@ -158,6 +159,14 @@ func (fs *blockedWriterFS) Write(ctx context.Context, v fileservice.IOVector) er
 }
 
 func TestS3WriterDefaultImportPipelinesAllProjections(t *testing.T) {
+	for _, capacity := range []int64{0, 1 << 20} {
+		t.Run(fmt.Sprint(capacity), func(t *testing.T) { checkS3WriterPipeline(t, capacity, false, false) })
+	}
+	t.Run("borrowed-reset", func(t *testing.T) { checkS3WriterPipeline(t, 0, true, false) })
+	t.Run("borrowed-to-retained", func(t *testing.T) { checkS3WriterPipeline(t, 0, false, true) })
+}
+
+func checkS3WriterPipeline(t *testing.T, capacity int64, reset, resume bool) {
 	_, ctrl, proc := prepareTestCtx(t, true)
 	fs := proc.GetFileService()
 	t.Cleanup(func() { fs.Close(context.Background()) })
@@ -183,7 +192,7 @@ func TestS3WriterDefaultImportPipelinesAllProjections(t *testing.T) {
 	t.Cleanup(cancel)
 	require.NoError(t, tc.op.Prepare(proc))
 	w := tc.op.ctr.s3Writer
-	credits := &admissionThrottler{capacity: 1 << 20}
+	credits := &admissionThrottler{capacity: capacity}
 	w.memController.throttler = credits
 	b := batch.NewWithSize(6)
 	t.Cleanup(func() { b.Clean(proc.Mp()) })
@@ -194,26 +203,74 @@ func TestS3WriterDefaultImportPipelinesAllProjections(t *testing.T) {
 	b.Vecs[4] = testutil.MakeVarcharVector([]string{"u2", "u1"}, nil, proc.Mp())
 	b.Vecs[5] = testutil.MakeVarcharVector([]string{"s2", "s1"}, nil, proc.Mp())
 	b.SetRowCount(2)
+	// Reserve one parent plus two waves of independent projection uploads.
+	var parent, uploads int64
+	for _, update := range w.updateCtxs {
+		projection := b.SelectColumns(update.InsertCols, nil)
+		peak, upload, err := ioutil.BatchIOEnvelope(projection, w.writerUnit(proc))
+		require.NoError(t, err)
+		parent = max(parent, peak)
+		uploads += upload
+	}
+	require.NoError(t, ws.TryGrow(ctx, rscthrottler.WorkingSetSpec{
+		UnitBytes: ws.UnitBytes(), Inputs: []rscthrottler.InputSlotSpec{
+			{Name: "csv", Count: 1, Bytes: ws.InputCapacity(0)},
+			{Name: "output", Count: 1, Bytes: ws.InputCapacity(1)},
+		}, IOBytes: max(ws.IOBytes(), parent+2*uploads),
+	}))
 	require.NoError(t, w.append(proc, tc.op.OpAnalyzer, b))
+	ids := vector.MustFixedColNoTypeCheck[int64](b.Vecs[0])
+	ids[0], ids[1] = 4, 3
+	require.NoError(t, vector.SetBytesAt(b.Vecs[4], 0, []byte("u4"), proc.Mp()))
+	require.NoError(t, vector.SetBytesAt(b.Vecs[4], 1, []byte("u3"), proc.Mp()))
+	if resume {
+		credits.capacity = 1 << 20
+	}
+	require.NoError(t, w.append(proc, tc.op.OpAnalyzer, b), "a cold D retry must not join ready uploads")
+	if resume {
+		require.Positive(t, w.ownedMP.AllocatedBytes(), "resumed D buffers must belong to the persistent operator pool")
+	}
 	require.NoError(t, w.submitInsertSinkers(proc, tc.op.OpAnalyzer))
+	if capacity == 0 && !resume {
+		require.Zero(t, w.retainedBytes(), "ready borrowed jobs own private W pools")
+	}
 	select {
 	case <-blocked.entered:
 	case <-ctx.Done():
 		t.Fatal(context.Cause(ctx))
 	}
 	require.Zero(t, w.metadataWritten)
+	inputRows := uint64(12)
+	if reset {
+		require.ErrorIs(t, w.reset(proc), context.Canceled)
+		require.Zero(t, w.retainedBytes())
+		available, err := ws.AcquireIO(ctx, ws.IOBytes())
+		require.NoError(t, err)
+		available.Release()
+		inputRows = 6
+	}
 	unblock()
+	if reset {
+		require.NoError(t, w.append(proc, tc.op.OpAnalyzer, b))
+	}
 	var rows uint64
+	var objects int
 	for {
 		require.NoError(t, w.flushTailAndWriteToOutput(proc, tc.op.OpAnalyzer))
 		if w.outputBat == nil {
 			break
 		}
+		objects += w.outputBat.RowCount()
 		for _, n := range vector.MustFixedColNoTypeCheck[uint64](w.outputBat.Vecs[2]) {
 			rows += n
 		}
 	}
-	require.EqualValues(t, 6, rows, "base, unique and regular index each persist both rows")
+	require.EqualValues(t, inputRows, rows, "base, unique and regular index retain exactly this generation")
+	expectedObjects := 3
+	if capacity == 0 && !reset {
+		expectedObjects = 6
+	}
+	require.Equal(t, expectedObjects, objects)
 	require.NoError(t, w.free(proc))
 	require.Zero(t, credits.reserved)
 	require.False(t, credits.invalidRelease)
