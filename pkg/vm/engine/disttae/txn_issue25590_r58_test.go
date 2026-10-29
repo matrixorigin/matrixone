@@ -296,6 +296,18 @@ func TestIssue25590AcceptedGCDeletionObligationKeepsCapacityThroughCommit(t *tes
 		"the recovered worker completed the stalled batch's file deletion")
 	issue25590RequireGone(t, failFS, name,
 		"the recovered worker deleted the stalled object's file")
+	// The file-gone observation can beat the worker's settle — the settle
+	// trails DeleteUnpublishedObjects' whole-batch return on the same
+	// worker goroutine (pkg/vm/engine/disttae/types.go gcFiles) — so the
+	// proof waits for the LEDGER here, the same sync point r41's recovery
+	// leg and the settle-before-commit order below use. An immediate
+	// zero raced this window and failed CI run 40798664858 with
+	// live=1 although the file was already gone.
+	require.Eventually(t, func() bool {
+		q, l, f := e.InspectUnpublishedPendingForTest()
+		return len(q) == 0 && l == 0 && f == 0
+	}, 10*time.Second, 10*time.Millisecond,
+		"the accepted worker's settle retired the retained obligation's ledger membership")
 	queued, live, inFlight = e.InspectUnpublishedPendingForTest()
 	require.Empty(t, queued)
 	require.Zero(t, inFlight)

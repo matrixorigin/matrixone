@@ -5955,3 +5955,76 @@ artifacts):
   ./pkg/vm/engine/disttae` — under the same environment, after its own
   two ineffassign findings in the new matrix regression were fixed —
   reports 0 issues (`static-lint3.log`, exit 0).
+
+## 10 design review record - round 59 (CI follow-up): the r58 recovery leg waits the settle's ledger retire
+
+CI run 40798664858 (head 8b41e39227, attempt 1, terminal 02:57:45Z)
+triaged: the round-58 regression
+TestIssue25590AcceptedGCDeletionObligationKeepsCapacityThroughCommit
+failed at the recovery tail (`txn_issue25590_r58_test.go:302`, live 1
+where the settled bound requires 0) on a throttle-starved runner (the
+job heartbeat shows 19-24 live test processes, 11.4-14.2 GiB of the
+16 GiB limit, and ~749 s of accumulated cgroup CPU throttle). The
+root cause is test-side; the production bytes are untouched. The leg
+waited FILE-GONE and asserted LEDGER-ZERO immediately, but gcFiles'
+worker settles the ledger only after DeleteUnpublishedObjects returns
+on the whole batch, so the file-gone observation can legitimately
+precede the membership retire — the same window r41's recovery tail,
+the r58 settle-before-commit order, and the round-34 tail already
+guard with a ledger-sync `Eventually`. The CI log itself pins the
+interleaving: at the failing check the stalled obligation's membership
+was still retained while the file was already absent, exactly the
+inherent ordering gap — not a settle that never happens.
+
+Decision (no invariant, interface or production change): the recovery
+leg takes the same bounded ledger-sync point — `Eventually`(queued
+empty, `live` 0, `inFlight` 0; 10 s, 10 ms tick) — before asserting
+the settled bound re-opens. The proven contract is unchanged (the
+settle alone returns the stalled obligation's capacity; no terminal,
+no caller waits on storage), and a product that failed to retire the
+claim would still fail the bounded wait. The whole diff is one test
+file.
+
+The same run's other failures match pre-existing flake classes,
+verified against the immediately preceding green run 40778977585
+(head 7c75f3e07b passed the same UT and PROXY jobs at 23:18:54Z; the
+only delta to the failed head is the round-58 disttae commit):
+
+- pkg/embed TestCrossTargetUpgradeRecovery hung polling
+  `mo_upgrade state = 1` until the 37m7s package alarm — the #31044
+  cross-process cluster-admission hang class.
+- pkg/logservice TestAddScheduleCommands died in a hakeeper propose
+  timeout after no-leader churn — the #8767 class;
+  `pkg/logservice` imports neither `disttae` nor `colexec`, so the
+  round-58 commit cannot even link into that test binary.
+- The PROXY compose BVT failed 5/324 statements of
+  `pub_sub_data_branch.sql`, all cascading from one transient
+  subscription-source resolve miss at its B6 case — the #30949
+  regression coverage added by fix #31039, whose frontend bytes are
+  identical between the green and the failed run.
+
+The Coverage gate failed fail-closed (`PREREQUISITES_READY: false`,
+no verdict) and CI Required projects them — aggregates, not separate
+root causes. Reproduction records were posted on issues #31044,
+#8767 and #30949; no rerun of run 40798664858 was issued (its UT
+failure set contained this PR's own race; the head advances with the
+push, starting a fresh run).
+
+Validation (logs under `/tmp/issue25590-r59/`, the round's handler
+artifacts):
+
+- GREEN, blocked retry order now deterministic: the r58 family — the
+  accepted-stall order the CI failed, the settle-first order, and the
+  submit-failure order — passes 3x consecutive on the fixed tree
+  (`r58_family.log`, `ok 3.624s`, exit 0) and verbose per-test
+  (`r58_family_verbose.log`: all three `--- PASS`, `ok 5.235s`,
+  exit 0), the CI-failing test's recovery leg settling through the
+  new bounded wait.
+- The full disttae `TestIssue25590` corpus stays green on the fixed
+  tree (`corpus-25590.log`, `ok 44.985s`, exit 0).
+- Static: `gofmt -l` clean on the changed closure (single test file,
+  +12 lines).
+- Reused evidence: the round-58 production code, its red/green proof,
+  the external engine-test drivers and the race leg stand unchanged —
+  this round edits no production byte; the round-59 commit's own
+  corpus rerun above re-covers the package on the fixed tree.
