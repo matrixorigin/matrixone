@@ -415,7 +415,14 @@ func containsInt32(list []int32, target int32) bool {
 }
 
 func (builder *QueryBuilder) applyIndices(nodeID int32, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) (int32, error) {
-	return builder.applyIndicesWithOrder(nodeID, colRefCnt, idxColMap, false)
+	nodeID, err := builder.applyIndicesWithOrder(nodeID, colRefCnt, idxColMap, false)
+	if err != nil {
+		return -1, err
+	}
+	if err := builder.checkPlanningCanceled(); err != nil {
+		return -1, err
+	}
+	return nodeID, nil
 }
 
 // fullTextOrderOverwritten proves that an explicit ordering will replace a
@@ -2542,13 +2549,17 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, no
 	}
 
 	if best.indexPos != -1 && best.shape == encodedRegularIndexCostIndexOnly {
-		return builder.applyRegularIndexOnlyScan(
+		ret := builder.applyRegularIndexOnlyScan(
 			indexes[best.indexPos], node, idxColMap, scanSnapshot,
 			&regularIndexOnlyMatch{
 				filterIdx: best.filterIdx, filterType: best.filterType,
 				leadingEqual: best.leadingEqual, residualLeadingPos: best.residualLeadingPos,
 			},
 		)
+		if ret != -1 {
+			return ret
+		}
+		return nodeID
 	}
 
 	// Preserve the established priority of a covering spatial access over a
@@ -2833,10 +2844,12 @@ func (builder *QueryBuilder) replaceNonEqualCondition(idxDef *IndexDef, filter *
 	}
 	comparesByteStringColumn := indexFunctionComparesByteStringColumn(fn)
 
+	commuted := false
 	switch fn.Func.ObjName {
 	case ">", ">=", "<", "<=":
 		// Canonicalize: ensure column is on the left
 		if isRuntimeConstExpr(fn.Args[0]) && fn.Args[1].GetCol() != nil {
+			commuted = true
 			fn.Args[0], fn.Args[1] = fn.Args[1], fn.Args[0]
 			switch fn.Func.ObjName {
 			case ">":
@@ -2903,7 +2916,7 @@ func (builder *QueryBuilder) replaceNonEqualCondition(idxDef *IndexDef, filter *
 		if err != nil {
 			return nil, err
 		}
-	} else {
+	} else if commuted {
 		var err error
 		expr, err = BindFuncExprImplByPlanExpr(builder.GetContext(), fn.Func.ObjName, fn.Args)
 		if err != nil {
