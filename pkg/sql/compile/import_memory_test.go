@@ -82,6 +82,7 @@ func TestImportOptionalStagingKeepsAdmissionAndRecordGrowth(t *testing.T) {
 	schema := []types.Type{types.T_varchar.ToType()}
 	for _, test := range []struct {
 		name       string
+		kind       string
 		unit       int64
 		headroom   bool
 		wantBuffer bool
@@ -89,10 +90,17 @@ func TestImportOptionalStagingKeepsAdmissionAndRecordGrowth(t *testing.T) {
 		{name: "available", unit: 16 << 20, headroom: true, wantBuffer: true},
 		{name: "no_headroom", unit: 16 << 20},
 		{name: "record_can_grow", unit: 1 << 20, headroom: true},
+		{name: "multi_available", kind: "multi-meta", unit: 16 << 20, headroom: true, wantBuffer: true},
+		{name: "multi_no_headroom", kind: "multi-meta", unit: 16 << 20},
+		{name: "multi_record_can_grow", kind: "multi-meta", unit: 1 << 20, headroom: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
+			kind := test.kind
+			if kind == "" {
+				kind = "insert-meta"
+			}
 			manifest := MemoryManifest{TargetUnit: test.unit, Parallel: 1, NoWait: true,
-				Producers: []MemoryProducerDescriptor{{Kind: "csv", Schema: schema}, {Kind: "insert-meta", Inputs: []uint32{0}, InsertOnly: true, TableCount: 1}},
+				Producers: []MemoryProducerDescriptor{{Kind: "csv", Schema: schema}, {Kind: kind, Inputs: []uint32{0}, InsertOnly: true, TableCount: 1, ColumnCount: 1}},
 				Stages:    []MemoryStageDescriptor{{Role: MemoryStageCSV, Count: 1, Schema: schema, RetainedFields: 1}, {Role: MemoryStageOutput, Count: 1, Schema: schema, TableCount: 1, InsertOnly: true}},
 			}
 			specs, _, err := memoryManifestCandidates(manifest, test.unit)

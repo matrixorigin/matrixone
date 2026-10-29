@@ -104,6 +104,7 @@ func TestGetDefaultSinkPool_ReturnsSameInstance(t *testing.T) {
 
 type mockFileSinker struct {
 	sinkedRows int
+	onSink     func(*batch.Batch)
 	sinkErr    error
 	syncErr    error
 	stats      objectio.ObjectStats
@@ -115,6 +116,9 @@ type mockFileSinker struct {
 func (m *mockFileSinker) Sink(_ context.Context, bat *batch.Batch) error {
 	if m.sinkErr != nil {
 		return m.sinkErr
+	}
+	if m.onSink != nil {
+		m.onSink(bat)
 	}
 	m.sinkedRows += bat.RowCount()
 	return nil

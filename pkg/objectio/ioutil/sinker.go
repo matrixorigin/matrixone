@@ -846,6 +846,18 @@ func (sinker *Sinker) syncFileSinker(ctx context.Context, fSinker FileSinker) er
 func (sinker *Sinker) trySpillMergeSortStreaming(
 	ctx context.Context, fSinker FileSinker,
 ) error {
+	// trySpill already sorted this owned batch. When it fits one bounded
+	// block, keep it alive through Sync instead of copying every row into W.
+	if sinker.workspace != nil && len(sinker.staged.inMemory) == 1 {
+		data := sinker.staged.inMemory[0]
+		if data.RowCount() > 0 && int64(data.Allocated()) <= sinker.config.bufferBytes &&
+			byteWindowEnd(data, 0, objectio.BlockMaxRows, 0, sinker.config.bufferBytes) == data.RowCount() {
+			start := time.Now()
+			err := fSinker.Sink(ctx, data)
+			atomic.AddInt64(&sinker.timing.sinkNs, int64(time.Since(start)))
+			return err
+		}
+	}
 	mp := sinker.mp
 	var buffer *batch.Batch
 	var err error

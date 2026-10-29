@@ -391,7 +391,7 @@ func admitMemoryManifest(ctx context.Context, throttler rscthrottler.WorkingSetT
 	// credits. Reserve at most one shared batch unit when it fits; failure keeps
 	// the existing zero-credit path and never shrinks or delays admission.
 	// Avoid consuming headroom needed for a later CSV record-budget growth.
-	if meta.RecordBytes == int64(config.LargestEntryLimit) && manifestHasCSVInsert(manifest) {
+	if meta.RecordBytes == int64(config.LargestEntryLimit) && manifestHasCSVWriter(manifest) {
 		if _, err = working.TryReserveStaging(ctx, meta.UnitBytes); err != nil {
 			working.Close()
 			return nil, err
@@ -401,13 +401,13 @@ func admitMemoryManifest(ctx context.Context, throttler rscthrottler.WorkingSetT
 	return meta, nil
 }
 
-func manifestHasCSVInsert(manifest MemoryManifest) bool {
+func manifestHasCSVWriter(manifest MemoryManifest) bool {
 	var source, writer bool
 	for _, stage := range manifest.Stages {
 		source = source || stage.Role == MemoryStageCSV && stage.Count > 0
 	}
 	for _, producer := range manifest.Producers {
-		writer = writer || producer.Kind == "insert-meta"
+		writer = writer || producer.Kind == "insert-meta" || producer.Kind == "multi-meta"
 	}
 	return source && writer
 }

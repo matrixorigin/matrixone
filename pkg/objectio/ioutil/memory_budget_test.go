@@ -16,6 +16,7 @@ package ioutil
 
 import (
 	"context"
+	"errors"
 	"runtime"
 	"strings"
 	"sync"
@@ -74,6 +75,90 @@ func TestSinkerByteWindowsAndAllocationPrediction(t *testing.T) {
 	require.Equal(t, before, mp.AllocatedBytes())
 	require.NoError(t, s.Close())
 	require.Zero(t, mp.AllocatedBytes())
+}
+
+func TestAdmittedSingleBatchSkipsMergeCopy(t *testing.T) {
+	for _, mode := range []string{"single", "multiple", "wide_singleton", "dedup", "write_error", "sync_error", "cancel"} {
+		t.Run(mode, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			unit := int64(16 << 10)
+			if mode == "multiple" || mode == "wide_singleton" {
+				unit = 1024
+			}
+			owner := rscthrottler.NewMemThrottler(t.Name(), 1, rscthrottler.WithConstLimit(8<<30))
+			ws, err := owner.(rscthrottler.WorkingSetThrottler).ReserveWorkingSetCandidatesUntilFit(ctx, []rscthrottler.WorkingSetSpec{{UnitBytes: unit, IOBytes: 4 << 20}})
+			require.NoError(t, err)
+			defer ws.Close()
+			mp := mpool.MustNew("single-batch-data")
+			defer mpool.DeleteMPool(mp)
+			srcMP := mpool.MustNew("single-batch-source")
+			defer mpool.DeleteMPool(srcMP)
+			data := batch.NewWithSchema(false, []string{"k", "v"}, []types.Type{types.T_int64.ToType(), types.T_text.ToType()})
+			defer data.Clean(srcMP)
+			keys := []int64{2, 1}
+			want := []int64{1, 2}
+			if mode == "dedup" {
+				keys, want = []int64{1, 1}, []int64{1}
+			} else if mode == "wide_singleton" {
+				keys, want = []int64{1}, []int64{1}
+			}
+			for _, k := range keys {
+				require.NoError(t, vector.AppendFixed(data.Vecs[0], k, false, srcMP))
+				require.NoError(t, vector.AppendBytes(data.Vecs[1], []byte(strings.Repeat("x", 1024)), false, srcMP))
+			}
+			data.SetRowCount(len(keys))
+			writeErr := errors.New("injected single-batch write failure")
+			var received []int64
+			var file *mockFileSinker
+			factory := func(ioMP *mpool.MPool, _ fileservice.FileService) FileSinker {
+				file = &mockFileSinker{onSink: func(b *batch.Batch) {
+					if mode == "multiple" || mode == "wide_singleton" || mode == "dedup" {
+						require.Positive(t, ioMP.AllocatedBytes(), "multiple batches and dedup retain their existing paths")
+					} else {
+						require.Zero(t, ioMP.AllocatedBytes(), "an owned sorted batch needs no second vector buffer")
+					}
+					received = append(received, vector.MustFixedColNoTypeCheck[int64](b.Vecs[0])...)
+				}}
+				if mode == "write_error" {
+					file.sinkErr = writeErr
+				} else if mode == "sync_error" {
+					file.syncErr = writeErr
+				}
+				return file
+			}
+			opts := []SinkerOption{WithMemoryWorkspace(ws), WithBufferBytes(unit), WithMemorySizeThreshold(1 << 30), WithTailSizeCap(0)}
+			if mode == "dedup" {
+				opts = append(opts, WithDedupAll())
+			}
+			s := NewSinker(0, data.Attrs, []types.Type{types.T_int64.ToType(), types.T_text.ToType()}, factory, mp, nil, opts...)
+			defer s.Close()
+			require.NoError(t, s.Write(ctx, data))
+			syncCtx := ctx
+			if mode == "cancel" {
+				var stop context.CancelFunc
+				syncCtx, stop = context.WithCancel(ctx)
+				stop()
+			}
+			err = s.Sync(syncCtx)
+			switch mode {
+			case "write_error", "sync_error":
+				require.ErrorIs(t, err, writeErr)
+			case "cancel":
+				require.ErrorIs(t, err, context.Canceled)
+			default:
+				require.NoError(t, err)
+				require.Equal(t, want, received)
+				require.Equal(t, len(want), file.sinkedRows)
+			}
+			require.Equal(t, keys, vector.MustFixedColNoTypeCheck[int64](data.Vecs[0]), "sorting must not mutate the caller's batch")
+			require.NoError(t, s.Close())
+			require.Zero(t, mp.AllocatedBytes())
+			lease, err := ws.AcquireIO(ctx, ws.IOBytes())
+			require.NoError(t, err)
+			lease.Release()
+		})
+	}
 }
 
 type workspaceTracker struct {
