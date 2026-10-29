@@ -3,7 +3,7 @@
 Issue: https://github.com/matrixorigin/matrixone/issues/31618
 
 Design baseline: `fc6882279b3b55e4dab8caef19b712b663c5eb66`.
-Implementation PR: pending. This is a conservative, partial optimization;
+This is a conservative, partial optimization;
 opposite join orientations and independently distributed execution retain their
 existing behavior. This change does not close the whole issue.
 
@@ -111,7 +111,7 @@ pair. Each normal compile/retry uses the existing statement-scoped message
 board; there is no new cross-CN transport or batch generation. No extra side
 effects, locking, transaction snapshot advancement or write path is introduced.
 
-## Validation and delivery
+## Validation
 
 * Unit tests must show that the original generator rejects and the late pass
   actually adds the target pair, preserves all baseline Stats/filters, and is
@@ -134,7 +134,6 @@ effects, locking, transaction snapshot advancement or write path is introduced.
   A truly distributed plan must retain the baseline filters and direction;
   do not infer this from service count or scope address metadata alone.
 * Run final incremental formatting/vet/lint and affected normal/race tests on
-  the final diff. Obtain gpt-6.1-terra/max overall review before submission.
+  the final diff.
 
-The implementation may be delivered as a related improvement only after these
-gates pass. Do not claim all bounded DELETE plans are fixed or close #31618.
+Do not claim all bounded DELETE plans are fixed or close #31618.
