@@ -67,11 +67,11 @@ func stageReady406Predecessor(t *testing.T, ctx context.Context) Cluster {
 	// The pre-change binary persisted the undecorated template; install it via
 	// the internal executor (the wire user holds no privilege to replace an
 	// information_schema view) so every later boot starts from the predecessor
-	// content. Background COLUMNS/TABLES maintenance is suppressed in these
-	// scenario clusters (columnsUpgradeMaintenanceDisabled), so the staged
-	// text survives: read it back, settle across several tenant-upgrade
-	// passes, and re-assert, pinning the exact undecorated state every boot in
-	// these scenarios starts from.
+	// content. The periodic COLUMNS/TABLES maintenance walker was removed
+	// upstream (#31662), so nothing recreates the staged predecessor text
+	// outside the versioned entries: read it back, settle across several
+	// tenant-upgrade passes, and re-assert, pinning the exact undecorated
+	// state every boot in these scenarios starts from.
 	execInternalStatement(t, ctx, cn, "DROP VIEW IF EXISTS information_schema.COLUMNS;")
 	execInternalStatement(t, ctx, cn, preChangeCurrentColumnsDDL())
 	requireAccountColumnsDefinitionsPreChange(t, ctx, cn, 0)
@@ -204,8 +204,7 @@ func TestColumnsUpgradeLegacyCDCAbortsBootBeforeCrossing(t *testing.T) {
 		require.NoError(t, c.Stop())
 	}()
 
-	setRecoveryCNHandles(c, append(columns46ShapeChain(), columnsPredecessorChain()[3], v4_0_18.Handler), true,
-		columnsUpgradeMaintenanceDisabled())
+	setRecoveryCNHandles(c, append(columns46ShapeChain(), columnsPredecessorChain()[3], v4_0_18.Handler), true)
 	err := c.Start()
 	require.Error(t, err, "a catalog with a legacy CDC task must abort the automatic boot")
 	require.Contains(t, err.Error(), "legacy CDC tasks must be exported and removed")
@@ -217,7 +216,7 @@ func TestColumnsUpgradeLegacyCDCAbortsBootBeforeCrossing(t *testing.T) {
 	// present for the operator to remediate, and with maintenance suppressed
 	// the staged undecorated COLUMNS definition persists — the abort leaves
 	// the predecessor content exactly as staged.
-	setRecoveryCNHandles(c, columns46ShapeChain(), true, columnsUpgradeMaintenanceDisabled())
+	setRecoveryCNHandles(c, columns46ShapeChain(), true)
 	require.NoError(t, c.Start())
 	cn, err := c.GetCNService(0)
 	require.NoError(t, err)
@@ -229,8 +228,7 @@ func TestColumnsUpgradeLegacyCDCAbortsBootBeforeCrossing(t *testing.T) {
 	execInternalStatement(t, ctx, cn, "delete from mo_catalog.mo_cdc_task")
 	require.NoError(t, c.Stop())
 
-	setRecoveryCNHandles(c, append(columns46ShapeChain(), columnsPredecessorChain()[3], v4_0_18.Handler), true,
-		columnsUpgradeMaintenanceDisabled())
+	setRecoveryCNHandles(c, append(columns46ShapeChain(), columnsPredecessorChain()[3], v4_0_18.Handler), true)
 	require.NoError(t, c.Start())
 	cn, err = c.GetCNService(0)
 	require.NoError(t, err)
@@ -260,8 +258,7 @@ func TestColumnsUpgradeEmptyCDCControlCompletesCrossing(t *testing.T) {
 	defer cancel()
 	c := stageReady406Predecessor(t, ctx)
 
-	setRecoveryCNHandles(c, append(columns46ShapeChain(), columnsPredecessorChain()[3], v4_0_18.Handler), true,
-		columnsUpgradeMaintenanceDisabled())
+	setRecoveryCNHandles(c, append(columns46ShapeChain(), columnsPredecessorChain()[3], v4_0_18.Handler), true)
 	require.NoError(t, c.Start())
 	cn, err := c.GetCNService(0)
 	require.NoError(t, err)
@@ -294,7 +291,7 @@ func TestColumnsUpgradeTaskSurvivalCrossingEmbed(t *testing.T) {
 	// despite the task row and proceeds into the route; interrupt inside the
 	// v4_0_18 tenant entry so the route row exists but is not finished.
 	interrupted := &interruptedUpgradeHandler{VersionHandle: v4_0_18.Handler, entered: make(chan struct{}), tenant: true}
-	setRecoveryCNHandles(c, append(columnsPredecessorChain(), interrupted), true, columnsUpgradeMaintenanceDisabled())
+	setRecoveryCNHandles(c, append(columnsPredecessorChain(), interrupted), true)
 	started := make(chan error, 1)
 	go func() { started <- c.Start() }()
 	select {
@@ -317,7 +314,7 @@ func TestColumnsUpgradeTaskSurvivalCrossingEmbed(t *testing.T) {
 	// Restart: the in-flight route resumes without ever re-reading the task
 	// table for admission, completes to READY 4.0.18, and the task row is
 	// still present.
-	setRecoveryCNHandles(c, append(columnsPredecessorChain(), v4_0_18.Handler), true, columnsUpgradeMaintenanceDisabled())
+	setRecoveryCNHandles(c, append(columnsPredecessorChain(), v4_0_18.Handler), true)
 	require.NoError(t, c.Start())
 	cn, err := c.GetCNService(0)
 	require.NoError(t, err)

@@ -155,15 +155,3 @@ func WithKek(value string) Option {
 		s.upgrade.kek = value
 	}
 }
-
-// WithInformationSchemaColumnsTablesMaintenanceDisabled suppresses the
-// periodic background COLUMNS/TABLES repair walker. It exists so that upgrade
-// scenario tests can prove entry attribution: with the walker suppressed, a
-// staged predecessor definition survives until the crossing entry itself
-// recreates it. Production must keep the default (enabled); passing true is
-// only for tests.
-func WithInformationSchemaColumnsTablesMaintenanceDisabled(disabled bool) Option {
-	return func(s *service) {
-		s.upgrade.informationSchemaColumnsTablesMaintenanceDisabled = disabled
-	}
-}

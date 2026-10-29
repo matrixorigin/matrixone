@@ -74,7 +74,7 @@ func newColumnsUpgradeCluster(
 			// the walker off, the staged predecessor definition survives until
 			// the crossing entry recreates it, so restored metadata is
 			// attributable to the entry rather than to background maintenance.
-			svc.(*operator).testingCNOptions = recoveryCNOptions(handles, columnsUpgradeMaintenanceDisabled())
+			svc.(*operator).testingCNOptions = recoveryCNOptions(handles)
 		}
 	}))
 	if c != nil {
@@ -92,18 +92,11 @@ func columnsPredecessorChain() []bootstrap.VersionHandle {
 	return []bootstrap.VersionHandle{v4_0_4.Handler, v4_0_5.Handler, v4_0_6.Handler, v4_0_7.Handler}
 }
 
-// columnsUpgradeMaintenanceDisabled returns the bootstrap option that
-// suppresses main's periodic COLUMNS/TABLES repair walker for every
-// generation of these scenario clusters. Validation item (iv) of the
-// approved design runs the operator path with background maintenance
-// disabled on purpose: the walker converges a staged predecessor definition
-// to the code template without touching any marker, so with it enabled the
-// completion assertions could pass even if the v4_0_18 entry repaired
-// nothing. Every setRecoveryCNHandles call in these two files must thread
-// this option so the suppression survives generation restarts.
-func columnsUpgradeMaintenanceDisabled() bootstrap.Option {
-	return bootstrap.WithInformationSchemaColumnsTablesMaintenanceDisabled(true)
-}
+// Note on background maintenance: the periodic COLUMNS/TABLES repair walker
+// was removed upstream (#31662); the versioned 4.0.7 entry and CREATE ACCOUNT
+// initialization now own convergence. These scenario clusters therefore prove
+// entry attribution with no suppression option at all: nothing besides the
+// v4_0_18 crossing entry recreates a staged predecessor definition.
 
 // stageReady407Predecessor runs generation one on the truncated chain, then
 // installs the probe fixtures and the exact pre-change persisted COLUMNS
@@ -334,7 +327,7 @@ func TestColumnsUpgradeAutomaticScenarioCompletion(t *testing.T) {
 	defer cancel()
 	c := stageReady407Predecessor(t, ctx)
 
-	setRecoveryCNHandles(c, append(columnsPredecessorChain(), v4_0_18.Handler), true, columnsUpgradeMaintenanceDisabled())
+	setRecoveryCNHandles(c, append(columnsPredecessorChain(), v4_0_18.Handler), true)
 	require.NoError(t, c.Start())
 	cn, err := c.GetCNService(0)
 	require.NoError(t, err)
@@ -370,7 +363,7 @@ func TestColumnsUpgradeManualFailFastThenComplete(t *testing.T) {
 	defer cancel()
 	c := stageReady407Predecessor(t, ctx)
 
-	setRecoveryCNHandles(c, append(columnsPredecessorChain(), v4_0_18.Handler), false, columnsUpgradeMaintenanceDisabled())
+	setRecoveryCNHandles(c, append(columnsPredecessorChain(), v4_0_18.Handler), false)
 	err := c.Start()
 	require.Error(t, err, "manual mode must fail startup against a not-ready final catalog")
 	require.Contains(t, err.Error(), "catalog version 4.0.7/41 is not ready for 4.0.18/1; enable auto-upgrade for the stopped upgrade and restart")
@@ -378,7 +371,7 @@ func TestColumnsUpgradeManualFailFastThenComplete(t *testing.T) {
 	err = c.Stop()
 	require.NoError(t, err)
 
-	setRecoveryCNHandles(c, append(columnsPredecessorChain(), v4_0_18.Handler), true, columnsUpgradeMaintenanceDisabled())
+	setRecoveryCNHandles(c, append(columnsPredecessorChain(), v4_0_18.Handler), true)
 	require.NoError(t, c.Start())
 	cn, err := c.GetCNService(0)
 	require.NoError(t, err)
@@ -403,7 +396,7 @@ func TestColumnsUpgradeWithoutEntryKeepsPredecessorDefinitions(t *testing.T) {
 	c := stageReady407Predecessor(t, ctx)
 
 	// Ablation generation: the frozen 4.0.7/41 chain with no v4_0_18 handle.
-	setRecoveryCNHandles(c, columnsPredecessorChain(), true, columnsUpgradeMaintenanceDisabled())
+	setRecoveryCNHandles(c, columnsPredecessorChain(), true)
 	require.NoError(t, c.Start())
 	cn, err := c.GetCNService(0)
 	require.NoError(t, err)
@@ -438,7 +431,7 @@ func TestColumnsUpgradeWithoutEntryKeepsPredecessorDefinitions(t *testing.T) {
 	// Attribution leg: the same data directory, the entry carried again. Only
 	// now does the repair execute, proving the completion legs' decorated
 	// state comes from the v4_0_18 entry and not from background machinery.
-	setRecoveryCNHandles(c, append(columnsPredecessorChain(), v4_0_18.Handler), true, columnsUpgradeMaintenanceDisabled())
+	setRecoveryCNHandles(c, append(columnsPredecessorChain(), v4_0_18.Handler), true)
 	require.NoError(t, c.Start())
 	cn, err = c.GetCNService(0)
 	require.NoError(t, err)
@@ -570,7 +563,7 @@ func TestColumnsUpgradeInterruptedRouteResumes(t *testing.T) {
 		crashed:       map[int32]bool{},
 		observed:      map[int32]rollbackObservation{},
 	}
-	setRecoveryCNHandles(c, append(columnsPredecessorChain(), crash), true, columnsUpgradeMaintenanceDisabled())
+	setRecoveryCNHandles(c, append(columnsPredecessorChain(), crash), true)
 	require.NoError(t, c.Start())
 	cn, err := c.GetCNService(0)
 	require.NoError(t, err)

@@ -15,6 +15,7 @@
 package external
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -31,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	pbplan "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/crt"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -86,7 +88,10 @@ func (r *CsvReader) Open(param *ExternalParam, proc *process.Process) (fileEmpty
 		return true, nil
 	}
 
-	csvParser, err := newCSVParserFromReader(param.Extern, r.reader)
+	cfg := CSVConfigForLoad(param.Extern)
+	cfg.AllowUnterminatedEnclosureAtEOF = param.Extern.ExternType == int32(pbplan.ExternType_LOAD) &&
+		!param.Extern.Parallel && param.Extern.Format == tree.CSV
+	csvParser, err := csvparser.NewCSVParser(cfg, bufio.NewReader(r.reader), csvparser.ReadBlockSize, false)
 	if err != nil {
 		r.reader.Close()
 		r.reader = nil
