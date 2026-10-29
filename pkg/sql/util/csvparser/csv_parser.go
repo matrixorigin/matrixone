@@ -78,6 +78,8 @@ type CSVConfig struct {
 	NotNull           bool
 
 	AllowEmptyLine bool
+	// AllowUnterminatedEnclosureAtEOF accepts the opening enclosure as data at stream EOF.
+	AllowUnterminatedEnclosureAtEOF bool
 	// SkipWhitespaceRecords keeps unquoted single-field whitespace records out
 	// of JSONLINE record accounting. CSV callers leave it disabled.
 	SkipWhitespaceRecords bool
@@ -154,7 +156,8 @@ type CSVParser struct {
 	// bytes decode to one quote. recordWeight includes it so the whole-record
 	// bound prices raw consumed bytes, never the decoded output; it resets
 	// with the other per-record accumulators in readRecord.
-	recordSurcharge int64
+	recordSurcharge   int64
+	unterminatedAtEOF bool
 
 	LastRow []Field
 
@@ -210,6 +213,7 @@ func (parser *CSVParser) Reset(reader io.Reader) {
 	parser.lineNo = 0
 	parser.recordStartLine = 0
 	parser.isLastChunk = false
+	parser.unterminatedAtEOF = false
 	parser.remainBuf.Reset()
 	parser.appendBuf.Reset()
 }
@@ -356,7 +360,7 @@ func (parser *CSVParser) readRow(row []Field) ([]Field, error) {
 	row = row[:len(parser.fieldIndexes)]
 	var preIdx int
 	for i, idx := range parser.fieldIndexes {
-		unescaped, isNull, err := parser.unescapeString(str[preIdx:idx], parser.fieldIsQuoted[i])
+		unescaped, isNull, err := parser.decodeField(str[preIdx:idx], i)
 		if err != nil {
 			return nil, err
 		}
@@ -367,6 +371,18 @@ func (parser *CSVParser) readRow(row []Field) ([]Field, error) {
 	}
 
 	return row, nil
+}
+
+// decodeField preserves the literal opening enclosure of an EOF-terminated field.
+func (parser *CSVParser) decodeField(content string, i int) (string, bool, error) {
+	if parser.unterminatedAtEOF && i == len(parser.fieldIndexes)-1 {
+		prefix, suffix := content[:len(parser.quote)], content[len(parser.quote):]
+		if len(parser.escapedBy) > 0 {
+			suffix = unescape(suffix, "", parser.escFlavor, parser.escapedBy[0], parser.unescapeRegexp)
+		}
+		return prefix + suffix, false, nil
+	}
+	return parser.unescapeString(content, parser.fieldIsQuoted[i])
 }
 
 func (parser *CSVParser) unescapeString(content string, quoted bool) (unescaped string, isNull bool, err error) {
@@ -715,6 +731,7 @@ func (parser *CSVParser) readRecord() error {
 	parser.fieldIndexes = parser.fieldIndexes[:0]
 	parser.fieldIsQuoted = parser.fieldIsQuoted[:0]
 	parser.recordSurcharge = 0
+	parser.unterminatedAtEOF = false
 
 	isEmptyLine := true
 	foundStartingByThisLine := false
@@ -821,8 +838,19 @@ outside:
 				}
 				return errUnexpectedQuoteField
 			}
-			if err = parser.readQuotedField(); err != nil {
+			fieldStart := len(parser.recordBuffer)
+			endedAtEOF, err := parser.readQuotedField()
+			if err != nil {
 				return err
+			}
+			if endedAtEOF {
+				if err := parser.appendToRecord(parser.quote); err != nil {
+					return err
+				}
+				copy(parser.recordBuffer[fieldStart+len(parser.quote):], parser.recordBuffer[fieldStart:len(parser.recordBuffer)-len(parser.quote)])
+				copy(parser.recordBuffer[fieldStart:], parser.quote)
+				parser.unterminatedAtEOF = true
+				return parser.sealField(false)
 			}
 			fieldIsQuoted = true
 		case csvTokenNewLine:
@@ -896,11 +924,17 @@ outside:
 	return nil
 }
 
-func (parser *CSVParser) readQuotedField() error {
+func (parser *CSVParser) readQuotedField() (bool, error) {
 	for {
 		prevPos := parser.pos
 		content, terminator, err := parser.readUntil(&parser.quoteByteSet)
 		if err != nil {
+			if err == io.EOF && parser.cfg.AllowUnterminatedEnclosureAtEOF {
+				if err := parser.appendToRecord(content); err != nil {
+					return false, err
+				}
+				return true, nil
+			}
 			if err == io.EOF {
 				// return the position of quote to the caller.
 				// because we return an error here, the parser won't
@@ -910,16 +944,22 @@ func (parser *CSVParser) readQuotedField() error {
 				parser.buf = content
 				err = parser.replaceEOF(err, errUnterminatedQuotedField)
 			}
-			return err
+			return false, err
 		}
 		if err := parser.appendToRecord(content); err != nil {
-			return err
+			return false, err
 		}
 		parser.skipBytes(1)
 
 		token, err := parser.readQuotedToken(terminator)
+		if err == errDanglingBackslash && parser.cfg.AllowUnterminatedEnclosureAtEOF {
+			if err := parser.appendToRecord([]byte{terminator}); err != nil {
+				return false, err
+			}
+			return true, nil
+		}
 		if err != nil {
-			return err
+			return false, err
 		}
 
 		switch token {
@@ -927,7 +967,7 @@ func (parser *CSVParser) readQuotedField() error {
 			// encountered '"' -> continue if we're seeing '""'.
 			doubledDelimiter, err := parser.tryReadExact(parser.quote)
 			if err != nil {
-				return err
+				return false, err
 			}
 			if doubledDelimiter {
 				// consume the double quotation mark and continue: two raw
@@ -935,37 +975,37 @@ func (parser *CSVParser) readQuotedField() error {
 				// the decoded byte while the folded second byte is charged
 				// as raw consumed input.
 				if err := parser.appendToRecord(parser.quote); err != nil {
-					return err
+					return false, err
 				}
 				if err := parser.chargeFolded(len(parser.quote)); err != nil {
-					return err
+					return false, err
 				}
 			} else if parser.unescapedQuote {
 				// allow unescaped quote inside quoted field, so we only finish
 				// reading the field when we see a delimiter + comma/newline.
 				comma, _, err2 := parser.tryPeekExact(parser.comma)
 				if comma || err2 != nil {
-					return err2
+					return false, err2
 				}
 
 				newline, eof, err2 := parser.tryPeekNewLine(parser.newLine)
 				if eof || newline {
-					return nil
+					return false, nil
 				}
 
 				if err2 != nil {
-					return err2
+					return false, err2
 				}
 				if err := parser.appendToRecord(parser.quote); err != nil {
-					return err
+					return false, err
 				}
 			} else {
 				// the field is completed, exit.
-				return nil
+				return false, nil
 			}
 		default:
 			if err := parser.appendCSVTokenToRecordBuffer(token); err != nil {
-				return err
+				return false, err
 			}
 		}
 	}
@@ -995,7 +1035,7 @@ func (parser *CSVParser) readColumns() error {
 	str := string(parser.recordBuffer) // Convert to string once to batch allocations
 	var preIdx int
 	for i, idx := range parser.fieldIndexes {
-		colNameStr, _, err := parser.unescapeString(str[preIdx:idx], parser.fieldIsQuoted[i])
+		colNameStr, _, err := parser.decodeField(str[preIdx:idx], i)
 		if err != nil {
 			return err
 		}
