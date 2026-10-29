@@ -6298,6 +6298,9 @@ func (c *Compile) setProjection(node *plan.Node, s *Scope) {
 func (c *Compile) compileUnion(node *plan.Node, left []*Scope, right []*Scope) []*Scope {
 	left = c.mergeShuffleScopesIfNeeded(left, false)
 	right = c.mergeShuffleScopesIfNeeded(right, false)
+	if keys, dop := c.parallelUnionDistinct(node, left, right); dop > 1 {
+		return c.compileParallelUnionDistinct(node, left, right, keys, dop)
+	}
 	return c.mergeDistinctSetScopes(node, append(left, right...), c.anal.isFirst)
 }
 
@@ -6306,6 +6309,15 @@ func (c *Compile) compileUnion(node *plan.Node, left []*Scope, right []*Scope) [
 // copy of a set key per worker, so their local operator-level deduplication is
 // insufficient once those worker outputs are merged.
 func (c *Compile) mergeDistinctSetScopes(node *plan.Node, scopes []*Scope, isFirst bool) []*Scope {
+	rs := c.newMergeScope(scopes)
+	op := c.constructDistinctSetGroup(node)
+	op.SetAnalyzeControl(c.anal.curNodeIdx, isFirst)
+	rs.setRootOperator(op)
+	c.anal.isFirst = false
+	return []*Scope{rs}
+}
+
+func (c *Compile) constructDistinctSetGroup(node *plan.Node) *group.Group {
 	gn := &plan.Node{SpillMem: node.SpillMem}
 	gn.GroupBy = make([]*plan.Expr, len(node.ProjectList))
 	for i := range gn.GroupBy {
@@ -6323,7 +6335,6 @@ func (c *Compile) mergeDistinctSetScopes(node *plan.Node, scopes []*Scope, isFir
 			panic(err)
 		}
 	}
-	rs := c.newMergeScope(scopes)
 	op := constructGroup(c.proc.Ctx, gn, node, true, 0, c.proc)
 	if len(node.PhysicalEqualityKeyList) > 0 {
 		op.ProjectList = make([]*plan.Expr, len(node.ProjectList))
@@ -6334,10 +6345,7 @@ func (c *Compile) mergeDistinctSetScopes(node *plan.Node, scopes []*Scope, isFir
 			}
 		}
 	}
-	op.SetAnalyzeControl(c.anal.curNodeIdx, isFirst)
-	rs.setRootOperator(op)
-	c.anal.isFirst = false
-	return []*Scope{rs}
+	return op
 }
 
 func (c *Compile) compileTpMinusAndIntersect(node *plan.Node, left []*Scope, right []*Scope, nodeType plan.Node_NodeType) []*Scope {
