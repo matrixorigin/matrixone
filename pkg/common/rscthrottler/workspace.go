@@ -102,7 +102,7 @@ type InputLease struct {
 	released atomic.Bool
 }
 
-// StagingLease is an optional, non-blocking data buffer for one insert writer.
+// StagingLease is an optional, non-blocking data buffer for one import writer.
 // Its capacity is included in the owning working set's input promise.
 type StagingLease struct {
 	ticket   *WorkingSet

@@ -140,6 +140,7 @@ type s3WriterDelegate struct {
 		mutations   int
 		grantedSize int64
 		throttler   rscthrottler.RSCThrottler
+		staging     *rscthrottler.StagingLease
 	}
 }
 
@@ -273,9 +274,17 @@ func (writer *s3WriterDelegate) cleanDeleteBatches(mp *mpool.MPool) {
 }
 
 func (writer *s3WriterDelegate) releaseMemory() {
+	writer.memController.mu.Lock()
+	defer writer.memController.mu.Unlock()
 	if size := writer.memController.grantedSize; size > 0 {
-		writer.memController.throttler.Release(size)
+		if writer.memController.staging == nil {
+			writer.memController.throttler.Release(size)
+		}
 		writer.memController.grantedSize = 0
+	}
+	if writer.memController.staging != nil {
+		writer.memController.staging.Release()
+		writer.memController.staging = nil
 	}
 }
 
@@ -424,8 +433,14 @@ func (writer *s3WriterDelegate) sourceReleased() {
 }
 func (writer *s3WriterDelegate) reconcileMemoryLocked() {
 	if excess := writer.memController.grantedSize - writer.chargedBytes(); excess > 0 {
-		writer.memController.throttler.Release(excess)
+		if writer.memController.staging == nil {
+			writer.memController.throttler.Release(excess)
+		}
 		writer.memController.grantedSize -= excess
+	}
+	if writer.memController.grantedSize == 0 && writer.memController.staging != nil {
+		writer.memController.staging.Release()
+		writer.memController.staging = nil
 	}
 }
 func (writer *s3WriterDelegate) reconcileMemory() {
@@ -436,6 +451,41 @@ func (writer *s3WriterDelegate) reconcileMemory() {
 
 var errBorrowedSpill = moerr.NewInternalErrorNoCtx("use admitted IO workspace")
 
+// One shared staging lease covers the aggregate of all table projections.
+// Never mix its prepaid bytes with ordinary grants or wait for a busy lease
+// while holding an upstream input.
+func (writer *s3WriterDelegate) tryAcquireMemory(proc *process.Process, size int64) (bool, error) {
+	writer.memController.mu.Lock()
+	defer writer.memController.mu.Unlock()
+	if lease := writer.memController.staging; lease != nil {
+		if size > lease.Capacity()-writer.memController.grantedSize {
+			return false, nil
+		}
+		writer.memController.grantedSize += size
+		return true, nil
+	}
+	if _, ok := writer.memController.throttler.Acquire(size); ok {
+		writer.memController.grantedSize += size
+		return true, nil
+	}
+	if writer.memController.grantedSize != 0 || proc.Base.ImportMemory == nil {
+		return false, nil
+	}
+	lease, err := proc.Base.ImportMemory.WorkingSet.TryAcquireStaging(proc.Ctx)
+	if err != nil {
+		return false, err
+	}
+	if lease != nil {
+		if size <= lease.Capacity() {
+			writer.memController.staging = lease
+			writer.memController.grantedSize += size
+			return true, nil
+		}
+		lease.Release()
+	}
+	return false, nil
+}
+
 func (writer *s3WriterDelegate) acquireMemory(proc *process.Process, analyzer process.Analyzer, size int64, recompute func() int64) error {
 	if err := context.Cause(proc.Ctx); err != nil {
 		return err
@@ -443,9 +493,8 @@ func (writer *s3WriterDelegate) acquireMemory(proc *process.Process, analyzer pr
 	if size <= 0 {
 		return nil
 	}
-	if _, ok := writer.memController.throttler.Acquire(size); ok {
-		writer.memController.grantedSize += size
-		return nil
+	if ok, err := writer.tryAcquireMemory(proc, size); err != nil || ok {
+		return err
 	}
 
 	// Retire every destructible owner before waiting. Uncommitted delete
@@ -470,9 +519,8 @@ func (writer *s3WriterDelegate) acquireMemory(proc *process.Process, analyzer pr
 		return nil
 	}
 	objectio.ReleaseIdleArenas()
-	if _, ok := writer.memController.throttler.Acquire(size); ok {
-		writer.memController.grantedSize += size
-		return nil
+	if ok, err := writer.tryAcquireMemory(proc, size); err != nil || ok {
+		return err
 	}
 	if proc.Base.ImportMemory != nil {
 		return errBorrowedSpill
