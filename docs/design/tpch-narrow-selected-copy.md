@@ -26,9 +26,12 @@ window. The pointer and window remain local to the existing call. No allocation,
 borrowed reference, eligibility scan or per-row destination check is introduced.
 Source-index checks remain as in the original scalar loop.
 
-The zero-selection early return and wide, constant, NULL and varlen paths keep
-their implementations. Growth happens before the window is formed, so valid
-self-appends read the original prefix from the current backing allocation.
+The zero-selection early return and wide, NULL and varlen paths keep their
+implementations. Fixed constants reuse one checked append window for both the
+initial value copy and the existing doubling broadcast, avoiding duplicate
+window admission and receiver-field reloads. Growth happens before a window is
+formed, so valid self-appends read the original prefix from the current backing
+allocation.
 
 ## Cost correction
 
