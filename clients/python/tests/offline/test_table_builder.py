@@ -17,16 +17,13 @@ Offline tests for VectorTableBuilder functionality.
 """
 
 import pytest
-import sys
-from unittest.mock import Mock
-from sqlalchemy import MetaData
+from sqlalchemy import Float, MetaData
+from sqlalchemy.dialects.mysql import DOUBLE
 from sqlalchemy.schema import CreateTable
 from matrixone.sqlalchemy_ext import (
     VectorTableBuilder,
     create_vector_table,
     create_vector_index_table,
-    Vectorf32,
-    Vectorf64,
 )
 
 pytestmark = pytest.mark.vector
@@ -94,6 +91,31 @@ class TestVectorTableBuilder:
                 assert str(col.type) == "VARCHAR(100)"
             elif col.name == "embedding":
                 assert str(col.type) == "vecf32(128)"
+
+    def test_float_and_double_columns_keep_distinct_types(self):
+        """DOUBLE must not be silently downgraded to FLOAT."""
+        table = (
+            VectorTableBuilder("numeric_types")
+            .add_numeric_column("float_value", "float")
+            .add_numeric_column("double_value", "double")
+            .add_numeric_column("double_precision_only", "double", precision=24)
+            .add_numeric_column("double_precision_scale", "double", precision=24, scale=6)
+            .build()
+        )
+
+        assert isinstance(table.c.float_value.type, Float)
+        assert not isinstance(table.c.float_value.type, DOUBLE)
+        assert isinstance(table.c.double_value.type, DOUBLE)
+        assert isinstance(table.c.double_precision_only.type, DOUBLE)
+        assert isinstance(table.c.double_precision_scale.type, DOUBLE)
+
+        from matrixone.sqlalchemy_ext import MatrixOneDialect
+
+        create_sql = str(CreateTable(table).compile(dialect=MatrixOneDialect()))
+        assert "float_value FLOAT" in create_sql
+        assert "double_value DOUBLE" in create_sql
+        assert "double_precision_only DOUBLE" in create_sql
+        assert "double_precision_scale DOUBLE(24, 6)" in create_sql
 
     def test_vector_column_types(self):
         """Test different vector column types."""
