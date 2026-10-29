@@ -23,16 +23,11 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/defines"
-	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
-	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	cuvscdc "github.com/matrixorigin/matrixone/pkg/vectorindex/cuvs"
@@ -136,7 +131,7 @@ func swapIndexFiles(t *testing.T) *fakeIndexFiles {
 		}
 		return &fakeOpenFile{f: f, size: int64(len(buf)), release: fake.hold(key)}, nil
 	}
-	writeIndexFile = func(_ *sqlexec.SqlProcess, files *IndexFiles, _ client.TxnOperator, ref indexfile.Ref, src io.Reader,
+	writeIndexFile = func(_ *sqlexec.SqlProcess, files *indexfile.Files, _ client.TxnOperator, ref indexfile.Ref, src io.Reader,
 		_ func(sql string) error) (int64, string, error) {
 		buf, err := io.ReadAll(src)
 		if err != nil {
@@ -211,40 +206,4 @@ func frameRowsBatch(t *testing.T, mp *mpool.MPool, rows []frameRow) *batch.Batch
 	}
 	b.SetRowCount(len(rows))
 	return b
-}
-
-// An index file is read as the process's internal SQL reads: at its named snapshot when that is
-// historical, and as the account that SQL executes as.
-func TestReadTarget(t *testing.T) {
-	sp, _ := mockSqlProc(t)
-	ctrl := gomock.NewController(t)
-	now := timestamp.Timestamp{PhysicalTime: 100}
-	op := mock_frontend.NewMockTxnOperator(ctrl)
-	op.EXPECT().Txn().Return(txn.TxnMeta{SnapshotTS: now}).AnyTimes()
-	sp.Proc.Base.TxnOperator = op
-
-	ctx, got, err := readTarget(sp)
-	require.NoError(t, err)
-	require.Same(t, op, got, "no named snapshot: the process's transaction")
-	account, err := defines.GetAccountId(ctx)
-	require.NoError(t, err)
-	want, err := sp.GetAccountID()
-	require.NoError(t, err)
-	require.Equal(t, want, account)
-
-	historic := timestamp.Timestamp{PhysicalTime: 50}
-	clone := mock_frontend.NewMockTxnOperator(ctrl)
-	op.EXPECT().CloneSnapshotOp(historic).Return(clone)
-	sp.SnapshotTS = &historic
-	sp.WithExecutionIdentity(7, "pub_db")
-	ctx, got, err = readTarget(sp)
-	require.NoError(t, err)
-	require.Same(t, clone, got, "a historical named snapshot: the transaction pinned at it")
-	account, err = defines.GetAccountId(ctx)
-	require.NoError(t, err)
-	require.Equal(t, uint32(7), account, "the account the internal SQL executes as")
-
-	sp.Proc = nil
-	_, _, err = readTarget(sp)
-	require.Error(t, err)
 }

@@ -864,7 +864,7 @@ func readSmallTailFrames(sqlproc *sqlexec.SqlProcess, cfg TableConfig, rows []ta
 		if int64(len(data)) != r.size {
 			return nil, moerr.NewInternalErrorNoCtxf("fulltext2 tail frame at chunk %d: %d bytes, want %d", r.start, len(data), r.size)
 		}
-		if err := verifyFrameBytes(data, r.checksum); err != nil {
+		if err := indexfile.VerifyTailFrameBytes(data, r.checksum); err != nil {
 			return nil, err
 		}
 	}

@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fulltext2"
 	"github.com/matrixorigin/matrixone/pkg/fulltext2/tokenfilter"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/indexfile"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 )
 
@@ -68,7 +69,7 @@ func RunFulltext2(c *IndexConsumer, ctx context.Context, errch chan error, r Dat
 	// ISCPTaskExecutorFactory; resolve it by this CN's UUID. spillDir="" (no LOCAL
 	// attached / executor not found) falls back to the OS temp dir, unchanged behavior.
 	var spillDir string
-	files := &fulltext2.IndexFiles{Engine: c.cnEngine}
+	files := &indexfile.Files{Engine: c.cnEngine}
 	if exec, ok := GetExecutorRuntime(c.cnUUID); ok {
 		spillDir = fulltext2.LocalSpillDir(ctx, exec.rootFS)
 		files.Cache = fileservice.GetIndexFileCache(exec.rootFS)

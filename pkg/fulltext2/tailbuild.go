@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	cuvscdc "github.com/matrixorigin/matrixone/pkg/vectorindex/cuvs"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/indexfile"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 )
 
@@ -282,7 +283,7 @@ func (t *TailBuilder) Finish() ([]TailSegment, error) {
 // engine and index-file cache when sqlproc has no process; frames that fit in one chunk are not
 // cached and their chunk rows are inserted together, maxInsertTuples rows per statement. Finish
 // must run first; Cleanup remains with the outer owner until commit/rollback returns.
-func (t *TailBuilder) PersistFinished(sqlproc *sqlexec.SqlProcess, cfg TableConfig, files *IndexFiles, startChunkID, buildTS int64) (int64, error) {
+func (t *TailBuilder) PersistFinished(sqlproc *sqlexec.SqlProcess, cfg TableConfig, files *indexfile.Files, startChunkID, buildTS int64) (int64, error) {
 	if t.curFile != nil || t.cur != nil || len(t.delBatch) != 0 {
 		return startChunkID, moerr.NewInternalErrorNoCtx("tail builder must finish before persistence")
 	}
