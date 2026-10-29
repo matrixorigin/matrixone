@@ -173,27 +173,27 @@ stored format and needs a rollout gate.
 
 Decided by @cpegeric, 2026-10-24. Index files live in their own disk cache: a separate
 directory and cache instance on the CN, built from the same disk-cache code as the
-table-data cache but not shared with it. Its capacity is a configured share carved out of
-the existing disk-cache capacity, so total disk use is unchanged and the split between
-table data and index files is explicit: a large index load cannot evict hot table data,
-nor the reverse. Index files exist only in this cache: a miss is never served from the
+table-data cache for storing and publishing files but with its own eviction (see
+"Eviction"), not shared with it, with its own configured capacity, so a large
+index load cannot evict hot table data, nor the reverse. Index files exist only in this cache: a miss is never served from the
 storage backend, only rebuilt from the chunk rows. Without an index-file cache, a file is
 rebuilt into a temporary file in a directory the caller chooses, with no reuse between
 loads; FULLTEXT2 uses the CN's local spill directory, not the system temporary directory.
 
-- The default share is 30%, set when FULLTEXT2 adopted the layer (decision, @cpegeric,
-  2026-10-24: zero until an index reads through the layer); on upgrade the table-data cache
-  shrinks by that share. A runtime resize of the disk cache applies the same split to the
-  new size.
-- Operators size the disk capacity so that the index-file share holds the files of every
-  index the CN serves (decision, @cpegeric, 2026-10-28). The cache keeps the table-data
-  cache's admission rule, under which a file written once and not yet read is the first to
-  be evicted when the cache is full; below capacity nothing is evicted. A file that does
-  not fit costs one rebuild from its rows per load.
+- The capacity is a setting of its own, not a share of the table-data disk capacity
+  (decision, @cpegeric, 2026-10-29; replaces the 30% share of 2026-10-24). The
+  table-data cache keeps its configured capacity and behaves as before an upgrade, so
+  existing caches and benchmarks are unchanged, and an index-heavy CN sizes the index
+  files without resizing table data. The capacity has a default, used when the setting is
+  absent; total disk use is the sum of the two capacities. A runtime resize of the disk
+  cache applies to the table-data cache only.
+- Operators size the index-file capacity so that it holds the files of every index the CN
+  serves (decision, @cpegeric, 2026-10-28). Below capacity nothing is evicted. Of an index
+  larger than the capacity, the files that do not fit are rebuilt from their rows on each
+  load (see "Eviction").
 - A CN whose storage backend is local disk has no table-data disk cache, because table
-  data is already local, but it still gets the index-file cache, sized as the same share of
-  the configured disk capacity (decision, @cpegeric, 2026-10-24): rebuilding a file from its
-  rows costs the same on any backend.
+  data is already local, but it still gets the index-file cache (decision, @cpegeric,
+  2026-10-24): rebuilding a file from its rows costs the same on any backend.
 - Only CNs get the cache; TN, LOG and proxy nodes do not serve index searches.
 - Several CNs in one process configured with the same cache directory share it, as they
   share the table-data cache directory today (decision, @cpegeric, 2026-10-24). Files are
@@ -213,34 +213,47 @@ Rejected alternative: placing index files in the shared table-data cache under a
 namespace. It needs no new capacity setting, but a large index load and hot table blocks
 would evict each other.
 
-### Eviction: the existing disk-cache rules (decision)
+### Eviction: least recently used, never a held file (decision)
 
-Decided by @cpegeric, 2026-10-24. The index-file cache uses the existing disk cache's
-eviction mechanism and rules unchanged; index files get no pinning or other special
-treatment.
+Decided by @cpegeric, 2026-10-29, replacing the 2026-10-24 decision to keep the table-data
+cache's eviction. When the cache is over its capacity, it removes the files with no holds
+whose last use is oldest, until it is within capacity. The table-data cache keeps its
+own eviction.
 
-- Eviction follows the existing policy against the cache's capacity, including eviction
-  when the disk is full, and removes the evicted file. Removing an entry leaves nothing
-  of it on disk, so the files and directories the cache keeps are bounded by its live
-  entries.
+- A file's last use is when it was published, opened or its last hold released. It is
+  recorded on disk, so the order survives a restart.
+- A held file is passed over, so a file in use is never evicted. A newly written file is
+  the most recently used and is evicted only after every older file that is not held.
+- When the disk is full, the cache removes files the same way, a tenth of its capacity at
+  a time.
+- Removing a file leaves nothing of it on disk, so the files and directories the cache
+  keeps are bounded by its live entries.
 - A reader never blocks eviction. It only waits for an in-progress write or eviction of
-  the same file, then opens it. A file evicted while a reader holds it stays on disk until
-  the last hold is released (see "Holds and idle collection").
+  the same file, then opens it.
 - A file that is gone when a reader opens it is a miss, rebuilt from the chunk rows.
-- Cached files survive a CN restart, as table-data cache files do; the manifest is checked
-  on open.
 
 Accepted consequences:
 
-- Disk use may exceed the configured capacity by evicted files that are still held.
-  Table-data reads hold a file briefly; a loaded index holds its file while it is loaded.
-  The excess is bounded by what the index-cache governor keeps loaded.
-- A consumer must use the handle the layer returns, not reopen the cache path by name: an
-  eviction between the two opens makes the name disappear. A library that takes a path is
+- Disk use exceeds the capacity only while held files alone exceed it, as after the
+  capacity is lowered; the cache returns to its capacity on its next write once they are
+  released.
+- An index larger than the capacity keeps the files that fit, held while it is loaded; a
+  file rebuilt once those fill the cache is evicted at once and served uncached, so each
+  load rebuilds the same remainder (pmc, 13 GB index in a 10 GB cache: 3.0 s first query
+  after a restart, against 0.25 s when it fits). The first load after the cache holds a
+  different set of the index's files, as after the capacity is lowered, can rebuild more:
+  a rebuilt file evicts the oldest file not yet loaded, which the same load needs next
+  (30.8 s in the same case). Operators size the capacity to hold the indexes the CN serves.
+- A consumer must use the handle the layer returns, not reopen the cache path by name: a
+  removal between the two opens makes the name disappear. A library that takes a path is
   given a path to the open handle itself, which stays valid until the handle is closed.
 
-Rejected alternative: pinning open files so eviction skips them. It keeps disk use within
-capacity, but adds a second eviction rule to the shared disk-cache code.
+Rejected alternative: the table-data cache's eviction (S3-FIFO). A new file enters a small
+queue of a tenth of the capacity and is evicted from it unless read twice, while files of
+replaced generations stay in the main queue; an index that does not fit settled only after
+three loads, and a new generation arriving in a full cache could be evicted ahead of the
+one it replaces. Index files are few, large, written once and read on every query, which
+is what that admission rule is built to filter out.
 
 ### Holds and idle collection (decision)
 
@@ -252,19 +265,22 @@ by time since its last use, not by which index generation or snapshot names it.
   done with it; a loaded index holds the files it keeps mapped until it is unloaded. Holds
   are counted in memory per file across every cache in the process, so CNs sharing a
   directory see each other's holds, and do not survive a restart.
-- Evicting or collecting a held file takes effect when its last hold is released.
-  Eviction still chooses its victims as before; a held victim leaves the cache's
-  accounting at once. A held file opened again before its release is cached again and is
-  not removed.
+- Neither eviction nor collection removes a held file.
 - Deleting a file, as a failed check does, takes effect at once, held or not: holders keep
   reading the handles they have open, and the rebuilt file takes its place.
-- A file's last use is when it was published or when its last hold was released. It is
-  recorded on disk, so it survives a restart.
+- A file's last use is when it was published or when its last hold was released, as for
+  eviction.
 - A file with no holds whose last use is older than the idle TTL is deleted by a periodic
   collection in each CN. The TTL is configurable, 1 hour by default; 0 turns collection
   off and leaves only eviction. A hold taken while a file is being collected either keeps
   it or finds it missing and rebuilds it from the rows; a collection never removes a file
   that is held.
+- The same periodic collection also watches the free space of the cache's filesystem
+  (decision, @cpegeric, 2026-10-29). Below 10% free, it removes files with no holds, least
+  recently used first and whatever the TTL, until 15% is free, and checks again every 30
+  seconds until it is; it logs once when only held files are left. The cache thus gives
+  space back before writes fail, also when something else fills the disk while index
+  files sit unused.
 - Collection covers every way a file stops being used: a merge or rebuild replacing it, a
   dropped index or table, a write whose transaction aborted, a snapshot no longer queried,
   and files written or loaded on a CN that was down or had the index unloaded when it
@@ -325,7 +341,7 @@ Decided by @cpegeric, 2026-10-28.
   cache, the internal table function the write path uses) and its contract.
 - Not in scope: adopting the layer in any index other than FULLTEXT2. Each algorithm
   adopts it in its own change, which decides how its files map onto the layer (for example how a CDC tail is
-  split into files) and the default cache share. When cached files are deleted is the
+  split into files). When cached files are deleted is the
   layer's (see "Holds and idle collection").
 - Not in scope: the incremental-update algorithm; a new on-disk format; changes to what
   clone, restore or backup copy; IVFFLAT, which stores no chunks; GPU residency.
@@ -361,15 +377,20 @@ Every statement in "Contract" is checked by a test that would fail if it were fa
   after its write finished, nor for chunks outside the file, nor with an input;
 - a file evicted while open stays readable through the open handle and through the path to
   the handle, and the next open is a miss that rebuilds it;
-- a held file evicted stays on disk until its last hold is released, a file opened again
-  before then is cached again, and a hold kept past the reader's close holds the file until
-  it is released; a loaded index holds the files it maps until unloaded; a held file
+- files are evicted least recently used first: a new file is never the victim while an
+  older file is not held, an opened or released file counts as used, a held file is never
+  evicted and stays in the cache's accounting, and after a restart the files reloaded from
+  disk are evicted in their order of last use before it; a hold kept past the reader's
+  close holds the file until it is released; a loaded index holds the files it maps until
+  unloaded; a held file
   deleted is removed at once, stays readable through open handles, and a file found
   invalid while held is replaced by its rebuild; a hold taken through one cache keeps the
   file from the collection of another cache sharing the directory;
 - a file with no holds last used longer than the idle TTL ago is collected and removed from
   the cache's accounting, while a held one, a recently used one and one whose last hold
-  was just released stay; collection runs periodically until the cache closes, a TTL of 0
+  was just released stay; below the low-water mark of free space, files with no holds are
+  removed least recently used first until the target is reached, a held file stays, and
+  an unknown filesystem is left alone; collection runs periodically until the cache closes, a TTL of 0
   runs none, and a negative TTL is rejected; holds, deletions and collections racing on
   the same files leave the directory and the cache index in agreement;
 - concurrent readers missing the same file rebuild it once; a cancelled waiter does not
@@ -381,10 +402,10 @@ Every statement in "Contract" is checked by a test that would fail if it were fa
   publishes an entry both write;
 - cached entries are reused after a restart, and leftover temporary and trash directories
   are removed;
-- the configured share splits the disk capacity and a runtime resize, the default share
-  giving the index-file cache 30% and the table-data cache the rest; only a CN's
-  SHARED file service gets the cache; an overlapping directory and an invalid share or
-  rebuild setting are rejected; each rebuild setting maps to its cache policy, and a
+- the index-file cache gets its configured capacity, or the default when unset, and a
+  capacity of zero disables it; the table-data cache keeps its own capacity, and a runtime
+  resize changes only that; only a CN's SHARED file service gets the cache; an
+  overlapping directory and an invalid rebuild setting are rejected; each rebuild setting maps to its cache policy, and a
   rebuild in the `read` or `none` setting starts no full-file prefetch through the storage
   engine's reader while the default setting does;
 - a CN without an index-file cache still serves reads, rebuilding each load from the rows

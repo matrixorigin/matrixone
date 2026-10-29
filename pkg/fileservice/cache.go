@@ -48,9 +48,10 @@ type CacheConfig struct {
 	RPC                  morpc.Config   `toml:"rpc"`
 	CheckOverlaps        bool           `toml:"check-overlaps"`
 
-	// IndexFileDiskShare is the share of DiskCapacity given to the index-file cache,
-	// in [0, 1); 0 disables it. Default DefaultIndexFileDiskShare.
-	IndexFileDiskShare *float64 `toml:"index-file-disk-share"`
+	// IndexFileDiskCapacity is the capacity of the index-file cache, separate from
+	// DiskCapacity; DisableCacheCapacity or less disables it. Default
+	// DefaultIndexFileDiskCapacity.
+	IndexFileDiskCapacity *toml.ByteSize `toml:"index-file-disk-capacity"`
 	// IndexFileDiskPath is the index-file cache directory. Default DiskPath + "-index-file".
 	IndexFileDiskPath *string `toml:"index-file-disk-path"`
 	// IndexFileIdleTTL is how long an index-file cache entry with no holds stays after its
@@ -128,10 +129,7 @@ func newFileServiceCaches(
 		logutil.Info("fileservice: remote cache initialized", zap.Any("fs-name", name))
 	}
 
-	indexShare, err := config.indexFileDiskShare()
-	if err != nil {
-		return caches, err
-	}
+	indexCapacity := config.indexFileDiskCapacity()
 	rebuildPolicy, err := ParseIndexFileRebuildCache(config.IndexFileRebuildCache)
 	if err != nil {
 		return caches, err
@@ -147,22 +145,16 @@ func newFileServiceCaches(
 		if caches.memory != nil {
 			cacheDataAllocator = caches.memory
 		}
-		capacity := int64(*config.DiskCapacity)
-		var opts diskCacheOptions
-		if indexShare > 0 {
-			capacity = int64(float64(capacity) * (1 - indexShare))
-			opts.sizeHintShare = 1 - indexShare
-		}
 		caches.disk, err = newDiskCache(
 			ctx,
 			*config.DiskPath,
-			fscache.ConstCapacity(capacity),
+			fscache.ConstCapacity(int64(*config.DiskCapacity)),
 			perfCounterSets,
 			true,
 			cacheDataAllocator,
 			name,
 			config.MetricScope,
-			opts,
+			diskCacheOptions{},
 		)
 		if err != nil {
 			return caches, err
@@ -173,7 +165,7 @@ func newFileServiceCaches(
 		)
 	}
 
-	if indexShare > 0 {
+	if indexCapacity > 0 {
 		path := filepath.Clean(*config.DiskPath) + "-index-file"
 		if config.IndexFileDiskPath != nil && *config.IndexFileDiskPath != "" {
 			path = filepath.Clean(*config.IndexFileDiskPath)
@@ -181,14 +173,12 @@ func newFileServiceCaches(
 		if err = checkIndexFileDiskPath(*config.DiskPath, path); err != nil {
 			return caches, err
 		}
-		capacity := int64(float64(*config.DiskCapacity) * indexShare)
 		caches.index, err = newIndexFileCache(
 			ctx,
 			path,
-			fscache.ConstCapacity(capacity),
+			fscache.ConstCapacity(indexCapacity),
 			name+"-index-file",
 			config.MetricScope,
-			indexShare,
 			rebuildPolicy,
 			idleTTL,
 		)
@@ -199,7 +189,7 @@ func newFileServiceCaches(
 		logutil.Info("fileservice: index file cache initialized",
 			zap.Any("fs-name", name),
 			zap.String("path", path),
-			zap.Int64("capacity", capacity),
+			zap.Int64("capacity", indexCapacity),
 			zap.Duration("idle-ttl", idleTTL),
 			zap.Bool("check-on-startup", config.IndexFileCheckOnStartup),
 		)
@@ -230,21 +220,20 @@ func checkIndexFileDiskPath(diskPath, indexPath string) error {
 	return nil
 }
 
-// indexFileDiskShare returns the share of the disk capacity for the index-file cache, 0
-// when the cache is not enabled for this file service.
-func (c *CacheConfig) indexFileDiskShare() (float64, error) {
-	share := DefaultIndexFileDiskShare
-	if c.IndexFileDiskShare != nil {
-		share = *c.IndexFileDiskShare
-		if !(share >= 0 && share < 1) {
-			return 0, moerr.NewInvalidInputNoCtxf("invalid index-file-disk-share %v, want [0, 1)", share)
-		}
+// indexFileDiskCapacity returns the capacity of the index-file cache, 0 when the cache is
+// not enabled for this file service.
+func (c *CacheConfig) indexFileDiskCapacity() int64 {
+	if !c.IndexFileCacheEnabled || c.DiskPath == nil {
+		return 0
 	}
-	if !c.IndexFileCacheEnabled || c.DiskCapacity == nil ||
-		*c.DiskCapacity <= DisableCacheCapacity || c.DiskPath == nil {
-		return 0, nil
+	capacity := int64(DefaultIndexFileDiskCapacity)
+	if c.IndexFileDiskCapacity != nil {
+		capacity = int64(*c.IndexFileDiskCapacity)
 	}
-	return share, nil
+	if capacity <= DisableCacheCapacity {
+		return 0
+	}
+	return capacity
 }
 
 // indexFileIdleTTL returns the idle TTL of index-file cache entries.

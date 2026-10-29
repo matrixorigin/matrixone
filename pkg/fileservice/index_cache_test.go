@@ -21,10 +21,10 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
-	"math"
 	"math/rand"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -299,7 +299,7 @@ func requireEntryDir(t *testing.T, c *IndexFileCache, name string, exists bool) 
 	}
 }
 
-// A held entry is removed by Delete or eviction only when its last hold is released.
+// Delete removes a held entry at once, and eviction passes over a held entry.
 func TestIndexFileCacheHoldDefersRemoval(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
@@ -331,56 +331,107 @@ func TestIndexFileCacheHoldDefersRemoval(t *testing.T) {
 	require.Equal(t, replacement, readAllFile(t, files[0]), "releasing the old holds keeps the replacement")
 	closeFiles(files)
 
-	_, err = c.Put(ctx, "evicted", indexCacheEntry(data))
+	_, err = c.Put(ctx, "held", indexCacheEntry(data))
 	require.NoError(t, err)
-	release, err := c.Hold("evicted")
+	release, err := c.Hold("held")
 	require.NoError(t, err)
 	for i := 0; i < 8; i++ {
 		_, err := c.Put(ctx, fmt.Sprintf("other-%d", i), indexCacheEntry(data))
 		require.NoError(t, err)
 	}
 	evictIndexCache(c)
-	requireEntryDir(t, c, "evicted", true)
+	heldPath, err := c.disk.pathForDir("held")
+	require.NoError(t, err)
+	requireEntryDir(t, c, "held", true)
+	require.True(t, c.disk.cache.Contains(heldPath), "a held entry is not evicted")
 	release()
-	requireEntryDir(t, c, "evicted", false)
+	requireEntryDir(t, c, "held", true)
+	require.True(t, c.disk.cache.Contains(heldPath), "a released entry stays")
 
 	_, temps, trash := listCacheDirs(t, dir)
 	require.Empty(t, temps)
 	require.Empty(t, trash)
 }
 
-// An entry opened again after its eviction was deferred is in the cache again, and the
-// release of the earlier hold leaves it.
-func TestIndexFileCacheHeldEntryReopened(t *testing.T) {
+// Entries are evicted least recently used first: a new entry is never the victim, an
+// opened or released entry is used again, and a held one is passed over.
+func TestIndexFileCacheEvictsLeastRecentlyUsed(t *testing.T) {
 	ctx := context.Background()
-	c := newTestIndexFileCache(t, t.TempDir(), 200<<10)
 	data := bytes.Repeat([]byte("p"), 64<<10)
-	_, err := c.Put(ctx, "e", indexCacheEntry(data))
-	require.NoError(t, err)
-	release, err := c.Hold("e")
-	require.NoError(t, err)
-	for i := 0; i < 8; i++ {
-		_, err := c.Put(ctx, fmt.Sprintf("other-%d", i), indexCacheEntry(data))
+	entrySize := measuredEntrySize(t, data)
+	c := newTestIndexFileCache(t, t.TempDir(), 3*entrySize+10)
+	put := func(name string) {
+		t.Helper()
+		written, err := c.Put(ctx, name, indexCacheEntry(data))
 		require.NoError(t, err)
+		require.True(t, written, name)
 	}
-	evictIndexCache(c)
-	path, err := c.disk.pathForDir("e")
-	require.NoError(t, err)
-	require.False(t, c.disk.cache.Contains(path), "an evicted held entry leaves the cache accounting")
-	requireEntryDir(t, c, "e", true)
+	cached := func(names ...string) {
+		t.Helper()
+		for _, n := range []string{"a", "b", "c", "d", "e", "f"} {
+			path, err := c.disk.pathForDir(n)
+			require.NoError(t, err)
+			require.Equal(t, slices.Contains(names, n), c.disk.cache.Contains(path), n)
+			requireEntryDir(t, c, n, slices.Contains(names, n))
+		}
+	}
 
-	files, err := c.Open(ctx, "e", "data")
+	put("a")
+	put("b")
+	put("c")
+	files, err := c.Open(ctx, "a", "data")
 	require.NoError(t, err)
 	closeFiles(files)
-	release()
-	requireEntryDir(t, c, "e", true)
-	files, err = c.Open(ctx, "e", "data")
+	put("d")
+	cached("a", "c", "d")
+
+	release, err := c.Hold("c")
 	require.NoError(t, err)
-	defer closeFiles(files)
-	require.Equal(t, data, readAllFile(t, files[0]))
+	put("e")
+	cached("c", "d", "e")
+
+	release()
+	put("f")
+	cached("c", "e", "f")
+	require.LessOrEqual(t, c.disk.cache.Used(), 3*entrySize+10)
 
 	_, err = c.Hold("../e")
 	require.Error(t, err)
+}
+
+// After a restart the cache evicts the entries reloaded from disk least recently used
+// first, by their last use before the restart.
+func TestIndexFileCacheEvictionOrderSurvivesRestart(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	data := bytes.Repeat([]byte("p"), 64<<10)
+	capacity := 3*measuredEntrySize(t, data) + 10
+	c, err := NewIndexFileCache(ctx, dir, fscache.ConstCapacity(capacity), "", IndexFileRebuildPolicyDefault)
+	require.NoError(t, err)
+	<-c.disk.load.done
+	for i, n := range []string{"new", "old", "mid"} {
+		_, err := c.Put(ctx, n, indexCacheEntry(data))
+		require.NoError(t, err)
+		ageEntry(t, c, n, []time.Duration{time.Minute, 3 * time.Hour, time.Hour}[i])
+	}
+	c.Close(ctx)
+
+	c = newTestIndexFileCache(t, dir, capacity)
+	_, err = c.Put(ctx, "next", indexCacheEntry(data))
+	require.NoError(t, err)
+	requireEntryDir(t, c, "old", false)
+	for _, n := range []string{"new", "mid", "next"} {
+		requireEntryDir(t, c, n, true)
+	}
+}
+
+// measuredEntrySize is the accounted size of an entry of data, in disk blocks.
+func measuredEntrySize(t *testing.T, data []byte) int64 {
+	t.Helper()
+	c := newTestIndexFileCache(t, t.TempDir(), 1<<30)
+	_, err := c.Put(context.Background(), "e", indexCacheEntry(data))
+	require.NoError(t, err)
+	return c.disk.cache.Used()
 }
 
 func ageEntry(t *testing.T, c *IndexFileCache, name string, age time.Duration) {
@@ -393,10 +444,70 @@ func ageEntry(t *testing.T, c *IndexFileCache, name string, age time.Duration) {
 
 // The GC deletes an entry with no holds last used longer than the idle TTL ago; a held
 // entry, a recently used one and one whose last hold was just released stay.
+// Below the low-water mark of free space, entries with no holds are removed, least recently
+// used first, until enough is freed to reach the target, whatever the idle TTL.
+func TestIndexFileCacheRelievesDiskPressure(t *testing.T) {
+	ctx := context.Background()
+	c, err := newIndexFileCache(ctx, t.TempDir(), fscache.ConstCapacity(1<<30), "", "", IndexFileRebuildPolicyDefault, 0)
+	require.NoError(t, err)
+	<-c.disk.load.done
+	t.Cleanup(func() { c.Close(context.Background()) })
+	names := []string{"e0", "e1", "e2", "e3", "e4"}
+	for i, n := range names {
+		_, err := c.Put(ctx, n, indexCacheEntry(bytes.Repeat([]byte{'x'}, 400)))
+		require.NoError(t, err)
+		ageEntry(t, c, n, time.Duration(len(names)-i)*time.Minute)
+	}
+	release, err := c.Hold("e0")
+	require.NoError(t, err)
+	defer release()
+
+	var stat diskCacheFilesystemStat
+	ok := true
+	c.disk.statFilesystem = func(string) (diskCacheFilesystemStat, bool) { return stat, ok }
+	present := func() (out []string) {
+		for _, n := range names {
+			path, err := c.disk.pathForDir(n)
+			require.NoError(t, err)
+			if _, err := os.Stat(path); err == nil {
+				out = append(out, n)
+			}
+		}
+		return out
+	}
+
+	stat = diskCacheFilesystemStat{totalBytes: 10000, availableBytes: 1000}
+	short, err := c.relieveDiskPressure(ctx)
+	require.NoError(t, err)
+	require.False(t, short)
+	require.Equal(t, names, present(), "at the low-water mark nothing is removed")
+
+	ok = false
+	stat.availableBytes = 0
+	short, err = c.relieveDiskPressure(ctx)
+	require.NoError(t, err)
+	require.False(t, short)
+	require.Equal(t, names, present(), "an unknown filesystem is left alone")
+
+	// 1000 bytes short of the 15% target: three 407-byte entries
+	ok = true
+	stat.availableBytes = 500
+	short, err = c.relieveDiskPressure(ctx)
+	require.NoError(t, err)
+	require.False(t, short)
+	require.Equal(t, []string{"e0", "e4"}, present(), "the oldest unheld entries go first; a held one stays")
+	requireIndexCacheMiss(t, c, "e1")
+
+	short, err = c.relieveDiskPressure(ctx)
+	require.NoError(t, err)
+	require.True(t, short, "only a held entry is left")
+	require.Equal(t, []string{"e0"}, present())
+}
+
 func TestIndexFileCacheCollectsIdleEntries(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
-	c, err := newIndexFileCache(ctx, dir, fscache.ConstCapacity(1<<30), "", "", 0, IndexFileRebuildPolicyDefault, time.Hour)
+	c, err := newIndexFileCache(ctx, dir, fscache.ConstCapacity(1<<30), "", "", IndexFileRebuildPolicyDefault, time.Hour)
 	require.NoError(t, err)
 	<-c.disk.load.done
 	t.Cleanup(func() { c.Close(context.Background()) })
@@ -443,7 +554,7 @@ func TestIndexFileCacheCollectsIdleEntries(t *testing.T) {
 // The GC runs on its own ticker until Close; an idle TTL of 0 starts none.
 func TestIndexFileCacheGCLoop(t *testing.T) {
 	ctx := context.Background()
-	c, err := newIndexFileCache(ctx, t.TempDir(), fscache.ConstCapacity(1<<30), "", "", 0, IndexFileRebuildPolicyDefault, time.Second)
+	c, err := newIndexFileCache(ctx, t.TempDir(), fscache.ConstCapacity(1<<30), "", "", IndexFileRebuildPolicyDefault, time.Second)
 	require.NoError(t, err)
 	<-c.disk.load.done
 	_, err = c.Put(ctx, "e", indexCacheEntry([]byte("e")))
@@ -456,8 +567,8 @@ func TestIndexFileCacheGCLoop(t *testing.T) {
 	}, 10*time.Second, 50*time.Millisecond)
 	c.Close(ctx)
 
-	off := newTestIndexFileCache(t, t.TempDir(), 1<<30)
-	require.Nil(t, off.stopGC)
+	noTTL := newTestIndexFileCache(t, t.TempDir(), 1<<30)
+	require.NotNil(t, noTTL.stopGC, "without an idle TTL the loop still watches free space")
 }
 
 func TestIndexFileIdleTTLConfig(t *testing.T) {
@@ -473,7 +584,7 @@ func TestIndexFileIdleTTLConfig(t *testing.T) {
 	_, err = c.indexFileIdleTTL()
 	require.Error(t, err)
 
-	config := indexCacheConfig(t, 100<<20)
+	config := indexCacheConfig(t, 100<<20, 300<<20)
 	config.IndexFileIdleTTL = &toml.Duration{Duration: -time.Second}
 	_, err = newFileServiceCaches(context.Background(), config, nil, "test", true)
 	require.Error(t, err)
@@ -709,15 +820,14 @@ func TestDiskCacheIgnoresDirectoryEntriesWithoutIndexCache(t *testing.T) {
 	require.True(t, os.IsNotExist(err), "a table-data cache removes unknown files, as before")
 }
 
-func indexCacheConfig(t *testing.T, capacity int64) CacheConfig {
+func indexCacheConfig(t *testing.T, capacity, indexCapacity int64) CacheConfig {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "disk-cache")
-	c := toml.ByteSize(capacity)
-	share := 0.3
+	c, ic := toml.ByteSize(capacity), toml.ByteSize(indexCapacity)
 	return CacheConfig{
 		DiskPath:              &path,
 		DiskCapacity:          &c,
-		IndexFileDiskShare:    &share,
+		IndexFileDiskCapacity: &ic,
 		IndexFileCacheEnabled: true,
 	}
 }
@@ -730,78 +840,71 @@ func newTestFileServiceCaches(t *testing.T, config CacheConfig) fileServiceCache
 	return caches
 }
 
-func TestIndexFileCacheSplitsDiskCapacity(t *testing.T) {
-	config := indexCacheConfig(t, 100<<20)
+func TestIndexFileCacheHasItsOwnCapacity(t *testing.T) {
+	config := indexCacheConfig(t, 100<<20, 300<<20)
 	caches := newTestFileServiceCaches(t, config)
 	require.NotNil(t, caches.disk)
 	require.NotNil(t, caches.index)
-	require.Equal(t, int64(70<<20), caches.disk.capacityFunc())
-	require.Equal(t, int64(30<<20), caches.index.disk.capacityFunc())
+	require.Equal(t, int64(100<<20), caches.disk.capacityFunc(), "the table-data cache keeps disk-capacity")
+	require.Equal(t, int64(300<<20), caches.index.disk.capacityFunc())
 	require.Equal(t, *config.DiskPath+"-index-file", caches.index.disk.path)
 	require.True(t, caches.index.disk.dirEntries)
 	require.False(t, caches.disk.dirEntries)
 	require.Equal(t, IndexFileRebuildPolicyDefault, caches.index.RebuildPolicy())
+	require.False(t, caches.index.CheckOnStartup())
 
-	share := 0.5
 	path := filepath.Join(t.TempDir(), "index")
-	config = indexCacheConfig(t, 100<<20)
-	config.IndexFileDiskShare = &share
+	config = indexCacheConfig(t, 100<<20, 50<<20)
 	config.IndexFileDiskPath = &path
 	config.IndexFileRebuildCache = IndexFileRebuildCacheNone
+	config.IndexFileCheckOnStartup = true
 	caches = newTestFileServiceCaches(t, config)
-	require.Equal(t, int64(50<<20), caches.disk.capacityFunc())
 	require.Equal(t, int64(50<<20), caches.index.disk.capacityFunc())
 	require.Equal(t, path, caches.index.disk.path)
 	require.Equal(t, Policy(SkipAllCache|SkipFullFilePreloads), caches.index.RebuildPolicy())
+	require.True(t, caches.index.CheckOnStartup())
 }
 
-func TestIndexFileCacheShareSplitsDiskCapacity(t *testing.T) {
-	zero := 0.0
+func TestIndexFileCacheCapacityDefaultAndDisable(t *testing.T) {
+	config := indexCacheConfig(t, 100<<20, 0)
+	config.IndexFileDiskCapacity = nil
+	caches := newTestFileServiceCaches(t, config)
+	require.NotNil(t, caches.index)
+	require.Equal(t, int64(DefaultIndexFileDiskCapacity), caches.index.disk.capacityFunc())
+	require.Equal(t, int64(100<<20), caches.disk.capacityFunc())
+
 	for name, mutate := range map[string]func(*CacheConfig){
 		"not enabled for this service": func(c *CacheConfig) { c.IndexFileCacheEnabled = false },
-		"share 0":                      func(c *CacheConfig) { c.IndexFileDiskShare = &zero },
+		"capacity 0":                   func(c *CacheConfig) { *c.IndexFileDiskCapacity = 0 },
+		"capacity disabled":            func(c *CacheConfig) { *c.IndexFileDiskCapacity = DisableCacheCapacity },
 	} {
-		config := indexCacheConfig(t, 100<<20)
+		config := indexCacheConfig(t, 100<<20, 300<<20)
 		mutate(&config)
 		caches := newTestFileServiceCaches(t, config)
 		require.Nil(t, caches.index, name)
 		require.Equal(t, int64(100<<20), caches.disk.capacityFunc(), name)
 	}
 
-	// the default share splits the capacity
-	config := indexCacheConfig(t, 100<<20)
-	config.IndexFileDiskShare = nil
-	caches := newTestFileServiceCaches(t, config)
-	require.NotNil(t, caches.index)
-	require.Equal(t, int64(30<<20), caches.index.disk.capacityFunc())
-	require.Equal(t, int64(70<<20), caches.disk.capacityFunc())
-
-	config = indexCacheConfig(t, 100<<20)
-	disabled := toml.ByteSize(DisableCacheCapacity)
-	config.DiskCapacity = &disabled
+	// a disabled table-data cache leaves the index-file cache on
+	config = indexCacheConfig(t, DisableCacheCapacity, 300<<20)
 	caches = newTestFileServiceCaches(t, config)
-	require.Nil(t, caches.index)
 	require.Nil(t, caches.disk)
+	require.NotNil(t, caches.index)
+	require.Equal(t, int64(300<<20), caches.index.disk.capacityFunc())
 }
 
 func TestIndexFileCacheWithoutTableDiskCache(t *testing.T) {
-	config := indexCacheConfig(t, 100<<20)
+	config := indexCacheConfig(t, 100<<20, 300<<20)
 	caches, err := newFileServiceCaches(context.Background(), config, nil, "test", false)
 	require.NoError(t, err)
 	defer caches.close(context.Background())
 	require.Nil(t, caches.disk)
 	require.NotNil(t, caches.index)
-	require.Equal(t, int64(30<<20), caches.index.disk.capacityFunc())
+	require.Equal(t, int64(300<<20), caches.index.disk.capacityFunc())
 }
 
 func TestIndexFileCacheRejectsInvalidConfig(t *testing.T) {
-	for _, share := range []float64{-0.1, 1, 1.5, math.NaN()} {
-		config := indexCacheConfig(t, 100<<20)
-		config.IndexFileDiskShare = &share
-		_, err := newFileServiceCaches(context.Background(), config, nil, "test", true)
-		require.Error(t, err, share)
-	}
-	config := indexCacheConfig(t, 100<<20)
+	config := indexCacheConfig(t, 100<<20, 300<<20)
 	config.IndexFileRebuildCache = "sometimes"
 	_, err := newFileServiceCaches(context.Background(), config, nil, "test", true)
 	require.Error(t, err)
@@ -818,24 +921,19 @@ func TestIndexFileCacheRejectsInvalidConfig(t *testing.T) {
 	}
 }
 
-func TestIndexFileCacheSizeHintSplit(t *testing.T) {
+func TestIndexFileCacheIgnoresSizeHint(t *testing.T) {
 	old := GlobalDiskCacheSizeHint.Load()
 	t.Cleanup(func() { GlobalDiskCacheSizeHint.Store(old) })
 
-	caches := newTestFileServiceCaches(t, indexCacheConfig(t, 100<<20))
-	plain, err := NewDiskCache(context.Background(), t.TempDir(), fscache.ConstCapacity(100<<20), nil, false, nil, "")
-	require.NoError(t, err)
-	defer plain.Close(context.Background())
-
+	caches := newTestFileServiceCaches(t, indexCacheConfig(t, 100<<20, 300<<20))
 	GlobalDiskCacheSizeHint.Store(1000 << 20)
-	require.Equal(t, int64(700<<20), caches.disk.capacityFunc())
+	require.Equal(t, int64(1000<<20), caches.disk.capacityFunc(), "the table-data cache takes the whole hint")
 	require.Equal(t, int64(300<<20), caches.index.disk.capacityFunc())
-	require.Equal(t, int64(1000<<20), plain.capacityFunc(), "a cache without the split takes the whole hint")
 }
 
 func TestGetIndexFileCacheFromFileServices(t *testing.T) {
 	ctx := context.Background()
-	config := indexCacheConfig(t, 100<<20)
+	config := indexCacheConfig(t, 100<<20, 300<<20)
 	shared, err := NewLocalFS(ctx, defines.SharedFileServiceName, t.TempDir(), config, nil)
 	require.NoError(t, err)
 	local, err := NewLocalFS(ctx, defines.LocalFileServiceName, t.TempDir(), CacheConfig{}, nil)
@@ -895,7 +993,7 @@ func TestIndexFileCachePutMovesTempFile(t *testing.T) {
 }
 
 func TestIndexFileCachePathMustNotOverlapDiskCache(t *testing.T) {
-	config := indexCacheConfig(t, 100<<20)
+	config := indexCacheConfig(t, 100<<20, 300<<20)
 	trailing := *config.DiskPath + string(filepath.Separator)
 	config.DiskPath = &trailing
 	caches := newTestFileServiceCaches(t, config)
@@ -907,7 +1005,7 @@ func TestIndexFileCachePathMustNotOverlapDiskCache(t *testing.T) {
 		"inside": func(disk string) string { return filepath.Join(disk, "index") },
 		"parent": func(disk string) string { return filepath.Dir(disk) },
 	} {
-		config := indexCacheConfig(t, 100<<20)
+		config := indexCacheConfig(t, 100<<20, 300<<20)
 		p := indexPath(*config.DiskPath)
 		config.IndexFileDiskPath = &p
 		_, err := newFileServiceCaches(context.Background(), config, nil, "test", true)
