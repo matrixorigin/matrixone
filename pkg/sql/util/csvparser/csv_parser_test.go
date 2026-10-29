@@ -1515,3 +1515,32 @@ func TestUnterminatedEnclosureWithMatchingEscapeAndDoubledQuote(t *testing.T) {
 		}
 	}
 }
+
+func TestMatchingEnclosureEscapeEOFAdjacentBoundaries(t *testing.T) {
+	// The first quoted field is already sealed when the final field reaches EOF.
+	input := "\"first\",\"a\"\"n\nend"
+	for _, size := range []int64{1, 128} {
+		for _, limit := range []int64{15, 16} {
+			t.Run(fmt.Sprintf("block=%d/limit=%d", size, limit), func(t *testing.T) {
+				cfg := CSVConfig{FieldsTerminatedBy: ",", FieldsEnclosedBy: "\"", FieldsEscapedBy: "\"", LinesTerminatedBy: "\n", AllowUnterminatedEnclosureAtEOF: true, MaxRecordSize: limit}
+				p, err := NewCSVParser(&cfg, strings.NewReader(input), size, false)
+				require.NoError(t, err)
+				row, err := p.Read(nil)
+				if limit == 15 {
+					require.Error(t, err)
+					require.False(t, IsSyntaxError(err))
+					return
+				}
+				require.NoError(t, err)
+				require.Equal(t, []Field{{Val: "first", HasStringQuote: true}, {Val: "\"a\"n\nend"}}, row)
+				require.Equal(t, int64(len(input)), p.Pos())
+				_, err = p.Read(nil)
+				require.ErrorIs(t, err, io.EOF)
+				p.Reset(strings.NewReader("\"ok\",\"done\""))
+				row, err = p.Read(nil)
+				require.NoError(t, err)
+				require.Equal(t, []Field{{Val: "ok", HasStringQuote: true}, {Val: "done", HasStringQuote: true}}, row)
+			})
+		}
+	}
+}
