@@ -18,7 +18,6 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 )
 
@@ -32,16 +31,20 @@ type IgnoredRow struct {
 	Ts     int64
 }
 
+// IgnoredColumns names the ignored table's columns. The caller passes the catalog's names:
+// this package cannot import catalog, which reaches it again through cuvs in a gpu build.
+type IgnoredColumns struct {
+	Pk, Reason, Ts string
+}
+
 // IgnoredRowsSql returns the statements that record rows in the ignored table db.table.
-func IgnoredRowsSql(db, table string, rows []IgnoredRow) []string {
+func IgnoredRowsSql(db, table string, cols IgnoredColumns, rows []IgnoredRow) []string {
 	var sqls []string
 	for start := 0; start < len(rows); start += ignoredRowsPerSql {
 		end := min(start+ignoredRowsPerSql, len(rows))
 		var b strings.Builder
 		fmt.Fprintf(&b, "REPLACE INTO %s (%s, %s, %s) VALUES ", sqlquote.QualifiedIdent(db, table),
-			sqlquote.Ident(catalog.IndexIgnored_TblCol_Pk),
-			sqlquote.Ident(catalog.IndexIgnored_TblCol_Reason),
-			sqlquote.Ident(catalog.IndexIgnored_TblCol_Ts))
+			sqlquote.Ident(cols.Pk), sqlquote.Ident(cols.Reason), sqlquote.Ident(cols.Ts))
 		for i, r := range rows[start:end] {
 			if i > 0 {
 				b.WriteString(", ")

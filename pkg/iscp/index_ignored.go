@@ -199,7 +199,7 @@ func (g *ignoredRows) flush(ctx context.Context, service string, txn client.TxnO
 		c := g.changes[k]
 		rows = append(rows, vectorindex.IgnoredRow{Pk: string(lit), Reason: c.reason, Ts: c.ts.Physical()})
 	}
-	for _, sql := range vectorindex.IgnoredRowsSql(g.db, g.tbl, rows) {
+	for _, sql := range vectorindex.IgnoredRowsSql(g.db, g.tbl, vectorindex.IgnoredColumns{Pk: catalog.IndexIgnored_TblCol_Pk, Reason: catalog.IndexIgnored_TblCol_Reason, Ts: catalog.IndexIgnored_TblCol_Ts}, rows) {
 		if err := exec(sql); err != nil {
 			return err
 		}
