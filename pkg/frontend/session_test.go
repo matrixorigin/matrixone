@@ -1417,6 +1417,29 @@ func TestCheckPasswordExpired(t *testing.T) {
 	assert.True(t, expired)
 }
 
+func TestRestrictedAccountError(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+
+	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+	pu.SV.SetDefaultValues()
+	setPu("", pu)
+	ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+	ses.SetTenantInfo(&TenantInfo{Tenant: "restricted_account"})
+	ses.setRoutine(&Routine{})
+	ses.getRoutine().setResricted(true)
+
+	stmts, err := mysql.Parse(ctx, "create database blocked", 1)
+	require.NoError(t, err)
+	defer stmts[0].Free()
+
+	_, err = authenticateUserCanExecuteStatement(ctx, ses, stmts[0])
+	require.EqualError(t, err, "internal error: Account restricted_account is restricted")
+}
+
 func Test_CheckLockTimeExpired(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
