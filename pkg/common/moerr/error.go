@@ -456,6 +456,14 @@ const (
 	// Group 16: CCPR
 	ErrCCPRReadOnly uint16 = 22401
 
+	// Group 17: Data Branch
+	// ErrDataBranchConflict reports a DATA BRANCH merge/pick write-write
+	// conflict between the two branches on the same primary key. It is a
+	// deterministic, user-visible data condition (issue #31614), not an
+	// internal fault: the failing statement aborts atomically and the
+	// error is never silently retried.
+	ErrDataBranchConflict uint16 = 22501
+
 	// ErrEnd, the max value of MOErrorCode
 	ErrEnd uint16 = 65535
 )
@@ -790,6 +798,14 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 
 	// Group 16: CCPR
 	ErrCCPRReadOnly: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "ccpr shared object is read-only"},
+
+	// Group 17: Data Branch. The conflict report is a deterministic data
+	// condition, surfaced to the client as MySQL ER_UNKNOWN_ERROR (1105)
+	// with SQLSTATE HY000 — the same severity class as the checksum and
+	// write-conflict reports — and is never silently retried. Callers
+	// pass the two conflicting sides and the pk as a single pre-formatted
+	// detail; the leading "conflict: " comes from this catalog template.
+	ErrDataBranchConflict: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "conflict: %s"},
 
 	// Group End: max value of MOErrorCode
 	ErrEnd: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "internal error: end of errcode code"},

@@ -51,7 +51,12 @@ func TestEmptyTimeConversionPreservesReleaseContract(t *testing.T) {
 						tc.parameters[0].SetIsBin(binary)
 						ok, info := tc.Run()
 						require.True(t, ok, info)
-						require.Empty(t, session.warnings)
+						if source == types.T_varchar && !binary && name != "assignment" {
+							require.Len(t, session.warnings, 1)
+							require.Equal(t, "Truncated incorrect time value: ''", session.warnings[0].msg)
+						} else {
+							require.Empty(t, session.warnings)
+						}
 					})
 				}
 			}
@@ -363,7 +368,11 @@ func TestDatetimeExpressionCastInvalidStrings(t *testing.T) {
 					WithSelectList(&FunctionSelectList{AnyNull: true, SelectList: []bool{true, true, true, true, true, true, true, false}})
 				ok, info := fc.RunAndFree()
 				require.True(t, ok, info)
-				require.Empty(t, warnings.warnings)
+				if isTemporalTextSource(source) {
+					require.Len(t, warnings.warnings, 5)
+				} else {
+					require.Empty(t, warnings.warnings)
+				}
 			})
 		}
 	}

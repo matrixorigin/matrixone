@@ -24,7 +24,7 @@ select id, note from child_t order by id;
 1  ¦  leaf-pick-clean  𝄀
 2  ¦  direct-control
 data branch pick leaf_pick into child_t keys(2) when conflict fail;
-internal error: conflict: leaf_pick INSERT and child_t INSERT on pk(2) with different values
+conflict: leaf_pick INSERT and child_t INSERT on pk(2) with different values
 select id, note from child_t order by id;
 ➤ id[4,32,0]  ¦  note[12,32,0]  𝄀
 1  ¦  leaf-pick-clean  𝄀
