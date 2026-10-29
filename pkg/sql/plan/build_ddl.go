@@ -1712,6 +1712,13 @@ func genAsSelectCols(
 				typ = provenance.Source.Metadata.Typ
 				typ.NotNullable = expr.Typ.NotNullable
 			}
+		} else {
+			// Numeric attribute masks carry only on the direct single-source
+			// channel. Any other output (computed expression, set-operation
+			// result, aggregate, literal) is a semantic boundary: a UNION's
+			// packet-only retained UNSIGNED bit must not persist into the CTAS
+			// target, which would reject negative assignments.
+			typ.NumericAttributes = 0
 		}
 		typ = ctasTemporalSchemaType(decimalDivSchemaType(typ, provenance))
 		if g := query.IntegerPrecision; g != nil && i < len(g.Outputs) {
@@ -1739,7 +1746,7 @@ func genAsSelectCols(
 					defaultDef.NullAbility = nullAbility
 					if defaultDef.Expr == nil && defaultDef.OriginString != "" {
 						defaultDef, err = buildCTASDefaultFromOrigin(
-							ctx, typ, nullAbility, defaultDef.OriginString)
+							ctx, typ, nullAbility, defaultDef.OriginString, "inherited default")
 						if err != nil {
 							return nil, nil, 0, err
 						}
@@ -1963,11 +1970,11 @@ func buildCTASDefaultForView(ctx CompilerContext, typ plan.Type, nullAbility boo
 		return defaultDef, nil
 	}
 
-	return buildCTASDefaultFromOrigin(ctx, typ, false, originString)
+	return buildCTASDefaultFromOrigin(ctx, typ, false, originString, "view default")
 }
 
 func buildCTASDefaultFromOrigin(
-	ctx CompilerContext, typ plan.Type, nullAbility bool, originString string,
+	ctx CompilerContext, typ plan.Type, nullAbility bool, originString string, colNameOrigin string,
 	columns ...*ColDef,
 ) (*plan.Default, error) {
 	stmt, err := parsers.ParseOne(ctx.GetContext(), dialect.MYSQL, "select "+originString, 1)
@@ -1989,6 +1996,11 @@ func buildCTASDefaultFromOrigin(
 	if len(columns) > 0 {
 		binder = NewDefaultBinderWithColumns(bindCtx, typ, columns)
 	}
+	// Attributed DECIMAL CTAS-inherited defaults bind target-free, the same
+	// predicate as the CREATE/ALTER DEFAULT owner.
+	if isAttributedDecimalPlanType(typ) {
+		binder.baseBinder.suppressDefaultValueBindType = true
+	}
 	defaultExpr, err := binder.bindPersistedExpr(selectClause.Exprs[0].Expr, 0, false)
 	if err != nil {
 		return nil, err
@@ -2004,8 +2016,14 @@ func buildCTASDefaultFromOrigin(
 			return nil, err
 		}
 	}
-	defaultExpr, err = makePlan2AssignmentCastExpr(ctx.GetContext(), defaultExpr, typ)
+	srcExpr := defaultExpr
+	defaultExpr, err = makePlan2AssignmentCastExprForColumn(ctx.GetContext(), defaultExpr, typ, colNameOrigin)
 	if err != nil {
+		return nil, err
+	}
+	// Attributed DECIMAL strict constant validation: a reparsed constant
+	// negative default must validate identically to the original authoring.
+	if err = validateUnsignedDecimalStrictConstantDefault(ctx.GetContext(), ctx.GetProcess(), typ, srcExpr, colNameOrigin); err != nil {
 		return nil, err
 	}
 	defaultExpr, err = ConstantFold(
@@ -2045,7 +2063,7 @@ func finalizeCTASDefaults(ctx CompilerContext, cols []*ColDef) error {
 			continue
 		}
 		bound, err := buildCTASDefaultFromOrigin(ctx, col.Typ,
-			col.Default.NullAbility, col.Default.OriginString, cols...)
+			col.Default.NullAbility, col.Default.OriginString, col.Name, cols...)
 		if err != nil {
 			return err
 		}

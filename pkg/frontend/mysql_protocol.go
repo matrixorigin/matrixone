@@ -2762,7 +2762,7 @@ func (mp *MysqlProtocolImpl) appendResultSetBinaryRow(mrs *MysqlResultSet, rowId
 			if value, err := mrs.GetString(mp.ctx, rowIdx, i); err != nil {
 				return err
 			} else {
-				err = mp.appendStringLenEnc(value)
+				err = mp.appendStringLenEnc(padZerofillDecimalText(value, mysqlColumn.zerofillPadDigitsForRender()))
 				if err != nil {
 					return err
 				}
@@ -2897,7 +2897,7 @@ func (mp *MysqlProtocolImpl) appendResultSetTextRow(mrs *MysqlResultSet, r uint6
 			if value, err2 := mrs.GetString(mp.ctx, r, i); err2 != nil {
 				return err2
 			} else {
-				err = mp.appendStringLenEnc(value)
+				err = mp.appendStringLenEnc(padZerofillDecimalText(value, mysqlColumn.zerofillPadDigitsForRender()))
 				if err != nil {
 					return err
 				}
@@ -3337,7 +3337,7 @@ func (mp *MysqlProtocolImpl) appendResultSetBinaryRow2(mrs *MysqlResultSet, colS
 			if err != nil {
 				return err
 			}
-			err = AppendStringLenEnc(mp, value)
+			err = AppendStringLenEnc(mp, padZerofillDecimalText(value, mysqlColumn.zerofillPadDigitsForRender()))
 			if err != nil {
 				return err
 			}
@@ -3503,7 +3503,7 @@ func (mp *MysqlProtocolImpl) appendResultSetTextRow2(mrs *MysqlResultSet, colSli
 			if err != nil {
 				return err
 			}
-			err = AppendStringLenEnc(mp, value)
+			err = AppendStringLenEnc(mp, padZerofillDecimalText(value, mysqlColumn.zerofillPadDigitsForRender()))
 			if err != nil {
 				return err
 			}

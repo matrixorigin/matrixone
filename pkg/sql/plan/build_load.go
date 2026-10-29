@@ -44,10 +44,16 @@ const (
 )
 
 // Textual LOAD keeps TIME fields intact until the shared assignment cast owns
-// syntax, precision and range policy. The scan's TableDef retains the target
-// type for field preprocessing; only its physical column references are text.
+// syntax, precision and range policy; attributed DECIMAL stages text on every
+// format (CSV raw field text, Parquet/Arrow mapper-rendered text) so the
+// shared admission boundary classifies the raw source. The scan's TableDef
+// retains the target type for field preprocessing; only its physical column
+// references are text.
 func loadTimeInputType(format string, typ plan.Type) plan.Type {
 	if typ.Id == int32(types.T_time) && format != tree.PARQUET && format != tree.ARROW {
+		return makeGeneratedPlan2Type(types.T_varchar, 0, 0, false)
+	}
+	if isAttributedDecimalPlanType(typ) {
 		return makeGeneratedPlan2Type(types.T_varchar, 0, 0, false)
 	}
 	return typ
@@ -788,15 +794,17 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 	if stmt.Param.Parallel && noCompress && stmt.Param.Format != tree.PARQUET && stmt.Param.Format != tree.ARROW {
 		projectNode.ProjectList = makeCastExpr(stmt, fileName, originTableDef, projectNode, colToIndex)
 	}
-	// Enforce payload, TIME and MEDIUMINT assignment limits before defaults read
-	// assigned values, including parallel CSV staging and the FK fallback.
+	// Enforce payload, TIME, MEDIUMINT and attributed DECIMAL assignment
+	// limits before defaults read assigned values, including parallel CSV
+	// staging and the FK fallback.
 	for i, col := range originTableDef.Cols {
 		if _, supplied := colToIndex[col.Name]; !supplied ||
 			(col.Typ.Id != int32(types.T_blob) && col.Typ.Id != int32(types.T_text) &&
-				col.Typ.Id != int32(types.T_time) && !isMediumIntPlanType(col.Typ)) {
+				col.Typ.Id != int32(types.T_time) && !isMediumIntPlanType(col.Typ) &&
+				!isAttributedDecimalPlanType(col.Typ)) {
 			continue
 		}
-		projectNode.ProjectList[i], err = builder.forceAssignmentCastExpr(projectNode.ProjectList[i], col.Typ, loadAssignmentIgnore(stmt))
+		projectNode.ProjectList[i], err = builder.forceAssignmentCastExpr(projectNode.ProjectList[i], col.Typ, loadAssignmentIgnore(stmt), col.Name)
 		if err != nil {
 			return nil, err
 		}

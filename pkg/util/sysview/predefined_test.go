@@ -406,6 +406,60 @@ func TestInformationSchemaColumnsDDL_MixedVersionSubscriptionViews(t *testing.T)
 	require.Contains(t, InitInformationSchemaSysTablesForProtocol(defines.MORPCVersion109), current)
 }
 
+func TestInformationSchemaColumnsDDL_UnsignedDecimalLocalBranchOnly(t *testing.T) {
+	current := InformationSchemaColumnsDDL
+	// Exactly one decoration: the local mo_columns branch carries the mask
+	// reference; the derived View and subscription projections keep the plain
+	// decimal spelling until a later gated template references the producers'
+	// code-only att_is_unsigned output.
+	require.Equal(t, 1, strings.Count(current, "mc.att_is_unsigned"))
+	require.Equal(t, 1, strings.Count(current, "' unsigned zerofill'"))
+	require.Equal(t, 1, strings.Count(current, "'DECIMAL%' then"))
+	require.Contains(t, current,
+		"case mc.att_is_unsigned when 3 then ' unsigned zerofill' when 1 then ' unsigned' else '' end")
+	// Local-branch DATA_TYPE keeps the plain decimal spelling; only
+	// COLUMN_TYPE is decorated.
+	require.Contains(t, current, "split_part(mo_show_visible_bin(mc.atttyp,2), ' ', 1)")
+	// The undecorated derivation is the pre-change current template: a
+	// pre-change binary persists exactly this text, and the historical
+	// adapter recognizes it as a byte-stable pass-through identity (see
+	// view_columns_history_test.go).
+	preAttributes := informationSchemaCurrentColumnsDDL()
+	require.NotContains(t, preAttributes, "att_is_unsigned")
+	require.NotContains(t, preAttributes, "unsigned zerofill")
+	require.NotEqual(t, preAttributes, current)
+	assertInformationSchemaInitSQLParses(t, current)
+	assertInformationSchemaInitSQLParses(t, preAttributes)
+}
+
+func TestInformationSchemaColumnsDDL_UnsignedDecimalAncientConstructs(t *testing.T) {
+	// The frozen-template rule: the decoration composes only concat, upper,
+	// like, case, the two-argument mo_show_visible_bin and one outer
+	// cast-as-varchar width pin, so a persisted definition never depends on a
+	// builtin introduced after the historical template fence. The historical
+	// templates themselves already carry cast-as-varchar (TABLE_SCHEMA,
+	// TABLE_NAME, EXTRA, GENERATION_EXPRESSION), so the width pin is fence
+	// safe; it exists because a bare concat of the varchar(65535) base with
+	// the suffix promotes to TEXT and the UNION would widen the public
+	// COLUMN_TYPE header away from main's.
+	current := InformationSchemaColumnsDDL
+	start := strings.Index(current, "cast(concat((case when length(mc.attr_enum)")
+	require.NotEqual(t, -1, start)
+	end := strings.Index(current[start:], "as COLUMN_TYPE,")
+	require.NotEqual(t, -1, end)
+	window := current[start : start+end]
+	for _, forbidden := range []string{
+		"internal_", "split_part(", "ifnull(",
+		"internal_column_character_set", "mo_view_columns", "mo_subscription_",
+	} {
+		require.NotContains(t, window, forbidden)
+	}
+	// The single permitted cast is the outer width pin on the decoration.
+	require.Equal(t, 1, strings.Count(window, "cast("))
+	require.True(t, strings.HasPrefix(window, "cast(concat("))
+	require.Contains(t, window, "as varchar(65535))")
+}
+
 func TestInformationSchemaColumnsDDL_MapsNativeUnicodeCollations(t *testing.T) {
 	current := InformationSchemaColumnsDDL
 	require.Equal(t, 4, strings.Count(current,

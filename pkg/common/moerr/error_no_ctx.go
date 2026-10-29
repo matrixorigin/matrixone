@@ -73,6 +73,10 @@ func NewOutOfRangeNoCtx(typ string, msg string) *Error {
 	return newError(Context(), ErrOutOfRange, typ, msg)
 }
 
+func NewOutOfRangeValueForColumnNoCtx(column string, row uint64) *Error {
+	return newError(Context(), ErrOutOfRangeValueForColumn, column, row)
+}
+
 func NewDataTruncatedNoCtx(typ string, msg string) *Error {
 	return newError(Context(), ErrDataTruncated, typ, msg)
 }

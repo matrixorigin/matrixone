@@ -86,6 +86,11 @@ const (
 	ErrTruncatedWrongValue         uint16 = 20208
 	ErrGroupConcatCut              uint16 = 20209
 	ErrEnumSetValueTruncated       uint16 = 20210
+	// ErrOutOfRangeValueForColumn is the strict-mode assignment domain
+	// violation (MySQL ER_WARN_DATA_OUT_OF_RANGE, 1264/22003). It carries the
+	// destination column name and statement row, unlike ErrOutOfRange (1690),
+	// which reports a bare conversion range without column context.
+	ErrOutOfRangeValueForColumn uint16 = 20211
 
 	// Group 3: invalid input
 	ErrBadConfig            uint16 = 20300
@@ -494,6 +499,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrTruncatedWrongValue:         {ER_TRUNCATED_WRONG_VALUE, []string{"22007"}, "Truncated incorrect %-.64s value: '%-.128s'"},
 	ErrGroupConcatCut:              {ER_CUT_VALUE_GROUP_CONCAT, []string{"HY000"}, "%s"},
 	ErrEnumSetValueTruncated:       {WARN_DATA_TRUNCATED, []string{"01000"}, "%s"},
+	ErrOutOfRangeValueForColumn:    {ER_WARN_DATA_OUT_OF_RANGE, []string{"22003"}, "Out of range value for column '%-.192s' at row %d"},
 
 	// Group 3: invalid input
 	ErrBadConfig:                    {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "invalid configuration: %s"},
@@ -1147,6 +1153,10 @@ func NewOutOfRange(ctx context.Context, typ string, msg string) *Error {
 
 func NewPreparedParamOutOfRange(ctx context.Context, typ string, statement string) *Error {
 	return newError(ctx, ErrPreparedParamOutOfRange, typ, statement)
+}
+
+func NewOutOfRangeValueForColumn(ctx context.Context, column string, row uint64) *Error {
+	return newError(ctx, ErrOutOfRangeValueForColumn, column, row)
 }
 
 func NewDataTruncatedf(ctx context.Context, typ string, format string, args ...any) *Error {

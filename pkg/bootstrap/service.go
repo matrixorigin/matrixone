@@ -164,7 +164,12 @@ type service struct {
 		informationSchemaViewsMaintenanceState           informationSchemaViewsMaintenanceState
 		informationSchemaColumnsTablesMaintenanceRunning atomic.Bool
 		informationSchemaColumnsTablesMaintenanceState   informationSchemaColumnsTablesMaintenanceState
-		kek                                              string
+		// informationSchemaColumnsTablesMaintenanceDisabled gates the periodic
+		// COLUMNS/TABLES repair walker. Production keeps it enabled; upgrade
+		// scenario tests disable it so the crossing's own effects stay
+		// attributable (validation plan item (iv)).
+		informationSchemaColumnsTablesMaintenanceDisabled bool
+		kek                                               string
 	}
 }
 

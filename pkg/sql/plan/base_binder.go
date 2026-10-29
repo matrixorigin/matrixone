@@ -180,6 +180,17 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 			err = moerr.NewNYI(b.GetContext(), "CAST to MEDIUMINT is not supported")
 			return
 		}
+		if typ, ok := exprImpl.Type.(*tree.T); ok &&
+			defines.MysqlType(typ.InternalType.Oid) == defines.MYSQL_TYPE_DECIMAL &&
+			(typ.InternalType.Unsigned || typ.InternalType.Zerofill) {
+			// MySQL's restricted cast_type grammar admits no UNSIGNED/ZEROFILL
+			// modifiers on a DECIMAL CAST target and rejects the spelling at
+			// parse time (1064). Column declarations keep the attribute; only
+			// the user-written CAST target is refused here.
+			err = moerr.NewParseErrorf(b.GetContext(),
+				"UNSIGNED/ZEROFILL attribute is not allowed in DECIMAL CAST target")
+			return
+		}
 		var typ Type
 		typ, err = getTypeFromAst(b.GetContext(), exprImpl.Type)
 		if err != nil {
@@ -7480,6 +7491,16 @@ func bindFuncExprImplByPlanExpr(
 	allowInternalFunctionArgs bool,
 ) (*plan.Expr, error) {
 	var err error
+	// The unsigned-DECIMAL admission entries exist only for the plan-composed
+	// assignment boundary. Their retType mirrors the source type, so a public
+	// call with an ANY-typed source (for example a bare NULL) would publish an
+	// ANY result node and panic executor result allocation in
+	// vector/functionTools.go. Persisted-boundary rebinding carries
+	// allowInternalFunctionArgs and must keep resolving these names.
+	if isUnsignedDecimalAdmissionName(name) && !allowInternalFunctionArgs {
+		return nil, moerr.NewInvalidInputf(
+			ctx, "function %s is plan-internal and cannot be called directly", name)
+	}
 	preparedCalendarResult := preparedRawCalendarResult(name, args)
 	// Validate before rewriting or converting argument metadata. Checked public
 	// binding must not turn an unknown identity into a MustTypeFromPlan panic.
