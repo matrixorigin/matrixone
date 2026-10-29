@@ -871,9 +871,6 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			proc, t.HasAutoCol, t.TrackAutoIncrementGenerated); err != nil {
 			return ctxId, nil, err
 		}
-		if err := validateRemotePartitionFulltextRouteProtocol(proc, t.PreserveInput); err != nil {
-			return ctxId, nil, err
-		}
 		if err := validateRemoteTargetAwareUpdateProtocol(proc, t.HasTargetSelector); err != nil {
 			return ctxId, nil, err
 		}
@@ -1373,9 +1370,6 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 		}
 		updateCtxList := make([]*plan.UpdateCtx, len(updateOp.MultiUpdateCtx))
 		for i, muCtx := range updateOp.MultiUpdateCtx {
-			if err := validateRemotePartitionFulltextRouteProtocol(proc, muCtx.PartitionIndexCtx != nil); err != nil {
-				return ctxId, nil, err
-			}
 			if err := validateRemoteODKUAffectedRowsProtocol(proc,
 				muCtx.AffectedRowsWeightCol != nil || muCtx.PhysicalChangedRowsCol != nil); err != nil {
 				return ctxId, nil, err
@@ -2445,21 +2439,6 @@ func validateRemoteStatementLastInsertIDProtocol(
 	return validateRemoteAutoIncrementSessionOptionsProtocol(proc, trackAutoIncrementGenerated || hasNonDefaultAutoIncrementSessionOptions(proc))
 }
 
-func validateRemotePartitionFulltextRouteProtocol(
-	proc *process.Process,
-	required bool,
-) error {
-	if !required {
-		return nil
-	}
-	if proc == nil || !supportsRemotePartitionFulltextRoute(proc.GetService()) {
-		return moerr.NewNotSupportedNoCtx(
-			"partitioned FULLTEXT routing requires MORPC protocol version 135",
-		)
-	}
-	return nil
-}
-
 func hasNonDefaultAutoIncrementSessionOptions(proc *process.Process) bool {
 	if proc == nil || proc.Base == nil {
 		return false
@@ -2862,21 +2841,9 @@ func validateRemoteStatementLastInsertIDPipelineProtocol(
 		return nil
 	}
 	for _, instruction := range p.InstructionList {
-		if update := instruction.GetMultiUpdate(); update != nil {
-			for _, target := range update.UpdateCtxList {
-				if target != nil {
-					if err := validateRemotePartitionFulltextRouteProtocol(proc, target.PartitionIndexCtx != nil); err != nil {
-						return err
-					}
-				}
-			}
-		}
 		if preInsert := instruction.GetPreInsert(); preInsert != nil {
 			if err := validateRemoteStatementLastInsertIDProtocol(
 				proc, preInsert.HasAutoCol, preInsert.TrackAutoIncrementGenerated); err != nil {
-				return err
-			}
-			if err := validateRemotePartitionFulltextRouteProtocol(proc, preInsert.PreserveInput); err != nil {
 				return err
 			}
 			if preInsert.TrackOdkuResult && (proc == nil || !supportsRemoteODKUResultTracking(proc.GetService())) {

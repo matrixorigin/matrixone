@@ -61,9 +61,6 @@ func (c *Compile) constrainRemoteExpressionWorkers(qry *plan.Query) error {
 		return nil
 	}
 	required := executionRemoteExpressionProtocolVersion(c.proc, features)
-	if queryRequiresPartitionFulltextRoute(qry) {
-		required = max(required, defines.MORPCVersion135)
-	}
 	if required == 0 {
 		return nil
 	}
@@ -74,26 +71,6 @@ func (c *Compile) constrainRemoteExpressionWorkers(qry *plan.Query) error {
 	c.execType = plan2.ExecTypeAP_ONECN
 	c.cnList, err = c.scheduleQueryWorkers()
 	return err
-}
-
-func queryRequiresPartitionFulltextRoute(qry *plan.Query) bool {
-	if qry == nil {
-		return false
-	}
-	for _, node := range qry.Nodes {
-		if node == nil {
-			continue
-		}
-		if node.PreInsertCtx != nil && node.PreInsertCtx.PreserveInput {
-			return true
-		}
-		for _, target := range node.UpdateCtxList {
-			if target != nil && target.PartitionIndexCtx != nil {
-				return true
-			}
-		}
-	}
-	return false
 }
 
 // Diagnostics depend on the outer statement and current session mode, unlike

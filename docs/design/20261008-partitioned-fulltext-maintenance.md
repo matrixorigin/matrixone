@@ -1,13 +1,11 @@
 # Partitioned classic FULLTEXT maintenance contract
 
-Revision: R7 current MORPC130 reconciliation, 2026-10-23. Issue #28311 / PR #28477.
+Revision: shutdown-upgrade protocol policy reconciliation, 2026-10-29. Issue #28311 / PR #28477.
 
-Status: **proposal, approval required**. This revision describes implementation
-snapshot `795e0a7ac8a3c0eff140298aba836a0f3716a65c`, which integrates actual main
-`517a0a412ba5f3b52e6abe722c9675a3d72491af` into published source
-`4658b228182f34d7679d200297c77e9c4cf8d7f5`. R7 reconciles the documented
-capability with that implementation; it changes no runtime behavior and supplies
-neither resource measurements nor receiving-CN acceptance.
+Status: **proposal, approval required**. This revision reconciles the protocol
+policy with the shutdown-upgrade requirement. The R7 snapshot and its older
+MORPC allocations below are historical; they do not establish approval, resource
+measurements or receiving-CN acceptance for the current candidate.
 It is not an approval record. The earlier ODKU-only contract does not authorize
 the UPDATE, REPLACE, partition routing, or wire changes described here.
 
@@ -110,7 +108,7 @@ separate scope decision rather than an implied approval here.
 
 Superseded assumptions are explicit: ordinary synchronous FULLTEXT PK UPDATE is
 not newly supported; 102 is not a route capability; additive protobuf fields
-are not safe without actual-peer admission; codec reconstruction, `IsRemote`
+do not make mixed-binary execution safe; codec reconstruction, `IsRemote`
 and local disk-backed S3 writes are not deployed acceptance. No standalone
 FULLTEXT DDL, per-index transaction owner, or logical-relation fallback is added.
 
@@ -139,53 +137,24 @@ Failed-transaction object reclamation stays with the existing storage lifecycle
 and must be checked separately from SQL invisibility. Restart/rollback reuse
 existing persisted block and catalog formats, not a new posting format.
 
-## Cumulative compatibility
+## Compatibility under shutdown upgrade
 
-**Integration note:** On main `c4946bb74d43f0f777977507a5a7d0105e628bf2`,
-133 and 134 belong to upstream capabilities. The current merge candidate
-provisionally appends FULLTEXT routing at MORPC135 and uses plan
-`PreInsertCtx.preserve_input=18` and pipeline `PreInsert.preserve_input=22`.
-Numbers and component evidence below describe the historical R7 snapshot;
-they are not validation of this candidate or final allocation approval.
+MatrixOne uses a shutdown upgrade: all old service binaries stop before the new
+version serves traffic. This feature adds no route-specific MORPC version or
+placement, destination, stream, or receiver admission gate. Existing unrelated
+protocol checks and their version assignments remain in effect. Additive fields
+do not imply that mixed-version execution or live downgrade is supported.
 
-The integrated main snapshot owns MORPC 101-129, including vector-cache control at 102,
-functional-index metadata/generated-key maintenance at 107 (#29472), and
-isolated user-variable NULL regexp history in connection migration at 108,
-native Unicode collation metadata at 109, MEDIUMINT assignment bounds at 110,
-and complete IndexSearchScan/algo_options/algo_exprs at 111. It also owns
-112 for signed INT WEEK/DAYOFYEAR results, 113-128 for subsequent capabilities,
-and 129 for selected JSON ELT/opaque text execution. The
-functional-index creation and 4.0.13 tenant-upgrade floors stay at 107; they
-must not be renumbered or treated as FULLTEXT-route support. Implementation
-snapshot `795e0a7a` uses **MORPC130** for route-preserving PRE_INSERT and
-partition-index MULTI_UPDATE. Main's JSON129 capability is not routed FULLTEXT
-support; historical proposed112 is not the current route floor. The allocation
-is recorded in `pkg/defines/const.go` and used by query placement, actual
-destination admission, execution-stream requirements and recursive receiver
-validation in `pkg/sql/compile`.
-This snapshot allocation is neither an exclusive reservation nor an approved
-final landing number.
-Integration must recheck landing main and competing open protocol owners,
-and refresh maintainer ordering before publication/acceptance. Separate unmerged
-proposals do not become implemented capabilities merely by sharing a numeric
-threshold; compare the actual command, handler and payload contract.
+The current wire representation uses plan `UpdateCtx.partition_index_ctx=20`,
+plan `PreInsertCtx.preserve_input=18`, and pipeline `PreInsert.preserve_input=22`.
+The existing MultiUpdate operator carries the route and decoding restores its
+partition wrapper. The new binary must still handle supported old persisted
+state and backup/restore paths; stopping old binaries is not evidence that those
+paths have been tested. Existing posting schemas need no new migration in this
+proposal, subject to the required upgrade validation.
 
-New fields are additive: plan UpdateCtx.partition_index_ctx=20,
-plan PreInsertCtx.preserve_input=15, pipeline PreInsert.preserve_input=19.
-Main's existing fields and protocol meanings are retained. The existing
-MultiUpdate wire operator is used; decoding restores its partition wrapper.
-Sender conversion and recursive remote-scope validation must reject routed
-payloads below MORPC130. Reported version129 is the nearest negative component
-control and130 the positive control; older reported versions also reject routed
-payloads, while ordinary payloads retain their prior admission. Those component
-controls are not execution of an actual predecessor binary: real129 destination
-and mixed-binary refusal remain acceptance requirements. Correct mixed-version
-refusal is required; silently dropping route
-metadata is not a compatibility strategy. The sender checks both route fields
-through the complete lowered child tree and probes the actual destination on
-each send. Expression floors and this routing floor share one per-send
-observation; unknown capabilities and failed probes reject the send. Receiver
-checks remain independent because the endpoint can change after admission.
+The route-specific MORPC130 and proposed MORPC135 allocations in earlier
+snapshots were historical implementations and do not define the current policy.
 
 ## Resource envelope and alternatives
 
@@ -235,13 +204,14 @@ The alternatives to compare during design review are:
 | Alternative | Correctness / compatibility | Cost and operational consequence |
 | --- | --- | --- |
 | Status quo: logical hidden writer / no parent route | Cannot identify the required physical target after tokenization | No new route payload, but cannot satisfy partitioned maintenance |
-| Materialized ordinal plus existing partition writer (proposal) | Parent image determines route; existing storage/transaction owners remain | Metadata duplication, full-column grouping and writer fan-out; peer gate and topology acceptance required |
+| Materialized ordinal plus existing partition writer (proposal) | Parent image determines route; existing storage/transaction owners remain | Metadata duplication, full-column grouping and writer fan-out; shutdown-upgrade policy and topology acceptance required |
 | Shared parent-metadata reference plus narrower grouped projection | Can retain identity with less repeated payload/copying | New lifetime/reference contract and remapping surface; compare measured costs before expanding this repair |
 | Generic plugin maintenance interface carrying old/final parent images | Could consolidate algorithm-specific binder decisions | Wider planner/plugin API and lifecycle change; requires its own approved contract and regression surface |
 
 Protobuf's additive decoding is an interoperability constraint, not evidence
-that an older implementation understands new route fields. The cumulative
-MORPC gate is the repository's admission contract. Existing SQL transaction
+that an older implementation understands new route fields. The shutdown-upgrade
+policy avoids mixed-binary routing; unrelated existing MORPC admission checks
+continue to apply. Existing SQL transaction
 atomicity is the required user-visible contract. No new external protocol or
 compatibility guarantee is asserted by this proposal.
 
@@ -258,13 +228,12 @@ both cardinalities. No measurement or reviewer acceptance is asserted here.
 
 ## Acceptance still required
 
-1. Explicit review of this versioned scope, field ownership, cumulative
-   capability, and resource trade-offs by the blocking design reviewers.
+1. Explicit review of this versioned scope, field ownership, shutdown-upgrade
+   policy, and resource trade-offs by the blocking design reviewers.
 2. Execute focused planner/operator/codec tests on this candidate and exact
-   base, including reported129 refusal /130 acceptance, unchanged ordinary
-   admission, partitioned key moves, and non-partitioned/vector rejection.
-   Bind component receipts to their exact revision; do not count simulated
-   reported versions as actual-predecessor executable qualification.
+   base, including unchanged unrelated admission checks, partitioned key moves,
+   and non-partitioned/vector rejection. Bind receipts to their exact revision;
+   verify supported old persisted state and backup/restore separately.
 3. Execute the canonical partition FULLTEXT BVT plus unchanged ordinary
    FULLTEXT PK-update/consistency controls; record SHA, environment and results.
 4. In a real multi-CN deployment, prove the producer selects WriteS3 and the
@@ -280,7 +249,7 @@ both cardinalities. No measurement or reviewer acceptance is asserted here.
 ### Focused acceptance protocol for an allocated deployment
 
 Reuse the existing multi-CN/object-storage fixture after allocation. Pin the
-candidate SHA, actual main/predecessor binaries, capability registry, storage
+candidate SHA, supported upgrade source and target binaries, storage
 backend, CN identities, run ownership and cleanup scope. Freeze any experiment
 wrapper before execution. Stop if remote WriteS3 selection or physical-writer
 progress cannot be observed; increasing SQL volume or setting `IsRemote=true`
@@ -299,7 +268,7 @@ correlate all records to the same statement/transaction.
 | Failure after one completed physical write | Observe the completed write before injecting failure into a later write/completion; no successful partial result; independent parent and MATCH reads retain pre-statement state after rollback |
 | Cancellation after the same progress barrier | Cancel the originating query through its production path; prove receiver termination and writer cleanup on every participating CN, then the same rollback oracle |
 | Immediate subsequent statement / reuse | Same admitted topology succeeds with fresh data; no stale output, receiver, writer or route mapping survives |
-| Actual predecessor / ordinary control | Routed payload rejected by the actual old destination before submission; an ordinary compatible payload retains admission |
+| Shutdown upgrade / ordinary control | Supported predecessor persisted data and restore paths remain readable by the new binary after old services stop; unrelated protocol checks retain their existing behavior |
 
 Use deterministic existing injection/observation seams. If the fixture cannot
 inject after physical progress or report receiver cleanup, that missing seam
@@ -337,13 +306,11 @@ belongs in the maintenance evidence receipt, not an unverified PASS here.
 
 ## Rollout and unresolved decisions
 
-Before landing, integration owns a fresh cumulative-capability check and final
-allocation; no reservation is created by this document. During mixed versions,
-reject routed work to an incapable/unknown destination and retain the existing
-ordinary admission path. Rollout requires approved design, current-head CI and
-the focused topology/failure/cost acceptance above. Downgrade must drain active
-routed work; additive fields must not be silently dropped to bypass the gate.
-Existing persisted posting schemas need no new migration in this proposal.
+Before landing, preserve the shutdown-upgrade contract and existing unrelated
+protocol admission checks. Stop old services before starting the new binary;
+no mixed-binary or live-downgrade guarantee is made. Rollout requires approved
+design, current-head CI and the focused topology/failure/cost acceptance above.
+Supported old persisted state and restore paths still require validation.
 
 Use existing query/transaction diagnostics and test-owned observers; no new
 per-row logging or public metric labels are proposed. Access to physical hidden
@@ -355,7 +322,7 @@ a capacity risk until its memory envelope is accepted.
 | Open decision | Owner / decision point | Status |
 | --- | --- | --- |
 | R3 ownership/placement/supported scope | Blocking design reviewers, before implementation approval | Approval required |
-| Final cumulative route capability and ordering | Integrator and protocol owners, against landing main and competing open owners | Implemented130 at snapshot795e0a7a/base517a0a41; landing-main ordering and approval pending |
+| Shutdown-upgrade policy and existing protocol gates | Protocol and design reviewers | Route-specific floor removed; review pending |
 | Multi-CN WriteS3 failure/cancel/visibility/reuse | Allocated deployment validation owner, before acceptance | NOT_RUN |
 | Payload/copy/writer budget and comparative cost | Design reviewers and validation owner, before rollout | Unmeasured / unaccepted |
 
