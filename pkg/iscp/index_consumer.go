@@ -21,7 +21,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/bytedance/sonic"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -397,8 +396,10 @@ func runHnsw[T types.ArrayElement](c *IndexConsumer, ctx context.Context, errch 
 			}
 
 			// sql -> cdc
+			// UnmarshalJSON, not sonic.Unmarshal into the fields: a float32 batch must decode
+			// with encoding/json, as sonic rounds float32 values twice (bytedance/sonic#884).
 			var cdc vectorindex.VectorIndexCdc[T]
-			err = sonic.Unmarshal(sql, &cdc)
+			err = cdc.UnmarshalJSON(sql)
 			if err != nil {
 				reportIndexConsumerErr(errch, err)
 				return
