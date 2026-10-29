@@ -16,8 +16,10 @@ package frontend
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"testing"
 
@@ -32,6 +34,8 @@ import (
 	pbplan "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -41,6 +45,67 @@ import (
 )
 
 var _ plan2.ViewDependencyIdentityResolver = (*TxnCompilerContext)(nil)
+
+func TestDropPlanForgetsOnlyConfirmedMissingTemporaryTable(t *testing.T) {
+	for _, background := range []bool{false, true} {
+		for _, temporary := range []string{"", "temporary "} {
+			for _, failure := range []string{"relation", "database", "lookup_error"} {
+				t.Run(fmt.Sprint(background)+temporary+failure, func(t *testing.T) {
+					proc := testutil.NewProcess(t)
+					ctrl := gomock.NewController(t)
+					txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+					txnOp.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
+					txnOp.EXPECT().SetFootPrints(gomock.Any(), gomock.Any()).AnyTimes()
+					storage := mock_frontend.NewMockEngine(ctrl)
+					db := mock_frontend.NewMockDatabase(ctrl)
+					ses, _ := newObservedProtocolSession()
+					ses.tempTables, ses.tempTablesRev = make(map[string]string), make(map[string]string)
+					ses.txnHandler = InitTxnHandler("", storage, proc.Ctx, txnOp)
+					ses.AddTempTable("mo_catalog", "stale", "physical")
+					var dbErr error
+					if failure == "database" {
+						dbErr = moerr.NewBadDBNoCtx("mo_catalog")
+					}
+					if failure == "lookup_error" {
+						dbErr = errors.New("storage unavailable")
+					}
+					storage.EXPECT().Database(gomock.Any(), "mo_catalog", txnOp).Return(db, dbErr).AnyTimes()
+					db.EXPECT().Relation(gomock.Any(), "physical", nil).Return(nil, moerr.NewNoSuchTableNoCtx("mo_catalog", "physical")).AnyTimes()
+					var planningSession FeSession = ses
+					if background {
+						planningSession = &backSession{feSessionImpl: feSessionImpl{upstream: ses, txnHandler: ses.txnHandler}}
+					}
+					tcc := &TxnCompilerContext{execCtx: &ExecCtx{reqCtx: proc.Ctx, ses: planningSession, proc: proc}}
+					// A normal resolver read must never mutate session ownership.
+					_, _, _ = tcc.Resolve("mo_catalog", "stale", nil)
+					_, exists := ses.GetTempTable("mo_catalog", "stale")
+					require.True(t, exists)
+					stmt, err := parsers.ParseOne(proc.Ctx, dialect.MYSQL, "drop "+temporary+"table mo_catalog.stale", 1)
+					require.NoError(t, err)
+					defer stmt.Free()
+					_, err = plan2.BuildPlan(tcc, stmt, false)
+					if failure == "lookup_error" {
+						require.ErrorIs(t, err, dbErr)
+					} else if failure == "database" {
+						require.True(t, moerr.IsMoErrCode(err, moerr.ErrBadDB), "%v", err)
+					} else {
+						require.True(t, moerr.IsMoErrCode(err, moerr.ErrNoSuchTable), "%v", err)
+					}
+					_, exists = ses.GetTempTable("mo_catalog", "stale")
+					require.Equal(t, failure == "lookup_error", exists)
+					require.Empty(t, ses.retiredTempTables)
+					if !exists {
+						ses.AddTempTable("mo_catalog", "stale", "physical")
+						name, ok := ses.GetTempTable("mo_catalog", "stale")
+						require.True(t, ok)
+						require.Equal(t, "physical", name)
+					}
+				})
+			}
+		}
+	}
+
+}
 
 func TestSubscriptionMetasFromSubInfos(t *testing.T) {
 	metas, err := subscriptionMetasFromSubInfos(context.Background(), []*pubsub.SubInfo{
@@ -593,6 +658,54 @@ func TestResolveByIdPreservesUnassignableLegacyHexDefault(t *testing.T) {
 	after, err := catalogDef.Marshal()
 	require.NoError(t, err)
 	require.Equal(t, wire, after)
+}
+
+func TestResolveByIdNormalizesPersistedDecimalCoercions(t *testing.T) {
+	data, err := os.ReadFile("../sql/plan/testdata/legacy_decimal_catalog_63a964a82f.json")
+	require.NoError(t, err)
+	var fixtures map[string][]byte
+	require.NoError(t, json.Unmarshal(data, &fixtures))
+	for _, name := range []string{"signed_compare", "generated_compare"} {
+		t.Run(name, func(t *testing.T) {
+			catalogDef := new(pbplan.TableDef)
+			require.NoError(t, catalogDef.Unmarshal(fixtures[name]))
+			wire, err := catalogDef.Marshal()
+			require.NoError(t, err)
+			ctrl := gomock.NewController(t)
+			proc := testutil.NewProcess(t)
+			requestCtx := proc.GetTopContext()
+			pipelineCtx, cancel := context.WithCancel(requestCtx)
+			cancel()
+			proc.Ctx = pipelineCtx // A completed pipeline must not cancel the next compilation.
+			txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+			storage := mock_frontend.NewMockEngine(ctrl)
+			relation := mock_frontend.NewMockRelation(ctrl)
+			storage.EXPECT().GetRelationById(gomock.Any(), txnOp, uint64(42)).Return("db", "legacy_cmp", relation, nil).Times(2)
+			relation.EXPECT().GetTableDef(gomock.Any()).Return(catalogDef).Times(2)
+			ses, _ := newObservedProtocolSession()
+			ses.txnHandler = InitTxnHandler("", storage, requestCtx, txnOp)
+			tcc := &TxnCompilerContext{execCtx: &ExecCtx{reqCtx: requestCtx, ses: ses, proc: proc}}
+			for range 2 {
+				_, resolved, err := tcc.ResolveById(42, nil)
+				require.NoError(t, err)
+				var expr *pbplan.Expr
+				if name == "signed_compare" {
+					require.NotSame(t, catalogDef.Checks[0], resolved.Checks[0])
+					expr = resolved.Checks[0].Check
+				} else {
+					require.NotSame(t, catalogDef.Cols[2], resolved.Cols[2])
+					expr = resolved.Cols[2].GeneratedCol.Expr
+				}
+				for _, arg := range expr.GetF().Args {
+					require.Equal(t, int32(types.T_decimal128), arg.Typ.Id)
+					require.Equal(t, int32(19), arg.Typ.Width)
+				}
+			}
+			after, err := catalogDef.Marshal()
+			require.NoError(t, err)
+			require.Equal(t, wire, after)
+		})
+	}
 }
 
 func TestDatabaseExistsSuppressesOnlyExpectedEOBLog(t *testing.T) {

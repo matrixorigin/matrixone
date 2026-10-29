@@ -1259,6 +1259,46 @@ func TestPreparedWindowFrameMarkers(t *testing.T) {
 	require.IsType(t, &tree.ParamExpr{}, window.Frame.End.Expr)
 }
 
+func TestQuantileExactWeightedParseForms(t *testing.T) {
+	stmt, err := ParseOne(context.Background(),
+		"select quantileExactWeighted(v, w, 0.5) from t", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	fn, ok := firstSelectExpr(t, stmt).(*tree.FuncExpr)
+	require.True(t, ok)
+	require.Equal(t, "quantileExactWeighted", fn.FuncName.Origin())
+	require.Len(t, fn.Exprs, 3)
+	require.Equal(t, tree.FUNC_TYPE_DEFAULT, fn.Type)
+
+	stmt, err = ParseOne(context.Background(),
+		"select quantileExactWeighted(distinct v, w, 0.5) from t", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	fn, ok = firstSelectExpr(t, stmt).(*tree.FuncExpr)
+	require.True(t, ok)
+	require.Equal(t, tree.FUNC_TYPE_DISTINCT, fn.Type)
+
+	stmt, err = ParseOne(context.Background(),
+		"select quantileExactWeighted(v, w, 0.5) over (partition by g) from t", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	window := extractFirstWindowSpec(t, stmt)
+	require.Len(t, window.PartitionBy, 1)
+
+	stmt, err = ParseOne(context.Background(),
+		"select quantileExactWeighted(v, w, 0.5) over ("+
+			"order by id rows between 1 preceding and current row) from t", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	window = extractFirstWindowSpec(t, stmt)
+	require.True(t, window.HasFrame)
+	require.NotNil(t, window.Frame)
+}
+
 func TestVarianceWindowSpec(t *testing.T) {
 	stmt, err := ParseOne(context.Background(),
 		"select variance(amount) over (partition by customer_id) from orders",
@@ -3823,6 +3863,12 @@ var (
 		}, {
 			input:  "create fulltext2 index idx on A (a) max_index_capacity 500000 max_postings_capacity 8000000",
 			output: "create fulltext2 index idx on a (a) MAX_INDEX_CAPACITY 500000 MAX_POSTINGS_CAPACITY 8000000 ",
+		}, {
+			input:  "create fulltext2 index idx on A (a) with parser gojieba token_filter = 'stop'",
+			output: "create fulltext2 index idx on a (a) with parser gojieba TOKEN_FILTER = 'stop' ",
+		}, {
+			input:  "create fulltext2 index idx on A (a) with parser gojieba token_filter 'stop,synonym'",
+			output: "create fulltext2 index idx on a (a) with parser gojieba TOKEN_FILTER = 'stop,synonym' ",
 		}, {
 			input:  "alter table t1 alter reindex idx1 fulltext2 max_postings_capacity = 4000000",
 			output: "alter table t1 alter reindex idx1 fulltext2 max_postings_capacity = 4000000",
@@ -7300,5 +7346,29 @@ func TestAlterAddParenthesizedColumns(t *testing.T) {
 			require.Equal(t, tree.ColumnPositionNone, add.Position.Typ)
 		}
 		stmt.Free()
+	}
+}
+
+func TestExtensionAndLoadStatementMetadata(t *testing.T) {
+	for _, tc := range []struct {
+		sql, name, query string
+		output           tree.OutputType
+		location         tree.ExecLocation
+	}{
+		{"load some_ext", "Load Extension", tree.QueryTypeOth, tree.OUTPUT_UNDEFINED, tree.EXEC_IN_FRONTEND},
+		{"create extension pg as myext file '/missing.so'", "Create Extension", tree.QueryTypeDDL, tree.OUTPUT_UNDEFINED, tree.EXEC_IN_FRONTEND},
+		{"select 1", "Select", tree.QueryTypeDQL, tree.OUTPUT_RESULT_ROW, tree.EXEC_IN_ENGINE},
+		{"create database metadata_control", "Create Database", tree.QueryTypeDDL, tree.OUTPUT_STATUS, tree.EXEC_IN_ENGINE},
+		{"load data infile '/missing.csv' into table t", "Load", tree.QueryTypeDML, tree.OUTPUT_STATUS, tree.EXEC_IN_ENGINE},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stmt, err := ParseOne(t.Context(), tc.sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			require.Equal(t, tc.name, stmt.GetStatementType())
+			require.Equal(t, tc.query, stmt.GetQueryType())
+			require.Equal(t, tc.output, stmt.StmtKind().OutputType())
+			require.Equal(t, tc.location, stmt.StmtKind().ExecLocation())
+		})
 	}
 }

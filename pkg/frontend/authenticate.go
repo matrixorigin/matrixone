@@ -68,6 +68,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/stage"
 	"github.com/matrixorigin/matrixone/pkg/stage/stageutil"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/util/metric/mometric"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
@@ -3207,7 +3208,7 @@ func doAlterUser(ctx context.Context, ses *Session, au *alterUser) (err error) {
 		}
 	}
 
-	bh := ses.GetBackgroundExec(ctx)
+	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{internalExecution: true})
 	defer bh.Close()
 
 	// put it into the single transaction
@@ -3433,7 +3434,7 @@ func doAlterAccount(ctx context.Context, ses *Session, aa *alterAccount) (err er
 	}
 
 	alterAccountFunc := func() (rtnErr error) {
-		bh := ses.GetBackgroundExec(ctx)
+		bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{internalExecution: true})
 		defer bh.Close()
 
 		rtnErr = bh.Exec(ctx, "begin")
@@ -3678,7 +3679,7 @@ func doSwitchRole(ctx context.Context, ses *Session, sr *tree.SetRole) (err erro
 		// step1 : check the role exists or not;
 
 		switchRoleFunc := func() (rtnErr error) {
-			bh := ses.GetBackgroundExec(ctx)
+			bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{internalExecution: true})
 			defer bh.Close()
 
 			rtnErr = bh.Exec(ctx, "begin;")
@@ -4128,17 +4129,12 @@ func doDropAccount(ctx context.Context, bh BackgroundExec, ses *Session, da *dro
 		handler.backSes.txnCompileCtx.dbName = catalog.MO_CATALOG
 	}
 
-	var sql, db, table string
-	var erArray []ExecResult
-	var databases map[string]int8
-	var dbSql, prefix string
-	var sqlsForDropDatabases = make([]string, 0, 5)
-
-	var deleteCtx context.Context
 	var accountId int64
 	var version uint64
 	var hasAccount = true
-	clusterTables := make(map[string]int)
+	var targetAccountID int64
+	var targetResolved bool
+	var retry bool
 
 	da.Name, err = normalizeName(ctx, da.Name)
 	if err != nil {
@@ -4150,6 +4146,8 @@ func doDropAccount(ctx context.Context, bh BackgroundExec, ses *Session, da *dro
 	}
 
 	checkAccount := func(accountName string) (accountId int64, version uint64, ok bool, err error) {
+		var sql string
+		var erArray []ExecResult
 		if sql, err = getSqlForCheckTenant(ctx, accountName); err != nil {
 			return
 		}
@@ -4177,14 +4175,40 @@ func doDropAccount(ctx context.Context, bh BackgroundExec, ses *Session, da *dro
 	}
 
 	dropAccountFunc := func() (rtnErr error) {
+		var sql, db, table string
+		var erArray []ExecResult
+		var databases map[string]int8
+		var dbSql, prefix string
+		var deleteCtx context.Context
+		sqlsForDropDatabases := make([]string, 0, 5)
+		clusterTables := make(map[string]int)
+		accountId, version, hasAccount = 0, 0, false
+		retry = false
 		// If already in a transaction (e.g., restore scenario), don't create a new one
 		if !inTxn {
 			rtnErr = bh.Exec(ctx, "begin;")
 			if rtnErr != nil {
 				return rtnErr
 			}
+			txnOp := backgroundExecTxnOperator(bh)
+			var txnID []byte
+			if txnOp != nil {
+				txnID = slices.Clone(txnOp.Txn().ID)
+			}
 			defer func() {
-				rtnErr = finishTxn(ctx, bh, rtnErr)
+				if rtnErr == nil {
+					// Commit errors, including an unknown outcome, are never replayed.
+					rtnErr = finishTxn(ctx, bh, nil)
+					return
+				}
+				cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Minute)
+				defer cancel()
+				rtnErr = finishTxn(cleanupCtx, bh, rtnErr)
+				// A fatal statement can already have rolled back and invalidated
+				// the frontend handle. A subsequent no-op ROLLBACK is not proof.
+				outcome, ok := txnOp.(client.AbortedTxnCleanupObserver)
+				retry = retry && moerr.IsMoErrCode(rtnErr, moerr.ErrLockConflict) &&
+					ok && outcome.IsAbortedTxnCleanupComplete(txnID)
 			}()
 			// Standalone DROP ACCOUNT owns this transaction and must enter the
 			// lineage-owner lifecycle before locking mo_account or deleting any
@@ -4219,6 +4243,11 @@ func doDropAccount(ctx context.Context, bh BackgroundExec, ses *Session, da *dro
 			}
 			return
 		}
+
+		if targetResolved && accountId != targetAccountID {
+			return moerr.NewInternalErrorf(ctx, "account %s was replaced during DROP ACCOUNT", da.Name)
+		}
+		targetAccountID, targetResolved = accountId, true
 
 		// Retire SQL tasks before dropping tenant-owned catalog objects. This is
 		// part of the account-drop transaction, so a later failure restores the
@@ -4319,6 +4348,7 @@ func doDropAccount(ctx context.Context, bh BackgroundExec, ses *Session, da *dro
 			ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, sql)
 			rtnErr = bh.Exec(deleteCtx, sql)
 			if rtnErr != nil {
+				retry = !inTxn && moerr.IsMoErrCode(rtnErr, moerr.ErrLockConflict)
 				return rtnErr
 			}
 		}
@@ -4514,9 +4544,28 @@ func doDropAccount(ctx context.Context, bh BackgroundExec, ses *Session, da *dro
 	// disable foreign key checks
 	ctx = context.WithValue(ctx, defines.DisableFkCheck{}, true)
 
-	err = dropAccountFunc()
-	if err != nil {
-		return err
+	// Lifecycle admission must fail fast while this transaction holds other
+	// catalog locks. Only its owner may release them and replay the whole drop.
+	const maxAttempts = 5
+	for attempt := 0; ; attempt++ {
+		if err = ctx.Err(); err != nil {
+			return err
+		}
+		err = dropAccountFunc()
+		if err == nil {
+			break
+		}
+		if !retry || attempt+1 == maxAttempts {
+			return err
+		}
+		bh.ClearExecResultSet()
+		timer := time.NewTimer(25 * time.Millisecond << attempt)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
 	}
 
 	if !hasAccount {
@@ -4642,7 +4691,7 @@ func doDropUser(ctx context.Context, ses *Session, du *tree.DropUser) (err error
 	}
 
 	// Retain creator-row locks held by partial restore through recreation.
-	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{forcePessimisticRC: true})
+	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{forcePessimisticRC: true, internalExecution: true})
 	defer bh.Close()
 
 	// put it into the single transaction
@@ -4728,7 +4777,7 @@ func doDropRole(ctx context.Context, ses *Session, dr *tree.DropRole) (err error
 	}
 
 	// Honor grant-row locks retained by catalog restore through replay.
-	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{forcePessimisticRC: true})
+	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{forcePessimisticRC: true, internalExecution: true})
 	defer bh.Close()
 
 	// put it into the single transaction
@@ -4816,7 +4865,7 @@ func doAlterRole(ctx context.Context, ses *Session, ar *tree.AlterRole) (err err
 		return moerr.NewInternalErrorf(ctx, "the new role name is the same as the old role name")
 	}
 
-	bh := ses.GetBackgroundExec(ctx)
+	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{internalExecution: true})
 	defer bh.Close()
 
 	// put it into the single transaction
@@ -6033,7 +6082,7 @@ func doRevokeRole(ctx context.Context, ses *Session, rr *tree.RevokeRole) (err e
 	// semantics used by active-session authorization refreshes. Otherwise an
 	// SI snapshot can make a committed REVOKE temporarily invisible even to a
 	// fresh private authorization transaction.
-	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{forcePessimisticRC: true})
+	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{forcePessimisticRC: true, internalExecution: true})
 	defer bh.Close()
 
 	// step1 : check Roles exists or not
@@ -6193,7 +6242,7 @@ func doGrantRole(ctx context.Context, ses *Session, gr *tree.GrantRole) (err err
 	}
 
 	account := ses.GetTenantInfo()
-	bh := ses.GetBackgroundExec(ctx)
+	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{internalExecution: true})
 	defer bh.Close()
 
 	// step1 : check Roles exists or not
@@ -6807,6 +6856,7 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		*tree.PauseDaemonTask, *tree.CancelDaemonTask, *tree.ResumeDaemonTask, *tree.ShowRecoveryWindow,
 		*tree.ShowSQLTasks, *tree.ShowSQLTaskRuns,
 		*tree.CheckTableStmt, *tree.ShowProfileStmt,
+		*tree.CreateExtension, *tree.LoadExtension,
 		*tree.AnalyzeStmt:
 		objType = objectTypeNone
 		kind = privilegeKindNone
@@ -11428,7 +11478,7 @@ func InitUser(ctx context.Context, ses *Session, tenant *TenantInfo, cu *createU
 	}
 	defer mpool.DeleteMPool(mp)
 
-	bh := ses.GetBackgroundExec(ctx)
+	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{internalExecution: true})
 	defer bh.Close()
 
 	err = bh.Exec(ctx, "begin;")
@@ -11660,7 +11710,7 @@ func InitRole(ctx context.Context, ses *Session, tenant *TenantInfo, cr *tree.Cr
 		return err
 	}
 
-	bh := ses.GetBackgroundExec(ctx)
+	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{internalExecution: true})
 	defer bh.Close()
 
 	err = bh.Exec(ctx, "begin;")
@@ -12631,6 +12681,15 @@ func doInterpretCall(
 		}
 		defer freeStatements(stmt)
 
+		// Procedure bodies run on background executors that open and commit
+		// their own transactions. When the caller is in READ ONLY mode the
+		// whole call must therefore be rejected up front if any body
+		// statement could write; otherwise the procedure's writes would
+		// persist outside the caller's read-only transaction.
+		if err = enforceReadOnlyOnProcedureBody(ctx, ses, stmt, dbName); err != nil {
+			return nil, err
+		}
+
 		interpreter.ctx, err = enterSQLProcedure(ctx, ses, dbName, string(call.Name.Name.ObjectName))
 		if err != nil {
 			return nil, err
@@ -12643,6 +12702,17 @@ func doInterpretCall(
 		return interpreter.GetResult(), nil
 
 	case "starlark":
+		// Starlark bodies embed SQL in a non-SQL grammar whose statements
+		// cannot be classified statically; fail closed under a read-only
+		// caller rather than let embedded writes commit on their own
+		// transaction.
+		readOnly, readErr := callerTxnReadOnly(ses)
+		if readErr != nil {
+			return nil, readErr
+		}
+		if readOnly {
+			return nil, moerr.NewCantExecuteInReadOnlyTransaction(ctx)
+		}
 		interpreter.ctx, err = enterSQLProcedure(ctx, ses, dbName, string(call.Name.Name.ObjectName))
 		if err != nil {
 			return nil, err
@@ -12825,7 +12895,11 @@ func doSetGlobalSystemVariables(
 ) (err error) {
 	accountId := uint64(ses.GetTenantInfo().TenantID)
 	accountName := ses.GetTenantName()
-	bh := ses.GetBackgroundExec(ctx)
+	// The generated catalog INSERT/UPDATE below is trusted implementation
+	// SQL of the SET GLOBAL statement itself, not caller-authored work: mark
+	// the executor internal so client-facing gates (e.g. the READ ONLY
+	// transaction enforcement) never observe it as user writes.
+	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{internalExecution: true})
 	defer bh.Close()
 
 	if err = bh.Exec(ctx, "begin;"); err != nil {

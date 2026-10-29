@@ -302,7 +302,26 @@ func informationSchemaSubscriptionColumnAuthorizationPredicate() string {
 }
 
 func informationSchemaCurrentColumnsDDL() string {
-	return informationSchemaDerivedColumnsDDL(informationSchemaColumnsWithMediumIntDDL())
+	// Binary-family types have no character set or collation under MySQL
+	// parity (issue #31160): the current view must render NULL there, not the
+	// historical 'binary' literal. Historical layers (V41/V58/V100/V109)
+	// stay byte-stable; only the current definition is adapted.
+	return strings.ReplaceAll(
+		informationSchemaDerivedColumnsDDL(informationSchemaColumnsWithMediumIntDDL()),
+		"WHEN 2 then 'binary'", "WHEN 2 then NULL")
+}
+
+// InformationSchemaViewDefinitionMatches compares initialization and replacement
+// definitions without changing the SELECT body or accepting other SQL variants.
+func InformationSchemaViewDefinitionMatches(actual, expected string) bool {
+	return canonicalInformationSchemaViewDDL(actual) == canonicalInformationSchemaViewDDL(expected)
+}
+
+func canonicalInformationSchemaViewDDL(definition string) string {
+	if body, ok := strings.CutPrefix(definition, "CREATE OR REPLACE VIEW information_schema."); ok {
+		return "CREATE VIEW information_schema." + body
+	}
+	return definition
 }
 
 // AdaptLegacyInformationSchemaColumnsDDL changes only the column authority of
@@ -310,7 +329,7 @@ func informationSchemaCurrentColumnsDDL() string {
 // a snapshot must not change its character-set selectors or add subscriptions
 // to a template that did not expose them.
 func AdaptLegacyInformationSchemaColumnsDDL(definition string) (string, bool) {
-	definition = canonicalColumnsViewName(definition)
+	definition = canonicalColumnsViewDDL(definition)
 	// V100 already contains the subscription-derived branches. Keep it byte
 	// stable when binding historical snapshots; re-deriving it would duplicate
 	// those branches and could change the persisted legacy projection.
@@ -319,7 +338,7 @@ func AdaptLegacyInformationSchemaColumnsDDL(definition string) (string, bool) {
 	}
 	// V109 already has the derived View-column branches and native Unicode
 	// selectors. Keep this historical template byte-stable apart from the
-	// lowercase view-name normalization above.
+	// authoring-form and lowercase view-name normalization above.
 	if definition == InformationSchemaColumnsV109DDL() {
 		return definition, true
 	}
@@ -336,7 +355,7 @@ func AdaptLegacyInformationSchemaColumnsDDL(definition string) (string, bool) {
 // publisher ID, to the common request so authorization and root resolution use
 // the caller's namespace. The persisted templates and projections do not change.
 func ViewMetadataColumnsDDL(definition string) (string, bool) {
-	definition = canonicalColumnsViewName(definition)
+	definition = canonicalColumnsViewDDL(definition)
 	known := definition == InformationSchemaColumnsDDL ||
 		definition == InformationSchemaColumnsV100DDL() || definition == InformationSchemaColumnsV109DDL()
 	if !known {
@@ -358,7 +377,17 @@ func ViewMetadataColumnsDDL(definition string) (string, bool) {
 }
 
 func IsCurrentInformationSchemaColumnsDDL(definition string) bool {
-	return canonicalColumnsViewName(definition) == InformationSchemaColumnsDDL
+	canonical := canonicalColumnsViewDDL(definition)
+	if canonical == InformationSchemaColumnsDDL {
+		return true
+	}
+	// Issue #31160 replay compatibility: a CN that shut down with the
+	// pre-fix binary selector and restarts on this version may have replayed
+	// the historical 'binary' branch into the current shape. That definition
+	// is one SELECT away from the current DDL and must converge, not rebuild;
+	// tolerate exactly that selector drift and nothing else.
+	return strings.ReplaceAll(canonical,
+		"WHEN 2 then 'binary'", "WHEN 2 then NULL") == InformationSchemaColumnsDDL
 }
 
 // IsInformationSchemaColumnsMigrationDDL reports whether a persisted COLUMNS
@@ -367,12 +396,15 @@ func IsCurrentInformationSchemaColumnsDDL(definition string) bool {
 // migration gates; the historical protocol-109 definition is an input to the
 // adapter, not a migration gate.
 func IsInformationSchemaColumnsMigrationDDL(definition string) bool {
-	definition = canonicalColumnsViewName(definition)
+	definition = canonicalColumnsViewDDL(definition)
 	return definition == InformationSchemaColumnsV100DDL() ||
 		definition == InformationSchemaColumnsDDL
 }
 
-func canonicalColumnsViewName(definition string) string {
+func canonicalColumnsViewDDL(definition string) string {
+	// Identity-preserving upgrades persist CREATE OR REPLACE. Readers and
+	// reconciliation must recognize the same authored template.
+	definition = canonicalInformationSchemaViewDDL(definition)
 	// Older upgrades used the lowercase spelling of this identifier. Do not
 	// case-fold literals or accept arbitrary lookalike system-view SQL.
 	return strings.Replace(definition, "CREATE VIEW information_schema.columns AS ",
@@ -731,9 +763,18 @@ var (
 		catalog.IndexTableNamePrefix+"%", catalog.NonTemporaryTableSQLPredicate("tbl"), catalog.MO_ACCOUNT_LOCK, catalog.SystemPartitionRel)
 
 	InformationSchemaTablesDDL     = informationSchemaSubscriptionTablesDDL()
-	InformationSchemaTablesV118DDL = strings.ReplaceAll(InformationSchemaTablesDDL,
+	InformationSchemaTablesV118DDL = strings.NewReplacer(
+		"tbl.relname not like '"+catalog.IndexTableNamePrefix+"%'",
+		"not startswith(tbl.relname, '"+catalog.IndexTableNamePrefix+"')",
 		"'"+DefaultCollationForCharset("utf8mb4")+"' AS TABLE_COLLATION,",
-		"internal_table_collation(tbl.extra_info) AS TABLE_COLLATION,")
+		"internal_table_collation(tbl.extra_info) AS TABLE_COLLATION,",
+		// A freshly created table has no UPDATE/CHECK time (issue #31163):
+		// do not fabricate one from CREATE_TIME. Views were already NULL.
+		"if(relkind = 'v', NULL, created_time) AS UPDATE_TIME,",
+		"cast(null as timestamp) AS UPDATE_TIME,",
+		"if(relkind = 'v', NULL, created_time) AS CHECK_TIME,",
+		"cast(null as timestamp) AS CHECK_TIME,",
+	).Replace(InformationSchemaTablesDDL)
 
 	InformationSchemaPartitionsDDL = "CREATE VIEW information_schema.`PARTITIONS` AS " +
 		informationSchemaMetadataVisibilityCTE() + "SELECT " +

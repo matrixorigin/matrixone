@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	commonutil "github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
@@ -444,6 +445,12 @@ func (exec *txnExecutor) Exec(
 			true)
 	}
 
+	if statementOption.TrustedForeignKeyLayout() {
+		exec.ctx = context.WithValue(exec.ctx,
+			defines.TrustedForeignKeyLayout{},
+			true)
+	}
+
 	if v := statementOption.AlterCopyDedupOpt(); v != nil {
 		exec.ctx = context.WithValue(exec.ctx,
 			defines.AlterCopyOpt{}, v)
@@ -688,11 +695,27 @@ func (exec *txnExecutor) Exec(
 	}
 
 	var batches []*batch.Batch
+	var resultBytes uint64
+	resultLimit := statementOption.MaxResultBytes()
+	defer func() {
+		if retErr != nil {
+			for _, bat := range batches {
+				bat.Clean(exec.s.mp)
+			}
+		}
+	}()
 	err = c.Compile(
 		exec.ctx,
 		pn,
 		func(bat *batch.Batch, crs *perfcounter.CounterSet) error {
 			if bat != nil {
+				if resultLimit != 0 {
+					var err error
+					resultBytes, err = resultCloneBytes(bat, resultBytes, resultLimit)
+					if err != nil {
+						return err
+					}
+				}
 				// the bat is valid only in current method. So we need copy data.
 				// FIXME: add a custom streaming apply handler to consume readed data. Now
 				// our current internal sql will never read too much data.
@@ -737,11 +760,6 @@ func (exec *txnExecutor) Exec(
 		if streaming {
 			err_chan <- err
 		}
-		for _, bat := range batches {
-			if bat != nil {
-				bat.Clean(exec.s.mp)
-			}
-		}
 		return executor.Result{}, err
 	}
 
@@ -760,11 +778,93 @@ func (exec *txnExecutor) Exec(
 		state := captureSequenceStatementState(proc)
 		sequenceState.output = &state
 	}
-	result.LastInsertID = proc.GetStatementLastInsertID()
+	result.LastInsertID = c.statementLastInsertID()
 	result.Batches = batches
 	result.AffectedRows = runResult.AffectRows
 	result.LogicalPlan = pn.GetQuery()
 	return result, nil
+}
+
+func (c *Compile) statementLastInsertID() uint64 {
+	// Run may rebuild the plan on retry. Select the final attempt's owner,
+	// rather than inferring tracking from the original ODKU syntax.
+	if insert, ok := c.stmt.(*tree.Insert); ok && c.GetPlan().GetQuery().HasODKUResultTracking() {
+		id, _ := c.proc.GetODKUProtocolIDForSource(insert.IsValuesSource())
+		return id
+	}
+	return c.proc.GetStatementLastInsertID()
+}
+
+// resultCloneBytes bounds the logical payload the result clone can retain.
+// A flat vector may share one varlen payload between many rows; UnionBatch
+// materializes those rows, so the source area's size alone is not a bound.
+func resultCloneBytes(bat *batch.Batch, used, limit uint64) (uint64, error) {
+	exceeded := func() (uint64, error) { return 0, &executor.ResultLimitError{Limit: limit} }
+	if used > limit {
+		return exceeded()
+	}
+	charge := func(n uint64) bool {
+		if n > limit-used {
+			return false
+		}
+		used += n
+		return true
+	}
+	for _, vec := range bat.Vecs {
+		rows, width := vec.Length(), vec.GetType().TypeSize()
+		if rows < 0 || width < 0 || width > 0 && uint64(rows) > uint64(^uint(0)>>1)/uint64(width) {
+			return exceeded()
+		}
+		if !charge(uint64(rows) * uint64(width)) {
+			return exceeded()
+		}
+		// Sidecars for flat vectors can expand to one entry per output row.
+		// Constants retain the exact source sidecars after broadcasting.
+		for _, n := range []int{len(vec.GetPrepareParamKinds()), len(vec.GetStringSources())} {
+			if n != 0 && !vec.IsConst() {
+				n = max(n, rows)
+			}
+			if !charge(uint64(n)) {
+				return exceeded()
+			}
+		}
+		if vec.HasBinaryStringMetadata() {
+			words := uint64(rows) / 64
+			if rows%64 != 0 {
+				words++
+			}
+			if words > ^uint64(0)/16 || !charge(words*16) {
+				return exceeded()
+			}
+		}
+		if !vec.GetType().IsVarlen() || rows == 0 || vec.IsConstNull() {
+			continue
+		}
+		values, area := vector.MustVarlenaRawData(vec)
+		if vec.VarlenaAreaIsDisjoint() && vec.AreaBackingKind() == vector.OwnedMPoolUnique {
+			if !charge(uint64(len(area))) {
+				return exceeded()
+			}
+			continue
+		}
+		count := rows
+		if vec.IsConst() {
+			count = 1
+		}
+		for i := 0; i < count; i++ {
+			if vec.IsNull(uint64(i)) || values[i].IsSmall() {
+				continue
+			}
+			offset, length := values[i].OffsetLen()
+			if uint64(offset)+uint64(length) > uint64(len(area)) {
+				return 0, moerr.NewInvalidStateNoCtx("invalid varlen result payload")
+			}
+			if !charge(uint64(length)) {
+				return exceeded()
+			}
+		}
+	}
+	return used, nil
 }
 
 func cloneInternalExecutorResultBatch(

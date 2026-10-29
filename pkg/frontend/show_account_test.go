@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math/rand"
 	"strings"
@@ -35,6 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/util/metric/mometric"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/stretchr/testify/assert"
@@ -300,6 +302,113 @@ func TestRequestStorageUsageWithNoTN(t *testing.T) {
 	require.Nil(t, response)
 	require.False(t, tried)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNoAvailableBackend), err)
+}
+
+type accountTableSizeEngine struct {
+	engine.Engine
+	query func(context.Context, []uint64, bool) (map[uint64]uint64, bool, error)
+}
+
+func (e accountTableSizeEngine) QueryAccountTableSizes(ctx context.Context, accounts []uint64, force bool) (map[uint64]uint64, bool, error) {
+	return e.query(ctx, accounts, force)
+}
+
+func TestTryGetSizeFromMTS(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		accounts [][]int64
+		wantIDs  []uint64
+		force    bool
+		wrapped  bool
+	}{
+		{name: "empty"},
+		{name: "sys", accounts: [][]int64{{0}}, wantIDs: []uint64{0}},
+		{name: "single tenant", accounts: [][]int64{{7}}, wantIDs: []uint64{7}, force: true},
+		{name: "multiple batches", accounts: [][]int64{{7}, {9}}, wantIDs: []uint64{7, 9}},
+		{name: "wrapped engine", accounts: [][]int64{{7, 9}}, wantIDs: []uint64{7, 9}, wrapped: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			calls := 0
+			var eng engine.Engine = accountTableSizeEngine{query: func(_ context.Context, ids []uint64, force bool) (map[uint64]uint64, bool, error) {
+				calls++
+				require.Equal(t, test.wantIDs, ids)
+				require.Equal(t, test.force, force)
+				result := make(map[uint64]uint64)
+				for _, id := range ids {
+					result[id] = 1<<53 + 1
+				}
+				return result, true, nil
+			}}
+			if test.wrapped {
+				eng = &engine.EntireEngine{Engine: eng}
+			}
+			sizes, ok := tryGetSizeFromMTS(context.Background(), eng, test.accounts)
+			require.True(t, ok)
+			require.Len(t, sizes, len(test.wantIDs))
+			for _, id := range test.wantIDs {
+				require.Equal(t, uint64(1<<53+1), sizes[int64(id)])
+			}
+			require.Equal(t, 1, calls)
+		})
+	}
+	sizes, ok := tryGetSizeFromMTS(context.Background(), nil, [][]int64{{7}})
+	require.False(t, ok)
+	require.Nil(t, sizes)
+}
+
+func TestGetAccountsStorageUsageMTS(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		sizes map[uint64]uint64
+		ok    bool
+		err   error
+		want  map[int64][]uint64
+	}{
+		{
+			name: "aggregate replaces only size", sizes: map[uint64]uint64{7: 303, 9: 404}, ok: true,
+			want: map[int64][]uint64{7: {303, 13}, 9: {404, 14}},
+		},
+		{
+			name: "zero replaces size but absent account retains TN", sizes: map[uint64]uint64{7: 0}, ok: true,
+			want: map[int64][]uint64{7: {0, 13}, 9: {202, 14}},
+		},
+		{
+			name: "empty aggregate retains TN", ok: true,
+			want: map[int64][]uint64{7: {101, 13}, 9: {202, 14}},
+		},
+		{
+			name: "unhandled retains TN", sizes: map[uint64]uint64{7: 999},
+			want: map[int64][]uint64{7: {101, 13}, 9: {202, 14}},
+		},
+		{
+			name: "partial result on error is ignored", sizes: map[uint64]uint64{7: 999}, ok: true,
+			err: errors.New("statistics query failed"), want: map[int64][]uint64{7: {101, 13}, 9: {202, 14}},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			previous := cnUsageCache
+			cnUsageCache = logtail.NewStorageUsageCache(logtail.WithLazyThreshold(600))
+			t.Cleanup(func() { cnUsageCache = previous })
+			updateStorageUsageCache(&cmd_util.StorageUsageResp_V3{
+				AccIds: []int64{7, 9}, Sizes: []uint64{101, 202}, SnapshotSizes: []uint64{13, 14},
+				ObjCnts: []uint64{1, 2}, BlkCnts: []uint64{3, 4}, RowCnts: []uint64{5, 6},
+			})
+			calls := 0
+			eng := accountTableSizeEngine{query: func(_ context.Context, accounts []uint64, force bool) (map[uint64]uint64, bool, error) {
+				calls++
+				require.Equal(t, []uint64{7, 9}, accounts)
+				require.False(t, force)
+				return test.sizes, test.ok, test.err
+			}}
+			usage, err := getAccountsStorageUsage(context.Background(), nil, eng, [][]int64{{7}, {9}})
+			require.NoError(t, err)
+			require.Equal(t, test.want, usage)
+			require.Equal(t, 1, calls, "cache hits must still use MTS without refreshing individual tables")
+			cached, ok := checkStorageUsageCache([][]int64{{7, 9}})
+			require.True(t, ok)
+			require.Equal(t, map[int64][]uint64{7: {101, 13}, 9: {202, 14}}, cached, "MTS must not mutate the TN cache")
+		})
+	}
 }
 
 func Test_updateStorageUsageCache_V2(t *testing.T) {

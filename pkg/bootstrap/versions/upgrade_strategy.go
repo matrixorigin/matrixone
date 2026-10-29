@@ -107,6 +107,7 @@ const (
 
 	CREATE_DATABASE
 	MODIFY_METADATA
+	RECONCILE_LEGACY_INFORMATION_SCHEMA_VIEW
 )
 
 // ColumnInfo Describe the detailed information of the table column
@@ -189,6 +190,10 @@ func (u *UpgradeEntry) upgrade(
 		if err := checkCommonProtocolVersion(txn, u.RequiredProtocolVersion); err != nil {
 			return err
 		}
+	}
+
+	if u.UpgType == RECONCILE_LEGACY_INFORMATION_SCHEMA_VIEW {
+		return u.reconcileLegacyInformationSchemaView(txn, accountId)
 	}
 
 	// 1. First, judge whether there is prefix sql
@@ -488,33 +493,6 @@ func CheckTableComment(txn executor.TxnExecutor, accountId uint32, schema string
 	})
 
 	return loaded, comment, nil
-}
-
-// CheckDatabaseDefinition This function is used to check if the database definition exists.
-// If it exists, return true; otherwise, return false.
-func CheckDatabaseDefinition(txn executor.TxnExecutor, accountId uint32, schema string) (bool, error) {
-	if schema == "" {
-		return false, moerr.NewInternalErrorNoCtx("schema name is empty")
-	}
-
-	sql := fmt.Sprintf(`select datname from mo_catalog.mo_database where datname = '%s'`, schema)
-	if accountId == catalog.System_Account {
-		sql = fmt.Sprintf(`select datname from mo_catalog.mo_database where account_id = 0 and datname = '%s'`, schema)
-	}
-
-	res, err := txn.Exec(sql, executor.StatementOption{}.WithAccountID(accountId))
-	if err != nil {
-		return false, err
-	}
-	defer res.Close()
-
-	loaded := false
-	res.ReadRows(func(rows int, cols []*vector.Vector) bool {
-		loaded = true
-		return false
-	})
-
-	return loaded, nil
 }
 
 // CheckTableDataExist Used to checks whether a table contains specific data

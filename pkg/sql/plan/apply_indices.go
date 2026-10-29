@@ -271,6 +271,7 @@ func (builder *QueryBuilder) prepareSpecialIndexGuards(rootID int32) {
 
 func (builder *QueryBuilder) resetSpecialIndexGuards() {
 	clear(builder.projectAnchoredSorts)
+	clear(builder.fulltextBoundableJoins)
 	if builder.protectedScans != nil {
 		for k := range builder.protectedScans {
 			delete(builder.protectedScans, k)
@@ -1072,6 +1073,9 @@ func (builder *QueryBuilder) applyIndicesForSort(nodeID int32, sortNode *plan.No
 	// A covered fulltext rewrite may be below the explicit SQL score sort.
 	// Preserve the original projection tags while checking that complete chain.
 	builder.pushCoveredFulltext2ScoreLimitFromSort(sortNode)
+	// The non-covered (base-table JOIN) analogue: push the score LIMIT top-k into the
+	// fulltext2 search so it emits k rows instead of every match.
+	builder.pushJoinFulltext2ScoreLimitFromSort(sortNode)
 	if _, ok := builder.projectAnchoredSorts[nodeID]; ok {
 		// The PROJECT above will anchor this Top-K with full column information.
 		return nodeID, nil
@@ -2331,14 +2335,62 @@ type regularIndexAccessCandidate struct {
 	work               float64
 }
 
+// hasPrimaryKeyEquality proves equality on every distinct PK component using
+// the same eligible equality classifier as index matching, without a fact map.
+func hasPrimaryKeyEquality(node *plan.Node) bool {
+	if node == nil || node.TableDef == nil || node.TableDef.Pkey == nil || len(node.BindingTags) == 0 {
+		return false
+	}
+	table := node.TableDef
+	parts := table.Pkey.Names
+	if len(parts) == 0 || len(parts) > len(node.FilterList) {
+		return false
+	}
+	for i, name := range parts {
+		pos, ok := table.Name2ColIndex[name]
+		if !ok || pos < 0 || int(pos) >= len(table.Cols) {
+			return false
+		}
+		for _, previous := range parts[:i] {
+			if table.Name2ColIndex[previous] == pos {
+				return false
+			}
+		}
+		found := false
+		for _, filter := range node.FilterList {
+			fn := filter.GetF()
+			if fn == nil || fn.Func == nil || fn.Func.ObjName != "=" || len(fn.Args) != 2 || !hasNonNilFunctionArgs(fn, 2) {
+				continue
+			}
+			kind, col := checkIndexFilter(fn)
+			if kind == EqualIndexCondition && col.RelPos == node.BindingTags[0] && col.ColPos == pos {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return false
+		}
+	}
+	return true
+}
+
 func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, node *plan.Node, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) int32 {
 	if len(node.FilterList) == 0 || len(node.TableDef.Indexes) == 0 {
 		return nodeID
 	}
-	builder.addFunctionalIndexFilters(node)
 
 	forceIndex := builder.scanHintsForceIndexes(node)
-	for i := range node.FilterList { // if already have filter on first pk column and have a good selectivity, no need to go index
+	pointBlocked := !forceIndex && hasPrimaryKeyEquality(node)
+	if pointBlocked && node.TableDef.ClusterBy == nil && !catalog.IsFakePkName(node.TableDef.Pkey.PkeyColName) {
+		// A real, physically ordered full PK is already a point lookup.
+		// Do not build or score partial secondary candidates for a singleton.
+		return nodeID
+	}
+	builder.addFunctionalIndexFilters(node)
+
+	preferSortedScan := false
+	for i := range node.FilterList {
 		expr := node.FilterList[i]
 		fn := expr.GetF()
 		if fn == nil {
@@ -2348,8 +2400,12 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, no
 		if col == nil {
 			continue
 		}
-		if !forceIndex && GetSortOrder(node.TableDef, col.ColPos) == 0 && node.FilterList[i].Selectivity <= 0.001 {
-			return node.NodeId
+		// Default statistics leave expression selectivities unset (zero).
+		// Only actual estimates can justify a sorted-scan cost preference.
+		if !forceIndex && node.Stats != nil && !IsDefaultStats(node.Stats) && finitePositive(node.Stats.TableCnt) &&
+			GetSortOrder(node.TableDef, col.ColPos) == 0 && expr.Selectivity >= 0 && expr.Selectivity <= 0.001 {
+			preferSortedScan = true
+			break
 		}
 	}
 
@@ -2404,11 +2460,19 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, no
 	best := regularIndexAccessCandidate{indexPos: -1, work: math.Inf(1)}
 	fallback := regularIndexAccessCandidate{indexPos: -1}
 	sawScorable := false
-	pointBlocked := costCtx.pointLookupBlockedByPrimaryKey()
 	consider := func(candidate regularIndexAccessCandidate) {
 		idxDef := indexes[candidate.indexPos]
 		work, skip, valid := costCtx.score(idxDef, candidate.filterIdx, candidate.residualLeadingPos, candidate.shape)
 		candidate.work = work
+		if preferSortedScan {
+			// Preserve the sorted-scan shortcut unless a legal point lookup has
+			// a known lower cost. Small-table policy alone is not that proof.
+			if valid && !skip && work < costCtx.baseWork &&
+				(best.indexPos == -1 || work < best.work) {
+				best = candidate
+			}
+			return
+		}
 		if ignoreStats {
 			// FORCE and small tables bypass cost rejection because their estimates
 			// are not an automatic cross-shape selection oracle. Preserve the
@@ -2437,12 +2501,14 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, no
 	}
 
 	for idx, idxDef := range indexes {
-		if match, ok := builder.matchRegularIndexOnlyScan(idxDef, node, costCtx); ok {
-			consider(regularIndexAccessCandidate{
-				indexPos: idx, shape: encodedRegularIndexCostIndexOnly,
-				filterType: match.filterType, filterIdx: match.filterIdx,
-				leadingEqual: match.leadingEqual, residualLeadingPos: match.residualLeadingPos,
-			})
+		if !preferSortedScan {
+			if match, ok := builder.matchRegularIndexOnlyScan(idxDef, node, costCtx); ok {
+				consider(regularIndexAccessCandidate{
+					indexPos: idx, shape: encodedRegularIndexCostIndexOnly,
+					filterType: match.filterType, filterIdx: match.filterIdx,
+					leadingEqual: match.leadingEqual, residualLeadingPos: match.residualLeadingPos,
+				})
+			}
 		}
 		if !allowBackfill {
 			continue
@@ -2455,7 +2521,7 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, no
 				})
 			}
 		}
-		if functionalIndexColumn(node.TableDef, idxDef) != nil {
+		if preferSortedScan || functionalIndexColumn(node.TableDef, idxDef) != nil {
 			continue
 		}
 		if filterIdx := costCtx.matchRangeBackfill(idxDef); len(filterIdx) > 0 {
@@ -2485,13 +2551,14 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, no
 
 	// Preserve the established priority of a covering spatial access over a
 	// regular backfill join. Spatial candidates have a different cost domain.
-	for i := range spatialIndexes {
-		ret := builder.trySpatialIndexOnlyScan(spatialIndexes[i], node, colRefCnt, idxColMap, scanSnapshot)
-		if ret != -1 {
-			return ret
+	if !preferSortedScan {
+		for i := range spatialIndexes {
+			ret := builder.trySpatialIndexOnlyScan(spatialIndexes[i], node, colRefCnt, idxColMap, scanSnapshot)
+			if ret != -1 {
+				return ret
+			}
 		}
 	}
-
 	if !allowBackfill {
 		return nodeID
 	}
@@ -2504,6 +2571,9 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, no
 		}
 	}
 
+	if preferSortedScan {
+		return nodeID
+	}
 	idxToChoose, filterIdx := builder.getIndexForSpatialCond(spatialIndexes, node)
 	if idxToChoose != -1 {
 		retID, _ := builder.applyIndexJoin(spatialIndexes[idxToChoose], node, SpatialIndexCondition, filterIdx, scanSnapshot)
@@ -3393,14 +3463,6 @@ func (builder *QueryBuilder) newEncodedRegularIndexCostContext(
 		ctx.valid = finitePositive(ctx.baseWork) && finitePositive(ctx.baseUpperWork)
 	}
 	return ctx
-}
-
-func (ctx *encodedRegularIndexCostContext) pointLookupBlockedByPrimaryKey() bool {
-	if ctx.node == nil || ctx.node.TableDef == nil || ctx.node.TableDef.Pkey == nil || len(ctx.node.TableDef.Pkey.Names) == 0 {
-		return false
-	}
-	colPos, ok := ctx.node.TableDef.Name2ColIndex[ctx.node.TableDef.Pkey.Names[0]]
-	return ok && colPos >= 0 && int(colPos) < len(ctx.equalFilters) && ctx.equalFilters[colPos] >= 0
 }
 
 func (ctx *encodedRegularIndexCostContext) matchPointBackfill(idxDef *IndexDef, ignoreStats bool) []int32 {

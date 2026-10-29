@@ -465,6 +465,8 @@ message ColDef {
   // of origin/key metadata, which can be lost across set operations. UNKNOWN
   // preserves compatibility with plans produced before this field existed.
   ResultColumnKind result_column_kind = 23;
+  // Result publication only; never persisted as a table/view schema attribute.
+  IntegerResultPresentation integer_result_presentation = 24;
 }
 
 message Default {
@@ -839,6 +841,14 @@ message DedupJoinCtx {
   bool emit_action_rows = 10;
   ColRef action_final_col = 11;
   repeated ODKUForeignKeyCheck foreign_key_checks = 12 [(gogoproto.nullable) = false];
+  // ODKU result tracking is explicit plan metadata.  The target column is
+  // read from the old/probe row; the generated and ordinal columns are read
+  // from the input/build row.  Presence is restricted to the main UPDATE
+  // dedup join and survives projection/remap like the other metadata refs.
+  ColRef odku_target_auto_increment_col = 13;
+  ColRef odku_generated_col = 14;
+  ColRef odku_ordinal_col = 15;
+  ColRef odku_generated_auto_increment_col = 16;
 }
 
 message UpdateCtx {
@@ -1665,6 +1675,13 @@ message PreInsertCtx {
   // INSERT IGNORE arbiter must distinguish generated from explicit values.
   bool track_auto_increment_generated = 13;
   int32 auto_increment_generated_column = 14;
+  // ODKU keeps the generated marker and a statement-local source ordinal so
+  // the DEDUP action owner can publish first-generated/last-action results.
+  bool track_odku_result = 15;
+  int32 odku_ordinal_column = 16;
+  // ODKU provenance names the user-visible AUTO_INCREMENT source column.
+  // Hidden fake-primary-key allocations must not be treated as the source.
+  int32 odku_auto_increment_column = 17;
 }
 
 // RuntimeFilterKeyEncoding records the versioned producer-side closure
@@ -1757,6 +1774,50 @@ message PostDmlCtx {
   PostDmlFullTextCtx full_text = 8;
 }
 
+// Logical metadata only. Executors never consult this graph for values or vector
+// types. One-based edges are topologically ordered; zero means unknown.
+message IntegerPrecisionNode {
+  enum Kind {
+    DECLARED = 0;
+    SQL_LITERAL = 1;
+    EXPLICIT_CAST = 2;
+    PARAMETER = 3;
+    ADD = 4;
+    MUL = 5;
+    REFERENCE = 6;
+    COMMON_INTEGER = 7;
+  }
+  Kind kind = 1;
+  uint32 precision = 2;
+  bool unsigned = 3;
+  repeated uint32 inputs = 4;
+  int32 param_pos = 5;
+  bool arithmetic = 6;
+}
+
+message IntegerPrecisionOutput {
+  enum RootClass {
+    DECLARED_SOURCE = 0;
+    DIRECT_FUNCTION = 1;
+    SQL_REFERENCE = 2;
+    SQL_LITERAL = 3;
+  }
+  uint32 node = 1;
+  RootClass root_class = 2;
+}
+
+message IntegerPrecisionGraph {
+  repeated IntegerPrecisionNode nodes = 1;
+  repeated IntegerPrecisionOutput outputs = 2;
+  // Covers all admitted source tokens, including imported persisted view bodies.
+  uint64 source_budget = 3;
+  uint32 parameter_count = 4;
+}
+
+message IntegerResultPresentation {
+  uint32 display_length = 1;
+}
+
 message Query {
   enum StatementType {
     UNKNOWN = 0;
@@ -1836,6 +1897,7 @@ message Query {
   // Logical access paths, not grants or resolved security roles.
   repeated ViewReference view_references = 18;
   CorrelationSpec correlation = 19;
+  IntegerPrecisionGraph integer_precision = 20;
 }
 
 message TransationControl {

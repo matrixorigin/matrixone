@@ -15,6 +15,7 @@
 package function
 
 import (
+	"context"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -35,13 +36,13 @@ func jsonStringConsumerOverloadIndex(overloads []overload) int {
 // ordinary text and binary operands. JSON has a separate execution contract:
 // only a non-SQL-NULL JSON value is serialized to its visible JSON bytes.
 func getJSONStringConsumerValue(
-	parameter vector.FunctionParameterWrapper[types.Varlena], row uint64,
+	ctx context.Context, parameter vector.FunctionParameterWrapper[types.Varlena], row uint64,
 ) ([]byte, bool, error) {
 	value, isNull := parameter.GetStrValue(row)
 	if isNull || parameter.GetType().Oid != types.T_json {
 		return value, isNull, nil
 	}
-	visible, err := concatStringValue(parameter.GetType().Oid, value)
+	visible, err := concatStringValue(ctx, parameter.GetType().Oid, value)
 	if err != nil {
 		return nil, false, err
 	}
@@ -127,7 +128,7 @@ func jsonStringConsumerUnaryBytesToBytes(
 			}
 			continue
 		}
-		value, isNull, err := getJSONStringConsumerValue(source, row)
+		value, isNull, err := getJSONStringConsumerValue(proc.Ctx, source, row)
 		if err != nil {
 			return err
 		}

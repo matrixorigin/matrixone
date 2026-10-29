@@ -16,6 +16,8 @@ package frontend
 
 import (
 	"context"
+	cryptorand "crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -122,7 +124,7 @@ var (
 		"mo_user":                       systemCatalogRestoreCopy,
 		"mo_role":                       systemCatalogRestoreCopy,
 		"mo_user_grant":                 systemCatalogRestoreCopy,
-		"mo_role_grant":                 systemCatalogRestoreCopy,
+		"mo_role_grant":                 systemCatalogRestoreRebuild,
 		"mo_role_privs":                 systemCatalogRestoreRebuild,
 		"mo_role_rule":                  systemCatalogRestoreCopy,
 		"mo_user_defined_function":      systemCatalogRestoreCopy,
@@ -270,6 +272,23 @@ func NewSubDbRestoreRecord(dbName string, sourceAccount, targetAccount uint32, c
 	}
 }
 
+// snapshotBackgroundTxnOperator is the production binding for the statement
+// transaction's background operator; unit tests substitute it (the
+// resolveBranchSubscriptionMeta precedent) so the create path runs against a
+// mocked operator.
+var snapshotBackgroundTxnOperator = backgroundExecTxnOperator
+
+// resolvePublicationSnapshotDatabaseID reads the routed target database's
+// persisted identity under the statement transaction (finding 5 keying stays
+// in the caller); tests substitute it to drive the coverage database id.
+var resolvePublicationSnapshotDatabaseID = func(ctx context.Context, ses *Session, bh BackgroundExec, databaseName string) (uint64, error) {
+	db, err := ses.proc.GetSessionInfo().StorageEngine.Database(ctx, databaseName, snapshotBackgroundTxnOperator(bh))
+	if err != nil {
+		return 0, err
+	}
+	return strconv.ParseUint(db.GetDatabaseId(ctx), 10, 64)
+}
+
 func doCreateSnapshot(ctx context.Context, ses *Session, stmt *tree.CreateSnapShot) (err error) {
 	var snapshotLevel tree.SnapshotLevel
 	var snapshotForAccount string
@@ -321,15 +340,13 @@ func doCreateSnapshot(ctx context.Context, ses *Session, stmt *tree.CreateSnapSh
 		}
 		return nil
 	}
-	if !fromPublication {
-		if err = checkAccessAndName(); err != nil || snapshotExist {
-			return err
-		}
-	}
 	// Install the quota/catalog frontier before the lifecycle write. Advancing
 	// the transaction snapshot after that write can expose both workspace
 	// versions of the feature-registry gate row to the quota query.
 	localSnapshot := snapshotLevel == tree.SNAPSHOTLEVELDATABASE || snapshotLevel == tree.SNAPSHOTLEVELTABLE
+	var pubBinding *snapshotPublicationBinding
+	var aliasSubDb string
+	var aliasSubDbID uint64
 	if localSnapshot {
 		if snapshotLevel == tree.SNAPSHOTLEVELDATABASE {
 			databaseName = string(stmt.Object.ObjName)
@@ -340,19 +357,63 @@ func doCreateSnapshot(ctx context.Context, ses *Session, stmt *tree.CreateSnapSh
 			}
 			databaseName, tableName = objects[0], objects[1]
 		}
+		if !fromPublication && snapshotLevel == tree.SNAPSHOTLEVELTABLE {
+			// Subscription alias form (design §4.1/§4.4): classify N.t. A
+			// visible operand rewrites the statement to the explicit
+			// publication form over the physical database D, and captures
+			// the subscriber binding facts the admission revalidates after
+			// the catalog frontier (finding 12). Local and out-of-publication
+			// operands keep today's behavior and errors.
+			operand, outOfScope, clsErr := classifySubscriptionOperand(
+				ctx, ses, ses.GetTxnHandler().GetTxn(), bh, databaseName, tableName)
+			if clsErr != nil {
+				return clsErr
+			}
+			if outOfScope {
+				return newBranchOperandOutsidePublicationScopeError(ctx, databaseName, tableName)
+			}
+			if !operand.local {
+				aliasSubDb = databaseName
+				aliasSubDbID, _, err = getDbIdAndTypeForAccount(ctx, bh, aliasSubDb, tenantInfo.GetTenantID())
+				if err != nil {
+					return err
+				}
+				pubAccountName = operand.pubAccount
+				pubName = operand.pubName
+				fromPublication = true
+				databaseName = operand.physDb
+			}
+		}
+	}
+	// The alias classification above rewrites a visible subscription operand
+	// into the explicit publication form, so both publication forms arrive
+	// here with fromPublication set and skip the statement-account duplicate
+	// check exactly like today's explicit form; the recorded artifact lives
+	// under the physical owner (design §4.4 step 8).
+	if !fromPublication {
+		if err = checkAccessAndName(); err != nil || snapshotExist {
+			return err
+		}
+	}
+	if localSnapshot {
 		if fromPublication {
 			// The publisher identity is provisional until the P row is locked
 			// and checked again after the applied catalog frontier.
-			publisherID, publisherName, pubErr := getAccountFromPublication(
-				ctx, bh, pubAccountName, pubName, tenantInfo.GetTenant())
-			if pubErr != nil {
-				return pubErr
+			pubBinding, err = resolveSnapshotPublicationBinding(
+				ctx, bh, tenantInfo.GetTenantID(), tenantInfo.GetTenant(), pubAccountName, pubName)
+			if err != nil {
+				return err
 			}
-			ownerAccountID = uint32(publisherID)
-			currentAccount = publisherName
+			pubBinding.aliasDb = aliasSubDb
+			pubBinding.aliasDbID = aliasSubDbID
+			ownerAccountID = pubBinding.physID
+			currentAccount = pubBinding.physName
 			ctx = defines.AttachAccountId(ctx, ownerAccountID)
 		}
-		accountID, err := defines.GetAccountId(ctx)
+		// Assign to the shared err: := would shadow the named return until
+		// the end of this block, silently dropping an admission failure.
+		var accountID uint32
+		accountID, err = defines.GetAccountId(ctx)
 		if err != nil {
 			return err
 		}
@@ -364,8 +425,18 @@ func doCreateSnapshot(ctx context.Context, ses *Session, stmt *tree.CreateSnapSh
 		if snapshotLevel == tree.SNAPSHOTLEVELDATABASE {
 			databaseMode = lock.LockMode_Exclusive
 		}
-		err = admitLocalLifecycleRC(ctx, ses, bh, accountID, databaseName,
-			snapshotLevel.String(), databaseMode, publicationName, tableName)
+		if fromPublication {
+			// Split-identity admission (design §4.4 step 3): D/T/Q under the
+			// physical source owner, P under the publication account; the
+			// alias form prepends the subscriber database key (S, N).
+			err = admitPublicationLifecycleRC(ctx, ses, bh,
+				pubBinding.subscriberID, pubBinding.aliasDb,
+				pubBinding.physID, pubBinding.row.accountID,
+				databaseName, snapshotLevel.String(), databaseMode, pubName, tableName)
+		} else {
+			err = admitLocalLifecycleRC(ctx, ses, bh, accountID, databaseName,
+				snapshotLevel.String(), databaseMode, publicationName, tableName)
+		}
 		if err == nil && !fromPublication {
 			snapshotExist, err = checkSnapShotExistOrNot(ctx, bh, snapshotName)
 			if err == nil && snapshotExist {
@@ -388,6 +459,13 @@ func doCreateSnapshot(ctx context.Context, ses *Session, stmt *tree.CreateSnapSh
 	if fromPublication {
 		if localSnapshot {
 			if err = checkPublicationSubscriberGeneration(ctx, bh, tenantInfo.GetTenant(), tenantInfo.GetTenantID()); err != nil {
+				return err
+			}
+			// Post-frontier revalidation (design §4.4 step 5): the locked
+			// publication row and, for the alias form, the subscriber
+			// binding are re-derived after the applied catalog frontier;
+			// drift fails closed before any write.
+			if err = revalidateSnapshotPublicationBinding(ctx, bh, pubBinding); err != nil {
 				return err
 			}
 		} else {
@@ -461,7 +539,7 @@ func doCreateSnapshot(ctx context.Context, ses *Session, stmt *tree.CreateSnapSh
 	// refer to the `handleCloneDatabase`
 	snapshotTxnOp := ses.proc.GetTxnOperator()
 	if localSnapshot {
-		snapshotTxnOp = backgroundExecTxnOperator(bh)
+		snapshotTxnOp = snapshotBackgroundTxnOperator(bh)
 	}
 	if snapshotTS, err = tryToIncreaseTxnPhysicalTS(ctx, snapshotTxnOp); err != nil {
 		return err
@@ -616,27 +694,29 @@ func doCreateSnapshot(ctx context.Context, ses *Session, stmt *tree.CreateSnapSh
 		}
 	}
 	if localSnapshot && pubAccountName != "" && pubName != "" {
-		accountID, err := defines.GetAccountId(ctx)
-		if err != nil {
-			return err
-		}
-		db, err := ses.proc.GetSessionInfo().StorageEngine.Database(
-			ctx, databaseName, backgroundExecTxnOperator(bh))
-		if err != nil {
-			return err
-		}
-		databaseID, err := strconv.ParseUint(db.GetDatabaseId(ctx), 10, 64)
-		if err != nil {
-			return err
+		databaseID, idErr := resolvePublicationSnapshotDatabaseID(ctx, ses, bh, databaseName)
+		if idErr != nil {
+			return idErr
 		}
 		if snapshotLevel == tree.SNAPSHOTLEVELDATABASE && objId != databaseID {
 			return moerr.NewTxnNeedRetryWithDefChanged(ctx)
 		}
-		if err = checkSnapshotPublicationCoverage(ctx, bh, accountID,
+		// The mo_pubs query is keyed on the publication account (finding 5):
+		// the publisher argument stays P_pub while the compared database id
+		// was resolved under the physical source owner (design §4.4 step 7).
+		if err = checkSnapshotPublicationCoverage(ctx, bh, pubBinding.row.accountID,
 			pubAccountName, pubName, tenantInfo.GetTenant(), databaseName, tableName,
 			databaseID); err != nil {
 			return err
 		}
+	}
+
+	// Test-only failure-injection seam (snapshot_record_fault.go): inert
+	// unless a hook is armed. A fired fault takes the identical rollback path
+	// as a failed insert: the statement transaction consumes no quota and
+	// records nothing before finishTxn rolls it back.
+	if err = fireSnapshotRecordWriteFault(); err != nil {
+		return err
 	}
 
 	getLogger(ses.GetService()).Debug("create pitr", zap.String("sql", sql))
@@ -698,14 +778,20 @@ func doDropSnapshot(ctx context.Context, ses *Session, stmt *tree.DropSnapShot) 
 	pubAccountName := string(stmt.AccountName)
 	pubName := string(stmt.PubName)
 
+	var dropPubRow *snapshotPublicationRow
+	var dropPhysID uint32
 	if len(pubAccountName) > 0 && len(pubName) > 0 {
 		tenantInfo := ses.GetTenantInfo()
 		currentAccount := tenantInfo.GetTenant()
-		accountID, _, err := lockAccountFromPublication(ctx, bh, pubAccountName, pubName, currentAccount, tenantInfo.GetTenantID())
+		// The authorization spine is unchanged (generation + the FOR UPDATE
+		// membership row); the resolved owner is the shape-aware physical
+		// source with the shared foreign-source gate (design §4.5 step 1).
+		dropPubRow, dropPhysID, err = lockPublicationSnapshotOwner(
+			ctx, bh, pubAccountName, pubName, currentAccount, tenantInfo.GetTenantID())
 		if err != nil {
 			return err
 		}
-		ctx = defines.AttachAccountId(ctx, uint32(accountID))
+		ctx = defines.AttachAccountId(ctx, dropPhysID)
 	}
 
 	// check snapshot exists or not
@@ -735,6 +821,19 @@ func doDropSnapshot(ctx context.Context, ses *Session, stmt *tree.DropSnapShot) 
 				"snapshot %q is managed by data branch and cannot be dropped directly",
 				string(stmt.Name),
 			)
+		}
+		if dropPubRow != nil {
+			// Coverage-and-identity scope binding (design §4.5 step 2, I7): a
+			// publication-routed drop deletes only a fully bound record; any
+			// record outside the publication's scope fails closed and stays.
+			pubRecordIface, pubRecordErr := getSnapshotByName(ctx, bh, string(stmt.Name))
+			if pubRecordErr != nil {
+				return pubRecordErr
+			}
+			if err = bindPublicationSnapshotRecordForDrop(
+				ctx, bh, dropPubRow, dropPhysID, pubRecordIface); err != nil {
+				return err
+			}
 		}
 		var viewMetadataEnabled bool
 		if viewMetadataEnabled, err = prepareViewMetadataMutation(ctx, bh, ses.GetService()); err != nil {
@@ -1103,6 +1202,7 @@ func preflightRestoreSnapshotEntry(
 		// the first account mutation.
 		return nil
 	case tree.RESTORELEVELACCOUNT:
+		sourceAccount := uint32(snapshot.objId)
 		if snapshot.level == tree.RESTORELEVELCLUSTER.String() {
 			account, err := getAccountRecordByTs(
 				ctx, ses, bh, snapshot.snapshotName, snapshot.ts, string(stmt.AccountName),
@@ -1110,15 +1210,31 @@ func preflightRestoreSnapshotEntry(
 			if err != nil {
 				return err
 			}
-			accountID := uint32(account.accountId)
+			sourceAccount = uint32(account.accountId)
+		}
+		targetName := string(stmt.ToAccountName)
+		if targetName == "" {
+			targetName = string(stmt.AccountName)
+		}
+		targetAccount, targetExists, err := restoreTargetAccountID(ctx, bh, targetName)
+		if err != nil {
+			return err
+		}
+		if err = preflightRestoreAccountMetadata(ctx, bh, snapshot.ts, sourceAccount, targetAccount, targetExists); err != nil {
+			return err
+		}
+		if snapshot.level == tree.RESTORELEVELCLUSTER.String() {
 			return preflightLogicalRestoreAccountFromTS(
-				ctx, ses.GetService(), bh, snapshot.ts, accountID, accountID,
+				ctx, ses.GetService(), bh, snapshot.ts, sourceAccount, sourceAccount,
 			)
 		}
 		return preflightLogicalRestoreAccountFromSnapshot(
-			ctx, ses.GetService(), bh, snapshot.snapshotName, snapshot.ts, uint32(snapshot.objId),
+			ctx, ses.GetService(), bh, snapshot.snapshotName, snapshot.ts, sourceAccount,
 		)
 	case tree.RESTORELEVELDATABASE, tree.RESTORELEVELTABLE:
+		if err := preflightIcebergPartialRestore(ctx, bh, snapshot.ts, ses.GetTenantInfo().GetTenantID(), string(stmt.DatabaseName), string(stmt.TableName)); err != nil {
+			return err
+		}
 		return preflightLogicalRestoreDatabases(
 			ctx,
 			[]string{string(stmt.DatabaseName)},
@@ -2043,7 +2159,7 @@ func sortedViewInfos(
 
 		viewCtx.SetDatabase(viewEntry.dbName)
 		// build create sql to find dependent views
-		_, err = plan.BuildPlan(compCtx, stmts[0], false)
+		_, err = buildViewCreatePlanForRestore(compCtx, viewEntry, stmts[0])
 		freeStatements(stmts)
 		if err != nil {
 			getLogger(ses.GetService()).Debug(fmt.Sprintf("try to build view %v failed, try to build it again", viewEntry.tblName))
@@ -2051,7 +2167,7 @@ func sortedViewInfos(
 			if err != nil {
 				return nil, err
 			}
-			_, err = plan.BuildPlan(compCtx, stmts[0], false)
+			_, err = buildViewCreatePlanForRestore(compCtx, viewEntry, stmts[0])
 			freeStatements(stmts)
 			if err != nil {
 				// The dependency sort plans every view BEFORE the restore loop, so the
@@ -2100,7 +2216,7 @@ func recreateTable(
 	if isExternalTable(tblInfo) {
 		return newExternalTableRestoreError(ctx, tblInfo, "snapshot")
 	}
-	if isCurrentSchemaUserDefinedFunctionCatalog(tblInfo) {
+	if isCurrentSchemaRoutineCatalog(tblInfo) {
 		curAccountID, accountErr := defines.GetAccountId(ctx)
 		if accountErr != nil {
 			return accountErr
@@ -2109,8 +2225,8 @@ func recreateTable(
 		if curAccountID != toAccountId {
 			sourceSnapshot = fmt.Sprintf(" {SNAPSHOT = %s}", escapeSQLString(snapshotName))
 		}
-		return restoreUserDefinedFunctionCatalogWithCurrentSchema(
-			ctx, bh, sourceSnapshot, curAccountID, toAccountId,
+		return restoreRoutineCatalogWithCurrentSchema(
+			ctx, bh, tblInfo.tblName, sourceSnapshot, curAccountID, toAccountId,
 		)
 	}
 	ctx, err = restoreDDLContext(ctx, tblInfo.dbName, tblInfo.tblName)
@@ -2192,7 +2308,7 @@ func recreateTable(
 		}
 		getLogger(sid).Debug(fmt.Sprintf("[%s] insert select table: %v, cost: %v", snapshotName, tblInfo.tblName, time.Since(beginTime)))
 	}
-	return
+	return ensureRestoredIcebergAllocator(ctx, bh, tblInfo)
 }
 
 func needSkipDb(dbName string) bool {
@@ -2906,7 +3022,21 @@ func parseViewCreateSQLForRestore(ctx context.Context, tblInfo *tableInfo, lower
 		return nil, err
 	}
 
+	ctx = plan.WithRestoredViewDefinition(ctx, tblInfo.dbName, tblInfo.tblName, tblInfo.viewDef, tblInfo.createSql)
+	lowerCaseTableNames, err = plan.RestoredViewLowerCaseTableNames(ctx, tblInfo.createSql, lowerCaseTableNames)
+	if err != nil {
+		return nil, err
+	}
 	return parsers.ParseWithSQLMode(ctx, dialect.MYSQL, tblInfo.createSql, lowerCaseTableNames, parserSQLMode)
+}
+
+// The three restore dependency sorts own isolated mutable compiler contexts.
+// Their dependency discovery must use the same creation environment as replay.
+func buildViewCreatePlanForRestore(compCtx plan.CompilerContext, tblInfo *tableInfo, stmt tree.Statement) (*pbplan.Plan, error) {
+	original := compCtx.GetContext()
+	compCtx.SetContext(plan.WithRestoredViewDefinition(original, tblInfo.dbName, tblInfo.tblName, tblInfo.viewDef, tblInfo.createSql))
+	defer compCtx.SetContext(original)
+	return plan.BuildPlan(compCtx, stmt, false)
 }
 
 func executeViewCreateSQLForRestore(ctx context.Context, bh BackgroundExec, tblInfo *tableInfo) error {
@@ -2921,6 +3051,7 @@ func executeViewCreateSQLForRestore(ctx context.Context, bh BackgroundExec, tblI
 	if err != nil {
 		return err
 	}
+	ctx = plan.WithRestoredViewDefinition(ctx, tblInfo.dbName, tblInfo.tblName, tblInfo.viewDef, tblInfo.createSql)
 	return bh.ExecWithSQLMode(ctx, tblInfo.createSql, parserSQLMode)
 }
 
@@ -3055,22 +3186,6 @@ func getCreateTableSql(
 
 	return colsList[0][0], nil
 }
-
-//func getAccountIdBySnapshot(
-//	ctx context.Context,
-//	bh BackgroundExec,
-//	accountName string,
-//	snapshot string,
-//) (uint32, error) {
-//
-//	ctx = defines.AttachAccountId(ctx, catalog.System_Account)
-//	sql := fmt.Sprintf(
-//		"select account_id from mo_catalog.mo_account {SNAPSHOT = %s} where account_name = %s",
-//		snapshot, accountName,
-//	)
-//
-//	return getAccountIdHelper(ctx, bh, sql, accountName)
-//}
 
 func getAccountIdByTS(
 	ctx context.Context,
@@ -3405,11 +3520,19 @@ func restoreToCluster(ctx context.Context,
 	if err != nil {
 		return err
 	}
+	currentIDs := make(map[string]uint32, len(currentExistsAccount))
+	for _, account := range currentExistsAccount {
+		currentIDs[account.accountName] = uint32(account.accountId)
+	}
 	// Validate every source account before dropping an account that is absent
 	// from the snapshot. Account drop terminates sessions and sends cross-CN
 	// kill requests that a catalog transaction rollback cannot undo.
 	for _, account := range pastExistsAccount {
 		accountID := uint32(account.accountId)
+		targetID, exists := currentIDs[account.accountName]
+		if err = preflightRestoreAccountMetadata(ctx, bh, snapshotTs, accountID, targetID, exists); err != nil {
+			return err
+		}
 		if err = preflightLogicalRestoreAccountFromTS(
 			ctx, ses.GetService(), bh, snapshotTs, accountID, accountID,
 		); err != nil {
@@ -3755,7 +3878,9 @@ func createDroppedAccount(ctx context.Context, ses *Session, bh BackgroundExec, 
 	getLogger(ses.GetService()).Debug(fmt.Sprintf("[%s] start to re-create dropped account: %v, account id: %d", snapshotName, account.accountName, account.accountId))
 
 	createAccountSql := makeCreateAccountSqlByAccountRecord(account)
-	getLogger(ses.GetService()).Debug(fmt.Sprintf("[%s] start to create account: %v, create account sql: %s", snapshotName, account.accountName, createAccountSql))
+	// #30752: never log the bootstrap statement; it embeds the one-shot temp
+	// password and would leave a live credential in the log files.
+	getLogger(ses.GetService()).Debug(fmt.Sprintf("[%s] start to create account: %v, account id: %d", snapshotName, account.accountName, account.accountId))
 
 	var ast []tree.Statement
 	ast, err = mysql.Parse(ctx, createAccountSql, 1)
@@ -4008,6 +4133,31 @@ func getRestoreAcurrentExistsAccount(
 	return
 }
 
+// newSnapshotRestoreTempPassword returns a CSPRNG-generated one-shot
+// password for the account bootstrap performed inside the snapshot/PITR
+// restore pipeline. The catalog (mo_account) stores no password material, so
+// a dropped account is first re-created with this temporary password and the
+// real credentials land later when the snapshot's mo_user rows are restored.
+// #30752: the previous constant "111" was the shipped factory default of
+// every MatrixOne instance, making the restored account loginable with a
+// widely-known credential for the whole restore window — and leaving a
+// permanent backdoor admin whenever the restore failed after the account
+// creation step. The random value is never logged, never returned to any
+// client, and never leaves the pipeline in plaintext.
+// snapshotRestoreRandRead exists so tests can exercise the entropy-failure
+// branch; in production it is always crypto/rand.Read.
+var snapshotRestoreRandRead = cryptorand.Read
+
+func newSnapshotRestoreTempPassword() (string, error) {
+	var buf [24]byte
+	if _, err := snapshotRestoreRandRead(buf[:]); err != nil {
+		return "", moerr.NewInternalErrorNoCtxf("generate snapshot restore temp password: %v", err)
+	}
+	// 48 lowercase hex characters: safe to embed in a single-quoted SQL
+	// literal, and 192 bits of entropy make it unguessable.
+	return hex.EncodeToString(buf[:]), nil
+}
+
 func makeCreateAccountSqlByAccountRecord(record accountRecord) string {
 	baseSQL := fmt.Sprintf(
 		"create account IF NOT EXISTS %s ADMIN_NAME '%s' IDENTIFIED BY '%s'",
@@ -4079,7 +4229,12 @@ func getPastExistsAccounts(
 				return nil, err
 			}
 
-			account.pwd = "111"
+			// #30752: no password material exists in mo_account to restore
+			// from; give every account its own unguessable bootstrap password
+			// instead of the hardcoded factory default.
+			if account.pwd, err = newSnapshotRestoreTempPassword(); err != nil {
+				return nil, err
+			}
 
 			accounts = append(accounts, account)
 		}
@@ -4449,7 +4604,10 @@ func getAccountRecordByTs(ctx context.Context, ses *Session, bh BackgroundExec, 
 		if account.comments, err = erArray[0].GetString(ctx, 0, 3); err != nil {
 			return &accountRecord{}, err
 		}
-		account.pwd = "111"
+		// #30752: unguessable per-restore bootstrap password, never "111".
+		if account.pwd, err = newSnapshotRestoreTempPassword(); err != nil {
+			return &accountRecord{}, err
+		}
 		return &account, nil
 	}
 
@@ -4492,61 +4650,6 @@ func checkPublicationSubscriberGeneration(ctx context.Context, bh BackgroundExec
 		return moerr.NewInternalErrorf(ctx, "account %s session is no longer active", currentAccount)
 	}
 	return nil
-}
-
-func resolveAccountFromPublication(ctx context.Context, bh BackgroundExec, pubAccountName string, pubName string, currentAccount string, lock bool) (accountID uint64, accountName string, err error) {
-	// Query mo_pubs to get publication info and verify permission
-	systemCtx := defines.AttachAccountId(ctx, catalog.System_Account)
-	queryPubSQL := fmt.Sprintf(`SELECT account_id, account_name, pub_name, database_name, database_id, table_list, account_list 
-			FROM mo_catalog.mo_pubs 
-			WHERE account_name = '%s' AND pub_name = '%s'`, strings.ReplaceAll(pubAccountName, "'", "''"), strings.ReplaceAll(pubName, "'", "''"))
-	if lock {
-		// ALTER/DROP PUBLICATION updates this row. Hold its lock through the
-		// snapshot transaction so membership cannot change after authorization.
-		queryPubSQL += " for update"
-	}
-
-	bh.ClearExecResultSet()
-	err = bh.Exec(systemCtx, queryPubSQL)
-	if err != nil {
-		return 0, "", moerr.NewInternalErrorf(ctx, "failed to query publication info: %v", err)
-	}
-
-	erArray, err := getResultSet(systemCtx, bh)
-	if err != nil {
-		return 0, "", err
-	}
-
-	if !execResultArrayHasData(erArray) {
-		return 0, "", moerr.NewInternalErrorf(ctx, "publication %s.%s does not exist", pubAccountName, pubName)
-	}
-
-	// Get publication info
-	var accountList string
-	for i := uint64(0); i < erArray[0].GetRowCount(); i++ {
-		accountID, err = erArray[0].GetUint64(ctx, i, 0)
-		if err != nil {
-			return 0, "", err
-		}
-		accountName, err = erArray[0].GetString(ctx, i, 1)
-		if err != nil {
-			return 0, "", err
-		}
-		accountList, err = erArray[0].GetString(ctx, i, 6)
-		if err != nil {
-			return 0, "", err
-		}
-	}
-
-	// Check if current account has permission to access this publication
-	pubInfo := &pubsub.PubInfo{
-		SubAccountsStr: accountList,
-	}
-	if !pubInfo.InSubAccounts(currentAccount) {
-		return 0, "", moerr.NewInternalErrorf(ctx, "account %s does not have permission to access publication %s.%s", currentAccount, pubAccountName, pubName)
-	}
-
-	return
 }
 
 func checkSnapshotPublicationCoverage(

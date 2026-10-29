@@ -81,17 +81,23 @@ func getExternalWithColListProject(stmt *tree.Load, ctx CompilerContext, tableDe
 	var newCols []*ColDef
 
 	newTableDef := DeepCopyTableDef(tableDef, true)
+	// Legacy DML filters Cols without rebuilding Name2ColIndex. Resolve against
+	// the actual columns once instead of scanning the schema for every target.
+	columns := make(map[string]*ColDef, len(newTableDef.Cols))
+	for _, column := range newTableDef.Cols {
+		columns[column.Name] = column
+	}
 	colPos := 0
 	for i, col := range stmt.Param.Tail.ColumnList {
 		switch realCol := col.(type) {
 		case *tree.UnresolvedName:
 			colName := realCol.ColName()
-			if _, ok := newTableDef.Name2ColIndex[colName]; !ok {
+			column := columns[colName]
+			if column == nil || column.Hidden {
 				return nil, nil, nil, nil, moerr.NewBadFieldErrorf(ctx.GetContext(), "internal error: column '%s' does not exist", colName)
 			}
-			tbColIdx := newTableDef.Name2ColIndex[colName]
 			colExpr := &plan.Expr{
-				Typ: loadTimeInputType(stmt.Param.Format, newTableDef.Cols[tbColIdx].Typ),
+				Typ: loadTimeInputType(stmt.Param.Format, column.Typ),
 				Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{
 						ColPos: int32(colPos),
@@ -103,7 +109,7 @@ func getExternalWithColListProject(stmt *tree.Load, ctx CompilerContext, tableDe
 			colToIndex[colName] = int32(colPos)
 			colPos++
 			tbColToDataCol[colName] = int32(i)
-			newCols = append(newCols, newTableDef.Cols[tbColIdx])
+			newCols = append(newCols, column)
 		case *tree.VarExpr:
 			// Row-variable slots are recorded after target columns so referenced
 			// values can be exposed to the LOAD assignment projection.
@@ -125,63 +131,7 @@ func getExternalProject(stmt *tree.Load, ctx CompilerContext, tableDef *TableDef
 }
 
 func newReaderWithParam(param *tree.ExternParam, reader io.ReadCloser) (*csvparser.CSVParser, error) {
-	fieldsTerminatedBy := "\t"
-	fieldsEnclosedBy := "\""
-	fieldsEscapedBy := "\\"
-
-	linesTerminatedBy := "\n"
-	linesStartingBy := ""
-
-	if param.Tail.Fields != nil {
-		if terminated := param.Tail.Fields.Terminated; terminated != nil && terminated.Value != "" {
-			fieldsTerminatedBy = terminated.Value
-		}
-		if enclosed := param.Tail.Fields.EnclosedBy; enclosed != nil && enclosed.Value != 0 {
-			fieldsEnclosedBy = string(enclosed.Value)
-		}
-		if escaped := param.Tail.Fields.EscapedBy; escaped != nil {
-			if escaped.Value == 0 {
-				fieldsEscapedBy = ""
-			} else {
-				fieldsEscapedBy = string(escaped.Value)
-			}
-		}
-	}
-
-	if param.Tail.Lines != nil {
-		if terminated := param.Tail.Lines.TerminatedBy; terminated != nil && terminated.Value != "" {
-			linesTerminatedBy = param.Tail.Lines.TerminatedBy.Value
-		}
-		if param.Tail.Lines.StartingBy != "" {
-			linesStartingBy = param.Tail.Lines.StartingBy
-		}
-	}
-
-	if param.Format == tree.JSONLINE {
-		fieldsTerminatedBy = "\t"
-		fieldsEscapedBy = ""
-	}
-
-	config := csvparser.CSVConfig{
-		FieldsTerminatedBy: fieldsTerminatedBy,
-		FieldsEnclosedBy:   fieldsEnclosedBy,
-		FieldsEscapedBy:    fieldsEscapedBy,
-		LinesTerminatedBy:  linesTerminatedBy,
-		LinesStartingBy:    linesStartingBy,
-		NotNull:            false,
-		Null:               []string{`\N`},
-		UnescapedQuote:     true,
-		// Comment defaults to 0 (no comment marker): every line is data, matching
-		// MySQL LOAD DATA, which does not treat '#' lines as comments.
-		Comment: "",
-	}
-
-	if param.Format == tree.JSONLINE {
-		config.SkipWhitespaceRecords = true
-		config.Context = param.Ctx
-	}
-
-	return csvparser.NewCSVParser(&config, bufio.NewReader(reader), csvparser.ReadBlockSize, false)
+	return csvparser.NewCSVParser(CSVConfigForLoad(param), bufio.NewReader(reader), csvparser.ReadBlockSize, false)
 }
 
 func IgnoredLines(param *tree.ExternParam, ctx CompilerContext) (offset int64, err error) {
@@ -634,7 +584,7 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 	if err != nil {
 		return nil, err
 	}
-	if err := validateLoadSetAssignments(stmt.Param, ctx); err != nil {
+	if err := validateLoadSetAssignments(stmt.Param, ctx, tblInfo.tableDefs[0]); err != nil {
 		return nil, err
 	}
 	userVariableAssignments, err := loadUserVariableNullIfAssignments(stmt.Param, ctx)

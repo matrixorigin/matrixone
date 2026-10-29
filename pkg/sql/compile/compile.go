@@ -710,14 +710,12 @@ func (c *Compile) run(s *Scope) error {
 	return nil
 }
 
-// isRetryErr accepts transaction retries under RC and snapshot-coverage retries
-// under either isolation level. A coverage retry changes the access path, not
-// the transaction snapshot.
+// isRetryErr if the error is ErrTxnNeedRetry and the transaction is RC isolation, we need to retry t
+// he statement
 func (c *Compile) isRetryErr(err error) bool {
-	return moerr.IsMoErrCode(err, moerr.ErrVectorIndexSnapshotChanged) ||
-		(moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) ||
-			moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged)) &&
-			c.proc.GetTxnOperator().Txn().IsRCIsolation()
+	return (moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) ||
+		moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged)) &&
+		c.proc.GetTxnOperator().Txn().IsRCIsolation()
 }
 
 type scopeRunResult struct {
@@ -1402,6 +1400,9 @@ func (c *Compile) compileQuery(qry *plan.Query) ([]*Scope, error) {
 
 	c.execType = vectorQueryExecType(sequenceExecType(
 		plan2.GetExecType(c.pn.GetQuery(), c.getHaveDDL(), c.isPrepare), qry), qry)
+	if executor.RequiresLocalExecution(c.proc.Ctx) && c.execType == plan2.ExecTypeAP_MULTICN {
+		c.execType = plan2.ExecTypeAP_ONECN
+	}
 
 	c.cnList, err = c.scheduleQueryWorkers()
 	if err != nil {
@@ -2024,6 +2025,22 @@ func (c *Compile) compilePlanScopeWithUnionAllDemand(
 
 		c.setAnalyzeCurrent(ss, int(curNodeIdx))
 		ss = c.ensureCoordinatorOnlyFunctions(node, ss)
+		if plan2.IsSortRollupOption(node.ExtraOptions) {
+			// The child SORT performs the global k-way merge when the input is
+			// distributed, so the ordered rollup aggregate must run once on the
+			// resulting coordinator scope. A second aggregate stage would destroy
+			// the prefix-boundary invariant.
+			if len(ss) != 1 || ss[0].HasPartialResults {
+				return nil, moerr.NewInternalErrorNoCtx(
+					"sort rollup requires one non-partial ordered input scope")
+			}
+			if !c.scopesRunOnCoordinator(ss) {
+				ss = []*Scope{c.newMergeScope(ss)}
+			}
+			ss = c.compileTPGroup(node, ss, nodes)
+			ss = c.compileSort(node, c.compileProjection(node, c.compileRestrict(node, ss)))
+			return ss, nil
+		}
 		if c.canCompileShuffleGroup(node) {
 			ss = c.compileSort(node, c.compileProjection(node, c.compileRestrict(node, c.compileShuffleGroup(node, ss, nodes))))
 			return ss, nil
@@ -6493,6 +6510,7 @@ func canPreserveParallelUnionAllBranches(node *plan.Node) bool {
 
 func (c *Compile) canCompileParallelUnionAllAggregate(node *plan.Node) bool {
 	return !hasOrderedGroupConcat(node) && !hasOrderedSetPercentile(node) &&
+		!hasQuantileExactWeighted(node) &&
 		!c.hasUnsupportedRemoteGroupWire(node) &&
 		!plan2.RequiresSingleStageDistinctAgg(node)
 }
@@ -8205,6 +8223,7 @@ func (c *Compile) compileGroupWithoutShuffle(
 	distinctRequiresSingleStage bool,
 ) []*Scope {
 	if hasOrderedGroupConcat(node) || hasOrderedSetPercentile(node) ||
+		hasQuantileExactWeighted(node) ||
 		c.hasUnsupportedRemoteGroupWire(node) {
 		return c.compileOrderedAggregateSingleStage(node, ss, ns)
 	}
@@ -8222,14 +8241,18 @@ func (c *Compile) hasUnsupportedRemoteGroupWire(node *plan.Node) bool {
 		(hasVariableLengthGroupKey(node) && !c.supportsRemoteGroupHashString()) ||
 		(hasCanonicalDistinctKeyWire(node) && !c.supportsRemoteCanonicalDistinctKeyWire()) ||
 		(hasLegacyFloatDistinctKeyWire(node) && !c.supportsRemoteCanonicalDistinctKeyWire()) ||
-		(hasVarianceAggregate(node) && !c.supportsRemoteVarianceAggregates())
+		(hasVarianceAggregate(node) && !c.supportsRemoteVarianceAggregates()) ||
+		(hasQuantileExactWeighted(node) && !c.supportsQuantileExactWeightedDispatch())
 }
 
+// Local reduction may replace a complete child only when the parent establishes
+// its own distribution. A reuse consumer must preserve the complete child.
 func isLocalPreAggregationGroup(parent, child *plan.Node) bool {
 	if parent == nil || child == nil ||
 		parent.NodeType != plan.Node_AGG || child.NodeType != plan.Node_AGG ||
 		parent.Stats == nil || parent.Stats.HashmapStats == nil ||
 		!parent.Stats.HashmapStats.Shuffle ||
+		parent.Stats.HashmapStats.ShuffleMethod != plan.ShuffleMethod_Normal ||
 		len(parent.AggList) != 0 || len(child.AggList) != 0 ||
 		len(parent.GroupBy) == 0 || len(parent.GroupBy) != len(child.GroupBy) ||
 		len(parent.GroupingFlag) != 0 || len(child.GroupingFlag) != 0 ||
@@ -8338,7 +8361,6 @@ func (c *Compile) canOmitLocalPreAggregation(
 		local.ExtraOptions != "" || len(local.PhysicalEqualityKeyList) != 0 ||
 		input.Stats == nil || len(ss) == 0 ||
 		parent.Stats.Dop <= 1 || !c.canCompileShuffleGroup(parent) ||
-		parent.Stats.HashmapStats.ShuffleMethod != plan.ShuffleMethod_Normal ||
 		parent.Stats.HashmapStats.ShuffleColIdx != 0 {
 		return false
 	}
@@ -8485,6 +8507,21 @@ func hasOrderedSetPercentile(node *plan.Node) bool {
 			case plan2.NamePercentileCont, plan2.NamePercentileDisc:
 				return true
 			}
+		}
+	}
+	return false
+}
+
+// hasQuantileExactWeighted reports whether this aggregate node evaluates the
+// exact weighted percentile aggregate anywhere in its list.
+func hasQuantileExactWeighted(node *plan.Node) bool {
+	if node == nil {
+		return false
+	}
+	for _, agg := range node.AggList {
+		if fn := agg.GetF(); fn != nil &&
+			strings.EqualFold(fn.Func.ObjName, plan2.NameQuantileExactWeighted) {
+			return true
 		}
 	}
 	return false
@@ -9037,6 +9074,19 @@ func supportsRemoteStatementLastInsertID(service string) bool {
 	return ok && protocolVersion >= defines.MORPCVersion26
 }
 
+func supportsRemoteODKUResultTracking(service string) bool {
+	rt := moruntime.ServiceRuntime(service)
+	if rt == nil {
+		return false
+	}
+	version, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	if !ok {
+		return false
+	}
+	protocolVersion, ok := version.(int64)
+	return ok && protocolVersion >= defines.MORPCVersion134
+}
+
 func supportsRemoteAutoIncrementSessionOptions(service string) bool {
 	rt := moruntime.ServiceRuntime(service)
 	if rt == nil {
@@ -9146,6 +9196,7 @@ func (c *Compile) canCompileShuffleGroup(node *plan.Node) bool {
 		node.Stats.HashmapStats.Shuffle &&
 		(!hasOrderedGroupConcat(node) || c.supportsRemoteOrderedAggregates()) &&
 		(!hasOrderedSetPercentile(node) || c.supportsRemoteOrderedSetAggregates()) &&
+		(!hasQuantileExactWeighted(node) || c.supportsQuantileExactWeightedDispatch()) &&
 		(!hasApproxPercentile(node) || c.supportsRemoteApproxPercentile()) &&
 		(!hasHLLAggregate(node) || c.supportsRemoteHLL()) &&
 		(canonicalHLLAddRequiredVersion(node) <= c.remoteProtocolVersion()) &&
@@ -9153,7 +9204,38 @@ func (c *Compile) canCompileShuffleGroup(node *plan.Node) bool {
 		(!hasCanonicalDistinctKeyWire(node) || c.supportsRemoteCanonicalDistinctKeyWire()) &&
 		(!hasLegacyFloatDistinctKeyWire(node) || c.supportsRemoteCanonicalDistinctKeyWire()) &&
 		(!hasVarianceAggregate(node) || c.supportsRemoteVarianceAggregates()) &&
-		(!hasWidenedDecimalSum(node) || c.supportsRemoteWidenedDecimalSum())
+		(!hasWidenedDecimalSum(node) || c.supportsRemoteWidenedDecimalSum()) &&
+		(!hasJSONMinMaxAggregate(node) || c.remoteProtocolVersion() >=
+			requiredExpressionContractProtocolVersion(plan.RemoteExpressionFeatures{JSONMinMaxTypedComparison: true}))
+}
+
+// supportsQuantileExactWeightedDispatch is the compile-time fast-fail layer of
+// the design's D10 mixed-version gate: the exact weighted percentile aggregate
+// is distributed only when the coordinator AND every CN in the cluster
+// inventory advertise the protocol capability (an incomplete inventory counts
+// as unsupported). The destination is additionally verified by the
+// requiredProtocol floor raised during remote-scope encoding and confirmed on
+// the live stream before the pipeline is delivered.
+func (c *Compile) supportsQuantileExactWeightedDispatch() bool {
+	supported, err := AllCNsSupportProtocol(c.proc, defines.MORPCVersion131)
+	return err == nil && supported
+}
+
+// supportsRemoteQuantileExactWeighted supplies only the coordinator-side
+// self-gate and its coherent not-supported message; destination capability is
+// verified by AllCNsSupportProtocol, the encoded requiredProtocol floor and
+// the send-time stream confirmation.
+func supportsRemoteQuantileExactWeighted(service string) bool {
+	rt := moruntime.ServiceRuntime(service)
+	if rt == nil {
+		return false
+	}
+	version, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	if !ok {
+		return false
+	}
+	protocolVersion, ok := version.(int64)
+	return ok && protocolVersion >= defines.MORPCVersion131
 }
 
 func (c *Compile) compileLocalShuffleGroup(node *plan.Node, inputSS []*Scope, nodes []*plan.Node) []*Scope {
@@ -9270,6 +9352,14 @@ func (c *Compile) appendPrescopes(parents, children []*Scope, stageNodes engine.
 
 // compilePreInsert Compile PreInsert Node and set it as the root operator for each Scope.
 func (c *Compile) compilePreInsert(nodes []*plan.Node, node *plan.Node, ss []*Scope) ([]*Scope, error) {
+	// Assign row provenance at one input-stream boundary, before parallel
+	// deduplication. VALUES keeps its row-list order; ORDER BY has already
+	// produced a globally ordered stream. Unordered SELECT has no SQL-defined
+	// order. Merge streams batches with existing backpressure, not a row cache.
+	if node.PreInsertCtx != nil && node.PreInsertCtx.TrackOdkuResult && !c.scopesRunOnCoordinator(ss) {
+		ss = []*Scope{c.newMergeScope(ss)}
+		ss[0].NodeInfo.Mcpu = 1
+	}
 	currentFirstFlag := c.anal.isFirst
 	for i := range ss {
 		preInsertArg, err := constructPreInsert(c.anal.qry.Nodes, node, c.e, c.proc)

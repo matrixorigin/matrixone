@@ -26,9 +26,19 @@ import (
 
 func TestHnswHiddenTableTypes(t *testing.T) {
 	got := CatalogHooks{}.HiddenTableTypes()
-	require.Len(t, got, 2)
+	require.Len(t, got, 3)
 	require.Contains(t, got, catalog.Hnsw_TblType_Metadata)
 	require.Contains(t, got, catalog.Hnsw_TblType_Storage)
+	require.Contains(t, got, catalog.Hnsw_TblType_Dict)
+}
+
+func TestHnswNeedsDict(t *testing.T) {
+	for _, q := range []string{"int8", "UINT8"} {
+		require.True(t, NeedsDict(q), q)
+	}
+	for _, q := range []string{"", "float32", "float16", "bf16", "float64"} {
+		require.False(t, NeedsDict(q), q)
+	}
 }
 
 // TestHnswIsVectorIndex pins the vector-KIND capability (the counterpart of the

@@ -35,16 +35,6 @@ const (
 	ModuleName = "logstore"
 )
 
-// var buf []byte
-// func init() {
-// 	go http.ListenAndServe("0.0.0.0:6060", nil)
-// 	var bs bytes.Buffer
-// 	for i := 0; i < 3000; i++ {
-// 		bs.WriteString("helloyou")
-// 	}
-// 	buf = bs.Bytes()
-// }
-
 func newTestDriver(t *testing.T, size int) driver.Driver {
 	dir := testutils.InitTestEnv(ModuleName, t)
 	name := "test"
@@ -67,28 +57,10 @@ func restartTestDriver(t *testing.T, size int) driver.Driver {
 	return s
 }
 
-//	func newTestLogserviceDriver(t *testing.T) (driver.Driver, *logservice.Service) {
-//		fs := vfs.NewStrictMem()
-//		service, ccfg, err := logservice.NewTestService(fs)
-//		assert.NoError(t, err)
-//		cfg := logservicedriver.NewTestConfig(&ccfg)
-//		driver := logservicedriver.NewLogServiceDriver(cfg)
-//		return driver, service
-//	}
-
 // func TestAppendRead(t *testing.T) {
 // 	driver := newTestDriver(t, int(mpool.MB)*64)
 // 	wal := NewStore(driver)
 // 	defer wal.Close()
-
-// 	e := entry.GetBase()
-// 	e.SetType(entry.IOET_WALEntry_Test)
-// 	err := e.SetPayload([]byte("payload"))
-// 	if err != nil {
-// 		panic(err)
-// 	}
-// 	lsn, err := wal.Append(10, e)
-// 	assert.NoError(t, err)
 
 // 	err = e.WaitDone()
 // 	assert.NoError(t, err)
@@ -234,7 +206,7 @@ func TestTruncate(t *testing.T) {
 // 9. Restart => Check DSN and LSN and Checkpointed
 func TestReplayWithCheckpoint(t *testing.T) {
 	_, clientFactory := logservicedriver.NewMockServiceAndClientFactory()
-	wal := NewLogserviceHandle(clientFactory)
+	wal := NewLogserviceHandle(clientFactory, 0)
 	replayHandle := func(
 		group uint32,
 		commitId uint64,
@@ -353,7 +325,7 @@ func TestReplayWithCheckpoint(t *testing.T) {
 
 	wal.Close()
 
-	wal = NewLogserviceHandle(clientFactory)
+	wal = NewLogserviceHandle(clientFactory, 0)
 	defer wal.Close()
 
 	err = wal.Replay(context.Background(), replayHandle, modeGetter, nil)

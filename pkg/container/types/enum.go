@@ -15,6 +15,7 @@
 package types
 
 import (
+	"context"
 	"strconv"
 	"strings"
 
@@ -30,12 +31,17 @@ func ParseIntToEnum(input int64) (Enum, error) {
 
 // ParseEnum return item index with item name or value.
 func ParseEnum(enumStr string, name string) (Enum, error) {
-	value, truncated, err := ParseEnumAssignment(enumStr, name)
+	return ParseEnumWithContext(defaultParseContext, enumStr, name)
+}
+
+// ParseEnumWithContext parses with the caller's error reporting context.
+func ParseEnumWithContext(ctx context.Context, enumStr string, name string) (Enum, error) {
+	value, truncated, err := parseEnumAssignmentWithContext(ctx, enumStr, name)
 	if err != nil {
 		return 0, err
 	}
 	if truncated {
-		return 0, moerr.NewInternalErrorNoCtxf("convert to MySQL enum failed: item %s is not in enum %v", name, strings.Split(enumStr, ","))
+		return 0, moerr.NewInternalErrorf(parseErrorContext(ctx), "convert to MySQL enum failed: item %s is not in enum %v", name, strings.Split(enumStr, ","))
 	}
 	return value, nil
 }
@@ -43,20 +49,28 @@ func ParseEnum(enumStr string, name string) (Enum, error) {
 // ParseEnumAssignment separates recoverable value truncation from invalid
 // metadata. The caller owns SQL-mode policy and diagnostics.
 func ParseEnumAssignment(enumStr, name string) (Enum, bool, error) {
+	return parseEnumAssignmentWithContext(defaultParseContext, enumStr, name)
+}
+
+func parseEnumAssignmentWithContext(ctx context.Context, enumStr, name string) (Enum, bool, error) {
 	elems := strings.Split(enumStr, ",")
-	enumName, err := parseEnumName(elems, name)
+	enumName, err := parseEnumNameWithContext(ctx, elems, name)
 	if err != nil {
 		return 0, false, err
 	}
 	if enumName != 0 {
 		return enumName, false, nil
 	}
-	return ParseEnumNumericText(name, len(elems))
+	return parseEnumNumericTextWithContext(ctx, name, len(elems))
 }
 
 func validateEnumMemberCount(count int) error {
+	return validateEnumMemberCountWithContext(defaultParseContext, count)
+}
+
+func validateEnumMemberCountWithContext(ctx context.Context, count int) error {
 	if count < 1 || count > MaxEnumLen {
-		return moerr.NewInvalidInputNoCtxf("invalid enum member count %d", count)
+		return moerr.NewInvalidInputf(parseErrorContext(ctx), "invalid enum member count %d", count)
 	}
 	return nil
 }
@@ -77,7 +91,11 @@ func ParseEnumNumberAssignment(enumStr string, number uint64) (Enum, bool, error
 // ParseEnumNumericText is shared with indexed label lookup. MySQL only tries
 // decimal ordinal fallback for at most five bytes after removing end spaces.
 func ParseEnumNumericText(input string, memberCount int) (Enum, bool, error) {
-	if err := validateEnumMemberCount(memberCount); err != nil {
+	return parseEnumNumericTextWithContext(defaultParseContext, input, memberCount)
+}
+
+func parseEnumNumericTextWithContext(ctx context.Context, input string, memberCount int) (Enum, bool, error) {
+	if err := validateEnumMemberCountWithContext(ctx, memberCount); err != nil {
 		return 0, false, err
 	}
 	input = strings.TrimRight(input, " ")
@@ -126,7 +144,11 @@ func ParseEnumName(enumStr string, name string) (Enum, error) {
 	return parseEnumName(elems, name)
 }
 func parseEnumName(elems []string, name string) (Enum, error) {
-	if err := validateEnumMemberCount(len(elems)); err != nil {
+	return parseEnumNameWithContext(defaultParseContext, elems, name)
+}
+
+func parseEnumNameWithContext(ctx context.Context, elems []string, name string) (Enum, error) {
+	if err := validateEnumMemberCountWithContext(ctx, len(elems)); err != nil {
 		return 0, err
 	}
 	// Preserve raw padded labels in existing MO definitions before trying the

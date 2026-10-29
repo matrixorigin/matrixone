@@ -111,7 +111,7 @@ func Open(
 
 	logutil.Info(Phase_Open + "-open-wal-start")
 	if opts.WalClientFactory != nil {
-		db.Wal = wal.NewLogserviceHandle(opts.WalClientFactory)
+		db.Wal = wal.NewLogserviceHandle(opts.WalClientFactory, opts.MaxWALRecordSize)
 	} else {
 		db.Wal = wal.NewLocalHandle(dirname, WALDir, nil)
 	}
@@ -160,18 +160,6 @@ func Open(
 
 	return
 }
-
-// TODO: remove it
-// func checkObjectState(db *DB) {
-// 	p := &catalog.LoopProcessor{}
-// 	p.ObjectFn = func(oe *catalog.ObjectEntry) error {
-// 		if oe.IsAppendable() == oe.IsSorted() {
-// 			panic(fmt.Sprintf("logic err %v", oe.ID.String()))
-// 		}
-// 		return nil
-// 	}
-// 	db.Catalog.RecurLoop(p)
-// }
 
 func mpoolAllocatorSubTask() {
 	v2.MemTAEDefaultAllocatorGauge.Set(float64(common.DefaultAllocator.CurrNB()))

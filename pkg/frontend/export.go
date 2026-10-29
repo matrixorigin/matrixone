@@ -49,6 +49,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	planfunction "github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/sql/util/csvparser"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -63,6 +64,12 @@ type ExportConfig struct {
 	FileCnt     uint
 	ColumnFlag  []bool
 	Symbol      [][]byte
+
+	// Audit totals contain only files confirmed by the existing sink boundary.
+	auditEnabled         bool
+	auditBytesWritten    uint64
+	auditRowsWritten     uint64
+	parquetConfirmedRows uint64
 	// default flush size
 	DefaultBufSize int64
 
@@ -87,6 +94,17 @@ type ExportConfig struct {
 	stopFileCancel  func() bool
 	fileCancelDone  chan struct{}
 	ownsFileService bool
+	// simPool recycles the LOAD-replay simulators between concurrent
+	// conversion workers (see csvEmissionSimulator).
+	simPool sync.Pool
+	// Framing is immutable for a statement, including across file rotation.
+	// All non-final columns share the field terminator; the final column uses
+	// the record terminator. Validate NULL lazily once for each, not per row.
+	nullEmission [2]struct {
+		once   sync.Once
+		quoted bool
+		err    error
+	}
 }
 
 type writeParam struct {
@@ -156,6 +174,9 @@ func initExportFileParam(ep *ExportConfig, mrs *MysqlResultSet) {
 
 var openNewFile = func(ctx context.Context, ep *ExportConfig, mrs *MysqlResultSet) error {
 	if err := ep.validateCSVFraming(ctx); err != nil {
+		return err
+	}
+	if err := validateOutfileHeaderPrefix(ctx, ep, mrs); err != nil {
 		return err
 	}
 	var err error
@@ -275,7 +296,192 @@ func getExportFilePath(filename string, fileCnt uint) string {
 	return fmt.Sprintf("%s.%d", filename, fileCnt)
 }
 
-var formatOutputString = func(oq *ExportConfig, tmp, symbol []byte, enclosed byte, flag bool, buffer *bytes.Buffer) error {
+// checkCSVValueRoundTrip rejects the value shapes LOAD can no longer tell
+// apart from framing once the escape byte is not the historical backslash:
+//
+//   - A field of exactly `\N` matches LOAD's NULL token list (always ['\N'])
+//     after unescaping, even inside quotes (quotedNullIsText is false), so a
+//     literal \N string would silently come back as SQL NULL whenever
+//     FIELDS ESCAPED BY is set to a custom or empty byte.
+//   - LOAD's unescape translates the second byte of an escape pair from a
+//     fixed letter table ({'0','b','n','r','t','Z'} -> control character,
+//     everything else literal), whatever the configured escape byte is. When
+//     the escape byte itself is one of those letters, the writer's doubling
+//     (e.g. 'banana' with ESCAPED BY 'n' -> 'bannanna') decodes to a control
+//     character instead of the letter: no encoding of such a value exists,
+//     so it must be rejected. 'N' is exempt here (N+N stays literal N); it
+//     breaks only the NULL marker, which formatOutputNull guards.
+//   - With escaping disabled, the reader strips a trailing CR from the last
+//     column's record when its (CRLF-normalized) terminator is '\n'
+//     (csv_parser.go). That strip runs on the record buffer AFTER quotes are
+//     removed, so an enclosure does not protect the CR; only an escape byte
+//     (which rewrites it to a two-byte sequence the reader translates back)
+//     does. Other terminators never trigger the strip.
+//
+// All three checks make the export produce either a file that reads back
+// exactly or an upfront error — never silent corruption.
+func checkCSVValueRoundTrip(oq *ExportConfig, tmp []byte, last bool) error {
+	esc := oq.escapeChar()
+	if esc != '\\' {
+		if bytes.Equal(tmp, []byte(`\N`)) {
+			return moerr.NewNotSupported(oq.ctx,
+				"select into outfile (csv): a value of exactly \\N cannot round-trip unless FIELDS ESCAPED BY is the default '\\\\'")
+		}
+		if isAmbiguousCSVEscape(esc) && esc != 'N' && bytes.IndexByte(tmp, esc) >= 0 {
+			return moerr.NewNotSupportedf(oq.ctx,
+				"select into outfile (csv): a value containing '%c' cannot round-trip with FIELDS ESCAPED BY '%c': LOAD translates the doubled escape back to a control character", esc, esc)
+		}
+	}
+	if last && esc == 0 && oq.readerStripsTrailingCR() && bytes.HasSuffix(tmp, []byte{'\r'}) {
+		return moerr.NewNotSupported(oq.ctx,
+			"select into outfile (csv): with FIELDS ESCAPED BY '' a value ending in CR in the last column cannot round-trip")
+	}
+	return nil
+}
+
+// csvNormalizedRecordTerm returns LOAD's normalized record terminator for
+// simulation: the configured value, with CRLF collapsed the way csvparser
+// normalizes it and empty/default falling back to LF.
+func (ec *ExportConfig) csvNormalizedRecordTerm() []byte {
+	term := "\n"
+	if l := ec.userConfig.Lines; l != nil && l.TerminatedBy != nil && l.TerminatedBy.Value != "" {
+		term = l.TerminatedBy.Value
+	}
+	if term == "\r\n" {
+		term = "\n"
+	}
+	return []byte(term)
+}
+
+// csvEmissionConfig shares LOAD's authoritative clause/default mapping.
+// Only the line-prefix filter is disabled: simulation starts at a field in
+// an already-admitted record, not at a physical line containing the prefix.
+func (ec *ExportConfig) csvEmissionConfig() *csvparser.CSVConfig {
+	cfg := external.CSVConfigForLoad(&tree.ExternParam{Tail: &tree.TailParameter{
+		Fields: ec.userConfig.Fields,
+		Lines:  ec.userConfig.Lines,
+	}})
+	cfg.LinesStartingBy = ""
+	return cfg
+}
+
+// csvEmissionSimulator wraps a reusable csvparser so the per-field emission
+// check costs a buffer refill instead of a fresh parser: NewCSVParser
+// allocates a 320 KiB block buffer and compiles the escape regexp, which per
+// cell dominated the formatter (~26 µs and ~330 KB of garbage per value at
+// review time). CSVParser.Reset re-points a parser at a new stream and
+// clears all buffered state (csvparser-sanctioned reuse, no cross-input
+// bleed), so one simulator serves every cell of the statement; concurrent
+// conversion workers share instances through ExportConfig.simPool.
+type csvEmissionSimulator struct {
+	parser  *csvparser.CSVParser
+	err     error
+	rd      bytes.Reader
+	scratch []byte
+	row     []csvparser.Field
+}
+
+// acquireEmissionSimulator returns a pooled simulator or constructs one.
+// Construction is intentionally error-recording instead of error-returning:
+// the emit path must treat an unconstructable parser the same as a failed
+// replay — fail closed.
+func (ec *ExportConfig) acquireEmissionSimulator() *csvEmissionSimulator {
+	if sim, ok := ec.simPool.Get().(*csvEmissionSimulator); ok && sim != nil {
+		return sim
+	}
+	sim := &csvEmissionSimulator{}
+	sim.parser, sim.err = csvparser.NewCSVParser(ec.csvEmissionConfig(), &sim.rd, csvparser.ReadBlockSize, false)
+	return sim
+}
+
+// csvFieldEmissionParses replays a fully emitted CSV field and its actual
+// following boundary through LOAD's parser. A non-final field also includes an
+// empty following-field witness: delimiters can overlap the field's suffix
+// even when they do not occur inside the field alone. Require exactly the
+// expected field(s) and one record — the ground-truth check for configurations where
+// the writer cannot statically tell whether the encoded bytes survive
+// csvparser's enclosure/escape scan (its behavior differs between backslash
+// and other enclosure==escape bytes, per generated payload letter). With
+// wantNull the field must read back as SQL NULL; otherwise it must read
+// back byte-identical to want. A simulator that errors mid-scan is dropped
+// rather than returned to the pool.
+func (ec *ExportConfig) csvFieldEmissionParses(field, boundary []byte, last bool, want []byte, wantNull bool) bool {
+	sim := ec.acquireEmissionSimulator()
+	if sim.err != nil {
+		// Defensive: validateCSVFraming rejects the operator-visible
+		// misconfigurations (CR/LF/quote/NUL/invalid field delimiters) before
+		// export starts, so construction cannot fail here. Any residual
+		// failure still fails closed.
+		return false
+	}
+	sim.scratch = append(sim.scratch[:0], field...)
+	sim.scratch = append(sim.scratch, boundary...)
+	fields := 1
+	if !last {
+		sim.scratch = append(sim.scratch, ec.csvNormalizedRecordTerm()...)
+		fields = 2
+	}
+	sim.rd.Reset(sim.scratch)
+	sim.parser.Reset(&sim.rd)
+	sim.row = sim.row[:0]
+	row, err := sim.parser.Read(sim.row)
+	if err != nil || len(row) != fields {
+		return false
+	}
+	sim.row = row
+	if !last && (row[1].IsNull || row[1].Val != "") {
+		return false
+	}
+	if wantNull {
+		if !row[0].IsNull {
+			return false
+		}
+	} else if row[0].IsNull || row[0].Val != string(want) {
+		return false
+	}
+	if _, err = sim.parser.Read(sim.row[:0]); err != io.EOF {
+		return false
+	}
+	ec.simPool.Put(sim)
+	return true
+}
+
+// readerStripsTrailingCR reports whether LOAD's parser drops a record's
+// trailing CR for this configuration. The parser compares its COMPLETE
+// normalized line terminator with LF (only "\r\n" normalizes), so a
+// multi-byte terminator like '\n|' disables the strip even though its
+// first byte is LF (csv_parser.go terminator normalization, record CR
+// strip).
+func (ec *ExportConfig) readerStripsTrailingCR() bool {
+	term := "\n"
+	if l := ec.userConfig.Lines; l != nil && l.TerminatedBy != nil {
+		term = l.TerminatedBy.Value
+	}
+	if term == "\r\n" {
+		term = "\n"
+	}
+	return term == "\n"
+}
+
+// readerRecognizesNewlineBoundaries reports whether LOAD's parser treats CR
+// and LF as record boundaries for this configuration: whenever its
+// normalized terminator is empty or exactly LF (csvparser tryReadNewLine
+// accepts both bytes in those modes regardless of ESCAPED BY).
+func (ec *ExportConfig) readerRecognizesNewlineBoundaries() bool {
+	term := "\n"
+	if l := ec.userConfig.Lines; l != nil && l.TerminatedBy != nil {
+		term = l.TerminatedBy.Value
+	}
+	if term == "\r\n" {
+		term = "\n"
+	}
+	return term == "" || term == "\n"
+}
+
+var formatOutputString = func(oq *ExportConfig, tmp, symbol []byte, enclosed byte, flag bool, last bool, buffer *bytes.Buffer) error {
+	if err := checkCSVValueRoundTrip(oq, tmp, last); err != nil {
+		return err
+	}
 	if !flag && enclosed != 0 && oq.escapeChar() != 0 {
 		field, line, _, _ := oq.csvBoundaryBytes()
 		// LOAD translates \n, \0, etc., and recognizes \N as NULL. An
@@ -291,24 +497,98 @@ var formatOutputString = func(oq *ExportConfig, tmp, symbol []byte, enclosed byt
 			(isAmbiguousCSVEscape(field) && bytes.IndexByte(tmp, field) >= 0) ||
 			(isAmbiguousCSVEscape(line) && bytes.IndexByte(tmp, line) >= 0) ||
 			(isAmbiguousCSVEscape(enclosed) && bytes.IndexByte(tmp, enclosed) >= 0)
+		// A CR or LF escape byte can never protect a bare field: LOAD
+		// consumes newline bytes as record boundaries before decoding
+		// escapes whenever its normalized terminator is a newline, so an
+		// escaped byte lands after the record the escape byte itself just
+		// ended. Enclose a value whose bare encoding contains the escape
+		// byte — including BIT and other binary values whose callers pass
+		// quote=false, which the ambiguity checks above never reach.
+		if esc := oq.escapeChar(); !flag && (esc == '\r' || esc == '\n') && oq.readerRecognizesNewlineBoundaries() {
+			flag = bytes.IndexByte(addEscapeToString(oq, tmp, 0), esc) >= 0
+		}
 	}
 	quote := byte(0)
 	if flag {
 		quote = enclosed
 	}
-	return formatOutputStringRaw(oq, addEscapeToString(oq, tmp, quote), symbol, enclosed, flag, buffer)
+	encoded := addEscapeToString(oq, tmp, quote)
+	// ENCLOSED BY equal to ESCAPED BY leaves no static rule for whether the
+	// encoded bytes survive LOAD's enclosure scan: generated escape payloads
+	// are read as enclosure opens/closes for non-backslash bytes, while some
+	// backslash payloads parse. Replay the emitted field through the parser
+	// and reject what does not come back byte-identical.
+	if enclosed != 0 && enclosed == oq.escapeChar() {
+		emitted := encoded
+		if flag {
+			emitted = append(append([]byte{enclosed}, encoded...), enclosed)
+		}
+		if !oq.csvFieldEmissionParses(emitted, symbol, last, tmp, false) {
+			return moerr.NewNotSupportedf(oq.ctx,
+				"select into outfile (csv): a value cannot round-trip when ENCLOSED BY and ESCAPED BY are the same character '%c': its encoded form breaks LOAD's field scan", enclosed)
+		}
+	}
+	return formatOutputStringRaw(oq, encoded, symbol, enclosed, flag, buffer)
 }
 
 // NULL bypasses value escaping, but still needs enclosure when the escape
 // prefix would otherwise become a separator or opening enclosure. Keep this
 // check off the ordinary non-NULL raw writer path.
-func formatOutputNull(oq *ExportConfig, symbol []byte, enclosed byte, buffer *bytes.Buffer) error {
-	flag := false
-	if enclosed != 0 && oq.escapeChar() != 0 {
-		field, line, _, _ := oq.csvBoundaryBytes()
-		flag = enclosed == oq.escapeChar() || field == oq.escapeChar() || line == oq.escapeChar()
+func formatOutputNull(oq *ExportConfig, symbol []byte, enclosed byte, last bool, buffer *bytes.Buffer) error {
+	boundary := 0
+	if last {
+		boundary = 1
 	}
-	return formatOutputStringRaw(oq, []byte{'\\', 'N'}, symbol, enclosed, flag, buffer)
+	check := &oq.nullEmission[boundary]
+	check.once.Do(func() {
+		check.quoted, check.err = oq.checkNullEmission(symbol, enclosed, last)
+	})
+	if check.err != nil {
+		return check.err
+	}
+	return formatOutputStringRaw(oq, []byte{'\\', 'N'}, symbol, enclosed, check.quoted, buffer)
+}
+
+// checkNullEmission depends only on statement framing and the actual following
+// boundary. Call it only on first encountering NULL at that boundary: unsafe
+// NULL framing must not reject a statement which exports no NULLs.
+func (ec *ExportConfig) checkNullEmission(symbol []byte, enclosed byte, last bool) (bool, error) {
+	// The NULL marker always ends in 'N'. With FIELDS ESCAPED BY 'N' the
+	// reader consumes the byte after the marker (separator or terminator)
+	// as escape content, merging fields/records — no safe encoding exists,
+	// so reject before writing a corrupt file.
+	if ec.escapeChar() == 'N' {
+		return false, moerr.NewNotSupported(ec.ctx,
+			"select into outfile (csv): a NULL value cannot round-trip with FIELDS ESCAPED BY 'N'")
+	}
+	flag := false
+	if enclosed != 0 && ec.escapeChar() != 0 {
+		field, line, _, _ := ec.csvBoundaryBytes()
+		flag = enclosed == ec.escapeChar() || field == ec.escapeChar() || line == ec.escapeChar()
+	}
+	// The marker always starts with a literal backslash and ends in N.
+	// Those bytes can collide with the enclosure, with a field or record
+	// terminator, or with the escape byte — a field terminator of N splits
+	// the raw marker into two non-NULL fields on LOAD. Which collisions
+	// the field scan survives is parser-behavior, not static, so replay
+	// the marker exactly as emitted (wrapped or raw) against the loader's
+	// full clause set and reject any framing where it does not read back
+	// as a clean SQL NULL. Enclosure-collision rejections keep their
+	// precise diagnostic; all other framings get the general one.
+	marker := []byte{'\\', 'N'}
+	emitted := marker
+	if flag {
+		emitted = append(append([]byte{enclosed}, marker...), enclosed)
+	}
+	if !ec.csvFieldEmissionParses(emitted, symbol, last, nil, true) {
+		if enclosed != 0 && (enclosed == '\\' || enclosed == 'N' || enclosed == ec.escapeChar()) {
+			return false, moerr.NewNotSupportedf(ec.ctx,
+				"select into outfile (csv): a NULL value cannot round-trip with ENCLOSED BY '%c': the emitted \\N marker breaks LOAD's field scan", enclosed)
+		}
+		return false, moerr.NewNotSupported(ec.ctx,
+			"select into outfile (csv): a NULL value cannot round-trip with this CSV framing: the emitted \\N marker breaks LOAD's field scan")
+	}
+	return flag, nil
 }
 
 // formatOutputStringRaw is also used for the genuine NULL marker. All non-NULL
@@ -354,6 +634,8 @@ func exportCleanupError(primary, cleanup error) error {
 
 func (ec *ExportConfig) closeFile(cause error) error {
 	var err error
+	fileActive := ec.AsyncWriter != nil || ec.AsyncGroup != nil
+	fileBytes, fileRows := ec.CurFileSize, ec.Rows
 	if ec.AsyncWriter != nil {
 		if cause != nil {
 			err = ec.AsyncWriter.CloseWithError(cause)
@@ -375,6 +657,11 @@ func (ec *ExportConfig) closeFile(cause error) error {
 	}
 	if ec.ownsFileService && ec.FileService != nil {
 		ec.FileService.Close(context.Background())
+	}
+	if cause == nil && err == nil && fileActive {
+		if auditErr := ec.addOutfileAuditTotals(fileBytes, fileRows); auditErr != nil {
+			err = auditErr
+		}
 	}
 	ec.AsyncReader, ec.AsyncWriter, ec.AsyncGroup = nil, nil, nil
 	ec.stopFileCancel, ec.fileCancelDone = nil, nil
@@ -433,8 +720,22 @@ func exceedsFileSize(currentSize, additionalSize, maxSize uint64) bool {
 }
 
 func writeExportBatchToFile(ep *ExportConfig, batch *BatchByte) error {
+	if ep.auditEnabled && batch.rowCount < 0 {
+		return moerr.NewInternalErrorNoCtx("outfile audit row count is negative")
+	}
 	if ep.getExportFormat() != "csv" {
-		return writeToCSVFile(ep, batch.writeByte)
+		if ep.getExportFormat() == "jsonline" && ep.auditEnabled {
+			if ^uint64(0)-ep.Rows < uint64(batch.rowCount) {
+				return moerr.NewInternalErrorNoCtx("outfile audit row count overflow")
+			}
+		}
+		if err := writeToCSVFile(ep, batch.writeByte); err != nil {
+			return err
+		}
+		if ep.getExportFormat() == "jsonline" && ep.auditEnabled {
+			ep.Rows += uint64(batch.rowCount)
+		}
+		return nil
 	}
 	if batch.rowCount == 0 {
 		return nil
@@ -442,6 +743,9 @@ func writeExportBatchToFile(ep *ExportConfig, batch *BatchByte) error {
 
 	maxSize := getEffectiveMaxFileSize(ep)
 	if maxSize == 0 {
+		if ep.auditEnabled && ^uint64(0)-ep.Rows < uint64(batch.rowCount) {
+			return moerr.NewInternalErrorNoCtx("outfile audit row count overflow")
+		}
 		if err := writeToCSVFile(ep, batch.writeByte); err != nil {
 			return err
 		}
@@ -453,6 +757,9 @@ func writeExportBatchToFile(ep *ExportConfig, batch *BatchByte) error {
 	flushChunk := func() error {
 		if chunkRows == 0 {
 			return nil
+		}
+		if ep.auditEnabled && ^uint64(0)-ep.Rows < uint64(chunkRows) {
+			return moerr.NewInternalErrorNoCtx("outfile audit row count overflow")
 		}
 		if err := writeToCSVFile(ep, batch.writeByte[chunkStart:chunkEnd]); err != nil {
 			return err
@@ -485,6 +792,9 @@ func writeExportBatchToFile(ep *ExportConfig, batch *BatchByte) error {
 }
 
 var writeDataToCSVFile = func(ep *ExportConfig, output []byte) error {
+	if ep.auditEnabled && ^uint64(0)-ep.CurFileSize < uint64(len(output)) {
+		return moerr.NewInternalErrorNoCtx("outfile audit file byte count overflow")
+	}
 
 	for {
 		if n, err := Write(ep, output); err != nil {
@@ -571,7 +881,26 @@ func constructByte(ctx context.Context, obj FeSession, bat *batch.Batch, index i
 	closeby := ep.userConfig.Fields.EnclosedBy.Value
 	flag := ep.ColumnFlag
 
+	// LINES STARTING BY prefixes every data record (and only data records:
+	// the CSV header stays unprefixed so the reader's startingBy line filter
+	// skips it, mirroring the externalwrite writer and LOAD's readRecord).
+	var startingBy []byte
+	if l := ep.userConfig.Lines; l != nil && l.StartingBy != "" {
+		startingBy = []byte(l.StartingBy)
+	}
+
 	buffer := &bytes.Buffer{}
+
+	// formatOutputString can now reject a value LOAD would no longer read
+	// back losslessly; record the first failure and abort the batch on it
+	// instead of writing a corrupt file.
+	var fmtErr error
+	out := func(tmp, sym []byte, enclosed byte, quote bool, last bool) {
+		if fmtErr != nil {
+			return
+		}
+		fmtErr = formatOutputString(ep, tmp, sym, enclosed, quote, last, buffer)
+	}
 
 	rowCount := bat.RowCount()
 	var rowEnds []int
@@ -579,22 +908,27 @@ func constructByte(ctx context.Context, obj FeSession, bat *batch.Batch, index i
 		rowEnds = make([]int, 0, rowCount)
 	}
 	for i := 0; i < rowCount; i++ {
+		if len(startingBy) > 0 {
+			buffer.Write(startingBy)
+		}
 		for j, vec := range bat.Vecs {
 			if vec.GetNulls().Contains(uint64(i)) {
-				formatOutputNull(ep, symbol[j], closeby, buffer)
+				if fmtErr == nil {
+					fmtErr = formatOutputNull(ep, symbol[j], closeby, j == len(bat.Vecs)-1, buffer)
+				}
 				continue
 			}
 			switch vec.GetType().Oid { //get col
 			case types.T_json:
 				val := types.DecodeJson(vec.GetBytesAt(i))
 				value := []byte(val.String())
-				formatOutputString(ep, value, symbol[j], closeby, true, buffer)
+				out(value, symbol[j], closeby, true, j == len(bat.Vecs)-1)
 			case types.T_bool:
 				val := vector.GetFixedAtNoTypeCheck[bool](vec, i)
 				if val {
-					formatOutputString(ep, []byte("true"), symbol[j], closeby, flag[j], buffer)
+					out([]byte("true"), symbol[j], closeby, flag[j], j == len(bat.Vecs)-1)
 				} else {
-					formatOutputString(ep, []byte("false"), symbol[j], closeby, flag[j], buffer)
+					out([]byte("false"), symbol[j], closeby, flag[j], j == len(bat.Vecs)-1)
 				}
 			case types.T_bit:
 				val := vector.GetFixedAtNoTypeCheck[uint64](vec, i)
@@ -602,48 +936,48 @@ func constructByte(ctx context.Context, obj FeSession, bat *batch.Batch, index i
 				byteLength := (bitLength + 7) / 8
 				b := types.EncodeUint64(&val)[:byteLength]
 				slices.Reverse(b)
-				formatOutputString(ep, b, symbol[j], closeby, flag[j], buffer)
+				out(b, symbol[j], closeby, flag[j], j == len(bat.Vecs)-1)
 			case types.T_int8:
 				val := vector.GetFixedAtNoTypeCheck[int8](vec, i)
-				formatOutputString(ep, []byte(strconv.FormatInt(int64(val), 10)), symbol[j], closeby, flag[j], buffer)
+				out([]byte(strconv.FormatInt(int64(val), 10)), symbol[j], closeby, flag[j], j == len(bat.Vecs)-1)
 			case types.T_int16:
 				val := vector.GetFixedAtNoTypeCheck[int16](vec, i)
-				formatOutputString(ep, []byte(strconv.FormatInt(int64(val), 10)), symbol[j], closeby, flag[j], buffer)
+				out([]byte(strconv.FormatInt(int64(val), 10)), symbol[j], closeby, flag[j], j == len(bat.Vecs)-1)
 			case types.T_int32:
 				val := vector.GetFixedAtNoTypeCheck[int32](vec, i)
-				formatOutputString(ep, []byte(strconv.FormatInt(int64(val), 10)), symbol[j], closeby, flag[j], buffer)
+				out([]byte(strconv.FormatInt(int64(val), 10)), symbol[j], closeby, flag[j], j == len(bat.Vecs)-1)
 			case types.T_int64:
 				val := vector.GetFixedAtNoTypeCheck[int64](vec, i)
-				formatOutputString(ep, []byte(strconv.FormatInt(int64(val), 10)), symbol[j], closeby, flag[j], buffer)
+				out([]byte(strconv.FormatInt(int64(val), 10)), symbol[j], closeby, flag[j], j == len(bat.Vecs)-1)
 			case types.T_uint8:
 				val := vector.GetFixedAtNoTypeCheck[uint8](vec, i)
-				formatOutputString(ep, []byte(strconv.FormatUint(uint64(val), 10)), symbol[j], closeby, flag[j], buffer)
+				out([]byte(strconv.FormatUint(uint64(val), 10)), symbol[j], closeby, flag[j], j == len(bat.Vecs)-1)
 			case types.T_uint16:
 				val := vector.GetFixedAtNoTypeCheck[uint16](vec, i)
-				formatOutputString(ep, []byte(strconv.FormatUint(uint64(val), 10)), symbol[j], closeby, flag[j], buffer)
+				out([]byte(strconv.FormatUint(uint64(val), 10)), symbol[j], closeby, flag[j], j == len(bat.Vecs)-1)
 			case types.T_uint32:
 				val := vector.GetFixedAtNoTypeCheck[uint32](vec, i)
-				formatOutputString(ep, []byte(strconv.FormatUint(uint64(val), 10)), symbol[j], closeby, flag[j], buffer)
+				out([]byte(strconv.FormatUint(uint64(val), 10)), symbol[j], closeby, flag[j], j == len(bat.Vecs)-1)
 			case types.T_uint64:
 				val := vector.GetFixedAtNoTypeCheck[uint64](vec, i)
-				formatOutputString(ep, []byte(strconv.FormatUint(uint64(val), 10)), symbol[j], closeby, flag[j], buffer)
+				out([]byte(strconv.FormatUint(uint64(val), 10)), symbol[j], closeby, flag[j], j == len(bat.Vecs)-1)
 			case types.T_float32:
 				val := vector.GetFixedAtNoTypeCheck[float32](vec, i)
 				if vec.GetType().Scale < 0 || vec.GetType().Width == 0 {
-					formatOutputString(ep, []byte(strconv.FormatFloat(float64(val), 'f', -1, 32)), symbol[j], closeby, flag[j], buffer)
+					out([]byte(strconv.FormatFloat(float64(val), 'f', -1, 32)), symbol[j], closeby, flag[j], j == len(bat.Vecs)-1)
 				} else {
-					formatOutputString(ep, []byte(strconv.FormatFloat(float64(val), 'f', int(vec.GetType().Scale), 64)), symbol[j], closeby, flag[j], buffer)
+					out([]byte(strconv.FormatFloat(float64(val), 'f', int(vec.GetType().Scale), 64)), symbol[j], closeby, flag[j], j == len(bat.Vecs)-1)
 				}
 			case types.T_float64:
 				val := vector.GetFixedAtNoTypeCheck[float64](vec, i)
 				if vec.GetType().Scale < 0 || vec.GetType().Width == 0 {
-					formatOutputString(ep, []byte(strconv.FormatFloat(val, 'f', -1, 64)), symbol[j], closeby, flag[j], buffer)
+					out([]byte(strconv.FormatFloat(val, 'f', -1, 64)), symbol[j], closeby, flag[j], j == len(bat.Vecs)-1)
 				} else {
-					formatOutputString(ep, []byte(strconv.FormatFloat(float64(val), 'f', int(vec.GetType().Scale), 64)), symbol[j], closeby, flag[j], buffer)
+					out([]byte(strconv.FormatFloat(float64(val), 'f', int(vec.GetType().Scale), 64)), symbol[j], closeby, flag[j], j == len(bat.Vecs)-1)
 				}
 			case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary, types.T_datalink:
 				value := vec.GetBytesAt(i)
-				formatOutputString(ep, value, symbol[j], closeby, true, buffer)
+				out(value, symbol[j], closeby, true, j == len(bat.Vecs)-1)
 			case types.T_geometry, types.T_geometry32:
 				text, err := planfunction.GeometryPayloadToText(vec.GetBytesAt(i))
 				if err != nil {
@@ -651,44 +985,44 @@ func constructByte(ctx context.Context, obj FeSession, bat *batch.Batch, index i
 					return
 				}
 				value := []byte(text)
-				formatOutputString(ep, value, symbol[j], closeby, true, buffer)
+				out(value, symbol[j], closeby, true, j == len(bat.Vecs)-1)
 			case types.T_array_float32:
 				arrStr := types.BytesToArrayToString[float32](vec.GetBytesAt(i))
 				value := util2.UnsafeStringToBytes(arrStr)
-				formatOutputString(ep, value, symbol[j], closeby, true, buffer)
+				out(value, symbol[j], closeby, true, j == len(bat.Vecs)-1)
 			case types.T_array_float64:
 				arrStr := types.BytesToArrayToString[float64](vec.GetBytesAt(i))
 				value := util2.UnsafeStringToBytes(arrStr)
-				formatOutputString(ep, value, symbol[j], closeby, true, buffer)
+				out(value, symbol[j], closeby, true, j == len(bat.Vecs)-1)
 			case types.T_array_bf16:
 				arrStr := types.BytesToArrayToString[types.BF16](vec.GetBytesAt(i))
 				value := util2.UnsafeStringToBytes(arrStr)
-				formatOutputString(ep, value, symbol[j], closeby, true, buffer)
+				out(value, symbol[j], closeby, true, j == len(bat.Vecs)-1)
 			case types.T_array_float16:
 				arrStr := types.BytesToArrayToString[types.Float16](vec.GetBytesAt(i))
 				value := util2.UnsafeStringToBytes(arrStr)
-				formatOutputString(ep, value, symbol[j], closeby, true, buffer)
+				out(value, symbol[j], closeby, true, j == len(bat.Vecs)-1)
 			case types.T_array_int8:
 				arrStr := types.BytesToArrayToString[int8](vec.GetBytesAt(i))
 				value := util2.UnsafeStringToBytes(arrStr)
-				formatOutputString(ep, value, symbol[j], closeby, true, buffer)
+				out(value, symbol[j], closeby, true, j == len(bat.Vecs)-1)
 			case types.T_array_uint8:
 				// []uint8 aliases []byte; BytesToArrayToString[uint8] renders the values
 				// as an array string ("[1, 2, 3]"), not the raw bytes as a string.
 				arrStr := types.BytesToArrayToString[uint8](vec.GetBytesAt(i))
 				value := util2.UnsafeStringToBytes(arrStr)
-				formatOutputString(ep, value, symbol[j], closeby, true, buffer)
+				out(value, symbol[j], closeby, true, j == len(bat.Vecs)-1)
 			case types.T_date:
 				val := vector.GetFixedAtNoTypeCheck[types.Date](vec, i)
-				formatOutputString(ep, []byte(val.String()), symbol[j], closeby, flag[j], buffer)
+				out([]byte(val.String()), symbol[j], closeby, flag[j], j == len(bat.Vecs)-1)
 			case types.T_datetime:
 				scale := vec.GetType().Scale
 				val := vector.GetFixedAtNoTypeCheck[types.Datetime](vec, i).String2(scale)
-				formatOutputString(ep, []byte(val), symbol[j], closeby, flag[j], buffer)
+				out([]byte(val), symbol[j], closeby, flag[j], j == len(bat.Vecs)-1)
 			case types.T_time:
 				scale := vec.GetType().Scale
 				val := vector.GetFixedAtNoTypeCheck[types.Time](vec, i).String2(scale)
-				formatOutputString(ep, []byte(val), symbol[j], closeby, flag[j], buffer)
+				out([]byte(val), symbol[j], closeby, flag[j], j == len(bat.Vecs)-1)
 			case types.T_timestamp:
 				var timeZone *time.Location
 				if ss != nil {
@@ -698,34 +1032,34 @@ func constructByte(ctx context.Context, obj FeSession, bat *batch.Batch, index i
 				}
 				scale := vec.GetType().Scale
 				val := vector.GetFixedAtNoTypeCheck[types.Timestamp](vec, i).String2(timeZone, scale)
-				formatOutputString(ep, []byte(val), symbol[j], closeby, flag[j], buffer)
+				out([]byte(val), symbol[j], closeby, flag[j], j == len(bat.Vecs)-1)
 			case types.T_year:
 				val := vector.GetFixedAtNoTypeCheck[types.MoYear](vec, i).String()
-				formatOutputString(ep, []byte(val), symbol[j], closeby, flag[j], buffer)
+				out([]byte(val), symbol[j], closeby, flag[j], j == len(bat.Vecs)-1)
 			case types.T_decimal64:
 				scale := vec.GetType().Scale
 				val := vector.GetFixedAtNoTypeCheck[types.Decimal64](vec, i).Format(scale)
-				formatOutputString(ep, []byte(val), symbol[j], closeby, flag[j], buffer)
+				out([]byte(val), symbol[j], closeby, flag[j], j == len(bat.Vecs)-1)
 			case types.T_decimal128:
 				scale := vec.GetType().Scale
 				val := vector.GetFixedAtNoTypeCheck[types.Decimal128](vec, i).Format(scale)
-				formatOutputString(ep, []byte(val), symbol[j], closeby, flag[j], buffer)
+				out([]byte(val), symbol[j], closeby, flag[j], j == len(bat.Vecs)-1)
 			case types.T_decimal256:
 				scale := vec.GetType().Scale
 				val := vector.GetFixedAtNoTypeCheck[types.Decimal256](vec, i).Format(scale)
-				formatOutputString(ep, []byte(val), symbol[j], closeby, flag[j], buffer)
+				out([]byte(val), symbol[j], closeby, flag[j], j == len(bat.Vecs)-1)
 			case types.T_uuid:
 				val := vector.GetFixedAtNoTypeCheck[types.Uuid](vec, i).String()
-				formatOutputString(ep, []byte(val), symbol[j], closeby, flag[j], buffer)
+				out([]byte(val), symbol[j], closeby, flag[j], j == len(bat.Vecs)-1)
 			case types.T_Rowid:
 				val := vector.GetFixedAtNoTypeCheck[types.Rowid](vec, i)
-				formatOutputString(ep, []byte(val.String()), symbol[j], closeby, flag[j], buffer)
+				out([]byte(val.String()), symbol[j], closeby, flag[j], j == len(bat.Vecs)-1)
 			case types.T_Blockid:
 				val := vector.GetFixedAtNoTypeCheck[types.Blockid](vec, i)
-				formatOutputString(ep, []byte(val.String()), symbol[j], closeby, flag[j], buffer)
+				out([]byte(val.String()), symbol[j], closeby, flag[j], j == len(bat.Vecs)-1)
 			case types.T_enum:
 				val := vector.GetFixedAtNoTypeCheck[types.Enum](vec, i).String()
-				formatOutputString(ep, []byte(val), symbol[j], closeby, flag[j], buffer)
+				out([]byte(val), symbol[j], closeby, flag[j], j == len(bat.Vecs)-1)
 			default:
 				if ss != nil {
 					ss.Error(ctx,
@@ -743,6 +1077,10 @@ func constructByte(ctx context.Context, obj FeSession, bat *batch.Batch, index i
 				})
 				return
 			}
+		}
+		if fmtErr != nil {
+			sendExportBatchByte(ctx, ByteChan, &BatchByte{err: fmtErr})
+			return
 		}
 		if rowEnds != nil {
 			rowEnds = append(rowEnds, buffer.Len())
@@ -839,12 +1177,90 @@ func (ec *ExportConfig) validateCSVFraming(ctx context.Context) error {
 		return moerr.NewInvalidInput(ctx,
 			"CSV ENCLOSED BY must not be the first byte of a field or line terminator or another recognized newline byte")
 	}
+	// Mirror the LOAD parser's config check: a prefix containing the record
+	// terminator makes record boundaries ambiguous (csvparser normalizes CRLF
+	// to LF the same way). Written output would never read back, so reject
+	// before opening the file.
+	if l := ec.userConfig.Lines; l != nil && l.StartingBy != "" && l.TerminatedBy != nil {
+		terminator := l.TerminatedBy.Value
+		if terminator == "\r\n" {
+			terminator = "\n"
+		}
+		if terminator != "" && strings.Contains(l.StartingBy, terminator) {
+			return moerr.NewInvalidInputNoCtx(fmt.Sprintf("STARTING BY '%s' cannot contain LINES TERMINATED BY '%s'", l.StartingBy, terminator))
+		}
+	}
+	// The loader's parser constructor rejects CR, LF, double quote, NUL and
+	// invalid runes as the field delimiter (csvparser validDelim, mirroring
+	// Go's encoding/csv). Any export framed that way is unloadable — and the
+	// round-trip simulation must never see one — so reject before opening
+	// the file.
+	if f := ec.userConfig.Fields; f != nil && f.Terminated != nil && f.Terminated.Value != "" {
+		if r, _ := utf8.DecodeRuneInString(f.Terminated.Value); r == 0 || r == '"' || r == '\r' || r == '\n' || r == utf8.RuneError {
+			return moerr.NewInvalidInput(ctx,
+				"CSV FIELDS TERMINATED BY must not be CR, LF, a double quote, NUL or an invalid rune: LOAD rejects the field delimiter")
+		}
+	}
 	if ec.escapeChar() == 0 {
 		return nil
 	}
 	if noQuote && (isAmbiguousCSVEscape(field) || isAmbiguousCSVEscape(line) || field == ec.escapeChar() || line == ec.escapeChar() || physicalLine == ec.escapeChar()) {
 		return moerr.NewInvalidInput(ctx,
 			"CSV terminators starting with ESCAPED BY or an ambiguous escape character (0, b, n, r, t, Z, N) require a nonempty ENCLOSED BY")
+	}
+	// LOAD recognizes CR (and LF) as a record boundary whenever its
+	// normalized terminator is a newline — BEFORE applying any escape byte
+	// (csvparser tryReadNewLine). A newline byte can therefore never serve
+	// as ESCAPED BY for unenclosed output: an escaped separator would land
+	// after the record the escape byte itself just ended. Enclosed output
+	// keeps both bytes inside quotes and stays safe.
+	if esc := ec.escapeChar(); noQuote && (esc == '\r' || esc == '\n') && ec.readerRecognizesNewlineBoundaries() {
+		return moerr.NewInvalidInput(ctx,
+			"CSV FIELDS ESCAPED BY must not be CR or LF without a nonempty ENCLOSED BY: LOAD treats both bytes as record boundaries before applying escapes")
+	}
+	return nil
+}
+
+// validateOutfileHeaderPrefix applies LOAD's startingBy line filter to the
+// CSV header before the file is opened. The reader keeps any line containing
+// the prefix (dropping everything up to its first occurrence); only lines
+// without it are skipped wholesale. The header line is written unprefixed on
+// purpose below so the filter skips it — but if the raw header text happens
+// to CONTAIN the prefix (for example a column named `name` with
+// LINES STARTING BY 'n'), the filter instead keeps the mangled remainder as
+// a data row. Reject that configuration up front: the alternatives are
+// HEADER 'false' or a prefix that does not occur in the header.
+func validateOutfileHeaderPrefix(ctx context.Context, ep *ExportConfig, mrs *MysqlResultSet) error {
+	if ep.getExportFormat() != "csv" || !ep.userConfig.Header || mrs == nil {
+		return nil
+	}
+	l := ep.userConfig.Lines
+	if l == nil || l.StartingBy == "" {
+		return nil
+	}
+	n := len(mrs.Columns)
+	if n == 0 {
+		return nil
+	}
+	// LOAD's startingBy filter scans each raw record INCLUDING its line
+	// terminator, so validate against the complete emitted header record,
+	// not just the joined column names: with terminator '||' a column 'X'
+	// emits the header 'X||', which 'X|' matches (readUntilTerminator).
+	var header strings.Builder
+	for i := 0; i < n-1; i++ {
+		header.WriteString(mrs.Columns[i].Name())
+		header.WriteString(ep.userConfig.Fields.Terminated.Value)
+	}
+	header.WriteString(mrs.Columns[n-1].Name())
+	lineTerm := "\n"
+	if l.TerminatedBy != nil && l.TerminatedBy.Value != "" {
+		lineTerm = l.TerminatedBy.Value
+	}
+	header.WriteString(lineTerm)
+	if strings.Contains(header.String(), l.StartingBy) {
+		return moerr.NewInvalidInputf(ctx,
+			"LINES STARTING BY '%s' occurs in the CSV header: LOAD would import the remainder of the header as data; set HEADER 'false' or choose a prefix that does not occur in the header",
+			l.StartingBy)
 	}
 	return nil
 }
@@ -869,10 +1285,17 @@ func addEscapeToString(ep *ExportConfig, s []byte, enclosed byte) []byte {
 	}
 	if escape != 0 && enclosed == 0 && bytes.Equal(s, []byte("NULL")) {
 		// LOAD's default enclosure mode treats bare NULL as SQL NULL. Escape
-		// its first N (not a translated escape) to retain literal text/BIT bytes.
-		result := make([]byte, len(s)+1)
-		result[0] = escape
-		copy(result[1:], s)
+		// its first N (not a translated escape) to retain literal text/BIT
+		// bytes, and encode any configured-escape occurrences inside the word
+		// (e.g. the U in ESCAPED BY 'U') so the remaining letters stay literal
+		// too: otherwise LOAD would collapse them away ('UNULL' -> 'NLL').
+		result := []byte{escape}
+		for _, b := range s {
+			if b == escape {
+				result = append(result, escape)
+			}
+			result = append(result, b)
+		}
 		return result
 	}
 	field, line, quote, defaultLine := ep.csvBoundaryBytes()
@@ -930,6 +1353,12 @@ func exportDataFromResultSetToCSVFile(oq *ExportConfig) error {
 
 	buffer := &bytes.Buffer{}
 
+	// One call builds one record; prefix it with LINES STARTING BY exactly as
+	// the batch writer (constructByte) does.
+	if l := oq.userConfig.Lines; l != nil && l.StartingBy != "" {
+		buffer.WriteString(l.StartingBy)
+	}
+
 	for i := uint64(0); i < oq.mrs.GetColumnCount(); i++ {
 
 		column, err := oq.mrs.GetColumn(oq.ctx, i)
@@ -944,7 +1373,7 @@ func exportDataFromResultSetToCSVFile(oq *ExportConfig) error {
 			return err
 		} else if isNil {
 			//NULL is output as \N
-			if err = formatOutputNull(oq, symbol[i], closeby, buffer); err != nil {
+			if err = formatOutputNull(oq, symbol[i], closeby, i == oq.mrs.GetColumnCount()-1, buffer); err != nil {
 				return err
 			}
 			continue
@@ -956,7 +1385,7 @@ func exportDataFromResultSetToCSVFile(oq *ExportConfig) error {
 			if err != nil {
 				return err
 			}
-			if err = formatOutputString(oq, []byte(value), symbol[i], closeby, flag[i], buffer); err != nil {
+			if err = formatOutputString(oq, []byte(value), symbol[i], closeby, flag[i], i == oq.mrs.GetColumnCount()-1, buffer); err != nil {
 				return err
 			}
 		case defines.MYSQL_TYPE_BOOL:
@@ -964,7 +1393,7 @@ func exportDataFromResultSetToCSVFile(oq *ExportConfig) error {
 			if err != nil {
 				return err
 			}
-			if err = formatOutputString(oq, []byte(value), symbol[i], closeby, flag[i], buffer); err != nil {
+			if err = formatOutputString(oq, []byte(value), symbol[i], closeby, flag[i], i == oq.mrs.GetColumnCount()-1, buffer); err != nil {
 				return err
 			}
 		case defines.MYSQL_TYPE_BIT:
@@ -975,7 +1404,7 @@ func exportDataFromResultSetToCSVFile(oq *ExportConfig) error {
 			byteLength := (mysqlColumn.Length() + 7) / 8
 			encoded := types.EncodeUint64(&value)[:byteLength]
 			slices.Reverse(encoded)
-			if err = formatOutputString(oq, encoded, symbol[i], closeby, flag[i], buffer); err != nil {
+			if err = formatOutputString(oq, encoded, symbol[i], closeby, flag[i], i == oq.mrs.GetColumnCount()-1, buffer); err != nil {
 				return err
 			}
 		case defines.MYSQL_TYPE_TINY, defines.MYSQL_TYPE_SHORT, defines.MYSQL_TYPE_INT24, defines.MYSQL_TYPE_LONG, defines.MYSQL_TYPE_YEAR:
@@ -985,20 +1414,20 @@ func exportDataFromResultSetToCSVFile(oq *ExportConfig) error {
 			}
 			if mysqlColumn.ColumnType() == defines.MYSQL_TYPE_YEAR {
 				if value == 0 {
-					if err = formatOutputString(oq, []byte("0000"), symbol[i], closeby, flag[i], buffer); err != nil {
+					if err = formatOutputString(oq, []byte("0000"), symbol[i], closeby, flag[i], i == oq.mrs.GetColumnCount()-1, buffer); err != nil {
 						return err
 					}
 				} else {
 					var lineStr []byte
 					lineStr = strconv.AppendInt(lineStr, value, 10)
-					if err = formatOutputString(oq, lineStr, symbol[i], closeby, flag[i], buffer); err != nil {
+					if err = formatOutputString(oq, lineStr, symbol[i], closeby, flag[i], i == oq.mrs.GetColumnCount()-1, buffer); err != nil {
 						return err
 					}
 				}
 			} else {
 				var lineStr []byte
 				lineStr = strconv.AppendInt(lineStr, value, 10)
-				if err = formatOutputString(oq, lineStr, symbol[i], closeby, flag[i], buffer); err != nil {
+				if err = formatOutputString(oq, lineStr, symbol[i], closeby, flag[i], i == oq.mrs.GetColumnCount()-1, buffer); err != nil {
 					return err
 				}
 			}
@@ -1008,7 +1437,7 @@ func exportDataFromResultSetToCSVFile(oq *ExportConfig) error {
 				return err
 			}
 			lineStr := []byte(fmt.Sprintf("%v", value))
-			if err = formatOutputString(oq, lineStr, symbol[i], closeby, flag[i], buffer); err != nil {
+			if err = formatOutputString(oq, lineStr, symbol[i], closeby, flag[i], i == oq.mrs.GetColumnCount()-1, buffer); err != nil {
 				return err
 			}
 		case defines.MYSQL_TYPE_LONGLONG:
@@ -1018,7 +1447,7 @@ func exportDataFromResultSetToCSVFile(oq *ExportConfig) error {
 				} else {
 					var lineStr []byte
 					lineStr = strconv.AppendUint(lineStr, value, 10)
-					if err = formatOutputString(oq, lineStr, symbol[i], closeby, flag[i], buffer); err != nil {
+					if err = formatOutputString(oq, lineStr, symbol[i], closeby, flag[i], i == oq.mrs.GetColumnCount()-1, buffer); err != nil {
 						return err
 					}
 				}
@@ -1028,7 +1457,7 @@ func exportDataFromResultSetToCSVFile(oq *ExportConfig) error {
 				} else {
 					var lineStr []byte
 					lineStr = strconv.AppendInt(lineStr, value, 10)
-					if err = formatOutputString(oq, lineStr, symbol[i], closeby, flag[i], buffer); err != nil {
+					if err = formatOutputString(oq, lineStr, symbol[i], closeby, flag[i], i == oq.mrs.GetColumnCount()-1, buffer); err != nil {
 						return err
 					}
 				}
@@ -1063,7 +1492,7 @@ func exportDataFromResultSetToCSVFile(oq *ExportConfig) error {
 				value = []byte(s)
 			}
 
-			if err = formatOutputString(oq, value.([]byte), symbol[i], closeby, true, buffer); err != nil {
+			if err = formatOutputString(oq, value.([]byte), symbol[i], closeby, true, i == oq.mrs.GetColumnCount()-1, buffer); err != nil {
 				return err
 			}
 		case defines.MYSQL_TYPE_DATE:
@@ -1071,7 +1500,7 @@ func exportDataFromResultSetToCSVFile(oq *ExportConfig) error {
 			if err != nil {
 				return err
 			}
-			if err = formatOutputString(oq, []byte(value.(types.Date).String()), symbol[i], closeby, flag[i], buffer); err != nil {
+			if err = formatOutputString(oq, []byte(value.(types.Date).String()), symbol[i], closeby, flag[i], i == oq.mrs.GetColumnCount()-1, buffer); err != nil {
 				return err
 			}
 		case defines.MYSQL_TYPE_TIME:
@@ -1079,7 +1508,7 @@ func exportDataFromResultSetToCSVFile(oq *ExportConfig) error {
 			if err != nil {
 				return err
 			}
-			if err = formatOutputString(oq, []byte(value.(types.Time).String()), symbol[i], closeby, flag[i], buffer); err != nil {
+			if err = formatOutputString(oq, []byte(value.(types.Time).String()), symbol[i], closeby, flag[i], i == oq.mrs.GetColumnCount()-1, buffer); err != nil {
 				return err
 			}
 		case defines.MYSQL_TYPE_DATETIME:
@@ -1087,7 +1516,7 @@ func exportDataFromResultSetToCSVFile(oq *ExportConfig) error {
 			if err != nil {
 				return err
 			}
-			if err = formatOutputString(oq, []byte(value.(string)), symbol[i], closeby, flag[i], buffer); err != nil {
+			if err = formatOutputString(oq, []byte(value.(string)), symbol[i], closeby, flag[i], i == oq.mrs.GetColumnCount()-1, buffer); err != nil {
 				return err
 			}
 		case defines.MYSQL_TYPE_TIMESTAMP:
@@ -1095,7 +1524,7 @@ func exportDataFromResultSetToCSVFile(oq *ExportConfig) error {
 			if err != nil {
 				return err
 			}
-			if err = formatOutputString(oq, []byte(value), symbol[i], closeby, flag[i], buffer); err != nil {
+			if err = formatOutputString(oq, []byte(value), symbol[i], closeby, flag[i], i == oq.mrs.GetColumnCount()-1, buffer); err != nil {
 				return err
 			}
 		case defines.MYSQL_TYPE_JSON:
@@ -1104,7 +1533,7 @@ func exportDataFromResultSetToCSVFile(oq *ExportConfig) error {
 				return err
 			}
 			jsonStr := value.(bytejson.ByteJson).String()
-			if err = formatOutputString(oq, []byte(jsonStr), symbol[i], closeby, flag[i], buffer); err != nil {
+			if err = formatOutputString(oq, []byte(jsonStr), symbol[i], closeby, flag[i], i == oq.mrs.GetColumnCount()-1, buffer); err != nil {
 				return err
 			}
 		case defines.MYSQL_TYPE_UUID:
@@ -1112,7 +1541,7 @@ func exportDataFromResultSetToCSVFile(oq *ExportConfig) error {
 			if err != nil {
 				return err
 			}
-			if err = formatOutputString(oq, []byte(value), symbol[i], closeby, flag[i], buffer); err != nil {
+			if err = formatOutputString(oq, []byte(value), symbol[i], closeby, flag[i], i == oq.mrs.GetColumnCount()-1, buffer); err != nil {
 				return err
 			}
 		case defines.MYSQL_TYPE_ENUM:
@@ -1120,7 +1549,7 @@ func exportDataFromResultSetToCSVFile(oq *ExportConfig) error {
 			if err != nil {
 				return err
 			}
-			if err = formatOutputString(oq, []byte(value), symbol[i], closeby, flag[i], buffer); err != nil {
+			if err = formatOutputString(oq, []byte(value), symbol[i], closeby, flag[i], i == oq.mrs.GetColumnCount()-1, buffer); err != nil {
 				return err
 			}
 		default:
@@ -1367,6 +1796,9 @@ func (ec *ExportConfig) writeParquet(execCtx *ExecCtx, bat *batch.Batch) error {
 	// Check if we need to split the file
 	splitSize := getEffectiveMaxFileSize(ec)
 	if splitSize == 0 {
+		if ec.auditEnabled && ^uint64(0)-ec.Rows < uint64(bat.RowCount()) {
+			return moerr.NewInternalErrorNoCtx("outfile audit row count overflow")
+		}
 		if err := ec.parquetWriter.WriteBatch(bat, execCtx.ses.GetMemPool(), timeZone); err != nil {
 			return err
 		}
@@ -1377,6 +1809,9 @@ func (ec *ExportConfig) writeParquet(execCtx *ExecCtx, bat *batch.Batch) error {
 	// Accumulate bounded row groups across executor batches. Flush ends a row
 	// group, so flushing every row causes large metadata overhead and exhausts
 	// parquet-go's per-file row-group limit long before SPLITSIZE is reached.
+	if ec.auditEnabled && ^uint64(0)-ec.Rows < uint64(bat.RowCount()) {
+		return moerr.NewInternalErrorNoCtx("outfile audit row count overflow")
+	}
 	for row := 0; row < bat.RowCount(); {
 		if ec.parquetWriter == nil {
 			var err error
@@ -1441,7 +1876,30 @@ func (ec *ExportConfig) flushParquetFile() error {
 	if err := writeParquetToFile(ec, parquetData); err != nil {
 		return err
 	}
+	if ec.auditEnabled {
+		if ec.Rows < ec.parquetConfirmedRows {
+			return moerr.NewInternalErrorNoCtx("outfile audit parquet row count regressed")
+		}
+		newRows := ec.Rows - ec.parquetConfirmedRows
+		if err := ec.addOutfileAuditTotals(uint64(len(parquetData)), newRows); err != nil {
+			return err
+		}
+		ec.parquetConfirmedRows = ec.Rows
+	}
 
+	return nil
+}
+
+func (ec *ExportConfig) addOutfileAuditTotals(bytesWritten, rowsWritten uint64) error {
+	if !ec.auditEnabled {
+		return nil
+	}
+	max := ^uint64(0)
+	if max-ec.auditBytesWritten < bytesWritten || max-ec.auditRowsWritten < rowsWritten {
+		return moerr.NewInternalErrorNoCtx("outfile audit total overflow")
+	}
+	ec.auditBytesWritten += bytesWritten
+	ec.auditRowsWritten += rowsWritten
 	return nil
 }
 
@@ -1636,6 +2094,7 @@ func constructJSONLine(ctx context.Context, obj FeSession, bat *batch.Batch, ind
 	if !sendExportBatchByte(ctx, ByteChan, &BatchByte{
 		index:     index,
 		writeByte: result,
+		rowCount:  bat.RowCount(),
 		err:       nil,
 	}) {
 		return

@@ -209,6 +209,7 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.SpillMem = t.SpillMem
 		op.GroupingFlag = t.GroupingFlag
 		op.DynamicGrouping = t.DynamicGrouping
+		op.SortRollup = t.SortRollup
 		op.GroupBy = t.GroupBy
 		op.GroupByHashKey = t.GroupByHashKey
 		op.Aggs = t.Aggs
@@ -586,6 +587,9 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.RejectZeroTemporal = t.RejectZeroTemporal
 		op.TrackAutoIncrementGenerated = t.TrackAutoIncrementGenerated
 		op.AutoIncrementGeneratedColumn = t.AutoIncrementGeneratedColumn
+		op.TrackODKUResult = t.TrackODKUResult
+		op.ODKUOrdinalColumn = t.ODKUOrdinalColumn
+		op.ODKUAutoIncrementColumn = t.ODKUAutoIncrementColumn
 		op.HasTargetSelector = t.HasTargetSelector
 		op.TargetRowNumberCol = t.TargetRowNumberCol
 		op.TargetActiveCol = t.TargetActiveCol
@@ -712,6 +716,11 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.CountFoundRows = t.CountFoundRows
 		op.EmitActionRows = t.EmitActionRows
 		op.ActionFinalResultPos = t.ActionFinalResultPos
+		op.ODKUResultTracking = t.ODKUResultTracking
+		op.ODKUTargetAutoIncrementCol = t.ODKUTargetAutoIncrementCol
+		op.ODKUGeneratedCol = t.ODKUGeneratedCol
+		op.ODKUOrdinalCol = t.ODKUOrdinalCol
+		op.ODKUGeneratedAutoIncrementCol = t.ODKUGeneratedAutoIncrementCol
 		op.ForeignKeyChecks = make([]dedupjoin.ODKUForeignKeyCheck, len(t.ForeignKeyChecks))
 		for i, check := range t.ForeignKeyChecks {
 			op.ForeignKeyChecks[i] = dedupjoin.ODKUForeignKeyCheck{
@@ -932,6 +941,9 @@ func constructPreInsert(nodes []*plan.Node, node *plan.Node, eng engine.Engine, 
 	op.ColOffset = preCtx.ColOffset
 	op.TrackAutoIncrementGenerated = preCtx.TrackAutoIncrementGenerated
 	op.AutoIncrementGeneratedColumn = preCtx.AutoIncrementGeneratedColumn
+	op.TrackODKUResult = preCtx.TrackOdkuResult
+	op.ODKUOrdinalColumn = preCtx.OdkuOrdinalColumn
+	op.ODKUAutoIncrementColumn = preCtx.OdkuAutoIncrementColumn
 	op.HasTargetSelector = preCtx.HasTargetSelector
 	op.TargetRowNumberCol = preCtx.TargetRowNumberCol
 	op.TargetActiveCol = preCtx.TargetActiveCol
@@ -1650,6 +1662,10 @@ func constructDedupJoin(node *plan.Node, leftTypes, rightTypes []types.Type, pro
 	arg.DedupKeyExprs = node.DedupKeyExprs
 	arg.DelColIdx = -1
 	arg.DedupDeleteMarkerColIdx = -1
+	arg.ODKUTargetAutoIncrementCol = -1
+	arg.ODKUGeneratedCol = -1
+	arg.ODKUOrdinalCol = -1
+	arg.ODKUGeneratedAutoIncrementCol = -1
 	if node.DedupJoinCtx != nil {
 		arg.DedupBuildKeepLast = node.DedupJoinCtx.DedupBuildKeepLast
 		arg.UpdateColIdxList = node.DedupJoinCtx.UpdateColIdxList
@@ -1670,6 +1686,19 @@ func constructDedupJoin(node *plan.Node, leftTypes, rightTypes []types.Type, pro
 			arg.ForeignKeyChecks[i] = dedupjoin.ODKUForeignKeyCheck{
 				ColIdxList:           slices.Clone(check.ColIdxList),
 				EligibilityResultPos: findJoinResultPos(result, check.EligibilityCol),
+			}
+		}
+		if node.DedupJoinCtx.OdkuTargetAutoIncrementCol != nil &&
+			node.DedupJoinCtx.OdkuGeneratedCol != nil &&
+			node.DedupJoinCtx.OdkuOrdinalCol != nil {
+			arg.ODKUResultTracking = true
+			arg.ODKUTargetAutoIncrementCol = node.DedupJoinCtx.OdkuTargetAutoIncrementCol.ColPos
+			arg.ODKUGeneratedCol = node.DedupJoinCtx.OdkuGeneratedCol.ColPos
+			arg.ODKUOrdinalCol = node.DedupJoinCtx.OdkuOrdinalCol.ColPos
+			if node.DedupJoinCtx.OdkuGeneratedAutoIncrementCol != nil {
+				arg.ODKUGeneratedAutoIncrementCol = node.DedupJoinCtx.OdkuGeneratedAutoIncrementCol.ColPos
+			} else {
+				arg.ODKUResultTracking = false
 			}
 		}
 		// OldColList identifies the row being updated.  Both FAIL and IGNORE
@@ -1964,6 +1993,7 @@ func constructGroup(_ context.Context, node, childNode *plan.Node, needEval bool
 	arg.SpillMem = node.SpillMem
 	arg.GroupingFlag = node.GroupingFlag
 	_, arg.DynamicGrouping = plan2.DecodeGroupingSetExpandOption(childNode.ExtraOptions)
+	arg.SortRollup = plan2.IsSortRollupOption(node.ExtraOptions)
 	arg.GroupBy = node.GroupBy
 	arg.GroupByHashKey = node.GroupByHashKey
 	return arg
@@ -1994,6 +2024,15 @@ func preflightPercentileConfigs(node *plan.Node, proc *process.Process) error {
 			}
 			if _, _, err := constructOrderedPercentileConfig(f, proc); err != nil {
 				return err
+			}
+		default:
+			if strings.EqualFold(f.Func.ObjName, plan2.NameQuantileExactWeighted) {
+				if len(f.Args) != 3 || !expressionContainsParam(f.Args[2]) {
+					continue
+				}
+				if _, _, err := constructQuantileExactWeightedConfig(f, proc); err != nil {
+					return err
+				}
 			}
 		}
 	}
@@ -2034,6 +2073,9 @@ func constructAggregateConfigWithError(
 			"aggregate function configuration is nil")
 	}
 	args := f.Args
+	if strings.EqualFold(f.Func.ObjName, plan2.NameQuantileExactWeighted) {
+		return constructQuantileExactWeightedConfig(f, proc)
+	}
 	switch f.Func.ObjName {
 	case plan2.NameGroupConcat:
 		value, err := resolveVariableOrDefault(proc, "group_concat_max_len", true, false)
@@ -2181,6 +2223,47 @@ func constructOrderedPercentileConfig(
 	}
 	descending := len(f.AggConfig) > 0 && f.AggConfig[0] != 0
 	return args[:1], aggexec.EncodeOrderedPercentileConfig(percentile, descending), nil
+}
+
+// constructQuantileExactWeightedConfig strips the flat three-argument
+// quantileExactWeighted signature down to its two data arguments
+// [value, weight] in their original types, evaluating the third (level)
+// argument exactly once as execution-invariant aggregate configuration
+// through the shared validated percentile codec.
+func constructQuantileExactWeightedConfig(
+	f *plan.Function, proc *process.Process,
+) ([]*plan.Expr, []byte, error) {
+	args := f.Args
+	if len(args) != 3 {
+		return nil, nil, moerr.NewInvalidInputNoCtxf(
+			"%s requires a value, a weight, and a level argument", f.Func.ObjName)
+	}
+	configExpr := args[2]
+	if err := validateQuantileExactWeightedExpr(configExpr, f.Func.ObjName); err != nil {
+		return nil, nil, err
+	}
+	configExpr, err := normalizeAggregateConfigExpr(proc, configExpr)
+	if err != nil {
+		return nil, nil, err
+	}
+	vec, free, err := colexec.GetReadonlyResultFromNoColumnExpression(proc, configExpr)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer free()
+	level, err := getEvaluatedPercentileConfigNamed(vec, f.Func.ObjName)
+	if err != nil {
+		return nil, nil, err
+	}
+	return args[:2], aggexec.EncodeQuantileExactWeightedConfig(level), nil
+}
+
+func validateQuantileExactWeightedExpr(expr *plan.Expr, name string) error {
+	if !isPercentileConfigExpr(expr) {
+		return moerr.NewInvalidInputNoCtxf(
+			"level argument of %s must be a constant or parameter", name)
+	}
+	return nil
 }
 
 // normalizeAggregateConfigExpr materializes a semantically constant function
@@ -3026,6 +3109,18 @@ func constructTableClone(
 			return nil, err
 		}
 	}
+
+	// Allocator queries run before RestoreTable. Lend the source owner's
+	// session only within its account; publication/snapshot account switches
+	// must not resolve the source through the caller's temporary aliases.
+	originalCtx := c.proc.Ctx
+	if caller, callerErr := defines.GetAccountId(originalCtx); callerErr == nil && caller == account {
+		c.proc.Ctx = attachInternalExecutorSession(originalCtx, c.proc.GetSession())
+	} else {
+		// An inherited session must be masked, even if this process has none.
+		c.proc.Ctx = process.ContextWithInternalExecutorSession(originalCtx, nil)
+	}
+	defer func() { c.proc.Ctx = originalCtx }()
 
 	if mainHasAutoIncr {
 		if err := c.proc.Ctx.Err(); err != nil {
