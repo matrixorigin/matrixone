@@ -145,11 +145,16 @@ grant show tables on database hnsw_ignored to hnsw_ignored_r;
 create user hnsw_ignored_u identified by '111' default role hnsw_ignored_r;
 show index ignored from hnsw_ignored.m;
 internal error: do not have privilege to execute the statement
+show index ignored from hnsw_ignored.e;
+internal error: do not have privilege to execute the statement
 grant select on table hnsw_ignored.m to hnsw_ignored_r;
+grant select on table hnsw_ignored.e to hnsw_ignored_r;
 show index ignored from hnsw_ignored.m where Key_name = 'm2';
 ➤ Key_name[12,65535,0]  ¦  Primary_key[12,65535,0]  ¦  Reason[12,65535,0]  ¦  Ignored_at[93,19,0]  𝄀
 m2  ¦  2  ¦  data out of range: data type hnsw quantization, vector element 70000 cannot be stored as F16  ¦  2026-10-28 13:25:44  𝄀
 m2  ¦  3  ¦  data out of range: data type hnsw quantization, vector element 70000 cannot be stored as F16  ¦  2026-10-28 13:26:44
+show index ignored from hnsw_ignored.e;
+➤ Key_name[12,65535,0]  ¦  Primary_key[12,65535,0]  ¦  Reason[12,65535,0]  ¦  Ignored_at[93,19,0]
 drop user hnsw_ignored_u;
 drop role hnsw_ignored_r;
 drop index i on t;
