@@ -659,6 +659,7 @@ func TestInformationSchemaTablesV118DDL_NullsFreshUpdateAndCheckTime(t *testing.
 	// against InformationSchemaTablesV118DDL): a tenant republished by any
 	// pre-fix binary still has the fabricated-time text and must mismatch once.
 	legacyV118 := strings.NewReplacer(
+		"not startswith(tbl.relname, '"+catalog.IndexTableNamePrefix+"')", "tbl.relname not like '"+catalog.IndexTableNamePrefix+"%'",
 		"cast(null as timestamp) AS UPDATE_TIME,",
 		"if(relkind = 'v', NULL, created_time) AS UPDATE_TIME,",
 		"cast(null as timestamp) AS CHECK_TIME,",
@@ -823,5 +824,25 @@ func TestMetadataVisibilityPolicyMatchesPersistedViews(t *testing.T) {
 		require.NoError(t, err)
 		require.Contains(t, sql, "tbl.account_id = current_account_id()")
 		require.Contains(t, sql, "rp.obj_id = tbl.rel_logical_id")
+	}
+}
+
+func TestInformationSchemaTablesLiteralIndexPrefix(t *testing.T) {
+	for _, tc := range []struct {
+		name, ddl string
+		branches  int
+	}{
+		{"legacy", InformationSchemaTablesV41DDL, 1},
+		{"current", InformationSchemaTablesDDL, 2},
+		{"protocol 118", InformationSchemaTablesV118DDL, 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.name == "protocol 118" {
+				require.Equal(t, tc.branches, strings.Count(tc.ddl, "not startswith(tbl.relname, '"+catalog.IndexTableNamePrefix+"')"))
+				require.NotContains(t, tc.ddl, "relname not like '"+catalog.IndexTableNamePrefix+"%'")
+			} else {
+				require.Equal(t, tc.branches, strings.Count(tc.ddl, "tbl.relname not like '"+catalog.IndexTableNamePrefix+"%'"))
+			}
+		})
 	}
 }

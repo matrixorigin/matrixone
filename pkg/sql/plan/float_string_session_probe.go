@@ -40,9 +40,11 @@ type legacyFloatSessionProbe struct {
 }
 
 type legacyFloatSessionIsland struct {
-	source, want *planpb.Expr
-	memo         *legacyFloatIslandMemo
-	wantValue    [sha256.Size]byte
+	source, want   *planpb.Expr
+	memo           *legacyFloatIslandMemo
+	wantValue      [sha256.Size]byte
+	scratch        *legacyFloatProbeScratch
+	scratchChecked bool
 }
 type legacyFloatSessionFoldKey struct{}
 
@@ -353,77 +355,96 @@ func (p *legacyFloatSessionProbe) key(budget *tableDumpBindingBudget) (string, e
 func (p *legacyFloatSessionProbe) matches(ctx CompilerContext, budget *tableDumpBindingBudget) (bool, error) {
 	proc := legacyFloatSessionProbeProcess(ctx, p.mode)
 	session := legacyFloatProbeSession{proc.GetSessionInfo().TimeZone, function.TemporalLocaleNameForProcess(proc)}
-	for _, island := range p.islands {
+	for i := range p.islands {
 		if err := ctx.GetContext().Err(); err != nil {
 			return false, err
 		}
-		var folded *planpb.Expr
-		memo := island.memo
-		if memo != nil && memo.owner == budget {
-			// Charge a lookup, then the actual decoded comparison input on hits.
-			if err := chargeFloatStringRebind(&planpb.Expr{}, budget); err != nil {
+		if matched, err := p.islands[i].matches(ctx, budget, proc, session); !matched || err != nil {
+			return matched, err
+		}
+	}
+	return true, nil
+}
+
+// Consume all folded pointers (including Literal.Src back references) before
+// restoring the private input. Only comparison results and owned memo bytes escape.
+func (island *legacyFloatSessionIsland) matches(ctx CompilerContext, budget *tableDumpBindingBudget, proc *process.Process, session legacyFloatProbeSession) (bool, error) {
+	var folded *planpb.Expr
+	memo := island.memo
+	if memo != nil && memo.owner == budget {
+		// Charge a lookup, then the actual decoded comparison input on hits.
+		if err := chargeFloatStringRebind(&planpb.Expr{}, budget); err != nil {
+			return false, err
+		}
+		if result, exists := memo.results[session]; exists {
+			if result.value != island.wantValue {
+				return false, nil
+			}
+			folded = &planpb.Expr{}
+			if err := proto.Unmarshal(result.data, folded); err != nil {
 				return false, err
 			}
-			if result, exists := memo.results[session]; exists {
-				if result.value != island.wantValue {
-					return false, nil
-				}
-				folded = &planpb.Expr{}
-				if err := proto.Unmarshal(result.data, folded); err != nil {
-					return false, err
-				}
-				if err := chargeFloatStringRebind(folded, budget); err != nil {
-					return false, err
-				}
+			if err := chargeFloatStringRebind(folded, budget); err != nil {
+				return false, err
 			}
 		}
-		if folded == nil {
-			if err := chargeFloatStringRebind(island.source, budget); err != nil {
+	}
+	if folded == nil {
+		if err := chargeFloatStringRebind(island.source, budget); err != nil {
+			return false, err
+		}
+		defer island.resetScratch()
+		var err error
+		folded, err = ConstantFold(batch.EmptyForConstFoldBatch, island.foldInput(), proc, false, true)
+		if err != nil {
+			return false, ctx.GetContext().Err()
+		}
+		m := &budget.probeMemo
+		if memo != nil && memo.owner == budget && folded.GetLit() != nil {
+			if err := chargeFloatStringRebind(folded, budget); err != nil {
 				return false, err
 			}
-			var err error
-			folded, err = ConstantFold(batch.EmptyForConstFoldBatch, DeepCopyExpr(island.source), proc, false, true)
+			value, err := legacyFloatLiteralFingerprint(folded)
 			if err != nil {
-				return false, ctx.GetContext().Err()
+				return false, err
 			}
-			m := &budget.probeMemo
-			if memo != nil && memo.owner == budget && folded.GetLit() != nil {
-				if err := chargeFloatStringRebind(folded, budget); err != nil {
-					return false, err
-				}
-				value, err := legacyFloatLiteralFingerprint(folded)
+			if m.admits(proto.Size(folded)) {
+				data, err := proto.Marshal(folded)
 				if err != nil {
 					return false, err
 				}
-				if m.admits(proto.Size(folded)) {
-					data, err := proto.Marshal(folded)
-					if err != nil {
-						return false, err
-					}
-					if memo.results == nil {
-						memo.results = make(map[legacyFloatProbeSession]legacyFloatProbeResult)
-					}
-					memo.results[session] = legacyFloatProbeResult{data, value}
-					m.entries++
-					m.bytes += len(data) + legacyFloatProbeMemoOverhead
+				if memo.results == nil {
+					memo.results = make(map[legacyFloatProbeSession]legacyFloatProbeResult)
 				}
-				if value != island.wantValue {
-					return false, nil
-				}
+				memo.results[session] = legacyFloatProbeResult{data, value}
+				m.entries++
+				m.bytes += len(data) + legacyFloatProbeMemoOverhead
+			}
+			if value != island.wantValue {
+				return false, nil
 			}
 		}
-		if err := chargeFloatStringRebind(island.want, budget); err != nil {
-			return false, err
-		}
-		if !sameLegacyFloatOrigin(island.want, folded) {
-			return false, ctx.GetContext().Err()
-		}
+	}
+	if err := chargeFloatStringRebind(island.want, budget); err != nil {
+		return false, err
+	}
+	if !sameLegacyFloatOrigin(island.want, folded) {
+		return false, ctx.GetContext().Err()
 	}
 	return true, nil
 }
 
 func matchLegacyFloatSessionProbes(ctx CompilerContext, zone *time.Location, locale string, timeZones func(func(*time.Location) bool), probes []*legacyFloatSessionProbe, budget *tableDumpBindingBudget, candidateVisitLimit int,
 	bind func(tableDumpSessionCandidate, *time.Location, string) (*planpb.Expr, error), match func(tableDumpSessionCandidate, *planpb.Expr) (bool, error)) (bool, error) {
+	clearScratch := func() {
+		for _, p := range probes {
+			for i := range p.islands {
+				p.islands[i].scratch = nil
+				p.islands[i].scratchChecked = false
+			}
+		}
+	}
+	defer clearScratch()
 	if len(probes) == 0 {
 		return false, nil
 	}
@@ -459,6 +480,9 @@ func matchLegacyFloatSessionProbes(ctx CompilerContext, zone *time.Location, loc
 					if !possible {
 						continue
 					}
+					// The full bind owns its own trees; release probe work trees
+					// before entering it, even when this candidate later fails.
+					clearScratch()
 					for _, search := range p.searches {
 						bound, err := bind(search, tz, lc)
 						if err != nil {
