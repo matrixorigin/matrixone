@@ -2328,6 +2328,19 @@ func (tc *txnOperator) inRunSql() bool {
 	return tc.reset.runSQLTracker.active()
 }
 
+func (tc *txnOperator) IsAbortedTxnCleanupComplete(expectedTxnID []byte) bool {
+	// Deferred rollback can retain mu while remote unlock is still pending.
+	// This observation must decline replay rather than wait for that owner.
+	if !tc.mu.TryRLock() {
+		return false
+	}
+	defer tc.mu.RUnlock()
+	return len(expectedTxnID) != 0 && slices.Equal(expectedTxnID, tc.mu.txn.ID) &&
+		tc.mu.closed && tc.mu.txn.Status == txn.TxnStatus_Aborted &&
+		tc.mu.terminalOutcome == txnTerminalOutcomeSucceeded && !tc.mu.restarting &&
+		txnTerminalCallState(tc.terminalCall.Load()) == txnTerminalCallSealed
+}
+
 func (tc *txnOperator) claimRestart() error {
 	tc.mu.Lock()
 	defer tc.mu.Unlock()

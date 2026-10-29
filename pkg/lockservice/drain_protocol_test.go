@@ -29,6 +29,7 @@ import (
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap/zapcore"
 )
 
 func TestGetBindRejectsInvalidAllocatorResult(t *testing.T) {
@@ -250,8 +251,8 @@ func TestInstanceBoundDrainRecoveryHandshake(t *testing.T) {
 func TestLiveRemoteLockDrainRecovers(t *testing.T) {
 	for _, failure := range []string{"allocator-loss", "negative-retirement"} {
 		t.Run(failure, func(t *testing.T) {
-			runLockServiceTestsWithAdjustConfig(t, []string{"owner", "remote"}, time.Hour,
-				func(a *lockTableAllocator, services []*service) {
+			runLockServiceRestartTests(t, zapcore.DebugLevel, []string{"owner", "remote"}, time.Hour,
+				func(a *lockTableAllocator, services []*service, restart func(...AllocatorOption) (*lockTableAllocator, error)) {
 					// Join allocator background readers before controlled failure injection;
 					// the RPC server/client stay live and CN keeper steps are driven explicitly.
 					a.stopper.Stop()
@@ -282,12 +283,8 @@ func TestLiveRemoteLockDrainRecovers(t *testing.T) {
 					require.Equal(t, pb.Status_ServiceLockWaiting, owner.getStatus())
 					switch failure {
 					case "allocator-loss":
-						a.mu.Lock()
-						a.mu.services = make(map[string]*serviceBinds)
-						a.mu.lockTables = make(map[uint32]map[uint64]pb.LockTable)
-						a.allocatorID = "replacement-allocator"
-						a.version++
-						a.mu.Unlock()
+						a, err = restart()
+						require.NoError(t, err)
 					case "negative-retirement":
 						previousClient := a.client
 						func() {
@@ -315,8 +312,13 @@ func TestLiveRemoteLockDrainRecovers(t *testing.T) {
 						AllocatorID: begin.AllocatorID, AllocatorVersion: begin.AllocatorVersion}
 					if failure == "allocator-loss" {
 						// Reject the old epoch before the live CN observes the replacement.
-						keeper.doKeepLockTableBind(ctx)
-						require.Equal(t, begin.AllocatorID, owner.allocatorStateSnapshot().id)
+						// The first RPC may still hit the closed connection. Drive
+						// the periodic heartbeat until this generation is observed;
+						// stop before sending its fresh-generation drain handshake.
+						require.Eventually(t, func() bool {
+							keeper.doKeepLockTableBind(ctx)
+							return owner.allocatorStateSnapshot().id == begin.AllocatorID
+						}, 5*time.Second, time.Millisecond)
 						require.False(t, a.beginDrain(pb.BeginDrainRequest{
 							ServiceID: owner.serviceID, AttemptID: attempt}).OK)
 						require.False(t, a.queryDrain(query).Safe)

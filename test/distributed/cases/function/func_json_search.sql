@@ -42,7 +42,7 @@ INSERT INTO t_json_search VALUES
 SELECT JSON_SEARCH(doc, 'all', term) AS loc FROM t_json_search ORDER BY id;
 DROP TABLE t_json_search;
 
--- Views retain the v129 requirement; generated columns fail closed.
+-- Views retain the v136 requirement; generated columns fail closed.
 DROP VIEW IF EXISTS v_json_search;
 CREATE VIEW v_json_search AS SELECT JSON_SEARCH('{"a":"x"}', 'one', 'x') AS loc;
 SELECT loc FROM v_json_search;

@@ -466,6 +466,68 @@ func TestShowColumnsSkipsNilIndexMetadata(t *testing.T) {
 	require.True(t, queryContainsStringLiteral(got.GetQuery(), "MUL"))
 }
 
+func addMockShowTable(t *testing.T, mock *MockOptimizer, alias, physical string, temporary bool, indexedColumn string) {
+	t.Helper()
+	tableDef := DeepCopyTableDef(mock.ctxt.tables["nation"], true)
+	tableDef.Name = physical
+	tableDef.IsTemporary = temporary
+	if indexedColumn != "" {
+		tableDef.Cols[1].Name = indexedColumn
+		tableDef.Cols[1].OriginName = indexedColumn
+		tableDef.Indexes = []*plan.IndexDef{{
+			IndexName: "ix_quoted",
+			Parts:     []string{indexedColumn},
+		}}
+	}
+	objRef := &ObjectRef{SchemaName: "tpch", ObjName: alias, Obj: int64(tableDef.TblId)}
+	qualifiedName := mockQualifiedTableName("tpch", alias)
+	mock.ctxt.tables[alias] = tableDef
+	mock.ctxt.objects[alias] = objRef
+	mock.ctxt.tablesByQualifiedName[qualifiedName] = tableDef
+	mock.ctxt.objectsByQualifiedName[qualifiedName] = objRef
+	mock.ctxt.legacyTableOwners[alias] = qualifiedName
+	mock.ctxt.legacyObjectOwners[alias] = qualifiedName
+}
+
+func TestShowMetadataEscapesQuotedIdentifiers(t *testing.T) {
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
+	addMockShowTable(t, mock, "a'b", "a'b", false, "")
+	addMockShowTable(t, mock, "quote_col", "quote_col", false, "x'y")
+
+	for _, sql := range []string{
+		"show columns from `a'b`",
+		"show full columns from `a'b`",
+		"show index from `a'b`",
+		"show columns from quote_col",
+		"show index from quote_col",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			_, err := runOneStmt(mock, t, sql)
+			require.NoError(t, err)
+		})
+	}
+}
+
+func TestShowColumnsUsesTemporaryPhysicalName(t *testing.T) {
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
+	addMockShowTable(t, mock, "temp_alias", "__mo_tmp_physical_temp_alias", true, "")
+
+	for _, sql := range []string{
+		"desc temp_alias",
+		"describe temp_alias",
+		"show columns from temp_alias",
+		"show fields from temp_alias",
+		"show full columns from temp_alias",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			logicPlan, err := runOneStmt(mock, t, sql)
+			require.NoError(t, err)
+			require.True(t, queryContainsStringLiteral(logicPlan.GetQuery(), "__mo_tmp_physical_temp_alias"),
+				"temporary SHOW metadata must query the physical catalog relation")
+		})
+	}
+}
+
 func TestCoverage_buildShowTableStatus(t *testing.T) {
 	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 
@@ -512,4 +574,24 @@ func TestCoverage_buildShowColumnNumber(t *testing.T) {
 		"show column_number from nation",
 	}
 	runTestShouldPass(mock, t, sqls, false, false)
+}
+
+func TestShowTablesLiteralInternalIndexPrefix(t *testing.T) {
+	for _, statement := range []string{
+		"show tables from tpch",
+		"show full tables from tpch",
+		"show table_number from tpch",
+		"show table status from tpch",
+	} {
+		t.Run(statement, func(t *testing.T) {
+			mock := NewMockOptimizer(false, newPlanTestProcess(t))
+			stmt, err := mysql.ParseOne(mock.ctxt.GetContext(), statement, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			built, err := BuildPlan(mock.CurrentContext(), stmt, false)
+			require.NoError(t, err)
+			require.True(t, queryContainsStringLiteral(built.GetQuery(), "__mo_index_"))
+			require.False(t, queryContainsStringLiteral(built.GetQuery(), "__mo_index_%"))
+		})
+	}
 }

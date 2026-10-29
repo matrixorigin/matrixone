@@ -19,7 +19,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
 
 // configureAsofJoin validates the logical predecessor-join contract and records
@@ -99,7 +99,7 @@ func (builder *QueryBuilder) configureAsofJoin(
 		if err != nil {
 			return err
 		}
-		if !rule.IsConstant(tolerance, true) {
+		if !function.IsConstant(tolerance, true) {
 			return moerr.NewInvalidInput(builder.GetContext(), "ASOF JOIN TOLERANCE must be a constant interval")
 		}
 		threshold, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "date_sub", []*planpb.Expr{DeepCopyExpr(leftTime), tolerance})

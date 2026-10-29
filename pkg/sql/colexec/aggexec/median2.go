@@ -1987,11 +1987,6 @@ func medianDecimal128FromState(st aggState, idx uint16, info *aggInfo) (types.De
 	return medianDecimal128Vals(vals)
 }
 
-func MedianNumeric[T numeric](vs *Vectors[T]) (float64, error) {
-	var arithmetic percentileArithmeticScratch
-	return medianNumericWithScratch(vs, &arithmetic)
-}
-
 func MedianDecimal64(vs *Vectors[types.Decimal64]) (types.Decimal128, error) {
 	vals := collectMedianValues(vs)
 	return medianDecimal64Vals(vals)

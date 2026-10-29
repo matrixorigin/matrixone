@@ -242,7 +242,7 @@ func autoIncrementValueToOffset(value uint64) uint64 {
 	return 0
 }
 
-func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext, bindings alterColumnBindings) (*Plan, error) {
+func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext, bindings alterColumnBindings, pureAddColumns bool) (*Plan, error) {
 	ctx := cctx.GetContext()
 	// 1. get origin table name and Schema name
 	schemaName, tableName := string(stmt.Table.Schema()), string(stmt.Table.Name())
@@ -348,6 +348,9 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext, bindings a
 	}
 
 	for ordinal, spec := range validAlterSpecs {
+		if isIgnoredStorageTableOption(spec) {
+			continue
+		}
 		switch option := spec.(type) {
 		case *tree.AlterOptionAdd:
 			switch optionAdd := option.Def.(type) {
@@ -575,6 +578,12 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext, bindings a
 	); err != nil {
 		return nil, err
 	}
+	// A surviving SET NULL constraint must remain executable over the final
+	// schema: reject an ALTER that tightens its child column to NOT NULL
+	// (#30282 review).
+	if err = checkAlterSurvivingFkSetNull(cctx, tableName, droppedFkNames(validAlterSpecs), tableDef, copyTableDef); err != nil {
+		return nil, err
+	}
 	for _, check := range pendingChecks {
 		if err = appendCheckDef(cctx, copyTableDef, check.ConstraintSymbol, check.Expr, -1); err != nil {
 			return nil, err
@@ -587,6 +596,7 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext, bindings a
 
 	createTmpDdl, _, err := constructCreateTableSQL(
 		cctx, copyTableDef, snapshot, true, nil, true, nil,
+		false, "", // Internal SQL is parsed in ordinary mode.
 	)
 	if err != nil {
 		return nil, err
@@ -643,6 +653,25 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext, bindings a
 
 	alterTablePlan.ChangeTblColIdMap = alterTableCtx.changColDefMap
 	alterTablePlan.UpdateFkSqls = append(alterTablePlan.UpdateFkSqls, alterTableCtx.UpdateSqls...)
+	if pureAddColumns && len(alterTablePlan.Actions) == 0 {
+		// COPY markers describe the final layout, not a sequence of engine ADDs.
+		// Purity was established from the complete original option list, before
+		// constraint resolution can remove no-op clauses.
+		for pos, col := range copyTableDef.Cols {
+			if FindColumn(tableDef.Cols, col.Name) != nil {
+				continue
+			}
+			previous := ""
+			if pos > 0 {
+				previous = copyTableDef.Cols[pos-1].Name
+			}
+			alterTablePlan.Actions = append(alterTablePlan.Actions, &plan.AlterTable_Action{
+				Action: &plan.AlterTable_Action_AddColumn{AddColumn: &plan.AlterAddColumn{
+					Name: col.Name, Type: *DeepCopyType(&col.Typ), Pos: int32(pos), PreName: previous,
+				}},
+			})
+		}
+	}
 	return &Plan{
 		Plan: &plan.Plan_Ddl{
 			Ddl: &plan.DataDefinition{
@@ -706,6 +735,13 @@ func addAlterCopyForeignKeys(
 			cctx, alterTablePlan.Database, finalTableDef, foreignKey,
 		)
 		if err != nil {
+			return err
+		}
+		// #30282: reject ON DELETE/ON UPDATE SET NULL declared over NOT NULL
+		// child columns (MySQL error 1830). The check runs against the final
+		// schema view so a NOT NULL column introduced by an earlier action of
+		// this same ALTER statement is caught as well.
+		if err = checkFkSetNullColumnsRequireNullable(ctx, finalTableDef.Cols, fkData.Def, fkData.Cols.Cols); err != nil {
 			return err
 		}
 		if fkData.IsSelfRefer {
@@ -1337,6 +1373,24 @@ func initAlterTableContext(originTableDef *TableDef, copyTableDef *TableDef, sch
 	}
 }
 
+// droppedFkNames collects the FOREIGN KEY constraints the statement drops, so
+// surviving-constraint validation does not raise error 1830 for a definition
+// this same ALTER is removing anyway.
+func droppedFkNames(specs []tree.AlterTableOption) map[string]bool {
+	var out map[string]bool
+	for _, spec := range specs {
+		drop, ok := spec.(*tree.AlterOptionDrop)
+		if !ok || drop.Typ != tree.AlterTableDropForeignKey {
+			continue
+		}
+		if out == nil {
+			out = make(map[string]bool)
+		}
+		out[strings.ToLower(string(drop.Name))] = true
+	}
+	return out
+}
+
 func buildCopyTableDef(ctx context.Context, tableDef *TableDef) (*TableDef, error) {
 	replicaTableDef := DeepCopyTableDef(tableDef, true)
 
@@ -1427,6 +1481,7 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 	if objRef.PubInfo != nil {
 		return nil, moerr.NewInternalError(ctx.GetContext(), "cannot alter table in subscription database")
 	}
+	pureAddColumns := pureAlterAddColumns(stmt.Options)
 	bindings := analyzeAlterColumnBindings(tableDef, stmt.Options)
 	options, err := resolveAlterConstraintOptions(ctx, tableDef, stmt.Options, bindings)
 	if err != nil {
@@ -1474,10 +1529,36 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 	}
 
 	if algorithm == plan.AlterTable_COPY {
-		return buildAlterTableCopy(stmt, ctx, bindings)
+		return buildAlterTableCopy(stmt, ctx, bindings, pureAddColumns)
 	} else {
 		return buildAlterTableInplace(stmt, ctx)
 	}
+}
+
+// Only the validated algorithm/lock hints may accompany a pure ADD certificate.
+// Call this before filtering or resolving the parser's option list.
+func pureAlterAddColumns(options []tree.AlterTableOption) bool {
+	added := false
+	for _, option := range options {
+		switch value := option.(type) {
+		case *tree.AlterAddCol:
+			if value == nil || value.Column == nil {
+				return false
+			}
+			added = true
+		case *tree.AlterOptionAlgorithm:
+			if value == nil {
+				return false
+			}
+		case *tree.AlterOptionLock:
+			if value == nil {
+				return false
+			}
+		default:
+			return false
+		}
+	}
+	return added
 }
 
 func hasVersionedIndexMutation(options []tree.AlterTableOption) bool {
@@ -1630,6 +1711,25 @@ func allowTempTableAlter(stmt *tree.AlterTable) bool {
 		}
 	}
 	return true
+}
+
+// isIgnoredStorageTableOption reports MySQL storage-engine table options that
+// CREATE TABLE accepts and ignores (see buildCreateTable); ALTER TABLE ignores
+// them the same way. CHARSET/COLLATE/COMMENT/AUTO_INCREMENT have real effects
+// and are handled separately.
+func isIgnoredStorageTableOption(option tree.AlterTableOption) bool {
+	switch option.(type) {
+	case *tree.TableOptionAUTOEXTEND_SIZE, *tree.TableOptionAvgRowLength,
+		*tree.TableOptionChecksum, *tree.TableOptionCompression,
+		*tree.TableOptionConnection, *tree.TableOptionDataDirectory, *tree.TableOptionIndexDirectory,
+		*tree.TableOptionDelayKeyWrite, *tree.TableOptionEncryption, *tree.TableOptionEngine, *tree.TableOptionEngineAttr,
+		*tree.TableOptionKeyBlockSize, *tree.TableOptionMaxRows, *tree.TableOptionMinRows, *tree.TableOptionPackKeys,
+		*tree.TableOptionPassword, *tree.TableOptionRowFormat, *tree.TableOptionStartTrans, *tree.TableOptionSecondaryEngineAttr,
+		*tree.TableOptionStatsAutoRecalc, *tree.TableOptionStatsPersistent, *tree.TableOptionStatsSamplePages,
+		*tree.TableOptionTablespace, *tree.TableOptionUnion:
+		return true
+	}
+	return false
 }
 
 func ResolveAlterTableAlgorithm(

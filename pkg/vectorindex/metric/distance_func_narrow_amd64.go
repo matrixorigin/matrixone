@@ -78,8 +78,8 @@ func l2sqBF16SIMD(a, b []types.BF16) (float64, error) {
 	for ; j <= np-16; j += 16 {
 		ua := archsimd.LoadUint32x16(au[j : j+16])
 		ub := archsimd.LoadUint32x16(bu[j : j+16])
-		dE := ua.ShiftAllLeft(16).AsFloat32x16().Sub(ub.ShiftAllLeft(16).AsFloat32x16())
-		dO := ua.And(hi).AsFloat32x16().Sub(ub.And(hi).AsFloat32x16())
+		dE := ua.ShiftAllLeft(16).BitsToFloat32().Sub(ub.ShiftAllLeft(16).BitsToFloat32())
+		dO := ua.And(hi).BitsToFloat32().Sub(ub.And(hi).BitsToFloat32())
 		acc0 = dE.MulAdd(dE, acc0)
 		acc1 = dO.MulAdd(dO, acc1)
 	}
@@ -103,8 +103,8 @@ func innerProductBF16SIMD(a, b []types.BF16) (float64, error) {
 	for ; j <= np-16; j += 16 {
 		ua := archsimd.LoadUint32x16(au[j : j+16])
 		ub := archsimd.LoadUint32x16(bu[j : j+16])
-		acc0 = ua.ShiftAllLeft(16).AsFloat32x16().MulAdd(ub.ShiftAllLeft(16).AsFloat32x16(), acc0)
-		acc1 = ua.And(hi).AsFloat32x16().MulAdd(ub.And(hi).AsFloat32x16(), acc1)
+		acc0 = ua.ShiftAllLeft(16).BitsToFloat32().MulAdd(ub.ShiftAllLeft(16).BitsToFloat32(), acc0)
+		acc1 = ua.And(hi).BitsToFloat32().MulAdd(ub.And(hi).BitsToFloat32(), acc1)
 	}
 	sum := sumF32x16(acc0.Add(acc1))
 	for i := j * 2; i < n; i++ {
@@ -126,10 +126,10 @@ func l1DistanceBF16SIMD(a, b []types.BF16) (float64, error) {
 	for ; j <= np-16; j += 16 {
 		ua := archsimd.LoadUint32x16(au[j : j+16])
 		ub := archsimd.LoadUint32x16(bu[j : j+16])
-		dE := ua.ShiftAllLeft(16).AsFloat32x16().Sub(ub.ShiftAllLeft(16).AsFloat32x16())
-		dO := ua.And(hi).AsFloat32x16().Sub(ub.And(hi).AsFloat32x16())
-		acc0 = acc0.Add(dE.AsUint32x16().And(absMask).AsFloat32x16())
-		acc1 = acc1.Add(dO.AsUint32x16().And(absMask).AsFloat32x16())
+		dE := ua.ShiftAllLeft(16).BitsToFloat32().Sub(ub.ShiftAllLeft(16).BitsToFloat32())
+		dO := ua.And(hi).BitsToFloat32().Sub(ub.And(hi).BitsToFloat32())
+		acc0 = acc0.Add(dE.ToBits().And(absMask).BitsToFloat32())
+		acc1 = acc1.Add(dO.ToBits().And(absMask).BitsToFloat32())
 	}
 	sum := sumF32x16(acc0.Add(acc1))
 	for i := j * 2; i < n; i++ {
@@ -159,10 +159,10 @@ func cosineDistanceBF16SIMD(a, b []types.BF16) (float64, error) {
 	for ; j <= np-16; j += 16 {
 		ua := archsimd.LoadUint32x16(au[j : j+16])
 		ub := archsimd.LoadUint32x16(bu[j : j+16])
-		aE := ua.ShiftAllLeft(16).AsFloat32x16()
-		aO := ua.And(hi).AsFloat32x16()
-		bE := ub.ShiftAllLeft(16).AsFloat32x16()
-		bO := ub.And(hi).AsFloat32x16()
+		aE := ua.ShiftAllLeft(16).BitsToFloat32()
+		aO := ua.And(hi).BitsToFloat32()
+		bE := ub.ShiftAllLeft(16).BitsToFloat32()
+		bO := ub.And(hi).BitsToFloat32()
 		dot0 = aE.MulAdd(bE, dot0)
 		dot1 = aO.MulAdd(bO, dot1)
 		na0 = aE.MulAdd(aE, na0)

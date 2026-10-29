@@ -17,11 +17,13 @@ package plan
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/stretchr/testify/require"
 )
 
@@ -204,6 +206,65 @@ func TestViewMetadataBranchesShareWorkAndReleaseCancellation(t *testing.T) {
 	require.Zero(t, f.generation.Used())
 }
 
+// collectNodeScanTables returns the lowercased names of every physical table
+// scanned by the query, so tests can distinguish the logical description path
+// from a persisted-column fallback.
+func collectNodeScanTables(query *Query) map[string]bool {
+	tables := make(map[string]bool)
+	if query == nil {
+		return tables
+	}
+	for _, node := range query.Nodes {
+		if node == nil || node.NodeType != planpb.Node_TABLE_SCAN || node.TableDef == nil {
+			continue
+		}
+		tables[strings.ToLower(node.TableDef.Name)] = true
+	}
+	return tables
+}
+
+// The SHOW rewrite must never fall back to the persisted View column snapshot:
+// user Views are described into a statement-local row source, while ordinary
+// tables keep their physical mo_catalog.mo_columns read. Losing either side
+// breaks the S2/S4 authority boundary documented for #30668.
+func TestShowColumnsSplitsPhysicalAndLogicalAuthority(t *testing.T) {
+	f := newViewSchemaTestFixture(t)
+	f.addView(t, "current_v", "select n_nationkey from nation")
+	r := NewViewMetadataRequest(t.Context(), f.provider)
+	defer r.Close()
+	ctx := &viewMetadataTestCompiler{viewSchemaTestCompiler: f.compiler, ctx: r.Context()}
+
+	for _, stmt := range []string{
+		"describe current_v",
+		"show columns from current_v",
+		"show full columns from current_v",
+		"show column_number from current_v",
+	} {
+		t.Run(stmt, func(t *testing.T) {
+			p, err := buildViewMetadataConsumerPlan(t, ctx, stmt, false)
+			require.NoError(t, err, stmt)
+			require.False(t, collectNodeScanTables(p.GetQuery())["mo_columns"],
+				stmt+": a described View must not scan the persisted column snapshot")
+		})
+	}
+	// Ordinary tables keep reading the physical catalog. The plain mock is used
+	// here on purpose: the authority split must not depend on an active derived
+	// metadata request.
+	for _, stmt := range []string{
+		"describe nation",
+		"show columns from nation",
+		"show full columns from nation",
+		"show column_number from nation",
+	} {
+		t.Run(stmt, func(t *testing.T) {
+			p, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, stmt)
+			require.NoError(t, err, stmt)
+			require.True(t, collectNodeScanTables(p.GetQuery())["mo_columns"],
+				stmt+": ordinary tables keep their physical mo_columns read")
+		})
+	}
+}
+
 func TestViewMetadataCandidateFailureProvenance(t *testing.T) {
 	for _, stage := range []string{"authorize", "open", "root", "definition"} {
 		t.Run(stage, func(t *testing.T) {
@@ -235,4 +296,116 @@ func TestViewMetadataCandidateFailureProvenance(t *testing.T) {
 			require.Zero(t, f.generation.Used())
 		})
 	}
+}
+
+func TestViewMetadataWarmMemoFailureRecovery(t *testing.T) {
+	for _, mode := range []string{"memo", "cache off"} {
+		for _, fault := range []string{"root missing", "transient resolution", "authorization revoked"} {
+			t.Run(mode+"/"+fault, func(t *testing.T) {
+				f := newViewSchemaTestFixture(t)
+				f.addView(t, "middle_v", "select n_name from nation")
+				f.addView(t, "root_v", "select n_name from middle_v")
+				r := NewViewMetadataRequest(t.Context(), f.provider)
+				defer r.Close()
+				r.schema.memoDisabled = mode == "cache off"
+				for range 2 {
+					result, err := DescribeViewMetadata(r.Context(), "tpch", "root_v", nil)
+					require.NoError(t, err)
+					result.Release()
+				}
+				if mode == "memo" {
+					require.Positive(t, r.schema.hits)
+				}
+				failure := errors.New("temporary catalog failure")
+				if fault == "root missing" {
+					failure = moerr.NewNoSuchTable(t.Context(), "tpch", "root_v")
+				}
+				if fault == "authorization revoked" {
+					f.authErr = failure
+				} else {
+					f.compiler.resolve = func(_ context.Context, _, name string, _ *Snapshot) error {
+						if name == "root_v" {
+							return failure
+						}
+						return nil
+					}
+				}
+				result, invalid, err := DescribeViewMetadataCandidate(r.Context(), "tpch", "root_v", nil)
+				result.Release()
+				require.Nil(t, result, "预热结果不能遮蔽根对象解析或权限失败")
+				require.ErrorIs(t, err, failure)
+				require.False(t, invalid, "根查找失败不能伪装成 binder 确证的依赖缺失")
+				require.Zero(t, f.generation.Used())
+				f.authErr, f.compiler.resolve = nil, nil
+				result, invalid, err = DescribeViewMetadataCandidate(r.Context(), "tpch", "root_v", nil)
+				if result != nil {
+					defer result.Release()
+				}
+				require.NoError(t, err)
+				require.False(t, invalid)
+				columns, err := result.Columns()
+				require.NoError(t, err)
+				require.Len(t, columns, 1)
+				require.Equal(t, "n_name", columns[0].Name)
+				result.Release()
+				r.Close()
+				require.Zero(t, f.generation.Used())
+			})
+		}
+	}
+}
+
+func TestViewMetadataWarmMemoCancellationDuringRootRead(t *testing.T) {
+	f := newViewSchemaTestFixture(t)
+	f.addView(t, "middle_v", "select n_name from nation")
+	f.addView(t, "root_v", "select n_name from middle_v")
+	r := NewViewMetadataRequest(t.Context(), f.provider)
+	defer r.Close()
+	result, err := DescribeViewMetadata(r.Context(), "tpch", "root_v", nil)
+	require.NoError(t, err)
+	result.Release()
+	entered, done := make(chan struct{}), make(chan struct{})
+	f.compiler.resolve = func(ctx context.Context, _, name string, _ *Snapshot) error {
+		if name == "root_v" {
+			close(entered)
+			<-ctx.Done()
+			// 取消与缺失同时可见时，取消必须获胜，不能被 bulk skip 吞掉。
+			return moerr.NewNoSuchTable(ctx, "tpch", name)
+		}
+		return nil
+	}
+	ctx, cancel := context.WithCancelCause(r.Context())
+	defer func() {
+		cancel(nil)
+		viewSchemaTestWait(t, done) // Join before the deferred request.Close, including assertion failures.
+	}()
+	var invalid bool
+	go func() {
+		defer close(done)
+		result, invalid, err = DescribeViewMetadataCandidate(ctx, "tpch", "root_v", nil)
+		result.Release()
+	}()
+	viewSchemaTestWait(t, entered)
+	cancelled := errors.New("statement reader cancelled")
+	cancel(cancelled)
+	viewSchemaTestWait(t, done)
+	require.Nil(t, result)
+	require.False(t, invalid)
+	require.ErrorIs(t, err, cancelled)
+	r.Close()
+	require.Zero(t, f.generation.Used())
+	require.False(t, f.generation.Closed())
+
+	// 失败只终结旧执行代；新请求不能继承失败或已取消的私有 compiler context。
+	f.compiler.resolve = nil
+	next := NewViewMetadataRequest(t.Context(), f.provider)
+	defer next.Close()
+	result, err = DescribeViewMetadata(next.Context(), "tpch", "root_v", nil)
+	if result != nil {
+		defer result.Release()
+	}
+	require.NoError(t, err)
+	result.Release()
+	next.Close()
+	require.Zero(t, f.generation.Used())
 }

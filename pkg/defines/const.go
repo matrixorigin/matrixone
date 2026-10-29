@@ -164,9 +164,17 @@ const (
 	MORPCVersion126    int64 = 126 // parser-derived information_schema.VIEWS definitions
 	MORPCVersion127    int64 = 127 // IndexSearchScan internal_topk / max_internal_topk search knobs
 	MORPCVersion128    int64 = 128 // category-preserving mixed JSON/numeric comparisons
-	MORPCVersion129    int64 = 129 // fulltext2 parallel search threads_search, token_filter analyzer, and search_df_cutoff
-	MORPCVersion130    int64 = 130 // JSON_SEARCH path traversal and result contract
-	MORPCLatestVersion       = MORPCVersion130
+	MORPCVersion129    int64 = 129 // selected JSON ELT and opaque text expression execution
+	MORPCVersion130    int64 = 130 // incomplete temporal string overloads and rejection diagnostics
+	MORPCVersion131    int64 = 131 // exact weighted percentile aggregate remote dispatch
+	MORPCVersion132    int64 = 132 // decimal float rounding and strict textual float conversions
+	MORPCVersion133    int64 = 133 // typed JSON MIN/MAX aggregate comparison
+	MORPCVersion134    int64 = 134 // ordered ODKU result summary and captured session LAST_INSERT_ID baseline
+	// 135 is not used here: it is claimed by the in-flight implicit boolean-condition
+	// contracts change (matrixorigin/matrixone#31492). JSON_SEARCH takes the next
+	// unclaimed number; renumber on merge if that PR lands first.
+	MORPCVersion136    int64 = 136 // JSON_SEARCH path traversal and result contract
+	MORPCLatestVersion       = MORPCVersion136
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by

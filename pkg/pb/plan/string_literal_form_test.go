@@ -25,7 +25,7 @@ func TestRequiredRemoteExpressionFeaturesViewMetadataIdentities(t *testing.T) {
 	for _, tc := range []struct {
 		id   int64
 		want bool
-	}{{590, false}, {591, false}, {592, false}, {593, false}, {594, false}, {595, false}, {596, false}, {597, false}, {598, false}, {599, false}, {600, false}, {601, false}, {602, false}, {603, true}, {604, true}, {605, false}} {
+	}{{590, false}, {591, false}, {592, false}, {593, false}, {594, false}, {595, false}, {596, false}, {597, false}, {598, false}, {599, false}, {600, false}, {601, false}, {602, false}, {603, true}, {604, true}, {605, false}, {606, false}, {607, false}, {608, false}, {609, false}, {610, false}, {611, false}, {612, false}, {613, false}, {614, false}, {615, false}, {616, false}, {617, false}, {618, false}, {619, false}, {620, false}} {
 		t.Run(fmt.Sprintf("function_%d", tc.id), func(t *testing.T) {
 			// Identity, not the spelling or the surrounding expression shape,
 			// controls the floor. A subquery child exercises nested detection.
@@ -39,8 +39,8 @@ func TestRequiredRemoteExpressionFeaturesViewMetadataIdentities(t *testing.T) {
 			require.Equal(t, tc.id == 600, features.TableCollationFunction)
 			require.Equal(t, tc.id == 601, features.TimestampAddSecondIntervals)
 			require.Equal(t, tc.id == 602, features.LoadFKIgnoreCheck)
-			require.Equal(t, tc.id == 605, features.JSONSearch)
-			require.Equal(t, tc.want || tc.id == 598 || tc.id == 600 || tc.id == 601 || tc.id == 602 || tc.id == 605, features.Any())
+			require.Equal(t, tc.id == 620, features.JSONSearch)
+			require.Equal(t, tc.want || tc.id == 598 || tc.id == 600 || tc.id == 601 || tc.id == 602 || tc.id == 620, features.Any())
 		})
 	}
 	for name, expr := range map[string]*Expr{
@@ -1022,6 +1022,43 @@ func TestTemporalConversionProtocolSourceMatrix(t *testing.T) {
 	}
 }
 
+func TestRequiresMORPCVersion129JSONStringConsumerOverload(t *testing.T) {
+	consumer := func(functionID, overloadID int32) *Expr {
+		return &Expr{
+			Typ: Type{Id: 61},
+			Expr: &Expr_F{F: &Function{
+				Func: &ObjectRef{Obj: int64(functionID)<<32 | int64(overloadID)},
+			}},
+		}
+	}
+
+	for _, functionID := range []int32{remoteJSONStringConsumerELTFunctionID} {
+		t.Run(fmt.Sprintf("function_%d", functionID), func(t *testing.T) {
+			required, err := RequiresMORPCVersion129JSONStringConsumerOverload(consumer(functionID, 1))
+			require.NoError(t, err)
+			require.True(t, required)
+			for _, overloadID := range []int32{0, 2} {
+				required, err = RequiresMORPCVersion129JSONStringConsumerOverload(consumer(functionID, overloadID))
+				require.NoError(t, err)
+				require.False(t, required)
+			}
+		})
+	}
+
+	for _, control := range []*Expr{consumer(17, 1), consumer(16, 0)} {
+		required, err := RequiresMORPCVersion129JSONStringConsumerOverload(control)
+		require.NoError(t, err)
+		require.False(t, required)
+	}
+
+	features, err := RequiredRemoteExpressionFeatures(&struct{ Expressions []*Expr }{
+		Expressions: []*Expr{consumer(remoteJSONStringConsumerELTFunctionID, 1)},
+	})
+	require.NoError(t, err)
+	require.True(t, features.JSONStringConsumerOverload)
+	require.True(t, features.Any())
+}
+
 func TestRequiredRemoteExpressionFeaturesMediumIntAssignmentBounds(t *testing.T) {
 	cast := func(functionID int32, functionName string, target Type) *Expr {
 		return &Expr{Typ: target, Expr: &Expr_F{F: &Function{
@@ -1075,6 +1112,24 @@ func TestRequiredRemoteExpressionFeaturesMediumIntAssignmentBounds(t *testing.T)
 	}
 }
 
+func TestRequiredRemoteExpressionFeaturesODKUOwnerMetadata(t *testing.T) {
+	for _, owner := range []any{
+		&Query{Nodes: []*Node{{PreInsertCtx: &PreInsertCtx{TrackOdkuResult: true}}}},
+		&Plan{Plan: &Plan_Query{Query: &Query{Nodes: []*Node{{DedupJoinCtx: &DedupJoinCtx{
+			OdkuOrdinalCol: &ColRef{}, OdkuGeneratedCol: &ColRef{},
+		}}}}}},
+	} {
+		features, err := RequiredRemoteExpressionFeatures(owner)
+		require.NoError(t, err)
+		require.True(t, features.ODKUStatementResult)
+		require.True(t, features.Any())
+		require.False(t, features.SessionLastInsertIDBaseline, "tracking metadata needs a floor without any LAST_INSERT_ID expression")
+	}
+	features, err := RequiredRemoteExpressionFeatures(&PreInsertCtx{})
+	require.NoError(t, err)
+	require.False(t, features.ODKUStatementResult)
+}
+
 func TestDateNumericResultFeaturesRoundTrip(t *testing.T) {
 	for _, tc := range []struct {
 		name                 string
@@ -1083,10 +1138,11 @@ func TestDateNumericResultFeaturesRoundTrip(t *testing.T) {
 	}{
 		{"week date", 216, 0, 22, true}, {"week datetime", 216, 1, 22, true},
 		{"week date mode", 216, 2, 22, true}, {"week datetime mode", 216, 3, 22, true},
+		{"week string", 216, 4, 22, true}, {"week string mode", 216, 5, 22, true},
 		{"dayofyear", 206, 0, 22, true},
 		{"legacy week", 216, 2, 25, false}, {"legacy dayofyear", 206, 0, 26, false},
 		{"weekofyear control", 217, 0, 23, false}, {"other int function", 218, 0, 22, false},
-		{"unknown overload", 216, 4, 22, false},
+		{"unknown overload", 216, 6, 22, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			expr := &Expr{Typ: Type{Id: tc.result}, Expr: &Expr_F{F: &Function{Func: &ObjectRef{Obj: int64(tc.id)<<32 | int64(tc.overload)}}}}
@@ -1100,9 +1156,136 @@ func TestDateNumericResultFeaturesRoundTrip(t *testing.T) {
 			if tc.want {
 				require.True(t, features.Any())
 			}
-			require.Equal(t, tc.id == 216 && tc.overload < 2, features.WeekSessionDefault)
+			require.Equal(t, tc.id == 216 && (tc.overload < 2 || tc.overload == 4), features.WeekSessionDefault)
 		})
 	}
+}
+
+func TestIncompleteTemporalStringFeaturesRoundTrip(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		id, overload int32
+		want         bool
+	}{
+		{"date_format string", 251, 2, true}, {"datediff strings", 93, 1, true},
+		{"datediff left string", 93, 2, true}, {"datediff right string", 93, 3, true},
+		{"to_days string", 222, 1, true}, {"to_seconds string", 223, 1, true},
+		{"week string", 216, 4, true}, {"week string mode", 216, 5, true},
+		{"dayofweek string", 360, 3, true},
+		{"last_day varchar", 201, 0, true}, {"last_day char", 201, 1, true},
+		{"date_add varchar", 224, 2, true}, {"date_add char", 224, 3, true}, {"date_add text", 224, 6, true},
+		{"date_sub varchar", 225, 2, true}, {"date_sub char", 225, 3, true}, {"date_sub text", 225, 5, true},
+		{"date_format typed", 251, 0, false}, {"date_format time", 251, 1, false},
+		{"datediff typed", 93, 0, false}, {"to_days typed", 222, 0, false}, {"to_seconds typed", 223, 0, false},
+		{"week typed", 216, 2, false}, {"week unknown", 216, 6, false}, {"dayofweek typed", 360, 0, false},
+		{"last_day date", 201, 2, false}, {"last_day datetime", 201, 3, false},
+		{"date_add time", 224, 5, false}, {"date_sub time", 225, 6, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			expr := &Expr{Typ: Type{Id: planInt32TypeID}, Expr: &Expr_F{F: &Function{Func: &ObjectRef{Obj: int64(tc.id)<<32 | int64(tc.overload)}}}}
+			data, err := expr.Marshal()
+			require.NoError(t, err)
+			decoded := &Expr{}
+			require.NoError(t, decoded.Unmarshal(data))
+			owner := &TableDef{Cols: []*ColDef{{GeneratedCol: &GeneratedCol{Expr: decoded}}}}
+			features, err := RequiredRemoteExpressionFeatures(owner)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, features.IncompleteTemporalStrings)
+			require.True(t, (RemoteExpressionFeatures{IncompleteTemporalStrings: true}).Any())
+		})
+	}
+}
+
+func TestJSONBinaryCastAndStoredOpaqueRenderingFeatures(t *testing.T) {
+	function := func(id, source, target int32, param bool) *Expr {
+		arg := &Expr{Typ: Type{Id: source}, Expr: &Expr_Col{Col: &ColRef{ColPos: 0}}}
+		if param {
+			arg.Expr = &Expr_P{P: &ParamRef{Pos: 2}}
+		}
+		return &Expr{Typ: Type{Id: target}, Expr: &Expr_F{F: &Function{Func: &ObjectRef{Obj: int64(id) << 32}, Args: []*Expr{arg}}}}
+	}
+	for _, tc := range []struct {
+		name               string
+		id, source, target int32
+		param, want        bool
+	}{
+		{"binarycast", 21, 64, 62, false, true}, {"varbinarycast", 21, 65, 62, false, true}, {"blobcast", 21, 70, 62, false, true},
+		{"knowntextcast", 21, 61, 62, false, false}, {"unknowncast", 21, 0, 62, false, true}, {"textparametercast", 21, 71, 62, true, true},
+		{"storedconcat", 16, 62, 71, false, true}, {"storedconcatws", 76, 62, 71, false, true},
+		{"jsonvarchar", 21, 62, 61, false, true}, {"jsonbinary", 21, 62, 64, false, true}, {"jsonassign", 554, 62, 71, false, true},
+		{"jsonignore", 555, 62, 70, false, true}, {"jsonstrict", 541, 62, 61, false, true},
+		{"jsonunquote", 256, 62, 61, false, true}, {"jsonpretty", 459, 62, 71, false, true},
+		{"jsonrow", 257, 62, 71, false, true}, {"jsonschema", 460, 62, 10, false, true}, {"jsonschemareport", 461, 62, 62, false, true}, {"udfjson", 326, 62, 22, false, true},
+		{"legacySQLbinarykey", 366, 70, 62, false, false}, {"storedobjectkey", 366, 62, 62, false, true},
+		{"plainconcat", 16, 61, 71, false, false},
+		{"jsontype", 456, 62, 61, false, false}, {"numericjsoncast", 21, 22, 62, false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			expr := function(tc.id, tc.source, tc.target, tc.param)
+			features, err := RequiredRemoteExpressionFeatures(expr)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, features.JSONOpaqueTextContracts)
+		})
+	}
+}
+
+func TestSerializedGroupConcatAggregateJSONFeature(t *testing.T) {
+	const (
+		groupConcatID = uint64(185)
+		distinctFlag  = uint64(1) << 63
+	)
+	for _, tc := range []struct {
+		name     string
+		objName  string
+		distinct bool
+		jsonArg  bool
+	}{
+		{name: "group_concat", objName: "group_concat", jsonArg: true},
+		{name: "group_concat distinct", objName: "group_concat", distinct: true, jsonArg: true},
+		{name: "listagg alias", objName: "listagg", jsonArg: true},
+		{name: "listagg distinct alias", objName: "listagg", distinct: true, jsonArg: true},
+		{name: "ordinary string control", objName: "group_concat"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			obj := groupConcatID << 32
+			if tc.distinct {
+				obj |= distinctFlag
+			}
+			argType := int32(61)
+			if tc.jsonArg {
+				argType = planJSONTypeID
+			}
+			aggregate := &Expr{Typ: Type{Id: 61}, Expr: &Expr_F{F: &Function{
+				Func: &ObjectRef{Obj: int64(obj), ObjName: tc.objName},
+				Args: []*Expr{{Typ: Type{Id: argType}, Expr: &Expr_Col{Col: &ColRef{ColPos: 0}}}},
+			}}}
+			serializedNode := &Node{AggList: []*Expr{aggregate}}
+			data, err := serializedNode.Marshal()
+			require.NoError(t, err)
+			decodedNode := &Node{}
+			require.NoError(t, decodedNode.Unmarshal(data))
+
+			features, err := RequiredRemoteExpressionFeatures(decodedNode)
+			require.NoError(t, err)
+			require.Equal(t, tc.jsonArg, features.JSONOpaqueTextContracts)
+			requires129, err := RequiresMORPCVersion129JSONStringConsumerOverload(decodedNode)
+			require.NoError(t, err)
+			require.Equal(t, tc.jsonArg, requires129)
+		})
+	}
+}
+
+func TestJSONBinaryCastKnownNumericParameterResultNotOpaque(t *testing.T) {
+	marker := &Expr{Typ: Type{Id: 71}, Expr: &Expr_P{P: &ParamRef{Pos: 0}}}
+	numeric := &Expr{Typ: Type{Id: 22}, Expr: &Expr_F{F: &Function{Func: &ObjectRef{Obj: int64(21)<<32 | 1}, Args: []*Expr{marker}}}}
+	outer := &Expr{Typ: Type{Id: 62}, Expr: &Expr_F{F: &Function{Func: &ObjectRef{Obj: int64(21)<<32 | 1}, Args: []*Expr{numeric}}}}
+	features, err := RequiredRemoteExpressionFeatures(outer)
+	require.NoError(t, err)
+	require.False(t, features.JSONOpaqueTextContracts)
+}
+
+func TestJSONOpaqueRendererDoesNotExpandSharedStringTypes(t *testing.T) {
+	require.False(t, isPlanMySQLStringType(72))
 }
 
 func TestCalendarIntervalFeatureRoundTrip(t *testing.T) {

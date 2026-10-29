@@ -93,12 +93,13 @@ type TxnComputationWrapper struct {
 	// specialization outside the live PrepareStmt cache. The candidate is
 	// installed only after its Compile succeeds, so a failed replacement leaves
 	// the preceding category and Compile intact.
-	runtimeCacheTarget          *PrepareStmt
-	runtimeCacheKey             string
-	runtimeCachePlan            *plan.Plan
-	runtimeCacheDiagnostics     []*plan.Expr
-	runtimeCacheColDefData      [][]byte
-	runtimeCacheRetiredCompiles []retiredRuntimeCompile
+	runtimeCacheTarget             *PrepareStmt
+	runtimeCacheKey                string
+	runtimeCachePlan               *plan.Plan
+	runtimeCacheDiagnostics        []*plan.Expr
+	runtimeCacheDecimalFloatProofs []plan2.PreparedDecimalFloatProof
+	runtimeCacheColDefData         [][]byte
+	runtimeCacheRetiredCompiles    []retiredRuntimeCompile
 
 	explainBuffer *bytes.Buffer
 	binaryPrepare bool
@@ -317,25 +318,25 @@ func (cwft *TxnComputationWrapper) GetColumns(ctx context.Context) ([]interface{
 	case *tree.ShowColumns:
 		if len(cols) == 7 {
 			cols = []*plan2.ColDef{
-				{Typ: plan2.Type{Id: int32(types.T_char)}, Name: "Field"},
-				{Typ: plan2.Type{Id: int32(types.T_char)}, Name: "Type"},
-				{Typ: plan2.Type{Id: int32(types.T_char)}, Name: "Null"},
-				{Typ: plan2.Type{Id: int32(types.T_char)}, Name: "Key"},
-				{Typ: plan2.Type{Id: int32(types.T_char)}, Name: "Default"},
-				{Typ: plan2.Type{Id: int32(types.T_char)}, Name: "Extra"},
-				{Typ: plan2.Type{Id: int32(types.T_char)}, Name: "Comment"},
+				{Typ: plan2.Type{Id: int32(types.T_varchar)}, Name: "Field"},
+				{Typ: plan2.Type{Id: int32(types.T_varchar)}, Name: "Type"},
+				{Typ: plan2.Type{Id: int32(types.T_varchar)}, Name: "Null"},
+				{Typ: plan2.Type{Id: int32(types.T_varchar)}, Name: "Key"},
+				{Typ: plan2.Type{Id: int32(types.T_varchar)}, Name: "Default"},
+				{Typ: plan2.Type{Id: int32(types.T_varchar)}, Name: "Extra"},
+				{Typ: plan2.Type{Id: int32(types.T_varchar)}, Name: "Comment"},
 			}
 		} else {
 			cols = []*plan2.ColDef{
-				{Typ: plan2.Type{Id: int32(types.T_char)}, Name: "Field"},
-				{Typ: plan2.Type{Id: int32(types.T_char)}, Name: "Type"},
-				{Typ: plan2.Type{Id: int32(types.T_char)}, Name: "Collation"},
-				{Typ: plan2.Type{Id: int32(types.T_char)}, Name: "Null"},
-				{Typ: plan2.Type{Id: int32(types.T_char)}, Name: "Key"},
-				{Typ: plan2.Type{Id: int32(types.T_char)}, Name: "Default"},
-				{Typ: plan2.Type{Id: int32(types.T_char)}, Name: "Extra"},
-				{Typ: plan2.Type{Id: int32(types.T_char)}, Name: "Privileges"},
-				{Typ: plan2.Type{Id: int32(types.T_char)}, Name: "Comment"},
+				{Typ: plan2.Type{Id: int32(types.T_varchar)}, Name: "Field"},
+				{Typ: plan2.Type{Id: int32(types.T_varchar)}, Name: "Type"},
+				{Typ: plan2.Type{Id: int32(types.T_varchar)}, Name: "Collation"},
+				{Typ: plan2.Type{Id: int32(types.T_varchar)}, Name: "Null"},
+				{Typ: plan2.Type{Id: int32(types.T_varchar)}, Name: "Key"},
+				{Typ: plan2.Type{Id: int32(types.T_varchar)}, Name: "Default"},
+				{Typ: plan2.Type{Id: int32(types.T_varchar)}, Name: "Extra"},
+				{Typ: plan2.Type{Id: int32(types.T_varchar)}, Name: "Privileges"},
+				{Typ: plan2.Type{Id: int32(types.T_varchar)}, Name: "Comment"},
 			}
 		}
 	}
@@ -352,7 +353,7 @@ func checkResultQueryPrivilege(proc *process.Process, p *plan.Plan, reqCtx conte
 	var stats statistic.StatsArray
 	stats.Reset()
 
-	if ids, err = isResultQuery(proc, p); err != nil || ids == nil {
+	if ids, err = isResultQuery(reqCtx, proc, p); err != nil || ids == nil {
 		return stats, err
 	}
 	return checkPrivilege(sid, ids, reqCtx, ses)
@@ -637,13 +638,6 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 			cwft.compile = retComp
 		}
 
-		//check privilege
-		/* prepare not need check privilege
-		   err = authenticateUserCanExecutePrepareOrExecute(requestCtx, cwft.ses, prepareStmt.PrepareStmt, newPlan)
-		   if err != nil {
-		   	return nil, err
-		   }
-		*/
 	} else {
 		var planSnapshotTS *timestamp.Timestamp
 		if cwft.preparedStmt != nil {
@@ -1704,7 +1698,7 @@ func initExecuteStmtParamWithResolverInSession(
 	cwft.paramVals = nil
 	if prepareStmt.params != nil && prepareStmt.params.Length() > 0 { // use binary protocol
 		if prepareStmt.params.Length() != numParams {
-			return nil, nil, nil, originSQL, false, moerr.NewInvalidInput(reqCtx, "Incorrect arguments to EXECUTE")
+			return nil, nil, nil, originSQL, false, moerr.NewWrongArguments(reqCtx, "EXECUTE")
 		}
 		paramCount := prepareStmt.params.Length()
 		if err = prepareStmt.params.SetStringSource(types.StringSourceCOMStmt); err != nil {
@@ -1793,7 +1787,7 @@ func initExecuteStmtParamWithResolverInSession(
 		}
 	} else if execPlan != nil && len(execPlan.Args) > 0 {
 		if len(execPlan.Args) != numParams {
-			return nil, nil, nil, originSQL, false, moerr.NewInvalidInput(reqCtx, "Incorrect arguments to EXECUTE")
+			return nil, nil, nil, originSQL, false, moerr.NewWrongArguments(reqCtx, "EXECUTE")
 		}
 		showPublicationPatternPositions := []int32(nil)
 		if show, ok := prepareStmt.PrepareStmt.(*tree.ShowPublications); ok && show.Like != nil {
@@ -1824,7 +1818,7 @@ func initExecuteStmtParamWithResolverInSession(
 		}
 	} else {
 		if numParams > 0 {
-			return nil, nil, nil, originSQL, false, moerr.NewInvalidInput(reqCtx, "Incorrect arguments to EXECUTE")
+			return nil, nil, nil, originSQL, false, moerr.NewWrongArguments(reqCtx, "EXECUTE")
 		}
 	}
 	if err = plan2.ValidatePreparedWindowParams(reqCtx, preparePlan.Plan, cwft.paramVals); err != nil {
@@ -1849,6 +1843,9 @@ func initExecuteStmtParamWithResolverInSession(
 		if err != nil {
 			return nil, nil, nil, originSQL, false, err
 		}
+		// Update only after the full protocol payload and typed bindings are
+		// admitted. The effective domain also owns the specialization/packet key.
+		prepareStmt.rememberIntegerArithmeticBindings(preparePlan.Plan, cwft.paramBindings, cwft.paramVals)
 		bindingKey := preparedExecutionBindingKey(cwft.paramBindings, cwft.paramVals)
 		key := preparedFieldBindingKey(bindingKey, fieldTypes)
 		var proof func(*plan.Expr) bool
@@ -1856,7 +1853,8 @@ func initExecuteStmtParamWithResolverInSession(
 			proof = func(expr *plan.Expr) bool { return preparedBinaryIntegerCastDiagnosticFree(prepareStmt, expr, true) }
 		}
 		if key == prepareStmt.runtimeSpecializationKey && prepareStmt.runtimePlan != nil &&
-			!fieldTypes.NeedsReprepare(cwft.paramBindings, cwft.paramVals) {
+			!fieldTypes.NeedsReprepare(cwft.paramBindings, cwft.paramVals) &&
+			plan2.MatchPreparedDecimalFloatProofs(prepareStmt.runtimeDecimalFloatProofs, cwft.paramBindings, cwft.paramVals) {
 			safe, probeErr := plan2.ProbePreparedDiagnosticCandidatesWithProof(cwft.proc, prepareStmt.runtimeDiagnosticCandidates, proof)
 			if probeErr != nil {
 				return nil, nil, nil, originSQL, false, probeErr
@@ -1920,6 +1918,7 @@ func initExecuteStmtParamWithResolverInSession(
 			if cacheable {
 				cwft.runtimeCacheTarget, cwft.runtimeCacheKey, cwft.runtimeCachePlan = prepareStmt, key, executionPlan
 				cwft.runtimeCacheDiagnostics = bound.DiagnosticCandidates
+				cwft.runtimeCacheDecimalFloatProofs = bound.DecimalFloatProofs
 			}
 		}
 	} else if numParams > 0 && (executionPlan.GetDdl().GetQuery() != nil || executionPlan.GetDcl().GetSetVariables() != nil) {
@@ -2026,6 +2025,7 @@ func (cwft *TxnComputationWrapper) discardRuntimeCacheCandidate() {
 	cwft.runtimeCacheKey = ""
 	cwft.runtimeCachePlan = nil
 	cwft.runtimeCacheDiagnostics = nil
+	cwft.runtimeCacheDecimalFloatProofs = nil
 	cwft.runtimeCacheColDefData = nil
 }
 
@@ -2046,7 +2046,7 @@ func (cwft *TxnComputationWrapper) installRuntimeCacheCandidate(runtimeCompile *
 		return false
 	}
 	retiredCompile := cwft.runtimeCacheTarget.installRuntimeSpecializationCache(
-		cwft.runtimeCacheKey, cwft.runtimeCachePlan, runtimeCompile, cwft.runtimeCacheDiagnostics, cwft.runtimeCacheColDefData)
+		cwft.runtimeCacheKey, cwft.runtimeCachePlan, runtimeCompile, cwft.runtimeCacheDiagnostics, cwft.runtimeCacheDecimalFloatProofs, cwft.runtimeCacheColDefData)
 	if retiredCompile != nil {
 		// NewCompile has already installed runtimeCompile's execution state on the
 		// shared session Process. Releasing the displaced compile here would call
@@ -3023,9 +3023,6 @@ func buildPlanForCompileRetry(
 	planningContext := originalContext
 	if planningContext == nil {
 		planningContext = ctx
-	}
-	if ctx.Value(defines.HnswSnapshotFallbackKey{}) == true {
-		planningContext = context.WithValue(planningContext, defines.HnswSnapshotFallbackKey{}, true)
 	}
 	compilerContext.SetContext(plan2.WithJSONMergeWarningOrigin(planningContext, plan2.JSONMergeWarningInternalReprepare))
 	defer compilerContext.SetContext(originalContext)

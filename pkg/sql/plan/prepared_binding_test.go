@@ -221,7 +221,13 @@ func TestPreparedDecimalIntegerConsumerPruning(t *testing.T) {
 			{"signed cast integer", "c = cast(? as signed)", types.T_int64, []string{"16001"}, true, true},
 			{"signed cast unsigned control", "c = cast(? as signed)", types.T_uint64, []string{"18446744073709551615"}, false, false},
 			{"signed cast double control", "c = cast(? as signed)", types.T_float64, []string{"16001.75"}, false, false},
-			{"double cast integer control", "c = cast(? as double)", types.T_int64, []string{"16001"}, false, false},
+			{"double cast integer", "c = cast(? as double)", types.T_int64, []string{"16001"}, true, false},
+			{"double cast integer range", "c >= cast(? as double)", types.T_int64, []string{"-16001"}, true, false},
+			{"double cast unsigned commuted", "cast(? as double) <= c", types.T_uint64, []string{"16001"}, true, false},
+			{"double cast injective chain", "c = cast(cast(? as signed) as double)", types.T_int64, []string{"16001"}, true, false},
+			{"double cast wide integer", "c = cast(? as double)", types.T_int64, []string{"1152921504606846976"}, false, false},
+			{"double cast float32 control", "c = cast(cast(? as float) as double)", types.T_int64, []string{"16001"}, false, false},
+			{"double cast rounded control", "c = cast(? as double(5,0))", types.T_int64, []string{"16001"}, false, false},
 			{"abs double cast integer control", "c = abs(cast(? as double))", types.T_int64, []string{"-16001"}, false, false},
 			{"double cast collision", "c = cast(? as double)", types.T_int64, []string{"9007199254740992"}, false, false},
 		} {
@@ -252,6 +258,11 @@ func TestPreparedDecimalIntegerConsumerPruning(t *testing.T) {
 				t.Cleanup(stmt.Free)
 				bound, err := BuildPreparedExecutionPlan(&mock.ctxt, stmt, bindings, values)
 				require.NoError(t, err)
+				if tc.native && strings.Contains(tc.name, "double cast") || tc.name == "double cast wide integer" || tc.name == "double cast collision" {
+					require.NotEmpty(t, bound.DecimalFloatProofs)
+					require.False(t, bound.ValueDependent, "both proved classes can occupy the single cache slot")
+					require.True(t, MatchPreparedDecimalFloatProofs(bound.DecimalFloatProofs, bindings, values))
+				}
 				if tc.guarded {
 					require.False(t, bound.ValueDependent, "safe admitted domains remain reusable")
 					require.NotEmpty(t, bound.DiagnosticCandidates)
@@ -756,6 +767,55 @@ func TestPreparedSQLPresentationKeepsDerivedNumericConsumer(t *testing.T) {
 			require.Equal(t, int32(types.T_text), root.ProjectList[0].Typ.Id)
 		}
 		require.Equal(t, int32(types.T_decimal128), root.ProjectList[1].Typ.Id)
+	}
+}
+
+func TestPreparedSQLPresentationKeepsDependentProgramTypes(t *testing.T) {
+	const query = `SELECT ?, (o.N_NATIONKEY,(SELECT ?)) <=>
+		(SELECT COUNT(*),MAX(i.N_NATIONKEY) FROM NATION i WHERE i.N_NATIONKEY<=o.N_NATIONKEY)
+		FROM NATION o`
+	for _, binary := range []bool{false, true} {
+		for _, tc := range []struct {
+			name  string
+			typ   types.Type
+			value any
+		}{
+			{"integer", types.T_int64.ToType(), "1"},
+			{"decimal", types.New(types.T_decimal128, 20, 2), "1.25"},
+			{"boolean", types.T_bool.ToType(), "true"},
+			{"text", types.T_text.ToType(), "2"},
+			{"null", types.T_any.ToType(), nil},
+		} {
+			t.Run(fmt.Sprintf("binary=%v/%s", binary, tc.name), func(t *testing.T) {
+				mock := NewMockOptimizer(true, newPlanTestProcess(t))
+				proc := mock.ctxt.GetProcess()
+				params := vector.NewVec(types.T_text.ToType())
+				defer func() { proc.SetPrepareParams(nil); params.Free(proc.Mp()) }()
+				for range 2 {
+					require.NoError(t, vector.AppendBytes(params, []byte(fmt.Sprint(tc.value)), tc.value == nil, proc.Mp()))
+				}
+				proc.SetPrepareParams(params)
+				stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, query, 1)
+				require.NoError(t, err)
+				defer stmt.Free()
+				value := ParamValue{Value: tc.value, IsBinaryProtocol: binary}
+				bound, err := BuildPreparedExecutionPlan(&mock.ctxt, stmt,
+					[]PreparedSourceBinding{{Position: 0, Type: tc.typ}, {Position: 1, Type: tc.typ}},
+					[]any{value, value})
+				require.NoError(t, err)
+				q := bound.Plan.GetQuery()
+				require.NotNil(t, q.Correlation)
+				require.NoError(t, q.ValidateCorrelation(), "presentation must not rewrite internal program outputs")
+				if tc.value != nil {
+					root := q.Nodes[q.Steps[q.MainOutputStep()]]
+					want := types.T_text
+					if binary {
+						want = tc.typ.Oid
+					}
+					require.Equal(t, int32(want), root.ProjectList[0].Typ.Id, "preserve the public bare-marker contract")
+				}
+			})
+		}
 	}
 }
 

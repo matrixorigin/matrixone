@@ -3506,14 +3506,19 @@ func (v *Vector) preflightBinaryStringAppend(
 	}
 	needsRows := states > 1
 	if !needsRows {
-		hasDestinationValue := v.length > v.nsp.GetBitmap().CountRange(0, uint64(v.length))
+		// Keep the borrowed-validity materialization boundary before growth.
+		destinationNulls := v.nsp.GetBitmap()
 		destination := types.RuntimeStringInherit
 		if v.binaryString {
 			destination = types.RuntimeStringBinary
 		}
-		needsRows = hasDestinationValue &&
-			(summary.inherit && destination != types.RuntimeStringInherit ||
-				summary.text || summary.binary && destination != types.RuntimeStringBinary)
+		needsRows = summary.inherit && destination != types.RuntimeStringInherit ||
+			summary.text || summary.binary && destination != types.RuntimeStringBinary
+		if needsRows {
+			// Matching scalar domains cannot require row metadata, regardless
+			// of the destination's NULLs. Inspect its prefix only on a conflict.
+			needsRows = v.length > destinationNulls.CountRange(0, uint64(v.length))
+		}
 	}
 	if needsRows {
 		return v.ensureBinaryStringCapacity(finalLength, mp)
@@ -3968,15 +3973,6 @@ func NewVec(typ types.Type) *Vector {
 func NewOffHeapVecWithType(typ types.Type) *Vector {
 	vec := NewVec(typ)
 	vec.offHeap = true
-	return vec
-}
-
-func NewOffHeapVecWithTypeAndData(typ types.Type, data []byte, length, cap int) *Vector {
-	vec := NewVec(typ)
-	vec.offHeap = true
-	vec.data = data
-	vec.length = length
-	vec.areaDisjoint = !typ.IsVarlen() || length == 0
 	return vec
 }
 
@@ -4452,16 +4448,6 @@ func (v *Vector) Free(mp *mpool.MPool) {
 	v.preflightAreaReady = false
 	v.preflightRowCount = 0
 	v.areaDisjoint = true
-
-	// if !v.OnUsed || v.OnPut {
-	// 	panic("free vector which unalloc or in put list")
-	// }
-	// v.OnUsed = false
-	// v.OnPut = false
-	// if len(v.FreeMsg) > 20 {
-	// 	v.FreeMsg = v.FreeMsg[1:]
-	// }
-	// v.FreeMsg = append(v.FreeMsg, time.Now().String()+" : typ="+v.typ.DescString()+" "+string(debug.Stack()))
 
 	//reuse.Free[Vector](v, nil)
 }
@@ -8528,7 +8514,8 @@ func unionT[T int32 | int64](v, w *Vector, sels []T, mp *mpool.MPool) error {
 					nulls.Add(&v.nsp, uint64(oldLen+i))
 					continue
 				}
-				copy(v.data[(oldLen+i)*tlen:(oldLen+i+1)*tlen], w.data[int(sel)*tlen:(int(sel)+1)*tlen])
+				dstOffset, srcOffset := (oldLen+i)*tlen, int(sel)*tlen
+				copy(v.data[dstOffset:dstOffset+tlen], w.data[srcOffset:srcOffset+tlen])
 			}
 		} else {
 			switch tlen {
@@ -8555,9 +8542,7 @@ func unionT[T int32 | int64](v, w *Vector, sels []T, mp *mpool.MPool) error {
 					v.data[(oldLen + i)] = w.data[int(sel)]
 				}
 			default:
-				for i, sel := range sels {
-					copy(v.data[(oldLen+i)*tlen:(oldLen+i+1)*tlen], w.data[int(sel)*tlen:(int(sel)+1)*tlen])
-				}
+				unionWideFixedSelected(v, w, oldLen, sels, tlen)
 			}
 		}
 	}
@@ -8569,6 +8554,42 @@ func unionT[T int32 | int64](v, w *Vector, sels []T, mp *mpool.MPool) error {
 		return err
 	}
 	return nil
+}
+
+// unionWideFixedSelected handles widths that otherwise require a dynamic copy
+// per row. Keep the existing scalar paths in unionT for narrow values.
+func unionWideFixedSelected[S int32 | int64](v, w *Vector, oldLen int, sels []S, width int) {
+	// Bound the byte ranges before constructing typed views. The backing
+	// allocation can contain padding, especially for 12/20/24-byte values.
+	source := w.data[:w.length*width]
+	target := v.data[oldLen*width : (oldLen+len(sels))*width]
+	switch width {
+	case 12:
+		unionFixedSelected[types.TS](target, source, sels)
+	case 16:
+		unionFixedSelected[types.Decimal128](target, source, sels)
+	case 20:
+		unionFixedSelected[types.Blockid](target, source, sels)
+	case 24:
+		unionFixedSelected[types.Rowid](target, source, sels)
+	case 32:
+		unionFixedSelected[types.Decimal256](target, source, sels)
+	default:
+		for i, sel := range sels {
+			copy(target[i*width:(i+1)*width], source[int(sel)*width:(int(sel)+1)*width])
+		}
+	}
+}
+
+// unionFixedSelected copies physical values only. unionT owns capacity,
+// logical length and metadata; the representative type has the selected width,
+// but need not be the vector's logical SQL type (e.g. UUID and Decimal128).
+func unionFixedSelected[T types.FixedSizeT, S int32 | int64](target, source []byte, sels []S) {
+	var value T
+	width := int(unsafe.Sizeof(value))
+	src := util.UnsafeSlice[T](unsafe.Pointer(unsafe.SliceData(source)), len(source)/width)
+	dst := util.UnsafeSlice[T](unsafe.Pointer(unsafe.SliceData(target)), len(sels))
+	shuffle.FixedLengthShuffle(src, dst, sels)
 }
 
 func (v *Vector) UnionBatch(w *Vector, offset int64, cnt int, flags []uint8, mp *mpool.MPool) error {
@@ -8711,11 +8732,15 @@ func (v *Vector) unionBatch(
 		// the parent's complete area, so copying w.area merely because the window's
 		// offset is zero can amplify one logical range into a copy of every sibling
 		// range. Derive the live payload span from the selected descriptors first.
-		if flags == nil {
+		if flags == nil || preflighted && addCnt == cnt {
 			oldLen := v.length
+			areaBytes := -1
+			if preflighted {
+				areaBytes = selectedAreaBytes
+			}
 			var fast bool
 			fast, err = v.unionBatchContiguousVarlenRange(
-				w, vCol, wCol, int(offset), cnt, mp)
+				w, vCol, wCol, int(offset), cnt, areaBytes, mp)
 			if err != nil {
 				return err
 			}
@@ -9432,7 +9457,7 @@ func byteSlicesOverlap(left, right []byte) bool {
 func (v *Vector) unionBatchContiguousVarlenRange(
 	w *Vector,
 	vCol, wCol []types.Varlena,
-	offset, cnt int,
+	offset, cnt, admittedAreaBytes int,
 	mp *mpool.MPool,
 ) (bool, error) {
 	hasNull := !w.nsp.EmptyByFlag()
@@ -9443,7 +9468,8 @@ func (v *Vector) unionBatchContiguousVarlenRange(
 	// whole vector. SetLength and aliasing operations clear areaDisjoint; a
 	// borrowed Window is identified by cantFreeArea and must scan its descriptors
 	// because it retains the parent's complete area.
-	if offset == 0 && cnt == w.length && w.areaDisjoint && !w.cantFreeArea {
+	if offset == 0 && cnt == w.length && w.areaDisjoint && !w.cantFreeArea &&
+		(admittedAreaBytes < 0 || len(w.area) == admittedAreaBytes) {
 		areaEnd = len(w.area)
 		hasArea = areaEnd > 0
 	} else {
@@ -9472,6 +9498,13 @@ func (v *Vector) unionBatchContiguousVarlenRange(
 		}
 	}
 
+	// A preflighted publication may only copy the exact live payload admitted
+	// before commit. NULL mutations can leave dead bytes even in disjoint area.
+	payloadBytes := areaEnd - areaStart
+	if admittedAreaBytes >= 0 && (payloadBytes != admittedAreaBytes ||
+		payloadBytes > cap(v.area)-len(v.area)) {
+		return false, nil
+	}
 	oldLen := v.length
 	baseOff := len(v.area)
 	if hasArea {
@@ -10777,7 +10810,15 @@ func (v *Vector) CloneWindowTo(w *Vector, start, end int, mp *mpool.MPool) error
 			w.areaDisjoint = false
 		}
 		w.length = end - start
-		w.data = nil
+		if w.dataLease != nil {
+			w.releaseBorrowedData()
+		} else if w.cantFreeData {
+			w.data = nil
+			w.cantFreeData = false
+		} else {
+			// Keep owned capacity available for reuse and eventual Free.
+			w.data = w.data[:0]
+		}
 		return v.copyBinaryStringWindowTo(w, start, end, mp)
 	} else if v.IsConst() {
 		if v.typ.IsVarlen() {

@@ -24,7 +24,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/panjf2000/ants/v2"
 	"golang.org/x/sync/semaphore"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -43,9 +42,6 @@ const (
 )
 
 var (
-	parallelUploadPoolOnce sync.Once
-	parallelUploadPool     *ants.Pool
-
 	parallelUploadSemaphoreOnce sync.Once
 	parallelUploadSemaphore     chan struct{}
 
@@ -56,17 +52,6 @@ var (
 type weightedUploadBufferBudget struct {
 	semaphore *semaphore.Weighted
 	capacity  int64
-}
-
-func getParallelUploadPool() *ants.Pool {
-	parallelUploadPoolOnce.Do(func() {
-		pool, err := ants.NewPool(runtime.NumCPU())
-		if err != nil {
-			panic(err)
-		}
-		parallelUploadPool = pool
-	})
-	return parallelUploadPool
 }
 
 func getParallelUploadSemaphore() chan struct{} {

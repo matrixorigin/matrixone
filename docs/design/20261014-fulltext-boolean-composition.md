@@ -2,12 +2,13 @@
 
 ## Revision and gate
 
-- Owning issue: https://github.com/matrixorigin/matrixone/issues/30166 (read in full, including its recipe and regression expectations; no comments as of 2026-10-14).
-- Design revision: v1, 2026-10-14. Status: approved by independent review v1 on 2026-10-16; see `20261016-fulltext-boolean-composition-review-v1.md`.
-- Implementation: local work only; no implementation PR exists or is authorized for publication.
+- Owning issue: <https://github.com/matrixorigin/matrixone/issues/30166> (read in full, including its recipe and regression expectations; no comments as of 2026-10-14).
+- Design revision: v1, 2026-10-14. Status: approved by independent review v1 on 2026-10-16; see the frozen decision below.
+- Implementation history: the later review examined PR #30190; design approval does not certify implementation or merge readiness.
+- Revision 2026-10-27 (#31411): a MATCH used as a Boolean is whether the index returned the row, not whether its relevance is nonzero (§2). Decided by the developer; the frozen review below predates it.
 - Verified base/head/merge-base before this document: `5a0570ea70083c9365719009a5ed8d7618f9ed91`; isolated worktree `/workspace/shared/matrixone-30166` was clean.
 - G-FEATURE-DESIGN applies: new SQL capability and material hot-path cardinality/resource change, independent of diff size. This document is the design-only phase. No production code may precede recorded independent PASS on its exact content revision.
-- Approval record belongs in a separate versioned review document identifying this document's commit and content SHA256. Material design changes invalidate approval of affected decisions. No user reconfirmation is required for internal review; publishing remains outside scope.
+- The frozen decision below identifies the reviewed commit and content SHA256. Material design changes invalidate approval of affected decisions.
 
 ## 1. Problem, contract, owner
 
@@ -23,11 +24,11 @@ Goals: arbitrary nested AND/OR/NOT around supported scan-local MATCH leaves, sca
 
 Non-goals: change standalone projection/order-only MATCH row inclusion; implement generic full-table/token LIKE fallback; change tokenizers/scoring; make FULLTEXT2 synchronous; optimize OR/NOT with new bitmaps or runtime engines; change SQL syntax/catalog/protobuf; support cross-table MATCH arguments or arbitrary MATCH solely above a relational barrier; default relevance sorting changes owned by issue 30164.
 
-Compatibility precedent matters: maintainers intentionally retain score-zero omission in projection-only MATCH (https://github.com/matrixorigin/matrixone/issues/29299#issuecomment-5809939130 and https://github.com/matrixorigin/matrixone/issues/28327#issuecomment-5572594737); broad LEFT JOIN change PR 28340 was closed unmerged. The new path must require a MATCH beneath OR or NOT in a scan-local WHERE filter. A bare/projection-only positive query keeps the existing route. A SELECT score in a query routed by the new Boolean WHERE uses the preserved-row semantics below.
+Compatibility precedent matters: maintainers intentionally retain score-zero omission in projection-only MATCH (<https://github.com/matrixorigin/matrixone/issues/29299#issuecomment-5809939130> and <https://github.com/matrixorigin/matrixone/issues/28327#issuecomment-5572594737>); broad LEFT JOIN change PR 28340 was closed unmerged. The new path must require a MATCH beneath OR or NOT in a scan-local WHERE filter. A bare/projection-only positive query keeps the existing route. A SELECT score in a query routed by the new Boolean WHERE uses the preserved-row semantics below.
 
 ## 2. Exact scalar semantics and three-valued logic
 
-Define `S_m(r)` from the COMPLETE existing search stream for MATCH m: emitted relevance if that stream contains r's primary key; otherwise typed FLOAT32 zero. An emitted zero or negative relevance is preserved, not replaced by a Boolean membership bit. Bare MATCH uses the binder's existing numeric-to-Boolean conversion: zero is FALSE, nonzero TRUE. Comparisons/casts/rounding retain their original bound expression; no algebraic approximation.
+Define `S_m(r)` from the COMPLETE existing search stream for MATCH m: emitted relevance if that stream contains r's primary key; otherwise typed FLOAT32 zero. Define `F_m(r)` as whether that stream contains r's primary key. The BOOL value of MATCH is `F_m(r)` wherever MATCH is converted to BOOL — a bare predicate, an operand of AND/OR/NOT/XOR, a CASE/IF condition, or an explicit `CAST(MATCH(...) AS BOOL)`: TRUE for every row the index returned, whatever its relevance, including zero (a term in every document, or a one-row table, has idf zero); FALSE for a row it did not return. This is the same answer an AND-only MATCH gives, so `MATCH`, `MATCH OR FALSE` and `NOT MATCH` agree (#31411). Every non-Boolean use of MATCH is `S_m(r)`: comparisons, numeric casts, rounding and projection retain their original bound expression on the score; no algebraic approximation. A cast through a numeric type therefore converts the score (`CAST(CAST(MATCH(...) AS DOUBLE) AS BOOL)` is FALSE at relevance zero). A column projected from MATCH is `S_m(r)`, so a condition on it in an outer query block (`SELECT ... FROM (SELECT MATCH(...) AS sc ...) d WHERE sc`) is the score's truth, not `F_m(r)`, wherever the optimizer moves that condition.
 
 This is an explicit contract for the newly supported composition domain, not a claim that a previously unexecutable scalar form already returned these values. Missing index rows do not become SQL NULL merely because LEFT JOIN represents absence with NULL.
 
@@ -140,4 +141,18 @@ Decided: preserving rewrite is composition-triggered only; absent indexed releva
 
 Implementation proof obligations, not deferred semantic decisions: confirm complete unlimited FULLTEXT2 search and one-doc-per-score contract for admitted search modes; prove current scan pagination provenance or refuse affected shape; preserve consumer tags and prepared snapshots. If any is false, do not invent a fallback: notify owner and revise/re-review. No unresolved semantic design decision is intentionally delegated to code.
 
-Independent review decision: PASS. Versioned record `20261016-fulltext-boolean-composition-review-v1.md` binds this exact revision (`dde7e9ef357815198133ef8abe666cb5b021d94c`), content SHA256 `df7d8bafc2772d79fe18934226c1c3608e51573348ba97494d6e9bc1e32a1925`, and source head `ca9bf53793e598f58edf8fb045d23ce61c49cfd1`.
+## Frozen design decision
+
+On 2026-10-16 an independent `gpt-6.1-sol` session with reasoning `high`
+returned design-only PASS without conditions for revision
+`dde7e9ef357815198133ef8abe666cb5b021d94c`, content SHA256
+`df7d8bafc2772d79fe18934226c1c3608e51573348ba97494d6e9bc1e32a1925`.
+It examined source `ca9bf53793e598f58edf8fb045d23ce61c49cfd1` (PR #30190).
+
+The review statically inspected the design, SQL contract, source and expected
+result oracles. It ran no build, UT, BVT, benchmark, service or CI. Its PASS
+certifies that frozen design only: it establishes neither implementation
+correctness, runtime leak freedom, capacity, QA, CI nor merge readiness. Later
+material changes require renewed review. Consolidation does not broaden approval.
+The [original decision](https://github.com/matrixorigin/matrixone/blob/6cbe375b49696021d72778baa292a66287f080bd/docs/design/20261016-fulltext-boolean-composition-review-v1.md)
+retains its provenance and historical scope.

@@ -44,3 +44,54 @@ func bindTemporalMarkerConsumer(ctx context.Context, source *Expr, target types.
 	}
 	return appendCastBeforeExpr(ctx, datetime, makePlan2Type(&target))
 }
+
+// Raw markers need the arithmetic consumer's incomplete-calendar diagnostics.
+// Explicit casts and known non-string sources keep the released typed path.
+func rawPreparedCalendarMarker(expr *Expr) bool {
+	if !temporalDirectMarker(expr) {
+		return false
+	}
+	source := unwrapPreparedImplicitCast(expr, true)
+	oid := types.T(source.Typ.Id)
+	return oid == types.T_any || oid.IsMySQLString()
+}
+
+func preparedRawCalendarResult(name string, args []*Expr) *types.Type {
+	if len(args) != 2 || args[0] == nil || args[1] == nil {
+		return nil
+	}
+	date, interval := args[0], args[1]
+	switch name {
+	case "date_add", "date_sub":
+	case "+":
+		if args[0].Typ.Id == int32(types.T_interval) {
+			date, interval = args[1], args[0]
+		} else if args[1].Typ.Id != int32(types.T_interval) {
+			return nil
+		}
+	case "-":
+		if args[1].Typ.Id != int32(types.T_interval) {
+			return nil
+		}
+	default:
+		return nil
+	}
+	if !rawPreparedCalendarMarker(date) {
+		return nil
+	}
+	list := interval.GetList()
+	if list == nil || len(list.List) < 2 {
+		return nil
+	}
+	unit, err := types.IntervalTypeOf(list.List[1].GetLit().GetSval())
+	if err != nil {
+		return nil
+	}
+	// Inspect the SQL unit before normalization can turn text DAY into
+	// MICROSECOND. Rebinding the internal three-argument tree keeps this cast.
+	target := types.New(types.T_datetime, 6, 6)
+	if timestampAddDateUnit(unit) || unit == types.Year_Month {
+		target = types.T_date.ToType()
+	}
+	return &target
+}

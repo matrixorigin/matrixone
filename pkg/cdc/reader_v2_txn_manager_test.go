@@ -1010,45 +1010,39 @@ func TestTransactionManager_EnsureCleanup_WatermarkMismatch_Concurrent(t *testin
 	require.False(t, tm.tracker.NeedsRollback(), "tracker should be clean after EnsureCleanup")
 }
 
-// slowRecordingSinker injects small delays to simulate slow downstream without causing deadlocks.
-type slowRecordingSinker struct {
+// blockingRollbackSinker holds the first rollback until the test explicitly
+// releases it, simulating a slow downstream without scheduler-dependent sleeps.
+type blockingRollbackSinker struct {
 	*recordingSinker
-	delay time.Duration
+	rollbackEntered chan struct{}
+	releaseRollback <-chan struct{}
+	once            sync.Once
 }
 
-func newSlowRecordingSinker(delay time.Duration) *slowRecordingSinker {
-	return &slowRecordingSinker{
-		recordingSinker: newRecordingSinker(),
-		delay:           delay,
-	}
-}
-
-func (s *slowRecordingSinker) SendBegin() {
-	time.Sleep(s.delay)
-	s.record("begin")
-}
-
-func (s *slowRecordingSinker) SendCommit() {
-	time.Sleep(s.delay)
-	s.record("commit")
-}
-
-func (s *slowRecordingSinker) SendRollback() {
-	time.Sleep(s.delay)
-	s.record("rollback")
-}
-
-func (s *slowRecordingSinker) SendDummy() {
-	time.Sleep(s.delay / 2)
-	s.record("dummy")
+func (s *blockingRollbackSinker) SendRollback() {
+	s.once.Do(func() {
+		close(s.rollbackEntered)
+		<-s.releaseRollback
+	})
+	s.recordingSinker.SendRollback()
 }
 
 // TestTransactionManager_SlowSinker_NoDeadlock ensures that even with a slow sinker,
 // concurrent begins do not deadlock; at worst, they serialize and take slightly longer.
 func TestTransactionManager_SlowSinker_NoDeadlock(t *testing.T) {
 	t.Parallel()
-	ctx := context.Background()
-	sinker := newSlowRecordingSinker(5 * time.Millisecond)
+	// This deadline is only a deadlock watchdog, not a throughput assertion.
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+	releaseRollback := make(chan struct{})
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(releaseRollback) }) }
+	t.Cleanup(release)
+	sinker := &blockingRollbackSinker{
+		recordingSinker: newRecordingSinker(),
+		rollbackEntered: make(chan struct{}),
+		releaseRollback: releaseRollback,
+	}
 	updater := newMockWatermarkUpdater()
 	tm := NewTransactionManager(sinker, updater, 1, "task1", "db1", "table1")
 
@@ -1064,15 +1058,18 @@ func TestTransactionManager_SlowSinker_NoDeadlock(t *testing.T) {
 	wg.Add(numGoroutines)
 
 	done := make(chan struct{})
-	start := time.Now()
+	start := make(chan struct{})
+	errCh := make(chan error, numGoroutines)
 
 	for i := 0; i < numGoroutines; i++ {
 		go func() {
 			defer wg.Done()
+			<-start
 			// Repeatedly attempt begin on a new range; should not deadlock
-			_ = tm.BeginTransaction(ctx, toTs1, toTs2)
+			errCh <- tm.BeginTransaction(ctx, toTs1, toTs2)
 		}()
 	}
+	close(start)
 
 	go func() {
 		wg.Wait()
@@ -1080,11 +1077,38 @@ func TestTransactionManager_SlowSinker_NoDeadlock(t *testing.T) {
 	}()
 
 	select {
+	case <-sinker.rollbackEntered:
+	case <-ctx.Done():
+		t.Fatal("concurrent begin did not reach rollback; possible recursive-lock deadlock")
+	}
+	// The slow rollback must retain the manager lock. No caller may finish
+	// or emit another transaction operation until the downstream is released.
+	if tm.mu.TryLock() {
+		tm.mu.Unlock()
+		t.Fatal("transaction manager lock was released during rollback")
+	}
+	require.Equal(t, []string{"clear"}, sinker.opsSnapshot())
+	select {
+	case err := <-errCh:
+		t.Fatalf("begin completed before rollback was released: %v", err)
+	default:
+	}
+	release()
+
+	select {
 	case <-done:
-		// Completed; assert time bound is reasonable (no deadlock)
-		elapsed := time.Since(start)
-		require.Less(t, elapsed, 500*time.Millisecond, "should not take too long; no deadlock expected")
-	case <-time.After(2 * time.Second):
+	case <-ctx.Done():
 		t.Fatal("timeout indicates potential deadlock with slow sinker")
 	}
+	for range numGoroutines {
+		require.NoError(t, <-errCh)
+	}
+	expected := make([]string, 0, 4*numGoroutines)
+	for range numGoroutines {
+		expected = append(expected, "clear", "rollback", "dummy", "begin")
+	}
+	require.Equal(t, expected, sinker.opsSnapshot(), "each begin must serialize rollback and its next begin")
+	require.Equal(t, toTs1, tm.tracker.GetFromTs())
+	require.Equal(t, toTs2, tm.tracker.GetToTs())
+	require.True(t, tm.tracker.NeedsRollback(), "the final begin remains active")
 }

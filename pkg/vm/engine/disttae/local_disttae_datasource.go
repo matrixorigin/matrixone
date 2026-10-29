@@ -869,12 +869,18 @@ func (ls *LocalDisttaeDataSource) filterInMemCommittedInserts(
 		summaryBuf = v.(*bytes.Buffer)
 	}
 	if ls.pStateRows.insIter == nil {
-		if !ls.memPKFilter.Valid() {
-			ls.pStateRows.insIter = ls.pState.NewRowsIter(ls.snapshotTS, nil, false)
-		} else {
+		switch {
+		case ls.memPKFilter.Valid():
 			ls.pStateRows.insIter = ls.pState.NewPrimaryKeyIterWithFilters(
 				ls.memPKFilter.TS,
 				ls.memPKFilter.Specs())
+		case ls.memPKFilter.ClusterKeyValid():
+			ls.pStateRows.insIter = ls.pState.NewClusterKeyIterWithFilters(
+				ls.memPKFilter.ClusterKeyTS(),
+				ls.memPKFilter.ClusterKeyDescriptor(),
+				ls.memPKFilter.ClusterKeySpecs())
+		default:
+			ls.pStateRows.insIter = ls.pState.NewRowsIter(ls.snapshotTS, nil, false)
 		}
 		if summaryBuf != nil {
 			summaryBuf.WriteString(fmt.Sprintf("[PScan] insIter created %v\n", ls.memPKFilter.String()))
@@ -910,6 +916,8 @@ func (ls *LocalDisttaeDataSource) filterInMemCommittedInserts(
 	)
 	if ls.memPKFilter.Valid() {
 		iterKind = "primary-key"
+	} else if ls.memPKFilter.ClusterKeyValid() {
+		iterKind = "cluster-key"
 	}
 
 	var (
@@ -968,16 +976,16 @@ func (ls *LocalDisttaeDataSource) filterInMemCommittedInserts(
 				if i == physicalColumnPos {
 					continue
 				}
-
-				var idx uint16
-				switch seqNums[i] {
-				case objectio.SEQNUM_COMMITTS:
-					// in-memory committed row batch layout:
-					// [0]=rowid, [1]=commitTS, [2+seq]=user columns
-					idx = 1
-				default:
-					idx = 2 /*rowid and commits*/ + seqNums[i]
+				if seqNums[i] == objectio.SEQNUM_COMMITTS {
+					// Replayed rows keep commit time on RowEntry, not in the
+					// retained batch's zero-length timestamp vector.
+					if err = vector.AppendFixed(outBatch.Vecs[i], entry.Time, false, mp); err != nil {
+						return err
+					}
+					continue
 				}
+
+				idx := 2 /*rowid and commits*/ + seqNums[i]
 
 				if int(idx) >= len(entry.Batch.Vecs) /*add column*/ ||
 					entry.Batch.Attrs[idx] == "" /*drop column*/ {

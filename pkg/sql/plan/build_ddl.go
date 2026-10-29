@@ -58,6 +58,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 )
 
@@ -347,6 +348,11 @@ func inferViewColumns(
 		return nil, moerr.NewViewWrongList(ctx.GetContext())
 	}
 	cols := make([]*plan.ColDef, len(projectList))
+	var integerValues []function.IntegerLogicalPrecision
+	if query.IntegerPrecision != nil {
+		integerValues = evaluateIntegerPrecision(query.IntegerPrecision)
+	}
+
 	for idx, expr := range projectList {
 		name := query.Headings[idx]
 		originName := ""
@@ -368,6 +374,10 @@ func inferViewColumns(
 		if idx < len(outputColumnProvenance) {
 			narrowed := decimalDivSchemaType(*typ, outputColumnProvenance[idx])
 			typ = &narrowed
+		}
+		if g := query.IntegerPrecision; g != nil && idx < len(g.Outputs) {
+			adjusted := integerSchemaType(*typ, g, g.Outputs[idx], true, integerValues)
+			typ = &adjusted
 		}
 		defaultDef := &plan.Default{NullAbility: !expr.Typ.NotNullable}
 		if idx < len(outputColumnProvenance) {
@@ -1555,6 +1565,18 @@ func viewJoinCondWithExpandedStars(
 	return &stableCond, rewritten
 }
 
+// CTAS writes the temporal fractional precision into both plan fields used
+// by schema metadata. Expression types may carry the precision only in Scale.
+func ctasTemporalSchemaType(typ plan.Type) plan.Type {
+	switch types.T(typ.Id) {
+	case types.T_time, types.T_datetime, types.T_timestamp:
+		if typ.Scale >= 0 && typ.Scale <= MaxFsp {
+			typ.Width = typ.Scale
+		}
+	}
+	return typ
+}
+
 // RefreshPreparedCTASInferredColumns aligns columns inferred from AS SELECT
 // with the execute-time query. Explicit column definitions remain the user's
 // schema contract even when a parameter changes the source domain.
@@ -1600,6 +1622,11 @@ func RefreshPreparedCTASInferredColumns(ctx context.Context, p, original *Plan, 
 	if len(targetColumns) < targetOnlyCount+len(originalColumns) {
 		return moerr.NewInternalError(ctx, "prepared CTAS source columns are missing from target")
 	}
+	g := p.GetDdl().Query.IntegerPrecision
+	var integerValues []function.IntegerLogicalPrecision
+	if g != nil {
+		integerValues = evaluateIntegerPrecision(g)
+	}
 	for i, source := range runtimeColumns {
 		if source == nil || originalColumns[i] == nil ||
 			!strings.EqualFold(source.Name, originalColumns[i].Name) {
@@ -1623,7 +1650,10 @@ func RefreshPreparedCTASInferredColumns(ctx context.Context, p, original *Plan, 
 			return moerr.NewNotSupportedf(ctx,
 				"prepared CTAS inferred column %q has a type-dependent default", target.Name)
 		}
-		target.Typ = source.Typ
+		target.Typ = ctasTemporalSchemaType(source.Typ)
+		if g != nil && i < len(g.Outputs) {
+			target.Typ = integerSchemaType(target.Typ, g, g.Outputs[i], false, integerValues)
+		}
 	}
 	return nil
 }
@@ -1669,6 +1699,11 @@ func genAsSelectCols(
 	rootNode := query.Nodes[query.Steps[query.MainOutputStep()]]
 
 	cols := make([]*plan.ColDef, len(rootNode.ProjectList))
+	var integerValues []function.IntegerLogicalPrecision
+	if query.IntegerPrecision != nil {
+		integerValues = evaluateIntegerPrecision(query.IntegerPrecision)
+	}
+
 	for i, expr := range rootNode.ProjectList {
 		typ := expr.Typ
 		provenance := outputColumnProvenance[i]
@@ -1678,7 +1713,11 @@ func genAsSelectCols(
 				typ.NotNullable = expr.Typ.NotNullable
 			}
 		}
-		typ = decimalDivSchemaType(typ, provenance)
+		typ = ctasTemporalSchemaType(decimalDivSchemaType(typ, provenance))
+		if g := query.IntegerPrecision; g != nil && i < len(g.Outputs) {
+			typ = integerSchemaType(typ, g, g.Outputs[i], false, integerValues)
+		}
+
 		// CTAS creates a new table from the query result.  A source column's
 		// AUTO_INCREMENT attribute is not part of that result schema and must
 		// not be copied to the new table.
@@ -2182,8 +2221,16 @@ func buildCreateView(stmt *tree.CreateView, ctx CompilerContext) (*Plan, error) 
 		defer ctx.SetBuildingAlterView(false, "", "")
 	}
 
+	creationContext, err := restoredViewCreationContext(ctx, createView.Database, string(viewName))
+	if err != nil {
+		return nil, err
+	}
 	tableDef, err := genViewTableDef(
-		ctx, stmt.AsSource, stmt.ColNames, createView.Database, string(viewName), stmt.CheckOption, true)
+		creationContext, stmt.AsSource, stmt.ColNames, createView.Database, string(viewName), stmt.CheckOption, true)
+	if err != nil {
+		return nil, err
+	}
+	tableDef.ViewSql.View, err = preserveRestoredViewDefinition(ctx.GetContext(), createView.Database, string(viewName), tableDef.ViewSql.View)
 	if err != nil {
 		return nil, err
 	}
@@ -2848,6 +2895,7 @@ func buildCreateTable(
 			cloneStmt,
 			recoveredLegacyChecks,
 			sub,
+			false, *parserSQLModeFromContext(ctx),
 		)
 		if err != nil {
 			return nil, err
@@ -3160,7 +3208,7 @@ func buildCreateTable(
 	} else if stmt.Param != nil {
 		for i := 0; i < len(stmt.Param.Option); i += 2 {
 			switch strings.ToLower(stmt.Param.Option[i]) {
-			case "endpoint", "region", "access_key_id", "secret_access_key", "bucket", "filepath", "compression", "format", "jsondata", "provider", "role_arn", "external_id", "hive_partitioning", "hive_partition_columns", "arrow_container", ExternalWriteFilePatternKey, CSVCommentKey:
+			case "endpoint", "region", "access_key_id", "secret_access_key", "bucket", "filepath", "compression", "format", "jsondata", "provider", "role_arn", "external_id", "hive_partitioning", "hive_partition_columns", "arrow_container", JSONBinaryOptionKey, ExternalWriteFilePatternKey, CSVCommentKey:
 			default:
 				return nil, moerr.NewBadConfigf(ctx.GetContext(), "the keyword '%s' is not support", strings.ToLower(stmt.Param.Option[i]))
 			}
@@ -3170,6 +3218,9 @@ func buildCreateTable(
 			return nil, moerr.NewNotSupported(ctx.GetContext(), "Arrow format is supported only by LOAD DATA")
 		}
 
+		if err := initJSONBinaryOption(stmt.Param); err != nil {
+			return nil, err
+		}
 		if err := validateWriteFilePattern(ctx.GetContext(), stmt.Param, createTable.TableDef); err != nil {
 			return nil, err
 		}
@@ -4582,7 +4633,35 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 		}
 	}
 
+	// #30282: reject ON DELETE/ON UPDATE SET NULL declared over NOT NULL child
+	// columns (MySQL error 1830). Runs after the primary-key pass so implied
+	// NOT NULL columns are caught as well. Recovery replay keeps the
+	// historical (already accepted) layout buildable; a trusted physical
+	// reconstruction of an owned table (TRUNCATE's drop-and-recreate and the
+	// truncate-optimized unfiltered DELETE) reinstalls that same unchanged
+	// layout and is not a newly authored constraint.
+	if replay == nil && !trustedForeignKeyLayoutRebuild(ctx.GetContext()) {
+		for i, fk := range createTable.TableDef.Fkeys {
+			if i >= len(createTable.FkCols) || createTable.FkCols[i] == nil {
+				break
+			}
+			if err := checkFkSetNullColumnsRequireNullable(ctx.GetContext(), createTable.TableDef.Cols, fk, createTable.FkCols[i].Cols); err != nil {
+				return err
+			}
+		}
+	}
+
 	return nil
+}
+
+// trustedForeignKeyLayoutRebuild reports whether the current CREATE physically
+// reconstructs an owned table unchanged (TRUNCATE / truncate-optimized DELETE
+// recreate reaching the internal executor with the bridge from
+// StatementOption.WithTrustedForeignKeyLayout). Such statements reinstall a
+// historical foreign-key layout rather than author a new constraint (#30282).
+func trustedForeignKeyLayoutRebuild(gctx context.Context) bool {
+	trusted, _ := gctx.Value(defines.TrustedForeignKeyLayout{}).(bool)
+	return trusted
 }
 
 func findCTASColumn(cols []*ColDef, name string) *ColDef {
@@ -6085,7 +6164,16 @@ func buildDropTableSingle(ifExists bool, temporary bool, name *tree.TableName, c
 
 	dropTable.Table = string(name.ObjectName)
 
-	obj, tableDef, err := ctx.Resolve(dropTable.Database, dropTable.Table, nil)
+	var obj *plan.ObjectRef
+	var tableDef *plan.TableDef
+	var err error
+	if resolver, ok := ctx.(interface {
+		ResolveForDrop(string, string) (*plan.ObjectRef, *plan.TableDef, error)
+	}); ok {
+		obj, tableDef, err = resolver.ResolveForDrop(dropTable.Database, dropTable.Table)
+	} else {
+		obj, tableDef, err = ctx.Resolve(dropTable.Database, dropTable.Table, nil)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -7037,6 +7125,9 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 	droppedIndexNames := make(map[string]bool)
 	droppedForeignKeyNames := make(map[string]bool)
 	for i, option := range stmt.Options {
+		if isIgnoredStorageTableOption(option) {
+			continue
+		}
 		switch opt := option.(type) {
 		case *tree.AlterOptionDrop:
 			alterTableDrop := new(plan.AlterTableDrop)
@@ -7133,6 +7224,11 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 
 				fkData, err := getForeignKeyData(ctx, databaseName, currentTableDef, def)
 				if err != nil {
+					return nil, err
+				}
+				// #30282: reject ON DELETE/ON UPDATE SET NULL declared over
+				// NOT NULL child columns (MySQL error 1830).
+				if err = checkFkSetNullColumnsRequireNullable(ctx.GetContext(), currentTableDef.Cols, fkData.Def, fkData.Cols.Cols); err != nil {
 					return nil, err
 				}
 				currentTableDef.Fkeys = append(currentTableDef.Fkeys, fkData.Def)
@@ -8061,6 +8157,129 @@ func checkFkColsAreValid(ctx CompilerContext, fkData *FkData, parentTableDef *Ta
 	return checkForeignKeyColumns(ctx.GetContext(), fkData, parentTableDef)
 }
 
+// checkFkSetNullColumnsRequireNullable enforces MySQL error 1830
+// (ER_FK_COLUMN_NOT_NULL): a foreign key declared with an ON DELETE or
+// ON UPDATE SET NULL action must not name a NOT NULL child column, because the
+// action could never write NULL into it at runtime. MySQL rejects the
+// definition at CREATE TABLE and ALTER TABLE ADD [CONSTRAINT] time; without
+// the check, the invalid ON DELETE action silently keeps the old child value
+// (leaving an orphan) and the ON UPDATE action fails only when the parent
+// row is updated, far away from the DDL that created the trap.
+//
+// The caller must hand over the final column list. Primary-key implied NOT
+// NULL is applied only after the whole CREATE TABLE column pass, so a
+// validation running mid-loop would miss it.
+func checkFkSetNullColumnsRequireNullable(gctx context.Context, tableCols []*plan.ColDef, fkDef *plan.ForeignKeyDef, fkColNames []string) error {
+	if fkDef == nil ||
+		(fkDef.OnDelete != plan.ForeignKeyDef_SET_NULL &&
+			fkDef.OnUpdate != plan.ForeignKeyDef_SET_NULL) {
+		return nil
+	}
+	name2Col := make(map[string]*plan.ColDef, len(tableCols))
+	for _, col := range tableCols {
+		name2Col[col.Name] = col
+	}
+	for _, colName := range fkColNames {
+		col, ok := name2Col[strings.ToLower(colName)]
+		if !ok || col == nil {
+			// The accurate "column does not exist" error is raised elsewhere.
+			continue
+		}
+		// fkColumnNotNullable documents the predicate origin (explicit NOT
+		// NULL attribute, primary-key implication and catalog-loaded flag).
+		if fkColumnNotNullable(col) {
+			name := col.Name
+			if col.OriginName != "" {
+				name = col.OriginName
+			}
+			return moerr.NewErrFkColumnNotNull(gctx, name, fkDef.Name)
+		}
+	}
+	return nil
+}
+
+// fkColumnNotNullable is the shared nullability predicate used by the FK
+// SET NULL validation: Default.NullAbility is the authoritative flag (it
+// carries both the explicit NOT NULL attribute and the primary-key implied
+// NOT NULL), while NotNull/Typ.NotNullable cover catalog-loaded definitions
+// whose Default slot may be unset.
+func fkColumnNotNullable(col *plan.ColDef) bool {
+	notNull := col.NotNull || col.Typ.NotNullable
+	if col.Default != nil {
+		notNull = notNull || !col.Default.NullAbility
+	}
+	return notNull
+}
+
+// checkAlterSurvivingFkSetNull rejects an ALTER that makes a child column of
+// a SURVIVING SET NULL foreign key NOT NULL — MODIFY/CHANGE ... NOT NULL or
+// ADD PRIMARY KEY would leave the constraint impossible to execute (MySQL
+// error 1830, #30282 review). Only columns whose NOT NULL status is newly
+// introduced by this ALTER are tightened; columns that were already NOT NULL
+// keep their previously validated constraint, constraints dropped by the
+// same statement are ignored, and the historical-restore replay keeps the
+// legacy layout buildable.
+//
+// The pre-ALTER nullability is compared by ColId identity, never by column
+// name: CHANGE/RENAME preserve a column's ColId, while a name can be reused
+// by a different physical column inside one ALTER (DROP COLUMN old, CHANGE
+// col old ... NOT NULL) — a name-keyed comparison would inherit the dropped
+// column's NOT NULL exemption and reinstall an impossible SET NULL
+// constraint (#30282 review round 3).
+func checkAlterSurvivingFkSetNull(cctx CompilerContext, tableName string, droppedFks map[string]bool, oldDef, newDef *plan.TableDef) error {
+	if ddlReplayForTable(cctx.GetContext(), tableName) != nil {
+		// historical-restore exception
+		return nil
+	}
+	if len(newDef.Fkeys) == 0 {
+		return nil
+	}
+	oldNotNull := make(map[uint64]bool, len(oldDef.Cols))
+	for _, col := range oldDef.Cols {
+		if col == nil {
+			continue
+		}
+		if fkColumnNotNullable(col) {
+			oldNotNull[col.ColId] = true
+		}
+	}
+	id2col := make(map[uint64]*plan.ColDef, len(newDef.Cols))
+	for _, col := range newDef.Cols {
+		if col == nil {
+			continue
+		}
+		id2col[col.ColId] = col
+	}
+	for _, fk := range newDef.Fkeys {
+		if fk == nil ||
+			(fk.OnDelete != plan.ForeignKeyDef_SET_NULL &&
+				fk.OnUpdate != plan.ForeignKeyDef_SET_NULL) {
+			continue
+		}
+		if droppedFks[strings.ToLower(fk.Name)] {
+			continue
+		}
+		for _, id := range fk.Cols {
+			col, ok := id2col[id]
+			if !ok || col == nil {
+				continue
+			}
+			// no entry in oldNotNull for this ColId means either the column
+			// was nullable before or it did not exist at all — both leave the
+			// NOT NULL status attributable to this ALTER.
+			if !fkColumnNotNullable(col) || oldNotNull[col.ColId] {
+				continue
+			}
+			name := col.Name
+			if col.OriginName != "" {
+				name = col.OriginName
+			}
+			return moerr.NewErrFkColumnNotNull(cctx.GetContext(), name, fk.Name)
+		}
+	}
+	return nil
+}
+
 func checkForeignKeyColumns(ctx context.Context, fkData *FkData, parentTableDef *TableDef) error {
 	// colId in parent table-> position in parent table
 	columnIdPos := make(map[uint64]int)
@@ -8182,6 +8401,13 @@ func BindForwardForeignKey(ctx context.Context, constraintName string,
 
 	// 3. check fk valid or not
 	if err := checkForeignKeyColumns(ctx, &fkData, parentTableDef); err != nil {
+		return nil, err
+	}
+	// #30282 forward-binding parity: an unresolved declaration admitted under
+	// foreign_key_checks=0 over a NOT NULL child column must not bind when the
+	// parent table is created either (MySQL error 1830); a SET NULL action
+	// could never write NULL there.
+	if err := checkFkSetNullColumnsRequireNullable(ctx, childTableDef.Cols, fkData.Def, fkData.Cols.Cols); err != nil {
 		return nil, err
 	}
 	return &fkData, nil

@@ -85,6 +85,9 @@ func executionRemoteExpressionProtocolVersion(proc *process.Process, features pl
 
 func remoteExpressionProtocolVersion(features plan.RemoteExpressionFeatures) int64 {
 	required := max(requiredExpressionContractProtocolVersion(features), temporalExpressionProtocolVersion(features))
+	if features.FloatConversionSemantics {
+		required = max(required, defines.MORPCVersion132)
+	}
 	if features.LoadFKIgnoreCheck {
 		required = max(required, defines.MORPCVersion125)
 	}
@@ -148,10 +151,22 @@ func remoteExpressionProtocolVersion(features plan.RemoteExpressionFeatures) int
 	if features.JSONNumericComparisons {
 		required = max(required, defines.MORPCVersion128)
 	}
+	if features.IncompleteTemporalStrings {
+		required = max(required, defines.MORPCVersion130)
+	}
 	return required
 }
 
 func requiredExpressionContractProtocolVersion(features plan.RemoteExpressionFeatures) int64 {
+	if features.ODKUStatementResult || features.SessionLastInsertIDBaseline {
+		return defines.MORPCVersion134
+	}
+	if features.JSONMinMaxTypedComparison {
+		return defines.MORPCVersion133
+	}
+	if features.JSONStringConsumerOverload || features.JSONOpaqueTextContracts {
+		return defines.MORPCVersion129
+	}
 	if features.JSONScalarLiteralContracts {
 		return defines.MORPCVersion104
 	}

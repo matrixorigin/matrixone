@@ -57,6 +57,7 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, bindCtx *BindContext)
 	defer func() {
 		builder.insertHasOnDuplicateUpdate = false
 	}()
+	builder.isODKU = builder.insertHasOnDuplicateUpdate
 	dmlCtx := NewDMLContext()
 	// Allow FK tables on the modern insert path: bypass the generic FK-table
 	// rejection in ResolveTables via IgnoreForeignKey, then enforce parent
@@ -633,7 +634,7 @@ func (builder *QueryBuilder) appendIrregularMaintSource(
 			colPos[strings.ToLower(col.Name)] = imagePos
 			imagePos++
 		}
-		builder.recordReturningSource(maintStep, tableDef, objRef, tableDef.Name, tableDef.Name, colPos)
+		builder.recordReturningSource(maintStep, tableDef, tableDef.Name, tableDef.Name, colPos)
 	}
 
 	return projID
@@ -2723,6 +2724,17 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 	// index table types.
 	isOnDupUpdate := len(astUpdateExprs) > 0 &&
 		!(len(astUpdateExprs) == 1 && astUpdateExprs[0] == nil)
+	// Resolve explicit targets before choosing the conflict action. Even an
+	// INSERT with no possible duplicate must not accept engine-owned columns.
+	if isOnDupUpdate {
+		for _, assignment := range astUpdateExprs {
+			name := assignment.Names[0].ColName()
+			idx, ok := tableDef.Name2ColIndex[name]
+			if !ok || tableDef.Cols[idx].Hidden {
+				return 0, moerr.NewBadFieldErrorf(builder.GetContext(), "invalid input: column '%s' does not exist", assignment.Names[0].ColNameOrigin())
+			}
+		}
+	}
 	isRegularDMLTarget := tableDef.TableType == catalog.SystemOrdinaryRel ||
 		tableDef.TableType == catalog.SystemIndexRel ||
 		tableDef.TableType == catalog.SystemClusterRel ||
@@ -2782,10 +2794,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 		var updateExpr *plan.Expr
 		for _, astUpdateExpr := range astUpdateExprs {
 			colName := astUpdateExpr.Names[0].ColName()
-			colIdx, ok := tableDef.Name2ColIndex[colName]
-			if !ok {
-				return 0, moerr.NewBadFieldErrorf(builder.GetContext(), "invalid input: column '%s' does not exist", astUpdateExpr.Names[0].ColNameOrigin())
-			}
+			colIdx := tableDef.Name2ColIndex[colName]
 			colDef := tableDef.Cols[colIdx]
 			astExpr := astUpdateExpr.Expr
 
@@ -2830,6 +2839,11 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 				}
 			}
 
+			isPrimaryKey := slices.Contains(tableDef.Pkey.Names, colDef.Name)
+			// Use the bound row owner, before assignment casts obscure the column.
+			// Unlike VALUES(pk), an existing-row identity is safe for every arbiter.
+			isSelfAssignment := isPrimaryKey && isOnDupColumn(updateExpr, scanTag, int32(colIdx))
+
 			// Flink's MySQL JDBC dialect includes every column in the update
 			// clause. When PRIMARY is the only conflict arbiter, pk = VALUES(pk)
 			// is necessarily a no-op because the incoming and existing primary
@@ -2837,9 +2851,14 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 			// a physical primary-key update. If a secondary UNIQUE key can select
 			// the conflicting row, the incoming primary key may differ, so retain
 			// the existing rejection for that ambiguous case.
-			if firstUniqueIdxPos < 0 &&
-				slices.Contains(tableDef.Pkey.Names, colDef.Name) &&
-				isOnDupIncomingColumn(updateExpr, selectTag, int32(colIdx)) {
+			if isPrimaryKey && firstUniqueIdxPos < 0 &&
+				isOnDupColumn(updateExpr, selectTag, int32(colIdx)) {
+				// Elide execution, but retain explicit assignment ownership so an
+				// ON UPDATE expression cannot replace this unchanged primary key.
+				updateExprs[colDef.Name] = updateExpr
+				if _, unproven := unprovenPrimaryKeyCols[colDef.Name]; !unproven {
+					immutablePrimaryKeyCols[colDef.Name] = struct{}{}
+				}
 				continue
 			}
 
@@ -2851,24 +2870,25 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 			if err != nil {
 				return 0, err
 			}
-			// MySQL clients such as NiFi's JDBC writer assign every inserted
-			// column in the ODKU arm, including a literal or prepared marker for
-			// the primary key. The value is only a no-op when it equals the row
-			// selected by the primary-key arbiter, so retain the assignment in
-			// order and validate it against the old row at execution time.
-			if slices.Contains(tableDef.Pkey.Names, colDef.Name) {
-				if isDirectODKUPKIdentityValue(astExpr) {
+			// Retain self assignments in order, preserving explicit assignment
+			// ownership without a runtime guard. Direct literals and prepared
+			// markers require a guard against the conflicting row's primary key.
+			// A later identity cannot erase an earlier unproven mutation.
+			if isPrimaryKey {
+				if isSelfAssignment || isDirectODKUPKIdentityValue(astExpr) {
 					if _, unproven := unprovenPrimaryKeyCols[colDef.Name]; !unproven {
-						oldPrimaryKey := &plan.Expr{
-							Typ: colDef.Typ,
-							Expr: &plan.Expr_Col{Col: &plan.ColRef{
-								RelPos: scanTag,
-								ColPos: int32(colIdx),
-							}},
-						}
-						updateExpr, err = buildODKUPKIdentityGuard(builder, oldPrimaryKey, updateExpr)
-						if err != nil {
-							return 0, err
+						if !isSelfAssignment {
+							oldPrimaryKey := &plan.Expr{
+								Typ: colDef.Typ,
+								Expr: &plan.Expr_Col{Col: &plan.ColRef{
+									RelPos: scanTag,
+									ColPos: int32(colIdx),
+								}},
+							}
+							updateExpr, err = buildODKUPKIdentityGuard(builder, oldPrimaryKey, updateExpr)
+							if err != nil {
+								return 0, err
+							}
 						}
 						immutablePrimaryKeyCols[colDef.Name] = struct{}{}
 					}
@@ -3647,6 +3667,9 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 					if _, skipped := noopSkipCols[col.Name]; skipped {
 						continue
 					}
+					if _, immutable := immutablePrimaryKeyCols[col.Name]; immutable {
+						continue
+					}
 					if _, written := updateExprs[col.Name]; written {
 						updateCheckColIdxList = append(updateCheckColIdxList, int32(i))
 					}
@@ -3664,6 +3687,45 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 					UpdateCheckColIdxList:  updateCheckColIdxList,
 					CountFoundRows:         countFoundRows,
 					EmitActionRows:         emitODKUActionRows,
+				}
+				// ODKU result tracking is attached only to the main UPDATE join.
+				// The old/probe auto-increment value is the protocol fallback target;
+				// the input/build marker and ordinal identify a successful generated
+				// INSERT action.  Explicit refs let every later projection/remap keep
+				// the contract intact without inspecting transient column names.
+				autoIncrementCol := int32(-1)
+				autoIncrementInputCol := int32(-1)
+				for i, col := range tableDef.Cols {
+					if col == nil || col.Hidden || !col.Typ.AutoIncr {
+						continue
+					}
+					autoIncrementCol = int32(i)
+					var ok bool
+					autoIncrementInputCol, ok = colName2Idx[tableDef.Name+"."+col.Name]
+					if !ok {
+						return 0, moerr.NewInternalError(builder.GetContext(),
+							"ODKU auto-increment column is missing from input projection")
+					}
+					break // Same first-visible-column policy as PRE_INSERT provenance.
+				}
+				if autoIncrementCol >= 0 && autoIncrementInputCol >= 0 && autoIncrementGeneratedColumn >= 0 {
+					ordinalCol := autoIncrementGeneratedColumn + 1
+					if int(ordinalCol) >= len(selectNode.ProjectList) {
+						return 0, moerr.NewInternalError(builder.GetContext(),
+							"ODKU result provenance columns are missing from input projection")
+					}
+					dedupJoinNode.DedupJoinCtx.OdkuTargetAutoIncrementCol = &plan.ColRef{
+						RelPos: scanTag, ColPos: autoIncrementCol,
+					}
+					dedupJoinNode.DedupJoinCtx.OdkuGeneratedCol = &plan.ColRef{
+						RelPos: selectTag, ColPos: autoIncrementGeneratedColumn,
+					}
+					dedupJoinNode.DedupJoinCtx.OdkuOrdinalCol = &plan.ColRef{
+						RelPos: selectTag, ColPos: ordinalCol,
+					}
+					dedupJoinNode.DedupJoinCtx.OdkuGeneratedAutoIncrementCol = &plan.ColRef{
+						RelPos: selectTag, ColPos: autoIncrementInputCol,
+					}
 				}
 				if emitODKUActionRows {
 					dedupJoinNode.DedupJoinCtx.ActionFinalCol = &plan.ColRef{
@@ -4651,13 +4713,12 @@ func insertUniqueLockKeyPrefixLengths(idxDef *IndexDef, skip bool) (map[string]i
 		(idxDef.KeyFormat == collation.KeyFormatV1 || len(idxDef.Parts) > 1 || len(prefixLengths) > 0), nil
 }
 
-// isOnDupIncomingColumn reports whether an ON DUPLICATE KEY UPDATE expression
-// is the unmodified incoming value of the target column (VALUES(col)). The
-// expression is checked after binding so normal identifier validation has
-// already taken place.
-func isOnDupIncomingColumn(expr *plan.Expr, selectTag, colPos int32) bool {
+// isOnDupColumn matches a direct reference by its bound row owner and position.
+// Binding has already validated identifiers and distinguishes existing-row
+// columns from incoming VALUES columns through their relation tags.
+func isOnDupColumn(expr *plan.Expr, relTag, colPos int32) bool {
 	col := expr.GetCol()
-	return col != nil && col.RelPos == selectTag && col.ColPos == colPos
+	return col != nil && col.RelPos == relTag && col.ColPos == colPos
 }
 
 // isDirectODKUPKIdentityValue limits the runtime no-op guard to values whose
@@ -4738,10 +4799,21 @@ func buildODKUPKIdentityGuard(builder *QueryBuilder, oldPrimaryKey, candidate *p
 	return guard, nil
 }
 
+// isAlterCopyFakePrimaryKey admits only the row identity preserved by the
+// engine-owned COPY statement for this destination. Ordinary SQL has no COPY
+// authority, and other hidden columns are never explicit insert targets.
+func isAlterCopyFakePrimaryKey(ctx context.Context, tableDef *TableDef, col *ColDef) bool {
+	if col.Name != catalog.FakePrimaryKeyColName || tableDef.Pkey == nil ||
+		tableDef.Pkey.PkeyColName != catalog.FakePrimaryKeyColName {
+		return false
+	}
+	opt, ok := ctx.Value(defines.AlterCopyOpt{}).(*plan.AlterCopyOpt)
+	return ok && opt != nil && opt.TargetTableName != "" && opt.TargetTableName == tableDef.Name
+}
+
 // getInsertColsFromStmt retrieves the list of column names to be inserted into a table
 // based on the given INSERT statement and table definition.
-// If the INSERT statement does not specify the columns, all columns except the fake primary key column
-// will be included in the list.
+// An implicit list includes only visible, non-generated columns.
 // If the INSERT statement specifies the columns, it validates the column names against the table definition
 // and returns an error if any of the column names are invalid.
 // The function returns the list of insert columns and an error, if any.
@@ -4765,10 +4837,7 @@ func (builder *QueryBuilder) getInsertColsFromStmt(astCols tree.IdentifierList, 
 		for _, column := range astCols {
 			colName := strings.ToLower(string(column))
 			idx, ok := colToIdx[colName]
-			if !ok {
-				return nil, moerr.NewBadFieldError(builder.GetContext(), colName, tableDef.Name)
-			}
-			if isFunctionalColumn(tableDef.Cols[idx]) {
+			if !ok || (tableDef.Cols[idx].Hidden && !isAlterCopyFakePrimaryKey(builder.GetContext(), tableDef, tableDef.Cols[idx])) {
 				return nil, moerr.NewBadFieldError(builder.GetContext(), colName, tableDef.Name)
 			}
 			if tableDef.Cols[idx].GeneratedCol != nil {
@@ -4852,7 +4921,7 @@ func (builder *QueryBuilder) stripGeneratedDefaultCols(astCols tree.IdentifierLi
 	for i, col := range astCols {
 		colName := strings.ToLower(string(col))
 		if idx, ok := tableDef.Name2ColIndex[colName]; ok {
-			if isFunctionalColumn(tableDef.Cols[idx]) {
+			if tableDef.Cols[idx].Hidden && !isAlterCopyFakePrimaryKey(builder.GetContext(), tableDef, tableDef.Cols[idx]) {
 				return nil, nil, moerr.NewBadFieldError(builder.GetContext(), colName, tableDef.Name)
 			}
 			if tableDef.Cols[idx].GeneratedCol != nil {
@@ -5376,10 +5445,16 @@ func (builder *QueryBuilder) appendNodesForInsertStmt(
 ) (int32, map[string]int32, []bool, int32, error) {
 	colName2Idx := make(map[string]int32)
 	hasAutoCol := false
-	for _, col := range tableDef.Cols {
-		if col.Typ.AutoIncr {
+	odkuAutoIncrementColumn := int32(-1)
+	for i, col := range tableDef.Cols {
+		if col != nil && col.Typ.AutoIncr {
 			hasAutoCol = true
-			break
+			if builder.isODKU && !col.Hidden && odkuAutoIncrementColumn < 0 {
+				// Multiple visible AUTO_INCREMENT columns remain valid DML. Use
+				// the first in table order for both generated and fallback IDs;
+				// later columns still allocate normally but do not own this result.
+				odkuAutoIncrementColumn = int32(i)
+			}
 		}
 	}
 
@@ -5425,13 +5500,6 @@ func (builder *QueryBuilder) appendNodesForInsertStmt(
 		} else if col.Name == catalog.Row_ID {
 			continue
 		} else if col.Name == catalog.CPrimaryKeyColName {
-			//args := make([]*plan.Expr, len(tableDef.Pkey.Names))
-			//
-			//for k, part := range tableDef.Pkey.Names {
-			//	args[k] = DeepCopyExpr(insertColToExpr[part])
-			//}
-			//
-			//compPkeyExpr, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", args)
 			compPkeyExpr = makeCompPkeyExpr(tableDef, tableDef.Name2ColIndex)
 			projList2 = append(projList2, &plan.Expr{
 				Typ: compPkeyExpr.Typ,
@@ -5444,14 +5512,6 @@ func (builder *QueryBuilder) appendNodesForInsertStmt(
 			})
 			colName2Idx[tableDef.Name+"."+col.Name] = int32(len(projList2) - 1)
 		} else if hasCompClusterBy && col.Name == tableDef.ClusterBy.Name {
-			//names := util.SplitCompositeClusterByColumnName(tableDef.ClusterBy.Name)
-			//args := make([]*plan.Expr, len(names))
-			//
-			//for k, part := range names {
-			//	args[k] = DeepCopyExpr(insertColToExpr[part])
-			//}
-			//
-			//clusterByExpr, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "serial_full", args)
 			clusterByExpr = makeClusterByExpr(tableDef, tableDef.Name2ColIndex)
 			projList2 = append(projList2, &plan.Expr{
 				Typ: clusterByExpr.Typ,
@@ -5602,6 +5662,18 @@ func (builder *QueryBuilder) appendNodesForInsertStmt(
 	}
 	markerPhysicalPos, trackAutoIncrementGenerated := builder.insertIgnoreAutoIncrementReorderable(
 		tableDef, skipUniqueIdx, compPkeyExpr, clusterByExpr)
+	// A table without a user-visible AUTO_INCREMENT column may still carry
+	// MatrixOne's hidden fake primary key. That key is an allocation detail and
+	// must not become LAST_INSERT_ID or an ODKU OK-packet value.
+	trackODKUResult := builder.isODKU && odkuAutoIncrementColumn >= 0
+	if trackODKUResult {
+		// ODKU uses the same pre-allocation generated marker as INSERT IGNORE,
+		// but keeps a distinct statement-local ordinal beside it.  The marker is
+		// never used as a hidden-name convention; its physical position is carried
+		// through PreInsertCtx and the DEDUP metadata below.
+		markerPhysicalPos = int32(len(projList2))
+		trackAutoIncrementGenerated = true
+	}
 	if trackAutoIncrementGenerated {
 		projList2 = append(projList2, &plan.Expr{
 			Typ: plan.Type{Id: int32(types.T_bool)},
@@ -5610,22 +5682,37 @@ func (builder *QueryBuilder) appendNodesForInsertStmt(
 				ColPos: markerPhysicalPos,
 			}},
 		})
+		if trackODKUResult {
+			projList2 = append(projList2, &plan.Expr{
+				Typ: plan.Type{Id: int32(types.T_uint64)},
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{
+					RelPos: preInsertTag,
+					ColPos: markerPhysicalPos + 1,
+				}},
+			})
+		}
 	}
 
 	if hasAutoCol || compPkeyExpr != nil || clusterByExpr != nil {
+		preInsertCtx := &plan.PreInsertCtx{
+			Ref:                          objRef,
+			TableDef:                     tableDef,
+			HasAutoCol:                   hasAutoCol,
+			CompPkeyExpr:                 compPkeyExpr,
+			ClusterByExpr:                clusterByExpr,
+			TrackAutoIncrementGenerated:  trackAutoIncrementGenerated && !trackODKUResult,
+			AutoIncrementGeneratedColumn: markerPhysicalPos,
+			TrackOdkuResult:              trackODKUResult,
+			OdkuOrdinalColumn:            markerPhysicalPos + 1,
+		}
+		if trackODKUResult {
+			preInsertCtx.OdkuAutoIncrementColumn = odkuAutoIncrementColumn
+		}
 		lastNodeID = builder.appendNode(&plan.Node{
-			NodeType: plan.Node_PRE_INSERT,
-			Children: []int32{lastNodeID},
-			PreInsertCtx: &plan.PreInsertCtx{
-				Ref:                          objRef,
-				TableDef:                     tableDef,
-				HasAutoCol:                   hasAutoCol,
-				CompPkeyExpr:                 compPkeyExpr,
-				ClusterByExpr:                clusterByExpr,
-				TrackAutoIncrementGenerated:  trackAutoIncrementGenerated,
-				AutoIncrementGeneratedColumn: markerPhysicalPos,
-			},
-			BindingTags: []int32{preInsertTag},
+			NodeType:     plan.Node_PRE_INSERT,
+			Children:     []int32{lastNodeID},
+			PreInsertCtx: preInsertCtx,
+			BindingTags:  []int32{preInsertTag},
 		}, tmpCtx)
 	}
 
@@ -5636,7 +5723,7 @@ func (builder *QueryBuilder) appendNodesForInsertStmt(
 		BindingTags: []int32{builder.genNewBindTag()},
 	}, tmpCtx)
 
-	if !trackAutoIncrementGenerated {
+	if !trackAutoIncrementGenerated && !trackODKUResult {
 		markerPhysicalPos = -1
 	}
 	return lastNodeID, colName2Idx, skipUniqueIdx, markerPhysicalPos, nil

@@ -37,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 )
 
 func NewCatalog() *CatalogCache {
@@ -823,6 +824,8 @@ func InitTableItemWithColumns(item *TableItem, cols Columns) {
 }
 
 func (cc *CatalogCache) InsertColumns(bat *batch.Batch) {
+	cc.tableChange.Lock()
+	defer cc.tableChange.Unlock()
 	ParseColumnsBatchAnd(bat, func(mp map[TableItemKey]Columns) {
 		queryKey := new(TableItem)
 		for k, cols := range mp {
@@ -832,7 +835,10 @@ func (cc *CatalogCache) InsertColumns(bat *batch.Batch) {
 			queryKey.Id = k.Id
 			queryKey.Ts = k.Ts.toTs()
 			item, exist := cc.tables.data.Get(queryKey)
-			if !exist {
+			if !exist && cc.columnUpdateLeavesProjectionUnchanged(queryKey, cols) {
+				continue
+			}
+			if !exist || item.deleted || item.Id != k.Id {
 				logutil.Errorf(
 					"catalog-cache table %v-%v-%v not found when inserting columns",
 					k.AccountId, k.DatabaseId, k.Name,
@@ -875,6 +881,14 @@ func ParseDatabaseBatchAnd(bat *batch.Batch, f func(*DatabaseItem)) {
 }
 
 func genTableDefOfColumn(col catalog.Column) engine.TableDef {
+	def, err := decodeColumnAttribute(col)
+	if err != nil {
+		panic(err)
+	}
+	return def
+}
+
+func decodeColumnAttribute(col catalog.Column) (*engine.AttributeDef, error) {
 	var attr engine.Attribute
 
 	attr.Name = col.Name
@@ -891,30 +905,30 @@ func genTableDefOfColumn(col catalog.Column) engine.TableDef {
 	// whole attr local to escape to the heap. The direct method call avoids
 	// the extra standalone allocation per column.
 	if err := attr.Type.Unmarshal(col.Typ); err != nil {
-		panic(err)
+		return nil, err
 	}
 	attr.Default = new(plan.Default)
 	if col.HasDef == 1 {
 		if err := types.Decode(col.DefaultExpr, attr.Default); err != nil {
-			panic(err)
+			return nil, err
 		}
 	}
 	if col.HasUpdate == 1 {
 		attr.OnUpdate = new(plan.OnUpdate)
 		if err := types.Decode(col.UpdateExpr, attr.OnUpdate); err != nil {
-			panic(err)
+			return nil, err
 		}
 	}
 	if col.HasGenerated == 1 {
 		attr.GeneratedCol = new(plan.GeneratedCol)
 		if err := types.Decode(col.GeneratedExpr, attr.GeneratedCol); err != nil {
-			panic(err)
+			return nil, err
 		}
 	}
 	if col.ConstraintType == catalog.SystemColPKConstraint {
 		attr.Primary = true
 	}
-	return &engine.AttributeDef{Attr: attr}
+	return &engine.AttributeDef{Attr: attr}, nil
 }
 
 func getTableDef(tblItem *TableItem, coldefs []engine.TableDef) (*plan.TableDef, []engine.TableDef) {
@@ -1108,4 +1122,33 @@ func getTableDef(tblItem *TableItem, coldefs []engine.TableDef) (*plan.TableDef,
 		Checks:           tblItem.ExtraInfo.GetChecks(),
 		LogicalId:        tblItem.LogicalId,
 	}, tableDef
+}
+
+// ReplayClusterKey copies one schema under the same publication guard as column
+// initialization. The caller must have applied the catalog through at before
+// dispatching this frame; the cache duration is not that coverage proof.
+func (cc *CatalogCache) ReplayClusterKey(account uint32, dbID, tableID uint64, name string, at timestamp.Timestamp) *readutil.ClusterKeyDescriptor {
+	if cc == nil || at.IsEmpty() {
+		return nil
+	}
+	cc.tableChange.RLock()
+	defer cc.tableChange.RUnlock()
+	probe := &TableItem{AccountId: account, DatabaseId: dbID, Name: name, Ts: at}
+	var result *readutil.ClusterKeyDescriptor
+	cc.tables.data.Ascend(probe, func(item *TableItem) bool {
+		if item.AccountId != account || item.DatabaseId != dbID || item.Name != name {
+			return false
+		}
+		if item.deleted || item.Id != tableID {
+			return false
+		}
+		key, ok := readutil.DeclaredClusterKey(item.TableDef)
+		if ok && key.TableID == tableID && key.Version == item.Version {
+			key.Effective = types.TimestampToTS(item.Ts)
+			key.Through = types.TimestampToTS(at)
+			result = &key
+		}
+		return false
+	})
+	return result
 }

@@ -39,7 +39,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -1046,12 +1045,12 @@ func buildDefaultExprWithColumnsObserved(
 	// try to calculate default value, return err if fails
 	newExpr, err := ConstantFold(batch.EmptyForConstFoldBatch, DeepCopyExpr(defaultExpr), proc, false, true)
 	// cast_assign remains an executable expression because its behavior depends
-	// on sql_mode, so rule.IsConstant rejects the outer function. Validate when
+	// on sql_mode, so function.IsConstant rejects the outer function. Validate when
 	// its source value is constant, without eagerly evaluating volatile defaults.
 	constantMediumIntDefault := false
 	if err == nil && isMediumIntPlanType(typ) && newExpr.GetLit() == nil {
 		if cast := newExpr.GetF(); cast != nil && len(cast.Args) > 0 {
-			constantMediumIntDefault = rule.IsConstant(cast.Args[0], false)
+			constantMediumIntDefault = function.IsConstant(cast.Args[0], false)
 		}
 	}
 	if constantMediumIntDefault {
@@ -2593,65 +2592,6 @@ func getFunctionObjRef(funcID int64, name string) *ObjectRef {
 		ObjName: name,
 	}
 }
-
-// getAccountIds transforms the account names into account ids.
-// if accounts is nil, return the id of the sys account.
-// func getAccountIds(ctx CompilerContext, accounts tree.IdentifierList) ([]uint32, error) {
-// 	var accountIds []uint32
-// 	var err error
-// 	if len(accounts) != 0 {
-// 		accountNames := make([]string, len(accounts))
-// 		for i, account := range accounts {
-// 			accountNames[i] = string(account)
-// 		}
-// 		accountIds, err = ctx.ResolveAccountIds(accountNames)
-// 		if err != nil {
-// 			return nil, err
-// 		}
-// 	} else {
-// 		accountIds = []uint32{catalog.System_Account}
-// 	}
-// 	if len(accountIds) == 0 {
-// 		return nil, moerr.NewInternalError(ctx.GetContext(), "need specify account for the cluster tables")
-// 	}
-// 	return accountIds, err
-// }
-
-// func getAccountInfoOfClusterTable(ctx CompilerContext, accounts tree.IdentifierList, tableDef *TableDef, isClusterTable bool) (*plan.ClusterTable, error) {
-// 	var accountIds []uint32
-// 	var columnIndexOfAccountId int32 = -1
-// 	var err error
-// 	if isClusterTable {
-// 		accountIds, err = getAccountIds(ctx, accounts)
-// 		if err != nil {
-// 			return nil, err
-// 		}
-// 		for i, col := range tableDef.GetCols() {
-// 			if util.IsClusterTableAttribute(col.Name) {
-// 				if columnIndexOfAccountId >= 0 {
-// 					return nil, moerr.NewInternalError(ctx.GetContext(), "there are two account_ids in the cluster table")
-// 				} else {
-// 					columnIndexOfAccountId = int32(i)
-// 				}
-// 			}
-// 		}
-
-// 		if columnIndexOfAccountId == -1 {
-// 			return nil, moerr.NewInternalError(ctx.GetContext(), "there is no account_id in the cluster table")
-// 		} else if columnIndexOfAccountId >= int32(len(tableDef.GetCols())) {
-// 			return nil, moerr.NewInternalError(ctx.GetContext(), "the index of the account_id in the cluster table is invalid")
-// 		}
-// 	} else {
-// 		if len(accounts) != 0 {
-// 			return nil, moerr.NewInvalidInput(ctx.GetContext(), "can not specify the accounts for the non cluster table")
-// 		}
-// 	}
-// 	return &plan.ClusterTable{
-// 		IsClusterTable:         isClusterTable,
-// 		AccountIDs:             accountIds,
-// 		ColumnIndexOfAccountId: columnIndexOfAccountId,
-// 	}, nil
-// }
 
 // getDefaultExprForAssignment restores a catalog default under the current
 // statement policy. The column owns the byte limit, including for legacy

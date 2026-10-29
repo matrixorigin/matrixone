@@ -362,8 +362,8 @@ drop table if exists cast04;
 create table cast04(col1 char(10), col2 char(10), col3 char(10)) as select * from cast03;
 select * from cast04;
 ➤ col1[1,10,0]  ¦  col2[1,10,0]  ¦  col3[1,10,0]  𝄀
-321424  ¦  213412.23  ¦  -100.313  𝄀
--1241  ¦  2314321  ¦  0  𝄀
+321424  ¦  213412  ¦  -100.313  𝄀
+-1241  ¦  2314320  ¦  0  𝄀
 0  ¦  0  ¦  0
 drop table cast03;
 drop table cast04;

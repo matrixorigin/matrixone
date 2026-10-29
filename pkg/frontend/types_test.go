@@ -27,16 +27,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestEngineColumnInfo(t *testing.T) {
-	ec := &engineColumnInfo{
-		name: "test_column",
-		typ:  types.New(types.T_int64, 0, 0),
-	}
-
-	assert.Equal(t, "test_column", ec.GetName())
-	assert.Equal(t, types.T_int64, ec.GetType())
-}
-
 func TestInternalCmdFieldList(t *testing.T) {
 	icfl := &InternalCmdFieldList{
 		tableName: "test_table",

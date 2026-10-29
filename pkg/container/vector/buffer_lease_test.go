@@ -377,3 +377,47 @@ func TestBorrowedVarlenMarshalUsesCanonicalCompactedArea(t *testing.T) {
 	require.Nil(t, dataLease.Bytes())
 	require.Nil(t, areaLease.Bytes())
 }
+
+func TestCloneWindowToConstNullReleasesDataLease(t *testing.T) {
+	for _, sharedArea := range []bool{false, true} {
+		t.Run(fmt.Sprintf("sharedArea=%v", sharedArea), func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			typ := types.T_int64.ToType()
+			if sharedArea {
+				typ = types.T_varchar.ToType()
+			}
+			backing := make([]byte, typ.TypeSize()+32)
+			releases := 0
+			lease, err := NewRefCountedBufferLease(backing, int64(len(backing)), func() { releases++ })
+			require.NoError(t, err)
+			releaseIncoming := sync.OnceFunc(lease.Release)
+			t.Cleanup(releaseIncoming)
+			dst := NewOffHeapVecWithType(typ)
+			t.Cleanup(func() { dst.Free(mp) })
+			require.NoError(t, dst.InstallBorrowedData(backing[:typ.TypeSize()], lease))
+			if sharedArea {
+				require.NoError(t, dst.InstallBorrowedArea(backing[typ.TypeSize():], lease))
+			}
+			releaseIncoming()
+			src := NewConstNull(typ, 1, mp)
+			t.Cleanup(func() { src.Free(mp) })
+			require.NoError(t, src.CloneWindowTo(dst, 0, 1, nil))
+			require.True(t, dst.IsConstNull())
+			require.Equal(t, OwnedMPoolUnique, dst.DataBackingKind())
+			require.Nil(t, dst.GetData())
+			if sharedArea {
+				require.Zero(t, releases, "dropping the data reference must preserve the area's reference")
+				require.Equal(t, BorrowedLease, dst.AreaBackingKind())
+				require.Equal(t, backing[typ.TypeSize():], dst.GetArea())
+			} else {
+				require.Equal(t, 1, releases)
+				dst.ResetWithNewType(&typ)
+				require.NoError(t, AppendFixed(dst, int64(7), false, mp))
+				require.Equal(t, int64(7), GetFixedAtNoTypeCheck[int64](dst, 0))
+			}
+			dst.Free(mp)
+			require.Equal(t, 1, releases)
+			require.Zero(t, mp.CurrNB())
+		})
+	}
+}

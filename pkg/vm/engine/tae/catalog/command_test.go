@@ -20,7 +20,6 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -80,7 +79,6 @@ func (n *errorDBNode) ApproxSize() int64 {
 // TestEntryCommand_MarshalBinary_SmallBuffer tests MarshalBinary with small buffer
 // that will be returned to pool (requires copy)
 func TestEntryCommand_MarshalBinary_SmallBuffer(t *testing.T) {
-	defer testutils.AfterTest(t)()
 
 	// Create a simple EntryCommand
 	cmd := newEmptyEntryCmd(
@@ -115,7 +113,6 @@ func TestEntryCommand_MarshalBinary_SmallBuffer(t *testing.T) {
 // TestEntryCommand_MarshalBinary_LargeBuffer tests MarshalBinary with large buffer
 // that exceeds MaxPooledBufSize (no copy needed)
 func TestEntryCommand_MarshalBinary_LargeBuffer(t *testing.T) {
-	defer testutils.AfterTest(t)()
 
 	// Create an EntryCommand with a large node
 	largeSize := txnbase.MaxPooledBufSize + 1000
@@ -144,7 +141,6 @@ func TestEntryCommand_MarshalBinary_LargeBuffer(t *testing.T) {
 
 // TestEntryCommand_MarshalBinary_Error tests MarshalBinary when MarshalBinaryWithBuffer returns an error
 func TestEntryCommand_MarshalBinary_Error(t *testing.T) {
-	defer testutils.AfterTest(t)()
 
 	// Create an EntryCommand with an error node
 	errorNode := &errorDBNode{}
@@ -173,7 +169,6 @@ func TestEntryCommand_MarshalBinary_Error(t *testing.T) {
 
 // TestEntryCommand_MarshalBinary_MultipleCalls tests that multiple calls work correctly
 func TestEntryCommand_MarshalBinary_MultipleCalls(t *testing.T) {
-	defer testutils.AfterTest(t)()
 
 	cmd := newEmptyEntryCmd(
 		IOET_WALTxnCommand_Database,
@@ -199,7 +194,6 @@ func TestEntryCommand_MarshalBinary_MultipleCalls(t *testing.T) {
 
 // TestEntryCommand_MarshalBinary_VerifyCopy tests that small buffers are properly copied
 func TestEntryCommand_MarshalBinary_VerifyCopy(t *testing.T) {
-	defer testutils.AfterTest(t)()
 
 	cmd := newEmptyEntryCmd(
 		IOET_WALTxnCommand_Database,

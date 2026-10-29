@@ -514,9 +514,6 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 		}
 		for _, assignment := range updateAssignments {
 			colName := assignment.Column
-			if isFunctionalColumn(FindColumn(tableDef.Cols, colName)) {
-				return 0, moerr.NewBadFieldError(builder.GetContext(), colName, tableDef.Name)
-			}
 			updateExpr := assignment.Expr
 			// Check: cannot update a generated column (unless SET gen_col = DEFAULT)
 			isGenCol := false
@@ -1256,7 +1253,7 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 			colPos[strings.ToLower(col.Name)] = pos
 		}
 		lastNodeID = builder.materializeReturningSource(
-			bindCtx, lastNodeID, selectNodeTag, tableDef, dmlCtx.objRefs[0], tableDef.Name, alias, colPos,
+			bindCtx, lastNodeID, selectNodeTag, tableDef, tableDef.Name, alias, colPos,
 		)
 		selectNode = builder.qry.Nodes[lastNodeID]
 		selectNodeTag = selectNode.BindingTags[0]

@@ -28,6 +28,27 @@ from t order by grp, id;
 3  ¦  2  𝄀
 4  ¦  5  𝄀
 5  ¦  5
+select id, nth_value(id, bit_count('3 ')) over (partition by grp order by id rows between unbounded preceding and unbounded following) nth_id from t order by grp, id;
+➤ id[4,32,0]  ¦  nth_id[4,32,0]  𝄀
+1  ¦  2  𝄀
+2  ¦  2  𝄀
+3  ¦  2  𝄀
+4  ¦  5  𝄀
+5  ¦  5
+show count(*) warnings;
+➤ @@session.warning_count[-5,0,0]  𝄀
+0
+select nth_value(1, bit_count('3 ')) over (order by 1) is null as missing_second;
+➤ missing_second[-7,1,0]  𝄀
+1
+select nth_value(id, bit_count('3x')) over (order by id) from t;
+Incorrect arguments to nth_value
+select bit_count('3x') as bits;
+➤ bits[-5,64,0]  𝄀
+2
+show count(*) warnings;
+➤ @@session.warning_count[-5,0,0]  𝄀
+1
 prepare nth_param from 'select id, nth_value(id, ?) over (
 partition by grp order by id
 rows between unbounded preceding and unbounded following

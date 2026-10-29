@@ -1153,6 +1153,7 @@ func isJsonNumericType(tp bytejson.TpCode) bool {
 }
 
 func jsonLength(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	legacy := legacyJSONBinding(proc.Ctx)
 	jsonVec := parameters[0]
 	jsonWrapper := vector.GenerateFunctionStrParameter(jsonVec)
 	rs := vector.MustFunctionResult[int64](result)
@@ -1191,11 +1192,30 @@ func jsonLength(parameters []*vector.Vector, result vector.FunctionResultWrapper
 			if err != nil {
 				return err
 			}
-			bj = bj.Query([]*bytejson.Path{&parsedPath})
+			if legacy {
+				bj = bj.Query([]*bytejson.Path{&parsedPath})
+			} else {
+				// #30781: a matched JSON literal null is a value, only a
+				// non-matching path yields SQL NULL.
+				selected, exists := bj.QueryWithExists([]*bytejson.Path{&parsedPath})
+				if !exists {
+					if err := rs.Append(0, true); err != nil {
+						return err
+					}
+					continue
+				}
+				bj = selected
+			}
 		}
 
+		// #30781: the JSON literal null is a scalar of length 1 (MySQL).
+		// SQL-NULL documents were already handled by jIsNull above.
 		if bj.IsNull() {
-			if err := rs.Append(0, true); err != nil {
+			value := int64(1)
+			if legacy {
+				value = 0
+			}
+			if err := rs.Append(value, legacy); err != nil {
 				return err
 			}
 			continue
@@ -2056,6 +2076,7 @@ func jsonMergeDocument(
 }
 
 func (op *opBuiltInJsonSet) buildJsonFunction(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList, jsonFuncType bytejson.JsonModifyType) error {
+	legacy := legacyJSONBinding(proc.Ctx)
 	// implement json_set function
 	// the first parameter is the json object
 	// the rest of the parameters are the path-value pairs
@@ -2110,6 +2131,22 @@ func (op *opBuiltInJsonSet) buildJsonFunction(parameters []*vector.Vector, resul
 		}
 	default:
 		return moerr.NewInvalidInput(proc.Ctx, "invalid json function type")
+	}
+	if legacy {
+		isJSON := jsonVec.GetType().Oid == types.T_json
+		fn = func(raw []byte, paths []*bytejson.Path, values []bytejson.ByteJson) (bytejson.ByteJson, error) {
+			var document bytejson.ByteJson
+			if isJSON {
+				document = types.DecodeJson(raw)
+			} else {
+				var err error
+				document, err = types.ParseSliceToByteJson(raw)
+				if err != nil {
+					return bytejson.Null, err
+				}
+			}
+			return document.ModifyForLegacyBinding(paths, values, jsonFuncType)
+		}
 	}
 
 rowLoop:
@@ -2173,14 +2210,20 @@ rowLoop:
 		if err != nil {
 			return err
 		}
-		if out.IsNull() && jsonFuncType != bytejson.JsonModifyArrayAppend && jsonFuncType != bytejson.JsonModifyArrayInsert {
-			if err = rs.AppendBytes(nil, true); err != nil {
+		if legacy && out.IsNull() && jsonFuncType != bytejson.JsonModifyArrayAppend && jsonFuncType != bytejson.JsonModifyArrayInsert {
+			if err := rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
-		} else {
-			if err = rs.AppendByteJson(out, false); err != nil {
-				return err
-			}
+			continue
+		}
+		// The modifier result is always a JSON document: a JSON literal null
+		// is a value, not SQL NULL. MySQL keeps the JSON literal null for
+		// JSON_SET/JSON_INSERT/JSON_REPLACE applied to it, so a NOT NULL column
+		// must accept the updated document. SQL-NULL propagation was already
+		// handled by the earlier input checks (null source document, null
+		// path or the ARRAY_APPEND null-value contract).
+		if err = rs.AppendByteJson(out, false); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -2434,13 +2477,13 @@ func (op *opBuiltInJsonObject) jsonObject(params []*vector.Vector, result vector
 						key = fmt.Sprint(v)
 					}
 				case bytejson.TpCodeDate, bytejson.TpCodeTime, bytejson.TpCodeDatetime, bytejson.TpCodeBlob, bytejson.TpCodeOpaque, bytejson.TpCodeBit:
-					if bj, err := v.MarshalJSON(); err == nil && len(bj) >= 2 && bj[0] == '"' {
+					if bj, err := marshalJSONForFloatStringProof(proc.Ctx, v); err == nil && len(bj) >= 2 && bj[0] == '"' {
 						key = string(bj[1 : len(bj)-1])
 					} else {
 						key = fmt.Sprint(v)
 					}
 				default:
-					if bj, err := v.MarshalJSON(); err == nil {
+					if bj, err := marshalJSONForFloatStringProof(proc.Ctx, v); err == nil {
 						key = string(bj)
 					} else {
 						key = fmt.Sprint(v)
@@ -2485,6 +2528,12 @@ func (op *opBuiltInJsonObject) convertKeyToAny(
 ) (any, error) {
 	typ := v.GetType()
 	switch typ.Oid {
+	case types.T_json:
+		// MySQL member-name conversion uses the JSON argument's val_str,
+		// including JSON quotes/escapes, not JSON_UNQUOTE. Keep SQL scalar
+		// key conversion below separate from this already-JSON domain.
+		visible, err := concatStringValue(proc.Ctx, types.T_json, v.GetBytesAt(row))
+		return string(visible), err
 	case types.T_char, types.T_varchar, types.T_text:
 		// Prepared key text keeps the previous kind-only conversion. Concrete
 		// scalar and binary sidecars belong to values, not member names.
@@ -2631,6 +2680,7 @@ func jsonLengthRoot(ivecs []*vector.Vector, result vector.FunctionResultWrapper,
 }
 
 func jsonLengthWithPath(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	legacy := legacyJSONBinding(proc.Ctx)
 	result.UseOptFunctionParamFrame(2)
 	rs := vector.MustFunctionResult[int64](result)
 	p1 := vector.OptGetBytesParamFromWrapper(rs, 0, ivecs[0])
@@ -2673,8 +2723,14 @@ func jsonLengthWithPath(ivecs []*vector.Vector, result vector.FunctionResultWrap
 		if err != nil {
 			return moerr.NewInvalidArg(proc.Ctx, "json_length", "invalid path expression")
 		}
-		val := bj.Query([]*bytejson.Path{&path})
-		if val.IsNull() {
+		// A JSON literal null under the path is an existing value of scalar
+		// length 1 (MySQL); only a non-matching path yields SQL NULL.
+		val, exists := bj.QueryWithExists([]*bytejson.Path{&path})
+		if legacy {
+			val = bj.Query([]*bytejson.Path{&path})
+			exists = !val.IsNull()
+		}
+		if !exists {
 			rsNull.Add(i)
 			continue
 		}
@@ -2857,7 +2913,7 @@ func JsonPretty(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 		if err != nil {
 			return moerr.NewInvalidArg(proc.Ctx, "json_pretty", "invalid JSON document")
 		}
-		out, err := jsonPrettyPrint(bj, 0)
+		out, err := jsonPrettyPrint(proc.Ctx, bj, 0)
 		if err != nil {
 			return err
 		}
@@ -2866,27 +2922,27 @@ func JsonPretty(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 	return nil
 }
 
-func jsonPrettyPrint(bj bytejson.ByteJson, depth int) ([]byte, error) {
+func jsonPrettyPrint(ctx context.Context, bj bytejson.ByteJson, depth int) ([]byte, error) {
 	var buf bytes.Buffer
-	err := jsonPrettyPrintTo(&buf, bj, depth)
+	err := jsonPrettyPrintTo(ctx, &buf, bj, depth)
 	if err != nil {
 		return nil, err
 	}
 	return buf.Bytes(), nil
 }
 
-func jsonPrettyPrintTo(w *bytes.Buffer, bj bytejson.ByteJson, depth int) error {
+func jsonPrettyPrintTo(ctx context.Context, w *bytes.Buffer, bj bytejson.ByteJson, depth int) error {
 	switch bj.Type {
 	case bytejson.TpCodeObject:
-		return prettyPrintObject(w, bj, depth)
+		return prettyPrintObject(ctx, w, bj, depth)
 	case bytejson.TpCodeArray:
-		return prettyPrintArray(w, bj, depth)
+		return prettyPrintArray(ctx, w, bj, depth)
 	default:
-		return prettyPrintScalar(w, bj)
+		return prettyPrintScalar(ctx, w, bj)
 	}
 }
 
-func prettyPrintObject(w *bytes.Buffer, bj bytejson.ByteJson, depth int) error {
+func prettyPrintObject(ctx context.Context, w *bytes.Buffer, bj bytejson.ByteJson, depth int) error {
 	cnt := bj.GetElemCnt()
 	if cnt == 0 {
 		w.WriteString("{}")
@@ -2902,7 +2958,7 @@ func prettyPrintObject(w *bytes.Buffer, bj bytejson.ByteJson, depth int) error {
 		w.Write(keyJSON)
 		w.WriteString(": ")
 		val := bj.GetObjectVal(i)
-		if err := jsonPrettyPrintTo(w, val, depth+1); err != nil {
+		if err := jsonPrettyPrintTo(ctx, w, val, depth+1); err != nil {
 			return err
 		}
 		if i < cnt-1 {
@@ -2915,7 +2971,7 @@ func prettyPrintObject(w *bytes.Buffer, bj bytejson.ByteJson, depth int) error {
 	return nil
 }
 
-func prettyPrintArray(w *bytes.Buffer, bj bytejson.ByteJson, depth int) error {
+func prettyPrintArray(ctx context.Context, w *bytes.Buffer, bj bytejson.ByteJson, depth int) error {
 	cnt := bj.GetElemCnt()
 	if cnt == 0 {
 		w.WriteString("[]")
@@ -2926,7 +2982,7 @@ func prettyPrintArray(w *bytes.Buffer, bj bytejson.ByteJson, depth int) error {
 	for i := 0; i < cnt; i++ {
 		w.WriteString(indent)
 		elem := bj.GetArrayElem(i)
-		if err := jsonPrettyPrintTo(w, elem, depth+1); err != nil {
+		if err := jsonPrettyPrintTo(ctx, w, elem, depth+1); err != nil {
 			return err
 		}
 		if i < cnt-1 {
@@ -2939,9 +2995,9 @@ func prettyPrintArray(w *bytes.Buffer, bj bytejson.ByteJson, depth int) error {
 	return nil
 }
 
-func prettyPrintScalar(w *bytes.Buffer, bj bytejson.ByteJson) error {
+func prettyPrintScalar(ctx context.Context, w *bytes.Buffer, bj bytejson.ByteJson) error {
 	// Use MarshalJSON to get properly formatted/escaped scalar value.
-	text, err := bj.MarshalJSON()
+	text, err := marshalJSONForFloatStringProof(ctx, bj)
 	if err != nil {
 		return err
 	}
@@ -3532,7 +3588,7 @@ func JsonValue(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 			continue
 		}
 		// Unquote → extract text value (strip JSON string quotes).
-		s, err := val.Unquote()
+		s, err := unquoteJSONForFloatStringProof(proc.Ctx, val)
 		if err != nil {
 			return err
 		}

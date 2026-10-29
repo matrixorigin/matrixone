@@ -23,6 +23,7 @@ import (
 	"math"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -1907,7 +1908,7 @@ func TestRollupWindowHavingPreservesFromScopeErrors(t *testing.T) {
 				select sum(n_nationkey) as n_name
 				from nation
 				group by n_regionkey with rollup
-				having n_name <> ''`,
+				having nation.n_name <> ''`,
 			wantError: "must appear in the GROUP BY clause",
 		},
 		{
@@ -1917,7 +1918,7 @@ func TestRollupWindowHavingPreservesFromScopeErrors(t *testing.T) {
 				       row_number() over (order by sum(n_nationkey)) as rn
 				from nation
 				group by n_regionkey with rollup
-				having n_name <> ''`,
+				having nation.n_name <> ''`,
 			wantError: "must appear in the GROUP BY clause",
 		},
 	}
@@ -8857,13 +8858,18 @@ func TestSubQuery(t *testing.T) {
 	}
 	runTestShouldPass(mock, t, sqls, false, false)
 
-	// should error
+	// Complete relation execution preserves grouping, HAVING and projection.
+	// Scalar cardinality is checked against the rows at execution time.
 	sqls = []string{
-		"SELECT * FROM NATION where N_REGIONKEY > (select max(R_REGIONKEY) from REGION222)",                                                          // table not exist
-		"SELECT * FROM NATION where N_REGIONKEY > (select max(R_REGIONKEY) from REGION where R_REGIONKEY < N_REGIONKEY222)",                          // column not exist
-		"SELECT * FROM NATION where N_REGIONKEY > (select max(R_REGIONKEY) from REGION where R_REGIONKEY < N_REGIONKEY group by R_NAME)",             // non-eq agg scalar subquery with GROUP BY
-		"SELECT * FROM NATION where N_REGIONKEY > (select max(R_REGIONKEY) from REGION where R_REGIONKEY < N_REGIONKEY having max(R_REGIONKEY) > 0)", // non-eq agg scalar subquery with HAVING
-		"SELECT * FROM NATION where N_REGIONKEY > (select max(R_REGIONKEY) + 1 from REGION where R_REGIONKEY < N_REGIONKEY)",                         // non-eq agg scalar subquery with computed projection
+		"SELECT * FROM NATION where N_REGIONKEY > (select max(R_REGIONKEY) from REGION where R_REGIONKEY < N_REGIONKEY group by R_NAME)",
+		"SELECT * FROM NATION where N_REGIONKEY > (select max(R_REGIONKEY) from REGION where R_REGIONKEY < N_REGIONKEY having max(R_REGIONKEY) > 0)",
+		"SELECT * FROM NATION where N_REGIONKEY > (select max(R_REGIONKEY) + 1 from REGION where R_REGIONKEY < N_REGIONKEY)",
+	}
+	runTestShouldPass(mock, t, sqls, false, false)
+
+	sqls = []string{
+		"SELECT * FROM NATION where N_REGIONKEY > (select max(R_REGIONKEY) from REGION222)",                                 // table not exist
+		"SELECT * FROM NATION where N_REGIONKEY > (select max(R_REGIONKEY) from REGION where R_REGIONKEY < N_REGIONKEY222)", // column not exist
 	}
 	runTestShouldError(mock, t, sqls)
 
@@ -10198,7 +10204,7 @@ func outPutPlan(logicPlan *Plan, toFile bool, t *testing.T) {
 		json = getJSON(logicPlan.GetDcl(), t)
 	}
 	if toFile {
-		err := os.WriteFile("/tmp/mo_plan_test.json", json, 0777)
+		err := os.WriteFile(filepath.Join(t.TempDir(), "mo_plan_test.json"), json, 0600)
 		if err != nil {
 			t.Logf("%+v", err)
 		}
@@ -10852,4 +10858,24 @@ func planNodeDependsOn(query *plan.Query, nodeID, dependencyID int32, visited ma
 		}
 	}
 	return false
+}
+
+func TestExtensionPlansAreNotSupported(t *testing.T) {
+	for _, sql := range []string{"load some_ext", "create extension pg as myext file '/missing.so'"} {
+		t.Run(sql, func(t *testing.T) {
+			ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
+			stmt, err := mysql.ParseOne(t.Context(), sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			p, err := BuildPlan(ctx, stmt, false)
+			require.Nil(t, p)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), "%v", err)
+			require.ErrorContains(t, err, "extension statements are not supported in MatrixOne")
+			prepared := tree.NewPrepareString("unsupported_extension", sql)
+			defer prepared.Free()
+			p, err = buildPrepare(prepared, ctx)
+			require.Nil(t, p)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), "%v", err)
+		})
+	}
 }

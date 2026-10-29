@@ -23,6 +23,18 @@ import (
 type legacySpecialConsumerContextKey struct{}
 type legacyTimestampAddSecondContextKey struct{}
 type legacyDecimalIntegerDivContextKey struct{}
+type legacyUnixTimestampDatetimeContextKey struct{}
+
+// WithLegacyUnixTimestampDatetime reconstructs pre-DATETIME-overload trees
+// only while verifying persisted table expressions during DUMP/LOAD.
+func WithLegacyUnixTimestampDatetime(ctx context.Context) context.Context {
+	return context.WithValue(ctx, legacyUnixTimestampDatetimeContextKey{}, true)
+}
+
+func LegacyUnixTimestampDatetime(ctx context.Context) bool {
+	value, _ := ctx.Value(legacyUnixTimestampDatetimeContextKey{}).(bool)
+	return value
+}
 
 // WithLegacySpecialConsumers is only for validating pre-migration catalog
 // expressions against their SQL origin in table DUMP/LOAD. It must never be
@@ -222,4 +234,59 @@ func LegacyTemporalNullability(ctx context.Context) bool {
 	}
 	value, _ := ctx.Value(legacyTemporalNullabilityContextKey{}).(bool)
 	return value
+}
+
+type legacyTimeNullabilityContextKey struct{}
+
+// WithLegacyTimeNullability reconstructs the post-8dd TIME binding metadata
+// from before the row-local NULL synthesis change. DATE and CAST keep their
+// current inference; only the TIME() string overloads restore NOT NULL.
+func WithLegacyTimeNullability(ctx context.Context) context.Context {
+	return context.WithValue(ctx, legacyTimeNullabilityContextKey{}, true)
+}
+
+// LegacyTimeNullability reports the private dump-origin intermediate TIME
+// binding era.
+func LegacyTimeNullability(ctx context.Context) bool {
+	if ctx == nil {
+		return false
+	}
+	value, _ := ctx.Value(legacyTimeNullabilityContextKey{}).(bool)
+	return value
+}
+
+type legacyIncompleteTemporalStringsContextKey struct{}
+
+// WithLegacyIncompleteTemporalStrings reconstructs complete pre-migration
+// catalog origins only during DUMP/LOAD verification; never ordinary binding.
+func WithLegacyIncompleteTemporalStrings(ctx context.Context) context.Context {
+	return context.WithValue(ctx, legacyIncompleteTemporalStringsContextKey{}, true)
+}
+
+func LegacyIncompleteTemporalStrings(ctx context.Context) bool {
+	if ctx == nil {
+		return false
+	}
+	enabled, _ := ctx.Value(legacyIncompleteTemporalStringsContextKey{}).(bool)
+	return enabled
+}
+
+func legacyIncompleteTemporalCheck(ctx context.Context, id int32, overloads []overload, inputs []types.Type) (checkResult, bool) {
+	if !LegacyIncompleteTemporalStrings(ctx) {
+		return checkResult{}, false
+	}
+	count := 0
+	switch id {
+	case DATE_FORMAT:
+		count = 2
+	case DATEDIFF, TO_DAYS, TO_SECONDS:
+		count = 1
+	case DAYOFWEEK:
+		count = 3
+	case WEEK:
+		count = 4
+	default:
+		return checkResult{}, false
+	}
+	return fixedTypeMatch(overloads[:count], inputs), true
 }

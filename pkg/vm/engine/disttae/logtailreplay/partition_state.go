@@ -77,7 +77,13 @@ type PartitionState struct {
 	dataObjectsNameIndex      *btree.BTreeG[objectio.ObjectEntry]
 	tombstoneObjectsNameIndex *btree.BTreeG[objectio.ObjectEntry]
 
-	rowPrimaryKeyIndex       *btree.BTreeG[*PrimaryIndexEntry]
+	rowPrimaryKeyIndex *btree.BTreeG[*PrimaryIndexEntry]
+	rowClusterIndex    *btree.BTreeG[*PrimaryIndexEntry]
+
+	// The optional index is Fresh (zero key), Active, or permanently Disabled.
+	// A disabled mutable copy drops its tree; published snapshots stay intact.
+	clusterKey               readutil.ClusterKeyDescriptor
+	clusterIndexDisabled     bool
 	inMemTombstoneRowIdIndex *btree.BTreeG[*PrimaryIndexEntry]
 
 	dataObjectTSIndex       *btree.BTreeG[ObjectIndexByTSEntry]
@@ -444,6 +450,8 @@ func (p *PartitionState) handleDataObjectEntry(
 	fs fileservice.FileService,
 	objEntry objectio.ObjectEntry,
 ) (err error) {
+	var clusterPacker types.Packer
+	defer clusterPacker.Close()
 	commitTS := objEntry.CreateTime
 	if !objEntry.DeleteTime.IsEmpty() {
 		commitTS = objEntry.DeleteTime
@@ -529,13 +537,7 @@ func (p *PartitionState) handleDataObjectEntry(
 				p.rows.Delete(entry)
 
 				// delete the row's primary index
-				if len(entry.PrimaryIndexBytes) > 0 {
-					p.rowPrimaryKeyIndex.Delete(&PrimaryIndexEntry{
-						Bytes:      entry.PrimaryIndexBytes,
-						RowEntryID: entry.ID,
-						Time:       entry.Time,
-					})
-				}
+				p.deleteRowIndexes(entry, &clusterPacker)
 				numDeleted++
 			}
 
@@ -570,6 +572,8 @@ func (p *PartitionState) handleTombstoneObjectEntry(
 	fs fileservice.FileService,
 	objEntry objectio.ObjectEntry,
 ) (err error) {
+	var clusterPacker types.Packer
+	defer clusterPacker.Close()
 	commitTS := objEntry.CreateTime
 	if !objEntry.DeleteTime.IsEmpty() {
 		commitTS = objEntry.DeleteTime
@@ -642,13 +646,7 @@ func (p *PartitionState) handleTombstoneObjectEntry(
 
 			p.rows.Delete(deletedRow)
 			p.inMemTombstoneRowIdIndex.Delete(tbIter.Item())
-			if len(deletedRow.PrimaryIndexBytes) > 0 {
-				p.rowPrimaryKeyIndex.Delete(&PrimaryIndexEntry{
-					Bytes:      deletedRow.PrimaryIndexBytes,
-					RowEntryID: deletedRow.ID,
-					Time:       deletedRow.Time,
-				})
-			}
+			p.deleteRowIndexes(deletedRow, &clusterPacker)
 		}
 	}
 
@@ -663,6 +661,7 @@ func (p *PartitionState) HandleLogtailEntry(
 	primarySeqnum int,
 	packer *types.Packer,
 	pool *mpool.MPool,
+	keys ...*readutil.ClusterKeyDescriptor,
 ) {
 	switch entry.EntryType {
 	case api.Entry_Insert:
@@ -680,7 +679,7 @@ func (p *PartitionState) HandleLogtailEntry(
 			if ok, _ := objectio.PartitionStateInjected(entry.DatabaseName, entry.TableName); ok {
 				p.LogEntry(entry, "INJECT-TRACE-PS-MEM-INS")
 			}
-			p.HandleRowsInsert(ctx, entry.Bat, primarySeqnum, packer, pool)
+			p.HandleRowsInsert(ctx, entry.Bat, primarySeqnum, packer, pool, keys...)
 		}
 
 	case api.Entry_Delete:
@@ -708,6 +707,8 @@ func (p *PartitionState) HandleDataObjectList(
 	ee *api.Entry,
 	fs fileservice.FileService,
 	pool *mpool.MPool) {
+	var clusterPacker types.Packer
+	defer clusterPacker.Close()
 
 	var numDeleted, blockDeleted int64
 
@@ -804,13 +805,7 @@ func (p *PartitionState) HandleDataObjectList(
 					}
 					if entry.Time.LE(&trunctPoint) {
 						p.rows.Delete(entry)
-						if len(entry.PrimaryIndexBytes) > 0 {
-							p.rowPrimaryKeyIndex.Delete(&PrimaryIndexEntry{
-								Bytes:      entry.PrimaryIndexBytes,
-								RowEntryID: entry.ID,
-								Time:       entry.Time,
-							})
-						}
+						p.deleteRowIndexes(entry, &clusterPacker)
 						numDeleted++
 						blockDeleted++
 					}
@@ -836,6 +831,8 @@ func (p *PartitionState) HandleTombstoneObjectList(
 	ee *api.Entry,
 	fs fileservice.FileService,
 	pool *mpool.MPool) {
+	var clusterPacker types.Packer
+	defer clusterPacker.Close()
 
 	statsVec := mustVectorFromProto(ee.Bat.Vecs[2])
 	defer statsVec.Free(pool)
@@ -929,13 +926,7 @@ func (p *PartitionState) HandleTombstoneObjectList(
 
 			p.rows.Delete(deletedRow)
 			p.inMemTombstoneRowIdIndex.Delete(tbIter.Item())
-			if len(deletedRow.PrimaryIndexBytes) > 0 {
-				p.rowPrimaryKeyIndex.Delete(&PrimaryIndexEntry{
-					Bytes:      deletedRow.PrimaryIndexBytes,
-					RowEntryID: deletedRow.ID,
-					Time:       deletedRow.Time,
-				})
-			}
+			p.deleteRowIndexes(deletedRow, &clusterPacker)
 		}
 
 		p.prefetchObject(fs, objEntry)
@@ -954,23 +945,22 @@ func (p *PartitionState) HandleRowsDelete(
 	ctx, task := trace.NewTask(ctx, "PartitionState.HandleRowsDelete")
 	defer task.End()
 
-	batch, err := batch.ProtoBatchToBatch(input)
+	sourceBatch, err := batch.ProtoBatchToBatch(input)
 	if err != nil {
 		panic(err)
 	}
-	rowIDVector := vector.MustFixedColWithTypeCheck[types.Rowid](batch.Vecs[0])
-	timeVector := vector.MustFixedColWithTypeCheck[types.TS](batch.Vecs[1])
-	tbRowIdVector := vector.MustFixedColWithTypeCheck[types.Rowid](batch.Vecs[3])
+	rowIDVector := vector.MustFixedColWithTypeCheck[types.Rowid](sourceBatch.Vecs[0])
+	timeVector := vector.MustFixedColWithTypeCheck[types.TS](sourceBatch.Vecs[1])
+	tbRowIdVector := vector.MustFixedColWithTypeCheck[types.Rowid](sourceBatch.Vecs[3])
 
 	var primaryKeys [][]byte
 	if len(input.Vecs) > 2 {
 		// has primary key
 		primaryKeys = readutil.EncodePrimaryKeyVector(
-			batch.Vecs[2],
+			sourceBatch.Vecs[2],
 			packer,
 		)
 	}
-
 	numDeletes := int64(0)
 	for i, rowID := range rowIDVector {
 		blockID := rowID.CloneBlockID()
@@ -980,10 +970,19 @@ func (p *PartitionState) HandleRowsDelete(
 			Time:    timeVector[i],
 		}
 		entry, ok := p.rows.Get(pivot)
+		if ok {
+			copy := *entry
+			entry = &copy
+		}
 		if !ok {
 			entry = pivot
 			entry.ID = atomic.AddInt64(&nextRowEntryID, 1)
 			numDeletes++
+		}
+		// An insert and its delete can share the physical version identity.
+		// Release the insertion's index ownership before replacing its batch.
+		if ok && !entry.Deleted && p.rowClusterIndex != nil {
+			p.deleteRowIndexes(entry, packer)
 		}
 
 		entry.Deleted = true
@@ -991,7 +990,7 @@ func (p *PartitionState) HandleRowsDelete(
 			entry.PrimaryIndexBytes = primaryKeys[i]
 		}
 		if !p.noData {
-			entry.Batch = batch
+			entry.Batch = sourceBatch
 			entry.Offset = int64(i)
 		}
 		p.rows.Set(entry)
@@ -1024,6 +1023,16 @@ func (p *PartitionState) HandleRowsDelete(
 
 		p.inMemTombstoneRowIdIndex.Set(&index)
 	}
+	if !p.noData {
+		// No reader can observe this mutable replay state until the handler
+		// returns. Reuse its batch header and vector slice, but clear every
+		// reference beyond the PK before shortening the slice: GC scans the
+		// entire backing array, including elements past len.
+		sourceBatch.Vecs[0] = sourceBatch.Vecs[2]
+		clear(sourceBatch.Vecs[1:])
+		sourceBatch.Vecs = sourceBatch.Vecs[:1]
+		sourceBatch.Attrs = nil
+	}
 
 	perfcounter.Update(ctx, func(c *perfcounter.CounterSet) {
 	})
@@ -1034,23 +1043,25 @@ func (p *PartitionState) HandleRowsInsert(
 	input *api.Batch,
 	primarySeqnum int,
 	packer *types.Packer,
-	_ *mpool.MPool,
+	mp *mpool.MPool,
+	keys ...*readutil.ClusterKeyDescriptor,
 ) (
 	primaryKeys [][]byte,
 ) {
 	ctx, task := trace.NewTask(ctx, "PartitionState.HandleRowsInsert")
 	defer task.End()
 
-	batch, err := batch.ProtoBatchToBatch(input)
+	sourceBatch, err := batch.ProtoBatchToBatch(input)
 	if err != nil {
 		panic(err)
 	}
-	rowIDVector := vector.MustFixedColWithTypeCheck[types.Rowid](batch.Vecs[0])
-	timeVector := vector.MustFixedColWithTypeCheck[types.TS](batch.Vecs[1])
+	rowIDVector := vector.MustFixedColWithTypeCheck[types.Rowid](sourceBatch.Vecs[0])
+	timeVector := vector.MustFixedColWithTypeCheck[types.TS](sourceBatch.Vecs[1])
 	primaryKeys = readutil.EncodePrimaryKeyVector(
-		batch.Vecs[2+primarySeqnum],
+		sourceBatch.Vecs[2+primarySeqnum],
 		packer,
 	)
+	clusterKeys := p.encodeClusterKeys(sourceBatch, packer, keys)
 
 	var numInserted int64
 	for i, rowID := range rowIDVector {
@@ -1061,6 +1072,10 @@ func (p *PartitionState) HandleRowsInsert(
 			Time:    timeVector[i],
 		}
 		entry, ok := p.rows.Get(pivot)
+		if ok {
+			copy := *entry
+			entry = &copy
+		}
 		if !ok {
 			entry = pivot
 			entry.ID = atomic.AddInt64(&nextRowEntryID, 1)
@@ -1068,7 +1083,7 @@ func (p *PartitionState) HandleRowsInsert(
 		}
 
 		if !p.noData {
-			entry.Batch = batch
+			entry.Batch = sourceBatch
 			entry.Offset = int64(i)
 		}
 		entry.PrimaryIndexBytes = primaryKeys[i]
@@ -1085,6 +1100,26 @@ func (p *PartitionState) HandleRowsInsert(
 			}
 			p.rowPrimaryKeyIndex.Set(pe)
 		}
+
+		if clusterKeys != nil && !entry.Deleted {
+			pe := &PrimaryIndexEntry{
+				Bytes:      clusterKeys[i],
+				RowEntryID: entry.ID,
+				BlockID:    blockID,
+				RowID:      rowID,
+				Time:       entry.Time,
+				Deleted:    entry.Deleted,
+			}
+			p.rowClusterIndex.Set(pe)
+		}
+	}
+	if !p.noData {
+		// ProtoBatchToBatch borrows the input vector bytes. RowEntry owns
+		// the physical RowID and commit time, so release the decoded vectors'
+		// references after the entire replay loop has consumed them. Their
+		// types and positions remain for existing in-memory column readers.
+		sourceBatch.Vecs[0].Free(mp)
+		sourceBatch.Vecs[1].Free(mp)
 	}
 
 	perfcounter.Update(ctx, func(c *perfcounter.CounterSet) {
@@ -1093,7 +1128,100 @@ func (p *PartitionState) HandleRowsInsert(
 	return
 }
 
+// WantsClusterKeyMetadata is read from a published state at dispatch time.
+func (p *PartitionState) WantsClusterKeyMetadata() bool {
+	return !p.noData && !p.clusterIndexDisabled
+}
+
+func (p *PartitionState) disableClusterIndex() {
+	p.clusterIndexDisabled = true
+	p.clusterKey = readutil.ClusterKeyDescriptor{}
+	p.rowClusterIndex = nil
+}
+
+func (p *PartitionState) encodeClusterKeys(bat *batch.Batch, packer *types.Packer, keys []*readutil.ClusterKeyDescriptor) [][]byte {
+	if p.clusterIndexDisabled || p.noData {
+		return nil
+	}
+	if len(bat.Vecs) == 0 || bat.Vecs[0].Length() == 0 {
+		return nil
+	}
+	if len(keys) != 1 || keys[0] == nil {
+		p.disableClusterIndex()
+		return nil
+	}
+	key := *keys[0]
+	if key.TableID != p.tid || key.Name == "" || key.Through.IsEmpty() ||
+		(p.clusterKey.Name != "" && !p.clusterKey.SameSchema(key)) {
+		p.disableClusterIndex()
+		return nil
+	}
+	pos := int(key.Seqnum) + 2
+	if pos < 2 || pos >= len(bat.Attrs) || pos >= len(bat.Vecs) ||
+		bat.Attrs[pos] != key.Name || bat.Vecs[pos] == nil ||
+		bat.Vecs[pos].GetType().Oid != types.T_varchar ||
+		bat.Vecs[pos].Length() != bat.Vecs[0].Length() || (bat.Vecs[pos].IsConstNull() || bat.Vecs[pos].GetNulls().Any()) {
+		p.disableClusterIndex()
+		return nil
+	}
+	matches := 0
+	for _, name := range bat.Attrs {
+		if name == key.Name {
+			matches++
+		}
+	}
+	if matches != 1 {
+		p.disableClusterIndex()
+		return nil
+	}
+	for _, ts := range vector.MustFixedColWithTypeCheck[types.TS](bat.Vecs[1]) {
+		if ts.LT(&key.Effective) || ts.GT(&key.Through) {
+			p.disableClusterIndex()
+			return nil
+		}
+	}
+	// Eligibility is complete before any payload encoding or index allocation.
+	encoded := readutil.EncodePrimaryKeyVector(bat.Vecs[pos], packer)
+	if p.rowClusterIndex == nil {
+		p.rowClusterIndex = btree.NewBTreeGOptions((*PrimaryIndexEntry).Less, btree.Options{Degree: 32, NoLocks: true})
+	}
+	p.clusterKey = key
+	return encoded
+}
+
+// deleteRowIndexes removes a row version's primary-key and cluster-key index
+// entries. It is the single removal path shared by every physical
+// row-removal site (appendable-object GC), so the two indexes cannot drift
+// apart.
+func (p *PartitionState) deleteRowIndexes(entry *RowEntry, packer *types.Packer) {
+	if len(entry.PrimaryIndexBytes) > 0 {
+		p.rowPrimaryKeyIndex.Delete(&PrimaryIndexEntry{
+			Bytes:      entry.PrimaryIndexBytes,
+			RowEntryID: entry.ID,
+			Time:       entry.Time,
+		})
+	}
+	if p.rowClusterIndex == nil || entry.Deleted {
+		return
+	}
+	pos := int(p.clusterKey.Seqnum) + 2
+	if entry.Batch == nil || pos >= len(entry.Batch.Vecs) || pos >= len(entry.Batch.Attrs) ||
+		entry.Batch.Attrs[pos] != p.clusterKey.Name || entry.Batch.Vecs[pos] == nil || entry.Offset < 0 ||
+		entry.Batch.Vecs[pos].GetType().Oid != types.T_varchar ||
+		entry.Offset >= int64(entry.Batch.Vecs[pos].Length()) {
+		p.disableClusterIndex()
+		return
+	}
+	packer.Reset()
+	packer.EncodeStringType(entry.Batch.Vecs[pos].GetBytesAt(int(entry.Offset)))
+	p.rowClusterIndex.Delete(&PrimaryIndexEntry{Bytes: packer.GetBuf(), RowEntryID: entry.ID, Time: entry.Time})
+}
+
 func (p *PartitionState) Copy() *PartitionState {
+	var clusterIndex *btree.BTreeG[*PrimaryIndexEntry]
+	if p.rowClusterIndex != nil {
+		clusterIndex = p.rowClusterIndex.Copy()
+	}
 	state := PartitionState{
 		service:                   p.service,
 		tid:                       p.tid,
@@ -1101,6 +1229,9 @@ func (p *PartitionState) Copy() *PartitionState {
 		dataObjectsNameIndex:      p.dataObjectsNameIndex.Copy(),
 		tombstoneObjectsNameIndex: p.tombstoneObjectsNameIndex.Copy(),
 		rowPrimaryKeyIndex:        p.rowPrimaryKeyIndex.Copy(),
+		rowClusterIndex:           clusterIndex,
+		clusterKey:                p.clusterKey,
+		clusterIndexDisabled:      p.clusterIndexDisabled,
 		inMemTombstoneRowIdIndex:  p.inMemTombstoneRowIdIndex.Copy(),
 		noData:                    p.noData,
 		dataObjectTSIndex:         p.dataObjectTSIndex.Copy(),
@@ -1686,7 +1817,13 @@ func (p *PartitionState) CollectDataStats(
 			if estimatedOneRowSize > 0 {
 				stats.Size += estimatedOneRowSize
 			} else if entry.Batch != nil {
-				stats.Size += float64(entry.Batch.Size()) / float64(entry.Batch.RowCount())
+				rowSize := float64(entry.Batch.Size()) / float64(entry.Batch.RowCount())
+				// Compact replay keeps these two physical values on RowEntry,
+				// but they still contribute to the logical row-size estimate.
+				if len(entry.Batch.Vecs) >= 2 && entry.Batch.Vecs[0].Length() == 0 && entry.Batch.Vecs[1].Length() == 0 {
+					rowSize += types.RowidSize + types.TxnTsSize
+				}
+				stats.Size += rowSize
 			}
 		}
 		return true
