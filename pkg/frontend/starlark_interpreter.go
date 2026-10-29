@@ -368,6 +368,8 @@ func (si *starlarkInterpreter) moSql(thread *starlark.Thread, b *starlark.Builti
 	err := si.interp.execStoredSQL(si.interp.ctx, sql)
 	si.interp.recordAffectedRows()
 	if err != nil {
+		// Early guard/parser failures never reach backExec's ROW_COUNT reset.
+		si.interp.setAffectedRows(-1)
 		ret[1] = si.failed(err)
 		return starlark.NewList(ret), nil
 	}

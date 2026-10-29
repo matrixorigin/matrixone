@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"go.starlark.net/starlark"
 )
 
 func TestIsHiddenIndexTableName(t *testing.T) {
@@ -376,6 +377,16 @@ func TestStoredSQLHiddenIndexCallerPolicy(t *testing.T) {
 	callCtx := context.WithValue(ctx, storedSQLCallerKey{}, storedSQLCaller(ctx, ses))
 	require.Same(t, ses, storedSQLCaller(callCtx, child))
 	const hidden = "__mo_index_secondary_probe"
+	// An early denial must preserve background SQL's failure ROW_COUNT(), not
+	// report the previous successful statement's affected rows to Starlark.
+	rowBack := &evalCondBackgroundExec{rows: 7}
+	rowInterpreter := &Interpreter{ctx: callCtx, ses: child, bh: rowBack, lastAffectedRows: 7}
+	si := &starlarkInterpreter{interp: rowInterpreter}
+	result, err := si.moSql(nil, nil, starlark.Tuple{starlark.String("select * from " + hidden)}, nil)
+	require.NoError(t, err)
+	require.Contains(t, result.(*starlark.List).Index(1).String(), "hidden internal table")
+	require.Equal(t, int64(-1), rowInterpreter.lastAffectedRows)
+	require.Equal(t, int64(-1), rowBack.GetLastAffectedRows())
 	prepared := parseOneGuardTestStmt(t, "select * from "+hidden)
 	t.Cleanup(prepared.Free)
 	require.ErrorContains(t, verifyStoredSQLAgainstHiddenIndexTables(callCtx, prepared), "hidden internal table")

@@ -44,9 +44,11 @@ create procedure hit_db_bvt.hit_expr() 'begin declare n bigint default (select c
 create procedure hit_db_bvt.hit_base() 'begin insert into hit_db_bvt.hit_t values (4,40); select x,y from hit_db_bvt.hit_t where y=40; delete from hit_db_bvt.hit_t where x=4; end';
 create procedure hit_db_bvt.hit_dynamic(out status varchar) language 'starlark'
 $$
+_, setup_err = mo.sql("delete from hit_db_bvt.hit_t where x=-1")
 rs, err = mo.sql("select count(*) from hit_db_bvt.__mo_index_secondary_hit_probe")
+rc, rc_err = mo.sql("select row_count()")
 rs2, err2 = mo.sql("select 1")
-out_status = "denied_then_ok" if err != None and "hidden internal table" in err and err2 == None else "unexpected"
+out_status = "denied_then_ok" if setup_err == None and err != None and "hidden internal table" in err and rc_err == None and rc[0][0] == "-1" and err2 == None else "unexpected"
 $$;
 -- The administrative exemption applies to stored SQL as well.
 call hit_db_bvt.hit_nested();
