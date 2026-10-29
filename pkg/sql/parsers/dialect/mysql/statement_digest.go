@@ -466,11 +466,17 @@ func digestAlterDefaultValid(expression tree.Expr) bool {
 	// Parentheses do not turn a temporal literal into an expression default.
 	// CAST/function/operator wrappers are distinct expressions and remain valid.
 	for {
-		parenthesized, ok := expression.(*tree.ParenExpr)
-		if !ok {
-			break
+		switch value := expression.(type) {
+		case *tree.ParenExpr:
+			expression = value.Expr
+			continue
+		case *tree.UnaryExpr:
+			if value.Op == tree.UNARY_PLUS {
+				expression = value.Expr
+				continue
+			}
 		}
-		expression = parenthesized.Expr
+		break
 	}
 	literal, temporal := expression.(*tree.FuncExpr)
 	return !temporal || !literal.IsTemporalLiteral

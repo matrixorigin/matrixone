@@ -557,6 +557,46 @@ func selectIntoVariablesForTopLevel(stmt SelectStatement, insideUnion bool) (var
 	}
 }
 
+// ValidateSelectIntoInParentheses preserves the original SELECT-clause
+// placement. Promoted Select.IntoVars alone cannot distinguish INTO before
+// FROM from the query-level suffix after FROM.
+func ValidateSelectIntoInParentheses(stmt SelectStatement) string {
+	vars, deprecated, err := SelectIntoVariablesForTopLevel(stmt)
+	if err != "" {
+		return err
+	}
+	if len(vars) == 0 {
+		return ""
+	}
+	if deprecated {
+		return MisplacedIntoClauseMessage
+	}
+	for {
+		switch node := stmt.(type) {
+		case *Select:
+			stmt = node.Select
+		case *ParenSelect:
+			stmt = node.Select
+		case *SelectClause:
+			if len(node.IntoVars) == 0 && node.From != nil && len(node.From.Tables) > 0 {
+				return MisplacedIntoClauseMessage
+			}
+			return ""
+		default:
+			return MisplacedIntoClauseMessage
+		}
+	}
+}
+
+// ValidateSelectIntoInSubquery applies the subquery context independently of
+// column-expression itemization, including deferred window specifications.
+func ValidateSelectIntoInSubquery(stmt SelectStatement) string {
+	if selectStatementHasInto(stmt) {
+		return MisplacedIntoClauseMessage
+	}
+	return ""
+}
+
 func SelectIntoActionConflict(stmt SelectStatement, suffix *SelectInto) bool {
 	actions := 0
 	if vars, _, _ := SelectIntoVariablesForTopLevel(stmt); len(vars) > 0 {
@@ -579,6 +619,13 @@ func SelectIntoActionConflict(stmt SelectStatement, suffix *SelectInto) bool {
 func ValidateSelectIntoPlacement(stmt *Select) string {
 	if stmt == nil {
 		return ""
+	}
+	if _, parenthesized := stmt.Select.(*ParenSelect); parenthesized &&
+		(stmt.With != nil || stmt.SelectLockInfo != nil || len(stmt.OrderBy) > 0 ||
+			stmt.Limit != nil || stmt.TimeWindow != nil || stmt.RankOption != nil) {
+		if err := ValidateSelectIntoInParentheses(stmt.Select); err != "" {
+			return err
+		}
 	}
 	if stmt.IsPerform && (len(stmt.IntoVars) > 0 || selectTreeHasInto(stmt.Select)) {
 		return PerformIntoClauseMessage

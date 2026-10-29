@@ -1,0 +1,80 @@
+// Copyright 2026 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package mysql
+
+import (
+	"github.com/stretchr/testify/require"
+	"testing"
+)
+
+func TestQueryLockAndIntoContext(t *testing.T) {
+	for _, tc := range []struct {
+		sql   string
+		valid bool
+	}{
+		{"(SELECT n_nationkey FROM nation FOR SHARE) FOR UPDATE", false},
+		{"((SELECT n_nationkey FROM nation FOR UPDATE NOWAIT)) FOR SHARE", false},
+		{"((SELECT n_nationkey FROM nation)) FOR UPDATE NOWAIT", true},
+		{"(SELECT 1 FOR SHARE) FOR UPDATE", true},
+		{"(SELECT 1 FROM DUAL FOR SHARE) FOR UPDATE", true},
+		{"(SELECT * FROM (SELECT 1) d FOR SHARE) FOR UPDATE", true},
+		{"WITH c AS (SELECT 1) ((SELECT * FROM c FOR SHARE) FOR UPDATE)", true},
+		{"SELECT * FROM (SELECT n_nationkey FROM nation FOR SHARE) d FOR UPDATE", true},
+		{"WITH c AS (SELECT 1) (SELECT 1 FROM c INTO @x)", false},
+		{"SELECT (WITH nation AS (SELECT 1) SELECT 1), (((SELECT n_nationkey FROM nation FOR SHARE) FOR UPDATE))", false},
+		{"WITH c AS (SELECT 1) (SELECT 1 INTO @x FROM c)", true},
+		{"(SELECT * FROM nation INTO @x)", true},
+	} {
+		t.Run(tc.sql, func(t *testing.T) {
+			// Reuse a real parser so lock admission state cannot leak across calls.
+			parser := &MySQLParser{}
+			for _, sql := range []string{tc.sql, "SELECT 1"} {
+				func() {
+					statements, err := parser.ParseWithSQLMode(t.Context(), sql, 0, "")
+					if sql == tc.sql && !tc.valid {
+						require.Error(t, err)
+						return
+					}
+					require.NoError(t, err)
+					defer func() {
+						for _, statement := range statements {
+							statement.Free()
+						}
+					}()
+					require.Len(t, statements, 1)
+				}()
+			}
+		})
+	}
+}
+
+func TestDigestSubqueryExportContext(t *testing.T) {
+	for _, sql := range []string{
+		"ALTER TABLE t ALTER COLUMN a SET DEFAULT ((SELECT 1 INTO OUTFILE '/tmp/claude_no_execute'))",
+		"CREATE TABLE t(a INT AS (SUM(1) OVER(ORDER BY (SELECT 1 INTO OUTFILE '/tmp/claude_no_execute'))))",
+		"CREATE TABLE t(a INT DEFAULT (CASE WHEN 0 THEN (SELECT 1 INTO OUTFILE '/tmp/claude_no_execute') ELSE 1 END))",
+	} {
+		_, _, err := StatementDigest(t.Context(), sql, "")
+		require.Error(t, err)
+	}
+	for _, sql := range []string{
+		"SELECT 1 INTO OUTFILE '/tmp/claude_no_execute'",
+		"ALTER TABLE t ALTER COLUMN a SET DEFAULT ((SELECT 1))",
+		"CREATE TABLE t(a INT AS (SUM(1) OVER(PARTITION BY @x)))",
+	} {
+		_, _, err := StatementDigest(t.Context(), sql, "")
+		require.NoError(t, err)
+	}
+}

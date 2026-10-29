@@ -7627,6 +7627,7 @@ select_lock_opt:
 select_lock:
     FOR UPDATE
     {
+        yylex.(*Lexer).selectLockClauses++
         $$ = &tree.SelectLockInfo{
             LockType:tree.SelectLockForUpdate,
         }
@@ -7636,6 +7637,7 @@ select_lock:
     }
 |   FOR SHARE
     {
+        yylex.(*Lexer).selectLockClauses++
         $$ = &tree.SelectLockInfo{
             LockType:tree.SelectLockForShare,
         }
@@ -7647,6 +7649,7 @@ select_lock:
     }
 |   LOCK IN SHARE MODE
     {
+        yylex.(*Lexer).selectLockClauses++
         $$ = &tree.SelectLockInfo{
             LockType:tree.SelectLockForShare,
         }
@@ -13051,6 +13054,12 @@ column_format:
 subquery:
     select_with_parens %prec SUBQUERY_AS_EXPR
     {
+        if yylex.(*Lexer).digest != nil {
+            if err := tree.ValidateSelectIntoInSubquery($1); err != "" {
+                yylex.Error(err)
+                return 1
+            }
+        }
         $$ = &tree.Subquery{Select: $1, Exists: false}
     }
 

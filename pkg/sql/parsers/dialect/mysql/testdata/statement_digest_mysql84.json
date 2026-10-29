@@ -7718,5 +7718,790 @@
     "sql": "SELECT \"CURRENT_ROLE\"",
     "text": "SELECT ?",
     "digest": "d1b44b0c19af710b5a679907e284acd2ddc285201794bc69a2389d77baedddae"
+  },
+  {
+    "sql_mode": "",
+    "sql": "(SELECT n_nationkey FROM nation FOR SHARE) FOR SHARE",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "(SELECT n_nationkey FROM nation FOR SHARE) FOR UPDATE",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "(SELECT n_nationkey FROM nation FOR SHARE) FOR UPDATE NOWAIT",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "(SELECT n_nationkey FROM nation FOR UPDATE) FOR SHARE",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "(SELECT n_nationkey FROM nation FOR UPDATE) FOR UPDATE",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "(SELECT n_nationkey FROM nation FOR UPDATE) FOR UPDATE NOWAIT",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "(SELECT n_nationkey FROM nation FOR UPDATE NOWAIT) FOR SHARE",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "(SELECT n_nationkey FROM nation FOR UPDATE NOWAIT) FOR UPDATE",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "(SELECT n_nationkey FROM nation FOR UPDATE NOWAIT) FOR UPDATE NOWAIT",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "((SELECT n_nationkey FROM nation)) FOR SHARE",
+    "text": "( ( SELECT `n_nationkey` FROM `nation` ) ) FOR SHARE",
+    "digest": "2abc41972bef99f138700fe5d48c0d0f1b377ad137106d312f3424b8d397137f"
+  },
+  {
+    "sql_mode": "",
+    "sql": "((SELECT n_nationkey FROM nation)) FOR UPDATE NOWAIT",
+    "text": "( ( SELECT `n_nationkey` FROM `nation` ) ) FOR UPDATE NOWAIT",
+    "digest": "34a7981d2806814addbaec6c2ca598aaee75cf1bcd3b82280aeb4bb3d7659546"
+  },
+  {
+    "sql_mode": "",
+    "sql": "(SELECT 1 FOR SHARE) FOR SHARE",
+    "text": "( SELECT ? FOR SHARE ) FOR SHARE",
+    "digest": "1dc3b5b7d8f2f721bafe336bcbbc8860d1b92fc13b25ab664ca243da2710c10d"
+  },
+  {
+    "sql_mode": "",
+    "sql": "(SELECT 1 FOR SHARE) FOR UPDATE",
+    "text": "( SELECT ? FOR SHARE ) FOR UPDATE",
+    "digest": "8782012944f157dcbc8f2c1b0c08a254eadc9e35100fdd727870c617816e345b"
+  },
+  {
+    "sql_mode": "",
+    "sql": "(SELECT 1 FOR SHARE) FOR UPDATE NOWAIT",
+    "text": "( SELECT ? FOR SHARE ) FOR UPDATE NOWAIT",
+    "digest": "995972b19f4696dec57586c8da761ba901caaa4fb5e016a5d47d87624341b9c2"
+  },
+  {
+    "sql_mode": "",
+    "sql": "(SELECT 1 FOR UPDATE) FOR SHARE",
+    "text": "( SELECT ? FOR UPDATE ) FOR SHARE",
+    "digest": "13be2eb3ace2a3cedcd7be4c4aad921346c7f79bf6538d7ad336d5d809e52544"
+  },
+  {
+    "sql_mode": "",
+    "sql": "(SELECT 1 FOR UPDATE) FOR UPDATE",
+    "text": "( SELECT ? FOR UPDATE ) FOR UPDATE",
+    "digest": "738ae2f2c5251b15c007ec1bd6077ad47a38cd3a083db8b70169f24497cb59b0"
+  },
+  {
+    "sql_mode": "",
+    "sql": "(SELECT 1 FOR UPDATE) FOR UPDATE NOWAIT",
+    "text": "( SELECT ? FOR UPDATE ) FOR UPDATE NOWAIT",
+    "digest": "636500ceb8c5646bdd9b36f82f80c4b844f8e9194df5269863aa918469e0bb78"
+  },
+  {
+    "sql_mode": "",
+    "sql": "(SELECT 1 FOR UPDATE NOWAIT) FOR SHARE",
+    "text": "( SELECT ? FOR UPDATE NOWAIT ) FOR SHARE",
+    "digest": "83120114caca2151927b92cb44081c5689186e3263ed92b467a7d33327364b13"
+  },
+  {
+    "sql_mode": "",
+    "sql": "(SELECT 1 FOR UPDATE NOWAIT) FOR UPDATE",
+    "text": "( SELECT ? FOR UPDATE NOWAIT ) FOR UPDATE",
+    "digest": "5e3e6477519418847ca3ecc6e2e2e2fbf0422fde4a38c3a87eee0a371d850595"
+  },
+  {
+    "sql_mode": "",
+    "sql": "(SELECT 1 FOR UPDATE NOWAIT) FOR UPDATE NOWAIT",
+    "text": "( SELECT ? FOR UPDATE NOWAIT ) FOR UPDATE NOWAIT",
+    "digest": "079df71b4773620e984d0ee7ffbc11de1f3cda3164575e08c3037968116d5fbb"
+  },
+  {
+    "sql_mode": "",
+    "sql": "((SELECT 1)) FOR SHARE",
+    "text": "( ( SELECT ? ) ) FOR SHARE",
+    "digest": "1d08c5206460938468d74d50ebb396c725463dd91143ab45d229cea1a5f395e7"
+  },
+  {
+    "sql_mode": "",
+    "sql": "((SELECT 1)) FOR UPDATE NOWAIT",
+    "text": "( ( SELECT ? ) ) FOR UPDATE NOWAIT",
+    "digest": "79a57371b979878847c0ddadc569bfe97476469b71b17d83069f6e4f3007ce52"
+  },
+  {
+    "sql_mode": "",
+    "sql": "(SELECT * FROM (SELECT 1) d FOR SHARE) FOR SHARE",
+    "text": "( SELECT * FROM ( SELECT ? ) `d` FOR SHARE ) FOR SHARE",
+    "digest": "a8b6801168f09d63708ff7da0463e81a406bbc792cdf4ef93a298d072b486817"
+  },
+  {
+    "sql_mode": "",
+    "sql": "(SELECT * FROM (SELECT 1) d FOR SHARE) FOR UPDATE",
+    "text": "( SELECT * FROM ( SELECT ? ) `d` FOR SHARE ) FOR UPDATE",
+    "digest": "62334bf63b7ede9b045f0d7f80bf12f665c0388bea734762942ee0a08f8ebd51"
+  },
+  {
+    "sql_mode": "",
+    "sql": "(SELECT * FROM (SELECT 1) d FOR SHARE) FOR UPDATE NOWAIT",
+    "text": "( SELECT * FROM ( SELECT ? ) `d` FOR SHARE ) FOR UPDATE NOWAIT",
+    "digest": "097ebec47ad7473b204ea7bb91ddc60bc005450b4b788d2b8236ec15639b3101"
+  },
+  {
+    "sql_mode": "",
+    "sql": "(SELECT * FROM (SELECT 1) d FOR UPDATE) FOR SHARE",
+    "text": "( SELECT * FROM ( SELECT ? ) `d` FOR UPDATE ) FOR SHARE",
+    "digest": "9a4ea5c24c1a17c7a04ac7133cfa20bf3aae6e7dc79141ca25dad55607b5f077"
+  },
+  {
+    "sql_mode": "",
+    "sql": "(SELECT * FROM (SELECT 1) d FOR UPDATE) FOR UPDATE",
+    "text": "( SELECT * FROM ( SELECT ? ) `d` FOR UPDATE ) FOR UPDATE",
+    "digest": "bac28a254415a8230a476dcf20466f2204cc5da2196a72874687e0374451778c"
+  },
+  {
+    "sql_mode": "",
+    "sql": "(SELECT * FROM (SELECT 1) d FOR UPDATE) FOR UPDATE NOWAIT",
+    "text": "( SELECT * FROM ( SELECT ? ) `d` FOR UPDATE ) FOR UPDATE NOWAIT",
+    "digest": "335ff1a09020a567fa4ad2c0715dd6daa35dd1fb51a75a4126e376d049f5af7b"
+  },
+  {
+    "sql_mode": "",
+    "sql": "(SELECT * FROM (SELECT 1) d FOR UPDATE NOWAIT) FOR SHARE",
+    "text": "( SELECT * FROM ( SELECT ? ) `d` FOR UPDATE NOWAIT ) FOR SHARE",
+    "digest": "53d2bad190b319c3b3453bbfe410526bbb4807b655c9b3fbcad1ef40414fe10d"
+  },
+  {
+    "sql_mode": "",
+    "sql": "(SELECT * FROM (SELECT 1) d FOR UPDATE NOWAIT) FOR UPDATE",
+    "text": "( SELECT * FROM ( SELECT ? ) `d` FOR UPDATE NOWAIT ) FOR UPDATE",
+    "digest": "1cb3266fff6909e2d14773be81e5121e259d5f583c99b9fd2b78b823176e69a5"
+  },
+  {
+    "sql_mode": "",
+    "sql": "(SELECT * FROM (SELECT 1) d FOR UPDATE NOWAIT) FOR UPDATE NOWAIT",
+    "text": "( SELECT * FROM ( SELECT ? ) `d` FOR UPDATE NOWAIT ) FOR UPDATE NOWAIT",
+    "digest": "943e3a686e2a317cbf73a32c0bfd290ed2c0cfe3150e4f5d985dbcea3e33e596"
+  },
+  {
+    "sql_mode": "",
+    "sql": "((SELECT * FROM (SELECT 1) d)) FOR SHARE",
+    "text": "( ( SELECT * FROM ( SELECT ? ) `d` ) ) FOR SHARE",
+    "digest": "3bc6493676790485bf89520cf755a7d32179657c34fe5ff3d7e37aa9ea09cd92"
+  },
+  {
+    "sql_mode": "",
+    "sql": "((SELECT * FROM (SELECT 1) d)) FOR UPDATE NOWAIT",
+    "text": "( ( SELECT * FROM ( SELECT ? ) `d` ) ) FOR UPDATE NOWAIT",
+    "digest": "8dcdffdcc2cafb1a24247af84747f0e78a7fde74aa54775f15dee90d9d2cc935"
+  },
+  {
+    "sql_mode": "",
+    "sql": "(SELECT * FROM nation JOIN region ON 1=1 FOR SHARE) FOR SHARE",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "(SELECT * FROM nation JOIN region ON 1=1 FOR SHARE) FOR UPDATE",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "(SELECT * FROM nation JOIN region ON 1=1 FOR SHARE) FOR UPDATE NOWAIT",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "(SELECT * FROM nation JOIN region ON 1=1 FOR UPDATE) FOR SHARE",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "(SELECT * FROM nation JOIN region ON 1=1 FOR UPDATE) FOR UPDATE",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "(SELECT * FROM nation JOIN region ON 1=1 FOR UPDATE) FOR UPDATE NOWAIT",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "(SELECT * FROM nation JOIN region ON 1=1 FOR UPDATE NOWAIT) FOR SHARE",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "(SELECT * FROM nation JOIN region ON 1=1 FOR UPDATE NOWAIT) FOR UPDATE",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "(SELECT * FROM nation JOIN region ON 1=1 FOR UPDATE NOWAIT) FOR UPDATE NOWAIT",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "((SELECT * FROM nation JOIN region ON 1=1)) FOR SHARE",
+    "text": "( ( SELECT * FROM `nation` JOIN `region` ON ? = ? ) ) FOR SHARE",
+    "digest": "d2e139d465423f6c64ded668300f70d016f2da710c2f54fbb8f3e776551faf36"
+  },
+  {
+    "sql_mode": "",
+    "sql": "((SELECT * FROM nation JOIN region ON 1=1)) FOR UPDATE NOWAIT",
+    "text": "( ( SELECT * FROM `nation` JOIN `region` ON ? = ? ) ) FOR UPDATE NOWAIT",
+    "digest": "16eb78fd418631193373a0b0425c5740b892bf38e573280a0a3b8b9d58d1b24f"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT * FROM (SELECT n_nationkey FROM nation FOR SHARE) d FOR UPDATE",
+    "text": "SELECT * FROM ( SELECT `n_nationkey` FROM `nation` FOR SHARE ) `d` FOR UPDATE",
+    "digest": "57f202e8b2e17e6b2dc93baea17a6e68afbb100403b945771bd1425764da8160"
+  },
+  {
+    "sql_mode": "",
+    "sql": "(SELECT * FROM (SELECT n_nationkey FROM nation FOR SHARE) d) FOR UPDATE",
+    "text": "( SELECT * FROM ( SELECT `n_nationkey` FROM `nation` FOR SHARE ) `d` ) FOR UPDATE",
+    "digest": "171d57ea11cae3f91ebeb0a3eb347931646f4745e75a096c73b33bd10e4fc1a4"
+  },
+  {
+    "sql_mode": "",
+    "sql": "(WITH c AS (SELECT 1) SELECT * FROM c FOR SHARE) FOR UPDATE",
+    "text": "( WITH `c` AS ( SELECT ? ) SELECT * FROM `c` FOR SHARE ) FOR UPDATE",
+    "digest": "bd455bc9d01bf073a57ced23f64b6aef0171ba6812e3d9f46d04ca708adfe7c8"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT 1) ((SELECT * FROM c FOR SHARE) FOR UPDATE)",
+    "text": "WITH `c` AS ( SELECT ? ) ( ( SELECT * FROM `c` FOR SHARE ) FOR UPDATE )",
+    "digest": "00035ad4c6e350bb263eb199af48b1fe00729453bc498bd6913e9a17b0342c25"
+  },
+  {
+    "sql_mode": "",
+    "sql": "(SELECT 1 FROM DUAL FOR SHARE) FOR UPDATE",
+    "text": "( SELECT ? FROM DUAL FOR SHARE ) FOR UPDATE",
+    "digest": "3caf0ca83d8e0e8a7c0b3326af6f1f4e2971a52022fe33908c8ecbbf30d41df5"
+  },
+  {
+    "sql_mode": "",
+    "sql": "(SELECT * FROM nation JOIN (SELECT 1) d ON 1=1 FOR SHARE) FOR UPDATE",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ALTER COLUMN a SET DEFAULT (+DATE '2020-01-01')",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT (+DATE '2020-01-01')",
+    "text": "SELECT ( + DATE ? )",
+    "digest": "68378cb85e22916a2f7523cfe8fb0a02f4690f8442ac778be5fb073947816915"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ALTER COLUMN a SET DEFAULT ((+(DATE '2020-01-01')))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT ((+(DATE '2020-01-01')))",
+    "text": "SELECT ( ( + ( DATE ? ) ) )",
+    "digest": "0609d2f02dd9cd8514dc6aa5d3eb027141704f32bc40af19d4b2c89d3077fb6c"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ALTER COLUMN a SET DEFAULT (+ +DATE '2020-01-01')",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT (+ +DATE '2020-01-01')",
+    "text": "SELECT ( + + DATE ? )",
+    "digest": "14f3ac5cd1a6144940ea894223fe248e2d5d0bed35664f1b34d1724e350df369"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ALTER COLUMN a SET DEFAULT (-DATE '2020-01-01')",
+    "text": "ALTER TABLE `t` ALTER COLUMN `a` SET DEFAULT ( - DATE ? )",
+    "digest": "e81b9f52f0d239415144408a38e2fcac11c2175865dfb318d9b47abff1b713d2"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT (-DATE '2020-01-01')",
+    "text": "SELECT ( - DATE ? )",
+    "digest": "ffbc22c7fc8e0d3078d50c86515dbb8efab7ca11697c84d731c765c0206bb162"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ALTER COLUMN a SET DEFAULT (+CAST(DATE '2020-01-01' AS CHAR))",
+    "text": "ALTER TABLE `t` ALTER COLUMN `a` SET DEFAULT ( + CAST ( DATE ? AS CHARACTER ) )",
+    "digest": "589e276c41c4762af1d1b60acf3a3ce8e34d8d5bbf9521b72f935c7a5f6c7e5a"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT (+CAST(DATE '2020-01-01' AS CHAR))",
+    "text": "SELECT ( + CAST ( DATE ? AS CHARACTER ) )",
+    "digest": "342adcfc286afee4043c69f0874fa55e9fc17b50f253fdcdf0312c7267a5c726"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ALTER COLUMN a SET DEFAULT (DATE '2020-01-01'+0)",
+    "text": "ALTER TABLE `t` ALTER COLUMN `a` SET DEFAULT ( DATE ? + ? )",
+    "digest": "5a07748bcd4985116e8aec184c0abb20b5e6f3bfd14fc37167d2b709c0498e1f"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT (DATE '2020-01-01'+0)",
+    "text": "SELECT ( DATE ? + ? )",
+    "digest": "1789bed32185e157187aa398123161416286d5cb793ac63304328eecbe88049c"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ALTER COLUMN a SET DEFAULT (+TIME '12:34:56')",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT (+TIME '12:34:56')",
+    "text": "SELECT ( + TIME ? )",
+    "digest": "78161a39948ef504b3b4a41152e17ea027feb478238373e4cfa05cd5d4fc9f80"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ALTER COLUMN a SET DEFAULT ((+(TIME '12:34:56')))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT ((+(TIME '12:34:56')))",
+    "text": "SELECT ( ( + ( TIME ? ) ) )",
+    "digest": "68df3dd04e7a1a86a79b4113b7e092b0ddefc14d67d55da7304c551124a82a6b"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ALTER COLUMN a SET DEFAULT (+ +TIME '12:34:56')",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT (+ +TIME '12:34:56')",
+    "text": "SELECT ( + + TIME ? )",
+    "digest": "fff89dc64698440b502eba9d8ca2d286d2c9f23ff7db34d16be5cb1a19883cd2"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ALTER COLUMN a SET DEFAULT (-TIME '12:34:56')",
+    "text": "ALTER TABLE `t` ALTER COLUMN `a` SET DEFAULT ( - TIME ? )",
+    "digest": "b15ad4976c8a8798cec56b855c32f5409eb56a9945eae0f995a72f4b35bf28e9"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT (-TIME '12:34:56')",
+    "text": "SELECT ( - TIME ? )",
+    "digest": "cfe2559d4fb8bfe37602c2b4f5085f780a464c1fed92e98982022456a12ca57d"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ALTER COLUMN a SET DEFAULT (+CAST(TIME '12:34:56' AS CHAR))",
+    "text": "ALTER TABLE `t` ALTER COLUMN `a` SET DEFAULT ( + CAST ( TIME ? AS CHARACTER ) )",
+    "digest": "1ddfcacbc428ab5cd0b3d399bf1b907712b6a2385597c22c621fe7d2c35134ad"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT (+CAST(TIME '12:34:56' AS CHAR))",
+    "text": "SELECT ( + CAST ( TIME ? AS CHARACTER ) )",
+    "digest": "11ee7cd511c3504800155336a9689f61fda654fcbd16502f70e8a8d01682e54f"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ALTER COLUMN a SET DEFAULT (TIME '12:34:56'+0)",
+    "text": "ALTER TABLE `t` ALTER COLUMN `a` SET DEFAULT ( TIME ? + ? )",
+    "digest": "c0ecc99fcc3a2f954da06a5b425543e1750124458634b0604232f7373dc77b58"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT (TIME '12:34:56'+0)",
+    "text": "SELECT ( TIME ? + ? )",
+    "digest": "c710bb5dc2c3c4be6434375f376da93b1e94b3c6d0151bec510234a3f2129486"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ALTER COLUMN a SET DEFAULT (+TIMESTAMP '2020-01-01 12:34:56')",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT (+TIMESTAMP '2020-01-01 12:34:56')",
+    "text": "SELECT ( + TIMESTAMP ? )",
+    "digest": "113ab931fd03ce91e4de1edb92cb78f0421fb8449882bdf67420fc3d73676f9f"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ALTER COLUMN a SET DEFAULT ((+(TIMESTAMP '2020-01-01 12:34:56')))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT ((+(TIMESTAMP '2020-01-01 12:34:56')))",
+    "text": "SELECT ( ( + ( TIMESTAMP ? ) ) )",
+    "digest": "a81f267048f7c42eca5402b24f9dcd8475570a2ec97a628f763ced4242a4db65"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ALTER COLUMN a SET DEFAULT (+ +TIMESTAMP '2020-01-01 12:34:56')",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT (+ +TIMESTAMP '2020-01-01 12:34:56')",
+    "text": "SELECT ( + + TIMESTAMP ? )",
+    "digest": "3573791289a91e66d88a039dda655f8300b2d5774d630ccd45ed3b6edf8f5a75"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ALTER COLUMN a SET DEFAULT (-TIMESTAMP '2020-01-01 12:34:56')",
+    "text": "ALTER TABLE `t` ALTER COLUMN `a` SET DEFAULT ( - TIMESTAMP ? )",
+    "digest": "0099471c2fb32c0af5038e3731239193719b12f022229b364e93aa4e8af86392"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT (-TIMESTAMP '2020-01-01 12:34:56')",
+    "text": "SELECT ( - TIMESTAMP ? )",
+    "digest": "87f6082640f14f175ebb1de683c5da4f2cc2231d65e6c30a8921249712fee86b"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ALTER COLUMN a SET DEFAULT (+CAST(TIMESTAMP '2020-01-01 12:34:56' AS CHAR))",
+    "text": "ALTER TABLE `t` ALTER COLUMN `a` SET DEFAULT ( + CAST ( TIMESTAMP ? AS CHARACTER ) )",
+    "digest": "569b37d881074d52f08d9bd410a3479a3051c541fe95ff7607c625547ee76106"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT (+CAST(TIMESTAMP '2020-01-01 12:34:56' AS CHAR))",
+    "text": "SELECT ( + CAST ( TIMESTAMP ? AS CHARACTER ) )",
+    "digest": "214c5102fc725291cde9d10dbef82bb81e18451dc70b13c7a5dee9e8e7f57b04"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ALTER COLUMN a SET DEFAULT (TIMESTAMP '2020-01-01 12:34:56'+0)",
+    "text": "ALTER TABLE `t` ALTER COLUMN `a` SET DEFAULT ( TIMESTAMP ? + ? )",
+    "digest": "7ed9befe8a3f0eeb21464f8db910b77c052a3ae3ca3f849a94c0f72aac8f932f"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT (TIMESTAMP '2020-01-01 12:34:56'+0)",
+    "text": "SELECT ( TIMESTAMP ? + ? )",
+    "digest": "137d0deb1968aa8fce1e65f2a73df8c25bdcc8cc7a9127ea07d52f0977ec43a0"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ALTER COLUMN a SET DEFAULT ((SELECT 1 INTO OUTFILE '/tmp/claude_no_execute'))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a INT DEFAULT ((SELECT 1 INTO OUTFILE '/tmp/claude_no_execute')))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a INT AS ((SELECT 1 INTO OUTFILE '/tmp/claude_no_execute')))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT (SELECT 1 INTO OUTFILE '/tmp/claude_no_execute')",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ALTER COLUMN a SET DEFAULT (((SELECT 1 INTO OUTFILE '/tmp/claude_no_execute')))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a INT DEFAULT (((SELECT 1 INTO OUTFILE '/tmp/claude_no_execute'))))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a INT AS (((SELECT 1 INTO OUTFILE '/tmp/claude_no_execute'))))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT ((SELECT 1 INTO OUTFILE '/tmp/claude_no_execute'))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ALTER COLUMN a SET DEFAULT (CASE WHEN 0 THEN (SELECT 1 INTO OUTFILE '/tmp/claude_no_execute') ELSE 1 END)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a INT DEFAULT (CASE WHEN 0 THEN (SELECT 1 INTO OUTFILE '/tmp/claude_no_execute') ELSE 1 END))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a INT AS (CASE WHEN 0 THEN (SELECT 1 INTO OUTFILE '/tmp/claude_no_execute') ELSE 1 END))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CASE WHEN 0 THEN (SELECT 1 INTO OUTFILE '/tmp/claude_no_execute') ELSE 1 END",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ALTER COLUMN a SET DEFAULT (SUM(1) OVER(ORDER BY (SELECT 1 INTO OUTFILE '/tmp/claude_no_execute')))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a INT DEFAULT (SUM(1) OVER(ORDER BY (SELECT 1 INTO OUTFILE '/tmp/claude_no_execute'))))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a INT AS (SUM(1) OVER(ORDER BY (SELECT 1 INTO OUTFILE '/tmp/claude_no_execute'))))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT SUM(1) OVER(ORDER BY (SELECT 1 INTO OUTFILE '/tmp/claude_no_execute'))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ALTER COLUMN a SET DEFAULT (SUM(1) OVER(PARTITION BY (SELECT 1 INTO OUTFILE '/tmp/claude_no_execute')))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a INT DEFAULT (SUM(1) OVER(PARTITION BY (SELECT 1 INTO OUTFILE '/tmp/claude_no_execute'))))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a INT AS (SUM(1) OVER(PARTITION BY (SELECT 1 INTO OUTFILE '/tmp/claude_no_execute'))))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT SUM(1) OVER(PARTITION BY (SELECT 1 INTO OUTFILE '/tmp/claude_no_execute'))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 INTO OUTFILE '/tmp/claude_no_execute'",
+    "text": "SELECT ? INTO OUTFILE ?",
+    "digest": "10439180ed7830e9a5e8c9118d178a31613e36a4ebe278702e77a60a47c64ea8"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT 1) (SELECT * FROM c INTO @x)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT 1) ((SELECT * FROM c INTO @x))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "(SELECT * FROM c INTO @x) FOR UPDATE",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "(SELECT * FROM c INTO @x) ORDER BY 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT 1) (SELECT * INTO @x FROM c)",
+    "text": "WITH `c` AS ( SELECT ? ) ( SELECT * INTO @? FROM `c` )",
+    "digest": "95a36d57cc3d811b32471f6bd5dad3447dd8da3572a06cb3abfe6c624dae57f9"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT 1) ((SELECT * INTO @x FROM c))",
+    "text": "WITH `c` AS ( SELECT ? ) ( ( SELECT * INTO @? FROM `c` ) )",
+    "digest": "212322393999b11e05869f1ee400714f5acf212409a4031423202ad795ba76a3"
+  },
+  {
+    "sql_mode": "",
+    "sql": "(SELECT * INTO @x FROM c) FOR UPDATE",
+    "text": "( SELECT * INTO @? FROM `c` ) FOR UPDATE",
+    "digest": "3d4659eb564e351bdb2ebeca621d828f48fe57bdcd33dbe9a870d24cfe47211d"
+  },
+  {
+    "sql_mode": "",
+    "sql": "(SELECT * INTO @x FROM c) ORDER BY 1",
+    "text": "( SELECT * INTO @? FROM `c` ) ORDER BY ?",
+    "digest": "5b8a2eefffd9b58131ce3a3bb7b4e024e100d996400e1e0938b11d810db650ab"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT 1) (SELECT n_nationkey FROM nation INTO @x)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT 1) ((SELECT n_nationkey FROM nation INTO @x))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "(SELECT n_nationkey FROM nation INTO @x) FOR UPDATE",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "(SELECT n_nationkey FROM nation INTO @x) ORDER BY 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT 1) (SELECT n_nationkey INTO @x FROM nation)",
+    "text": "WITH `c` AS ( SELECT ? ) ( SELECT `n_nationkey` INTO @? FROM `nation` )",
+    "digest": "175de3dee6a16ed4defa973301836b98d6594d55f1893248f51d041962f0c9d7"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT 1) ((SELECT n_nationkey INTO @x FROM nation))",
+    "text": "WITH `c` AS ( SELECT ? ) ( ( SELECT `n_nationkey` INTO @? FROM `nation` ) )",
+    "digest": "7e1aedd859b3aca7aba768a7375163c2704335a2920d3a9d82de92750ee8f993"
+  },
+  {
+    "sql_mode": "",
+    "sql": "(SELECT n_nationkey INTO @x FROM nation) FOR UPDATE",
+    "text": "( SELECT `n_nationkey` INTO @? FROM `nation` ) FOR UPDATE",
+    "digest": "297e8b971dbcaed09fbe18fa0ae0791d266a3c58912e237ba0c0458a731753b9"
+  },
+  {
+    "sql_mode": "",
+    "sql": "(SELECT n_nationkey INTO @x FROM nation) ORDER BY 1",
+    "text": "( SELECT `n_nationkey` INTO @? FROM `nation` ) ORDER BY ?",
+    "digest": "c742273101a40db38216487c1804c775f582a7393ef3a8ff7e9208139d4f1811"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT 1) (SELECT 1 INTO @x)",
+    "text": "WITH `c` AS ( SELECT ? ) ( SELECT ? INTO @? )",
+    "digest": "af8d13b8dad34f9f38bb084b066bb46679d5f8a403c50c6d9d828e19609e12a7"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT 1) ((SELECT 1 INTO @x))",
+    "text": "WITH `c` AS ( SELECT ? ) ( ( SELECT ? INTO @? ) )",
+    "digest": "3ef95eaa2b453503e671e9b1dc82b9cd7edf106d892e2dea3e345c72a9137385"
+  },
+  {
+    "sql_mode": "",
+    "sql": "(SELECT 1 INTO @x) FOR UPDATE",
+    "text": "( SELECT ? INTO @? ) FOR UPDATE",
+    "digest": "8cfe2bd8085ea1379e81697c57fdd4cb4eac2351c60fc3852430c7f58b0a95b0"
+  },
+  {
+    "sql_mode": "",
+    "sql": "(SELECT 1 INTO @x) ORDER BY 1",
+    "text": "( SELECT ? INTO @? ) ORDER BY ?",
+    "digest": "716604fc0a6c0f71e51ac9a65b15ef4a7f393f0a2187fb4a1af43d33f9a53d2b"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT 1) (SELECT 1 INTO @x FROM c)",
+    "text": "WITH `c` AS ( SELECT ? ) ( SELECT ? INTO @? FROM `c` )",
+    "digest": "e56671aaac4ee83baaafbc1094a98ebdec6f892afd32c837056b9a945c3143fe"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT 1) ((SELECT 1 INTO @x FROM c))",
+    "text": "WITH `c` AS ( SELECT ? ) ( ( SELECT ? INTO @? FROM `c` ) )",
+    "digest": "62ffec2d53231fea933997fde92ccf6baeb4c19b2a15c748373ab12279dd0386"
+  },
+  {
+    "sql_mode": "",
+    "sql": "(SELECT 1 INTO @x FROM c) FOR UPDATE",
+    "text": "( SELECT ? INTO @? FROM `c` ) FOR UPDATE",
+    "digest": "40b4defdcac712e6d69934b4a06e23a6de3b77c53d04207bd09f8bd35ca34029"
+  },
+  {
+    "sql_mode": "",
+    "sql": "(SELECT 1 INTO @x FROM c) ORDER BY 1",
+    "text": "( SELECT ? INTO @? FROM `c` ) ORDER BY ?",
+    "digest": "4b387dc48c6d9d2cd30c8daa486ae72f1b51c19e3438673a71e45bd0d9586573"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT 1) (SELECT 1 FROM c INTO @x)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT 1) ((SELECT 1 FROM c INTO @x))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "(SELECT 1 FROM c INTO @x) FOR UPDATE",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "(SELECT 1 FROM c INTO @x) ORDER BY 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "(SELECT 1 INTO OUTFILE '/tmp/claude_no_execute')",
+    "text": "( SELECT ? INTO OUTFILE ? )",
+    "digest": "67c4a7afcd4afac6dee005ebd48f19a81441cd1bec05ade4a8c6545d6a3d9b1d"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT 1) (SELECT 1 INTO OUTFILE '/tmp/claude_no_execute')",
+    "text": "WITH `c` AS ( SELECT ? ) ( SELECT ? INTO OUTFILE ? )",
+    "digest": "c7932c9dad771acfdb7f3523fc4af4f4e8c04ac70f004a47f4c11aa9217b69a9"
+  },
+  {
+    "sql_mode": "",
+    "sql": "(SELECT * FROM nation INTO @x)",
+    "text": "( SELECT * FROM `nation` INTO @? )",
+    "digest": "27ab139fa73a67de6b911c31c812cfa3b720e805fe5640dade72f79e4545bbd3"
+  },
+  {
+    "sql_mode": "",
+    "sql": "(SELECT n_nationkey INTO @x FROM nation)",
+    "text": "( SELECT `n_nationkey` INTO @? FROM `nation` )",
+    "digest": "1861fdcacd9d4d494e56a97a4917da88c5733f301f01a13dd8bc3eabdb6f410c"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT * FROM nation INTO @x",
+    "text": "SELECT * FROM `nation` INTO @?",
+    "digest": "f8ac3d469c8bdf3eac3a2f6cfcafef90ea0a50394f56aff7e5f4099cd4e5b0e2"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT (WITH nation AS (SELECT 1) SELECT 1), (((SELECT n_nationkey FROM nation FOR SHARE) FOR UPDATE))",
+    "error_code": 3677
   }
 ]

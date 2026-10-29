@@ -308,6 +308,7 @@ type Lexer struct {
 	parseFirst            bool
 	stopLexing            bool
 	statementEnd          int
+	selectLockClauses     int
 }
 
 // reservedKeywordsAfterAS lists tokens that represent reserved keywords
@@ -353,6 +354,7 @@ func (l *Lexer) setScanner(s *Scanner, lower int64, sqlMode SQLModeFlags) {
 	l.parseFirst = false
 	l.stopLexing = false
 	l.statementEnd = 0
+	l.selectLockClauses = 0
 }
 
 func (l *Lexer) HasSQLMode(flag SQLModeFlag) bool {
@@ -834,6 +836,14 @@ func validateSelectIntoStatements(lexer *Lexer) error {
 		if errMsg := tree.ValidateSelectIntoStatementRoot(stmt); errMsg != "" {
 			lexer.Error(errMsg)
 			return lexer.scanner.LastError
+		}
+		// WITH/CTE scope is complete only at this boundary. Avoid a query-tree
+		// walk on the ordinary zero/single-lock path.
+		if lexer.selectLockClauses > 1 {
+			if errMsg := tree.ValidateSelectLocking(stmt); errMsg != "" {
+				lexer.Error(errMsg)
+				return lexer.scanner.LastError
+			}
 		}
 	}
 	return nil
