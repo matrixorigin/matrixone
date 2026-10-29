@@ -5460,7 +5460,13 @@ func (v *Vector) CloneWindowTo(w *Vector, start, end int, mp *mpool.MPool) error
 			w.areaDisjoint = false
 		}
 		w.length = end - start
-		w.data = nil
+		if w.cantFreeData {
+			w.data = nil
+			w.cantFreeData = false
+		} else {
+			// Keep owned capacity available for reuse and eventual Free.
+			w.data = w.data[:0]
+		}
 		return nil
 	} else if v.IsConst() {
 		if v.typ.IsVarlen() {
