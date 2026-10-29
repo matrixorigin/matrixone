@@ -172,6 +172,23 @@ func TestDefaultAdmissionExhaustedMemoryDoesNotWrap(t *testing.T) {
 					t.Errorf("rss=%d: left=%d, granted=%t, reserved=%d", rss, left, ok, m.reserved.Load())
 				}
 			}
+
+			// Releasing the old reservation does not create capacity while RSS
+			// is above budget. Capacity returns when RSS falls below budget.
+			require.Zero(t, m.Release(math.MaxInt64))
+			left, ok := m.Acquire(1)
+			require.False(t, ok)
+			require.Zero(t, left)
+			m.rss.Store(99)
+			left, ok = m.Acquire(1)
+			require.True(t, ok)
+			require.Zero(t, left)
+			m.options.allowOutOfMemoryAcquire = true
+			left, ok = m.Acquire(1)
+			require.True(t, ok)
+			require.Equal(t, int64(-1), left)
+			require.Equal(t, int64(2), m.reserved.Load())
+			require.Equal(t, int64(1), m.Release(2))
 		})
 	}
 }
