@@ -1465,11 +1465,35 @@ type unpublishedPendingQueue struct {
 	// FINAL claim does; a queue entry (the enqueue below) or a storage
 	// deletion retires the whole membership, the queue and the deleted
 	// file being the obligation then. The member key exists exactly
-	// while its claim set is non-empty, so the set's reads below keep
-	// answering the bound's membership questions unchanged.
+	// while its claim set is non-empty OR an accepted GC delete batch
+	// holds the name — the round-58 rule gcAccepted below states.
 	ownedNames map[string]map[*Transaction]struct{}
 	live       int64
 	inFlight   int64
+	// gcAccepted is the engine-owned GC capacity claim — the per-name
+	// refcount of outstanding POOL-WORKER delete batches gcFiles
+	// submitted and the pool accepted (issue #25590 round-58 review):
+	// the moment the pool accepts a batch, its names' admission
+	// obligation belongs to that delete job, so an ACCEPTED but
+	// unsettled name keeps its owned-member capacity through every
+	// terminal's published-class claim release. Compaction and
+	// dropped-table cleanup submit these deletions on an OPEN
+	// transaction's behalf, so a transaction that commits while its
+	// worker stalls inside DeleteUnpublishedObjects would otherwise
+	// release the obsolete object's final claim as published and free
+	// its unit while the deletion obligation is still outstanding —
+	// the review's overshoot: one stalled obsolete object beside two
+	// newly admitted names behind a two-unit bound (I4 counts queued,
+	// owned AND admitted-in-flight obligations alike). The claim is
+	// keyed by NAME alone — the round-40/41 doctrine the settle state
+	// already follows — so the completed transaction's graph stays
+	// collectible exactly as before, and the worker's settle retires
+	// the refcount together with the membership in the
+	// storage-deletion whole-membership class. The refcount exists
+	// because one name can appear in several in-flight or retried
+	// batches; it is bounded by the accepted batch population, which
+	// the pool's worker bound and the producers counter already cap.
+	gcAccepted map[string]int
 	// arrivalSeq counts enqueue events (one bump per call that added at
 	// least one name) under the same mutex as the queue itself: two
 	// readers of the same sequence value saw the exact same set of
@@ -1844,10 +1868,21 @@ func (e *Engine) admitUnpublishedPendingRecordedNames(
 // re-record of a transferred object - keeps its membership and its
 // capacity counted until that final claim retires, so a transferred
 // fragment's settlement cannot free capacity a live recording workspace
-// still owes. The release stays idempotent per (workspace, name) for
-// duplicate pending or repeated deliveries, and names already moved out
-// - handed off, deleted, or never claimed - simply no-op, so commit
-// after any intermediate transfer cannot double-release.
+// still owes. Round-58 (issue #25590 review of 2026-10-28) adds the
+// engine-owned GC claim to the same retirement condition: a name whose
+// delete a POOL WORKER accepted keeps its membership and capacity while
+// its claim set empties, because that accepted job — not any workspace,
+// and never a completed transaction (round-40/41) — owns the obligation
+// until the worker's settle retires it with the whole membership
+// (compaction and dropped-table cleanup submit such deletes on an open
+// transaction's behalf, whose commit payload no longer carries the
+// obsolete object; freeing its unit at the terminal admitted the review's
+// overshoot — one stalled obsolete object beside up to a full bound of
+// new names, violating I4's retained-population cap). The release stays
+// idempotent per (workspace, name) for duplicate pending or repeated
+// deliveries, and names already moved out - handed off, deleted, or
+// never claimed - simply no-op, so commit after any intermediate
+// transfer cannot double-release.
 func (e *Engine) releaseUnpublishedPendingPublished(
 	txn *Transaction, names []string,
 ) {
@@ -1865,10 +1900,16 @@ func (e *Engine) releaseUnpublishedPendingPublished(
 				continue
 			}
 			delete(claims, txn)
-			if len(claims) == 0 {
-				delete(e.unpublishedPending.ownedNames, n)
-				e.unpublishedPending.live--
+			if len(claims) > 0 {
+				continue
 			}
+			if e.unpublishedPending.gcAccepted[n] > 0 {
+				// The accepted delete batch holds the name's capacity:
+				// the membership retires whole at the batch's settle.
+				continue
+			}
+			delete(e.unpublishedPending.ownedNames, n)
+			e.unpublishedPending.live--
 		}
 	}
 	e.unpublishedPending.mu.Unlock()
@@ -1954,6 +1995,68 @@ func (e *Engine) abandonUnpublishedPendingReservations(names []string) {
 	e.unpublishedPending.mu.Unlock()
 }
 
+// retainUnpublishedPendingGCNames takes the ENGINE-OWNED capacity claim
+// of names whose delete batch gcFiles is about to hand to the pool
+// (issue #25590 round-58 review): from the moment the submission can no
+// longer fail back to the caller, the obligation of these names belongs
+// to the accepted delete job, so the ledger must keep their membership
+// counted through the submitting transaction's own terminal — the claim
+// is keyed by name alone, never by the Transaction, so the completed
+// transaction's graph stays collectible exactly as round-40/41 pinned.
+// Registration runs on the submitting goroutine BEFORE pool.Submit, so
+// no worker settle can race the refcount in; the settle and the
+// submit-failure unwind are the only two paths that retire it.
+func (e *Engine) retainUnpublishedPendingGCNames(names []string) {
+	if len(names) == 0 {
+		return
+	}
+	e.unpublishedPending.mu.Lock()
+	e.retainUnpublishedPendingGCNamesLocked(names)
+	e.unpublishedPending.mu.Unlock()
+}
+
+// releaseUnpublishedPendingGCNames settles the engine-owned GC claim of
+// batch names whose submission FAILED before any worker could owe them
+// a delete: the names transfer to the lossless queue tail in the same
+// breath, whose enqueue retires the whole membership into the queue's
+// own slot, so the accepted-job class must not keep a phantom claim on
+// names the queue now owns (issue #25590 round-58 review).
+func (e *Engine) releaseUnpublishedPendingGCNames(names []string) {
+	if len(names) == 0 {
+		return
+	}
+	e.unpublishedPending.mu.Lock()
+	e.releaseUnpublishedPendingGCNamesLocked(names)
+	e.unpublishedPending.mu.Unlock()
+}
+
+// retainUnpublishedPendingGCNamesLocked registers one accepted-batch
+// reference per name; the caller holds the queue mutex.
+func (e *Engine) retainUnpublishedPendingGCNamesLocked(names []string) {
+	if e.unpublishedPending.gcAccepted == nil {
+		e.unpublishedPending.gcAccepted = make(map[string]int, len(names))
+	}
+	for _, n := range names {
+		e.unpublishedPending.gcAccepted[n]++
+	}
+}
+
+// releaseUnpublishedPendingGCNamesLocked retires one reference per name
+// and drops the entry at zero; settling an unregistered name — a name
+// the queue's own drain deleted, or one never submitted to the pool - is
+// the documented no-op. The caller holds the queue mutex.
+func (e *Engine) releaseUnpublishedPendingGCNamesLocked(names []string) {
+	for _, n := range names {
+		if refs, ok := e.unpublishedPending.gcAccepted[n]; ok {
+			if refs <= 1 {
+				delete(e.unpublishedPending.gcAccepted, n)
+			} else {
+				e.unpublishedPending.gcAccepted[n] = refs - 1
+			}
+		}
+	}
+}
+
 // settleUnpublishedPendingDeleted retires the ledger membership of
 // names an admitted GC caller finished with - successfully deleted or
 // dropped with the caller's own pre-existing loss class - so capacity
@@ -1962,7 +2065,12 @@ func (e *Engine) abandonUnpublishedPendingReservations(names []string) {
 // #25590 round-18 review). The retire is the WHOLE membership with its
 // claim set: the file is gone for every claimant, so no later
 // published-class release may resurrect or retain capacity behind it
-// (issue #25590 round-57 review).
+// (issue #25590 round-57 review). Round-58 adds the settle's own
+// guarantee to the same section: the accepted delete job that held the
+// name's engine-owned GC claim is exactly what just completed, so its
+// refcount retires here together with the membership — the terminal
+// release can never be needed to return the stalled name's capacity,
+// and the claim map keeps no batch the workers already finished.
 func (e *Engine) settleUnpublishedPendingDeleted(names []string) {
 	if len(names) == 0 {
 		return
@@ -1976,6 +2084,7 @@ func (e *Engine) settleUnpublishedPendingDeleted(names []string) {
 			}
 		}
 	}
+	e.releaseUnpublishedPendingGCNamesLocked(names)
 	e.unpublishedPending.mu.Unlock()
 }
 

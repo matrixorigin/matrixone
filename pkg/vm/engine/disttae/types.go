@@ -1459,6 +1459,19 @@ func gcFiles(txn *Transaction, scope cloneGCScope, names ...string) error {
 	for start := 0; start < len(names); start += GCBatchOfFileCount {
 		end := min(start+GCBatchOfFileCount, len(names))
 		batch := append([]string(nil), names[start:end]...)
+		// Round-58 (issue #25590 review of 2026-10-28): the pool is about
+		// to own this batch's deletions, so their names' admission
+		// capacity takes the ENGINE-OWNED GC claim here — registered
+		// BEFORE the submit, on the submitting goroutine, so no worker
+		// settle can race the refcount in. Compaction and dropped-table
+		// cleanup submit these deletes on an OPEN transaction's behalf,
+		// and the transaction that commits while the accepted worker
+		// stalls must not release the obsolete objects' capacity as
+		// published: the obligation is the delete job's now, counted
+		// until the worker's settle retires it with the whole membership,
+		// and keyed by name alone so the completed transaction stays
+		// collectible (round-40/41).
+		e.retainUnpublishedPendingGCNames(batch)
 		if err := pool.Submit(func() {
 			// Rollback cleanup must survive query cancellation. The existing helper
 			// bounds each storage attempt; engine close waits for the actual return
@@ -1506,6 +1519,14 @@ func gcFiles(txn *Transaction, scope cloneGCScope, names ...string) error {
 			// them — so the transfer registers THIS transaction as the
 			// names' recorded-copy owner and the queue drain's settle
 			// retires the members with the same rule.
+			//
+			// round-58 (issue #25590 review of 2026-10-28): no worker
+			// owes this failed batch a delete, so the accepted-job claim
+			// its registration took retires here; the queue tail below
+			// takes the names over whole — the enqueue retires the
+			// ledger membership into the queue's own slot — and no
+			// phantom engine claim may double-count it.
+			e.releaseUnpublishedPendingGCNames(batch)
 			e.enqueueUnpublishedPendingFrom(txn, names[start:])
 			logutil.Warn(
 				"GC-WORKSPACE-FILES-HANDOFF",

@@ -5803,3 +5803,155 @@ artifacts):
   Test on Ubuntu/x86` run, so the residual is a local-host condition
   of the spill test surface, not code evidence — reported, not
   worked around.
+
+## 10 design review record - round 58 (implementation follow-up): the accepted GC delete batch holds the stalled name's capacity as an engine-owned claim
+
+The request-changes review on PR #30988 head `7c75f3e07b` (finding P2
+at `pkg/vm/engine/disttae/txn.go:3906`): intermediate-object
+compaction (the `compactDeletionOnObjsLocked` tail's `GCObjsByStats`
+after `releaseWorkspaceEntryBatchLocked` removed the originals'
+entries) and dropped-table cleanup (`mergeTxnWorkspaceLocked`'s
+`GCObjsByIdxRange`) submit the STORAGE deletion of names the commit
+payload no longer carries, on an OPEN transaction's behalf — the
+submitter's recorded-name copy keeps each obsolete name until the
+accepted worker settles (round-37), and the round-41 record already
+keeps that settle state independently of the transaction. But the
+commit terminal's published-class release classified EVERY
+still-recorded name as published, so a transaction that committed
+while its parked worker stalled inside `DeleteUnpublishedObjects`
+released the obsolete object's final workspace claim — the
+membership, `live`, and its capacity unit — although the deletion
+obligation remained outstanding in the pool. The review's priced
+counterexample: with the bound at 2, one stalled obsolete object
+then coexisted with two newly admitted objects — three retained
+obligations behind a two-object bound — where the distinct-engine
+control refuses the second; the terminal, the commit payload and the
+settling worker each discharged the obligation from the bound while
+none of them had completed it.
+
+Trigger analysis (design gate): I4's population term is explicit —
+"the engine's retained unpublished-object population (queued + live
++ admitted-in-flight) is capped" and §5.5's bound is "queued, owned,
+and in-flight alike" — and §5.3's conversion/release clause releases
+"this transaction's still-owned recorded names" at exactly the same
+moment the claim classes of r57 had to survive: an accepted delete
+that has NOT settled is an admitted-in-flight obligation, and no
+published-class terminal may free its unit before the delete
+completes. Nothing about the admission formula, the refusal policy,
+the capacity unit, the queue handoff classes, the storage-deletion
+whole-membership class, or the recorded-name fates changes: round 41
+already made the accepted worker's settle state independently owned
+(round-40's no-completed-Transaction doctrine), and this round gives
+the same ownership to the ACCEPTED job's capacity claim. An
+implementation follow-up inside the approved r17 design; no new
+design revision.
+
+Decision (inside the approved I4 bound): the pool's acceptance of a
+delete batch is the ownership transfer point — the moment `gcFiles`
+can no longer fail the names back to the caller, their admission
+obligation belongs to the delete job, which now holds it as an
+ENGINE-OWNED claim keyed by NAME alone (`gcAccepted` refcount under
+the ledger's one mutex; one reference per accepted batch, so a name
+in several in-flight batches never under-retires). Three transitions
+join the existing ones: (1) registration runs on the submitting
+goroutine BEFORE `pool.Submit`, so no worker settle may race the
+refcount in; (2) the published-class release of any terminal —
+commit, unknown-result, CCPR branch, fragment settlement — still
+retires exactly the caller's per-workspace claim, and the
+membership plus its capacity retire only when the FINAL claim does
+AND no accepted batch holds the name: the recorded copy may drain
+and the transaction may end and collect (round-40/41 stand), while
+the obligation keeps its unit the whole outage; (3) the worker's
+settle — the storage-deletion whole-membership class — retires the
+refcount together with the membership, and hence is the only path
+that returns a stalled name's capacity; the submit-failure unwind
+(a pool released between admission and submit) releases the failed
+batch's references BEFORE the lossless queue tail takes the names,
+so the enqueue's whole-membership class leaves exactly the queue's
+one slot — capacity moved, not added, and the round-13/38 handoff
+fates are untouched.
+
+Deliberately unchanged, recorded for round completeness:
+
+- The bound reads (queued + owned + in-flight), the object-unit
+  reservation semantics, the fail-closed refusal behavior, and the
+  one-unit-per-name rule are byte-identical; an accepted batch adds
+  no unit — the membership the record already created keeps counting
+  it.
+- The per-workspace claim sets (round 57), the queued-name
+  `recordedOwners` channel (round 38), the round-40 terminal detach
+  and the round-41 independently owned settle state keep their exact
+  semantics; the new claim is engine-owned and name-keyed precisely so
+  it perturbs none of them and retains no `*Transaction`.
+- The enqueue and storage-deletion whole-membership classes keep
+  whole-retire; the queue's drain settle for queued names never
+  consults the refcount (queued names carry none), and settling an
+  unregistered name stays the documented no-op.
+
+Affected-family contract update, recorded because the round's
+classification change reaches one existing regression: the round-34
+failed-merge recovery regression's terminal section asserted `live=0`
+immediately after `FinalizeCommit` — an assertion that held only
+through the pre-fix classification, because its own scenario had just
+submitted the two superseded originals' deletes to the pool (the
+retried pass's `GCObjsByStats`; the debug run proves the batch is the
+single pool GC of the whole test and the terminal ran ~2 ms later,
+with both names still accepted-unsettled). The regression's tail now
+asserts the round-58 contract — the terminal publishes the payload's
+members, the thread-empty settle class retires the two obsolete
+originals' retained units (`Eventually` on the ledger, the same sync
+point every accepted-worker family uses), the final drain finds no
+obligation, the published replacement files survive, and (stronger
+than before) both superseded originals' files are provably removed by
+their accepted delete jobs.
+
+Validation (logs under `/tmp/issue25590-r58/`, the round's handler
+artifacts):
+
+- RED on the pre-fix tree: the production diff stashed aside
+  (`git stash`, restored after), the reviewed head `7c75f3e07b`
+  rebuilding with only the new regressions present.
+  `TestIssue25590AcceptedGCDeletionObligationKeepsCapacityThroughCommit`
+  fails at exactly the review's classification — `live` 0 where the
+  retained obligation requires 1 at the commit terminal
+  (`red-pristine.log`, exit 1; the earlier red-fixture.log captured the
+  identical failure before the controlled stash rerun).
+- GREEN on the fixed tree, same regression plus the round's other
+  orders: the stalled obligation stays counted through
+  `FinalizeCommit` (`live` 1), exactly one further reservation passes
+  the bound-2 engine and the second is refused fail-closed, the
+  recovered worker's settle alone returns the full capacity
+  (`green-family.log` `green-rerun.log`); the settle-first order
+  proves the settlement — never a terminal — returns the deleted
+  object's capacity; the released-pool order proves the refused
+  submission's lossless queue handoff counts exactly one unit
+  (`p2-verbose-touched.log` exit 0, all eight name-proofs PASS).
+  `TestIssue25590EngineOwnedGCClaimOutlivesFinalClaimRelease` and
+  `...RefCountAndUnwind` pin the mechanics directly: the final-claim
+  release keeps the engine-owned claim counted for every claimant
+  count, duplicate accepted batches retire one reference per settle
+  (the first settle frees the unit whole per round-57's deleted-file
+  class), the submit-failure unwind leaves no phantom claim behind
+  the queue's slot, and both claim maps close empty.
+- The round-41 weak-ref regression now asserts this round's contract
+  (`live=1` while the worker stays parked, 0 after its settle — the
+  immediate post-commit assertion and the recovery tail both updated
+  with the ledger-sync point) and still passes both original
+  collection checks: the completed transaction stays collectible
+  while its obligation stays counted (`p2`, `p5`).
+- The round-34 failed-merge recovery passes on the updated tail
+  (`reladder-r34.log`, verbose PASS); the whole disttae
+  `TestIssue25590` corpus passes (`reladder-p1-issue25590.log`), the
+  FULL `pkg/vm/engine/disttae` package passes with ONLY the
+  round-34-family delta resolved (`p3-disttae-full.log`: the
+  pre-update run failed exactly that one test, exit 1; the
+  post-update corpus exit recorded in the reladder log), the external
+  `pkg/vm/engine/test` drivers pass (`p4-engine-test.log` `ok`
+  370.353s, exit 0), and the race leg of every new and affected family
+  passes (`p5-race-disttae-ledger.log` exit 0).
+- Static: `gofmt -l` clean on the changed closure, `go vet` clean
+  through the wrapper's CGo environment (`static-vet.log`, vet exit
+  0), and `golangci-lint run --new-from-rev HEAD
+  ./pkg/vm/engine/disttae` — under the same environment, after its own
+  two ineffassign findings in the new matrix regression were fixed —
+  reports 0 issues (`static-lint3.log`, exit 0).

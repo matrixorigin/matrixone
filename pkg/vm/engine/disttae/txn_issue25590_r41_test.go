@@ -238,7 +238,18 @@ func TestIssue25590AcceptedGCWorkerStallDoesNotRetainCompletedTransaction(t *tes
 
 	// COMMIT terminal - the production FinalizeCommit, which never joins
 	// the in-flight GC jobs: the release classifies the recorded member
-	// as published and drops the copy while the worker stays parked.
+	// as still-owned by no workspace and drops the copy while the
+	// worker stays parked. Round-58 (issue #25590 review of 2026-10-28)
+	// extends the classification: the ACCEPTED delete job holds the
+	// member's capacity as the engine-owned GC claim, so the obligation
+	// the parked worker still owes stays counted against the admission
+	// bound until the settle retires it with the whole membership —
+	// this scenario drives the GC front door while the entry keeps the
+	// name (a shape no production caller pairs with a kept entry; the
+	// payload-drop lifetime is the r58 regressions' own), and the
+	// reclamation contract below is untouched: the released claim and
+	// the recorded copy are the transaction's; the counted unit is the
+	// obligation's.
 	txn.FinalizeCommit(ctx)
 
 	txn.Lock()
@@ -251,8 +262,8 @@ func TestIssue25590AcceptedGCWorkerStallDoesNotRetainCompletedTransaction(t *tes
 	queued, live, inFlight = e.InspectUnpublishedPendingForTest()
 	require.Empty(t, queued,
 		"the committed object's settle obligation lives only in the parked worker")
-	require.Zero(t, live,
-		"the terminal release retired the member's owned ledger membership as published")
+	require.Equal(t, 1, live,
+		"the terminal released the departed workspace's claim; the accepted GC job's engine-owned obligation keeps the member counted until its settle (issue #25590 round-58)")
 	require.Zero(t, inFlight)
 
 	// THE ROUND-41 CONTRACT: the probe drops its own reference and the
@@ -287,6 +298,16 @@ func TestIssue25590AcceptedGCWorkerStallDoesNotRetainCompletedTransaction(t *tes
 		"the recovered worker completes the stalled batch's file deletion")
 	issue25590RequireGone(t, failFS, name,
 		"the recovered worker deleted the stalled object's file")
+	// The settle's whole-membership retire FOLLOWS the delete's return
+	// (the worker settles the ledger and the recorded copy after the
+	// storage call), so the ledger reaches empty only on the same
+	// recovery's own step the r58 regressions wait for — the file's
+	// disappearance alone is not the ledger's settle.
+	require.Eventually(t, func() bool {
+		_, l, _ := e.InspectUnpublishedPendingForTest()
+		return l == 0
+	}, 10*time.Second, 10*time.Millisecond,
+		"the recovered worker's settle retired the engine-owned GC claim with the membership")
 	queued, live, inFlight = e.InspectUnpublishedPendingForTest()
 	require.Empty(t, queued)
 	require.Zero(t, live)

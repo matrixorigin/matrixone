@@ -42,6 +42,7 @@ package disttae
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -379,11 +380,23 @@ func TestIssue25590FailedMergeStillHandsOffForInTxnRecovery(t *testing.T) {
 	require.Empty(t, txn.pendingObjectCleanupNames())
 	require.Equal(t, recoveryAdmissionLimit, unpublishedPendingAdmissionLimit,
 		"the capacity limit never changed through the whole recovery")
+	// The two superseded dirty originals' names: gone from the workspace
+	// with the retried pass's compaction, their files now owned by the
+	// pass's accepted `GCObjsByStats` delete batch.
+	supersededNames := make([]string, 0, recoveryLimit)
+	for name := range allOriginalNames {
+		if !namesNow[name] {
+			supersededNames = append(supersededNames, name)
+		}
+	}
+	require.Len(t, supersededNames, recoveryLimit,
+		"exactly the two superseded dirty originals left the workspace with the retried pass")
 
 	// COMMIT in the SAME transaction: the commit admission's merge has
 	// nothing failed left to run, the commit-prepare handoff queues
 	// nothing recorded, and the success classification retires the
-	// recorded members as published, leaving the published files intact.
+	// payload's recorded members as published, leaving the published
+	// files intact.
 	require.NoError(t, txn.checkWorkspaceAccountingLocked())
 	require.NoError(t, func() error {
 		_, cerr := txn.Commit(ctx)
@@ -392,14 +405,32 @@ func TestIssue25590FailedMergeStillHandsOffForInTxnRecovery(t *testing.T) {
 	require.Zero(t, len(issue25590QueuedNames(e)),
 		"the commit-prepare handoff queues nothing recorded")
 	txn.FinalizeCommit(ctx)
+	// Round-58 contract (issue #25590 review of 2026-10-28): the retried
+	// pass's compaction submitted the two superseded originals' deletes
+	// to the pool BEFORE this terminal, so at the terminal the names are
+	// recorded obligations an ACCEPTED GC job owns. The published-class
+	// release frees exactly the eight payload members' units at the
+	// commit; the two obsolete originals' units retire with their
+	// workers' settle — the settlement, never the terminal, returns a
+	// retained obligation's capacity — and nothing inside the commit
+	// waited on storage.
+	require.Eventually(t, func() bool {
+		_, l, _ := issue25590LedgerNow(e)
+		return l == 0
+	}, 10*time.Second, 10*time.Millisecond,
+		"the accepted delete jobs' settles retire the two obsolete originals' retained units")
 	_, live, inFlight = issue25590LedgerNow(e)
 	require.Zero(t, live,
-		"the successful commit released every recorded member as published")
+		"the terminal published the payload's members and the settled deletes retired the two obsolete originals' units")
 	require.Zero(t, inFlight)
 	require.NoError(t, e.DrainUnpublishedPendingForTest(ctx),
 		"the final scheduled pass has no obligation left")
 	for name := range freshNames {
 		issue25590RequireKept(t, failFS, name,
 			"a published replacement file survives the terminal")
+	}
+	for _, name := range supersededNames {
+		issue25590RequireGone(t, failFS, name,
+			"the accepted delete job completed its obsolete original's deletion")
 	}
 }
