@@ -792,7 +792,7 @@ func readClusterTaeRange(
 	reader, err := readutil.NewReader(
 		qryCtx, mp, pool, fs, tableDef,
 		timestamp.Timestamp{PhysicalTime: time.Now().UnixNano()},
-		expr, ls, 0, engine.FilterHint{})
+		expr, ls, engine.FilterHint{})
 	require.NoError(t, err)
 
 	attrs := []string{"tenant_id", "device_id", "metric_id", "event_ts", "value"}
