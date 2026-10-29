@@ -102,27 +102,12 @@ func DropPrimaryKey(ctx CompilerContext, alterPlan *plan.AlterTable, alterCtx *A
 	// MySQL equivalent-key transition: dropping the primary key recorded by a
 	// child foreign key is allowed when another key covering the same columns
 	// survives; the binding moves there through the ALTER's FK catalog
-	// updates. Legacy bindings and keyless survivors keep the 1553 rejection.
-	survivingDef := DeepCopyTableDef(tableDef, true)
-	survivingDef.Pkey = nil
-	rebinds, err := resolveForeignKeyBoundIndexDrops(
-		ctx, tableDef, "PRIMARY", tableDef.Pkey.Names, true, survivingDef, nil)
-	if err != nil {
-		return err
-	}
-	for _, rebind := range rebinds {
-		// Self-referencing children are recorded against the COPY's temporary
-		// name, but the rows that survive the relation transfer live under the
-		// original table's name: readdress those before emitting the update.
-		if alterCtx.copyTableName != "" && rebind.childTable == alterCtx.copyTableName {
-			if alterCtx.originTableName == "" {
-				return moerr.NewInternalError(ctx.GetContext(), "missing original table name for foreign key rebinding")
-			}
-			rebind.childTable = alterCtx.originTableName
-		}
-		alterCtx.UpdateSqls = append(alterCtx.UpdateSqls, GetSqlForUpdateFkReferencedIndex(
-			rebind.childDatabase, rebind.childTable, rebind.constraintName, rebind.newIndexName))
-	}
+	// updates. The rebind is deferred until the owning ALTER assembles the
+	// COPY's final key set (applyAlterCopyPrimaryRebind), so a same-statement
+	// ADD UNIQUE on the same columns can supply the surviving key regardless
+	// of SQL clause order (review 5691776262). Legacy bindings and keyless
+	// survivors keep the 1553 rejection at that point.
+	alterCtx.pendingPrimaryRebind = append([]string(nil), tableDef.Pkey.Names...)
 	if tableDef.Pkey.PkeyColName == catalog.FakePrimaryKeyColName {
 		return moerr.NewErrCantDropFieldOrKey(ctx.GetContext(), "PRIMARY")
 	}
@@ -139,5 +124,49 @@ func DropPrimaryKey(ctx CompilerContext, alterPlan *plan.AlterTable, alterCtx *A
 		})
 	}
 	tableDef.Pkey = nil
+	return nil
+}
+
+// applyAlterCopyPrimaryRebind resolves a DROP PRIMARY KEY's child rebinding
+// after the COPY's final key set is assembled (including same-statement ADD
+// UNIQUE indexes), then emits the catalog updates this statement carries.
+func applyAlterCopyPrimaryRebind(
+	cctx CompilerContext,
+	copyTableDef *TableDef,
+	alterCtx *AlterTableContext,
+) error {
+	if alterCtx == nil || len(alterCtx.pendingPrimaryRebind) == 0 {
+		return nil
+	}
+	if len(copyTableDef.RefChildTbls) == 0 {
+		return nil
+	}
+	rebinds, err := resolveForeignKeyBoundIndexDrops(
+		cctx, copyTableDef, "PRIMARY", alterCtx.pendingPrimaryRebind, true, copyTableDef, nil)
+	if err != nil {
+		return err
+	}
+	for _, rebind := range rebinds {
+		// Self-referencing children are recorded against the COPY's temporary
+		// name, but the rows that survive the relation transfer live under the
+		// original table's name: readdress those before emitting the update.
+		if alterCtx.copyTableName != "" && rebind.childTable == alterCtx.copyTableName {
+			if alterCtx.originTableName == "" {
+				return moerr.NewInternalError(cctx.GetContext(), "missing original table name for foreign key rebinding")
+			}
+			rebind.childTable = alterCtx.originTableName
+			// A self-reference persists its constraint through this statement's
+			// COPY: rewrite the copy's durable binding too, so the catalog
+			// update and the stored ForeignKeyDef commit together
+			// (review 5691776262).
+			for _, fk := range copyTableDef.Fkeys {
+				if fk.Name == rebind.constraintName {
+					fk.ReferencedIndexName = rebind.newIndexName
+				}
+			}
+		}
+		alterCtx.UpdateSqls = append(alterCtx.UpdateSqls, GetSqlForUpdateFkReferencedIndex(
+			rebind.childDatabase, rebind.childTable, rebind.constraintName, rebind.newIndexName))
+	}
 	return nil
 }

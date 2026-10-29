@@ -2022,6 +2022,13 @@ func (s *Scope) alterTableCopy(c *Compile, cleanup *alterAutoIncrementResetClean
 				return err
 			}
 		}
+		// Keep each referencing child's stored ForeignKeyDef binding in step
+		// with the catalog rows updated above, in this same DDL transaction,
+		// so the durable constraint and the catalog binding commit together
+		// (review 5691776262).
+		if err = c.syncDurableForeignKeyIndexBindings(qry); err != nil {
+			return err
+		}
 		prepareFkSqls, _ := plan2.GetSqlForTransferAlterCopyFk(
 			qry.Database,
 			qry.TableDef.Name,
@@ -2893,6 +2900,11 @@ func (s *Scope) doAlterTable(c *Compile, cleanup *alterAutoIncrementResetCleanup
 			if err != nil {
 				return err
 			}
+		}
+		// Same-transaction durable alignment of every referencing child's
+		// stored binding (review 5691776262).
+		if err = c.syncDurableForeignKeyIndexBindings(qry); err != nil {
+			return err
 		}
 	}
 	databaseName := qry.Database

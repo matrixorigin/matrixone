@@ -7947,6 +7947,19 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 			if !slices.Contains(updateSqls, sql) {
 				updateSqls = append(updateSqls, sql)
 			}
+			// A self-referencing child persists its durable ForeignKeyDef
+			// through this statement's COPY: rewrite the copy's binding too,
+			// so the catalog update and the stored def commit together with
+			// the same surviving key (review 5691776262).
+			if alterTable.CopyTableDef != nil &&
+				rebind.childDatabase == alterTable.TableDef.DbName &&
+				rebind.childTable == alterTable.TableDef.Name {
+				for _, fk := range alterTable.CopyTableDef.Fkeys {
+					if fk.Name == rebind.constraintName {
+						fk.ReferencedIndexName = rebind.newIndexName
+					}
+				}
+			}
 		}
 	}
 
@@ -8302,6 +8315,32 @@ func ForeignKeyReferencedIndexMatches(parent *plan.TableDef, columns []uint64, n
 	}
 	_, matched := selectForeignKeyReferencedIndex(parent, names, name)
 	return matched
+}
+
+// HealedForeignKeyReferencedIndex validates an explicitly retained binding and
+// repairs a stale one: the equivalent-key transition moves the catalog binding
+// while a child's stored ForeignKeyDef keeps the removed key name until the
+// table is re-materialized. When the recorded name is gone but another
+// covering PRIMARY/UNIQUE key survives, the survivor's name is returned with
+// changed=true so callers heal the persisted binding instead of failing the
+// table recreation.
+func HealedForeignKeyReferencedIndex(parent *plan.TableDef, columns []uint64, name string) (string, bool, bool) {
+	if parent == nil || name == "" || len(columns) == 0 {
+		return name, false, false
+	}
+	names := make([]string, len(columns))
+	for i, id := range columns {
+		col := FindColumnByColId(parent.Cols, id)
+		if col == nil {
+			return name, false, false
+		}
+		names[i] = col.Name
+	}
+	if _, matched := selectForeignKeyReferencedIndex(parent, names, name); matched {
+		return name, false, true
+	}
+	healed, matched := selectForeignKeyReferencedIndex(parent, names)
+	return healed, name != healed && matched, matched
 }
 
 func foreignKeyReferencedColumnsMatch(keyColumns, referredColumns []string) bool {

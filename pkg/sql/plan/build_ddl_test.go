@@ -7544,6 +7544,14 @@ func TestDropSelfReferencingBoundIndexRebinds(t *testing.T) {
 	require.Contains(t, fkSqls[0], "referenced_index_name")
 	require.Contains(t, fkSqls[0], "idx_stays")
 	require.Contains(t, fkSqls[0], "fk_self")
+	// A pure DROP INDEX plans an INPLACE alter with no copy table: its durable
+	// binding is aligned by the executor inside the same transaction. Any
+	// statement that does build a COPY must carry the rewritten binding in
+	// the copy's durable definition as well.
+	copyDef := logicPlan.GetDdl().GetAlterTable().GetCopyTableDef()
+	if copyDef != nil {
+		require.Equal(t, "idx_stays", copyDef.Fkeys[0].ReferencedIndexName)
+	}
 }
 
 func TestDropBoundIndexRebindsEveryBoundChild(t *testing.T) {
@@ -8032,9 +8040,73 @@ func TestDropPrimaryKeySelfReferenceRebindAddressesOriginalTable(t *testing.T) {
 		copyTableName:   "test_idx_copy_TEST",
 	}
 	require.NoError(t, DropPrimaryKey(&mock.ctxt, alterPlan, alterCtx))
+	require.NotEmpty(t, alterCtx.pendingPrimaryRebind)
+	require.Empty(t, alterCtx.UpdateSqls)
+	require.NoError(t, applyAlterCopyPrimaryRebind(&mock.ctxt, copyDef, alterCtx))
 	require.Len(t, alterCtx.UpdateSqls, 1)
 	require.Contains(t, alterCtx.UpdateSqls[0], "referenced_index_name")
 	require.Contains(t, alterCtx.UpdateSqls[0], "fk_self")
 	require.Contains(t, alterCtx.UpdateSqls[0], "'test_idx'")
 	require.NotContains(t, alterCtx.UpdateSqls[0], "test_idx_copy_TEST")
+	require.Equal(t, "uk_id", copyDef.Fkeys[0].ReferencedIndexName)
+}
+
+// Review 5691776262: a same-statement DROP PRIMARY KEY plus its only
+// replacement UNIQUE must rebind to that replacement regardless of SQL clause
+// order, because the rebind resolves after the COPY's final key set is
+// assembled. Without a replacement the rejection stays.
+func TestAlterDropPrimaryKeyRebindsToSameStatementUnique(t *testing.T) {
+	newCase := func(sql string, expectReject bool, wantKey string) func(t *testing.T) {
+		return func(t *testing.T) {
+			mock := NewMockOptimizer(true, newPlanTestProcess(t))
+			parent := mock.ctxt.tables["test_idx"]
+			parent.TblId = 100
+			parent.RefChildTbls = []uint64{200}
+			parent.Pkey = &plan.PrimaryKeyDef{
+				Names:       []string{"n_nationkey"},
+				PkeyColName: "n_nationkey",
+			}
+			parent.Indexes = []*plan.IndexDef{}
+			child := &TableDef{
+				Name:  "fk_child_pk",
+				TblId: 200,
+				Fkeys: []*plan.ForeignKeyDef{{
+					Name:                "fk_child_pk",
+					ForeignTbl:          parent.TblId,
+					ForeignCols:         []uint64{parent.Cols[0].ColId},
+					ReferencedIndexName: "PRIMARY",
+				}},
+			}
+			mock.ctxt.tables[child.Name] = child
+			mock.ctxt.objects[child.Name] = &ObjectRef{SchemaName: "tpch", ObjName: child.Name}
+			mock.ctxt.id2name[child.TblId] = child.Name
+			proc := testutil.NewProc(t)
+			proc.ReplaceTopCtx(defines.AttachAccountId(context.Background(), catalog.System_Account))
+			mock.ctxt.GetProcessFunc = func() *process.Process { return proc }
+			setPlanTestGlobalVariable(t, proc.GetService(), moruntime.InternalSQLExecutor,
+				executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+					result := executor.NewMemResult(
+						[]types.Type{types.T_varchar.ToType(), types.T_int8.ToType()}, proc.Mp(),
+					)
+					result.NewBatchWithRowCount(0)
+					return result.GetResult(), nil
+				}),
+			)
+			if expectReject {
+				_, err := runOneStmt(mock, t, sql)
+				require.Error(t, err)
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrDropIndexNeededInForeignKey), err.Error())
+				return
+			}
+			logicPlan, err := runOneStmt(mock, t, sql)
+			require.NoError(t, err)
+			fkSqls := logicPlan.GetDdl().GetAlterTable().GetUpdateFkSqls()
+			require.Len(t, fkSqls, 1)
+			require.Contains(t, fkSqls[0], wantKey)
+			require.Contains(t, fkSqls[0], "fk_child_pk")
+		}
+	}
+	t.Run("drop then add", newCase("alter table test_idx drop primary key, add unique index uk_new(n_nationkey)", false, "uk_new"))
+	t.Run("add then drop", newCase("alter table test_idx add unique index uk_new(n_nationkey), drop primary key", false, "uk_new"))
+	t.Run("no replacement keeps rejection", newCase("alter table test_idx drop primary key", true, ""))
 }
