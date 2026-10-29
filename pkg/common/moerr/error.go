@@ -350,6 +350,11 @@ const (
 	ErrSyncProtectionInvalid    uint16 = 20647
 	ErrSyncProtectionExpired    uint16 = 20648
 
+	// ErrCantExecuteInReadOnlyTransaction rejects a writing statement executed
+	// inside a read-only transaction. It carries the MySQL-compatible error
+	// code 1792 (SQLSTATE 25006).
+	ErrCantExecuteInReadOnlyTransaction uint16 = 20649
+
 	// Group 7: lock service
 	// ErrDeadLockDetected lockservice has detected a deadlock and should abort the transaction if it receives this error
 	ErrDeadLockDetected uint16 = 20701
@@ -772,6 +777,16 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 
 	// Group 15: Vector Search
 	ErrVectorIndexSnapshotChanged: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "vector index generation does not cover the read snapshot"},
+
+	// ErrCantExecuteInReadOnlyTransaction mirrors MySQL ERROR 1792 (25006)
+	// byte-for-byte so drivers matching on the error code, notably
+	// Connector/J after Connection.setReadOnly(true), observe the exact
+	// server reply MySQL would send.
+	ErrCantExecuteInReadOnlyTransaction: {
+		ER_CANT_EXECUTE_IN_READ_ONLY_TRANSACTION,
+		[]string{"25006"},
+		"Cannot execute statement in a READ ONLY transaction.",
+	},
 
 	// Group 16: CCPR
 	ErrCCPRReadOnly: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "ccpr shared object is read-only"},
@@ -1948,6 +1963,13 @@ func NewErrTooBigPrecision(ctx context.Context, precision int64, funcName string
 
 func NewCCPRReadOnly(ctx context.Context) *Error {
 	return newError(ctx, ErrCCPRReadOnly)
+}
+
+// NewCantExecuteInReadOnlyTransaction reports MySQL ERROR 1792 (25006): a
+// writing statement was attempted while the session or the current
+// transaction is in READ ONLY access mode.
+func NewCantExecuteInReadOnlyTransaction(ctx context.Context) *Error {
+	return newError(ctx, ErrCantExecuteInReadOnlyTransaction)
 }
 
 var contextFunc atomic.Value
