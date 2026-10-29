@@ -10,6 +10,17 @@ with x as (select 99 as id) delete x from t as x where x.id=1;
 select id from t order by id;
 rollback;
 
+-- A qualified explicit alias retains the existing source-table precedence,
+-- including an alias spelled exactly like the base table's implicit name.
+begin;
+delete ignored.x from t as x where x.id=1;
+select id from t order by id;
+rollback;
+begin;
+with t as (select 99 as id) delete ignored.t from cte_delete_target.t as t where t.id=1;
+select id from t order by id;
+rollback;
+
 -- An actual CTE target must neither panic nor delete the same-named base table.
 with t as (select 1 as id) delete from t where id=1;
 select id from t order by id;

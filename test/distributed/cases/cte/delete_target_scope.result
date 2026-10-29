@@ -9,6 +9,18 @@ select id from t order by id;
 ➤ id[4,32,0]  𝄀
 2
 rollback;
+begin;
+delete ignored.x from t as x where x.id=1;
+select id from t order by id;
+➤ id[4,32,0]  𝄀
+2
+rollback;
+begin;
+with t as (select 99 as id) delete ignored.t from cte_delete_target.t as t where t.id=1;
+select id from t order by id;
+➤ id[4,32,0]  𝄀
+2
+rollback;
 with t as (select 1 as id) delete from t where id=1;
 invalid input: cannot delete from CTE t
 select id from t order by id;
