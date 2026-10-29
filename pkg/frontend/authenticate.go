@@ -11950,10 +11950,9 @@ func ensurePythonUdfRuntimeReady(ctx context.Context, ses *Session) error {
 	return readiness.CheckLanguageReady(ctx, udf.LanguagePython)
 }
 
-// validatePythonUdfDefinitionAtCreate runs after the immutable artifact has
-// been published and before the Catalog transaction writes the new identity
-// or revision. The source is transient input to the validator; the Gateway
-// resolves the same account-scoped digest before sending it to the worker.
+// validatePythonUdfDefinitionAtCreate validates transient DDL source before
+// artifact publication or any catalog transaction. Execution resolves the
+// immutable digest only after the catalog has published the definition.
 func validatePythonUdfDefinitionAtCreate(
 	ctx context.Context,
 	ses *Session,
@@ -12158,10 +12157,13 @@ func InitFunction(ses *Session, execCtx *ExecCtx, tenant *TenantInfo, cf *tree.C
 		// in storage and break json.Unmarshal when invoking python UDFs.
 		body = string(byt)
 
-		// Publish and validate the exact immutable artifact before opening the
+		// Validate before any persistent artifact write, then publish before opening the
 		// Catalog transaction. A failed CREATE/REPLACE therefore cannot expose
 		// a revision whose source the current worker has not accepted, while a
 		// failed replacement leaves its previous active revision untouched.
+		if err = validatePythonUdfDefinitionAtCreate(execCtx.reqCtx, ses, tenant, nb); err != nil {
+			return err
+		}
 		artifactStore, storeErr := pythonudf.NewFileArtifactStore(
 			getPu(ses.GetService()).FileService,
 			pythonudf.DefaultMaxArtifactBytes,
@@ -12175,9 +12177,6 @@ func InitFunction(ses *Session, execCtx *ExecCtx, tenant *TenantInfo, cf *tree.C
 			cf.Handler,
 			cf.Body,
 		); err != nil {
-			return err
-		}
-		if err = validatePythonUdfDefinitionAtCreate(execCtx.reqCtx, ses, tenant, nb); err != nil {
 			return err
 		}
 	}
