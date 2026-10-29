@@ -172,7 +172,7 @@ class TestStageSQLConsistency(unittest.TestCase):
         self.session_manager.alter('test_stage', url='file:///new/path/', enable=True, comment='Updated')
         session_sql = self.session.execute.call_args_list[0][0][0]  # First call is ALTER
 
-        expected_sql = "ALTER STAGE test_stage SET URL='file:///new/path/' COMMENT='Updated' ENABLE=TRUE"
+        expected_sql = "ALTER STAGE test_stage SET URL='file:///new/path/' ENABLE=TRUE COMMENT='Updated'"
         self.assertEqual(sync_sql, expected_sql)
         self.assertEqual(session_sql, expected_sql)
 

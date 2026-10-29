@@ -70,6 +70,13 @@ class AsyncMatrixOneQuery(BaseMatrixOneQuery):
         results = await _first_query(self).all()
         return results[0] if results else None
 
+    async def scalar(self):
+        """Return the first projected value by position, preserving its type."""
+        query = _first_query(self)
+        sql, params = query._build_sql()
+        result = await query._execute(sql, params)
+        return query._scalar_from_result(result)
+
     async def count(self) -> int:
         """Execute query and return count of results - SQLAlchemy style"""
         sql, params = self._build_sql()
@@ -86,17 +93,16 @@ class AsyncMatrixOneQuery(BaseMatrixOneQuery):
 
     async def execute(self) -> Any:
         """Execute the query based on its type"""
-        if self._query_type == "SELECT":
-            sql, params = self._build_sql()
-            return await self._execute(sql, params)
-        elif self._query_type == "INSERT":
-            sql, params = self._build_insert_sql()
-            return await self._execute(sql, params)
-        elif self._query_type == "UPDATE":
-            sql, params = self._build_update_sql()
-            return await self._execute(sql, params)
-        elif self._query_type == "DELETE":
-            sql, params = self._build_delete_sql()
-            return await self._execute(sql, params)
-        else:
-            raise ValueError(f"Unknown query type: {self._query_type}")
+        sql, params = self._build_current_sql()
+        return await self._execute(sql, params)
+
+    async def explain(self, verbose=False):
+        """Explain the current statement, including UPDATE/DELETE when supported."""
+        sql, params = self._build_current_sql()
+        return await self._execute(('EXPLAIN VERBOSE ' if verbose else 'EXPLAIN ') + sql, params)
+
+    async def explain_analyze(self, verbose=False):
+        """Execute EXPLAIN ANALYZE; mutations can modify data."""
+        sql, params = self._build_current_sql()
+        prefix = 'EXPLAIN ANALYZE VERBOSE ' if verbose else 'EXPLAIN ANALYZE '
+        return await self._execute(prefix + sql, params)

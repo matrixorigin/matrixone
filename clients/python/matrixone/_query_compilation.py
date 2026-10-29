@@ -11,6 +11,36 @@ from sqlalchemy.sql.elements import ClauseElement
 from sqlalchemy.sql.compiler import SQLCompiler
 
 from ._sql_literals import substitute_parameters
+from ._telemetry import phase
+
+
+def buffer_result(result_type, result):
+    """Retain the execution's type context before fetch closes its cursor."""
+    context = getattr(result, 'context', None)
+    cursor = getattr(result, 'cursor', None)
+    description = getattr(cursor, 'description', None)
+    compiled = getattr(context, 'compiled', None)
+    columns = list(result.keys())
+    with phase('fetch'):
+        buffered = result_type(columns, result.fetchall())
+    buffered._matrixone_dialect = getattr(context, 'dialect', None)
+    buffered._matrixone_description = description
+    buffered._matrixone_typed = bool(getattr(compiled, '_result_columns', ()))
+    return buffered
+
+
+def compile_from(source):
+    """Let the dialect render qualified tables, joins and selectable aliases."""
+    from sqlalchemy import inspect
+    from .sqlalchemy_ext.dialect import MatrixOneDialect
+
+    inspected = inspect(source, raiseerr=False)
+    if inspected is not None and getattr(inspected, 'is_aliased_class', False):
+        source = inspected.selectable
+    else:
+        source = getattr(source, '__table__', source)
+    dialect = MatrixOneDialect(paramstyle='qmark')
+    return dialect.statement_compiler(dialect, None).process(source, asfrom=True)
 
 
 def render_fragment(sql, params=()):

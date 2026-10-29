@@ -46,7 +46,7 @@ class MatrixOneLogger:
         logger: Optional[logging.Logger] = None,
         level: int = logging.INFO,
         format_string: Optional[str] = None,
-        sql_log_mode: str = "auto",
+        sql_log_mode: str = "off",
         slow_query_threshold: float = 1.0,
         max_sql_display_length: int = 500,
     ):
@@ -59,8 +59,8 @@ class MatrixOneLogger:
             level: Logging level (default: INFO)
             format_string: Custom format string for log messages
             sql_log_mode: SQL logging mode ('off', 'auto', 'simple', 'full')
-                - 'off': No SQL logging
-                - 'auto': Smart logging - short SQL shown fully, long SQL summarized (default)
+                - 'off': No SQL logging (default)
+                - 'auto': Smart logging - short SQL shown fully, long SQL summarized (opt-in)
                 - 'simple': Show operation summary only (e.g., "INSERT INTO table (5 rows)")
                 - 'full': Show complete SQL regardless of length
             slow_query_threshold: Threshold in seconds for slow query warnings (default: 1.0)
@@ -184,7 +184,28 @@ class MatrixOneLogger:
             include_traceback: If True, include full traceback in log
         """
         error_type = type(error).__name__
-        kwargs = {"error_type": error_type, "error_message": str(error)}
+        message = str(error)
+        if self.sql_log_mode != 'full':
+            from pymysql.err import MySQLError
+            from sqlalchemy.exc import DBAPIError
+
+            source, seen = error, set()
+            while source is not None and id(source) not in seen:
+                seen.add(id(source))
+                if isinstance(source, (DBAPIError, MySQLError)):
+                    driver = source.orig if isinstance(source, DBAPIError) else source
+                    code = driver.args[0] if driver.args and isinstance(driver.args[0], int) else 'unknown'
+                    # Driver messages can embed bound values; SQLAlchemy's
+                    # string form also includes SQL and its parameter mapping.
+                    message = 'Database error (code %s); inspect the raised exception for details' % code
+                    break
+                next_source = getattr(source, 'orig', None) or source.__cause__
+                source = (
+                    next_source
+                    if next_source is not None
+                    else None if source.__suppress_context__ else source.__context__
+                )
+        kwargs = {"error_type": error_type, "error_message": message}
         if context:
             kwargs["context"] = context
 
@@ -250,7 +271,26 @@ class MatrixOneLogger:
             return "SET VARIABLE"
 
         else:
-            return sql_stripped[:50] + "..." if len(sql_stripped) > 50 else sql_stripped
+            operation = sql_upper.split(None, 1)[0] if sql_upper else ''
+            return (
+                operation
+                if operation
+                in (
+                    'ALTER',
+                    'CALL',
+                    'SHOW',
+                    'EXPLAIN',
+                    'USE',
+                    'TRUNCATE',
+                    'RENAME',
+                    'GRANT',
+                    'REVOKE',
+                    'COMMIT',
+                    'ROLLBACK',
+                    'BEGIN',
+                )
+                else 'SQL'
+            )
 
     def _format_sql_for_log(
         self, sql: str, is_error: bool = False, is_slow: bool = False, log_mode: Optional[str] = None
@@ -261,15 +301,11 @@ class MatrixOneLogger:
         if effective_mode == 'off':
             return ""
 
-        # Errors and slow queries always show complete SQL for debugging
-        if is_error or is_slow:
-            return sql.strip()
-
-        if effective_mode == 'full':
-            return sql.strip()
-
         if effective_mode == 'simple':
             return self._extract_sql_summary(sql)
+
+        if effective_mode == 'full' or is_error or is_slow:
+            return sql.strip()
 
         if effective_mode == 'auto':
             sql_stripped = sql.strip()
@@ -401,7 +437,7 @@ class MatrixOneLogger:
 def create_default_logger(
     level: int = logging.INFO,
     format_string: Optional[str] = None,
-    sql_log_mode: str = "auto",
+    sql_log_mode: str = "off",
     slow_query_threshold: float = 1.0,
     max_sql_display_length: int = 500,
 ) -> MatrixOneLogger:
@@ -432,7 +468,7 @@ def create_default_logger(
 
 def create_custom_logger(
     logger: logging.Logger,
-    sql_log_mode: str = "auto",
+    sql_log_mode: str = "off",
     slow_query_threshold: float = 1.0,
     max_sql_display_length: int = 500,
 ) -> MatrixOneLogger:

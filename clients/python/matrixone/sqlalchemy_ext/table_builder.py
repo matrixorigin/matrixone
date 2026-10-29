@@ -42,6 +42,71 @@ from sqlalchemy.dialects.mysql import BLOB, JSON, LONGBLOB, MEDIUMBLOB, TINYBLOB
 from .vector_type import Vectorf32, Vectorf64, VectorPrecision, VectorType
 
 
+def simplified_table(name, columns, primary_key=None, **kwargs):
+    """Build the same typed definition for client and transaction APIs."""
+    import re
+    from sqlalchemy.dialects import mysql
+    from sqlalchemy.types import TypeEngine
+
+    if not columns:
+        raise ValueError('columns must contain at least one column')
+    keys = [primary_key] if isinstance(primary_key, str) else list(primary_key or ())
+    if any(key not in columns for key in keys):
+        raise ValueError('primary_key must name existing columns')
+    definitions = []
+    for column_name, definition in columns.items():
+        options = {}
+        inline_primary = False
+        if isinstance(definition, str):
+            inline_primary = bool(re.search(r'\s+primary\s+key\b', definition, re.IGNORECASE))
+            if re.search(r'\s+not\s+null\b', definition, re.IGNORECASE):
+                options['nullable'] = False
+            if re.search(r'\s+auto_increment\b', definition, re.IGNORECASE):
+                options['autoincrement'] = True
+            definition = re.sub(
+                r'\s+(?:primary\s+key|not\s+null|auto_increment)\b', '', definition, flags=re.IGNORECASE
+            )
+            match = re.fullmatch(
+                r'\s*([a-zA-Z0-9]+)(?:\(\s*([^()]*)\s*\))?\s*(unsigned)?\s*', definition, re.IGNORECASE
+            )
+            if match is None:
+                raise ValueError('Invalid column type: ' + definition)
+            kind, arguments, unsigned = match.groups()
+            kind = kind.lower()
+            args = [arg.strip() for arg in arguments.split(',')] if arguments else []
+            if kind == 'vector':
+                if len(args) not in (1, 2) or (len(args) == 2 and args[1] not in ('f32', 'f64')):
+                    raise ValueError('Expected vector(dimension[,f32|f64])')
+                dtype = (Vectorf64 if len(args) == 2 and args[1] == 'f64' else Vectorf32)(int(args[0]))
+            elif kind in ('vecf32', 'vecf64'):
+                if len(args) != 1:
+                    raise ValueError('Vector types require one dimension')
+                dtype = (Vectorf32 if kind == 'vecf32' else Vectorf64)(int(args[0]))
+            else:
+                aliases = {
+                    'integer': 'INTEGER',
+                    'int': 'INTEGER',
+                    'bool': 'BOOLEAN',
+                    'boolean': 'BOOLEAN',
+                    'jsonb': 'JSON',
+                    'numeric': 'DECIMAL',
+                }
+                constructor = getattr(mysql, aliases.get(kind, kind.upper()), None)
+                if constructor is None or kind in ('enum', 'set'):
+                    raise ValueError('Unsupported simplified column type: ' + definition)
+                type_options = {'unsigned': True} if unsigned else {}
+                dtype = constructor(*(int(arg) for arg in args), **type_options)
+        elif isinstance(definition, TypeEngine) or (
+            isinstance(definition, type) and issubclass(definition, TypeEngine)
+        ):
+            dtype = definition
+        else:
+            raise TypeError('Column types must be strings or SQLAlchemy types')
+        definitions.append(Column(column_name, dtype, primary_key=column_name in keys or inline_primary, **options))
+    metadata = kwargs.pop('metadata', None) or MetaData()
+    return Table(name, metadata, *definitions, **kwargs)
+
+
 class VectorTableBuilder:
     """
     Builder class for creating MatrixOne vector tables with SQLAlchemy.
@@ -171,9 +236,9 @@ class VectorTableBuilder:
     ):
         """Add a numeric column (float, double, decimal, numeric)."""
         if column_type in ("float", "double"):
-            from sqlalchemy import Float
+            from sqlalchemy.dialects.mysql import DOUBLE, FLOAT
 
-            return self.add_column(name, Float(precision=precision), **kwargs)
+            return self.add_column(name, (DOUBLE if column_type == 'double' else FLOAT)(precision=precision), **kwargs)
         elif column_type in ("decimal", "numeric"):
             return self.add_column(name, Numeric(precision=precision, scale=scale), **kwargs)
         else:
@@ -212,9 +277,9 @@ class VectorTableBuilder:
         elif column_type == "tinyblob":
             return self.add_column(name, TINYBLOB, **kwargs)
         elif column_type == "binary":
-            from sqlalchemy import Binary
+            from sqlalchemy.dialects.mysql import BINARY
 
-            return self.add_column(name, Binary, **kwargs)
+            return self.add_column(name, BINARY, **kwargs)
         elif column_type == "varbinary":
             return self.add_column(name, VARBINARY, **kwargs)
         else:
@@ -310,7 +375,9 @@ def create_vector_index_table(table_name: str, metadata: MetaData = None) -> Vec
     return builder
 
 
-def create_document_vector_table(table_name: str, metadata: MetaData = None, vector_dim: int = 384) -> VectorTableBuilder:
+def create_document_vector_table(
+    table_name: str, metadata: MetaData = None, vector_dim: int = 384
+) -> VectorTableBuilder:
     """
     Create a table builder for document vector storage.
     """
@@ -330,7 +397,9 @@ def create_document_vector_table(table_name: str, metadata: MetaData = None, vec
     return builder
 
 
-def create_product_vector_table(table_name: str, metadata: MetaData = None, vector_dim: int = 512) -> VectorTableBuilder:
+def create_product_vector_table(
+    table_name: str, metadata: MetaData = None, vector_dim: int = 512
+) -> VectorTableBuilder:
     """
     Create a table builder for product vector storage.
     """

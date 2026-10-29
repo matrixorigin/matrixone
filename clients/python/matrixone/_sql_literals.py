@@ -111,9 +111,9 @@ def identifier_parts(name, qualified=False):
     return tuple(parts)
 
 
-def sql_object_name(name, qualified=False):
+def sql_object_name(name, qualified=False, force=False):
     """Render a manager name, including complete legacy backtick quoting."""
-    return '.'.join(sql_identifier(part) for part in identifier_parts(name, qualified))
+    return '.'.join(sql_identifier(part, force=force) for part in identifier_parts(name, qualified))
 
 
 def sql_literal(value):
@@ -296,8 +296,8 @@ def sql_string_token(value, *, context='LOAD') -> str:
     return "'" + value.replace("'", "''") + "'"
 
 
-def fulltext_term_token(value):
-    """Render AGAINST's STRING grammar, independent of sql_mode.
+def string_grammar_token(value):
+    """Render a STRING token for AGAINST/SHOW LIKE, independent of sql_mode.
 
     NUL and combined backslash/dollar input cannot be represented safely by
     the supported server lexer and are rejected before query execution.

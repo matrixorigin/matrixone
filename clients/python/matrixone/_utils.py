@@ -169,3 +169,22 @@ def result_returns_rows(result):
     if declared is not None:
         return bool(declared)
     return callable(getattr(result, 'keys', None)) and callable(getattr(result, 'fetchall', None))
+
+
+def rows_from_result(result):
+    """Read a manager-owned result from buffered Client or SQLAlchemy Session."""
+    if result is None:
+        return []
+    rows = getattr(result, 'rows', None)
+    return rows if rows is not None else result.fetchall()
+
+
+def stage_file_uri(name, filename):
+    """Encode a logical Stage identifier while preserving legacy filename syntax."""
+    import re
+    from urllib.parse import quote
+    from ._sql_literals import sql_identifier
+
+    sql_identifier(name)  # Shared identifier bounds/NUL validation.
+    root = 'stage://' + name if re.fullmatch(r'[A-Za-z0-9_.-]+', name) else 'stage:///' + quote(name, safe='')
+    return root + '/' + filename
