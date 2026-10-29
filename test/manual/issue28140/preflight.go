@@ -194,13 +194,13 @@ func run(ctx context.Context, db *sql.DB) error {
 		return fmt.Errorf("commit catalog snapshot: %w", err)
 	}
 	for _, finding := range oversized {
-		fmt.Printf("OVERSIZE account=%d database=%s table=%s column=%s cost>65536\n",
-			finding.table.key.account, finding.table.database, finding.table.name, finding.column)
+		fmt.Fprintln(os.Stdout, fmt.Sprintf("OVERSIZE account=%d database=%s table=%s column=%s cost>65536",
+			finding.table.key.account, finding.table.database, finding.table.name, finding.column))
 	}
 	if len(oversized) > 0 {
 		return fmt.Errorf("%d oversized generated columns; defer upgrade until table owners approve a semantics-preserving rewrite", len(oversized))
 	}
-	fmt.Printf("PASS accounts=%d tables=%d columns=%d oversized=0\n", len(accounts), len(tables), columnCount)
+	fmt.Fprintln(os.Stdout, fmt.Sprintf("PASS accounts=%d tables=%d columns=%d oversized=0", len(accounts), len(tables), columnCount))
 	return nil
 }
 
