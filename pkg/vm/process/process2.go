@@ -224,6 +224,25 @@ func (proc *Process) ReplaceTopCtx(topCtx context.Context) {
 	proc.Base.sqlContext.outerContext = topCtx
 }
 
+// SetReadOnlyTxnAccessMode stamps the effective client-facing READ ONLY
+// transaction access mode for the executing statement on the shared
+// BaseProcess.
+func (proc *Process) SetReadOnlyTxnAccessMode(readOnly bool) {
+	if proc == nil || proc.Base == nil {
+		return
+	}
+	proc.Base.readOnlyTxnAccessMode.Store(readOnly)
+}
+
+// ReadOnlyTxnAccessMode reports the stamped client-facing READ ONLY
+// transaction access mode of the executing statement.
+func (proc *Process) ReadOnlyTxnAccessMode() bool {
+	if proc == nil || proc.Base == nil {
+		return false
+	}
+	return proc.Base.readOnlyTxnAccessMode.Load()
+}
+
 // SaveToTopContext for easy access to change the top context.
 // it's same to a combined operator list like `GetTopContext() + ReplaceTopCtx() + GetTopContext()`.
 func (proc *Process) SaveToTopContext(key, value any) context.Context {

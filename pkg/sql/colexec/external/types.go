@@ -486,67 +486,9 @@ func newCSVParserFromReaderWithBlockSize(extern *tree.ExternParam, r io.Reader, 
 	return csvparser.NewCSVParser(CSVConfigForLoad(extern), bufio.NewReader(r), blockSize, false)
 }
 
-// CSVConfigForLoad is the authoritative LOAD clause/default mapping. Export
-// validation uses the same configuration when replaying emitted fields.
+// CSVConfigForLoad shares the LOAD parser grammar with prescan and export validation.
 func CSVConfigForLoad(extern *tree.ExternParam) *csvparser.CSVConfig {
-	fieldsTerminatedBy := tree.DefaultFieldsTerminated
-	fieldsEnclosedBy := tree.DefaultFieldsEnclosedBy
-	fieldsEscapedBy := tree.DefaultFieldsEscapedBy
-
-	linesTerminatedBy := "\n"
-	linesStartingBy := ""
-
-	if extern.Tail.Fields != nil {
-		if terminated := extern.Tail.Fields.Terminated; terminated != nil && terminated.Value != "" {
-			fieldsTerminatedBy = terminated.Value
-		}
-		if enclosed := extern.Tail.Fields.EnclosedBy; enclosed != nil && enclosed.Value != 0 {
-			fieldsEnclosedBy = string(enclosed.Value)
-		}
-		if escaped := extern.Tail.Fields.EscapedBy; escaped != nil {
-			if escaped.Value == 0 {
-				fieldsEscapedBy = ""
-			} else {
-				fieldsEscapedBy = string(escaped.Value)
-			}
-		}
-	}
-
-	if extern.Tail.Lines != nil {
-		if terminated := extern.Tail.Lines.TerminatedBy; terminated != nil && terminated.Value != "" {
-			linesTerminatedBy = extern.Tail.Lines.TerminatedBy.Value
-		}
-		if extern.Tail.Lines.StartingBy != "" {
-			linesStartingBy = extern.Tail.Lines.StartingBy
-		}
-	}
-
-	if extern.Format == tree.JSONLINE {
-		fieldsTerminatedBy = "\t"
-		fieldsEscapedBy = ""
-	}
-
-	config := csvparser.CSVConfig{
-		FieldsTerminatedBy: fieldsTerminatedBy,
-		FieldsEnclosedBy:   fieldsEnclosedBy,
-		FieldsEscapedBy:    fieldsEscapedBy,
-		LinesTerminatedBy:  linesTerminatedBy,
-		LinesStartingBy:    linesStartingBy,
-		NotNull:            false,
-		Null:               []string{`\N`},
-		UnescapedQuote:     true,
-		// Comment marker comes from the table's COMMENT option; empty (the
-		// default) means no marker, so every line is data. A configured marker
-		// skips lines whose raw prefix matches it (checked before unquoting).
-		Comment: plan.GetCSVComment(extern),
-	}
-
-	if extern.Format == tree.JSONLINE {
-		config.SkipWhitespaceRecords = true
-		config.Context = extern.Ctx
-	}
-
-	return &config
+	return plan.CSVConfigForLoad(extern)
 }
 
 type ParquetHandler struct {
