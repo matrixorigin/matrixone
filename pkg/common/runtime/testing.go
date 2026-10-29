@@ -78,7 +78,7 @@ func (tc *TestingContext) SetBeforeLockFunc(
 func (tc *TestingContext) GetBeforeLockFunc() func(txnID []byte, tableID uint64) {
 	tc.RLock()
 	defer tc.RUnlock()
-	if tc.adjustLockResultFunc == nil {
+	if tc.beforeLockFunc == nil {
 		return func(txnID []byte, tableID uint64) {}
 	}
 	return tc.beforeLockFunc
