@@ -58,6 +58,7 @@ type tableDumpExpressionVisitor struct {
 	hasUnixTimestamp      bool
 	hasJSON               bool
 	hasIncompleteTemporal bool
+	hasTimeString         bool
 }
 
 func (v *tableDumpExpressionVisitor) Enter(e tree.Expr) (tree.Expr, bool) {
@@ -73,6 +74,8 @@ func (v *tableDumpExpressionVisitor) Enter(e tree.Expr) (tree.Expr, bool) {
 		switch numericAstFunctionName(fn) {
 		case "format", "makedate", "maketime":
 			v.hasSpecial = true
+		case "time":
+			v.hasTimeString = true
 		case "timestampadd":
 			v.hasTimestampAdd = true
 		case "unix_timestamp":
@@ -988,6 +991,19 @@ func analyzeTableDumpBindingsWithCandidateVisitLimit(ctx CompilerContext, target
 			// Each migration era must reproduce the whole tree; no partial matching
 			// or semantic normalization is permitted for supplied expressions.
 			modes := []tableDumpBindingMode{tableDumpBindingCurrent}
+			sawTimeEra := false
+			appendTimeEraCandidates := func() {
+				modes = append(modes, tableDumpBindingCurrent|tableDumpBindingPreTimeNullability)
+				if visit.hasTimestampAdd {
+					modes = append(modes, tableDumpBindingLegacyTimestampAdd|tableDumpBindingPreTimeNullability)
+				}
+				if visit.hasIntegerDivision {
+					modes = append(modes, tableDumpBindingLegacyDecimalIntegerDiv|tableDumpBindingPreTimeNullability)
+				}
+				if visit.hasSpecial {
+					modes = append(modes, tableDumpBindingLegacySpecial|tableDumpBindingPreTimeNullability)
+				}
+			}
 			zeroTemporal := false
 			if item.kind == "default" {
 				_, zeroTemporal = zeroTemporalDefaultLiteral(unwrapParenExpr(ast), item.col.Typ)
@@ -1012,20 +1028,15 @@ func analyzeTableDumpBindingsWithCandidateVisitLimit(ctx CompilerContext, target
 				if visit.hasSpecial {
 					modes = append(modes, tableDumpBindingLegacySpecial|tableDumpBindingPreTemporalNullability)
 				}
-				if tableDumpHasTimeStringConversion(item.expr) {
-					// The intermediate post-8dd era kept TIME() NOT NULL while
-					// DATE conversions were already nullable; it pairs with the
-					// historical function-era modes such a tree also contains.
-					modes = append(modes, tableDumpBindingCurrent|tableDumpBindingPreTimeNullability)
-					if visit.hasTimestampAdd {
-						modes = append(modes, tableDumpBindingLegacyTimestampAdd|tableDumpBindingPreTimeNullability)
-					}
-					if visit.hasIntegerDivision {
-						modes = append(modes, tableDumpBindingLegacyDecimalIntegerDiv|tableDumpBindingPreTimeNullability)
-					}
-					if visit.hasSpecial {
-						modes = append(modes, tableDumpBindingLegacySpecial|tableDumpBindingPreTimeNullability)
-					}
+				if visit.hasTimeString || tableDumpHasTimeStringConversion(item.expr) {
+					// Constant folding may replace the TIME() string
+					// conversion with a literal that preserves its
+					// nullability metadata, so applicability comes from the
+					// SQL origin or the stored tree. The intermediate
+					// post-8dd era kept TIME() NOT NULL while DATE
+					// conversions were already nullable.
+					appendTimeEraCandidates()
+					sawTimeEra = true
 				}
 			}
 			if visit.hasJSON {
@@ -1036,6 +1047,12 @@ func analyzeTableDumpBindingsWithCandidateVisitLimit(ctx CompilerContext, target
 					}
 				}
 				modes = append(modes, tableDumpBindingCurrent|tableDumpBindingPreJSON)
+				if sawTimeEra {
+					// The post-JSON window that predates the TIME() change
+					// keeps current JSON semantics: the legacy rewrite above
+					// must not consume the only intermediate-era candidate.
+					appendTimeEraCandidates()
+				}
 			}
 			if visit.hasUnixTimestamp {
 				// Rebind complete pre-overload trees, including their implicit
