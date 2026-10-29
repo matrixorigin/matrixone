@@ -21,7 +21,6 @@ import (
 	"math/rand"
 	"strconv"
 	"testing"
-	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -1909,15 +1908,22 @@ func TestStrHashMapVecBlockKeysStayInReservedBuffer(t *testing.T) {
 					reserved[i] = cap(itr.keys[i])
 				}
 				itr.encodeHashKeys([]*vector.Vector{vec}, 0, 3)
-				lo := uintptr(unsafe.Pointer(unsafe.SliceData(buf)))
-				hi := lo + uintptr(len(buf))
+				// at reports the offset of key's first byte in buf, or -1 when key lies elsewhere
+				at := func(key []byte) int {
+					for j := range buf {
+						if &buf[j] == &key[0] {
+							return j
+						}
+					}
+					return -1
+				}
 				for i := 0; i < 3; i++ {
 					if shape == "nullable" && i == 1 {
 						continue
 					}
 					require.Greater(t, len(itr.keys[i]), len(cell), "row %d", i)
-					p := uintptr(unsafe.Pointer(unsafe.SliceData(itr.keys[i])))
-					require.True(t, p >= lo && p+uintptr(len(itr.keys[i])) <= hi, "row %d key left the accounted buffer", i)
+					off := at(itr.keys[i])
+					require.True(t, off >= 0 && off+len(itr.keys[i]) <= len(buf), "row %d key left the accounted buffer", i)
 					require.Equal(t, reserved[i], cap(itr.keys[i]), "row %d", i)
 				}
 				m.Free()
