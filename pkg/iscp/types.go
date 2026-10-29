@@ -94,7 +94,7 @@ type DataRetriever interface {
 type IterationContext struct {
 	accountID uint32
 	tableID   uint64
-	// indexJob selects the bounded catch-up window for an exclusive index iteration.
+	// indexJob keeps index reads separate from ordinary consumer reads.
 	indexJob bool
 	jobNames []string
 	jobIDs   []uint64
@@ -214,8 +214,8 @@ type JobEntry struct {
 	stage              int8
 	dropAt             types.Timestamp
 	currentLSN         uint64
-	// isIndexJob marks a ConsumerType_IndexSync job. It owns a separate,
-	// bounded iteration and uses IndexFlushWatermarkInterval for flushing.
+	// isIndexJob marks a ConsumerType_IndexSync job. It selects its own
+	// range, may share an in-step read, and uses IndexFlushWatermarkInterval.
 	isIndexJob bool
 }
 
@@ -256,6 +256,9 @@ type Schedule struct {
 type TriggerSpec struct {
 	JobType uint16
 	Schedule
+	// TargetRows opts this independent iteration into a soft source-change
+	// row budget. Zero preserves the historical full-range behavior.
+	TargetRows int
 }
 
 type ConsumerInfo struct {

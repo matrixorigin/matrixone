@@ -253,7 +253,7 @@ func TestTableEntryDoesNotShareInitIterations(t *testing.T) {
 		require.Len(t, iter.jobNames, 1)
 	}
 
-	// Running index jobs also retain separate iterations.
+	// In-step Running index jobs share one change read.
 	table.AddOrUpdateSinker(
 		context.Background(),
 		"index_hv",
@@ -266,11 +266,9 @@ func TestTableEntryDoesNotShareInitIterations(t *testing.T) {
 	)
 	require.Equal(t, int8(JobStage_Running), table.jobs[JobKey{JobName: "index_hv", JobID: 2}].stage)
 	iters, _ = table.getCandidate()
-	require.Len(t, iters, 2)
-	for _, iter := range iters {
-		require.Len(t, iter.jobNames, 1)
-		require.Equal(t, []int8{JobStage_Running}, iter.stages)
-	}
+	require.Len(t, iters, 1)
+	require.ElementsMatch(t, []string{"index_ft", "index_hv"}, iters[0].jobNames)
+	require.Equal(t, []int8{JobStage_Running, JobStage_Running}, iters[0].stages)
 }
 
 func TestPublishRebuiltStateReplacesAbandonedGeneration(t *testing.T) {

@@ -185,8 +185,8 @@ func (t *TableEntry) getCandidate() (iter []*IterationContext, minFromTS types.T
 		var ok, share bool
 		var from, to types.TS
 		if sinker.isIndexJob {
-			// A default index job always catches up from its own watermark.
-			// Timed index jobs keep their interval but never share a range.
+			// Each index selects from its own watermark. In-step indexes may
+			// share the same read; a lagging index catches up separately.
 			if sinker.jobSpec.JobType == TriggerType_Default {
 				ok, from, to, share = checkAlwaysUpdateJobConfig(nil, sinker, types.MaxTs())
 			} else {
@@ -194,6 +194,7 @@ func (t *TableEntry) getCandidate() (iter []*IterationContext, minFromTS types.T
 				spec.Share = false
 				ok, from, to, share = spec.Check(nil, sinker, types.MaxTs())
 			}
+			share = sinker.jobSpec.JobType != TriggerType_Timed || sinker.jobSpec.Share
 		} else {
 			ok, from, to, share = sinker.jobSpec.Check(sharedCandidates, sinker, types.MaxTs())
 		}
@@ -208,14 +209,21 @@ func (t *TableEntry) getCandidate() (iter []*IterationContext, minFromTS types.T
 		foundIteration := false
 		if share {
 			for _, iter := range shareableIterations {
-				if iter.fromTS.EQ(&from) && iter.toTS.EQ(&to) {
-					iter.jobNames = append(iter.jobNames, sinker.jobName)
-					iter.jobIDs = append(iter.jobIDs, sinker.jobID)
-					iter.lsn = append(iter.lsn, sinker.currentLSN+1)
-					iter.stages = append(iter.stages, sinker.stage)
-					foundIteration = true
-					break
+				if iter.indexJob != sinker.isIndexJob || !iter.fromTS.EQ(&from) || !iter.toTS.EQ(&to) {
+					continue
 				}
+				if sinker.isIndexJob {
+					first := t.jobs[JobKey{JobName: iter.jobNames[0], JobID: iter.jobIDs[0]}]
+					if first == nil || indexTargetRows(first.jobSpec) != indexTargetRows(sinker.jobSpec) {
+						continue
+					}
+				}
+				iter.jobNames = append(iter.jobNames, sinker.jobName)
+				iter.jobIDs = append(iter.jobIDs, sinker.jobID)
+				iter.lsn = append(iter.lsn, sinker.currentLSN+1)
+				iter.stages = append(iter.stages, sinker.stage)
+				foundIteration = true
+				break
 			}
 		}
 		if !foundIteration {

@@ -230,6 +230,37 @@ func ExecuteIterationWithRuntime(
 	if iterCtx.fromTS.IsEmpty() {
 		iterCtx.toTS = types.TimestampToTS(txnOp.SnapshotTS())
 	}
+	collectCtx := collectChangesCtxForJobs(ctxWithoutTimeout, jobSpecs, prevStatus, committedWatermark)
+	if !iterCtx.fromTS.IsEmpty() {
+		var targetRows int
+		targetRows, err = rowBudgetForJobs(jobSpecs)
+		if err != nil {
+			return
+		}
+		if targetRows > 0 {
+			var observedRows int
+			iterCtx.toTS, observedRows, err = selectRowBudgetTo(
+				collectChangesCtxForJobs(ctx, jobSpecs, prevStatus, committedWatermark),
+				iterCtx.fromTS, iterCtx.toTS, targetRows,
+				func(probeCtx context.Context, from, to types.TS, target int) (int, error) {
+					return probeChangeRows(
+						probeCtx, from, to, target, mp,
+						func(readCtx context.Context, readFrom, readTo types.TS) (engine.ChangesHandle, error) {
+							return CollectChanges(readCtx, rel, readFrom, readTo, mp)
+						},
+					)
+				},
+			)
+			if err != nil {
+				return
+			}
+			if observedRows > targetRows {
+				// An oversized first commit is accepted but should still be
+				// streamed in ordinary batches rather than one quick batch.
+				collectCtx = engine.WithCollectChangesDisableQuick(collectCtx)
+			}
+		}
+	}
 
 	startAt := types.BuildTS(time.Now().UnixNano(), 0)
 	for i := range iterCtx.jobNames {
@@ -241,7 +272,7 @@ func ExecuteIterationWithRuntime(
 		statuses[i].StartAt = startAt
 	}
 	changes, err := CollectChanges(
-		collectChangesCtxForJobs(ctxWithoutTimeout, jobSpecs, prevStatus, committedWatermark),
+		collectCtx,
 		rel, iterCtx.fromTS, iterCtx.toTS, mp,
 	)
 	if err != nil {

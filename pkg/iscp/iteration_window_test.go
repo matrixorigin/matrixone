@@ -88,24 +88,49 @@ func TestSharedCandidateCannotJoinIndexIteration(t *testing.T) {
 	}
 }
 
-func TestLimitIndexIterationTimeSpan(t *testing.T) {
+func TestIndexCandidatesShareOnlyEqualBudgets(t *testing.T) {
+	table := NewTableEntry(newRuntimeTestExecutor(), 1, 2, 3, "db", "table")
+	watermark := types.BuildTS(10, 0)
+	for i, target := range []int{0, DefaultTargetChangeRows, 200_000} {
+		name := []string{"index_a", "index_b", "index_c"}[i]
+		_, err := table.AddOrUpdateSinker(context.Background(), name,
+			&JobSpec{ConsumerInfo: ConsumerInfo{ConsumerType: int8(ConsumerType_IndexSync)},
+				TriggerSpec: TriggerSpec{JobType: TriggerType_AlwaysUpdate, TargetRows: target}},
+			&JobStatus{Stage: JobStage_Running}, uint64(i+1), watermark, ISCPJobState_Completed, 0)
+		require.NoError(t, err)
+	}
+	iters, _ := table.getCandidate()
+	require.Len(t, iters, 2)
+	for _, iter := range iters {
+		switch len(iter.jobNames) {
+		case 1:
+			require.Equal(t, "index_c", iter.jobNames[0])
+		case 2:
+			require.ElementsMatch(t, []string{"index_a", "index_b"}, iter.jobNames)
+		default:
+			t.Fatalf("unexpected index grouping: %v", iter.jobNames)
+		}
+	}
+}
+
+func TestLimitIterationTimeSpan(t *testing.T) {
 	from := types.BuildTS(time.Hour.Nanoseconds(), 5)
 	to := types.BuildTS(from.Physical()+2*DefaultMaxChangeInterval.Nanoseconds(), 0)
 	iter := &IterationContext{indexJob: true, fromTS: from, toTS: to}
-	limitIndexIterationTimeSpan(iter)
+	limitIterationTimeSpan(iter)
 	want := types.BuildTS(from.Physical()+DefaultMaxChangeInterval.Nanoseconds(), 0)
 	require.Equal(t, want, iter.toTS)
 
 	// The next range starts just after the persisted bound and is bounded too.
 	next := &IterationContext{indexJob: true, fromTS: iter.toTS.Next(), toTS: to}
-	limitIndexIterationTimeSpan(next)
+	limitIterationTimeSpan(next)
 	require.Equal(t, types.BuildTS(next.fromTS.Physical()+DefaultMaxChangeInterval.Nanoseconds(), 0), next.toTS)
 
 	within := &IterationContext{indexJob: true, fromTS: from, toTS: types.BuildTS(from.Physical()+time.Minute.Nanoseconds(), 0)}
-	limitIndexIterationTimeSpan(within)
+	limitIterationTimeSpan(within)
 	require.Equal(t, types.BuildTS(from.Physical()+time.Minute.Nanoseconds(), 0), within.toTS)
 
 	ordinary := &IterationContext{fromTS: from, toTS: to}
-	limitIndexIterationTimeSpan(ordinary)
-	require.Equal(t, to, ordinary.toTS)
+	limitIterationTimeSpan(ordinary)
+	require.Equal(t, want, ordinary.toTS)
 }
