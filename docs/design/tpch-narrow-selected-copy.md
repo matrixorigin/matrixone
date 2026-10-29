@@ -12,19 +12,19 @@ There is no SQL, public API, format, configuration or retained-lifetime change.
 
 ## Implementation
 
-Keep the direct scalar store for one selected value. For multiple selections,
-construct one byte window covering the complete destination append range, then
-advance row pointers only inside that window. Copy each source value with the
-existing checked source-byte indexing and uint32/uint64 stores. These stores
-preserve every logical type's bits, including NaNs and signed zero.
+Copy the first selected value through the existing checked scalar indexes. This
+is also the complete single-row operation. When more rows remain, check the
+last destination byte once, then advance the first-row pointer for rows 1..N-1.
+Keep the original checked source-byte indexing and uint32/uint64 stores. These
+stores preserve every logical type's bits, including NaNs and signed zero.
 
-For width W, the checked destination window is
-`v.data[oldLen*W:(oldLen+len(sels))*W]`. Its construction validates both ends,
-including a negative or invalid start. For every loop index
-`0 <= i < len(sels)`, the W-byte store at offset `i*W` stays within that admitted
-window. The pointer and window remain local to the existing call. No allocation,
-borrowed reference, eligibility scan or per-row destination check is introduced.
-Source-index checks remain as in the original scalar loop.
+For width W, the first checked index admits `oldLen*W`; the checked tail index
+is `(oldLen+len(sels))*W-1`. Existing capacity admission guarantees complete
+values before the first scalar store, as in the original implementation. Before
+subsequent pointer-derived stores, both ends of the append interval are checked.
+For every remaining index `1 <= i < len(sels)`, the W-byte store at offset `i*W`
+stays in that interval. Copy order remains 0..N-1. The pointer stays local; no
+allocation, borrowed reference, eligibility scan or slice-header setup is added.
 
 The zero-selection early return and wide, NULL and varlen paths keep their
 implementations. Fixed constants reuse one checked append window for both the
@@ -42,10 +42,11 @@ loop savings. Exact-head measurements retained a slower Q9 signal; same-binary
 controls showed substantial process variation, so the entire query shift is not
 assumed to be caused by this mechanism.
 
-This revision removes the helper and typed-view admission cost for all multi-row
-calls. It hoists a redundant destination check into one span admission and keeps
-the scalar loads/stores. There is no empirically tuned batch-size crossover,
-new abstraction or build-alignment change.
+Q21's unscored shape count finds about 343,000 eligible calls averaging ten rows.
+This revision removes helper/view admission and the extra byte-window header
+setup from those short calls. It peels the existing first scalar store and checks
+the remaining destination interval once. There is no empirically tuned batch-size
+crossover, new abstraction or build-alignment change.
 
 ## Evidence and acceptance
 
