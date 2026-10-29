@@ -37,7 +37,7 @@ from sqlalchemy import (
     Text,
     Time,
 )
-from sqlalchemy.dialects.mysql import BLOB, JSON, LONGBLOB, MEDIUMBLOB, TINYBLOB, TINYINT, VARBINARY
+from sqlalchemy.dialects.mysql import BLOB, DOUBLE, JSON, LONGBLOB, MEDIUMBLOB, TINYBLOB, TINYINT, VARBINARY
 
 from .vector_type import Vectorf32, Vectorf64, VectorPrecision, VectorType
 
@@ -170,10 +170,15 @@ class VectorTableBuilder:
         self, name: str, column_type: str, precision: Optional[int] = None, scale: Optional[int] = None, **kwargs
     ):
         """Add a numeric column (float, double, decimal, numeric)."""
-        if column_type in ("float", "double"):
+        if column_type == "float":
             from sqlalchemy import Float
 
             return self.add_column(name, Float(precision=precision), **kwargs)
+        elif column_type == "double":
+            double_type = (
+                DOUBLE(precision=precision, scale=scale) if precision is not None and scale is not None else DOUBLE()
+            )
+            return self.add_column(name, double_type, **kwargs)
         elif column_type in ("decimal", "numeric"):
             return self.add_column(name, Numeric(precision=precision, scale=scale), **kwargs)
         else:
@@ -310,7 +315,9 @@ def create_vector_index_table(table_name: str, metadata: MetaData = None) -> Vec
     return builder
 
 
-def create_document_vector_table(table_name: str, metadata: MetaData = None, vector_dim: int = 384) -> VectorTableBuilder:
+def create_document_vector_table(
+    table_name: str, metadata: MetaData = None, vector_dim: int = 384
+) -> VectorTableBuilder:
     """
     Create a table builder for document vector storage.
     """
@@ -330,7 +337,9 @@ def create_document_vector_table(table_name: str, metadata: MetaData = None, vec
     return builder
 
 
-def create_product_vector_table(table_name: str, metadata: MetaData = None, vector_dim: int = 512) -> VectorTableBuilder:
+def create_product_vector_table(
+    table_name: str, metadata: MetaData = None, vector_dim: int = 512
+) -> VectorTableBuilder:
     """
     Create a table builder for product vector storage.
     """
