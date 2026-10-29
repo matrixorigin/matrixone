@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/bytedance/sonic"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -100,7 +101,7 @@ func (u *hnswCreateState) end(tf *TableFunction, proc *process.Process) error {
 		for i := range u.ignored {
 			u.ignored[i].Ts = buildTs
 		}
-		sqls = append(sqls, vectorindex.IgnoredRowsSql(u.tblcfg.DbName, u.tblcfg.IgnoredTable, u.ignored)...)
+		sqls = append(sqls, vectorindex.IgnoredRowsSql(u.tblcfg.DbName, u.tblcfg.IgnoredTable, vectorindex.IgnoredColumns{Pk: catalog.IndexIgnored_TblCol_Pk, Reason: catalog.IndexIgnored_TblCol_Reason, Ts: catalog.IndexIgnored_TblCol_Ts}, u.ignored)...)
 		logutil.Warn("hnsw_create ignored rows",
 			zap.String("db", u.tblcfg.DbName),
 			zap.String("table", u.tblcfg.SrcTable),

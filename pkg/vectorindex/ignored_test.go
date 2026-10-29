@@ -23,9 +23,10 @@ import (
 )
 
 func TestIgnoredRowsSql(t *testing.T) {
-	require.Empty(t, IgnoredRowsSql("db", "t", nil))
+	cols := IgnoredColumns{Pk: "__mo_index_pk", Reason: "__mo_index_reason", Ts: "__mo_index_ts"}
+	require.Empty(t, IgnoredRowsSql("db", "t", cols, nil))
 
-	sqls := IgnoredRowsSql("db", "t", []IgnoredRow{{Pk: "1", Reason: `a'b\c`, Ts: 5}, {Pk: "'x'", Reason: "r", Ts: 6}})
+	sqls := IgnoredRowsSql("db", "t", cols, []IgnoredRow{{Pk: "1", Reason: `a'b\c`, Ts: 5}, {Pk: "'x'", Reason: "r", Ts: 6}})
 	require.Equal(t, []string{
 		"REPLACE INTO `db`.`t` (`__mo_index_pk`, `__mo_index_reason`, `__mo_index_ts`) VALUES (1, 'a''b\\\\c', 5), ('x', 'r', 6)",
 	}, sqls)
@@ -34,7 +35,7 @@ func TestIgnoredRowsSql(t *testing.T) {
 	for i := range rows {
 		rows[i] = IgnoredRow{Pk: strconv.Itoa(i), Reason: "r"}
 	}
-	sqls = IgnoredRowsSql("db", "t", rows)
+	sqls = IgnoredRowsSql("db", "t", cols, rows)
 	require.Len(t, sqls, 2)
 	require.Equal(t, ignoredRowsPerSql, strings.Count(sqls[0], "'r'"))
 	require.Equal(t, 1, strings.Count(sqls[1], "'r'"))
