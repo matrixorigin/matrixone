@@ -853,15 +853,21 @@ func decodeVectorMatmulCells(queries string, binaryQueries bool, vecType types.T
 		if rows == 0 || rows > vectorMatmulMaxQueries {
 			return nil, moerr.NewInvalidInputNoCtxf("vector_matmul: query count %d out of range [1, %d]", rows, vectorMatmulMaxQueries)
 		}
-		texts := make([]string, 0, rows)
-		vectorMatmulJSONRows(queries, func(_, _, _ int, value string) { texts = append(texts, value) })
 		cells = make([][]byte, 0, rows)
-		for i, text := range texts {
-			cell, err := types.BlockScaledFromJSON(format, text)
+		var cellErr error
+		vectorMatmulJSONRows(queries, func(i, _, _ int, value string) {
+			if cellErr != nil {
+				return
+			}
+			cell, err := types.BlockScaledFromJSON(format, value)
 			if err != nil {
-				return nil, vectorMatmulQueryError(i, err)
+				cellErr = vectorMatmulQueryError(i, err)
+				return
 			}
 			cells = append(cells, cell)
+		})
+		if cellErr != nil {
+			return nil, cellErr
 		}
 	}
 	for i, cell := range cells {

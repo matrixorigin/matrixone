@@ -198,3 +198,18 @@ func TestVectorIndexCdcFloat32RoundTrip(t *testing.T) {
 	require.NoError(t, gbf.UnmarshalJSON([]byte(text)))
 	require.Equal(t, cbf.Data, gbf.Data)
 }
+
+// cdcFloat32 is a named float32 element type, which ArrayElement (~float32) admits.
+type cdcFloat32 float32
+
+// A named float32 element type decodes exactly too.
+func TestVectorIndexCdcNamedFloat32RoundTrip(t *testing.T) {
+	cdc := NewVectorIndexCdc[cdcFloat32](1)
+	cdc.Insert(1, []cdcFloat32{cdcFloat32(math.Float32frombits(0x15ae43fd)), 1.0000001}, nil)
+	text, err := cdc.ToJson()
+	require.NoError(t, err)
+	var got VectorIndexCdc[cdcFloat32]
+	require.NoError(t, got.UnmarshalJSON([]byte(text)))
+	require.Equal(t, uint32(0x15ae43fd), math.Float32bits(float32(got.Data[0].Vec[0])))
+	require.Equal(t, cdc.Data, got.Data)
+}

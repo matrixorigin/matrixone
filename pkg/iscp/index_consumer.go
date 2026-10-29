@@ -396,8 +396,7 @@ func runHnsw[T types.ArrayElement](c *IndexConsumer, ctx context.Context, errch 
 			}
 
 			// sql -> cdc
-			// UnmarshalJSON, not sonic.Unmarshal into the fields: a float32 batch must decode
-			// with encoding/json, as sonic rounds float32 values twice (bytedance/sonic#884).
+			// UnmarshalJSON decodes float32 batches exactly; see it before changing the decoder.
 			var cdc vectorindex.VectorIndexCdc[T]
 			err = cdc.UnmarshalJSON(sql)
 			if err != nil {
