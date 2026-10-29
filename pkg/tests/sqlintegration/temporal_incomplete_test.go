@@ -109,7 +109,7 @@ func TestIncompleteTemporalStrings(t *testing.T) {
 		t.Run("gapfill_constant_bounds", func(t *testing.T) {
 			exec("create table " + schema + ".bounded_readings(device varchar(8), event_ts datetime, value int)")
 			exec("insert into " + schema + ".bounded_readings values ('d1','2026-01-01 00:02:10',20),('d1','2026-01-01 00:04:20',40),('d2','2026-01-01 00:01:30',7)")
-			for _, partitioned := range []bool{true, false} {
+			for _, partitioned := range []bool{false, true} {
 				func() {
 					query := "select _wstart, sum(value) from " + schema + ".bounded_readings where event_ts >= '2026-01-02 00:00:00' and event_ts < '2026-01-02 00:03:00' interval(event_ts, 1, minute) gapfill(partition) fill(null) order by _wstart"
 					wantRows := 3
@@ -117,24 +117,36 @@ func TestIncompleteTemporalStrings(t *testing.T) {
 						query = "select _wstart, sum(value) from " + schema + ".bounded_readings where event_ts >= '2026-01-01 00:00:00' and event_ts < '2026-01-01 00:06:00' group by device interval(event_ts, 1, minute) gapfill(partition) fill(value, 0) order by device, _wstart"
 						wantRows = 12
 					}
-					rows, err := conn.QueryContext(ctx, query)
-					require.NoError(t, err)
-					defer rows.Close()
-					count := 0
-					for rows.Next() {
-						var start string
-						var sum sql.NullInt64
-						require.NoError(t, rows.Scan(&start, &sum))
-						day, minute := 2, count
-						if partitioned {
-							day, minute = 1, count%6
+					checkRows := func(runQuery func() (*sql.Rows, error)) {
+						rows, err := runQuery()
+						require.NoError(t, err)
+						defer rows.Close()
+						count := 0
+						for rows.Next() {
+							var start string
+							var sum sql.NullInt64
+							require.NoError(t, rows.Scan(&start, &sum))
+							day, minute := 2, count
+							if partitioned {
+								day, minute = 1, count%6
+							}
+							require.Equal(t, fmt.Sprintf("2026-01-%02d 00:%02d:00", day, minute), start)
+							require.Equal(t, partitioned, sum.Valid)
+							count++
 						}
-						require.Equal(t, fmt.Sprintf("2026-01-%02d 00:%02d:00", day, minute), start)
-						require.Equal(t, partitioned, sum.Valid)
-						count++
+						require.NoError(t, rows.Err())
+						require.Equal(t, wantRows, count)
 					}
-					require.NoError(t, rows.Err())
-					require.Equal(t, wantRows, count)
+					checkRows(func() (*sql.Rows, error) { return conn.QueryContext(ctx, query) })
+					stmt, err := conn.PrepareContext(ctx, query)
+					require.NoError(t, err)
+					defer stmt.Close()
+					exec("prepare temporal_gapfill from '" + strings.ReplaceAll(query, "'", "''") + "'")
+					defer exec("deallocate prepare temporal_gapfill")
+					for round := 0; round < 2; round++ {
+						checkRows(func() (*sql.Rows, error) { return stmt.QueryContext(ctx) })
+						checkRows(func() (*sql.Rows, error) { return conn.QueryContext(ctx, "execute temporal_gapfill") })
+					}
 				}()
 			}
 		})

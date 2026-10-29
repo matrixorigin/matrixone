@@ -10303,8 +10303,11 @@ func gapFillBoundContainsColumn(expr *Expr, timestamp *plan.ColRef) bool {
 }
 
 func gapFillBoundIsConstant(expr *Expr) bool {
+	// Inferred bounds are evaluated at EXECUTE, including parameterless
+	// prepared plans. Diagnostic relocation policy must not reject a value
+	// that is constant within that execution.
 	return expr != nil && !exprHasColRef(expr) && !hasCorrCol(expr) &&
-		!hasSubquery(expr) && !containsVolatileFunction(expr)
+		!hasSubquery(expr) && function.IsRuntimeConstant(expr)
 }
 
 func combineGapFillBounds(ctx context.Context, name string, candidates []*Expr, targetType plan.Type) (*Expr, error) {
