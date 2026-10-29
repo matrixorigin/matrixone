@@ -4569,9 +4569,44 @@ func appendTimeIntervalOverflowWarning(proc *process.Process) {
 	}
 }
 
+// timeArithmeticResult computes the ADDTIME/SUBTIME TIME-domain result and
+// clamps values beyond the MySQL TIME boundary to +-MySQLTimeMax, matching the
+// CAST-to-TIME path instead of discarding the computed duration as NULL.
+// The returned bool reports that clamping happened.
 func timeArithmeticResult(first, second types.Time, subtract bool) (types.Time, bool) {
-	result, overflow, _ := doTimeInterval(first, int64(second), types.MicroSecond, subtract)
-	return result, overflow
+	delta := int64(second)
+	if subtract {
+		if delta == math.MinInt64 {
+			// first - MinInt64 == first + 2^63 is never negative, so move the
+			// subtraction once into uint64 space where the exact result
+			// cannot overflow again. Only first within
+			// [MinInt64, MinInt64+MySQLTimeMax] stays inside the TIME range;
+			// the 2^63 offset is the exact unsigned form of -MinInt64.
+			sum64 := uint64(int64(first)) + (uint64(1) << 63)
+			if sum64 <= uint64(types.MySQLTimeMax) {
+				return types.Time(sum64), false
+			}
+			return types.MySQLTimeMax, true
+		}
+		delta = -delta
+	}
+	sum, ok := safeTimestampWindowSum(int64(first), delta)
+	if !ok {
+		// An int64 overflow needs same-sign operands, so the direction of the
+		// out-of-range result stays unambiguous.
+		if int64(first) < 0 || delta < 0 {
+			return -types.MySQLTimeMax, true
+		}
+		return types.MySQLTimeMax, true
+	}
+	value := types.Time(sum)
+	if value >= -types.MySQLTimeMax && value <= types.MySQLTimeMax {
+		return value, false
+	}
+	if value < 0 {
+		return -types.MySQLTimeMax, true
+	}
+	return types.MySQLTimeMax, true
 }
 
 // Both operands may use the wider internal duration domain; only the final
@@ -4636,13 +4671,9 @@ func addTimeToString(ivecs []*vector.Vector, result vector.FunctionResultWrapper
 			outputScale = scale
 		}
 		if kind == temporalStringTime {
-			resultTime, overflow := timeArithmeticResult(time1, time2, false)
-			if overflow {
+			resultTime, clamped := timeArithmeticResult(time1, time2, false)
+			if clamped {
 				appendTimeIntervalOverflowWarning(proc)
-				if err := rs.AppendBytes(nil, true); err != nil {
-					return err
-				}
-				continue
 			}
 			if err := appendStringTimeResult(rs, resultTime, outputScale); err != nil {
 				return err
@@ -4893,13 +4924,9 @@ func subTimeFromString(ivecs []*vector.Vector, result vector.FunctionResultWrapp
 			outputScale = scale
 		}
 		if kind == temporalStringTime {
-			resultTime, overflow := timeArithmeticResult(time1, time2, true)
-			if overflow {
+			resultTime, clamped := timeArithmeticResult(time1, time2, true)
+			if clamped {
 				appendTimeIntervalOverflowWarning(proc)
-				if err := rs.AppendBytes(nil, true); err != nil {
-					return err
-				}
-				continue
 			}
 			if err := appendStringTimeResult(rs, resultTime, outputScale); err != nil {
 				return err

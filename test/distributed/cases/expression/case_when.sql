@@ -173,6 +173,7 @@ drop table if exists t1;
 -- @case
 -- @desc:test for case_when expression with mixed decimal scales
 -- @label:bvt
+-- @metacmp(true)
 SELECT
   7.01970 * CAST(-58140.00 AS DECIMAL(23,2)) AS direct_mul,
   CASE WHEN 'USD' = 'RMB'
@@ -183,6 +184,7 @@ SELECT
 -- @case
 -- @desc:test for case_when expression with then branch decimal cast
 -- @label:bvt
+-- @metacmp(true)
 SELECT
   CASE WHEN 'USD' = 'USD'
        THEN CAST(-58140.00 AS DECIMAL(23,2))
@@ -192,6 +194,7 @@ SELECT
 -- @case
 -- @desc:test for iff expression with mixed decimal scales
 -- @label:bvt
+-- @metacmp(true)
 SELECT
   IFF('USD' = 'USD',
       CAST(-58140.00 AS DECIMAL(23,2)),
@@ -226,11 +229,14 @@ SELECT
 -- @case
 -- @desc:test for coalesce over decimal branches with different scales aligns scale/width
 -- @label:bvt
+-- @metacmp(true)
 SELECT 7.01970 * CAST(-58140.00 AS DECIMAL(23,2)) AS direct_mul;
+-- @metacmp(true)
 SELECT COALESCE(
   CAST(NULL AS DECIMAL(23,2)),
   7.01970 * CAST(-58140.00 AS DECIMAL(23,2))
 ) AS coalesce_decimal_scale;
+-- @metacmp(true)
 SELECT COALESCE(
   CAST(1.23 AS DECIMAL(23,2)),
   7.01970 * CAST(-58140.00 AS DECIMAL(23,2))

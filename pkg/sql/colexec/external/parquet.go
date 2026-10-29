@@ -2058,6 +2058,26 @@ func (h *ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapp
 			}
 			break
 		}
+		if lt := st.LogicalType(); lt != nil && lt.UUID != nil &&
+			(types.T(dt.Id) == types.T_char || types.T(dt.Id) == types.T_varchar || types.T(dt.Id) == types.T_text) {
+			// A native UUID column imported into a text target carries the UUID
+			// value as its canonical spelling instead of leaking raw bytes as
+			// text; binary-family targets keep the raw 16 storage bytes below.
+			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+				return processParquetValuesToBytes(proc.Ctx, mp, page, proc, vec, func(v parquet.Value) ([]byte, error) {
+					u, err := parquetUuidBytesToUuid(proc.Ctx, v.ByteArray())
+					if err != nil {
+						return nil, err
+					}
+					s, err := types.UuidToString(u)
+					if err != nil {
+						return nil, err
+					}
+					return []byte(s), nil
+				})
+			}
+			break
+		}
 		if st.Kind() != parquet.ByteArray && st.Kind() != parquet.FixedLenByteArray {
 			break
 		}
@@ -2358,6 +2378,20 @@ func (h *ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapp
 			return processStringToJson(proc.Ctx, mp, page, proc, vec)
 		}
 	case types.T_uuid:
+		if lt := st.LogicalType(); lt != nil && lt.UUID != nil {
+			// Native Parquet UUID annotation: the column physically carries the
+			// raw 16 RFC 4122 UUID bytes, not UUID text (LogicalTypes.md#uuid),
+			// so import the bytes as they are. Schema-invalid lengths (compliant
+			// writers only emit fixed_len_byte_array(16) here) are rejected as
+			// ordinary input errors before any row lands.
+			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+				return processParquetValuesToFixed(proc.Ctx, mp, page, proc, vec, types.Uuid{},
+					func(v parquet.Value) (types.Uuid, error) {
+						return parquetUuidBytesToUuid(proc.Ctx, v.ByteArray())
+					})
+			}
+			break
+		}
 		if st.Kind() != parquet.ByteArray && st.Kind() != parquet.FixedLenByteArray {
 			break
 		}
@@ -3860,6 +3894,19 @@ func isParquetValueJsonConvertibleSource(st parquet.Type) bool {
 	return isParquetValueStringConvertibleSource(st)
 }
 
+// parquetUuidBytesToUuid imports the raw 16 UUID bytes written under the
+// Parquet UUID logical annotation (LogicalTypes.md#uuid). Compliant writers
+// only annotate fixed_len_byte_array(16); any other length is an ordinary
+// invalid-input error for the load, rejected before a row reaches the target.
+func parquetUuidBytesToUuid(ctx context.Context, data []byte) (types.Uuid, error) {
+	if len(data) != 16 {
+		return types.Uuid{}, moerr.NewInvalidInputf(ctx, "parquet UUID value must be 16 bytes, got %d", len(data))
+	}
+	var u types.Uuid
+	copy(u[:], data)
+	return u, nil
+}
+
 func parquetValueToBool(ctx context.Context, st parquet.Type, v parquet.Value) (bool, error) {
 	if isDecimalLogicalType(st.LogicalType()) {
 		val, err := parquetValueToFloat64(ctx, st, v)
@@ -3872,11 +3919,20 @@ func parquetValueToBool(ctx context.Context, st parquet.Type, v parquet.Value) (
 	case parquet.Boolean:
 		return v.Boolean(), nil
 	case parquet.Int32, parquet.Int64:
-		val, err := parquetValueToInt64(ctx, st, v)
-		if err != nil {
-			return false, err
+		// BOOL only asks whether the source value is nonzero. Unsigned
+		// annotations must not be narrowed through signed BIGINT: values above
+		// INT64_MAX are valid TRUE sources (#31523), matching direct SQL
+		// inserts. Signed values keep the plain nonzero test.
+		if lt := st.LogicalType(); lt != nil && lt.Integer != nil && !lt.Integer.IsSigned {
+			if st.Kind() == parquet.Int32 {
+				return v.Uint32() != 0, nil
+			}
+			return v.Uint64() != 0, nil
 		}
-		return val != 0, nil
+		if st.Kind() == parquet.Int32 {
+			return v.Int32() != 0, nil
+		}
+		return v.Int64() != 0, nil
 	case parquet.Float:
 		return v.Float() != 0, nil
 	case parquet.Double:

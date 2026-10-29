@@ -1216,26 +1216,20 @@ func (ctr *container) createNewGroupByBatchWithAllocation(
 	return b, nil
 }
 
-func (ctr *container) appendGroupByBatch(
-	vs []*vector.Vector,
-	offset int,
-	insertList []uint8,
-) (int, error) {
-	return ctr.appendGroupByBatchWithStringSources(vs, offset, insertList, nil, 0)
-}
-
+// toIncrease is the exact selection count validated before hash publication.
+// Keep that count when splitting a chunk across output batches.
 func (ctr *container) appendGroupByBatchWithStringSources(
 	vs []*vector.Vector,
 	offset int,
 	insertList []uint8,
+	toIncrease int,
 	stringSources [][]types.StringSource,
 	stringSourceOffset int,
-) (int, error) {
-	toIncrease, _ := countNonZeroAndFindKth(insertList, len(insertList)+1)
+) error {
 	if toIncrease == 0 {
 		// A duplicate-only chunk must not create a fresh retained batch after
 		// the hash preview has committed no new groups.
-		return 0, nil
+		return nil
 	}
 
 	// first find the target batch.
@@ -1247,7 +1241,7 @@ func (ctr *container) appendGroupByBatchWithStringSources(
 			var err error
 			groupByBatch, err = ctr.createNewGroupByBatch(vs, aggBatchSize)
 			if err != nil {
-				return 0, err
+				return err
 			}
 		}
 		ctr.groupByBatches = append(ctr.groupByBatches, groupByBatch)
@@ -1259,7 +1253,7 @@ func (ctr *container) appendGroupByBatchWithStringSources(
 	addedRows := toIncrease
 	kth := -1
 	if toIncrease > spaceLeft {
-		_, kth = countNonZeroAndFindKth(insertList, spaceLeft)
+		kth = findKthNonZero(insertList, spaceLeft)
 		thisTime = insertList[:kth+1]
 		addedRows = spaceLeft
 	}
@@ -1272,14 +1266,14 @@ func (ctr *container) appendGroupByBatchWithStringSources(
 				vs[i], int64(offset), len(thisTime), thisTime, ctr.mp)
 		} else if i >= len(stringSources) || stringSourceOffset < 0 ||
 			stringSourceOffset+len(thisTime) > len(stringSources[i]) {
-			return 0, mpool.ErrAllocationAccountInvariant
+			return mpool.ErrAllocationAccountInvariant
 		} else {
 			err = vec.UnionBatchPreflightedWithStringSourcesDeferredNormalization(
 				vs[i], int64(offset), len(thisTime), thisTime,
 				stringSources[i][stringSourceOffset:stringSourceOffset+len(thisTime)], ctr.mp)
 		}
 		if err != nil {
-			return 0, err
+			return err
 		}
 	}
 	currBatch.AddRowCount(addedRows)
@@ -1287,14 +1281,11 @@ func (ctr *container) appendGroupByBatchWithStringSources(
 	if toIncrease > spaceLeft {
 		// there is not enough space in the current batch to insert thisTime.
 		// so we need to append the rest of the insertList to the next batch.
-		_, err := ctr.appendGroupByBatchWithStringSources(
-			vs, offset+kth+1, insertList[kth+1:], stringSources,
+		return ctr.appendGroupByBatchWithStringSources(
+			vs, offset+kth+1, insertList[kth+1:], toIncrease-spaceLeft, stringSources,
 			stringSourceOffset+kth+1)
-		if err != nil {
-			return 0, err
-		}
 	}
-	return toIncrease, nil
+	return nil
 }
 
 func (group *Group) outputOneBatch(proc *process.Process) (vm.CallResult, error) {

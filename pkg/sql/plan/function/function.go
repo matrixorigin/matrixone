@@ -610,6 +610,8 @@ func getFunctionByName(
 	check := f.checkArgumentTypesWidening(args, stringDomainModes)
 	if legacyIntegerDecimalCoercions(ctx) {
 		check = legacyIntegerDecimalCheck(r.fid, args, check)
+	} else if LegacyDecimalIntermediatePrecision(ctx) {
+		check = legacyDecimalPrecisionCheck(r.fid, args, check)
 	}
 	if r.fid == UNIX_TIMESTAMP && LegacyUnixTimestampDatetime(ctx) {
 		check = fixedTypeMatch(f.Overloads[:4], args)
@@ -664,6 +666,9 @@ func getFunctionByName(
 		err = moerr.NewInvalidArg(ctx, fmt.Sprintf("too many overloads matched %s", name), args)
 	}
 	if err == nil {
+		if LegacyDecimalIntermediatePrecision(ctx) {
+			r.applyLegacyDecimalArithmeticReturnType(args)
+		}
 		r.applyDivPrecisionIncrement(ctx, args)
 		r.applyDecimalModMetadata(args)
 		if !LegacyDecimalIntegerDiv(ctx) {
@@ -894,6 +899,17 @@ func deduceNotNullable(ctx context.Context, overloadID int64, args []*plan.Expr)
 		// Typed zero dates can become NULL under NO_ZERO_DATE, and string
 		// conversions synthesize NULL for malformed input.
 		if oid == 0 || oid == 2 || ((oid == 3 || oid == 4) && !LegacyTemporalNullability(ctx)) {
+			return false
+		}
+	case TIME:
+		// String conversions synthesize NULL with a truncation warning for
+		// invalid input even when the argument is NOT NULL. The typed and
+		// numeric overloads fail the statement instead of producing NULL
+		// and keep their NOT NULL inference. Historical dump bindings keep
+		// their pre-8dd published NOT NULL metadata, and the intermediate
+		// post-8dd era that predates the NULL synthesis change kept TIME
+		// NOT NULL while DATE conversions were already nullable.
+		if oid >= 5 && oid <= 8 && !LegacyTemporalNullability(ctx) && !LegacyTimeNullability(ctx) {
 			return false
 		}
 	case CAST:

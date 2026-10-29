@@ -823,6 +823,7 @@ func TestFloat32CodecContract(t *testing.T) {
 		math.Float64frombits(0x7ff8000000000000)))
 	require.Equal(t, CanonicalFloat64Bits(math.Float64frombits(0x7ff8000000000000)),
 		CanonicalFloat64Bits(math.Float64frombits(0xfff0000000000001)))
+	require.Equal(t, uint64(0), CanonicalFloat64Bits(math.Copysign(0, -1)))
 }
 
 func TestSupportsExactRawRuntimeFilter(t *testing.T) {
