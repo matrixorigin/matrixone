@@ -12001,15 +12001,16 @@ func (v *Vector) inplaceSortRowMetadata(compact bool) bool {
 	return true
 }
 
-// InplaceSortAndCompact @todo optimization in the future
+// InplaceSortAndCompact requires writable descriptors and row metadata.
+// A leased varlen payload can remain readonly: only descriptors are reordered.
 func (v *Vector) InplaceSortAndCompact() {
 	if v.inplaceSortRowMetadata(true) {
 		return
 	}
-	cleanDataNotResetArea := func() {
-		if v.data != nil {
-			v.length = 0
-		}
+	publishCompactedLength := func(length int) {
+		// Compact already wrote the result into the descriptor prefix. Do not
+		// re-append it: that can require COW/admission, but this API has no pool.
+		v.SetLength(length)
 		v.nsp.Reset()
 		v.sorted = true
 	}
@@ -12326,8 +12327,7 @@ func (v *Vector) InplaceSortAndCompact() {
 		})
 
 		if len(newCol) != len(col) {
-			cleanDataNotResetArea()
-			appendList(v, newCol, nil, nil)
+			publishCompactedLength(len(newCol))
 		}
 
 	case types.T_array_float32:
@@ -12345,8 +12345,7 @@ func (v *Vector) InplaceSortAndCompact() {
 			) == 0
 		})
 		if len(newCol) != len(col) {
-			cleanDataNotResetArea()
-			appendList(v, newCol, nil, nil)
+			publishCompactedLength(len(newCol))
 		}
 
 	case types.T_array_float64:
@@ -12364,17 +12363,16 @@ func (v *Vector) InplaceSortAndCompact() {
 			) == 0
 		})
 		if len(newCol) != len(col) {
-			cleanDataNotResetArea()
-			appendList(v, newCol, nil, nil)
+			publishCompactedLength(len(newCol))
 		}
 	case types.T_array_bf16:
-		inplaceSortAndCompactArrayElement[types.BF16](v, cleanDataNotResetArea)
+		inplaceSortAndCompactArrayElement[types.BF16](v, publishCompactedLength)
 	case types.T_array_float16:
-		inplaceSortAndCompactArrayElement[types.Float16](v, cleanDataNotResetArea)
+		inplaceSortAndCompactArrayElement[types.Float16](v, publishCompactedLength)
 	case types.T_array_int8:
-		inplaceSortAndCompactArrayElement[int8](v, cleanDataNotResetArea)
+		inplaceSortAndCompactArrayElement[int8](v, publishCompactedLength)
 	case types.T_array_uint8:
-		inplaceSortAndCompactArrayElement[uint8](v, cleanDataNotResetArea)
+		inplaceSortAndCompactArrayElement[uint8](v, publishCompactedLength)
 	default:
 		return
 	}
@@ -12385,7 +12383,7 @@ func (v *Vector) InplaceSortAndCompact() {
 
 // inplaceSortAndCompactArrayElement sorts+dedups a narrow-typed vector using the
 // float32-bridged comparator (so bf16/f16 order by value, not by raw bits).
-func inplaceSortAndCompactArrayElement[T types.ArrayElement](v *Vector, cleanDataNotResetArea func()) {
+func inplaceSortAndCompactArrayElement[T types.ArrayElement](v *Vector, publishCompactedLength func(int)) {
 	col, area := MustVarlenaRawData(v)
 	sort.Slice(col, func(i, j int) bool {
 		return types.ArrayElementCompare[T](
@@ -12400,8 +12398,7 @@ func inplaceSortAndCompactArrayElement[T types.ArrayElement](v *Vector, cleanDat
 		) == 0
 	})
 	if len(newCol) != len(col) {
-		cleanDataNotResetArea()
-		appendList(v, newCol, nil, nil)
+		publishCompactedLength(len(newCol))
 	}
 }
 
