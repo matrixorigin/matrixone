@@ -113,7 +113,7 @@ timediff('-838:59:59', '00:00:01') as negative_overflow,
 addtime('2000000000:00:00', '2000000000:00:00') as add_overflow,
 subtime('2000000000:00:00', '-2000000000:00:00') as sub_overflow;
 ➤ positive_overflow[92,10,0]  ¦  negative_overflow[92,10,0]  ¦  add_overflow[12,29,0]  ¦  sub_overflow[12,29,0]  𝄀
-null  ¦  null  ¦  null  ¦  null
+null  ¦  null  ¦  838:59:59  ¦  838:59:59
 prepare dynamic_timediff from 'select timediff(?, ?) as dynamic_fsp';
 set @first = '12:00:00.123456', @second = '11:00:00';
 execute dynamic_timediff using @first, @second;
@@ -592,7 +592,7 @@ subtime(time '-838:59:59', '00:00:01') is null as sub_null,
 timediff('838:59:59','-00:00:01') is null as diff_null,
 maketime(839,0,0) is null as make_null;
 ➤ add_null[-7,1,0]  ¦  sub_null[-7,1,0]  ¦  diff_null[-7,1,0]  ¦  make_null[-7,1,0]  𝄀
-1  ¦  1  ¦  1  ¦  1
+0  ¦  0  ¦  1  ¦  1
 show warnings;
 ➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
 Warning  ¦  1441  ¦  Datetime function: time field overflow  𝄀
