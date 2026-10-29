@@ -186,6 +186,9 @@ func RequiredPersistedExpressionProtocolVersion(owner any) (int64, error) {
 	if features.ViewMetadataFunctions {
 		requiredVersion = max(requiredVersion, defines.MORPCVersion126)
 	}
+	if features.JSONSearch {
+		requiredVersion = max(requiredVersion, defines.MORPCVersion136)
+	}
 	if features.IncompleteTemporalStrings {
 		requiredVersion = max(requiredVersion, defines.MORPCVersion130)
 	}
@@ -224,6 +227,24 @@ func (b *baseBinder) observeExpressionProtocol(expr *planpb.Expr) error {
 // contracts so a mixed owner is never admitted at an incomplete version.
 func RequiredPersistedIPFunctionProtocolVersion(owner any) (int64, error) {
 	return RequiredPersistedExpressionProtocolVersion(owner)
+}
+
+// RejectJSONSearchInNonViewDefinition keeps the initial JSON_SEARCH support
+// subset independent of whether the cluster has already activated protocol
+// v130. Views retain the requirement and use the shared admission fence;
+// other catalog expression surfaces fail closed before publication.
+func RejectJSONSearchInNonViewDefinition(ctx context.Context, owner any) error {
+	features, err := planpb.RequiredRemoteExpressionFeatures(owner)
+	if err != nil {
+		return err
+	}
+	if !features.JSONSearch {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return moerr.NewNotSupported(ctx, "JSON_SEARCH is not supported in non-view persisted expressions")
 }
 
 // RequirePersistedProtocolVersion checks an explicit catalog-expression floor

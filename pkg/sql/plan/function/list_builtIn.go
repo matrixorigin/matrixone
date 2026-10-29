@@ -3163,6 +3163,26 @@ var supportedStringBuiltIns = []FuncNew{
 		},
 	},
 
+	// function `json_search`
+	{
+		functionId: JSON_SEARCH,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    jsonSearchCheckFn,
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_json.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return JSONSearch
+				},
+			},
+		},
+	},
+
 	// function `least`
 	{
 		functionId: LEAST,

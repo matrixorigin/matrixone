@@ -930,8 +930,13 @@ const (
 	// renumbering is safe.
 	QUANTILE_EXACT_WEIGHTED = 619
 
+	// JSON_SEARCH requires the executable path-traversal and persisted
+	// expression contract introduced with MORPC v136. Re-issued 605 -> 620
+	// after main allocated the 605..619 block first; references are by name.
+	JSON_SEARCH = 620
+
 	// Keep FUNCTION_END_NUMBER one past the highest allocated function id.
-	FUNCTION_END_NUMBER = 620
+	FUNCTION_END_NUMBER = 621
 )
 
 // functionIdRegister is what function we have registered already.
@@ -1256,6 +1261,7 @@ var functionIdRegister = map[string]int32{
 	"json_agg_to_double":             JSON_AGG_TO_DOUBLE,
 	"json_storage_free":              JSON_STORAGE_FREE,
 	"json_depth":                     JSON_DEPTH,
+	"json_search":                    JSON_SEARCH,
 	"json_contains":                  JSON_CONTAINS,
 	"json_contains_path":             JSON_CONTAINS_PATH,
 	"json_merge":                     JSON_MERGE_PRESERVE,

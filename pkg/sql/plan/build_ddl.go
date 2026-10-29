@@ -1999,6 +1999,9 @@ func buildCTASDefaultFromOrigin(
 	if err = RequirePersistedIPFunctionProtocolForAuthoring(ctx.GetContext(), ctx.GetProcess(), defaultExpr); err != nil {
 		return nil, err
 	}
+	if err = RejectJSONSearchInNonViewDefinition(ctx.GetContext(), defaultExpr); err != nil {
+		return nil, err
+	}
 	if exprHasLocalColumnRef(defaultExpr) {
 		if err := requireExpressionDefaultProtocol(ctx.GetProcess()); err != nil {
 			return nil, err
@@ -2036,6 +2039,9 @@ func finalizeCTASDefaults(ctx CompilerContext, cols []*ColDef) error {
 				return err
 			}
 			if err := RequirePersistedIPFunctionProtocolForAuthoring(ctx.GetContext(), ctx.GetProcess(), col.Default.Expr); err != nil {
+				return err
+			}
+			if err := RejectJSONSearchInNonViewDefinition(ctx.GetContext(), col.Default.Expr); err != nil {
 				return err
 			}
 			if err := requireExpressionDefaultProtocol(ctx.GetProcess()); err != nil {
@@ -4821,6 +4827,9 @@ func appendCheckDef(
 		return err
 	}
 	if err = RequirePersistedIPFunctionProtocolForAuthoring(ctx.GetContext(), ctx.GetProcess(), checkExpr); err != nil {
+		return err
+	}
+	if err = RejectJSONSearchInNonViewDefinition(ctx.GetContext(), checkExpr); err != nil {
 		return err
 	}
 	if err = validateCheckExpr(ctx.GetContext(), tableDef, checkExpr, columnPos); err != nil {
