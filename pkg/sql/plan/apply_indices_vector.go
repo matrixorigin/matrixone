@@ -16,6 +16,7 @@ package plan
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
@@ -37,6 +38,26 @@ type vectorSortContext struct {
 	vecArgExpr       *plan.Expr
 	membershipNodeID int32 // existing SEMI JOIN that filters the indexed table before Top-K
 	hasMembership    bool
+}
+
+// resolveVectorNprobe chooses the query's base probe count without consulting
+// the session when an override is present. AUTO may still widen this base.
+func (builder *QueryBuilder) resolveVectorNprobe(option *plan.RankOption, fallback int64) (int64, error) {
+	if option != nil && option.Nprobe != 0 {
+		return option.Nprobe, nil
+	}
+	value, err := builder.compCtx.ResolveVariable("probe_limit", true, false)
+	if err != nil {
+		return 0, err
+	}
+	if value == nil {
+		return fallback, nil
+	}
+	probe, ok := value.(int64)
+	if !ok {
+		return 0, moerr.NewInternalErrorNoCtx("ResolveVariable: probe_limit is not int64")
+	}
+	return probe, nil
 }
 
 func (builder *QueryBuilder) resolveScanNodeWithIndex(node *plan.Node, depth int32) *plan.Node {
