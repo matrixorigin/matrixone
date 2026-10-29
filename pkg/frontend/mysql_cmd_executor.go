@@ -5115,7 +5115,7 @@ func authenticateUserCanExecuteStatement(reqCtx context.Context, ses *Session, s
 
 		// can or not execute in retricted status
 		if ses.getRoutine() != nil && ses.getRoutine().isRestricted() && !ses.GetPrivilege().canExecInRestricted {
-			return stats, moerr.NewInternalError(reqCtx, "do not have enough storage to execute the statement")
+			return stats, moerr.NewInternalErrorf(reqCtx, "Account %s is restricted", ses.GetTenantInfo().GetTenant())
 		}
 
 		// can or not execute in password expired status
