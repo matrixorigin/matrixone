@@ -307,3 +307,25 @@ SELECT FORMAT("12332.2", "2","it_CH");
 SELECT FORMAT("12332.2", "2","rm_CH");
 
 SELECT FORMAT("12332.2", "2","ro_RO");
+
+-- Negative decimal rounding preserves the sign for constants and column values.
+SELECT FORMAT(CAST('-1.2350000' AS DECIMAL(38,7)), 2) AS formatted;
+SELECT
+    FORMAT(CAST('-1234.5678901' AS DECIMAL(38,7)), 2) AS rounds_up,
+    FORMAT(CAST('-1234.5612345' AS DECIMAL(38,7)), 2) AS rounds_down,
+    ROUND(CAST('-1234.5678901' AS DECIMAL(38,7)), 2) AS numeric_control;
+
+DROP TABLE IF EXISTS format_negative_rounding;
+CREATE TABLE format_negative_rounding(id INT PRIMARY KEY, amount DECIMAL(38,7));
+INSERT INTO format_negative_rounding VALUES
+    (1, '-1234.5678901'),
+    (2, '-1234.5612345'),
+    (3, '1234.5678901');
+SELECT id, FORMAT(amount, 2) AS formatted,
+    FORMAT(amount, 2, 'en_US') AS formatted_locale,
+    ROUND(amount, 2) AS numeric_control
+FROM format_negative_rounding ORDER BY id;
+SELECT FORMAT(SUM(amount), 2) AS formatted_sum,
+    ROUND(SUM(amount), 2) AS numeric_sum
+FROM format_negative_rounding WHERE id = 1;
+DROP TABLE format_negative_rounding;
