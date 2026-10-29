@@ -22,12 +22,13 @@ volatility, runtime filters, or any unsupported subtree as a whole.
 
 An immutable `objectio.ExactScanFilter` owns typed scalar bounds and ordered
 predicates. The scan compiles it once per Prepare from the bound expression tree.
-A single internal `engine.ReaderFilter` request carries that program, the existing
+A single internal `engine.ReaderFilterRequest` carries that program, the existing
 owned-batch evaluator, and a metadata-only observation callback. Update callers
 and consumers together; do not create a parallel Reader interface or expose
 cache-backed vectors through the callback.
 
-The fast read initially requires an ordinary committed, non-appendable block,
+The fast read initially requires fixed-width projected columns and an ordinary
+committed, non-appendable block,
 no physical-rowid output, no Top-K/ordered limit, and a complete admitted program.
 All other blocks and in-memory sources use the existing evaluator. Use current
 storage selections or current tombstones to establish visible physical rows
@@ -54,7 +55,9 @@ Use the existing numeric comparison semantics, including signed Decimal64.
 IOVector scope owns every cache lease. ObjectIO's bound vector views terminate
 before that scope releases. Selection scratch has one effective cleanup owner
 on success, empty output, error, cancellation, and reset; do not retain input
-references in the prepared program. The program is bounded by its admitted
+references in the prepared program. Per-reader mutable execution scratch reuses
+its vector headers and selection; Reset/Free close it, and every call clears all
+borrowed views before returning. The program is bounded by its admitted
 expression count; row scratch is bounded by the existing object-block row domain.
 There is no new cache, worker, queue, wait, or persistent state.
 
