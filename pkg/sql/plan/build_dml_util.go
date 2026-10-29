@@ -6126,6 +6126,13 @@ func GetSqlForUpdateFkReferencedIndex(db, table, constraintName, referencedIndex
 	)
 }
 
+// QuoteSQLStringLiteral exposes the literal quoting used by the catalog
+// binding-update statements so executor-side internal SQL escapes values
+// exactly the way the writer did.
+func QuoteSQLStringLiteral(s string) string {
+	return quoteSQLStringLiteral(s)
+}
+
 // getSqlForDeleteTable returns the delete sql that deletes all the fk relationships from mo_foreign_keys
 // on the table
 func getSqlForDeleteTable(db, tbl string) string {
