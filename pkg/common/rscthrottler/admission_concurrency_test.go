@@ -164,10 +164,13 @@ func TestDefaultAdmissionExhaustedMemoryDoesNotWrap(t *testing.T) {
 			require.True(t, ok)
 			m.limit.Store(100)
 			m.actualTotalMemory.Store(100)
-			m.rss.Store(102)
-			left, ok := m.Acquire(1)
-			if ok || left != 0 || m.reserved.Load() != math.MaxInt64 {
-				t.Errorf("exhausted budget: left=%d, granted=%t, reserved=%d", left, ok, m.reserved.Load())
+			for _, rss := range []int64{99, 100, 102} {
+				m.rss.Store(rss)
+				require.Zero(t, m.Available())
+				left, ok := m.Acquire(1)
+				if ok || left != 0 || m.reserved.Load() != math.MaxInt64 {
+					t.Errorf("rss=%d: left=%d, granted=%t, reserved=%d", rss, left, ok, m.reserved.Load())
+				}
 			}
 		})
 	}

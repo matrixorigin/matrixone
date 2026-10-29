@@ -427,7 +427,6 @@ func (m *memThrottler) Available() int64 {
 func (m *memThrottler) availableForReserved(reserved int64) int64 {
 
 	var (
-		avail int64
 		limit = m.limit.Load()
 		rss   = m.rss.Load()
 
@@ -448,16 +447,13 @@ func (m *memThrottler) availableForReserved(reserved int64) int64 {
 			}
 		}
 
-		return max(0, limit-rss-reserved)
+		return max(0, max(0, limit-rss)-max(0, reserved))
 	}
 
-	if actualMaxMemory-rss >= limit {
-		avail = limit - reserved
-	} else {
-		avail = actualMaxMemory - rss - reserved
-	}
-
-	return max(0, avail)
+	// Clamp the budget before subtracting reservations: a budget that has
+	// fallen below RSS must not underflow when existing reservations remain.
+	budget := min(max(0, limit), max(0, actualMaxMemory-rss))
+	return max(0, budget-max(0, reserved))
 }
 
 func (m *memThrottler) PrintUsage() {
