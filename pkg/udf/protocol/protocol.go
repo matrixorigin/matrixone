@@ -793,7 +793,7 @@ func (g *ExecutionGroup) shouldReleaseLocked() bool {
 	return g.closing && len(g.members) == 0 && g.inFlight == 0 && !g.released
 }
 
-func (g *ExecutionGroup) releaseIfReady() error {
+func (g *ExecutionGroup) releaseIfReady() (err error) {
 	g.mu.Lock()
 	if !g.shouldReleaseLocked() {
 		g.mu.Unlock()
@@ -816,22 +816,24 @@ func (g *ExecutionGroup) releaseIfReady() error {
 	g.releaseDone = make(chan struct{})
 	done := g.releaseDone
 	g.mu.Unlock()
-	err := func() (err error) {
-		defer func() {
-			if recovered := recover(); recovered != nil {
-				err = errutil.WrapfCauseFirst(ErrProtocol, "group release panicked: %v", recovered)
-			}
-		}()
-		return g.release()
+	returned := false
+	defer func() {
+		// Leave panic recovery to the enclosing request boundary, but still
+		// unblock waiters and keep an interrupted release retryable.
+		if !returned {
+			err = errutil.WrapfCauseFirst(ErrProtocol, "group release did not return")
+		}
+		g.mu.Lock()
+		g.releaseBusy = false
+		g.releaseErr = err
+		if err == nil {
+			g.released = true
+		}
+		close(done)
+		g.mu.Unlock()
 	}()
-	g.mu.Lock()
-	g.releaseBusy = false
-	g.releaseErr = err
-	if err == nil {
-		g.released = true
-	}
-	close(done)
-	g.mu.Unlock()
+	err = g.release()
+	returned = true
 	return err
 }
 
