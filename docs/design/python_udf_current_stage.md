@@ -2,10 +2,10 @@
 
 | Field | Value |
 | --- | --- |
-| Design revision | `python-udf-current-stage-r36-2026-10-28` |
+| Design revision | `python-udf-current-stage-r37-2026-10-29` |
 | Applies to | MatrixOne PR #29152, test/development-stage Python UDF |
 | Upstream repair baseline | `23488e1eb2c50f4d3638dee1d50715bbc1eb1f67` (unrelated existing MORPC gates through 134 and the frozen consolidated 4.0.7 catalog preserved) |
-| Approval | Feature owner approved the r1 current-stage contract on 2026-09-24 in [PR comment](https://github.com/matrixorigin/matrixone/pull/29152#issuecomment-5809313638). The r36 contract preserves the official consolidated and frozen 4.0.7 catalog, follows it with the separate shared-routine repair in 4.0.18, and follows full-cluster shutdown upgrade, with no Python/shared-routine MORPC capability gate. Independent Architecture and SQL/Planner approval of this revision is pending; no production or security scope is added. The immutable approval artifact and independent-review status remain recorded in the [design approval record](python_udf_current_stage_approval.md). |
+| Approval | Feature owner approved the r1 current-stage contract on 2026-09-24 in [PR comment](https://github.com/matrixorigin/matrixone/pull/29152#issuecomment-5809313638). The r37 contract preserves the official consolidated and frozen 4.0.7 catalog, follows it with the separate shared-routine repair in 4.0.18, and follows full-cluster shutdown upgrade, with no Python/shared-routine MORPC capability gate. Independent Architecture and SQL/Planner approval of this revision is pending; no production or security scope is added. The immutable approval artifact and independent-review status remain recorded in the [design approval record](python_udf_current_stage_approval.md). |
 | Not covered | Production tenant isolation, sandbox, Operator rollout, or cross-version rollback/restore |
 
 This is the versioned governing proposal for the current PR stage. The owner
@@ -47,11 +47,32 @@ digest; each artifact is at most 1 MiB. CN resolves the exact account/digest
 before Open, and the worker receives verified source bytes without object-store
 credentials or query-time dependency installation. CREATE/REPLACE validates the
 current contract before committing a catalog definition. Artifact publication
-precedes catalog commit, so a failed validation/transaction can leave an
-unreferenced content-addressed object. No artifact garbage collector or
-per-account total artifact quota exists today; per-object size is bounded, total
-retained artifact storage is not. This is an explicit test/development-stage
-limitation, not a production storage-retention claim.
+follows worker definition validation and precedes catalog commit. A failed
+validation writes no object. A later failed transaction may retain an
+unreferenced object, charged to a finite shared FileService admission budget.
+The r37 repair admits at most 1,024 new account/digest identities across the
+whole backing store, each with at most 1 MiB of source and an immutable identity
+of at most 85 bytes. The budget is global, not reset by a CN restart, account,
+database, transaction, DROP, or REPLACE. Exhaustion rejects new object
+publication before writing source; resolving or republishing existing objects
+continues. This is a conservative development-stage capacity limit, not a
+production quota/GC service or a throughput claim.
+
+Admission uses the existing FileService exclusive-create primitive with no
+check-then-write fallback. Each fixed slot holds one account/digest identity;
+publishers probe a bounded set from a deterministic starting slot. The same
+identity reuses its slot after an interrupted write; concurrent different
+identities cannot own the same slot. Source publication is also exclusive and
+an existing object must pass its exact handler/content digest check. Unsupported
+backends fail closed before either reservation or source write. Slots are never
+reclaimed automatically, including after failed catalog commit: a failed
+publisher cannot delete a digest another revision or snapshot may use.
+Replacement, DROP and historical snapshots retain their existing catalog/MVCC
+ownership and immutable objects. No reference scan, background worker or
+delete operation is added. Pre-r37 objects remain readable and unchanged; the
+new budget bounds additional retained growth, not that finite pre-existing
+baseline. Backups must preserve the admission namespace alongside artifacts;
+an absent namespace in an older backup starts the bounded additional budget.
 
 The type descriptor is canonical over SQL type ID and applicable width, scale,
 charset, offset-width, JSON, and temporal encodings. The trusted adapter builds
