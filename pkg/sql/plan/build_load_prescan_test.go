@@ -34,20 +34,30 @@ import (
 
 type prescanTrackingFS struct {
 	fileservice.ETLFileService
-	t       *testing.T
-	readers []*prescanTrackingReader
-	readErr error
+	t         *testing.T
+	readers   []*prescanTrackingReader
+	readErr   error
+	readLimit int
 }
 
 type prescanTrackingReader struct {
 	io.ReadCloser
-	readErr error
-	closes  int
+	readErr   error
+	readLimit int
+	closes    int
 }
 
 func (r *prescanTrackingReader) Read(p []byte) (int, error) {
 	if r.readErr != nil {
-		return 0, r.readErr
+		if r.readLimit == 0 {
+			return 0, r.readErr
+		}
+		if len(p) > r.readLimit {
+			p = p[:r.readLimit]
+		}
+		n, err := r.ReadCloser.Read(p)
+		r.readLimit -= n
+		return n, err
 	}
 	return r.ReadCloser.Read(p)
 }
@@ -68,7 +78,7 @@ func (fs *prescanTrackingFS) Read(ctx context.Context, vec *fileservice.IOVector
 		if entry.ReadCloserForRead == nil {
 			continue
 		}
-		r := &prescanTrackingReader{ReadCloser: *entry.ReadCloserForRead, readErr: fs.readErr}
+		r := &prescanTrackingReader{ReadCloser: *entry.ReadCloserForRead, readErr: fs.readErr, readLimit: fs.readLimit}
 		fs.readers = append(fs.readers, r)
 		fs.t.Cleanup(func() {
 			if r.closes == 0 {
@@ -78,6 +88,20 @@ func (fs *prescanTrackingFS) Read(ctx context.Context, vec *fileservice.IOVector
 		*entry.ReadCloserForRead = r
 	}
 	return nil
+}
+
+func TestIgnoredLinesFailureAfterComment(t *testing.T) {
+	scanErr := errors.New("read failed after comment")
+	fs := newPrescanTrackingFS(t, "#note\n1\n2\n")
+	fs.readErr, fs.readLimit = scanErr, len("#note\n")
+	param := &tree.ExternParam{ExParamConst: tree.ExParamConst{Filepath: "etl:/prescan.csv", Format: tree.CSV, ScanType: tree.INFILE, Option: []string{"comment", "#"}, Tail: &tree.TailParameter{IgnoredLines: 1}}, ExParam: tree.ExParam{FileService: fs}}
+	compCtx, _, _ := newLoadGlobTestCtx(t)
+	_, err := IgnoredLines(param, compCtx)
+	require.ErrorIs(t, err, scanErr)
+	require.Equal(t, uint64(1), param.Tail.IgnoredLines)
+	require.Len(t, fs.readers, 1)
+	require.Zero(t, fs.readers[0].readLimit, "comment must be read before the injected error")
+	require.Equal(t, 1, fs.readers[0].closes)
 }
 
 func newPrescanTrackingFS(t *testing.T, data string) *prescanTrackingFS {
@@ -185,6 +209,9 @@ func TestIgnoredLinesCSVGrammar(t *testing.T) {
 		{"witness", "#note\n1\n2\n3\n", "#", 1, 8},
 		{"interleaved", "#a\n1\n#b\n2\n3\n", "#", 2, 10},
 		{"multi marker", "REM note\n1\n2\n", "REM", 1, 11},
+		{"partial marker is data", "RE\nREM comment\n2\n", "REM", 1, 3},
+		{"partial marker at EOF", "RE", "REM", 1, 2},
+		{"quoted multiline marker", "\"#a\nb\"\n2\n", "#", 1, 7},
 		{"quoted marker", "\"#x\"\n2\n", "#", 1, 5},
 		{"middle marker", "a,#x\n2\n", "#", 1, 5},
 		{"default comma quoted newline", "a,\"b\nc\"\n2,x\n", "", 1, 8},
