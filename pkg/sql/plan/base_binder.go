@@ -3075,10 +3075,10 @@ func (b *baseBinder) mysqlSpecialTypeNumericContext(expr tree.Expr) bool {
 		return mysqlSpecialTypeNumericLiteral(value)
 	case *tree.UnresolvedName:
 		typ, ok := b.numericColumnType(value)
-		return ok && makeTypeByPlan2Type(typ).IsNumeric()
+		return ok && !isEnumOrSetPlanType(&typ) && makeTypeByPlan2Type(typ).IsNumeric()
 	case *tree.UnaryExpr:
 		return (value.Op == tree.UNARY_PLUS || value.Op == tree.UNARY_MINUS) &&
-			b.mysqlSpecialTypeNumericContext(value.Expr)
+			(b.mysqlSpecialTypeNumericContext(value.Expr) || b.mysqlSpecialTypeAst(value.Expr))
 	case *tree.BinaryExpr:
 		return isNumericBinaryOp(value.Op) || isBitwiseBinaryOp(value.Op)
 	case *tree.CastExpr:
