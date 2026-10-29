@@ -77,6 +77,16 @@ for different content, so a rewritten file has a new name and nothing is invalid
   written since 2026-10-29). The starting chunk and size in the name narrow a collision,
   and the remaining chance (same start, size and checksum for different content) is
   accepted.
+- A file rewritten in place, under the same `index_id` with a new checksum in its metadata
+  row, is named by its writer's own full-strength checksum, such as an MD5, not by the
+  32-bit one (decision, @cpegeric, 2026-10-29). HNSW rewrites each changed model this way
+  on every sync, and a model's size is fixed by its capacity, so its versions differ only
+  by checksum. Each sync then adds another version under the same name prefix, the 32-bit
+  collision risk grows with the number of syncs, and a collision would silently serve an
+  older model. The rewrite still needs no timestamp in the name: a reader at a snapshot
+  reads the metadata row and the chunk rows visible at that snapshot, and each version
+  has its own name. Each sync also caches a whole new version of the model; the version
+  it replaces is no longer read, so the cache evicts it first.
 
 The name carries no snapshot timestamp (decision, @cpegeric, 2026-10-24). Snapshot reads
 are handled by the storage engine and the content-addressed name: a reader resolves names
