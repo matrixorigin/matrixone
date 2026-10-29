@@ -16,7 +16,9 @@ package python
 
 import (
 	"context"
+	"fmt"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -108,4 +110,140 @@ func TestFileArtifactStoreRejectsInvalidUTF8(t *testing.T) {
 	store := newTestArtifactStore(t, DefaultMaxArtifactBytes)
 	_, err := store.Publish(context.Background(), 7, "add", string([]byte{'\xff'}))
 	require.ErrorContains(t, err, "not valid UTF-8")
+}
+
+// The wrapper deliberately has no recognized exclusive-write capability.
+type readOnlyArtifactFS struct{ fileservice.FileService }
+
+func TestFileArtifactStorePreservesLegacyReadWithoutExclusiveWriter(t *testing.T) {
+	legacy := newTestArtifactStore(t, DefaultMaxArtifactBytes)
+	const source = "def f(ctx): return 7"
+	digest := udf.PythonInlineArtifactDigest("f", source)
+	// An existing artifact from before admission is an immutable baseline.
+	require.NoError(t, legacy.fs.Write(t.Context(), fileservice.IOVector{
+		FilePath: artifactPath(7, digest),
+		Entries:  []fileservice.IOEntry{{Size: int64(len(source)), Data: []byte(source)}},
+	}))
+	store, err := NewFileArtifactStore(readOnlyArtifactFS{legacy.fs}, DefaultMaxArtifactBytes)
+	require.NoError(t, err)
+	resolved, err := store.Resolve(t.Context(), 7, "f", digest)
+	require.NoError(t, err)
+	require.Equal(t, source, resolved)
+	_, err = store.Publish(t.Context(), 7, "f", source)
+	require.NoError(t, err, "existing objects do not require new reservations")
+	_, err = store.Publish(t.Context(), 7, "f", "def f(ctx): return 8")
+	require.ErrorContains(t, err, "requires exclusive publication")
+	for _, err := range legacy.fs.List(t.Context(), "udf-artifact-admission") {
+		require.NoError(t, err)
+		t.Fatal("unsupported backend must not reserve capacity")
+	}
+}
+
+func TestFileArtifactStoreAdmissionRecoveryAndSharedDigest(t *testing.T) {
+	store := newTestArtifactStore(t, DefaultMaxArtifactBytes)
+	store.maxPublications = 1
+	ctx := t.Context()
+	source := "def f(ctx): return 1"
+	digest := udf.PythonInlineArtifactDigest("f", source)
+	// Simulate a crash after admission but before writing any source. The
+	// durable reservation must be reusable by another CN instance.
+	identity := fmt.Sprintf("7/%s", digest)
+	require.NoError(t, fileservice.WriteExclusive(ctx, store.fs, fileservice.IOVector{
+		FilePath: artifactAdmissionPath(0),
+		Entries:  []fileservice.IOEntry{{Size: int64(len(identity)), Data: []byte(identity)}},
+	}))
+	restarted, err := NewFileArtifactStore(store.fs, DefaultMaxArtifactBytes)
+	require.NoError(t, err)
+	restarted.maxPublications = 1
+	_, err = restarted.Publish(ctx, 7, "f", source)
+	require.NoError(t, err)
+	// A failed catalog transaction does not release this identity: a second
+	// committed revision or a snapshot can already depend on the same digest.
+	_, err = store.Publish(ctx, 7, "f", source)
+	require.NoError(t, err)
+	_, err = restarted.Publish(ctx, 8, "f", source)
+	require.ErrorContains(t, err, "publication budget")
+	_, err = restarted.Publish(ctx, 7, "f", "def f(ctx): return 2")
+	require.ErrorContains(t, err, "publication budget")
+	resolved, err := restarted.Resolve(ctx, 7, "f", digest)
+	require.NoError(t, err)
+	require.Equal(t, source, resolved)
+	for _, dir := range []string{"udf-artifacts/7", "udf-artifact-admission/v1"} {
+		count := 0
+		for entry, err := range store.fs.List(ctx, dir) {
+			require.NoError(t, err)
+			require.False(t, entry.IsDir)
+			count++
+		}
+		require.Equal(t, 1, count)
+	}
+}
+
+func TestFileArtifactStoreConcurrentAdmission(t *testing.T) {
+	for _, same := range []bool{false, true} {
+		t.Run(fmt.Sprintf("shared_digest_%t", same), func(t *testing.T) {
+			first := newTestArtifactStore(t, DefaultMaxArtifactBytes)
+			second, err := NewFileArtifactStore(first.fs, DefaultMaxArtifactBytes)
+			require.NoError(t, err)
+			first.maxPublications, second.maxPublications = 1, 1
+			start := make(chan struct{})
+			results := make(chan error, 2)
+			var wg sync.WaitGroup
+			for i, store := range []*FileArtifactStore{first, second} {
+				wg.Add(1)
+				go func(i int, store *FileArtifactStore) {
+					defer wg.Done()
+					<-start
+					if same {
+						i = 0
+					}
+					_, err := store.Publish(t.Context(), 7, "f", fmt.Sprintf("def f(ctx): return %d", i))
+					results <- err
+				}(i, store)
+			}
+			close(start)
+			wg.Wait()
+			close(results)
+			success := 0
+			for err := range results {
+				if err == nil {
+					success++
+				} else {
+					require.ErrorContains(t, err, "publication budget")
+				}
+			}
+			if same {
+				require.Equal(t, 2, success)
+			} else {
+				require.Equal(t, 1, success)
+			}
+			count := 0
+			for entry, err := range first.fs.List(t.Context(), "udf-artifacts/7") {
+				require.NoError(t, err)
+				require.False(t, entry.IsDir)
+				count++
+			}
+			require.Equal(t, 1, count, "losing admission must not write another object")
+		})
+	}
+}
+
+func TestFileArtifactStoreAdmissionCapacityTwo(t *testing.T) {
+	store := newTestArtifactStore(t, DefaultMaxArtifactBytes)
+	store.maxPublications = 2
+	for _, source := range []string{"def f(ctx): return 1", "def f(ctx): return 2"} {
+		_, err := store.Publish(t.Context(), 7, "f", source)
+		require.NoError(t, err)
+	}
+	_, err := store.Publish(t.Context(), 7, "f", "def f(ctx): return 3")
+	require.ErrorContains(t, err, "publication budget")
+	for _, dir := range []string{"udf-artifacts/7", "udf-artifact-admission/v1"} {
+		count := 0
+		for entry, err := range store.fs.List(t.Context(), dir) {
+			require.NoError(t, err)
+			require.False(t, entry.IsDir)
+			count++
+		}
+		require.Equal(t, 2, count)
+	}
 }

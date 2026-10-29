@@ -170,6 +170,29 @@ func TestPythonRoutineSQLBoundaries(t *testing.T) {
 		require.NoError(t, conn.QueryRowContext(ctx, "select utf8_varchar()").Scan(&out))
 		require.Equal(t, strings.Repeat("中", 86), out)
 	})
+	t.Run("failed_publication_recovery_and_shared_digest", func(t *testing.T) {
+		for i := 0; i < 2; i++ {
+			require.Error(t, create("bad_artifact", "int", fmt.Sprintf("def f( %d", i), "scalar"))
+		}
+		var count int
+		require.NoError(t, conn.QueryRowContext(ctx, "select count(*) from mo_catalog.mo_user_defined_function where db='python_boundary' and name='bad_artifact'").Scan(&count))
+		require.Zero(t, count)
+		const source = "def f(ctx): return 43"
+		// Validation succeeds, but the missing target database rejects the
+		// catalog transaction after publication. Retrying reuses the digest.
+		require.Error(t, create("python_boundary_missing.recovered_artifact", "int", source, "scalar"))
+		require.NoError(t, create("recovered_artifact", "int", source, "scalar"))
+		require.NoError(t, create("shared_artifact_peer", "int", source, "scalar"))
+		_, err := conn.ExecContext(ctx, "create or replace function shared_artifact_peer() returns int language python as 'def f(' handler 'f'")
+		require.Error(t, err)
+		var result int
+		require.NoError(t, conn.QueryRowContext(ctx, "select shared_artifact_peer()").Scan(&result))
+		require.Equal(t, 43, result)
+		_, err = conn.ExecContext(ctx, "drop function shared_artifact_peer()")
+		require.NoError(t, err)
+		require.NoError(t, conn.QueryRowContext(ctx, "select recovered_artifact()").Scan(&result))
+		require.Equal(t, 43, result, "dropping one reference must not delete another revision's source")
+	})
 	t.Run("catalog_envelope_and_failed_replacement", func(t *testing.T) {
 		require.NoError(t, create("keep_revision", "int", "def f(ctx): return 7", "scalar"))
 		var saved string

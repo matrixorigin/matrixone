@@ -16,6 +16,8 @@ package python
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/binary"
 	"fmt"
 	"strings"
 	"unicode/utf8"
@@ -34,6 +36,10 @@ import (
 // corrupt or malicious object cannot turn an artifact lookup into an
 // unbounded allocation.
 const DefaultMaxArtifactBytes int64 = 1 << 20
+
+// Admission is a backing-store-wide lifetime budget, including abandoned
+// publications. Never recycle slots: revisions and snapshots may share a digest.
+const DefaultMaxArtifactPublications = 1024
 
 // ArtifactResolver supplies the immutable source bytes for an exact catalog
 // artifact reference. The resolver is deliberately keyed by account and
@@ -63,8 +69,9 @@ type ArtifactStore interface {
 // the content digest is global, preventing one account from using another
 // account's artifact as an execution capability.
 type FileArtifactStore struct {
-	fs      fileservice.FileService
-	maxSize int64
+	fs              fileservice.FileService
+	maxSize         int64
+	maxPublications int
 }
 
 var _ ArtifactStore = (*FileArtifactStore)(nil)
@@ -83,7 +90,7 @@ func NewFileArtifactStore(fs fileservice.FileService, maxSize int64) (*FileArtif
 	if maxSize > DefaultMaxArtifactBytes {
 		return nil, udferr.Newf("UNSUPPORTED_ROUTINE_VERSION: Python artifact limit %d exceeds the current contract limit %d", maxSize, DefaultMaxArtifactBytes)
 	}
-	return &FileArtifactStore{fs: shared, maxSize: maxSize}, nil
+	return &FileArtifactStore{fs: shared, maxSize: maxSize, maxPublications: DefaultMaxArtifactPublications}, nil
 }
 
 func (s *FileArtifactStore) Publish(ctx context.Context, accountID uint64, handler, source string) (string, error) {
@@ -98,12 +105,25 @@ func (s *FileArtifactStore) Publish(ctx context.Context, accountID uint64, handl
 		return "", err
 	}
 	path := artifactPath(accountID, digest)
+	// Existing immutable objects need no new capacity, including objects from
+	// before admission was introduced. Never remove or overwrite them.
+	if _, statErr := s.fs.StatFile(ctx, path); statErr == nil {
+		return s.existingArtifact(ctx, accountID, handler, source, digest)
+	} else if !moerr.IsMoErrCode(statErr, moerr.ErrFileNotFound) {
+		return "", statErr
+	}
+	if err := fileservice.CheckExclusiveWrite(s.fs); err != nil {
+		return "", errutil.Wrapf(err, "RESOURCE_UNAVAILABLE: Python artifact store requires exclusive publication")
+	}
+	if err := s.admitPublication(ctx, accountID, digest); err != nil {
+		return "", err
+	}
 	data := []byte(source)
 	// FileService implementations may retain the caller's IOEntry until the
 	// write returns. Give the store its own immutable backing so later caller
 	// mutation cannot alter the bytes whose digest is being published.
 	owned := append([]byte(nil), data...)
-	err = s.fs.Write(ctx, fileservice.IOVector{
+	err = fileservice.WriteExclusive(ctx, s.fs, fileservice.IOVector{
 		FilePath: path,
 		Entries:  []fileservice.IOEntry{{Offset: 0, Size: int64(len(owned)), Data: owned}},
 	})
@@ -116,6 +136,10 @@ func (s *FileArtifactStore) Publish(ctx context.Context, accountID uint64, handl
 	// A concurrent or retrying publisher is successful only after reading and
 	// validating the existing object. This closes the write-once collision
 	// boundary instead of treating path existence as proof of content identity.
+	return s.existingArtifact(ctx, accountID, handler, source, digest)
+}
+
+func (s *FileArtifactStore) existingArtifact(ctx context.Context, accountID uint64, handler, source, digest string) (string, error) {
 	existing, resolveErr := s.Resolve(ctx, accountID, handler, digest)
 	if resolveErr != nil {
 		return "", errutil.Wrapf(resolveErr, "python artifact publish %s found an invalid existing object", digest)
@@ -124,6 +148,58 @@ func (s *FileArtifactStore) Publish(ctx context.Context, accountID uint64, handl
 		return "", udferr.Newf("python artifact publish %s encountered a digest collision", digest)
 	}
 	return digest, nil
+}
+
+func artifactAdmissionPath(slot int) string {
+	return fileservice.JoinPath(defines.SharedFileServiceName, fmt.Sprintf("udf-artifact-admission/v1/%04d", slot))
+}
+
+func (s *FileArtifactStore) admitPublication(ctx context.Context, accountID uint64, digest string) error {
+	identity := fmt.Sprintf("%d/%s", accountID, digest)
+	hash := sha256.Sum256([]byte(identity))
+	start := int(binary.BigEndian.Uint16(hash[:2])) % s.maxPublications
+	for offset := 0; offset < s.maxPublications; offset++ {
+		path := artifactAdmissionPath((start + offset) % s.maxPublications)
+		err := fileservice.WriteExclusive(ctx, s.fs, fileservice.IOVector{
+			FilePath: path,
+			Entries:  []fileservice.IOEntry{{Offset: 0, Size: int64(len(identity)), Data: []byte(identity)}},
+		})
+		if err == nil {
+			return nil
+		}
+		if !moerr.IsMoErrCode(err, moerr.ErrFileAlreadyExists) {
+			return errutil.Wrapf(err, "python artifact admission")
+		}
+		reserved, err := s.admissionIdentity(ctx, path)
+		if err != nil {
+			return err
+		}
+		if reserved == identity {
+			return nil
+		}
+	}
+	return udferr.Newf("RESOURCE_EXHAUSTED: Python artifact publication budget of %d identities is full", s.maxPublications)
+}
+
+func (s *FileArtifactStore) admissionIdentity(ctx context.Context, path string) (string, error) {
+	entry, err := s.fs.StatFile(ctx, path)
+	if err != nil {
+		return "", err
+	}
+	// A bounded immutable marker is sufficient for crash recovery. Release
+	// read ownership on each probe, rather than retaining it across the loop.
+	if entry == nil || entry.IsDir || entry.Size <= 0 || entry.Size > 85 {
+		return "", udferr.Newf("RESOURCE_UNAVAILABLE: invalid Python artifact admission slot")
+	}
+	v := &fileservice.IOVector{FilePath: path, Entries: []fileservice.IOEntry{{Offset: 0, Size: entry.Size, Data: make([]byte, entry.Size)}}}
+	defer v.Release()
+	if err := s.fs.Read(ctx, v); err != nil {
+		return "", err
+	}
+	if len(v.Entries) != 1 || int64(len(v.Entries[0].Data)) != entry.Size {
+		return "", udferr.Newf("RESOURCE_UNAVAILABLE: incomplete Python artifact admission slot")
+	}
+	return string(v.Entries[0].Data), nil
 }
 
 func (s *FileArtifactStore) Resolve(ctx context.Context, accountID uint64, handler, digest string) (string, error) {
@@ -152,6 +228,7 @@ func (s *FileArtifactStore) Resolve(ctx context.Context, accountID uint64, handl
 		FilePath: path,
 		Entries:  []fileservice.IOEntry{{Offset: 0, Size: entry.Size, Data: data}},
 	}
+	defer readVector.Release()
 	if err := s.fs.Read(ctx, readVector); err != nil {
 		return "", errutil.Wrapf(err, "RESOURCE_UNAVAILABLE: Python artifact %s cannot be read", digest)
 	}
@@ -193,6 +270,9 @@ func (s *FileArtifactStore) validate() error {
 	}
 	if s.maxSize <= 0 {
 		return udferr.Newf("RESOURCE_UNAVAILABLE: Python artifact store has an invalid size limit")
+	}
+	if s.maxPublications <= 0 || s.maxPublications > DefaultMaxArtifactPublications {
+		return udferr.Newf("RESOURCE_UNAVAILABLE: Python artifact store has an invalid publication budget")
 	}
 	return nil
 }
