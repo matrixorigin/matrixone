@@ -670,4 +670,21 @@ order by id;
 1  ¦  false  𝄀
 2  ¦  false  𝄀
 3  ¦  true
+insert into t_case_nullable_condition values (4, 1);
+select id, case when cond then case when id = 4 then null else id end else null end as case_value
+from t_case_nullable_condition order by id;
+➤ id[4,32,0]  ¦  case_value[4,32,0]  𝄀
+1  ¦  null  𝄀
+2  ¦  null  𝄀
+3  ¦  3  𝄀
+4  ¦  null
+select id, case when cond then cast(case when id = 3 then '7' else 'bad' end as decimal(18,2)) else null end as case_value
+from t_case_nullable_condition where id < 4 order by id;
+➤ id[4,32,0]  ¦  case_value[3,18,2]  𝄀
+1  ¦  null  𝄀
+2  ¦  null  𝄀
+3  ¦  7.00
+select case when cond then cast(case when id = 3 then '7' else 'bad' end as decimal(18,2)) else null end as case_value
+from t_case_nullable_condition where id = 4;
+invalid input: "bad" is invalid decimal string
 drop table t_case_nullable_condition;
