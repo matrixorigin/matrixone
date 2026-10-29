@@ -1469,7 +1469,7 @@ func Quote(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *pr
 		}
 		value, null := parameter.GetStrValue(row)
 		if null {
-			if err := rs.AppendBytes([]byte("NULL"), false); err != nil {
+			if err := rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
 			continue
