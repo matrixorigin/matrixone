@@ -57,10 +57,29 @@ func rawPreparedCalendarMarker(expr *Expr) bool {
 }
 
 func preparedRawCalendarResult(name string, args []*Expr) *types.Type {
-	if (name != "date_add" && name != "date_sub") || len(args) != 2 || !rawPreparedCalendarMarker(args[0]) {
+	if len(args) != 2 || args[0] == nil || args[1] == nil {
 		return nil
 	}
-	list := args[1].GetList()
+	date, interval := args[0], args[1]
+	switch name {
+	case "date_add", "date_sub":
+	case "+":
+		if args[0].Typ.Id == int32(types.T_interval) {
+			date, interval = args[1], args[0]
+		} else if args[1].Typ.Id != int32(types.T_interval) {
+			return nil
+		}
+	case "-":
+		if args[1].Typ.Id != int32(types.T_interval) {
+			return nil
+		}
+	default:
+		return nil
+	}
+	if !rawPreparedCalendarMarker(date) {
+		return nil
+	}
+	list := interval.GetList()
 	if list == nil || len(list.List) < 2 {
 		return nil
 	}
