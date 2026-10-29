@@ -663,3 +663,70 @@ func TestReadOnlyGateRemapEffectiveDatabase(t *testing.T) {
 	require.NoError(t, enforceReadOnlyTxnAccessMode(ses, remapCtx(insertOkt), insertOkt, ""))
 	require.NoError(t, enforceReadOnlyTxnAccessMode(ses, remapCtx(insertOkt), insertOkt, "r7_src"))
 }
+
+func TestSequenceMutationClassification(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ses := newTestSession(t, ctrl)
+	ses.SetDatabaseName("testdb")
+	ctx := context.Background()
+
+	// Read-classified carriers of sequence-mutating builtins must be gated:
+	// projection, expression containers, sub-selects, CTE bodies, window
+	// frames, ORDER BY, LIMIT and user-variable assignment.
+	for _, sql := range []string{
+		"select nextval('s')",
+		"select nextval(seq_col) from t",
+		"select setval('s', 7)",
+		"select setval('s', 7, false)",
+		"select NEXTVAL('s')",
+		"select 1 + nextval('s')",
+		"select coalesce(nextval('s'), 0)",
+		"select case when nextval('s') > 1 then 1 else 0 end",
+		"select a from t where b = nextval('s')",
+		"select a from t where b in (select nextval('s'))",
+		"select a from (select nextval('s') as b) x",
+		"with c as (select nextval('s') as b) select b from c",
+		"select a from t join (select nextval('s') as b) x on a = x.b",
+		"select sum(a) over (order by nextval('s')) from t",
+		"select a from t order by nextval('s')",
+		"select a from t limit nextval('s')",
+		"explain analyze select nextval('s')",
+		"explain phyplan select nextval('s')",
+		"set @v = nextval('s')",
+		`(select nextval('s'))`,
+		"select setval('s', nextval('s'))",
+	} {
+		stmt := parseSingleStatement(t, sql)
+		require.True(t, statementRequiresPersistentWriteAccess(ses, stmt, "testdb"), sql)
+	}
+
+	// Session-local sequence reads and ordinary reads stay exempt.
+	for _, sql := range []string{
+		"select currval('s')",
+		"select lastval()",
+		"select curr_val('s')",
+		"select a from t",
+		"set @v = 1",
+		"set @v = currval('s')",
+	} {
+		stmt := parseSingleStatement(t, sql)
+		require.False(t, statementRequiresPersistentWriteAccess(ses, stmt, "testdb"), sql)
+	}
+
+	// Gate-level: a NEXTVAL read-carrier raises 1792 under the session
+	// default, then a CURRVAL read still runs — the rejection leaves the
+	// transaction usable.
+	require.NoError(t, ses.SetSessionSysVar(ctx, transactionReadOnlySystemVariable, int64(1)))
+	defer func() {
+		_ = ses.SetSessionSysVar(ctx, transactionReadOnlySystemVariable, int64(0))
+	}()
+	nextval := parseSingleStatement(t, "select nextval('s')")
+	execCtx := &ExecCtx{reqCtx: ctx, ses: ses, stmt: nextval, txnOpt: FeTxnOption{}, input: &UserInput{}}
+	err := enforceReadOnlyTxnAccessMode(ses, execCtx, nextval, "testdb")
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrCantExecuteInReadOnlyTransaction))
+	currval := parseSingleStatement(t, "select currval('s')")
+	execCtx2 := &ExecCtx{reqCtx: ctx, ses: ses, stmt: currval, txnOpt: FeTxnOption{}, input: &UserInput{}}
+	require.NoError(t, enforceReadOnlyTxnAccessMode(ses, execCtx2, currval, "testdb"))
+}

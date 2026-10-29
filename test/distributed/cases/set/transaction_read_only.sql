@@ -379,5 +379,25 @@ drop table r7_dst.leak;
 drop database r7_src;
 drop database r7_dst;
 
+-- Sequence-mutating builtins persist catalog state through the statement's
+-- own transaction: NEXTVAL/SETVAL inside a read-classified statement are
+-- gated like writes, while session-local CURRVAL stays readable after the
+-- rejection. A blocked NEXTVAL consumes nothing: the counter resumes exactly
+-- where the last successful call left it.
+create sequence r8_sq;
+select nextval('r8_sq');
+set session transaction_read_only = 1;
+select nextval('r8_sq');
+select currval('r8_sq');
+select setval('r8_sq', 100);
+set session transaction_read_only = 0;
+select nextval('r8_sq');
+prepare r8_pp from 'select nextval(''r8_sq'')';
+set session transaction_read_only = 1;
+execute r8_pp;
+set session transaction_read_only = 0;
+deallocate prepare r8_pp;
+drop sequence r8_sq;
+
 drop table t;
 drop database txn_readonly;

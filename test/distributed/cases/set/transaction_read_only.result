@@ -416,5 +416,28 @@ use txn_readonly;
 drop table r7_dst.leak;
 drop database r7_src;
 drop database r7_dst;
+create sequence r8_sq;
+select nextval('r8_sq');
+nextval(r8_sq)
+1
+set session transaction_read_only = 1;
+select nextval('r8_sq');
+Cannot execute statement in a READ ONLY transaction.
+select currval('r8_sq');
+currval(r8_sq)
+1
+select setval('r8_sq', 100);
+Cannot execute statement in a READ ONLY transaction.
+set session transaction_read_only = 0;
+select nextval('r8_sq');
+nextval(r8_sq)
+2
+prepare r8_pp from 'select nextval(''r8_sq'')';
+set session transaction_read_only = 1;
+execute r8_pp;
+Cannot execute statement in a READ ONLY transaction.
+set session transaction_read_only = 0;
+deallocate prepare r8_pp;
+drop sequence r8_sq;
 drop table t;
 drop database txn_readonly;

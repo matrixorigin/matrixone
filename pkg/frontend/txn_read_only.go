@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"context"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -323,6 +324,347 @@ func statementRequiresPersistentWriteAccess(
 		*tree.DataBranchDeleteTable, *tree.DataBranchDeleteDatabase,
 		*tree.DataBranchMerge, *tree.DataBranchPick:
 		return true
+	}
+	// A read-classified statement can still mutate persistent state through a
+	// sequence-mutating builtin: NEXTVAL/SETVAL rewrite the catalog counter
+	// inside the statement's own transaction (seqfunc.go) without ever
+	// becoming a write-classified statement. Gate them like writes; their
+	// session-local reads (CURRVAL/LASTVAL) stay exempt.
+	return statementMutatesSequence(stmt)
+}
+
+// sequenceMutationFunctions are the builtins that persistently mutate catalog
+// sequence state. Function names resolve case-insensitively
+// (function/function_id.go registers them lower-case).
+var sequenceMutationFunctions = map[string]struct{}{
+	"nextval": {},
+	"setval":  {},
+}
+
+// statementMutatesSequence reports whether stmt evaluates a sequence-mutating
+// builtin anywhere it can be reached at execution time. Only statement kinds
+// that reach this point read-classified can smuggle the call — selecting the
+// value, hiding it in a sub-select or expression container, or assigning it
+// to a user variable through SET. Write-classified statements are gated long
+// before this walk.
+func statementMutatesSequence(stmt tree.Statement) bool {
+	switch st := stmt.(type) {
+	case *tree.Select:
+		return selectMentionsSequenceMutation(st)
+	case *tree.ParenSelect:
+		return selectMentionsSequenceMutation(st.Select)
+	case *tree.SetVar:
+		for _, assignment := range st.Assignments {
+			if assignment == nil {
+				continue
+			}
+			if exprMentionsSequenceMutation(assignment.Value) ||
+				exprMentionsSequenceMutation(assignment.Reserved) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func selectMentionsSequenceMutation(sel *tree.Select) bool {
+	if sel == nil {
+		return false
+	}
+	if sel.With != nil {
+		for _, cte := range sel.With.CTEs {
+			if cte == nil {
+				continue
+			}
+			if body, ok := cte.Stmt.(tree.SelectStatement); ok {
+				if selectStatementMentionsSequenceMutation(body) {
+					return true
+				}
+			} else if statementMutatesSequence(cte.Stmt) {
+				return true
+			}
+		}
+	}
+	if selectStatementMentionsSequenceMutation(sel.Select) {
+		return true
+	}
+	if orderByMentionsSequenceMutation(sel.OrderBy) {
+		return true
+	}
+	if sel.Limit != nil &&
+		(exprMentionsSequenceMutation(sel.Limit.Offset) ||
+			exprMentionsSequenceMutation(sel.Limit.Count)) {
+		return true
+	}
+	if sel.TimeWindow != nil {
+		tw := sel.TimeWindow
+		if tw.Interval != nil && exprMentionsSequenceMutation(tw.Interval.Val) {
+			return true
+		}
+		if tw.Sliding != nil && exprMentionsSequenceMutation(tw.Sliding.Val) {
+			return true
+		}
+		if tw.Fill != nil && exprMentionsSequenceMutation(tw.Fill.Val) {
+			return true
+		}
+	}
+	return false
+}
+
+func selectStatementMentionsSequenceMutation(s tree.SelectStatement) bool {
+	switch c := s.(type) {
+	case nil:
+		return false
+	case *tree.SelectClause:
+		if c.From != nil {
+			for _, te := range c.From.Tables {
+				if tableExprMentionsSequenceMutation(te) {
+					return true
+				}
+			}
+		}
+		for _, se := range c.Exprs {
+			if exprMentionsSequenceMutation(se.Expr) {
+				return true
+			}
+		}
+		if c.Where != nil && exprMentionsSequenceMutation(c.Where.Expr) {
+			return true
+		}
+		if c.Having != nil && exprMentionsSequenceMutation(c.Having.Expr) {
+			return true
+		}
+		if c.GroupBy != nil {
+			for _, exprs := range c.GroupBy.GroupByExprsList {
+				for _, e := range exprs {
+					if exprMentionsSequenceMutation(e) {
+						return true
+					}
+				}
+			}
+			for _, e := range c.GroupBy.GroupingSet {
+				if exprMentionsSequenceMutation(e) {
+					return true
+				}
+			}
+		}
+		for _, definition := range c.Windows {
+			if definition != nil && windowSpecMentionsSequenceMutation(definition.Spec) {
+				return true
+			}
+		}
+		return false
+	case *tree.UnionClause:
+		return selectStatementMentionsSequenceMutation(c.Left) ||
+			selectStatementMentionsSequenceMutation(c.Right)
+	case *tree.ParenSelect:
+		return selectMentionsSequenceMutation(c.Select)
+	case *tree.Select:
+		return selectMentionsSequenceMutation(c)
+	case *tree.ValuesClause:
+		for _, row := range c.Rows {
+			for _, e := range row {
+				if exprMentionsSequenceMutation(e) {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+func tableExprMentionsSequenceMutation(te tree.TableExpr) bool {
+	switch t := te.(type) {
+	case nil:
+		return false
+	case *tree.AliasedTableExpr:
+		return tableExprMentionsSequenceMutation(t.Expr)
+	case *tree.JoinTableExpr:
+		if tableExprMentionsSequenceMutation(t.Left) || tableExprMentionsSequenceMutation(t.Right) {
+			return true
+		}
+		if on, ok := t.Cond.(*tree.OnJoinCond); ok && exprMentionsSequenceMutation(on.Expr) {
+			return true
+		}
+		return false
+	case *tree.ApplyTableExpr:
+		return tableExprMentionsSequenceMutation(t.Left) || tableExprMentionsSequenceMutation(t.Right)
+	case *tree.ParenTableExpr:
+		return tableExprMentionsSequenceMutation(t.Expr)
+	case *tree.Select:
+		return selectMentionsSequenceMutation(t)
+	case *tree.ParenSelect:
+		return selectMentionsSequenceMutation(t.Select)
+	case *tree.Subquery:
+		return selectStatementMentionsSequenceMutation(t.Select)
+	}
+	return false
+}
+
+func orderByMentionsSequenceMutation(orderBy tree.OrderBy) bool {
+	for _, order := range orderBy {
+		if order != nil && exprMentionsSequenceMutation(order.Expr) {
+			return true
+		}
+	}
+	return false
+}
+
+func windowSpecMentionsSequenceMutation(spec *tree.WindowSpec) bool {
+	if spec == nil {
+		return false
+	}
+	for _, e := range spec.PartitionBy {
+		if exprMentionsSequenceMutation(e) {
+			return true
+		}
+	}
+	if orderByMentionsSequenceMutation(spec.OrderBy) {
+		return true
+	}
+	if spec.Frame != nil {
+		frame := spec.Frame
+		for _, bound := range []*tree.FrameBound{frame.Start, frame.End} {
+			if bound != nil && exprMentionsSequenceMutation(bound.Expr) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// exprMentionsSequenceMutation mirrors remapDbInExpr (remap_db.go): every
+// expression container a function call can hide in is descended, including
+// nested sub-selects. Keep aligned with pkg/sql/parsers/tree/expr.go when an
+// expression wrapper with children is added.
+func exprMentionsSequenceMutation(expr tree.Expr) bool {
+	switch e := expr.(type) {
+	case nil:
+		return false
+	case *tree.Subquery:
+		return selectStatementMentionsSequenceMutation(e.Select)
+	case *tree.ExprList:
+		for _, sub := range e.Exprs {
+			if exprMentionsSequenceMutation(sub) {
+				return true
+			}
+		}
+		return false
+	case *tree.ParenExpr:
+		return exprMentionsSequenceMutation(e.Expr)
+	case *tree.NotExpr:
+		return exprMentionsSequenceMutation(e.Expr)
+	case *tree.IsNullExpr:
+		return exprMentionsSequenceMutation(e.Expr)
+	case *tree.IsNotNullExpr:
+		return exprMentionsSequenceMutation(e.Expr)
+	case *tree.IsUnknownExpr:
+		return exprMentionsSequenceMutation(e.Expr)
+	case *tree.IsNotUnknownExpr:
+		return exprMentionsSequenceMutation(e.Expr)
+	case *tree.IsTrueExpr:
+		return exprMentionsSequenceMutation(e.Expr)
+	case *tree.IsNotTrueExpr:
+		return exprMentionsSequenceMutation(e.Expr)
+	case *tree.IsFalseExpr:
+		return exprMentionsSequenceMutation(e.Expr)
+	case *tree.IsNotFalseExpr:
+		return exprMentionsSequenceMutation(e.Expr)
+	case *tree.AndExpr:
+		return exprMentionsSequenceMutation(e.Left) || exprMentionsSequenceMutation(e.Right)
+	case *tree.OrExpr:
+		return exprMentionsSequenceMutation(e.Left) || exprMentionsSequenceMutation(e.Right)
+	case *tree.XorExpr:
+		return exprMentionsSequenceMutation(e.Left) || exprMentionsSequenceMutation(e.Right)
+	case *tree.ComparisonExpr:
+		return exprMentionsSequenceMutation(e.Left) || exprMentionsSequenceMutation(e.Right) ||
+			exprMentionsSequenceMutation(e.Escape)
+	case *tree.RangeCond:
+		return exprMentionsSequenceMutation(e.Left) || exprMentionsSequenceMutation(e.From) ||
+			exprMentionsSequenceMutation(e.To)
+	case *tree.UnaryExpr:
+		return exprMentionsSequenceMutation(e.Expr)
+	case *tree.BinaryExpr:
+		return exprMentionsSequenceMutation(e.Left) || exprMentionsSequenceMutation(e.Right)
+	case *tree.CastExpr:
+		return exprMentionsSequenceMutation(e.Expr)
+	case *tree.CollateExpr:
+		return exprMentionsSequenceMutation(e.Expr)
+	case *tree.BitCastExpr:
+		return exprMentionsSequenceMutation(e.Expr)
+	case *tree.SerialExtractExpr:
+		return exprMentionsSequenceMutation(e.SerialExpr) || exprMentionsSequenceMutation(e.IndexExpr)
+	case *tree.IntervalExpr:
+		return exprMentionsSequenceMutation(e.Expr)
+	case *tree.DefaultVal:
+		return exprMentionsSequenceMutation(e.Expr)
+	case *tree.VarExpr:
+		return exprMentionsSequenceMutation(e.Expr)
+	case *tree.FuncExpr:
+		if sequenceFuncExprMutates(e) {
+			return true
+		}
+		for _, sub := range e.Exprs {
+			if exprMentionsSequenceMutation(sub) {
+				return true
+			}
+		}
+		if orderByMentionsSequenceMutation(e.OrderBy) {
+			return true
+		}
+		return windowSpecMentionsSequenceMutation(e.WindowSpec)
+	case *tree.Tuple:
+		for _, sub := range e.Exprs {
+			if exprMentionsSequenceMutation(sub) {
+				return true
+			}
+		}
+		return false
+	case *tree.CaseExpr:
+		if exprMentionsSequenceMutation(e.Expr) {
+			return true
+		}
+		for _, when := range e.Whens {
+			if when == nil {
+				continue
+			}
+			if exprMentionsSequenceMutation(when.Cond) || exprMentionsSequenceMutation(when.Val) {
+				return true
+			}
+		}
+		return exprMentionsSequenceMutation(e.Else)
+	case *tree.SampleExpr:
+		columns, _ := e.GetColumns()
+		for _, sub := range columns {
+			if exprMentionsSequenceMutation(sub) {
+				return true
+			}
+		}
+		return false
+	case *tree.FullTextMatchExpr:
+		for _, keyPart := range e.KeyParts {
+			if keyPart != nil && exprMentionsSequenceMutation(keyPart.Expr) {
+				return true
+			}
+		}
+		return exprMentionsSequenceMutation(e.Pattern)
+	}
+	return false
+}
+
+// sequenceFuncExprMutates reports whether a function call names a builtin
+// that persists sequence state, matched unqualified or schema-qualified,
+// mirroring how the builtin registry resolves names.
+func sequenceFuncExprMutates(fn *tree.FuncExpr) bool {
+	if fn.FuncName != nil {
+		_, mutates := sequenceMutationFunctions[strings.ToLower(fn.FuncName.Origin())]
+		if mutates {
+			return true
+		}
+	}
+	if name, ok := fn.Func.FunctionReference.(*tree.UnresolvedName); ok {
+		_, mutates := sequenceMutationFunctions[strings.ToLower(name.ColName())]
+		return mutates
 	}
 	return false
 }
