@@ -6774,7 +6774,7 @@ func buildDropIndex(stmt *tree.DropIndex, ctx CompilerContext) (*Plan, error) {
 			// An empty index name represents the no-op path for DROP INDEX IF EXISTS.
 			dropIndex.IndexName = ""
 		} else {
-			return nil, moerr.NewInternalErrorf(ctx.GetContext(), "not found index: %s", requestedIndexName)
+			return nil, moerr.NewErrCantDropFieldOrKey(ctx.GetContext(), requestedIndexName)
 		}
 	} else if err := checkDropReferencedKeyForeignKeyDependency(ctx, tableDef, dropIndex.IndexName, nil); err != nil {
 		return nil, err
