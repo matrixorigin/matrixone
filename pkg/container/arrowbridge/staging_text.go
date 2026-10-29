@@ -153,16 +153,38 @@ func appendArrowStageTextValue(
 	return vector.AppendBytes(vec, []byte(text), false, mp)
 }
 
+const (
+	// arrowDecimal128MaxDigits and arrowDecimal256MaxDigits bound the
+	// coefficient digits the physical Arrow decimal storage can hold:
+	// BigInt interprets the value as a signed two's-complement integer, so
+	// Decimal128 carries at most |2^127| (39 digits) and Decimal256 at most
+	// |2^255| (77 digits), whatever precision the schema declares.
+	arrowDecimal128MaxDigits = 39
+	arrowDecimal256MaxDigits = 77
+	// stagingFixedPointMaxDigitSpan bounds the digit run the fixed-point
+	// staging form can emit: the well-formedness gate caps the source scale
+	// at 76, so zero padding grows the run to at most scale+1 characters
+	// before the point is inserted.
+	stagingFixedPointMaxDigitSpan = 77
+	// stagingScientificMaxSuffix bounds the bytes the scientific staging form
+	// appends past the coefficient digits: the 'e' separator plus the decimal
+	// text of the negated int32 scale (one sign plus up to 10 digits).
+	stagingScientificMaxSuffix = 12
+)
+
 // renderedStageTextBound conservatively upper-bounds the rendered text
 // payload one staged row can produce for the given Arrow source type:
-// decimals render sign + up to precision digits + a decimal point (plus one
-// leading zero when scale == precision), integers at most 20 digits + sign,
-// floats shortest round-trip text with a small exponent, and bools a single
-// byte. Batch budgeting must count this payload or a window of individually
-// valid rows can exceed the configured byte budget once rendered.
+// decimals charge the larger of their two render forms (see
+// renderedStageDecimalBound), integers at most 20 digits + sign, floats
+// shortest round-trip text with a small exponent, and bools a single byte.
+// Batch budgeting must count this payload or a window of individually valid
+// rows can exceed the configured byte budget once rendered.
 func renderedStageTextBound(dt arrow.DataType) (int, error) {
-	if info, ok := arrowDecimalTypeInfoOf(dt); ok {
-		return int(info.precision) + 3, nil
+	switch dt.(type) {
+	case *arrow.Decimal128Type:
+		return renderedStageDecimalBound(arrowDecimal128MaxDigits), nil
+	case *arrow.Decimal256Type:
+		return renderedStageDecimalBound(arrowDecimal256MaxDigits), nil
 	}
 	switch dt.ID() {
 	case arrow.INT8, arrow.INT16, arrow.INT32, arrow.INT64,
@@ -174,6 +196,19 @@ func renderedStageTextBound(dt arrow.DataType) (int, error) {
 		return 1, nil
 	}
 	return 0, moerr.NewInvalidInputNoCtxf("unsupported Arrow staged text type %s", dt)
+}
+
+// renderedStageDecimalBound upper-bounds the rendered bytes of one staged
+// decimal row as the larger of the two reachable render forms: fixed-point
+// text needs a sign, the coefficient digits zero-padded to the source span,
+// and the point; bounded scientific text needs a sign, the physical
+// coefficient digits, and the exponent suffix. Both forms charge the
+// physical digit span rather than the declared precision, so no schema claim
+// can under-budget a window of individually valid rows.
+func renderedStageDecimalBound(maxDigits int) int {
+	fixedPoint := 1 + max(maxDigits, stagingFixedPointMaxDigitSpan) + 1
+	scientific := 1 + maxDigits + stagingScientificMaxSuffix
+	return max(fixedPoint, scientific)
 }
 
 // isArrowStageTextSource reports the Arrow source kinds that materialize

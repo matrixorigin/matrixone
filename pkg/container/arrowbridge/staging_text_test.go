@@ -18,6 +18,7 @@ import (
 	"context"
 	"math"
 	"math/big"
+	"strings"
 	"testing"
 
 	"github.com/apache/arrow-go/v18/arrow"
@@ -353,8 +354,65 @@ func TestRenderedStageTextBoundKinds(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 1, bound, "bools render a single byte")
 
+	// Decimals charge the larger of the two render forms over the physical
+	// coefficient span: declaring an extreme scale cannot shrink the bound
+	// even though such a schema renders the scientific form.
+	bound, err = renderedStageTextBound(&arrow.Decimal128Type{Precision: 18, Scale: 2})
+	require.NoError(t, err)
+	require.Equal(t, 79, bound,
+		"Decimal128 bounds sign plus the fixed-point digit span capped at scale 76 plus the point")
+
+	bound, err = renderedStageTextBound(&arrow.Decimal128Type{Precision: 38, Scale: 1_000_000_000})
+	require.NoError(t, err)
+	require.Equal(t, 79, bound, "an extreme declared scale keeps the conservative Decimal128 bound")
+
+	bound, err = renderedStageTextBound(&arrow.Decimal256Type{Precision: 76, Scale: 0})
+	require.NoError(t, err)
+	require.Equal(t, 90, bound,
+		"Decimal256 bounds sign plus 77 physical coefficient digits plus the scientific suffix")
+
+	bound, err = renderedStageTextBound(&arrow.Decimal256Type{Precision: 76, Scale: -2})
+	require.NoError(t, err)
+	require.Equal(t, 90, bound, "a negative declared scale keeps the conservative Decimal256 bound")
+
 	_, err = renderedStageTextBound(arrow.BinaryTypes.Binary)
 	require.ErrorContains(t, err, "unsupported Arrow staged text type")
+}
+
+// TestRenderedStageDecimalBoundCoversWorstRenders pins the decimal row
+// bound against the worst renders the staging gate can physically emit, so
+// the estimate can never be loosened below the reachable payload again:
+// Decimal256 scientific text reaches the bound exactly (77 physical digits,
+// sign, 'e', and an 11-character exponent), and the shared renderer's
+// fixed-point ceiling needs the full 77-character padded span.
+func TestRenderedStageDecimalBoundCoversWorstRenders(t *testing.T) {
+	// |coeff| < 2^255 carries at most 77 digits; scale math.MaxInt32 takes
+	// the scientific fallback with the longest reachable exponent text.
+	coeff256 := new(big.Int).Neg(new(big.Int).Sub(
+		new(big.Int).Lsh(big.NewInt(1), 255), big.NewInt(1)))
+	scientific := RenderStagingDecimalText(coeff256, 76, math.MaxInt32)
+	require.Len(t, scientific, 90, "sign + 77 digits + 'e' + 11 exponent characters")
+	require.True(t, strings.HasSuffix(scientific, "e-2147483647"))
+	bound, err := renderedStageTextBound(&arrow.Decimal256Type{Precision: 76, Scale: math.MaxInt32})
+	require.NoError(t, err)
+	require.Equal(t, len(scientific), bound, "the bound covers the worst scientific render exactly")
+
+	// The gate admits source scales up to 76, whose zero padding plus sign
+	// and point renders 79 bytes even for a minimal coefficient.
+	fixedPoint := RenderStagingDecimalText(big.NewInt(-1), 76, 76)
+	require.Len(t, fixedPoint, 79, "sign + 77 padded digits + point")
+	require.True(t, strings.HasPrefix(fixedPoint, "-0."))
+	bound, err = renderedStageTextBound(&arrow.Decimal128Type{Precision: 38, Scale: 10})
+	require.NoError(t, err)
+	require.Equal(t, len(fixedPoint), bound, "the bound covers the shared renderer's fixed-point ceiling")
+
+	// More digits than the declared precision still stay inside the bound: a
+	// forged Decimal128 record can carry the full 39-digit physical span.
+	coeff128 := new(big.Int).Neg(new(big.Int).Sub(
+		new(big.Int).Lsh(big.NewInt(1), 127), big.NewInt(1)))
+	overwide := RenderStagingDecimalText(coeff128, 1, 0)
+	require.Len(t, overwide, 40)
+	require.LessOrEqual(t, len(overwide), bound)
 }
 
 // TestConvertStagedTextCanceledContext checks the staged-text conversion
@@ -513,10 +571,11 @@ func TestMaxOutputRowsAccountsRenderedStagedText(t *testing.T) {
 	dictionary := array.NewDictionaryArray(dictionaryType, indices, values)
 	indices.Release()
 
-	// A rendered DECIMAL(76) row costs its varchar descriptor plus at most
-	// precision+3 payload bytes; a budget fitting two descriptors alone must
-	// admit only one staged row.
-	rowBytes := uint64(types.VarlenaSize + 76 + 3)
+	// A staged DECIMAL row costs its varchar descriptor plus the conservative
+	// rendered-text bound for the source storage (90 bytes for Decimal256:
+	// sign, up to 77 physical coefficient digits, and the scientific suffix);
+	// a budget fitting one such row must admit only that one.
+	rowBytes := uint64(types.VarlenaSize + 90)
 	for _, tc := range []struct {
 		name   string
 		schema *arrow.Schema
@@ -549,6 +608,129 @@ func TestMaxOutputRowsAccountsRenderedStagedText(t *testing.T) {
 	dictionary.Release()
 	values.Release()
 	alloc.AssertSize(t, 0)
+}
+
+// TestMaxOutputRowsAccountsScientificStagedText is the regression for a
+// declared scale outside the fixed-point domain: the renderer falls back to
+// the bounded scientific form, whose exponent bytes the estimate must charge
+// as well. Under the previous precision+3 estimate the byte budget admitted
+// two individually valid rows whose rendered staging payload overflowed the
+// budget; the conservative bound admits only rows the converted staging
+// vector actually fits.
+func TestMaxOutputRowsAccountsScientificStagedText(t *testing.T) {
+	alloc := memory.NewCheckedAllocator(memory.NewGoAllocator())
+	mp := mpool.MustNewZero()
+
+	// 10^37 renders 38 coefficient digits; scale +/-1e9 falls outside the
+	// fixed-point gate, so each row renders "<digits>e-1000000000" (50 bytes)
+	// or "<digits>e1000000000" (49 bytes).
+	coeff := new(big.Int).Exp(big.NewInt(10), big.NewInt(37), nil)
+
+	for _, tc := range []struct {
+		name          string
+		scale         int32
+		wantRendered  string
+		wantFootprint int
+	}{
+		{name: "positive scale", scale: 1_000_000_000,
+			wantRendered:  "1" + strings.Repeat("0", 37) + "e-1000000000",
+			wantFootprint: 2*types.VarlenaSize + 100},
+		{name: "negative scale", scale: -1_000_000_000,
+			wantRendered:  "1" + strings.Repeat("0", 37) + "e1000000000",
+			wantFootprint: 2*types.VarlenaSize + 98},
+	} {
+		decimalType := &arrow.Decimal128Type{Precision: 38, Scale: tc.scale}
+		builder := array.NewDecimal128Builder(alloc, decimalType)
+		builder.AppendValues([]decimal128.Num{
+			decimal128.FromBigInt(coeff),
+			decimal128.FromBigInt(coeff),
+		}, nil)
+		values := builder.NewArray()
+		builder.Release()
+
+		dictionaryType := &arrow.DictionaryType{
+			IndexType: arrow.PrimitiveTypes.Int8, ValueType: decimalType,
+		}
+		indexBuilder := array.NewInt8Builder(alloc)
+		indexBuilder.AppendValues([]int8{0, 0}, nil)
+		indices := indexBuilder.NewArray()
+		indexBuilder.Release()
+		dictionary := array.NewDictionaryArray(dictionaryType, indices, values)
+		indices.Release()
+
+		for _, encoding := range []struct {
+			name   string
+			schema *arrow.Schema
+			values arrow.Array
+		}{
+			{name: "plain",
+				schema: arrow.NewSchema([]arrow.Field{{Name: "v", Type: decimalType}}, nil),
+				values: values},
+			{name: "dictionary",
+				schema: arrow.NewSchema([]arrow.Field{{Name: "v", Type: dictionaryType, Nullable: true}}, nil),
+				values: dictionary},
+		} {
+			t.Run(tc.name+"/"+encoding.name, func(t *testing.T) {
+				record := array.NewRecordBatch(encoding.schema, []arrow.Array{encoding.values}, 2)
+				plan, err := BindLoad(context.Background(), encoding.schema,
+					[]TargetColumn{stagedTextTarget("v")}, MatchByName)
+				require.NoError(t, err)
+
+				// The conservative Decimal128 row bound charges descriptor +
+				// sign + padded/physical digits + point or exponent suffix.
+				rowBytes := uint64(types.VarlenaSize + 79)
+				const budget = uint64(130)
+				require.GreaterOrEqual(t, budget, rowBytes)
+				require.Less(t, budget, 2*rowBytes,
+					"the probe budget fits one bounded row but not two")
+
+				rows, err := plan.MaxOutputRows(context.Background(), record, 0, 2, budget)
+				require.NoError(t, err)
+				require.Equal(t, 1, rows,
+					"the scientific render charges exponent bytes toward the byte budget")
+
+				window := record.NewSlice(0, int64(rows))
+				bat, _, err := plan.Convert(context.Background(), window, mp, ConvertOptions{})
+				require.NoError(t, err)
+				require.Equal(t, rows, bat.Vecs[0].Length())
+				require.Equal(t, tc.wantRendered, bat.Vecs[0].GetStringAt(0))
+				require.LessOrEqual(t, stagedFootprint(bat.Vecs[0]), int(budget),
+					"the admitted window materializes within the budget")
+				window.Release()
+				bat.Clean(mp)
+
+				// A budget for both bounded rows admits both; the rendered
+				// footprint is identical under plain and dictionary encodings.
+				rows, err = plan.MaxOutputRows(context.Background(), record, 0, 2, 2*rowBytes)
+				require.NoError(t, err)
+				require.Equal(t, 2, rows)
+				bat, _, err = plan.Convert(context.Background(), record, mp, ConvertOptions{})
+				require.NoError(t, err)
+				require.Equal(t, tc.wantFootprint, stagedFootprint(bat.Vecs[0]))
+				require.LessOrEqual(t, stagedFootprint(bat.Vecs[0]), int(2*rowBytes))
+				bat.Clean(mp)
+
+				record.Release()
+			})
+		}
+
+		dictionary.Release()
+		values.Release()
+	}
+	require.Equal(t, int64(0), mp.CurrNB())
+	alloc.AssertSize(t, 0)
+}
+
+// stagedFootprint returns the bytes a materialized staging vector occupies:
+// one varlena descriptor per row plus every non-null rendered payload byte.
+func stagedFootprint(vec *vector.Vector) int {
+	footprint := vec.Length() * types.VarlenaSize
+	for row := 0; row < vec.Length(); row++ {
+		if !vec.IsNull(uint64(row)) {
+			footprint += len(vec.GetBytesAt(row))
+		}
+	}
+	return footprint
 }
 
 func TestConvertMaterializesStagedScalarText(t *testing.T) {
