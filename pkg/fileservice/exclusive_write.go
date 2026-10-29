@@ -35,6 +35,9 @@ func CheckExclusiveWrite(fs FileService) error {
 		return CheckExclusiveWrite(f.upstream)
 	case *LocalETLFS:
 		return nil
+	case *MemoryFS:
+		// Write holds the same mutex across existence checking and insertion.
+		return nil
 	case *S3FS:
 		switch storage := f.rawStorage.(type) {
 		case *AwsSDKv2:

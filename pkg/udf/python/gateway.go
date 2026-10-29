@@ -378,18 +378,17 @@ func (g *Gateway) ValidateDefinition(ctx context.Context, definition *udf.Routin
 	}
 
 	source := definition.Source
-	if g.artifactResolver != nil {
+	// Definition validation receives trusted DDL source before publication.
+	// Execution still forbids source in plans and resolves its immutable digest.
+	if source == "" && g.artifactResolver != nil {
 		resolved, resolveErr := g.artifactResolver.Resolve(
 			requestCtx, definition.AccountID, definition.Handler, definition.ArtifactDigest,
 		)
 		if resolveErr != nil {
 			return resolveErr
 		}
-		if source != "" && source != resolved {
-			return udferr.Newf("UNSUPPORTED_ROUTINE_VERSION: Python artifact source does not match the immutable artifact")
-		}
 		source = resolved
-	} else if !g.allowInlineSource {
+	} else if source == "" && !g.allowInlineSource {
 		return udferr.Newf("RESOURCE_UNAVAILABLE: Python artifact resolver is not configured")
 	}
 	if source == "" || !utf8.ValidString(source) {
