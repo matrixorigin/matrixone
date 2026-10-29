@@ -24,9 +24,11 @@ import (
 	"github.com/apache/arrow-go/v18/arrow/array"
 	"github.com/apache/arrow-go/v18/arrow/decimal128"
 	"github.com/apache/arrow-go/v18/arrow/decimal256"
+	"github.com/apache/arrow-go/v18/arrow/float16"
 	"github.com/apache/arrow-go/v18/arrow/memory"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/stretchr/testify/require"
 )
 
@@ -45,6 +47,7 @@ func TestRenderStagingDecimalTextContract(t *testing.T) {
 		{name: "zero keeps scale digits", coeff: 0, precision: 10, scale: 2, want: "0.00"},
 		{name: "sub-unit coefficient", coeff: 7, precision: 4, scale: 4, want: "0.0007"},
 		{name: "zero scale", coeff: -42, precision: 10, scale: 0, want: "-42"},
+		{name: "zero scale positive renders plain digits", coeff: 42, precision: 10, scale: 0, want: "42"},
 		{name: "scale beyond fixed bound renders exponent", coeff: 123, precision: 10, scale: 77, want: "123e-77"},
 		{name: "negative scale renders positive exponent", coeff: 123, precision: 10, scale: -2, want: "123e2"},
 		{name: "scale above precision renders exponent", coeff: 1, precision: 2, scale: 3, want: "1e-3"},
@@ -242,6 +245,172 @@ func TestConvertMaterializesStagedDecimalText(t *testing.T) {
 	values.Release()
 	bat.Clean(mp)
 	require.Equal(t, int64(0), mp.CurrNB())
+	alloc.AssertSize(t, 0)
+}
+
+// TestAppendArrowStageTextValueScalarKinds renders one value per staged Arrow
+// scalar kind through the staging renderer directly: each integer width
+// renders exact integer text, floats render shortest round-trip text, and an
+// unsupported source kind keeps the loud rejection.
+func TestAppendArrowStageTextValueScalarKinds(t *testing.T) {
+	alloc := memory.NewCheckedAllocator(memory.NewGoAllocator())
+	mp := mpool.MustNewZero()
+	ctx := context.Background()
+
+	check := func(t *testing.T, values arrow.Array, want string) {
+		t.Helper()
+		vec := vector.NewVec(types.T_varchar.ToType())
+		require.NoError(t, appendArrowStageTextValue(ctx, vec, values, 0, false, mp))
+		require.Equal(t, want, vec.GetStringAt(0))
+		vec.Free(mp)
+		values.Release()
+	}
+
+	// Decimal256 renders coeff x 10^-scale through the shared renderer.
+	decimal256Type := &arrow.Decimal256Type{Precision: 38, Scale: 4}
+	decimal256Builder := array.NewDecimal256Builder(alloc, decimal256Type)
+	decimal256Builder.AppendValues([]decimal256.Num{
+		decimal256.FromBigInt(big.NewInt(123456789)),
+	}, nil)
+	check(t, decimal256Builder.NewArray(), "12345.6789")
+	decimal256Builder.Release()
+
+	int8Builder := array.NewInt8Builder(alloc)
+	int8Builder.AppendValues([]int8{-8}, nil)
+	check(t, int8Builder.NewArray(), "-8")
+	int8Builder.Release()
+
+	int16Builder := array.NewInt16Builder(alloc)
+	int16Builder.AppendValues([]int16{-1600}, nil)
+	check(t, int16Builder.NewArray(), "-1600")
+	int16Builder.Release()
+
+	int32Builder := array.NewInt32Builder(alloc)
+	int32Builder.AppendValues([]int32{-320000}, nil)
+	check(t, int32Builder.NewArray(), "-320000")
+	int32Builder.Release()
+
+	uint8Builder := array.NewUint8Builder(alloc)
+	uint8Builder.AppendValues([]uint8{8}, nil)
+	check(t, uint8Builder.NewArray(), "8")
+	uint8Builder.Release()
+
+	uint16Builder := array.NewUint16Builder(alloc)
+	uint16Builder.AppendValues([]uint16{1600}, nil)
+	check(t, uint16Builder.NewArray(), "1600")
+	uint16Builder.Release()
+
+	uint32Builder := array.NewUint32Builder(alloc)
+	uint32Builder.AppendValues([]uint32{320000}, nil)
+	check(t, uint32Builder.NewArray(), "320000")
+	uint32Builder.Release()
+
+	uint64Builder := array.NewUint64Builder(alloc)
+	uint64Builder.AppendValues([]uint64{6400000000}, nil)
+	check(t, uint64Builder.NewArray(), "6400000000")
+	uint64Builder.Release()
+
+	float16Builder := array.NewFloat16Builder(alloc)
+	float16Builder.AppendValues([]float16.Num{float16.New(1.5)}, nil)
+	check(t, float16Builder.NewArray(), "1.5")
+	float16Builder.Release()
+
+	float32Builder := array.NewFloat32Builder(alloc)
+	float32Builder.AppendValues([]float32{2.5}, nil)
+	check(t, float32Builder.NewArray(), "2.5")
+	float32Builder.Release()
+
+	// A source kind outside the staged-text set is rejected loudly; nothing
+	// is appended to the staging vector.
+	stringBuilder := array.NewStringBuilder(alloc)
+	stringBuilder.AppendValues([]string{"x"}, nil)
+	strings := stringBuilder.NewArray()
+	stringBuilder.Release()
+	vec := vector.NewVec(types.T_varchar.ToType())
+	err := appendArrowStageTextValue(ctx, vec, strings, 0, false, mp)
+	require.ErrorContains(t, err, "unsupported Arrow array")
+	require.Equal(t, 0, vec.Length())
+	vec.Free(mp)
+	strings.Release()
+
+	require.Equal(t, int64(0), mp.CurrNB())
+	alloc.AssertSize(t, 0)
+}
+
+// TestRenderedStageTextBoundKinds pins the conservative rendered-text byte
+// bound for each staged source family and the loud rejection for source
+// kinds outside the staged-text set.
+func TestRenderedStageTextBoundKinds(t *testing.T) {
+	bound, err := renderedStageTextBound(arrow.PrimitiveTypes.Int32)
+	require.NoError(t, err)
+	require.Equal(t, 21, bound, "integers bound sign plus at most 20 digits")
+
+	bound, err = renderedStageTextBound(arrow.PrimitiveTypes.Float32)
+	require.NoError(t, err)
+	require.Equal(t, 32, bound, "floats bound shortest round-trip text with a small exponent")
+
+	bound, err = renderedStageTextBound(arrow.FixedWidthTypes.Boolean)
+	require.NoError(t, err)
+	require.Equal(t, 1, bound, "bools render a single byte")
+
+	_, err = renderedStageTextBound(arrow.BinaryTypes.Binary)
+	require.ErrorContains(t, err, "unsupported Arrow staged text type")
+}
+
+// TestConvertStagedTextCanceledContext checks the staged-text conversion
+// loop observes context cancellation between rows instead of rendering the
+// whole batch first.
+func TestConvertStagedTextCanceledContext(t *testing.T) {
+	alloc := memory.NewCheckedAllocator(memory.NewGoAllocator())
+	builder := array.NewInt64Builder(alloc)
+	builder.AppendValues([]int64{1, 2}, nil)
+	values := builder.NewArray()
+	builder.Release()
+	schema := arrow.NewSchema([]arrow.Field{{Name: "v", Type: arrow.PrimitiveTypes.Int64}}, nil)
+	plan, err := BindLoad(context.Background(), schema, []TargetColumn{stagedTextTarget("v")}, MatchByName)
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	record := array.NewRecordBatch(schema, []arrow.Array{values}, 2)
+	mp := mpool.MustNewZero()
+	bat, _, err := plan.Convert(ctx, record, mp, ConvertOptions{})
+	require.Error(t, err, "a canceled context aborts the staged conversion")
+	require.Nil(t, bat)
+
+	// The per-column staged-text loop checks the context before rendering a
+	// row: a canceled context aborts the materialization at row zero. The
+	// whole-batch path above may already reject during row budgeting, so the
+	// column loop needs this direct exercise as well.
+	_, _, err = materializeConverted(ctx, values, columnPlan{
+		target: stagedTextTarget("v"),
+		kind:   conversionMaterializeText,
+	}, mp, nil, nil)
+	require.Error(t, err, "a canceled context aborts the staged per-column loop")
+
+	record.Release()
+	values.Release()
+	alloc.AssertSize(t, 0)
+}
+
+// TestEstimateColumnRowBytesStagedTextUnsupportedSource checks row budgeting
+// for a staged-text target propagates the rendered-bound rejection instead
+// of silently under-budgeting the batch window.
+func TestEstimateColumnRowBytesStagedTextUnsupportedSource(t *testing.T) {
+	alloc := memory.NewCheckedAllocator(memory.NewGoAllocator())
+	builder := array.NewStringBuilder(alloc)
+	builder.AppendValues([]string{"x"}, nil)
+	values := builder.NewArray()
+	builder.Release()
+
+	binding := columnPlan{
+		target: stagedTextTarget("v"),
+		kind:   conversionMaterializeText,
+	}
+	_, err := estimateColumnRowBytes(context.Background(), values, binding, 0)
+	require.ErrorContains(t, err, "unsupported Arrow staged text type")
+
+	values.Release()
 	alloc.AssertSize(t, 0)
 }
 
