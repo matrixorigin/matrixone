@@ -464,3 +464,80 @@ func TestSqlAutoIsNullAggregateOverNullSideNotRewritten(t *testing.T) {
 	require.True(t, sqlAutoIsNullQueryHasFunction(qry, "isnull"))
 	require.False(t, sqlAutoIsNullAnyNodeNotCacheable(qry))
 }
+
+// The materialization family pins MySQL's derived-merge boundary (review
+// 5692189512): a derived table containing LIMIT/OFFSET, DISTINCT, a window
+// function, HAVING or a UNION is not mergeable (mysql/sql_lex.cc
+// mergeability rules), so the outer statement observes a materialized
+// column whose temporary field loses the AUTO_INCREMENT resolution
+// property (mysql/field.cc temporary-field construction). The whole-clause
+// form therefore keeps plain IS NULL semantics: over a NOT NULL
+// AUTO_INCREMENT column that is an empty result, never a last_insert_id()
+// comparison. Plain WHERE-based derived tables stay mergeable and keep the
+// rewrite, so the boundary must be the shape of the derived block itself.
+
+func TestSqlAutoIsNullLimitDerivedNotRewritten(t *testing.T) {
+	cc := newSqlAutoIsNullTestContext(t, int64(1), nil)
+	qry := buildSqlAutoIsNullQuery(t, cc,
+		"select d.seq from (select seq from auto_t limit 1) d where d.seq is null")
+	require.False(t, sqlAutoIsNullQueryHasFunction(qry, "last_insert_id"),
+		"a materialized (LIMIT/OFFSET) derived column must keep plain IS NULL semantics; plan:\n%s", qry.String())
+	require.True(t, sqlAutoIsNullQueryHasFunction(qry, "isnull"))
+	require.False(t, sqlAutoIsNullAnyNodeNotCacheable(qry))
+}
+
+func TestSqlAutoIsNullDistinctDerivedNotRewritten(t *testing.T) {
+	cc := newSqlAutoIsNullTestContext(t, int64(1), nil)
+	qry := buildSqlAutoIsNullQuery(t, cc,
+		"select d.seq from (select distinct seq from auto_t) d where d.seq is null")
+	require.False(t, sqlAutoIsNullQueryHasFunction(qry, "last_insert_id"),
+		"a materialized (DISTINCT) derived column must keep plain IS NULL semantics; plan:\n%s", qry.String())
+	require.True(t, sqlAutoIsNullQueryHasFunction(qry, "isnull"))
+	require.False(t, sqlAutoIsNullAnyNodeNotCacheable(qry))
+}
+
+func TestSqlAutoIsNullWindowDerivedNotRewritten(t *testing.T) {
+	cc := newSqlAutoIsNullTestContext(t, int64(1), nil)
+	qry := buildSqlAutoIsNullQuery(t, cc,
+		"select d.seq from (select seq, row_number() over (order by val) as rn "+
+			"from auto_t) d where d.seq is null")
+	require.False(t, sqlAutoIsNullQueryHasFunction(qry, "last_insert_id"),
+		"a materialized (window) derived column must keep plain IS NULL semantics; plan:\n%s", qry.String())
+	require.True(t, sqlAutoIsNullQueryHasFunction(qry, "isnull"))
+	require.False(t, sqlAutoIsNullAnyNodeNotCacheable(qry))
+}
+
+func TestSqlAutoIsNullHavingDerivedNotRewritten(t *testing.T) {
+	cc := newSqlAutoIsNullTestContext(t, int64(1), nil)
+	qry := buildSqlAutoIsNullQuery(t, cc,
+		"select d.seq from (select seq from auto_t having seq >= 0) d where d.seq is null")
+	require.False(t, sqlAutoIsNullQueryHasFunction(qry, "last_insert_id"),
+		"a materialized (HAVING) derived column must keep plain IS NULL semantics; plan:\n%s", qry.String())
+	require.True(t, sqlAutoIsNullQueryHasFunction(qry, "isnull"))
+	require.False(t, sqlAutoIsNullAnyNodeNotCacheable(qry))
+}
+
+func TestSqlAutoIsNullUnionAllDerivedNotRewritten(t *testing.T) {
+	cc := newSqlAutoIsNullTestContext(t, int64(1), nil)
+	qry := buildSqlAutoIsNullQuery(t, cc,
+		"select d.seq from (select seq from auto_t union all select seq from auto_t) d "+
+			"where d.seq is null")
+	require.False(t, sqlAutoIsNullQueryHasFunction(qry, "last_insert_id"),
+		"a materialized (UNION ALL) derived column must keep plain IS NULL semantics; plan:\n%s", qry.String())
+	require.True(t, sqlAutoIsNullQueryHasFunction(qry, "isnull"))
+	require.False(t, sqlAutoIsNullAnyNodeNotCacheable(qry))
+}
+
+// TestSqlAutoIsNullOrderedLimitDerivedNotRewritten pins the ordered-limit
+// shape: ORDER BY with LIMIT materializes the block exactly like a plain
+// LIMIT; the limit marker rides on the sort stage between the block's
+// projections, and the boundary must catch it there too.
+func TestSqlAutoIsNullOrderedLimitDerivedNotRewritten(t *testing.T) {
+	cc := newSqlAutoIsNullTestContext(t, int64(1), nil)
+	qry := buildSqlAutoIsNullQuery(t, cc,
+		"select d.seq from (select seq from auto_t order by seq limit 1) d where d.seq is null")
+	require.False(t, sqlAutoIsNullQueryHasFunction(qry, "last_insert_id"),
+		"a materialized (ORDER BY ... LIMIT) derived column must keep plain IS NULL semantics; plan:\n%s", qry.String())
+	require.True(t, sqlAutoIsNullQueryHasFunction(qry, "isnull"))
+	require.False(t, sqlAutoIsNullAnyNodeNotCacheable(qry))
+}

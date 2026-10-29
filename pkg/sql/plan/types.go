@@ -405,6 +405,13 @@ type QueryBuilder struct {
 	hadPendingExistentials  bool
 	existentialGateProjects map[int32]struct{}
 
+	// sqlAutoIsNullMaterialNodes records blocks whose materialization is only
+	// decidable at bind time (a non-aggregate HAVING appends its filter into
+	// the FROM chain exactly like a WHERE, so position alone cannot separate
+	// the two); the sql_auto_is_null whole-clause gate uses the mark to keep
+	// plain IS NULL semantics across the materialization boundary.
+	sqlAutoIsNullMaterialNodes map[int32]struct{}
+
 	qry     *plan.Query
 	compCtx CompilerContext
 	// Only buildValueScan owns this borrowed scope. Ordinary VALUES keep ctx nil;

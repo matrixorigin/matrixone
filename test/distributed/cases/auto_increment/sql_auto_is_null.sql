@@ -69,4 +69,15 @@ select d.id from (select id from t30717) d where d.id is null;
 select d.ui from (select u.id as ui from t30717 t left join u30717 u on u.id=t.id group by u.id) d where d.ui is null;
 select d.id from (select id from t30717 group by id) d where d.id is null;
 select d.m from (select max(u.id) as m from t30717 t left join u30717 u on u.id=t.id group by t.v) d where d.m is null order by d.m;
+-- Materialization boundaries (review 5692189512): MySQL materializes a
+-- derived table containing LIMIT/OFFSET, DISTINCT, HAVING, window functions
+-- or a UNION; the materialized temporary column loses the AUTO_INCREMENT
+-- resolution property, so the whole-clause form keeps plain IS NULL
+-- semantics (an empty result over the NOT NULL column), never a
+-- last_insert_id() comparison.
+select d.id from (select id from t30717 order by id limit 1) d where d.id is null;
+select d.id from (select distinct id from t30717) d where d.id is null;
+select d.id from (select id, row_number() over (order by v) as rn from t30717) d where d.id is null;
+select d.id from (select id from t30717 having id >= 0) d where d.id is null;
+select d.id from (select id from t30717 union all select id from t30717) d where d.id is null;
 drop database if exists sql_auto_is_null_bvt;

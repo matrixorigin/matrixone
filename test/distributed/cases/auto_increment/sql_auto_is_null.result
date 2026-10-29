@@ -101,4 +101,14 @@ null  𝄀
 null  𝄀
 null  𝄀
 null
+select d.id from (select id from t30717 order by id limit 1) d where d.id is null;
+➤ id[-5,64,0]
+select d.id from (select distinct id from t30717) d where d.id is null;
+➤ id[-5,64,0]
+select d.id from (select id, row_number() over (order by v) as rn from t30717) d where d.id is null;
+➤ id[-5,64,0]
+select d.id from (select id from t30717 having id >= 0) d where d.id is null;
+➤ id[-5,64,0]
+select d.id from (select id from t30717 union all select id from t30717) d where d.id is null;
+➤ id[-5,64,0]
 drop database if exists sql_auto_is_null_bvt;
