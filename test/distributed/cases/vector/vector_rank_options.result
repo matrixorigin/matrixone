@@ -14,7 +14,7 @@ create index ix using ivfflat on t(v) lists=1 op_type 'vector_l2_ops';
 set probe_limit = 5;
 explain verbose select id from t order by l2_distance(v, '[0,0]') limit 2 by rank with option 'nprobe=1';
 -- @regex("ivf_search", true)
-➤ AP QUERY PLAN ON MULTICN(10 core)[12,-1,0]  𝄀
+➤ AP QUERY PLAN ON MULTICN(10 core)[12,0,0]  𝄀
 Project[2] (cost=0.00 outcnt=0.00 selectivity=0.0000 dop=0 rowsize=100.00)  𝄀
   Output: mo_ivf_alias_0.pkid  𝄀
   ->  Sort[1] (cost=0.00 outcnt=0.00 selectivity=0.0000 dop=0 rowsize=100.00)  𝄀
@@ -27,7 +27,7 @@ Project[2] (cost=0.00 outcnt=0.00 selectivity=0.0000 dop=0 rowsize=100.00)  𝄀
               Limit: 2
 explain verbose select id from t order by l2_distance(v, '[0,0]') limit 2 by rank with option 'mode=post', 'nprobe=9';
 -- @regex("ivf_search", true)
-➤ AP QUERY PLAN ON MULTICN(10 core)[12,-1,0]  𝄀
+➤ AP QUERY PLAN ON MULTICN(10 core)[12,0,0]  𝄀
 Project[2] (cost=0.00 outcnt=0.00 selectivity=0.0000 dop=0 rowsize=100.00)  𝄀
   Output: mo_ivf_alias_0.pkid  𝄀
   ->  Sort[1] (cost=0.00 outcnt=0.00 selectivity=0.0000 dop=0 rowsize=100.00)  𝄀
@@ -40,7 +40,7 @@ Project[2] (cost=0.00 outcnt=0.00 selectivity=0.0000 dop=0 rowsize=100.00)  𝄀
               Limit: 2
 explain verbose select id from t order by l2_distance(v, '[0,0]') limit 2 by rank with option 'mode=post';
 -- @regex("ivf_search", true)
-➤ AP QUERY PLAN ON MULTICN(10 core)[12,-1,0]  𝄀
+➤ AP QUERY PLAN ON MULTICN(10 core)[12,0,0]  𝄀
 Project[2] (cost=0.00 outcnt=0.00 selectivity=0.0000 dop=0 rowsize=100.00)  𝄀
   Output: mo_ivf_alias_0.pkid  𝄀
   ->  Sort[1] (cost=0.00 outcnt=0.00 selectivity=0.0000 dop=0 rowsize=100.00)  𝄀
@@ -52,15 +52,15 @@ Project[2] (cost=0.00 outcnt=0.00 selectivity=0.0000 dop=0 rowsize=100.00)  𝄀
               Index Reader Param:  Limit: 2  𝄀
               Limit: 2
 select @@probe_limit;
-➤ @@probe_limit[-1,16383,0]  𝄀
+➤ @@probe_limit[12,0,0]  𝄀
 5
 set session probe_limit = 4;
 select @@probe_limit;
-➤ @@probe_limit[-1,16383,0]  𝄀
+➤ @@probe_limit[12,0,0]  𝄀
 4
 explain verbose select id from t order by l2_distance(v, '[0,0]') limit 2 by rank with option 'mode=post';
 -- @regex("ivf_search", true)
-➤ AP QUERY PLAN ON MULTICN(10 core)[12,-1,0]  𝄀
+➤ AP QUERY PLAN ON MULTICN(10 core)[12,0,0]  𝄀
 Project[2] (cost=0.00 outcnt=0.00 selectivity=0.0000 dop=0 rowsize=100.00)  𝄀
   Output: mo_ivf_alias_0.pkid  𝄀
   ->  Sort[1] (cost=0.00 outcnt=0.00 selectivity=0.0000 dop=0 rowsize=100.00)  𝄀
@@ -73,7 +73,7 @@ Project[2] (cost=0.00 outcnt=0.00 selectivity=0.0000 dop=0 rowsize=100.00)  𝄀
               Limit: 2
 explain verbose select id from t order by l2_distance(v, '[0,0]') limit 2 by rank with option 'mode=post', 'nprobe=9';
 -- @regex("ivf_search", true)
-➤ AP QUERY PLAN ON MULTICN(10 core)[12,-1,0]  𝄀
+➤ AP QUERY PLAN ON MULTICN(10 core)[12,0,0]  𝄀
 Project[2] (cost=0.00 outcnt=0.00 selectivity=0.0000 dop=0 rowsize=100.00)  𝄀
   Output: mo_ivf_alias_0.pkid  𝄀
   ->  Sort[1] (cost=0.00 outcnt=0.00 selectivity=0.0000 dop=0 rowsize=100.00)  𝄀
@@ -85,7 +85,7 @@ Project[2] (cost=0.00 outcnt=0.00 selectivity=0.0000 dop=0 rowsize=100.00)  𝄀
               Index Reader Param:  Limit: 2  𝄀
               Limit: 2
 select @@probe_limit;
-➤ @@probe_limit[-1,16383,0]  𝄀
+➤ @@probe_limit[12,0,0]  𝄀
 4
 use vector_rank_options;
 set @saved_probe_limit = @@probe_limit;
@@ -98,7 +98,7 @@ set enable_vector_prefilter_by_default = 0;
 set probe_limit = 2;
 explain verbose select id from t order by l2_distance(v, '[0,0]') limit 2 by rank with option 'mode=post';
 -- @regex("ivf_search", true)
-➤ AP QUERY PLAN ON MULTICN(10 core)[12,-1,0]  𝄀
+➤ AP QUERY PLAN ON MULTICN(10 core)[12,0,0]  𝄀
 Project[2] (cost=0.00 outcnt=0.00 selectivity=0.0000 dop=0 rowsize=100.00)  𝄀
   Output: mo_ivf_alias_0.pkid  𝄀
   ->  Sort[1] (cost=0.00 outcnt=0.00 selectivity=0.0000 dop=0 rowsize=100.00)  𝄀
@@ -111,7 +111,7 @@ Project[2] (cost=0.00 outcnt=0.00 selectivity=0.0000 dop=0 rowsize=100.00)  𝄀
               Limit: 2
 explain verbose select id from t order by l2_distance(v, '[0,0]') limit 2 by rank with option 'mode=post', 'nprobe=9';
 -- @regex("ivf_search", true)
-➤ AP QUERY PLAN ON MULTICN(10 core)[12,-1,0]  𝄀
+➤ AP QUERY PLAN ON MULTICN(10 core)[12,0,0]  𝄀
 Project[2] (cost=0.00 outcnt=0.00 selectivity=0.0000 dop=0 rowsize=100.00)  𝄀
   Output: mo_ivf_alias_0.pkid  𝄀
   ->  Sort[1] (cost=0.00 outcnt=0.00 selectivity=0.0000 dop=0 rowsize=100.00)  𝄀
@@ -123,18 +123,18 @@ Project[2] (cost=0.00 outcnt=0.00 selectivity=0.0000 dop=0 rowsize=100.00)  𝄀
               Index Reader Param:  Limit: 2  𝄀
               Limit: 2
 select @@probe_limit;
-➤ @@probe_limit[-1,16383,0]  𝄀
+➤ @@probe_limit[12,0,0]  𝄀
 2
 set probe_limit = @saved_probe_limit;
 set experimental_ivf_index = @saved_ivf;
 set enable_vector_auto_mode_by_default = @saved_auto;
 set enable_vector_prefilter_by_default = @saved_pre;
 select @@probe_limit;
-➤ @@probe_limit[-1,16383,0]  𝄀
+➤ @@probe_limit[12,0,0]  𝄀
 4
 explain verbose select id from t order by l2_distance(v, '[0,0]') limit 2 by rank with option 'mode=post';
 -- @regex("ivf_search", true)
-➤ AP QUERY PLAN ON MULTICN(10 core)[12,-1,0]  𝄀
+➤ AP QUERY PLAN ON MULTICN(10 core)[12,0,0]  𝄀
 Project[2] (cost=0.00 outcnt=0.00 selectivity=0.0000 dop=0 rowsize=100.00)  𝄀
   Output: mo_ivf_alias_0.pkid  𝄀
   ->  Sort[1] (cost=0.00 outcnt=0.00 selectivity=0.0000 dop=0 rowsize=100.00)  𝄀
@@ -178,11 +178,11 @@ SQL parser error: You have an error in your SQL syntax; check the manual that co
 select id from t limit 1 by rank with option 1;
 SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. rank options must be string literals containing key=value at line 1 column 47 near ";";
 select @@probe_limit;
-➤ @@probe_limit[-1,16383,0]  𝄀
+➤ @@probe_limit[12,0,0]  𝄀
 4
 explain verbose select id from t order by l2_distance(v, '[0,0]') limit 2 by rank with option 'mode=post';
 -- @regex("ivf_search", true)
-➤ AP QUERY PLAN ON MULTICN(10 core)[12,-1,0]  𝄀
+➤ AP QUERY PLAN ON MULTICN(10 core)[12,0,0]  𝄀
 Project[2] (cost=0.00 outcnt=0.00 selectivity=0.0000 dop=0 rowsize=100.00)  𝄀
   Output: mo_ivf_alias_0.pkid  𝄀
   ->  Sort[1] (cost=0.00 outcnt=0.00 selectivity=0.0000 dop=0 rowsize=100.00)  𝄀
