@@ -6274,22 +6274,24 @@ func (c *Compile) compileUnion(node *plan.Node, left []*Scope, right []*Scope) [
 // copy of a set key per worker, so their local operator-level deduplication is
 // insufficient once those worker outputs are merged.
 func (c *Compile) mergeDistinctSetScopes(node *plan.Node, scopes []*Scope, isFirst bool) []*Scope {
-	rs := c.newMergeScope(scopes)
-	gn := new(plan.Node)
+	gn := &plan.Node{SpillMem: node.SpillMem}
 	gn.GroupBy = make([]*plan.Expr, len(node.ProjectList))
 	for i := range gn.GroupBy {
 		gn.GroupBy[i] = plan2.DeepCopyExpr(node.ProjectList[i])
 		gn.GroupBy[i].Typ.NotNullable = false
 	}
 	if len(node.PhysicalEqualityKeyList) > 0 {
-		visibleCount := len(gn.GroupBy)
-		for i, expr := range node.PhysicalEqualityKeyList {
-			key := plan2.DeepCopyExpr(expr)
+		keys := plan2.DeepCopyExprList(node.PhysicalEqualityKeyList)
+		for _, key := range keys {
 			key.Typ.NotNullable = false
-			gn.GroupBy = append(gn.GroupBy, key)
-			gn.GroupByHashKey = append(gn.GroupByHashKey, int32(visibleCount+i))
+		}
+		var err error
+		gn.GroupBy, gn.GroupByHashKey, err = plan2.CompactPhysicalGroupKeys(gn.GroupBy, keys)
+		if err != nil {
+			panic(err)
 		}
 	}
+	rs := c.newMergeScope(scopes)
 	op := constructGroup(c.proc.Ctx, gn, node, true, 0, c.proc)
 	if len(node.PhysicalEqualityKeyList) > 0 {
 		op.ProjectList = make([]*plan.Expr, len(node.ProjectList))

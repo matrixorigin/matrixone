@@ -12586,6 +12586,12 @@ func (builder *QueryBuilder) appendStep(nodeID int32) int32 {
 
 func (builder *QueryBuilder) appendNode(node *plan.Node, ctx *BindContext) int32 {
 	nodeID := int32(len(builder.qry.Nodes))
+	switch node.NodeType {
+	case plan.Node_UNION, plan.Node_INTERSECT, plan.Node_MINUS:
+		// Their global deduplication phase is an aggregate, including set
+		// nodes synthesized outside the SELECT binder.
+		node.SpillMem = builder.aggSpillMem
+	}
 	if ctx != nil && len(node.ViewPath) == 0 {
 		node.ViewPath = append([]*plan.ViewStep(nil), ctx.viewPath...)
 	}

@@ -922,6 +922,11 @@ func determineHashOnPK(nodeID int32, builder *QueryBuilder) map[uint64][]uint64 
 		return nil
 	}
 
+	// This proof belongs to the current inputs and predicates. Rewriters may
+	// have changed them since a previous invocation, including for a trial.
+	if node.Stats != nil && node.Stats.HashmapStats != nil {
+		node.Stats.HashmapStats.HashOnPK = false
+	}
 	leftColMap := determineHashOnPK(node.Children[0], builder)
 	rightColMap := determineHashOnPK(node.Children[1], builder)
 	if rightColMap == nil {

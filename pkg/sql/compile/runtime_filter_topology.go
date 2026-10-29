@@ -346,6 +346,19 @@ func disableScalarRuntimeFilter(tag int32, topology runtimeFilterTopology) {
 			}
 		}
 		consumer.DataSource.RuntimeFilterSpecs = kept
+		if node := consumer.DataSource.node; node != nil {
+			// Datasource initialization, scan clones and remote serialization
+			// read this node again. Keep a per-source copy so they cannot
+			// resurrect the disabled consumer, without mutating a reusable plan.
+			private := *node
+			private.RuntimeFilterProbeList = make([]*plan.RuntimeFilterSpec, 0, len(node.RuntimeFilterProbeList))
+			for _, spec := range node.RuntimeFilterProbeList {
+				if spec == nil || spec.Tag != tag {
+					private.RuntimeFilterProbeList = append(private.RuntimeFilterProbeList, spec)
+				}
+			}
+			consumer.DataSource.node = &private
+		}
 	}
 
 	seen := make(map[*Scope]struct{})
