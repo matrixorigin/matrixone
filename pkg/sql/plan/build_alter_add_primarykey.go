@@ -106,11 +106,20 @@ func DropPrimaryKey(ctx CompilerContext, alterPlan *plan.AlterTable, alterCtx *A
 	survivingDef := DeepCopyTableDef(tableDef, true)
 	survivingDef.Pkey = nil
 	rebinds, err := resolveForeignKeyBoundIndexDrops(
-		ctx, tableDef, "PRIMARY", tableDef.Pkey.Names, survivingDef, nil)
+		ctx, tableDef, "PRIMARY", tableDef.Pkey.Names, true, survivingDef, nil)
 	if err != nil {
 		return err
 	}
 	for _, rebind := range rebinds {
+		// Self-referencing children are recorded against the COPY's temporary
+		// name, but the rows that survive the relation transfer live under the
+		// original table's name: readdress those before emitting the update.
+		if alterCtx.copyTableName != "" && rebind.childTable == alterCtx.copyTableName {
+			if alterCtx.originTableName == "" {
+				return moerr.NewInternalError(ctx.GetContext(), "missing original table name for foreign key rebinding")
+			}
+			rebind.childTable = alterCtx.originTableName
+		}
 		alterCtx.UpdateSqls = append(alterCtx.UpdateSqls, GetSqlForUpdateFkReferencedIndex(
 			rebind.childDatabase, rebind.childTable, rebind.constraintName, rebind.newIndexName))
 	}

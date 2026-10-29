@@ -6647,17 +6647,23 @@ type foreignKeyBoundIndexRebind struct {
 	newIndexName   string
 }
 
-// foreignKeyReferencedIndexExists reports whether the parent currently has a
-// PRIMARY/UNIQUE key under the given name.
-func foreignKeyReferencedIndexExists(parentTableDef *TableDef, name string) bool {
-	if parentTableDef == nil || name == "" {
+// foreignKeyReferencedIndexCovered reports whether the parent currently has a
+// real PRIMARY/UNIQUE key under the given name that covers the foreign key's
+// referenced columns. A bare name match proves nothing: a table without a
+// declared primary key still carries a fake physical primary, and a dropped
+// index's name can be recreated on unrelated columns.
+func foreignKeyReferencedIndexCovered(parentTableDef *TableDef, name string, referredColumns []string) bool {
+	if parentTableDef == nil || name == "" || len(referredColumns) == 0 {
 		return false
 	}
 	if name == "PRIMARY" {
-		return parentTableDef.Pkey != nil
+		return parentTableDef.Pkey != nil &&
+			parentTableDef.Pkey.PkeyColName != catalog.FakePrimaryKeyColName &&
+			foreignKeyReferencedColumnsMatch(parentTableDef.Pkey.Names, referredColumns)
 	}
 	for _, index := range parentTableDef.Indexes {
-		if index.IndexName == name {
+		if index.IndexName == name && index.Unique &&
+			foreignKeyReferencedColumnsMatch(index.Parts, referredColumns) {
 			return true
 		}
 	}
@@ -6676,11 +6682,15 @@ func foreignKeyReferencedIndexExists(parentTableDef *TableDef, name string) bool
 // parentTableDef provides the authoritative columns, children, and primary
 // key; droppedIndexName/droppedColumns describe the key being dropped and
 // survivingDef must already exclude every key the statement removes.
+// droppedEligible reports whether the dropped key is itself an eligible
+// PRIMARY/UNIQUE candidate; legacy bindings are only protected against
+// eligible drops, mirroring the baseline executor-side checker.
 func resolveForeignKeyBoundIndexDrops(
 	ctx CompilerContext,
 	parentTableDef *TableDef,
 	droppedIndexName string,
 	droppedColumns []string,
+	droppedEligible bool,
 	survivingDef *TableDef,
 	ignoredSelfForeignKeys map[string]struct{},
 ) ([]foreignKeyBoundIndexRebind, error) {
@@ -6728,15 +6738,17 @@ func resolveForeignKeyBoundIndexDrops(
 			}
 
 			if fk.ReferencedIndexName == "" {
-				// Legacy metadata: protect every compatible key rather than
-				// guessing which one was historically selected.
-				if foreignKeyReferencedColumnsMatch(droppedColumns, referredColumns) {
+				// Legacy metadata: protect every compatible eligible key rather
+				// than guessing which one was historically selected. Ordinary
+				// secondary indexes can never back a foreign key, so dropping
+				// them keeps the baseline behavior of an unrestricted drop.
+				if droppedEligible && foreignKeyReferencedColumnsMatch(droppedColumns, referredColumns) {
 					return nil, moerr.NewErrDropIndexNeededInForeignKey(ctx.GetContext(), droppedIndexName)
 				}
 				continue
 			}
 			if fk.ReferencedIndexName != droppedIndexName {
-				if !foreignKeyReferencedIndexExists(parentTableDef, fk.ReferencedIndexName) {
+				if !foreignKeyReferencedIndexCovered(parentTableDef, fk.ReferencedIndexName, referredColumns) {
 					// The recorded binding names a key this parent no longer
 					// has: catalog binding updates applied by an earlier
 					// rebind may not be visible in this resolved child yet.
@@ -6905,14 +6917,16 @@ func buildDropIndex(stmt *tree.DropIndex, ctx CompilerContext) (*Plan, error) {
 			return indexDef.IndexName == resolvedIndexName
 		})
 		var droppedColumns []string
+		droppedEligible := false
 		for _, indexDef := range tableDef.Indexes {
 			if indexDef.IndexName == resolvedIndexName {
 				droppedColumns = indexDef.Parts
+				droppedEligible = indexDef.Unique
 				break
 			}
 		}
 		rebinds, resolveErr := resolveForeignKeyBoundIndexDrops(
-			ctx, tableDef, resolvedIndexName, droppedColumns, survivingDef, nil)
+			ctx, tableDef, resolvedIndexName, droppedColumns, droppedEligible, survivingDef, nil)
 		if resolveErr != nil {
 			return nil, resolveErr
 		}
@@ -7238,6 +7252,7 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 	type droppedForeignKeyKey struct {
 		indexName string
 		columns   []string
+		eligible  bool
 	}
 	var droppedForeignKeyKeys []droppedForeignKeyKey
 	uniqueIndexInfos := make([]*tree.UniqueIndex, 0)
@@ -7295,6 +7310,7 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 							droppedForeignKeyKeys = append(droppedForeignKeyKeys, droppedForeignKeyKey{
 								indexName: constraintName,
 								columns:   indexDef.Parts,
+								eligible:  indexDef.Unique,
 							})
 							break
 						}
@@ -7920,7 +7936,7 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 
 	for _, dropped := range droppedForeignKeyKeys {
 		rebinds, dropErr := resolveForeignKeyBoundIndexDrops(
-			ctx, currentTableDef, dropped.indexName, dropped.columns, currentTableDef, nil)
+			ctx, currentTableDef, dropped.indexName, dropped.columns, dropped.eligible, currentTableDef, nil)
 		if dropErr != nil {
 			return nil, dropErr
 		}

@@ -42,7 +42,7 @@ p2  ¦  CREATE TABLE `p2` (
   UNIQUE KEY `uk_new` (`u`)
 )
 select constraint_name, table_name, refer_table_name, referenced_index_name
-from mo_catalog.mo_foreign_keys where table_name='c2' order by constraint_name;
+from mo_catalog.mo_foreign_keys where db_name='fk_drop_rebind_index' and table_name='c2' order by constraint_name;
 ➤ constraint_name[12,5000,0]  ¦  table_name[12,5000,0]  ¦  refer_table_name[12,5000,0]  ¦  referenced_index_name[12,5000,0]  𝄀
 fkc2  ¦  c2  ¦  p2  ¦  uk_new
 insert into c2 values(4,999);
@@ -55,7 +55,7 @@ insert into p3 values (1);
 insert into c3 values (1,1);
 alter table p3 drop primary key;
 select constraint_name, table_name, refer_table_name, referenced_index_name
-from mo_catalog.mo_foreign_keys where table_name='c3' order by constraint_name;
+from mo_catalog.mo_foreign_keys where db_name='fk_drop_rebind_index' and table_name='c3' order by constraint_name;
 ➤ constraint_name[12,5000,0]  ¦  table_name[12,5000,0]  ¦  refer_table_name[12,5000,0]  ¦  referenced_index_name[12,5000,0]  𝄀
 fkc3  ¦  c3  ¦  p3  ¦  uk_id
 insert into p3 values (2);
@@ -70,3 +70,4 @@ alter table p4 drop index uk_only;
 Cannot drop index 'uk_only': needed in a foreign key constraint
 drop index uk_only on p4;
 Cannot drop index 'uk_only': needed in a foreign key constraint
+drop database if exists fk_drop_rebind_index;

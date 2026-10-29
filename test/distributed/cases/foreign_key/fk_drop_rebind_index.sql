@@ -29,7 +29,7 @@ insert into c2 values (1,10);
 alter table p2 drop index uk_old, add unique index uk_new(u);
 show create table p2;
 select constraint_name, table_name, refer_table_name, referenced_index_name
-    from mo_catalog.mo_foreign_keys where table_name='c2' order by constraint_name;
+    from mo_catalog.mo_foreign_keys where db_name='fk_drop_rebind_index' and table_name='c2' order by constraint_name;
 insert into c2 values(4,999);
 alter table p2 drop index uk_new;
 -- PRIMARY-to-unique transition.
@@ -39,7 +39,7 @@ insert into p3 values (1);
 insert into c3 values (1,1);
 alter table p3 drop primary key;
 select constraint_name, table_name, refer_table_name, referenced_index_name
-    from mo_catalog.mo_foreign_keys where table_name='c3' order by constraint_name;
+    from mo_catalog.mo_foreign_keys where db_name='fk_drop_rebind_index' and table_name='c3' order by constraint_name;
 insert into p3 values (2);
 insert into c3 values (2,2);
 insert into c3 values (9,99);
@@ -50,3 +50,6 @@ insert into p4 values (1,10);
 insert into c4 values (1,10);
 alter table p4 drop index uk_only;
 drop index uk_only on p4;
+
+-- Repository hygiene: leave nothing behind for same-instance reruns.
+drop database if exists fk_drop_rebind_index;

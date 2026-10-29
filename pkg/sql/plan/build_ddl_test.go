@@ -7889,3 +7889,152 @@ func TestSessionDatabaseNullability(t *testing.T) {
 		})
 	}
 }
+
+// Review 5690727734: legacy bindings only protect eligible keys, so ordinary
+// secondary indexes on the same columns stay droppable, matching the baseline
+// executor-side checker that requires key uniqueness.
+func TestLegacyFkDoesNotProtectSecondaryIndexDrops(t *testing.T) {
+	t.Run("secondary index stays droppable", func(t *testing.T) {
+		mock := NewMockOptimizer(true, newPlanTestProcess(t))
+		parent := mock.ctxt.tables["test_idx"]
+		parent.TblId = 100
+		parent.RefChildTbls = []uint64{200}
+		parent.Indexes = []*plan.IndexDef{
+			{IndexName: "idx_sec", Unique: false, Parts: []string{"n_nationkey"}},
+		}
+		child := &TableDef{
+			Name:  "fk_child_legacy",
+			TblId: 200,
+			Fkeys: []*plan.ForeignKeyDef{{
+				Name:                "fk_child_legacy",
+				ForeignTbl:          parent.TblId,
+				ForeignCols:         []uint64{parent.Cols[0].ColId},
+				ReferencedIndexName: "",
+			}},
+		}
+		mock.ctxt.tables[child.Name] = child
+		mock.ctxt.objects[child.Name] = &ObjectRef{SchemaName: "tpch", ObjName: child.Name}
+		mock.ctxt.id2name[child.TblId] = child.Name
+		logic, err := runOneStmt(mock, t, "drop index idx_sec on test_idx")
+		require.NoError(t, err)
+		require.NotNil(t, logic.GetDdl().GetDropIndex())
+	})
+
+	t.Run("covering unique keeps protection", func(t *testing.T) {
+		mock := NewMockOptimizer(true, newPlanTestProcess(t))
+		parent := mock.ctxt.tables["test_idx"]
+		parent.TblId = 100
+		parent.RefChildTbls = []uint64{200}
+		parent.Indexes = []*plan.IndexDef{
+			{IndexName: "uk_c", Unique: true, Parts: []string{"n_nationkey"}},
+		}
+		child := &TableDef{
+			Name:  "fk_child_legacy",
+			TblId: 200,
+			Fkeys: []*plan.ForeignKeyDef{{
+				Name:                "fk_child_legacy",
+				ForeignTbl:          parent.TblId,
+				ForeignCols:         []uint64{parent.Cols[0].ColId},
+				ReferencedIndexName: "",
+			}},
+		}
+		mock.ctxt.tables[child.Name] = child
+		mock.ctxt.objects[child.Name] = &ObjectRef{SchemaName: "tpch", ObjName: child.Name}
+		mock.ctxt.id2name[child.TblId] = child.Name
+		_, err := runOneStmt(mock, t, "drop index uk_c on test_idx")
+		require.Error(t, err)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrDropIndexNeededInForeignKey), err.Error())
+	})
+}
+
+// Review 5690727734: a stale durable claim only counts when a real
+// PRIMARY/UNIQUE key under that name still covers the foreign key's columns;
+// a fake keyless primary and a recreated non-covering name never do.
+func TestStaleClaimRequiresRealCoveringKey(t *testing.T) {
+	caseFn := func(claim string, parentSetup func(*TableDef)) func(t *testing.T) {
+		return func(t *testing.T) {
+			mock := NewMockOptimizer(true, newPlanTestProcess(t))
+			parent := mock.ctxt.tables["test_idx"]
+			parent.TblId = 100
+			parent.RefChildTbls = []uint64{200}
+			parentSetup(parent)
+			child := &TableDef{
+				Name:  "fk_child_stale",
+				TblId: 200,
+				Fkeys: []*plan.ForeignKeyDef{{
+					Name:                "fk_child_stale",
+					ForeignTbl:          parent.TblId,
+					ForeignCols:         []uint64{parent.Cols[0].ColId},
+					ReferencedIndexName: claim,
+				}},
+			}
+			mock.ctxt.tables[child.Name] = child
+			mock.ctxt.objects[child.Name] = &ObjectRef{SchemaName: "tpch", ObjName: child.Name}
+			mock.ctxt.id2name[child.TblId] = child.Name
+			_, err := runOneStmt(mock, t, "alter table test_idx drop index uk_last")
+			require.Error(t, err)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrDropIndexNeededInForeignKey), err.Error())
+		}
+	}
+	t.Run("fake primary key does not satisfy a PRIMARY claim", caseFn("PRIMARY", func(p *TableDef) {
+		p.Pkey = &plan.PrimaryKeyDef{
+			PkeyColName: catalog.FakePrimaryKeyColName,
+			Names:       []string{catalog.FakePrimaryKeyColName},
+		}
+		p.Indexes = []*plan.IndexDef{
+			{IndexName: "uk_last", Unique: true, Parts: []string{"n_nationkey"}},
+		}
+	}))
+	t.Run("recreated non-covering name does not satisfy a claim", caseFn("uk_stale", func(p *TableDef) {
+		p.Pkey = nil
+		p.Indexes = []*plan.IndexDef{
+			{IndexName: "uk_stale", Unique: true, Parts: []string{"n_name"}},
+			{IndexName: "uk_last", Unique: true, Parts: []string{"n_nationkey"}},
+		}
+	}))
+}
+
+// Review 5690727734: a self-referencing DROP PRIMARY KEY must address the
+// catalog rebind to the original table's name; the COPY relation's temporary
+// name is discarded when the relation transfer moves the source rows.
+// Review 5690727734: a self-referencing DROP PRIMARY KEY must address the
+// catalog rebind to the original table's name; the COPY relation's temporary
+// name is discarded when the relation transfer moves the source rows. The
+// full COPY flow needs end-to-end services, so the readdressing itself is
+// pinned here at the planner boundary.
+func TestDropPrimaryKeySelfReferenceRebindAddressesOriginalTable(t *testing.T) {
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
+	copyDef := &TableDef{
+		Name:         "test_idx_copy_TEST",
+		DbName:       "tpch",
+		TblId:        100,
+		RefChildTbls: []uint64{100},
+		Cols: []*ColDef{
+			{Name: "n_nationkey", ColId: 1, Typ: plan.Type{}},
+		},
+		Pkey: &plan.PrimaryKeyDef{
+			Names:       []string{"n_nationkey"},
+			PkeyColName: "n_nationkey",
+		},
+		Indexes: []*plan.IndexDef{
+			{IndexName: "uk_id", Unique: true, Parts: []string{"n_nationkey"}},
+		},
+		Fkeys: []*plan.ForeignKeyDef{{
+			Name:                "fk_self",
+			ForeignTbl:          100,
+			ForeignCols:         []uint64{1},
+			ReferencedIndexName: "PRIMARY",
+		}},
+	}
+	alterPlan := &plan.AlterTable{CopyTableDef: copyDef}
+	alterCtx := &AlterTableContext{
+		originTableName: "test_idx",
+		copyTableName:   "test_idx_copy_TEST",
+	}
+	require.NoError(t, DropPrimaryKey(&mock.ctxt, alterPlan, alterCtx))
+	require.Len(t, alterCtx.UpdateSqls, 1)
+	require.Contains(t, alterCtx.UpdateSqls[0], "referenced_index_name")
+	require.Contains(t, alterCtx.UpdateSqls[0], "fk_self")
+	require.Contains(t, alterCtx.UpdateSqls[0], "'test_idx'")
+	require.NotContains(t, alterCtx.UpdateSqls[0], "test_idx_copy_TEST")
+}
