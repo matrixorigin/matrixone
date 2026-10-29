@@ -29,6 +29,8 @@ from .analytics import (
     _validate_upload,
 )
 
+_CLEANUP_TIMEOUT = 5
+
 
 def _abort(connection):
     """Stop the sole transport before any await can be canceled again."""
@@ -379,6 +381,7 @@ class AsyncFileRelation:
         self._tables = []
         self._sql = ''
         self._closed = False
+        self._close_task = None
 
     @property
     def sources(self):
@@ -386,8 +389,8 @@ class AsyncFileRelation:
         return self._plan.sources
 
     def _check_open(self):
-        if self._closed:
-            raise RuntimeError('File relation is closed')
+        if self._closed or self._close_task is not None:
+            raise RuntimeError('File relation is closing or closed')
 
     async def _sources(self, lease=None):
         self._check_open()
@@ -458,9 +461,20 @@ class AsyncFileRelation:
             await self._server_sources(connection.exec_driver_sql)
             return rows
 
+    @_tracked
     async def close(self):
+        await self._close()
+
+    async def _close(self, primary=None):
         if self._closed:
             return
+        # A timed-out or canceled caller leaves the same DROP owner retained.
+        # Retry joins it until completion; only a finished failure starts anew.
+        if self._close_task is None or self._close_task.done():
+            self._close_task = asyncio.create_task(self._drop_tables())
+        await self._manager._cleanup(self._close_task, primary)
+
+    async def _drop_tables(self):
         first_error = None
         for identity in reversed(self._tables[:]):
             try:
@@ -483,7 +497,7 @@ class AsyncFileRelation:
         return self
 
     async def __aexit__(self, exc_type, exc, traceback):
-        await self._manager._cleanup(self.close(), exc)
+        await self._close(exc)
 
 
 class AsyncAnalyticsManager:
@@ -501,17 +515,18 @@ class AsyncAnalyticsManager:
         return self.client._engine
 
     async def _cleanup(self, coroutine, primary=None):
-        task = asyncio.create_task(coroutine)
-        self._finalizers.add(task)
+        task = asyncio.ensure_future(coroutine)
 
         def completed(done):
             self._finalizers.discard(done)
             if not done.cancelled():
                 done.exception()
 
-        task.add_done_callback(completed)
+        if task not in self._finalizers:
+            self._finalizers.add(task)
+            task.add_done_callback(completed)
         try:
-            await asyncio.wait_for(asyncio.shield(task), 5)
+            await asyncio.wait_for(asyncio.shield(task), _CLEANUP_TIMEOUT)
         except BaseException as error:
             if primary is not None:
                 primary.cleanup_error = error
@@ -582,7 +597,7 @@ class AsyncAnalyticsManager:
         except BaseException as primary:
             primary.file_relation = relation
             primary.attempted_tables = tuple(_qualified_table(*identity) for identity in relation._tables)
-            await self._cleanup(relation.close(), primary)
+            await relation._close(primary)
             primary.owned_tables = tuple(_qualified_table(*identity) for identity in relation._tables)
             raise
 
@@ -658,6 +673,7 @@ class AsyncAnalyticsManager:
     def pending_operations(self):
         return self._workers.pending()
 
+    @_tracked
     async def retry_cleanup(self, operation_id):
         await self._workers.retry_cleanup(operation_id)
 

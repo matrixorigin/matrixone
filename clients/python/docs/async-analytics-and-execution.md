@@ -32,7 +32,9 @@ await client.analytics.upload_arrow(
 ```
 
 File relations own uniquely named ordinary external catalog tables. Closing a
-relation drops only those identities. A failed DROP can be retried with
+relation drops only those identities. Starting close seals further use; a timed-out
+close retains one DROP task, and repeated close calls join it until it completes.
+A failed DROP can be retried against only the remaining identities with
 `await relation.close()`; it retains the engine on which the relation was made.
 A process crash can leave tables. CSV defaults to a header; `header=False`
 preserves the first row and uses explicit schema names or generated names.

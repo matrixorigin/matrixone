@@ -53,8 +53,11 @@ accounting and still-running old leases. Queries are never retried automatically
 
 Client query_timeout bounds each public async operation; stream entry and each
 fetch have separate budgets excluding caller idle time. network_timeout bounds
-actual socket operations, excluding local validation and CPU admission. Database
-finalizers are retained and bounded; blocked foreign Python readers/filesystem
+actual socket operations, excluding local validation and CPU admission. Direct relation close and context/construction cleanup share one retained DROP
+task. Closing seals new use; timeout/cancellation preserves that task, retry joins
+it, and only a completed failure starts another attempt for remaining identities.
+Staging cleanup retry uses the same public operation deadline as other async
+operations. Database finalizers are retained and bounded; blocked foreign Python readers/filesystem
 calls cannot be forcibly interrupted. A process kill may leave recorded owned
 artifacts for explicit reconciliation.
 
