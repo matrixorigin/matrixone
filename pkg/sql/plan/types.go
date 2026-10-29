@@ -382,6 +382,9 @@ type ViewData struct {
 }
 
 type QueryBuilder struct {
+	// DELETE owns these generated scan identities. Optimizer consumers must
+	// revalidate the binding and table after join rewrites.
+	deleteIndexScanTables map[int32]deleteIndexScan
 	integerPrecision      *integerPrecisionBuilder
 	correlationRouteNodes map[int32]bool
 	dependentRelations    map[int32]bool
