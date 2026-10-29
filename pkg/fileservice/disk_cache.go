@@ -26,7 +26,6 @@ import (
 	pathpkg "path"
 	"path/filepath"
 	"runtime"
-	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -76,6 +75,9 @@ type DiskCache struct {
 	// phase barriers. Production instances leave them nil.
 	beforeLoadDirectoryCleanup func(path string)
 	beforeCacheTempFileCreate  func()
+	// beforeIndexLoadedDirs is a test-only phase barrier before the entry directories found
+	// by the load are indexed.
+	beforeIndexLoadedDirs func()
 	// beforeFilePublication is a test-only phase barrier. Production instances
 	// leave it nil, so the publication hot path pays only one predictable branch.
 	beforeFilePublication func()
@@ -276,15 +278,9 @@ func (d *DiskCache) loadCache(ctx context.Context) {
 	}
 	works := make(chan Info)
 
-	// entry directories are added once all are found, least recently used first
-	type dirEntry struct {
-		path    string
-		size    int64
-		lastUse time.Time
-	}
 	var (
 		dirsMu sync.Mutex
-		dirs   []dirEntry
+		dirs   []loadedDir
 	)
 
 	numWorkers := runtime.NumCPU()
@@ -311,7 +307,7 @@ func (d *DiskCache) loadCache(ctx context.Context) {
 							continue // ignore
 						}
 						dirsMu.Lock()
-						dirs = append(dirs, dirEntry{path: work.Path, size: size, lastUse: info.ModTime()})
+						dirs = append(dirs, loadedDir{path: work.Path, size: size, lastUse: info.ModTime()})
 						dirsMu.Unlock()
 						continue
 					}
@@ -403,9 +399,8 @@ func (d *DiskCache) loadCache(ctx context.Context) {
 
 	close(works)
 	wg.Wait()
-	slices.SortFunc(dirs, func(a, b dirEntry) int { return a.lastUse.Compare(b.lastUse) })
-	for _, e := range dirs {
-		d.cache.Set(ctx, e.path, struct{}{}, e.size)
+	if len(dirs) > 0 {
+		d.indexLoadedDirs(ctx, dirs)
 	}
 
 	logutil.Info("disk cache info loaded",

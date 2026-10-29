@@ -103,6 +103,26 @@ func (c *Cache[K, V]) Set(ctx context.Context, key K, value V, size int64) (inse
 	return true, false
 }
 
+// SetOldest adds key as the least recently used item, then evicts down to the capacity.
+// It does nothing and returns false when key is present.
+func (c *Cache[K, V]) SetOldest(ctx context.Context, key K, value V, size int64) bool {
+	c.mu.Lock()
+	if c.items[key] != nil {
+		c.mu.Unlock()
+		return false
+	}
+	c.nextSeq++
+	it := item[K, V]{key: key, value: value, size: size, seq: c.nextSeq}
+	c.items[key] = c.order.PushBack(&it)
+	c.used += size
+	c.mu.Unlock()
+	if c.postSet != nil {
+		c.postSet(ctx, key, value, size, it.seq)
+	}
+	c.Evict(ctx, nil, 0)
+	return true
+}
+
 // Get returns key's value and makes it the most recently used item.
 func (c *Cache[K, V]) Get(ctx context.Context, key K) (value V, ok bool) {
 	c.mu.Lock()

@@ -798,12 +798,16 @@ func TestWriteFallsBackWhenCacheStagingFails(t *testing.T) {
 	cache := newCache(t, dir)
 	tbl := &fakeTable{tableID: 21, rows: func() []chunkRow { return nil }}
 	env := newEnv(t, ctrl, tbl, cache)
+	env.TempDir = t.TempDir()
 	data := randomBytes(2*ChunkSize+9, 21)
 	failCacheStaging(t, dir, 5)
 
 	ref := Ref{DB: "db", Table: "idx", IndexID: "idx:3:0"}
 	var got []byte
 	size, sum, err := Write(context.Background(), env, ref, &onceReader{src: bytes.NewReader(data)}, func(sql string) error {
+		left, err := os.ReadDir(env.TempDir)
+		require.NoError(t, err)
+		require.Empty(t, left, "the private staging file has no name a crash could leave behind")
 		token := sql[strings.Index(sql, "('")+2 : strings.Index(sql, "',")]
 		src, err := LookupSource(token, []byte("txn-1"))
 		require.NoError(t, err)

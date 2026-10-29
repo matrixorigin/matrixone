@@ -105,6 +105,21 @@ func TestEvictsLeastRecentlyUsed(t *testing.T) {
 	require.Zero(t, c.Used())
 }
 
+func TestSetOldestAddsBehindEveryItem(t *testing.T) {
+	ctx := context.Background()
+	c, r := newRecorded(30)
+	c.Set(ctx, "a", 0, 10)
+	require.True(t, c.SetOldest(ctx, "b", 1, 10))
+	require.True(t, c.SetOldest(ctx, "c", 2, 10))
+	require.False(t, c.SetOldest(ctx, "a", 9, 10), "a present key is left in place")
+	require.Equal(t, []string{"a", "b", "c"}, keys(c))
+	r.take()
+
+	require.True(t, c.SetOldest(ctx, "d", 3, 10))
+	require.Equal(t, []string{"a", "b", "c"}, keys(c), "over capacity the item added oldest goes first")
+	require.Equal(t, []string{"set d=3/10", "prepare d", "evict d=3/10", "finish d"}, r.take())
+}
+
 func TestEvictablePassesOverItems(t *testing.T) {
 	ctx := context.Background()
 	c, _ := newRecorded(20)

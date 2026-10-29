@@ -425,6 +425,63 @@ func TestIndexFileCacheEvictionOrderSurvivesRestart(t *testing.T) {
 	}
 }
 
+// Entries found when the cache loads rank behind every entry published while it loads,
+// an entry removed meanwhile is not counted, and an entry published again becomes the
+// most recently used.
+func TestIndexFileCacheLoadRanksBehindUse(t *testing.T) {
+	ctx := context.Background()
+	data := bytes.Repeat([]byte("p"), 64<<10)
+	size := measuredEntrySize(t, data)
+	put := func(c *IndexFileCache, name string) {
+		t.Helper()
+		written, err := c.Put(ctx, name, indexCacheEntry(data))
+		require.NoError(t, err)
+		require.True(t, written, name)
+	}
+
+	// entries left on disk by an earlier process
+	earlier := newTestIndexFileCache(t, t.TempDir(), 1<<30)
+	for i, n := range []string{"old1", "old2", "gone"} {
+		put(earlier, n)
+		ageEntry(t, earlier, n, time.Duration(3-i)*time.Hour)
+	}
+	c := newTestIndexFileCache(t, t.TempDir(), 3*size+10)
+	for _, n := range []string{"old1", "old2", "gone"} {
+		from, err := earlier.disk.pathForDir(n)
+		require.NoError(t, err)
+		to, err := c.disk.pathForDir(n)
+		require.NoError(t, err)
+		require.NoError(t, os.MkdirAll(filepath.Dir(to), 0755))
+		require.NoError(t, os.Rename(from, to))
+	}
+	gonePath, err := c.disk.pathForDir("gone")
+	require.NoError(t, err)
+	c.disk.beforeIndexLoadedDirs = func() {
+		put(c, "fresh")
+		require.NoError(t, os.RemoveAll(gonePath))
+	}
+	c.disk.loadCache(ctx)
+	c.disk.beforeIndexLoadedDirs = nil
+	require.False(t, c.disk.cache.Contains(gonePath), "an entry removed while the cache loads is not counted")
+	require.Equal(t, 3*size, c.disk.cache.Used())
+
+	put(c, "next")
+	requireEntryDir(t, c, "old1", false)
+	for _, n := range []string{"fresh", "old2", "next"} {
+		requireEntryDir(t, c, n, true)
+	}
+
+	old2, err := c.disk.pathForDir("old2")
+	require.NoError(t, err)
+	require.NoError(t, os.RemoveAll(old2))
+	put(c, "old2")
+	put(c, "last")
+	requireEntryDir(t, c, "fresh", false)
+	for _, n := range []string{"old2", "next", "last"} {
+		requireEntryDir(t, c, n, true)
+	}
+}
+
 // measuredEntrySize is the accounted size of an entry of data, in disk blocks.
 func measuredEntrySize(t *testing.T, data []byte) int64 {
 	t.Helper()
@@ -502,6 +559,14 @@ func TestIndexFileCacheRelievesDiskPressure(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, short, "only a held entry is left")
 	require.Equal(t, []string{"e0"}, present())
+
+	// a last use recorded ahead of the clock, as after the clock is set back
+	_, err = c.Put(ctx, "future", indexCacheEntry(bytes.Repeat([]byte{'x'}, 400)))
+	require.NoError(t, err)
+	ageEntry(t, c, "future", -time.Hour)
+	_, err = c.relieveDiskPressure(ctx)
+	require.NoError(t, err)
+	requireEntryDir(t, c, "future", false)
 }
 
 func TestIndexFileCacheCollectsIdleEntries(t *testing.T) {
@@ -551,7 +616,8 @@ func TestIndexFileCacheCollectsIdleEntries(t *testing.T) {
 	require.Empty(t, trash)
 }
 
-// The GC runs on its own ticker until Close; an idle TTL of 0 starts none.
+// The GC runs on its own timer until Close, also with an idle TTL of 0, when it only
+// watches free space.
 func TestIndexFileCacheGCLoop(t *testing.T) {
 	ctx := context.Background()
 	c, err := newIndexFileCache(ctx, t.TempDir(), fscache.ConstCapacity(1<<30), "", "", IndexFileRebuildPolicyDefault, time.Second)

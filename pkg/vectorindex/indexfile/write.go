@@ -133,12 +133,15 @@ func newStagingWriter(cache *fileservice.IndexFileCache, tempDir string) (*stagi
 	return &stagingWriter{f: f, remove: remove, tempDir: tempDir}, nil
 }
 
+// createPrivateTemp creates a temp file in dir, unlinked at once so a crash leaves
+// nothing behind.
 func createPrivateTemp(dir string) (*os.File, func(), error) {
 	f, err := os.CreateTemp(dir, "indexfile-*")
 	if err != nil {
 		return nil, nil, err
 	}
-	return f, func() { _ = os.Remove(f.Name()) }, nil
+	_ = os.Remove(f.Name())
+	return f, func() {}, nil
 }
 
 func (w *stagingWriter) Write(p []byte) (int, error) {

@@ -55,7 +55,8 @@ type CacheConfig struct {
 	// IndexFileDiskPath is the index-file cache directory. Default DiskPath + "-index-file".
 	IndexFileDiskPath *string `toml:"index-file-disk-path"`
 	// IndexFileIdleTTL is how long an index-file cache entry with no holds stays after its
-	// last use; 0 keeps entries until evicted. Default DefaultIndexFileIdleTTL.
+	// last use; 0 turns idle collection off, while free-space collection still runs.
+	// Default DefaultIndexFileIdleTTL.
 	IndexFileIdleTTL *toml.Duration `toml:"index-file-idle-ttl"`
 	// IndexFileRebuildCache is how an index-file rebuild uses the memory and disk caches:
 	// "read-write" (default), "read" or "none".

@@ -220,8 +220,10 @@ cache's eviction. When the cache is over its capacity, it removes the files with
 whose last use is oldest, until it is within capacity. The table-data cache keeps its
 own eviction.
 
-- A file's last use is when it was published, opened or its last hold released. It is
-  recorded on disk, so the order survives a restart.
+- A file's last use is when it was published, opened or its last hold released. Every
+  read through the layer holds its file, so the release of the last hold, recorded on disk
+  with the publication, keeps the order across a restart. Files found on disk after a
+  restart rank behind every file used since.
 - A held file is passed over, so a file in use is never evicted. A newly written file is
   the most recently used and is evicted only after every older file that is not held.
 - When the disk is full, the cache removes files the same way, a tenth of its capacity at
@@ -271,8 +273,8 @@ by time since its last use, not by which index generation or snapshot names it.
 - A file's last use is when it was published or when its last hold was released, as for
   eviction.
 - A file with no holds whose last use is older than the idle TTL is deleted by a periodic
-  collection in each CN. The TTL is configurable, 1 hour by default; 0 turns collection
-  off and leaves only eviction. A hold taken while a file is being collected either keeps
+  collection in each CN. The TTL is configurable, 1 hour by default; 0 turns idle collection
+  off, leaving eviction and the free-space collection below. A hold taken while a file is being collected either keeps
   it or finds it missing and rebuilds it from the rows; a collection never removes a file
   that is held.
 - The same periodic collection also watches the free space of the cache's filesystem
@@ -378,9 +380,10 @@ Every statement in "Contract" is checked by a test that would fail if it were fa
 - a file evicted while open stays readable through the open handle and through the path to
   the handle, and the next open is a miss that rebuilds it;
 - files are evicted least recently used first: a new file is never the victim while an
-  older file is not held, an opened or released file counts as used, a held file is never
+  older file is not held, a file published again becomes the most recently used, an opened or released file counts as used, a held file is never
   evicted and stays in the cache's accounting, and after a restart the files reloaded from
-  disk are evicted in their order of last use before it; a hold kept past the reader's
+  disk are evicted in their order of last use before it and before any file published
+  or opened while they load, which skip files removed meanwhile; a hold kept past the reader's
   close holds the file until it is released; a loaded index holds the files it maps until
   unloaded; a held file
   deleted is removed at once, stays readable through open handles, and a file found
@@ -389,9 +392,9 @@ Every statement in "Contract" is checked by a test that would fail if it were fa
 - a file with no holds last used longer than the idle TTL ago is collected and removed from
   the cache's accounting, while a held one, a recently used one and one whose last hold
   was just released stay; below the low-water mark of free space, files with no holds are
-  removed least recently used first until the target is reached, a held file stays, and
-  an unknown filesystem is left alone; collection runs periodically until the cache closes, a TTL of 0
-  runs none, and a negative TTL is rejected; holds, deletions and collections racing on
+  removed least recently used first until the target is reached, whatever their recorded
+  last use, a held file stays, and an unknown filesystem is left alone; collection runs periodically until the cache closes, a TTL of 0
+  runs no idle collection while free space is still watched, and a negative TTL is rejected; holds, deletions and collections racing on
   the same files leave the directory and the cache index in agreement;
 - concurrent readers missing the same file rebuild it once; a cancelled waiter does not
   hold the lock;

@@ -38,6 +38,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
+	"github.com/matrixorigin/matrixone/pkg/fileservice/lrucache"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 )
 
@@ -225,12 +226,11 @@ func (c *IndexFileCache) relieveDiskPressure(ctx context.Context) (short bool, e
 	need := target - stat.availableBytes
 	var freed uint64
 	n := 0
-	now := time.Now()
 	for _, e := range entries {
 		if freed >= need {
 			break
 		}
-		removed, err := c.disk.removeIdleDir(ctx, e.path, now)
+		removed, err := c.disk.removeIdleDir(ctx, e.path, anyLastUse)
 		if err != nil {
 			return true, err
 		}
@@ -449,6 +449,31 @@ type dirHolds struct {
 	m  map[string]int
 }
 
+// loadedDir is an entry directory found when the cache loads.
+type loadedDir struct {
+	path    string
+	size    int64
+	lastUse time.Time
+}
+
+// indexLoadedDirs indexes the entry directories found when the cache loads behind every
+// entry published or opened meanwhile, in their order of last use, skipping those removed
+// meanwhile.
+func (d *DiskCache) indexLoadedDirs(ctx context.Context, dirs []loadedDir) {
+	lru := d.cache.(*lrucache.Cache[string, struct{}])
+	slices.SortFunc(dirs, func(a, b loadedDir) int { return b.lastUse.Compare(a.lastUse) })
+	if d.beforeIndexLoadedDirs != nil {
+		d.beforeIndexLoadedDirs()
+	}
+	for _, e := range dirs {
+		done := d.startUpdate(e.path)
+		if _, err := os.Stat(e.path); err == nil {
+			lru.SetOldest(ctx, e.path, struct{}{}, e.size)
+		}
+		done()
+	}
+}
+
 // dirHeld reports whether entry directory path has a hold.
 func dirHeld(path string) bool {
 	heldDirs.mu.Lock()
@@ -510,6 +535,10 @@ func (d *DiskCache) removeIdleDir(ctx context.Context, path string, before time.
 	d.cache.Delete(ctx, path)
 	return true, os.RemoveAll(trash)
 }
+
+// anyLastUse is a cutoff later than any entry's last use, even one recorded before the
+// clock was set back.
+var anyLastUse = time.Unix(1<<62, 0)
 
 // idleDirLocked reports whether an entry directory has no holds and was last used before
 // before. The caller holds heldDirs.mu.
@@ -663,7 +692,8 @@ func (d *DiskCache) putDir(ctx context.Context, diskPath string, files []IndexCa
 	}
 	tmpOwned = false
 
-	if !d.cache.Replace(ctx, diskPath, struct{}{}, size) {
+	// a republished entry is the most recently used before its new size is accounted
+	if _, ok := d.cache.Get(ctx, diskPath); !ok || !d.cache.Replace(ctx, diskPath, struct{}{}, size) {
 		d.cache.Set(ctx, diskPath, struct{}{}, size)
 	}
 	if !d.cache.Contains(diskPath) {
