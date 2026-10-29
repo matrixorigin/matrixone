@@ -514,6 +514,105 @@ func fixedTypeMatchWithBoolNumericCast(overloads []overload, inputs []types.Type
 	return newCheckResultWithCast(matched.idx, finalTypes)
 }
 
+// isLogicalBoolOperand reports whether one type can serve as an operand of the
+// logical operators AND/OR/XOR/NOT, whose arguments are a boolean context. It
+// accepts every type the fixed implicit-cast table converts to BOOL and,
+// additionally, BIT: MySQL evaluates BIT as a number in a boolean context
+// (non-zero is TRUE, zero is FALSE, NULL stays NULL), and the execution layer
+// already provides the bit->bool cast for every bit width.
+//
+// The BIT acceptance is deliberately kept inside these boolean argument
+// positions: adding BIT->BOOL to the global implicit-cast table would also
+// change overload and value-result selection in CASE/IF/COALESCE, where BOOL
+// is the only type reachable from both BIT and BOOL (BOOL has no implicit
+// numeric target), so a non-zero BIT value would silently collapse to TRUE.
+func isLogicalBoolOperand(t types.Type) bool {
+	if t.Oid == types.T_bool || t.Oid == types.T_bit {
+		return true
+	}
+	can, _ := fixedImplicitTypeCast(t, types.T_bool)
+	return can
+}
+
+// logicalOperatorTypeCheck is the shared checker for the multiary logical
+// operators AND/OR: every argument must be a boolean-context operand (see
+// isLogicalBoolOperand), and non-BOOL arguments are cast to BOOL. Non-BIT
+// inputs resolve exactly as before; BIT inputs are the only newly accepted
+// domain.
+func logicalOperatorTypeCheck(overloads []overload, inputs []types.Type) checkResult {
+	cost := 0
+	for _, source := range inputs {
+		if source.Oid != types.T_bool {
+			if !isLogicalBoolOperand(source) {
+				return newCheckResultWithFailure(failedFunctionParametersWrong)
+			}
+			cost++
+		}
+	}
+
+	if cost == 0 {
+		return newCheckResultWithSuccess(0)
+	}
+
+	castTypes := make([]types.Type, len(inputs))
+	boolType := types.T_bool.ToType()
+	for i := range castTypes {
+		castTypes[i] = boolType
+	}
+	return newCheckResultWithCast(0, castTypes)
+}
+
+// logicalFixedTypeMatch resolves the fixed-arity logical operators NOT and
+// XOR through the ordinary fixed matcher, normalizing BIT arguments to BOOL
+// first so a BIT operand uses the existing boolean overload with a real
+// bit->bool cast at execution. For every non-BIT input the resolution, cost
+// mechanics, arity handling, and overload selection are exactly those of
+// fixedTypeMatch; only BIT operands are newly accepted (see
+// isLogicalBoolOperand for why BIT stays out of the global cast table).
+func logicalFixedTypeMatch(overloads []overload, inputs []types.Type) checkResult {
+	hasBit := false
+	for _, input := range inputs {
+		if input.Oid == types.T_bit {
+			hasBit = true
+			break
+		}
+	}
+	if !hasBit {
+		return fixedTypeMatch(overloads, inputs)
+	}
+
+	normalized := append([]types.Type(nil), inputs...)
+	for i := range normalized {
+		if normalized[i].Oid == types.T_bit {
+			normalized[i] = types.T_bool.ToType()
+		}
+	}
+	matched := fixedTypeMatch(overloads, normalized)
+	if matched.status != succeedMatched && matched.status != succeedWithCast {
+		return matched
+	}
+
+	boolType := types.T_bool.ToType()
+	if matched.status == succeedWithCast {
+		finalTypes := append([]types.Type(nil), matched.finalType...)
+		for i, input := range inputs {
+			if input.Oid == types.T_bit {
+				finalTypes[i] = boolType
+			}
+		}
+		return newCheckResultWithCast(matched.idx, finalTypes)
+	}
+
+	finalTypes := make([]types.Type, len(inputs))
+	for i, input := range inputs {
+		finalTypes[i] = input
+		if input.Oid == types.T_bit {
+			finalTypes[i] = boolType
+		}
+	}
+	return newCheckResultWithCast(matched.idx, finalTypes)
+}
+
 // stringDomainFixedTypeMatch keeps every MySQL string input in its original
 // OID/width/charset while applying the ordinary fixed matcher to control
 // arguments. Varlena string executors can consume every string family; casting
