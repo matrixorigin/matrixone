@@ -69,48 +69,61 @@ func enforceReadOnlyTxnAccessMode(
 	if execCtx.input != nil && execCtx.input.isInternal() {
 		return nil
 	}
+	// Resolve the effective caller access mode for every admitted statement —
+	// including read-classified ones — and stamp it on the statement's
+	// shared process Base. Admission deliberately exempts carriers it cannot
+	// fully see
+	// into (a temporary-target INSERT keeps its target exemption even when a
+	// sequence-mutating builtin hides in its SELECT arm, and stored views
+	// expand only at binding), so the NEXTVAL/SETVAL mutation boundary
+	// (seqfunc.go) reads this stamp and enforces ERROR 1792 itself. Unstamped
+	// contexts (internal, background or remote execution) keep their previous
+	// behavior.
+	gateSes := ses
+	originless := false
+	if ses.IsBackgroundSession() {
+		origin := upstreamUserSession(ses)
+		if origin == nil {
+			// Trusted maintenance without a user caller stays exempt; its
+			// generated writes are not client-owned, so no stamp is needed.
+			originless = true
+		} else {
+			gateSes = origin
+		}
+	}
+	readOnly := false
+	if !originless {
+		var err error
+		if gateSes != ses {
+			// The caller's mode is read live: this statement executes inside
+			// the caller's transaction lifetime (procedure body or callback),
+			// so the mode of the caller's currently active transaction governs.
+			readOnly, err = callerTxnReadOnly(gateSes)
+		} else {
+			txnHandler := gateSes.GetTxnHandler()
+			if execCtx.txnOpt.activeTxnAtStart && txnHandler != nil {
+				// The active transaction's mode was fixed when it started.
+				// Changing the session default afterwards has no effect on it
+				// (MySQL).
+				readOnly = txnHandler.TxnReadOnly()
+			} else {
+				readOnly, err = sessionTransactionReadOnly(execCtx)
+			}
+		}
+		if err != nil {
+			return err
+		}
+		if execCtx.proc != nil {
+			execCtx.proc.SetReadOnlyTxnAccessMode(readOnly)
+		}
+	}
+
 	defaultDatabase = effectiveDefaultDatabaseWithRemap(ses, execCtx, defaultDatabase)
 	deferOwnership := updateOwnershipDeferred(ses, stmt, defaultDatabase)
 	if !statementRequiresPersistentWriteAccess(ses, stmt, defaultDatabase) && !deferOwnership {
 		return nil
 	}
-
-	gateSes := ses
-	if ses.IsBackgroundSession() {
-		origin := upstreamUserSession(ses)
-		if origin == nil {
-			// Trusted maintenance without a user caller stays exempt.
-			return nil
-		}
-		gateSes = origin
-	}
-
-	readOnly := false
-	if gateSes != ses {
-		// The caller's mode is read live: this statement executes inside the
-		// caller's transaction lifetime (procedure body or callback), so the
-		// mode of the caller's currently active transaction governs.
-		var err error
-		readOnly, err = callerTxnReadOnly(gateSes)
-		if err != nil {
-			return err
-		}
-	} else {
-		txnHandler := gateSes.GetTxnHandler()
-		if execCtx.txnOpt.activeTxnAtStart && txnHandler != nil {
-			// The active transaction's mode was fixed when it started.
-			// Changing the session default afterwards has no effect on it
-			// (MySQL).
-			readOnly = txnHandler.TxnReadOnly()
-		} else {
-			var err error
-			readOnly, err = sessionTransactionReadOnly(execCtx)
-			if err != nil {
-				return err
-			}
-		}
-	}
-	if !readOnly {
+	if originless || !readOnly {
 		return nil
 	}
 	if deferOwnership {

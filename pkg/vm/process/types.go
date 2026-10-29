@@ -528,6 +528,14 @@ type BaseProcess struct {
 	// It is intentionally not part of SessionInfo: remote/rebuilt session state
 	// must not copy or replace a live synchronization object.
 	sequenceGate sequenceGate
+	// readOnlyTxnAccessMode stamps the effective client-facing READ ONLY
+	// access mode of the executing statement's transaction, resolved by the
+	// frontend gate once per user statement, for mutation boundaries that
+	// fire after admission (sequence builtins evaluating inside
+	// temporary-target DML or stored views). Child processes share this
+	// Base, so the stamp set before pipeline construction is visible to
+	// every operator in the statement.
+	readOnlyTxnAccessMode atomic.Bool
 	// groupConcatInputRowCounters gives each logical Group operator one
 	// statement-scoped source-row cursor. A BaseProcess is shared by local
 	// parallel child processes, so partial producers do not restart at row 1.

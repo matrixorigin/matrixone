@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 )
 
 // stubUpdateSourceColumns replaces catalog access for UPDATE assignment
@@ -729,4 +730,35 @@ func TestSequenceMutationClassification(t *testing.T) {
 	currval := parseSingleStatement(t, "select currval('s')")
 	execCtx2 := &ExecCtx{reqCtx: ctx, ses: ses, stmt: currval, txnOpt: FeTxnOption{}, input: &UserInput{}}
 	require.NoError(t, enforceReadOnlyTxnAccessMode(ses, execCtx2, currval, "testdb"))
+}
+
+func TestReadOnlyGateStampsProcessAccessMode(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ses := newTestSession(t, ctrl)
+	ses.SetDatabaseName("testdb")
+	ctx := context.Background()
+	sel := parseSingleStatement(t, "select a from t")
+	proc := testutil.NewProcess(t)
+
+	// Admitted read-classified statements still stamp the effective caller
+	// mode so post-binding mutations (sequence builtins via temp-target DML
+	// or stored views) can enforce it at their boundary.
+	require.NoError(t, ses.SetSessionSysVar(ctx, transactionReadOnlySystemVariable, int64(1)))
+	execCtx := &ExecCtx{reqCtx: ctx, ses: ses, stmt: sel, txnOpt: FeTxnOption{}, input: &UserInput{}, proc: proc}
+	require.NoError(t, enforceReadOnlyTxnAccessMode(ses, execCtx, sel, "testdb"))
+	require.Equal(t, true, proc.ReadOnlyTxnAccessMode())
+
+	require.NoError(t, ses.SetSessionSysVar(ctx, transactionReadOnlySystemVariable, int64(0)))
+	require.NoError(t, enforceReadOnlyTxnAccessMode(ses, execCtx, sel, "testdb"))
+	require.Equal(t, false, proc.ReadOnlyTxnAccessMode())
+
+	// The active transaction's declared mode wins over the session default
+	// changed after it started (MySQL).
+	ses.GetTxnHandler().txnReadOnly = true
+	activeCtx := &ExecCtx{reqCtx: ctx, ses: ses, stmt: sel, input: &UserInput{}, proc: proc,
+		txnOpt: FeTxnOption{activeTxnAtStart: true, activeTxnAtStartKnown: true}}
+	require.NoError(t, enforceReadOnlyTxnAccessMode(ses, activeCtx, sel, "testdb"))
+	require.Equal(t, true, proc.ReadOnlyTxnAccessMode())
+	ses.GetTxnHandler().txnReadOnly = false
 }

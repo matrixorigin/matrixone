@@ -439,5 +439,45 @@ Cannot execute statement in a READ ONLY transaction.
 set session transaction_read_only = 0;
 deallocate prepare r8_pp;
 drop sequence r8_sq;
+create sequence r9_sq;
+select nextval('r9_sq');
+nextval(r9_sq)
+1
+create view r9_v as select nextval('r9_sq') as nv;
+create temporary table r9_tt (a int);
+set session transaction_read_only = 1;
+select * from r9_v;
+Cannot execute statement in a READ ONLY transaction.
+insert into r9_tt select nextval('r9_sq');
+Cannot execute statement in a READ ONLY transaction.
+select count(*) from r9_tt;
+count(*)
+0
+insert into r9_tt values (1);
+select count(*) from r9_tt;
+count(*)
+1
+select currval('r9_sq');
+currval(r9_sq)
+1
+create view r9_v2 as select 1 as a;
+Cannot execute statement in a READ ONLY transaction.
+set session transaction_read_only = 0;
+select nextval('r9_sq');
+nextval(r9_sq)
+2
+select * from r9_v;
+nv
+3
+insert into r9_tt select nextval('r9_sq');
+select currval('r9_sq');
+currval(r9_sq)
+4
+select count(*) from r9_tt;
+count(*)
+2
+drop temporary table r9_tt;
+drop view r9_v;
+drop sequence r9_sq;
 drop table t;
 drop database txn_readonly;

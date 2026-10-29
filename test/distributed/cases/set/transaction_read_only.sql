@@ -399,5 +399,33 @@ set session transaction_read_only = 0;
 deallocate prepare r8_pp;
 drop sequence r8_sq;
 
+-- Sequence mutations hidden behind admission-exempt carriers are enforced at
+-- the mutation boundary: a temporary-target INSERT arm and a stored view
+-- evaluate NEXTVAL after the classifier has exempted the carrier, so the
+-- boundary rejects the counter write itself. Ordinary temporary writes and
+-- session-local sequence reads stay permitted, and a blocked NEXTVAL still
+-- consumes nothing.
+create sequence r9_sq;
+select nextval('r9_sq');
+create view r9_v as select nextval('r9_sq') as nv;
+create temporary table r9_tt (a int);
+set session transaction_read_only = 1;
+select * from r9_v;
+insert into r9_tt select nextval('r9_sq');
+select count(*) from r9_tt;
+insert into r9_tt values (1);
+select count(*) from r9_tt;
+select currval('r9_sq');
+create view r9_v2 as select 1 as a;
+set session transaction_read_only = 0;
+select nextval('r9_sq');
+select * from r9_v;
+insert into r9_tt select nextval('r9_sq');
+select currval('r9_sq');
+select count(*) from r9_tt;
+drop temporary table r9_tt;
+drop view r9_v;
+drop sequence r9_sq;
+
 drop table t;
 drop database txn_readonly;
