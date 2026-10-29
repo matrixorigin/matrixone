@@ -154,3 +154,21 @@ func TestDefaultAdmissionMaxInt64(t *testing.T) {
 	require.Zero(t, left)
 	require.Equal(t, int64(math.MaxInt64), m.reserved.Load())
 }
+
+func TestDefaultAdmissionExhaustedMemoryDoesNotWrap(t *testing.T) {
+	for _, merge := range []bool{false, true} {
+		t.Run(map[bool]string{false: "physical", true: "merge"}[merge], func(t *testing.T) {
+			// A prior reservation may remain after RSS rises above the budget.
+			m := admissionFixture(math.MaxInt64, math.MaxInt64, 0, 0, merge)
+			_, ok := m.Acquire(math.MaxInt64)
+			require.True(t, ok)
+			m.limit.Store(100)
+			m.actualTotalMemory.Store(100)
+			m.rss.Store(102)
+			left, ok := m.Acquire(1)
+			if ok || left != 0 || m.reserved.Load() != math.MaxInt64 {
+				t.Errorf("exhausted budget: left=%d, granted=%t, reserved=%d", left, ok, m.reserved.Load())
+			}
+		})
+	}
+}
