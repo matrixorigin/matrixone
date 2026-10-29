@@ -2848,10 +2848,12 @@ func TestPreparedJSONComparisonSelection(t *testing.T) {
 	for _, test := range []struct {
 		name, parameter, jsonValue string
 		typ                        types.T
+		kind                       vector.PrepareParamKind
 		reject                     bool
 	}{
-		{name: "JSON string differs from numeric parameter", parameter: "1", jsonValue: `"1"`, typ: types.T_int64},
-		{name: "narrow parameter retains range rejection", parameter: "127", jsonValue: `128`, typ: types.T_int8, reject: true},
+		{name: "JSON string differs from numeric parameter", parameter: "1", jsonValue: `"1"`, typ: types.T_int64, kind: vector.PrepareParamInteger},
+		{name: "narrow integer compares wider JSON", parameter: "127", jsonValue: `128`, typ: types.T_int8, kind: vector.PrepareParamInteger},
+		{name: "float32 retains range rejection", parameter: "1", jsonValue: `1e100`, typ: types.T_float32, kind: vector.PrepareParamFloat, reject: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			checkExpressionStorageAfterCleanup(t, proc)
@@ -2860,7 +2862,7 @@ func TestPreparedJSONComparisonSelection(t *testing.T) {
 			params := vector.NewVec(types.T_text.ToType())
 			defer params.Free(proc.Mp())
 			require.NoError(t, vector.AppendBytes(params, []byte(test.parameter), false, proc.Mp()))
-			proc.SetPrepareParamsWithTypedMeta(params, nil, []vector.PrepareParamKind{vector.PrepareParamInteger}, []types.T{test.typ})
+			proc.SetPrepareParamsWithTypedMeta(params, nil, []vector.PrepareParamKind{test.kind}, []types.T{test.typ})
 			bat := batch.NewWithSize(1)
 			defer bat.Clean(proc.Mp())
 			bat.Vecs[0] = vector.NewVec(types.T_json.ToType())
@@ -2886,7 +2888,7 @@ func TestPreparedJSONComparisonSelection(t *testing.T) {
 			for _, selection := range [][]bool{nil, {false, true}} {
 				result, err := executor.Eval(proc, []*batch.Batch{bat}, selection)
 				if test.reject {
-					require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidArg), "expected exact-width conversion failure: %v", err)
+					require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidArg), "expected floating-point range failure: %v", err)
 				} else {
 					require.NoError(t, err)
 					require.Equal(t, 2, result.Length())
@@ -2910,7 +2912,8 @@ func TestPreparedJSONComparisonSelection(t *testing.T) {
 			empty, err = executor.Eval(proc, []*batch.Batch{bat}, []bool{})
 			require.NoError(t, err)
 			require.Zero(t, empty.Length())
-			// Retry the same compaction/scatter path after a selected conversion error.
+			// Reuse the compaction/scatter path with a matching value, including
+			// recovery after the FLOAT32 conversion error.
 			fill(test.parameter, 2)
 			result, err := executor.Eval(proc, []*batch.Batch{bat}, []bool{false, true})
 			require.NoError(t, err)
@@ -2920,13 +2923,13 @@ func TestPreparedJSONComparisonSelection(t *testing.T) {
 			require.True(t, vector.GetFixedAtNoTypeCheck[bool](result, 1))
 			if test.reject {
 				fill(test.jsonValue, 2)
-				proc.SetPrepareParamsWithTypedMeta(params, nil, []vector.PrepareParamKind{vector.PrepareParamInteger}, []types.T{types.T_int64})
+				proc.SetPrepareParamsWithTypedMeta(params, nil, []vector.PrepareParamKind{test.kind}, []types.T{types.T_float64})
 				executor.ResetForNextQuery()
 				result, err = executor.Eval(proc, []*batch.Batch{bat}, []bool{false, true})
 				require.NoError(t, err)
 				require.False(t, result.IsNull(1))
 				require.False(t, vector.GetFixedAtNoTypeCheck[bool](result, 1))
-				proc.SetPrepareParamsWithTypedMeta(params, nil, []vector.PrepareParamKind{vector.PrepareParamInteger}, []types.T{test.typ})
+				proc.SetPrepareParamsWithTypedMeta(params, nil, []vector.PrepareParamKind{test.kind}, []types.T{test.typ})
 				executor.ResetForNextQuery()
 				_, err = executor.Eval(proc, []*batch.Batch{bat}, []bool{false, true})
 				require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidArg))
