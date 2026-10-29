@@ -413,3 +413,54 @@ func TestSqlAutoIsNullDerivedTablePlainProjectionStillRewritten(t *testing.T) {
 		"a plain derived projection must keep the rewrite")
 	require.True(t, sqlAutoIsNullAnyNodeNotCacheable(qry))
 }
+
+// The grouped family pins the aggregate boundary (review 5690740934's
+// follow-up 5691534789). MySQL cannot merge a derived table that contains
+// GROUP BY or aggregate functions, so the outer statement observes a
+// materialized column: it no longer resolves to the AUTO_INCREMENT
+// definition, and an aggregate over null-extended rows can genuinely yield
+// NULL. The whole-clause form therefore keeps plain IS NULL semantics for
+// every reference whose lineage crosses an aggregate node.
+
+// TestSqlAutoIsNullGroupedDerivedNullSideNotRewritten is the review case:
+// the grouped column of the null-extended side must keep the NULL group row
+// observable, never compare it to last_insert_id().
+func TestSqlAutoIsNullGroupedDerivedNullSideNotRewritten(t *testing.T) {
+	cc := newSqlAutoIsNullTestContext(t, int64(1), nil)
+	qry := buildSqlAutoIsNullQuery(t, cc,
+		"select d.seq from (select s.seq from auto_t m left join auto_t s "+
+			"on m.seq = s.seq group by s.seq) d where d.seq is null")
+	require.False(t, sqlAutoIsNullQueryHasFunction(qry, "last_insert_id"),
+		"a grouped null-extended AUTO_INCREMENT column must keep plain IS NULL semantics")
+	require.True(t, sqlAutoIsNullQueryHasFunction(qry, "isnull"))
+	require.False(t, sqlAutoIsNullAnyNodeNotCacheable(qry))
+}
+
+// TestSqlAutoIsNullGroupedPlainDerivedNotRewritten pins the materialization
+// parity of the same boundary without any join: MySQL never rewrites through
+// a grouped derived table, and the plain query over a NOT NULL AUTO_INCREMENT
+// column therefore observes an empty result instead of the last-inserted row.
+func TestSqlAutoIsNullGroupedPlainDerivedNotRewritten(t *testing.T) {
+	cc := newSqlAutoIsNullTestContext(t, int64(1), nil)
+	qry := buildSqlAutoIsNullQuery(t, cc,
+		"select d.seq from (select seq from auto_t group by seq) d where d.seq is null")
+	require.False(t, sqlAutoIsNullQueryHasFunction(qry, "last_insert_id"),
+		"a grouped derived table materializes before the outer statement and never carries the rewrite")
+	require.True(t, sqlAutoIsNullQueryHasFunction(qry, "isnull"))
+	require.False(t, sqlAutoIsNullAnyNodeNotCacheable(qry))
+}
+
+// TestSqlAutoIsNullAggregateOverNullSideNotRewritten pins the aggregate side
+// of the boundary: an aggregate over null-extended rows can yield NULL for a
+// group, so the whole-clause form on the aggregate output keeps plain
+// semantics regardless of which leg of the gate protects it.
+func TestSqlAutoIsNullAggregateOverNullSideNotRewritten(t *testing.T) {
+	cc := newSqlAutoIsNullTestContext(t, int64(1), nil)
+	qry := buildSqlAutoIsNullQuery(t, cc,
+		"select d.m from (select max(s.seq) as m from auto_t m left join auto_t s "+
+			"on m.seq = s.seq group by m.val) d where d.m is null")
+	require.False(t, sqlAutoIsNullQueryHasFunction(qry, "last_insert_id"),
+		"an aggregate output over a null-extended side must keep plain IS NULL semantics")
+	require.True(t, sqlAutoIsNullQueryHasFunction(qry, "isnull"))
+	require.False(t, sqlAutoIsNullAnyNodeNotCacheable(qry))
+}

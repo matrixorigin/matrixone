@@ -87,4 +87,18 @@ select d.ti, d.ui from (select t.id as ti, u.id as ui from t30717 t left join u3
 select d.id from (select id from t30717) d where d.id is null;
 ➤ id[-5,64,0]  𝄀
 1
+select d.ui from (select u.id as ui from t30717 t left join u30717 u on u.id=t.id group by u.id) d where d.ui is null;
+➤ ui[-5,64,0]  𝄀
+null
+select d.id from (select id from t30717 group by id) d where d.id is null;
+➤ id[-5,64,0]
+select d.m from (select max(u.id) as m from t30717 t left join u30717 u on u.id=t.id group by t.v) d where d.m is null order by d.m;
+➤ m[-5,64,0]  𝄀
+null  𝄀
+null  𝄀
+null  𝄀
+null  𝄀
+null  𝄀
+null  𝄀
+null
 drop database if exists sql_auto_is_null_bvt;

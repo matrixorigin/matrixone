@@ -9799,25 +9799,29 @@ func (builder *QueryBuilder) colRefOnOuterJoinNullSide(fromNodeID int32, col *pl
 // FROM subtree that project that tag: the projected expression's own column
 // references decide the lineage. References landing on raw relations are
 // terminal (they already answered in nullSideTags); references landing on
-// other projections recurse. visited bounds the resolution against cycles.
+// other projections recurse; references landing on an aggregate node's
+// grouped or aggregated output mark an aggregate boundary that excludes the
+// rewrite outright, because MySQL materializes grouped derived tables and an
+// aggregate over null-extended rows can itself yield NULL. visited bounds the
+// resolution against cycles.
 func (builder *QueryBuilder) colRefProducedOnNullSide(fromNodeID int32, col *plan.ColRef,
 	nullSideTags map[int32]struct{}, visited map[[2]int32]bool) bool {
 	if col == nil {
 		return false
 	}
 	var producers []int32
+	aggBoundary := false
 	var collect func(nodeID int32)
 	collect = func(nodeID int32) {
 		if nodeID < 0 || int(nodeID) >= len(builder.qry.Nodes) {
 			return
 		}
 		node := builder.qry.Nodes[nodeID]
-		if len(node.ProjectList) > 0 {
-			for _, tag := range node.BindingTags {
-				if tag == col.RelPos {
-					producers = append(producers, nodeID)
-					break
-				}
+		if slices.Contains(node.BindingTags, col.RelPos) {
+			if len(node.ProjectList) > 0 {
+				producers = append(producers, nodeID)
+			} else if len(node.AggList) > 0 || len(node.GroupBy) > 0 {
+				aggBoundary = true
 			}
 		}
 		for _, child := range node.Children {
@@ -9825,6 +9829,14 @@ func (builder *QueryBuilder) colRefProducedOnNullSide(fromNodeID int32, col *pla
 		}
 	}
 	collect(fromNodeID)
+	if aggBoundary {
+		// MySQL cannot merge a derived table containing GROUP BY or
+		// aggregate functions, so the outer statement observes a
+		// materialized column that no longer resolves to the
+		// AUTO_INCREMENT definition; the whole-clause form keeps plain
+		// IS NULL semantics across the aggregate boundary.
+		return true
+	}
 	for _, producer := range producers {
 		project := builder.qry.Nodes[producer].ProjectList
 		if col.ColPos < 0 || int(col.ColPos) >= len(project) {

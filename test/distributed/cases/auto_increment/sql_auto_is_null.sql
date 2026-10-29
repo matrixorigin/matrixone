@@ -62,4 +62,11 @@ insert into u30717(b) values (1),(2);
 select d.ti, d.ui from (select t.id as ti, u.id as ui from t30717 t left join u30717 u on u.id=t.id) d where d.ui is null order by d.ti;
 select d.ti, d.ui from (select t.id as ti, u.id as ui from t30717 t left join u30717 u on u.id=t.id) d where d.ti is null order by d.ti;
 select d.id from (select id from t30717) d where d.id is null;
+-- Grouped derived tables cross an aggregate boundary: MySQL materializes
+-- them (derived-table merge is impossible with GROUP BY), so the projected
+-- column no longer resolves to the AUTO_INCREMENT definition and the
+-- whole-clause form keeps plain IS NULL semantics (review 5691534789).
+select d.ui from (select u.id as ui from t30717 t left join u30717 u on u.id=t.id group by u.id) d where d.ui is null;
+select d.id from (select id from t30717 group by id) d where d.id is null;
+select d.m from (select max(u.id) as m from t30717 t left join u30717 u on u.id=t.id group by t.v) d where d.m is null order by d.m;
 drop database if exists sql_auto_is_null_bvt;
