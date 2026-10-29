@@ -51,9 +51,8 @@ class CloneTable(CloneStatement):
         return self
 
     def if_not_exists(self) -> 'CloneTable':
-        """Add IF NOT EXISTS clause."""
-        self._if_not_exists = True
-        return self
+        """Reject unsafe raw IF NOT EXISTS at the point of use."""
+        raise ValueError('Raw CLONE IF NOT EXISTS is unsafe; use client.clone with if_not_exists=True')
 
     def to_account(self, account: str) -> 'CloneTable':
         """Set target account for cross-tenant cloning (sys tenant only)."""
@@ -91,9 +90,8 @@ class CloneDatabase(CloneStatement):
         return self
 
     def if_not_exists(self) -> 'CloneDatabase':
-        """Add IF NOT EXISTS clause."""
-        self._if_not_exists = True
-        return self
+        """Reject unsafe raw IF NOT EXISTS at the point of use."""
+        raise ValueError('Raw CLONE IF NOT EXISTS is unsafe; use client.clone with if_not_exists=True')
 
     def to_account(self, account: str) -> 'CloneDatabase':
         """Set target account for cross-tenant cloning (sys tenant only)."""
