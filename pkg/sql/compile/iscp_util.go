@@ -164,6 +164,12 @@ func CreateIndexCdcTask(c *Compile, dbname string, tablename string, tableid uin
 			IndexName: indexname,
 			InitSQL:   sql},
 	}
+	if sinker_type == int8(iscp.ConsumerType_IndexSync) {
+		// AlwaysUpdate already gives this index its own iteration. Older CNs
+		// understand that trigger and safely ignore the new TargetRows field.
+		spec.TriggerSpec.JobType = iscp.TriggerType_AlwaysUpdate
+		spec.TriggerSpec.TargetRows = iscp.DefaultTargetChangeRows
+	}
 	job := &iscp.JobID{DBName: dbname, TableName: tablename, JobName: genCdcTaskJobID(indexname)}
 
 	// create index cdc task
