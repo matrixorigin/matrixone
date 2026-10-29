@@ -1443,9 +1443,7 @@ func (builder *QueryBuilder) casePreservesType(expr *plan.Expr) bool {
 // Inspect only referenced origins in the input graph, without expanding or
 // mutating expressions. Unknown producers retain the historical IS TRUE barrier.
 func (builder *QueryBuilder) existentialJoinPredicatesAreTotal(predicates []*plan.Expr, inputs ...int32) bool {
-	if !areTruncationSafePredicates(predicates) {
-		return false
-	}
+	legacyProof := areTruncationSafePredicates(predicates)
 	origins := make(map[int32]*plan.Node)
 	visited := make(map[int32]uint8)
 	var collect func(int32) bool
@@ -1506,6 +1504,47 @@ func (builder *QueryBuilder) existentialJoinPredicatesAreTotal(predicates []*pla
 		}
 	}
 
+	// TEXT width zero also describes some unbounded computed expressions. Only
+	// use the ordinary stored TEXT byte limit after following transparent column
+	// references to the actual table definition.
+	storedTextIsBounded := func(expr *plan.Expr) bool {
+		seen := make(map[[2]int32]bool)
+		for expr != nil && types.T(expr.Typ.Id) == types.T_text && expr.Typ.Width == 0 {
+			col := expr.GetCol()
+			if col == nil || col.ColPos < 0 {
+				return false
+			}
+			key := [2]int32{col.RelPos, col.ColPos}
+			if seen[key] {
+				return false
+			}
+			seen[key] = true
+			node := origins[col.RelPos]
+			if node == nil {
+				return false
+			}
+			if node.NodeType == plan.Node_TABLE_SCAN {
+				if int(col.ColPos) >= len(node.TableDef.Cols) || node.TableDef.Cols[col.ColPos] == nil {
+					return false
+				}
+				typ := node.TableDef.Cols[col.ColPos].Typ
+				return types.T(typ.Id) == types.T_text && typ.Width == 0
+			}
+			if node.NodeType != plan.Node_PROJECT || int(col.ColPos) >= len(node.ProjectList) {
+				return false
+			}
+			expr = node.ProjectList[col.ColPos]
+		}
+		return false
+	}
+	if !legacyProof {
+		for _, predicate := range predicates {
+			if !existentialPredicateIsTotal(predicate, storedTextIsBounded) {
+				return false
+			}
+		}
+	}
+
 	proved := make(map[[2]int32]uint8)
 	var inspect func(*plan.Expr) bool
 	inspect = func(expr *plan.Expr) bool {
@@ -1528,7 +1567,7 @@ func (builder *QueryBuilder) existentialJoinPredicatesAreTotal(predicates []*pla
 					return false
 				}
 				origin := node.ProjectList[col.ColPos]
-				if !isTruncationSafePredicateValue(origin) || !inspect(origin) {
+				if !(legacyProof && isTruncationSafePredicateValue(origin) || existentialValueIsTotal(origin, storedTextIsBounded)) || !inspect(origin) {
 					return false
 				}
 			}
