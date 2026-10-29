@@ -195,6 +195,9 @@ func requireSequence(ctx context.Context, rel engine.Relation) error {
 // Return advanced last_seq_num.
 
 func Nextval(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	if err = rejectSequenceMutationInReadOnly(proc); err != nil {
+		return err
+	}
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	ivec := vector.GenerateFunctionStrParameter(ivecs[0])
 	var databases vector.FunctionParameterWrapper[types.Varlena]
@@ -240,6 +243,27 @@ func Nextval(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *
 				return
 			}
 		}
+	}
+	return nil
+}
+
+// rejectSequenceMutationInReadOnly enforces the READ ONLY transaction access
+// mode at the sequence mutation boundary. Frontend admission cannot see every
+// carrier of a sequence builtin — a temporary-target INSERT keeps its target
+// exemption even when NEXTVAL hides in its SELECT arm, and stored views
+// expand only at binding — so the frontend gate stamps the effective caller
+// access mode (active transaction's declared mode, else the session
+// transaction_read_only default) onto the shared process Base for every
+// user statement. A stamped read-only mode rejects the mutation with
+// ERROR 1792 before any counter write; an unstamped (zero-value) mode —
+// internal, background or remote execution — keeps its previous behavior,
+// and session-local CURRVAL/LASTVAL do not pass through here.
+func rejectSequenceMutationInReadOnly(proc *process.Process) error {
+	if proc == nil || proc.Ctx == nil {
+		return nil
+	}
+	if proc.ReadOnlyTxnAccessMode() {
+		return moerr.NewCantExecuteInReadOnlyTransaction(proc.Ctx)
 	}
 	return nil
 }
@@ -441,6 +465,9 @@ func setIsCalled[T constraints.Integer](proc *process.Process, rel engine.Relati
 }
 
 func Setval(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	if err = rejectSequenceMutationInReadOnly(proc); err != nil {
+		return err
+	}
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	tblnames := vector.GenerateFunctionStrParameter(ivecs[0])
 	setnums := vector.GenerateFunctionStrParameter(ivecs[1])
