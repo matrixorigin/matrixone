@@ -1982,6 +1982,15 @@ func (c *Compile) compilePlanScopeWithUnionAllDemand(
 		ss = c.compileTableScanFiltersAndProjection(node, ss)
 		return ss, nil
 	case plan.Node_FILTER, plan.Node_ASSERT, plan.Node_PROJECT:
+		if c.canCompileParallelUnionAllProjection(step, curNodeIdx, nodes, outerUnionAllDemand) {
+			ss, err = c.compileParallelUnionAllInput(step, node.Children[0], nodes)
+			if err != nil {
+				return nil, err
+			}
+			c.setAnalyzeCurrent(ss, int(curNodeIdx))
+			ss = c.compileProjection(node, ss)
+			return []*Scope{c.newMergeScope(ss)}, nil
+		}
 		childDemand := streamingUnionAllDemand(node, outerUnionAllDemand)
 		ss, err = c.compilePlanScopeWithUnionAllDemand(step, node.Children[0], nodes, childDemand)
 		if err != nil {
