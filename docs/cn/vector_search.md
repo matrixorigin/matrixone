@@ -17,7 +17,8 @@ SELECT @@session.probe_limit;
 
 `nprobe` 可以不指定 `mode`。IVFFLAT AUTO 可根据统计信息在这个基础上扩大探测，
 因此它不是 AUTO 的硬上限；`force` 不使用索引探测。POST 在有限候选中过滤，可能短页。
-AUTO 按该版本的策略选择执行方式；满页不保证精确召回，短页行为取决于查询形状和策略。
+AUTO 按该版本的策略选择执行方式；索引检索结果为空时会回退到 PRE，非空短页不会触发回退。
+满页也不保证精确召回；需要精确结果时使用 `mode=force`。
 未知参数、非字符串选项和非法 `nprobe` 会报错。
 
 IVFPQ 是 GPU 索引，需要支持 CUDA 的构建和兼容设备；CPU 构建不提供 GPU 执行能力。
