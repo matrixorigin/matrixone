@@ -566,6 +566,73 @@ func TestJSONValueSemanticNormalizationAndClone(t *testing.T) {
 	require.Equal(t, tree.JsonValueImplicitResponse, copyExpr.JsonValue.OnError.Mode)
 }
 
+func TestJSONValueSemanticKeyHandlesLegacyAcceptNodes(t *testing.T) {
+	parseExprWithOwner := func(sql string) (tree.Expr, func()) {
+		stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql, 1)
+		require.NoError(t, err)
+		selectStmt := stmt.(*tree.Select).Select.(*tree.SelectClause)
+		return selectStmt.Exprs[0].Expr, stmt.Free
+	}
+	parseExpr := func(sql string) tree.Expr {
+		stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql, 1)
+		require.NoError(t, err)
+		selectStmt := stmt.(*tree.Select).Select.(*tree.SelectClause)
+		expr := cloneTreeExpr(selectStmt.Exprs[0].Expr)
+		stmt.Free()
+		return expr
+	}
+
+	integer := tree.NewNumVal(int64(1), "1", false, tree.P_int64)
+	interval := tree.NewIntervalExpr(tree.INTERVAL_TYPE_DAY)
+	interval.Expr = integer
+	subquery, releaseSubquery := parseExprWithOwner(`select (select 1)`)
+	defer releaseSubquery()
+	nodes := []struct {
+		name string
+		expr tree.Expr
+	}{
+		{name: "subquery", expr: subquery},
+		{name: "expression list", expr: parseExpr(`select 1 in (1, 2)`)},
+		{name: "interval", expr: interval},
+		{name: "variable", expr: tree.NewVarExpr("legacy_var", false, false, nil)},
+		{name: "string value", expr: tree.NewStrVal("legacy")},
+	}
+	for _, node := range nodes {
+		t.Run(node.name, func(t *testing.T) {
+			require.NotEmpty(t, semanticAstKey(node.expr))
+			require.NotEmpty(t, semanticAstKey(&tree.ParenExpr{Expr: node.expr}))
+		})
+	}
+
+	implicit := parseExpr(`select json_value('{"v":7}', '$.v' returning signed)`)
+	explicitNull := parseExpr(`select json_value('{"v":7}', '$.v' returning signed null on empty null on error)`)
+	implicitSample, err := tree.NewSampleRowsFuncExpression(1, false, tree.Exprs{implicit}, "row")
+	require.NoError(t, err)
+	explicitSample, err := tree.NewSampleRowsFuncExpression(1, false, tree.Exprs{explicitNull}, "row")
+	require.NoError(t, err)
+	require.Equal(t, semanticAstKey(explicitSample), semanticAstKey(implicitSample), "SampleExpr keeps children in a private field")
+}
+
+func TestJSONValueSemanticKeyInNestedSubqueryBinding(t *testing.T) {
+	_, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
+		`select json_value('{"v":7}', '$.v' returning signed) in (1, 2) group by json_value('{"v":7}', '$.v' returning signed) in (1, 2)`)
+	require.NoError(t, err)
+	_, err = runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
+		`select (select json_value('{"v":7}', '$.v' returning signed)) as nested_json_value group by (select json_value('{"v":7}', '$.v' returning signed))`)
+	require.NoError(t, err)
+	parseExpr := func(sql string) (tree.Expr, func()) {
+		stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql, 1)
+		require.NoError(t, err)
+		selectStmt := stmt.(*tree.Select).Select.(*tree.SelectClause)
+		return selectStmt.Exprs[0].Expr, stmt.Free
+	}
+	implicit, releaseImplicit := parseExpr(`select (select json_value('{"v":7}', '$.v' returning signed))`)
+	defer releaseImplicit()
+	explicitNull, releaseExplicit := parseExpr(`select (select json_value('{"v":7}', '$.v' returning signed null on empty null on error))`)
+	defer releaseExplicit()
+	require.Equal(t, semanticAstKey(explicitNull), semanticAstKey(implicit))
+}
+
 func TestJSONValueVisitorVisitsDefaults(t *testing.T) {
 	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL,
 		`select json_value('1', '$' default 0 on empty default 1 on error)`, 1)

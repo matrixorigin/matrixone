@@ -142,20 +142,6 @@ func semanticNodeKey(node tree.NodeFormatter) string {
 	return identity + "\x00" + display
 }
 
-type jsonValueSemanticNormalizer struct{}
-
-func (jsonValueSemanticNormalizer) Enter(expr tree.Expr) (tree.Expr, bool) {
-	if fn, ok := expr.(*tree.FuncExpr); ok && fn.JsonValue != nil {
-		spec := fn.JsonValue.SemanticNormalized()
-		fn.JsonValue = &spec
-	}
-	return expr, false
-}
-
-func (jsonValueSemanticNormalizer) Exit(expr tree.Expr) (tree.Expr, bool) {
-	return expr, true
-}
-
 // normalizeJSONValueSemantics works on a clone so formatting used for
 // expression identity never changes the AST that will later be rebound or
 // shown to the user.
@@ -167,9 +153,15 @@ func normalizeJSONValueSemantics(astExpr tree.Expr) tree.Expr {
 	if clone == nil {
 		return astExpr
 	}
-	if visited, ok := clone.Accept(jsonValueSemanticNormalizer{}); ok && visited != nil {
-		return visited
-	}
+	// Semantic normalization is syntax-only, so continue into nested SELECTs.
+	// The reflection walker also handles legacy nodes whose Accept panics.
+	walkTreeExpr(clone, func(expr tree.Expr) bool {
+		if fn, ok := expr.(*tree.FuncExpr); ok && fn.JsonValue != nil {
+			spec := fn.JsonValue.SemanticNormalized()
+			fn.JsonValue = &spec
+		}
+		return true
+	}, true)
 	return clone
 }
 

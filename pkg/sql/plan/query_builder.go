@@ -10937,6 +10937,14 @@ func containsGroupingFunction(astExpr tree.Expr) bool {
 var groupingOrderFuncExprType = reflect.TypeOf(tree.FuncExpr{})
 
 func walkGroupingSetOrderByExpr(astExpr tree.Expr, visit func(tree.Expr) bool) {
+	walkTreeExpr(astExpr, visit, false)
+}
+
+// walkTreeExpr traverses expression-valued AST fields without calling Accept.
+// Some legacy nodes have unimplemented Accept methods. Sample
+// expressions keep their children in a private field, which callers can opt in
+// to traversing through GetColumns.
+func walkTreeExpr(astExpr tree.Expr, visit func(tree.Expr) bool, includeSampleColumns bool) {
 	visited := make(map[uintptr]struct{})
 	var walk func(reflect.Value)
 	walk = func(value reflect.Value) {
@@ -10960,8 +10968,18 @@ func walkGroupingSetOrderByExpr(astExpr tree.Expr, visit func(tree.Expr) bool) {
 			}
 			visited[pointer] = struct{}{}
 			if value.CanInterface() {
-				if expr, ok := value.Interface().(tree.Expr); ok && !visit(expr) {
-					return
+				if expr, ok := value.Interface().(tree.Expr); ok {
+					if !visit(expr) {
+						return
+					}
+					if includeSampleColumns {
+						if sample, ok := expr.(*tree.SampleExpr); ok {
+							columns, _ := sample.GetColumns()
+							for _, column := range columns {
+								walk(reflect.ValueOf(column))
+							}
+						}
+					}
 				}
 			}
 			walk(value.Elem())
