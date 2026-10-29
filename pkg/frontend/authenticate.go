@@ -6838,7 +6838,8 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 			dbName = string(st.Table.SchemaName)
 		}
 	case *tree.ShowIndexIgnored:
-		// lists primary keys of the table's rows: SELECT on the table, checked on the plan
+		// lists primary keys of the table's rows: SELECT on the table, checked on the plan, or
+		// on the named table when the plan reads no table
 		objType = objectTypeTable
 		typs = append(typs, PrivilegeTypeSelect, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership)
 		canExecInRestricted = true
@@ -9387,6 +9388,20 @@ func authenticateUserCanExecuteStatementWithObjectTypeDatabaseAndTable(ctx conte
 					clusterTableOperation: clusterTableModify,
 				})
 			}
+			// SHOW INDEX IGNORED reads no table when the table has no ignored-rows table (an
+			// ordinary table, or an index without one): SELECT is still checked on the table.
+			if st, isShow := stmt.(*tree.ShowIndexIgnored); isShow {
+				if dbName, tableName, ok := getShowIndexIgnoredTableName(st, ses); ok {
+					arr = append(arr, privilegeTips{
+						typ:                   PrivilegeTypeSelect,
+						objType:               objectTypeTable,
+						databaseName:          dbName,
+						tableName:             tableName,
+						isClusterTable:        isClusterTable(dbName, tableName),
+						clusterTableOperation: clusterTableSelect,
+					})
+				}
+			}
 		}
 		if len(arr) == 0 {
 			return true, stats, nil
@@ -9423,6 +9438,21 @@ func getInsertTargetTableName(stmt *tree.Insert, ses *Session) (string, string, 
 		dbName = ses.GetDatabaseName()
 	}
 	tableName := string(name.ObjectName)
+	if dbName == "" || tableName == "" {
+		return "", "", false
+	}
+	return dbName, tableName, true
+}
+
+func getShowIndexIgnoredTableName(stmt *tree.ShowIndexIgnored, ses *Session) (string, string, bool) {
+	if stmt == nil || stmt.TableName == nil {
+		return "", "", false
+	}
+	dbName := stmt.TableName.GetDBName()
+	if dbName == "" {
+		dbName = ses.GetDatabaseName()
+	}
+	tableName := stmt.TableName.GetTableName()
 	if dbName == "" || tableName == "" {
 		return "", "", false
 	}
