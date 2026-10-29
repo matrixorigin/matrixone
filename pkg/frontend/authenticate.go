@@ -40,7 +40,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
-	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -10839,11 +10838,7 @@ func InitGeneralTenant(ctx context.Context, bh BackgroundExec, ses *Session, ca 
 		if rtnErr != nil {
 			return rtnErr
 		}
-		protocolVersion, protocolErr := protocolVersionForTenantInitializationWithContext(ctx, ses.GetService(), ses.GetProc())
-		if protocolErr != nil {
-			return protocolErr
-		}
-		rtnErr = createTablesInInformationSchemaOfGeneralTenantWithProtocol(newTenantCtx, bh, protocolVersion)
+		rtnErr = createTablesInInformationSchemaOfGeneralTenant(newTenantCtx, bh)
 		if rtnErr != nil {
 			return rtnErr
 		}
@@ -11229,24 +11224,7 @@ func createTablesInSystemOfGeneralTenant(ctx context.Context, bh BackgroundExec,
 }
 
 // createTablesInInformationSchemaOfGeneralTenant creates the database information_schema and the views or tables.
-func createTablesInInformationSchemaOfGeneralTenant(
-	ctx context.Context,
-	bh BackgroundExec,
-	service string,
-	proc *process.Process,
-) error {
-	protocolVersion, err := protocolVersionForTenantInitializationWithContext(ctx, service, proc)
-	if err != nil {
-		return err
-	}
-	return createTablesInInformationSchemaOfGeneralTenantWithProtocol(ctx, bh, protocolVersion)
-}
-
-func createTablesInInformationSchemaOfGeneralTenantWithProtocol(
-	ctx context.Context,
-	bh BackgroundExec,
-	protocolVersion int64,
-) error {
+func createTablesInInformationSchemaOfGeneralTenant(ctx context.Context, bh BackgroundExec) error {
 	start := time.Now()
 	defer func() {
 		v2.CreateTablesInInfoSchemaDurationHistogram.Observe(time.Since(start).Seconds())
@@ -11256,17 +11234,13 @@ func createTablesInInformationSchemaOfGeneralTenantWithProtocol(
 	// with new tenant
 	// TODO: when we have the auto_increment column, we need new strategy.
 
-	// COLUMNS keeps its independent protocol contract even when VIEWS falls back.
-	if protocolVersion >= defines.MORPCVersion100 {
-		requiredProtocol := defines.MORPCVersion100
-		if protocolVersion >= defines.MORPCVersion109 {
-			requiredProtocol = defines.MORPCVersion109
-		}
-		if err := requireCommonViewColumnsProtocol(ctx, bh, requiredProtocol); err != nil {
-			return err
-		}
+	// The account row is committed at this binary's catalog version. Require
+	// the complete current definition set instead of publishing older views
+	// under that version when capability discovery is unavailable.
+	if err := requireCommonInformationSchemaProtocol(ctx, bh, defines.MORPCVersion126); err != nil {
+		return err
 	}
-	informationSchemaTables := sysview.InitInformationSchemaSysTablesForProtocol(protocolVersion)
+	informationSchemaTables := sysview.InitInformationSchemaSysTables
 	var err error
 	sqls := make([]string, 0, len(informationSchemaTables)+len(sysview.InitMysqlSysTables)+4)
 
@@ -11285,83 +11259,7 @@ func createTablesInInformationSchemaOfGeneralTenantWithProtocol(
 	return err
 }
 
-func protocolVersionForTenantInitialization(service string, proc *process.Process) (int64, error) {
-	return protocolVersionForTenantInitializationWithContext(context.Background(), service, proc)
-}
-
-func protocolVersionForTenantInitializationWithContext(
-	ctx context.Context,
-	service string,
-	proc *process.Process,
-) (int64, error) {
-	// Account creation must remain available while the cluster is rolling out
-	// the parser-derived VIEWS functions. The v109 fallback preserves the
-	// native COLUMNS contract; an admitted v118 predecessor also retains TABLES.
-	// Bootstrap maintenance revisits the final-version account row once the
-	// VIEWS capability becomes available.
-	legacyVersion := defines.MORPCMinVersion
-	predecessorViewsVersion := defines.MORPCVersion109
-	rt := moruntime.ServiceRuntime(service)
-	if rt == nil {
-		return legacyVersion, nil
-	}
-	value, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
-	if !ok {
-		return legacyVersion, nil
-	}
-	version, ok := value.(int64)
-	if !ok {
-		return legacyVersion, nil
-	}
-	if version < defines.MORPCVersion126 {
-		// Preserve every pre-existing protocol-specific information_schema
-		// contract. Only the new VIEWS function needs the predecessor
-		// fallback; promoting an older known protocol would also install newer
-		// TABLES/COLUMNS and role-closure definitions.
-		return version, nil
-	}
-	// Admission for TABLES v118 and VIEWS v126 is independent. Keep TABLES
-	// when both its local authoring fence and the current peers support it.
-	floorValue, hasFloor := rt.GetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor)
-	floor, validFloor := floorValue.(int64)
-	fallbackProtocol := func() (int64, error) {
-		if err := ctx.Err(); err != nil {
-			return 0, err
-		}
-		if hasFloor && (!validFloor || floor < defines.MORPCVersion118) {
-			return predecessorViewsVersion, nil
-		}
-		supported, err := compile.AllCNsSupportProtocolWithContext(ctx, proc, defines.MORPCVersion118)
-		if ctx.Err() != nil {
-			return 0, ctx.Err()
-		}
-		if err == nil && supported {
-			return defines.MORPCVersion118, nil
-		}
-		return predecessorViewsVersion, nil
-	}
-	// A missing key retains standalone runtimes' existing capability behavior.
-	if hasFloor && (!validFloor || floor < defines.MORPCVersion126) {
-		return fallbackProtocol()
-	}
-	supported, err := compile.AllCNsSupportProtocolWithContext(ctx, proc, defines.MORPCVersion126)
-	if err != nil {
-		// Capability discovery is deliberately best-effort for account
-		// creation. Do not turn a temporary inventory/RPC failure into a
-		// failed CREATE ACCOUNT, but preserve cancellation of the owning
-		// process so shutdown and request cancellation still propagate.
-		if ctx.Err() != nil {
-			return 0, ctx.Err()
-		}
-		return fallbackProtocol()
-	}
-	if !supported {
-		return fallbackProtocol()
-	}
-	return version, nil
-}
-
-func requireCommonViewColumnsProtocol(ctx context.Context, bh BackgroundExec, requiredProtocol int64) error {
+func requireCommonInformationSchemaProtocol(ctx context.Context, bh BackgroundExec, requiredProtocol int64) error {
 	bh.ClearExecResultSet()
 	// This fixed cluster probe is system-authored; subsequent tenant DDL keeps its original identity.
 	probeCtx := defines.AttachAccount(ctx, catalog.System_Account, catalog.System_User, catalog.System_Role)
