@@ -123,3 +123,51 @@ func TestLoadFormatFilepathNoBackslashEscape(t *testing.T) {
 	load.Format(ctx)
 	require.Contains(t, ctx.String(), "infile 'C:\\tmp\\it''s.parquet'")
 }
+
+func TestLoadOptionDiagnostics(t *testing.T) {
+	for _, option := range []struct{ name, other string }{
+		{name: "parallel", other: "strict"},
+		{name: "strict", other: "parallel"},
+	} {
+		for _, value := range []string{"invalid", ""} {
+			t.Run(option.name+"/"+value, func(t *testing.T) {
+				stmt, err := ParseOne(context.Background(),
+					"load data infile 'input.csv' into table t "+option.name+" '"+value+"'", 1)
+				require.Error(t, err)
+				require.Nil(t, stmt)
+				require.ErrorContains(t, err, "error "+option.name+" flag")
+				require.NotContains(t, err.Error(), "error "+option.other+" flag")
+			})
+		}
+	}
+}
+
+func TestLoadOptionValues(t *testing.T) {
+	for _, test := range []struct {
+		name, clause                string
+		parallel, specified, strict bool
+	}{
+		{"omitted", "", false, false, true},
+		{"parallel_true", " parallel 'true'", true, true, true},
+		{"parallel_false", " parallel 'false'", false, true, true},
+		{"parallel_mixed_true", " parallel 'TrUe'", true, true, true},
+		{"parallel_mixed_false", " parallel 'FaLsE'", false, true, true},
+		{"strict_true", " strict 'true'", false, false, true},
+		{"strict_false", " strict 'false'", false, false, false},
+		{"strict_mixed_true", " strict 'TrUe'", false, false, true},
+		{"strict_mixed_false", " strict 'FaLsE'", false, false, false},
+		{"both_false", " parallel 'false' strict 'false'", false, true, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			stmt, err := ParseOne(context.Background(), "load data infile 'input.csv' into table t"+test.clause, 1)
+			require.NoError(t, err)
+			require.NotNil(t, stmt)
+			defer stmt.Free()
+			load, ok := stmt.(*tree.Load)
+			require.True(t, ok)
+			require.Equal(t, test.parallel, load.Param.Parallel)
+			require.Equal(t, test.specified, load.Param.ParallelSpecified)
+			require.Equal(t, test.strict, load.Param.Strict)
+		})
+	}
+}
