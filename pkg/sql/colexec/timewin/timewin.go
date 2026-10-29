@@ -158,8 +158,14 @@ func (ctr *container) evalGapFillBounds(timeWin *TimeWin, proc *process.Process)
 	if !timeWin.hasGapFillBounds() {
 		return nil
 	}
+	// These copies describe the output grid; the original WHERE expressions
+	// own statement diagnostics. Probing the grid must not publish warnings
+	// again, or publish them when no input row evaluates the predicate.
+	child := proc.NewNoContextChildProc(0)
+	child.Ctx = proc.Ctx
+	child.WarningSink = &process.WarningProbe{}
 	eval := func(exe colexec.ExpressionExecutor, name string) (types.Datetime, bool, error) {
-		vec, err := exe.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
+		vec, err := exe.Eval(child, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
 		if err != nil {
 			return 0, false, err
 		}
