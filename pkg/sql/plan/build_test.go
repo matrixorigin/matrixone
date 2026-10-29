@@ -4551,7 +4551,7 @@ func TestDropIndexIfExistsMissingIndex(t *testing.T) {
 	_, err = runOneStmt(mock, t, "drop index nonexist on test_idx")
 	require.Error(t, err)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrCantDropFieldOrKey), err.Error())
-	require.EqualError(t, err, "Can\'t DROP \'nonexist\'; check that column/key exists")
+	require.EqualError(t, err, "Can't DROP 'nonexist'; check that column/key exists")
 }
 
 func TestUpdatePgStyleFromDedupsDuplicateSourceMatchesOnNewPath(t *testing.T) {
