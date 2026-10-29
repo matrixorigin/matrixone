@@ -1,4 +1,5 @@
 -- RENAME USER preserves stable identity, grants and existing sessions across name reuse.
+-- SHOW GRANTS is unordered: use the tester default full-row multiset comparison.
 drop database if exists ru30467_db;
 drop user if exists ru30467_a, ru30467_b, ru30467_mid, ru30467_moved;
 drop role if exists ru30467_reader;
@@ -24,7 +25,6 @@ select connection_id();
 select current_user_id()={{ru30467_a_id}} as source_identity;
 select current_role();
 select v from ru30467_db.marker;
--- @sortkey:0
 show grants;
 -- @session
 -- The first pair writes; the second collides with that destination.
@@ -45,11 +45,8 @@ select v from ru30467_db.marker;
 -- The original JDBC session ID is reused, not reauthenticated.
 -- @session:id=11&user=sys:ru30467_a&password=ru30467_password
 select connection_id()={{ru30467_old_conn}} and current_user_id()={{ru30467_a_id}} as original_session;
--- @sortkey:0
 show grants;
--- @sortkey:0
 show grants for current_user;
--- @sortkey:0
 show grants for current_user();
 -- @session
 rename user ru30467_b to ru30467_a;
@@ -63,19 +60,12 @@ rename user ru30467_moved to ru30467_b;
 -- @session:id=11&user=sys:ru30467_a&password=ru30467_password
 select connection_id()={{ru30467_old_conn}} and current_user_id()={{ru30467_a_id}} as original_session_after_reuse;
 select v from ru30467_db.marker;
--- @sortkey:0
 show grants;
--- @sortkey:0
 show grants for current_user;
--- @sortkey:0
 show grants for current_user();
--- @sortkey:0
 show grants for 'ru30467_a';
--- @sortkey:0
 show grants for 'ru30467_moved';
--- @sortkey:0
 show grants for 'ru30467_moved'@'%';
--- @sortkey:0
 show grants for role ru30467_reader;
 -- @session
 rename user ru30467_moved to ru30467_a;
