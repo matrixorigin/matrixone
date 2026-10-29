@@ -6838,8 +6838,8 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 			dbName = string(st.Table.SchemaName)
 		}
 	case *tree.ShowIndexIgnored:
-		// lists primary keys of the table's rows: SELECT on the table, checked on the plan, or
-		// on the named table when the plan reads no table
+		// lists primary keys of the table's rows: SELECT on the named table and on what the
+		// plan reads
 		objType = objectTypeTable
 		typs = append(typs, PrivilegeTypeSelect, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership)
 		canExecInRestricted = true
@@ -9388,19 +9388,19 @@ func authenticateUserCanExecuteStatementWithObjectTypeDatabaseAndTable(ctx conte
 					clusterTableOperation: clusterTableModify,
 				})
 			}
-			// SHOW INDEX IGNORED reads no table when the table has no ignored-rows table (an
-			// ordinary table, or an index without one): SELECT is still checked on the table.
-			if st, isShow := stmt.(*tree.ShowIndexIgnored); isShow {
-				if dbName, tableName, ok := getShowIndexIgnoredTableName(st, ses); ok {
-					arr = append(arr, privilegeTips{
-						typ:                   PrivilegeTypeSelect,
-						objType:               objectTypeTable,
-						databaseName:          dbName,
-						tableName:             tableName,
-						isClusterTable:        isClusterTable(dbName, tableName),
-						clusterTableOperation: clusterTableSelect,
-					})
-				}
+		}
+		// SHOW INDEX IGNORED needs SELECT on the named table, which its plan may not read: the
+		// table may have no ignored-rows table, and a WHERE subquery reads other tables.
+		if st, isShow := stmt.(*tree.ShowIndexIgnored); isShow {
+			if dbName, tableName, ok := getShowIndexIgnoredTableName(st, ses); ok {
+				arr = append(arr, privilegeTips{
+					typ:                   PrivilegeTypeSelect,
+					objType:               objectTypeTable,
+					databaseName:          dbName,
+					tableName:             tableName,
+					isClusterTable:        isClusterTable(dbName, tableName),
+					clusterTableOperation: clusterTableSelect,
+				})
 			}
 		}
 		if len(arr) == 0 {

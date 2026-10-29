@@ -138,11 +138,16 @@ show index ignored from hnsw_ignored.m;
 show index ignored from hnsw_ignored.e;
 -- @session
 grant select on table hnsw_ignored.m to hnsw_ignored_r;
+-- @session:id=2&user=sys:hnsw_ignored_u:hnsw_ignored_r&password=111
+show index ignored from hnsw_ignored.e where exists (select 1 from hnsw_ignored.m);
+show index ignored from hnsw_ignored.e where Key_name = (select 'm2' from hnsw_ignored.m limit 1);
+-- @session
 grant select on table hnsw_ignored.e to hnsw_ignored_r;
 -- @session:id=2&user=sys:hnsw_ignored_u:hnsw_ignored_r&password=111
 -- @ignore:3
 show index ignored from hnsw_ignored.m where Key_name = 'm2';
 show index ignored from hnsw_ignored.e;
+show index ignored from hnsw_ignored.e where exists (select 1 from hnsw_ignored.m);
 -- @session
 drop user hnsw_ignored_u;
 drop role hnsw_ignored_r;
