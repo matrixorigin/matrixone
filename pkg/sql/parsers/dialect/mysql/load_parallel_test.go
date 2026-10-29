@@ -171,3 +171,32 @@ func TestLoadOptionValues(t *testing.T) {
 		})
 	}
 }
+
+func TestLoadOptionDiagnosticsWithAdjacentOptions(t *testing.T) {
+	for _, test := range []struct {
+		name, clause, expected, other string
+	}{
+		{"invalid_parallel_valid_strict", "parallel ' true ' strict 'false'", "parallel", "strict"},
+		{"valid_parallel_invalid_strict", "parallel 'true' strict 'falsex'", "strict", "parallel"},
+		{"both_invalid", "parallel 'falsex' strict 'truex'", "parallel", "strict"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			stmt, err := ParseOne(context.Background(), "load data infile 'input.csv' into table t "+test.clause, 1)
+			require.Error(t, err)
+			require.Nil(t, stmt)
+			require.ErrorContains(t, err, "error "+test.expected+" flag")
+			require.NotContains(t, err.Error(), "error "+test.other+" flag")
+
+			// A failed parse must not poison the next parse in the same process.
+			stmt, err = ParseOne(context.Background(), "load data infile 'input.csv' into table t parallel 'false' strict 'true'", 1)
+			require.NoError(t, err)
+			require.NotNil(t, stmt)
+			defer stmt.Free()
+			load, ok := stmt.(*tree.Load)
+			require.True(t, ok)
+			require.False(t, load.Param.Parallel)
+			require.True(t, load.Param.ParallelSpecified)
+			require.True(t, load.Param.Strict)
+		})
+	}
+}
