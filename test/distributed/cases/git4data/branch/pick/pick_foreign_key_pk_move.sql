@@ -2668,3 +2668,9 @@ select id, v from xr2_p order by id;
 select id, pid from xr2_c order by id;
 
 drop database branch_pick_fk_pk_move;
+
+-- Restore the default isolation this file replaced above: mo-tester
+-- reuses the default connection across files, and an inherited
+-- repeatable-read session makes later lifecycle statements fail the
+-- pessimistic-RC admission gates.
+set session transaction isolation level read committed;

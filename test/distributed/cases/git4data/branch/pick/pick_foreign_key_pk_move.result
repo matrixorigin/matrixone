@@ -3285,3 +3285,4 @@ select id, pid from xr2_c order by id;
 ➤ id[4,32,0]  ¦  pid[4,32,0]  𝄀
 900  ¦  1
 drop database branch_pick_fk_pk_move;
+set session transaction isolation level read committed;
