@@ -216,7 +216,7 @@ func (p *SpilledSegment) Write(sqlproc *sqlexec.SqlProcess, cfg TableConfig, ts 
 		}
 		ref := baseRef(cfg, p.Id, p.size, "")
 		ref.Tag = int64(tag)
-		size, sum, err := writeIndexFile(sqlproc, nil, exec.Txn(), ref, io.NewSectionReader(p.fp, 0, p.size), run)
+		size, sum, err := writeIndexFile(sqlproc, nil, exec.Txn(), ref, io.NewSectionReader(p.fp, 0, p.size), localSpillDir(sqlproc), run)
 		if err != nil {
 			return err
 		}

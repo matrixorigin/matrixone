@@ -140,6 +140,23 @@ func newFileServiceCaches(
 		return caches, err
 	}
 
+	if indexCapacity > 0 {
+		path := filepath.Clean(*config.DiskPath) + "-index-file"
+		if config.IndexFileDiskPath != nil && *config.IndexFileDiskPath != "" {
+			path = filepath.Clean(*config.IndexFileDiskPath)
+		}
+		caches.index, err = acquireIndexFileCache(ctx, *config.DiskPath, indexFileCacheSettings{
+			path:           path,
+			capacity:       indexCapacity,
+			rebuildPolicy:  rebuildPolicy,
+			idleTTL:        idleTTL,
+			checkOnStartup: config.IndexFileCheckOnStartup,
+		}, name+"-index-file", config.MetricScope)
+		if err != nil {
+			return caches, err
+		}
+	}
+
 	if enableDiskCache && config.DiskCapacity != nil &&
 		*config.DiskCapacity > DisableCacheCapacity && config.DiskPath != nil {
 		var cacheDataAllocator CacheDataAllocator
@@ -163,36 +180,6 @@ func newFileServiceCaches(
 		logutil.Info("fileservice: disk cache initialized",
 			zap.Any("fs-name", name),
 			zap.Any("config", config),
-		)
-	}
-
-	if indexCapacity > 0 {
-		path := filepath.Clean(*config.DiskPath) + "-index-file"
-		if config.IndexFileDiskPath != nil && *config.IndexFileDiskPath != "" {
-			path = filepath.Clean(*config.IndexFileDiskPath)
-		}
-		if err = checkIndexFileDiskPath(*config.DiskPath, path); err != nil {
-			return caches, err
-		}
-		caches.index, err = newIndexFileCache(
-			ctx,
-			path,
-			fscache.ConstCapacity(indexCapacity),
-			name+"-index-file",
-			config.MetricScope,
-			rebuildPolicy,
-			idleTTL,
-		)
-		if err != nil {
-			return caches, err
-		}
-		caches.index.SetCheckOnStartup(config.IndexFileCheckOnStartup)
-		logutil.Info("fileservice: index file cache initialized",
-			zap.Any("fs-name", name),
-			zap.String("path", path),
-			zap.Int64("capacity", indexCapacity),
-			zap.Duration("idle-ttl", idleTTL),
-			zap.Bool("check-on-startup", config.IndexFileCheckOnStartup),
 		)
 	}
 
@@ -251,7 +238,7 @@ func (c *CacheConfig) indexFileIdleTTL() (time.Duration, error) {
 
 func (c *fileServiceCaches) close(ctx context.Context) {
 	if c.index != nil {
-		c.index.Close(ctx)
+		releaseIndexFileCache(ctx, c.index)
 		c.index = nil
 	}
 	if c.disk != nil {

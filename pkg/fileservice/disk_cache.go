@@ -57,7 +57,9 @@ type DiskCache struct {
 	cache        diskCacheIndex
 	capacityFunc fscache.CapacityFunc
 	dirEntries   bool
-	directoryMu  sync.RWMutex
+	// held counts the holds on entry directories.
+	held        dirHolds
+	directoryMu sync.RWMutex
 	// diskFullEviction is held by the single eviction that responds to
 	// disk-full write failures.
 	diskFullEviction atomic.Bool
@@ -234,7 +236,7 @@ func newDiskCache(
 	}
 	if opts.dirEntries {
 		lru := lrucache.NewWithPrepareEvict(capacityFunc, keyShard, postSet, nil, prepareEvict, postEvict)
-		lru.SetEvictable(func(path string) bool { return !dirHeld(path) })
+		lru.SetEvictable(func(path string) bool { return !ret.dirHeld(path) })
 		ret.cache = lru
 	} else {
 		ret.cache = fifocache.NewWithPrepareEvict(capacityFunc, keyShard, postSet, nil, prepareEvict, postEvict)

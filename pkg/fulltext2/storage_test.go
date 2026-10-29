@@ -343,6 +343,10 @@ func TestTailPersistPackedRanges(t *testing.T) {
 		}
 		rows := strings.Count(strings.Join(metadata, ""), TailFrameMetaPrefix)
 		require.Equal(t, len(frames), rows, "every frame has a metadata row")
+		require.Len(t, files.tempDirs, len(largeFrames))
+		for _, dir := range files.tempDirs {
+			require.Equal(t, tb.dir, dir, "an index file is staged in the builder's spill directory")
+		}
 	}
 	next, err := tb.PersistFinished(sp, testStorageCfg(), nil, 7, 0)
 	require.NoError(t, err)
@@ -350,7 +354,7 @@ func TestTailPersistPackedRanges(t *testing.T) {
 	check()
 	// The finished owner retains its spool for a transaction retry.
 	actual, batchRows, metadata = nil, nil, nil
-	files.files = make(map[string][]byte)
+	files.files, files.tempDirs = make(map[string][]byte), nil
 	next, err = tb.PersistFinished(sp, testStorageCfg(), nil, 7, 0)
 	require.NoError(t, err)
 	require.Equal(t, start, next)

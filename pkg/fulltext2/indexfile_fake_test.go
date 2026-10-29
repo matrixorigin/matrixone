@@ -44,8 +44,8 @@ type fakeIndexFiles struct {
 	opens   int
 	openErr error
 	held    map[string]int
-	// uncached records the files written with no storage engine or cache.
-	uncached map[string]bool
+	// tempDirs records the staging directory of each write.
+	tempDirs []string
 }
 
 func fakeFileKey(id string, tag, first int64) string { return fmt.Sprintf("%s/%d/%d", id, tag, first) }
@@ -97,7 +97,7 @@ func (f *fakeIndexFiles) holds(id string, tag, first int64) int {
 
 // swapIndexFiles replaces the index-file layer for the test.
 func swapIndexFiles(t *testing.T) *fakeIndexFiles {
-	fake := &fakeIndexFiles{files: make(map[string][]byte), held: make(map[string]int), uncached: make(map[string]bool)}
+	fake := &fakeIndexFiles{files: make(map[string][]byte), held: make(map[string]int)}
 	prevOpen, prevWrite := openIndexFile, writeIndexFile
 	openIndexFile = func(_ *sqlexec.SqlProcess, ref indexfile.Ref) (indexFile, error) {
 		fake.mu.Lock()
@@ -132,14 +132,14 @@ func swapIndexFiles(t *testing.T) *fakeIndexFiles {
 		return &fakeOpenFile{f: f, size: int64(len(buf)), release: fake.hold(key)}, nil
 	}
 	writeIndexFile = func(_ *sqlexec.SqlProcess, files *indexfile.Files, _ client.TxnOperator, ref indexfile.Ref, src io.Reader,
-		_ func(sql string) error) (int64, string, error) {
+		tempDir string, _ func(sql string) error) (int64, string, error) {
 		buf, err := io.ReadAll(src)
 		if err != nil {
 			return 0, "", err
 		}
 		fake.put(ref.IndexID, ref.Tag, ref.FirstChunk, buf)
 		fake.mu.Lock()
-		fake.uncached[fakeFileKey(ref.IndexID, ref.Tag, ref.FirstChunk)] = files != nil && files.Engine == nil && files.Cache == nil
+		fake.tempDirs = append(fake.tempDirs, tempDir)
 		fake.mu.Unlock()
 		return int64(len(buf)), indexfile.Checksum(buf), nil
 	}

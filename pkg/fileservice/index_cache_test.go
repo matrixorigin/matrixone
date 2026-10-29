@@ -747,29 +747,37 @@ func TestIndexFileCacheTwoInstancesShareDirectory(t *testing.T) {
 	require.Empty(t, trash)
 }
 
-// A hold taken through one instance keeps the entry from the idle collection of another
-// instance sharing the directory.
-func TestIndexFileCacheHoldSeenAcrossInstances(t *testing.T) {
+// CNs of a process configured with the same index-file cache directory share one cache,
+// created with the settings of the first and closed with the last; CNs with different
+// directories have their own.
+func TestIndexFileCacheSharedPerDirectory(t *testing.T) {
 	ctx := context.Background()
-	dir := t.TempDir()
-	c1 := newTestIndexFileCache(t, dir, 1<<30)
-	c2 := newTestIndexFileCache(t, dir, 1<<30)
-	_, err := c1.Put(ctx, "e", indexCacheEntry([]byte("shared")))
-	require.NoError(t, err)
-	release, err := c1.Hold("e")
-	require.NoError(t, err)
+	config := indexCacheConfig(t, 100<<20, 300<<20)
+	c1 := newTestFileServiceCaches(t, config)
+	same := indexCacheConfig(t, 100<<20, 50<<20)
+	path := c1.index.disk.path + string(filepath.Separator)
+	same.IndexFileDiskPath = &path
+	c2 := newTestFileServiceCaches(t, same)
+	require.Same(t, c1.index, c2.index)
+	require.Equal(t, int64(300<<20), c2.index.disk.capacityFunc(), "the first CN's settings are kept")
 
-	n, err := c2.collectIdle(ctx, time.Now().Add(time.Hour))
-	require.NoError(t, err)
-	require.Zero(t, n)
-	requireEntryDir(t, c1, "e", true)
+	other := newTestFileServiceCaches(t, indexCacheConfig(t, 100<<20, 50<<20))
+	require.NotSame(t, c1.index, other.index)
+	require.Equal(t, int64(50<<20), other.index.disk.capacityFunc())
 
-	release()
-	ageEntry(t, c1, "e", 2*time.Hour)
-	n, err = c2.collectIdle(ctx, time.Now().Add(-time.Hour))
+	shared := c1.index
+	_, err := shared.Put(ctx, "e", indexCacheEntry([]byte("e")))
 	require.NoError(t, err)
-	require.Equal(t, 1, n)
-	requireEntryDir(t, c1, "e", false)
+	c1.close(ctx)
+	files, err := shared.Open(ctx, "e", "data")
+	require.NoError(t, err, "the cache stays open while a CN uses it")
+	closeFiles(files)
+	c2.close(ctx)
+	c3 := newTestFileServiceCaches(t, config)
+	require.NotSame(t, shared, c3.index, "the last CN to stop closed the cache")
+	files, err = c3.index.Open(ctx, "e", "data")
+	require.NoError(t, err, "the entry is reused after the cache is reopened")
+	closeFiles(files)
 }
 
 func TestIndexFileCacheConcurrentOperations(t *testing.T) {
@@ -898,12 +906,12 @@ func indexCacheConfig(t *testing.T, capacity, indexCapacity int64) CacheConfig {
 	}
 }
 
-func newTestFileServiceCaches(t *testing.T, config CacheConfig) fileServiceCaches {
+func newTestFileServiceCaches(t *testing.T, config CacheConfig) *fileServiceCaches {
 	t.Helper()
 	caches, err := newFileServiceCaches(context.Background(), config, nil, "test", true)
 	require.NoError(t, err)
 	t.Cleanup(func() { caches.close(context.Background()) })
-	return caches
+	return &caches
 }
 
 func TestIndexFileCacheHasItsOwnCapacity(t *testing.T) {
@@ -918,6 +926,7 @@ func TestIndexFileCacheHasItsOwnCapacity(t *testing.T) {
 	require.False(t, caches.disk.dirEntries)
 	require.Equal(t, IndexFileRebuildPolicyDefault, caches.index.RebuildPolicy())
 	require.False(t, caches.index.CheckOnStartup())
+	caches.close(context.Background())
 
 	path := filepath.Join(t.TempDir(), "index")
 	config = indexCacheConfig(t, 100<<20, 50<<20)
@@ -938,6 +947,7 @@ func TestIndexFileCacheCapacityDefaultAndDisable(t *testing.T) {
 	require.NotNil(t, caches.index)
 	require.Equal(t, int64(DefaultIndexFileDiskCapacity), caches.index.disk.capacityFunc())
 	require.Equal(t, int64(100<<20), caches.disk.capacityFunc())
+	caches.close(context.Background())
 
 	for name, mutate := range map[string]func(*CacheConfig){
 		"not enabled for this service": func(c *CacheConfig) { c.IndexFileCacheEnabled = false },

@@ -327,7 +327,7 @@ func (t *TailBuilder) PersistFinished(sqlproc *sqlexec.SqlProcess, cfg TableConf
 				continue
 			}
 			ref := tailRef(cfg, next, int64(f.FrameLen), vectorindex.CdcChunkSetChecksum([]uint32{f.Checksum}))
-			size, _, err := writeIndexFile(sqlproc, files, exec.Txn(), ref, io.NewSectionReader(fp, f.Offset, int64(f.FrameLen)), run)
+			size, _, err := writeIndexFile(sqlproc, files, exec.Txn(), ref, io.NewSectionReader(fp, f.Offset, int64(f.FrameLen)), t.dir, run)
 			if err != nil {
 				return err
 			}

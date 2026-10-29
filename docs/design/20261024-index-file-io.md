@@ -206,11 +206,19 @@ loads; FULLTEXT2 uses the CN's local spill directory, not the system temporary d
   data is already local, but it still gets the index-file cache (decision, @cpegeric,
   2026-10-24): rebuilding a file from its rows costs the same on any backend.
 - Only CNs get the cache; TN, LOG and proxy nodes do not serve index searches.
-- Several CNs in one process configured with the same cache directory share it, as they
-  share the table-data cache directory today (decision, @cpegeric, 2026-10-24). Files are
-  immutable and content-named and every write is a single rename, so sharing is safe; a
-  file evicted by one CN is a miss for the other. Rejected alternative: a CN id in the
-  path, which stores identical bytes once per CN.
+- A process has one index-file cache per directory (decision, @cpegeric, 2026-10-29). CNs
+  configured with the same directory share it: the first creates it with its own settings
+  (capacity, idle TTL, startup check), a later one whose settings differ uses it as is,
+  with a warning, and the last to stop closes it. One cache stores each file once and
+  accounts for its holds, last use and capacity in one place. CNs configured with
+  different directories have separate caches, each with its own settings. Rejected
+  alternatives: a cache per CN on a shared directory, which lets one CN's eviction remove
+  a file another CN has just taken a hold on; and one cache over several directories,
+  which needs a lookup across directories, a staging area and a free-space check per
+  filesystem, and one capacity in place of several.
+- Separate processes may still share a directory. Files are immutable and content-named
+  and every write is a single rename, so this stays safe; each process keeps its own
+  accounting and holds, and a file one removes is a miss for the other.
 - The index-file cache directory must not be, contain or lie inside the table-data cache
   directory; such a configuration is rejected at startup. Each cache's restart scan removes
   files it does not own.
@@ -276,8 +284,8 @@ by time since its last use, not by which index generation or snapshot names it.
 
 - Every read through the layer holds its file from before the open until the reader is
   done with it; a loaded index holds the files it keeps mapped until it is unloaded. Holds
-  are counted in memory per file across every cache in the process, so CNs sharing a
-  directory see each other's holds, and do not survive a restart.
+  are counted in memory per file by the cache of the directory and do not survive a
+  restart.
 - Neither eviction nor collection removes a held file.
 - Deleting a file, as a failed check does, takes effect at once, held or not: holders keep
   reading the handles they have open, and the rebuilt file takes its place.
@@ -398,8 +406,9 @@ Every statement in "Contract" is checked by a test that would fail if it were fa
   close holds the file until it is released; a loaded index holds the files it maps until
   unloaded; a held file
   deleted is removed at once, stays readable through open handles, and a file found
-  invalid while held is replaced by its rebuild; a hold taken through one cache keeps the
-  file from the collection of another cache sharing the directory;
+  invalid while held is replaced by its rebuild; CNs of a process configured with one directory
+  share one cache, created with the first CN's settings and closed with the last, while
+  CNs with different directories have their own;
 - a file with no holds last used longer than the idle TTL ago is collected and removed from
   the cache's accounting, while a held one, a recently used one and one whose last hold
   was just released stay; below the low-water mark of free space, files with no holds are

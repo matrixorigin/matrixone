@@ -38,8 +38,8 @@ var (
 		return indexfile.OpenWithProcess(sqlproc, ref, localSpillDir(sqlproc))
 	}
 	writeIndexFile = func(sqlproc *sqlexec.SqlProcess, files *indexfile.Files, txn client.TxnOperator, ref indexfile.Ref,
-		src io.Reader, runSQL func(sql string) error) (int64, string, error) {
-		env := indexfile.NewEnv(sqlproc, files, txn, localSpillDir(sqlproc))
+		src io.Reader, tempDir string, runSQL func(sql string) error) (int64, string, error) {
+		env := indexfile.NewEnv(sqlproc, files, txn, tempDir)
 		return indexfile.Write(sqlproc.GetContext(), env, ref, src, runSQL)
 	}
 )
