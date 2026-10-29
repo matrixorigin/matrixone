@@ -1054,10 +1054,12 @@ func (tbl *txnTable) GetByFilter(
 	defer pks.Close()
 	pks.Append(filter.Val, false)
 	rowIDs, err := tbl.dataTable.getRowsByPK(ctx, pks)
+	if rowIDs != nil {
+		defer rowIDs.Close()
+	}
 	if err != nil && !moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict) {
 		return
 	}
-	defer rowIDs.Close()
 	if rowIDs.IsNull(0) {
 		err = moerr.NewNotFoundNoCtx()
 		return
@@ -1240,11 +1242,13 @@ func (tbl *txnTable) DedupSnapByPK(
 	defer r.End()
 	var rowIDs containers.Vector
 	rowIDs, err = tbl.getBaseTable(isTombstone).getRowsByPK(ctx, keys)
+	if rowIDs != nil {
+		defer rowIDs.Close()
+	}
 	if err != nil {
 		logutil.Errorf("getRowsByPK failed, %v", err)
 		return
 	}
-	defer rowIDs.Close()
 	from, to := types.TS{}, tbl.store.txn.GetStartTS()
 	if !isTombstone {
 		err = tbl.findDeletes(ctx, rowIDs, from, to)
