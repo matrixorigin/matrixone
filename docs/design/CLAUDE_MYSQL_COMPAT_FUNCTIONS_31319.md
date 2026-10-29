@@ -1,6 +1,6 @@
 # MySQL 兼容函数与运算符补齐设计
 
-版本：v8，2026-10-28。归属：#31319（原始报告 #23010、#23024、#23025、#23035）。STATEMENT_DIGEST 的兼容目标为 MySQL 8.4 逐字节一致的摘要，而非近似指纹。
+版本：v9，2026-10-29。归属：#31319（原始报告 #23010、#23024、#23025、#23035）。STATEMENT_DIGEST 的兼容目标为 MySQL 8.4 逐字节一致的摘要，而非近似指纹。
 
 ## 范围、不变量与设计门槛
 
@@ -79,10 +79,12 @@ VALUES/REPLACE/ON DUPLICATE KEY UPDATE 通过本次 DML 已解析的目标列定
 - HAVING 的 DEFAULT 虽不依赖行值，仍受 HAVING 可见列约束：已声明的源分组列优先于同名 SELECT 别名，其次匹配输出别名和直接投影列；不因表达式或聚合引用了底层列就授予可见性。分组列可见性使用 GroupBinder 在降低前保存的 query-local 源列声明索引（关系 tag/列位置），只移除 AST 中括号/一元加号，不将 CAST、负号或算术视为透明；GROUP BY ordinal/alias 先由原分组解析器选定投影再记录。该索引不改变行值/函数依赖，只供 DEFAULT 元数据可见性使用；物理分组键改写不会删除 SQL 声明身份，子查询不继承，窗口校验克隆独立复制。它不使用仅表示小计分支函数依赖的 active grouping 位图，因此 ROLLUP/CUBE 的非活跃声明列仍能读取元数据。复用 HavingBinder 所有的名称/列身份索引，不创建伪造行引用或聚合；聚合参数及外层相关列仍使用各自原有作用域。
 - 系统变量的 scoped name 按词法引号域编码：反引号和 ANSI_QUOTES 双引号为标识符，普通单/双引号字符串为占位符；无 scope 的字符串语法拒绝，不把它伪装成注册表存在性校验。
 - 普通列的裸 CURRENT_TIMESTAMP/NOW/LOCALTIME/LOCALTIMESTAMP 默认值和 ON UPDATE 只用于 TIMESTAMP/DATETIME，显式/省略小数秒精度须与列声明相等且处于 0..6；其他函数、裸算术与表达式须使用 MySQL 的括号默认值语法，不能按裸时间默认值处理。括号表达式默认值仍允许其他目标类型和不同精度。digest-only lexer 允许 ON UPDATE NOW(fsp)，不扩展普通 MO 执行语法。
-- DEFAULT 的单个尾部 COLLATE 属于列属性，即使表达式 parser 把它附着在 literal、带符号数值或原生时间默认值的 AST 上，也须按原默认值语法域校验；重复尾部 COLLATE 拒绝。其对 NULL/default 与 AUTO_INCREMENT 的属性顺序校验不能丢失。
-- 列定义中的 DEFAULT/生成列表达式拒绝用户/系统变量、赋值及子查询；字符串或列标识符中的 @ 不算变量。复用现有 formatter 的完整 AST 遍历收集语法事实，避免调用未完成的 VarExpr/Subquery.Accept；该临时快照与 AST 同寿命，不缓存，不执行表达式。生成列表达式额外拒绝上述原生时间默认值函数；不扩张为任意 UDF/函数注册表校验。
-- ALTER COLUMN SET DEFAULT 与列定义不是相同上下文：其括号表达式在 MySQL 摘要解析阶段仍允许变量/子查询，不能套用列定义禁令；但不允许裸函数式时间默认值。保留独立的正负对照，不执行 ALTER 或推断现有列类型。
+- DEFAULT 的单个尾部 COLLATE 属于列属性，即使表达式 parser 把它附着在 literal、带符号数值或原生时间默认值的 AST 上，也须按原默认值语法域校验；重复尾部 COLLATE 拒绝。其对 NULL/default 与 AUTO_INCREMENT 的属性顺序校验不能丢失。显式列 COLLATE 的唯一性跨 AttributeCollate、DEFAULT 尾部和带符号 literal 的 CollateExpr 统一记录；括号表达式内的 COLLATE 不计作列属性。
+- 列定义中的 DEFAULT/生成列表达式拒绝用户/系统变量、赋值及子查询；字符串或列标识符中的 @ 不算变量。复用 formatter 收集列定义 itemization 上下文的语法事实，避免调用未完成的 VarExpr/Subquery.Accept；快照与 AST 同寿命，不缓存，不执行表达式。窗口函数的实参与外侧表达式仍属该上下文，窗口 specification 的 PARTITION/ORDER/frame 属于后续查询阶段，不在这里拒绝变量、子查询或函数；只关闭列观察者，不关闭参数/CASE 等其他观察者。普通格式化输出不变。
+- 内建函数限制按 MySQL value-generator 预校验分为 DEFAULT/生成列共同禁止与仅生成列禁止两组，而非四个时间函数名或运行期非确定性黑名单。覆盖当前日期/时间别名、UTC、UNIX_TIMESTAMP、会话身份/状态、锁、UUID/RAND 和摘要函数等已支持语法；MATCH 也属于共同禁止项。UNIX_TIMESTAMP 带参数仍禁止用于生成列；SYSDATE、RANDOM_BYTES 在摘要解析阶段允许，不能按执行期策略误拒绝。不引入任意 UDF/目录函数注册表。
+- ALTER COLUMN SET DEFAULT 与列定义不是相同上下文：它严格采用 literal、单个符号 numeric literal 或括号表达式语法，裸算术/位运算/NOT/函数/尾部 COLLATE 均拒绝；括号体在 MySQL 摘要解析阶段仍允许变量/子查询，不能套用列定义禁令。子查询自带括号不算外层表达式分组，使用 parser 保留的 ParenSelect 层级区别，不扫描 SQL 文本猜测。保留正负对照，不执行 ALTER 或推断现有列类型。
 - 裸时间默认值须来自原生 keyword 语法域；复用 FuncExpr.IsGeneric 保存普通 identifier 函数身份，digest-only 解析额外标记被引号包裹的原生时间 keyword。IGNORE_SPACE 仅放宽函数名和左括号之间的空白，不跨注释；括号表达式也不接受这些伪装的原生函数。普通执行 parser 契约不变。
+- 摘要 lexer 的 ROW 构造器适配不能吞掉窗口 frame 的 CURRENT ROW；该 native frame token 保持原样。窗口跳过的是列 itemization，不跳过 parser、资源预算或摘要编码。
 - 上述附加 AST 遍历仅发生于 DDL 的 DEFAULT/生成属性，按 1 MiB/65536 token 输入预算线性工作，临时文本及函数引用列表均受输入大小约束；普通 SELECT 摘要路径不增加扫描、会话、IO 或持久状态。
 - 列级 REFERENCES 的准入依赖 AST 所在 DDL 上下文：CREATE/ADD 可接受，MODIFY/CHANGE 拒绝；表级 FOREIGN KEY 不套此限制，不解析引用表或执行建表校验。
 - CREATE 和 ALTER ADD/MODIFY/CHANGE 共用列属性上下文化规则；生成列拒绝 DEFAULT（包括裸 NULL）、AUTO_INCREMENT、ON UPDATE、COLUMN_FORMAT 和 STORAGE；COMMENT、NULL/NOT NULL、索引/字符属性及普通列上的属性通过独立控制组保留，不按建表执行期的键约束误拒绝其他合法摘要。
@@ -109,4 +111,5 @@ VALUES/REPLACE/ON DUPLICATE KEY UPDATE 通过本次 DML 已解析的目标列定
 - hint 有独立词法域，不能把其内容当普通 SQL 表达式扫描：其中的 `?` 是标点而非参数，复合运算符按单字符编码，`--`/`#` 不开始行注释，字符串前的 N/字符集/X 保留为标识符；标识符与 @ 的空白也影响 token。复用现有字符串、数字和标识符扫描器，但用局部 hint 分派入口，避免给全局 scanner 增加状态。
 - 摘要达到 1024 字节后进入不可变状态：追加和归约均不得修改已保存前缀；仍扫描后缀以拒绝参数占位符。长前缀后接字符集引入符或 hint 的独立 oracle 反例已加入 fixture。
 - 摘要返回类型为可空 VARCHAR(64)/LONGTEXT，字符域复用 MO 已支持的显式 utf8mb4_general_ci 标识（与既有文本函数一致）；本任务不新增 MySQL utf8mb4_0900_ai_ci 的排序引擎。文本及 hash 的内容兼容不依赖这一现有元数据边界。
+- 所有有预算的 scanner 工作均由公开 ParseWithSQLMode 边界所有，包含可选摘要归一化扫描。内部私有 context 请求携带语法事实/有界输出，公开签名不变，无通用 callback。只在已批准的解析入口捕获本 control 的 parseAbort；StatementDigest/私有 wrapper 不再独立 recover，其他 panic 原样传播。两遍共用 control 身份但重置 token/work 计数，预算独立；AST 成功才移交调用方，否则由解析入口唯一释放，两个 scanner 均立即注册归还。注释-only EmptyStmt 的既有摘要行为保留。
 - 摘要解析的资源预算固定为每个参数最多 1 MiB 输入、65536 个 parser token 和 8 MiB scanner 工作量（语法校验和编码扫描各有独立同额预算）；尊重更紧的上层 ParseLimits。错误统一使用 MySQL 3677 的不披露输入版本，取消原因和资源超限原样传播。

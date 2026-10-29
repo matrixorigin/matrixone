@@ -16,7 +16,7 @@ import (
 	"testing"
 )
 
-func TestInspectExpressionSyntax(t *testing.T) {
+func TestInspectColumnExpressionSyntax(t *testing.T) {
 	literal := NewNumVal("@x", "@x", false, P_char)
 	variable := NewVarExpr("x", false, false, nil)
 	function := &FuncExpr{Func: FuncName2ResolvableFunctionReference(NewUnresolvedColName("abs")), FuncName: NewCStr("abs", 1), Exprs: Exprs{variable}}
@@ -36,14 +36,14 @@ func TestInspectExpressionSyntax(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			before := String(tc.expr, dialect.MYSQL)
-			syntax := InspectExpressionSyntax(tc.expr)
+			syntax := InspectColumnExpressionSyntax(tc.expr)
 			require.Equal(t, tc.restricted, syntax.VariableOrSubquery)
 			require.Len(t, syntax.Functions, tc.functions)
 			require.Equal(t, before, String(tc.expr, dialect.MYSQL))
 			if tc.functions == 1 {
 				require.Same(t, function, syntax.Functions[0])
 			}
-			require.Equal(t, ExpressionSyntax{}, InspectExpressionSyntax(literal))
+			require.Equal(t, ColumnExpressionSyntax{}, InspectColumnExpressionSyntax(literal))
 		})
 	}
 }

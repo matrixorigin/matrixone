@@ -1102,7 +1102,16 @@ func (node *FuncExpr) Format(ctx *FmtCtx) {
 
 	if node.WindowSpec != nil {
 		ctx.WriteString(" ")
-		node.WindowSpec.Format(ctx)
+		if ctx.expressionSyntax != nil {
+			// MySQL defers window specification itemization to query resolution,
+			// outside the column DEFAULT/generated-expression validation context.
+			// Preserve all other observers (e.g. parameter and CASE collection).
+			windowCtx := *ctx
+			windowCtx.expressionSyntax = nil
+			node.WindowSpec.Format(&windowCtx)
+		} else {
+			node.WindowSpec.Format(ctx)
+		}
 	}
 }
 
@@ -2305,6 +2314,9 @@ func NewFullTextMatchFuncExpression(columns []*KeyPart, pattern Expr, mode FullT
 }
 
 func (node *FullTextMatchExpr) Format(ctx *FmtCtx) {
+	if ctx.expressionSyntax != nil {
+		ctx.expressionSyntax.FullTextMatch = true
+	}
 	ctx.WriteString("MATCH (")
 	for i, k := range node.KeyParts {
 		if i > 0 {

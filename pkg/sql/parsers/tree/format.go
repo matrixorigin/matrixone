@@ -46,21 +46,23 @@ type FmtCtx struct {
 	stringLiteralPositions        *[]StringLiteralPosition
 	parameterCount                *int
 	caseExpressions               *[]*CaseExpr
-	expressionSyntax              *ExpressionSyntax
+	expressionSyntax              *ColumnExpressionSyntax
 }
 
-// ExpressionSyntax records syntax before binding or constant folding. Function
-// pointers remain owned by the AST and must not outlive it.
-type ExpressionSyntax struct {
+// ColumnExpressionSyntax records the column-itemization subtree, not window
+// specifications deferred to query resolution. Function pointers remain owned
+// by the AST and must not outlive it.
+type ColumnExpressionSyntax struct {
 	VariableOrSubquery bool
+	FullTextMatch      bool
 	Functions          []*FuncExpr
 }
 
-// InspectExpressionSyntax uses the formatter's complete AST traversal, including
-// nodes whose Accept implementation is incomplete. String contents and quoted
-// column identifiers do not count as variable or function syntax.
-func InspectExpressionSyntax(expr Expr) ExpressionSyntax {
-	var syntax ExpressionSyntax
+// InspectColumnExpressionSyntax observes column-expression context through the
+// formatter, avoiding incomplete Accept implementations. Window specifications
+// have a separate context; strings and quoted identifiers are not variables.
+func InspectColumnExpressionSyntax(expr Expr) ColumnExpressionSyntax {
+	var syntax ColumnExpressionSyntax
 	ctx := NewFmtCtx(dialect.MYSQL)
 	ctx.expressionSyntax = &syntax
 	expr.Format(ctx)

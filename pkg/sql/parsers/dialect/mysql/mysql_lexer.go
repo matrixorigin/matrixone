@@ -190,23 +190,30 @@ func Parse(ctx context.Context, sql string, lower int64) ([]tree.Statement, erro
 	return ParseWithSQLMode(ctx, sql, lower, "")
 }
 
-func ParseWithSQLMode(ctx context.Context, sql string, lower int64, sqlMode string) ([]tree.Statement, error) {
-	return parseWithSQLMode(ctx, sql, lower, sqlMode, nil)
+func parseWithSQLMode(ctx context.Context, sql string, lower int64, sqlMode string, digest *statementDigestSyntax) ([]tree.Statement, error) {
+	// Keep the public parser signature stable. This private, per-invocation
+	// request lets the same approved owner bound both digest scanner passes.
+	return ParseWithSQLMode(context.WithValue(ctx, statementDigestSyntaxKey{}, digest), sql, lower, sqlMode)
 }
 
-func parseWithSQLMode(ctx context.Context, sql string, lower int64, sqlMode string, digest *statementDigestSyntax) (statements []tree.Statement, err error) {
+func ParseWithSQLMode(ctx context.Context, sql string, lower int64, sqlMode string) (statements []tree.Statement, err error) {
 	lexer := NewLexerWithSQLMode(dialect.MYSQL, sql, lower, ParseSQLModeFlags(sqlMode))
 	defer PutScanner(lexer.scanner)
+	// Until a successful return transfers the AST, this is its only cleanup
+	// owner, including syntax/normalization failures and foreign panics.
+	defer func() {
+		if statements == nil {
+			for _, statement := range lexer.stmts {
+				statement.Free()
+			}
+		}
+	}()
+	digest, _ := ctx.Value(statementDigestSyntaxKey{}).(*statementDigestSyntax)
 	lexer.digest = digest
 	lexer.scanner.digestMode = digest != nil
+	var control *parseControl
 	if limits, ok := ctx.Value(parseLimitsKey{}).(ParseLimits); ok {
-		if cause := context.Cause(ctx); cause != nil {
-			return nil, cause
-		}
-		if len(sql) > limits.Input {
-			return nil, ErrParseLimit
-		}
-		control := &parseControl{ctx: ctx, limits: limits}
+		control = &parseControl{ctx: ctx, limits: limits}
 		lexer.scanner.parseControl = control
 		defer func() {
 			if failure := recover(); failure != nil {
@@ -214,37 +221,43 @@ func parseWithSQLMode(ctx context.Context, sql string, lower int64, sqlMode stri
 				if !own || abort.control != control {
 					panic(failure)
 				}
-				for _, statement := range lexer.stmts {
-					statement.Free()
-				}
 				statements, err = nil, abort.err
 			}
 		}()
+		if cause := context.Cause(ctx); cause != nil {
+			return nil, cause
+		}
+		if len(sql) > limits.Input {
+			return nil, ErrParseLimit
+		}
 	}
 
 	if yyParse(lexer) != 0 {
-		for _, s := range lexer.stmts {
-			s.Free()
-		}
 		return nil, lexer.scanner.LastError
 	}
 	if err := validateSelectIntoStatements(lexer); err != nil {
-		for _, s := range lexer.stmts {
-			s.Free()
-		}
 		return nil, err
 	}
 	if len(lexer.stmts) == 0 {
-		/**
-		For CORNER CASE like:
-
-		mysql> -- MySQL dump 10.13  Distrib 8.1.0, for macos11.7 (arm64)
-
-		the input will be stripped to empty string, and the parser will return 0 stmts.
-		but, the mysql server responds ok to the client.
-		so, we return an EmptyStmt that does nothing beside responding ok.
-		*/
-		return []tree.Statement{&tree.EmptyStmt{}}, nil
+		// Keep the existing empty/comment-only statement shape. Digest still
+		// rejects empty/whitespace input, but comments alone have an empty digest.
+		lexer.stmts = []tree.Statement{&tree.EmptyStmt{}}
+	}
+	if digest != nil && digest.normalized != nil {
+		if len(lexer.stmts) != 1 || strings.TrimSpace(sql) == "" || !digestSyntaxValid(lexer.stmts[0]) {
+			return nil, moerr.NewDigestParse(ctx)
+		}
+		if control != nil {
+			// Syntax and normalization have independent, equally tight budgets.
+			control.work, control.tokens = 0, 0
+		}
+		*digest.normalized = statementDigest{tokens: make([]digestToken, 0, 64)}
+		scanner := NewScannerWithSQLMode(dialect.MYSQL, sql, lexer.sqlMode)
+		defer PutScanner(scanner)
+		scanner.digestMode, scanner.parseControl = true, control
+		if err := digest.normalized.scan(scanner, digest, false); err != nil {
+			return nil, err
+		}
 	}
 	return lexer.stmts, nil
 }
@@ -410,7 +423,8 @@ func (l *Lexer) Lex(lval *yySymType) int {
 	// ROW constructor and quoted user-variable names without changing ordinary
 	// SQL execution syntax. The independent digest scanner keeps their tokens.
 	if l.digest != nil {
-		if typ == ROW {
+		if typ == ROW && l.lastToken != CURRENT {
+			// CURRENT ROW is a window-frame bound, not a ROW constructor.
 			if !digestRowConstructorValid(l.scanner) {
 				typ = LEX_ERROR
 			} else {

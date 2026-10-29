@@ -46,7 +46,11 @@ const digestStorageSize = 1024
 
 // Digest arguments are data, potentially one per vector row. Bound parsing as
 // well as retained digest bytes; a full prefix never excuses an invalid suffix.
-type statementDigestSyntax struct{ nulls map[int]struct{} }
+type statementDigestSyntaxKey struct{}
+type statementDigestSyntax struct {
+	nulls      map[int]struct{}
+	normalized *statementDigest
+}
 type digestSymbol struct {
 	id       uint16
 	function bool
@@ -63,7 +67,7 @@ type statementDigest struct {
 
 // StatementDigest parses, but never executes or resolves, one SQL statement.
 // Its text and SHA256 share MySQL 8.4's normalized token-byte representation.
-func StatementDigest(ctx context.Context, sql, sqlMode string) (text, hash string, err error) {
+func StatementDigest(ctx context.Context, sql, sqlMode string) (string, string, error) {
 	limits := ParseLimits{Input: 1 << 20, Tokens: 1 << 16, Work: 8 << 20}
 	if parent, ok := ctx.Value(parseLimitsKey{}).(ParseLimits); ok {
 		limits.Input = min(limits.Input, parent.Input)
@@ -71,7 +75,10 @@ func StatementDigest(ctx context.Context, sql, sqlMode string) (text, hash strin
 		limits.Work = min(limits.Work, parent.Work)
 	}
 	ctx = WithParseLimits(ctx, limits)
-	syntax := &statementDigestSyntax{nulls: make(map[int]struct{})}
+	syntax := &statementDigestSyntax{
+		nulls:      make(map[int]struct{}),
+		normalized: &statementDigest{},
+	}
 	stmts, parseErr := parseWithSQLMode(ctx, sql, 0, sqlMode, syntax)
 	if parseErr != nil {
 		if errors.Is(parseErr, ErrParseLimit) || errors.Is(parseErr, context.Cause(ctx)) {
@@ -84,27 +91,9 @@ func StatementDigest(ctx context.Context, sql, sqlMode string) (text, hash strin
 			stmt.Free()
 		}
 	}()
-	if len(stmts) != 1 || strings.TrimSpace(sql) == "" || !digestSyntaxValid(stmts[0]) {
-		return "", "", moerr.NewDigestParse(ctx)
-	}
-
-	control := &parseControl{ctx: ctx, limits: limits}
-	defer func() {
-		if failure := recover(); failure != nil {
-			abort, own := failure.(parseAbort)
-			if !own || abort.control != control {
-				panic(failure)
-			}
-			text, hash, err = "", "", abort.err
-		}
-	}()
-	scanner := NewScannerWithSQLMode(dialect.MYSQL, sql, ParseSQLModeFlags(sqlMode))
-	defer PutScanner(scanner)
-	scanner.digestMode, scanner.parseControl = true, control
-	digest := statementDigest{tokens: make([]digestToken, 0, 64)}
-	if err = digest.scan(scanner, syntax, false); err != nil {
-		return "", "", err
-	}
+	// Both scanner passes finish at the parser's approved budget boundary.
+	// Publish text/hash only after parsing, contextualization and normalization.
+	digest := syntax.normalized
 	encoded := make([]byte, 0, digest.size)
 	var formatted strings.Builder
 	for _, token := range digest.tokens {
@@ -382,12 +371,12 @@ func digestSyntaxValid(statement tree.Statement) bool {
 					return false
 				}
 			case *tree.AlterTableAlterColumnClause:
-				// SET DEFAULT has no bare temporal-function production. Its
-				// parenthesized expressions are not column-definition contexts.
-				if option.OptionType == tree.AlterColumnOptionSetDefault {
-					if call, ok := option.DefaultExpr.Expr.(*tree.FuncExpr); ok && !call.IsTemporalLiteral {
-						return false
-					}
+				// Its signed-literal/parenthesized grammar is narrower than a
+				// column definition, but the parenthesized body is not itemized
+				// as a column expression (variables/subqueries remain valid).
+				if option.OptionType == tree.AlterColumnOptionSetDefault &&
+					!digestDefaultLiteralValid(option.DefaultExpr.Expr, false) {
+					return false
 				}
 			}
 		}
@@ -404,7 +393,7 @@ func digestColumnValid(column *tree.ColumnTableDef, allowReferences bool) bool {
 		return false
 	}
 	notNull, nullDefault, hasDefault, autoIncrement, generated := false, false, false, false, false
-	generatedDisallowedAttribute := false
+	generatedDisallowedAttribute, hasCollation := false, false
 	for _, attribute := range column.Attributes {
 		switch attr := attribute.(type) {
 		case *tree.AttributeNull:
@@ -428,11 +417,22 @@ func digestColumnValid(column *tree.ColumnTableDef, allowReferences bool) bool {
 				return false
 			}
 			generatedDisallowedAttribute = true
+		case *tree.AttributeCollate:
+			if hasCollation {
+				return false
+			}
+			hasCollation = true
 		case *tree.AttributeColumnFormat, *tree.AttributeStorage:
 			generatedDisallowedAttribute = true
 		case *tree.AttributeDefault:
 			if !digestColumnExpressionValid(attr.Expr, false) || !digestTemporalAttributeValid(column, attr.Expr, false) {
 				return false
+			}
+			if digestDefaultHasColumnCollation(attr.Expr) {
+				if hasCollation {
+					return false
+				}
+				hasCollation = true
 			}
 			hasDefault = true
 			expression := attr.Expr
@@ -447,45 +447,71 @@ func digestColumnValid(column *tree.ColumnTableDef, allowReferences bool) bool {
 }
 
 func digestColumnExpressionValid(expression tree.Expr, generated bool) bool {
-	syntax := tree.InspectExpressionSyntax(expression)
-	if syntax.VariableOrSubquery {
+	syntax := tree.InspectColumnExpressionSyntax(expression)
+	if syntax.VariableOrSubquery || syntax.FullTextMatch {
 		return false
 	}
 	for _, function := range syntax.Functions {
-		if function.IsGeneric || generated && function.FuncName != nil && isDigestTemporalFunctionName(function.FuncName.Origin()) {
+		if function.IsGeneric || function.FuncName != nil && !digestColumnFunctionValid(function.FuncName.Origin(), generated) {
 			return false
 		}
 	}
 	return true
 }
 
+// Match the signed-literal or parenthesized-expression domain, not an arbitrary
+// bit_expr. A trailing COLLATE belongs to column definitions only.
+func digestDefaultLiteralValid(expression tree.Expr, allowCollation bool) bool {
+	collated := false
+	if value, ok := expression.(*tree.CollateExpr); ok && allowCollation {
+		expression, collated = value.Expr, true
+	}
+	switch value := expression.(type) {
+	case *tree.NumVal, *tree.ParenExpr:
+		return true
+	case *tree.Subquery:
+		// Subquery parentheses belong to the query itself. Only an additional
+		// grouping pair supplies SET DEFAULT's '(' expression ')' production.
+		if !value.Exists {
+			if query, ok := value.Select.(*tree.ParenSelect); ok {
+				_, grouped := query.Select.Select.(*tree.ParenSelect)
+				return grouped
+			}
+		}
+	case *tree.UnaryExpr:
+		operand := value.Expr
+		if value, ok := operand.(*tree.CollateExpr); ok && allowCollation && !collated {
+			operand = value.Expr
+		}
+		if literal, ok := operand.(*tree.NumVal); ok &&
+			(value.Op == tree.UNARY_PLUS || value.Op == tree.UNARY_MINUS) {
+			switch literal.ValType {
+			case tree.P_int64, tree.P_uint64, tree.P_float64, tree.P_decimal:
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func digestDefaultHasColumnCollation(expression tree.Expr) bool {
+	if _, ok := expression.(*tree.CollateExpr); ok {
+		return true
+	}
+	if unary, ok := expression.(*tree.UnaryExpr); ok {
+		_, collated := unary.Expr.(*tree.CollateExpr)
+		return collated
+	}
+	return false
+}
+
 func digestTemporalAttributeValid(column *tree.ColumnTableDef, expression tree.Expr, onUpdate bool) bool {
 	if !onUpdate {
-		// One trailing COLLATE is a column attribute even when the expression
-		// parser attaches it to the DEFAULT operand. Preserve the operand's
-		// literal/expression/native-function domain; repeated COLLATE is invalid.
-		collated := false
-		if value, ok := expression.(*tree.CollateExpr); ok {
-			expression, collated = value.Expr, true
-		}
-		switch value := expression.(type) {
-		case *tree.NumVal, *tree.ParenExpr:
-			// Parenthesized expressions are a separate DEFAULT grammar domain;
-			// their runtime value need not match the timestamp-column contract.
+		if digestDefaultLiteralValid(expression, true) {
 			return true
-		case *tree.UnaryExpr:
-			operand := value.Expr
-			if value, ok := operand.(*tree.CollateExpr); ok && !collated {
-				operand = value.Expr
-			}
-			if literal, ok := operand.(*tree.NumVal); ok &&
-				(value.Op == tree.UNARY_PLUS || value.Op == tree.UNARY_MINUS) {
-				switch literal.ValType {
-				case tree.P_int64, tree.P_uint64, tree.P_float64, tree.P_decimal:
-					return true
-				}
-			}
-			return false
+		}
+		if collated, ok := expression.(*tree.CollateExpr); ok {
+			expression = collated.Expr
 		}
 	}
 	function, direct := expression.(*tree.FuncExpr)
@@ -515,6 +541,27 @@ func digestTemporalAttributeValid(column *tree.ColumnTableDef, expression tree.E
 		}
 	}
 	return precision >= 0 && precision <= 6 && precision == int64(typ.InternalType.Scale)
+}
+
+// These are MySQL value-generator pre-validation rules, not a determinism
+// heuristic or execution-time function registry. In particular SYSDATE passes
+// this parsing phase, while UNIX_TIMESTAMP with an argument still fails for a
+// generated column. DEFAULT expressions have their own, less restrictive set.
+func digestColumnFunctionValid(name string, generated bool) bool {
+	switch strings.ToLower(name) {
+	case "version", "last_insert_id", "found_rows", "row_count", "benchmark", "sleep",
+		"get_lock", "is_free_lock", "is_used_lock", "release_lock", "release_all_locks",
+		"source_pos_wait", "master_pos_wait", "load_file", "values":
+		return false
+	case "current_timestamp", "now", "localtime", "localtimestamp",
+		"current_date", "curdate", "utc_date", "current_time", "curtime", "utc_time", "utc_timestamp",
+		"unix_timestamp", "connection_id", "current_user", "user", "session_user", "system_user",
+		"database", "schema", "current_role", "roles_graphml", "uuid", "uuid_short", "rand",
+		"statement_digest", "statement_digest_text":
+		return !generated
+	default:
+		return true
+	}
 }
 
 func isDigestTemporalFunctionName(name string) bool {
