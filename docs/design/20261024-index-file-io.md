@@ -80,8 +80,9 @@ for different content, so a rewritten file has a new name and nothing is invalid
 - A file rewritten in place, under the same `index_id` with a new checksum in its metadata
   row, is named by its writer's own full-strength checksum, such as an MD5, not by the
   32-bit one (decision, @cpegeric, 2026-10-29). HNSW rewrites each changed model this way
-  on every sync, and a model's size is fixed by its capacity, so its versions differ only
-  by checksum. Each sync then adds another version under the same name prefix, the 32-bit
+  on every sync. A model's saved size follows its node count, which slot reuse and in-place
+  updates leave unchanged, so successive versions often share a size and differ only by
+  checksum. Each sync then adds another version under the same name prefix, the 32-bit
   collision risk grows with the number of syncs, and a collision would silently serve an
   older model. The rewrite still needs no timestamp in the name: a reader at a snapshot
   reads the metadata row and the chunk rows visible at that snapshot, and each version
