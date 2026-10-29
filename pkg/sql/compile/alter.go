@@ -1333,6 +1333,24 @@ func (c *Compile) alterCopyPostPublicationRetryConflict(err error) error {
 	return err
 }
 
+// alterCopyStaleRefreshTerminatingError enforces the stale-refresh policy of
+// a source-changed ALTER COPY: once the refresh starts, every later failure
+// must terminate the transaction - never a retry under retained locks. Errors
+// the shared transaction policy already treats as fatal and non-retryable keep
+// their own identity; every other failure, including the lock-wait-timeout
+// family now statement-scoped in the shared policy and the retry family, is
+// converted into the terminating write-conflict verdict that the shared policy
+// already treats as fatal to the whole transaction.
+func (c *Compile) alterCopyStaleRefreshTerminatingError(err error) error {
+	if err == nil {
+		return nil
+	}
+	if moerr.MustRollbackTxn(err) && !c.isRetryErr(err) {
+		return err
+	}
+	return c.alterCopyPostPublicationConflict("stale source refresh failed: " + err.Error())
+}
+
 // retireAlterCopyReplica is called only after RC admission and all source locks
 // have succeeded. A scoped caller supplies exact private-root authority; the
 // default receipt borrows broad ownership. Neither receipt grants admission.
@@ -1911,8 +1929,8 @@ func (s *Scope) alterTableCopy(c *Compile, cleanup *alterAutoIncrementResetClean
 			// Once refresh starts, every later failure (including publication)
 			// must terminate the txn, never retry this COPY under retained locks.
 			defer func() {
-				if err != nil && !(moerr.MustRollbackTxn(err) && !c.isRetryErr(err)) {
-					err = c.alterCopyPostPublicationConflict("stale source refresh failed: " + err.Error())
+				if err != nil {
+					err = c.alterCopyStaleRefreshTerminatingError(err)
 				}
 			}()
 		}
