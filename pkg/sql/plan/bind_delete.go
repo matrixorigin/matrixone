@@ -395,6 +395,12 @@ func (builder *QueryBuilder) bindDelete(ctx CompilerContext, stmt *tree.Delete, 
 				ScanSnapshot: bindCtx.snapshot,
 			}
 			idxTableNodeID := builder.appendNode(idxScanNodes[i][j], bindCtx)
+			if catalog.IsRegularIndexAlgo(idxDef.IndexAlgo) && !isSpatialIndexDef(idxDef) {
+				if builder.deleteIndexScanTables == nil {
+					builder.deleteIndexScanTables = make(map[int32]deleteIndexScan)
+				}
+				builder.deleteIndexScanTables[idxTag] = deleteIndexScan{tableID: idxTableDef.TblId}
+			}
 
 			lookupColName := indexLookupColumnName(idxDef)
 			rightPkPos := idxTableDef.Name2ColIndex[lookupColName]
