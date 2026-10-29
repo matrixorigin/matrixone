@@ -704,6 +704,16 @@ func (flusher *flushImpl) fireFlushTabletail(
 	table *catalog.TableEntry,
 	end, lastCkp types.TS,
 ) error {
+	return flusher.fireFlushTabletailWithPolicy(table, end, lastCkp, nil)
+}
+
+// partialReady is checked only when an older-to-newer scan stops at an object
+// that cannot be compacted. Forced flushes pass nil and retry any remainder.
+func (flusher *flushImpl) fireFlushTabletailWithPolicy(
+	table *catalog.TableEntry,
+	end, lastCkp types.TS,
+	partialReady func(asize, dsize int) bool,
+) error {
 	tableDesc := fmt.Sprintf("%d-%s", table.ID, table.GetLastestSchemaLocked(false).Name)
 	metas := make([]*catalog.ObjectEntry, 0, 10)
 	tombstoneMetas := make([]*catalog.ObjectEntry, 0, 10)
@@ -724,67 +734,91 @@ func (flusher *flushImpl) fireFlushTabletail(
 		return nil
 	}
 
-	if len(metas) == 0 && len(tombstoneMetas) > 0 {
-		metas = append(metas, nil) // make it a non-empty chunk
+	// Both create groups are ordered by CreatedAt. Do not skip a busy older
+	// object and flush a newer one: only the contiguous prepared prefix is
+	// eligible for this round. Data and tombstones have independent prefixes.
+	readyData := make([]*catalog.ObjectEntry, 0, len(metas))
+	readyTombstones := make([]*catalog.ObjectEntry, 0, len(tombstoneMetas))
+	deferredData := 0
+	deferredTombstones := 0
+	for i, meta := range metas {
+		if !meta.GetObjectData().PrepareCompact() {
+			// The suffix is deferred without probing its newer objects.
+			deferredData = len(metas) - i
+			break
+		}
+		readyData = append(readyData, meta)
+	}
+	for i, meta := range tombstoneMetas {
+		if !meta.GetObjectData().PrepareCompact() {
+			// Keep the same oldest-first boundary as data objects.
+			deferredTombstones = len(tombstoneMetas) - i
+			break
+		}
+		readyTombstones = append(readyTombstones, meta)
+	}
+	if deferredData > 0 {
+		logutil.Info("flusher.data.prepare.compact.false",
+			zap.String("table", tableDesc),
+			zap.Int("deferred-count", deferredData),
+			zap.Int("unscanned-count", deferredData-1))
+	}
+	if deferredTombstones > 0 {
+		logutil.Info("flusher.tombstones.prepare.compact.false",
+			zap.String("table", tableDesc),
+			zap.String("obj", tombstoneMetas[len(tombstoneMetas)-deferredTombstones].ID().String()),
+			zap.Int("unscanned-count", deferredTombstones-1))
+	}
+	deferred := deferredData > 0 || deferredTombstones > 0
+	if len(readyData) == 0 && len(readyTombstones) == 0 {
+		if deferred {
+			return moerr.GetOkExpectedEOB()
+		}
+		return nil
+	}
+	if deferred && partialReady != nil {
+		var asize, dsize int
+		for _, meta := range readyData {
+			asize += meta.GetObjectData().EstimateMemSize()
+		}
+		for _, meta := range readyTombstones {
+			dsize += meta.GetObjectData().EstimateMemSize()
+		}
+		if !partialReady(asize, dsize) {
+			return moerr.GetOkExpectedEOB()
+		}
+	}
+	if len(readyData) == 0 {
+		readyData = append(readyData, nil) // tombstone-only first chunk
 	}
 
-	metaChunks := slices.Chunk(metas, 400)
+	metaChunks := slices.Chunk(readyData, 400)
 	firstChunk := true
-	deferred := 0
-	defer func() {
-		// Scanning past busy peers must not turn one retry into an object-sized
-		// stream of diagnostics. Also report partial scans that exit on a conflict.
-		if deferred > 0 {
-			logutil.Info("flusher.data.prepare.compact.false",
-				zap.String("table", tableDesc),
-				zap.Int("deferred-count", deferred))
-		}
-	}()
-
 	for chunk := range metaChunks {
 		tombstoneOnly := len(chunk) == 1 && chunk[0] == nil
 		if tombstoneOnly {
 			chunk = chunk[:0] // remove the placeholder
 		}
 		// The factory captures this slice; keep each admitted chunk immutable.
-		ready := make([]*catalog.ObjectEntry, 0, len(chunk))
-		scopes := make([]common.ID, 0, len(chunk))
+		scopes := make([]common.ID, 0, len(chunk)+len(readyTombstones))
 		for _, meta := range chunk {
-			if !meta.GetObjectData().PrepareCompact() {
-				deferred++
-				continue
-			}
-			ready = append(ready, meta)
 			scopes = append(scopes, *meta.AsCommonID())
 		}
-		if len(ready) == 0 && !tombstoneOnly {
-			continue
-		}
 		if firstChunk {
-			for _, meta := range tombstoneMetas {
-				if !meta.GetObjectData().PrepareCompact() {
-					logutil.Info(
-						"flusher.tombstones.prepare.compact.false",
-						zap.String("table", tableDesc),
-						zap.String("obj", meta.ID().String()),
-					)
-					// As we treat tombstone as a monolithic chunk,
-					// skip this fire and wait for the next run if freeze fails.
-					return moerr.GetOkExpectedEOB()
-				}
+			for _, meta := range readyTombstones {
 				scopes = append(scopes, *meta.AsCommonID())
 			}
 		}
 		var factory tasks.TxnTaskFactory
 		if firstChunk {
-			factory = jobs.FlushTableTailTaskFactory(ready, tombstoneMetas, flusher.rt)
+			factory = jobs.FlushTableTailTaskFactory(chunk, readyTombstones, flusher.rt)
 			firstChunk = false
 		} else {
 			logutil.Info("flusher.table.tail.fire.chunk",
 				zap.String("table", tableDesc),
-				zap.Int("chunk-size", len(ready)),
+				zap.Int("chunk-size", len(chunk)),
 			)
-			factory = jobs.FlushTableTailTaskFactory(ready, nil, flusher.rt)
+			factory = jobs.FlushTableTailTaskFactory(chunk, nil, flusher.rt)
 		}
 
 		_, err := flusher.rt.Scheduler.ScheduleMultiScopedTxnTask(
@@ -800,7 +834,7 @@ func (flusher *flushImpl) fireFlushTabletail(
 		}
 	}
 
-	if deferred > 0 {
+	if deferred {
 		// Partial admission must not postpone retries by resetting the deadline.
 		return moerr.GetOkExpectedEOB()
 	}
@@ -831,9 +865,17 @@ func (flusher *flushImpl) checkFlushConditionAndFire(
 			continue
 		}
 
-		flushReady := func() bool {
-			if !table.IsActive() {
-				count++
+		// Reuse the same pressure sample for a partial prefix. A new random
+		// draw could admit the whole table but reject its eligible prefix for
+		// reasons unrelated to the prefix's actual size.
+		pressureDraw := -1.0
+		dropped := !table.IsActive()
+		if dropped {
+			count++
+		}
+		deadlinePassed := table.Stats.GetFlushDeadline().Before(time.Now())
+		flushReady := func(asize, dsize int) bool {
+			if dropped {
 				if pressure < 0.5 || count < 200 {
 					// if the table has been dropped, flush it immediately if
 					// resources are available.
@@ -843,7 +885,7 @@ func (flusher *flushImpl) checkFlushConditionAndFire(
 				return false
 			}
 			// time to flush
-			if table.Stats.GetFlushDeadline().Before(time.Now()) {
+			if deadlinePassed {
 				return true
 			}
 			// this table is too large, flush it
@@ -851,13 +893,16 @@ func (flusher *flushImpl) checkFlushConditionAndFire(
 				return true
 			}
 			// unflushed data is too large, flush it
-			if asize > common.Const1MBytes && rand.Float64() < pressure {
-				return true
+			if asize > common.Const1MBytes {
+				if pressureDraw < 0 {
+					pressureDraw = rand.Float64()
+				}
+				return pressureDraw < pressure
 			}
 			return false
 		}
 
-		ready := flushReady()
+		ready := flushReady(asize, dsize)
 
 		if asize+dsize > 2*1000*1024 {
 			logutil.Info(
@@ -871,7 +916,7 @@ func (flusher *flushImpl) checkFlushConditionAndFire(
 		}
 
 		if ready {
-			if err := flusher.fireFlushTabletail(table, end, lastCkp); err == nil {
+			if err := flusher.fireFlushTabletailWithPolicy(table, end, lastCkp, flushReady); err == nil {
 				table.Stats.ResetDeadline(flusher.flushInterval)
 			}
 		}
