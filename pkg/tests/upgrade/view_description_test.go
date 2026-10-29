@@ -300,14 +300,19 @@ func TestViewDescriptionPublicSQL(t *testing.T) {
 			warnings, err := missingConn.QueryContext(ctx, "show warnings")
 			require.NoError(t, err)
 			defer warnings.Close()
-			require.True(t, warnings.Next())
-			var level, message string
-			var code int
-			require.NoError(t, warnings.Scan(&level, &code, &message))
-			require.Equal(t, "Warning", level)
-			require.Equal(t, 1356, code)
-			require.Contains(t, message, "missing_db_view")
+			var messages []string
+			for warnings.Next() {
+				var level, message string
+				var code int
+				require.NoError(t, warnings.Scan(&level, &code, &message))
+				require.Equal(t, "Warning", level)
+				require.Equal(t, 1356, code)
+				messages = append(messages, message)
+			}
 			require.NoError(t, warnings.Err())
+			allWarnings := strings.Join(messages, "\n")
+			require.Contains(t, allWarnings, "missing_db_view")
+			require.Contains(t, allWarnings, "missing_default_db_view")
 		}()
 	})
 }
