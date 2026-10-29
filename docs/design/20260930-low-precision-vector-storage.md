@@ -704,7 +704,13 @@ within the fp32 GEMM's tolerance, rows closer than it in either order.
   decoding with the parse's errors; the JSON row scan (`vectorMatmulJSONRows`) on nested,
   spaced, string, object and malformed text. Binder (`plan/base_binder_vector_matmul_test.go`):
   `RAND()`, `UUID()` and `SYSDATE()` configurations are rejected, parameters and constants
-  accepted; function resolution accepts JSON options and rejects BLOB options.
+  accepted; function resolution accepts JSON options and rejects BLOB options. The bound
+  makes no allocation with 20,000 escaped option keys (`testing.AllocsPerRun`), and such
+  options beyond a 64 KiB account are refused; the options visitor's cases (duplicate keys
+  take the last, nested keys are ignored, escapes, non-objects and invalid values with
+  their texts); JSON query values round once (`1.00000005960464478` is `1.0000001`, also in
+  BVT `vector/vector_matmul.sql`), with the parse's errors for non-numbers, nesting and
+  nulls.
 - **Sort and hash keys** (`sort/vecblock_test.go`, `hashmap/strhashmap_test.go`): `ORDER BY k, v`
   over 150 peer groups sorts each group by the decoded values with under 64 KiB of Go heap
   (16.8 MB decoding the column per group); a `vecf8`/`vecf4(768)` hash key, flat, nullable
@@ -864,7 +870,18 @@ cosine divides the norm out and squared L2 includes it.
   and the score scratch, from the configuration's lengths and a non-allocating scan of
   JSON queries that also checks the query count, `queries × topk` and the dimension),
   then keeps only the retained bytes, so a configuration beyond the account is refused
-  before its queries are decoded.
+  before its queries are decoded. The bound reads neither the options nor the query values,
+  so it covers either query format. The options and JSON queries are parsed in one SAX pass
+  (`sonic/ast.Preorder`) without building a map or nested slices: the options visitor keeps
+  the top-level `metric` and `query_format`, and the query visitor writes each value,
+  rounded once from its text to float32 (`strconv.ParseFloat(text, 32)`, as `encoding/json`
+  does), into one backing sized by the row scan. Measured against `Unmarshal` (64 × 768
+  queries; options with 10,002 keys): the SAX parse holds 197 KB against 610 KB to 3.15 MB
+  for the queries and 64 B against 1.9 to 3.4 MB for the options, and takes 1.8 to 1.9 ms
+  against 0.87 ms (native sonic) or 3.9 ms (the `encoding/json` fallback sonic v1.15.2 uses
+  on Go 1.27) for the queries and 0.8 to 1.2 ms against 1.6 to 3.5 ms for the options.
+  Native sonic's `Unmarshal` into float32 rounds through float64 (1.00000005960464478 reads
+  as 1, not 1.0000001); the SAX parse keeps the single rounding on any sonic version.
 - v1 is a function call per tile with no index, residency or dataset cache; the cuVS
   brute-force index is unchanged.
 - SQL surface = one aggregate, `vector_matmul`; partials per pipeline and the cross-CN

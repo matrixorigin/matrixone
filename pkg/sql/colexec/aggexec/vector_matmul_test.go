@@ -2150,7 +2150,6 @@ func TestVectorMatmulParseBoundLimits(t *testing.T) {
 	}{
 		{EncodeVectorMatmulConfig(1, vmJSONQueries(vectorMatmulMaxQueries+1, 2, false), "", false), "query count 4097 out of range"},
 		{EncodeVectorMatmulConfig(1, "[]", "", false), "query count 0 out of range"},
-		{EncodeVectorMatmulConfig(1, "[[1,2],[1,2,3]]", "", false), "vector ops between different dimensions"},
 		{EncodeVectorMatmulConfig(vectorMatmulMaxTopK, vmJSONQueries(vectorMatmulMaxQueries, 2, false), "", false), "queries x topk exceeds"},
 		{EncodeVectorMatmulConfig(0, "[[1,2]]", "", false), "topk 0 out of range"},
 	} {
@@ -2161,6 +2160,120 @@ func TestVectorMatmulParseBoundLimits(t *testing.T) {
 		_, parseErr := parseVectorMatmulConfig(tc.raw, typ)
 		require.ErrorContains(t, parseErr, tc.want)
 	}
+}
+
+// The bound leaves a dimension mismatch to parsing: JSON vecblock queries have one value a row.
+func TestVectorMatmulParseBoundDimension(t *testing.T) {
+	typ := types.New(types.T_array_float32, 2, 0)
+	raw := EncodeVectorMatmulConfig(1, "[[1,2],[1,2,3]]", "", false)
+	_, err := vectorMatmulParseBound(raw, typ)
+	require.NoError(t, err)
+	_, err = parseVectorMatmulConfig(raw, typ)
+	require.ErrorContains(t, err, "vector ops between different dimensions")
+}
+
+// The bound reads neither the options nor the queries' values: it allocates nothing for
+// large options, escaped strings included, or for large queries.
+func TestVectorMatmulParseBoundAllocatesNothing(t *testing.T) {
+	var opts strings.Builder
+	opts.WriteString(`{"metric":"cosine"`)
+	for i := 0; i < 20000; i++ {
+		opts.WriteString(`,"k` + strconv.Itoa(i) + `":"v\nalue \u00e9"`)
+	}
+	opts.WriteString(`}`)
+	typ := types.New(types.T_array_float32, 64, 0)
+	for _, raw := range [][]byte{
+		EncodeVectorMatmulConfig(4, vmJSONQueries(64, 64, false), opts.String(), false),
+		EncodeVectorMatmulBinaryConfig(4, make([]byte, 64*64*4), opts.String(), false),
+	} {
+		var err error
+		require.Zero(t, testing.AllocsPerRun(5, func() { _, err = vectorMatmulParseBound(raw, typ) }))
+		require.NoError(t, err)
+	}
+}
+
+// Large options beyond the account are refused before they are read.
+func TestVectorMatmulLargeOptionsRefused(t *testing.T) {
+	var opts strings.Builder
+	opts.WriteString(`{"metric":"cosine"`)
+	for i := 0; i < 20000; i++ {
+		opts.WriteString(`,"k` + strconv.Itoa(i) + `":"v\nalue"`)
+	}
+	opts.WriteString(`}`)
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	registry, err := mpool.NewAllocationAccountRegistry(1, 512)
+	require.NoError(t, err)
+	account, err := registry.Open(64 << 10)
+	require.NoError(t, err)
+	allocation, err := NewAllocationAccount(account, mpool.AllocationOwnerGroup, AllocationAccountSites{
+		VectorData: 1, VectorArea: 2, VectorNulls: 3, VectorGrouping: 4, ArgumentCount: 5, ArgumentArena: 6,
+	})
+	require.NoError(t, err)
+	raw := EncodeVectorMatmulConfig(1, "[[1,0,0,0]]", opts.String(), false)
+	_, err = MakeGroupAgg(mp, AggIdOfVectorMatmul, false, allocation, raw, types.T_int64.ToType(), types.New(types.T_array_float32, 4, 0))
+	require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
+	require.Zero(t, account.Snapshot().Used)
+}
+
+func TestVectorMatmulOptions(t *testing.T) {
+	for _, tc := range []struct {
+		options  string
+		metric   int
+		vecblock bool
+		err      string
+	}{
+		{"", vectorMatmulInnerProduct, false, ""},
+		{`{"metric":"cosine"}`, vectorMatmulCosine, false, ""},
+		{` { "metric" : "l2sq" , "query_format" : "vecblock" } `, vectorMatmulL2sq, true, ""},
+		{`{"metric":"l2sq","metric":"cosine"}`, vectorMatmulCosine, false, ""},
+		{`{"x":{"metric":"l2sq","query_format":"bad"},"metric":"cos\u0069ne"}`, vectorMatmulCosine, false, ""},
+		{`{"other":[1,{"a":null}],"query_format":"float32"}`, vectorMatmulInnerProduct, false, ""},
+		{`{}`, vectorMatmulInnerProduct, false, ""},
+		{`{"metric":"l2"}`, 0, false, `metric "l2" is not inner_product`},
+		{`{"metric":5}`, 0, false, "metric 5 is not inner_product"},
+		{`{"metric":{"a":1}}`, 0, false, `metric {"a":1} is not inner_product`},
+		{`{"query_format":"cells"}`, 0, false, `query_format "cells" is not float32 or vecblock`},
+		{`[1]`, 0, false, "options must be a JSON object"},
+		{`null`, 0, false, "options must be a JSON object"},
+		{`"x"`, 0, false, "options must be a JSON object"},
+		{`{"metric":"cosine"`, 0, false, "options must be a JSON object"},
+		{`not json`, 0, false, "options must be a JSON object"},
+	} {
+		m, vb, err := parseVectorMatmulOptions(tc.options)
+		if tc.err != "" {
+			require.ErrorContains(t, err, tc.err, tc.options)
+			continue
+		}
+		require.NoError(t, err, tc.options)
+		require.Equal(t, tc.metric, m, tc.options)
+		require.Equal(t, tc.vecblock, vb, tc.options)
+	}
+}
+
+// A JSON query value is rounded once from its text to float32: 1.00000005960464478 lies
+// just above the midpoint of 1 and the next float32, which a float64 step rounds to 1.
+func TestVectorMatmulJSONQueriesRoundOnce(t *testing.T) {
+	text := "[[1.00000005960464478, 1e-46, 3.4028235e38, -0, 7]]"
+	queries, err := decodeVectorMatmulJSONQueries(text)
+	require.NoError(t, err)
+	for i, s := range []string{"1.00000005960464478", "1e-46", "3.4028235e38", "-0", "7"} {
+		want, err := strconv.ParseFloat(s, 32)
+		require.NoError(t, err)
+		require.Equal(t, math.Float32bits(float32(want)), math.Float32bits(queries[0][i]), s)
+	}
+	require.Equal(t, float32(1.0000001), queries[0][0])
+	for _, bad := range []string{`[[1e39]]`, `[["1"]]`, `[[true]]`, `[[[1]]]`, `[[{"a":1}]]`, `[1,2]`, `{}`, `[[1,2]`} {
+		_, err := decodeVectorMatmulJSONQueries(bad)
+		require.ErrorContains(t, err, "queries must be a JSON array of vectors", bad)
+	}
+	_, err = decodeVectorMatmulJSONQueries(`[[1,2],null]`)
+	require.ErrorContains(t, err, "query 1 is null")
+	_, err = decodeVectorMatmulJSONQueries(`[[1,2],[3,null]]`)
+	require.ErrorContains(t, err, "query 1: coordinate 1 is null")
+	queries, err = decodeVectorMatmulJSONQueries(`[]`)
+	require.NoError(t, err)
+	require.Empty(t, queries)
 }
 
 func TestVectorMatmulJSONRows(t *testing.T) {
@@ -2187,7 +2300,7 @@ func TestVectorMatmulJSONRows(t *testing.T) {
 		{"", 0, nil, false, nil},
 	} {
 		var lens, nulls []int
-		rows, ok := vectorMatmulJSONRows(tc.text, func(_, n, null int) {
+		rows, ok := vectorMatmulJSONRows(tc.text, func(_, n, null int, _ string) {
 			lens = append(lens, n)
 			nulls = append(nulls, null)
 		})

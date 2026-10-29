@@ -31,6 +31,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/bytedance/sonic"
+	"github.com/bytedance/sonic/ast"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -149,9 +150,9 @@ func decodeVectorMatmulConfigFields(b []byte, str func([]byte) string) (topk int
 		b = b[4+n:]
 		return s, true
 	}
-	malformed := moerr.NewInternalErrorNoCtx("vector_matmul: malformed configuration")
+	malformed := func() error { return moerr.NewInternalErrorNoCtx("vector_matmul: malformed configuration") }
 	if len(b) < 8 {
-		return 0, "", "", false, false, malformed
+		return 0, "", "", false, false, malformed()
 	}
 	topk = int64(binary.LittleEndian.Uint64(b))
 	b = b[8:]
@@ -159,7 +160,7 @@ func decodeVectorMatmulConfigFields(b []byte, str func([]byte) string) (topk int
 	queries, ok1 = read()
 	options, ok2 = read()
 	if !ok1 || !ok2 || len(b) != 1 || b[0]&^(vectorMatmulFlagGPU|vectorMatmulFlagBinaryQueries) != 0 {
-		return 0, "", "", false, false, malformed
+		return 0, "", "", false, false, malformed()
 	}
 	return topk, queries, options, b[0]&vectorMatmulFlagGPU != 0, b[0]&vectorMatmulFlagBinaryQueries != 0, nil
 }
@@ -204,36 +205,101 @@ func parseVectorMatmulOptions(options string) (metric int, vecblockQueries bool,
 	if options == "" {
 		return vectorMatmulInnerProduct, false, nil
 	}
-	var fields map[string]json.RawMessage
-	if err := sonic.UnmarshalString(options, &fields); err != nil || fields == nil {
+	v := &vectorMatmulOptionsVisitor{}
+	if err := ast.Preorder(options, v, vectorMatmulNumberText); err != nil || !v.object {
 		return 0, false, moerr.NewInvalidInputNoCtx("vector_matmul: options must be a JSON object")
 	}
 	metric = vectorMatmulInnerProduct
-	if raw, ok := fields["metric"]; ok {
-		var name string
-		_ = sonic.Unmarshal(raw, &name)
-		switch name {
+	if v.metric.set {
+		switch v.metric.str {
 		case "inner_product":
 		case "cosine":
 			metric = vectorMatmulCosine
 		case "l2sq":
 			metric = vectorMatmulL2sq
 		default:
-			return 0, false, moerr.NewInvalidInputNoCtxf("vector_matmul: metric %s is not inner_product, cosine or l2sq", raw)
+			return 0, false, moerr.NewInvalidInputNoCtxf("vector_matmul: metric %s is not inner_product, cosine or l2sq", vectorMatmulOptionText(options, "metric"))
 		}
 	}
-	if raw, ok := fields["query_format"]; ok {
-		var name string
-		_ = sonic.Unmarshal(raw, &name)
-		switch name {
+	if v.format.set {
+		switch v.format.str {
 		case "float32":
 		case "vecblock":
 			vecblockQueries = true
 		default:
-			return 0, false, moerr.NewInvalidInputNoCtxf("vector_matmul: query_format %s is not float32 or vecblock", raw)
+			return 0, false, moerr.NewInvalidInputNoCtxf("vector_matmul: query_format %s is not float32 or vecblock", vectorMatmulOptionText(options, "query_format"))
 		}
 	}
 	return metric, vecblockQueries, nil
+}
+
+// vectorMatmulNumberText makes ast.Preorder pass numbers as their text only.
+var vectorMatmulNumberText = &ast.VisitorOptions{OnlyNumber: true}
+
+// vectorMatmulOption is one option's value as an options object last sets it: str is the
+// value when it is a JSON string, empty for any other value.
+type vectorMatmulOption struct {
+	set bool
+	str string
+}
+
+// vectorMatmulOptionsVisitor reads the options object in one pass without building it: it
+// keeps the top-level "metric" and "query_format" values and skips the others.
+type vectorMatmulOptionsVisitor struct {
+	depth          int
+	object         bool
+	key            string
+	metric, format vectorMatmulOption
+}
+
+// value records a value at depth; a value at depth 0 is the options itself.
+func (v *vectorMatmulOptionsVisitor) value(str string) {
+	if v.depth != 1 {
+		return
+	}
+	switch v.key {
+	case "metric":
+		v.metric = vectorMatmulOption{set: true, str: str}
+	case "query_format":
+		v.format = vectorMatmulOption{set: true, str: str}
+	}
+}
+
+func (v *vectorMatmulOptionsVisitor) OnNull() error                        { v.value(""); return nil }
+func (v *vectorMatmulOptionsVisitor) OnBool(bool) error                    { v.value(""); return nil }
+func (v *vectorMatmulOptionsVisitor) OnString(s string) error              { v.value(s); return nil }
+func (v *vectorMatmulOptionsVisitor) OnInt64(int64, json.Number) error     { v.value(""); return nil }
+func (v *vectorMatmulOptionsVisitor) OnFloat64(float64, json.Number) error { v.value(""); return nil }
+func (v *vectorMatmulOptionsVisitor) OnObjectKey(k string) error {
+	if v.depth == 1 {
+		v.key = k
+	}
+	return nil
+}
+func (v *vectorMatmulOptionsVisitor) OnObjectBegin(int) error {
+	if v.depth == 0 {
+		v.object = true
+	}
+	v.value("")
+	v.depth++
+	return nil
+}
+func (v *vectorMatmulOptionsVisitor) OnObjectEnd() error { v.depth--; return nil }
+func (v *vectorMatmulOptionsVisitor) OnArrayBegin(int) error {
+	v.value("")
+	v.depth++
+	return nil
+}
+func (v *vectorMatmulOptionsVisitor) OnArrayEnd() error { v.depth--; return nil }
+
+// vectorMatmulOptionText is the JSON text of the options' key, for an error message.
+func vectorMatmulOptionText(options, key string) string {
+	if node, err := sonic.GetFromString(options, key); err == nil {
+		if raw, err := node.Raw(); err == nil {
+			return raw
+		}
+	}
+	return `""`
 }
 
 // vectorMatmulConfigs shares a parsed configuration between the executors holding the same
@@ -303,60 +369,43 @@ func vectorMatmulParseBound(raw []byte, vecType types.Type) (uint64, error) {
 	if dim < 1 || dim > types.MaxArrayDimension {
 		return 0, moerr.NewInvalidInputNoCtxf("vector_matmul: dimension %d out of range [1, %d]", dim, types.MaxArrayDimension)
 	}
-	_, vecblockQueries, err := parseVectorMatmulOptions(options)
-	if err != nil {
-		// parsing reports the options
-		return 0, err
-	}
 	cellSize := 4 * dim
 	if f, ok := vecType.Oid.BlockScaledFormat(); ok {
 		cellSize = types.BlockScaledCellSize(f, dim)
 	}
-	// the copies of queries and options, and the options map
-	bound := 2*uint64(len(queries)) + 4*uint64(len(options)) + 4096
+	// the options are read only after admission, so the bound covers either query format:
+	// the escaped strings of the options, and the copy of the queries
+	bound := 2*uint64(len(options)) + 2*uint64(len(queries)) + 4096
 	var nq int
-	switch {
-	case binaryQueries:
-		width := 4 * dim
-		if vecblockQueries {
-			width = cellSize
+	if binaryQueries {
+		// float32 values or cells: the larger count that divides the length; parsing
+		// reports a length that divides neither, and a count beyond the limit
+		for _, width := range []int{4 * dim, cellSize} {
+			if len(queries) > 0 && len(queries)%width == 0 {
+				nq = max(nq, len(queries)/width)
+			}
 		}
-		if len(queries) == 0 || len(queries)%width != 0 {
-			// parsing reports the length
+		if nq == 0 || nq > vectorMatmulMaxQueries {
 			return bound, nil
 		}
-		nq = len(queries) / width
 		// the decoded values and their slice headers
 		bound += uint64(len(queries)) + uint64(nq)*24
-	case vecblockQueries:
-		rows, ok := vectorMatmulJSONRows(queries, nil)
+	} else {
+		total := 0
+		rows, ok := vectorMatmulJSONRows(queries, func(_, n, _ int, _ string) { total += n })
 		if !ok {
 			return bound, nil
 		}
 		nq = rows
-		// the element texts, their JSON decoding and the cells built from them
-		bound += uint64(len(queries)) + uint64(nq)*(2048+uint64(cellSize)+256*uint64(dim))
-	default:
-		badRow, badLen := -1, 0
-		rows, ok := vectorMatmulJSONRows(queries, func(row, n, _ int) {
-			if badRow < 0 && n != dim {
-				badRow, badLen = row, n
-			}
-		})
-		if !ok {
-			return bound, nil
-		}
-		nq = rows
-		if nq >= 1 && nq <= vectorMatmulMaxQueries && nq*int(topk) <= vectorMatmulMaxEntries && badRow >= 0 {
-			return 0, moerr.NewArrayInvalidOpNoCtx(dim, badLen)
-		}
-		// the decoded vectors with append growth
-		bound += uint64(nq) * (128 + 24*uint64(dim))
+		// float queries: the values and the query views; vecblock queries: the element
+		// texts' JSON decoding and the cells built from them
+		bound += max(4*uint64(total)+24*uint64(nq), uint64(nq)*(2048+uint64(cellSize)+256*uint64(dim)))
 	}
-	if nq < 1 || nq > vectorMatmulMaxQueries {
+	// JSON queries have the same count in either format; parsing checks binary ones
+	if !binaryQueries && (nq < 1 || nq > vectorMatmulMaxQueries) {
 		return 0, moerr.NewInvalidInputNoCtxf("vector_matmul: query count %d out of range [1, %d]", nq, vectorMatmulMaxQueries)
 	}
-	if nq*int(topk) > vectorMatmulMaxEntries {
+	if !binaryQueries && nq*int(topk) > vectorMatmulMaxEntries {
 		return 0, moerr.NewInvalidInputNoCtxf("vector_matmul: queries x topk exceeds %d", vectorMatmulMaxEntries)
 	}
 	// the converted storage (cells built from vectors, then copied back to back), the
@@ -368,151 +417,179 @@ func vectorMatmulParseBound(raw []byte, vecType types.Type) (uint64, error) {
 }
 
 // vectorMatmulJSONRows scans text as a JSON array of arrays without decoding it: it returns
-// the number of rows and calls row, when not nil, with each row's element count and the
-// index of its first null element (-1 when none). ok is false when text is not well-formed
-// JSON of that shape; the decoder then reports the error. An element of the outer array that
-// is not an array counts as a row of one element; a null one has null at -2.
-func vectorMatmulJSONRows(text string, row func(i, n, null int)) (rows int, ok bool) {
-	i := 0
-	ws := func() {
-		for i < len(text) && (text[i] == ' ' || text[i] == '\t' || text[i] == '\n' || text[i] == '\r') {
-			i++
-		}
-	}
-	// skipString moves i past the string starting at text[i].
-	skipString := func() bool {
-		for i++; i < len(text); i++ {
-			switch text[i] {
-			case '\\':
-				i++
-			case '"':
-				i++
-				return true
-			}
-		}
-		return false
-	}
-	// isNull reports whether the value at text[i] is the literal null.
-	isNull := func() bool {
-		ws()
-		return strings.HasPrefix(text[i:], "null") &&
-			(i+4 == len(text) || strings.IndexByte(",]} \t\n\r", text[i+4]) >= 0)
-	}
-	// firstNull is the index of the first null element of the array skipValue last left.
-	firstNull := -1
-	// skipValue moves i past one value, counting the elements of an array.
-	var skipValue func() (elems int, ok bool)
-	skipValue = func() (int, bool) {
-		ws()
-		if i >= len(text) {
-			return 0, false
-		}
-		switch text[i] {
-		case '"':
-			return 1, skipString()
-		case '[', '{':
-			open, closer := text[i], byte(']')
-			if open == '{' {
-				closer = '}'
-			}
-			i++
-			ws()
-			if i < len(text) && text[i] == closer {
-				i++
-				firstNull = -1
-				return 0, true
-			}
-			n, null := 0, -1
-			for {
-				if open == '{' {
-					ws()
-					if i >= len(text) || text[i] != '"' || !skipString() {
-						return 0, false
-					}
-					ws()
-					if i >= len(text) || text[i] != ':' {
-						return 0, false
-					}
-					i++
-				}
-				if null < 0 && open == '[' && isNull() {
-					null = n
-				}
-				if _, ok := skipValue(); !ok {
-					return 0, false
-				}
-				n++
-				ws()
-				if i >= len(text) {
-					return 0, false
-				}
-				if text[i] == closer {
-					i++
-					firstNull = -1
-					if open == '{' {
-						return 1, true
-					}
-					firstNull = null
-					return n, true
-				}
-				if text[i] != ',' {
-					return 0, false
-				}
-				i++
-			}
-		default:
-			start := i
-			for i < len(text) && text[i] != ',' && text[i] != ']' && text[i] != '}' &&
-				text[i] != ' ' && text[i] != '\t' && text[i] != '\n' && text[i] != '\r' {
-				i++
-			}
-			return 1, i > start
-		}
-	}
-	ws()
-	if i >= len(text) || text[i] != '[' {
+// the number of rows and calls row, when not nil, with each row's element count, the index
+// of its first null element (-1 when none) and its text. ok is false when text is not
+// well-formed JSON of that shape; the decoder then reports the error. An element of the
+// outer array that is not an array counts as a row of one element; a null one has null at -2.
+func vectorMatmulJSONRows(text string, row func(i, n, null int, value string)) (rows int, ok bool) {
+	sc := vectorMatmulJSONScanner{text: text}
+	sc.ws()
+	if sc.i >= len(text) || text[sc.i] != '[' {
 		return 0, false
 	}
-	i++
-	ws()
-	if i < len(text) && text[i] == ']' {
-		i++
-		ws()
-		return 0, i == len(text)
+	sc.i++
+	sc.ws()
+	if sc.i < len(text) && text[sc.i] == ']' {
+		sc.i++
+		sc.ws()
+		return 0, sc.i == len(text)
 	}
 	for {
-		ws()
-		isArray := i < len(text) && text[i] == '['
+		sc.ws()
+		start := sc.i
+		isArray := sc.i < len(text) && text[sc.i] == '['
 		null := -1
-		if !isArray && isNull() {
+		if !isArray && sc.isNull() {
 			null = -2
 		}
-		n, ok := skipValue()
+		n, ok := sc.skipValue()
 		if !ok {
 			return 0, false
 		}
 		if isArray {
-			null = firstNull
+			null = sc.firstNull
 		} else {
 			n = 1
 		}
 		if row != nil {
-			row(rows, n, null)
+			row(rows, n, null, text[start:sc.i])
 		}
 		rows++
-		ws()
-		if i >= len(text) {
+		sc.ws()
+		if sc.i >= len(text) {
 			return 0, false
 		}
-		if text[i] == ']' {
-			i++
-			ws()
-			return rows, i == len(text)
+		if text[sc.i] == ']' {
+			sc.i++
+			sc.ws()
+			return rows, sc.i == len(text)
 		}
-		if text[i] != ',' {
+		if text[sc.i] != ',' {
 			return 0, false
 		}
-		i++
+		sc.i++
+	}
+}
+
+// vectorMatmulJSONScanner walks JSON text at i without decoding it.
+type vectorMatmulJSONScanner struct {
+	text string
+	i    int
+	// firstNull is the index of the first null element of the array skipValue last left.
+	firstNull int
+}
+
+func (sc *vectorMatmulJSONScanner) ws() {
+	for sc.i < len(sc.text) {
+		switch sc.text[sc.i] {
+		case ' ', '\t', '\n', '\r':
+			sc.i++
+		default:
+			return
+		}
+	}
+}
+
+// isNull reports whether the value at i is the literal null.
+func (sc *vectorMatmulJSONScanner) isNull() bool {
+	sc.ws()
+	t := sc.text[sc.i:]
+	if len(t) < 4 || t[:4] != "null" {
+		return false
+	}
+	if len(t) == 4 {
+		return true
+	}
+	switch t[4] {
+	case ',', ']', '}', ' ', '\t', '\n', '\r':
+		return true
+	}
+	return false
+}
+
+// skipString moves i past the string starting at i.
+func (sc *vectorMatmulJSONScanner) skipString() bool {
+	for sc.i++; sc.i < len(sc.text); sc.i++ {
+		switch sc.text[sc.i] {
+		case '\\':
+			sc.i++
+		case '"':
+			sc.i++
+			return true
+		}
+	}
+	return false
+}
+
+// skipValue moves i past one value, counting the elements of an array.
+func (sc *vectorMatmulJSONScanner) skipValue() (int, bool) {
+	sc.ws()
+	if sc.i >= len(sc.text) {
+		return 0, false
+	}
+	switch sc.text[sc.i] {
+	case '"':
+		return 1, sc.skipString()
+	case '[', '{':
+		open, closer := sc.text[sc.i], byte(']')
+		if open == '{' {
+			closer = '}'
+		}
+		sc.i++
+		sc.ws()
+		if sc.i < len(sc.text) && sc.text[sc.i] == closer {
+			sc.i++
+			sc.firstNull = -1
+			return 0, true
+		}
+		n, null := 0, -1
+		for {
+			if open == '{' {
+				sc.ws()
+				if sc.i >= len(sc.text) || sc.text[sc.i] != '"' || !sc.skipString() {
+					return 0, false
+				}
+				sc.ws()
+				if sc.i >= len(sc.text) || sc.text[sc.i] != ':' {
+					return 0, false
+				}
+				sc.i++
+			}
+			if null < 0 && open == '[' && sc.isNull() {
+				null = n
+			}
+			if _, ok := sc.skipValue(); !ok {
+				return 0, false
+			}
+			n++
+			sc.ws()
+			if sc.i >= len(sc.text) {
+				return 0, false
+			}
+			if sc.text[sc.i] == closer {
+				sc.i++
+				sc.firstNull = -1
+				if open == '{' {
+					return 1, true
+				}
+				sc.firstNull = null
+				return n, true
+			}
+			if sc.text[sc.i] != ',' {
+				return 0, false
+			}
+			sc.i++
+		}
+	default:
+		start := sc.i
+		for sc.i < len(sc.text) {
+			switch sc.text[sc.i] {
+			case ',', ']', '}', ' ', '\t', '\n', '\r':
+				return 1, sc.i > start
+			}
+			sc.i++
+		}
+		return 1, sc.i > start
 	}
 }
 
@@ -620,28 +697,104 @@ func decodeVectorMatmulBinaryQueries(b string, dim int) ([][]float32, error) {
 	return queries, nil
 }
 
-// decodeVectorMatmulJSONQueries reads a JSON array of vectors. A null query or coordinate is
-// an error: unmarshalling into float32 reads it as 0, so the row scan finds the first one.
+// decodeVectorMatmulJSONQueries reads a JSON array of vectors in one pass into one backing,
+// each number rounded once from its text to float32. A null query or coordinate is an error.
 func decodeVectorMatmulJSONQueries(text string) ([][]float32, error) {
-	var queries [][]float32
-	if err := sonic.UnmarshalString(text, &queries); err != nil {
-		return nil, moerr.NewInvalidInputNoCtx("vector_matmul: queries must be a JSON array of vectors")
-	}
-	nullRow, nullAt := -1, -1
-	vectorMatmulJSONRows(text, func(row, _, null int) {
+	total, nullRow, nullAt := 0, -1, -1
+	rows, ok := vectorMatmulJSONRows(text, func(row, n, null int, _ string) {
+		total += n
 		if nullRow < 0 && null != -1 {
 			nullRow, nullAt = row, null
 		}
 	})
+	if !ok {
+		return nil, moerr.NewInvalidInputNoCtx("vector_matmul: queries must be a JSON array of vectors")
+	}
+	v := &vectorMatmulQueryVisitor{values: make([]float32, 0, total), queries: make([][]float32, 0, rows)}
+	if err := ast.Preorder(text, v, vectorMatmulNumberText); err != nil {
+		return nil, moerr.NewInvalidInputNoCtx("vector_matmul: queries must be a JSON array of vectors")
+	}
 	switch {
 	case nullRow < 0:
-		return queries, nil
+		return v.queries, nil
 	case nullAt == -2:
 		return nil, moerr.NewInvalidInputNoCtxf("vector_matmul: query %d is null", nullRow)
 	default:
 		return nil, moerr.NewInvalidInputNoCtxf("vector_matmul: query %d: coordinate %d is null", nullRow, nullAt)
 	}
 }
+
+// vectorMatmulQueryVisitor reads an array of arrays of numbers into values, a query per
+// inner array viewing it; a null query is nil and a null coordinate 0, which the caller
+// reports. Any other value is an error.
+type vectorMatmulQueryVisitor struct {
+	values  []float32
+	queries [][]float32
+	depth   int
+	start   int
+}
+
+var errVectorMatmulQueryValue = moerr.NewInvalidInputNoCtx("vector_matmul: queries must be a JSON array of vectors")
+
+func (v *vectorMatmulQueryVisitor) number(n json.Number) error {
+	if v.depth != 2 {
+		return errVectorMatmulQueryValue
+	}
+	f, err := strconv.ParseFloat(string(n), 32)
+	if err != nil {
+		return errVectorMatmulQueryValue
+	}
+	v.values = append(v.values, float32(f))
+	return nil
+}
+
+func (v *vectorMatmulQueryVisitor) OnNull() error {
+	switch v.depth {
+	case 1:
+		v.queries = append(v.queries, nil)
+	case 2:
+		v.values = append(v.values, 0)
+	default:
+		return errVectorMatmulQueryValue
+	}
+	return nil
+}
+func (v *vectorMatmulQueryVisitor) OnBool(bool) error                        { return errVectorMatmulQueryValue }
+func (v *vectorMatmulQueryVisitor) OnString(string) error                    { return errVectorMatmulQueryValue }
+func (v *vectorMatmulQueryVisitor) OnInt64(_ int64, n json.Number) error     { return v.number(n) }
+func (v *vectorMatmulQueryVisitor) OnFloat64(_ float64, n json.Number) error { return v.number(n) }
+func (v *vectorMatmulQueryVisitor) OnObjectBegin(int) error                  { return errVectorMatmulQueryValue }
+func (v *vectorMatmulQueryVisitor) OnObjectKey(string) error                 { return errVectorMatmulQueryValue }
+func (v *vectorMatmulQueryVisitor) OnObjectEnd() error                       { return errVectorMatmulQueryValue }
+func (v *vectorMatmulQueryVisitor) OnArrayBegin(int) error {
+	v.depth++
+	if v.depth > 2 {
+		return errVectorMatmulQueryValue
+	}
+	v.start = len(v.values)
+	return nil
+}
+func (v *vectorMatmulQueryVisitor) OnArrayEnd() error {
+	if v.depth == 2 {
+		v.queries = append(v.queries, v.values[v.start:len(v.values):len(v.values)])
+	}
+	v.depth--
+	return nil
+}
+
+// vectorMatmulJSONCheck validates text as JSON in one pass without building it.
+type vectorMatmulJSONCheck struct{}
+
+func (vectorMatmulJSONCheck) OnNull() error                        { return nil }
+func (vectorMatmulJSONCheck) OnBool(bool) error                    { return nil }
+func (vectorMatmulJSONCheck) OnString(string) error                { return nil }
+func (vectorMatmulJSONCheck) OnInt64(int64, json.Number) error     { return nil }
+func (vectorMatmulJSONCheck) OnFloat64(float64, json.Number) error { return nil }
+func (vectorMatmulJSONCheck) OnObjectBegin(int) error              { return nil }
+func (vectorMatmulJSONCheck) OnObjectKey(string) error             { return nil }
+func (vectorMatmulJSONCheck) OnObjectEnd() error                   { return nil }
+func (vectorMatmulJSONCheck) OnArrayBegin(int) error               { return nil }
+func (vectorMatmulJSONCheck) OnArrayEnd() error                    { return nil }
 
 // decodeVectorMatmulCells reads query_format vecblock queries for a vecf8/vecf4 column of
 // vecType: a BLOB of cells back to back, or a JSON array of vecblock JSON objects. Every
@@ -667,15 +820,16 @@ func decodeVectorMatmulCells(queries string, binaryQueries bool, vecType types.T
 			cells = append(cells, b[off:off+size:off+size])
 		}
 	} else {
-		var texts []json.RawMessage
-		if err := sonic.UnmarshalString(queries, &texts); err != nil {
+		var texts []string
+		_, ok := vectorMatmulJSONRows(queries, func(_, _, _ int, value string) { texts = append(texts, value) })
+		if !ok || ast.Preorder(queries, vectorMatmulJSONCheck{}, vectorMatmulNumberText) != nil {
 			return nil, moerr.NewInvalidInputNoCtx("vector_matmul: vecblock queries must be a JSON array of vecblock JSON objects")
 		}
 		if len(texts) == 0 || len(texts) > vectorMatmulMaxQueries {
 			return nil, moerr.NewInvalidInputNoCtxf("vector_matmul: query count %d out of range [1, %d]", len(texts), vectorMatmulMaxQueries)
 		}
 		for i, text := range texts {
-			cell, err := types.BlockScaledFromJSON(format, string(text))
+			cell, err := types.BlockScaledFromJSON(format, text)
 			if err != nil {
 				return nil, vectorMatmulQueryError(i, err)
 			}

@@ -102,6 +102,12 @@ select vector_matmul(4, id, v, '[[1,2,2]]', json_object('metric', 'l2')) from mt
 invalid input: vector_matmul: metric "l2" is not inner_product, cosine or l2sq
 select vector_matmul(4, id, v, '[[1,2,2]]', json_array('cosine')) from mt;
 invalid input: vector_matmul: options must be a JSON object
+create table r1 (id int, v vecf32(1));
+insert into r1 values (1, '[1]');
+select vector_matmul(1, id, v, '[[1.00000005960464478]]') from r1;
+➤ vector_matmul(1, id, v, [[1.00000005960464478]])[-1,2147483647,0]  𝄀
+[[["1", -1.0000001]]]
+drop table r1;
 select vector_matmul(4, id, v, json_array(json_array(rand(), rand(), rand()))) from mt;
 invalid input: topk, queries and options arguments of vector_matmul must be non-null constants, parameters or variables
 select vector_matmul(4, id, v, '[[1,2,2]]', json_object('metric', 'cosine', 'seed', uuid())) from mt;

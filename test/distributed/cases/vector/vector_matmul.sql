@@ -67,6 +67,12 @@ select vector_matmul(4, id, v, '[[1,2,2],[0,1,0]]', json_object('metric', 'cosin
 select vector_matmul(4, id, v, json_array(json_array(1, 2, 2)), json_object('metric', 'l2sq')) from mt;
 select vector_matmul(4, id, v, '[[1,2,2]]', json_object('metric', 'l2')) from mt;
 select vector_matmul(4, id, v, '[[1,2,2]]', json_array('cosine')) from mt;
+-- a JSON query value rounds once from its text to float32: 1.00000005960464478 is just above
+-- the midpoint of 1 and the next float32, so the score is -1.0000001, not -1
+create table r1 (id int, v vecf32(1));
+insert into r1 values (1, '[1]');
+select vector_matmul(1, id, v, '[[1.00000005960464478]]') from r1;
+drop table r1;
 -- a configuration that can differ between evaluations is an error: rand(), uuid(), sysdate()
 select vector_matmul(4, id, v, json_array(json_array(rand(), rand(), rand()))) from mt;
 select vector_matmul(4, id, v, '[[1,2,2]]', json_object('metric', 'cosine', 'seed', uuid())) from mt;
