@@ -27,10 +27,7 @@ func buildDelete(stmt *tree.Delete, ctx CompilerContext, isPrepareStmt bool) (*P
 	defer func() {
 		v2.TxnStatementBuildDeleteHistogram.Observe(time.Since(start).Seconds())
 	}()
-	aliasMap := make(map[string][2]string)
-	for _, tbl := range stmt.TableRefs {
-		getAliasToName(ctx, tbl, "", aliasMap)
-	}
+	aliasMap := CollectDeleteSourceAliases(stmt.TableRefs)
 	tblInfo, err := getDmlTableInfo(ctx, stmt.Tables, stmt.With, aliasMap, "delete")
 	if err != nil {
 		return nil, err
