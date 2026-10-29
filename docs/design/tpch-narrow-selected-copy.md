@@ -54,8 +54,13 @@ BatchSet consumer evidence. Inspect the common-owner frame before benchmarks.
 
 Measure complete owners, including tiny, constant/NULL and wide controls. Use
 unchanged local TPC-H Q1-Q22; exclude cold runs and keep profiles separate. Do
-not verify benchmark inputs, schemas, row counts, results or checksums. Require
-attributable target improvement and reject proven PR-caused slowdowns. Report
-uncertainty and same-binary control variation without calling inconclusive
-results a pass. Publish source/binary pins and resource limits with the PR
-using its template. The broader issue remains separate from this slice.
+not verify benchmark inputs, schemas, row counts, results or checksums.
+
+The user revised acceptance to "if no regression, can still commit": confirmed
+component work reduction is sufficient without a confirmed TPC-H speedup.
+Reject confirmed PR-caused slowdowns, including indirect ones. Investigate
+observed slower signals with focused same-binary controls rather than repeat
+unaffected suites. Report inconclusive query gains and control variation
+explicitly; they are not proof of an end-to-end speedup. Publish source/binary
+pins and resource limits with the PR template. The broader issue remains
+separate from this slice.
