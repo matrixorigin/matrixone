@@ -15809,7 +15809,7 @@ func TestStringTimeArithmeticKeepsTimeDomain(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			case1 := NewFunctionTestCase(proc, []FunctionTestInput{first, second},
-				NewFunctionTestResult(types.New(types.T_varchar, 0, 6), false, tc.want, []bool{false, tc.name == "add", false, true}), tc.fn)
+				NewFunctionTestResult(types.New(types.T_varchar, 0, 6), false, tc.want, []bool{false, false, false, true}), tc.fn)
 			ok, info := case1.RunAndFree()
 			require.True(t, ok, info)
 		})

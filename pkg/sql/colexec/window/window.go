@@ -626,10 +626,9 @@ func (ctr *container) processAggregateFuncRange(
 	w := ap.WinSpecList[idx].Expr.(*plan.Expr_W).W
 	frame := ctr.frameAt(idx, w.Frame)
 	wholeFrame := fullPartitionWindowFrame(frame) ||
-		(cumulativeRangeWindowFrame(frame) && len(w.OrderBy) == 0)
+		(cumulativeRangeWindowFrame(frame) && len(w.OrderBy) == 0 && len(ctr.orderVecs) == 0)
 	if wholeFrame && (orderedSetWindowAggregate(w.Name) ||
-		(singleWindowPartition(ctr.ps) && cumulativePartitionUsesRunning(0, ctr.bat.RowCount()) &&
-			aggexec.FullPartitionWindowAggregate(ap.Aggs[idx].GetAggID()))) {
+		aggexec.FullPartitionWindowAggregate(ap.Aggs[idx].GetAggID())) {
 		return ctr.processFullPartitionRange(
 			idx, ap, proc, outputStart, outputEnd)
 	}
@@ -767,13 +766,10 @@ func (ctr *container) windowPrefixOrderMonotonic(proc *process.Process) (bool, e
 	return !index.hasFold, nil
 }
 
-// processFullPartitionRange evaluates one aggregate state per
-// partition and broadcasts its result to the output rows in that partition.
-// The compact result vector is retained across bounded output chunks and is
-// released after the final chunk (or by Reset/Free on early termination). The
-// ordinary frame evaluator allocates one state per output row; for exact
-// percentiles over a full partition that would retain the same ordered values
-// repeatedly and turn a linear input into quadratic resident state.
+// processFullPartitionRange evaluates each partition once and broadcasts its
+// result. Ordinary aggregates evaluate only partitions needed by the requested
+// output range, preserving LIMIT/error behavior and amortizing setup over small
+// partitions. Ordered-set aggregates retain their historical eager evaluation.
 func (ctr *container) processFullPartitionRange(
 	idx int,
 	ap *Window,
@@ -782,6 +778,7 @@ func (ctr *container) processFullPartitionRange(
 	outputEnd int,
 ) (_ *vector.Vector, retErr error) {
 	n := ctr.bat.RowCount()
+	eager := orderedSetWindowAggregate(ap.WinSpecList[idx].GetW().Name)
 	if outputStart != ctr.fullPartitionNextRow {
 		ctr.freeFullPartitionResults(proc.Mp())
 		return nil, moerr.NewInternalErrorNoCtx("full-partition window output is not sequential")
@@ -792,54 +789,9 @@ func (ctr *container) processFullPartitionRange(
 		}
 	}()
 
-	if ctr.fullPartitionResults == nil {
-		partitionCount := 1
-		if len(ctr.ps) > 0 {
-			partitionCount = len(ctr.ps)
-		}
-		if err := ctr.makeAggregateExecutor(idx, ap, proc, partitionCount); err != nil {
-			return nil, err
-		}
-		defer ctr.freeAggFun()
-
-		for group := 0; group < partitionCount; group++ {
-			start := 0
-			if len(ctr.ps) > 0 {
-				start = int(ctr.ps[group])
-			}
-			end := partitionEnd(ctr.ps, group, n)
-			if start < 0 || end <= start || end > n {
-				return nil, moerr.NewInternalErrorNoCtx("invalid full-partition window interval")
-			}
-			for row := start; row < end; row++ {
-				if err := checkCanceled(proc, row-start); err != nil {
-					return nil, err
-				}
-				if err := ctr.batAggs[idx].Fill(group, row, ctr.aggVecs[idx].Vec); err != nil {
-					return nil, err
-				}
-			}
-		}
-
-		vecs, err := aggexec.FlushWithContext(proc.Ctx, ctr.batAggs[idx])
-		if err != nil {
-			return nil, err
-		}
-		ctr.fullPartitionResults, err = aggexec.MergeSplitResult(vecs, proc.Mp())
-		if err != nil {
-			return nil, err
-		}
-		if ctr.fullPartitionResults.Length() != partitionCount {
-			return nil, moerr.NewInternalErrorNoCtx("full-partition result count mismatch")
-		}
-	}
-
-	result, allocationErr := ctr.allocation.NewVector(*ctr.fullPartitionResults.GetType())
-	if allocationErr != nil {
-		return nil, allocationErr
-	}
+	var result *vector.Vector
 	defer func() {
-		if retErr != nil {
+		if retErr != nil && result != nil {
 			result.Free(proc.Mp())
 		}
 	}()
@@ -848,27 +800,101 @@ func (ctr *container) processFullPartitionRange(
 		start := 0
 		if len(ctr.ps) > 0 {
 			if group >= len(ctr.ps) {
-				return nil, moerr.NewInternalErrorNoCtx("full-partition cache exhausted")
+				return nil, moerr.NewInternalErrorNoCtx("full-partition window cache exhausted")
 			}
 			start = int(ctr.ps[group])
 		}
 		end := partitionEnd(ctr.ps, group, n)
-		if row < start || row >= end {
-			return nil, moerr.NewInternalErrorNoCtx("invalid full-partition cache position")
+		if start < 0 || end <= start || end > n || row < start || row >= end {
+			return nil, moerr.NewInternalErrorNoCtx("invalid full-partition window interval")
+		}
+		if ctr.fullPartitionResults == nil {
+			var err error
+			ctr.fullPartitionResults, err = ctr.evaluateFullPartitions(idx, ap, proc, group, outputEnd, eager)
+			if err != nil {
+				return nil, err
+			}
+		}
+		if result == nil {
+			var err error
+			result, err = ctr.allocation.NewVector(*ctr.fullPartitionResults.GetType())
+			if err != nil {
+				return nil, err
+			}
 		}
 		visibleEnd := min(end, outputEnd)
 		if err := result.UnionMulti(
-			ctr.fullPartitionResults, int64(group), visibleEnd-row, proc.Mp()); err != nil {
+			ctr.fullPartitionResults, int64(ctr.fullPartitionResultIndex), visibleEnd-row, proc.Mp()); err != nil {
 			return nil, err
 		}
 		row = visibleEnd
 		if row == end {
+			ctr.fullPartitionResultIndex++
+			if ctr.fullPartitionResultIndex == ctr.fullPartitionResults.Length() {
+				ctr.fullPartitionResults.Free(proc.Mp())
+				ctr.fullPartitionResults = nil
+				ctr.fullPartitionResultIndex = 0
+			}
 			ctr.fullPartition++
 		}
 	}
 	ctr.fullPartitionNextRow = outputEnd
 	if outputEnd == n {
 		ctr.freeFullPartitionResults(proc.Mp())
+	}
+	return result, nil
+}
+
+func (ctr *container) evaluateFullPartitions(
+	idx int, ap *Window, proc *process.Process, firstPartition, outputEnd int, eager bool,
+) (*vector.Vector, error) {
+	groups := 1
+	if len(ctr.ps) > 0 {
+		if eager {
+			firstPartition = 0
+			groups = len(ctr.ps)
+		} else {
+			lastPartition := firstPartition + 1
+			for lastPartition < len(ctr.ps) && ctr.ps[lastPartition] < int64(outputEnd) {
+				lastPartition++
+			}
+			groups = lastPartition - firstPartition
+		}
+	}
+	if err := ctr.makeAggregateExecutor(idx, ap, proc, groups); err != nil {
+		return nil, err
+	}
+	defer ctr.freeAggFun()
+	for group := 0; group < groups; group++ {
+		partition := firstPartition + group
+		start := 0
+		if len(ctr.ps) > 0 {
+			start = int(ctr.ps[partition])
+		}
+		end := partitionEnd(ctr.ps, partition, ctr.bat.RowCount())
+		if start < 0 || end <= start || end > ctr.bat.RowCount() {
+			return nil, moerr.NewInternalErrorNoCtx("invalid full-partition window interval")
+		}
+		for row := start; row < end; row++ {
+			if err := checkCanceled(proc, row-start); err != nil {
+				return nil, err
+			}
+			if err := ctr.batAggs[idx].Fill(group, row, ctr.aggVecs[idx].Vec); err != nil {
+				return nil, err
+			}
+		}
+	}
+	vecs, err := aggexec.FlushWithContext(proc.Ctx, ctr.batAggs[idx])
+	if err != nil {
+		return nil, err
+	}
+	result, err := aggexec.MergeSplitResult(vecs, proc.Mp())
+	if err != nil {
+		return nil, err
+	}
+	if result.Length() != groups {
+		result.Free(proc.Mp())
+		return nil, moerr.NewInternalErrorNoCtx("full-partition aggregate result count mismatch")
 	}
 	return result, nil
 }
