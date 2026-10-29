@@ -1,6 +1,6 @@
 # MySQL 兼容函数与运算符补齐设计
 
-版本：v9，2026-10-29。归属：#31319（原始报告 #23010、#23024、#23025、#23035）。STATEMENT_DIGEST 的兼容目标为 MySQL 8.4 逐字节一致的摘要，而非近似指纹。
+版本：v10，2026-10-29。归属：#31319（原始报告 #23010、#23024、#23025、#23035）。STATEMENT_DIGEST 的兼容目标为 MySQL 8.4 逐字节一致的摘要，而非近似指纹。
 
 ## 范围、不变量与设计门槛
 
@@ -82,7 +82,10 @@ VALUES/REPLACE/ON DUPLICATE KEY UPDATE 通过本次 DML 已解析的目标列定
 - DEFAULT 的单个尾部 COLLATE 属于列属性，即使表达式 parser 把它附着在 literal、带符号数值或原生时间默认值的 AST 上，也须按原默认值语法域校验；重复尾部 COLLATE 拒绝。其对 NULL/default 与 AUTO_INCREMENT 的属性顺序校验不能丢失。显式列 COLLATE 的唯一性跨 AttributeCollate、DEFAULT 尾部和带符号 literal 的 CollateExpr 统一记录；括号表达式内的 COLLATE 不计作列属性。
 - 列定义中的 DEFAULT/生成列表达式拒绝用户/系统变量、赋值及子查询；字符串或列标识符中的 @ 不算变量。复用 formatter 收集列定义 itemization 上下文的语法事实，避免调用未完成的 VarExpr/Subquery.Accept；快照与 AST 同寿命，不缓存，不执行表达式。窗口函数的实参与外侧表达式仍属该上下文，窗口 specification 的 PARTITION/ORDER/frame 属于后续查询阶段，不在这里拒绝变量、子查询或函数；只关闭列观察者，不关闭参数/CASE 等其他观察者。普通格式化输出不变。
 - 内建函数限制按 MySQL value-generator 预校验分为 DEFAULT/生成列共同禁止与仅生成列禁止两组，而非四个时间函数名或运行期非确定性黑名单。覆盖当前日期/时间别名、UTC、UNIX_TIMESTAMP、会话身份/状态、锁、UUID/RAND 和摘要函数等已支持语法；MATCH 也属于共同禁止项。UNIX_TIMESTAMP 带参数仍禁止用于生成列；SYSDATE、RANDOM_BYTES 在摘要解析阶段允许，不能按执行期策略误拒绝。不引入任意 UDF/目录函数注册表。
-- ALTER COLUMN SET DEFAULT 与列定义不是相同上下文：它严格采用 literal、单个符号 numeric literal 或括号表达式语法，裸算术/位运算/NOT/函数/尾部 COLLATE 均拒绝；括号体在 MySQL 摘要解析阶段仍允许变量/子查询，不能套用列定义禁令。子查询自带括号不算外层表达式分组，使用 parser 保留的 ParenSelect 层级区别，不扫描 SQL 文本猜测。保留正负对照，不执行 ALTER 或推断现有列类型。
+- ALTER COLUMN SET DEFAULT 与列定义不是相同上下文：它严格采用 literal、单个符号 numeric literal 或括号表达式语法，裸算术/位运算/NOT/函数/尾部 COLLATE 均拒绝；括号体在 MySQL 摘要解析阶段仍允许变量/子查询，不能套用列定义禁令。子查询自带括号不算外层表达式分组，使用 parser 保留的 ParenSelect 层级区别，且所属 Select 查询层必须整体为透明 wrapper：不能携带 ORDER BY/LIMIT、WITH、锁、导出/INTO 或其他查询选项；不能只看 Select 子节点的括号。不扫描 SQL 文本猜测。裸或仅被多层括号包裹的 DATE/TIME/TIMESTAMP 时间 literal 在 SET DEFAULT 中仍拒绝；CAST/函数/运算表达式、SELECT 与列定义的合法时间 literal 不套此禁令。保留正负对照，不执行 ALTER 或推断现有列类型。
+- NAME_CONST 属于列定义 DEFAULT/生成列共同禁止项；普通 SELECT、ALTER SET DEFAULT 括号体及延迟窗口 specification 仍按各自解析域准入。
+- CURRENT_ROLE 在 digest-only lexer 中未调用时为 identifier，调用时沿用零参数函数语法（空白/注释不改变该身份），因此生成列 AS(CURRENT_ROLE) 与 AS(CURRENT_ROLE()) 必须区分；不改变普通 MO 执行 parser。
+- 为保留查询层的真实分组，支持 WITH + parenthesized query 及 parenthesized query 后直接锁子句，沿用 INTO metadata/placement 校验；生成 parser 必须零冲突且可复现。
 - 裸时间默认值须来自原生 keyword 语法域；复用 FuncExpr.IsGeneric 保存普通 identifier 函数身份，digest-only 解析额外标记被引号包裹的原生时间 keyword。IGNORE_SPACE 仅放宽函数名和左括号之间的空白，不跨注释；括号表达式也不接受这些伪装的原生函数。普通执行 parser 契约不变。
 - 摘要 lexer 的 ROW 构造器适配不能吞掉窗口 frame 的 CURRENT ROW；该 native frame token 保持原样。窗口跳过的是列 itemization，不跳过 parser、资源预算或摘要编码。
 - 上述附加 AST 遍历仅发生于 DDL 的 DEFAULT/生成属性，按 1 MiB/65536 token 输入预算线性工作，临时文本及函数引用列表均受输入大小约束；普通 SELECT 摘要路径不增加扫描、会话、IO 或持久状态。

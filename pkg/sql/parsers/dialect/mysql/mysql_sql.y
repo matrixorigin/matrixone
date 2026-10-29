@@ -857,7 +857,7 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 %type <insertPartition> insert_partition_clause_opt
 %type <partitionValues> insert_partition_value_list
 %type <joinCond> join_condition join_condition_opt
-%type <selectLockInfo> select_lock_opt
+%type <selectLockInfo> select_lock_opt select_lock
 %type <upgrade_target> target
 %type <analyzeTableEntries> analyze_table_list
 %type <analyzeTableEntry> analyze_table_entry
@@ -7114,6 +7114,32 @@ select_no_parens:
             return 1
         }
     }
+|   select_with_parens select_lock
+    {
+        intoVars, deprecatedInto, intoErr := tree.SelectIntoVariablesForTopLevel($1)
+        if intoErr != "" {
+            yylex.Error(intoErr)
+            return 1
+        }
+        $$ = &tree.Select{Select: $1, SelectLockInfo: $2, Ep: tree.SelectIntoExport($1), IntoVars: intoVars, DeprecatedInto: deprecatedInto}
+        if intoErr := tree.ValidateSelectIntoPlacement($$); intoErr != "" {
+            yylex.Error(intoErr)
+            return 1
+        }
+    }
+|   with_clause select_with_parens
+    {
+        intoVars, deprecatedInto, intoErr := tree.SelectIntoVariablesForTopLevel($2)
+        if intoErr != "" {
+            yylex.Error(intoErr)
+            return 1
+        }
+        $$ = &tree.Select{Select: $2, With: $1, Ep: tree.SelectIntoExport($2), IntoVars: intoVars, DeprecatedInto: deprecatedInto}
+        if intoErr := tree.ValidateSelectIntoPlacement($$); intoErr != "" {
+            yylex.Error(intoErr)
+            return 1
+        }
+    }
 |   select_with_parens time_window_opt order_by_clause select_into_param_opt
     {
         intoVars, deprecatedInto, intoErr := tree.SelectIntoVariablesForTopLevel($1)
@@ -7593,7 +7619,13 @@ select_lock_opt:
     {
         $$ = nil
     }
-|   FOR UPDATE
+|   select_lock
+    {
+        $$ = $1
+    }
+
+select_lock:
+    FOR UPDATE
     {
         $$ = &tree.SelectLockInfo{
             LockType:tree.SelectLockForUpdate,

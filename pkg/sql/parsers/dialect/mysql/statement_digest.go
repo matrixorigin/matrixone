@@ -375,7 +375,7 @@ func digestSyntaxValid(statement tree.Statement) bool {
 				// column definition, but the parenthesized body is not itemized
 				// as a column expression (variables/subqueries remain valid).
 				if option.OptionType == tree.AlterColumnOptionSetDefault &&
-					!digestDefaultLiteralValid(option.DefaultExpr.Expr, false) {
+					!digestAlterDefaultValid(option.DefaultExpr.Expr) {
 					return false
 				}
 			}
@@ -459,6 +459,23 @@ func digestColumnExpressionValid(expression tree.Expr, generated bool) bool {
 	return true
 }
 
+func digestAlterDefaultValid(expression tree.Expr) bool {
+	if !digestDefaultLiteralValid(expression, false) {
+		return false
+	}
+	// Parentheses do not turn a temporal literal into an expression default.
+	// CAST/function/operator wrappers are distinct expressions and remain valid.
+	for {
+		parenthesized, ok := expression.(*tree.ParenExpr)
+		if !ok {
+			break
+		}
+		expression = parenthesized.Expr
+	}
+	literal, temporal := expression.(*tree.FuncExpr)
+	return !temporal || !literal.IsTemporalLiteral
+}
+
 // Match the signed-literal or parenthesized-expression domain, not an arbitrary
 // bit_expr. A trailing COLLATE belongs to column definitions only.
 func digestDefaultLiteralValid(expression tree.Expr, allowCollation bool) bool {
@@ -474,8 +491,15 @@ func digestDefaultLiteralValid(expression tree.Expr, allowCollation bool) bool {
 		// grouping pair supplies SET DEFAULT's '(' expression ')' production.
 		if !value.Exists {
 			if query, ok := value.Select.(*tree.ParenSelect); ok {
-				_, grouped := query.Select.Select.(*tree.ParenSelect)
-				return grouped
+				wrapper := query.Select
+				_, grouped := wrapper.Select.(*tree.ParenSelect)
+				// The entire query layer must be just a grouping pair. A nested
+				// ParenSelect followed by this layer's ORDER/LIMIT/etc. is still
+				// query syntax, not DEFAULT's outer expression parentheses.
+				return grouped && len(wrapper.OrderBy) == 0 && wrapper.Limit == nil &&
+					wrapper.With == nil && wrapper.TimeWindow == nil && wrapper.RankOption == nil &&
+					wrapper.Ep == nil && len(wrapper.IntoVars) == 0 && wrapper.SelectLockInfo == nil &&
+					!wrapper.IsPerform && wrapper.RewriteOption == nil && !wrapper.DeprecatedInto
 			}
 		}
 	case *tree.UnaryExpr:
@@ -551,7 +575,7 @@ func digestColumnFunctionValid(name string, generated bool) bool {
 	switch strings.ToLower(name) {
 	case "version", "last_insert_id", "found_rows", "row_count", "benchmark", "sleep",
 		"get_lock", "is_free_lock", "is_used_lock", "release_lock", "release_all_locks",
-		"source_pos_wait", "master_pos_wait", "load_file", "values":
+		"source_pos_wait", "master_pos_wait", "load_file", "values", "name_const":
 		return false
 	case "current_timestamp", "now", "localtime", "localtimestamp",
 		"current_date", "curdate", "utc_date", "current_time", "curtime", "utc_time", "utc_timestamp",

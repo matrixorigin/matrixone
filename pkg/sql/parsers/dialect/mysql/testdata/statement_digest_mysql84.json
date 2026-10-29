@@ -6522,5 +6522,1201 @@
     "sql_mode": "",
     "sql": "ALTER TABLE t ALTER COLUMN a SET DEFAULT -TRUE",
     "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ALTER COLUMN a SET DEFAULT DATE '2020-01-01'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT DATE '2020-01-01'",
+    "text": "SELECT DATE ?",
+    "digest": "5e0f9cc7bb2c8b618e60c55c4278113acf8d67e456140b29a33d3a0e34d98b60"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a VARCHAR(100) DEFAULT (DATE '2020-01-01'))",
+    "text": "CREATE TABLE `t` ( `a` VARCHARACTER (?) DEFAULT ( DATE ? ) )",
+    "digest": "f0e95f540176dccf574b57b215d93f89ef3d1be1ad2c81bd5674e3e556fda217"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a VARCHAR(100) AS (DATE '2020-01-01'))",
+    "text": "CREATE TABLE `t` ( `a` VARCHARACTER (?) AS ( DATE ? ) )",
+    "digest": "2e4224a3a337537d3bf29fd81867e922d2280c766bd265aeac33f74b6c37987a"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ALTER COLUMN a SET DEFAULT (DATE '2020-01-01')",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT (DATE '2020-01-01')",
+    "text": "SELECT ( DATE ? )",
+    "digest": "c5aa05201b0c069e51d01ecf80af1052d37cfb951172a0869e17a39a2cb3d270"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a VARCHAR(100) DEFAULT ((DATE '2020-01-01')))",
+    "text": "CREATE TABLE `t` ( `a` VARCHARACTER (?) DEFAULT ( ( DATE ? ) ) )",
+    "digest": "2859aa263d867655e2498a709413f081047cf85e75d873dcc35e06b4838acb81"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a VARCHAR(100) AS ((DATE '2020-01-01')))",
+    "text": "CREATE TABLE `t` ( `a` VARCHARACTER (?) AS ( ( DATE ? ) ) )",
+    "digest": "0c4fe1ce6509ac9651b14a9a6f3cb4eac9553ccc57a7aa598469b1ef636bf95b"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ALTER COLUMN a SET DEFAULT ((DATE '2020-01-01'))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT ((DATE '2020-01-01'))",
+    "text": "SELECT ( ( DATE ? ) )",
+    "digest": "35345b7edbb7166497108d23b5bdb82151ade8f37c2eba1dbedeef8abff96f35"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a VARCHAR(100) DEFAULT (((DATE '2020-01-01'))))",
+    "text": "CREATE TABLE `t` ( `a` VARCHARACTER (?) DEFAULT ( ( ( DATE ? ) ) ) )",
+    "digest": "7f4e57ed5f93779f5957c803bc2c5780fd19f59edd477ba7bdb1da9cf2d75dea"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a VARCHAR(100) AS (((DATE '2020-01-01'))))",
+    "text": "CREATE TABLE `t` ( `a` VARCHARACTER (?) AS ( ( ( DATE ? ) ) ) )",
+    "digest": "ae6890b4cdfd60387b780ff3d6f880d24e1eded2acce84eda5bb0cc1708073aa"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ALTER COLUMN a SET DEFAULT CAST(DATE '2020-01-01' AS CHAR)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(DATE '2020-01-01' AS CHAR)",
+    "text": "SELECT CAST ( DATE ? AS CHARACTER )",
+    "digest": "256f24270b6f8593e5c63890b3079243644f0080b14b442b4ead76f2446cc501"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a VARCHAR(100) DEFAULT (CAST(DATE '2020-01-01' AS CHAR)))",
+    "text": "CREATE TABLE `t` ( `a` VARCHARACTER (?) DEFAULT ( CAST ( DATE ? AS CHARACTER ) ) )",
+    "digest": "bac954f392370feefbcfa4839d90542845b2f144b23bd431c94237eaccc12c29"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a VARCHAR(100) AS (CAST(DATE '2020-01-01' AS CHAR)))",
+    "text": "CREATE TABLE `t` ( `a` VARCHARACTER (?) AS ( CAST ( DATE ? AS CHARACTER ) ) )",
+    "digest": "478fe608dcf17e8abe006bdca0f29c6a08b07ec9709a91339e2b03a24591b1a8"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ALTER COLUMN a SET DEFAULT (DATE '2020-01-01' IS NULL)",
+    "text": "ALTER TABLE `t` ALTER COLUMN `a` SET DEFAULT ( DATE ? IS NULL )",
+    "digest": "f3e06197f01e5c3b98b139bba37e1f3f9cf846a8aa6beafac75a7508011f3030"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT (DATE '2020-01-01' IS NULL)",
+    "text": "SELECT ( DATE ? IS NULL )",
+    "digest": "5fdeb2c2aab36a3b68c2157c084c4fc39357bc184b4a5ba0e39084f0aacfe3e7"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a VARCHAR(100) DEFAULT ((DATE '2020-01-01' IS NULL)))",
+    "text": "CREATE TABLE `t` ( `a` VARCHARACTER (?) DEFAULT ( ( DATE ? IS NULL ) ) )",
+    "digest": "a4f6536cb78cd3b57c6cac1e2f9532721ca172e6c3acf040cebfbe21dc558b91"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a VARCHAR(100) AS ((DATE '2020-01-01' IS NULL)))",
+    "text": "CREATE TABLE `t` ( `a` VARCHARACTER (?) AS ( ( DATE ? IS NULL ) ) )",
+    "digest": "d1840b98424a68996c03deb6c9fe5eecb6f1384ced3e6f2f05b36d302fbaaacf"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ALTER COLUMN a SET DEFAULT (SELECT DATE '2020-01-01')",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT (SELECT DATE '2020-01-01')",
+    "text": "SELECT ( SELECT DATE ? )",
+    "digest": "081504c7edf2f073fa12aec2596c6d04c7eeb1bd3c25b614c268e3324706835d"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a VARCHAR(100) DEFAULT ((SELECT DATE '2020-01-01')))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a VARCHAR(100) AS ((SELECT DATE '2020-01-01')))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ALTER COLUMN a SET DEFAULT TIME '12:34:56'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIME '12:34:56'",
+    "text": "SELECT TIME ?",
+    "digest": "5d819aca6bf2534bb535afd7e122141ba1b17fb3de3e7e2d11b82493321d1fea"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a VARCHAR(100) DEFAULT (TIME '12:34:56'))",
+    "text": "CREATE TABLE `t` ( `a` VARCHARACTER (?) DEFAULT ( TIME ? ) )",
+    "digest": "29d40931dcee56ef8f32ce052d88ceaddffb50ffddf1569abde3e5718e20b8df"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a VARCHAR(100) AS (TIME '12:34:56'))",
+    "text": "CREATE TABLE `t` ( `a` VARCHARACTER (?) AS ( TIME ? ) )",
+    "digest": "9f3efe2b527fa4cbd433f021c8ed012ddc712ff497039f5e391a63a0efe3e55c"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ALTER COLUMN a SET DEFAULT (TIME '12:34:56')",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT (TIME '12:34:56')",
+    "text": "SELECT ( TIME ? )",
+    "digest": "91d3ec86e93bab492dc6cf99f09cd9c06d887f8f6cec89fa61e5146214663765"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a VARCHAR(100) DEFAULT ((TIME '12:34:56')))",
+    "text": "CREATE TABLE `t` ( `a` VARCHARACTER (?) DEFAULT ( ( TIME ? ) ) )",
+    "digest": "7b37d6b8af29d9323613b56e825d4d2c79c1abbe645e0fa180b23b6872f2d1bb"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a VARCHAR(100) AS ((TIME '12:34:56')))",
+    "text": "CREATE TABLE `t` ( `a` VARCHARACTER (?) AS ( ( TIME ? ) ) )",
+    "digest": "45a66f8a1765a2a1f4bb3df89d08cf6534cacbced2490132b7eb93be347605f3"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ALTER COLUMN a SET DEFAULT ((TIME '12:34:56'))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT ((TIME '12:34:56'))",
+    "text": "SELECT ( ( TIME ? ) )",
+    "digest": "deb762f3ea08b58a7bc7bb4266002686dcf753d38576d0ece79bc1b30e9812ff"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a VARCHAR(100) DEFAULT (((TIME '12:34:56'))))",
+    "text": "CREATE TABLE `t` ( `a` VARCHARACTER (?) DEFAULT ( ( ( TIME ? ) ) ) )",
+    "digest": "f56dd7ee10328130fc046af63858af89a740a7f6d5e0b83367dc886c91abff23"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a VARCHAR(100) AS (((TIME '12:34:56'))))",
+    "text": "CREATE TABLE `t` ( `a` VARCHARACTER (?) AS ( ( ( TIME ? ) ) ) )",
+    "digest": "7169daabfd4e96754cd0480924a55919affd937ed69e9273fee5edf9b3ea2dec"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ALTER COLUMN a SET DEFAULT CAST(TIME '12:34:56' AS CHAR)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(TIME '12:34:56' AS CHAR)",
+    "text": "SELECT CAST ( TIME ? AS CHARACTER )",
+    "digest": "0cec4dbdc3212cefe14ec0c47d999050cd178b3e5940001a611d8800e46b1d72"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a VARCHAR(100) DEFAULT (CAST(TIME '12:34:56' AS CHAR)))",
+    "text": "CREATE TABLE `t` ( `a` VARCHARACTER (?) DEFAULT ( CAST ( TIME ? AS CHARACTER ) ) )",
+    "digest": "7dea3fa2efc39b7bb06496beb7b94251e5d13d66215e63cf454ef65526808ae2"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a VARCHAR(100) AS (CAST(TIME '12:34:56' AS CHAR)))",
+    "text": "CREATE TABLE `t` ( `a` VARCHARACTER (?) AS ( CAST ( TIME ? AS CHARACTER ) ) )",
+    "digest": "e77b132671b17f036e8b9e51efe2f5d89ae9a3b5a6595523c1c740f9444e737b"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ALTER COLUMN a SET DEFAULT (TIME '12:34:56' IS NULL)",
+    "text": "ALTER TABLE `t` ALTER COLUMN `a` SET DEFAULT ( TIME ? IS NULL )",
+    "digest": "a44f776d0303b3a6fda744ac428092590a423e306352d5c473a41f7eb3bd4535"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT (TIME '12:34:56' IS NULL)",
+    "text": "SELECT ( TIME ? IS NULL )",
+    "digest": "96c8e0233e38c856a757cb1b0ded839439d4c3a26fccdd9dabffc8a2947ee2e6"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a VARCHAR(100) DEFAULT ((TIME '12:34:56' IS NULL)))",
+    "text": "CREATE TABLE `t` ( `a` VARCHARACTER (?) DEFAULT ( ( TIME ? IS NULL ) ) )",
+    "digest": "a4792def69ed0d9864fc3ae5d574f625053a5b5902d3940077880e06d5d33e85"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a VARCHAR(100) AS ((TIME '12:34:56' IS NULL)))",
+    "text": "CREATE TABLE `t` ( `a` VARCHARACTER (?) AS ( ( TIME ? IS NULL ) ) )",
+    "digest": "7a1fbbf4da844c02fea259a75a9e0b0dd22ecbf2add4789f6fc9042e255f867f"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ALTER COLUMN a SET DEFAULT (SELECT TIME '12:34:56')",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT (SELECT TIME '12:34:56')",
+    "text": "SELECT ( SELECT TIME ? )",
+    "digest": "add74c996ace7e5432eb82e3af2d0ad7e5292007765ea64d8ec0723485a65428"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a VARCHAR(100) DEFAULT ((SELECT TIME '12:34:56')))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a VARCHAR(100) AS ((SELECT TIME '12:34:56')))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ALTER COLUMN a SET DEFAULT TIMESTAMP '2020-01-01 12:34:56'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIMESTAMP '2020-01-01 12:34:56'",
+    "text": "SELECT TIMESTAMP ?",
+    "digest": "f84b085f1fa0a55e86f60dd67627629af1312564b4444327b5c3953df5c1841e"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a VARCHAR(100) DEFAULT (TIMESTAMP '2020-01-01 12:34:56'))",
+    "text": "CREATE TABLE `t` ( `a` VARCHARACTER (?) DEFAULT ( TIMESTAMP ? ) )",
+    "digest": "5331755201a26e7584c3b058b2daad88c3c4fda407e3a337b87bacf701f4b357"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a VARCHAR(100) AS (TIMESTAMP '2020-01-01 12:34:56'))",
+    "text": "CREATE TABLE `t` ( `a` VARCHARACTER (?) AS ( TIMESTAMP ? ) )",
+    "digest": "62162b373921b257ab6fd4e9a734393f2a73e7a4f5e56ab047a90cb721a0bd22"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ALTER COLUMN a SET DEFAULT (TIMESTAMP '2020-01-01 12:34:56')",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT (TIMESTAMP '2020-01-01 12:34:56')",
+    "text": "SELECT ( TIMESTAMP ? )",
+    "digest": "8a67a91b7128bd8d4dea3d41a8f041d03fc80b53d6c61e16979b817ddb5b7fc7"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a VARCHAR(100) DEFAULT ((TIMESTAMP '2020-01-01 12:34:56')))",
+    "text": "CREATE TABLE `t` ( `a` VARCHARACTER (?) DEFAULT ( ( TIMESTAMP ? ) ) )",
+    "digest": "9e9ca82a6fe1afa62c2caf12e5244d44f4cac7a10f930c416b5ff0e18ee99e5b"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a VARCHAR(100) AS ((TIMESTAMP '2020-01-01 12:34:56')))",
+    "text": "CREATE TABLE `t` ( `a` VARCHARACTER (?) AS ( ( TIMESTAMP ? ) ) )",
+    "digest": "9e387c3ccf0fb583db0dd6fb6931617b1280746ff9ba4d902a5a5a540950b4f3"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ALTER COLUMN a SET DEFAULT ((TIMESTAMP '2020-01-01 12:34:56'))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT ((TIMESTAMP '2020-01-01 12:34:56'))",
+    "text": "SELECT ( ( TIMESTAMP ? ) )",
+    "digest": "0abec5676cd1da32fc1e15c0e480e610aa0678982e3a366c5df25482ee784870"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a VARCHAR(100) DEFAULT (((TIMESTAMP '2020-01-01 12:34:56'))))",
+    "text": "CREATE TABLE `t` ( `a` VARCHARACTER (?) DEFAULT ( ( ( TIMESTAMP ? ) ) ) )",
+    "digest": "1d8f93ddac811e51cfdb3294fd7a0fd58dbb6553d7e6332a147d118a8b788b1c"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a VARCHAR(100) AS (((TIMESTAMP '2020-01-01 12:34:56'))))",
+    "text": "CREATE TABLE `t` ( `a` VARCHARACTER (?) AS ( ( ( TIMESTAMP ? ) ) ) )",
+    "digest": "c966a2e5e5d7cd055c8a7277a6adb79cf3ecea22a907c57d707c9d954b9d563e"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ALTER COLUMN a SET DEFAULT CAST(TIMESTAMP '2020-01-01 12:34:56' AS CHAR)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(TIMESTAMP '2020-01-01 12:34:56' AS CHAR)",
+    "text": "SELECT CAST ( TIMESTAMP ? AS CHARACTER )",
+    "digest": "fb1a94c6a347723f6bd2a03c8e98dd22ad0e2f6f78a4b4e52e40850a8ac0d1c8"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a VARCHAR(100) DEFAULT (CAST(TIMESTAMP '2020-01-01 12:34:56' AS CHAR)))",
+    "text": "CREATE TABLE `t` ( `a` VARCHARACTER (?) DEFAULT ( CAST ( TIMESTAMP ? AS CHARACTER ) ) )",
+    "digest": "c185d31f12cf698cfdc7db4ea804d750248dee7a37abfbf65122f92c6c9aa4ee"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a VARCHAR(100) AS (CAST(TIMESTAMP '2020-01-01 12:34:56' AS CHAR)))",
+    "text": "CREATE TABLE `t` ( `a` VARCHARACTER (?) AS ( CAST ( TIMESTAMP ? AS CHARACTER ) ) )",
+    "digest": "63afa3d26f92f3d2f1889487358a1422f7c9390740124dbc5d924afed0021305"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ALTER COLUMN a SET DEFAULT (TIMESTAMP '2020-01-01 12:34:56' IS NULL)",
+    "text": "ALTER TABLE `t` ALTER COLUMN `a` SET DEFAULT ( TIMESTAMP ? IS NULL )",
+    "digest": "6affd848509bd7ea0cff44fc1a7270af5a32c8b94ed29effacaebbb0bfe83ffd"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT (TIMESTAMP '2020-01-01 12:34:56' IS NULL)",
+    "text": "SELECT ( TIMESTAMP ? IS NULL )",
+    "digest": "291b4efa7005caa86207107fbaeb86aa0b5cc715364a0156ce0ec990f8123d35"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a VARCHAR(100) DEFAULT ((TIMESTAMP '2020-01-01 12:34:56' IS NULL)))",
+    "text": "CREATE TABLE `t` ( `a` VARCHARACTER (?) DEFAULT ( ( TIMESTAMP ? IS NULL ) ) )",
+    "digest": "a504e2231eab2d82d054d46a03af1c0d493e51e17c3fb6afb4041fc480fdcc8e"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a VARCHAR(100) AS ((TIMESTAMP '2020-01-01 12:34:56' IS NULL)))",
+    "text": "CREATE TABLE `t` ( `a` VARCHARACTER (?) AS ( ( TIMESTAMP ? IS NULL ) ) )",
+    "digest": "419e92df9df375c4603621b3df56fef881d57c1df2cdc2fe731c75cff3a1a3a7"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ALTER COLUMN a SET DEFAULT (SELECT TIMESTAMP '2020-01-01 12:34:56')",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT (SELECT TIMESTAMP '2020-01-01 12:34:56')",
+    "text": "SELECT ( SELECT TIMESTAMP ? )",
+    "digest": "03e92f73237b27460522f9279e220fc02b24941d1022d503e3c7c066f0afb06f"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a VARCHAR(100) DEFAULT ((SELECT TIMESTAMP '2020-01-01 12:34:56')))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a VARCHAR(100) AS ((SELECT TIMESTAMP '2020-01-01 12:34:56')))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ALTER COLUMN a SET DEFAULT (CAST('2020-01-01' AS DATE))",
+    "text": "ALTER TABLE `t` ALTER COLUMN `a` SET DEFAULT ( CAST ( ? AS DATE ) )",
+    "digest": "2dc31658fb75903e44d02c5edce411c4bd678d4cb8f7123c3d974728c74001a3"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ALTER COLUMN a SET DEFAULT (DATE('2020-01-01'))",
+    "text": "ALTER TABLE `t` ALTER COLUMN `a` SET DEFAULT ( DATE (?) )",
+    "digest": "933054f7c0b30c74f5b0d0f9f0b76e30bc43ae5661f8838b08a95c800abf6749"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ALTER COLUMN a SET DEFAULT ('2020-01-01')",
+    "text": "ALTER TABLE `t` ALTER COLUMN `a` SET DEFAULT (?)",
+    "digest": "62da1125046344dc980e71b84889a2ae9b51ca9bdb0f4320cb61f7e238862e2f"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ALTER COLUMN a SET DEFAULT ((((SELECT 1))))",
+    "text": "ALTER TABLE `t` ALTER COLUMN `a` SET DEFAULT ( ( ( ( SELECT ? ) ) ) )",
+    "digest": "64c935b784a8dd474a38855f17dce81b52907be0c4855caeb728fbc4a4d45fcc"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ALTER COLUMN a SET DEFAULT ((SELECT 1) ORDER BY 1)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ALTER COLUMN a SET DEFAULT (((SELECT 1) ORDER BY 1))",
+    "text": "ALTER TABLE `t` ALTER COLUMN `a` SET DEFAULT ( ( ( SELECT ? ) ORDER BY ? ) )",
+    "digest": "ab5ee6b16a4f5f1071914d81e4dd4f286e62d3ef1cf1c3f67db99888a9612926"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ALTER COLUMN a SET DEFAULT ((((SELECT 1) ORDER BY 1)))",
+    "text": "ALTER TABLE `t` ALTER COLUMN `a` SET DEFAULT ( ( ( ( SELECT ? ) ORDER BY ? ) ) )",
+    "digest": "e82dc697186803b701e226173e767df311c25444fa91bc1872abb9c64d99f805"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ALTER COLUMN a SET DEFAULT ((SELECT 1) LIMIT 1)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ALTER COLUMN a SET DEFAULT (((SELECT 1) LIMIT 1))",
+    "text": "ALTER TABLE `t` ALTER COLUMN `a` SET DEFAULT ( ( ( SELECT ? ) LIMIT ? ) )",
+    "digest": "7eaba39298334e78e4043486ee554e198b5093348f3b7d014b37bf920e342771"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ALTER COLUMN a SET DEFAULT ((((SELECT 1) LIMIT 1)))",
+    "text": "ALTER TABLE `t` ALTER COLUMN `a` SET DEFAULT ( ( ( ( SELECT ? ) LIMIT ? ) ) )",
+    "digest": "bf105ada2150b2582082ef1157dd820e8a781e5fa09bdc885a7d6c51c00f0707"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ALTER COLUMN a SET DEFAULT ((SELECT 1) ORDER BY 1 LIMIT 1)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ALTER COLUMN a SET DEFAULT (((SELECT 1) ORDER BY 1 LIMIT 1))",
+    "text": "ALTER TABLE `t` ALTER COLUMN `a` SET DEFAULT ( ( ( SELECT ? ) ORDER BY ? LIMIT ? ) )",
+    "digest": "e345e226a6a0791961d41d3ceb644d3aa2991b465fcdcd846aa301ff71cbc806"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ALTER COLUMN a SET DEFAULT ((((SELECT 1) ORDER BY 1 LIMIT 1)))",
+    "text": "ALTER TABLE `t` ALTER COLUMN `a` SET DEFAULT ( ( ( ( SELECT ? ) ORDER BY ? LIMIT ? ) ) )",
+    "digest": "1375f0c5e29a66556e87f1d1b33228697a06f8eb10854c8d235299544013b9cc"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ALTER COLUMN a SET DEFAULT (SELECT 1 ORDER BY 1)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ALTER COLUMN a SET DEFAULT ((SELECT 1 ORDER BY 1))",
+    "text": "ALTER TABLE `t` ALTER COLUMN `a` SET DEFAULT ( ( SELECT ? ORDER BY ? ) )",
+    "digest": "89ae888c691d9aae179ac0445fb14ee3a87d8f604af32d420c0c1c87ddaca557"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ALTER COLUMN a SET DEFAULT (((SELECT 1 ORDER BY 1)))",
+    "text": "ALTER TABLE `t` ALTER COLUMN `a` SET DEFAULT ( ( ( SELECT ? ORDER BY ? ) ) )",
+    "digest": "6f288f4ce5469a74ad0f800e51fc791808f46b3d95ce15a9110a8f79a44c99f0"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ALTER COLUMN a SET DEFAULT ((SELECT 1) LIMIT 1 OFFSET 0)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ALTER COLUMN a SET DEFAULT (((SELECT 1) LIMIT 1 OFFSET 0))",
+    "text": "ALTER TABLE `t` ALTER COLUMN `a` SET DEFAULT ( ( ( SELECT ? ) LIMIT ? OFFSET ? ) )",
+    "digest": "0a6db87a1b3be3fa7f661fda40e72b8f2c368254712a302978db8d74bce8f584"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ALTER COLUMN a SET DEFAULT ((((SELECT 1) LIMIT 1 OFFSET 0)))",
+    "text": "ALTER TABLE `t` ALTER COLUMN `a` SET DEFAULT ( ( ( ( SELECT ? ) LIMIT ? OFFSET ? ) ) )",
+    "digest": "cefb14e181f941a68adeb0c7b21d4c0bd3ccb19e765a5d9551fc235875317ca3"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ALTER COLUMN a SET DEFAULT ((SELECT 1) UNION SELECT 2)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ALTER COLUMN a SET DEFAULT (((SELECT 1) UNION SELECT 2))",
+    "text": "ALTER TABLE `t` ALTER COLUMN `a` SET DEFAULT ( ( ( SELECT ? ) UNION SELECT ? ) )",
+    "digest": "9b0b2bc92ddfbed1a5781093bcacfd1e321ee035784ebf1511124727099633b3"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ALTER COLUMN a SET DEFAULT ((((SELECT 1) UNION SELECT 2)))",
+    "text": "ALTER TABLE `t` ALTER COLUMN `a` SET DEFAULT ( ( ( ( SELECT ? ) UNION SELECT ? ) ) )",
+    "digest": "76305900a5d0d81a503b9e5d0207ced7ddf01a73170f4c0ec5a7fe06ffafc607"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT NAME_CONST('n',1)",
+    "text": "SELECT `NAME_CONST` (...)",
+    "digest": "320bcea230c4973aff64e6ca7f655fb41e17985983c68ee7b011ba8554a79f26"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ALTER COLUMN a SET DEFAULT (NAME_CONST('n',1))",
+    "text": "ALTER TABLE `t` ALTER COLUMN `a` SET DEFAULT ( `NAME_CONST` (...) )",
+    "digest": "fd00a0c3ec8999ef1fc6c81fbfb3f61e1c504630b517bfb9895dc34cbb45d79b"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a INT DEFAULT (NAME_CONST('n',1)))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a INT DEFAULT (NAME_CONST('n',1))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a INT DEFAULT (NAME_CONST('n',1))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN b a INT DEFAULT (NAME_CONST('n',1))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a INT AS (NAME_CONST('n',1)))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a INT AS (NAME_CONST('n',1))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a INT AS (NAME_CONST('n',1))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN b a INT AS (NAME_CONST('n',1))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT ABS(NAME_CONST('n',1))",
+    "text": "SELECT `ABS` ( `NAME_CONST` (...) )",
+    "digest": "956f611978c9e07fbe375f50c3b52a9ea21760fe2e9aade4badc91ae671b814f"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ALTER COLUMN a SET DEFAULT (ABS(NAME_CONST('n',1)))",
+    "text": "ALTER TABLE `t` ALTER COLUMN `a` SET DEFAULT ( `ABS` ( `NAME_CONST` (...) ) )",
+    "digest": "77fa09f5224b21c152ef80448a9efdfe01caaa0a4a3a9fd68a69da9f31ff898a"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a INT DEFAULT (ABS(NAME_CONST('n',1))))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a INT DEFAULT (ABS(NAME_CONST('n',1)))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a INT DEFAULT (ABS(NAME_CONST('n',1)))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN b a INT DEFAULT (ABS(NAME_CONST('n',1)))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a INT AS (ABS(NAME_CONST('n',1))))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a INT AS (ABS(NAME_CONST('n',1)))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a INT AS (ABS(NAME_CONST('n',1)))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN b a INT AS (ABS(NAME_CONST('n',1)))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CASE WHEN 0 THEN NAME_CONST('n',1) ELSE 2 END",
+    "text": "SELECT CASE WHEN ? THEN `NAME_CONST` (...) ELSE ? END",
+    "digest": "25c3e6e4fc43e3062ee8b099bb92ca9219b436ab28668e3a9d997beef00d68b3"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ALTER COLUMN a SET DEFAULT (CASE WHEN 0 THEN NAME_CONST('n',1) ELSE 2 END)",
+    "text": "ALTER TABLE `t` ALTER COLUMN `a` SET DEFAULT ( CASE WHEN ? THEN `NAME_CONST` (...) ELSE ? END )",
+    "digest": "0b30f84fa6d240c9919a0dae8dd38800d785c994ff8af296d252f056ae1bfa07"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a INT DEFAULT (CASE WHEN 0 THEN NAME_CONST('n',1) ELSE 2 END))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a INT DEFAULT (CASE WHEN 0 THEN NAME_CONST('n',1) ELSE 2 END)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a INT DEFAULT (CASE WHEN 0 THEN NAME_CONST('n',1) ELSE 2 END)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN b a INT DEFAULT (CASE WHEN 0 THEN NAME_CONST('n',1) ELSE 2 END)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a INT AS (CASE WHEN 0 THEN NAME_CONST('n',1) ELSE 2 END))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a INT AS (CASE WHEN 0 THEN NAME_CONST('n',1) ELSE 2 END)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a INT AS (CASE WHEN 0 THEN NAME_CONST('n',1) ELSE 2 END)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN b a INT AS (CASE WHEN 0 THEN NAME_CONST('n',1) ELSE 2 END)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT SUM(1) OVER(PARTITION BY NAME_CONST('n',1))",
+    "text": "SELECT SUM (?) OVER ( PARTITION BY `NAME_CONST` (...) )",
+    "digest": "e4559e38a0d60b79fd087f563e56ce6b46f0bd54471c80f293d1a99dd6cdb3ba"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ALTER COLUMN a SET DEFAULT (SUM(1) OVER(PARTITION BY NAME_CONST('n',1)))",
+    "text": "ALTER TABLE `t` ALTER COLUMN `a` SET DEFAULT ( SUM (?) OVER ( PARTITION BY `NAME_CONST` (...) ) )",
+    "digest": "aef60967210fd3bec9de31133b7cd03cf8bfcc47b2d778f88733c677d6c5f190"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a INT DEFAULT (SUM(1) OVER(PARTITION BY NAME_CONST('n',1))))",
+    "text": "CREATE TABLE `t` ( `a` INTEGER DEFAULT ( SUM (?) OVER ( PARTITION BY `NAME_CONST` (...) ) ) )",
+    "digest": "532522a8eaf70a8090c7462a4f2df1fffca21c415d01c4e73ac43a0eff12cd20"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a INT DEFAULT (SUM(1) OVER(PARTITION BY NAME_CONST('n',1)))",
+    "text": "ALTER TABLE `t` ADD COLUMN `a` INTEGER DEFAULT ( SUM (?) OVER ( PARTITION BY `NAME_CONST` (...) ) )",
+    "digest": "e96a27312624f53fef9b5c678b906bb238f99e093aba327ac91e81baa84fb27b"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a INT DEFAULT (SUM(1) OVER(PARTITION BY NAME_CONST('n',1)))",
+    "text": "ALTER TABLE `t` MODIFY COLUMN `a` INTEGER DEFAULT ( SUM (?) OVER ( PARTITION BY `NAME_CONST` (...) ) )",
+    "digest": "7aa9c25dc72e7d4c4a86b1fb21b737309546ef11af4d0354b3c807d46417e8d9"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN b a INT DEFAULT (SUM(1) OVER(PARTITION BY NAME_CONST('n',1)))",
+    "text": "ALTER TABLE `t` CHANGE COLUMN `b` `a` INTEGER DEFAULT ( SUM (?) OVER ( PARTITION BY `NAME_CONST` (...) ) )",
+    "digest": "315c63c093b20d2a839f5cd307417deb2620356ed45eb46600527f06a688f2ca"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a INT AS (SUM(1) OVER(PARTITION BY NAME_CONST('n',1))))",
+    "text": "CREATE TABLE `t` ( `a` INTEGER AS ( SUM (?) OVER ( PARTITION BY `NAME_CONST` (...) ) ) )",
+    "digest": "b224c20251a4243c0b46ac60af38a09ca3109b0f1e3a44d0f69b9b05d5b8e8f8"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a INT AS (SUM(1) OVER(PARTITION BY NAME_CONST('n',1)))",
+    "text": "ALTER TABLE `t` ADD COLUMN `a` INTEGER AS ( SUM (?) OVER ( PARTITION BY `NAME_CONST` (...) ) )",
+    "digest": "3807d171fe29315f9dffc5c8416ebf10f951f6e381bae34da57ef697d729ee1f"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a INT AS (SUM(1) OVER(PARTITION BY NAME_CONST('n',1)))",
+    "text": "ALTER TABLE `t` MODIFY COLUMN `a` INTEGER AS ( SUM (?) OVER ( PARTITION BY `NAME_CONST` (...) ) )",
+    "digest": "817e72a43434345f12f7f6fca78a379e0d327dc0562d65706aa753afd0008dae"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN b a INT AS (SUM(1) OVER(PARTITION BY NAME_CONST('n',1)))",
+    "text": "ALTER TABLE `t` CHANGE COLUMN `b` `a` INTEGER AS ( SUM (?) OVER ( PARTITION BY `NAME_CONST` (...) ) )",
+    "digest": "9b1152357089e7d466253ec199d6b89109b1a50cc6eefe74dcdcb89ac978aea2"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT SUM(NAME_CONST('n',1)) OVER()",
+    "text": "SELECT SUM ( `NAME_CONST` (...) ) OVER ( )",
+    "digest": "a4b961c2c3b2f7169dd26cf3cd0fd4013de3cc508aa12f37271694331cc1de56"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ALTER COLUMN a SET DEFAULT (SUM(NAME_CONST('n',1)) OVER())",
+    "text": "ALTER TABLE `t` ALTER COLUMN `a` SET DEFAULT ( SUM ( `NAME_CONST` (...) ) OVER ( ) )",
+    "digest": "b66136032b59c587b679405544a248b431eab2cfc4452a307008e624b002f38d"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a INT DEFAULT (SUM(NAME_CONST('n',1)) OVER()))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a INT DEFAULT (SUM(NAME_CONST('n',1)) OVER())",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a INT DEFAULT (SUM(NAME_CONST('n',1)) OVER())",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN b a INT DEFAULT (SUM(NAME_CONST('n',1)) OVER())",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a INT AS (SUM(NAME_CONST('n',1)) OVER()))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a INT AS (SUM(NAME_CONST('n',1)) OVER())",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a INT AS (SUM(NAME_CONST('n',1)) OVER())",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN b a INT AS (SUM(NAME_CONST('n',1)) OVER())",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CURRENT_ROLE",
+    "text": "SELECT `CURRENT_ROLE`",
+    "digest": "4ab96e2e716e49febba3efff86c787273d8384da580b12c0ccd1929262778dc8"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a INT AS (CURRENT_ROLE))",
+    "text": "CREATE TABLE `t` ( `a` INTEGER AS ( `CURRENT_ROLE` ) )",
+    "digest": "b63c0c7b87734d68d9351c7774c9f2b10a9e6f931968ba22a338252453fcfadf"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a INT DEFAULT (CURRENT_ROLE))",
+    "text": "CREATE TABLE `t` ( `a` INTEGER DEFAULT ( `CURRENT_ROLE` ) )",
+    "digest": "b74944d52562cc63408dbab36b6535d1892a57f480e6390327c4607b4879afb8"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ALTER COLUMN a SET DEFAULT (CURRENT_ROLE)",
+    "text": "ALTER TABLE `t` ALTER COLUMN `a` SET DEFAULT ( `CURRENT_ROLE` )",
+    "digest": "944595af21ef2c79c0f39a8d4f25d072137152f76c49848e310c8425039dd99f"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT CURRENT_ROLE",
+    "text": "SELECT `CURRENT_ROLE`",
+    "digest": "4ab96e2e716e49febba3efff86c787273d8384da580b12c0ccd1929262778dc8"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "CREATE TABLE t(a INT AS (CURRENT_ROLE))",
+    "text": "CREATE TABLE `t` ( `a` INTEGER AS ( `CURRENT_ROLE` ) )",
+    "digest": "b63c0c7b87734d68d9351c7774c9f2b10a9e6f931968ba22a338252453fcfadf"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "CREATE TABLE t(a INT DEFAULT (CURRENT_ROLE))",
+    "text": "CREATE TABLE `t` ( `a` INTEGER DEFAULT ( `CURRENT_ROLE` ) )",
+    "digest": "b74944d52562cc63408dbab36b6535d1892a57f480e6390327c4607b4879afb8"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "ALTER TABLE t ALTER COLUMN a SET DEFAULT (CURRENT_ROLE)",
+    "text": "ALTER TABLE `t` ALTER COLUMN `a` SET DEFAULT ( `CURRENT_ROLE` )",
+    "digest": "944595af21ef2c79c0f39a8d4f25d072137152f76c49848e310c8425039dd99f"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CURRENT_ROLE()",
+    "text": "SELECT `CURRENT_ROLE` ( )",
+    "digest": "f8e80fe80eb9edaac82efe14fd4924a944936bf9a29b3f9da74c2975a61f7f82"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ALTER COLUMN a SET DEFAULT (CURRENT_ROLE())",
+    "text": "ALTER TABLE `t` ALTER COLUMN `a` SET DEFAULT ( `CURRENT_ROLE` ( ) )",
+    "digest": "957a40c8692efa3c17da50ef6e3849580c70ed81b67d9101c3f804a77389209d"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT CURRENT_ROLE()",
+    "text": "SELECT `CURRENT_ROLE` ( )",
+    "digest": "f8e80fe80eb9edaac82efe14fd4924a944936bf9a29b3f9da74c2975a61f7f82"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "CREATE TABLE t(a INT AS (CURRENT_ROLE()))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "CREATE TABLE t(a INT DEFAULT (CURRENT_ROLE()))",
+    "text": "CREATE TABLE `t` ( `a` INTEGER DEFAULT ( `CURRENT_ROLE` ( ) ) )",
+    "digest": "273a7465bdd3600eab502c534ae46592f73dcc935445cc1a2ba9b0ae39e55d71"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "ALTER TABLE t ALTER COLUMN a SET DEFAULT (CURRENT_ROLE())",
+    "text": "ALTER TABLE `t` ALTER COLUMN `a` SET DEFAULT ( `CURRENT_ROLE` ( ) )",
+    "digest": "957a40c8692efa3c17da50ef6e3849580c70ed81b67d9101c3f804a77389209d"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CURRENT_ROLE ()",
+    "text": "SELECT `CURRENT_ROLE` ( )",
+    "digest": "f8e80fe80eb9edaac82efe14fd4924a944936bf9a29b3f9da74c2975a61f7f82"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a INT AS (CURRENT_ROLE ()))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a INT DEFAULT (CURRENT_ROLE ()))",
+    "text": "CREATE TABLE `t` ( `a` INTEGER DEFAULT ( `CURRENT_ROLE` ( ) ) )",
+    "digest": "273a7465bdd3600eab502c534ae46592f73dcc935445cc1a2ba9b0ae39e55d71"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ALTER COLUMN a SET DEFAULT (CURRENT_ROLE ())",
+    "text": "ALTER TABLE `t` ALTER COLUMN `a` SET DEFAULT ( `CURRENT_ROLE` ( ) )",
+    "digest": "957a40c8692efa3c17da50ef6e3849580c70ed81b67d9101c3f804a77389209d"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT CURRENT_ROLE ()",
+    "text": "SELECT `CURRENT_ROLE` ( )",
+    "digest": "f8e80fe80eb9edaac82efe14fd4924a944936bf9a29b3f9da74c2975a61f7f82"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "CREATE TABLE t(a INT AS (CURRENT_ROLE ()))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "CREATE TABLE t(a INT DEFAULT (CURRENT_ROLE ()))",
+    "text": "CREATE TABLE `t` ( `a` INTEGER DEFAULT ( `CURRENT_ROLE` ( ) ) )",
+    "digest": "273a7465bdd3600eab502c534ae46592f73dcc935445cc1a2ba9b0ae39e55d71"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "ALTER TABLE t ALTER COLUMN a SET DEFAULT (CURRENT_ROLE ())",
+    "text": "ALTER TABLE `t` ALTER COLUMN `a` SET DEFAULT ( `CURRENT_ROLE` ( ) )",
+    "digest": "957a40c8692efa3c17da50ef6e3849580c70ed81b67d9101c3f804a77389209d"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CURRENT_ROLE/**/()",
+    "text": "SELECT `CURRENT_ROLE` ( )",
+    "digest": "f8e80fe80eb9edaac82efe14fd4924a944936bf9a29b3f9da74c2975a61f7f82"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a INT AS (CURRENT_ROLE/**/()))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a INT DEFAULT (CURRENT_ROLE/**/()))",
+    "text": "CREATE TABLE `t` ( `a` INTEGER DEFAULT ( `CURRENT_ROLE` ( ) ) )",
+    "digest": "273a7465bdd3600eab502c534ae46592f73dcc935445cc1a2ba9b0ae39e55d71"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ALTER COLUMN a SET DEFAULT (CURRENT_ROLE/**/())",
+    "text": "ALTER TABLE `t` ALTER COLUMN `a` SET DEFAULT ( `CURRENT_ROLE` ( ) )",
+    "digest": "957a40c8692efa3c17da50ef6e3849580c70ed81b67d9101c3f804a77389209d"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT CURRENT_ROLE/**/()",
+    "text": "SELECT `CURRENT_ROLE` ( )",
+    "digest": "f8e80fe80eb9edaac82efe14fd4924a944936bf9a29b3f9da74c2975a61f7f82"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "CREATE TABLE t(a INT AS (CURRENT_ROLE/**/()))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "CREATE TABLE t(a INT DEFAULT (CURRENT_ROLE/**/()))",
+    "text": "CREATE TABLE `t` ( `a` INTEGER DEFAULT ( `CURRENT_ROLE` ( ) ) )",
+    "digest": "273a7465bdd3600eab502c534ae46592f73dcc935445cc1a2ba9b0ae39e55d71"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "ALTER TABLE t ALTER COLUMN a SET DEFAULT (CURRENT_ROLE/**/())",
+    "text": "ALTER TABLE `t` ALTER COLUMN `a` SET DEFAULT ( `CURRENT_ROLE` ( ) )",
+    "digest": "957a40c8692efa3c17da50ef6e3849580c70ed81b67d9101c3f804a77389209d"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT `CURRENT_ROLE`",
+    "text": "SELECT `CURRENT_ROLE`",
+    "digest": "4ab96e2e716e49febba3efff86c787273d8384da580b12c0ccd1929262778dc8"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a INT AS (`CURRENT_ROLE`))",
+    "text": "CREATE TABLE `t` ( `a` INTEGER AS ( `CURRENT_ROLE` ) )",
+    "digest": "b63c0c7b87734d68d9351c7774c9f2b10a9e6f931968ba22a338252453fcfadf"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a INT DEFAULT (`CURRENT_ROLE`))",
+    "text": "CREATE TABLE `t` ( `a` INTEGER DEFAULT ( `CURRENT_ROLE` ) )",
+    "digest": "b74944d52562cc63408dbab36b6535d1892a57f480e6390327c4607b4879afb8"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ALTER COLUMN a SET DEFAULT (`CURRENT_ROLE`)",
+    "text": "ALTER TABLE `t` ALTER COLUMN `a` SET DEFAULT ( `CURRENT_ROLE` )",
+    "digest": "944595af21ef2c79c0f39a8d4f25d072137152f76c49848e310c8425039dd99f"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT `CURRENT_ROLE`",
+    "text": "SELECT `CURRENT_ROLE`",
+    "digest": "4ab96e2e716e49febba3efff86c787273d8384da580b12c0ccd1929262778dc8"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "CREATE TABLE t(a INT AS (`CURRENT_ROLE`))",
+    "text": "CREATE TABLE `t` ( `a` INTEGER AS ( `CURRENT_ROLE` ) )",
+    "digest": "b63c0c7b87734d68d9351c7774c9f2b10a9e6f931968ba22a338252453fcfadf"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "CREATE TABLE t(a INT DEFAULT (`CURRENT_ROLE`))",
+    "text": "CREATE TABLE `t` ( `a` INTEGER DEFAULT ( `CURRENT_ROLE` ) )",
+    "digest": "b74944d52562cc63408dbab36b6535d1892a57f480e6390327c4607b4879afb8"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "ALTER TABLE t ALTER COLUMN a SET DEFAULT (`CURRENT_ROLE`)",
+    "text": "ALTER TABLE `t` ALTER COLUMN `a` SET DEFAULT ( `CURRENT_ROLE` )",
+    "digest": "944595af21ef2c79c0f39a8d4f25d072137152f76c49848e310c8425039dd99f"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT `CURRENT_ROLE`()",
+    "text": "SELECT `CURRENT_ROLE` ( )",
+    "digest": "f8e80fe80eb9edaac82efe14fd4924a944936bf9a29b3f9da74c2975a61f7f82"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a INT AS (`CURRENT_ROLE`()))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a INT DEFAULT (`CURRENT_ROLE`()))",
+    "text": "CREATE TABLE `t` ( `a` INTEGER DEFAULT ( `CURRENT_ROLE` ( ) ) )",
+    "digest": "273a7465bdd3600eab502c534ae46592f73dcc935445cc1a2ba9b0ae39e55d71"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ALTER COLUMN a SET DEFAULT (`CURRENT_ROLE`())",
+    "text": "ALTER TABLE `t` ALTER COLUMN `a` SET DEFAULT ( `CURRENT_ROLE` ( ) )",
+    "digest": "957a40c8692efa3c17da50ef6e3849580c70ed81b67d9101c3f804a77389209d"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT `CURRENT_ROLE`()",
+    "text": "SELECT `CURRENT_ROLE` ( )",
+    "digest": "f8e80fe80eb9edaac82efe14fd4924a944936bf9a29b3f9da74c2975a61f7f82"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "CREATE TABLE t(a INT AS (`CURRENT_ROLE`()))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "CREATE TABLE t(a INT DEFAULT (`CURRENT_ROLE`()))",
+    "text": "CREATE TABLE `t` ( `a` INTEGER DEFAULT ( `CURRENT_ROLE` ( ) ) )",
+    "digest": "273a7465bdd3600eab502c534ae46592f73dcc935445cc1a2ba9b0ae39e55d71"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "ALTER TABLE t ALTER COLUMN a SET DEFAULT (`CURRENT_ROLE`())",
+    "text": "ALTER TABLE `t` ALTER COLUMN `a` SET DEFAULT ( `CURRENT_ROLE` ( ) )",
+    "digest": "957a40c8692efa3c17da50ef6e3849580c70ed81b67d9101c3f804a77389209d"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT src.current_role",
+    "text": "SELECT `src` . `current_role`",
+    "digest": "e773c62f12150f4f26a04b691f086ef7e1751bfb1b0ae67f0648d6fd09d372fd"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a INT AS (src.current_role))",
+    "text": "CREATE TABLE `t` ( `a` INTEGER AS ( `src` . `current_role` ) )",
+    "digest": "98fe4f5a662e78f460c963b783716b45c56936fec0453f2873c01d58eca0b216"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a INT DEFAULT (src.current_role))",
+    "text": "CREATE TABLE `t` ( `a` INTEGER DEFAULT ( `src` . `current_role` ) )",
+    "digest": "d6473345bfb5da9e72c0a09eb9cebbb470f4e05967031e289f5e14a275f61511"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ALTER COLUMN a SET DEFAULT (src.current_role)",
+    "text": "ALTER TABLE `t` ALTER COLUMN `a` SET DEFAULT ( `src` . `current_role` )",
+    "digest": "d00f2e9fd2aeaeef6ed0dde79889363ea8a724c14206fe3c0e1eb7d84985d0a6"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT src.current_role",
+    "text": "SELECT `src` . `current_role`",
+    "digest": "e773c62f12150f4f26a04b691f086ef7e1751bfb1b0ae67f0648d6fd09d372fd"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "CREATE TABLE t(a INT AS (src.current_role))",
+    "text": "CREATE TABLE `t` ( `a` INTEGER AS ( `src` . `current_role` ) )",
+    "digest": "98fe4f5a662e78f460c963b783716b45c56936fec0453f2873c01d58eca0b216"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "CREATE TABLE t(a INT DEFAULT (src.current_role))",
+    "text": "CREATE TABLE `t` ( `a` INTEGER DEFAULT ( `src` . `current_role` ) )",
+    "digest": "d6473345bfb5da9e72c0a09eb9cebbb470f4e05967031e289f5e14a275f61511"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "ALTER TABLE t ALTER COLUMN a SET DEFAULT (src.current_role)",
+    "text": "ALTER TABLE `t` ALTER COLUMN `a` SET DEFAULT ( `src` . `current_role` )",
+    "digest": "d00f2e9fd2aeaeef6ed0dde79889363ea8a724c14206fe3c0e1eb7d84985d0a6"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ALTER COLUMN a SET DEFAULT (CAST(DATE '2020-01-01' AS CHAR))",
+    "text": "ALTER TABLE `t` ALTER COLUMN `a` SET DEFAULT ( CAST ( DATE ? AS CHARACTER ) )",
+    "digest": "f54fdd222d0d1ae5d009f39877738c896d79e01ec5c190d774e433a846f1b865"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ALTER COLUMN a SET DEFAULT ((SELECT DATE '2020-01-01'))",
+    "text": "ALTER TABLE `t` ALTER COLUMN `a` SET DEFAULT ( ( SELECT DATE ? ) )",
+    "digest": "b321b0b869cc95feee26785b197d2b428be16f322479ca2359b2b14322ae72a6"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ALTER COLUMN a SET DEFAULT ((SELECT 1) FOR UPDATE)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ALTER COLUMN a SET DEFAULT (((SELECT 1) FOR UPDATE))",
+    "text": "ALTER TABLE `t` ALTER COLUMN `a` SET DEFAULT ( ( ( SELECT ? ) FOR UPDATE ) )",
+    "digest": "b7a34c42c5c74866903b044e4f0e848a826f6067a79130947941cc676e7e9531"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ALTER COLUMN a SET DEFAULT ((((SELECT 1) FOR UPDATE)))",
+    "text": "ALTER TABLE `t` ALTER COLUMN `a` SET DEFAULT ( ( ( ( SELECT ? ) FOR UPDATE ) ) )",
+    "digest": "94f8dd929cbc819a7b2aa78a9fff510e757a2b9dd35588993360cd4e7d9a7387"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ALTER COLUMN a SET DEFAULT (WITH c AS (SELECT 1) (SELECT 1))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ALTER COLUMN a SET DEFAULT ((WITH c AS (SELECT 1) (SELECT 1)))",
+    "text": "ALTER TABLE `t` ALTER COLUMN `a` SET DEFAULT ( ( WITH `c` AS ( SELECT ? ) ( SELECT ? ) ) )",
+    "digest": "57086d3224f3aabc05bc76d28acf2e13a019ee07c9e7cb02b80b0eb60718346e"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ALTER COLUMN a SET DEFAULT (((WITH c AS (SELECT 1) (SELECT 1))))",
+    "text": "ALTER TABLE `t` ALTER COLUMN `a` SET DEFAULT ( ( ( WITH `c` AS ( SELECT ? ) ( SELECT ? ) ) ) )",
+    "digest": "462be9134857724588521205843d3137f7ea8aa2b4a32d8b9a8d3d321cafa9d8"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CURRENT_ROLE(1)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a INT AS (CURRENT_ROLE(1)))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT current_role AS current_role",
+    "text": "SELECT `current_role` AS `current_role`",
+    "digest": "06fbdb49a9eacabb80a07df1334349afc2f7e1b3ccc99a35943886bd06c1b959"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(current_role INT)",
+    "text": "CREATE TABLE `t` ( `current_role` INTEGER )",
+    "digest": "d74de83609137480fe8e703b36828390b2914741d03379c378bad85f4076a69a"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT \"CURRENT_ROLE\"",
+    "text": "SELECT ?",
+    "digest": "d1b44b0c19af710b5a679907e284acd2ddc285201794bc69a2389d77baedddae"
   }
 ]

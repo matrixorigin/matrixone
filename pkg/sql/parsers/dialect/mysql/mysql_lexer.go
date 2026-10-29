@@ -430,6 +430,14 @@ func (l *Lexer) Lex(lval *yySymType) int {
 			} else {
 				typ = ID
 			}
+		} else if typ == CURRENT_ROLE {
+			// MySQL's CURRENT_ROLE is an ordinary identifier unless called.
+			// Retain the existing zero-argument call grammar, including spaces
+			// and comments, without changing ordinary MO execution parsing.
+			lookahead := *l.scanner
+			if next, _ := lookahead.Scan(); next != '(' {
+				typ = ID
+			}
 		} else if typ == NOW && l.previousToken == ON && l.lastToken == UPDATE {
 			// MySQL also admits NOW(fsp) for an ON UPDATE timestamp attribute.
 			// Keep this digest-only; bare NOW is not the CURRENT_TIMESTAMP form.
