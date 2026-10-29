@@ -423,9 +423,6 @@ func (s *service) newTenantUpgradePass(ctx context.Context) func() (bool, error)
 			if err := s.maintainInformationSchemaViews(maintenanceCtx); err != nil {
 				return false, wrapUpgradeError(moerr.AttachCause(maintenanceCtx, err), "information schema views maintenance")
 			}
-			if err := s.maintainInformationSchemaColumnsTables(maintenanceCtx); err != nil {
-				return false, wrapUpgradeError(moerr.AttachCause(maintenanceCtx, err), "information schema columns/tables maintenance")
-			}
 			if err := s.maintainOrphanObjectPrivileges(maintenanceCtx); err != nil {
 				return false, wrapUpgradeError(moerr.AttachCause(maintenanceCtx, err), "orphan object privilege maintenance")
 			}

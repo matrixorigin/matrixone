@@ -677,6 +677,7 @@ func TestLoadRuleCacheIncludesSecondaryRoles(t *testing.T) {
 		{30, "db1.t1", "select a, age from db1.t1 where age < 3"},
 		{20, "db2.t2", "select a from db2.t2 where a = 20"},
 		{30, "db2.t2", "select * from db2.t2 where age > 30"},
+		{10, "db3.t3", "select * from db3.t3 /* persisted */ where id = 1"},
 	})
 
 	rules, err := loadRuleCache(context.Background(), ses)
@@ -684,7 +685,15 @@ func TestLoadRuleCacheIncludesSecondaryRoles(t *testing.T) {
 	require.Equal(t, map[string]string{
 		"db1.t1": "select a, age from db1.t1 where (age < 3) or (age > 28)",
 		"db2.t2": "select a from db2.t2 where a = 20",
+		"db3.t3": "select * from db3.t3 /* persisted */ where id = 1",
 	}, rules)
+	hint, err := formatRewriteHint(context.Background(), rules)
+	require.NoError(t, err)
+	sql := hint + "set names utf8mb4"
+	stmts, err := parsers.Parse(context.Background(), dialect.MYSQL, sql, 1)
+	require.NoError(t, err)
+	defer freeStatements(stmts)
+	require.NoError(t, parsers.AddRewriteHints(context.Background(), stmts, sql))
 }
 
 func TestLoadRuleCacheReturnsParseErrorForConflictingRules(t *testing.T) {
@@ -1369,6 +1378,7 @@ func TestValidateRewriteRuleSQL(t *testing.T) {
 	}{
 		{name: "empty", rule: "  ", err: "rewrite rule SQL is empty"},
 		{name: "syntax error", rule: "select a from", err: "invalid rewrite rule SQL"},
+		{name: "multiple statements", rule: "select a from db1.t1; select a from db1.t1", err: "invalid rewrite rule SQL"},
 		{name: "non select", rule: "delete from db1.t1 where a = 1", err: "only accept SELECT-like statements"},
 	}
 	for _, tc := range invalidRules {
@@ -1398,10 +1408,12 @@ func TestHandleAlterRoleAddRuleRejectsInvalidRuleSQLBeforeWriting(t *testing.T) 
 	require.NoError(t, err)
 	bh.sql2result[roleSQL] = newMrsForRoleIdOfRole([][]interface{}{{int64(10)}})
 
-	stmt := tree.NewAlterRoleAddRule("role10", "db1.t1", "select a from", "db1", "t1")
-	err = handleAlterRoleAddRule(ses, execCtx, stmt)
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "invalid rewrite rule SQL")
+	for _, rule := range []string{"select a from", "select a from db1.t1; select a from db1.t1"} {
+		stmt := tree.NewAlterRoleAddRule("role10", "db1.t1", rule, "db1", "t1")
+		err = handleAlterRoleAddRule(ses, execCtx, stmt)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "invalid rewrite rule SQL")
+	}
 
 	for _, sql := range bh.executedSQLs {
 		require.NotContains(t, strings.ToLower(sql), "delete from mo_catalog.mo_role_rule")
@@ -1644,6 +1656,131 @@ func TestExtractInlineRewrites(t *testing.T) {
 		require.Len(t, rules, 0)
 		require.Len(t, remap, 0)
 	})
+}
+
+func TestRewriteHintCommentBoundary(t *testing.T) {
+	ctx := context.Background()
+	for _, rule := range []string{
+		"select * from db.t where id = 1",
+		"select * from db.t /* harmless */ where id = 1",
+		"select * from db.t where '*/' = '*/'",
+		`select * from db.t where '中文\\*/' = '中文\\*/'`,
+	} {
+		t.Run(rule, func(t *testing.T) {
+			for _, format := range []func() (string, error){
+				func() (string, error) { return formatRewriteHint(ctx, map[string]string{"db.t": rule}) },
+				func() (string, error) { return formatRewriteHintChains(ctx, map[string][]string{"db.t": {rule}}, nil) },
+			} {
+				hint, err := format()
+				require.NoError(t, err)
+				content, ok := leadingHintContent(hint)
+				require.True(t, ok)
+				chains, _, err := parsers.DecodeRewriteHint(ctx, content)
+				require.NoError(t, err)
+				require.Equal(t, []string{rule}, chains["db.t"])
+				for _, sql := range []string{"set names utf8mb4", "select * from db.t"} {
+					materialized := hint + sql
+					stmts, err := parsers.Parse(ctx, dialect.MYSQL, materialized, 1)
+					require.NoError(t, err)
+					require.NoError(t, parsers.AddRewriteHints(ctx, stmts, materialized))
+					if sel, ok := stmts[0].(*tree.Select); ok {
+						require.Len(t, sel.RewriteOption.Rewrites["db.t"], 1)
+					}
+					freeStatements(stmts)
+				}
+			}
+		})
+	}
+}
+
+func TestRewriteHintPayloadRoundTripSpecialCharacters(t *testing.T) {
+	ctx := context.Background()
+	rules := map[string]string{`key*/`: "quoted \" Unicode 中文\n *\\/ \\\\*/ */*/"}
+	hint, err := formatRewriteHint(ctx, rules)
+	require.NoError(t, err)
+	require.NotContains(t, strings.TrimSuffix(hint, hintSuffix), "*/")
+	decoded, err := parseRewriteHint(ctx, hint)
+	require.NoError(t, err)
+	require.Equal(t, rules, decoded)
+}
+
+func TestRewriteHintPerStatement(t *testing.T) {
+	ctx := context.Background()
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+	ses.rewriteEnabled.Store(true)
+	role := "select * from db.t /* role */ where id = 1"
+	ses.ruleCache = map[string]string{"db.t": role}
+	rewritten, err := rewriteSQL(ctx, ses, "select * from db.t; select * from db.t")
+	require.NoError(t, err)
+	fragments := parsers.SplitSqlBySemicolon(rewritten)
+	require.Len(t, fragments, 2)
+	for _, fragment := range fragments {
+		content, ok := leadingHintContent(fragment)
+		require.True(t, ok)
+		chains, _, err := parsers.DecodeRewriteHint(ctx, content)
+		require.NoError(t, err)
+		require.Equal(t, []string{role}, chains["db.t"])
+		stmts, err := parsers.Parse(ctx, dialect.MYSQL, fragment, 1)
+		require.NoError(t, err)
+		require.NoError(t, parsers.AddRewriteHints(ctx, stmts, fragment))
+		require.Len(t, stmts[0].(*tree.Select).RewriteOption.Rewrites["db.t"], 1)
+		freeStatements(stmts)
+	}
+}
+
+func TestRewriteHintLayersAndModes(t *testing.T) {
+	ctx := context.Background()
+	role := "select * from src.t /* role */ where id = 1"
+	session := "select * from src.t where '*/' = '*/'"
+	inline := "select * from src.t /* inline */ where id = 1"
+	outerHint, err := formatRewriteHintChains(ctx, map[string][]string{"src.t": {role, session}}, map[string]string{"src": "dst"})
+	require.NoError(t, err)
+	inner := `/*+ {"rewrites":{"src.t":"select * from src.t /* inline *\/ where id = 1"}} */ select * from src.t`
+	rewritten, err := rewriteSQLFromMaterializedPolicy(ctx, outerHint+"prepare s from 'select 1'", inner)
+	require.NoError(t, err)
+	content, ok := leadingHintContent(rewritten)
+	require.True(t, ok)
+	chains, remap, err := parsers.DecodeRewriteHint(ctx, content)
+	require.NoError(t, err)
+	require.Equal(t, []string{role, session, inline}, chains["src.t"])
+	require.Equal(t, map[string]string{"src": "dst"}, remap)
+	for _, mode := range []string{"", "NO_BACKSLASH_ESCAPES"} {
+		stmts, err := parsers.ParseWithSQLMode(ctx, dialect.MYSQL, rewritten, 1, mode)
+		require.NoError(t, err)
+		require.NoError(t, parsers.AddRewriteHintsWithSQLMode(ctx, stmts, rewritten, mode))
+		sel := stmts[0].(*tree.Select)
+		require.Len(t, sel.RewriteOption.Rewrites["src.t"], 3)
+		require.Equal(t, map[string]string{"src": "dst"}, sel.RewriteOption.RemapDb)
+		freeStatements(stmts)
+	}
+}
+
+func TestRewriteHintBackslashModeSemantics(t *testing.T) {
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name, mode, rule string
+	}{
+		{"default", "", `select * from db.t where 'a\\*/b' = 'a\\*/b'`},
+		{"no backslash escapes", "NO_BACKSLASH_ESCAPES", `select * from db.t where 'a\*/b' = 'a\*/b'`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			original, err := parsers.ParseOneWithSQLMode(ctx, dialect.MYSQL, tc.rule, 1, tc.mode)
+			require.NoError(t, err)
+			defer original.Free()
+			hint, err := formatRewriteHintChains(ctx, map[string][]string{"db.t": {tc.rule}}, nil)
+			require.NoError(t, err)
+			sql := hint + "select * from db.t"
+			stmts, err := parsers.ParseWithSQLMode(ctx, dialect.MYSQL, sql, 1, tc.mode)
+			require.NoError(t, err)
+			defer freeStatements(stmts)
+			require.NoError(t, parsers.AddRewriteHintsWithSQLMode(ctx, stmts, sql, tc.mode))
+			chain := stmts[0].(*tree.Select).RewriteOption.Rewrites["db.t"]
+			require.Len(t, chain, 1)
+			require.Equal(t, tree.String(original, dialect.MYSQL), tree.String(chain[0].Stmt, dialect.MYSQL))
+		})
+	}
 }
 
 // TestFormatRewriteHintChains verifies that a single-layer chain is emitted as
