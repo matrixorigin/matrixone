@@ -904,6 +904,17 @@ func deduceNotNullable(ctx context.Context, overloadID int64, args []*plan.Expr)
 		if oid == 0 || oid == 2 || ((oid == 3 || oid == 4) && !LegacyTemporalNullability(ctx)) {
 			return false
 		}
+	case TIME:
+		// String conversions synthesize NULL with a truncation warning for
+		// invalid input even when the argument is NOT NULL. The typed and
+		// numeric overloads fail the statement instead of producing NULL
+		// and keep their NOT NULL inference. Historical dump bindings keep
+		// their pre-8dd published NOT NULL metadata, and the intermediate
+		// post-8dd era that predates the NULL synthesis change kept TIME
+		// NOT NULL while DATE conversions were already nullable.
+		if oid >= 5 && oid <= 8 && !LegacyTemporalNullability(ctx) && !LegacyTimeNullability(ctx) {
+			return false
+		}
 	case CAST:
 		if (oid == 0 || oid == 1) && len(args) == 2 &&
 			types.T(args[0].Typ.Id).IsMySQLString() && types.T(args[1].Typ.Id) == types.T_datetime && !LegacyTemporalNullability(ctx) {
