@@ -635,6 +635,42 @@ out_o = mo.quote(label) + "-ok"
 	require.Equal(t, body, rewritten[0].body)
 }
 
+func TestRewriteCloneStarlarkProcedureBodiesCoversAssignmentTargets(t *testing.T) {
+	body := `def run():
+    values = {}
+    values[mo.sql("select v from source_db.clone_probe where id = 1")[0][0][0]] = 1
+    return values
+
+out_o = run()
+`
+
+	rewritten, err := rewriteCloneStoredProcedureBodies(
+		context.Background(),
+		[]storedProcedureDefinition{{name: "p_index_call", lang: "starlark", body: body}},
+		"source_db",
+		"target_db",
+		1,
+	)
+	require.NoError(t, err)
+	require.Contains(t, rewritten[0].body, "`target_db`.`clone_probe`")
+	require.NotContains(t, rewritten[0].body, "source_db.clone_probe")
+
+	_, err = rewriteCloneStoredProcedureBodies(
+		context.Background(),
+		[]storedProcedureDefinition{{name: "p_bad_index_call", lang: "starlark", body: `def run():
+    values = {}
+    values[mo.sql("select from")[0][0][0]] = {}
+    return values
+
+out_o = run()
+`}},
+		"source_db",
+		"target_db",
+		1,
+	)
+	require.ErrorContains(t, err, "cannot safely rewrite")
+}
+
 func TestRewriteCloneStarlarkProcedureBodiesRejectsUnsafeMoSQL(t *testing.T) {
 	tests := []struct {
 		name string

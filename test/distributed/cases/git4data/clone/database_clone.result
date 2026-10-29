@@ -19,6 +19,12 @@ $$
 rows, err = mo.sql("select v from db0.clone_probe where id = 1")
 out_answer = "ERR" if err != None else rows[0][0]
 $$;
+create procedure db0.p_clone_probe_starlark_lhs(out answer varchar) language 'starlark'
+$$
+values = {}
+values[mo.sql("select v from db0.clone_probe where id = 1")[0][0][0]] = 1
+out_answer = "BAD" if "source-v2" in values else "GOOD"
+$$;
 create function db0.f_clone_answer() returns int language sql as 'select count(*) from db0.s1';
 create view db0.v_clone_answer as select f_clone_answer() as answer;
 create database db0_copy_0 clone db0;
@@ -43,6 +49,7 @@ name
 p_answer
 p_clone_probe_sql
 p_clone_probe_starlark
+p_clone_probe_starlark_lhs
 p_double
 p_labeled_loop
 p_labeled_repeat
@@ -70,6 +77,10 @@ call db0_copy_0.p_clone_probe_starlark(@db0_clone_starlark);
 select @db0_clone_starlark;
 @db0_clone_starlark
 clone-v2
+call db0_copy_0.p_clone_probe_starlark_lhs(@db0_clone_starlark_lhs);
+select @db0_clone_starlark_lhs;
+@db0_clone_starlark_lhs
+GOOD
 create database db0_copy_1 clone db0 to account sys;
 show tables from db0_copy_1;
 Tables_in_db0_copy_1

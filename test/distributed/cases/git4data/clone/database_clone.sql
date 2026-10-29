@@ -26,6 +26,12 @@ $$
 rows, err = mo.sql("select v from db0.clone_probe where id = 1")
 out_answer = "ERR" if err != None else rows[0][0]
 $$;
+create procedure db0.p_clone_probe_starlark_lhs(out answer varchar) language 'starlark'
+$$
+values = {}
+values[mo.sql("select v from db0.clone_probe where id = 1")[0][0][0]] = 1
+out_answer = "BAD" if "source-v2" in values else "GOOD"
+$$;
 
 -- Functions are catalog metadata too. They must be restored before a view that
 -- binds them, and source-qualified routine queries must bind the clone.
@@ -50,6 +56,8 @@ call db0_copy_0.p_sql_mode();
 call db0_copy_0.p_clone_probe_sql();
 call db0_copy_0.p_clone_probe_starlark(@db0_clone_starlark);
 select @db0_clone_starlark;
+call db0_copy_0.p_clone_probe_starlark_lhs(@db0_clone_starlark_lhs);
+select @db0_clone_starlark_lhs;
 
 create database db0_copy_1 clone db0 to account sys;
 show tables from db0_copy_1;
