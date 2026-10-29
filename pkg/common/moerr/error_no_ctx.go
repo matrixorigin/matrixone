@@ -516,3 +516,9 @@ func NewSyncProtectionExpiredNoCtx(jobID string, validTS, prepareTS int64) *Erro
 func NewVectorIndexSnapshotChangedNoCtx() *Error {
 	return newError(Context(), ErrVectorIndexSnapshotChanged)
 }
+
+// NewCantExecuteInReadOnlyTransactionNoCtx reports MySQL ERROR 1792 (25006)
+// for callers without a request context.
+func NewCantExecuteInReadOnlyTransactionNoCtx() *Error {
+	return newError(Context(), ErrCantExecuteInReadOnlyTransaction)
+}

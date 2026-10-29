@@ -850,6 +850,8 @@ var (
 
 	InformationSchemaTablesDDL     = informationSchemaSubscriptionTablesDDL()
 	InformationSchemaTablesV118DDL = strings.NewReplacer(
+		"tbl.relname not like '"+catalog.IndexTableNamePrefix+"%'",
+		"not startswith(tbl.relname, '"+catalog.IndexTableNamePrefix+"')",
 		"'"+DefaultCollationForCharset("utf8mb4")+"' AS TABLE_COLLATION,",
 		"internal_table_collation(tbl.extra_info) AS TABLE_COLLATION,",
 		// A freshly created table has no UPDATE/CHECK time (issue #31163):

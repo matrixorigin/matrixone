@@ -809,7 +809,7 @@ var supportedOperators = []FuncNew{
 		functionId: NOT,
 		class:      plan.Function_STRICT,
 		layout:     UNARY_LOGICAL_OPERATOR,
-		checkFn:    fixedTypeMatch,
+		checkFn:    logicalFixedTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -830,29 +830,7 @@ var supportedOperators = []FuncNew{
 		functionId: AND,
 		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
 		layout:     MULTIARY_LOGICAL_OPERATOR,
-		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			cost := 0
-			for _, source := range inputs {
-				if source.Oid != types.T_bool {
-					can, _ := fixedImplicitTypeCast(source, types.T_bool)
-					if !can {
-						return newCheckResultWithFailure(failedFunctionParametersWrong)
-					}
-					cost++
-				}
-			}
-
-			if cost == 0 {
-				return newCheckResultWithSuccess(0)
-			} else {
-				castTypes := make([]types.Type, len(inputs))
-				boolType := types.T_bool.ToType()
-				for i := range castTypes {
-					castTypes[i] = boolType
-				}
-				return newCheckResultWithCast(0, castTypes)
-			}
-		},
+		checkFn:    logicalOperatorTypeCheck,
 
 		Overloads: []overload{
 			{
@@ -872,29 +850,7 @@ var supportedOperators = []FuncNew{
 		functionId: OR,
 		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
 		layout:     MULTIARY_LOGICAL_OPERATOR,
-		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			cost := 0
-			for _, source := range inputs {
-				if source.Oid != types.T_bool {
-					can, _ := fixedImplicitTypeCast(source, types.T_bool)
-					if !can {
-						return newCheckResultWithFailure(failedFunctionParametersWrong)
-					}
-					cost++
-				}
-			}
-
-			if cost == 0 {
-				return newCheckResultWithSuccess(0)
-			} else {
-				castTypes := make([]types.Type, len(inputs))
-				boolType := types.T_bool.ToType()
-				for i := range castTypes {
-					castTypes[i] = boolType
-				}
-				return newCheckResultWithCast(0, castTypes)
-			}
-		},
+		checkFn:    logicalOperatorTypeCheck,
 
 		Overloads: []overload{
 			{
@@ -914,7 +870,7 @@ var supportedOperators = []FuncNew{
 		functionId: XOR,
 		class:      plan.Function_STRICT,
 		layout:     BINARY_LOGICAL_OPERATOR,
-		checkFn:    fixedTypeMatch,
+		checkFn:    logicalFixedTypeMatch,
 
 		Overloads: []overload{
 			{
