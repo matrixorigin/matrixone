@@ -76,8 +76,10 @@ func jsonStringConsumerUnaryDomainTypeMatch(overloads []overload, inputs []types
 	return jsonStringConsumerTypeMatch(overloads, inputs, stringDomainFixedTypeMatch)
 }
 
-// These JSON signatures require a full stopped-cluster binary upgrade.
-// Dispatch to a pre-upgrade CN and binary rollback are not supported.
+// Direct JSON signatures are retained for local or previously serialized
+// expressions. Newly bound SQL lowers these consumers through JSON-aware
+// CONCAT so the existing remote expression protocol fence applies. Direct
+// pre-lowering plans still require a stopped-cluster upgrade.
 func jsonStringConsumerTypeMatch(
 	overloads []overload,
 	inputs []types.Type,

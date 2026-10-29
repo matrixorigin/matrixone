@@ -14,6 +14,8 @@ insert into src values
     (3, 'null', null),
     (4, null, null);
 
+select count(*) as matching_sha_alias from src where sha(js) = sha1(js) or (sha(js) is null and sha1(js) is null);
+
 select id, concat('', js) as concat_left, concat(js, '') as concat_right, concat('', js) is null as concat_left_is_null, concat(js, '') is null as concat_right_is_null, concat_ws('|', 'x', js, 'y') as concat_ws_middle, concat_ws('|', js, v) as concat_ws_column, concat_ws('|', js, v) = '' as concat_ws_empty from src order by id;
 select id, elt(2, 'fallback', js, 'other') as elt_selected from src order by id;
 

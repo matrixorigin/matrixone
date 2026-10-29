@@ -7,6 +7,9 @@ insert into src values
 (2, '1', ''),
 (3, 'null', null),
 (4, null, null);
+select count(*) as matching_sha_alias from src where sha(js) = sha1(js) or (sha(js) is null and sha1(js) is null);
+matching_sha_alias
+4
 select id, concat('', js) as concat_left, concat(js, '') as concat_right, concat('', js) is null as concat_left_is_null, concat(js, '') is null as concat_right_is_null, concat_ws('|', 'x', js, 'y') as concat_ws_middle, concat_ws('|', js, v) as concat_ws_column, concat_ws('|', js, v) = '' as concat_ws_empty from src order by id;
 id    concat_left    concat_right    concat_left_is_null    concat_right_is_null    concat_ws_middle    concat_ws_column    concat_ws_empty
 1    {"a": 1, "b": 2}    {"a": 1, "b": 2}    0    0    x|{"a": 1, "b": 2}|y    {"a": 1, "b": 2}|A    0

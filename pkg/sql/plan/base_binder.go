@@ -8924,6 +8924,22 @@ func bindFuncExprImplByPlanExpr(
 			}
 		}
 	}
+	// Older CNs execute these consumers by overload ID without knowing that
+	// a JSON operand needs visible-text serialization. Keep the original
+	// overload and result metadata, then lower its JSON input to CONCAT, which
+	// carries an existing remote compatibility fence. Applying this after
+	// overload selection also avoids changing non-JSON coercion behavior.
+	if len(args) > 0 && args[0] != nil && types.T(args[0].Typ.Id) == types.T_json {
+		switch strings.ToLower(name) {
+		case "md5", "sha", "sha1", "sha2", "compress", "quote", "soundex":
+			visible, err := BindFuncExprImplByPlanExpr(ctx, "concat", []*Expr{args[0]})
+			if err != nil {
+				return nil, err
+			}
+			args = append([]*Expr(nil), args...)
+			args[0] = visible
+		}
+	}
 
 	// Temporal precision is also the display width stored in derived schemas.
 	// Keep the two metadata fields aligned after unit-dependent refinement.

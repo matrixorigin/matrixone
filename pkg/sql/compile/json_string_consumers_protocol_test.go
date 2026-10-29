@@ -63,6 +63,10 @@ func bindJSONStringConsumerExpr(t *testing.T, name string) *planpb.Expr {
 		args = []*planpb.Expr{stringConstant("|"), jsonColumn, stringConstant("!")}
 	case "elt":
 		args = []*planpb.Expr{plan2.MakePlan2Int64ConstExprWithType(1), jsonColumn, stringConstant("!")}
+	case "md5", "sha", "sha1", "compress", "quote", "soundex":
+		args = []*planpb.Expr{jsonColumn}
+	case "sha2":
+		args = []*planpb.Expr{jsonColumn, plan2.MakePlan2Int64ConstExprWithType(256)}
 	default:
 		t.Fatalf("unsupported JSON string consumer %q", name)
 	}
@@ -137,6 +141,14 @@ func TestJSONStringConsumerProtocolPlanAdmissionAndCachedRun(t *testing.T) {
 // binary or executing a remote pipeline.
 func TestJSONStringConsumerSimulatedVersionSerializationFences(t *testing.T) {
 	for _, name := range []string{"elt", "concat", "concat_ws", "binary_cast"} {
+		t.Run(name, func(t *testing.T) { testJSONStringConsumerSerializationFences(t, name) })
+	}
+}
+
+// The lowered signatures must keep the existing source, destination and
+// receiver checks after serialization, including the SHA alias.
+func TestJSONStringConsumerLoweredVersionSerializationFences(t *testing.T) {
+	for _, name := range []string{"md5", "sha", "sha1", "sha2", "compress", "quote", "soundex"} {
 		t.Run(name, func(t *testing.T) { testJSONStringConsumerSerializationFences(t, name) })
 	}
 }
