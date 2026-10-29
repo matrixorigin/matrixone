@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"fmt"
 	"testing"
-	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -85,7 +84,7 @@ func TestReadonlySortAndCompact(t *testing.T) {
 					}
 					require.NoError(t, err)
 					t.Cleanup(func() { snapshot.Free(mp) })
-					data, area, lease := unsafe.SliceData(destination.data), unsafe.SliceData(destination.area), destination.areaLease
+					data, area, lease := destination.data, destination.area, destination.areaLease
 					beforeMP, beforeAccount, calls := mp.CurrNB(), state.account.Snapshot().Used, controller.calls
 					controller.failAt = calls + 1
 					destination.InplaceSortAndCompact()
@@ -94,8 +93,16 @@ func TestReadonlySortAndCompact(t *testing.T) {
 					for row, value := range shape.want {
 						require.Equal(t, value, destination.GetBytesAt(row))
 					}
-					require.True(t, data == unsafe.SliceData(destination.data), "descriptor backing must stay in place")
-					require.True(t, area == unsafe.SliceData(destination.area), "readonly payload must stay in place")
+					require.Equal(t, len(data), len(destination.data))
+					require.Equal(t, cap(data), cap(destination.data))
+					if cap(data) > 0 {
+						require.True(t, &data[:cap(data)][0] == &destination.data[:cap(destination.data)][0], "descriptor backing must stay in place")
+					}
+					require.Equal(t, len(area), len(destination.area))
+					require.Equal(t, cap(area), cap(destination.area))
+					if cap(area) > 0 {
+						require.True(t, &area[:cap(area)][0] == &destination.area[:cap(destination.area)][0], "readonly payload must stay in place")
+					}
 					require.True(t, lease == destination.areaLease, "compaction must retain the same lease")
 					require.Equal(t, beforeMP, mp.CurrNB())
 					require.Equal(t, beforeAccount, state.account.Snapshot().Used)
