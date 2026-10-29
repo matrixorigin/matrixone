@@ -16,6 +16,7 @@ package hashmap
 
 import (
 	"bytes"
+	"encoding/binary"
 	"io"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap/keycodec"
@@ -108,6 +109,10 @@ func (itr *strHashmapIterator) prepareHashKeys(
 		return err
 	}
 	itr.ensureCapacity(count)
+	if count == 0 {
+		itr.keyBuffer = itr.keyBuffer[:0]
+		return nil
+	}
 	for i := 0; i < count; i++ {
 		itr.zValues[i] = 0
 	}
@@ -197,7 +202,12 @@ func (itr *strHashmapIterator) prepareHashKeys(
 				continue
 			}
 			values, area := vector.MustVarlenaRawData(vec)
-			if vec.GetType().Oid == types.T_json {
+			if vec.GetType().Oid == types.T_char ||
+				(types.IsUnicodeCollation(vec.GetType().Charset) && vec.GetType().Oid.IsMySQLString()) {
+				if err := itr.sizeFlatCanonicalStringKeys(vec, start, count, prefix); err != nil {
+					return err
+				}
+			} else if vec.GetType().Oid == types.T_json {
 				for i := 0; i < count; i++ {
 					value := values[start+i].GetByteSlice(area)
 					if err := add(i, prefix+4+keycodec.CanonicalJSONSize(value)); err != nil {
@@ -370,6 +380,9 @@ func (m *StrHashMap) Size() int64 {
 }
 
 func (itr *strHashmapIterator) encodeHashKeys(vecs []*vector.Vector, start, count int) {
+	if count == 0 {
+		return
+	}
 	for _, vec := range vecs {
 		if itr.mp.groupingAware || itr.mp.hasNull {
 			switch vec.GetType().Oid {
@@ -641,6 +654,62 @@ func isFlatRawStringHashKey(vec *vector.Vector) bool {
 		!types.IsUnicodeCollation(typ.Charset) && !vec.IsConst() && !vec.HasGrouping()
 }
 
+func (itr *strHashmapIterator) sizeFlatCanonicalStringKeys(vec *vector.Vector, start, n, prefix int) error {
+	values, area := vector.MustVarlenaRawData(vec)
+	typ := vec.GetType()
+	const maxInt = int(^uint(0) >> 1)
+	if types.IsUnicodeCollation(typ.Charset) {
+		for i := 0; i < n; i++ {
+			value := types.CollationKeyOrOriginal(typ.Charset, values[start+i].GetByteSlice(area))
+			size := prefix + 4 + len(value)
+			if size < 0 || itr.zValues[i] > int64(maxInt-size) {
+				return mpool.ErrAllocationAccountInvalid
+			}
+			itr.zValues[i] += int64(size)
+		}
+	} else {
+		for i := 0; i < n; i++ {
+			value := keycodec.CanonicalCharValue(values[start+i].GetByteSlice(area))
+			size := prefix + 4 + len(value)
+			if size < 0 || itr.zValues[i] > int64(maxInt-size) {
+				return mpool.ErrAllocationAccountInvalid
+			}
+			itr.zValues[i] += int64(size)
+		}
+	}
+	return nil
+}
+
+// Canonicalization is selected once for a flat CHAR column. The caller has
+// already excluded constants, NULLs and grouping rows; sizing/admission still
+// finishes before this encoder can publish any hash-table state.
+func fillFlatCharCanonicalKeys(itr *strHashmapIterator, vec *vector.Vector, n, start int) {
+	values, area := vector.MustVarlenaRawData(vec)
+	typ := vec.GetType()
+	width := 4
+	if itr.mp.hasNull || itr.mp.groupingAware {
+		width = 5
+	}
+	if types.IsUnicodeCollation(typ.Charset) {
+		for i := 0; i < n; i++ {
+			value := types.CollationKeyOrOriginal(typ.Charset, values[start+i].GetByteSlice(area))
+			itr.keys[i] = appendFlatCharKey(itr.keys[i], value, width)
+		}
+	} else {
+		for i := 0; i < n; i++ {
+			value := keycodec.CanonicalCharValue(values[start+i].GetByteSlice(area))
+			itr.keys[i] = appendFlatCharKey(itr.keys[i], value, width)
+		}
+	}
+}
+
+func appendFlatCharKey(dst, value []byte, width int) []byte {
+	var prefix [5]byte
+	binary.LittleEndian.PutUint32(prefix[width-4:width], uint32(len(value)))
+	dst = append(dst, prefix[:width]...)
+	return append(dst, value...)
+}
+
 func fillFlatRawStringGroupingAwareStr(itr *strHashmapIterator, vec *vector.Vector, n, start int) {
 	values, area := vector.MustVarlenaRawData(vec)
 	nsp := vec.GetNulls()
@@ -700,6 +769,11 @@ func fillGroupingAwareStr(
 				itr.zValues[i] = 0
 			}
 		}
+		return
+	}
+	if vec.GetType().Oid == types.T_char && !vec.IsConst() &&
+		!vec.HasGrouping() && !vec.GetNulls().Any() {
+		fillFlatCharCanonicalKeys(itr, vec, n, start)
 		return
 	}
 	float32Codec := keycodec.NewFloat32Codec(vec.GetType().Scale)
@@ -927,6 +1001,11 @@ func fillStringGroupStr(itr *strHashmapIterator, vec *vector.Vector, lenV int, s
 	}
 	if vec.IsConst() {
 		fillStringGroupStrForConstVec(itr, vec, lenV, start)
+		return
+	}
+
+	if vec.GetType().Oid == types.T_char && !vec.HasGrouping() && !vec.GetNulls().Any() {
+		fillFlatCharCanonicalKeys(itr, vec, lenV, start)
 		return
 	}
 
