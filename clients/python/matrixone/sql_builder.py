@@ -22,7 +22,7 @@ code duplication across different interfaces (ORM, Vector Search, Pinecone, etc.
 from ._query_compilation import conjoin_conditions
 from ._sql_literals import sql_string_token
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Set
 from enum import Enum
 from typing import Any, Dict, List, Optional, Tuple, Union
 
@@ -117,9 +117,11 @@ class MatrixOneSQLBuilder:
 
     # INSERT methods
     def insert_into(self, table_name: str) -> "MatrixOneSQLBuilder":
-        """Start INSERT operation"""
+        """Start a new INSERT operation with no pending rows."""
         self._query_type = "INSERT"
         self._from_table = table_name
+        self._insert_columns = []
+        self._insert_values = []
         return self
 
     def values(self, **kwargs) -> "MatrixOneSQLBuilder":
@@ -131,7 +133,7 @@ class MatrixOneSQLBuilder:
         if self._query_type != "INSERT":
             raise ValueError("values() can only be used with INSERT operations")
 
-        if not self._insert_columns:
+        if not self._insert_columns and not self._insert_values:
             self._insert_columns = list(kwargs.keys())
 
         unexpected = sorted(set(kwargs) - set(self._insert_columns))
@@ -149,17 +151,33 @@ class MatrixOneSQLBuilder:
         return self
 
     def insert_values(self, columns: List[str], values: List[List[Any]]) -> "MatrixOneSQLBuilder":
-        """Add multiple rows of values for INSERT"""
+        """Append rows using the established column order.
+
+        Rows must be sequences with one value per column. A mismatched column
+        list or invalid row is rejected without changing pending rows.
+        """
         if self._query_type != "INSERT":
             raise ValueError("insert_values() can only be used with INSERT operations")
+
+        if isinstance(columns, (Mapping, Set, str, bytes, bytearray)):
+            raise TypeError("INSERT columns must be an ordered sequence of names")
+        columns_copy = list(columns)
+        if (self._insert_columns or self._insert_values) and columns_copy != self._insert_columns:
+            raise ValueError("INSERT columns must match the established column order")
+
         rows = []
         for row in values:
             if isinstance(row, Mapping):
                 raise TypeError("insert_values() rows must be positional, not mappings")
-            rows.append(list(row))
+            if isinstance(row, (Set, str, bytes, bytearray)):
+                raise TypeError("INSERT rows must be ordered sequences of values")
+            row_copy = list(row)
+            if len(row_copy) != len(columns_copy):
+                raise ValueError("INSERT row length must match the number of columns")
+            rows.append(row_copy)
 
-        self._insert_columns = list(columns)
-        self._insert_values = rows
+        self._insert_columns = columns_copy
+        self._insert_values.extend(rows)
         return self
 
     # UPDATE methods
