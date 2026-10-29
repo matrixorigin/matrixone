@@ -5,11 +5,11 @@
 | Field | Value |
 |---|---|
 | Owning issue | https://github.com/matrixorigin/matrixone/issues/30955 |
-| Revision | 14 (2026-10-25). Revisions 1-11 were each rejected by pre-PR design review; revision 12 passed design review; revision 13 (the staged-delivery contract) was REQUEST-CHANGES-blocked for three gaps this revision closes. R14-F1: D-4's ordinary-local transfer mask moves INTO stage-1 — the delivered same-workspace carrier performs no old-to-new rowid mapping and stage-1 as scoped would have admitted delete-carrying marked reads whose own-deleted rows can resurrect through compacted objects (local suppression is keyed by block/rowid: local_disttae_datasource.go:1204-1241/:1425-1429/:1453-1457; mapping machinery verified at logtailreplay/blocks_iter.go:225-228 GetChangedObjsBetweenForTombstoneTransfer and transfer.go:495 doTransferRowids, used at :60). R14-F2: the vanished-mark declinature becomes computable through an EXPLICIT role representation — construction emits `NestedBlockExplicit` and a dedicated covered-plan strip value, the zero value means 'unset' and never appears in a completed above-gate plan, and an unset-role scan in a locking-presence plan declines the whole statement before source publication (O-D9 resolved; D-10.3 no longer needs post-optimization structural inference over join shapes or table identity). R14-F3: D-10's byte-identical conservation is scoped to plans bound or rebound under the closed gate; every mid-flight capability transition defers to D-8's rebuild-or-reject verbatim (frontend check computation_wrapper.go:1482-1487 -> Run admission compile2.go:451-459), making D-8's NotSupported requires-rebinding error the single recorded new-error exception. Revision 13's mechanisms, decision rows and closure ladder are kept; D-10's clauses 1-5, the item 8 (iii)/(vi)/(vii) members, D-1/D-4/D-8 notes and R-17 are amended accordingly. |
-| Status | `in progress` — design-first phase; implementation review stays blocked until this revision passes |
+| Revision | 15 (2026-10-29). Revision 14 is kept verbatim except where the two new decisions below supersede it. R15-F1 (PR-review design blocker): the rev-3–14 cluster capability gate contradicts the repository's shutdown-only upgrade contract (`upgrade-compatibility.md`), so the allocated `MORPCVersion135` gate design and every below-gate/legacy/transition mechanism are DELETED — D-7 is rewritten as the single-version deployment contract, D-8 loses its capability-transition layers, D-9/D-10/section 6-8 clauses are amended, and rev-14's R7-F3/R14-F3 gate halves are superseded. R15-F2 (PR-review P1): D-5 gains the marked-retry persistence invariant — an already-recorded marked floor must surface its retry on every terminal path of the lock batch, so a later SKIP LOCKED direct conflict cannot silently erase it. Revision 14 (2026-10-25): Revisions 1-11 were each rejected by pre-PR design review; revision 12 passed design review; revision 13 (the staged-delivery contract) was REQUEST-CHANGES-blocked for three gaps this revision closes. R14-F1: D-4's ordinary-local transfer mask moves INTO stage-1 — the delivered same-workspace carrier performs no old-to-new rowid mapping and stage-1 as scoped would have admitted delete-carrying marked reads whose own-deleted rows can resurrect through compacted objects (local suppression is keyed by block/rowid: local_disttae_datasource.go:1204-1241/:1425-1429/:1453-1457; mapping machinery verified at logtailreplay/blocks_iter.go:225-228 GetChangedObjsBetweenForTombstoneTransfer and transfer.go:495 doTransferRowids, used at :60). R14-F2: the vanished-mark declinature becomes computable through an EXPLICIT role representation — construction emits `NestedBlockExplicit` and a dedicated covered-plan strip value, the zero value means 'unset' and never appears in a completed above-gate plan, and an unset-role scan in a locking-presence plan declines the whole statement before source publication (O-D9 resolved; D-10.3 no longer needs post-optimization structural inference over join shapes or table identity). R14-F3: D-10's byte-identical conservation is scoped to plans bound or rebound under the closed gate; every mid-flight capability transition defers to D-8's rebuild-or-reject verbatim (frontend check computation_wrapper.go:1482-1487 -> Run admission compile2.go:451-459), making D-8's NotSupported requires-rebinding error the single recorded new-error exception. Revision 13's mechanisms, decision rows and closure ladder are kept; D-10's clauses 1-5, the item 8 (iii)/(vi)/(vii) members, D-1/D-4/D-8 notes and R-17 are amended accordingly. |
+| Status | `in progress` — design-first phase; implementation of the R15-F1 gate removal and the R15-F2 retry repair stays blocked until this revision passes; the already-delivered stage-1 implementation remains under review and is revised after this revision passes |
 | Implementation PR / PR series | to be attached by the implementation turn after design approval |
 | Base revision | `d93d5d66c83d2927c233de17f21fe7f513bc7d32` |
-| Design gate trigger | complexity trigger: adds a per-read visibility mode inside a fixed SI read view, materially changes retry/idempotency behavior, crosses plan/executor/compile/engine/moerr boundaries (≥2 subsystems), and adds additive plan/pipeline wire fields plus a cluster capability version. Not an ordinary focused bug fix. |
+| Design gate trigger | complexity trigger: adds a per-read visibility mode inside a fixed SI read view, materially changes retry/idempotency behavior, crosses plan/executor/compile/engine/moerr boundaries (≥2 subsystems), and adds additive plan/pipeline wire fields (rev 15 removes rev-14's gate-design clause after PR review: the change introduces no cluster capability version). Not an ordinary focused bug fix. |
 
 Decision log (findings mapped to decisions, evidence verified at base
 `d93d5d66c8`; the decision cell records the latest revision that owns the
@@ -18,7 +18,7 @@ say so):
 
 | Finding | Verified evidence at base | Decision (owning revision) |
 |---|---|---|
-| Rev1-F1/F2/F3/F4, Rev2-F1..F4, Rev3-F1..F4 (accumulated, resolved earlier) | see the corresponding sections; all re-verified or preserved | Retained resolutions: discovery-inclusive frontier, per-occurrence visibility, no SnapshotTS mutation, transfer-mask without workspace rewrite, wire-verified retry token, cluster capability gate |
+| Rev1-F1/F2/F3/F4, Rev2-F1..F4, Rev3-F1..F4 (accumulated, resolved earlier) | see the corresponding sections; all re-verified or preserved | Retained resolutions: discovery-inclusive frontier, per-occurrence visibility, no SnapshotTS mutation, transfer-mask without workspace rewrite, wire-verified retry token; the former cluster-capability-gate entry is superseded by R15-F1 |
 | **R4-F1 frontier freshness** | `WaitLogTailAppliedAt(empty)` delegates to `timestampWaiter.GetTimestamp(empty)` (client.go:937-960), which immediately returns `latestTS.Next()` when the local latest satisfies the (empty) floor (timestamp_waiter.go:83-85) — no newer publication is acquired; a peer commit completed before statement admission but not yet published/applied to this CN is outside F₀, so initially-empty discovery misses it with no retry to recover. The alternative contract exists: `PushClient.AcquireLogtailReadBarrier` "obtains a TN-ordered publication frontier and waits until the normal CN logtail apply pipeline reaches it" (disttae/logtail_consumer.go:238-269; `acquireAppliedLogtailReadBarrier` 272-293 waits `GetTimestamp(frontier)` and validates `applied ≥ frontier`); engine interface + compile helper already in place (`engine.LogtailReadBarrier`, compile:`getLogtailReadBarrier`, used by lifecycle admission and CDC guards) | D-2: F₀ is acquired through `AcquireLogtailReadBarrier` at the start of compile source assembly — a publication frontier ordered after every commit that completed before statement admission, whose application this CN waits for before marked reads assemble sources; the retry admission floor stays a concrete timestamp (`WaitLogTailAppliedAt(max(requiredTS, Fₖ))`), where a non-empty floor genuinely waits. Deterministic delayed-application regression added |
 | **R4-F2 scan-occurrence identity** | Right-oriented SEMI/ANTI/SINGLE joins are admitted (stats.go:2486-2500 sets `IsRightJoin` for SEMI/ANTI/SINGLE/LEFT/OUTER by stats) and `swapJoinChildren` swaps children afterwards (opt_misc.go:544-548), so final-plan child positions no longer express the block structure a post-optimization walk would rely on; scalar subqueries lower to LEFT/SINGLE joins reusing both subtrees (flatten_subquery.go:780-799, 861-867), so two occurrences of the same table (outer locked + subquery) share one `TableDef.TblId` — a final-plan table-identity pass would mark both or neither | D-1 rewritten: read-view identity is the **bind-time scan-node occurrence marker**, not a post-optimization structural walk; the bind tree (subquery subtrees distinct under SEMI/ANTI/SINGLE/MARK children, no orientation normalization yet) is where the collectLockTargets exclusion rules are meaningful. Marks travel with node objects through re-parent/swap rewrites automatically. The enumerated fabrication sites that create NEW scan nodes (apply_indices' two idx-table-node sites) must propagate the mark and set the additive `IndexScanInfo.ParentTableId`; other potential fabrication sites are enumerated and covered by a typed-plan occurrence corpus test. Right-join-swap and same-table-scalar-subquery controls added. **Capture mechanism superseded by R5-F1** — the walk-adjacent capture point was found to run after WHERE subquery lowering; the retained identity conclusion is one role per node object surviving all rewrites, now captured at construction time |
 | **R4-F3 ordinary local readers ignore RelData tombstones** | `NewLocalDataSource` receives `relData.GetTombstones()` (txn_table.go:2668-2679 buildLocalDataSource) but `ApplyTombstones` and `GetTombstones` consume `extraTombstones` only when `ls.category == engine.ShardingRemoteDataSource` (local_disttae_datasource.go:1086-1094 and :1147-1158); ordinary local sources apply tombstones they compute themselves (workspace stages + pState stages at `ls.snapshotTS`). A mask appended only to the RelData set would therefore resurrect compaction-transferred rows on the ordinary local path | D-4 output becomes a **separate mask-only tombstone input** to the data source with two consumers: (a) the shipped/remote form appends to the relData set (applied by the existing ShardingRemote consumer, unchanged), and (b) the ordinary local source gets an additive mask input consumed in both `ApplyTombstones` and `GetTombstones` under explicit policy and ownership rules; Regressions through the ordinary local path (in-memory and S3-dumped deletes across compaction) mandated |
@@ -54,6 +54,18 @@ say so):
 | **R14-F1 stage-1 as scoped would admit delete-carrying marked reads without D-4's transfer mask — own-deleted rows can resurrect across a compaction inside [SnapshotTS, F]** | Verified at the delivered base and revision: D-10.2 admitted ordinary local relations with no exclusion for transactions carrying deletes while D-10.4 deferred D-4 to stage-2; the ordinary local reader keys its workspace-delete suppression by block and rowid — `workspaceDeleteEntriesForBlockLocked(bid)` with offset matching (local_disttae_datasource.go:1204-1241), `GetTombstonesByBlockId(ls.snapshotTS, bid, ...)` (:1425-1429) and `FastApplyDeletesByRowOffsets(..., rawRowIdDeletes.offsets[*bid])` (:1453-1457) — so an own DELETE against object O followed by a compaction O→P inside the RR window leaves the admitted reader enumerating P at F (rows rebuilt under P's identity) while the transaction's workspace tombstones identify O: the deleted row SURFACES through P on the marked read; the delivered carrier delegates the SAME workspace (no old-to-new mapping), and R12-F1's flushed-tombstone capture supplies suppression surface identity, not mapping; approved D-4 exists exactly for this domain — per attempt over [txn.SnapshotTS, F], every workspace DELETE of marked tables (in-memory entries and S3-dumped objects' rowid+PK) whose rowid's object died inside the window (`GetChangedObjsBetweenForTombstoneTransfer`, comment 'includes deleted intermediate', logtailreplay/blocks_iter.go:225-230) is mapped by PK to the alive-generation rowid (`doTransferRowids`, transfer.go:495, consumed at transfer.go:60), covering late-added deletes and O→P→P2 chains, consumed as the mask-only `maskTombstones` input at `ApplyTombstones`/`GetTombstones`, with zero mask work for delete-free executions (D-6) and no commit-path effect | **D-4's ordinary-local form moved into stage-1 (rev-14, D-10 re-scoped; supersedes R13-F6's stage-2 listing of D-4 — the isolated-execution-view/re-evaluation family stays stage-2):** the mask is a MANDATORY stage-1 input for every admitted marked execution over the ordinary local surface; delete-free executions compute zero mask work per D-6; a delete-carrying marked read never ships without the mask, so the resurrection shape cannot occur inside stage-1's admitted set (remaining stress lives inside D-4 itself, whose approved design stands unchanged). Mandatory stage-1 evidence (item 8 (vi)): D-4's own regression set moved into the ladder as deterministic CreateEngines-harness members — in-memory workspace deletes across compaction, S3-dumped (flushed) workspace deletes across compaction, late-added deletes, double/repeated compaction (O→P→P2), the dual-view control (frontier reads suppress the deleted rows; snapshot reads keep them hidden via original rowids) and commit-behavior invariance, all through the ordinary local path; no SQL-level compaction forcing is claimed — the hazard is code-verified and the validator is the deterministic harness member |
 | **R14-F2 the promised vanished-mark decline is not computable from the specified representation** | Verified: D-1's artifact wording gives the role enum's zero value (default `NestedBlock`) BOTH meanings — 'an unset field means "no current read"' — while D-10.3 required post-optimization detection of 'a locked-occurrence scan left ... at `ScanNestedBlock` outside the approved nested-block sets'; distinguishing those sets after optimization needs structural or table-identity inference, which same-table scalar subqueries lowered to LEFT joins defeat (R5-F1's own evidence; `collectLockTargets` recurses into BOTH LEFT children, query_builder.go:15070-15109), and O-D4 permits a presence boolean OR a role walk while O-D9 deferred the mechanism — so with one lost outer mark beside a valid nested occurrence the summary stays true, the statement mixes reads, and nothing in the specified inputs can institute the promised whole-statement decline | **Explicit role representation (rev-14, D-1 amendment; O-D9 RESOLVED):** construction (the `buildTable` role helper) emits ONLY the explicit set — `OuterLocking`, `OuterLockingWithExplicitSnapshot`, the NEW `NestedBlockExplicit` (nested by query-block provenance: subqueries, CTE bodies, grouping/UNION arms, nested blocks inside view bodies), or the covered-plan strip value set by the fulltext2 covered-plan mutation (its single allowlist now representationally distinguishable); the zero value means 'unset', is never produced for a scan of a completed above-gate plan, and a below-gate/legacy-bound plan carries no presence summary so zero decodes exactly as today (legacy wire behavior unchanged; the added enum values are additive and appear only above the D-7 gate). The declinature check is thereby a pure role walk over the bound plan: in a locking-presence plan, ANY unset-role scan is a vanished mark and declines the WHOLE statement BEFORE source publication; `NestedBlockExplicit` and covered-strip occurrences are exempt BY REPRESENTATION, so no join-shape or table-identity inference is needed and the same-table scalar-subquery plan stays decidable. Mandated (item 8 (iii)): the ablation member — a same-table scalar-subquery plan with exactly one outer role dropped beside a valid `NestedBlockExplicit` occurrence asserts whole-statement decline before any marked source binds/publishes, with both-marked and both-explicit-nested controls executing per contract; the typed corpus additionally asserts construction never emits the zero role |
 | **R14-F3 D-10's below-gate promise contradicted D-8's Run-time rejection** | Verified: D-10.1 and D-10.3 promised 'no new error classes' and 'below the capability gate, every marked plan executes today's semantics uniformly', while approved D-8 layer-3 mandates the validate-family member `validateLockingCurrentReadCapability` REJECTING a marked plan at Run admission below the gate with the NotSupported 'locking current-read execution requires rebinding (MORPC protocol version <MORPCVersionLockingCurrentRead>)' error at both call sites (cold compile compile2.go:169-181; every Run including reused prepared pipelines compile2.go:451-459); the window is REACHABLE because the frontend prepare-execute check (computation_wrapper.go:1482-1487: `protocolMismatch := prepareStmt.protocolVersion != 0 && prepareStmt.protocolVersion != protocolVersion` feeding `preparePlanNeedsRebuild`) runs before Run admission, so the negotiated capability can drop between the two; the two contracts could not both hold | **D-8 owns every capability transition (rev-14, D-10 compatibility clause scoped):** byte-identical conservation is asserted ONLY for unmarked statements, for G4-declined statements, and for statements whose plans were bound (or rebound) under the closed gate; a plan that was marked above the gate and arrives at Run admission below the gate is NOT a conservation path — prepared statements rebuild through the existing protocolVersion machinery into unmarked legacy plans (byte-identical only AFTER that rebuild), session-cached marked entries are eagerly evicted on observation, and the residual past-the-guards case fails the EXECUTE with D-8's NotSupported error exactly; this is the single new-error exception recorded in D-10.1, and no read is ever mixed on any transition path. Mandated (item 8 (vii)): the deterministic capability-drop transition members — a drop landing between the frontend protocol check (computation_wrapper.go:1482-1487) and Run admission (compile2.go:451-459), and the residual past-the-guards case, asserting rebuild-or-reject per D-8 exactly (rebuild produces an unmarked byte-identical plan; the residual fails with the exact terminal error); never a mixed execution |
+| **R15-F1 the rev-3–14 cluster capability gate violates the repository's shutdown-only upgrade contract** | Verified at the repository contract, the merge base and the delivered head. Contract: `.agents/skills/mo-dev/references/upgrade-compatibility.md` (identical at merge base `9e29011e73`) — "MatrixOne supports shutdown upgrade only", "Do not add a per-feature `MORPCVersion` constant, bump `MORPCLatestVersion`, or gate a feature on … any other 'all peers support X' capability check", "Do not add legacy encode/decode paths, neutral fallbacks, or downgraded plans for an older peer", "Adding features, fields, operators, or functions is never by itself a reason to bump", and a new or changed proto field "needs no version gate". Delivered head: `pkg/defines/const.go:197-198` adds `MORPCVersion135` and raises `MORPCLatestVersion` over the base high-water 134; `pkg/sql/plan/locking_current_read.go:25-46` adds `ClusterHasLockingCurrentRead`; `pkg/sql/plan/query_builder.go:13374-13388` conditions mark emission on it at bind time; `pkg/sql/compile/locking_current_read_capability.go:38-59` adds the `validateLockingCurrentReadCapability` Run-admission member with a NotSupported "requires rebinding" terminal error wired at `compile2.go:188/:474`; `pkg/frontend/mysql_cmd_executor.go:4545-4548/:7020-7021` adds gate-down session-cache eviction and publish guards; 9 test files carry gate/transition members. PR review blocked the design on this contradiction (aunjgr 2026-10-29, mo-bot rounds). | **D-7 rewritten as the single-version deployment contract (rev 15):** every gate/legacy/transition mechanism is DELETED from design and implementation — the allocated constant and `MORPCLatestVersion` bump, `ClusterHasLockingCurrentRead`, the bind-time gate, the validator member and both call sites, the session-cache publish/evict guards, and the gate/transition test members (full deletion list in D-7's rev-15 notes; the `PlanHasLockingCurrentRead` presence summary and its feature consumers stay). The feature is unconditional for every shape D-10/G4 admits; additive proto fields ride the wire with no negotiation; absents decode by plain-proto default to no-role/no-frontier. D-8's per-execution reset/freshness and effective-role resolution stay verbatim; the prepared-statement `protocolVersion` machinery stays owned by its existing consumers and is no longer consumed for this feature. Persisted state, backup/restore and the MySQL client protocol are untouched by this feature; the release boundary of the semantic change is the binary version itself, exactly like every other semantic fix. Supersedes: the gate halves of R5-F2/R7-F3/R13-F6/R14-F3, D-7 rev-3–14, D-8 layers 2-3, D-9 item 4's gate clause, D-10.1's new-error exception, R-6, and the gate members of R-8/R-11/item 4/item 5/item 6/item 8 (vii). |
+| **R15-F2 a marked retry recorded on an earlier target can be lost to a later target's direct SKIP LOCKED conflict** | Verified at the delivered head (PR-review P1, confirmed by trace): the marked-SI branch of `doLock` records its observation only through `opts.markingFloor` (`lock_op.go:524`) and returns an EMPTY refreshTS (:1377-1395 `recordMarkingFloor(newSnapshotTS)` then `return true, false, timestamp.Timestamp{}, nil`); `performLock` persists an RC-style retry inside the target loop only when refreshTS is non-empty (:575-580) and defers the marked conversion to after the loop (:598-606, `ctr.lockingReadFloor` + `ErrTxnNeedRetryLockingRead` only `if ctr.retryError == nil`); a later target returning `lockservice.ErrLockConflict` exits the loop first at :548-549; `callSkipLocked` then sees `ctr.retryError == nil` and converts the returned direct conflict into an ordinary skip (:242-252). Counterexample: RR `SELECT a.id,b.id FROM a JOIN b ON b.id=a.k WHERE a.id=1 FOR SHARE SKIP LOCKED`, plan locking `a` before `b`; at frontier F, a(1).k=1; after F a writer commits a(1).k=2; another transaction holds b(1) exclusively while b(2) is free. The a-grant records the newer-version floor with an empty refreshTS; the b(1) conflict then silently skips the candidate, and the statement can return an empty result instead of retrying at the floor to the current pair (1,2) — no receipt the current-read contract was ever honored for the pair. | **D-5 marked-retry persistence invariant (rev 15):** once any target of a `performLock` call has recorded a marked floor, the call must surface the locking-read retry on EVERY terminal path — a later skippable conflict may shrink the accepted row set but never erases an already-recorded retry obligation. The conversion runs at the point of recording, before the next target is inspected; `ctr.lockingReadFloor` max-aggregates across targets and the tokenized retry is (re)generated from the CURRENT max; definition-retry precedence is retained (`retryWithDefChangedError` dominates whenever set, before or after a marked floor); fatal `doLock` errors still return immediately; `callSkipLocked`'s existing conflict branch then surfaces the retry with `result.Batch = nil` (no accepted prefix published, so a downstream LIMIT cannot consume partial output). Mandated item 8 (vii) members: the RR marked-SI counterpart of `TestLockOpSkipLockedPreservesRefreshBeforeLaterTargetConflict` (floor + empty refreshTS on the first target, direct conflict on the second), the two-floor max-aggregation member, the both-order definition-precedence members, and the LIMIT/no-output assertion including the all-candidates-skipped shape. |
+
+Rev-15 global supersession (R15-F1): wherever earlier revisions of this
+document reference the allocated capability gate
+(`MORPCVersion135`/`MORPCVersionLockingCurrentRead`), below-gate/legacy
+behavior, capability transitions, or D-8's removed layers 2-3, revision 15
+supersedes those mechanisms with the single-version deployment contract.
+The authoritative rev-15 statements are this decision table (R15-F1/R15-F2),
+D-5's rev-15 paragraph, the rewritten D-7, D-8's rev-15 notes, and the amended
+D-9 item 4, D-10, section 6, R-6/R-8/R-11/R-17, item 4/5/6, item 8 (vii) and
+O-D5 clauses below.
 
 ## 1. Problem and evidence
 
@@ -214,7 +226,9 @@ Two further facts verified at base (rev-5):
   (computation_wrapper.go:1481-1490), per-Run cached-plan capability
   validators (compile2.go:451-459) and session-cache eager eviction
   (mysql_cmd_executor.go:4574-4583) — none of which revision 4 connected into
-  a per-execution admission contract for the marks.
+  a per-execution admission contract for the marks. (Rev-15, R15-F1: these
+  seams belong to other features' existing gates; this feature no longer
+  consumes them for capability purposes.)
 
 Two further facts verified at base (rev-6 — the fifth review's two
 read-source boundaries):
@@ -446,11 +460,11 @@ plans in all their shapes (the covered-path variant has NO base target today
 — a pre-existing coverage gap recorded by N6, conserved unchanged).
 
 G4 A locking statement executes with current-read semantics on every fragment
-it uses, or with today's semantics on every fragment — never a mixture, in any
-version mix (cluster capability gate) and across the lifetime of a cached or
-prepared plan: per-execution admission renews frontiers, masks and retry
-floors at every execution and retires them at Reset, and capability
-transitions rebuild or reject, never degrade silently.
+it uses, or with today's semantics on every fragment — never a mixture,
+across the lifetime of a cached or prepared plan (rev-15: no in-cluster
+version mix exists — shutdown-only upgrade, R15-F1): per-execution admission
+renews frontiers, masks and retry floors at every execution and retires them
+at Reset.
 
 Non-goals: N1 DML current-read visibility under SI; N2 locking PK-less tables
 (pre-existing: no targets, no locks); N3 `refreshTableSnapshot`/DDL fences
@@ -645,17 +659,20 @@ demonstrated on the index path this round), and the statement-level closure chec
 added in D-10/G4 makes a vanished mark a whole-statement decline rather than a
 silent snapshot co-occurrence.
 
-Rev-14 representation closure (R14-F2): the zero value's meaning is hereby
-narrowed for above-gate plans — construction emits ONLY the explicit set
+Rev-14 representation closure (R14-F2; rev-15 wording: the gate is deleted so
+"above-gate plan" reads "any completed plan of this feature"): the zero value's meaning is hereby
+narrowed — construction emits ONLY the explicit set
 (`OuterLocking`, `OuterLockingWithExplicitSnapshot`, the new
 `NestedBlockExplicit`, or the covered-plan strip value; the fulltext2 mutation
 sets the strip value instead of plain nested). An unset (zero) role is then
-never produced for the scans of a completed above-gate plan and can only be a
+never produced for the scans of a completed plan and can only be a
 mark lost through a rewrite; the G4 declinature check treats any unset-role
 scan inside a locking-presence plan as a vanished mark (whole-statement
 decline before source publication), while intentional nested blocks are exempt
-by representation. Legacy/below-gate behavior is unchanged (zero decodes as
-today; the new enum values are additive and appear only above the D-7 gate).
+by representation. Rev-15 amendment (R15-F1): the legacy/below-gate clause is
+deleted — zero stays the plain-proto wire default (it carries no gating
+meaning inside a cluster, where every service runs one binary), and the enum
+extension stays additive for wire-decode safety only.
 O-D9 is resolved by this mechanism; O-D4's summary storage shape stays
 bounded.
 
@@ -1225,53 +1242,106 @@ item 8 (iv) members — deterministic commit-between-acquisition and
 commit-while-waiting SQL cases on the issue's own shape plus the item-3 lockop
 matrix — gate stage-1 closure.
 
-### D-7 Cluster capability admission (binding gate; per-execution admission in D-8)
+Rev-15 marked-retry persistence (R15-F2, PR-review P1): persistence of the
+marked retry must not depend on how LATER targets of the same lock batch
+terminate. The stage-1 delivery records a marked floor only in the
+call-local accumulator (`opts.markingFloor` wiring, lock_op.go:524) and
+returns an EMPTY refreshTS from the marked-SI branch (:1377-1395);
+`performLock` converts it to `ctr.lockingReadFloor` + the tokenized retry
+only AFTER the target loop (:598-606), while a later target returning a
+direct `lockservice.ErrLockConflict` exits at :548-549 first, and
+`callSkipLocked` converts a returned conflict with `ctr.retryError == nil`
+into an ordinary skip (:242-252) — so a join whose first target discovered a
+newer version and whose second target conflicts on a stale candidate can
+silently drop the retry (the R15-F2 counterexample in the decision table).
+INVARIANT: once any target of a `performLock` call has recorded a marked
+floor, the call must surface the locking-read retry on EVERY terminal path;
+a later skippable conflict may shrink the accepted row set but never erases
+an already-recorded retry obligation. The conversion runs at the point of
+recording — before the next target is inspected — with `ctr.lockingReadFloor`
+max-aggregated across targets and the tokenized retry (re)generated from the
+CURRENT max; definition-retry precedence is retained (`retryWithDefChangedError`
+dominates whenever set, before or after a marked floor), and fatal `doLock`
+errors still return immediately. `callSkipLocked`'s existing conflict branch
+then surfaces the retry with `result.Batch = nil` — the already-published
+prefix/row-count rules keep a downstream LIMIT from consuming partial
+output. This changes WHEN the single D-5 retry is materialized into operator
+state, not its transport, aggregation-precedence or admission rules; the
+mandated item 8 (vii) members are restated below.
 
-Feature admitted only when the live `runtime.MOProtocolVersion` (oldest live
-service; unavailable → legacy; the `ClusterHasIndexProvenance` pattern,
-indexplugin/plan/capability.go:39-64) satisfies the NEWLY ALLOCATED
-`defines.MORPCVersionLockingCurrentRead`. Rev-7 allocation rule (R7-F3): the
-constant is allocated at integration-time STRICTLY ABOVE every version the
-finalized integration base defines — origin/main already consumes 130 for
-incomplete temporal string semantics (commit 5a813a324d, #30311;
-`MORPCLatestVersion = 130` at its const.go:169) while this design's base
-still ends at 129, so the fixed "130" of revisions 3-6 admitted unsupported
-peers; the concrete number is fixed when the integration base is finalized
-(≥131 against today's tip) and REVALIDATED at integration (asserted above
-the base's then-high-water including any versions landed mid-flight). Below
-the gate: no marks, no frontier, uniform today-behavior on every fragment;
-above: complete current-read. Legacy-decode, gate-pinning, the real 2-CN
-regression and a mixed-version matrix distinguishing an upstream-130 peer
-(temporal-string capable only — must NOT enable this feature) from a
-locking-current-read-capable peer remain mandated.
+### D-7 Deployment: single-version cluster (rev 15, R15-F1; supersedes the cluster capability gate of revisions 3-14)
 
-The bind-time gate decides **eligibility** only (D-1 marks exist on the bound
-plan). Whether each execution **runs** the current-read mode is decided per
-execution by D-8.
+MatrixOne supports shutdown upgrade only (the repository contract,
+`upgrade-compatibility.md`): peers inside one cluster always run the same
+binary, a new or changed proto field, plan node, operator or function needs
+no version gate, and adding features is never by itself a reason to bump
+`MORPCVersion`. The rev-3–14 gate design (the allocated
+`defines.MORPCVersionLockingCurrentRead`/`MORPCVersion135`, the bind-time
+gate, the below-gate legacy plans, the per-Run validate-family rejection,
+the prepared-statement protocolVersion rebuild consumption and the
+session-cache publish/evict guards) contradicted that contract and is
+DELETED from design and implementation: locking-read current-read is
+UNCONDITIONAL for every statement shape D-10/G4 admits. There is no
+eligibility-by-capability step; the D-1 roles and the plan-level presence
+summary are emitted at bind time for every plan, absent fields decode to
+no-role/no-frontier as a plain-proto property, and the additive
+plan/pipeline/sharding wire fields ride the existing RPC wire with no
+negotiation. The rev-7 allocation rule (R7-F3), the below-gate/legacy
+clauses, the mixed-version matrix and the gate UT mandates are superseded.
 
-### D-8 Per-execution admission and reset contract for cached and prepared executions (rev 5)
+What stays: every shutdown-compatibility line the contract itself names —
+persisted state, upgrade steps, backup/restore, and external boundaries
+(the MySQL client protocol; cross-cluster publication/CDC). This feature
+persists nothing new, mutates no on-disk format, adds no catalog upgrade
+step and does not change the client protocol; its cached plans are
+process-local. The release boundary of the semantic change is therefore
+the binary version itself, exactly like every other semantic fix.
 
-The review-identified seams (compile2.go:451-459 Run validators;
-computation_wrapper.go:1481-1490 per-EXECUTE protocol-mismatch rebuild;
-mysql_cmd_executor.go:4574-4583 session-cache eager eviction) define three
-layers, so a cached plan can never execute a mode inconsistent with the live
-cluster:
+Implementation removal plan (post-approval, enumerated as the contract for
+the implementation revision): delete `MORPCVersion135` and restore
+`MORPCLatestVersion = MORPCVersion134` (pkg/defines/const.go); delete
+`ClusterHasLockingCurrentRead` (pkg/sql/plan/locking_current_read.go) and
+the bind-time gate consumption (query_builder.go); delete the whole
+validator file `pkg/sql/compile/locking_current_read_capability.go` and
+both call sites (compile2.go cold compile and every Run); delete the
+session-cache publish-guard and gate-down eviction pair
+(mysql_cmd_executor.go); drop this feature's consumption of the
+prepared-statement protocolVersion machinery (the machinery stays owned by
+its existing consumers); delete the gate/transition test members while
+keeping every non-gate member (the cache-transition tests keep their
+publication/freshness members in gate-free form). `PlanHasLockingCurrentRead`
+and every feature consumer of the presence summary (compile.go,
+dependent.go admission/declinature/barrier paths) stay unchanged, as do
+all other features' existing gates (which belong to their own cleanup PRs
+per the contract's cleanup precedent rule).
+
+Whether each execution runs the current-read mode for a given occurrence
+is still decided per execution by D-8 — solely through the effective-role
+resolution (bind provenance against the executing SnapshotTS); no
+capability input exists anywhere in that decision.
+
+### D-8 Per-execution admission and reset contract for cached and prepared executions (rev 5; capability-transition layers deleted in rev 15 by R15-F1)
+
+Rev-15 scope: with the D-7 gate deleted, the layers below contract to ONE
+admission concern — a cached or prepared plan re-executes the current-read
+contract on EVERY execution with fresh per-execution state; there is no
+capability layer because there is no capability input:
 
 1. **Eligibility (bind time, immutable in the cached plan; effective mode per
    execution — rev-9, resolving R9-F3).** D-1's PROVENANCE marks plus one
    plan-level summary ("this plan expresses locking-current-read presence",
    derived from the outer-block marks; presence of an explicit snapshot
    clause with its TS H is stored as plan data, never resolved to a mode) are
-   captured when the plan is bound, under the then-live capability gate. The
+   captured when the plan is bound. The
    summary is derived from the plan object itself (zero cost for unmarked
    plans) and is what every later check reads; provenance facts never appear
    or disappear after bind. The EXECUTING transaction's SnapshotTS is not a
    bind input, so the EFFECTIVE role (eligible `OuterLocking` vs
    `HistoricalSnapshot`) is re-resolved from the provenance on EVERY
-   execution at the layer-3 admission boundary — first thing layer 3 does —
+   execution at the per-Run admission boundary — the first step of every Run
+   admission —
    with the reader's own predicate (H non-zero and Less(execSnapshotTS)),
-   before any marked-consumer setup, before the D-2 barrier, and before the
-   layer-3 validator reasons about the plan's marks: an execution in which
+   before any marked-consumer setup and before the D-2 barrier: an execution in which
    every candidate resolves ineligible skips barrier, F and every marked
    consumer exactly as today (the historical cohort engages on its own);
    an execution with at least one eligible candidate runs the marked path
@@ -1280,40 +1350,27 @@ cluster:
    (the cache/history mismatch the review demonstrated — a plan bound at
    S0 <= H cannot carry a stale eligible mode into an S1 > H execution —
    cannot occur).
-2. **Cache reuse and capability transitions.**
-   - Prepared statements: every EXECUTE compares `prepareStmt.protocolVersion`
-     (recorded at bind, computation_wrapper.go:1610) with the live
-     protocol version and rebuilds on ANY change in EITHER direction
-     (`protocolMismatch` :1483-1484 → `preparePlanNeedsRebuild` :938-940 →
-     `needRebuild` :1485 — verified machinery). Rebinding re-evaluates the
-     D-7 gate: upgrade transitions produce a newly marked plan; downgrades
-     produce an unmarked legacy plan. The recording gap `protocolVersion != 0`
-     (:1483) is covered for this feature by layer 3.
-   - Session plan cache: a marked plan is published only while the live gate
-     is up (the publish-side guard joins the existing per-wrapper
-     `protocolVersion` check, mysql_cmd_executor.go:6856-6863), and a cached
-     marked entry observed while the live gate is down is eagerly evicted at
-     lookup, exactly on the `cachedPlanForInput` eviction precedent
-     (:4574-4583), so it cannot survive a rollback-and-reupgrade cycle.
-     Entries bound below the gate are unmarked and keep base semantics for
-     their cache lifetime (bounded, documented divergence, same category as
-     other capability-gated cached features).
-3. **Per-Run admission (the backstop, crossed on EVERY execution path — and,
-   rev-9, the FIRST STEP of every marked admission: effective-role
-   resolution).** The admission first re-resolves each provenance candidate's
-   EFFECTIVE role against the EXECUTING transaction's SnapshotTS (D-1,
-   R9-F3), so the mode is consistent before any consumer setup. A
-   new validate-family member, `validateLockingCurrentReadCapability(proc,
-   pn)`, derives the plan's requirement from the summary and rejects a marked
-   plan with a NotSupported "locking current-read execution requires
-   rebinding (MORPC protocol version <MORPCVersionLockingCurrentRead>)" error
-   when the live negotiated version is below the ALLOCATED gate (D-7,
-   rev-7: the allocated constant, not the colliding 130) — mirroring
-   `validateJSONStringConsumerProtocol` / `validateRemoteExpressionFeatures`
-   (remoterun.go:2362-2387) at both call
-   sites: cold compile (compile2.go:169-181) and every Run including reused
-   prepared pipelines (compile2.go:451-459). Unmarked plans always pass
-   (zero behavioral delta below the gate).
+2. **Cache reuse (rev 15, R15-F1 — the capability-transition layer is
+   deleted).** Prepared statements keep the existing protocolVersion
+   record/rebuild machinery owned by its other-feature consumers; this
+   feature adds no comparison of its own (a marked plan is not
+   capability-dependent, so no rebuild class of this feature exists).
+   Session plan cache: marked entries are published exactly as unmarked
+   entries are today; there is no publish-side capability guard and no
+   gate-down eviction. A cached or prepared marked plan stays marked for
+   its cache lifetime and re-executes the current-read contract per
+   execution under D-8's freshness rules.
+3. **Per-Run admission (crossed on EVERY execution path — first step:
+   effective-role resolution only).** The admission re-resolves each
+   provenance candidate's EFFECTIVE role against the EXECUTING transaction's
+   SnapshotTS (D-1, R9-F3), so the mode is consistent before any consumer
+   setup. Rev-15: the validate-family capability member
+   `validateLockingCurrentReadCapability` and its NotSupported
+   "requires rebinding" rejection at both call sites (cold compile
+   compile2.go:169-181; every Run including reused prepared pipelines
+   compile2.go:451-459) are DELETED (R15-F1); no capability validator
+   exists for this feature, and no plan of this feature can reach Run in a
+   mode requiring one.
 
 Freshness and retirement (per execution — the R5-F2 core):
 
@@ -1337,9 +1394,10 @@ Freshness and retirement (per execution — the R5-F2 core):
   (R-4) is joined by a between-executions commit regression for the reused
   path (R-8 tests).
 - `Compile.Reset`'s contract itself gains the eligibility check: the Reset
-  path is valid for this feature only while the execute-time admission
-  (layer 3) passes; a rejection there fails the EXECUTE before pipelines
-  start. This preserves the call order of the existing machinery: admission
+  path is valid for every plan of this feature (rev-15: no capability
+  precondition exists; effective-role resolution runs per execution as the
+  first Run step). This preserves the call order of the existing machinery:
+  admission
   runs before runC proceeds (compile2.go:451-459 position).
 
 Rev-13 closure (pool generations — R13-F1): the retirement rule above executes
@@ -1360,13 +1418,12 @@ evidence; SQL-level reproducibility is explicitly NOT required for closure
 because which recycled object the allocator returns is not deterministic from
 SQL.
 
-Rev-14 (R14-F3): D-8's rebuild-or-reject is the BINDING contract for every
-capability transition in D-10 — byte-identical conservation never applies to
-a marked plan observed below the gate at Run admission; the transition window
-between the frontend protocol check (computation_wrapper.go:1482-1487) and
-Run admission (compile2.go:451-459) is covered by the layer-2 rebuild
-machinery plus the layer-3 validator, and item 8 (vii)'s transition members
-pin it. D-8's own text is unchanged.
+Rev-14 (R14-F3): SUPERSEDED in rev 15 by R15-F1. The rebuild-or-reject
+contract, its frontend-to-Run transition window and its item 8 (vii)
+transition members are deleted with the gate: inside a cluster no capability
+transition exists, so there is no transition class and no new-error
+exception at all; item 8 (vii) is restated as the marked-retry persistence
+members of R15-F2.
 
 ### D-9 Sharded-read visibility transport (rev 6/7, resolving R6-F2 + R7-F4)
 
@@ -1425,12 +1482,12 @@ N7 keeps shard placement/replication/lifecycle out of scope.
    /-1147-1158) — applied by every ReadNext of the stream and released only
    with it. The coordinator's local part keeps the ordinary local mask
    input (D-4). Never persisted at the receiver; nil on unmarked requests.
-4. **Capability and cancellation.** The additive `ReadParam` fields and the
-   `ReadAt(F)` semantics exist only above the ALLOCATED D-7 gate
-   (`MORPCVersionLockingCurrentRead`; below the gate there
-   are no marked occurrences, hence no coordinator ever emits them; the
-   receiver's decode of absent additive fields is legacy-identical — pinned
-   by the gate UT extended to the sharding codec). Forwarded waits are
+4. **Field safety and cancellation (rev-15 retitle; no capability negotiation —
+   R15-F1).** The additive `ReadParam` fields and the
+   `ReadAt(F)` semantics need no version gate: both ends of every in-cluster
+   exchange run one binary, the fields carry plain-proto-safe zero values,
+   and absent fields decode to an unmarked reader — a plain-proto property
+   pinned by the existing decode members. Forwarded waits are
    bounded by the execution's statement context at the coordinator; the
    receiver side is bounded by the existing stream lease; no reader build
    starts before the barrier completes (D-2), so no
@@ -1439,7 +1496,7 @@ N7 keeps shard placement/replication/lifecycle out of scope.
    sweep; next-after-cancel — asserting pin immutability, per-ReadNext mask
    usage and zero leaked state after terminal cleanup.
 
-### D-10 Staged delivery contract (rev 13, amended in rev 14 per R14-F1/F2/F3; the partial-rollout gate rev-12 did not contain)
+### D-10 Staged delivery contract (rev 13, amended in rev 14 per R14-F1/F2/F3 and in rev 15 per R15-F1/R15-F2; the partial-rollout gate rev-12 did not contain)
 
 The implementation round delivered a working subset of this document's mechanism
 set and the review correctly blocked it: a partial rollout without a contract.
@@ -1450,11 +1507,11 @@ remainder, and what evidence closes a stage.
 1. **Non-mixing policy.** A locking statement under REPEATABLE READ executes the
    FULL approved current-read contract for every locked occurrence, or the WHOLE
    statement conserves today's snapshot semantics (locks exactly as today on the
-   same rows, reads exactly as today). The single exception to "no new error
-   classes" is owned by approved D-8 (R14-F3): a marked plan that survives past the
-   prepared/cache guards to a Run where the live gate has dropped fails with D-8's
-   NotSupported "requires rebinding" terminal error instead of executing mixed
-   reads. No statement mixes current-read and snapshot occurrences of the locked
+   same rows, reads exactly as today). Rev-15 (R15-F1): the formerly recorded
+   exception to "no new error classes" is DELETED with the gate — this design
+   introduces no new terminal error class, and the reserved NotSupported
+   "requires rebinding" rejection path is removed with the validator that
+   produced it. No statement mixes current-read and snapshot occurrences of the locked
    targets; no statement survives a partially failing bind.
 
 2. **Stage-1 admission set (the primary relation-read surface, complete):**
@@ -1468,11 +1525,11 @@ remainder, and what evidence closes a stage.
    through D-4's ordinary-local transfer mask consumed by every admitted
    marked execution over this surface (R14-F1: delete-free executions compute
    zero mask work per D-6; delete-carrying executions ALWAYS compute it), and
-   marked-SI revalidation with the retry contract (D-5, R13-F4) — gated by
-   D-7's ALLOCATED capability
-   version (the constant, the bind-time gate, the per-Run validator in the
-   validate family, the prepared-statement protocolVersion rebuild and the
-   session-cache publish/evict guards — D-8 layers 1-3, R13-F6).
+   marked-SI revalidation with the retry contract (D-5, R13-F4) — admission is
+   UNCONDITIONAL for this set (rev-15, R15-F1: no capability constant, no
+   bind-time gate, no per-Run validator, no per-feature protocolVersion
+   rebuild consumption and no session-cache publish/evict guard exists;
+   D-8's per-execution admission/reset stays).
 
 3. **Refusal/conservation closure (G4 completion).** Any locked occurrence the
    admission predicate cannot fully serve — refused relation kinds (mock,
@@ -1483,25 +1540,23 @@ remainder, and what evidence closes a stage.
    marked source is published. The declinature check is the explicit-role walk
    of R14-F2: in a locking-presence plan, an UNSET (zero-value) scan role can
    only be a lost mark — construction never emits the zero value for a
-   completed above-gate plan — so any unset-role scan declines the statement,
+   completed plan — so any unset-role scan declines the statement,
    while `NestedBlockExplicit` and covered-strip occurrences are exempt BY
    REPRESENTATION; no post-optimization structural inference over join shapes
    or table identity is needed, so same-table scalar-subquery/LEFT-lowered
-   plans stay decidable. Byte-identical conservation is asserted for unmarked
-   statements everywhere, for statements whose plans were bound or rebound
-   under the closed gate, and for G4-declined statements. A plan that was
-   marked above the gate and is observed at Run admission below the gate is NOT
-   a conservation path: it follows approved D-8's rebuild-or-reject verbatim
-   (prepared-statement protocolVersion rebuild into an unmarked legacy plan;
-   session-cache eviction of the marked entry; the residual past-the-guards
-   case failing the EXECUTE with the NotSupported "requires rebinding" error)
-   — D-10 inherits D-8's wording as the binding transition contract (R14-F3).
+   plans stay decidable. Rev-15 amendment (R15-F1): the closed-gate
+   conservation clause and the run-time transition sentence are DELETED —
+   byte-identical conservation is asserted for unmarked statements everywhere
+   and for G4-declined statements, a bound plan never changes admission
+   mid-life (no capability input exists), so there is no transition class
+   and no residual past-the-guards case.
 
 4. **Ownership (stage boundary).** Stage-1 owns D-1 complete (with rev-14's
    explicit-role representation), D-2, D-3's carrier-consistent surfaces,
    D-4's ordinary-local transfer mask with its full regression set (R14-F1),
-   D-5, D-7, D-8's three layers with pool-generation retirement and the
-   capability-transition contract (R14-F3), G4 statement closure via the
+   D-5 (with rev-15's marked-retry persistence invariant, R15-F2), the rev-15
+   single-version deployment contract (D-7, R15-F1), D-8's per-execution
+   admission/reset with pool-generation retirement (R13-F1), G4 statement closure via the
    explicit-role walk, and item 8's ladder (i)-(ix). Stage-2 owns the
    ALREADY-APPROVED remaining mechanisms, unchanged and not redesigned here:
    the isolated execution view and re-evaluation family with R12-F1's
@@ -1526,7 +1581,8 @@ remainder, and what evidence closes a stage.
    (in-memory and S3-dumped own deletes across compaction, late-added deletes,
    repeated compaction — R14-F1; deterministic CreateEngines-harness members,
    no SQL-level compaction forcing claimed), the vanished-mark ablation member
-   (R14-F2) and the capability-drop transition members (R14-F3). No
+   (R14-F2) and the marked-retry persistence members (R15-F2; rev-15: the
+   capability-drop transition members are deleted with the gate, R15-F1). No
    repetition-based or narrative-only closure counts.
 
 ### D-6 Bounds summary
@@ -1535,8 +1591,8 @@ One barrier wait per marked statement execution (addition to the cost
 statement); zero
 shared-state mutation; zero mask work for delete-free transactions; mask
 bounded per execution; retries monotone and bounded by the statement deadline;
-per-execution admission is O(1) on unmarked plans and one capability read plus
-(when admitted) one barrier acquisition + one ISOLATED execution-view
+per-execution admission is O(1) on unmarked plans and (rev-15: no capability
+read exists — R15-F1) one barrier acquisition + one ISOLATED execution-view
 construction per marked execution (bounded relation reconstruction in the
 view's fresh private `tableCache` — the parent's warm cache is reused by
 unmarked reads untouched; entry clones and pin-ledger entries only for
@@ -1572,28 +1628,29 @@ execution's retirement, leaving the parent transaction (operator identity,
 cached relations, write data) and every following execution untouched — all
 execution-scoped,
 acquired at execution admission (D-2/D-8) and retired at Reset/execution end;
-locks unchanged; workspace untouched for commit purposes; mixed-version
-uniform-legacy below the gate; additive proto fields default to no-role/no-
-frontier (rev-9: the wire carries only presence provenance and per-execution
-state; absence of the execution fields decodes legacy-identically below the
-gate, and the per-execution effective role needs NO wire field at all — it
-resolves locally on both ends from the same plan data plus each side's
-executing SnapshotTS). The plan cache is affected in bounded and precedent-following ways
-(revision 5 resolves R5-F2): prepared plans record bind-time protocol state
-and rebuild on any live protocol transition (existing machinery), marked
-session-cache entries are published only above the gate and eagerly evicted
-when observed below it (existing eviction pattern), and the per-Run
-capability validator (new, validate-family shape) rejects the residual
-mismatch cases with "requires rebinding" errors. Unmarked and below-gate
-plans remain byte-identical in behavior to today.
+locks unchanged; workspace untouched for commit purposes; additive proto
+fields default to no-role/no-frontier (rev-9; rev-15: the wire carries only
+presence provenance and per-execution state, absence of the execution fields
+decodes identity to "no role" as a plain-proto property — both ends of every
+in-cluster exchange run one binary under the shutdown-only upgrade contract,
+so no below-gate decode contract exists; the per-execution effective role
+needs NO wire field at all — it resolves locally on both ends from the same
+plan data plus each side's executing SnapshotTS). Rev-15 plan-cache contract
+(R15-F1): prepared statement plans keep the existing protocolVersion
+record/rebuild machinery owned by its other-feature consumers; a marked
+plan is a permanent property of its generation — there is no
+capability publish-guard, no gate-side eviction and no per-Run capability
+validator (all deleted). A cached or prepared marked plan re-executes the
+current-read contract on every EXECUTE with a fresh frontier (D-8).
+Unmarked plans remain byte-identical in behavior to today.
 
 Rev-13 additions (R13-F1, D-10): per-execution state is retired at the
 pool-recycle boundary (`clear`) as well as in `Reset`, each retirement stamping
 a monotonic execution-read epoch that gates the cached carrier (any missed
 boundary degrades to re-acquisition, never reuse); statement-wide decline under
 D-10 replaces silent partial binding for shapes outside the live stage's
-admission set; capability compatibility stays uniform-legacy below the
-allocated version on every fragment and every statement. All other
+admission set (rev-15: the uniform-legacy capability clause is deleted with
+the gate, R15-F1). All other
 state-lifecycle properties are unchanged.
 
 ## 7. Residual risks and implementation-time verification
@@ -1620,23 +1677,24 @@ state-lifecycle properties are unchanged.
   EXISTS/IN, view-inheritance and CTE controls, plus the lock-target-set
   conservation assertion (target lists byte-identical to base for every corpus
   plan).
-- R-6 capability gate (rev-7 restated): the gate is the ALLOCATED
-  `MORPCVersionLockingCurrentRead` (strictly above the integration base's
-  high-water — upstream already consumes 130 for temporal-string semantics,
-  commit 5a813a324d), revalidated at integration; legacy-decode tests,
-  gate-pinning UT, real 2-CN
-  regression (retained); per-Run admission validator UT (marked plan below gate
-  → "requires rebinding" at both call sites; unmarked plan always passes).
+- R-6 deployment (rev-15 restated, R15-F1 — supersedes the rev-7
+  capability-gate row): MatrixOne is shutdown-upgrade-only, so no per-feature
+  gate exists; the gate constant, bind-time gate, per-Run validator and their
+  mandated UTs (legacy-decode, gate-pinning, validator rejection) are deleted
+  with the mechanism. Residual risk retained: the additive wire/pipeline
+  fields keep plain-proto-safe zero values ("no role/no frontier"), exercised
+  by the existing decode members; the deletion is pinned by the change closure
+  staying green and the real 2-CN regression of R-11/multi-CN members
+  (retained, gate-free).
 - R-7 scope: added barrier plumbing and the local-mask input atop revision 3;
   owner paths enumerated per component; same design-gated classification.
-- R-8 per-execution freshness and reuse (R5-F2): repeated prepared RR
+- R-8 per-execution freshness and reuse (R5-F2; rev-15: the
+  capability-transition members are deleted with the gate, R15-F1): repeated
+  prepared RR
   EXECUTEs with peer commits between executions (row must be discovered and
   returned at each execution — stale-frontier counterexample); stubbed-barrier
   acquisition count == one per execution; per-execution retirement of frontier/
-  mask/floors in Reset; capability transition matrix low→high (rebind produces
-  marks; legacy-cached entry behavior documented) and high→low (EXECUTE
-  rebuild produces an unmarked plan; a surviving marked cached plan is
-  rejected per D-8 layer 3, never silently degraded).
+  mask/floors in Reset.
 - R-9 provenance class coverage (R5-F1 residual): the construction-capture
   predicate must classify every bind site the corpus exercises; sites
   discovered during implementation that bypass `buildTable` (e.g. table
@@ -1670,8 +1728,8 @@ state-lifecycle properties are unchanged.
   same ISOLATED-pair construction over its reconstruction (R8-F1 rules); the
   mask is consumed only
   through the existing ShardingRemote channel; absent additive fields decode
-  legacy-identically below the allocated gate; coordinator cancellation drops
-  its side and the stream ends by lease; delegate/handle harness UTs
+  to an unmarked reader by plain-proto default (rev-15: both ends run one
+  binary, R15-F1); coordinator cancellation drops its side and the stream ends by lease; delegate/handle harness UTs
   crossing actual RPC boundaries (build→next→close; build→abandoned→sweep;
   next-after-cancel) plus the multi-CN witness pin the boundary.
 - R-12 retry-token integrity (R7-F5): tokens are validated before any
@@ -1821,8 +1879,8 @@ state-lifecycle properties are unchanged.
   transaction-created relations, remote-marked scopes, DDL-spanning corners)
   still exhibit the REPORTED defect by design — stage-1 conserves today's
   snapshot semantics there and D-10's ownership table records who unblocks
-  each shape; clusters below the allocated capability version behave
-  uniformly as today on every fragment regardless of marks. The archived
+  each shape (rev-15: the below-gate uniform clause is deleted with the
+  gate — R15-F1). The archived
   first-replay dual-role miss (73/74, implementation round) remains
   unexplained by existing artifacts (the failing assertion text was
   overwritten before archival; re-verified this round), so stage-1 closure
@@ -2056,10 +2114,11 @@ without resurrecting own-deleted rows across a compaction inside
 stage-2 items, the isolated-execution-view family remaining there. (2) The
 vanished-mark promise becomes computable through the explicit-role
 representation (R14-F2), amending D-1's artifact wording only in that the
-zero value means "unset" for above-gate plans rather than "no current read";
-the enum extension is additive and gate-bounded. (3) The below-gate
-compatibility promise is scoped to plans bound under the closed gate, with
-D-8's rebuild-or-reject binding every mid-flight transition (R14-F3). No
+zero value means "unset" for plans of this feature rather than "no current read"
+(the gate qualifier is gone — rev-15);
+the enum extension is additive. (3) Superseded in rev-15 (R15-F1): the
+below-gate promise and the mid-flight rebuild-or-reject are deleted with the
+gate. No
 rev-13 mechanism was unsound; these rows supersede the corresponding D-10
 sentences only.
 
@@ -2183,18 +2242,14 @@ shared mo-tester repository and shared config untouched; isolated report dirs.
    ordered frontier); `DataSource.Timestamp == admitted frontier` at scope
    assembly for marked scans (ordinary and INDEX_SEARCH_SCAN scopes); retry
    admission monotone with concrete floors;
-   `SnapshotTS` never mutated on any exit path; gate-pinning below
-   MORPCVersion130 emits no marks/frontier — rev-7: gate-pinning below the
-   ALLOCATED `MORPCVersionLockingCurrentRead` emits no marks/frontier; NEW (R5-F2) per-execution
-   admission UTs: the Run-admission validator at both call sites (marked plan
-   + gate below the allocated version → "requires rebinding" NotSupported;
-   unmarked plan always
-   passes), a repeated-Reset execution harness asserting stubbed-barrier
+   `SnapshotTS` never mutated on any exit path; rev-15 (R15-F1): the
+   gate-pinning UTs, the Run-admission-validator UTs and the
+   capability-transition/mixed-version matrix members are DELETED with the
+   mechanism; retained NEW (R5-F2) per-execution
+   UTs: a repeated-Reset execution harness asserting stubbed-barrier
    acquisitions == one per execution and per-execution retirement of frontier/
-   mask/floors, and the capability-transition matrix through the existing prepareStmt machinery,
-   extended (R7-F3) with the mixed-version assertion that an upstream-130 peer
-   (temporal-string only) does NOT enable the feature while an
-   allocated-gate peer does.
+   mask/floors; plus the marked-retry persistence members of item 8 (vii)
+   (R15-F2) through the lockop matrix.
 4b. **UT search-plugin boundary (R6-F1, rev-8 restated)**: with a stubbed
    searcher — the pin-helper UT FIRST drives the ACTUAL helpers with
    F > SnapshotTS: the execution cohort
@@ -2355,18 +2410,18 @@ shared mo-tester repository and shared config untouched; isolated report dirs.
    mask is consumed through the existing ShardingRemoteDataSource
    extraTombstones
    channel on each ReadNext; a lost/abandoned build (coordinator gone) frees
-   the stream by the existing lease; absent additive fields decode
-   legacy-identically below the allocated gate (codec gate-pinning); and
+   the stream by the existing lease; absent additive fields decode to an
+   unmarked reader by plain-proto default (rev-15: the codec gate-pinning
+   clause is deleted with the gate, R15-F1); and
    lifecycle cases cross actual RPC boundaries: build → next(s) → close,
    build → abandoned → lease sweep, next-after-cancel — asserting pin
    immutability, per-ReadNext mask usage, and zero leaked state after
    terminal cleanup.
 6. **Multi-CN real regression**: 2-CN isolated launch; persisted-data join of
    two locked outer tables with peer commits to both across the window; all
-   fragments current; subsequent plain RR reads unchanged; legacy-decode
-   behavior tests; gate-forced-low uniform-legacy run; high→low capability
-   drop observed between prepared EXECUTEs (D-8: rebuild or reject, never
-   mixed execution); NEW (R6-F2) the public sharded current-read witness —
+   fragments current; subsequent plain RR reads unchanged (rev-15, R15-F1:
+   the legacy-decode tests, the gate-forced-low uniform-legacy run and the
+   high→low capability-drop member are deleted with the gate); NEW (R6-F2) the public sharded current-read witness —
    with the shard service enabled and a sharded table whose shard is not
    local to the executing CN, the two-session locking scenario asserts the
    FORWARDED shard read observes the peer commit at the coordinator's
@@ -2414,16 +2469,23 @@ shared mo-tester repository and shared config untouched; isolated report dirs.
    (frontier reads suppress the deleted rows while snapshot reads keep them
    hidden via original rowids), late-added deletes, double/repeated compaction
    (O→P→P2) and commit-behavior invariance;
-   (vii) capability-gate members — below-gate uniform legacy on every
-   fragment for plans bound or rebound under the closed gate (including
-   stage-1-admitted statement shapes), above-gate enable, and
-   prepared/session-cache protocolVersion transitions in BOTH directions —
-   plus the R14-F3 capability-drop transition members: a drop landing between
-   the frontend protocol check (computation_wrapper.go:1482-1487) and Run
-   admission (compile2.go:451-459), and the residual past-the-guards case,
-   asserting rebuild-or-reject per D-8 exactly (the rebuild produces an
-   unmarked byte-identical plan; the residual fails the EXECUTE with the
-   exact NotSupported requires-rebinding error); never a mixed execution;
+   (vii) marked-retry persistence members (rev-15, R15-F2 — replacing the
+   deleted capability-gate/drop members of R14-F3, whose members are
+   removed with the gate per R15-F1): the RR marked-SI counterpart of
+   `TestLockOpSkipLockedPreservesRefreshBeforeLaterTargetConflict` — two
+   marked FOR SHARE targets in one batch where the first target's grant
+   records a marking floor and returns an EMPTY refreshTS and a later target
+   returns a direct `lockservice.ErrLockConflict` — asserting
+   performLock/callSkipLocked surface the locking-read retry instead of
+   skipping the candidate (ctr.retryError carries the tokenized floor);
+   a two-floor max-aggregation member (both targets record floors; the
+   surfaced floor/error carries the MAX, and re-persisting a lower floor
+   never regresses the state); both-order definition-precedence members
+   (definition change recorded before, and after, a marked floor —
+   `retryWithDefChangedError` dominates in both orders); and the
+   LIMIT/no-output assertions — the retry returns before any accepted
+   prefix is published (`result.Batch = nil`, no partial rows consumed by
+   a downstream LIMIT), including the all-candidates-skipped shape;
    (viii) an ANIMATED dual-role oracle — the watched row receives DISTINCT
    committed values per re-read so all-current and all-snapshot executions
    both FAIL, replacing the stable-value oracle;
@@ -2456,9 +2518,9 @@ shared mo-tester repository and shared config untouched; isolated report dirs.
   vs a wrapped sub-message), and the receiver pin's exact carrier over its
   reconstruction (a read-only view op at F): all variants
   are sound under D-9's rules (stream-lifetime ownership under the existing
-  lease, gate-admitted, absent-field
-  legacy decode); chosen at implementation with the harness UTs pinning the
-  pick.
+  lease, plain-proto-safe zero values with no
+  capability admission — rev-15, R15-F1); chosen at implementation with the
+  harness UTs pinning the pick.
 - O-D7 (rev-6) plugin TS-pin carrier — **RESOLVED in rev-7 (R7-F1)**: the
   frontier rides its own execution-TS field on the search scan (plan
   `IndexSearchScan` + the Scope-wire DataSource), NOT the named-snapshot
