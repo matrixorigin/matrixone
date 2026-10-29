@@ -69,6 +69,19 @@ select id from ft_nuk where match(body) against('delta') order by id;
 select id from ft_nuk where match(body) against('beta') order by id;
 drop table ft_nuk;
 
+-- ODKU must delete using every old dependency of a compound partition key.
+create table ft_compound_odku(id int primary key, bucket int, salt int, body text, fulltext fti_compound_odku(body)) partition by range(bucket + salt)(partition o0 values less than (10), partition o1 values less than maxvalue);
+insert into ft_compound_odku values (1, 1, 20, 'odku old alpha');
+insert into ft_compound_odku values (1, 1, 0, 'odku moved beta') on duplicate key update salt = values(salt), body = values(body);
+select count(*), min(bucket), min(salt) from ft_compound_odku where id = 1;
+select id from ft_compound_odku where match(body) against('alpha') order by id;
+select id from ft_compound_odku where match(body) against('beta') order by id;
+insert into ft_compound_odku values (1, 1, 20, 'odku returned gamma') on duplicate key update salt = values(salt), body = values(body);
+select count(*), min(bucket), min(salt) from ft_compound_odku where id = 1;
+select id from ft_compound_odku where match(body) against('beta') order by id;
+select id from ft_compound_odku where match(body) against('gamma') order by id;
+drop table ft_compound_odku;
+
 -- Compound partition routing must use old and new values for every expression
 -- dependency when REPLACE removes and inserts the parent and FULLTEXT postings.
 create table ft_compound_replace(id int primary key, bucket int, salt int, body text, fulltext fti_compound_replace(body))

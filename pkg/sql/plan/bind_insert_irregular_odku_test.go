@@ -493,6 +493,40 @@ func TestPartitionedFulltextConflictDMLKeepsOldAndNewPartitionKeys(t *testing.T)
 	}
 }
 
+func TestODKUCompoundPartitionRoutesBothDependencies(t *testing.T) {
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
+	base := mock.ctxt.tables["docs_ft"]
+	base.FeatureFlag |= features.Partitioned
+	key, err := BindFuncExprImplByPlanExpr(mock.ctxt.GetContext(), "+", []*Expr{
+		{Typ: base.Cols[0].Typ, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{Name: "id", ColPos: 0}}},
+		{Typ: base.Cols[2].Typ, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{Name: "payload", ColPos: 2}}},
+	})
+	require.NoError(t, err)
+	cond, err := BindFuncExprImplByPlanExpr(mock.ctxt.GetContext(), ">=", []*Expr{key, makePlan2Int32ConstExprWithType(0)})
+	require.NoError(t, err)
+	base.Partition = &planpb.Partition{PartitionDefs: []*planpb.PartitionDef{
+		{Def: cond}, {Def: makePlan2BoolConstExprWithType(false)},
+	}}
+	logicPlan, err := runOneStmt(mock, t, "insert into constraint_test.docs_ft(id, body, payload, embedding) values (1, 'incoming', -5, '[1,2,3]') on duplicate key update payload = values(payload)")
+	require.NoError(t, err)
+	var parents int
+	for _, node := range logicPlan.GetQuery().Nodes {
+		if node == nil || node.NodeType != planpb.Node_MULTI_UPDATE {
+			continue
+		}
+		for _, ctx := range node.UpdateCtxList {
+			if ctx.TableDef.TblId != base.TblId || ctx.PartitionIndexCtx != nil {
+				continue
+			}
+			parents++
+			require.Len(t, ctx.PartitionCols, 4, "delete and insert must each route both partition-expression dependencies")
+			require.NotEqual(t, ctx.PartitionCols[0].ColPos, ctx.PartitionCols[2].ColPos)
+			require.NotEqual(t, ctx.PartitionCols[1].ColPos, ctx.PartitionCols[3].ColPos)
+		}
+	}
+	require.Equal(t, 1, parents)
+}
+
 // TestReplaceMergedScanCapturesPartitionDependency pins the merged-main-scan
 // REPLACE path: when the parent is partitioned and carries classic FULLTEXT,
 // every old partition-expression dependency must be present in

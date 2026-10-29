@@ -4205,8 +4205,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 	delColName2Idx := make(map[string][2]int32)
 	valueChangeMarkerPosByGroup := make(map[string]int32, len(irregularValueChangeFilters))
 	oldPartitionRoutePos := int32(-1)
-	oldPartitionKeyPos := int32(-1)
-	partitionKeyName := ""
+	var oldPartitionKeyPositions, newPartitionKeyPositions []int32
 
 	if newProjLen > len(selectNode.ProjectList) {
 		newProjList := make([]*plan.Expr, 0, newProjLen)
@@ -4479,13 +4478,12 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 		}
 
 		if moveFulltextPartition {
-			partitionKeyName = getPartitionColName(tableDef.Partition.PartitionDefs[0].Def)
-			keyPos, ok := tableDef.Name2ColIndex[partitionKeyName]
-			if !ok {
-				return 0, moerr.NewInternalError(builder.GetContext(), "cannot locate old partition key for FULLTEXT ODKU")
+			partitionExprCols := make(map[string]struct{})
+			for _, partitionDef := range tableDef.Partition.PartitionDefs {
+				if partitionDef != nil {
+					collectPartitionExprColumnNames(partitionDef.Def, tableDef, partitionExprCols)
+				}
 			}
-			oldKey := &plan.Expr{Typ: tableDef.Cols[keyPos].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: scanTag, ColPos: keyPos}}}
-			newKey := &plan.Expr{Typ: oldKey.Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: selectTag, ColPos: colName2Idx[tableDef.Name+"."+partitionKeyName]}}}
 			rowIDPos := tableDef.Name2ColIndex[catalog.Row_ID]
 			isNew, routeErr := BindFuncExprImplByPlanExpr(builder.GetContext(), "isnull", []*plan.Expr{
 				{Typ: tableDef.Cols[rowIDPos].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: scanTag, ColPos: rowIDPos}}},
@@ -4493,12 +4491,28 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 			if routeErr != nil {
 				return 0, routeErr
 			}
-			oldKey, routeErr = BindFuncExprImplByPlanExpr(builder.GetContext(), "if", []*plan.Expr{isNew, newKey, oldKey})
-			if routeErr != nil {
-				return 0, routeErr
+			// The executor maps route columns in physical table-column order.
+			for keyPos, col := range tableDef.Cols {
+				if _, ok := partitionExprCols[col.Name]; !ok {
+					continue
+				}
+				newPos, ok := colName2Idx[tableDef.Name+"."+col.Name]
+				if !ok {
+					return 0, moerr.NewInternalError(builder.GetContext(), "cannot locate partition dependency for FULLTEXT ODKU")
+				}
+				oldKey := &plan.Expr{Typ: col.Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: scanTag, ColPos: int32(keyPos)}}}
+				newKey := &plan.Expr{Typ: col.Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: selectTag, ColPos: newPos}}}
+				deleteKey, bindErr := BindFuncExprImplByPlanExpr(builder.GetContext(), "if", []*plan.Expr{DeepCopyExpr(isNew), newKey, oldKey})
+				if bindErr != nil {
+					return 0, bindErr
+				}
+				oldPartitionKeyPositions = append(oldPartitionKeyPositions, int32(len(newProjList)))
+				newPartitionKeyPositions = append(newPartitionKeyPositions, newPos)
+				newProjList = append(newProjList, deleteKey)
 			}
-			oldPartitionKeyPos = int32(len(newProjList))
-			newProjList = append(newProjList, oldKey)
+			if len(oldPartitionKeyPositions) == 0 {
+				return 0, moerr.NewInternalError(builder.GetContext(), "cannot locate partition dependencies for FULLTEXT ODKU")
+			}
 		}
 
 		selectTag = finalProjTag
@@ -4694,10 +4708,9 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 		deleteCols[1].ColPos = colName2Idx[tableDef.Name+"."+tableDef.Pkey.PkeyColName]
 	}
 
-	if oldPartitionKeyPos >= 0 {
-		updateCtx.PartitionCols = []plan.ColRef{
-			{RelPos: selectTag, ColPos: oldPartitionKeyPos},
-			{RelPos: selectTag, ColPos: colName2Idx[tableDef.Name+"."+partitionKeyName]},
+	for _, positions := range [][]int32{oldPartitionKeyPositions, newPartitionKeyPositions} {
+		for _, pos := range positions {
+			updateCtx.PartitionCols = append(updateCtx.PartitionCols, plan.ColRef{RelPos: selectTag, ColPos: pos})
 		}
 	}
 
