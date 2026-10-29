@@ -38,7 +38,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/util/sysview"
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -243,18 +242,6 @@ func downgradeColumnsDefinitions(t *testing.T, ctx context.Context, cn ServiceOp
 		}
 	}
 	t.Logf("downgraded information_schema.COLUMNS to the pre-change definition for accounts 0 and %d", tenantID)
-}
-
-// readColumnsRoute reads the persisted route steps for the final target and
-// logs them for the evidence trail.
-func readColumnsRoute(t *testing.T, ctx context.Context, cn ServiceOperator, target versions.Version) ([]versions.VersionUpgrade, versions.Version) {
-	t.Helper()
-	version, steps := readRecoveryCatalog(t, ctx, cn, target)
-	for i, step := range steps {
-		t.Logf("route %s,%d step[%d] order=%d state=%d tenants ready=%d total=%d",
-			target.Version, target.VersionOffset, i, step.UpgradeOrder, step.State, step.ReadyTenant, step.TotalTenant)
-	}
-	return steps, version
 }
 
 // requireColumnsDecorated asserts the decorated COLUMN_TYPE rendering for the
@@ -621,33 +608,4 @@ func TestColumnsUpgradeInterruptedRouteResumes(t *testing.T) {
 	requireDecoratedColumns(t, ctx, cn)
 	requireColumnsEntryNoop(t, ctx, cn)
 	require.NoError(t, c.Stop())
-}
-
-// waitColumnsVersionReady polls the persisted version marker until the target
-// reports Ready, logging the observed route state during convergence. The
-// completion assertions above read state only after a returned startup, so
-// this fallback is for diagnosis of future legs that observe convergence.
-func waitColumnsVersionReady(t *testing.T, ctx context.Context, db *sql.DB, version string, offset int) {
-	t.Helper()
-	var lastLog string
-	require.EventuallyWithT(t, func(collect *assert.CollectT) {
-		var state int32
-		err := db.QueryRowContext(ctx,
-			"select state from mo_catalog.mo_version where version = ? and version_offset = ?",
-			version, offset).Scan(&state)
-		if err != nil {
-			if lastLog != err.Error() {
-				lastLog = err.Error()
-				t.Logf("waiting for %s,%d: %v", version, offset, err)
-			}
-			require.NoError(collect, err)
-			return
-		}
-		status := fmt.Sprintf("%s,%d state=%d", version, offset, state)
-		if status != lastLog {
-			lastLog = status
-			t.Logf("version marker %s", status)
-		}
-		require.Equal(collect, versions.StateReady, state)
-	}, 3*time.Minute, 500*time.Millisecond)
 }

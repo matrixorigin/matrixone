@@ -42,11 +42,16 @@ func decimalColumnUpdateFixture(t *testing.T) (*CatalogCache, *TableItem, Column
 		return catalog.Column{AccountId: 7, DatabaseId: 8, TableId: 9, DatabaseName: "db", TableName: "t",
 			Name: name, Num: num, Seqnum: seq, Typ: typ, ConstraintType: catalog.SystemColNoConstraint}
 	}
+	rowType := types.T_Rowid.ToType()
+	rowEncoded, err := rowType.Marshal()
+	require.NoError(t, err)
 	cols := Columns{
 		newCol(1, 0, "c0", pkEncoded),
 		newCol(2, 1, "c1", decimalEncoded),
 		newCol(3, 2, "c2", decimalEncoded),
 		newCol(4, 3, "c3", decimalEncoded),
+		{AccountId: 7, DatabaseId: 8, TableId: 9, DatabaseName: "db", TableName: "t",
+			Name: catalog.Row_ID, Num: 5, Seqnum: 4, Typ: rowEncoded, IsHidden: 1},
 	}
 	cols[0].ConstraintType = catalog.SystemColPKConstraint
 	cols[0].HasDef = 1
@@ -54,11 +59,6 @@ func decimalColumnUpdateFixture(t *testing.T) (*CatalogCache, *TableItem, Column
 	require.NoError(t, err)
 	cols[2].IsUnsigned = 1 // unsigned decimal
 	cols[3].IsUnsigned = 3 // unsigned zerofill decimal
-	rowType := types.T_Rowid.ToType()
-	rowEncoded, err := rowType.Marshal()
-	require.NoError(t, err)
-	cols = append(cols, catalog.Column{AccountId: 7, DatabaseId: 8, TableId: 9, DatabaseName: "db", TableName: "t",
-		Name: catalog.Row_ID, Num: 5, Seqnum: 4, Typ: rowEncoded, IsHidden: 1})
 	item := &TableItem{AccountId: 7, DatabaseId: 8, Id: 9, Name: "t", Ts: timestamp.Timestamp{PhysicalTime: 100},
 		PrimaryIdx: -1, PrimarySeqnum: -1, ClusterByIdx: -1}
 	InitTableItemWithColumns(item, cols)

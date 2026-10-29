@@ -595,7 +595,7 @@ func unsignedDecimalAdmissionVarlena(
 			continue
 		}
 		s := convertByteSliceToString(v)
-		outcome := unsignedDecimalStringPass
+		var outcome unsignedDecimalStringOutcome
 		if mysqlPrefix {
 			outcome = classifyMySQLDecimalPrefixSource(s)
 		} else {

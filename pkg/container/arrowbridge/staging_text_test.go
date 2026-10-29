@@ -275,7 +275,7 @@ func TestConvertMaterializesStagedDictionaryDecimalText(t *testing.T) {
 	plainBuilder.AppendValues([]decimal128.Num{
 		decimal128.FromBigInt(big.NewInt(12345)),
 		decimal128.FromBigInt(big.NewInt(-150)),
-		decimal128.Num{},
+		{},
 	}, []bool{true, true, false})
 	plainValues := plainBuilder.NewArray()
 	plainBuilder.Release()

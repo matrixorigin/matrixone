@@ -148,7 +148,7 @@ func TestUnsignedDecimalAdmissionFixedStrict(t *testing.T) {
 		[]types.Decimal64{types.Decimal64(0), types.Decimal64(0)})
 	result, err = runUnsignedDecimalAdmission(proc, from, typ, typ, 2, unsignedDecimalAdmissionStrict, "amt")
 	require.NoError(t, err)
-	vec, isNull = decimalResult[types.Decimal64](t, result)
+	_, isNull = decimalResult[types.Decimal64](t, result)
 	require.True(t, isNull(0))
 	require.False(t, isNull(1))
 	require.Empty(t, session.warnings)
@@ -450,14 +450,14 @@ func TestUnsignedDecimalAdmissionJSONSignedZeroMalformedAndNegative(t *testing.T
 	t.Run("strict", func(t *testing.T) {
 		proc, session := unsignedDecimalAdmissionProc(t, "STRICT_TRANS_TABLES")
 		rows := []string{zeroNumber, zeroString, malformed, malformedBlank, negativeNumber}
-		result, err := runUnsignedDecimalAdmission(proc, newJSONVec(proc, rows...), typ, jsonT, 5, unsignedDecimalAdmissionMode, "j")
+		_, err := runUnsignedDecimalAdmission(proc, newJSONVec(proc, rows...), typ, jsonT, 5, unsignedDecimalAdmissionMode, "j")
 		requireOutOfRangeForColumn(t, err, "j", 5)
 		require.Empty(t, session.warnings)
 
 		// Without the negative row, admission is clean and the composed cast
 		// stores 0.00 for both signed-zero spellings.
 		session.warnings = nil
-		result, err = runUnsignedDecimalAdmission(proc, newJSONVec(proc, zeroNumber, zeroString), typ, jsonT, 2, unsignedDecimalAdmissionMode, "j")
+		result, err := runUnsignedDecimalAdmission(proc, newJSONVec(proc, zeroNumber, zeroString), typ, jsonT, 2, unsignedDecimalAdmissionMode, "j")
 		require.NoError(t, err)
 		require.Empty(t, session.warnings, "signed zeros must not raise a spurious 1264")
 		for i := 0; i < 2; i++ {

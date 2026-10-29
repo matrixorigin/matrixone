@@ -43,7 +43,6 @@ type crossingFakeDB struct {
 	t *testing.T
 
 	mu          sync.Mutex
-	inTxn       bool
 	txns        int
 	afterCommit func(n int)
 
@@ -267,12 +266,6 @@ func (db *crossingFakeDB) mutations() []string {
 		}
 	}
 	return out
-}
-
-func (db *crossingFakeDB) executionLog() []string {
-	db.mu.Lock()
-	defer db.mu.Unlock()
-	return append([]string(nil), db.log...)
 }
 
 func newCrossingService(t *testing.T, db *crossingFakeDB) *service {
