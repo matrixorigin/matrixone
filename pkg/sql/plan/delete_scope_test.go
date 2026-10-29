@@ -57,6 +57,61 @@ func TestIsUnrestrictedDelete(t *testing.T) {
 	require.False(t, isUnrestrictedDelete(nil, 1))
 }
 
+func TestDeleteCTETargetScope(t *testing.T) {
+	for _, legacy := range []bool{false, true} {
+		for _, tc := range []struct {
+			name, sql string
+			wantError string
+		}{
+			{"alias shadows CTE", "with x as (select 1 as id) delete x from nation as x where x.n_nationkey=1", ""},
+			{"apply source", "delete nation from nation cross apply generate_series(nation.n_nationkey,nation.n_nationkey) as g where nation.n_nationkey=1", ""},
+			{"qualified explicit alias", "with x as (select 99 as id) delete ignored.x from nation as x where x.n_nationkey=1", ""},
+			{"qualified explicit alias same spelling", "with nation as (select 99 as id) delete ignored.nation from tpch.nation as nation where nation.n_nationkey=1", ""},
+			{"unrelated CTE", "with q as (select 1 as id) delete x from nation as x where x.n_nationkey=1", ""},
+			{"qualified source shadows CTE", "with nation as (select 1 as id) delete x from tpch.nation as x where x.n_nationkey=1", ""},
+			{"qualified unaliased source", "with nation as (select 1 as id) delete nation from tpch.nation where nation.n_nationkey=1", ""},
+			{"qualified target", "with nation as (select 1 as id) delete from tpch.nation where n_nationkey=1", ""},
+			{"CTE target", "with nation as (select 1 as n_nationkey) delete from nation where n_nationkey=1", "cannot delete from CTE"},
+			{"aliased CTE target", "with nation as (select 1 as n_nationkey) delete x from nation as x where x.n_nationkey=1", "cannot delete from CTE"},
+			{"qualified target mismatches source", "with q as (select 1) delete other.nation from tpch.nation where nation.n_nationkey=1", "does not match its source"},
+			{"qualified target reads CTE", "with nation as (select 1 as n_nationkey) delete tpch.nation from nation where nation.n_nationkey=1", "cannot delete from CTE"},
+			{"derived source", "delete nation from (select 1 as n_nationkey) as nation", "not a writable source"},
+		} {
+			route := "modern/"
+			if legacy {
+				route = "legacy/"
+			}
+			t.Run(route+tc.name, func(t *testing.T) {
+				mock := NewMockOptimizer(true, newPlanTestProcess(t))
+				stmt, err := mysql.ParseOne(t.Context(), tc.sql, 1)
+				require.NoError(t, err)
+				defer stmt.Free()
+				var p *Plan
+				if legacy {
+					p, err = buildDelete(stmt.(*tree.Delete), mock.CurrentContext(), false)
+				} else {
+					p, err = BuildPlan(mock.CurrentContext(), stmt, false)
+				}
+				if tc.wantError != "" {
+					require.ErrorContains(t, err, tc.wantError)
+					return
+				}
+				require.NoError(t, err)
+				var targets []string
+				for _, node := range p.GetQuery().Nodes {
+					if node.NodeType == planpb.Node_DELETE {
+						targets = append(targets, node.DeleteCtx.TableDef.Name)
+					}
+					for _, update := range node.UpdateCtxList {
+						targets = append(targets, update.TableDef.Name)
+					}
+				}
+				require.Equal(t, []string{"nation"}, targets)
+			})
+		}
+	}
+}
+
 func TestNormalizeDeleteOldValueExprPreservesStoredSpecialValue(t *testing.T) {
 	ctx := context.Background()
 	enumType := planpb.Type{Id: int32(types.T_enum), Enumvalues: "a,b,"}
