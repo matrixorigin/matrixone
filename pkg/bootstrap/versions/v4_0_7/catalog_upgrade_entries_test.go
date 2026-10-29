@@ -244,6 +244,23 @@ func TestDaemonClaimPrecisionCheckUsesStoredType(t *testing.T) {
 	}
 }
 
+func TestColumnsAndTablesAreIncludedInTenantUpgrade(t *testing.T) {
+	want := map[string]string{
+		"COLUMNS": sysview.InformationSchemaColumnsDDL,
+		"TABLES":  sysview.InformationSchemaTablesV118DDL,
+	}
+	for _, entry := range tenantUpgEntries {
+		ddl, ok := want[entry.TableName]
+		if !ok || entry.Schema != sysview.InformationDBConst {
+			continue
+		}
+		require.Equal(t, versions.MODIFY_VIEW, entry.UpgType)
+		require.Equal(t, strings.Replace(ddl, "CREATE VIEW ", "CREATE OR REPLACE VIEW ", 1), entry.UpgSql)
+		delete(want, entry.TableName)
+	}
+	require.Empty(t, want, "the tenant upgrade must refresh both persisted views")
+}
+
 func TestInformationSchemaMetadataVisibilityUpgradeChecks(t *testing.T) {
 	views := []struct {
 		entry versions.UpgradeEntry
