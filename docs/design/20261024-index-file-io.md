@@ -5,7 +5,7 @@
 - Issue: #31051
 - Implementation PR: #31050
 - Branch: `index_io`
-- Last updated: 2026-10-27
+- Last updated: 2026-10-29; the decisions dated 2026-10-28 and later await review
 
 ## Problem
 
@@ -27,7 +27,8 @@ Incremental index maintenance multiplies both costs: it writes many small files 
 them back often.
 
 This document covers the layer itself: the file contract, the index-file disk cache, and
-the read and write paths. No index uses it yet; each algorithm adopts it in its own change.
+the read and write paths, and how FULLTEXT2, the first index to adopt it, maps its files onto
+it. Each other algorithm adopts it in its own change.
 
 ## Contract
 
@@ -71,9 +72,11 @@ for different content, so a rewritten file has a new name and nothing is invalid
   are cached twice. A rebuild in place (REINDEX) keeps the table id; its new generation
   has a new `index_id` and checksum, so a new name. A snapshot read resolves the table id
   visible at its snapshot.
-- A caller may name files by a weak checksum, such as a 32-bit frame checksum (decision,
-  @cpegeric, 2026-10-24). The starting chunk and size in the name narrow a collision, and
-  the remaining chance (same start, size and checksum for different content) is accepted.
+- Files are named by a 32-bit checksum: the CRC32-C the layer records, or a caller's own,
+  such as a frame checksum (decision, @cpegeric, 2026-10-24; CRC32-C for every file
+  written since 2026-10-29). The starting chunk and size in the name narrow a collision,
+  and the remaining chance (same start, size and checksum for different content) is
+  accepted.
 
 The name carries no snapshot timestamp (decision, @cpegeric, 2026-10-24). Snapshot reads
 are handled by the storage engine and the content-addressed name: a reader resolves names
@@ -97,7 +100,7 @@ Decided by @cpegeric, 2026-10-24.
 - The table function is reachable only from internal SQL, and only for the transaction
   that registered the file; it takes a handle, never a path.
 - After the statements succeed, the same local file becomes the cached file, without a
-  second copy. It goes to the disk cache only, never the memory cache. The writing CN reads
+  second copy, unless the caller writes the file without a cache entry. It goes to the disk cache only, never the memory cache. The writing CN reads
   it warm from local disk.
 - A file cached by a transaction that aborts is never named by a committed metadata row,
   so no reader reaches it; it is collected once idle, or evicted.
@@ -140,16 +143,22 @@ format gate is needed.
 
 - Consumers that open the file by path (an archive unpacker, a library that maps the
   whole file) see the same bytes as today; nothing is appended or prepended.
-- When the layer rebuilds a file from its rows, it verifies the bytes against the
-  checksum the caller passes, by the caller's rule (by default the whole-file MD5 the index
-  metadata records; an appended frame can supply its own check), then writes the file and
-  its manifest.
-- The manifest never leaves the CN, so it uses one checksum for every file kind. The
-  full checksum is verified on the first open of a cached file after the CN starts; later
-  opens on the same CN check the length only (decision, @cpegeric, 2026-10-24; reaffirmed
-  2026-10-28: every new index generation reloads all of an index's files, so a full check
-  on every open would re-read the whole index on the query path after each sync). A failed
-  check removes the cached file and rebuilds it from the rows.
+- The checksum recorded for a file is its CRC32-C (decision, @cpegeric, 2026-10-29). A
+  rebuild verifies it while the chunks stream in, in any order: each chunk's CRC is
+  computed as it arrives and the file's is combined from them, so the file is never read
+  back. Files recorded earlier with an MD5 are still verified by MD5 after assembly, and an
+  appended frame can supply its own check. Rationale: MD5 runs at about 650 MB/s on one
+  core and was over half of a 38 s cold load of a 13 GB index, while CRC32-C runs at
+  several GB/s and is what Lucene, RocksDB, HDFS and Kafka use for the same purpose.
+- The manifest never leaves the CN, so it uses one checksum for every file kind, the
+  CRC32-C the rebuild already computed. Whether a cached file's full checksum is verified
+  on its first open after the CN starts is a CN configuration setting, off by default
+  (decision, @cpegeric, 2026-10-29, after Elasticsearch's `check_on_startup`). Off, every
+  open checks the manifest and the length only; on, the first open in the process reads
+  the whole file, and later opens check the length only. A failed check removes the cached
+  file and rebuilds it from the rows. Rationale: the full check of a 13 GB index took
+  most of a 4.4 s first query after a restart, and every new index generation reloads all
+  of an index's files.
 - The file and its manifest are one cache entry: a directory holding both (decision,
   @cpegeric, 2026-10-24). It is written complete under a temporary name and renamed into
   place in one step, evicted and deleted as a unit, and counted as one entry of their
@@ -168,13 +177,19 @@ table-data cache but not shared with it. Its capacity is a configured share carv
 the existing disk-cache capacity, so total disk use is unchanged and the split between
 table data and index files is explicit: a large index load cannot evict hot table data,
 nor the reverse. Index files exist only in this cache: a miss is never served from the
-storage backend, only rebuilt from the chunk rows. A CN without a disk cache uses a
-private temporary directory instead, with no reuse between loads.
+storage backend, only rebuilt from the chunk rows. Without an index-file cache, a file is
+rebuilt into a temporary file in a directory the caller chooses, with no reuse between
+loads; FULLTEXT2 uses the CN's local spill directory, not the system temporary directory.
 
 - The default share is 30%, set when FULLTEXT2 adopted the layer (decision, @cpegeric,
   2026-10-24: zero until an index reads through the layer); on upgrade the table-data cache
   shrinks by that share. A runtime resize of the disk cache applies the same split to the
   new size.
+- Operators size the disk capacity so that the index-file share holds the files of every
+  index the CN serves (decision, @cpegeric, 2026-10-28). The cache keeps the table-data
+  cache's admission rule, under which a file written once and not yet read is the first to
+  be evicted when the cache is full; below capacity nothing is evicted. A file that does
+  not fit costs one rebuild from its rows per load.
 - A CN whose storage backend is local disk has no table-data disk cache, because table
   data is already local, but it still gets the index-file cache, sized as the same share of
   the configured disk capacity (decision, @cpegeric, 2026-10-24): rebuilding a file from its
@@ -235,11 +250,14 @@ by time since its last use, not by which index generation or snapshot names it.
 
 - Every read through the layer holds its file from before the open until the reader is
   done with it; a loaded index holds the files it keeps mapped until it is unloaded. Holds
-  are counted in memory per file and do not survive a restart.
-- Removing a held file, by eviction or by deletion, takes effect when its last hold is
-  released. Eviction still chooses its victims as before; a held victim leaves the
-  cache's accounting at once. A held file opened again before its release is cached again
-  and is not removed.
+  are counted in memory per file across every cache in the process, so CNs sharing a
+  directory see each other's holds, and do not survive a restart.
+- Evicting or collecting a held file takes effect when its last hold is released.
+  Eviction still chooses its victims as before; a held victim leaves the cache's
+  accounting at once. A held file opened again before its release is cached again and is
+  not removed.
+- Deleting a file, as a failed check does, takes effect at once, held or not: holders keep
+  reading the handles they have open, and the rebuilt file takes its place.
 - A file's last use is when it was published or when its last hold was released. It is
   recorded on disk, so it survives a restart.
 - A file with no holds whose last use is older than the idle TTL is deleted by a periodic
@@ -286,12 +304,27 @@ file can be written by one path and read by the other, on the same CN or across 
 schema, catalog or wire change is involved, so a rolling upgrade needs no capability
 gate, and each algorithm can switch its readers and writers independently.
 
+## FULLTEXT2 files (decision)
+
+Decided by @cpegeric, 2026-10-28.
+
+- Each base segment is one file. Each CDC tail frame is one file starting at its first
+  chunk, and every frame has a metadata row recording its size and checksum.
+- A frame that fits in one chunk is not cached. Its chunk rows are written together with
+  the other such frames of the same flush, a bounded number of rows per statement, and are
+  read back from the rows, a bounded number of frames per statement, each checked against
+  its metadata row. Caching a one-chunk file costs more than reading its row, and a busy
+  index writes many of them. On a 25% pmc corpus, the reload after a tail change stayed
+  at about 100 ms from 10 to 100 one-chunk frames.
+- A tail with frames that have no metadata row, written before every frame had one, is read
+  entirely from its chunk rows. A MERGE or REINDEX rewrites it with a row for every frame.
+
 ## Scope and non-goals
 
 - In scope: the logical file layer (naming, whole-file write and read, the index-file disk
   cache, the internal table function the write path uses) and its contract.
-- Not in scope: adopting the layer in any index. Each algorithm adopts it in its own
-  change, which decides how its files map onto the layer (for example how a CDC tail is
+- Not in scope: adopting the layer in any index other than FULLTEXT2. Each algorithm
+  adopts it in its own change, which decides how its files map onto the layer (for example how a CDC tail is
   split into files) and the default cache share. When cached files are deleted is the
   layer's (see "Holds and idle collection").
 - Not in scope: the incremental-update algorithm; a new on-disk format; changes to what
@@ -316,17 +349,24 @@ Every statement in "Contract" is checked by a test that would fail if it were fa
   cached; a cache disk that fails while staging a file does not fail the read or the
   write, keeps the bytes already read from the source, and caches nothing, while a source
   error still fails the write;
-- a corrupted cached file is detected on the first open in the process and rebuilt; an
-  entry missing a file is replaced;
+- a file's CRC32-C combined from its chunks, added in any order, equals the CRC32-C of the
+  whole file; a file recorded with an MD5 is verified by MD5, and a mismatch of either
+  fails the read;
+- with the check on startup configured, a corrupted cached file is detected on the first
+  open in the process and rebuilt; without it, the length is checked only; an entry
+  missing a file is replaced;
 - writing chunk rows that already exist fails with a duplicate-key error, as an `INSERT`
   does; a failed write caches nothing and leaves no registered source or temporary file;
 - the table function cannot be called from user SQL, nor by another transaction, nor
   after its write finished, nor for chunks outside the file, nor with an input;
 - a file evicted while open stays readable through the open handle and through the path to
   the handle, and the next open is a miss that rebuilds it;
-- a held file evicted or deleted stays on disk until its last hold is released, a file
-  opened again before then is cached again, and a hold kept past the reader's close holds
-  the file until it is released; a loaded index holds the files it maps until unloaded;
+- a held file evicted stays on disk until its last hold is released, a file opened again
+  before then is cached again, and a hold kept past the reader's close holds the file until
+  it is released; a loaded index holds the files it maps until unloaded; a held file
+  deleted is removed at once, stays readable through open handles, and a file found
+  invalid while held is replaced by its rebuild; a hold taken through one cache keeps the
+  file from the collection of another cache sharing the directory;
 - a file with no holds last used longer than the idle TTL ago is collected and removed from
   the cache's accounting, while a held one, a recently used one and one whose last hold
   was just released stay; collection runs periodically until the cache closes, a TTL of 0
@@ -341,11 +381,14 @@ Every statement in "Contract" is checked by a test that would fail if it were fa
   publishes an entry both write;
 - cached entries are reused after a restart, and leftover temporary and trash directories
   are removed;
-- the configured share splits the disk capacity and a runtime resize; with the default share
-  no index-file cache exists and the table-data cache keeps its full capacity; only a CN's
+- the configured share splits the disk capacity and a runtime resize, the default share
+  giving the index-file cache 30% and the table-data cache the rest; only a CN's
   SHARED file service gets the cache; an overlapping directory and an invalid share or
   rebuild setting are rejected; each rebuild setting maps to its cache policy, and a
   rebuild in the `read` or `none` setting starts no full-file prefetch through the storage
   engine's reader while the default setting does;
-- a CN without an index-file cache still serves reads, rebuilding each load from the rows;
+- a CN without an index-file cache still serves reads, rebuilding each load from the rows
+  into the caller's temporary directory;
+- FULLTEXT2 writes one-chunk tail frames as batched chunk rows and larger frames as files,
+  every frame with its metadata row, and reads one-chunk frames back in bounded scans;
 - a table-data disk cache never treats a directory as a cache entry.

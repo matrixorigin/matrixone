@@ -127,7 +127,7 @@ func swapIndexFiles(t *testing.T) *fakeIndexFiles {
 		}
 		if ref.Verify != nil {
 			err = ref.Verify(f, ref.Size, ref.Checksum)
-		} else if sum := md5.Sum(buf); hex.EncodeToString(sum[:]) != ref.Checksum {
+		} else if sum := md5.Sum(buf); hex.EncodeToString(sum[:]) != ref.Checksum && indexfile.Checksum(buf) != ref.Checksum {
 			err = moerr.NewInternalErrorNoCtxf("index file %s: checksum mismatch", ref.IndexID)
 		}
 		if err != nil {
@@ -146,8 +146,7 @@ func swapIndexFiles(t *testing.T) *fakeIndexFiles {
 		fake.mu.Lock()
 		fake.uncached[fakeFileKey(ref.IndexID, ref.Tag, ref.FirstChunk)] = files != nil && files.Engine == nil && files.Cache == nil
 		fake.mu.Unlock()
-		sum := md5.Sum(buf)
-		return int64(len(buf)), hex.EncodeToString(sum[:]), nil
+		return int64(len(buf)), indexfile.Checksum(buf), nil
 	}
 	t.Cleanup(func() { openIndexFile, writeIndexFile = prevOpen, prevWrite })
 	return fake

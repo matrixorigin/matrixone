@@ -312,17 +312,24 @@ func TestIndexFileCacheHoldDefersRemoval(t *testing.T) {
 	require.NoError(t, err)
 	release2, err := c.Hold("deleted")
 	require.NoError(t, err)
-	require.NoError(t, c.Delete(ctx, "deleted"))
-	requireEntryDir(t, c, "deleted", true)
-	path, err := c.disk.pathForDir("deleted")
+	files, err := c.Open(ctx, "deleted", "data")
 	require.NoError(t, err)
-	require.False(t, c.disk.cache.Contains(path), "a deleted held entry leaves the cache accounting")
-	release1()
-	release1()
-	requireEntryDir(t, c, "deleted", true)
-	release2()
+	require.NoError(t, c.Delete(ctx, "deleted"))
 	requireEntryDir(t, c, "deleted", false)
 	requireIndexCacheMiss(t, c, "deleted")
+	require.Equal(t, data, readAllFile(t, files[0]), "a file open before Delete stays readable")
+	closeFiles(files)
+	replacement := bytes.Repeat([]byte("r"), 64<<10)
+	written, err := c.Put(ctx, "deleted", indexCacheEntry(replacement))
+	require.NoError(t, err)
+	require.True(t, written, "a held entry deleted as invalid is replaced")
+	release1()
+	release1()
+	release2()
+	files, err = c.Open(ctx, "deleted", "data")
+	require.NoError(t, err)
+	require.Equal(t, replacement, readAllFile(t, files[0]), "releasing the old holds keeps the replacement")
+	closeFiles(files)
 
 	_, err = c.Put(ctx, "evicted", indexCacheEntry(data))
 	require.NoError(t, err)
@@ -342,17 +349,25 @@ func TestIndexFileCacheHoldDefersRemoval(t *testing.T) {
 	require.Empty(t, trash)
 }
 
-// An entry opened again after its removal was deferred is in the cache again, and the
+// An entry opened again after its eviction was deferred is in the cache again, and the
 // release of the earlier hold leaves it.
 func TestIndexFileCacheHeldEntryReopened(t *testing.T) {
 	ctx := context.Background()
-	c := newTestIndexFileCache(t, t.TempDir(), 1<<30)
-	data := []byte("payload")
+	c := newTestIndexFileCache(t, t.TempDir(), 200<<10)
+	data := bytes.Repeat([]byte("p"), 64<<10)
 	_, err := c.Put(ctx, "e", indexCacheEntry(data))
 	require.NoError(t, err)
 	release, err := c.Hold("e")
 	require.NoError(t, err)
-	require.NoError(t, c.Delete(ctx, "e"))
+	for i := 0; i < 8; i++ {
+		_, err := c.Put(ctx, fmt.Sprintf("other-%d", i), indexCacheEntry(data))
+		require.NoError(t, err)
+	}
+	evictIndexCache(c)
+	path, err := c.disk.pathForDir("e")
+	require.NoError(t, err)
+	require.False(t, c.disk.cache.Contains(path), "an evicted held entry leaves the cache accounting")
+	requireEntryDir(t, c, "e", true)
 
 	files, err := c.Open(ctx, "e", "data")
 	require.NoError(t, err)
@@ -553,6 +568,31 @@ func TestIndexFileCacheTwoInstancesShareDirectory(t *testing.T) {
 	_, temps, trash := listCacheDirs(t, dir)
 	require.Empty(t, temps)
 	require.Empty(t, trash)
+}
+
+// A hold taken through one instance keeps the entry from the idle collection of another
+// instance sharing the directory.
+func TestIndexFileCacheHoldSeenAcrossInstances(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	c1 := newTestIndexFileCache(t, dir, 1<<30)
+	c2 := newTestIndexFileCache(t, dir, 1<<30)
+	_, err := c1.Put(ctx, "e", indexCacheEntry([]byte("shared")))
+	require.NoError(t, err)
+	release, err := c1.Hold("e")
+	require.NoError(t, err)
+
+	n, err := c2.collectIdle(ctx, time.Now().Add(time.Hour))
+	require.NoError(t, err)
+	require.Zero(t, n)
+	requireEntryDir(t, c1, "e", true)
+
+	release()
+	ageEntry(t, c1, "e", 2*time.Hour)
+	n, err = c2.collectIdle(ctx, time.Now().Add(-time.Hour))
+	require.NoError(t, err)
+	require.Equal(t, 1, n)
+	requireEntryDir(t, c1, "e", false)
 }
 
 func TestIndexFileCacheConcurrentOperations(t *testing.T) {

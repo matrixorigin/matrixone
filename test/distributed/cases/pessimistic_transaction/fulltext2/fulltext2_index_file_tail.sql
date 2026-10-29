@@ -1,7 +1,6 @@
--- fulltext2 CDC tail frames through the index-file layer: every frame has a metadata row
--- covering its chunks and is searched from its index file; a tail with frames that have no
--- metadata row (written before every frame had one) is still searched, from its chunk rows,
--- and MERGE folds it into the base without losing rows.
+-- fulltext2 CDC tail frames: every frame has a metadata row covering its chunks and is
+-- searched; a tail with frames that have no metadata row (written before every frame had one)
+-- is still searched, from its chunk rows, and MERGE folds it into the base without losing rows.
 set experimental_fulltext2_index = 1;
 drop database if exists ft2_index_file_tail;
 create database ft2_index_file_tail;
@@ -44,8 +43,16 @@ select id from t where match(body) against('hello') order by id;
 -- MERGE folds the whole tail, the frame without a row included, into the base
 drop snapshot if exists ft2_index_file_tail_sp;
 create snapshot ft2_index_file_tail_sp for account;
+set @frames_before_sql = concat('select count(*) into @frames_before from `', database(), '`.`', @t_meta, '` where index_id like ''cdc_tail:%''');
+prepare frames_before from @frames_before_sql;
+execute frames_before;
+deallocate prepare frames_before;
 delete from t where id = 1;
--- @wait_expect(2, 60)
+set @deleted_sql = concat('select count(*) > @frames_before as deleted from `', database(), '`.`', @t_meta, '` where index_id like ''cdc_tail:%''');
+prepare deleted from @deleted_sql;
+-- @wait_expect(2, 120)
+execute deleted;
+deallocate prepare deleted;
 select id from t where match(body) against('hello') order by id;
 alter table t alter reindex ft fulltext2 merge;
 execute frames;

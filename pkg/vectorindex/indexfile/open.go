@@ -40,6 +40,9 @@ type Env struct {
 	Proc   *process.Process
 	Txn    client.TxnOperator
 	Cache  *fileservice.IndexFileCache
+	// TempDir holds the files written or rebuilt outside the cache; empty means the system
+	// temp directory.
+	TempDir string
 }
 
 // File is an open index file. The caller closes it.
@@ -98,7 +101,8 @@ func Open(ctx context.Context, env *Env, ref Ref) (*File, error) {
 	}
 
 	name := entryName(rel.GetTableID(ctx), &ref)
-	if f, err := openCached(ctx, env.Cache, name, &ref); f != nil || err != nil {
+	full := env.Cache.CheckOnStartup()
+	if f, err := openCached(ctx, env.Cache, name, &ref, full); f != nil || err != nil {
 		return f, err
 	}
 
@@ -107,14 +111,14 @@ func Open(ctx context.Context, env *Env, ref Ref) (*File, error) {
 		return nil, err
 	}
 	defer unlock()
-	if f, err := openCached(ctx, env.Cache, name, &ref); f != nil || err != nil {
+	if f, err := openCached(ctx, env.Cache, name, &ref, full); f != nil || err != nil {
 		return f, err
 	}
 	return rebuildCached(ctx, env, rel, &ref, name)
 }
 
 // verified holds the cache entries whose full checksum was checked since the process
-// started; later opens check the length only. It is cleared when it reaches
+// started, when the cache checks on startup; later opens check the length only. It is cleared when it reaches
 // maxVerified entries, which only costs a full check on the next open of each entry.
 var verified = verifiedSet{m: make(map[string]struct{})}
 
@@ -147,9 +151,10 @@ func (v *verifiedSet) remove(key string) {
 	delete(v.m, key)
 }
 
-// openCached opens entry name. A missing, invalid or unreadable entry is a miss
-// (nil, nil); an invalid entry is deleted. Only cancellation is an error.
-func openCached(ctx context.Context, cache *fileservice.IndexFileCache, name string, ref *Ref) (*File, error) {
+// openCached opens entry name, checking its full checksum if full and not yet checked
+// since the process started. A missing, invalid or unreadable entry is a miss (nil, nil);
+// an invalid entry is deleted. Only cancellation is an error.
+func openCached(ctx context.Context, cache *fileservice.IndexFileCache, name string, ref *Ref, full bool) (*File, error) {
 	release, err := cache.Hold(name)
 	if err != nil {
 		return nil, err
@@ -168,7 +173,7 @@ func openCached(ctx context.Context, cache *fileservice.IndexFileCache, name str
 	data, manifest := files[0], files[1]
 	defer manifest.Close()
 	key := cache.Path() + "\x00" + name
-	if err := checkCached(data, manifest, ref, key); err != nil {
+	if err := checkCached(data, manifest, ref, key, full); err != nil {
 		_ = data.Close()
 		release()
 		verified.remove(key)
@@ -183,7 +188,7 @@ func openCached(ctx context.Context, cache *fileservice.IndexFileCache, name str
 	return &File{f: data, size: ref.Size, release: release}, nil
 }
 
-func checkCached(data, manifest *os.File, ref *Ref, key string) error {
+func checkCached(data, manifest *os.File, ref *Ref, key string, full bool) error {
 	b, err := io.ReadAll(io.LimitReader(manifest, manifestLen+1))
 	if err != nil {
 		return err
@@ -199,7 +204,7 @@ func checkCached(data, manifest *os.File, ref *Ref, key string) error {
 	if size != ref.Size || stat.Size() != ref.Size {
 		return moerr.NewInternalErrorNoCtxf("index file %s: cached size %d/%d, want %d", ref.IndexID, size, stat.Size(), ref.Size)
 	}
-	if verified.has(key) {
+	if !full || verified.has(key) {
 		return nil
 	}
 	got, err := fileCRC(data, size)
@@ -242,7 +247,7 @@ func rebuildCached(ctx context.Context, env *Env, rel engine.Relation, ref *Ref,
 	if written {
 		verified.add(env.Cache.Path() + "\x00" + name)
 	}
-	if f, err := openCached(ctx, env.Cache, name, ref); f != nil || err != nil {
+	if f, err := openCached(ctx, env.Cache, name, ref, env.Cache.CheckOnStartup()); f != nil || err != nil {
 		_ = tmp.Close()
 		return f, err
 	}
@@ -253,7 +258,7 @@ func rebuildCached(ctx context.Context, env *Env, rel engine.Relation, ref *Ref,
 
 // rebuildTemp rebuilds the file into a private temp file removed on close.
 func rebuildTemp(ctx context.Context, env *Env, rel engine.Relation, ref *Ref) (*File, error) {
-	tmp, err := os.CreateTemp("", "indexfile-*")
+	tmp, err := os.CreateTemp(env.TempDir, "indexfile-*")
 	if err != nil {
 		return nil, err
 	}
@@ -278,19 +283,21 @@ func rebuildInto(ctx context.Context, env *Env, rel engine.Relation, ref *Ref, f
 	if err := scanChunks(ctx, env, rel, ref, asm.add); err != nil {
 		return 0, err
 	}
-	if err := asm.finish(); err != nil {
-		return 0, err
-	}
-	verify := ref.Verify
-	if verify == nil {
-		verify = VerifyMD5
-	}
-	if err := verify(f, ref.Size, ref.Checksum); err != nil {
-		return 0, err
-	}
-	crc, err := fileCRC(f, ref.Size)
+	crc, err := asm.finish()
 	if err != nil {
-		return 0, &stagingError{err}
+		return 0, err
+	}
+	switch {
+	case ref.Verify != nil:
+		err = ref.Verify(f, ref.Size, ref.Checksum)
+	case isMD5(ref.Checksum):
+		err = verifyMD5(f, ref.Size, ref.Checksum)
+	case formatCRC(crc) != ref.Checksum:
+		err = moerr.NewInternalErrorNoCtxf("index file %s: checksum mismatch: got %s, want %s",
+			ref.IndexID, formatCRC(crc), ref.Checksum)
+	}
+	if err != nil {
+		return 0, err
 	}
 	return crc, nil
 }

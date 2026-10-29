@@ -37,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	cuvscdc "github.com/matrixorigin/matrixone/pkg/vectorindex/cuvs"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/indexfile"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 )
 
@@ -194,7 +195,7 @@ func (s *Segment) Spill(dir string) (*SpilledSegment, error) {
 		Recency:  s.Recency,
 		N:        s.N,
 		fp:       fp,
-		checksum: vectorindex.CheckSumFromBuffer(buf),
+		checksum: indexfile.Checksum(buf),
 		size:     int64(len(buf)),
 	}, nil
 }
@@ -825,8 +826,9 @@ func loadTailFrames(sqlproc *sqlexec.SqlProcess, cfg TableConfig, legacy bool) (
 	return frames, nil
 }
 
-// readSmallTailFrames reads the frames of rows that fit in one chunk from their chunk rows in
-// one scan, checks each against its row, and returns them by starting chunk.
+// readSmallTailFrames reads the frames of rows that fit in one chunk from their chunk rows,
+// maxTailFramesPerRead frames per scan, checks each against its row, and returns them by
+// starting chunk.
 func readSmallTailFrames(sqlproc *sqlexec.SqlProcess, cfg TableConfig, rows []tailFrame) (map[int64][]byte, error) {
 	var starts []string
 	for _, r := range rows {
@@ -837,25 +839,18 @@ func readSmallTailFrames(sqlproc *sqlexec.SqlProcess, cfg TableConfig, rows []ta
 	if len(starts) == 0 {
 		return nil, nil
 	}
-	sql := fmt.Sprintf("SELECT %s, %s FROM %s WHERE %s = %s AND %s = %d AND %s IN (%s)",
-		catalog.FullText2Index_TblCol_Storage_Chunk_Id, catalog.FullText2Index_TblCol_Storage_Data,
-		sqlquote.QualifiedIdent(cfg.DbName, cfg.IndexTable),
-		catalog.FullText2Index_TblCol_Storage_Index_Id, sqlquote.String(vectorindex.CdcTailId),
-		catalog.FullText2Index_TblCol_Storage_Tag, int(vectorindex.Tag_CdcEvents),
-		catalog.FullText2Index_TblCol_Storage_Chunk_Id, strings.Join(starts, ", "))
-	res, err := runSql(sqlproc, sql)
-	if err != nil {
-		return nil, err
-	}
-	defer res.Close()
 	chunks := make(map[int64][]byte, len(starts))
-	for _, bat := range res.Batches {
-		if bat == nil {
-			continue
-		}
-		cids := vector.MustFixedColNoTypeCheck[int64](bat.Vecs[0])
-		for i := 0; i < bat.RowCount(); i++ {
-			chunks[cids[i]] = append([]byte(nil), bat.Vecs[1].GetRawBytesAt(i)...)
+	for len(starts) > 0 {
+		n := min(len(starts), maxTailFramesPerRead)
+		sql := fmt.Sprintf("SELECT %s, %s FROM %s WHERE %s = %s AND %s = %d AND %s IN (%s)",
+			catalog.FullText2Index_TblCol_Storage_Chunk_Id, catalog.FullText2Index_TblCol_Storage_Data,
+			sqlquote.QualifiedIdent(cfg.DbName, cfg.IndexTable),
+			catalog.FullText2Index_TblCol_Storage_Index_Id, sqlquote.String(vectorindex.CdcTailId),
+			catalog.FullText2Index_TblCol_Storage_Tag, int(vectorindex.Tag_CdcEvents),
+			catalog.FullText2Index_TblCol_Storage_Chunk_Id, strings.Join(starts[:n], ", "))
+		starts = starts[n:]
+		if err := readTailChunks(sqlproc, sql, chunks); err != nil {
+			return nil, err
 		}
 	}
 	for _, r := range rows {
@@ -874,6 +869,28 @@ func readSmallTailFrames(sqlproc *sqlexec.SqlProcess, cfg TableConfig, rows []ta
 		}
 	}
 	return chunks, nil
+}
+
+// maxTailFramesPerRead bounds the frames one statement of readSmallTailFrames reads.
+const maxTailFramesPerRead = 1000
+
+// readTailChunks adds the chunk rows sql returns to chunks.
+func readTailChunks(sqlproc *sqlexec.SqlProcess, sql string, chunks map[int64][]byte) error {
+	res, err := runSql(sqlproc, sql)
+	if err != nil {
+		return err
+	}
+	defer res.Close()
+	for _, bat := range res.Batches {
+		if bat == nil {
+			continue
+		}
+		cids := vector.MustFixedColNoTypeCheck[int64](bat.Vecs[0])
+		for i := 0; i < bat.RowCount(); i++ {
+			chunks[cids[i]] = append([]byte(nil), bat.Vecs[1].GetRawBytesAt(i)...)
+		}
+	}
+	return nil
 }
 
 // legacyTailFrames reads a tail written before every frame had a metadata row from its chunk

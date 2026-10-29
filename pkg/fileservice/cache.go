@@ -59,6 +59,9 @@ type CacheConfig struct {
 	// IndexFileRebuildCache is how an index-file rebuild uses the memory and disk caches:
 	// "read-write" (default), "read" or "none".
 	IndexFileRebuildCache string `toml:"index-file-rebuild-cache"`
+	// IndexFileCheckOnStartup checks the full checksum of each cached index file on its
+	// first open since the process started. Default false: opens check the length only.
+	IndexFileCheckOnStartup bool `toml:"index-file-check-on-startup"`
 	// IndexFileCacheEnabled is set by the service launcher for a CN's SHARED file service.
 	IndexFileCacheEnabled bool `toml:"-" json:"-"`
 
@@ -192,11 +195,13 @@ func newFileServiceCaches(
 		if err != nil {
 			return caches, err
 		}
+		caches.index.SetCheckOnStartup(config.IndexFileCheckOnStartup)
 		logutil.Info("fileservice: index file cache initialized",
 			zap.Any("fs-name", name),
 			zap.String("path", path),
 			zap.Int64("capacity", capacity),
 			zap.Duration("idle-ttl", idleTTL),
+			zap.Bool("check-on-startup", config.IndexFileCheckOnStartup),
 		)
 	}
 

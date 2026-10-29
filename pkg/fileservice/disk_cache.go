@@ -56,7 +56,6 @@ type DiskCache struct {
 	cache        *fifocache.Cache[string, struct{}]
 	capacityFunc fscache.CapacityFunc
 	dirEntries   bool
-	dirHolds     dirHolds
 	directoryMu  sync.RWMutex
 	// diskFullEviction is held by the single eviction that responds to
 	// disk-full write failures.

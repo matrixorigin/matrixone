@@ -84,11 +84,12 @@ type IndexFiles struct {
 }
 
 // indexFileEnv is the index-file layer environment in txn (nil means the process's
-// transaction), from files or else from sqlproc's process. Without a storage engine it has no
-// cache: a write then needs only the transaction.
+// transaction), from files or else from sqlproc's process, spilling files outside the cache to
+// the LOCAL file service. Without a storage engine it has no cache: a write then needs only the
+// transaction.
 func indexFileEnv(sqlproc *sqlexec.SqlProcess, files *IndexFiles, txn client.TxnOperator) *indexfile.Env {
 	proc := sqlproc.Proc
-	env := &indexfile.Env{Proc: proc, Txn: txn}
+	env := &indexfile.Env{Proc: proc, Txn: txn, TempDir: localSpillDir(sqlproc)}
 	if files != nil {
 		env.Engine, env.Cache = files.Engine, files.Cache
 	} else if proc != nil {

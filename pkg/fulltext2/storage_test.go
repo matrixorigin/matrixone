@@ -16,6 +16,7 @@ package fulltext2
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"os"
 	"strings"
@@ -27,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/indexfile"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/stretchr/testify/require"
 )
@@ -106,7 +108,7 @@ func TestSegmentPersistBinary(t *testing.T) {
 	require.Equal(t, expected, files.get(t, "uid:0", int64(vectorindex.Tag_ModelChunk), 0))
 	require.Len(t, statements, 1)
 	require.Contains(t, statements[0], cfg.MetadataTable)
-	require.Contains(t, statements[0], vectorindex.CheckSumFromBuffer(expected))
+	require.Contains(t, statements[0], indexfile.Checksum(expected))
 	_ = mp
 }
 
@@ -280,56 +282,79 @@ func TestTailPersistPackedRanges(t *testing.T) {
 	require.NoError(t, err)
 	defer tb.Cleanup()
 	tb.rollCap = 300
+	large := map[int64]bool{100: true, 300: true}
 	for i := int64(1); i <= 503; i++ {
 		cdc := NewCdc(int32(types.T_int64))
-		cdc.Insert(i, "owned chronological frame", nil)
+		body := "owned chronological frame"
+		if large[i] {
+			var sb strings.Builder
+			for w := 0; w < 20000; w++ {
+				fmt.Fprintf(&sb, "w%d_%d ", i, w)
+			}
+			body = sb.String()
+		}
+		cdc.Insert(i, body, nil)
 		require.NoError(t, tb.AddBatch(cdc))
 	}
 	frames, err := tb.Finish()
 	require.NoError(t, err)
 	require.Len(t, frames, 503)
 	require.Greater(t, distinctPaths(frames), 1)
-	expected := make([][]byte, 0, len(frames))
+	var smallFrames [][]byte
+	largeFrames := map[int64][]byte{}
+	start := int64(7)
 	for _, f := range frames {
 		data, err := os.ReadFile(f.Path)
 		require.NoError(t, err)
-		expected = append(expected, append([]byte(nil), data[f.Offset:f.Offset+int64(f.FrameLen)]...))
+		frame := append([]byte(nil), data[f.Offset:f.Offset+int64(f.FrameLen)]...)
+		if smallTailFrame(int64(len(frame))) {
+			smallFrames = append(smallFrames, frame)
+		} else {
+			largeFrames[start] = frame
+		}
+		start += FrameChunkCount(len(frame))
 	}
+	require.Len(t, largeFrames, len(large))
 	files := swapIndexFiles(t)
+	var actual [][]byte
+	var batchRows []int
 	var metadata []string
 	installPersistenceExecutor(t, sp, func(sql string, opt executor.StatementOption) (executor.Result, error) {
+		if opt.HasParams() {
+			v, err := opt.Params(mp)
+			require.NoError(t, err)
+			defer v.Free(mp)
+			batchRows = append(batchRows, v.Length()/2)
+			for i := 0; i < v.Length(); i += 2 {
+				require.Equal(t, vectorindex.CdcTailId, string(v.GetRawBytesAt(i)))
+				actual = append(actual, append([]byte(nil), v.GetRawBytesAt(i+1)...))
+			}
+		}
 		metadata = append(metadata, sql)
 		return executor.Result{}, nil
 	})
 	check := func() {
 		t.Helper()
-		start := int64(7)
-		small := 0
-		for i, want := range expected {
-			require.Equal(t, want, files.get(t, vectorindex.CdcTailId, int64(vectorindex.Tag_CdcEvents), start), "frame %d", i)
-			uncached := files.uncached[fakeFileKey(vectorindex.CdcTailId, int64(vectorindex.Tag_CdcEvents), start)]
-			require.Equal(t, smallTailFrame(int64(len(want))), uncached, "frame %d: only a frame that fits in one chunk is written uncached", i)
-			if uncached {
-				small++
-			}
-			start += FrameChunkCount(len(want))
+		require.Equal(t, []int{500, 1}, batchRows, "chunk rows of one-chunk frames are batched across frames and file rolls")
+		require.Equal(t, smallFrames, actual)
+		require.Len(t, files.files, len(largeFrames), "only a frame larger than one chunk is an index file")
+		for at, want := range largeFrames {
+			require.Equal(t, want, files.get(t, vectorindex.CdcTailId, int64(vectorindex.Tag_CdcEvents), at))
 		}
-		require.Len(t, files.files, len(expected), "one index file per frame")
-		require.Positive(t, small)
+		rows := strings.Count(strings.Join(metadata, ""), TailFrameMetaPrefix)
+		require.Equal(t, len(frames), rows, "every frame has a metadata row")
 	}
 	next, err := tb.PersistFinished(sp, testStorageCfg(), nil, 7, 0)
 	require.NoError(t, err)
-	require.Equal(t, int64(510), next)
+	require.Equal(t, start, next)
 	check()
-	rows := strings.Count(strings.Join(metadata, ""), TailFrameMetaPrefix)
-	require.Equal(t, len(expected), rows, "every frame has a metadata row")
 	// The finished owner retains its spool for a transaction retry.
+	actual, batchRows, metadata = nil, nil, nil
 	files.files = make(map[string][]byte)
 	next, err = tb.PersistFinished(sp, testStorageCfg(), nil, 7, 0)
 	require.NoError(t, err)
-	require.Equal(t, int64(510), next)
+	require.Equal(t, start, next)
 	check()
-	_ = mp
 }
 
 func TestSegmentSpillIsUnlinked(t *testing.T) {

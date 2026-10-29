@@ -15,6 +15,7 @@
 package fulltext2
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 
@@ -88,4 +89,54 @@ func TestLoadedSegmentsHoldTheirFiles(t *testing.T) {
 	require.Contains(t, scans[0], "IN (3, 6)")
 	require.Equal(t, opens+1, files.opens, "only the larger frame is opened as an index file")
 	require.Equal(t, 0, files.holds(vectorindex.CdcTailId, int64(vectorindex.Tag_CdcEvents), largeStart))
+}
+
+// One-chunk tail frames are read maxTailFramesPerRead frames per scan.
+func TestSmallTailFramesReadInBoundedScans(t *testing.T) {
+	sp, mp := mockSqlProc(t)
+	n := maxTailFramesPerRead + 1
+	frames := make(map[int64][]byte, n)
+	rows := make([]frameRow, 0, n)
+	for i := 0; i < n; i++ {
+		frame, err := FrameDeletes(int32(types.T_int64), []DeleteRecord{{Pk: int64(i)}})
+		require.NoError(t, err)
+		start := int64(i + 1)
+		frames[start] = frame
+		rows = append(rows, frameRow{start: start, frame: frame})
+	}
+	chunks := swapIndexFiles(t).storeFrames(frames)
+	served := map[int64]bool{}
+	var scans int
+	swapRunSql(t, func(_ *sqlexec.SqlProcess, sql string) (executor.Result, error) {
+		switch {
+		case strings.Contains(sql, "SUM("):
+			return executor.Result{Mp: mp, Batches: []*batch.Batch{docsAndBytesBatch(mp, int64(n*len(frames[1])), int64(n))}}, nil
+		case strings.Contains(sql, "COUNT("):
+			return executor.Result{Mp: mp, Batches: []*batch.Batch{docsAndBytesBatch(mp, int64(n), 0)}}, nil
+		case strings.Contains(sql, "ORDER BY"):
+			return executor.Result{Mp: mp, Batches: []*batch.Batch{frameRowsBatch(t, mp, rows)}}, nil
+		default:
+			scans++
+			list := sql[strings.Index(sql, " IN (")+5 : strings.LastIndex(sql, ")")]
+			var asked []TailChunk
+			for _, id := range strings.Split(list, ", ") {
+				start, err := strconv.ParseInt(id, 10, 64)
+				require.NoError(t, err)
+				require.False(t, served[start], "chunk %d read twice", start)
+				served[start] = true
+				for _, c := range chunks {
+					if c.ChunkId == start {
+						asked = append(asked, c)
+					}
+				}
+			}
+			require.LessOrEqual(t, len(asked), maxTailFramesPerRead)
+			return executor.Result{Mp: mp, Batches: []*batch.Batch{tailChunkBatch(mp, asked)}}, nil
+		}
+	})
+	_, deletes, err := LoadTailSegments(sp, testStorageCfg())
+	require.NoError(t, err)
+	require.Len(t, deletes, n)
+	require.Equal(t, 2, scans)
+	require.Len(t, served, n)
 }

@@ -43,8 +43,8 @@ func cachedEntries(t *testing.T, cache *fileservice.IndexFileCache) int {
 	return n
 }
 
-// An open File holds its cache entry: deleting the entry takes effect when the File is
-// closed, or, after Keep, when the caller releases it.
+// An open File holds its cache entry until Close, or, after Keep, until the caller releases
+// it; a Delete removes the entry at once and the open File stays readable.
 func TestOpenHoldsCacheEntry(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	data := randomBytes(2*ChunkSize+7, 31)
@@ -57,20 +57,22 @@ func TestOpenHoldsCacheEntry(t *testing.T) {
 
 	f, err := Open(ctx, env, ref)
 	require.NoError(t, err)
+	release, err := cache.Hold(name)
+	require.NoError(t, err)
 	require.NoError(t, cache.Delete(ctx, name))
-	require.Equal(t, 1, cachedEntries(t, cache), "deleting an open file waits for its close")
+	require.Equal(t, 0, cachedEntries(t, cache), "a held entry is deleted at once")
 	require.Equal(t, data, readFile(t, f))
 	require.NoError(t, f.Close())
-	require.Equal(t, 0, cachedEntries(t, cache))
+	release()
 
 	f, err = Open(ctx, env, ref)
 	require.NoError(t, err)
-	release := f.Keep()
+	require.Equal(t, 1, cachedEntries(t, cache), "a deleted entry is rebuilt and cached again")
+	kept := f.Keep()
 	require.NoError(t, f.Close())
-	require.NoError(t, cache.Delete(ctx, name))
-	require.Equal(t, 1, cachedEntries(t, cache), "a kept hold outlives Close")
-	release()
-	require.Equal(t, 0, cachedEntries(t, cache))
+	require.Equal(t, 1, cachedEntries(t, cache))
+	kept()
+	require.Equal(t, 1, cachedEntries(t, cache), "releasing the last hold keeps an entry that was not removed")
 
 	env.Cache = nil
 	f, err = Open(ctx, env, ref)

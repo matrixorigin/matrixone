@@ -48,7 +48,17 @@ select id from t where match(body) against('hello') order by id;
 4
 drop snapshot if exists ft2_index_file_tail_sp;
 create snapshot ft2_index_file_tail_sp for account;
+set @frames_before_sql = concat('select count(*) into @frames_before from `', database(), '`.`', @t_meta, '` where index_id like ''cdc_tail:%''');
+prepare frames_before from @frames_before_sql;
+execute frames_before;
+deallocate prepare frames_before;
 delete from t where id = 1;
+set @deleted_sql = concat('select count(*) > @frames_before as deleted from `', database(), '`.`', @t_meta, '` where index_id like ''cdc_tail:%''');
+prepare deleted from @deleted_sql;
+execute deleted;
+➤ deleted[-6,8,0]  𝄀
+1
+deallocate prepare deleted;
 select id from t where match(body) against('hello') order by id;
 ➤ id[-5,64,0]  𝄀
 2  𝄀

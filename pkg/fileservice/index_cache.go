@@ -89,11 +89,12 @@ func ParseIndexFileRebuildCache(s string) (Policy, error) {
 // whose last use, its publication or the release of its last hold, is older than the
 // idle TTL is deleted.
 type IndexFileCache struct {
-	disk          *DiskCache
-	rebuildPolicy Policy
-	idleTTL       time.Duration
-	stopGC        context.CancelFunc
-	gcDone        chan struct{}
+	disk           *DiskCache
+	rebuildPolicy  Policy
+	checkOnStartup atomic.Bool
+	idleTTL        time.Duration
+	stopGC         context.CancelFunc
+	gcDone         chan struct{}
 }
 
 // IndexCacheFile is one file of an entry written by IndexFileCache.Put. Its content
@@ -212,6 +213,17 @@ func (c *IndexFileCache) RebuildPolicy() Policy {
 	return c.rebuildPolicy
 }
 
+// CheckOnStartup reports whether each cached file's full checksum is checked on its first
+// open since the process started.
+func (c *IndexFileCache) CheckOnStartup() bool {
+	return c.checkOnStartup.Load()
+}
+
+// SetCheckOnStartup sets CheckOnStartup.
+func (c *IndexFileCache) SetCheckOnStartup(on bool) {
+	c.checkOnStartup.Store(on)
+}
+
 // IndexFileCacheProvider is a file service that owns an index-file cache.
 type IndexFileCacheProvider interface {
 	IndexFileCache() *IndexFileCache
@@ -292,9 +304,9 @@ func (c *IndexFileCache) Open(ctx context.Context, name string, files ...string)
 	return c.disk.openDir(ctx, name, diskPath, files)
 }
 
-// Hold keeps entry name on disk until release is called: removing the entry, by
-// eviction or Delete, is deferred until its last hold is released. Take the hold before
-// Open. release must be called once.
+// Hold keeps entry name on disk until release is called: evicting or collecting the
+// entry is deferred until its last hold is released. Take the hold before Open. release
+// must be called once.
 func (c *IndexFileCache) Hold(name string) (release func(), err error) {
 	diskPath, err := c.disk.pathForDir(name)
 	if err != nil {
@@ -305,7 +317,7 @@ func (c *IndexFileCache) Hold(name string) (release func(), err error) {
 	return func() { once.Do(func() { c.disk.releaseDir(diskPath) }) }, nil
 }
 
-// Delete removes entry name, once it has no holds.
+// Delete removes entry name at once, held or not; files already open stay readable.
 func (c *IndexFileCache) Delete(ctx context.Context, name string) error {
 	diskPath, err := c.disk.pathForDir(name)
 	if err != nil {
@@ -316,15 +328,18 @@ func (c *IndexFileCache) Delete(ctx context.Context, name string) error {
 		return err
 	}
 	defer done()
-	if err := c.disk.removeCachePath(diskPath); err != nil && !os.IsNotExist(err) {
+	if err := c.disk.removeDir(diskPath); err != nil && !os.IsNotExist(err) {
 		return err
 	}
 	c.disk.cache.Delete(ctx, diskPath)
 	return nil
 }
 
-// dirHolds counts the holds on entry directories. A removal of a held entry is recorded
-// and performed when its last hold is released.
+// heldDirs counts the holds on entry directories of every cache in the process, so caches
+// sharing a directory see each other's holds. An eviction of a held entry is recorded and
+// performed when its last hold is released.
+var heldDirs dirHolds
+
 type dirHolds struct {
 	mu sync.Mutex
 	m  map[string]*dirHold
@@ -336,31 +351,31 @@ type dirHold struct {
 }
 
 func (d *DiskCache) holdDir(path string) {
-	d.dirHolds.mu.Lock()
-	defer d.dirHolds.mu.Unlock()
-	if d.dirHolds.m == nil {
-		d.dirHolds.m = make(map[string]*dirHold)
+	heldDirs.mu.Lock()
+	defer heldDirs.mu.Unlock()
+	if heldDirs.m == nil {
+		heldDirs.m = make(map[string]*dirHold)
 	}
-	h := d.dirHolds.m[path]
+	h := heldDirs.m[path]
 	if h == nil {
 		h = &dirHold{}
-		d.dirHolds.m[path] = h
+		heldDirs.m[path] = h
 	}
 	h.refs++
 }
 
 func (d *DiskCache) releaseDir(path string) {
-	d.dirHolds.mu.Lock()
-	h := d.dirHolds.m[path]
+	heldDirs.mu.Lock()
+	h := heldDirs.m[path]
 	h.refs--
 	if h.refs > 0 {
-		d.dirHolds.mu.Unlock()
+		heldDirs.mu.Unlock()
 		return
 	}
 	now := time.Now()
 	_ = os.Chtimes(path, now, now)
-	delete(d.dirHolds.m, path)
-	d.dirHolds.mu.Unlock()
+	delete(heldDirs.m, path)
+	heldDirs.mu.Unlock()
 	if !h.removed {
 		return
 	}
@@ -378,9 +393,9 @@ func (d *DiskCache) releaseDir(path string) {
 // removeIdleDir removes an entry directory that has no holds and was last used before
 // before.
 func (d *DiskCache) removeIdleDir(ctx context.Context, path string, before time.Time) (bool, error) {
-	d.dirHolds.mu.Lock()
+	heldDirs.mu.Lock()
 	idle, err := d.idleDirLocked(path, before)
-	d.dirHolds.mu.Unlock()
+	heldDirs.mu.Unlock()
 	if !idle {
 		return false, err
 	}
@@ -389,13 +404,13 @@ func (d *DiskCache) removeIdleDir(ctx context.Context, path string, before time.
 		return false, err
 	}
 	defer done()
-	d.dirHolds.mu.Lock()
+	heldDirs.mu.Lock()
 	if idle, err = d.idleDirLocked(path, before); !idle {
-		d.dirHolds.mu.Unlock()
+		heldDirs.mu.Unlock()
 		return false, err
 	}
 	trash, err := trashCacheDir(path)
-	d.dirHolds.mu.Unlock()
+	heldDirs.mu.Unlock()
 	if err != nil {
 		if os.IsNotExist(err) {
 			return false, nil
@@ -407,9 +422,9 @@ func (d *DiskCache) removeIdleDir(ctx context.Context, path string, before time.
 }
 
 // idleDirLocked reports whether an entry directory has no holds and was last used before
-// before. The caller holds dirHolds.mu.
+// before. The caller holds heldDirs.mu.
 func (d *DiskCache) idleDirLocked(path string, before time.Time) (bool, error) {
-	if d.dirHolds.m[path] != nil {
+	if heldDirs.m[path] != nil {
 		return false, nil
 	}
 	info, err := os.Stat(path)
@@ -422,17 +437,31 @@ func (d *DiskCache) idleDirLocked(path string, before time.Time) (bool, error) {
 	return info.ModTime().Before(before), nil
 }
 
+// removeDir removes an entry directory now, dropping any removal recorded for its holds.
+func (d *DiskCache) removeDir(path string) error {
+	heldDirs.mu.Lock()
+	if h := heldDirs.m[path]; h != nil {
+		h.removed = false
+	}
+	trash, err := trashCacheDir(path)
+	heldDirs.mu.Unlock()
+	if err != nil {
+		return err
+	}
+	return os.RemoveAll(trash)
+}
+
 // removeHeldDir removes an entry directory, or records the removal for the release of
 // its last hold.
 func (d *DiskCache) removeHeldDir(path string) error {
-	d.dirHolds.mu.Lock()
-	if h := d.dirHolds.m[path]; h != nil {
+	heldDirs.mu.Lock()
+	if h := heldDirs.m[path]; h != nil {
 		h.removed = true
-		d.dirHolds.mu.Unlock()
+		heldDirs.mu.Unlock()
 		return nil
 	}
 	trash, err := trashCacheDir(path)
-	d.dirHolds.mu.Unlock()
+	heldDirs.mu.Unlock()
 	if err != nil {
 		return err
 	}
