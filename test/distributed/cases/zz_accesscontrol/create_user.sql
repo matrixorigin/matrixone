@@ -73,6 +73,13 @@ create user user_aaa identified by '12345678' default role aaa ;
 create user '' identified by '111' ;
 create user c_user_4 identified by '' ;
 
+-- Credential-bearing syntax errors must not echo raw secrets, including decoded PREPARE bodies.
+alter user u identified by FIRST_PASSWORD, v identified by 'SECOND_PASSWORD';
+create account `` x `` x `` ADMIN_NAME 'admin' IDENTIFIED BY 'STACKED_REVIEW_CANARY';
+prepare redacted_prepare from "create accout a ADMIN_NAME 'admin' IDENTIFIED BY 'PREPARE_ERROR_CANARY';";
+prepare redacted_prepare from "create tablex t(id int)";
+select 1;
+
 --6.CREATE-DROP-CREATE,CREATE-ALTER-CREATE场景
 create user if not exists test_user2 identified by '12345678';
 select user_name,authentication_string from mo_catalog.mo_user where user_name='test_user2';

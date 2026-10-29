@@ -11130,6 +11130,7 @@ func TestExecRequestStmtPrepareRejectsNonPrepareableAndEmptyPayloads(t *testing.
 	tests := []struct {
 		name    string
 		payload string
+		secret  string
 	}{
 		{name: "values", payload: "values row(1)"},
 		{name: "lock tables", payload: "lock tables t read"},
@@ -11138,6 +11139,8 @@ func TestExecRequestStmtPrepareRejectsNonPrepareableAndEmptyPayloads(t *testing.
 		{name: "whitespace", payload: " \t\r\n"},
 		{name: "line comment", payload: "-- comment"},
 		{name: "block comment", payload: "/* comment */"},
+		{name: "credential parse error", payload: "create accout a ADMIN_NAME 'admin' IDENTIFIED BY 'PREPARE_ERROR_CANARY';", secret: "PREPARE_ERROR_CANARY"},
+		{name: "unterminated credential", payload: "create user u identified by 'PREPARE_OPEN_CANARY", secret: "PREPARE_OPEN_CANARY"},
 	}
 
 	for _, tc := range tests {
@@ -11152,6 +11155,63 @@ func TestExecRequestStmtPrepareRejectsNonPrepareableAndEmptyPayloads(t *testing.
 			moErr, ok := resp.GetData().(*moerr.Error)
 			require.True(t, ok)
 			require.Equal(t, moerr.ErrParseError, moErr.ErrorCode())
+			require.Equal(t, uint16(1064), moErr.MySQLCode())
+			require.Equal(t, "42000", moErr.SqlState())
+			if tc.secret != "" {
+				require.NotContains(t, moErr.Error(), tc.secret, "client response")
+				require.Contains(t, moErr.Error(), "syntax error")
+			}
+		})
+	}
+}
+
+func TestParsePreparedStatementRedactsBeforeReporting(t *testing.T) {
+	ctx := defines.AttachAccountId(t.Context(), sysAccountID)
+	ctrl := gomock.NewController(t)
+	previousPU := getPuIfPresent("")
+	t.Cleanup(func() { setPu("", previousPU) })
+	ses := newTestSession(t, ctrl)
+	t.Cleanup(ses.Close)
+	execCtx := newTestExecCtx(ctx, ctrl)
+	execCtx.ses = ses
+	previousReporter := errutil.GetReportErrorFunc()
+	var mu sync.Mutex
+	var reports []string
+	errutil.SetErrorReporter(func(_ context.Context, err error, _ int) {
+		mu.Lock()
+		defer mu.Unlock()
+		reports = append(reports, err.Error())
+	})
+	t.Cleanup(func() { errutil.SetErrorReporter(previousReporter) })
+	for _, tc := range []struct{ name, sql, secret string }{
+		{"terminated", "create accout a ADMIN_NAME 'admin' IDENTIFIED BY 'INNER_PREPARE_CANARY';", "INNER_PREPARE_CANARY"},
+		{"unterminated", "create user u identified by 'INNER_OPEN_CANARY", "INNER_OPEN_CANARY"},
+		{"ordinary", "create tablex t(id int)", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mu.Lock()
+			reports = nil
+			mu.Unlock()
+			_, stmt, _, err := parsePreparedStatement(execCtx, ses, tc.sql)
+			require.Nil(t, stmt)
+			require.Error(t, err)
+			moErr, ok := err.(*moerr.Error)
+			require.True(t, ok)
+			require.Equal(t, uint16(1064), moErr.MySQLCode())
+			require.Equal(t, "42000", moErr.SqlState())
+			require.Contains(t, err.Error(), "syntax error at line 1 column")
+			if tc.secret == "" {
+				require.Contains(t, err.Error(), "tablex")
+				return
+			}
+			assert.NotContains(t, err.Error(), tc.secret, "client error")
+			mu.Lock()
+			reported := append([]string(nil), reports...)
+			mu.Unlock()
+			require.NotEmpty(t, reported, "exercise the actual moerr reporting boundary")
+			for _, report := range reported {
+				assert.NotContains(t, report, tc.secret, "error pipeline")
+			}
 		})
 	}
 }
@@ -12994,19 +13054,19 @@ func TestRedactStatementErrorForLoggingMasksSecrets(t *testing.T) {
 }
 
 // The diagnostic copy must mask an identified-by password inside the
-// serialized near echo, even though the client-visible echo keeps it readable
-// by convention; a naive whole-message token scan cannot see the password
+// serialized near echo; a naive whole-message token scan cannot see the password
 // because the echo is one outer double-quoted string (#30747 review).
 func TestRedactStatementErrorForLoggingMasksSerializedNearPassword(t *testing.T) {
 	sql := `create accout a1 ADMIN_NAME 'admin' IDENTIFIED BY 'PWN123456';`
 	_, parseErr := mysql.ParseOne(context.Background(), sql, 1)
 	require.Error(t, parseErr)
-	// raw client-side error keeps the identified-by literal (convention)
+	// The internal parser error retains raw source for the redaction boundary.
 	require.Contains(t, parseErr.Error(), "PWN123456")
 	// diagnostic copy masks it inside the near fragment
 	redacted := redactStatementErrorForLogging(parseErr, sql, "").Error()
 	require.NotContains(t, redacted, "PWN123456")
-	require.Contains(t, redacted, "IDENTIFIED BY '******'")
+	require.Contains(t, redacted, `near "******"`)
+	require.Contains(t, redacted, "syntax error at line 1 column")
 }
 
 // A stage credential map written with JSON-style colons instead of '=' fails
@@ -13426,6 +13486,7 @@ func TestRound11MalformedMapFamilyAllSinks(t *testing.T) {
 		"B1CANARY", "B2CANARY", "B3CANARY", "B4CANARY", "B5CANARY", "B6CANARY", "B7CANARY",
 		"C1CANARY", "C2CANARY", "C3CANARY", "C4CANARY", "C5CANARY", "C6CANARY",
 		"D1CANARY", "D2CANARY", "D3CANARY", "D4CANARY", "D5CANARY", "D6PASSWORD",
+		"FIRST_PASSWORD", "SECOND_PASSWORD", "STACKED_REVIEW_CANARY",
 	}
 	shapes := []struct {
 		name    string
@@ -13456,6 +13517,8 @@ func TestRound11MalformedMapFamilyAllSinks(t *testing.T) {
 		{"r13-admission-slashes", "", "// leading\nSET sql_mode='ANSI_QUOTES'; create stage \"s\\\" url='file:///x' credentials={'k'='D4CANARY'}"},
 		{"r13-cursor-resume-chain", "", `SET sql_mode='ANSI_QUOTES'; SELECT 1 AS "a\"; SET sql_mode=''; SELECT 1; SET sql_mode='ANSI_QUOTES'; create stage "s\" url='file:///x' credentials={'k'='D5CANARY'}`},
 		{"r13-identified-by-unterminated", "", `create user u identified by 'D6PASSWORD`},
+		{"original spans before partial near rewrite", "", `alter user u identified by FIRST_PASSWORD, v identified by 'SECOND_PASSWORD';`},
+		{"lexical recovery exhaustion", "", "create account `` x `` x `` ADMIN_NAME 'admin' IDENTIFIED BY 'STACKED_REVIEW_CANARY';"},
 	}
 	for _, shape := range shapes {
 		t.Run(shape.name, func(t *testing.T) {

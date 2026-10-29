@@ -436,6 +436,15 @@ func TestMaskPrepareAtNestedStatementBoundary(t *testing.T) {
 		require.NotContains(t,
 			MaskSensitiveSqlLiteralsPerStatement("create account `` x `` ADMIN_NAME 'a' IDENTIFIED BY 'STACKED_CANARY';", 0),
 			"STACKED_CANARY")
+		for _, depth := range []int{3, 4, 16} {
+			poison := "create account " + strings.Repeat("`` x ", depth) + "ADMIN_NAME 'a' IDENTIFIED BY 'RECOVERY_BUDGET_CANARY';"
+			for _, mode := range []SQLModeFlags{0, SQLModeFlags(SQLModeNoBackslashEscapes), SQLModeFlags(SQLModeANSIQuotes | SQLModeNoBackslashEscapes)} {
+				got := MaskSensitiveSqlLiteralsPerStatement(poison, mode)
+				require.NotContains(t, got, "RECOVERY_BUDGET_CANARY", "depth=%d mode=%d", depth, mode)
+				require.NotEmpty(t, SensitiveLiteralSpansForDiagnostic(poison, mode))
+				require.Equal(t, got, MaskSensitiveSqlLiteralsPerStatement(got, mode), "idempotent")
+			}
+		}
 	})
 
 	t.Run("controls", func(t *testing.T) {

@@ -389,8 +389,8 @@ func redactStatementTextForLogging(statement tree.Statement, text string, sqlMod
 // The near echo is embedded as one outer double-quoted string inside the
 // serialized error, so a plain token scan of the whole message cannot see
 // through it — the fragment is extracted, masked on its own, and spliced
-// back. (The client-visible echo keeps the identified-by plaintext by
-// convention; only this diagnostic copy is fully masked.)
+// back. The sanitized diagnostic is also used for credential-bearing client
+// errors; raw parser errors are never safe to report before this boundary.
 // nearFragmentRegion locates the serialized `near "..."` tail in a parser
 // error message: the region between the quote after " near " and the last
 // quote, with only `;` or a parenthesized length marker allowed after it.
@@ -418,9 +418,8 @@ func nearFragmentRegion(errText string) (int, int, bool) {
 // the near tail and replays no `identified by` keyword, so keyword-driven
 // fragment passes cannot see it — but the record masker's span union over
 // the full statement knows exactly which bytes are secret. Applied only to
-// the diagnostic path (error telemetry + terminal status log); the client
-// echo never passes through here, so the documented plaintext echo policy
-// is preserved.
+// the diagnostic path (error telemetry + terminal status log) and credential-
+// bearing client errors, before fragment replacements erase source provenance.
 func redactOverlappingNearSensitive(errText, stmtText string, mode mysql.SQLModeFlags) string {
 	if stmtText == "" {
 		return errText
@@ -456,13 +455,10 @@ func redactStatementErrorForLogging(err error, text string, sqlMode string) erro
 	}
 	mode := mysql.ParseSQLModeFlags(sqlMode)
 	errText := err.Error()
-	errText = maskSerializedNearFragment(errText, text, mode)
-	// Only fragments the keyword-driven pass just left UNCHANGED are still
-	// suspect: provenance overlapping any original-statement sensitive span
-	// then redacts wholesale (e.g. an unterminated identified-by password,
-	// #30747 review round 13). A fragment the pass already masked no longer
-	// matches the source verbatim and is left alone.
+	// Check the original echo before partial masking changes its bytes. One
+	// replaced credential does not prove that the rest of the echo is safe.
 	errText = redactOverlappingNearSensitive(errText, text, mode)
+	errText = maskSerializedNearFragment(errText, text, mode)
 	if masked := parsers.MaskSensitiveLiteralsForLoggingWithSQLMode(errText, mode); masked != err.Error() {
 		// Downstream (RecordParseErrorStatement) wraps the returned error with
 		// moerr.NewParseError, whose template prepends "SQL parser error: ".
@@ -488,13 +484,12 @@ func (e plainMaskedParseError) Error() string { return string(e) }
 // reportParseErrorForClient normalizes a non-moerr parse failure for the two
 // audiences that consume it. moerr.NewParseError(ctx, ...) would push the
 // client-visible near-text into the error pipeline (error log + error_info)
-// as well; on a credential-bearing statement that echo carries secrets
-// (#30747). Report the redacted diagnostic copy with context instead, and
-// hand the client an error with the SAME conventional echo that never
-// touches the error pipeline (no-report context — the NoCtx constructors
-// still report through the ambient context). When the diagnostic copy is
-// identical to the client text, telemetry keeps its previous shape (only the
-// error-code envelope is added, as before).
+// as well; an unredacted credential-bearing echo carries secrets (#30747).
+// Callers sanitize both copies before this boundary. Report the diagnostic
+// copy with context, but do not also report the client copy (the NoCtx
+// constructors still report through the ambient context). When the diagnostic
+// copy is identical to the client text, telemetry keeps its previous shape
+// (only the error-code envelope is added, as before).
 func reportParseErrorForClient(ctx context.Context, parseErr, diagnosticErr error) error {
 	if _, ok := parseErr.(*moerr.Error); ok {
 		return parseErr
@@ -3217,7 +3212,8 @@ func parsePreparedStatement(execCtx *ExecCtx, ses *Session, rewritten string) (s
 		// rejected when executed directly, instead of a generic 1105
 		// internal error.
 		if _, positioned := err.(mysql.PositionedErr); positioned {
-			err = moerr.NewParseError(execCtx.reqCtx, err.Error())
+			diagnosticErr := redactStatementErrorForLogging(err, rewritten, sessionSQLModeForParser(ses))
+			err = reportParseErrorForClient(execCtx.reqCtx, diagnosticErr, diagnosticErr)
 		}
 		return rewritten, nil, nil, err
 	}

@@ -234,8 +234,16 @@ func collectCredentialMasksWithLexErrorRecovery(sql string, initial CredentialMa
 			statementStart = typ == SPBEGIN || typ == THEN || typ == ELSE ||
 				typ == DO || typ == REPEAT || typ == LOOP
 		}
-		if typ == LEX_ERROR && lexErrTailBudget > 0 && credState == CredentialStateNone &&
+		if typ == LEX_ERROR && credState == CredentialStateNone &&
 			tokStart >= coveredUntil && scanner.Pos-tokStart >= 8 {
+			if lexErrTailBudget == 0 {
+				// Exhausting bounded recovery does not establish that the
+				// swallowed remainder is clean. Preserve its raw sensitive
+				// span for every diagnostic consumer, without descending again.
+				spans = append(spans, [2]int{tokStart, scanner.Pos})
+				coveredUntil = scanner.Pos
+				continue
+			}
 			// A token-level poison (for example the empty quoted
 			// identifier ` `` `) makes the scanner REPORT the remainder
 			// as one large LEX_ERROR tail, hiding every credential
