@@ -130,7 +130,8 @@ func TestMaintainInformationSchemaColumnsTablesRepairsFinalVersionTenants(t *tes
 			"0/TABLES":  sysview.InformationSchemaTablesV118DDL,
 			// account 10: already at final version with pre-fix definitions
 			"10/COLUMNS": oldColumnsSelectorDefinition(),
-			"10/TABLES":  oldTablesV118Definition(),
+			"10/TABLES": strings.ReplaceAll(sysview.InformationSchemaTablesV118DDL,
+				"not startswith(tbl.relname, '__mo_index_')", "tbl.relname not like '__mo_index_%'"),
 			// account 20: tenant whose COLUMNS never got a fix but TABLES is fine
 			"20/COLUMNS": "CREATE VIEW information_schema.COLUMNS AS SELECT 1",
 			"20/TABLES":  sysview.InformationSchemaTablesV118DDL,

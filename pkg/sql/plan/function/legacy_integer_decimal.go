@@ -21,6 +21,71 @@ import (
 )
 
 type legacyIntegerDecimalContextKey struct{}
+type legacyDecimalPrecisionContextKey struct{}
+
+// WithLegacyDecimalIntermediatePrecision reconstructs the released precision
+// metadata after strict integer casts but before intermediate-precision fixes.
+// Like the older coercion era, it is only for DUMP/LOAD origin verification.
+func WithLegacyDecimalIntermediatePrecision(ctx context.Context) context.Context {
+	return context.WithValue(ctx, legacyDecimalPrecisionContextKey{}, true)
+}
+
+// LegacyDecimalIntermediatePrecision is confined to historical origin binding;
+// the earlier integer-coercion era also predates the precision correction.
+func LegacyDecimalIntermediatePrecision(ctx context.Context) bool {
+	if ctx == nil {
+		return false
+	}
+	value, _ := ctx.Value(legacyDecimalPrecisionContextKey{}).(bool)
+	return value || legacyIntegerDecimalCoercions(ctx)
+}
+
+// Keep this era's arithmetic targets independent of logical precision changes.
+// It preserves the strict integer-cast domains already released at that time.
+func legacyDecimalPrecisionCheck(id int32, inputs []types.Type, current checkResult) checkResult {
+	if len(inputs) != 2 || (!inputs[0].Oid.IsDecimal() && !inputs[1].Oid.IsDecimal()) {
+		return current
+	}
+	var operator string
+	switch id {
+	case PLUS:
+		operator = "+"
+	case MINUS:
+		operator = "-"
+	case MULTI:
+		operator = "*"
+	default:
+		return current
+	}
+	has, left, right := arithmeticTypeCastRule1(inputs[0], inputs[1])
+	if !left.Oid.IsDecimal() || !right.Oid.IsDecimal() {
+		return current
+	}
+	wideUnsigned := inputs[0].Oid == types.T_uint64 || inputs[0].Oid == types.T_bit ||
+		inputs[1].Oid == types.T_uint64 || inputs[1].Oid == types.T_bit
+	if id == MULTI && wideUnsigned && left.Oid == types.T_decimal64 && right.Oid == types.T_decimal64 {
+		left = types.New(types.T_decimal128, 38, left.Scale)
+		right = types.New(types.T_decimal128, 38, right.Scale)
+		has = true
+	}
+	if widened, ok := legacyWidenedDecimalArithmeticInputs(operator, inputs, []types.Type{left, right}); ok {
+		return newCheckResultWithCast(0, widened)
+	}
+	if has {
+		// This historical fast path excluded BIGINT/UINT64/BIT because their
+		// complete domains exceed a declared precision-18 D64 cast target.
+		if id == MULTI && left.Oid == types.T_decimal128 && right.Oid == types.T_decimal128 &&
+			(inputs[0].Oid == types.T_decimal64 || inputs[1].Oid == types.T_decimal64) &&
+			inputs[0].Oid != types.T_decimal128 && inputs[1].Oid != types.T_decimal128 &&
+			inputs[0].Oid != types.T_int64 && inputs[1].Oid != types.T_int64 && !wideUnsigned {
+			left, right = types.T_decimal64.ToType(), types.T_decimal64.ToType()
+			SetTargetScaleFromSource(&inputs[0], &left)
+			SetTargetScaleFromSource(&inputs[1], &right)
+		}
+		return newCheckResultWithCast(0, []types.Type{left, right})
+	}
+	return newCheckResultWithSuccess(0)
+}
 
 // WithLegacyIntegerDecimalCoercions reconstructs complete pre-width-check
 // bindings only for DUMP/LOAD origin verification. It does not change runtime
@@ -42,7 +107,9 @@ func legacyIntegerDecimalCheck(id int32, inputs []types.Type, current checkResul
 	for _, input := range inputs {
 		hasInteger = hasInteger || input.IsIntOrUint() || input.Oid == types.T_bit
 	}
-	if !hasInteger {
+	hasDecimalArithmetic := (id == PLUS || id == MINUS || id == MULTI) && len(inputs) == 2 &&
+		(inputs[0].Oid.IsDecimal() || inputs[1].Oid.IsDecimal())
+	if !hasInteger && !hasDecimalArithmetic {
 		return current
 	}
 	if (id == BETWEEN && len(inputs) == 3) || (id == IN_RANGE && len(inputs) == 4) {
@@ -120,7 +187,7 @@ func legacyIntegerDecimalCheck(id int32, inputs []types.Type, current checkResul
 		}
 	}
 	if arithmetic != "" {
-		if widened, ok := widenedDecimalArithmeticInputs(arithmetic, inputs, targets); ok {
+		if widened, ok := legacyWidenedDecimalArithmeticInputs(arithmetic, inputs, targets); ok {
 			return newCheckResultWithCast(current.idx, widened)
 		}
 	}
@@ -137,4 +204,117 @@ func legacyIntegerDecimalCheck(id int32, inputs []types.Type, current checkResul
 		}
 	}
 	return newCheckResultWithCast(current.idx, targets)
+}
+
+// These formulas reconstruct the pre-intermediate-precision binding only for
+// persisted-origin verification. Normal arithmetic uses the current domains.
+func legacyDecimalArithmeticDomain(input types.Type) (width, scale int32, ok bool) {
+	if input.Oid.IsDecimal() {
+		width = input.Width
+		if width <= 0 {
+			width = input.Oid.ToType().Width
+		}
+		scale = max(input.Scale, int32(0))
+		return width, scale, true
+	}
+	if input.IsIntOrUint() {
+		return integerIntegralWidth(input.Oid), 0, true
+	}
+	// BIT participates in exact numeric coercion as an unsigned integer even
+	// though it is intentionally outside IsIntOrUint. BIT(64) spans the full
+	// uint64 domain, so reserve all 20 decimal digits when deriving a widened
+	// arithmetic result.
+	if input.Oid == types.T_bit {
+		return 20, 0, true
+	}
+	return 0, 0, false
+}
+
+// legacyWidenedDecimalArithmeticInputs derives the Decimal256 cast domains from the
+// original numeric operands. fixedTypeCastRule1 intentionally uses a full
+// Decimal128 envelope for mixed decimal/integer operands, so deciding from its
+// output alone loses the integer's actual 3..20 digit domain and can either
+// miss a required widening or make small literal arithmetic unnecessarily wide.
+func legacyWidenedDecimalArithmeticInputs(operator string, inputs, coerced []types.Type) ([]types.Type, bool) {
+	if len(inputs) != 2 || len(coerced) != 2 ||
+		coerced[0].Oid != types.T_decimal128 || coerced[1].Oid != types.T_decimal128 {
+		return nil, false
+	}
+
+	leftWidth, leftScale, leftOK := legacyDecimalArithmeticDomain(inputs[0])
+	rightWidth, rightScale, rightOK := legacyDecimalArithmeticDomain(inputs[1])
+	if !leftOK || !rightOK || (!inputs[0].Oid.IsDecimal() && !inputs[1].Oid.IsDecimal()) {
+		return nil, false
+	}
+
+	var precision int32
+	switch operator {
+	case "+", "-":
+		scale := max(leftScale, rightScale)
+		integerDigits := max(leftWidth-leftScale, rightWidth-rightScale)
+		precision = integerDigits + scale + 1
+	case "*":
+		precision = leftWidth + rightWidth
+	default:
+		return nil, false
+	}
+	if precision <= types.T_decimal128.ToType().Width {
+		return nil, false
+	}
+	return []types.Type{
+		types.New(types.T_decimal256, leftWidth, leftScale),
+		types.New(types.T_decimal256, rightWidth, rightScale),
+	}, true
+}
+
+func legacyDecimalAddSubReturnType(parameters []types.Type) types.Type {
+	scale := max(parameters[0].Scale, parameters[1].Scale)
+	if parameters[0].Oid == types.T_decimal256 || parameters[1].Oid == types.T_decimal256 {
+		integerDigits := max(
+			parameters[0].Width-parameters[0].Scale,
+			parameters[1].Width-parameters[1].Scale,
+		)
+		return types.New(types.T_decimal256, min(integerDigits+scale+1, int32(65)), scale)
+	}
+	if parameters[0].Oid == types.T_decimal128 || parameters[1].Oid == types.T_decimal128 {
+		return types.New(types.T_decimal128, 38, scale)
+	}
+	return types.New(types.T_decimal64, 18, scale)
+}
+
+func legacyDecimalMultiplyReturnType(parameters []types.Type) types.Type {
+	scale := int32(12)
+	scale1, scale2 := parameters[0].Scale, parameters[1].Scale
+	if scale1 > scale {
+		scale = scale1
+	}
+	if scale2 > scale {
+		scale = scale2
+	}
+	if scale1+scale2 < scale {
+		scale = scale1 + scale2
+	}
+	if parameters[0].Oid == types.T_decimal256 || parameters[1].Oid == types.T_decimal256 {
+		return types.New(types.T_decimal256, min(parameters[0].Width+parameters[1].Width, int32(65)), scale)
+	}
+	return types.New(types.T_decimal128, 38, scale)
+}
+
+func (fr *FuncGetResult) applyLegacyDecimalArithmeticReturnType(inputs []types.Type) {
+	if fr.overloadId != 0 {
+		return
+	}
+	parameters := inputs
+	if fr.needCast {
+		parameters = fr.targetTypes
+	}
+	if len(parameters) != 2 || !parameters[0].Oid.IsDecimal() {
+		return
+	}
+	switch fr.fid {
+	case PLUS, MINUS:
+		fr.retType = legacyDecimalAddSubReturnType(parameters)
+	case MULTI:
+		fr.retType = legacyDecimalMultiplyReturnType(parameters)
+	}
 }
