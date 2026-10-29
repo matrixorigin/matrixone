@@ -240,6 +240,49 @@ var (
 	benchmarkIntZValues  []int64
 )
 
+func BenchmarkIntHashMapEncodeFlatFixed(b *testing.B) {
+	for _, typ := range []types.T{types.T_int32, types.T_int64} {
+		for _, mode := range []string{"flat", "null-outside-range", "composite"} {
+			b.Run(typ.String()+"/"+mode, func(b *testing.B) {
+				mp := mpool.MustNewZero()
+				owner, err := NewIntHashMap(false, mp)
+				if err != nil {
+					b.Fatal(err)
+				}
+				b.Cleanup(func() {
+					owner.Free()
+					if mp.CurrNB() != 0 {
+						b.Fatalf("retained hash memory: %d", mp.CurrNB())
+					}
+				})
+				vecType, columns := typ, 1
+				if mode == "composite" {
+					vecType, columns = types.T_int32, 2
+				}
+				vecs := make([]*vector.Vector, columns)
+				for i := range vecs {
+					vec := newVector(UnitLimit+1, vecType.ToType(), mp, false, nil)
+					b.Cleanup(func() { vec.Free(mp) })
+					if mode == "null-outside-range" {
+						vec.GetNulls().Add(UnitLimit)
+					}
+					vecs[i] = vec
+				}
+				itr := owner.NewIterator()
+				itr.ensureCapacity(UnitLimit)
+				b.ReportAllocs()
+				b.ResetTimer()
+				for i := 0; i < b.N; i++ {
+					clear(itr.keys)
+					clear(itr.keyOffs)
+					copy(itr.zValues, OneInt64s[:])
+					itr.encodeHashKeys(vecs, 0, UnitLimit)
+				}
+			})
+		}
+	}
+}
+
 func BenchmarkIntHashMapIteratorFirstInsert(b *testing.B) {
 	for _, count := range []int{1, 255, 256} {
 		b.Run(fmt.Sprintf("rows-%d", count), func(b *testing.B) {

@@ -533,7 +533,7 @@ select cast(-5 as unsigned) -1, cast(-5 as unsigned) + 1;
 ➤ cast(-5 as unsigned) - 1[3,38,0]  ¦  cast(-5 as unsigned) + 1[3,38,0]  𝄀
 18446744073709551610  ¦  18446744073709551612
 select cast(5 as unsigned) -6.0;
-➤ cast(5 as unsigned) - 6.0[3,38,1]  𝄀
+➤ cast(5 as unsigned) - 6.0[3,22,1]  𝄀
 -1.0
 select cast(NULL as signed);
 ➤ cast(null as signed)[-5,64,0]  𝄀
@@ -605,7 +605,7 @@ select 1.0 * (_binary X'312E35' | X'312E35');
 ➤ 1.0 * (0x312E35 | 0x312E35)[8,53,1]  𝄀
 1.5
 select 1.0 * (X'312E35' | X'312E35');
-➤ 1.0 * (0x312E35 | 0x312E35)[3,38,1]  𝄀
+➤ 1.0 * (0x312E35 | 0x312E35)[3,22,1]  𝄀
 3223093.0
 select (_binary X'31' | NULL) + 0;
 ➤ (0x31 | null) + 0[-5,64,0]  𝄀

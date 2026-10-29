@@ -139,6 +139,9 @@ def test_sql_builder_clone_snapshots_bulk_insert_inputs():
     rows[0].append(1)
     rows.append([2, 'new', 0])
     assert clone.build() == expected
+    assert builder.build() == expected
+    builder.values(id=2, label="new")
+    assert clone.build() == expected
     assert builder.build() != expected
 
 
