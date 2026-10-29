@@ -127,12 +127,16 @@ func (f *hiddenIndexTableRefFinder) scanStatement(stmt tree.Statement) {
 		}
 		f.scanUpdateExprs(st.Exprs)
 		f.scanWhere(st.Where)
+		f.scanOrderBy(st.OrderBy)
+		f.scanLimit(st.Limit)
 		f.scanSelectExprs(st.Returning)
 	case *tree.Delete:
 		f.scanWith(st.With)
 		f.scanTableExprs(st.Tables)
 		f.scanTableExprs(st.TableRefs)
 		f.scanWhere(st.Where)
+		f.scanOrderBy(st.OrderBy)
+		f.scanLimit(st.Limit)
 		f.scanSelectExprs(st.Returning)
 	case *tree.Replace:
 		f.scanTableExpr(st.Table)
@@ -173,6 +177,9 @@ func (f *hiddenIndexTableRefFinder) scanStatement(stmt tree.Statement) {
 	case *tree.CreateView:
 		f.scanTableName(st.Name)
 		f.scanSelect(st.AsSource)
+	case *tree.AlterView:
+		f.scanTableName(st.Name)
+		f.scanSelect(st.AsSource)
 	case *tree.CreateIndex:
 		f.scanTableName(st.Table)
 	case *tree.DropIndex:
@@ -194,6 +201,8 @@ func (f *hiddenIndexTableRefFinder) scanStatement(stmt tree.Statement) {
 	case *tree.ExplainStmt:
 		f.scanStatement(st.Statement)
 	case *tree.ExplainAnalyze:
+		f.scanStatement(st.Statement)
+	case *tree.ExplainPhyPlan:
 		f.scanStatement(st.Statement)
 	case *tree.ExplainFor:
 		f.scanStatement(st.Statement)
@@ -233,14 +242,22 @@ func (f *hiddenIndexTableRefFinder) scanSelect(sel *tree.Select) {
 	}
 	f.scanWith(sel.With)
 	f.scanSelectStatement(sel.Select)
-	for _, order := range sel.OrderBy {
+	f.scanOrderBy(sel.OrderBy)
+	f.scanLimit(sel.Limit)
+}
+
+func (f *hiddenIndexTableRefFinder) scanOrderBy(orderBy tree.OrderBy) {
+	for _, order := range orderBy {
 		if order != nil {
 			f.scanExpr(order.Expr)
 		}
 	}
-	if sel.Limit != nil {
-		f.scanExpr(sel.Limit.Offset)
-		f.scanExpr(sel.Limit.Count)
+}
+
+func (f *hiddenIndexTableRefFinder) scanLimit(limit *tree.Limit) {
+	if limit != nil {
+		f.scanExpr(limit.Offset)
+		f.scanExpr(limit.Count)
 	}
 }
 
@@ -283,6 +300,29 @@ func (f *hiddenIndexTableRefFinder) scanSelectClause(clause *tree.SelectClause) 
 		f.scanExprs(clause.GroupBy.GroupingSet)
 	}
 	f.scanWhere(clause.Having)
+	for _, window := range clause.Windows {
+		if window != nil {
+			f.scanWindowSpec(window.Spec)
+		}
+	}
+}
+
+// A subquery in ordering/partitioning is still user-written SQL, even when
+// the function has no ordinary arguments (for example ROW_NUMBER() OVER ...).
+func (f *hiddenIndexTableRefFinder) scanWindowSpec(spec *tree.WindowSpec) {
+	if spec == nil || f.found {
+		return
+	}
+	f.scanExprs(spec.PartitionBy)
+	f.scanOrderBy(spec.OrderBy)
+	if spec.Frame != nil {
+		if spec.Frame.Start != nil {
+			f.scanExpr(spec.Frame.Start.Expr)
+		}
+		if spec.Frame.End != nil {
+			f.scanExpr(spec.Frame.End.Expr)
+		}
+	}
 }
 
 func (f *hiddenIndexTableRefFinder) scanSelectExprs(exprs tree.SelectExprs) {
@@ -365,6 +405,11 @@ func (f *hiddenIndexTableRefFinder) scanTableExpr(expr tree.TableExpr) {
 		f.scanSelect(t.Select)
 	case *tree.StatementSource:
 		f.scanStatement(t.Statement)
+	case *tree.TableFunction:
+		if t.Func != nil {
+			f.scanExpr(t.Func)
+		}
+		f.scanSelect(t.SelectStmt)
 	}
 }
 
@@ -484,8 +529,13 @@ func (f *hiddenIndexTableRefFinder) scanExpr(expr tree.Expr) {
 		f.scanExpr(e.Expr)
 	case *tree.BitCastExpr:
 		f.scanExpr(e.Expr)
+	case *tree.SerialExtractExpr:
+		f.scanExpr(e.SerialExpr)
+		f.scanExpr(e.IndexExpr)
 	case *tree.FuncExpr:
 		f.scanExprs(e.Exprs)
+		f.scanOrderBy(e.OrderBy)
+		f.scanWindowSpec(e.WindowSpec)
 	case *tree.Tuple:
 		f.scanExprs(e.Exprs)
 	case *tree.ExprList:

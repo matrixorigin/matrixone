@@ -1,4 +1,3 @@
--- @bvt:issue#31436
 -- Direct access to hidden physical index tables (__mo_index_secondary_* /
 -- __mo_index_unique_*) is rejected for ordinary users. Root keeps access.
 -- The allow_hidden_index_table_access system variable is the debugging
@@ -13,6 +12,7 @@ insert into hit_t values (1,10),(2,20),(3,30);
 create unique index uidx_y on hit_t(y);
 create role hit_role_bvt;
 grant select,insert,update,delete on table hit_db_bvt.* to hit_role_bvt;
+grant alter view on database hit_db_bvt to hit_role_bvt;
 create user hit_user_bvt identified by '123456' default role hit_role_bvt;
 grant hit_role_bvt to hit_user_bvt;
 select name,column_name from mo_catalog.mo_indexes where table_id = (select rel_id from mo_catalog.mo_tables where reldatabase = 'hit_db_bvt' and relname = 'hit_t') order by name, ordinal_position;
@@ -30,10 +30,34 @@ insert into hit_db_bvt.`__mo_index_secondary_hit_probe` values (1,2),(3,4);
 create table hit_db_bvt.`__mo_index_unique_hit_probe` (a int, b int);
 insert into hit_db_bvt.`__mo_index_unique_hit_probe` values (1,2),(3,4);
 select count(*) from hit_db_bvt.`__mo_index_secondary_hit_probe`;
+create view hit_db_bvt.hit_view_bvt as select x from hit_db_bvt.hit_t;
 
 -- index access for an ordinary user goes through the base table
 -- @session:id=1&user=sys:hit_user_bvt:hit_role_bvt&password=123456
 select x,y from hit_db_bvt.hit_t where y = 20;
+
+-- Existing view DDL must not turn an internal table into a readable view.
+alter view hit_db_bvt.hit_view_bvt as select y from hit_db_bvt.hit_t;
+-- @regex("do not have privilege to access the hidden internal table",true)
+alter view hit_db_bvt.hit_view_bvt as select a from hit_db_bvt.`__mo_index_secondary_hit_probe`;
+-- Observe the unchanged stored definition independently as its owner.
+-- @session
+select y from hit_db_bvt.hit_view_bvt order by y;
+-- @session:id=1&user=sys:hit_user_bvt:hit_role_bvt&password=123456
+
+-- Nested expressions and ordering clauses share the direct-access boundary.
+-- @regex("do not have privilege to access the hidden internal table",true)
+select serial_extract((select serial(count(*)) from hit_db_bvt.`__mo_index_secondary_hit_probe`), 0 as bigint);
+-- @regex("do not have privilege to access the hidden internal table",true)
+select percentile_disc(0.5) within group (order by (select count(*) from hit_db_bvt.`__mo_index_secondary_hit_probe`)) from hit_db_bvt.hit_t;
+-- @regex("do not have privilege to access the hidden internal table",true)
+select row_number() over (order by (select count(*) from hit_db_bvt.`__mo_index_secondary_hit_probe`)) from hit_db_bvt.hit_t;
+-- @regex("do not have privilege to access the hidden internal table",true)
+select row_number() over w from hit_db_bvt.hit_t window w as (order by (select count(*) from hit_db_bvt.`__mo_index_secondary_hit_probe`));
+-- @regex("do not have privilege to access the hidden internal table",true)
+explain phyplan select * from hit_db_bvt.`__mo_index_secondary_hit_probe`;
+select percentile_disc(0.5) within group (order by y) as median_y from hit_db_bvt.hit_t;
+select row_number() over (order by y) as rn from hit_db_bvt.hit_t order by rn;
 
 -- every direct statement form against a hidden index table is rejected
 -- @regex("do not have privilege to access the hidden internal table",true)
