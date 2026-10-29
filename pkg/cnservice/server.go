@@ -463,17 +463,27 @@ func (s *service) StartContext(parent context.Context) (err error) {
 		s.startMu.Unlock()
 		return moerr.NewInvalidStateNoCtx("CN service already started or closed")
 	}
-	s.startCtx, s.startCancel = context.WithCancel(parent)
+	s.startCtx, s.startCancel = context.WithCancelCause(parent)
+	s.startInProgress = true
 	s.startMu.Unlock()
 
 	s.lifecycleMu.Lock()
 	defer s.lifecycleMu.Unlock()
 	if s.lifecycle != serviceInitialized {
-		s.startCancel()
+		s.startMu.Lock()
+		s.startInProgress = false
+		s.startCancel(nil)
+		s.startMu.Unlock()
 		return moerr.NewInvalidStateNoCtx("CN service already started or closed")
 	}
 	s.lifecycle = serviceStarting
 	defer func() {
+		s.startMu.Lock()
+		s.startInProgress = false
+		if cause := context.Cause(s.startCtx); cause != nil {
+			err = errors.Join(err, cause)
+		}
+		s.startMu.Unlock()
 		if err != nil {
 			s.lifecycle = serviceClosing
 			err = errors.Join(err, s.closeService())
@@ -573,7 +583,7 @@ func (s *service) Close() error {
 	s.startMu.Lock()
 	s.startClosing = true
 	if s.startCancel != nil {
-		s.startCancel()
+		s.startCancel(nil)
 	}
 	s.startMu.Unlock()
 	s.lifecycleMu.Lock()
@@ -1499,6 +1509,9 @@ func (s *service) bootstrap() error {
 	}
 
 	if s.cfg.AutomaticUpgrade {
+		s.startMu.Lock()
+		s.startUpgradeActive = true
+		s.startMu.Unlock()
 		s.bootstrapUpgradeResult = make(chan error, 1)
 		s.bootstrapUpgradeStartupReady = make(chan struct{})
 		started := make(chan struct{})
