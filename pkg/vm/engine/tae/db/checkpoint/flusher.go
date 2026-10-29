@@ -737,8 +737,8 @@ func (flusher *flushImpl) fireFlushTabletailWithPolicy(
 	// Both create groups are ordered by CreatedAt. Do not skip a busy older
 	// object and flush a newer one: only the contiguous prepared prefix is
 	// eligible for this round. Data and tombstones have independent prefixes.
-	readyData := make([]*catalog.ObjectEntry, 0, len(metas))
-	readyTombstones := make([]*catalog.ObjectEntry, 0, len(tombstoneMetas))
+	readyDataCount := 0
+	readyTombstoneCount := 0
 	deferredData := 0
 	deferredTombstones := 0
 	for i, meta := range metas {
@@ -747,7 +747,7 @@ func (flusher *flushImpl) fireFlushTabletailWithPolicy(
 			deferredData = len(metas) - i
 			break
 		}
-		readyData = append(readyData, meta)
+		readyDataCount++
 	}
 	for i, meta := range tombstoneMetas {
 		if !meta.GetObjectData().PrepareCompact() {
@@ -755,8 +755,10 @@ func (flusher *flushImpl) fireFlushTabletailWithPolicy(
 			deferredTombstones = len(tombstoneMetas) - i
 			break
 		}
-		readyTombstones = append(readyTombstones, meta)
+		readyTombstoneCount++
 	}
+	readyData := metas[:readyDataCount]
+	readyTombstones := tombstoneMetas[:readyTombstoneCount]
 	if deferredData > 0 {
 		logutil.Info("flusher.data.prepare.compact.false",
 			zap.String("table", tableDesc),
@@ -787,6 +789,19 @@ func (flusher *flushImpl) fireFlushTabletailWithPolicy(
 		if !partialReady(asize, dsize) {
 			return moerr.GetOkExpectedEOB()
 		}
+	}
+	// A task factory retains these slices after this call returns. Copy only
+	// admitted prefixes so a small task does not retain the deferred suffix's
+	// backing array, and rejected rounds allocate no extra ready arrays.
+	if len(readyData) > 0 {
+		readyData = slices.Clone(readyData)
+	} else {
+		readyData = nil
+	}
+	if len(readyTombstones) > 0 {
+		readyTombstones = slices.Clone(readyTombstones)
+	} else {
+		readyTombstones = nil
 	}
 	if len(readyData) == 0 {
 		readyData = append(readyData, nil) // tombstone-only first chunk
