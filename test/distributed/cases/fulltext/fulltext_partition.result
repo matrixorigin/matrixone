@@ -98,6 +98,27 @@ select id from ft_nuk where match(body) against('beta') order by id;
 id
 2
 drop table ft_nuk;
+create table ft_compound_odku(id int primary key, bucket int, salt int, body text, fulltext fti_compound_odku(body)) partition by range(bucket + salt)(partition o0 values less than (10), partition o1 values less than maxvalue);
+insert into ft_compound_odku values (1, 1, 20, 'odku old alpha');
+insert into ft_compound_odku values (1, 1, 0, 'odku moved beta') on duplicate key update salt = values(salt), body = values(body);
+select count(*), min(bucket), min(salt) from ft_compound_odku where id = 1;
+count(*)	min(bucket)	min(salt)
+1	1	0
+select id from ft_compound_odku where match(body) against('alpha') order by id;
+id
+select id from ft_compound_odku where match(body) against('beta') order by id;
+id
+1
+insert into ft_compound_odku values (1, 1, 20, 'odku returned gamma') on duplicate key update salt = values(salt), body = values(body);
+select count(*), min(bucket), min(salt) from ft_compound_odku where id = 1;
+count(*)	min(bucket)	min(salt)
+1	1	20
+select id from ft_compound_odku where match(body) against('beta') order by id;
+id
+select id from ft_compound_odku where match(body) against('gamma') order by id;
+id
+1
+drop table ft_compound_odku;
 create table ft_compound_replace(id int primary key, bucket int, salt int, body text, fulltext fti_compound_replace(body))
 partition by range(bucket + salt)(partition c0 values less than (10), partition c1 values less than maxvalue);
 insert into ft_compound_replace values (1, 1, 20, 'compound old alpha'), (2, 1, 1, 'compound old beta');
