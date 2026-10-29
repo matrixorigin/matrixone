@@ -540,16 +540,17 @@ func (mp *MysqlProtocolImpl) ClearLoadLocalIOInterrupt() {
 	mp.tcpConn.ClearLoadLocalIOInterrupt()
 }
 
-// LoadLocalFramingBroken exposes the connection's lost-packet-boundary state
-// (see (*Conn).LoadLocalFramingBroken) so the upload owner retires — rather
-// than drains or reuses — a connection whose interrupted frame could let file
-// bytes re-frame as an upload EOF or a later command.
+// LoadLocalFramingBroken reports an unfinished or invalid frame. Only the
+// upload owner's discard can recover it from preserved progress.
 func (mp *MysqlProtocolImpl) LoadLocalFramingBroken() bool {
 	return mp.tcpConn.LoadLocalFramingBroken()
 }
 
 func (mp *MysqlProtocolImpl) ReadLoadLocalPacketWithTimeout(timeout time.Duration, deadline time.Time) ([]byte, error) {
 	return mp.tcpConn.ReadLoadLocalPacketWithTimeout(timeout, deadline)
+}
+func (mp *MysqlProtocolImpl) DiscardLoadLocalPacket(timeout time.Duration, deadline time.Time, budget int64) (int64, bool, error) {
+	return mp.tcpConn.DiscardLoadLocalPacket(timeout, deadline, budget)
 }
 func (mp *MysqlProtocolImpl) Free(buf []byte) {
 	mp.tcpConn.allocator.Free(buf)
