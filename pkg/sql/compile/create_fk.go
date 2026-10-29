@@ -15,6 +15,7 @@
 package compile
 
 import (
+	"context"
 	"fmt"
 	"maps"
 	"slices"
@@ -277,18 +278,25 @@ func (c *Compile) syncDurableForeignKeyIndexBindings(qry *plan.AlterTable) error
 	if len(qry.GetUpdateFkSqls()) == 0 || plan2.IsFkBannedDatabase(qry.Database) {
 		return nil
 	}
-	// The self-referencing child is covered by the COPY statement's own
-	// durable write; it is skipped here so the in-flight relation is not
-	// re-read mid-transfer.
+	// The zero marker is the durable self-reference sentinel: the referencing
+	// child is this ALTER's own table. Resolve it to the table's real ID so an
+	// INPLACE alter aligns its own stored ForeignKeyDef with the catalog rows
+	// this statement just updated (review 5695003826). A COPY still skips it
+	// below: the in-flight original must not be disturbed mid-transfer, and
+	// the published replacement relation is aligned after the FK state
+	// restore instead.
 	for _, childID := range qry.GetTableDef().GetRefChildTbls() {
+		if childID == 0 && qry.GetTableDef().GetTblId() != 0 {
+			childID = qry.GetTableDef().GetTblId()
+		}
 		if childID == 0 {
 			continue
 		}
 		// A COPY repairs the self-referencing child's durable def through the
-		// copy table definition being created, so the in-flight original must
-		// not be disturbed mid-transfer; an INPLACE alter keeps the original
-		// relation itself, and the same transaction can align its durable
-		// binding directly.
+		// replacement relation's post-restore alignment, so the in-flight
+		// original must not be disturbed mid-transfer; an INPLACE alter keeps
+		// the original relation itself, and the same transaction can align its
+		// durable binding directly.
 		if childID == qry.GetTableDef().GetTblId() && qry.AlgorithmType == plan.AlterTable_COPY {
 			continue
 		}
@@ -312,10 +320,21 @@ func (c *Compile) syncChildDurableForeignKeyIndexBinding(childID uint64) error {
 	if err != nil {
 		return err
 	}
+	return alignDurableForeignKeyIndexBindings(c.proc.Ctx, rel, bindings)
+}
+
+// alignDurableForeignKeyIndexBindings rewrites one relation's stored
+// ForeignKeyDef bindings to the catalog's authoritative values when they
+// diverge. The durable read, the rewrite and the UpdateConstraint write all
+// share the caller's transaction, so a failure aborts the statement and rolls
+// the catalog rebinding and the durable repair back together. This is the
+// shared durable-write consumer for cross-table children, the INPLACE self
+// reference, and the COPY post-restore self alignment (review 5695003826).
+func alignDurableForeignKeyIndexBindings(ctx context.Context, rel engine.Relation, bindings map[string]string) error {
 	if len(bindings) == 0 {
 		return nil
 	}
-	latest, err := GetConstraintDef(c.proc.Ctx, rel)
+	latest, err := GetConstraintDef(ctx, rel)
 	if err != nil {
 		return err
 	}
@@ -338,7 +357,7 @@ func (c *Compile) syncChildDurableForeignKeyIndexBinding(childID uint64) error {
 	if !changed {
 		return nil
 	}
-	return rel.UpdateConstraint(c.proc.Ctx, complete)
+	return rel.UpdateConstraint(ctx, complete)
 }
 
 func (c *Compile) readChildForeignKeyIndexBindings(db, tbl string) (map[string]string, error) {
