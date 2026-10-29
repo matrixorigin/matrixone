@@ -680,6 +680,21 @@ func TestReadOnlyGateRemapEffectiveDatabase(t *testing.T) {
 	insertOkt := parseSingleStatement(t, "insert into okt values (1)")
 	require.NoError(t, enforceReadOnlyTxnAccessMode(ses, remapCtx(insertOkt), insertOkt, ""))
 	require.NoError(t, enforceReadOnlyTxnAccessMode(ses, remapCtx(insertOkt), insertOkt, "r7_src"))
+
+	// A prepared statement retains its threaded database after USE changes the session.
+	ses.SetDatabaseName("other")
+	require.Equal(t, "r7_dst", effectiveDefaultDatabaseWithRemap(ses, remapCtx(nil), "r7_src"))
+	require.NoError(t, enforceReadOnlyTxnAccessMode(ses, remapCtx(insertOkt), insertOkt, "r7_src"))
+	require.Equal(t, "other", effectiveDefaultDatabaseWithRemap(ses, remapCtx(nil), ""))
+	require.Equal(t, "other", effectiveDefaultDatabaseWithRemap(ses, nil, ""))
+	ses.sesSysVars.Set("lower_case_table_names", int64(2))
+	mode2 := &ExecCtx{ses: ses, remapDb: map[string]string{"r7_src": "Destination"}}
+	require.Equal(t, "Destination", effectiveDefaultDatabaseWithRemap(ses, mode2, "R7_SRC"))
+	mode2.remapDb["r7_src"] = ""
+	require.Empty(t, effectiveDefaultDatabaseWithRemap(ses, mode2, "R7_SRC"))
+	ses.SetDatabaseName("")
+	emptyKey := &ExecCtx{ses: ses, remapDb: map[string]string{"": "unexpected"}}
+	require.Empty(t, effectiveDefaultDatabaseWithRemap(ses, emptyKey, ""))
 }
 
 func TestSequenceMutationClassification(t *testing.T) {

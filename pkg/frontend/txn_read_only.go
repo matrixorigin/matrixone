@@ -138,8 +138,7 @@ func enforceReadOnlyTxnAccessMode(
 }
 
 // effectiveDefaultDatabaseWithRemap resolves the database unqualified names
-// actually bind against for this statement, mirroring
-// TxnCompilerContext.DefaultDatabase (compiler_context.go): the caller's
+// actually bind against for this statement: the caller's
 // default database is the prepared binding database for EXECUTE (captured
 // when PREPAREd) or, when empty, the session's current database; an active
 // remapdb policy then redirects it to the remapped destination. Admission
@@ -155,8 +154,7 @@ func effectiveDefaultDatabaseWithRemap(ses FeSession, execCtx *ExecCtx, defaultD
 	if db == "" || execCtx == nil || len(execCtx.remapDb) == 0 {
 		return db
 	}
-	key := tree.NewCStr(db, parserLowerCaseTableNames(ses)).Compare()
-	if dst, ok := execCtx.remapDb[key]; ok {
+	if dst, ok := lookupRemappedDatabase(execCtx.remapDb, db, parserLowerCaseTableNames(ses)); ok {
 		return dst
 	}
 	return db
