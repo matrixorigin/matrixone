@@ -242,6 +242,7 @@ message PreInsert {
   int32 odku_ordinal_column = 20;
   // ODKU provenance names the user-visible AUTO_INCREMENT source column.
   int32 odku_auto_increment_column = 21;
+  bool preserve_input = 22;
 }
 
 message PostDml {

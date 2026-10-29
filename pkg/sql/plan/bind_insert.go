@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	lockpb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/features"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"go.uber.org/zap"
@@ -406,6 +407,22 @@ func splitIrregularIndexesByUpdatedColumns(
 	}
 
 	affectedGroups := make(map[string]bool, len(indexes))
+	partitionChanged, err := partitionColumnsUpdated(tableDef, possiblyChangedCols)
+	if err != nil {
+		return nil, nil, err
+	}
+	pkChanged := false
+	if tableDef != nil && tableDef.Pkey != nil {
+		for _, pkName := range tableDef.Pkey.Names {
+			if _, ok := possiblyChangedCols[catalog.ResolveAlias(pkName)]; ok {
+				pkChanged = true
+				break
+			}
+		}
+		if !pkChanged && tableDef.Pkey.PkeyColName != "" && tableDef.Pkey.PkeyColName != catalog.CPrimaryKeyColName {
+			_, pkChanged = possiblyChangedCols[catalog.ResolveAlias(tableDef.Pkey.PkeyColName)]
+		}
+	}
 	asyncGroups := make(map[string]bool, len(indexes))
 	for _, indexdef := range indexes {
 		async, asyncErr := indexplugin.IsAsync(indexdef.IndexAlgo, indexdef.IndexAlgoParams)
@@ -428,6 +445,9 @@ func splitIrregularIndexesByUpdatedColumns(
 			return nil, nil, affectedErr
 		}
 		if affected {
+			affectedGroups[key] = true
+		}
+		if (partitionChanged || pkChanged) && catalog.IsFullTextIndexAlgo(indexdef.IndexAlgo) {
 			affectedGroups[key] = true
 		}
 	}
@@ -620,6 +640,7 @@ func (builder *QueryBuilder) appendIrregularMaintSource(
 	maintTableDef := *tableDef
 	maintTableDef.Indexes = irregularIndexes
 	builder.irregularMaintSourceStep = maintStep
+	builder.irregularMaintDeleteRoutePos = -1
 	builder.irregularMaintIndexes = irregularIndexes
 	builder.irregularMaintValueChangedSourceSteps = nil
 	builder.irregularMaintTableDef = &maintTableDef
@@ -724,7 +745,7 @@ func (builder *QueryBuilder) appendTaggedSinkScan(bindCtx *BindContext, sourceSt
 // sink-scan the caller must continue from.
 func (builder *QueryBuilder) appendOnDupIrregularMaintSource(
 	bindCtx *BindContext,
-	finalProjNodeID, finalProjTag, deletePkPos int32, deletePkTyp plan.Type,
+	finalProjNodeID, finalProjTag, deletePkPos, deleteRoutePos int32, deletePkTyp plan.Type,
 	targetRowNumberPos, targetActivePos, physicalChangedPos int32,
 	irregularIndexes, insertOnlyIndexes []*plan.IndexDef,
 	newRowMarkerPos int32,
@@ -734,6 +755,7 @@ func (builder *QueryBuilder) appendOnDupIrregularMaintSource(
 ) (int32, error) {
 	sinkID := appendSinkNodeWithTag(builder, bindCtx, finalProjNodeID, finalProjTag)
 	joinStep := builder.appendStep(sinkID)
+	builder.preserveIrregularMaintSource(joinStep)
 	maintStep := joinStep
 	if targetRowNumberPos >= 0 {
 		selectedScanID := builder.appendTaggedSinkScan(bindCtx, joinStep, finalProjTag)
@@ -744,10 +766,11 @@ func (builder *QueryBuilder) appendOnDupIrregularMaintSource(
 			return 0, err
 		}
 		selectedID := builder.appendNode(&plan.Node{
-			NodeType: plan.Node_FILTER, Children: []int32{selectedScanID}, FilterList: []*plan.Expr{selected},
+			NodeType: plan.Node_FILTER, BindingTags: []int32{finalProjTag}, Children: []int32{selectedScanID}, FilterList: []*plan.Expr{selected},
 		}, bindCtx)
 		selectedSinkID := appendSinkNodeWithTag(builder, bindCtx, selectedID, finalProjTag)
 		maintStep = builder.appendStep(selectedSinkID)
+		builder.preserveIrregularMaintSource(maintStep)
 	}
 	insertOnlyBaseStep := maintStep
 	// A changed-row derivative is useful only to affected indexes. Creating it
@@ -771,8 +794,9 @@ func (builder *QueryBuilder) appendOnDupIrregularMaintSource(
 				"ON DUPLICATE KEY UPDATE cannot locate the physical-change marker for irregular index maintenance")
 		}
 		changedID := builder.appendNode(&plan.Node{
-			NodeType: plan.Node_FILTER,
-			Children: []int32{changedScanID},
+			NodeType:    plan.Node_FILTER,
+			BindingTags: []int32{finalProjTag},
+			Children:    []int32{changedScanID},
 			FilterList: []*plan.Expr{{
 				Typ: changedScan.ProjectList[physicalChangedPos].Typ,
 				Expr: &plan.Expr_Col{Col: &plan.ColRef{
@@ -783,6 +807,7 @@ func (builder *QueryBuilder) appendOnDupIrregularMaintSource(
 		}, bindCtx)
 		changedSinkID := appendSinkNodeWithTag(builder, bindCtx, changedID, finalProjTag)
 		maintStep = builder.appendStep(changedSinkID)
+		builder.preserveIrregularMaintSource(maintStep)
 	}
 
 	insertOnlyStep := int32(-1)
@@ -809,10 +834,11 @@ func (builder *QueryBuilder) appendOnDupIrregularMaintSource(
 			return 0, err
 		}
 		newRowsID := builder.appendNode(&plan.Node{
-			NodeType: plan.Node_FILTER, Children: []int32{newRowsScanID}, FilterList: []*plan.Expr{isNewRow},
+			NodeType: plan.Node_FILTER, BindingTags: []int32{finalProjTag}, Children: []int32{newRowsScanID}, FilterList: []*plan.Expr{isNewRow},
 		}, bindCtx)
 		newRowsSinkID := appendSinkNodeWithTag(builder, bindCtx, newRowsID, finalProjTag)
 		insertOnlyStep = builder.appendStep(newRowsSinkID)
+		builder.preserveIrregularMaintSource(insertOnlyStep)
 	}
 
 	valueChangedSteps := make(map[string]int32, len(valueChangeMarkerPosByGroup))
@@ -855,10 +881,11 @@ func (builder *QueryBuilder) appendOnDupIrregularMaintSource(
 			return 0, err
 		}
 		changedRowsID := builder.appendNode(&plan.Node{
-			NodeType: plan.Node_FILTER, Children: []int32{changedRowsScanID}, FilterList: []*plan.Expr{eligible},
+			NodeType: plan.Node_FILTER, BindingTags: []int32{finalProjTag}, Children: []int32{changedRowsScanID}, FilterList: []*plan.Expr{eligible},
 		}, bindCtx)
 		changedRowsSinkID := appendSinkNodeWithTag(builder, bindCtx, changedRowsID, finalProjTag)
 		valueChangedSteps[groupKey] = builder.appendStep(changedRowsSinkID)
+		builder.preserveIrregularMaintSource(valueChangedSteps[groupKey])
 	}
 
 	maintTableDef := *tableDef
@@ -867,6 +894,7 @@ func (builder *QueryBuilder) appendOnDupIrregularMaintSource(
 	builder.irregularMaintDeleteStep = maintStep
 	builder.irregularMaintDeletePkPos = deletePkPos
 	builder.irregularMaintDeletePkTyp = deletePkTyp
+	builder.irregularMaintDeleteRoutePos = deleteRoutePos
 	builder.irregularMaintIndexes = irregularIndexes
 	builder.irregularMaintInsertOnlySourceStep = insertOnlyStep
 	builder.irregularMaintInsertOnlyIndexes = insertOnlyIndexes
@@ -981,10 +1009,12 @@ func (builder *QueryBuilder) buildIrregularIndexInsertMaintenance(
 			}
 			multiTableIndexes[groupKey].IndexDefs[catalog.ToLower(indexdef.IndexAlgoTableType)] = indexdef
 		case catalog.IsFullTextIndexAlgo(indexdef.IndexAlgo):
-			if seenFullTextTbls[indexdef.IndexTableName] {
+			key := fullTextIndexGroupKey(indexdef)
+			if seenFullTextTbls[key] {
 				continue
 			}
-			seenFullTextTbls[indexdef.IndexTableName] = true
+			seenFullTextTbls[key] = true
+			indexdef = mergeFullTextIndexParts(tableDef.Indexes, indexdef)
 			if err := buildPreInsertFullTextIndex(nil, builder.compCtx, builder, bindCtx, objRef,
 				tableDef, 0, indexSourceStep, nil, indexdef, idx, nil); err != nil {
 				return err
@@ -1047,10 +1077,12 @@ func (builder *QueryBuilder) buildIrregularIndexDeleteMaintenance(bindCtx *BindC
 		sourceStep := builder.irregularMaintenanceSourceStep(indexdef, builder.irregularMaintDeleteStep)
 		switch {
 		case catalog.IsFullTextIndexAlgo(indexdef.IndexAlgo):
-			if seenFullTextTbls[indexdef.IndexTableName] {
+			key := fullTextIndexGroupKey(indexdef)
+			if seenFullTextTbls[key] {
 				continue
 			}
-			seenFullTextTbls[indexdef.IndexTableName] = true
+			seenFullTextTbls[key] = true
+			indexdef = mergeFullTextIndexParts(tableDef.Indexes, indexdef)
 			if err := builder.buildIrregularFulltextDeleteByPk(bindCtx, indexdef, sourceStep); err != nil {
 				return err
 			}
@@ -1251,6 +1283,8 @@ func (builder *QueryBuilder) buildIrregularFulltextDeleteByPk(bindCtx *BindConte
 	}, bindCtx)
 
 	srcScan := appendSinkScanNode(builder, bindCtx, sourceStep)
+	partitioned := features.IsPartitioned(builder.irregularMaintTableDef.FeatureFlag) &&
+		builder.irregularMaintTableDef.Partition != nil && len(builder.irregularMaintTableDef.Partition.PartitionDefs) > 0
 
 	// join index (left) with the image (right) on doc_id == old/final PK.
 	cond, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*plan.Expr{
@@ -1260,16 +1294,64 @@ func (builder *QueryBuilder) buildIrregularFulltextDeleteByPk(bindCtx *BindConte
 	if err != nil {
 		return err
 	}
+	joinProject := []*plan.Expr{
+		{Typ: rowidTyp, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 0, Name: catalog.Row_ID}}},
+		{Typ: fakePkTyp, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 2, Name: catalog.FakePrimaryKeyColName}}},
+	}
+	routePos := int32(-1)
+	if partitioned {
+		if builder.irregularMaintDeleteRoutePos < 0 {
+			return moerr.NewInvalidInput(builder.GetContext(), "partition fulltext delete is missing its old-row route")
+		}
+		sourceRoutePos := builder.irregularMaintDeleteRoutePos
+		if builder.sinkColRef != nil {
+			if newPos, ok := builder.sinkColRef[[2]int32{sourceStep, sourceRoutePos}]; ok {
+				sourceRoutePos = int32(newPos)
+			}
+		}
+		sinkNodeID := builder.qry.Steps[sourceStep]
+		if sinkNodeID < 0 || int(sinkNodeID) >= len(builder.qry.Nodes) ||
+			builder.qry.Nodes[sinkNodeID] == nil || sourceRoutePos < 0 ||
+			int(sourceRoutePos) >= len(builder.qry.Nodes[sinkNodeID].ProjectList) {
+			return moerr.NewInvalidInput(builder.GetContext(), "partition fulltext delete route was pruned")
+		}
+		routeTyp := builder.qry.Nodes[sinkNodeID].ProjectList[sourceRoutePos].Typ
+		routePos = int32(len(joinProject))
+		joinProject = append(joinProject, &plan.Expr{
+			Typ: routeTyp,
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{
+				RelPos: 1,
+				ColPos: sourceRoutePos,
+			}},
+		})
+	}
 	joinID := builder.appendNode(&plan.Node{
-		NodeType: plan.Node_JOIN,
-		JoinType: plan.Node_INNER,
-		Children: []int32{idxScanID, srcScan},
-		OnList:   []*plan.Expr{cond},
-		ProjectList: []*plan.Expr{
-			{Typ: rowidTyp, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 0, Name: catalog.Row_ID}}},
-			{Typ: fakePkTyp, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 2, Name: catalog.FakePrimaryKeyColName}}},
-		},
+		NodeType:    plan.Node_JOIN,
+		JoinType:    plan.Node_INNER,
+		Children:    []int32{idxScanID, srcScan},
+		OnList:      []*plan.Expr{cond},
+		ProjectList: joinProject,
 	}, bindCtx)
+	if partitioned {
+		deleteNode := &plan.Node{
+			NodeType:    plan.Node_MULTI_UPDATE,
+			Children:    []int32{joinID},
+			BindingTags: []int32{builder.genNewBindTag()},
+			UpdateCtxList: []*plan.UpdateCtx{{
+				ObjRef:             indexObjRef,
+				TableDef:           indexTableDef,
+				DeleteCols:         []plan.ColRef{{ColPos: 0}, {ColPos: 1}},
+				IgnoreAffectedRows: true,
+				PartitionIndexCtx: &plan.PartitionIndexCtx{
+					ParentRef:    DeepCopyObjectRef(builder.irregularMaintObjRef),
+					ParentTable:  DeepCopyTableDef(builder.irregularMaintTableDef, true),
+					PartitionCol: plan.ColRef{ColPos: routePos},
+				},
+			}},
+		}
+		builder.appendStep(builder.appendNode(deleteNode, bindCtx))
+		return nil
+	}
 
 	delNodeInfo := makeDeleteNodeInfo(builder.compCtx, indexObjRef, indexTableDef, 0, false, 1, fakePkTyp, false)
 	lastID, err := makeOneDeletePlan(builder, bindCtx, joinID, delNodeInfo, false, true, false)
@@ -1376,6 +1458,7 @@ func (builder *QueryBuilder) finishIrregularIndexMaintenance(query *plan.Query, 
 			builder.irregularMaintDeleteStep = maint.deleteStep
 			builder.irregularMaintDeletePkPos = maint.deletePkPos
 			builder.irregularMaintDeletePkTyp = maint.deletePkTyp
+			builder.irregularMaintDeleteRoutePos = maint.deleteRoutePos
 			builder.irregularMaintIndexes = maint.indexes
 			builder.irregularMaintInsertOnlySourceStep = maint.insertOnlySourceStep
 			builder.irregularMaintInsertOnlyIndexes = maint.insertOnlyIndexes
@@ -3064,6 +3147,19 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 		selectTag = selectNode.BindingTags[0]
 	}
 
+	moveFulltextPartition := false
+	partitionUpdated, err := partitionColumnsUpdated(tableDef, possiblyChangedCols)
+	if err != nil {
+		return 0, err
+	}
+	if onDupAction == plan.Node_UPDATE && features.IsPartitioned(tableDef.FeatureFlag) && partitionUpdated {
+		for _, idx := range irregularIndexes {
+			if catalog.IsFullTextIndexAlgo(idx.IndexAlgo) {
+				moveFulltextPartition = true
+				break
+			}
+		}
+	}
 	idxNeedUpdate := make([]bool, len(tableDef.Indexes))
 	for i, idxDef := range tableDef.Indexes {
 		for _, part := range idxDef.Parts {
@@ -3075,6 +3171,13 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 					break
 				}
 			}
+		}
+	}
+
+	if moveFulltextPartition {
+		// Even an unchanged regular index key moves to another physical table.
+		for i := range idxNeedUpdate {
+			idxNeedUpdate[i] = true
 		}
 	}
 
@@ -4087,9 +4190,22 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 	if onDupAction == plan.Node_UPDATE {
 		newProjLen++
 	}
+	needOldPartitionRoute := false
+	if onDupAction == plan.Node_UPDATE && features.IsPartitioned(tableDef.FeatureFlag) &&
+		tableDef.Partition != nil && len(tableDef.Partition.PartitionDefs) > 0 {
+		for _, idxDef := range affectedIrregularIndexes {
+			if catalog.IsFullTextIndexAlgo(idxDef.IndexAlgo) {
+				needOldPartitionRoute = true
+				newProjLen++
+				break
+			}
+		}
+	}
 
 	delColName2Idx := make(map[string][2]int32)
 	valueChangeMarkerPosByGroup := make(map[string]int32, len(irregularValueChangeFilters))
+	oldPartitionRoutePos := int32(-1)
+	var oldPartitionKeyPositions, newPartitionKeyPositions []int32
 
 	if newProjLen > len(selectNode.ProjectList) {
 		newProjList := make([]*plan.Expr, 0, newProjLen)
@@ -4186,7 +4302,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 
 		// append projections for secondary index tables
 		for i, idxDef := range tableDef.Indexes {
-			if idxDef.Unique {
+			if idxDef.Unique && !idxNeedUpdate[i] {
 				continue
 			}
 
@@ -4210,7 +4326,11 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 						return nil, err
 					}
 				}
-				return BindFuncExprImplByPlanExpr(builder.GetContext(), "serial_full", args)
+				funcName := "serial_full"
+				if idxDef.Unique {
+					funcName = "serial"
+				}
+				return BindFuncExprImplByPlanExpr(builder.GetContext(), funcName, args)
 			}
 
 			projForAppendAllInputRows := func() error {
@@ -4228,7 +4348,18 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 			}
 
 			if idxNeedUpdate[i] {
-				if err := projForAppendAllInputRows(); err != nil {
+				if idxDef.Unique {
+					// Dedup has already checked the incoming keys. A partition move
+					// must now reinsert the unchanged key into its new physical index.
+					appendedUniqueProjs[idxTableName+"."+catalog.IndexTablePrimaryColName] = &plan.Expr{
+						Typ: selectNode.ProjectList[pkPos].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: selectTag, ColPos: pkPos}},
+					}
+					idxExpr, err := serialIdxPkExpr(idxDef)
+					if err != nil {
+						return 0, err
+					}
+					appendedUniqueProjs[idxTableName+"."+catalog.IndexTableIndexColName] = idxExpr
+				} else if err := projForAppendAllInputRows(); err != nil {
 					return 0, err
 				}
 
@@ -4282,7 +4413,11 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 						}
 					}
 
-					delIdxExpr, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "serial_full", delArgs)
+					funcName := "serial_full"
+					if idxDef.Unique {
+						funcName = "serial"
+					}
+					delIdxExpr, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), funcName, delArgs)
 				}
 				delColName2Idx[idxTableName+"."+catalog.IndexTableIndexColName] = [2]int32{finalProjTag, int32(len(newProjList))}
 				newProjList = append(newProjList, delIdxExpr)
@@ -4332,6 +4467,52 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 		for colName, expr := range appendedUniqueProjs {
 			colName2Idx[colName] = int32(len(newProjList))
 			newProjList = append(newProjList, expr)
+		}
+		if needOldPartitionRoute {
+			routeExpr, routeErr := buildPartitionRouteExpr(builder.GetContext(), tableDef, scanTag)
+			if routeErr != nil {
+				return 0, routeErr
+			}
+			oldPartitionRoutePos = int32(len(newProjList))
+			newProjList = append(newProjList, routeExpr)
+		}
+
+		if moveFulltextPartition {
+			partitionExprCols := make(map[string]struct{})
+			for _, partitionDef := range tableDef.Partition.PartitionDefs {
+				if partitionDef != nil {
+					collectPartitionExprColumnNames(partitionDef.Def, tableDef, partitionExprCols)
+				}
+			}
+			rowIDPos := tableDef.Name2ColIndex[catalog.Row_ID]
+			isNew, routeErr := BindFuncExprImplByPlanExpr(builder.GetContext(), "isnull", []*plan.Expr{
+				{Typ: tableDef.Cols[rowIDPos].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: scanTag, ColPos: rowIDPos}}},
+			})
+			if routeErr != nil {
+				return 0, routeErr
+			}
+			// The executor maps route columns in physical table-column order.
+			for keyPos, col := range tableDef.Cols {
+				if _, ok := partitionExprCols[col.Name]; !ok {
+					continue
+				}
+				newPos, ok := colName2Idx[tableDef.Name+"."+col.Name]
+				if !ok {
+					return 0, moerr.NewInternalError(builder.GetContext(), "cannot locate partition dependency for FULLTEXT ODKU")
+				}
+				oldKey := &plan.Expr{Typ: col.Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: scanTag, ColPos: int32(keyPos)}}}
+				newKey := &plan.Expr{Typ: col.Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: selectTag, ColPos: newPos}}}
+				deleteKey, bindErr := BindFuncExprImplByPlanExpr(builder.GetContext(), "if", []*plan.Expr{DeepCopyExpr(isNew), newKey, oldKey})
+				if bindErr != nil {
+					return 0, bindErr
+				}
+				oldPartitionKeyPositions = append(oldPartitionKeyPositions, int32(len(newProjList)))
+				newPartitionKeyPositions = append(newPartitionKeyPositions, newPos)
+				newProjList = append(newProjList, deleteKey)
+			}
+			if len(oldPartitionKeyPositions) == 0 {
+				return 0, moerr.NewInternalError(builder.GetContext(), "cannot locate partition dependencies for FULLTEXT ODKU")
+			}
 		}
 
 		selectTag = finalProjTag
@@ -4410,7 +4591,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 					"ON DUPLICATE KEY UPDATE cannot locate the old row id for irregular index maintenance")
 			}
 			lastNodeID, err = builder.appendOnDupIrregularMaintSource(
-				bindCtx, lastNodeID, finalProjTag, int32(odkuPkPos), odkuPkTyp,
+				bindCtx, lastNodeID, finalProjTag, int32(odkuPkPos), oldPartitionRoutePos, odkuPkTyp,
 				-1, -1, physicalChangedRowsInputPos,
 				affectedIrregularIndexes, insertOnlyIrregularIndexes, oldRowIDRef[1],
 				valueChangeMarkerPosByGroup,
@@ -4525,6 +4706,12 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 
 		deleteCols[1].RelPos = selectTag
 		deleteCols[1].ColPos = colName2Idx[tableDef.Name+"."+tableDef.Pkey.PkeyColName]
+	}
+
+	for _, positions := range [][]int32{oldPartitionKeyPositions, newPartitionKeyPositions} {
+		for _, pos := range positions {
+			updateCtx.PartitionCols = append(updateCtx.PartitionCols, plan.ColRef{RelPos: selectTag, ColPos: pos})
+		}
 	}
 
 	dmlNode.UpdateCtxList = append(dmlNode.UpdateCtxList, updateCtx)

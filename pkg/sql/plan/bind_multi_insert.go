@@ -644,6 +644,7 @@ func (builder *QueryBuilder) bindMultiInsertGroup(
 			deleteStep:              builder.irregularMaintDeleteStep,
 			deletePkPos:             builder.irregularMaintDeletePkPos,
 			deletePkTyp:             builder.irregularMaintDeletePkTyp,
+			deleteRoutePos:          builder.irregularMaintDeleteRoutePos,
 			indexes:                 builder.irregularMaintIndexes,
 			insertOnlySourceStep:    builder.irregularMaintInsertOnlySourceStep,
 			insertOnlyIndexes:       builder.irregularMaintInsertOnlyIndexes,
@@ -657,6 +658,7 @@ func (builder *QueryBuilder) bindMultiInsertGroup(
 		builder.irregularMaintTableDef = nil
 		builder.irregularMaintObjRef = nil
 		builder.irregularMaintDeleteStep = -1
+		builder.irregularMaintDeleteRoutePos = -1
 		builder.irregularMaintInsertOnlySourceStep = -1
 	}
 	return nil

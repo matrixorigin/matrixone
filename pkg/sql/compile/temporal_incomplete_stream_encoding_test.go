@@ -15,9 +15,14 @@
 package compile
 
 import (
+	"context"
+	"fmt"
 	"testing"
 
+	"github.com/golang/mock/gomock"
 	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/common/morpc/mock_morpc"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -32,24 +37,72 @@ import (
 )
 
 func TestIncompleteTemporalExecutionStreamControls(t *testing.T) {
-	for _, name := range []string{"typed week", "typed to_days", "literal"} {
-		t.Run(name, func(t *testing.T) {
-			c, client := expressionProtocolTestCompile(t)
-			client.version = defines.MORPCVersion130
-			fn := "week"
-			if name == "typed to_days" {
-				fn = "to_days"
-			}
-			scope := incompleteTemporalStreamScope(t, c, fn, types.T_date)
-			if name == "literal" {
-				scope.RootOp.(*projection.Projection).ProjectList = []*planpb.Expr{plan2.MakePlan2StringConstExprWithType("2001-00-00")}
-			}
-			stream := &fakeStreamSender{}
-			installIncompleteTemporalTestStream(t, c, stream)
-			require.NoError(t, scope.RemoteRun(c))
-			require.Len(t, stream.sent, 1)
-			require.Equal(t, pipeline.Method_PipelineMessage, stream.sent[0].(*pipeline.Message).GetCmd(), "unaffected projections must not add a handshake")
-		})
+	for _, tc := range []struct {
+		name     string
+		function string
+		floor    int64
+	}{
+		{"typed week", "week", defines.MORPCVersion112},
+		{"typed to_days", "to_days", defines.MORPCVersion98},
+		{"literal", "week", 0},
+	} {
+		versions := []int64{tc.floor}
+		if tc.floor > 0 {
+			versions = append(versions, tc.floor-1)
+		}
+		for _, version := range versions {
+			t.Run(fmt.Sprintf("%s/%d", tc.name, version), func(t *testing.T) {
+				c, client := expressionProtocolTestCompile(t)
+				client.version = defines.MORPCVersion130
+				scope := incompleteTemporalStreamScope(t, c, tc.function, types.T_date)
+				if tc.name == "literal" {
+					scope.RootOp.(*projection.Projection).ProjectList = []*planpb.Expr{plan2.MakePlan2StringConstExprWithType("2001-00-00")}
+				}
+				// Typed DATE inputs do not acquire the incomplete-string floor130,
+				// but retain their existing expression floors on the actual stream.
+				checks, payloads, closed := 0, 0, 0
+				replies := make(chan morpc.Message, 1)
+				stream := mock_morpc.NewMockStream(gomock.NewController(t))
+				stream.EXPECT().ID().Return(uint64(17)).AnyTimes()
+				stream.EXPECT().Receive().Return(replies, nil)
+				stream.EXPECT().Send(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, m morpc.Message) error {
+					message := m.(*pipeline.Message)
+					switch message.GetCmd() {
+					case pipeline.Method_PipelineProtocolCheck:
+						checks++
+						require.Positive(t, tc.floor)
+						require.Zero(t, payloads)
+						require.Equal(t, tc.floor, message.ProtocolVersion)
+						replies <- &pipeline.Message{Id: 17, Cmd: pipeline.Method_PipelineProtocolCheck, Sid: pipeline.Status_Last, ProtocolVersion: version}
+					case pipeline.Method_PipelineMessage:
+						payloads++
+						if tc.floor > 0 {
+							require.Equal(t, 1, checks)
+						}
+						replies <- &pipeline.Message{Id: 17, Sid: pipeline.Status_MessageEnd}
+					default:
+						t.Fatalf("unexpected command %v", message.GetCmd())
+					}
+					return nil
+				}).AnyTimes()
+				stream.EXPECT().Close(true).DoAndReturn(func(bool) error { closed++; return nil })
+				installIncompleteTemporalTestStream(t, c, stream)
+				err := scope.RemoteRun(c)
+				if version < tc.floor {
+					require.ErrorContains(t, err, fmt.Sprintf("version %d", tc.floor))
+					require.Zero(t, payloads)
+				} else {
+					require.NoError(t, err)
+					require.Equal(t, 1, payloads)
+				}
+				if tc.floor == 0 {
+					require.Zero(t, checks, "a literal must not add a handshake")
+				} else {
+					require.Equal(t, 1, checks)
+				}
+				require.Equal(t, 1, closed)
+			})
+		}
 	}
 }
 

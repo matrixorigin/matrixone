@@ -17,6 +17,7 @@ package multi_update
 import (
 	"fmt"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/common/rscthrottler"
@@ -61,6 +62,22 @@ func lookupUpdateCtxInfo(infos map[string]*updateCtxInfo, ctx *MultiUpdateCtx) *
 		return infos[ctx.TableDef.Name]
 	}
 	return nil
+}
+
+// isSecondaryIndexTableDef includes classic FULLTEXT hidden tables. They use
+// their own catalog table type and name prefix, but MultiUpdate must route them
+// through the same storage path as other non-unique index tables so that the
+// insert buffer is sized from the physical table columns.
+func isSecondaryIndexTableDef(tableDef *plan.TableDef) bool {
+	return tableDef != nil &&
+		(catalog.IsSecondaryIndexTable(tableDef.Name) ||
+			catalog.IsFullTextIndexTableType(tableDef.TableType, tableDef.Name) ||
+			catalog.IsFullTextIndexTableType(catalog.SystemIndexRel, tableDef.Name))
+}
+
+func isSecondaryIndexTableName(name string) bool {
+	return catalog.IsSecondaryIndexTable(name) ||
+		catalog.IsFullTextIndexTableType(catalog.SystemIndexRel, name)
 }
 
 var _ vm.Operator = new(MultiUpdate)
@@ -161,8 +178,13 @@ type container struct {
 }
 
 type MultiUpdateCtx struct {
-	ObjRef             *plan.ObjectRef
-	TableDef           *plan.TableDef
+	ObjRef   *plan.ObjectRef
+	TableDef *plan.TableDef
+	// PartitionIndexCtx marks an index-only maintenance target. TableDef and
+	// ObjRef identify the logical index table, while this context identifies the
+	// partitioned parent and the input route ordinal used to select its physical
+	// index relation.
+	PartitionIndexCtx  *plan.PartitionIndexCtx
 	InsertCols         []int
 	DeleteCols         []int
 	PartitionCols      []int
