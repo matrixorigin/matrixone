@@ -146,44 +146,46 @@ func TestIssue30537TemporalWarningsPeerCN(t *testing.T) {
 			{"select x from t where cast(x as time) is null", 2, 2},
 			{"select x from t where cast('abc' as time) is null", 2, 1},
 		} {
-			rows, err := conn.QueryContext(ctx, tc.query)
-			require.NoError(t, err)
-			count := 0
-			for rows.Next() {
-				var value any
-				require.NoError(t, rows.Scan(&value))
-				if tc.query == query {
-					require.Nil(t, value)
-				} else {
-					require.Equal(t, "bad", string(value.([]byte)))
+			func() {
+				rows, err := conn.QueryContext(ctx, tc.query)
+				require.NoError(t, err)
+				defer func() { require.NoError(t, rows.Close()) }()
+				count := 0
+				for rows.Next() {
+					var value any
+					require.NoError(t, rows.Scan(&value))
+					if tc.query == query {
+						require.Nil(t, value)
+					} else {
+						require.Equal(t, "bad", string(value.([]byte)))
+					}
+					count++
 				}
-				count++
-			}
-			require.NoError(t, rows.Err())
-			require.NoError(t, rows.Close())
-			var warnings int
-			require.NoError(t, conn.QueryRowContext(ctx, "show count(*) warnings").Scan(&warnings))
-			require.Equal(t, tc.rows, count, tc.query)
-			require.Equal(t, tc.warnings, warnings, tc.query)
-			warningRows, err := conn.QueryContext(ctx, "show warnings")
-			require.NoError(t, err)
-			seen := 0
-			for warningRows.Next() {
-				var level, message string
-				var code int
-				require.NoError(t, warningRows.Scan(&level, &code, &message))
-				input := "bad"
-				if strings.Contains(tc.query, "'abc'") {
-					input = "abc"
+				require.NoError(t, rows.Err())
+				var warnings int
+				require.NoError(t, conn.QueryRowContext(ctx, "show count(*) warnings").Scan(&warnings))
+				require.Equal(t, tc.rows, count, tc.query)
+				require.Equal(t, tc.warnings, warnings, tc.query)
+				warningRows, err := conn.QueryContext(ctx, "show warnings")
+				require.NoError(t, err)
+				defer func() { require.NoError(t, warningRows.Close()) }()
+				seen := 0
+				for warningRows.Next() {
+					var level, message string
+					var code int
+					require.NoError(t, warningRows.Scan(&level, &code, &message))
+					input := "bad"
+					if strings.Contains(tc.query, "'abc'") {
+						input = "abc"
+					}
+					require.Equal(t, "Warning", level)
+					require.Equal(t, 1292, code)
+					require.Equal(t, "Truncated incorrect time value: '"+input+"'", message)
+					seen++
 				}
-				require.Equal(t, "Warning", level)
-				require.Equal(t, 1292, code)
-				require.Equal(t, "Truncated incorrect time value: '"+input+"'", message)
-				seen++
-			}
-			require.NoError(t, warningRows.Err())
-			require.NoError(t, warningRows.Close())
-			require.Equal(t, tc.warnings, seen)
+				require.NoError(t, warningRows.Err())
+				require.Equal(t, tc.warnings, seen)
+			}()
 		}
 	}
 }
