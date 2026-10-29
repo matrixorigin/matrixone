@@ -1158,3 +1158,16 @@ func TestVectorVectorArithmeticRejectsOverflow(t *testing.T) {
 		require.NotContains(t, err.Error(), wantErr)
 	})
 }
+
+// Positions at the ends of the int64 range slice nothing out of range: subvector(v, 2,
+// MaxInt64) keeps the rest of the vector, and subvector(v, MinInt64) is empty.
+func TestSubArrayExtremePositions(t *testing.T) {
+	s := []int8{1, 2, 3}
+	require.Equal(t, []int8{2, 3}, SubArrayFromLeftWithLength(s, 1, math.MaxInt64))
+	require.Equal(t, []int8{2, 3}, SubArrayFromRightWithLength(s, 2, math.MaxInt64))
+	require.Empty(t, SubArrayFromRightWithLength(s, math.MinInt64, 1))
+	require.Empty(t, SubArrayFromRight(s, math.MinInt64))
+	require.Empty(t, SubArrayFromLeft(s, math.MaxInt64))
+	require.Equal(t, []int8{3}, SubArrayFromRight(s, 1))
+	require.Equal(t, []float32{2}, SubArrayFromLeftWithLength([]float32{1, 2, 3}, 1, 1))
+}
