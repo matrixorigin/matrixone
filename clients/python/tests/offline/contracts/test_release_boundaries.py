@@ -9,6 +9,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
 
+from matrixone import with_snapshot
+
 import pytest
 import pymysql
 import sqlalchemy as sa
@@ -132,7 +134,7 @@ def test_snapshot_driver_formatting_preserves_identity(mysql_transport, snapshot
     table = sa.table('t', sa.column('id'))
     other = sa.table('other', sa.column('id'))
     columns = [sa.literal(42).label('projection'), table.c.id] if bound else [table.c.id]
-    statement = select(*columns).select_from(table.join(other, table.c.id == other.c.id)).with_snapshot(snapshot)
+    statement = with_snapshot(select(*columns).select_from(table.join(other, table.c.id == other.c.id)), snapshot)
     if bound:
         statement = statement.where(table.c.id == sa.bindparam('id', 7)).where(
             table.c.id.in_(sa.bindparam('ids', [7, 8], expanding=True))
@@ -172,7 +174,7 @@ def test_snapshot_raw_export_sql_keeps_original_percents(mysql_transport, snapsh
     engine, wire, formatter = mysql_transport
     client = Client.from_engine(engine, logger=Mock(), sql_log_mode='off')
     table = sa.table('t', sa.column('id'))
-    statement = select(table.c.id).where(table.c.id == 7).with_snapshot(snapshot)
+    statement = with_snapshot(select(table.c.id).where(table.c.id == 7), snapshot)
     hint = "{snapshot = '" + snapshot.replace("'", "''") + "'}"
     for sql in (
         compile_select_to_sql(statement),
@@ -208,7 +210,7 @@ def test_snapshot_annotation_isolated_from_caller_bind_namespace(mysql_transport
     live = select(table.c.id).where(predicate)
     assert client.execute(live).scalar() == 1
     assert ('t.id IN (5, 6)' if expanding else 't.id = 5') in wire[-1]
-    snapshot = live.with_snapshot('expected_history')
+    snapshot = with_snapshot(live, 'expected_history')
     supplied = {parameter: value}
     supplied.update(
         {
@@ -237,11 +239,11 @@ def test_snapshot_binding_avoids_multiple_occupied_caller_names(mysql_transport)
     engine, wire, _ = mysql_transport
     client = Client.from_engine(engine.execution_options(compiled_cache={}), logger=Mock(), sql_log_mode='off')
     table = sa.table('t', sa.column('id'))
-    statement = (
+    statement = with_snapshot(
         select(table.c.id)
         .where(table.c.id >= sa.bindparam('_matrixone_snapshot_0_value', 3))
-        .where(table.c.id <= sa.bindparam('_matrixone_snapshot_1_value', 5))
-        .with_snapshot('expected_history')
+        .where(table.c.id <= sa.bindparam('_matrixone_snapshot_1_value', 5)),
+        'expected_history',
     )
     for lower, upper in ((7, 9), (8, 10)):
         parameters = {
@@ -274,7 +276,7 @@ def test_raw_compilation_preserves_escaped_bind_processors(mysql_transport, snap
     bind = sa.bindparam('ordinary name', [7, 8] if expanding else 7, type_=OffsetInteger(), expanding=expanding)
     statement = select(table.c.id).where(table.c.id.in_(bind) if expanding else table.c.id == bind)
     if snapshot is not None:
-        statement = statement.with_snapshot(snapshot)
+        statement = with_snapshot(statement, snapshot)
     assert client.execute(statement).scalar() == 1
     expected = 't.id IN (8, 9)' if expanding else 't.id = 8'
     assert expected in wire[-1]
@@ -379,8 +381,8 @@ def snapshot_tables():
 def test_snapshot_select_is_generative_and_cache_keyed_across_consumers():
     a, b = snapshot_tables()
     live = select(a.c.id).select_from(a.join(b, a.c.id == b.c.ref))
-    first = live.with_snapshot('first')
-    second = live.with_snapshot('second')
+    first = with_snapshot(live, 'first')
+    second = with_snapshot(live, 'second')
     assert first is not live
     assert 'matrixone_snapshot' not in live._annotations
     assert live._generate_cache_key() != first._generate_cache_key() != second._generate_cache_key()
@@ -402,13 +404,13 @@ def test_snapshot_select_is_generative_and_cache_keyed_across_consumers():
 @pytest.mark.parametrize('shape', ['subquery', 'cte', 'outer_cte'])
 def test_nested_snapshot_statement_rejects_complete_query(shape):
     a, _ = snapshot_tables()
-    inner = select(a.c.id).with_snapshot('historical')
+    inner = with_snapshot(select(a.c.id), 'historical')
     if shape == 'subquery':
         statement = select(inner.subquery())
     elif shape == 'cte':
         statement = select(inner.cte())
     else:
-        statement = select(select(a.c.id).cte()).with_snapshot('historical')
+        statement = with_snapshot(select(select(a.c.id).cte()), 'historical')
     with pytest.raises(ValueError, match='Snapshot|snapshot'):
         compile_select_to_sql(statement)
 

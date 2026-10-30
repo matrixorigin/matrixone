@@ -79,11 +79,11 @@ def sql_identifier(name, qualified=False, *, force=False) -> str:
     return '.'.join(quoted)
 
 
-def identifier_parts(name, qualified=False, *, preserve_quoting=False):
+def identifier_parts(name, qualified=False, *, preserve_quoting=False, max_parts=2):
     """Normalize complete legacy quoted names, never trailing SQL fragments."""
     if not isinstance(name, str):
         raise TypeError('SQL identifier must be a string')
-    if not name or len(name) > (261 if qualified else 130):
+    if not name or len(name) > ((131 * max_parts - 1) if qualified else 130):
         raise ValueError('Invalid SQL object name')
     if getattr(name, 'quote', None) is True:
         sql_identifier(name)
@@ -113,8 +113,8 @@ def identifier_parts(name, qualified=False, *, preserve_quoting=False):
         sql_identifier(part)  # Apply the same length/NUL contract to decoded parts.
         parts.append(part)
         if offset < len(name):
-            if not qualified or len(parts) >= 2 or offset + 1 == len(name):
-                raise ValueError('Expected an atomic name or database.table reference')
+            if not qualified or len(parts) >= max_parts or offset + 1 == len(name):
+                raise ValueError('Too many or empty SQL identifier components')
             offset += 1
     return tuple(parts)
 
@@ -175,7 +175,8 @@ def sql_literal(value):
     return "'%s'" % value.replace("'", "''")
 
 
-def substitute_parameters(sql, params, *, sql_mode=''):
+def substitute_parameters(sql, params, *, sql_mode='', qmark_only=False):
+    """Render data once; qmark-only builders retain raw SQL modulo expressions."""
     if params is None:
         return sql
     named = isinstance(params, dict)
@@ -256,7 +257,7 @@ def substitute_parameters(sql, params, *, sql_mode=''):
                 used.add(key)
                 i = match.end()
                 continue
-        if not named and (char == '?' or (char == '%' and sql.startswith('%s', i))):
+        if not named and (char == '?' or (not qmark_only and char == '%' and sql.startswith('%s', i))):
             try:
                 value = next(values)
             except StopIteration as error:

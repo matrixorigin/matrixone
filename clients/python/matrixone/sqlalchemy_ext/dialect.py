@@ -22,6 +22,7 @@ from sqlalchemy.sql.elements import ClauseElement
 from sqlalchemy.dialects.mysql.base import MySQLTypeCompiler, MySQLDialect, ischema_names as mysql_ischema_names
 
 from .vector_type import VectorType, VectorPrecision
+from .._local_infile import _physical_driver
 
 
 class _Vecf32Type(VectorType):
@@ -284,6 +285,28 @@ MatrixOneDialect.type_compiler_cls = MatrixOneTypeCompiler
 # MatrixOneVectorType removed - use VectorType from vector_type.py instead
 
 
+class _AsyncBinaryEscape:
+    """One instance-local adapter; all nonbinary values retain the driver owner."""
+
+    def __init__(self, original):
+        self.original = original
+
+    def __call__(self, value):
+        if isinstance(value, (bytes, bytearray, memoryview)):
+            from .._sql_literals import sql_literal
+
+            return sql_literal(value)
+        return self.original(value)
+
+
+def _prepare_async_binary(dbapi_connection, connection_record, connection_proxy):
+    from aiomysql import Connection
+
+    driver = _physical_driver(dbapi_connection)
+    if isinstance(driver, Connection) and not isinstance(driver.escape, _AsyncBinaryEscape):
+        driver.escape = _AsyncBinaryEscape(driver.escape)
+
+
 def adapt_engine_dialect(engine):
     """Add MatrixOne traits without replacing the driver's initialization owner.
 
@@ -291,6 +314,18 @@ def adapt_engine_dialect(engine):
     engine. Keep its DBAPI, ping, server state and driver-specific overrides.
     """
     _install_compiler_contract(engine)
+    if engine.dialect.driver == 'aiomysql':
+        # Older dialects infer PyMySQL's signature, but aiomysql requires False.
+        # Set it before pre-ping, which runs before checkout listeners.
+        engine.dialect._send_false_to_ping = True
+        # Separately constructed engines may share a pool with another dialect.
+        # Pre-ping belongs to that pool, not necessarily this engine proxy.
+        pool_dialect = getattr(engine.pool, '_dialect', None)
+        if pool_dialect is not engine.dialect and getattr(pool_dialect, 'driver', None) == 'aiomysql':
+            pool_dialect._send_false_to_ping = True
+        if _prepare_async_binary not in engine.pool.dispatch.checkout:
+            # Also covers pools warmed before explicit SDK adoption.
+            event.listen(engine.pool, 'checkout', _prepare_async_binary, insert=True)
     dialect = engine.dialect
     if isinstance(dialect, MatrixOneDialect):
         return
