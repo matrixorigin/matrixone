@@ -464,8 +464,16 @@ func (c *compilerContext) GetProcess() *process.Process {
 	return c.proc
 }
 
+// GetQueryResultMeta reads a saved query result through the frontend session
+// that issued the statement. CTAS populates its target through the internal
+// executor, so CREATE TABLE ... AS SELECT ... FROM result_scan(...) binds
+// RESULT_SCAN here; without a session there is no saved result to read.
 func (c *compilerContext) GetQueryResultMeta(uuid string) ([]*plan.ColDef, string, error) {
-	panic("not supported in internal sql executor")
+	delegate, err := c.sessionCompilerContext()
+	if err != nil {
+		return nil, "", err
+	}
+	return delegate.GetQueryResultMeta(uuid)
 }
 
 func (c *compilerContext) DatabaseExists(name string, snapshot *plan.Snapshot) bool {
