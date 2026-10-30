@@ -73,6 +73,10 @@ func NewOutOfRangeNoCtx(typ string, msg string) *Error {
 	return newError(Context(), ErrOutOfRange, typ, msg)
 }
 
+func NewOutOfRangeValueForColumnNoCtx(column string, row uint64) *Error {
+	return newError(Context(), ErrOutOfRangeValueForColumn, column, row)
+}
+
 func NewDataTruncatedNoCtx(typ string, msg string) *Error {
 	return newError(Context(), ErrDataTruncated, typ, msg)
 }
@@ -274,6 +278,17 @@ func NewTxnWriteConflictNoCtxf(format string, args ...any) *Error {
 
 func NewTxnWriteConflictNoCtx(msg string) *Error {
 	return newError(Context(), ErrTxnWriteConflict, msg)
+}
+
+// NewDataBranchConflictNoCtxf creates the DATA BRANCH merge/pick
+// write-write conflict error (ErrDataBranchConflict, issue #31614).
+// The format string describes the two conflicting sides and the pk
+// WITHOUT the leading "conflict: ": the catalog message template in
+// errorMsgRefer supplies it. The error is a deterministic data
+// condition — MySQL ER_UNKNOWN_ERROR (1105), SQLSTATE HY000 — and is
+// never silently retried: the failing statement aborts atomically.
+func NewDataBranchConflictNoCtxf(format string, args ...any) *Error {
+	return newError(Context(), ErrDataBranchConflict, fmt.Sprintf(format, args...))
 }
 
 func NewMissingTxnNoCtx() *Error {

@@ -855,7 +855,9 @@ class MatrixOneCLI(cmd.Cmd):
         database = arg if arg else self.current_database
 
         if not database:
-            print("❌ No database specified and no current database set. Use 'use <database>' or provide database name.")
+            print(
+                "❌ No database specified and no current database set. Use 'use <database>' or provide database name."
+            )
             return
 
         if not self.client:
@@ -1408,7 +1410,9 @@ class MatrixOneCLI(cmd.Cmd):
                     columns = [col[0] for col in getattr(result, 'description', [])]
 
                 if rows and columns:
-                    detail_payload = [{columns[idx]: row[idx] for idx in range(min(len(columns), len(row)))} for row in rows]
+                    detail_payload = [
+                        {columns[idx]: row[idx] for idx in range(min(len(columns), len(row)))} for row in rows
+                    ]
                 else:
                     detail_payload = rows
 
@@ -1784,59 +1788,18 @@ class MatrixOneCLI(cmd.Cmd):
             return
 
         try:
-            # Switch to the database temporarily if needed
-            current_db = self.client._connection_params.get('database')
-            if current_db != database:
-                self.client.execute(f"USE {database}")
+            from .index_utils import index_count_report, verify_count_report
+            from ._sql_literals import sql_identifier
 
-            # Get index tables
-            index_tables = self.client.get_secondary_index_tables(table_name, database)
-
-            if not index_tables:
-                print(f"⚠️  No secondary indexes found for table '{table_name}'")
-                # Still show main table count
-                result = self.client.execute(f"SELECT COUNT(*) FROM `{table_name}`")
-                count = result.fetchone()[0]
-                print(f"Main table '{table_name}': {count:,} rows")
-                return
-
-            # Build verification SQL
-            from .index_utils import build_verify_counts_sql
-
-            sql = build_verify_counts_sql(table_name, index_tables)
-
-            result = self.client.execute(sql)
-            row = result.fetchone()
-
-            main_count = row[0]
-            mismatches = []
-
-            table_info = f"'{database}.{table_name}'"
-            print(f"\n{header('📊 Row Count Verification for')} {bold(table_info)}")
-            print(info("=" * 80))
-            print(bold(f"Main table: {main_count:,} rows"))
-            print(info("-" * 80))
-
-            for idx, index_table in enumerate(index_tables):
-                index_count = row[idx + 1]
-                if index_count == main_count:
-                    print(f"{success('✓')} {index_table}: {bold(f'{index_count:,}')} rows")
-                else:
-                    print(f"{error('✗ MISMATCH')} {index_table}: {bold(f'{index_count:,}')} rows")
-                    mismatches.append((index_table, index_count))
-
-            print(info("=" * 80))
-
-            if mismatches:
-                print(f"❌ FAILED: {len(mismatches)} index table(s) have mismatched counts!")
-            else:
-                print(f"✅ PASSED: All index tables match ({main_count:,} rows)")
-            print()
-
-            # Switch back if needed
-            if current_db and current_db != database:
-                self.client.execute(f"USE {current_db}")
-
+            target = sql_identifier(database, force=True) + '.' + sql_identifier(table_name, force=True)
+            with self.client.get_sqlalchemy_engine().begin() as connection:
+                report = index_count_report(connection, target)
+            count, details = report
+            print(f"Main table '{database}.{table_name}': {count:,} rows")
+            for item in details:
+                print('%s: %s entries, expected %s' % (item['name'], item['actual'], item['expected']))
+            verify_count_report(report)
+            print('✅ PASSED: All supported index counts match their key semantics')
         except Exception as e:
             print(f"❌ Error: {e}")
 
@@ -1965,7 +1928,9 @@ class MatrixOneCLI(cmd.Cmd):
                                     print(f"  Total Vectors:   {total_vectors:,}")
                                     print(f"  Min/Avg/Max:     {min_count} / {avg_count:.1f} / {max_count}")
                                     print(
-                                        f"  Load Balance:    {balance:.2f}x" if min_count > 0 else "  Load Balance:    N/A"
+                                        f"  Load Balance:    {balance:.2f}x"
+                                        if min_count > 0
+                                        else "  Load Balance:    N/A"
                                     )
 
                                     # Show top 10 centroids by size
@@ -2180,7 +2145,9 @@ class MatrixOneCLI(cmd.Cmd):
 
                     # 1a. Show Data (non-tombstone objects)
                     try:
-                        main_table_objects = self.client.metadata.scan(database, table_name, is_tombstone=False, columns="*")
+                        main_table_objects = self.client.metadata.scan(
+                            database, table_name, is_tombstone=False, columns="*"
+                        )
                         if main_table_objects:
                             unique_objs = deduplicate_objects(list(main_table_objects))
                             total_rows = sum(getattr(obj, 'rows_cnt', 0) or 0 for obj in unique_objs)
@@ -2228,7 +2195,9 @@ class MatrixOneCLI(cmd.Cmd):
                                     total_rows = sum(getattr(obj, 'rows_cnt', 0) or 0 for obj in unique_tomb_objs)
                                     total_null = sum(getattr(obj, 'null_cnt', 0) or 0 for obj in unique_tomb_objs)
                                     total_origin = sum(getattr(obj, 'origin_size', 0) or 0 for obj in unique_tomb_objs)
-                                    total_compress = sum(getattr(obj, 'compress_size', 0) or 0 for obj in unique_tomb_objs)
+                                    total_compress = sum(
+                                        getattr(obj, 'compress_size', 0) or 0 for obj in unique_tomb_objs
+                                    )
 
                                     print(f"\n  └─ {bold('Tombstone')}")
                                     print(
@@ -2280,7 +2249,9 @@ class MatrixOneCLI(cmd.Cmd):
                                 # Show each physical table for this index
                                 for idx_table in idx_tables:
                                     physical_table = idx_table['physical_table_name']
-                                    table_type = idx_table['algo_table_type'] if idx_table['algo_table_type'] else 'index'
+                                    table_type = (
+                                        idx_table['algo_table_type'] if idx_table['algo_table_type'] else 'index'
+                                    )
 
                                     # Get physical table's table_id
                                     try:
@@ -2323,7 +2294,9 @@ class MatrixOneCLI(cmd.Cmd):
                                             unique_objs = deduplicate_objects(list(phys_objects))
                                             total_rows = sum(getattr(obj, 'rows_cnt', 0) or 0 for obj in unique_objs)
                                             total_null = sum(getattr(obj, 'null_cnt', 0) or 0 for obj in unique_objs)
-                                            total_origin = sum(getattr(obj, 'origin_size', 0) or 0 for obj in unique_objs)
+                                            total_origin = sum(
+                                                getattr(obj, 'origin_size', 0) or 0 for obj in unique_objs
+                                            )
                                             total_compress = sum(
                                                 getattr(obj, 'compress_size', 0) or 0 for obj in unique_objs
                                             )
@@ -2377,7 +2350,8 @@ class MatrixOneCLI(cmd.Cmd):
                                                         getattr(obj, 'origin_size', 0) or 0 for obj in unique_tomb_objs
                                                     )
                                                     total_compress = sum(
-                                                        getattr(obj, 'compress_size', 0) or 0 for obj in unique_tomb_objs
+                                                        getattr(obj, 'compress_size', 0) or 0
+                                                        for obj in unique_tomb_objs
                                                     )
 
                                                     print(f"\n{data_indent}└─ {bold('Tombstone')}")
@@ -2625,7 +2599,9 @@ class MatrixOneCLI(cmd.Cmd):
                                         total_rows = sum(getattr(obj, 'rows_cnt', 0) or 0 for obj in unique_objs)
                                         total_null = sum(getattr(obj, 'null_cnt', 0) or 0 for obj in unique_objs)
                                         total_origin = sum(getattr(obj, 'origin_size', 0) or 0 for obj in unique_objs)
-                                        total_compress = sum(getattr(obj, 'compress_size', 0) or 0 for obj in unique_objs)
+                                        total_compress = sum(
+                                            getattr(obj, 'compress_size', 0) or 0 for obj in unique_objs
+                                        )
 
                                         # Format display label
                                         if has_multiple_tables:
@@ -2655,10 +2631,12 @@ class MatrixOneCLI(cmd.Cmd):
                                                             getattr(obj, 'null_cnt', 0) or 0 for obj in unique_tomb_objs
                                                         )
                                                         total_origin = sum(
-                                                            getattr(obj, 'origin_size', 0) or 0 for obj in unique_tomb_objs
+                                                            getattr(obj, 'origin_size', 0) or 0
+                                                            for obj in unique_tomb_objs
                                                         )
                                                         total_compress = sum(
-                                                            getattr(obj, 'compress_size', 0) or 0 for obj in unique_tomb_objs
+                                                            getattr(obj, 'compress_size', 0) or 0
+                                                            for obj in unique_tomb_objs
                                                         )
 
                                                         tomb_label = "      └─ tombstone"
@@ -2730,7 +2708,9 @@ class MatrixOneCLI(cmd.Cmd):
                 indexes = self.client.get_table_indexes_detail(table_name, database_name)
                 if indexes:
                     # Extract all unique physical table names
-                    physical_tables = list(set(idx['physical_table_name'] for idx in indexes if idx['physical_table_name']))
+                    physical_tables = list(
+                        set(idx['physical_table_name'] for idx in indexes if idx['physical_table_name'])
+                    )
 
                     if physical_tables:
                         print(f"{info('📋 Found')} {len(physical_tables)} index physical tables")
@@ -3127,7 +3107,9 @@ Examples:
     cdc_show_parser.add_argument('--watermarks-only', action='store_true', help='Show only watermarks (task view)')
     cdc_show_parser.add_argument('--threshold', help='Watermark latency threshold (task view, e.g. 5m, 30s)')
     cdc_show_parser.add_argument('--table', help='Filter watermarks by table name (task view)')
-    cdc_show_parser.add_argument('--strict', action='store_true', help='Zero tolerance for watermark delays (task view)')
+    cdc_show_parser.add_argument(
+        '--strict', action='store_true', help='Zero tolerance for watermark delays (task view)'
+    )
 
     cdc_create_parser = cdc_subparsers.add_parser('create', help='Launch guided CDC task creation')
     cdc_create_parser.add_argument('--database-level', action='store_true', help='Force database-level replication')
