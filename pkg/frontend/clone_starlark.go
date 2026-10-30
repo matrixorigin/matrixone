@@ -123,6 +123,9 @@ func (r *cloneStarlarkBodyRewriter) walkStmt(stmt syntax.Stmt) error {
 		}
 		return r.walkStmts(stmt.Body)
 	case *syntax.ForStmt:
+		if err := r.walkExpr(stmt.Vars, nil); err != nil {
+			return err
+		}
 		if err := r.walkExpr(stmt.X, nil); err != nil {
 			return err
 		}

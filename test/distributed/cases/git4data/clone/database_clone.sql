@@ -32,6 +32,11 @@ values = {}
 values[mo.sql("select v from db0.clone_probe where id = 1")[0][0][0]] = 1
 out_answer = "BAD" if "source-v2" in values else "GOOD"
 $$;
+create procedure db0.p_clone_probe_starlark_for() language 'starlark'
+$$
+values = {}
+for values[mo.sql("update db0.clone_probe set v = 'clone-for' where id = 1")[1]] in [1]: pass
+$$;
 
 -- Functions are catalog metadata too. They must be restored before a view that
 -- binds them, and source-qualified routine queries must bind the clone.
@@ -58,6 +63,9 @@ call db0_copy_0.p_clone_probe_starlark(@db0_clone_starlark);
 select @db0_clone_starlark;
 call db0_copy_0.p_clone_probe_starlark_lhs(@db0_clone_starlark_lhs);
 select @db0_clone_starlark_lhs;
+call db0_copy_0.p_clone_probe_starlark_for();
+select v from db0.clone_probe where id = 1;
+select v from db0_copy_0.clone_probe where id = 1;
 
 create database db0_copy_1 clone db0 to account sys;
 show tables from db0_copy_1;

@@ -671,6 +671,40 @@ out_o = run()
 	require.ErrorContains(t, err, "cannot safely rewrite")
 }
 
+func TestRewriteCloneStarlarkProcedureBodiesCoversForTargets(t *testing.T) {
+	tests := []struct {
+		name, body, expected, wantError string
+	}{
+		{
+			name:     "literal SQL in indexed loop target",
+			body:     "values = {}\nfor values[mo.sql(\"update source_db.clone_probe set v = 'changed'\")[1]] in [1]: pass\n",
+			expected: "`target_db`.`clone_probe`",
+		},
+		{
+			name:      "dynamic SQL in indexed loop target",
+			body:      "values = {}\nquery = \"select 1\"\nfor values[mo.sql(query)[1]] in [1]: pass\n",
+			wantError: "requires a string literal",
+		},
+		{
+			name:      "aliased SQL in indexed loop target",
+			body:      "values = {}\nfor values[mo.sql] in [1]: pass\n",
+			wantError: "must be used as a direct call",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := rewriteCloneStarlarkProcedureBody(context.Background(), tt.body, "", "source_db", "target_db", 1)
+			if tt.wantError != "" {
+				require.ErrorContains(t, err, tt.wantError)
+				return
+			}
+			require.NoError(t, err)
+			require.Contains(t, got, tt.expected)
+			require.NotContains(t, got, "source_db.clone_probe")
+		})
+	}
+}
+
 func TestRewriteCloneStarlarkProcedureBodiesRejectsUnsafeMoSQL(t *testing.T) {
 	tests := []struct {
 		name string
