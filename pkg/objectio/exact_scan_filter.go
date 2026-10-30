@@ -179,7 +179,8 @@ func MaterializeExactScan(ctx context.Context, entries []fileservice.IOEntry,
 		}
 		start := time.Now()
 		stats.Applied = true
-		for _, p := range state.filter.predicates {
+		for i := 0; i < len(state.filter.predicates); {
+			p := state.filter.predicates[i]
 			if err = ctx.Err(); err != nil {
 				stats.FilterTime = time.Since(start)
 				return stats, err
@@ -191,7 +192,19 @@ func MaterializeExactScan(ctx context.Context, entries []fileservice.IOEntry,
 				break
 			}
 			allBefore := rows == nil
-			rows = state.selectRows(p, rows, n)
+			v := &state.views[p.Column]
+			if i+1 < len(state.filter.predicates) && p.Op == ExactScanGE &&
+				state.filter.predicates[i+1].Op == ExactScanLE &&
+				state.filter.predicates[i+1].Column == p.Column &&
+				rows == nil && !v.IsConst() && v.GetNulls().EmptyByFlag() {
+				// BETWEEN needs one value pass and one selection write, rather
+				// than gathering the lower-bound survivors for the upper bound.
+				rows = state.selectBetween(p, state.filter.predicates[i+1], n)
+				i += 2
+			} else {
+				rows = state.selectRows(p, rows, n)
+				i++
+			}
 			if allBefore && len(rows) == n {
 				rows = nil
 			}
@@ -217,6 +230,46 @@ func MaterializeExactScan(ctx context.Context, entries []fileservice.IOEntry,
 		}
 	}
 	return stats, nil
+}
+
+func (s *ExactScanState) selectBetween(lower, upper ExactScanPredicate, n int) []int64 {
+	v := &s.views[lower.Column]
+	switch lower.Type.Oid {
+	case types.T_int8:
+		return selectExactBetween[int8, int8](s, v, lower.Value, upper.Value, n)
+	case types.T_int16:
+		return selectExactBetween[int16, int16](s, v, lower.Value, upper.Value, n)
+	case types.T_int32:
+		return selectExactBetween[int32, int32](s, v, lower.Value, upper.Value, n)
+	case types.T_date:
+		return selectExactBetween[types.Date, int32](s, v, lower.Value, upper.Value, n)
+	case types.T_int64:
+		return selectExactBetween[int64, int64](s, v, lower.Value, upper.Value, n)
+	case types.T_decimal64:
+		return selectExactBetween[types.Decimal64, int64](s, v, lower.Value, upper.Value, n)
+	case types.T_uint8:
+		return selectExactBetween[uint8, uint8](s, v, lower.Value, upper.Value, n)
+	case types.T_uint16:
+		return selectExactBetween[uint16, uint16](s, v, lower.Value, upper.Value, n)
+	case types.T_uint32:
+		return selectExactBetween[uint32, uint32](s, v, lower.Value, upper.Value, n)
+	case types.T_uint64:
+		return selectExactBetween[uint64, uint64](s, v, lower.Value, upper.Value, n)
+	}
+	panic(moerr.NewInternalErrorNoCtx("unadmitted exact scan range type"))
+}
+
+func selectExactBetween[T, C exactOrdered](s *ExactScanState, v *vector.Vector, lower, upper uint64, n int) []int64 {
+	values := vector.MustFixedColNoTypeCheck[T](v)[:n]
+	lo, hi := C(lower), C(upper)
+	out := s.rows[:0]
+	for row, value := range values {
+		if lo <= C(value) && C(value) <= hi {
+			out = append(out, int64(row))
+		}
+	}
+	s.rows = out
+	return out
 }
 
 func (s *ExactScanState) selectRows(p ExactScanPredicate, rows []int64, n int) []int64 {
