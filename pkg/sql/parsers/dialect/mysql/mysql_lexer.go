@@ -288,6 +288,23 @@ type Lexer struct {
 	parseFirst            bool
 	stopLexing            bool
 	statementEnd          int
+	// credentialsState tracks the CREDENTIALS = { ... } option-map context
+	// while tokens flow to the parser (0 none, 1 after the CREDENTIALS
+	// keyword, 2 after '=', 3 inside the map, 4 inside the map right after
+	// '=' — i.e. the next token is a value). Error diagnostics echo the
+	// raw remaining input; knowing whether the echo starts inside such a map
+	// keeps the credentials mask effective there (#30747/#30746).
+	credentialsState int
+	// credentialsValuePos remembers where the value token began when state 4
+	// was consumed. If the error position equals it, the near echo starts AT
+	// the secret value itself and must be masked in pending-value state.
+	credentialsValuePos int
+	// credentialsPhase/credentialsValid are the structural key=value ledger
+	// for credentialsState==3 (#30747 review round 11): a quoted STRING can
+	// mis-pair and leave the map's closing brace arriving at junk, and that
+	// brace must NOT clear credential context.
+	credentialsPhase int
+	credentialsValid bool
 }
 
 // reservedKeywordsAfterAS lists tokens that represent reserved keywords
@@ -333,6 +350,11 @@ func (l *Lexer) setScanner(s *Scanner, lower int64, sqlMode SQLModeFlags) {
 	l.parseFirst = false
 	l.stopLexing = false
 	l.statementEnd = 0
+	// Parser reuse must not inherit the previous statement's credential-map
+	// context: a near echo of unrelated SQL would otherwise redact text that
+	// merely sits where a credential value once did (#30747 review).
+	l.credentialsState = 0
+	l.credentialsValuePos = 0
 }
 
 func (l *Lexer) HasSQLMode(flag SQLModeFlag) bool {
@@ -406,6 +428,63 @@ func (l *Lexer) Lex(lval *yySymType) int {
 	if typ == NOT && l.HasSQLMode(SQLModeHighNotPrecedence) {
 		typ = HIGH_NOT
 	}
+	// Track the CREDENTIALS option-map context so the error diagnostic can
+	// keep masking credential values even when the echo tail starts inside
+	// the map — including right at a value token (state 4). (#30747/#30746)
+	// Round 11: the tracker carries the same structural ledger as the
+	// masking state machine — a `}` closes the context ONLY at the end of
+	// a structurally validated key=value chain, so a mis-paired quote can
+	// never let a junk-chain brace drop the credential context early.
+	switch {
+	case l.credentialsState == 1 && typ == int('='):
+		l.credentialsState = 2
+	case l.credentialsState == 2 && typ == int('='):
+		// a doubled separator (CREDENTIALS = = {...}) keeps the pending map
+		// context instead of dropping it (#30747 review)
+	case l.credentialsState == 2 && typ == int('{'):
+		l.credentialsState, l.credentialsPhase, l.credentialsValid = 3, mapPhaseExpectKey, true
+	case l.credentialsState == 3 && typ == int('}'):
+		if l.credentialsValid && (l.credentialsPhase == mapPhaseExpectKey || l.credentialsPhase == mapPhaseExpectCommaOrClose) {
+			l.credentialsState = 0
+		} else {
+			l.credentialsValid = false
+			l.credentialsPhase = mapPhaseJunk
+		}
+	case l.credentialsState == 3 && typ == int('='):
+		if l.credentialsPhase != mapPhaseExpectSep {
+			l.credentialsValid = false
+		}
+		l.credentialsState = 4
+	case l.credentialsState == 4 && typ == int('='):
+		// doubled '=' still precedes the value
+	case l.credentialsState == 4:
+		// the value itself arrived; back to plain in-map, but remember where
+		// it started so the error echo recognizes a value-position failure.
+		l.credentialsValuePos = l.scanner.PrePos
+		l.credentialsState, l.credentialsPhase = 3, mapPhaseExpectCommaOrClose
+	case l.credentialsState == 3 && typ == int(','):
+		if l.credentialsPhase != mapPhaseExpectCommaOrClose {
+			l.credentialsValid = false
+		}
+		l.credentialsPhase = mapPhaseExpectKey
+	case l.credentialsState == 3:
+		// any other token inside the map: advance the key=value ledger.
+		if l.credentialsPhase == mapPhaseExpectKey {
+			l.credentialsPhase = mapPhaseExpectSep
+		} else {
+			// separator missing where due, or junk between a value and the
+			// map close (mis-paired STRING quoting the `=`, bare-IDENT key)
+			l.credentialsValid = false
+			l.credentialsPhase = mapPhaseJunk
+		}
+	case typ == CREDENTIALS:
+		l.credentialsState = 1
+	case typ == int(';'):
+		l.credentialsState = 0
+	default:
+		l.credentialsState = 0
+	}
+
 	if typ == OFFSET && l.syntaxLastToken == int(')') && l.lastClosedTableParen && l.scanner.offsetAliasColumnListAhead() {
 		// OFFSET is non-reserved. In a table-factor context, the established
 		// `(...) offset (c1, c2)` syntax is an implicit alias plus column list,
@@ -630,8 +709,82 @@ func (l *Lexer) Error(err string) {
 		lenStr = " (total length " + strconv.Itoa(len(lenStr)) + ")"
 		near = near[:commonutil.UTF8PrefixLen(near, 1024)]
 	}
+	// The remaining input echoes into every downstream parse diagnostic
+	// (client, ERROR log, statement telemetry). Scrub stage CREDENTIALS map
+	// values in it so a malformed credential-bearing statement cannot leak
+	// its cloud secrets (#30747/#30746) — including an echo that begins
+	// right at the secret value, where the map context alone is not enough
+	// to recognize it. Other secret-looking literals (e.g. identified by)
+	// are left alone: the near echo keeps its established, golden-tested
+	// diagnostic shape.
+	nearState := credentialMapStateForNear(l.credentialsState)
+	if l.credentialsState == 3 && l.credentialsValuePos == l.scanner.PrePos {
+		// the failure is exactly at a map value: the echo opens with the
+		// secret itself.
+		nearState = CredentialStateInMapAfterEq
+	}
+	if nearState == CredentialStateNone {
+		nearBeforeMask := near
+		near = MaskStageCredentialLiteralsWithInitialStateAndSQLMode(near, nearState, l.sqlMode)
+		if near == nearBeforeMask {
+			// The byte prefilter tracks the session mode's OWN pairing: an
+			// ANSI-only identifier (` "s\" ` under default) can swallow the
+			// credentials keyword into a misread quoted token and silence
+			// the scrub. The conservative all-variants union covers the
+			// modes the session mode cannot read (#30747 review round 13).
+			// stage-scope union only (maskAll=false): identified-by literals keep
+			// their established plaintext echo convention even here.
+			near = maskPieceUnderAllLexicalVariantsScoped(near, l.sqlMode, false, CredentialStateNone, nil, true)
+		}
+		if near == nearBeforeMask && looksCredentialBearing(near) {
+			// Even the variants cannot prove the echo clean (a keyword
+			// trapped inside a mis-paired string in every admitted mode).
+			// A near tail that literally carries a credential keyword with
+			// no verified masking is redacted wholesale; keyword-free
+			// tails (e.g. the identified-by password echo) keep their
+			// established shape.
+			near = "******"
+		}
+	} else {
+		// The tracker places the failure inside a credential map: redact
+		// the WHOLE tail. A partial fragment scrub is never proof of
+		// protection (#30747 review rounds 11/12): a mis-paired quotation
+		// retokenizes the tail so the credentials inside cannot be
+		// localized from the fragment alone, and scrubbing only a suffix
+		// (an embedded '=') leaves the credential prefix standing. The
+		// identified-by echo policy is unaffected — that context never
+		// arms this tracker.
+		near = "******"
+	}
 	near = commonutil.Abbreviate(near, -1)
 	l.scanner.LastError = PositionedErr{Err: errMsg, Line: l.scanner.Line, Col: l.scanner.Col, Near: near, LenStr: lenStr}
+}
+
+// looksCredentialBearing reports cheap byte-level evidence that a near tail
+// mentions a CREDENTIALS option map keyword. IDENTIFIED BY is deliberately
+// NOT a trigger: the near echo's plaintext for it is an established,
+// golden-pinned diagnostic convention (TestParseErrorKeepsIdentifiedByInNearEcho),
+// and its unterminated-tail class is redacted on the diagnostic path with
+// original-source spans instead.
+func looksCredentialBearing(text string) bool {
+	return strings.Contains(strings.ToLower(text), "credentials")
+}
+
+// credentialMapStateForNear maps the lexer's small integer tracker onto the
+// exported CredentialMapState understood by the diagnostic masker.
+func credentialMapStateForNear(state int) CredentialMapState {
+	switch state {
+	case 1:
+		return CredentialStateAfterKeyword
+	case 2:
+		return CredentialStateAfterMapEq
+	case 3:
+		return CredentialStateInMap
+	case 4:
+		return CredentialStateInMapAfterEq
+	default:
+		return CredentialStateNone
+	}
 }
 
 func (l *Lexer) AppendStmt(stmt tree.Statement) {

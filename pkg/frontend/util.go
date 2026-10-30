@@ -1496,7 +1496,7 @@ func makeExecuteSql(ctx context.Context, ses *Session, stmt tree.Statement, binE
 	}
 	// Only scan the saved SQL when its diagnostic can be retained. Redact
 	// before clipping so a later privacy marker cannot expose an earlier prefix.
-	preparedSQL := redactStatementTextForLogging(prepared.PrepareStmt, strings.TrimSpace(prepared.Sql))
+	preparedSQL := redactStatementTextForLogging(prepared.PrepareStmt, strings.TrimSpace(prepared.Sql), prepared.schedulingSQLMode)
 	if !appendPart(preparedSQL) || !appendPart(" ; ") {
 		return finish()
 	}
@@ -2708,36 +2708,45 @@ func sqlSourcesByFragment(ctx context.Context, sql, sqlMode string, fragments []
 // Parse failures have no executable AST boundaries. Keep diagnostic text and
 // provenance paired using lexical delimiters; never infer markers beyond a
 // lexical failure. These entries are for recording only, not execution.
+//
+// Text and provenance are both derived from the credential-safe spans the
+// record splitter uses (#30747 review round 10): a malformed credential
+// whose quotes mis-pair under the session mode would otherwise surface a
+// fake top-level `;` INSIDE the credential — cutting there drops the
+// `credentials=` context from the suffix and the surviving fragment leaks
+// into the retained statement text (the client-visible echo convention is
+// untouched; this only feeds recording).
 func (ui *UserInput) parseErrorRecords(ses FeSession) ([]string, []string) {
 	sql := ui.getSql()
-	scanner := mysql.NewScannerWithSQLMode(dialect.MYSQL, sql, mysql.ParseSQLModeFlags(sessionSQLModeForParser(ses)))
-	defer mysql.PutScanner(scanner)
-	var records, sources []string
-	start := 0
-	source := constant.ExternSql
-	previousToken := 0
-	appendRecord := func(end int) {
-		records = append(records, strings.Join(parsers.HandleSqlForRecord(sql[start:end]), ";"))
-		sources = append(sources, source)
-	}
-	for {
-		token, comment := scanSQLSourceToken(scanner, &previousToken)
-		switch token {
-		case mysql.COMMENT:
-			source = sourceWithComment(source, comment)
-		case ';':
-			appendRecord(scanner.Pos - 1)
-			start, source = scanner.Pos, constant.ExternSql
-		case 0, mysql.LEX_ERROR:
-			if start < len(sql) || len(records) == 0 {
-				appendRecord(len(sql))
+	sqlMode := sessionSQLModeForParser(ses)
+	records, spans := parsers.HandleSqlForRecordSpansWithSQLMode(sql, sqlMode)
+	flags := mysql.ParseSQLModeFlags(sqlMode)
+	sources := make([]string, len(spans))
+	for i, span := range spans {
+		// Source attribution runs over the RAW span text with the same
+		// comment-driven logic the previous per-`;` loop used; marker
+		// comments swallowed by an unterminated string stay invisible to
+		// the tokenizer, exactly as before.
+		source := constant.ExternSql
+		scanner := mysql.NewScannerWithSQLMode(dialect.MYSQL, sql[span.Start:span.End], flags)
+		previousToken := 0
+	scanComments:
+		for {
+			token, comment := scanSQLSourceToken(scanner, &previousToken)
+			switch token {
+			case mysql.COMMENT:
+				source = sourceWithComment(source, comment)
+			case 0, mysql.EofChar(), mysql.LEX_ERROR:
+				break scanComments
 			}
-			// Apply internal protection without publishing diagnostic slots on ui.
-			diagnostic := *ui
-			diagnostic.setSqlSourceTypes(ses, sources)
-			return records, diagnostic.sqlSourceType
 		}
+		mysql.PutScanner(scanner)
+		sources[i] = source
 	}
+	// Apply internal protection without publishing diagnostic slots on ui.
+	diagnostic := *ui
+	diagnostic.setSqlSourceTypes(ses, sources)
+	return records, diagnostic.sqlSourceType
 }
 
 func (ui *UserInput) getSqlSourceType(i int) string {

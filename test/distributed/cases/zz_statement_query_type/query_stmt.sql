@@ -13,6 +13,10 @@ select /*case 3*/ account, statement from system.statement_info where statement 
 -- case 4: hide result
 select /*case 4*/ statement from system.statement_info where statement_type in ('Create User', 'Create Table', 'Select') and account = 'bvt_query_stmt' order by request_at desc limit 4;
 
+-- case 5: stage credential values never reach statement_info nor its error text (#30747)
+select /*case 5*/ statement from system.statement_info where statement_type in ('Create Stage', 'Alter Stage') and account = 'bvt_query_stmt' order by request_at;
+select /*case 5*/ count(*) as leaked_credential_records from system.statement_info where account = 'bvt_query_stmt' and (statement like '%V5CANARY9%' or statement like '%V5SECCANARY9%' or `error` like '%V5CANARY9%');
+
 -- case: select span_kind issue #7571
 select IF(span_kind="internal", 1, IF(span_kind="statement", 1, IF(span_kind="session", 1, IF(span_kind="remote", 1, 0)))) as exist from system.rawlog where `raw_item` = "log_info" limit 1;
 

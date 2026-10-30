@@ -36,7 +36,19 @@ import (
 // A mirror transaction on a remote scan worker cannot commit the builder's
 // internal index INSERTs. Two CNs distinguish a remote source from its writer.
 func TestIssue29566IndexRebuildCoordinator(t *testing.T) {
-	cluster, err := embed.StartTestCluster(embed.WithCNCount(2))
+	// This fixture owns synchronous index generations and asserts their
+	// transactional commit/rollback on each coordinator. The embedded default
+	// discovers asynchronous ISCP work every second; an unrelated refresh can
+	// then compete with FORCE_SYNC for the same hidden tables and legitimately
+	// abort one transaction as a deadlock victim. Keep discovery outside this
+	// test's bounded lifetime instead of retrying or weakening those assertions.
+	cluster, err := embed.StartTestCluster(embed.WithCNCount(2), embed.WithPreStart(func(op embed.ServiceOperator) {
+		if op.ServiceType() == metadata.ServiceType_CN {
+			op.Adjust(func(cfg *embed.ServiceConfig) {
+				cfg.CN.ISCP.SyncTaskInterval.Duration = time.Hour
+			})
+		}
+	}))
 	if cluster != nil {
 		t.Cleanup(func() { require.NoError(t, cluster.Close()) })
 	}

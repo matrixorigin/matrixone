@@ -78,6 +78,11 @@ func TestPKCheckReconnectRollsBackAndFreshTxnSucceeds(t *testing.T) {
 	defer writer.Close()
 	_, err = writer.ExecContext(ctx, "set mo_rollback_txn_on_error=0")
 	require.NoError(t, err)
+	// Reconnect recovery is an RC contract. Pin the owning session as well
+	// as BeginTx's next-transaction option: setup/planning must not leave the
+	// parked DELETE using the cluster's default isolation.
+	_, err = writer.ExecContext(ctx, "set session transaction isolation level read committed")
+	require.NoError(t, err)
 	txn, err := writer.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
 	require.NoError(t, err)
 	defer txn.Rollback()
@@ -148,19 +153,24 @@ func TestPKCheckReconnectRollsBackAndFreshTxnSucceeds(t *testing.T) {
 	case <-ctx.Done():
 		t.Fatal(ctx.Err())
 	}
-	frontier, err = pushClient.AcquireLogtailReadBarrier(ctx)
-	require.NoError(t, err)
 	found := false
 	cn.GetTxnClient().IterTxns(func(tx client.TxnOverview) bool {
 		if bytes.Equal(tx.Meta.ID, owner) {
 			found = true
 			require.True(t, tx.Meta.IsRCIsolation())
-			require.True(t, tx.Meta.SnapshotTS.LessEq(frontier))
+			frontier = tx.Meta.SnapshotTS
 			return false
 		}
 		return true
 	})
 	require.True(t, found, "the parked DELETE must belong to an active transaction")
+	// Cover the actual CN snapshot, not an independently sampled TN frontier.
+	// The waiter returns applied.Next() (a future snapshot), so keep the input
+	// frontier for the injected lock: it must not need another logtail advance
+	// while reconnect is deliberately paused below.
+	applied, err := cn.GetTxnClient().WaitLogTailAppliedAt(ctx, frontier)
+	require.NoError(t, err)
+	require.True(t, frontier.Less(applied))
 	require.NoError(t, pushClient.Disconnect())
 	select {
 	case <-reconnecting:

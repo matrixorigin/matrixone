@@ -50,6 +50,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
@@ -1351,6 +1352,38 @@ func Test_makeExecuteSql(t *testing.T) {
 			require.Equal(t, abbreviate(full, limit), makeExecuteSql(ctx, ses1, &tree.Select{}, true, "empty_sql", env, limit))
 		}
 	}
+	t.Run("prepared diagnostics retain their original lexical mode", func(t *testing.T) {
+		for _, tc := range []struct {
+			name, preparedMode, currentMode, sql, literal string
+		}{
+			{"ANSI identifier", "ANSI_QUOTES", "", `create stage "s\" url='file:///x' credentials={'k'='PreparedModeSecret42'}`, "PreparedModeSecret42"},
+			{"no backslash escapes", "NO_BACKSLASH_ESCAPES", "", `create stage s url='file:///x' credentials={'k'='PreparedModeSecret42\'}`, `PreparedModeSecret42\`},
+			{"default mode", "", "NO_BACKSLASH_ESCAPES,ANSI_QUOTES", `create stage s url='file:///x' credentials={'k'='PreparedModeSecret42\'tail'}`, `PreparedModeSecret42\'tail`},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				// The surrounding abbreviation fixture deliberately retains a
+				// nil prepared handle. Use a fresh lightweight session for the
+				// real sql_mode transition, which invalidates existing plans.
+				session := NewSession(ctx, "", &testMysqlWriter{}, nil)
+				stmt, err := mysql.ParseOneWithSQLMode(ctx, tc.sql, 1, tc.preparedMode)
+				require.NoError(t, err)
+				defer stmt.Free()
+				require.NoError(t, session.SetSessionSysVar(ctx, "sql_mode", tc.preparedMode))
+				prepared := &PrepareStmt{Name: "mode_diagnostic", Sql: tc.sql, PrepareStmt: stmt, schedulingSQLMode: tc.preparedMode}
+				require.NoError(t, session.SetPrepareStmt(ctx, prepared.Name, prepared))
+				require.NoError(t, session.SetSessionSysVar(ctx, "sql_mode", tc.currentMode))
+				full := "execute 你 // " + strings.Replace(tc.sql, tc.literal, "******", 1) + " ; "
+				for _, binary := range []bool{false, true} {
+					for _, limit := range limits(full) {
+						got := makeExecuteSql(ctx, session, &tree.Execute{Name: tree.Identifier(prepared.Name)}, binary, prepared.Name, "execute 你", limit)
+						require.Equal(t, abbreviate(full, limit), got, "binary=%v limit=%d", binary, limit)
+						require.NotContains(t, got, "PreparedModeSecret42")
+					}
+				}
+				require.Equal(t, tc.sql, prepared.Sql, "diagnostics must not rewrite executable SQL")
+			})
+		}
+	})
 	t.Run("malformed EXECUTE USING text", func(t *testing.T) {
 		const rawSQL = "select /* \xff */ ?"
 		const rawVariable = "set @value = '你\xe4\xbd'"

@@ -16,17 +16,22 @@ insert into t0_f64 values (0, '[1,2,3]');
 update t0_f64 set b = '[4,5,6]' where a = 0;
 insert into t0_f64 values (1, '[2,3,4]');
 delete from t0_f64 where a = 1;
-insert into t0_f64 values (2, '[100,100,100]');
+-- A second row in the final commit makes its live cardinality (three) distinct
+-- from every earlier committed prefix (at most two). Merely observing a
+-- non-empty model, or even two rows, can admit an intermediate generation.
+insert into t0_f64 values (2, '[100,100,100]'), (3, '[200,200,200]');
 
 set @t0_f64_meta = (select index_table_name from mo_catalog.mo_indexes where name = 'idx0_f64' and algo = 'hnsw' and algo_table_type = 'hnsw_meta' and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 't0_f64') limit 1);
-set @wait_t0_sql = concat('select count(*) = 1 and min(filesize) > 0 as f64_empty_ready from `', database(), '`.`', @t0_f64_meta, '`');
+set @wait_t0_sql = concat('select count(*) = 1 and min(filesize) > 0 and sum(nrow) = 3 as f64_empty_ready from `', database(), '`.`', @t0_f64_meta, '`');
 prepare wait_t0 from @wait_t0_sql;
 -- @metacmp(false)
 -- @wait_expect(1, 120)
 execute wait_t0;
 deallocate prepare wait_t0;
 
+-- Keep the serving cache cold until the complete generation is published.
 select case_name, a, b from ( select 'f64-empty-update' as case_name, a, b from (select * from t0_f64 order by l2_distance(b, '[4,5,6]') limit 1) q union all select 'f64-empty-delete', a, b from (select * from t0_f64 order by l2_distance(b, '[2,3,4]') limit 1) q union all select 'f64-empty-insert', a, b from (select * from t0_f64 order by l2_distance(b, '[100,100,100]') limit 1) q ) readiness order by case_name;
+select a, b from t0_f64 order by l2_distance(b, '[200,200,200]') limit 1;
 drop table t0_f64;
 
 -- f32 and f64 exercise distinct HNSW type paths while sharing each

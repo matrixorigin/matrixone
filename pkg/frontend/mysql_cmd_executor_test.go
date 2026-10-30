@@ -75,6 +75,7 @@ import (
 	txnclient "github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/util"
+	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/util/resource"
@@ -188,7 +189,7 @@ func TestDoComQueryParseErrorRedactsMongoDBSelector(t *testing.T) {
 	require.Error(t, err)
 	assertMongoDBSelectorIsRedacted(t, ses.GetSqlOfStmt())
 	assertMongoDBSelectorIsAbsent(t, err.Error())
-	redactedErr := redactStatementErrorForLogging(err, sql).Error()
+	redactedErr := redactStatementErrorForLogging(err, sql, "").Error()
 	require.Contains(t, redactedErr, "<redacted MongoDB __mo_query statement>")
 	assertMongoDBSelectorIsAbsent(t, redactedErr)
 }
@@ -11129,6 +11130,7 @@ func TestExecRequestStmtPrepareRejectsNonPrepareableAndEmptyPayloads(t *testing.
 	tests := []struct {
 		name    string
 		payload string
+		secret  string
 	}{
 		{name: "values", payload: "values row(1)"},
 		{name: "lock tables", payload: "lock tables t read"},
@@ -11137,6 +11139,8 @@ func TestExecRequestStmtPrepareRejectsNonPrepareableAndEmptyPayloads(t *testing.
 		{name: "whitespace", payload: " \t\r\n"},
 		{name: "line comment", payload: "-- comment"},
 		{name: "block comment", payload: "/* comment */"},
+		{name: "credential parse error", payload: "create accout a ADMIN_NAME 'admin' IDENTIFIED BY 'PREPARE_ERROR_CANARY';", secret: "PREPARE_ERROR_CANARY"},
+		{name: "unterminated credential", payload: "create user u identified by 'PREPARE_OPEN_CANARY", secret: "PREPARE_OPEN_CANARY"},
 	}
 
 	for _, tc := range tests {
@@ -11151,6 +11155,63 @@ func TestExecRequestStmtPrepareRejectsNonPrepareableAndEmptyPayloads(t *testing.
 			moErr, ok := resp.GetData().(*moerr.Error)
 			require.True(t, ok)
 			require.Equal(t, moerr.ErrParseError, moErr.ErrorCode())
+			require.Equal(t, uint16(1064), moErr.MySQLCode())
+			require.Equal(t, "42000", moErr.SqlState())
+			if tc.secret != "" {
+				require.NotContains(t, moErr.Error(), tc.secret, "client response")
+				require.Contains(t, moErr.Error(), "syntax error")
+			}
+		})
+	}
+}
+
+func TestParsePreparedStatementRedactsBeforeReporting(t *testing.T) {
+	ctx := defines.AttachAccountId(t.Context(), sysAccountID)
+	ctrl := gomock.NewController(t)
+	previousPU := getPuIfPresent("")
+	t.Cleanup(func() { setPu("", previousPU) })
+	ses := newTestSession(t, ctrl)
+	t.Cleanup(ses.Close)
+	execCtx := newTestExecCtx(ctx, ctrl)
+	execCtx.ses = ses
+	previousReporter := errutil.GetReportErrorFunc()
+	var mu sync.Mutex
+	var reports []string
+	errutil.SetErrorReporter(func(_ context.Context, err error, _ int) {
+		mu.Lock()
+		defer mu.Unlock()
+		reports = append(reports, err.Error())
+	})
+	t.Cleanup(func() { errutil.SetErrorReporter(previousReporter) })
+	for _, tc := range []struct{ name, sql, secret string }{
+		{"terminated", "create accout a ADMIN_NAME 'admin' IDENTIFIED BY 'INNER_PREPARE_CANARY';", "INNER_PREPARE_CANARY"},
+		{"unterminated", "create user u identified by 'INNER_OPEN_CANARY", "INNER_OPEN_CANARY"},
+		{"ordinary", "create tablex t(id int)", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mu.Lock()
+			reports = nil
+			mu.Unlock()
+			_, stmt, _, err := parsePreparedStatement(execCtx, ses, tc.sql)
+			require.Nil(t, stmt)
+			require.Error(t, err)
+			moErr, ok := err.(*moerr.Error)
+			require.True(t, ok)
+			require.Equal(t, uint16(1064), moErr.MySQLCode())
+			require.Equal(t, "42000", moErr.SqlState())
+			require.Contains(t, err.Error(), "syntax error at line 1 column")
+			if tc.secret == "" {
+				require.Contains(t, err.Error(), "tablex")
+				return
+			}
+			assert.NotContains(t, err.Error(), tc.secret, "client error")
+			mu.Lock()
+			reported := append([]string(nil), reports...)
+			mu.Unlock()
+			require.NotEmpty(t, reported, "exercise the actual moerr reporting boundary")
+			for _, report := range reported {
+				assert.NotContains(t, report, tc.secret, "error pipeline")
+			}
 		})
 	}
 }
@@ -12965,5 +13026,565 @@ func TestPreparedCTASCompileRetryPreservesNamesAndParameters(t *testing.T) {
 		require.Equal(t, originalSource, tree.String(stmt.(*tree.CreateTable).AsSource, dialect.MYSQL))
 		// Specialization retains each supplied value, rather than freezing the first retry.
 		require.Contains(t, got.GetDdl().Query.String(), fmt.Sprintf("sval:%q", fmt.Sprint(value)))
+	}
+}
+
+func TestRedactStatementErrorForLoggingMasksSecrets(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+	execCtx := newTestExecCtx(ctx, ctrl)
+	execCtx.ses = ses
+
+	// a malformed stage statement: the secrets are already cut out of the
+	// parse error near-fragment at the lexer level (#30747/#30746)
+	sql := `create stage bad credentials={'aws_secret_key'='XYZCANARY',`
+	err := doComQuery(ses, execCtx, &UserInput{sql: sql})
+	require.Error(t, err)
+	require.NotContains(t, err.Error(), "XYZCANARY")
+	require.NotContains(t, ses.GetSqlOfStmt(), "XYZCANARY")
+
+	// the redaction hook leaves both masked and mundane diagnostics stable
+	redacted := redactStatementErrorForLogging(err, sql, "").Error()
+	require.NotContains(t, redacted, "XYZCANARY")
+
+	mundane := moerr.NewParseErrorNoCtx("SQL parser error: plain syntax issue")
+	require.Same(t, mundane, redactStatementErrorForLogging(mundane, "select 1", ""))
+}
+
+// The diagnostic copy must mask an identified-by password inside the
+// serialized near echo; a naive whole-message token scan cannot see the password
+// because the echo is one outer double-quoted string (#30747 review).
+func TestRedactStatementErrorForLoggingMasksSerializedNearPassword(t *testing.T) {
+	sql := `create accout a1 ADMIN_NAME 'admin' IDENTIFIED BY 'PWN123456';`
+	_, parseErr := mysql.ParseOne(context.Background(), sql, 1)
+	require.Error(t, parseErr)
+	// The internal parser error retains raw source for the redaction boundary.
+	require.Contains(t, parseErr.Error(), "PWN123456")
+	// diagnostic copy masks it inside the near fragment
+	redacted := redactStatementErrorForLogging(parseErr, sql, "").Error()
+	require.NotContains(t, redacted, "PWN123456")
+	require.Contains(t, redacted, `near "******"`)
+	require.Contains(t, redacted, "syntax error at line 1 column")
+}
+
+// A stage credential map written with JSON-style colons instead of '=' fails
+// parsing INSIDE the map; the near echo begins mid-map at a raw separator and
+// replays no keyword. The diagnostic must still scrub every value (#30746).
+func TestRedactStatementErrorForLoggingMasksMidMapCredentialTail(t *testing.T) {
+	sql := "create stage diag_midmap url='s3,endpoint=x' credentials={'access_key_id':'AKIAMIDMAP','secret_key':'midmapsecret'}"
+	_, parseErr := mysql.ParseOne(context.Background(), sql, 1)
+	require.Error(t, parseErr)
+	require.Contains(t, parseErr.Error(), "near \"", "test premise: the echo carries the mid-map tail")
+	redacted := redactStatementErrorForLogging(parseErr, sql, "").Error()
+	require.NotContains(t, redacted, "AKIAMIDMAP")
+	require.NotContains(t, redacted, "midmapsecret")
+	// equals-form maps keep working through the same mid-map fallback
+	sqlEq := "create stage diag_midmap2 url='s3,endpoint=x' credentials={'access_key_id'='AKIAMIDMAP2','secret_key'='midmapsecret2'}"
+	_, parseErr2 := mysql.ParseOne(context.Background(), sqlEq, 1)
+	if parseErr2 != nil { // '=' maps may parse; if they fail the echo is scrubbed too
+		require.NotContains(t, redactStatementErrorForLogging(parseErr2, sqlEq, "").Error(), "AKIAMIDMAP2")
+	}
+}
+
+// The COM_QUERY debug trace logs raw request text before any downstream
+// masking hook ran; the helper must mask first, then abbreviate, so no
+// partial secret can survive in the log either. (#30747 review)
+func TestMaskQueryForDebugTrace(t *testing.T) {
+	q := `create stage s url='file:///x' credentials={'aws_secret_key'='TRACECANARY42', 'aws_region'='us-east-1'}`
+	out := maskQueryForDebugTrace(q, 40, "")
+	require.NotContains(t, out, "TRACECANARY42")
+	require.LessOrEqual(t, len(out), 43, "maxLen plus ellipsis")
+	out = maskQueryForDebugTrace(q, -1, "")
+	require.NotContains(t, out, "TRACECANARY42")
+	require.Contains(t, out, "'******'")
+}
+
+// #30747 review: a PREPARE wraps its statement in one string literal, so
+// neither the record redaction nor the debug trace can see credentials inside
+// it with an outer token scan alone — the masker descends into the literal at
+// its owning boundary.
+func TestRedactStatementTextForLoggingDescendsIntoPrepareString(t *testing.T) {
+	sql := `prepare p from "create stage s url='file:///x' credentials={'aws_key'='PREPARE_CANARY'}"`
+	redacted := redactStatementTextForLogging(nil, sql, "")
+	require.NotContains(t, redacted, "PREPARE_CANARY")
+	require.Contains(t, redacted, `credentials={'aws_key'='******'}`)
+
+	// the debug-trace helper scrubs the same prepare payload
+	out := maskQueryForDebugTrace(sql, -1, "")
+	require.NotContains(t, out, "PREPARE_CANARY")
+}
+
+// #30747 review: NO_BACKSLASH_ESCAPES changes where the first credential
+// value terminates; the redaction boundary must evaluate tokens under the
+// session's effective lexical mode instead of the default one.
+func TestRedactStatementTextForLoggingNoBackslashEscapes(t *testing.T) {
+	sql := `create stage s credentials={'aws_key'='foo\','secret_key'='CANARY_BETA'}`
+	redacted := redactStatementTextForLogging(nil, sql, "NO_BACKSLASH_ESCAPES")
+	require.NotContains(t, redacted, "CANARY")
+	require.Contains(t, redacted, `'secret_key'='******'`)
+}
+
+// #30747 review: the tree formatter redacts stage credential VALUES at
+// origin (matching the access-key and IDENTIFIED BY format rules), so any
+// diagnostic echo of the formatted statement — prepare plan-build errors
+// among them — arrives already scrubbed.
+func TestStageCredentialsFormatRedactsValues(t *testing.T) {
+	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL,
+		"create stage s5 url='file:///x' credentials={'aws_key'='FORMAT_CANARY'}", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	rendered := tree.String(stmt, dialect.MYSQL)
+	require.NotContains(t, rendered, "FORMAT_CANARY")
+	require.Contains(t, rendered, "'aws_key'='******'")
+}
+
+// #30747 review round 4: the debug trace receives the WHOLE multi-statement
+// request text; a leading `SET sql_mode='NO_BACKSLASH_ESCAPES'` re-tunes the
+// lexical mode for the statements that follow it, and masking every
+// statement under the request's INITIAL mode leaves a backslash-bearing
+// credential visible in the trace.
+func TestMaskQueryForDebugTraceStagedSQLMode(t *testing.T) {
+	q := `set sql_mode='NO_BACKSLASH_ESCAPES'; create stage s credentials={'aws_key'='a\', url='STAGED_DBG_CANARY'}`
+	out := maskQueryForDebugTrace(q, -1, "")
+	require.NotContains(t, out, "STAGED_DBG_CANARY")
+	require.Contains(t, out, "url='******'")
+
+	// same shape through the abbreviation boundary
+	out = maskQueryForDebugTrace(q, 400, "")
+	require.NotContains(t, out, "STAGED_DBG_CANARY")
+
+	// a single statement still masks under the session mode directly
+	out = maskQueryForDebugTrace(
+		`create stage s credentials={'aws_key'='a\', url='STAGED_DBG_CANARY2'}`, -1,
+		"NO_BACKSLASH_ESCAPES")
+	require.NotContains(t, out, "STAGED_DBG_CANARY2")
+}
+
+// #30747 review (nested PREPARE boundary): the FIRST statement inside a
+// `begin ... end` block — a compound statement or a CREATE SQL TASK body —
+// sits at statement-initial position without a preceding ';'; the
+// debug-trace helper must still descend into that PREPARE's payload
+// (observed query-trace regression coverage, review probe verbatim).
+func TestMaskQueryForDebugTraceNestedPrepare(t *testing.T) {
+	q := `begin prepare p from "create stage s url='file:///x' credentials={'aws_secret_key'='NESTED_TRACE_CANARY'}"; execute p; end`
+	for _, limit := range []int{-1, 400} {
+		out := maskQueryForDebugTrace(q, limit, "")
+		require.NotContains(t, out, "NESTED_TRACE_CANARY")
+		require.Contains(t, out, `credentials={'aws_secret_key'='******'}`)
+	}
+
+	// the task wrapper hits the same first-in-body position
+	out := maskQueryForDebugTrace(
+		`create task t as begin prepare p from "create stage s credentials={'k'='NESTED_TASK_CANARY'}"; execute p; end`, 400, "")
+	require.NotContains(t, out, "NESTED_TASK_CANARY")
+
+	// the redaction walker masks the nested payload identically
+	redacted := redactStatementTextForLogging(nil, q, "")
+	require.NotContains(t, redacted, "NESTED_TRACE_CANARY")
+	require.Contains(t, redacted, `credentials={'aws_secret_key'='******'}`)
+}
+
+// #30747 review round 16 (acceptance, issue comment 6330683761): a
+// MALFORMED credential-bearing statement must not expose its raw fragment
+// to the client — redact through safe masking/truncation while keeping
+// useful parse diagnostics. Non-credential parse errors keep the
+// historical raw near-echo byte-for-byte.
+func TestParseErrorClientEchoRedactsCredentials(t *testing.T) {
+	run := func(t *testing.T, sql string) error {
+		ctx := defines.AttachAccountId(t.Context(), sysAccountID)
+		ctrl := gomock.NewController(t)
+		previousPU := getPuIfPresent("")
+		defer setPu("", previousPU)
+		ses := newTestSession(t, ctrl)
+		defer ses.Close()
+		ses.ruleCache = map[string]string{}
+		getPu("").SV.LengthOfQueryPrinted = 400
+		execCtx := newTestExecCtx(ctx, ctrl)
+		execCtx.ses = ses
+		return doComQuery(ses, execCtx, &UserInput{sql: sql})
+	}
+
+	t.Run("unterminated identified by is redacted but still diagnostic", func(t *testing.T) {
+		err := run(t, `create user u identified by 'CLIENT_GATE_D6`)
+		require.Error(t, err)
+		require.NotContains(t, err.Error(), "CLIENT_GATE_D6")
+		require.Contains(t, err.Error(), "syntax error", "location/shape diagnostics survive")
+	})
+
+	t.Run("terminated identified by keeps structure with the secret masked", func(t *testing.T) {
+		err := run(t, `create accout a1 ADMIN_NAME 'admin' IDENTIFIED BY 'PWN_CLIENT' ;`)
+		require.Error(t, err)
+		require.NotContains(t, err.Error(), "PWN_CLIENT")
+		require.Contains(t, err.Error(), "syntax error")
+	})
+
+	t.Run("non-credential parse errors keep the raw near echo verbatim", func(t *testing.T) {
+		err := run(t, `create tablex t (id int)`)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "tablex", "ordinary parse errors are untouched")
+	})
+}
+
+func TestMaskQueryForDebugTraceSQLModeOperands(t *testing.T) {
+	const mode = "NO_BACKSLASH_ESCAPES"
+	const stage = ` create stage s url='file:///x' credentials={'k'='foo\','secret_key'='TRACE_OPERAND_CANARY'}`
+	for _, prefix := range []string{
+		`set @x=@@session.sql_mode='';`,
+		`set @x=@@sql_mode='';`,
+		`set @x=@@local.sql_mode='';`,
+		`set @x=if(1,@@session.sql_mode='',0);`,
+		`set @x=1,@y=coalesce(NULL,@@local.sql_mode='');`,
+	} {
+		t.Run(prefix, func(t *testing.T) {
+			stmt, err := mysql.ParseOneWithSQLMode(t.Context(), prefix, 1, mode)
+			require.NoError(t, err)
+			defer stmt.Free()
+			require.False(t, isSessionSQLModeSet(stmt), "production staging must agree this is not a mode assignment")
+			want := prefix + mysql.MaskSensitiveSqlLiteralsWithSQLMode(stage, mysql.ParseSQLModeFlags(mode))
+			for _, limit := range []int{-1, 400} {
+				got := maskQueryForDebugTrace(prefix+stage, limit, mode)
+				require.Equal(t, want, got)
+				require.NotContains(t, got, "TRACE_OPERAND_CANARY")
+			}
+		})
+	}
+}
+
+func TestExecRequestSQLModeOperandTrace(t *testing.T) {
+	ctx := defines.AttachAccountId(t.Context(), sysAccountID)
+	ctrl := gomock.NewController(t)
+	previousPU := getPuIfPresent("")
+	defer setPu("", previousPU)
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+	// Pair the fixture's catalog-version proof with an already loaded empty
+	// policy, so request admission does not need a catalog engine.
+	ses.ruleCache = map[string]string{}
+	getPu("").SV.LengthOfQueryPrinted = 400
+	require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", "NO_BACKSLASH_ESCAPES"))
+	observed, logs := newObservedProtocolSession()
+	ses.logger, ses.logLevel = observed.logger, observed.logLevel
+	ses.loggerOnce.Do(func() {})
+	// The trace is emitted before planning. Stop at the existing wrapper seam
+	// so this protocol-boundary test needs neither an engine nor a cluster.
+	stop := moerr.NewInvalidInputNoCtx("stop after query trace")
+	planCalls := 0
+	stubs := gostub.Stub(&GetComputationWrapper, func(*ExecCtx, string, string, engine.Engine, *process.Process, *Session) ([]ComputationWrapper, error) {
+		planCalls++
+		return nil, stop
+	})
+	defer stubs.Reset()
+	for i, target := range []string{"@@sql_mode", "@@session.sql_mode", "@@local.sql_mode"} {
+		query := `set @x=` + target + `=''; create stage s url='file:///x' credentials={'k'='foo\','secret_key'='COM_QUERY_SCOPE_CANARY'}`
+		resp, err := ExecRequest(ses, newTestExecCtx(ctx, ctrl), &Request{cmd: COM_QUERY, data: []byte(query)})
+		require.NoError(t, err)
+		require.NotNil(t, resp)
+		require.Equal(t, ErrorResponse, resp.category)
+		responseErr, ok := resp.data.(error)
+		require.True(t, ok)
+		require.ErrorContains(t, responseErr, "stop after query trace")
+		require.Equal(t, i+1, planCalls, "request must reach the injected planning boundary")
+		entries := logs.FilterMessage("query trace").All()
+		require.Len(t, entries, i+1, "the actual debug sink must receive each request once")
+		logged := entries[len(entries)-1].ContextMap()["query"]
+		require.Equal(t, mysql.MaskSensitiveSqlLiteralsPerStatement(query, mysql.ParseSQLModeFlags("NO_BACKSLASH_ESCAPES")), logged)
+		require.NotContains(t, logged, "COM_QUERY_SCOPE_CANARY")
+		mode, err := ses.GetSessionSysVar("sql_mode")
+		require.NoError(t, err)
+		require.Equal(t, "NO_BACKSLASH_ESCAPES", mode)
+	}
+}
+
+// #30747 review round 9: the three named sinks — the by-statement record
+// text used for session state and telemetry, the client-visible parse-error
+// echo, and the debug trace — must all hide a semicolon-bearing credential
+// under NO_BACKSLASH_ESCAPES and a structurally-unclosed malformed map.
+func TestRound9CredentialBoundariesAcrossSinks(t *testing.T) {
+	// F1 shape: semicolon inside a credential under NBE
+	req := `create stage s url='file:///x' credentials={'k'='foo\','secret_key'='prefix;R9_X_CANARY'}`
+	records, err := sqlForRecordByStatementWithSQLMode(context.Background(), req, "NO_BACKSLASH_ESCAPES")
+	require.NoError(t, err)
+	for _, rec := range records {
+		require.NotContains(t, rec, "R9_X_CANARY")
+	}
+	out := maskQueryForDebugTrace(req, -1, "NO_BACKSLASH_ESCAPES")
+	require.NotContains(t, out, "R9_X_CANARY")
+	_, parseErr := mysql.ParseOneWithSQLMode(context.Background(), req, 1, "NO_BACKSLASH_ESCAPES")
+	if parseErr != nil {
+		require.NotContains(t, redactStatementErrorForLogging(parseErr, req, "NO_BACKSLASH_ESCAPES").Error(), "R9_X_CANARY")
+	}
+
+	// F2 shape: structurally unclosed map made of valid tokens
+	req2 := `create stage s url='file:///x' credentials={'k'='foo\','secret_key'='R9_Y_CANARY'} -- '`
+	records, err = sqlForRecordByStatementWithSQLMode(context.Background(), req2, "")
+	if err == nil {
+		for _, rec := range records {
+			require.NotContains(t, rec, "R9_Y_CANARY")
+		}
+	}
+	out = maskQueryForDebugTrace(req2, -1, "")
+	require.NotContains(t, out, "R9_Y_CANARY")
+	_, parseErr = mysql.ParseOneWithSQLMode(context.Background(), req2, 1, "")
+	if parseErr != nil {
+		require.NotContains(t, redactStatementErrorForLogging(parseErr, req2, "").Error(), "R9_Y_CANARY")
+	}
+}
+
+// #30747 review round 9: a non-moerr parse failure is reported to the error
+// pipeline (error log + error_info) when it is wrapped for the client. The
+// pipeline copy must be the redacted diagnostic, while the client keeps the
+// conventional echo — a credential in the near-text must never reach error
+// telemetry.
+func TestReportParseErrorForClientKeepsPipelineRedacted(t *testing.T) {
+	prev := errutil.GetReportErrorFunc()
+	var mu sync.Mutex
+	var reported []string
+	errutil.SetErrorReporter(func(_ context.Context, err error, _ int) {
+		mu.Lock()
+		reported = append(reported, err.Error())
+		mu.Unlock()
+	})
+	defer errutil.SetErrorReporter(prev)
+	resetReported := func() {
+		mu.Lock()
+		reported = nil
+		mu.Unlock()
+	}
+
+	req := `create stage s url='file:///x' credentials={'k'='foo\','secret_key'='R9_Z_CANARY'} -- '`
+	_, parseErr := mysql.ParseOneWithSQLMode(context.Background(), req, 1, "")
+	require.Error(t, parseErr)
+	diagnosticErr := redactStatementErrorForLogging(parseErr, req, "")
+	require.NotContains(t, diagnosticErr.Error(), "R9_Z_CANARY")
+
+	resetReported()
+	clientErr := reportParseErrorForClient(context.Background(), parseErr, diagnosticErr)
+	require.Error(t, clientErr)
+	// client-visible text keeps the conventional echo, unchanged from before
+	// (expectation built as plain text: moerr constructors themselves report
+	// through the ambient context inside the test harness)
+	require.Equal(t, "SQL parser error: "+parseErr.Error(), clientErr.Error())
+	// exactly one pipeline report and it is the redacted diagnostic copy
+	require.Len(t, reported, 1)
+	require.NotContains(t, reported[0], "R9_Z_CANARY")
+	require.Contains(t, reported[0], "syntax error")
+
+	// mundane parse failures keep their previous telemetry verbatim
+	// ("create stage" alone is a PositionedErr with no credentials involved)
+	_, mundaneErr := mysql.ParseOneWithSQLMode(context.Background(), "create stage", 1, "")
+	require.Error(t, mundaneErr)
+	resetReported()
+	mundaneClient := reportParseErrorForClient(context.Background(), mundaneErr, mundaneErr)
+	require.Len(t, reported, 1)
+	require.Contains(t, reported[0], mundaneErr.Error())
+	require.Equal(t, "SQL parser error: "+mundaneErr.Error(), mundaneClient.Error())
+
+	// moerr-typed failures were already reported at construction: pass through
+	passthrough := moerr.NewParseErrorNoCtx("typed")
+	resetReported()
+	require.Same(t, passthrough, reportParseErrorForClient(context.Background(), passthrough, passthrough))
+	require.Empty(t, reported)
+}
+
+// #30747 review round 10, P1: verbatim mo-bot probes through the production
+// entrypoints they name — parseErrorRecords feeding RecordParseErrorStatement
+// and doComQuery's retained statement text. Masking must run on the WHOLE
+// malformed text BEFORE diagnostic fragments are cut, otherwise the default
+// mode mis-pairs the quotes and surfaces a fake top-level `;` inside the
+// credential; the suffix would then lose its `credentials=` context.
+func TestRound10MalformedMapParseErrorRecords(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+
+	req := `create stage s url='file:///x' credentials={'k'='foo\','secret_key'='prefix;REVIEW_RECORD_CANARY'} -- '`
+	// the review's TestReviewMalformedMapParseErrorRecords shape: one redacted
+	// record, suffix context preserved by construction
+	records, _ := (&UserInput{sql: req}).parseErrorRecords(ses)
+	require.Len(t, records, 1)
+	require.NotContains(t, records[0], "REVIEW_RECORD_CANARY")
+	require.Contains(t, records[0], "credentials=")
+
+	// the review's TestReviewDoComQueryMalformedMap shape: the retained
+	// statement text never collapses to the raw suffix
+	execCtx := newTestExecCtx(ctx, ctrl)
+	execCtx.ses = ses
+	err := doComQuery(ses, execCtx, &UserInput{sql: req})
+	require.Error(t, err)
+	require.NotContains(t, ses.GetSqlOfStmt(), "REVIEW_RECORD_CANARY")
+	require.NotEqual(t, "REVIEW_RECORD_CANARY'} -- '", ses.GetSqlOfStmt())
+	require.Contains(t, ses.GetSqlOfStmt(), "credentials=")
+}
+
+// #30747 review round 10, P2: verbatim mo-bot probe through the actual
+// COM_QUERY debug sink at print limit 400 (ExecRequest), mirroring the
+// review's TestReviewExecRequestUnknownModeTrace. An unknown-mode transition
+// tail must never split inside a credential under ANY lexical variant.
+func TestExecRequestUnknownModeBraceBoundaryTrace(t *testing.T) {
+	ctx := defines.AttachAccountId(t.Context(), sysAccountID)
+	ctrl := gomock.NewController(t)
+	previousPU := getPuIfPresent("")
+	defer setPu("", previousPU)
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+	// Pair the fixture's catalog-version proof with an already loaded empty
+	// policy, so request admission does not need a catalog engine.
+	ses.ruleCache = map[string]string{}
+	getPu("").SV.LengthOfQueryPrinted = 400
+	observed, logs := newObservedProtocolSession()
+	ses.logger, ses.logLevel = observed.logger, observed.logLevel
+	ses.loggerOnce.Do(func() {})
+	// The trace is emitted before planning. Stop at the existing wrapper seam
+	// so this protocol-boundary test needs neither an engine nor a cluster.
+	stop := moerr.NewInvalidInputNoCtx("stop after query trace")
+	planCalls := 0
+	stubs := gostub.Stub(&GetComputationWrapper, func(*ExecCtx, string, string, engine.Engine, *process.Process, *Session) ([]ComputationWrapper, error) {
+		planCalls++
+		return nil, stop
+	})
+	defer stubs.Reset()
+	queries := []string{
+		`set sql_mode=concat('NO_BACKSLASH','_ESCAPES'); create stage s url='file:///x' credentials={'k'='foo\','secret_key'='prefix};REVIEW_BRACE_CANARY'}`,
+		`SET sql_mode='NO_BACKSLASH_ESCAPES'; SELECT 'access_key_id'='foo\'; SET sql_mode=''; create stage s2 url="file:///x\"z" credentials={'k'='REVIEW_NEW_CANARY'}`,
+		// Nearest controls: no mixed-mode prefix, and no quote re-pairing
+		// in the SELECT before the reset. Both were already safe.
+		`create stage s2 url="file:///x\"z" credentials={'k'='REVIEW_NEW_CANARY'}`,
+		`SET sql_mode='NO_BACKSLASH_ESCAPES'; SELECT 'access_key_id'='foo'; SET sql_mode=''; create stage s2 url="file:///x\"z" credentials={'k'='REVIEW_NEW_CANARY'}`,
+	}
+	for i, query := range queries {
+		resp, err := ExecRequest(ses, newTestExecCtx(ctx, ctrl), &Request{cmd: COM_QUERY, data: []byte(query)})
+		require.NoError(t, err)
+		require.NotNil(t, resp)
+		require.Equal(t, ErrorResponse, resp.category)
+		responseErr, ok := resp.data.(error)
+		require.True(t, ok)
+		require.ErrorContains(t, responseErr, "stop after query trace")
+		require.Equal(t, i+1, planCalls, "request must reach the injected planning boundary")
+		entries := logs.FilterMessage("query trace").All()
+		require.Len(t, entries, i+1, "the actual debug sink must receive each request once")
+		logged := entries[i].ContextMap()["query"]
+		require.Equal(t, mysql.MaskSensitiveSqlLiteralsPerStatement(query, mysql.ParseSQLModeFlags("")), logged)
+		require.NotContains(t, logged, "REVIEW_BRACE_CANARY")
+		require.NotContains(t, logged, "REVIEW_NEW_CANARY")
+	}
+}
+
+// #30747 review rounds 11/12, battery: the full malformed-map family from
+// rounds 9/10/11/12 — EOF-taint, valid-tokens-junk-tail, mis-paired-quote
+// with-};, near-tail (incl. embedded '=' and value-before-equals), unknown-
+// mode transitions, comment-prefixed transitions (three trivia flavors) and
+// ANSI_QUOTES-entry cursor chains — asserting EVERY production sink in ONE
+// pass: client parse-error echo, retained statement text
+// (doComQuery/GetSqlOfStmt), the full observed log stream (debug/status
+// sinks), and the error pipeline (error log + error_info via the registered
+// reporter). Zero canary in any cell.
+func TestRound11MalformedMapFamilyAllSinks(t *testing.T) {
+	canaries := []string{
+		"B1CANARY", "B2CANARY", "B3CANARY", "B4CANARY", "B5CANARY", "B6CANARY", "B7CANARY",
+		"C1CANARY", "C2CANARY", "C3CANARY", "C4CANARY", "C5CANARY", "C6CANARY",
+		"D1CANARY", "D2CANARY", "D3CANARY", "D4CANARY", "D5CANARY", "D6PASSWORD",
+		"FIRST_PASSWORD", "SECOND_PASSWORD", "STACKED_REVIEW_CANARY",
+	}
+	shapes := []struct {
+		name    string
+		sqlMode string // "" = default session mode
+		query   string
+	}{
+		{"r9-eof-taint", "", `create stage s url='file:///x' credentials={'k'='foo\','secret_key'='B1CANARY'} -- '`},
+		{"r10-unknown-brace", "", `set sql_mode=concat('NO_BACKSLASH','_ESCAPES'); create stage s url='file:///x' credentials={'k'='foo\','secret_key'='prefix};B2CANARY'}`},
+		{"r11-known-brace-comment", "", `create stage s url='file:///x' credentials={'k'='foo\','secret_key'='prefix};B3CANARY'} -- '`},
+		{"r11-near-tail", "", `create stage s url='file:///x' credentials={'k'='foo\','secret_key'='B4CANARY'} -- '`},
+		{"r9-nbe-single", "NO_BACKSLASH_ESCAPES", `create stage s url='file:///x' credentials={'k'='foo\','secret_key'='prefix;B5CANARY'}`},
+		{"r10-record-semicolon", "", `create stage s url='file:///x' credentials={'k'='foo\','secret_key'='prefix;B6CANARY'} -- '`},
+		{"r9-transition-repin", "", `set sql_mode=concat('NO_BACKSLASH','_ESCAPES'); create stage s1 url='file:///x' credentials={'k'='foo\','k2'='first'}; set sql_mode=''; create stage s2 url='file:///x' credentials={'k'='prefix\'B7CANARY'}`},
+		// round 12 tier: comment-prefixed transitions, ANSI-entry cursor
+		// chains, near-tail variants (embedded '=', value-before-equals)
+		{"r12-block-comment-transition", "", `/* application */ SET sql_mode=''; create stage s url='file:///x' credentials={'k'='C1CANARY'}`},
+		{"r12-line-comment-transition", "", "-- application\nSET sql_mode=''; create stage s url='file:///x' credentials={'k'='C2CANARY'}"},
+		{"r12-hash-comment-transition", "", "# application\nSET sql_mode=''; create stage s url='file:///x' credentials={'k'='C3CANARY'}"},
+		{"r12-ansi-entry-cursor-chain", "ANSI_QUOTES", `SELECT 1 AS "a\"; SET sql_mode=''; SELECT 1; SET sql_mode='ANSI_QUOTES'; create stage "s\" url='file:///x' credentials={'k'='C4CANARY'}`},
+		{"r12-near-tail-embedded-eq", "", `create stage s url='file:///x' credentials={'k'='foo\','secret_key'='C5CANARY=tail'} -- '`},
+		{"r12-near-tail-value-before-eq", "", `create stage s url='file:///x' credentials={'k'='foo\','secret_key'='C6CANARY'=''} -- '`},
+		// round 13 tier: scanner-rule transition admission, cursor resume
+		// across mode flips, identified-by unterminated tail (round 16
+		// acceptance: the client echo is redacted too — every sink clean)
+		{"r13-admission-backtick", "", "SET`sql_mode`='ANSI_QUOTES'; create stage \"s\\\" url='file:///x' credentials={'k'='D1CANARY'}"},
+		{"r13-admission-hash-interstitial", "", "SET # c\nsql_mode='ANSI_QUOTES'; create stage \"s\\\" url='file:///x' credentials={'k'='D2CANARY'}"},
+		{"r13-admission-dash-interstitial", "", "SET -- c\nsql_mode='ANSI_QUOTES'; create stage \"s\\\" url='file:///x' credentials={'k'='D3CANARY'}"},
+		{"r13-admission-slashes", "", "// leading\nSET sql_mode='ANSI_QUOTES'; create stage \"s\\\" url='file:///x' credentials={'k'='D4CANARY'}"},
+		{"r13-cursor-resume-chain", "", `SET sql_mode='ANSI_QUOTES'; SELECT 1 AS "a\"; SET sql_mode=''; SELECT 1; SET sql_mode='ANSI_QUOTES'; create stage "s\" url='file:///x' credentials={'k'='D5CANARY'}`},
+		{"r13-identified-by-unterminated", "", `create user u identified by 'D6PASSWORD`},
+		{"original spans before partial near rewrite", "", `alter user u identified by FIRST_PASSWORD, v identified by 'SECOND_PASSWORD';`},
+		{"lexical recovery exhaustion", "", "create account `` x `` x `` ADMIN_NAME 'admin' IDENTIFIED BY 'STACKED_REVIEW_CANARY';"},
+	}
+	for _, shape := range shapes {
+		t.Run(shape.name, func(t *testing.T) {
+			ctx := defines.AttachAccountId(t.Context(), sysAccountID)
+			ctrl := gomock.NewController(t)
+			previousPU := getPuIfPresent("")
+			defer setPu("", previousPU)
+
+			// capture the error pipeline (terminal ERROR log + error_info)
+			prev := errutil.GetReportErrorFunc()
+			var mu sync.Mutex
+			var reported []string
+			errutil.SetErrorReporter(func(_ context.Context, err error, _ int) {
+				mu.Lock()
+				reported = append(reported, err.Error())
+				mu.Unlock()
+			})
+			defer errutil.SetErrorReporter(prev)
+
+			ses := newTestSession(t, ctrl)
+			defer ses.Close()
+			ses.ruleCache = map[string]string{}
+			getPu("").SV.LengthOfQueryPrinted = 400
+			observed, logs := newObservedProtocolSession()
+			ses.logger, ses.logLevel = observed.logger, observed.logLevel
+			ses.loggerOnce.Do(func() {})
+			if shape.sqlMode != "" {
+				require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", shape.sqlMode))
+			}
+
+			execCtx := newTestExecCtx(ctx, ctrl)
+			execCtx.ses = ses
+			// doComQuery itself drives both the record path and the client
+			// error echo for this battery's (mostly invalid) diagnostics.
+			comErr := doComQuery(ses, execCtx, &UserInput{sql: shape.query})
+			// round 16 acceptance: including the identified-by-unterminated
+			// cell, the CLIENT echo must not carry any secret either.
+			if comErr != nil && comErr.Error() != "" {
+				for _, canary := range canaries {
+					require.NotContains(t, comErr.Error(), canary, "client error echo")
+				}
+			}
+			for _, canary := range canaries {
+				require.NotContains(t, ses.GetSqlOfStmt(), canary, "retained statement text")
+			}
+			// the entire observed log stream of this session: debug trace,
+			// status lines, error fields — concatenate and assert clean.
+			for _, entry := range logs.All() {
+				entryText := entry.Message
+				for key, value := range entry.ContextMap() {
+					if s, ok := value.(string); ok {
+						entryText += " " + key + "=" + s
+					}
+				}
+				for _, canary := range canaries {
+					require.NotContains(t, entryText, canary, "observed log entry %q", entry.Message)
+				}
+			}
+			mu.Lock()
+			reportedCopy := append([]string(nil), reported...)
+			mu.Unlock()
+			for _, line := range reportedCopy {
+				for _, canary := range canaries {
+					require.NotContains(t, line, canary, "error pipeline report")
+				}
+			}
+		})
 	}
 }
