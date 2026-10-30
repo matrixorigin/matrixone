@@ -19,26 +19,6 @@ on:
       - "optools/gpu/**"
       - "optools/ut_tools.bash"
       - "thirdparties/**"
-  push:
-    branches:
-      - main
-    paths:
-      - ".github/workflows/native-dependency-check.yml"
-      - ".github/workflows/sca-go-module-cache.yaml"
-      - ".agents/skills/mo-dev/**"
-      - ".dockerignore"
-      - "Makefile"
-      - "cgo/**"
-      - "go.mod"
-      - "go.sum"
-      - "optools/images/Dockerfile"
-      - "optools/images/Dockerfile.ci"
-      - "optools/images/test_go_toolchain.py"
-      - "optools/images/gpu/**"
-      - "optools/run_ut.sh"
-      - "optools/gpu/**"
-      - "optools/ut_tools.bash"
-      - "thirdparties/**"
   workflow_dispatch:
 
 permissions:
