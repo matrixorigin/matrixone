@@ -35,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
 
@@ -46,6 +47,16 @@ func TestDedupLogicalDiagnostic(t *testing.T) {
 					ctrl := gomock.NewController(t)
 					defer ctrl.Finish()
 					proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
+					// This is a duplicate-diagnostic test, not a host disk-headroom
+					// test. Keep a private finite ledger so a low-space build host
+					// cannot reject the tiny forced-spill input before the oracle.
+					budget := process.MustNewExecutionResourceBudget(8<<20, 8<<20)
+					t.Cleanup(budget.Close)
+					require.NoError(t, budget.SetSpillCaps(64<<20, 0))
+					generation, err := budget.OpenGeneration(1)
+					require.NoError(t, err)
+					t.Cleanup(generation.Close)
+					require.NoError(t, proc.SetExecutionResourceBudgetForTesting(generation))
 					op := mock_frontend.NewMockTxnOperator(ctrl)
 					op.EXPECT().Txn().Return(txn.TxnMeta{Mode: mode}).AnyTimes()
 					proc.Base.TxnOperator = op
@@ -67,6 +78,9 @@ func TestDedupLogicalDiagnostic(t *testing.T) {
 						if probeBat != nil {
 							probeBat.Clean(proc.Mp())
 						}
+						require.Zero(t, generation.Used())
+						require.Zero(t, generation.SpillDiskUsed())
+						require.Zero(t, generation.SpillFDUsed())
 						proc.Free()
 						require.Zero(t, proc.Mp().CurrNB())
 						if allocation != nil {
@@ -160,7 +174,7 @@ func TestDedupLogicalDiagnostic(t *testing.T) {
 					allocation = installTestAllocation(t, join, build)
 					require.NoError(t, build.Prepare(proc))
 					require.NoError(t, join.Prepare(proc))
-					_, err := vm.Exec(build, proc)
+					_, err = vm.Exec(build, proc)
 					require.NoError(t, err)
 					for {
 						res, err := vm.Exec(join, proc)

@@ -16,6 +16,7 @@ package group
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -1366,13 +1367,16 @@ func (ctr *container) loadSpilledData(proc *process.Process, opAnalyzer process.
 					return false, err
 				}
 				if err := bkt.finishWriting(); err != nil {
-					bkt.free()
+					err = errors.Join(err, bkt.free())
 					ctr.currentSpillBkt[i] = nil
 					return false, err
 				}
 				ctr.spillBkts.PushBack(bkt)
 			} else {
-				bkt.free()
+				if err := bkt.free(); err != nil {
+					ctr.currentSpillBkt[i] = nil
+					return false, err
+				}
 			}
 			// Ownership has moved to spillBkts or ended at free(). Do not leave
 			// a second source reference behind if a later flush fails/cancels.
@@ -1394,9 +1398,7 @@ func (ctr *container) loadSpilledData(proc *process.Process, opAnalyzer process.
 	bkt := ctr.spillBkts.PopBack().Value
 	defer func() {
 		spillio.DropReadCache(bkt.file)
-		if err := bkt.free(); err != nil && retErr == nil {
-			retErr = err
-		}
+		retErr = errors.Join(retErr, bkt.free())
 		ctr.freeSpillAggList()
 	}()
 	opStats := opAnalyzer.GetOpStats()

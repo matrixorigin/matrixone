@@ -326,24 +326,26 @@ func (r *BucketReader) ResetForSpillFile(
 	budget *process.ExecutionResourceGeneration,
 	file *message.SpillFile,
 ) error {
-	r.closeCurrentFile()
+	if err := r.closeCurrentFile(); err != nil {
+		if file != nil {
+			err = errors.Join(err, file.Close())
+		}
+		return err
+	}
 	if file == nil {
 		return nil
 	}
 	if err := file.Validate(); err != nil {
-		_ = file.Close()
-		return err
+		return errors.Join(err, file.Close())
 	}
 	if file.NeedsOpen() {
 		if budget == nil {
-			_ = file.Close()
-			return process.ErrExecutionResourceInvalid
+			return errors.Join(process.ErrExecutionResourceInvalid, file.Close())
 		}
 		var err error
 		r.fdReservation, err = budget.ReserveSpillFD(1)
 		if err != nil {
-			_ = file.Close()
-			return err
+			return errors.Join(err, file.Close())
 		}
 	}
 	fd, err := file.Open(proc.Ctx)
@@ -352,14 +354,13 @@ func (r *BucketReader) ResetForSpillFile(
 			r.fdReservation.Release()
 			r.fdReservation = nil
 		}
-		_ = file.Close()
-		return err
+		return errors.Join(err, file.Close())
 	}
 	r.spillFile = file
 	r.fd = fd
 	if r.reader != nil {
 		if err := r.reader.Reset(r.fd); err != nil {
-			_ = file.Close()
+			err = errors.Join(err, file.Close())
 			r.spillFile = nil
 			r.fd = nil
 			if r.fdReservation != nil {
@@ -374,20 +375,20 @@ func (r *BucketReader) ResetForSpillFile(
 	return nil
 }
 
-func (r *BucketReader) closeCurrentFile() {
+func (r *BucketReader) closeCurrentFile() (err error) {
 	spill := r.spillFile
 	r.spillFile = nil
 	spillio.DropReadCache(r.fd)
 	if spill != nil {
-		_ = spill.Close()
+		err = spill.Close()
 		r.fd = nil
 	}
 	if r.fd != nil {
-		_ = r.fd.Close()
+		err = errors.Join(err, r.fd.Close())
 		r.fd = nil
 	}
 	if r.reader != nil {
-		_ = r.reader.Reset(nil)
+		err = errors.Join(err, r.reader.Reset(nil))
 	}
 	if r.fdReservation != nil {
 		r.fdReservation.Release()
@@ -395,14 +396,16 @@ func (r *BucketReader) closeCurrentFile() {
 	}
 	r.headerPending = false
 	r.schema = nil
+	return err
 }
 
-func (r *BucketReader) Close() {
-	r.closeCurrentFile()
+func (r *BucketReader) Close() error {
+	err := r.closeCurrentFile()
 	if r.reader != nil {
 		r.reader.Free()
 		r.reader = nil
 	}
+	return err
 }
 
 // BucketWriter retains a named spill file and its disk ownership, never an FD.
@@ -448,16 +451,25 @@ func (w *BucketWriter) getSpillFileService(proc *process.Process) (fileservice.M
 
 func (w *BucketWriter) Created() bool { return w.created }
 
-func (w *BucketWriter) Close() {
+func (w *BucketWriter) Close() error {
+	var removeErr error
 	if w.created && w.fileFS != nil && w.Name != "" {
-		_ = w.fileFS.RemoveFile(context.Background(), w.Name)
+		removeErr = w.fileFS.RemoveFile(context.Background(), w.Name)
+		if errors.Is(removeErr, os.ErrNotExist) || moerr.IsMoErrCode(removeErr, moerr.ErrFileNotFound) {
+			removeErr = nil
+		}
 	}
 	w.created = false
 	w.fileFS = nil
 	if w.diskReservation != nil {
-		w.diskReservation.Release()
+		if removeErr == nil {
+			w.diskReservation.Release()
+		} else {
+			w.diskReservation.Abandon()
+		}
 		w.diskReservation = nil
 	}
+	return removeErr
 }
 
 func (w *BucketWriter) handOffSpillFile(
@@ -490,15 +502,19 @@ func (w *BucketWriter) handOffSpillFile(
 	w.diskReservation = nil
 	w.created = false
 	w.fileFS = nil
-	release := func() {
+	finish := func(removed bool) {
 		if disk != nil {
-			disk.Release()
+			if removed {
+				disk.Release()
+			} else {
+				disk.Abandon()
+			}
 		}
 	}
 	return message.NewReopenableSpillFile(
 		func(ctx context.Context) (*os.File, error) { return fs.OpenFile(ctx, name) },
 		func() error { return fs.RemoveFile(context.Background(), name) },
-		w.Rows, w.Bytes, release,
+		w.Rows, w.Bytes, finish,
 	), nil
 }
 
@@ -1642,31 +1658,28 @@ func TakeSpillBuildPayload(
 		actualRows += rows
 	}
 	if !validRows || actualRows != expectedRows {
-		_ = payload.Close()
-		return message.SpillBuildPayload{}, nil, spillRowCountMismatch(
+		return message.SpillBuildPayload{}, nil, errors.Join(spillRowCountMismatch(
 			proc,
 			"build payload",
 			expectedRows,
 			actualRows,
-		)
+		), payload.Close())
 	}
 	for _, file := range payload.Files {
 		if file == nil {
 			continue
 		}
 		if err := file.Validate(); err != nil {
-			_ = payload.Close()
-			return message.SpillBuildPayload{}, nil, err
+			return message.SpillBuildPayload{}, nil, errors.Join(err, payload.Close())
 		}
 	}
 
 	budget, ok := payload.BudgetRef.(*process.ExecutionResourceGeneration)
 	if !ok || budget == nil {
-		_ = payload.Close()
-		return message.SpillBuildPayload{}, nil, moerr.NewInternalError(
+		return message.SpillBuildPayload{}, nil, errors.Join(moerr.NewInternalError(
 			proc.Ctx,
 			"spilled join map is missing its producer budget generation",
-		)
+		), payload.Close())
 	}
 	return payload, budget, nil
 }
@@ -1692,7 +1705,7 @@ func (e *SpillEngine) ScatterProbeTable(
 	children func() (*batch.Batch, error),
 	analyzer process.Analyzer,
 	evalKeysFn func(bat *batch.Batch) ([]*vector.Vector, error),
-) error {
+) (retErr error) {
 	bucketCount := len(e.buckets)
 	if bucketCount == 0 ||
 		bucketCount > SpillNumBuckets ||
@@ -1718,7 +1731,7 @@ func (e *SpillEngine) ScatterProbeTable(
 	defer func() {
 		e.discardScatterBuffers()
 		for i := range writers {
-			writers[i].Close()
+			retErr = errors.Join(retErr, writers[i].Close())
 		}
 	}()
 	defer e.releaseScatterScratch()
@@ -1775,7 +1788,7 @@ func (e *SpillEngine) ScatterProbeTable(
 		if err != nil {
 			for _, handedOff := range probeFiles {
 				if handedOff != nil {
-					handedOff.Close()
+					err = errors.Join(err, handedOff.Close())
 				}
 			}
 			return err
@@ -1940,7 +1953,7 @@ func shouldReSpillBeforeRetain(
 }
 
 // RebuildHashmap rebuilds the hashmap for the next bucket in the queue.
-func (e *SpillEngine) RebuildHashmap(proc *process.Process, analyzer process.Analyzer) (*message.JoinMap, BucketResult, error) {
+func (e *SpillEngine) RebuildHashmap(proc *process.Process, analyzer process.Analyzer) (result *message.JoinMap, state BucketResult, retErr error) {
 	if err := checkSpillCanceled(proc); err != nil {
 		return nil, BucketSkip, err
 	}
@@ -1964,7 +1977,7 @@ func (e *SpillEngine) RebuildHashmap(proc *process.Process, analyzer process.Ana
 		e.buckets[0].BuildFd = nil
 		e.buckets = e.buckets[1:]
 		if bucket.BuildFd != nil {
-			_ = bucket.BuildFd.Close()
+			return nil, BucketSkip, bucket.BuildFd.Close()
 		}
 		return nil, BucketSkip, nil
 	}
@@ -1982,7 +1995,7 @@ func (e *SpillEngine) RebuildHashmap(proc *process.Process, analyzer process.Ana
 			return nil, BucketEmptyBuild, nil
 		}
 		if bucket.ProbeFd != nil {
-			bucket.ProbeFd.Close()
+			return nil, BucketSkip, bucket.ProbeFd.Close()
 		}
 		return nil, BucketSkip, nil
 	}
@@ -2029,7 +2042,16 @@ func (e *SpillEngine) RebuildHashmap(proc *process.Process, analyzer process.Ana
 		return nil, BucketSkip, err
 	}
 	e.buckets[0].BuildFd = nil // prevent Cleanup double-close on error
-	defer e.buildReader.closeCurrentFile()
+	defer func() {
+		if closeErr := e.buildReader.closeCurrentFile(); closeErr != nil {
+			retErr = errors.Join(retErr, closeErr)
+			if result != nil {
+				result.FreeMemory()
+				result = nil
+			}
+			state = BucketSkip
+		}
+	}()
 	if e.buildReadBatch == nil {
 		readBatch, err := newSpillBatch(0, e.allocation.decoded)
 		if err != nil {
@@ -2212,7 +2234,7 @@ func (e *SpillEngine) RebuildHashmap(proc *process.Process, analyzer process.Ana
 			return nil, BucketEmptyBuild, nil
 		}
 		if bucket.ProbeFd != nil {
-			bucket.ProbeFd.Close()
+			return nil, BucketSkip, bucket.ProbeFd.Close()
 		}
 		return nil, BucketSkip, nil
 	}
@@ -2234,7 +2256,7 @@ func (e *SpillEngine) RebuildHashmap(proc *process.Process, analyzer process.Ana
 	return jm, BucketReady, nil
 }
 
-func (e *SpillEngine) reSpillBucket(proc *process.Process, analyzer process.Analyzer, bucket SpillBucket, builder *hashbuild.HashmapBuilder, reader *BucketReader, pending *batch.Batch) ([]SpillBucket, error) {
+func (e *SpillEngine) reSpillBucket(proc *process.Process, analyzer process.Analyzer, bucket SpillBucket, builder *hashbuild.HashmapBuilder, reader *BucketReader, pending *batch.Batch) (result []SpillBucket, retErr error) {
 	if err := checkSpillCanceled(proc); err != nil {
 		return nil, err
 	}
@@ -2254,23 +2276,24 @@ func (e *SpillEngine) reSpillBucket(proc *process.Process, analyzer process.Anal
 			e.discardScatterBuffers()
 		}
 		for i := range buildWriters {
-			buildWriters[i].Close()
+			retErr = errors.Join(retErr, buildWriters[i].Close())
 		}
 		for i := range probeWriters {
-			probeWriters[i].Close()
+			retErr = errors.Join(retErr, probeWriters[i].Close())
 		}
 		if !probeFdConsumed && bucket.ProbeFd != nil {
-			bucket.ProbeFd.Close()
+			retErr = errors.Join(retErr, bucket.ProbeFd.Close())
 		}
-		if !committed {
+		if !committed || retErr != nil {
 			for i := range subBuckets {
 				if subBuckets[i].BuildFd != nil {
-					_ = subBuckets[i].BuildFd.Close()
+					retErr = errors.Join(retErr, subBuckets[i].BuildFd.Close())
 				}
 				if subBuckets[i].ProbeFd != nil {
-					_ = subBuckets[i].ProbeFd.Close()
+					retErr = errors.Join(retErr, subBuckets[i].ProbeFd.Close())
 				}
 			}
+			result = nil
 		}
 	}()
 	defer e.releaseScatterScratch()
@@ -2557,11 +2580,11 @@ func (e *SpillEngine) reSpillBucket(proc *process.Process, analyzer process.Anal
 }
 
 // FinishBucket closes the current bucket's probe reader.
-func (e *SpillEngine) FinishBucket() {
+func (e *SpillEngine) FinishBucket() error {
 	// Keep reader and decoded-batch reservations live with their retained
 	// capacities. The next bucket replaces them transactionally; Cleanup is the
 	// terminal release point.
-	e.probeReader.closeCurrentFile()
+	return e.probeReader.closeCurrentFile()
 }
 
 // IsProbing reports whether a probe file is currently open.
@@ -2642,13 +2665,13 @@ func noProgressError(proc *process.Process, depth int) error {
 }
 
 // Cleanup releases all engine resources.
-func (e *SpillEngine) Cleanup(proc *process.Process) {
+func (e *SpillEngine) Cleanup(proc *process.Process) (err error) {
 	for i := range e.buckets {
 		if e.buckets[i].BuildFd != nil {
-			_ = e.buckets[i].BuildFd.Close()
+			err = errors.Join(err, e.buckets[i].BuildFd.Close())
 		}
 		if e.buckets[i].ProbeFd != nil {
-			_ = e.buckets[i].ProbeFd.Close()
+			err = errors.Join(err, e.buckets[i].ProbeFd.Close())
 		}
 	}
 	e.buckets = nil
@@ -2660,10 +2683,10 @@ func (e *SpillEngine) Cleanup(proc *process.Process) {
 		e.probeReadBatch.Clean(proc.Mp())
 		e.probeReadBatch = nil
 	}
-	e.probeReader.Close()
-	e.buildReader.Close()
+	err = errors.Join(err, e.probeReader.Close(), e.buildReader.Close())
 	e.buildPool.Release(proc)
 	e.probePool.Release(proc)
 	e.freeKeyExecs()
 	e.releaseScatterScratch()
+	return err
 }

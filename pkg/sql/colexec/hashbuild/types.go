@@ -16,6 +16,7 @@ package hashbuild
 
 import (
 	"context"
+	"errors"
 	"io"
 	"os"
 	"sync"
@@ -196,14 +197,22 @@ func (b *spillFileBundle) release() {
 		if entry.file != nil {
 			_ = entry.file.Close()
 		}
-		if entry.fs != nil && entry.name != "" {
-			_ = entry.fs.RemoveFile(context.Background(), entry.name)
+		var removeErr error
+		if entry.created && entry.fs != nil && entry.name != "" {
+			removeErr = entry.fs.RemoveFile(context.Background(), entry.name)
+			if errors.Is(removeErr, os.ErrNotExist) || moerr.IsMoErrCode(removeErr, moerr.ErrFileNotFound) {
+				removeErr = nil
+			}
 		}
 		if entry.fdToken != nil {
 			entry.fdToken.Release()
 		}
 		if entry.diskToken != nil {
-			entry.diskToken.Release()
+			if removeErr == nil {
+				entry.diskToken.Release()
+			} else {
+				entry.diskToken.Abandon()
+			}
 		}
 		entry.cacheToken.Release()
 	}
@@ -444,9 +453,13 @@ func (b *spillFileBundle) accountedFiles(
 			},
 			e.rows,
 			e.bytes,
-			func() {
+			func(removed bool) {
 				if e.diskToken != nil {
-					e.diskToken.Release()
+					if removed {
+						e.diskToken.Release()
+					} else {
+						e.diskToken.Abandon()
+					}
 					e.diskToken = nil
 				}
 			},
@@ -782,6 +795,9 @@ func NewArgument() *HashBuild {
 
 func (hashBuild *HashBuild) Release() {
 	if hashBuild != nil {
+		// The spill bundle is self-contained; pool reset must not erase its
+		// destruction owner even when normal Free was bypassed by an error.
+		hashBuild.cleanupSpillFiles(nil)
 		reuse.Free[HashBuild](hashBuild, nil)
 	}
 }

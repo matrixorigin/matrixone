@@ -349,8 +349,12 @@ func initServiceFileServices(
 	if err != nil {
 		return nil, err
 	}
-	if err := clearSpillFiles(ctx, fs); err != nil {
-		return nil, err
+	// Only CN owns query spill files. Standalone/launch TN and CN can share
+	// LOCAL: a non-spilling role must not take CN's lease or clean its files.
+	if st == metadata.ServiceType_CN {
+		if err := clearSpillFiles(ctx, fs); err != nil {
+			return nil, err
+		}
 	}
 	if err = initTraceMetric(ctx, st, cfg, stopper, etlFS, nodeUUID); err != nil {
 		return nil, err
@@ -915,16 +919,13 @@ func maybeRunInDaemonMode() {
 }
 
 func clearSpillFiles(ctx context.Context, fs fileservice.FileService) error {
-	localFS, err := fileservice.Get[fileservice.FileService](fs, defines.LocalFileServiceName)
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	localFS, err := fileservice.Get[fileservice.MutableFileService](fs, defines.LocalFileServiceName)
 	if err != nil {
 		return err
 	}
-	spillFS := fileservice.SubPath(localFS, defines.SpillFileServiceName)
-	for entry, listErr := range spillFS.List(ctx, "/") {
-		if listErr != nil {
-			return listErr
-		}
-		_ = spillFS.Delete(ctx, entry.Name)
-	}
-	return nil
+	_, err = fileservice.GetSpillFileService(ctx, localFS, defines.SpillFileServiceName)
+	return err
 }

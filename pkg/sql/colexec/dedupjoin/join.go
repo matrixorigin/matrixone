@@ -16,6 +16,7 @@ package dedupjoin
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"slices"
@@ -330,7 +331,9 @@ func (dedupJoin *DedupJoin) Call(proc *process.Process) (vm.CallResult, error) {
 					return result, hashbuild.TerminalBudgetError(proc.Ctx, readErr)
 				}
 				if bat == nil {
-					ctr.spillEngine.FinishBucket()
+					if err := ctr.spillEngine.FinishBucket(); err != nil {
+						return result, err
+					}
 					ctr.state = Finalize
 					ctr.cleanBuf(proc)
 					continue
@@ -462,10 +465,10 @@ func (dedupJoin *DedupJoin) build(analyzer process.Analyzer, proc *process.Proce
 				return takeErr
 			}
 			if dedupJoin.allocationAccount == nil {
-				_ = payload.Close()
+				cleanupErr := payload.Close()
 				ctr.mp.Free()
 				ctr.mp = nil
-				return mpool.ErrAllocationAccountInvalid
+				return errors.Join(mpool.ErrAllocationAccountInvalid, cleanupErr)
 			}
 			engine, engineErr := spillutil.NewSpillEngine(spillutil.SpillEngineConfig{
 				BuildKeyExprs:             dedupJoin.Conditions[1],
@@ -487,7 +490,7 @@ func (dedupJoin *DedupJoin) build(analyzer process.Analyzer, proc *process.Proce
 				Budget:                    budget,
 			}, dedupJoin.allocationAccount, mpool.AllocationOwnerHashBuild)
 			if engineErr != nil {
-				_ = payload.Close()
+				engineErr = errors.Join(engineErr, payload.Close())
 				ctr.mp.Free()
 				ctr.mp = nil
 				ctr.cleanEvalVectors()
@@ -510,7 +513,7 @@ func (dedupJoin *DedupJoin) build(analyzer process.Analyzer, proc *process.Proce
 			); err != nil {
 				ctr.mp.Free()
 				ctr.mp = nil
-				engine.Cleanup(proc)
+				err = errors.Join(err, engine.Cleanup(proc))
 				ctr.spillEngine = nil
 				return err
 			}

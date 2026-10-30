@@ -17,6 +17,7 @@ package group
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -232,18 +233,23 @@ func (bkt *spillBucket) free() error {
 		return nil
 	}
 	err := bkt.flushWriter()
-	if closeErr := bkt.closeFile(); err == nil {
-		err = closeErr
-	}
+	err = errors.Join(err, bkt.closeFile())
+	var removeErr error
 	if bkt.fileFS != nil {
 		// Cancellation must not prevent deletion of a bucket owned by the query.
-		if removeErr := bkt.fileFS.RemoveFile(context.Background(), bkt.name); err == nil {
-			err = removeErr
+		removeErr = bkt.fileFS.RemoveFile(context.Background(), bkt.name)
+		if errors.Is(removeErr, os.ErrNotExist) || moerr.IsMoErrCode(removeErr, moerr.ErrFileNotFound) {
+			removeErr = nil
 		}
+		err = errors.Join(err, removeErr)
 		bkt.fileFS = nil
 	}
 	if bkt.diskToken != nil {
-		bkt.diskToken.Release()
+		if removeErr == nil {
+			bkt.diskToken.Release()
+		} else {
+			bkt.diskToken.Abandon()
+		}
 		bkt.diskToken = nil
 	}
 	return err
