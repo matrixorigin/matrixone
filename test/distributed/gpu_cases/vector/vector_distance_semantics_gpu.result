@@ -1,0 +1,140 @@
+drop database if exists vec_distance_semantics_gpu;
+create database vec_distance_semantics_gpu;
+use vec_distance_semantics_gpu;
+set experimental_cagra_index = 1;
+set experimental_ivfpq_index = 1;
+create table t (id bigint primary key, v vecf32(3));
+insert into t values (1,'[0.5,0.5,-3]'),(2,'[-0.5,-1,2]'),(3,'[-2,-3,-1]'),(4,'[-0.5,3,0.5]'),(5,'[-3,1,0.5]'),(6,'[2,-2,-2]'),(7,'[-2,-0.5,-0.5]'),(8,'[-3,1,1]'),(9,'[2,4,6]');
+create index ix using cagra on t(v) op_type 'vector_l2_ops';
+explain select id from t order by l2_distance(v, '[1,2,3]') limit 3;
+-- @regex("Vector Index Scan on ix \[l2_distance\]", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: #[0,1] INTERNAL  𝄀
+        Limit: 3  𝄀
+        ->  Join  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (t.id = #[1,0])  𝄀
+              Runtime Filter Build: #[-1,0]  𝄀
+              ->  Table Scan on vec_distance_semantics_gpu.t  𝄀
+                    Runtime Filter Probe: t.id  𝄀
+              ->  Vector Index Scan on ix [l2_distance]  𝄀
+                    Vector Index: ix, Metric: l2_distance, Candidate Limit: 3
+select id, round(l2_distance(v, '[1,2,3]'), 4) d from t order by l2_distance(v, '[1,2,3]') limit 3;
+➤ id[-5,64,0]  ¦  d[8,53,31]  𝄀
+4  ¦  3.0822  𝄀
+2  ¦  3.5  𝄀
+9  ¦  3.7417
+explain select id from t order by l2_distance_sq(v, '[1,2,3]') limit 3;
+-- @regex("Vector Index Scan on ix \[l2_distance_sq\]", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: #[0,1] INTERNAL  𝄀
+        Limit: 3  𝄀
+        ->  Join  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (t.id = #[1,0])  𝄀
+              Runtime Filter Build: #[-1,0]  𝄀
+              ->  Table Scan on vec_distance_semantics_gpu.t  𝄀
+                    Runtime Filter Probe: t.id  𝄀
+              ->  Vector Index Scan on ix [l2_distance_sq]  𝄀
+                    Vector Index: ix, Metric: l2_distance_sq, Candidate Limit: 3
+select id, round(l2_distance_sq(v, '[1,2,3]'), 4) d from t order by l2_distance_sq(v, '[1,2,3]') limit 3;
+➤ id[-5,64,0]  ¦  d[8,53,31]  𝄀
+4  ¦  9.5  𝄀
+2  ¦  12.25  𝄀
+9  ¦  14.0
+drop index ix on t;
+create index ix using cagra on t(v) op_type 'vector_l2sq_ops';
+explain select id from t order by l2_distance(v, '[1,2,3]') limit 3;
+-- @regex("Vector Index Scan on ix \[l2_distance\]", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: #[0,1] INTERNAL  𝄀
+        Limit: 3  𝄀
+        ->  Join  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (t.id = #[1,0])  𝄀
+              Runtime Filter Build: #[-1,0]  𝄀
+              ->  Table Scan on vec_distance_semantics_gpu.t  𝄀
+                    Runtime Filter Probe: t.id  𝄀
+              ->  Vector Index Scan on ix [l2_distance]  𝄀
+                    Vector Index: ix, Metric: l2_distance, Candidate Limit: 3
+select id, round(l2_distance(v, '[1,2,3]'), 4) d from t order by l2_distance(v, '[1,2,3]') limit 3;
+➤ id[-5,64,0]  ¦  d[8,53,31]  𝄀
+4  ¦  3.0822  𝄀
+2  ¦  3.5  𝄀
+9  ¦  3.7417
+drop index ix on t;
+create index ix using cagra on t(v) op_type 'vector_ip_ops';
+explain select id from t order by inner_product(v, '[1,2,3]') limit 3;
+-- @regex("Vector Index Scan on ix \[inner_product\]", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: #[0,1] INTERNAL  𝄀
+        Limit: 3  𝄀
+        ->  Join  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (t.id = #[1,0])  𝄀
+              Runtime Filter Build: #[-1,0]  𝄀
+              ->  Table Scan on vec_distance_semantics_gpu.t  𝄀
+                    Runtime Filter Probe: t.id  𝄀
+              ->  Vector Index Scan on ix [inner_product]  𝄀
+                    Vector Index: ix, Metric: inner_product, Candidate Limit: 3
+select id, round(inner_product(v, '[1,2,3]'), 4) d from t order by inner_product(v, '[1,2,3]') limit 3;
+➤ id[-5,64,0]  ¦  d[8,53,31]  𝄀
+9  ¦  -28.0  𝄀
+4  ¦  -7.0  𝄀
+2  ¦  -3.5
+drop index ix on t;
+create index ix using cagra on t(v) op_type 'vector_cosine_ops';
+explain select id from t order by cosine_distance(v, '[1,2,3]') limit 3;
+-- @regex("Vector Index Scan on ix \[cosine_distance\]", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: #[0,1] INTERNAL  𝄀
+        Limit: 3  𝄀
+        ->  Join  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (t.id = #[1,0])  𝄀
+              Runtime Filter Build: #[-1,0]  𝄀
+              ->  Table Scan on vec_distance_semantics_gpu.t  𝄀
+                    Runtime Filter Probe: t.id  𝄀
+              ->  Vector Index Scan on ix [cosine_distance]  𝄀
+                    Vector Index: ix, Metric: cosine_distance, Candidate Limit: 3
+select id, abs(cosine_distance(v, '[1,2,3]')) < 1e-6 near_zero from t order by cosine_distance(v, '[1,2,3]') limit 1;
+➤ id[-5,64,0]  ¦  near_zero[-7,1,0]  𝄀
+9  ¦  1
+select id, round(cosine_distance(v, '[1,2,3]'), 4) d from t order by cosine_distance(v, '[1,2,3]') limit 3;
+➤ id[-5,64,0]  ¦  d[8,53,31]  𝄀
+9  ¦  0.0  𝄀
+4  ¦  0.393  𝄀
+2  ¦  0.5918
+drop index ix on t;
+create index ix using cagra on t(v) op_type 'vector_l1_ops';
+invalid input: invalid op_type. 'vector_l1_ops'
+create index ix using ivfpq on t(v) lists = 2 m = 3 op_type 'vector_ip_ops';
+explain select id from t order by inner_product(v, '[1,2,3]') limit 3;
+-- @regex("Vector Index Scan on ix \[inner_product\]", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: #[0,1] INTERNAL  𝄀
+        Limit: 3  𝄀
+        ->  Join  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (t.id = #[1,0])  𝄀
+              Runtime Filter Build: #[-1,0]  𝄀
+              ->  Table Scan on vec_distance_semantics_gpu.t  𝄀
+                    Runtime Filter Probe: t.id  𝄀
+              ->  Vector Index Scan on ix [inner_product]  𝄀
+                    Vector Index: ix, Metric: inner_product, Candidate Limit: 3
+drop index ix on t;
+create index ix using ivfpq on t(v) lists = 2 m = 3 op_type 'vector_l1_ops';
+invalid input: invalid op_type. 'vector_l1_ops'
+drop database vec_distance_semantics_gpu;

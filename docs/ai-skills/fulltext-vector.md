@@ -24,6 +24,9 @@ SELECT * FROM t WHERE MATCH(col) AGAINST('keyword' IN BOOLEAN MODE);
 - **支持算法：** CPU 构建提供 IVF-Flat、HNSW；GPU 构建另外提供 IVF-PQ、CAGRA。
 - **检索模式与参数：** [向量检索模式与 IVF 参数](../cn/vector_search.md)，包括
   IVFFLAT AUTO 的行数与召回边界、会话 `probe_limit`、查询级 `nprobe` 和 IVFPQ 构建要求。
+- **距离函数语义：** [Vector functions and distance semantics](../sql/vector-distance-functions.md)：
+  `inner_product` 返回 `-Σ aᵢbᵢ`（负内积，距离越小越近，属设计行为而非 bug）；各函数的类型、
+  边界行为，以及各索引的内部度量（L2 索引按平方 L2 排序）与返回值。
 
 - **SQL 语法：**
 ```sql
