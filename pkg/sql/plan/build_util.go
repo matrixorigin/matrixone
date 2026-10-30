@@ -1095,11 +1095,6 @@ func buildDefaultExprWithColumnsObserved(
 		}
 		return nil, mapDDLAssignmentCastError(bindCtx, typ, colNameOrigin, err)
 	}
-	if purpose == defaultExprForDDL && !isExpressionDefault {
-		if err = validateEnumSetConstantDefault(bindCtx, proc, typ, newExpr, colNameOrigin); err != nil {
-			return nil, err
-		}
-	}
 	zeroTemporalDefault := false
 	if lit := newExpr.GetLit(); lit != nil && !lit.Isnull {
 		switch types.T(typ.Id) {
@@ -1121,6 +1116,12 @@ func buildDefaultExprWithColumnsObserved(
 		}
 		if process.IsStrictNoZeroDateMode(mode) {
 			return nil, moerr.NewErrInvalidDefault(bindCtx, colNameOrigin)
+		}
+	}
+
+	if purpose == defaultExprForDDL && !isExpressionDefault {
+		if err = validateEnumSetConstantDefault(bindCtx, proc, typ, newExpr, colNameOrigin); err != nil {
+			return nil, err
 		}
 	}
 
