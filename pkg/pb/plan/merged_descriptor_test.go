@@ -25,6 +25,7 @@ func TestPlanDescriptorMergedContracts(t *testing.T) {
 	// The compressed descriptor must agree with both generated Go contracts.
 	// Resolving a descriptor-only conflict by choosing either side loses one.
 	want := map[string]map[string]int32{
+		"Type":             {"numeric_attributes": 14},
 		"Function":         {"routine_call": 6},
 		"Node":             {"dedup_key_exprs": 95},
 		"PreInsertUkCtx":   {"key_diagnostic_exprs": 19},

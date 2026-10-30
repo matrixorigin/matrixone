@@ -193,6 +193,20 @@ func TestPythonRoutineSQLBoundaries(t *testing.T) {
 		require.NoError(t, conn.QueryRowContext(ctx, "select recovered_artifact()").Scan(&result))
 		require.Equal(t, 43, result, "dropping one reference must not delete another revision's source")
 	})
+	t.Run("attributed_decimal_declarations_fail_closed", func(t *testing.T) {
+		for _, suffix := range []string{" unsigned", " zerofill"} {
+			require.ErrorContains(t, create("bad_decimal", "decimal(8,2)"+suffix, "def f(ctx): return 7", "scalar"), "attributed DECIMAL")
+			_, err := conn.ExecContext(ctx, "create function bad_decimal(x decimal(8,2)"+suffix+") returns int language python as 'def f(ctx, x): return 7' handler 'f'")
+			require.ErrorContains(t, err, "attributed DECIMAL")
+		}
+		var count int
+		require.NoError(t, conn.QueryRowContext(ctx, "select count(*) from mo_catalog.mo_user_defined_function where db='python_boundary' and name='bad_decimal'").Scan(&count))
+		require.Zero(t, count)
+		require.NoError(t, create("plain_decimal", "decimal(8,2)", "def f(ctx): return __import__(\"decimal\").Decimal(\"7.00\")", "scalar"))
+		var result string
+		require.NoError(t, conn.QueryRowContext(ctx, "select plain_decimal()").Scan(&result))
+		require.Equal(t, "7.00", result)
+	})
 	t.Run("catalog_envelope_and_failed_replacement", func(t *testing.T) {
 		require.NoError(t, create("keep_revision", "int", "def f(ctx): return 7", "scalar"))
 		var saved string

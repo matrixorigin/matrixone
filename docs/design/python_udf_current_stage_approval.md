@@ -5,7 +5,7 @@
 | Record | `python-udf-current-stage-r1-2026-09-24-approval` |
 | Issue | [MatrixOne #28132](https://github.com/matrixorigin/matrixone/issues/28132) |
 | Implementation PR | [MatrixOne #29152](https://github.com/matrixorigin/matrixone/pull/29152) |
-| Current-stage proposal | [`python-udf-current-stage-r37-2026-10-29`](python_udf_current_stage.md); historical r1 approval retained below |
+| Current-stage proposal | [`python-udf-current-stage-r38-2026-10-30`](python_udf_current_stage.md); historical r1 approval retained below |
 | Scope | Explicitly enabled test/development adapter; no production rollout or production-readiness claim |
 
 This record separates the immutable current-stage design artifact, the feature
@@ -789,3 +789,26 @@ contract is in the governing r37 proposal. This is a resource-correctness repair
 within the existing development scope, not a production quota/GC service.
 Independent Architecture and SQL/Planner approval of r37 remains pending;
 implementation review and tests do not grant that approval.
+
+
+## r38: preserve the published 4.0.18 predecessor (2026-10-30)
+
+The governing proposal is `python-udf-current-stage-r38-2026-10-30`. Official
+main `bbfe55669a1440424914d45a283a1d0e36f722fa` now registers 4.0.18 for
+the attributed-DECIMAL information_schema.COLUMNS repair. Preserve that
+handler, entry list and offset exactly. The nine shared-routine entries move
+to 4.0.19, with minimum direct predecessor 4.0.18; earlier released sources
+continue through both official predecessors before routine repair. Real first
+login and idempotence controls include an already-4.0.18 tenant. Frozen
+4.0.7/retired-source/CDC admission safeguards and upstream iterative paging
+continuation remain intact. Regenerate the plan descriptor from merged proto
+so official numeric attributes coexist with RoutineCall and dependencies.
+Reject attributed DECIMAL declarations at the external-routine type boundary
+instead of silently dropping their plan-side attributes; no ABI extension is added.
+
+This is a mechanical namespace/conflict repair, without new Python protocol,
+artifact-budget, sandbox or production scope. MORPCLatestVersion remains the
+official 134; no per-feature mixed-version gate is introduced. Historical r1
+acceptance and subsequent records are retained. Independent Architecture and
+SQL/Planner approval of r38 remains pending; this maintenance does not assert
+or supply that decision.
