@@ -236,7 +236,7 @@ func TestGenDeleteSQL(t *testing.T) {
 // The build statement calls hnsw_create alone; its config names the source table, its
 // columns and the hidden tables.
 func TestGenBuildSQL(t *testing.T) {
-	sqls, err := genBuildSQL(newRecordingCtx(), hnswDefs(""), false)
+	sqls, err := genBuildSQL(newRecordingCtx(), hnswDefs(""))
 	require.NoError(t, err)
 	require.Len(t, sqls, 1)
 	require.True(t, strings.HasPrefix(sqls[0], "SELECT f.* FROM hnsw_create('"), sqls[0])
@@ -246,17 +246,23 @@ func TestGenBuildSQL(t *testing.T) {
 		require.Contains(t, sqls[0], field)
 	}
 	require.NotContains(t, sqls[0], `"dict"`)
-	require.NotContains(t, sqls[0], `"reject_unstorable"`)
+	require.NotContains(t, sqls[0], `"max_bad_records"`)
 
-	sqls, err = genBuildSQL(newRecordingCtx(), withDict(hnswDefs("")), true)
+	defs := withDict(hnswDefs(""))
+	defs[catalog.Hnsw_TblType_Storage].IndexAlgoParams = `{"max_bad_records":"5"}`
+	sqls, err = genBuildSQL(newRecordingCtx(), defs)
 	require.NoError(t, err)
 	require.Contains(t, sqls[0], `"dict":"__mo_dict"`)
-	require.Contains(t, sqls[0], `"reject_unstorable":true`)
+	require.Contains(t, sqls[0], `"max_bad_records":5`)
+
+	defs[catalog.Hnsw_TblType_Storage].IndexAlgoParams = `{"max_bad_records":"x"}`
+	_, err = genBuildSQL(newRecordingCtx(), defs)
+	require.Error(t, err)
 
 	for _, missing := range []string{catalog.Hnsw_TblType_Metadata, catalog.Hnsw_TblType_Storage} {
 		defs := hnswDefs("")
 		delete(defs, missing)
-		_, err := genBuildSQL(newRecordingCtx(), defs, false)
+		_, err := genBuildSQL(newRecordingCtx(), defs)
 		require.Error(t, err)
 	}
 }

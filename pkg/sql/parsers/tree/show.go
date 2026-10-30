@@ -611,6 +611,24 @@ func (node *ShowIndexIgnored) Format(ctx *FmtCtx) {
 func (node *ShowIndexIgnored) GetStatementType() string { return "Show Index Ignored" }
 func (node *ShowIndexIgnored) GetQueryType() string     { return QueryTypeOth }
 
+// ShowIndexStatus shows the state of the indexes of a table that are kept in sync.
+type ShowIndexStatus struct {
+	showImpl
+	TableName *UnresolvedObjectName
+	Where     *Where
+}
+
+func (node *ShowIndexStatus) Format(ctx *FmtCtx) {
+	ctx.WriteString("show index status from ")
+	node.TableName.Format(ctx)
+	if node.Where != nil {
+		ctx.WriteByte(' ')
+		node.Where.Format(ctx)
+	}
+}
+func (node *ShowIndexStatus) GetStatementType() string { return "Show Index Status" }
+func (node *ShowIndexStatus) GetQueryType() string     { return QueryTypeOth }
+
 // show Function or Procedure statement
 
 type ShowFunctionOrProcedureStatus struct {

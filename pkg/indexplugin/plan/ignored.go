@@ -23,7 +23,8 @@ import (
 )
 
 // BuildIgnoredTableDefs returns the IndexDef and TableDef of the ignored table of an index:
-// the source rows the index cannot store, keyed by the source primary key pk.
+// the source rows the index cannot store, keyed by the source primary key pk, with the
+// code of the reason and an optional message.
 func BuildIgnoredTableDefs(
 	ctx CompilerContext,
 	indexInfo *tree.Index,
@@ -53,10 +54,16 @@ func BuildIgnoredTableDefs(
 				Default: &plan.Default{NullAbility: false},
 			},
 			{
+				Name:    catalog.IndexIgnored_TblCol_Code,
+				Alg:     plan.CompressType_Lz4,
+				Typ:     plan.Type{Id: int32(types.T_int32)},
+				Default: &plan.Default{NullAbility: false},
+			},
+			{
 				Name:    catalog.IndexIgnored_TblCol_Reason,
 				Alg:     plan.CompressType_Lz4,
 				Typ:     plan.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen},
-				Default: &plan.Default{NullAbility: false},
+				Default: &plan.Default{NullAbility: true},
 			},
 			{
 				Name:    catalog.IndexIgnored_TblCol_Ts,

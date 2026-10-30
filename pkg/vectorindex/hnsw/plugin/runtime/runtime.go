@@ -210,6 +210,10 @@ func (CatalogHooks) ParamsFromTree(idx *tree.Index) (map[string]string, error) {
 		res[catalog.IndexAlgoParamMaxIndexCapacity] = strconv.FormatInt(idx.IndexOption.MaxIndexCapacity, 10)
 	}
 
+	if idx.IndexOption.MaxBadRecordsSet {
+		res[catalog.IndexAlgoParamMaxBadRecords] = strconv.FormatInt(idx.IndexOption.MaxBadRecords, 10)
+	}
+
 	if len(idx.IndexOption.Quantization) > 0 {
 		quantization := catalog.ToLower(idx.IndexOption.Quantization)
 		if err := (CatalogHooks{}).ValidQuantization(quantization, res[catalog.IndexAlgoParamOpType]); err != nil {

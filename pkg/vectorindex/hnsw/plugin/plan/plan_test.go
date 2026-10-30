@@ -165,8 +165,11 @@ func TestBuildSecondaryIndexDefs_OK(t *testing.T) {
 	require.Equal(t, []string{"vec"}, idxDefs[2].Parts)
 	require.Equal(t, catalog.IndexIgnored_TblCol_Pk, ignored.Pkey.PkeyColName)
 	require.Equal(t, vecColMap("id", "vec")["id"].Typ.Id, ignored.Cols[0].Typ.Id)
-	require.Equal(t, []string{catalog.IndexIgnored_TblCol_Pk, catalog.IndexIgnored_TblCol_Reason, catalog.IndexIgnored_TblCol_Ts},
-		[]string{ignored.Cols[0].Name, ignored.Cols[1].Name, ignored.Cols[2].Name})
+	require.Equal(t, []string{catalog.IndexIgnored_TblCol_Pk, catalog.IndexIgnored_TblCol_Code, catalog.IndexIgnored_TblCol_Reason, catalog.IndexIgnored_TblCol_Ts},
+		[]string{ignored.Cols[0].Name, ignored.Cols[1].Name, ignored.Cols[2].Name, ignored.Cols[3].Name})
+	require.Equal(t, int32(types.T_int32), ignored.Cols[1].Typ.Id)
+	require.False(t, ignored.Cols[1].Default.NullAbility, "every row has a code")
+	require.True(t, ignored.Cols[2].Default.NullAbility, "the message is optional")
 	for _, td := range tblDefs {
 		require.NotEmpty(t, td.Cols)
 		for _, col := range td.Cols {

@@ -153,13 +153,14 @@ type IndexTableConfig struct {
 	IndexTable    string `json:"index"`
 	DictTable     string `json:"dict,omitempty"`
 	IgnoredTable  string `json:"ignored,omitempty"`
-	// RejectUnstorable fails the build on a row the index cannot store instead of ignoring it.
-	RejectUnstorable bool   `json:"reject_unstorable,omitempty"`
-	PKey             string `json:"pkey"`
-	KeyPart          string `json:"part"`
-	OrigFuncName     string `json:"orig_func_name"`
-	ThreadsBuild     int64  `json:"threads_build"`
-	ThreadsSearch    int64  `json:"threads_search"`
+	// MaxBadRecords is the number of rows the build may leave out because the index cannot
+	// store them; one more fails the build.
+	MaxBadRecords int64  `json:"max_bad_records,omitempty"`
+	PKey          string `json:"pkey"`
+	KeyPart       string `json:"part"`
+	OrigFuncName  string `json:"orig_func_name"`
+	ThreadsBuild  int64  `json:"threads_build"`
+	ThreadsSearch int64  `json:"threads_search"`
 
 	// IVF related
 	EntriesTable       string   `json:"entries"`

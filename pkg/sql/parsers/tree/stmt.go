@@ -402,6 +402,10 @@ func (node *ShowIndexIgnored) StmtKind() StmtKind {
 	return defaultResRowTyp
 }
 
+func (node *ShowIndexStatus) StmtKind() StmtKind {
+	return defaultResRowTyp
+}
+
 func (node *ShowTarget) StmtKind() StmtKind {
 	return defaultResRowTyp
 }

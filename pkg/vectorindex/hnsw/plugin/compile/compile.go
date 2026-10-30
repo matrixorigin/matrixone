@@ -136,7 +136,7 @@ func (Hooks) handleCreate(ctx compileplugin.CompileContext, indexDefs map[string
 		// (monotonic across a rebuild under a skewed/backward clock; see
 		// hnsw.BuildTimestamp / HnswSearch.IsStale). The TVF clears even when
 		// nothing is built, so a REBUILD to zero docs still empties the index.
-		sqls, err := genBuildSQL(ctx, indexDefs, compileplugin.RejectUnstorableRows(ctx, indexName))
+		sqls, err := genBuildSQL(ctx, indexDefs)
 		if err != nil {
 			return err
 		}
@@ -209,6 +209,7 @@ func (Hooks) ValidateReindexParams(old map[string]string, alter compileplugin.Re
 		catalog.HnswEfConstruction,
 		catalog.HnswEfSearch,
 		catalog.IndexAlgoParamMaxIndexCapacity,
+		catalog.IndexAlgoParamMaxBadRecords,
 	)
 }
 
@@ -264,7 +265,7 @@ func genDeleteSQL(indexDefs map[string]*plan.IndexDef, qryDatabase string) ([]st
 }
 
 // genBuildSQL is lifted from pkg/sql/compile/util.go:576.
-func genBuildSQL(ctx compileplugin.CompileContext, indexDefs map[string]*plan.IndexDef, rejectUnstorable bool) ([]string, error) {
+func genBuildSQL(ctx compileplugin.CompileContext, indexDefs map[string]*plan.IndexDef) ([]string, error) {
 	originalTableDef := ctx.OriginalTableDef()
 	qryDatabase := ctx.QryDatabase()
 
@@ -299,7 +300,11 @@ func genBuildSQL(ctx compileplugin.CompileContext, indexDefs map[string]*plan.In
 	if ignored, ok := indexDefs[catalog.IndexIgnored_TblType]; ok {
 		cfg.IgnoredTable = ignored.IndexTableName
 	}
-	cfg.RejectUnstorable = rejectUnstorable
+	maxBadRecords, err := catalog.IndexParamMaxBadRecords(idx.IndexAlgoParams)
+	if err != nil {
+		return nil, err
+	}
+	cfg.MaxBadRecords = maxBadRecords
 
 	threads, err := ctx.ResolveVariable("hnsw_threads_build", true, false)
 	if err != nil {

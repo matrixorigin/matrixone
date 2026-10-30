@@ -105,6 +105,13 @@ func TestHnswParamsFromTree_Defaults(t *testing.T) {
 	require.Equal(t, metric.OpType_L2Distance, got[catalog.IndexAlgoParamOpType])
 	require.NotContains(t, got, catalog.HnswM)
 	require.NotContains(t, got, catalog.HnswEfConstruction)
+	require.NotContains(t, got, catalog.IndexAlgoParamMaxBadRecords)
+
+	// MAX_BAD_RECORDS = 0 is recorded: it was specified
+	idx = &tree.Index{IndexOption: &tree.IndexOption{MaxBadRecordsSet: true}}
+	got, err = CatalogHooks{}.ParamsFromTree(idx)
+	require.NoError(t, err)
+	require.Equal(t, "0", got[catalog.IndexAlgoParamMaxBadRecords])
 }
 
 func TestHnswParamsFromTree_AllOptions(t *testing.T) {
@@ -114,6 +121,8 @@ func TestHnswParamsFromTree_AllOptions(t *testing.T) {
 		HnswEfSearch:          64,
 		AlgoParamVectorOpType: metric.OpType_CosineDistance,
 		Async:                 true,
+		MaxBadRecords:         100,
+		MaxBadRecordsSet:      true,
 	}}
 	got, err := CatalogHooks{}.ParamsFromTree(idx)
 	require.NoError(t, err)
@@ -122,6 +131,7 @@ func TestHnswParamsFromTree_AllOptions(t *testing.T) {
 	require.Equal(t, "64", got[catalog.HnswEfSearch])
 	require.Equal(t, metric.OpType_CosineDistance, got[catalog.IndexAlgoParamOpType])
 	require.Equal(t, "true", got[catalog.Async])
+	require.Equal(t, "100", got[catalog.IndexAlgoParamMaxBadRecords])
 }
 
 func TestHnswParamsFromTree_NegativeM(t *testing.T) {

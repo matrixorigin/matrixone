@@ -16,8 +16,11 @@ package hnsw
 
 import (
 	"math"
+	"strings"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/stretchr/testify/require"
 	usearch "github.com/unum-cloud/usearch/golang"
 )
@@ -34,8 +37,25 @@ func TestCheckStorable(t *testing.T) {
 	require.NoError(t, CheckStorable([]float32{-1e30, 1e30}, usearch.I8))
 	require.NoError(t, CheckStorable([]float32{-1e30, 1e30}, usearch.U8))
 	require.NoError(t, CheckStorable([]int8{-128, 127}, usearch.I8))
-	require.Error(t, CheckStorable([]float32{1, float32(math.NaN())}, usearch.F32))
-	require.Error(t, CheckStorable([]float32{}, usearch.F32))
+	code := func(err error) uint16 {
+		c, ok := vectorindex.UnstorableCode(err)
+		require.True(t, ok, "%v", err)
+		return c
+	}
+	require.Equal(t, moerr.ErrIndexVectorNonFinite, code(CheckStorable([]float32{1, float32(math.NaN())}, usearch.F32)))
+	require.Equal(t, moerr.ErrIndexVectorDimension, code(CheckStorable([]float32{}, usearch.F32)))
+	require.Equal(t, moerr.ErrIndexVectorOutOfRange, code(CheckStorable([]float32{1, 100000}, usearch.F16)))
+	// same verdict as ToStorage, and the same detail
+	same := func(want, got error, msgAndArgs ...any) {
+		if want == nil {
+			require.NoError(t, got, msgAndArgs...)
+			return
+		}
+		require.Equal(t, moerr.ErrIndexVectorOutOfRange, code(got), msgAndArgs...)
+		detail := strings.TrimPrefix(got.Error(), moerr.MessageOf(moerr.ErrIndexVectorOutOfRange)+": ")
+		require.True(t, strings.HasPrefix(detail, "vector element "), msgAndArgs...)
+		require.True(t, strings.HasSuffix(want.Error(), ", "+detail), msgAndArgs...)
+	}
 
 	// CheckStorable rejects exactly the vectors ToStorage rejects, with the same error, on both
 	// sides of every overflow boundary
@@ -54,14 +74,14 @@ func TestCheckStorable(t *testing.T) {
 			}
 			v := []float32{1, x}
 			_, _, want := ToStorage(v, kind, bounds)
-			require.Equal(t, want, CheckStorable(v, kind), "%v as %v", x, kind)
+			same(want, CheckStorable(v, kind), "%v as %v", x, kind)
 		}
 		// a vecf64 element near the float32 limit, rounding either way
 		for _, x := range []float64{math.MaxFloat32, math.MaxFloat32 * (1 + 0x1p-25), math.MaxFloat32 * (1 + 0x1p-23), 65519.999, 65520.001} {
 			for _, e := range []float64{x, -x} {
 				v := []float64{1, e}
 				_, _, want := ToStorage(v, kind, bounds)
-				require.Equal(t, want, CheckStorable(v, kind), "%v as %v", e, kind)
+				same(want, CheckStorable(v, kind), "%v as %v", e, kind)
 			}
 		}
 	}
