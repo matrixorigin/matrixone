@@ -119,27 +119,27 @@ func enforceReadOnlyTxnAccessMode(
 		}
 	}
 
-	defaultDatabase = effectiveDefaultDatabaseWithRemap(ses, execCtx, defaultDatabase)
-	deferOwnership := updateOwnershipDeferred(ses, stmt, defaultDatabase)
-	if !statementRequiresPersistentWriteAccess(ses, stmt, defaultDatabase) && !deferOwnership {
-		return nil
-	}
+	// The access mode is already stamped on the process. A READ WRITE or
+	// origin-less statement cannot be rejected by this gate, so it does not
+	// need the UPDATE ownership walk or its catalog lookups.
 	if originless || !readOnly {
 		return nil
 	}
-	if deferOwnership {
-		// The verdict needs a catalog transaction that does not exist yet:
-		// executeStmtWithWorkspace re-runs this gate right after Create with
-		// the transaction attached.
+	defaultDatabase = effectiveDefaultDatabaseWithRemap(ses, execCtx, defaultDatabase)
+	switch classifyStatementWrite(ses, stmt, defaultDatabase) {
+	case writeAllowed:
+		return nil
+	case writeDeferred:
+		// The post-Create gate resolves ownership once a catalog transaction exists.
 		execCtx.deferReadOnlyOwnership = true
 		return nil
+	default:
+		return moerr.NewCantExecuteInReadOnlyTransaction(execCtx.reqCtx)
 	}
-	return moerr.NewCantExecuteInReadOnlyTransaction(execCtx.reqCtx)
 }
 
 // effectiveDefaultDatabaseWithRemap resolves the database unqualified names
-// actually bind against for this statement, mirroring
-// TxnCompilerContext.DefaultDatabase (compiler_context.go): the caller's
+// actually bind against for this statement: the caller's
 // default database is the prepared binding database for EXECUTE (captured
 // when PREPAREd) or, when empty, the session's current database; an active
 // remapdb policy then redirects it to the remapped destination. Admission
@@ -155,8 +155,7 @@ func effectiveDefaultDatabaseWithRemap(ses FeSession, execCtx *ExecCtx, defaultD
 	if db == "" || execCtx == nil || len(execCtx.remapDb) == 0 {
 		return db
 	}
-	key := tree.NewCStr(db, parserLowerCaseTableNames(ses)).Compare()
-	if dst, ok := execCtx.remapDb[key]; ok {
+	if dst, ok := lookupRemappedDatabase(execCtx.remapDb, db, parserLowerCaseTableNames(ses)); ok {
 		return dst
 	}
 	return db
@@ -170,50 +169,22 @@ var catalogOwnershipResolvable = func(ses FeSession) bool {
 	return txnHandler != nil && txnHandler.GetTxn() != nil
 }
 
-// updateOwnershipDeferred reports whether stmt is an UPDATE whose write
-// verdict needs a catalog transaction that does not exist yet: an
-// unqualified assignment column over multiple sources can only be owned by
-// catalog resolution, which admission cannot perform before TxnHandler.Create
-// (the autocommit path). The gate marks the statement for re-classification
-// right after Create instead of conservatively rejecting a potentially
-// temporary-only write. EXPLAIN ANALYZE/PHYPLAN wrappers defer with their
-// wrapped statement.
-func updateOwnershipDeferred(ses FeSession, stmt tree.Statement, defaultDatabase string) bool {
-	switch st := stmt.(type) {
-	case *tree.ExplainAnalyze:
-		return updateOwnershipDeferred(ses, st.Statement, defaultDatabase)
-	case *tree.ExplainPhyPlan:
-		return updateOwnershipDeferred(ses, st.Statement, defaultDatabase)
-	case *tree.Update:
-		if catalogOwnershipResolvable(ses) {
-			return false
-		}
-		ctes := make(map[string]struct{})
-		if st.With != nil {
-			for _, cte := range st.With.CTEs {
-				ctes[string(cte.Name.Alias)] = struct{}{}
-			}
-		}
-		sources := make(map[string][2]string)
-		for _, expr := range st.Tables {
-			collectUpdateSource(expr, ctes, sources)
-		}
-		if len(sources) < 2 {
-			return false
-		}
-		for _, updateExpr := range st.Exprs {
-			if updateExpr == nil || updateExpr.Tuple || len(updateExpr.Names) != 1 || updateExpr.Names[0] == nil {
-				continue
-			}
-			if updateExpr.Names[0].NumParts <= 1 {
-				return true
-			}
-		}
+type writeDisposition uint8
+
+const (
+	writeAllowed writeDisposition = iota
+	writePersistent
+	writeDeferred
+)
+
+func dispositionForPersistentWrite(persistent bool) writeDisposition {
+	if persistent {
+		return writePersistent
 	}
-	return false
+	return writeAllowed
 }
 
-// statementRequiresPersistentWriteAccess reports whether stmt mutates
+// classifyStatementWrite reports whether stmt mutates
 // persistent data or the persistent catalog. Reads, SET/SHOW, transaction
 // control and account-management (DCL) statements never require it.
 //
@@ -226,24 +197,20 @@ func updateOwnershipDeferred(ses FeSession, stmt tree.Statement, defaultDatabase
 //
 // The DDL fallback follows the parser-owned QueryType classification so a
 // newly added DDL statement type cannot silently bypass the gate.
-func statementRequiresPersistentWriteAccess(
+func classifyStatementWrite(
 	ses FeSession,
 	stmt tree.Statement,
 	defaultDatabase string,
-) bool {
+) writeDisposition {
 	switch st := stmt.(type) {
 	case *tree.Insert:
-		return !writeTargetIsSessionTemporary(ses, st.Table, defaultDatabase)
+		return dispositionForPersistentWrite(!writeTargetIsSessionTemporary(ses, st.Table, defaultDatabase))
 	case *tree.Replace:
-		return !writeTargetIsSessionTemporary(ses, st.Table, defaultDatabase)
+		return dispositionForPersistentWrite(!writeTargetIsSessionTemporary(ses, st.Table, defaultDatabase))
 	case *tree.Update:
-		// The planner derives the written tables of an UPDATE from the SET
-		// assignment targets only (build_constraint_util.go getUpdateTableInfo
-		// removes every unmodified source); a join partner or FROM source
-		// that is merely read does not require write access. Mirror that:
-		// classify the actual assignment targets so temporary-only writes
-		// through a persistent join stay allowed, exactly like MySQL.
-		return updateRequiresPersistentWriteAccess(ses, st, defaultDatabase)
+		// A source that is only read does not require write access. Classify
+		// the SET owners, deferring when catalog facts are not available yet.
+		return classifyUpdateWrite(ses, st, defaultDatabase)
 	case *tree.Delete:
 		if len(st.TableRefs) != 0 {
 			// Multi-table DELETE lists bare write targets that resolve through
@@ -257,29 +224,29 @@ func statementRequiresPersistentWriteAccess(
 				name, ok := target.(*tree.TableName)
 				if !ok || name == nil {
 					// Unresolvable target; fail closed.
-					return true
+					return writePersistent
 				}
 				if _, found := aliasMap[string(name.ObjectName)]; !found {
-					return true // Missing or derived source: fail closed.
+					return writePersistent // Missing or derived source: fail closed.
 				}
 				dbName, tableName, _ := plan.ResolveDMLTargetName(
 					string(name.SchemaName), string(name.ObjectName), "", aliasMap)
 				resolved := *name
 				resolved.SchemaName, resolved.ObjectName = tree.Identifier(dbName), tree.Identifier(tableName)
 				if !isSessionTemporaryTable(ses, &resolved, defaultDatabase) {
-					return true
+					return writePersistent
 				}
 			}
-			return false
+			return writeAllowed
 		}
 		if len(st.Tables) != 0 {
 			// Single-table DELETE writes the (possibly aliased) target itself.
-			return !writeTargetIsSessionTemporary(ses, st.Tables[0], defaultDatabase)
+			return dispositionForPersistentWrite(!writeTargetIsSessionTemporary(ses, st.Tables[0], defaultDatabase))
 		}
 		// DELETE FROM t lists the written table only in the FROM clause.
-		return !tableExprsAllSessionTemporary(ses, st.TableRefs, defaultDatabase)
+		return dispositionForPersistentWrite(!tableExprsAllSessionTemporary(ses, st.TableRefs, defaultDatabase))
 	case *tree.Merge:
-		return !writeTargetIsSessionTemporary(ses, st.Target, defaultDatabase)
+		return dispositionForPersistentWrite(!writeTargetIsSessionTemporary(ses, st.Target, defaultDatabase))
 	case *tree.MultiInsert:
 		targetsFound := false
 		for _, target := range st.AllTargets() {
@@ -288,42 +255,42 @@ func statementRequiresPersistentWriteAccess(
 			}
 			targetsFound = true
 			if !isSessionTemporaryTable(ses, target.Table, defaultDatabase) {
-				return true
+				return writePersistent
 			}
 		}
 		// INSERT FIRST/ALL always carries at least one INTO clause; without
 		// one, fail closed and require write access.
-		return !targetsFound
+		return dispositionForPersistentWrite(!targetsFound)
 	case *tree.Load:
-		return st.Table == nil || !isSessionTemporaryTable(ses, st.Table, defaultDatabase)
+		return dispositionForPersistentWrite(st.Table == nil || !isSessionTemporaryTable(ses, st.Table, defaultDatabase))
 	case *tree.LoadTable:
-		return st.Table == nil || !isSessionTemporaryTable(ses, st.Table, defaultDatabase)
+		return dispositionForPersistentWrite(st.Table == nil || !isSessionTemporaryTable(ses, st.Table, defaultDatabase))
 	case *tree.CreateTable:
-		return !st.Temporary
+		return dispositionForPersistentWrite(!st.Temporary)
 	case *tree.DropTable:
-		return len(capturePersistentDropTableTargets(ses, st, defaultDatabase)) > 0
+		return dispositionForPersistentWrite(len(capturePersistentDropTableTargets(ses, st, defaultDatabase)) > 0)
 	case *tree.TruncateTable:
-		return st.Name == nil || !isSessionTemporaryTable(ses, st.Name, defaultDatabase)
+		return dispositionForPersistentWrite(st.Name == nil || !isSessionTemporaryTable(ses, st.Name, defaultDatabase))
 	case *tree.AlterTable:
-		return st.Table == nil || !isSessionTemporaryTable(ses, st.Table, defaultDatabase)
+		return dispositionForPersistentWrite(st.Table == nil || !isSessionTemporaryTable(ses, st.Table, defaultDatabase))
 	case *tree.ExplainAnalyze:
 		// EXPLAIN ANALYZE executes the wrapped statement (result_row_stmt.go
 		// runs its plan directly); gate exactly what it would run. Ordinary
 		// EXPLAIN/EXPLAIN FOR only plans and stays exempt.
-		return statementRequiresPersistentWriteAccess(ses, st.Statement, defaultDatabase)
+		return classifyStatementWrite(ses, st.Statement, defaultDatabase)
 	case *tree.ExplainPhyPlan:
 		// EXPLAIN PHYPLAN shares the executing branch with EXPLAIN ANALYZE
 		// (result_row_stmt.go *tree.ExplainAnalyze, *tree.ExplainPhyPlan runs
 		// the plan for both through Exec.Run); classify its wrapped statement
 		// exactly like EXPLAIN ANALYZE.
-		return statementRequiresPersistentWriteAccess(ses, st.Statement, defaultDatabase)
+		return classifyStatementWrite(ses, st.Statement, defaultDatabase)
 	case *tree.DataBranchDiff:
 		// Diffing is read-only unless the result is materialized into an
 		// output table.
-		return st.OutputOpt != nil && st.OutputOpt.As.ObjectName != ""
+		return dispositionForPersistentWrite(st.OutputOpt != nil && st.OutputOpt.As.ObjectName != "")
 	}
 	if st, ok := stmt.(tree.StatementType); ok && st.GetQueryType() == tree.QueryTypeDDL {
-		return true
+		return writePersistent
 	}
 	// The parser classifies these catalog writers as Other rather than DDL,
 	// but they persist data or catalog state and must observe the read-only
@@ -341,14 +308,14 @@ func statementRequiresPersistentWriteAccess(
 		*tree.DataBranchCreateTable, *tree.DataBranchCreateDatabase,
 		*tree.DataBranchDeleteTable, *tree.DataBranchDeleteDatabase,
 		*tree.DataBranchMerge, *tree.DataBranchPick:
-		return true
+		return writePersistent
 	}
 	// A read-classified statement can still mutate persistent state through a
 	// sequence-mutating builtin: NEXTVAL/SETVAL rewrite the catalog counter
 	// inside the statement's own transaction (seqfunc.go) without ever
 	// becoming a write-classified statement. Gate them like writes; their
 	// session-local reads (CURRVAL/LASTVAL) stay exempt.
-	return statementMutatesSequence(stmt)
+	return dispositionForPersistentWrite(statementMutatesSequence(stmt))
 }
 
 // sequenceMutationFunctions are the builtins that persistently mutate catalog
@@ -687,10 +654,10 @@ func sequenceFuncExprMutates(fn *tree.FuncExpr) bool {
 	return false
 }
 
-// updateRequiresPersistentWriteAccess reports whether an UPDATE writes a
-// persistent table, mirroring getUpdateTableInfo (build_constraint_util.go)
-// step for step: the written tables derive from the SET assignment targets,
-// which resolve through the source alias map — an explicitly aliased source
+// classifyUpdateWrite determines whether an UPDATE writes a persistent table
+// or needs a catalog transaction before its SET owners can be identified.
+// Written tables derive from SET targets, which resolve through the source
+// alias map — an explicitly aliased source
 // by its alias, an unaliased one by its object name, WITH-clause names never
 // resolve. A qualified target the sources cannot name never writes (the
 // planner reports it as an unknown table before execution). An unqualified
@@ -698,7 +665,7 @@ func sequenceFuncExprMutates(fn *tree.FuncExpr) bool {
 // ownership through the session compile context so temporary-owned columns
 // stay writable, while genuinely ambiguous assignments and unresolvable
 // persistent sources keep the conservative gate.
-func updateRequiresPersistentWriteAccess(ses FeSession, st *tree.Update, defaultDatabase string) bool {
+func classifyUpdateWrite(ses FeSession, st *tree.Update, defaultDatabase string) writeDisposition {
 	sources := make(map[string][2]string)
 	ctes := make(map[string]struct{})
 	if st.With != nil {
@@ -708,6 +675,22 @@ func updateRequiresPersistentWriteAccess(ses FeSession, st *tree.Update, default
 	}
 	for _, expr := range st.Tables {
 		collectUpdateSource(expr, ctes, sources)
+	}
+
+	// Deferral is determined before inspecting qualified assignments: a later
+	// unqualified column may need the post-Create catalog snapshot.
+	unqualified := 0
+	for _, assignment := range st.Exprs {
+		if assignment != nil && !assignment.Tuple && len(assignment.Names) == 1 && assignment.Names[0] != nil && assignment.Names[0].NumParts <= 1 {
+			unqualified++
+		}
+	}
+	if len(sources) > 1 && unqualified > 0 && !catalogOwnershipResolvable(ses) {
+		return writeDeferred
+	}
+	var resolvedColumns map[string]map[string]struct{}
+	if len(sources) > 1 && unqualified > 1 {
+		resolvedColumns = make(map[string]map[string]struct{}, len(sources))
 	}
 
 	for _, updateExpr := range st.Exprs {
@@ -731,7 +714,7 @@ func updateRequiresPersistentWriteAccess(ses FeSession, st *tree.Update, default
 				tree.ObjectNamePrefix{SchemaName: tree.Identifier(base[0])},
 				nil,
 			), defaultDatabase) {
-				return true
+				return writePersistent
 			}
 			continue
 		}
@@ -745,23 +728,7 @@ func updateRequiresPersistentWriteAccess(ses FeSession, st *tree.Update, default
 					tree.ObjectNamePrefix{SchemaName: tree.Identifier(base[0])},
 					nil,
 				), defaultDatabase) {
-					return true
-				}
-			}
-			continue
-		}
-		if !catalogOwnershipResolvable(ses) {
-			// Without a catalog transaction this outcome defers to the
-			// post-Create gate (updateOwnershipDeferred). A bool-only
-			// consumer still gets the conservative answer whenever a
-			// persistent source may own the column.
-			for _, base := range sources {
-				if !isSessionTemporaryTable(ses, tree.NewTableName(
-					tree.Identifier(base[1]),
-					tree.ObjectNamePrefix{SchemaName: tree.Identifier(base[0])},
-					nil,
-				), defaultDatabase) {
-					return true
+					return writePersistent
 				}
 			}
 			continue
@@ -774,10 +741,18 @@ func updateRequiresPersistentWriteAccess(ses FeSession, st *tree.Update, default
 		// MySQL. Genuine ambiguity and unresolvable persistent sources stay
 		// conservatively gated: the gate must never open for a write it
 		// cannot classify.
-		owners := make(map[string][2]string)
+		var owner [2]string
+		ownerCount := 0
 		unresolvedPersistent := false
 		for alias, base := range sources {
-			columns, err := resolveSourceColumnNames(ses, base[0], base[1], defaultDatabase)
+			columns, cached := resolvedColumns[alias]
+			var err error
+			if !cached {
+				columns, err = resolveSourceColumnNames(ses, base[0], base[1], defaultDatabase)
+				if err == nil && resolvedColumns != nil {
+					resolvedColumns[alias] = columns
+				}
+			}
 			if err != nil {
 				if !isSessionTemporaryTable(ses, tree.NewTableName(
 					tree.Identifier(base[1]),
@@ -789,34 +764,33 @@ func updateRequiresPersistentWriteAccess(ses FeSession, st *tree.Update, default
 				continue
 			}
 			if _, hit := columns[parts.ColName()]; hit {
-				owners[alias] = base
+				owner = base
+				ownerCount++
 			}
 		}
-		switch len(owners) {
+		switch ownerCount {
 		case 0:
 			// No source owns the column: the planner rejects the statement
 			// (or an unresolvable source owns it) — gate only what cannot be
 			// proven temporary.
 			if unresolvedPersistent {
-				return true
+				return writePersistent
 			}
 		case 1:
-			for _, base := range owners {
-				if !isSessionTemporaryTable(ses, tree.NewTableName(
-					tree.Identifier(base[1]),
-					tree.ObjectNamePrefix{SchemaName: tree.Identifier(base[0])},
-					nil,
-				), defaultDatabase) {
-					return true
-				}
+			if !isSessionTemporaryTable(ses, tree.NewTableName(
+				tree.Identifier(owner[1]),
+				tree.ObjectNamePrefix{SchemaName: tree.Identifier(owner[0])},
+				nil,
+			), defaultDatabase) {
+				return writePersistent
 			}
 		default:
 			// Genuine ambiguity: the planner errors, but the write target is
 			// unprovable statically, so keep the conservative gate.
-			return true
+			return writePersistent
 		}
 	}
-	return false
+	return writeAllowed
 }
 
 // resolveSourceColumnNames resolves the column names of one UPDATE source
