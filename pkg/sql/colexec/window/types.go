@@ -59,15 +59,15 @@ type container struct {
 	runningRight     int
 	runningPeerEnd   int
 
-	// fullPartitionResults retains one finalized scalar result per
-	// logical partition while a materialized input generation is emitted in
-	// bounded chunks. The compact cache avoids rebuilding a full-partition
-	// aggregate for every output chunk. fullPartitionNextRow and
-	// fullPartition enforce sequential consumption and identify the
-	// cached scalar to broadcast next.
-	fullPartitionResults *vector.Vector
-	fullPartitionNextRow int
-	fullPartition        int
+	// fullPartitionResults caches finalized aggregate values across output chunks.
+	// Ordinary aggregates cache only partitions reached by the current chunk;
+	// ordered-set aggregates retain their eager evaluation behavior.
+	// fullPartition is the global partition and fullPartitionResultIndex its
+	// position in the current cache. Both are reset with the input generation.
+	fullPartitionResults     *vector.Vector
+	fullPartitionNextRow     int
+	fullPartition            int
+	fullPartitionResultIndex int
 
 	desc      []bool
 	nullsLast []bool
@@ -312,6 +312,7 @@ func (ctr *container) freeFullPartitionResults(mp *mpool.MPool) {
 	}
 	ctr.fullPartitionNextRow = 0
 	ctr.fullPartition = 0
+	ctr.fullPartitionResultIndex = 0
 }
 
 func (ctr *container) freeExes() {

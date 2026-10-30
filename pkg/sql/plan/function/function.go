@@ -630,6 +630,27 @@ func getFunctionByName(
 	if r.fid == MINUS && signedUnsignedSubtraction(ctx, args) {
 		check = newCheckResultWithCast(3, integerDomainOperands(args))
 	}
+	if (r.fid == IFF || r.fid == CASE) && !MySQLConditionalBooleanContracts(ctx) {
+		// D11 gate: a native-mode statement keeps the pre-contract IF/CASE
+		// condition admission - JSON conditions reject, and ENUM/SET display
+		// operands keep their ordinary string-typed handling without the
+		// storage-truth admission.
+		if legacy, ok := legacyConditionalBooleanCheck(r.fid, f.Overloads, args); ok {
+			check = legacy
+		}
+	}
+	if !MySQLConditionalBooleanContracts(ctx) && len(args) == 2 &&
+		args[0].Oid == types.T_enum && args[1].Oid == types.T_bool &&
+		isEnumToBoolCastFunctionId(r.fid) {
+		// D11 gate for the shared cast boundary: the ENUM -> BOOL cast pair
+		// exists only for the conditional storage-truth contracts (CASE
+		// conditions, explicit BOOL targets), and the cast resolution table is
+		// context-free, so the compatibility decision is enforced here where
+		// the statement scalar is in scope. A native-mode statement keeps the
+		// pre-contract bind result byte-identically: base had no such cast
+		// pair, and the failure below produces the same bind error base gave.
+		check = newCheckResultWithFailure(failedFunctionParametersWrong)
+	}
 	check = legacyFloatStringCheck(ctx, check, args)
 	switch check.status {
 	case succeedMatched:
@@ -899,6 +920,17 @@ func deduceNotNullable(ctx context.Context, overloadID int64, args []*plan.Expr)
 		// Typed zero dates can become NULL under NO_ZERO_DATE, and string
 		// conversions synthesize NULL for malformed input.
 		if oid == 0 || oid == 2 || ((oid == 3 || oid == 4) && !LegacyTemporalNullability(ctx)) {
+			return false
+		}
+	case TIME:
+		// String conversions synthesize NULL with a truncation warning for
+		// invalid input even when the argument is NOT NULL. The typed and
+		// numeric overloads fail the statement instead of producing NULL
+		// and keep their NOT NULL inference. Historical dump bindings keep
+		// their pre-8dd published NOT NULL metadata, and the intermediate
+		// post-8dd era that predates the NULL synthesis change kept TIME
+		// NOT NULL while DATE conversions were already nullable.
+		if oid >= 5 && oid <= 8 && !LegacyTemporalNullability(ctx) && !LegacyTimeNullability(ctx) {
 			return false
 		}
 	case CAST:

@@ -1306,6 +1306,34 @@ func TestBoundedGapFillValidatesDomain(t *testing.T) {
 	}
 }
 
+func TestBoundedGapFillDoesNotPublishInferredBoundWarnings(t *testing.T) {
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
+	defer func() { proc.Free(); require.Zero(t, proc.Mp().CurrNB()) }()
+	warnings := &process.WarningProbe{}
+	proc.WarningSink = warnings
+	params := vector.NewVec(types.T_text.ToType())
+	defer func() { proc.SetPrepareParams(nil); params.Free(proc.Mp()) }()
+	require.NoError(t, vector.AppendBytes(params, []byte("bad"), false, proc.Mp()))
+	proc.SetPrepareParams(params)
+	arg := newBoundedPartArg(t, proc, "2023-08-01 00:00:00", "2023-08-01 00:00:15", false)
+	defer arg.Free(proc, false, nil)
+	arg.GapFillStart = preparedDatetimeBound(t, 0)
+	for i, value := range []string{"bad", "2023-08-01 00:00:00", "bad"} {
+		if i > 0 {
+			arg.Reset(proc, false, nil)
+		}
+		require.NoError(t, vector.SetStringAt(params, 0, value, proc.Mp()))
+		starts, _, _ := runPartArgBats(t, arg, proc, nil)
+		wantRows := 0
+		if value != "bad" {
+			wantRows = 3
+		}
+		require.Len(t, starts, wantRows)
+		require.False(t, warnings.Warned(), "inferred grid copies must not own WHERE diagnostics")
+		require.Same(t, warnings, proc.GetWarningSink())
+	}
+}
+
 func TestBoundedGapFillTreatsPreparedNullBoundAsEmptyAndReevaluatesAfterReset(t *testing.T) {
 	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	params := vector.NewVec(types.T_text.ToType())

@@ -20,7 +20,9 @@ code duplication across different interfaces (ORM, Vector Search, Pinecone, etc.
 """
 
 from ._query_compilation import conjoin_conditions
+from ._sql_literals import sql_string_token, sql_identifier
 
+from collections.abc import Mapping, Set
 from enum import Enum
 from typing import Any, Dict, List, Optional, Tuple, Union
 
@@ -115,9 +117,11 @@ class MatrixOneSQLBuilder:
 
     # INSERT methods
     def insert_into(self, table_name: str) -> "MatrixOneSQLBuilder":
-        """Start INSERT operation"""
+        """Start a new INSERT operation with no pending rows."""
         self._query_type = "INSERT"
         self._from_table = table_name
+        self._insert_columns = []
+        self._insert_values = []
         return self
 
     def values(self, **kwargs) -> "MatrixOneSQLBuilder":
@@ -129,30 +133,44 @@ class MatrixOneSQLBuilder:
         if self._query_type != "INSERT":
             raise ValueError("values() can only be used with INSERT operations")
 
-        if not self._insert_columns:
+        if not self._insert_columns and not self._insert_values:
             self._insert_columns = list(kwargs.keys())
 
-        unexpected = sorted(set(kwargs) - set(self._insert_columns))
-        if unexpected:
-            raise ValueError(f"unexpected INSERT columns: {', '.join(unexpected)}")
+        from .base_client import insert_row_values
 
-        values_row = []
-        for col in self._insert_columns:
-            if col in kwargs:
-                values_row.append(kwargs[col])
-            else:
-                values_row.append(None)
+        values_row = insert_row_values(kwargs, self._insert_columns)
 
         self._insert_values.append(values_row)
         return self
 
     def insert_values(self, columns: List[str], values: List[List[Any]]) -> "MatrixOneSQLBuilder":
-        """Add multiple rows of values for INSERT"""
+        """Append rows using the established column order.
+
+        Rows must be sequences with one value per column. A mismatched column
+        list or invalid row is rejected without changing pending rows.
+        """
         if self._query_type != "INSERT":
             raise ValueError("insert_values() can only be used with INSERT operations")
 
-        self._insert_columns = list(columns)
-        self._insert_values = [list(row) for row in values]
+        if isinstance(columns, (Mapping, Set, str, bytes, bytearray)):
+            raise TypeError("INSERT columns must be an ordered sequence of names")
+        columns_copy = list(columns)
+        if (self._insert_columns or self._insert_values) and columns_copy != self._insert_columns:
+            raise ValueError("INSERT columns must match the established column order")
+
+        rows = []
+        for row in values:
+            if isinstance(row, Mapping):
+                raise TypeError("insert_values() rows must be positional, not mappings")
+            if isinstance(row, (Set, str, bytes, bytearray)):
+                raise TypeError("INSERT rows must be ordered sequences of values")
+            row_copy = list(row)
+            if len(row_copy) != len(columns_copy):
+                raise ValueError("INSERT row length must match the number of columns")
+            rows.append(row_copy)
+
+        self._insert_columns = columns_copy
+        self._insert_values.extend(rows)
         return self
 
     # UPDATE methods
@@ -424,7 +442,7 @@ class MatrixOneSQLBuilder:
         if self._ctes:
             with_parts = []
             for cte in self._ctes:
-                with_parts.append(f"{cte['name']} AS ({cte['sql']})")
+                with_parts.append(f"{sql_identifier(cte['name'])} AS ({cte['sql']})")
                 all_params.extend(cte["params"])
             prefix = "WITH RECURSIVE " if any(cte.get("recursive", False) for cte in self._ctes) else "WITH "
             sql_parts.append(prefix + ", ".join(with_parts))
@@ -440,7 +458,7 @@ class MatrixOneSQLBuilder:
         if self._from_table:
             from_clause = f"FROM {self._from_table}"
             if self._from_snapshot:
-                from_clause += f"{{snapshot = '{self._from_snapshot}'}}"
+                from_clause += f"{{snapshot = {sql_string_token(self._from_snapshot, context='Snapshot')}}}"
             sql_parts.append(from_clause)
 
         # Build JOIN clauses
