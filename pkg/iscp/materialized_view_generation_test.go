@@ -25,6 +25,23 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestDecodeISCPJSONStorageBoundary(t *testing.T) {
+	valid := encodeJSONRows(t, []string{`{"ConsumerType":1,"IndexName":"idx"}`})[0]
+	decoded, err := decodeISCPJSON(valid)
+	require.NoError(t, err)
+	require.JSONEq(t, `{"ConsumerType":1,"IndexName":"idx"}`, string(decoded))
+
+	for _, stored := range [][]byte{
+		nil,
+		[]byte(`{"ConsumerType":1}`), // JSON text is not catalog storage.
+		{0x01},                       // Truncated binary JSON.
+		{0xff, 0x00},
+	} {
+		_, err = decodeISCPJSON(stored)
+		require.Error(t, err)
+	}
+}
+
 func TestMaterializedViewWireReferenceAndReplayIsolation(t *testing.T) {
 	ref := &mvdefinition.Reference{Format: 1, TargetID: 100, Generation: 1, Digest: strings.Repeat("1", 64)}
 	spec := &JobSpec{ConsumerInfo: ConsumerInfo{ConsumerType: int8(ConsumerType_MaterializedView), MVReference: ref, RefreshSQL: "must not be replay authority", IncrementalSpec: "must not be duplicated", SrcTable: TableInfo{DBID: 1, DBName: "db", TableID: 11, TableName: "src"}}}

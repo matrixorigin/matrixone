@@ -945,15 +945,21 @@ func queryIndexLog(
 	return
 }
 
-// Parse persisted JSON through the validating decoder so malformed job
-// payloads return an error instead of aborting log replay.
-func decodeISCPJSON(data []byte) ([]byte, error) {
+// The catalog JSON column stores ByteJson binary, not JSON text. Decode at
+// this boundary so malformed durable rows can be quarantined during replay.
+func decodeISCPJSON(data []byte) (decoded []byte, err error) {
 	if len(data) == 0 {
 		return nil, mvdefinition.Invalid("empty ISCP storage JSON")
 	}
-	decoded, err := types.ParseSliceToByteJson(data)
-	if err != nil {
+	defer func() {
+		if recover() != nil {
+			decoded = nil
+			err = mvdefinition.Invalid("malformed ISCP storage JSON")
+		}
+	}()
+	decoded, err = types.DecodeJson(data).MarshalJSON()
+	if err != nil || !json.Valid(decoded) {
 		return nil, mvdefinition.Invalid("malformed ISCP storage JSON")
 	}
-	return []byte(decoded.String()), nil
+	return decoded, nil
 }
