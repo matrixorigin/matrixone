@@ -111,5 +111,54 @@ select id from ts order by id;
 select id from base order by id;
 set session transaction isolation level read committed;
 
+-- A DROP error still forgets an alias whose backing table vanished externally.
+drop database if exists temp_ddl_stale;
+create database temp_ddl_stale;
+create temporary table temp_ddl_stale.stale (id int primary key);
+-- @session:id=2&user=sys:dump&password=111
+drop database temp_ddl_stale;
+create database temp_ddl_stale;
+-- @session
+-- @regex("no such table",true)
+drop table temp_ddl_stale.stale;
+create temporary table temp_ddl_stale.stale (id int primary key);
+insert into temp_ddl_stale.stale values (11);
+select id from temp_ddl_stale.stale;
+-- @session:id=2&user=sys:dump&password=111
+drop database temp_ddl_stale;
+create database temp_ddl_stale;
+-- @session
+-- @regex("no such table",true)
+drop temporary table temp_ddl_stale.stale;
+create temporary table temp_ddl_stale.stale (id int primary key);
+-- @session:id=2&user=sys:dump&password=111
+drop database temp_ddl_stale;
+create database temp_ddl_stale;
+-- @session
+start transaction;
+drop temporary table if exists temp_ddl_stale.stale;
+create temporary table temp_ddl_stale.stale (id int primary key);
+insert into temp_ddl_stale.stale values (22);
+commit;
+select id from temp_ddl_stale.stale;
+drop temporary table temp_ddl_stale.stale;
+
+-- Stored-procedure planning must clean the upstream owner, including hidden indexes.
+create temporary table temp_ddl_stale.stale (id int primary key);
+create index stale_ix on temp_ddl_stale.stale(id);
+create procedure temp_ddl_transactions.drop_missing_temp() 'begin drop temporary table temp_ddl_stale.stale; end';
+-- @session:id=2&user=sys:dump&password=111
+drop database temp_ddl_stale;
+create database temp_ddl_stale;
+-- @session
+-- @regex("no such table",true)
+call temp_ddl_transactions.drop_missing_temp();
+create temporary table temp_ddl_stale.stale (id int primary key);
+insert into temp_ddl_stale.stale values (33);
+select id from temp_ddl_stale.stale;
+drop procedure temp_ddl_transactions.drop_missing_temp;
+drop temporary table temp_ddl_stale.stale;
+drop database temp_ddl_stale;
+
 drop temporary table tc, td, tg, ta, tp, ti, ts, tf;
 drop database temp_ddl_transactions;

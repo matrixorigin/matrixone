@@ -68,102 +68,98 @@ class TestJoinMethods(unittest.TestCase):
         self.query.join(Address, User.id == Address.user_id)
 
         self.assertEqual(len(self.query._joins), 1)
-        self.assertTrue(self.query._joins[0].startswith("INNER JOIN"))
-        self.assertIn("addresses", self.query._joins[0])
-        self.assertIn("users.id = addresses.user_id", self.query._joins[0])
+        self.assertTrue(" INNER JOIN " in self.query.to_sql())
+        self.assertIn("addresses", self.query.to_sql())
+        self.assertIn("users.id = addresses.user_id", self.query.to_sql())
 
     def test_join_with_string_condition(self):
         """Test join with string condition"""
         self.query.join('addresses', 'users.id = addresses.user_id')
 
         self.assertEqual(len(self.query._joins), 1)
-        self.assertTrue(self.query._joins[0].startswith("INNER JOIN"))
-        self.assertIn("addresses", self.query._joins[0])
-        self.assertIn("users.id = addresses.user_id", self.query._joins[0])
+        self.assertTrue(" INNER JOIN " in self.query.to_sql())
+        self.assertIn("addresses", self.query.to_sql())
+        self.assertIn("users.id = addresses.user_id", self.query.to_sql())
 
     def test_join_with_onclause_parameter(self):
         """Test join with onclause parameter"""
         self.query.join('addresses', onclause='users.id = addresses.user_id')
 
         self.assertEqual(len(self.query._joins), 1)
-        self.assertTrue(self.query._joins[0].startswith("INNER JOIN"))
-        self.assertIn("addresses", self.query._joins[0])
-        self.assertIn("users.id = addresses.user_id", self.query._joins[0])
+        self.assertTrue(" INNER JOIN " in self.query.to_sql())
+        self.assertIn("addresses", self.query.to_sql())
+        self.assertIn("users.id = addresses.user_id", self.query.to_sql())
 
     def test_join_with_sqlalchemy_expression(self):
         """Test join with SQLAlchemy expression"""
         self.query.join(Address, User.id == Address.user_id)
 
         self.assertEqual(len(self.query._joins), 1)
-        self.assertTrue(self.query._joins[0].startswith("INNER JOIN"))
-        self.assertIn("addresses", self.query._joins[0])
+        self.assertTrue(" INNER JOIN " in self.query.to_sql())
+        self.assertIn("addresses", self.query.to_sql())
         # SQLAlchemy expressions keep table prefixes to avoid ambiguity
-        self.assertIn("users.id = addresses.user_id", self.query._joins[0])
+        self.assertIn("users.id = addresses.user_id", self.query.to_sql())
 
     def test_join_with_model_class_target(self):
         """Test join with model class as target"""
         self.query.join(Address, 'users.id = addresses.user_id')
 
         self.assertEqual(len(self.query._joins), 1)
-        self.assertTrue(self.query._joins[0].startswith("INNER JOIN"))
-        self.assertIn("addresses", self.query._joins[0])
+        self.assertTrue(" INNER JOIN " in self.query.to_sql())
+        self.assertIn("addresses", self.query.to_sql())
 
     def test_join_without_onclause(self):
-        """Test join without onclause (should still work)"""
-        self.query.join(Address)
-
-        self.assertEqual(len(self.query._joins), 1)
-        self.assertTrue(self.query._joins[0].startswith("INNER JOIN"))
-        self.assertIn("addresses", self.query._joins[0])
-        self.assertNotIn("ON", self.query._joins[0])
+        with self.assertRaisesRegex(ValueError, 'foreign key'):
+            self.query.join(Address)
+        self.assertEqual(self.query._joins, [])
 
     def test_join_with_isouter_true(self):
         """Test join with isouter=True creates LEFT OUTER JOIN"""
         self.query.join(Address, User.id == Address.user_id, isouter=True)
 
         self.assertEqual(len(self.query._joins), 1)
-        self.assertTrue(self.query._joins[0].startswith("LEFT OUTER JOIN"))
-        self.assertIn("addresses", self.query._joins[0])
+        self.assertTrue(" LEFT OUTER JOIN " in self.query.to_sql())
+        self.assertIn("addresses", self.query.to_sql())
 
     def test_join_with_full_true(self):
         """Test join with full=True creates FULL OUTER JOIN"""
         self.query.join(Address, User.id == Address.user_id, full=True)
 
         self.assertEqual(len(self.query._joins), 1)
-        self.assertTrue(self.query._joins[0].startswith("FULL OUTER JOIN"))
-        self.assertIn("addresses", self.query._joins[0])
+        self.assertTrue(" FULL OUTER JOIN " in self.query.to_sql())
+        self.assertIn("addresses", self.query.to_sql())
 
     def test_innerjoin_method(self):
         """Test innerjoin method"""
         self.query.innerjoin(Address, User.id == Address.user_id)
 
         self.assertEqual(len(self.query._joins), 1)
-        self.assertTrue(self.query._joins[0].startswith("INNER JOIN"))
-        self.assertIn("addresses", self.query._joins[0])
+        self.assertTrue(" INNER JOIN " in self.query.to_sql())
+        self.assertIn("addresses", self.query.to_sql())
 
     def test_leftjoin_method(self):
         """Test leftjoin method"""
         self.query.leftjoin(Address, User.id == Address.user_id)
 
         self.assertEqual(len(self.query._joins), 1)
-        self.assertTrue(self.query._joins[0].startswith("LEFT OUTER JOIN"))
-        self.assertIn("addresses", self.query._joins[0])
+        self.assertTrue(" LEFT OUTER JOIN " in self.query.to_sql())
+        self.assertIn("addresses", self.query.to_sql())
 
     def test_outerjoin_method(self):
         """Test outerjoin method (should be same as leftjoin)"""
         self.query.outerjoin(Address, User.id == Address.user_id)
 
         self.assertEqual(len(self.query._joins), 1)
-        self.assertTrue(self.query._joins[0].startswith("LEFT OUTER JOIN"))
-        self.assertIn("addresses", self.query._joins[0])
+        self.assertTrue(" LEFT OUTER JOIN " in self.query.to_sql())
+        self.assertIn("addresses", self.query.to_sql())
 
     def test_fullouterjoin_method(self):
         """Test fullouterjoin method"""
         self.query.fullouterjoin(Address, User.id == Address.user_id)
 
         self.assertEqual(len(self.query._joins), 1)
-        self.assertTrue(self.query._joins[0].startswith("FULL OUTER JOIN"))
-        self.assertIn("addresses", self.query._joins[0])
+        self.assertTrue(" FULL OUTER JOIN " in self.query.to_sql())
+        self.assertIn("addresses", self.query.to_sql())
 
     def test_multiple_joins(self):
         """Test multiple joins in one query"""
@@ -171,10 +167,10 @@ class TestJoinMethods(unittest.TestCase):
         self.query.join(Department, User.department_id == Department.id)
 
         self.assertEqual(len(self.query._joins), 2)
-        self.assertTrue(self.query._joins[0].startswith("INNER JOIN"))
-        self.assertTrue(self.query._joins[1].startswith("INNER JOIN"))
-        self.assertIn("addresses", self.query._joins[0])
-        self.assertIn("departments", self.query._joins[1])
+        self.assertTrue(" INNER JOIN " in self.query.to_sql())
+        self.assertTrue(" INNER JOIN " in self.query.to_sql())
+        self.assertIn("addresses", self.query.to_sql())
+        self.assertIn("departments", self.query.to_sql())
 
     def test_join_method_chaining(self):
         """Test that join methods support method chaining"""
@@ -199,17 +195,17 @@ class TestJoinMethods(unittest.TestCase):
         new_query.join(cte, 'users.id = engineering_users.id')
 
         self.assertEqual(len(new_query._joins), 1)
-        self.assertTrue(new_query._joins[0].startswith("INNER JOIN"))
-        self.assertIn("engineering_users", new_query._joins[0])
+        self.assertTrue(" INNER JOIN " in new_query.to_sql())
+        self.assertIn("engineering_users", new_query.to_sql())
 
     def test_join_with_string_table_name(self):
         """Test join with string table name"""
         self.query.join('custom_table', 'users.id = custom_table.user_id')
 
         self.assertEqual(len(self.query._joins), 1)
-        self.assertTrue(self.query._joins[0].startswith("INNER JOIN"))
-        self.assertIn("custom_table", self.query._joins[0])
-        self.assertIn("users.id = custom_table.user_id", self.query._joins[0])
+        self.assertTrue(" INNER JOIN " in self.query.to_sql())
+        self.assertIn("custom_table", self.query.to_sql())
+        self.assertIn("users.id = custom_table.user_id", self.query.to_sql())
 
     def test_join_sqlalchemy_expression_compilation(self):
         """Test that SQLAlchemy expressions are properly compiled"""
@@ -217,8 +213,8 @@ class TestJoinMethods(unittest.TestCase):
         self.query.join(Address, (User.id == Address.user_id) & (Address.email.like('%@example.com')))
 
         self.assertEqual(len(self.query._joins), 1)
-        join_clause = self.query._joins[0]
-        self.assertTrue(join_clause.startswith("INNER JOIN"))
+        join_clause = self.query.to_sql()
+        self.assertIn(" INNER JOIN addresses ON ", join_clause)
         self.assertIn("addresses", join_clause)
         # The complex expression should be compiled to SQL
         self.assertIn("ON", join_clause)
@@ -258,7 +254,7 @@ class TestJoinMethods(unittest.TestCase):
                 # Should have one join
                 self.assertEqual(len(query._joins), 1)
                 # Should contain the condition
-                self.assertIn("users.id = addresses.user_id", query._joins[0])
+                self.assertIn("users.id = addresses.user_id", query.to_sql())
 
 
 if __name__ == '__main__':
@@ -277,5 +273,7 @@ if __name__ == '__main__':
     print(f"Tests run: {result.testsRun}")
     print(f"Failures: {len(result.failures)}")
     print(f"Errors: {len(result.errors)}")
-    print(f"Success rate: {((result.testsRun - len(result.failures) - len(result.errors)) / result.testsRun * 100):.1f}%")
+    print(
+        f"Success rate: {((result.testsRun - len(result.failures) - len(result.errors)) / result.testsRun * 100):.1f}%"
+    )
     print(f"{'='*50}")

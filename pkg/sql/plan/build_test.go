@@ -23,6 +23,7 @@ import (
 	"math"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -355,6 +356,19 @@ func BenchmarkInsert(b *testing.B) {
 			break
 		}
 	}
+}
+
+// A syntax failure inside SQL PREPARE text must report ER_PARSE_ERROR
+// (1064/42000) like the same statement executed directly, not the generic
+// 1105 for unclassified errors (#30434).
+func TestBuildPrepareStringSyntaxErrorIsParseError(t *testing.T) {
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
+	stmt := tree.NewPrepareString("bad_stmt", "SELECT FROM")
+	defer stmt.Free()
+	_, err := buildPrepare(stmt, ctx)
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrParseError),
+		"expected 1064/42000 for inner syntax error, got: %v", err)
 }
 
 func TestBuildPrepareStringUsesSessionSQLMode(t *testing.T) {
@@ -1894,7 +1908,7 @@ func TestRollupWindowHavingPreservesFromScopeErrors(t *testing.T) {
 				select sum(n_nationkey) as n_name
 				from nation
 				group by n_regionkey with rollup
-				having n_name <> ''`,
+				having nation.n_name <> ''`,
 			wantError: "must appear in the GROUP BY clause",
 		},
 		{
@@ -1904,7 +1918,7 @@ func TestRollupWindowHavingPreservesFromScopeErrors(t *testing.T) {
 				       row_number() over (order by sum(n_nationkey)) as rn
 				from nation
 				group by n_regionkey with rollup
-				having n_name <> ''`,
+				having nation.n_name <> ''`,
 			wantError: "must appear in the GROUP BY clause",
 		},
 	}
@@ -3698,6 +3712,10 @@ func TestApplyLockTableFallbackGuardsAndModes(t *testing.T) {
 					markedAboveBoundary,
 					{Mode: lockpb.LockMode_Shared},
 					{Mode: lockpb.LockMode_Exclusive},
+					{Mode: lockpb.LockMode_Exclusive, NoWait: true},
+					{Mode: lockpb.LockMode_Shared, NoWait: true},
+					{Mode: lockpb.LockMode_Shared, SkipLocked: true},
+					{Mode: lockpb.LockMode_Shared, NoWait: true, LockTable: true},
 				},
 			},
 		}},
@@ -3728,6 +3746,13 @@ func TestApplyLockTableFallbackGuardsAndModes(t *testing.T) {
 		"cardinality-known shared targets must upgrade before acquisition")
 	require.False(t, builder.qry.Nodes[3].LockTargets[2].LockTable,
 		"unmarked exclusive targets retain owner-side range escalation")
+	for _, target := range builder.qry.Nodes[3].LockTargets[3:6] {
+		require.False(t, target.LockTable, "cardinality estimates must not widen nonblocking row locks")
+	}
+
+	require.True(t, builder.qry.Nodes[3].LockTargets[6].LockTable,
+		"an explicit coarse target must remain visible to nonblocking admission")
+
 }
 
 func TestApplyLockTableFallbackUsesFullUpdateSourceCardinality(t *testing.T) {
@@ -6348,6 +6373,7 @@ func TestLoadCheckConstraintPolicy(t *testing.T) {
 		} {
 			t.Run(table+"/"+tc.name, func(t *testing.T) {
 				mock := NewMockOptimizer(true, newPlanTestProcess(t))
+				setLoadPrimaryKeyCheck(&mock.ctxt, 1)
 				addPositiveCheck(t, mock, table, "deptno")
 				stmt, err := mysql.ParseOne(t.Context(), fmt.Sprintf(tc.sql, table), 1)
 				require.NoError(t, err)
@@ -7339,6 +7365,15 @@ func TestUpdateSelfReferCascadeUsesModernPlan(t *testing.T) {
 		query := logicPlan.GetQuery()
 		require.NotNil(t, query)
 		require.True(t, query.GetHasForeignKeyAction())
+		var selfChecks []string
+		for _, sql := range query.GetDetectSqls() {
+			if strings.HasPrefix(sql, "select count(*)") {
+				selfChecks = append(selfChecks, sql)
+			}
+		}
+		require.Len(t, selfChecks, 1)
+		require.Contains(t, selfChecks[0], "self_ref_cascade")
+		require.Contains(t, selfChecks[0], "parent_id")
 		require.Equal(t, 1, countUpdateFkPlanNodes(query, plan.Node_MULTI_UPDATE),
 			"the root UPDATE and self-referencing CASCADE must share one physical writer")
 		foundAffectedRowsSelector := false
@@ -8584,12 +8619,129 @@ func TestReplaceAndChildInsertUseCanonicalForeignKeyLockOrder(t *testing.T) {
 		"REPLACE must lock the base table first and hidden unique indexes by physical table name")
 }
 
+func TestSelectLockPoliciesReachOnlyTheirQueryBlockTargets(t *testing.T) {
+	tests := []struct {
+		name       string
+		sql        string
+		mode       lockpb.LockMode
+		noWait     bool
+		correlated bool
+		skipLocked bool
+	}{
+		{name: "ordinary share", sql: "SELECT N_NATIONKEY FROM NATION FOR SHARE", mode: lockpb.LockMode_Shared},
+		{name: "update nowait", sql: "SELECT N_NATIONKEY FROM NATION FOR UPDATE NOWAIT", mode: lockpb.LockMode_Exclusive, noWait: true},
+		{name: "share nowait", sql: "SELECT N_NATIONKEY FROM NATION FOR SHARE NOWAIT", mode: lockpb.LockMode_Shared, noWait: true},
+		{name: "correlated nowait", sql: "SELECT N_NATIONKEY FROM NATION WHERE N_NATIONKEY=1 AND N_NATIONKEY=(SELECT (SELECT NATION.N_NATIONKEY)) FOR SHARE NOWAIT", mode: lockpb.LockMode_Shared, noWait: true, correlated: true},
+		{name: "share skip locked", sql: "SELECT N_NATIONKEY FROM NATION FOR SHARE SKIP LOCKED", mode: lockpb.LockMode_Shared, skipLocked: true},
+		{name: "correlated skip", sql: "SELECT CAST(N_NATIONKEY AS CHAR CHARACTER SET binary) FROM NATION WHERE N_NATIONKEY=(SELECT (SELECT NATION.N_NATIONKEY)) ORDER BY N_NATIONKEY LIMIT 1 OFFSET 1 FOR SHARE SKIP LOCKED", mode: lockpb.LockMode_Shared, skipLocked: true, correlated: true},
+		{
+			name:   "nested clause does not leak to outer target",
+			sql:    "SELECT N_NATIONKEY FROM NATION WHERE N_NATIONKEY IN (SELECT N_NATIONKEY FROM NATION FOR SHARE NOWAIT)",
+			mode:   lockpb.LockMode_Shared,
+			noWait: true,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			mock := NewMockOptimizer(true, newPlanTestProcess(t))
+			logicPlan, err := runOneStmt(mock, t, test.sql)
+			require.NoError(t, err)
+			if test.correlated {
+				require.NotNil(t, logicPlan.GetQuery().Correlation, "the regression must reach the dependent compiler")
+			}
+
+			var targets []*plan.LockTarget
+			for _, node := range logicPlan.GetQuery().Nodes {
+				if node.NodeType == plan.Node_LOCK_OP {
+					targets = append(targets, node.LockTargets...)
+				}
+			}
+			require.NotEmpty(t, targets)
+			for _, target := range targets {
+				assert.Equal(t, test.mode, target.Mode)
+				assert.Equal(t, test.noWait, target.GetNoWait())
+				assert.Equal(t, test.skipLocked, target.GetSkipLocked())
+			}
+		})
+	}
+}
+
+func TestShareSkipLockedKeepsLimitAboveLockFilterAfterPlanBuild(t *testing.T) {
+	for _, sql := range []string{
+		"SELECT N_NATIONKEY FROM NATION ORDER BY N_NATIONKEY LIMIT 3 FOR SHARE SKIP LOCKED",
+		"SELECT N.N_NATIONKEY FROM NATION N LEFT JOIN REGION R ON N.N_REGIONKEY = R.R_REGIONKEY ORDER BY N.N_NATIONKEY LIMIT 3 FOR SHARE SKIP LOCKED",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			mock := NewMockOptimizer(true, newPlanTestProcess(t))
+			logicPlan, err := runOneStmt(mock, t, sql)
+			require.NoError(t, err)
+			query := logicPlan.GetQuery()
+
+			var lockNodes []int32
+			var limitNodes []int32
+			for id, node := range query.Nodes {
+				if node.NodeType == plan.Node_LOCK_OP {
+					lockNodes = append(lockNodes, int32(id))
+				}
+				if node.Limit != nil || node.Offset != nil {
+					limitNodes = append(limitNodes, int32(id))
+				}
+			}
+			require.NotEmpty(t, lockNodes)
+			require.NotEmpty(t, limitNodes)
+
+			contains := func(root int32, want func(*plan.Node) bool) bool {
+				seen := make(map[int32]bool)
+				var visit func(int32) bool
+				visit = func(id int32) bool {
+					if id < 0 || int(id) >= len(query.Nodes) || seen[id] {
+						return false
+					}
+					seen[id] = true
+					node := query.Nodes[id]
+					if want(node) {
+						return true
+					}
+					for _, child := range node.Children {
+						if visit(child) {
+							return true
+						}
+					}
+					return false
+				}
+				return visit(root)
+			}
+
+			for _, lockID := range lockNodes {
+				node := query.Nodes[lockID]
+				require.Len(t, node.Children, 1)
+				require.False(t, contains(node.Children[0], func(descendant *plan.Node) bool {
+					return descendant.Limit != nil || descendant.Offset != nil
+				}), "finite pagination must not be pushed beneath the row-removing lock node")
+			}
+			hasLimitAboveLock := false
+			for _, limitID := range limitNodes {
+				if contains(limitID, func(descendant *plan.Node) bool {
+					return descendant.NodeType == plan.Node_LOCK_OP
+				}) {
+					hasLimitAboveLock = true
+					break
+				}
+			}
+			require.True(t, hasLimitAboveLock,
+				"the final LIMIT must consume rows after ShareSkip removes conflicts")
+		})
+	}
+}
+
 func TestDeepCopyPreservesSharedLockMode(t *testing.T) {
 	assert.Nil(t, DeepCopyLockTarget(nil))
 	target := &plan.LockTarget{
 		TableId:              42,
 		ObjRef:               &plan.ObjectRef{Obj: 42, ObjName: "parent"},
 		Mode:                 lockpb.LockMode_Shared,
+		NoWait:               true,
+		SkipLocked:           true,
 		PrimaryColRelPos:     11,
 		FilterColRelPos:      12,
 		PartitionColIdxInBat: 13,
@@ -8599,6 +8751,8 @@ func TestDeepCopyPreservesSharedLockMode(t *testing.T) {
 	assertScalarFields := func(t *testing.T, copied *plan.LockTarget) {
 		t.Helper()
 		assert.Equal(t, lockpb.LockMode_Shared, copied.Mode)
+		assert.True(t, copied.NoWait)
+		assert.True(t, copied.SkipLocked)
 		assert.Equal(t, int32(11), copied.PrimaryColRelPos)
 		assert.Equal(t, int32(12), copied.FilterColRelPos)
 		assert.Equal(t, int32(13), copied.PartitionColIdxInBat)
@@ -8713,13 +8867,18 @@ func TestSubQuery(t *testing.T) {
 	}
 	runTestShouldPass(mock, t, sqls, false, false)
 
-	// should error
+	// Complete relation execution preserves grouping, HAVING and projection.
+	// Scalar cardinality is checked against the rows at execution time.
 	sqls = []string{
-		"SELECT * FROM NATION where N_REGIONKEY > (select max(R_REGIONKEY) from REGION222)",                                                          // table not exist
-		"SELECT * FROM NATION where N_REGIONKEY > (select max(R_REGIONKEY) from REGION where R_REGIONKEY < N_REGIONKEY222)",                          // column not exist
-		"SELECT * FROM NATION where N_REGIONKEY > (select max(R_REGIONKEY) from REGION where R_REGIONKEY < N_REGIONKEY group by R_NAME)",             // non-eq agg scalar subquery with GROUP BY
-		"SELECT * FROM NATION where N_REGIONKEY > (select max(R_REGIONKEY) from REGION where R_REGIONKEY < N_REGIONKEY having max(R_REGIONKEY) > 0)", // non-eq agg scalar subquery with HAVING
-		"SELECT * FROM NATION where N_REGIONKEY > (select max(R_REGIONKEY) + 1 from REGION where R_REGIONKEY < N_REGIONKEY)",                         // non-eq agg scalar subquery with computed projection
+		"SELECT * FROM NATION where N_REGIONKEY > (select max(R_REGIONKEY) from REGION where R_REGIONKEY < N_REGIONKEY group by R_NAME)",
+		"SELECT * FROM NATION where N_REGIONKEY > (select max(R_REGIONKEY) from REGION where R_REGIONKEY < N_REGIONKEY having max(R_REGIONKEY) > 0)",
+		"SELECT * FROM NATION where N_REGIONKEY > (select max(R_REGIONKEY) + 1 from REGION where R_REGIONKEY < N_REGIONKEY)",
+	}
+	runTestShouldPass(mock, t, sqls, false, false)
+
+	sqls = []string{
+		"SELECT * FROM NATION where N_REGIONKEY > (select max(R_REGIONKEY) from REGION222)",                                 // table not exist
+		"SELECT * FROM NATION where N_REGIONKEY > (select max(R_REGIONKEY) from REGION where R_REGIONKEY < N_REGIONKEY222)", // column not exist
 	}
 	runTestShouldError(mock, t, sqls)
 
@@ -8730,11 +8889,10 @@ func TestSubQuery(t *testing.T) {
 				OR n3.N_REGIONKEY = 1
 		)
 	)`
-	_, err := runOneStmt(mock, t, sql)
-	assert.Error(t, err)
-	if err != nil {
-		assert.Contains(t, err.Error(), "deep correlated predicate containing inner columns cannot be pulled above mark join")
-	}
+	p, err := runOneStmt(mock, t, sql)
+	require.NoError(t, err)
+	require.NotNil(t, p.GetQuery().Correlation)
+	require.NoError(t, p.GetQuery().ValidateCorrelation())
 }
 
 func TestCorrelatedScalarAggregatePushdown(t *testing.T) {
@@ -10055,7 +10213,7 @@ func outPutPlan(logicPlan *Plan, toFile bool, t *testing.T) {
 		json = getJSON(logicPlan.GetDcl(), t)
 	}
 	if toFile {
-		err := os.WriteFile("/tmp/mo_plan_test.json", json, 0777)
+		err := os.WriteFile(filepath.Join(t.TempDir(), "mo_plan_test.json"), json, 0600)
 		if err != nil {
 			t.Logf("%+v", err)
 		}
@@ -10437,13 +10595,13 @@ func TestSubqueryInOuterJoinOn(t *testing.T) {
 	_, err := runOneStmt(mock, t,
 		"SELECT a.n_nationkey FROM nation a LEFT JOIN nation b ON EXISTS ("+
 			"SELECT 1 FROM region z WHERE z.r_regionkey = a.n_regionkey AND z.r_regionkey = b.n_regionkey)")
-	require.ErrorContains(t, err, "referencing both join inputs")
+	require.NoError(t, err)
 
 	_, err = runOneStmt(mock, t,
 		"SELECT outer_n.n_nationkey FROM nation outer_n WHERE EXISTS ("+
 			"SELECT 1 FROM nation a LEFT JOIN nation b ON EXISTS ("+
 			"SELECT 1 FROM region z WHERE z.r_regionkey = outer_n.n_regionkey))")
-	require.ErrorContains(t, err, "deeply correlated subquery")
+	require.NoError(t, err)
 }
 func TestSamePhysicalTargetAliasesShareMergedFinalRows(t *testing.T) {
 	for _, sql := range []string{
@@ -10651,7 +10809,7 @@ func TestUpdateIgnoreRepeatedAliasPlanningObservesCancellation(t *testing.T) {
 		defer stmt.Free()
 		mock := NewMockOptimizer(true, newPlanTestProcess(t))
 		builder := NewQueryBuilder(plan.Query_UPDATE, mock.CurrentContext(), false, true)
-		rootID, bindErr := builder.bindUpdate(stmt.(*tree.Update), NewBindContext(builder, nil))
+		rootID, bindErr := builder.bindUpdate(stmt.(*tree.Update), NewBindContext(builder, nil), NewDMLContext())
 		require.NoError(t, bindErr)
 
 		cancelCtx, cancel := context.WithCancel(t.Context())
@@ -10672,7 +10830,7 @@ func TestUpdateIgnoreRepeatedAliasPlanningObservesCancellation(t *testing.T) {
 		defer stmt.Free()
 		mock := NewMockOptimizer(true, newPlanTestProcess(t))
 		builder := NewQueryBuilder(plan.Query_UPDATE, mock.CurrentContext(), false, true)
-		rootID, bindErr := builder.bindUpdate(stmt.(*tree.Update), NewBindContext(builder, nil))
+		rootID, bindErr := builder.bindUpdate(stmt.(*tree.Update), NewBindContext(builder, nil), NewDMLContext())
 		require.NoError(t, bindErr)
 		builder.qry.Steps = append(builder.qry.Steps, rootID)
 
@@ -10709,4 +10867,24 @@ func planNodeDependsOn(query *plan.Query, nodeID, dependencyID int32, visited ma
 		}
 	}
 	return false
+}
+
+func TestExtensionPlansAreNotSupported(t *testing.T) {
+	for _, sql := range []string{"load some_ext", "create extension pg as myext file '/missing.so'"} {
+		t.Run(sql, func(t *testing.T) {
+			ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
+			stmt, err := mysql.ParseOne(t.Context(), sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			p, err := BuildPlan(ctx, stmt, false)
+			require.Nil(t, p)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), "%v", err)
+			require.ErrorContains(t, err, "extension statements are not supported in MatrixOne")
+			prepared := tree.NewPrepareString("unsupported_extension", sql)
+			defer prepared.Free()
+			p, err = buildPrepare(prepared, ctx)
+			require.Nil(t, p)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), "%v", err)
+		})
+	}
 }

@@ -138,6 +138,7 @@ func NewService(
 
 	options = append(options, WithBootstrapOptions(
 		bootstrap.WithUpgradeTenantBatch(cfg.UpgradeTenantBatchSize),
+		bootstrap.WithUpgradeCatalogObjectLimit(cfg.UpgradeCatalogObjectLimit),
 		bootstrap.WithKek(cfg.Frontend.KeyEncryptionKey),
 	))
 
@@ -430,10 +431,16 @@ func (s *service) checkViewMetadataGenerationRevoked() error {
 }
 
 func (s *service) startUnlessViewMetadataGenerationRevoked(start func() error) error {
+	if err := s.startContext().Err(); err != nil {
+		return err
+	}
 	if err := s.checkViewMetadataGenerationRevoked(); err != nil {
 		return err
 	}
 	if err := start(); err != nil {
+		return err
+	}
+	if err := s.startContext().Err(); err != nil {
 		return err
 	}
 	return s.checkViewMetadataGenerationRevoked()
@@ -445,14 +452,38 @@ func (s *service) startFrontendUnlessViewMetadataGenerationRevoked() error {
 	return s.startUnlessViewMetadataGenerationRevoked(s.runMoServer)
 }
 
-func (s *service) Start() (err error) {
+func (s *service) Start() error {
+	return s.StartContext(context.Background())
+}
+
+// StartContext lets the lifecycle owner cancel startup before waiting for it.
+func (s *service) StartContext(parent context.Context) (err error) {
+	s.startMu.Lock()
+	if s.startClosing || s.startCancel != nil {
+		s.startMu.Unlock()
+		return moerr.NewInvalidStateNoCtx("CN service already started or closed")
+	}
+	s.startCtx, s.startCancel = context.WithCancelCause(parent)
+	s.startInProgress = true
+	s.startMu.Unlock()
+
 	s.lifecycleMu.Lock()
 	defer s.lifecycleMu.Unlock()
 	if s.lifecycle != serviceInitialized {
+		s.startMu.Lock()
+		s.startInProgress = false
+		s.startCancel(nil)
+		s.startMu.Unlock()
 		return moerr.NewInvalidStateNoCtx("CN service already started or closed")
 	}
 	s.lifecycle = serviceStarting
 	defer func() {
+		s.startMu.Lock()
+		s.startInProgress = false
+		if cause := context.Cause(s.startCtx); cause != nil {
+			err = errors.Join(err, cause)
+		}
+		s.startMu.Unlock()
 		if err != nil {
 			s.lifecycle = serviceClosing
 			err = errors.Join(err, s.closeService())
@@ -479,8 +510,11 @@ func (s *service) Start() (err error) {
 	if err = s.waitForViewMetadataAdmission(); err != nil {
 		return err
 	}
+	if err = s.waitForBootstrapUpgrade(); err != nil {
+		return err
+	}
 	if err = s.startUnlessViewMetadataGenerationRevoked(func() error {
-		ctx, cancel := context.WithTimeoutCause(context.Background(), 5*time.Minute, moerr.CauseBootstrap)
+		ctx, cancel := context.WithTimeoutCause(s.startContext(), 5*time.Minute, moerr.CauseBootstrap)
 		defer cancel()
 		if s.pu != nil {
 			ctx = context.WithValue(ctx, config.ParameterUnitKey, s.pu)
@@ -499,7 +533,7 @@ func (s *service) Start() (err error) {
 		return err
 	}
 	if err = s.startUnlessViewMetadataGenerationRevoked(func() error {
-		return s.startSiriusRuntime(context.Background())
+		return s.startSiriusRuntime(s.startContext())
 	}); err != nil {
 		return err
 	}
@@ -544,6 +578,14 @@ func (s *service) Start() (err error) {
 }
 
 func (s *service) Close() error {
+	// Startup holds lifecycleMu while waiting on catalog and admission. Cancel
+	// it before acquiring that lock so shutdown can join the startup owner.
+	s.startMu.Lock()
+	s.startClosing = true
+	if s.startCancel != nil {
+		s.startCancel(nil)
+	}
+	s.startMu.Unlock()
 	s.lifecycleMu.Lock()
 	defer s.lifecycleMu.Unlock()
 	if s.lifecycle != serviceClosed {
@@ -552,6 +594,16 @@ func (s *service) Close() error {
 	err := s.closeService()
 	s.lifecycle = serviceClosed
 	return err
+}
+
+func (s *service) startContext() context.Context {
+	s.startMu.Lock()
+	ctx := s.startCtx
+	s.startMu.Unlock()
+	if ctx == nil {
+		return context.Background()
+	}
+	return ctx
 }
 
 func (s *service) closeService() error {
@@ -1429,17 +1481,18 @@ func (s *service) bootstrap() error {
 	s.bootstrapMu.Lock()
 	defer s.bootstrapMu.Unlock()
 	if s.bootstrapService == nil {
+		bootstrapOptions := append([]bootstrap.Option{bootstrap.WithUpgradeDecisionFileService(s.fileService)}, s.options.bootstrapOptions...)
 		s.bootstrapService = bootstrap.NewService(
 			s.cfg.UUID,
 			&locker{hakeeperClient: s._hakeeperClient, requestID: s.cfg.UUID},
 			rt.Clock(),
 			s._txnClient,
 			s.sqlExecutor,
-			s.options.bootstrapOptions...,
+			bootstrapOptions...,
 		)
 	}
 
-	ctx, cancel := context.WithTimeoutCause(context.Background(), time.Minute*5, moerr.CauseBootstrap)
+	ctx, cancel := context.WithTimeoutCause(s.startContext(), time.Minute*5, moerr.CauseBootstrap)
 	ctx = context.WithValue(ctx, config.ParameterUnitKey, s.pu)
 	defer cancel()
 
@@ -1449,16 +1502,26 @@ func (s *service) bootstrap() error {
 	if err := s.bootstrapService.Bootstrap(ctx); err != nil {
 		return handleBootstrapErr(ctx, err)
 	}
+	if !s.cfg.AutomaticUpgrade {
+		if err := s.bootstrapService.CheckManualUpgradeReadiness(ctx); err != nil {
+			return handleBootstrapErr(ctx, err)
+		}
+	}
 
 	if s.cfg.AutomaticUpgrade {
+		s.startMu.Lock()
+		s.startUpgradeActive = true
+		s.startMu.Unlock()
 		s.bootstrapUpgradeResult = make(chan error, 1)
 		s.bootstrapUpgradeStartupReady = make(chan struct{})
 		started := make(chan struct{})
 		if err := s.stopper.RunTask(func(taskCtx context.Context) {
-			ctx, cancel := context.WithTimeoutCause(taskCtx, time.Minute*120, moerr.CauseBootstrap2)
+			ctx, cancel := context.WithCancel(s.startContext())
+			stopTaskCancel := context.AfterFunc(taskCtx, cancel)
 			s.bootstrapUpgradeContext = ctx
 			close(started)
 			defer cancel()
+			defer stopTaskCancel()
 
 			s.bootstrapMu.RLock()
 			defer s.bootstrapMu.RUnlock()

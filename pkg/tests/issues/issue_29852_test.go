@@ -554,9 +554,18 @@ func TestTruncatePreservesMaterializedForeignKeyIdentity(t *testing.T) {
 			"select referenced_index_name from mo_catalog.mo_foreign_keys where db_name=? and table_name='child' and constraint_name='fk_selected'", database),
 			"query failed: selected referenced key after recreation")
 		require.Equal(t, "z", selected, "recreation must preserve the declared selected key")
-		requireSQLRejection(t, ctx, db, "drop index z on "+database+".parent") // engine FK protection must agree with the catalog key
-		require.NoErrorf(t, boundedExec(t, ctx, db, "drop index a on "+database+".parent"),
-			"new compatible key was not selected by the existing FK")
+		// The equivalent-key transition (issue #30342) allows dropping the
+		// recorded key when another covering key survives: the FK rebinds to
+		// the surviving key in the same transaction instead of rejecting, so
+		// identity is proven by the catalog tracking the recorded key and by
+		// the rebind, not by an unconditional rejection.
+		require.NoErrorf(t, boundedExec(t, ctx, db, "drop index z on "+database+".parent"),
+			"exec failed: drop recorded key with a compatible survivor")
+		require.NoErrorf(t, boundedQueryRow(t, ctx, db, &selected,
+			"select referenced_index_name from mo_catalog.mo_foreign_keys where db_name=? and table_name='child' and constraint_name='fk_selected'", database),
+			"query failed: selected referenced key after rebind")
+		require.Equal(t, "a", selected, "rebind must move the binding to the surviving compatible key")
+		requireSQLRejection(t, ctx, db, "drop index a on "+database+".parent") // the last covering key stays protected
 		requireSQLRejection(t, ctx, db, "insert into "+database+".child values(1,999)")
 		require.NoErrorf(t, boundedExec(t, ctx, db, "insert into "+database+".child values(1,7)"),
 			"exec failed: reinsert child")
@@ -694,9 +703,15 @@ func TestPartitionReplacementLifecycle(t *testing.T) {
 
 func TestBorrowedCreateAdmissionPreservesCallerWrites(t *testing.T) {
 	runAuthenticatedClusterTest(t, func(cluster embed.Cluster) {
-		ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
-		defer cancel()
-		ctx = defines.AttachAccountId(ctx, 0)
+		parent := defines.AttachAccountId(t.Context(), 0)
+		ctx, cancel := context.WithTimeout(parent, time.Minute)
+		defer func() { cancel() }()
+		// CTAS, failed MERGE, and each committed/rolled-back MERGE are
+		// independent scenarios, not portions of one shared minute.
+		nextPhase := func() {
+			cancel()
+			ctx, cancel = context.WithTimeout(parent, time.Minute)
+		}
 		cn, err := cluster.GetCNService(0)
 		require.NoError(t, err)
 		value, ok := runtime.ServiceRuntime(cn.ServiceID()).GetGlobalVariables(runtime.InternalSQLExecutor)
@@ -765,6 +780,7 @@ func TestBorrowedCreateAdmissionPreservesCallerWrites(t *testing.T) {
 
 		// MERGE creates several staging tables through frontend shared
 		// background execution. Its children must preserve earlier caller work.
+		nextPhase()
 		for _, query := range []string{
 			"create table " + database + ".branch_base(id int primary key, value int unique)",
 			"insert into " + database + ".branch_base values(1,10),(2,20)",
@@ -805,6 +821,7 @@ func TestBorrowedCreateAdmissionPreservesCallerWrites(t *testing.T) {
 		require.NoError(t, err)
 
 		for _, commit := range []bool{false, true} {
+			nextPhase()
 			tx, err := db.BeginTx(ctx, nil)
 			require.NoError(t, err)
 			_, err = tx.ExecContext(ctx, "insert into "+database+".existing values(8,'2023-11-12 10:00:01')")

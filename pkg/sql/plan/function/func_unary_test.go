@@ -3863,6 +3863,21 @@ func initDateStringToDateTestCase() []tcTemp {
 				[]types.Date{t.ToDate()},
 				[]bool{false}),
 		},
+		{
+			info: "invalid rows do not abort later dates",
+			inputs: []FunctionTestInput{NewFunctionTestInput(types.T_varchar.ToType(),
+				[]string{"2026-02-30", "2026-13-01", "not a date", "", " ", "ignored", "2024-02-29"},
+				[]bool{false, false, false, false, false, true, false})},
+			expect: NewFunctionTestResult(types.T_date.ToType(), false,
+				[]types.Date{0, 0, 0, 0, 0, 0, types.DateFromCalendar(2024, 2, 29)},
+				[]bool{true, true, true, true, true, true, false}),
+		},
+		{
+			info: "invalid constant",
+			inputs: []FunctionTestInput{NewFunctionTestConstInput(types.T_char.ToType(),
+				[]string{"not a date"}, nil)},
+			expect: NewFunctionTestResult(types.T_date.ToType(), false, []types.Date{0}, []bool{true}),
+		},
 	}
 }
 
@@ -3872,10 +3887,24 @@ func TestDateStringToDate(t *testing.T) {
 	// do the test work.
 	proc := testutil.NewProcess(t)
 	for _, tc := range testCases {
-		fcTC := NewFunctionTestCase(proc,
-			tc.inputs, tc.expect, DateStringToDate)
-		s, info := fcTC.RunAndFree()
-		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+		t.Run(tc.info, func(t *testing.T) {
+			fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, DateStringToDate)
+			s, info := fcTC.RunAndFree()
+			require.True(t, s, info)
+		})
+	}
+	for _, sqlMode := range []string{"", "NO_ZERO_DATE"} {
+		t.Run("zero and masked rows/"+sqlMode, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) { return sqlMode, nil })
+			fc := NewFunctionTestCase(proc, []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"bad", "0000-00-00", "2024-02-29"}, nil),
+			}, NewFunctionTestResult(types.T_date.ToType(), false,
+				[]types.Date{0, types.ZeroDate, types.DateFromCalendar(2024, 2, 29)}, []bool{true, sqlMode != "", false}),
+				DateStringToDate).WithSelectList(&FunctionSelectList{AnyNull: true, SelectList: []bool{false, true, true}})
+			ok, info := fc.RunAndFree()
+			require.True(t, ok, info)
+		})
 	}
 }
 
@@ -4180,6 +4209,23 @@ func initJsonUnquoteTestCase() []tcTemp {
 
 func TestJsonUnquote(t *testing.T) {
 	testCases := initJsonUnquoteTestCase()
+	documents := []string{"123", "true", "null", `[1,"two"]`, `{"a":"b"}`}
+	jsonInputs := make([]string, len(documents))
+	for i, document := range documents {
+		bj, err := types.ParseStringToByteJson(document)
+		require.NoError(t, err)
+		encoded, err := bj.Marshal()
+		require.NoError(t, err)
+		jsonInputs[i] = string(encoded)
+	}
+	testCases = append(testCases, tcTemp{
+		info: "native JSON scalar and composite text",
+		inputs: []FunctionTestInput{
+			NewFunctionTestInput(types.T_json.ToType(), jsonInputs, nil),
+		},
+		expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+			[]string{"123", "true", "null", `[1, "two"]`, `{"a": "b"}`}, nil),
+	})
 
 	// do the test work.
 	proc := testutil.NewProcess(t)
@@ -4340,6 +4386,7 @@ func TestJsonUnquoteUsesEvaluatedRowStringDomain(t *testing.T) {
 
 func TestJsonUnquotePreservesPayloadBoundaryQuotes(t *testing.T) {
 	values := []string{
+		"",
 		"plain",
 		"a\"b",
 		"\"leading",
@@ -4348,6 +4395,9 @@ func TestJsonUnquotePreservesPayloadBoundaryQuotes(t *testing.T) {
 		"\"",
 		"\"\"",
 		"\"你好\"",
+		"slashes\\and\nlines",
+		strings.Repeat("a", types.VarlenaInlineSize),
+		strings.Repeat("a", types.VarlenaInlineSize+1),
 	}
 	inputs := make([]string, len(values))
 	for i, value := range values {
@@ -4374,16 +4424,70 @@ func TestJsonUnquotePreservesPayloadBoundaryQuotes(t *testing.T) {
 		require.NoError(t, err)
 		jsonInputs[i] = string(encoded)
 	}
-	jsonTC := NewFunctionTestCase(proc,
-		[]FunctionTestInput{
-			NewFunctionTestInput(types.T_json.ToType(), jsonInputs,
-				make([]bool, len(jsonInputs))),
-		},
-		NewFunctionTestResult(types.T_varchar.ToType(), false, values,
-			make([]bool, len(values))),
-		JsonUnquote)
-	s, info = jsonTC.RunAndFree()
-	require.True(t, s, info)
+	for _, scenario := range []struct {
+		name     string
+		constant bool
+		masked   bool
+		valueRow int
+	}{
+		{name: "flat"},
+		{name: "flat NULL and masked rows", masked: true},
+		{name: "constant inline", constant: true, valueRow: 5},
+		{name: "constant area", constant: true, valueRow: len(values) - 1},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			input, wanted := jsonInputs, values
+			inputNulls := make([]bool, len(input))
+			wantedNulls := make([]bool, len(wanted))
+			var selected *FunctionSelectList
+			if scenario.masked {
+				inputNulls[1], wantedNulls[1], wantedNulls[2] = true, true, true
+				selected = &FunctionSelectList{AnyNull: true, SelectList: make([]bool, len(input))}
+				for row := range selected.SelectList {
+					selected.SelectList[row] = row != 2
+				}
+			}
+			inputCase := NewFunctionTestInput(types.T_json.ToType(), input, inputNulls)
+			if scenario.constant {
+				input = []string{jsonInputs[scenario.valueRow]}
+				wanted = []string{values[scenario.valueRow], values[scenario.valueRow]}
+				wantedNulls = nil
+				inputCase = NewFunctionTestConstInput(types.T_json.ToType(), input, nil)
+			}
+			jsonTC := NewFunctionTestCase(proc, []FunctionTestInput{inputCase},
+				NewFunctionTestResult(types.T_varchar.ToType(), false, wanted, wantedNulls), JsonUnquote).
+				WithSelectList(selected)
+			defer jsonTC.Free()
+			jsonTC.fnLength = len(wanted)
+			source := jsonTC.parameters[0]
+			source.SetLength(len(wanted))
+			s, info := jsonTC.Run()
+			require.True(t, s, info)
+			assertOwnedResult := func() {
+				result := vector.GenerateFunctionStrParameter(jsonTC.GetResultVectorDirectly())
+				for row, want := range wanted {
+					got, isNull := result.GetStrValue(uint64(row))
+					wantNull := len(wantedNulls) > 0 && wantedNulls[row]
+					require.Equal(t, wantNull, isNull, "row %d", row)
+					if !wantNull {
+						require.Equal(t, want, string(got), "row %d aliases input", row)
+					}
+				}
+			}
+			// Overwrite both inline and area-backed input before releasing it.
+			// The repeated-constant append must also own its first payload copy.
+			for row := range input {
+				stored := source.GetBytesAt(row)
+				for i := range stored {
+					stored[i] = '?'
+				}
+			}
+			assertOwnedResult()
+			source.Free(proc.Mp())
+			jsonTC.parameters[0] = nil
+			assertOwnedResult()
+		})
+	}
 }
 
 func TestLoadFile(t *testing.T) {
@@ -5495,26 +5599,31 @@ func initToTimestampCase() []tcTemp {
 	}
 }
 
-func TestToTimeStamp(t *testing.T) {
-	testCases := initToTimestampCase()
-
-	// do the test work.
+// Released stored plans can still request the original TIMESTAMP vector.
+func TestUnaryTimestampLegacyResultVector(t *testing.T) {
 	proc := testutil.NewProcess(t)
-	for _, tc := range testCases {
-		var fcTC FunctionTestCase
-		switch tc.typ {
+	for _, tc := range initToTimestampCase() {
+		var oid int32
+		switch tc.inputs[0].typ.Oid {
 		case types.T_date:
-			fcTC = NewFunctionTestCase(proc,
-				tc.inputs, tc.expect, DateToTimestamp)
+			oid = 0
 		case types.T_datetime:
-			fcTC = NewFunctionTestCase(proc,
-				tc.inputs, tc.expect, DatetimeToTimestamp)
+			oid = 1
+		case types.T_timestamp:
+			oid = 2
 		case types.T_varchar:
-			fcTC = NewFunctionTestCase(proc,
-				tc.inputs, tc.expect, DateStringToTimestamp)
+			oid = 3
+		case types.T_char:
+			oid = 4
+		default:
+			t.Fatalf("unexpected legacy TIMESTAMP input %s", tc.inputs[0].typ)
 		}
-		s, info := fcTC.RunAndFree()
-		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+		overload, err := GetFunctionById(proc.Ctx, EncodeOverloadID(TIMESTAMP, oid))
+		require.NoError(t, err)
+		exec, _, _, _ := overload.GetExecuteMethod()
+		fc := NewFunctionTestCase(proc, tc.inputs, tc.expect, exec)
+		ok, info := fc.RunAndFree()
+		require.True(t, ok, info)
 	}
 }
 

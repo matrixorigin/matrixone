@@ -97,7 +97,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
 	"github.com/matrixorigin/matrixone/pkg/sql/schedule"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/stage/stageutil"
@@ -156,6 +155,10 @@ func NewCompile(
 	c.startAt = startAt
 	c.disableRetry = false
 	c.retryTimes = 0
+	// Start every new compilation with the ordinary index-registration policy.
+	// The ALTER COPY private preparation opts out through its executor options;
+	// that opt-out must not survive into this object's next pool generation.
+	c.skipIndexTaskRegistration = false
 	c.ncpu = system.GoMaxProcs()
 	c.lockMeta = NewLockMeta()
 	// TODO: The action of updating the WriteOffset logic should be executed in the `func (c *Compile) Run(_ uint64)` method.
@@ -492,6 +495,7 @@ func (c *Compile) clear() {
 	for i := range c.fuzzys {
 		c.fuzzys[i].release()
 	}
+	c.clearDependentSourceMetadata()
 
 	c.MessageBoard = c.MessageBoard.Reset()
 	c.fuzzys = c.fuzzys[:0]
@@ -499,6 +503,7 @@ func (c *Compile) clear() {
 	c.auxiliaryProductScopes = nil
 	c.pn = nil
 	c.fill = nil
+	c.buildPlanFunc = nil
 	c.preparedParamValues = nil
 	c.preparedJoinDiagnosticFree = false
 	c.resultSink = nil
@@ -566,6 +571,7 @@ func (c *Compile) clear() {
 	c.keepAutoIncrement = 0
 	c.lastInsertIDBaseline = 0
 	c.disableLock = false
+	c.skipIndexTaskRegistration = false
 	c.prePipelineLockTableID = 0
 	c.icebergScanPlanner = nil
 
@@ -786,9 +792,6 @@ func (c *Compile) canRetry(err error) bool {
 	if c.disableRetry || c.proc.IncrStatementDisabled() {
 		return false
 	}
-	if moerr.IsMoErrCode(err, moerr.ErrVectorNeedRetryWithPreMode) {
-		return true
-	}
 	return c.isRetryErr(err)
 }
 
@@ -839,15 +842,19 @@ func (c *Compile) printPipeline() {
 // 1. lock table.
 // 2. init data source.
 func (c *Compile) prePipelineInitializer() (startedSources []*materialized.Source, err error) {
-	// do table lock.
-	if err = c.lockMeta.doLock(c.e, c.proc); err != nil {
-		return nil, err
+	if !c.disableLock {
+		// do table lock.
+		if err = c.lockMeta.doLock(c.e, c.proc); err != nil {
+			return nil, err
+		}
 	}
 	if err = c.unresolvedIndexHintError(); err != nil {
 		return nil, err
 	}
-	if err = c.lockTable(); err != nil {
-		return nil, err
+	if !c.disableLock {
+		if err = c.lockTable(); err != nil {
+			return nil, err
+		}
 	}
 	if err = c.maybePromoteLoadUniqueIndexes(); err != nil {
 		return nil, err
@@ -1375,6 +1382,9 @@ func (c *Compile) shouldPrePipelineLockTable(target *plan.LockTarget) bool {
 // }
 
 func (c *Compile) compileQuery(qry *plan.Query) ([]*Scope, error) {
+	if qry.Correlation != nil {
+		return c.compileDependentQuery(qry)
+	}
 	var err error
 	c.foundRowsOwnerNode = c.selectFoundRowsOwnerNode(qry)
 	c.auxiliaryProductScopes = nil
@@ -1390,6 +1400,9 @@ func (c *Compile) compileQuery(qry *plan.Query) ([]*Scope, error) {
 
 	c.execType = vectorQueryExecType(sequenceExecType(
 		plan2.GetExecType(c.pn.GetQuery(), c.getHaveDDL(), c.isPrepare), qry), qry)
+	if executor.RequiresLocalExecution(c.proc.Ctx) && c.execType == plan2.ExecTypeAP_MULTICN {
+		c.execType = plan2.ExecTypeAP_ONECN
+	}
 
 	c.cnList, err = c.scheduleQueryWorkers()
 	if err != nil {
@@ -1678,7 +1691,7 @@ func (c *Compile) materializeSQLSelectLimit(queryPlan *plan.Plan) (sqlSelectLimi
 	if limitExpr == nil || len(qry.Steps) == 0 {
 		return materialization, nil
 	}
-	finalStep := qry.Steps[len(qry.Steps)-1]
+	finalStep := qry.Steps[qry.MainOutputStep()]
 	if finalStep < 0 || int(finalStep) >= len(qry.Nodes) || qry.Nodes[finalStep] == nil {
 		// Leave malformed-plan reporting to the existing compile/export
 		// validation rather than panicking at this optional materialization.
@@ -1999,7 +2012,7 @@ func (c *Compile) compilePlanScopeWithUnionAllDemand(
 			ss, err = c.compileParallelUnionAllInput(step, childNodeID, nodes)
 		} else if isLocalPreAggregationGroup(node, childNode) &&
 			!c.hasUnsupportedRemoteGroupWire(node) {
-			ss, err = c.compileLocalPreAggregationScope(step, childNodeID, nodes)
+			ss, err = c.compileLocalPreAggregationScope(step, curNodeIdx, nodes)
 		} else {
 			ss, err = c.compilePlanScope(step, childNodeID, nodes)
 		}
@@ -2012,6 +2025,22 @@ func (c *Compile) compilePlanScopeWithUnionAllDemand(
 
 		c.setAnalyzeCurrent(ss, int(curNodeIdx))
 		ss = c.ensureCoordinatorOnlyFunctions(node, ss)
+		if plan2.IsSortRollupOption(node.ExtraOptions) {
+			// The child SORT performs the global k-way merge when the input is
+			// distributed, so the ordered rollup aggregate must run once on the
+			// resulting coordinator scope. A second aggregate stage would destroy
+			// the prefix-boundary invariant.
+			if len(ss) != 1 || ss[0].HasPartialResults {
+				return nil, moerr.NewInternalErrorNoCtx(
+					"sort rollup requires one non-partial ordered input scope")
+			}
+			if !c.scopesRunOnCoordinator(ss) {
+				ss = []*Scope{c.newMergeScope(ss)}
+			}
+			ss = c.compileTPGroup(node, ss, nodes)
+			ss = c.compileSort(node, c.compileProjection(node, c.compileRestrict(node, ss)))
+			return ss, nil
+		}
 		if c.canCompileShuffleGroup(node) {
 			ss = c.compileSort(node, c.compileProjection(node, c.compileRestrict(node, c.compileShuffleGroup(node, ss, nodes))))
 			return ss, nil
@@ -2195,8 +2224,8 @@ func (c *Compile) compilePlanScopeWithUnionAllDemand(
 		return ss, nil
 	case plan.Node_DELETE:
 		// Check if target table is a CCPR shared table (from publication)
-		if node.DeleteCtx != nil && c.shouldBlockCCPRReadOnly(node.DeleteCtx.TableDef) {
-			return nil, moerr.NewCCPRReadOnly(c.proc.Ctx)
+		if err := c.validateDMLTarget(node); err != nil {
+			return nil, err
 		}
 		if node.DeleteCtx.CanTruncate {
 			s := newScope(TruncateTable)
@@ -2264,8 +2293,8 @@ func (c *Compile) compilePlanScopeWithUnionAllDemand(
 		return c.compilePreInsert(nodes, node, ss)
 	case plan.Node_INSERT:
 		// Check if target table is a CCPR shared table (from publication)
-		if node.InsertCtx != nil && c.shouldBlockCCPRReadOnly(node.InsertCtx.TableDef) {
-			return nil, moerr.NewCCPRReadOnly(c.proc.Ctx)
+		if err := c.validateDMLTarget(node); err != nil {
+			return nil, err
 		}
 		c.appendMetaTables(node.ObjRef)
 		ss, err = c.compilePlanScope(step, node.Children[0], nodes)
@@ -2278,10 +2307,10 @@ func (c *Compile) compilePlanScopeWithUnionAllDemand(
 		return c.compileInsert(nodes, node, ss)
 	case plan.Node_MULTI_UPDATE:
 		// Check if any target table is a CCPR shared table (from publication)
+		if err := c.validateDMLTarget(node); err != nil {
+			return nil, err
+		}
 		for _, updateCtx := range node.UpdateCtxList {
-			if c.shouldBlockCCPRReadOnly(updateCtx.TableDef) {
-				return nil, moerr.NewCCPRReadOnly(c.proc.Ctx)
-			}
 			c.appendMetaTables(updateCtx.ObjRef)
 		}
 		ss, err = c.compilePlanScope(step, node.Children[0], nodes)
@@ -2381,7 +2410,7 @@ func (c *Compile) firstStepToCompile(qry *plan.Query) int {
 	if qry == nil || len(qry.Steps) == 0 {
 		return 0
 	}
-	finalStep := qry.Steps[len(qry.Steps)-1]
+	finalStep := qry.Steps[qry.MainOutputStep()]
 	if finalStep >= 0 && int(finalStep) < len(qry.Nodes) && c.canUseLiteralLimitZeroFastPath(qry.Nodes[finalStep]) {
 		return len(qry.Steps) - 1
 	}
@@ -2420,7 +2449,7 @@ func (c *Compile) selectFoundRowsOwnerNode(qry *plan.Query) *plan.Node {
 		return nil
 	}
 
-	rootID := qry.Steps[len(qry.Steps)-1]
+	rootID := qry.Steps[qry.MainOutputStep()]
 	if rootID < 0 || int(rootID) >= len(qry.Nodes) {
 		return nil
 	}
@@ -2926,6 +2955,12 @@ func (c *Compile) compileExternScanWithPlanNodeIDAndIsolation(
 	planNodeID int32,
 	isolateMongoPlan bool,
 ) ([]*Scope, error) {
+	return c.compileExternScanSource(node, planNodeID, isolateMongoPlan, false)
+}
+
+// serialSource freezes one coordinator source without dispatch/merge workers.
+// Readers are still created by the ordinary External/MongoScan operators.
+func (c *Compile) compileExternScanSource(node *plan.Node, planNodeID int32, isolateMongoPlan, serialSource bool) ([]*Scope, error) {
 	if c.isPrepare {
 		return nil, cantCompileForPrepareErr
 	}
@@ -3037,16 +3072,21 @@ func (c *Compile) compileExternScanWithPlanNodeIDAndIsolation(
 		if err != nil {
 			return nil, err
 		}
-		if len(fileList) == 1 && len(arrowRuntime.shardsByPath[fileList[0]]) > 1 {
+		if !serialSource && len(fileList) == 1 && len(arrowRuntime.shardsByPath[fileList[0]]) > 1 {
 			return c.compileExternScanArrowRecordBatchFanout(
 				node, param, fileList[0], fileSize[0], strictSqlMode, arrowRuntime,
 			)
 		}
-		if param.Parallel && len(fileList) > 1 {
+		if !serialSource && param.Parallel && len(fileList) > 1 {
 			return c.compileExternScanWholeFileFanout(
 				node, param, fileList, fileSize, strictSqlMode, false, arrowRuntime,
 			)
 		}
+	}
+
+	if serialSource {
+		param.Parallel = false
+		return c.compileExternScanSerialReadWrite(node, param, fileList, fileSize, strictSqlMode, arrowRuntime)
 	}
 
 	if param.HivePartitioning {
@@ -5483,13 +5523,17 @@ func (c *Compile) compileIndexSearchScan(node *plan.Node) ([]*Scope, error) {
 				CNIDX: int32(i),
 			}
 		}
-		supported, err := remoteWorkersSupportProtocol(c.proc, nodes, vectorscan.IndexSearchScanProtocolVersion)
+		requiredVersion, err := c.indexSearchScanProtocolVersion(node.IndexSearchScan)
+		if err != nil {
+			return nil, err
+		}
+		supported, err := remoteWorkersSupportProtocol(c.proc, nodes, requiredVersion)
 		if err != nil {
 			return nil, err
 		}
 		if !supported {
 			return nil, moerr.NewNotSupportedNoCtxf(
-				"index search scan requires MORPC protocol version %d on every CN", vectorscan.IndexSearchScanProtocolVersion)
+				"index search scan requires MORPC protocol version %d on every CN", requiredVersion)
 		}
 		// Keep the query's coordinator-first list intact for other scans.
 		// Object owners depend only on the selected identities, not ingress.
@@ -6466,6 +6510,7 @@ func canPreserveParallelUnionAllBranches(node *plan.Node) bool {
 
 func (c *Compile) canCompileParallelUnionAllAggregate(node *plan.Node) bool {
 	return !hasOrderedGroupConcat(node) && !hasOrderedSetPercentile(node) &&
+		!hasQuantileExactWeighted(node) &&
 		!c.hasUnsupportedRemoteGroupWire(node) &&
 		!plan2.RequiresSingleStageDistinctAgg(node)
 }
@@ -6587,7 +6632,7 @@ func (c *Compile) lazyUnionAllBranches(scopes []*Scope) []*Scope {
 func shouldBuildLeftForAsof(node, left, right *plan.Node) bool {
 	if node == nil || left == nil || right == nil ||
 		(node.JoinType != plan.Node_ASOF && node.JoinType != plan.Node_ASOF_LEFT) ||
-		left.Stats == nil {
+		left.Stats == nil || isMixedJSONNumericAsof(node) {
 		return false
 	}
 	leftRows := left.Stats.Outcnt
@@ -6645,6 +6690,25 @@ func scopesContainOperator(scopes []*Scope, target vm.OpType) bool {
 }
 
 func (c *Compile) compileJoin(node, left, right *plan.Node, probeScopes, buildScopes []*Scope) []*Scope {
+	if isMixedJSONNumericAsof(node) {
+		// Gather complete inputs on one coordinator worker before selecting
+		// eligible predecessors. This also handles a single remote scope.
+		node.RuntimeFilterBuildList = nil
+		if node.Stats != nil && node.Stats.HashmapStats != nil {
+			node.Stats.HashmapStats.Shuffle = false
+			node.Stats.HashmapStats.ShuffleColIdx = -1
+		}
+		probeScopes = c.mergeShuffleScopesIfNeeded(probeScopes, false)
+		buildScopes = c.mergeShuffleScopesIfNeeded(buildScopes, false)
+		if !c.scopesRunOnCoordinator(probeScopes) {
+			probeScopes = []*Scope{c.newMergeScope(probeScopes)}
+		}
+		if !c.scopesRunOnCoordinator(buildScopes) {
+			buildScopes = []*Scope{c.newMergeScope(buildScopes)}
+		}
+		rs := c.compileProbeSideForBroadcastJoin(node, left, right, probeScopes)
+		return c.compileBuildSideForBroadcastJoin(node, rs, buildScopes)
+	}
 	if containsStatementInvariantDiagnosticInList(c.proc, node.OnList) ||
 		c.joinNeedsLocalWindow(node, probeScopes, buildScopes) {
 		// Keep WINDOW local: it has no remote encoding. The same local
@@ -7048,6 +7112,9 @@ func canUseShuffleHashMarkJoinWithInputs(node, left, right *plan.Node) bool {
 }
 
 func (c *Compile) broadcastJoinUsesHash(node *plan.Node) bool {
+	if isMixedJSONNumericAsof(node) {
+		return true
+	}
 	isEq := plan2.IsEquiJoin2(node.OnList)
 	if isEq && (node.JoinType == plan.Node_INNER || node.JoinType == plan.Node_LEFT ||
 		node.JoinType == plan.Node_RIGHT || node.JoinType == plan.Node_SEMI ||
@@ -7505,7 +7572,8 @@ func hasMultiScopeGroup(groups [][]*Scope) bool {
 
 func (c *Compile) compileApply(node, right *plan.Node, rs []*Scope) []*Scope {
 	name := right.GetTableDef().GetTblFunc().GetName()
-	if name == "mo_view_columns" || name == "json_table" || planplugin.TableFuncRequiresCoordinator(name) {
+	derivedSubscription := name == "mo_subscription_view_columns" && len(right.TblFuncExprList) == 3
+	if name == "mo_view_columns" || derivedSubscription || name == "json_table" || planplugin.TableFuncRequiresCoordinator(name) {
 		// Session-bound functions and index writers must use the origin process:
 		// a remote mirror workspace cannot publish writes in its transaction.
 		// Gather inputs here without changing the source scans' placement.
@@ -7640,7 +7708,10 @@ func (c *Compile) compileSort(node *plan.Node, ss []*Scope) []*Scope {
 		return c.compileOrder(node, ss)
 
 	case node.Limit != nil && node.Offset != nil && len(node.OrderBy) > 0:
-		if rule.IsConstant(node.Limit, false) && rule.IsConstant(node.Offset, false) {
+		if topN, ok := c.preparedPaginationTop(node); ok {
+			return c.compileOffset(node, c.compileTop(node, plan2.MakePlan2Uint64ConstExprWithType(topN), ss))
+		}
+		if function.IsConstant(node.Limit, false) && function.IsConstant(node.Offset, false) {
 			// get limit
 			vec1, free1, err := colexec.GetReadonlyResultFromNoColumnExpression(c.proc, node.Limit)
 			if err != nil {
@@ -8155,6 +8226,7 @@ func (c *Compile) compileGroupWithoutShuffle(
 	distinctRequiresSingleStage bool,
 ) []*Scope {
 	if hasOrderedGroupConcat(node) || hasOrderedSetPercentile(node) ||
+		hasQuantileExactWeighted(node) ||
 		c.hasUnsupportedRemoteGroupWire(node) {
 		return c.compileOrderedAggregateSingleStage(node, ss, ns)
 	}
@@ -8172,14 +8244,18 @@ func (c *Compile) hasUnsupportedRemoteGroupWire(node *plan.Node) bool {
 		(hasVariableLengthGroupKey(node) && !c.supportsRemoteGroupHashString()) ||
 		(hasCanonicalDistinctKeyWire(node) && !c.supportsRemoteCanonicalDistinctKeyWire()) ||
 		(hasLegacyFloatDistinctKeyWire(node) && !c.supportsRemoteCanonicalDistinctKeyWire()) ||
-		(hasVarianceAggregate(node) && !c.supportsRemoteVarianceAggregates())
+		(hasVarianceAggregate(node) && !c.supportsRemoteVarianceAggregates()) ||
+		(hasQuantileExactWeighted(node) && !c.supportsQuantileExactWeightedDispatch())
 }
 
+// Local reduction may replace a complete child only when the parent establishes
+// its own distribution. A reuse consumer must preserve the complete child.
 func isLocalPreAggregationGroup(parent, child *plan.Node) bool {
 	if parent == nil || child == nil ||
 		parent.NodeType != plan.Node_AGG || child.NodeType != plan.Node_AGG ||
 		parent.Stats == nil || parent.Stats.HashmapStats == nil ||
 		!parent.Stats.HashmapStats.Shuffle ||
+		parent.Stats.HashmapStats.ShuffleMethod != plan.ShuffleMethod_Normal ||
 		len(parent.AggList) != 0 || len(child.AggList) != 0 ||
 		len(parent.GroupBy) == 0 || len(parent.GroupBy) != len(child.GroupBy) ||
 		len(parent.GroupingFlag) != 0 || len(child.GroupingFlag) != 0 ||
@@ -8229,19 +8305,16 @@ func (c *Compile) compileLocalPreAggregationScope(
 	nodeID int32,
 	nodes []*plan.Node,
 ) ([]*Scope, error) {
+	parent := nodes[nodeID]
+	nodeID = parent.Children[0]
 	node := nodes[nodeID]
 	ss, err := c.compilePlanScope(step, node.Children[0], nodes)
 	if err != nil {
 		return nil, err
 	}
-	groupInfo := constructGroup(c.proc.Ctx, node, nodes[node.Children[0]], false, 0, c.proc)
-	defer groupInfo.Release()
-
 	c.setAnalyzeCurrent(ss, int(nodeID))
 	ss = c.ensureCoordinatorOnlyFunctions(node, ss)
-	ss = c.compileLocalGroupBy(node, ss, nodes)
-	ss = c.compileSort(node, c.compileProjection(node, c.compileRestrict(node, ss)))
-	return ss, nil
+	return c.compileLocalGroupBy(node, parent, ss, nodes), nil
 }
 
 // compileLocalGroupBy performs only the duplicate-reduction half of a logical
@@ -8249,10 +8322,17 @@ func (c *Compile) compileLocalPreAggregationScope(
 // completes the same key after exchange, so merging here would defeat the
 // pre-exchange reduction without adding correctness.
 func (c *Compile) compileLocalGroupBy(
-	node *plan.Node,
+	node, parent *plan.Node,
 	ss []*Scope,
 	ns []*plan.Node,
 ) []*Scope {
+	if c.canOmitLocalPreAggregation(parent, node, ns[node.Children[0]], ss) {
+		// The parent still completes the same key after shuffle. Preserve the
+		// local Group's output schema even when its hash table is unnecessary.
+		return c.compileProjection(&plan.Node{
+			ProjectList: plan2.DeepCopyExprList(node.GroupBy),
+		}, ss)
+	}
 	currentFirstFlag := c.anal.isFirst
 	for i := range ss {
 		op := constructGroup(c.proc.Ctx, node, ns[node.Children[0]], false, 0, c.proc)
@@ -8261,7 +8341,82 @@ func (c *Compile) compileLocalGroupBy(
 		ss[i].HasPartialResults = false
 	}
 	c.anal.isFirst = false
-	return ss
+	return c.compileSort(node, c.compileProjection(node, c.compileRestrict(node, ss)))
+}
+
+// canOmitLocalPreAggregation chooses only between two physical implementations
+// of the existing pure-key pair. Keep reduction before remote exchanges; within
+// one CN, large, weakly reducing local sets can duplicate the final Group's state.
+func (c *Compile) canOmitLocalPreAggregation(
+	parent, local, input *plan.Node,
+	ss []*Scope,
+) bool {
+	if !isLocalPreAggregationGroup(parent, local) ||
+		local.Stats == nil || local.Stats.HashmapStats == nil ||
+		len(local.GroupBy) != 1 || local.GroupBy[0].GetCol() == nil ||
+		local.Stats.HashmapStats.Shuffle ||
+		local.GroupBy[0].Typ.PadSpace || len(local.OrderBy) != 0 ||
+		!isIdentityGroupByProjection(parent) || len(parent.FilterList) != 0 ||
+		len(parent.RuntimeFilterProbeList) != 0 || len(parent.RuntimeFilterBuildList) != 0 ||
+		len(parent.OrderBy) != 0 || parent.Limit != nil || parent.Offset != nil ||
+		parent.ExtraOptions != "" || len(parent.PhysicalEqualityKeyList) != 0 ||
+		len(local.RuntimeFilterProbeList) != 0 || len(local.RuntimeFilterBuildList) != 0 ||
+		local.ExtraOptions != "" || len(local.PhysicalEqualityKeyList) != 0 ||
+		input.Stats == nil || len(ss) == 0 ||
+		parent.Stats.Dop <= 1 || !c.canCompileShuffleGroup(parent) ||
+		parent.Stats.HashmapStats.ShuffleColIdx != 0 {
+		return false
+	}
+	for _, key := range [][]int32{local.GroupByHashKey, parent.GroupByHashKey} {
+		if len(key) != 0 && (len(key) != 1 || key[0] != 0) {
+			return false
+		}
+	}
+	if _, expands := plan2.DecodeGroupingSetExpandOption(input.ExtraOptions); expands {
+		return false
+	}
+	key := local.GroupBy[0]
+	col := key.GetCol()
+	if col.RelPos != 0 || col.ColPos < 0 || int(col.ColPos) >= len(input.ProjectList) {
+		return false
+	}
+	switch types.T(key.Typ.Id) {
+	case types.T_int16, types.T_int32, types.T_int64,
+		types.T_uint16, types.T_uint32, types.T_uint64,
+		types.T_char, types.T_varchar, types.T_text:
+	default:
+		return false
+	}
+	inputType := input.ProjectList[col.ColPos].Typ
+	if !types.MustTypeFromPlan(key.Typ).Eq(types.MustTypeFromPlan(inputType)) ||
+		key.Typ.NotNullable != inputType.NotNullable ||
+		key.Typ.Charset != inputType.Charset || key.Typ.PadSpace != inputType.PadSpace {
+		return false
+	}
+	// These are single-CN cost guards, not a claim about worker-local reduction.
+	groups, rows := local.Stats.Outcnt, input.Stats.Outcnt
+	if math.IsNaN(groups) || math.IsInf(groups, 0) ||
+		math.IsNaN(rows) || math.IsInf(rows, 0) || rows <= 0 || groups > rows ||
+		groups < 2_000_000 || groups/rows < 0.25 {
+		return false
+	}
+	for _, s := range ss {
+		if s == nil || s.RootOp == nil {
+			return false
+		}
+	}
+	targets := c.shuffleStageNodes(ss)
+	if len(targets) != 1 || (targets[0].Id == "" && targets[0].Addr == "") {
+		return false
+	}
+	for _, s := range ss {
+		if s.HasPartialResults ||
+			(s.NodeInfo.Id == "" && s.NodeInfo.Addr == "") ||
+			!sameExecutionNode(s.NodeInfo, targets[0]) {
+			return false
+		}
+	}
+	return true
 }
 
 func (c *Compile) compileMergeGroup(
@@ -8355,6 +8510,21 @@ func hasOrderedSetPercentile(node *plan.Node) bool {
 			case plan2.NamePercentileCont, plan2.NamePercentileDisc:
 				return true
 			}
+		}
+	}
+	return false
+}
+
+// hasQuantileExactWeighted reports whether this aggregate node evaluates the
+// exact weighted percentile aggregate anywhere in its list.
+func hasQuantileExactWeighted(node *plan.Node) bool {
+	if node == nil {
+		return false
+	}
+	for _, agg := range node.AggList {
+		if fn := agg.GetF(); fn != nil &&
+			strings.EqualFold(fn.Func.ObjName, plan2.NameQuantileExactWeighted) {
+			return true
 		}
 	}
 	return false
@@ -8907,6 +9077,19 @@ func supportsRemoteStatementLastInsertID(service string) bool {
 	return ok && protocolVersion >= defines.MORPCVersion26
 }
 
+func supportsRemoteODKUResultTracking(service string) bool {
+	rt := moruntime.ServiceRuntime(service)
+	if rt == nil {
+		return false
+	}
+	version, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	if !ok {
+		return false
+	}
+	protocolVersion, ok := version.(int64)
+	return ok && protocolVersion >= defines.MORPCVersion134
+}
+
 func supportsRemoteAutoIncrementSessionOptions(service string) bool {
 	rt := moruntime.ServiceRuntime(service)
 	if rt == nil {
@@ -8944,6 +9127,19 @@ func supportsRemotePadSpaceSemantics(service string) bool {
 	}
 	protocolVersion, ok := version.(int64)
 	return ok && protocolVersion >= defines.MORPCVersion40
+}
+
+func supportsRemoteViewDefinitionFunction(service string) bool {
+	rt := moruntime.ServiceRuntime(service)
+	if rt == nil {
+		return false
+	}
+	version, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	if !ok {
+		return false
+	}
+	protocolVersion, ok := version.(int64)
+	return ok && protocolVersion >= defines.MORPCVersion126
 }
 
 func supportsRemoteParquetWholeFileFanout(service string) bool {
@@ -9003,6 +9199,7 @@ func (c *Compile) canCompileShuffleGroup(node *plan.Node) bool {
 		node.Stats.HashmapStats.Shuffle &&
 		(!hasOrderedGroupConcat(node) || c.supportsRemoteOrderedAggregates()) &&
 		(!hasOrderedSetPercentile(node) || c.supportsRemoteOrderedSetAggregates()) &&
+		(!hasQuantileExactWeighted(node) || c.supportsQuantileExactWeightedDispatch()) &&
 		(!hasApproxPercentile(node) || c.supportsRemoteApproxPercentile()) &&
 		(!hasHLLAggregate(node) || c.supportsRemoteHLL()) &&
 		(canonicalHLLAddRequiredVersion(node) <= c.remoteProtocolVersion()) &&
@@ -9010,7 +9207,38 @@ func (c *Compile) canCompileShuffleGroup(node *plan.Node) bool {
 		(!hasCanonicalDistinctKeyWire(node) || c.supportsRemoteCanonicalDistinctKeyWire()) &&
 		(!hasLegacyFloatDistinctKeyWire(node) || c.supportsRemoteCanonicalDistinctKeyWire()) &&
 		(!hasVarianceAggregate(node) || c.supportsRemoteVarianceAggregates()) &&
-		(!hasWidenedDecimalSum(node) || c.supportsRemoteWidenedDecimalSum())
+		(!hasWidenedDecimalSum(node) || c.supportsRemoteWidenedDecimalSum()) &&
+		(!hasJSONMinMaxAggregate(node) || c.remoteProtocolVersion() >=
+			requiredExpressionContractProtocolVersion(plan.RemoteExpressionFeatures{JSONMinMaxTypedComparison: true}))
+}
+
+// supportsQuantileExactWeightedDispatch is the compile-time fast-fail layer of
+// the design's D10 mixed-version gate: the exact weighted percentile aggregate
+// is distributed only when the coordinator AND every CN in the cluster
+// inventory advertise the protocol capability (an incomplete inventory counts
+// as unsupported). The destination is additionally verified by the
+// requiredProtocol floor raised during remote-scope encoding and confirmed on
+// the live stream before the pipeline is delivered.
+func (c *Compile) supportsQuantileExactWeightedDispatch() bool {
+	supported, err := AllCNsSupportProtocol(c.proc, defines.MORPCVersion131)
+	return err == nil && supported
+}
+
+// supportsRemoteQuantileExactWeighted supplies only the coordinator-side
+// self-gate and its coherent not-supported message; destination capability is
+// verified by AllCNsSupportProtocol, the encoded requiredProtocol floor and
+// the send-time stream confirmation.
+func supportsRemoteQuantileExactWeighted(service string) bool {
+	rt := moruntime.ServiceRuntime(service)
+	if rt == nil {
+		return false
+	}
+	version, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	if !ok {
+		return false
+	}
+	protocolVersion, ok := version.(int64)
+	return ok && protocolVersion >= defines.MORPCVersion131
 }
 
 func (c *Compile) compileLocalShuffleGroup(node *plan.Node, inputSS []*Scope, nodes []*plan.Node) []*Scope {
@@ -9127,6 +9355,14 @@ func (c *Compile) appendPrescopes(parents, children []*Scope, stageNodes engine.
 
 // compilePreInsert Compile PreInsert Node and set it as the root operator for each Scope.
 func (c *Compile) compilePreInsert(nodes []*plan.Node, node *plan.Node, ss []*Scope) ([]*Scope, error) {
+	// Assign row provenance at one input-stream boundary, before parallel
+	// deduplication. VALUES keeps its row-list order; ORDER BY has already
+	// produced a globally ordered stream. Unordered SELECT has no SQL-defined
+	// order. Merge streams batches with existing backpressure, not a row cache.
+	if node.PreInsertCtx != nil && node.PreInsertCtx.TrackOdkuResult && !c.scopesRunOnCoordinator(ss) {
+		ss = []*Scope{c.newMergeScope(ss)}
+		ss[0].NodeInfo.Mcpu = 1
+	}
 	currentFirstFlag := c.anal.isFirst
 	for i := range ss {
 		preInsertArg, err := constructPreInsert(c.anal.qry.Nodes, node, c.e, c.proc)
@@ -9516,7 +9752,20 @@ func (c *Compile) compileDelete(node *plan.Node, ss []*Scope) ([]*Scope, error) 
 }
 
 func (c *Compile) compileLock(node *plan.Node, ss []*Scope) ([]*Scope, error) {
+	// Build the physical lock pipeline before any Scope.Run, RemoteRun, or
+	// MergeRun can start a source. Waiting until LockOp.Prepare is too late for
+	// coordinator plans: MergeRun may start PreScopes before preparing its root
+	// operator. Keep the runtime guard as defense against malformed remote plans.
+	if err := c.validateNonBlockingLockTargets(node.LockTargets); err != nil {
+		return nil, err
+	}
+
+	if c.disableLock {
+		return ss, nil
+	}
+
 	lockRows := make([]*plan.LockTarget, 0, len(node.LockTargets))
+	coordinatorLock := false
 	localizeLockPlan := c.loadUniqueIndexPromotion != nil || c.prePipelineLockTableID != 0
 	promotedNewTable := false
 	filterPromotedRows := false
@@ -9528,6 +9777,12 @@ func (c *Compile) compileLock(node *plan.Node, ss []*Scope) ([]*Scope, error) {
 		filterPromotedRows = true
 	}
 	for _, canonicalTarget := range node.LockTargets {
+		if canonicalTarget == nil {
+			continue
+		}
+		if canonicalTarget.GetNoWait() || canonicalTarget.GetSkipLocked() {
+			coordinatorLock = true
+		}
 		if filterPromotedRows && c.loadUniqueIndexPromotion.coversRowTarget(canonicalTarget) {
 			continue
 		}
@@ -9585,10 +9840,8 @@ func (c *Compile) compileLock(node *plan.Node, ss []*Scope) ([]*Scope, error) {
 
 	currentFirstFlag := c.anal.isFirst
 	// The lock operator below is attached to ss[0] alone, so every input
-	// pipeline must be merged into it first or the others' rows reach the
-	// writer unlocked -- a multi-file LOAD fanout hands a TP-classified plan one
-	// scope per file shard, the same case compileMultiUpdate merges on.
-	if !c.IsTpQuery() || len(ss) > 1 || len(c.pn.GetQuery().Steps) > 1 { // todo: don't support dml with multi steps for now
+	// pipeline must be merged into it first or the others' rows reach it unlocked.
+	if coordinatorLock || !c.IsTpQuery() || len(ss) > 1 || len(c.pn.GetQuery().Steps) > 1 {
 		rs := c.newMergeScope(ss)
 		ss = []*Scope{rs}
 	}
@@ -9608,6 +9861,47 @@ func (c *Compile) compileLock(node *plan.Node, ss []*Scope) ([]*Scope, error) {
 	ss[0].doSetRootOperator(lockOpArg)
 	c.anal.isFirst = false
 	return ss, nil
+}
+
+// Dependent query kernels construct LockOps without compileLock. Enforce the
+// same admission contract before either physical compiler can publish sources.
+func (c *Compile) validateNonBlockingLockTargets(targets []*plan.LockTarget) error {
+	for _, target := range targets {
+		if target == nil || (!target.GetNoWait() && !target.GetSkipLocked()) {
+			continue
+		}
+		if c.proc == nil {
+			return moerr.NewNotSupportedNoCtx(
+				"NOWAIT and SKIP LOCKED require a pessimistic transaction")
+		}
+		txnOp := c.proc.GetTxnOperator()
+		if txnOp == nil || !txnOp.Txn().IsPessimistic() {
+			return moerr.NewNotSupportedNoCtx(
+				"NOWAIT and SKIP LOCKED require a pessimistic transaction")
+		}
+		if c.disableLock {
+			return moerr.NewNotSupportedNoCtx("NOWAIT and SKIP LOCKED require physical lock admission")
+		}
+		if target.GetLockTable() || target.GetLockTableAtTheEnd() {
+			return moerr.NewNotSupportedNoCtx("NOWAIT and SKIP LOCKED require exact row lock targets")
+		}
+	}
+	return nil
+}
+
+func (c *Compile) validateNonBlockingLockPlan(logicalPlan *plan.Plan) error {
+	if logicalPlan == nil || logicalPlan.GetQuery() == nil {
+		return nil
+	}
+	for _, node := range logicalPlan.GetQuery().GetNodes() {
+		if node == nil {
+			continue
+		}
+		if err := c.validateNonBlockingLockTargets(node.GetLockTargets()); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (c *Compile) canPrePipelineLockNewTable(target *plan.LockTarget) bool {
@@ -11143,6 +11437,8 @@ func (c *Compile) runSqlWithResultAndOptions(
 
 	lower := c.getLower()
 
+	options = c.internalStatementOption(options)
+
 	if c.pn != nil {
 		if qry, ok := c.pn.Plan.(*plan.Plan_Ddl); ok {
 			if qry.Ddl.DdlType == plan.DataDefinition_DROP_DATABASE {
@@ -11204,6 +11500,13 @@ func (c *Compile) runSqlWithResultAndOptions(
 	}
 	ctx = process.ContextWithWarningSink(ctx, c.proc.WarningSink)
 	return exec.Exec(ctx, sql, opts)
+}
+
+func (c *Compile) internalStatementOption(options executor.StatementOption) executor.StatementOption {
+	if c.disableLock {
+		return options.WithDisableLock()
+	}
+	return options
 }
 
 func (c *Compile) fatalLog(retry int, err error) {
@@ -11408,6 +11711,30 @@ func isTableFromPublication(tableDef *plan.TableDef) bool {
 		}
 	}
 	return false
+}
+
+// validateDMLTarget is shared by ordinary scopes and dependent programs. The
+// target's publication policy must be checked before either path opens readers
+// or constructs write operators.
+func (c *Compile) validateDMLTarget(node *plan.Node) error {
+	blocked := false
+	switch node.NodeType {
+	case plan.Node_DELETE:
+		blocked = node.DeleteCtx != nil && c.shouldBlockCCPRReadOnly(node.DeleteCtx.TableDef)
+	case plan.Node_INSERT:
+		blocked = node.InsertCtx != nil && c.shouldBlockCCPRReadOnly(node.InsertCtx.TableDef)
+	case plan.Node_MULTI_UPDATE:
+		for _, update := range node.UpdateCtxList {
+			if c.shouldBlockCCPRReadOnly(update.TableDef) {
+				blocked = true
+				break
+			}
+		}
+	}
+	if blocked {
+		return moerr.NewCCPRReadOnly(c.proc.Ctx)
+	}
+	return nil
 }
 
 // shouldBlockCCPRReadOnly checks if the CCPR read-only check should block the operation.

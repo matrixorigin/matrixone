@@ -15,7 +15,7 @@
 package types
 
 import (
-	"strconv"
+	"context"
 	"strings"
 	"sync"
 
@@ -61,24 +61,28 @@ func SetValidBitmap(definition string) (uint64, error) {
 }
 
 func NormalizeSetValues(values []string) ([]string, error) {
+	return normalizeSetValuesWithContext(defaultParseContext, values)
+}
+
+func normalizeSetValuesWithContext(ctx context.Context, values []string) ([]string, error) {
 	if len(values) == 0 {
-		return nil, moerr.NewInvalidInputNoCtx("set type length err")
+		return nil, moerr.NewInvalidInput(parseErrorContext(ctx), "set type length err")
 	}
 	if len(values) > MaxSetMembers {
-		return nil, moerr.NewInvalidInputNoCtxf("set type out of max length %d", MaxSetMembers)
+		return nil, moerr.NewInvalidInputf(parseErrorContext(ctx), "set type out of max length %d", MaxSetMembers)
 	}
 
 	normalized := make(map[string]struct{}, len(values))
 	result := make([]string, 0, len(values))
 	for _, value := range values {
 		if strings.Contains(value, ",") {
-			return nil, moerr.NewInvalidInputNoCtxf("set member %q contains ','", value)
+			return nil, moerr.NewInvalidInputf(parseErrorContext(ctx), "set member %q contains ','", value)
 		}
 
 		trimmed := strings.TrimRight(value, " ")
 		key := strings.ToLower(trimmed)
 		if _, ok := normalized[key]; ok {
-			return nil, moerr.NewInvalidInputNoCtxf("duplicate set member %q", value)
+			return nil, moerr.NewInvalidInputf(parseErrorContext(ctx), "duplicate set member %q", value)
 		}
 
 		normalized[key] = struct{}{}
@@ -88,29 +92,66 @@ func NormalizeSetValues(values []string) ([]string, error) {
 }
 
 func ParseSet(setStr string, name string) (uint64, error) {
-	descriptor, err := getSetDescriptor(setStr)
+	return ParseSetWithContext(defaultParseContext, setStr, name)
+}
+
+// ParseSetWithContext parses with the caller's error reporting context.
+func ParseSetWithContext(ctx context.Context, setStr string, name string) (uint64, error) {
+	bits, truncated, err := parseSetAssignmentWithContext(ctx, setStr, name)
 	if err != nil {
 		return 0, err
+	}
+	if truncated {
+		return 0, moerr.NewInternalErrorf(parseErrorContext(ctx), "convert to MySQL set failed: item %s is not in set [%s]", name, setStr)
+	}
+	return bits, nil
+}
+
+// ParseSetAssignment retains valid list members and reports value truncation
+// separately from invalid metadata. SQL-mode policy belongs to its caller.
+func ParseSetAssignment(setStr, name string) (uint64, bool, error) {
+	return parseSetAssignmentWithContext(defaultParseContext, setStr, name)
+}
+
+func parseSetAssignmentWithContext(ctx context.Context, setStr, name string) (uint64, bool, error) {
+	descriptor, err := getSetDescriptorWithContext(ctx, setStr)
+	if err != nil {
+		return 0, false, err
 	}
 
 	setBits, matched := descriptor.parseName(name)
 	if matched {
-		return setBits, nil
+		return setBits, false, nil
 	}
-
-	number, err := strconv.ParseUint(name, 0, 64)
-	if err == nil {
-		return descriptor.parseValue(number)
+	if setBits == 0 {
+		// Numeric fallback sees the original bytes, not the end-space-trimmed
+		// name view. Invalid numeric strings lose all bits, unlike typed input.
+		if len(name) > 0 && len(name) < 22 {
+			number, ok := parseEnumSetDecimal(name)
+			if ok && number&^descriptor.validBitmap == 0 {
+				return number, false, nil
+			}
+			return 0, true, nil
+		}
+		// With no name tokens and no numeric fallback (22+ spaces), MySQL
+		// stores zero silently. Shorter all-space strings fail the fallback.
+		if strings.TrimRight(name, " ") == "" {
+			return 0, false, nil
+		}
 	}
-
-	return 0, moerr.NewInternalErrorNoCtxf("convert to MySQL set failed: item %s is not in set [%s]", name, strings.Join(descriptor.values, ","))
+	return setBits, true, nil
 }
 
 // MatchSetName reports whether name is a list of member names of the SET
 // definition, exactly as ParseSet matches names, without building an error.
 // Numeric bitmap input is not considered.
 func MatchSetName(setStr string, name string) bool {
-	descriptor, err := getSetDescriptor(setStr)
+	return MatchSetNameWithContext(defaultParseContext, setStr, name)
+}
+
+// MatchSetNameWithContext parses with the caller's error reporting context.
+func MatchSetNameWithContext(ctx context.Context, setStr string, name string) bool {
+	descriptor, err := getSetDescriptorWithContext(ctx, setStr)
 	if err != nil {
 		return false
 	}
@@ -142,11 +183,15 @@ type setDescriptor struct {
 }
 
 func getSetDescriptor(setStr string) (*setDescriptor, error) {
+	return getSetDescriptorWithContext(defaultParseContext, setStr)
+}
+
+func getSetDescriptorWithContext(ctx context.Context, setStr string) (*setDescriptor, error) {
 	if descriptor, ok := setDescriptorCache.Load(setStr); ok {
 		return descriptor.(*setDescriptor), nil
 	}
 
-	descriptor, err := buildSetDescriptor(setStr)
+	descriptor, err := buildSetDescriptorWithContext(ctx, setStr)
 	if err != nil {
 		return nil, err
 	}
@@ -155,12 +200,12 @@ func getSetDescriptor(setStr string) (*setDescriptor, error) {
 	return actual.(*setDescriptor), nil
 }
 
-func buildSetDescriptor(setStr string) (*setDescriptor, error) {
+func buildSetDescriptorWithContext(ctx context.Context, setStr string) (*setDescriptor, error) {
 	if len(setStr) == 0 {
-		return nil, moerr.NewInternalErrorNoCtxf("convert to MySQL set failed: set define is empty %v", setStr)
+		return nil, moerr.NewInternalErrorf(parseErrorContext(ctx), "convert to MySQL set failed: set define is empty %v", setStr)
 	}
 
-	values, err := NormalizeSetValues(DecodeSetValues(setStr))
+	values, err := normalizeSetValuesWithContext(ctx, DecodeSetValues(setStr))
 	if err != nil {
 		return nil, err
 	}
@@ -187,20 +232,26 @@ func (d *setDescriptor) parseName(name string) (uint64, bool) {
 	if len(name) == 0 {
 		return 0, true
 	}
+	name = strings.TrimRight(name, " ")
+	if len(name) == 0 {
+		return 0, false
+	}
 
 	// Walk the comma-separated items in place (same items as strings.Split)
 	// so a member-name lookup does not allocate.
 	setBits := uint64(0)
+	matched := true
 	for {
 		item, rest, more := strings.Cut(name, ",")
-		normalized := strings.ToLower(strings.TrimRight(item, " "))
+		normalized := strings.ToLower(item)
 		origin, ok := d.normalizedToOrigin[normalized]
 		if !ok {
-			return 0, false
+			matched = false
+		} else {
+			setBits |= d.valueToBit[origin]
 		}
-		setBits |= d.valueToBit[origin]
 		if !more {
-			return setBits, true
+			return setBits, matched
 		}
 		name = rest
 	}

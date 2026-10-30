@@ -25,7 +25,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
 )
 
 func (builder *QueryBuilder) countColRefs(nodeID int32, colRefCnt map[[2]int32]int) {
@@ -33,6 +32,12 @@ func (builder *QueryBuilder) countColRefs(nodeID int32, colRefCnt map[[2]int32]i
 
 	increaseRefCntForExprList(node.ProjectList, 1, colRefCnt)
 	increaseRefCntForExprList(node.OnList, 1, colRefCnt)
+	increaseRefCntForExprList(node.DedupKeyExprs, 1, colRefCnt)
+	if node.PreInsertUkCtx != nil {
+		for _, exprs := range node.PreInsertUkCtx.KeyDiagnosticExprs {
+			increaseRefCntForExprList(exprs.GetList(), 1, colRefCnt)
+		}
+	}
 	increaseRefCntForExprList(node.FilterList, 1, colRefCnt)
 	increaseRefCntForExprList(node.GroupBy, 1, colRefCnt)
 	increaseRefCntForExprList(node.PhysicalEqualityKeyList, 1, colRefCnt)
@@ -221,6 +226,9 @@ func increaseRefCntForColRefList(cols []plan.ColRef, inc int, colRefCnt map[[2]i
 
 // FIXME: We should remove PROJECT node for more cases, but keep them now to avoid intricate issues.
 func (builder *QueryBuilder) canRemoveProject(parentType plan.Node_NodeType, node *plan.Node) bool {
+	if builder.isFullTextBooleanScoreProject(node) {
+		return false
+	}
 	if _, protected := builder.existentialGateProjects[node.NodeId]; protected {
 		// Inlining its TRUE slot would turn an ANTI hash key back into a
 		// residual and enumerate every duplicate-key match.
@@ -338,6 +346,12 @@ func exprCanRemoveProject(expr *Expr) bool {
 func replaceColumnsForNode(node *plan.Node, projMap map[[2]int32]*plan.Expr) {
 	replaceColumnsForExprList(node.ProjectList, projMap)
 	replaceColumnsForExprList(node.OnList, projMap)
+	replaceColumnsForExprList(node.DedupKeyExprs, projMap)
+	if node.PreInsertUkCtx != nil {
+		for _, exprs := range node.PreInsertUkCtx.KeyDiagnosticExprs {
+			replaceColumnsForExprList(exprs.GetList(), projMap)
+		}
+	}
 	replaceColumnsForExprList(node.FilterList, projMap)
 	replaceColumnsForExprList(node.GroupBy, projMap)
 	replaceColumnsForExprList(node.PhysicalEqualityKeyList, projMap)
@@ -658,7 +672,7 @@ func (builder *QueryBuilder) removeRedundantJoinCond(nodeID int32, colMap map[[2
 	newOnList := make([]*plan.Expr, 0)
 	for _, expr := range node.OnList {
 		if exprf := expr.GetF(); exprf != nil {
-			if IsEqualFunc(exprf.Func.GetObj()) {
+			if IsEqualFunc(exprf.Func.GetObj()) && !isJSONNumericComparisonArgs(exprf.Args) {
 				leftcol := exprf.Args[0].GetCol()
 				rightcol := exprf.Args[1].GetCol()
 				if leftcol != nil && rightcol != nil {
@@ -711,6 +725,12 @@ func (builder *QueryBuilder) removeEffectlessLeftJoins(nodeID int32, tagCnt map[
 
 	increaseTagCntForExprList(node.ProjectList, 1, tagCnt)
 	increaseTagCntForExprList(node.OnList, 1, tagCnt)
+	increaseTagCntForExprList(node.DedupKeyExprs, 1, tagCnt)
+	if node.PreInsertUkCtx != nil {
+		for _, exprs := range node.PreInsertUkCtx.KeyDiagnosticExprs {
+			increaseTagCntForExprList(exprs.GetList(), 1, tagCnt)
+		}
+	}
 	increaseTagCntForExprList(node.FilterList, 1, tagCnt)
 	increaseTagCntForExprList(node.GroupBy, 1, tagCnt)
 	increaseTagCntForExprList(node.AggList, 1, tagCnt)
@@ -773,6 +793,12 @@ func (builder *QueryBuilder) removeEffectlessLeftJoins(nodeID int32, tagCnt map[
 
 END:
 	increaseTagCntForExprList(node.ProjectList, -1, tagCnt)
+	increaseTagCntForExprList(node.DedupKeyExprs, -1, tagCnt)
+	if node.PreInsertUkCtx != nil {
+		for _, exprs := range node.PreInsertUkCtx.KeyDiagnosticExprs {
+			increaseTagCntForExprList(exprs.GetList(), -1, tagCnt)
+		}
+	}
 	increaseTagCntForExprList(node.FilterList, -1, tagCnt)
 	increaseTagCntForExprList(node.GroupBy, -1, tagCnt)
 	increaseTagCntForExprList(node.AggList, -1, tagCnt)
@@ -811,8 +837,9 @@ END:
 }
 
 func dedupJoinMetadataCols(ctx *plan.DedupJoinCtx) []*plan.ColRef {
-	cols := make([]*plan.ColRef, 0, 3+len(ctx.ForeignKeyChecks))
+	cols := make([]*plan.ColRef, 0, 7+len(ctx.ForeignKeyChecks))
 	cols = append(cols, ctx.AffectedRowsCol, ctx.PhysicalChangedRowsCol, ctx.ActionFinalCol)
+	cols = append(cols, ctx.OdkuTargetAutoIncrementCol, ctx.OdkuGeneratedCol, ctx.OdkuOrdinalCol, ctx.OdkuGeneratedAutoIncrementCol)
 	for i := range ctx.ForeignKeyChecks {
 		cols = append(cols, ctx.ForeignKeyChecks[i].EligibilityCol)
 	}
@@ -1126,41 +1153,45 @@ func checkExprInTags(expr *plan.Expr, tags []int32) bool {
 	return false
 }
 
-func (builder *QueryBuilder) rewriteDistinctToAGG(nodeID int32) {
+func (builder *QueryBuilder) rewriteDistinctToAGG(nodeID int32) error {
 	node := builder.qry.Nodes[nodeID]
 	if len(node.Children) > 0 {
 		for _, child := range node.Children {
-			builder.rewriteDistinctToAGG(child)
+			if err := builder.rewriteDistinctToAGG(child); err != nil {
+				return err
+			}
 		}
 	}
 	if node.NodeType != plan.Node_DISTINCT {
-		return
+		return nil
 	}
 	project := builder.qry.Nodes[node.Children[0]]
 	if project.NodeType != plan.Node_PROJECT {
-		return
+		return nil
 	}
 	if builder.qry.Nodes[project.Children[0]].NodeType == plan.Node_VALUE_SCAN {
-		return
+		return nil
 	}
 
+	groupBy, hashKeys, err := CompactPhysicalGroupKeys(project.ProjectList, node.PhysicalEqualityKeyList)
+	if err != nil {
+		return err
+	}
 	node.NodeType = plan.Node_AGG
-	node.GroupBy = project.ProjectList
+	node.GroupBy, node.GroupByHashKey = groupBy, hashKeys
 	if len(node.PhysicalEqualityKeyList) > 0 {
-		visibleCount := len(node.GroupBy)
+		visibleCount := len(project.ProjectList)
 		node.ProjectList = make([]*plan.Expr, visibleCount)
 		for i, expr := range project.ProjectList {
 			node.ProjectList[i] = GetColExpr(expr.Typ, -1, int32(i))
 		}
-		for i, key := range node.PhysicalEqualityKeyList {
-			node.GroupBy = append(node.GroupBy, DeepCopyExpr(key))
-			node.GroupByHashKey = append(node.GroupByHashKey, int32(visibleCount+i))
-		}
 	}
+	node.PhysicalEqualityKeyList = nil
 	node.BindingTags = project.BindingTags
 	node.BindingTags = append(node.BindingTags, builder.genNewBindTag())
 	node.Children[0] = project.Children[0]
 	node.SpillMem = builder.aggSpillMem
+	return nil
 }
 
 // reuse removeSimpleProjections to delete this plan node
@@ -1523,7 +1554,7 @@ func (builder *QueryBuilder) isConstantSingletonGroupOrderExpr(
 		nodeID = node.Children[0]
 	}
 
-	if !rule.IsConstant(resolved, false) {
+	if !function.IsConstant(resolved, false) {
 		return false, usesSingletonGroup
 	}
 	if resolved.GetLit() != nil {
@@ -2359,7 +2390,7 @@ func handleOptimizerHints(str string, builder *QueryBuilder) {
 	}
 	switch key {
 	case "vectorLocalDOP":
-		builder.optimizerHints.vectorLocalDOP = value
+		// Read directly by VectorLocalDOPEnabled at planning and compilation.
 	case "pushDownLimitToScan":
 		builder.optimizerHints.pushDownLimitToScan = value
 	case "pushDownTopThroughLeftJoin":
@@ -2410,6 +2441,8 @@ func handleOptimizerHints(str string, builder *QueryBuilder) {
 		builder.optimizerHints.skipDedup = value
 	case "outerAntiPlanning":
 		builder.optimizerHints.outerAntiPlanning = value
+	case "rollupSort":
+		builder.optimizerHints.rollupSort = value
 	}
 }
 
@@ -2447,6 +2480,20 @@ func (builder *QueryBuilder) parseOptimizeHints() {
 	}
 }
 
+// sortRollupMode is retained as an internal compatibility adapter. New code
+// should use rollup_algorithm through rollupAlgorithmMode, which mirrors the
+// COST/SORT/HASH session variable used by the window partition implementation.
+func (builder *QueryBuilder) sortRollupMode() int {
+	switch builder.rollupAlgorithmMode() {
+	case rollupAlgorithmSort:
+		return 1
+	case rollupAlgorithmHash:
+		return 2
+	default:
+		return 0
+	}
+}
+
 func (builder *QueryBuilder) optimizeFilters(rootID int32) (int32, error) {
 	rootID, _ = builder.pushdownFilters(rootID, nil, false)
 	transposeTableScanFilters(builder.compCtx.GetProcess(), builder.qry, rootID)
@@ -2456,8 +2503,8 @@ func (builder *QueryBuilder) optimizeFilters(rootID int32) (int32, error) {
 	}
 	ReCalcNodeStats(rootID, builder, true, true, true)
 	builder.rewriteInDomainNotInFilters(rootID)
-	compositePartBlockFilters := builder.collectCompositePartBlockFilters(rootID)
-	builder.mergeFiltersOnCompositeKey(rootID)
+	compositePartBlockFilters, _ := builder.collectCompositePartBlockFilters(rootID, false)
+	builder.mergeFiltersOnCompositeKey(rootID, true)
 	builder.retainConsumedCompositePartBlockFilters(compositePartBlockFilters)
 	foldTableScanFilters(builder.compCtx.GetProcess(), builder.qry, rootID, true)
 	builder.optimizeDateFormatExpr(rootID)
@@ -2546,20 +2593,21 @@ func (builder *QueryBuilder) lockTableIfLockNoRowsAtTheEndForDelAndUpdate() (err
 
 		for _, expr := range baseNode.FilterList {
 			if e, ok := expr.Expr.(*plan.Expr_F); ok {
-				if e.F.Func.GetObjName() == "=" {
+				// Mixed JSON/numeric equality does not identify a physical PK value.
+				if e.F.Func.GetObjName() == "=" && !isJSONNumericComparisonArgs(e.F.Args) {
 					//update t1 set a = 1 where pk = 1; then we allays lock rows pk=1, even pk=1 is not exists
 					//delete from where pk = 1; then we allays lock rows pk=1, even pk=1 is not exists
-					if checkIsPkColExpr(e.F.Args[0]) && rule.IsConstant(e.F.Args[1], true) {
+					if checkIsPkColExpr(e.F.Args[0]) && function.IsConstant(e.F.Args[1], true) {
 						lockRows = e.F.Args[1]
-					} else if checkIsPkColExpr(e.F.Args[1]) && rule.IsConstant(e.F.Args[0], true) {
+					} else if checkIsPkColExpr(e.F.Args[1]) && function.IsConstant(e.F.Args[0], true) {
 						lockRows = e.F.Args[0]
 					}
 				} else if e.F.Func.GetObjName() == "in" {
 					//update t1 set a = 1 where pk in (1,2); then we allays lock rows pk in (1,2), even pk=1 is not exists
 					//delete from where pk in (1,2); then we allays lock rows pk in (1,2), even pk in (1,2) is not exists
-					if checkIsPkColExpr(e.F.Args[0]) && rule.IsConstant(e.F.Args[1], true) {
+					if checkIsPkColExpr(e.F.Args[0]) && function.IsConstant(e.F.Args[1], true) {
 						lockRows = e.F.Args[1]
-					} else if checkIsPkColExpr(e.F.Args[1]) && rule.IsConstant(e.F.Args[0], true) {
+					} else if checkIsPkColExpr(e.F.Args[1]) && function.IsConstant(e.F.Args[0], true) {
 						lockRows = e.F.Args[0]
 					}
 				}

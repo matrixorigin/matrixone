@@ -46,6 +46,7 @@ import (
 	planPb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/proxy"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -447,14 +448,17 @@ func (mp *MysqlProtocolImpl) WriteHandshake() error {
 }
 
 func (mp *MysqlProtocolImpl) WriteOK(affectedRows, lastInsertId uint64, status, warnings uint16, message string) error {
+	status = mp.responseStatus(status)
 	return mp.sendOKPacket(affectedRows, lastInsertId, status, warnings, message)
 }
 
 func (mp *MysqlProtocolImpl) WriteOKtWithEOF(affectedRows, lastInsertId uint64, status, warnings uint16, message string) error {
+	status = mp.responseStatus(status)
 	return mp.sendOKPacketWithEof(affectedRows, lastInsertId, status, warnings, message)
 }
 
 func (mp *MysqlProtocolImpl) WriteEOF(warnings, status uint16) error {
+	status = mp.responseStatus(status)
 	return mp.sendEOFPacket(warnings, status)
 }
 
@@ -462,6 +466,7 @@ func (mp *MysqlProtocolImpl) WriteEOFIF(warnings uint16, status uint16) error {
 	return mp.SendEOFPacketIf(warnings, status)
 }
 func (mp *MysqlProtocolImpl) WriteEOFIFAndNoFlush(warnings uint16, status uint16) error {
+	status = mp.responseStatus(status)
 	if mp.capability&CLIENT_DEPRECATE_EOF == 0 {
 		data := mp.makeEOFPayload(warnings, status)
 		return mp.appendPacket(data)
@@ -470,10 +475,12 @@ func (mp *MysqlProtocolImpl) WriteEOFIFAndNoFlush(warnings uint16, status uint16
 }
 
 func (mp *MysqlProtocolImpl) WriteEOFOrOK(warnings uint16, status uint16) error {
+	status = mp.responseStatus(status)
 	return mp.sendEOFOrOkPacket(warnings, status)
 }
 
 func (mp *MysqlProtocolImpl) WriteEOFOrOKWithAffectedRows(affectedRows uint64, warnings uint16, status uint16) error {
+	status = mp.responseStatus(status)
 	if mp.capability&CLIENT_DEPRECATE_EOF != 0 {
 		return mp.sendOKPacketWithEof(affectedRows, 0, status, warnings, "")
 	}
@@ -524,6 +531,33 @@ func (mp *MysqlProtocolImpl) ReadLoadLocalPacket() ([]byte, error) {
 }
 func (mp *MysqlProtocolImpl) FreeLoadLocal() {
 	mp.tcpConn.FreeLoadLocal()
+}
+
+// InterruptLoadLocalIO, ClearLoadLocalIOInterrupt, LoadLocalFramingBroken and
+// ReadLoadLocalPacketWithTimeout wire the LOAD DATA LOCAL drain contract
+// through to the underlying connection. Without them the upload owner sees an
+// opaque MysqlRrWr, falls back to the legacy Disconnect, and a finite client
+// upload interrupted by cancellation or an ordinary statement error loses the
+// connection with 2013 instead of receiving the statement error (#30640).
+func (mp *MysqlProtocolImpl) InterruptLoadLocalIO() {
+	mp.tcpConn.InterruptLoadLocalIO()
+}
+
+func (mp *MysqlProtocolImpl) ClearLoadLocalIOInterrupt() {
+	mp.tcpConn.ClearLoadLocalIOInterrupt()
+}
+
+// LoadLocalFramingBroken reports an unfinished or invalid frame. Only the
+// upload owner's discard can recover it from preserved progress.
+func (mp *MysqlProtocolImpl) LoadLocalFramingBroken() bool {
+	return mp.tcpConn.LoadLocalFramingBroken()
+}
+
+func (mp *MysqlProtocolImpl) ReadLoadLocalPacketWithTimeout(timeout time.Duration, deadline time.Time) ([]byte, error) {
+	return mp.tcpConn.ReadLoadLocalPacketWithTimeout(timeout, deadline)
+}
+func (mp *MysqlProtocolImpl) DiscardLoadLocalPacket(timeout time.Duration, deadline time.Time, budget int64) (int64, bool, error) {
+	return mp.tcpConn.DiscardLoadLocalPacket(timeout, deadline, budget)
 }
 func (mp *MysqlProtocolImpl) Free(buf []byte) {
 	mp.tcpConn.allocator.Free(buf)
@@ -1864,7 +1898,7 @@ func (mp *MysqlProtocolImpl) Authenticate(ctx context.Context) error {
 
 	ses.Debugf(ctx, "handle handshake end")
 	ses.timestampMap[TSSendOKPacketStart] = time.Now()
-	err := mp.sendOKPacket(0, 0, 0, 0, "")
+	err := mp.sendOKPacket(0, 0, mp.responseStatus(0), 0, "")
 	ses.timestampMap[TSSendOKPacketEnd] = time.Now()
 	v2.SendOKPacketDurationHistogram.Observe(ses.timestampMap[TSSendOKPacketEnd].Sub(ses.timestampMap[TSSendOKPacketStart]).Seconds())
 	ses.Debugf(ctx, "handle handshake response ok")
@@ -2088,40 +2122,6 @@ func (mp *MysqlProtocolImpl) analyseHandshakeResponse41(ctx context.Context, dat
 	return true, info, nil
 }
 
-/*
-//the server does something after receiving a handshake response41 from the client
-//like check user and password
-//and other things
-func (mp *MysqlProtocolImpl) handleClientResponse41(resp41 response41) error {
-	//to do something else
-	//logutil.Infof("capabilities 0x%x\n", resp41.capabilities)
-	//logutil.Infof("maxPacketSize %d\n", resp41.maxPacketSize)
-	//logutil.Infof("collationID %d\n", resp41.collationID)
-	//logutil.Infof("username %s\n", resp41.username)
-	//logutil.Infof("authResponse: \n")
-	//update the capabilities with client's capabilities
-	mp.capability = DefaultCapability & resp41.capabilities
-
-	//character set
-	if nameAndCharset, ok := lookupSupportedProtocolCollation(int(resp41.collationID)); !ok {
-		return moerr.NewInternalError(requestCtx, "get collationName and charset failed")
-	} else {
-		mp.collationID = int(resp41.collationID)
-		mp.collationName = nameAndCharset.collationName
-		mp.charset = nameAndCharset.charset
-	}
-
-	mp.maxClientPacketSize = resp41.maxPacketSize
-	mp.username = resp41.username
-	mp.database = resp41.database
-
-	//logutil.Infof("collationID %d collatonName %s charset %s \n", mp.collationID, mp.collationName, mp.charset)
-	//logutil.Infof("database %s \n", resp41.database)
-	//logutil.Infof("clientPluginName %s \n", resp41.clientPluginName)
-	return nil
-}
-*/
-
 // the server analyses handshake response320 info from the old client
 // return true - analysed successfully / false - failed ; response320 ; error
 func (mp *MysqlProtocolImpl) analyseHandshakeResponse320(ctx context.Context, data []byte) (bool, response320, error) {
@@ -2180,37 +2180,6 @@ func (mp *MysqlProtocolImpl) analyseHandshakeResponse320(ctx context.Context, da
 	return true, info, nil
 }
 
-/*
-//the server does something after receiving a handshake response320 from the client
-//like check user and password
-//and other things
-func (mp *MysqlProtocolImpl) handleClientResponse320(resp320 response320) error {
-	//to do something else
-	//logutil.Infof("capabilities 0x%x\n", resp320.capabilities)
-	//logutil.Infof("maxPacketSize %d\n", resp320.maxPacketSize)
-	//logutil.Infof("username %s\n", resp320.username)
-	//logutil.Infof("authResponse: \n")
-
-	//update the capabilities with client's capabilities
-	mp.capability = DefaultCapability & resp320.capabilities
-
-	//if the client does not notice its default charset, the server gives a default charset.
-	//Run the sql in mysql 8.0.23 to get the charset
-	//the sql: select * from information_schema.collations where collation_name = 'utf8mb4_general_ci';
-	mp.collationID = int(Utf8mb4CollationID)
-	mp.collationName = "utf8mb4_general_ci"
-	mp.charset = "utf8mb4"
-
-	mp.maxClientPacketSize = resp320.maxPacketSize
-	mp.username = resp320.username
-	mp.database = resp320.database
-
-	//logutil.Infof("collationID %d collatonName %s charset %s \n", mp.collationID, mp.collationName, mp.charset)
-	//logutil.Infof("database %s \n", resp320.database)
-	return nil
-}
-*/
-
 // the server makes a AuthSwitchRequest that asks the client to authenticate the data with new method
 func (mp *MysqlProtocolImpl) makeAuthSwitchRequestPayload(authMethodName string) []byte {
 	data := make([]byte, HeaderOffset+1+len(authMethodName)+1+len(mp.GetSalt())+1)
@@ -2250,6 +2219,17 @@ func (mp *MysqlProtocolImpl) negotiateAuthenticationMethod(ctx context.Context) 
 // so we use it to mark the packet MUST be OK/EOF.
 func extendStatus(old uint16) uint16 {
 	return old | SERVER_QUERY_WAS_SLOW | SERVER_STATUS_NO_GOOD_INDEX_USED
+}
+
+// responseStatus derives DBAPI escaping mode from the executing session, so
+// SET/reset cannot leave a second cached mode behind. The pre-authentication
+// handshake has no authenticated tenant mode.
+func (mp *MysqlProtocolImpl) responseStatus(status uint16) uint16 {
+	status &^= SERVER_STATUS_NO_BACKSLASH_ESCAPES
+	if ses := mp.GetSession(); ses != nil && ses.sqlModeParserFlags()&mysql.SQLModeFlags(mysql.SQLModeNoBackslashEscapes) != 0 {
+		status |= SERVER_STATUS_NO_BACKSLASH_ESCAPES
+	}
+	return status
 }
 
 // make a OK packet
@@ -2384,6 +2364,7 @@ func (mp *MysqlProtocolImpl) sendEOFPacket(warnings, status uint16) error {
 }
 
 func (mp *MysqlProtocolImpl) SendEOFPacketIf(warnings, status uint16) error {
+	status = mp.responseStatus(status)
 	//If the CLIENT_DEPRECATE_EOF client capabilities flag is not set, EOF_Packet
 	if mp.capability&CLIENT_DEPRECATE_EOF == 0 {
 		return mp.sendEOFPacket(warnings, status)
@@ -2478,7 +2459,15 @@ func (mp *MysqlProtocolImpl) makeColumnDefinition41Payload(column *MysqlColumn, 
 		//int<2>              character set
 		pos = mp.io.WriteUint16(data, pos, charsetBinary)
 		//int<4>              column length
-		pos = mp.io.WriteUint32(data, pos, boolColumnLength)
+		columnLength := uint32(boolColumnLength)
+		if column.Length() != 0 && column.Length() != boolColumnLength {
+			// Computed BOOL results use a non-one TINYINT display width. MySQL
+			// clients (notably Connector/J) use a one-byte width to infer
+			// pseudo-BOOLEAN values; preserving the computed width keeps these
+			// results numeric while native BOOLEAN columns retain BOOL metadata.
+			columnLength = column.Length()
+		}
+		pos = mp.io.WriteUint32(data, pos, columnLength)
 		//int<1>              type
 		pos = mp.io.WriteUint8(data, pos, uint8(defines.MYSQL_TYPE_TINY))
 	} else {
@@ -2793,7 +2782,7 @@ func (mp *MysqlProtocolImpl) appendResultSetBinaryRow(mrs *MysqlResultSet, rowId
 			if value, err := mrs.GetString(mp.ctx, rowIdx, i); err != nil {
 				return err
 			} else {
-				err = mp.appendStringLenEnc(value)
+				err = mp.appendStringLenEnc(padZerofillDecimalText(value, mysqlColumn.zerofillPadDigitsForRender()))
 				if err != nil {
 					return err
 				}
@@ -2928,7 +2917,7 @@ func (mp *MysqlProtocolImpl) appendResultSetTextRow(mrs *MysqlResultSet, r uint6
 			if value, err2 := mrs.GetString(mp.ctx, r, i); err2 != nil {
 				return err2
 			} else {
-				err = mp.appendStringLenEnc(value)
+				err = mp.appendStringLenEnc(padZerofillDecimalText(value, mysqlColumn.zerofillPadDigitsForRender()))
 				if err != nil {
 					return err
 				}
@@ -3368,7 +3357,7 @@ func (mp *MysqlProtocolImpl) appendResultSetBinaryRow2(mrs *MysqlResultSet, colS
 			if err != nil {
 				return err
 			}
-			err = AppendStringLenEnc(mp, value)
+			err = AppendStringLenEnc(mp, padZerofillDecimalText(value, mysqlColumn.zerofillPadDigitsForRender()))
 			if err != nil {
 				return err
 			}
@@ -3534,7 +3523,7 @@ func (mp *MysqlProtocolImpl) appendResultSetTextRow2(mrs *MysqlResultSet, colSli
 			if err != nil {
 				return err
 			}
-			err = AppendStringLenEnc(mp, value)
+			err = AppendStringLenEnc(mp, padZerofillDecimalText(value, mysqlColumn.zerofillPadDigitsForRender()))
 			if err != nil {
 				return err
 			}
@@ -4175,7 +4164,7 @@ func (mp *MysqlProtocolImpl) WritePacket(payload []byte) error {
 
 // MakeOKPayload exposes (*MysqlProtocolImpl).makeOKPayload() function.
 func (mp *MysqlProtocolImpl) MakeOKPayload(affectedRows, lastInsertId uint64, statusFlags, warnings uint16, message string) []byte {
-	return mp.makeOKPayload(affectedRows, lastInsertId, statusFlags, warnings, message)
+	return mp.makeOKPayload(affectedRows, lastInsertId, mp.responseStatus(statusFlags), warnings, message)
 }
 
 // MakeErrPayload exposes (*MysqlProtocolImpl).makeErrPayload() function.
@@ -4185,7 +4174,7 @@ func (mp *MysqlProtocolImpl) MakeErrPayload(errCode uint16, sqlState, errorMessa
 
 // MakeEOFPayload exposes (*MysqlProtocolImpl).makeEOFPayload() function.
 func (mp *MysqlProtocolImpl) MakeEOFPayload(warnings, status uint16) []byte {
-	return mp.makeEOFPayload(warnings, status)
+	return mp.makeEOFPayload(warnings, mp.responseStatus(status))
 }
 
 // receiveExtraInfo tries to receive salt and labels read from proxy module.

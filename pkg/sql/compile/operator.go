@@ -194,6 +194,7 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.DedupBuildKeepLast = t.DedupBuildKeepLast
 		op.OnDuplicateAction = t.OnDuplicateAction
 		op.DedupColTypes = t.DedupColTypes
+		op.DedupKeyExprs = t.DedupKeyExprs
 		op.DedupColName = t.DedupColName
 		op.DelColIdx = t.DelColIdx
 		op.DedupDeleteMarkerColIdx = t.DedupDeleteMarkerColIdx
@@ -208,6 +209,7 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.SpillMem = t.SpillMem
 		op.GroupingFlag = t.GroupingFlag
 		op.DynamicGrouping = t.DynamicGrouping
+		op.SortRollup = t.SortRollup
 		op.GroupBy = t.GroupBy
 		op.GroupByHashKey = t.GroupByHashKey
 		op.Aggs = t.Aggs
@@ -585,6 +587,9 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.RejectZeroTemporal = t.RejectZeroTemporal
 		op.TrackAutoIncrementGenerated = t.TrackAutoIncrementGenerated
 		op.AutoIncrementGeneratedColumn = t.AutoIncrementGeneratedColumn
+		op.TrackODKUResult = t.TrackODKUResult
+		op.ODKUOrdinalColumn = t.ODKUOrdinalColumn
+		op.ODKUAutoIncrementColumn = t.ODKUAutoIncrementColumn
 		op.HasTargetSelector = t.HasTargetSelector
 		op.TargetRowNumberCol = t.TargetRowNumberCol
 		op.TargetActiveCol = t.TargetActiveCol
@@ -701,6 +706,7 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.DedupBuildKeepLast = t.DedupBuildKeepLast
 		op.DedupColName = t.DedupColName
 		op.DedupColTypes = t.DedupColTypes
+		op.DedupKeyExprs = t.DedupKeyExprs
 		op.UpdateColIdxList = t.UpdateColIdxList
 		op.UpdateColExprList = t.UpdateColExprList
 		op.HasODKUAffectedRows = t.HasODKUAffectedRows
@@ -710,6 +716,11 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.CountFoundRows = t.CountFoundRows
 		op.EmitActionRows = t.EmitActionRows
 		op.ActionFinalResultPos = t.ActionFinalResultPos
+		op.ODKUResultTracking = t.ODKUResultTracking
+		op.ODKUTargetAutoIncrementCol = t.ODKUTargetAutoIncrementCol
+		op.ODKUGeneratedCol = t.ODKUGeneratedCol
+		op.ODKUOrdinalCol = t.ODKUOrdinalCol
+		op.ODKUGeneratedAutoIncrementCol = t.ODKUGeneratedAutoIncrementCol
 		op.ForeignKeyChecks = make([]dedupjoin.ODKUForeignKeyCheck, len(t.ForeignKeyChecks))
 		for i, check := range t.ForeignKeyChecks {
 			op.ForeignKeyChecks[i] = dedupjoin.ODKUForeignKeyCheck{
@@ -742,6 +753,7 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.InputKeysUnique = t.InputKeysUnique
 		op.DedupColName = t.DedupColName
 		op.DedupColTypes = t.DedupColTypes
+		op.DedupKeyExprs = t.DedupKeyExprs
 		op.UpdateColIdxList = t.UpdateColIdxList
 		op.UpdateColExprList = t.UpdateColExprList
 		op.DelColIdx = t.DelColIdx
@@ -929,6 +941,9 @@ func constructPreInsert(nodes []*plan.Node, node *plan.Node, eng engine.Engine, 
 	op.ColOffset = preCtx.ColOffset
 	op.TrackAutoIncrementGenerated = preCtx.TrackAutoIncrementGenerated
 	op.AutoIncrementGeneratedColumn = preCtx.AutoIncrementGeneratedColumn
+	op.TrackODKUResult = preCtx.TrackOdkuResult
+	op.ODKUOrdinalColumn = preCtx.OdkuOrdinalColumn
+	op.ODKUAutoIncrementColumn = preCtx.OdkuAutoIncrementColumn
 	op.HasTargetSelector = preCtx.HasTargetSelector
 	op.TargetRowNumberCol = preCtx.TargetRowNumberCol
 	op.TargetActiveCol = preCtx.TargetActiveCol
@@ -969,7 +984,7 @@ func constructLockOp(node *plan.Node, eng engine.Engine) (*lockop.LockOp, error)
 			partitionColPos = target.PartitionColIdxInBat
 		}
 		typ := plan2.MakeTypeByPlan2Type(target.PrimaryColTyp)
-		arg.AddLockTargetWithMode(target.GetTableId(), target.GetObjRef(), target.GetMode(), target.GetPrimaryColIdxInBat(), typ, partitionColPos, target.GetRefreshTsIdxInBat(), target.GetLockRows(), target.GetLockTableAtTheEnd())
+		arg.AddLockTargetWithPolicy(target.GetTableId(), target.GetObjRef(), target.GetMode(), target.GetPrimaryColIdxInBat(), typ, partitionColPos, target.GetRefreshTsIdxInBat(), target.GetLockRows(), target.GetLockTableAtTheEnd(), target.GetNoWait(), target.GetSkipLocked())
 	}
 	for _, target := range node.LockTargets {
 		if target.LockTable {
@@ -1543,7 +1558,12 @@ func constructHashJoin(node, left *plan.Node, left_types, right_types []types.Ty
 	for i, expr := range node.ProjectList {
 		result[i].Rel, result[i].Pos = constructJoinResult(expr, proc)
 	}
-	nonEqCond, eqConds := extraJoinConditions(node.OnList)
+	conditions := node.OnList
+	mixedAsof := isMixedJSONNumericAsof(node)
+	if mixedAsof {
+		conditions = colexec.SplitAndExprs(conditions)
+	}
+	nonEqCond, eqConds := extraJoinConditions(conditions)
 	arg := hashjoin.NewArgument()
 	arg.JoinType = node.JoinType
 	arg.IsRightJoin = node.IsRightJoin
@@ -1569,6 +1589,21 @@ func constructHashJoin(node, left *plan.Node, left_types, right_types []types.Ty
 	arg.IsShuffle = node.Stats.HashmapStats != nil && node.Stats.HashmapStats.Shuffle
 	arg.SpillThreshold = node.SpillMem
 	arg.AsofRightCol = node.AsofRightCol
+	if mixedAsof {
+		arg.IsShuffle = false
+		arg.RuntimeFilterSpecs = nil
+		if len(arg.EqConds[0]) == 0 {
+			// This is only physical coarse grouping. Preserve the logical ON
+			// and evaluate every mixed equality before choosing a predecessor.
+			constant := func() *plan.Expr {
+				return &plan.Expr{
+					Typ:  plan.Type{Id: int32(types.T_int64), NotNullable: true},
+					Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_I64Val{I64Val: 0}}},
+				}
+			}
+			arg.EqConds = [][]*plan.Expr{{constant()}, {constant()}}
+		}
+	}
 
 	for i := range node.SendMsgList {
 		if node.SendMsgList[i].MsgType == int32(message.MsgJoinMap) {
@@ -1624,8 +1659,13 @@ func constructDedupJoin(node *plan.Node, leftTypes, rightTypes []types.Type, pro
 	arg.OnDuplicateAction = node.OnDuplicateAction
 	arg.DedupColName = node.DedupColName
 	arg.DedupColTypes = node.DedupColTypes
+	arg.DedupKeyExprs = node.DedupKeyExprs
 	arg.DelColIdx = -1
 	arg.DedupDeleteMarkerColIdx = -1
+	arg.ODKUTargetAutoIncrementCol = -1
+	arg.ODKUGeneratedCol = -1
+	arg.ODKUOrdinalCol = -1
+	arg.ODKUGeneratedAutoIncrementCol = -1
 	if node.DedupJoinCtx != nil {
 		arg.DedupBuildKeepLast = node.DedupJoinCtx.DedupBuildKeepLast
 		arg.UpdateColIdxList = node.DedupJoinCtx.UpdateColIdxList
@@ -1646,6 +1686,19 @@ func constructDedupJoin(node *plan.Node, leftTypes, rightTypes []types.Type, pro
 			arg.ForeignKeyChecks[i] = dedupjoin.ODKUForeignKeyCheck{
 				ColIdxList:           slices.Clone(check.ColIdxList),
 				EligibilityResultPos: findJoinResultPos(result, check.EligibilityCol),
+			}
+		}
+		if node.DedupJoinCtx.OdkuTargetAutoIncrementCol != nil &&
+			node.DedupJoinCtx.OdkuGeneratedCol != nil &&
+			node.DedupJoinCtx.OdkuOrdinalCol != nil {
+			arg.ODKUResultTracking = true
+			arg.ODKUTargetAutoIncrementCol = node.DedupJoinCtx.OdkuTargetAutoIncrementCol.ColPos
+			arg.ODKUGeneratedCol = node.DedupJoinCtx.OdkuGeneratedCol.ColPos
+			arg.ODKUOrdinalCol = node.DedupJoinCtx.OdkuOrdinalCol.ColPos
+			if node.DedupJoinCtx.OdkuGeneratedAutoIncrementCol != nil {
+				arg.ODKUGeneratedAutoIncrementCol = node.DedupJoinCtx.OdkuGeneratedAutoIncrementCol.ColPos
+			} else {
+				arg.ODKUResultTracking = false
 			}
 		}
 		// OldColList identifies the row being updated.  Both FAIL and IGNORE
@@ -1728,6 +1781,7 @@ func constructRightDedupJoin(node *plan.Node, leftTypes, rightTypes []types.Type
 	arg.InputKeysUnique = node.DedupInputKeysUnique
 	arg.DedupColName = node.DedupColName
 	arg.DedupColTypes = node.DedupColTypes
+	arg.DedupKeyExprs = node.DedupKeyExprs
 	arg.DelColIdx = -1
 	if node.DedupJoinCtx != nil {
 		arg.UpdateColIdxList = node.DedupJoinCtx.UpdateColIdxList
@@ -1939,6 +1993,7 @@ func constructGroup(_ context.Context, node, childNode *plan.Node, needEval bool
 	arg.SpillMem = node.SpillMem
 	arg.GroupingFlag = node.GroupingFlag
 	_, arg.DynamicGrouping = plan2.DecodeGroupingSetExpandOption(childNode.ExtraOptions)
+	arg.SortRollup = plan2.IsSortRollupOption(node.ExtraOptions)
 	arg.GroupBy = node.GroupBy
 	arg.GroupByHashKey = node.GroupByHashKey
 	return arg
@@ -1969,6 +2024,15 @@ func preflightPercentileConfigs(node *plan.Node, proc *process.Process) error {
 			}
 			if _, _, err := constructOrderedPercentileConfig(f, proc); err != nil {
 				return err
+			}
+		default:
+			if strings.EqualFold(f.Func.ObjName, plan2.NameQuantileExactWeighted) {
+				if len(f.Args) != 3 || !expressionContainsParam(f.Args[2]) {
+					continue
+				}
+				if _, _, err := constructQuantileExactWeightedConfig(f, proc); err != nil {
+					return err
+				}
 			}
 		}
 	}
@@ -2009,6 +2073,9 @@ func constructAggregateConfigWithError(
 			"aggregate function configuration is nil")
 	}
 	args := f.Args
+	if strings.EqualFold(f.Func.ObjName, plan2.NameQuantileExactWeighted) {
+		return constructQuantileExactWeightedConfig(f, proc)
+	}
 	switch f.Func.ObjName {
 	case plan2.NameGroupConcat:
 		value, err := resolveVariableOrDefault(proc, "group_concat_max_len", true, false)
@@ -2158,12 +2225,53 @@ func constructOrderedPercentileConfig(
 	return args[:1], aggexec.EncodeOrderedPercentileConfig(percentile, descending), nil
 }
 
+// constructQuantileExactWeightedConfig strips the flat three-argument
+// quantileExactWeighted signature down to its two data arguments
+// [value, weight] in their original types, evaluating the third (level)
+// argument exactly once as execution-invariant aggregate configuration
+// through the shared validated percentile codec.
+func constructQuantileExactWeightedConfig(
+	f *plan.Function, proc *process.Process,
+) ([]*plan.Expr, []byte, error) {
+	args := f.Args
+	if len(args) != 3 {
+		return nil, nil, moerr.NewInvalidInputNoCtxf(
+			"%s requires a value, a weight, and a level argument", f.Func.ObjName)
+	}
+	configExpr := args[2]
+	if err := validateQuantileExactWeightedExpr(configExpr, f.Func.ObjName); err != nil {
+		return nil, nil, err
+	}
+	configExpr, err := normalizeAggregateConfigExpr(proc, configExpr)
+	if err != nil {
+		return nil, nil, err
+	}
+	vec, free, err := colexec.GetReadonlyResultFromNoColumnExpression(proc, configExpr)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer free()
+	level, err := getEvaluatedPercentileConfigNamed(vec, f.Func.ObjName)
+	if err != nil {
+		return nil, nil, err
+	}
+	return args[:2], aggexec.EncodeQuantileExactWeightedConfig(level), nil
+}
+
+func validateQuantileExactWeightedExpr(expr *plan.Expr, name string) error {
+	if !isPercentileConfigExpr(expr) {
+		return moerr.NewInvalidInputNoCtxf(
+			"level argument of %s must be a constant or parameter", name)
+	}
+	return nil
+}
+
 // normalizeAggregateConfigExpr materializes a semantically constant function
 // expression as a literal before a scalar aggregate configuration consumes it.
 // Some internal plans (notably CTAS's INSERT ... SELECT) bypass the optional
 // optimizer constant-fold pass.  Their expression executor can therefore
 // return a one-row flat vector for a constant cast, although the plan still
-// satisfies rule.IsConstant.  Fold a private copy here so the configuration
+// satisfies function.IsConstant.  Fold a private copy here so the configuration
 // boundary does not depend on which planner path produced the expression.
 func normalizeAggregateConfigExpr(proc *process.Process, expr *plan.Expr) (*plan.Expr, error) {
 	if expr == nil || expr.GetF() == nil {
@@ -2638,6 +2746,7 @@ func constructBroadcastHashBuild(op vm.Operator, proc *process.Process, mcpu int
 		ret.OnDuplicateAction = arg.OnDuplicateAction
 		ret.DedupColName = arg.DedupColName
 		ret.DedupColTypes = arg.DedupColTypes
+		ret.DedupKeyExprs = arg.DedupKeyExprs
 		ret.DelColIdx = arg.DelColIdx
 		ret.DedupDeleteMarkerColIdx = arg.DedupDeleteMarkerColIdx
 		ret.DedupDeleteKeepColIdxList = arg.DedupDeleteKeepColIdxList
@@ -2656,6 +2765,7 @@ func constructBroadcastHashBuild(op vm.Operator, proc *process.Process, mcpu int
 		ret.OnDuplicateAction = arg.OnDuplicateAction
 		ret.DedupColName = arg.DedupColName
 		ret.DedupColTypes = arg.DedupColTypes
+		ret.DedupKeyExprs = arg.DedupKeyExprs
 		ret.DelColIdx = arg.DelColIdx
 		if len(arg.RuntimeFilterSpecs) > 0 {
 			ret.RuntimeFilterSpec = arg.RuntimeFilterSpecs[0]
@@ -2707,6 +2817,7 @@ func constructShuffleHashBuild(node *plan.Node, op vm.Operator, proc *process.Pr
 		ret.OnDuplicateAction = arg.OnDuplicateAction
 		ret.DedupColName = arg.DedupColName
 		ret.DedupColTypes = arg.DedupColTypes
+		ret.DedupKeyExprs = arg.DedupKeyExprs
 		ret.DelColIdx = arg.DelColIdx
 		ret.DedupDeleteMarkerColIdx = arg.DedupDeleteMarkerColIdx
 		ret.DedupDeleteKeepColIdxList = arg.DedupDeleteKeepColIdxList
@@ -2725,6 +2836,7 @@ func constructShuffleHashBuild(node *plan.Node, op vm.Operator, proc *process.Pr
 		ret.OnDuplicateAction = arg.OnDuplicateAction
 		ret.DedupColName = arg.DedupColName
 		ret.DedupColTypes = arg.DedupColTypes
+		ret.DedupKeyExprs = arg.DedupKeyExprs
 		ret.DelColIdx = arg.DelColIdx
 		if len(arg.RuntimeFilterSpecs) > 0 {
 			ret.RuntimeFilterSpec = plan2.DeepCopyRuntimeFilterSpec(arg.RuntimeFilterSpecs[0])
@@ -2815,7 +2927,7 @@ func constructTableScan(node *plan.Node) *table_scan.TableScan {
 	return table_scan.NewArgument().WithTypes(types)
 }
 
-func constructValueScan(proc *process.Process, node *plan.Node) (*value_scan.ValueScan, error) {
+func constructValueScan(proc *process.Process, node *plan.Node, allocations ...*vector.AllocationAccountSelection) (*value_scan.ValueScan, error) {
 	op := value_scan.NewArgument()
 	if node == nil {
 		return op, nil
@@ -2837,17 +2949,31 @@ func constructValueScan(proc *process.Process, node *plan.Node) (*value_scan.Val
 	}
 
 	for i, col := range node.RowsetData.Cols {
-		vec := vector.NewVec(plan2.MakeTypeByPlan2Type(node.TableDef.Cols[i].Typ))
+		typ := plan2.MakeTypeByPlan2Type(node.TableDef.Cols[i].Typ)
+		var vec *vector.Vector
+		if len(allocations) > 0 && allocations[0] != nil {
+			var err error
+			vec, err = vector.NewOffHeapVecWithTypeAndAllocation(typ, allocations[0])
+			if err != nil {
+				op.Free(proc, true, err)
+				op.Release()
+				return nil, err
+			}
+		} else {
+			vec = vector.NewVec(typ)
+		}
 		op.Batchs[0].Vecs[i] = vec
 		for j, rowsetExpr := range col.Data {
 			get, err := rule.GetConstantValue2(proc, rowsetExpr.Expr, vec)
 			if err != nil {
-				op.Batchs[0].Clean(proc.Mp())
+				op.Free(proc, true, err)
+				op.Release()
 				return nil, err
 			}
 			if !get {
-				rowsetExpr.RowPos = int32(j)
-				rowsetData.Cols[i].Data = append(rowsetData.Cols[i].Data, rowsetExpr)
+				bound := *rowsetExpr
+				bound.RowPos = int32(j)
+				rowsetData.Cols[i].Data = append(rowsetData.Cols[i].Data, &bound)
 			}
 		}
 	}
@@ -2983,6 +3109,18 @@ func constructTableClone(
 			return nil, err
 		}
 	}
+
+	// Allocator queries run before RestoreTable. Lend the source owner's
+	// session only within its account; publication/snapshot account switches
+	// must not resolve the source through the caller's temporary aliases.
+	originalCtx := c.proc.Ctx
+	if caller, callerErr := defines.GetAccountId(originalCtx); callerErr == nil && caller == account {
+		c.proc.Ctx = attachInternalExecutorSession(originalCtx, c.proc.GetSession())
+	} else {
+		// An inherited session must be masked, even if this process has none.
+		c.proc.Ctx = process.ContextWithInternalExecutorSession(originalCtx, nil)
+	}
+	defer func() { c.proc.Ctx = originalCtx }()
 
 	if mainHasAutoIncr {
 		if err := c.proc.Ctx.Err(); err != nil {

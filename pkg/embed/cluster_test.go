@@ -19,11 +19,13 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"errors"
+	"flag"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -36,7 +38,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/tests"
 	"github.com/matrixorigin/matrixone/pkg/testutil/clusteradmission"
+	"github.com/matrixorigin/matrixone/pkg/testutil/portlease"
 	"github.com/matrixorigin/matrixone/pkg/tnservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -77,12 +81,8 @@ type completedCloseService struct {
 func (s *completedCloseService) CloseComplete() bool { return s.complete }
 
 func TestClusterAdmissionAtStart(t *testing.T) {
-	// Isolate process-scoped admission from the package's long-lived base fixture.
-	if os.Getenv("MO_EMBED_ADMISSION_HELPER") != "1" {
-		cmd := exec.CommandContext(t.Context(), os.Args[0], "-test.run=^TestClusterAdmissionAtStart$")
-		cmd.Env = append(os.Environ(), "MO_EMBED_ADMISSION_HELPER=1", "TMPDIR="+t.TempDir())
-		out, err := cmd.CombinedOutput()
-		require.NoError(t, err, "%s", out)
+	// Isolate process-scoped admission from other test processes.
+	if runInIsolatedClusterAdmissionProcess(t, "^TestClusterAdmissionAtStart$") {
 		return
 	}
 	newFixture := func(t *testing.T) (*cluster, *int) {
@@ -123,6 +123,17 @@ func TestClusterAdmissionAtStart(t *testing.T) {
 			WithTestAdmissionContext(t.Context())(c)
 			require.NoError(t, c.Start())
 			require.Equal(t, 1, *starts)
+			ports := c.portLease
+			require.NoError(t, c.Stop())
+			require.Same(t, ports, c.portLease)
+			require.Nil(t, c.testAdmission)
+			WithTestAdmissionContext(ctx)(c)
+			require.ErrorIs(t, c.Start(), context.Canceled)
+			require.Equal(t, 1, *starts, "cancelled restart must not start services")
+			require.Same(t, ports, c.portLease)
+			WithTestAdmissionContext(t.Context())(c)
+			require.NoError(t, c.Start())
+			require.Equal(t, 2, *starts)
 			require.NoError(t, c.Close())
 			require.Nil(t, c.testAdmission)
 			require.Nil(t, c.portLease)
@@ -159,6 +170,41 @@ func TestClusterAdmissionAtStart(t *testing.T) {
 			})
 		}
 	}
+	// Synthetic rollback belongs to the same private admission namespace. It
+	// must not queue behind real clusters or need a second helper process.
+	t.Run("completed-error-rollback", func(t *testing.T) {
+		t.Setenv(clusteradmission.ProcessPoolSizeEnv, "2")
+		failure := errors.New("startup and withdrawal failed")
+		svc := &completedCloseService{closeTrackingService: closeTrackingService{closeErr: failure}, complete: true}
+		c, _ := newFixture(t)
+		c.startFn = func(op *operator) error { op.reset.svc = svc; return failure }
+		require.ErrorIs(t, c.Start(), failure)
+		require.Nil(t, c.testAdmission)
+		require.False(t, c.services[0].needsCleanup())
+		require.Equal(t, int32(1), svc.closeCount.Load())
+
+		next, starts := newFixture(t)
+		require.NoError(t, next.Start(), "completed rollback must admit the next owner")
+		require.Equal(t, 1, *starts)
+	})
+
+}
+
+func runInIsolatedClusterAdmissionProcess(t *testing.T, runPattern string) bool {
+	t.Helper()
+	if os.Getenv("MO_EMBED_ADMISSION_HELPER") == "1" {
+		return false
+	}
+	args := []string{"-test.run=" + runPattern}
+	// Keep subprocess counters in the directory collected by go test.
+	if coverageDir := flag.Lookup("test.gocoverdir"); coverageDir != nil && coverageDir.Value.String() != "" {
+		args = append(args, "-test.gocoverdir="+coverageDir.Value.String())
+	}
+	cmd := exec.CommandContext(t.Context(), os.Args[0], args...)
+	cmd.Env = append(os.Environ(), "MO_EMBED_ADMISSION_HELPER=1", "TMPDIR="+t.TempDir())
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "%s", out)
+	return true
 }
 
 func TestClusterCloseCompletedErrorReleasesOwnership(t *testing.T) {
@@ -258,23 +304,6 @@ func TestOperatorStartPreservesIncompleteOwnership(t *testing.T) {
 	require.NoError(t, op.Close())
 	require.False(t, op.needsCleanup())
 	require.Nil(t, commonruntime.ServiceRuntime(op.sid))
-}
-
-func TestClusterStartRollbackCompletedErrorReleasesAdmission(t *testing.T) {
-	t.Setenv(clusteradmission.ProcessPoolSizeEnv, "2")
-	failure := errors.New("startup and withdrawal failed")
-	svc := &completedCloseService{closeTrackingService: closeTrackingService{closeErr: failure}, complete: true}
-	op := &operator{serviceType: metadata.ServiceType_CN}
-	c := &cluster{services: []*operator{op}}
-	WithTesting()(c)
-	// The synthetic failure must remain reachable beside the shared base.
-	WithConcurrentTestClusters()(c)
-	c.startFn = func(op *operator) error { op.reset.svc = svc; return failure }
-	t.Cleanup(func() { require.NoError(t, c.Close()) })
-	require.ErrorIs(t, c.Start(), failure)
-	require.Nil(t, c.testAdmission)
-	require.False(t, op.needsCleanup())
-	require.Equal(t, int32(1), svc.closeCount.Load())
 }
 
 func (s *closeTrackingFileService) Close(context.Context) {
@@ -729,7 +758,7 @@ func TestGetInitValueWithEmptyNameMustPanic(t *testing.T) {
 func TestClusterPortLeasesAreExclusive(t *testing.T) {
 	// This lock-only test must own its namespace: other cluster processes may
 	// legitimately acquire a released range before this test reacquires it.
-	t.Setenv("TMPDIR", t.TempDir())
+	isolateClusterPortLeases(t)
 	first, err := acquireClusterPortLease()
 	require.NoError(t, err)
 	firstCluster := &cluster{
@@ -773,6 +802,91 @@ func TestClusterPortLeasesAreExclusive(t *testing.T) {
 	require.NoError(t, firstCluster.releasePortLeaseLocked())
 }
 
+func TestClusterStopRetainsPortLease(t *testing.T) {
+	isolateClusterPortLeases(t)
+	ports, err := acquireClusterPortLease()
+	require.NoError(t, err)
+	c := &cluster{portLease: ports, portLeaseBase: ports.base, portLeaseNext: ports.base,
+		services: []*operator{{serviceType: metadata.ServiceType_CN}}}
+	t.Cleanup(func() { require.NoError(t, c.Close()) })
+	service := &closeTrackingService{}
+	c.startFn = func(op *operator) error {
+		op.state = started
+		op.reset.svc = service
+		return nil
+	}
+	port, err := c.nextBasePort()
+	require.NoError(t, err)
+	for generation := 0; generation < 2; generation++ {
+		require.NoError(t, c.Start())
+		require.NoError(t, c.Stop())
+		require.NoError(t, c.Stop(), "stopping twice must retain the same lease")
+		require.False(t, c.CloseComplete(), "stopped clusters still own ports")
+		contender, locked, err := tryAcquireClusterPortLease(ports.base)
+		if contender != nil {
+			t.Cleanup(func() { require.NoError(t, contender.lock.Close()) })
+		}
+		require.NoError(t, err)
+		require.False(t, locked, "another cluster must not take a stopped cluster's range")
+		require.Same(t, ports, c.portLease)
+		require.Equal(t, uint64(port), c.portLease.next.Load())
+	}
+	require.Equal(t, int32(2), service.closeCount.Load())
+	require.NoError(t, c.Close())
+	require.NoError(t, c.Stop(), "Stop after final Close must not reacquire ports")
+	require.True(t, c.CloseComplete())
+	contender, locked, err := tryAcquireClusterPortLease(ports.base)
+	if contender != nil {
+		t.Cleanup(func() { require.NoError(t, contender.lock.Close()) })
+	}
+	require.NoError(t, err)
+	require.True(t, locked, "final Close must release the range")
+}
+
+func TestClusterStopCleanupOwnership(t *testing.T) {
+	for _, complete := range []bool{false, true} {
+		t.Run(fmt.Sprintf("complete=%t", complete), func(t *testing.T) {
+			failure := errors.New("service withdrawal failed")
+			service := &completedCloseService{closeTrackingService: closeTrackingService{closeErr: failure}, complete: complete}
+			op := &operator{state: started}
+			op.reset.svc = service
+			dependency := &closeTrackingService{}
+			dep := &operator{state: started}
+			dep.reset.svc = dependency
+			ports, err := acquireClusterPortLease()
+			require.NoError(t, err)
+			c := &cluster{state: started, services: []*operator{dep, op}, portLease: ports,
+				portLeaseBase: ports.base, portLeaseNext: ports.base}
+			t.Cleanup(func() {
+				service.complete = true
+				service.closeErr = nil
+				require.NoError(t, c.Close())
+			})
+			manager := clusteradmission.NewManager(filepath.Join(t.TempDir(), "cluster.lock"), time.Millisecond)
+			admission, err := manager.Acquire(t.Context(), clusteradmission.Exclusive)
+			require.NoError(t, err)
+			c.testAdmission = admission
+			require.ErrorIs(t, c.Stop(), failure)
+			require.Same(t, ports, c.portLease)
+			if !complete {
+				require.Zero(t, dependency.closeCount.Load())
+				require.Same(t, admission, c.testAdmission)
+				require.ErrorContains(t, c.Start(), "cleanup is incomplete")
+				service.complete = true
+				require.ErrorIs(t, c.Stop(), failure)
+			}
+			require.Nil(t, c.testAdmission)
+			require.Equal(t, int32(1), dependency.closeCount.Load())
+			require.Same(t, ports, c.portLease)
+			next, err := manager.Acquire(t.Context(), clusteradmission.Exclusive)
+			require.NoError(t, err, "completed Stop must release admission")
+			t.Cleanup(func() { require.NoError(t, next.Release()) })
+			require.NoError(t, c.Close())
+			require.True(t, c.CloseComplete())
+		})
+	}
+}
+
 func TestNewClusterRejectsPortRangeExhaustion(t *testing.T) {
 	capacity, err := portBaseCapacity()
 	require.NoError(t, err)
@@ -787,7 +901,7 @@ func TestNewClusterRejectsPortRangeExhaustion(t *testing.T) {
 }
 
 func TestNextBasePortExhaustionDoesNotConsumeCapacity(t *testing.T) {
-	lease := &clusterPortLease{base: minPort}
+	lease := &clusterPortLease{base: portlease.MinPort}
 	lastValid := lease.base + portLeaseSpan - basePortStep
 	lease.next.Store(lastValid)
 	c := &cluster{id: 1, portLease: lease, portLeaseNext: lastValid}
@@ -799,7 +913,7 @@ func TestNextBasePortExhaustionDoesNotConsumeCapacity(t *testing.T) {
 }
 
 func TestStartNewCNServiceRejectsCapacityWithoutMutatingTopology(t *testing.T) {
-	lease := &clusterPortLease{base: minPort}
+	lease := &clusterPortLease{base: portlease.MinPort}
 	lastValid := lease.base + portLeaseSpan - basePortStep
 	lease.next.Store(lastValid)
 	c := &cluster{
@@ -827,14 +941,19 @@ func TestClusterRejectsNegativeCNCounts(t *testing.T) {
 	require.Nil(t, value)
 	require.ErrorContains(t, err, "CN count cannot be negative")
 
-	c := &cluster{state: started, portLease: &clusterPortLease{base: minPort}}
-	c.portLease.next.Store(minPort)
+	c := &cluster{state: started, portLease: &clusterPortLease{base: portlease.MinPort}}
+	c.portLease.next.Store(portlease.MinPort)
 	err = c.StartNewCNService(-1)
 	require.ErrorContains(t, err, "additional CN count cannot be negative")
 	require.Zero(t, c.options.cn)
 }
 
 func TestClusterAdmissionCoversFullLifecycle(t *testing.T) {
+	// The child process initializes the global admission manager with a private
+	// TMPDIR, so unrelated test processes cannot hold this synthetic lifecycle.
+	if runInIsolatedClusterAdmissionProcess(t, "^TestClusterAdmissionCoversFullLifecycle$") {
+		return
+	}
 	for _, poolSize := range []string{"1", "2"} {
 		t.Run("pool="+poolSize, func(t *testing.T) {
 			t.Setenv(clusteradmission.ProcessPoolSizeEnv, poolSize)
@@ -854,8 +973,6 @@ func testClusterAdmissionLifecycle(t *testing.T) {
 		portLeaseNext: portLease.base,
 	}
 	c.options.testing = true
-	// This synthetic cluster has no services. Allow it to exercise admission
-	// lifecycle while the package's shared base cluster may be alive.
 	c.options.allowConcurrentTestClusters = true
 	t.Cleanup(func() {
 		require.NoError(t, c.Close())
@@ -942,7 +1059,13 @@ func TestTestingServiceDefaultsPreserveOverrides(t *testing.T) {
 						wantFetch = time.Second
 					}
 					require.Equal(t, wantFetch, cfg.CN.TaskRunner.FetchInterval.Duration)
-					svc.Adjust(func(cfg *ServiceConfig) { cfg.CN.TaskRunner.FetchInterval.Duration = 17 * time.Second })
+					require.Equal(t, wantFetch, cfg.CN.ISCP.SyncTaskInterval.Duration)
+					require.Equal(t, wantFetch, cfg.CN.ISCP.IndexFlushWatermarkInterval.Duration)
+					svc.Adjust(func(cfg *ServiceConfig) {
+						cfg.CN.TaskRunner.FetchInterval.Duration = 17 * time.Second
+						cfg.CN.ISCP.SyncTaskInterval.Duration = 17 * time.Millisecond
+						cfg.CN.ISCP.IndexFlushWatermarkInterval.Duration = 23 * time.Millisecond
+					})
 					svc.Adjust(func(cfg *ServiceConfig) { cfg.CN.LockService.KeepBindDuration.Duration = 350 * time.Millisecond })
 				}
 				if svc.ServiceType() == metadata.ServiceType_LOG {
@@ -988,6 +1111,8 @@ func TestTestingServiceDefaultsPreserveOverrides(t *testing.T) {
 				require.Equal(t, 8192, cn.GetServiceConfig().CN.Txn.Trace.BufferSize)
 				require.Equal(t, 350*time.Millisecond, cn.GetServiceConfig().CN.LockService.KeepBindDuration.Duration)
 				require.Equal(t, 17*time.Second, cn.GetServiceConfig().CN.TaskRunner.FetchInterval.Duration)
+				require.Equal(t, 17*time.Millisecond, cn.GetServiceConfig().CN.ISCP.SyncTaskInterval.Duration)
+				require.Equal(t, 23*time.Millisecond, cn.GetServiceConfig().CN.ISCP.IndexFlushWatermarkInterval.Duration)
 			}
 		})
 	}
@@ -1625,7 +1750,32 @@ load-to-mo = true
 		require.Len(t, entries, 1, "retired trace must not create output")
 	}
 	check(true)
-	require.NoError(t, c.Close())
+	require.NoError(t, c.Stop())
 	require.NoError(t, c.Start())
 	check(false)
+}
+
+func isolateClusterPortLeases(t *testing.T) {
+	previous := clusterPortAllocator
+	clusterPortAllocator = portlease.Allocator{Directory: t.TempDir()}
+	t.Cleanup(func() { clusterPortAllocator = previous })
+}
+
+func TestClusterAndLegacyPortAllocatorsShareLeases(t *testing.T) {
+	clusterLease, err := acquireClusterPortLease()
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, clusterLease.lock.Close()) })
+	port, err := tests.GetAvailablePort("127.0.0.1")
+	require.NoError(t, err)
+	value, err := strconv.ParseUint(port, 10, 64)
+	require.NoError(t, err)
+	require.True(t, value < clusterLease.base || value >= clusterLease.base+portLeaseSpan)
+	// The legacy allocation remains reserved even though no listener was started.
+	base := portlease.MinPort + (value-portlease.MinPort)/portlease.Span*portlease.Span
+	contender, locked, err := tryAcquireClusterPortLease(base)
+	require.NoError(t, err)
+	if contender != nil {
+		require.NoError(t, contender.lock.Close())
+	}
+	require.False(t, locked)
 }

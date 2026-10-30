@@ -4475,8 +4475,8 @@ func TestRuntimeSpecializationReplacementCommitsOnlyAfterCompileSuccess(t *testi
 		cw.proc, prepareStmt.PrepareStmt, false, nil, time.Now())
 	oldMetadata := [][]byte{[]byte("old column payload")}
 	oldDiagnostics := []*plan.Expr{{Typ: plan.Type{Id: int32(types.T_int32)}, Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}}}}
-	prepareStmt.installRuntimeSpecializationCache("old", oldPlan, oldCompile, oldDiagnostics, oldMetadata)
-	require.Nil(t, prepareStmt.installRuntimeSpecializationCache("old", oldPlan, oldCompile, oldDiagnostics, oldMetadata),
+	prepareStmt.installRuntimeSpecializationCache("old", oldPlan, oldCompile, oldDiagnostics, nil, oldMetadata)
+	require.Nil(t, prepareStmt.installRuntimeSpecializationCache("old", oldPlan, oldCompile, oldDiagnostics, nil, oldMetadata),
 		"reinstalling the live compile must not retire it")
 
 	for _, compileErr := range []error{assert.AnError, context.Canceled} {
@@ -4957,6 +4957,27 @@ func TestResolveVariableIsBinHonorsStoredProcedureScope(t *testing.T) {
 	kind, err = ses.txnCompileCtx.ResolveVariablePrepareParamKind("missing_user_var", false, false)
 	require.NoError(t, err)
 	require.Equal(t, vector.PrepareParamNone, kind)
+
+	t.Run("system variables keep their namespace", func(t *testing.T) {
+		for _, local := range []interface{}{nil, int64(0), int64(1)} {
+			scopes[1]["mo_pk_check_by_cn"] = local
+			value, err := ses.txnCompileCtx.ResolveVariable("MO_PK_CHECK_BY_CN", false, false)
+			require.NoError(t, err)
+			require.Equal(t, local, value, "ordinary local resolution stays intact")
+			for _, enabled := range []int8{0, 1} {
+				require.NoError(t, ses.SetSessionSysVar(execCtx.reqCtx, "mo_pk_check_by_cn", enabled))
+				value, err := ses.txnCompileCtx.ResolveVariable("MO_PK_CHECK_BY_CN", true, false)
+				require.NoError(t, err)
+				require.Equal(t, enabled, value, "system reads use the current owning session")
+			}
+		}
+		scopes[1]["autocommit"] = nil
+		want, err := ses.GetGlobalSysVar("autocommit")
+		require.NoError(t, err)
+		value, err := ses.txnCompileCtx.ResolveVariable("AUTOCOMMIT", true, true)
+		require.NoError(t, err)
+		require.Equal(t, want, value, "system global reads also bypass procedure locals")
+	})
 }
 
 func TestBuildExecuteUserParamsHonorsStoredProcedureScope(t *testing.T) {
@@ -5623,6 +5644,8 @@ func TestInitExecuteStmtParamRebuildsWhenProtocolVersionChanges(t *testing.T) {
 		{name: "rollback", from: defines.MORPCVersion8, to: defines.MORPCVersion7},
 		{name: "numeric prefix upgrade", from: defines.MORPCVersion25, to: defines.MORPCVersion30},
 		{name: "numeric prefix rollback", from: defines.MORPCVersion30, to: defines.MORPCVersion25},
+		{name: "fractional interval upgrade", from: defines.MORPCVersion123, to: defines.MORPCVersion124},
+		{name: "fractional interval rollback", from: defines.MORPCVersion124, to: defines.MORPCVersion123},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			rt.SetGlobalVariables(moruntime.MOProtocolVersion, test.from)
@@ -6771,7 +6794,12 @@ func TestPreparedUserVariableStringDomainIsBoundPerStatement(t *testing.T) {
 				t.Helper()
 				stmt := tree.NewPrepareString("bound_variable", "select char_length(@bound_s), hex(left(@bound_s,1)), ord(@bound_s), @bound_s+0, "+
 					"char_length(coalesce(@bound_s,NULL)), hex(left(case when @bound_s is null then null else @bound_s end,1)), "+
-					"charset(@bound_s), collation(@bound_s)")
+					"charset(@bound_s), collation(@bound_s), "+
+					"hex(left(coalesce(case when @bound_s is null then null else @bound_s end,NULL),1)), "+
+					"hex(left(if(@bound_s is null,NULL,@bound_s),1)), "+
+					"hex(left(case when @bound_s is null then null else left(@bound_s,1) end,1)), "+
+					"hex(left(nullif(@bound_s,''),1)), "+
+					"hex(left(case when @bound_s is null then null else nullif(@bound_s,'') end,1))")
 				defer stmt.Free()
 				prepared, err := buildPlan(execCtx.reqCtx, ses, ses.txnCompileCtx, stmt)
 				require.NoError(t, err)
@@ -6781,7 +6809,7 @@ func TestPreparedUserVariableStringDomainIsBoundPerStatement(t *testing.T) {
 				t.Helper()
 				q := p.GetQuery()
 				projects := q.Nodes[q.Steps[len(q.Steps)-1]].ProjectList
-				require.Len(t, projects, 8)
+				require.Len(t, projects, 13)
 				for i, project := range projects {
 					func() {
 						executor, err := colexec.NewExpressionExecutor(cw.proc, project)
@@ -6789,8 +6817,9 @@ func TestPreparedUserVariableStringDomainIsBoundPerStatement(t *testing.T) {
 						defer executor.Free()
 						value, err := executor.Eval(cw.proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
 						require.NoError(t, err)
-						require.Equal(t, isNull && i < 6, value.GetNulls().Contains(0))
-						if isNull && i < 6 {
+						isValue := i < 6 || i >= 8
+						require.Equal(t, isNull && isValue, value.GetNulls().Contains(0), "project %d: %s", i, project.String())
+						if isNull && isValue {
 							return
 						}
 						switch i {
@@ -6800,12 +6829,12 @@ func TestPreparedUserVariableStringDomainIsBoundPerStatement(t *testing.T) {
 								want = 3
 							}
 							require.Equal(t, want, vector.GetFixedAtNoTypeCheck[int64](value, 0))
-						case 1, 5:
+						case 1, 5, 8, 9, 10, 11, 12:
 							want := "E4BDA0"
 							if binary {
 								want = "E4"
 							}
-							require.Equal(t, want, value.GetStringAt(0))
+							require.Equal(t, want, value.GetStringAt(0), "project %d: %s", i, project.String())
 						case 2:
 							want := int64(0xe4bda0)
 							if binary {

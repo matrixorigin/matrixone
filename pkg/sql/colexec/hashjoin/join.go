@@ -81,6 +81,11 @@ func (hashJoin *HashJoin) OpType() vm.OpType {
 }
 
 func (hashJoin *HashJoin) Prepare(proc *process.Process) (err error) {
+	hashJoin.ctr.asofResidualEquality = hashJoin.IsAsof() &&
+		colexec.HasMixedJSONNumericEquality(hashJoin.NonEqCond)
+	if hashJoin.AsofBuildLeft && hashJoin.ctr.asofResidualEquality {
+		return moerr.NewInternalError(proc.Ctx, "ASOF mixed JSON/numeric equality requires build-right")
+	}
 	if hashJoin.IsAsof() {
 		if hashJoin.NonEqCond == nil || len(hashJoin.EqConds) != 2 || len(hashJoin.EqConds[0]) == 0 ||
 			len(hashJoin.EqConds[0]) != len(hashJoin.EqConds[1]) || hashJoin.HashOnPK ||
@@ -267,6 +272,9 @@ func (hashJoin *HashJoin) Call(proc *process.Process) (vm.CallResult, error) {
 				input, err = hashJoin.getInputBatch(proc, analyzer)
 				if err != nil {
 					return result, hashbuild.TerminalBudgetError(proc.Ctx, err)
+				}
+				if input.Status == vm.ExecYield {
+					return input, nil
 				}
 				bat := input.Batch
 
@@ -1073,6 +1081,10 @@ func (ctr *container) findAsofPredecessor(
 		return -1, false, nil
 	}
 
+	if ctr.asofResidualEquality {
+		return ctr.scanAsofEligible(hashJoin, proc, leftRow, candidates, leftValue)
+	}
+
 	// A bounded scan is cheaper than retaining per-group metadata for tiny
 	// equality groups, even when they are reused. This is the literal
 	// one-best-row path: no index table and no per-row search state.
@@ -1130,6 +1142,37 @@ func (ctr *container) findAsofPredecessor(
 		return -1, false, evalErr
 	}
 	return best, qualified, nil
+}
+
+// scanAsofEligible keeps only the nearest candidate satisfying the complete
+// residual. A temporal-only index cannot represent per-left-row eligibility.
+func (ctr *container) scanAsofEligible(
+	hashJoin *HashJoin, proc *process.Process, leftRow int64,
+	candidates []int32, leftValue int64,
+) (int32, bool, error) {
+	best := int32(-1)
+	var bestValue int64
+	for i, candidate := range candidates {
+		// Count rejected/NULL candidates too, so they cannot postpone cancellation.
+		if i&255 == 0 {
+			if err := proc.Ctx.Err(); err != nil {
+				return -1, false, err
+			}
+		}
+		value, valid := ctr.asofRightTemporalValue(hashJoin, candidate)
+		if !valid || !asofPredecessorEligible(value, leftValue, ctr.asofStrict) {
+			continue
+		}
+		qualified, err := ctr.evalNonEqCondition(ctr.leftBat, leftRow, proc,
+			int64(candidate/colexec.DefaultBatchSize), int64(candidate%colexec.DefaultBatchSize))
+		if err != nil {
+			return -1, false, err
+		}
+		if qualified && (best < 0 || value > bestValue || value == bestValue && candidate < best) {
+			best, bestValue = candidate, value
+		}
+	}
+	return best, best >= 0, nil
 }
 
 func asofTemporalValue(vec *vector.Vector, row int64) (int64, bool) {

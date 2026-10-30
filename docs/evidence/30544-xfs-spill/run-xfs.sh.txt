@@ -1,0 +1,30 @@
+#!/bin/bash
+set -euo pipefail
+case_dir=/data3/tmp/issue30544-fix
+cd "$case_dir"
+variant=$1
+expect=$2
+image="$case_dir/$variant.img"
+mountdir="$case_dir/$variant-mnt"
+mkdir -p "$mountdir" "$case_dir/tmp"
+cleanup() {
+ if mountpoint -q "$mountdir"; then umount "$mountdir" || return; fi
+ rm -f "$image"
+ rmdir "$mountdir"
+}
+trap cleanup EXIT
+truncate -s 17G "$image"
+mkfs.xfs -f "$image" >"$variant-mkfs.log"
+mount -o loop "$image" "$mountdir"
+python3 - "$mountdir" <<'PY'
+import os,sys
+root=sys.argv[1]
+s=os.statvfs(root)
+target=(16<<30)+(192<<20)
+n=s.f_bavail*s.f_frsize-target
+assert 0<n<2<<30,(s,n)
+with open(root+"/ballast","wb") as f: os.posix_fallocate(f.fileno(),0,n)
+s=os.statvfs(root)
+print("initial_available",s.f_bavail*s.f_frsize,"target",target,flush=True)
+PY
+env ISSUE30544_XFS_ROOT="$mountdir" ISSUE30544_EXPECT="$expect" TMPDIR="$case_dir/tmp" GOMAXPROCS=4 GOMEMLIMIT=4GiB taskset -c 0,2,4,6 "./xfs-$variant.test" -test.v -test.timeout=4m -test.run '^TestIssue30544RealXFSSQL$' >"$variant-sql.log" 2>&1

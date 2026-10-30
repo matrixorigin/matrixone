@@ -20,6 +20,10 @@ or stages using MatrixOne's SELECT ... INTO OUTFILE commands.
 """
 
 import warnings
+from ._query_compilation import compile_expression
+from ._sql_literals import sql_string_token, substitute_parameters
+from ._utils import stage_file_uri
+
 from typing import Any, Optional, Union
 
 
@@ -57,19 +61,13 @@ def _query_to_sql(query: Union[str, Any]) -> str:
     # If it has _build_sql method (MatrixOneQuery)
     if hasattr(query, '_build_sql'):
         sql, params = query._build_sql()
-        # Replace parameters in the SQL
-        if params:
-            for param in params:
-                if isinstance(param, str):
-                    sql = sql.replace("?", f"'{param}'", 1)
-                else:
-                    sql = sql.replace("?", str(param), 1)
+        sql = substitute_parameters(sql, params)
         return sql.rstrip(';').strip()
 
     # If it's a SQLAlchemy statement (has compile method)
     if hasattr(query, 'compile'):
         try:
-            compiled = query.compile(compile_kwargs={"literal_binds": True})
+            compiled = compile_expression(query)
             return str(compiled).rstrip(';').strip()
         except Exception as e:
             raise ValueError(f"Failed to compile SQLAlchemy statement: {e}")
@@ -94,6 +92,9 @@ def _validate_csv_params(sep: str, quotechar: Optional[str], lineterminator: str
     """
     if not sep:
         raise ValueError("sep cannot be empty")
+
+    if quotechar is not None and len(quotechar.encode('utf-8')) > 1:
+        raise ValueError('quotechar must contain at most one UTF-8 byte')
 
     if len(sep) > 1:
         warnings.warn(
@@ -133,30 +134,27 @@ def _build_csv_export_sql(
     query_sql = _query_to_sql(query)
 
     # Build the export SQL
-    sql_parts = [query_sql, "INTO OUTFILE", f"'{output_path}'"]
+    sql_parts = [query_sql, "INTO OUTFILE", sql_string_token(output_path), "FORMAT 'csv'"]
 
     # Add CSV options
     options = []
 
-    # MatrixOne limitation: can't use both sep and quotechar simultaneously
-    # If both are specified, use sep only
-    if quotechar and sep != ',':
-        # Use quotechar only if sep is not default (user wants quoting behavior)
-        options.append(f"fields enclosed by '{quotechar}'")
-    elif sep:
-        # Use sep (default behavior)
-        options.append(f"fields terminated by '{sep}'")
+    fields = f"fields terminated by {sql_string_token(sep)}"
+    if quotechar:
+        fields += f" enclosed by {sql_string_token(quotechar)}"
+    options.append(fields)
 
     # Add line terminator if not default
     if lineterminator != '\n':
-        options.append(f"lines terminated by '{lineterminator}'")
+        options.append(f"lines terminated by {sql_string_token(lineterminator)}")
 
     sql_parts.extend(options)
 
     # Note: HEADER option not yet supported in MatrixOne
     if header:
         warnings.warn(
-            "header=True is not yet supported by MatrixOne's INTO OUTFILE. " "Headers will not be included in the output.",
+            "header=True is not yet supported by MatrixOne's INTO OUTFILE. "
+            "Headers will not be included in the output.",
             UserWarning,
         )
 
@@ -182,7 +180,7 @@ def _build_jsonl_export_sql(
 
     # Build the export SQL with JSONL format
     # MatrixOne syntax: INTO OUTFILE 'path' FORMAT 'jsonline'
-    return f"{query_sql} INTO OUTFILE '{output_path}'"
+    return f"{query_sql} INTO OUTFILE {sql_string_token(output_path)} FORMAT 'jsonline'"
 
 
 class ExportManager:
@@ -279,7 +277,10 @@ class ExportManager:
         Note:
             - For local paths, the MatrixOne server must have write permissions
             - For stage paths, use format: 'stage://stage_name/filename.csv'
-            - MatrixOne doesn't support using sep and quotechar simultaneously
+            - Recognized non-CSV suffixes are rejected by the server; other suffixes use CSV.
+            - Requires server support for explicit OUTFILE FORMAT, also used by to_jsonl().
+            - sep and quotechar can be used together
+            - path/sep/quotechar/lineterminator must not contain NUL or backslashes; use actual tabs for TSV
             - header=True is not yet supported by MatrixOne
         """
         # Build SQL
@@ -334,6 +335,7 @@ class ExportManager:
 
         Note:
             - JSONL format: one JSON object per line, no array wrapper
+            - path must not contain NUL or backslashes
             - Each line is a complete, valid JSON object
             - Suitable for streaming and big data processing
         """
@@ -393,10 +395,12 @@ class ExportManager:
         Note:
             - The stage must exist before calling this method
             - Use client.stage.create_s3() or client.stage.create_local() to create stages
-            - MatrixOne doesn't support using sep and quotechar simultaneously
+            - Recognized non-CSV suffixes are rejected by the server; other suffixes use CSV.
+            - Requires server support for explicit OUTFILE FORMAT, also used by to_jsonl().
+            - sep and quotechar can be used together
         """
         # Build stage path
-        stage_path = f"stage://{stage_name}/{filename}"
+        stage_path = stage_file_uri(stage_name, filename)
 
         # Delegate to to_csv method
         return self.to_csv(
@@ -446,7 +450,7 @@ class ExportManager:
             - Use client.stage.create_s3() or client.stage.create_local() to create stages
         """
         # Build stage path
-        stage_path = f"stage://{stage_name}/{filename}"
+        stage_path = stage_file_uri(stage_name, filename)
 
         # Delegate to to_jsonl method
         return self.to_jsonl(path=stage_path, query=query, **kwargs)
@@ -591,7 +595,7 @@ class AsyncExportManager:
             await client.export.to_csv_stage('active_stage', 'active_users.csv', stmt)
         """
         # Build stage path
-        stage_path = f"stage://{stage_name}/{filename}"
+        stage_path = stage_file_uri(stage_name, filename)
 
         # Delegate to to_csv method
         return await self.to_csv(
@@ -637,7 +641,7 @@ class AsyncExportManager:
             await client.export.to_jsonl_stage('verified_stage', 'verified.jsonl', stmt)
         """
         # Build stage path
-        stage_path = f"stage://{stage_name}/{filename}"
+        stage_path = stage_file_uri(stage_name, filename)
 
         # Delegate to to_jsonl method
         return await self.to_jsonl(path=stage_path, query=query, **kwargs)

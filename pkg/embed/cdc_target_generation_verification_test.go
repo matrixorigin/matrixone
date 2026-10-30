@@ -96,12 +96,16 @@ func TestCDCGenerationContractFetchConfiguration(t *testing.T) {
 			service.cfg.CN.TaskRunner.HeartbeatTimeout.Duration = 30 * time.Second
 			service.cfg.CN.TaskRunner.Parallelism = 2
 			service.cfg.CN.TaskRunner.MaxWaitTasks = 50
+			service.cfg.CN.ISCP.SyncTaskInterval.Duration = 17 * time.Millisecond
+			service.cfg.CN.ISCP.IndexFlushWatermarkInterval.Duration = 23 * time.Millisecond
 			expected := service.cfg.CN.TaskRunner
+			expectedISCP := service.cfg.CN.ISCP
 			if kind == metadata.ServiceType_CN {
 				expected.FetchInterval.Duration = time.Second
 			}
 			adjustTestingClusterTiming(service)
 			require.Equal(t, expected, service.GetServiceConfig().CN.TaskRunner)
+			require.Equal(t, expectedISCP, service.GetServiceConfig().CN.ISCP)
 		})
 	}
 }
@@ -194,11 +198,22 @@ func testCDCTenantCatalogGuardBlocksOtherCNDrop(t *testing.T, cluster Cluster) {
 	defer root.Close()
 	require.NoError(t, execSQL(ctx, root, "CREATE ACCOUNT cdc_guard_probe ADMIN_NAME 'admin' IDENTIFIED BY '111'"))
 	defer func() {
-		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		// Account removal performs many catalog operations. Give it its own
+		// budget matching setup, including headroom for race-runner WAL stalls.
+		// Keep failures visible and verify removal before reusing the fixture.
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 2*time.Minute)
 		defer cleanupCancel()
-		if _, cleanupErr := root.ExecContext(cleanupCtx, "DROP ACCOUNT IF EXISTS cdc_guard_probe"); cleanupErr != nil {
+		started := time.Now()
+		_, cleanupErr := root.ExecContext(cleanupCtx, "DROP ACCOUNT IF EXISTS cdc_guard_probe")
+		t.Logf("CDC catalog guard account cleanup: elapsed=%s error=%v", time.Since(started), cleanupErr)
+		if cleanupErr != nil {
 			t.Errorf("drop CDC catalog guard account: %v", cleanupErr)
+			return
 		}
+		var remaining int
+		require.NoError(t, root.QueryRowContext(cleanupCtx,
+			"SELECT COUNT(*) FROM mo_catalog.mo_account WHERE account_name = 'cdc_guard_probe'").Scan(&remaining))
+		require.Zero(t, remaining, "CDC catalog guard account must be removed before fixture reuse")
 	}()
 	connect := func(port int) *sql.DB {
 		db, openErr := sql.Open("mysql", fmt.Sprintf("cdc_guard_probe#admin:111@tcp(127.0.0.1:%d)/", port))

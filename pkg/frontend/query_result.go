@@ -377,6 +377,22 @@ func saveQueryResult2(execCtx *ExecCtx, crs *perfcounter.CounterSet, bat *batch.
 	if canSaveQueryResult(execCtx.reqCtx, ses) {
 		newCtx := perfcounter.AttachS3RequestKey(execCtx.reqCtx, crs)
 		if bat == nil {
+			// A query that produced zero rows sends no data batches, so the
+			// meta would have no block file to reference and result_scan
+			// rejects the saved result (issue #30553). Stage one typed empty
+			// block first, mirroring the cursor path's FinishStage handling.
+			if ses.queryRowCount == 0 && ses.blockIdx == 0 && ses.rs != nil && len(ses.rs.ResultCols) > 0 {
+				empty := batch.NewWithSize(len(ses.rs.ResultCols))
+				for i, col := range ses.rs.ResultCols {
+					empty.Vecs[i] = vector.NewVec(types.MustTypeFromPlan(col.Typ))
+				}
+				empty.SetRowCount(0)
+				if err := saveBatch(newCtx, ses, empty); err != nil {
+					empty.Clean(ses.GetMemPool())
+					return err
+				}
+				empty.Clean(ses.GetMemPool())
+			}
 			if err := saveMeta(newCtx, ses); err != nil {
 				return err
 			}
@@ -489,7 +505,7 @@ func buildColumnMap(ctx context.Context, rs *plan.ResultColDef) (string, error) 
 	return buf.String(), nil
 }
 
-func isResultQuery(proc *process.Process, p *plan.Plan) ([]string, error) {
+func isResultQuery(ctx context.Context, proc *process.Process, p *plan.Plan) ([]string, error) {
 	var uuids []string = nil
 	if q, ok := p.Plan.(*plan.Plan_Query); ok {
 		for _, n := range q.Query.Nodes {
@@ -500,12 +516,19 @@ func isResultQuery(proc *process.Process, p *plan.Plan) ([]string, error) {
 			} else if n.NodeType == plan.Node_FUNCTION_SCAN {
 				if n.TableDef.TblFunc.Name == "meta_scan" {
 					// calculate uuid
-					vec, free, err := colexec.GetReadonlyResultFromNoColumnExpression(proc, n.TblFuncExprList[0])
+					uuid, err := func() (types.Uuid, error) {
+						restore := bindFrontendExpressionContext(proc, ctx)
+						defer restore()
+						vec, free, err := colexec.GetReadonlyResultFromNoColumnExpression(proc, n.TblFuncExprList[0])
+						if err != nil {
+							return types.Uuid{}, err
+						}
+						defer free()
+						return vector.MustFixedColNoTypeCheck[types.Uuid](vec)[0], nil
+					}()
 					if err != nil {
 						return nil, err
 					}
-					uuid := vector.MustFixedColNoTypeCheck[types.Uuid](vec)[0]
-					free()
 
 					uuids = append(uuids, uuid.String())
 				}
@@ -721,12 +744,18 @@ type resultFileInfo struct {
 
 // doDumpQueryResult reads data from the query result, converts it into csv and saves it into
 // the file designated by the path.
-func doDumpQueryResult(ctx context.Context, ses *Session, eParam *tree.ExportParam) error {
-	var err error
+func doDumpQueryResult(ctx context.Context, ses *Session, eParam *tree.ExportParam) (err error) {
 	var columnDefs *plan.ResultColDef
 	var reader *ioutil.BlockReader
 	var blocks []objectio.BlockObject
 	var files []resultFileInfo
+
+	// MODUMP honors the output-file suffix the same way EXPORT does:
+	// .jsonl/.jsonline/.ndjson produce JSON Lines and .parquet produces
+	// Parquet; unsuffixed and other names keep the legacy CSV bytes (#30570).
+	if err = validateExportFormat(ctx, eParam); err != nil {
+		return err
+	}
 
 	//step1: open file handler
 	if columnDefs, err = openResultMeta(ctx, ses, eParam.QueryId); err != nil {
@@ -761,6 +790,7 @@ func doDumpQueryResult(ctx context.Context, ses *Session, eParam *tree.ExportPar
 		if err != nil {
 			return err
 		}
+		setMysqlColumnTypeMetadata(mcol, typs[i])
 		mrs.AddColumn(mcol)
 	}
 	mrs.Data = make([][]interface{}, 1)
@@ -778,18 +808,15 @@ func doDumpQueryResult(ctx context.Context, ses *Session, eParam *tree.ExportPar
 	exportParam.DefaultBufSize = getPu(exportParam.service).SV.ExportDataDefaultFlushSize
 	exportParam.FileService = getPu(exportParam.service).FileService
 	exportParam.Ctx = ctx
-	defer func() {
-		if exportParam.AsyncReader != nil {
-			_ = exportParam.AsyncReader.Close()
-		}
-		if exportParam.AsyncWriter != nil {
-			_ = exportParam.AsyncWriter.Close()
-		}
-	}()
+	exportParam.ctx = ctx
+	exportParam.init()
+	dumpExecCtx := &ExecCtx{reqCtx: ctx, ses: ses}
+	defer func() { err = exportParam.finish(err) }()
+
 	initExportFileParam(exportParam, mrs)
 
 	//open output file
-	if err = openNewFile(ctx, exportParam, mrs); err != nil {
+	if err = openNewFile(exportParam.ctx, exportParam, mrs); err != nil {
 		return err
 	}
 
@@ -820,6 +847,16 @@ func doDumpQueryResult(ctx context.Context, ses *Session, eParam *tree.ExportPar
 			defer release()
 			tmpBatch = bat
 
+			if exportParam.getExportFormat() != "csv" {
+				//step2.fmt: feed the decoded batch into the EXPORT format
+				//machinery (JSON Lines / Parquet writers) instead of the
+				//per-row CSV converter.
+				if err = exportParam.Write(dumpExecCtx, nil, tmpBatch); err != nil {
+					return err
+				}
+				continue
+			}
+
 			//step2.1: converts it into the csv string
 			//step2.2: writes the csv string into the outfile
 			n := tmpBatch.RowCount()
@@ -846,11 +883,13 @@ func doDumpQueryResult(ctx context.Context, ses *Session, eParam *tree.ExportPar
 		}
 	}
 
-	err = Close(exportParam)
-	if err != nil {
-		return err
+	if exportParam.getExportFormat() != "csv" {
+		// Finalize the JSON Lines / Parquet writers: flush pending buffered
+		// rows and close the writer before finish() reports success.
+		if err = exportAllDataFromBatches(exportParam); err != nil {
+			return err
+		}
 	}
-
 	return err
 }
 

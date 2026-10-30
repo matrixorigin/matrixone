@@ -251,19 +251,20 @@ func PlanColsToExeCols(planCols []*plan.ColDef) []TableDef {
 		exeTyp := types.MustTypeFromPlan(colTyp)
 		exeCols[i] = &AttributeDef{
 			Attr: Attribute{
-				Name:          col.GetOriginCaseName(),
-				Alg:           alg,
-				Type:          exeTyp,
-				Default:       planCols[i].GetDefault(),
-				OnUpdate:      planCols[i].GetOnUpdate(),
-				GeneratedCol:  col.GetGeneratedCol(),
-				Primary:       col.GetPrimary(),
-				Comment:       col.GetComment(),
-				ClusterBy:     col.ClusterBy,
-				AutoIncrement: col.Typ.GetAutoIncr(),
-				IsHidden:      col.Hidden,
-				Seqnum:        uint16(col.Seqnum),
-				EnumVlaues:    colTyp.GetEnumvalues(),
+				Name:              col.GetOriginCaseName(),
+				Alg:               alg,
+				Type:              exeTyp,
+				Default:           planCols[i].GetDefault(),
+				OnUpdate:          planCols[i].GetOnUpdate(),
+				GeneratedCol:      col.GetGeneratedCol(),
+				Primary:           col.GetPrimary(),
+				Comment:           col.GetComment(),
+				ClusterBy:         col.ClusterBy,
+				AutoIncrement:     col.Typ.GetAutoIncr(),
+				IsHidden:          col.Hidden,
+				Seqnum:            uint16(col.Seqnum),
+				EnumVlaues:        colTyp.GetEnumvalues(),
+				NumericAttributes: uint8(colTyp.GetNumericAttributes() & types.NumericAttributeMask),
 			},
 		}
 	}
@@ -302,6 +303,11 @@ type Attribute struct {
 	EnumVlaues string
 	// GeneratedCol is for generated (computed) columns
 	GeneratedCol *plan.GeneratedCol
+	// NumericAttributes carries the DECIMAL UNSIGNED(bit 0)/ZEROFILL(bit 1)
+	// attribute mask. It is an in-memory mirror only: the durable record is
+	// mo_columns.att_is_unsigned, rebuilt into this field on every catalog
+	// read. Zero for every non-decimal type.
+	NumericAttributes uint8
 }
 
 type PropertiesDef struct {
@@ -1193,6 +1199,13 @@ type RelationHandleFactory interface {
 	NewRelationHandle() Relation
 }
 
+// RelationCreatedInCurrentTxn reports whether the relation was created by the
+// transaction bound to the relation. Engines without a transaction-local
+// relation cache do not implement it.
+type RelationCreatedInCurrentTxn interface {
+	CreatedInCurrentTxn(context.Context) (bool, error)
+}
+
 // SourceCommitTSProvider is an optional relation capability used by async
 // indexes that must prove their source-table coverage.  It is intentionally not
 // part of Relation: engines without a logtail partition state simply do not
@@ -1206,6 +1219,14 @@ type RelationHandleFactory interface {
 // is always a valid lower bound: >= mustExceed when it short-circuits, else exact.
 type SourceCommitTSProvider interface {
 	SourceCommitTS(ctx context.Context, mustExceed types.TS) (types.TS, error)
+}
+
+// SourceCommitTSAfterCopyProvider returns committed source mutations while
+// excluding writes made by the current transaction. ALTER COPY has already
+// copied transaction-visible writes; it still must detect commits by other
+// transactions after the copy timestamp.
+type SourceCommitTSAfterCopyProvider interface {
+	SourceCommitTSAfterCopy(ctx context.Context, mustExceed types.TS) (types.TS, error)
 }
 
 // NewRelationHandle returns an exclusively owned handle when the engine
@@ -1499,11 +1520,6 @@ type AnalyzedStatsPublisher interface {
 // this local engine instance and frontier is the exact applied logtail target.
 type LogtailReadBarrier interface {
 	AcquireLogtailReadBarrier(ctx context.Context) (frontier timestamp.Timestamp, err error)
-}
-
-type VectorPool interface {
-	PutBatch(bat *batch.Batch)
-	GetVector(typ types.Type) *vector.Vector
 }
 
 // CatalogCacheGCer is an optional interface for engines that support

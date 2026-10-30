@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
+	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_7"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
@@ -46,7 +47,7 @@ func TestDoCheckUpgradeRetainsInterruptedTarget(t *testing.T) {
 					switch {
 					case strings.HasPrefix(sql, "SELECT reldatabase, relname, account_id FROM mo_catalog.mo_tables"):
 						return newBootstrapStringResult("mo_catalog"), nil
-					case sql == "select version, version_offset, state from mo_version order by create_at desc limit 1":
+					case sql == versions.LatestVersionSQL:
 						return recoveryVersionResult(t, target), nil
 					case strings.Contains(sql, "from mo_upgrade"):
 						total, ready := int32(0), int32(0)
@@ -72,6 +73,49 @@ func TestDoCheckUpgradeRetainsInterruptedTarget(t *testing.T) {
 	}
 }
 
+// Retained handler identities must match rows written by released binaries.
+// Use the production registration, not a synthetic offset-zero replacement.
+func TestDoCheckUpgradeRetainsInterruptedPublishedV406(t *testing.T) {
+	for _, state := range []int32{versions.StateCreated, versions.StateUpgradingTenant, versions.StateReady} {
+		t.Run(fmt.Sprint(state), func(t *testing.T) {
+			runtime.RunTest("", func(runtime.Runtime) {
+				target := versions.Version{Version: "4.0.6", VersionOffset: 5, State: versions.StateCreated}
+				var routeReads int
+				exec := executor.NewMemExecutor2(func(sql string) (executor.Result, error) {
+					switch {
+					case strings.HasPrefix(sql, "SELECT reldatabase, relname, account_id FROM mo_catalog.mo_tables"):
+						return newBootstrapStringResult("mo_catalog"), nil
+					case sql == versions.LatestVersionSQL:
+						return recoveryVersionResult(t, target), nil
+					case strings.Contains(sql, "from mo_upgrade"):
+						routeReads++
+						total, ready := int32(0), int32(0)
+						if state == versions.StateUpgradingTenant {
+							total, ready = 2, 1
+						} else if state == versions.StateReady {
+							total, ready = 2, 2
+						}
+						return ownRecoveryResult(t, buildUpgradeVersionResult(10, state, "4.0.5", "4.0.6", 5, 0, versions.Yes, versions.Yes, total, ready)), nil
+					case strings.Contains(sql, "from mo_catalog.mo_cdc_task"):
+						return executor.Result{}, nil
+					default:
+						return executor.Result{}, fmt.Errorf("must retain the interrupted v4.0.6 route: %s", sql)
+					}
+				}, &testTxnOperator{})
+				s := newServiceForTest("", &memLocker{}, clock.NewHLCClock(func() int64 { return 0 }, 0), nil, exec,
+					func(s *service) { s.initUpgrade() })
+				t.Cleanup(s.stopper.Stop)
+				// Assert before invoking the checker so a regression fails the test
+				// instead of terminating the process through its Fatal branch.
+				require.True(t, s.canResumeUpgrade(target), "released v4.0.6 offset five must remain resumable")
+				require.NoError(t, s.doCheckUpgrade(t.Context()))
+				require.Equal(t, 1, routeReads, "startup must validate the retained route")
+				require.False(t, s.upgrade.finalVersionCompleted.Load())
+			})
+		})
+	}
+}
+
 func TestManualTenantUpgradeWaitsForRecoveredRoute(t *testing.T) {
 	runtime.RunTest("", func(runtime.Runtime) {
 		s, _ := newRecoveryTestService(t, versions.StateReady)
@@ -79,7 +123,7 @@ func TestManualTenantUpgradeWaitsForRecoveredRoute(t *testing.T) {
 			switch sql {
 			case "select create_version from mo_account where account_id = 7":
 				return newBootstrapStringResult("4.0.10"), nil
-			case "select version, version_offset, state from mo_version order by create_at desc limit 1":
+			case versions.LatestVersionSQL:
 				return recoveryVersionResult(t, versions.Version{Version: "4.0.11", VersionOffset: 2}), nil
 			default:
 				return executor.Result{}, fmt.Errorf("must not upgrade a tenant past the retained route: %s", sql)
@@ -121,11 +165,20 @@ func TestUpgradeRecoveryRejectsUnsupportedCatalog(t *testing.T) {
 				txn := executor.NewMemTxnExecutor(func(string) (executor.Result, error) {
 					return ownRecoveryResult(t, buildUpgradeVersionResult(10, tc.state, tc.from, "4.0.11", 2, tc.order, versions.Yes, tc.tenant, 0, 0)), nil
 				}, &testTxnOperator{})
-				require.ErrorContains(t, s.checkUpgradeRecovery(s.handles[0].Metadata(), txn), "cannot resume")
+				err := s.checkUpgradeRecovery(s.handles[0].Metadata(), txn)
+				require.ErrorContains(t, err, "cannot resume")
+				var terminal *terminalUpgradeError
+				require.ErrorAs(t, err, &terminal)
+				calls := 0
+				require.ErrorIs(t, retryRun(t.Context(), s.logger, "invalid-route", func(context.Context) error { calls++; return err }), err)
+				require.Equal(t, 1, calls)
 			})
 		}
 		txn := executor.NewMemTxnExecutor(func(string) (executor.Result, error) { return executor.Result{}, nil }, &testTxnOperator{})
-		require.ErrorContains(t, s.checkUpgradeRecovery(s.handles[0].Metadata(), txn), "incomplete upgrade route")
+		err := s.checkUpgradeRecovery(s.handles[0].Metadata(), txn)
+		require.ErrorContains(t, err, "incomplete upgrade route")
+		var terminal *terminalUpgradeError
+		require.ErrorAs(t, err, &terminal)
 	})
 }
 
@@ -173,6 +226,69 @@ func TestUpgradePassRecoversBeforeAdvancing(t *testing.T) {
 	}
 }
 
+type deadlineCheckingExecutor struct {
+	executor.SQLExecutor
+	transactions int
+}
+
+func (e *deadlineCheckingExecutor) ExecTxn(ctx context.Context, fn func(executor.TxnExecutor) error, opts executor.Options) error {
+	if _, ok := ctx.Deadline(); !ok {
+		return errors.New("upgrade transaction has no deadline")
+	}
+	e.transactions++
+	return e.SQLExecutor.ExecTxn(ctx, fn, opts)
+}
+
+func TestUpgradePassUsesPerTransactionDeadline(t *testing.T) {
+	runtime.RunTest("", func(runtime.Runtime) {
+		s, _ := newRecoveryTestService(t, versions.StateReady)
+		checked := &deadlineCheckingExecutor{SQLExecutor: s.exec}
+		s.exec = checked
+		pass := s.newUpgradePass(context.Background())
+		completed, err := pass()
+		require.NoError(t, err)
+		require.False(t, completed)
+		completed, err = pass()
+		require.NoError(t, err)
+		require.True(t, completed)
+		require.GreaterOrEqual(t, checked.transactions, 3)
+
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		_, err = s.newUpgradePass(ctx)()
+		require.ErrorIs(t, err, context.Canceled)
+	})
+}
+
+func TestManualUpgradeRequiresCurrentReadyCatalog(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		version versions.Version
+		ok      bool
+	}{
+		{name: "current", version: versions.Version{Version: "4.0.12", VersionOffset: 1, State: versions.StateReady}, ok: true},
+		{name: "older", version: versions.Version{Version: "4.0.11", VersionOffset: 2, State: versions.StateReady}},
+		{name: "unfinished", version: versions.Version{Version: "4.0.12", VersionOffset: 1, State: versions.StateCreated}},
+		{name: "different offset", version: versions.Version{Version: "4.0.12", VersionOffset: 2, State: versions.StateReady}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			runtime.RunTest("", func(runtime.Runtime) {
+				s, _ := newRecoveryTestService(t, versions.StateReady)
+				s.exec = executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+					require.Contains(t, sql, "select version, version_offset, state from mo_version")
+					return recoveryVersionResult(t, tc.version), nil
+				})
+				err := s.CheckManualUpgradeReadiness(context.Background())
+				if tc.ok {
+					require.NoError(t, err)
+				} else {
+					require.ErrorContains(t, err, "enable auto-upgrade")
+				}
+			})
+		})
+	}
+}
+
 func TestUpgradeRecoveryRetainsMultiStepProgress(t *testing.T) {
 	for _, pending := range []bool{false, true} {
 		t.Run(fmt.Sprint(pending), func(t *testing.T) {
@@ -210,7 +326,7 @@ func TestUpgradeRecoveryRetainsMultiStepProgress(t *testing.T) {
 				s, _ := newRecoveryTestService(t, versions.StateReady)
 				s.handles = []VersionHandle{prefix, old, final}
 				require.NoError(t, s.checkUpgradeRecovery(old.Metadata(), txn))
-				completed, err := s.performUpgrade(t.Context(), old.Metadata(), txn)
+				completed, _, _, err := s.performUpgrade(t.Context(), old.Metadata(), txn, 0)
 				require.NoError(t, err)
 				require.Equal(t, !pending, completed)
 				require.Zero(t, prefix.callHandleClusterUpgrade.Load(), "do not replay a committed prefix")
@@ -421,7 +537,7 @@ func (e *recoveryTestExecutor) exec(sql string) (executor.Result, error) {
 	switch {
 	case strings.HasPrefix(sql, "SELECT reldatabase, relname, account_id FROM mo_catalog.mo_tables"):
 		return newBootstrapStringResult("mo_catalog"), nil
-	case sql == "select version, version_offset, state from mo_version order by create_at desc limit 1":
+	case sql == versions.LatestVersionSQL:
 		v := versions.Version{Version: "4.0.11", VersionOffset: 2, State: e.state.oldState}
 		if e.state.routes > 0 {
 			v = versions.Version{Version: "4.0.12", VersionOffset: 1, State: e.state.finalState}
@@ -618,5 +734,58 @@ func TestUpgradeRetryBackoff(t *testing.T) {
 		})
 		require.NoError(t, err)
 		require.Equal(t, []time.Duration{0, time.Second, 3 * time.Second, 7 * time.Second, 15 * time.Second, 25 * time.Second, 35 * time.Second}, attempts)
+	})
+}
+
+func TestV407RejectsDifferentOffsetBeforeCreatingRoute(t *testing.T) {
+	for _, offset := range []uint32{1, 1000} {
+		t.Run(fmt.Sprint(offset), func(t *testing.T) {
+			runtime.RunTest("", func(runtime.Runtime) {
+				target := versions.Version{Version: "4.0.7", VersionOffset: offset, State: versions.StateReady}
+				exec := executor.NewMemExecutor2(func(sql string) (executor.Result, error) {
+					switch {
+					case strings.HasPrefix(sql, "SELECT reldatabase, relname, account_id FROM mo_catalog.mo_tables"):
+						return newBootstrapStringResult("mo_catalog"), nil
+					case sql == versions.LatestVersionSQL:
+						return recoveryVersionResult(t, target), nil
+					default:
+						return executor.Result{}, fmt.Errorf("unexpected SQL before offset rejection: %s", sql)
+					}
+				}, &testTxnOperator{})
+				s := newServiceForTest("", &memLocker{}, clock.NewHLCClock(func() int64 { return 0 }, 0), nil, exec, func(s *service) { s.initUpgrade() })
+				t.Cleanup(s.stopper.Stop)
+				err := s.doCheckUpgrade(t.Context())
+				require.ErrorContains(t, err, "4.0.7 is frozen")
+				var terminal *terminalUpgradeError
+				require.ErrorAs(t, err, &terminal)
+				require.False(t, s.upgrade.finalVersionCompleted.Load())
+			})
+		})
+	}
+}
+
+func TestV407RejectsInterruptedOffsetOnlyRouteBeforeMutation(t *testing.T) {
+	runtime.RunTest("", func(runtime.Runtime) {
+		final := v4_0_7.Handler.Metadata()
+		target := versions.Version{Version: final.Version, VersionOffset: final.VersionOffset, State: versions.StateCreated}
+		exec := executor.NewMemExecutor2(func(sql string) (executor.Result, error) {
+			switch {
+			case strings.HasPrefix(sql, "SELECT reldatabase, relname, account_id FROM mo_catalog.mo_tables"):
+				return newBootstrapStringResult("mo_catalog"), nil
+			case sql == versions.LatestVersionSQL:
+				return recoveryVersionResult(t, target), nil
+			case strings.Contains(sql, "from mo_upgrade"):
+				return ownRecoveryResult(t, buildUpgradeVersionResult(10, versions.StateUpgradingTenant, "4.0.7", "4.0.7", final.VersionOffset, 0, versions.Yes, versions.Yes, 1, 0)), nil
+			default:
+				return executor.Result{}, fmt.Errorf("unexpected SQL before offset rejection: %s", sql)
+			}
+		}, &testTxnOperator{})
+		s := newServiceForTest("", &memLocker{}, clock.NewHLCClock(func() int64 { return 0 }, 0), nil, exec, func(s *service) { s.initUpgrade() })
+		t.Cleanup(s.stopper.Stop)
+		err := s.doCheckUpgrade(t.Context())
+		require.ErrorContains(t, err, "unsupported in-progress 4.0.7 offset-only upgrade")
+		var terminal *terminalUpgradeError
+		require.ErrorAs(t, err, &terminal)
+		require.False(t, s.upgrade.finalVersionCompleted.Load())
 	})
 }

@@ -221,6 +221,11 @@ func ExecuteIterationWithRuntime(
 	if rel.GetTableID(ctxWithAccount) != iterCtx.tableID {
 		return moerr.NewInternalErrorNoCtx("table id mismatch")
 	}
+	if tableDef.TableType == catalog.SystemTemporaryTable {
+		// The source identity was validated against the scheduled job above.
+		// Tail/snapshot index consumers need the same internal access as InitSQL.
+		ctxWithoutTimeout = defines.AttachTemporaryTableAccess(ctxWithoutTimeout)
+	}
 
 	if iterCtx.fromTS.IsEmpty() {
 		iterCtx.toTS = types.TimestampToTS(txnOp.SnapshotTS())
@@ -382,27 +387,17 @@ func jobNeedsInitSQL(jobSpec *JobSpec, status *JobStatus) bool {
 // collectChangesCtxForJobs returns the context one iteration must read its
 // change range with.
 //
-// A key that is both inserted and deleted inside the range is coalesced away as
-// "no net change" (filterBatch Case 2.2). That is sound only while a consumer's
-// materialized state equals the table state at the range start. An InitSQL-seeded
-// job generation breaks the precondition exactly once: RestoreTable / CREATE
-// TABLE ... CLONE / DATA BRANCH copy an index's already-built state and re-arm
-// its CDC at the DDL transaction's PRE-commit snapshot TS, so the clone's own row
-// appends commit inside the FIRST range the copy is maintained from and share it
-// with a DELETE of a row inherited from the copied base. Dropping that tombstone
-// leaves the copied entry queryable forever (#28847).
+// A key that is both inserted and deleted inside the range is normally
+// coalesced away as "no net change" (filterBatch Case 2.2). Index consumers
+// must receive the trailing DELETE: their materialized base can already hold
+// the key even when its INSERT falls inside the collected range. This happens
+// after COPY ALTER's inline index build as well as when a copied index is
+// re-armed at a DDL transaction's pre-commit snapshot (#28847, #30335).
 //
-// The window is bounded by durable consumption, not by the index algorithm:
-// mo_iscp_log.watermark reaches prevStatus.To only in the transaction that
-// applies the range, and a persisted ErrorCode means the last attempt may have
-// been applied only partially, so its range is retried from the same lagging
-// state. Every later range starts after the clone's appends, where coalescing is
-// sound again, so ordinary insert-then-delete churn keeps cancelling out and no
-// consumer accumulates extra durable deletes. That bound matters: the
-// append-only cuVS sinks retain every distinct deleted pk in their cdc_tail,
-// while CuvsUpdatable counts inserts and upserts only, so an unconditional
-// opt-in would grow their retained history without ever arming the rebuild that
-// reclaims it.
+// An InitSQL-seeded non-index consumer uses the same mode only until its first
+// range is durably applied. Index consumers use it for every range, including
+// generations with no InitSQL; deleting an absent key is semantically
+// idempotent. Append-only index sinks still retain the extra tombstones.
 func collectChangesCtxForJobs(
 	ctx context.Context,
 	jobSpecs []*JobSpec,
@@ -410,7 +405,9 @@ func collectChangesCtxForJobs(
 	committedWatermark []types.TS,
 ) context.Context {
 	for i := range prevStatus {
-		if jobStateMayLagRangeStart(jobSpecs[i], prevStatus[i], committedWatermark[i]) {
+		if jobSpecs[i] != nil && prevStatus[i] != nil &&
+			jobSpecs[i].ConsumerInfo.ConsumerType == int8(ConsumerType_IndexSync) ||
+			jobStateMayLagRangeStart(jobSpecs[i], prevStatus[i], committedWatermark[i]) {
 			return engine.WithCollectChangesKeepTrailingDeletes(ctx)
 		}
 	}
@@ -1033,21 +1030,21 @@ func NewIterationContext(accountID uint32, tableID uint64, jobNames []string, jo
 // parse error are returned so the caller can fail the InitSQL rather than
 // silently rebuild with defaults; an absent blob (no index match, or no
 // session_vars key) is (nil, nil) — legitimate, skip the overlay.
-func initSQLSessionVars(ctx context.Context, cnEngine engine.Engine, txnOp client.TxnOperator, dbName, tableName, indexName string) ([]byte, error) {
+func initSQLSessionVars(ctx context.Context, cnEngine engine.Engine, txnOp client.TxnOperator, dbName, tableName, indexName string) (context.Context, []byte, error) {
 	if dbName == "" || tableName == "" || indexName == "" {
-		return nil, nil
+		return ctx, nil, nil
 	}
 	db, err := cnEngine.Database(ctx, dbName, txnOp)
 	if err != nil {
-		return nil, err
+		return ctx, nil, err
 	}
 	rel, err := db.Relation(ctx, tableName, nil)
 	if err != nil {
-		return nil, err
+		return ctx, nil, err
 	}
 	tableDef := rel.CopyTableDef(ctx)
 	if tableDef == nil {
-		return nil, nil
+		return ctx, nil, nil
 	}
 	for _, idx := range tableDef.Indexes {
 		if idx.IndexName != indexName {
@@ -1055,11 +1052,18 @@ func initSQLSessionVars(ctx context.Context, cnEngine engine.Engine, txnOp clien
 		}
 		sv, serr := catalog.IndexParamsSessionVars(idx.IndexAlgoParams)
 		if serr != nil {
-			return nil, serr
+			return ctx, nil, serr
 		}
-		return sv, nil
+		// InitSQL is trusted index-maintenance SQL generated for this source.
+		// Its background executor has no frontend session. Scope the existing
+		// internal capability to this initialization transaction only, after
+		// resolving both the source and the named index in its tenant.
+		if tableDef.TableType == catalog.SystemTemporaryTable {
+			ctx = defines.AttachTemporaryTableAccess(ctx)
+		}
+		return ctx, sv, nil
 	}
-	return nil, nil
+	return ctx, nil, nil
 }
 
 // initSQLResolver builds the system-variable resolver for an InitSQL build.
@@ -1250,7 +1254,7 @@ func processInitSQL(
 			// through this process's resolver; overlaying the captured values lets the
 			// background rebuild reproduce the create-time config instead of process
 			// defaults. A load/parse failure is surfaced; an absent blob yields nil.
-			sessionVars, err := initSQLSessionVars(runCtx, cnEngine, txn, dbName, tableName, indexName)
+			runCtx, sessionVars, err := initSQLSessionVars(runCtx, cnEngine, txn, dbName, tableName, indexName)
 			if err != nil {
 				return err
 			}

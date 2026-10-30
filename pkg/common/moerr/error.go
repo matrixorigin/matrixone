@@ -85,6 +85,12 @@ const (
 	ErrPreparedParamOutOfRange     uint16 = 20207
 	ErrTruncatedWrongValue         uint16 = 20208
 	ErrGroupConcatCut              uint16 = 20209
+	ErrEnumSetValueTruncated       uint16 = 20210
+	// ErrOutOfRangeValueForColumn is the strict-mode assignment domain
+	// violation (MySQL ER_WARN_DATA_OUT_OF_RANGE, 1264/22003). It carries the
+	// destination column name and statement row, unlike ErrOutOfRange (1690),
+	// which reports a bare conversion range without column context.
+	ErrOutOfRangeValueForColumn uint16 = 20211
 
 	// Group 3: invalid input
 	ErrBadConfig            uint16 = 20300
@@ -151,6 +157,19 @@ const (
 	// contract without reusing main's codes or the digest dependency's 20338/20339.
 	ErrInvalidJSONPathWildcard  uint16 = 20340
 	ErrCollationCharsetMismatch uint16 = 20341
+	// ErrDuplicateCheckConstraintName reports a CHECK constraint name already
+	// used by another table in the same schema (MySQL 3822).
+	ErrDuplicateCheckConstraintName uint16 = 20342
+	// ErrTruncateIllegalFk preserves MySQL's ER_TRUNCATE_ILLEGAL_FK (1701,
+	// 42000) contract for TRUNCATE on a table referenced by a foreign key: a
+	// dedicated user error carrying the constraint name instead of a generic
+	// internal error. Keep it distinct from the DROP-site code below and from
+	// the child-row DML errors (1217/1451/1452), which are a different class.
+	ErrTruncateIllegalFk uint16 = 20343
+	// ErrFkCannotDropParent preserves MySQL's ER_FK_CANNOT_DROP_PARENT (3730,
+	// HY000) contract for DROP on a parent table: a dedicated user error
+	// naming the referenced table, the constraint, and the child table.
+	ErrFkCannotDropParent uint16 = 20344
 
 	// Group 4: unexpected state and io errors
 	ErrInvalidState                             uint16 = 20400
@@ -238,7 +257,16 @@ const (
 	ErrTooBigFieldLength            uint16 = 20480
 	// ErrNeedReprepare is returned when a prepared statement depends on
 	// session state that has been invalidated and must not be executed again.
-	ErrNeedReprepare uint16 = 20481
+	ErrNeedReprepare    uint16 = 20481
+	ErrSPRecursionLimit uint16 = 20482
+	// ErrDependentByCheckConstraint rejects ALTER DROP/RENAME COLUMN when a
+	// surviving CHECK still references the column (MySQL 3959). CHECKs that
+	// reference only the dropped column follow it instead of erroring.
+	ErrDependentByCheckConstraint uint16 = 20483
+	// ErrFkColumnNotNull reports a foreign key with an ON DELETE/ON UPDATE
+	// SET NULL action over a NOT NULL child column (MySQL error 1830,
+	// ER_FK_COLUMN_NOT_NULL). The action could never write NULL at runtime.
+	ErrFkColumnNotNull uint16 = 20484
 
 	// Group 5: rpc errors
 	//
@@ -334,6 +362,11 @@ const (
 	ErrSyncProtectionInvalid    uint16 = 20647
 	ErrSyncProtectionExpired    uint16 = 20648
 
+	// ErrCantExecuteInReadOnlyTransaction rejects a writing statement executed
+	// inside a read-only transaction. It carries the MySQL-compatible error
+	// code 1792 (SQLSTATE 25006).
+	ErrCantExecuteInReadOnlyTransaction uint16 = 20649
+
 	// Group 7: lock service
 	// ErrDeadLockDetected lockservice has detected a deadlock and should abort the transaction if it receives this error
 	ErrDeadLockDetected uint16 = 20701
@@ -355,6 +388,9 @@ const (
 	ErrRemoteLockWaitTimeout uint16 = 20709
 	// ErrLockWaitTimeout a lock waiter exceeded its configured wait budget
 	ErrLockWaitTimeout uint16 = 20710
+	// ErrLockNowait is a settled NOWAIT row-lock conflict. Unlike ErrLockConflict,
+	// this is a statement error and does not by itself abort the transaction.
+	ErrLockNowait uint16 = 20711
 
 	// Group 8: partition
 	ErrPartitionFunctionIsNotAllowed       uint16 = 20801
@@ -425,9 +461,18 @@ const (
 	ErrExecutorRunning uint16 = 22201
 
 	// Group 15: Vector Search
-	ErrVectorNeedRetryWithPreMode uint16 = 22301
+	ErrVectorIndexSnapshotChanged uint16 = 22301
+
 	// Group 16: CCPR
 	ErrCCPRReadOnly uint16 = 22401
+
+	// Group 17: Data Branch
+	// ErrDataBranchConflict reports a DATA BRANCH merge/pick write-write
+	// conflict between the two branches on the same primary key. It is a
+	// deterministic, user-visible data condition (issue #31614), not an
+	// internal fault: the failing statement aborts atomically and the
+	// error is never silently retried.
+	ErrDataBranchConflict uint16 = 22501
 
 	// ErrEnd, the max value of MOErrorCode
 	ErrEnd uint16 = 65535
@@ -476,13 +521,24 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrPreparedParamOutOfRange:     {ER_DATA_OUT_OF_RANGE, []string{"22003"}, "%s value is out of range in '%s'"},
 	ErrTruncatedWrongValue:         {ER_TRUNCATED_WRONG_VALUE, []string{"22007"}, "Truncated incorrect %-.64s value: '%-.128s'"},
 	ErrGroupConcatCut:              {ER_CUT_VALUE_GROUP_CONCAT, []string{"HY000"}, "%s"},
+	ErrEnumSetValueTruncated:       {WARN_DATA_TRUNCATED, []string{"01000"}, "%s"},
+	ErrOutOfRangeValueForColumn:    {ER_WARN_DATA_OUT_OF_RANGE, []string{"22003"}, "Out of range value for column '%-.192s' at row %d"},
 
 	// Group 3: invalid input
-	ErrBadConfig:               {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "invalid configuration: %s"},
-	ErrInvalidInput:            {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "invalid input: %s"},
-	ErrSyntaxError:             {ER_SYNTAX_ERROR, []string{"42000"}, "SQL syntax error: %s"},
-	ErrParseError:              {ER_PARSE_ERROR, []string{"42000"}, "SQL parser error: %s"},
-	ErrConstraintViolation:     {ER_CHECK_CONSTRAINT_VIOLATED, []string{MySQLDefaultSqlState}, "constraint violation: %s"},
+	ErrBadConfig:                    {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "invalid configuration: %s"},
+	ErrInvalidInput:                 {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "invalid input: %s"},
+	ErrSyntaxError:                  {ER_SYNTAX_ERROR, []string{"42000"}, "SQL syntax error: %s"},
+	ErrParseError:                   {ER_PARSE_ERROR, []string{"42000"}, "SQL parser error: %s"},
+	ErrConstraintViolation:          {ER_CHECK_CONSTRAINT_VIOLATED, []string{MySQLDefaultSqlState}, "constraint violation: %s"},
+	ErrDuplicateCheckConstraintName: {ER_CHECK_CONSTRAINT_DUP_NAME, []string{MySQLDefaultSqlState}, "Duplicate check constraint name '%-.192s'"},
+	// Truncating/dropping an FK-referenced parent is a defined user error, not
+	// an internal failure. Texts, SQLSTATEs and MySQL numbers mirror the
+	// upstream table in mysql_error_define.go (ER_TRUNCATE_ILLEGAL_FK 1701
+	// /42000, ER_FK_CANNOT_DROP_PARENT 3730/HY000); TestSqlStateMatchesMySQL
+	// pins that pairing. Missing FK metadata yields empty names, never success.
+	ErrTruncateIllegalFk:  {ER_TRUNCATE_ILLEGAL_FK, []string{"42000"}, "Cannot truncate a table referenced in a foreign key constraint (%.192s)"},
+	ErrFkCannotDropParent: {ER_FK_CANNOT_DROP_PARENT, []string{"HY000"}, "Cannot drop table '%s' referenced by a foreign key constraint '%s' on table '%s'."},
+
 	ErrDuplicate:               {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "tae data: duplicate"},
 	ErrRoleGrantedToSelf:       {ER_ROLE_GRANTED_TO_ITSELF, []string{MySQLDefaultSqlState}, "cannot grant role %s to %s"},
 	ErrDuplicateEntry:          {ER_DUP_ENTRY, []string{"23000"}, "Duplicate entry '%s' for key '%s'"},
@@ -548,6 +604,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrTableAlreadyExists:                       {ER_TABLE_EXISTS_ERROR, []string{"42S01"}, "table %s already exists"},
 	ErrFunctionAlreadyExists:                    {ER_UDF_ALREADY_EXISTS, []string{MySQLDefaultSqlState}, "function %s already exists"},
 	ErrProcedureAlreadyExists:                   {ER_UDF_ALREADY_EXISTS, []string{MySQLDefaultSqlState}, "procedure %s already exists"},
+	ErrSPRecursionLimit:                         {ER_SP_RECURSION_LIMIT, []string{MySQLDefaultSqlState}, "Recursive limit %d (as set by the max_sp_recursion_depth variable) was exceeded for routine %.192s"},
 	ErrDropNonExistsFunction:                    {ER_CANT_FIND_UDF, []string{MySQLDefaultSqlState}, "function %s doesn't exist"},
 	ErrNoService:                                {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "service %s not found"},
 	ErrDupServiceName:                           {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "duplicate service name %s"},
@@ -581,6 +638,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrFKIncompatibleColumns:                    {ER_FK_INCOMPATIBLE_COLUMNS, []string{MySQLDefaultSqlState}, "Referencing column '%s' and referenced column '%s' in foreign key constraint '%s' are incompatible."},
 	ErrForeignKeyColumnCannotChangeChild:        {ER_FK_COLUMN_CANNOT_CHANGE_CHILD, []string{MySQLDefaultSqlState}, "Cannot change column '%-.192s': used in a foreign key constraint '%-.192s' of table '%-.192s'"},
 	ErrForeignKeyColumnCannotChange:             {ER_FK_COLUMN_CANNOT_CHANGE, []string{MySQLDefaultSqlState}, "Cannot change column '%-.192s': used in a foreign key constraint '%-.192s'"},
+	ErrFkColumnNotNull:                          {ER_FK_COLUMN_NOT_NULL, []string{MySQLDefaultSqlState}, "Column '%-.192s' cannot be NOT NULL: needed in a foreign key constraint '%-.192s' SET NULL"},
 	ErrForeignKeyOnPartitioned:                  {ER_FOREIGN_KEY_ON_PARTITIONED, []string{MySQLDefaultSqlState}, "Foreign keys are not yet supported in conjunction with partitioning"},
 	ErrKeyColumnDoesNotExist:                    {ER_KEY_COLUMN_DOES_NOT_EXIST, []string{"42000"}, "Key column '%-.192s' doesn't exist in table"},
 	ErrKeyDoesNotExist:                          {ER_KEY_DOES_NOT_EXIST, []string{"42000"}, "Key '%-.192s' doesn't exist in table '%-.192s'"},
@@ -590,10 +648,11 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrFkColumnCannotDrop:                       {ER_FK_COLUMN_CANNOT_DROP, []string{MySQLDefaultSqlState}, "Cannot drop column '%-.192s': needed in a foreign key constraint '%-.192s'"},
 	ErrFkColumnCannotDropChild:                  {ER_FK_COLUMN_CANNOT_DROP_CHILD, []string{MySQLDefaultSqlState}, "Cannot drop column '%-.192s': needed in a foreign key constraint '%-.192s' of table '%-.192s'"},
 	ErrDependentByPartitionFunction:             {ER_DEPENDENT_BY_PARTITION_FUNC, []string{MySQLDefaultSqlState}, "Column '%s' has a partitioning function dependency and cannot be dropped or renamed"},
+	ErrDependentByCheckConstraint:               {ER_DEPENDENT_BY_CHECK_CONSTRAINT, []string{MySQLDefaultSqlState}, "Check constraint '%-.192s' uses column '%-.192s', hence column cannot be dropped or renamed."},
 	ErrAlterOperationNotSupportedReasonFkRename: {ER_ALTER_OPERATION_NOT_SUPPORTED_REASON_FK_RENAME, []string{MySQLDefaultSqlState}, "Columns participating in a foreign key are renamed"},
 	ErrPrimaryCantHaveNull:                      {ER_PRIMARY_CANT_HAVE_NULL, []string{"42000"}, "All parts of a PRIMARY KEY must be NOT NULL; if you need NULL in a key, use UNIQUE instead"},
 	ErrPartitionMgmtOnNonpartitioned:            {ER_PARTITION_MGMT_ON_NONPARTITIONED, []string{MySQLDefaultSqlState}, "Partition management on a not partitioned table is not possible"},
-	ErrFKRowIsReferenced:                        {ER_ROW_IS_REFERENCED, []string{"23000"}, "Cannot delete or update a parent row: a foreign key constraint fails"},
+	ErrFKRowIsReferenced:                        {ER_ROW_IS_REFERENCED_2, []string{"23000"}, "Cannot delete or update a parent row: a foreign key constraint fails"},
 	ErrDuplicateKeyName:                         {ER_DUP_KEYNAME, []string{"42000"}, "Duplicate foreign key constraint name '%-.192s'"},
 	ErrFKNoReferencedRow2:                       {ER_NO_REFERENCED_ROW_2, []string{"23000"}, "Cannot add or update a child row: a foreign key constraint fails"},
 	ErrBlobCantHaveDefault:                      {ER_BLOB_CANT_HAVE_DEFAULT, []string{"42000"}, "BLOB, TEXT, GEOMETRY or JSON column '%-.192s' can't have a default value"},
@@ -670,7 +729,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrSyncProtectionExpired:    {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "sync protection expired: job %s validTS %d < prepareTS %d"},
 
 	// Group 7: lock service
-	ErrDeadLockDetected:        {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "deadlock detected"},
+	ErrDeadLockDetected:        {ER_LOCK_DEADLOCK, []string{"40001"}, "deadlock detected"},
 	ErrLockTableBindChanged:    {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "lock table bind changed"},
 	ErrLockTableNotFound:       {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "lock table not found on remote lock service"},
 	ErrDeadlockCheckBusy:       {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "deadlock check is busy"},
@@ -680,6 +739,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrCannotCommitOnInvalidCN: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "cannot commit a orphan transaction on invalid cn"},
 	ErrRemoteLockWaitTimeout:   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "remote lock wait timeout"},
 	ErrLockWaitTimeout:         {ER_LOCK_WAIT_TIMEOUT, []string{MySQLDefaultSqlState}, "Lock wait timeout exceeded; try restarting transaction"},
+	ErrLockNowait:              {ER_LOCK_NOWAIT, []string{"HY000"}, "Statement aborted because lock(s) could not be acquired immediately and NOWAIT is set."},
 
 	// Group 8: partition
 	ErrPartitionFunctionIsNotAllowed:       {ER_PARTITION_FUNCTION_IS_NOT_ALLOWED, []string{MySQLDefaultSqlState}, "This partition function is not allowed"},
@@ -742,10 +802,28 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrExecutorRunning: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "TaskService: executor %s is already running"},
 
 	// Group 15: Vector Search
-	ErrVectorNeedRetryWithPreMode: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "vector search need retry with pre mode"},
+	ErrVectorIndexSnapshotChanged: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "vector index generation does not cover the read snapshot"},
+
+	// ErrCantExecuteInReadOnlyTransaction mirrors MySQL ERROR 1792 (25006)
+	// byte-for-byte so drivers matching on the error code, notably
+	// Connector/J after Connection.setReadOnly(true), observe the exact
+	// server reply MySQL would send.
+	ErrCantExecuteInReadOnlyTransaction: {
+		ER_CANT_EXECUTE_IN_READ_ONLY_TRANSACTION,
+		[]string{"25006"},
+		"Cannot execute statement in a READ ONLY transaction.",
+	},
 
 	// Group 16: CCPR
 	ErrCCPRReadOnly: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "ccpr shared object is read-only"},
+
+	// Group 17: Data Branch. The conflict report is a deterministic data
+	// condition, surfaced to the client as MySQL ER_UNKNOWN_ERROR (1105)
+	// with SQLSTATE HY000 — the same severity class as the checksum and
+	// write-conflict reports — and is never silently retried. Callers
+	// pass the two conflicting sides and the pk as a single pre-formatted
+	// detail; the leading "conflict: " comes from this catalog template.
+	ErrDataBranchConflict: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "conflict: %s"},
 
 	// Group End: max value of MOErrorCode
 	ErrEnd: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "internal error: end of errcode code"},
@@ -1049,16 +1127,8 @@ func NewInfo(ctx context.Context, msg string) *Error {
 	return newError(ctx, ErrInfo, msg)
 }
 
-func NewLoadInfo(ctx context.Context, rec, del, skip, warn, writeTimeOut uint64) *Error {
-	return newError(ctx, ErrLoadInfo, rec, del, skip, warn, writeTimeOut)
-}
-
 func NewWarn(ctx context.Context, msg string) *Error {
 	return newError(ctx, ErrWarn, msg)
-}
-
-func NewBadS3Config(ctx context.Context, msg string) *Error {
-	return newError(ctx, ErrBadS3Config, msg)
 }
 
 func NewInternalErrorf(ctx context.Context, format string, args ...any) *Error {
@@ -1068,10 +1138,6 @@ func NewInternalErrorf(ctx context.Context, format string, args ...any) *Error {
 
 func NewInternalError(ctx context.Context, msg string) *Error {
 	return newError(ctx, ErrInternal, msg)
-}
-
-func NewUpgrateError(ctx context.Context, dbName string, table string, tenant string, tenantId uint32, errmsg string) *Error {
-	return newError(ctx, ErrUpgrateError, dbName, table, tenant, tenantId, errmsg)
 }
 
 func NewNYIf(ctx context.Context, format string, args ...any) *Error {
@@ -1089,10 +1155,6 @@ func NewNotSupportedf(ctx context.Context, format string, args ...any) *Error {
 
 func NewNotSupported(ctx context.Context, msg string) *Error {
 	return newError(ctx, ErrNotSupported, msg)
-}
-
-func NewRemoteDispatchNotRegistered(ctx context.Context, uuid string) *Error {
-	return newError(ctx, ErrRemoteDispatchNotRegistered, uuid)
 }
 
 func NewOOM(ctx context.Context) *Error {
@@ -1129,10 +1191,6 @@ func NewDivByZero(ctx context.Context) *Error {
 	return newError(ctx, ErrDivByZero)
 }
 
-func NewRegexpIllegalArgument(ctx context.Context) *Error {
-	return newError(ctx, ErrRegexpIllegalArgument)
-}
-
 func NewOutOfRangef(ctx context.Context, typ string, format string, args ...any) *Error {
 	msg := fmt.Sprintf(format, args...)
 	return newError(ctx, ErrOutOfRange, typ, msg)
@@ -1146,9 +1204,26 @@ func NewPreparedParamOutOfRange(ctx context.Context, typ string, statement strin
 	return newError(ctx, ErrPreparedParamOutOfRange, typ, statement)
 }
 
+func NewOutOfRangeValueForColumn(ctx context.Context, column string, row uint64) *Error {
+	return newError(ctx, ErrOutOfRangeValueForColumn, column, row)
+}
+
 func NewDataTruncatedf(ctx context.Context, typ string, format string, args ...any) *Error {
 	msg := fmt.Sprintf(format, args...)
 	return newError(ctx, ErrDataTruncated, typ, msg)
+}
+
+// NewAssignmentValueTruncated is a real strict-assignment failure with MySQL
+// diagnostic 1265/01000. Reuse the released error code used by ENUM/SET so
+// older error decoders retain the same real-error and rollback semantics.
+func NewAssignmentValueTruncated(ctx context.Context, message string) *Error {
+	return newError(ctx, ErrEnumSetValueTruncated, message)
+}
+
+// NewEnumSetValueTruncated is a real strict-assignment failure, even though
+// MySQL uses the same diagnostic number for non-strict truncation warnings.
+func NewEnumSetValueTruncated(ctx context.Context, message string) *Error {
+	return newError(ctx, ErrEnumSetValueTruncated, message)
 }
 
 func NewGroupConcatCut(ctx context.Context, message string) *Error {
@@ -1217,14 +1292,6 @@ func NewFtMatchingKeyNotFound(ctx context.Context) *Error {
 
 func NewWrongArguments(ctx context.Context, function string) *Error {
 	return newError(ctx, ErrWrongArguments, function)
-}
-
-func NewWrongParamCountToNativeFct(ctx context.Context, function string) *Error {
-	return newError(ctx, ErrWrongParamCountToNativeFct, function)
-}
-
-func NewAESInvalidIV(ctx context.Context, function string, minLength int) *Error {
-	return newError(ctx, ErrAESInvalidIV, function, minLength)
 }
 
 func NewUserLockWrongName(ctx context.Context, name string) *Error {
@@ -1309,6 +1376,12 @@ func NewConstraintViolation(ctx context.Context, msg string) *Error {
 	return newError(ctx, ErrConstraintViolation, msg)
 }
 
+// NewDuplicateCheckConstraintName reports MySQL's ER_CHECK_CONSTRAINT_DUP_NAME
+// (3822): another table in the same schema already uses the CHECK name.
+func NewDuplicateCheckConstraintName(ctx context.Context, name string) *Error {
+	return newError(ctx, ErrDuplicateCheckConstraintName, name)
+}
+
 func NewUnsupportedDML(ctx context.Context, format string, args ...any) *Error {
 	msg := fmt.Sprintf(format, args...)
 	noReportCtx := errutil.ContextWithNoReport(ctx, true)
@@ -1317,10 +1390,6 @@ func NewUnsupportedDML(ctx context.Context, format string, args ...any) *Error {
 
 func NewMultiUpdateKeyConflict(ctx context.Context, first, second string) *Error {
 	return newError(ctx, ErrMultiUpdateKeyConflict, first, second)
-}
-
-func NewEmptyVector(ctx context.Context) *Error {
-	return newError(ctx, ErrEmptyVector)
 }
 
 func NewFileNotFound(ctx context.Context, f string) *Error {
@@ -1339,10 +1408,6 @@ func NewNoConfig(ctx context.Context, f string) *Error {
 	return newError(ctx, ErrNoConfig, f)
 }
 
-func NewFileAlreadyExists(ctx context.Context, f string) *Error {
-	return newError(ctx, ErrFileAlreadyExists, f)
-}
-
 func NewDBAlreadyExists(ctx context.Context, db string) *Error {
 	return newError(ctx, ErrDBAlreadyExists, db)
 }
@@ -1359,18 +1424,6 @@ func NewEmptyRange(ctx context.Context, f string) *Error {
 	return newError(ctx, ErrEmptyRange, f)
 }
 
-func NewSizeNotMatch(ctx context.Context, f string) *Error {
-	return newError(ctx, ErrSizeNotMatch, f)
-}
-
-func NewNoProgress(ctx context.Context, f string) *Error {
-	return newError(ctx, ErrNoProgress, f)
-}
-
-func NewInvalidPath(ctx context.Context, f string) *Error {
-	return newError(ctx, ErrInvalidPath, f)
-}
-
 func NewInvalidStatef(ctx context.Context, format string, args ...any) *Error {
 	msg := fmt.Sprintf(format, args...)
 	return newError(ctx, ErrInvalidState, msg)
@@ -1382,10 +1435,6 @@ func NewInvalidState(ctx context.Context, msg string) *Error {
 
 func NewInvalidTask(ctx context.Context, runner string, id uint64) *Error {
 	return newError(ctx, ErrInvalidTask, runner, id)
-}
-
-func NewInvalidServiceIndex(ctx context.Context, idx int) *Error {
-	return newError(ctx, ErrInvalidServiceIndex, idx)
 }
 
 func NewLogServiceNotReady(ctx context.Context) *Error {
@@ -1402,20 +1451,8 @@ func NewNoDB(ctx context.Context) *Error {
 	return newError(noReportCtx, ErrNoDB)
 }
 
-func NewNoWorkingStore(ctx context.Context) *Error {
-	return newError(ctx, ErrNoWorkingStore)
-}
-
 func NewNoService(ctx context.Context, name string) *Error {
 	return newError(ctx, ErrNoService, name)
-}
-
-func NewDupServiceName(ctx context.Context, name string) *Error {
-	return newError(ctx, ErrDupServiceName, name)
-}
-
-func NewWrongService(ctx context.Context, exp, got string) *Error {
-	return newError(ctx, ErrWrongService, exp, got)
 }
 
 func NewNoHAKeeper(ctx context.Context) *Error {
@@ -1540,14 +1577,6 @@ func NewTxnWriteConflict(ctx context.Context, msg string) *Error {
 	return newError(ctx, ErrTxnWriteConflict, msg)
 }
 
-func NewMissingTxn(ctx context.Context) *Error {
-	return newError(ctx, ErrMissingTxn)
-}
-
-func NewUnresolvedConflict(ctx context.Context) *Error {
-	return newError(ctx, ErrUnresolvedConflict)
-}
-
 func NewTxnErrorf(ctx context.Context, format string, args ...any) *Error {
 	msg := fmt.Sprintf(format, args...)
 	return newError(ctx, ErrTxnError, msg)
@@ -1562,16 +1591,8 @@ func NewTAEErrorf(ctx context.Context, format string, args ...any) *Error {
 	return newError(ctx, ErrTAEError, msg)
 }
 
-func NewTAEError(ctx context.Context, msg string) *Error {
-	return newError(ctx, ErrTAEError, msg)
-}
-
 func NewTNShardNotFound(ctx context.Context, uuid string, id uint64) *Error {
 	return newError(ctx, ErrTNShardNotFound, uuid, id)
-}
-
-func NewShardNotReported(ctx context.Context, uuid string, id uint64) *Error {
-	return newError(ctx, ErrShardNotReported, uuid, id)
 }
 
 func NewDragonboatTimeoutf(ctx context.Context, format string, args ...any) *Error {
@@ -1588,16 +1609,8 @@ func NewDragonboatTimeoutTooSmallf(ctx context.Context, format string, args ...a
 	return newError(ctx, ErrDragonboatTimeoutTooSmall, msg)
 }
 
-func NewDragonboatTimeoutTooSmall(ctx context.Context, msg string) *Error {
-	return newError(ctx, ErrDragonboatTimeoutTooSmall, msg)
-}
-
 func NewDragonboatInvalidDeadlinef(ctx context.Context, format string, args ...any) *Error {
 	msg := fmt.Sprintf(format, args...)
-	return newError(ctx, ErrDragonboatInvalidDeadline, msg)
-}
-
-func NewDragonboatInvalidDeadline(ctx context.Context, msg string) *Error {
 	return newError(ctx, ErrDragonboatInvalidDeadline, msg)
 }
 
@@ -1606,16 +1619,8 @@ func NewDragonboatRejectedf(ctx context.Context, format string, args ...any) *Er
 	return newError(ctx, ErrDragonboatRejected, msg)
 }
 
-func NewDragonboatRejected(ctx context.Context, msg string, args ...any) *Error {
-	return newError(ctx, ErrDragonboatRejected, msg)
-}
-
 func NewDragonboatInvalidPayloadSizef(ctx context.Context, format string, args ...any) *Error {
 	msg := fmt.Sprintf(format, args...)
-	return newError(ctx, ErrDragonboatInvalidPayloadSize, msg)
-}
-
-func NewDragonboatInvalidPayloadSize(ctx context.Context, msg string) *Error {
 	return newError(ctx, ErrDragonboatInvalidPayloadSize, msg)
 }
 
@@ -1624,15 +1629,8 @@ func NewDragonboatShardNotReadyf(ctx context.Context, format string, args ...any
 	return newError(ctx, ErrDragonboatShardNotReady, msg)
 }
 
-func NewDragonboatShardNotReady(ctx context.Context, msg string) *Error {
-	return newError(ctx, ErrDragonboatShardNotReady, msg)
-}
-
 func NewDragonboatSystemClosedf(ctx context.Context, format string, args ...any) *Error {
 	msg := fmt.Sprintf(format, args...)
-	return newError(ctx, ErrDragonboatSystemClosed, msg)
-}
-func NewDragonboatSystemClosed(ctx context.Context, msg string) *Error {
 	return newError(ctx, ErrDragonboatSystemClosed, msg)
 }
 
@@ -1640,16 +1638,9 @@ func NewDragonboatInvalidRangef(ctx context.Context, format string, args ...any)
 	msg := fmt.Sprintf(format, args...)
 	return newError(ctx, ErrDragonboatInvalidRange, msg)
 }
-func NewDragonboatInvalidRange(ctx context.Context, msg string) *Error {
-	return newError(ctx, ErrDragonboatInvalidRange, msg)
-}
 
 func NewDragonboatShardNotFoundf(ctx context.Context, format string, args ...any) *Error {
 	msg := fmt.Sprintf(format, args...)
-	return newError(ctx, ErrDragonboatShardNotFound, msg)
-}
-
-func NewDragonboatShardNotFound(ctx context.Context, msg string) *Error {
 	return newError(ctx, ErrDragonboatShardNotFound, msg)
 }
 
@@ -1666,16 +1657,8 @@ func NewErrDropNonExistsDB(ctx context.Context, name string) *Error {
 	return newError(ctx, ErrDropNonExistsDB, name)
 }
 
-func NewTAERead(ctx context.Context) *Error {
-	return newError(ctx, ErrTAERead)
-}
-
 func NewRpcError(ctx context.Context, msg string) *Error {
 	return newError(ctx, ErrRpcError, msg)
-}
-
-func NewWaitTxn(ctx context.Context) *Error {
-	return newError(ctx, ErrWaitTxn)
 }
 
 func NewTxnNotFound(ctx context.Context) *Error {
@@ -1686,16 +1669,8 @@ func NewTxnNotActive(ctx context.Context, st string) *Error {
 	return newError(ctx, ErrTxnNotActive, st)
 }
 
-func NewTAEWrite(ctx context.Context) *Error {
-	return newError(ctx, ErrTAEWrite)
-}
-
 func NewTAECommitf(ctx context.Context, format string, args ...any) *Error {
 	msg := fmt.Sprintf(format, args...)
-	return newError(ctx, ErrTAECommit, msg)
-}
-
-func NewTAECommit(ctx context.Context, msg string) *Error {
 	return newError(ctx, ErrTAECommit, msg)
 }
 
@@ -1704,25 +1679,9 @@ func NewTAERollbackf(ctx context.Context, format string, args ...any) *Error {
 	return newError(ctx, ErrTAERollback, msg)
 }
 
-func NewTAERollback(ctx context.Context, msg string) *Error {
-	return newError(ctx, ErrTAERollback, msg)
-}
-
 func NewTAEPreparef(ctx context.Context, format string, args ...any) *Error {
 	msg := fmt.Sprintf(format, args...)
 	return newError(ctx, ErrTAEPrepare, msg)
-}
-
-func NewTAEPrepare(ctx context.Context, msg string) *Error {
-	return newError(ctx, ErrTAEPrepare, msg)
-}
-
-func NewTAEPossibleDuplicate(ctx context.Context) *Error {
-	return newError(ctx, ErrTAEPossibleDuplicate)
-}
-
-func NewTxnRWConflict(ctx context.Context) *Error {
-	return newError(ctx, ErrTxnRWConflict)
 }
 
 func NewTxnWWConflict(
@@ -1734,14 +1693,6 @@ func NewTxnWWConflict(
 	return e
 }
 
-func NewNotFound(ctx context.Context) *Error {
-	return newError(ctx, ErrNotFound)
-}
-
-func NewDuplicate(ctx context.Context) *Error {
-	return newError(ctx, ErrDuplicate)
-}
-
 func NewDuplicateEntry(ctx context.Context, entry string, key string) *Error {
 	return newError(ctx, ErrDuplicateEntry, entry, key)
 }
@@ -1751,6 +1702,22 @@ func NewDuplicateEntry(ctx context.Context, entry string, key string) *Error {
 // rejected row is an expected warning rather than an execution error.
 func FormatDuplicateEntry(entry string, key string) string {
 	return fmt.Sprintf(errorMsgRefer[ErrDuplicateEntry].errorMsgOrFormat, entry, key)
+}
+
+// NewTruncateIllegalFk reports MySQL ER_TRUNCATE_ILLEGAL_FK (1701, 42000):
+// TRUNCATE on a table referenced by a foreign key constraint. constraint is
+// the FK name when current metadata resolves it, empty when the referencing
+// child cannot be resolved.
+func NewTruncateIllegalFk(ctx context.Context, constraint string) *Error {
+	return newError(ctx, ErrTruncateIllegalFk, constraint)
+}
+
+// NewFkCannotDropParent reports MySQL ER_FK_CANNOT_DROP_PARENT (3730, HY000):
+// DROP on a table referenced by a foreign key constraint. constraint and
+// childTable carry the resolved names when current metadata has them and are
+// empty when it does not; a resolve failure is the caller's to propagate.
+func NewFkCannotDropParent(ctx context.Context, table string, constraint string, childTable string) *Error {
+	return newError(ctx, ErrFkCannotDropParent, table, constraint, childTable)
 }
 
 func NewWrongValueCountOnRow(ctx context.Context, row int) *Error {
@@ -1809,28 +1776,8 @@ func NewRoleGrantedToSelf(ctx context.Context, from, to string) *Error {
 	return newError(ctx, ErrRoleGrantedToSelf, from, to)
 }
 
-func NewTxnInternal(ctx context.Context) *Error {
-	return newError(ctx, ErrTxnInternal)
-}
-
-func NewTxnReadConflict(ctx context.Context, msg string) *Error {
-	return newError(ctx, ErrTxnReadConflict, msg)
-}
-
-func NewPrimaryKeyDuplicated(ctx context.Context, k any) *Error {
-	return newError(ctx, ErrPrimaryKeyDuplicated, k)
-}
-
 func NewDuplicateKey(ctx context.Context, k string) *Error {
 	return newError(ctx, ErrDuplicateKey, k)
-}
-
-func NewAppendableObjectNotFound(ctx context.Context) *Error {
-	return newError(ctx, ErrAppendableObjectNotFound)
-}
-
-func NewAppendableBlockNotFound(ctx context.Context) *Error {
-	return newError(ctx, ErrAppendableBlockNotFound)
 }
 
 func NewTxnNeedRetry(ctx context.Context) *Error {
@@ -1841,24 +1788,12 @@ func NewTxnNeedRetryWithDefChanged(ctx context.Context) *Error {
 	return newError(ctx, ErrTxnNeedRetryWithDefChanged)
 }
 
-func NewTxnCannotRetry(ctx context.Context) *Error {
-	return newError(ctx, ErrTxnCannotRetry)
-}
-
 func NewDeadLockDetected(ctx context.Context) *Error {
 	return newError(ctx, ErrDeadLockDetected)
 }
 
-func NewDeadlockCheckBusy(ctx context.Context) *Error {
-	return newError(ctx, ErrDeadlockCheckBusy)
-}
-
 func NewCannotCommitOrphan(ctx context.Context) *Error {
 	return newError(ctx, ErrCannotCommitOrphan)
-}
-
-func NewCannotCommitOnInvalidCN(ctx context.Context) *Error {
-	return newError(ctx, ErrCannotCommitOnInvalidCN)
 }
 
 func NewLockTableBindChanged(ctx context.Context) *Error {
@@ -1873,99 +1808,12 @@ func NewLockConflict(ctx context.Context) *Error {
 	return newError(ctx, ErrLockConflict)
 }
 
-func NewRemoteLockWaitTimeout(ctx context.Context) *Error {
-	return newError(ctx, ErrRemoteLockWaitTimeout)
-}
-
 func NewLockWaitTimeout(ctx context.Context) *Error {
 	return newError(ctx, ErrLockWaitTimeout)
 }
 
-func NewPartitionFunctionIsNotAllowed(ctx context.Context) *Error {
-	return newError(ctx, ErrPartitionFunctionIsNotAllowed)
-}
-
-func NewWrongExprInPartitionFunc(ctx context.Context) *Error {
-	return newError(ctx, ErrWrongExprInPartitionFunc)
-}
-
-func NewMultipleDefConstInListPart(ctx context.Context) *Error {
-	return newError(ctx, ErrMultipleDefConstInListPart)
-}
-
-func NewPartitionConstDomain(ctx context.Context) *Error {
-	return newError(ctx, ErrPartitionConstDomain)
-}
-
-func NewFieldNotFoundPart(ctx context.Context) *Error {
-	return newError(ctx, ErrFieldNotFoundPart)
-}
-func NewPartitionsMustBeDefined(ctx context.Context, k any) *Error {
-	return newError(ctx, ErrPartitionsMustBeDefined, k)
-}
-
-func NewWrongTypeColumnValue(ctx context.Context) *Error {
-	return newError(ctx, ErrWrongTypeColumnValue)
-}
-
-func NewValuesIsNotIntType(ctx context.Context, k any) *Error {
-	return newError(ctx, ErrValuesIsNotIntType, k)
-}
-
-func NewErrPartitionColumnList(ctx context.Context) *Error {
-	return newError(ctx, ErrPartitionColumnList)
-}
-
-func NewSameNamePartition(ctx context.Context, k any) *Error {
-	return newError(ctx, ErrSameNamePartition, k)
-}
-
-func NewSameNamePartitionField(ctx context.Context, k any) *Error {
-	return newError(ctx, ErrSameNamePartitionField, k)
-}
-
-func NewErrMaxvalueInValuesIn(ctx context.Context) *Error {
-	return newError(ctx, ErrMaxvalueInValuesIn)
-}
-
-func NewErrRowSinglePartitionField(ctx context.Context) *Error {
-	return newError(ctx, ErrRowSinglePartitionField)
-}
-
-func NewErrTooManyPartitionFuncFields(ctx context.Context, k any) *Error {
-	return newError(ctx, ErrTooManyPartitionFuncFields, k)
-}
-
-func NewErrTooManyPartitions(ctx context.Context) *Error {
-	return newError(ctx, ErrTooManyPartitions)
-}
-
-func NewPartitionFuncNotAllowed(ctx context.Context, k any) *Error {
-	return newError(ctx, ErrPartitionFuncNotAllowed, k)
-}
-
-func NewFieldTypeNotAllowedAsPartitionField(ctx context.Context, k any) *Error {
-	return newError(ctx, ErrFieldTypeNotAllowedAsPartitionField, k)
-}
-
 func NewPartitionNoTemporary(ctx context.Context) *Error {
 	return newError(ctx, ErrPartitionNoTemporary)
-}
-
-func NewBlobFieldInPartFunc(ctx context.Context) *Error {
-	return newError(ctx, ErrBlobFieldInPartFunc)
-}
-
-func NewUniqueKeyNeedAllFieldsInPf(ctx context.Context, k any) *Error {
-	return newError(ctx, ErrUniqueKeyNeedAllFieldsInPf, k)
-}
-
-func NewErrPartitionMaxvalue(ctx context.Context) *Error {
-	return newError(ctx, ErrPartitionMaxvalue)
-}
-
-func NewErrRangeNotIncreasing(ctx context.Context) *Error {
-	return newError(ctx, ErrRangeNotIncreasing)
 }
 
 func NewErrForeignKeyOnPartitioned(ctx context.Context) *Error {
@@ -1973,6 +1821,10 @@ func NewErrForeignKeyOnPartitioned(ctx context.Context) *Error {
 }
 func NewCheckRecursiveLevel(ctx context.Context) *Error {
 	return newError(ctx, ErrCheckRecursiveLevel)
+}
+
+func NewSPRecursionLimit(ctx context.Context, limit int64, routine string) *Error {
+	return newError(ctx, ErrSPRecursionLimit, limit, routine)
 }
 
 func NewCteMemoryQuotaExceeded(ctx context.Context, projected, limit uint64) *Error {
@@ -2011,10 +1863,6 @@ func NewErrMultiplePriKey(ctx context.Context) *Error {
 	return newError(ctx, ErrMultiplePriKey)
 }
 
-func NewErrTooManyKeys(ctx context.Context, k any) *Error {
-	return newError(ctx, ErrTooManyKeys, k)
-}
-
 func NewErrTooManyKeyParts(ctx context.Context, k any) *Error {
 	return newError(ctx, ErrTooManyKeyParts, k)
 }
@@ -2043,16 +1891,16 @@ func NewErrDropIndexNeededInForeignKey(ctx context.Context, args1 any) *Error {
 	return newError(ctx, ErrDropIndexNeededInForeignKey, args1)
 }
 
-func NewErrFKIncompatibleColumns(ctx context.Context, oriColName any, refColName any, fkName any) *Error {
-	return newError(ctx, ErrFKIncompatibleColumns, oriColName, refColName, fkName)
-}
-
 func NewErrForeignKeyColumnCannotChangeChild(ctx context.Context, args1 any, args2 any, args3 any) *Error {
 	return newError(ctx, ErrForeignKeyColumnCannotChangeChild, args1, args2, args3)
 }
 
 func NewErrForeignKeyColumnCannotChange(ctx context.Context, oriColName any, fkName any) *Error {
 	return newError(ctx, ErrForeignKeyColumnCannotChange, oriColName, fkName)
+}
+
+func NewErrFkColumnNotNull(ctx context.Context, colName any, fkName any) *Error {
+	return newError(ctx, ErrFkColumnNotNull, colName, fkName)
 }
 
 func NewErrTableMustHaveColumns(ctx context.Context) *Error {
@@ -2071,8 +1919,8 @@ func NewErrFkColumnCannotDrop(ctx context.Context, colName any, fKName any) *Err
 	return newError(ctx, ErrFkColumnCannotDrop, colName, fKName)
 }
 
-func NewErrDependentByPartitionFunction(ctx context.Context, colName any) *Error {
-	return newError(ctx, ErrDependentByPartitionFunction, colName)
+func NewErrDependentByCheckConstraint(ctx context.Context, checkName any, colName any) *Error {
+	return newError(ctx, ErrDependentByCheckConstraint, checkName, colName)
 }
 
 func NewErrAlterOperationNotSupportedReasonFkRename(ctx context.Context) *Error {
@@ -2081,26 +1929,6 @@ func NewErrAlterOperationNotSupportedReasonFkRename(ctx context.Context) *Error 
 
 func NewErrPrimaryCantHaveNull(ctx context.Context) *Error {
 	return newError(ctx, ErrPrimaryCantHaveNull)
-}
-
-func NewErrPartitionMgmtOnNonpartitioned(ctx context.Context) *Error {
-	return newError(ctx, ErrPartitionMgmtOnNonpartitioned)
-}
-
-func NewErrUnsupportedOption(ctx context.Context, option string) *Error {
-	return newError(ctx, ErrUnsupportedOption, option)
-}
-
-func NewErrInvalidValue(ctx context.Context, option string, value string) *Error {
-	return newError(ctx, ErrInvalidValue, option, value)
-}
-
-func NewErrLackOption(ctx context.Context, option string) *Error {
-	return newError(ctx, ErrLackOption, option)
-}
-
-func NewErrDuplicateConnector(ctx context.Context, tableName string) *Error {
-	return newError(ctx, ErrDuplicateConnector, tableName)
 }
 
 func NewErrUnsupportedDataType(ctx context.Context, typ any) *Error {
@@ -2155,14 +1983,6 @@ func NewErrFKNoReferencedRow2(ctx context.Context) *Error {
 	return newError(ctx, ErrFKNoReferencedRow2)
 }
 
-func NewErrBlobCantHaveDefault(ctx context.Context, arg any) *Error {
-	return newError(ctx, ErrBlobCantHaveDefault, arg)
-}
-
-func NewCantCompileForPrepare(ctx context.Context) *Error {
-	return newError(ctx, ErrCantCompileForPrepare)
-}
-
 func NewTableMustHaveVisibleColumn(ctx context.Context) *Error {
 	return newError(ctx, ErrTableMustHaveAVisibleColumn)
 }
@@ -2185,6 +2005,13 @@ func NewErrTooBigPrecision(ctx context.Context, precision int64, funcName string
 
 func NewCCPRReadOnly(ctx context.Context) *Error {
 	return newError(ctx, ErrCCPRReadOnly)
+}
+
+// NewCantExecuteInReadOnlyTransaction reports MySQL ERROR 1792 (25006): a
+// writing statement was attempted while the session or the current
+// transaction is in READ ONLY access mode.
+func NewCantExecuteInReadOnlyTransaction(ctx context.Context) *Error {
+	return newError(ctx, ErrCantExecuteInReadOnlyTransaction)
 }
 
 var contextFunc atomic.Value

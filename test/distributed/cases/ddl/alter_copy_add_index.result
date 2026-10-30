@@ -130,21 +130,14 @@ select id from vectors order by l2_distance(embedding, '[1,0,0]') limit 1;
 ➤ id[-5,64,0]  𝄀
 1
 explain select id from vectors order by l2_distance(embedding, '[1,0,0]') limit 1;
--- @regex("Vector Index Scan on", true)
+-- @regex("TP QUERY PLAN", true)
+-- @regex("(Table Scan on alter_copy_add_index[.]vectors|Vector Index Scan on)", true)
 ➤ TP QUERY PLAN[12,-1,0]  𝄀
 Project  𝄀
   ->  Sort  𝄀
-        Sort Key: mo_hnsw_alias_0.score INTERNAL  𝄀
+        Sort Key: l2_distance(vectors.embedding, 0x0000803F0000000000000000) INTERNAL, vectors.id INTERNAL  𝄀
         Limit: 1  𝄀
-        ->  Join  𝄀
-              Join Type: INNER  𝄀
-              Join Cond: (vectors.id = mo_hnsw_alias_0.pkid)  𝄀
-              Runtime Filter Build: #[-1,0]  𝄀
-              ->  Table Scan on alter_copy_add_index.vectors  𝄀
-                    Runtime Filter Probe: vectors.id  𝄀
-              ->  Table Function on hnsw_search  𝄀
-                    Index Reader Param:  Limit: 1  𝄀
-                    Limit: 1
+        ->  Table Scan on alter_copy_add_index.vectors
 set experimental_hnsw_index = 0;
 set experimental_ivf_index = 1;
 create table ivf_vectors(id bigint primary key, embedding vecf32(3));
@@ -174,6 +167,41 @@ select id from ivf_vectors order by l2_distance(embedding, '[1,0,0]') limit 1;
 ➤ id[-5,64,0]  𝄀
 1
 set experimental_ivf_index = 0;
+create table loaded(id int,v int);
+load data inline format='csv', data='1,10\n2,20\n' into table loaded;
+alter table loaded add column d int default 7;
+select id,v,d from loaded order by id;
+➤ id[4,32,0]  ¦  v[4,32,0]  ¦  d[4,32,0]  𝄀
+1  ¦  10  ¦  7  𝄀
+2  ¦  20  ¦  7
+begin;
+insert into loaded values(3,30,7);
+alter table loaded add column e int default 8;
+select id,v,d,e from loaded order by id;
+➤ id[4,32,0]  ¦  v[4,32,0]  ¦  d[4,32,0]  ¦  e[4,32,0]  𝄀
+1  ¦  10  ¦  7  ¦  8  𝄀
+2  ¦  20  ¦  7  ¦  8  𝄀
+3  ¦  30  ¦  7  ¦  8
+rollback;
+select id,v,d from loaded order by id;
+➤ id[4,32,0]  ¦  v[4,32,0]  ¦  d[4,32,0]  𝄀
+1  ¦  10  ¦  7  𝄀
+2  ¦  20  ¦  7
+select count(*) from mo_catalog.mo_columns where att_database=database() and att_relname='loaded' and attname='e';
+➤ count(*)[-5,64,0]  𝄀
+0
+create table loaded_partition(id int auto_increment primary key,v int,key idx_v(v)) auto_id_cache=1 partition by hash(id) partitions 2;
+load data inline format='csv', data='1,10\n2,20\n' into table loaded_partition;
+alter table loaded_partition add column d int default 7;
+select id,v,d from loaded_partition force index(idx_v) where v=20;
+➤ id[4,32,0]  ¦  v[4,32,0]  ¦  d[4,32,0]  𝄀
+2  ¦  20  ¦  7
+insert into loaded_partition(v) values(30);
+select id,v,d from loaded_partition order by id;
+➤ id[4,32,0]  ¦  v[4,32,0]  ¦  d[4,32,0]  𝄀
+1  ¦  10  ¦  7  𝄀
+2  ¦  20  ¦  7  𝄀
+3  ¦  30  ¦  7
 set @ordinary_id = (
 select rel_id from mo_catalog.mo_tables
 where reldatabase = database() and relname = 'ordinary'

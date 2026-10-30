@@ -15,21 +15,132 @@
 package search
 
 import (
+	"context"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/docfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	searchplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/search"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	hnswplan "github.com/matrixorigin/matrixone/pkg/vectorindex/hnsw/plugin/plan"
 	"github.com/stretchr/testify/require"
 )
 
-// A required membership filter is refused: the search would return candidates
-// the filter excludes.
-func TestNewReaderRefusesRequiredMembershipFilter(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	r, err := Hooks{}.NewReader(proc, nil, searchplugin.Request{
-		HasMembershipFilter: true, MembershipFilterRequired: true, MembershipFilter: []byte{1},
+func membershipSpec() *plan.IndexSearchScan {
+	spec := hnswSpec("idx")
+	spec.SourceTableDef = &plan.TableDef{
+		Name:          "t",
+		Cols:          []*plan.ColDef{{Name: "id", Typ: plan.Type{Id: int32(types.T_int64)}}, {Name: "v"}},
+		Name2ColIndex: map[string]int32{"id": 0, "v": 1},
+		Pkey:          &plan.PrimaryKeyDef{PkeyColName: "id", Names: []string{"id"}},
+	}
+	return spec
+}
+
+func membershipPayload(t *testing.T, typ types.Type, appendKeys func(*vector.Vector)) []byte {
+	proc := testutil.NewProc(t)
+	v := vector.NewVec(typ)
+	appendKeys(v)
+	defer v.Free(proc.Mp())
+	payload, err := v.MarshalBinary()
+	require.NoError(t, err)
+	return payload
+}
+
+func TestNewReaderMembership(t *testing.T) {
+	proc := testutil.NewProc(t)
+	req := f32Request([]float32{1, 2}, 10)
+
+	// a required membership filter that is missing is an error
+	r := req
+	r.MembershipFilterRequired = true
+	_, err := Hooks{}.NewReader(proc, membershipSpec(), r)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput), "got %v", err)
+
+	// an exact empty key set returns no rows without searching
+	r = req
+	r.HasMembershipFilter, r.MembershipFilterRequired = true, true
+	s, err := newSearcher(proc, membershipSpec(), r)
+	require.NoError(t, err)
+	require.True(t, s.emptyMembership)
+	chunk, more, err := s.Next(context.Background())
+	require.NoError(t, err)
+	require.False(t, more)
+	require.Empty(t, chunk.Keys)
+	require.NoError(t, s.Close())
+
+	// int64 keys build an exact filter; Close frees it
+	r.MembershipFilter = membershipPayload(t, types.T_int64.ToType(), func(v *vector.Vector) {
+		for _, k := range []int64{3, 1, 2} {
+			require.NoError(t, vector.AppendFixed(v, k, false, proc.Mp()))
+		}
 	})
-	require.Nil(t, r)
-	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), "got %v", err)
+	s, err = newSearcher(proc, membershipSpec(), r)
+	require.NoError(t, err)
+	require.NotNil(t, s.membership)
+	require.Equal(t, uint64(3), s.membershipCount)
+	require.NoError(t, s.Close())
+	require.Nil(t, s.membership)
+
+	// keys that do not match the primary key type are an error
+	r.MembershipFilter = membershipPayload(t, types.T_varchar.ToType(), func(v *vector.Vector) {
+		require.NoError(t, vector.AppendBytes(v, []byte("a"), false, proc.Mp()))
+	})
+	_, err = newSearcher(proc, membershipSpec(), r)
+	require.Error(t, err)
+
+	// a spec without a primary key is an error
+	spec := membershipSpec()
+	spec.SourceTableDef.Pkey = nil
+	r.MembershipFilter = membershipPayload(t, types.T_int64.ToType(), func(v *vector.Vector) {
+		require.NoError(t, vector.AppendFixed(v, int64(1), false, proc.Mp()))
+	})
+	_, err = newSearcher(proc, spec, r)
+	require.Error(t, err)
+
+	require.True(t, Hooks{}.SupportsMembership())
+
+	// the reader builds a C membership: cbitmap for dense keys, CRoaring for keys one in
+	// 100 apart, C sorted64 for keys one in 2^32 apart
+	for _, tc := range []struct {
+		step int64
+		kind byte
+	}{{1, docfilter.TagCbitmap}, {100, docfilter.TagCRoaring}, {1 << 32, docfilter.TagSorted64}} {
+		r = req
+		r.HasMembershipFilter, r.MembershipFilterRequired = true, true
+		r.MembershipFilter = membershipPayload(t, types.T_int64.ToType(), func(v *vector.Vector) {
+			for i := int64(0); i < 5000; i++ {
+				require.NoError(t, vector.AppendFixed(v, 7+i*tc.step, false, proc.Mp()))
+			}
+		})
+		s, err = newSearcher(proc, membershipSpec(), r)
+		require.NoError(t, err)
+		cf, ok := s.membership.(docfilter.CFilter)
+		require.True(t, ok, "step %d", tc.step)
+		require.Equal(t, tc.kind, cf.CKind(), "step %d", tc.step)
+		require.NoError(t, s.Close())
+	}
+
+	// the iterative scan option makes the membership search widen
+	r = f32Request([]float32{1, 2}, 10)
+	s, err = newSearcher(proc, membershipSpec(), r)
+	require.NoError(t, err)
+	require.False(t, s.iterative)
+	spec = membershipSpec()
+	spec.AlgoOptions, err = hnswplan.EncodeScanOptions(hnswplan.ScanOptions{Iterative: true})
+	require.NoError(t, err)
+	s, err = newSearcher(proc, spec, r)
+	require.NoError(t, err)
+	require.True(t, s.iterative)
+	require.Zero(t, s.exactThreshold)
+
+	// the exact threshold scan option reaches the search
+	spec = membershipSpec()
+	spec.AlgoOptions, err = hnswplan.EncodeScanOptions(hnswplan.ScanOptions{PrefilterExactThreshold: 100000})
+	require.NoError(t, err)
+	s, err = newSearcher(proc, spec, r)
+	require.NoError(t, err)
+	require.Equal(t, uint64(100000), s.exactThreshold)
 }

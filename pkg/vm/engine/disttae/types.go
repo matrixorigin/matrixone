@@ -1001,23 +1001,6 @@ func (txn *Transaction) adjustUpdateOrderLocked(writeOffset uint64) error {
 
 	return nil
 
-	//	// old logic
-	//	if txn.statementID > 0 {
-	//		writes := make([]Entry, 0, len(txn.writes[writeOffset:]))
-	//		for i := writeOffset; i < uint64(len(txn.writes)); i++ {
-	//			if !txn.writes[i].isCatalog() && txn.writes[i].typ == DELETE {
-	//				writes = append(writes, txn.writes[i])
-	//			}
-	//		}
-	//		for i := writeOffset; i < uint64(len(txn.writes)); i++ {
-	//			if txn.writes[i].isCatalog() || txn.writes[i].typ != DELETE {
-	//				writes = append(writes, txn.writes[i])
-	//			}
-	//		}
-	//		txn.writes = append(txn.writes[:writeOffset], writes...)
-	//	}
-	//
-	//	return nil
 }
 
 type cloneGCScope int
@@ -1277,6 +1260,25 @@ func (txn *Transaction) handleRCSnapshot(ctx context.Context, commit bool) (bool
 	return false, nil
 }
 
+// insertKeyRange is the byte-wise min/max envelope of an insert entry's
+// primary keys, canonical-encoded exactly as MemPKFilter filters encode keys.
+// inited=false leaves the entry on the unpruned full-scan path.
+type insertKeyRange struct {
+	inited bool
+	min    []byte
+	max    []byte
+}
+
+// insertKeyOffsets maps an insert entry's canonical-encoded primary keys to the
+// row offsets of the entry's CURRENT batch vector layout (issue 26796). It is
+// hydrated lazily by exact single-key probes and invalidated at every batch
+// mutation (merge, shrink, release), so a hydrated map always describes the
+// batch it was built from. Repeated primary keys hold all of their live row
+// offsets.
+type insertKeyOffsets struct {
+	offsets map[string][]uint32
+}
+
 // Entry represents a delete/insert
 type Entry struct {
 	typ          int
@@ -1293,6 +1295,35 @@ type Entry struct {
 	fileName string
 	//tuples would be applied to the table which belongs to the tenant(accountId)
 	bat *batch.Batch
+	// pkRange is the canonical-encoded primary-key envelope of an insert
+	// entry's rows (issue 26796). Writers compute it once from the entry's
+	// primary-key column; readers use it to skip the whole batch when the
+	// statement's primary-key filter provably misses the envelope. It is a
+	// conservative superset forever: in-transaction row deletions only shrink
+	// the live rows inside the envelope, never widen it.
+	pkRange insertKeyRange
+	// keyOffsets is the per-batch exact-key probe index of an insert entry.
+	// Readers hydrate it lazily for exact single-key point probes and bypass
+	// the whole-batch FilterVector pass; every invalidation drops it (through
+	// unaccountInsertKeyOffsetsLocked, together with its budget charge) so a
+	// hydrated map can never describe a stale row layout or outlive its
+	// charge, and no duplicated entry such as an ALTER transfer ever shares
+	// another entry's map. A nil keyOffsets keeps the entry on the unpruned
+	// FilterVector path.
+	keyOffsets *insertKeyOffsets
+	// keyIndexAccountedSize is the workspace-budget estimate charged for the
+	// hydrated keyOffsets (deterministic upper bound: one copied string key
+	// and one amortized map bucket per row, one uint32 offset slot per row,
+	// plus the map base). It is charged before the map is allocated and
+	// refunded — with the map dropped — on every invalidation or entry
+	// retirement (merge, shrink, release, dump, ALTER transfer, workspace
+	// compaction, transaction teardown), so workspaceSize and
+	// approximateInMemInsertSize always include exactly the retained index
+	// bytes that the spill thresholds consume. Envelope bytes (pkRange min/max
+	// clones) are bounded below two key lengths per batch and stay outside
+	// this budget. The invariant keyOffsets != nil implies a nonzero charge
+	// is validated by checkWorkspaceAccountingLocked.
+	keyIndexAccountedSize uint64
 	// accountedSize is the batch size currently included in workspaceSize.
 	// Keeping it on the entry lets in-place mutations remove the old
 	// contribution before accounting for the batch's new state.

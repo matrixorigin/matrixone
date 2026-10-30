@@ -17,6 +17,8 @@ package plan
 import (
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/stretchr/testify/require"
@@ -71,6 +73,95 @@ func requireODKUBaseLockUsesResolvedTarget(
 	t.Fatal("expected an ODKU base-table lock on the resolved target identity")
 }
 
+func TestInsertOnDupExistingPrimaryKeyNoop(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		sql     string
+		columns []int32
+	}{
+		{
+			name:    "primary key only",
+			sql:     "insert into constraint_test.t1(a,b) values (1,'x') on duplicate key update a=a",
+			columns: []int32{0},
+		},
+		{
+			name: "qualified parenthesized identity",
+			sql: "insert into constraint_test.t1(a,b) values (1,'x') " +
+				"on duplicate key update a=(constraint_test.t1.A), b=values(b)",
+			columns: []int32{0, 1},
+		},
+		{
+			name: "repeated identity",
+			sql: "insert into constraint_test.t1(a,b) values (1,'x') " +
+				"on duplicate key update a=a, a=a, b=values(b)",
+			columns: []int32{0, 0, 1},
+		},
+		{
+			name: "identity and incoming noop",
+			sql: "insert into constraint_test.t1(a,b) values (1,'x') " +
+				"on duplicate key update a=a, a=values(a), b=values(b)",
+			columns: []int32{0, 1},
+		},
+		{
+			name: "composite primary key",
+			sql: "insert into tpch.partsupp values (1,2,3,4.50,'x') " +
+				"on duplicate key update ps_partkey=ps_partkey, ps_suppkey=ps_suppkey, ps_availqty=values(ps_availqty)",
+			columns: []int32{0, 1, 2},
+		},
+		{
+			name: "secondary unique arbiter",
+			sql: "insert into constraint_test.dept(deptno,dname,loc) values (999,'Sales','NY') " +
+				"on duplicate key update deptno=dept.deptno, loc=values(loc)",
+			columns: []int32{0, 2},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := NewMockOptimizer(true, newPlanTestProcess(t))
+			logicPlan, err := runOneStmt(mock, t, tc.sql)
+			require.NoError(t, err)
+			ctx := odkuDedupCtx(t, logicPlan)
+			require.Equal(t, tc.columns, ctx.UpdateColIdxList, "explicit self assignments retain their order")
+			for i, col := range ctx.UpdateColIdxList {
+				if col == 0 {
+					require.NotNil(t, ctx.UpdateColExprList[i].GetCol(), "self identity needs no runtime guard")
+				}
+			}
+		})
+	}
+}
+
+func TestInsertOnDupSelfAssignmentDoesNotRelaxBindingOrIncomingSafety(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		sql  string
+		code uint16
+	}{
+		{
+			name: "invalid qualifier",
+			sql:  "insert into constraint_test.t1(a,b) values (1,'x') on duplicate key update a=other.a",
+			code: moerr.ErrBadFieldError,
+		},
+		{
+			name: "unsafe incoming after self",
+			sql: "insert into constraint_test.dept(deptno,dname,loc) values (999,'Sales','NY') " +
+				"on duplicate key update deptno=deptno, deptno=values(deptno)",
+			code: moerr.ErrUnsupportedDML,
+		},
+		{
+			name: "unsafe incoming before self",
+			sql: "insert into constraint_test.dept(deptno,dname,loc) values (999,'Sales','NY') " +
+				"on duplicate key update deptno=values(deptno), deptno=deptno",
+			code: moerr.ErrUnsupportedDML,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := NewMockOptimizer(true, newPlanTestProcess(t))
+			_, err := runOneStmt(mock, t, tc.sql)
+			require.True(t, moerr.IsMoErrCode(err, tc.code), "%v", err)
+		})
+	}
+}
+
 func TestInsertOnDupIncomingPrimaryKeyNoop(t *testing.T) {
 	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	logicPlan, err := runOneStmt(mock, t,
@@ -78,6 +169,103 @@ func TestInsertOnDupIncomingPrimaryKeyNoop(t *testing.T) {
 			"on duplicate key update a = values(a), b = values(b)")
 	require.NoError(t, err)
 	requireOnDupUpdateColumns(t, logicPlan, []int32{1}, []int32{0})
+}
+
+func TestInsertOnDupCarriesAutoIncrementResultProvenance(t *testing.T) {
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
+	table := mock.ctxt.tablesByQualifiedName[mockQualifiedTableName("constraint_test", "t1")]
+	require.NotNil(t, table)
+	require.NotEmpty(t, table.Cols)
+	original := table.Cols[0].Typ.AutoIncr
+	table.Cols[0].Typ.AutoIncr = true
+	t.Cleanup(func() { table.Cols[0].Typ.AutoIncr = original })
+
+	logicPlan, err := runOneStmt(mock, t,
+		"insert into constraint_test.t1(a, b) values (1, 'x') "+
+			"on duplicate key update b = values(b)")
+	require.NoError(t, err)
+
+	var found bool
+	for _, node := range logicPlan.GetQuery().Nodes {
+		if node.NodeType == planpb.Node_PRE_INSERT && node.PreInsertCtx != nil &&
+			node.PreInsertCtx.TrackOdkuResult {
+			require.GreaterOrEqual(t, node.PreInsertCtx.AutoIncrementGeneratedColumn, int32(0))
+			require.Equal(t, node.PreInsertCtx.AutoIncrementGeneratedColumn+1,
+				node.PreInsertCtx.OdkuOrdinalColumn)
+			require.Equal(t, int32(0), node.PreInsertCtx.OdkuAutoIncrementColumn)
+		}
+		if node.NodeType != planpb.Node_JOIN || node.JoinType != planpb.Node_DEDUP ||
+			node.OnDuplicateAction != planpb.Node_UPDATE || node.DedupJoinCtx == nil {
+			continue
+		}
+		found = true
+		require.NotNil(t, node.DedupJoinCtx.OdkuTargetAutoIncrementCol)
+		require.NotNil(t, node.DedupJoinCtx.OdkuGeneratedCol)
+		require.NotNil(t, node.DedupJoinCtx.OdkuOrdinalCol)
+		require.NotNil(t, node.DedupJoinCtx.OdkuGeneratedAutoIncrementCol)
+	}
+	require.True(t, found, "expected an ODKU dedup join")
+}
+
+func TestInsertOnDupResultColumnCompatibility(t *testing.T) {
+	for _, tc := range []struct {
+		name, autoColumn string
+		multiple         bool
+	}{
+		{name: "multiple visible allocators", autoColumn: "id", multiple: true},
+		{name: "visible internal spelling", autoColumn: catalog.FakePrimaryKeyColName},
+	} {
+		for _, explicit := range []bool{false, true} {
+			t.Run(tc.name+map[bool]string{false: "/generated", true: "/explicit"}[explicit], func(t *testing.T) {
+				mock := NewMockOptimizer(true, newPlanTestProcess(t))
+				table := mock.ctxt.tablesByQualifiedName[mockQualifiedTableName("constraint_test", "t1")]
+				require.NotNil(t, table)
+				cols := []*planpb.ColDef{table.Cols[0], {
+					Name: tc.autoColumn, OriginName: tc.autoColumn, ColId: 3,
+					Typ:     planpb.Type{Id: int32(types.T_int64), AutoIncr: true},
+					Default: &planpb.Default{NullAbility: true},
+				}}
+				if tc.multiple {
+					cols = append(cols, &planpb.ColDef{
+						Name: "second_id", OriginName: "second_id", ColId: 4,
+						Typ:     planpb.Type{Id: int32(types.T_int64), AutoIncr: true},
+						Default: &planpb.Default{NullAbility: true},
+					})
+				}
+				table.Cols = append(cols, table.Cols[1:]...)
+				table.Name2ColIndex = make(map[string]int32, len(table.Cols))
+				for i, col := range table.Cols {
+					table.Name2ColIndex[col.Name] = int32(i)
+				}
+				columns, values := "a, b", "1, 'x'"
+				if explicit {
+					columns, values = columns+", "+tc.autoColumn, values+", 10"
+					if tc.multiple {
+						columns, values = columns+", second_id", values+", 20"
+					}
+				}
+				p, err := runOneStmt(mock, t, "insert into constraint_test.t1 ("+columns+") values ("+values+") on duplicate key update b = values(b)")
+				require.NoError(t, err)
+				require.True(t, p.GetQuery().HasODKUResultTracking())
+				var pre *planpb.PreInsertCtx
+				for _, node := range p.GetQuery().Nodes {
+					if node.GetPreInsertCtx().GetTrackOdkuResult() {
+						pre = node.PreInsertCtx
+					}
+				}
+				require.NotNil(t, pre)
+				require.Equal(t, int32(1), pre.OdkuAutoIncrementColumn)
+				require.Equal(t, tc.autoColumn, pre.TableDef.Cols[1].Name)
+				dedup := odkuDedupCtx(t, p)
+				require.NotNil(t, dedup.OdkuTargetAutoIncrementCol)
+				require.Equal(t, dedup.OldColList[1], *dedup.OdkuTargetAutoIncrementCol,
+					"the target ID must reference the selected table column after remapping")
+				require.NotNil(t, dedup.OdkuGeneratedAutoIncrementCol)
+				require.NotNil(t, dedup.OdkuGeneratedCol)
+				require.NotNil(t, dedup.OdkuOrdinalCol)
+			})
+		}
+	}
 }
 
 func TestInsertOnDupIncomingPrimaryKeyOnlyNoop(t *testing.T) {
@@ -90,13 +278,21 @@ func TestInsertOnDupIncomingPrimaryKeyOnlyNoop(t *testing.T) {
 }
 
 func TestInsertOnDupPrimaryKeyLiteralIdentityIsRuntimeGuarded(t *testing.T) {
-	mock := NewMockOptimizer(true, newPlanTestProcess(t))
-	logicPlan, err := runOneStmt(mock, t,
-		"insert into constraint_test.t1(a, b) values (1, 'x') "+
-			"on duplicate key update a = (1), b = values(b)")
-	require.NoError(t, err)
-	requireOnDupUpdateColumns(t, logicPlan, []int32{0, 1}, nil)
-	requireODKUPKIdentityGuard(t, logicPlan, 0)
+	for _, assignment := range []string{
+		"a=(1), b=values(b)",
+		"a=a, a=1, b=values(b)",
+		"a=1, a=a, b=values(b)",
+		"a=1, a=values(a), a=a, b=values(b)",
+	} {
+		t.Run(assignment, func(t *testing.T) {
+			mock := NewMockOptimizer(true, newPlanTestProcess(t))
+			logicPlan, err := runOneStmt(mock, t,
+				"insert into constraint_test.t1(a,b) values (1,'x') on duplicate key update "+assignment)
+			require.NoError(t, err)
+			requireOnDupUpdateColumns(t, logicPlan, []int32{0, 1}, nil)
+			requireODKUPKIdentityGuard(t, logicPlan, 0)
+		})
+	}
 }
 
 func TestInsertOnDupPrimaryKeySignedLiteralIdentityIsRuntimeGuarded(t *testing.T) {
@@ -214,6 +410,9 @@ func requireODKUPKIdentityGuard(t *testing.T, logicPlan *planpb.Plan, updateColI
 			if colIdx != updateColIdx {
 				continue
 			}
+			if node.DedupJoinCtx.UpdateColExprList[i].GetCol() != nil {
+				continue // A direct self assignment may precede the guarded value.
+			}
 			guarded := node.DedupJoinCtx.UpdateColExprList[i].GetF()
 			require.NotNil(t, guarded)
 			require.Equal(t, "if", guarded.Func.ObjName)
@@ -245,6 +444,10 @@ func TestInsertOnDupIncomingCompositePrimaryKeyNoop(t *testing.T) {
 func TestInsertOnDupPrimaryKeyMutationStillRejected(t *testing.T) {
 	for _, assignment := range []string{
 		"a = a + 1, b = values(b)",
+		"a = b, b = values(b)",
+		"a = a + 1, a = a, b = values(b)",
+		"a = a, a = a + 1, b = values(b)",
+		"a = a + 1, a = values(a), a = a, b = values(b)",
 		"a = -(1 + 0), b = values(b)",
 		"a = 1, a = a + 1, b = values(b)",
 		"a = a + 1, a = 1, b = values(b)",
@@ -338,12 +541,12 @@ func planExprContainsFunction(expr *planpb.Expr, name string) bool {
 	return false
 }
 
-func TestIsOnDupIncomingColumn(t *testing.T) {
+func TestIsOnDupColumn(t *testing.T) {
 	expr := &planpb.Expr{Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 7, ColPos: 3}}}
-	require.True(t, isOnDupIncomingColumn(expr, 7, 3))
-	require.False(t, isOnDupIncomingColumn(expr, 8, 3))
-	require.False(t, isOnDupIncomingColumn(expr, 7, 4))
-	require.False(t, isOnDupIncomingColumn(&planpb.Expr{}, 7, 3))
+	require.True(t, isOnDupColumn(expr, 7, 3))
+	require.False(t, isOnDupColumn(expr, 8, 3))
+	require.False(t, isOnDupColumn(expr, 7, 4))
+	require.False(t, isOnDupColumn(&planpb.Expr{}, 7, 3))
 }
 
 func TestInsertOnDupPreservesAssignmentOrderAndDuplicates(t *testing.T) {

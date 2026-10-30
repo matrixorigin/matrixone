@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/queryservice/client"
@@ -59,8 +60,12 @@ func TestEvictVectorIndexCacheAsyncFreesConnection(t *testing.T) {
 		// Warm the single connection.
 		wctx, wcancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer wcancel()
-		_, err := cli.SendMessage(wctx, addr, getProtocol(cli))
+		protocolResp, err := cli.SendMessage(wctx, addr, getProtocol(cli))
 		require.NoError(t, err)
+		require.NotNil(t, protocolResp)
+		require.NotNil(t, protocolResp.GetProtocolVersion)
+		require.Equal(t, int64(defines.MORPCLatestVersion), protocolResp.GetProtocolVersion.Version)
+		cli.Release(protocolResp)
 
 		// Start Evict; the async handler blocks in the owner teardown well past its caller deadline.
 		evictDone := make(chan struct{})
@@ -79,8 +84,9 @@ func TestEvictVectorIndexCacheAsyncFreesConnection(t *testing.T) {
 		// An unrelated request on the SAME connection must complete while Evict is still blocked.
 		gctx, gcancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 		defer gcancel()
-		_, err = cli.SendMessage(gctx, addr, getProtocol(cli))
+		resp, err := cli.SendMessage(gctx, addr, getProtocol(cli))
 		require.NoError(t, err, "unrelated request must not queue behind a blocked async Evict (#28985)")
+		cli.Release(resp)
 
 		// The Evict caller deadline already fired; release the owner teardown and drain.
 		releaseOnce.Do(func() { close(release) })

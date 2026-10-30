@@ -16,11 +16,234 @@ package table_function
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
+
+func viewColumnsOutputFixture(t *testing.T, columns []*planpb.ColDef) (*viewColumnsState, *TableFunction, *process.Process) {
+	t.Helper()
+	proc := testutil.NewProcess(t)
+	tf := &TableFunction{Attrs: []string{"attnum", "attname", "atttyp", "att_default", "attnotnull", "attr_enum", "att_is_auto_increment", "attr_has_generated", "attr_generated", "att_is_hidden", "att_comment", "att_constraint_type"}}
+	tf.ctr.retSchema = []types.Type{types.T_int32.ToType(), types.T_varchar.ToType(), types.T_varbinary.ToType(), types.T_varbinary.ToType(), types.T_int8.ToType(), types.T_varchar.ToType(), types.T_int8.ToType(), types.T_int8.ToType(), types.T_varbinary.ToType(), types.T_int8.ToType(), types.T_varchar.ToType(), types.T_varchar.ToType()}
+	s := &viewColumnsState{columns: columns, derived: true}
+	t.Cleanup(func() {
+		s.free(tf, proc, false, nil)
+		require.Zero(t, proc.Mp().CurrNB())
+	})
+	return s, tf, proc
+}
+
+func TestViewColumnsOutputRowPagesAndCleanup(t *testing.T) {
+	cols := make([]*planpb.ColDef, viewColumnsBatchRows+1)
+	for i := range cols {
+		cols[i] = &planpb.ColDef{Name: fmt.Sprintf("column_%d", i), Typ: planpb.Type{Id: int32(types.T_int32), NotNullable: true}}
+	}
+	s, tf, proc := viewColumnsOutputFixture(t, cols)
+	seen := 0
+	for _, count := range []int{viewColumnsBatchRows, 1} {
+		result, err := s.call(tf, proc)
+		require.NoError(t, err)
+		require.Equal(t, vm.ExecNext, result.Status)
+		require.Equal(t, count, result.Batch.RowCount())
+		ordinals := vector.MustFixedColWithTypeCheck[int32](result.Batch.Vecs[0])
+		for i := range ordinals {
+			require.Equal(t, int32(seen+i+1), ordinals[i])
+			require.Equal(t, cols[seen+i].Name, result.Batch.Vecs[1].GetStringAt(i))
+		}
+		var typ types.Type
+		require.NoError(t, types.Decode(result.Batch.Vecs[2].GetBytesAt(0), &typ))
+		require.Equal(t, types.T_int32, typ.Oid)
+		var def planpb.Default
+		require.NoError(t, types.Decode(result.Batch.Vecs[3].GetBytesAt(0), &def))
+		require.False(t, def.NullAbility)
+		require.Equal(t, int8(1), vector.GetFixedAtNoTypeCheck[int8](result.Batch.Vecs[4], 0))
+		require.True(t, result.Batch.Vecs[8].IsNull(0))
+		seen += count
+	}
+	require.Nil(t, s.columns)
+	result, err := s.call(tf, proc)
+	require.NoError(t, err)
+	require.Equal(t, vm.CancelResult, result)
+	s.reset(tf, proc)
+	s.columns = cols[:1]
+	result, err = s.call(tf, proc)
+	require.NoError(t, err)
+	require.Equal(t, int32(1), vector.GetFixedAtNoTypeCheck[int32](result.Batch.Vecs[0], 0))
+	s.free(tf, proc, false, nil)
+	s.free(tf, proc, false, nil)
+}
+
+func TestViewColumnsOutputBytePagesAndLargeRow(t *testing.T) {
+	for _, length := range []int{viewColumnsBatchBytes / 2, viewColumnsBatchBytes + 1} {
+		t.Run(fmt.Sprint(length), func(t *testing.T) {
+			column := &planpb.ColDef{Name: "v", Typ: planpb.Type{Id: int32(types.T_varchar)}, Default: &planpb.Default{OriginString: strings.Repeat("x", length)}}
+			s, tf, proc := viewColumnsOutputFixture(t, []*planpb.ColDef{column, column})
+			for i := 0; i < 2; i++ {
+				result, err := s.call(tf, proc)
+				require.NoError(t, err)
+				require.Equal(t, 1, result.Batch.RowCount())
+				require.LessOrEqual(t, result.Batch.Size(), viewColumnsBatchHardBytes)
+			}
+		})
+	}
+}
+
+func TestViewColumnsOutputFailuresReleasePartialState(t *testing.T) {
+	for _, mode := range []string{"cancel", "nil column", "oversized column", "unknown projection", "early end", "reset"} {
+		t.Run(mode, func(t *testing.T) {
+			column := &planpb.ColDef{Name: "v", Typ: planpb.Type{Id: int32(types.T_int32)}}
+			s, tf, proc := viewColumnsOutputFixture(t, []*planpb.ColDef{column})
+			switch mode {
+			case "cancel":
+				ctx, cancel := context.WithCancel(proc.Ctx)
+				proc.Ctx = ctx
+				cancel()
+			case "nil column":
+				s.columns[0] = nil
+			case "oversized column":
+				column.Name = strings.Repeat("x", viewColumnsBatchHardBytes+1)
+			case "unknown projection":
+				tf.Attrs[len(tf.Attrs)-1] = "unknown"
+			case "early end":
+				require.NoError(t, s.end(tf, proc))
+			case "reset":
+				s.reset(tf, proc)
+			}
+			result, err := s.call(tf, proc)
+			if mode == "early end" || mode == "reset" {
+				require.NoError(t, err)
+			} else {
+				require.Error(t, err)
+			}
+			require.Equal(t, vm.CancelResult, result)
+			require.Nil(t, s.columns)
+			if s.batch != nil {
+				require.Zero(t, s.batch.RowCount())
+			}
+		})
+	}
+}
+
+func TestViewColumnsDerivedPlanCannotFallBackWithoutOwner(t *testing.T) {
+	s, tf, proc := viewColumnsOutputFixture(t, nil)
+	database, err := vector.NewConstBytes(types.T_varchar.ToType(), []byte("db"), 1, proc.Mp())
+	require.NoError(t, err)
+	defer database.Free(proc.Mp())
+	name, err := vector.NewConstBytes(types.T_varchar.ToType(), []byte("v"), 1, proc.Mp())
+	require.NoError(t, err)
+	defer name.Free(proc.Mp())
+	id, err := vector.NewConstFixed(types.T_uint64.ToType(), uint64(7), 1, proc.Mp())
+	require.NoError(t, err)
+	defer id.Free(proc.Mp())
+	tf.ctr.argVecs = []*vector.Vector{database, name, id}
+	err = s.start(tf, proc, 0, nil)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported))
+	require.Nil(t, s.columns)
+}
+
+func TestViewColumnsLegacyBatchCompatibility(t *testing.T) {
+	columns := make([]*planpb.ColDef, viewColumnsBatchRows+1)
+	for i := range columns {
+		columns[i] = &planpb.ColDef{Name: "v", Typ: planpb.Type{Id: int32(types.T_int32)}}
+	}
+	s, tf, proc := viewColumnsOutputFixture(t, columns)
+	s.derived = false
+	result, err := s.call(tf, proc)
+	require.NoError(t, err)
+	require.Equal(t, len(columns), result.Batch.RowCount())
+	for _, name := range []string{plan.ViewColumnsFunctionName, plan.SubscriptionViewColumnsFunctionName} {
+		tf.FuncName = name
+		tf.Args = make([]*planpb.Expr, 3)
+		require.True(t, tf.ApplyPreserveBatch())
+		tf.Args = tf.Args[:1]
+		require.False(t, tf.ApplyPreserveBatch())
+	}
+	tf.FuncName = "generate_series"
+	tf.Args = make([]*planpb.Expr, 3)
+	require.False(t, tf.ApplyPreserveBatch())
+}
+
+// A filtered-out candidate (a NULL argument row) must yield an empty scan,
+// not an error: bulk metadata enumeration keeps producing rows for the
+// remaining candidates, and an empty result must not be confused with a
+// failed description.
+func TestViewColumnsSkipsNullCandidatesYieldsEmptyResult(t *testing.T) {
+	newNullVec := func(t *testing.T, proc *process.Process, typ types.Type) *vector.Vector {
+		t.Helper()
+		vec := vector.NewConstNull(typ, 1, proc.Mp())
+		t.Cleanup(func() { vec.Free(proc.Mp()) })
+		return vec
+	}
+	t.Run("legacy null relation id", func(t *testing.T) {
+		s, tf, proc := viewColumnsOutputFixture(t, nil)
+		tf.ctr.argVecs = []*vector.Vector{newNullVec(t, proc, types.T_uint64.ToType())}
+		require.NoError(t, s.start(tf, proc, 0, nil))
+		require.Empty(t, s.columns)
+		require.False(t, s.derived)
+	})
+	t.Run("derived all null", func(t *testing.T) {
+		s, tf, proc := viewColumnsOutputFixture(t, nil)
+		tf.ctr.argVecs = []*vector.Vector{
+			newNullVec(t, proc, types.T_varchar.ToType()),
+			newNullVec(t, proc, types.T_varchar.ToType()),
+			newNullVec(t, proc, types.T_uint64.ToType()),
+		}
+		require.NoError(t, s.start(tf, proc, 0, nil))
+		require.Empty(t, s.columns)
+		require.True(t, s.derived)
+	})
+	for _, nullArg := range []int{0, 1, 2} {
+		t.Run(fmt.Sprintf("derived null arg %d", nullArg), func(t *testing.T) {
+			s, tf, proc := viewColumnsOutputFixture(t, nil)
+			database, err := vector.NewConstBytes(types.T_varchar.ToType(), []byte("db"), 1, proc.Mp())
+			require.NoError(t, err)
+			defer database.Free(proc.Mp())
+			name, err := vector.NewConstBytes(types.T_varchar.ToType(), []byte("v"), 1, proc.Mp())
+			require.NoError(t, err)
+			defer name.Free(proc.Mp())
+			id, err := vector.NewConstFixed(types.T_uint64.ToType(), uint64(7), 1, proc.Mp())
+			require.NoError(t, err)
+			defer id.Free(proc.Mp())
+			tf.ctr.argVecs = []*vector.Vector{database, name, id}
+			argTypes := []types.Type{types.T_varchar.ToType(), types.T_varchar.ToType(), types.T_uint64.ToType()}
+			tf.ctr.argVecs[nullArg] = newNullVec(t, proc, argTypes[nullArg])
+			require.NoError(t, s.start(tf, proc, 0, nil))
+			require.Empty(t, s.columns)
+			require.True(t, s.derived)
+			result, err := s.call(tf, proc)
+			require.NoError(t, err)
+			require.Equal(t, vm.CancelResult, result)
+		})
+	}
+}
+
+// Cancellation at scan start must abort the description before any candidate
+// work: the scan reports the context error instead of publishing partial
+// columns for the canceled statement.
+func TestViewColumnsStartRejectsCancelledContext(t *testing.T) {
+	s, tf, proc := viewColumnsOutputFixture(t, nil)
+	id, err := vector.NewConstFixed(types.T_uint64.ToType(), uint64(7), 1, proc.Mp())
+	require.NoError(t, err)
+	defer id.Free(proc.Mp())
+	tf.ctr.argVecs = []*vector.Vector{id}
+	ctx, cancel := context.WithCancel(proc.Ctx)
+	cancel()
+	proc.Ctx = ctx
+	err = s.start(tf, proc, 0, nil)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Empty(t, s.columns)
+}
 
 func TestSkippableViewDescriptionError(t *testing.T) {
 	ctx := t.Context()
@@ -38,6 +261,10 @@ func TestSkippableViewDescriptionError(t *testing.T) {
 		moerr.NewInternalError(ctx, "binding budget"),
 		moerr.NewParseError(ctx, "corrupt definition"),
 		context.Canceled,
+		context.DeadlineExceeded,
+		plan.ErrViewSchemaLimit,
+		plan.ErrViewSchemaChanged,
+		plan.ErrViewSchemaClosed,
 	} {
 		require.False(t, skippableViewDescriptionError(err), err)
 	}

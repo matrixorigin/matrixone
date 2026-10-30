@@ -116,21 +116,6 @@ func (*ClassAllocator[T]) BackingSizeContract() (BackingSizeContract, error) {
 	return BackingSizeContractClass, nil
 }
 
-func (*HybridMmapAllocator) BackingSize(size uint64) (uint64, error) {
-	backingSize, ok := HybridMmapAllocationSize(size)
-	if !ok {
-		if size == 0 {
-			return 0, moerr.NewInvalidInputNoCtx("backing size requires a positive request")
-		}
-		return 0, moerr.NewInternalErrorNoCtxf("cannot allocate %d bytes: too large", size)
-	}
-	return backingSize, nil
-}
-
-func (*HybridMmapAllocator) BackingSizeContract() (BackingSizeContract, error) {
-	return BackingSizeContractPage, nil
-}
-
 func (c *CAllocator) BackingSize(size uint64) (uint64, error) {
 	return size, nil
 }

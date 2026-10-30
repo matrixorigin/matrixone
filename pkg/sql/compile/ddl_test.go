@@ -1556,16 +1556,16 @@ type trackingTempTableSession struct {
 }
 
 func (s *trackingTempTableSession) GetTempTable(dbName, alias string) (string, bool) {
-	realName, ok := s.tables[dbName+"."+alias]
+	realName, ok := s.tables[defines.TempTableAliasKey(dbName, alias)]
 	return realName, ok
 }
 
 func (s *trackingTempTableSession) AddTempTable(dbName, alias, realName string) {
-	s.tables[dbName+"."+alias] = realName
+	s.tables[defines.TempTableAliasKey(dbName, alias)] = realName
 }
 
 func (s *trackingTempTableSession) RemoveTempTable(dbName, alias string) {
-	delete(s.tables, dbName+"."+alias)
+	delete(s.tables, defines.TempTableAliasKey(dbName, alias))
 }
 
 func (s *trackingTempTableSession) RemoveTempTableByRealName(string) {}
@@ -1667,8 +1667,10 @@ func TestScopeRestoreTemporaryCloneValidatesPhysicalDestination(t *testing.T) {
 			test.setup(proc, eng)
 			c := NewCompile("test", "test", "create temporary table temporary_table clone src", "", "", eng, proc, nil, false, nil, time.Now())
 
+			originalCtx := proc.Ctx
 			err := (&Scope{}).RestoreTable(c, newClonePlan())
 			require.ErrorContains(t, err, test.wantErr)
+			require.Same(t, originalCtx, proc.Ctx, "failed restore must not retain the borrowed session context")
 		})
 	}
 }
@@ -2157,6 +2159,71 @@ func TestDropSequenceCleansLogicalObjectPrivileges(t *testing.T) {
 	require.False(t, exists)
 }
 
+func TestCreateOrReplaceViewPreservesIdentity(t *testing.T) {
+	createErr := errors.New("stop after create context is captured")
+	deleteErr := errors.New("delete failed")
+	lockErr := errors.New("lock failed")
+	for _, tc := range []struct {
+		name                           string
+		absent, baseTable, ifNotExists bool
+		logicalID                      uint64
+		deleteErr, lockErr             error
+		wantErr                        error
+		wantIdentity                   uint64
+		wantCreate, wantRetained       bool
+	}{
+		{name: "view", logicalID: 77, wantErr: createErr, wantIdentity: 77, wantCreate: true},
+		{name: "legacy view", wantErr: createErr, wantIdentity: 101, wantCreate: true},
+		{name: "absent view gets new identity", absent: true, wantErr: createErr, wantCreate: true},
+		{name: "if not exists retains view", ifNotExists: true, logicalID: 77, wantRetained: true},
+		{name: "base table cannot be replaced", baseTable: true, wantRetained: true},
+		{name: "delete failure stops create", deleteErr: deleteErr, wantErr: deleteErr, wantRetained: true},
+		{name: "lock failure stops delete", lockErr: lockErr, wantErr: lockErr, wantRetained: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			eng := newStubEngine()
+			db := newStubDatabase("db")
+			db.createErr, db.deleteErr = createErr, tc.deleteErr
+			old := &stubRelation{name: "v", tableID: 101, tableDef: &plan2.TableDef{TblId: 101, LogicalId: tc.logicalID}}
+			if !tc.baseTable {
+				old.tableDef.ViewSql = &plan2.ViewDef{}
+			}
+			if !tc.absent {
+				db.rels["v"] = old
+			}
+			eng.dbs["db"] = db
+			stubs := gostub.New()
+			defer stubs.Reset()
+			stubs.Stub(&lockMoDatabase, func(*Compile, string, lock.LockMode) error { return nil })
+			stubs.Stub(&lockMoTable, func(*Compile, string, string, lock.LockMode) error { return tc.lockErr })
+			proc := testutil.NewProcess(t)
+			proc.Base.SessionInfo.Buf = buffer.New()
+			proc.Ctx = defines.AttachAccountId(context.Background(), sysAccountId)
+			c := NewCompile("test", "db", "create or replace view v as select 1", "", "", eng, proc, nil, false, nil, time.Now())
+			s := &Scope{Proc: proc, Plan: &plan2.Plan{Plan: &plan2.Plan_Ddl{Ddl: &plan2.DataDefinition{
+				Definition: &plan2.DataDefinition_CreateView{CreateView: &plan2.CreateView{
+					Replace: true, IfNotExists: tc.ifNotExists, Database: "db", TableDef: &plan2.TableDef{Name: "v"},
+				}},
+			}}}}
+			err := s.CreateView(c)
+			if tc.baseTable {
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrTableAlreadyExists), "%v", err)
+			} else {
+				require.ErrorIs(t, err, tc.wantErr)
+			}
+			if tc.wantCreate {
+				require.NotNil(t, db.createCtx)
+				identity, _ := db.createCtx.Value(defines.LogicalIdKey{}).(uint64)
+				require.Equal(t, tc.wantIdentity, identity)
+			} else {
+				require.Nil(t, db.createCtx)
+			}
+			_, retained := db.rels["v"]
+			require.Equal(t, tc.wantRetained, retained)
+		})
+	}
+}
+
 func TestAlterViewPreservesLogicalID(t *testing.T) {
 	eng := newStubEngine()
 	db := newStubDatabase("db")
@@ -2262,6 +2329,141 @@ func TestAlterViewEmptyDatabaseFallsBackToSession(t *testing.T) {
 	_, exists := current.rels["v"]
 	require.False(t, exists)
 	require.NotNil(t, current.createCtx)
+}
+
+func TestCheckConstraintNamesAvailable(t *testing.T) {
+	ctx := context.Background()
+	db := newStubDatabase("db")
+	db.rels["sibling_a"] = &stubRelation{
+		name: "sibling_a",
+		tableDef: &plan2.TableDef{
+			Checks: []*plan2.CheckDef{{Name: "sibling_a_chk_1"}, {Name: "ck_positive"}},
+		},
+	}
+	db.rels["sibling_b"] = &stubRelation{
+		name:     "sibling_b",
+		tableDef: &plan2.TableDef{Checks: []*plan2.CheckDef{{Name: "sibling_b_chk_1"}}},
+	}
+	for _, flag := range []uint64{features.Partition, features.IndexTable} {
+		db.rels[fmt.Sprintf("physical_%d", flag)] = &stubRelation{
+			tableDef: &plan2.TableDef{FeatureFlag: flag, Checks: []*plan2.CheckDef{{Name: "borrowed_ck"}}},
+		}
+	}
+	// Physical children do not independently own their borrowed CHECK names.
+	require.NoError(t, checkConstraintNamesAvailable(ctx, db, "parent", []*plan2.CheckDef{{Name: "borrowed_ck"}}))
+
+	// No checks on the new table: nothing to validate.
+	require.NoError(t, checkConstraintNamesAvailable(ctx, db, "new_t", nil))
+	// Fresh names pass even when siblings own other constraints.
+	require.NoError(t, checkConstraintNamesAvailable(ctx, db, "new_t",
+		[]*plan2.CheckDef{{Name: "new_t_chk_1"}, {Name: "ck_limit"}}))
+	// Names compare case-insensitively, like MySQL.
+	require.NoError(t, checkConstraintNamesAvailable(ctx, db, "new_t",
+		[]*plan2.CheckDef{{Name: "NEWT"}}))
+	// Reusing a name from another table in the same database is rejected.
+	err := checkConstraintNamesAvailable(ctx, db, "new_t",
+		[]*plan2.CheckDef{{Name: "ck_positive"}})
+	require.Error(t, err)
+	require.ErrorContains(t, err, "Duplicate check constraint name 'ck_positive'")
+	// Case-insensitive duplicate detection.
+	err = checkConstraintNamesAvailable(ctx, db, "new_t",
+		[]*plan2.CheckDef{{Name: "CK_POSITIVE"}})
+	require.Error(t, err)
+}
+
+func TestCheckConstraintNamesAvailableLegacySQL(t *testing.T) {
+	ctx := context.Background()
+	for _, checks := range [][]*plan2.CheckDef{nil, {nil}} {
+		db := newStubDatabase("db")
+		db.rels["legacy"] = &stubRelation{tableDef: &plan2.TableDef{
+			Checks:    checks,
+			Createsql: "create table legacy(x int check(x>0), constraint legacy_ck check(x<10))",
+		}}
+		for _, name := range []string{"__mo_chk_1", "LEGACY_CK"} {
+			err := checkConstraintNamesAvailable(ctx, db, "new_table", []*plan2.CheckDef{{Name: name}})
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicateCheckConstraintName), "%v", err)
+		}
+		require.NoError(t, checkConstraintNamesAvailable(ctx, db, "new_table", []*plan2.CheckDef{{Name: "fresh"}}))
+		require.NoError(t, checkConstraintNamesAvailable(ctx, db, "legacy", []*plan2.CheckDef{{Name: "legacy_ck"}}))
+	}
+	// Structured definitions remain authoritative over retained CREATE SQL.
+	db := newStubDatabase("db")
+	db.rels["structured"] = &stubRelation{tableDef: &plan2.TableDef{
+		Checks:    []*plan2.CheckDef{{Name: "current_ck"}},
+		Createsql: "create table structured(x int, constraint old_ck check(x>0))",
+	}}
+	for _, kind := range []string{catalog.SystemExternalRel, catalog.SystemViewRel, catalog.SystemSourceRel} {
+		db.rels[kind] = &stubRelation{tableDef: &plan2.TableDef{TableType: kind, Createsql: "stage://bucket/check.csv"}}
+	}
+	require.NoError(t, checkConstraintNamesAvailable(ctx, db, "new_table", []*plan2.CheckDef{{Name: "old_ck"}}))
+}
+
+func TestValidateRenamedCheckConstraintNames(t *testing.T) {
+	db := newStubDatabase("db")
+	eng := newStubEngine()
+	eng.dbs["db"] = db
+	c := &Compile{e: eng, proc: testutil.NewProcess(t), disableLock: true}
+	db.rels["t"] = &stubRelation{
+		name:     "t",
+		tableDef: &plan2.TableDef{Checks: []*plan2.CheckDef{{Name: "own_explicit_ck"}}},
+	}
+	db.rels["sibling"] = &stubRelation{
+		name:     "sibling",
+		tableDef: &plan2.TableDef{Checks: []*plan2.CheckDef{{Name: "u_chk_1"}}},
+	}
+
+	// Empty checks never block a rename.
+	require.NoError(t, c.validateRenamedCheckConstraintNames("db", "t", "u", nil))
+
+	// A plain generated name simply follows the table.
+	require.NoError(t, c.validateRenamedCheckConstraintNames("db", "t", "u2",
+		[]*plan2.CheckDef{{Name: "t_chk_1"}}))
+
+	// Same-table duplicate: the rewritten generated name lands on an
+	// explicit name owned by the table itself.
+	err := c.validateRenamedCheckConstraintNames("db", "t", "u",
+		[]*plan2.CheckDef{{Name: "t_chk_1"}, {Name: "u_chk_1"}})
+	require.Error(t, err)
+	require.ErrorContains(t, err, "Duplicate check constraint name 'u_chk_1'")
+
+	// Cross-table duplicate: a sibling already owns the resulting name.
+	err = c.validateRenamedCheckConstraintNames("db", "t", "u",
+		[]*plan2.CheckDef{{Name: "t_chk_1"}})
+	require.Error(t, err)
+	require.ErrorContains(t, err, "Duplicate check constraint name 'u_chk_1'")
+
+	// The renamed table's own pre-rename names never count as siblings.
+	require.NoError(t, c.validateRenamedCheckConstraintNames("db", "t", "v",
+		[]*plan2.CheckDef{{Name: "own_explicit_ck"}}))
+	// A legacy name shared with a sibling is inherited, not a new claim.
+	require.NoError(t, c.validateRenamedCheckConstraintNames("db", "t", "v",
+		[]*plan2.CheckDef{{Name: "u_chk_1"}}))
+}
+
+func TestComposeCheckNamesAcrossAlterActions(t *testing.T) {
+	checks := []*plan2.CheckDef{{Name: "t_chk_1"}, {Name: "explicit_ck"}}
+
+	// No rename-table action: the set is untouched.
+	qry := &plan2.AlterTable{}
+	require.Same(t, checks[0], composeCheckNamesAcrossAlterActions(qry, checks)[0])
+
+	// A rename-table action in the same ALTER composes the move into the set.
+	qry = &plan2.AlterTable{Actions: []*plan2.AlterTable_Action{
+		{Action: &plan2.AlterTable_Action_AlterName{AlterName: &plan2.AlterTableName{OldName: "t", NewName: "u"}}},
+		{Action: &plan2.AlterTable_Action_AlterRenameColumn{AlterRenameColumn: &plan2.AlterRenameColumn{OldName: "a", NewName: "b"}}},
+	}}
+	composed := composeCheckNamesAcrossAlterActions(qry, checks)
+	require.Equal(t, "u_chk_1", composed[0].Name)
+	require.Equal(t, "explicit_ck", composed[1].Name)
+
+	// Chained rename-table actions compose in order.
+	qry.Actions = append(qry.Actions,
+		&plan2.AlterTable_Action{Action: &plan2.AlterTable_Action_AlterName{AlterName: &plan2.AlterTableName{OldName: "u", NewName: "v"}}})
+	composed = composeCheckNamesAcrossAlterActions(qry, checks)
+	require.Equal(t, "v_chk_1", composed[0].Name)
+
+	// Empty input stays empty.
+	require.Empty(t, composeCheckNamesAcrossAlterActions(qry, nil))
 }
 
 func TestLockDroppedRelation(t *testing.T) {
@@ -3586,7 +3788,7 @@ func TestAlterTemporaryTableRejectsRecreatedRelation(t *testing.T) {
 			proc.Ctx = defines.AttachAccountId(proc.Ctx, 0)
 			c := NewCompile("test", "test", "alter table t add column v int", "", "", eng, proc, nil, false, nil, time.Now())
 			defer c.Release()
-			c.proc.Session = &trackingTempTableSession{tables: map[string]string{"test.t": "physical_t"}}
+			c.proc.Session = &trackingTempTableSession{tables: map[string]string{defines.TempTableAliasKey("test", "t"): "physical_t"}}
 			s := &Scope{Plan: &plan2.Plan{Plan: &plan2.Plan_Ddl{Ddl: &plan2.DataDefinition{
 				Definition: &plan2.DataDefinition_AlterTable{AlterTable: &plan2.AlterTable{
 					Database: "test", TableDef: &plan2.TableDef{Name: "t", TblId: 1, IsTemporary: true},
@@ -3782,25 +3984,6 @@ func TestTruncateLifecycleRCWaitPolicy(t *testing.T) {
 func TestAlterCopyAndTruncateSerializeBeforeTableLocks(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	ctrl := gomock.NewController(t)
-	eng := newStubEngine()
-	db := newStubDatabase("test")
-	db.rels["t"] = newStubRelation("t")
-	eng.dbs["test"] = db
-
-	newCompile := func(sql string) *Compile {
-		proc := testutil.NewProcess(t)
-		proc.Base.SessionInfo.Buf = buffer.New()
-		proc.Ctx = defines.AttachAccountId(ctx, catalog.System_Account)
-		proc.ReplaceTopCtx(proc.Ctx)
-		txnClient, txnOp := newTestTxnClientAndOpWithPessimistic(ctrl)
-		proc.Base.TxnClient = txnClient
-		proc.Base.TxnOperator = txnOp
-		return NewCompile("test", "test", sql, "", "", eng, proc, nil, false, nil, time.Now())
-	}
-	alterCompile := newCompile("alter table t add column a int")
-	defer alterCompile.Release()
-	truncateCompile := newCompile("truncate table t")
-	defer truncateCompile.Release()
 
 	var mu sync.Mutex
 	var order []string
@@ -3818,8 +4001,12 @@ func TestAlterCopyAndTruncateSerializeBeforeTableLocks(t *testing.T) {
 	var gateCalls atomic.Int32
 	stop := errors.New("stop after table lock")
 	exec := &recordingInternalSQLExecutor{mocker: func(sql string) (executor.Result, error) {
+		if sql == "insert into dept_copy select * from dept" {
+			record("alter physical")
+			return executor.Result{}, nil
+		}
 		if sql != databranchutils.LineageOwnerLifecyclePessimisticLockSQL() {
-			return executor.Result{}, fmt.Errorf("unexpected lifecycle SQL: %s", sql)
+			return executor.Result{}, nil
 		}
 		switch gateCalls.Add(1) {
 		case 1:
@@ -3845,6 +4032,15 @@ func TestAlterCopyAndTruncateSerializeBeforeTableLocks(t *testing.T) {
 			return executor.Result{}, errors.New("unexpected lifecycle lock")
 		}
 	}}
+	alterScope, alterCompile := newAlterCopyPessimisticGateConcurrencyFixture(
+		t, ctrl, exec, "alter-truncate", 0,
+	)
+	defer alterCompile.Release()
+	truncateCompile := NewCompile(
+		"test", "test", "truncate table dept", "", "", alterCompile.e, alterCompile.proc,
+		nil, false, nil, time.Now(),
+	)
+	defer truncateCompile.Release()
 	rt := moruntime.ServiceRuntime(alterCompile.proc.GetService())
 	previous, hadPrevious := rt.GetGlobalVariables(moruntime.InternalSQLExecutor)
 	rt.SetGlobalVariables(moruntime.InternalSQLExecutor, exec)
@@ -3872,14 +4068,9 @@ func TestAlterCopyAndTruncateSerializeBeforeTableLocks(t *testing.T) {
 	})
 	defer lockTableStub.Reset()
 
-	alterScope := &Scope{Plan: &plan2.Plan{Plan: &plan2.Plan_Ddl{Ddl: &plan2.DataDefinition{
-		Definition: &plan2.DataDefinition_AlterTable{AlterTable: &plan2.AlterTable{
-			Database: "test", TableDef: &plan2.TableDef{Name: "t"},
-		}},
-	}}}}
 	truncateScope := &Scope{Plan: &plan2.Plan{Plan: &plan2.Plan_Ddl{Ddl: &plan2.DataDefinition{
 		Definition: &plan2.DataDefinition_TruncateTable{TruncateTable: &plan2.TruncateTable{
-			Database: "test", Table: "t", TableId: 1,
+			Database: "test", Table: "dept", TableId: 1,
 		}},
 	}}}}
 	var workers sync.WaitGroup
@@ -3935,7 +4126,8 @@ func TestAlterCopyAndTruncateSerializeBeforeTableLocks(t *testing.T) {
 	got := append([]string(nil), order...)
 	mu.Unlock()
 	require.Equal(t, []string{
-		"alter gate", "alter database", "alter table", "truncate gate", "truncate table",
+		"alter physical", "alter gate", "alter database",
+		"alter table", "truncate gate", "truncate table",
 	}, got)
 }
 
@@ -3959,7 +4151,7 @@ func TestTruncateTemporaryTableRejectsStaleRelation(t *testing.T) {
 			plannedID:    1,
 			relationName: "physical_t",
 			relationID:   2,
-			tempTables:   map[string]string{"test.t": "physical_t"},
+			tempTables:   map[string]string{defines.TempTableAliasKey("test", "t"): "physical_t"},
 		},
 	}
 
@@ -4031,7 +4223,7 @@ func TestTruncateTemporaryTableRebuildsTemporaryRelation(t *testing.T) {
 	originalCtx := defines.AttachAccountId(context.Background(), 0)
 	proc.Ctx = originalCtx
 	proc.ReplaceTopCtx(originalCtx)
-	session := &trackingTempTableSession{tables: map[string]string{"test.t": "physical_t"}}
+	session := &trackingTempTableSession{tables: map[string]string{defines.TempTableAliasKey("test", "t"): "physical_t"}}
 	proc.Session = session
 
 	internalExecutor := &recordingInternalSQLExecutor{mocker: func(sql string) (executor.Result, error) {

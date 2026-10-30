@@ -51,7 +51,12 @@ func TestEmptyTimeConversionPreservesReleaseContract(t *testing.T) {
 						tc.parameters[0].SetIsBin(binary)
 						ok, info := tc.Run()
 						require.True(t, ok, info)
-						require.Empty(t, session.warnings)
+						if source == types.T_varchar && !binary && name != "assignment" {
+							require.Len(t, session.warnings, 1)
+							require.Equal(t, "Truncated incorrect time value: ''", session.warnings[0].msg)
+						} else {
+							require.Empty(t, session.warnings)
+						}
 					})
 				}
 			}
@@ -344,6 +349,102 @@ func TestAssignmentDateCastRejectsInvalidStrings(t *testing.T) {
 	}
 }
 
+func TestDatetimeExpressionCastInvalidStrings(t *testing.T) {
+	for _, source := range []types.T{types.T_char, types.T_varchar, types.T_text, types.T_binary, types.T_varbinary, types.T_blob} {
+		for name, fn := range map[string]executeLogicOfOverload{"ordinary": NewCast, "explicit": NewExplicitCast} {
+			t.Run(source.String()+"/"+name, func(t *testing.T) {
+				proc := testutil.NewProcess(t)
+				warnings := &numericWarningSession{}
+				proc.WarningSink = warnings
+				target := types.T_datetime.ToTypeWithScale(6)
+				fc := NewFunctionTestCase(proc, []FunctionTestInput{
+					NewFunctionTestInput(source.ToType(),
+						[]string{"2026-02-30", "2026-13-01", "not a date", "", " ", "ignored", "2024-02-29 12:34:56.123456", "masked"},
+						[]bool{false, false, false, false, false, true, false, false}),
+					NewFunctionTestInput(target, []types.Datetime{}, nil),
+				}, NewFunctionTestResult(target, false,
+					[]types.Datetime{0, 0, 0, 0, 0, 0, types.DatetimeFromClock(2024, 2, 29, 12, 34, 56, 123456), 0},
+					[]bool{true, true, true, true, true, true, false, true}), fn).
+					WithSelectList(&FunctionSelectList{AnyNull: true, SelectList: []bool{true, true, true, true, true, true, true, false}})
+				ok, info := fc.RunAndFree()
+				require.True(t, ok, info)
+				if isTemporalTextSource(source) {
+					require.Len(t, warnings.warnings, 5)
+				} else {
+					require.Empty(t, warnings.warnings)
+				}
+			})
+		}
+	}
+	for _, sqlMode := range []string{"", "STRICT_TRANS_TABLES,NO_ZERO_DATE", "TIME_TRUNCATE_FRACTIONAL"} {
+		for _, scale := range []int32{0, 6} {
+			t.Run(fmt.Sprintf("precision/%s/%d", sqlMode, scale), func(t *testing.T) {
+				proc := testutil.NewProcess(t)
+				proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) { return sqlMode, nil })
+				result := runStringTemporalCast(t, proc, NewCast, "bad", types.T_datetime.ToTypeWithScale(scale), nil,
+					"2024-02-29 12:34:56.9999999")
+				want := types.DatetimeFromClock(2024, 2, 29, 12, 34, 57, 0)
+				if sqlMode == "TIME_TRUNCATE_FRACTIONAL" {
+					fraction := uint32(0)
+					if scale == 6 {
+						fraction = 999999
+					}
+					want = types.DatetimeFromClock(2024, 2, 29, 12, 34, 56, fraction)
+				}
+				require.Equal(t, []bool{true, false}, result.nulls)
+				require.Equal(t, want, result.datetimes[1])
+			})
+		}
+	}
+}
+
+func TestDatetimeInvalidCastRetainsRestrictedDomains(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		fn      executeLogicOfOverload
+		sqlMode string
+		binary  bool
+	}{
+		{name: "strict assignment", fn: NewStrictCast},
+		{name: "runtime strict assignment", fn: NewAssignCast, sqlMode: "STRICT_TRANS_TABLES"},
+		{name: "non-strict assignment", fn: NewAssignCast},
+		{name: "binary ignore", fn: NewAssignIgnoreCast, binary: true},
+		{name: "comparison", fn: NewComparisonCast},
+		{name: "set operation", fn: NewSetOperationCast},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) { return tc.sqlMode, nil })
+			target := types.T_datetime.ToTypeWithScale(6)
+			fc := NewFunctionTestCase(proc, []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"2026-02-30"}, nil),
+				NewFunctionTestInput(target, []types.Datetime{}, nil),
+			}, NewFunctionTestResult(target, true, []types.Datetime{}, nil), tc.fn)
+			defer fc.Free()
+			fc.parameters[0].SetIsBin(tc.binary)
+			require.NoError(t, fc.result.PreExtendAndReset(1))
+			err := tc.fn(fc.parameters, fc.result, proc, 1, nil)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput), err)
+		})
+	}
+	// These types share string dispatch but are outside the tolerant text domain.
+	for _, source := range []types.T{types.T_datalink, types.T_geometry} {
+		t.Run(source.String(), func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			input := newVectorByType(proc.Mp(), source.ToType(), []string{"not a date"}, nil)
+			defer input.Free(proc.Mp())
+			result := vector.NewFunctionResultWrapper(types.T_datetime.ToType(), proc.Mp())
+			defer result.Free()
+			require.NoError(t, result.PreExtendAndReset(1))
+			err := strToDatetime(proc, vector.GenerateFunctionStrParameter(input),
+				vector.MustFunctionResult[types.Datetime](result), 1, nil, castModeNormal)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput), err)
+		})
+	}
+	// The classification must never absorb an unrelated evaluator failure.
+	require.False(t, isTemporalLexicalConversionError(moerr.NewInternalErrorNoCtx("unrelated")))
+}
+
 func TestExplicitCastZeroTemporalResolverErrorPropagates(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	proc.GetSessionInfo().TimeZone = time.UTC
@@ -351,17 +452,27 @@ func TestExplicitCastZeroTemporalResolverErrorPropagates(t *testing.T) {
 		return nil, fmt.Errorf("sql_mode lookup failed")
 	})
 
-	inputVec := testutil.MakeVarcharVector([]string{"0000-00-00"}, nil, proc.Mp())
-	defer inputVec.Free(proc.Mp())
-	targetType := vector.NewConstNull(types.T_date.ToType(), 1, proc.Mp())
-	defer targetType.Free(proc.Mp())
-	result := vector.NewFunctionResultWrapper(types.T_date.ToType(), proc.Mp())
-	defer result.Free()
-	require.NoError(t, result.PreExtendAndReset(1))
-
-	err := NewCast([]*vector.Vector{inputVec, targetType}, result, proc, 1, nil)
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "sql_mode lookup failed")
+	for _, tc := range []struct {
+		name   string
+		target types.Type
+		fn     executeLogicOfOverload
+	}{
+		{name: "date cast", target: types.T_date.ToType(), fn: NewCast},
+		{name: "datetime cast", target: types.T_datetime.ToType(), fn: NewCast},
+		{name: "date function", target: types.T_date.ToType(), fn: DateStringToDate},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			inputVec := testutil.MakeVarcharVector([]string{"0000-00-00"}, nil, proc.Mp())
+			defer inputVec.Free(proc.Mp())
+			targetType := vector.NewConstNull(tc.target, 1, proc.Mp())
+			defer targetType.Free(proc.Mp())
+			result := vector.NewFunctionResultWrapper(tc.target, proc.Mp())
+			defer result.Free()
+			require.NoError(t, result.PreExtendAndReset(1))
+			err := tc.fn([]*vector.Vector{inputVec, targetType}, result, proc, 1, nil)
+			require.ErrorContains(t, err, "sql_mode lookup failed")
+		})
+	}
 }
 
 func TestExplicitCastZeroTemporalSkippedRowsAreNotParsed(t *testing.T) {
@@ -622,6 +733,44 @@ func TestUnixTimestampTypedTimestampPreservesFraction(t *testing.T) {
 	)
 	succeed, info = fcTC.RunAndFree()
 	require.True(t, succeed, info)
+}
+
+func TestUnixTimestampTypedDatetimeDSTGap(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	zone, err := time.LoadLocation("America/New_York")
+	require.NoError(t, err)
+	proc.GetSessionInfo().TimeZone = zone
+
+	gap := types.DatetimeFromClock(2024, 3, 10, 2, 30, 0, 123456)
+	control := types.DatetimeFromClock(2024, 3, 10, 3, 30, 0, 123456)
+	preEpoch := types.DatetimeFromClock(1969, 12, 31, 18, 59, 59, 999999)
+	for _, tc := range []struct {
+		name   string
+		input  types.Type
+		expect FunctionTestResult
+	}{
+		{
+			name:   "whole seconds",
+			input:  types.T_datetime.ToType(),
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{1710054000, 1710055800, 0, 0, 0}, []bool{false, false, false, true, true}),
+		},
+		{
+			name:  "fractional seconds",
+			input: types.T_datetime.ToTypeWithScale(6),
+			expect: NewFunctionTestResult(types.New(types.T_decimal128, 38, 6), false,
+				[]types.Decimal128{mustDecimal128(t, "1710054000.123456", 38, 6), mustDecimal128(t, "1710055800.123456", 38, 6), {}, {}, {}},
+				[]bool{false, false, false, true, true}),
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fcTC := NewFunctionTestCase(proc,
+				[]FunctionTestInput{NewFunctionTestInput(tc.input,
+					[]types.Datetime{gap, control, preEpoch, types.ZeroDatetime, 0}, []bool{false, false, false, false, true})},
+				tc.expect, builtInUnixTimestampDatetime)
+			ok, info := fcTC.RunAndFree()
+			require.True(t, ok, info)
+		})
+	}
 }
 
 func TestUnixTimestampTypedTimestampDecimalNulls(t *testing.T) {

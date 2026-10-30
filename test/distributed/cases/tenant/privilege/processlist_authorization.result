@@ -1,0 +1,25 @@
+drop user if exists processlist_low;
+drop role if exists processlist_reader;
+create role processlist_reader;
+grant connect on account * to processlist_reader;
+create user processlist_low identified by '111' default role processlist_reader;
+select count(*) as other_users from information_schema.processlist where `user` <> 'processlist_low';
+other_users
+0
+select count(*) as other_users from processlist() p where `user` <> 'processlist_low';
+other_users
+0
+select count(*) > 0 as own_session from information_schema.processlist where `user` = 'processlist_low';
+own_session
+1
+prepare pl from 'select count(*) as other_users from information_schema.processlist where `user` <> ''processlist_low''';
+execute pl;
+other_users
+0
+set role processlist_reader;
+execute pl;
+other_users
+0
+deallocate prepare pl;
+drop user processlist_low;
+drop role processlist_reader;

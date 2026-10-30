@@ -201,13 +201,14 @@ func (builder *QueryBuilder) bindDelete(ctx CompilerContext, stmt *tree.Delete, 
 		return 0, moerr.NewUnsupportedDML(builder.GetContext(), "delete from multiple tables")
 	}
 
-	aliasMap := make(map[string][2]string)
-	for _, tbl := range stmt.TableRefs {
-		getAliasToName(builder.compCtx, tbl, "", aliasMap)
+	aliasMap, err := resolveDeleteTargetAliases(builder.compCtx, stmt)
+	if err != nil {
+		return 0, err
 	}
 
 	dmlCtx := NewDMLContext()
-	err := dmlCtx.ResolveTables(builder.compCtx, stmt.Tables, stmt.With, aliasMap, false)
+	// Target CTE/writability checks precede catalog lookup; SELECT keeps WITH.
+	err = dmlCtx.ResolveTables(builder.compCtx, stmt.Tables, nil, aliasMap, false)
 	if err != nil {
 		return 0, err
 	}
@@ -329,7 +330,7 @@ func (builder *QueryBuilder) bindDelete(ctx CompilerContext, stmt *tree.Delete, 
 			colPos[strings.ToLower(col.Name)] = pos
 		}
 		lastNodeID = builder.materializeReturningSource(
-			bindCtx, lastNodeID, selectNodeTag, tableDef, dmlCtx.objRefs[0], tableDef.Name, alias, colPos,
+			bindCtx, lastNodeID, selectNodeTag, tableDef, tableDef.Name, alias, colPos,
 		)
 		if len(returningIrregularIndexes) > 0 {
 			pkPos, ok := colPos[strings.ToLower(tableDef.Pkey.PkeyColName)]
@@ -395,6 +396,12 @@ func (builder *QueryBuilder) bindDelete(ctx CompilerContext, stmt *tree.Delete, 
 				ScanSnapshot: bindCtx.snapshot,
 			}
 			idxTableNodeID := builder.appendNode(idxScanNodes[i][j], bindCtx)
+			if catalog.IsRegularIndexAlgo(idxDef.IndexAlgo) && !isSpatialIndexDef(idxDef) {
+				if builder.deleteIndexScanTables == nil {
+					builder.deleteIndexScanTables = make(map[int32]deleteIndexScan)
+				}
+				builder.deleteIndexScanTables[idxTag] = deleteIndexScan{tableID: idxTableDef.TblId}
+			}
 
 			lookupColName := indexLookupColumnName(idxDef)
 			rightPkPos := idxTableDef.Name2ColIndex[lookupColName]

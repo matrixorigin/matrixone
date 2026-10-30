@@ -44,10 +44,16 @@ const (
 )
 
 // Textual LOAD keeps TIME fields intact until the shared assignment cast owns
-// syntax, precision and range policy. The scan's TableDef retains the target
-// type for field preprocessing; only its physical column references are text.
+// syntax, precision and range policy; attributed DECIMAL stages text on every
+// format (CSV raw field text, Parquet/Arrow mapper-rendered text) so the
+// shared admission boundary classifies the raw source. The scan's TableDef
+// retains the target type for field preprocessing; only its physical column
+// references are text.
 func loadTimeInputType(format string, typ plan.Type) plan.Type {
 	if typ.Id == int32(types.T_time) && format != tree.PARQUET && format != tree.ARROW {
+		return makeGeneratedPlan2Type(types.T_varchar, 0, 0, false)
+	}
+	if isAttributedDecimalPlanType(typ) {
 		return makeGeneratedPlan2Type(types.T_varchar, 0, 0, false)
 	}
 	return typ
@@ -81,17 +87,23 @@ func getExternalWithColListProject(stmt *tree.Load, ctx CompilerContext, tableDe
 	var newCols []*ColDef
 
 	newTableDef := DeepCopyTableDef(tableDef, true)
+	// Legacy DML filters Cols without rebuilding Name2ColIndex. Resolve against
+	// the actual columns once instead of scanning the schema for every target.
+	columns := make(map[string]*ColDef, len(newTableDef.Cols))
+	for _, column := range newTableDef.Cols {
+		columns[column.Name] = column
+	}
 	colPos := 0
 	for i, col := range stmt.Param.Tail.ColumnList {
 		switch realCol := col.(type) {
 		case *tree.UnresolvedName:
 			colName := realCol.ColName()
-			if _, ok := newTableDef.Name2ColIndex[colName]; !ok {
+			column := columns[colName]
+			if column == nil || column.Hidden {
 				return nil, nil, nil, nil, moerr.NewBadFieldErrorf(ctx.GetContext(), "internal error: column '%s' does not exist", colName)
 			}
-			tbColIdx := newTableDef.Name2ColIndex[colName]
 			colExpr := &plan.Expr{
-				Typ: loadTimeInputType(stmt.Param.Format, newTableDef.Cols[tbColIdx].Typ),
+				Typ: loadTimeInputType(stmt.Param.Format, column.Typ),
 				Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{
 						ColPos: int32(colPos),
@@ -103,7 +115,7 @@ func getExternalWithColListProject(stmt *tree.Load, ctx CompilerContext, tableDe
 			colToIndex[colName] = int32(colPos)
 			colPos++
 			tbColToDataCol[colName] = int32(i)
-			newCols = append(newCols, newTableDef.Cols[tbColIdx])
+			newCols = append(newCols, column)
 		case *tree.VarExpr:
 			// Row-variable slots are recorded after target columns so referenced
 			// values can be exposed to the LOAD assignment projection.
@@ -125,58 +137,7 @@ func getExternalProject(stmt *tree.Load, ctx CompilerContext, tableDef *TableDef
 }
 
 func newReaderWithParam(param *tree.ExternParam, reader io.ReadCloser) (*csvparser.CSVParser, error) {
-	fieldsTerminatedBy := "\t"
-	fieldsEnclosedBy := "\""
-	fieldsEscapedBy := "\\"
-
-	linesTerminatedBy := "\n"
-	linesStartingBy := ""
-
-	if param.Tail.Fields != nil {
-		if terminated := param.Tail.Fields.Terminated; terminated != nil && terminated.Value != "" {
-			fieldsTerminatedBy = terminated.Value
-		}
-		if enclosed := param.Tail.Fields.EnclosedBy; enclosed != nil && enclosed.Value != 0 {
-			fieldsEnclosedBy = string(enclosed.Value)
-		}
-		if escaped := param.Tail.Fields.EscapedBy; escaped != nil {
-			if escaped.Value == 0 {
-				fieldsEscapedBy = ""
-			} else {
-				fieldsEscapedBy = string(escaped.Value)
-			}
-		}
-	}
-
-	if param.Tail.Lines != nil {
-		if terminated := param.Tail.Lines.TerminatedBy; terminated != nil && terminated.Value != "" {
-			linesTerminatedBy = param.Tail.Lines.TerminatedBy.Value
-		}
-		if param.Tail.Lines.StartingBy != "" {
-			linesStartingBy = param.Tail.Lines.StartingBy
-		}
-	}
-
-	if param.Format == tree.JSONLINE {
-		fieldsTerminatedBy = "\t"
-		fieldsEscapedBy = ""
-	}
-
-	config := csvparser.CSVConfig{
-		FieldsTerminatedBy: fieldsTerminatedBy,
-		FieldsEnclosedBy:   fieldsEnclosedBy,
-		FieldsEscapedBy:    fieldsEscapedBy,
-		LinesTerminatedBy:  linesTerminatedBy,
-		LinesStartingBy:    linesStartingBy,
-		NotNull:            false,
-		Null:               []string{`\N`},
-		UnescapedQuote:     true,
-		// Comment defaults to 0 (no comment marker): every line is data, matching
-		// MySQL LOAD DATA, which does not treat '#' lines as comments.
-		Comment: "",
-	}
-
-	return csvparser.NewCSVParser(&config, bufio.NewReader(reader), csvparser.ReadBlockSize, false)
+	return csvparser.NewCSVParser(CSVConfigForLoad(param), bufio.NewReader(reader), csvparser.ReadBlockSize, false)
 }
 
 func IgnoredLines(param *tree.ExternParam, ctx CompilerContext) (offset int64, err error) {
@@ -210,9 +171,8 @@ func IgnoredLines(param *tree.ExternParam, ctx CompilerContext) (offset int64, e
 		return 0, err
 	}
 
-	var lastRow []csvparser.Field
 	for skipLines > 0 {
-		lastRow, err = csvReader.Read(lastRow)
+		err = csvReader.ScanRecord()
 		if err != nil {
 			if err == io.EOF {
 				param.Tail.IgnoredLines = 0
@@ -630,7 +590,7 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 	if err != nil {
 		return nil, err
 	}
-	if err := validateLoadSetAssignments(stmt.Param, ctx); err != nil {
+	if err := validateLoadSetAssignments(stmt.Param, ctx, tblInfo.tableDefs[0]); err != nil {
 		return nil, err
 	}
 	userVariableAssignments, err := loadUserVariableNullIfAssignments(stmt.Param, ctx)
@@ -705,7 +665,10 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 	}
 
 	builder := NewQueryBuilder(plan.Query_SELECT, ctx, isPrepareStmt, false)
-	builder.checkLoadPrimaryKey = loadChecksPrimaryKey(stmt, originTableDef)
+	builder.checkLoadPrimaryKey, err = loadPrimaryKeyCheckEnabled(ctx, stmt, originTableDef)
+	if err != nil {
+		return nil, err
+	}
 	bindCtx := NewBindContext(builder, nil)
 	terminated := ","
 	enclosedBy := []byte("\"")
@@ -775,15 +738,17 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 	if stmt.Param.Parallel && noCompress && stmt.Param.Format != tree.PARQUET && stmt.Param.Format != tree.ARROW {
 		projectNode.ProjectList = makeCastExpr(stmt, fileName, originTableDef, projectNode, colToIndex)
 	}
-	// Enforce payload, TIME and MEDIUMINT assignment limits before defaults read
-	// assigned values, including parallel CSV staging and the FK fallback.
+	// Enforce payload, TIME, MEDIUMINT and attributed DECIMAL assignment
+	// limits before defaults read assigned values, including parallel CSV
+	// staging and the FK fallback.
 	for i, col := range originTableDef.Cols {
 		if _, supplied := colToIndex[col.Name]; !supplied ||
 			(col.Typ.Id != int32(types.T_blob) && col.Typ.Id != int32(types.T_text) &&
-				col.Typ.Id != int32(types.T_time) && !isMediumIntPlanType(col.Typ)) {
+				col.Typ.Id != int32(types.T_time) && !isMediumIntPlanType(col.Typ) &&
+				!isAttributedDecimalPlanType(col.Typ)) {
 			continue
 		}
-		projectNode.ProjectList[i], err = builder.forceAssignmentCastExpr(projectNode.ProjectList[i], col.Typ, loadAssignmentIgnore(stmt))
+		projectNode.ProjectList[i], err = builder.forceAssignmentCastExpr(projectNode.ProjectList[i], col.Typ, loadAssignmentIgnore(stmt), col.Name)
 		if err != nil {
 			return nil, err
 		}
@@ -829,7 +794,7 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 			return nil, err
 		}
 	} else {
-		err = buildInsertPlans(ctx, builder, bindCtx, nil, objRef, newTableDef, lastNodeId, ifExistAutoPkCol, nil, nil)
+		err = buildInsertPlans(ctx, builder, bindCtx, nil, objRef, newTableDef, lastNodeId, ifExistAutoPkCol, nil, nil, tree.IsIgnoreStatement(stmt))
 		if err != nil {
 			return nil, err
 		}

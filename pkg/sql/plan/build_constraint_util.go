@@ -41,15 +41,13 @@ const (
 type dmlSelectInfo struct {
 	typ string
 
-	projectList    []*Expr
-	tblInfo        *dmlTableInfo
-	idx            int32
-	rootId         int32
-	derivedTableId int32
+	projectList []*Expr
+	tblInfo     *dmlTableInfo
+	idx         int32
+	rootId      int32
 
-	onDuplicateIdx      []int32
-	onDuplicateExpr     map[string]*Expr
-	onDuplicateIsIgnore bool
+	onDuplicateIdx  []int32
+	onDuplicateExpr map[string]*Expr
 }
 
 type dmlTableInfo struct {
@@ -57,35 +55,9 @@ type dmlTableInfo struct {
 	objRef         []*ObjectRef
 	tableDefs      []*TableDef
 	isClusterTable []bool
-	haveConstraint bool
 	isMulti        bool
 	needAggFilter  bool
-	updateKeys     []map[string]tree.Expr // This slice index correspond to tableDefs
-	oldColPosMap   []map[string]int       // origin table values to their position in derived table
-	newColPosMap   []map[string]int       // insert/update values to their position in derived table
-	nameToIdx      map[string]int         // Mapping of table full path name to tableDefs index，such as： 'tpch.nation -> 0'
-	idToName       map[uint64]string      // Mapping of tableId to full path name of table
-	alias          map[string]int         // Mapping of table aliases to tableDefs array index,If there is no alias, replace it with the original name of the table
-}
-
-func getAliasToName(ctx CompilerContext, expr tree.TableExpr, alias string, aliasMap map[string][2]string) {
-	switch t := expr.(type) {
-	case *tree.TableName:
-		dbName := string(t.SchemaName)
-		if dbName == "" {
-			dbName = ctx.DefaultDatabase()
-		}
-		tblName := string(t.ObjectName)
-		if alias != "" {
-			aliasMap[alias] = [2]string{dbName, tblName}
-		}
-	case *tree.AliasedTableExpr:
-		alias := string(t.As.Alias)
-		getAliasToName(ctx, t.Expr, alias, aliasMap)
-	case *tree.JoinTableExpr:
-		getAliasToName(ctx, t.Left, alias, aliasMap)
-		getAliasToName(ctx, t.Right, alias, aliasMap)
-	}
+	alias          map[string]int // Mapping of table aliases to tableDefs array index,If there is no alias, replace it with the original name of the table
 }
 
 func appendCheckConstraintPlan(
@@ -325,174 +297,6 @@ func getProjectionByLastNodeIfAvailable(builder *QueryBuilder, lastNodeID int32)
 	}
 }
 
-func getUpdateTableInfo(ctx CompilerContext, stmt *tree.Update) (*dmlTableInfo, error) {
-	tblInfo, err := getDmlTableInfo(ctx, stmt.Tables, stmt.With, nil, "update")
-	if err != nil {
-		return nil, err
-	}
-
-	// A PostgreSQL-style UPDATE ... FROM may match a single target row from
-	// multiple source rows. Mark it for dedup so the planner does not
-	// produce duplicate-row writes.
-	if stmt.From != nil && len(stmt.From.Tables) > 0 {
-		tblInfo.needAggFilter = true
-	}
-
-	// check update field and set updateKeys
-	usedTbl := make(map[string]map[string]tree.Expr)
-	allColumns := make(map[string]map[string]struct{})
-	for alias, idx := range tblInfo.alias {
-		allColumns[alias] = make(map[string]struct{})
-		for _, col := range tblInfo.tableDefs[idx].Cols {
-			allColumns[alias][col.Name] = struct{}{}
-		}
-	}
-
-	// checkSetGeneratedCol returns skip=true when the SET assigns DEFAULT to a
-	// stored generated column (which should be silently dropped so the base
-	// column's recomputation fills it), or an error when a non-DEFAULT value
-	// is assigned to any generated column. Mirrors bind_update.go's behaviour.
-	checkSetGeneratedCol := func(alias, column string, expr tree.Expr) (bool, error) {
-		idx, ok := tblInfo.alias[alias]
-		if !ok {
-			return false, nil
-		}
-		tableDef := tblInfo.tableDefs[idx]
-		for _, col := range tableDef.Cols {
-			if col.Name != column || col.GeneratedCol == nil {
-				continue
-			}
-			if _, ok := expr.(*tree.DefaultVal); ok {
-				return true, nil
-			}
-			return false, moerr.NewInvalidInputf(ctx.GetContext(),
-				"the value specified for generated column '%s' in table '%s' is not allowed",
-				column, tableDef.Name)
-		}
-		return false, nil
-	}
-
-	appendToTbl := func(table, column string, expr tree.Expr) {
-		if _, exists := usedTbl[table]; !exists {
-			usedTbl[table] = make(map[string]tree.Expr)
-		}
-		usedTbl[table][column] = expr
-	}
-
-	for _, updateExpr := range stmt.Exprs {
-		if len(updateExpr.Names) > 1 {
-			return nil, moerr.NewNYI(ctx.GetContext(), "unsupport expr")
-		}
-		parts := updateExpr.Names[0]
-		expr := updateExpr.Expr
-		if parts.NumParts > 1 {
-			colName := parts.ColName()
-			tblName := parts.TblName()
-			if _, tblExists := tblInfo.alias[tblName]; tblExists {
-				if _, colExists := allColumns[tblName][colName]; colExists {
-					skip, err := checkSetGeneratedCol(tblName, colName, expr)
-					if err != nil {
-						return nil, err
-					}
-					if !skip {
-						appendToTbl(tblName, colName, expr)
-					}
-				} else {
-					return nil, moerr.NewInternalErrorf(ctx.GetContext(), "column '%v' not found in table %s", parts.ColNameOrigin(), parts.TblNameOrigin())
-				}
-			} else {
-				return nil, moerr.NewNoSuchTable(ctx.GetContext(), "", parts.TblNameOrigin())
-			}
-		} else {
-			colName := parts.ColName()
-			tblName := ""
-			found := false
-			for alias, columns := range allColumns {
-				if _, colExists := columns[colName]; colExists {
-					if tblName != "" {
-						return nil, moerr.NewInternalErrorf(ctx.GetContext(), "Column '%v' in field list is ambiguous", parts.ColNameOrigin())
-					}
-					found = true
-					skip, err := checkSetGeneratedCol(alias, colName, expr)
-					if err != nil {
-						return nil, err
-					}
-					if !skip {
-						appendToTbl(alias, colName, expr)
-					}
-				}
-			}
-			if !found && stmt.With != nil {
-				var str string
-				for i, c := range stmt.With.CTEs {
-					if i > 0 {
-						str += ", "
-					}
-					str += string(c.Name.Alias)
-				}
-				return nil, moerr.NewInternalErrorf(ctx.GetContext(), "column '%v' not found in table or the target table %s of the UPDATE is not updatable", parts.ColNameOrigin(), str)
-			} else if !found {
-				return nil, moerr.NewInternalErrorf(ctx.GetContext(), "column '%v' not found in table %s", parts.ColNameOrigin(), tblName)
-			}
-		}
-	}
-
-	// remove unused table
-	newTblInfo := &dmlTableInfo{
-		nameToIdx:     make(map[string]int),
-		idToName:      make(map[uint64]string),
-		alias:         make(map[string]int),
-		isMulti:       tblInfo.isMulti,
-		needAggFilter: tblInfo.needAggFilter,
-	}
-	// Preserve the original target-table order from tblInfo. Iterating
-	// usedTbl directly would randomize order across runs (Go map
-	// iteration), which makes downstream UPDATE consumers observe
-	// non-deterministic per-target column blocks.
-	aliasByIdx := make([]string, len(tblInfo.tableDefs))
-	for alias, idx := range tblInfo.alias {
-		aliasByIdx[idx] = alias
-	}
-	for _, alias := range aliasByIdx {
-		columns, ok := usedTbl[alias]
-		if !ok {
-			continue
-		}
-		idx := tblInfo.alias[alias]
-		tblDef := tblInfo.tableDefs[idx]
-		if err := checkCatalogDMLTarget(ctx.GetContext(), tblInfo.objRef[idx], true); err != nil {
-			return nil, err
-		}
-		newTblInfo.objRef = append(newTblInfo.objRef, tblInfo.objRef[idx])
-		newTblInfo.tableDefs = append(newTblInfo.tableDefs, tblDef)
-		newTblInfo.isClusterTable = append(newTblInfo.isClusterTable, tblInfo.isClusterTable[idx])
-		newTblInfo.alias[alias] = len(newTblInfo.tableDefs) - 1
-		newTblInfo.updateKeys = append(newTblInfo.updateKeys, columns)
-
-		if !newTblInfo.haveConstraint {
-			if len(tblDef.RefChildTbls) > 0 {
-				newTblInfo.haveConstraint = true
-			} else if len(tblDef.Fkeys) > 0 {
-				newTblInfo.haveConstraint = true
-			} else {
-				for _, indexdef := range tblDef.Indexes {
-					if indexdef.Unique {
-						newTblInfo.haveConstraint = true
-						break
-					}
-				}
-			}
-		}
-	}
-	for idx, ref := range newTblInfo.objRef {
-		key := ref.SchemaName + "." + ref.ObjName
-		newTblInfo.idToName[newTblInfo.tableDefs[idx].TblId] = key
-		newTblInfo.nameToIdx[key] = idx
-	}
-
-	return newTblInfo, nil
-}
-
 func checkTableType(ctx context.Context, tableDef *TableDef, op string) error {
 	if tableDef.TableType == catalog.SystemSourceRel {
 		return moerr.NewInvalidInput(ctx, "cannot insert/update/delete from source")
@@ -523,7 +327,7 @@ func checkTableType(ctx context.Context, tableDef *TableDef, op string) error {
 	return nil
 }
 
-func setTableExprToDmlTableInfo(ctx CompilerContext, tbl tree.TableExpr, tblInfo *dmlTableInfo, aliasMap map[string][2]string, withMap map[string]struct{}) error {
+func setTableExprToDmlTableInfo(ctx CompilerContext, tbl tree.TableExpr, tblInfo *dmlTableInfo, aliasMap map[string]deleteSource, withMap map[string]struct{}) error {
 	var tblName, dbName, alias string
 
 	if aliasTbl, ok := tbl.(*tree.AliasedTableExpr); ok {
@@ -552,11 +356,7 @@ func setTableExprToDmlTableInfo(ctx CompilerContext, tbl tree.TableExpr, tblInfo
 		return nil
 	}
 
-	if aliasNames, exist := aliasMap[tblName]; exist {
-		alias = tblName // work in delete statement
-		dbName = aliasNames[0]
-		tblName = aliasNames[1]
-	}
+	dbName, tblName, alias = ResolveDMLTargetName(dbName, tblName, alias, aliasMap)
 
 	if tblName == "" {
 		return nil
@@ -573,10 +373,8 @@ func setTableExprToDmlTableInfo(ctx CompilerContext, tbl tree.TableExpr, tblInfo
 	if tableDef == nil {
 		return moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
 	}
-	if tblInfo.typ != "update" {
-		if err := checkCatalogDMLTarget(ctx.GetContext(), obj, false); err != nil {
-			return err
-		}
+	if err := checkCatalogDMLTarget(ctx.GetContext(), obj, false); err != nil {
+		return err
 	}
 	if err := validateTableIndexDefinitions(tableDef); err != nil {
 		return err
@@ -619,21 +417,6 @@ func setTableExprToDmlTableInfo(ctx CompilerContext, tbl tree.TableExpr, tblInfo
 		return moerr.NewInternalError(ctx.GetContext(), "cannot insert/update/delete from public table")
 	}
 
-	if !tblInfo.haveConstraint {
-		if len(tableDef.RefChildTbls) > 0 {
-			tblInfo.haveConstraint = true
-		} else if len(tableDef.Fkeys) > 0 {
-			tblInfo.haveConstraint = true
-		} else {
-			for _, indexdef := range tableDef.Indexes {
-				if indexdef.Unique {
-					tblInfo.haveConstraint = true
-					break
-				}
-			}
-		}
-	}
-
 	nowIdx := len(tblInfo.tableDefs)
 	tblInfo.isClusterTable = append(tblInfo.isClusterTable, isClusterTable)
 	objName := tblName
@@ -648,9 +431,6 @@ func setTableExprToDmlTableInfo(ctx CompilerContext, tbl tree.TableExpr, tblInfo
 		ObjName:    objName,
 	})
 	tblInfo.tableDefs = append(tblInfo.tableDefs, tableDef)
-	key := dbName + "." + tblName
-	tblInfo.nameToIdx[key] = nowIdx
-	tblInfo.idToName[tableDef.TblId] = key
 	if alias == "" {
 		alias = tblName
 	}
@@ -662,12 +442,10 @@ func setTableExprToDmlTableInfo(ctx CompilerContext, tbl tree.TableExpr, tblInfo
 	return nil
 }
 
-func getDmlTableInfo(ctx CompilerContext, tableExprs tree.TableExprs, with *tree.With, aliasMap map[string][2]string, typ string) (*dmlTableInfo, error) {
+func getDmlTableInfo(ctx CompilerContext, tableExprs tree.TableExprs, with *tree.With, aliasMap map[string]deleteSource, typ string) (*dmlTableInfo, error) {
 	tblInfo := &dmlTableInfo{
-		typ:       typ,
-		nameToIdx: make(map[string]int),
-		idToName:  make(map[uint64]string),
-		alias:     make(map[string]int),
+		typ:   typ,
+		alias: make(map[string]int),
 	}
 
 	cteMap := make(map[string]struct{})
@@ -697,15 +475,11 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 	tableDef := info.tblInfo.tableDefs[0]
 	tableObjRef := info.tblInfo.objRef[0]
 	colToIdx := make(map[string]int)
-	oldColPosMap := make(map[string]int)
 	tableDef.Name2ColIndex = make(map[string]int32)
 	for i, col := range tableDef.Cols {
 		colToIdx[col.Name] = i
-		oldColPosMap[col.Name] = i
 		tableDef.Name2ColIndex[col.Name] = int32(i)
 	}
-	info.tblInfo.oldColPosMap = append(info.tblInfo.oldColPosMap, oldColPosMap)
-	info.tblInfo.newColPosMap = append(info.tblInfo.newColPosMap, oldColPosMap)
 
 	// dbName := string(stmt.Table.(*tree.TableName).SchemaName)
 	// if dbName == "" {
@@ -836,7 +610,6 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 	}
 
 	tag := builder.qry.Nodes[info.rootId].BindingTags[0]
-	info.derivedTableId = info.rootId
 	oldProject := append([]*Expr{}, lastNode.ProjectList...)
 
 	insertColToExpr := make(map[string]*Expr)
@@ -868,7 +641,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 			}
 		} else {
 			projExpr, err = builder.forceProjectedAssignmentCastExpr(
-				projExpr, oldProject[i], tableDef.Cols[colIdx].Typ, builder.isInsertIgnore)
+				projExpr, oldProject[i], tableDef.Cols[colIdx].Typ, builder.isInsertIgnore, tableDef.Cols[colIdx].Name)
 			if err != nil {
 				return false, nil, nil, err
 			}
@@ -935,17 +708,6 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 				materializeCols[int32(colIdx)] = true
 				materializeOrder = append(materializeOrder, int32(colIdx))
 			}
-			// if col.Typ.AutoIncr {
-			// if _, ok := pkCols[col.Name]; ok {
-			// 	uniqueCheckOnAutoIncr, err = builder.compCtx.GetDbLevelConfig(dbName, "unique_check_on_autoincr")
-			// 	if err != nil {
-			// 		return false, nil, err
-			// 	}
-			// 	if uniqueCheckOnAutoIncr == "Error" {
-			// 		return false, nil, moerr.NewInvalidInput(builder.GetContext(), "When unique_check_on_autoincr is set to error, insertion of the specified value into auto-incr pk column is not allowed.")
-			// 	}
-			// }
-			// }
 		} else {
 			defExpr, err := getDefaultExprForAssignment(builder.GetContext(), col, builder.compCtx.GetProcess(), builder.isInsertIgnore)
 			if err != nil {
@@ -989,7 +751,6 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 	}
 
 	info.projectList = make([]*Expr, 0, len(projectList))
-	info.derivedTableId = info.rootId
 	for i, e := range projectList {
 		info.projectList = append(info.projectList, &plan.Expr{
 			Typ: e.Typ,
@@ -1089,7 +850,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 							return false, nil, nil, err
 						}
 					}
-					defExpr, err = builder.forceAssignmentCastExpr(defExpr, col.Typ, builder.isInsertIgnore)
+					defExpr, err = builder.forceAssignmentCastExpr(defExpr, col.Typ, builder.isInsertIgnore, col.Name)
 					if err != nil {
 						return false, nil, nil, err
 					}
@@ -1174,7 +935,6 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 			info.rootId = newRootId
 			info.onDuplicateIdx = idxs
 			info.onDuplicateExpr = updateExprs
-			info.onDuplicateIsIgnore = stmt.IsIgnore()
 
 			// append ProjectNode
 			info.rootId = builder.appendNode(&plan.Node{
@@ -1190,7 +950,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 	return existAutoPkCol, insertWithoutUniqueKeyMap, ifInsertFromUniqueColMap, nil
 }
 
-func deleteToSelect(builder *QueryBuilder, bindCtx *BindContext, node *tree.Delete, haveConstraint bool, tblInfo *dmlTableInfo) (int32, []map[string]int32, error) {
+func deleteToSelect(builder *QueryBuilder, bindCtx *BindContext, node *tree.Delete, tblInfo *dmlTableInfo) (int32, []map[string]int32, error) {
 	var selectList []tree.SelectExpr
 	fromTables := &tree.From{}
 	colName2Idx := make([]map[string]int32, len(tblInfo.tableDefs))
@@ -1199,28 +959,10 @@ func deleteToSelect(builder *QueryBuilder, bindCtx *BindContext, node *tree.Dele
 		var ret *tree.UnresolvedName
 		defIdx := tblInfo.alias[alias]
 		colName2Idx[defIdx] = make(map[string]int32)
-		if haveConstraint {
-			for _, col := range tblInfo.tableDefs[defIdx].Cols {
-				colName2Idx[defIdx][col.Name] = int32(len(selectList))
-				ret = tree.NewUnresolvedName(tree.NewCStr(alias, bindCtx.lower), tree.NewCStr(col.Name, 1))
-				selectList = append(selectList, tree.SelectExpr{
-					Expr: ret,
-				})
-			}
-		} else {
-			colName2Idx[defIdx][catalog.Row_ID] = int32(len(selectList))
-			ret = tree.NewUnresolvedName(tree.NewCStr(alias, bindCtx.lower), tree.NewCStr(catalog.Row_ID, 1))
-			selectList = append(selectList, tree.SelectExpr{
-				Expr: ret,
-			})
-			pkName := getTablePriKeyName(tblInfo.tableDefs[defIdx].Pkey)
-			if pkName != "" {
-				colName2Idx[defIdx][pkName] = int32(len(selectList))
-				ret = tree.NewUnresolvedName(tree.NewCStr(alias, bindCtx.lower), tree.NewCStr(pkName, 1))
-				selectList = append(selectList, tree.SelectExpr{
-					Expr: ret,
-				})
-			}
+		for _, col := range tblInfo.tableDefs[defIdx].Cols {
+			colName2Idx[defIdx][col.Name] = int32(len(selectList))
+			ret = tree.NewUnresolvedName(tree.NewCStr(alias, bindCtx.lower), tree.NewCStr(col.Name, 1))
+			selectList = append(selectList, tree.SelectExpr{Expr: ret})
 		}
 	}
 
@@ -1285,15 +1027,6 @@ func checkNotNull(ctx context.Context, expr *Expr, tableDef *TableDef, col *ColD
 	// 	return moerr.NewConstraintViolation(ctx, fmt.Sprintf("Column '%s' cannot be null", col.Name))
 	// }
 
-	// if tableDef.Pkey != nil && len(tableDef.Pkey.Names) > 1 {
-	// 	names := tableDef.Pkey.Names
-	// 	for _, name := range names {
-	// 		if name == col.Name {
-	// 			return moerr.NewConstraintViolation(ctx, fmt.Sprintf("Column '%s' cannot be null", name))
-	// 		}
-	// 	}
-	// }
-
 	return nil
 }
 
@@ -1324,6 +1057,7 @@ func useSqlModeStringAssignmentCast(targetType Type) bool {
 
 func useSqlModeAssignmentCast(targetType Type) bool {
 	return useSqlModeStringAssignmentCast(targetType) ||
+		targetType.Id == int32(types.T_float32) || targetType.Id == int32(types.T_float64) ||
 		isMediumIntPlanType(targetType) ||
 		targetType.Id == int32(types.T_year) ||
 		targetType.Id == int32(types.T_time)
@@ -1364,28 +1098,235 @@ func assignmentCastProtocolSupported(proc *process.Process) bool {
 	return ok && valid && protocolVersion >= defines.MORPCVersion5
 }
 
+// isAttributedDecimalPlanType reports whether a DECIMAL plan type carries a
+// numeric attribute mask. After authoring normalization any nonzero mask has
+// the UNSIGNED bit set, so bit 0 is the enforcement gate.
+func isAttributedDecimalPlanType(t Type) bool {
+	return types.T(t.Id).IsDecimal() &&
+		t.NumericAttributes&types.NumericAttributeUnsigned != 0
+}
+
+const (
+	unsignedDecimalAdmissionName       = "unsigned_decimal_admission"
+	unsignedDecimalAdmissionStrictName = "unsigned_decimal_admission_strict"
+	unsignedDecimalAdmissionIgnoreName = "unsigned_decimal_admission_ignore"
+)
+
+// unsignedDecimalAdmissionFunctionName selects the admission entry on the
+// build-time ignore axis, mirroring assignmentCastFunctionName. The strict
+// entry is selected by name only inside the authoring-time strict-validation
+// composition.
+func unsignedDecimalAdmissionFunctionName(isIgnore bool) string {
+	if isIgnore {
+		return unsignedDecimalAdmissionIgnoreName
+	}
+	return unsignedDecimalAdmissionName
+}
+
+// forceUnsignedDecimalAdmissionExpr wraps expr in the unsigned DECIMAL domain
+// admission step for an attributed DECIMAL target. The admission preserves the
+// source type: the shape (0x02 = ignore entry) is decided at build time while
+// sql_mode strictness resolves at execution time inside the entry. The third
+// argument is a constant carrying the destination column name, which the
+// execution-time 1264 diagnostics report verbatim.
+func forceUnsignedDecimalAdmissionExpr(
+	ctx context.Context,
+	expr *Expr,
+	targetType Type,
+	admissionFuncName string,
+	columnName string,
+) (*Expr, error) {
+	t1 := makeTypeByPlan2Expr(expr)
+	t2 := makeTypeByPlan2Type(targetType)
+	nameType := types.T_varchar.ToType()
+	fGet, err := function.GetFunctionByName(ctx, admissionFuncName, []types.Type{t1, t2, nameType})
+	if err != nil {
+		return nil, err
+	}
+	return &plan.Expr{
+		Expr: &plan.Expr_F{
+			F: &plan.Function{
+				Func: &ObjectRef{Obj: fGet.GetEncodedOverloadID(), ObjName: admissionFuncName},
+				Args: []*Expr{expr, &plan.Expr{
+					Typ:  targetType,
+					Expr: &plan.Expr_T{T: &plan.TargetType{}},
+				}, {
+					Typ: plan.Type{
+						Id:          int32(types.T_varchar),
+						NotNullable: true,
+						Width:       int32(len(columnName)),
+					},
+					Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+						Isnull:      false,
+						LiteralForm: plan.StringLiteralForm_STRING_LITERAL_TEXT,
+						Value:       &plan.Literal_Sval{Sval: columnName},
+					}},
+				}},
+			},
+		},
+		Typ: expr.Typ,
+	}, nil
+}
+
+// unsignedDecimalAssignmentCastName selects the outer assignment cast for an
+// attributed DECIMAL target. IGNORE replays use cast_ignore so both layers of
+// the boundary carry the statement policy; other assignments use cast_assign
+// so sql_mode resolves at execution time.
+func unsignedDecimalAssignmentCastName(targetType Type, isIgnore bool, proc *process.Process) string {
+	if isIgnore && useIgnoreConversionAssignmentCast(targetType) && assignmentCastProtocolSupported(proc) {
+		return "cast_ignore"
+	}
+	if assignmentCastProtocolSupported(proc) {
+		return "cast_assign"
+	}
+	return "cast"
+}
+
+// unsignedDecimalNullIdentitySource reports sources that are NULL by
+// construction: a NULL literal or an ANY-typed expression (scalar null). A
+// NULL passes every domain check, so composing the admission over it adds
+// nothing but a spurious ANY-typed runtime dispatch; the boundary degrades to
+// the plain cast wrapper, byte-identical to the unattributed shape (I4).
+func unsignedDecimalNullIdentitySource(expr *Expr) bool {
+	if lit := expr.GetLit(); lit != nil && lit.GetIsnull() {
+		return true
+	}
+	return types.T(expr.Typ.Id) == types.T_any
+}
+
+// forceUnsignedDecimalAssignmentComposition builds the complete attributed
+// DECIMAL assignment boundary outerName(admission(src), target). The nullary
+// guard keeps unattributed plans byte-identical. NULL-by-construction sources
+// take only the plain cast wrapper: they have no domain to police and must
+// not leave an ANY-typed admission node in the persisted boundary.
+func forceUnsignedDecimalAssignmentComposition(
+	ctx context.Context,
+	expr *Expr,
+	targetType Type,
+	outerName string,
+	columnName string,
+) (*Expr, error) {
+	if unsignedDecimalNullIdentitySource(expr) {
+		return forceCastExprWithNameAndAssignment(ctx, expr, targetType, "cast", true, true)
+	}
+	inner, err := forceUnsignedDecimalAdmissionExpr(
+		ctx, expr, targetType, unsignedDecimalAdmissionFunctionName(outerName == "cast_ignore"), columnName)
+	if err != nil {
+		return nil, err
+	}
+	return forceCastExprWithNameAndAssignment(ctx, inner, targetType, outerName, true, true)
+}
+
+// isUnsignedDecimalAdmissionName reports the plan-owned admission entries.
+// Function names from user SQL arrive in the caller's spelling, so the
+// comparison folds case.
+func isUnsignedDecimalAdmissionName(name string) bool {
+	switch strings.ToLower(name) {
+	case unsignedDecimalAdmissionName,
+		unsignedDecimalAdmissionStrictName,
+		unsignedDecimalAdmissionIgnoreName:
+		return true
+	}
+	return false
+}
+
+// matchUnsignedDecimalAssignmentComposition recognizes a persisted attributed
+// DECIMAL assignment boundary by typed shape: an assignment-cast-family outer
+// node (the name set the existing consumers already match) whose arg0 is the
+// plan-owned admission node feeding the same attributed target. User-written
+// CASTs or subexpressions inside the source are never matched; the admission
+// arg1 must be the target-type carrier for the identical attributed type.
+func matchUnsignedDecimalAssignmentComposition(expr *plan.Expr) (src *plan.Expr, columnName string, ok bool) {
+	if expr == nil {
+		return nil, "", false
+	}
+	if !isAttributedDecimalPlanType(expr.Typ) {
+		return nil, "", false
+	}
+	f := expr.GetF()
+	if f == nil || f.Func == nil || len(f.Args) != 2 {
+		return nil, "", false
+	}
+	switch f.Func.ObjName {
+	case "cast", "cast_assign", "cast_strict", "cast_ignore":
+	default:
+		return nil, "", false
+	}
+	inner := f.Args[0].GetF()
+	if inner == nil || inner.Func == nil || !isUnsignedDecimalAdmissionName(inner.Func.ObjName) {
+		return nil, "", false
+	}
+	// The three-argument shape carries the destination column name; the
+	// two-argument shape predates it and replays with the label fallback.
+	if len(inner.Args) != 2 && len(inner.Args) != 3 {
+		return nil, "", false
+	}
+	carrier := inner.Args[1]
+	if carrier == nil || carrier.GetT() == nil || !isAttributedDecimalPlanType(carrier.Typ) {
+		return nil, "", false
+	}
+	if carrier.Typ.Id != expr.Typ.Id || carrier.Typ.Width != expr.Typ.Width ||
+		carrier.Typ.Scale != expr.Typ.Scale ||
+		carrier.Typ.NumericAttributes != expr.Typ.NumericAttributes {
+		return nil, "", false
+	}
+	name := ""
+	if len(inner.Args) == 3 {
+		if lit, isLit := inner.Args[2].Expr.(*plan.Expr_Lit); isLit && lit.Lit != nil {
+			if sval, isSval := lit.Lit.Value.(*plan.Literal_Sval); isSval {
+				name = sval.Sval
+			}
+		}
+	}
+	return inner.Args[0], name, true
+}
+
+// rePoliceUnsignedDecimalAssignmentBoundary restores the complete assignment
+// boundary of a persisted attributed DECIMAL expression under the current
+// statement policy: IGNORE switches BOTH layers to the ignore entries,
+// non-IGNORE to cast_assign plus the mode-resolved admission entry. Anything
+// outside the typed boundary shape passes through byte-identically. The
+// rewrite is idempotent under a fixed policy, and an IGNORE -> non-IGNORE
+// sequence reproduces the DDL-authored boundary.
+func rePoliceUnsignedDecimalAssignmentBoundary(
+	ctx context.Context,
+	expr *plan.Expr,
+	isIgnore bool,
+	proc *process.Process,
+) (*plan.Expr, error) {
+	src, columnName, ok := matchUnsignedDecimalAssignmentComposition(expr)
+	if !ok {
+		return expr, nil
+	}
+	return forceUnsignedDecimalAssignmentComposition(ctx, src, expr.Typ,
+		unsignedDecimalAssignmentCastName(expr.Typ, isIgnore, proc), columnName)
+}
+
 // needsSameTypeAssignmentCast 判断相同规划器类型是否仍需要赋值检查。
 // BLOB/TEXT 和扩展 TIME 可能携带超出目标列范围的值。
 // 固定维度向量的实际载荷长度也可能不符合其声明宽度。
 // 这些类型都不能仅根据元数据相等省略赋值检查。
 func needsSameTypeAssignmentCast(targetType Type) bool {
 	return isMediumIntPlanType(targetType) ||
+		isAttributedDecimalPlanType(targetType) ||
 		targetType.Id == int32(types.T_blob) ||
 		targetType.Id == int32(types.T_text) ||
 		targetType.Id == int32(types.T_time) ||
 		(types.T(targetType.Id).IsArrayRelate() && targetType.Width > 0 && targetType.Width != types.MaxArrayDimension)
 }
 
-func forceCastExpr2(ctx context.Context, expr *Expr, t2 types.Type, targetType *plan.Expr) (*Expr, error) {
-	return forceCastExpr2WithIgnore(ctx, expr, t2, targetType, false)
+func forceCastExpr2(ctx context.Context, expr *Expr, t2 types.Type, targetType *plan.Expr, columnName ...string) (*Expr, error) {
+	return forceCastExpr2WithIgnore(ctx, expr, t2, targetType, false, columnName...)
 }
 
 // forceCastExpr2WithIgnore builds the assignment cast for a DML write when the
 // target plan.Expr is already known. SQL-mode-sensitive targets normally use
 // cast_assign so width-constrained strings, YEAR values, and TIME range checks
-// can apply strict, non-strict, and IGNORE semantics at runtime.
-func forceCastExpr2WithIgnore(ctx context.Context, expr *Expr, t2 types.Type, targetType *plan.Expr, isIgnore bool) (*Expr, error) {
-	return forceCastExpr2WithProcess(ctx, expr, t2, targetType, isIgnore, nil)
+// can apply strict, non-strict, and IGNORE semantics at runtime. The optional
+// columnName is reported verbatim by the attributed-DECIMAL admission
+// boundary's 1264 diagnostics.
+func forceCastExpr2WithIgnore(ctx context.Context, expr *Expr, t2 types.Type, targetType *plan.Expr, isIgnore bool, columnName ...string) (*Expr, error) {
+	return forceCastExpr2WithProcess(ctx, expr, t2, targetType, isIgnore, nil, columnName...)
 }
 
 func forceCastExpr2WithProcess(
@@ -1395,9 +1336,14 @@ func forceCastExpr2WithProcess(
 	targetType *plan.Expr,
 	isIgnore bool,
 	proc *process.Process,
+	columnName ...string,
 ) (*Expr, error) {
 	if targetType.Typ.Id == 0 {
 		return expr, nil
+	}
+	admissionColumnName := ""
+	if len(columnName) > 0 {
+		admissionColumnName = columnName[0]
 	}
 	if err := requireMediumIntProtocolForAuthoring(ctx, proc, targetType.Typ); err != nil {
 		return nil, err
@@ -1417,6 +1363,20 @@ func forceCastExpr2WithProcess(
 	t1 := makeTypeByPlan2Expr(expr)
 	if t1.Eq(t2) && !needsSameTypeAssignmentCast(targetType.Typ) && !alterCopyBinaryAssignment(ctx, targetType.Typ) {
 		return expr, nil
+	}
+	if isAttributedDecimalPlanType(targetType.Typ) {
+		// An already-composed admission boundary (for example a persisted
+		// DEFAULT replay) is re-policed under this statement's policy instead
+		// of nesting a second composition around it.
+		if _, _, ok := matchUnsignedDecimalAssignmentComposition(expr); ok {
+			return rePoliceUnsignedDecimalAssignmentBoundary(ctx, expr, isIgnore, proc)
+		}
+		// Attributed DECIMAL targets route through the shared NULL-aware
+		// assignment composition: admission(src) keeps the source type, so a
+		// scalar-NULL (ANY) source would otherwise leave an ANY-typed
+		// admission node the executor's result allocation cannot represent.
+		return forceUnsignedDecimalAssignmentComposition(ctx, expr, targetType.Typ,
+			unsignedDecimalAssignmentCastName(targetType.Typ, isIgnore, proc), admissionColumnName)
 	}
 
 	targetType.Typ.NotNullable = expr.Typ.NotNullable
@@ -1444,6 +1404,7 @@ func (builder *QueryBuilder) forceCastExpr2(
 	t2 types.Type,
 	targetType *plan.Expr,
 	isIgnore bool,
+	columnName ...string,
 ) (*Expr, error) {
 	return forceCastExpr2WithProcess(
 		builder.GetContext(),
@@ -1452,6 +1413,7 @@ func (builder *QueryBuilder) forceCastExpr2(
 		targetType,
 		isIgnore,
 		builder.compCtx.GetProcess(),
+		columnName...,
 	)
 }
 
@@ -1488,8 +1450,8 @@ func assignmentCastFunctionName(targetType Type, isIgnore bool, proc *process.Pr
 // forceAssignmentCastExprWithIgnore builds the assignment cast for a DML write.
 // SQL-mode-sensitive targets normally use cast_assign; IGNORE paths use
 // cast_ignore so invalid writes are adjusted regardless of sql_mode.
-func forceAssignmentCastExprWithIgnore(ctx context.Context, expr *Expr, targetType Type, isIgnore bool) (*Expr, error) {
-	return forceAssignmentCastExprWithProcess(ctx, expr, targetType, isIgnore, nil)
+func forceAssignmentCastExprWithIgnore(ctx context.Context, expr *Expr, targetType Type, isIgnore bool, columnName ...string) (*Expr, error) {
+	return forceAssignmentCastExprWithProcess(ctx, expr, targetType, isIgnore, nil, columnName...)
 }
 
 func forceAssignmentCastExprWithProcess(
@@ -1498,9 +1460,18 @@ func forceAssignmentCastExprWithProcess(
 	targetType Type,
 	isIgnore bool,
 	proc *process.Process,
+	columnName ...string,
 ) (*Expr, error) {
 	if err := requireMediumIntProtocolForAuthoring(ctx, proc, targetType); err != nil {
 		return nil, err
+	}
+	if isAttributedDecimalPlanType(targetType) {
+		name := ""
+		if len(columnName) > 0 {
+			name = columnName[0]
+		}
+		return forceUnsignedDecimalAssignmentComposition(ctx, expr, targetType,
+			unsignedDecimalAssignmentCastName(targetType, isIgnore, proc), name)
 	}
 	return forceAssignmentCastExprWithName(ctx, expr, targetType,
 		assignmentCastFunctionNameForSource(ctx, expr, targetType, isIgnore, proc))
@@ -1541,13 +1512,14 @@ func assignmentCastFunctionNameForSource(ctx context.Context, expr *Expr, target
 	return name
 }
 
-func (builder *QueryBuilder) forceAssignmentCastExpr(expr *Expr, targetType Type, isIgnore bool) (*Expr, error) {
+func (builder *QueryBuilder) forceAssignmentCastExpr(expr *Expr, targetType Type, isIgnore bool, columnName ...string) (*Expr, error) {
 	return forceAssignmentCastExprWithProcess(
 		builder.GetContext(),
 		expr,
 		targetType,
 		isIgnore,
 		builder.compCtx.GetProcess(),
+		columnName...,
 	)
 }
 
@@ -1555,6 +1527,7 @@ func (builder *QueryBuilder) forceProjectedAssignmentCastExpr(
 	expr, sourceExpr *Expr,
 	targetType Type,
 	isIgnore bool,
+	columnName ...string,
 ) (*Expr, error) {
 	if err := requireMediumIntProtocolForAuthoring(
 		builder.GetContext(), builder.compCtx.GetProcess(), targetType,
@@ -1581,7 +1554,7 @@ func (builder *QueryBuilder) forceProjectedAssignmentCastExpr(
 			builder.GetContext(), expr, targetType,
 			assignmentCastFunctionName(targetType, isIgnore, builder.compCtx.GetProcess()), true, true)
 	}
-	return builder.forceAssignmentCastExpr(expr, targetType, isIgnore)
+	return builder.forceAssignmentCastExpr(expr, targetType, isIgnore, columnName...)
 }
 
 func (builder *QueryBuilder) rewriteProjectedMySQLSpecialTypeDisplayCast(expr, sourceExpr *Expr, targetType Type) (*Expr, bool, error) {
@@ -2244,7 +2217,7 @@ func buildValueScan(
 			if err != nil {
 				return nil, err
 			}
-			defExpr, err = builder.forceCastExpr2(defExpr, colTyp, targetTyp, builder.isInsertIgnore)
+			defExpr, err = builder.forceCastExpr2(defExpr, colTyp, targetTyp, builder.isInsertIgnore, col.Name)
 			if err != nil {
 				return nil, err
 			}
@@ -2257,7 +2230,12 @@ func buildValueScan(
 			}
 		} else {
 			sourceType := col.Typ
-			if types.T(col.Typ.Id).IsInteger() {
+			// Attributed decimals join integers on the target-free route: raw
+			// string sources keep their text so unsigned-domain admission
+			// applies the string prefix grammar (including IGNORE
+			// retained-prefix truncation) instead of a context-typed early
+			// conversion.
+			if types.T(col.Typ.Id).IsInteger() || isAttributedDecimalPlanType(col.Typ) {
 				sourceType = plan.Type{}
 			}
 			binder := NewDefaultBinder(builder.GetContext(), nil, nil, sourceType, nil)
@@ -2288,7 +2266,11 @@ func buildValueScan(
 						continue
 					}
 				}
-				if nv, ok := r[i].(*tree.NumVal); ok && !isEnumOrSetPlanType(&col.Typ) && !isTypedArrayPlanType(&col.Typ) {
+				// An attributed decimal literal must bind in its natural type
+				// and pass through unsigned-domain admission; the const fast
+				// path materializes the target type directly and would bypass
+				// the admission composition.
+				if nv, ok := r[i].(*tree.NumVal); ok && !isEnumOrSetPlanType(&col.Typ) && !isTypedArrayPlanType(&col.Typ) && !isAttributedDecimalPlanType(col.Typ) {
 					expr, err := MakeInsertValueConstExpr(proc, nv, &colTyp, builder.isInsertIgnore)
 					if err != nil {
 						return nil, err
@@ -2329,7 +2311,7 @@ func buildValueScan(
 						}
 					}
 				}
-				defExpr, err = builder.forceCastExpr2(defExpr, colTyp, targetTyp, builder.isInsertIgnore)
+				defExpr, err = builder.forceCastExpr2(defExpr, colTyp, targetTyp, builder.isInsertIgnore, col.Name)
 				if err != nil {
 					return nil, err
 				}
@@ -2388,7 +2370,7 @@ func buildValueScan(
 			if err != nil {
 				return nil, err
 			}
-			defExpr, err = builder.forceCastExpr2(defExpr, colTyp, targetTyp, builder.isInsertIgnore)
+			defExpr, err = builder.forceCastExpr2(defExpr, colTyp, targetTyp, builder.isInsertIgnore, col.Name)
 			if err != nil {
 				return nil, err
 			}
@@ -2518,10 +2500,11 @@ func appendForeignConstrantPlan(
 				if err != nil {
 					return err
 				}
-				assertArgs := []*Expr{nullCheckExpr, errExpr}
-				if isUpdate {
-					assertArgs = append(assertArgs, makePlan2StringConstExprWithType(foreignKeyNoReferencedRowAssert))
-				}
+				// the typed assert reports ErrFKNoReferencedRow2 for both
+				// insert and update so the client receives MySQL errno 1452
+				// (ER_NO_REFERENCED_ROW_2) instead of an internal error
+				assertArgs := []*Expr{nullCheckExpr, errExpr,
+					makePlan2StringConstExprWithType(foreignKeyNoReferencedRowAssert)}
 				filterExpr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "assert", assertArgs)
 				if err != nil {
 					return err

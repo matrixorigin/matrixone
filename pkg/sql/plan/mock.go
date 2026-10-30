@@ -151,12 +151,16 @@ func (m *MockCompilerContext) ResolveVariable(varName string, isSystemVar, isGlo
 		"cagra_threads_build", "cagra_threads_search", "ivfpq_threads_build", "ivfpq_threads_search",
 		"hnsw_threads_build", "hnsw_threads_search", "ivf_threads_build", "ivf_threads_search":
 		return int64(1), nil
-	case "sort_spill_mem", "cagra_batch_window", "ivfpq_batch_window", "gpu_multi_simulation":
+	case "sort_spill_mem", "cagra_batch_window", "ivfpq_batch_window", "gpu_multi_simulation", "mo_pk_check_by_cn":
 		return int64(0), nil
+	case "rollup_algorithm":
+		return "COST", nil
 	case windowPartitionAlgorithmVariable:
 		return "SORT", nil
 	case "probe_limit":
 		return int64(20), nil
+	case "hnsw_prefilter_exact_threshold":
+		return int64(5000), nil
 	case "div_precision_increment":
 		if isSystemVar {
 			return int64(function.DefaultDivPrecisionIncrement), nil
@@ -323,6 +327,15 @@ func NewMockCompilerContext(isDml bool, proc *process.Process) *MockCompilerCont
 			{"n_name", types.T_varchar, false, 25, 0},
 			{"n_regionkey", types.T_int32, false, 0, 0},
 			{"n_comment", types.T_varchar, true, 152, 0},
+			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
+		},
+		pks: []int{0},
+	}
+	tpchSchema["returning_bool"] = &Schema{
+		cols: []col{
+			{"id", types.T_int32, false, 0, 0},
+			{"flag", types.T_bool, true, 0, 0},
+			{"n", types.T_int32, true, 0, 0},
 			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
 		},
 		pks: []int{0},

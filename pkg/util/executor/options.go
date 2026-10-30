@@ -96,6 +96,28 @@ func (opts StatementOption) WithIgnoreForeignKey() StatementOption {
 	return opts
 }
 
+// WithTrustedCheckConstraintNames marks a CREATE that intentionally reuses
+// CHECK constraint names inherited from an owned source: the ALTER ... COPY
+// replica, partition backing tables, and TRUNCATE's internal recreate. Those
+// creates keep the source's logical identity, so Scope.createTable skips the
+// schema-wide duplicate-name scan for them. Never set this for user-visible
+// CREATE TABLE statements.
+func (opts StatementOption) WithTrustedCheckConstraintNames() StatementOption {
+	opts.trustedCheckConstraintNames = true
+	return opts
+}
+
+// WithTrustedForeignKeyLayout marks a CREATE that physically reconstructs an
+// owned table unchanged — TRUNCATE's drop-and-recreate, including the
+// truncate-optimized unfiltered DELETE — so the planner reinstalls the
+// historical foreign-key layout without re-validating it as a newly authored
+// constraint (#30282: a legacy SET NULL over a NOT NULL column must stay
+// truncatable). Never set this for user-visible CREATE TABLE statements.
+func (opts StatementOption) WithTrustedForeignKeyLayout() StatementOption {
+	opts.trustedForeignKeyLayout = true
+	return opts
+}
+
 // WithTxn exec sql in a exists txn
 func (opts Options) WithTxn(txnOp client.TxnOperator) Options {
 	opts.txnOp = txnOp
@@ -303,6 +325,18 @@ func (opts StatementOption) DisableLog() bool {
 	return opts.disableLog
 }
 
+// WithMaxResultBytes limits the logical vector payload retained by one
+// statement. Zero leaves the result unlimited. The estimate excludes allocator
+// capacity, NULL/grouping bitmaps, and the plan and producer's memory.
+func (opts StatementOption) WithMaxResultBytes(limit uint64) StatementOption {
+	opts.maxResultBytes = limit
+	return opts
+}
+
+func (opts StatementOption) MaxResultBytes() uint64 {
+	return opts.maxResultBytes
+}
+
 // WithMoColumnsUpdate allows an internal metadata upgrade to rewrite the
 // redundant columns-table fields without opening mo_columns to ordinary DML.
 func (opts StatementOption) WithMoColumnsUpdate() StatementOption {
@@ -330,6 +364,19 @@ func (opts StatementOption) OptimizerHints() string {
 
 func (opts StatementOption) IgnoreForeignKey() bool {
 	return opts.ignoreForeignKey
+}
+
+// TrustedCheckConstraintNames reports whether the internal CREATE keeps CHECK
+// names inherited from an owned source, without a 3822 sibling name scan.
+func (opts StatementOption) TrustedCheckConstraintNames() bool {
+	return opts.trustedCheckConstraintNames
+}
+
+// TrustedForeignKeyLayout reports whether the internal CREATE physically
+// reconstructs an owned table unchanged, keeping its historical foreign-key
+// layout out of newly-authored-constraint validation (#30282).
+func (opts StatementOption) TrustedForeignKeyLayout() bool {
+	return opts.trustedForeignKeyLayout
 }
 
 func (opts Options) WithDisableWaitPaused() Options {
@@ -638,6 +685,15 @@ func (opts StatementOption) WithKeepRelKind(kind string) StatementOption {
 	opts.keepRelKind = kind
 	opts.hasKeepRelKind = true
 	return opts
+}
+
+func (opts StatementOption) WithSkipIndexTaskRegistration() StatementOption {
+	opts.skipIndexTaskRegistration = true
+	return opts
+}
+
+func (opts StatementOption) SkipIndexTaskRegistration() bool {
+	return opts.skipIndexTaskRegistration
 }
 
 func (opts StatementOption) WithIgnorePublish() StatementOption {

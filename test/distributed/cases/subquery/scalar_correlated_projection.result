@@ -124,8 +124,10 @@ select a, (select case when d > 0 then a else 0 end from t2 where d = a group by
 -- @regex("wrapped correlated scalar projection cannot be safely decorrelated", true)
 wrapped correlated scalar projection cannot be safely decorrelated is not yet implemented
 select a, (select (select case when t1.a > 0 then t1.a else 0 end from t2 limit 1) from t2 as outer_t2 limit 1) as deep_mixed from t1;
--- @regex("wrapped correlated scalar projection cannot be safely decorrelated", true)
-wrapped correlated scalar projection cannot be safely decorrelated is not yet implemented
+➤ a[4,32,0]  ¦  deep_mixed[-5,64,0]  𝄀
+1  ¦  1  𝄀
+11  ¦  11  𝄀
+11  ¦  11
 select a, (select case when count(*) > 0 then t1.a else 0 end from t2) as aggregate_projection_only from t1;
 -- @regex("wrapped correlated aggregate projection cannot be safely decorrelated", true)
 wrapped correlated aggregate projection cannot be safely decorrelated is not yet implemented
@@ -399,12 +401,17 @@ SELECT JSON_LENGTH(COALESCE(JSON_ARRAYAGG(`__prisma_data__`), CONVERT('[]', JSON
 ➤ post_count[-5,64,0]  𝄀
 2
 SELECT `a`.`id` FROM `Author` AS `a` WHERE EXISTS (SELECT 1 WHERE EXISTS (SELECT 1 FROM (SELECT `p`.`id` FROM `Post` AS `p` WHERE `p`.`authorId` = `a`.`id`) AS `d`));
--- @regex("correlated subquery in FROM clause is not yet implemented", true)
-correlated subquery in FROM clause is not yet implemented
+➤ id[4,32,0]  𝄀
+2  𝄀
+3
 SELECT `a`.`id` FROM `Author` AS `a` WHERE EXISTS (SELECT 1 WHERE EXISTS (SELECT 1 FROM `Post` AS `p` WHERE EXISTS (SELECT 1 FROM (SELECT `a2`.`id` FROM `Author` AS `a2` WHERE `a2`.`id` = `a`.`id`) AS `d`)));
--- @regex("correlated subquery in FROM clause is not yet implemented", true)
-correlated subquery in FROM clause is not yet implemented
+➤ id[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+3
 SELECT `a`.`id` FROM `Author` AS `a` WHERE EXISTS (SELECT 1 FROM `Post` AS `p` WHERE EXISTS (SELECT 1 WHERE EXISTS (SELECT 1 FROM (SELECT `a2`.`id` FROM `Author` AS `a2` WHERE `a2`.`id` = `p`.`authorId`) AS `d`)));
--- @regex("correlated subquery in FROM clause is not yet implemented", true)
-correlated subquery in FROM clause is not yet implemented
+➤ id[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+3
 drop database test_subq_corr_project;

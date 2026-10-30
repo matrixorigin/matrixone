@@ -793,6 +793,19 @@ const (
 	APPROX_PERCENTILE = 557
 	// function `mo_is_legacy_temporary_table`
 	MO_IS_LEGACY_TEMPORARY_TABLE = 558
+	// function `mo_view_definition`
+	MO_VIEW_DEFINITION = 603
+	// function `mo_view_check_option`
+	MO_VIEW_CHECK_OPTION = 604
+
+	// Local sliding-window ranks (issue #29947): argument-windowed frame-local
+	// competition rank, registered as value-window functions. Renumbered
+	// 605/606/607 -> 616/617/618 when main's technical-indicator kernels
+	// (#31017) claimed 605..615; ids are referenced by name everywhere, so
+	// renumbering is safe, and the ranks stay below the sentinel.
+	MRANK   = 616
+	CUMRANK = 617
+	TMRANK  = 618
 
 	// onnx_run: evaluate an ONNX model. Renumbered as main merges claim ids
 	// (549->554->556); referenced by name only, so renumbering is safe.
@@ -866,6 +879,26 @@ const (
 	EXTRACTVALUE            = 581
 	UPDATEXML               = 582
 	TO_INTERVAL_MICROSECOND = 583
+	// Technical-indicator window-function family (issue #29949): eleven
+	// native SQL window kernels with per-partition sequential state, per
+	// docs/design/technical_indicator_window_kernels.md section 5.1.
+	// IDs follow the upstream convention (newest id one below
+	// FUNCTION_END_NUMBER): 605..615 are the first free block above the
+	// internal helpers MO_VIEW_DEFINITION(603)/MO_VIEW_CHECK_OPTION(604);
+	// reusing those silently swaps their overloads and breaks the
+	// information_schema views maintenance.
+	SMA               = 605
+	WMA               = 606
+	TRIMA             = 607
+	EMA               = 608
+	WILDER            = 609
+	KAMA              = 610
+	DEMA              = 611
+	TEMA              = 612
+	T3                = 613
+	MMAXDRAWDOWN      = 614
+	CUMPOSITIVESTREAK = 615
+
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
 	UUID_SHORT = 587
@@ -883,11 +916,38 @@ const (
 	CHECK_ASYNC_DATALINK_SOURCE = 599
 	INTERNAL_TABLE_COLLATION    = 600
 
-	FUNCTION_END_NUMBER = 601
+	TIMESTAMPADD_SECOND_INTERVAL = 601
+
+	// Internal LOAD IGNORE predicate; gated by cluster protocol 125.
+	LOAD_FK_IGNORE_CHECK = 602
+
+	// 616/617/618 hold the local sliding-window ranks (MRANK/CUMRANK/TMRANK)
+	// renumbered above main's 605..615 indicator block.
+
+	// SQL exact weighted percentile aggregate quantileExactWeighted; remote
+	// dispatch is gated by cluster protocol 131. Re-issued 616 -> 619 when
+	// main's #31020 claimed 616..618 first; every reference is by name, so
+	// renumbering is safe.
+	QUANTILE_EXACT_WEIGHTED = 619
+
+	// Unsigned DECIMAL domain admission (issue #30940/#30941). Plan-composed
+	// identity step evaluated on the raw source value before the assignment
+	// cast quantizes to the target scale. The mode-resolved entry answers
+	// sql_mode at execution time (volatile, like cast_assign); the strict
+	// entry is built only by authoring-time DEFAULT validation; the ignore
+	// entry is chosen at build time for INSERT/UPDATE IGNORE. All are internal
+	// plan functions, never user-callable.
+	UNSIGNED_DECIMAL_ADMISSION        = 620
+	UNSIGNED_DECIMAL_ADMISSION_STRICT = 621
+	UNSIGNED_DECIMAL_ADMISSION_IGNORE = 622
+
+	// Keep FUNCTION_END_NUMBER one past the highest allocated function id.
+	FUNCTION_END_NUMBER = 623
 )
 
 // functionIdRegister is what function we have registered already.
 var functionIdRegister = map[string]int32{
+	"timestampadd_second_interval": TIMESTAMPADD_SECOND_INTERVAL,
 	"_check_async_datalink_source": CHECK_ASYNC_DATALINK_SOURCE,
 
 	"format_bytes":            FORMAT_BYTES,
@@ -897,62 +957,66 @@ var functionIdRegister = map[string]int32{
 	"extractvalue":            EXTRACTVALUE,
 	"updatexml":               UPDATEXML,
 	// operators
-	"=":            EQUAL,
-	"<=>":          NULL_SAFE_EQUAL,
-	">":            GREAT_THAN,
-	">=":           GREAT_EQUAL,
-	"<":            LESS_THAN,
-	"<=":           LESS_EQUAL,
-	"<>":           NOT_EQUAL,
-	"!=":           NOT_EQUAL,
-	"not":          NOT,
-	"and":          AND,
-	"or":           OR,
-	"xor":          XOR,
-	"like":         LIKE,
-	"between":      BETWEEN,
-	"in":           IN,
-	"not_in":       NOT_IN,
-	"in_range":     IN_RANGE,
-	"+":            PLUS,
-	"-":            MINUS,
-	"*":            MULTI,
-	"/":            DIV,
-	"div":          INTEGER_DIV,
-	"%":            MOD,
-	"mod":          MOD,
-	"unary_plus":   UNARY_PLUS,
-	"unary_minus":  UNARY_MINUS,
-	"unary_tilde":  UNARY_TILDE,
-	"unary_mark":   NOT,
-	"case":         CASE,
-	"coalesce":     COALESCE,
-	"cast":         CAST,
-	"cast_strict":  CAST_STRICT,
-	"cast_assign":  CAST_ASSIGN,
-	"cast_ignore":  CAST_IGNORE,
-	"bit_cast":     BIT_CAST,
-	"is":           IS,
-	"is_not":       ISNOT,
-	"isnot":        ISNOT,
-	"is_null":      ISNULL,
-	"isnull":       ISNULL,
-	"ifnull":       ISNULL,
-	"ilike":        ILIKE,
-	"is_not_null":  ISNOTNULL,
-	"isnotnull":    ISNOTNULL,
-	"isunknown":    ISNULL,
-	"isnotunknown": ISNOTNULL,
-	"istrue":       ISTRUE,
-	"isnottrue":    ISNOTTRUE,
-	"isfalse":      ISFALSE,
-	"isnotfalse":   ISNOTFALSE,
-	"&":            OP_BIT_AND,
-	"|":            OP_BIT_OR,
-	"^":            OP_BIT_XOR,
-	"<<":           OP_BIT_SHIFT_LEFT,
-	">>":           OP_BIT_SHIFT_RIGHT,
-	"decode":       DECODE,
+	"=":           EQUAL,
+	"<=>":         NULL_SAFE_EQUAL,
+	">":           GREAT_THAN,
+	">=":          GREAT_EQUAL,
+	"<":           LESS_THAN,
+	"<=":          LESS_EQUAL,
+	"<>":          NOT_EQUAL,
+	"!=":          NOT_EQUAL,
+	"not":         NOT,
+	"and":         AND,
+	"or":          OR,
+	"xor":         XOR,
+	"like":        LIKE,
+	"between":     BETWEEN,
+	"in":          IN,
+	"not_in":      NOT_IN,
+	"in_range":    IN_RANGE,
+	"+":           PLUS,
+	"-":           MINUS,
+	"*":           MULTI,
+	"/":           DIV,
+	"div":         INTEGER_DIV,
+	"%":           MOD,
+	"mod":         MOD,
+	"unary_plus":  UNARY_PLUS,
+	"unary_minus": UNARY_MINUS,
+	"unary_tilde": UNARY_TILDE,
+	"unary_mark":  NOT,
+	"case":        CASE,
+	"coalesce":    COALESCE,
+	"cast":        CAST,
+	"cast_strict": CAST_STRICT,
+	"cast_assign": CAST_ASSIGN,
+	"cast_ignore": CAST_IGNORE,
+
+	"unsigned_decimal_admission":        UNSIGNED_DECIMAL_ADMISSION,
+	"unsigned_decimal_admission_strict": UNSIGNED_DECIMAL_ADMISSION_STRICT,
+	"unsigned_decimal_admission_ignore": UNSIGNED_DECIMAL_ADMISSION_IGNORE,
+	"bit_cast":                          BIT_CAST,
+	"is":                                IS,
+	"is_not":                            ISNOT,
+	"isnot":                             ISNOT,
+	"is_null":                           ISNULL,
+	"isnull":                            ISNULL,
+	"ifnull":                            ISNULL,
+	"ilike":                             ILIKE,
+	"is_not_null":                       ISNOTNULL,
+	"isnotnull":                         ISNOTNULL,
+	"isunknown":                         ISNULL,
+	"isnotunknown":                      ISNOTNULL,
+	"istrue":                            ISTRUE,
+	"isnottrue":                         ISNOTTRUE,
+	"isfalse":                           ISFALSE,
+	"isnotfalse":                        ISNOTFALSE,
+	"&":                                 OP_BIT_AND,
+	"|":                                 OP_BIT_OR,
+	"^":                                 OP_BIT_XOR,
+	"<<":                                OP_BIT_SHIFT_LEFT,
+	">>":                                OP_BIT_SHIFT_RIGHT,
+	"decode":                            DECODE,
 
 	"prefix_eq":       PREFIX_EQ,
 	"prefix_in":       PREFIX_IN,
@@ -991,10 +1055,16 @@ var functionIdRegister = map[string]int32{
 	"median":                       MEDIAN,
 	"approx_percentile":            APPROX_PERCENTILE,
 	"mo_is_legacy_temporary_table": MO_IS_LEGACY_TEMPORARY_TABLE,
+	"mo_view_definition":           MO_VIEW_DEFINITION,
+	"mo_view_check_option":         MO_VIEW_CHECK_OPTION,
+	"mrank":                        MRANK,
+	"cumrank":                      CUMRANK,
+	"tmrank":                       TMRANK,
 	"max_by":                       MAX_BY,
 	"max_by_non_null":              MAX_BY_NON_NULL,
 	"percentile_cont":              PERCENTILE_CONT,
 	"percentile_disc":              PERCENTILE_DISC,
+	"quantileexactweighted":        QUANTILE_EXACT_WEIGHTED,
 	// count window
 	"rank":         RANK,
 	"row_number":   ROW_NUMBER,
@@ -1080,6 +1150,7 @@ var functionIdRegister = map[string]int32{
 	"asin":                           ASIN,
 	"assert":                         ASSERT,
 	"_check_constraint_assert":       CHECK_CONSTRAINT_ASSERT,
+	"_load_fk_ignore_check":          LOAD_FK_IGNORE_CHECK,
 	"bit_length":                     BIT_LENGTH,
 	"date":                           DATE,
 	"time":                           TIME,
@@ -1540,4 +1611,17 @@ var functionIdRegister = map[string]int32{
 
 	// date_trunc function
 	"date_trunc": DATE_TRUNC,
+
+	// technical-indicator window functions (issue #29949)
+	"sma":               SMA,
+	"wma":               WMA,
+	"trima":             TRIMA,
+	"ema":               EMA,
+	"wilder":            WILDER,
+	"kama":              KAMA,
+	"dema":              DEMA,
+	"tema":              TEMA,
+	"t3":                T3,
+	"mmaxdrawdown":      MMAXDRAWDOWN,
+	"cumpositivestreak": CUMPOSITIVESTREAK,
 }

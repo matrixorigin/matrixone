@@ -22,7 +22,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -136,100 +135,6 @@ func ReadDataByFilter(
 		stats.StorageFilterOutputRows += uint64(len(sels))
 	}
 	return
-}
-
-// BlockDataReadNoCopy only read block data from storage, don't apply deletes.
-func BlockDataReadNoCopy(
-	ctx context.Context,
-	info *objectio.BlockInfo,
-	ds engine.DataSource,
-	columns []uint16,
-	colTypes []types.Type,
-	ts types.TS,
-	policy fileservice.Policy,
-	mp *mpool.MPool,
-	fs fileservice.FileService,
-) (*batch.Batch, *nulls.Bitmap, func(), error) {
-	if logutil.GetSkip1Logger().Core().Enabled(zap.DebugLevel) {
-		logutil.Debugf("read block %s, columns %v, types %v", info.BlockID.String(), columns, colTypes)
-	}
-
-	var (
-		deleteMask objectio.Bitmap
-		release    func()
-		err        error
-	)
-
-	defer func() {
-		if err != nil {
-			if release != nil {
-				release()
-			}
-		}
-	}()
-
-	cacheVectors := containers.NewVectors(len(columns) + 2)
-
-	phyAddrColumnPos := -1
-	for i := range columns {
-		if columns[i] == objectio.SEQNUM_ROWID {
-			phyAddrColumnPos = i
-			break
-		}
-	}
-
-	// read block data from storage specified by meta location
-	if deleteMask, release, err = readBlockData(
-		ctx, columns, colTypes, phyAddrColumnPos, info, ts, policy, cacheVectors, mp, fs,
-	); err != nil {
-		return nil, nil, nil, err
-	}
-	defer deleteMask.Release()
-
-	tombstones, err := ds.GetTombstones(ctx, &info.BlockID)
-	if err != nil {
-		release()
-		return nil, nil, nil, err
-	}
-
-	// merge deletes from tombstones
-	if !deleteMask.IsValid() {
-		deleteMask = tombstones
-	} else {
-		deleteMask.Or(tombstones)
-		tombstones.Release()
-	}
-	outputBat := batch.NewWithSize(len(columns))
-
-	loadedColumnPos := 0
-	for outputColPos := range columns {
-		if outputColPos != phyAddrColumnPos {
-			outputBat.Vecs[outputColPos] = &cacheVectors[loadedColumnPos]
-			loadedColumnPos++
-		} else {
-			outputBat.Vecs[outputColPos] = vector.NewOffHeapVecWithType(objectio.RowidType)
-			if err = buildRowidColumn(
-				info, outputBat.Vecs[phyAddrColumnPos], nil, mp,
-			); err != nil {
-				release()
-				return nil, nil, nil, err
-			}
-			release = func() {
-				release()
-				outputBat.Vecs[phyAddrColumnPos].Free(mp)
-			}
-		}
-	}
-	outputBat.SetRowCount(outputBat.Vecs[0].Length())
-
-	// FIXME: w-zr
-	var retMask *nulls.Bitmap
-
-	if !deleteMask.IsEmpty() {
-		retMask = &nulls.Bitmap{}
-		retMask.OrBitmap(deleteMask.Bitmap())
-	}
-	return outputBat, retMask, release, nil
 }
 
 // BlockDataRead only read block data from storage, don't apply deletes.
@@ -1531,7 +1436,11 @@ func blockDataReadWithSelectedFilterTopK(
 	return nil
 }
 
+// A nil selection is the implicit identity map; its result aliases subsetRows.
 func positionsOfSelectedRows(selectedRows, subsetRows []int64) ([]int64, error) {
+	if selectedRows == nil {
+		return subsetRows, nil
+	}
 	positions := make([]int64, 0, len(subsetRows))
 	next := 0
 	for _, row := range subsetRows {

@@ -254,12 +254,17 @@ type container struct {
 	finalizeActionIdx     int
 	finalizeActionActive  bool
 	finalizeLogicalAffect uint64
+	finalizeAnyChanged    bool
+	finalizeBeforeVecs    []*vector.Vector
 	finalizeCurrentVecs   []*vector.Vector
+	odkuSummary           process.ODKUResultSummary
 
 	batches       []*batch.Batch
 	batchRowCount int64
 
-	exprExecs []colexec.ExpressionExecutor
+	exprExecs         []colexec.ExpressionExecutor
+	updateExpressions func(*process.Process, *batch.Batch, *batch.Batch) ([]*vector.Vector, error)
+	updateSuspended   bool
 
 	joinBat1 *batch.Batch
 	cfs1     []func(*vector.Vector, *vector.Vector, int64, int) error
@@ -334,19 +339,29 @@ type DedupJoin struct {
 	DedupColName              string
 	SpillThreshold            int64
 	DedupColTypes             []plan.Type
+	DedupKeyExprs             []*plan.Expr
 	DelColIdx                 int32
 	DedupDeleteMarkerColIdx   int32
 	DedupDeleteKeepColIdxList []int32
 	UpdateColIdxList          []int32
 	UpdateColExprList         []*plan.Expr
-	HasODKUAffectedRows       bool
-	AffectedRowsResultPos     int32
-	PhysicalChangedResultPos  int32
-	UpdateCheckColIdxList     []int32
-	CountFoundRows            bool
-	EmitActionRows            bool
-	ActionFinalResultPos      int32
-	ForeignKeyChecks          []ODKUForeignKeyCheck
+	// UpdateExpressions evaluates one ordered action against its current row
+	// image. A nil result requests ExecYield without publishing that action.
+	// Results remain borrowed until the next invocation or operator cleanup.
+	UpdateExpressions             func(*process.Process, *batch.Batch, *batch.Batch) ([]*vector.Vector, error)
+	HasODKUAffectedRows           bool
+	AffectedRowsResultPos         int32
+	PhysicalChangedResultPos      int32
+	UpdateCheckColIdxList         []int32
+	CountFoundRows                bool
+	EmitActionRows                bool
+	ActionFinalResultPos          int32
+	ForeignKeyChecks              []ODKUForeignKeyCheck
+	ODKUResultTracking            bool
+	ODKUTargetAutoIncrementCol    int32
+	ODKUGeneratedCol              int32
+	ODKUOrdinalCol                int32
+	ODKUGeneratedAutoIncrementCol int32
 
 	// OldColCapturePlaceholderIdxList / OldColCaptureProbeIdxList are parallel
 	// arrays. For each i, when probe hits a build bucket the probe-side column
@@ -510,7 +525,9 @@ func (dedupJoin *DedupJoin) Reset(proc *process.Process, pipelineFailed bool, er
 	}
 	ctr.cleanEvalVectors()
 	ctr.roundStatusPublished = false
+	ctr.odkuSummary = process.ODKUResultSummary{}
 	ctr.state = Build
+	ctr.updateSuspended = false
 	ctr.lastPos = 0
 }
 
@@ -531,10 +548,7 @@ func (dedupJoin *DedupJoin) Free(proc *process.Process, pipelineFailed bool, err
 		ctr.spillEngine = nil
 	}
 	ctr.cleanEvalVectors()
-}
-
-func (dedupJoin *DedupJoin) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
-	return input, nil
+	ctr.odkuSummary = process.ODKUResultSummary{}
 }
 
 func (ctr *container) cleanExprExecutor() {
@@ -562,6 +576,7 @@ func (ctr *container) cleanStableUpdateVecs(proc *process.Process) {
 	ctr.foreignKeyBeforeVecs = nil
 	ctr.foreignKeyEligibility = nil
 	ctr.probeCurrentVecs = nil
+	ctr.finalizeBeforeVecs = nil
 	ctr.finalizeCurrentVecs = nil
 }
 
@@ -644,6 +659,8 @@ func (ctr *container) resetActionReplayCursors() {
 	ctr.finalizeActionIdx = 0
 	ctr.finalizeActionActive = false
 	ctr.finalizeLogicalAffect = 0
+	ctr.finalizeAnyChanged = false
+	ctr.finalizeBeforeVecs = nil
 	ctr.finalizeCurrentVecs = nil
 }
 

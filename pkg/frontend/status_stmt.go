@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/util"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
 
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
@@ -114,7 +115,25 @@ func executeStatusStmt(ses *Session, execCtx *ExecCtx) (err error) {
 			return
 		}
 		if ep.needExportToFile() {
-			defer ep.Close()
+			exportCompleted := false
+			defer func() {
+				// A producer panic skips the ordered drain. Abort before joining
+				// abandoned publishers; the panic continues to the existing outer
+				// recovery boundary without changing its payload.
+				cause := err
+				if !exportCompleted && cause == nil {
+					cause = context.Canceled
+				}
+				err = ep.finish(cause)
+				if ep.auditEnabled && ses.tStmt != nil {
+					ses.tStmt.UpdateOutfileReceipt(
+						outfileFormat(ep.userConfig),
+						ep.auditBytesWritten,
+						ep.auditRowsWritten,
+						exportCompleted && err == nil,
+					)
+				}
+			}()
 			columns, err = execCtx.cw.GetColumns(execCtx.reqCtx)
 			if err != nil {
 				ses.Error(execCtx.reqCtx,
@@ -133,12 +152,12 @@ func executeStatusStmt(ses *Session, execCtx *ExecCtx) (err error) {
 			initExportFileParam(ep, mrs)
 			ep.mrs = mrs
 			ep.ctx = execCtx.reqCtx
+			ep.init()
 			ep.service = ses.GetService()
-			if err = openNewFile(execCtx.reqCtx, ep, mrs); err != nil {
+			if err = openNewFile(ep.ctx, ep, mrs); err != nil {
 				return
 			}
 
-			ep.init()
 			runBegin := time.Now()
 			/*
 				Start pipeline
@@ -159,14 +178,7 @@ func executeStatusStmt(ses *Session, execCtx *ExecCtx) (err error) {
 			if err = exportAllDataFromBatches(ep); err != nil {
 				return
 			}
-
-			// For parquet format, file is written in exportAllDataFromBatches
-			// No need to close pipe-based writer
-			if ep.getExportFormat() != "parquet" {
-				if err = Close(ep); err != nil {
-					return
-				}
-			}
+			exportCompleted = true
 
 		} else {
 			return moerr.NewInternalError(execCtx.reqCtx, "select without it generates the result rows")
@@ -271,6 +283,8 @@ func executeStatusStmt(ses *Session, execCtx *ExecCtx) (err error) {
 			if err != nil { // executor success, but processLoadLocal goroutine failed
 				return
 			}
+			// Test barrier after all LOAD work, before transaction finalization.
+			_, _, _ = fault.TriggerFault("load-local-before-finalize")
 		}
 
 		// only log if run time is longer than 1s
@@ -421,9 +435,19 @@ func (resper *MysqlResp) respStatus(ses *Session,
 		localFileName := ""
 		switch st := execCtx.stmt.(type) {
 		case *tree.Insert:
-			res.lastInsertId = execCtx.proc.GetStatementLastInsertID()
-			if res.lastInsertId != 0 {
-				ses.SetLastInsertID(res.lastInsertId)
+			isODKU := len(st.OnDuplicateUpdate) > 0 &&
+				!(len(st.OnDuplicateUpdate) == 1 && st.OnDuplicateUpdate[0] == nil)
+			if isODKU && execCtx.cw != nil && execCtx.cw.Plan().GetQuery().HasODKUResultTracking() {
+				lastInsertID, generated := execCtx.proc.GetODKUProtocolIDForSource(st.IsValuesSource())
+				res.lastInsertId = lastInsertID
+				if generated {
+					ses.SetLastInsertID(res.lastInsertId)
+				}
+			} else {
+				res.lastInsertId = execCtx.proc.GetStatementLastInsertID()
+				if res.lastInsertId != 0 {
+					ses.SetLastInsertID(res.lastInsertId)
+				}
 			}
 		case *tree.Replace:
 			// REPLACE uses the same PRE_INSERT auto-increment pipeline as INSERT,
@@ -479,6 +503,10 @@ func (resper *MysqlResp) respStatus(ses *Session,
 			err = doDropProcedureWithDB(execCtx.reqCtx, ses, execCtx.stmt)
 
 		case *tree.Load:
+			res.lastInsertId = execCtx.proc.GetStatementLastInsertID()
+			if res.lastInsertId != 0 {
+				ses.SetLastInsertID(res.lastInsertId)
+			}
 			if st.Local && execCtx.isIssue3482 {
 				isIssue3482 = true
 				localFileName = st.Param.Filepath

@@ -126,8 +126,6 @@ func requireNoUnpublishedCleanupMarkers(
 }
 
 func TestCancelableJob(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 
 	var v1 atomic.Int32
 	jobName := "job"
@@ -218,8 +216,6 @@ func TestCancelableJob(t *testing.T) {
 }
 
 func TestPrintVector(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 
 	mp, err := mpool.NewMPool("test", 0, mpool.NoFixed)
 	assert.NoError(t, err)
@@ -238,8 +234,6 @@ func TestPrintVector(t *testing.T) {
 }
 
 func TestAppend1(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, nil)
@@ -345,8 +339,6 @@ func TestAppend1(t *testing.T) {
 }
 
 func TestAppend2(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	opts := config.WithQuickScanCKPAndLongGCOpts(nil)
@@ -403,8 +395,6 @@ func TestAppend2(t *testing.T) {
 }
 
 func TestTruncate1(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	opts := config.WithQuickScanAndCKPOpts(nil)
@@ -448,8 +438,6 @@ func TestTruncate1(t *testing.T) {
 	assert.GreaterOrEqual(t, db.Wal.GetTruncated(), uint64(4))
 }
 func TestAppend3(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	opts := config.WithQuickScanAndCKPOpts(nil)
@@ -489,8 +477,6 @@ func TestAppend3(t *testing.T) {
 }
 
 func TestAppend4(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -627,8 +613,6 @@ func testCRUD(t *testing.T, tae *db.DB, schema *catalog.Schema) {
 }
 
 func TestCRUD(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -639,8 +623,6 @@ func TestCRUD(t *testing.T) {
 }
 
 func TestTableHandle(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	db := testutil.InitTestDB(ctx, ModuleName, t, nil)
@@ -665,8 +647,6 @@ func TestTableHandle(t *testing.T) {
 }
 
 func TestCreateBlock(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	db := testutil.InitTestDB(ctx, ModuleName, t, nil)
@@ -686,8 +666,6 @@ func TestCreateBlock(t *testing.T) {
 }
 
 func TestNonAppendableBlock(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	db := testutil.InitTestDB(ctx, ModuleName, t, nil)
@@ -770,8 +748,6 @@ func TestNonAppendableBlock(t *testing.T) {
 }
 
 func TestCreateObject(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	tae := testutil.InitTestDB(ctx, ModuleName, t, nil)
@@ -809,8 +785,6 @@ func TestCreateObject(t *testing.T) {
 }
 
 func TestAddObjsWithMetaLoc(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -987,8 +961,6 @@ func TestAddObjsWithMetaLoc(t *testing.T) {
 }
 
 func TestCompactMemAlter(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -1048,8 +1020,6 @@ func TestCompactMemAlter(t *testing.T) {
 }
 
 func TestFlushTableMergeOrder(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -1122,8 +1092,6 @@ func TestFlushTableMergeOrder(t *testing.T) {
 }
 
 func TestFlushTableMergeOrderPK(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -1197,8 +1165,6 @@ func TestFlushTableMergeOrderPK(t *testing.T) {
 }
 
 func TestFlushTableNoPk(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -1233,8 +1199,6 @@ func TestFlushTableNoPk(t *testing.T) {
 }
 
 func TestFlushTableDroppedEntry(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -1409,8 +1373,6 @@ func TestFlushTableErrorHandle2(t *testing.T) {
 
 func TestFlushTabletail(t *testing.T) {
 	// TODO
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -1568,8 +1530,6 @@ func TestFlushTabletail(t *testing.T) {
 }
 
 func TestRollback1(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	db := testutil.InitTestDB(ctx, ModuleName, t, nil)
@@ -1633,8 +1593,6 @@ func TestFlushEmptyAppendableObjectReplay(t *testing.T) {
 		{name: "checkpoint-collect", checkpoint: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			defer testutils.AfterTest(t)()
-			testutils.EnsureNoLeak(t)
 			ctx := context.Background()
 
 			opts := config.WithLongScanAndCKPOpts(nil)
@@ -1661,6 +1619,7 @@ func TestFlushEmptyAppendableObjectReplay(t *testing.T) {
 			require.True(t, meta.GetObjectData().PrepareCompact())
 
 			beforeFlushTxn, beforeFlushRel := tae.GetRelation()
+			beforeFlushTS := beforeFlushTxn.GetStartTS()
 			flushTxn, _ := tae.GetRelation()
 			require.Zero(t, tae.Runtime.TransferTable.Len())
 			flushStart := flushTxn.GetStartTS()
@@ -1673,6 +1632,7 @@ func TestFlushEmptyAppendableObjectReplay(t *testing.T) {
 			require.Nil(t, task.GetCreatedObjects())
 			require.NoError(t, flushTxn.Commit(ctx))
 			require.Zero(t, tae.Runtime.TransferTable.Len())
+			testutil.CheckAllColRowsByScan(t, beforeFlushRel, 0, true)
 
 			dedupBat := catalog.MockBatch(schema, 1)
 			beforeFlushIt := beforeFlushRel.MakeObjectIt(false)
@@ -1704,6 +1664,7 @@ func TestFlushEmptyAppendableObjectReplay(t *testing.T) {
 				require.True(t, checkpointed.HasDropCommitted())
 				require.Equal(t, createTS, checkpointed.GetCreatedAt())
 				require.NoError(t, txn.Commit(ctx))
+				checkRowsAtSnapshot(t, ctx, tae, beforeFlushTS, 0)
 				return
 			}
 			tae.Restart(ctx)
@@ -1713,13 +1674,12 @@ func TestFlushEmptyAppendableObjectReplay(t *testing.T) {
 			require.True(t, replayed.HasDropCommitted())
 			require.Equal(t, createTS, replayed.GetCreatedAt())
 			require.NoError(t, txn.Commit(ctx))
+			checkRowsAtSnapshot(t, ctx, tae, beforeFlushTS, 0)
 		})
 	}
 }
 
 func TestMVCC1(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	db := testutil.InitTestDB(ctx, ModuleName, t, nil)
@@ -1795,8 +1755,6 @@ func TestMVCC1(t *testing.T) {
 // 3. Txn2 delete the 5th row value in uncommitted state -- PASS
 // 4. Txn2 get the 5th row value -- NotFound
 func TestMVCC2(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	db := testutil.InitTestDB(ctx, ModuleName, t, nil)
@@ -1849,8 +1807,6 @@ func TestMVCC2(t *testing.T) {
 }
 
 func TestUnload1(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	opts := new(options.Options)
@@ -1895,8 +1851,6 @@ func TestUnload1(t *testing.T) {
 }
 
 func TestUnload2(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	opts := new(options.Options)
@@ -1964,8 +1918,6 @@ func TestUnload2(t *testing.T) {
 }
 
 func TestDelete1(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	tae := testutil.InitTestDB(ctx, ModuleName, t, nil)
@@ -2050,8 +2002,6 @@ func TestDelete1(t *testing.T) {
 }
 
 func TestLogIndex1(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	tae := testutil.InitTestDB(ctx, ModuleName, t, nil)
@@ -2107,8 +2057,6 @@ func TestLogIndex1(t *testing.T) {
 }
 
 func TestCrossDBTxn(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	tae := testutil.InitTestDB(ctx, ModuleName, t, nil)
@@ -2170,8 +2118,6 @@ func TestCrossDBTxn(t *testing.T) {
 }
 
 func TestSystemDB2(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	tae := testutil.InitTestDB(ctx, ModuleName, t, nil)
@@ -2210,8 +2156,6 @@ func TestSystemDB2(t *testing.T) {
 }
 
 func TestSystemDB3(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 	tae := testutil.InitTestDB(ctx, ModuleName, t, nil)
 	defer tae.Close()
@@ -2231,8 +2175,6 @@ func TestSystemDB3(t *testing.T) {
 }
 
 func TestScan1(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 	tae := testutil.InitTestDB(ctx, ModuleName, t, nil)
 	defer tae.Close()
@@ -2251,8 +2193,6 @@ func TestScan1(t *testing.T) {
 }
 
 func TestDedup(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	tae := testutil.InitTestDB(ctx, ModuleName, t, nil)
@@ -2276,8 +2216,6 @@ func TestDedup(t *testing.T) {
 }
 
 func TestScan2(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	tae := testutil.InitTestDB(ctx, ModuleName, t, nil)
@@ -2321,8 +2259,6 @@ func TestScan2(t *testing.T) {
 }
 
 func TestADA(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	tae := testutil.InitTestDB(ctx, ModuleName, t, nil)
@@ -2429,8 +2365,6 @@ func TestADA(t *testing.T) {
 }
 
 func TestUpdateByFilter(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	tae := testutil.InitTestDB(ctx, ModuleName, t, nil)
@@ -2469,8 +2403,6 @@ func TestUpdateByFilter(t *testing.T) {
 // 4. Start Txn2. Delete row 2. Commit.
 // 5. Txn1 call GetByFilter and should return PASS
 func TestGetByFilter(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	tae := testutil.InitTestDB(ctx, ModuleName, t, nil)
@@ -2519,8 +2451,6 @@ func TestGetByFilter(t *testing.T) {
 //     3.5.2 If error, should always be w-w conflict
 //  4. Wait done all workers. Check the raw row count of table, should be same with appendedcnt.
 func TestChaos1(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	tae := testutil.InitTestDB(ctx, ModuleName, t, nil)
@@ -2606,8 +2536,6 @@ func TestChaos1(t *testing.T) {
 // 5. Txn1 try to delete the 3rd row. W-W Conflict. Rollback
 // 6. Start txn3 and try to update th3 3rd row 3rd col to int64(3333). -- PASS
 func TestSnapshotIsolation1(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	tae := testutil.InitTestDB(ctx, ModuleName, t, nil)
@@ -2666,8 +2594,6 @@ func TestSnapshotIsolation1(t *testing.T) {
 // 3. Start txn3 and delete the row and commit
 // 4. Txn1 try to append the row. (W-W). Rollback
 func TestSnapshotIsolation2(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -2708,8 +2634,6 @@ func TestSnapshotIsolation2(t *testing.T) {
 // Same as TestMergeBlocks
 // no pkRow in schema, so merge will run reshape.
 func TestReshapeBlocks(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	tae := testutil.InitTestDB(ctx, ModuleName, t, nil)
@@ -2784,8 +2708,6 @@ func TestReshapeBlocks(t *testing.T) {
 // 2. Merge blocks
 // 3. Check rows and col[0]
 func TestMergeBlocks(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	tae := testutil.InitTestDB(ctx, ModuleName, t, nil)
@@ -2870,8 +2792,6 @@ func totsp(ts types.TS) *timestamp.Timestamp {
 }
 
 func TestSegDelLogtail(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -2982,8 +2902,6 @@ func TestSegDelLogtail(t *testing.T) {
 // delete
 // commit merge
 func TestMergeblocks2(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -3077,8 +2995,6 @@ func TestMergeblocks2(t *testing.T) {
 // Object2: 8, 9, 11 | 12
 // Delete map not nil on: [obj1, blk1] and [obj2, blk2]
 func TestMergeBlocksIntoMultipleObjects(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -3192,8 +3108,6 @@ func TestMergeBlocksIntoMultipleObjects(t *testing.T) {
 }
 
 func TestMergeEmptyBlocks(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -3245,8 +3159,6 @@ func TestMergeEmptyBlocks(t *testing.T) {
 	}
 }
 func TestDelete2(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -3271,8 +3183,6 @@ func TestDelete2(t *testing.T) {
 }
 
 func TestNull1(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -3393,8 +3303,6 @@ func TestNull1(t *testing.T) {
 }
 
 func TestTruncate(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	opts := config.WithQuickScanAndCKPOpts(nil)
@@ -3442,8 +3350,6 @@ func TestTruncate(t *testing.T) {
 }
 
 func TestGetColumnData(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -3510,8 +3416,6 @@ func TestGetColumnData(t *testing.T) {
 }
 
 func TestCompactBlk1(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -3591,8 +3495,6 @@ func TestCompactBlk1(t *testing.T) {
 }
 
 func TestCompactBlk2(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -3681,8 +3583,6 @@ func TestCompactBlk2(t *testing.T) {
 }
 
 func TestCompactblk3(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -3741,8 +3641,6 @@ func TestCompactblk3(t *testing.T) {
 }
 
 func TestImmutableIndexInAblk(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -3816,7 +3714,6 @@ func TestImmutableIndexInAblk(t *testing.T) {
 
 func TestDelete3(t *testing.T) {
 	// t.Skip(any("This case crashes occasionally, is being fixed, skip it for now"))
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 
 	opts := config.WithQuickScanAndCKPOpts(nil)
@@ -3996,7 +3893,6 @@ func checkRowsAtSnapshot(
 }
 
 func TestFlushTransferTombstonesVisibleAtParentCommit(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 	tae, flushTxn, oldTombstoneIDs := newFlushTransferScenario(t, ctx, nil)
 
@@ -4031,7 +3927,6 @@ func TestFlushTransferTombstonesVisibleAtParentCommit(t *testing.T) {
 }
 
 func TestFlushTransferTombstonesVisibleToSnapshotStartedWhilePreparing(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 	barrier := &flushPrepareBarrier{
 		reached: make(chan struct{}),
@@ -4083,7 +3978,6 @@ func TestFlushTransferTombstonesVisibleToSnapshotStartedWhilePreparing(t *testin
 }
 
 func TestFlushTransferTombstonesRollback(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 	tae, flushTxn, oldTombstoneIDs := newFlushTransferScenario(t, ctx, nil)
 
@@ -4106,7 +4000,6 @@ func TestFlushTransferTombstonesRollback(t *testing.T) {
 }
 
 func TestTombstoneMergeKeepsTargetDroppedAfterSnapshot(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 	opts := config.WithLongScanAndCKPOpts(nil)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
@@ -4193,8 +4086,6 @@ func TestTombstoneMergeKeepsTargetDroppedAfterSnapshot(t *testing.T) {
 }
 
 func TestTransferredTombstonesSyncFailureRollsBack(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 	opts := config.WithLongScanAndCKPOpts(nil)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
@@ -4281,7 +4172,6 @@ func TestTransferredTombstonesSyncFailureRollsBack(t *testing.T) {
 }
 
 func TestTransferredTombstonesPublishedBeforeConflictRollBack(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -4341,7 +4231,6 @@ func TestTransferredTombstonesPublishedBeforeConflictRollBack(t *testing.T) {
 }
 
 func TestV9FlushPreservesRowIDAcrossAbortHole(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 	serviceRuntime := runtime.ServiceRuntime("")
 	originalVersion, hadVersion := serviceRuntime.GetGlobalVariables(runtime.MOProtocolVersion)
@@ -4432,7 +4321,6 @@ func TestV9FlushPreservesRowIDAcrossAbortHole(t *testing.T) {
 }
 
 func TestV9PersistedTombstoneContainsSkipsRollback(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 	serviceRuntime := runtime.ServiceRuntime("")
 	originalVersion, hadVersion := serviceRuntime.GetGlobalVariables(runtime.MOProtocolVersion)
@@ -4502,7 +4390,6 @@ func TestV9PersistedTombstoneContainsSkipsRollback(t *testing.T) {
 }
 
 func TestIncrementalDedupIgnoresOldRowsInTNRewrite(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -4545,7 +4432,6 @@ func TestIncrementalDedupIgnoresOldRowsInTNRewrite(t *testing.T) {
 }
 
 func TestIncrementalDedupChecksCNCreatedObject(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -4590,7 +4476,6 @@ func TestIncrementalDedupChecksCNCreatedObject(t *testing.T) {
 }
 
 func TestStrictDedupIgnoresOldRowsInTNRewrite(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -4641,7 +4526,6 @@ func TestDedupDetectsConcurrentRowAfterTNRewrite(t *testing.T) {
 		{name: "incremental", policy: txnif.DedupPolicy_CheckIncremental},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			defer testutils.AfterTest(t)()
 			ctx := context.Background()
 
 			opts := config.WithLongScanAndCKPOpts(nil)
@@ -4690,7 +4574,6 @@ func TestDedupDetectsConcurrentRowAfterTNRewrite(t *testing.T) {
 }
 
 func TestDropCreated1(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -4712,7 +4595,6 @@ func TestDropCreated1(t *testing.T) {
 }
 
 func TestDropCreated2(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -4737,7 +4619,6 @@ func TestDropCreated2(t *testing.T) {
 }
 
 func TestDropCreated3(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -4763,7 +4644,6 @@ func TestDropCreated3(t *testing.T) {
 }
 
 func TestRollbackCreateTable(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -4795,7 +4675,6 @@ func TestRollbackCreateTable(t *testing.T) {
 }
 
 func TestDropCreated4(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -4821,7 +4700,6 @@ func TestDropCreated4(t *testing.T) {
 }
 
 func TestTruncateZonemap(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 
 	type Mod struct {
@@ -4838,7 +4716,6 @@ func TestTruncateZonemap(t *testing.T) {
 		}
 		return ret
 	}
-	testutils.EnsureNoLeak(t)
 	opts := config.WithLongScanAndCKPOpts(nil)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
@@ -4915,7 +4792,6 @@ func mustStartTxn(t *testing.T, tae *testutil.TestEngine, tenantID uint32) txnif
 }
 
 func TestMultiTenantDBOps(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 
 	var err error
@@ -4977,7 +4853,6 @@ func TestMultiTenantDBOps(t *testing.T) {
 }
 
 func TestMultiTenantMoCatalogOps(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 
 	var err error
@@ -5059,7 +4934,6 @@ func TestMultiTenantMoCatalogOps(t *testing.T) {
 // txn2: compact
 // txn3: append, shouldn't get rw
 func TestGetLastAppender(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -5092,7 +4966,6 @@ func TestGetLastAppender(t *testing.T) {
 // check data, row count, commit ts
 // TODO 1. in2pc committs!=preparets; 2. abort
 func TestCollectInsert(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -5172,7 +5045,6 @@ func TestCollectInsert(t *testing.T) {
 }
 
 func TestAppendnode(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -5216,7 +5088,6 @@ func TestAppendnode(t *testing.T) {
 }
 
 func TestTxnIdempotent(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -5250,7 +5121,6 @@ func TestTxnIdempotent(t *testing.T) {
 // insert 200 rows and do quick compaction
 // expect that there are some dirty tables at first and then zero dirty table found
 func TestWatchDirty(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 
 	opts := config.WithQuickScanAndCKPOpts(nil)
@@ -5314,7 +5184,6 @@ func TestWatchDirty(t *testing.T) {
 }
 
 func TestDirtyWatchRace(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 
 	opts := config.WithQuickScanAndCKPOpts(nil)
@@ -5369,7 +5238,6 @@ func TestDirtyWatchRace(t *testing.T) {
 func TestBlockRead(t *testing.T) {
 	ioutil.RunPipelineTest(
 		func() {
-			defer testutils.AfterTest(t)()
 			ctx := context.Background()
 
 			opts := config.WithLongScanAndCKPOpts(nil)
@@ -5508,7 +5376,6 @@ func TestBlockRead(t *testing.T) {
 func TestBlockRead2(t *testing.T) {
 	ioutil.RunPipelineTest(
 		func() {
-			defer testutils.AfterTest(t)()
 			ctx := context.Background()
 
 			opts := config.WithLongScanAndCKPOpts(nil)
@@ -5657,8 +5524,6 @@ func TestBlockRead2(t *testing.T) {
 }
 
 func TestCompactDeltaBlk(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -5743,7 +5608,6 @@ func TestCompactDeltaBlk(t *testing.T) {
 }
 
 func TestFlushTable(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -5786,7 +5650,6 @@ func TestFlushTable(t *testing.T) {
 }
 
 func TestReadCheckpoint(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 
 	opts := config.WithQuickScanAndCKPOpts(nil)
@@ -5879,7 +5742,6 @@ func TestReadCheckpoint(t *testing.T) {
 }
 
 func TestICKPPreservesTableIDHistoryWhileGCKPIntentIsPending(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx, cancel := context.WithTimeout(context.Background(), testutil.TestCheckpointTimeout)
 	t.Cleanup(cancel)
 
@@ -6001,7 +5863,6 @@ func TestICKPPreservesTableIDHistoryWhileGCKPIntentIsPending(t *testing.T) {
 }
 
 func TestReplacementChecksConcurrentDestinationKey(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, config.WithLongScanAndCKPOpts(nil))
 	defer tae.Close()
@@ -6038,7 +5899,6 @@ func TestReplacementChecksConcurrentDestinationKey(t *testing.T) {
 }
 
 func TestReplacementRejectsCompetingPredecessor(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	for _, transferred := range []bool{false, true} {
 		name := "ordinary"
 		if transferred {
@@ -6121,7 +5981,6 @@ func TestReplacementRejectsCompetingPredecessor(t *testing.T) {
 }
 
 func TestDelete4(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 
 	opts := config.WithQuickScanAndCKPOpts(nil)
@@ -6241,6 +6100,11 @@ func TestDelete4(t *testing.T) {
 					}()
 					err := blk.HybridScan(ctx, &view, uint16(j), []int{0}, common.DefaultAllocator)
 					require.NoError(t, err)
+					// A block with no rows visible to this transaction is a valid
+					// HybridScan result and does not allocate a batch.
+					if view == nil {
+						return
+					}
 					view.Compact()
 					if view.Length() != 0 {
 						t.Logf("block-%d, data=%s", j, logtail.ToStringTemplate(view.Vecs[0], -1))
@@ -6502,7 +6366,6 @@ func TestMergeBlocks3(t *testing.T) {
 }
 
 func TestTransfer3(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -6539,7 +6402,6 @@ func TestTransfer3(t *testing.T) {
 
 func TestUpdate(t *testing.T) {
 	t.Skip(any("This case crashes occasionally, is being fixed, skip it for now"))
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 
 	opts := config.WithQuickScanAndCKPOpts2(nil, 5)
@@ -6735,7 +6597,6 @@ func TestAppendBat(t *testing.T) {
 }
 
 func TestAlterRenameTbl(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -6912,7 +6773,6 @@ func TestAlterRenameTbl(t *testing.T) {
 }
 
 func TestAlterRenameTbl2(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -7006,8 +6866,6 @@ func TestAlterRenameTbl2(t *testing.T) {
 }
 
 func TestAlterFakePk(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -7132,8 +6990,6 @@ func TestAlterFakePk(t *testing.T) {
 }
 
 func TestAlterAutoIncrementSchemaCommitAndRollback(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	tae := testutil.InitTestDB(ctx, ModuleName, t, config.WithLongScanAndCKPOpts(nil))
@@ -7186,8 +7042,6 @@ func waitAutoIncrEpochBarrier(t *testing.T, ch <-chan struct{}, name string) {
 }
 
 func TestAutoIncrEpochCommitFence(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	newEpochTable := func(t *testing.T) (*db.DB, *catalog.Schema, uint32) {
@@ -7382,8 +7236,6 @@ func TestAutoIncrEpochCommitFence(t *testing.T) {
 }
 
 func TestAlterColumnAndFreeze(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -7531,8 +7383,6 @@ func TestAlterColumnAndFreeze(t *testing.T) {
 }
 
 func TestGlobalCheckpoint1(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	opts := config.WithQuickScanAndCKPOpts(nil)
@@ -7569,8 +7419,6 @@ func TestGlobalCheckpoint1(t *testing.T) {
 }
 
 func TestAppendAndGC(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	opts := new(options.Options)
@@ -7637,8 +7485,6 @@ func TestAppendAndGC(t *testing.T) {
 }
 
 func TestAppendAndGC2(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	opts := new(options.Options)
@@ -7853,8 +7699,6 @@ func appendBatchesConcurrently(
 }
 
 func TestSnapshotGC(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	opts := new(options.Options)
@@ -8055,8 +7899,6 @@ func TestSnapshotGC(t *testing.T) {
 }
 
 func TestSnapshotMeta(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	opts := new(options.Options)
@@ -8110,9 +7952,9 @@ func TestSnapshotMeta(t *testing.T) {
 	db = tae.DB
 	db.DiskCleaner.GetCleaner().DisableGC()
 	snapshots := make([]int64, 0)
-	// Only distinct ordered timestamp values are needed; elapsed wall time is
-	// not part of snapshot metadata reconstruction.
-	firstSnapshot := time.Now().UTC().Add(-time.Second).UnixNano()
+	// Begin after GC is disabled; older history may already have been collected.
+	// Nanosecond offsets provide distinct ordered metadata values without sleeps.
+	firstSnapshot := time.Now().UTC().UnixNano()
 	for i := 0; i < 10; i++ {
 		snapshots = append(snapshots, firstSnapshot+int64(i))
 	}
@@ -8180,8 +8022,6 @@ func TestSnapshotMeta(t *testing.T) {
 }
 
 func TestPitrMeta(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	opts := new(options.Options)
@@ -8413,8 +8253,6 @@ func TestPitrMeta(t *testing.T) {
 }
 
 func TestIscpMeta(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	opts := new(options.Options)
@@ -8680,8 +8518,6 @@ func TestIscpMeta(t *testing.T) {
 }
 
 func TestMergeGC(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	opts := new(options.Options)
@@ -8771,8 +8607,6 @@ func TestMergeGC(t *testing.T) {
 }
 
 func TestCkpLeak(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	opts := new(options.Options)
@@ -8860,8 +8694,6 @@ func TestCkpLeak(t *testing.T) {
 }
 
 func TestGlobalCheckpoint2(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 	// Flushing is asynchronous and shares workers with the checkpoint runner;
 	// use the same bounded timeout as checkpoint operations instead of a
@@ -8997,8 +8829,6 @@ func TestGlobalCheckpoint2(t *testing.T) {
 }
 
 func TestGlobalCheckpoint5(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -9054,8 +8884,6 @@ func TestGlobalCheckpoint5(t *testing.T) {
 }
 
 func TestGCCheckpoint1(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -9139,7 +8967,6 @@ func TestGCCheckpoint1(t *testing.T) {
 // 7. check the incremental checkpoints -> expect 1, finished
 // 8. check the intent -> expect nil
 func Test_CheckpointChaos1(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 	opts := config.WithLongScanAndCKPOpts(nil)
 
@@ -9228,7 +9055,6 @@ func Test_CheckpointChaos1(t *testing.T) {
 // 13. check ickp and gckp
 // 14. check all data
 func Test_CheckpointChaos2(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	opts := config.WithLongScanAndCKPOpts(nil)
 
 	ctx := context.Background()
@@ -9395,7 +9221,6 @@ func Test_CheckpointChaos2(t *testing.T) {
 }
 
 func Test_CheckpointChaos3(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	opts := config.WithLongScanAndCKPOptsAndQuickGC(nil)
 	ctx := context.Background()
 
@@ -9481,7 +9306,6 @@ endFor:
 }
 
 func TestGCCatalog1(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -9661,7 +9485,6 @@ func TestGCCatalog1(t *testing.T) {
 }
 
 func TestGCCatalog2(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 
 	opts := config.WithQuickScanAndCKPOpts(nil)
@@ -9722,7 +9545,6 @@ func TestGCCatalog2(t *testing.T) {
 	t.Log(tae.Catalog.SimplePPString(3))
 }
 func TestGCCatalog3(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 
 	opts := config.WithQuickScanAndCKPOpts(nil)
@@ -9811,7 +9633,6 @@ func TestForceCheckpoint(t *testing.T) {
 }
 
 func TestForceCheckpointWithoutWAL(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 	opts := config.WithLongScanAndCKPOpts(nil)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
@@ -9840,7 +9661,6 @@ func TestForceCheckpointWithoutWAL(t *testing.T) {
 }
 
 func TestForceCheckpointWithFullyReservedWAL(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 	opts := config.WithLongScanAndCKPOpts(nil)
 	options.WithReserveWALEntryCount(math.MaxUint64)(opts)
@@ -10142,8 +9962,6 @@ func TestCommitS3Blocks(t *testing.T) {
 }
 
 func TestDedupSnapshot1(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	opts := config.WithQuickScanAndCKPOpts(nil)
@@ -10175,8 +9993,6 @@ func TestDedupSnapshot1(t *testing.T) {
 }
 
 func TestDedupSnapshot2(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	opts := config.WithQuickScanAndCKPOpts(nil)
@@ -10235,8 +10051,6 @@ func TestDedupSnapshot2(t *testing.T) {
 }
 
 func TestDedupSnapshot3(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	opts := config.WithQuickScanAndCKPOpts(nil)
@@ -10306,7 +10120,6 @@ func TestDedupSnapshot3(t *testing.T) {
 }
 
 func TestSoftDeleteRollback(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 	opts := config.WithLongScanAndCKPOpts(nil)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
@@ -10482,7 +10295,6 @@ func TestRW(t *testing.T) {
 }
 
 func TestReplayDeletes(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -10520,7 +10332,6 @@ func TestReplayDeletes(t *testing.T) {
 	assert.NoError(t, txn2.Commit(context.Background()))
 }
 func TestApplyDeltalocation1(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -10573,7 +10384,6 @@ func TestApplyDeltalocation1(t *testing.T) {
 
 // test compact
 func TestApplyDeltalocation2(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -10637,7 +10447,6 @@ func TestApplyDeltalocation2(t *testing.T) {
 }
 
 func TestApplyDeltalocation3(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -10697,7 +10506,6 @@ func TestApplyDeltalocation3(t *testing.T) {
 }
 
 func TestApplyDeltalocation4(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -10738,7 +10546,6 @@ func TestApplyDeltalocation4(t *testing.T) {
 }
 
 func TestReplayPersistedDelete(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -10775,8 +10582,6 @@ func TestReplayPersistedDelete(t *testing.T) {
 func TestSnapshotCheckpoint(t *testing.T) {
 	ioutil.RunPipelineTest(
 		func() {
-			defer testutils.AfterTest(t)()
-			testutils.EnsureNoLeak(t)
 			ctx := context.Background()
 
 			opts := new(options.Options)
@@ -10894,7 +10699,6 @@ func TestSnapshotCheckpoint(t *testing.T) {
 }
 
 func TestEstimateMemSize(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -10963,7 +10767,6 @@ func TestEstimateMemSize(t *testing.T) {
 }
 
 func TestColumnCount(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -11000,7 +10803,6 @@ func TestColumnCount(t *testing.T) {
 }
 
 func TestCollectDeletesInRange1(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -11034,8 +10836,6 @@ func TestCollectDeletesInRange1(t *testing.T) {
 }
 
 func TestCollectDeletesInRangeWithActiveTombstoneDrop(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -11083,7 +10883,6 @@ func TestCollectDeletesInRangeWithActiveTombstoneDrop(t *testing.T) {
 }
 
 func TestCollectDeletesInRange2(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -11157,7 +10956,6 @@ func TestCollectDeletesInRange2(t *testing.T) {
 }
 
 func TestGlobalCheckpoint7(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 
 	opts := config.WithQuickScanAndCKPOpts(nil)
@@ -11237,7 +11035,6 @@ func TestGlobalCheckpoint7(t *testing.T) {
 }
 
 func TestSplitCommand(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -11260,7 +11057,6 @@ func TestSplitCommand(t *testing.T) {
 }
 
 func TestFlushAndAppend(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -11306,7 +11102,6 @@ func TestFlushAndAppend(t *testing.T) {
 }
 
 func TestFlushAndAppend2(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -11359,7 +11154,6 @@ func TestFlushAndAppend2(t *testing.T) {
 }
 
 func TestDeletesInMerge(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -11399,7 +11193,6 @@ func TestDeletesInMerge(t *testing.T) {
 }
 
 func TestDedupAndFlush(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 	opts := config.WithLongScanAndCKPOpts(nil)
 	options.WithGlobalVersionInterval(time.Microsecond)(opts)
@@ -11438,8 +11231,6 @@ func TestDedupAndFlush(t *testing.T) {
 }
 
 func TestTransferDeletes(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -11478,6 +11269,934 @@ func TestTransferDeletes(t *testing.T) {
 	wg.Wait()
 }
 
+func TestFreezeTransferIncludesMergeAtUpperBound(t *testing.T) {
+	ctx := context.Background()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+
+	schema := catalog.MockSchema(2, 0)
+	schema.Extra.BlockMaxRows = 10
+	schema.Extra.ObjectMaxBlocks = 10
+	tae.BindSchema(schema)
+	bat := catalog.MockBatch(schema, 1)
+	defer bat.Close()
+	tae.CreateRelAndAppend(bat, true)
+	tae.CompactBlocks(true)
+
+	mergeTxn, mergeRel := tae.GetRelation()
+	source := testutil.GetOneBlockMeta(mergeRel)
+	mergeTask, err := jobs.NewMergeObjectsTask(
+		nil, mergeTxn, []*catalog.ObjectEntry{source}, tae.Runtime, 0, false,
+	)
+	require.NoError(t, err)
+	require.NoError(t, mergeTask.OnExec(ctx))
+
+	// Resolve the row while the merge source is still visible, so the update's
+	// tombstone initially points at the source object.
+	updateTxn, updateRel := tae.GetRelation()
+	updateTxn.SetDedupType(txnif.DedupPolicy_CheckAll)
+	pk := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(0)
+	require.NoError(t, updateRel.UpdateByFilter(
+		ctx, handle.NewEQFilter(pk), 1, int32(42), false,
+	))
+
+	require.NoError(t, mergeTxn.Commit(ctx))
+	droppedSource := source.GetLatestNode()
+	require.NotNil(t, droppedSource)
+	dropTS := droppedSource.GetDeleteAt()
+	require.False(t, dropTS.IsEmpty())
+	originalNow := tae.Runtime.Now
+	tae.Runtime.Now = func() types.TS { return dropTS }
+	defer func() { tae.Runtime.Now = originalNow }()
+
+	// Transfer uses dropTS as an inclusive upper fence. The source tombstone
+	// must be transferred before the queued conflict check sees the dropped
+	// source object.
+	require.NoError(t, updateTxn.GetStore().Freeze(ctx))
+	require.NoError(t, updateTxn.Commit(ctx))
+	tae.CheckRowsByScan(1, true)
+}
+
+func TestFreezeConflictingUpdatesAfterMergeReturnWW(t *testing.T) {
+	ctx := context.Background()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+
+	schema := catalog.MockSchemaAll2(3, []int{0, 1})
+	schema.Extra.BlockMaxRows = 10
+	schema.Extra.ObjectMaxBlocks = 10
+	tae.BindSchema(schema)
+	bat := catalog.MockBatch(schema, 1)
+	defer bat.Close()
+	tae.CreateRelAndAppend(bat, true)
+	tae.CompactBlocks(true)
+
+	pk := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(0)
+	stageUpdate := func(value int32) txnif.AsyncTxn {
+		txn, rel := tae.GetRelation()
+		txn.SetDedupType(txnif.DedupPolicy_CheckIncremental)
+		require.NoError(t, rel.UpdateByFilter(
+			ctx, handle.NewEQFilter(pk), 2, value, false,
+		))
+		return txn
+	}
+	firstTxn := stageUpdate(10)
+	secondTxn := stageUpdate(20)
+
+	mergeTxn, mergeRel := tae.GetRelation()
+	source := testutil.GetOneBlockMeta(mergeRel)
+	mergeTask, err := jobs.NewMergeObjectsTask(
+		nil, mergeTxn, []*catalog.ObjectEntry{source}, tae.Runtime, 0, false,
+	)
+	require.NoError(t, err)
+	require.NoError(t, mergeTask.OnExec(ctx))
+	require.NoError(t, mergeTxn.Commit(ctx))
+
+	require.NoError(t, firstTxn.GetStore().Freeze(ctx))
+	require.NoError(t, firstTxn.Commit(ctx))
+
+	// Both optimistic updates deleted the same pre-merge physical row. Once the
+	// first update commits, the second must surface a retryable write conflict.
+	// Reporting a data-PK duplicate here leaks an internal dedup ordering detail
+	// to the SQL client instead of retrying the TPCC update transaction.
+	err = secondTxn.GetStore().Freeze(ctx)
+	if err != nil {
+		_ = secondTxn.Rollback(ctx)
+	}
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict), err)
+}
+
+// TestGetByFilterAfterMergeKeepsTheNewAppend verifies that merging the old
+// data object does not hide the replacement row appended by an update. The
+// visible object order is by object CreatedAt, while the replacement row's
+// logical commit timestamp belongs to an append node in an older appendable
+// object. GetByFilter must return the replacement row and reject a second
+// append with the same primary key.
+func TestGetByFilterAfterMergeKeepsTheNewAppendBeforeMergeCommit(t *testing.T) {
+	ctx := context.Background()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+
+	schema := catalog.MockSchemaAll2(3, []int{0, 1})
+	schema.Extra.BlockMaxRows = 10
+	schema.Extra.ObjectMaxBlocks = 10
+	tae.BindSchema(schema)
+	bat := catalog.MockBatch(schema, 1)
+	defer bat.Close()
+	tae.CreateRelAndAppend(bat, true)
+	tae.CompactBlocks(true)
+
+	pk := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(0)
+
+	// Build the merge output before the update commits. The merge output still
+	// contains the old row; its PrepareCommit transfer phase will later see the
+	// update's source tombstone and map it to that output row.
+	mergeTxn, mergeRel := tae.GetRelation()
+	source := testutil.GetOneBlockMeta(mergeRel)
+	mergeTask, err := jobs.NewMergeObjectsTask(
+		nil, mergeTxn, []*catalog.ObjectEntry{source}, tae.Runtime, 0, false,
+	)
+	require.NoError(t, err)
+	require.NoError(t, mergeTask.OnExec(ctx))
+
+	// The replacement append is made before merge commit, but its commit is
+	// deliberately performed from mergeTxn's Freeze callback. This gives the
+	// replacement append a later commit timestamp while keeping its appendable
+	// object older than the merge output in object-list order.
+	updateTxn, updateRel := tae.GetRelation()
+	updateTxn.SetDedupType(txnif.DedupPolicy_CheckIncremental)
+	require.NoError(t, updateRel.UpdateByFilter(
+		ctx, handle.NewEQFilter(pk), 2, int32(42), false,
+	))
+	mergeTxn.SetFreezeFn(func(at txnif.AsyncTxn) error {
+		if err := at.GetStore().Freeze(ctx); err != nil {
+			return err
+		}
+		return updateTxn.Commit(ctx)
+	})
+	require.NoError(t, mergeTxn.Commit(ctx))
+
+	readTxn, readRel := tae.GetRelation()
+	_, _, err = readRel.GetByFilter(ctx, handle.NewEQFilter(pk))
+	// The replacement append must remain visible after the merge transfer.
+	require.NoError(t, err)
+	require.NoError(t, readTxn.Commit(ctx))
+
+	// The replacement row still owns the primary key, so a second insert must
+	// be rejected even though the merge output is also present.
+	insertTxn, insertRel := tae.GetRelation()
+	err = insertRel.Append(ctx, bat)
+	if err == nil {
+		err = insertTxn.Commit(ctx)
+	} else {
+		_ = insertTxn.Rollback(ctx)
+	}
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry), err)
+}
+
+func TestFreezeMissedMergeTransferReturnsWW(t *testing.T) {
+	ctx := context.Background()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+
+	schema := catalog.MockSchemaAll2(3, []int{0, 1})
+	schema.Extra.BlockMaxRows = 10
+	schema.Extra.ObjectMaxBlocks = 10
+	tae.BindSchema(schema)
+	bat := catalog.MockBatch(schema, 1)
+	defer bat.Close()
+	tae.CreateRelAndAppend(bat, true)
+	tae.CompactBlocks(true)
+
+	pk := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(0)
+	stageUpdate := func(value int32) txnif.AsyncTxn {
+		txn, rel := tae.GetRelation()
+		txn.SetDedupType(txnif.DedupPolicy_CheckIncremental)
+		require.NoError(t, rel.UpdateByFilter(
+			ctx, handle.NewEQFilter(pk), 2, value, false,
+		))
+		return txn
+	}
+	victimTxn := stageUpdate(10)
+	winnerTxn := stageUpdate(20)
+	require.NoError(t, winnerTxn.Commit(ctx))
+
+	// Persist the winner's replacement row, then merge it together with the
+	// original source while victimTxn still carries the original physical RowID.
+	tae.CompactBlocks(true)
+	mergeTxn, mergeRel := tae.GetRelation()
+	objects := make([]*catalog.ObjectEntry, 0, 2)
+	it := mergeRel.MakeObjectIt(false)
+	for it.Next() {
+		obj := it.GetObject().GetMeta().(*catalog.ObjectEntry)
+		if !obj.IsAppendable() {
+			objects = append(objects, obj)
+		}
+	}
+	it.Close()
+	require.GreaterOrEqual(t, len(objects), 2)
+	mergeTask, err := jobs.NewMergeObjectsTask(
+		nil, mergeTxn, objects, tae.Runtime, 0, false,
+	)
+	require.NoError(t, err)
+	require.NoError(t, mergeTask.OnExec(ctx))
+	require.NoError(t, mergeTxn.Commit(ctx))
+
+	mergeTS := mergeTxn.GetCommitTS()
+	originalNow := tae.Runtime.Now
+	tae.Runtime.Now = func() types.TS { return mergeTS }
+	defer func() { tae.Runtime.Now = originalNow }()
+	txnimpl.EnableDebugSkipFreezePhaseTransfer()
+	defer txnimpl.DisableDebugSkipFreezePhaseTransfer()
+
+	err = victimTxn.GetStore().Freeze(ctx)
+	if err != nil {
+		_ = victimTxn.Rollback(ctx)
+	}
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict), err)
+}
+
+func TestCommitTransfersDeleteAcrossMergeAfterFreeze(t *testing.T) {
+	ctx := context.Background()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+
+	schema := catalog.MockSchemaAll2(3, []int{0, 1})
+	schema.Extra.BlockMaxRows = 10
+	schema.Extra.ObjectMaxBlocks = 10
+	tae.BindSchema(schema)
+	bat := catalog.MockBatch(schema, 1)
+	defer bat.Close()
+	tae.CreateRelAndAppend(bat, true)
+	tae.CompactBlocks(true)
+
+	updateTxn, updateRel := tae.GetRelation()
+	updateTxn.SetDedupType(txnif.DedupPolicy_CheckIncremental)
+	pk := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(0)
+	require.NoError(t, updateRel.UpdateByFilter(
+		ctx, handle.NewEQFilter(pk), 2, int32(42), false,
+	))
+
+	// Commit calls Freeze exactly once. Inject a merge after that Freeze has
+	// completed but before Commit enqueues updateTxn. PrePrepare's second
+	// transfer pass must repair the source RowID dropped in this interval.
+	updateTxn.SetFreezeFn(func(at txnif.AsyncTxn) error {
+		if err := at.GetStore().Freeze(ctx); err != nil {
+			return err
+		}
+		mergeTxn, mergeRel := tae.GetRelation()
+		source := testutil.GetOneBlockMeta(mergeRel)
+		mergeTask, err := jobs.NewMergeObjectsTask(
+			nil, mergeTxn, []*catalog.ObjectEntry{source}, tae.Runtime, 0, false,
+		)
+		if err != nil {
+			_ = mergeTxn.Rollback(ctx)
+			return err
+		}
+		if err = mergeTask.OnExec(ctx); err != nil {
+			_ = mergeTxn.Rollback(ctx)
+			return err
+		}
+		return mergeTxn.Commit(ctx)
+	})
+
+	require.NoError(t, updateTxn.Commit(ctx))
+	tae.CheckRowsByScan(1, true)
+}
+
+func TestMergePrepareCommitAppliesDeleteCreatedAfterFreeze(t *testing.T) {
+	ctx := context.Background()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+
+	schema := catalog.MockSchemaAll2(3, []int{0, 1})
+	schema.Extra.BlockMaxRows = 10
+	schema.Extra.ObjectMaxBlocks = 10
+	tae.BindSchema(schema)
+	bat := catalog.MockBatch(schema, 1)
+	defer bat.Close()
+	tae.CreateRelAndAppend(bat, true)
+	tae.CompactBlocks(true)
+
+	mergeTxn, mergeRel := tae.GetRelation()
+	source := testutil.GetOneBlockMeta(mergeRel)
+	mergeTask, err := jobs.NewMergeObjectsTask(
+		nil, mergeTxn, []*catalog.ObjectEntry{source}, tae.Runtime, 0, false,
+	)
+	require.NoError(t, err)
+	require.NoError(t, mergeTask.OnExec(ctx))
+
+	pk := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(0)
+	mergeTxn.SetFreezeFn(func(at txnif.AsyncTxn) error {
+		if err := at.GetStore().Freeze(ctx); err != nil {
+			return err
+		}
+		// This delete commits after the merge task built its output and after
+		// the merge transaction froze. mergeObjectsEntry.PrepareCommit must
+		// collect it and append the mapped target tombstone in the queue.
+		deleteTxn, deleteRel := tae.GetRelation()
+		if err := deleteRel.DeleteByFilter(ctx, handle.NewEQFilter(pk)); err != nil {
+			_ = deleteTxn.Rollback(ctx)
+			return err
+		}
+		return deleteTxn.Commit(ctx)
+	})
+
+	require.NoError(t, mergeTxn.Commit(ctx))
+	tae.CheckRowsByScan(0, true)
+}
+
+func TestPersistedDeleteTransfersWhenSourceDropsAfterTxnStart(t *testing.T) {
+	ctx := context.Background()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+
+	schema := catalog.MockSchemaAll2(3, []int{0, 1})
+	schema.Extra.BlockMaxRows = 10
+	schema.Extra.ObjectMaxBlocks = 10
+	tae.BindSchema(schema)
+	bat := catalog.MockBatch(schema, 1)
+	defer bat.Close()
+	tae.CreateRelAndAppend(bat, true)
+	tae.CompactBlocks(true)
+
+	deleteTxn, deleteRel := tae.GetRelation()
+	deleteTxn.SetDedupType(txnif.DedupPolicy_CheckIncremental)
+	pk := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(0)
+	id, offset, err := deleteRel.GetByFilter(ctx, handle.NewEQFilter(pk))
+	require.NoError(t, err)
+	oldRowID := types.NewRowIDWithObjectIDBlkNumAndRowID(
+		*id.ObjectID(), id.BlockID.Sequence(), offset,
+	)
+	pkVec := containers.MakeVector(schema.GetPrimaryKey().Type, common.DebugAllocator)
+	defer pkVec.Close()
+	pkVec.Append(pk, false)
+	rowIDVec := containers.MakeVector(types.T_Rowid.ToType(), common.DebugAllocator)
+	defer rowIDVec.Close()
+	rowIDVec.Append(oldRowID, false)
+	stats, err := testutil.MockCNDeleteInS3(
+		tae.Runtime.Fs, rowIDVec, pkVec, schema, deleteTxn,
+	)
+	require.NoError(t, err)
+	ok, err := deleteRel.AddPersistedTombstoneFile(id, stats)
+	require.NoError(t, err)
+	require.True(t, ok)
+
+	mergeTxn, mergeRel := tae.GetRelation()
+	source := testutil.GetOneBlockMeta(mergeRel)
+	mergeTask, err := jobs.NewMergeObjectsTask(
+		nil, mergeTxn, []*catalog.ObjectEntry{source}, tae.Runtime, 0, false,
+	)
+	require.NoError(t, err)
+	require.NoError(t, mergeTask.OnExec(ctx))
+	require.NoError(t, mergeTxn.Commit(ctx))
+
+	require.NoError(t, deleteTxn.Commit(ctx))
+	tae.CheckRowsByScan(0, true)
+}
+
+// TestTPCCStockMultiRowUpdateAcrossMerge models the stock-table part of one
+// NEW_ORDER transaction. A NEW_ORDER updates 5-15 stock rows, and the reported
+// duplicate key decodes as the two-column stock key (warehouse, item). All old
+// RowIDs are resolved before merge, so TN transfer must move every tombstone
+// before dedup checks the replacement appends.
+func TestTPCCStockMultiRowUpdateAcrossMerge(t *testing.T) {
+	ctx := context.Background()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+
+	schema := catalog.MockSchemaAll2(4, []int{0, 1})
+	schema.Name = "bmsql_stock"
+	schema.Extra.BlockMaxRows = 4
+	schema.Extra.ObjectMaxBlocks = 2
+	tae.BindSchema(schema)
+	bat := catalog.MockBatch(schema, 40)
+	defer bat.Close()
+	tae.CreateRelAndAppend(bat, true)
+	tae.CompactBlocks(true)
+
+	stockTxn, stockRel := tae.GetRelation()
+	stockTxn.SetDedupType(txnif.DedupPolicy_CheckIncremental)
+	pkVec := bat.Vecs[schema.GetSingleSortKeyIdx()]
+	for i := 0; i < 15; i++ {
+		require.NoError(t, stockRel.UpdateByFilter(
+			ctx, handle.NewEQFilter(pkVec.Get(i)), 2, int32(1000+i), false,
+		))
+	}
+
+	mergeTxn, mergeRel := tae.GetRelation()
+	objects := make([]*catalog.ObjectEntry, 0, 8)
+	it := mergeRel.MakeObjectIt(false)
+	for it.Next() {
+		obj := it.GetObject().GetMeta().(*catalog.ObjectEntry)
+		if !obj.IsAppendable() {
+			objects = append(objects, obj)
+		}
+	}
+	it.Close()
+	require.NotEmpty(t, objects)
+	mergeTask, err := jobs.NewMergeObjectsTask(
+		nil, mergeTxn, objects, tae.Runtime, 0, false,
+	)
+	require.NoError(t, err)
+	require.NoError(t, mergeTask.OnExec(ctx))
+	require.NoError(t, mergeTxn.Commit(ctx))
+	dropTS := objects[0].GetLatestNode().GetDeleteAt()
+	require.False(t, dropTS.IsEmpty())
+	originalNow := tae.Runtime.Now
+	tae.Runtime.Now = func() types.TS { return dropTS }
+	defer func() { tae.Runtime.Now = originalNow }()
+
+	require.NoError(t, stockTxn.Commit(ctx))
+	tae.CheckRowsByScan(40, true)
+}
+
+// TestTPCCStockOverlappingUpdatesAcrossMerge models two NEW_ORDER transactions
+// for the same warehouse whose item lists overlap by one stock row. Both
+// transactions finish Freeze concurrently, as they can in optimistic mode.
+// The serialized pre-prepare queue must turn the loser into a retryable WW
+// conflict; a data-PK duplicate is not an acceptable replacement.
+func TestTPCCStockOverlappingUpdatesAcrossMerge(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+
+	schema := catalog.MockSchemaAll2(4, []int{0, 1})
+	schema.Name = "bmsql_stock"
+	schema.Extra.BlockMaxRows = 4
+	schema.Extra.ObjectMaxBlocks = 2
+	tae.BindSchema(schema)
+	bat := catalog.MockBatch(schema, 40)
+	defer bat.Close()
+	tae.CreateRelAndAppend(bat, true)
+	tae.CompactBlocks(true)
+	pkVec := bat.Vecs[schema.GetSingleSortKeyIdx()]
+
+	stage := func(first, last int, valueBase int32) txnif.AsyncTxn {
+		txn, rel := tae.GetRelation()
+		txn.SetDedupType(txnif.DedupPolicy_CheckIncremental)
+		for i := first; i < last; i++ {
+			require.NoError(t, rel.UpdateByFilter(
+				ctx, handle.NewEQFilter(pkVec.Get(i)), 2, valueBase+int32(i), false,
+			))
+		}
+		return txn
+	}
+	// [0, 10) and [9, 19) have exactly one conflicting stock key.
+	firstTxn := stage(0, 10, 1000)
+	secondTxn := stage(9, 19, 2000)
+
+	mergeTxn, mergeRel := tae.GetRelation()
+	objects := make([]*catalog.ObjectEntry, 0, 8)
+	it := mergeRel.MakeObjectIt(false)
+	for it.Next() {
+		obj := it.GetObject().GetMeta().(*catalog.ObjectEntry)
+		if !obj.IsAppendable() {
+			objects = append(objects, obj)
+		}
+	}
+	it.Close()
+	require.NotEmpty(t, objects)
+	mergeTask, err := jobs.NewMergeObjectsTask(
+		nil, mergeTxn, objects, tae.Runtime, 0, false,
+	)
+	require.NoError(t, err)
+	require.NoError(t, mergeTask.OnExec(ctx))
+	require.NoError(t, mergeTxn.Commit(ctx))
+
+	freezeReady := make(chan struct{}, 2)
+	releaseFreeze := make(chan struct{})
+	for _, txn := range []txnif.AsyncTxn{firstTxn, secondTxn} {
+		txn.SetFreezeFn(func(at txnif.AsyncTxn) error {
+			err := at.GetStore().Freeze(ctx)
+			freezeReady <- struct{}{}
+			select {
+			case <-releaseFreeze:
+			case <-ctx.Done():
+				if err == nil {
+					err = context.Cause(ctx)
+				}
+			}
+			return err
+		})
+	}
+
+	errs := make(chan error, 2)
+	go func() { errs <- firstTxn.Commit(ctx) }()
+	go func() { errs <- secondTxn.Commit(ctx) }()
+	for range 2 {
+		select {
+		case <-freezeReady:
+		case <-ctx.Done():
+			t.Fatal(context.Cause(ctx))
+		}
+	}
+	close(releaseFreeze)
+
+	successes, wwConflicts := 0, 0
+	for range 2 {
+		err = <-errs
+		switch {
+		case err == nil:
+			successes++
+		case moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict):
+			wwConflicts++
+		case moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry):
+			t.Fatalf("overlapping stock update returned duplicate instead of WW: %v", err)
+		default:
+			t.Fatalf("unexpected stock update commit error: %v", err)
+		}
+	}
+	require.Equal(t, 1, successes)
+	require.Equal(t, 1, wwConflicts)
+	tae.CheckRowsByScan(40, true)
+}
+
+// TestTPCCStockUpdateAfterConcurrentWinnerReturnsWW models the ordinary OCC
+// race behind two NEW_ORDER transactions updating overlapping stock items.
+// Both transactions resolve the old RowIDs at their snapshots; the winner
+// commits before the victim reaches Freeze. Freeze data dedup sees the winner's
+// replacement PK first, but this is a write-write race, not a user insert of an
+// existing stock key, so it must remain retryable instead of becoming 1062.
+func TestTPCCStockUpdateAfterConcurrentWinnerReturnsWW(t *testing.T) {
+	ctx := context.Background()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+
+	schema := catalog.MockSchemaAll2(4, []int{0, 1})
+	schema.Name = "bmsql_stock"
+	schema.Extra.BlockMaxRows = 20
+	schema.Extra.ObjectMaxBlocks = 2
+	tae.BindSchema(schema)
+	bat := catalog.MockBatch(schema, 40)
+	defer bat.Close()
+	tae.CreateRelAndAppend(bat, true)
+	tae.CompactBlocks(true)
+	pkVec := bat.Vecs[schema.GetSingleSortKeyIdx()]
+
+	stageUpdate := func(valueBase int32) txnif.AsyncTxn {
+		txn, rel := tae.GetRelation()
+		txn.SetDedupType(txnif.DedupPolicy_CheckIncremental)
+		for i := 0; i < 10; i++ {
+			require.NoError(t, rel.UpdateByFilter(
+				ctx, handle.NewEQFilter(pkVec.Get(i)), 2, valueBase+int32(i), false,
+			))
+		}
+		return txn
+	}
+
+	victim := stageUpdate(1000)
+	winner := stageUpdate(2000)
+	require.NoError(t, winner.Commit(ctx))
+
+	stage := "freeze"
+	victim.SetFreezeFn(func(at txnif.AsyncTxn) error {
+		err := at.GetStore().Freeze(ctx)
+		if err == nil {
+			stage = "queue"
+		}
+		return err
+	})
+	err := victim.Commit(ctx)
+	if err == nil {
+		t.Fatal("both overlapping stock updates committed")
+	}
+	if moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry) {
+		t.Fatalf("stock update returned duplicate in %s instead of WW: %v", stage, err)
+	}
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict), err)
+	tae.CheckRowsByScan(40, true)
+}
+
+// TestTPCCStockUpdateAcrossFlush models a hot stock row produced by one update
+// and read by the next NEW_ORDER while it is still in an appendable object.
+// Background flush rewrites that source after the second transaction has
+// captured its RowID but before Freeze/PrePrepare transfer it.
+func TestTPCCStockUpdateAcrossFlush(t *testing.T) {
+	ctx := context.Background()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+
+	schema := catalog.MockSchemaAll2(4, []int{0, 1})
+	schema.Name = "bmsql_stock"
+	schema.Extra.BlockMaxRows = 20
+	schema.Extra.ObjectMaxBlocks = 2
+	tae.BindSchema(schema)
+	bat := catalog.MockBatch(schema, 40)
+	defer bat.Close()
+	tae.CreateRelAndAppend(bat, true)
+	tae.CompactBlocks(true)
+	pkVec := bat.Vecs[schema.GetSingleSortKeyIdx()]
+
+	update := func(valueBase int32) txnif.AsyncTxn {
+		txn, rel := tae.GetRelation()
+		txn.SetDedupType(txnif.DedupPolicy_CheckIncremental)
+		for i := 0; i < 15; i++ {
+			require.NoError(t, rel.UpdateByFilter(
+				ctx, handle.NewEQFilter(pkVec.Get(i)), 2, valueBase+int32(i), false,
+			))
+		}
+		return txn
+	}
+
+	// The first update creates the appendable source used by the victim.
+	require.NoError(t, update(1000).Commit(ctx))
+	victimTxn := update(2000)
+
+	// Flush after victimTxn captured the appendable RowIDs. This is the common
+	// TPCC shape where recently updated stock rows are rewritten again quickly.
+	require.NoError(t, tae.DB.ForceFlush(ctx, tae.TxnMgr.Now()))
+	require.NoError(t, victimTxn.Commit(ctx))
+	tae.CheckRowsByScan(40, true)
+}
+
+func TestFreezePersistedStaleRowIDAfterConcurrentUpdateReturnsWW(t *testing.T) {
+	ctx := context.Background()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+
+	schema := catalog.MockSchemaAll2(3, []int{0, 1})
+	schema.Extra.BlockMaxRows = 10
+	schema.Extra.ObjectMaxBlocks = 10
+	tae.BindSchema(schema)
+	bat := catalog.MockBatch(schema, 1)
+	defer bat.Close()
+	tae.CreateRelAndAppend(bat, true)
+	tae.CompactBlocks(true)
+
+	// Start the victim first and retain the physical RowID visible at StartTS.
+	victimTxn, victimRel := tae.GetRelation()
+	victimTxn.SetDedupType(txnif.DedupPolicy_CheckIncremental)
+	pk := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(0)
+	id, offset, err := victimRel.GetByFilter(ctx, handle.NewEQFilter(pk))
+	require.NoError(t, err)
+	oldRowID := types.NewRowIDWithObjectIDBlkNumAndRowID(
+		*id.ObjectID(), id.BlockID.Sequence(), offset,
+	)
+
+	// A concurrent transaction replaces the PK after victimTxn.StartTS. The
+	// victim must report WW even if CN later supplies the stale RowID through a
+	// persisted tombstone; reporting the replacement row as a PK duplicate is
+	// the TPCC failure mode this test is intended to expose.
+	winnerTxn, winnerRel := tae.GetRelation()
+	winnerTxn.SetDedupType(txnif.DedupPolicy_CheckIncremental)
+	require.NoError(t, winnerRel.UpdateByFilter(
+		ctx, handle.NewEQFilter(pk), 2, int32(42), false,
+	))
+	require.NoError(t, winnerTxn.Commit(ctx))
+	tae.CompactBlocks(true)
+
+	pkVec := containers.MakeVector(schema.GetPrimaryKey().Type, common.DebugAllocator)
+	defer pkVec.Close()
+	pkVec.Append(pk, false)
+	rowIDVec := containers.MakeVector(types.T_Rowid.ToType(), common.DebugAllocator)
+	defer rowIDVec.Close()
+	rowIDVec.Append(oldRowID, false)
+	stats, err := testutil.MockCNDeleteInS3(
+		tae.Runtime.Fs, rowIDVec, pkVec, schema, victimTxn,
+	)
+	require.NoError(t, err)
+	require.NoError(t, victimRel.Append(ctx, bat))
+	ok, err := victimRel.AddPersistedTombstoneFile(id, stats)
+	require.NoError(t, err)
+	require.True(t, ok)
+
+	err = victimTxn.GetStore().Freeze(ctx)
+	if err != nil {
+		_ = victimTxn.Rollback(ctx)
+	}
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict), err)
+}
+
+func TestConcurrentUpdateByPreviousRowIDWithFlushMerge(t *testing.T) {
+	testConcurrentUpdateByPreviousRowIDWithFlushMerge(t, 32, 32, 40)
+}
+
+func testConcurrentUpdateByPreviousRowIDWithFlushMerge(
+	t *testing.T, keyCount, workerCount, updatesPerWorker int,
+) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+
+	const maxAttemptsPerTxn = 1000
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(2, 0)
+	schema.Extra.BlockMaxRows = 4
+	schema.Extra.ObjectMaxBlocks = 2
+	tae.BindSchema(schema)
+
+	initial := catalog.MockBatch(schema, keyCount)
+	defer initial.Close()
+	keyBatches := make([]*containers.Batch, keyCount)
+	for i := range keyBatches {
+		keyBatches[i] = initial.CloneWindow(i, 1)
+		defer keyBatches[i].Close()
+	}
+	objectRows := int(schema.Extra.BlockMaxRows * schema.Extra.ObjectMaxBlocks)
+	for offset := 0; offset < keyCount; offset += objectRows {
+		windowRows := min(objectRows, keyCount-offset)
+		window := initial.CloneWindow(offset, windowRows)
+		if offset == 0 {
+			tae.CreateRelAndAppend(window, true)
+		} else {
+			txn, rel := tae.GetRelation()
+			require.NoError(t, rel.Append(ctx, window))
+			require.NoError(t, txn.Commit(ctx))
+		}
+		window.Close()
+		tae.CompactBlocks(true)
+	}
+
+	openRelation := func() (txnif.AsyncTxn, handle.Relation, error) {
+		txn, err := tae.StartTxn(nil)
+		if err != nil {
+			return nil, nil, err
+		}
+		txn.SetDedupType(txnif.DedupPolicy_CheckIncremental)
+		txn.BindAccessInfo(0, 0, 0)
+		database, err := txn.GetDatabase(testutil.DefaultTestDB)
+		if err != nil {
+			_ = txn.Rollback(context.Background())
+			return nil, nil, err
+		}
+		rel, err := database.GetRelationByName(schema.Name)
+		if err != nil {
+			_ = txn.Rollback(context.Background())
+			return nil, nil, err
+		}
+		return txn, rel, nil
+	}
+
+	var flushCount atomic.Uint64
+	var mergeCount atomic.Uint64
+	var commitTombstoneDuplicateCount atomic.Uint64
+	errC := make(chan error, workerCount+1)
+	stopMaintenance := make(chan struct{})
+	var maintenanceWG sync.WaitGroup
+	maintenanceWG.Add(1)
+	go func() {
+		defer maintenanceWG.Done()
+		ticker := time.NewTicker(time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-stopMaintenance:
+				return
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+			}
+
+			if err := tae.DB.ForceFlush(ctx, tae.TxnMgr.Now()); err == nil {
+				flushCount.Add(1)
+			} else if moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry) {
+				errC <- fmt.Errorf("background flush returned duplicate: %w", err)
+				return
+			}
+
+			txn, rel, err := openRelation()
+			if err != nil {
+				continue
+			}
+			objects := make([]*catalog.ObjectEntry, 0, 8)
+			it := rel.MakeObjectIt(false)
+			for it.Next() {
+				obj := it.GetObject().GetMeta().(*catalog.ObjectEntry)
+				if !obj.IsAppendable() {
+					objects = append(objects, obj)
+				}
+			}
+			it.Close()
+			if len(objects) < 2 {
+				_ = txn.Rollback(context.Background())
+				continue
+			}
+			objects = objects[:2]
+			task, err := jobs.NewMergeObjectsTask(nil, txn, objects, tae.Runtime, 0, false)
+			if err == nil {
+				err = task.OnExec(ctx)
+			}
+			if err == nil {
+				err = txn.Commit(ctx)
+			} else {
+				_ = txn.Rollback(context.Background())
+			}
+			if err == nil {
+				mergeCount.Add(1)
+			} else if moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry) {
+				errC <- fmt.Errorf("background merge returned duplicate: %w", err)
+				return
+			}
+		}
+	}()
+
+	var workersWG sync.WaitGroup
+	workersWG.Add(workerCount)
+	for worker := 0; worker < workerCount; worker++ {
+		go func() {
+			defer workersWG.Done()
+			key := worker % keyCount
+			pk := keyBatches[key].Vecs[schema.GetSingleSortKeyIdx()].Get(0)
+			for update := 0; update < updatesPerWorker; update++ {
+				committed := false
+				for attempt := 0; attempt < maxAttemptsPerTxn; attempt++ {
+					txn, rel, err := openRelation()
+					if err != nil {
+						errC <- fmt.Errorf("worker %d update %d open relation: %w", worker, update, err)
+						return
+					}
+					// Resolve the currently visible physical row before deleting and
+					// re-appending the same PK. A concurrent merge may transfer this
+					// tombstone away from the RowID returned here.
+					id, row, err := rel.GetByFilter(ctx, handle.NewEQFilter(pk))
+					if err == nil {
+						err = rel.RangeDelete(id, row, row, handle.DT_Normal)
+					}
+					if err == nil {
+						err = rel.Append(ctx, keyBatches[key])
+					}
+					stage := "operation"
+					if err == nil {
+						stage = "commit"
+						txn.SetFreezeFn(func(at txnif.AsyncTxn) error {
+							stage = "freeze"
+							err := at.GetStore().Freeze(ctx)
+							if err == nil {
+								stage = "queue"
+							}
+							return err
+						})
+						err = txn.Commit(ctx)
+					} else {
+						_ = txn.Rollback(context.Background())
+					}
+					if err == nil {
+						committed = true
+						break
+					}
+					if moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry) {
+						if stage == "commit" && strings.Contains(err.Error(), "__mo_%1_delete_rowid") {
+							// Keep stressing until we find the TPCC data-PK duplicate.
+							// Concurrent stale deletes can independently expose a
+							// tombstone-RowID duplicate during queued commit.
+							commitTombstoneDuplicateCount.Add(1)
+							time.Sleep(time.Millisecond)
+							continue
+						}
+						errC <- fmt.Errorf(
+							"worker %d key %d update %d attempt %d stage %s returned duplicate: %w",
+							worker, key, update, attempt, stage, err,
+						)
+						return
+					}
+					if ctx.Err() != nil {
+						errC <- fmt.Errorf("worker %d update %d: %w", worker, update, ctx.Err())
+						return
+					}
+					if !moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict) {
+						errC <- fmt.Errorf(
+							"worker %d update %d attempt %d stage %s returned unexpected error: %w",
+							worker, update, attempt, stage, err,
+						)
+						return
+					}
+					time.Sleep(time.Millisecond)
+				}
+				if !committed {
+					errC <- fmt.Errorf(
+						"worker %d update %d did not commit after %d attempts",
+						worker, update, maxAttemptsPerTxn,
+					)
+					return
+				}
+			}
+		}()
+	}
+	workersWG.Wait()
+	close(stopMaintenance)
+	maintenanceWG.Wait()
+	close(errC)
+	for err := range errC {
+		require.NoError(t, err)
+	}
+	require.Positive(t, flushCount.Load())
+	require.Positive(t, mergeCount.Load())
+	t.Logf("commit tombstone duplicates retried: %d", commitTombstoneDuplicateCount.Load())
+	tae.CheckRowsByScan(keyCount, true)
+}
+
 // TestTransferDeleteVectorRealloc verifies that TransferDeletes Part 2
 // refreshes the rowids unsafe.Slice after each TransferDeleteRows call.
 //
@@ -11489,8 +12208,6 @@ func TestTransferDeletes(t *testing.T) {
 // and leave the soft-deleted object in readSet — causing a spurious r-w
 // conflict at checkAll.
 func TestTransferDeleteVectorRealloc(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -11566,8 +12283,6 @@ func TestTransferDeleteVectorRealloc(t *testing.T) {
 }
 
 func TestGCKP(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -11595,8 +12310,6 @@ func TestGCKP(t *testing.T) {
 func TestCKPCollectObject(t *testing.T) {
 	ioutil.RunPipelineTest(
 		func() {
-			defer testutils.AfterTest(t)()
-			testutils.EnsureNoLeak(t)
 			ctx := context.Background()
 
 			opts := config.WithLongScanAndCKPOpts(nil)
@@ -11637,8 +12350,6 @@ func TestCKPCollectObject(t *testing.T) {
 }
 
 func TestGCCatalog4(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -11805,7 +12516,6 @@ func TestClearPersistTransferTable(t *testing.T) {
 }
 
 func TestTryDeleteByDeltaloc1(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -11837,7 +12547,6 @@ func TestTryDeleteByDeltaloc1(t *testing.T) {
 }
 
 func TestTryDeleteByDeltaloc2(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -12536,7 +13245,6 @@ func TestDedup4(t *testing.T) {
 }
 
 func TestDeleteWithObjectStats(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -12620,7 +13328,6 @@ func TestFillBlockTombstonesPersistedAobj(t *testing.T) {
 }
 
 func TestTransferS3Deletes(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -12710,9 +13417,17 @@ func TestRollbackMergeInQueue(t *testing.T) {
 	tae.DB.Runtime.BigDeleteHinter.DeleteBigDel(rel.ID())
 	err = task.OnExec(context.Background())
 	require.NoError(t, err)
+	created := objectio.ObjectStats(task.GetCommitEntry().CreatedObjs[0])
+	outputName := created.ObjectName().String()
+	_, err = tae.Runtime.Fs.StatFile(ctx, outputName)
+	require.NoError(t, err)
 
 	tae.DB.Runtime.BigDeleteHinter.RecordBigDel([]uint64{rel.ID()}, startTS.Next())
 	require.Error(t, txn.Commit(ctx)) // rollback
+	require.Eventually(t, func() bool {
+		_, err := tae.Runtime.Fs.StatFile(ctx, outputName)
+		return moerr.IsMoErrCode(err, moerr.ErrFileNotFound)
+	}, 30*time.Second, 20*time.Millisecond, "merge output %s survived rollback", outputName)
 
 	_, rel = tae.GetRelation()
 	objH, err := rel.GetObject(obj.ID(), false)
@@ -12885,6 +13600,11 @@ func TestRollbackMergeBeforeRegistrationCleansTransferState(t *testing.T) {
 	require.ErrorContains(t, task.OnExec(ctx), injectedErr)
 
 	created := objectio.ObjectStats(task.GetCommitEntry().CreatedObjs[0])
+	outputName := created.ObjectName().String()
+	require.Eventually(t, func() bool {
+		_, statErr := tae.Runtime.Fs.StatFile(ctx, outputName)
+		return moerr.IsMoErrCode(statErr, moerr.ErrFileNotFound)
+	}, 30*time.Second, 20*time.Millisecond, "merge output %s survived failed task", outputName)
 	createdBlk := objectio.NewBlockidWithObjectID(created.ObjectName().ObjectId(), 0)
 	require.Nil(t, tae.Runtime.TransferDelsMap.GetDelsForBlk(createdBlk))
 
@@ -14520,7 +15240,6 @@ func TestTNCatalogEventSource(t *testing.T) {
 }
 
 func TestCheckpointTableIDBatch1(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -14731,7 +15450,6 @@ func TestCheckpointTableIDBatch1(t *testing.T) {
 }
 
 func TestCheckpointTableIDBatch2(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -14798,7 +15516,6 @@ func TestCheckpointTableIDBatch2(t *testing.T) {
 }
 
 func TestRepeatedForceGCKPUsesFreshICKPBoundary(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	t.Cleanup(cancel)
 
@@ -14868,7 +15585,6 @@ func TestRepeatedForceGCKPUsesFreshICKPBoundary(t *testing.T) {
 }
 
 func TestGlobalCheckpointTableIDHistoryFallbackAndFailClosed(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -15020,8 +15736,6 @@ func TestGlobalCheckpointTableIDHistoryFallbackAndFailClosed(t *testing.T) {
 // remains visible after its source object is merged, and that a second append
 // with the same primary key is rejected by TN deduplication.
 func TestGetByFilterAfterMergeKeepsTheNewAppend(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)

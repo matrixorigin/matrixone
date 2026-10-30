@@ -190,12 +190,12 @@ func overlayPreparedGroupConcatResultMetadata(
 	if query == nil || groupConcatMaxLen == 0 || len(query.Steps) == 0 {
 		return
 	}
-	step := len(query.Steps) - 1
+	step := query.MainOutputStep()
 	if query.HasReturning {
-		if query.ReturningStep < 0 || int(query.ReturningStep) >= len(query.Steps) {
-			return
-		}
-		step = int(query.ReturningStep)
+		step = query.ReturningStep
+	}
+	if step < 0 || int(step) >= len(query.Steps) {
+		return
 	}
 	rootID := query.Steps[step]
 	if rootID < 0 || int(rootID) >= len(query.Nodes) {
@@ -383,6 +383,47 @@ func publishSelectResultMetadata(ses *Session, execCtx *ExecCtx) error {
 	return execCtx.resper.RespPreMeta(execCtx, columns)
 }
 
+// updateWithChangedRowsSemanticsCoversSpool decides whether a divergence
+// between the DML RETURNING spool row count and runResult.AffectRows is legal.
+//
+// The spool holds the final image of every row the DML matched, so its row
+// count equals the matched-row count. runResult.AffectRows is the
+// client-protocol affected-row count: with CLIENT_FOUND_ROWS enabled it is
+// also the matched-row count, but on a default-capability session an UPDATE
+// reports only physically changed rows (MySQL changed-row semantics). There,
+// and only there, a no-op or partially no-op UPDATE legitimately spools more
+// row images than the affected-row count reports; the invariant that still
+// holds -- and is enforced -- is that every changed row is covered by a
+// spooled matched image, i.e. spooled >= affected. Every other statement kind
+// and capability keeps the original strict-equality guard: INSERT and DELETE
+// count each spooled row as affected, MERGE action rows are never
+// changed-row filtered, and ODKU RETURNING is rejected upstream before this
+// point. See issue #31422.
+func updateWithChangedRowsSemanticsCoversSpool(ses *Session, execCtx *ExecCtx, spooled, affected uint64) bool {
+	return spoolCoversAffectedRows(spooled, affected, updateStmtWithChangedRowSemantics(ses, execCtx))
+}
+
+// spoolCoversAffectedRows is the pure gate predicate: strict equality always
+// passes; a larger spool passes only for changed-row UPDATE semantics; every
+// other divergence fails.
+func spoolCoversAffectedRows(spooled, affected uint64, updateChangedRows bool) bool {
+	if spooled == affected {
+		return true
+	}
+	return updateChangedRows && spooled > affected
+}
+
+// updateStmtWithChangedRowSemantics reports whether this statement is an
+// UPDATE planned for a session whose protocol reports changed rows only
+// (CLIENT_FOUND_ROWS disabled).
+func updateStmtWithChangedRowSemantics(ses *Session, execCtx *ExecCtx) bool {
+	if !countUpdateChangedRows(ses) {
+		return false
+	}
+	query := execCtx.cw.Plan().GetQuery()
+	return query != nil && query.StmtType == plan.Query_UPDATE
+}
+
 // executeResultRowStmt run the statemet that responses result rows
 func executeResultRowStmt(ses *Session, execCtx *ExecCtx) (err error) {
 	var columns []interface{}
@@ -415,7 +456,8 @@ func executeResultRowStmt(ses *Session, execCtx *ExecCtx) (err error) {
 		ses.rs = &plan.ResultColDef{ResultCols: colDefs}
 		execCtx.returning.columns = columns
 		execCtx.returning.affectedRows = execCtx.runResult.AffectRows
-		if got := execCtx.returning.spool.RowCount(); got != execCtx.runResult.AffectRows {
+		if got := execCtx.returning.spool.RowCount(); got != execCtx.runResult.AffectRows &&
+			!updateWithChangedRowsSemanticsCoversSpool(ses, execCtx, got, execCtx.runResult.AffectRows) {
 			return moerr.NewInternalErrorf(execCtx.reqCtx,
 				"DML RETURNING row count %d does not match affected rows %d", got, execCtx.runResult.AffectRows)
 		}

@@ -189,6 +189,18 @@ func TestConnCountsPartialWriteFacts(t *testing.T) {
 	assert.Equal(t, int64(1), ses.GetFlushPacketCnt())
 }
 
+// Make elapsed-time assertions independent of clock resolution: an immediate
+// in-memory append may legitimately take zero ticks. Delay inside Write (not
+// before Flush), so only the measured physical operation includes the delay.
+type measuredOutputWriteConn struct {
+	net.Conn
+}
+
+func (c *measuredOutputWriteConn) Write(p []byte) (int, error) {
+	time.Sleep(time.Millisecond)
+	return c.Conn.Write(p)
+}
+
 func TestConnMeasuresOnlyPhysicalOutputWrite(t *testing.T) {
 	underlying := &partialWriteConn{limit: 5}
 	sv, err := getSystemVariables("test/system_vars_config.toml")
@@ -197,6 +209,7 @@ func TestConnMeasuresOnlyPhysicalOutputWrite(t *testing.T) {
 	conn, err := NewIOSession(underlying, config.NewParameterUnit(sv, nil, nil, nil), "")
 	assert.NoError(t, err)
 	defer conn.Close()
+	conn.conn = &measuredOutputWriteConn{Conn: conn.conn}
 
 	tracker := new(responseOutputWaitTracker)
 	conn.setResponseOutputWaitTracker(tracker)
@@ -216,6 +229,7 @@ func TestConnMeasuresOnlyPhysicalOutputWrite(t *testing.T) {
 func TestConnMeasuresDelayedBufferedFlush(t *testing.T) {
 	underlying, conn := newTestConn(t, NewLeakCheckAllocator())
 	defer conn.Close()
+	conn.conn = &measuredOutputWriteConn{Conn: conn.conn}
 
 	tracker := new(responseOutputWaitTracker)
 	conn.setResponseOutputWaitTracker(tracker)
@@ -1042,6 +1056,51 @@ func newTestConn(t *testing.T, leakAlloc *LeakCheckAllocator) (*testConn, *Conn)
 	return tConn, conn
 }
 
+func TestConn_DiscardLoadLocalPacketPanic(t *testing.T) {
+	for _, phase := range []string{"header", "allocation", "payload"} {
+		t.Run(phase, func(t *testing.T) {
+			alloc := NewLeakCheckAllocator()
+			wire := &testConn{mod: testConnModReadPanic}
+			conn := &Conn{
+				conn:              wire,
+				allocator:         &BufferAllocator{allocator: alloc},
+				allowedPacketSize: 10,
+			}
+			t.Cleanup(func() {
+				conn.FreeLoadLocal()
+				require.True(t, alloc.CheckBalance())
+			})
+			if phase != "header" {
+				// Resume a previously interrupted frame at its payload boundary.
+				conn.loadLocalFrame = loadLocalFrameProgress{
+					headerBytes: HeaderLengthOfTheProtocol, payloadLength: 1,
+					decoded: true, interrupted: true,
+				}
+				conn.loadLocalFrameBroken.Store(true)
+			}
+			message := "test conn read panic"
+			if phase == "allocation" {
+				alloc.mod = leakCheckAllocatorModeAllocPanic
+				message = "leak check allocator panic"
+			}
+			n, eof, err := conn.DiscardLoadLocalPacket(time.Second, time.Now().Add(time.Second), 10)
+			var panicErr *moerr.Error
+			require.ErrorAs(t, err, &panicErr)
+			require.True(t, moerr.IsMoErrCode(panicErr, moerr.ErrInternal))
+			require.ErrorContains(t, err, message)
+			require.Zero(t, n)
+			require.False(t, eof)
+			require.True(t, conn.LoadLocalFramingBroken())
+			require.False(t, conn.loadLocalFrame.interrupted)
+			// A panic must not authorize another drain or normal packet read.
+			_, _, err = conn.DiscardLoadLocalPacket(time.Second, time.Now().Add(time.Second), 10)
+			require.ErrorContains(t, err, "framing is broken")
+			_, err = conn.ReadLoadLocalPacket()
+			require.ErrorContains(t, err, "unfinished LOCAL frame")
+		})
+	}
+}
+
 func TestConn_ReadLoadLocalPacketErr(t *testing.T) {
 	leakAlloc := NewLeakCheckAllocator()
 	var err error
@@ -1064,9 +1123,12 @@ func TestConn_ReadLoadLocalPacketErr(t *testing.T) {
 	tConn, conn = newTestConn(t, leakAlloc)
 
 	resetFunc := func() {
+		// A fatal allocation/transport error retires that framing generation.
+		// Each independent failure scenario starts on a fresh connection.
+		_ = conn.Close()
+		assert.True(t, leakAlloc.CheckBalance())
 		leakAlloc.mod = 0
-		tConn.mod = 0
-		tConn.data = nil
+		tConn, conn = newTestConn(t, leakAlloc)
 	}
 
 	for loop := 0; loop < 2; loop++ {
@@ -1166,9 +1228,11 @@ func TestConn_ReadLoadLocalPacketErr(t *testing.T) {
 					assert.NotNil(t, err)
 					assert.Nil(t, read)
 					assert.Nil(t, conn.loadLocalBuf.data)
-					//skip payload1 data
-					buf := make([]byte, payload1Len)
-					_, _ = tConn.Read(buf)
+					// A failed allocation consumed the header; do not reuse its
+					// unfinished frame by manually skipping untracked bytes.
+					assert.True(t, conn.LoadLocalFramingBroken())
+					resetFunc()
+					_, _ = tConn.Write(makePacket(payload2, 3))
 				} else if i == 1 {
 					assert.Nil(t, err)
 					assert.True(t, bytes.Equal(payload2, read))

@@ -1,0 +1,73 @@
+drop database if exists csv_value_assignment;
+create database csv_value_assignment;
+use csv_value_assignment;
+create external table csv_numbers(a tinyint, b smallint, c int, d bigint, ua tinyint unsigned, ub smallint unsigned, uc int unsigned, ud bigint unsigned, m mediumint, um mediumint unsigned, exact_value bigint)
+infile{'filepath'='$resources/external_table_file/csv_integer_assignment.csv', 'format'='csv'}
+fields terminated by ',' lines terminated by '\n';
+select * from csv_numbers;
+➤ a[-6,8,0]  ¦  b[5,16,0]  ¦  c[4,32,0]  ¦  d[-5,64,0]  ¦  ua[-6,8,0]  ¦  ub[5,16,0]  ¦  uc[4,32,0]  ¦  ud[-5,64,0]  ¦  m[4,9,0]  ¦  um[4,8,0]  ¦  exact_value[-5,64,0]  𝄀
+2  ¦  2  ¦  100  ¦  -2  ¦  3  ¦  4  ¦  5  ¦  18446744073709551615  ¦  8388607  ¦  16777215  ¦  9007199254740993
+create table native_numbers(a tinyint, b smallint, c int, d bigint, ua tinyint unsigned, ub smallint unsigned, uc int unsigned, ud bigint unsigned, m mediumint, um mediumint unsigned, exact_value bigint);
+insert into native_numbers values (1.9,2.4,1e2,-1.9,2.5,3.9,4.5,18446744073709551615.0,8388606.9,16777214.9,9007199254740993.0);
+select count(*) as mismatches from csv_numbers e cross join native_numbers n
+where e.a <> n.a or e.b <> n.b or e.c <> n.c or e.d <> n.d
+or e.ua <> n.ua or e.ub <> n.ub or e.uc <> n.uc or e.ud <> n.ud
+or e.m <> n.m or e.um <> n.um or e.exact_value <> n.exact_value;
+➤ mismatches[-5,64,0]  𝄀
+0
+create external table csv_spaces(v varchar(8))
+infile{'filepath'='$resources/external_table_file/csv_whitespace_records.csv', 'format'='csv'}
+fields terminated by ',' enclosed by '"' escaped by '\\' lines terminated by '\n';
+select count(*) as records, count(v) as non_null from csv_spaces;
+➤ records[-5,64,0]  ¦  non_null[-5,64,0]  𝄀
+7  ¦  6
+select __mo_file_line as line, concat('[',hex(v),']') as value_hex from csv_spaces order by line;
+➤ line[-5,64,0]  ¦  value_hex[12,66,0]  𝄀
+2  ¦  [20]  𝄀
+3  ¦  [09]  𝄀
+4  ¦  [20]  𝄀
+5  ¦  []  𝄀
+6  ¦  [78]  𝄀
+7  ¦  null  𝄀
+8  ¦  [20]
+create table loaded_spaces(v varchar(8));
+load data infile '$resources/external_table_file/csv_whitespace_records.csv'
+into table loaded_spaces fields terminated by ',' enclosed by '"' escaped by '\\' lines terminated by '\n';
+select count(*) as records, count(v) as non_null from loaded_spaces;
+➤ records[-5,64,0]  ¦  non_null[-5,64,0]  𝄀
+7  ¦  6
+select coalesce(concat('[',hex(v),']'),'NULL') as value_hex, count(*) as n
+from loaded_spaces group by v order by value_hex;
+➤ value_hex[12,66,0]  ¦  n[-5,64,0]  𝄀
+NULL  ¦  1  𝄀
+[09]  ¦  1  𝄀
+[20]  ¦  3  𝄀
+[78]  ¦  1  𝄀
+[]  ¦  1
+create external table csv_overflow(v tinyint)
+infile{'filepath'='$resources/external_table_file/csv_integer_overflow.csv', 'format'='csv'}
+fields terminated by ',' lines terminated by '\n';
+select v from csv_overflow;
+internal error: the input value '127.5' is not int8 type for column 0
+select v is null as rejected, __mo_file_line as line,
+__mo_error_message like '%not int8 type%' as conversion_error from csv_overflow;
+➤ rejected[-7,1,0]  ¦  line[-5,64,0]  ¦  conversion_error[-7,1,0]  𝄀
+1  ¦  1  ¦  1
+create external table json_lines(a int, s varchar(8))
+infile{'filepath'='$resources/external_table_file/jsonline_whitespace_records.jsonl', 'format'='jsonline', 'jsondata'='object'};
+select a, s, __mo_file_line as line from json_lines order by a;
+➤ a[4,32,0]  ¦  s[12,8,0]  ¦  line[-5,64,0]  𝄀
+1  ¦  alpha  ¦  1  𝄀
+2  ¦  beta  ¦  3
+select a, s, __mo_file_line as line, __mo_error_message is null as valid_record
+from json_lines order by a;
+➤ a[4,32,0]  ¦  s[12,8,0]  ¦  line[-5,64,0]  ¦  valid_record[-7,1,0]  𝄀
+1  ¦  alpha  ¦  1  ¦  1  𝄀
+2  ¦  beta  ¦  3  ¦  1
+create table loaded_json_lines(a int, s varchar(8));
+load data infile{'filepath'='$resources/external_table_file/jsonline_whitespace_records.jsonl', 'format'='jsonline', 'jsondata'='object'} into table loaded_json_lines;
+select a, s from loaded_json_lines order by a;
+➤ a[4,32,0]  ¦  s[12,8,0]  𝄀
+1  ¦  alpha  𝄀
+2  ¦  beta
+drop database csv_value_assignment;

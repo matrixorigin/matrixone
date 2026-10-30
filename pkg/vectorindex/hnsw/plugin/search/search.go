@@ -22,6 +22,7 @@ import (
 	"strconv"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/docfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	searchplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/search"
@@ -35,7 +36,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	usearch "github.com/unum-cloud/usearch/golang"
 )
 
 type Hooks struct{}
@@ -43,6 +43,23 @@ type Hooks struct{}
 var _ searchplugin.Hooks = Hooks{}
 var _ searchplugin.ExplainHooks = Hooks{}
 var _ searchplugin.CandidateBudgetHooks = Hooks{}
+var _ searchplugin.MembershipHooks = Hooks{}
+
+// SupportsMembership reports true: the search applies Request.MembershipFilter to every
+// sub-index search.
+func (Hooks) SupportsMembership() bool { return true }
+
+var _ searchplugin.IterativeSearchHooks = Hooks{}
+
+// StartRound is the first round of the HNSW widening policy (hnsw.IterativeSearch).
+func (Hooks) StartRound(spec *plan.IndexSearchScan, req searchplugin.Request, stats searchplugin.SearchStats) searchplugin.Round {
+	return hnsw.IterativeSearch{}.StartRound(spec, req, stats)
+}
+
+// NextRound is the round after prev of the HNSW widening policy (hnsw.IterativeSearch).
+func (Hooks) NextRound(spec *plan.IndexSearchScan, req searchplugin.Request, stats searchplugin.SearchStats, prev searchplugin.Round, got uint64) (searchplugin.Round, bool) {
+	return hnsw.IterativeSearch{}.NextRound(spec, req, stats, prev, got)
+}
 
 // ExplainSettings preserves compact text and exposes static settings on detailed output.
 func (Hooks) ExplainSettings(spec *plan.IndexSearchScan, detailed bool) ([]string, error) {
@@ -56,6 +73,9 @@ func (Hooks) ExplainSettings(spec *plan.IndexSearchScan, detailed bool) ([]strin
 	settings := []string{
 		"ThreadsSearch: " + strconv.FormatInt(int64(opts.ThreadsSearch), 10),
 	}
+	if opts.PrefilterExactThreshold > 0 {
+		settings = append(settings, "PrefilterExactThreshold: "+strconv.FormatInt(opts.PrefilterExactThreshold, 10))
+	}
 	return settings, nil
 }
 
@@ -65,10 +85,8 @@ func (Hooks) PostFilterCandidateBudget(resultLimit uint64) uint64 {
 }
 
 func (Hooks) NewReader(proc *process.Process, spec *plan.IndexSearchScan, req searchplugin.Request) (engine.Reader, error) {
-	// The search does not apply a membership key set, so a request whose candidate
-	// limit is only valid under one is refused rather than answered without it.
-	if req.MembershipFilterRequired {
-		return nil, moerr.NewNotSupported(proc.Ctx, "hnsw index search with a required membership filter")
+	if req.MembershipFilterRequired && !req.HasMembershipFilter {
+		return nil, moerr.NewInvalidInput(proc.Ctx, "hnsw index search requires a membership filter that is missing")
 	}
 	s, err := newSearcher(proc, spec, req)
 	if err != nil {
@@ -78,9 +96,18 @@ func (Hooks) NewReader(proc *process.Process, spec *plan.IndexSearchScan, req se
 }
 
 // newAlgo creates the usearch search of one query.
-var newAlgo = func(idxcfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig) veccache.VectorIndexSearchIf {
-	if idxcfg.Usearch.Quantization == usearch.F64 {
+var newAlgo = func(idxcfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig, queryType int32) veccache.VectorIndexSearchIf {
+	switch types.T(queryType) {
+	case types.T_array_float64:
 		return hnsw.NewHnswSearch[float64](idxcfg, tblcfg)
+	case types.T_array_float16:
+		return hnsw.NewHnswSearch[types.Float16](idxcfg, tblcfg)
+	case types.T_array_bf16:
+		return hnsw.NewHnswSearch[types.BF16](idxcfg, tblcfg)
+	case types.T_array_int8:
+		return hnsw.NewHnswSearch[int8](idxcfg, tblcfg)
+	case types.T_array_uint8:
+		return hnsw.NewHnswSearch[uint8](idxcfg, tblcfg)
 	}
 	return hnsw.NewHnswSearch[float32](idxcfg, tblcfg)
 }
@@ -92,6 +119,22 @@ type searcher struct {
 	query    []byte
 	limit    uint64
 	snapshot *plan.Snapshot
+
+	// iterative is set for mode=iterative: a membership search widens in rounds.
+	// resultLimit is the row count of the query and maxLimit caps limit while it
+	// widens.
+	iterative   bool
+	resultLimit uint64
+	maxLimit    uint64
+	// exactThreshold is the largest membership searched by scanning its vectors.
+	exactThreshold uint64
+	// queryType is the vector type of the query, searched as it is.
+	queryType int32
+	// membership holds the primary keys the search is restricted to, or nil.
+	// emptyMembership is an exact empty key set: the search returns no rows.
+	membership      docfilter.MembershipFilter
+	membershipCount uint64
+	emptyMembership bool
 }
 
 func newSearcher(proc *process.Process, spec *plan.IndexSearchScan, req searchplugin.Request) (*searcher, error) {
@@ -105,8 +148,15 @@ func newSearcher(proc *process.Process, spec *plan.IndexSearchScan, req searchpl
 	if err != nil {
 		return nil, err
 	}
-	idxcfg.Usearch.Quantization, err = hnsw.QuantizationToUsearch(req.QueryType.Id)
+	quantization, err := hnswplan.Quantization(spec.Index.IndexAlgoParams)
 	if err != nil {
+		return nil, err
+	}
+	idxcfg.Usearch.Quantization, err = hnsw.StorageQuantization(quantization, req.QueryType.Id)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := hnsw.QuantizationToUsearch(req.QueryType.Id); err != nil {
 		return nil, err
 	}
 	idxcfg.Usearch.Dimensions = uint(req.QueryType.Width)
@@ -126,19 +176,46 @@ func newSearcher(proc *process.Process, spec *plan.IndexSearchScan, req searchpl
 			tblcfg.MetadataTable = table.GetObject().GetObjName()
 		case catalog.Hnsw_TblType_Storage:
 			tblcfg.IndexTable = table.GetObject().GetObjName()
+		case catalog.Hnsw_TblType_Dict:
+			tblcfg.DictTable = table.GetObject().GetObjName()
 		}
 	}
 	if tblcfg.MetadataTable == "" || tblcfg.IndexTable == "" {
 		return nil, moerr.NewInvalidInputNoCtx("hnsw index search is missing its hidden tables")
 	}
-	return &searcher{
-		proc:     proc,
-		idxcfg:   idxcfg,
-		tblcfg:   tblcfg,
-		query:    req.QueryPayload,
-		limit:    max(req.CandidateBudget, 1),
-		snapshot: spec.ScanSnapshot,
-	}, nil
+	if len(spec.Index.Parts) > 0 {
+		if pos, ok := spec.SourceTableDef.Name2ColIndex[spec.Index.Parts[0]]; ok {
+			tblcfg.KeyPartType = spec.SourceTableDef.Cols[pos].Typ.Id
+		}
+	}
+	s := &searcher{
+		proc:        proc,
+		idxcfg:      idxcfg,
+		tblcfg:      tblcfg,
+		query:       req.QueryPayload,
+		limit:       max(req.CandidateBudget, 1),
+		snapshot:    spec.ScanSnapshot,
+		resultLimit: req.ResultLimit,
+		maxLimit:    req.MaxInternalTopK,
+		iterative:   opts.Iterative,
+		queryType:   req.QueryType.Id,
+	}
+	if opts.PrefilterExactThreshold > 0 {
+		s.exactThreshold = uint64(opts.PrefilterExactThreshold)
+	}
+	if req.HasMembershipFilter {
+		if err := s.setMembership(spec, req.MembershipFilter); err != nil {
+			return nil, err
+		}
+	}
+	return s, nil
+}
+
+// setMembership builds the exact primary-key filter of the serialized key vector payload.
+func (s *searcher) setMembership(spec *plan.IndexSearchScan, payload []byte) (err error) {
+	s.membership, s.membershipCount, s.emptyMembership, err = vectorindex.BuildMembership(
+		s.proc.GetService(), "hnsw", spec.SourceTableDef, payload)
+	return err
 }
 
 // Next returns the whole result as one chunk.
@@ -146,13 +223,25 @@ func (s *searcher) Next(ctx context.Context) (planreader.Chunk, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return planreader.Chunk{}, false, err
 	}
+	if s.emptyMembership {
+		return planreader.Chunk{}, false, nil
+	}
 	veccache.Cache.Once()
 	var keys []int64
 	var distances []float64
 	var err error
-	if s.idxcfg.Usearch.Quantization == usearch.F64 {
+	switch types.T(s.queryType) {
+	case types.T_array_float64:
 		keys, distances, err = search[float64](s)
-	} else {
+	case types.T_array_float16:
+		keys, distances, err = search[types.Float16](s)
+	case types.T_array_bf16:
+		keys, distances, err = search[types.BF16](s)
+	case types.T_array_int8:
+		keys, distances, err = search[int8](s)
+	case types.T_array_uint8:
+		keys, distances, err = search[uint8](s)
+	default:
 		keys, distances, err = search[float32](s)
 	}
 	if err != nil {
@@ -161,9 +250,15 @@ func (s *searcher) Next(ctx context.Context) (planreader.Chunk, bool, error) {
 	return planreader.Chunk{Keys: keys, Scores: distances}, false, nil
 }
 
-func (*searcher) Close() error { return nil }
+func (s *searcher) Close() error {
+	if s.membership != nil {
+		s.membership.Free()
+		s.membership = nil
+	}
+	return nil
+}
 
-func search[T types.RealNumbers](s *searcher) ([]int64, []float64, error) {
+func search[T types.ArrayElement](s *searcher) ([]int64, []float64, error) {
 	query := types.BytesToArray[T](s.query)
 	if uint(len(query)) != s.idxcfg.Usearch.Dimensions {
 		return nil, nil, moerr.NewInvalidInput(s.proc.Ctx, fmt.Sprintf(
@@ -176,8 +271,17 @@ func search[T types.RealNumbers](s *searcher) ([]int64, []float64, error) {
 	if ets := sp.ApplyScanSnapshot(s.snapshot); ets != nil {
 		cacheKey = veccache.SnapshotKey(s.tblcfg.IndexTable, *ets)
 	}
-	rt := vectorindex.RuntimeConfig{Limit: uint(s.limit), OrigFuncName: s.tblcfg.OrigFuncName}
-	keys, distances, err := veccache.Cache.Search(sp, cacheKey, newAlgo(s.idxcfg, s.tblcfg), query, rt)
+	rt := vectorindex.RuntimeConfig{
+		Limit:           uint(s.limit),
+		OrigFuncName:    s.tblcfg.OrigFuncName,
+		Membership:      s.membership,
+		MembershipCount: s.membershipCount,
+		Iterative:       s.iterative,
+		ExactThreshold:  s.exactThreshold,
+		ResultLimit:     uint(s.resultLimit),
+		MaxLimit:        uint(s.maxLimit),
+	}
+	keys, distances, err := veccache.Cache.Search(sp, cacheKey, newAlgo(s.idxcfg, s.tblcfg, s.queryType), query, rt)
 	if err != nil {
 		return nil, nil, err
 	}

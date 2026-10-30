@@ -430,8 +430,8 @@ func TestCorrelatedLimitIsPartitionedByCorrelationKey(t *testing.T) {
 	assertReachablePlanHasNoCorrelatedExpr(t, query)
 }
 
-func TestCorrelatedLimitRejectsNonPartitionablePredicate(t *testing.T) {
-	_, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t, `
+func TestCorrelatedLimitKeepsNonPartitionableRelation(t *testing.T) {
+	p, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t, `
 		SELECT n1.N_NATIONKEY,
 		       (SELECT n2.N_NATIONKEY
 		          FROM NATION n2
@@ -439,7 +439,9 @@ func TestCorrelatedLimitRejectsNonPartitionablePredicate(t *testing.T) {
 		         ORDER BY n2.N_NATIONKEY DESC
 		         LIMIT 1)
 		  FROM NATION n1`)
-	require.ErrorContains(t, err, "correlated LIMIT with non-equality predicates")
+	require.NoError(t, err)
+	require.NotNil(t, p.GetQuery().Correlation)
+	require.NoError(t, p.GetQuery().ValidateCorrelation())
 }
 
 func TestCorrelatedLimitRejectsProjectedCorrelatedOrdering(t *testing.T) {
@@ -945,6 +947,7 @@ func TestNestedCorrelatedScalarAggregatePullsUpGroupingKey(t *testing.T) {
 
 	query := logicPlan.GetQuery()
 	require.NotNil(t, query)
+	require.Nil(t, query.Correlation, "the established aggregate decorrelation must remain a set plan")
 	require.NotEmpty(t, query.Steps)
 
 	visited := make(map[int32]bool)
@@ -1118,7 +1121,7 @@ func TestTransparentCorrelatedDerivedTableChain(t *testing.T) {
 	}
 }
 
-func TestTransparentCorrelatedDerivedTableRejectsUnsafeShapes(t *testing.T) {
+func TestCorrelatedDerivedTableLexicalVisibility(t *testing.T) {
 	for _, tt := range []struct {
 		name    string
 		sql     string
@@ -1244,16 +1247,18 @@ func TestTransparentCorrelatedDerivedTableRejectsUnsafeShapes(t *testing.T) {
 		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t, tt.sql)
-			if tt.wantErr == "" {
-				tt.wantErr = "correlated subquery in FROM clause is not yet implemented"
+			p, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t, tt.sql)
+			if tt.wantErr != "" {
+				require.ErrorContains(t, err, tt.wantErr)
+				return
 			}
-			require.ErrorContains(t, err, tt.wantErr)
+			require.NoError(t, err)
+			require.NoError(t, p.GetQuery().ValidateCorrelation())
 		})
 	}
 }
 
-func TestTransparentCorrelatedDerivedTableRejectsDeepAncestor(t *testing.T) {
+func TestCorrelatedDerivedTableForwardsDeepAncestor(t *testing.T) {
 	immediateParent := `SELECT n1.N_NATIONKEY
 		FROM NATION n1
 		WHERE EXISTS (
@@ -1354,8 +1359,9 @@ func TestTransparentCorrelatedDerivedTableRejectsDeepAncestor(t *testing.T) {
 		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t, tt.sql)
-			require.ErrorContains(t, err, "correlated subquery in FROM clause is not yet implemented")
+			p, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t, tt.sql)
+			require.NoError(t, err)
+			require.NoError(t, p.GetQuery().ValidateCorrelation())
 		})
 	}
 }
@@ -1442,7 +1448,7 @@ func TestTransparentCorrelatedDerivedTableNormalizationIsAtomic(t *testing.T) {
 		require.True(t, ctx.isCorrelated)
 	})
 
-	t.Run("binder-backed empty ancestor is rejected atomically", func(t *testing.T) {
+	t.Run("binder-backed empty ancestor is forwarded", func(t *testing.T) {
 		corr := &plan.CorrColRef{RelPos: outerTag, Depth: 3}
 		nodes := newNodes(corr, &plan.Node{NodeType: plan.Node_TABLE_SCAN})
 		nodes[1].Children[0] = 0
@@ -1453,12 +1459,12 @@ func TestTransparentCorrelatedDerivedTableNormalizationIsAtomic(t *testing.T) {
 		emptyQuery.binder = NewWhereBinder(builder, emptyQuery)
 		ctx := NewBindContext(nil, emptyQuery)
 		err := builder.normalizeTransparentCorrelatedDerivedTable(3, ctx)
-		require.ErrorContains(t, err, "correlated subquery in FROM clause is not yet implemented")
+		require.NoError(t, err)
 		require.Equal(t, int32(3), corr.Depth)
-		require.False(t, ctx.isCorrelated)
+		require.True(t, ctx.isCorrelated)
 	})
 
-	t.Run("deeper ancestor is rejected atomically", func(t *testing.T) {
+	t.Run("deeper ancestor is forwarded", func(t *testing.T) {
 		corr := &plan.CorrColRef{RelPos: outerTag, Depth: 3}
 		nodes := newNodes(corr, &plan.Node{NodeType: plan.Node_TABLE_SCAN})
 		nodes[1].Children[0] = 0
@@ -1468,13 +1474,13 @@ func TestTransparentCorrelatedDerivedTableNormalizationIsAtomic(t *testing.T) {
 		intermediate.bindingByTag[42] = nil
 		ctx := NewBindContext(nil, intermediate)
 		err := newBuilder(nodes).normalizeTransparentCorrelatedDerivedTable(3, ctx)
-		require.ErrorContains(t, err, "correlated subquery in FROM clause is not yet implemented")
+		require.NoError(t, err)
 		require.Equal(t, int32(3), corr.Depth)
-		require.False(t, ctx.isCorrelated)
+		require.True(t, ctx.isCorrelated)
 	})
 }
 
-func TestNestedCorrelatedScalarStillRejectsUnsafeShapes(t *testing.T) {
+func TestNestedCorrelatedScalarUsesDependentPrograms(t *testing.T) {
 	for _, sql := range []string{
 		`SELECT n1.N_NATIONKEY,
 		        (SELECT MAX(n2.N_REGIONKEY)
@@ -1550,8 +1556,10 @@ func TestNestedCorrelatedScalarStillRejectsUnsafeShapes(t *testing.T) {
 		                 LIMIT 1 OFFSET 1))
 		   FROM NATION n1`,
 	} {
-		_, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t, sql)
-		require.ErrorContains(t, err, "correlated columns in SCALAR subquery deeper than 1 level")
+		p, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t, sql)
+		require.NoError(t, err)
+		require.NotNil(t, p.GetQuery().Correlation)
+		require.NoError(t, p.GetQuery().ValidateCorrelation())
 	}
 }
 
@@ -2595,7 +2603,20 @@ func TestMixedCorrelatedScalarProjectionUsesPerOuterLimit(t *testing.T) {
 	}
 }
 
-func TestUnsafeWrappedCorrelatedScalarProjectionEqualityFailsClosed(t *testing.T) {
+func TestWrappedCorrelatedScalarProjectionAdmission(t *testing.T) {
+	t.Run("deep projection uses dependent execution", func(t *testing.T) {
+		p, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t, `SELECT n.n_nationkey,
+		        (SELECT (SELECT CASE WHEN n.n_regionkey > 0 THEN n.n_regionkey ELSE 0 END
+		                          FROM region r
+		                          LIMIT 1)
+		           FROM region r2
+		          LIMIT 1)
+		   FROM nation n`)
+		require.NoError(t, err)
+		require.NotNil(t, p.GetQuery().Correlation)
+		require.NoError(t, p.GetQuery().ValidateCorrelation())
+	})
+
 	for _, sql := range []string{
 		`SELECT n.n_nationkey,
 		        (SELECT CASE WHEN r.r_regionkey > 0 THEN n.n_regionkey ELSE 0 END
@@ -2633,13 +2654,6 @@ func TestUnsafeWrappedCorrelatedScalarProjectionEqualityFailsClosed(t *testing.T
 		           FROM region r
 		          WHERE r.r_regionkey = n.n_regionkey
 		          GROUP BY r.r_regionkey
-		          LIMIT 1)
-		   FROM nation n`,
-		`SELECT n.n_nationkey,
-		        (SELECT (SELECT CASE WHEN n.n_regionkey > 0 THEN n.n_regionkey ELSE 0 END
-		                          FROM region r
-		                          LIMIT 1)
-		           FROM region r2
 		          LIMIT 1)
 		   FROM nation n`,
 		`DELETE FROM nation n
@@ -2694,6 +2708,7 @@ func TestUnsafeWrappedCorrelatedScalarProjectionEqualityFailsClosed(t *testing.T
 		         LIMIT 1)
 		  FROM nation n`, 1)
 	require.NoError(t, err)
+	defer preparedStmt.Free()
 	_, err = BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), preparedStmt, true)
 	require.ErrorContains(t, err, "wrapped correlated scalar projection cannot be safely decorrelated")
 

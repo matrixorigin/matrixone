@@ -36,6 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	txnpb "github.com/matrixorigin/matrixone/pkg/pb/txn"
@@ -1144,6 +1145,304 @@ func (c *rootSQLCompilerContext) GetRootSql() string {
 	return c.rootSQL
 }
 
+func TestBuildCreateViewPersistsParserDerivedInformationSchemaMetadata(t *testing.T) {
+	tests := []struct {
+		name        string
+		sql         string
+		contains    string
+		checkOption string
+		replay      bool
+		replayCols  []string
+	}{
+		{
+			name:     "dollar quoted definer cannot supply structural view tokens",
+			sql:      "CREATE DEFINER=$q$ view fake as select 0$q$ VIEW v AS SELECT 1;",
+			contains: "select 1",
+		},
+		{
+			name:     "executable comment preserves dollar quoted terminator text",
+			sql:      "/*!50001 CREATE VIEW v AS SELECT $q$x*/y$q$ AS s */;",
+			contains: "*/y",
+		},
+		{
+			name:     "executable comment preserves escaped double quoted terminator text",
+			sql:      "/*!50001 CREATE VIEW v AS SELECT \"x\\\"*/y\" AS s */;",
+			contains: "*/y",
+		},
+		{
+			name:     "double minus remains an arithmetic operator",
+			sql:      "/*!50001 CREATE VIEW v AS SELECT 1--2 AS x */;",
+			contains: "select",
+		},
+		{
+			name:        "check option is separate from the select definition",
+			sql:         "CREATE VIEW v AS SELECT 1 WITH CASCADED CHECK OPTION;",
+			contains:    "select 1",
+			checkOption: "CASCADED",
+		},
+		{
+			name:     "bound column references are normalized with the definition",
+			sql:      "CREATE VIEW v AS SELECT n_name FROM nation;",
+			contains: "select `nation`.`n_name` from `nation`",
+		},
+		{
+			name:       "explicit view columns preserve public names without changing inner aliases",
+			sql:        "CREATE VIEW v (view_name) AS SELECT n_name FROM nation;",
+			contains:   "as `__mo_view_definition`(`view_name`)",
+			replay:     true,
+			replayCols: []string{"view_name"},
+		},
+		{
+			name:       "explicit view columns preserve aliases used by order by",
+			sql:        "CREATE VIEW v (view_name) AS SELECT 1 AS source_name ORDER BY source_name;",
+			contains:   "source_name",
+			replay:     true,
+			replayCols: []string{"view_name"},
+		},
+		{
+			name:       "explicit view columns preserve aliases used by having",
+			sql:        "CREATE VIEW v (view_name) AS SELECT 1 AS source_name HAVING source_name = 1;",
+			contains:   "having `source_name` = 1",
+			replay:     true,
+			replayCols: []string{"view_name"},
+		},
+		{
+			name:       "explicit view columns cover parenthesized union output",
+			sql:        "CREATE VIEW v (view_name, region_name) AS (SELECT n_name, n_regionkey FROM nation UNION SELECT n_name, n_regionkey FROM nation);",
+			contains:   "as `__mo_view_definition`(`view_name`, `region_name`)",
+			replay:     true,
+			replayCols: []string{"view_name", "region_name"},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, test.sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+
+			ctx := &rootSQLCompilerContext{
+				MockCompilerContext: NewMockCompilerContext(false, newPlanTestProcess(t)),
+				rootSQL:             test.sql,
+			}
+			built, err := BuildPlan(ctx, stmt, false)
+			require.NoError(t, err)
+			var data ViewData
+			require.NoError(t, json.Unmarshal([]byte(built.GetDdl().GetCreateView().GetTableDef().GetViewSql().GetView()), &data))
+			require.NotEmpty(t, data.Definition)
+			assert.Contains(t, strings.ToLower(data.Definition), test.contains)
+			assert.NotContains(t, strings.ToLower(data.Definition), "create")
+			assert.NotContains(t, strings.ToLower(data.Definition), "check option")
+			expectedCheckOption := test.checkOption
+			if expectedCheckOption == "" {
+				expectedCheckOption = "NONE"
+			}
+			assert.Equal(t, expectedCheckOption, data.CheckOption)
+
+			definitions, err := parsers.Parse(t.Context(), dialect.MYSQL, data.Definition, 1)
+			require.NoError(t, err)
+			require.Len(t, definitions, 1)
+			_, ok := definitions[0].(*tree.Select)
+			assert.True(t, ok)
+			definitions[0].Free()
+
+			if test.replay {
+				replaySQL := "CREATE VIEW replayed AS " + data.Definition
+				replayStmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, replaySQL, 1)
+				require.NoError(t, err)
+				defer replayStmt.Free()
+				replayCtx := &rootSQLCompilerContext{
+					MockCompilerContext: NewMockCompilerContext(false, newPlanTestProcess(t)),
+					rootSQL:             replaySQL,
+				}
+				replayed, err := BuildPlan(replayCtx, replayStmt, false)
+				require.NoError(t, err)
+				replayCols := replayed.GetDdl().GetCreateView().GetTableDef().GetCols()
+				require.Len(t, replayCols, len(test.replayCols))
+				for i, name := range test.replayCols {
+					require.Equal(t, name, replayCols[i].Name)
+				}
+			}
+		})
+	}
+}
+
+func TestBuildCreateViewDefinitionReplaysStringValuesAcrossSQLModes(t *testing.T) {
+	const rootSQL = "CREATE VIEW v AS SELECT 'a''b' AS value"
+	modes := []string{
+		"",
+		"ANSI_QUOTES",
+		"NO_BACKSLASH_ESCAPES",
+		"ANSI_QUOTES,NO_BACKSLASH_ESCAPES",
+	}
+
+	for _, mode := range modes {
+		t.Run(strings.ReplaceAll(mode, ",", "_"), func(t *testing.T) {
+			stmt, err := parsers.ParseOneWithSQLMode(
+				t.Context(), dialect.MYSQL, rootSQL, 1, mode)
+			require.NoError(t, err)
+			defer stmt.Free()
+
+			ctx := &rootSQLCompilerContext{
+				MockCompilerContext: NewMockCompilerContext(false, newPlanTestProcess(t)),
+				rootSQL:             rootSQL,
+			}
+			ctx.SetSqlModeOverride(mode)
+			built, err := BuildPlan(ctx, stmt, false)
+			require.NoError(t, err)
+
+			var data ViewData
+			require.NoError(t, json.Unmarshal([]byte(
+				built.GetDdl().GetCreateView().GetTableDef().GetViewSql().GetView()), &data))
+			require.Contains(t, data.Definition, "'a''b'")
+			require.NotContains(t, data.Definition, `"a'b"`)
+
+			statements, err := parsers.ParseWithSQLMode(
+				t.Context(), dialect.MYSQL, data.Definition, 1, mode)
+			require.NoError(t, err)
+			require.Len(t, statements, 1)
+			defer func() {
+				for _, statement := range statements {
+					statement.Free()
+				}
+			}()
+
+			selectStmt, ok := statements[0].(*tree.Select)
+			require.True(t, ok)
+			selectClause, ok := selectStmt.Select.(*tree.SelectClause)
+			require.True(t, ok)
+			literal, ok := selectClause.Exprs[0].Expr.(*tree.NumVal)
+			require.True(t, ok)
+			require.Equal(t, "a'b", literal.String())
+		})
+	}
+}
+
+func TestBuildCreateViewDefinitionReplaysExpressionHeading(t *testing.T) {
+	const rootSQL = "CREATE VIEW v AS SELECT n_nationkey + 1 FROM nation"
+	ctx := &rootSQLCompilerContext{
+		MockCompilerContext: NewMockCompilerContext(false, newPlanTestProcess(t)),
+		rootSQL:             rootSQL,
+	}
+
+	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, rootSQL, 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	built, err := BuildPlan(ctx, stmt, false)
+	require.NoError(t, err)
+
+	tableDef := built.GetDdl().GetCreateView().GetTableDef()
+	require.Len(t, tableDef.GetCols(), 1)
+	require.Equal(t, "n_nationkey + 1", tableDef.GetCols()[0].Name)
+
+	var data ViewData
+	require.NoError(t, json.Unmarshal([]byte(tableDef.GetViewSql().GetView()), &data))
+	require.Contains(t, data.Definition, "as `n_nationkey + 1`")
+
+	replaySQL := "CREATE VIEW replayed AS " + data.Definition
+	replayStmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, replaySQL, 1)
+	require.NoError(t, err)
+	defer replayStmt.Free()
+	replayCtx := &rootSQLCompilerContext{
+		MockCompilerContext: NewMockCompilerContext(false, newPlanTestProcess(t)),
+		rootSQL:             replaySQL,
+	}
+	replayed, err := BuildPlan(replayCtx, replayStmt, false)
+	require.NoError(t, err)
+	replayCols := replayed.GetDdl().GetCreateView().GetTableDef().GetCols()
+	require.Len(t, replayCols, 1)
+	require.Equal(t, tableDef.GetCols()[0].Name, replayCols[0].Name)
+}
+
+func TestBuildCreateViewDefinitionReplaysUnaliasedBinaryHeading(t *testing.T) {
+	const rootSQL = "CREATE VIEW v AS SELECT _binary 'ab'"
+	ctx := &rootSQLCompilerContext{
+		MockCompilerContext: NewMockCompilerContext(false, newPlanTestProcess(t)),
+		rootSQL:             rootSQL,
+	}
+
+	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, rootSQL, 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	built, err := BuildPlan(ctx, stmt, false)
+	require.NoError(t, err)
+
+	tableDef := built.GetDdl().GetCreateView().GetTableDef()
+	require.Len(t, tableDef.GetCols(), 1)
+	require.Equal(t, "ab", tableDef.GetCols()[0].Name)
+
+	var data ViewData
+	require.NoError(t, json.Unmarshal([]byte(tableDef.GetViewSql().GetView()), &data))
+	require.Contains(t, data.Definition, "_binary 0x6162")
+	require.Contains(t, data.Definition, "as ")
+
+	replaySQL := "CREATE VIEW replayed AS " + data.Definition
+	replayStmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, replaySQL, 1)
+	require.NoError(t, err)
+	defer replayStmt.Free()
+	replayCtx := &rootSQLCompilerContext{
+		MockCompilerContext: NewMockCompilerContext(false, newPlanTestProcess(t)),
+		rootSQL:             replaySQL,
+	}
+	replayed, err := BuildPlan(replayCtx, replayStmt, false)
+	require.NoError(t, err)
+	replayCols := replayed.GetDdl().GetCreateView().GetTableDef().GetCols()
+	require.Len(t, replayCols, 1)
+	require.Equal(t, tableDef.GetCols()[0].Name, replayCols[0].Name)
+}
+
+func TestBuildCreateViewDefinitionReplaysEmptyBinaryAcrossSQLModes(t *testing.T) {
+	const rootSQL = "CREATE VIEW v AS SELECT _binary '' AS value"
+	modes := []string{
+		"",
+		"ANSI_QUOTES",
+		"NO_BACKSLASH_ESCAPES",
+		"ANSI_QUOTES,NO_BACKSLASH_ESCAPES",
+	}
+
+	for _, mode := range modes {
+		t.Run(strings.ReplaceAll(mode, ",", "_"), func(t *testing.T) {
+			stmt, err := parsers.ParseOneWithSQLMode(
+				t.Context(), dialect.MYSQL, rootSQL, 1, mode)
+			require.NoError(t, err)
+			defer stmt.Free()
+
+			ctx := &rootSQLCompilerContext{
+				MockCompilerContext: NewMockCompilerContext(false, newPlanTestProcess(t)),
+				rootSQL:             rootSQL,
+			}
+			ctx.SetSqlModeOverride(mode)
+			built, err := BuildPlan(ctx, stmt, false)
+			require.NoError(t, err)
+
+			var data ViewData
+			require.NoError(t, json.Unmarshal([]byte(
+				built.GetDdl().GetCreateView().GetTableDef().GetViewSql().GetView()), &data))
+			require.Contains(t, data.Definition, "_binary ''")
+			require.NotContains(t, data.Definition, "_binary 0x")
+
+			statements, err := parsers.ParseWithSQLMode(
+				t.Context(), dialect.MYSQL, data.Definition, 1, mode)
+			require.NoError(t, err)
+			require.Len(t, statements, 1)
+			defer func() {
+				for _, statement := range statements {
+					statement.Free()
+				}
+			}()
+
+			selectStmt, ok := statements[0].(*tree.Select)
+			require.True(t, ok)
+			selectClause, ok := selectStmt.Select.(*tree.SelectClause)
+			require.True(t, ok)
+			literal, ok := selectClause.Exprs[0].Expr.(*tree.NumVal)
+			require.True(t, ok)
+			require.Equal(t, tree.P_ScoreBinary, literal.ValType)
+			require.Empty(t, literal.String())
+		})
+	}
+}
+
 func TestBuildCreateOrReplaceViewRejectsRecursiveDefinition(t *testing.T) {
 	recentTimestamp := time.Now().UTC().Add(-time.Minute).Format("2006-01-02 15:04:05.999999999")
 	aheadOfWallClock := time.Now().Add(time.Minute)
@@ -1388,11 +1687,28 @@ func TestBuildCreateTableCheckConstraints(t *testing.T) {
 		return p.GetDdl().GetCreateTable().GetTableDef(), nil
 	}
 
+	t.Run("generated check names respect identifier length", func(t *testing.T) {
+		for _, length := range []int{58, 59, 64} {
+			name := strings.Repeat("t", length)
+			def, err := build("create table "+name+"(a int check(a>0))", false)
+			if length == 58 {
+				require.NoError(t, err)
+				require.Equal(t, name+"_chk_1", def.Checks[0].Name)
+			} else {
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrTooLongIdent), "%v", err)
+			}
+			// The table name itself is valid; an explicit short CHECK still works.
+			_, err = build("create table "+name+"(a int, constraint ck check(a>0))", false)
+			require.NoError(t, err)
+		}
+	})
+
 	t.Run("table check binds after all columns", func(t *testing.T) {
 		tableDef, err := build("create table t(a int, check (b > a), b int)", false)
 		require.NoError(t, err)
 		require.Len(t, tableDef.Checks, 1)
-		require.Equal(t, "__mo_chk_1", tableDef.Checks[0].Name)
+		// Unnamed CHECKs are named after their owning table, MySQL-style.
+		require.Equal(t, "t_chk_1", tableDef.Checks[0].Name)
 		require.Equal(t, int32(types.T_bool), tableDef.Checks[0].Check.Typ.Id)
 	})
 
@@ -1606,7 +1922,9 @@ func TestGenViewTableDefPersistsExpandedStarSelectList(t *testing.T) {
 	var viewData ViewData
 	require.NoError(t, json.Unmarshal([]byte(tableDef.GetViewSql().GetView()), &viewData))
 	require.NotContains(t, viewData.Stmt, "*")
+	require.NotContains(t, viewData.Definition, "*")
 	require.Contains(t, viewData.Stmt, "`nation`.`n_nationkey`")
+	require.Contains(t, viewData.Definition, "`nation`.`n_nationkey`")
 	require.Contains(t, viewData.Stmt, "`nation`.`n_name`")
 	require.Contains(t, viewData.Stmt, "`nation`.`n_regionkey`")
 	require.Contains(t, viewData.Stmt, "`nation`.`n_comment`")
@@ -1635,6 +1953,33 @@ func TestGenViewTableDefPersistsExpandedStarSelectList(t *testing.T) {
 	defer missingStmt.Free()
 	_, err = BuildPlan(ctx, missingStmt, false)
 	require.ErrorContains(t, err, "column n_extra does not exist")
+}
+
+func TestGenViewTableDefPersistsExpandedStarForMultiStatementRootSQL(t *testing.T) {
+	const rootSQL = "create view v_star_multi as select * from nation; select 1"
+	ctx := &rootSQLCompilerContext{
+		MockCompilerContext: NewMockCompilerContext(false, newPlanTestProcess(t)),
+		rootSQL:             rootSQL,
+	}
+	statements, err := parsers.Parse(context.Background(), dialect.MYSQL, rootSQL, 1)
+	require.NoError(t, err)
+	require.Len(t, statements, 2)
+	defer func() {
+		for _, statement := range statements {
+			statement.Free()
+		}
+	}()
+
+	p, err := BuildPlan(ctx, statements[0], false)
+	require.NoError(t, err)
+	tableDef := p.GetDdl().GetCreateView().GetTableDef()
+	require.NotNil(t, tableDef)
+
+	var viewData ViewData
+	require.NoError(t, json.Unmarshal([]byte(tableDef.GetViewSql().GetView()), &viewData))
+	require.Contains(t, viewData.Stmt, "; select 1")
+	require.NotContains(t, viewData.Definition, "*")
+	require.Contains(t, viewData.Definition, "`nation`.`n_nationkey`")
 }
 
 func TestGenViewTableDefExpandedStarFromDerivedAggregateCanRebind(t *testing.T) {
@@ -2359,6 +2704,36 @@ func TestStableViewSQLWithExpandedStarsRejectsUnsupportedInputs(t *testing.T) {
 }
 
 func TestBuildCreateViewExplicitColumnList(t *testing.T) {
+	t.Run("dependent query keeps main output metadata", func(t *testing.T) {
+		const selectSQL = `select n.n_nationkey as k,
+			(select (select cast(n.n_nationkey as decimal(12,2)))) as v from nation n`
+		for _, prefix := range []string{"create view v (k,v) as ", "create table dependent_ctas as "} {
+			func() {
+				sql := prefix + selectSQL
+				ctx := &rootSQLCompilerContext{MockCompilerContext: NewMockCompilerContext(false, newPlanTestProcess(t)), rootSQL: sql}
+				stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
+				require.NoError(t, err)
+				defer stmt.Free()
+				p, err := BuildPlan(ctx, stmt, false)
+				require.NoError(t, err)
+				var cols []*plan.ColDef
+				if view := p.GetDdl().GetCreateView(); view != nil {
+					cols = view.TableDef.Cols
+				} else {
+					cols = p.GetDdl().GetCreateTable().TableDef.Cols
+				}
+				require.GreaterOrEqual(t, len(cols), 2)
+				require.Equal(t, "k", cols[0].Name)
+				require.Equal(t, int32(types.T_int32), cols[0].Typ.Id)
+				require.Equal(t, "v", cols[1].Name)
+				require.Equal(t, int32(types.T_decimal64), cols[1].Typ.Id)
+				require.Equal(t, int32(12), cols[1].Typ.Width)
+				require.Equal(t, int32(2), cols[1].Typ.Scale)
+				require.True(t, cols[1].Default.NullAbility)
+			}()
+		}
+	})
+
 	t.Run("applies explicit names", func(t *testing.T) {
 		const rootSQL = "create view v (`alias#one`, alias_two) as select 1, 2"
 		ctx := &rootSQLCompilerContext{
@@ -3026,7 +3401,7 @@ func TestBuildNullableLOBCTASDefaultFromOrigin(t *testing.T) {
 	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 	for _, oid := range []types.T{types.T_text, types.T_blob} {
 		defaultDef, err := buildCTASDefaultFromOrigin(
-			ctx, plan.Type{Id: int32(oid)}, true, "('seed')")
+			ctx, plan.Type{Id: int32(oid)}, true, "('seed')", "col")
 		require.NoError(t, err)
 		require.True(t, defaultDef.GetNullAbility())
 		require.Equal(t, "('seed')", defaultDef.GetOriginString())
@@ -3148,6 +3523,47 @@ func TestBuildCreateViewTracksMySQLSpecialColumnTypeProvenance(t *testing.T) {
 				require.Equal(t, int32(types.T_varchar), cols[1].Typ.GetId())
 			}
 		})
+	}
+}
+
+func TestBuildCTASTemporalFractionalPrecision(t *testing.T) {
+	const sql = `create table temporal_fsp as select
+		addtime(cast('2024-02-29 23:59:59.123456' as datetime(6)), '00:00:00.000001') as added,
+		subtime(cast('2024-02-29 23:59:59.123456' as datetime(6)), '00:00:00.000001') as subtracted,
+		convert_tz('2024-02-29 23:59:59.123456', '+00:00', '+05:30') as converted`
+	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	p, err := BuildPlan(NewMockCompilerContext(false, newPlanTestProcess(t)), stmt, false)
+	require.NoError(t, err)
+	cols := p.GetDdl().GetCreateTable().GetTableDef().GetCols()
+	require.GreaterOrEqual(t, len(cols), 3)
+	for _, col := range cols[:3] {
+		require.Equal(t, int32(types.T_datetime), col.Typ.Id, col.Name)
+		require.Equal(t, int32(6), col.Typ.Scale, col.Name)
+		require.Equal(t, int32(6), col.Typ.Width, col.Name)
+	}
+}
+
+func TestBuildCTASConvertTZDottedDatePrecision(t *testing.T) {
+	const sql = `create table temporal_dotted_fsp as select
+		convert_tz('2024.01.15', '+00:00', '+00:00') as dotted_date,
+		convert_tz('2024.01.15 12:34:56', '+00:00', '+00:00') as dotted_datetime,
+		convert_tz('2024.01.15 12:34:56.123', '+00:00', '+00:00') as dotted_fraction,
+		convert_tz('20240115123456.123456', '+00:00', '+00:00') as compact_fraction`
+	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	p, err := BuildPlan(NewMockCompilerContext(false, newPlanTestProcess(t)), stmt, false)
+	require.NoError(t, err)
+	cols := p.GetDdl().GetCreateTable().GetTableDef().GetCols()
+	require.GreaterOrEqual(t, len(cols), 4)
+	for i, want := range []int32{0, 0, 3, 6} {
+		require.Equal(t, int32(types.T_datetime), cols[i].Typ.Id, cols[i].Name)
+		require.Equal(t, want, cols[i].Typ.Scale, cols[i].Name)
+		require.Equal(t, want, cols[i].Typ.Width, cols[i].Name)
 	}
 }
 
@@ -4046,6 +4462,7 @@ func TestConstructCreateTableSQLSubscriptionCloneMapsPublisherForeignKeyToTarget
 
 	createSQL, statement, err := constructCreateTableSQL(
 		ctx, child, nil, true, cloneStmt, true, subscription,
+		false, "",
 	)
 	require.NoError(t, err)
 	defer statement.Free()
@@ -5519,6 +5936,36 @@ func TestMediumIntCatalogAuthoringProtocolFence(t *testing.T) {
 	require.ErrorContains(t, err, "protocol version 110")
 }
 
+// An inline vector index without options takes the params, or the refusal, of the
+// plugin's ParamsFromTree with an empty option list, as CREATE INDEX does.
+func TestInlineVectorIndexWithoutOptionsUsesParamsFromTree(t *testing.T) {
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
+	for _, algo := range []string{"ivfflat", "hnsw", "cagra", "ivfpq"} {
+		t.Run(algo, func(t *testing.T) {
+			p, ok := indexplugin.Get(algo)
+			require.True(t, ok)
+			want, wantErr := p.Catalog().ParamsFromTree(&tree.Index{IndexOption: &tree.IndexOption{}})
+			sql := "create table inline_" + algo + " (id bigint primary key, v vecf32(8), index i using " + algo + "(v))"
+			logicPlan, err := runOneStmt(mock, t, sql)
+			if wantErr != nil {
+				require.ErrorContains(t, err, wantErr.Error())
+				return
+			}
+			require.NoError(t, err)
+			var params string
+			for _, idx := range logicPlan.GetDdl().GetCreateTable().GetTableDef().GetIndexes() {
+				if idx.IndexAlgo == algo {
+					params = idx.IndexAlgoParams
+				}
+			}
+			got, err := catalog.IndexParamsStringToMap(params)
+			require.NoError(t, err)
+			delete(got, catalog.IndexParamSessionVars)
+			require.Equal(t, want, got)
+		})
+	}
+}
+
 func TestBuildCompositeIndexMarksEncodedKeyBinary(t *testing.T) {
 	logicPlan, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
 		"create table composite_key_charset (id int primary key, a varchar(10), b varchar(10), index idx_ab(a, b))")
@@ -6738,6 +7185,86 @@ func TestPartitionCreateSQLIsModeIndependentForAddPartition(t *testing.T) {
 	require.Len(t, defs, 1)
 }
 
+func TestCompoundAlterSelfFkActionCarriesFinalBinding(t *testing.T) {
+	// Review 5699738215: a self-referencing FK added by the same ALTER that
+	// drops its recorded parent key must bind to the surviving equivalent key
+	// in the persisted AddFk action (the durable payload alterTableInplace
+	// materializes), not only in the catalog rows.
+	newSelfTarget := func(mock *MockOptimizer) *TableDef {
+		intType := plan.Type{Id: int32(types.T_int32)}
+		self := &TableDef{
+			Name:  "self_target",
+			TblId: 100,
+			Cols: []*plan.ColDef{
+				{ColId: 1, Name: "id", Typ: intType},
+				{ColId: 2, Name: "pid", Typ: intType},
+			},
+			Indexes: []*plan.IndexDef{
+				{IndexName: "uq_first", Unique: true, Parts: []string{"id"}},
+				{IndexName: "uq_second", Unique: true, Parts: []string{"id"}},
+			},
+		}
+		mock.ctxt.tables[self.Name] = self
+		mock.ctxt.objects[self.Name] = &ObjectRef{SchemaName: "tpch", ObjName: self.Name}
+		mock.ctxt.id2name[self.TblId] = self.Name
+		return self
+	}
+
+	t.Run("add then drop within one compound ALTER", func(t *testing.T) {
+		mock := NewMockOptimizer(true, newPlanTestProcess(t))
+		newSelfTarget(mock)
+		logicPlan, err := runOneStmt(mock, t,
+			"alter table self_target add constraint zfk_compound foreign key(pid) references self_target(id), drop index uq_first")
+		require.NoError(t, err)
+		alter := logicPlan.GetDdl().GetAlterTable()
+
+		rebound := false
+		for _, sql := range alter.GetUpdateFkSqls() {
+			if strings.Contains(sql, "referenced_index_name") &&
+				strings.Contains(sql, "zfk_compound") &&
+				strings.Contains(sql, "uq_second") {
+				rebound = true
+			}
+		}
+		require.True(t, rebound,
+			"the catalog rebinding must move the same-statement self FK to the survivor")
+
+		var addFk *plan.AlterTableAddFk
+		for _, action := range alter.GetActions() {
+			if candidate := action.GetAddFk(); candidate != nil {
+				addFk = candidate
+			}
+		}
+		require.NotNil(t, addFk)
+		require.NotNil(t, addFk.Fkey)
+		require.Equal(t, "zfk_compound", addFk.Fkey.Name)
+		require.Equal(t, uint64(0), addFk.Fkey.ForeignTbl,
+			"plan-time self references carry the durable zero sentinel; the executor materializes the relationship")
+		require.Equal(t, "uq_second", addFk.Fkey.ReferencedIndexName,
+			"the persisted AddFk action is the durable FK payload alterTableInplace writes; it must carry the surviving binding, not the removed key")
+	})
+
+	t.Run("reversed order binds the survivor naturally", func(t *testing.T) {
+		mock := NewMockOptimizer(true, newPlanTestProcess(t))
+		newSelfTarget(mock)
+		logicPlan, err := runOneStmt(mock, t,
+			"alter table self_target drop index uq_first, add constraint zfk_compound foreign key(pid) references self_target(id)")
+		require.NoError(t, err)
+		alter := logicPlan.GetDdl().GetAlterTable()
+
+		var addFk *plan.AlterTableAddFk
+		for _, action := range alter.GetActions() {
+			if candidate := action.GetAddFk(); candidate != nil {
+				addFk = candidate
+			}
+		}
+		require.NotNil(t, addFk)
+		require.NotNil(t, addFk.Fkey)
+		require.Equal(t, "uq_second", addFk.Fkey.ReferencedIndexName,
+			"with the drop applied before the add, the binding is chosen from the final key set")
+	})
+}
+
 func TestCheckFkColsAreValidRecordsReferencedKey(t *testing.T) {
 	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	ctx.SetContext(context.Background())
@@ -6855,11 +7382,23 @@ func TestDropSelectedForeignKeyIndexIsRejected(t *testing.T) {
 					mock.ctxt.objects[child.Name] = &ObjectRef{SchemaName: "tpch", ObjName: child.Name}
 					mock.ctxt.id2name[child.TblId] = child.Name
 
-					_, err := runOneStmt(mock, t, sql)
-					require.Error(t, err)
-					require.True(t, moerr.IsMoErrCode(err, moerr.ErrDropIndexNeededInForeignKey), err.Error())
+					plan, err := runOneStmt(mock, t, sql)
+					if referencedIndexName == "" {
+						require.Error(t, err)
+						require.True(t, moerr.IsMoErrCode(err, moerr.ErrDropIndexNeededInForeignKey), err.Error())
+					} else {
+						// MySQL equivalent-key transition: the recorded key can be
+						// dropped while an equivalent unique key remains, and the
+						// binding moves to that key in the same DDL transaction.
+						require.NoError(t, err)
+						fkSqls := plan.GetDdl().GetAlterTable().GetUpdateFkSqls()
+						require.Len(t, fkSqls, 1)
+						require.Contains(t, fkSqls[0], "referenced_index_name")
+						require.Contains(t, fkSqls[0], "idx_alternative")
+						require.Contains(t, fkSqls[0], "fk_child_parent")
+					}
 
-					plan, err := runOneStmt(mock, t, "drop index idx_unrelated on test_idx")
+					plan, err = runOneStmt(mock, t, "drop index idx_unrelated on test_idx")
 					require.NoError(t, err)
 					require.Equal(t, "idx_unrelated", plan.GetDdl().GetDropIndex().GetIndexName())
 
@@ -6898,6 +7437,244 @@ func TestAlterCanDropSelfForeignKeyAndItsSelectedIndexTogether(t *testing.T) {
 	require.Len(t, logicPlan.GetDdl().GetAlterTable().GetActions(), 2)
 }
 
+func TestAlterDropBoundIndexRebindsToSameStatementReplacement(t *testing.T) {
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
+	parent := mock.ctxt.tables["test_idx"]
+	parent.TblId = 100
+	parent.Pkey = nil
+	parent.RefChildTbls = []uint64{200}
+	parent.Indexes = []*plan.IndexDef{
+		{IndexName: "idx1", Unique: true, Parts: []string{"n_nationkey"}},
+	}
+	child := &TableDef{
+		Name:  "fk_child",
+		TblId: 200,
+		Fkeys: []*plan.ForeignKeyDef{{
+			Name:                "fk_child_parent",
+			ForeignTbl:          parent.TblId,
+			ForeignCols:         []uint64{parent.Cols[0].ColId},
+			ReferencedIndexName: "idx1",
+		}},
+	}
+	mock.ctxt.tables[child.Name] = child
+	mock.ctxt.objects[child.Name] = &ObjectRef{SchemaName: "tpch", ObjName: child.Name}
+	mock.ctxt.id2name[child.TblId] = child.Name
+
+	logicPlan, err := runOneStmt(mock, t,
+		"alter table test_idx drop index idx1, add unique index uk_new(n_nationkey)")
+	require.NoError(t, err)
+	fkSqls := logicPlan.GetDdl().GetAlterTable().GetUpdateFkSqls()
+	require.Len(t, fkSqls, 1)
+	require.Contains(t, fkSqls[0], "referenced_index_name")
+	require.Contains(t, fkSqls[0], "uk_new")
+	require.Contains(t, fkSqls[0], "fk_child_parent")
+}
+
+func TestDropForeignKeyBoundIndexWithoutAlternativeIsRejected(t *testing.T) {
+	for _, sql := range []string{
+		"drop index idx1 on test_idx",
+		"alter table test_idx drop index idx1",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			mock := NewMockOptimizer(true, newPlanTestProcess(t))
+			parent := mock.ctxt.tables["test_idx"]
+			parent.TblId = 100
+			parent.Pkey = nil
+			parent.RefChildTbls = []uint64{200}
+			parent.Indexes = []*plan.IndexDef{
+				{IndexName: "idx1", Unique: true, Parts: []string{"n_nationkey"}},
+				{IndexName: "idx_unrelated", Unique: true, Parts: []string{"n_name"}},
+			}
+			child := &TableDef{
+				Name:  "fk_child",
+				TblId: 200,
+				Fkeys: []*plan.ForeignKeyDef{{
+					Name:                "fk_child_parent",
+					ForeignTbl:          parent.TblId,
+					ForeignCols:         []uint64{parent.Cols[0].ColId},
+					ReferencedIndexName: "idx1",
+				}},
+			}
+			mock.ctxt.tables[child.Name] = child
+			mock.ctxt.objects[child.Name] = &ObjectRef{SchemaName: "tpch", ObjName: child.Name}
+			mock.ctxt.id2name[child.TblId] = child.Name
+
+			_, err := runOneStmt(mock, t, sql)
+			require.Error(t, err)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrDropIndexNeededInForeignKey), err.Error())
+		})
+	}
+}
+
+func TestDropForeignKeyIndexRepairsStaleClaimMetadata(t *testing.T) {
+	t.Run("stale claim without survivor keeps the rejection", func(t *testing.T) {
+		mock := NewMockOptimizer(true, newPlanTestProcess(t))
+		parent := mock.ctxt.tables["test_idx"]
+		parent.TblId = 100
+		parent.Pkey = nil
+		parent.RefChildTbls = []uint64{200}
+		parent.Indexes = []*plan.IndexDef{
+			{IndexName: "idx_now", Unique: true, Parts: []string{"n_nationkey"}},
+		}
+		child := &TableDef{
+			Name:  "fk_child",
+			TblId: 200,
+			Fkeys: []*plan.ForeignKeyDef{{
+				Name:                "fk_child_parent",
+				ForeignTbl:          parent.TblId,
+				ForeignCols:         []uint64{parent.Cols[0].ColId},
+				ReferencedIndexName: "idx_stale_gone",
+			}},
+		}
+		mock.ctxt.tables[child.Name] = child
+		mock.ctxt.objects[child.Name] = &ObjectRef{SchemaName: "tpch", ObjName: child.Name}
+		mock.ctxt.id2name[child.TblId] = child.Name
+
+		_, err := runOneStmt(mock, t, "alter table test_idx drop index idx_now")
+		require.Error(t, err)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrDropIndexNeededInForeignKey), err.Error())
+	})
+
+	t.Run("stale claim rebinds to a covering survivor", func(t *testing.T) {
+		mock := NewMockOptimizer(true, newPlanTestProcess(t))
+		parent := mock.ctxt.tables["test_idx"]
+		parent.TblId = 100
+		parent.Pkey = nil
+		parent.RefChildTbls = []uint64{200}
+		parent.Indexes = []*plan.IndexDef{
+			{IndexName: "idx_drop_me", Unique: true, Parts: []string{"n_nationkey"}},
+			{IndexName: "idx_stays", Unique: true, Parts: []string{"n_nationkey"}},
+		}
+		child := &TableDef{
+			Name:  "fk_child",
+			TblId: 200,
+			Fkeys: []*plan.ForeignKeyDef{{
+				Name:                "fk_child_parent",
+				ForeignTbl:          parent.TblId,
+				ForeignCols:         []uint64{parent.Cols[0].ColId},
+				ReferencedIndexName: "idx_stale_gone",
+			}},
+		}
+		mock.ctxt.tables[child.Name] = child
+		mock.ctxt.objects[child.Name] = &ObjectRef{SchemaName: "tpch", ObjName: child.Name}
+		mock.ctxt.id2name[child.TblId] = child.Name
+
+		logicPlan, err := runOneStmt(mock, t, "alter table test_idx drop index idx_drop_me")
+		require.NoError(t, err)
+		fkSqls := logicPlan.GetDdl().GetAlterTable().GetUpdateFkSqls()
+		require.Len(t, fkSqls, 1)
+		require.Contains(t, fkSqls[0], "referenced_index_name")
+		require.Contains(t, fkSqls[0], "idx_stays")
+		require.Contains(t, fkSqls[0], "fk_child_parent")
+	})
+}
+
+func TestAlterCompoundDropsLeaveNoCoveringSurvivorIsRejected(t *testing.T) {
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
+	parent := mock.ctxt.tables["test_idx"]
+	parent.TblId = 100
+	parent.Pkey = nil
+	parent.RefChildTbls = []uint64{200}
+	parent.Indexes = []*plan.IndexDef{
+		{IndexName: "idx1", Unique: true, Parts: []string{"n_nationkey"}},
+		{IndexName: "idx2", Unique: true, Parts: []string{"n_nationkey"}},
+	}
+	child := &TableDef{
+		Name:  "fk_child",
+		TblId: 200,
+		Fkeys: []*plan.ForeignKeyDef{{
+			Name:                "fk_child_parent",
+			ForeignTbl:          parent.TblId,
+			ForeignCols:         []uint64{parent.Cols[0].ColId},
+			ReferencedIndexName: "idx1",
+		}},
+	}
+	mock.ctxt.tables[child.Name] = child
+	mock.ctxt.objects[child.Name] = &ObjectRef{SchemaName: "tpch", ObjName: child.Name}
+	mock.ctxt.id2name[child.TblId] = child.Name
+
+	// Both covering keys vanish with the statement, so the final key set has
+	// no survivor and the compound drop must keep the 1553 rejection.
+	_, err := runOneStmt(mock, t, "alter table test_idx drop index idx1, drop index idx2")
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrDropIndexNeededInForeignKey), err.Error())
+}
+
+func TestDropSelfReferencingBoundIndexRebinds(t *testing.T) {
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
+	tableDef := mock.ctxt.tables["test_idx"]
+	tableDef.TblId = 100
+	tableDef.Pkey = nil
+	tableDef.RefChildTbls = []uint64{0}
+	tableDef.Indexes = []*plan.IndexDef{
+		{IndexName: "idx1", Unique: true, Parts: []string{"n_nationkey"}},
+		{IndexName: "idx_stays", Unique: true, Parts: []string{"n_nationkey"}},
+	}
+	tableDef.Fkeys = []*plan.ForeignKeyDef{{
+		Name:                "fk_self",
+		ForeignTbl:          0,
+		ForeignCols:         []uint64{tableDef.Cols[0].ColId},
+		ReferencedIndexName: "idx1",
+	}}
+
+	logicPlan, err := runOneStmt(mock, t, "alter table test_idx drop index idx1")
+	require.NoError(t, err)
+	fkSqls := logicPlan.GetDdl().GetAlterTable().GetUpdateFkSqls()
+	require.Len(t, fkSqls, 1)
+	require.Contains(t, fkSqls[0], "referenced_index_name")
+	require.Contains(t, fkSqls[0], "idx_stays")
+	require.Contains(t, fkSqls[0], "fk_self")
+	// A pure DROP INDEX plans an INPLACE alter with no copy table: its durable
+	// binding is aligned by the executor inside the same transaction. Any
+	// statement that does build a COPY must carry the rewritten binding in
+	// the copy's durable definition as well.
+	copyDef := logicPlan.GetDdl().GetAlterTable().GetCopyTableDef()
+	if copyDef != nil {
+		require.Equal(t, "idx_stays", copyDef.Fkeys[0].ReferencedIndexName)
+	}
+}
+
+func TestDropBoundIndexRebindsEveryBoundChild(t *testing.T) {
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
+	parent := mock.ctxt.tables["test_idx"]
+	parent.TblId = 100
+	parent.Pkey = nil
+	parent.RefChildTbls = []uint64{200, 300}
+	parent.Indexes = []*plan.IndexDef{
+		{IndexName: "idx1", Unique: true, Parts: []string{"n_nationkey"}},
+		{IndexName: "idx2", Unique: true, Parts: []string{"n_nationkey"}},
+	}
+	for _, spec := range []struct {
+		name string
+		id   uint64
+		fk   string
+	}{{"fk_child_one", 200, "fk_child_one"}, {"fk_child_two", 300, "fk_child_two"}} {
+		child := &TableDef{
+			Name:  spec.name,
+			TblId: spec.id,
+			Fkeys: []*plan.ForeignKeyDef{{
+				Name:                spec.fk,
+				ForeignTbl:          parent.TblId,
+				ForeignCols:         []uint64{parent.Cols[0].ColId},
+				ReferencedIndexName: "idx1",
+			}},
+		}
+		mock.ctxt.tables[child.Name] = child
+		mock.ctxt.objects[child.Name] = &ObjectRef{SchemaName: "tpch", ObjName: child.Name}
+		mock.ctxt.id2name[child.TblId] = child.Name
+	}
+
+	logicPlan, err := runOneStmt(mock, t, "alter table test_idx drop index idx1")
+	require.NoError(t, err)
+	fkSqls := logicPlan.GetDdl().GetAlterTable().GetUpdateFkSqls()
+	require.Len(t, fkSqls, 2)
+	for i, childFk := range []string{"fk_child_one", "fk_child_two"} {
+		require.Contains(t, fkSqls[i], childFk, childFk)
+		require.Contains(t, fkSqls[i], "idx2", childFk)
+		require.Contains(t, fkSqls[i], "referenced_index_name", childFk)
+	}
+}
+
 func TestDropReferencedPrimaryKeyIsRejected(t *testing.T) {
 	for _, referencedIndexName := range []string{"PRIMARY", ""} {
 		mock := NewMockOptimizer(true, nil)
@@ -6934,10 +7711,66 @@ func TestDropReferencedPrimaryKeyIsRejected(t *testing.T) {
 			}),
 		)
 
+		// The default test_idx mock ships a unique idx1 covering the primary
+		// column, so MySQL's equivalent-key transition lets a persisted PRIMARY
+		// binding drop the key and rebind to idx1 inside the same DDL
+		// transaction; legacy bindings keep the conservative rejection.
+		logicPlan, err := runOneStmt(mock, t, "alter table test_idx drop primary key")
+		if referencedIndexName == "" {
+			require.Error(t, err)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrDropIndexNeededInForeignKey), err.Error())
+		} else {
+			require.NoError(t, err)
+			fkSqls := logicPlan.GetDdl().GetAlterTable().GetUpdateFkSqls()
+			require.Len(t, fkSqls, 1)
+			require.Contains(t, fkSqls[0], "referenced_index_name")
+			require.Contains(t, fkSqls[0], "idx1")
+			require.Contains(t, fkSqls[0], "fk_child_primary")
+		}
+	}
+
+	t.Run("no covering survivor keeps the rejection", func(t *testing.T) {
+		mock := NewMockOptimizer(true, nil)
+		parent := mock.ctxt.tables["test_idx"]
+		parent.TblId = 100
+		parent.RefChildTbls = []uint64{200}
+		parent.Indexes = []*plan.IndexDef{
+			{IndexName: "idx_other", Unique: true, Parts: []string{"n_name"}},
+		}
+		child := &TableDef{
+			Name:  "fk_child_primary",
+			TblId: 200,
+			Fkeys: []*plan.ForeignKeyDef{{
+				Name:                "fk_child_primary",
+				ForeignTbl:          parent.TblId,
+				ForeignCols:         []uint64{parent.Cols[0].ColId},
+				ReferencedIndexName: "PRIMARY",
+			}},
+		}
+		mock.ctxt.tables[child.Name] = child
+		mock.ctxt.objects[child.Name] = &ObjectRef{SchemaName: "tpch", ObjName: child.Name}
+		mock.ctxt.id2name[child.TblId] = child.Name
+		proc := testutil.NewProc(t)
+		proc.ReplaceTopCtx(defines.AttachAccountId(context.Background(), catalog.System_Account))
+		mock.ctxt.GetProcessFunc = func() *process.Process { return proc }
+		setPlanTestGlobalVariable(t, proc.GetService(), moruntime.InternalSQLExecutor,
+			executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+				require.Equal(t,
+					"SELECT name, is_visible FROM mo_catalog.mo_indexes WHERE table_id = 100", sql)
+				result := executor.NewMemResult(
+					[]types.Type{types.T_varchar.ToType(), types.T_int8.ToType()}, proc.Mp(),
+				)
+				result.NewBatchWithRowCount(1)
+				require.NoError(t, executor.AppendStringRows(result, 0, []string{"idx_other"}))
+				require.NoError(t, executor.AppendFixedRows(result, 1, []int8{1}))
+				return result.GetResult(), nil
+			}),
+		)
+
 		_, err := runOneStmt(mock, t, "alter table test_idx drop primary key")
 		require.Error(t, err)
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrDropIndexNeededInForeignKey), err.Error())
-	}
+	})
 }
 
 func TestCreateForeignKeyUsesLegacyCatalogBeforeTenantUpgrade(t *testing.T) {
@@ -7051,4 +7884,497 @@ func TestValidateIdentifierEncoding(t *testing.T) {
 		_, err := runOneStmt(mock, t, statement)
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput), "%q: %v", statement, err)
 	}
+}
+
+func TestBuildCreateViewMetadataReplay(t *testing.T) {
+	selects := make([]string, 0, 27)
+	selects = append(selects,
+		`select 'ab' as c`,
+		`select 'a\\b' as c`,
+		`select 'é\\界' as c`,
+		`select src.ab from (select _binary 'ab') src`,
+		`select src.ab from (select _binary 'ab' as ab) src`,
+		`select src.`+"`n_nationkey + 1`"+` from (select n_nationkey + 1 from nation) src`,
+		`select src.`+"`a\\b`"+` from (select name_const('a\\b', 1)) src`,
+		`select src.ab from (select _binary 'ab') src (ab)`,
+		`with src as (select _binary 'ab') select ab from src`,
+		`with src(ab) as (select _binary 'ab') select ab from src`,
+		`select src.ab from ((select _binary 'ab') union all (select _binary 'cd')) src`,
+		`select src.ab from (select x.ab from (select _binary 'ab') x) src`,
+		`select (select src.ab from (select _binary 'ab') src) as c`,
+		`select 1 as c where exists (select src.ab from (select _binary 'ab') src)`,
+		`select * from (select src.ab from (select _binary 'ab') src) x`,
+		`select _binary 'ab' as ab having ab = _binary 'ab' order by ab`,
+		`select name_const('c', 'plain') as c`,
+		`select name_const('c', _binary 'a\\b') as c`,
+		`select length(name_const('c', 'a\\b')) as c`,
+		`select name_const('c', 'a\\b') as c`,
+		`select name_const('c', ('a\\b'))`,
+		`select name_const('c', 'a\\b' collate utf8mb4_bin)`,
+		`select c from (select name_const('c', 'a\\b')) src`,
+		`select name_const('c', 'a\\b$''é') as c`,
+	)
+	for _, width := range []int{65534, 65535, 65536} {
+		selects = append(selects, "select '"+strings.Repeat("a", width-1)+`\\' as c`)
+	}
+	for index, selectSQL := range selects {
+		name := selectSQL
+		if len(name) > 200 {
+			name = fmt.Sprintf("long_literal_%d", index)
+		}
+		t.Run(name, func(t *testing.T) {
+			build := func(sqlText, mode string) *TableDef {
+				stmt, err := parsers.ParseOneWithSQLMode(t.Context(), dialect.MYSQL, sqlText, 1, mode)
+				require.NoError(t, err)
+				defer stmt.Free()
+				ctx := &rootSQLCompilerContext{MockCompilerContext: NewMockCompilerContext(false, newPlanTestProcess(t)), rootSQL: sqlText}
+				ctx.SetSqlModeOverride(mode)
+				built, err := BuildPlan(ctx, stmt, false)
+				require.NoError(t, err, sqlText)
+				return built.GetDdl().GetCreateView().GetTableDef()
+			}
+			original := build("create view v as "+selectSQL, "")
+			var data ViewData
+			require.NoError(t, json.Unmarshal([]byte(original.GetViewSql().GetView()), &data))
+			for _, mode := range []string{"", "ANSI_QUOTES,NO_BACKSLASH_ESCAPES"} {
+				replayed := build("create view replayed as "+data.Definition, mode)
+				require.Len(t, replayed.Cols, len(original.Cols))
+				for i, col := range original.Cols {
+					require.Equal(t, col.Name, replayed.Cols[i].Name)
+					require.Equal(t, col.Typ.Id, replayed.Cols[i].Typ.Id)
+					require.Equal(t, col.Typ.Width, replayed.Cols[i].Typ.Width, data.Definition)
+					require.Equal(t, col.Typ.Charset, replayed.Cols[i].Typ.Charset)
+					require.Equal(t, col.Typ.CollationVersion, replayed.Cols[i].Typ.CollationVersion)
+				}
+			}
+		})
+	}
+}
+
+func TestSessionDatabaseNullability(t *testing.T) {
+	for _, database := range []string{"", "tpch"} {
+		t.Run("database="+database, func(t *testing.T) {
+			proc := newPlanTestProcess(t)
+			proc.Base.SessionInfo.Database = database
+			mock := NewMockOptimizer(false, proc)
+			const selectSQL = "select database() as d, schema() as s, " +
+				"concat('db=', database()) as c, ifnull(database(), 'none') as i, " +
+				"coalesce(schema(), 'none') as f, coalesce(schema(), null) as n"
+			wantNullable := []bool{true, true, true, false, false, true}
+			query, err := buildSingleStmt(mock, t, selectSQL)
+			require.NoError(t, err)
+			columns := GetResultColumnsFromPlan(query)
+			require.Len(t, columns, len(wantNullable))
+			for i, nullable := range wantNullable {
+				require.Equal(t, !nullable, columns[i].Typ.NotNullable, columns[i].Name)
+			}
+			ctas, err := buildSingleStmt(mock, t, "create table tpch.ctas_session_database as "+selectSQL)
+			require.NoError(t, err)
+			columns = ctas.GetDdl().GetCreateTable().GetTableDef().GetCols()
+			for i, nullable := range wantNullable {
+				require.Equal(t, nullable, columns[i].GetDefault().GetNullAbility(), columns[i].Name)
+			}
+		})
+	}
+}
+
+// TestBuildCTASUnsignedDecimalAttributeProvenance pins the CTAS attribute
+// channel: a direct single-source projection carries the source column's
+// numeric attribute mask into the CTAS target; a computed expression is a
+// semantic boundary and yields an unattributed target.
+func TestBuildCTASUnsignedDecimalAttributeProvenance(t *testing.T) {
+	proc := newPlanTestProcess(t)
+	ctx := NewMockCompilerContext(false, proc)
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	origProtocol, hadProtocol := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	origFloor, hadFloor := rt.GetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor)
+	t.Cleanup(func() {
+		if hadProtocol {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, origProtocol)
+		}
+		if hadFloor {
+			rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, origFloor)
+		}
+	})
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, defines.MORPCLatestVersion)
+
+	ctx.tables["nation"].Cols = append(ctx.tables["nation"].Cols,
+		&plan.ColDef{
+			Name: "ud_amount",
+			Typ: plan.Type{
+				Id: int32(types.T_decimal128), Width: 18, Scale: 2,
+				NumericAttributes: types.NumericAttributeUnsigned, NotNullable: true,
+			},
+		},
+		&plan.ColDef{
+			Name: "uz_count",
+			Typ: plan.Type{
+				Id: int32(types.T_decimal64), Width: 10, Scale: 0,
+				NumericAttributes: types.NumericAttributeZerofillMask,
+			},
+		},
+	)
+
+	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL,
+		"create table copied as select ud_amount, uz_count, ud_amount + 0 as computed_amount, n_name from nation", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	built, err := BuildPlan(ctx, stmt, false)
+	require.NoError(t, err)
+	cols := built.GetDdl().GetCreateTable().GetTableDef().GetCols()
+	require.GreaterOrEqual(t, len(cols), 4)
+	require.Equal(t, "ud_amount", cols[0].Name)
+	require.Equal(t, uint32(types.NumericAttributeUnsigned), cols[0].Typ.GetNumericAttributes())
+	require.Equal(t, int32(18), cols[0].Typ.GetWidth())
+	require.Equal(t, int32(2), cols[0].Typ.GetScale())
+	require.Equal(t, "uz_count", cols[1].Name)
+	require.Equal(t, uint32(types.NumericAttributeZerofillMask), cols[1].Typ.GetNumericAttributes())
+	require.Equal(t, "computed_amount", cols[2].Name)
+	require.Equal(t, uint32(0), cols[2].Typ.GetNumericAttributes())
+	require.Equal(t, uint32(0), cols[3].Typ.GetNumericAttributes())
+}
+
+// TestBuildCTASUnsignedDecimalSetOperationProvenance pins the approved
+// provenance rule at the persistence seam: a set-operation projection is not
+// single-source, so CTAS over UNION/UNION ALL must persist plain signed
+// decimals even when every branch carries the same mask (the set-op output
+// type only retains a packet-only UNSIGNED bit; persisting it would make the
+// new table reject negative assignments, contradicting MySQL's metadata
+// contract). A direct single-source projection keeps the mask (control), and
+// a negative literal insertion into the union-shaped destination binds no
+// admission, proving the stored table behaves signed.
+func TestBuildCTASUnsignedDecimalSetOperationProvenance(t *testing.T) {
+	proc := newPlanTestProcess(t)
+	ctx := NewMockCompilerContext(false, proc)
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	origProtocol, hadProtocol := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	origFloor, hadFloor := rt.GetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor)
+	t.Cleanup(func() {
+		if hadProtocol {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, origProtocol)
+		}
+		if hadFloor {
+			rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, origFloor)
+		}
+	})
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, defines.MORPCLatestVersion)
+
+	ctx.tables["nation"].Cols = append(ctx.tables["nation"].Cols,
+		&plan.ColDef{
+			Name: "ud_amount",
+			Typ: plan.Type{
+				Id: int32(types.T_decimal128), Width: 18, Scale: 2,
+				NumericAttributes: types.NumericAttributeUnsigned, NotNullable: true,
+			},
+		},
+	)
+
+	buildCTASCols := func(t *testing.T, sql string) []*plan.ColDef {
+		t.Helper()
+		stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
+		require.NoError(t, err)
+		defer stmt.Free()
+		built, err := BuildPlan(ctx, stmt, false)
+		require.NoError(t, err, sql)
+		return built.GetDdl().GetCreateTable().GetTableDef().GetCols()
+	}
+
+	admissionNames := []string{
+		unsignedDecimalAdmissionName,
+		unsignedDecimalAdmissionStrictName,
+		unsignedDecimalAdmissionIgnoreName,
+	}
+
+	unionShapes := map[string]*plan.Type{}
+	for _, tc := range []struct{ name, sql string }{
+		{"union all", "create table dst_uall as select ud_amount from nation union all select ud_amount from nation"},
+		{"union distinct", "create table dst_u as select ud_amount from nation union select ud_amount from nation"},
+		{"union all aliased", "create table dst_ualias as select ud_amount as amount from nation union all select ud_amount from nation"},
+	} {
+		t.Run(tc.name+" persists plain signed decimal", func(t *testing.T) {
+			cols := buildCTASCols(t, tc.sql)
+			require.Equal(t, uint32(0), cols[0].Typ.GetNumericAttributes(),
+				"a set-operation CTAS column is a semantic boundary and must not persist the mask")
+			require.Equal(t, int32(18), cols[0].Typ.GetWidth())
+			require.Equal(t, int32(2), cols[0].Typ.GetScale())
+			typCopy := cols[0].Typ
+			unionShapes[tc.name] = &typCopy
+		})
+	}
+
+	t.Run("direct single-source control retains the mask", func(t *testing.T) {
+		cols := buildCTASCols(t, "create table dst_direct as select ud_amount from nation")
+		require.Equal(t, uint32(types.NumericAttributeUnsigned), cols[0].Typ.GetNumericAttributes())
+	})
+
+	t.Run("subsequent negative insertion binds no admission on the union result", func(t *testing.T) {
+		// Mirror the exact persisted shape the UNION ALL build produced and
+		// insert a negative literal: a signed destination admits it (the plain
+		// assignment cast), while the pre-fix defect composed the strict-ish
+		// admission boundary that rejects negative values at execution.
+		shape := unionShapes["union all"]
+		require.NotNil(t, shape)
+		// INSERT binding needs the DML resolve path: with isDml unset,
+		// Resolve strips the Row_ID column and the dedup/multi-update
+		// machinery in bindInsert panics on the shortened TableDef.
+		ctx.isDml = true
+		ctx.tables["dst_uall"] = unsignedDecimalDMLTable("dst_uall",
+			&plan.ColDef{Name: "a", OriginName: "a",
+				Typ: plan.Type{
+					Id: shape.Id, Width: shape.Width, Scale: shape.Scale,
+					NumericAttributes: shape.NumericAttributes,
+				},
+				Default: &plan.Default{NullAbility: true}},
+		)
+		ctx.objects["dst_uall"] = &plan.ObjectRef{SchemaName: "tpch", ObjName: "dst_uall"}
+
+		stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL,
+			"insert into dst_uall(a) values (-1.5)", 1)
+		require.NoError(t, err)
+		defer stmt.Free()
+		built, err := BuildPlan(ctx, stmt, false)
+		require.NoError(t, err)
+		require.Empty(t,
+			collectAssignmentFunctionExprs(built, admissionNames...),
+			"a set-operation CTAS result is plain signed decimal; negative insertion composes no admission: %s",
+			built.String())
+	})
+
+	t.Run("negative insertion control: attributed shape composes admission", func(t *testing.T) {
+		ctx.isDml = true
+		ctx.tables["dst_att"] = unsignedDecimalDMLTable("dst_att",
+			&plan.ColDef{Name: "a", OriginName: "a",
+				Typ: plan.Type{
+					Id: int32(types.T_decimal128), Width: 18, Scale: 2,
+					NumericAttributes: types.NumericAttributeUnsigned,
+				},
+				Default: &plan.Default{NullAbility: true}},
+		)
+		ctx.objects["dst_att"] = &plan.ObjectRef{SchemaName: "tpch", ObjName: "dst_att"}
+		stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL,
+			"insert into dst_att(a) values (-1.5)", 1)
+		require.NoError(t, err)
+		defer stmt.Free()
+		built, err := BuildPlan(ctx, stmt, false)
+		require.NoError(t, err)
+		require.NotEmpty(t,
+			collectAssignmentFunctionExprs(built, unsignedDecimalAdmissionName),
+			"the comparison control proves the negative-insertion assertion above is discriminating")
+	})
+}
+
+// Review 5690727734: legacy bindings only protect eligible keys, so ordinary
+// secondary indexes on the same columns stay droppable, matching the baseline
+// executor-side checker that requires key uniqueness.
+func TestLegacyFkDoesNotProtectSecondaryIndexDrops(t *testing.T) {
+	t.Run("secondary index stays droppable", func(t *testing.T) {
+		mock := NewMockOptimizer(true, newPlanTestProcess(t))
+		parent := mock.ctxt.tables["test_idx"]
+		parent.TblId = 100
+		parent.RefChildTbls = []uint64{200}
+		parent.Indexes = []*plan.IndexDef{
+			{IndexName: "idx_sec", Unique: false, Parts: []string{"n_nationkey"}},
+		}
+		child := &TableDef{
+			Name:  "fk_child_legacy",
+			TblId: 200,
+			Fkeys: []*plan.ForeignKeyDef{{
+				Name:                "fk_child_legacy",
+				ForeignTbl:          parent.TblId,
+				ForeignCols:         []uint64{parent.Cols[0].ColId},
+				ReferencedIndexName: "",
+			}},
+		}
+		mock.ctxt.tables[child.Name] = child
+		mock.ctxt.objects[child.Name] = &ObjectRef{SchemaName: "tpch", ObjName: child.Name}
+		mock.ctxt.id2name[child.TblId] = child.Name
+		logic, err := runOneStmt(mock, t, "drop index idx_sec on test_idx")
+		require.NoError(t, err)
+		require.NotNil(t, logic.GetDdl().GetDropIndex())
+	})
+
+	t.Run("covering unique keeps protection", func(t *testing.T) {
+		mock := NewMockOptimizer(true, newPlanTestProcess(t))
+		parent := mock.ctxt.tables["test_idx"]
+		parent.TblId = 100
+		parent.RefChildTbls = []uint64{200}
+		parent.Indexes = []*plan.IndexDef{
+			{IndexName: "uk_c", Unique: true, Parts: []string{"n_nationkey"}},
+		}
+		child := &TableDef{
+			Name:  "fk_child_legacy",
+			TblId: 200,
+			Fkeys: []*plan.ForeignKeyDef{{
+				Name:                "fk_child_legacy",
+				ForeignTbl:          parent.TblId,
+				ForeignCols:         []uint64{parent.Cols[0].ColId},
+				ReferencedIndexName: "",
+			}},
+		}
+		mock.ctxt.tables[child.Name] = child
+		mock.ctxt.objects[child.Name] = &ObjectRef{SchemaName: "tpch", ObjName: child.Name}
+		mock.ctxt.id2name[child.TblId] = child.Name
+		_, err := runOneStmt(mock, t, "drop index uk_c on test_idx")
+		require.Error(t, err)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrDropIndexNeededInForeignKey), err.Error())
+	})
+}
+
+// Review 5690727734: a stale durable claim only counts when a real
+// PRIMARY/UNIQUE key under that name still covers the foreign key's columns;
+// a fake keyless primary and a recreated non-covering name never do.
+func TestStaleClaimRequiresRealCoveringKey(t *testing.T) {
+	caseFn := func(claim string, parentSetup func(*TableDef)) func(t *testing.T) {
+		return func(t *testing.T) {
+			mock := NewMockOptimizer(true, newPlanTestProcess(t))
+			parent := mock.ctxt.tables["test_idx"]
+			parent.TblId = 100
+			parent.RefChildTbls = []uint64{200}
+			parentSetup(parent)
+			child := &TableDef{
+				Name:  "fk_child_stale",
+				TblId: 200,
+				Fkeys: []*plan.ForeignKeyDef{{
+					Name:                "fk_child_stale",
+					ForeignTbl:          parent.TblId,
+					ForeignCols:         []uint64{parent.Cols[0].ColId},
+					ReferencedIndexName: claim,
+				}},
+			}
+			mock.ctxt.tables[child.Name] = child
+			mock.ctxt.objects[child.Name] = &ObjectRef{SchemaName: "tpch", ObjName: child.Name}
+			mock.ctxt.id2name[child.TblId] = child.Name
+			_, err := runOneStmt(mock, t, "alter table test_idx drop index uk_last")
+			require.Error(t, err)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrDropIndexNeededInForeignKey), err.Error())
+		}
+	}
+	t.Run("fake primary key does not satisfy a PRIMARY claim", caseFn("PRIMARY", func(p *TableDef) {
+		p.Pkey = &plan.PrimaryKeyDef{
+			PkeyColName: catalog.FakePrimaryKeyColName,
+			Names:       []string{catalog.FakePrimaryKeyColName},
+		}
+		p.Indexes = []*plan.IndexDef{
+			{IndexName: "uk_last", Unique: true, Parts: []string{"n_nationkey"}},
+		}
+	}))
+	t.Run("recreated non-covering name does not satisfy a claim", caseFn("uk_stale", func(p *TableDef) {
+		p.Pkey = nil
+		p.Indexes = []*plan.IndexDef{
+			{IndexName: "uk_stale", Unique: true, Parts: []string{"n_name"}},
+			{IndexName: "uk_last", Unique: true, Parts: []string{"n_nationkey"}},
+		}
+	}))
+}
+
+// Review 5690727734: a self-referencing DROP PRIMARY KEY must address the
+// catalog rebind to the original table's name; the COPY relation's temporary
+// name is discarded when the relation transfer moves the source rows.
+// Review 5690727734: a self-referencing DROP PRIMARY KEY must address the
+// catalog rebind to the original table's name; the COPY relation's temporary
+// name is discarded when the relation transfer moves the source rows. The
+// full COPY flow needs end-to-end services, so the readdressing itself is
+// pinned here at the planner boundary.
+func TestDropPrimaryKeySelfReferenceRebindAddressesOriginalTable(t *testing.T) {
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
+	copyDef := &TableDef{
+		Name:         "test_idx_copy_TEST",
+		DbName:       "tpch",
+		TblId:        100,
+		RefChildTbls: []uint64{100},
+		Cols: []*ColDef{
+			{Name: "n_nationkey", ColId: 1, Typ: plan.Type{}},
+		},
+		Pkey: &plan.PrimaryKeyDef{
+			Names:       []string{"n_nationkey"},
+			PkeyColName: "n_nationkey",
+		},
+		Indexes: []*plan.IndexDef{
+			{IndexName: "uk_id", Unique: true, Parts: []string{"n_nationkey"}},
+		},
+		Fkeys: []*plan.ForeignKeyDef{{
+			Name:                "fk_self",
+			ForeignTbl:          100,
+			ForeignCols:         []uint64{1},
+			ReferencedIndexName: "PRIMARY",
+		}},
+	}
+	alterPlan := &plan.AlterTable{CopyTableDef: copyDef}
+	alterCtx := &AlterTableContext{
+		originTableName: "test_idx",
+		copyTableName:   "test_idx_copy_TEST",
+	}
+	require.NoError(t, DropPrimaryKey(&mock.ctxt, alterPlan, alterCtx))
+	require.NotEmpty(t, alterCtx.pendingPrimaryRebind)
+	require.Empty(t, alterCtx.UpdateSqls)
+	require.NoError(t, applyAlterCopyPrimaryRebind(&mock.ctxt, copyDef, alterCtx))
+	require.Len(t, alterCtx.UpdateSqls, 1)
+	require.Contains(t, alterCtx.UpdateSqls[0], "referenced_index_name")
+	require.Contains(t, alterCtx.UpdateSqls[0], "fk_self")
+	require.Contains(t, alterCtx.UpdateSqls[0], "'test_idx'")
+	require.NotContains(t, alterCtx.UpdateSqls[0], "test_idx_copy_TEST")
+	require.Equal(t, "uk_id", copyDef.Fkeys[0].ReferencedIndexName)
+}
+
+// Review 5691776262: a same-statement DROP PRIMARY KEY plus its only
+// replacement UNIQUE must rebind to that replacement regardless of SQL clause
+// order, because the rebind resolves after the COPY's final key set is
+// assembled. Without a replacement the rejection stays.
+func TestAlterDropPrimaryKeyRebindsToSameStatementUnique(t *testing.T) {
+	newCase := func(sql string, expectReject bool, wantKey string) func(t *testing.T) {
+		return func(t *testing.T) {
+			mock := NewMockOptimizer(true, newPlanTestProcess(t))
+			parent := mock.ctxt.tables["test_idx"]
+			parent.TblId = 100
+			parent.RefChildTbls = []uint64{200}
+			parent.Pkey = &plan.PrimaryKeyDef{
+				Names:       []string{"n_nationkey"},
+				PkeyColName: "n_nationkey",
+			}
+			parent.Indexes = []*plan.IndexDef{}
+			child := &TableDef{
+				Name:  "fk_child_pk",
+				TblId: 200,
+				Fkeys: []*plan.ForeignKeyDef{{
+					Name:                "fk_child_pk",
+					ForeignTbl:          parent.TblId,
+					ForeignCols:         []uint64{parent.Cols[0].ColId},
+					ReferencedIndexName: "PRIMARY",
+				}},
+			}
+			mock.ctxt.tables[child.Name] = child
+			mock.ctxt.objects[child.Name] = &ObjectRef{SchemaName: "tpch", ObjName: child.Name}
+			mock.ctxt.id2name[child.TblId] = child.Name
+			proc := testutil.NewProc(t)
+			proc.ReplaceTopCtx(defines.AttachAccountId(context.Background(), catalog.System_Account))
+			mock.ctxt.GetProcessFunc = func() *process.Process { return proc }
+			setPlanTestGlobalVariable(t, proc.GetService(), moruntime.InternalSQLExecutor,
+				executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+					result := executor.NewMemResult(
+						[]types.Type{types.T_varchar.ToType(), types.T_int8.ToType()}, proc.Mp(),
+					)
+					result.NewBatchWithRowCount(0)
+					return result.GetResult(), nil
+				}),
+			)
+			if expectReject {
+				_, err := runOneStmt(mock, t, sql)
+				require.Error(t, err)
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrDropIndexNeededInForeignKey), err.Error())
+				return
+			}
+			logicPlan, err := runOneStmt(mock, t, sql)
+			require.NoError(t, err)
+			fkSqls := logicPlan.GetDdl().GetAlterTable().GetUpdateFkSqls()
+			require.Len(t, fkSqls, 1)
+			require.Contains(t, fkSqls[0], wantKey)
+			require.Contains(t, fkSqls[0], "fk_child_pk")
+		}
+	}
+	t.Run("drop then add", newCase("alter table test_idx drop primary key, add unique index uk_new(n_nationkey)", false, "uk_new"))
+	t.Run("add then drop", newCase("alter table test_idx add unique index uk_new(n_nationkey), drop primary key", false, "uk_new"))
+	t.Run("no replacement keeps rejection", newCase("alter table test_idx drop primary key", true, ""))
 }

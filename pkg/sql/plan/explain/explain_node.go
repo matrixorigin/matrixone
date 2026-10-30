@@ -660,17 +660,6 @@ func (ndesc *NodeDescribeImpl) GetExtraInfo(ctx context.Context, options *Explai
 		lines = append(lines, buf.String())
 	}
 
-	//if ndesc.Node.UpdateList != nil {
-	//	updateListDesc := &UpdateListDescribeImpl{
-	//		UpdateList: ndesc.Node.UpdateList,
-	//	}
-	//	updatedesc, err := updateListDesc.GetDescription(options)
-	//	if err != nil {
-	//		return nil, err
-	//	}
-	//	lines = append(lines, "Set columns with("+updatedesc+")")
-	//}
-
 	if len(ndesc.Node.SendMsgList) > 0 {
 		msgInfo, err := ndesc.GetSendMessageInfo(ctx, options)
 		if err != nil {
@@ -744,6 +733,21 @@ func (ndesc *NodeDescribeImpl) GetIndexSearchScanInfo(ctx context.Context, optio
 		for _, setting := range settings {
 			buf.WriteString(", ")
 			buf.WriteString(setting)
+		}
+	}
+	for _, knob := range []struct {
+		name  string
+		value uint64
+	}{
+		{"Internal Top-K", spec.GetInternalTopk()},
+		{"Max Internal Top-K", spec.GetMaxInternalTopk()},
+		{"Max NProbe", spec.GetMaxNprobe()},
+	} {
+		if knob.value != 0 {
+			buf.WriteString(", ")
+			buf.WriteString(knob.name)
+			buf.WriteString(": ")
+			buf.WriteString(strconv.FormatUint(knob.value, 10))
 		}
 	}
 	if len(spec.GetPreFilters()) > 0 {

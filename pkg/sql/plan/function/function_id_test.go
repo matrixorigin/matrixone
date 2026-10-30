@@ -69,6 +69,7 @@ func TestAggregateExecutorIDs(t *testing.T) {
 		{"approx_percentile", APPROX_PERCENTILE, aggexec.AggIdOfApproxPercentile},
 		{"percentile_cont", PERCENTILE_CONT, aggexec.AggIdOfPercentileCont},
 		{"percentile_disc", PERCENTILE_DISC, aggexec.AggIdOfPercentileDisc},
+		{"quantileExactWeighted", QUANTILE_EXACT_WEIGHTED, aggexec.AggIdOfQuantileExactWeighted},
 	}
 
 	for _, test := range tests {
@@ -82,14 +83,38 @@ func TestAggregateExecutorIDs(t *testing.T) {
 	}
 }
 
-func TestMinMaxRejectJSON(t *testing.T) {
+func TestMinMaxAcceptJSON(t *testing.T) {
 	for _, name := range []string{"min", "max"} {
-		_, err := GetFunctionByName(
+		fn, err := GetFunctionByName(
 			context.Background(),
 			name,
 			[]types.Type{types.T_json.ToType()},
 		)
-		require.Error(t, err, name)
+		require.NoError(t, err, name)
+		require.Equal(t, types.T_json, fn.GetReturnType().Oid, name)
+	}
+}
+
+func TestMaxByJSONTypeBoundary(t *testing.T) {
+	for _, name := range []string{"max_by", "max_by_non_null"} {
+		t.Run(name, func(t *testing.T) {
+			for _, key := range []int{1, 2} {
+				args := []types.Type{types.T_varchar.ToType(), types.T_int64.ToType(), types.T_int64.ToType()}
+				args[key] = types.T_json.ToType()
+				_, err := GetFunctionByName(context.Background(), name, args)
+				badTypes := "[VARCHAR JSON BIGINT]"
+				if key == 2 {
+					badTypes = "[VARCHAR BIGINT JSON]"
+				}
+				require.EqualError(t, err, "invalid argument aggregate function "+name+", bad value "+badTypes)
+			}
+			for _, valueType := range []types.T{types.T_varchar, types.T_json} {
+				fn, err := GetFunctionByName(context.Background(), name,
+					[]types.Type{valueType.ToType(), types.T_int64.ToType(), types.T_int64.ToType()})
+				require.NoError(t, err)
+				require.Equal(t, valueType, fn.GetReturnType().Oid, "return values do not participate in key comparison")
+			}
+		})
 	}
 }
 
@@ -786,6 +811,8 @@ var predefinedFunids = map[int]int{
 	ONNX_RUN:                       556,
 	APPROX_PERCENTILE:              557,
 	MO_IS_LEGACY_TEMPORARY_TABLE:   558,
+	MO_VIEW_DEFINITION:             603,
+	MO_VIEW_CHECK_OPTION:           604,
 	MAX_BY:                         559,
 	MAX_BY_NON_NULL:                560,
 	CHECK_CONSTRAINT_ASSERT:        561,
@@ -816,21 +843,41 @@ var predefinedFunids = map[int]int{
 	PHYSICAL_COLLATION_KEY:         590,
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	EXTRACTVALUE:                581,
-	UPDATEXML:                   582,
-	TO_INTERVAL_MICROSECOND:     583,
-	UUID_SHORT:                  587,
-	TANH:                        591,
-	COSH:                        592,
-	ASINH:                       593,
-	ACOSH:                       594,
-	ATANH:                       595,
-	FORMAT_BYTES:                596,
-	FORMAT_PICO_TIME:            597,
-	TO_CALENDAR_INTERVAL:        598,
-	CHECK_ASYNC_DATALINK_SOURCE: 599,
-	INTERNAL_TABLE_COLLATION:    600,
-	FUNCTION_END_NUMBER:         601,
+	EXTRACTVALUE:                      581,
+	UPDATEXML:                         582,
+	TO_INTERVAL_MICROSECOND:           583,
+	UUID_SHORT:                        587,
+	TANH:                              591,
+	COSH:                              592,
+	ASINH:                             593,
+	ACOSH:                             594,
+	ATANH:                             595,
+	FORMAT_BYTES:                      596,
+	FORMAT_PICO_TIME:                  597,
+	TO_CALENDAR_INTERVAL:              598,
+	CHECK_ASYNC_DATALINK_SOURCE:       599,
+	INTERNAL_TABLE_COLLATION:          600,
+	TIMESTAMPADD_SECOND_INTERVAL:      601,
+	LOAD_FK_IGNORE_CHECK:              602,
+	SMA:                               605,
+	WMA:                               606,
+	TRIMA:                             607,
+	EMA:                               608,
+	WILDER:                            609,
+	KAMA:                              610,
+	DEMA:                              611,
+	TEMA:                              612,
+	T3:                                613,
+	MMAXDRAWDOWN:                      614,
+	CUMPOSITIVESTREAK:                 615,
+	MRANK:                             616,
+	CUMRANK:                           617,
+	TMRANK:                            618,
+	QUANTILE_EXACT_WEIGHTED:           619,
+	UNSIGNED_DECIMAL_ADMISSION:        620,
+	UNSIGNED_DECIMAL_ADMISSION_STRICT: 621,
+	UNSIGNED_DECIMAL_ADMISSION_IGNORE: 622,
+	FUNCTION_END_NUMBER:               623,
 }
 
 func Test_funids(t *testing.T) {

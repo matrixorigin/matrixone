@@ -107,6 +107,15 @@ func WithChunkedColumnPolicy(policy objectio.ChunkedColumnPolicy) SinkerOption {
 	}
 }
 
+// WithBeforePersist installs a hook that runs after the active object name is
+// known and immediately before Sync can make the object durable. Callers can
+// use it to establish restart-safe ownership before a commit-ambiguous write.
+func WithBeforePersist(hook func(context.Context, string) error) SinkerOption {
+	return func(sinker *Sinker) {
+		sinker.beforePersist = hook
+	}
+}
+
 type FileSinker interface {
 	Sink(context.Context, *batch.Batch) error
 	Sync(context.Context) (*objectio.ObjectStats, error)
@@ -446,6 +455,8 @@ type Sinker struct {
 
 	mp *mpool.MPool
 	fs fileservice.FileService
+
+	beforePersist func(context.Context, string) error
 }
 
 func (sinker *Sinker) String() string {
@@ -482,6 +493,20 @@ func (sinker *Sinker) fillDefaults() {
 
 func (sinker *Sinker) GetResult() ([]objectio.ObjectStats, []*batch.Batch) {
 	return sinker.result.persisted, sinker.result.tail
+}
+
+// GetUnpublishedFiles returns object names whose Sync may have reached
+// storage without producing publishable stats. The snapshot is safe to use
+// while transferring cleanup ownership out of the sinker.
+func (sinker *Sinker) GetUnpublishedFiles() []string {
+	files := make([]string, 0, len(sinker.staged.unpublished))
+	files = append(files, sinker.staged.unpublished...)
+	if sinker.pipe.result != nil {
+		sinker.pipe.result.mu.RLock()
+		files = append(files, sinker.pipe.result.unpublished...)
+		sinker.pipe.result.mu.RUnlock()
+	}
+	return normalizeUnpublishedObjectNames(files)
 }
 
 // DeleteUnpublishedObjects deletes object files that have not crossed their
@@ -581,6 +606,9 @@ func (sinker *Sinker) fetchBuffer() (*batch.Batch, error) {
 	}
 
 	if err := bat.PreExtend(sinker.mp, objectio.BlockMaxRows); err != nil {
+		// Earlier vectors may already have allocated before a later one failed.
+		// The fetched batch is no longer owned by the freelist, so release it.
+		bat.Clean(sinker.mp)
 		return nil, err
 	}
 	return bat, nil
@@ -791,6 +819,13 @@ func (sinker *Sinker) trySpill(ctx context.Context) error {
 // responsible for cleanup via resetFileSinker(); the executor is eventually
 // closed in Sinker.Close().
 func (sinker *Sinker) syncFileSinker(ctx context.Context, fSinker FileSinker) error {
+	if sinker.beforePersist != nil {
+		if name := activeFileSinkerObjectName(fSinker); name != "" {
+			if err := sinker.beforePersist(ctx, name); err != nil {
+				return err
+			}
+		}
+	}
 	syncStart := time.Now()
 	stats, err := fSinker.Sync(ctx)
 	atomic.AddInt64(&sinker.timing.syncNs, int64(time.Since(syncStart)))
@@ -825,7 +860,8 @@ func (sinker *Sinker) trySpillMergeSortStreaming(
 	streamSinker := func(data *batch.Batch) (*batch.Batch, error) {
 		sinkStart := time.Now()
 		if err := fSinker.Sink(ctx, data); err != nil {
-			return nil, err
+			// Keep ownership of the merge buffer so the caller can recycle it.
+			return data, err
 		}
 		atomic.AddInt64(&sinker.timing.sinkNs, int64(time.Since(sinkStart)))
 		data.CleanOnlyData()
@@ -1011,7 +1047,9 @@ func (sinker *Sinker) Write(
 					return
 				}
 			} else if curr.RowCount() == objectio.BlockMaxRows {
-				if err = sinker.pushStaged(ctx, curr); err != nil {
+				staged := curr
+				curr = nil // pushStaged takes ownership even if it returns an error.
+				if err = sinker.pushStaged(ctx, staged); err != nil {
 					return
 				}
 				if curr, err = sinker.fetchBuffer(); err != nil {
@@ -1029,16 +1067,19 @@ func (sinker *Sinker) Write(
 			return
 		}
 		if curr.RowCount() == objectio.BlockMaxRows {
-			if err = sinker.pushStaged(ctx, curr); err != nil {
+			staged := curr
+			curr = nil
+			if err = sinker.pushStaged(ctx, staged); err != nil {
 				return
 			}
-			curr = nil
 		}
 		left -= toAdd
 		offset += toAdd
 	}
 	if curr != nil && curr.RowCount() > 0 {
-		if err = sinker.pushStaged(ctx, curr); err != nil {
+		staged := curr
+		curr = nil
+		if err = sinker.pushStaged(ctx, staged); err != nil {
 			return
 		}
 	}
@@ -1047,6 +1088,7 @@ func (sinker *Sinker) Write(
 
 // WriteOwned stages a full-block batch directly without copying. The caller
 // transfers ownership: the sinker will clean the batch later.
+// When owned is true, the caller must release its reference even if err is non-nil.
 // If the batch is not exactly BlockMaxRows or there is a partially-filled
 // staged buffer, falls back to Write (which copies).
 func (sinker *Sinker) WriteOwned(
@@ -1203,6 +1245,9 @@ func (sinker *Sinker) Close() error {
 	var drainErr error
 	if sinker.pipe.enabled && sinker.pipe.result != nil {
 		drainErr = sinker.drainPipeline()
+		// No more jobs will use this context after Close. Release its
+		// registration with the parent even when every job succeeded.
+		sinker.pipe.result.cancel()
 	}
 	sinker.cleanupInMemoryStaged()
 	if sinker.buf.buffers != nil {
@@ -1244,6 +1289,7 @@ func (sinker *Sinker) Reset() {
 	// doesn't inherit stale errors or persisted stats.
 	if sinker.pipe.result != nil {
 		sinker.drainPipeline()
+		sinker.pipe.result.cancel()
 		sinker.pipe.result = nil
 	}
 

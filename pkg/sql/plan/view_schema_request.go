@@ -64,6 +64,7 @@ type ViewSchemaProvider interface {
 // entry points do not construct it. Its provider is acquired lazily at the first
 // Describe; no worker, catalog write or cross-statement cache is created.
 type ViewSchemaRequest struct {
+	benchmark    viewSchemaBenchmarkState
 	ctx          context.Context
 	workCtx      context.Context
 	cancel       context.CancelCauseFunc
@@ -109,7 +110,12 @@ func NewViewSchemaRequest(ctx context.Context, provider ViewSchemaProvider) *Vie
 	return r
 }
 
-func (r *ViewSchemaRequest) Describe(database, name string, snapshot *Snapshot) (result *ViewSchemaResult, err error) {
+func (r *ViewSchemaRequest) Describe(database, name string, snapshot *Snapshot) (*ViewSchemaResult, error) {
+	result, err := r.describe(database, name, snapshot)
+	return result, unwrapViewSchemaDefinitionError(err)
+}
+
+func (r *ViewSchemaRequest) describe(database, name string, snapshot *Snapshot) (result *ViewSchemaResult, err error) {
 	select {
 	case <-r.ctx.Done():
 		return nil, context.Cause(r.ctx)

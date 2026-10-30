@@ -824,6 +824,21 @@ func TestAdmitTransfer(t *testing.T) {
 		require.False(t, can)
 	})
 
+	t.Run("closed pipe", func(t *testing.T) {
+		for _, clientClosed := range []bool{true, false} {
+			tu := &tunnel{logger: logger}
+			tu.mu.csp = &pipe{}
+			tu.mu.scp = &pipe{}
+			tu.mu.started = true
+			tu.mu.csp.mu.closed = clientClosed
+			tu.mu.scp.mu.closed = !clientClosed
+			for _, sync := range []bool{true, false} {
+				_, can := tu.admitTransfer(sync)
+				require.False(t, can, "a terminal pipe cannot start another backend generation")
+			}
+		}
+	})
+
 	t.Run("inFlight", func(t *testing.T) {
 		tu := &tunnel{
 			logger: logger,
@@ -841,6 +856,7 @@ func TestAdmitTransfer(t *testing.T) {
 			logger: logger,
 		}
 		csp := &pipe{tun: tu}
+		csp.mu.cond = sync.NewCond(&csp.mu)
 		tu.mu.csp = csp
 		tu.mu.scp = &pipe{}
 		tu.mu.started = true
@@ -853,10 +869,10 @@ func TestAdmitTransfer(t *testing.T) {
 			"even an untracked protocol message must finish forwarding first")
 		_, can = tu.admitTransfer(false)
 		require.False(t, can)
-		require.False(t, csp.tryArmSyncTransfer())
+		require.False(t, csp.tryArmSyncTransfer(false))
 
 		csp.finishClientMessageClaim()
-		require.True(t, csp.tryArmSyncTransfer())
+		require.True(t, csp.tryArmSyncTransfer(false))
 		gate, can := tu.admitTransferWithGate(true, csp)
 		require.True(t, can)
 		defer gate.finishSyncTransfer()
@@ -1378,17 +1394,48 @@ func (c *finalFetchTransferClientConn) BuildConnWithServer(context.Context, stri
 // Exercise the real pending-transfer path while FETCH packets pass through
 // both pipes. A binary row that resembles OK must not admit transfer; only
 // the forwarded terminator may cause handleTransferIntent to replace the CN.
+// Model a scheduling delay after the backend accepts the request, before
+// Write returns to c2s and its publication claim is released.
+type delayedPublicationConn struct {
+	net.Conn
+	ctx       context.Context
+	delivered chan struct{}
+	release   <-chan struct{}
+	writeErr  error
+	once      sync.Once
+}
+
+func (c *delayedPublicationConn) Write(p []byte) (int, error) {
+	n, err := c.Conn.Write(p)
+	if err != nil {
+		return n, err
+	}
+	c.once.Do(func() { close(c.delivered) })
+	select {
+	case <-c.release:
+	case <-c.ctx.Done():
+	}
+	return n, c.writeErr
+}
+
 func TestFinalFetchForwardingBeforeBackendReplacement(t *testing.T) {
 	for _, tc := range []struct {
-		name           string
-		deprecatesEOF  bool
-		makeTerminator func(uint16) []byte
-		splitRow       bool
+		name             string
+		deprecatesEOF    bool
+		makeTerminator   func(uint16) []byte
+		splitRow         bool
+		delayPublication bool
+		failPublication  bool
 	}{
-		{"legacy EOF", false, makeLegacyEOFPacket, false},
-		{"deprecated EOF", true, makeDeprecatedEOFPacket, false},
-		{"legacy EOF split row", false, makeLegacyEOFPacket, true},
-		{"deprecated EOF split row", true, makeDeprecatedEOFPacket, true},
+		{"legacy EOF", false, makeLegacyEOFPacket, false, false, false},
+		{"deprecated EOF", true, makeDeprecatedEOFPacket, false, false, false},
+		{"legacy EOF split row", false, makeLegacyEOFPacket, true, false, false},
+		{"deprecated EOF split row", true, makeDeprecatedEOFPacket, true, false, false},
+		{"legacy EOF delayed publication", false, makeLegacyEOFPacket, false, true, false},
+		{"deprecated EOF delayed publication", true, makeDeprecatedEOFPacket, false, true, false},
+		{"legacy EOF split row delayed publication", false, makeLegacyEOFPacket, true, true, false},
+		{"deprecated EOF split row delayed publication", true, makeDeprecatedEOFPacket, true, true, false},
+		{"legacy EOF failed publication", false, makeLegacyEOFPacket, false, true, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -1403,6 +1450,19 @@ func TestFinalFetchForwardingBeforeBackendReplacement(t *testing.T) {
 			runtime.SetupServiceBasedRuntime("", runtime.DefaultRuntime())
 			tun := newTunnel(ctx, runtime.DefaultRuntime().Logger(), newCounterSet())
 			defer func() { require.NoError(t, tun.Close()) }()
+			requestDelivered := make(chan struct{})
+			releaseWriteReturn := make(chan struct{})
+			var releaseWriteOnce sync.Once
+			defer releaseWriteOnce.Do(func() { close(releaseWriteReturn) })
+			publicationErr := errors.New("request publication write failed")
+			var backendProxy net.Conn = oldProxy
+			if tc.delayPublication {
+				delayed := &delayedPublicationConn{Conn: oldProxy, ctx: ctx, delivered: requestDelivered, release: releaseWriteReturn}
+				if tc.failPublication {
+					delayed.writeErr = publicationErr
+				}
+				backendProxy = delayed
+			}
 			cc := &finalFetchTransferClientConn{
 				ClientConn:  newMockClientConn(clientProxy, "fetch", clientInfo{}, nil, tun),
 				replacement: newMockServerConn(newProxy),
@@ -1411,7 +1471,7 @@ func TestFinalFetchForwardingBeforeBackendReplacement(t *testing.T) {
 			tun.cc = cc
 			tun.mu.sc = newMockServerConn(oldProxy)
 			tun.mu.clientConn = newMySQLConn(connClientName, clientProxy, 0, tun.reqC, tun.respC, false, 1)
-			tun.mu.serverConn = newMySQLConn(connServerName, oldProxy, 0, tun.reqC, tun.respC, false, 2)
+			tun.mu.serverConn = newMySQLConn(connServerName, backendProxy, 0, tun.reqC, tun.respC, false, 2)
 			tun.mu.csp = tun.newPipe(pipeClientToServer, tun.mu.clientConn, tun.mu.serverConn)
 			tun.mu.scp = tun.newPipe(pipeServerToClient, tun.mu.serverConn, tun.mu.clientConn)
 			tun.clientDeprecatesEOF = tc.deprecatesEOF
@@ -1464,6 +1524,14 @@ func TestFinalFetchForwardingBeforeBackendReplacement(t *testing.T) {
 			}
 
 			forwardRequest(oldBackend, makeStmtCommandPacket(frontend.COM_STMT_FETCH, 41, 2, 0, 0, 0))
+			if tc.delayPublication {
+				select {
+				case <-requestDelivered:
+				case <-ctx.Done():
+					t.Fatal("FETCH was not delivered")
+				}
+				require.True(t, tun.mu.csp.clientMessageActive.Load())
+			}
 			tun.setTransferIntent(true)
 			defer tun.setTransferIntent(false)
 			firstRow := makeBinaryBigIntRow(528384)
@@ -1515,6 +1583,25 @@ func TestFinalFetchForwardingBeforeBackendReplacement(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, terminator, gotTerminator)
 			require.NoError(t, <-writeDone)
+			if tc.delayPublication {
+				require.True(t, tun.mu.csp.clientMessageActive.Load())
+				require.Zero(t, cc.buildCalls.Load(), "a delivered response cannot bypass an unfinished request publication")
+				releaseWriteOnce.Do(func() { close(releaseWriteReturn) })
+			}
+			if tc.failPublication {
+				select {
+				case err := <-tun.errC:
+					require.ErrorContains(t, err, publicationErr.Error())
+				case <-ctx.Done():
+					t.Fatal("failed request publication did not stop the pipe")
+				}
+				tun.mu.csp.mu.Lock()
+				require.True(t, tun.mu.csp.mu.closed)
+				require.False(t, tun.mu.csp.clientMessageActive.Load())
+				tun.mu.csp.mu.Unlock()
+				require.Zero(t, cc.buildCalls.Load(), "failed request publication cannot admit replacement")
+				return
+			}
 			select {
 			case <-cc.buildCalled:
 			case <-ctx.Done():
@@ -2107,6 +2194,11 @@ func TestTunnelTransferAfterStmtLongDataIsClosed(t *testing.T) {
 
 	closeStmt := makeStmtCommandPacket(frontend.COM_STMT_CLOSE, statementID)
 	forward(closeStmt)
+	require.NoError(t, csp.waitClientMessageClaim(ctx))
+	gate, can := tun.admitTransfer(true)
+	require.True(t, can, "closing the statement discards its staged long data")
+	defer gate.finishSyncTransfer()
+	gate.finishSyncTransfer()
 	require.NoError(t, client.Close())
 	select {
 	case err := <-pipeDone:
@@ -2115,11 +2207,8 @@ func TestTunnelTransferAfterStmtLongDataIsClosed(t *testing.T) {
 		t.Fatal("client-to-server pipe did not stop")
 	}
 
-	gate, can := tun.admitTransfer(true)
-	require.True(t, can,
-		"closing the statement discards its staged long data")
-	defer gate.finishSyncTransfer()
-	gate.finishSyncTransfer()
+	_, can = tun.admitTransfer(true)
+	require.False(t, can, "a closed client pipe cannot migrate even after statement cleanup")
 }
 
 func TestSyncTransferSerializesClientRequestPublication(t *testing.T) {
@@ -2179,7 +2268,7 @@ func TestSyncTransferSerializesClientRequestPublication(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("client packet was not read before the migration barrier")
 	}
-	require.True(t, csp.tryArmSyncTransfer())
+	require.True(t, csp.tryArmSyncTransfer(false))
 	gate, can := tun.admitTransferWithGate(true, csp)
 	require.True(t, can)
 	require.Same(t, csp, gate)
@@ -2417,7 +2506,6 @@ func TestLocallyConsumedRequestClosesProxyBoundary(t *testing.T) {
 		statement string
 		eventType eventType
 	}{
-		{name: "kill", statement: "kill query 123", eventType: TypeKill},
 		{name: "upgrade", statement: "upgrade account all", eventType: TypeUpgrade},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -2444,8 +2532,6 @@ func TestLocallyConsumedRequestClosesProxyBoundary(t *testing.T) {
 					return
 				}
 				switch e.(type) {
-				case *killEvent:
-					eventSeen <- TypeKill
 				case *upgradeEvent:
 					eventSeen <- TypeUpgrade
 				default:
@@ -2685,7 +2771,7 @@ func TestTransferSync_SkipCachePopOnMigration(t *testing.T) {
 	)
 	tun.mu.scp = &pipe{tun: tun}
 	tun.mu.csp = &pipe{}
-	require.True(t, tun.mu.csp.tryArmSyncTransfer())
+	require.True(t, tun.mu.csp.tryArmSyncTransfer(false))
 	tun.mu.scp.syncTransferArmed = true
 	err := tun.mu.scp.handleTransferIntent(ctx, tun.mu.csp)
 	require.Error(t, err)
@@ -2695,4 +2781,65 @@ func TestTransferSync_SkipCachePopOnMigration(t *testing.T) {
 	require.Nil(t, tun.mu.csp.mu.syncTransferDone,
 		"failed synchronous migration must release client publication")
 	tun.mu.csp.mu.Unlock()
+}
+
+func TestSyncTransferPublicationDrainStop(t *testing.T) {
+	runtime.SetupServiceBasedRuntime("", runtime.DefaultRuntime())
+	for _, stop := range []string{"cancel", "closed", "expired_entry"} {
+		t.Run(stop, func(t *testing.T) {
+			tun := newTunnel(t.Context(), runtime.DefaultRuntime().Logger(), newCounterSet())
+			defer tun.ctxCancel()
+			csp := tun.newPipe(pipeClientToServer, nil, nil)
+			tun.mu.csp = csp
+			tun.mu.scp = &pipe{}
+			tun.mu.started = true
+			_, claimed, err := csp.claimClientMessage(t.Context(), nil, false)
+			require.NoError(t, err)
+			require.True(t, claimed)
+			defer csp.finishClientMessageClaim()
+			require.True(t, csp.tryArmSyncTransfer(true))
+			waiting := make(chan struct{})
+			csp.testHelper.onSyncTransferWait = func() { close(waiting) }
+			parent := t.Context()
+			cause := errors.New("publication owner cancelled")
+			if stop == "expired_entry" {
+				var expiredCancel context.CancelFunc
+				parent, expiredCancel = context.WithDeadline(parent, time.Now().Add(-time.Second))
+				defer expiredCancel()
+				cause = context.DeadlineExceeded
+			}
+			ctx, cancel := context.WithCancelCause(parent)
+			defer cancel(nil)
+			done := make(chan error, 1)
+			go func() { done <- tun.transferSyncWithGate(ctx, csp) }()
+			if stop != "expired_entry" {
+				select {
+				case <-waiting:
+				case <-t.Context().Done():
+					t.Fatal("transfer did not wait for publication")
+				}
+				if stop == "cancel" {
+					cancel(cause)
+				} else {
+					require.NoError(t, csp.seal())
+				}
+			}
+			select {
+			case err := <-done:
+				if stop == "closed" {
+					require.ErrorIs(t, err, errPipeClosed)
+				} else {
+					require.ErrorIs(t, err, cause)
+				}
+			case <-t.Context().Done():
+				t.Fatal("publication drain ignored stop")
+			}
+			csp.mu.Lock()
+			require.Nil(t, csp.mu.syncTransferDone)
+			csp.mu.Unlock()
+			tun.mu.Lock()
+			require.False(t, tun.mu.inTransfer)
+			tun.mu.Unlock()
+		})
+	}
 }

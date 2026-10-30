@@ -446,6 +446,26 @@ func (tbl *txnTable) Rows(ctx context.Context) (uint64, error) {
 	return v + rows, nil
 }
 
+func replayRowColumnSize(entry *logtailreplay.RowEntry, neededCols map[string]*plan.ColDef) uint64 {
+	var size uint64
+	for i, name := range entry.Batch.Attrs {
+		if _, ok := neededCols[name]; !ok {
+			continue
+		}
+		vec := entry.Batch.Vecs[i]
+		if vec.Length() == 0 {
+			// Replayed rows keep the physical RowID on RowEntry rather than
+			// duplicating it in the retained batch. Size("*") includes it.
+			if name == catalog.Row_ID {
+				size += types.RowidSize
+			}
+			continue
+		}
+		size += uint64(vec.Size() / vec.Length())
+	}
+	return size
+}
+
 func (tbl *txnTable) Size(ctx context.Context, columnName string) (uint64, error) {
 	ts := types.TimestampToTS(tbl.db.op.SnapshotTS())
 	part, err := tbl.getPartitionState(ctx)
@@ -499,11 +519,7 @@ func (tbl *txnTable) Size(ctx context.Context, columnName string) (uint64, error
 			continue
 		}
 
-		for i, s := range entry.Batch.Attrs {
-			if _, ok := neededCols[s]; ok {
-				szInPart += uint64(entry.Batch.Vecs[i].Size() / entry.Batch.Vecs[i].Length())
-			}
-		}
+		szInPart += replayRowColumnSize(entry, neededCols)
 	}
 
 	s, _ := tbl.getPublishedStats(ctx, true)
@@ -1733,15 +1749,16 @@ func (tbl *txnTable) GetTableDef(ctx context.Context) *plan.TableDef {
 					Name:       name,
 					OriginName: attr.Attr.Name,
 					Typ: plan.Type{
-						Id:               int32(attr.Attr.Type.Oid),
-						Width:            attr.Attr.Type.Width,
-						Scale:            attr.Attr.Type.Scale,
-						AutoIncr:         attr.Attr.AutoIncrement,
-						Table:            tbl.tableName,
-						NotNullable:      attr.Attr.Default != nil && !attr.Attr.Default.NullAbility,
-						Enumvalues:       attr.Attr.EnumVlaues,
-						Charset:          uint32(attr.Attr.Type.Charset),
-						CollationVersion: uint32(attr.Attr.Type.CollationVersion),
+						Id:                int32(attr.Attr.Type.Oid),
+						Width:             attr.Attr.Type.Width,
+						Scale:             attr.Attr.Type.Scale,
+						AutoIncr:          attr.Attr.AutoIncrement,
+						Table:             tbl.tableName,
+						NotNullable:       attr.Attr.Default != nil && !attr.Attr.Default.NullAbility,
+						Enumvalues:        attr.Attr.EnumVlaues,
+						Charset:           uint32(attr.Attr.Type.Charset),
+						CollationVersion:  uint32(attr.Attr.Type.CollationVersion),
+						NumericAttributes: uint32(attr.Attr.NumericAttributes),
 					},
 					Primary:      attr.Attr.Primary,
 					Default:      attr.Attr.Default,
@@ -1919,6 +1936,10 @@ func (tbl *txnTable) isCreatedInTxn(_ context.Context) (bool, error) {
 
 }
 
+func (tbl *txnTable) CreatedInCurrentTxn(ctx context.Context) (bool, error) {
+	return tbl.isCreatedInTxn(ctx)
+}
+
 func validateAutoIncrEpochAdvance(current uint32, resets uint64) error {
 	if uint64(current)+resets > math.MaxUint32 {
 		return moerr.NewInternalErrorNoCtx("AUTO_INCREMENT epoch exhausted")
@@ -1957,6 +1978,7 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 	var err error
 	var checkCstr []byte
 	oldTableName := tbl.tableName
+	oldCreateSQL := tbl.createSql
 	olddefs := tbl.defs
 	oldPart := tbl.partitioned
 	oldPartInfo := tbl.partition
@@ -1985,7 +2007,10 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 				tbl.constraint = oldConstraint
 			case api.AlterKind_RenameTable:
 				tbl.tableName = oldTableName
+				tbl.createSql = oldCreateSQL
+				tbl.extraInfo.Checks = oldChecks
 			case api.AlterKind_ReplaceDef:
+				tbl.extraInfo.Checks = oldChecks
 				tbl.extraInfo.DefaultCharset = oldDefaultCharset
 				tbl.extraInfo.CollationVersion = oldCollationVersion
 			case api.AlterKind_RenameColumn:
@@ -2023,10 +2048,39 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 			}
 			appendDef = append(appendDef, c)
 		case api.AlterKind_RenameTable:
-			tbl.tableName = req.GetRenameTable().NewName
+			rename := req.GetRenameTable()
+			structuredChecks := false
+			for _, check := range tbl.extraInfo.Checks {
+				structuredChecks = structuredChecks || check != nil
+			}
+			if !structuredChecks && (tbl.relKind == "" || tbl.relKind == catalog.SystemOrdinaryRel) {
+				createSQL, err := plan2.RenameLegacyCheckConstraintNames(ctx, tbl.createSql, rename.OldName, rename.NewName)
+				if err != nil {
+					return err
+				}
+				if createSQL != tbl.createSql {
+					tbl.createSql = createSQL
+					// createWithID consumes properties, while GetTableDef reads
+					// createSql. Publish the same fallback identity through both.
+					appendDef = append(appendDef, &engine.PropertiesDef{Properties: []engine.Property{{
+						Key: catalog.SystemRelAttr_CreateSQL, Value: createSQL,
+					}}})
+				}
+			}
+			tbl.tableName = rename.NewName
+			// Generated CHECK names (<table>_chk_<n>) follow the table they were
+			// generated for. Without this the renamed table keeps owning the old
+			// table's generated names, and recreating a table under the old name
+			// trips ER_CHECK_CONSTRAINT_DUP_NAME (3822).
+			tbl.extraInfo.Checks = plan2.RenameGeneratedCheckConstraintNames(
+				tbl.extraInfo.Checks, rename.OldName, rename.NewName,
+			)
 		case api.AlterKind_ReplaceDef:
 			hasReplaceDef = true
 			replaceDefReq = req
+			// ReplaceDef precedes composed rename actions. Publish its CHECKs
+			// here so later requests retain their final names and expressions.
+			tbl.extraInfo.Checks = api.CloneExtra(&api.SchemaExtra{Checks: req.GetReplaceDef().GetDef().GetChecks()}).Checks
 		case api.AlterKind_RenameColumn:
 			hasReplaceDef = true
 			re := req.GetRenameCol()
@@ -2064,7 +2118,8 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 			return err
 		}
 		// Catalog regeneration uses extraInfo independently of the property
-		// factory in baseDefs. Publish the validated pair through both owners.
+		// factory in baseDefs. CHECKs already follow the ordered requests above;
+		// publishing the replacement again would discard composed renames.
 		tbl.extraInfo.DefaultCharset = replacementExtra.DefaultCharset
 		tbl.extraInfo.CollationVersion = replacementExtra.CollationVersion
 		baseDefs = append(baseDefs, engine.PlanColsToExeCols(replaceDef.Def.Cols)...)
@@ -2139,30 +2194,7 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 		// 3. adjust writes for the table
 		txn.Lock()
 		defer txn.Unlock()
-		for i, n := 0, len(txn.writes); i < n; i++ {
-			if cur := txn.writes[i]; cur.tableId == tbl.tableId && cur.bat != nil && cur.bat.RowCount() > 0 {
-				if sels, exist := txn.batchSelectList[cur.bat]; exist && len(sels) == cur.bat.RowCount() {
-					continue
-				}
-				transferred := cur
-				transferred.tableName = tbl.tableName // in case renaming
-				transferred.bat, err = cur.bat.Dup(txn.proc.Mp())
-				transferred.accountedSize = 0
-				if err != nil {
-					return err
-				}
-				if len(renameColMap) > 0 {
-					for i, attr := range transferred.bat.Attrs {
-						if newName, ok := renameColMap[attr]; ok {
-							transferred.bat.Attrs[i] = newName
-						}
-					}
-				}
-				txn.appendWorkspaceEntryLocked(transferred)
-				txn.selectAllBatchRowsLocked(cur.bat)
-
-			}
-		}
+		return txn.transferWorkspaceWritesForAlterLocked(tbl.tableId, tbl.tableName, renameColMap)
 	}
 
 	return nil
@@ -2373,27 +2405,6 @@ func (tbl *txnTable) Delete(
 	var (
 		deletionTyp = bat.Attrs[0]
 	)
-
-	// this should not happen, just in case slice out of bound
-	//if len(bat.Attrs) == 0 {
-	//	logutil.Info("deletion bat has empty attr",
-	//		zap.String("name", name),
-	//		zap.String("bat", common.MoBatchToString(bat, 20)))
-	//
-	//	if objectio.IsPhysicalAddr(name) {
-	//		deletionTyp = name
-	//	} else {
-	//		typStr := string(name[len(name)-1])
-	//		typ, err := strconv.ParseInt(typStr, 10, 64)
-	//		if err != nil {
-	//			return err
-	//		}
-	//
-	//		if typ == deletion.FlushDeltaLoc {
-	//			deletionTyp = catalog.ObjectMeta_ObjectStats
-	//		}
-	//	}
-	//}
 
 	switch deletionTyp {
 	case catalog.Row_ID:
@@ -2763,7 +2774,6 @@ func (tbl *txnTable) BuildReaders(
 			tbl.db.op.SnapshotTS(),
 			expr,
 			ds,
-			readutil.GetThresholdForReader(newNum),
 			hint,
 		)
 		if err != nil {
@@ -2927,6 +2937,21 @@ func (tbl *txnTable) PKPersistedBetween(
 	keys *vector.Vector,
 	checkTombstone bool,
 ) (changed bool, err error) {
+	// A generated component of a composite primary key is not the stored
+	// primary-key vector. Keep the existing conservative policy until that
+	// caller can identify the component across the sharding boundary.
+	if !checkTombstone {
+		def := tbl.GetTableDef(ctx)
+		if def != nil && def.Pkey != nil &&
+			def.Pkey.PkeyColName != catalog.CPrimaryKeyColName &&
+			def.Pkey.PkeyColName != catalog.FakePrimaryKeyColName &&
+			tbl.primaryIdx >= 0 && tbl.primaryIdx < len(def.Cols) &&
+			def.Cols[tbl.primaryIdx] != nil &&
+			types.T(def.Cols[tbl.primaryIdx].Typ.Id).IsInteger() &&
+			types.T(def.Cols[tbl.primaryIdx].Typ.Id) == keys.GetType().Oid {
+			return tbl.pkUpsertPersistedBetween(ctx, p, from, to, keys)
+		}
+	}
 
 	start := time.Now()
 	reason := ""

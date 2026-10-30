@@ -268,7 +268,14 @@ func handleDelsOnLCA(
 		return nil, err
 	}
 
-	forceReaderProbe := tblStuff.lcaReaderProbeMode != nil && tblStuff.lcaReaderProbeMode.Load()
+	// The SQL probe resolves db.table by name under the statement account.
+	// A lineage node owned by another account (design §6.4, e.g. reopened
+	// under a subscription source owner) would resolve that name to a
+	// same-named local decoy or fail outright, so it is always scanned by
+	// id under its own owner identity via the reader fallback.
+	lcaOwnerMismatch := tblStuff.resolvedLCAIdentity(ctx, ses).account != ses.GetAccountId()
+	forceReaderProbe := lcaOwnerMismatch ||
+		(tblStuff.lcaReaderProbeMode != nil && tblStuff.lcaReaderProbeMode.Load())
 	if forceReaderProbe {
 		sqlRet, err = runLCAProbeWithReaderFallback(ctx, ses, tBat, tblStuff, snapshotTS)
 		if err != nil {
@@ -790,8 +797,17 @@ func runLCAProbeWithReaderFallback(
 	}()
 
 	scanStart := time.Now()
+	// Scan under the lineage node's owner identity; the statement context
+	// alone would route the by-id catalog read to the wrong account when the
+	// node lives under another owner (design §6.4). Derive the scan context
+	// from the *current* caller context: the descriptor's captured resolution
+	// context predates the enclosing probe's child cancellation, so attaching
+	// the owner account to it would make cancellation and deadline lossy for
+	// every in-flight catalog and storage read here (identityCtx keeps the
+	// live context when accounts already match).
+	scanCtx := identityCtx(ctx, tblStuff.resolvedLCAIdentity(ctx, ses))
 	err = scanSnapshotRelationByIDWithFallback(
-		ctx,
+		scanCtx,
 		"lca-reader-fallback",
 		ses,
 		tblStuff.lcaRel.GetTableID(ctx),
@@ -1068,13 +1084,36 @@ func hashDiffIfHasLCA(
 	baseTombstoneHashmap databranchutils.BranchHashmap,
 ) (err error) {
 
-	// Resolve per-side LCA snapshots once: each side's tombstone
-	// resolution probes the LCA at "the moment THIS side forked off
-	// the LCA" (or, when the side IS the LCA, at the OTHER side's
-	// snapshot — see branchMetaInfo helper docs).
+	// Resolve per-side LCA snapshots once. Both sides must resolve
+	// their collected changes against the shared divergence point of
+	// the two lineages: the earlier of the two per-side fork anchors
+	// (see branchMetaInfo helper docs). The side that forked off the
+	// LCA later inherits the LCA's writes between the two forks, and
+	// those writes are exactly the divergence its collect range
+	// gathered (buildSideCollectRange clamps the LCA window up to
+	// otherFork.Next()). Resolving that side against its own fork
+	// absorbs the divergence into the fork baseline — handleDelsOnLCA
+	// returns the post-fork rows, the collected inserts compare equal
+	// and are dropped — erasing real both-sides conflicts: WHEN
+	// CONFLICT FAIL and SKIP would silently behave like ACCEPT and
+	// DATA BRANCH DIFF would hide the destination rows. The
+	// earlier-forked side keeps its own fork as the anchor, and when
+	// both sides anchor identically (e.g. the other endpoint IS the
+	// LCA) the mutual anchor equals that moment.
 	tarSP, baseSP := tblStuff.resolvedSnapshots(ses)
-	tarLCAProbe := dagInfo.tarLCASnapshot(baseSP)
-	baseLCAProbe := dagInfo.baseLCASnapshot(tarSP)
+	var tarLCAProbe, baseLCAProbe types.TS
+	if copt.preservePickConflicts {
+		// PICK keeps the per-side fork anchors. Its conflict rule counts
+		// only writes each side made after its own fork: state the
+		// destination inherited from the LCA between the two forks is
+		// part of its baseline, and such picks must apply without a
+		// conflict (the byte-chain pick in branch_binary_pk.sql).
+		tarLCAProbe = dagInfo.tarLCASnapshot(baseSP)
+		baseLCAProbe = dagInfo.baseLCASnapshot(tarSP)
+	} else {
+		mutualProbe := dagInfo.lcaProbeSnapshot(tarSP, baseSP)
+		tarLCAProbe, baseLCAProbe = mutualProbe, mutualProbe
+	}
 	// A parent created earlier in the same explicit transaction has no
 	// catalog state at the pre-commit CloneTS recorded by its child.  Both
 	// tables become visible together, so the parent's creation commit is the
@@ -1305,8 +1344,8 @@ func hashDiffIfHasLCA(
 							return
 						}
 
-						err3 = moerr.NewInternalErrorNoCtxf(
-							"conflict: %s %s and %s %s on pk(%v)",
+						err3 = moerr.NewDataBranchConflictNoCtxf(
+							"%s %s and %s %s on pk(%v)",
 							tarWrapped.name, tarWrapped.logicalOperation(),
 							baseWrapped.name, baseWrapped.logicalOperation(), key,
 						)
@@ -2056,7 +2095,11 @@ func findDeleteAndUpdateBat(
 			if tuple, _, err2 = tombstoneHashmap.DecodeRow(key); err2 != nil {
 				return err2
 			}
-			if err2 = vector.AppendAny(tBat1.Vecs[0], tuple[0], false, ses.proc.Mp()); err2 != nil {
+			// The decoded tombstone key carries the packed heap encoding of
+			// the PK column. Fixed-width key payloads such as Decimal256 decode
+			// as raw bytes, so normalize to the PK column type before appending;
+			// AppendAny would assert the typed representation and panic.
+			if err2 = appendTupleValueToVector(tBat1.Vecs[0], tuple[0], ses.proc.Mp()); err2 != nil {
 				return err2
 			}
 			var tombTuple types.Tuple
@@ -2314,8 +2357,8 @@ func checkConflictAndAppendToBat(
 
 			msg := buf.String()
 			releaseBuffer(tblStuff.bufPool, buf)
-			return moerr.NewInternalErrorNoCtxf(
-				"conflict: %s %s and %s %s on pk(%v) with different values",
+			return moerr.NewDataBranchConflictNoCtxf(
+				"%s %s and %s %s on pk(%v) with different values",
 				tblStuff.tarRel.GetTableName(), diffInsert,
 				tblStuff.baseRel.GetTableName(), diffInsert,
 				msg,
@@ -3376,6 +3419,7 @@ func hydrateHistoricalDataBranchBatch(
 	ses *Session,
 	projected *batch.Batch,
 	tblStuff tableStuff,
+	endpointIdent branchIdentity,
 	endpointRel engine.Relation,
 	endpointSnapshot types.TS,
 ) (err error) {
@@ -3399,6 +3443,7 @@ func hydrateHistoricalDataBranchBatch(
 	tBat.SetRowCount(projected.RowCount())
 
 	probeStuff := dataBranchHistoricalProbeStuff(ctx, tblStuff, endpointRel)
+	probeStuff.lcaIdent = &endpointIdent
 	probe, err := runLCAProbeWithReaderFallback(
 		ctx, ses, tBat, probeStuff, endpointSnapshot,
 	)
@@ -3411,6 +3456,42 @@ func hydrateHistoricalDataBranchBatch(
 	)
 }
 
+// ownerScopedChangesHandle re-attaches the physical segment owner identity to
+// the live caller context on every Next (design §6). Construction-time
+// identity is not enough: replay runs inside Next, and the engine's lost
+// partition-state recovery reopens the physical table by id through
+// Engine.GetRelationById, which resolves names in the *context's* account.
+// Forwarding the statement context unchanged routes that recovery to the
+// subscriber namespace, where the publisher-owned table cannot resolve.
+// Deriving from the live context (identityCtx) keeps cancellation and every
+// later value attachment intact; for a segment owned by the statement account
+// the derivation is a no-op and local-local diffs pass their context through
+// byte-identical.
+type ownerScopedChangesHandle struct {
+	inner engine.ChangesHandle
+	ident branchIdentity
+}
+
+// scopeChangesHandleToSegmentOwner wraps a segment change handle so every
+// Next runs under the segment's physical owner identity.
+func scopeChangesHandleToSegmentOwner(
+	handle engine.ChangesHandle,
+	ident branchIdentity,
+) engine.ChangesHandle {
+	return &ownerScopedChangesHandle{inner: handle, ident: ident}
+}
+
+func (h *ownerScopedChangesHandle) Next(
+	ctx context.Context,
+	mp *mpool.MPool,
+) (*batch.Batch, *batch.Batch, engine.ChangesHandle_Hint, error) {
+	return h.inner.Next(identityCtx(ctx, h.ident), mp)
+}
+
+func (h *ownerScopedChangesHandle) Close() error {
+	return h.inner.Close()
+}
+
 type historicalDataBranchChangesHandle struct {
 	inner            engine.ChangesHandle
 	sourceMapping    []int
@@ -3418,7 +3499,10 @@ type historicalDataBranchChangesHandle struct {
 	ses              *Session
 	endpointRel      engine.Relation
 	endpointSnapshot types.TS
-	hydrate          bool
+	// endpointIdent is the physical owner identity endpointRel was opened
+	// under (design §6); hydration probes the endpoint under it.
+	endpointIdent branchIdentity
+	hydrate       bool
 }
 
 func (h *historicalDataBranchChangesHandle) Next(
@@ -3434,7 +3518,7 @@ func (h *historicalDataBranchChangesHandle) Next(
 		return data, tombstone, hint, nil
 	}
 	if err = hydrateHistoricalDataBranchBatch(
-		ctx, h.ses, data, h.tblStuff, h.endpointRel, h.endpointSnapshot,
+		ctx, h.ses, data, h.tblStuff, h.endpointIdent, h.endpointRel, h.endpointSnapshot,
 	); err != nil {
 		data.Clean(mp)
 		if tombstone != nil {

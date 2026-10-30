@@ -488,7 +488,8 @@ func Test_createTablesInMoCatalogOfGeneralTenant(t *testing.T) {
 		}).AnyTimes()
 		bh.EXPECT().ClearExecResultSet().Return().AnyTimes()
 		msr := newMrsForCheckTenant([][]interface{}{{1, "test"}})
-		protocolResult := newMrsForCheckTenant([][]interface{}{{`{"result":"cn-a:109"}`}})
+		// This success-path fixture represents a cluster at the current protocol.
+		protocolResult := newMrsForCheckTenant([][]interface{}{{fmt.Sprintf(`{"result":"cn-a:%d"}`, defines.MORPCLatestVersion)}})
 		bh.EXPECT().GetExecResultSet().DoAndReturn(func() []interface{} {
 			if protocolQuery {
 				return []interface{}{protocolResult}
@@ -520,7 +521,7 @@ func Test_createTablesInMoCatalogOfGeneralTenant(t *testing.T) {
 		_, _, err := createTablesInMoCatalogOfGeneralTenant(ctx, bh, finalVersion, ca)
 		convey.So(err, convey.ShouldBeNil)
 
-		err = createTablesInInformationSchemaOfGeneralTenant(ctx, bh, "")
+		err = createTablesInInformationSchemaOfGeneralTenant(ctx, bh)
 		convey.So(err, convey.ShouldBeNil)
 	})
 }
@@ -530,7 +531,81 @@ func TestMoRoleGrantHasGranteeLookupIndex(t *testing.T) {
 		"key idx_mo_role_grant_grantee_id(grantee_id)")
 }
 
-func Test_createTablesInInformationSchemaOfGeneralTenant_UsesProtocolAwareViews(t *testing.T) {
+func TestCreateTenantInformationSchemaRequiresCurrentProtocol(t *testing.T) {
+	probeErr := errors.New("capability RPC unavailable")
+	for _, tc := range []struct {
+		name, response string
+		execErr        error
+		cancel         bool
+		wantError      bool
+	}{
+		{name: "all ready", response: `{"result":"cn-a:126,cn-b:126"}`},
+		{name: "old COLUMNS peer", response: `{"result":"cn-a:126,cn-b:108"}`, wantError: true},
+		{name: "old TABLES peer", response: `{"result":"cn-a:126,cn-b:109"}`, wantError: true},
+		{name: "old VIEWS peer", response: `{"result":"cn-a:126,cn-b:125"}`, wantError: true},
+		{name: "missing response", wantError: true},
+		{name: "invalid response", response: "not JSON", wantError: true},
+		{name: "RPC failure", execErr: probeErr, wantError: true},
+		{name: "caller cancellation", cancel: true, wantError: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			ctx = defines.AttachAccount(ctx, 42, 1, 2)
+			if tc.cancel {
+				cancel()
+			}
+			bh := mock_frontend.NewMockBackgroundExec(gomock.NewController(t))
+			bh.EXPECT().ClearExecResultSet().AnyTimes()
+			var rows [][]interface{}
+			if tc.response != "" {
+				rows = [][]interface{}{{tc.response}}
+			}
+			bh.EXPECT().GetExecResultSet().Return([]interface{}{newMrsForCheckTenant(rows)}).AnyTimes()
+			var executed []string
+			bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(func(execCtx context.Context, sql string) error {
+				executed = append(executed, sql)
+				require.Equal(t, ctx.Done(), execCtx.Done())
+				accountID, err := defines.GetAccountId(execCtx)
+				require.NoError(t, err)
+				if sql == "SELECT mo_ctl('cn', 'GetProtocolVersion', '')" {
+					require.Equal(t, uint32(catalog.System_Account), accountID)
+					require.Equal(t, uint32(catalog.System_User), defines.GetUserId(execCtx))
+					require.Equal(t, uint32(catalog.System_Role), defines.GetRoleId(execCtx))
+					if ctx.Err() != nil {
+						return ctx.Err()
+					}
+					return tc.execErr
+				}
+				require.Equal(t, uint32(42), accountID)
+				require.Equal(t, uint32(1), defines.GetUserId(execCtx))
+				require.Equal(t, uint32(2), defines.GetRoleId(execCtx))
+				return nil
+			}).AnyTimes()
+			err := createTablesInInformationSchemaOfGeneralTenant(ctx, bh)
+			if tc.wantError {
+				require.Error(t, err)
+				require.Equal(t, []string{"SELECT mo_ctl('cn', 'GetProtocolVersion', '')"}, executed,
+					"failed capability discovery must not install predecessor views")
+				if tc.execErr != nil {
+					require.ErrorIs(t, err, tc.execErr)
+				}
+				if tc.cancel {
+					require.ErrorIs(t, err, context.Canceled)
+				}
+				return
+			}
+			require.NoError(t, err)
+			for _, ddl := range []string{sysview.InformationSchemaColumnsDDL, sysview.InformationSchemaTablesV118DDL,
+				sysview.InformationSchemaSchemataDDL, sysview.InformationSchemaViewsDDL} {
+				require.Contains(t, executed, ddl)
+			}
+			require.NotContains(t, executed, sysview.InformationSchemaViewsLegacyDDL)
+		})
+	}
+}
+
+func TestInitInformationSchemaSysTablesForProtocol_UsesProtocolAwareViews(t *testing.T) {
 	tests := []struct {
 		name                   string
 		protocol               int64
@@ -579,159 +654,26 @@ func Test_createTablesInInformationSchemaOfGeneralTenant_UsesProtocolAwareViews(
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			moruntime.RunTest("", func(rt moruntime.Runtime) {
-				oldProtocol, oldProtocolExists := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
-				defer func() {
-					if oldProtocolExists {
-						rt.SetGlobalVariables(moruntime.MOProtocolVersion, oldProtocol)
-					} else {
-						rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
-					}
-				}()
-				rt.SetGlobalVariables(moruntime.MOProtocolVersion, test.protocol)
+			executed := sysview.InitInformationSchemaSysTablesForProtocol(test.protocol)
 
-				ctrl := gomock.NewController(t)
-				defer ctrl.Finish()
-
-				var executed []string
-				bh := mock_frontend.NewMockBackgroundExec(ctrl)
-				bh.EXPECT().ClearExecResultSet().AnyTimes()
-				bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(
-					func(_ context.Context, sql string) error {
-						executed = append(executed, sql)
-						return nil
-					}).AnyTimes()
-
-				require.NoError(t, createTablesInInformationSchemaOfGeneralTenant(context.Background(), bh, ""))
-
-				require.Equal(t, test.wantCheckFunction, containsSQLFragment(executed, "mo_check_constraints()"))
-				require.Equal(t, test.wantCurrentRoles, containsSQLFragment(executed, "mo_current_roles()"))
-				require.Equal(t, test.wantCompatibilityRoles,
-					containsSQLFragment(executed, "FROM mo_catalog.mo_role_grant rg"))
-				require.Equal(t, test.wantCanonicalViews,
-					containsSQL(executed, sysview.InformationSchemaTableConstraintsDDL))
-			})
+			require.Equal(t, test.wantCheckFunction, containsSQLFragment(executed, "mo_check_constraints()"))
+			require.Equal(t, test.wantCurrentRoles, containsSQLFragment(executed, "mo_current_roles()"))
+			require.Equal(t, test.wantCompatibilityRoles,
+				containsSQLFragment(executed, "FROM mo_catalog.mo_role_grant rg"))
+			require.Equal(t, test.wantCanonicalViews,
+				containsSQL(executed, sysview.InformationSchemaTableConstraintsDDL))
 		})
 	}
-}
 
-func TestCreateTenantInformationSchemaWaitsForAllProtocol100Peers(t *testing.T) {
-	moruntime.RunTest("", func(rt moruntime.Runtime) {
-		previous, exists := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
-		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion100)
-		defer func() {
-			if exists {
-				rt.SetGlobalVariables(moruntime.MOProtocolVersion, previous)
-			} else {
-				rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
-			}
-		}()
-		for _, tc := range []struct {
-			name, response string
-			wantError      bool
-		}{
-			{name: "mixed", response: `{"result":"cn-a:96,cn-b:95"}`, wantError: true},
-			{name: "missing response", wantError: true},
-			{name: "all ready", response: `{"result":"cn-a:100,cn-b:100"}`},
-		} {
-			t.Run(tc.name, func(t *testing.T) {
-				ctrl := gomock.NewController(t)
-				bh := mock_frontend.NewMockBackgroundExec(ctrl)
-				var executed []string
-				tenantCtx := defines.AttachAccount(t.Context(), 42, 1, 2)
-				bh.EXPECT().ClearExecResultSet().AnyTimes()
-				bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(func(execCtx context.Context, sql string) error {
-					account, err := defines.GetAccountId(execCtx)
-					require.NoError(t, err)
-					if sql == "SELECT mo_ctl('cn', 'GetProtocolVersion', '')" {
-						require.Equal(t, uint32(catalog.System_Account), account)
-						require.Equal(t, uint32(catalog.System_User), defines.GetUserId(execCtx))
-						require.Equal(t, uint32(catalog.System_Role), defines.GetRoleId(execCtx))
-					} else {
-						require.Equal(t, uint32(42), account)
-						require.Equal(t, uint32(1), defines.GetUserId(execCtx))
-						require.Equal(t, uint32(2), defines.GetRoleId(execCtx))
-					}
-					require.Equal(t, tenantCtx.Done(), execCtx.Done())
-					executed = append(executed, sql)
-					return nil
-				}).AnyTimes()
-				var rows [][]interface{}
-				if tc.response != "" {
-					rows = [][]interface{}{{tc.response}}
-				}
-				bh.EXPECT().GetExecResultSet().Return([]interface{}{newMrsForCheckTenant(rows)}).AnyTimes()
-				err := createTablesInInformationSchemaOfGeneralTenant(tenantCtx, bh, "")
-				if tc.wantError {
-					require.ErrorContains(t, err, "protocol version 100")
-					require.Equal(t, []string{"SELECT mo_ctl('cn', 'GetProtocolVersion', '')"}, executed)
-				} else {
-					require.NoError(t, err)
-					require.Contains(t, executed, sysview.InformationSchemaColumnsV100DDL())
-				}
-			})
-		}
-		for _, protocol := range []int64{defines.MORPCVersion94, defines.MORPCVersion95, defines.MORPCVersion96, defines.MORPCVersion97, defines.MORPCVersion98, defines.MORPCVersion99} {
-			t.Run(fmt.Sprintf("CN%d uses legacy definition", protocol), func(t *testing.T) {
-				rt.SetGlobalVariables(moruntime.MOProtocolVersion, protocol)
-				ctrl := gomock.NewController(t)
-				bh := mock_frontend.NewMockBackgroundExec(ctrl)
-				var executed []string
-				bh.EXPECT().ClearExecResultSet().AnyTimes()
-				bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, sql string) error {
-					executed = append(executed, sql)
-					return nil
-				}).AnyTimes()
-				require.NoError(t, createTablesInInformationSchemaOfGeneralTenant(t.Context(), bh, ""))
-				require.Contains(t, executed, sysview.InformationSchemaColumnsV58DDL())
-				require.NotContains(t, executed, sysview.InformationSchemaColumnsDDL)
-				require.NotContains(t, executed, "SELECT mo_ctl('cn', 'GetProtocolVersion', '')")
-			})
-		}
-	})
-}
-
-func TestCreateTenantInformationSchemaWaitsForAllProtocol109Peers(t *testing.T) {
-	moruntime.RunTest("", func(rt moruntime.Runtime) {
-		previous, exists := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
-		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion109)
-		defer func() {
-			if exists {
-				rt.SetGlobalVariables(moruntime.MOProtocolVersion, previous)
-			} else {
-				rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
-			}
-		}()
-
-		for _, tc := range []struct {
-			name, response string
-			wantError      bool
-		}{
-			{name: "one peer is still on protocol 108", response: `{"result":"cn-a:109,cn-b:108"}`, wantError: true},
-			{name: "all peers support native view", response: `{"result":"cn-a:109,cn-b:109"}`},
-		} {
-			t.Run(tc.name, func(t *testing.T) {
-				ctrl := gomock.NewController(t)
-				bh := mock_frontend.NewMockBackgroundExec(ctrl)
-				var executed []string
-				bh.EXPECT().ClearExecResultSet().AnyTimes()
-				bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, sql string) error {
-					executed = append(executed, sql)
-					return nil
-				}).AnyTimes()
-				bh.EXPECT().GetExecResultSet().Return([]interface{}{newMrsForCheckTenant([][]interface{}{{tc.response}})}).AnyTimes()
-
-				err := createTablesInInformationSchemaOfGeneralTenant(t.Context(), bh, "")
-				if tc.wantError {
-					require.ErrorContains(t, err, "protocol version 109")
-					require.Equal(t, []string{"SELECT mo_ctl('cn', 'GetProtocolVersion', '')"}, executed)
-				} else {
-					require.NoError(t, err)
-					require.Contains(t, executed, sysview.InformationSchemaColumnsDDL)
-				}
-			})
-		}
-	})
+	for _, protocol := range []int64{defines.MORPCVersion104, defines.MORPCVersion105, defines.MORPCVersion106, defines.MORPCVersion124, defines.MORPCVersion123} {
+		catalog := sysview.InitInformationSchemaSysTablesForProtocol(protocol)
+		joined := strings.Join(catalog, "\n")
+		require.Contains(t, catalog, sysview.InformationSchemaViewsLegacyDDL)
+		require.NotContains(t, joined, "mo_view_definition(")
+	}
+	current := sysview.InitInformationSchemaSysTablesForProtocol(defines.MORPCVersion126)
+	require.Contains(t, current, sysview.InformationSchemaViewsDDL)
+	require.NotContains(t, current, sysview.InformationSchemaViewsLegacyDDL)
 }
 
 func containsSQL(sqls []string, expected string) bool {
@@ -13023,11 +12965,13 @@ type backgroundExecTest struct {
 	sql2result                     map[string]ExecResult
 	resultSets                     []interface{}
 	sql2err                        map[string]error
+	sqlPrefixErr                   map[string]error
 	executedSQLs                   []string
 	beforeExec                     func(string)
 	dropDatabaseIgnoresForeignKeys bool
 	systemCTELimits                []bool
 	lockWriterFair                 []bool
+	publicationViewBinding         []bool
 	executionAccountIDs            []uint32
 	executionDatabaseTypes         []string
 }
@@ -13145,6 +13089,7 @@ func (bt *backgroundExecTest) ClearExecResultBatches() {
 func (bt *backgroundExecTest) init() {
 	bt.sql2result = make(map[string]ExecResult)
 	bt.sql2err = make(map[string]error)
+	bt.sqlPrefixErr = make(map[string]error)
 }
 
 func (bt *backgroundExecTest) Close() {
@@ -13166,6 +13111,8 @@ func (bt *backgroundExecTest) Exec(ctx context.Context, s string) error {
 	bt.executedSQLs = append(bt.executedSQLs, s)
 	bt.systemCTELimits = append(bt.systemCTELimits, process.HasSystemCTELimits(ctx))
 	bt.lockWriterFair = append(bt.lockWriterFair, defines.IsLockWriterFair(ctx))
+	bt.publicationViewBinding = append(bt.publicationViewBinding,
+		defines.IsPublicationViewBinding(ctx))
 	accountID, _ := defines.GetAccountId(ctx)
 	bt.executionAccountIDs = append(bt.executionAccountIDs, accountID)
 	databaseType, _ := ctx.Value(defines.DatTypKey{}).(string)
@@ -13175,6 +13122,13 @@ func (bt *backgroundExecTest) Exec(ctx context.Context, s string) error {
 	}
 	if err, ok := bt.sql2err[s]; ok {
 		return err
+	}
+	// Prefix errors are checked after the exact key so nondeterministic SQL
+	// (an embedded runtime uuid, e.g. mo_snapshots inserts) can be faulted.
+	for prefix, err := range bt.sqlPrefixErr {
+		if strings.HasPrefix(s, prefix) {
+			return err
+		}
 	}
 	return nil
 }
@@ -13779,50 +13733,34 @@ func newMrsForGetAllAccounts(rows [][]interface{}) *MysqlResultSet {
 func newMrsForSqlForGetPubs(rows [][]interface{}) *MysqlResultSet {
 	mrs := &MysqlResultSet{}
 
-	col1 := &MysqlColumn{}
-	col1.SetName("pub_name")
-	col1.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
-	col2 := &MysqlColumn{}
-	col2.SetName("database_name")
-	col2.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
-	col3 := &MysqlColumn{}
-	col3.SetName("database_id")
-	col3.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
-	col4 := &MysqlColumn{}
-	col4.SetName("table_list")
-	col4.SetColumnType(defines.MYSQL_TYPE_TEXT)
-	col5 := &MysqlColumn{}
-	col5.SetName("account_list")
-	col5.SetColumnType(defines.MYSQL_TYPE_TEXT)
-	col6 := &MysqlColumn{}
-	col6.SetName("created_time")
-	col6.SetColumnType(defines.MYSQL_TYPE_TIMESTAMP)
-	col7 := &MysqlColumn{}
-	col7.SetName("update_time")
-	col7.SetColumnType(defines.MYSQL_TYPE_TIMESTAMP)
-	col8 := &MysqlColumn{}
-	col8.SetName("owner")
-	col8.SetColumnType(defines.MYSQL_TYPE_LONG)
-	col9 := &MysqlColumn{}
-	col9.SetName("creator")
-	col9.SetColumnType(defines.MYSQL_TYPE_LONG)
-	col10 := &MysqlColumn{}
-	col10.SetName("account_list")
-	col10.SetColumnType(defines.MYSQL_TYPE_TEXT)
-
-	mrs.AddColumn(col1)
-	mrs.AddColumn(col2)
-	mrs.AddColumn(col3)
-	mrs.AddColumn(col4)
-	mrs.AddColumn(col5)
-	mrs.AddColumn(col6)
-	mrs.AddColumn(col7)
-	mrs.AddColumn(col8)
-	mrs.AddColumn(col9)
-	mrs.AddColumn(col10)
+	colNames := []struct {
+		name string
+		typ  defines.MysqlType
+	}{
+		{"account_id", defines.MYSQL_TYPE_LONGLONG},
+		{"account_name", defines.MYSQL_TYPE_VARCHAR},
+		{"pub_name", defines.MYSQL_TYPE_VARCHAR},
+		{"database_name", defines.MYSQL_TYPE_VARCHAR},
+		{"database_id", defines.MYSQL_TYPE_LONGLONG},
+		{"table_list", defines.MYSQL_TYPE_TEXT},
+		{"account_list", defines.MYSQL_TYPE_TEXT},
+		{"created_time", defines.MYSQL_TYPE_TIMESTAMP},
+		{"update_time", defines.MYSQL_TYPE_TIMESTAMP},
+		{"owner", defines.MYSQL_TYPE_LONG},
+		{"creator", defines.MYSQL_TYPE_LONG},
+		{"comment", defines.MYSQL_TYPE_TEXT},
+	}
+	for _, meta := range colNames {
+		col := &MysqlColumn{}
+		col.SetName(meta.name)
+		col.SetColumnType(meta.typ)
+		mrs.AddColumn(col)
+	}
 
 	for _, row := range rows {
-		mrs.AddRow(row)
+		r := make([]interface{}, 0, len(colNames))
+		r = append(r, row...)
+		mrs.AddRow(r)
 	}
 
 	return mrs
@@ -16986,7 +16924,7 @@ func TestDoCreateStage(t *testing.T) {
 }
 
 func TestDoAlterStage(t *testing.T) {
-	convey.Convey("doAlterStage success", t, func() {
+	convey.Convey("doAlterStage combined options success", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
@@ -17025,13 +16963,16 @@ func TestDoAlterStage(t *testing.T) {
 				Url:   "s3://load/files/",
 			},
 			CredentialsOption: tree.StageCredentials{
-				Exist: false,
+				Exist:       true,
+				Credentials: []string{"AWS_SECRET_KEY", "quoted'value"},
 			},
 			StatusOption: tree.StageStatus{
-				Exist: false,
+				Exist:  true,
+				Option: tree.StageStatusEnabled,
 			},
 			Comment: tree.StageComment{
-				Exist: false,
+				Exist:   true,
+				Comment: "quoted'comment",
 			},
 		}
 
@@ -17238,7 +17179,7 @@ func TestDoAlterStage(t *testing.T) {
 		convey.So(err, convey.ShouldNotBeNil)
 	})
 
-	convey.Convey("doAlterStage fail", t, func() {
+	convey.Convey("doAlterStage IF EXISTS missing combined options is a no-op", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
@@ -17298,7 +17239,7 @@ func TestDoAlterStage(t *testing.T) {
 		bh.sql2result[sql] = mrs
 
 		err := doAlterStage(ctx, ses, as)
-		convey.So(err, convey.ShouldNotBeNil)
+		convey.So(err, convey.ShouldBeNil)
 	})
 
 	convey.Convey("doAlterStage fail", t, func() {
@@ -19323,4 +19264,48 @@ func TestCompoundObjectPrivilegesDoNotAuthorizeSibling(t *testing.T) {
 	allowed, err = checkPrivilegeInCache(t.Context(), ses, priv, true)
 	require.NoError(t, err)
 	require.True(t, allowed, "object-level alternatives still authorize each object")
+}
+
+// TestIsSysOnlyCatalogRelationSQL keeps the classification the sys-only
+// catalog DDLs depend on, byte for byte. The general-tenant account
+// initialization skips exactly these statements, and
+// isPublicationSharedSystemRelation builds its shared-relation set from the
+// complement, so one case-swapped prefix turns a system-owned relation into
+// per-tenant state (the round-15 review caught MoCatalogMoIndexUpdateDDL
+// exactly this way: its statement opens with uppercase CREATE TABLE while
+// the extraction wrote the lowercase literal). The assertions run against the
+// real predefined constants, not restated strings, so a future rewriting of
+// either side has to keep the pair consistent.
+func TestIsSysOnlyCatalogRelationSQL(t *testing.T) {
+	// sys-only: only the system account is initialized with these relations
+	require.True(t, isSysOnlyCatalogRelationSQL(MoCatalogMoAccountDDL),
+		"mo_account stays with the system account")
+	require.True(t, isSysOnlyCatalogRelationSQL(MoCatalogMoPubsDDL),
+		"mo_pubs stays with the system account")
+	require.True(t, isSysOnlyCatalogRelationSQL(MoCatalogMoTableStatsDDL),
+		"mo_table_stats stays with the system account")
+	require.True(t, isSysOnlyCatalogRelationSQL(MoCatalogMoIndexUpdateDDL),
+		"the uppercase MoCatalogMoIndexUpdateDDL classifies sys-only: a lowercase prefix literal misses its case-sensitive CREATE TABLE and the DDL would run for every general tenant")
+	// per-tenant: initialized for every new account, so it must not classify
+	// sys-only or general-tenant initialization would stop creating it
+	require.False(t, isSysOnlyCatalogRelationSQL(MoCatalogMoUserDDL),
+		"mo_user is created for every account")
+	// the checks are case-sensitive by design: the DDL constants define the
+	// exact statements that run, and this documents that only the uppercase
+	// form of the index-update statement matches
+	require.False(t, isSysOnlyCatalogRelationSQL("create table mo_catalog.mo_index_update (x int)"),
+		"the lowercase spelling is not the statement upstream skips tenants for")
+}
+
+func TestExtensionPrivilegeClassification(t *testing.T) {
+	for _, stmt := range []tree.Statement{&tree.CreateExtension{}, &tree.LoadExtension{}} {
+		t.Run(stmt.GetStatementType(), func(t *testing.T) {
+			priv := determinePrivilegeSetOfStatement(stmt)
+			require.Equal(t, objectTypeNone, priv.objectType())
+			require.Equal(t, privilegeKindNone, priv.kind)
+			require.Empty(t, priv.entries)
+			require.True(t, priv.canExecInRestricted)
+			require.False(t, priv.canExecInPasswordExpired)
+		})
+	}
 }

@@ -225,7 +225,7 @@ func (builder *QueryBuilder) normalizeUpdateAssignment(
 	if isGeometryPlanType(&col.Typ) {
 		return funcCastForGeometryType(builder.GetContext(), rhs, col.Typ)
 	}
-	return builder.forceProjectedAssignmentCastExpr(rhs, rhs, col.Typ, ignore)
+	return builder.forceProjectedAssignmentCastExpr(rhs, rhs, col.Typ, ignore, col.Name)
 }
 
 // appendSequentialSingleTableUpdateAssignments materializes the current row in
@@ -399,12 +399,11 @@ func (builder *QueryBuilder) newSequentialUpdateProjectionBinder(
 	return ctx, binder
 }
 
-func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext) (rootID int32, err error) {
+func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext, dmlCtx *DMLContext) (rootID int32, err error) {
 	if err := validateUpdateWindowFunctions(builder.compCtx, stmt); err != nil {
 		return 0, err
 	}
 
-	dmlCtx := NewDMLContext()
 	err = dmlCtx.ResolveUpdateTables(builder.compCtx, stmt)
 	if err != nil {
 		return 0, err
@@ -502,8 +501,31 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 		validIndexes, _ := getValidIndexes(tableDef)
 		tableDef.Indexes = validIndexes
 
+		checkGeneratedAssignment := func(assignment UpdateAssignment) (bool, error) {
+			for _, col := range tableDef.Cols {
+				if col.Name != assignment.Column || col.GeneratedCol == nil {
+					continue
+				}
+				if _, ok := assignment.Expr.(*tree.DefaultVal); ok {
+					return true, nil
+				}
+				return true, moerr.NewInvalidInputf(builder.compCtx.GetContext(), "the value specified for generated column '%s' in table '%s' is not allowed", assignment.Column, tableDef.Name)
+			}
+			return false, nil
+		}
+
 		updateAssignments := dmlCtx.updateAssignments[i]
 		if !sequentialAssignments {
+			// The nonsequential path keeps only the last assignment per column.
+			// Validate the original occurrences first so a later DEFAULT cannot
+			// hide an invalid write to a generated column.
+			if len(updateAssignments) > len(dmlCtx.updateCol2Expr[i]) {
+				for _, assignment := range updateAssignments {
+					if _, err := checkGeneratedAssignment(assignment); err != nil {
+						return 0, err
+					}
+				}
+			}
 			updateAssignments = make([]UpdateAssignment, 0, len(dmlCtx.updateCol2Expr[i]))
 			for colName := range dmlCtx.updateCol2Expr[i] {
 				updateAssignments = append(updateAssignments, UpdateAssignment{
@@ -514,25 +536,15 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 		}
 		for _, assignment := range updateAssignments {
 			colName := assignment.Column
-			if isFunctionalColumn(FindColumn(tableDef.Cols, colName)) {
-				return 0, moerr.NewBadFieldError(builder.GetContext(), colName, tableDef.Name)
-			}
 			updateExpr := assignment.Expr
-			// Check: cannot update a generated column (unless SET gen_col = DEFAULT)
-			isGenCol := false
-			for _, colDef := range tableDef.Cols {
-				if colDef.Name == colName && colDef.GeneratedCol != nil {
-					isGenCol = true
-					break
-				}
+			isGenCol, err := checkGeneratedAssignment(assignment)
+			if err != nil {
+				return 0, err
 			}
 			if isGenCol {
-				if _, ok := updateExpr.(*tree.DefaultVal); ok {
-					// SET gen_col = DEFAULT is allowed — silently remove from update set
-					delete(dmlCtx.updateCol2Expr[i], colName)
-					continue
-				}
-				return 0, moerr.NewInvalidInputf(builder.compCtx.GetContext(), "the value specified for generated column '%s' in table '%s' is not allowed", colName, tableDef.Name)
+				// SET generated_col = DEFAULT is allowed and is not a write.
+				delete(dmlCtx.updateCol2Expr[i], colName)
+				continue
 			}
 
 			if !dmlCtx.updatePartCol[i] {
@@ -833,6 +845,15 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 			newDefExpr := DeepCopyExpr(col.OnUpdate.Expr)
 			if err = replaceFuncId(builder.GetContext(), newDefExpr); err != nil {
 				return 0, err
+			}
+			if isAttributedDecimalPlanType(col.Typ) {
+				// Replay the persisted admission boundary under this
+				// statement's ignore policy instead of reusing the
+				// DDL-authored one verbatim.
+				if newDefExpr, err = rePoliceUnsignedDecimalAssignmentBoundary(
+					builder.GetContext(), newDefExpr, stmt.Ignore, builder.compCtx.GetProcess()); err != nil {
+					return 0, err
+				}
 			}
 			oldPos := oldColName2Idx[qualifiedName]
 			if changed := changedPredicates[alias]; changed != nil {
@@ -1256,7 +1277,7 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 			colPos[strings.ToLower(col.Name)] = pos
 		}
 		lastNodeID = builder.materializeReturningSource(
-			bindCtx, lastNodeID, selectNodeTag, tableDef, dmlCtx.objRefs[0], tableDef.Name, alias, colPos,
+			bindCtx, lastNodeID, selectNodeTag, tableDef, tableDef.Name, alias, colPos,
 		)
 		selectNode = builder.qry.Nodes[lastNodeID]
 		selectNodeTag = selectNode.BindingTags[0]
@@ -1741,6 +1762,20 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 					dedupColTypes[j] = tableDef.Cols[tableDef.Name2ColIndex[catalog.ResolveAlias(part)]].Typ
 				}
 
+				diagnosticExprs, err := builder.makeIndexDedupKeyExprs(tableDef, idxDef, newProjTag, func(name string) (int32, bool) {
+					if pos, ok := newColName2Idx[alias+"."+name]; ok {
+						return pos, true
+					}
+					pos, ok := oldColName2Idx[alias+"."+name]
+					return pos, ok
+				})
+				if err != nil {
+					return 0, err
+				}
+				if len(diagnosticExprs) > 0 {
+					dedupColName = idxDef.IndexName
+				}
+
 				dedupJoinNode := &plan.Node{
 					NodeType:          plan.Node_JOIN,
 					Children:          []int32{idxTableNodeID, lastNodeID},
@@ -1749,6 +1784,7 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 					OnDuplicateAction: onDuplicateAction,
 					DedupColName:      dedupColName,
 					DedupColTypes:     dedupColTypes,
+					DedupKeyExprs:     diagnosticExprs,
 					DedupJoinCtx: &plan.DedupJoinCtx{
 						OldColList: []plan.ColRef{
 							{
@@ -3917,6 +3953,17 @@ func (builder *QueryBuilder) appendMergedPhysicalTargetUniqueChecks(
 		if len(idxDef.Parts) > 1 {
 			dedupName = "(" + strings.Join(idxDef.Parts, ",") + ")"
 		}
+
+		diagnosticExprs, err := builder.makeIndexDedupKeyExprs(tableDef, idxDef, projectTag, func(name string) (int32, bool) {
+			pos, ok := currentPosByCol[name]
+			return pos, ok
+		})
+		if err != nil {
+			return 0, nil, err
+		}
+		if len(diagnosticExprs) > 0 {
+			dedupName = idxDef.IndexName
+		}
 		lastNodeID = builder.appendNode(&plan.Node{
 			NodeType:          plan.Node_JOIN,
 			Children:          []int32{idxScanID, lastNodeID},
@@ -3925,6 +3972,7 @@ func (builder *QueryBuilder) appendMergedPhysicalTargetUniqueChecks(
 			OnDuplicateAction: plan.Node_IGNORE,
 			DedupColName:      dedupName,
 			DedupColTypes:     dedupTypes,
+			DedupKeyExprs:     diagnosticExprs,
 			DedupJoinCtx: &plan.DedupJoinCtx{OldColList: []plan.ColRef{
 				{RelPos: projectTag, ColPos: oldKeyPos},
 				{RelPos: projectTag, ColPos: releaseMarkerPos},

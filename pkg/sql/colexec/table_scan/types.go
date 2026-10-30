@@ -32,28 +32,31 @@ import (
 var _ vm.Operator = new(TableScan)
 
 type container struct {
-	maxAllocSize           int
-	buf                    *batch.Batch
-	msgReceiver            *message.MessageReceiver
-	filterExecutors        []colexec.ExpressionExecutor
-	runtimeFilterExecutors []colexec.ExpressionExecutor
-	allFilterExecutors     []colexec.ExpressionExecutor // runtime + static; elements owned by above slices
-	filterBs               vector.FunctionParameterWrapper[bool]
-	earlyColumns           []int
-	lateColumns            []int
-	filterRows             []int64
-	filterReadMetrics      bool
-	filterLateMaterialized bool
-	filterActiveDuration   time.Duration
-	readerFilter           engine.ReaderFilter
-	metricView             *batch.Batch
-	padCharToFullLength    bool
+	maxAllocSize              int
+	buf                       *batch.Batch
+	msgReceiver               *message.MessageReceiver
+	filterExecutors           []colexec.ExpressionExecutor
+	runtimeFilterExecutors    []colexec.ExpressionExecutor
+	allFilterExecutors        []colexec.ExpressionExecutor // runtime + static; elements owned by above slices
+	filterBs                  vector.FunctionParameterWrapper[bool]
+	earlyColumns              []int
+	lateColumns               []int
+	filterRows                []int64
+	filterReadMetrics         bool
+	filterLateMaterialized    bool
+	filterActiveDuration      time.Duration
+	readerFilter              engine.ReaderFilter
+	metricView                *batch.Batch
+	padCharToFullLength       bool
+	subjectReuseAdmissionDone bool
 }
 
 type TableScan struct {
-	ctr            container
-	TopValueMsgTag int32
-	Reader         engine.Reader
+	// OutputAllocation belongs to the caller execution and is installed before reading.
+	OutputAllocation *vector.AllocationAccountSelection
+	ctr              container
+	TopValueMsgTag   int32
+	Reader           engine.Reader
 	// letter case: origin
 	Attrs              []string
 	Types              []plan.Type
@@ -152,6 +155,7 @@ func (tableScan *TableScan) Free(proc *process.Process, pipelineFailed bool, err
 		}
 	}
 	tableScan.ctr.filterExecutors = nil
+	tableScan.ctr.subjectReuseAdmissionDone = false
 
 	for i := range tableScan.ctr.runtimeFilterExecutors {
 		if tableScan.ctr.runtimeFilterExecutors[i] != nil {

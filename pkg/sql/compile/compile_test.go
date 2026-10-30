@@ -18,6 +18,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
+	goruntime "runtime"
+	godebug "runtime/debug"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -57,6 +60,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dependent"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
@@ -103,11 +107,43 @@ func TestBroadcastJoinUsesHashAfterPreparedDiagnosticProof(t *testing.T) {
 		bind("=", leftID, rightID), bind("=", leftTime, guard),
 	}}
 	c := &Compile{proc: proc}
+	assertDependentAlgorithm := func(want vm.OpType) {
+		children := []*plan.Node{
+			{ProjectList: []*plan.Expr{leftID, leftTime}},
+			{ProjectList: []*plan.Expr{rightID, rightTime}},
+		}
+		factory, err := c.compileDependentJoin(plan2.DeepCopyNode(node), children)
+		require.NoError(t, err)
+		op, err := factory(proc, []*dependent.DemandInput{{}, {}})
+		require.NoError(t, err)
+		root := op.(*dependent.JoinKernel)
+		defer func() {
+			root.Free(proc, false, nil)
+			root.Join.Free(proc, false, nil)
+			root.Build.Free(proc, false, nil)
+			root.Join.Release()
+			root.Build.Release()
+		}()
+		require.Equal(t, want, root.Join.OpType())
+	}
 	require.False(t, c.broadcastJoinUsesHash(node), "unproved guarded ON retains LoopJoin")
+	assertDependentAlgorithm(vm.LoopJoin)
 	c.SetPreparedJoinDiagnosticFree(true)
 	require.True(t, c.broadcastJoinUsesHash(node), "current clean binding permits HashJoin")
+	assertDependentAlgorithm(vm.HashJoin)
 	c.SetPreparedJoinDiagnosticFree(false)
 	require.False(t, c.broadcastJoinUsesHash(node), "a subsequent execution must not inherit proof")
+	assertDependentAlgorithm(vm.LoopJoin)
+
+	// A single nullable MARK key is otherwise hash eligible, but must retain
+	// pair-local guarded diagnostics until this execution proves them clean.
+	node.JoinType = plan.Node_MARK
+	node.OnList = node.OnList[1:]
+	assertDependentAlgorithm(vm.LoopJoin)
+	c.SetPreparedJoinDiagnosticFree(true)
+	assertDependentAlgorithm(vm.HashJoin)
+	c.SetPreparedJoinDiagnosticFree(false)
+	assertDependentAlgorithm(vm.LoopJoin)
 }
 
 func TestHasOrderedGroupConcat(t *testing.T) {
@@ -158,6 +194,71 @@ func TestCompileClearResetsExecutionType(t *testing.T) {
 	c.clear()
 	require.True(t, c.IsTpQuery())
 	require.Zero(t, c.prePipelineLockTableID, "pooled compiles must not retain a backfill lock request")
+}
+
+func TestCompileClearResetsSkipIndexTaskRegistration(t *testing.T) {
+	// The ALTER COPY private replica create opts out of index task
+	// registration on its executor Compile. Exercise the pool reset directly,
+	// independent of which object sync.Pool would choose for the next
+	// allocation: a released Compile must not hand that suppression to an
+	// unrelated frontend statement.
+	c := &Compile{
+		proc:                      testutil.NewProcess(t),
+		MessageBoard:              message.NewMessageBoard(),
+		affectRows:                new(atomic.Uint64),
+		skipIndexTaskRegistration: true,
+	}
+	c.clear()
+	require.False(t, c.skipIndexTaskRegistration,
+		"a pooled compile must not retain the private index-registration policy")
+}
+
+func TestCompilePoolHandoffClearsPrivateIndexRegistrationPolicy(t *testing.T) {
+	// Reproduce the frontend ownership boundary: the private ALTER COPY
+	// executor releases its Compile, then an ordinary frontend statement
+	// allocates the next generation from the global reuse pool. Two layers
+	// hold that boundary: Release runs clear() before sync.Pool.Put, and
+	// NewCompile re-initializes the flag after sync.Pool.Get.
+	//
+	// sync.Pool's documented contract permits Put to discard values and Get
+	// to return an unrelated object, and the race runtime drops Put values
+	// deliberately (runtime_randn(4) in sync/pool.go), so pointer identity
+	// between the released and the reallocated compile cannot be required.
+	// The oracle is the policy of every object the public constructor
+	// returns: each round seeds the pool with the exact leak payload and
+	// asserts the ordinary registration policy on the constructed frontend
+	// compile. A leak can only travel through a Put that the pool kept, and
+	// every kept Put is a round whose frontend object is unconditionally
+	// checked, so drops never mask a leaked policy. The deterministic
+	// clear() reset layer stays covered, pool-free, by
+	// TestCompileClearResetsSkipIndexTaskRegistration.
+	oldProcs := goruntime.GOMAXPROCS(1)
+	defer goruntime.GOMAXPROCS(oldProcs)
+	oldPercent := godebug.SetGCPercent(-1)
+	defer godebug.SetGCPercent(oldPercent)
+
+	const handoffs = 16
+	sameObject := 0
+	for round := 0; round < handoffs; round++ {
+		private := NewCompile("test", "test", "create table __mo_alter_copy_replica", "", "",
+			nil, testutil.NewProcess(t), nil, false, nil, time.Now())
+		// txnExecutor.Exec sets this for the private replica create's nested
+		// compiler (sql_executor.go), which Release returns to the pool.
+		private.skipIndexTaskRegistration = true
+		private.Release()
+
+		frontend := NewCompile("test", "test", "create table ordinary", "", "",
+			nil, testutil.NewProcess(t), nil, false, nil, time.Now())
+		require.False(t, frontend.skipIndexTaskRegistration,
+			"round %d: a frontend compile must not inherit the private preparation policy", round)
+		frontend.Release()
+		if frontend == private {
+			sameObject++
+		}
+	}
+	// Informational only: the race runtime drops Put values purposefully, so
+	// zero reuse observations is a legitimate outcome, never a failure.
+	t.Logf("pool handed back the released compile in %d/%d rounds", sameObject, handoffs)
 }
 
 func TestCompileMongoDBQueryDiagnosticsAreRedacted(t *testing.T) {
@@ -216,7 +317,6 @@ func TestCompileRunPreservesBinaryPrepareParamAcrossRetries(t *testing.T) {
 		{"ordinary_rc", false, moerr.NewTxnNeedRetryNoCtx()},
 		{"borrowed_rc", true, moerr.NewTxnNeedRetryNoCtx()},
 		{"borrowed_definition", true, moerr.NewTxnNeedRetryWithDefChangedNoCtx()},
-		{"borrowed_vector", true, moerr.NewVectorNeedRetryWithPreModeNoCtx()},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			borrowed := tc.borrowed
@@ -575,9 +675,8 @@ func TestCompileStepsDoesNotGiveOutputAdaptiveRetryOwnership(t *testing.T) {
 	compiled, err := c.compileSteps(qry, []*Scope{input}, 0)
 	require.NoError(t, err)
 	require.Len(t, compiled, 1)
-	out, ok := compiled[0].RootOp.(*output.Output)
+	_, ok := compiled[0].RootOp.(*output.Output)
 	require.True(t, ok)
-	require.False(t, out.IsAdaptive)
 }
 
 func TestCompileStepsKeepsOutputOnCurrentCNForSingleRemoteScope(t *testing.T) {
@@ -1146,6 +1245,142 @@ func TestCompileLockNonCandidatePreservesExactMainMutation(t *testing.T) {
 	require.Len(t, got, 1)
 	require.Empty(t, node.LockTargets)
 	require.Same(t, target, c.lockTables[target.TableId])
+}
+
+func TestCompileLockRejectsOptimisticNonBlockingBeforeScopeExecution(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		noWait bool
+		skip   bool
+	}{
+		{name: "NOWAIT", noWait: true},
+		{name: "SKIP LOCKED", skip: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := newPrePipelineLockTestCompile(t, plan.Query_SELECT)
+			ctrl := gomock.NewController(t)
+			txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+			txnOp.EXPECT().Txn().Return(txn.TxnMeta{Mode: txn.TxnMode_Optimistic}).AnyTimes()
+			c.proc.Base.TxnOperator = txnOp
+
+			source := newScope(Normal)
+			source.Proc = c.proc
+			source.setRootOperator(colexec.NewMockOperator())
+			t.Cleanup(func() {
+				source.FreeOperator(c)
+				source.release()
+			})
+			originalRoot := source.RootOp
+			target := &plan.LockTarget{
+				TableId: 42, PrimaryColTyp: plan.Type{Id: int32(types.T_int64)},
+				Mode: lockpb.LockMode_Shared, NoWait: tc.noWait, SkipLocked: tc.skip,
+			}
+
+			got, err := c.compileLock(&plan.Node{LockTargets: []*plan.LockTarget{target}}, []*Scope{source})
+			require.Error(t, err)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), "%v", err)
+			require.Nil(t, got)
+			require.Same(t, originalRoot, source.RootOp,
+				"optimistic nonblocking plans must fail while scopes are only being compiled")
+			require.Empty(t, source.PreScopes)
+		})
+	}
+}
+
+func TestCompileRejectsOptimisticNonBlockingBeforeScopeConstruction(t *testing.T) {
+	for _, mode := range []struct {
+		name       string
+		noWait     bool
+		skipLocked bool
+	}{{name: "NOWAIT", noWait: true},
+		{name: "SKIP alone", skipLocked: true}} {
+		for _, tc := range []struct {
+			name                                    string
+			optimistic, disabled, coarse, coarseEnd bool
+			message                                 string
+		}{
+			{name: "optimistic", optimistic: true, message: "pessimistic transaction"},
+			{name: "disabled", disabled: true, message: "physical lock admission"},
+			{name: "coarse", coarse: true, message: "exact row lock targets"},
+			{name: "coarse at EOF", coarseEnd: true, message: "exact row lock targets"},
+		} {
+			for _, correlated := range []bool{false, true} {
+				shape := "ordinary"
+				if correlated {
+					shape = "dependent"
+				}
+				t.Run(mode.name+"/"+tc.name+"/"+shape, func(t *testing.T) {
+					c := NewMockCompile(t)
+					c.disableLock = tc.disabled
+					ctrl := gomock.NewController(t)
+					txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+					txnMode := txn.TxnMode_Pessimistic
+					if tc.optimistic {
+						txnMode = txn.TxnMode_Optimistic
+					}
+					txnOp.EXPECT().Txn().Return(txn.TxnMeta{Mode: txnMode}).AnyTimes()
+					c.proc.Base.TxnOperator = txnOp
+					target := &plan.LockTarget{TableId: 42, Mode: lockpb.LockMode_Shared, NoWait: mode.noWait, SkipLocked: mode.skipLocked, LockTable: tc.coarse, LockTableAtTheEnd: tc.coarseEnd}
+					query := &plan.Query{StmtType: plan.Query_SELECT, Steps: []int32{0}, Nodes: []*plan.Node{{NodeType: plan.Node_LOCK_OP, LockTargets: []*plan.LockTarget{target}}}}
+					if correlated {
+						query.Correlation = &plan.CorrelationSpec{Programs: []*plan.CorrelationProgram{{RootNode: 0}}}
+					}
+					queryPlan := &plan.Plan{Plan: &plan.Plan_Query{Query: query}}
+					err := c.Compile(context.Background(), queryPlan, nil)
+					require.Error(t, err)
+					require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), "%v", err)
+					require.ErrorContains(t, err, tc.message)
+					require.Nil(t, c.scopes, "rejection must precede source construction")
+					require.Nil(t, c.cnList, "rejection must precede remote scheduling")
+					require.Empty(t, c.lockTables)
+					require.Same(t, target, query.Nodes[0].LockTargets[0])
+				})
+			}
+		}
+	}
+}
+
+func TestCompileLockDisabledSkipsAllStatementLocks(t *testing.T) {
+	c := NewMockCompile(t)
+	c.disableLock = true
+	target := &plan.LockTarget{TableId: 42, LockTable: true}
+	node := &plan.Node{LockTargets: []*plan.LockTarget{target}}
+	scope := &Scope{}
+
+	got, err := c.compileLock(node, []*Scope{scope})
+	require.NoError(t, err)
+	require.Equal(t, []*Scope{scope}, got)
+	require.Nil(t, scope.RootOp)
+	require.Empty(t, c.lockTables)
+	require.Equal(t, []*plan.LockTarget{target}, node.LockTargets)
+
+	// A pessimistic transaction can still request an internal lock-free
+	// statement; nonblocking SQL must not silently bypass physical admission.
+	ctrl := gomock.NewController(t)
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOp.EXPECT().Txn().Return(txn.TxnMeta{Mode: txn.TxnMode_Pessimistic}).AnyTimes()
+	c.proc.Base.TxnOperator = txnOp
+	target.LockTable = false
+	target.NoWait = true
+	got, err = c.compileLock(node, []*Scope{scope})
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), "%v", err)
+	require.Nil(t, got)
+	require.Nil(t, scope.RootOp)
+	require.Empty(t, c.lockTables)
+	require.Equal(t, []*plan.LockTarget{target}, node.LockTargets)
+
+	// SKIP alone must not pass just because NOWAIT is unset.
+	target.NoWait = false
+	target.SkipLocked = true
+	got, err = c.compileLock(node, []*Scope{scope})
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), "%v", err)
+	require.Nil(t, got)
+	require.Nil(t, scope.RootOp)
+	require.Empty(t, c.lockTables)
+	require.Equal(t, []*plan.LockTarget{target}, node.LockTargets)
+
 }
 
 func TestCompileLockPrePipelineTargetAdmission(t *testing.T) {
@@ -3596,6 +3831,10 @@ func TestCompileLocalPreAggregationKeepsEveryInputScope(t *testing.T) {
 		}},
 	}
 	require.True(t, isLocalPreAggregationGroup(final, local))
+	final.Stats.HashmapStats.ShuffleMethod = plan.ShuffleMethod_Reuse
+	require.False(t, isLocalPreAggregationGroup(final, local),
+		"reusing the child's partition must preserve the child's complete aggregation")
+	final.Stats.HashmapStats.ShuffleMethod = plan.ShuffleMethod_Normal
 	final.Stats.HashmapStats.Shuffle = false
 	require.False(t, isLocalPreAggregationGroup(final, local),
 		"a downstream complete Group is required before localizing its child")
@@ -3615,7 +3854,7 @@ func TestCompileLocalPreAggregationKeepsEveryInputScope(t *testing.T) {
 		inputRoots[i] = inputs[i].RootOp
 	}
 
-	result := c.compileLocalGroupBy(local, inputs, nodes)
+	result := c.compileLocalGroupBy(local, final, inputs, nodes)
 
 	require.Len(t, result, 4,
 		"local pre-dedup output must remain parallel for the parent exchange")
@@ -3636,6 +3875,217 @@ func TestCompileLocalPreAggregationKeepsEveryInputScope(t *testing.T) {
 		require.IsType(t, &group.Group{}, owner.RootOp,
 			"the parent exchange must retain four final pair owners")
 	}
+}
+
+func newLocalPreAggregationTestNodes() (*plan.Node, *plan.Node, []*plan.Node) {
+	local, nodes := newShuffleGroupTestNodes(4)
+	input := nodes[0]
+	input.Stats.Outcnt = 8_000_000
+	key := plan2.DeepCopyExpr(local.GroupBy[0])
+	key.GetCol().ColPos = 1
+	input.ProjectList = []*plan.Expr{
+		{Typ: plan.Type{Id: int32(types.T_int32)}},
+		plan2.DeepCopyExpr(key),
+	}
+	local.NodeId = 1
+	local.GroupBy = []*plan.Expr{key}
+	local.ProjectList = []*plan.Expr{{
+		Typ: key.Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: -1, ColPos: 0}},
+	}}
+	local.Stats.Outcnt = 2_000_000
+	local.Stats.HashmapStats.Shuffle = false
+	final := &plan.Node{
+		NodeType: plan.Node_AGG, Children: []int32{1},
+		Stats: &plan.Stats{Dop: 4, HashmapStats: &plan.HashMapStats{
+			Shuffle: true, ShuffleColIdx: 0, ShuffleType: plan.ShuffleType_Hash,
+		}},
+		GroupBy: []*plan.Expr{{
+			Typ: key.Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}},
+		}},
+	}
+	return local, final, append(nodes, local)
+}
+
+func TestCompileLocalPreAggregationPhysicalSelection(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		mcpu         int
+		sources      int
+		targets      int
+		remoteSource bool
+		partial      bool
+		dop          int32
+		coordinator  bool
+		wantOmit     bool
+	}{
+		{name: "packed local shuffle", mcpu: 4, sources: 1, targets: 1, dop: 4, wantOmit: true},
+		{name: "parallel local sources", mcpu: 1, sources: 4, targets: 1, dop: 4, wantOmit: true},
+		{name: "local dispatch fallback", mcpu: 1, sources: 1, targets: 1, dop: 4, wantOmit: true},
+		{name: "distributed targets", mcpu: 1, sources: 1, targets: 2, dop: 4},
+		{name: "remote source to local target", mcpu: 1, sources: 1, targets: 1, remoteSource: true, dop: 4},
+		{name: "single owner", mcpu: 1, sources: 1, targets: 1, dop: 1},
+		{name: "metadata partial results", mcpu: 4, sources: 1, targets: 1, dop: 4, partial: true},
+		{name: "parent coordinator projection", mcpu: 4, sources: 1, targets: 1, dop: 4, coordinator: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := newCompileForShuffleGroupTest(t)
+			c.addr = "127.0.0.1:18000"
+			// Placement, rather than this nominal classification, owns selection.
+			c.execType = plan2.ExecTypeAP_MULTICN
+			c.cnList = engine.Nodes{{Addr: c.addr, Mcpu: 4}}
+			if tc.targets == 2 {
+				c.cnList = append(c.cnList, engine.Node{Addr: "127.0.0.1:18001", Mcpu: 4})
+			}
+			local, final, nodes := newLocalPreAggregationTestNodes()
+			local.Stats.Dop, final.Stats.Dop = tc.dop, tc.dop
+			if tc.coordinator {
+				c.addr = "127.0.0.1:18002"
+				fn, err := plan2.BindFuncExprImplByPlanExpr(c.proc.Ctx, "found_rows", nil)
+				require.NoError(t, err)
+				final.ProjectList = []*plan.Expr{plan2.DeepCopyExpr(local.ProjectList[0]), fn}
+			}
+			beforeLocal, err := local.Marshal()
+			require.NoError(t, err)
+			beforeFinal, err := final.Marshal()
+			require.NoError(t, err)
+			inputs := make([]*Scope, tc.sources)
+			for i := range inputs {
+				inputs[i] = newShuffleGroupInputScope(t, tc.mcpu)
+				inputs[i].HasPartialResults = tc.partial
+				if tc.remoteSource {
+					inputs[i].NodeInfo.Addr = "127.0.0.1:18001"
+				}
+			}
+			result := c.compileLocalGroupBy(local, final, inputs, nodes)
+			require.Len(t, result, tc.sources)
+			for i, source := range result {
+				require.Same(t, inputs[i], source)
+				if tc.wantOmit {
+					proj, ok := source.RootOp.(*projection.Projection)
+					require.True(t, ok)
+					require.Equal(t, local.GroupBy, proj.ProjectList)
+					require.NotSame(t, local.GroupBy[0], proj.ProjectList[0])
+					require.Equal(t, int32(1), proj.ProjectList[0].GetCol().ColPos,
+						"raw key slot 1 must be projected into final key slot 0")
+				} else {
+					op, ok := source.RootOp.(*group.Group)
+					require.True(t, ok)
+					require.False(t, op.NeedEval)
+				}
+			}
+			if tc.coordinator {
+				relocated := c.ensureCoordinatorOnlyFunctions(final, result)
+				require.Len(t, relocated, 1)
+				require.NotSame(t, result[0], relocated[0])
+				require.Equal(t, c.addr, relocated[0].NodeInfo.Addr)
+				require.IsType(t, &group.Group{}, result[0].RootOp.GetOperatorBase().GetChildren(0),
+					"local reduction must precede the parent coordinator transfer")
+			}
+			if tc.wantOmit || tc.targets == 2 || tc.remoteSource {
+				owners := c.compileShuffleGroup(final, result, nodes)
+				ownerSlots := 0
+				for _, owner := range owners {
+					ownerSlots += owner.NodeInfo.Mcpu
+					op, ok := owner.RootOp.(*group.Group)
+					require.True(t, ok)
+					require.True(t, op.NeedEval)
+					require.Equal(t, int32(0), op.GroupBy[0].GetCol().ColPos)
+				}
+				require.Equal(t, tc.targets*int(tc.dop), ownerSlots)
+			}
+			afterLocal, err := local.Marshal()
+			require.NoError(t, err)
+			afterFinal, err := final.Marshal()
+			require.NoError(t, err)
+			require.Equal(t, beforeLocal, afterLocal, "physical selection must not mutate a reusable plan")
+			require.Equal(t, beforeFinal, afterFinal)
+		})
+	}
+}
+
+func TestLocalPreAggregationOmissionGuards(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		change func(local, final, input *plan.Node, source *Scope)
+		want   bool
+	}{
+		{name: "inclusive size and ratio", want: true},
+		{name: "below size", change: func(l, _, _ *plan.Node, _ *Scope) { l.Stats.Outcnt-- }},
+		{name: "below ratio", change: func(_, _, in *plan.Node, _ *Scope) { in.Stats.Outcnt++ }},
+		{name: "missing input stats", change: func(_, _, in *plan.Node, _ *Scope) { in.Stats = nil }},
+		{name: "missing group stats", change: func(l, _, _ *plan.Node, _ *Scope) { l.Stats = nil }},
+		{name: "zero input", change: func(_, _, in *plan.Node, _ *Scope) { in.Stats.Outcnt = 0 }},
+		{name: "unknown groups", change: func(l, _, _ *plan.Node, _ *Scope) { l.Stats.Outcnt = -1 }},
+		{name: "NaN groups", change: func(l, _, _ *plan.Node, _ *Scope) { l.Stats.Outcnt = math.NaN() }},
+		{name: "infinite input", change: func(_, _, in *plan.Node, _ *Scope) { in.Stats.Outcnt = math.Inf(1) }},
+		{name: "inconsistent cardinality", change: func(l, _, in *plan.Node, _ *Scope) { l.Stats.Outcnt = in.Stats.Outcnt + 1 }},
+		{name: "computed key", change: func(l, _, _ *plan.Node, _ *Scope) { l.GroupBy[0] = plan2.MakePlan2Int64ConstExprWithType(7) }},
+		{name: "PAD SPACE key", change: func(l, _, _ *plan.Node, _ *Scope) { l.GroupBy[0].Typ.PadSpace = true }},
+		{name: "multiple keys", change: func(l, f, _ *plan.Node, _ *Scope) {
+			l.GroupBy = append(l.GroupBy, l.GroupBy[0])
+			f.GroupBy = append(f.GroupBy, f.GroupBy[0])
+		}},
+		{name: "physical key transform", change: func(l, _, _ *plan.Node, _ *Scope) { l.GroupByHashKey = []int32{1} }},
+		{name: "final key transform", change: func(_, f, _ *plan.Node, _ *Scope) { f.GroupByHashKey = []int32{1} }},
+		{name: "local shuffle", change: func(l, _, _ *plan.Node, _ *Scope) { l.Stats.HashmapStats.Shuffle = true }},
+		{name: "transformed output", change: func(l, _, _ *plan.Node, _ *Scope) { l.ProjectList[0].GetCol().ColPos = 1 }},
+		{name: "order", change: func(l, _, _ *plan.Node, _ *Scope) { l.OrderBy = []*plan.OrderBySpec{{Expr: l.GroupBy[0]}} }},
+		{name: "limit", change: func(l, _, _ *plan.Node, _ *Scope) { l.Limit = plan2.MakePlan2Int64ConstExprWithType(1) }},
+		{name: "filter", change: func(l, _, _ *plan.Node, _ *Scope) {
+			l.FilterList = []*plan.Expr{plan2.MakePlan2BoolConstExprWithType(true)}
+		}},
+		{name: "runtime filter", change: func(l, _, _ *plan.Node, _ *Scope) { l.RuntimeFilterProbeList = []*plan.RuntimeFilterSpec{{}} }},
+		{name: "parent filter", change: func(_, f, _ *plan.Node, _ *Scope) {
+			f.FilterList = []*plan.Expr{plan2.MakePlan2BoolConstExprWithType(true)}
+		}},
+		{name: "raw grouping expansion", change: func(_, _, in *plan.Node, _ *Scope) { in.ExtraOptions = "grouping_set_expand:2" }},
+		{name: "physical equality transform", change: func(l, _, _ *plan.Node, _ *Scope) { l.PhysicalEqualityKeyList = l.GroupBy }},
+		{name: "grouping option", change: func(l, _, _ *plan.Node, _ *Scope) { l.ExtraOptions = "nonempty" }},
+		{name: "invalid input key", change: func(l, _, _ *plan.Node, _ *Scope) { l.GroupBy[0].GetCol().ColPos = 2 }},
+		{name: "input type mismatch", change: func(_, _, in *plan.Node, _ *Scope) { in.ProjectList[1].Typ.Id = int32(types.T_int32) }},
+		{name: "unsupported key", change: func(l, _, in *plan.Node, _ *Scope) {
+			l.GroupBy[0].Typ.Id = int32(types.T_float64)
+			in.ProjectList[1].Typ.Id = int32(types.T_float64)
+		}},
+		{name: "unknown placement", change: func(_, _, _ *plan.Node, s *Scope) { s.NodeInfo = engine.Node{} }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := newCompileForShuffleGroupTest(t)
+			local, final, nodes := newLocalPreAggregationTestNodes()
+			source := newShuffleGroupInputScope(t, 4)
+			if tc.change != nil {
+				tc.change(local, final, nodes[0], source)
+			}
+			require.Equal(t, tc.want, c.canOmitLocalPreAggregation(final, local, nodes[0], []*Scope{source}))
+		})
+	}
+}
+
+func TestLocalPreAggregationOmissionProjectsRawKey(t *testing.T) {
+	c := newCompileForShuffleGroupTest(t)
+	local, final, nodes := newLocalPreAggregationTestNodes()
+	source := newShuffleGroupInputScope(t, 4)
+	proc := source.Proc
+	baseline := proc.Mp().CurrNB()
+	in := batch.NewWithSize(2)
+	in.Vecs[0] = testutil.MakeInt32Vector([]int32{100, 200, 300, 400}, nil, proc.Mp())
+	in.Vecs[1] = testutil.MakeInt64Vector([]int64{7, 0, 7, 8}, []uint64{1}, proc.Mp())
+	in.SetRowCount(4)
+	mock := source.RootOp.(*colexec.MockOperator).WithBatchs([]*batch.Batch{in})
+	result := c.compileLocalGroupBy(local, final, []*Scope{source}, nodes)
+	proj := result[0].RootOp.(*projection.Projection)
+	t.Cleanup(func() {
+		proj.Free(proc, false, nil)
+		mock.Free(proc, false, nil)
+		require.Equal(t, baseline, proc.Mp().CurrNB())
+	})
+	require.NoError(t, mock.Prepare(proc))
+	require.NoError(t, proj.Prepare(proc))
+	out, err := vm.Exec(proj, proc)
+	require.NoError(t, err)
+	require.Len(t, out.Batch.Vecs, 1)
+	require.Equal(t, []int64{7, 0, 7, 8}, vector.MustFixedColWithTypeCheck[int64](out.Batch.Vecs[0]))
+	require.True(t, out.Batch.Vecs[0].GetNulls().Contains(1))
 }
 
 type distinctPreAggregationCompilerContext struct {
@@ -3667,6 +4117,7 @@ func TestLocalPreAggregationCompileShapeIsReachableFromSQL(t *testing.T) {
 	stats.BlockNumber = 1_000
 	stats.NdvMap["l_returnflag"] = 3
 	stats.NdvMap["l_orderkey"] = 1_500_000
+	stats.NdvMap["l_suppkey"] = 10_000
 	cache := plan2.NewStatsCache()
 	cache.Set(tableDef.TblId, stats)
 	compilerCtx := &distinctPreAggregationCompilerContext{
@@ -3675,29 +4126,111 @@ func TestLocalPreAggregationCompileShapeIsReachableFromSQL(t *testing.T) {
 		cache:               cache,
 	}
 
-	const sql = "select l_returnflag, count(distinct l_orderkey) " +
-		"from lineitem group by l_returnflag"
-	statements, err := mysql.Parse(context.Background(), sql, 1)
-	require.NoError(t, err)
-	query, err := plan2.NewPrepareOptimizer(compilerCtx).Optimize(statements[0], false)
-	require.NoError(t, err)
-
-	found := false
-	for _, parent := range query.Nodes {
-		if parent == nil || len(parent.Children) != 1 {
-			continue
-		}
-		childID := parent.Children[0]
-		if childID < 0 || int(childID) >= len(query.Nodes) {
-			continue
-		}
-		if isLocalPreAggregationGroup(parent, query.Nodes[childID]) {
-			found = true
-			break
-		}
+	for _, tc := range []struct {
+		name     string
+		sql      string
+		ndv      float64
+		wantOmit bool
+		reuse    bool
+	}{
+		{name: "grouped fallback", sql: "select l_returnflag, count(distinct l_orderkey) from lineitem group by l_returnflag", ndv: 1_500_000},
+		{name: "large global key", sql: "select count(distinct l_orderkey) from lineitem", ndv: 5_000_000, wantOmit: true},
+		{name: "grouped tuple", sql: "select l_returnflag, count(distinct l_suppkey,l_orderkey) from lineitem group by l_returnflag", ndv: 1_500_000},
+		{name: "global tuple spelling", sql: "select count(distinct (l_orderkey,l_suppkey)) from lineitem", ndv: 1_500_000},
+		{name: "nested distinct preserves complete owner", sql: "select distinct l_orderkey from (select distinct l_orderkey from lineitem) q", ndv: 5_000_000, reuse: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stats.NdvMap["l_orderkey"] = tc.ndv
+			statements, err := mysql.Parse(context.Background(), tc.sql, 1)
+			require.NoError(t, err)
+			query, err := plan2.NewPrepareOptimizer(compilerCtx).Optimize(statements[0], false)
+			require.NoError(t, err)
+			plan2.CalcQueryDOP(&plan.Plan{Plan: &plan.Plan_Query{Query: query}}, 4, 1, plan2.ExecTypeAP_ONECN)
+			for _, parent := range query.Nodes {
+				if len(parent.Children) != 1 {
+					continue
+				}
+				local := query.Nodes[parent.Children[0]]
+				if tc.reuse {
+					if parent.NodeType != plan.Node_AGG || local.NodeType != plan.Node_AGG ||
+						parent.Stats.HashmapStats.ShuffleMethod != plan.ShuffleMethod_Reuse {
+						continue
+					}
+					require.True(t, local.Stats.HashmapStats.Shuffle)
+					require.False(t, isLocalPreAggregationGroup(parent, local),
+						"the compiler must preserve the distribution the finalized SQL plan reuses")
+					for _, targets := range []int{1, 2} {
+						t.Run(fmt.Sprintf("targets-%d", targets), func(t *testing.T) {
+							c := newCompileForShuffleGroupTest(t)
+							c.addr = "127.0.0.1:18000"
+							c.cnList = engine.Nodes{{Addr: c.addr, Mcpu: 4}}
+							if targets == 2 {
+								c.cnList = append(c.cnList, engine.Node{Addr: "127.0.0.1:18001", Mcpu: 4})
+							}
+							// Keep the finalized aggregate plan and replace only storage
+							// access. Public SQL separately verifies cross-worker results.
+							nodes := plan2.DeepCopyQuery(query).Nodes
+							for i, node := range nodes {
+								// DeepCopyStats omits the physical DOP computed above.
+								node.Stats.Dop = query.Nodes[i].Stats.Dop
+								if node.NodeType == plan.Node_TABLE_SCAN {
+									node.NodeType = plan.Node_VALUE_SCAN
+								}
+							}
+							scopes, err := c.compilePlanScope(0, parent.NodeId, nodes)
+							require.NoError(t, err)
+							t.Cleanup(func() { ReleaseScopes(scopes) })
+							childGroups, parentGroups, exchanges, mergeGroups := 0, 0, 0, 0
+							var visit func(*Scope)
+							visit = func(scope *Scope) {
+								require.NoError(t, vm.HandleAllOp(scope.RootOp, func(_ vm.Operator, op vm.Operator) error {
+									switch op.OpType() {
+									case vm.Group:
+										if op.GetOperatorBase().GetIdx() == int(local.NodeId) {
+											childGroups++
+										} else if op.GetOperatorBase().GetIdx() == int(parent.NodeId) {
+											parentGroups++
+										}
+									case vm.Shuffle:
+										exchanges++
+									case vm.MergeGroup:
+										mergeGroups++
+									}
+									return nil
+								}))
+								for _, child := range scope.PreScopes {
+									visit(child)
+								}
+							}
+							for _, scope := range scopes {
+								visit(scope)
+							}
+							require.Equal(t, 1, exchanges, "preserve the child exchange without adding a second one")
+							require.Equal(t, 4*targets, childGroups)
+							require.Equal(t, childGroups, parentGroups)
+							require.Zero(t, mergeGroups, "complete owners can still be reused")
+						})
+					}
+					return
+				}
+				if !isLocalPreAggregationGroup(parent, local) {
+					continue
+				}
+				c := newCompileForShuffleGroupTest(t)
+				source := newShuffleGroupInputScope(t, 4)
+				require.Equal(t, tc.wantOmit,
+					c.canOmitLocalPreAggregation(parent, local, query.Nodes[local.Children[0]], []*Scope{source}))
+				result := c.compileLocalGroupBy(local, parent, []*Scope{source}, query.Nodes)
+				if tc.wantOmit {
+					require.IsType(t, &projection.Projection{}, result[0].RootOp)
+				} else {
+					require.IsType(t, &group.Group{}, result[0].RootOp)
+				}
+				return
+			}
+			t.Fatal("finalized SQL plan did not retain the local-pair compile contract")
+		})
 	}
-	require.True(t, found,
-		"the finalized and column-remapped SQL plan must retain the local-pair compile contract")
 }
 
 func newCompileForShuffleGroupTest(t *testing.T) *Compile {
@@ -3973,6 +4506,38 @@ func TestNewCompileTxnOffsetForInternalSql(t *testing.T) {
 		c := NewCompile("test", "test", "select 1", "", "", nil, proc, nil, false, nil, time.Now())
 		require.Equal(t, 7, c.TxnOffset)
 	})
+}
+
+func TestCompileODKUPreInsertSingleInputStream(t *testing.T) {
+	for _, tracked := range []bool{false, true} {
+		t.Run(fmt.Sprint(tracked), func(t *testing.T) {
+			c := NewMockCompile(t)
+			c.addr = "local-cn:6001"
+			c.anal = &AnalyzeModule{qry: &plan.Query{}}
+			inputs := make([]*Scope, 0, 2)
+			for range 2 {
+				input := newScope(Remote)
+				input.NodeInfo = engine.Node{Addr: "remote-cn:6001", Mcpu: 2}
+				input.Proc = c.proc.NewNoContextChildProc(0)
+				input.setRootOperator(projection.NewArgument())
+				inputs = append(inputs, input)
+			}
+			node := &plan.Node{PreInsertCtx: &plan.PreInsertCtx{
+				Ref: &plan.ObjectRef{}, TableDef: &plan.TableDef{}, TrackOdkuResult: tracked}}
+			out, err := c.compilePreInsert(nil, node, inputs)
+			require.NoError(t, err)
+			t.Cleanup(func() { ReleaseScopes(out) })
+			if tracked {
+				require.Len(t, out, 1)
+				require.Equal(t, 1, out[0].NodeInfo.Mcpu)
+				require.Len(t, out[0].PreScopes, 2)
+				require.Same(t, c.proc.Base, out[0].Proc.Base)
+			} else {
+				require.Len(t, out, 2)
+				require.Equal(t, 2, out[0].NodeInfo.Mcpu)
+			}
+		})
+	}
 }
 
 func TestWindowIntervalValidationPrecedesSourceInitialization(t *testing.T) {

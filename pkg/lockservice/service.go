@@ -452,6 +452,10 @@ func (s *service) Lock(
 		return pb.Result{}, err
 	}
 	options = s.applyLockWaitTimeoutCeiling(options)
+	if options.NoWait && (!validNoWaitLockOptions(options) || len(rows) == 0) {
+		return pb.Result{}, moerr.NewNotSupportedNoCtx(
+			"nonblocking row lock admission requires exact row keys and FastFail policy")
+	}
 	if lockWaitDeadlineExpired(options, time.Now()) {
 		return pb.Result{}, ErrLockTimeout
 	}
@@ -612,16 +616,44 @@ func (s *service) Lock(
 			result = r
 			err = e
 		})
+	noWaitConflict := options.NoWait && err == ErrLockConflict
 	if terminalErr := txn.terminalLockErrorLocked(txnID); terminalErr != nil {
-		result = pb.Result{}
+		result = cleanupOnlyNoWaitResult(result, bind, options.NoWait)
 		err = terminalErr
-	} else if err == nil {
+	} else if err == nil || noWaitConflict {
 		if e := s.checkBindChangedBeforeLockSuccess(txn, txnID, bind); e != nil {
-			result = pb.Result{}
+			result = cleanupOnlyNoWaitResult(result, bind, options.NoWait)
 			err = e
 		}
 	}
 	return result, err
+}
+
+// cleanupOnlyNoWaitResult preserves the route needed to release locks acquired
+// by a nonblocking request when a terminal fence makes the lock outcome fatal.
+// The route does not acknowledge a successful grant: all lock and retry result
+// fields are deliberately discarded, and the original fatal error is kept.
+func cleanupOnlyNoWaitResult(
+	result pb.Result,
+	selectedBind pb.LockTable,
+	noWait bool,
+) pb.Result {
+	if !noWait || !selectedBind.Valid {
+		return pb.Result{}
+	}
+
+	cleanupBind := selectedBind
+	returned := result.LockedOn
+	if returned.Valid && returned.ServiceID != "" &&
+		returned.Group == selectedBind.Group &&
+		returned.Table == selectedBind.Table &&
+		returned.OriginTable == selectedBind.OriginTable &&
+		returned.Sharding == selectedBind.Sharding {
+		// A remote table may have completed against a newer physical binding than
+		// the one selected before the RPC. Prefer that validated cleanup route.
+		cleanupBind = returned
+	}
+	return pb.Result{LockedOn: cleanupBind}
 }
 
 // applyLockWaitTimeoutCeiling bounds missing or oversized wait budgets and
@@ -1974,6 +2006,16 @@ func (s *service) Close() error {
 				txn.complete()
 			}
 		}
+		// Local mutation and cleanup ownership is now gone. Retire allocator
+		// bindings before releasing the transport, rather than leaving a dead
+		// owner valid for two keep-bind intervals after a graceful shutdown.
+		if isExactDrainServiceID(s.serviceID) {
+			ctx, cancel := context.WithTimeout(context.Background(), defaultRPCTimeout)
+			defer cancel()
+			if err := s.notifyAllocatorOfClose(ctx); err != nil {
+				s.logger.Warn("allocator close report failed; bindings retain timeout retirement", zap.Error(err))
+			}
+		}
 		clientErr := s.remote.client.Close()
 		close(s.fetchWhoWaitingListC)
 		s.closeErr = errors.Join(serverErr, keeperErr, clientErr)
@@ -2375,7 +2417,7 @@ func (s *service) handleBindChangedFromAllocator(
 	// cleanup independently of replacement-owner discovery. Unlock interprets
 	// a non-nil result as a reason to retry the old owner, so an unpublishable
 	// replacement must not turn this authoritative change back into a retry.
-	publish := s.canPublishRemoteRouteLocked(newBind, nil)
+	publish := newBind.Valid && newBind.ServiceID != "" && s.canPublishRemoteRouteLocked(newBind, nil)
 	current := s.tableGroups.get(newBind.Group, newBind.Table)
 	if current != nil {
 		currentBind := current.getBind()

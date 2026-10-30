@@ -1063,6 +1063,13 @@ func TestRewriteError(t *testing.T) {
 		want2 string
 	}{
 		{
+			name:  "deadlock retains MySQL retry identity",
+			args:  args{err: moerr.NewDeadLockDetectedNoCtx()},
+			want:  1213,
+			want1: "40001",
+			want2: "deadlock detected",
+		},
+		{
 			name: "t1",
 			args: args{
 				err: &testError{s: "non moerr"},
@@ -1445,18 +1452,22 @@ func (t testErr) Error() string {
 func Test_isErrorRollbackWholeTxn(t *testing.T) {
 	assert.Equal(t, false, isErrorRollbackWholeTxn(nil))
 	assert.Equal(t, false, isErrorRollbackWholeTxn(&testError{}))
-	assert.Equal(t, true, isErrorRollbackWholeTxn(moerr.NewLockWaitTimeoutNoCtx()))
+	// MySQL's default (innodb_rollback_on_timeout=OFF) scopes an expired lock
+	// wait to the failing statement only; the transaction stays open, so the
+	// local and remote lock-wait-timeout codes are NOT whole-transaction fatal.
+	assert.Equal(t, false, isErrorRollbackWholeTxn(moerr.NewLockWaitTimeoutNoCtx()))
 	assert.Equal(t, true, isErrorRollbackWholeTxn(moerr.NewRetryForCNRollingRestart()))
 	assert.Equal(t, true, isErrorRollbackWholeTxn(moerr.NewDeadLockDetectedNoCtx()))
 	assert.Equal(t, true, isErrorRollbackWholeTxn(moerr.NewLockTableBindChangedNoCtx()))
 	assert.Equal(t, true, isErrorRollbackWholeTxn(moerr.NewLockTableNotFoundNoCtx()))
 	assert.Equal(t, true, isErrorRollbackWholeTxn(moerr.NewDeadlockCheckBusyNoCtx()))
 	assert.Equal(t, true, isErrorRollbackWholeTxn(moerr.NewLockConflictNoCtx()))
-	assert.Equal(t, true, isErrorRollbackWholeTxn(moerr.NewRemoteLockWaitTimeoutNoCtx()))
+	assert.Equal(t, false, isErrorRollbackWholeTxn(moerr.NewRemoteLockWaitTimeoutNoCtx()))
 	assert.Equal(t, true, isErrorRollbackWholeTxn(moerr.NewTxnUnknown(context.Background(), "test")))
 	assert.Equal(t, true, isErrorRollbackWholeTxn(moerr.NewBackendClosedNoCtx()))
 	assert.Equal(t, true, isErrorRollbackWholeTxn(moerr.NewNoAvailableBackendNoCtx()))
 	assert.Equal(t, true, isErrorRollbackWholeTxn(moerr.NewBackendCannotConnectNoCtx("test")))
+	assert.Equal(t, true, isErrorRollbackWholeTxn(moerr.NewTxnWriteConflictNoCtx("test")))
 }
 
 func TestNewErrorRollbackWholeTxnCoversEveryCode(t *testing.T) {
@@ -2483,6 +2494,309 @@ func TestColDef2MysqlColumnOriginMetadata(t *testing.T) {
 	require.Equal(t, "table", legacy.OrgTable())
 }
 
+func TestComputedBooleanResultUsesNumericWireMetadata(t *testing.T) {
+	computed, err := colDef2MysqlColumn(context.Background(), &plan2.ColDef{
+		Name:             "predicate",
+		Typ:              plan2.Type{Id: int32(types.T_bool)},
+		ResultColumnKind: plan2.ResultColumnKind_RESULT_COLUMN_KIND_COMPUTED,
+	})
+	require.NoError(t, err)
+	require.Equal(t, defines.MYSQL_TYPE_BOOL, computed.ColumnType())
+	require.Equal(t, uint32(8), computed.Length())
+
+	proto := &MysqlProtocolImpl{io: NewIOPackage(true)}
+	packet := proto.makeColumnDefinition41Payload(computed, int(COM_QUERY))
+	pos := HeaderOffset
+	for range 6 {
+		_, next, ok := proto.readStringLenEnc(packet, pos)
+		require.True(t, ok)
+		pos = next
+	}
+	_, pos, ok := proto.io.ReadUint8(packet, pos)
+	require.True(t, ok)
+	charset, pos, ok := proto.io.ReadUint16(packet, pos)
+	require.True(t, ok)
+	require.Equal(t, uint16(charsetBinary), charset)
+	length, pos, ok := proto.io.ReadUint32(packet, pos)
+	require.True(t, ok)
+	require.Equal(t, uint32(8), length)
+	typ, _, ok := proto.io.ReadUint8(packet, pos)
+	require.True(t, ok)
+	require.Equal(t, uint8(defines.MYSQL_TYPE_TINY), typ)
+
+	native, err := colDef2MysqlColumn(context.Background(), &plan2.ColDef{
+		Name:             "flag",
+		Typ:              plan2.Type{Id: int32(types.T_bool)},
+		ResultColumnKind: plan2.ResultColumnKind_RESULT_COLUMN_KIND_STORED,
+	})
+	require.NoError(t, err)
+	require.Equal(t, defines.MYSQL_TYPE_BOOL, native.ColumnType())
+	require.Equal(t, uint32(boolColumnLength), native.Length())
+	packet = proto.makeColumnDefinition41Payload(native, int(COM_QUERY))
+	pos = HeaderOffset
+	for range 6 {
+		_, next, ok := proto.readStringLenEnc(packet, pos)
+		require.True(t, ok)
+		pos = next
+	}
+	_, pos, ok = proto.io.ReadUint8(packet, pos)
+	require.True(t, ok)
+	_, pos, ok = proto.io.ReadUint16(packet, pos)
+	require.True(t, ok)
+	length, pos, ok = proto.io.ReadUint32(packet, pos)
+	require.True(t, ok)
+	require.Equal(t, uint32(boolColumnLength), length)
+	typ, _, ok = proto.io.ReadUint8(packet, pos)
+	require.True(t, ok)
+	require.Equal(t, uint8(defines.MYSQL_TYPE_TINY), typ)
+}
+
+func TestAggregateBooleanResultUsesNumericWireMetadata(t *testing.T) {
+	mock := plan.NewMockOptimizer(false, newPlanTestProcess(t))
+	for _, sql := range []string{
+		"select min(n_nationkey is null) as p from nation",
+		"select max(n_nationkey is null) as p from nation",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			queryPlan, err := buildSingleSql(mock, t, sql)
+			require.NoError(t, err)
+			columns := plan.GetResultColumnsFromPlan(queryPlan)
+			require.Len(t, columns, 1)
+			require.Equal(t, plan2.ResultColumnKind_RESULT_COLUMN_KIND_COMPUTED, columns[0].ResultColumnKind)
+
+			column, err := colDef2MysqlColumn(context.Background(), columns[0])
+			require.NoError(t, err)
+			require.Equal(t, defines.MYSQL_TYPE_BOOL, column.ColumnType())
+			require.Equal(t, uint32(8), column.Length())
+		})
+	}
+}
+
+func TestWindowBooleanResultUsesNumericWireMetadata(t *testing.T) {
+	mock := plan.NewMockOptimizer(false, newPlanTestProcess(t))
+	for _, tc := range []struct {
+		name   string
+		sql    string
+		kind   plan2.ResultColumnKind
+		length uint32
+	}{
+		{
+			name:   "computed predicate window",
+			sql:    "select max(n_nationkey is null) over () as p from nation",
+			kind:   plan2.ResultColumnKind_RESULT_COLUMN_KIND_COMPUTED,
+			length: 8,
+		},
+		{
+			name:   "computed predicate window under distinct",
+			sql:    "select distinct max(n_nationkey is null) over () as p from nation",
+			kind:   plan2.ResultColumnKind_RESULT_COLUMN_KIND_COMPUTED,
+			length: 8,
+		},
+		{
+			name:   "computed min predicate window",
+			sql:    "select min(n_nationkey is null) over () as p from nation",
+			kind:   plan2.ResultColumnKind_RESULT_COLUMN_KIND_COMPUTED,
+			length: 8,
+		},
+		{
+			name:   "computed first predicate window",
+			sql:    "select first_value(n_nationkey is null) over (order by n_nationkey) as p from nation",
+			kind:   plan2.ResultColumnKind_RESULT_COLUMN_KIND_COMPUTED,
+			length: 8,
+		},
+		{
+			name:   "aggregate over native boolean window",
+			sql:    "select max(with_grant_option) over () as p from mo_catalog.mo_role_privs",
+			kind:   plan2.ResultColumnKind_RESULT_COLUMN_KIND_COMPUTED,
+			length: 8,
+		},
+		{
+			name:   "native boolean window",
+			sql:    "select first_value(with_grant_option) over () as p from mo_catalog.mo_role_privs",
+			kind:   plan2.ResultColumnKind_RESULT_COLUMN_KIND_STORED,
+			length: boolColumnLength,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			queryPlan, err := buildSingleSql(mock, t, tc.sql)
+			require.NoError(t, err)
+			columns := plan.GetResultColumnsFromPlan(queryPlan)
+			require.Len(t, columns, 1)
+			require.Equal(t, tc.kind, columns[0].ResultColumnKind)
+
+			column, err := colDef2MysqlColumn(context.Background(), columns[0])
+			require.NoError(t, err)
+			require.Equal(t, defines.MYSQL_TYPE_BOOL, column.ColumnType())
+			require.Equal(t, tc.length, column.Length())
+		})
+	}
+}
+
+func TestWindowBooleanResultKeepsStoredBooleanSiblingWireMetadata(t *testing.T) {
+	mock := plan.NewMockOptimizer(false, newPlanTestProcess(t))
+	queryPlan, err := buildSingleSql(mock, t,
+		"select with_grant_option, max(with_grant_option is null) over () as p from mo_catalog.mo_role_privs")
+	require.NoError(t, err)
+	columns := plan.GetResultColumnsFromPlan(queryPlan)
+	require.Len(t, columns, 2)
+
+	stored, err := colDef2MysqlColumn(context.Background(), columns[0])
+	require.NoError(t, err)
+	require.Equal(t, defines.MYSQL_TYPE_BOOL, stored.ColumnType())
+	require.Equal(t, uint32(boolColumnLength), stored.Length())
+
+	computed, err := colDef2MysqlColumn(context.Background(), columns[1])
+	require.NoError(t, err)
+	require.Equal(t, defines.MYSQL_TYPE_BOOL, computed.ColumnType())
+	require.Equal(t, uint32(8), computed.Length())
+}
+
+func TestStackedWindowBooleanResultsKeepWireMetadata(t *testing.T) {
+	mock := plan.NewMockOptimizer(false, newPlanTestProcess(t))
+	queryPlan, err := buildSingleSql(mock, t,
+		"select first_value(with_grant_option) over (order by role_id), "+
+			"max(with_grant_option is null) over (), "+
+			"first_value(with_grant_option is null) over (order by role_id desc) "+
+			"from mo_catalog.mo_role_privs")
+	require.NoError(t, err)
+	columns := plan.GetResultColumnsFromPlan(queryPlan)
+	require.Len(t, columns, 3)
+
+	for i, want := range []struct {
+		kind   plan2.ResultColumnKind
+		length uint32
+	}{
+		{kind: plan2.ResultColumnKind_RESULT_COLUMN_KIND_STORED, length: boolColumnLength},
+		{kind: plan2.ResultColumnKind_RESULT_COLUMN_KIND_COMPUTED, length: 8},
+		{kind: plan2.ResultColumnKind_RESULT_COLUMN_KIND_COMPUTED, length: 8},
+	} {
+		require.Equal(t, want.kind, columns[i].ResultColumnKind)
+		column, err := colDef2MysqlColumn(context.Background(), columns[i])
+		require.NoError(t, err)
+		require.Equal(t, defines.MYSQL_TYPE_BOOL, column.ColumnType())
+		require.Equal(t, want.length, column.Length())
+	}
+}
+
+func TestStackedWindowBooleanResultsKeepMixedOutputOrder(t *testing.T) {
+	mock := plan.NewMockOptimizer(false, newPlanTestProcess(t))
+	for _, tc := range []struct {
+		name string
+		sql  string
+		want []struct {
+			kind   plan2.ResultColumnKind
+			length uint32
+		}
+	}{
+		{
+			name: "stored then computed",
+			sql: "select first_value(with_grant_option) over (order by role_id), " +
+				"first_value(role_id is null) over (order by role_id desc) " +
+				"from mo_catalog.mo_role_privs",
+			want: []struct {
+				kind   plan2.ResultColumnKind
+				length uint32
+			}{
+				{kind: plan2.ResultColumnKind_RESULT_COLUMN_KIND_STORED, length: boolColumnLength},
+				{kind: plan2.ResultColumnKind_RESULT_COLUMN_KIND_COMPUTED, length: 8},
+			},
+		},
+		{
+			name: "computed then stored",
+			sql: "select first_value(role_id is null) over (order by role_id desc), " +
+				"first_value(with_grant_option) over (order by role_id) " +
+				"from mo_catalog.mo_role_privs",
+			want: []struct {
+				kind   plan2.ResultColumnKind
+				length uint32
+			}{
+				{kind: plan2.ResultColumnKind_RESULT_COLUMN_KIND_COMPUTED, length: 8},
+				{kind: plan2.ResultColumnKind_RESULT_COLUMN_KIND_STORED, length: boolColumnLength},
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			queryPlan, err := buildSingleSql(mock, t, tc.sql)
+			require.NoError(t, err)
+			columns := plan.GetResultColumnsFromPlan(queryPlan)
+			require.Len(t, columns, len(tc.want))
+			for i, want := range tc.want {
+				require.Equal(t, want.kind, columns[i].ResultColumnKind)
+				column, err := colDef2MysqlColumn(context.Background(), columns[i])
+				require.NoError(t, err)
+				require.Equal(t, defines.MYSQL_TYPE_BOOL, column.ColumnType())
+				require.Equal(t, want.length, column.Length())
+			}
+		})
+	}
+}
+
+func TestJoinedBooleanResultsKeepWireMetadata(t *testing.T) {
+	mock := plan.NewMockOptimizer(false, newPlanTestProcess(t))
+	for _, tc := range []struct {
+		name string
+		sql  string
+	}{
+		{
+			name: "distinct cross join",
+			sql: "select a.v, b.v from " +
+				"(select distinct with_grant_option v from mo_catalog.mo_role_privs) a cross join " +
+				"(select distinct role_id is null v from mo_catalog.mo_role_privs) b",
+		},
+		{
+			name: "grouped left join",
+			sql: "select a.v, b.v from " +
+				"(select with_grant_option v from mo_catalog.mo_role_privs group by with_grant_option) a left join " +
+				"(select role_id is null v from mo_catalog.mo_role_privs group by role_id is null) b on a.v = b.v",
+		},
+		{
+			name: "outer distinct right join",
+			sql: "select distinct a.v, b.v from " +
+				"(select distinct with_grant_option v from mo_catalog.mo_role_privs) a right join " +
+				"(select distinct role_id is null v from mo_catalog.mo_role_privs) b on a.v = b.v",
+		},
+	} {
+		for _, reordered := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/reordered_%t", tc.name, reordered), func(t *testing.T) {
+				sql := tc.sql
+				lengths := []uint32{boolColumnLength, 8}
+				if reordered {
+					sql = strings.Replace(sql, "a.v, b.v", "b.v, a.v", 1)
+					lengths = []uint32{8, boolColumnLength}
+				}
+				queryPlan, err := buildSingleSql(mock, t, sql)
+				require.NoError(t, err)
+				columns := plan.GetResultColumnsFromPlan(queryPlan)
+				require.Len(t, columns, 2)
+				proto := &MysqlProtocolImpl{io: NewIOPackage(true)}
+				for i, colDef := range columns {
+					column, err := colDef2MysqlColumn(t.Context(), colDef)
+					require.NoError(t, err)
+					for _, cmd := range []int{int(COM_QUERY), int(COM_STMT_PREPARE)} {
+						packet := proto.makeColumnDefinition41Payload(column, cmd)
+						pos := HeaderOffset
+						for range 6 {
+							_, next, ok := proto.readStringLenEnc(packet, pos)
+							require.True(t, ok)
+							pos = next
+						}
+						_, pos, ok := proto.io.ReadUint8(packet, pos)
+						require.True(t, ok)
+						_, pos, ok = proto.io.ReadUint16(packet, pos)
+						require.True(t, ok)
+						length, pos, ok := proto.io.ReadUint32(packet, pos)
+						require.True(t, ok)
+						require.Equal(t, lengths[i], length, "column %d, command %d", i, cmd)
+						typ, _, ok := proto.io.ReadUint8(packet, pos)
+						require.True(t, ok)
+						require.Equal(t, uint8(defines.MYSQL_TYPE_TINY), typ)
+					}
+				}
+			})
+		}
+	}
+}
+
 func Test_setMysqlColumnTypeMetadataFloatingPointDecimals(t *testing.T) {
 	cases := []struct {
 		name     string
@@ -2625,6 +2939,102 @@ func Test_convertRowsIntoBatchError(t *testing.T) {
 	assert.NoError(t, err)
 	_, _, err = convertRowsIntoBatch(pool, mrs.Columns, mrs.Data)
 	assert.Error(t, err)
+}
+
+func Test_mysqlColDef2PlanResultColDefIntegerSignedness(t *testing.T) {
+	// Saved-result metadata must round-trip wire integer signedness so an
+	// unsigned count column saves into an unsigned destination type (issue
+	// #31498) instead of forcing values through a signed destination.
+	cases := []struct {
+		mysqlType defines.MysqlType
+		signed    bool
+		wantOid   types.T
+	}{
+		{defines.MYSQL_TYPE_TINY, true, types.T_int8},
+		{defines.MYSQL_TYPE_TINY, false, types.T_uint8},
+		{defines.MYSQL_TYPE_SHORT, true, types.T_int16},
+		{defines.MYSQL_TYPE_SHORT, false, types.T_uint16},
+		{defines.MYSQL_TYPE_LONG, true, types.T_int32},
+		{defines.MYSQL_TYPE_LONG, false, types.T_uint32},
+		{defines.MYSQL_TYPE_LONGLONG, true, types.T_int64},
+		{defines.MYSQL_TYPE_LONGLONG, false, types.T_uint64},
+	}
+	for _, c := range cases {
+		column := new(MysqlColumn)
+		column.SetColumnType(c.mysqlType)
+		column.SetSigned(c.signed)
+		pCols, oids, _, err := mysqlColDef2PlanResultColDef([]Column{column})
+		require.NoError(t, err)
+		require.Equal(t, c.wantOid, oids[0].Oid)
+		require.Equal(t, int32(c.wantOid), pCols.ResultCols[0].Typ.Id)
+	}
+}
+
+func Test_convertRowsIntoBatchUnsignedRoundTrip(t *testing.T) {
+	// The SHOW COUNT(*) WARNINGS/ERRORS column publishes uint64 values with
+	// unsigned LONGLONG metadata. Saving must keep unsigned metadata and must
+	// not truncate counts above MaxInt64 (issue #31498).
+	column := new(MysqlColumn)
+	column.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
+	column.SetSigned(false)
+	column.SetName("@@session.warning_count")
+	mrs := &MysqlResultSet{}
+	mrs.AddColumn(column)
+	values := []uint64{0, 1, math.MaxInt64, uint64(math.MaxInt64) + 1, math.MaxUint64}
+	for _, v := range values {
+		mrs.AddRow([]any{v})
+	}
+	mrs.AddRow([]any{nil}) // NULL rows must keep the unsigned metadata intact.
+
+	pool, err := mpool.NewMPool("test", 0, mpool.NoFixed)
+	assert.NoError(t, err)
+	data, pColDefs, err := convertRowsIntoBatch(pool, mrs.Columns, mrs.Data)
+	assert.NoError(t, err)
+	assert.NotNil(t, data)
+	assert.Equal(t, int32(types.T_uint64), pColDefs.ResultCols[0].Typ.Id)
+	vec := data.Vecs[0]
+	assert.Equal(t, types.T_uint64, vec.GetType().Oid)
+	assert.Equal(t, len(values)+1, vec.Length())
+	assert.Equal(t, values, vector.MustFixedColWithTypeCheck[uint64](vec)[:len(values)])
+	assert.True(t, vec.GetNulls().Contains(uint64(len(values))))
+
+	// Nonnegative int64 row values also save for narrower unsigned metadata.
+	tinyCol := new(MysqlColumn)
+	tinyCol.SetColumnType(defines.MYSQL_TYPE_TINY)
+	tinyCol.SetSigned(false)
+	tinyCol.SetName("tiny_unsigned")
+	tiny := &MysqlResultSet{}
+	tiny.AddColumn(tinyCol)
+	tiny.AddRow([]any{int64(7)})
+	tinyData, tinyDefs, err := convertRowsIntoBatch(pool, tiny.Columns, tiny.Data)
+	assert.NoError(t, err)
+	assert.Equal(t, int32(types.T_uint8), tinyDefs.ResultCols[0].Typ.Id)
+	assert.Equal(t, []uint8{7}, vector.MustFixedColWithTypeCheck[uint8](tinyData.Vecs[0]))
+}
+
+func Test_convertRowsIntoBatchUnsignedRejections(t *testing.T) {
+	// Values that cannot be represented exactly must fail fast instead of
+	// panicking, wrapping sign, or truncating (issue #31498).
+	pool, err := mpool.NewMPool("test", 0, mpool.NoFixed)
+	assert.NoError(t, err)
+	run := func(mysqlType defines.MysqlType, value any) error {
+		column := new(MysqlColumn)
+		column.SetColumnType(mysqlType)
+		column.SetSigned(false)
+		mrs := &MysqlResultSet{}
+		mrs.AddColumn(column)
+		mrs.AddRow([]any{value})
+		_, _, err := convertRowsIntoBatch(pool, mrs.Columns, mrs.Data)
+		return err
+	}
+	// Negative signed values fail instead of wrapping around.
+	assert.Error(t, run(defines.MYSQL_TYPE_LONGLONG, int64(-1)))
+	// Out-of-range values fail instead of truncating to the wire width.
+	assert.Error(t, run(defines.MYSQL_TYPE_TINY, uint64(math.MaxUint8)+1))
+	assert.Error(t, run(defines.MYSQL_TYPE_SHORT, uint64(math.MaxUint16)+1))
+	assert.Error(t, run(defines.MYSQL_TYPE_LONG, uint64(math.MaxUint32)+1))
+	// Foreign value types surface a clean error rather than a panic.
+	assert.Error(t, run(defines.MYSQL_TYPE_LONGLONG, "7"))
 }
 
 func Test_issue3482(t *testing.T) {
@@ -3250,4 +3660,20 @@ func Test_parseCmdCheckSnapshotFlushed_GoodPath(t *testing.T) {
 		convey.So(err, convey.ShouldNotBeNil)
 		convey.So(err.Error(), convey.ShouldContainSubstring, "invalid")
 	})
+}
+
+func BenchmarkMakeExecuteSqlDiscardedPreparedSQL(b *testing.B) {
+	for _, size := range []int{16, 1 << 20} {
+		b.Run(fmt.Sprint(size), func(b *testing.B) {
+			prepared := &PrepareStmt{Sql: "select '" + strings.Repeat("x", size) + "'"}
+			ses := &Session{prepareStmts: map[string]*PrepareStmt{"audit": prepared}}
+			stmt := &tree.Select{}
+			b.ReportAllocs()
+			for b.Loop() {
+				if got := makeExecuteSql(b.Context(), ses, stmt, true, "audit", "execute audit", 4); got != "exec..." {
+					b.Fatalf("unexpected diagnostic: %q", got)
+				}
+			}
+		})
+	}
 }

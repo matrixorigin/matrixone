@@ -12,7 +12,7 @@ set foreign_key_checks = 0;
 insert into child values (1, 101);
 set foreign_key_checks = 1;
 insert into child values (2, 102);
-internal error: Cannot add or update a child row: a foreign key constraint fails
+Cannot add or update a child row: a foreign key constraint fails
 select id, parent_id from child order by id;
 ➤ id[4,32,0]  ¦  parent_id[4,32,0]  𝄀
 1  ¦  101
@@ -24,7 +24,7 @@ execute fk_plain_off using @id, @parent_id;
 set foreign_key_checks = 1;
 set @id = 11, @parent_id = 111;
 execute fk_plain_off using @id, @parent_id;
-internal error: Cannot add or update a child row: a foreign key constraint fails
+Cannot add or update a child row: a foreign key constraint fails
 set foreign_key_checks = 0;
 set @id = 12, @parent_id = 112;
 execute fk_plain_off using @id, @parent_id;
@@ -38,14 +38,14 @@ set foreign_key_checks = 1;
 prepare fk_plain_on from 'insert into child values (?, ?)';
 set @id = 20, @parent_id = 120;
 execute fk_plain_on using @id, @parent_id;
-internal error: Cannot add or update a child row: a foreign key constraint fails
+Cannot add or update a child row: a foreign key constraint fails
 set foreign_key_checks = 0;
 set @id = 21, @parent_id = 121;
 execute fk_plain_on using @id, @parent_id;
 set foreign_key_checks = 1;
 set @id = 22, @parent_id = 122;
 execute fk_plain_on using @id, @parent_id;
-internal error: Cannot add or update a child row: a foreign key constraint fails
+Cannot add or update a child row: a foreign key constraint fails
 select id, parent_id from child order by id;
 ➤ id[4,32,0]  ¦  parent_id[4,32,0]  𝄀
 21  ¦  121
@@ -91,7 +91,7 @@ execute fk_odku_off using @id, @parent_id;
 set foreign_key_checks = 1;
 set @parent_id = 151;
 execute fk_odku_off using @id, @parent_id;
-internal error: Cannot add or update a child row: a foreign key constraint fails
+Cannot add or update a child row: a foreign key constraint fails
 set foreign_key_checks = 0;
 set @parent_id = 152;
 execute fk_odku_off using @id, @parent_id;
@@ -106,14 +106,14 @@ prepare fk_odku_on from
 'insert into child values (?, ?) on duplicate key update parent_id = values(parent_id)';
 set @id = 60, @parent_id = 160;
 execute fk_odku_on using @id, @parent_id;
-internal error: Cannot add or update a child row: a foreign key constraint fails
+Cannot add or update a child row: a foreign key constraint fails
 set foreign_key_checks = 0;
 set @parent_id = 161;
 execute fk_odku_on using @id, @parent_id;
 set foreign_key_checks = 1;
 set @parent_id = 162;
 execute fk_odku_on using @id, @parent_id;
-internal error: Cannot add or update a child row: a foreign key constraint fails
+Cannot add or update a child row: a foreign key constraint fails
 select id, parent_id from child order by id;
 ➤ id[4,32,0]  ¦  parent_id[4,32,0]  𝄀
 60  ¦  161
@@ -131,7 +131,7 @@ execute fk_no_key_off using @id, @parent_id;
 set foreign_key_checks = 1;
 set @id = 71, @parent_id = 171;
 execute fk_no_key_off using @id, @parent_id;
-internal error: Cannot add or update a child row: a foreign key constraint fails
+Cannot add or update a child row: a foreign key constraint fails
 set foreign_key_checks = 0;
 set @id = 72, @parent_id = 172;
 execute fk_no_key_off using @id, @parent_id;
@@ -146,14 +146,14 @@ prepare fk_no_key_on from
 'insert into child_no_key values (?, ?) on duplicate key update parent_id = values(parent_id)';
 set @id = 80, @parent_id = 180;
 execute fk_no_key_on using @id, @parent_id;
-internal error: Cannot add or update a child row: a foreign key constraint fails
+Cannot add or update a child row: a foreign key constraint fails
 set foreign_key_checks = 0;
 set @id = 81, @parent_id = 181;
 execute fk_no_key_on using @id, @parent_id;
 set foreign_key_checks = 1;
 set @id = 82, @parent_id = 182;
 execute fk_no_key_on using @id, @parent_id;
-internal error: Cannot add or update a child row: a foreign key constraint fails
+Cannot add or update a child row: a foreign key constraint fails
 select id, parent_id from child_no_key order by id;
 ➤ id[4,32,0]  ¦  parent_id[4,32,0]  𝄀
 81  ¦  181

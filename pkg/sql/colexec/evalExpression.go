@@ -179,12 +179,15 @@ type expressionExecutorBuildContext struct {
 	joinBuildDiagnosticOwner    *DeferredJoinDiagnostic
 	joinActivation              *[]ExpressionExecutor
 	conditionalJoinDepth        int
+	ownedTemporalFilter         bool
+	temporalGuardDepth          int
+	deferredTemporal            bool
 }
 
 // NewOwnedConstantFilterExecutors is only for a single coordinator filter
 // whose diagnostic constant casts were excluded from storage pruning.
 func NewOwnedConstantFilterExecutors(proc *process.Process, exprs []*plan.Expr) ([]ExpressionExecutor, error) {
-	return NewExpressionExecutorsFromPlanExpressionsWithAllocation(proc, exprs, nil, true)
+	return newExpressionExecutorsWithDiagnosticOwner(proc, exprs, nil, true, nil, true)
 }
 
 func NewExpressionExecutorsFromPlanExpressions(proc *process.Process, planExprs []*plan.Expr) (executors []ExpressionExecutor, err error) {
@@ -202,7 +205,7 @@ func NewExpressionExecutorsFromPlanExpressionsWithAllocation(
 ) (executors []ExpressionExecutor, err error) {
 	return newExpressionExecutorsWithDiagnosticOwner(
 		proc, planExprs, selection,
-		len(foldOwnedConstantCasts) > 0 && foldOwnedConstantCasts[0], nil,
+		len(foldOwnedConstantCasts) > 0 && foldOwnedConstantCasts[0], nil, false,
 	)
 }
 
@@ -214,7 +217,7 @@ func NewJoinBuildExpressionExecutors(
 	selection *vector.AllocationAccountSelection,
 	owner *DeferredJoinDiagnostic,
 ) ([]ExpressionExecutor, error) {
-	return newExpressionExecutorsWithDiagnosticOwner(proc, planExprs, selection, true, owner)
+	return newExpressionExecutorsWithDiagnosticOwner(proc, planExprs, selection, true, owner, false)
 }
 
 // NewJoinProbeExpressionExecutors returns borrowed references to the constant
@@ -262,6 +265,7 @@ func newExpressionExecutorsWithDiagnosticOwner(
 	selection *vector.AllocationAccountSelection,
 	foldOwnedConstantCasts bool,
 	owner *DeferredJoinDiagnostic,
+	ownedTemporalFilter bool,
 ) (executors []ExpressionExecutor, err error) {
 	if err := plan.RequireLegacyCollations(planExprs); err != nil {
 		return nil, err
@@ -271,6 +275,7 @@ func newExpressionExecutorsWithDiagnosticOwner(
 		buildCtx := &expressionExecutorBuildContext{
 			foldOwnedLiteralNumericCast: foldOwnedConstantCasts,
 			joinBuildDiagnosticOwner:    owner,
+			ownedTemporalFilter:         ownedTemporalFilter,
 		}
 		executors[i], err = newExpressionExecutorWithAllocation(proc, planExprs[i], selection, buildCtx)
 		if err != nil {
@@ -336,6 +341,8 @@ func newExpressionExecutorWithAllocation(
 		return &memoExpressionExecutor{state: state}, nil
 	}
 	switch t := planExpr.Expr.(type) {
+	case *plan.Expr_Slot:
+		return newDependentSlotExecutor(proc, t.Slot, typ, selection)
 	case *plan.Expr_Lit:
 		vec, err := generateConstExpressionExecutor(proc, typ, t.Lit, selection)
 		if err != nil {
@@ -454,11 +461,30 @@ func newExpressionExecutorWithAllocation(
 
 	case *plan.Expr_F:
 		overloadID := t.F.GetFunc().GetObj()
+		// Validate before allocating the result wrapper, including plans retained
+		// from the pre-versioned unary TIMESTAMP implementation.
+		fid, oid := function.DecodeOverloadID(overloadID)
+		if fid == function.LOAD_FK_IGNORE_CHECK {
+			if err := function.RequireLoadFKIgnoreProtocol(proc.Ctx, proc); err != nil {
+				return nil, err
+			}
+		}
+		if fid == function.TIMESTAMP && oid >= 0 && oid <= 10 {
+			want := types.T_timestamp
+			if oid >= 5 {
+				want = types.T_datetime
+			}
+			if typ.Oid != want {
+				return nil, moerr.NewNotSupportedNoCtx("TIMESTAMP result vector contract mismatch requires rebinding")
+			}
+		}
 		overload, err := function.GetFunctionById(proc.Ctx, overloadID)
 		if err != nil {
 			return nil, err
 		}
 
+		deferDiagnostic := buildCtx.joinBuildDiagnosticOwner != nil &&
+			function.IsStatementConstantInput(planExpr) && !function.ContainsRowScopedConversion(planExpr)
 		executor := NewFunctionExpressionExecutor()
 		{
 			// init function folding status.
@@ -473,10 +499,12 @@ func newExpressionExecutorWithAllocation(
 				isStringToNumericCast(planExpr, buildCtx.foldOwnedLiteralNumericCast)
 			executor.rowScopedDecimalCast = function.IsExplicitDecimalCast(planExpr)
 			executor.volatile = overload.IsVolatile() || executor.stringToNumericCast || executor.rowScopedDecimalCast
-			executor.rowScopedDiagnostics = overload.HasRowScopedDiagnostics()
+			executor.rowScopedDiagnostics = overload.HasRowScopedDiagnostics() ||
+				(function.IsTemporalTextDiagnosticCall(planExpr) && !deferDiagnostic && !buildCtx.deferredTemporal &&
+					!(buildCtx.ownedTemporalFilter && buildCtx.temporalGuardDepth == 0 && function.IsStatementConstantInput(planExpr) && !function.ContainsRowScopedConversion(planExpr)))
 			executor.timeDependent = overload.IsRealTimeRelated()
 			executor.fid, _ = function.DecodeOverloadID(overloadID)
-			executor.evalFn, executor.resetFn, executor.freeFn, executor.retainedBytesFn = overload.GetExecuteMethod()
+			executor.evalFn, executor.resetFn, executor.freeFn, _ = overload.GetExecuteMethod()
 		}
 		if err = executor.init(proc, len(t.F.Args), typ, selection); err != nil {
 			executor.Free()
@@ -487,19 +515,23 @@ func newExpressionExecutorWithAllocation(
 			executor.parameterTypes[i] = types.MustTypeFromPlan(arg.Typ)
 		}
 
-		deferDiagnostic := buildCtx.joinBuildDiagnosticOwner != nil &&
-			function.IsStatementConstantInput(planExpr) &&
-			!function.ContainsRowScopedConversion(planExpr)
 		owner := buildCtx.joinBuildDiagnosticOwner
 		if deferDiagnostic {
 			buildCtx.joinBuildDiagnosticOwner = nil
-			defer func() { buildCtx.joinBuildDiagnosticOwner = owner }()
+			oldDeferred := buildCtx.deferredTemporal
+			buildCtx.deferredTemporal = true
+			defer func() { buildCtx.joinBuildDiagnosticOwner = owner; buildCtx.deferredTemporal = oldDeferred }()
 		}
 		conditional := !deferDiagnostic &&
-			(executor.fid == function.IFF || executor.fid == function.CASE || executor.fid == function.COALESCE)
+			(executor.fid == function.IFF || executor.fid == function.CASE || executor.fid == function.COALESCE ||
+				(executor.fid == function.ELT && int32(executor.overloadID) == 1))
 		if conditional {
 			buildCtx.conditionalJoinDepth++
 			defer func() { buildCtx.conditionalJoinDepth-- }()
+		}
+		if (executor.fid == function.IFF || executor.fid == function.CASE || executor.fid == function.COALESCE || executor.fid == function.ELT) && !function.IsStatementConstantInput(planExpr) {
+			buildCtx.temporalGuardDepth++
+			defer func() { buildCtx.temporalGuardDepth-- }()
 		}
 		for i := range executor.parameterExecutor {
 			subExecutor, paramErr := newExpressionExecutorWithAllocation(proc, t.F.Args[i], selection, buildCtx)
@@ -1197,6 +1229,50 @@ func (expr *FunctionExpressionExecutor) EvalIff(proc *process.Process, batches [
 	return err
 }
 
+// EvalJSONStringElt evaluates the selector first and masks each value subtree.
+// Only overload 1 has this JSON-aware, selected-consumer execution contract.
+func (expr *FunctionExpressionExecutor) EvalJSONStringElt(proc *process.Process, batches []*batch.Batch, selectList []bool) error {
+	index, err := expr.parameterExecutor[0].Eval(proc, batches, selectList)
+	if err != nil {
+		return err
+	}
+	expr.parameterResults[0] = index
+	rowCount := expressionRowCount(batches)
+	if len(expr.selectList1) < rowCount {
+		expr.selectList1 = make([]bool, rowCount)
+	}
+	selected := expr.selectList1[:rowCount]
+	var signedIndex vector.FunctionParameterWrapper[int64]
+	var unsignedIndex vector.FunctionParameterWrapper[uint64]
+	switch index.GetType().Oid {
+	case types.T_int64:
+		signedIndex = vector.GenerateFunctionFixedTypeParameter[int64](index)
+	case types.T_uint64, types.T_bit:
+		unsignedIndex = vector.GenerateFunctionFixedTypeParameter[uint64](index)
+	}
+	for branch := 1; branch < len(expr.parameterExecutor); branch++ {
+		for row := range selected {
+			selected[row] = false
+			if selectList != nil && !selectList[row] {
+				continue
+			}
+			switch {
+			case signedIndex != nil:
+				value, isNull := signedIndex.GetValue(uint64(row))
+				selected[row] = !isNull && value == int64(branch)
+			case unsignedIndex != nil:
+				value, isNull := unsignedIndex.GetValue(uint64(row))
+				selected[row] = !isNull && value == uint64(branch)
+			}
+		}
+		expr.parameterResults[branch], err = expr.parameterExecutor[branch].Eval(proc, batches, selected)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func hasSelectedRows(selectList []bool) bool {
 	for _, selected := range selectList {
 		if selected {
@@ -1806,6 +1882,11 @@ func (expr *FunctionExpressionExecutor) Eval(proc *process.Process, batches []*b
 		}
 	} else if expr.fid == function.CASE {
 		err = expr.EvalCase(proc, batches, selectList)
+		if err != nil {
+			return nil, err
+		}
+	} else if expr.fid == function.ELT && int32(expr.overloadID) == 1 {
+		err = expr.EvalJSONStringElt(proc, batches, selectList)
 		if err != nil {
 			return nil, err
 		}

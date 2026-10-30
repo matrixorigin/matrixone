@@ -17,8 +17,41 @@ Unit tests for MatrixOne StageManager functionality - SQL consistency tests
 """
 
 import unittest
+import pytest
 from unittest.mock import Mock, AsyncMock
 from matrixone.stage import StageManager, AsyncStageManager
+
+
+@pytest.mark.parametrize('asynchronous', [False, True])
+@pytest.mark.asyncio
+async def test_load_files_text_fallback_reuses_generic_stage_load(asynchronous):
+    import inspect
+    from matrixone import AsyncClient, Client
+    from matrixone.stage import Stage
+
+    client = AsyncClient() if asynchronous else Client()
+    acknowledged = object()
+
+    def execute(sql, *args, **kwargs):
+        if 'missing' in sql:
+            raise FileNotFoundError('missing input')
+        return acknowledged
+
+    client.execute = AsyncMock(side_effect=execute) if asynchronous else Mock(side_effect=execute)
+    stage = Stage(name='two words', url='file:///owned', _client=client)
+    results = stage.load_files({'data.csv': 'csv_target', 'data.txt': 'txt_target', 'missing.txt': 'empty_target'})
+    for path in ('data.csv', 'data.txt'):
+        result = results[path]
+        if asynchronous:
+            assert inspect.isawaitable(result)
+            result = await result
+        assert result is acknowledged
+    if asynchronous:
+        with pytest.raises(FileNotFoundError):
+            await results['missing.txt']
+    else:
+        assert 'missing input' in results['missing.txt']
+    assert any('stage:///two%20words/data.txt' in str(call) for call in client.execute.call_args_list)
 
 
 class TestStageSQLConsistency(unittest.TestCase):
@@ -39,6 +72,7 @@ class TestStageSQLConsistency(unittest.TestCase):
         self.sync_manager = StageManager(self.client)
         self.session_manager = StageManager(self.client, executor=self.session)
 
+    @pytest.mark.usefixtures("isolate_create_sql_from_catalog_readback")
     def test_create_stage_basic_sql_consistency(self):
         """Test that create generates identical SQL across client and session"""
         self.client.execute = Mock()
@@ -57,6 +91,7 @@ class TestStageSQLConsistency(unittest.TestCase):
         self.assertEqual(session_sql, expected_sql)
         self.assertEqual(sync_sql, session_sql)
 
+    @pytest.mark.usefixtures("isolate_create_sql_from_catalog_readback")
     def test_create_stage_with_comment_sql_consistency(self):
         """Test create stage with comment"""
         self.client.execute = Mock()
@@ -72,6 +107,7 @@ class TestStageSQLConsistency(unittest.TestCase):
         self.assertEqual(sync_sql, expected_sql)
         self.assertEqual(session_sql, expected_sql)
 
+    @pytest.mark.usefixtures("isolate_create_sql_from_catalog_readback")
     def test_create_stage_with_credentials_sql_consistency(self):
         """Test create stage with credentials (e.g., S3)"""
         self.client.execute = Mock()
@@ -84,9 +120,7 @@ class TestStageSQLConsistency(unittest.TestCase):
         self.session_manager.create('s3_stage', 's3://bucket/path/', credentials=credentials)
         session_sql = self.session.execute.call_args[0][0]
 
-        expected_sql = (
-            "CREATE STAGE s3_stage URL='s3://bucket/path/' CREDENTIALS={'AWS_KEY_ID'='key123', 'AWS_SECRET_KEY'='secret456'}"
-        )
+        expected_sql = "CREATE STAGE s3_stage URL='s3://bucket/path/' CREDENTIALS={'AWS_KEY_ID'='key123', 'AWS_SECRET_KEY'='secret456'}"
         self.assertEqual(sync_sql, expected_sql)
         self.assertEqual(session_sql, expected_sql)
 
@@ -170,7 +204,7 @@ class TestStageSQLConsistency(unittest.TestCase):
         self.session_manager.alter('test_stage', url='file:///new/path/', enable=True, comment='Updated')
         session_sql = self.session.execute.call_args_list[0][0][0]  # First call is ALTER
 
-        expected_sql = "ALTER STAGE test_stage SET URL='file:///new/path/' COMMENT='Updated' ENABLE=TRUE"
+        expected_sql = "ALTER STAGE test_stage SET URL='file:///new/path/' ENABLE=TRUE COMMENT='Updated'"
         self.assertEqual(sync_sql, expected_sql)
         self.assertEqual(session_sql, expected_sql)
 
@@ -206,7 +240,7 @@ class TestStageSQLConsistency(unittest.TestCase):
             pass
         session_sql = self.session.execute.call_args[0][0]
 
-        expected_sql = "SELECT stage_name, url, stage_status, comment, created_time FROM mo_catalog.mo_stages WHERE stage_name = 'test_stage'"
+        expected_sql = "SELECT stage_name, url, stage_status, comment, created_time FROM mo_catalog.mo_stages WHERE stage_name = LOWER('test_stage')"
         self.assertEqual(sync_sql, expected_sql)
         self.assertEqual(session_sql, expected_sql)
 
@@ -228,6 +262,7 @@ class TestAsyncStageSQLConsistency(unittest.IsolatedAsyncioTestCase):
         self.async_manager = AsyncStageManager(self.client)
         self.async_session_manager = AsyncStageManager(self.client, executor=self.session)
 
+    @pytest.mark.usefixtures("isolate_create_sql_from_catalog_readback")
     async def test_async_create_stage_sql_consistency(self):
         """Test async create stage SQL"""
         self.client.execute = AsyncMock()
@@ -243,6 +278,7 @@ class TestAsyncStageSQLConsistency(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(async_sql, expected_sql)
         self.assertEqual(async_session_sql, expected_sql)
 
+    @pytest.mark.usefixtures("isolate_create_sql_from_catalog_readback")
     async def test_async_create_stage_with_credentials_sql_consistency(self):
         """Test async create stage with credentials"""
         self.client.execute = AsyncMock()
@@ -328,3 +364,10 @@ class TestAsyncStageSQLConsistency(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+@pytest.fixture
+def isolate_create_sql_from_catalog_readback(monkeypatch):
+    """These tests inspect CREATE SQL; catalog behavior has separate contracts."""
+    monkeypatch.setattr(StageManager, 'get', Mock(return_value=Mock()))
+    monkeypatch.setattr(AsyncStageManager, 'get', AsyncMock(return_value=Mock()))

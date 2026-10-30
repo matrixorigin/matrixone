@@ -512,17 +512,29 @@ func TestNextvalChildProcessesSerializeMetadataAndSessionPublication(t *testing.
 			return makeMetadataResult(last, called)
 		}
 		if strings.HasPrefix(normalized, "update") {
+			setIdx := strings.Index(normalized, " set ")
+			if setIdx < 0 {
+				return executor.Result{}, fmt.Errorf("unexpected sequence SQL: %s", sql)
+			}
 			state.Lock()
-			if strings.Contains(normalized, "is_called = true") {
-				state.called = true
-			} else {
-				pos := strings.LastIndex(normalized, "=")
-				value, parseErr := strconv.ParseInt(strings.TrimSpace(normalized[pos+1:]), 10, 64)
-				if parseErr != nil {
+			for _, piece := range strings.Split(normalized[setIdx+len(" set "):], ",") {
+				kv := strings.SplitN(strings.TrimSpace(piece), "=", 2)
+				if len(kv) != 2 {
 					state.Unlock()
-					return executor.Result{}, parseErr
+					return executor.Result{}, fmt.Errorf("unexpected sequence assignment %q: %s", piece, sql)
 				}
-				state.last = value
+				key, rawVal := strings.TrimSpace(kv[0]), strings.TrimSpace(kv[1])
+				switch key {
+				case "last_seq_num":
+					value, parseErr := strconv.ParseInt(rawVal, 10, 64)
+					if parseErr != nil {
+						state.Unlock()
+						return executor.Result{}, parseErr
+					}
+					state.last = value
+				case "is_called":
+					state.called = rawVal == "true"
+				}
 			}
 			state.Unlock()
 			return executor.Result{}, nil
@@ -732,15 +744,32 @@ func TestMixedSequenceOperationsSerializeStatePublication(t *testing.T) {
 			if strings.Contains(normalized, "last_seq_num") {
 				state.updateOnce.Do(func() { close(state.updateEntered) })
 				<-state.releaseUpdate
-				pos := strings.LastIndex(normalized, "=")
-				value, err := strconv.ParseInt(strings.TrimSpace(normalized[pos+1:]), 10, 64)
-				if err != nil {
-					return executor.Result{}, err
-				}
-				state.Lock()
-				state.last = value
-				state.Unlock()
 			}
+			setIdx := strings.Index(normalized, " set ")
+			if setIdx < 0 {
+				return executor.Result{}, fmt.Errorf("unexpected sequence SQL: %s", sql)
+			}
+			state.Lock()
+			for _, piece := range strings.Split(normalized[setIdx+len(" set "):], ",") {
+				kv := strings.SplitN(strings.TrimSpace(piece), "=", 2)
+				if len(kv) != 2 {
+					state.Unlock()
+					return executor.Result{}, fmt.Errorf("unexpected sequence assignment %q: %s", piece, sql)
+				}
+				key, rawVal := strings.TrimSpace(kv[0]), strings.TrimSpace(kv[1])
+				switch key {
+				case "last_seq_num":
+					value, err := strconv.ParseInt(rawVal, 10, 64)
+					if err != nil {
+						state.Unlock()
+						return executor.Result{}, err
+					}
+					state.last = value
+				case "is_called":
+					state.called = rawVal == "true"
+				}
+			}
+			state.Unlock()
 			return executor.Result{}, nil
 		}
 		return executor.Result{}, fmt.Errorf("unexpected sequence SQL: %s", sql)
@@ -913,4 +942,24 @@ func TestMixedSequenceOperationsSerializeStatePublication(t *testing.T) {
 	require.Equal(t, int64(10), state.last)
 	state.Unlock()
 	require.Equal(t, "10", parent.GetSessionInfo().SeqLastValue[0])
+}
+
+func TestSequenceMutationHonorsReadOnlyStamp(t *testing.T) {
+	// Unstamped and explicitly read-write contexts pass the mutation
+	// boundary unchanged; a stamped read-only mode is rejected with
+	// ERROR 1792 before any engine or counter work happens.
+	require.NoError(t, rejectSequenceMutationInReadOnly(nil))
+
+	proc := testutil.NewProcess(t)
+	require.NoError(t, rejectSequenceMutationInReadOnly(proc))
+
+	rwProc := testutil.NewProcess(t)
+	rwProc.SetReadOnlyTxnAccessMode(false)
+	require.NoError(t, rejectSequenceMutationInReadOnly(rwProc))
+
+	roProc := testutil.NewProcess(t)
+	roProc.SetReadOnlyTxnAccessMode(true)
+	err := rejectSequenceMutationInReadOnly(roProc)
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrCantExecuteInReadOnlyTransaction))
 }

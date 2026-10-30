@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/indexfile"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -66,6 +67,9 @@ func (tableFunction *TableFunction) Call(proc *process.Process) (vm.CallResult, 
 				input, err := vm.ChildrenCall(tableFunction.GetChildren(0), proc, analyzer)
 				if err != nil {
 					return input, err
+				}
+				if input.Status == vm.ExecYield {
+					return input, nil
 				}
 				tableFunction.ctr.inputBatch = input.Batch
 				if input.Batch.IsDone() {
@@ -207,6 +211,8 @@ func (tableFunction *TableFunction) Prepare(proc *process.Process) error {
 		tblArg.ctr.state, err = tableStatsPrepare(proc, tblArg)
 	case "load_file_chunks":
 		tblArg.ctr.state, err = loadFileChunksPrepare(proc, tblArg)
+	case indexfile.FuncName:
+		tblArg.ctr.state, err = indexFileChunksPrepare(proc, tblArg)
 	case "cagra_create":
 		tblArg.ctr.state, err = cagraCreatePrepare(proc, tblArg)
 	case "ivfpq_create":

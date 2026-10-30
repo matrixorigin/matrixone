@@ -15,13 +15,14 @@
 package function
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"fmt"
 	"math"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -187,6 +188,98 @@ func TestPreparedJSONComparisonCoercion(t *testing.T) {
 		require.NoError(t, result.PreExtendAndReset(length))
 		return result
 	}
+
+	t.Run("JSON numeric operators preserve category fraction and orientation", func(t *testing.T) {
+		jsonValues := makeJSON(t, []any{int64(1), 1.5, int64(-1), -1.5, map[string]any{"a": int64(1)}, []any{int64(1)}, "str", "1", true, false, nil, nil}, 11)
+		signs := []int{0, 1, -1, -1, 1, 1, 1, 1, 1, 1, 0, 0}
+		const length = 12
+		direct, err := vector.NewConstFixed(types.T_int64.ToType(), int64(1), length, proc.Mp())
+		require.NoError(t, err)
+		t.Cleanup(func() { direct.Free(proc.Mp()) })
+		prepared, err := vector.NewConstBytes(types.T_json.ToType(), encode(t, int64(1)), length, proc.Mp())
+		require.NoError(t, err)
+		t.Cleanup(func() { prepared.Free(proc.Mp()) })
+		prepared.SetPreparedJSONComparisonParam()
+		prepared.SetPrepareParamKind(vector.PrepareParamInteger)
+		for _, mode := range []string{"direct", "prepared concrete", "prepared legacy"} {
+			t.Run(mode, func(t *testing.T) {
+				numeric := direct
+				if mode != "direct" {
+					numeric = prepared
+					prepared.SetPrepareParamType(types.T_int64)
+				}
+				if mode == "prepared legacy" {
+					prepared.SetPrepareParamType(types.T_any)
+				}
+				for _, reversed := range []bool{false, true} {
+					args := []*vector.Vector{jsonValues, numeric}
+					if reversed {
+						args[0], args[1] = args[1], args[0]
+					}
+					for _, op := range []struct {
+						name     string
+						fn       executeLogicOfOverload
+						test     func(int) bool
+						nullSafe bool
+					}{
+						{"=", equalFn, func(c int) bool { return c == 0 }, false},
+						{"!=", notEqualFn, func(c int) bool { return c != 0 }, false},
+						{"<=>", nullSafeEqualFn, func(c int) bool { return c == 0 }, true},
+						{"<", lessThanFn, func(c int) bool { return c < 0 }, false},
+						{"<=", lessEqualFn, func(c int) bool { return c <= 0 }, false},
+						{">", greatThanFn, func(c int) bool { return c > 0 }, false},
+						{">=", greatEqualFn, func(c int) bool { return c >= 0 }, false},
+					} {
+						t.Run(fmt.Sprintf("%s/reversed=%t", op.name, reversed), func(t *testing.T) {
+							result := makeResult(t, length)
+							require.NoError(t, op.fn(args, result, proc, length, nil))
+							got := vector.MustFixedColNoTypeCheck[bool](result.GetResultVector())
+							for row, sign := range signs {
+								if row >= 10 {
+									require.Equal(t, !op.nullSafe, result.GetResultVector().IsNull(uint64(row)))
+									require.False(t, got[row])
+									continue
+								}
+								if reversed {
+									sign = -sign
+								}
+								require.Equal(t, op.test(sign), got[row], "row %d", row)
+								require.False(t, result.GetResultVector().IsNull(uint64(row)))
+							}
+						})
+					}
+				}
+			})
+		}
+	})
+
+	t.Run("mixed numeric selection nulls empty and result reuse", func(t *testing.T) {
+		jsonValues := makeJSON(t, []any{int64(1), uint64(math.MaxUint64), nil})
+		numbers := vector.NewVec(types.T_int64.ToType())
+		t.Cleanup(func() { numbers.Free(proc.Mp()) })
+		for _, v := range []int64{1, 1, 0} {
+			require.NoError(t, vector.AppendFixed(numbers, v, false, proc.Mp()))
+		}
+		result := makeResult(t, 3)
+		selected := &FunctionSelectList{AnyNull: true, SelectList: []bool{true, false, true}}
+		require.NoError(t, equalFn([]*vector.Vector{jsonValues, numbers}, result, proc, 3, selected))
+		require.Equal(t, []bool{true, false, false}, vector.MustFixedColNoTypeCheck[bool](result.GetResultVector()))
+		require.True(t, result.GetResultVector().IsNull(1))
+		require.True(t, result.GetResultVector().IsNull(2))
+		allSkipped := &FunctionSelectList{AllNull: true}
+		require.NoError(t, nullSafeEqualFn([]*vector.Vector{jsonValues, numbers}, result, proc, 3, allSkipped))
+		for row := range 3 {
+			require.True(t, result.GetResultVector().IsNull(uint64(row)))
+		}
+		nullPeer := vector.NewConstNull(types.T_int64.ToType(), 3, proc.Mp())
+		t.Cleanup(func() { nullPeer.Free(proc.Mp()) })
+		require.NoError(t, nullSafeEqualFn([]*vector.Vector{nullPeer, jsonValues}, result, proc, 3, nil))
+		require.Equal(t, []bool{false, false, true}, vector.MustFixedColNoTypeCheck[bool](result.GetResultVector()))
+		require.True(t, result.GetResultVector().GetNulls().IsEmpty())
+		require.ErrorContains(t, equalFn([]*vector.Vector{jsonValues, numbers}, result, proc, 3, nil), "JSON -> BIGINT")
+		empty := makeJSON(t, nil)
+		require.NoError(t, equalFn([]*vector.Vector{empty, numbers}, makeResult(t, 0), proc, 0, nil))
+	})
 
 	t.Run("mixed JSON boolean operators preserve scalar category", func(t *testing.T) {
 		jsonValues := makeJSON(t, []any{true, false, float64(1), float64(0), "true", "false", nil, nil, true}, 7)
@@ -392,15 +485,22 @@ func TestPreparedJSONComparisonCoercion(t *testing.T) {
 		params.SetPrepareParamKind(vector.PrepareParamDecimal)
 		result := makeResult(t, 4)
 		require.NoError(t, comparePreparedJSON([]*vector.Vector{jsonValues, params}, result, proc, 4, false, func(c int) bool { return c == 0 }, nil))
-		require.Equal(t, []bool{true, true, false, true}, vector.MustFixedColNoTypeCheck[bool](result.GetResultVector()))
+		require.Equal(t, []bool{true, false, false, true}, vector.MustFixedColNoTypeCheck[bool](result.GetResultVector()))
 	})
 
-	t.Run("decimal category rejects malformed numeric text", func(t *testing.T) {
+	t.Run("decimal comparison preserves nonnumeric JSON string category", func(t *testing.T) {
 		jsonValues := makeJSON(t, []any{"1.25tail"})
 		params := makePreparedJSON(t, []any{newTypedByteJson(bytejson.TpCodeDecimal, "1.25")})
 		params.SetPrepareParamKind(vector.PrepareParamDecimal)
-		require.Error(t, comparePreparedJSON(
-			[]*vector.Vector{jsonValues, params}, makeResult(t, 1), proc, 1,
+		result := makeResult(t, 1)
+		require.NoError(t, comparePreparedJSON(
+			[]*vector.Vector{jsonValues, params}, result, proc, 1,
+			false, func(c int) bool { return c == 0 }, nil))
+		require.Equal(t, []bool{false}, vector.MustFixedColNoTypeCheck[bool](result.GetResultVector()))
+		// A bad numeric parameter is still an error, unlike a JSON string row.
+		badParam := makePreparedJSON(t, []any{"bad"})
+		badParam.SetPrepareParamKind(vector.PrepareParamDecimal)
+		require.Error(t, comparePreparedJSON([]*vector.Vector{jsonValues, badParam}, makeResult(t, 1), proc, 1,
 			false, func(c int) bool { return c == 0 }, nil))
 	})
 
@@ -476,7 +576,7 @@ func TestPreparedJSONComparisonCoercion(t *testing.T) {
 		params.SetPrepareParamKind(vector.PrepareParamInteger)
 		result := makeResult(t, 4)
 		require.NoError(t, comparePreparedJSON([]*vector.Vector{jsonValues, params}, result, proc, 4, false, func(c int) bool { return c == 0 }, nil))
-		require.Equal(t, []bool{true, true, false, true}, vector.MustFixedColNoTypeCheck[bool](result.GetResultVector()))
+		require.Equal(t, []bool{true, true, false, false}, vector.MustFixedColNoTypeCheck[bool](result.GetResultVector()))
 	})
 
 	t.Run("concrete signed type preserves overflow errors", func(t *testing.T) {

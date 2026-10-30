@@ -551,15 +551,15 @@ func TestCandidateLimitRefusesJSONProbe(t *testing.T) {
 	// even with NO residual filter and a literal LIMIT — the shape the gate is
 	// most willing to push — a probe is refused
 	scan := &plan.Node{TableDef: &plan.TableDef{}}
-	require.Nil(t, b.buildFullTextCandidateLimit(
-		scan, nil, []*plan.Expr{probe}, nil, false, false, limit, nil),
+	ok, literalOnly := b.fullTextCandidateLimitRule(scan, nil, []*plan.Expr{probe}, nil, false, false)
+	require.False(t, ok)
+	require.Nil(t, candidateLimitForRule(ok, literalOnly, limit, nil),
 		"a probe must not be truncated, whatever the rest of the shape allows")
 }
 
-// A prepared plan carrying an injected json coverage probe must be flagged so it rebuilds every
-// EXECUTE: its covered/partial decision reflects the async index's freshness at build time, which
-// no schema version tracks, so a reused plan would drop rows committed after it was cached. A user
-// MATCH builds the same fulltext2 index search scan but is freshness-tolerant, so only JSONProbeMode counts.
+// Prepared index searches defer their rebuild policy to the registered plugin.
+// An injected JSON probe must recheck transaction-local writes; a user MATCH
+// remains reusable. HNSW must recheck source coverage at every EXECUTE.
 func TestPreparedPlanDependsOnIndexCoverage(t *testing.T) {
 	mkPlan := func(nodes ...*plan.Node) *Plan {
 		return &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{Nodes: nodes}}}
@@ -586,6 +586,25 @@ func TestPreparedPlanDependsOnIndexCoverage(t *testing.T) {
 		"an injected json coverage probe must force a rebuild")
 	require.True(t, PreparedPlanDependsOnIndexCoverage(mkPlan(&plan.Node{NodeType: plan.Node_TABLE_SCAN}, ftNode(fulltext2.JSONProbeMode))),
 		"the probe must be found among other nodes")
+	require.False(t, PreparedPlanDependsOnIndexCoverage(mkPlan(&plan.Node{
+		NodeType: plan.Node_INDEX_SEARCH_SCAN,
+		IndexSearchScan: &plan.IndexSearchScan{
+			Index: &plan.IndexDef{IndexAlgo: catalog.MoIndexHnswAlgo.ToString()},
+		},
+	})), "an HNSW search does not depend on index freshness and remains reusable")
+	require.False(t, PreparedPlanDependsOnIndexCoverage(mkPlan(&plan.Node{
+		NodeType: plan.Node_INDEX_SEARCH_SCAN,
+		IndexSearchScan: &plan.IndexSearchScan{
+			Index: &plan.IndexDef{IndexAlgo: catalog.MoIndexIvfFlatAlgo.ToString()},
+		},
+	})), "an algorithm without the coverage policy remains reusable")
+	require.False(t, PreparedPlanDependsOnIndexCoverage(mkPlan(&plan.Node{
+		NodeType: plan.Node_INDEX_SEARCH_SCAN,
+		IndexSearchScan: &plan.IndexSearchScan{
+			Index:       &plan.IndexDef{IndexAlgo: catalog.MoIndexFullText2Algo.ToString()},
+			AlgoOptions: []byte("invalid"),
+		},
+	})), "invalid fulltext2 options cannot identify an injected JSON probe")
 }
 
 // recordJSONProbeTail marks a scan self-completing and records (keyed by node id) both the json

@@ -54,12 +54,6 @@ func (r *ConstantFold) Apply(node *plan.Node, _ *plan.Query, proc *process.Proce
 	if node.Offset != nil {
 		node.Offset = r.constantFold(node.Offset, proc)
 	}
-	// if n.Interval != nil {
-	// 	n.Interval = r.constantFold(n.Interval, proc)
-	// }
-	// if n.Sliding != nil {
-	// 	n.Sliding = r.constantFold(n.Sliding, proc)
-	// }
 
 	for i := range node.OnList {
 		node.OnList[i] = r.constantFold(node.OnList[i], proc)
@@ -138,10 +132,10 @@ func IsNullIntegerArgumentCast(expr *plan.Expr) bool {
 }
 
 func (r *ConstantFold) constantFold(expr *plan.Expr, proc *process.Process) *plan.Expr {
-	return r.foldExpr(expr, proc, false)
+	return r.foldExpr(expr, proc, false, false)
 }
 
-func (r *ConstantFold) foldExpr(expr *plan.Expr, proc *process.Process, spatialChecked bool) *plan.Expr {
+func (r *ConstantFold) foldExpr(expr *plan.Expr, proc *process.Process, spatialChecked, jsonFeatureChecked bool) *plan.Expr {
 	if expr == nil {
 		return expr
 	}
@@ -161,7 +155,7 @@ func (r *ConstantFold) foldExpr(expr *plan.Expr, proc *process.Process, spatialC
 			exprList := elist.List
 			cannotFold := false
 			for i := range exprList {
-				exprList[i] = r.foldExpr(exprList[i], proc, spatialChecked)
+				exprList[i] = r.foldExpr(exprList[i], proc, spatialChecked, jsonFeatureChecked)
 				if exprList[i].GetLit() == nil {
 					cannotFold = true
 				}
@@ -229,15 +223,25 @@ func (r *ConstantFold) foldExpr(expr *plan.Expr, proc *process.Process, spatialC
 	if !exists {
 		return expr
 	}
-	// Preserve the v90 spatial requirement before evaluating any child. A
-	// successful scan covers this entire subtree, so recursive folding can
-	// reuse it instead of scanning every descendant again.
-	if !spatialChecked {
-		if requiresSpatial, err := plan.RequiresMORPCVersion90SpatialDistanceSemantics(expr); err != nil || requiresSpatial {
+	// Share the feature walk between spatial and JSON admission. Keep positive
+	// identities executable and propagate the negative proof to descendants;
+	// JSON ELT's selected subtree still belongs to its lazy executor.
+	if !spatialChecked || !jsonFeatureChecked {
+		features, err := plan.RequiredRemoteExpressionFeatures(expr)
+		if err != nil || (!spatialChecked && features.SpatialDistanceSemantics) ||
+			(!jsonFeatureChecked && (features.JSONStringConsumerOverload || features.JSONOpaqueTextContracts)) {
 			return expr
 		}
-		spatialChecked = true
+		spatialChecked, jsonFeatureChecked = true, true
 	}
+	// ELT's selected-subtree evaluation belongs to its lazy executor; eagerly
+	// folding every argument would evaluate unselected invalid expressions.
+	functionID, overload := function.DecodeOverloadID(overloadID)
+	if functionID == function.ELT && overload == 1 {
+		return expr
+	}
+	// Row-scoped diagnostics are admitted speculatively below; only a
+	// warning-free evaluation may replace them with a literal.
 	if f.IsVolatile() {
 		return expr
 	}
@@ -256,7 +260,7 @@ func (r *ConstantFold) foldExpr(expr *plan.Expr, proc *process.Process, spatialC
 	}
 	isVec := false
 	for i := range fn.Args {
-		fn.Args[i] = r.foldExpr(fn.Args[i], proc, spatialChecked)
+		fn.Args[i] = r.foldExpr(fn.Args[i], proc, spatialChecked, jsonFeatureChecked)
 		isVec = isVec || fn.Args[i].GetVec() != nil && !IsScalarConstantVector(fn.Args[i])
 	}
 	if r.isPrepared && ContainsSqlModeDependentTemporalCall(expr) {
@@ -269,6 +273,10 @@ func (r *ConstantFold) foldExpr(expr *plan.Expr, proc *process.Process, spatialC
 		return expr
 	}
 	if isVec && !CanMaterializeConstantVector(expr) {
+		return expr
+	}
+
+	if ContainsTruncatedFloatTextConversion(expr) {
 		return expr
 	}
 
@@ -415,7 +423,7 @@ func IsImplicitFloatCastOfExplicitDecimalConstant(expr *plan.Expr) bool {
 		return false
 	}
 	source := fn.Args[0]
-	if source == nil || !types.T(source.Typ.Id).IsDecimal() || !IsConstant(source, false) {
+	if source == nil || !types.T(source.Typ.Id).IsDecimal() || !function.IsConstant(source, false) {
 		return false
 	}
 	sourceFn := source.GetF()
@@ -1170,10 +1178,6 @@ func IsLegacyTimeAssignmentOutsideInternalRange(fn *plan.Function) bool {
 	return outOfRange
 }
 
-func IsConstant(e *plan.Expr, varAndParamIsConst bool) bool {
-	return function.IsConstant(e, varAndParamIsConst)
-}
-
 // ContainsSqlModeDependentDivision preserves the path to divisions whose
 // denominator is not a proven nonzero numeric literal. Folding a parent under
 // an empty sql_mode could otherwise erase warnings for a later EXECUTE.
@@ -1217,34 +1221,6 @@ func ContainsSqlModeDependentDivision(expr *plan.Expr) bool {
 		}
 	}
 	return false
-}
-
-// IsDivisionByZeroConstant checks if the expression is a division/modulo operation
-// where the divisor is a constant zero or either operand is NULL.
-// We skip constant folding for such cases to allow runtime to properly handle them.
-func IsDivisionByZeroConstant(fn *plan.Function) bool {
-	fid, _ := function.DecodeOverloadID(fn.Func.GetObj())
-	if fid != function.DIV && fid != function.INTEGER_DIV && fid != function.MOD {
-		return false
-	}
-	if len(fn.Args) < 2 {
-		return false
-	}
-
-	// Check if either operand is NULL
-	for _, arg := range fn.Args {
-		lit := arg.GetLit()
-		if lit != nil && lit.GetIsnull() {
-			return true
-		}
-	}
-
-	divisor := fn.Args[1]
-	lit := divisor.GetLit()
-	if lit == nil {
-		return false
-	}
-	return isZeroLiteral(lit)
 }
 
 // isZeroLiteral checks if a literal value is zero
@@ -1295,4 +1271,47 @@ func EvaluateConstantExpression(proc *process.Process, expr *plan.Expr, bat *bat
 	child.WarningSink = sink
 	vec, free, err = colexec.GetReadonlyResultFromExpression(child, expr, []*batch.Batch{bat})
 	return vec, free, sink.Warned(), err
+}
+
+// ContainsTruncatedFloatTextConversion keeps a context-dependent conversion and
+// its parents executable. Safe source expressions may fold first; complete
+// numeric literals and unrelated CASTs remain foldable. In particular, a strict
+// assignment error must not escape speculative SQL PREPARE evaluation.
+func ContainsTruncatedFloatTextConversion(expr *plan.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	if fn := expr.GetF(); fn != nil {
+		if fn.Func != nil && len(fn.Args) > 0 && fn.Args[0] != nil {
+			id, _ := function.DecodeOverloadID(fn.Func.Obj)
+			target := types.T(expr.Typ.Id)
+			if (id == function.CAST || id == function.CAST_STRICT || id == function.CAST_ASSIGN || id == function.CAST_IGNORE) &&
+				(target == types.T_float32 || target == types.T_float64) && types.T(fn.Args[0].Typ.Id).IsMySQLString() {
+				source := fn.Args[0]
+				if lit := source.GetLit(); lit != nil && !lit.Isnull && !lit.IsBin {
+					if value, ok := lit.Value.(*plan.Literal_Sval); ok && function.FloatTextTruncated(value.Sval) {
+						return true
+					}
+				}
+				// scalarConstantVector is a borrowed view of the literal payload.
+				if vec := scalarConstantVector(source); vec != nil && !vec.IsNull(0) && !vec.GetIsBin() &&
+					function.FloatTextTruncated(vec.GetStringAt(0)) {
+					return true
+				}
+			}
+		}
+		for _, arg := range fn.Args {
+			if ContainsTruncatedFloatTextConversion(arg) {
+				return true
+			}
+		}
+	}
+	if list := expr.GetList(); list != nil {
+		for _, arg := range list.List {
+			if ContainsTruncatedFloatTextConversion(arg) {
+				return true
+			}
+		}
+	}
+	return false
 }

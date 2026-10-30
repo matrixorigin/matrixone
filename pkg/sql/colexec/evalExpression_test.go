@@ -1263,7 +1263,7 @@ func TestFlowControlFolding(t *testing.T) {
 				require.NoError(t, expr.Init(proc, len(argTypes), test.resultType))
 				expr.fid = test.fid
 				expr.overloadID = resolved.GetEncodedOverloadID()
-				expr.evalFn, expr.resetFn, expr.freeFn, expr.retainedBytesFn = overload.GetExecuteMethod()
+				expr.evalFn, expr.resetFn, expr.freeFn, _ = overload.GetExecuteMethod()
 				expr.folded.needFoldingCheck = true
 				offset := 0
 				if test.fid != function.COALESCE {
@@ -2850,7 +2850,7 @@ func TestPreparedJSONComparisonSelection(t *testing.T) {
 		typ                        types.T
 		reject                     bool
 	}{
-		{name: "string JSON uses parameter conversion", parameter: "1", jsonValue: `"1"`, typ: types.T_int64},
+		{name: "JSON string differs from numeric parameter", parameter: "1", jsonValue: `"1"`, typ: types.T_int64},
 		{name: "narrow parameter retains range rejection", parameter: "127", jsonValue: `128`, typ: types.T_int8, reject: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -2890,11 +2890,11 @@ func TestPreparedJSONComparisonSelection(t *testing.T) {
 				} else {
 					require.NoError(t, err)
 					require.Equal(t, 2, result.Length())
-					require.True(t, vector.GetFixedAtNoTypeCheck[bool](result, 1))
+					require.False(t, vector.GetFixedAtNoTypeCheck[bool](result, 1))
 					require.False(t, result.IsNull(1))
 					require.Equal(t, selection != nil, result.IsNull(0))
 					if selection == nil {
-						require.True(t, vector.GetFixedAtNoTypeCheck[bool](result, 0))
+						require.False(t, vector.GetFixedAtNoTypeCheck[bool](result, 0))
 					}
 				}
 			}
@@ -2966,7 +2966,7 @@ func TestPreparedJSONComparisonSelection(t *testing.T) {
 					selected1 := selection == nil || selection[1]
 					require.Equal(t, !selected0, result.IsNull(0))
 					if selected0 {
-						require.True(t, vector.GetFixedAtNoTypeCheck[bool](result, 0))
+						require.False(t, vector.GetFixedAtNoTypeCheck[bool](result, 0))
 					}
 					require.Equal(t, !selected1 || op == "=", result.IsNull(1))
 					if selected1 && op == "<=>" {
@@ -2984,7 +2984,7 @@ func TestPreparedJSONComparisonSelection(t *testing.T) {
 				result, err := executor.Eval(proc, []*batch.Batch{bat}, []bool{true, false})
 				require.NoError(t, err)
 				require.False(t, result.IsNull(0))
-				require.True(t, vector.GetFixedAtNoTypeCheck[bool](result, 0))
+				require.False(t, vector.GetFixedAtNoTypeCheck[bool](result, 0))
 				require.True(t, result.IsNull(1))
 			})
 		}
@@ -3580,6 +3580,70 @@ func TestFlowControlShortCircuitInvalidCast(t *testing.T) {
 		result, err := executor.Eval(proc, []*batch.Batch{input}, nil)
 		require.NoError(t, err)
 		require.Equal(t, []bool{false, true, false}, vector.MustFixedColWithTypeCheck[bool](result))
+	})
+
+	t.Run("integer in-list compaction and reset", func(t *testing.T) {
+		list := vector.NewVec(types.T_int64.ToType())
+		defer list.Free(proc.Mp())
+		for i := int64(0); i < 32; i += 2 {
+			require.NoError(t, vector.AppendFixed(list, i, false, proc.Mp()))
+		}
+		list.SetSorted(true)
+		data, err := list.MarshalBinary()
+		require.NoError(t, err)
+		values := []int64{-1, 0, 1, 2, 30, 31}
+		input := testutil.NewBatchWithVectors([]*vector.Vector{
+			testutil.NewVector(6, types.T_bool.ToType(), proc.Mp(), false, []bool{false, true, true, true, true, true}),
+			testutil.NewVector(6, types.T_int64.ToType(), proc.Mp(), false, values),
+		}, nil)
+		defer input.Clean(proc.Mp())
+		input.Vecs[1].GetNulls().Add(5)
+		for _, name := range []string{"in", "not_in"} {
+			t.Run(name, func(t *testing.T) {
+				listExpr := &plan.Expr{Typ: plan.Type{Id: int32(types.T_int64)}, Expr: &plan.Expr_Vec{Vec: &plan.LiteralVec{Len: 16, Data: data}}}
+				expr := bindTestFunction(t, proc, "if", column(0, types.T_bool.ToType()), bindTestFunction(t, proc, name, column(1, types.T_int64.ToType()), listExpr), makePlan2BoolConstExprWithType(false))
+				executor, err := NewExpressionExecutor(proc, expr)
+				require.NoError(t, err)
+				defer executor.Free()
+				for _, mask := range [][]bool{nil, {true, false, true, true, true, true}, {false, false, false, false, false, false}, nil} {
+					result, err := executor.Eval(proc, []*batch.Batch{input}, mask)
+					require.NoError(t, err)
+					for i, v := range values {
+						wantNull := i == 5 || mask != nil && !mask[i]
+						require.Equal(t, wantNull, result.IsNull(uint64(i)), "row %d", i)
+						if !wantNull {
+							want := false
+							if i > 0 {
+								want = (v >= 0 && v < 32 && v%2 == 0) != (name == "not_in")
+							}
+							require.Equal(t, want, vector.GetFixedAtWithTypeCheck[bool](result, i), "row %d", i)
+						}
+					}
+					executor.ResetForNextQuery()
+				}
+			})
+		}
+	})
+	t.Run("integer in-list refreshes prepared values", func(t *testing.T) {
+		input := testutil.NewBatchWithVectors([]*vector.Vector{
+			testutil.NewVector(3, types.T_int64.ToType(), proc.Mp(), false, []int64{1, 2, 3}),
+		}, nil)
+		defer input.Clean(proc.Mp())
+		param := &plan.Expr{Typ: plan.Type{Id: int32(types.T_text)}, Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}}}
+		list := &plan.Expr{Typ: plan.Type{Id: int32(types.T_int64)}, Expr: &plan.Expr_List{List: &plan.ExprList{List: []*plan.Expr{
+			bindTestCast(t, proc, 0, param, types.T_int64.ToType()), makePlan2Int64ConstExprWithType(2),
+		}}}}
+		executor, err := NewExpressionExecutor(proc, bindTestFunction(t, proc, "in", column(0, types.T_int64.ToType()), list))
+		require.NoError(t, err)
+		defer executor.Free()
+		for _, tc := range []struct {
+			value string
+			want  []bool
+		}{{"1", []bool{true, true, false}}, {"3", []bool{false, true, true}}, {"1", []bool{true, true, false}}} {
+			result := evalTestTextParameter(t, proc, executor, tc.value, false, vector.PrepareParamNone, []*batch.Batch{input}, nil)
+			require.Equal(t, tc.want, vector.MustFixedColWithTypeCheck[bool](result))
+			executor.ResetForNextQuery()
+		}
 	})
 
 	t.Run("case preserves first match across multiple when clauses and reuse", func(t *testing.T) {
@@ -4747,6 +4811,95 @@ func TestRegisteredXorSelectionAndFolding(t *testing.T) {
 			require.True(t, vector.GetFixedAtWithTypeCheck[bool](result, 1))
 		}
 	})
+}
+
+func TestJSONStringEltEvaluatesOnlySelectedSubtree(t *testing.T) {
+	proc := testutil.NewProcess(t, testutil.WithFileService(nil))
+	checkExpressionStorageAfterCleanup(t, proc)
+	input := batch.NewWithSize(3)
+	defer input.Clean(proc.Mp())
+	input.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	input.Vecs[1] = vector.NewVec(types.T_json.ToType())
+	input.Vecs[2] = vector.NewVec(types.T_varchar.ToType())
+	for _, n := range []int64{1, 2} {
+		require.NoError(t, vector.AppendFixed(input.Vecs[0], n, false, proc.Mp()))
+	}
+	for _, value := range []string{`{"p":1}`, `{"p":2}`} {
+		encoded, err := types.ParseStringToByteJson(value)
+		require.NoError(t, err)
+		data, err := encoded.Marshal()
+		require.NoError(t, err)
+		require.NoError(t, vector.AppendBytes(input.Vecs[1], data, false, proc.Mp()))
+	}
+	for _, value := range []string{`not json`, `{"q":3}`} {
+		require.NoError(t, vector.AppendBytes(input.Vecs[2], []byte(value), false, proc.Mp()))
+	}
+	input.SetRowCount(2)
+	column := func(pos int32, typ types.Type) *plan.Expr {
+		return &plan.Expr{Typ: typ.PlanType(), Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: pos}}}
+	}
+	cast := bindTestCast(t, proc, 1, column(2, types.T_varchar.ToType()), types.T_json.ToType())
+	bound := bindTestFunction(t, proc, "elt", column(0, types.T_int64.ToType()), column(1, types.T_json.ToType()), cast)
+	_, overload := function.DecodeOverloadID(bound.GetF().GetFunc().GetObj())
+	require.Equal(t, int32(1), overload)
+	executor, err := NewExpressionExecutor(proc, bound)
+	require.NoError(t, err)
+	defer executor.Free()
+	result, err := executor.Eval(proc, []*batch.Batch{input}, nil)
+	require.NoError(t, err)
+	require.Equal(t, `{"p": 1}`, string(result.GetBytesAt(0)))
+	require.Equal(t, `{"q": 3}`, string(result.GetBytesAt(1)))
+	executor.ResetForNextQuery()
+	// Selecting the malformed conversion must still report its error.
+	vector.MustFixedColNoTypeCheck[int64](input.Vecs[0])[0] = 2
+	_, err = executor.Eval(proc, []*batch.Batch{input}, nil)
+	require.Error(t, err)
+	executor.ResetForNextQuery()
+	// The masked bad row cannot poison a valid selected row.
+	result, err = executor.Eval(proc, []*batch.Batch{input}, []bool{false, true})
+	require.NoError(t, err)
+	require.True(t, result.IsNull(0))
+	require.Equal(t, `{"q": 3}`, string(result.GetBytesAt(1)))
+	executor.ResetForNextQuery()
+	// Invalid selectors do not evaluate any value subtree.
+	indices := vector.MustFixedColNoTypeCheck[int64](input.Vecs[0])
+	indices[0], indices[1] = 0, 3
+	result, err = executor.Eval(proc, []*batch.Batch{input}, nil)
+	require.NoError(t, err)
+	require.True(t, result.IsNull(0))
+	require.True(t, result.IsNull(1))
+}
+
+func TestJSONStringEltDoesNotFoldUnselectedCast(t *testing.T) {
+	proc := testutil.NewProcess(t, testutil.WithFileService(nil))
+	checkExpressionStorageAfterCleanup(t, proc)
+	input := batch.NewWithSize(2)
+	defer input.Clean(proc.Mp())
+	input.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	input.Vecs[1] = vector.NewVec(types.T_json.ToType())
+	require.NoError(t, vector.AppendFixed(input.Vecs[0], int64(1), false, proc.Mp()))
+	value, err := types.ParseStringToByteJson(`{"p":1}`)
+	require.NoError(t, err)
+	data, err := value.Marshal()
+	require.NoError(t, err)
+	require.NoError(t, vector.AppendBytes(input.Vecs[1], data, false, proc.Mp()))
+	input.SetRowCount(1)
+	column := func(pos int32, typ types.Type) *plan.Expr {
+		return &plan.Expr{Typ: typ.PlanType(), Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: pos}}}
+	}
+	malformed := &plan.Expr{Typ: types.T_varchar.ToType().PlanType(), Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Sval{Sval: "not json"}}}}
+	cast := bindTestCast(t, proc, 1, malformed, types.T_json.ToType())
+	expression := bindTestFunction(t, proc, "elt", column(0, types.T_int64.ToType()), column(1, types.T_json.ToType()), cast)
+	executor, err := NewExpressionExecutor(proc, expression)
+	require.NoError(t, err)
+	defer executor.Free()
+	result, err := executor.Eval(proc, []*batch.Batch{input}, nil)
+	require.NoError(t, err)
+	require.Equal(t, `{"p": 1}`, string(result.GetBytesAt(0)))
+	executor.ResetForNextQuery()
+	vector.MustFixedColNoTypeCheck[int64](input.Vecs[0])[0] = 2
+	_, err = executor.Eval(proc, []*batch.Batch{input}, nil)
+	require.Error(t, err)
 }
 
 // Exercise the registered overload through runtime folding, rather than calling

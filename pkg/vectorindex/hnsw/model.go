@@ -27,9 +27,9 @@ import (
 
 	"github.com/detailyang/go-fallocate"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/docfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
-	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -38,11 +38,12 @@ import (
 	vimemory "github.com/matrixorigin/matrixone/pkg/vectorindex/memory"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/usearchex"
 	usearch "github.com/unum-cloud/usearch/golang"
 )
 
 // HnswModel struct - This structure shares with Search, Build and Sync
-type HnswModel[T types.RealNumbers] struct {
+type HnswModel[T types.ArrayElement] struct {
 	Id       string
 	Index    *usearch.Index
 	Path     string
@@ -57,6 +58,9 @@ type HnswModel[T types.RealNumbers] struct {
 	// info required for build
 	MaxCapacity uint
 	NThread     uint
+	// Headroom is the number of rows a writable load reserves room for beyond the
+	// model's current size.
+	Headroom uint
 
 	// inflight counts adds that have been ASSIGNED to this index (a slot reserved
 	// under HnswBuild.mutex) but not yet completed. A concurrent capacity rollover
@@ -75,6 +79,9 @@ type HnswModel[T types.RealNumbers] struct {
 	Nrow    int64
 	BuildTS int64
 
+	// Bounds is the trained range an int8/uint8 model maps its vectors with.
+	Bounds QuantizeBounds
+
 	// for cdc update
 	Dirty atomic.Bool
 	View  bool
@@ -85,15 +92,20 @@ type HnswModel[T types.RealNumbers] struct {
 }
 
 // New HnswModel struct
-func NewHnswModelForBuild[T types.RealNumbers](id string, cfg vectorindex.IndexConfig, nthread int, max_capacity uint, tmpdir string) (*HnswModel[T], error) {
+// NewHnswModelForBuild creates an empty model holding up to max_capacity rows, with room
+// reserved for the first reserve of them (max_capacity when reserve is 0).
+func NewHnswModelForBuild[T types.ArrayElement](id string, cfg vectorindex.IndexConfig, nthread int, max_capacity uint, reserve uint, tmpdir string) (*HnswModel[T], error) {
 	var err error
 	idx := &HnswModel[T]{TmpDir: tmpdir}
 
 	idx.Id = id
 	idx.NThread = uint(nthread)
 	idx.MaxCapacity = max_capacity
+	if reserve == 0 || reserve > max_capacity {
+		reserve = max_capacity
+	}
 
-	err = idx.initIndex(cfg)
+	err = idx.initIndex(cfg, reserve)
 	if err != nil {
 		return nil, err
 	}
@@ -101,7 +113,7 @@ func NewHnswModelForBuild[T types.RealNumbers](id string, cfg vectorindex.IndexC
 	return idx, nil
 }
 
-func (idx *HnswModel[T]) initIndex(cfg vectorindex.IndexConfig) (err error) {
+func (idx *HnswModel[T]) initIndex(cfg vectorindex.IndexConfig, reserve uint) (err error) {
 	idx.Index, err = usearch.NewIndex(cfg.Usearch)
 	if err != nil {
 		return err
@@ -116,7 +128,7 @@ func (idx *HnswModel[T]) initIndex(cfg vectorindex.IndexConfig) (err error) {
 		}
 	}()
 
-	err = idx.Index.Reserve(idx.MaxCapacity)
+	err = idx.Index.Reserve(reserve)
 	if err != nil {
 		return err
 	}
@@ -356,6 +368,27 @@ func (idx *HnswModel[T]) Full() (bool, error) {
 	return (sz == idx.MaxCapacity), nil
 }
 
+// EnsureRoom grows the reservation of a loaded writable model to hold n more rows, up to its
+// capacity.
+func (idx *HnswModel[T]) EnsureRoom(n uint) error {
+	if idx.Index == nil || idx.View {
+		return nil
+	}
+	size, err := idx.Index.Len()
+	if err != nil {
+		return err
+	}
+	reserved, err := idx.Index.Capacity()
+	if err != nil {
+		return err
+	}
+	want := min(size+n, max(idx.MaxCapacity, size))
+	if want <= reserved {
+		return nil
+	}
+	return idx.Index.Reserve(want)
+}
+
 // add vector to the index
 func (idx *HnswModel[T]) Add(key int64, vec []T) error {
 	if idx.View {
@@ -381,8 +414,12 @@ func (idx *HnswModel[T]) Add(key int64, vec []T) error {
 		return moerr.NewInternalErrorNoCtx(fmt.Sprintf("usearch dimension not match (expected %d but got %d)", dim, len(vec)))
 	}
 
-	defer runtime.KeepAlive(vec)
-	return idx.Index.AddUnsafe(uint64(key), util.UnsafePointer(&vec[0]))
+	ptr, stored, err := ToStorage(vec, idx.Index.GetConfig().Quantization, idx.Bounds)
+	if err != nil {
+		return err
+	}
+	defer runtime.KeepAlive(stored)
+	return idx.Index.AddUnsafe(uint64(key), ptr)
 }
 
 // add vector without increment the counter.  concurrency add will increment the counter before Add
@@ -410,8 +447,12 @@ func (idx *HnswModel[T]) AddWithoutIncr(key int64, vec []T) error {
 		return moerr.NewInternalErrorNoCtx("usearch dimension not match")
 	}
 
-	defer runtime.KeepAlive(vec)
-	return idx.Index.AddUnsafe(uint64(key), util.UnsafePointer(&vec[0]))
+	ptr, stored, err := ToStorage(vec, idx.Index.GetConfig().Quantization, idx.Bounds)
+	if err != nil {
+		return err
+	}
+	defer runtime.KeepAlive(stored)
+	return idx.Index.AddUnsafe(uint64(key), ptr)
 }
 
 // remove key
@@ -727,7 +768,11 @@ func (idx *HnswModel[T]) LoadIndex(
 
 	if idx.FileSize == 0 && len(idx.Path) == 0 {
 		// indx is newly created and not save to file yet so simply create a usearch index here
-		return idx.initIndex(idxcfg)
+		reserve := idx.MaxCapacity
+		if idx.Headroom > 0 && idx.Headroom < reserve {
+			reserve = idx.Headroom
+		}
+		return idx.initIndex(idxcfg, reserve)
 	}
 
 	if len(idx.Checksum) == 0 {
@@ -869,7 +914,11 @@ func (idx *HnswModel[T]) LoadIndex(
 		if err != nil {
 			return err
 		}
-		err = usearchidx.Reserve(uint(idxcfg.IndexCapacity))
+		var size uint
+		if size, err = usearchidx.Len(); err != nil {
+			return err
+		}
+		err = usearchidx.Reserve(max(size, min(uint(idxcfg.IndexCapacity), size+idx.Headroom)))
 		if err != nil {
 			return err
 		}
@@ -891,10 +940,7 @@ func (idx *HnswModel[T]) LoadIndex(
 	}
 
 	if !view {
-		// sometimes Reserve() will give bigger capacity than requested
-		if idx.MaxCapacity > uint(idxcfg.IndexCapacity) {
-			idx.MaxCapacity = uint(idxcfg.IndexCapacity)
-		}
+		idx.MaxCapacity = uint(idxcfg.IndexCapacity)
 	}
 
 	return nil
@@ -936,6 +982,13 @@ func (idx *HnswModel[T]) Unload() error {
 
 // Call usearch.Search
 func (idx *HnswModel[T]) Search(query []T, limit uint) (keys []usearch.Key, distances []float32, err error) {
+	return idx.SearchWithMembership(query, limit, nil, false)
+}
+
+// SearchWithMembership searches for the nearest limit keys that membership holds; a nil
+// membership searches every key. With exact, it tests every indexed key against membership
+// and measures the distance of each key membership holds, instead of traversing the graph.
+func (idx *HnswModel[T]) SearchWithMembership(query []T, limit uint, membership docfilter.MembershipFilter, exact bool) (keys []usearch.Key, distances []float32, err error) {
 	if idx.Index == nil {
 		return nil, nil, moerr.NewInternalErrorNoCtx("usearch index is nil")
 	}
@@ -953,11 +1006,22 @@ func (idx *HnswModel[T]) Search(query []T, limit uint) (keys []usearch.Key, dist
 		return nil, nil, moerr.NewInternalErrorNoCtx("usearch dimension not match")
 	}
 
-	defer runtime.KeepAlive(query)
-	keys, distances, serr := idx.Index.SearchUnsafe(util.UnsafePointer(&query[0]), limit)
+	kind := idx.Index.GetConfig().Quantization
+	ptr, stored, err := ToStorage(query, kind, idx.Bounds)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer runtime.KeepAlive(stored)
+	var serr error
+	if membership == nil {
+		keys, distances, serr = idx.Index.SearchUnsafe(ptr, limit)
+	} else {
+		keys, distances, serr = usearchex.FilteredSearchUnsafeWithMembership(idx.Index, ptr, limit, membership, exact)
+	}
 	if serr != nil {
 		return nil, nil, serr
 	}
+	RescaleDistances(distances, kind, idx.Bounds)
 	if err := metric.CheckFiniteDists(distances, "vector index search"); err != nil {
 		return nil, nil, err
 	}

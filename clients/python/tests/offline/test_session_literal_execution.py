@@ -2,6 +2,7 @@
 # Licensed under the Apache License, Version 2.0.
 
 import asyncio
+import re
 from contextlib import contextmanager, nullcontext
 from unittest.mock import Mock
 
@@ -44,11 +45,19 @@ def data():
     return [{'id': i, 'embedding': [i, i + 1], 'label': label} for i, label in enumerate(LABELS)]
 
 
+def sqlite_hex_text_transport(conn, cursor, sql, parameters, context, many):
+    # SQLite is only the execution transport for these lifecycle tests. Map
+    # MySQL's generated UTF-8 hex conversion to SQLite's equivalent text cast.
+    sql = re.sub(r"CONVERT\((X'[0-9a-f]*') USING utf8mb4\)", r'CAST(\1 AS TEXT)', sql)
+    return sql, parameters
+
+
 @pytest.fixture
 def client(tmp_path):
     c = Client(logger=Mock())
     c._engine = create_engine('sqlite:///' + str(tmp_path / 'sync.sqlite'))
     Base.metadata.create_all(c._engine)
+    event.listen(c._engine, 'before_cursor_execute', sqlite_hex_text_transport, retval=True)
     try:
         yield c
     finally:
@@ -61,6 +70,7 @@ async def async_client(tmp_path):
     c._engine = create_async_engine('sqlite+aiosqlite:///' + str(tmp_path / 'async.sqlite'))
     async with c._engine.begin() as connection:
         await connection.run_sync(Base.metadata.create_all)
+    event.listen(c._engine.sync_engine, 'before_cursor_execute', sqlite_hex_text_transport, retval=True)
     try:
         yield c
     finally:
@@ -205,8 +215,9 @@ def test_public_batch_literals_and_statement_budget(client):
     event.listen(client._engine, 'commit', lambda c: commits.append(c))
     manager = VectorManager(client)
     assert manager.batch_insert('rows', data(), batch_size=3) is manager
-    assert len(statements) == 3
-    assert all(sql.startswith('INSERT INTO rows') for sql in statements)
+    assert statements[0] == 'BEGIN'
+    assert len(statements) == 4
+    assert all(sql.startswith('INSERT INTO `rows`') for sql in statements[1:])
     assert len(commits) == 1
     assert client.execute('SELECT label FROM rows ORDER BY id').rows == [(label,) for label in LABELS]
 
@@ -685,7 +696,8 @@ async def test_async_public_literals_and_caller_rollback(async_client):
     event.listen(c._engine.sync_engine, 'commit', lambda conn: commits.append(conn))
     manager = AsyncVectorManager(c)
     assert await manager.batch_insert('rows', data(), batch_size=3) is manager
-    assert len(statements) == 3
+    assert statements[0] == 'BEGIN'
+    assert len(statements) == 4
     assert len(commits) == 1
     async with c.session() as session:
         assert (await session.execute('SELECT label FROM rows ORDER BY id')).all() == [(label,) for label in LABELS]
@@ -720,7 +732,7 @@ async def test_async_failure_pool_return_and_reuse(async_client, failure):
         counters['commit'] += 1
 
     def capture(conn, cursor, sql, args, context, many):
-        if sql.startswith('INSERT INTO rows'):
+        if sql.startswith(('INSERT INTO rows', 'INSERT INTO `rows`')):
             counters['inserts'] += 1
             if failure in ('cancel', 'orm-cancel') and counters['inserts'] == 1:
                 task.cancel()

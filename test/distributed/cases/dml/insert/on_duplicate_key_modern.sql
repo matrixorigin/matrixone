@@ -467,6 +467,8 @@ drop table if exists t_odku_mfk_child;
 drop table if exists t_odku_mfk_p1;
 drop table if exists t_odku_mfk_p2;
 
+-- Seed historical timestamps to distinguish no-op preservation from a real
+-- update without relying on wall-clock sleeps or timestamp precision.
 -- ODKU no-op on a table with an implicit ON UPDATE CURRENT_TIMESTAMP column:
 -- the auto-update column must not defeat physical no-op detection or advance.
 -- Under mo-tester's CLIENT_FOUND_ROWS connection the logical affected count is
@@ -477,9 +479,8 @@ create table t_odku_onupdate (
   v int,
   updated_at timestamp default current_timestamp on update current_timestamp
 );
-insert into t_odku_onupdate(id, v) values (1, 10);
+insert into t_odku_onupdate(id, v, updated_at) values (1, 10, '2000-01-01 00:00:00');
 set @ts0 = (select updated_at from t_odku_onupdate where id = 1);
-select sleep(2);
 insert into t_odku_onupdate(id, v) values (1, 10) on duplicate key update v = v;
 select updated_at = @ts0 as ts_unchanged from t_odku_onupdate where id = 1;
 -- a real change must count as delete+insert (2) and advance the timestamp
@@ -550,9 +551,8 @@ create table t_odku_onupdate_gen (
   updated_at timestamp default current_timestamp on update current_timestamp,
   g timestamp as (updated_at) stored
 );
-insert into t_odku_onupdate_gen(id, v) values (1, 10);
+insert into t_odku_onupdate_gen(id, v, updated_at) values (1, 10, '2000-01-01 00:00:00');
 set @g0 = (select g from t_odku_onupdate_gen where id = 1);
-select sleep(2);
 insert into t_odku_onupdate_gen(id, v) values (1, 10) on duplicate key update v = v;
 select updated_at = @g0 as ts_unchanged, g = @g0 as g_unchanged from t_odku_onupdate_gen where id = 1;
 insert into t_odku_onupdate_gen(id, v) values (1, 99) on duplicate key update v = values(v);
@@ -590,9 +590,8 @@ create table t_odku_sec_uk (
   v int,
   updated_at timestamp default current_timestamp on update current_timestamp
 );
-insert into t_odku_sec_uk(id, u, v) values (1, 10, 5);
+insert into t_odku_sec_uk(id, u, v, updated_at) values (1, 10, 5, '2000-01-01 00:00:00');
 set @ts_sec = (select updated_at from t_odku_sec_uk where u = 10);
-select sleep(2);
 insert into t_odku_sec_uk(id, u, v) values (2, 10, 99) on duplicate key update v = v;
 select id, u, v, updated_at = @ts_sec as ts_unchanged from t_odku_sec_uk order by id;
 insert into t_odku_sec_uk(id, u, v) values (3, 10, 5) on duplicate key update v = v + 1;
@@ -755,3 +754,35 @@ insert into t_odku_fk_uk_child(pid, attr_id, val) values (1, 5, 'new')
 select id, pid, attr_id, val from t_odku_fk_uk_child order by id;
 drop table if exists t_odku_fk_uk_child;
 drop table if exists t_odku_fk_uk_parent;
+
+-- Nested subqueries read the image left by the preceding assignment. Each
+-- duplicate in the incoming stream has its own VALUES row and affected count.
+drop table if exists t_odku_nested;
+create table t_odku_nested(k int primary key, v int);
+insert into t_odku_nested values(1,10);
+insert into t_odku_nested values(1,3),(1,4),(2,8),(2,9)
+  on duplicate key update v=v+1,v=(select (select t_odku_nested.v+values(v)));
+select row_count();
+select * from t_odku_nested order by k;
+start transaction;
+insert into t_odku_nested values(1,50)
+  on duplicate key update v=(select (select t_odku_nested.v+1)),v=(select (select t_odku_nested.v+2));
+select row_count();
+select * from t_odku_nested order by k;
+rollback;
+select * from t_odku_nested order by k;
+-- A later scalar-cardinality error rolls back an earlier insert in the same
+-- statement. The next prepared execution starts with fresh invocation state.
+insert into t_odku_nested values(3,1),(1,2)
+  on duplicate key update v=(select u.x+t_odku_nested.v from (select 1 as x union all select 2) u);
+select * from t_odku_nested order by k;
+prepare od_nested from 'insert into t_odku_nested values(?,?) on duplicate key update v=(select (select t_odku_nested.v+values(v)))';
+set @od_k=1,@od_v=1;
+execute od_nested using @od_k,@od_v;
+select row_count();
+set @od_k=2,@od_v=2;
+execute od_nested using @od_k,@od_v;
+select row_count();
+select * from t_odku_nested order by k;
+deallocate prepare od_nested;
+drop table t_odku_nested;

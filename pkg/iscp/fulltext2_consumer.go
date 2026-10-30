@@ -20,6 +20,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/fulltext2"
+	"github.com/matrixorigin/matrixone/pkg/fulltext2/tokenfilter"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 )
@@ -44,8 +45,14 @@ func RunFulltext2(c *IndexConsumer, ctx context.Context, errch chan error, r Dat
 
 	// Parser-aware tokenize (ngram/gojieba/json) so build and query tokens match.
 	// The json term shape travels with the config so this path and the CREATE
-	// build agree on the terms they emit.
-	tokenize, err := fulltext2.CdcTokenizerWithJSONOptions(w.cfg.Parser, w.cfg.JSONTermOptions())
+	// build agree on the terms they emit. The token_filter chain (stop) travels the
+	// same way so the CDC tail strips the same tokens as create/query.
+	filters, err := tokenfilter.Build(w.cfg.TokenFilters)
+	if err != nil {
+		errch <- err
+		return
+	}
+	tokenize, err := fulltext2.CdcTokenizerWithJSONOptions(w.cfg.Parser, w.cfg.JSONTermOptions(), filters...)
 	if err != nil {
 		errch <- err
 		return
@@ -122,10 +129,18 @@ func RunFulltext2(c *IndexConsumer, ctx context.Context, errch chan error, r Dat
 					errch <- err
 					return
 				}
-				// A successful CDC flush only makes the new tail durable. Search-cache
-				// freshness is governed by the normal generation/stale/TTL lifecycle;
-				// CDC must not evict or refresh a warm read-only search object here.
-				// This also avoids making every ordinary tail flush contend with readers.
+				// The tail this flush committed is now durable, but the querying CN may
+				// still serve a warm cache loaded before it (an index created empty has
+				// no tag=0 base, so that warm copy is doc-less). Drop it IF idle so the
+				// next query reloads the tail; a busy entry stays warm (RemoveIdle is a
+				// no-op on it) and refreshes later via the IsStale sweep, so this never
+				// thrashes concurrent readers. No-op when nothing was written. Without
+				// this, an incremental INSERT/UPDATE/DELETE stays invisible until the
+				// ~10-minute housekeeping sweep (#30401); the reloaded object is still
+				// read-only, so the read-only-cache contract is unchanged.
+				if len(segs) > 0 {
+					fulltext2.EvictIdleCache(w.cfg.IndexTable)
+				}
 				return
 			}
 
