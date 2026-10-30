@@ -6,13 +6,14 @@
 | --- | --- |
 | Owning issue | matrixorigin/matrixone#28026 |
 | Implementation | PR [matrixorigin/matrixone#31629](https://github.com/matrixorigin/matrixone/pull/31629) (branch `agent/issue-28026-688adec6` on fork `gouhongshen/matrixone`), single PR |
-| Current revision | r102, 2026-10-30, supersedes r101 |
+| Current revision | r103, 2026-10-30, supersedes r102 |
 
 | Revision | Date | Note |
 | --- | --- | --- |
 | r1-r71 | 2026-10-16 - 2026-10-24 | Initial protocol design and the first pre-PR review rounds. |
 | r72-r101 | 2026-10-25 - 2026-10-30 | Post-review repair rounds; each round's disposition is recorded per-decision in section 11. |
 | r102 | 2026-10-30 | Editorial compaction only — no protocol or behavior-design change. Answers the PR #31629 review by aunjgr: the tracked artifact now keeps the durable content (the problem/invariant protocol of sections 2-9, the invariant validation anchors of section 10, and the complete 222-decision register with its refinement chain, open items and approval trace of section 11) and drops the transient material the repository delivery contract excludes (per-run verification logs and walkthroughs, temporary local paths, one-off proof narratives, and full review transcripts). The Implementation field is corrected to name PR #31629. The superseded full text of r101 remains reachable as linked external evidence at the pre-compaction blob: <https://github.com/matrixorigin/matrixone/blob/430914c128ee5afd36880afd8f44d242bcc50f7f/docs/design/20261016-data-branch-pk-move-update-provenance.md> |
+| r103 | 2026-10-30 | Editorial only — no protocol or decision change. Answers the PR #31629 design-gate review by aunjgr (2026-10-30T13:43:12Z): section 11 now identifies the independent design approval of record for the delivered revision with its reviewed content hash, public byte link, reviewer identity, and a durable artifact link. No completed review was rerun; no review transcripts are added to the repository. |
 ## 2. Problem, evidence, and invariants
 
 A pk-moving `UPDATE` executes in `multi_update` as a delete of the old row
@@ -1038,3 +1039,31 @@ Decision: the PR #31629 implementation follows sections 5/6 and the section 10
   validation map, and stands for the independent reviewers of record
 Implementation deviations: none known; section 5/6 invariants gate the code
 ```
+
+Approval traceability for the delivered revision (added r103; per the mo-dev
+contract, "the reviewed revision and approval decision must be traceable"):
+
+- Approval of record: independent **DESIGN PASS on r100**, recorded
+  2026-10-30T00:41:36Z. Reviewed content MD5
+  `ca2d0d19b2a39b16c8f1103555b0d128` at worktree HEAD
+  `bcc8b099d457ddf88cb9a10d1d47939b6cbc91fa`; the exact reviewed bytes are
+  public at PR commit `56c390d567a249e498a906d1d162fe384593951e`
+  (and `99dd9c6651a0de20e9730814918feaa8388ed580`):
+  <https://github.com/matrixorigin/matrixone/blob/56c390d567a249e498a906d1d162fe384593951e/docs/design/20261016-data-branch-pk-move-update-provenance.md>
+- Reviewer identity: the issue-fix-loop controller's independent local
+  reviewer — a read-only, ephemeral Codex review session under the
+  fix-issue-loop-local-reviewer contract, provider-separated from the
+  implementing handler (reviewer model gpt-6.1-sol, reasoning xhigh; handler
+  Grok CLI, magpie/tass/kimi-k3). `approved=true` approves that exact design
+  revision only; implementation and executable proof are a separate review.
+- Delivered-lineage check: r101 = r100 + D222 only (the r100→r101 document
+  diff is 68 added lines, 0 deletions, all D222-scoped); D222 was demanded by
+  this design-gate review's round-51 finding and confirmed resolved in the
+  2026-10-30T13:43:12Z review. r102 = r101 with sections 2-9 byte-identical
+  (block MD5 `102bf6b88108c5b1c8f3ed490e71a3fc` on both sides); delivered
+  r102 content MD5 `483aaf9da027ac7fec1ed832ecb88acf` at commit
+  `053b5ffbac87bcc69613cd2667c4edff46d82919`.
+- Durable decision record and verbatim artifact:
+  <https://gist.github.com/gouhongshen/5e3e7f1c103a8312e31c684676bf0cad>
+  (decision record README plus the r100 PASS artifact JSON, MD5
+  `29a610e69e0d27e802428bf0c8999b1a`, copied verbatim).
