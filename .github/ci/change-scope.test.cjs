@@ -643,6 +643,11 @@ test('main is validated before merge without post-merge test or cache producers'
     assert.match(trigger(name), /^  schedule:/m);
     assert.match(trigger(name), /^  workflow_dispatch:/m);
   }
+  const sca = workflow('sca-go-module-cache.yaml');
+  const saveTools = sca.indexOf('name: Save static-check tools');
+  assert.ok(saveTools >= 0);
+  assert.ok(saveTools < sca.indexOf('name: Restore golangci-lint analysis cache'));
+  assert.ok(saveTools < sca.indexOf('name: Build native SCA prerequisites'));
   assert.match(trigger('entrypoint.yaml'), /branches: \[ main,/);
   assert.match(trigger('ci-cancellation.yml'), /pull_request_target:\n    types: \[closed\]/);
 });
