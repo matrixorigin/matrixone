@@ -55,15 +55,9 @@ type dmlTableInfo struct {
 	objRef         []*ObjectRef
 	tableDefs      []*TableDef
 	isClusterTable []bool
-	haveConstraint bool
 	isMulti        bool
 	needAggFilter  bool
-	updateKeys     []map[string]tree.Expr // This slice index correspond to tableDefs
-	oldColPosMap   []map[string]int       // origin table values to their position in derived table
-	newColPosMap   []map[string]int       // insert/update values to their position in derived table
-	nameToIdx      map[string]int         // Mapping of table full path name to tableDefs index，such as： 'tpch.nation -> 0'
-	idToName       map[uint64]string      // Mapping of tableId to full path name of table
-	alias          map[string]int         // Mapping of table aliases to tableDefs array index,If there is no alias, replace it with the original name of the table
+	alias          map[string]int // Mapping of table aliases to tableDefs array index,If there is no alias, replace it with the original name of the table
 }
 
 func appendCheckConstraintPlan(
@@ -303,174 +297,6 @@ func getProjectionByLastNodeIfAvailable(builder *QueryBuilder, lastNodeID int32)
 	}
 }
 
-func getUpdateTableInfo(ctx CompilerContext, stmt *tree.Update) (*dmlTableInfo, error) {
-	tblInfo, err := getDmlTableInfo(ctx, stmt.Tables, stmt.With, nil, "update")
-	if err != nil {
-		return nil, err
-	}
-
-	// A PostgreSQL-style UPDATE ... FROM may match a single target row from
-	// multiple source rows. Mark it for dedup so the planner does not
-	// produce duplicate-row writes.
-	if stmt.From != nil && len(stmt.From.Tables) > 0 {
-		tblInfo.needAggFilter = true
-	}
-
-	// check update field and set updateKeys
-	usedTbl := make(map[string]map[string]tree.Expr)
-	allColumns := make(map[string]map[string]struct{})
-	for alias, idx := range tblInfo.alias {
-		allColumns[alias] = make(map[string]struct{})
-		for _, col := range tblInfo.tableDefs[idx].Cols {
-			allColumns[alias][col.Name] = struct{}{}
-		}
-	}
-
-	// checkSetGeneratedCol returns skip=true when the SET assigns DEFAULT to a
-	// stored generated column (which should be silently dropped so the base
-	// column's recomputation fills it), or an error when a non-DEFAULT value
-	// is assigned to any generated column. Mirrors bind_update.go's behaviour.
-	checkSetGeneratedCol := func(alias, column string, expr tree.Expr) (bool, error) {
-		idx, ok := tblInfo.alias[alias]
-		if !ok {
-			return false, nil
-		}
-		tableDef := tblInfo.tableDefs[idx]
-		for _, col := range tableDef.Cols {
-			if col.Name != column || col.GeneratedCol == nil {
-				continue
-			}
-			if _, ok := expr.(*tree.DefaultVal); ok {
-				return true, nil
-			}
-			return false, moerr.NewInvalidInputf(ctx.GetContext(),
-				"the value specified for generated column '%s' in table '%s' is not allowed",
-				column, tableDef.Name)
-		}
-		return false, nil
-	}
-
-	appendToTbl := func(table, column string, expr tree.Expr) {
-		if _, exists := usedTbl[table]; !exists {
-			usedTbl[table] = make(map[string]tree.Expr)
-		}
-		usedTbl[table][column] = expr
-	}
-
-	for _, updateExpr := range stmt.Exprs {
-		if len(updateExpr.Names) > 1 {
-			return nil, moerr.NewNYI(ctx.GetContext(), "unsupport expr")
-		}
-		parts := updateExpr.Names[0]
-		expr := updateExpr.Expr
-		if parts.NumParts > 1 {
-			colName := parts.ColName()
-			tblName := parts.TblName()
-			if _, tblExists := tblInfo.alias[tblName]; tblExists {
-				if _, colExists := allColumns[tblName][colName]; colExists {
-					skip, err := checkSetGeneratedCol(tblName, colName, expr)
-					if err != nil {
-						return nil, err
-					}
-					if !skip {
-						appendToTbl(tblName, colName, expr)
-					}
-				} else {
-					return nil, moerr.NewInternalErrorf(ctx.GetContext(), "column '%v' not found in table %s", parts.ColNameOrigin(), parts.TblNameOrigin())
-				}
-			} else {
-				return nil, moerr.NewNoSuchTable(ctx.GetContext(), "", parts.TblNameOrigin())
-			}
-		} else {
-			colName := parts.ColName()
-			tblName := ""
-			found := false
-			for alias, columns := range allColumns {
-				if _, colExists := columns[colName]; colExists {
-					if tblName != "" {
-						return nil, moerr.NewInternalErrorf(ctx.GetContext(), "Column '%v' in field list is ambiguous", parts.ColNameOrigin())
-					}
-					found = true
-					skip, err := checkSetGeneratedCol(alias, colName, expr)
-					if err != nil {
-						return nil, err
-					}
-					if !skip {
-						appendToTbl(alias, colName, expr)
-					}
-				}
-			}
-			if !found && stmt.With != nil {
-				var str string
-				for i, c := range stmt.With.CTEs {
-					if i > 0 {
-						str += ", "
-					}
-					str += string(c.Name.Alias)
-				}
-				return nil, moerr.NewInternalErrorf(ctx.GetContext(), "column '%v' not found in table or the target table %s of the UPDATE is not updatable", parts.ColNameOrigin(), str)
-			} else if !found {
-				return nil, moerr.NewInternalErrorf(ctx.GetContext(), "column '%v' not found in table %s", parts.ColNameOrigin(), tblName)
-			}
-		}
-	}
-
-	// remove unused table
-	newTblInfo := &dmlTableInfo{
-		nameToIdx:     make(map[string]int),
-		idToName:      make(map[uint64]string),
-		alias:         make(map[string]int),
-		isMulti:       tblInfo.isMulti,
-		needAggFilter: tblInfo.needAggFilter,
-	}
-	// Preserve the original target-table order from tblInfo. Iterating
-	// usedTbl directly would randomize order across runs (Go map
-	// iteration), which makes downstream UPDATE consumers observe
-	// non-deterministic per-target column blocks.
-	aliasByIdx := make([]string, len(tblInfo.tableDefs))
-	for alias, idx := range tblInfo.alias {
-		aliasByIdx[idx] = alias
-	}
-	for _, alias := range aliasByIdx {
-		columns, ok := usedTbl[alias]
-		if !ok {
-			continue
-		}
-		idx := tblInfo.alias[alias]
-		tblDef := tblInfo.tableDefs[idx]
-		if err := checkCatalogDMLTarget(ctx.GetContext(), tblInfo.objRef[idx], true); err != nil {
-			return nil, err
-		}
-		newTblInfo.objRef = append(newTblInfo.objRef, tblInfo.objRef[idx])
-		newTblInfo.tableDefs = append(newTblInfo.tableDefs, tblDef)
-		newTblInfo.isClusterTable = append(newTblInfo.isClusterTable, tblInfo.isClusterTable[idx])
-		newTblInfo.alias[alias] = len(newTblInfo.tableDefs) - 1
-		newTblInfo.updateKeys = append(newTblInfo.updateKeys, columns)
-
-		if !newTblInfo.haveConstraint {
-			if len(tblDef.RefChildTbls) > 0 {
-				newTblInfo.haveConstraint = true
-			} else if len(tblDef.Fkeys) > 0 {
-				newTblInfo.haveConstraint = true
-			} else {
-				for _, indexdef := range tblDef.Indexes {
-					if indexdef.Unique {
-						newTblInfo.haveConstraint = true
-						break
-					}
-				}
-			}
-		}
-	}
-	for idx, ref := range newTblInfo.objRef {
-		key := ref.SchemaName + "." + ref.ObjName
-		newTblInfo.idToName[newTblInfo.tableDefs[idx].TblId] = key
-		newTblInfo.nameToIdx[key] = idx
-	}
-
-	return newTblInfo, nil
-}
-
 func checkTableType(ctx context.Context, tableDef *TableDef, op string) error {
 	if tableDef.TableType == catalog.SystemSourceRel {
 		return moerr.NewInvalidInput(ctx, "cannot insert/update/delete from source")
@@ -547,10 +373,8 @@ func setTableExprToDmlTableInfo(ctx CompilerContext, tbl tree.TableExpr, tblInfo
 	if tableDef == nil {
 		return moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
 	}
-	if tblInfo.typ != "update" {
-		if err := checkCatalogDMLTarget(ctx.GetContext(), obj, false); err != nil {
-			return err
-		}
+	if err := checkCatalogDMLTarget(ctx.GetContext(), obj, false); err != nil {
+		return err
 	}
 	if err := validateTableIndexDefinitions(tableDef); err != nil {
 		return err
@@ -593,21 +417,6 @@ func setTableExprToDmlTableInfo(ctx CompilerContext, tbl tree.TableExpr, tblInfo
 		return moerr.NewInternalError(ctx.GetContext(), "cannot insert/update/delete from public table")
 	}
 
-	if !tblInfo.haveConstraint {
-		if len(tableDef.RefChildTbls) > 0 {
-			tblInfo.haveConstraint = true
-		} else if len(tableDef.Fkeys) > 0 {
-			tblInfo.haveConstraint = true
-		} else {
-			for _, indexdef := range tableDef.Indexes {
-				if indexdef.Unique {
-					tblInfo.haveConstraint = true
-					break
-				}
-			}
-		}
-	}
-
 	nowIdx := len(tblInfo.tableDefs)
 	tblInfo.isClusterTable = append(tblInfo.isClusterTable, isClusterTable)
 	objName := tblName
@@ -622,9 +431,6 @@ func setTableExprToDmlTableInfo(ctx CompilerContext, tbl tree.TableExpr, tblInfo
 		ObjName:    objName,
 	})
 	tblInfo.tableDefs = append(tblInfo.tableDefs, tableDef)
-	key := dbName + "." + tblName
-	tblInfo.nameToIdx[key] = nowIdx
-	tblInfo.idToName[tableDef.TblId] = key
 	if alias == "" {
 		alias = tblName
 	}
@@ -638,10 +444,8 @@ func setTableExprToDmlTableInfo(ctx CompilerContext, tbl tree.TableExpr, tblInfo
 
 func getDmlTableInfo(ctx CompilerContext, tableExprs tree.TableExprs, with *tree.With, aliasMap map[string][2]string, typ string) (*dmlTableInfo, error) {
 	tblInfo := &dmlTableInfo{
-		typ:       typ,
-		nameToIdx: make(map[string]int),
-		idToName:  make(map[uint64]string),
-		alias:     make(map[string]int),
+		typ:   typ,
+		alias: make(map[string]int),
 	}
 
 	cteMap := make(map[string]struct{})
@@ -671,15 +475,11 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 	tableDef := info.tblInfo.tableDefs[0]
 	tableObjRef := info.tblInfo.objRef[0]
 	colToIdx := make(map[string]int)
-	oldColPosMap := make(map[string]int)
 	tableDef.Name2ColIndex = make(map[string]int32)
 	for i, col := range tableDef.Cols {
 		colToIdx[col.Name] = i
-		oldColPosMap[col.Name] = i
 		tableDef.Name2ColIndex[col.Name] = int32(i)
 	}
-	info.tblInfo.oldColPosMap = append(info.tblInfo.oldColPosMap, oldColPosMap)
-	info.tblInfo.newColPosMap = append(info.tblInfo.newColPosMap, oldColPosMap)
 
 	// dbName := string(stmt.Table.(*tree.TableName).SchemaName)
 	// if dbName == "" {
@@ -1150,7 +950,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 	return existAutoPkCol, insertWithoutUniqueKeyMap, ifInsertFromUniqueColMap, nil
 }
 
-func deleteToSelect(builder *QueryBuilder, bindCtx *BindContext, node *tree.Delete, haveConstraint bool, tblInfo *dmlTableInfo) (int32, []map[string]int32, error) {
+func deleteToSelect(builder *QueryBuilder, bindCtx *BindContext, node *tree.Delete, tblInfo *dmlTableInfo) (int32, []map[string]int32, error) {
 	var selectList []tree.SelectExpr
 	fromTables := &tree.From{}
 	colName2Idx := make([]map[string]int32, len(tblInfo.tableDefs))
@@ -1159,28 +959,10 @@ func deleteToSelect(builder *QueryBuilder, bindCtx *BindContext, node *tree.Dele
 		var ret *tree.UnresolvedName
 		defIdx := tblInfo.alias[alias]
 		colName2Idx[defIdx] = make(map[string]int32)
-		if haveConstraint {
-			for _, col := range tblInfo.tableDefs[defIdx].Cols {
-				colName2Idx[defIdx][col.Name] = int32(len(selectList))
-				ret = tree.NewUnresolvedName(tree.NewCStr(alias, bindCtx.lower), tree.NewCStr(col.Name, 1))
-				selectList = append(selectList, tree.SelectExpr{
-					Expr: ret,
-				})
-			}
-		} else {
-			colName2Idx[defIdx][catalog.Row_ID] = int32(len(selectList))
-			ret = tree.NewUnresolvedName(tree.NewCStr(alias, bindCtx.lower), tree.NewCStr(catalog.Row_ID, 1))
-			selectList = append(selectList, tree.SelectExpr{
-				Expr: ret,
-			})
-			pkName := getTablePriKeyName(tblInfo.tableDefs[defIdx].Pkey)
-			if pkName != "" {
-				colName2Idx[defIdx][pkName] = int32(len(selectList))
-				ret = tree.NewUnresolvedName(tree.NewCStr(alias, bindCtx.lower), tree.NewCStr(pkName, 1))
-				selectList = append(selectList, tree.SelectExpr{
-					Expr: ret,
-				})
-			}
+		for _, col := range tblInfo.tableDefs[defIdx].Cols {
+			colName2Idx[defIdx][col.Name] = int32(len(selectList))
+			ret = tree.NewUnresolvedName(tree.NewCStr(alias, bindCtx.lower), tree.NewCStr(col.Name, 1))
+			selectList = append(selectList, tree.SelectExpr{Expr: ret})
 		}
 	}
 

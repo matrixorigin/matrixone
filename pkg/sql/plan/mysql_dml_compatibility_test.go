@@ -287,14 +287,16 @@ func requireMySQLUpdateTargetSubqueryCompatible(t *testing.T, sql string) {
 	defer stmt.Free()
 	updateStmt, ok := stmt.(*tree.Update)
 	require.True(t, ok)
-	tblInfo, err := getUpdateTableInfo(ctx, updateStmt)
-	require.NoError(t, err)
-	targetAliases := make([]string, len(tblInfo.tableDefs))
-	for alias, idx := range tblInfo.alias {
-		targetAliases[idx] = alias
+	dmlCtx := NewDMLContext()
+	require.NoError(t, dmlCtx.ResolveUpdateTables(ctx, updateStmt))
+	targetAliases := make([]string, len(dmlCtx.tableDefs))
+	for idx, alias := range dmlCtx.aliases {
+		if len(dmlCtx.updateCol2Expr[idx]) > 0 {
+			targetAliases[idx] = alias
+		}
 	}
 	require.NoError(t, validateUpdateTargetSubqueries(
-		ctx, updateStmt, tblInfo.objRef, tblInfo.tableDefs, targetAliases,
+		ctx, updateStmt, dmlCtx.objRefs, dmlCtx.tableDefs, targetAliases,
 	))
 }
 
