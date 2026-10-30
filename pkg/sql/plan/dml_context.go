@@ -75,12 +75,8 @@ type DMLContext struct {
 	// left to right, so UPDATE t SET a = a + 1, a = a + 1 must apply both
 	// occurrences instead of retaining only the final RHS in updateCol2Expr.
 	updateAssignments [][]UpdateAssignment
-	updatePartCol     []bool //If update cols contains col that Partition expr used
-	//oldColPosMap   []map[string]int       // origin table values to their position in derived table
-	//newColPosMap   []map[string]int       // insert/update values to their position in derived table
-	//nameToIdx      map[string]int         // Mapping of table full path name to tableDefs index，such as： 'tpch.nation -> 0'
-	//idToName       map[uint64]string      // Mapping of tableId to full path name of table
-	aliasMap map[string]int // Mapping of table aliases to tableDefs array index,If there is no alias, replace it with the original name of the table
+	updatePartCol     []bool         //If update cols contains col that Partition expr used
+	aliasMap          map[string]int // Mapping of table aliases to tableDefs array index,If there is no alias, replace it with the original name of the table
 }
 
 type UpdateAssignment struct {
@@ -90,8 +86,6 @@ type UpdateAssignment struct {
 
 func NewDMLContext() *DMLContext {
 	return &DMLContext{
-		//nameToIdx: make(map[string]int),
-		//idToName:  make(map[uint64]string),
 		aliasMap: make(map[string]int),
 	}
 }
@@ -332,7 +326,7 @@ const unsupportedTableTypeDMLMsg = "unsupported DML: unsupported table type"
 
 const emptyTableNameDMLMsg = "unsupported DML: empty table name"
 
-func (dmlCtx *DMLContext) ResolveTables(ctx CompilerContext, tableExprs tree.TableExprs, with *tree.With, aliasMap map[string][2]string, respectFKCheck bool) error {
+func (dmlCtx *DMLContext) ResolveTables(ctx CompilerContext, tableExprs tree.TableExprs, with *tree.With, aliasMap map[string]deleteSource, respectFKCheck bool) error {
 	policy := foreignKeyResolveAlwaysReject
 	if respectFKCheck {
 		policy = foreignKeyResolveRespectSession
@@ -344,7 +338,7 @@ func (dmlCtx *DMLContext) resolveTables(
 	ctx CompilerContext,
 	tableExprs tree.TableExprs,
 	with *tree.With,
-	aliasMap map[string][2]string,
+	aliasMap map[string]deleteSource,
 	foreignKeyPolicy foreignKeyResolvePolicy,
 	allowReadOnlySources bool,
 ) error {
@@ -365,7 +359,7 @@ func (dmlCtx *DMLContext) resolveTables(
 	return nil
 }
 
-func (dmlCtx *DMLContext) ResolveSingleTable(ctx CompilerContext, tbl tree.TableExpr, aliasMap map[string][2]string, withMap map[string]bool, respectFKCheck bool) error {
+func (dmlCtx *DMLContext) ResolveSingleTable(ctx CompilerContext, tbl tree.TableExpr, aliasMap map[string]deleteSource, withMap map[string]bool, respectFKCheck bool) error {
 	policy := foreignKeyResolveAlwaysReject
 	if respectFKCheck {
 		policy = foreignKeyResolveRespectSession
@@ -376,7 +370,7 @@ func (dmlCtx *DMLContext) ResolveSingleTable(ctx CompilerContext, tbl tree.Table
 func (dmlCtx *DMLContext) resolveSingleTable(
 	ctx CompilerContext,
 	tbl tree.TableExpr,
-	aliasMap map[string][2]string,
+	aliasMap map[string]deleteSource,
 	withMap map[string]bool,
 	foreignKeyPolicy foreignKeyResolvePolicy,
 	allowReadOnlySources bool,
@@ -534,9 +528,6 @@ func (dmlCtx *DMLContext) resolveSingleTable(
 	dmlCtx.isClusterTable = append(dmlCtx.isClusterTable, isClusterTable)
 	dmlCtx.objRefs = append(dmlCtx.objRefs, objRef)
 	dmlCtx.tableDefs = append(dmlCtx.tableDefs, tableDef)
-	//key := dbName + "." + tblName
-	//dmlCtx.nameToIdx[key] = nowIdx
-	//dmlCtx.idToName[tableDef.TblId] = key
 	if alias == "" {
 		alias = tblName
 	}
