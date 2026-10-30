@@ -3081,6 +3081,9 @@ func createPrepareStmtInSession(
 	originSQL string,
 	stmt tree.Statement,
 	saveStmt tree.Statement) (*PrepareStmt, error) {
+	if _, ok := saveStmt.(*tree.FlushPrivileges); ok {
+		return nil, moerr.NewNotSupported(execCtx.reqCtx, "preparing FLUSH PRIVILEGES")
+	}
 	// Every executable handle must prove which policy actually participated
 	// in planning. Publication cannot repair missing provenance afterward.
 	if !preparedOwnerPolicyCaptured(execCtx) {

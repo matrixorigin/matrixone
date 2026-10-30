@@ -7372,3 +7372,22 @@ func TestExtensionAndLoadStatementMetadata(t *testing.T) {
 		})
 	}
 }
+
+func TestFlushPrivilegesSyntax(t *testing.T) {
+	for _, sql := range []string{"FLUSH PRIVILEGES", "flush privileges;"} {
+		stmt, err := ParseOne(context.Background(), sql, 1)
+		require.NoError(t, err)
+		require.IsType(t, &tree.FlushPrivileges{}, stmt)
+		require.Equal(t, "flush privileges", tree.String(stmt, dialect.MYSQL))
+		stmt.Free()
+	}
+	for _, sql := range []string{"select flush from flush", "create table flush (flush int)"} {
+		stmt, err := ParseOne(context.Background(), sql, 1)
+		require.NoError(t, err, sql)
+		stmt.Free()
+	}
+	for _, sql := range []string{"flush tables", "flush privileges, tables", "flush", "flush privileges extra", "begin flush privileges; end"} {
+		_, err := ParseOne(context.Background(), sql, 1)
+		require.Error(t, err, sql)
+	}
+}
