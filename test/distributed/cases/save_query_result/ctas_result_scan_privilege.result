@@ -1,0 +1,42 @@
+drop database if exists ctas_rs_priv;
+create database ctas_rs_priv;
+create table ctas_rs_priv.src (id int primary key, s varchar(10));
+insert into ctas_rs_priv.src values (1, 'secret'), (2, 'x');
+drop user if exists ctas_rs_u1;
+drop role if exists ctas_rs_r1;
+create role ctas_rs_r1;
+create user ctas_rs_u1 identified by '123456' default role ctas_rs_r1;
+grant connect on account * to ctas_rs_r1;
+grant create table on database ctas_rs_priv to ctas_rs_r1;
+grant show tables on database ctas_rs_priv to ctas_rs_r1;
+grant insert on table ctas_rs_priv.* to ctas_rs_r1;
+grant select on table ctas_rs_priv.src to ctas_rs_r1;
+set save_query_result = on;
+use ctas_rs_priv;
+/* save_result */select * from src order by id;
+➤ id[4,32,0]  ¦  s[12,10,0]  𝄀
+1  ¦  secret  𝄀
+2  ¦  x
+set @qid = last_query_id();
+revoke select on table ctas_rs_priv.src from ctas_rs_r1;
+select * from result_scan(@qid) as r;
+internal error: do not have privilege to execute the statement
+create table stolen as select * from result_scan(@qid) as r;
+internal error: do not have privilege to execute the statement
+show tables;
+➤ Tables_in_ctas_rs_priv[12,5000,0]  𝄀
+src
+grant select on table ctas_rs_priv.src to ctas_rs_r1;
+create table copied as select * from result_scan(@qid) as r;
+show tables;
+➤ Tables_in_ctas_rs_priv[12,5000,0]  𝄀
+copied  𝄀
+src
+set save_query_result = off;
+select * from ctas_rs_priv.copied order by id;
+➤ id[4,32,0]  ¦  s[12,10,0]  𝄀
+1  ¦  secret  𝄀
+2  ¦  x
+drop database ctas_rs_priv;
+drop user if exists ctas_rs_u1;
+drop role if exists ctas_rs_r1;

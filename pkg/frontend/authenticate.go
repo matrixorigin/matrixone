@@ -9635,6 +9635,15 @@ func authenticateCreateTableAsSelectSourcePrivilege(
 	if err != nil {
 		return false, stats, err
 	}
+	// A RESULT_SCAN source carries no table privilege tips of its own. Re-check
+	// the saved query against the current user's privileges, exactly as a direct
+	// SELECT ... FROM result_scan(...) does, so CTAS cannot copy saved rows whose
+	// source the user may no longer read.
+	resultStats, err := checkResultQueryPrivilege(ses.GetProc(), sourcePlan, ctx, ses.GetService(), ses)
+	stats.Add(&resultStats)
+	if err != nil {
+		return false, stats, err
+	}
 	arr, err := extractPrivilegeTipsFromPlan(sourcePlan)
 	if err != nil {
 		return false, stats, err
