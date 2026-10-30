@@ -2202,7 +2202,7 @@ parallel_opt:
         } else if str == "false" {
 			$$ = 0
         } else {
-            yylex.Error("error strict flag")
+            yylex.Error("error parallel flag")
             goto ret1
         }
     }
@@ -2218,7 +2218,7 @@ strict_opt:
         } else if str == "false" {
             $$ = false
         } else {
-            yylex.Error("error parallel flag")
+            yylex.Error("error strict flag")
             goto ret1
         }
     }
@@ -13199,6 +13199,55 @@ simple_expr:
     {
         $$ = tree.NewNotExpr($2)
     }
+|   BINARY simple_expr
+    {
+        name := tree.NewUnresolvedColName($1)
+        exprs := make([]tree.Expr, 1)
+        arg := $2
+        // `binary(<expr>)` is the functional notation of the same operator;
+        // unwrap one paren layer so the AST stays identical to the legacy
+        // `BINARY '(' expression_list ')'` form and the formatted output
+        // re-parses to itself.
+        if paren, ok := arg.(*tree.ParenExpr); ok {
+            arg = paren.Expr
+        }
+        if sub, ok := arg.(*tree.Subquery); ok {
+            // Flatten redundant nested-paren subqueries produced by
+            // `select_with_parens: '(' select_with_parens ')'`, keeping the
+            // canonical single-layer `Subquery{ParenSelect{...}}` shape so
+            // formatted output re-parses to itself. Only collapse an
+            // intermediate layer whose *tree.Select is a genuinely empty
+            // wrapper: select_no_parens attaches Limit, OrderBy, With and the
+            // other semantic clauses to that same Select shape, and dropping
+            // any of them would change the subquery's meaning (e.g. LIMIT 0
+            // pins a zero-row scalar result, and a CTE definition binds the
+            // body select). See PR review 5688289986.
+            for {
+                ps, ok1 := sub.Select.(*tree.ParenSelect)
+                if !ok1 {
+                    break
+                }
+                mid := ps.Select
+                if mid == nil || mid.IsPerform || mid.RewriteOption != nil ||
+                    mid.TimeWindow != nil || len(mid.OrderBy) > 0 || mid.Limit != nil ||
+                    mid.RankOption != nil || mid.With != nil || mid.Ep != nil ||
+                    len(mid.IntoVars) > 0 || mid.DeprecatedInto || mid.SelectLockInfo != nil {
+                    break
+                }
+                inner, ok2 := mid.Select.(*tree.ParenSelect)
+                if !ok2 || inner == ps {
+                    break
+                }
+                sub.Select = inner
+            }
+        }
+        exprs[0] = arg
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStr($1, 1),
+            Exprs: exprs,
+        }
+    }
 |   '{'  ident expression '}'
     {   
         hint := strings.ToLower($2.Compare())
@@ -14831,37 +14880,6 @@ function_call_keyword:
             Func: tree.FuncName2ResolvableFunctionReference(name),
             FuncName: tree.NewCStr($1, 1),
             Exprs: es,
-        }
-    }
-|   BINARY '(' expression_list ')'
-    {
-        name := tree.NewUnresolvedColName($1)
-        $$ = &tree.FuncExpr{
-            Func: tree.FuncName2ResolvableFunctionReference(name),
-            FuncName: tree.NewCStr($1, 1),
-            Exprs: $3,
-        }
-    }
-|   BINARY literal
-    {
-        name := tree.NewUnresolvedColName($1)
-        exprs := make([]tree.Expr, 1)
-        exprs[0] = $2
-        $$ = &tree.FuncExpr{
-           Func: tree.FuncName2ResolvableFunctionReference(name),
-           FuncName: tree.NewCStr($1, 1),
-           Exprs: exprs,
-        }
-    }
-|   BINARY column_name
-    {
-        name := tree.NewUnresolvedColName($1)
-        exprs := make([]tree.Expr, 1)
-        exprs[0] = $2
-        $$ = &tree.FuncExpr{
-            Func: tree.FuncName2ResolvableFunctionReference(name),
-            FuncName: tree.NewCStr($1, 1),
-            Exprs: exprs,
         }
     }
 |   CHAR '(' expression_list ')'

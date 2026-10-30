@@ -1,0 +1,155 @@
+drop database if exists issue31636_json_window;
+create database issue31636_json_window;
+use issue31636_json_window;
+create table src(id int primary key, j json, v int);
+insert into src values
+(1, '1', 10),
+(2, '1.0', 20),
+(3, '1', 30),
+(4, '2', 40),
+(5, '2.0', 50),
+(6, null, 60);
+select count(*) as cnt, sum(v) as total from src group by j order by sum(v), count(*);
+➤ cnt[-5,64,0]  ¦  total[-5,64,0]  𝄀
+1  ¦  60  𝄀
+3  ¦  60  𝄀
+2  ¦  90
+select count(distinct j) as dj from src;
+➤ dj[-5,64,0]  𝄀
+2
+select id,
+row_number() over(partition by j order by id) as rn,
+sum(v) over(partition by j order by id rows unbounded preceding) as total
+from src order by id;
+➤ id[4,32,0]  ¦  rn[-5,64,0]  ¦  total[-5,64,0]  𝄀
+1  ¦  1  ¦  10  𝄀
+2  ¦  2  ¦  30  𝄀
+3  ¦  3  ¦  60  𝄀
+4  ¦  1  ¦  40  𝄀
+5  ¦  2  ¦  90  𝄀
+6  ¦  1  ¦  60
+select id,
+count(*) over(partition by j) as cnt,
+sum(v) over(partition by j) as total
+from src order by id;
+➤ id[4,32,0]  ¦  cnt[-5,64,0]  ¦  total[-5,64,0]  𝄀
+1  ¦  3  ¦  60  𝄀
+2  ¦  3  ¦  60  𝄀
+3  ¦  3  ¦  60  𝄀
+4  ¦  2  ¦  90  𝄀
+5  ¦  2  ¦  90  𝄀
+6  ¦  1  ¦  60
+select l.id,
+(select r.id from src r where r.j = l.j order by r.id desc limit 1) as picked
+from src l order by l.id;
+➤ id[4,32,0]  ¦  picked[4,32,0]  𝄀
+1  ¦  3  𝄀
+2  ¦  3  𝄀
+3  ¦  3  𝄀
+4  ¦  5  𝄀
+5  ¦  5  𝄀
+6  ¦  null
+select l.id,
+(select r.id from src r where r.j = l.j order by r.id desc limit 1 offset 1) as picked
+from src l order by l.id;
+➤ id[4,32,0]  ¦  picked[4,32,0]  𝄀
+1  ¦  2  𝄀
+2  ¦  2  𝄀
+3  ¦  2  𝄀
+4  ¦  4  𝄀
+5  ¦  4  𝄀
+6  ¦  null
+select l.id,
+(select max(r.id) from src r where r.j = l.j) as picked
+from src l order by l.id;
+➤ id[4,32,0]  ¦  picked[4,32,0]  𝄀
+1  ¦  3  𝄀
+2  ¦  3  𝄀
+3  ¦  3  𝄀
+4  ¦  5  𝄀
+5  ¦  5  𝄀
+6  ¦  null
+create table copied(id int primary key, rn bigint, total bigint);
+insert into copied
+select id,
+row_number() over(partition by j order by id),
+sum(v) over(partition by j order by id rows unbounded preceding)
+from src;
+select * from copied order by id;
+➤ id[4,32,0]  ¦  rn[-5,64,0]  ¦  total[-5,64,0]  𝄀
+1  ¦  1  ¦  10  𝄀
+2  ¦  2  ¦  30  𝄀
+3  ¦  3  ¦  60  𝄀
+4  ¦  1  ¦  40  𝄀
+5  ¦  2  ¦  90  𝄀
+6  ¦  1  ¦  60
+create table picked(id int primary key, picked int);
+insert into picked
+select l.id, (select r.id from src r where r.j = l.j order by r.id desc limit 1)
+from src l;
+select * from picked order by id;
+➤ id[4,32,0]  ¦  picked[4,32,0]  𝄀
+1  ¦  3  𝄀
+2  ¦  3  𝄀
+3  ¦  3  𝄀
+4  ¦  5  𝄀
+5  ¦  5  𝄀
+6  ¦  null
+create table jforms(id int primary key, j json);
+insert into jforms values
+(1, '1'),
+(2, '1.0'),
+(3, '1e0'),
+(4, '{"a": 1}'),
+(5, '{"a": 1.0}'),
+(6, '[1]'),
+(7, '[1.0]'),
+(8, null),
+(9, null);
+select id,
+count(*) over(partition by j) as cnt,
+row_number() over(partition by j order by id) as rn
+from jforms order by id;
+➤ id[4,32,0]  ¦  cnt[-5,64,0]  ¦  rn[-5,64,0]  𝄀
+1  ¦  3  ¦  1  𝄀
+2  ¦  3  ¦  2  𝄀
+3  ¦  3  ¦  3  𝄀
+4  ¦  2  ¦  1  𝄀
+5  ¦  2  ¦  2  𝄀
+6  ¦  2  ¦  1  𝄀
+7  ¦  2  ¦  2  𝄀
+8  ¦  2  ¦  1  𝄀
+9  ¦  2  ¦  2
+create table nform(id int primary key, s varchar(10), d decimal(10, 2));
+insert into nform values (1, '1', 1), (2, '1.0', 1.0);
+select id, count(*) over(partition by s) as cnt from nform order by id;
+➤ id[4,32,0]  ¦  cnt[-5,64,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  1
+select id, count(*) over(partition by d) as cnt from nform order by id;
+➤ id[4,32,0]  ¦  cnt[-5,64,0]  𝄀
+1  ¦  2  𝄀
+2  ¦  2
+create table keyed(id int primary key, rn bigint, total bigint);
+insert into keyed values (1, 1, 10);
+insert into keyed
+select id,
+row_number() over(partition by j order by id),
+sum(v) over(partition by j order by id rows unbounded preceding)
+from src;
+Duplicate entry '1' for key 'id'
+select count(*) as cnt from keyed;
+➤ cnt[-5,64,0]  𝄀
+1
+select * from keyed order by id;
+➤ id[4,32,0]  ¦  rn[-5,64,0]  ¦  total[-5,64,0]  𝄀
+1  ¦  1  ¦  10
+select count(*) as cnt, sum(v) as total from src group by j order by sum(v), count(*);
+➤ cnt[-5,64,0]  ¦  total[-5,64,0]  𝄀
+1  ¦  60  𝄀
+3  ¦  60  𝄀
+2  ¦  90
+select 1;
+➤ 1[-5,64,0]  𝄀
+1
+drop database if exists issue31636_json_window;

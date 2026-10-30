@@ -17,6 +17,7 @@ package frontend
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"sync"
@@ -90,6 +91,15 @@ func (w *interruptibleLoadLocalWriter) ReadLoadLocalPacketWithTimeout(timeout ti
 	}
 	w.awaitPendingInterruptBeforeRead()
 	return w.ioses.ReadLoadLocalPacketWithTimeout(timeout, deadline)
+}
+
+func (w *interruptibleLoadLocalWriter) DiscardLoadLocalPacket(timeout time.Duration, deadline time.Time, budget int64) (int64, bool, error) {
+	select {
+	case w.reading <- struct{}{}:
+	default:
+	}
+	w.awaitPendingInterruptBeforeRead()
+	return w.ioses.DiscardLoadLocalPacket(timeout, deadline, budget)
 }
 
 func (w *interruptibleLoadLocalWriter) InterruptLoadLocalIO() {
@@ -1023,8 +1033,22 @@ func TestLoadLocalInterruptCoversDeadlineArmWindow(t *testing.T) {
 				t.Fatal("interrupt lost in the arm window: 24h read did not die")
 			}
 			conn.ClearLoadLocalIOInterrupt()
+			// Restore the interrupted frame boundary before reusing the socket.
+			// Clearing a deadline alone must never reinterpret its tail.
+			if name != "header read" {
+				tail := []byte{0, 1, 'x', 'y'} // completes {2,0} header + payload
+				if name == "partial payload read" {
+					tail = []byte("defgh")
+				}
+				sent := make(chan error, 1)
+				go func() { _, err := client.Write(tail); sent <- err }()
+				_, eof, err := conn.DiscardLoadLocalPacket(time.Second, time.Now().Add(5*time.Second), 8)
+				require.NoError(t, err)
+				require.False(t, eof)
+				require.NoError(t, <-sent)
+			}
 			// A leftover interrupt would poison the next command on a reused
-			// session; the cleared connection reads normally again.
+			// session; the drained connection reads normally again.
 			written := make(chan error, 1)
 			go func() { _, err := client.Write([]byte{1, 0, 0, 0, 'q'}); written <- err }()
 			payload, err := conn.ReadLoadLocalPacket()
@@ -1381,6 +1405,161 @@ func TestProcessLoadLocalDataPlusErrorCancelRetiresConn(t *testing.T) {
 				require.Error(t, err, "client writes must fail once the connection is retired")
 			case <-time.After(5 * time.Second):
 				t.Fatal("client write did not settle")
+			}
+		})
+	}
+}
+
+// A cancelled finite upload must finish its interrupted frame before looking
+// for EOF. Payload bytes resembling packets must never become framing.
+func TestProcessLoadLocalResumesInterruptedFrame(t *testing.T) {
+	for _, prefix := range []int{1, 2, 3, 4, 6} {
+		t.Run(fmt.Sprint(prefix), func(t *testing.T) {
+			ses, protocol, client := newInterruptibleLoadLocal(t)
+			protocol.interruptEntered = make(chan struct{}, 1)
+			protocol.interruptGate = make(chan struct{})
+			protocol.interruptApplied = make(chan struct{})
+			t.Cleanup(protocol.releaseInterruptGate)
+			ctx, cancel := context.WithCancel(context.Background())
+			t.Cleanup(cancel)
+			reader, writer := io.Pipe()
+			t.Cleanup(func() { _ = reader.Close(); _ = writer.Close() })
+			ec := newTestExecCtx(ctx, gomock.NewController(t))
+			param := &tree.ExternParam{ExParamConst: tree.ExParamConst{Filepath: "test.csv"}}
+			done := make(chan error, 1)
+			exited := make(chan struct{})
+			go func() { defer close(exited); done <- processLoadLocal(ctx, ses, ec, param, writer, reader) }()
+			t.Cleanup(func() {
+				cancel()
+				protocol.releaseInterruptGate()
+				_ = reader.Close()
+				_ = writer.Close()
+				_ = client.Close()
+				select {
+				case <-exited:
+				case <-time.After(5 * time.Second):
+					t.Error("upload owner did not stop")
+				}
+			})
+			// Two complete fake packets live INSIDE this twelve-byte payload.
+			frame := []byte{12, 0, 0, 1, 'x', 'y', 0, 0, 0, 5, 1, 0, 0, 0, 'q', 'z'}
+			_, err := client.Write(frame[:prefix])
+			require.NoError(t, err)
+			cancel()
+			select {
+			case <-protocol.interruptEntered:
+			case <-time.After(5 * time.Second):
+				t.Fatal("no interrupt")
+			}
+			protocol.releaseInterruptGate()
+			select {
+			case <-protocol.interruptApplied:
+			case <-time.After(5 * time.Second):
+				t.Fatal("no applied interrupt")
+			}
+			_, err = client.Write(append(frame[prefix:], 0, 0, 0, 2))
+			require.NoError(t, err, "finite frame remainder must be drained")
+			select {
+			case err = <-done:
+			case <-time.After(5 * time.Second):
+				t.Fatal("no statement completion")
+			}
+			require.ErrorIs(t, err, context.Canceled)
+			require.Zero(t, protocol.disconnects.Load())
+			written := make(chan error, 1)
+			go func() { _, err := client.Write([]byte{1, 0, 0, 0, 's'}); written <- err }()
+			payload, err := protocol.ioses.ReadLoadLocalPacket()
+			require.NoError(t, err)
+			require.Equal(t, []byte{'s'}, payload)
+			require.NoError(t, <-written)
+		})
+	}
+}
+
+// A Read may return the last header/payload bytes AND a cancellation timeout.
+// These bytes were consumed even when no successful read preceded the error.
+func TestDiscardLoadLocalDataAndError(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		script []scriptedRead
+		tail   []byte
+		want   int64
+		eof    bool
+	}{
+		{"partial header", []scriptedRead{{prefix: []byte{2, 0}, err: scriptedTimeoutError{}}}, []byte{0, 1, 'x', 'y'}, 2, false},
+		{"complete header", []scriptedRead{{prefix: []byte{2, 0, 0, 1}, err: scriptedTimeoutError{}}}, []byte{'x', 'y'}, 2, false},
+		{"partial payload", []scriptedRead{{prefix: []byte{2, 0, 0, 1}}, {prefix: []byte{'x'}, err: scriptedTimeoutError{}}}, []byte{'y'}, 1, false},
+		{"complete payload", []scriptedRead{{prefix: []byte{2, 0, 0, 1}}, {prefix: []byte{'x', 'y'}, err: scriptedTimeoutError{}}}, nil, 0, false},
+		{"complete EOF", []scriptedRead{{prefix: []byte{0, 0, 0, 1}, err: scriptedTimeoutError{}}}, nil, 0, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, protocol, client := newInterruptibleLoadLocal(t)
+			conn := protocol.ioses
+			conn.UseConn(&dataErrConn{Conn: conn.conn, script: tc.script})
+			conn.InterruptLoadLocalIO()
+			_, err := conn.ReadLoadLocalPacket()
+			require.Error(t, err)
+			require.True(t, conn.LoadLocalFramingBroken())
+			conn.ClearLoadLocalIOInterrupt()
+			require.True(t, conn.LoadLocalFramingBroken(), "clearing deadlines alone cannot restore framing")
+			sent := make(chan error, 1)
+			go func() {
+				var err error
+				if len(tc.tail) > 0 {
+					_, err = client.Write(tc.tail)
+				}
+				sent <- err
+			}()
+			n, eof, err := conn.DiscardLoadLocalPacket(time.Second, time.Now().Add(5*time.Second), tc.want)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, n)
+			require.Equal(t, tc.eof, eof)
+			require.NoError(t, <-sent)
+			require.False(t, conn.LoadLocalFramingBroken())
+			// Neither fake EOF bytes in the previous payload nor stale progress may
+			// consume or synthesize the next real frame.
+			go func() { _, err := client.Write([]byte{1, 0, 0, 2, 'q'}); sent <- err }()
+			payload, err := conn.ReadLoadLocalPacket()
+			require.NoError(t, err)
+			require.Equal(t, []byte{'q'}, payload)
+			require.NoError(t, <-sent)
+		})
+	}
+}
+
+func TestDiscardLoadLocalByteBudget(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		length byte
+		budget int64
+		ok     bool
+	}{
+		{"exact", 2, 2, true}, {"over", 3, 2, false}, {"zero EOF", 0, 0, true}, {"zero data", 1, 0, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, protocol, client := newInterruptibleLoadLocal(t)
+			// No payload is offered for an over-budget declared length. Admission
+			// must fail before waiting or allocating to fulfill that declaration.
+			sent := make(chan error, 1)
+			go func() {
+				packet := []byte{tc.length, 0, 0, 1}
+				if tc.ok {
+					packet = append(packet, make([]byte, int(tc.length))...)
+				}
+				_, err := client.Write(packet)
+				sent <- err
+			}()
+			n, eof, err := protocol.ioses.DiscardLoadLocalPacket(time.Second, time.Now().Add(5*time.Second), tc.budget)
+			require.NoError(t, <-sent)
+			if tc.ok {
+				require.NoError(t, err)
+				require.Equal(t, int64(tc.length), n)
+				require.Equal(t, tc.length == 0, eof)
+			} else {
+				require.ErrorContains(t, err, "drain byte budget")
+				require.Zero(t, n)
+				require.False(t, eof)
+				require.True(t, protocol.ioses.LoadLocalFramingBroken())
 			}
 		})
 	}

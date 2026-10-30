@@ -110,12 +110,19 @@ func TestBackgroundSessionNeverRollsBackWholeTxn(t *testing.T) {
 // TestStaticRollbackSetIsInfrastructureOnly: the static set is failures after
 // which a transaction cannot continue. Data errors must stay out of it, or the
 // session variable would have nothing to control and MySQL compatibility would
-// be lost by default.
+// be lost by default. The lock-wait-timeout family is also kept out of the set
+// on purpose (MySQL's innodb_rollback_on_timeout=OFF default): an expired lock
+// wait rolls back only the failing statement, so the transaction keeps its
+// earlier work and can still COMMIT.
 func TestStaticRollbackSetIsInfrastructureOnly(t *testing.T) {
 	for _, code := range []uint16{moerr.ErrDuplicateEntry, moerr.ErrInvalidInput, moerr.ErrNoSuchTable} {
 		require.NotContains(t, errCodeRollbackWholeTxn, code)
 	}
 	require.False(t, isErrorRollbackWholeTxn(moerr.NewDuplicateEntryNoCtx("1", "a")))
+	require.NotContains(t, errCodeRollbackWholeTxn, moerr.ErrLockWaitTimeout)
+	require.False(t, isErrorRollbackWholeTxn(moerr.NewLockWaitTimeoutNoCtx()))
+	require.NotContains(t, errCodeRollbackWholeTxn, moerr.ErrRemoteLockWaitTimeout)
+	require.False(t, isErrorRollbackWholeTxn(moerr.NewRemoteLockWaitTimeoutNoCtx()))
 	// a genuine infrastructure failure still ends the transaction, with or
 	// without the session variable
 	require.True(t, isErrorRollbackWholeTxn(moerr.NewDeadLockDetectedNoCtx()))
@@ -255,10 +262,6 @@ func newErrorRollbackWholeTxn(code uint16) error {
 		return moerr.NewDeadlockCheckBusyNoCtx()
 	case moerr.ErrLockConflict:
 		return moerr.NewLockConflictNoCtx()
-	case moerr.ErrRemoteLockWaitTimeout:
-		return moerr.NewRemoteLockWaitTimeoutNoCtx()
-	case moerr.ErrLockWaitTimeout:
-		return moerr.NewLockWaitTimeoutNoCtx()
 	case moerr.ErrTxnUnknown:
 		return moerr.NewTxnUnknown(context.Background(), "test")
 	case moerr.ErrBackendClosed:

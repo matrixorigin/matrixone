@@ -40,7 +40,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
-	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -1142,7 +1142,7 @@ var (
 		stage_credentials,
 		stage_status,
 		created_time,
-		comment) values ('%s','%s', '%s', '%s','%s', '%s');`
+		comment) values (%s,%s, %s, %s,%s, %s);`
 
 	initMoUserDefinedFunctionFormat = `insert into mo_catalog.mo_user_defined_function(
 			name,
@@ -1629,17 +1629,17 @@ const (
 
 	updateConfigurationByAccountNameFormat = `update mo_catalog.mo_mysql_compatibility_mode set variable_value = '%s' where account_name = '%s' and variable_name = '%s';`
 
-	checkStageFormat = `select stage_id, stage_name from mo_catalog.mo_stages where stage_name = "%s" order by stage_id;`
+	checkStageFormat = `select stage_id, stage_name from mo_catalog.mo_stages where stage_name = %s order by stage_id;`
 
-	dropStageFormat = `delete from mo_catalog.mo_stages where stage_name = '%s' order by stage_id;`
+	dropStageFormat = `delete from mo_catalog.mo_stages where stage_name = %s order by stage_id;`
 
-	updateStageUrlFormat = `update mo_catalog.mo_stages set url = '%s'  where stage_name = '%s' order by stage_id;`
+	updateStageUrlFormat = `update mo_catalog.mo_stages set url = %s  where stage_name = %s order by stage_id;`
 
-	updateStageCredentialsFormat = `update mo_catalog.mo_stages set stage_credentials = '%s'  where stage_name = '%s' order by stage_id;`
+	updateStageCredentialsFormat = `update mo_catalog.mo_stages set stage_credentials = %s  where stage_name = %s order by stage_id;`
 
-	updateStageStatusFormat = `update mo_catalog.mo_stages set stage_status = '%s'  where stage_name = '%s' order by stage_id;`
+	updateStageStatusFormat = `update mo_catalog.mo_stages set stage_status = %s  where stage_name = %s order by stage_id;`
 
-	updateStageCommentFormat = `update mo_catalog.mo_stages set comment = '%s'  where stage_name = '%s' order by stage_id;`
+	updateStageCommentFormat = `update mo_catalog.mo_stages set comment = %s  where stage_name = %s order by stage_id;`
 
 	getAccountIdAndStatusFormat = `select account_id,status from mo_catalog.mo_account where account_name = '%s';`
 
@@ -1709,12 +1709,12 @@ func getSqlForCheckTenant(ctx context.Context, tenant string) (string, error) {
 	return fmt.Sprintf(checkTenantFormat, tenant), nil
 }
 
-func getSqlForCheckStage(ctx context.Context, stage string) (string, error) {
-	err := inputNameIsInvalid(ctx, stage)
+func getSqlForCheckStage(ctx context.Context, stageName string) (string, error) {
+	err := stage.ValidateName(ctx, stageName)
 	if err != nil {
 		return "", err
 	}
-	return fmt.Sprintf(checkStageFormat, stage), nil
+	return fmt.Sprintf(checkStageFormat, sqlquote.String(stageName)), nil
 }
 
 func getSqlForCheckUdfWithDb(dbName string) string {
@@ -1722,31 +1722,31 @@ func getSqlForCheckUdfWithDb(dbName string) string {
 }
 
 func getSqlForInsertIntoMoStages(ctx context.Context, stageName, url, credentials, status, createdTime, comment string) (string, error) {
-	err := inputNameIsInvalid(ctx, stageName)
+	err := stage.ValidateName(ctx, stageName)
 	if err != nil {
 		return "", err
 	}
-	return fmt.Sprintf(insertIntoMoStages, stageName, url, credentials, status, createdTime, comment), nil
+	return fmt.Sprintf(insertIntoMoStages, sqlquote.String(stageName), sqlquote.String(url), sqlquote.String(credentials), sqlquote.String(status), sqlquote.String(createdTime), sqlquote.String(comment)), nil
 }
 
 func getSqlForDropStage(stageName string) string {
-	return fmt.Sprintf(dropStageFormat, stageName)
+	return fmt.Sprintf(dropStageFormat, sqlquote.String(stageName))
 }
 
 func getsqlForUpdateStageUrl(stageName, url string) string {
-	return fmt.Sprintf(updateStageUrlFormat, url, stageName)
+	return fmt.Sprintf(updateStageUrlFormat, sqlquote.String(url), sqlquote.String(stageName))
 }
 
 func getsqlForUpdateStageCredentials(stageName, credentials string) string {
-	return fmt.Sprintf(updateStageCredentialsFormat, credentials, stageName)
+	return fmt.Sprintf(updateStageCredentialsFormat, sqlquote.String(credentials), sqlquote.String(stageName))
 }
 
 func getsqlForUpdateStageStatus(stageName, status string) string {
-	return fmt.Sprintf(updateStageStatusFormat, status, stageName)
+	return fmt.Sprintf(updateStageStatusFormat, sqlquote.String(status), sqlquote.String(stageName))
 }
 
 func getsqlForUpdateStageComment(stageName, comment string) string {
-	return fmt.Sprintf(updateStageCommentFormat, comment, stageName)
+	return fmt.Sprintf(updateStageCommentFormat, sqlquote.String(comment), sqlquote.String(stageName))
 }
 
 func getSqlForUpdateCommentsOfAccount(ctx context.Context, comment, account string) (string, error) {
@@ -3208,7 +3208,7 @@ func doAlterUser(ctx context.Context, ses *Session, au *alterUser) (err error) {
 		}
 	}
 
-	bh := ses.GetBackgroundExec(ctx)
+	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{internalExecution: true})
 	defer bh.Close()
 
 	// put it into the single transaction
@@ -3434,7 +3434,7 @@ func doAlterAccount(ctx context.Context, ses *Session, aa *alterAccount) (err er
 	}
 
 	alterAccountFunc := func() (rtnErr error) {
-		bh := ses.GetBackgroundExec(ctx)
+		bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{internalExecution: true})
 		defer bh.Close()
 
 		rtnErr = bh.Exec(ctx, "begin")
@@ -3679,7 +3679,7 @@ func doSwitchRole(ctx context.Context, ses *Session, sr *tree.SetRole) (err erro
 		// step1 : check the role exists or not;
 
 		switchRoleFunc := func() (rtnErr error) {
-			bh := ses.GetBackgroundExec(ctx)
+			bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{internalExecution: true})
 			defer bh.Close()
 
 			rtnErr = bh.Exec(ctx, "begin;")
@@ -3790,6 +3790,29 @@ func checkStageExistOrNot(ctx context.Context, bh BackgroundExec, stageName stri
 	return false, nil
 }
 
+// validateStageCredentials preserves the existing comma-separated catalog format.
+// Delimiters cannot be represented in keys/values; reject before any mutation.
+func validateStageCredentials(ctx context.Context, credentials tree.StageCredentials) error {
+	if !credentials.Exist {
+		return nil
+	}
+	if len(credentials.Credentials)%2 != 0 {
+		return moerr.NewInvalidInput(ctx, "stage credentials require key/value pairs")
+	}
+	seen := make(map[string]struct{}, len(credentials.Credentials)/2)
+	for i := 0; i < len(credentials.Credentials); i += 2 {
+		if strings.ContainsAny(credentials.Credentials[i], ",=") || strings.Contains(credentials.Credentials[i+1], ",") {
+			return moerr.NewInvalidInput(ctx, "stage credential delimiters are not representable")
+		}
+		key := strings.ToLower(credentials.Credentials[i])
+		if _, ok := seen[key]; ok {
+			return moerr.NewInvalidInput(ctx, "duplicate stage credential key")
+		}
+		seen[key] = struct{}{}
+	}
+	return nil
+}
+
 func formatCredentials(credentials tree.StageCredentials) string {
 	var rstr string
 	if credentials.Exist {
@@ -3810,6 +3833,9 @@ func doCreateStage(ctx context.Context, ses *Session, cs *tree.CreateStage) (err
 	var credentials string
 	var StageStatus string
 	var comment string
+	if err = validateStageCredentials(ctx, cs.Credentials); err != nil {
+		return err
+	}
 	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 
@@ -3961,6 +3987,9 @@ func doAlterStage(ctx context.Context, ses *Session, as *tree.AlterStage) (err e
 	// var err error
 	var stageExist bool
 	var credentials string
+	if err = validateStageCredentials(ctx, as.CredentialsOption); err != nil {
+		return err
+	}
 	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 
@@ -3970,25 +3999,8 @@ func doAlterStage(ctx context.Context, ses *Session, as *tree.AlterStage) (err e
 		return err
 	}
 
-	optionBits := uint8(0)
-	if as.UrlOption.Exist {
-		optionBits |= 1
-	}
-	if as.CredentialsOption.Exist {
-		optionBits |= 1 << 1
-	}
-	if as.StatusOption.Exist {
-		optionBits |= 1 << 2
-	}
-	if as.Comment.Exist {
-		optionBits |= 1 << 3
-	}
-	optionCount := bits.OnesCount8(optionBits)
-	if optionCount == 0 {
+	if !as.UrlOption.Exist && !as.CredentialsOption.Exist && !as.StatusOption.Exist && !as.Comment.Exist {
 		return moerr.NewInternalError(ctx, "at least one option at a time")
-	}
-	if optionCount > 1 {
-		return moerr.NewInternalError(ctx, "at most one option at a time")
 	}
 
 	err = bh.Exec(ctx, "begin;")
@@ -4691,7 +4703,7 @@ func doDropUser(ctx context.Context, ses *Session, du *tree.DropUser) (err error
 	}
 
 	// Retain creator-row locks held by partial restore through recreation.
-	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{forcePessimisticRC: true})
+	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{forcePessimisticRC: true, internalExecution: true})
 	defer bh.Close()
 
 	// put it into the single transaction
@@ -4777,7 +4789,7 @@ func doDropRole(ctx context.Context, ses *Session, dr *tree.DropRole) (err error
 	}
 
 	// Honor grant-row locks retained by catalog restore through replay.
-	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{forcePessimisticRC: true})
+	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{forcePessimisticRC: true, internalExecution: true})
 	defer bh.Close()
 
 	// put it into the single transaction
@@ -4865,7 +4877,7 @@ func doAlterRole(ctx context.Context, ses *Session, ar *tree.AlterRole) (err err
 		return moerr.NewInternalErrorf(ctx, "the new role name is the same as the old role name")
 	}
 
-	bh := ses.GetBackgroundExec(ctx)
+	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{internalExecution: true})
 	defer bh.Close()
 
 	// put it into the single transaction
@@ -6082,7 +6094,7 @@ func doRevokeRole(ctx context.Context, ses *Session, rr *tree.RevokeRole) (err e
 	// semantics used by active-session authorization refreshes. Otherwise an
 	// SI snapshot can make a committed REVOKE temporarily invisible even to a
 	// fresh private authorization transaction.
-	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{forcePessimisticRC: true})
+	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{forcePessimisticRC: true, internalExecution: true})
 	defer bh.Close()
 
 	// step1 : check Roles exists or not
@@ -6242,7 +6254,7 @@ func doGrantRole(ctx context.Context, ses *Session, gr *tree.GrantRole) (err err
 	}
 
 	account := ses.GetTenantInfo()
-	bh := ses.GetBackgroundExec(ctx)
+	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{internalExecution: true})
 	defer bh.Close()
 
 	// step1 : check Roles exists or not
@@ -10847,11 +10859,7 @@ func InitGeneralTenant(ctx context.Context, bh BackgroundExec, ses *Session, ca 
 		if rtnErr != nil {
 			return rtnErr
 		}
-		protocolVersion, protocolErr := protocolVersionForTenantInitializationWithContext(ctx, ses.GetService(), ses.GetProc())
-		if protocolErr != nil {
-			return protocolErr
-		}
-		rtnErr = createTablesInInformationSchemaOfGeneralTenantWithProtocol(newTenantCtx, bh, protocolVersion)
+		rtnErr = createTablesInInformationSchemaOfGeneralTenant(newTenantCtx, bh)
 		if rtnErr != nil {
 			return rtnErr
 		}
@@ -11237,24 +11245,7 @@ func createTablesInSystemOfGeneralTenant(ctx context.Context, bh BackgroundExec,
 }
 
 // createTablesInInformationSchemaOfGeneralTenant creates the database information_schema and the views or tables.
-func createTablesInInformationSchemaOfGeneralTenant(
-	ctx context.Context,
-	bh BackgroundExec,
-	service string,
-	proc *process.Process,
-) error {
-	protocolVersion, err := protocolVersionForTenantInitializationWithContext(ctx, service, proc)
-	if err != nil {
-		return err
-	}
-	return createTablesInInformationSchemaOfGeneralTenantWithProtocol(ctx, bh, protocolVersion)
-}
-
-func createTablesInInformationSchemaOfGeneralTenantWithProtocol(
-	ctx context.Context,
-	bh BackgroundExec,
-	protocolVersion int64,
-) error {
+func createTablesInInformationSchemaOfGeneralTenant(ctx context.Context, bh BackgroundExec) error {
 	start := time.Now()
 	defer func() {
 		v2.CreateTablesInInfoSchemaDurationHistogram.Observe(time.Since(start).Seconds())
@@ -11264,17 +11255,13 @@ func createTablesInInformationSchemaOfGeneralTenantWithProtocol(
 	// with new tenant
 	// TODO: when we have the auto_increment column, we need new strategy.
 
-	// COLUMNS keeps its independent protocol contract even when VIEWS falls back.
-	if protocolVersion >= defines.MORPCVersion100 {
-		requiredProtocol := defines.MORPCVersion100
-		if protocolVersion >= defines.MORPCVersion109 {
-			requiredProtocol = defines.MORPCVersion109
-		}
-		if err := requireCommonViewColumnsProtocol(ctx, bh, requiredProtocol); err != nil {
-			return err
-		}
+	// The account row is committed at this binary's catalog version. Require
+	// the complete current definition set instead of publishing older views
+	// under that version when capability discovery is unavailable.
+	if err := requireCommonInformationSchemaProtocol(ctx, bh, defines.MORPCVersion126); err != nil {
+		return err
 	}
-	informationSchemaTables := sysview.InitInformationSchemaSysTablesForProtocol(protocolVersion)
+	informationSchemaTables := sysview.InitInformationSchemaSysTables
 	var err error
 	sqls := make([]string, 0, len(informationSchemaTables)+len(sysview.InitMysqlSysTables)+4)
 
@@ -11293,83 +11280,7 @@ func createTablesInInformationSchemaOfGeneralTenantWithProtocol(
 	return err
 }
 
-func protocolVersionForTenantInitialization(service string, proc *process.Process) (int64, error) {
-	return protocolVersionForTenantInitializationWithContext(context.Background(), service, proc)
-}
-
-func protocolVersionForTenantInitializationWithContext(
-	ctx context.Context,
-	service string,
-	proc *process.Process,
-) (int64, error) {
-	// Account creation must remain available while the cluster is rolling out
-	// the parser-derived VIEWS functions. The v109 fallback preserves the
-	// native COLUMNS contract; an admitted v118 predecessor also retains TABLES.
-	// Bootstrap maintenance revisits the final-version account row once the
-	// VIEWS capability becomes available.
-	legacyVersion := defines.MORPCMinVersion
-	predecessorViewsVersion := defines.MORPCVersion109
-	rt := moruntime.ServiceRuntime(service)
-	if rt == nil {
-		return legacyVersion, nil
-	}
-	value, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
-	if !ok {
-		return legacyVersion, nil
-	}
-	version, ok := value.(int64)
-	if !ok {
-		return legacyVersion, nil
-	}
-	if version < defines.MORPCVersion126 {
-		// Preserve every pre-existing protocol-specific information_schema
-		// contract. Only the new VIEWS function needs the predecessor
-		// fallback; promoting an older known protocol would also install newer
-		// TABLES/COLUMNS and role-closure definitions.
-		return version, nil
-	}
-	// Admission for TABLES v118 and VIEWS v126 is independent. Keep TABLES
-	// when both its local authoring fence and the current peers support it.
-	floorValue, hasFloor := rt.GetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor)
-	floor, validFloor := floorValue.(int64)
-	fallbackProtocol := func() (int64, error) {
-		if err := ctx.Err(); err != nil {
-			return 0, err
-		}
-		if hasFloor && (!validFloor || floor < defines.MORPCVersion118) {
-			return predecessorViewsVersion, nil
-		}
-		supported, err := compile.AllCNsSupportProtocolWithContext(ctx, proc, defines.MORPCVersion118)
-		if ctx.Err() != nil {
-			return 0, ctx.Err()
-		}
-		if err == nil && supported {
-			return defines.MORPCVersion118, nil
-		}
-		return predecessorViewsVersion, nil
-	}
-	// A missing key retains standalone runtimes' existing capability behavior.
-	if hasFloor && (!validFloor || floor < defines.MORPCVersion126) {
-		return fallbackProtocol()
-	}
-	supported, err := compile.AllCNsSupportProtocolWithContext(ctx, proc, defines.MORPCVersion126)
-	if err != nil {
-		// Capability discovery is deliberately best-effort for account
-		// creation. Do not turn a temporary inventory/RPC failure into a
-		// failed CREATE ACCOUNT, but preserve cancellation of the owning
-		// process so shutdown and request cancellation still propagate.
-		if ctx.Err() != nil {
-			return 0, ctx.Err()
-		}
-		return fallbackProtocol()
-	}
-	if !supported {
-		return fallbackProtocol()
-	}
-	return version, nil
-}
-
-func requireCommonViewColumnsProtocol(ctx context.Context, bh BackgroundExec, requiredProtocol int64) error {
+func requireCommonInformationSchemaProtocol(ctx context.Context, bh BackgroundExec, requiredProtocol int64) error {
 	bh.ClearExecResultSet()
 	// This fixed cluster probe is system-authored; subsequent tenant DDL keeps its original identity.
 	probeCtx := defines.AttachAccount(ctx, catalog.System_Account, catalog.System_User, catalog.System_Role)
@@ -11486,7 +11397,7 @@ func InitUser(ctx context.Context, ses *Session, tenant *TenantInfo, cu *createU
 	}
 	defer mpool.DeleteMPool(mp)
 
-	bh := ses.GetBackgroundExec(ctx)
+	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{internalExecution: true})
 	defer bh.Close()
 
 	err = bh.Exec(ctx, "begin;")
@@ -11718,7 +11629,7 @@ func InitRole(ctx context.Context, ses *Session, tenant *TenantInfo, cr *tree.Cr
 		return err
 	}
 
-	bh := ses.GetBackgroundExec(ctx)
+	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{internalExecution: true})
 	defer bh.Close()
 
 	err = bh.Exec(ctx, "begin;")
@@ -12689,6 +12600,15 @@ func doInterpretCall(
 		}
 		defer freeStatements(stmt)
 
+		// Procedure bodies run on background executors that open and commit
+		// their own transactions. When the caller is in READ ONLY mode the
+		// whole call must therefore be rejected up front if any body
+		// statement could write; otherwise the procedure's writes would
+		// persist outside the caller's read-only transaction.
+		if err = enforceReadOnlyOnProcedureBody(ctx, ses, stmt, dbName); err != nil {
+			return nil, err
+		}
+
 		interpreter.ctx, err = enterSQLProcedure(ctx, ses, dbName, string(call.Name.Name.ObjectName))
 		if err != nil {
 			return nil, err
@@ -12701,6 +12621,17 @@ func doInterpretCall(
 		return interpreter.GetResult(), nil
 
 	case "starlark":
+		// Starlark bodies embed SQL in a non-SQL grammar whose statements
+		// cannot be classified statically; fail closed under a read-only
+		// caller rather than let embedded writes commit on their own
+		// transaction.
+		readOnly, readErr := callerTxnReadOnly(ses)
+		if readErr != nil {
+			return nil, readErr
+		}
+		if readOnly {
+			return nil, moerr.NewCantExecuteInReadOnlyTransaction(ctx)
+		}
 		interpreter.ctx, err = enterSQLProcedure(ctx, ses, dbName, string(call.Name.Name.ObjectName))
 		if err != nil {
 			return nil, err
@@ -12883,7 +12814,11 @@ func doSetGlobalSystemVariables(
 ) (err error) {
 	accountId := uint64(ses.GetTenantInfo().TenantID)
 	accountName := ses.GetTenantName()
-	bh := ses.GetBackgroundExec(ctx)
+	// The generated catalog INSERT/UPDATE below is trusted implementation
+	// SQL of the SET GLOBAL statement itself, not caller-authored work: mark
+	// the executor internal so client-facing gates (e.g. the READ ONLY
+	// transaction enforcement) never observe it as user writes.
+	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{internalExecution: true})
 	defer bh.Close()
 
 	if err = bh.Exec(ctx, "begin;"); err != nil {

@@ -340,7 +340,7 @@ temporal_conflict_branch  ¦  UPDATE  ¦  2024-01-01 00:00:00.000001000  ¦  bra
 temporal_conflict_base  ¦  UPDATE  ¦  2024-01-01 00:00:00.000001000  ¦  base-conflict  𝄀
 temporal_conflict_branch  ¦  UPDATE  ¦  2024-01-01 00:00:00.000002000  ¦  branch-safe
 data branch merge temporal_conflict_branch into temporal_conflict_base;
-internal error: conflict: temporal_conflict_branch UPDATE and temporal_conflict_base UPDATE on pk('2024-01-01 00:00:00.000001')
+conflict: temporal_conflict_branch UPDATE and temporal_conflict_base UPDATE on pk('2024-01-01 00:00:00.000001')
 select k, v from temporal_conflict_base order by k;
 ➤ k[93,26,0]  ¦  v[12,32,0]  𝄀
 2024-01-01 00:00:00.000001000  ¦  base-conflict  𝄀
@@ -358,7 +358,7 @@ update temporal_composite_conflict_branch set v = 'branch-conflict' where id = 1
 update temporal_composite_conflict_branch set v = 'branch-safe' where id = 2 and k = '2024-01-01 00:00:00.000002';
 update temporal_composite_conflict_base set v = 'base-conflict' where id = 1 and k = '2024-01-01 00:00:00.000001';
 data branch merge temporal_composite_conflict_branch into temporal_composite_conflict_base when conflict fail;
-internal error: conflict: temporal_composite_conflict_branch UPDATE and temporal_composite_conflict_base UPDATE on pk(1,'2024-01-01 00:00:00.000001')
+conflict: temporal_composite_conflict_branch UPDATE and temporal_composite_conflict_base UPDATE on pk(1,'2024-01-01 00:00:00.000001')
 select id, k, v from temporal_composite_conflict_base order by id;
 ➤ id[4,32,0]  ¦  k[93,26,0]  ¦  v[12,32,0]  𝄀
 1  ¦  2024-01-01 00:00:00.000001000  ¦  base-conflict  𝄀
@@ -373,7 +373,7 @@ data branch create table vector_fake_pk_conflict_f32_branch from vector_fake_pk_
 delete from vector_fake_pk_conflict_f32_branch where id = 1;
 delete from vector_fake_pk_conflict_f32 where id = 1;
 data branch merge vector_fake_pk_conflict_f32_branch into vector_fake_pk_conflict_f32 when conflict fail;
-internal error: conflict: vector_fake_pk_conflict_f32_branch DELETE and vector_fake_pk_conflict_f32 DELETE on pk(1,'[1, 2]')
+conflict: vector_fake_pk_conflict_f32_branch DELETE and vector_fake_pk_conflict_f32 DELETE on pk(1,'[1, 2]')
 select id, embedding from vector_fake_pk_conflict_f32 order by id;
 ➤ id[4,32,0]  ¦  embedding[12,2,0]  𝄀
 2  ¦  [1, 2]
@@ -386,7 +386,7 @@ data branch create table vector_fake_pk_conflict_f64_branch from vector_fake_pk_
 delete from vector_fake_pk_conflict_f64_branch where id = 1;
 delete from vector_fake_pk_conflict_f64 where id = 1;
 data branch merge vector_fake_pk_conflict_f64_branch into vector_fake_pk_conflict_f64 when conflict fail;
-internal error: conflict: vector_fake_pk_conflict_f64_branch DELETE and vector_fake_pk_conflict_f64 DELETE on pk(1,'[3, 4]')
+conflict: vector_fake_pk_conflict_f64_branch DELETE and vector_fake_pk_conflict_f64 DELETE on pk(1,'[3, 4]')
 select id, embedding from vector_fake_pk_conflict_f64 order by id;
 ➤ id[4,32,0]  ¦  embedding[12,2,0]  𝄀
 2  ¦  [3, 4]
@@ -401,7 +401,7 @@ data branch create table json_fake_pk_conflict_branch from json_fake_pk_conflict
 delete from json_fake_pk_conflict_branch where id = 1;
 delete from json_fake_pk_conflict where id = 1;
 data branch merge json_fake_pk_conflict_branch into json_fake_pk_conflict when conflict fail;
-internal error: conflict: json_fake_pk_conflict_branch DELETE and json_fake_pk_conflict DELETE on pk(1,'{"n": 1, "name": "same"}')
+conflict: json_fake_pk_conflict_branch DELETE and json_fake_pk_conflict DELETE on pk(1,'{"n": 1, "name": "same"}')
 select id, payload from json_fake_pk_conflict order by id;
 ➤ id[4,32,0]  ¦  payload[-1,2147483647,0]  𝄀
 2  ¦  {"n": 2, "name": "same"}

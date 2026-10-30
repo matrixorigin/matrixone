@@ -236,6 +236,25 @@ func LegacyTemporalNullability(ctx context.Context) bool {
 	return value
 }
 
+type legacyTimeNullabilityContextKey struct{}
+
+// WithLegacyTimeNullability reconstructs the post-8dd TIME binding metadata
+// from before the row-local NULL synthesis change. DATE and CAST keep their
+// current inference; only the TIME() string overloads restore NOT NULL.
+func WithLegacyTimeNullability(ctx context.Context) context.Context {
+	return context.WithValue(ctx, legacyTimeNullabilityContextKey{}, true)
+}
+
+// LegacyTimeNullability reports the private dump-origin intermediate TIME
+// binding era.
+func LegacyTimeNullability(ctx context.Context) bool {
+	if ctx == nil {
+		return false
+	}
+	value, _ := ctx.Value(legacyTimeNullabilityContextKey{}).(bool)
+	return value
+}
+
 type legacyIncompleteTemporalStringsContextKey struct{}
 
 // WithLegacyIncompleteTemporalStrings reconstructs complete pre-migration
