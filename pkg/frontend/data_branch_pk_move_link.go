@@ -235,12 +235,23 @@ func appendPkMoveLinkWindow(
 // the local-local posture pays nothing); a probe error propagates, and
 // when no candidate owns the table the ZERO identity keeps the
 // pre-routing caller-context posture instead of guessing an owner.
+//
+// The probe reads each candidate's catalog at snapshot, the same instant
+// the reopen walk opens the segment at (r101 D222): an intermediate
+// lineage generation is retired from the CURRENT catalog when its
+// replacement commits, so an unanchored probe would find no owner and
+// silently re-scope the window's provenance reads to the caller despite
+// the retained link. The anchored form keeps the full timestamp
+// (physical-logical) so visibility matches the reopen walk's snapshot
+// exactly. An empty snapshot keeps the unanchored current-catalog probe
+// for callers without transition bookkeeping.
 func resolvePkMoveWindowOwner(
 	ctx context.Context,
 	ses *Session,
 	bh BackgroundExec,
 	candidates []branchIdentity,
 	tableID uint64,
+	snapshot types.TS,
 ) (branchIdentity, error) {
 	if len(candidates) == 0 || tableID == 0 {
 		return branchIdentity{}, nil
@@ -248,9 +259,15 @@ func resolvePkMoveWindowOwner(
 	if len(candidates) == 1 {
 		return candidates[0], nil
 	}
+	snapshotClause := ""
+	if !snapshot.IsEmpty() {
+		snapshotClause = fmt.Sprintf(
+			" {MO_TS = '%s'}", snapshot.ToTimestamp().DebugString())
+	}
 	for _, candidate := range candidates {
 		probe, err := runSql(identityCtx(ctx, candidate), ses, bh, fmt.Sprintf(
-			"select rel_id from mo_catalog.mo_tables where rel_id = %d", tableID,
+			"select rel_id from mo_catalog.mo_tables%s where rel_id = %d",
+			snapshotClause, tableID,
 		), nil, nil)
 		if err != nil {
 			return branchIdentity{}, err

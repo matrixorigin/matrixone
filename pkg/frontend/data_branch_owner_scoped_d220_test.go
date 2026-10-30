@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/golang/mock/gomock"
@@ -43,6 +44,11 @@ type accountCapturingBh struct {
 	ctrl     *gomock.Controller
 	bh       *mock_frontend.MockBackgroundExec
 	accounts []uint32
+	// sqls records every executed statement so snapshot-anchor pins can
+	// assert the probe's MO_TS clause; serveSQL, when set, resolves the
+	// page from the caller account AND the statement text.
+	sqls     []string
+	serveSQL func(account uint32, sql string) []interface{}
 	// serve resolves one page per executed statement from the caller
 	// account of the LAST recorded Exec.
 	serve func(account uint32) []interface{}
@@ -56,8 +62,9 @@ func newAccountCapturingBh(
 	h := &accountCapturingBh{t: t, ctrl: ctrl, serve: serve}
 	h.bh = mock_frontend.NewMockBackgroundExec(ctrl)
 	h.bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(
-		func(ctx context.Context, _ string) error {
+		func(ctx context.Context, sql string) error {
 			account, err := defines.GetAccountId(ctx)
+			h.sqls = append(h.sqls, sql)
 			if err != nil {
 				h.accounts = append(h.accounts, ^uint32(0))
 				return nil
@@ -69,6 +76,10 @@ func newAccountCapturingBh(
 	h.bh.EXPECT().GetExecResultSet().DoAndReturn(func() []interface{} {
 		if len(h.accounts) == 0 {
 			return []interface{}{buildPkMovePickProbeResultSet()}
+		}
+		if h.serveSQL != nil {
+			return h.serveSQL(
+				h.accounts[len(h.accounts)-1], h.sqls[len(h.sqls)-1])
 		}
 		return h.serve(h.accounts[len(h.accounts)-1])
 	}).AnyTimes()
@@ -333,17 +344,17 @@ func TestResolvePkMoveWindowOwner(t *testing.T) {
 
 	t.Run("no candidates and a zero table id need no catalog work", func(t *testing.T) {
 		bh := mock_frontend.NewMockBackgroundExec(ctrl)
-		owner, err := resolvePkMoveWindowOwner(base, ses, bh, nil, 42)
+		owner, err := resolvePkMoveWindowOwner(base, ses, bh, nil, 42, types.TS{})
 		require.NoError(t, err)
 		require.Equal(t, branchIdentity{}, owner)
-		owner, err = resolvePkMoveWindowOwner(base, ses, bh, []branchIdentity{cand1}, 0)
+		owner, err = resolvePkMoveWindowOwner(base, ses, bh, []branchIdentity{cand1}, 0, types.TS{})
 		require.NoError(t, err)
 		require.Equal(t, branchIdentity{}, owner)
 	})
 
 	t.Run("a single candidate wins without a probe", func(t *testing.T) {
 		bh := mock_frontend.NewMockBackgroundExec(ctrl)
-		owner, err := resolvePkMoveWindowOwner(base, ses, bh, []branchIdentity{cand1}, 42)
+		owner, err := resolvePkMoveWindowOwner(base, ses, bh, []branchIdentity{cand1}, 42, types.TS{})
 		require.NoError(t, err)
 		require.Equal(t, cand1, owner,
 			"equal-account collapse keeps local-local reads probe-free")
@@ -352,7 +363,7 @@ func TestResolvePkMoveWindowOwner(t *testing.T) {
 	t.Run("the first owning candidate wins", func(t *testing.T) {
 		h := newAccountCapturingBh(t, ctrl, func(uint32) []interface{} { return d220OneRow(t) })
 		owner, err := resolvePkMoveWindowOwner(
-			base, ses, h.bh, []branchIdentity{cand1, cand2}, 42)
+			base, ses, h.bh, []branchIdentity{cand1, cand2}, 42, types.TS{})
 		require.NoError(t, err)
 		require.Equal(t, cand1, owner)
 		require.Equal(t, []uint32{200}, h.accounts,
@@ -367,7 +378,7 @@ func TestResolvePkMoveWindowOwner(t *testing.T) {
 			return d220OneRow(t)
 		})
 		owner, err := resolvePkMoveWindowOwner(
-			base, ses, h.bh, []branchIdentity{cand1, cand2}, 42)
+			base, ses, h.bh, []branchIdentity{cand1, cand2}, 42, types.TS{})
 		require.NoError(t, err)
 		require.Equal(t, cand2, owner)
 		require.Equal(t, []uint32{200, 300}, h.accounts)
@@ -376,7 +387,7 @@ func TestResolvePkMoveWindowOwner(t *testing.T) {
 	t.Run("no owning candidate keeps the zero identity", func(t *testing.T) {
 		h := newAccountCapturingBh(t, ctrl, func(uint32) []interface{} { return d220EmptyRows() })
 		owner, err := resolvePkMoveWindowOwner(
-			base, ses, h.bh, []branchIdentity{cand1, cand2}, 42)
+			base, ses, h.bh, []branchIdentity{cand1, cand2}, 42, types.TS{})
 		require.NoError(t, err)
 		require.Equal(t, branchIdentity{}, owner,
 			"an unowned table keeps the pre-routing caller-context posture")
@@ -387,9 +398,95 @@ func TestResolvePkMoveWindowOwner(t *testing.T) {
 		injected := moerr.NewInternalErrorNoCtx("owner probe blew up")
 		bh := mock_frontend.NewMockBackgroundExec(ctrl)
 		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(injected).Times(1)
-		_, err := resolvePkMoveWindowOwner(base, ses, bh, []branchIdentity{cand1, cand2}, 42)
+		_, err := resolvePkMoveWindowOwner(base, ses, bh, []branchIdentity{cand1, cand2}, 42, types.TS{})
 		require.ErrorIs(t, err, injected)
 	})
+}
+
+// TestResolvePkMoveWindowOwnerAnchorsProbeAtSnapshot pins r101 D222: an
+// anchored probe reads the candidate's catalog at the historical
+// transition snapshot the collect walk opens that segment at, so a
+// generation retired from the current catalog by a COPY ALTER still
+// resolves its owner; an unanchored probe of the same retired generation
+// finds no owner and would re-scope the window's provenance reads to the
+// caller.
+func TestResolvePkMoveWindowOwnerAnchorsProbeAtSnapshot(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	base := defines.AttachAccountId(context.Background(), 100)
+	ses := newValidateSession(t)
+	cand1 := branchIdentity{account: 200, ctx: base}
+	cand2 := branchIdentity{account: 300, ctx: base}
+	transition := types.BuildTS(1_700_000_000_000_000_000, 7)
+
+	t.Run("an anchored probe carries the full transition timestamp", func(t *testing.T) {
+		h := newAccountCapturingBh(t, ctrl, func(uint32) []interface{} { return d220OneRow(t) })
+		owner, err := resolvePkMoveWindowOwner(
+			base, ses, h.bh, []branchIdentity{cand1, cand2}, 42, transition)
+		require.NoError(t, err)
+		require.Equal(t, cand1, owner)
+		require.Len(t, h.sqls, 1)
+		require.Contains(t, h.sqls[0],
+			" {MO_TS = '"+transition.ToTimestamp().DebugString()+"'}",
+			"the anchored probe keeps physical AND logical time, matching the reopen walk's snapshot")
+	})
+
+	t.Run("an empty snapshot keeps the unanchored probe", func(t *testing.T) {
+		h := newAccountCapturingBh(t, ctrl, func(uint32) []interface{} { return d220OneRow(t) })
+		_, err := resolvePkMoveWindowOwner(
+			base, ses, h.bh, []branchIdentity{cand1, cand2}, 42, types.TS{})
+		require.NoError(t, err)
+		require.Len(t, h.sqls, 1)
+		require.NotContains(t, h.sqls[0], "MO_TS")
+	})
+
+	t.Run("a retired generation resolves its owner only at the transition snapshot", func(t *testing.T) {
+		// Post-ALTER catalog truth: the retired physical generation is
+		// visible only in an anchored read, never in a current-catalog
+		// read, and the subscriber never owned it at any instant.
+		h := newAccountCapturingBh(t, ctrl, func(uint32) []interface{} { return d220EmptyRows() })
+		h.serveSQL = func(account uint32, sql string) []interface{} {
+			if account == 200 && strings.Contains(sql, " {MO_TS = '"+
+				transition.ToTimestamp().DebugString()+"'}") {
+				return d220OneRow(t)
+			}
+			return d220EmptyRows()
+		}
+		owner, err := resolvePkMoveWindowOwner(
+			base, ses, h.bh, []branchIdentity{cand1, cand2}, 42, transition)
+		require.NoError(t, err)
+		require.Equal(t, cand1, owner,
+			"the publisher's anchored catalog owns the retired generation; the probe never reaches the subscriber")
+		require.Equal(t, []uint32{200}, h.accounts)
+
+		h2 := newAccountCapturingBh(t, ctrl, func(uint32) []interface{} { return d220EmptyRows() })
+		owner, err = resolvePkMoveWindowOwner(
+			base, ses, h2.bh, []branchIdentity{cand1, cand2}, 42, types.TS{})
+		require.NoError(t, err)
+		require.Equal(t, branchIdentity{}, owner,
+			"the pre-D222 unanchored probe of a retired generation finds no owner")
+		require.Equal(t, []uint32{200, 300}, h2.accounts)
+	})
+}
+
+// TestPkMoveWindowOwnerSnapshot pins the D222 snapshot rule: the path's
+// endpoint segment resolves at the endpoint snapshot, an intermediate
+// generation at the transition into its successor, and a missing
+// transition entry degrades to the endpoint snapshot.
+func TestPkMoveWindowOwnerSnapshot(t *testing.T) {
+	endpointSP := types.BuildTS(300, 7)
+	ts := []types.TS{{}, types.BuildTS(100, 1), types.BuildTS(200, 3)}
+
+	require.Equal(t, ts[1], pkMoveWindowOwnerSnapshot(ts, 0, endpointSP),
+		"an intermediate generation resolves at the transition into its successor")
+	require.Equal(t, ts[2], pkMoveWindowOwnerSnapshot(ts, 1, endpointSP))
+	require.Equal(t, endpointSP, pkMoveWindowOwnerSnapshot(ts, 2, endpointSP),
+		"the endpoint segment resolves at the endpoint snapshot")
+	require.Equal(t, endpointSP, pkMoveWindowOwnerSnapshot(nil, 0, endpointSP),
+		"missing transition bookkeeping degrades to the endpoint snapshot")
+	require.Equal(t, endpointSP, pkMoveWindowOwnerSnapshot(ts[:1], 3, endpointSP),
+		"an index past the transitions degrades to the endpoint snapshot")
 }
 
 // TestPkMovePickProbesRunUnderOwnerCtx pins D220 (B.2) on the PICK closure

@@ -1214,7 +1214,13 @@ func diffMergeAgency(
 		// the ordered-candidate rule of the reopen walk (walking side
 		// first, opposite endpoint second; equal accounts collapse). A
 		// table shared by both paths keeps the first resolved identity —
-		// one physical table has exactly one owner.
+		// one physical table has exactly one owner. The owner probe reads
+		// each candidate's catalog at the same instant the collect walk
+		// opens that segment (r101 D222): an intermediate generation was
+		// retired from the CURRENT catalog when its replacement committed,
+		// so an unanchored probe would report no owner and re-scope the
+		// window's provenance reads to the caller despite the retained
+		// link.
 		tarIdent, baseIdent := tblStuff.endpointIdentities(ctx, ses)
 		ownerCache := make(map[uint64]branchIdentity)
 		linkWindows := make([]pkMoveLinkTableWindow, 0,
@@ -1224,12 +1230,12 @@ func diffMergeAgency(
 			linkWindows = appendPkMoveLinkWindow(
 				linkWindows, seenWin, id, uint64(end.Physical()), ident)
 		}
-		addPathWindow := func(id uint64, end types.TS, walking, opposite branchIdentity) bool {
+		addPathWindow := func(id uint64, end, snap types.TS, walking, opposite branchIdentity) bool {
 			owner, cached := ownerCache[id]
 			if !cached {
 				var err3 error
 				owner, err3 = resolvePkMoveWindowOwner(
-					ctx, ses, bh, dedupeBranchIdentities(walking, opposite), id)
+					ctx, ses, bh, dedupeBranchIdentities(walking, opposite), id, snap)
 				if err3 != nil {
 					err = err3
 					return false
@@ -1239,13 +1245,17 @@ func diffMergeAgency(
 			addWindow(id, end, owner)
 			return true
 		}
-		for _, id := range dagInfo.pathFromLCAToTar {
-			if !addPathWindow(id, tarEnd, tarIdent, baseIdent) {
+		for i, id := range dagInfo.pathFromLCAToTar {
+			if !addPathWindow(id, tarEnd,
+				pkMoveWindowOwnerSnapshot(dagInfo.pathFromLCAToTarTS, i, tarSP),
+				tarIdent, baseIdent) {
 				return
 			}
 		}
-		for _, id := range dagInfo.pathFromLCAToBase {
-			if !addPathWindow(id, baseSP, baseIdent, tarIdent) {
+		for i, id := range dagInfo.pathFromLCAToBase {
+			if !addPathWindow(id, baseSP,
+				pkMoveWindowOwnerSnapshot(dagInfo.pathFromLCAToBaseTS, i, baseSP),
+				baseIdent, tarIdent) {
 				return
 			}
 		}
@@ -3374,6 +3384,20 @@ func dataBranchCollectRelationSnapshot(endpointSP, windowEnd types.TS, endpoint 
 		return endpointSP
 	}
 	return windowEnd
+}
+
+// pkMoveWindowOwnerSnapshot mirrors buildSideCollectRange's relation
+// snapshot rule for the PICK closure owner probe (r101 D222): the path's
+// endpoint segment resolves at the endpoint snapshot where it was opened,
+// an intermediate generation at the transition into its successor — the
+// source snapshot of the clone/ALTER edge — where it was still visible.
+// A missing transition entry (defensive, or i naming the endpoint)
+// degrades to the endpoint snapshot, never to a fabricated instant.
+func pkMoveWindowOwnerSnapshot(pathTS []types.TS, i int, endpointSP types.TS) types.TS {
+	if i+1 < len(pathTS) {
+		return pathTS[i+1]
+	}
+	return endpointSP
 }
 
 // getTablesCreationCommitTS resolves the creation commit timestamp for
