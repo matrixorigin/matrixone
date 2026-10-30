@@ -522,39 +522,80 @@ const MisplacedIntoClauseMessage = "Misplaced INTO clause, INTO is not allowed i
 const PerformIntoClauseMessage = "INTO is not allowed with PERFORM statements."
 
 func SelectIntoVariablesForTopLevel(stmt SelectStatement) (vars []*VarExpr, deprecated bool, err string) {
-	return selectIntoVariablesForTopLevel(stmt, false)
+	info, err := collectSelectInto(stmt, false)
+	return info.vars, info.deprecated, err
 }
 
-func selectIntoVariablesForTopLevel(stmt SelectStatement, insideUnion bool) (vars []*VarExpr, deprecated bool, err string) {
+// Original placement and promotion are collected together, once per node.
+// Rescanning each UNION's final operand here makes a single collection quadratic
+// and the parser's repeated reductions cubic on a nested UNION spine.
+type selectIntoInfo struct {
+	vars            []*VarExpr
+	deprecated      bool
+	hasInto         bool
+	hasFrom         bool
+	suffixAfterFrom bool
+}
+
+func collectSelectInto(stmt SelectStatement, insideUnion bool) (selectIntoInfo, string) {
 	switch node := stmt.(type) {
 	case *Select:
+		info, err := collectSelectInto(node.Select, insideUnion)
+		if err != "" {
+			return info, err
+		}
+		if !info.hasInto && (len(node.IntoVars) > 0 || node.Ep != nil) {
+			info.hasInto = true
+			info.suffixAfterFrom = info.hasFrom
+		}
 		if len(node.IntoVars) > 0 {
-			return node.IntoVars, insideUnion || node.DeprecatedInto, ""
+			info.vars = node.IntoVars
 		}
-		vars, deprecated, err = selectIntoVariablesForTopLevel(node.Select, insideUnion)
-		if err != "" {
-			return nil, false, err
-		}
-		return vars, deprecated || node.DeprecatedInto, ""
+		info.deprecated = info.deprecated || node.DeprecatedInto || insideUnion && len(info.vars) > 0
+		return info, ""
 	case *SelectClause:
-		return node.IntoVars, insideUnion && len(node.IntoVars) > 0, ""
+		return selectIntoInfo{
+			vars: node.IntoVars, deprecated: insideUnion && len(node.IntoVars) > 0,
+			hasInto: len(node.IntoVars) > 0 || node.IntoExport != nil,
+			hasFrom: node.From != nil && len(node.From.Tables) > 0,
+		}, ""
 	case *ParenSelect:
-		return selectIntoVariablesForTopLevel(node.Select, insideUnion)
+		return collectSelectInto(node.Select, insideUnion)
 	case *UnionClause:
-		if selectTreeHasInto(node.Left) || selectTreeHasExport(node.Left) {
-			return nil, false, MisplacedIntoClauseMessage
+		left, err := collectSelectInto(node.Left, true)
+		if err != "" || left.hasInto {
+			return selectIntoInfo{}, MisplacedIntoClauseMessage
 		}
-		vars, deprecated, err = selectIntoVariablesForTopLevel(node.Right, true)
-		if err != "" {
-			return nil, false, err
+		right, err := collectSelectInto(node.Right, true)
+		if _, parenthesized := node.Right.(*ParenSelect); parenthesized && right.suffixAfterFrom {
+			return selectIntoInfo{}, MisplacedIntoClauseMessage
 		}
-		if len(vars) > 0 {
-			deprecated = true
-		}
-		return vars, deprecated, ""
+		return right, err
 	default:
-		return nil, false, ""
+		return selectIntoInfo{}, ""
 	}
+}
+
+// ValidateSelectIntoInParentheses checks original placement, not the warning
+// metadata: a deprecated UNION INTO can still be a legal pre-FROM INTO.
+func ValidateSelectIntoInParentheses(stmt SelectStatement) string {
+	info, err := collectSelectInto(stmt, false)
+	if err != "" {
+		return err
+	}
+	if info.suffixAfterFrom {
+		return MisplacedIntoClauseMessage
+	}
+	return ""
+}
+
+// ValidateSelectIntoInSubquery applies the subquery context independently of
+// column-expression itemization, including deferred window specifications.
+func ValidateSelectIntoInSubquery(stmt SelectStatement) string {
+	if selectStatementHasInto(stmt) {
+		return MisplacedIntoClauseMessage
+	}
+	return ""
 }
 
 func SelectIntoActionConflict(stmt SelectStatement, suffix *SelectInto) bool {
@@ -579,6 +620,13 @@ func SelectIntoActionConflict(stmt SelectStatement, suffix *SelectInto) bool {
 func ValidateSelectIntoPlacement(stmt *Select) string {
 	if stmt == nil {
 		return ""
+	}
+	if _, parenthesized := stmt.Select.(*ParenSelect); parenthesized &&
+		(stmt.With != nil || stmt.SelectLockInfo != nil || len(stmt.OrderBy) > 0 ||
+			stmt.Limit != nil || stmt.TimeWindow != nil || stmt.RankOption != nil) {
+		if err := ValidateSelectIntoInParentheses(stmt.Select); err != "" {
+			return err
+		}
 	}
 	if stmt.IsPerform && (len(stmt.IntoVars) > 0 || selectTreeHasInto(stmt.Select)) {
 		return PerformIntoClauseMessage

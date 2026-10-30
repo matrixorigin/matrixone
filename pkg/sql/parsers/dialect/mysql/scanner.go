@@ -60,6 +60,13 @@ type Scanner struct {
 	aliasFollowerLookahead bool
 	soundsPhraseLookahead  bool
 	identifierAfterDot     bool
+	// identifierDot keeps a following .digit in identifier context, not a decimal.
+	identifierDot bool
+	// These are digest lexical facts, shared by syntax and normalization.
+	qualifiedIdentifier bool
+	digestReservedWord  bool
+	// digestMode applies MySQL 8.4 lexical compatibility only to digest arguments.
+	digestMode bool
 }
 
 func (s *Scanner) reset(clearLargeOnly bool, oversized bool) {
@@ -79,6 +86,10 @@ func (s *Scanner) reset(clearLargeOnly bool, oversized bool) {
 	s.aliasFollowerLookahead = false
 	s.soundsPhraseLookahead = false
 	s.identifierAfterDot = false
+	s.identifierDot = false
+	s.qualifiedIdentifier = false
+	s.digestReservedWord = false
+	s.digestMode = false
 
 	if clearLargeOnly {
 		if oversized {
@@ -152,10 +163,30 @@ func (s *Scanner) scanQualified(comments bool) (int, string) {
 func (s *Scanner) ScanWithComments() (int, string) { return s.scan(true) }
 
 func (s *Scanner) scan(comments bool) (int, string) {
+	reserved := s.digestReservedWord
+	s.digestReservedWord = false
+	s.qualifiedIdentifier = false
 	for {
 		s.scanCheckpoint()
 		token, value := s.scanToken(comments)
 		if token != skippedScannerToken {
+			if s.digestMode {
+				if token == '.' && reserved {
+					// MO admits some MySQL reserved words as identifiers. A
+					// real keyword cannot become a qualifier after the fact.
+					return LEX_ERROR, value
+				}
+				if token == COMMENT {
+					s.digestReservedWord = reserved
+				} else if token != QUOTE_ID && token != STRING && token != AT_ID && token != AT_AT_ID && !s.qualifiedIdentifier {
+					symbol := digestSymbols[digestKeywordUpper(value)]
+					if s.identifierAfterDot && symbol.reserved {
+						return LEX_ERROR, value
+					}
+					s.digestReservedWord = symbol.reserved
+				}
+			}
+			s.identifierDot = s.digestMode && token == ID && s.cur() == '.' && isDigit(s.peek(1))
 			return token, value
 		}
 	}
@@ -169,8 +200,14 @@ func (s *Scanner) scanToken(comments bool) (int, string) {
 		}
 		s.MysqlSpecialComment = nil
 	}
+	identifierDot := s.identifierDot
+	s.identifierDot = false
 	s.PrePos = s.Pos
 	s.skipBlank()
+	if identifierDot && s.cur() == '.' {
+		s.inc()
+		return '.', ""
+	}
 	if size := supplementaryUTF8SequenceSizeAt(s.buf, s.Pos); size != 0 {
 		start := s.Pos
 		s.incN(size)
@@ -184,6 +221,11 @@ func (s *Scanner) scanToken(comments bool) (int, string) {
 		if s.cur() == '@' {
 			tokenID = AT_AT_ID
 			s.inc()
+			// System-variable strings require an explicit scope and dot.
+			// Backtick identifiers remain legal without a scope.
+			if s.digestMode && (s.cur() == '\'' || s.cur() == '"') {
+				return LEX_ERROR, ""
+			}
 		} else if s.cur() == '\'' || s.cur() == '"' {
 			return int('@'), ""
 		} else if s.cur() == ',' {
@@ -204,6 +246,10 @@ func (s *Scanner) scanToken(comments bool) (int, string) {
 		}
 		return tokenID, tBytes
 	case isUnquotedIdentifierLetterAt(s.buf, s.Pos):
+		if s.digestMode && s.identifierAfterDot && s.Pos > 0 && s.buf[s.Pos-1] == '.' {
+			// A qualified name component is not a literal introducer.
+			return s.scanIdentifier(false)
+		}
 		if ch == 'X' || ch == 'x' {
 			if s.peek(1) == '\'' {
 				s.incN(2)
@@ -220,6 +266,8 @@ func (s *Scanner) scanToken(comments bool) (int, string) {
 			typ, str := s.scanIdentifier(false)
 			if s.cur() != '$' {
 				return typ, str
+			} else if s.digestMode {
+				return LEX_ERROR, ""
 			} else {
 				// this is a dollar sign string
 				strTyp, strStr := s.scanString('$', STRING)
@@ -263,6 +311,9 @@ func (s *Scanner) scanToken(comments bool) (int, string) {
 		return s.scanIdentifier(false)
 
 	case isDigit(ch):
+		if s.digestMode && s.identifierAfterDot && s.Pos > 0 && s.buf[s.Pos-1] == '.' {
+			return s.scanIdentifier(false)
+		}
 		return s.scanNumber()
 	case ch == ':':
 		if s.peek(1) == '=' {
@@ -296,6 +347,9 @@ func (s *Scanner) scanToken(comments bool) (int, string) {
 		s.inc()
 		switch s.cur() {
 		case '/':
+			if s.digestMode {
+				return int('/'), ""
+			}
 			s.inc()
 			id, str := s.scanCommentTypeLine(2)
 			if comments || id == LEX_ERROR {
@@ -339,7 +393,7 @@ func (s *Scanner) scanToken(comments bool) (int, string) {
 			return s.stepBackOneChar(ch, comments)
 		}
 	case ch == '\'':
-		if !s.CommentFlag {
+		if !s.CommentFlag || s.digestMode {
 			return s.stepBackOneChar(ch, comments)
 		}
 		s.inc()
@@ -442,11 +496,18 @@ func (s *Scanner) readVersion() bool {
 	if s.Pos < len(s.buf) {
 		if isDigit(s.cur()) {
 			if s.Pos+4 < len(s.buf) {
+				version := 0
 				for i := 0; i < 5; i++ {
 					if !isDigit(s.cur()) {
 						return false
 					}
+					version = version*10 + int(s.cur()-'0')
 					s.inc()
+				}
+				if s.digestMode && version > 80411 {
+					token, _ := s.scanCommentTypeBlock()
+					s.CommentFlag = false
+					return token != LEX_ERROR
 				}
 				return true
 			}
@@ -838,7 +899,7 @@ func (s *Scanner) scanNumber() (int, string) {
 	// 0x construct.
 	if s.cur() == '0' {
 		s.inc()
-		if s.cur() == 'x' || s.cur() == 'X' {
+		if s.cur() == 'x' || !s.digestMode && s.cur() == 'X' {
 			token = HEXNUM
 			s.inc()
 			p1 := s.Pos
@@ -851,11 +912,11 @@ func (s *Scanner) scanNumber() (int, string) {
 						return typ, str
 					}
 				}
-				return token, toLowerASCII(s.buf[start:s.Pos])
+				return token, s.numberText(start)
 			}
 
 			goto exit
-		} else if s.cur() == 'b' || s.cur() == 'B' {
+		} else if s.cur() == 'b' || !s.digestMode && s.cur() == 'B' {
 			token = BIT_LITERAL
 			s.inc()
 			p1 := s.Pos
@@ -868,7 +929,7 @@ func (s *Scanner) scanNumber() (int, string) {
 						return typ, str
 					}
 				}
-				return token, toLowerASCII(s.buf[start:s.Pos])
+				return token, s.numberText(start)
 			}
 
 			goto exit
@@ -892,6 +953,9 @@ exponent:
 			s.incN(2)
 		} else if digitVal(s.peek(1)) < 10 {
 			token = FLOAT
+			if s.digestMode {
+				canPromoteToIdentifier = false
+			}
 			s.inc()
 		} else {
 			goto exit
@@ -906,12 +970,20 @@ exit:
 		s.scanIdentifier(false)
 	}
 
-	return token, toLowerASCII(s.buf[start:s.Pos])
+	return token, s.numberText(start)
+}
+
+func (s *Scanner) numberText(start int) string {
+	// Digest identifier bytes are case-sensitive, including digit-led names.
+	if s.digestMode {
+		return s.buf[start:s.Pos]
+	}
+	return toLowerASCII(s.buf[start:s.Pos])
 }
 
 func (s *Scanner) scanIdentifier(isVariable bool) (int, string) {
 	token, text := s.scanIdentifierToken(isVariable)
-	if token != BEGIN || s.aliasFollowerLookahead {
+	if token != BEGIN || s.aliasFollowerLookahead || s.digestMode {
 		return token, text
 	}
 	// BEGIN's transaction/block lookahead used to recursively scan a chain of
@@ -981,17 +1053,36 @@ func (s *Scanner) scanIdentifierToken(isVariable bool) (int, string) {
 		s.inc()
 	}
 	keywordName := s.buf[start:s.Pos]
-	// MySQL permits even reserved words as unquoted qualified name components.
-	// Classify here so BEGIN and other contextual keywords cannot look ahead.
-	if s.identifierAfterDot && !isVariable {
-		return ID, keywordName
+	// MySQL bypasses keyword lookup before an adjacent dot only when its
+	// next byte starts an unquoted identifier. After a qualifying dot, the
+	// word is already an identifier. Decide before BEGIN/function lookahead
+	// and retain the fact for digest encoding; token ID alone is insufficient.
+	if !isVariable {
+		if s.digestMode {
+			if s.identifierAfterDot && start > 0 && s.buf[start-1] == '.' ||
+				s.cur() == '.' && (isUnquotedIdentifierLetterAt(s.buf, s.Pos+1) || isDigit(s.peek(1))) {
+				s.qualifiedIdentifier = true
+				return ID, keywordName
+			}
+		} else if s.identifierAfterDot {
+			return ID, keywordName
+		}
 	}
-	lower := strings.ToLower(keywordName)
+	var lower string
+	if s.digestMode {
+		lower = toLowerASCII(keywordName)
+	} else {
+		lower = strings.ToLower(keywordName)
+	}
 	if keywordID, found := keywords[lower]; found {
-		if isSQLModeSensitiveFunctionName(lower) && !s.sqlMode.Has(SQLModeIgnoreSpace) {
+		if isSQLModeSensitiveFunctionName(lower) && (!s.sqlMode.Has(SQLModeIgnoreSpace) || s.digestMode) {
 			pos := s.skipBlankAndCommentsFrom(s.Pos)
 			if pos != s.Pos && pos < len(s.buf) && s.buf[pos] == '(' {
-				return ID, keywordName
+				// IGNORE_SPACE admits whitespace, not intervening comments. Keep
+				// this digest contextualization isolated from execution parsing.
+				if !s.sqlMode.Has(SQLModeIgnoreSpace) || strings.Trim(s.buf[s.Pos:pos], " \n\r\t") != "" {
+					return ID, keywordName
+				}
 			}
 		}
 		if lower == "within" {

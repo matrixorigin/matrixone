@@ -35,6 +35,7 @@ var _ Binder = (*distinctOrderBinder)(nil)
 
 func newDistinctOrderBinder(projectionBinder *ProjectionBinder) *distinctOrderBinder {
 	b := &distinctOrderBinder{}
+	b.defaultColumnAliases = true
 	b.sysCtx = projectionBinder.sysCtx
 	b.builder = projectionBinder.builder
 	b.ctx = projectionBinder.ctx
@@ -355,6 +356,9 @@ func NewOrderBinder(projectionBinder *ProjectionBinder, selectList tree.SelectEx
 }
 
 func (b *OrderBinder) BindExpr(astExpr tree.Expr) (*plan.Expr, error) {
+	previousDefaultAliases := b.defaultColumnAliases
+	b.defaultColumnAliases = true
+	defer func() { b.defaultColumnAliases = previousDefaultAliases }()
 	// Parentheses do not turn a top-level ORDER BY name into a nested
 	// expression. Keep the same output-name precedence for `ORDER BY name` and
 	// `ORDER BY (name)`.

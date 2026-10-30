@@ -193,6 +193,7 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
     str string
     item interface{}
     pos int
+    quotedIdentifier bool
 }
 
 %union {
@@ -740,6 +741,9 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 
 // Iceberg
 %token <str> ICEBERG CATALOG CATALOGS NAMESPACE NAMESPACES REF FOR_ICEBERG
+// DUAL is reserved only in MySQL digest syntax; ordinary MO identifiers keep
+// their existing grammar. Its only unqualified form is the entire FROM clause.
+%token <str> DIGEST_DUAL
 %token <str> MONGODB MONGODB_PATH MONGODB_CONVERT CONNECTIONS
 %token <str> DATASTREAM ESQL KAFKA
 
@@ -857,7 +861,7 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 %type <insertPartition> insert_partition_clause_opt
 %type <partitionValues> insert_partition_value_list
 %type <joinCond> join_condition join_condition_opt
-%type <selectLockInfo> select_lock_opt
+%type <selectLockInfo> select_lock_opt select_lock
 %type <upgrade_target> target
 %type <analyzeTableEntries> analyze_table_list
 %type <analyzeTableEntry> analyze_table_entry
@@ -7114,6 +7118,32 @@ select_no_parens:
             return 1
         }
     }
+|   select_with_parens select_lock
+    {
+        intoVars, deprecatedInto, intoErr := tree.SelectIntoVariablesForTopLevel($1)
+        if intoErr != "" {
+            yylex.Error(intoErr)
+            return 1
+        }
+        $$ = &tree.Select{Select: $1, SelectLockInfo: $2, Ep: tree.SelectIntoExport($1), IntoVars: intoVars, DeprecatedInto: deprecatedInto}
+        if intoErr := tree.ValidateSelectIntoPlacement($$); intoErr != "" {
+            yylex.Error(intoErr)
+            return 1
+        }
+    }
+|   with_clause select_with_parens select_lock_opt
+    {
+        intoVars, deprecatedInto, intoErr := tree.SelectIntoVariablesForTopLevel($2)
+        if intoErr != "" {
+            yylex.Error(intoErr)
+            return 1
+        }
+        $$ = &tree.Select{Select: $2, With: $1, Ep: tree.SelectIntoExport($2), IntoVars: intoVars, DeprecatedInto: deprecatedInto, SelectLockInfo: $3}
+        if intoErr := tree.ValidateSelectIntoPlacement($$); intoErr != "" {
+            yylex.Error(intoErr)
+            return 1
+        }
+    }
 |   select_with_parens time_window_opt order_by_clause select_into_param_opt
     {
         intoVars, deprecatedInto, intoErr := tree.SelectIntoVariablesForTopLevel($1)
@@ -7391,6 +7421,15 @@ fill_mode:
 with_clause:
     WITH cte_list
     {
+        // Ordinary SQL retains binder-owned duplicate-name diagnostics. Digest
+        // has no binder, so declaration syntax must be checked here, even in
+        // unused definitions and EXPLAIN where lock itemization is skipped.
+        if yylex.(*Lexer).digest != nil {
+            if err := tree.ValidateCTENames($2, digestIdentifierKey); err != "" {
+                yylex.Error(err)
+                goto ret1
+            }
+        }
         $$ = &tree.With{
             IsRecursive: false,
             CTEs: $2,
@@ -7398,6 +7437,12 @@ with_clause:
     }
 |    WITH RECURSIVE cte_list
     {
+        if yylex.(*Lexer).digest != nil {
+            if err := tree.ValidateCTENames($3, digestIdentifierKey); err != "" {
+                yylex.Error(err)
+                goto ret1
+            }
+        }
         $$ = &tree.With{
             IsRecursive: true,
             CTEs: $3,
@@ -7424,8 +7469,12 @@ common_table_expr:
             yylex.Error("empty common table expression body")
             goto ret1
         }
+        name := $1.Compare()
+        if yylex.(*Lexer).digest != nil {
+            name = $1.Origin()
+        }
         $$ = &tree.CTE{
-            Name: &tree.AliasClause{Alias: tree.Identifier($1.Compare()), Cols: $2},
+            Name: &tree.AliasClause{Alias: tree.Identifier(name), Cols: $2},
             Stmt: $5,
         }
     }
@@ -7593,8 +7642,15 @@ select_lock_opt:
     {
         $$ = nil
     }
-|   FOR UPDATE
+|   select_lock
     {
+        $$ = $1
+    }
+
+select_lock:
+    FOR UPDATE
+    {
+        yylex.(*Lexer).selectLockClauses++
         $$ = &tree.SelectLockInfo{
             LockType:tree.SelectLockForUpdate,
         }
@@ -7604,6 +7660,7 @@ select_lock_opt:
     }
 |   FOR SHARE
     {
+        yylex.(*Lexer).selectLockClauses++
         $$ = &tree.SelectLockInfo{
             LockType:tree.SelectLockForShare,
         }
@@ -7615,6 +7672,7 @@ select_lock_opt:
     }
 |   LOCK IN SHARE MODE
     {
+        yylex.(*Lexer).selectLockClauses++
         $$ = &tree.SelectLockInfo{
             LockType:tree.SelectLockForShare,
         }
@@ -8103,6 +8161,11 @@ from_clause:
         $$ = &tree.From{
             Tables: tree.TableExprs{$2},
         }
+    }
+|   FROM DIGEST_DUAL
+    {
+        tn := tree.NewTableName(tree.Identifier($2), tree.ObjectNamePrefix{}, nil)
+        $$ = &tree.From{Tables: tree.TableExprs{&tree.AliasedTableExpr{Expr: tn}}}
     }
 
 table_references:
@@ -12169,6 +12232,7 @@ table_name:
         prefix := tree.ObjectNamePrefix{ExplicitSchema: false}
         $$ = tree.NewTableName(tree.Identifier(tblName), prefix, $2)
         $$.IcebergRef = $3
+        $$.IsQuoted = $1.Quoted
     }
 |   ident '.' ident table_snapshot_opt iceberg_ref_opt
     {
@@ -12177,6 +12241,7 @@ table_name:
         prefix := tree.ObjectNamePrefix{SchemaName: tree.Identifier(dbName), ExplicitSchema: true}
         $$ = tree.NewTableName(tree.Identifier(tblName), prefix, $4)
         $$.IcebergRef = $5
+        $$.IsQuoted = $3.Quoted
     }
 
 iceberg_ref_opt:
@@ -12625,10 +12690,12 @@ ident:
     ID
     {
 		if rejectSQLModeReservedFunctionName(yylex, $1) { goto ret1 }; $$ = tree.NewCStr($1, 1)
+        $$.Quoted = $<quotedIdentifier>1
     }
 |	QUOTE_ID
 	{
     	$$ = tree.NewCStr($1, 1)
+        $$.Quoted = true
     }
 |   not_keyword
 	{
@@ -13019,6 +13086,12 @@ column_format:
 subquery:
     select_with_parens %prec SUBQUERY_AS_EXPR
     {
+        if yylex.(*Lexer).digest != nil {
+            if err := tree.ValidateSelectIntoInSubquery($1); err != "" {
+                yylex.Error(err)
+                return 1
+            }
+        }
         $$ = &tree.Subquery{Select: $1, Exists: false}
     }
 
@@ -13108,6 +13181,10 @@ simple_expr:
 |   variable
     {
         $$ = $1
+    }
+|   DEFAULT '(' column_name ')'
+    {
+        $$ = &tree.DefaultColExpr{Column: $3, StrictMode: yylex.(*Lexer).sqlMode.Has(SQLModeStrict)}
     }
 |   literal
     {
@@ -14506,7 +14583,8 @@ function_call_generic:
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
             FuncName: tree.NewCStr($1, 1),
-            IsGeneric: isSQLModeSensitiveFunctionName($1),
+            IsGeneric: isSQLModeSensitiveFunctionName($1) ||
+                (yylex.(*Lexer).digest != nil && isDigestTemporalFunctionName($1)),
             Exprs: $3,
         }
     }
@@ -14863,6 +14941,7 @@ function_call_keyword:
         val := tree.NewNumVal($2, $2, false, tree.P_char)
         name := tree.NewUnresolvedColName($1)
         $$ = &tree.FuncExpr{
+            IsTemporalLiteral: true,
             Func: tree.FuncName2ResolvableFunctionReference(name),
             FuncName: tree.NewCStr($1, 1),
             Exprs: tree.Exprs{val},
@@ -14873,6 +14952,7 @@ function_call_keyword:
         val := tree.NewNumVal($2, $2, false, tree.P_char)
         name := tree.NewUnresolvedColName($1)
         $$ = &tree.FuncExpr{
+            IsTemporalLiteral: true,
             Func: tree.FuncName2ResolvableFunctionReference(name),
             FuncName: tree.NewCStr($1, 1),
             Exprs: tree.Exprs{val},
@@ -14912,6 +14992,7 @@ function_call_keyword:
         val := tree.NewNumVal($2, $2, false, tree.P_char)
         name := tree.NewUnresolvedColName($1)
         $$ = &tree.FuncExpr{
+            IsTemporalLiteral: true,
             Func: tree.FuncName2ResolvableFunctionReference(name),
             FuncName: tree.NewCStr($1, 1),
             Exprs: tree.Exprs{val},
@@ -15400,6 +15481,9 @@ literal:
     }
 |   NULL
     {
+        if digest := yylex.(*Lexer).digest; digest != nil {
+            digest.nulls[$<pos>1] = struct{}{}
+        }
         $$ = tree.NewNumVal("null", "null", false, tree.P_null)
     }
 |   HEXNUM

@@ -1035,6 +1035,11 @@ type BindContext struct {
 	groupByAst          map[string]int32
 	groupByCanonicalAst map[string]int32
 	groupByParamAst     map[string]int32
+	// groupBySourceColumns retains logical source identity before unary-plus
+	// lowering inserts numeric functions/casts. Keys are (relation tag, column).
+	// DEFAULT uses it for name visibility, never for row values or functional
+	// dependency proofs. It is query-local and independent of active subtotals.
+	groupBySourceColumns map[[2]int32]struct{}
 	// sampleGroupByAst retains the logical identity of stable GROUP BY
 	// literals removed from the physical key. SAMPLE must still reject those
 	// expressions even though ordinary projection binding should see literals.
@@ -1233,6 +1238,8 @@ type baseBinder struct {
 	inetNtoaNumericLiteralContext bool
 	subqueryInAggregateInput      bool
 	aggregateInputCorrelation     bool
+	// DEFAULT's metadata-only reference may use output aliases in ORDER BY.
+	defaultColumnAliases bool
 }
 
 type boundColumn struct {
@@ -1243,9 +1250,12 @@ type boundColumn struct {
 
 type DefaultBinder struct {
 	baseBinder
-	typ           Type
-	cols          []string // Name-only SHOW scope; mutually exclusive with columns.
-	columns       []*ColDef
+	typ     Type
+	cols    []string // Name-only SHOW scope; mutually exclusive with columns.
+	columns []*ColDef
+	// defaultTarget is only the namespace of DEFAULT(col) in VALUES. It must
+	// not admit ordinary row-column references in INSERT value expressions.
+	defaultTarget *TableDef
 	allowSubquery bool
 }
 

@@ -343,6 +343,7 @@ func TestStatementRequiresPersistentWriteAccessTemporaryTables(t *testing.T) {
 		"delete tt from otherdb.tt",
 		"delete x from (otherdb.tt as x)",
 		"delete tt from (select 1 as a) as tt",
+		"delete missing from tt",
 	} {
 		stmt := parseSingleStatement(t, sql)
 		require.Equal(t, writePersistent, classifyStatementWrite(ses, stmt, "testdb"), sql)

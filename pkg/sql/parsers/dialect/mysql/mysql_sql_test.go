@@ -2836,7 +2836,7 @@ var (
 			output: "select date_add(1997-12-31 23:59:59, INTERVAL -100000 year)",
 		}, {
 			input:  "SELECT ADDDATE(DATE'2021-01-01', INTERVAL 1 DAY);",
-			output: "select ADDDATE(DATE(2021-01-01), INTERVAL 1 day)",
+			output: "select ADDDATE(DATE 2021-01-01, INTERVAL 1 day)",
 		}, {
 			input:  "SELECT DATE_ADD('2025-12-01', INTERVAL ((5*11)%180) DAY);",
 			output: "select DATE_ADD(2025-12-01, INTERVAL ((5 * 11) % 180) day)",
@@ -3006,7 +3006,7 @@ var (
 			output: "select extract(year from l_shipdate) as l_year from t",
 		}, {
 			input:  "select * from R join S on R.uid = S.uid where l_shipdate <= date '1998-12-01' - interval '112' day",
-			output: "select * from r inner join s on R.uid = S.uid where l_shipdate <= date(1998-12-01) - INTERVAL 112 day",
+			output: "select * from r inner join s on R.uid = S.uid where l_shipdate <= date 1998-12-01 - INTERVAL 112 day",
 		}, {
 			input: "create table deci_table (a decimal(10, 5))",
 		}, {

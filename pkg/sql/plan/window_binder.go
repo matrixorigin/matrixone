@@ -571,6 +571,7 @@ func cloneBindContextForWindowValidation(ctx *BindContext) *BindContext {
 	cloned.groupByAst = cloneWindowValidationMap(ctx.groupByAst)
 	cloned.groupByCanonicalAst = cloneWindowValidationMap(ctx.groupByCanonicalAst)
 	cloned.groupByParamAst = cloneWindowValidationMap(ctx.groupByParamAst)
+	cloned.groupBySourceColumns = cloneWindowValidationMap(ctx.groupBySourceColumns)
 	cloned.aggregateByAst = cloneWindowValidationMap(ctx.aggregateByAst)
 	cloned.aliasExpandedExprs = cloneWindowValidationMap(ctx.aliasExpandedExprs)
 	cloned.groupConcatByExpr = cloneWindowValidationMap(ctx.groupConcatByExpr)

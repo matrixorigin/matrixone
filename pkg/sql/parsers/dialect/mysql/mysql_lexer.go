@@ -190,17 +190,30 @@ func Parse(ctx context.Context, sql string, lower int64) ([]tree.Statement, erro
 	return ParseWithSQLMode(ctx, sql, lower, "")
 }
 
+func parseWithSQLMode(ctx context.Context, sql string, lower int64, sqlMode string, digest *statementDigestSyntax) ([]tree.Statement, error) {
+	// Keep the public parser signature stable. This private, per-invocation
+	// request lets the same approved owner bound both digest scanner passes.
+	return ParseWithSQLMode(context.WithValue(ctx, statementDigestSyntaxKey{}, digest), sql, lower, sqlMode)
+}
+
 func ParseWithSQLMode(ctx context.Context, sql string, lower int64, sqlMode string) (statements []tree.Statement, err error) {
 	lexer := NewLexerWithSQLMode(dialect.MYSQL, sql, lower, ParseSQLModeFlags(sqlMode))
 	defer PutScanner(lexer.scanner)
+	// Until a successful return transfers the AST, this is its only cleanup
+	// owner, including syntax/normalization failures and foreign panics.
+	defer func() {
+		if statements == nil {
+			for _, statement := range lexer.stmts {
+				statement.Free()
+			}
+		}
+	}()
+	digest, _ := ctx.Value(statementDigestSyntaxKey{}).(*statementDigestSyntax)
+	lexer.digest = digest
+	lexer.scanner.digestMode = digest != nil
+	var control *parseControl
 	if limits, ok := ctx.Value(parseLimitsKey{}).(ParseLimits); ok {
-		if cause := context.Cause(ctx); cause != nil {
-			return nil, cause
-		}
-		if len(sql) > limits.Input {
-			return nil, ErrParseLimit
-		}
-		control := &parseControl{ctx: ctx, limits: limits}
+		control = &parseControl{ctx: ctx, limits: limits}
 		lexer.scanner.parseControl = control
 		defer func() {
 			if failure := recover(); failure != nil {
@@ -208,37 +221,43 @@ func ParseWithSQLMode(ctx context.Context, sql string, lower int64, sqlMode stri
 				if !own || abort.control != control {
 					panic(failure)
 				}
-				for _, statement := range lexer.stmts {
-					statement.Free()
-				}
 				statements, err = nil, abort.err
 			}
 		}()
+		if cause := context.Cause(ctx); cause != nil {
+			return nil, cause
+		}
+		if len(sql) > limits.Input {
+			return nil, ErrParseLimit
+		}
 	}
 
 	if yyParse(lexer) != 0 {
-		for _, s := range lexer.stmts {
-			s.Free()
-		}
 		return nil, lexer.scanner.LastError
 	}
 	if err := validateSelectIntoStatements(lexer); err != nil {
-		for _, s := range lexer.stmts {
-			s.Free()
-		}
 		return nil, err
 	}
 	if len(lexer.stmts) == 0 {
-		/**
-		For CORNER CASE like:
-
-		mysql> -- MySQL dump 10.13  Distrib 8.1.0, for macos11.7 (arm64)
-
-		the input will be stripped to empty string, and the parser will return 0 stmts.
-		but, the mysql server responds ok to the client.
-		so, we return an EmptyStmt that does nothing beside responding ok.
-		*/
-		return []tree.Statement{&tree.EmptyStmt{}}, nil
+		// Keep the existing empty/comment-only statement shape. Digest still
+		// rejects empty/whitespace input, but comments alone have an empty digest.
+		lexer.stmts = []tree.Statement{&tree.EmptyStmt{}}
+	}
+	if digest != nil && digest.normalized != nil {
+		if len(lexer.stmts) != 1 || strings.TrimSpace(sql) == "" || !digestSyntaxValid(lexer.stmts[0]) {
+			return nil, moerr.NewDigestParse(ctx)
+		}
+		if control != nil {
+			// Syntax and normalization have independent, equally tight budgets.
+			control.work, control.tokens = 0, 0
+		}
+		*digest.normalized = statementDigest{tokens: make([]digestToken, 0, 64)}
+		scanner := NewScannerWithSQLMode(dialect.MYSQL, sql, lexer.sqlMode)
+		defer PutScanner(scanner)
+		scanner.digestMode, scanner.parseControl = true, control
+		if err := digest.normalized.scan(scanner, digest, false); err != nil {
+			return nil, err
+		}
 	}
 	return lexer.stmts, nil
 }
@@ -272,6 +291,7 @@ func ParseOneWithSQLMode(ctx context.Context, sql string, lower int64, sqlMode s
 }
 
 type Lexer struct {
+	digest                *statementDigestSyntax
 	scanner               *Scanner
 	stmts                 []tree.Statement
 	paramIndex            int
@@ -288,6 +308,7 @@ type Lexer struct {
 	parseFirst            bool
 	stopLexing            bool
 	statementEnd          int
+	selectLockClauses     int
 }
 
 // reservedKeywordsAfterAS lists tokens that represent reserved keywords
@@ -333,6 +354,7 @@ func (l *Lexer) setScanner(s *Scanner, lower int64, sqlMode SQLModeFlags) {
 	l.parseFirst = false
 	l.stopLexing = false
 	l.statementEnd = 0
+	l.selectLockClauses = 0
 }
 
 func (l *Lexer) HasSQLMode(flag SQLModeFlag) bool {
@@ -349,6 +371,11 @@ func (l *Lexer) isSQLModeReservedFunctionName(name string) bool {
 	// that distinction before applying the function-name rule.
 	if l.previousToken == int('.') {
 		return false
+	}
+	if l.digest != nil {
+		keywordID := keywords[strings.ToLower(name)]
+		return !l.scanner.qualifiedIdentifier && (l.scanner.digestFunctionCallAhead() ||
+			l.lastToken == int('(') && l.previousToken == keywordID)
 	}
 	if l.HasSQLMode(SQLModeIgnoreSpace) {
 		return true
@@ -398,6 +425,56 @@ func (l *Lexer) Lex(lval *yySymType) int {
 		typ, str = l.scanner.ScanAfterDot()
 	} else {
 		typ, str = l.scanner.Scan()
+	}
+	// Preserve identifier identity even when digest-only grammar adaptation
+	// below turns QUOTE_ID into ID. This is token-local, never scanner state.
+	lval.quotedIdentifier = typ == QUOTE_ID
+	// Digest input is parsed, never bound/executed. Admit MySQL's explicit
+	// ROW constructor and quoted user-variable names without changing ordinary
+	// SQL execution syntax. The independent digest scanner keeps their tokens.
+	if l.digest != nil {
+		if typ == ROW && l.lastToken != CURRENT {
+			// CURRENT ROW is a window-frame bound, not a ROW constructor.
+			if !digestRowConstructorValid(l.scanner) {
+				typ = LEX_ERROR
+			} else {
+				typ = ID
+			}
+		} else if typ == CURRENT_ROLE {
+			// MySQL's CURRENT_ROLE is an ordinary identifier unless called.
+			// Retain the existing zero-argument call grammar, including spaces
+			// and comments, without changing ordinary MO execution parsing.
+			lookahead := *l.scanner
+			if next, _ := lookahead.Scan(); next != '(' {
+				typ = ID
+			}
+		} else if typ == NOW && l.previousToken == ON && l.lastToken == UPDATE {
+			// MySQL also admits NOW(fsp) for an ON UPDATE timestamp attribute.
+			// Keep this digest-only; bare NOW is not the CURRENT_TIMESTAMP form.
+			lookahead := *l.scanner
+			if next, _ := lookahead.Scan(); next == '(' {
+				typ = CURRENT_TIMESTAMP
+			} else {
+				typ = LEX_ERROR
+			}
+		} else if typ == ID && l.lastToken != '.' && strings.EqualFold(str, "n") && l.scanner.cur() == '\'' {
+			// National strings are one literal, not an identifier plus alias.
+			typ, str = l.scanner.Scan()
+		} else if typ == ID && strings.EqualFold(str, "dual") && !l.scanner.qualifiedIdentifier {
+			typ = DIGEST_DUAL
+		} else if typ == QUOTE_ID {
+			typ = ID
+		} else if typ == ID && l.lastToken != '.' && digestCharsetIntroducer(str) {
+			typ = UNDERSCORE_BINARY
+		} else if typ == ASSIGNMENT && l.lastToken == AT_ID {
+			typ = '='
+		} else if typ == '@' {
+			if next, value := l.scanner.Scan(); next == STRING || next == QUOTE_ID {
+				typ, str = AT_ID, value
+			} else {
+				typ = LEX_ERROR
+			}
+		}
 	}
 	lval.pos = l.scanner.Pos
 	l.scanner.LastToken = str
@@ -769,6 +846,18 @@ func validateSelectIntoStatements(lexer *Lexer) error {
 		if errMsg := tree.ValidateSelectIntoStatementRoot(stmt); errMsg != "" {
 			lexer.Error(errMsg)
 			return lexer.scanner.LastError
+		}
+		// WITH/CTE scope is complete only at this boundary. Avoid a query-tree
+		// walk on the ordinary zero/single-lock path.
+		if lexer.selectLockClauses > 1 {
+			nameKey := strings.ToLower
+			if lexer.digest != nil {
+				nameKey = digestIdentifierKey
+			}
+			if errMsg := tree.ValidateSelectLocking(stmt, nameKey); errMsg != "" {
+				lexer.Error(errMsg)
+				return lexer.scanner.LastError
+			}
 		}
 	}
 	return nil

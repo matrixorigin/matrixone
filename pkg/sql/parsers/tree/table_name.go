@@ -19,6 +19,9 @@ type TableName struct {
 	objName
 	AtTsExpr   *AtTimeStamp
 	IcebergRef *IcebergRefSpec
+	// IsQuoted preserves the lexical identity of a table identifier. In
+	// particular, `dual` names a base table, unlike the unquoted DUAL form.
+	IsQuoted bool
 }
 
 func (tn TableName) Format(ctx *FmtCtx) {

@@ -1707,12 +1707,11 @@ func genAsSelectCols(
 	for i, expr := range rootNode.ProjectList {
 		typ := expr.Typ
 		provenance := outputColumnProvenance[i]
-		if provenance.State == ProvenanceSingleSource && provenance.Source != nil {
-			if isEnumOrSetPlanType(&provenance.Source.Metadata.Typ) {
-				typ = provenance.Source.Metadata.Typ
-				typ.NotNullable = expr.Typ.NotNullable
-			}
-		} else {
+		if resultType := mysqlSpecialTypeFromProvenance(provenance); resultType != nil {
+			typ = *resultType
+			typ.NotNullable = expr.Typ.NotNullable
+		}
+		if provenance.State != ProvenanceSingleSource || provenance.Source == nil {
 			// Numeric attribute masks carry only on the direct single-source
 			// channel. Any other output (computed expression, set-operation
 			// result, aggregate, literal) is a semantic boundary: a UNION's

@@ -873,6 +873,9 @@ func (bc *BindContext) mysqlSpecialCanonicalTypeForProject(colPos int32) *plan.T
 }
 
 func mysqlSpecialTypeFromProvenance(provenance OutputColumnProvenance) *plan.Type {
+	if isEnumOrSetPlanType(provenance.ResultType) {
+		return DeepCopyType(provenance.ResultType)
+	}
 	if provenance.State != ProvenanceSingleSource || provenance.Source == nil ||
 		!isEnumOrSetPlanType(&provenance.Source.Metadata.Typ) {
 		return nil
@@ -1421,37 +1424,6 @@ func makeMySQLSpecialOrderKey(ctx context.Context, displayExpr *plan.Expr, stora
 	orderKey.Typ.NotNullable = displayExpr.Typ.NotNullable
 	orderKey.Typ.Enumvalues = storageType.Enumvalues
 	return orderKey, nil
-}
-
-func wrapAstExprForMySQLSpecialType(ctx context.Context, targetType plan.Type, astExpr tree.Expr) (tree.Expr, error) {
-	if !isEnumOrSetPlanType(&targetType) {
-		return astExpr, nil
-	}
-
-	binder := NewDefaultBinder(ctx, nil, nil, targetType, nil)
-	boundExpr, err := binder.BindExpr(astExpr, 0, false)
-	if err != nil {
-		return nil, err
-	}
-
-	_, valueToIndex, indexValueToIndex, err := mysqlSpecialTypeFuncNames(&targetType)
-	if err != nil {
-		return nil, err
-	}
-
-	funcName := valueToIndex
-	if types.T(boundExpr.Typ.Id).IsInteger() {
-		funcName = indexValueToIndex
-	}
-
-	return &tree.FuncExpr{
-		Func: tree.FuncName2ResolvableFunctionReference(tree.NewUnresolvedColName(funcName)),
-		Type: tree.FUNC_TYPE_DEFAULT,
-		Exprs: []tree.Expr{
-			tree.NewNumVal(targetType.Enumvalues, targetType.Enumvalues, false, tree.P_char),
-			astExpr,
-		},
-	}, nil
 }
 
 func funcCastForGeometryType(ctx context.Context, expr *Expr, targetType Type) (*Expr, error) {

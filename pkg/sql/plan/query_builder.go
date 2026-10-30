@@ -4749,19 +4749,35 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 		if err == nil {
 			// Identical UNION branches can collapse to one DISTINCT SELECT,
 			// but its SQL result still crosses a set-operation boundary.
-			var integerIDs []uint32
-			if builder.integerPrecision != nil {
-				integerIDs = make([]uint32, len(ctx.headings))
-				for i := range integerIDs {
-					integerIDs[i] = ctx.outputColumnProvenanceForProject(int32(i)).IntegerPrecisionID
+			provenance := make([]OutputColumnProvenance, len(ctx.projects))
+			for i, project := range ctx.projects {
+				previous := ctx.outputColumnProvenanceForProject(int32(i))
+				provenance[i] = previous
+				if !shareGroupingInput {
+					// The optimizer's DISTINCT rewrite must not erase the SQL
+					// UNION field's default or pre-fold temporal nullability.
+					nullability := previous.TypeDefaultNullability
+					if nullability == typeDefaultInheritNullability {
+						nullability = typeDefaultNullable
+						if project.Typ.NotNullable {
+							nullability = typeDefaultNotNullable
+						}
+					}
+					provenance[i] = OutputColumnProvenance{
+						State: ProvenanceNone, TypeDefault: typeDefaultUnion,
+						TypeDefaultNullability: nullability,
+					}
+					if previous.State == ProvenancePureNull {
+						provenance[i].State = ProvenancePureNull
+					}
+					if builder.integerPrecision != nil {
+						provenance[i].IntegerPrecisionID = builder.integerPrecision.reference(previous.IntegerPrecisionID)
+					}
 				}
 			}
 			ctx.clearOutputColumnProvenance()
-			for i, id := range integerIDs {
-				if !shareGroupingInput {
-					id = builder.integerPrecision.reference(id)
-				}
-				ctx.setOutputColumnProvenance(int32(i), OutputColumnProvenance{State: ProvenanceNone, IntegerPrecisionID: id})
+			for i, source := range provenance {
+				ctx.setOutputColumnProvenance(int32(i), source)
 			}
 		}
 		return nodeID, err
@@ -5270,9 +5286,30 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 				break
 			}
 		}
-		if allPureNull {
-			ctx.setOutputColumnProvenance(int32(colIdx), OutputColumnProvenance{State: ProvenancePureNull})
+		defaultKind := typeDefaultUnion
+		if shareGroupingInput {
+			// ROLLUP's UNION is an execution rewrite, not a SQL UNION field.
+			// Its temporary fields must not acquire UNION-only strict errors.
+			defaultKind = typeDefaultImplicit
 		}
+		provenance := OutputColumnProvenance{
+			State:              ProvenanceNone,
+			TypeDefault:        defaultKind,
+			IntegerPrecisionID: ctx.outputColumnProvenanceForProject(int32(colIdx)).IntegerPrecisionID,
+		}
+		provenance.TypeDefaultNullability = typeDefaultNotNullable
+		for _, branch := range subCtxList {
+			nullability := branch.outputColumnProvenanceForProject(int32(colIdx)).TypeDefaultNullability
+			if nullability == typeDefaultNullable ||
+				(nullability == typeDefaultInheritNullability && !branch.projects[colIdx].Typ.NotNullable) {
+				provenance.TypeDefaultNullability = typeDefaultNullable
+				break
+			}
+		}
+		if allPureNull {
+			provenance.State = ProvenancePureNull
+		}
+		ctx.setOutputColumnProvenance(int32(colIdx), provenance)
 	}
 	// A set-operation result keeps ENUM/SET definition-order provenance only
 	// when every non-NULL branch is the same pure display contract. A literal
@@ -12586,7 +12623,11 @@ func bindProjectionExprWithNumericTarget(
 			defer func() { projectionBinder.numericTargetType = nil }()
 		}
 	}
-	return projectionBinder.BindExpr(astExpr, 0, true)
+	expr, err := projectionBinder.BindExpr(astExpr, 0, true)
+	if err == nil {
+		err = recordColumnDefaultProjection(ctx, projectionBinder, astExpr, expr, int32(projectIdx))
+	}
+	return expr, err
 }
 
 func (builder *QueryBuilder) appendStep(nodeID int32) int32 {
@@ -14240,19 +14281,7 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 			util.TableIsClusterTable(node.TableDef.TableType), defaultVals)
 		binding.originCols = originCols
 		binding.headingProvenance = headingMetadata
-		binding.outputColumnProvenance = make([]OutputColumnProvenance, colLength)
-		for i, col := range node.TableDef.Cols {
-			binding.outputColumnProvenance[i] = OutputColumnProvenance{
-				State:             ProvenanceSingleSource,
-				CTASDefaultPolicy: CTASDefaultInheritSource,
-				Source: &SourceColumn{
-					RelPos:   tag,
-					ColPos:   int32(i),
-					TableID:  node.TableDef.TblId,
-					Metadata: snapshotSourceColumnMetadata(col),
-				},
-			}
-		}
+		binding.initSourceColumnProvenance(node.TableDef.Cols, nil)
 	} else {
 		// Subquery
 		subCtx := builder.ctxByNode[nodeID]
@@ -14317,6 +14346,11 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 				outputColumnProvenance = make([]OutputColumnProvenance, colLength)
 			}
 			outputColumnProvenance[i] = subCtx.outputColumnProvenanceForProject(int32(i))
+			if outputColumnProvenance[i].State != ProvenanceSingleSource && outputColumnProvenance[i].TypeDefault == typeDefaultNone &&
+				(len(subCtx.bindings) == 0 || subCtx.isDistinct || subCtx.hasHaving ||
+					len(subCtx.groups)+len(subCtx.aggregates)+len(subCtx.windows) > 0 || node.Limit != nil || node.Offset != nil) {
+				outputColumnProvenance[i].TypeDefault = typeDefaultImplicit
+			}
 			if id := outputColumnProvenance[i].IntegerPrecisionID; id != 0 && builder.integerPrecision != nil {
 				if subCtx.integerPrecision != nil && subCtx.integerPrecision != builder.integerPrecision {
 					id = builder.integerPrecision.importID(subCtx.integerPrecision.graph, id)

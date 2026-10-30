@@ -1,0 +1,192 @@
+-- @suite
+-- @case
+-- @desc: Named-column defaults preserve source metadata without changing bare DEFAULT assignments
+SET @default_column_saved_sql_mode = @@sql_mode;
+SET sql_mode = 'ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES';
+DROP VIEW IF EXISTS default_column_view;
+DROP TABLE IF EXISTS default_column_metadata;
+DROP TABLE IF EXISTS default_column_input;
+CREATE TABLE default_column_input (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    a INT DEFAULT 7,
+    b INT,
+    c INT NOT NULL,
+    d INT DEFAULT (2+3),
+    e TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP,
+    f TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    g INT AS (a+1),
+    h VARCHAR(5) NOT NULL DEFAULT 'xyz',
+    j DATE NOT NULL DEFAULT '2020-01-01',
+    k BINARY(3) DEFAULT 'a',
+    p INT DEFAULT (7),
+    q INT DEFAULT (NULL)
+);
+INSERT INTO default_column_input(c) VALUES(1);
+SELECT DEFAULT(id), DEFAULT(a), DEFAULT(b), DEFAULT(e), DEFAULT(f), DEFAULT(h), DEFAULT(j), HEX(DEFAULT(k)) FROM default_column_input;
+SELECT DEFAULT(c) FROM default_column_input;
+SELECT DEFAULT(d) FROM default_column_input;
+SELECT DEFAULT(g) FROM default_column_input;
+SELECT DEFAULT(p) FROM default_column_input;
+SELECT DEFAULT(q) FROM default_column_input;
+SELECT DEFAULT(missing) FROM default_column_input;
+SELECT DEFAULT(a+1) FROM default_column_input;
+SELECT DEFAULT(1) FROM default_column_input;
+SELECT DEFAULT(a), a FROM default_column_input WHERE a=7;
+SELECT DEFAULT(t.a) FROM default_column_input t;
+SELECT DEFAULT(a) FROM default_column_input x, default_column_input y;
+
+SELECT DEFAULT(x) FROM (SELECT 1 AS x) derived;
+SELECT DEFAULT(x) FROM (SELECT 'abc' AS x) derived;
+SELECT DEFAULT(x) FROM (SELECT NULL AS x) derived;
+SELECT DEFAULT(x) FROM (SELECT 1.23 AS x) derived;
+SELECT DEFAULT(x) FROM (SELECT CAST('2020-01-01' AS DATE) AS x) derived;
+SELECT DEFAULT(x) FROM (SELECT CAST('2020-01-01' AS DATETIME) AS x) derived;
+SELECT DEFAULT(x) FROM (SELECT CAST('12:34:56' AS TIME) AS x) derived;
+SELECT DEFAULT(x) FROM (SELECT DATE '2020-01-01' AS x) derived;
+SELECT DEFAULT(x) FROM (SELECT TIME '12:34:56' AS x) derived;
+SELECT DEFAULT(x) FROM (SELECT TIMESTAMP '2020-01-01 00:00:00' AS x) derived;
+SELECT DEFAULT(x) FROM (SELECT DATE('2020-01-01') AS x) derived;
+SELECT DEFAULT(x) FROM (SELECT TIME('12:34:56') AS x) derived;
+SELECT DEFAULT(x) FROM (SELECT TIMESTAMP('2020-01-01 00:00:00') AS x) derived;
+SELECT DEFAULT(x) FROM (SELECT CURRENT_DATE AS x) derived;
+SELECT DEFAULT(x) FROM (SELECT CURRENT_TIME AS x) derived;
+SELECT DEFAULT(x) FROM (SELECT x FROM (SELECT CAST('2020-01-01' AS DATE) AS x) inner_derived) derived;
+SELECT DEFAULT(x) FROM (SELECT DATE '2020-01-01' AS x UNION ALL SELECT CAST('2020-01-01' AS DATE) AS x) derived;
+SELECT DEFAULT(x) FROM (SELECT DATE '2020-01-01' AS x UNION ALL SELECT DATE '2021-01-01' AS x) derived;
+SELECT DEFAULT(x) FROM (SELECT DATE '2020-01-01' AS x UNION SELECT DATE '2020-01-01' AS x) derived;
+SELECT DEFAULT(x) FROM (SELECT CAST('2020-01-01' AS DATE) AS x UNION SELECT CAST('2020-01-01' AS DATE) AS x) derived;
+SELECT DEFAULT(x) FROM (SELECT CAST('12:34:56' AS TIME) AS x UNION SELECT CAST('12:34:56' AS TIME) AS x) derived;
+SELECT DEFAULT(x) FROM (SELECT JSON_OBJECT('a',1) AS x) derived;
+SELECT DEFAULT(x) FROM (SELECT a AS x FROM default_column_input) derived;
+SELECT DEFAULT(x) FROM (SELECT a AS x FROM default_column_input LIMIT 1) derived;
+SELECT DEFAULT(x) FROM (SELECT +a AS x FROM default_column_input) derived;
+SELECT DEFAULT(x) FROM (SELECT +(+a) AS x FROM default_column_input LIMIT 1) derived;
+SELECT DEFAULT(x) FROM (SELECT +h AS x FROM default_column_input LIMIT 1) derived;
+SELECT DEFAULT(x) FROM (SELECT -a AS x FROM default_column_input) derived;
+SELECT DEFAULT(x) FROM (SELECT -a AS x FROM default_column_input LIMIT 1) derived;
+SELECT DEFAULT(x) FROM (SELECT +CAST(a AS SIGNED) AS x FROM default_column_input) derived;
+WITH derived AS (SELECT +a AS x FROM default_column_input) SELECT DEFAULT(x) FROM derived;
+SELECT DEFAULT(x) FROM (SELECT a+0 AS x FROM default_column_input) derived;
+SELECT DEFAULT(x) FROM (SELECT a+0 AS x FROM default_column_input LIMIT 1) derived;
+SELECT DEFAULT(x) FROM (SELECT CAST(a AS SIGNED) AS x FROM default_column_input) derived;
+SELECT DEFAULT(x) FROM (SELECT CAST(a AS SIGNED) AS x FROM default_column_input LIMIT 1) derived;
+SELECT DEFAULT(x) FROM (SELECT a AS x FROM default_column_input UNION ALL SELECT a AS x FROM default_column_input) derived;
+SELECT DEFAULT(x) FROM (SELECT a AS x FROM default_column_input GROUP BY a) derived;
+SELECT DEFAULT(x) FROM (SELECT MAX(a) AS x FROM default_column_input) derived;
+SELECT DEFAULT(x) FROM (SELECT COUNT(*) AS x FROM default_column_input) derived;
+WITH derived AS (SELECT a AS x FROM default_column_input) SELECT DEFAULT(x) FROM derived;
+SELECT (SELECT DEFAULT(t.a)) FROM default_column_input t;
+SELECT DEFAULT(a), COUNT(*) FROM default_column_input;
+SELECT a,DEFAULT(a) FROM default_column_input GROUP BY a;
+SELECT a AS x,DEFAULT(x) FROM default_column_input;
+SELECT a AS x FROM default_column_input ORDER BY DEFAULT(x);
+SELECT a AS x FROM default_column_input HAVING DEFAULT(x)=7;
+SELECT +a AS x FROM default_column_input HAVING DEFAULT(x)=7;
+SELECT +a AS x FROM default_column_input ORDER BY DEFAULT(x);
+SELECT 1 FROM default_column_input HAVING DEFAULT(a)=7;
+SELECT a+1 FROM default_column_input HAVING DEFAULT(a)=7;
+SELECT COUNT(a) FROM default_column_input HAVING DEFAULT(a)=7;
+SELECT a AS x FROM default_column_input HAVING DEFAULT(a)=7;
+SELECT 1 FROM default_column_input GROUP BY a HAVING DEFAULT(a)=7;
+SELECT 1 FROM default_column_input HAVING MAX(DEFAULT(a))=7;
+SELECT a AS c FROM default_column_input HAVING DEFAULT(c)=7;
+SELECT a AS c FROM default_column_input ORDER BY DEFAULT(c);
+SELECT (SELECT DEFAULT(t.a) FROM (SELECT 1 AS z) t) FROM default_column_input t;
+SELECT DEFAULT(r.a) FROM default_column_input l LEFT JOIN default_column_input r ON FALSE;
+SELECT DEFAULT(r.c) FROM default_column_input l LEFT JOIN default_column_input r ON FALSE;
+
+CREATE VIEW default_column_unary_view AS SELECT +a AS x,+h AS y FROM default_column_input;
+SELECT DEFAULT(x),DEFAULT(y) FROM default_column_unary_view;
+DROP VIEW default_column_unary_view;
+CREATE VIEW default_column_view AS SELECT a,h,c,d,e,f,g FROM default_column_input;
+SELECT DEFAULT(a),DEFAULT(h),DEFAULT(e),DEFAULT(f) FROM default_column_view;
+SELECT DEFAULT(c) FROM default_column_view;
+SELECT DEFAULT(d) FROM default_column_view;
+SELECT DEFAULT(g) FROM default_column_view;
+CREATE TABLE default_column_metadata AS SELECT DEFAULT(id) AS id, DEFAULT(a) AS a, DEFAULT(h) AS h FROM default_column_input;
+SHOW COLUMNS FROM default_column_metadata;
+SELECT * FROM default_column_metadata;
+
+UPDATE default_column_input SET c=DEFAULT(a),a=9;
+SELECT a,c,DEFAULT(a) FROM default_column_input;
+UPDATE default_column_input SET a=10,c=DEFAULT(a);
+SELECT a,c,DEFAULT(a) FROM default_column_input;
+UPDATE default_column_input SET a=DEFAULT;
+INSERT INTO default_column_input(c) VALUES(DEFAULT(a));
+INSERT INTO default_column_input(c) VALUES(DEFAULT(default_column_input.a));
+INSERT INTO default_column_input(c) VALUES(DEFAULT(c));
+INSERT INTO default_column_input(id,c) VALUES(1,99) ON DUPLICATE KEY UPDATE c=DEFAULT(a);
+SELECT id,a,c FROM default_column_input ORDER BY id;
+REPLACE INTO default_column_input(id,c) VALUES(1,DEFAULT(a));
+SELECT id,a,c FROM default_column_input ORDER BY id;
+PREPARE default_column_prepared FROM 'SELECT id,DEFAULT(a),DEFAULT(h) FROM default_column_input WHERE id=?';
+SET @default_column_id=1;
+EXECUTE default_column_prepared USING @default_column_id;
+SET @default_column_id=2;
+EXECUTE default_column_prepared USING @default_column_id;
+ALTER TABLE default_column_input ALTER COLUMN a SET DEFAULT 8;
+EXECUTE default_column_prepared USING @default_column_id;
+DEALLOCATE PREPARE default_column_prepared;
+
+DROP VIEW IF EXISTS default_column_temporal_view;
+CREATE VIEW default_column_temporal_view AS SELECT DATE '2020-01-01' AS x,CAST('2020-01-01' AS DATE) AS y;
+SELECT DEFAULT(x),DEFAULT(y) FROM default_column_temporal_view;
+DROP VIEW default_column_temporal_view;
+
+DROP TABLE IF EXISTS default_column_special;
+CREATE TABLE default_column_special(a ENUM('red','blue') NOT NULL DEFAULT 'blue',b SET('a','b') NOT NULL DEFAULT 'a,b');
+INSERT INTO default_column_special VALUES(DEFAULT,DEFAULT);
+SELECT DEFAULT(a),DEFAULT(a)+0,DEFAULT(b),DEFAULT(b)+0 FROM default_column_special;
+SELECT DEFAULT(x),DEFAULT(y) FROM (SELECT +a AS x,+b AS y FROM default_column_special LIMIT 1) derived;
+UPDATE default_column_special SET a='red',b=DEFAULT(b);
+SELECT a,b,DEFAULT(a),DEFAULT(b) FROM default_column_special;
+UPDATE default_column_special SET a=2,b=1;
+SELECT a,b FROM default_column_special;
+UPDATE default_column_special SET a=DEFAULT,b=DEFAULT;
+SELECT a,b FROM default_column_special;
+DROP TABLE IF EXISTS default_column_special_metadata;
+CREATE TABLE default_column_special_metadata AS SELECT DEFAULT(a) AS a,DEFAULT(b) AS b FROM default_column_special;
+SHOW COLUMNS FROM default_column_special_metadata;
+SELECT * FROM default_column_special_metadata;
+SELECT DEFAULT(x) FROM (SELECT DEFAULT(a) AS x FROM default_column_special) derived;
+SELECT DEFAULT(x) FROM (SELECT DEFAULT(a) AS x FROM default_column_special LIMIT 1) derived;
+DROP TABLE default_column_special_metadata;
+DROP TABLE default_column_special;
+-- Declared grouping keys retain their schema defaults in subtotal branches.
+SET @default_column_saved_rollup = @@rollup_algorithm;
+SET rollup_algorithm = 'HASH';
+DROP TABLE IF EXISTS default_column_grouped;
+CREATE TABLE default_column_grouped(a INT DEFAULT 7,b INT DEFAULT 9,d DATE NOT NULL DEFAULT '2020-01-01');
+INSERT INTO default_column_grouped VALUES(1,2,'2022-01-01'),(2,2,'2023-01-01');
+SELECT a AS b,COUNT(*) FROM default_column_grouped GROUP BY a,b HAVING DEFAULT(b)=9 ORDER BY a;
+SELECT a AS b,COUNT(*) FROM default_column_grouped GROUP BY a,b HAVING DEFAULT(b)=7 ORDER BY a;
+SELECT a AS b FROM default_column_grouped HAVING DEFAULT(b)=7 ORDER BY a;
+SELECT 1,COUNT(*) FROM default_column_grouped GROUP BY +(+(b)) HAVING DEFAULT(b)=9;
+SELECT a AS b,COUNT(*) FROM default_column_grouped GROUP BY a,+(+b) HAVING DEFAULT(b)=9 ORDER BY a;
+SELECT a AS b,COUNT(*) FROM default_column_grouped GROUP BY a,+b HAVING DEFAULT(b)=7 ORDER BY a;
+SELECT 1,COUNT(*) FROM default_column_grouped GROUP BY +b WITH ROLLUP HAVING DEFAULT(b)=9;
+SELECT 1 FROM default_column_grouped GROUP BY b+0 HAVING DEFAULT(b)=9;
+SELECT a AS b,COUNT(*) FROM default_column_grouped GROUP BY a,b+0 HAVING DEFAULT(b)=7 ORDER BY a;
+SELECT +b AS x,COUNT(*) FROM default_column_grouped GROUP BY 1 HAVING DEFAULT(b)=9 ORDER BY x;
+SELECT 1,COUNT(*) FROM default_column_grouped GROUP BY a,b WITH ROLLUP HAVING DEFAULT(b)=9 ORDER BY COUNT(*),1;
+SELECT 1 FROM default_column_grouped GROUP BY a WITH ROLLUP HAVING DEFAULT(b)=9;
+SELECT DEFAULT(x) FROM (SELECT DATE '2020-01-01' AS x FROM default_column_grouped GROUP BY a WITH ROLLUP) derived;
+SELECT DEFAULT(x) FROM (SELECT CAST('2020-01-01' AS DATE) AS x FROM default_column_grouped GROUP BY a WITH ROLLUP) derived;
+SELECT DEFAULT(x) FROM (SELECT d AS x FROM default_column_grouped GROUP BY d WITH ROLLUP) derived;
+SET rollup_algorithm = 'SORT';
+SELECT 1,COUNT(*) FROM default_column_grouped GROUP BY a,b WITH ROLLUP HAVING DEFAULT(b)=9 ORDER BY COUNT(*),1;
+SET rollup_algorithm = @default_column_saved_rollup;
+DROP TABLE default_column_grouped;
+
+SET sql_mode = '';
+SELECT DEFAULT(x) FROM (SELECT DATE '2020-01-01' AS x UNION SELECT DATE '2020-01-01' AS x) derived;
+PREPARE default_union_mode FROM 'SELECT DEFAULT(x) FROM (SELECT DATE ''2020-01-01'' AS x UNION ALL SELECT DATE ''2021-01-01'' AS x) derived';
+EXECUTE default_union_mode;
+SET sql_mode = 'STRICT_TRANS_TABLES';
+EXECUTE default_union_mode;
+DEALLOCATE PREPARE default_union_mode;
+PREPARE default_union_strict FROM 'SELECT DEFAULT(x) FROM (SELECT DATE ''2020-01-01'' AS x UNION ALL SELECT DATE ''2021-01-01'' AS x) derived';
+SET sql_mode = @default_column_saved_sql_mode;
+DROP VIEW default_column_view;
+DROP TABLE default_column_metadata;
+DROP TABLE default_column_input;
