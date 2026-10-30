@@ -14055,6 +14055,13 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 				}
 				builder.qry.Nodes[nodeID].FilterList = accountFilterExprs
 			}
+			if mayHaveVirtualTimestampRead(midNode.TableDef) &&
+				len(VirtualTimestampExpansionFindings(midNode.TableDef)) != 0 {
+				nodeID, err = builder.stageLegacyVirtualTimestampColumns(nodeID, ctx)
+				if err != nil {
+					return 0, "", err
+				}
+			}
 		}
 		return
 	case *tree.StatementSource:
@@ -14494,6 +14501,18 @@ func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindCo
 	err = ctx.mergeContexts(builder.GetContext(), leftCtx, rightCtx)
 	if err != nil {
 		return 0, err
+	}
+	// Expressions bound above this join must distinguish a missing child row
+	// from a real row whose generated expression happens to return a value.
+	if joinType == plan.Node_RIGHT || joinType == plan.Node_OUTER {
+		for _, binding := range leftCtx.bindings {
+			ctx.nullExtendedTags[binding.tag] = true
+		}
+	}
+	if joinType == plan.Node_LEFT || joinType == plan.Node_ASOF_LEFT || joinType == plan.Node_OUTER {
+		for _, binding := range rightCtx.bindings {
+			ctx.nullExtendedTags[binding.tag] = true
+		}
 	}
 	if ctx.bindingTree != nil {
 		_, hasUsingClause := tbl.Cond.(*tree.UsingJoinCond)

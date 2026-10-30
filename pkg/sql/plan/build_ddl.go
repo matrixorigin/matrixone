@@ -4663,6 +4663,11 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 		}
 	}
 
+	if replay == nil && !trustedForeignKeyLayoutRebuild(ctx.GetContext()) {
+		if err := validateVirtualTimestampExpansion(ctx.GetContext(), createTable.TableDef); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -8082,6 +8087,9 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 		return nil, err
 	}
 
+	if err := validateVirtualTimestampExpansion(ctx.GetContext(), currentTableDef); err != nil {
+		return nil, err
+	}
 	alterTable.DetectSqls = detectSqls
 	// Ordered ADD/DROP catalog mutations use the original identity. Rename
 	// their surviving rows and incoming references only after all mutations.
