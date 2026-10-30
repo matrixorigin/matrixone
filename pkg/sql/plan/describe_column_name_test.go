@@ -44,4 +44,12 @@ func TestDescribeColumnNameFiltersColumns(t *testing.T) {
 	}
 
 	require.Equal(t, build("show columns from nation like 'nosuch'"), build("desc nation nosuch"))
+
+	// A wildcard selector that is not an exact column name keeps its case,
+	// like SHOW COLUMNS ... LIKE (case-sensitive LIKE must still see N_%).
+	for _, pattern := range []string{"N_%", "n_%", "N_NA%"} {
+		require.Equal(t,
+			build("show columns from nation like '"+pattern+"'"),
+			build("desc nation `"+pattern+"`"), pattern)
+	}
 }

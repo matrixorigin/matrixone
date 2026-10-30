@@ -803,8 +803,11 @@ func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error
 		result, err = returnByLikeAndSQL(ctx, sql, likeExpr, ddlType)
 	} else if stmt.ColName != nil {
 		// DESCRIBE tbl col_name is SHOW COLUMNS FROM tbl LIKE 'col_name' in MySQL.
-		pattern := stmt.ColName.ColName()
-		if origin, ok := colNameToOriginName[pattern]; ok {
+		// An exact column match uses the catalog spelling; anything else
+		// (including wildcards such as N_%) keeps the selector as written,
+		// matching SHOW COLUMNS ... LIKE.
+		pattern := stmt.ColName.ColNameOrigin()
+		if origin, ok := colNameToOriginName[stmt.ColName.ColName()]; ok {
 			pattern = origin
 		}
 		likeExpr := tree.NewComparisonExpr(tree.LIKE, tree.NewUnresolvedColName("attname"),
