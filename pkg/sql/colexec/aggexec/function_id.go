@@ -61,5 +61,5 @@ const (
 	AggIdOfPercentileCont        int64 = 567 << 32
 	AggIdOfPercentileDisc        int64 = 568 << 32
 	AggIdOfQuantileExactWeighted int64 = 619 << 32
-	AggIdOfVectorMatmul          int64 = 623 << 32
+	AggIdOfVectorMatmul          int64 = 624 << 32
 )

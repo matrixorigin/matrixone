@@ -381,7 +381,16 @@ type ViewData struct {
 	RequiredProtocolVersion *int64 `json:"required_protocol_version,omitempty"`
 }
 
+// updateTargetScope borrows the existing target-side binding while UPDATE FROM
+// temporarily joins its separate read sources. It is local to one bindUpdate call.
+type updateTargetScope struct {
+	join    *tree.JoinTableExpr
+	context *BindContext
+}
+
 type QueryBuilder struct {
+	updateTargetScope *updateTargetScope
+
 	// DELETE owns these generated scan identities. Optimizer consumers must
 	// revalidate the binding and table after join rewrites.
 	deleteIndexScanTables map[int32]deleteIndexScan

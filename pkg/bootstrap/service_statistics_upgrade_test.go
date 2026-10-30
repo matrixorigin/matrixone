@@ -22,6 +22,7 @@ import (
 
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
+	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_18"
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_6"
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_7"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -50,9 +51,10 @@ func TestPublishedCatalogUpgradeRoutes(t *testing.T) {
 		offset        uint32
 		hops          [][2]string
 	}{
-		{name: "4.1", version: "4.0.1", offset: 1, hops: [][2]string{{"4.0.1", "4.0.2"}, {"4.0.2", "4.0.3"}, {"4.0.3", "4.0.4"}, {"4.0.4", "4.0.5"}, {"4.0.5", "4.0.6"}, {"4.0.6", "4.0.7"}, {"4.0.7", "4.0.18"}}},
-		{name: "4.2", version: "4.0.6", offset: 5, hops: [][2]string{{"4.0.6", "4.0.7"}, {"4.0.7", "4.0.18"}}},
-		{name: "4.0.7", version: "4.0.7", offset: v4_0_7.Handler.Metadata().VersionOffset, hops: [][2]string{{"4.0.7", "4.0.18"}}},
+		{name: "4.1", version: "4.0.1", offset: 1, hops: [][2]string{{"4.0.1", "4.0.2"}, {"4.0.2", "4.0.3"}, {"4.0.3", "4.0.4"}, {"4.0.4", "4.0.5"}, {"4.0.5", "4.0.6"}, {"4.0.6", "4.0.7"}, {"4.0.7", "4.0.18"}, {"4.0.18", "4.0.19"}}},
+		{name: "4.2", version: "4.0.6", offset: 5, hops: [][2]string{{"4.0.6", "4.0.7"}, {"4.0.7", "4.0.18"}, {"4.0.18", "4.0.19"}}},
+		{name: "4.0.7_frozen", version: "4.0.7", offset: v4_0_7.Handler.Metadata().VersionOffset, hops: [][2]string{{"4.0.7", "4.0.19"}}},
+		{name: "4.0.18_main_era", version: "4.0.18", offset: v4_0_18.Handler.Metadata().VersionOffset, hops: [][2]string{{"4.0.18", "4.0.19"}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			runtime.RunTest("", func(runtime.Runtime) {
@@ -72,12 +74,12 @@ func TestPublishedCatalogUpgradeRoutes(t *testing.T) {
 				}, &testTxnOperator{})
 				s := newServiceForTest("", &memLocker{}, clock.NewHLCClock(func() int64 { return 0 }, 0), nil, exec, func(s *service) { s.initUpgrade() })
 				t.Cleanup(s.stopper.Stop)
-				require.Equal(t, "4.0.18", s.GetFinalVersion())
+				require.Equal(t, "4.0.19", s.GetFinalVersion())
 				require.Equal(t, uint32(5), v4_0_6.Handler.Metadata().VersionOffset)
 				require.NoError(t, s.doCheckUpgrade(t.Context()))
 				require.Len(t, upgrades, len(tc.hops))
 				for i, hop := range tc.hops {
-					require.Contains(t, upgrades[i], fmt.Sprintf("values ('%s', '%s', '4.0.18',", hop[0], hop[1]))
+					require.Contains(t, upgrades[i], fmt.Sprintf("values ('%s', '%s', '4.0.19',", hop[0], hop[1]))
 				}
 			})
 		})

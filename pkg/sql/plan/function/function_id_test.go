@@ -878,10 +878,11 @@ var predefinedFunids = map[int]int{
 	UNSIGNED_DECIMAL_ADMISSION:        620,
 	UNSIGNED_DECIMAL_ADMISSION_STRICT: 621,
 	UNSIGNED_DECIMAL_ADMISSION_IGNORE: 622,
-	VECTOR_MATMUL:                     623,
-	VECBLOCK_JSON:                     624,
-	VECBLOCK_BINARY:                   625,
-	FUNCTION_END_NUMBER:               626,
+	MO_INDEX_SUB_PART:                 623,
+	VECTOR_MATMUL:                     624,
+	VECBLOCK_JSON:                     625,
+	VECBLOCK_BINARY:                   626,
+	FUNCTION_END_NUMBER:               627,
 }
 
 func Test_funids(t *testing.T) {

@@ -81,10 +81,11 @@ func newRecoveryClusterStarterWithBudget(
 		cleanup()
 		current = nil
 		begin := now()
-		if err := startCluster(); err != nil {
+		err := startCluster()
+		deadline = deadline.Add(now().Sub(begin))
+		if err != nil {
 			return nil, err
 		}
-		deadline = deadline.Add(now().Sub(begin))
 		if err := parent.Err(); err != nil {
 			return nil, err
 		}
@@ -104,9 +105,13 @@ func newRecoveryClusterStarterWithBudget(
 func TestCrossTargetUpgradeRecovery(t *testing.T) {
 	require.NoError(t, CloseBaseClusterTests())
 	require.NoError(t, CloseSingleCNBaseClusterTests())
-	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Minute)
-	defer cancel()
-	c, err := NewCluster(WithTesting(), WithTestAdmissionContext(ctx), WithCNCount(2), WithPreStart(func(svc ServiceOperator) {
+	setupCtx := t.Context()
+	if deadline, ok := t.Deadline(); ok {
+		var cancel context.CancelFunc
+		setupCtx, cancel = context.WithDeadline(setupCtx, deadline)
+		defer cancel()
+	}
+	c, err := NewCluster(WithTesting(), WithTestAdmissionContext(setupCtx), WithCNCount(2), WithPreStart(func(svc ServiceOperator) {
 		adjustBasicClusterService(svc)
 		if svc.ServiceType() == metadata.ServiceType_CN {
 			svc.Adjust(func(cfg *ServiceConfig) { cfg.CN.AutomaticUpgrade = true })
@@ -120,7 +125,12 @@ func TestCrossTargetUpgradeRecovery(t *testing.T) {
 		})
 	}
 	require.NoError(t, err)
-	require.NoError(t, c.Start())
+	// Preserve the aggregate SQL budget across generations without charging
+	// runner admission or service startup to it.
+	start, finish := newRecoveryClusterStarterWithBudget(setupCtx, c.Start, time.Now, 3*time.Minute)
+	defer finish()
+	ctx, err := start()
+	require.NoError(t, err)
 	cn, err := c.GetCNService(0)
 	require.NoError(t, err)
 	frontendPort := cn.GetServiceConfig().CN.Frontend.Port
@@ -149,16 +159,34 @@ func TestCrossTargetUpgradeRecovery(t *testing.T) {
 	interrupted := &interruptedUpgradeHandler{VersionHandle: v4_0_6.Handler, entered: make(chan struct{})}
 	setRecoveryCNHandles(c, []bootstrap.VersionHandle{v4_0_4.Handler, v4_0_5.Handler, interrupted}, true)
 	started := make(chan error, 1)
-	go func() { started <- c.Start() }()
+	startupDone := make(chan struct{})
+	go func() {
+		defer close(startupDone)
+		_, err := start()
+		started <- err
+	}()
+	defer func() {
+		// Join the starter before its budget cleanup, including early failures.
+		select {
+		case <-startupDone:
+			return
+		default:
+		}
+		assert.NoError(t, c.Stop())
+		<-startupDone
+	}()
 	select {
 	case <-interrupted.entered:
 	case err := <-started:
 		t.Fatalf("startup failed before the retained step: %v", err)
-	case <-ctx.Done():
-		t.Fatal("retained step was not reached", ctx.Err())
+	case <-setupCtx.Done():
+		t.Fatal("retained step was not reached", setupCtx.Err())
 	}
 	// Use the saved frontend address rather than the cluster lock while Start is blocked.
-	pingCtx, pingCancel := context.WithTimeout(ctx, time.Second)
+	// The previous generation's SQL context was canceled before this start.
+	stopCtx, stopCancel := context.WithTimeout(setupCtx, 3*time.Minute)
+	defer stopCancel()
+	pingCtx, pingCancel := context.WithTimeout(stopCtx, time.Second)
 	db, err = sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/", frontendPort))
 	require.NoError(t, err)
 	require.Error(t, db.PingContext(pingCtx), "unfinished catalog must not admit SQL")
@@ -169,18 +197,19 @@ func TestCrossTargetUpgradeRecovery(t *testing.T) {
 	select {
 	case err := <-started:
 		require.ErrorIs(t, err, context.Canceled)
-	case <-ctx.Done():
-		t.Fatal("stop did not cancel the upgrade startup", ctx.Err())
+	case <-stopCtx.Done():
+		t.Fatal("stop did not cancel the upgrade startup", stopCtx.Err())
 	}
 	select {
 	case err := <-stopped:
 		require.NoError(t, err)
-	case <-ctx.Done():
-		t.Fatal("cluster did not finish stopping", ctx.Err())
+	case <-stopCtx.Done():
+		t.Fatal("cluster did not finish stopping", stopCtx.Err())
 	}
 
 	setRecoveryCNHandles(c, []bootstrap.VersionHandle{v4_0_4.Handler, v4_0_5.Handler, v4_0_6.Handler}, true)
-	require.NoError(t, c.Start())
+	ctx, err = start()
+	require.NoError(t, err)
 	cn, err = c.GetCNService(0)
 	require.NoError(t, err)
 	retained, steps := readRecoveryCatalog(t, ctx, cn, v4_0_6.Handler.Metadata())
@@ -196,7 +225,8 @@ func TestCrossTargetUpgradeRecovery(t *testing.T) {
 
 	setRecoveryCNHandles(c, []bootstrap.VersionHandle{v4_0_4.Handler, v4_0_5.Handler, v4_0_6.Handler, v4_0_7.Handler}, true)
 	for generation := 0; generation < 2; generation++ {
-		require.NoError(t, c.Start())
+		ctx, err = start()
+		require.NoError(t, err)
 		for i := 0; i < 2; i++ {
 			cn, err := c.GetCNService(i)
 			require.NoError(t, err)
@@ -289,13 +319,28 @@ func TestRecoveryClusterStartupBudget(t *testing.T) {
 		})
 	}
 
-	t.Run("startup error", func(t *testing.T) {
-		failure := errors.New("startup failed")
-		start, cleanup := newRecoveryClusterStarter(t.Context(), func() error { return failure }, time.Now)
+	t.Run("interrupted startup does not consume workload budget", func(t *testing.T) {
+		base := time.Now().Add(time.Hour)
+		now := base
+		starts := 0
+		start, cleanup := newRecoveryClusterStarterWithBudget(t.Context(), func() error {
+			starts++
+			now = now.Add(10 * time.Minute) // Admission may exceed the SQL budget.
+			if starts == 1 {
+				return context.Canceled
+			}
+			return nil
+		}, func() time.Time { return now }, 3*time.Minute)
 		defer cleanup()
 		ctx, err := start()
-		require.ErrorIs(t, err, failure)
+		require.ErrorIs(t, err, context.Canceled)
 		require.Nil(t, ctx)
+		ctx, err = start()
+		require.NoError(t, err)
+		deadline, ok := ctx.Deadline()
+		require.True(t, ok)
+		require.Equal(t, 3*time.Minute, deadline.Sub(now))
+		require.Equal(t, 2, starts)
 	})
 
 	t.Run("parent deadline and workload cancellation", func(t *testing.T) {
