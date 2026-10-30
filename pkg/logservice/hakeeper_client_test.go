@@ -1864,29 +1864,60 @@ func TestAllocateBatchIDRetriesPrepareClientErrorUntilContextDone(t *testing.T) 
 		newHAKeeperClientFunc = originalNew
 		hakeeperClientRetryInterval = originalRetryInterval
 	}()
+	hakeeperClientRetryInterval = time.Millisecond
 
-	attempts := 0
-	newHAKeeperClientFunc = func(
-		context.Context,
-		string,
-		HAKeeperClientConfig,
-	) (*hakeeperClient, error) {
-		attempts++
-		return nil, net.ErrClosed
+	newClient := func() *managedHAKeeperClient {
+		c := &managedHAKeeperClient{
+			cfg: HAKeeperClientConfig{AllocateIDBatch: 2},
+		}
+		c.allocMu.allocIDByKey = make(map[string]*allocID)
+		return c
 	}
-	hakeeperClientRetryInterval = 20 * time.Millisecond
 
-	c := &managedHAKeeperClient{
-		cfg: HAKeeperClientConfig{AllocateIDBatch: 2},
-	}
-	c.allocMu.allocIDByKey = make(map[string]*allocID)
-	ctx, cancel := context.WithTimeout(context.Background(), 55*time.Millisecond)
-	defer cancel()
+	// Retry count is driven by the stub, not by wall-clock time: discovery
+	// keeps failing and the caller's context is canceled during the third
+	// attempt, so scheduler delays cannot change how many attempts happen.
+	t.Run("retries until canceled", func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+		attempts := 0
+		newHAKeeperClientFunc = func(
+			context.Context,
+			string,
+			HAKeeperClientConfig,
+		) (*hakeeperClient, error) {
+			attempts++
+			if attempts == 3 {
+				cancel()
+			}
+			return nil, net.ErrClosed
+		}
 
-	_, err := c.AllocateIDByKeyWithBatch(ctx, "x", 2)
-	require.ErrorIs(t, err, context.DeadlineExceeded)
-	require.GreaterOrEqual(t, attempts, 2)
-	require.Less(t, attempts, 10)
+		_, err := newClient().AllocateIDByKeyWithBatch(ctx, "x", 2)
+		require.ErrorIs(t, err, context.Canceled)
+		require.Equal(t, 3, attempts)
+	})
+
+	// A caller deadline ends the retry loop with DeadlineExceeded. How many
+	// attempts fit before it depends on scheduling, so only the error and a
+	// lower bound of one attempt are asserted.
+	t.Run("stops at deadline", func(t *testing.T) {
+		attempts := 0
+		newHAKeeperClientFunc = func(
+			context.Context,
+			string,
+			HAKeeperClientConfig,
+		) (*hakeeperClient, error) {
+			attempts++
+			return nil, net.ErrClosed
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+		defer cancel()
+
+		_, err := newClient().AllocateIDByKeyWithBatch(ctx, "x", 2)
+		require.ErrorIs(t, err, context.DeadlineExceeded)
+		require.GreaterOrEqual(t, attempts, 1)
+	})
 }
 
 func TestAllocateBatchIDRetriesEOFSendError(t *testing.T) {
