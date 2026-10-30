@@ -2093,11 +2093,10 @@ data branch create table esy_b2 from esy_p{snapshot="esy_s2"};
 data branch merge esy_b2 into esy_b1 when conflict accept;
 select id, v from esy_b1 order by id;
 ➤ id[4,32,0]  ¦  v[12,32,0]  𝄀
-2  ¦  two  𝄀
 3  ¦  two
 select id, pid from esy_c order by id;
 ➤ id[4,32,0]  ¦  pid[4,32,0]  𝄀
-1  ¦  2
+1  ¦  3
 create table esyx_p (id int primary key, v varchar(32));
 insert into esyx_p values (2, 'two');
 drop snapshot if exists esyx_s1;
@@ -2121,11 +2120,10 @@ data branch create table esyx_b2 from esyx_p{snapshot="esyx_s2"};
 data branch merge esyx_b2 into esyx_b1 when conflict accept;
 select id, v from esyx_b1 order by id;
 ➤ id[4,32,0]  ¦  v[12,32,0]  𝄀
-2  ¦  two  𝄀
 3  ¦  two
 select id, pid from esyx_c order by id;
 ➤ id[4,32,0]  ¦  pid[4,32,0]  𝄀
-1  ¦  2
+1  ¦  3
 create table esyr_p (id int primary key, v varchar(32));
 insert into esyr_p values (2, 'two');
 drop snapshot if exists esyr_s1;
@@ -2153,11 +2151,10 @@ data branch create table esyr_b2 from esyr_p{snapshot="esyr_s2"};
 data branch merge esyr_b2 into esyr_b1 when conflict accept;
 select id, v from esyr_b1 order by id;
 ➤ id[4,32,0]  ¦  v[12,32,0]  𝄀
-2  ¦  two  𝄀
 3  ¦  two
 select id, pid from esyr_c order by id;
 ➤ id[4,32,0]  ¦  pid[4,32,0]  𝄀
-1  ¦  2
+1  ¦  3
 create table esy2_p (id int primary key, v varchar(32));
 insert into esy2_p values (2, 'two');
 update esy2_p set id = 3 where id = 2;

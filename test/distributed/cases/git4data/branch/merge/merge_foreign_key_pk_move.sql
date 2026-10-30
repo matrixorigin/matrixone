@@ -1847,10 +1847,13 @@ select id, pid from eszr_c order by id;
 -- links unconditionally; post-fix a retained snapshot still grounds a
 -- historical branch of the lineage, so the links survive the drop (1 -> 1).
 -- The MERGE between the snapshot-instantiated siblings then behaves exactly
--- as with a live source: a move recorded on the common ancestor predates
--- both branches, so the replay brings the src-only row and keeps the
--- dst-only row (no destination delete is attempted on this stack — verified
--- byte-identical to the esyx_ control whose parent stays alive).
+-- as with a live source: the siblings anchor at esy_s1 (pre-move) and esy_s2
+-- (post-move), so MERGE collects both sides against the shared divergence
+-- point esy_s1 (#31766) and the ancestor-recorded move 2 -> 3 is inherited
+-- divergence of the src lineage. The fold replays it on the destination as
+-- one native UPDATE: esy_b1 re-keys 2 -> 3 and the ON UPDATE CASCADE
+-- re-parents the child (verified byte-identical to the esyx_ control whose
+-- parent stays alive).
 create table esy_p (id int primary key, v varchar(32));
 insert into esy_p values (2, 'two');
 drop snapshot if exists esy_s1;
@@ -1900,9 +1903,10 @@ data branch merge esyx_b2 into esyx_b1 when conflict accept;
 select id, v from esyx_b1 order by id;
 select id, pid from esyx_c order by id;
 
--- Same snapshot-bracketed drop against a RESTRICT child: the replay never
--- attempts the destination delete for an ancestor-recorded move, so no
--- constraint rejection fires and both generations stay, child untouched.
+-- Same snapshot-bracketed drop against a RESTRICT child: the replay folds
+-- the ancestor-recorded move into a native UPDATE instead of a destination
+-- delete, so the RESTRICT check never fires; the statement lands and the
+-- ON UPDATE CASCADE re-parents the child to the landed key.
 create table esyr_p (id int primary key, v varchar(32));
 insert into esyr_p values (2, 'two');
 drop snapshot if exists esyr_s1;
