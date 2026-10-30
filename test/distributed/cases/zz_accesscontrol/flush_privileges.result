@@ -11,6 +11,9 @@ grant flush_privileges_role to flush_privileges_user;
 begin;
 insert into flush_privileges_db.flush values (1);
 flush privileges;
+select count(*) from flush_privileges_db.flush;
+➤ count(*)[-5,64,0]  𝄀
+1
 rollback;
 select count(*) from flush_privileges_db.flush;
 ➤ count(*)[-5,64,0]  𝄀
@@ -18,6 +21,9 @@ select count(*) from flush_privileges_db.flush;
 set autocommit = 0;
 insert into flush_privileges_db.flush values (2);
 flush privileges;
+select count(*) from flush_privileges_db.flush;
+➤ count(*)[-5,64,0]  𝄀
+1
 rollback;
 select count(*) from flush_privileges_db.flush;
 ➤ count(*)[-5,64,0]  𝄀
@@ -34,23 +40,53 @@ not supported: preparing FLUSH PRIVILEGES
 flush tables;
 SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 12 near " tables;";
 set session enable_privilege_cache = on;
+set session mo_rollback_txn_on_error = 0;
 begin;
 insert into flush_privileges_db.flush values (3);
 flush privileges;
 internal error: do not have privilege to execute the statement
+select count(*) from flush_privileges_db.flush;
+➤ count(*)[-5,64,0]  𝄀
+1
 rollback;
 select count(*) from flush_privileges_db.flush;
 ➤ count(*)[-5,64,0]  𝄀
 0
 set session enable_privilege_cache = off;
+set session mo_rollback_txn_on_error = 0;
 begin;
 insert into flush_privileges_db.flush values (4);
 flush privileges;
 internal error: do not have privilege to execute the statement
+select count(*) from flush_privileges_db.flush;
+➤ count(*)[-5,64,0]  𝄀
+1
 rollback;
 select count(*) from flush_privileges_db.flush;
 ➤ count(*)[-5,64,0]  𝄀
 0
+set autocommit = 0;
+insert into flush_privileges_db.flush values (6);
+flush privileges;
+internal error: do not have privilege to execute the statement
+select count(*) from flush_privileges_db.flush;
+➤ count(*)[-5,64,0]  𝄀
+1
+rollback;
+select count(*) from flush_privileges_db.flush;
+➤ count(*)[-5,64,0]  𝄀
+0
+set autocommit = 1;
+set session mo_rollback_txn_on_error = 1;
+begin;
+insert into flush_privileges_db.flush values (5);
+flush privileges;
+internal error: do not have privilege to execute the statement
+select count(*) from flush_privileges_db.flush;
+➤ count(*)[-5,64,0]  𝄀
+0
+rollback;
+set session mo_rollback_txn_on_error = 0;
 revoke select on table flush_privileges_db.flush from flush_privileges_role;
 select count(*) from flush_privileges_db.flush;
 internal error: do not have privilege to execute the statement
