@@ -701,6 +701,7 @@ func setOperationOutputType(
 	nodeType plan.Node_NodeType,
 	leftType, rightType plan.Type,
 ) plan.Type {
+	leftType = setOperationDecimalAttributes(nodeType, leftType, rightType)
 	switch nodeType {
 	case plan.Node_UNION, plan.Node_UNION_ALL:
 		if commonType, ok := function.CommonMediumIntType([]types.Type{
@@ -711,6 +712,33 @@ func setOperationOutputType(
 		}
 		leftType.NotNullable = leftType.NotNullable && rightType.NotNullable
 	}
+	return leftType
+}
+
+// setOperationDecimalAttributes derives the numeric attribute mask of one
+// materialized set-operation column. Set outputs are derived rows: MySQL
+// documents ZEROFILL as ignored for UNION queries, and the same materialized
+// boundary applies uniformly to INTERSECT/MINUS. UNION/UNION ALL clear the
+// ZEROFILL bit and keep UNSIGNED only when every branch carries it (the same
+// shape as the NotNullable AND-merge); every other set operation clears both
+// bits. Only numeric_attributes is touched; width/scale/nullability/collation
+// stay byte-identical, and non-decimal branches are unaffected. Domain
+// admission never keys on a set-op output mask: enforcement happens at
+// attributed target writes, and a set-op output is not ProvenanceSingleSource,
+// so CTAS over a UNION lands mask 0 under the computed-expression rule.
+func setOperationDecimalAttributes(
+	nodeType plan.Node_NodeType,
+	leftType, rightType plan.Type,
+) plan.Type {
+	if !types.T(leftType.Id).IsDecimal() {
+		return leftType
+	}
+	if nodeType == plan.Node_UNION || nodeType == plan.Node_UNION_ALL {
+		leftType.NumericAttributes = leftType.NumericAttributes &
+			rightType.NumericAttributes & types.NumericAttributeUnsigned
+		return leftType
+	}
+	leftType.NumericAttributes = 0
 	return leftType
 }
 

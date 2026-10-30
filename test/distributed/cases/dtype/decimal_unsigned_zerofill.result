@@ -1,0 +1,281 @@
+drop database if exists deuz;
+create database deuz;
+create table deuz.zf (x decimal(10,2) unsigned zerofill);
+create table deuz.u (x decimal(10,2) unsigned);
+create table deuz.plain (x decimal(10,2));
+show create table deuz.zf;
+➤ Table[12,2,0]  ¦  Create Table[12,72,0]  𝄀
+zf  ¦  CREATE TABLE `zf` (
+  `x` decimal(10,2) unsigned zerofill DEFAULT NULL
+)
+show create table deuz.u;
+➤ Table[12,1,0]  ¦  Create Table[12,62,0]  𝄀
+u  ¦  CREATE TABLE `u` (
+  `x` decimal(10,2) unsigned DEFAULT NULL
+)
+show create table deuz.plain;
+➤ Table[12,5,0]  ¦  Create Table[12,57,0]  𝄀
+plain  ¦  CREATE TABLE `plain` (
+  `x` decimal(10,2) DEFAULT NULL
+)
+select column_type from information_schema.columns where table_schema='deuz' and table_name='zf' and column_name='x';
+➤ column_type[12,65535,0]  𝄀
+decimal(10,2) unsigned zerofill
+select column_type from information_schema.columns where table_schema='deuz' and table_name='u' and column_name='x';
+➤ column_type[12,65535,0]  𝄀
+decimal(10,2) unsigned
+select column_type from information_schema.columns where table_schema='deuz' and table_name='plain' and column_name='x';
+➤ column_type[12,65535,0]  𝄀
+decimal(10,2)
+select cast(-1.5 as decimal(10,2) unsigned);
+SQL parser error: UNSIGNED/ZEROFILL attribute is not allowed in DECIMAL CAST target
+select cast(-1.5 as decimal(10,2) zerofill);
+SQL parser error: UNSIGNED/ZEROFILL attribute is not allowed in DECIMAL CAST target
+select cast(-1.5 as decimal(10,2));
+➤ cast(-1.5 as decimal(10, 2))[3,10,2]  𝄀
+-1.50
+set session sql_mode='STRICT_TRANS_TABLES';
+insert into deuz.u values (-1.5);
+Data truncation: Out of range value for column 'x' at row 1
+select count(*) from deuz.u;
+➤ count(*)[-5,64,0]  𝄀
+0
+insert into deuz.u values (1.5),(-2.5),(3.5);
+Data truncation: Out of range value for column 'x' at row 1
+select count(*) from deuz.u;
+➤ count(*)[-5,64,0]  𝄀
+0
+insert ignore into deuz.u values (-1.5);
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1264  ¦  Out of range value for column 'x' at row 1
+select x from deuz.u;
+➤ x[3,10,2]  𝄀
+0.00
+delete from deuz.u;
+set session sql_mode='STRICT_TRANS_TABLES';
+insert into deuz.u values (null);
+select x from deuz.u;
+➤ x[3,10,2]  𝄀
+null
+insert ignore into deuz.u values (null);
+insert into deuz.u values (null),(2.5);
+select x from deuz.u order by x;
+➤ x[3,10,2]  𝄀
+null  𝄀
+null  𝄀
+null  𝄀
+2.50
+select count(x), count(*) from deuz.u;
+➤ count(x)[-5,64,0]  ¦  count(*)[-5,64,0]  𝄀
+1  ¦  4
+update deuz.u set x = null where x = 2.5;
+select x from deuz.u order by x;
+➤ x[3,10,2]  𝄀
+null  𝄀
+null  𝄀
+null  𝄀
+null
+delete from deuz.u;
+set session sql_mode='ONLY_FULL_GROUP_BY';
+insert into deuz.u values (-1.5);
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1264  ¦  Out of range value for column 'x' at row 1
+select x from deuz.u;
+➤ x[3,10,2]  𝄀
+0.00
+delete from deuz.u;
+set session sql_mode='STRICT_TRANS_TABLES';
+create table deuz.pr (x decimal(10,0) unsigned);
+insert into deuz.pr values (-0.01);
+Data truncation: Out of range value for column 'x' at row 1
+insert ignore into deuz.pr values (-0.01);
+select x from deuz.pr;
+➤ x[3,10,0]  𝄀
+0
+drop table deuz.pr;
+insert into deuz.zf values (123.45),(0.5);
+select x from deuz.zf order by x;
+➤ x[3,10,2]  𝄀
+0.50  𝄀
+123.45
+set session sql_mode='ONLY_FULL_GROUP_BY';
+insert into deuz.plain values (-1.5);
+select x from deuz.plain;
+➤ x[3,10,2]  𝄀
+-1.50
+delete from deuz.plain;
+insert into deuz.plain values (123.45);
+select x from deuz.plain;
+➤ x[3,10,2]  𝄀
+123.45
+set session sql_mode='STRICT_TRANS_TABLES';
+create table deuz.w20 (x decimal(20,2) unsigned);
+insert into deuz.w20 values (-1.5);
+Data truncation: Out of range value for column 'x' at row 1
+insert into deuz.w20 values (1.5);
+create table deuz.w65 (x decimal(65,6) unsigned);
+insert into deuz.w65 values (-1.5);
+Data truncation: Out of range value for column 'x' at row 1
+insert into deuz.w65 values (1.5);
+insert into deuz.u values (5.5);
+update deuz.u set x = -1 where x = 5.5;
+Data truncation: Out of range value for column 'x' at row 1
+select x from deuz.u;
+➤ x[3,10,2]  𝄀
+5.50
+update deuz.u set x = 7.5 where x = 5.5;
+select x from deuz.u;
+➤ x[3,10,2]  𝄀
+7.50
+set session sql_mode='STRICT_TRANS_TABLES';
+insert into deuz.u values (1.5),(-2.5);
+Data truncation: Out of range value for column 'x' at row 1
+insert into deuz.u values (1.5),(2.5),(-3.5);
+Data truncation: Out of range value for column 'x' at row 1
+select count(*) from deuz.u;
+➤ count(*)[-5,64,0]  𝄀
+1
+set session sql_mode='ONLY_FULL_GROUP_BY';
+insert into deuz.u values (1.5),(-2.5);
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1264  ¦  Out of range value for column 'x' at row 1
+select x from deuz.u;
+➤ x[3,10,2]  𝄀
+7.50  𝄀
+1.50  𝄀
+0.00
+delete from deuz.u;
+set session sql_mode='STRICT_TRANS_TABLES';
+create table deuz.alt (x decimal(10,2));
+insert into deuz.alt values (-1);
+alter table deuz.alt modify x decimal(10,2) unsigned;
+Data truncation: Out of range value for column 'x' at row 1
+show create table deuz.alt;
+➤ Table[12,3,0]  ¦  Create Table[12,55,0]  𝄀
+alt  ¦  CREATE TABLE `alt` (
+  `x` decimal(10,2) DEFAULT NULL
+)
+select x from deuz.alt;
+➤ x[3,10,2]  𝄀
+-1.00
+set session sql_mode='ONLY_FULL_GROUP_BY';
+alter table deuz.alt modify x decimal(10,2) unsigned;
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1264  ¦  Out of range value for column 'x' at row 1
+show create table deuz.alt;
+➤ Table[12,3,0]  ¦  Create Table[12,64,0]  𝄀
+alt  ¦  CREATE TABLE `alt` (
+  `x` decimal(10,2) unsigned DEFAULT NULL
+)
+select x from deuz.alt;
+➤ x[3,10,2]  𝄀
+0.00
+set session sql_mode='STRICT_TRANS_TABLES';
+alter table deuz.alt modify x decimal(10,2);
+show create table deuz.alt;
+➤ Table[12,3,0]  ¦  Create Table[12,55,0]  𝄀
+alt  ¦  CREATE TABLE `alt` (
+  `x` decimal(10,2) DEFAULT NULL
+)
+insert into deuz.alt values (-2.5);
+select x from deuz.alt order by x;
+➤ x[3,10,2]  𝄀
+-2.50  𝄀
+0.00
+drop table deuz.alt;
+create table deuz.altz (x decimal(10,2));
+insert into deuz.altz values (-1);
+set session sql_mode='STRICT_TRANS_TABLES';
+alter table deuz.altz modify x decimal(10,2) zerofill;
+Data truncation: Out of range value for column 'x' at row 1
+show create table deuz.altz;
+➤ Table[12,4,0]  ¦  Create Table[12,56,0]  𝄀
+altz  ¦  CREATE TABLE `altz` (
+  `x` decimal(10,2) DEFAULT NULL
+)
+select x from deuz.altz;
+➤ x[3,10,2]  𝄀
+-1.00
+set session sql_mode='ONLY_FULL_GROUP_BY';
+alter table deuz.altz modify x decimal(10,2) zerofill;
+show create table deuz.altz;
+➤ Table[12,4,0]  ¦  Create Table[12,74,0]  𝄀
+altz  ¦  CREATE TABLE `altz` (
+  `x` decimal(10,2) unsigned zerofill DEFAULT NULL
+)
+select x from deuz.altz;
+➤ x[3,10,2]  𝄀
+0.00
+drop table deuz.altz;
+set session sql_mode='STRICT_TRANS_TABLES';
+insert into deuz.u select cast('-00:00:01' as time);
+Data truncation: Out of range value for column 'x' at row 1
+insert into deuz.u select cast('00:00:01' as time);
+insert into deuz.u select cast(null as time);
+select x from deuz.u;
+➤ x[3,10,2]  𝄀
+1.00  𝄀
+null
+set session sql_mode='ONLY_FULL_GROUP_BY';
+insert into deuz.u select cast('-00:00:01' as time);
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1264  ¦  Out of range value for column 'x' at row 1
+select x from deuz.u;
+➤ x[3,10,2]  𝄀
+1.00  𝄀
+null  𝄀
+0.00
+delete from deuz.u;
+create table deuz.j (v json);
+insert into deuz.j values ('-2.5');
+set session sql_mode='STRICT_TRANS_TABLES';
+insert into deuz.u select v from deuz.j;
+Data truncation: Out of range value for column 'x' at row 1
+set session sql_mode='ONLY_FULL_GROUP_BY';
+insert into deuz.u select v from deuz.j;
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1264  ¦  Out of range value for column 'x' at row 1
+select x from deuz.u;
+➤ x[3,10,2]  𝄀
+0.00
+delete from deuz.u;
+delete from deuz.j;
+insert into deuz.j values ('3.5');
+set session sql_mode='STRICT_TRANS_TABLES';
+insert into deuz.u select v from deuz.j;
+select x from deuz.u;
+➤ x[3,10,2]  𝄀
+3.50
+delete from deuz.u;
+delete from deuz.j;
+insert into deuz.j values ('null');
+insert into deuz.u select v from deuz.j;
+select x from deuz.u;
+➤ x[3,10,2]  𝄀
+null
+delete from deuz.u;
+drop table deuz.j;
+create table deuz.yr (y year);
+insert into deuz.yr values (2024);
+insert into deuz.u select y from deuz.yr;
+select x from deuz.u;
+➤ x[3,10,2]  𝄀
+2024.00
+delete from deuz.u;
+drop table deuz.yr;
+create snapshot deuz_snap for account;
+select column_type from information_schema.columns {snapshot='deuz_snap'} where table_schema='deuz' and table_name='u' and column_name='x';
+➤ column_type[12,65535,0]  𝄀
+decimal(10,2) unsigned
+select column_type from information_schema.columns {snapshot='deuz_snap'} where table_schema='deuz' and table_name='zf' and column_name='x';
+➤ column_type[12,65535,0]  𝄀
+decimal(10,2) unsigned zerofill
+drop snapshot deuz_snap;
+set session sql_mode=default;
+drop database deuz;

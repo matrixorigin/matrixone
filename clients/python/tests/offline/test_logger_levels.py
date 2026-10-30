@@ -44,11 +44,14 @@ def logging_target():
         logging.Logger.manager.loggerDict.pop(name, None)
 
 
-@pytest.mark.parametrize('level,expected', [
-    (logging.DEBUG, ['debug', 'info', 'warning', 'error', 'critical']),
-    (logging.WARNING, ['warning', 'error', 'critical']),
-    (logging.ERROR, ['error', 'critical']),
-])
+@pytest.mark.parametrize(
+    'level,expected',
+    [
+        (logging.DEBUG, ['debug', 'info', 'warning', 'error', 'critical']),
+        (logging.WARNING, ['warning', 'error', 'critical']),
+        (logging.ERROR, ['error', 'critical']),
+    ],
+)
 def test_sdk_respects_custom_logger_level(logging_target, level, expected):
     target, records = logging_target
     target.setLevel(level)
@@ -86,7 +89,7 @@ def test_sdk_respects_global_disable(logging_target):
 def test_query_logging_and_runtime_level_changes(logging_target):
     target, records = logging_target
     target.setLevel(logging.ERROR)
-    sdk = MatrixOneLogger(logger=target)
+    sdk = MatrixOneLogger(logger=target, sql_log_mode='full')
     sdk.log_query('SELECT 1', success=True)
     sdk.log_query('SELECT 2', success=False)
     sdk.set_level(logging.INFO)
