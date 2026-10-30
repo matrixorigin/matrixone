@@ -1004,14 +1004,28 @@ def _standalone_vector_index_sql(index, table_name):
 def _compile_vector_index(index, compiler, if_not_exists=False):
     if index.table is None:
         raise ValueError('Vector index must be bound to a table')
-    table_sql = compiler.preparer.quote_identifier(index.table.name)
-    if index.table.schema:
-        table_sql = compiler.preparer.quote_identifier(index.table.schema) + '.' + table_sql
-    return _render_vector_index(index, compiler.preparer, table_sql, if_not_exists)
+    from copy import copy
+    from sqlalchemy.sql.elements import quoted_name
+
+    original = compiler.preparer
+    preparer = copy(original)
+
+    def quote_schema(name):
+        # False also marks SQLAlchemy's deferred schema-translation tokens.
+        if getattr(name, 'quote', None) is False:
+            return original.quote_schema(name)
+        return original.quote_identifier(name)
+
+    preparer.quote_schema = quote_schema
+    # Execution renders schema translations using the compiled preparer later.
+    # Keep this policy local to this DDL, including MatrixOne-only keywords.
+    compiler.preparer = preparer
+    table_sql = preparer.format_table(index.table, name=quoted_name(index.table.name, True))
+    return _render_vector_index(index, preparer, table_sql, if_not_exists)
 
 
 def _render_vector_index(index, preparer, table_sql, if_not_exists=False):
-    from .._sql_literals import sql_object_name
+    from .._sql_literals import identifier_parts
 
     parts = ['CREATE INDEX']
     if if_not_exists:
@@ -1019,7 +1033,7 @@ def _render_vector_index(index, preparer, table_sql, if_not_exists=False):
     parts.append(
         '%s USING %s ON %s(%s)'
         % (
-            sql_object_name(index.name, force=True),
+            preparer.quote_identifier(identifier_parts(index.name)[0]),
             index.index_type,
             table_sql,
             preparer.quote_identifier(index._column_name),

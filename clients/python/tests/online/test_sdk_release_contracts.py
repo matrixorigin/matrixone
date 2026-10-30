@@ -831,3 +831,34 @@ async def test_async_orm_binary_and_pre_ping(client, server, mode, owner):
                     await engine.dispose()
             finally:
                 client.execute('DROP TABLE IF EXISTS ' + table)
+
+
+@pytest.mark.parametrize('source_schema', ['logical', None])
+def test_compiled_vector_ddl_routes_schema_and_preserves_percent_names(client, source_schema):
+    from matrixone._sql_literals import sql_identifier
+    from matrixone.sqlalchemy_ext import IVFVectorIndex
+
+    database = name('ddl_schema_') + '%db'
+    physical_table = sql_identifier(database, force=True) + '.`fulltext2`'
+    owned = False
+    try:
+        client.execute('CREATE DATABASE ' + sql_identifier(database, force=True))
+        owned = True
+        client.execute('CREATE TABLE ' + physical_table + '(id INT PRIMARY KEY, `v%` VECF32(2))')
+        client.execute('INSERT INTO ' + physical_table + " VALUES(1,'[1,0]'),(2,'[0,1]')")
+        table = sa.Table('fulltext2', sa.MetaData(), sa.Column('v%', sa.Integer), schema=source_schema)
+        for index_name in ('ix%name', 'ix%s', 'ix%%name'):
+            index = IVFVectorIndex(index_name, table.c['v%'], lists=1)
+            with client._engine.begin() as connection:
+                connection.execution_options(schema_translate_map={source_schema: database}).execute(
+                    sa.schema.CreateIndex(index)
+                )
+            result = client.execute('SHOW INDEX FROM ' + physical_table)
+            name_column = [str(column).casefold() for column in result.columns].index('key_name')
+            assert index_name in {row[name_column] for row in result.rows}
+            assert index.drop(client._engine, physical_table) is True
+            assert client.execute('SELECT id FROM ' + physical_table + ' ORDER BY id').rows == [(1,), (2,)]
+        assert table.name == 'fulltext2' and table.schema == source_schema
+    finally:
+        if owned:
+            client.execute('DROP DATABASE ' + sql_identifier(database, force=True))
