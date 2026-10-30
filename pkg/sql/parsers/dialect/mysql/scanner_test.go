@@ -23,6 +23,49 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 )
 
+func TestDigestQualifiedNumberTokens(t *testing.T) {
+	s := NewScanner(dialect.MYSQL, "dual.1a, .5, 1.5")
+	defer PutScanner(s)
+	s.digestMode = true
+	previous := 0
+	for i, want := range []int{ID, '.', ID, ',', FLOAT, ',', FLOAT, 0} {
+		var token int
+		if previous == '.' {
+			token, _ = s.ScanAfterDot()
+		} else {
+			token, _ = s.Scan()
+		}
+		if token != want {
+			t.Fatalf("token %d = %d, want %d", i, token, want)
+		}
+		previous = token
+	}
+	// Reset while a numeric qualification is pending. Neither setSql nor
+	// the shared pool reset may leak that state into a new decimal literal.
+	for _, poolReset := range []bool{false, true} {
+		s.setSql("dual.1")
+		s.digestMode = true
+		s.Scan()
+		if !s.identifierDot {
+			t.Fatal("expected pending qualified dot")
+		}
+		if poolReset {
+			s.reset(true, false)
+			if s.identifierDot {
+				t.Fatal("pool reset retained qualified dot")
+			}
+		}
+		s.setSql(".5")
+		if s.identifierDot {
+			t.Fatal("setSql retained qualified dot")
+		}
+		s.digestMode = true
+		if token, _ := s.Scan(); token != FLOAT {
+			t.Fatalf("new decimal token = %d, want FLOAT", token)
+		}
+	}
+}
+
 func TestLiteralID(t *testing.T) {
 	testcases := []struct {
 		in  string

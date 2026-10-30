@@ -311,14 +311,16 @@ func (d *statementDigest) scan(s *Scanner, syntax *statementDigestSyntax, hint b
 	}
 }
 
-// MySQL admits a reserved word as a qualified identifier only immediately
-// adjacent to the dot. Whitespace/comments break that lexical identity.
+// MySQL's identifier lexer bypasses keyword lookup before a dot only when
+// the following byte starts an unquoted identifier (including numeric names).
+// After a qualifying dot, the word is already an identifier. In particular,
+// dual.* and dual.`name` do not get the before-dot exception; db.dual.* does.
 func digestDualIsKeyword(s *Scanner, afterDot bool) bool {
 	start := s.Pos - len("dual")
 	if afterDot && start > 0 && s.buf[start-1] == '.' {
 		return false
 	}
-	return s.Pos == len(s.buf) || s.buf[s.Pos] != '.'
+	return s.cur() != '.' || !(isUnquotedIdentifierLetterAt(s.buf, s.Pos+1) || isDigit(s.peek(1)))
 }
 
 func digestCharsetIntroducer(word string) bool {

@@ -14,6 +14,26 @@
 
 package tree
 
+import "fmt"
+
+// ValidateCTENames checks declaration syntax, independently of reference-time
+// itemization. Names already carry the parser's identifier comparison policy.
+// Call once for each complete WITH list, including unused definitions/EXPLAIN.
+func ValidateCTENames(ctes []*CTE) string {
+	if len(ctes) < 2 {
+		return ""
+	}
+	names := make(map[Identifier]struct{}, len(ctes))
+	for _, cte := range ctes {
+		name := cte.Name.Alias
+		if _, exists := names[name]; exists {
+			return fmt.Sprintf("Not unique table/alias: '%s'", name)
+		}
+		names[name] = struct{}{}
+	}
+	return ""
+}
+
 type With struct {
 	statementImpl
 	IsRecursive bool

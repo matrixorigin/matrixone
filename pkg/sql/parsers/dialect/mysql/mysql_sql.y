@@ -7421,6 +7421,15 @@ fill_mode:
 with_clause:
     WITH cte_list
     {
+        // Ordinary SQL retains binder-owned duplicate-name diagnostics. Digest
+        // has no binder, so declaration syntax must be checked here, even in
+        // unused definitions and EXPLAIN where lock itemization is skipped.
+        if yylex.(*Lexer).digest != nil {
+            if err := tree.ValidateCTENames($2); err != "" {
+                yylex.Error(err)
+                goto ret1
+            }
+        }
         $$ = &tree.With{
             IsRecursive: false,
             CTEs: $2,
@@ -7428,6 +7437,12 @@ with_clause:
     }
 |    WITH RECURSIVE cte_list
     {
+        if yylex.(*Lexer).digest != nil {
+            if err := tree.ValidateCTENames($3); err != "" {
+                yylex.Error(err)
+                goto ret1
+            }
+        }
         $$ = &tree.With{
             IsRecursive: true,
             CTEs: $3,

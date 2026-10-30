@@ -1,6 +1,6 @@
 # MySQL 兼容函数与运算符补齐设计
 
-版本：v13，2026-10-30。归属：#31319（原始报告 #23010、#23024、#23025、#23035）。STATEMENT_DIGEST 的兼容目标为 MySQL 8.4 逐字节一致的摘要，而非近似指纹。
+版本：v14，2026-10-30。归属：#31319（原始报告 #23010、#23024、#23025、#23035）。STATEMENT_DIGEST 的兼容目标为 MySQL 8.4 逐字节一致的摘要，而非近似指纹。
 
 ## 范围、不变量与设计门槛
 
@@ -86,9 +86,9 @@ VALUES/REPLACE/ON DUPLICATE KEY UPDATE 通过本次 DML 已解析的目标列定
 - NAME_CONST 属于列定义 DEFAULT/生成列共同禁止项；普通 SELECT、ALTER SET DEFAULT 括号体及延迟窗口 specification 仍按各自解析域准入。
 - CURRENT_ROLE 在 digest-only lexer 中未调用时为 identifier，调用时沿用零参数函数语法（空白/注释不改变该身份），因此生成列 AS(CURRENT_ROLE) 与 AS(CURRENT_ROLE()) 必须区分；不改变普通 MO 执行 parser。
 - 为保留查询层的真实分组，支持 WITH + parenthesized query 及 parenthesized query 后直接锁子句；INTO 约束须在真实包装上下文检查变量和 OUTFILE 的原始位置，不能只依赖复制后的 IntoVars/Ep/DeprecatedInto。FROM 前的 SELECT-clause INTO 保留，FROM 后的 suffix 在 WITH/ORDER/LIMIT/锁包装以及集合末项括号中拒绝；没有包装选项的裸顶层括号查询不误套该规则。变量、导出、原始位置和 deprecated 提示在同一次后序收集中返回：每个查询节点只访问一次，不能在每层 UNION 再扫描右子树。deprecated 仅表示提示，不是非法位置；合法 UNION INTO 仍准入。语法逐层归约本身仍可导致嵌套输入的二次总工作，不宣称整个 parser 线性，但不能叠加为三次方；使用分档 parser/digest benchmark 验证时间与分配。
-- 同一查询块的重复锁不能静默丢掉外层策略。lexer 记录锁子句数，多个锁时在最终 parser 边界按完整 WITH 作用域验证；括号链共享查询块，集合查询末项继续继承外层锁，前项与真正派生/CTE/标量查询各自独立；EXPLAIN（含 ANALYZE）按 MySQL 不应用锁上下文化。仅直接基表目标重复时拒绝，常量、未加引号且非限定/别名形式的虚拟 DUAL、derived/CTE 引用没有直接目标时保留 MySQL 准入。引号身份从 lexer token 经 CStr 到 TableName 保留，digest 的 QUOTE_ID→ID 适配不能抹去该事实。SELECT 与 UPDATE/DELETE 的真实查询各自拥有调用局部作用域帧，同一 query-expression 的括号/集合操作数共享该帧，后继 WITH 替换本层绑定并对后续操作数和 body 之后的 ORDER BY 生效；真正内层查询另建帧，不修改父作用域。CTE 定义只有被引用时才在其定义作用域及可见前缀内校验，未引用定义不做锁上下文化；递归引用与重复引用通过本次调用内的定义访问标记终止，不指数展开。括号和集合末项链迭代、尾部表达式按 body 后的生效顺序访问；不克隆累计环境、不持久化状态、不查目录。
+- 同一查询块的重复锁不能静默丢掉外层策略。lexer 记录锁子句数，多个锁时在最终 parser 边界按完整 WITH 作用域验证；括号链共享查询块，集合查询末项继续继承外层锁，前项与真正派生/CTE/标量查询各自独立；EXPLAIN（含 ANALYZE）按 MySQL 不应用锁上下文化。仅直接基表目标重复时拒绝，常量、未加引号且非限定/别名形式的虚拟 DUAL、derived/CTE 引用没有直接目标时保留 MySQL 准入。引号身份从 lexer token 经 CStr 到 TableName 保留，digest 的 QUOTE_ID→ID 适配不能抹去该事实。SELECT 与 UPDATE/DELETE 的真实查询各自拥有调用局部作用域帧，同一 query-expression 的括号/集合操作数共享该帧，后继 WITH 替换本层绑定并对后续操作数和 body 之后的 ORDER BY 生效；真正内层查询另建帧，不修改父作用域。CTE 名称唯一性属于声明语法：摘要不经过 binder，因此每个完整 WITH 列表在 digest grammar 构造时按既有 identifier 比较身份做一次线性检查；普通 SQL 保留既有 binder 的重复名称错误与拒绝前零权限/目录探测契约。零/单元素无额外 map；无锁、EXPLAIN、未引用的内层定义仍不能含同层重名，真正嵌套/后继 WITH 不共享唯一性集合。CTE 定义中的锁只有被引用时才在其定义作用域及可见前缀内校验，未引用定义不做锁上下文化；递归引用与重复引用通过本次调用内的定义访问标记终止，不指数展开。括号和集合末项链迭代、尾部表达式按 body 后的生效顺序访问；不克隆累计环境、不持久化状态、不查目录。
 - digest 模式在实际 subquery 产生式调用已有 INTO/EXPORT 查询上下文遍历，拒绝子查询内部导出/assignment，覆盖 ALTER DEFAULT、列定义和延迟窗口 specification；合法顶层 export 仍仅作为 SQL 数据归一化。该检查不依赖关闭的列观察者，不执行 IO，也不改变普通 MO SET 的已有导出诊断路径。
-- 摘要的裸 DUAL 是 MySQL 保留 token，只能作为完整 FROM 子句，不是可带别名/索引提示/括号/连接的普通表因子，也不能作为裸别名或列名。digest-only token 与专用 grammar 产生式闭合全部语法位置；引号标识符、点号限定名保留真实标识符语义（保留词与点号须直接相邻，空白/注释会打断身份），摘要 token 编码同步保留限定身份。普通 MO 执行 parser 的原有标识符语法不变。
+- 摘要的裸 DUAL 是 MySQL 保留 token，只能作为完整 FROM 子句，不是可带别名/索引提示/括号/连接的普通表因子，也不能作为裸别名或列名。digest-only token 与专用 grammar 产生式闭合全部语法位置；引号标识符、点号限定名保留真实标识符语义：点前 DUAL 仅在紧邻点号且点后紧邻未加引号 identifier 字符时跳过 keyword 查找（含数字、BMP 字符、下划线和美元符号），不能因点后是 `*`、引号、空白或注释就降为 identifier；从前一个点号进入的限定组件则已经是 identifier，故 db.dual.* 与 dual.* 不同。摘要 token 编码使用同一判据。数字开头组件由 digest scanner 的单 token pending-dot 状态避免误分为小数，ScanAfterDot 仅在直接相邻时接收数字 identifier，普通数字 literal 不变；quoted 前缀不启用此状态。状态逐 token 消费且在 setSql/PutScanner 的共同 reset 清除。普通 MO 执行 parser 的原有标识符语法不变。
 - 生成 parser 必须零冲突且可复现。
 - 裸时间默认值须来自原生 keyword 语法域；复用 FuncExpr.IsGeneric 保存普通 identifier 函数身份，digest-only 解析额外标记被引号包裹的原生时间 keyword。IGNORE_SPACE 仅放宽函数名和左括号之间的空白，不跨注释；括号表达式也不接受这些伪装的原生函数。普通执行 parser 契约不变。
 - 摘要 lexer 的 ROW 构造器适配不能吞掉窗口 frame 的 CURRENT ROW；该 native frame token 保持原样。窗口跳过的是列 itemization，不跳过 parser、资源预算或摘要编码。

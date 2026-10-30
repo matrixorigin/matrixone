@@ -10139,5 +10139,712 @@
     "sql": "WITH c0 AS ((SELECT 1 FOR SHARE) FOR UPDATE),c1 AS (SELECT * FROM c0 a JOIN c0 b ON 1=1),c2 AS (SELECT * FROM c1 a JOIN c1 b ON 1=1),c3 AS (SELECT * FROM c2 a JOIN c2 b ON 1=1),c4 AS (SELECT * FROM c3 a JOIN c3 b ON 1=1),c5 AS (SELECT * FROM c4 a JOIN c4 b ON 1=1) SELECT * FROM c5",
     "text": "WITH `c0` AS ( ( SELECT ? FOR SHARE ) FOR UPDATE ) , `c1` AS ( SELECT * FROM `c0` `a` JOIN `c0` `b` ON ? = ? ) , `c2` AS ( SELECT * FROM `c1` `a` JOIN `c1` `b` ON ? = ? ) , `c3` AS ( SELECT * FROM `c2` `a` JOIN `c2` `b` ON ? = ? ) , `c4` AS ( SELECT * FROM `c3` `a` JOIN `c3` `b` ON ? = ? ) , `c5` AS ( SELECT * FROM `c4` `a` JOIN `c4` `b` ON ? = ? ) SELECT * FROM `c5`",
     "digest": "b6ef5864511e0e848ef15a2c4cc7d47563887494fa21238bd666f85eba003b72"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT 1), c AS (SELECT 2) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT 1), c AS (SELECT 2) SELECT * FROM c",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH RECURSIVE c AS (SELECT 1), c AS (SELECT 2) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH RECURSIVE c AS (SELECT 1), c AS (SELECT 2) SELECT * FROM c",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT 1), C AS (SELECT 2) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT 1), C AS (SELECT 2) SELECT * FROM c",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH RECURSIVE c AS (SELECT 1), C AS (SELECT 2) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH RECURSIVE c AS (SELECT 1), C AS (SELECT 2) SELECT * FROM c",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT 1), `c` AS (SELECT 2) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT 1), `c` AS (SELECT 2) SELECT * FROM c",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH RECURSIVE c AS (SELECT 1), `c` AS (SELECT 2) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH RECURSIVE c AS (SELECT 1), `c` AS (SELECT 2) SELECT * FROM c",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH `C` AS (SELECT 1), c AS (SELECT 2) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH `C` AS (SELECT 1), c AS (SELECT 2) SELECT * FROM c",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH RECURSIVE `C` AS (SELECT 1), c AS (SELECT 2) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH RECURSIVE `C` AS (SELECT 1), c AS (SELECT 2) SELECT * FROM c",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT 1), d AS (SELECT 2) SELECT 1",
+    "text": "WITH `c` AS ( SELECT ? ) , `d` AS ( SELECT ? ) SELECT ?",
+    "digest": "018e938c89c992e3c1f70cd695bc29451044386c946aa470e7926c87f833f90e"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT 1), d AS (SELECT 2) SELECT * FROM c",
+    "text": "WITH `c` AS ( SELECT ? ) , `d` AS ( SELECT ? ) SELECT * FROM `c`",
+    "digest": "de8cce3a16597634a5e67b5d1eb68555348f97a719437de3acd079af8f3a72ae"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH RECURSIVE c AS (SELECT 1), d AS (SELECT 2) SELECT 1",
+    "text": "WITH RECURSIVE `c` AS ( SELECT ? ) , `d` AS ( SELECT ? ) SELECT ?",
+    "digest": "8b7e5576b3746c5429e6b5f27b1e667a178c28b3178c370e6415756cb15e29ab"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH RECURSIVE c AS (SELECT 1), d AS (SELECT 2) SELECT * FROM c",
+    "text": "WITH RECURSIVE `c` AS ( SELECT ? ) , `d` AS ( SELECT ? ) SELECT * FROM `c`",
+    "digest": "1eae77f76cd4af4b73fc25a513d291bc45db1c3a2febe990e4a3bb904d10f272"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH `名` AS (SELECT 1), 名 AS (SELECT 2) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH `名` AS (SELECT 1), 名 AS (SELECT 2) SELECT * FROM c",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH RECURSIVE `名` AS (SELECT 1), 名 AS (SELECT 2) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH RECURSIVE `名` AS (SELECT 1), 名 AS (SELECT 2) SELECT * FROM c",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "EXPLAIN WITH c AS (SELECT 1), c AS (SELECT 2) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "EXPLAIN ANALYZE WITH c AS (SELECT 1), c AS (SELECT 2) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH unused AS (WITH c AS (SELECT 1), c AS (SELECT 2) SELECT 1) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT (WITH c AS (SELECT 1), c AS (SELECT 2) SELECT 1)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT * FROM (WITH c AS (SELECT 1), c AS (SELECT 2) SELECT 1) d",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT 1), c AS (SELECT 2) (WITH d AS (SELECT 3) SELECT 1)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT 1), c AS (SELECT 2) UPDATE t SET a=1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT 1), c AS (SELECT 2) DELETE FROM t",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT 1), c AS (SELECT 2) SELECT * FROM t FOR UPDATE",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT 1), c AS (SELECT 2) ((SELECT * FROM c FOR SHARE) FOR UPDATE)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT 1), c AS (SELECT 2), c AS (SELECT 3) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT 1) SELECT (WITH c AS (SELECT 2) SELECT * FROM c)",
+    "text": "WITH `c` AS ( SELECT ? ) SELECT ( WITH `c` AS ( SELECT ? ) SELECT * FROM `c` )",
+    "digest": "43447ade8b2e7778dd50c9e4771a9816e27a46a15ccf20dd766e6c04a5a8ec8c"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT 1) (WITH c AS (SELECT 2) SELECT * FROM c)",
+    "text": "WITH `c` AS ( SELECT ? ) ( WITH `c` AS ( SELECT ? ) SELECT * FROM `c` )",
+    "digest": "5891b7f9f53aa4a2a9b7399d4993edb028a402f9657b360dd6b98c74a2d16241"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT 1) SELECT 1 UNION (WITH c AS (SELECT 2) SELECT 2)",
+    "text": "WITH `c` AS ( SELECT ? ) SELECT ? UNION ( WITH `c` AS ( SELECT ? ) SELECT ? )",
+    "digest": "fa868ea41b996b7c55c3d3c520668f252cbd313713e572234adfff496de267b3"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c(a,a) AS (SELECT 1,2) SELECT 1",
+    "text": "WITH `c` ( `a` , `a` ) AS ( SELECT ?, ... ) SELECT ?",
+    "digest": "a61779f9661501bde2a83cccd2090caee5c82b1b5b993a31f541ee065b1f4314"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH unused AS (WITH c AS (SELECT 1) SELECT 1) SELECT 1",
+    "text": "WITH `unused` AS ( WITH `c` AS ( SELECT ? ) SELECT ? ) SELECT ?",
+    "digest": "16e22be143256b8d02256506734a3a616473c24fb762307f224e5da02a01dd1c"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT dual.* FROM t AS `dual`",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT dual.* FROM t AS `dual`",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT dual.* FROM t AS `dual`",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT dual.a FROM t AS `dual`",
+    "text": "SELECT `dual` . `a` FROM `t` AS `dual`",
+    "digest": "f02b29202fc6be0ccde68b40d0fbdbdc65cf9ccda5c6f2164f2584882a252f22"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT dual.a FROM t AS `dual`",
+    "text": "SELECT `dual` . `a` FROM `t` AS `dual`",
+    "digest": "f02b29202fc6be0ccde68b40d0fbdbdc65cf9ccda5c6f2164f2584882a252f22"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT dual.a FROM t AS `dual`",
+    "text": "SELECT `dual` . `a` FROM `t` AS `dual`",
+    "digest": "f02b29202fc6be0ccde68b40d0fbdbdc65cf9ccda5c6f2164f2584882a252f22"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT dual.1 FROM t AS `dual`",
+    "text": "SELECT `dual` . `1` FROM `t` AS `dual`",
+    "digest": "83a71faa5550805094c35a5d30d0944fc7a036bcfa8e0ff892128294b7f06bb3"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT dual.1 FROM t AS `dual`",
+    "text": "SELECT `dual` . `1` FROM `t` AS `dual`",
+    "digest": "83a71faa5550805094c35a5d30d0944fc7a036bcfa8e0ff892128294b7f06bb3"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT dual.1 FROM t AS `dual`",
+    "text": "SELECT `dual` . `1` FROM `t` AS `dual`",
+    "digest": "83a71faa5550805094c35a5d30d0944fc7a036bcfa8e0ff892128294b7f06bb3"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT dual.1a FROM t AS `dual`",
+    "text": "SELECT `dual` . `1a` FROM `t` AS `dual`",
+    "digest": "27314686fb656b6a0bed935a8d323a412ad7246d28412e2cfe24191a54e88af8"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT dual.1a FROM t AS `dual`",
+    "text": "SELECT `dual` . `1a` FROM `t` AS `dual`",
+    "digest": "27314686fb656b6a0bed935a8d323a412ad7246d28412e2cfe24191a54e88af8"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT dual.1a FROM t AS `dual`",
+    "text": "SELECT `dual` . `1a` FROM `t` AS `dual`",
+    "digest": "27314686fb656b6a0bed935a8d323a412ad7246d28412e2cfe24191a54e88af8"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT dual.0x1 FROM t AS `dual`",
+    "text": "SELECT `dual` . `0x1` FROM `t` AS `dual`",
+    "digest": "0ab70fe2e647d950b82e3a161a1387454e02842f1b93b814a87528678c42e8d4"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT dual.0x1 FROM t AS `dual`",
+    "text": "SELECT `dual` . `0x1` FROM `t` AS `dual`",
+    "digest": "0ab70fe2e647d950b82e3a161a1387454e02842f1b93b814a87528678c42e8d4"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT dual.0x1 FROM t AS `dual`",
+    "text": "SELECT `dual` . `0x1` FROM `t` AS `dual`",
+    "digest": "0ab70fe2e647d950b82e3a161a1387454e02842f1b93b814a87528678c42e8d4"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT dual._a FROM t AS `dual`",
+    "text": "SELECT `dual` . `_a` FROM `t` AS `dual`",
+    "digest": "d0abc2e37426abf2c48ea76134ea2e8c974405a640e91a7f047a396e321844c3"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT dual._a FROM t AS `dual`",
+    "text": "SELECT `dual` . `_a` FROM `t` AS `dual`",
+    "digest": "d0abc2e37426abf2c48ea76134ea2e8c974405a640e91a7f047a396e321844c3"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT dual._a FROM t AS `dual`",
+    "text": "SELECT `dual` . `_a` FROM `t` AS `dual`",
+    "digest": "d0abc2e37426abf2c48ea76134ea2e8c974405a640e91a7f047a396e321844c3"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT dual.$a FROM t AS `dual`",
+    "text": "SELECT `dual` . `$a` FROM `t` AS `dual`",
+    "digest": "53a9844b711b2dc280f78f65b9ed90af0877429d0b0bd75e520ee69ac86f6646"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT dual.$a FROM t AS `dual`",
+    "text": "SELECT `dual` . `$a` FROM `t` AS `dual`",
+    "digest": "53a9844b711b2dc280f78f65b9ed90af0877429d0b0bd75e520ee69ac86f6646"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT dual.$a FROM t AS `dual`",
+    "text": "SELECT `dual` . `$a` FROM `t` AS `dual`",
+    "digest": "53a9844b711b2dc280f78f65b9ed90af0877429d0b0bd75e520ee69ac86f6646"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT dual.名 FROM t AS `dual`",
+    "text": "SELECT `dual` . `名` FROM `t` AS `dual`",
+    "digest": "48f5ee3f835e46cd7ce655b4526bf7eab33d033c4279fe98a1718e5843881229"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT dual.名 FROM t AS `dual`",
+    "text": "SELECT `dual` . `名` FROM `t` AS `dual`",
+    "digest": "48f5ee3f835e46cd7ce655b4526bf7eab33d033c4279fe98a1718e5843881229"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT dual.名 FROM t AS `dual`",
+    "text": "SELECT `dual` . `名` FROM `t` AS `dual`",
+    "digest": "48f5ee3f835e46cd7ce655b4526bf7eab33d033c4279fe98a1718e5843881229"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT dual.ä FROM t AS `dual`",
+    "text": "SELECT `dual` . `ä` FROM `t` AS `dual`",
+    "digest": "ea9af64277f97e191daa0b70e4909a19d3ec67e26eacc52a5d0469f2552e1853"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT dual.ä FROM t AS `dual`",
+    "text": "SELECT `dual` . `ä` FROM `t` AS `dual`",
+    "digest": "ea9af64277f97e191daa0b70e4909a19d3ec67e26eacc52a5d0469f2552e1853"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT dual.ä FROM t AS `dual`",
+    "text": "SELECT `dual` . `ä` FROM `t` AS `dual`",
+    "digest": "ea9af64277f97e191daa0b70e4909a19d3ec67e26eacc52a5d0469f2552e1853"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT dual. a FROM t AS `dual`",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT dual. a FROM t AS `dual`",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT dual. a FROM t AS `dual`",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT dual.\ta FROM t AS `dual`",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT dual.\ta FROM t AS `dual`",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT dual.\ta FROM t AS `dual`",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT dual.\na FROM t AS `dual`",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT dual.\na FROM t AS `dual`",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT dual.\na FROM t AS `dual`",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT dual./*gap*/a FROM t AS `dual`",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT dual./*gap*/a FROM t AS `dual`",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT dual./*gap*/a FROM t AS `dual`",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT dual.-- gap\na FROM t AS `dual`",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT dual.-- gap\na FROM t AS `dual`",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT dual.-- gap\na FROM t AS `dual`",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT dual.`a` FROM t AS `dual`",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT dual.`a` FROM t AS `dual`",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT dual.`a` FROM t AS `dual`",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT dual.\"a\" FROM t AS `dual`",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT dual.\"a\" FROM t AS `dual`",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT dual.\"a\" FROM t AS `dual`",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT dual.'a' FROM t AS `dual`",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT dual.'a' FROM t AS `dual`",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT dual.'a' FROM t AS `dual`",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT dual. FROM t AS `dual`",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT dual. FROM t AS `dual`",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT dual. FROM t AS `dual`",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT dual.a.* FROM t AS `dual`",
+    "text": "SELECT `dual` . `a` . * FROM `t` AS `dual`",
+    "digest": "bf2acbfa3efdf7f188765e9aa970d9fb3e45849b88f3ecdf43f7360a4045675a"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT dual.a.* FROM t AS `dual`",
+    "text": "SELECT `dual` . `a` . * FROM `t` AS `dual`",
+    "digest": "bf2acbfa3efdf7f188765e9aa970d9fb3e45849b88f3ecdf43f7360a4045675a"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT dual.a.* FROM t AS `dual`",
+    "text": "SELECT `dual` . `a` . * FROM `t` AS `dual`",
+    "digest": "bf2acbfa3efdf7f188765e9aa970d9fb3e45849b88f3ecdf43f7360a4045675a"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT `dual`.* FROM t AS `dual`",
+    "text": "SELECT `dual` . * FROM `t` AS `dual`",
+    "digest": "7bb88a74d4a7031c22a8b1b22c986760f0b7d6c8bbd3cfacc0125f221b4d78b4"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT `dual`. a FROM t AS `dual`",
+    "text": "SELECT `dual` . `a` FROM `t` AS `dual`",
+    "digest": "f02b29202fc6be0ccde68b40d0fbdbdc65cf9ccda5c6f2164f2584882a252f22"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT `dual`.`a` FROM t AS `dual`",
+    "text": "SELECT `dual` . `a` FROM `t` AS `dual`",
+    "digest": "f02b29202fc6be0ccde68b40d0fbdbdc65cf9ccda5c6f2164f2584882a252f22"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT dual. /*gap*/a FROM t AS `dual`",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT dual.a",
+    "text": "SELECT `dual` . `a`",
+    "digest": "dda83339604c70d49470bc0402fe029c5f69ba3924c9491ffe0a3e87731b2a49"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT dual.",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT t.dual FROM t",
+    "text": "SELECT `t` . `dual` FROM `t`",
+    "digest": "e25608dc8a512603737b02acf041d249b3120155ee3de38bf09ab472b0ade206"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT t.dual.* FROM t",
+    "text": "SELECT `t` . `dual` . * FROM `t`",
+    "digest": "7e50f6e40dec6b255082a846e26ae1ad5cd0ae8bc1149b33348d1032aaa6a14f"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT `t`.dual FROM t",
+    "text": "SELECT `t` . `dual` FROM `t`",
+    "digest": "e25608dc8a512603737b02acf041d249b3120155ee3de38bf09ab472b0ade206"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT t. dual FROM t",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT t./*gap*/dual FROM t",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT * FROM dual.a",
+    "text": "SELECT * FROM `dual` . `a`",
+    "digest": "ad674de946f9472ee8673b3e3b723ca938a9bdcf4f0897d4822a161da3ce183f"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT * FROM dual.`a`",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT * FROM dual. a",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT * FROM dual./*gap*/a",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT * FROM dual.*",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT * FROM dual.1",
+    "text": "SELECT * FROM `dual` . `1`",
+    "digest": "16983958ed66f67682404d4d6997934d390f940687ad5fbc86894661a544fa97"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*!80000 dual.a */ FROM t AS `dual`",
+    "text": "SELECT `dual` . `a` FROM `t` AS `dual`",
+    "digest": "f02b29202fc6be0ccde68b40d0fbdbdc65cf9ccda5c6f2164f2584882a252f22"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT dual./*!80000 a */ FROM t AS `dual`",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*!80000 dual.* */ FROM t AS `dual`",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT t./*!80000 dual */ FROM t",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT \"dual\".* FROM t AS \"dual\"",
+    "text": "SELECT `dual` . * FROM `t` AS `dual`",
+    "digest": "7bb88a74d4a7031c22a8b1b22c986760f0b7d6c8bbd3cfacc0125f221b4d78b4"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT dual.\"a\" FROM t AS \"dual\"",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT a.1 FROM t",
+    "text": "SELECT `a` . `1` FROM `t`",
+    "digest": "6ba888fa91d9af50c172be95f9647159306b90ce2c6de9c235aeb1fc95136ba8"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT a.1e2 FROM t",
+    "text": "SELECT `a` . `1e2` FROM `t`",
+    "digest": "c0392ee6f4d9e3de903f6a6c4eec9d95f5bdfbcb0a7eaef1552ac90e7831032e"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT a.1.5 FROM t",
+    "text": "SELECT `a` . `1` . `5` FROM `t`",
+    "digest": "7aee96550384d8ef1a58a742c89e8f045893e8ab89501970d43ba83cb21e9cf7"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT `a`.1 FROM t",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT `a` .5 FROM t",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT a. 1 FROM t",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT a.\n1 FROM t",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT a./*gap*/1 FROM t",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT a./*!80000 1 */ FROM t",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*!80000 dual.1 */ FROM t AS `dual`",
+    "text": "SELECT `dual` . `1` FROM `t` AS `dual`",
+    "digest": "83a71faa5550805094c35a5d30d0944fc7a036bcfa8e0ff892128294b7f06bb3"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT .5, 1.5, 1e2, 0x1",
+    "text": "SELECT ?, ...",
+    "digest": "efb26d6aca0766da4a6d37f3e3aa5332542ff42893ff98fbb393da4e8cbd6a10"
   }
 ]

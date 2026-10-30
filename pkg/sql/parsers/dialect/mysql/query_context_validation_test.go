@@ -70,6 +70,9 @@ func TestQueryLockAndIntoContext(t *testing.T) {
 		{"WITH c AS (((SELECT * FROM nation FOR SHARE) FOR UPDATE)) DELETE c FROM c", false},
 		{"WITH `dual` AS (((SELECT * FROM nation FOR SHARE) FOR UPDATE)) SELECT 1 FROM DUAL", true},
 		{"WITH `dual` AS (((SELECT * FROM nation FOR SHARE) FOR UPDATE)) SELECT 1 FROM `dual`", false},
+		{"WITH c AS (SELECT 1), d AS (SELECT 2) SELECT 1", true},
+		{"WITH c AS (SELECT 1) SELECT (WITH c AS (SELECT 2) SELECT * FROM c)", true},
+		{"WITH c AS (SELECT 1) (WITH c AS (SELECT 2) SELECT * FROM c)", true},
 	} {
 		t.Run(tc.sql, func(t *testing.T) {
 			// Reuse a real parser so lock admission state cannot leak across calls.
@@ -94,6 +97,34 @@ func TestQueryLockAndIntoContext(t *testing.T) {
 	}
 }
 
+func TestDigestCTENameUniqueness(t *testing.T) {
+	parser := &MySQLParser{}
+	for _, sql := range []string{
+		"WITH c AS (SELECT 1), c AS (SELECT 2) SELECT 1",
+		"WITH c AS (SELECT 1), `C` AS (SELECT 2) SELECT 1",
+		"WITH RECURSIVE c AS (SELECT 1), c AS (SELECT 2) SELECT 1",
+		"EXPLAIN WITH c AS (SELECT 1), c AS (SELECT 2) SELECT 1",
+		"WITH unused AS (WITH c AS (SELECT 1), c AS (SELECT 2) SELECT 1) SELECT 1",
+		"WITH c AS (SELECT 1), c AS (SELECT 2) UPDATE nation SET n_nationkey=1",
+		"WITH c AS (SELECT 1), c AS (SELECT 2) DELETE FROM nation",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			_, _, err := StatementDigest(t.Context(), sql, "")
+			require.Error(t, err)
+			// Normal SQL retains its binder diagnostics, not digest-only
+			// validation. Reuse after digest failure must not leak that mode.
+			statements, err := parser.ParseWithSQLMode(t.Context(), sql, 0, "")
+			require.NoError(t, err)
+			defer func() {
+				for _, statement := range statements {
+					statement.Free()
+				}
+			}()
+			require.Len(t, statements, 1)
+		})
+	}
+}
+
 func TestDigestDualSyntax(t *testing.T) {
 	// Digest follows MySQL's reserved DUAL grammar without changing MO's
 	// established execution grammar for unquoted identifiers/aliases.
@@ -101,6 +132,8 @@ func TestDigestDualSyntax(t *testing.T) {
 		"SELECT 1 FROM dual d", "SELECT 1 FROM (dual)",
 		"SELECT 1 FROM dual,t", "SELECT 1 FROM (SELECT 1) dual",
 		"SELECT 1 AS dual", "SELECT dual", "CREATE TABLE dual(a INT)",
+		"SELECT dual.* FROM t AS `dual`", "SELECT dual.`a` FROM t AS `dual`",
+		"SELECT dual. a FROM t AS `dual`", "SELECT dual./*gap*/a FROM t AS `dual`",
 	} {
 		t.Run(sql, func(t *testing.T) {
 			_, _, err := StatementDigest(t.Context(), sql, "")

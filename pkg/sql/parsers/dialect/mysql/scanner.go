@@ -60,6 +60,8 @@ type Scanner struct {
 	aliasFollowerLookahead bool
 	soundsPhraseLookahead  bool
 	identifierAfterDot     bool
+	// identifierDot keeps a following .digit in identifier context, not a decimal.
+	identifierDot bool
 	// digestMode applies MySQL 8.4 lexical compatibility only to digest arguments.
 	digestMode bool
 }
@@ -81,6 +83,7 @@ func (s *Scanner) reset(clearLargeOnly bool, oversized bool) {
 	s.aliasFollowerLookahead = false
 	s.soundsPhraseLookahead = false
 	s.identifierAfterDot = false
+	s.identifierDot = false
 	s.digestMode = false
 
 	if clearLargeOnly {
@@ -159,6 +162,7 @@ func (s *Scanner) scan(comments bool) (int, string) {
 		s.scanCheckpoint()
 		token, value := s.scanToken(comments)
 		if token != skippedScannerToken {
+			s.identifierDot = s.digestMode && token == ID && s.cur() == '.' && isDigit(s.peek(1))
 			return token, value
 		}
 	}
@@ -172,8 +176,14 @@ func (s *Scanner) scanToken(comments bool) (int, string) {
 		}
 		s.MysqlSpecialComment = nil
 	}
+	identifierDot := s.identifierDot
+	s.identifierDot = false
 	s.PrePos = s.Pos
 	s.skipBlank()
+	if identifierDot && s.cur() == '.' {
+		s.inc()
+		return '.', ""
+	}
 	if size := supplementaryUTF8SequenceSizeAt(s.buf, s.Pos); size != 0 {
 		start := s.Pos
 		s.incN(size)
@@ -277,6 +287,9 @@ func (s *Scanner) scanToken(comments bool) (int, string) {
 		return s.scanIdentifier(false)
 
 	case isDigit(ch):
+		if s.digestMode && s.identifierAfterDot && s.Pos > 0 && s.buf[s.Pos-1] == '.' {
+			return s.scanIdentifier(false)
+		}
 		return s.scanNumber()
 	case ch == ':':
 		if s.peek(1) == '=' {
