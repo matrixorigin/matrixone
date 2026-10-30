@@ -2199,7 +2199,7 @@ parallel_opt:
         } else if str == "false" {
 			$$ = 0
         } else {
-            yylex.Error("error strict flag")
+            yylex.Error("error parallel flag")
             goto ret1
         }
     }
@@ -2215,7 +2215,7 @@ strict_opt:
         } else if str == "false" {
             $$ = false
         } else {
-            yylex.Error("error parallel flag")
+            yylex.Error("error strict flag")
             goto ret1
         }
     }

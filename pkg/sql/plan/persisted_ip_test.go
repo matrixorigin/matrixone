@@ -690,12 +690,12 @@ func TestPersistedIPFunctionProtocolAdmissionForCatalogBuilders(t *testing.T) {
 
 			_, err = buildCTASDefaultFromOrigin(ctx,
 				planpb.Type{Id: int32(types.T_varchar), Width: 32}, true,
-				"inet_ntoa(1)", columns...)
+				"inet_ntoa(1)", "col", columns...)
 			checkAdmissionResult(t, version, err, defines.MORPCVersion72)
 
 			_, err = buildCTASDefaultFromOrigin(ctx,
 				planpb.Type{Id: int32(types.T_varchar), Width: 32}, true,
-				"inet_ntoa(1.6)", columns...)
+				"inet_ntoa(1.6)", "col", columns...)
 			checkAdmissionResult(t, version, err, defines.MORPCVersion72)
 		})
 	}

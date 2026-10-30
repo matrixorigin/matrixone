@@ -179,26 +179,23 @@ distinct from all existing function registrations.
 The capability is specific to these functions and the persisted VIEWS definition.
 A sender probes the selected destination CN as well as its local runtime before
 encoding a pipeline containing either function ID; an unknown or unavailable
-destination capability fails closed. The v4.0.6 VIEWS upgrade waits for common
-v126. New tenant initialization installs the new VIEWS DDL only after the local
-coordinator and every CN in the current inventory have positively confirmed v126;
-a mixed, unknown, RPC-failing, or incomplete capability probe records the
-predecessor VIEWS definition while still committing the final-version tenant
-row. A bounded post-upgrade reconciliation pass later rechecks common v126 and
-reuses the guarded transactional entry to converge missing or stale VIEWS
-definitions to the current contract. Any cluster with a CN below v126, including
-the predecessors v104, v105, v106, v108, v109, v110, v111, v112, v113, v114, v115, v116, v117, v118, v119, v120, v121, v122, v123, v124, and immediate predecessor v125, preserves the predecessor VIEWS
-definition while retaining each existing protocol-specific metadata contract,
-including the independent v100 and v109 COLUMNS contracts. A local v126 CN
-that defers VIEWS uses the VIEWS DDL of the immediate v125 predecessor, preserving native Unicode
-collation metadata. A v118 predecessor is selected only when its local
-authoring fence and every current peer support it; older, unknown, or failed
-probes retain the conservative v109 contract. Bootstrap prerequisites still
-defer the v118 TABLES function until the existing post-admission publication
-phase; ordinary tenant initialization retains admitted v118 TABLES/SCHEMATA
-while VIEWS waits for v126. COLUMNS installation still requires a positive common-v100
-or common-v109 probe according to its selected definition; unknown local runtime versions retain
-the minimum supported catalog contract. Pipeline preparation, remote marshal, and
+destination capability fails closed. The v4.0.7 VIEWS upgrade waits for common
+v126. New tenant initialization installs the complete current information-schema
+set only after a positive common-v126 check. A mixed, unknown, RPC-failing,
+or incomplete capability result aborts CREATE ACCOUNT and rolls back its
+catalog rows and final-version marker. It must not commit predecessor views
+under the final account version. Once the cluster is ready, retrying the same
+account name initializes the current COLUMNS, TABLES, SCHEMATA and VIEWS
+contracts in one transaction. Older binaries remain responsible for creating
+tenants at their own catalog versions; their persisted versions are handled
+by the normal tenant upgrade route. This initializer does not synthesize an
+older catalog or lower its version marker.
+
+The bounded VIEWS reconciliation pass remains available for existing legacy
+catalog rows. Bootstrap prerequisites still defer the v118 TABLES function
+until the existing post-admission publication phase. Historical protocol
+adapters remain for bootstrap and persisted metadata compatibility.
+Pipeline preparation, remote marshal, and
 remote unmarshal reject a
 pipeline containing either function ID below v126. The receiver check protects
 stale prepared work as well as normal sender dispatch. Before the v126 HAKeeper
@@ -262,15 +259,13 @@ authoring/read floor values 0, v104, v105, v106, v108, v109, v110, v111, v112, v
 metadata at the immediate predecessor and current protocol.
 Real CREATE VIEW controls using FORMAT_BYTES and FORMAT_PICO_TIME succeed with
 the VIEWS authoring floor closed and persist no protocol marker.
-System-view tests prove mixed, unknown, and RPC-failing CN capability probes
-fall back to the predecessor VIEWS DDL, while an all-v126 inventory uses the
-parser-derived DDL. Tenant initialization keeps the final account version but
-records the predecessor VIEWS definition when capability discovery is
-incomplete. The post-upgrade bounded reconciliation pass rediscovers that
-durable definition marker, retries only after a positive all-CN v126 check, and
-uses the same guarded transactional entry to publish the parser-derived
-definition once it is safe. Recovery tests use the real `initUpgrade` registry
-to validate an interrupted v4.0.7/offset-zero target with created, tenant-pending,
+Current account-initialization tests reject old, missing, malformed and
+RPC-failing capability results before issuing view DDL. A real SQL recovery
+test verifies that failed initialization leaves no account row, the account
+name is reusable after capability recovery, and the resulting version and
+COLUMNS/TABLES/VIEWS metadata agree. Existing VIEWS reconciliation tests cover
+legacy rows and the guarded replacement path. Recovery tests use the real
+`initUpgrade` registry to validate an interrupted v4.0.7/offset-zero target with created, tenant-pending,
 and already-committed route steps through the startup checker. Handler tests
 pin its original protocol-61 requirement and zero offset, while standalone
 VIEWS repair tests retain the v126 gate before DROP/CREATE. The predecessor-init
@@ -476,10 +471,11 @@ The subsequent 2026-10-17 refresh rebases onto official main
 INTERNAL_TABLE_COLLATION ID 600; VIEWS advances to v119 and IDs 601/602.
 Shared feature detection distinguishes the v118 TABLES function from both VIEWS
 functions. Persisted read/authoring, Prepare, sender placement and receiver tests
-include immediate-predecessor v118 rejection. Tenant initialization retains
-v118 TABLES/SCHEMATA when their local fence and peers are ready, while VIEWS
-waits for v119; unknown or failed capability probes keep the conservative
-fallback. System bootstrap preserves the database-default prerequisites even
+include immediate-predecessor v118 rejection. At that historical revision,
+tenant initialization retained v118 TABLES/SCHEMATA when their local fence and
+peers were ready, while VIEWS waited for v119; unknown or failed capability probes kept the conservative
+fallback. The current account-initialization contract above supersedes that
+behavior. System bootstrap preserves the database-default prerequisites even
 with its authoring fence closed and defers the TABLES function to main's
 existing post-admission publication phase.
 
