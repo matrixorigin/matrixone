@@ -1,0 +1,102 @@
+drop database if exists ext_read_consistency;
+create database ext_read_consistency;
+use ext_read_consistency;
+create external table e1(id int, s varchar(20), d date, f double) infile{'filepath'='$resources/external_table_file/ext_read_1030/part1.csv'} fields terminated by ',' enclosed by '"';
+select id, s, concat('[', s, ']'), d, f from e1 order by id;
+➤ id[4,32,0]  ¦  s[12,20,0]  ¦  concat([, s, ])[12,22,0]  ¦  d[91,10,0]  ¦  f[8,53,31]  𝄀
+-6  ¦   sp   ¦  [ sp ]  ¦  2024-03-04  ¦  7.0  𝄀
+1  ¦  abc  ¦  [abc]  ¦  2024-01-02  ¦  1.5  𝄀
+2  ¦  q,uoted  ¦  [q,uoted]  ¦  2024-02-28  ¦  2.0  𝄀
+3  ¦    ¦  []  ¦  null  ¦  null  𝄀
+4  ¦  a"b  ¦  [a"b]  ¦  2024-03-01  ¦  100.0
+select count(*), count(s), count(d), count(f), sum(id) from e1;
+➤ count(*)[-5,64,0]  ¦  count(s)[-5,64,0]  ¦  count(d)[-5,64,0]  ¦  count(f)[-5,64,0]  ¦  sum(id)[-5,64,0]  𝄀
+5  ¦  5  ¦  4  ¦  4  ¦  4
+select id from e1 where s is null or s = '';
+➤ id[4,32,0]  𝄀
+3
+select id from e1 where s like '%"%';
+➤ id[4,32,0]  𝄀
+4
+create table r1(id int, s varchar(20), d date, f double);
+load data infile '$resources/external_table_file/ext_read_1030/part1.csv' into table r1 fields terminated by ',' enclosed by '"';
+select count(*) from e1 e join r1 r on e.id = r.id and e.s <=> r.s and e.d <=> r.d and e.f <=> r.f;
+➤ count(*)[-5,64,0]  𝄀
+5
+create external table e1gz(id int, s varchar(20), d date, f double) infile{'filepath'='$resources/external_table_file/ext_read_1030/part1.csv.gz','compression'='gzip'} fields terminated by ',' enclosed by '"';
+create external table e1auto(id int, s varchar(20), d date, f double) infile{'filepath'='$resources/external_table_file/ext_read_1030/part1.csv.gz','compression'='auto'} fields terminated by ',' enclosed by '"';
+select count(*) from e1gz g join e1 e on g.id = e.id and g.s <=> e.s and g.d <=> e.d and g.f <=> e.f;
+➤ count(*)[-5,64,0]  𝄀
+5
+select count(*) from e1auto a join e1 e on a.id = e.id and a.s <=> e.s and a.d <=> e.d and a.f <=> e.f;
+➤ count(*)[-5,64,0]  𝄀
+5
+create external table eall(id int, s varchar(20), d date, f double) infile{'filepath'='$resources/external_table_file/ext_read_1030/part*.csv'} fields terminated by ',' enclosed by '"';
+select substring_index(__mo_filepath, '/', -1) file, count(*), min(id), max(id) from eall group by file order by file;
+➤ file[12,65535,0]  ¦  count(*)[-5,64,0]  ¦  min(id)[4,32,0]  ¦  max(id)[4,32,0]  𝄀
+part1.csv  ¦  5  ¦  -6  ¦  4  𝄀
+part2.csv  ¦  2  ¦  10  ¦  11
+select id, s from eall where substring_index(__mo_filepath, '/', -1) = 'part2.csv' order by id;
+➤ id[4,32,0]  ¦  s[12,20,0]  𝄀
+10  ¦  ten  𝄀
+11  ¦  e,l,v
+create external table ebom(id varchar(10), name varchar(10)) infile{'filepath'='$resources/external_table_file/ext_read_1030/bom_header.csv'} fields terminated by ',' lines terminated by '\r\n' ignore 1 lines;
+select id, hex(id), name, hex(name) from ebom order by id;
+➤ id[12,10,0]  ¦  hex(id)[12,80,0]  ¦  name[12,10,0]  ¦  hex(name)[12,80,0]  𝄀
+1  ¦  31  ¦  x  ¦  78  𝄀
+2  ¦  32  ¦  y  ¦  79
+create external table enonl(id int, s varchar(10)) infile{'filepath'='$resources/external_table_file/ext_read_1030/no_final_newline.csv'} fields terminated by ',';
+select * from enonl order by id;
+➤ id[4,32,0]  ¦  s[12,10,0]  𝄀
+1  ¦  a  𝄀
+2  ¦  b
+create view ve as select id, s from e1 where id > 0;
+select * from ve order by id;
+➤ id[4,32,0]  ¦  s[12,20,0]  𝄀
+1  ¦  abc  𝄀
+2  ¦  q,uoted  𝄀
+3  ¦    𝄀
+4  ¦  a"b
+select a.id, b.id from e1 a join e1 b on a.id = b.id + 1 order by a.id;
+➤ id[4,32,0]  ¦  id[4,32,0]  𝄀
+2  ¦  1  𝄀
+3  ¦  2  𝄀
+4  ¦  3
+select e.id, n.s from e1 e join enonl n on e.id = n.id order by e.id;
+➤ id[4,32,0]  ¦  s[12,10,0]  𝄀
+1  ¦  a  𝄀
+2  ¦  b
+select id from e1 where id in (select id from enonl) order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2
+select id from e1 union select id from enonl order by id;
+➤ id[4,32,0]  𝄀
+-6  𝄀
+1  𝄀
+2  𝄀
+3  𝄀
+4
+create table copy1 as select * from e1;
+select count(*) from copy1;
+➤ count(*)[-5,64,0]  𝄀
+5
+insert into copy1 select * from e1 where id = 1;
+select count(*) from copy1 where id = 1;
+➤ count(*)[-5,64,0]  𝄀
+2
+select table_type from information_schema.tables where table_schema = 'ext_read_consistency' and table_name = 'e1';
+➤ table_type[12,14,0]  𝄀
+EXTERNAL TABLE
+insert into e1 values (9,'a','2024-01-01',1);
+invalid input: cannot insert/update/delete from external table
+update e1 set s = 'x';
+invalid input: cannot insert/update/delete from external table
+delete from e1;
+invalid input: cannot insert/update/delete from external table
+create index ie on e1(id);
+invalid input: cannot create index on external table
+create external table epk(id int primary key, s varchar(10)) infile{'filepath'='$resources/external_table_file/ext_read_1030/part2.csv'} fields terminated by ',';
+invalid input: cannot create index on external table
+drop view ve;
+drop database ext_read_consistency;
