@@ -2780,6 +2780,8 @@ func TestMaterializedViewRefreshCanWriteHiddenState(t *testing.T) {
 	require.NoError(t, err)
 	_, err = runOneStmt(mock, t, "update mv_state set __mv_state = __mv_state + 1 where service = 'api'")
 	require.NoError(t, err)
+	_, err = runOneStmt(mock, t, "insert into mv_state (service, __mv_state, __mo_fake_pk_col) values (null, 2, 1) on duplicate key update __mv_state = values(__mv_state)")
+	require.NoError(t, err)
 }
 
 func TestGenViewTableDefCapturesRootSQLOnce(t *testing.T) {

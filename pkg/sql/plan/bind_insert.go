@@ -2735,7 +2735,8 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 		for _, assignment := range astUpdateExprs {
 			name := assignment.Names[0].ColName()
 			idx, ok := tableDef.Name2ColIndex[name]
-			if !ok || tableDef.Cols[idx].Hidden {
+			if !ok || (tableDef.Cols[idx].Hidden &&
+				!isAuthorizedMaterializedViewHiddenColumn(builder.GetContext(), tableDef, tableDef.Cols[idx])) {
 				return 0, moerr.NewBadFieldErrorf(builder.GetContext(), "invalid input: column '%s' does not exist", assignment.Names[0].ColNameOrigin())
 			}
 		}
