@@ -18,7 +18,6 @@ type replica struct {
 	// uuid is the store UUID
 	uuid    string
 	shardID uint64
-	epoch   uint64
 
 	replicaID uint64
 }

@@ -620,35 +620,40 @@ func presentPreparedSQLResults(ctx context.Context, query *plan.Query) {
 	if state == nil || query == nil || query.StmtType != plan.Query_SELECT {
 		return
 	}
+	// Steps also contains internal producers, including dependent programs.
+	// Their output types belong to semantic consumers, not client presentation.
+	output := query.MainOutputStep()
+	if output < 0 || int(output) >= len(query.Steps) {
+		return
+	}
+	step := query.Steps[output]
+	if step < 0 || int(step) >= len(query.Nodes) {
+		return
+	}
+	root := query.Nodes[step]
+	if root == nil {
+		return
+	}
 	textType := types.T_text.ToType()
-	for _, step := range query.Steps {
-		if step < 0 || int(step) >= len(query.Nodes) {
+	for i, expr := range root.ProjectList {
+		if expr == nil || expr.Typ.Id == int32(types.T_text) {
 			continue
 		}
-		root := query.Nodes[step]
-		if root == nil {
+		pos, direct := preparedProjectedParamPosition(query, root, expr,
+			make(map[preparedSetOperationNullKey]bool), false)
+		if !direct || pos < 0 || int(pos) >= len(state.values) {
 			continue
 		}
-		for i, expr := range root.ProjectList {
-			if expr == nil || expr.Typ.Id == int32(types.T_text) {
-				continue
-			}
-			pos, direct := preparedProjectedParamPosition(query, root, expr,
-				make(map[preparedSetOperationNullKey]bool), false)
-			if !direct || pos < 0 || int(pos) >= len(state.values) {
-				continue
-			}
-			param, ok := state.values[pos].(ParamValue)
-			if !ok || param.IsBinaryProtocol {
-				continue
-			}
-			// SQL EXECUTE already transports the original spelling as TEXT.
-			// Reuse that source for presentation instead of formatting a
-			// semantic BOOL/DECIMAL value back into a different string.
-			root.ProjectList[i] = &Expr{
-				Typ:  makePlan2Type(&textType),
-				Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: pos}},
-			}
+		param, ok := state.values[pos].(ParamValue)
+		if !ok || param.IsBinaryProtocol {
+			continue
+		}
+		// SQL EXECUTE already transports the original spelling as TEXT.
+		// Reuse that source for presentation instead of formatting a
+		// semantic BOOL/DECIMAL value back into a different string.
+		root.ProjectList[i] = &Expr{
+			Typ:  makePlan2Type(&textType),
+			Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: pos}},
 		}
 	}
 }
@@ -1023,7 +1028,7 @@ func BuildPreparedExecutionPlan(ctx CompilerContext, stmt tree.Statement,
 	bindings []PreparedSourceBinding, values []any) (*PreparedExecutionPlan, error) {
 	previous := ctx.GetContext()
 	if tree.ParameterCount(stmt) != len(bindings) {
-		return nil, moerr.NewInvalidInput(previous, "Incorrect arguments to EXECUTE")
+		return nil, moerr.NewWrongArguments(previous, "EXECUTE")
 	}
 	planning := withPreparedSourceBindings(previous, bindings, values)
 	fieldTypes := newPreparedFieldTypeBinding(previous, stmt)

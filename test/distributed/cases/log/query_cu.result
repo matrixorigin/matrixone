@@ -5,7 +5,7 @@ val
 7528422223
 select json_extract(@stats, '$[2]') val;
 val
-573384797164
+573384797164.0
 select json_extract(@stats, '$[3]') val;
 val
 0

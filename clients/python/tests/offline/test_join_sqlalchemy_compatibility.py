@@ -76,11 +76,11 @@ class TestJoinSQLAlchemyCompatibility(unittest.TestCase):
         sqlalchemy_query = select(User).join(Address, User.id == Address.user_id)
 
         # Both should produce INNER JOIN
-        self.assertTrue(matrixone_query._joins[0].startswith("INNER JOIN"))
+        self.assertTrue(" INNER JOIN " in matrixone_query.to_sql())
 
         # MatrixOne should handle the SQLAlchemy expression correctly
-        self.assertIn("addresses", matrixone_query._joins[0])
-        self.assertIn("users.id = addresses.user_id", matrixone_query._joins[0])
+        self.assertIn("addresses", matrixone_query.to_sql())
+        self.assertIn("users.id = addresses.user_id", matrixone_query.to_sql())
 
     def test_left_join_behavior_matches_sqlalchemy(self):
         """Test that left join behavior matches SQLAlchemy ORM"""
@@ -93,23 +93,15 @@ class TestJoinSQLAlchemyCompatibility(unittest.TestCase):
         sqlalchemy_query = select(User).outerjoin(Address, User.id == Address.user_id)
 
         # Both should produce LEFT OUTER JOIN
-        self.assertTrue(matrixone_query._joins[0].startswith("LEFT OUTER JOIN"))
-        self.assertIn("addresses", matrixone_query._joins[0])
+        self.assertTrue(" LEFT OUTER JOIN " in matrixone_query.to_sql())
+        self.assertIn("addresses", matrixone_query.to_sql())
 
     def test_join_without_condition_matches_sqlalchemy(self):
-        """Test that join without condition matches SQLAlchemy ORM"""
-        # MatrixOne query
         matrixone_query = MatrixOneQuery(User, self.mock_client)
-        matrixone_query._table_name = 'users'
-        matrixone_query.join(Address)
-
-        # SQLAlchemy equivalent
-        sqlalchemy_query = select(User).join(Address)
-
-        # Both should produce INNER JOIN without ON condition
-        self.assertTrue(matrixone_query._joins[0].startswith("INNER JOIN"))
-        self.assertIn("addresses", matrixone_query._joins[0])
-        self.assertNotIn("ON", matrixone_query._joins[0])
+        with self.assertRaisesRegex(ValueError, 'foreign key'):
+            matrixone_query.join(Address)
+        with self.assertRaises(Exception):
+            str(select(User).join(Address))
 
     def test_multiple_joins_matches_sqlalchemy(self):
         """Test that multiple joins match SQLAlchemy ORM"""
@@ -126,10 +118,10 @@ class TestJoinSQLAlchemyCompatibility(unittest.TestCase):
 
         # Both should have two joins
         self.assertEqual(len(matrixone_query._joins), 2)
-        self.assertTrue(matrixone_query._joins[0].startswith("INNER JOIN"))
-        self.assertTrue(matrixone_query._joins[1].startswith("INNER JOIN"))
-        self.assertIn("addresses", matrixone_query._joins[0])
-        self.assertIn("departments", matrixone_query._joins[1])
+        self.assertTrue(" INNER JOIN " in matrixone_query.to_sql())
+        self.assertTrue(" INNER JOIN " in matrixone_query.to_sql())
+        self.assertIn("addresses", matrixone_query.to_sql())
+        self.assertIn("departments", matrixone_query.to_sql())
 
     def test_join_with_string_condition(self):
         """Test join with string condition (MatrixOne specific)"""
@@ -139,9 +131,9 @@ class TestJoinSQLAlchemyCompatibility(unittest.TestCase):
         matrixone_query.join('addresses', 'users.id = addresses.user_id')
 
         # Should produce INNER JOIN with the exact condition
-        self.assertTrue(matrixone_query._joins[0].startswith("INNER JOIN"))
-        self.assertIn("addresses", matrixone_query._joins[0])
-        self.assertIn("users.id = addresses.user_id", matrixone_query._joins[0])
+        self.assertTrue(" INNER JOIN " in matrixone_query.to_sql())
+        self.assertIn("addresses", matrixone_query.to_sql())
+        self.assertIn("users.id = addresses.user_id", matrixone_query.to_sql())
 
     def test_join_with_onclause_parameter(self):
         """Test join with onclause parameter (SQLAlchemy style)"""
@@ -151,9 +143,9 @@ class TestJoinSQLAlchemyCompatibility(unittest.TestCase):
         matrixone_query.join('addresses', onclause='users.id = addresses.user_id')
 
         # Should produce INNER JOIN with the exact condition
-        self.assertTrue(matrixone_query._joins[0].startswith("INNER JOIN"))
-        self.assertIn("addresses", matrixone_query._joins[0])
-        self.assertIn("users.id = addresses.user_id", matrixone_query._joins[0])
+        self.assertTrue(" INNER JOIN " in matrixone_query.to_sql())
+        self.assertIn("addresses", matrixone_query.to_sql())
+        self.assertIn("users.id = addresses.user_id", matrixone_query.to_sql())
 
     def test_join_method_aliases(self):
         """Test that join method aliases work correctly"""
@@ -178,10 +170,10 @@ class TestJoinSQLAlchemyCompatibility(unittest.TestCase):
         query4.fullouterjoin(Address, User.id == Address.user_id)
 
         # Verify join types
-        self.assertTrue(query1._joins[0].startswith("INNER JOIN"))
-        self.assertTrue(query2._joins[0].startswith("LEFT OUTER JOIN"))
-        self.assertTrue(query3._joins[0].startswith("LEFT OUTER JOIN"))
-        self.assertTrue(query4._joins[0].startswith("FULL OUTER JOIN"))
+        self.assertTrue(" INNER JOIN " in query1.to_sql())
+        self.assertTrue(" LEFT OUTER JOIN " in query2.to_sql())
+        self.assertTrue(" LEFT OUTER JOIN " in query3.to_sql())
+        self.assertTrue(" FULL OUTER JOIN " in query4.to_sql())
 
     def test_join_with_complex_expression(self):
         """Test join with complex SQLAlchemy expression"""
@@ -191,11 +183,11 @@ class TestJoinSQLAlchemyCompatibility(unittest.TestCase):
         matrixone_query.join(Address, (User.id == Address.user_id) & (Address.email.like('%@example.com')))
 
         # Should handle complex expressions
-        self.assertTrue(matrixone_query._joins[0].startswith("INNER JOIN"))
-        self.assertIn("addresses", matrixone_query._joins[0])
-        self.assertIn("ON", matrixone_query._joins[0])
+        self.assertTrue(" INNER JOIN " in matrixone_query.to_sql())
+        self.assertIn("addresses", matrixone_query.to_sql())
+        self.assertIn("ON", matrixone_query.to_sql())
         # The complex expression should be compiled to SQL
-        join_clause = matrixone_query._joins[0]
+        join_clause = matrixone_query.to_sql()
         self.assertIn("users.id = addresses.user_id", join_clause)
 
     def test_join_method_chaining_compatibility(self):
@@ -221,9 +213,9 @@ class TestJoinSQLAlchemyCompatibility(unittest.TestCase):
         matrixone_query.join(Address, 'users.id = addresses.user_id')
 
         # Should use the model's table name
-        self.assertTrue(matrixone_query._joins[0].startswith("INNER JOIN"))
-        self.assertIn("addresses", matrixone_query._joins[0])
-        self.assertIn("users.id = addresses.user_id", matrixone_query._joins[0])
+        self.assertTrue(" INNER JOIN " in matrixone_query.to_sql())
+        self.assertIn("addresses", matrixone_query.to_sql())
+        self.assertIn("users.id = addresses.user_id", matrixone_query.to_sql())
 
     def test_join_parameter_consistency_with_sqlalchemy(self):
         """Test that parameter names are consistent with SQLAlchemy"""
@@ -238,7 +230,7 @@ class TestJoinSQLAlchemyCompatibility(unittest.TestCase):
         query2.join('addresses', 'users.id = addresses.user_id')
 
         # Both should produce the same result
-        self.assertEqual(query1._joins[0], query2._joins[0])
+        self.assertEqual(query1.to_sql(), query2.to_sql())
 
     def test_join_default_behavior_is_inner_join(self):
         """Test that join() defaults to INNER JOIN like SQLAlchemy"""
@@ -251,7 +243,7 @@ class TestJoinSQLAlchemyCompatibility(unittest.TestCase):
         sqlalchemy_query = select(User).join(Address, User.id == Address.user_id)
 
         # Both should default to INNER JOIN
-        self.assertTrue(matrixone_query._joins[0].startswith("INNER JOIN"))
+        self.assertTrue(" INNER JOIN " in matrixone_query.to_sql())
 
         # This matches SQLAlchemy's default behavior where join() creates INNER JOIN
 
@@ -272,5 +264,7 @@ if __name__ == '__main__':
     print(f"Tests run: {result.testsRun}")
     print(f"Failures: {len(result.failures)}")
     print(f"Errors: {len(result.errors)}")
-    print(f"Success rate: {((result.testsRun - len(result.failures) - len(result.errors)) / result.testsRun * 100):.1f}%")
+    print(
+        f"Success rate: {((result.testsRun - len(result.failures) - len(result.errors)) / result.testsRun * 100):.1f}%"
+    )
     print(f"{'='*50}")

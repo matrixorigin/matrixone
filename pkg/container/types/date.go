@@ -15,6 +15,7 @@
 package types
 
 import (
+	"context"
 	"fmt"
 	"strconv"
 	"strings"
@@ -101,11 +102,15 @@ func ParseDateCastComponents(s string) (int32, uint8, uint8, error) {
 // parseDateCastComponents parses an already-trimmed date string. Keeping the
 // normalization outside this helper lets ParseDateCast avoid repeating it.
 func parseDateCastComponents(s string) (int32, uint8, uint8, bool, error) {
+	return parseDateCastComponentsWithContext(defaultParseContext, s)
+}
+
+func parseDateCastComponentsWithContext(ctx context.Context, s string) (int32, uint8, uint8, bool, error) {
 	if isZeroDatetimeString(s) {
 		return 0, 0, 0, true, nil
 	}
 	if len(s) < 7 && isAllDigit(s) {
-		return 0, 0, 0, false, moerr.NewInvalidArgNoCtx("parsedate", s)
+		return 0, 0, 0, false, moerr.NewInvalidArg(parseErrorContext(ctx), "parsedate", s)
 	}
 	var year, month, day int64
 	if len(s) == 7 && isAllDigit(s) {
@@ -136,7 +141,7 @@ func parseDateCastComponents(s string) (int32, uint8, uint8, bool, error) {
 			switch state {
 			case start:
 				if !isDigit(s[i]) {
-					return 0, 0, 0, false, moerr.NewInvalidArgNoCtx("parsedate", s)
+					return 0, 0, 0, false, moerr.NewInvalidArg(parseErrorContext(ctx), "parsedate", s)
 				}
 				state = yearState
 				year = int64(s[i] - '0')
@@ -144,51 +149,51 @@ func parseDateCastComponents(s string) (int32, uint8, uint8, bool, error) {
 			case yearState:
 				if isDigit(s[i]) {
 					if yearLen >= 4 {
-						return 0, 0, 0, false, moerr.NewInvalidArgNoCtx("parsedate", s)
+						return 0, 0, 0, false, moerr.NewInvalidArg(parseErrorContext(ctx), "parsedate", s)
 					}
 					year = year*10 + int64(s[i]-'0')
 					yearLen++
 				} else if isDateDelimiter(s[i]) {
 					state = monthState
 					if yearLen == 0 {
-						return 0, 0, 0, false, moerr.NewInvalidArgNoCtx("parsedate", s)
+						return 0, 0, 0, false, moerr.NewInvalidArg(parseErrorContext(ctx), "parsedate", s)
 					}
 				} else {
-					return 0, 0, 0, false, moerr.NewInvalidArgNoCtx("parsedate", s)
+					return 0, 0, 0, false, moerr.NewInvalidArg(parseErrorContext(ctx), "parsedate", s)
 				}
 			case monthState:
 				if isDigit(s[i]) {
 					month = month*10 + int64(s[i]-'0')
 					monthLen++
 					if monthLen >= 3 {
-						return 0, 0, 0, false, moerr.NewInvalidArgNoCtx("parsedate", s)
+						return 0, 0, 0, false, moerr.NewInvalidArg(parseErrorContext(ctx), "parsedate", s)
 					}
 				} else if isDateDelimiter(s[i]) {
 					if monthLen == 0 {
-						return 0, 0, 0, false, moerr.NewInvalidArgNoCtx("parsedate", s)
+						return 0, 0, 0, false, moerr.NewInvalidArg(parseErrorContext(ctx), "parsedate", s)
 					}
 					state = dayState
 				} else {
-					return 0, 0, 0, false, moerr.NewInvalidArgNoCtx("parsedate", s)
+					return 0, 0, 0, false, moerr.NewInvalidArg(parseErrorContext(ctx), "parsedate", s)
 				}
 			case dayState:
 				if isDigit(s[i]) {
 					day = day*10 + int64(s[i]-'0')
 					dayLen++
 					if dayLen >= 3 {
-						return 0, 0, 0, false, moerr.NewInvalidArgNoCtx("parsedate", s)
+						return 0, 0, 0, false, moerr.NewInvalidArg(parseErrorContext(ctx), "parsedate", s)
 					}
 				} else if s[i] == ' ' || s[i] == 'T' {
 					if dayLen == 0 {
-						return 0, 0, 0, false, moerr.NewInvalidArgNoCtx("parsedate", s)
+						return 0, 0, 0, false, moerr.NewInvalidArg(parseErrorContext(ctx), "parsedate", s)
 					}
 					if i == len(s)-1 {
-						return 0, 0, 0, false, moerr.NewInvalidArgNoCtx("parsedate", s)
+						return 0, 0, 0, false, moerr.NewInvalidArg(parseErrorContext(ctx), "parsedate", s)
 					}
 					state = hourState
 					hasTime = true
 				} else {
-					return 0, 0, 0, false, moerr.NewInvalidArgNoCtx("parsedate", s)
+					return 0, 0, 0, false, moerr.NewInvalidArg(parseErrorContext(ctx), "parsedate", s)
 				}
 				if i == len(s)-1 {
 					state = end
@@ -200,22 +205,22 @@ func parseDateCastComponents(s string) (int32, uint8, uint8, bool, error) {
 				if isDigit(s[i]) {
 					hourLen++
 					if hourLen >= 3 {
-						return 0, 0, 0, false, moerr.NewInvalidArgNoCtx("parsedate", s)
+						return 0, 0, 0, false, moerr.NewInvalidArg(parseErrorContext(ctx), "parsedate", s)
 					}
 					hour = hour*10 + uint8(s[i]-'0')
 				} else if isTimeDelimiter(s[i]) {
 					if hourLen == 0 {
-						return 0, 0, 0, false, moerr.NewInvalidArgNoCtx("parsedate", s)
+						return 0, 0, 0, false, moerr.NewInvalidArg(parseErrorContext(ctx), "parsedate", s)
 					}
 					state = minuteState
 				} else {
-					return 0, 0, 0, false, moerr.NewInvalidArgNoCtx("parsedate", s)
+					return 0, 0, 0, false, moerr.NewInvalidArg(parseErrorContext(ctx), "parsedate", s)
 				}
 			case minuteState:
 				if isDigit(s[i]) {
 					minuteLen++
 					if minuteLen >= 3 {
-						return 0, 0, 0, false, moerr.NewInvalidArgNoCtx("parsedate", s)
+						return 0, 0, 0, false, moerr.NewInvalidArg(parseErrorContext(ctx), "parsedate", s)
 					}
 					minute = minute*10 + uint8(s[i]-'0')
 					if i == len(s)-1 {
@@ -223,29 +228,29 @@ func parseDateCastComponents(s string) (int32, uint8, uint8, bool, error) {
 					}
 				} else if isTimeDelimiter(s[i]) {
 					if minuteLen == 0 {
-						return 0, 0, 0, false, moerr.NewInvalidArgNoCtx("parsedate", s)
+						return 0, 0, 0, false, moerr.NewInvalidArg(parseErrorContext(ctx), "parsedate", s)
 					}
 					if i == len(s)-1 {
 						s += "00"
 					}
 					state = secondState
 				} else {
-					return 0, 0, 0, false, moerr.NewInvalidArgNoCtx("parsedate", s)
+					return 0, 0, 0, false, moerr.NewInvalidArg(parseErrorContext(ctx), "parsedate", s)
 				}
 			case secondState:
 				if isDigit(s[i]) {
 					secondLen++
 					if secondLen >= 3 {
-						return 0, 0, 0, false, moerr.NewInvalidArgNoCtx("parsedate", s)
+						return 0, 0, 0, false, moerr.NewInvalidArg(parseErrorContext(ctx), "parsedate", s)
 					}
 					second = second*10 + uint8(s[i]-'0')
 				} else if s[i] == '.' {
 					if secondLen == 0 {
-						return 0, 0, 0, false, moerr.NewInvalidArgNoCtx("parsedate", s)
+						return 0, 0, 0, false, moerr.NewInvalidArg(parseErrorContext(ctx), "parsedate", s)
 					}
 					state = msState
 				} else {
-					return 0, 0, 0, false, moerr.NewInvalidArgNoCtx("parsedate", s)
+					return 0, 0, 0, false, moerr.NewInvalidArg(parseErrorContext(ctx), "parsedate", s)
 				}
 				if i == len(s)-1 {
 					state = end
@@ -255,20 +260,20 @@ func parseDateCastComponents(s string) (int32, uint8, uint8, bool, error) {
 					state = end
 					i = len(s)
 				} else {
-					return 0, 0, 0, false, moerr.NewInvalidArgNoCtx("parsedate", s)
+					return 0, 0, 0, false, moerr.NewInvalidArg(parseErrorContext(ctx), "parsedate", s)
 				}
 			}
 		}
 		if state != end {
-			return 0, 0, 0, false, moerr.NewInvalidArgNoCtx("parsedate", s)
+			return 0, 0, 0, false, moerr.NewInvalidArg(parseErrorContext(ctx), "parsedate", s)
 		}
 		year = normalizeDateCastYear(year, yearLen)
 		if hasTime && !ValidTimeInDay(hour, minute, second) {
-			return 0, 0, 0, false, moerr.NewInvalidArgNoCtx("parsedate", s)
+			return 0, 0, 0, false, moerr.NewInvalidArg(parseErrorContext(ctx), "parsedate", s)
 		}
 	}
 	if year > MaxDateYear || month > MaxMonthInYear || day > 31 {
-		return 0, 0, 0, false, moerr.NewInvalidArgNoCtx("parsedate", s)
+		return 0, 0, 0, false, moerr.NewInvalidArg(parseErrorContext(ctx), "parsedate", s)
 	}
 	return int32(year), uint8(month), uint8(day), false, nil
 }
@@ -322,6 +327,11 @@ func parseFixedDateCast(s string) (Date, bool) {
 // 2.yyyy-mm-dd
 // 3.yyyymmdd
 func ParseDateCast(s string) (Date, error) {
+	return ParseDateCastWithContext(defaultParseContext, s)
+}
+
+// ParseDateCastWithContext parses with the caller's error reporting context.
+func ParseDateCastWithContext(ctx context.Context, s string) (Date, error) {
 	s = strings.TrimSpace(s)
 	if len(s) > 0 && s[0] == '0' && isZeroDatetimeString(s) {
 		return ZeroDate, nil
@@ -354,7 +364,7 @@ func ParseDateCast(s string) (Date, error) {
 		return date, nil
 	}
 
-	year, month, day, isZero, err := parseDateCastComponents(s)
+	year, month, day, isZero, err := parseDateCastComponentsWithContext(ctx, s)
 	if err != nil {
 		return -1, err
 	}
@@ -364,7 +374,7 @@ func ParseDateCast(s string) (Date, error) {
 	if ValidDate(year, month, day) {
 		return DateFromCalendar(year, month, day), nil
 	}
-	return -1, moerr.NewInvalidArgNoCtx("parsedate", s)
+	return -1, moerr.NewInvalidArg(parseErrorContext(ctx), "parsedate", s)
 }
 
 // date[0001-01-01 to 9999-12-31]

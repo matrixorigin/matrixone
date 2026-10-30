@@ -110,6 +110,7 @@ select round(4, -4294967200);
 #比较操作
 CREATE TABLE t1 (a INTEGER, b INTEGER, c INTEGER);
 INSERT INTO t1 (a,b) VALUES (1,2),(1,3),(2,5);
+-- @metacmp(true)
 SELECT a, 0.1*0+1 r2, SUM(1) r1 FROM t1 WHERE a = 1 GROUP BY a HAVING r1>1 AND r2=1;
 SELECT a, ROUND(sin(100)*10) r2, SUM(1) r1 FROM t1 GROUP BY a;
 SELECT a, ROUND(sin(100)*10) r2, SUM(1) r1 FROM t1 GROUP BY a

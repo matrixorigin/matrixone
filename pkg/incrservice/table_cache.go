@@ -148,12 +148,13 @@ func (c *tableCache) insertAutoValues(
 			panic("column cache should not be nil, " + col.ColName)
 		}
 
-		if estimate > int64(cc.cfg.CountPerAllocate) {
+		if estimate > int64(cc.cfg.CountPerAllocate) && !cc.adaptiveVisiblePrefetch() {
 			// Planner bounds are speculative and may be billions of rows.
 			// Do not size reservations from the estimate. The column cache
-			// applies configured policy and bounded observed internal-key
-			// demand; actual batches still reserve on demand.
-			cc.preAllocate(ctx, tableID, cc.cfg.CountPerAllocate, txnOp)
+			// applies configured policy and bounded observed demand. Default
+			// visible columns defer to the vector's actual automatic demand;
+			// a fixed speculative request would block its adaptive prefetch.
+			cc.preAllocate(ctx, tableID, cc.cfg.CountPerAllocate, txnOp, false)
 		}
 
 		vec := vecs[col.ColIndex]

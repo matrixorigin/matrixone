@@ -988,3 +988,24 @@ func TestPostEvictPanicDoesNotBlockDone(t *testing.T) {
 		t.Fatal("deadlock: done channel not signaled after postEvict panic")
 	}
 }
+
+// Long scans should compete through the cache policy instead of preventing
+// every admission after a fixed reader position.
+func TestCacheScanRetainsReusedWorkingSet(t *testing.T) {
+	ctx := t.Context()
+	cache := New[int, int](fscache.ConstCapacity(10), ShardInt[int], nil, nil, nil)
+	for key := 0; key < 7; key++ {
+		cache.Set(ctx, key, key, 1)
+		cache.Get(ctx, key)
+		cache.Get(ctx, key)
+	}
+	for key := 7; key < 47; key++ {
+		cache.Set(ctx, key, key, 1)
+		for hot := 0; hot < 7; hot++ {
+			value, ok := cache.Get(ctx, hot)
+			assert.True(t, ok, "hot key %d during scan key %d", hot, key)
+			assert.Equal(t, hot, value)
+		}
+		assert.LessOrEqual(t, cache.Used(), int64(10))
+	}
+}

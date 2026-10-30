@@ -36,7 +36,6 @@ require (
 	github.com/detailyang/go-fallocate v0.0.0-20180908115635-432fa640bd2e
 	github.com/dgryski/go-metro v0.0.0-20250106013310-edb8663e5e33
 	github.com/docker/go-units v0.5.0
-	github.com/dolthub/maphash v0.1.0
 	github.com/dslipak/pdf v0.0.2
 	github.com/elastic/elastic-transport-go/v8 v8.6.0
 	github.com/elastic/go-elasticsearch/v8 v8.15.0
@@ -307,3 +306,5 @@ replace (
 )
 
 replace github.com/shoenig/go-m1cpu => github.com/shoenig/go-m1cpu v0.1.7
+
+replace github.com/unum-cloud/usearch/golang => github.com/cpegeric/usearch/golang v0.0.0-20261026183644-b1f5768c8466

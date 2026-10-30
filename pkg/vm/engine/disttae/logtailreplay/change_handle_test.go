@@ -1666,6 +1666,22 @@ func TestAObjectHandleNextPrefetchTarget_SkipsPrunedBlocks(t *testing.T) {
 	require.Equal(t, 0, handle.blkOffsetCursor)
 }
 
+func TestAObjectHandleNextPrefetchTarget_SkipsEmptyObjects(t *testing.T) {
+	empty := makeTestObjectEntry(t, 0, true, false, types.BuildTS(10, 0))
+	handle := &AObjectHandle{
+		objects:    []*objectio.ObjectEntry{nil, empty},
+		blockPlans: make(map[string]*aobjBlockPlan),
+	}
+
+	obj, blk, ok, err := handle.nextPrefetchTarget(context.Background())
+	require.NoError(t, err)
+	require.Nil(t, obj)
+	require.Zero(t, blk)
+	require.False(t, ok)
+	require.Equal(t, len(handle.objects), handle.objectOffsetCursor)
+	require.Zero(t, handle.blkOffsetCursor)
+}
+
 func TestAObjectHandleGetNextAObject_UsesCachedBatch(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
@@ -2503,6 +2519,12 @@ func TestClassifyCheckpointObject(t *testing.T) {
 		require.Equal(t, checkpointObjectKindRowCommitTS, kind)
 	})
 
+	t.Run("range_empty_appendable", func(t *testing.T) {
+		obj := *makeTestObjectEntry(t, 0, true, false, types.BuildTS(15, 0))
+		kind := classifyCheckpointObject(obj, false, start, end, checkpointObjectSelectionRange)
+		require.Equal(t, checkpointObjectKindIgnore, kind)
+	})
+
 	t.Run("range_appendable_after_end", func(t *testing.T) {
 		obj := *makeTestObjectEntry(t, 1, true, false, types.BuildTS(25, 0))
 		kind := classifyCheckpointObject(obj, false, start, end, checkpointObjectSelectionRange)
@@ -2544,6 +2566,12 @@ func TestClassifyCheckpointObject(t *testing.T) {
 		obj := *makeTestObjectEntry(t, 1, true, false, types.BuildTS(15, 0))
 		kind := classifyCheckpointObject(obj, false, start, end, checkpointObjectSelectionRecovery)
 		require.Equal(t, checkpointObjectKindRowCommitTS, kind)
+	})
+
+	t.Run("recovery_empty_appendable", func(t *testing.T) {
+		obj := *makeTestObjectEntry(t, 0, true, false, types.BuildTS(15, 0))
+		kind := classifyCheckpointObject(obj, false, start, end, checkpointObjectSelectionRecovery)
+		require.Equal(t, checkpointObjectKindIgnore, kind)
 	})
 
 	t.Run("recovery_appendable_before_start", func(t *testing.T) {
@@ -3525,6 +3553,33 @@ func TestCDCSchema_NoRowIDWhenRetainRowIDFalse(t *testing.T) {
 		src.Clean(mp)
 	})
 
+	t.Run("fillInDeleteBatch reads compact retained delete", func(t *testing.T) {
+		src := batch.NewWithSize(1)
+		pkVec := vector.NewVec(types.T_int64.ToType())
+		require.NoError(t, vector.AppendFixed(pkVec, int64(7), false, mp))
+		require.NoError(t, vector.AppendFixed(pkVec, int64(42), false, mp))
+		src.Vecs[0] = pkVec
+		src.SetRowCount(2)
+
+		blk := types.Blockid{}
+		rowID := types.NewRowid(&blk, 3)
+		commitTS := types.BuildTS(100, 0)
+		entry := &RowEntry{Batch: src, Offset: 1, RowID: rowID, Time: commitTS, Deleted: true}
+		for _, retainRowID := range []bool{false, true} {
+			var out *batch.Batch
+			fillInDeleteBatch(&out, entry, retainRowID, mp)
+			pkCol := 0
+			if retainRowID {
+				require.Equal(t, rowID, vector.GetFixedAtNoTypeCheck[types.Rowid](out.Vecs[0], 0))
+				pkCol = 1
+			}
+			require.Equal(t, int64(42), vector.GetFixedAtNoTypeCheck[int64](out.Vecs[pkCol], 0))
+			require.Equal(t, commitTS, vector.GetFixedAtNoTypeCheck[types.TS](out.Vecs[pkCol+1], 0))
+			out.Clean(mp)
+		}
+		src.Clean(mp)
+	})
+
 	t.Run("fillInInsertBatch omits rowid column", func(t *testing.T) {
 		// RowEntry.Batch layout: [Rowid, TS, pk, val]; src.Attrs[2:] = [pk, val]
 		src := batch.NewWithSize(4)
@@ -3553,6 +3608,27 @@ func TestCDCSchema_NoRowIDWhenRetainRowIDFalse(t *testing.T) {
 		assertNoRowID(t, out)
 		// Trailing column must be commit_ts.
 		require.Equal(t, types.T_TS, out.Vecs[len(out.Vecs)-1].GetType().Oid)
+		out.Clean(mp)
+		src.Clean(mp)
+	})
+
+	t.Run("fillInInsertBatch reads rowid and time from compact retained insert", func(t *testing.T) {
+		src := batch.NewWithSize(3)
+		src.SetAttributes([]string{catalog.Row_ID, objectio.DefaultCommitTS_Attr, "pk"})
+		src.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+		src.Vecs[1] = vector.NewVec(types.T_TS.ToType())
+		src.Vecs[2] = vector.NewVec(types.T_int64.ToType())
+		require.NoError(t, vector.AppendFixed(src.Vecs[2], int64(42), false, mp))
+		src.SetRowCount(1)
+		blk := types.Blockid{}
+		rowID := types.NewRowid(&blk, 5)
+		commitTS := types.BuildTS(123, 0)
+		entry := &RowEntry{Batch: src, RowID: rowID, Time: commitTS}
+		var out *batch.Batch
+		fillInInsertBatch(&out, entry, true, nil, mp)
+		require.Equal(t, rowID, vector.GetFixedAtNoTypeCheck[types.Rowid](out.Vecs[0], 0))
+		require.Equal(t, int64(42), vector.GetFixedAtNoTypeCheck[int64](out.Vecs[1], 0))
+		require.Equal(t, commitTS, vector.GetFixedAtNoTypeCheck[types.TS](out.Vecs[2], 0))
 		out.Clean(mp)
 		src.Clean(mp)
 	})

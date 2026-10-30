@@ -551,8 +551,9 @@ func TestCandidateLimitRefusesJSONProbe(t *testing.T) {
 	// even with NO residual filter and a literal LIMIT — the shape the gate is
 	// most willing to push — a probe is refused
 	scan := &plan.Node{TableDef: &plan.TableDef{}}
-	require.Nil(t, b.buildFullTextCandidateLimit(
-		scan, nil, []*plan.Expr{probe}, nil, false, false, limit, nil),
+	ok, literalOnly := b.fullTextCandidateLimitRule(scan, nil, []*plan.Expr{probe}, nil, false, false)
+	require.False(t, ok)
+	require.Nil(t, candidateLimitForRule(ok, literalOnly, limit, nil),
 		"a probe must not be truncated, whatever the rest of the shape allows")
 }
 
@@ -585,12 +586,12 @@ func TestPreparedPlanDependsOnIndexCoverage(t *testing.T) {
 		"an injected json coverage probe must force a rebuild")
 	require.True(t, PreparedPlanDependsOnIndexCoverage(mkPlan(&plan.Node{NodeType: plan.Node_TABLE_SCAN}, ftNode(fulltext2.JSONProbeMode))),
 		"the probe must be found among other nodes")
-	require.True(t, PreparedPlanDependsOnIndexCoverage(mkPlan(&plan.Node{
+	require.False(t, PreparedPlanDependsOnIndexCoverage(mkPlan(&plan.Node{
 		NodeType: plan.Node_INDEX_SEARCH_SCAN,
 		IndexSearchScan: &plan.IndexSearchScan{
 			Index: &plan.IndexDef{IndexAlgo: catalog.MoIndexHnswAlgo.ToString()},
 		},
-	})), "an HNSW search must be rebuilt when coverage can change")
+	})), "an HNSW search does not depend on index freshness and remains reusable")
 	require.False(t, PreparedPlanDependsOnIndexCoverage(mkPlan(&plan.Node{
 		NodeType: plan.Node_INDEX_SEARCH_SCAN,
 		IndexSearchScan: &plan.IndexSearchScan{

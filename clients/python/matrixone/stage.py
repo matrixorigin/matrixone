@@ -22,6 +22,9 @@ including creating, modifying, and querying external storage locations (stages).
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Dict, List, Optional
+from .exceptions import QueryError, ConnectionError
+from ._sql_literals import sql_identifier, sql_literal, sql_string_token
+from ._utils import rows_from_result
 
 
 @dataclass
@@ -173,7 +176,11 @@ class Stage:
                     # Fallback to generic file loading
                     from .load_data import LoadDataManager
 
-                    results[filepath] = LoadDataManager(self._client).from_stage(self.name, filepath, table_model, **kwargs)
+                    from ._utils import stage_file_uri
+
+                    results[filepath] = LoadDataManager(self._client).from_file(
+                        stage_file_uri(self.name, filepath), table_model, **kwargs
+                    )
             except Exception as e:
                 # Store error in results for debugging
                 results[filepath] = f"Error: {e}"
@@ -268,17 +275,24 @@ class BaseStageManager:
         if if_not_exists:
             sql_parts.append("IF NOT EXISTS")
 
-        sql_parts.append(stage_name)  # No escaping to match existing behavior
-        sql_parts.append(f"URL='{url}'")
+        sql_parts.append(sql_identifier(stage_name))
+        sql_parts.append(f"URL={sql_string_token(url, context='Stage')}")
 
         if credentials:
-            cred_parts = [f"'{k}'='{v}'" for k, v in credentials.items()]
+            cred_parts = [
+                sql_string_token(k, context='Stage') + '=' + sql_string_token(v, context='Stage')
+                for k, v in credentials.items()
+            ]
             sql_parts.append(f"CREDENTIALS={{{', '.join(cred_parts)}}}")
 
-        if comment:
-            sql_parts.append(f"COMMENT='{comment}'")
+        # The server's default status is the usable "in_use"; only a disabled
+        # stage needs an explicit clause, which must precede COMMENT.
+        if not enable:
+            sql_parts.append("ENABLE=FALSE")
 
-        # Note: enable is not included in SQL - MatrixOne stages are enabled by default
+        if comment is not None:
+            sql_parts.append(f"COMMENT={sql_string_token(comment, context='Stage')}")
+
         return " ".join(sql_parts)
 
     def _build_drop_stage_sql(self, stage_name: str, if_exists: bool = False) -> str:
@@ -286,7 +300,7 @@ class BaseStageManager:
         sql_parts = ["DROP STAGE"]
         if if_exists:
             sql_parts.append("IF EXISTS")
-        sql_parts.append(stage_name)  # No escaping to match existing behavior
+        sql_parts.append(sql_identifier(stage_name))
         return " ".join(sql_parts)
 
     def _build_alter_stage_sql(
@@ -302,18 +316,21 @@ class BaseStageManager:
         sql_parts = ["ALTER STAGE"]
         if if_exists:
             sql_parts.append("IF EXISTS")
-        sql_parts.append(f"{stage_name} SET")
+        sql_parts.append(f"{sql_identifier(stage_name)} SET")
 
         set_clauses = []
         if set_url is not None:
-            set_clauses.append(f"URL='{set_url}'")
+            set_clauses.append(f"URL={sql_string_token(set_url, context='Stage')}")
         if set_credentials is not None:
-            cred_parts = [f"'{k}'='{v}'" for k, v in set_credentials.items()]
+            cred_parts = [
+                sql_string_token(k, context='Stage') + '=' + sql_string_token(v, context='Stage')
+                for k, v in set_credentials.items()
+            ]
             set_clauses.append(f"CREDENTIALS={{{', '.join(cred_parts)}}}")
-        if set_comment is not None:
-            set_clauses.append(f"COMMENT='{set_comment}'")
         if set_enable is not None:
             set_clauses.append(f"ENABLE={'TRUE' if set_enable else 'FALSE'}")
+        if set_comment is not None:
+            set_clauses.append(f"COMMENT={sql_string_token(set_comment, context='Stage')}")
 
         if not set_clauses:
             raise ValueError("At least one SET clause must be provided for ALTER STAGE")
@@ -328,9 +345,10 @@ class BaseStageManager:
 
     def _build_get_stage_sql(self, stage_name: str) -> str:
         """Build SQL to get a specific stage"""
+        literal = sql_literal(stage_name)
         return (
             f"SELECT stage_name, url, stage_status, comment, created_time "
-            f"FROM mo_catalog.mo_stages WHERE stage_name = '{stage_name}'"
+            f"FROM mo_catalog.mo_stages WHERE stage_name = LOWER({literal})"
         )
 
     def _row_to_stage(self, row: tuple) -> Stage:
@@ -349,17 +367,20 @@ class BaseStageManager:
         credentials: Optional[Dict[str, str]] = None,
         comment: Optional[str] = None,
         if_not_exists: bool = False,
+        enable: bool = True,
     ) -> tuple:
         """
         Prepare data for create operation.
         Returns: (sql, stage_object)
         """
-        sql = self._build_create_stage_sql(name, url, credentials, enable=True, comment=comment, if_not_exists=if_not_exists)
+        sql = self._build_create_stage_sql(
+            name, url, credentials, enable=enable, comment=comment, if_not_exists=if_not_exists
+        )
         stage = Stage(
             name=name,
             url=url,
             credentials=credentials,
-            status='enabled',
+            status='enabled' if enable else 'disabled',
             comment=comment,
             created_time=datetime.now(),
             _client=self.client,
@@ -380,6 +401,13 @@ class BaseStageManager:
         if_exists: bool = False,
     ) -> str:
         """Prepare SQL for alter operation"""
+        from sqlalchemy.orm import Session
+        from sqlalchemy.ext.asyncio import AsyncSession
+
+        if isinstance(getattr(self, 'executor', None), (Session, AsyncSession)):
+            raise QueryError(
+                'ALTER STAGE cannot run inside a Session transaction; use client.stage.alter() outside the Session'
+            )
         if not any([url, credentials, comment is not None, enable is not None]):
             raise ValueError("At least one of url, credentials, comment, or enable must be provided")
         return self._build_alter_stage_sql(name, url, credentials, enable, comment, if_exists)
@@ -392,9 +420,23 @@ class BaseStageManager:
         """Prepare SQL for get operation"""
         return self._build_get_stage_sql(name)
 
-    def _process_get_result(self, rows, name: str) -> Stage:
+    @staticmethod
+    def _raise_readback_error(error, operation):
+        message = 'Stage %s acknowledged but metadata readback failed' % operation
+        error.phase = 'metadata_readback'
+        error.statement_acknowledged = True
+        if type(error) in (QueryError, ConnectionError, ValueError):
+            wrapped = type(error)(message)
+            wrapped.phase = 'metadata_readback'
+            wrapped.statement_acknowledged = True
+            raise wrapped from error
+        raise error
+
+    def _process_get_result(self, rows, name: str, optional=False) -> Optional[Stage]:
         """Process get result rows into Stage object"""
         if not rows:
+            if optional:
+                return None
             raise ValueError(f"Stage '{name}' not found")
 
         row = rows[0]
@@ -623,6 +665,7 @@ class StageManager(BaseStageManager):
         credentials: Optional[Dict[str, str]] = None,
         comment: Optional[str] = None,
         if_not_exists: bool = False,
+        enable: bool = True,
     ) -> Stage:
         """
         Create a new external stage.
@@ -645,6 +688,7 @@ class StageManager(BaseStageManager):
                 }
             comment (str, optional): Stage description
             if_not_exists (bool): If True, don't error if stage already exists
+            enable (bool): If False, create the stage disabled (``ENABLE=FALSE``)
 
         Returns:
             Stage: Created stage object
@@ -674,9 +718,12 @@ class StageManager(BaseStageManager):
             ...     'stage://production_data/archive/2024/'
             ... )
         """
-        sql, stage = self._prepare_create(name, url, credentials, comment, if_not_exists)
+        sql, stage = self._prepare_create(name, url, credentials, comment, if_not_exists, enable)
         self._get_executor().execute(sql)
-        return stage
+        try:
+            return self.get(name)
+        except Exception as error:
+            self._raise_readback_error(error, 'CREATE')
 
     def alter(
         self,
@@ -686,7 +733,7 @@ class StageManager(BaseStageManager):
         comment: Optional[str] = None,
         enable: Optional[bool] = None,
         if_exists: bool = False,
-    ) -> Stage:
+    ) -> Optional[Stage]:
         """
         Modify an existing stage.
 
@@ -702,7 +749,7 @@ class StageManager(BaseStageManager):
             if_exists (bool): If True, don't error if stage doesn't exist
 
         Returns:
-            Stage: Updated stage object
+            Optional[Stage]: Observed stage, or None for missing ALTER IF EXISTS
 
         Examples:
             >>> # Update URL
@@ -730,7 +777,10 @@ class StageManager(BaseStageManager):
         """
         sql = self._prepare_alter(name, url, credentials, comment, enable, if_exists)
         self._get_executor().execute(sql)
-        return self.get(name)
+        try:
+            return self._lookup(name, optional=if_exists)
+        except Exception as error:
+            self._raise_readback_error(error, 'ALTER')
 
     def drop(self, name: str, if_exists: bool = False) -> None:
         """
@@ -778,7 +828,7 @@ class StageManager(BaseStageManager):
         result = self._get_executor().execute(sql)
 
         stages = []
-        for row in result.rows:
+        for row in rows_from_result(result):
             # Parse SHOW STAGES output
             # Expected columns: stage_name, url, status, comment, created_time, modified_time
             stage = Stage(
@@ -809,13 +859,13 @@ class StageManager(BaseStageManager):
         sql = self._prepare_list()
         result = self._get_executor().execute(sql)
         # Handle both ResultSet (client) and CursorResult (session)
-        if hasattr(result, 'rows'):
-            rows = result.rows
-        else:
-            rows = result.fetchall() if result else []
+        rows = rows_from_result(result)
         return self._process_list_result(rows)
 
     def get(self, name: str) -> Stage:
+        return self._lookup(name)
+
+    def _lookup(self, name: str, optional=False) -> Optional[Stage]:
         """
         Get details of a specific stage.
 
@@ -836,11 +886,8 @@ class StageManager(BaseStageManager):
         sql = self._prepare_get(name)
         result = self._get_executor().execute(sql)
         # Handle both ResultSet (client) and CursorResult (session)
-        if hasattr(result, 'rows'):
-            rows = result.rows
-        else:
-            rows = result.fetchall() if result else []
-        return self._process_get_result(rows, name)
+        rows = rows_from_result(result)
+        return self._process_get_result(rows, name, optional=optional)
 
     def exists(self, name: str) -> bool:
         """
@@ -1167,11 +1214,15 @@ class AsyncStageManager(BaseStageManager):
         credentials: Optional[Dict[str, str]] = None,
         comment: Optional[str] = None,
         if_not_exists: bool = False,
+        enable: bool = True,
     ) -> Stage:
         """Create a stage asynchronously"""
-        sql, stage = self._prepare_create(name, url, credentials, comment, if_not_exists)
+        sql, stage = self._prepare_create(name, url, credentials, comment, if_not_exists, enable)
         await self._get_executor().execute(sql)
-        return stage
+        try:
+            return await self.get(name)
+        except Exception as error:
+            self._raise_readback_error(error, 'CREATE')
 
     async def drop(self, name: str, if_exists: bool = False) -> None:
         """Drop a stage asynchronously"""
@@ -1186,33 +1237,33 @@ class AsyncStageManager(BaseStageManager):
         comment: Optional[str] = None,
         enable: Optional[bool] = None,
         if_exists: bool = False,
-    ) -> Stage:
+    ) -> Optional[Stage]:
         """Alter a stage asynchronously"""
         sql = self._prepare_alter(name, url, credentials, comment, enable, if_exists)
         await self._get_executor().execute(sql)
-        return await self.get(name)
+        try:
+            return await self._lookup(name, optional=if_exists)
+        except Exception as error:
+            self._raise_readback_error(error, 'ALTER')
 
     async def list(self) -> List[Stage]:
         """List all stages asynchronously"""
         sql = self._prepare_list()
         result = await self._get_executor().execute(sql)
         # Handle both AsyncResultSet (client) and CursorResult (session)
-        if hasattr(result, 'rows'):
-            rows = result.rows
-        else:
-            rows = result.fetchall() if result else []
+        rows = rows_from_result(result)
         return self._process_list_result(rows)
 
     async def get(self, name: str) -> Stage:
+        return await self._lookup(name)
+
+    async def _lookup(self, name: str, optional=False) -> Optional[Stage]:
         """Get a specific stage by name asynchronously"""
         sql = self._prepare_get(name)
         result = await self._get_executor().execute(sql)
         # Handle both AsyncResultSet (client) and CursorResult (session)
-        if hasattr(result, 'rows'):
-            rows = result.rows
-        else:
-            rows = result.fetchall() if result else []
-        return self._process_get_result(rows, name)
+        rows = rows_from_result(result)
+        return self._process_get_result(rows, name, optional=optional)
 
     async def exists(self, name: str) -> bool:
         """Check if a stage exists asynchronously"""
@@ -1231,10 +1282,7 @@ class AsyncStageManager(BaseStageManager):
         result = await self._get_executor().execute(sql)
 
         # Handle both AsyncResultSet (client) and CursorResult (session)
-        if hasattr(result, 'rows'):
-            rows = result.rows
-        else:
-            rows = result.fetchall() if result else []
+        rows = rows_from_result(result)
 
         stages = []
         for row in rows:
@@ -1325,4 +1373,6 @@ class AsyncStageManager(BaseStageManager):
             if endpoint:
                 credentials['ENDPOINT'] = endpoint
 
-        return await self.create(name, bucket_path, credentials=credentials, comment=comment, if_not_exists=if_not_exists)
+        return await self.create(
+            name, bucket_path, credentials=credentials, comment=comment, if_not_exists=if_not_exists
+        )

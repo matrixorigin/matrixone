@@ -98,7 +98,7 @@ func (builder *QueryBuilder) bindExternalScan(
 	if err != nil {
 		return -1, nil, err
 	}
-	if err := validateLoadSetAssignments(stmt.Param, ctx); err != nil {
+	if err := validateLoadSetAssignments(stmt.Param, ctx, dmlCtx.tableDefs[0]); err != nil {
 		return -1, nil, err
 	}
 	userVariableAssignments, err := loadUserVariableNullIfAssignments(stmt.Param, ctx)
@@ -131,10 +131,10 @@ func (builder *QueryBuilder) bindExternalScan(
 				switch realCol := col.(type) {
 				case *tree.UnresolvedName:
 					colName := realCol.ColName()
-					if _, ok := tableDef.Name2ColIndex[colName]; !ok {
+					tbColIdx, ok := tableDef.Name2ColIndex[colName]
+					if !ok || tableDef.Cols[tbColIdx].Hidden {
 						return -1, nil, moerr.NewBadFieldErrorf(ctx.GetContext(), "internal error: column '%s' does not exist", colName)
 					}
-					tbColIdx := tableDef.Name2ColIndex[colName]
 					if tableDef.Cols[tbColIdx].GeneratedCol != nil {
 						return -1, nil, moerr.NewInvalidInputf(ctx.GetContext(),
 							"the value specified for generated column '%s' in table '%s' is not allowed",
@@ -342,10 +342,14 @@ func (builder *QueryBuilder) applyLoadAssignmentCasts(
 	for _, col := range tableDef.Cols {
 		expr, ok := insertColToExpr[col.Name]
 		if !ok || (col.Typ.Id != int32(types.T_blob) && col.Typ.Id != int32(types.T_text) &&
-			col.Typ.Id != int32(types.T_time) && !isMediumIntPlanType(col.Typ)) {
+			col.Typ.Id != int32(types.T_time) && !isMediumIntPlanType(col.Typ) &&
+			!isAttributedDecimalPlanType(col.Typ)) {
 			continue
 		}
-		casted, err := builder.forceAssignmentCastExpr(expr, col.Typ, assignmentIgnore)
+		// Attributed DECIMAL staged text takes the same admission -> assignment
+		// composition as DML; loadAssignmentIgnore keeps its LOCAL/IGNORE
+		// mapping on the statement-policy axis.
+		casted, err := builder.forceAssignmentCastExpr(expr, col.Typ, assignmentIgnore, col.Name)
 		if err != nil {
 			return err
 		}
