@@ -29,6 +29,14 @@ select id from t order by id;
 2
 create table s(id int primary key);
 insert into s values (1),(2);
+begin;
+delete x, missing from t as x join s as y on x.id=y.id;
+invalid input: missing FROM-clause entry for table 'missing'
+select id from t order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2
+rollback;
 with x as (select 99 as id), y as (select 99 as id)
 delete x,y from t as x join s as y on x.id=y.id where x.id=1;
 select id from t order by id;

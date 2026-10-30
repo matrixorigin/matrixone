@@ -15,11 +15,13 @@
 package plan
 
 import (
+	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/stretchr/testify/require"
-	"testing"
 )
 
 func TestIsUnrestrictedDelete(t *testing.T) {
@@ -74,7 +76,10 @@ func TestDeleteCTETargetScope(t *testing.T) {
 			{"aliased CTE target", "with nation as (select 1 as n_nationkey) delete x from nation as x where x.n_nationkey=1", "cannot delete from CTE"},
 			{"qualified target mismatches source", "with q as (select 1) delete other.nation from tpch.nation where nation.n_nationkey=1", "does not match its source"},
 			{"qualified target reads CTE", "with nation as (select 1 as n_nationkey) delete tpch.nation from nation where nation.n_nationkey=1", "cannot delete from CTE"},
-			{"derived source", "delete nation from (select 1 as n_nationkey) as nation", "not a writable source"},
+			{"target missing from USING", "delete from nation using region", "missing FROM-clause entry for table 'nation'"},
+			{"target hidden by alias", "delete nation from nation as x where x.n_nationkey=1", "missing FROM-clause entry for table 'nation'"},
+			{"second target missing", "delete x, missing from nation as x join region as r on x.n_regionkey=r.r_regionkey", "missing FROM-clause entry for table 'missing'"},
+			{"derived source", "delete nation from (select 1 as n_nationkey) as nation", "missing FROM-clause entry for table 'nation'"},
 		} {
 			route := "modern/"
 			if legacy {
@@ -93,6 +98,7 @@ func TestDeleteCTETargetScope(t *testing.T) {
 				}
 				if tc.wantError != "" {
 					require.ErrorContains(t, err, tc.wantError)
+					require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput), err)
 					return
 				}
 				require.NoError(t, err)

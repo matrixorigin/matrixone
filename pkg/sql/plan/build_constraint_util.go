@@ -110,7 +110,7 @@ func resolveDeleteTargetAliases(ctx CompilerContext, stmt *tree.Delete) (map[str
 			var found bool
 			source, found = aliases[tableName]
 			if !found {
-				return nil, moerr.NewInvalidInputf(ctx.GetContext(), "DELETE target %s is not a writable source", tableName)
+				return nil, moerr.NewInvalidInputf(ctx.GetContext(), "missing FROM-clause entry for table '%s'", tableName)
 			}
 		}
 		if source.schema == "" && ctes[source.table] {

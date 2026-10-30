@@ -28,6 +28,11 @@ select id from t order by id;
 -- The legacy multi-target planner must use the same target scope.
 create table s(id int primary key);
 insert into s values (1),(2);
+-- Validate every target before any rows are deleted.
+begin;
+delete x, missing from t as x join s as y on x.id=y.id;
+select id from t order by id;
+rollback;
 with x as (select 99 as id), y as (select 99 as id)
 delete x,y from t as x join s as y on x.id=y.id where x.id=1;
 select id from t order by id;
