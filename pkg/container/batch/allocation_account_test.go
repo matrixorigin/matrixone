@@ -1195,6 +1195,38 @@ func TestShrinkBorrowedBatchRollsBackOnSecondAllocation(t *testing.T) {
 	require.Zero(t, releases)
 }
 
+func TestShrinkWideBorrowedBatchRollsBackOnSecondAllocation(t *testing.T) {
+	state := newTestBatchAllocationAccount(t, 1)
+	mp := mpool.MustNewZero()
+	t.Cleanup(func() {
+		require.Zero(t, mp.CurrNB())
+		finalizeTestBatchAllocationAccount(t, state)
+		mpool.DeleteMPool(mp)
+	})
+	bat := NewWithSize(1025)
+	bat.SetRowCount(3)
+	var releases, installed int
+	t.Cleanup(func() { bat.Clean(mp); require.Equal(t, installed, releases) })
+	for i := range bat.Vecs {
+		data := types.EncodeSlice([]int64{11, 22, 33})
+		lease, err := vector.NewRefCountedBufferLease(data, int64(cap(data)), func() { releases++ })
+		require.NoError(t, err)
+		vec, err := vector.NewBorrowedFixedVectorWithAllocation(types.T_int64.ToType(), 3, data, lease, state.selection)
+		lease.Release()
+		require.NoError(t, err)
+		bat.Vecs[i] = vec
+		installed++
+	}
+	err := bat.Shrink([]int64{1, 2}, false, mp)
+	require.Error(t, err)
+	require.Equal(t, 3, bat.RowCount())
+	for _, vec := range bat.Vecs {
+		require.Equal(t, []int64{11, 22, 33}, vector.MustFixedColNoTypeCheck[int64](vec))
+	}
+	require.Zero(t, mp.CurrNB())
+	require.Zero(t, releases)
+}
+
 func TestShrinkBorrowedBatchMaskRollsBackOnSecondAllocation(t *testing.T) {
 	for _, negate := range []bool{false, true} {
 		t.Run(fmt.Sprint(negate), func(t *testing.T) {
@@ -1264,17 +1296,29 @@ func TestShrinkBorrowedBatchWithDuplicateVector(t *testing.T) {
 }
 
 func TestShrinkWideBatchWithDuplicateVector(t *testing.T) {
-	mp := mpool.MustNewZero()
-	bat := NewWithSize(33)
-	for i := 0; i < len(bat.Vecs)-1; i++ {
-		bat.Vecs[i] = vector.NewOffHeapVecWithType(types.T_int64.ToType())
-		require.NoError(t, vector.AppendFixedList(bat.Vecs[i], []int64{11, 22, 33}, nil, mp))
-	}
-	bat.Vecs[len(bat.Vecs)-1] = bat.Vecs[0]
-	bat.SetRowCount(3)
-	t.Cleanup(func() { bat.Clean(mp); require.Zero(t, mp.CurrNB()); mpool.DeleteMPool(mp) })
-	require.NoError(t, bat.Shrink([]int64{1, 2}, false, mp))
-	for _, vec := range bat.Vecs {
-		require.Equal(t, []int64{22, 33}, vector.MustFixedColNoTypeCheck[int64](vec))
+	for _, mask := range []bool{false, true} {
+		t.Run(fmt.Sprintf("mask=%t", mask), func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			bat := NewWithSize(2050)
+			t.Cleanup(func() { bat.Clean(mp); require.Zero(t, mp.CurrNB()); mpool.DeleteMPool(mp) })
+			for i := 0; i < len(bat.Vecs)-1; i++ {
+				bat.Vecs[i] = vector.NewOffHeapVecWithType(types.T_int64.ToType())
+				require.NoError(t, vector.AppendFixedList(bat.Vecs[i], []int64{11, 22, 33}, nil, mp))
+			}
+			bat.Vecs[len(bat.Vecs)-1] = bat.Vecs[0]
+			bat.SetRowCount(3)
+			if mask {
+				var sels bitmap.Bitmap
+				sels.InitWithSize(3)
+				sels.AddMany([]uint64{1, 2})
+				require.NoError(t, bat.ShrinkByMask(&sels, false, 0, mp))
+			} else {
+				require.NoError(t, bat.Shrink([]int64{1, 2}, false, mp))
+			}
+			require.Equal(t, 2, bat.RowCount())
+			for _, vec := range bat.Vecs {
+				require.Equal(t, []int64{22, 33}, vector.MustFixedColNoTypeCheck[int64](vec))
+			}
+		})
 	}
 }
