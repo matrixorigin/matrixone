@@ -4566,63 +4566,75 @@ var gSysVarsDefs = map[string]SystemVariable{
 }
 
 func updateTimeZone(ctx context.Context, sess *Session, sv *SystemVariables, name string, val interface{}) error {
-	originalTzStr := val.(string)
+	stored, loc, err := resolveTimeZone(ctx, val)
+	if err != nil {
+		return err
+	}
+	sv.Set(name, stored)
+	sess.SetTimeZone(loc)
+	return nil
+}
+
+// resolveTimeZone validates a time_zone value and returns the spelling to
+// store and its location. SET GLOBAL uses it too, so an unknown zone is
+// rejected before it is persisted for every new session.
+func resolveTimeZone(ctx context.Context, val interface{}) (string, *time.Location, error) {
+	originalTzStr, ok := val.(string)
+	if !ok {
+		return "", nil, moerr.NewWrongDatetimeSpec(ctx, fmt.Sprintf("%v", val))
+	}
 	originalTzStr = strings.TrimSpace(originalTzStr)
 	tzStr := strings.ToLower(originalTzStr)
 	if tzStr == "system" {
-		sv.Set(name, "SYSTEM")
-		sess.SetTimeZone(time.Local)
+		return "SYSTEM", time.Local, nil
 	} else if len(tzStr) > 0 && (tzStr[0] == '-' || tzStr[0] == '+') {
 		if len(tzStr) != 5 && len(tzStr) != 6 {
-			return moerr.NewWrongDatetimeSpec(ctx, tzStr)
+			return "", nil, moerr.NewWrongDatetimeSpec(ctx, tzStr)
 		}
 
 		minIdx := 3
 		if tzStr[1] < '0' || tzStr[1] > '9' {
-			return moerr.NewWrongDatetimeSpec(ctx, tzStr)
+			return "", nil, moerr.NewWrongDatetimeSpec(ctx, tzStr)
 		}
 		hour := int(tzStr[1] - '0')
 		if tzStr[2] != ':' {
 			if tzStr[2] < '0' || tzStr[2] > '9' {
-				return moerr.NewWrongDatetimeSpec(ctx, tzStr)
+				return "", nil, moerr.NewWrongDatetimeSpec(ctx, tzStr)
 			}
 			hour = hour*10 + int(tzStr[2]-'0')
 			minIdx = 4
 			if tzStr[3] != ':' {
-				return moerr.NewWrongDatetimeSpec(ctx, tzStr)
+				return "", nil, moerr.NewWrongDatetimeSpec(ctx, tzStr)
 			}
 		}
 
 		if minIdx != len(tzStr)-2 {
-			return moerr.NewWrongDatetimeSpec(ctx, tzStr)
+			return "", nil, moerr.NewWrongDatetimeSpec(ctx, tzStr)
 		}
 		if tzStr[minIdx] < '0' || tzStr[minIdx] > '9' {
-			return moerr.NewWrongDatetimeSpec(ctx, tzStr)
+			return "", nil, moerr.NewWrongDatetimeSpec(ctx, tzStr)
 		}
 		minute := int(tzStr[minIdx]-'0') * 10
 		if tzStr[minIdx+1] < '0' || tzStr[minIdx+1] > '9' {
-			return moerr.NewWrongDatetimeSpec(ctx, tzStr)
+			return "", nil, moerr.NewWrongDatetimeSpec(ctx, tzStr)
 		}
 		minute += int(tzStr[minIdx+1] - '0')
 		if minute >= 60 {
-			return moerr.NewWrongDatetimeSpec(ctx, tzStr)
+			return "", nil, moerr.NewWrongDatetimeSpec(ctx, tzStr)
 		}
 
 		minute += hour * 60
 
 		if tzStr[0] == '-' {
 			if minute >= 14*60 {
-				return moerr.NewWrongDatetimeSpec(ctx, tzStr)
+				return "", nil, moerr.NewWrongDatetimeSpec(ctx, tzStr)
 			}
-			sess.SetTimeZone(time.FixedZone("FixedZone", -minute*60))
-		} else {
-			if minute > 14*60 {
-				return moerr.NewWrongDatetimeSpec(ctx, tzStr)
-			}
-			sess.SetTimeZone(time.FixedZone("FixedZone", minute*60))
+			return tzStr, time.FixedZone("FixedZone", -minute*60), nil
 		}
-
-		sv.Set(name, tzStr)
+		if minute > 14*60 {
+			return "", nil, moerr.NewWrongDatetimeSpec(ctx, tzStr)
+		}
+		return tzStr, time.FixedZone("FixedZone", minute*60), nil
 	} else {
 		// Handle common timezone aliases first
 		// These work even when timezone database is not available
@@ -4632,7 +4644,7 @@ func updateTimeZone(ctx context.Context, sess *Session, sv *SystemVariables, nam
 			// UTC is a special case - Go's time.LoadLocation("UTC") works without timezone database
 			// but time.LoadLocation("utc") requires it. Use time.UTC directly to avoid dependency.
 			loc = time.UTC
-			sv.Set(name, "UTC")
+			return "UTC", loc, nil
 		default:
 			// Try to load from system timezone database
 			// IANA timezone names are case-sensitive (e.g., "Asia/Shanghai", "America/New_York")
@@ -4640,14 +4652,11 @@ func updateTimeZone(ctx context.Context, sess *Session, sv *SystemVariables, nam
 			var err error
 			loc, err = time.LoadLocation(originalTzStr)
 			if err != nil {
-				return err
+				return "", nil, err
 			}
-			sv.Set(name, originalTzStr)
+			return originalTzStr, loc, nil
 		}
-		sess.SetTimeZone(loc)
 	}
-
-	return nil
 }
 
 func getSystemTimeZone() string {
