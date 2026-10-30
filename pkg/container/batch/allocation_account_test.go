@@ -17,8 +17,10 @@ package batch
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -1191,6 +1193,46 @@ func TestShrinkBorrowedBatchRollsBackOnSecondAllocation(t *testing.T) {
 	}
 	require.Zero(t, mp.CurrNB())
 	require.Zero(t, releases)
+}
+
+func TestShrinkBorrowedBatchMaskRollsBackOnSecondAllocation(t *testing.T) {
+	for _, negate := range []bool{false, true} {
+		t.Run(fmt.Sprint(negate), func(t *testing.T) {
+			state := newTestBatchAllocationAccount(t, 1)
+			mp := mpool.MustNewZero()
+			bat := NewWithSize(2)
+			bat.SetRowCount(3)
+			var releases, installed int
+			t.Cleanup(func() {
+				bat.Clean(mp)
+				require.Equal(t, installed, releases)
+				require.Zero(t, mp.CurrNB())
+				finalizeTestBatchAllocationAccount(t, state)
+				mpool.DeleteMPool(mp)
+			})
+			for i := range bat.Vecs {
+				data := types.EncodeSlice([]int64{11, 22, 33})
+				lease, err := vector.NewRefCountedBufferLease(data, int64(cap(data)), func() { releases++ })
+				require.NoError(t, err)
+				vec, err := vector.NewBorrowedFixedVectorWithAllocation(types.T_int64.ToType(), 3, data, lease, state.selection)
+				lease.Release()
+				require.NoError(t, err)
+				bat.Vecs[i] = vec
+				installed++
+			}
+			var mask bitmap.Bitmap
+			mask.InitWithSize(2)
+			mask.AddMany([]uint64{0, 1})
+			require.Error(t, bat.ShrinkByMask(&mask, negate, 1, mp))
+			require.Equal(t, 3, bat.RowCount())
+			for _, vec := range bat.Vecs {
+				require.Equal(t, []int64{11, 22, 33}, vector.MustFixedColNoTypeCheck[int64](vec))
+				require.True(t, vec.HasBorrowedBacking())
+			}
+			require.Zero(t, mp.CurrNB())
+			require.Zero(t, releases)
+		})
+	}
 }
 
 func TestShrinkBorrowedBatchWithDuplicateVector(t *testing.T) {
