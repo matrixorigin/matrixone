@@ -1287,6 +1287,15 @@ func buildGeneratedExpr(bindCtx context.Context, col *tree.ColumnTableDef, typ p
 	if err != nil {
 		return nil, err
 	}
+	// The assignment wrapper is itself persisted: a BOOL target around an
+	// ENUM operand binds the conditional storage-truth cast the raw expression
+	// alone does not carry (g BOOL AS (e) is merely an ENUM reference before
+	// this point, so the first authoring check computed no requirement).
+	// Validate the final stored expression so this cast cannot be authored
+	// while the cluster is below the protocol floor.
+	if err = RequirePersistedIPFunctionProtocolForAuthoring(bindCtx, proc, genExpr); err != nil {
+		return nil, err
+	}
 
 	fmtCtx := tree.NewFmtCtx(dialect.MYSQL, tree.WithSingleQuoteString())
 	fmtCtx.PrintExpr(genAttr.Expr, genAttr.Expr, false)
