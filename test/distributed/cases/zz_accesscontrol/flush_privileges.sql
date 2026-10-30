@@ -13,11 +13,13 @@ grant flush_privileges_role to flush_privileges_user;
 begin;
 insert into flush_privileges_db.flush values (1);
 flush privileges;
+select count(*) from flush_privileges_db.flush;
 rollback;
 select count(*) from flush_privileges_db.flush;
 set autocommit = 0;
 insert into flush_privileges_db.flush values (2);
 flush privileges;
+select count(*) from flush_privileges_db.flush;
 rollback;
 select count(*) from flush_privileges_db.flush;
 set autocommit = 1;
@@ -30,17 +32,37 @@ flush tables;
 
 -- @session:id=1&user=sys:flush_privileges_user:flush_privileges_role&password=123456{
 set session enable_privilege_cache = on;
+set session mo_rollback_txn_on_error = 0;
 begin;
 insert into flush_privileges_db.flush values (3);
 flush privileges;
+select count(*) from flush_privileges_db.flush;
 rollback;
 select count(*) from flush_privileges_db.flush;
 set session enable_privilege_cache = off;
+set session mo_rollback_txn_on_error = 0;
 begin;
 insert into flush_privileges_db.flush values (4);
 flush privileges;
+select count(*) from flush_privileges_db.flush;
 rollback;
 select count(*) from flush_privileges_db.flush;
+-- A denied statement also preserves pending work in autocommit=0 mode.
+set autocommit = 0;
+insert into flush_privileges_db.flush values (6);
+flush privileges;
+select count(*) from flush_privileges_db.flush;
+rollback;
+select count(*) from flush_privileges_db.flush;
+set autocommit = 1;
+-- With rollback-on-error enabled, the existing policy rolls back on denial.
+set session mo_rollback_txn_on_error = 1;
+begin;
+insert into flush_privileges_db.flush values (5);
+flush privileges;
+select count(*) from flush_privileges_db.flush;
+rollback;
+set session mo_rollback_txn_on_error = 0;
 -- @session}
 revoke select on table flush_privileges_db.flush from flush_privileges_role;
 -- @session:id=1&user=sys:flush_privileges_user:flush_privileges_role&password=123456{
