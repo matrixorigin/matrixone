@@ -16,10 +16,29 @@ package plan
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
 const virtualTimestampStageOption = "virtual-timestamp-stage"
+
+func mayHaveVirtualTimestampRead(table *plan.TableDef) bool {
+	if table == nil {
+		return false
+	}
+	hasTimestamp, hasVirtual := false, false
+	for _, col := range table.Cols {
+		if col == nil {
+			continue
+		}
+		hasTimestamp = hasTimestamp || types.T(col.Typ.Id) == types.T_timestamp
+		hasVirtual = hasVirtual || col.GeneratedCol != nil && !col.GeneratedCol.IsStored
+		if hasTimestamp && hasVirtual {
+			return true
+		}
+	}
+	return false
+}
 
 // Historical catalogs could contain small generated-column DAGs whose fully
 // inlined expression is enormous. Compute each affected column once, in

@@ -14040,7 +14040,8 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 				}
 				builder.qry.Nodes[nodeID].FilterList = accountFilterExprs
 			}
-			if len(VirtualTimestampExpansionFindings(midNode.TableDef)) != 0 {
+			if mayHaveVirtualTimestampRead(midNode.TableDef) &&
+				len(VirtualTimestampExpansionFindings(midNode.TableDef)) != 0 {
 				nodeID, err = builder.stageLegacyVirtualTimestampColumns(nodeID, ctx)
 				if err != nil {
 					return 0, "", err
