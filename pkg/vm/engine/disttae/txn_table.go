@@ -2408,7 +2408,10 @@ func (tbl *txnTable) Delete(
 
 	switch deletionTyp {
 	case catalog.Row_ID:
-		bat = tbl.getTxn().deleteBatch(bat, tbl.db.databaseId, tbl.tableId)
+		bat, err := tbl.getTxn().deleteBatch(bat, tbl.db.databaseId, tbl.tableId)
+		if err != nil {
+			return err
+		}
 		if bat.RowCount() == 0 {
 			return nil
 		}
@@ -3096,7 +3099,9 @@ func (tbl *txnTable) PKPersistedBetween(
 		return true, err
 	}
 
-	keys.InplaceSort()
+	if err := keys.InplaceSort(tbl.getTxn().proc.Mp()); err != nil {
+		return true, err
+	}
 	bytes, _ := keys.MarshalBinary()
 	colExpr := readutil.NewColumnExpr(0, plan2.MakePlan2Type(keys.GetType()), tbl.tableDef.Pkey.PkeyColName)
 	inExpr := plan2.MakeInExpr(

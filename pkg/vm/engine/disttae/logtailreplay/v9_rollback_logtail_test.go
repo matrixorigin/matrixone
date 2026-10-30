@@ -59,7 +59,8 @@ func TestV9RollbackSentinelDoesNotReachPartitionState(t *testing.T) {
 	src.AddVector(catalog.PhyAddrColumnName, rowIDs)
 	src.AddVector(objectio.DefaultCommitTS_Attr, commitTSs)
 
-	logtailBatch := logtail.DataChangeToLogtailBatch(src)
+	logtailBatch, err := logtail.DataChangeToLogtailBatch(src)
+	require.NoError(t, err)
 	require.Equal(t, 1, logtailBatch.Length())
 	protoBatch, err := batch.BatchToProtoBatch(containers.ToCNBatch(logtailBatch))
 	require.NoError(t, err)

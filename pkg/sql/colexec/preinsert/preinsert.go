@@ -285,7 +285,9 @@ func (preInsert *PreInsert) Call(proc *proc) (vm.CallResult, error) {
 			return result, err
 		}
 		defer workBat.Clean(proc.Mp())
-		workBat.Shrink(selectedRows, false)
+		if err = workBat.Shrink(selectedRows, false, proc.Mp()); err != nil {
+			return result, err
+		}
 		workBat.SetRowCount(len(selectedRows))
 	}
 	if err = checkZeroTemporalInStrictMode(preInsert, workBat, proc); err != nil {

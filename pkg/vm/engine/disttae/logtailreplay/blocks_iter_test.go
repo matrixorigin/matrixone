@@ -520,7 +520,7 @@ func TestFilterBatchCase2InsertThenDelete(t *testing.T) {
 	tombstoneBatch.SetRowCount(1)
 
 	// Call filterBatch with skipDeletes=true (CDC scenario)
-	err := filterBatch(dataBatch, tombstoneBatch, primarySeqnum, true, true)
+	err := filterBatch(dataBatch, tombstoneBatch, primarySeqnum, true, true, mp)
 	require.NoError(t, err)
 
 	// Verify the fix:
@@ -602,7 +602,7 @@ func TestFilterBatchCase2InsertThenDeleteMultiple(t *testing.T) {
 	tombstoneBatch.SetRowCount(2)
 
 	// Call filterBatch with skipDeletes=true
-	err := filterBatch(dataBatch, tombstoneBatch, primarySeqnum, true, true)
+	err := filterBatch(dataBatch, tombstoneBatch, primarySeqnum, true, true, mp)
 	require.NoError(t, err)
 
 	// Verify: data should be empty, tombstone should have 1 row (last delete)
@@ -646,7 +646,7 @@ func TestChangeHandlerCoalesceBatchPreservesAllVersions(t *testing.T) {
 	defer tombstone.Clean(mp)
 
 	h := &ChangeHandler{primarySeqnum: 0, preserveAllVersions: true}
-	require.NoError(t, h.coalesceBatch(data, tombstone))
+	require.NoError(t, h.coalesceBatch(data, tombstone, mp))
 	require.Equal(t, 2, data.RowCount())
 	require.Equal(t, 1, tombstone.RowCount())
 }

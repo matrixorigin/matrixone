@@ -66,8 +66,8 @@ type Vector interface {
 	setDownstreamVector(vec *cnVector.Vector)
 
 	Update(i int, v any, isNull bool)
-	Compact(*roaring.Bitmap)
-	CompactByBitmap(*nulls.Bitmap)
+	Compact(*roaring.Bitmap) error
+	CompactByBitmap(*nulls.Bitmap) error
 
 	Extend(o Vector)
 	ExtendWithOffset(src Vector, srcOff, srcLen int)
@@ -94,7 +94,7 @@ type Vector interface {
 	String() string
 	PPString(num int) string
 	AppendMany(vs []any, isNulls []bool)
-	Delete(i int)
+	Delete(i int) error
 }
 
 type Batch struct {

@@ -1476,7 +1476,7 @@ func TestFlushTabletail(t *testing.T) {
 					viewDel = view.Deletes.GetCardinality()
 				}
 				assert.Equal(t, dels[i], viewDel)
-				view.Compact()
+				require.NoError(t, view.Compact())
 				total += view.Length()
 				i++
 			}
@@ -1518,7 +1518,7 @@ func TestFlushTabletail(t *testing.T) {
 					viewDel = views.Deletes.GetCardinality()
 				}
 				assert.Equal(t, dels[i], viewDel)
-				views.Compact()
+				require.NoError(t, views.Compact())
 				i++
 			}
 			total += views.Length()
@@ -2523,7 +2523,7 @@ func TestChaos1(t *testing.T) {
 	defer view.Close()
 	assert.Equal(t, int(appendCnt), view.Length())
 	mask := view.Deletes
-	view.Compact()
+	require.NoError(t, view.Compact())
 	t.Log(view.String())
 	assert.Equal(t, int(deleteCnt), mask.GetCardinality())
 }
@@ -3630,7 +3630,7 @@ func TestCompactblk3(t *testing.T) {
 			blkID := objectio.NewBlockidWithObjectID(be.ID(), uint16(j))
 			err := tables.HybridScanByBlock(ctx, tblEntry, txn, &view, schema, []int{0}, &blkID, common.DefaultAllocator)
 			assert.NoError(t, err)
-			view.Compact()
+			require.NoError(t, view.Compact())
 			assert.Equal(t, 2, view.Length())
 			view.Close()
 		}
@@ -4313,7 +4313,7 @@ func TestV9FlushPreservesRowIDAcrossAbortHole(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, view)
 	defer view.Close()
-	view.Compact()
+	require.NoError(t, view.Compact())
 	require.Equal(t, 2, view.Length())
 	require.Equal(t, rows.Vecs[sortKeyIdx].Get(0), view.Vecs[0].Get(0))
 	require.Equal(t, rows.Vecs[sortKeyIdx].Get(3), view.Vecs[0].Get(1))
@@ -6105,7 +6105,7 @@ func TestDelete4(t *testing.T) {
 					if view == nil {
 						return
 					}
-					view.Compact()
+					require.NoError(t, view.Compact())
 					if view.Length() != 0 {
 						t.Logf("block-%d, data=%s", j, logtail.ToStringTemplate(view.Vecs[0], -1))
 					}
@@ -14411,7 +14411,7 @@ func TestCheckpointV2(t *testing.T) {
 	assert.NoError(t, err)
 	readTxn, err := tae.StartTxn(nil)
 	assert.NoError(t, err)
-	closeFn := catalog2.RelayFromSysTableObjects(
+	closeFn, err := catalog2.RelayFromSysTableObjects(
 		ctx, readTxn, tables.ReadSysTableBatch, func(cols []containers.Vector, pkidx int) (err2 error) {
 			_, err2 = mergesort.SortBlockColumns(cols, pkidx, tae.Runtime.VectorPool.Transient)
 			return
@@ -14420,6 +14420,7 @@ func TestCheckpointV2(t *testing.T) {
 	for _, fn := range closeFn {
 		fn()
 	}
+	require.NoError(t, err)
 	err = logtail.ReplayCheckpoint(ctx, catalog2, false, reader)
 	assert.NoError(t, err)
 
@@ -14569,7 +14570,7 @@ func TestCheckpointCompatibility(t *testing.T) {
 
 	readTxn, err := tae.StartTxn(nil)
 	assert.NoError(t, err)
-	closeFn := catalog2.RelayFromSysTableObjects(
+	closeFn, err := catalog2.RelayFromSysTableObjects(
 		ctx,
 		readTxn,
 		tables.ReadSysTableBatch,
@@ -14580,6 +14581,7 @@ func TestCheckpointCompatibility(t *testing.T) {
 	for _, fn := range closeFn {
 		fn()
 	}
+	require.NoError(t, err)
 
 	err = logtail.ReplayCheckpoint(ctx, catalog2, false, reader)
 	assert.NoError(t, err)
@@ -15233,7 +15235,8 @@ func TestTNCatalogEventSource(t *testing.T) {
 	rel.Append(ctx, initData)
 	assert.NoError(t, txn.Commit(ctx))
 
-	bat, free := source.GetMergeSettingsBatchFn()()
+	bat, free, err := source.GetMergeSettingsBatchFn()()
+	require.NoError(t, err)
 	defer free()
 	require.NotNil(t, bat)
 

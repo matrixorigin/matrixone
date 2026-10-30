@@ -262,7 +262,9 @@ func (e *TestEngine) DeleteAll(skipConflict bool) error {
 			err := blk.HybridScan(context.Background(), &view, i, []int{rowIDIdx, pkIdx}, common.DefaultAllocator)
 			assert.NoError(e.T, err)
 			defer view.Close()
-			view.Compact()
+			if err := view.Compact(); err != nil {
+				return err
+			}
 			err = rel.DeleteByPhyAddrKeys(view.Vecs[0], view.Vecs[1], handle.DT_Normal)
 			assert.NoError(e.T, err)
 		}

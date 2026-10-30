@@ -414,6 +414,19 @@ func TestBorrowedVarlenMarshalUsesCanonicalCompactedArea(t *testing.T) {
 	require.Nil(t, areaLease.Bytes())
 }
 
+func TestCloneWindowToConstFixedWithoutPool(t *testing.T) {
+	mp := mpool.MustNewZero()
+	t.Cleanup(func() { mpool.DeleteMPool(mp) })
+	typ := types.T_int64.ToType()
+	src, err := NewConstFixed(typ, int64(42), 3, mp)
+	require.NoError(t, err)
+	t.Cleanup(func() { src.Free(mp) })
+	dst := NewOffHeapVecWithType(typ)
+	t.Cleanup(func() { dst.Free(mp) })
+	require.NoError(t, src.CloneWindowTo(dst, 0, 2, nil))
+	require.Equal(t, int64(42), GetFixedAtNoTypeCheck[int64](dst, 1))
+}
+
 func TestCloneWindowToConstNullReleasesDataLease(t *testing.T) {
 	for _, sharedArea := range []bool{false, true} {
 		t.Run(fmt.Sprintf("sharedArea=%v", sharedArea), func(t *testing.T) {

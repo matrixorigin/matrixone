@@ -309,6 +309,9 @@ func (v *Vector) ResetWithNewType(t *types.Type) {
 	v.areaDisjoint = true
 }
 
+// UnsafeGetRawData returns a view into the current backing. The caller must
+// not write borrowed storage; materialize it before mutation. The view expires
+// on replacement, reset, or Free.
 func (v *Vector) UnsafeGetRawData() []byte {
 	length := 1
 	if !v.IsConst() {
@@ -3825,6 +3828,8 @@ func (v *Vector) GetBytesAt2(bs []types.Varlena, i int) []byte {
 	return bs[i].GetByteSlice(v.area)
 }
 
+// GetRawBytesAt returns a view into data or area. Borrowed backing must be
+// materialized before writing, and the view expires on replacement or Free.
 func (v *Vector) GetRawBytesAt(i int) []byte {
 	if v.typ.IsVarlen() {
 		return v.GetBytesAt(i)
@@ -4429,10 +4434,14 @@ func (v *Vector) VarlenaAreaIsDisjoint() bool {
 	return v != nil && v.typ.IsVarlen() && !v.IsConst() && v.areaDisjoint
 }
 
+// GetData returns the current data backing. Treat borrowed data as immutable;
+// any view expires on replacement, reset, or Free.
 func (v *Vector) GetData() []byte {
 	return v.data
 }
 
+// GetPtrAt returns a pointer into the current data backing. Do not write through
+// it while the backing is borrowed, or retain it across replacement or Free.
 func GetPtrAt[T any](v *Vector, idx int64) *T {
 	if v.IsConst() {
 		idx = 0
@@ -4981,7 +4990,6 @@ func (v *Vector) unmarshalBinary(data []byte, validateValues bool) error {
 	if v == nil {
 		return io.ErrClosedPipe
 	}
-	v.areaDisjoint = false
 	if v.allocationAccount != nil {
 		return allocationAccountInvalid(
 			"cannot install aliases in an accounted vector",
@@ -5002,6 +5010,7 @@ func (v *Vector) unmarshalBinary(data []byte, validateValues bool) error {
 			return err
 		}
 	}
+	v.areaDisjoint = false
 	v.class = int(layout.class)
 	v.typ = layout.typ
 	v.length = layout.length
@@ -5146,7 +5155,6 @@ func (v *Vector) UnmarshalBinaryWithCopy(data []byte, mp *mpool.MPool) error {
 	if v == nil || mp == nil {
 		return io.ErrClosedPipe
 	}
-	v.areaDisjoint = false
 	if v.hasBackingStorage() {
 		return allocationAccountInvalid(
 			"cannot replace vector storage without Free",
@@ -6061,8 +6069,54 @@ func copyBitmapWithinLength(dst, src *nulls.Nulls, length int) {
 	})
 }
 
-// Shrink use to shrink vectors, sels must be guaranteed to be ordered
-func (v *Vector) Shrink(sels []int64, negate bool) {
+// ShrinkDataPreparation owns a private replacement until Commit or Abort.
+type ShrinkDataPreparation struct {
+	vector *Vector
+	data   []byte
+	mp     *mpool.MPool
+}
+
+// PrepareShrinkData prepares a private data backing before an in-place shrink.
+// writes must indicate whether the selection will write any data elements.
+func (v *Vector) PrepareShrinkData(mp *mpool.MPool, writes bool) (*ShrinkDataPreparation, error) {
+	if !writes || v.IsConst() || v.dataLease == nil {
+		return nil, nil
+	}
+	data, err := v.allocData(mp, v.length*v.typ.TypeSize())
+	if err != nil {
+		return nil, err
+	}
+	copy(data, v.data)
+	return &ShrinkDataPreparation{vector: v, data: data, mp: mp}, nil
+}
+
+func (p *ShrinkDataPreparation) Abort() {
+	if p != nil && p.data != nil {
+		p.mp.Free(p.data)
+		p.data = nil
+	}
+}
+
+func (p *ShrinkDataPreparation) Commit() {
+	if p != nil && p.data != nil {
+		p.vector.replaceOwnedData(p.data, p.mp)
+		p.data = nil
+	}
+}
+
+// Shrink requires ordered selections and leaves the vector unchanged on allocation failure.
+func (v *Vector) Shrink(sels []int64, negate bool, mp *mpool.MPool) error {
+	p, err := v.PrepareShrinkData(mp, (!negate && len(sels) > 0) || (negate && len(sels) > 0 && len(sels) < v.length))
+	if err != nil {
+		return err
+	}
+	p.Commit()
+	v.shrinkPrepared(sels, negate)
+	return nil
+}
+
+// ShrinkPrepared applies a selection after all affected vectors have been prepared.
+func (v *Vector) shrinkPrepared(sels []int64, negate bool) {
 	if v.typ.IsVarlen() {
 		v.areaDisjoint = false
 	}
@@ -6150,7 +6204,18 @@ func (v *Vector) Shrink(sels []int64, negate bool) {
 	}
 }
 
-func (v *Vector) ShrinkByMask(sels *bitmap.Bitmap, negate bool, offset uint64) {
+func (v *Vector) ShrinkByMask(sels *bitmap.Bitmap, negate bool, offset uint64, mp *mpool.MPool) error {
+	n := sels.Count()
+	p, err := v.PrepareShrinkData(mp, (!negate && n > 0) || (negate && n > 0 && n < v.length))
+	if err != nil {
+		return err
+	}
+	p.Commit()
+	v.shrinkByMaskPrepared(sels, negate, offset)
+	return nil
+}
+
+func (v *Vector) shrinkByMaskPrepared(sels *bitmap.Bitmap, negate bool, offset uint64) {
 	if v.typ.IsVarlen() {
 		v.areaDisjoint = false
 	}
@@ -11135,6 +11200,9 @@ func (v *Vector) CloneWindowWithAllocation(
 }
 
 func (v *Vector) CloneWindowTo(w *Vector, start, end int, mp *mpool.MPool) error {
+	if start != end && !v.IsConstNull() && mp == nil && w.hasOwnedBackingStorage() {
+		return moerr.NewInternalErrorNoCtx("cannot replace owned vector storage without a mpool")
+	}
 	if start == end {
 		w.setBinaryStringScalar(v.binaryString)
 		w.resetPrepareParamKind()
@@ -11187,6 +11255,7 @@ func (v *Vector) CloneWindowTo(w *Vector, start, end int, mp *mpool.MPool) error
 					)
 				}
 				w.data = make([]byte, len(v.data))
+				copy(w.data, v.data)
 				w.cantFreeData = true
 			} else {
 				if err := w.PreExtend(1, mp); err != nil {
@@ -12007,7 +12076,17 @@ func (v *Vector) inplaceSortRowMetadata(compact bool) bool {
 
 // InplaceSortAndCompact requires writable descriptors and row metadata.
 // A leased varlen payload can remain readonly: only descriptors are reordered.
-func (v *Vector) InplaceSortAndCompact() {
+func (v *Vector) InplaceSortAndCompact(mp *mpool.MPool) error {
+	prepared, err := v.PrepareShrinkData(mp, v.length > 1 && supportsInplaceSort(v.typ.Oid))
+	if err != nil {
+		return err
+	}
+	prepared.Commit()
+	v.inplaceSortAndCompact()
+	return nil
+}
+
+func (v *Vector) inplaceSortAndCompact() {
 	if v.inplaceSortRowMetadata(true) {
 		return
 	}
@@ -12409,7 +12488,17 @@ func inplaceSortAndCompactArrayElement[T types.ArrayElement](v *Vector, publishC
 // InplaceSort orders every supported vector type without compacting duplicate
 // values and marks that order in the vector metadata. Unsupported types remain
 // untouched and unflagged.
-func (v *Vector) InplaceSort() {
+func (v *Vector) InplaceSort(mp *mpool.MPool) error {
+	prepared, err := v.PrepareShrinkData(mp, v.length > 1 && supportsInplaceSort(v.typ.Oid))
+	if err != nil {
+		return err
+	}
+	prepared.Commit()
+	v.inplaceSort()
+	return nil
+}
+
+func (v *Vector) inplaceSort() {
 	if v.inplaceSortRowMetadata(false) {
 		return
 	}

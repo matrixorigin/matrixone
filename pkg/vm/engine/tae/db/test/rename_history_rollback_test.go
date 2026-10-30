@@ -98,7 +98,7 @@ func TestHistoricalRenameRollback(t *testing.T) {
 				require.NoError(t, err)
 				var values []int64
 				testutil.ForEachColumnView(t, rel, 0, func(view *containers.Batch) error {
-					view.Compact()
+					require.NoError(t, view.Compact())
 					for i := 0; i < view.Length(); i++ {
 						values = append(values, view.Vecs[0].Get(i).(int64))
 					}

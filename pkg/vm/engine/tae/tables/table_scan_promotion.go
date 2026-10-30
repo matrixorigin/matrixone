@@ -63,7 +63,10 @@ func ReadMergeSettingsBatchForPromotion(
 		}
 	}
 	if bat != nil {
-		bat.Compact()
+		if err := bat.Compact(); err != nil {
+			bat.Close()
+			return nil, err
+		}
 	}
 	return bat, nil
 }

@@ -636,7 +636,9 @@ func unmarshalPKInVector(data []byte) (ret *vector.Vector, err error) {
 	if err := owned.UnmarshalBinary(bytes.Clone(data)); err != nil {
 		return nil, err
 	}
-	normalizePKInVector(owned)
+	if err := normalizePKInVector(owned); err != nil {
+		return nil, err
+	}
 	return owned, nil
 }
 
@@ -776,7 +778,7 @@ func validatePKInNullEncoding(data []byte, logicalLength uint64) error {
 	return nil
 }
 
-func normalizePKInVector(vec *vector.Vector) {
+func normalizePKInVector(vec *vector.Vector) error {
 	// A constant vector represents a repeated value, while IN is set-valued.
 	// Collapse its logical length before encoding it for workspace filtering;
 	// otherwise a corrupt or adversarial logical length can force an O(n)
@@ -789,7 +791,7 @@ func normalizePKInVector(vec *vector.Vector) {
 			vec.SetLength(1)
 		}
 		vec.SetSorted(true)
-		return
+		return nil
 	}
 	if vec.GetNulls().Any() {
 		sels := make([]int64, 0, vec.Length()-vec.GetNulls().Count())
@@ -798,9 +800,14 @@ func normalizePKInVector(vec *vector.Vector) {
 				sels = append(sels, int64(row))
 			}
 		}
-		vec.Shrink(sels, false)
+		if err := vec.Shrink(sels, false, nil); err != nil {
+			return err
+		}
 	}
-	vec.InplaceSortAndCompact()
+	if err := vec.InplaceSortAndCompact(nil); err != nil {
+		return err
+	}
+	return nil
 }
 
 func releaseUnreferencedMergedVectors(filters []BasePKFilter, keep *basePKFilterResource) {

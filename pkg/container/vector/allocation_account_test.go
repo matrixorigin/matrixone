@@ -464,7 +464,7 @@ func TestVectorAllocationAccountBitmapShrinkUsesNoScratch(t *testing.T) {
 	}
 	before := state.account.Snapshot()
 
-	vec.Shrink([]int64{0, 2, 64, 65, 129}, false)
+	require.NoError(t, vec.Shrink([]int64{0, 2, 64, 65, 129}, false, mp))
 	require.Equal(t, []int64{0, 2, 64, 65, 129}, MustFixedColWithTypeCheck[int64](vec))
 	for _, row := range []uint64{0, 1, 2, 4} {
 		require.True(t, vec.IsNull(row))
@@ -509,7 +509,7 @@ func TestVectorAllocationAccountDupPreservesSparseBitmapRowDomain(t *testing.T) 
 		sels[i] = int64(i + 1)
 	}
 	require.NotPanics(t, func() {
-		dup.Shrink(sels, false)
+		require.NoError(t, dup.Shrink(sels, false, mp))
 	})
 	require.Equal(t, 129, dup.Length())
 	require.Zero(t, dup.GetNulls().Count())
@@ -1773,9 +1773,9 @@ func TestAccountedBinaryStringInplaceSortHasPreflightedBitmaps(t *testing.T) {
 
 			require.NotPanics(t, func() {
 				if compact {
-					vec.InplaceSortAndCompact()
+					require.NoError(t, vec.InplaceSortAndCompact(nil))
 				} else {
-					vec.InplaceSort()
+					require.NoError(t, vec.InplaceSort(nil))
 				}
 			})
 

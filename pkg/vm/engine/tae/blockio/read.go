@@ -535,6 +535,38 @@ func blockDataReadWithExactMembershipTopK(
 	return nil
 }
 
+func shrinkSelectedColumns(bat *batch.Batch, positions []int, sels []int64, negate bool, mp *mpool.MPool) error {
+	vecs := make([]*vector.Vector, 0, len(positions))
+	prepared := make([]*vector.ShrinkDataPreparation, 0, len(positions))
+	seen := make(map[*vector.Vector]struct{}, len(positions))
+	for _, pos := range positions {
+		vec := bat.Vecs[pos]
+		if _, ok := seen[vec]; ok {
+			continue
+		}
+		seen[vec] = struct{}{}
+		writes := (!negate && len(sels) > 0) || (negate && len(sels) > 0 && len(sels) < vec.Length())
+		p, err := vec.PrepareShrinkData(mp, writes)
+		if err != nil {
+			for _, p := range prepared {
+				p.Abort()
+			}
+			return err
+		}
+		prepared = append(prepared, p)
+		vecs = append(vecs, vec)
+	}
+	for _, p := range prepared {
+		p.Commit()
+	}
+	for _, vec := range vecs {
+		if err := vec.Shrink(sels, negate, mp); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func CopyBlockData(
 	ctx context.Context,
 	location objectio.Location,
@@ -562,7 +594,7 @@ func CopyBlockData(
 	); err != nil {
 		return
 	}
-	outputBat.Shrink(deletes, true)
+	err = outputBat.Shrink(deletes, true, mp)
 	return
 }
 
@@ -649,7 +681,7 @@ func BlockDataReadBackup(
 		rows := tombstones.ToI64Array(nil)
 		if len(rows) > 0 {
 			logutil.Info("[BlockDataReadBackup Shrink]", zap.String("location", location.String()), zap.Int("rows", len(rows)))
-			loaded.Shrink(rows, true)
+			err = loaded.Shrink(rows, true, common.DebugAllocator)
 		}
 		return
 	}
@@ -673,7 +705,9 @@ func BlockDataReadBackup(
 		visibleRows = append(visibleRows, int64(row))
 	}
 	if len(visibleRows) != len(commitTSs) {
-		loaded.Shrink(visibleRows, false)
+		if err = loaded.Shrink(visibleRows, false, common.DebugAllocator); err != nil {
+			return
+		}
 		logutil.Info("[BlockDataReadBackup]",
 			zap.String("ts", ts.ToString()),
 			zap.String("location", location.String()),
@@ -1113,8 +1147,8 @@ func blockDataReadWithFilter(
 			deleted := vector.GetSels()
 			defer func() { vector.PutSels(deleted) }()
 			deleted = deleteMask.ToI64Array(&deleted)
-			for _, pos := range earlyColumns {
-				outputBat.Vecs[pos].Shrink(deleted, true)
+			if err := shrinkSelectedColumns(outputBat, earlyColumns, deleted, true, mp); err != nil {
+				return err
 			}
 		}
 	}
@@ -1226,12 +1260,20 @@ func blockDataReadWithFilter(
 		if mapErr != nil {
 			return mapErr
 		}
+		var shrinkPositions []int
+		for _, pos := range earlyColumns {
+			if pos != topColPos && len(winnerPositions) > 0 {
+				shrinkPositions = append(shrinkPositions, pos)
+			}
+		}
+		if err := shrinkSelectedColumns(outputBat, shrinkPositions, winnerPositions, false, mp); err != nil {
+			return err
+		}
 		for _, pos := range earlyColumns {
 			if pos == topColPos || len(winnerPositions) == 0 {
 				outputBat.Vecs[pos].CleanOnlyData()
 				continue
 			}
-			outputBat.Vecs[pos].Shrink(winnerPositions, false)
 		}
 		outputBat.SetRowCount(len(topRows))
 		materializeRows = topRows
@@ -1404,12 +1446,16 @@ func blockDataReadWithSelectedFilterTopK(
 	if err != nil {
 		return err
 	}
+	if len(winnerPositions) > 0 {
+		if err := shrinkSelectedColumns(outputBat, earlyColumns, winnerPositions, false, mp); err != nil {
+			return err
+		}
+	}
 	for _, pos := range earlyColumns {
 		if len(winnerPositions) == 0 {
 			outputBat.Vecs[pos].CleanOnlyData()
 			continue
 		}
-		outputBat.Vecs[pos].Shrink(winnerPositions, false)
 	}
 	outputBat.SetRowCount(len(topRows))
 	outputBat.Vecs[topColPos].CleanOnlyData()
@@ -1579,8 +1625,12 @@ func BlockDataReadInner(
 			arr := vector.GetSels()
 			defer vector.PutSels(arr)
 			deletedRows = deleteMask.ToI64Array(&arr)
-			for i := range columns {
-				outputBat.Vecs[i].Shrink(deletedRows, true)
+			positions := make([]int, len(columns))
+			for i := range positions {
+				positions[i] = i
+			}
+			if err := shrinkSelectedColumns(outputBat, positions, deletedRows, true, mp); err != nil {
+				return err
 			}
 		}
 		return nil
@@ -1766,9 +1816,16 @@ func BlockDataReadInner(
 			}
 			loadedColumnPos++
 		}
-		if len(deletedRows) > 0 {
-			outputBat.Vecs[outputColPos].Shrink(deletedRows, true)
+	}
+	if err != nil {
+		return
+	}
+	if len(deletedRows) > 0 {
+		positions := make([]int, len(columns))
+		for i := range positions {
+			positions[i] = i
 		}
+		err = shrinkSelectedColumns(outputBat, positions, deletedRows, true, mp)
 	}
 	return
 }

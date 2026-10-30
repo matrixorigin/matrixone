@@ -59,7 +59,8 @@ func TestV9RollbackSentinelDoesNotReachTombstoneLogtail(t *testing.T) {
 	src.AddVector(catalog.PhyAddrColumnName, physicalRowIDs)
 	src.AddVector(objectio.TombstoneAttr_CommitTs_Attr, commitTSs)
 
-	output := TombstoneChangeToLogtailBatch(src)
+	output, err := TombstoneChangeToLogtailBatch(src)
+	require.NoError(t, err)
 	require.Equal(t, 1, output.Length())
 	require.Equal(t, int64(7), output.GetVectorByName(objectio.TombstoneAttr_PK_Attr).Get(0))
 }

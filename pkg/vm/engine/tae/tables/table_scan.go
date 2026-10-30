@@ -44,9 +44,9 @@ func preservePhysicalRows(ctx context.Context) bool {
 	return preserve
 }
 
-func compactInvisibleAppendRows(bat *containers.Batch, invisibleRows *nulls.Bitmap) {
+func compactInvisibleAppendRows(bat *containers.Batch, invisibleRows *nulls.Bitmap) error {
 	if bat == nil || invisibleRows.IsEmpty() {
-		return
+		return nil
 	}
 
 	invisible := invisibleRows.ToArray()
@@ -65,11 +65,16 @@ func compactInvisibleAppendRows(bat *containers.Batch, invisibleRows *nulls.Bitm
 	// Compact rows hidden by append MVCC (rollback holes and commits newer than
 	// the reader snapshot). Tombstone and workspace deletes remain represented
 	// in the returned batch, with offsets shifted over the removed rows.
+	oldDeletes := bat.Deletes
 	bat.Deletes = invisibleRows
-	bat.Compact()
+	if err := bat.Compact(); err != nil {
+		bat.Deletes = oldDeletes
+		return err
+	}
 	if !remainingDeletes.IsEmpty() {
 		bat.Deletes = remainingDeletes
 	}
+	return nil
 }
 
 func HybridScanByBlock(
@@ -131,7 +136,10 @@ func HybridScanByBlock(
 		(*bat).Close()
 		return err
 	}
-	compactInvisibleAppendRows(*bat, invisibleAppendRows)
+	if err := compactInvisibleAppendRows(*bat, invisibleAppendRows); err != nil {
+		(*bat).Close()
+		return err
+	}
 	return nil
 }
 
@@ -242,7 +250,7 @@ func RangeScanInMemoryByObject(
 }
 
 // TODO: ensure bat does not exceed the 1G limit
-func ReadSysTableBatch(ctx context.Context, entry *catalog.TableEntry, readTxn txnif.AsyncTxn) *containers.Batch {
+func ReadSysTableBatch(ctx context.Context, entry *catalog.TableEntry, readTxn txnif.AsyncTxn) (*containers.Batch, error) {
 	if entry.ID > 3 {
 		panic(fmt.Sprintf("unsupported sys table id %v", entry))
 	}
@@ -277,12 +285,15 @@ func ReadSysTableBatch(ctx context.Context, entry *catalog.TableEntry, readTxn t
 		}
 	}
 	if bat != nil {
-		bat.Compact()
+		if err := bat.Compact(); err != nil {
+			bat.Close()
+			return nil, err
+		}
 	}
-	return bat
+	return bat, nil
 }
 
-func ReadMergeSettingsBatch(ctx context.Context, entry *catalog.TableEntry, readTxn txnif.AsyncTxn) *containers.Batch {
+func ReadMergeSettingsBatch(ctx context.Context, entry *catalog.TableEntry, readTxn txnif.AsyncTxn) (*containers.Batch, error) {
 	schema := entry.GetLastestSchema(false)
 	it := entry.MakeDataVisibleObjectIt(readTxn)
 	defer it.Release()
@@ -311,7 +322,10 @@ func ReadMergeSettingsBatch(ctx context.Context, entry *catalog.TableEntry, read
 		}
 	}
 	if bat != nil {
-		bat.Compact()
+		if err := bat.Compact(); err != nil {
+			bat.Close()
+			return nil, err
+		}
 	}
-	return bat
+	return bat, nil
 }

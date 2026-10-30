@@ -83,7 +83,7 @@ func TestBuildSnapshotBlockFilter(t *testing.T) {
 		for _, v := range []int64{1, 3, 5} {
 			require.NoError(t, vector.AppendFixed(vec, v, false, mp))
 		}
-		vec.InplaceSort()
+		require.NoError(t, vec.InplaceSort(nil))
 		expr, cerr := readutil.ConstructInExpr(context.Background(), "a", vec)
 		require.NoError(t, cerr)
 

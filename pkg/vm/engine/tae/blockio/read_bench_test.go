@@ -182,8 +182,8 @@ func (f *lateMaterializationBenchmarkFixture) read(late, all bool) (int, error) 
 				sels = append(sels, int64(row))
 			}
 		}
-		for _, pos := range loaded {
-			bat.Vecs[pos].Shrink(sels, false)
+		if err := shrinkSelectedColumns(bat, loaded, sels, false, mp); err != nil {
+			return engine.ReaderFilterResult{}, err
 		}
 		bat.SetRowCount(len(sels))
 		return engine.ReaderFilterResult{Sels: sels}, nil
@@ -470,8 +470,8 @@ func (f *vectorRangeTopNBenchmarkFixture) readFiltered(
 				sels = append(sels, int64(pos))
 			}
 		}
-		for _, pos := range loaded {
-			bat.Vecs[pos].Shrink(sels, false)
+		if err := shrinkSelectedColumns(bat, loaded, sels, false, mp); err != nil {
+			return engine.ReaderFilterResult{}, err
 		}
 		bat.SetRowCount(len(sels))
 		return engine.ReaderFilterResult{Sels: sels}, nil

@@ -544,7 +544,9 @@ func materializeValuesUnified(
 	}
 
 	// Sort for segment construction (and deterministic hashmap ordering).
-	vec.InplaceSort()
+	if err := vec.InplaceSort(ses.proc.Mp()); err != nil {
+		return nil, err
+	}
 
 	// Put all PK values into the hashmap.  keyCols=[0] because the Vec has
 	// exactly one column (the PK).
@@ -625,7 +627,9 @@ func materializeCompositeValuesUnified(
 	*encodedVec.GetType() = pkType
 
 	// Sort the encoded vector (lexicographic order preserves composite key ordering).
-	encodedVec.InplaceSort()
+	if err := encodedVec.InplaceSort(mp); err != nil {
+		return nil, err
+	}
 
 	// Put into hashmap.
 	if err = pickKeyHashmap.PutByVectors([]*vector.Vector{encodedVec}, []int{0}); err != nil {

@@ -85,7 +85,9 @@ func (store *replayTxnStore) prepareCommit(txn txnif.AsyncTxn) (err error) {
 	store.Observer.OnTimeStamp(txn.GetPrepareTS())
 	for _, command := range store.Cmd.Cmds {
 		command.SetReplayTxn(txn)
-		store.prepareCmd(command)
+		if err = store.prepareCmd(command); err != nil {
+			return err
+		}
 	}
 	store.registerPreparedDMLTables(txn)
 	return
@@ -146,7 +148,7 @@ func (store *replayTxnStore) prepareRollback(txn txnif.AsyncTxn) (err error) {
 		txn.String()))
 }
 
-func (store *replayTxnStore) prepareCmd(txncmd txnif.TxnCmd) {
+func (store *replayTxnStore) prepareCmd(txncmd txnif.TxnCmd) error {
 	if txncmd.GetType() != txnbase.IOET_WALTxnEntry {
 		common.DoIfDebugEnabled(func() {
 			logutil.Debug(
@@ -164,15 +166,15 @@ func (store *replayTxnStore) prepareCmd(txncmd txnif.TxnCmd) {
 		*catalog.EntryCommand[*catalog.MetadataMVCCNode, *catalog.BlockNode]:
 		store.catalog.ReplayCmd(txncmd, store.Observer)
 	case *AppendCmd:
-		store.replayAppendData(
-			cmd, store.Observer)
+		return store.replayAppendData(cmd, store.Observer)
 	case *updates.UpdateCmd:
 		store.replayDataCmds(
 			cmd, store.Observer)
 	}
+	return nil
 }
 
-func (store *replayTxnStore) replayAppendData(cmd *AppendCmd, observer wal.ReplayObserver) {
+func (store *replayTxnStore) replayAppendData(cmd *AppendCmd, observer wal.ReplayObserver) error {
 	hasActive := false
 	_, sarg, _ := fault.TriggerFault("replay debug log")
 	for _, info := range cmd.Infos {
@@ -197,7 +199,7 @@ func (store *replayTxnStore) replayAppendData(cmd *AppendCmd, observer wal.Repla
 	}
 
 	if !hasActive {
-		return
+		return nil
 	}
 
 	data := cmd.Data
@@ -225,8 +227,10 @@ func (store *replayTxnStore) replayAppendData(cmd *AppendCmd, observer wal.Repla
 		}
 		start := info.GetSrcOff()
 		bat := data.CloneWindow(int(start), int(info.GetSrcLen()))
-		bat.Compact()
 		defer bat.Close()
+		if err := bat.Compact(); err != nil {
+			return err
+		}
 		if err = blk.GetObjectData().OnReplayAppendPayload(bat, info.GetDestOff()); err != nil || sarg != "" {
 			logutil.Infof("cmd %v\ncatalog: %v", cmd.String(), store.catalog.SimplePPString(3))
 			if sarg == "" {
@@ -234,6 +238,7 @@ func (store *replayTxnStore) replayAppendData(cmd *AppendCmd, observer wal.Repla
 			}
 		}
 	}
+	return nil
 }
 
 func (store *replayTxnStore) replayDataCmds(cmd *updates.UpdateCmd, observer wal.ReplayObserver) {

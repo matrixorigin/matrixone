@@ -50,7 +50,7 @@ type MergeNotifierOnCatalog interface {
 type CatalogEventSource interface {
 	InitSource() iter.Seq[MergeTable]
 	SetMergeNotifier(MergeNotifierOnCatalog)
-	GetMergeSettingsBatchFn() func() (*batch.Batch, func())
+	GetMergeSettingsBatchFn() func() (*batch.Batch, func(), error)
 }
 
 type MergeDataItem interface {

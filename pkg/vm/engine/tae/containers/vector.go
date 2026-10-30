@@ -33,6 +33,9 @@ type vectorWrapper struct {
 	// wrapped is the vector.Vector that is wrapped by this vectorWrapper.
 	wrapped *vector.Vector
 
+	// externalVector means another owner retains the Vector object itself.
+	externalVector bool
+
 	// mpool is the memory pool used by the wrapped vector.Vector.
 	mpool *mpool.MPool
 
@@ -497,10 +500,11 @@ func (vec *vectorWrapper) releaseWrapped() {
 	if vec.wrapped == nil {
 		return
 	}
-	if !vec.wrapped.NeedDup() {
+	if !vec.externalVector || !vec.wrapped.NeedDup() {
 		vec.wrapped.Free(vec.mpool)
 	}
 	vec.wrapped = nil
+	vec.externalVector = false
 }
 
 func (vec *vectorWrapper) Allocated() int {
@@ -520,7 +524,7 @@ func (vec *vectorWrapper) tryCOW() {
 	if err != nil {
 		panic(err)
 	}
-	vec.wrapped = newCnVector
+	vec.commitCompact(newCnVector)
 }
 
 func (vec *vectorWrapper) Window(offset, length int) Vector {
@@ -581,36 +585,59 @@ func (vec *vectorWrapper) extendWithOffset(src *vector.Vector, srcOff, srcLen in
 	return
 }
 
-func (vec *vectorWrapper) CompactByBitmap(mask *nulls.Bitmap) {
-	if mask.IsEmpty() {
-		return
+func (vec *vectorWrapper) prepareCompact() (*vector.Vector, error) {
+	if !vec.wrapped.NeedDup() {
+		return nil, nil
 	}
-	vec.tryCOW()
-
-	dels := vector.GetSels()
-	mask.Foreach(func(i uint64) bool {
-		dels = append(dels, int64(i))
-		return true
-	})
-	vec.wrapped.Shrink(dels, true)
-	vector.PutSels(dels)
+	return vec.wrapped.Dup(vec.mpool)
 }
 
-func (vec *vectorWrapper) Compact(deletes *roaring.Bitmap) {
-	if deletes == nil || deletes.IsEmpty() {
+func (vec *vectorWrapper) commitCompact(copy *vector.Vector) {
+	if copy == nil {
 		return
 	}
-	vec.tryCOW()
+	old := vec.wrapped
+	vec.wrapped = copy
+	if vec.element != nil {
+		vec.element.vec = copy
+	}
+	if !vec.externalVector {
+		old.Free(vec.mpool)
+	}
+	vec.externalVector = false
+}
 
+func (vec *vectorWrapper) CompactByBitmap(mask *nulls.Bitmap) error {
+	if mask.IsEmpty() {
+		return nil
+	}
 	dels := vector.GetSels()
+	defer func() { vector.PutSels(dels) }()
+	mask.Foreach(func(i uint64) bool { dels = append(dels, int64(i)); return true })
+	copy, err := vec.prepareCompact()
+	if err != nil {
+		return err
+	}
+	vec.commitCompact(copy)
+	return vec.wrapped.Shrink(dels, true, vec.mpool)
+}
+
+func (vec *vectorWrapper) Compact(deletes *roaring.Bitmap) error {
+	if deletes == nil || deletes.IsEmpty() {
+		return nil
+	}
+	dels := vector.GetSels()
+	defer func() { vector.PutSels(dels) }()
 	itr := deletes.Iterator()
 	for itr.HasNext() {
-		r := itr.Next()
-		dels = append(dels, int64(r))
+		dels = append(dels, int64(itr.Next()))
 	}
-
-	vec.wrapped.Shrink(dels, true)
-	vector.PutSels(dels)
+	copy, err := vec.prepareCompact()
+	if err != nil {
+		return err
+	}
+	vec.commitCompact(copy)
+	return vec.wrapped.Shrink(dels, true, vec.mpool)
 }
 
 func (vec *vectorWrapper) GetDownstreamVector() *vector.Vector {
@@ -619,6 +646,7 @@ func (vec *vectorWrapper) GetDownstreamVector() *vector.Vector {
 
 func (vec *vectorWrapper) setDownstreamVector(dsVec *vector.Vector) {
 	vec.wrapped = dsVec
+	vec.externalVector = false
 }
 
 /****** Below functions are not used in critical path. Used mainly for testing */
@@ -675,9 +703,9 @@ func (vec *vectorWrapper) AppendMany(vs []any, isNulls []bool) {
 
 // Delete Deletes an item from vectorWrapper
 // Deprecated: Only use for test functions
-func (vec *vectorWrapper) Delete(delRowId int) {
+func (vec *vectorWrapper) Delete(delRowId int) error {
 	deletes := roaring.BitmapOf(uint32(delRowId))
-	vec.Compact(deletes)
+	return vec.Compact(deletes)
 }
 
 // Equals Compares two vectors

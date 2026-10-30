@@ -1117,8 +1117,15 @@ func (hashBuild *HashBuild) handleRuntimeFilter(
 		hashBuild.sendRuntimeFilter(runtimeFilter, spec, proc)
 		return nil
 	}
+	prepared, err := keyVec.PrepareShrinkData(proc.Mp(), keyVec.Length() > 1)
+	if err != nil {
+		return err
+	}
+	prepared.Commit()
 	keyVec.GetNulls().Reset()
-	keyVec.InplaceSort()
+	if err := keyVec.InplaceSort(proc.Mp()); err != nil {
+		return err
+	}
 	data, release, err := ctr.hashmapBuilder.marshalRuntimeFilterVector(
 		keyVec,
 		proc.Mp(),
@@ -1486,7 +1493,9 @@ func (hashBuild *HashBuild) materializeSerializedRuntimeFilter(
 	if outputRows == 0 {
 		return nil, nil, 0, true, nil
 	}
-	payload.InplaceSort()
+	if err := payload.InplaceSort(proc.Mp()); err != nil {
+		return nil, nil, 0, false, err
+	}
 	data, release, err =
 		hashBuild.ctr.hashmapBuilder.marshalRuntimeFilterVector(
 			payload,

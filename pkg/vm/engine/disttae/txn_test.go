@@ -2078,7 +2078,7 @@ func TestDupVectorWithoutNulls_ConcurrentSafety(t *testing.T) {
 			require.False(t, dup.HasNull(), "filtered vector should have no NULLs")
 
 			// InplaceSort on the copy should not corrupt original
-			dup.InplaceSort()
+			require.NoError(t, dup.InplaceSort(nil))
 		}()
 	}
 

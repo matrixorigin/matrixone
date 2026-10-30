@@ -87,7 +87,7 @@ func TestReadonlySortAndCompact(t *testing.T) {
 					data, area, lease := destination.data, destination.area, destination.areaLease
 					beforeMP, beforeAccount, calls := mp.CurrNB(), state.account.Snapshot().Used, controller.calls
 					controller.failAt = calls + 1
-					destination.InplaceSortAndCompact()
+					require.NoError(t, destination.InplaceSortAndCompact(nil))
 					require.Equal(t, len(shape.want), destination.Length())
 					require.True(t, destination.GetSorted())
 					for row, value := range shape.want {
@@ -117,7 +117,7 @@ func TestReadonlySortAndCompact(t *testing.T) {
 						require.Equal(t, value, snapshot.GetBytesAt(row))
 					}
 					// Repeated compaction is idempotent and still cannot allocate.
-					destination.InplaceSortAndCompact()
+					require.NoError(t, destination.InplaceSortAndCompact(nil))
 					require.Equal(t, len(shape.want), destination.Length())
 					require.Equal(t, calls, controller.calls)
 					for row, value := range shape.want {

@@ -109,7 +109,9 @@ func normalizeInPayload(data []byte) ([]byte, int, error) {
 	if owned.GetNulls().Any() {
 		return data, owned.Length(), nil
 	}
-	owned.InplaceSortAndCompact() // also sets the sorted flag
+	if err := owned.InplaceSortAndCompact(nil); err != nil {
+		return nil, 0, err
+	} // also sets the sorted flag
 	// Returned directly rather than branched on: there is nothing to unwind here,
 	// and the caller discards the length whenever the error is non-nil.
 	sorted, err := owned.MarshalBinary()

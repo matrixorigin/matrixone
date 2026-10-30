@@ -1213,7 +1213,7 @@ func TestConvertFoldExprToNormal(t *testing.T) {
 							mp := mpool.MustNewZeroNoFixed()
 							vec := vector.NewVec(types.T_int64.ToType())
 							require.NoError(t, vector.AppendFixed[int64](vec, int64(1), false, mp))
-							vec.InplaceSortAndCompact()
+							require.NoError(t, vec.InplaceSortAndCompact(nil))
 							data, err := vec.MarshalBinary()
 							require.NoError(t, err)
 							vec.Free(mp)

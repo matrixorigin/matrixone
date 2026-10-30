@@ -267,7 +267,10 @@ func callSkipLocked(
 		if err != nil {
 			return result, err
 		}
-		output.Shrink(accepted, false)
+		if err = output.Shrink(accepted, false, proc.Mp()); err != nil {
+			output.Clean(proc.Mp())
+			return result, err
+		}
 		result.Batch = output
 		if len(accepted) == 0 && !input.Last() && result.Status != vm.ExecStop {
 			output.Clean(proc.Mp())

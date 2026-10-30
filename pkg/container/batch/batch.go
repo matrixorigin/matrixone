@@ -21,6 +21,8 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"slices"
+	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -1647,38 +1649,110 @@ func (bat *Batch) prepareOwnedDecodeVectors(count int, mp *mpool.MPool) error {
 	return nil
 }
 
-func (bat *Batch) ShrinkByMask(sels *bitmap.Bitmap, negate bool, offset uint64) {
-	if !negate {
-		if sels.Count() == bat.rowCount {
-			return
+// forEachUniqueVector visits each pointer once without allocating on the owned path.
+func forEachUniqueVector(vecs []*vector.Vector, visit func(*vector.Vector) error) error {
+	if len(vecs) > 16 && len(vecs) <= 1024 {
+		return forEachUniqueVectorWide(vecs, visit)
+	}
+	for i, vec := range vecs {
+		if slices.Contains(vecs[:i], vec) {
+			continue
+		}
+		if err := visit(vec); err != nil {
+			return err
 		}
 	}
-
-	for _, vec := range bat.Vecs {
-		vec.ShrinkByMask(sels, negate, offset)
-	}
-
-	if negate {
-		bat.rowCount -= sels.Count()
-		return
-	}
-	bat.rowCount = sels.Count()
+	return nil
 }
 
-func (bat *Batch) Shrink(sels []int64, negate bool) {
-	if !negate {
-		if len(sels) == bat.rowCount {
-			return
+func forEachUniqueVectorWide(vecs []*vector.Vector, visit func(*vector.Vector) error) error {
+	var seen [2048]*vector.Vector
+	for _, vec := range vecs {
+		if vec == nil {
+			return visit(vec)
+		}
+		idx := (uintptr(unsafe.Pointer(vec)) >> 4) & (uintptr(len(seen)) - 1)
+		for seen[idx] != nil && seen[idx] != vec {
+			idx = (idx + 1) & (uintptr(len(seen)) - 1)
+		}
+		if seen[idx] == vec {
+			continue
+		}
+		seen[idx] = vec
+		if err := visit(vec); err != nil {
+			return err
 		}
 	}
-	for _, vec := range bat.Vecs {
-		vec.Shrink(sels, negate)
+	return nil
+}
+
+// PrepareShrinkData prepares every unique vector before any selection is applied.
+// The caller must Commit or Abort all returned preparations.
+func PrepareShrinkData(vecs []*vector.Vector, mp *mpool.MPool, writes bool) ([]*vector.ShrinkDataPreparation, error) {
+	var prepared []*vector.ShrinkDataPreparation
+	err := forEachUniqueVector(vecs, func(vec *vector.Vector) error {
+		p, err := vec.PrepareShrinkData(mp, writes)
+		if err != nil {
+			return err
+		}
+		if p != nil {
+			prepared = append(prepared, p)
+		}
+		return nil
+	})
+	if err != nil {
+		for _, p := range prepared {
+			p.Abort()
+		}
+		return nil, err
+	}
+	return prepared, nil
+}
+
+func (bat *Batch) ShrinkByMask(sels *bitmap.Bitmap, negate bool, offset uint64, mp *mpool.MPool) error {
+	n := sels.Count()
+	if !negate && n == bat.rowCount {
+		return nil
+	}
+	prepared, err := PrepareShrinkData(bat.Vecs, mp, (!negate && n > 0) || (negate && n > 0 && n < bat.rowCount))
+	if err != nil {
+		return err
+	}
+	for _, p := range prepared {
+		p.Commit()
+	}
+	if err := forEachUniqueVector(bat.Vecs, func(vec *vector.Vector) error { return vec.ShrinkByMask(sels, negate, offset, mp) }); err != nil {
+		return err
 	}
 	if negate {
-		bat.rowCount -= len(sels)
-		return
+		bat.rowCount -= n
+	} else {
+		bat.rowCount = n
 	}
-	bat.rowCount = len(sels)
+	return nil
+}
+
+func (bat *Batch) Shrink(sels []int64, negate bool, mp *mpool.MPool) error {
+	n := len(sels)
+	if !negate && n == bat.rowCount {
+		return nil
+	}
+	prepared, err := PrepareShrinkData(bat.Vecs, mp, (!negate && n > 0) || (negate && n > 0 && n < bat.rowCount))
+	if err != nil {
+		return err
+	}
+	for _, p := range prepared {
+		p.Commit()
+	}
+	if err := forEachUniqueVector(bat.Vecs, func(vec *vector.Vector) error { return vec.Shrink(sels, negate, mp) }); err != nil {
+		return err
+	}
+	if negate {
+		bat.rowCount -= n
+	} else {
+		bat.rowCount = n
+	}
+	return nil
 }
 
 func (bat *Batch) Shuffle(sels []int64, m *mpool.MPool) error {

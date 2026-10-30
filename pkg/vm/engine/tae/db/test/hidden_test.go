@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/testutil"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // Testing Steps
@@ -248,7 +249,7 @@ func TestHidden2(t *testing.T) {
 			err := blk.HybridScan(ctx, &view, 0, []int{def.Idx}, common.DefaultAllocator)
 			assert.NoError(t, err)
 			defer view.Close()
-			view.Compact()
+			require.NoError(t, view.Compact())
 			assert.Equal(t, bats[0].Length()-1, view.Length())
 		}
 	}
@@ -313,7 +314,7 @@ func TestHidden2(t *testing.T) {
 				err := blk.HybridScan(ctx, &hidden, uint16(j), []int{schema.PhyAddrKey.Idx}, common.DefaultAllocator)
 				assert.NoError(t, err)
 				defer hidden.Close()
-				hidden.Compact()
+				require.NoError(t, hidden.Compact())
 				rows += hidden.Length()
 			}
 		}

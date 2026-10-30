@@ -404,6 +404,7 @@ func ToTNBatch(cnBat *batch.Batch, mp *mpool.MPool) *Batch {
 func ToTNVector(v *vector.Vector, mp *mpool.MPool) Vector {
 	vec := MakeVector(*v.GetType(), mp)
 	vec.setDownstreamVector(v)
+	vec.(*vectorWrapper).externalVector = true
 	return vec
 }
 
@@ -1312,6 +1313,7 @@ func MakeForeachVectorOp(t types.T, overloads map[types.T]any, args ...any) any 
 func DedupSortedBatches(
 	uniqueIdx int,
 	batches []*batch.Batch,
+	mp *mpool.MPool,
 ) error {
 	if len(batches) == 0 {
 		return nil
@@ -1335,7 +1337,14 @@ func DedupSortedBatches(
 			}
 		}
 		if len(sels) > 0 {
-			batches[i].Shrink(sels, true)
+			// last may point into this batch's leased data, which Shrink can
+			// replace and release before the next batch compares its first key.
+			if i+1 < len(batches) {
+				last = bytes.Clone(last)
+			}
+			if err := batches[i].Shrink(sels, true, mp); err != nil {
+				return err
+			}
 			sels = sels[:0]
 		}
 	}

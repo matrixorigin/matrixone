@@ -98,8 +98,11 @@ func (offset *Offset) Call(proc *process.Process) (vm.CallResult, error) {
 			if err != nil {
 				return vm.CancelResult, err
 			}
-			offset.ctr.buf.Shrink(sels, false)
+			err = offset.ctr.buf.Shrink(sels, false, proc.Mp())
 			vector.PutSels(sels)
+			if err != nil {
+				return vm.CancelResult, err
+			}
 			offset.ctr.seen += uint64(length)
 
 			return vm.CallResult{Batch: offset.ctr.buf, Status: vm.ExecNext}, nil

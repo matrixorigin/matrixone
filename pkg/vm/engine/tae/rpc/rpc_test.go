@@ -607,7 +607,7 @@ func TestApplyDeltaloc(t *testing.T) {
 				blkID := objectio.NewBlockidWithObjectID(meta.ID(), uint16(j))
 				err := tables.HybridScanByBlock(ctx, meta.GetTable(), txn0, &view, schema, []int{def.Idx}, &blkID, common.DefaultAllocator)
 				assert.NoError(t, err)
-				view.Compact()
+				require.NoError(t, view.Compact())
 				length += view.Length()
 			}
 		}

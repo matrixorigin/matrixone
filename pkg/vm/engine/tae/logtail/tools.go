@@ -109,13 +109,15 @@ func makeRespBatchFromSchema(schema *catalog.Schema, mp *mpool.MPool) *container
 
 // GetDataWindowForLogtail returns the batch according to the writeSchema.
 // columns are sorted by seqnum and vacancy is filled with zero value
-func DataChangeToLogtailBatch(src *containers.BatchWithVersion) *containers.Batch {
+func DataChangeToLogtailBatch(src *containers.BatchWithVersion) (*containers.Batch, error) {
 	seqnums := src.Seqnums
 	if len(seqnums) != len(src.Vecs) {
 		panic("unmatched seqnums length")
 	}
 
-	filterAbortedLogtailRows(src)
+	if err := filterAbortedLogtailRows(src); err != nil {
+		return nil, err
+	}
 
 	// sort by seqnum
 	sort.Sort(src)
@@ -148,15 +150,17 @@ func DataChangeToLogtailBatch(src *containers.BatchWithVersion) *containers.Batc
 		}
 		bat.AddVector(src.Attrs[i], src.Vecs[i].TryConvertConst())
 	}
-	return bat
+	return bat, nil
 }
 
-func TombstoneChangeToLogtailBatch(src *containers.BatchWithVersion) *containers.Batch {
+func TombstoneChangeToLogtailBatch(src *containers.BatchWithVersion) (*containers.Batch, error) {
 	seqnums := src.Seqnums
 	if len(seqnums) != len(src.Vecs) {
 		panic("unmatched seqnums length")
 	}
-	filterAbortedLogtailRows(src)
+	if err := filterAbortedLogtailRows(src); err != nil {
+		return nil, err
+	}
 
 	bat := containers.NewBatchWithCapacity(3)
 
@@ -173,10 +177,12 @@ func TombstoneChangeToLogtailBatch(src *containers.BatchWithVersion) *containers
 		bat.AddVector(attr, vec)
 	}
 
-	return bat
+	return bat, nil
 }
 
-func filterAbortedLogtailRows(src *containers.BatchWithVersion) {
+func filterAbortedLogtailRows(src *containers.BatchWithVersion) error {
+	oldDeletes := src.Deletes
+	src.Deletes = oldDeletes.Clone()
 	abortPos, commitTSPos := -1, -1
 	for i, seqnum := range src.Seqnums {
 		switch seqnum {
@@ -201,8 +207,20 @@ func filterAbortedLogtailRows(src *containers.BatchWithVersion) {
 		}
 	}
 	if src.HasDelete() {
-		src.Compact()
+		workingDeletes := src.Deletes
+		if err := src.Compact(); err != nil {
+			workingDeletes.Reset()
+			src.Deletes = oldDeletes
+			return err
+		}
+		workingDeletes.Reset()
+	} else {
+		if src.Deletes != nil {
+			src.Deletes.Reset()
+		}
+		src.Deletes = oldDeletes
 	}
+	return nil
 }
 
 func containersBatchToProtoBatch(bat *containers.Batch) (*api.Batch, error) {

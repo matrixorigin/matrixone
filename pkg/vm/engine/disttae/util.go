@@ -908,13 +908,24 @@ func isColumnsBatchPerfectlySplitted(bs []*batch.Batch) bool {
 func shrinkBatchWithRowids(
 	bat *batch.Batch,
 	toDeleteOffsets []int64,
-) {
-	bat.Shrink(toDeleteOffsets, true)
+	mp *mpool.MPool,
+) error {
+	prepared, err := batch.PrepareShrinkData(bat.Vecs, mp, len(toDeleteOffsets) < bat.RowCount())
+	if err != nil {
+		return err
+	}
+	for _, p := range prepared {
+		p.Commit()
+	}
+	if err := bat.Shrink(toDeleteOffsets, true, mp); err != nil {
+		return err
+	}
 	if bat.RowCount() == 0 {
-		return
+		return nil
 	}
 	rowids := vector.MustFixedColWithTypeCheck[objectio.Rowid](bat.Vecs[0])
 	for i := range rowids {
 		rowids[i].SetRowOffset(uint32(i))
 	}
+	return nil
 }

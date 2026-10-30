@@ -188,6 +188,7 @@ func TestSplitDataBranchBatchForNativeUpdate(t *testing.T) {
 	defer ctrl.Finish()
 
 	tblStuff := newTestBranchTableStuff(ctrl)
+	t.Cleanup(func() { tblStuff.retPool.freeAllRetBatches(ses.proc.Mp()) })
 	bat := tblStuff.retPool.acquireRetBatch(tblStuff, false)
 	defer tblStuff.retPool.releaseRetBatch(bat, false)
 	require.NoError(t, appendTupleToBat(
@@ -791,6 +792,7 @@ func TestDiffDataHelper_ConflictAcceptExpandUpdate(t *testing.T) {
 	defer ctrl.Finish()
 
 	tblStuff := newTestBranchTableStuff(ctrl)
+	t.Cleanup(func() { tblStuff.retPool.freeAllRetBatches(ses.proc.Mp()) })
 	tarHashmap := buildTestBranchHashmap(
 		t, mp, tblStuff.def.colTypes,
 		[][]any{{int64(7), "after", "target"}},
@@ -844,6 +846,7 @@ func TestDiffDataHelper_ConflictAcceptExpandUpdateWithSparseCommonIdxes(t *testi
 	defer ctrl.Finish()
 
 	tblStuff := newTestBranchTableStuff(ctrl)
+	t.Cleanup(func() { tblStuff.retPool.freeAllRetBatches(ses.proc.Mp()) })
 	tblStuff.def.colNames = []string{"id", "target_only", "name"}
 	tblStuff.def.colTypes = []types.Type{
 		types.T_int64.ToType(),

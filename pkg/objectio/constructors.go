@@ -328,6 +328,9 @@ func MustVectorToCachedWithMpool(toVec *vector.Vector, data fscache.Data, mp *mp
 		return MustVectorToCached(toVec, data)
 	}
 	buf := marked.validatedVectorBackingForScope()
+	if toVec == nil || toVec.HasOwnedBackingStorage() {
+		return moerr.NewInvalidInputNoCtx("cannot replace vector storage without freeing its owner")
+	}
 	warnVectorDestinationNotEmpty(toVec, len(buf))
 	var borrowed vector.Vector
 	if err := mustVectorTo(&borrowed, buf, true); err != nil {

@@ -481,7 +481,9 @@ func ivfCentroidPrefixFilter(
 	// as well would claim sortedness even for an element type its switch does not
 	// handle, which is the assumption this fix exists to remove. Compaction is why
 	// Len below is taken from the vector, not from centroidIDs.
-	prefixVec.InplaceSortAndCompact()
+	if err := prefixVec.InplaceSortAndCompact(mp); err != nil {
+		return nil, err
+	}
 	data, err := prefixVec.MarshalBinary()
 	if err != nil {
 		return nil, err
@@ -602,7 +604,9 @@ func (idx *IvfflatSearchIndex[T]) filterEntryDistanceRange(
 				sels = append(sels, int64(row))
 			}
 		}
-		selectRelationBatchRows(bat, sels, loadedColumns)
+		if _, err := selectRelationBatchRows(bat, sels, loadedColumns, res.Mp); err != nil {
+			return err
+		}
 	}
 	return nil
 }

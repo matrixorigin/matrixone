@@ -720,7 +720,9 @@ func TestBlockDataReadWithFilterDefersPayload(t *testing.T) {
 					sels = append(sels, int64(i))
 				}
 			}
-			bat.Vecs[0].Shrink(sels, false)
+			if err := bat.Vecs[0].Shrink(sels, false, queryMP); err != nil {
+				return engine.ReaderFilterResult{}, err
+			}
 			bat.SetRowCount(len(sels))
 			return engine.ReaderFilterResult{Sels: sels}, nil
 		}))
@@ -810,7 +812,9 @@ func TestBlockDataReadWithFilterDefersPayload(t *testing.T) {
 			[]int{0},
 			func(bat *batch.Batch, _ []int) (engine.ReaderFilterResult, error) {
 				sels := []int64{1}
-				bat.Vecs[0].Shrink(sels, false)
+				if err := bat.Vecs[0].Shrink(sels, false, queryMP); err != nil {
+					return engine.ReaderFilterResult{}, err
+				}
 				bat.SetRowCount(1)
 				return engine.ReaderFilterResult{Sels: sels}, nil
 			},
@@ -900,7 +904,9 @@ func TestBlockDataReadWithFilterAppliesVectorTopKAfterResidual(t *testing.T) {
 					sels = append(sels, int64(pos))
 				}
 			}
-			bat.Vecs[0].Shrink(sels, false)
+			if err := bat.Vecs[0].Shrink(sels, false, queryMP); err != nil {
+				return engine.ReaderFilterResult{}, err
+			}
 			bat.SetRowCount(len(sels))
 			return engine.ReaderFilterResult{Sels: sels}, nil
 		},
@@ -936,7 +942,9 @@ func TestBlockDataReadWithFilterAppliesVectorTopKAfterResidual(t *testing.T) {
 					sels = append(sels, int64(pos))
 				}
 			}
-			bat.Vecs[0].Shrink(sels, false)
+			if err := bat.Vecs[0].Shrink(sels, false, queryMP); err != nil {
+				return engine.ReaderFilterResult{}, err
+			}
 			bat.SetRowCount(len(sels))
 			return engine.ReaderFilterResult{Sels: sels}, nil
 		},
@@ -1044,7 +1052,9 @@ func TestBlockDataReadWithFilterAppliesVectorTopKAfterResidual(t *testing.T) {
 				if tc.filterSels == nil {
 					return engine.ReaderFilterResult{All: true}, nil
 				}
-				bat.Vecs[0].Shrink(tc.filterSels, false)
+				if err := bat.Vecs[0].Shrink(tc.filterSels, false, queryMP); err != nil {
+					return engine.ReaderFilterResult{}, err
+				}
 				bat.SetRowCount(len(tc.filterSels))
 				return engine.ReaderFilterResult{Sels: tc.filterSels}, nil
 			}
@@ -1367,7 +1377,9 @@ func TestBlockDataReadInnerAppendableVisibility(t *testing.T) {
 				visibleRowids[1].GetRowOffset(),
 			})
 			sels := []int64{1}
-			bat.Vecs[1].Shrink(sels, false)
+			if err := bat.Vecs[1].Shrink(sels, false, queryMP); err != nil {
+				return engine.ReaderFilterResult{}, err
+			}
 			bat.SetRowCount(1)
 			return engine.ReaderFilterResult{Sels: sels}, nil
 		},

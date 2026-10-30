@@ -854,7 +854,9 @@ func convertFoldExprToNormal(expr *plan.Expr) (*plan.Expr, bool) {
 			if vec.IsConstNull() || vec.GetNulls().Any() {
 				return nil, false
 			}
-			vec.InplaceSortAndCompact()
+			if err := vec.InplaceSortAndCompact(nil); err != nil {
+				return nil, false
+			}
 			data, err := vec.MarshalBinary()
 			if err != nil {
 				return nil, false

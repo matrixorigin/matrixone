@@ -1697,8 +1697,29 @@ func (ctr *container) filterNullTimeRows(bat *batch.Batch, proc *process.Process
 			sels = append(sels, int64(i))
 		}
 	}
-	ts.Shrink(sels, false)
-	bat.Shrink(sels, false)
+	vecs := append([]*vector.Vector{ts}, bat.Vecs...)
+	prepared, err := batch.PrepareShrinkData(vecs, proc.Mp(), len(sels) > 0)
+	if err != nil {
+		return false, err
+	}
+	for _, p := range prepared {
+		p.Commit()
+	}
+	inBatch := false
+	for _, vec := range bat.Vecs {
+		if vec == ts {
+			inBatch = true
+			break
+		}
+	}
+	if !inBatch {
+		if err := ts.Shrink(sels, false, proc.Mp()); err != nil {
+			return false, err
+		}
+	}
+	if err := bat.Shrink(sels, false, proc.Mp()); err != nil {
+		return false, err
+	}
 	return len(sels) > 0, nil
 }
 

@@ -215,7 +215,11 @@ func (ctr *container) cacheBatch(
 			return nil, err
 		}
 		if insertedRows != nil {
-			appBat.Shrink(insertedRows, false)
+			if err := appBat.Shrink(insertedRows, false, proc.Mp()); err != nil {
+				appBat.Clean(proc.Mp())
+				replacement.Rollback()
+				return nil, err
+			}
 		}
 		if err = replacement.Commit(appBat); err != nil {
 			appBat.Clean(proc.Mp())
@@ -242,7 +246,12 @@ func (ctr *container) cacheBatch(
 		appBat.Attrs = append(appBat.Attrs[:0], src.Attrs...)
 		appBat.SetRowCount(src.RowCount())
 		if insertedRows != nil {
-			appBat.Shrink(insertedRows, false)
+			if err := appBat.Shrink(insertedRows, false, proc.Mp()); err != nil {
+				appBat.Clean(proc.Mp())
+				ctr.freeBats[ctr.i] = nil
+				replacement.Discard()
+				return nil, err
+			}
 		}
 		if err = replacement.Commit(appBat); err != nil {
 			appBat.Clean(proc.Mp())
@@ -262,7 +271,11 @@ func (ctr *container) cacheBatch(
 		return nil, err
 	}
 	if insertedRows != nil {
-		appBat.Shrink(insertedRows, false)
+		if err := appBat.Shrink(insertedRows, false, proc.Mp()); err != nil {
+			appBat.Clean(proc.Mp())
+			replacement.Rollback()
+			return nil, err
+		}
 	}
 	if err = replacement.Commit(appBat); err != nil {
 		appBat.Clean(proc.Mp())

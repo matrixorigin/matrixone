@@ -213,7 +213,7 @@ func makeIndexTblScan(builder *QueryBuilder, bindCtx *BindContext, filterExp *pl
 		// and an IN list arrives in whatever order it was written, so an unsorted
 		// one is refused for pruning and scans every block. Compaction can shrink
 		// it, which is why Len below is read from the vector afterwards.
-		arg1ForPrefixInVec.InplaceSortAndCompact()
+		_ = arg1ForPrefixInVec.InplaceSortAndCompact(mp) // freshly built owned vector; no COW allocation
 		arg1ForPrefixInBytes, _ := arg1ForPrefixInVec.MarshalBinary()
 		arg1ForPrefixInLitVec := &plan.Expr{
 			Typ: makePlan2Type(&varcharType),

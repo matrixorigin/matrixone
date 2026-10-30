@@ -1968,7 +1968,9 @@ func constantFoldWithPreparedExactSource(
 
 		// Nullable IN-lists must keep their null bitmap aligned with values.
 		if !vec.IsConstNull() && !vec.GetNulls().Any() {
-			vec.InplaceSortAndCompact()
+			if err := vec.InplaceSortAndCompact(proc.Mp()); err != nil {
+				return nil, err
+			}
 		}
 		data, err := vec.MarshalBinary()
 		if err != nil {
@@ -8596,7 +8598,9 @@ func EvalFoldExpr(proc *process.Process, expr *Expr, executors *[]colexec.Expres
 			}
 			// Nullable folded lists must keep their null bitmap aligned with values.
 			if !vec.IsConstNull() && !vec.GetNulls().Any() {
-				vec.InplaceSortAndCompact()
+				if err := vec.InplaceSortAndCompact(proc.Mp()); err != nil {
+					return err
+				}
 			}
 			data, err = vec.MarshalBinary()
 			if err != nil {

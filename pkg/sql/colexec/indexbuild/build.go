@@ -372,8 +372,15 @@ func (ctr *container) handleRuntimeFilter(ap *IndexBuild, proc *process.Process)
 	// NULLs are irrelevant for IN-filter: clear the bitmap before sorting.
 	// InplaceSort preserves exact duplicate representations and marks supported
 	// payload types sorted for pruning.
+	prepared, err := vec.PrepareShrinkData(proc.Mp(), vec.Length() > 1)
+	if err != nil {
+		return err
+	}
+	prepared.Commit()
 	vec.GetNulls().Reset()
-	vec.InplaceSort()
+	if err := vec.InplaceSort(proc.Mp()); err != nil {
+		return err
+	}
 	data, release, err := runtimefilter.MarshalExactFilterVector(
 		vec,
 		proc.Mp(),

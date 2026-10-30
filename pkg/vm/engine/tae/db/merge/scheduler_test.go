@@ -117,7 +117,7 @@ func (e *delayedCompletionExecutor) ExecuteFor(_ catalog.MergeTable, task mergeT
 }
 
 type dummyCatalogSource struct {
-	settingsFn func() (*batch.Batch, func())
+	settingsFn func() (*batch.Batch, func(), error)
 	initTables []catalog.MergeTable
 }
 
@@ -133,7 +133,7 @@ func (c *dummyCatalogSource) InitSource() iter.Seq[catalog.MergeTable] {
 
 func (c *dummyCatalogSource) SetMergeNotifier(catalog.MergeNotifierOnCatalog) {}
 
-var oneGoodOneBad = func() (*batch.Batch, func()) {
+var oneGoodOneBad = func() (*batch.Batch, func(), error) {
 	bat := batch.New([]string{"account_id", "tid", "version", "settings"})
 	// first row with bad settings leading to parse error
 	bat.Vecs[0] = vector.NewVec(types.T_uint32.ToType())
@@ -155,10 +155,10 @@ var oneGoodOneBad = func() (*batch.Batch, func()) {
 
 	bat.SetRowCount(2)
 
-	return bat, func() { bat.Clean(common.MergeAllocator) }
+	return bat, func() { bat.Clean(common.MergeAllocator) }, nil
 }
 
-func (c *dummyCatalogSource) GetMergeSettingsBatchFn() func() (*batch.Batch, func()) {
+func (c *dummyCatalogSource) GetMergeSettingsBatchFn() func() (*batch.Batch, func(), error) {
 	return c.settingsFn
 }
 
@@ -835,9 +835,9 @@ func TestStoppedGenerationIOCannotCrossRestart(t *testing.T) {
 	stoppedGeneration.ioChan <- &MMsg{
 		Kind: MMsgKindConfigBootstrap,
 		Value: MMsgConfigBootstrap{
-			ReadSettingsBatch: func() (*batch.Batch, func()) {
+			ReadSettingsBatch: func() (*batch.Batch, func(), error) {
 				staleIOProcessed.Store(true)
-				return nil, func() {}
+				return nil, func() {}, nil
 			},
 		},
 		generation: stoppedGeneration,

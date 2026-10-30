@@ -350,7 +350,7 @@ func TestEvaluateFilterByZoneMapKeepsBlockForUnflaggedArrayIn(t *testing.T) {
 	defer ordered.Free(mp)
 	require.NoError(t, vector.AppendArray(ordered, []float32{3}, false, mp))
 	require.NoError(t, vector.AppendArray(ordered, []float32{2}, false, mp))
-	ordered.InplaceSortAndCompact()
+	require.NoError(t, ordered.InplaceSortAndCompact(nil))
 	require.True(t, ordered.GetSorted())
 	require.False(t, zm.AnyIn(ordered),
 		"the direct ArrayCompare oracle must prune the disjoint block")
@@ -374,7 +374,7 @@ func TestZoneMapInVectorKeepsNarrowArraysConservative(t *testing.T) {
 	defer vec.Free(mp)
 	require.NoError(t, vector.AppendArray(vec, []int8{2}, false, mp))
 	require.NoError(t, vector.AppendArray(vec, []int8{1}, false, mp))
-	vec.InplaceSortAndCompact()
+	require.NoError(t, vec.InplaceSortAndCompact(nil))
 	require.True(t, vec.GetSorted(), "the control must carry sorted metadata")
 	data, err := vec.MarshalBinary()
 	require.NoError(t, err)
@@ -431,7 +431,7 @@ func TestEvaluateFilterByZoneMapKeepsBlockForPrefixNeedleOfAnother(t *testing.T)
 				require.NoError(t, vector.AppendBytes(vec, []byte(s), false, mp))
 			}
 			if flagged {
-				vec.InplaceSortAndCompact()
+				require.NoError(t, vec.InplaceSortAndCompact(nil))
 				require.True(t, vec.GetSorted(), "the payload really is flagged sorted")
 			}
 			data, err := vec.MarshalBinary()

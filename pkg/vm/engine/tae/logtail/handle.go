@@ -352,7 +352,11 @@ func (b *TableLogtailRespBuilder) BuildResp() (api.SyncLogTailResp, error) {
 	}
 	slices.Sort(keys)
 	for _, k := range keys {
-		if err := tryAppendEntry(api.Entry_Insert, TableRespKind_Data, DataChangeToLogtailBatch(b.dataInsBatches[k]), k); err != nil {
+		bat, err := DataChangeToLogtailBatch(b.dataInsBatches[k])
+		if err != nil {
+			return empty, err
+		}
+		if err := tryAppendEntry(api.Entry_Insert, TableRespKind_Data, bat, k); err != nil {
 			return empty, err
 		}
 	}
@@ -360,7 +364,11 @@ func (b *TableLogtailRespBuilder) BuildResp() (api.SyncLogTailResp, error) {
 		panic(fmt.Sprintf("logic err, batch %v", b.dataDelBatches))
 	}
 	for _, bat := range b.dataDelBatches {
-		if err := tryAppendEntry(api.Entry_Delete, TableRespKind_Data, TombstoneChangeToLogtailBatch(bat), 0); err != nil {
+		output, err := TombstoneChangeToLogtailBatch(bat)
+		if err != nil {
+			return empty, err
+		}
+		if err := tryAppendEntry(api.Entry_Delete, TableRespKind_Data, output, 0); err != nil {
 			return empty, err
 		}
 	}

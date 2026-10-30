@@ -355,7 +355,9 @@ func (v *Vector) CanSetAllocationAccount(
 }
 
 func (v *Vector) hasBackingStorage() bool {
-	return cap(v.data) != 0 ||
+	return v.dataLease != nil || v.areaLease != nil ||
+		v.nsp.HasBorrowedValidity() || v.gsp.HasBorrowedValidity() ||
+		cap(v.data) != 0 ||
 		cap(v.area) != 0 ||
 		cap(v.prepareParamKinds) != 0 ||
 		cap(v.stringSources) != 0 ||
@@ -371,12 +373,17 @@ func (v *Vector) hasBackingStorage() bool {
 		v.gsp.GetBitmap().ExternalStorageCapacity() != 0
 }
 
-// hasOwnedBackingStorage reports storage that UnmarshalBinary cannot replace
-// without losing an MPool-owned allocation. Data and area marked cantFree are
-// borrowed aliases; ordinary bitmap backing is Go-owned and remains GC-visible
-// after replacement. Accounted bitmap storage is explicit external storage.
+// HasOwnedBackingStorage reports whether replacing this Vector would discard
+// an allocation or a retained lease that must first be released.
+func (v *Vector) HasOwnedBackingStorage() bool {
+	return v != nil && v.hasOwnedBackingStorage()
+}
+
+// hasOwnedBackingStorage includes leased backing and MPool-owned allocations.
+// Legacy aliases and Go-owned bitmap storage can be replaced without release.
 func (v *Vector) hasOwnedBackingStorage() bool {
 	return v.dataLease != nil || v.areaLease != nil ||
+		v.nsp.HasBorrowedValidity() || v.gsp.HasBorrowedValidity() ||
 		cap(v.data) != 0 && !v.cantFreeData ||
 		cap(v.area) != 0 && !v.cantFreeArea ||
 		cap(v.prepareParamKinds) != 0 ||

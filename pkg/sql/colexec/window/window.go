@@ -3899,15 +3899,6 @@ func searchRightWithLocation(loc *time.Location, start, end, rowIdx int, vec *ve
 		if desc {
 			cmpl = genericLess[types.Datetime]
 		}
-		i := start
-		for ; i < end; i++ {
-			if !vec.GetNulls().Contains(uint64(i)) {
-				break
-			}
-		}
-		for j := start; j < i; j++ {
-			col[j] = col[i]
-		}
 		if expr == nil {
 			right = genericSearchEqualRight(rowIdx, end-1, col, col[rowIdx], genericEqual[types.Datetime])
 		} else {

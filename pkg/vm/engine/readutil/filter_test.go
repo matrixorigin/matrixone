@@ -1173,7 +1173,7 @@ func TestConstructBasePKFilterWithOr(t *testing.T) {
 		for _, v := range vals {
 			vector.AppendFixed(vec, v, false, m)
 		}
-		vec.InplaceSort()
+		require.NoError(t, vec.InplaceSort(nil))
 		needFreeVecs = append(needFreeVecs, vec)
 		return MakeInExprForTest[int64](MakeColExprForTest(0, types.T_int64), vals, types.T_int64, m)
 	}
@@ -1651,7 +1651,7 @@ func TestConstructBlockPKFilter(t *testing.T) {
 							for x := lb; x <= ub; x++ {
 								vector.AppendBytes(vec, []byte(strconv.Itoa(int(x))), false, mp)
 							}
-							vec.InplaceSort()
+							require.NoError(t, vec.InplaceSort(nil))
 						}
 
 						str1 := strconv.Itoa(int(lb))
@@ -1731,7 +1731,7 @@ func TestConstructBlockPKFilter(t *testing.T) {
 									vector.AppendFixed[types.Uuid](vec, u, false, mp)
 								}
 							}
-							vec.InplaceSort()
+							require.NoError(t, vec.InplaceSort(nil))
 						}
 
 						u := encodeIntToUUID(int32(lb))
@@ -1874,8 +1874,7 @@ func TestConstructBlockPKFilter(t *testing.T) {
 							xx := strconv.Itoa(int(x))
 							vector.AppendBytes(inputVec, []byte(xx), false, mp)
 						}
-						inputVec.InplaceSort()
-
+						require.NoError(t, inputVec.InplaceSort(nil))
 					case types.T_date:
 						for x := lb - 1; x <= ub+1; x++ {
 							xx := types.Date(x)
@@ -1907,8 +1906,7 @@ func TestConstructBlockPKFilter(t *testing.T) {
 							}
 						}
 
-						inputVec.InplaceSort()
-
+						require.NoError(t, inputVec.InplaceSort(nil))
 					case types.T_decimal256:
 						for x := lb - 1; x <= ub+1; x++ {
 							xx := types.Decimal256{B0_63: uint64(x)}
@@ -1920,8 +1918,7 @@ func TestConstructBlockPKFilter(t *testing.T) {
 							}
 						}
 
-						inputVec.InplaceSort()
-
+						require.NoError(t, inputVec.InplaceSort(nil))
 					case types.T_uuid:
 						for x := lb - 1; x <= ub+1; x++ {
 							xx := encodeIntToUUID(int32(x))
@@ -1931,7 +1928,7 @@ func TestConstructBlockPKFilter(t *testing.T) {
 								vector.AppendFixed[types.Uuid](inputVec, xx, false, mp)
 							}
 						}
-						inputVec.InplaceSort()
+						require.NoError(t, inputVec.InplaceSort(nil))
 					}
 
 					if opOnBinary(op) && (ty == types.T_float32 || ty == types.T_float64) {
@@ -2061,7 +2058,7 @@ func TestConstructBlockPKFilterWithOr(t *testing.T) {
 			appendVal(sorted, ty, i, useBinary)
 		}
 		if ty.ToType().IsVarlen() || useBinary {
-			sorted.InplaceSort()
+			require.NoError(t, sorted.InplaceSort(nil))
 		}
 
 		unsorted = vector.NewVec(ty.ToType())
@@ -2083,7 +2080,7 @@ func TestConstructBlockPKFilterWithOr(t *testing.T) {
 		for _, v := range vals {
 			appendVal(vec, ty, v, useBinary)
 		}
-		vec.InplaceSort()
+		require.NoError(t, vec.InplaceSort(nil))
 		return vec
 	}
 

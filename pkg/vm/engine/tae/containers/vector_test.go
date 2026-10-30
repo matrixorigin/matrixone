@@ -23,6 +23,7 @@ import (
 
 	"github.com/RoaringBitmap/roaring/v2"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	movec "github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -360,9 +361,9 @@ func TestVector8(t *testing.T) {
 	vec.Append(int32(4), false)
 	vec.Append(int32(5), false)
 	assert.True(t, vec.IsNull(3))
-	vec.Delete(1)
+	require.NoError(t, vec.Delete(1))
 	assert.True(t, vec.IsNull(2))
-	vec.Delete(3)
+	require.NoError(t, vec.Delete(3))
 	assert.True(t, vec.IsNull(2))
 	vec.Update(1, nil, true)
 	assert.True(t, vec.IsNull(1))
@@ -371,7 +372,7 @@ func TestVector8(t *testing.T) {
 	assert.True(t, vec.IsNull(1))
 	assert.True(t, vec.IsNull(2))
 	assert.True(t, vec.IsNull(4))
-	vec.Compact(roaring.BitmapOf(0, 2))
+	require.NoError(t, vec.Compact(roaring.BitmapOf(0, 2)))
 	assert.Equal(t, 3, vec.Length())
 	assert.True(t, vec.IsNull(0))
 	assert.True(t, vec.IsNull(2))
@@ -404,7 +405,7 @@ func TestCompact(t *testing.T) {
 	t.Log(vec.String())
 	deletes := roaring.BitmapOf(0)
 	//{null}
-	vec.Compact(deletes)
+	require.NoError(t, vec.Compact(deletes))
 	//{}
 	assert.Equal(t, 0, vec.Length())
 
@@ -413,7 +414,7 @@ func TestCompact(t *testing.T) {
 	vec.Append(nil, true)
 	deletes = roaring.BitmapOf(0, 1)
 	//{n,n,n}
-	vec.Compact(deletes)
+	require.NoError(t, vec.Compact(deletes))
 	//{n}
 	assert.Equal(t, 1, vec.Length())
 	assert.True(t, vec.IsNull(0))
@@ -424,7 +425,7 @@ func TestCompact(t *testing.T) {
 	vec.Append(nil, true)
 	//{null,var,null,var,null}
 	deletes = roaring.BitmapOf(1, 3)
-	vec.Compact(deletes)
+	require.NoError(t, vec.Compact(deletes))
 	//{null,null,null}
 	assert.Equal(t, 3, vec.Length())
 	assert.True(t, vec.IsNull(0))
@@ -1318,4 +1319,145 @@ func TestVectorWrapper_WriteTo_ConcurrentCalls(t *testing.T) {
 			assert.NotEqual(t, results[i], results[j], "different vectors should produce different output")
 		}
 	}
+}
+
+func TestCompactPreservesExternalBorrowedVector(t *testing.T) {
+	mp := mpool.MustNewZero()
+	data := types.EncodeSlice([]int64{11, 22, 33})
+	releases := 0
+	lease, err := movec.NewRefCountedBufferLease(data, int64(cap(data)), func() { releases++ })
+	require.NoError(t, err)
+	original, err := movec.NewBorrowedFixedVector(types.T_int64.ToType(), 3, data, lease)
+	require.NoError(t, err)
+	lease.Release()
+	t.Cleanup(func() { original.Free(mp) })
+	wrapped := ToTNVector(original, mp)
+	t.Cleanup(wrapped.Close)
+	require.NoError(t, wrapped.Compact(roaring.BitmapOf(0)))
+	require.Equal(t, []int64{22, 33}, movec.MustFixedColNoTypeCheck[int64](wrapped.GetDownstreamVector()))
+	require.Equal(t, []int64{11, 22, 33}, movec.MustFixedColNoTypeCheck[int64](original))
+	require.Zero(t, releases)
+	original.Free(mp)
+	require.Equal(t, 1, releases)
+}
+
+func TestCompactBatchRollsBackOnSecondCopy(t *testing.T) {
+	registry, err := mpool.NewAllocationAccountRegistry(1, 1)
+	require.NoError(t, err)
+	account, err := registry.Open(16 << 20)
+	require.NoError(t, err)
+	selection, err := movec.NewAllocationAccountSelection(account, 1, 1, 2, 3, 4)
+	require.NoError(t, err)
+	mp := mpool.MustNewZero()
+	bat := NewEmptyBatch()
+	var originals []*movec.Vector
+	var releases int
+	t.Cleanup(func() {
+		bat.Close()
+		for _, v := range originals {
+			v.Free(mp)
+		}
+		require.Equal(t, len(originals), releases)
+		require.Zero(t, mp.CurrNB())
+		snapshot := account.Seal()
+		require.Zero(t, snapshot.Used)
+		_, err := registry.Finalize(account)
+		require.NoError(t, err)
+		mpool.DeleteMPool(mp)
+	})
+	for i := 0; i < 2; i++ {
+		data := types.EncodeSlice([]int64{11, 22, 33})
+		lease, err := movec.NewRefCountedBufferLease(data, int64(cap(data)), func() { releases++ })
+		require.NoError(t, err)
+		v, err := movec.NewBorrowedFixedVectorWithAllocation(types.T_int64.ToType(), 3, data, lease, selection)
+		lease.Release()
+		require.NoError(t, err)
+		originals = append(originals, v)
+		bat.AddVector(fmt.Sprint(i), ToTNVector(v, mp))
+	}
+	bat.Delete(0)
+	require.Error(t, bat.Compact())
+	require.True(t, bat.HasDelete())
+	for i, v := range originals {
+		require.Same(t, v, bat.Vecs[i].GetDownstreamVector())
+		require.Equal(t, []int64{11, 22, 33}, movec.MustFixedColNoTypeCheck[int64](v))
+	}
+	require.Zero(t, mp.CurrNB())
+	require.Zero(t, releases)
+}
+
+func TestCompactBatchWithPlaceholder(t *testing.T) {
+	mp := mpool.MustNewZero()
+	t.Cleanup(func() { require.Zero(t, mp.CurrNB()); mpool.DeleteMPool(mp) })
+	bat := NewEmptyBatch()
+	t.Cleanup(bat.Close)
+	vec := MakeVector(types.T_int64.ToType(), mp)
+	vec.Append(int64(11), false)
+	vec.Append(int64(22), false)
+	bat.AddVector("value", vec)
+	bat.AppendPlaceholder()
+	bat.Delete(0)
+	require.NoError(t, bat.Compact())
+	require.False(t, bat.HasDelete())
+	require.Equal(t, []int64{22}, movec.MustFixedColNoTypeCheck[int64](vec.GetDownstreamVector()))
+	require.Same(t, EMPTY_VECTOR, bat.Vecs[1])
+}
+
+func TestDedupSortedBatchesRetainsBoundaryKey(t *testing.T) {
+	mp := mpool.MustNewZero()
+	data := types.EncodeSlice([]int64{1, 2, 2})
+	releases := 0
+	lease, err := movec.NewRefCountedBufferLease(data, int64(cap(data)), func() { releases++; clear(data) })
+	require.NoError(t, err)
+	first, err := movec.NewBorrowedFixedVector(types.T_int64.ToType(), 3, data, lease)
+	require.NoError(t, err)
+	lease.Release()
+	b1 := batch.NewOffHeap([]string{"key"})
+	b1.Vecs[0] = first
+	b1.SetRowCount(3)
+	b2 := batch.NewOffHeap([]string{"key"})
+	b2.Vecs[0] = movec.NewOffHeapVecWithType(types.T_int64.ToType())
+	t.Cleanup(func() { b1.Clean(mp); b2.Clean(mp); require.Zero(t, mp.CurrNB()); mpool.DeleteMPool(mp) })
+	require.NoError(t, movec.AppendFixedList(b2.Vecs[0], []int64{2, 3}, nil, mp))
+	b2.SetRowCount(2)
+	require.NoError(t, DedupSortedBatches(0, []*batch.Batch{b1, b2}, mp))
+	require.Equal(t, 1, releases)
+	require.Equal(t, []int64{1, 2}, movec.MustFixedColNoTypeCheck[int64](b1.Vecs[0]))
+	require.Equal(t, []int64{3}, movec.MustFixedColNoTypeCheck[int64](b2.Vecs[0]))
+}
+
+func TestCompactReleasesOwnedBorrowedVector(t *testing.T) {
+	mp := mpool.MustNewZero()
+	data := types.EncodeSlice([]int64{11, 22, 33})
+	releases := 0
+	lease, err := movec.NewRefCountedBufferLease(data, int64(cap(data)), func() { releases++ })
+	require.NoError(t, err)
+	original, err := movec.NewBorrowedFixedVector(types.T_int64.ToType(), 3, data, lease)
+	require.NoError(t, err)
+	lease.Release()
+	wrapped := MakeVector(types.T_int64.ToType(), mp)
+	wrapped.setDownstreamVector(original)
+	t.Cleanup(wrapped.Close)
+	require.NoError(t, wrapped.Compact(roaring.BitmapOf(0)))
+	require.Equal(t, 1, releases)
+	require.Equal(t, []int64{22, 33}, movec.MustFixedColNoTypeCheck[int64](wrapped.GetDownstreamVector()))
+}
+
+func TestCompactReplacesPooledVector(t *testing.T) {
+	mp := mpool.MustNewZero()
+	data := types.EncodeSlice([]int64{11, 22, 33})
+	releases := 0
+	lease, err := movec.NewRefCountedBufferLease(data, int64(cap(data)), func() { releases++ })
+	require.NoError(t, err)
+	original, err := movec.NewBorrowedFixedVector(types.T_int64.ToType(), 3, data, lease)
+	require.NoError(t, err)
+	lease.Release()
+	element := &vectorPoolElement{mp: mp, vec: original, pool: &VectorPool{maxAlloc: 1 << 20}}
+	element.inUse.Store(true)
+	wrapped := &vectorWrapper{wrapped: original, mpool: mp, element: element}
+	t.Cleanup(func() { wrapped.Close(); element.vec.Free(mp) })
+	require.NoError(t, wrapped.Compact(roaring.BitmapOf(0)))
+	require.Same(t, wrapped.wrapped, element.vec)
+	require.Equal(t, 1, releases)
+	require.Equal(t, []int64{22, 33}, movec.MustFixedColNoTypeCheck[int64](element.vec))
 }

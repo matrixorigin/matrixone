@@ -539,6 +539,18 @@ func TestColumnCacheConstructorValidatesAndMarksV2(t *testing.T) {
 	require.NoError(t, MustVectorToCached(target, cacheData))
 	require.Equal(t, "value longer than inline storage", target.GetStringAt(0))
 
+	occupied := vector.NewOffHeapVecWithType(types.T_int64.ToType())
+	releases := 0
+	lease, err := vector.NewRefCountedBufferLease(nil, 0, func() { releases++ })
+	require.NoError(t, err)
+	require.NoError(t, occupied.InstallBorrowedData(nil, lease))
+	lease.Release()
+	require.Error(t, MustVectorToCachedWithMpool(occupied, cacheData, mp))
+	require.True(t, occupied.HasBorrowedBacking())
+	require.Zero(t, releases)
+	occupied.Free(mp)
+	require.Equal(t, 1, releases)
+
 	ownedTarget := vector.NewVecFromReuse()
 	require.NoError(t, MustVectorToCachedWithMpool(ownedTarget, cacheData, mp))
 	require.False(t, ownedTarget.NeedDup())

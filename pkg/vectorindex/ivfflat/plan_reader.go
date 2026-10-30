@@ -1032,28 +1032,47 @@ func filterRelationBatchRows(
 			sels = append(sels, int64(row))
 		}
 	}
-	return selectRelationBatchRows(bat, sels, loadedColumns), nil
+	return selectRelationBatchRows(bat, sels, loadedColumns, proc.Mp())
 }
 
 // selectRelationBatchRows preserves unloaded slots when columns were materialized
 // selectively. A nil column list denotes a fully materialized batch.
-func selectRelationBatchRows(bat *batch.Batch, sels []int64, loadedColumns []int) engine.ReaderFilterResult {
+func selectRelationBatchRows(bat *batch.Batch, sels []int64, loadedColumns []int, mp *mpool.MPool) (engine.ReaderFilterResult, error) {
 	if len(sels) == bat.RowCount() {
-		return engine.ReaderFilterResult{All: true}
+		return engine.ReaderFilterResult{All: true}, nil
 	}
 	if len(sels) == 0 {
 		bat.CleanOnlyData()
-		return engine.ReaderFilterResult{Sels: sels}
+		return engine.ReaderFilterResult{Sels: sels}, nil
 	}
 	if loadedColumns == nil {
-		bat.Shrink(sels, false)
+		if err := bat.Shrink(sels, false, mp); err != nil {
+			return engine.ReaderFilterResult{}, err
+		}
 	} else {
+		vecs := make([]*vector.Vector, 0, len(loadedColumns))
 		for _, pos := range loadedColumns {
-			bat.Vecs[pos].Shrink(sels, false)
+			vecs = append(vecs, bat.Vecs[pos])
+		}
+		prepared, err := batch.PrepareShrinkData(vecs, mp, true)
+		if err != nil {
+			return engine.ReaderFilterResult{}, err
+		}
+		for _, p := range prepared {
+			p.Commit()
+		}
+		seen := make(map[*vector.Vector]struct{}, len(vecs))
+		for _, v := range vecs {
+			if _, ok := seen[v]; !ok {
+				seen[v] = struct{}{}
+				if err := v.Shrink(sels, false, mp); err != nil {
+					return engine.ReaderFilterResult{}, err
+				}
+			}
 		}
 		bat.SetRowCount(len(sels))
 	}
-	return engine.ReaderFilterResult{Sels: sels}
+	return engine.ReaderFilterResult{Sels: sels}, nil
 }
 
 // relationFilterEarlyColumns returns the output positions that must be loaded

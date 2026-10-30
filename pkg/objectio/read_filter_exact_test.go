@@ -139,7 +139,7 @@ func TestReadFilterExactLengthOrdering(t *testing.T) {
 				for _, sorted := range []bool{false, true} {
 					t.Run(fmt.Sprintf("sorted=%t", sorted), func(t *testing.T) {
 						if sorted {
-							vec.InplaceSort()
+							require.NoError(t, vec.InplaceSort(nil))
 						}
 						var want []int64
 						for row := 0; row < vec.Length(); row++ {
@@ -212,7 +212,7 @@ func BenchmarkReadFilterExactSearch(b *testing.B) {
 				}
 				defer vec.Free(mp)
 				if shape == "sorted" {
-					vec.InplaceSort()
+					require.NoError(b, vec.InplaceSort(nil))
 				}
 				run := func(b *testing.B, find func() []int64) {
 					b.ReportAllocs()

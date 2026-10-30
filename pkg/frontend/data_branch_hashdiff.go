@@ -587,10 +587,9 @@ func handleDelsOnLCA(
 		}
 		tBat.SetRowCount(0)
 	} else {
-		for i := range tBat.Vecs {
-			tBat.Vecs[i].Shrink(sels, false)
+		if err := tBat.Shrink(sels, false, ses.proc.Mp()); err != nil {
+			return nil, err
 		}
-		tBat.SetRowCount(tBat.Vecs[0].Length())
 	}
 	logutil.Debug(
 		"DataBranch-LCA-PostProcess-Done",
@@ -740,7 +739,9 @@ func runLCAProbeWithReaderFallback(
 	if err = filterVec.UnionBatch(pkVec, 0, rowCount, nil, mp); err != nil {
 		return executor.Result{}, err
 	}
-	filterVec.InplaceSort()
+	if err := filterVec.InplaceSort(mp); err != nil {
+		return executor.Result{}, err
+	}
 	pkFilterExpr, err := readutil.ConstructInExpr(ctx, lcaPKName, filterVec)
 	if err != nil {
 		return executor.Result{}, err
@@ -1198,6 +1199,19 @@ func hashDiffIfHasLCA(
 				}
 				delete(restoreMissingKeys, key)
 			}
+			// Prepare before emitting any restored rows so allocation failure cannot
+			// occur after publishing part of this result.
+			if len(keep) > 0 {
+				prepared, err := batch.PrepareShrinkData(wrapped.batch.Vecs, ses.proc.Mp(), len(keep) < wrapped.batch.RowCount())
+				if err != nil {
+					tblStuff.retPool.releaseRetBatch(restoreBat, false)
+					tblStuff.retPool.releaseRetBatch(wrapped.batch, false)
+					return err
+				}
+				for _, p := range prepared {
+					p.Commit()
+				}
+			}
 			if restoreBat.Vecs[0].Length() > 0 {
 				restoreBat.SetRowCount(restoreBat.Vecs[0].Length())
 				if stop, e := emitBatch(emit, batchWithKind{
@@ -1221,7 +1235,10 @@ func hashDiffIfHasLCA(
 				tblStuff.retPool.releaseRetBatch(wrapped.batch, false)
 				return nil
 			}
-			wrapped.batch.Shrink(keep, true)
+			if err := wrapped.batch.Shrink(keep, true, ses.proc.Mp()); err != nil {
+				tblStuff.retPool.releaseRetBatch(wrapped.batch, false)
+				return err
+			}
 		}
 		if copt.conflictOpt != nil && copt.conflictOpt.Opt == tree.CONFLICT_ACCEPT &&
 			copt.expandUpdate && wrapped.kind == diffInsert && wrapped.fromUpdate &&
@@ -1372,12 +1389,32 @@ func hashDiffIfHasLCA(
 				if sels1, sels2, err3 = checkConflict(wrapped, baseWrapped); err3 != nil {
 					return
 				} else {
-					if len(sels1) != 0 {
-						wrapped.batch.Shrink(sels1, true)
+					p1, err := batch.PrepareShrinkData(wrapped.batch.Vecs, ses.proc.Mp(), len(sels1) > 0 && len(sels1) < wrapped.batch.RowCount())
+					if err != nil {
+						return err
 					}
-
+					p2, err := batch.PrepareShrinkData(baseWrapped.batch.Vecs, ses.proc.Mp(), len(sels2) > 0 && len(sels2) < baseWrapped.batch.RowCount())
+					if err != nil {
+						for _, p := range p1 {
+							p.Abort()
+						}
+						return err
+					}
+					for _, p := range p1 {
+						p.Commit()
+					}
+					for _, p := range p2 {
+						p.Commit()
+					}
+					if len(sels1) != 0 {
+						if err := wrapped.batch.Shrink(sels1, true, ses.proc.Mp()); err != nil {
+							return err
+						}
+					}
 					if len(sels2) != 0 {
-						baseWrapped.batch.Shrink(sels2, true)
+						if err := baseWrapped.batch.Shrink(sels2, true, ses.proc.Mp()); err != nil {
+							return err
+						}
 					}
 				}
 
@@ -1778,6 +1815,8 @@ func splitDataBranchBatchForNativeUpdate(
 
 	nativeBat := tblStuff.retPool.acquireRetBatch(tblStuff, false)
 	nativeRowIdxes := make([]int64, 0, len(nativeUpdateKeys))
+	acceptedKeys := make([]string, 0, len(nativeUpdateKeys))
+	accepted := make(map[string]struct{}, len(nativeUpdateKeys))
 	for rowIdx := range bat.RowCount() {
 		key, err := extractPKAsString(ses, tblStuff, bat, rowIdx)
 		if err != nil {
@@ -1787,12 +1826,16 @@ func splitDataBranchBatchForNativeUpdate(
 		if _, ok := nativeUpdateKeys[key]; !ok {
 			continue
 		}
+		if _, ok := accepted[key]; ok {
+			continue
+		}
 		if err := nativeBat.UnionOne(bat, int64(rowIdx), ses.proc.Mp()); err != nil {
 			tblStuff.retPool.releaseRetBatch(nativeBat, false)
 			return nil, err
 		}
 		nativeRowIdxes = append(nativeRowIdxes, int64(rowIdx))
-		delete(nativeUpdateKeys, key)
+		acceptedKeys = append(acceptedKeys, key)
+		accepted[key] = struct{}{}
 	}
 	if len(nativeRowIdxes) == 0 {
 		tblStuff.retPool.releaseRetBatch(nativeBat, false)
@@ -1800,7 +1843,13 @@ func splitDataBranchBatchForNativeUpdate(
 	}
 
 	nativeBat.SetRowCount(nativeBat.Vecs[0].Length())
-	bat.Shrink(nativeRowIdxes, true)
+	if err := bat.Shrink(nativeRowIdxes, true, ses.proc.Mp()); err != nil {
+		tblStuff.retPool.releaseRetBatch(nativeBat, false)
+		return nil, err
+	}
+	for _, key := range acceptedKeys {
+		delete(nativeUpdateKeys, key)
+	}
 	return nativeBat, nil
 }
 
@@ -2848,7 +2897,10 @@ func buildHashmapForTable(
 						return // all rows filtered out
 					}
 					if len(sels) < bat.RowCount() {
-						bat.Shrink(sels, false)
+						if taskErr = bat.Shrink(sels, false, mp); taskErr != nil {
+							atomicErr.Store(taskErr)
+							return
+						}
 						ll = bat.VectorCount()
 					}
 				}

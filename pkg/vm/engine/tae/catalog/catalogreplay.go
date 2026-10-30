@@ -298,10 +298,10 @@ func (catalog *Catalog) onReplayUpdateObject(
 func (catalog *Catalog) RelayFromSysTableObjects(
 	ctx context.Context,
 	readTxn txnif.AsyncTxn,
-	readFunc func(context.Context, *TableEntry, txnif.AsyncTxn) *containers.Batch,
+	readFunc func(context.Context, *TableEntry, txnif.AsyncTxn) (*containers.Batch, error),
 	sortFunc func([]containers.Vector, int) error,
 	replayer ObjectListReplayer,
-) (closeCB []func()) {
+) (closeCB []func(), err error) {
 	closeCB = make([]func(), 0)
 	db, err := catalog.GetDatabaseByID(pkgcatalog.MO_CATALOG_ID)
 	if err != nil {
@@ -344,30 +344,32 @@ func (catalog *Catalog) RelayFromSysTableObjects(
 		End:     panguEpoch,
 	}
 
-	// replay database catalog
-	if dbBatch := readFunc(ctx, dbTbl, readTxn); dbBatch != nil {
+	dbBatch, err := readFunc(ctx, dbTbl, readTxn)
+	if err != nil {
+		return closeCB, err
+	}
+	if dbBatch != nil {
 		closeCB = append(closeCB, dbBatch.Close)
 		catalog.ReplayMODatabase(ctx, txnNode, dbBatch)
 	}
-
-	// replay table catalog
-	if tableBatch := readFunc(ctx, tableTbl, readTxn); tableBatch != nil {
-		if err := sortFunc(
-			tableBatch.Vecs, pkgcatalog.MO_TABLES_REL_ID_IDX,
-		); err != nil {
-			panic(err)
-		}
+	tableBatch, err := readFunc(ctx, tableTbl, readTxn)
+	if err != nil {
+		return closeCB, err
+	}
+	if tableBatch != nil {
 		closeCB = append(closeCB, tableBatch.Close)
-		columnBatch := readFunc(ctx, columnTbl, readTxn)
-		if err := sortFunc(
-			columnBatch.Vecs, pkgcatalog.MO_COLUMNS_ATT_RELNAME_ID_IDX,
-		); err != nil {
-			panic(err)
+		if err = sortFunc(tableBatch.Vecs, pkgcatalog.MO_TABLES_REL_ID_IDX); err != nil {
+			return closeCB, err
+		}
+		columnBatch, err := readFunc(ctx, columnTbl, readTxn)
+		if err != nil {
+			return closeCB, err
 		}
 		closeCB = append(closeCB, columnBatch.Close)
-		catalog.ReplayMOTables(
-			ctx, txnNode, tableBatch, columnBatch, replayer,
-		)
+		if err = sortFunc(columnBatch.Vecs, pkgcatalog.MO_COLUMNS_ATT_RELNAME_ID_IDX); err != nil {
+			return closeCB, err
+		}
+		catalog.ReplayMOTables(ctx, txnNode, tableBatch, columnBatch, replayer)
 	}
 	// logutil.Info(catalog.SimplePPString(common.PPL3))
 	return

@@ -193,7 +193,9 @@ func (ctr *container) shrinkWithSels(proc *process.Process, bat *batch.Batch, se
 		return batch.EmptyBatch, nil
 	}
 	if bat == ctr.buf {
-		ctr.buf.Shrink(sels, false)
+		if err := ctr.buf.Shrink(sels, false, proc.Mp()); err != nil {
+			return nil, err
+		}
 	} else {
 		if ctr.buf == nil {
 			ctr.buf = batch.NewWithSize(len(bat.Vecs))

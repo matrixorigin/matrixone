@@ -1017,15 +1017,31 @@ func (ls *LocalDisttaeDataSource) filterInMemCommittedInserts(
 		}
 
 		if deletedMask.Count() > 0 {
-			delInFile += deletedMask.Count()
+			vecs := outBatch.Vecs
 			if physicalColumnPos == -1 {
-				physicalColumnPtr.ShrinkByMask(deletedMask.Bitmap(), true, uint64(applyOffset))
-
-				// negative shrink requires the bat sorted already
-				outBatch.ShrinkByMask(deletedMask.Bitmap(), true, uint64(applyOffset+inputRowCnt))
-			} else {
-				outBatch.ShrinkByMask(deletedMask.Bitmap(), true, uint64(applyOffset))
+				vecs = append([]*vector.Vector{physicalColumnPtr}, vecs...)
 			}
+			prepared, prepErr := batch.PrepareShrinkData(vecs, mp, true)
+			if prepErr != nil {
+				deletedMask.Release()
+				return prepErr
+			}
+			for _, p := range prepared {
+				p.Commit()
+			}
+			if physicalColumnPos == -1 {
+				err = physicalColumnPtr.ShrinkByMask(deletedMask.Bitmap(), true, uint64(applyOffset), mp)
+				if err == nil {
+					err = outBatch.ShrinkByMask(deletedMask.Bitmap(), true, uint64(applyOffset+inputRowCnt), mp)
+				}
+			} else {
+				err = outBatch.ShrinkByMask(deletedMask.Bitmap(), true, uint64(applyOffset), mp)
+			}
+			if err != nil {
+				deletedMask.Release()
+				return err
+			}
+			delInFile += deletedMask.Count()
 		}
 
 		minTS = types.MaxTs()

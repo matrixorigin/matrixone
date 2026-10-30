@@ -651,9 +651,9 @@ func TestBatchUnmarshalSeparatesBorrowedAliasedReuseVectorsWithoutMpool(t *testi
 
 func TestBatchShrink(t *testing.T) {
 	bat := newBatch([]types.Type{types.T_int8.ToType()}, 4)
-	bat.Shrink([]int64{0}, true)
+	require.NoError(t, bat.Shrink([]int64{0}, true, nil))
 	require.Equal(t, 3, bat.rowCount)
-	bat.Shrink([]int64{0, 2}, false)
+	require.NoError(t, bat.Shrink([]int64{0, 2}, false, nil))
 	require.Equal(t, 2, bat.rowCount)
 }
 

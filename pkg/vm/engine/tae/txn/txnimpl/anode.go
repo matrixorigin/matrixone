@@ -184,12 +184,15 @@ func (n *anode) FillBlockView(
 	return
 }
 
-func (n *anode) Compact() {
+func (n *anode) Compact() error {
 	if n.data == nil {
-		return
+		return nil
 	}
-	n.data.Compact()
+	if err := n.data.Compact(); err != nil {
+		return err
+	}
 	n.rows = uint32(n.data.Length())
+	return nil
 }
 
 func (n *anode) GetValue(col int, row uint32) (any, bool, error) {
@@ -218,7 +221,11 @@ func (n *anode) WindowColumn(start, end uint32, pos int) (vec containers.Vector,
 	deletes := data.WindowDeletes(int(start), int(end-start), false)
 	if deletes != nil {
 		vec = data.Vecs[pos].CloneWindow(int(start), int(end-start))
-		vec.CompactByBitmap(deletes)
+		if err = vec.CompactByBitmap(deletes); err != nil {
+			vec.Close()
+			vec = nil
+			return
+		}
 	} else {
 		vec = data.Vecs[pos].Window(int(start), int(end-start))
 	}
@@ -229,7 +236,11 @@ func (n *anode) Window(start, end uint32) (bat *containers.Batch, err error) {
 	data := n.data
 	if data.HasDelete() {
 		bat = data.CloneWindow(int(start), int(end-start))
-		bat.Compact()
+		if err = bat.Compact(); err != nil {
+			bat.Close()
+			bat = nil
+			return
+		}
 	} else {
 		bat = data.Window(int(start), int(end-start))
 	}

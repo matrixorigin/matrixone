@@ -845,7 +845,11 @@ func (e *Engine) Delete(ctx context.Context, name string, op client.TxnOperator)
 		return err
 	}
 
-	if bat = txn.deleteBatch(bat, catalog.MO_CATALOG_ID, catalog.MO_DATABASE_ID); bat.RowCount() > 0 {
+	if bat, err = txn.deleteBatch(bat, catalog.MO_CATALOG_ID, catalog.MO_DATABASE_ID); err != nil {
+		bat.Clean(txn.proc.Mp())
+		return err
+	}
+	if bat.RowCount() > 0 {
 		note := noteForDrop(uint64(accountId), name)
 		if _, err := txn.WriteBatch(DELETE, note, catalog.System_Account, catalog.MO_CATALOG_ID, catalog.MO_DATABASE_ID,
 			catalog.MO_CATALOG, catalog.MO_DATABASE, bat, txn.tnStores[0]); err != nil {

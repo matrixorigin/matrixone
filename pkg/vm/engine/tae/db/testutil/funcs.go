@@ -517,7 +517,9 @@ func GetColumnRowsByScan(t *testing.T, rel handle.Relation, colIdx int, applyDel
 	rows := 0
 	ForEachColumnView(t, rel, colIdx, func(view *containers.Batch) (err error) {
 		if applyDelete {
-			view.Compact()
+			if err := view.Compact(); err != nil {
+				return err
+			}
 		}
 		rows += view.Length()
 		// t.Log(view.String())
@@ -793,7 +795,7 @@ func DeleteAllWithCommitTS(t *testing.T, accountID uint32, db *db.DB, dbName, ta
 			err := blk.HybridScan(context.Background(), &view, i, []int{rowIDIdx, pkIdx}, common.DefaultAllocator)
 			require.NoError(t, err)
 			defer view.Close()
-			view.Compact()
+			require.NoError(t, view.Compact())
 			err = rel.DeleteByPhyAddrKeys(view.Vecs[0], view.Vecs[1], handle.DT_Normal)
 			require.NoError(t, err)
 		}

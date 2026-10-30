@@ -479,7 +479,7 @@ func newSortedFloatTestVector[T ~float32 | ~float64](
 		require.NoError(t, vector.AppendFixed(vec, value, false, mp))
 	}
 	if sortValues {
-		vec.InplaceSort()
+		require.NoError(t, vec.InplaceSort(nil))
 	}
 	return vec
 }

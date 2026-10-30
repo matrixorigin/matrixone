@@ -918,6 +918,7 @@ func (sinker *Sinker) trySpillMergeSortAccumulate(
 	if err := containers.DedupSortedBatches(
 		sinker.schema.sortKeyIdx,
 		sorted,
+		sinker.mp,
 	); err != nil {
 		return err
 	}
@@ -1155,6 +1156,7 @@ func (sinker *Sinker) Sync(ctx context.Context) error {
 			if err := containers.DedupSortedBatches(
 				sinker.schema.sortKeyIdx,
 				sinker.staged.inMemory,
+				sinker.mp,
 			); err != nil {
 				return err
 			}

@@ -49,7 +49,7 @@ func (v *emptyVector) Append(x any, isNull bool) {
 	panic("not implemented") // TODO: Implement
 }
 
-func (v *emptyVector) Compact(_ *roaring.Bitmap) {
+func (v *emptyVector) Compact(_ *roaring.Bitmap) error {
 	panic("not implemented") // TODO: Implement
 }
 
@@ -132,14 +132,54 @@ func (bat *Batch) DeleteCnt() int {
 	return int(bat.Deletes.GetCardinality())
 }
 
-func (bat *Batch) Compact() {
+func (bat *Batch) Compact() error {
 	if !bat.HasDelete() {
-		return
+		return nil
 	}
-	for _, vec := range bat.Vecs {
-		vec.CompactByBitmap(bat.Deletes)
+	type prepared struct {
+		vec  *vectorWrapper
+		copy *vector.Vector
+	}
+	var copies []prepared
+	seen := make(map[*vectorWrapper]struct{}, len(bat.Vecs))
+	for _, col := range bat.Vecs {
+		if _, placeholder := col.(*emptyVector); placeholder {
+			continue
+		}
+		vec := col.(*vectorWrapper)
+		if _, ok := seen[vec]; ok {
+			continue
+		}
+		seen[vec] = struct{}{}
+		copy, err := vec.prepareCompact()
+		if err != nil {
+			for _, p := range copies {
+				if p.copy != nil {
+					p.copy.Free(p.vec.mpool)
+				}
+			}
+			return err
+		}
+		copies = append(copies, prepared{vec, copy})
+	}
+	for _, p := range copies {
+		p.vec.commitCompact(p.copy)
+	}
+	dels := vector.GetSels()
+	defer func() { vector.PutSels(dels) }()
+	bat.Deletes.Foreach(func(i uint64) bool { dels = append(dels, int64(i)); return true })
+	seenData := make(map[*vector.Vector]struct{}, len(copies))
+	for _, p := range copies {
+		if _, ok := seenData[p.vec.wrapped]; ok {
+			continue
+		}
+		seenData[p.vec.wrapped] = struct{}{}
+		if err := p.vec.wrapped.Shrink(dels, true, p.vec.mpool); err != nil {
+			return err
+		}
 	}
 	bat.Deletes = nil
+	return nil
 }
 
 func (bat *Batch) Length() int {

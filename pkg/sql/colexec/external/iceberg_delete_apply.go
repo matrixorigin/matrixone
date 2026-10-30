@@ -187,8 +187,7 @@ func (external *External) applyIcebergDeletes(ctx context.Context, bat *batch.Ba
 	if len(sels) == bat.RowCount() {
 		return nil
 	}
-	bat.Shrink(sels, false)
-	return nil
+	return bat.Shrink(sels, false, proc.Mp())
 }
 
 func icebergDeleteTaskDataFile(task *pipeline.IcebergDeleteFileTask) string {

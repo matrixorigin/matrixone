@@ -316,7 +316,7 @@ type MMsgVacuumCheck struct {
 }
 
 type MMsgConfigBootstrap struct {
-	ReadSettingsBatch func() (*batch.Batch, func())
+	ReadSettingsBatch func() (*batch.Batch, func(), error)
 }
 
 type MMsgConfig struct {
@@ -805,7 +805,11 @@ func (a *MergeScheduler) ioConfigBootstrap(
 	generation *mergeSchedulerGeneration,
 	msg MMsgConfigBootstrap,
 ) {
-	bat, release := msg.ReadSettingsBatch()
+	bat, release, err := msg.ReadSettingsBatch()
+	if err != nil {
+		logutil.Error("MergeExecutorEvent-BootstrapConfigFailed", zap.Error(err))
+		return
+	}
 	if bat == nil {
 		logutil.Error(
 			"MergeExecutorEvent-NilBootstrapConfig",

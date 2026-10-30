@@ -247,7 +247,7 @@ func TestCopyWithReadonlyAreaMutations(t *testing.T) {
 				if !mutation.copy {
 					// Keep spare descriptors: area growth must not invalidate the
 					// capacity admitted for the next appended row.
-					destination.Shrink([]int64{2}, true)
+					require.NoError(t, destination.Shrink([]int64{2}, true, mp))
 				}
 				for _, size := range []int{4096, 6} {
 					extra.CleanOnlyData()
@@ -294,7 +294,7 @@ func TestCopyWithReadonlyAreaPreflightWithinCapacity(t *testing.T) {
 		require.NoError(t, AppendBytes(source, bytes.Repeat([]byte{'a'}, 64), false, mp))
 	}
 	require.NoError(t, destination.CopyWithReadonlyArea(source, mp))
-	destination.Shrink([]int64{2}, true)
+	require.NoError(t, destination.Shrink([]int64{2}, true, mp))
 	require.NoError(t, AppendBytes(extra, []byte("inline"), false, mp))
 	require.NoError(t, extra.SetStringSource(types.StringSourceLiteral))
 	before := mp.CurrNB()

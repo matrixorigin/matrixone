@@ -582,7 +582,7 @@ func TestShrinkPopulatedVecs_SkipsUnmaterializedColumn(t *testing.T) {
 	defer bat.Clean(mp)
 
 	require.NotPanics(t, func() {
-		shrinkPopulatedVecs(bat, []int64{1, 3})
+		require.NoError(t, shrinkPopulatedVecs(bat, []int64{1, 3}, nil, mp))
 	})
 
 	require.Equal(t, 2, bat.RowCount())
@@ -603,7 +603,7 @@ func TestShrinkPopulatedVecs_NoOpAndEmptyBatch(t *testing.T) {
 	bat.SetRowCount(3)
 	defer bat.Clean(mp)
 
-	shrinkPopulatedVecs(bat, []int64{0, 1, 2})
+	require.NoError(t, shrinkPopulatedVecs(bat, []int64{0, 1, 2}, nil, mp))
 	require.Equal(t, 3, bat.RowCount())
 	require.Equal(t, []int64{1, 2, 3}, vector.MustFixedColWithTypeCheck[int64](bat.Vecs[0]))
 
@@ -612,6 +612,6 @@ func TestShrinkPopulatedVecs_NoOpAndEmptyBatch(t *testing.T) {
 	empty.Vecs[0] = vector.NewVec(types.T_int64.ToType())
 	empty.SetRowCount(0)
 	defer empty.Clean(mp)
-	require.NotPanics(t, func() { shrinkPopulatedVecs(empty, []int64{}) })
+	require.NotPanics(t, func() { require.NoError(t, shrinkPopulatedVecs(empty, []int64{}, nil, mp)) })
 	require.Equal(t, 0, empty.RowCount())
 }

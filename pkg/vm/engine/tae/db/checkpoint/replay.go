@@ -387,7 +387,7 @@ func (c *CkpReplayer) ReplayCatalog(
 		_, err2 = mergesort.SortBlockColumns(cols, pkidx, c.r.rt.VectorPool.Transient)
 		return
 	}
-	closeFn := c.r.catalog.RelayFromSysTableObjects(
+	closeFn, err := c.r.catalog.RelayFromSysTableObjects(
 		c.r.ctx,
 		readTxn,
 		tables.ReadSysTableBatch,
@@ -397,6 +397,9 @@ func (c *CkpReplayer) ReplayCatalog(
 	c.wg.Wait()
 	for _, fn := range closeFn {
 		fn()
+	}
+	if err != nil {
+		return err
 	}
 	c.resetObjectCountMap()
 	// logutil.Info(c.r.catalog.SimplePPString(common.PPL0))

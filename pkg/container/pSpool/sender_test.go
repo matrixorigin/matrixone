@@ -1140,3 +1140,65 @@ func newSpoolTestBatch(t *testing.T, mp *mpool.MPool, rows int) *batch.Batch {
 	src.SetRowCount(len(values))
 	return src
 }
+
+func TestSpoolSnapshotSurvivesProducerShrink(t *testing.T) {
+	mp := mpool.MustNewZero()
+	data := types.EncodeSlice([]int64{11, 22, 33})
+	releases := 0
+	t.Cleanup(func() { require.Equal(t, 1, releases); require.Zero(t, mp.CurrNB()); mpool.DeleteMPool(mp) })
+	lease, err := vector.NewRefCountedBufferLease(data, int64(cap(data)), func() { releases++ })
+	require.NoError(t, err)
+	vec, err := vector.NewBorrowedFixedVector(types.T_int64.ToType(), 3, data, lease)
+	require.NoError(t, err)
+	lease.Release()
+	source := batch.NewOffHeap([]string{"v"})
+	source.Vecs[0] = vec
+	source.SetRowCount(3)
+	t.Cleanup(func() { source.Clean(mp) })
+	cache := initCachedBatch(mp, 1)
+	t.Cleanup(cache.free)
+	copied, useCache, id, err := cache.GetCopiedBatch(source)
+	require.NoError(t, err)
+	t.Cleanup(func() { cache.CacheBatch(useCache, id, copied) })
+	start := make(chan struct{})
+	result := make(chan []int64, 1)
+	go func() {
+		<-start
+		result <- append([]int64(nil), vector.MustFixedColNoTypeCheck[int64](copied.Vecs[0])...)
+	}()
+	close(start)
+	err = source.Shrink([]int64{1, 2}, false, mp)
+	snapshot := <-result
+	require.NoError(t, err)
+	require.Equal(t, []int64{11, 22, 33}, snapshot)
+	require.Equal(t, []int64{22, 33}, vector.MustFixedColNoTypeCheck[int64](source.Vecs[0]))
+	require.Zero(t, releases)
+}
+
+func TestPipelineSpoolAbortReleasesBorrowedSnapshot(t *testing.T) {
+	mp := mpool.MustNewZero()
+	releases := 0
+	t.Cleanup(func() { require.Equal(t, 1, releases); require.Zero(t, mp.CurrNB()); mpool.DeleteMPool(mp) })
+	data := types.EncodeSlice([]int64{11, 22, 33})
+	lease, err := vector.NewRefCountedBufferLease(data, int64(cap(data)), func() { releases++ })
+	require.NoError(t, err)
+	vec, err := vector.NewBorrowedFixedVector(types.T_int64.ToType(), 3, data, lease)
+	require.NoError(t, err)
+	lease.Release()
+	source := batch.NewOffHeap([]string{"v"})
+	source.Vecs[0] = vec
+	source.SetRowCount(3)
+	t.Cleanup(func() { source.Clean(mp) })
+	sp := InitMyPipelineSpool(mp, 1)
+	t.Cleanup(sp.ForceCleanup)
+	done, err := sp.SendBatch(context.Background(), 0, source, nil)
+	require.NoError(t, err)
+	require.False(t, done)
+	source.Clean(mp)
+	require.Zero(t, releases)
+	sp.Abort(nil)
+	require.Equal(t, 1, releases)
+	got, cause := sp.ReceiveBatch(0)
+	require.Nil(t, got)
+	require.Same(t, ErrPipelineSpoolAborted, cause)
+}

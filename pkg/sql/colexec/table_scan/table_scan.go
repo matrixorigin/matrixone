@@ -20,6 +20,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -272,18 +273,41 @@ func padCharColumnsToFullLength(bat *batch.Batch, proc *process.Process) error {
 // and shrinking it is precisely the crash. It cannot mask a real misalignment either --
 // any vector the reader DID fill is shrunk, so every populated column stays consistent
 // with the row count set below.
-func shrinkPopulatedVecs(bat *batch.Batch, sels []int64) {
+func shrinkPopulatedVecs(bat *batch.Batch, sels []int64, loadedColumns []int, mp *mpool.MPool) error {
 	if len(sels) == bat.RowCount() {
-		return
+		return nil
 	}
-	rowCount := bat.RowCount()
-	for _, vec := range bat.Vecs {
-		if vec == nil || (vec.Length() == 0 && rowCount != 0) {
+	var vecs []*vector.Vector
+	if loadedColumns == nil {
+		for _, vec := range bat.Vecs {
+			if vec != nil && (vec.Length() != 0 || bat.RowCount() == 0) {
+				vecs = append(vecs, vec)
+			}
+		}
+	} else {
+		for _, pos := range loadedColumns {
+			vecs = append(vecs, bat.Vecs[pos])
+		}
+	}
+	prepared, err := batch.PrepareShrinkData(vecs, mp, len(sels) > 0)
+	if err != nil {
+		return err
+	}
+	for _, p := range prepared {
+		p.Commit()
+	}
+	seen := make(map[*vector.Vector]struct{}, len(vecs))
+	for _, vec := range vecs {
+		if _, ok := seen[vec]; ok {
 			continue
 		}
-		vec.Shrink(sels, false)
+		seen[vec] = struct{}{}
+		if err := vec.Shrink(sels, false, mp); err != nil {
+			return err
+		}
 	}
 	bat.SetRowCount(len(sels))
+	return nil
 }
 
 // evalFilter evaluates inline filter expressions in-place. loadedColumns is
@@ -385,6 +409,9 @@ func (tableScan *TableScan) evalFilter(
 			}
 
 			if len(sels) != bat.RowCount() {
+				if err := shrinkPopulatedVecs(bat, sels, loadedColumns, proc.Mp()); err != nil {
+					return engine.ReaderFilterResult{}, err
+				}
 				if trackOriginalRows {
 					if !hasSelection {
 						tableScan.ctr.filterRows = append(tableScan.ctr.filterRows, sels...)
@@ -397,14 +424,6 @@ func (tableScan *TableScan) evalFilter(
 					}
 				}
 
-				if loadedColumns == nil {
-					shrinkPopulatedVecs(bat, sels)
-				} else {
-					for _, pos := range loadedColumns {
-						bat.Vecs[pos].Shrink(sels, false)
-					}
-					bat.SetRowCount(len(sels))
-				}
 			}
 		}
 	}

@@ -194,7 +194,7 @@ type TNCatalogEventSource struct {
 	*txnbase.TxnManager
 }
 
-func (c *TNCatalogEventSource) GetMergeSettingsBatchFn() func() (*batch.Batch, func()) {
+func (c *TNCatalogEventSource) GetMergeSettingsBatchFn() func() (*batch.Batch, func(), error) {
 	db, err := c.GetDatabaseByID(pkgcatalog.MO_CATALOG_ID)
 	if err != nil {
 		return nil
@@ -208,15 +208,18 @@ func (c *TNCatalogEventSource) GetMergeSettingsBatchFn() func() (*batch.Batch, f
 	if err != nil {
 		return nil
 	}
-	return func() (*batch.Batch, func()) {
-		bat := tables.ReadMergeSettingsBatch(context.Background(), entry, txn)
+	return func() (*batch.Batch, func(), error) {
+		bat, err := tables.ReadMergeSettingsBatch(context.Background(), entry, txn)
+		if err != nil {
+			return nil, nil, err
+		}
 		if bat == nil {
-			return nil, nil
+			return nil, nil, nil
 		}
 		cnBat := containers.ToCNBatch(bat)
 		return cnBat, func() {
 			bat.Close()
-		}
+		}, nil
 	}
 }
 

@@ -65,13 +65,13 @@ func exerciseNarrowArray[T types.ArrayElement](t *testing.T, oid types.T, a, b [
 	// InplaceSort narrow branch (unsorted input with a duplicate)
 	srt := NewVec(types.New(oid, dim, 0))
 	require.NoError(t, AppendArrayList[T](srt, [][]T{b, a, a}, nil, mp))
-	srt.InplaceSort()
+	require.NoError(t, srt.InplaceSort(nil))
 	srt.Free(mp)
 
 	// InplaceSortAndCompact narrow branch (sort + dedup)
 	cmp := NewVec(types.New(oid, dim, 0))
 	require.NoError(t, AppendArrayList[T](cmp, [][]T{b, a, a}, nil, mp))
-	cmp.InplaceSortAndCompact()
+	require.NoError(t, cmp.InplaceSortAndCompact(nil))
 	cmp.Free(mp)
 
 	// GetMinMaxValue narrow branch

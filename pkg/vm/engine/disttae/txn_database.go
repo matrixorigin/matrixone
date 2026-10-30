@@ -304,7 +304,11 @@ func (db *txnDatabase) deleteTable(ctx context.Context, name string, forAlter bo
 		if err != nil {
 			return nil, err
 		}
-		if bat = txn.deleteBatch(bat, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID); bat.RowCount() > 0 {
+		if bat, err = txn.deleteBatch(bat, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID); err != nil {
+			bat.Clean(txn.proc.Mp())
+			return nil, err
+		}
+		if bat.RowCount() > 0 {
 			// the deleted table is not created by this txn
 			note := noteForDrop(id, name)
 			if useAlterNote {
@@ -335,7 +339,11 @@ func (db *txnDatabase) deleteTable(ctx context.Context, name string, forAlter bo
 			return nil, err
 		}
 
-		if bat = txn.deleteBatch(bat, catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID); bat.RowCount() > 0 {
+		if bat, err = txn.deleteBatch(bat, catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID); err != nil {
+			bat.Clean(txn.proc.Mp())
+			return nil, err
+		}
+		if bat.RowCount() > 0 {
 			note := noteForDrop(id, name)
 			if useAlterNote {
 				note = noteForAlterDel(id, name)
@@ -802,7 +810,11 @@ func (db *txnDatabase) syncLogicalIdIndexDelete(
 	}
 
 	// Use deleteBatch to filter out rows that were created in this txn (same pattern as deleteTable)
-	if bat = txn.deleteBatch(bat, catalog.MO_CATALOG_ID, catalog.MO_TABLES_LOGICAL_ID_INDEX_ID); bat.RowCount() > 0 {
+	if bat, err = txn.deleteBatch(bat, catalog.MO_CATALOG_ID, catalog.MO_TABLES_LOGICAL_ID_INDEX_ID); err != nil {
+		bat.Clean(m)
+		return err
+	}
+	if bat.RowCount() > 0 {
 		note := fmt.Sprintf("sync logical_id index delete %d", logicalId)
 		if _, err = txn.WriteBatch(
 			DELETE, note, catalog.System_Account, catalog.MO_CATALOG_ID, catalog.MO_TABLES_LOGICAL_ID_INDEX_ID,

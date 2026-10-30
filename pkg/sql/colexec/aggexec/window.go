@@ -16,6 +16,7 @@ package aggexec
 
 import (
 	io "io"
+	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -880,6 +881,8 @@ type valueEntry struct {
 	stringDomain types.RuntimeStringDomain
 	stringSource types.StringSource
 	data         []byte
+	fixed        [32]byte
+	fixedInline  bool
 	kind         vector.PrepareParamKind
 }
 
@@ -923,8 +926,15 @@ func (exec *valueWindowExec) Fill(groupIndex int, row int, vectors []*vector.Vec
 			entry.data = make([]byte, len(bs))
 			copy(entry.data, bs)
 		} else {
-			// For fixed-size types, get the raw bytes
-			entry.data = vec.GetRawBytesAt(row)
+			// Frames outlive the input vector and must not retain an unowned alias.
+			value := vec.GetRawBytesAt(row)
+			if len(value) <= len(entry.fixed) {
+				copy(entry.fixed[:], value)
+				entry.data = entry.fixed[:len(value)]
+				entry.fixedInline = true
+			} else {
+				entry.data = append([]byte(nil), value...)
+			}
 		}
 	}
 
@@ -1001,10 +1011,9 @@ func (exec *valueWindowExec) Free() {
 func (exec *valueWindowExec) Size() int64 {
 	var size int64
 	// Sizes on 64-bit: slice header = 24, pointer = 8, int = 8
-	// valueEntry{two bools, data []byte, kind byte} occupies 40 bytes after alignment.
 	const sliceHeaderSize = 24
 	const ptrSize = 8
-	const entrySize = 40
+	const entrySize = int64(unsafe.Sizeof(valueEntry{}))
 	const intSize = 8
 
 	size += int64(cap(exec.frameValues)) * sliceHeaderSize
@@ -1012,7 +1021,10 @@ func (exec *valueWindowExec) Size() int64 {
 		size += int64(cap(frame)) * ptrSize
 		for _, entry := range frame {
 			if entry != nil {
-				size += entrySize + int64(len(entry.data))
+				size += entrySize
+				if !entry.fixedInline {
+					size += int64(len(entry.data))
+				}
 			}
 		}
 	}

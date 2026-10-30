@@ -1955,3 +1955,20 @@ func TestCumeDistWindowExec_SizeWithData(t *testing.T) {
 
 	exec.Free()
 }
+
+func TestValueWindowCopiesBorrowedFixedInput(t *testing.T) {
+	mp := mpool.MustNewZero()
+	data := types.EncodeSlice([]int64{11, 22})
+	releases := 0
+	lease, err := vector.NewRefCountedBufferLease(data, int64(cap(data)), func() { releases++; clear(data) })
+	require.NoError(t, err)
+	v, err := vector.NewBorrowedFixedVector(types.T_int64.ToType(), 2, data, lease)
+	require.NoError(t, err)
+	lease.Release()
+	t.Cleanup(func() { v.Free(mp); require.Equal(t, 1, releases); mpool.DeleteMPool(mp) })
+	exec := &valueWindowExec{}
+	require.NoError(t, exec.Fill(0, 0, []*vector.Vector{v}))
+	v.Free(mp)
+	require.Equal(t, 1, releases)
+	require.Equal(t, int64(11), types.DecodeInt64(exec.frameValues[0][0].data))
+}

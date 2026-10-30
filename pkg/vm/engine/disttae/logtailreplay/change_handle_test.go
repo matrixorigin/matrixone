@@ -74,7 +74,7 @@ func TestFilterBatchUsesLogicalPrimaryKeyIndex(t *testing.T) {
 	t.Run("insert delete cancels with added-first layout", func(t *testing.T) {
 		data := newData([]int32{7}, []int64{10})
 		tombstone := newTombstone([]int64{20})
-		require.NoError(t, filterBatch(data, tombstone, 1, false, false))
+		require.NoError(t, filterBatch(data, tombstone, 1, false, false, mp))
 		require.Zero(t, data.RowCount())
 		require.Zero(t, tombstone.RowCount())
 		data.Clean(mp)
@@ -87,7 +87,7 @@ func TestFilterBatchUsesLogicalPrimaryKeyIndex(t *testing.T) {
 		// final tombstone is the delete being tested and must remain as the
 		// latest net effect.
 		tombstone := newTombstone([]int64{5, 30})
-		require.NoError(t, filterBatch(data, tombstone, 1, false, false))
+		require.NoError(t, filterBatch(data, tombstone, 1, false, false, mp))
 		require.Zero(t, data.RowCount())
 		require.Equal(t, 1, tombstone.RowCount())
 		data.Clean(mp)
@@ -3698,7 +3698,7 @@ func splitPKOps(t *testing.T, mp *mpool.MPool, ops []pkOp, skipDeletes, keepTrai
 	defer dataBat.Clean(mp)
 	defer tombBat.Clean(mp)
 
-	require.NoError(t, filterBatch(dataBat, tombBat, 0, skipDeletes, keepTrailingDeletes))
+	require.NoError(t, filterBatch(dataBat, tombBat, 0, skipDeletes, keepTrailingDeletes, mp))
 	return remainingPKs(t, dataBat), remainingPKs(t, tombBat)
 }
 
@@ -3933,4 +3933,51 @@ func TestSelectRangeNetEffectRowsKeepsTrailingDeleteInRecovery(t *testing.T) {
 	keepFirst, keepLast = selectRangeNetEffectRows(single, single, false, false)
 	require.True(t, keepFirst)
 	require.False(t, keepLast)
+}
+
+func TestFilterBatchRollsBackAcrossBatches(t *testing.T) {
+	mp := mpool.MustNewZero()
+	registry, err := mpool.NewAllocationAccountRegistry(1, 1)
+	require.NoError(t, err)
+	account, err := registry.Open(16 << 20)
+	require.NoError(t, err)
+	selection, err := vector.NewAllocationAccountSelection(account, 1, 1, 2, 3, 4)
+	require.NoError(t, err)
+	batches := make([]*batch.Batch, 0, 2)
+	releases := 0
+	t.Cleanup(func() {
+		for _, bat := range batches {
+			bat.Clean(mp)
+		}
+		require.Equal(t, len(batches), releases)
+		require.Zero(t, mp.CurrNB())
+		snapshot := account.Seal()
+		require.Zero(t, snapshot.Used)
+		_, err := registry.Finalize(account)
+		require.NoError(t, err)
+		mpool.DeleteMPool(mp)
+	})
+	for i, keys := range [][]int64{{1, 2}, {1, 3}} {
+		bat := batch.NewWithSize(2)
+		batches = append(batches, bat)
+		data := types.EncodeSlice(keys)
+		lease, err := vector.NewRefCountedBufferLease(data, int64(cap(data)), func() { releases++ })
+		require.NoError(t, err)
+		bat.Vecs[0], err = vector.NewBorrowedFixedVectorWithAllocation(types.T_int64.ToType(), 2, data, lease, selection)
+		lease.Release()
+		require.NoError(t, err)
+		bat.Vecs[1] = vector.NewOffHeapVecWithType(types.T_TS.ToType())
+		ts := int64(i + 1)
+		require.NoError(t, vector.AppendFixedList(bat.Vecs[1], []types.TS{types.BuildTS(ts, 0), types.BuildTS(ts, 0)}, nil, mp))
+		bat.SetRowCount(2)
+	}
+	before := mp.CurrNB()
+	require.Error(t, filterBatch(batches[0], batches[1], 0, false, false, mp))
+	for i, bat := range batches {
+		require.Equal(t, 2, bat.RowCount())
+		require.Equal(t, [][]int64{{1, 2}, {1, 3}}[i], vector.MustFixedColNoTypeCheck[int64](bat.Vecs[0]))
+		require.True(t, bat.Vecs[0].HasBorrowedBacking())
+	}
+	require.Equal(t, before, mp.CurrNB())
+	require.Zero(t, releases)
 }

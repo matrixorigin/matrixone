@@ -619,16 +619,19 @@ func (tbl *txnTable) TransferDeletes(
 	if transferd.IsEmpty() {
 		return
 	}
+	selected := containers.NewEmptyBatch()
+	selected.Deletes = &transferd
+	for i, attr := range deletes.Attrs {
+		// The rowid column is always empty in the delete node.
+		if attr != catalog.PhyAddrColumnName {
+			selected.Vecs = append(selected.Vecs, deletes.Vecs[i])
+		}
+	}
+	if err = selected.Compact(); err != nil {
+		return
+	}
 	if phase == txnif.PrePreparePhase {
 		tbl.transferChanged = true
-	}
-	for i, attr := range deletes.Attrs {
-		// Skip the rowid column.
-		// The rowid column is always empty in the delete node.
-		if attr == catalog.PhyAddrColumnName {
-			continue
-		}
-		deletes.Vecs[i].CompactByBitmap(&transferd)
 	}
 	tbl.tombstoneTable.tableSpace.node.rows = uint32(deletes.Length())
 	return

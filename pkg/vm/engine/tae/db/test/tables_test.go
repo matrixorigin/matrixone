@@ -34,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils/config"
 	"github.com/panjf2000/ants/v2"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestTables1(t *testing.T) {
@@ -411,7 +412,7 @@ func TestTxn6(t *testing.T) {
 					defer view.Close()
 					assert.NotEqual(t, bats[0].Length(), view.Length())
 					t.Log(view.Deletes.String())
-					view.Compact()
+					require.NoError(t, view.Compact())
 					assert.Equal(t, bats[0].Length()-1, view.Length())
 				}
 			}

@@ -73,6 +73,9 @@ func (v *Vector) MarshalBinaryWithBufferV1(buf *bytes.Buffer) error {
 }
 
 func (v *Vector) UnmarshalBinaryV1(data []byte) error {
+	if v.allocationAccount != nil || v.hasOwnedBackingStorage() {
+		return allocationAccountInvalid("cannot replace owned vector storage with aliases")
+	}
 	// Keep the legacy decoder contract for unrelated types. JSON needs complete
 	// admission before any decoded descriptor can become visible.
 	if len(data) >= 1+types.TSize {
@@ -86,9 +89,6 @@ func (v *Vector) UnmarshalBinaryV1(data []byte) error {
 	}
 	if err := validateJSONLegacyWire(data); err != nil {
 		return err
-	}
-	if v.allocationAccount != nil || v.hasOwnedBackingStorage() {
-		return allocationAccountInvalid("cannot replace owned vector storage with aliases")
 	}
 	var decoded Vector
 	if err := decoded.unmarshalBinaryV1(data); err != nil {

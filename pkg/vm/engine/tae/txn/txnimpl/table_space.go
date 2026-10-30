@@ -208,7 +208,9 @@ func (space *tableSpace) PrepareApply(ctx context.Context) (err error) {
 
 func (space *tableSpace) prepareApplyANode(ctx context.Context, node *anode, startOffset uint32) (err error) {
 	if startOffset == 0 {
-		node.Compact()
+		if err = node.Compact(); err != nil {
+			return
+		}
 	}
 	tableData := space.table.entry.GetTableData()
 	appended := startOffset

@@ -193,7 +193,7 @@ func TestCompactAbortRowsRemapsDeletes(t *testing.T) {
 	bat.Deletes = nulls.Build(6, 0, 1, 2, 3, 4)
 	abortRows := nulls.Build(6, 0, 1, 3, 4)
 
-	compactInvisibleAppendRows(bat, abortRows)
+	require.NoError(t, compactInvisibleAppendRows(bat, abortRows))
 
 	require.Equal(t, 2, bat.Length())
 	require.Equal(t, []uint64{0}, bat.Deletes.ToArray())

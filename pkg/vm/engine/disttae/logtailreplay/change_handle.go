@@ -3466,7 +3466,7 @@ func (p *ChangeHandler) quickNext(ctx context.Context, mp *mpool.MPool) (data, t
 			dataEnd = true
 			err = nil
 		} else if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
-			if err = p.coalesceBatch(data, tombstone); err != nil {
+			if err = p.coalesceBatch(data, tombstone, mp); err != nil {
 				return
 			}
 			return
@@ -3479,7 +3479,7 @@ func (p *ChangeHandler) quickNext(ctx context.Context, mp *mpool.MPool) (data, t
 			tombstoneEnd = true
 			err = nil
 		} else if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
-			if err = p.coalesceBatch(data, tombstone); err != nil {
+			if err = p.coalesceBatch(data, tombstone, mp); err != nil {
 				return
 			}
 			return
@@ -3487,7 +3487,7 @@ func (p *ChangeHandler) quickNext(ctx context.Context, mp *mpool.MPool) (data, t
 		if err != nil {
 			return
 		}
-		if err = p.coalesceBatch(data, tombstone); err != nil {
+		if err = p.coalesceBatch(data, tombstone, mp); err != nil {
 			return
 		}
 		if tombstoneEnd && dataEnd {
@@ -3505,11 +3505,11 @@ func (p *ChangeHandler) quickNext(ctx context.Context, mp *mpool.MPool) (data, t
 
 // coalesceBatch applies net-effect filtering to a pair of batches unless the
 // caller explicitly requests all historical versions.
-func (p *ChangeHandler) coalesceBatch(data, tombstone *batch.Batch) error {
+func (p *ChangeHandler) coalesceBatch(data, tombstone *batch.Batch, mp *mpool.MPool) error {
 	if p.preserveAllVersions {
 		return nil
 	}
-	return filterBatch(data, tombstone, p.primaryIdx, p.skipDeletes, p.isRecoveryMode)
+	return filterBatch(data, tombstone, p.primaryIdx, p.skipDeletes, p.isRecoveryMode, mp)
 }
 
 // filterBatch merges operations on the same primary key (pk) from data and tombstone batches.
@@ -3534,7 +3534,7 @@ func (p *ChangeHandler) coalesceBatch(data, tombstone *batch.Batch) error {
 // delete) keeps the delete to ensure downstream consistency. When false (normal
 // operation), Case 2.2 deletes all rows since the net effect is "no change" — sound
 // only while the consumer's state matches the table state at the range start.
-func filterBatch(data, tombstone *batch.Batch, primarySeqnum int, skipDeletes bool, isRecoveryMode bool) (err error) {
+func filterBatch(data, tombstone *batch.Batch, primarySeqnum int, skipDeletes bool, isRecoveryMode bool, mp *mpool.MPool) (err error) {
 	if data == nil || tombstone == nil {
 		return
 	}
@@ -3691,8 +3691,29 @@ func filterBatch(data, tombstone *batch.Batch, primarySeqnum int, skipDeletes bo
 	goSort.Slice(dataRowsToDelete, func(i, j int) bool {
 		return dataRowsToDelete[i] < dataRowsToDelete[j]
 	})
-	tombstone.Shrink(tombstoneRowsToDelete, true)
-	data.Shrink(dataRowsToDelete, true)
+	tp, err := batch.PrepareShrinkData(tombstone.Vecs, mp, len(tombstoneRowsToDelete) > 0 && len(tombstoneRowsToDelete) < tombstone.RowCount())
+	if err != nil {
+		return err
+	}
+	dp, err := batch.PrepareShrinkData(data.Vecs, mp, len(dataRowsToDelete) > 0 && len(dataRowsToDelete) < data.RowCount())
+	if err != nil {
+		for _, p := range tp {
+			p.Abort()
+		}
+		return err
+	}
+	for _, p := range tp {
+		p.Commit()
+	}
+	for _, p := range dp {
+		p.Commit()
+	}
+	if err = tombstone.Shrink(tombstoneRowsToDelete, true, mp); err != nil {
+		return err
+	}
+	if err = data.Shrink(dataRowsToDelete, true, mp); err != nil {
+		return err
+	}
 	return
 }
 func (p *ChangeHandler) Next(ctx context.Context, mp *mpool.MPool) (data, tombstone *batch.Batch, hint engine.ChangesHandle_Hint, err error) {
@@ -3749,7 +3770,7 @@ func (p *ChangeHandler) Next(ctx context.Context, mp *mpool.MPool) (data, tombst
 		case NextChangeHandle_Data:
 			err = p.dataHandle.Next(ctx, &data, mp)
 			if err == nil && data.Vecs[0].Length() >= p.coarseMaxRow*2 {
-				if err = p.coalesceBatch(data, tombstone); err != nil {
+				if err = p.coalesceBatch(data, tombstone, mp); err != nil {
 					return
 				}
 				if data.Vecs[0].Length() > p.coarseMaxRow {
@@ -3766,7 +3787,7 @@ func (p *ChangeHandler) Next(ctx context.Context, mp *mpool.MPool) (data, tombst
 		case NextChangeHandle_Tombstone:
 			err = p.tombstoneHandle.Next(ctx, &tombstone, mp)
 			if err == nil && tombstone.Vecs[0].Length() >= p.coarseMaxRow*2 {
-				if err = p.coalesceBatch(data, tombstone); err != nil {
+				if err = p.coalesceBatch(data, tombstone, mp); err != nil {
 					return
 				}
 				if tombstone.Vecs[0].Length() > p.coarseMaxRow {
@@ -3784,7 +3805,7 @@ func (p *ChangeHandler) Next(ctx context.Context, mp *mpool.MPool) (data, tombst
 		if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
 			err = nil
 			if data != nil || tombstone != nil {
-				if err = p.coalesceBatch(data, tombstone); err != nil {
+				if err = p.coalesceBatch(data, tombstone, mp); err != nil {
 					return
 				}
 				p.totalDuration += time.Since(t0)
@@ -3800,7 +3821,7 @@ func (p *ChangeHandler) Next(ctx context.Context, mp *mpool.MPool) (data, tombst
 		}
 		if moerr.IsMoErrCode(err, moerr.OkExpectedEOF) {
 			err = nil
-			if err = p.coalesceBatch(data, tombstone); err != nil {
+			if err = p.coalesceBatch(data, tombstone, mp); err != nil {
 				return
 			}
 			p.totalDuration += time.Since(t0)
@@ -3825,7 +3846,7 @@ func (p *ChangeHandler) Next(ctx context.Context, mp *mpool.MPool) (data, tombst
 	}
 }
 
-func applyTSFilterForBatch(bat *batch.Batch, sortIdx int, skipTS map[types.TS]struct{}, start, end types.TS) error {
+func applyTSFilterForBatch(bat *batch.Batch, sortIdx int, skipTS map[types.TS]struct{}, start, end types.TS, mp *mpool.MPool) error {
 	if bat == nil {
 		return nil
 	}
@@ -3846,11 +3867,33 @@ func applyTSFilterForBatch(bat *batch.Batch, sortIdx int, skipTS map[types.TS]st
 			}
 		}
 	}
-	for _, vec := range bat.Vecs {
-		vec.Shrink(deletes, true)
+	if err := shrinkVectors(bat.Vecs, deletes, mp); err != nil {
+		return err
 	}
 	return nil
 }
+func shrinkVectors(vecs []*vector.Vector, sels []int64, mp *mpool.MPool) error {
+	writes := len(vecs) > 0 && len(sels) > 0 && len(sels) < vecs[0].Length()
+	prepared, err := batch.PrepareShrinkData(vecs, mp, writes)
+	if err != nil {
+		return err
+	}
+	for _, p := range prepared {
+		p.Commit()
+	}
+	seen := make(map[*vector.Vector]struct{}, len(vecs))
+	for _, vec := range vecs {
+		if _, ok := seen[vec]; ok {
+			continue
+		}
+		seen[vec] = struct{}{}
+		if err := vec.Shrink(sels, true, mp); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func sortBatch(bat *batch.Batch, sortIdx int, mp *mpool.MPool) error {
 	if bat == nil {
 		return nil
@@ -4295,7 +4338,9 @@ func updateTombstoneBatch(
 			objectio.TombstoneAttr_PK_Attr,
 			objectio.DefaultCommitTS_Attr,
 		}
-		applyTSFilterForBatch(bat, 2, skipTS, start, end)
+		if err := applyTSFilterForBatch(bat, 2, skipTS, start, end, mp); err != nil {
+			return err
+		}
 	} else {
 		if rowIDVec != nil {
 			rowIDVec.Free(mp)
@@ -4304,7 +4349,9 @@ func updateTombstoneBatch(
 		bat.Attrs = []string{
 			objectio.TombstoneAttr_PK_Attr,
 			objectio.DefaultCommitTS_Attr}
-		applyTSFilterForBatch(bat, 1, skipTS, start, end)
+		if err := applyTSFilterForBatch(bat, 1, skipTS, start, end, mp); err != nil {
+			return err
+		}
 	}
 	if sort {
 		sortIdx := len(bat.Vecs) - 1
@@ -4405,8 +4452,8 @@ func updatePersistedTombstoneBatch(
 		bat.Vecs = []*vector.Vector{pkVec, commitTSVec}
 		bat.Attrs = []string{objectio.TombstoneAttr_PK_Attr, objectio.DefaultCommitTS_Attr}
 	}
-	for _, vec := range bat.Vecs {
-		vec.Shrink(deletes, true)
+	if err := shrinkVectors(bat.Vecs, deletes, mp); err != nil {
+		return err
 	}
 	bat.SetRowCount(bat.Vecs[0].Length())
 	if sortBatchByTS {
@@ -4473,7 +4520,9 @@ func updateDataBatch(
 	if rebuildAttrs {
 		bat.Attrs = filteredAttrs
 	}
-	applyTSFilterForBatch(bat, len(bat.Vecs)-1, nil, start, end)
+	if err := applyTSFilterForBatch(bat, len(bat.Vecs)-1, nil, start, end, mp); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -4611,8 +4660,8 @@ func updatePersistedDataBatch(
 	if rebuildAttrs {
 		bat.Attrs = filteredAttrs
 	}
-	for _, vec := range bat.Vecs {
-		vec.Shrink(deletes, true)
+	if err := shrinkVectors(bat.Vecs, deletes, mp); err != nil {
+		return err
 	}
 	if len(bat.Vecs) > 0 {
 		bat.SetRowCount(bat.Vecs[0].Length())
