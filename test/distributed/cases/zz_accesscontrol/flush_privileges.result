@@ -1,0 +1,64 @@
+drop user if exists flush_privileges_user;
+drop role if exists flush_privileges_role;
+drop database if exists flush_privileges_db;
+create database flush_privileges_db;
+create table flush_privileges_db.flush (flush int);
+create role flush_privileges_role;
+create user flush_privileges_user identified by '123456' default role flush_privileges_role;
+grant connect on account * to flush_privileges_role;
+grant insert, select on table flush_privileges_db.flush to flush_privileges_role;
+grant flush_privileges_role to flush_privileges_user;
+begin;
+insert into flush_privileges_db.flush values (1);
+flush privileges;
+rollback;
+select count(*) from flush_privileges_db.flush;
+➤ count(*)[-5,64,0]  𝄀
+0
+set autocommit = 0;
+insert into flush_privileges_db.flush values (2);
+flush privileges;
+rollback;
+select count(*) from flush_privileges_db.flush;
+➤ count(*)[-5,64,0]  𝄀
+0
+set autocommit = 1;
+prepare flush_privileges_existing from 'select count(*) from flush_privileges_db.flush';
+flush privileges;
+execute flush_privileges_existing;
+➤ count(*)[-5,64,0]  𝄀
+0
+deallocate prepare flush_privileges_existing;
+prepare flush_privileges_unsupported from 'flush privileges';
+not supported: preparing FLUSH PRIVILEGES
+flush tables;
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 12 near " tables";
+set session enable_privilege_cache = on;
+begin;
+insert into flush_privileges_db.flush values (3);
+flush privileges;
+internal error: do not have privilege to execute the statement
+rollback;
+select count(*) from flush_privileges_db.flush;
+➤ count(*)[-5,64,0]  𝄀
+0
+set session enable_privilege_cache = off;
+begin;
+insert into flush_privileges_db.flush values (4);
+flush privileges;
+internal error: do not have privilege to execute the statement
+rollback;
+select count(*) from flush_privileges_db.flush;
+➤ count(*)[-5,64,0]  𝄀
+0
+revoke select on table flush_privileges_db.flush from flush_privileges_role;
+select count(*) from flush_privileges_db.flush;
+internal error: do not have privilege to execute the statement
+flush privileges;
+grant select on table flush_privileges_db.flush to flush_privileges_role;
+select count(*) from flush_privileges_db.flush;
+➤ count(*)[-5,64,0]  𝄀
+0
+drop user if exists flush_privileges_user;
+drop role if exists flush_privileges_role;
+drop database if exists flush_privileges_db;
