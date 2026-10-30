@@ -203,6 +203,12 @@ func virtualTimestampColumnState(table *plan.TableDef, pos int32, state []uint8)
 		state[pos] = 2
 		return false
 	}
+	// A UNIQUE key is enforced against the persisted writer-time value. Expose
+	// that same value to reads, and treat it as a physical leaf for dependents.
+	if virtualTimestampUniqueKeyPart(table, pos) {
+		state[pos] = 2
+		return false
+	}
 	if col.GeneratedCol.Expr == nil {
 		state[pos] = 3
 		return true
@@ -213,6 +219,20 @@ func virtualTimestampColumnState(table *plan.TableDef, pos int32, state []uint8)
 		return true
 	}
 	state[pos] = 2
+	return false
+}
+
+func virtualTimestampUniqueKeyPart(table *plan.TableDef, pos int32) bool {
+	for _, idx := range table.Indexes {
+		if idx == nil || !idx.Unique {
+			continue
+		}
+		for _, part := range idx.Parts {
+			if partPos, ok := table.Name2ColIndex[catalog.ResolveAlias(part)]; ok && partPos == pos {
+				return true
+			}
+		}
+	}
 	return false
 }
 

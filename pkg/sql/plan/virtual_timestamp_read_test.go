@@ -54,6 +54,13 @@ func TestVirtualTimestampReadAndIndexEligibility(t *testing.T) {
 	require.Equal(t, int32(17), correlated.GetCorr().RelPos)
 	require.Equal(t, int32(0), correlated.GetCorr().ColPos)
 	require.Equal(t, int32(1), correlated.GetCorr().Depth)
+
+	// A unique key keeps its writer-time value visible to readers. Dependent
+	// virtual columns use that same physical leaf.
+	table.Indexes = []*pb.IndexDef{{Unique: true, Parts: []string{"d"}}}
+	require.False(t, virtualTimestampColumn(table, 1))
+	require.False(t, virtualTimestampColumn(table, 2))
+	require.False(t, indexUsesVirtualTimestamp(&pb.IndexDef{Parts: []string{"d"}}, table))
 }
 
 func TestVirtualTimestampOrdinaryColumnDoesNotAllocate(t *testing.T) {

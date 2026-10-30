@@ -109,6 +109,28 @@ func TestVirtualTimestampColumnUsesReaderTimeZone(t *testing.T) {
 		// column read under the reader's time zone.
 		count("select count(*) from special_side where id in (3,4) and x=g and x='2!'", 2)
 		count("select count(*) from special_side where id in (5,6) and x=h and x='2:2024-03-01'", 2)
+		// The empty ENUM label and error member have the same display text.
+		// Sequential UPDATE must carry the stored ordinal between projections.
+		exec("create table special_empty(id int primary key, ts timestamp(6) not null, p enum('','a') default '', h varchar(32) as (concat(p,':',date(ts))) virtual, x varchar(32), y int)")
+		exec("set time_zone='+00:00'")
+		exec("insert into special_empty(id,ts) values(1,'2024-02-29 23:30:00'),(2,'2024-02-29 23:30:00')")
+		exec("set time_zone='+08:00'")
+		exec("update special_empty set x=h where id=1")
+		exec("update special_empty set x=h,y=1 where id=2")
+		count("select count(*) from special_empty where x='1:2024-03-01'", 2)
+		// UNIQUE still enforces writer-time keys. Reads must expose those same
+		// persisted values until a versioned uniqueness policy is available.
+		exec("create table unique_side(id int primary key, ts timestamp(6) not null, d date as (date(ts)) virtual, unique key ud(d))")
+		exec("set time_zone='+00:00'")
+		exec("insert into unique_side(id,ts) values(1,'2024-02-29 23:30:00')")
+		exec("set time_zone='+08:00'")
+		exec("insert into unique_side(id,ts) values(2,'2024-03-01 09:00:00')")
+		var uniqueD1, uniqueD2 string
+		require.NoError(t, conn.QueryRowContext(ctx, "select cast(d as char) from unique_side where id=1").Scan(&uniqueD1))
+		require.NoError(t, conn.QueryRowContext(ctx, "select cast(d as char) from unique_side where id=2").Scan(&uniqueD2))
+		require.Equal(t, "2024-02-29", uniqueD1)
+		require.Equal(t, "2024-03-01", uniqueD2)
+		count("select count(*) from unique_side force index(ud) where d='2024-03-01'", 1)
 		for _, hint := range []string{"", "force index(kd)", "ignore index(kd)"} {
 			count("select count(*) from t "+hint+" where d='2024-03-01'", 1)
 			count("select count(*) from t "+hint+" where d='2024-02-29'", 1)

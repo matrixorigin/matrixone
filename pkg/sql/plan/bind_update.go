@@ -478,6 +478,14 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 		for _, col := range tableDef.Cols {
 			oldColName2Idx[alias+"."+col.Name] = int32(len(selectList))
 			e := tree.NewUnresolvedName(tree.NewCStr(alias, bindCtx.lower), tree.NewCStr(col.Name, 1))
+			if sequentialAssignments && isEnumOrSetPlanType(&col.Typ) {
+				// Sequential projections must retain the storage ordinal/bitmap.
+				// A display string cannot recover an empty-label ENUM member.
+				if bindCtx.physicalMySQLSpecialRefs == nil {
+					bindCtx.physicalMySQLSpecialRefs = make(map[*tree.UnresolvedName]struct{})
+				}
+				bindCtx.physicalMySQLSpecialRefs[e] = struct{}{}
+			}
 			if col.GeneratedCol != nil {
 				if bindCtx.physicalGeneratedRefs == nil {
 					bindCtx.physicalGeneratedRefs = make(map[*tree.UnresolvedName]struct{})

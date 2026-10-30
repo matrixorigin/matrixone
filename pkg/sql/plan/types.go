@@ -876,7 +876,8 @@ type BindContext struct {
 	// Internal UPDATE/DELETE target projections need the persisted value for
 	// old secondary-index keys. The user predicate in the same SELECT still
 	// observes the session's virtual-column value.
-	physicalGeneratedRefs map[*tree.UnresolvedName]struct{}
+	physicalGeneratedRefs    map[*tree.UnresolvedName]struct{}
+	physicalMySQLSpecialRefs map[*tree.UnresolvedName]struct{}
 	// Tags whose rows can be NULL-extended by a join in this query block.
 	nullExtendedTags map[int32]bool
 	// The grouping/window rewrite owns this exact generated source. Neither
