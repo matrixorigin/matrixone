@@ -25,6 +25,7 @@ import (
 
 func buildEnumSetDDLForTest(t *testing.T, sql string) error {
 	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
+	ctx.SetSqlModeOverride("STRICT_TRANS_TABLES")
 	stmt, err := mysql.ParseOne(t.Context(), sql, 1)
 	require.NoError(t, err)
 	defer stmt.Free()
@@ -101,4 +102,39 @@ func TestEnumSetDuplicateMembers(t *testing.T) {
 			require.NoError(t, buildEnumSetDDLForTest(t, "create table dd(id int, "+def+")"), def)
 		})
 	}
+}
+
+type enumDuplicateWarningSink struct {
+	codes    []uint16
+	messages []string
+}
+
+func (s *enumDuplicateWarningSink) AppendWarningDiagnostic(code uint16, msg string) {
+	s.codes = append(s.codes, code)
+	s.messages = append(s.messages, msg)
+}
+
+// With a non-strict sql_mode MySQL creates an ENUM with a duplicate member and
+// reports Note 1291 once. SET duplicates stay an error: MO cannot store two
+// equal SET members.
+func TestEnumSetDuplicateMembersNonStrict(t *testing.T) {
+	build := func(sql string) (error, *enumDuplicateWarningSink) {
+		proc := newPlanTestProcess(t)
+		sink := &enumDuplicateWarningSink{}
+		proc.WarningSink = sink
+		ctx := NewMockCompilerContext(true, proc)
+		ctx.SetSqlModeOverride("")
+		stmt, err := mysql.ParseOne(t.Context(), sql, 1)
+		require.NoError(t, err)
+		defer stmt.Free()
+		_, err = BuildPlan(ctx, stmt, false)
+		return err, sink
+	}
+	err, sink := build("create table dd(id int, e enum('a','b','A'))")
+	require.NoError(t, err)
+	require.Equal(t, []uint16{moerr.ER_DUPLICATED_VALUE_IN_TYPE}, sink.codes)
+	require.Equal(t, []string{"Column 'e' has duplicated value 'a' in ENUM"}, sink.messages)
+
+	err, _ = build("create table dd(id int, s set('a','a'))")
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicatedValueInType), "%v", err)
 }

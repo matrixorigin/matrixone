@@ -1,6 +1,8 @@
 drop database if exists enum_set_ddl_validation;
 create database enum_set_ddl_validation;
 use enum_set_ddl_validation;
+set @saved_sql_mode = @@sql_mode;
+set sql_mode = 'ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES,NO_ZERO_IN_DATE,NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION';
 create table t_bad1 (id int, e enum('a','b') default 'zz');
 Invalid default value for 'e'
 create table t_bad2 (id int, s set('a','b') default 'c');
@@ -71,4 +73,18 @@ insert into t_dup_ok values (1, 'A', ' a');
 select id, e2 from t_dup_ok;
 ➤ id[4,32,0]  ¦  e2[12,65535,0]  𝄀
 1  ¦   a
+set sql_mode = '';
+create table t_ns_dup (id int, e enum('a','b','A'));
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1291  ¦  Column 'e' has duplicated value 'a' in ENUM
+insert into t_ns_dup values (1, 'b');
+select * from t_ns_dup;
+➤ id[4,32,0]  ¦  e[12,65535,0]  𝄀
+1  ¦  b
+create table t_ns_dup_set (id int, s set('a','a'));
+Column 's' has duplicated value 'a' in SET
+create table t_ns_bad (id int, e enum('a','b') default 'zz');
+Invalid default value for 'e'
+set sql_mode = @saved_sql_mode;
 drop database enum_set_ddl_validation;

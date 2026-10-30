@@ -3720,6 +3720,11 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 					return moerr.NewErrTooManyFields(ctx.GetContext())
 				}
 			}
+			if replay == nil {
+				if err := checkEnumMemberDuplicates(ctx, def, tableCharset); err != nil {
+					return err
+				}
+			}
 			cType, err := getColumnTypeFromAst(ctx.GetContext(), def, tableCharset, replay)
 			if err != nil {
 				return err

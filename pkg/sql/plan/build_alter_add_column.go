@@ -52,6 +52,9 @@ func AddColumn(
 			"column name %s is reserved for external table scans", newColName)
 	}
 
+	if err := checkEnumMemberDuplicates(ctx, specNewColumn, tableDef.DefaultCharset); err != nil {
+		return false, err
+	}
 	colType, err := getColumnTypeFromAst(ctx.GetContext(), specNewColumn, tableDef.DefaultCharset, nil)
 	if err != nil {
 		return false, err

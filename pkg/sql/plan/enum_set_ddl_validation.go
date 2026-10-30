@@ -36,13 +36,13 @@ import (
 // spaces, so those are ignored; ENUM keeps raw padded labels (ENUM('a ','a')
 // assigns 'a ' and 'a' to different members), so only identical labels
 // collide there.
-func validateEnumSetMemberDuplicates(ctx context.Context, column *tree.ColumnTableDef, tableCharset uint32) error {
+func validateEnumSetMemberDuplicates(ctx context.Context, column *tree.ColumnTableDef, tableCharset uint32, want defines.MysqlType) error {
 	astType, ok := column.Type.(*tree.T)
-	if !ok {
+	if !ok || defines.MysqlType(astType.InternalType.Oid) != want {
 		return nil
 	}
 	var family string
-	switch defines.MysqlType(astType.InternalType.Oid) {
+	switch want {
 	case defines.MYSQL_TYPE_ENUM:
 		family = "ENUM"
 	case defines.MYSQL_TYPE_SET:
@@ -72,6 +72,33 @@ func validateEnumSetMemberDuplicates(ctx context.Context, column *tree.ColumnTab
 			return moerr.NewErrDuplicatedValueInType(ctx, column.Name.ColNameOrigin(), first, family)
 		}
 		seen[key] = member
+	}
+	return nil
+}
+
+// checkEnumMemberDuplicates applies the sql_mode dependent ENUM duplicate
+// rule of a user CREATE/ALTER TABLE column definition. Like MySQL, strict mode
+// rejects the definition with 1291, while a non-strict session creates the
+// column and only gets a 1291 diagnostic. SET duplicates are checked by
+// getColumnTypeFromAst and stay an error in every mode: MO cannot store two
+// equal SET members (types.NormalizeSetValues has always rejected them).
+func checkEnumMemberDuplicates(cctx CompilerContext, column *tree.ColumnTableDef, tableCharset uint32) error {
+	ctx := cctx.GetContext()
+	if defines.IsInternalExecutor(ctx) {
+		return nil
+	}
+	err := validateEnumSetMemberDuplicates(ctx, column, tableCharset, defines.MYSQL_TYPE_ENUM)
+	if err == nil {
+		return nil
+	}
+	mode, modeErr := cctx.ResolveVariable("sql_mode", true, false)
+	if modeErr != nil || process.IsStrictMode(mode) {
+		return err
+	}
+	if proc := cctx.GetProcess(); proc != nil {
+		if sink, ok := proc.GetWarningSink().(process.WarningDiagnosticAppender); ok {
+			sink.AppendWarningDiagnostic(moerr.ER_DUPLICATED_VALUE_IN_TYPE, err.Error())
+		}
 	}
 	return nil
 }

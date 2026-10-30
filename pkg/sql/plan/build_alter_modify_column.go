@@ -34,6 +34,9 @@ func updateNewColumnInTableDef(
 ) (bool, error) {
 	ctx := cctx.GetContext()
 
+	if err := checkEnumMemberDuplicates(cctx, nColSpec, tableDef.DefaultCharset); err != nil {
+		return false, err
+	}
 	nTy, err := getColumnTypeFromAst(ctx, nColSpec, tableDef.DefaultCharset, nil)
 	if err != nil {
 		return false, err

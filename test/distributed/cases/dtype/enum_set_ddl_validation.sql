@@ -3,6 +3,8 @@
 drop database if exists enum_set_ddl_validation;
 create database enum_set_ddl_validation;
 use enum_set_ddl_validation;
+set @saved_sql_mode = @@sql_mode;
+set sql_mode = 'ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES,NO_ZERO_IN_DATE,NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION';
 
 -- non-member constant defaults are rejected at CREATE TABLE
 create table t_bad1 (id int, e enum('a','b') default 'zz');
@@ -50,5 +52,16 @@ alter table t_dup_ok add column e3 enum('p','q','p');
 alter table t_dup_ok modify column e2 enum('a','ab','a');
 insert into t_dup_ok values (1, 'A', ' a');
 select id, e2 from t_dup_ok;
+
+-- non-strict sql_mode: like MySQL, a duplicate ENUM member is only a 1291
+-- diagnostic; SET duplicates stay an error because MO cannot store them
+set sql_mode = '';
+create table t_ns_dup (id int, e enum('a','b','A'));
+show warnings;
+insert into t_ns_dup values (1, 'b');
+select * from t_ns_dup;
+create table t_ns_dup_set (id int, s set('a','a'));
+create table t_ns_bad (id int, e enum('a','b') default 'zz');
+set sql_mode = @saved_sql_mode;
 
 drop database enum_set_ddl_validation;

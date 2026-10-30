@@ -198,7 +198,7 @@ func getColumnTypeFromAst(
 		parseType = &bounded
 	}
 	if !internal && replay == nil {
-		if err := validateEnumSetMemberDuplicates(ctx, column, tableCharset); err != nil {
+		if err := validateEnumSetMemberDuplicates(ctx, column, tableCharset, defines.MYSQL_TYPE_SET); err != nil {
 			return plan.Type{}, err
 		}
 	}
