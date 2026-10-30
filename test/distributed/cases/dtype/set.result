@@ -99,7 +99,8 @@ select id, tags from c order by tags, id;
 3  ¦  a
 select tags, count(*) as cnt from set_empty_member_order group by tags order by tags;
 ➤ tags[12,-1,0]  ¦  cnt[-5,64,0]  𝄀
-  ¦  2  𝄀
+  ¦  1  𝄀
+  ¦  1  𝄀
 a  ¦  1
 select distinct tags from set_empty_member_order order by tags;
 ➤ tags[12,-1,0]  𝄀
@@ -119,7 +120,8 @@ select id, s, s + 0 as bitmap from (select id, s from set_boundary_order) d orde
 select s, count(*) as cnt from set_boundary_order group by s order by s;
 ➤ s[12,-1,0]  ¦  cnt[-5,64,0]  𝄀
 null  ¦  1  𝄀
-  ¦  2  𝄀
+  ¦  1  𝄀
+  ¦  1  𝄀
 z  ¦  1  𝄀
 a  ¦  1
 select distinct s from set_boundary_order order by s;
@@ -160,7 +162,8 @@ insert into set_boundary_order values (5, null), (4, 4), (3, 1), (2, 0), (1, 2);
 select s, count(*) as cnt from set_boundary_order group by s order by s;
 ➤ s[12,-1,0]  ¦  cnt[-5,64,0]  𝄀
 null  ¦  1  𝄀
-  ¦  2  𝄀
+  ¦  1  𝄀
+  ¦  1  𝄀
 z  ¦  1  𝄀
 a  ¦  1
 select distinct s from set_boundary_order order by s;
