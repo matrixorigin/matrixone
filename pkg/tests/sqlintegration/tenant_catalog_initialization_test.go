@@ -77,7 +77,7 @@ func TestCreateAccountCatalogInitialization(t *testing.T) {
 		require.NoError(t, err, "the same account name must be reusable after recovery")
 		var version string
 		require.NoError(t, sys.QueryRowContext(ctx, "select create_version from mo_catalog.mo_account where account_name=?", account).Scan(&version))
-		require.Equal(t, "4.0.7", version)
+		require.Equal(t, "4.0.18", version)
 
 		tenant, err := sql.Open("mysql", fmt.Sprintf(account+"#root#accountadmin:111@tcp(127.0.0.1:%d)/", port))
 		require.NoError(t, err)

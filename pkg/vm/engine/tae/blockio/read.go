@@ -757,7 +757,8 @@ func fillOutputBatchBySelectedRows(
 
 // materializeBlockData copies block columns directly from pinned FileService
 // cache entries into the output batch. Cached Vectors remain scoped inside
-// ObjectIO; only caller-owned output data survives this call.
+// ObjectIO. Full non-appendable reads publish private, retained varlen payloads;
+// selected/visibility reads keep the existing uniquely owned materialization.
 func materializeBlockData(
 	ctx context.Context,
 	info *objectio.BlockInfo,
@@ -806,18 +807,16 @@ func materializeBlockData(
 		}
 	}
 
-	deleteMask, _, err = ioutil.LoadColumnsDataInto(
-		ctx,
-		idxes,
-		typs,
-		fs,
-		info.MetaLocation(),
-		destinations,
-		selectRows,
-		visibilityTS,
-		mp,
-		policy,
-	)
+	if selectRows == nil && visibilityTS == nil {
+		_, err = ioutil.LoadColumnsDataIntoReadonly(
+			ctx, idxes, typs, fs, info.MetaLocation(), destinations, mp, policy,
+		)
+	} else {
+		deleteMask, _, err = ioutil.LoadColumnsDataInto(
+			ctx, idxes, typs, fs, info.MetaLocation(), destinations,
+			selectRows, visibilityTS, mp, policy,
+		)
+	}
 	if err != nil {
 		return
 	}

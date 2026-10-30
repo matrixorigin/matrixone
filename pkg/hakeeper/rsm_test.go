@@ -704,6 +704,57 @@ func TestSetTaskSchedulerState(t *testing.T) {
 	}
 }
 
+// TestTaskTableUserCmdPersistsFirstBootOnly pins the one-shot persistence the
+// unknown-credentials upgrade rollout state depends on: the first accepted
+// task-table-user proposal persists and flips the scheduler to Running; every
+// later proposal — env-set at upgrade time or a fresh random pair — is dropped
+// and never replaces the persisted first-boot credentials. The proposer
+// (pkg/logservice/store_hakeeper_check.go's registerTaskUser/setTaskTableUser,
+// GetTaskTableUserCmd's only caller) merely logs 'task user info already set'
+// on this pre-state, no rotation command exists, and the state rides the RSM
+// snapshot across restarts — so special-user credentials set after first
+// bootstrap can never match an already-initialized cluster's persisted pair.
+func TestTaskTableUserCmdPersistsFirstBootOnly(t *testing.T) {
+	first := pb.TaskTableUser{Username: "first-boot-random-user", Password: "first-boot-random-password"}
+	rsm := stateMachine{state: pb.HAKeeperRSMState{
+		State:              pb.HAKeeperRunning,
+		TaskSchedulerState: pb.TaskSchedulerCreated,
+	}}
+	result, err := rsm.Update(sm.Entry{Cmd: GetTaskTableUserCmd(first)})
+	require.NoError(t, err)
+	assert.Equal(t, uint64(pb.TaskSchedulerCreated), result.Value,
+		"the proposer observes the Created pre-state on the first proposal")
+	assert.Equal(t, first, rsm.state.TaskTableUser)
+	assert.Equal(t, pb.TaskSchedulerRunning, rsm.state.TaskSchedulerState)
+
+	for _, later := range []pb.TaskTableUser{
+		{Username: "env-set-at-upgrade", Password: "env-set-at-upgrade"},
+		{Username: "another-random-pair", Password: "another-random-pair"},
+	} {
+		result, err = rsm.Update(sm.Entry{Cmd: GetTaskTableUserCmd(later)})
+		require.NoError(t, err)
+		assert.Equal(t, uint64(pb.TaskSchedulerRunning), result.Value,
+			"the proposer observes Running and logs-and-drops the later proposal")
+		assert.Equal(t, first, rsm.state.TaskTableUser,
+			"later proposals never replace the persisted first-boot credentials")
+	}
+
+	// The persisted pair survives a snapshot/restore round trip, so a restart
+	// keeps rejecting replacement proposals.
+	var buf bytes.Buffer
+	require.NoError(t, rsm.SaveSnapshot(&buf, nil, nil))
+	restored := stateMachine{}
+	require.NoError(t, restored.RecoverFromSnapshot(&buf, nil, nil))
+	assert.Equal(t, first, restored.state.TaskTableUser)
+	assert.Equal(t, pb.TaskSchedulerRunning, restored.state.TaskSchedulerState)
+	result, err = restored.Update(sm.Entry{Cmd: GetTaskTableUserCmd(
+		pb.TaskTableUser{Username: "post-restart-env", Password: "post-restart-env"})})
+	require.NoError(t, err)
+	assert.Equal(t, uint64(pb.TaskSchedulerRunning), result.Value)
+	assert.Equal(t, first, restored.state.TaskTableUser,
+		"the restarted state machine keeps the first-boot pair")
+}
+
 func TestInitialClusterRequestCmd(t *testing.T) {
 	nextIDByKey := map[string]uint64{"a": 1, "b": 2}
 	cmd := GetInitialClusterRequestCmd(

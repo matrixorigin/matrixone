@@ -1813,8 +1813,8 @@ func (builder *QueryBuilder) appendModernChildFkMarkOks(
 					return 0, nil, moerr.NewInternalErrorf(builder.GetContext(),
 						"foreign-key parent column %s not found", referencedNames[i])
 				}
-				childExprs[i], err = makePlan2AssignmentCastExpr(
-					builder.GetContext(), childExpr, parentCol.Typ)
+				childExprs[i], err = makePlan2AssignmentCastExprForColumn(
+					builder.GetContext(), childExpr, parentCol.Typ, parentCol.Name)
 				if err != nil {
 					return 0, nil, err
 				}
@@ -2866,7 +2866,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 			if err != nil {
 				return 0, err
 			}
-			updateExpr, err = builder.forceAssignmentCastExpr(updateExpr, colDef.Typ, builder.isInsertIgnore)
+			updateExpr, err = builder.forceAssignmentCastExpr(updateExpr, colDef.Typ, builder.isInsertIgnore, colDef.Name)
 			if err != nil {
 				return 0, err
 			}
@@ -2907,6 +2907,15 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 				err = replaceFuncId(builder.GetContext(), newDefExpr)
 				if err != nil {
 					return 0, err
+				}
+				if isAttributedDecimalPlanType(col.Typ) {
+					// Replay the persisted admission boundary under this
+					// statement's ignore policy instead of reusing the
+					// DDL-authored one verbatim.
+					if newDefExpr, err = rePoliceUnsignedDecimalAssignmentBoundary(
+						builder.GetContext(), newDefExpr, builder.isInsertIgnore, builder.compCtx.GetProcess()); err != nil {
+						return 0, err
+					}
 				}
 
 				updateExprs[col.Name] = newDefExpr
@@ -2956,6 +2965,13 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 				builder.isInsertIgnore,
 			)
 			if err != nil {
+				return 0, err
+			}
+			// Same cross-mode consumption boundary as the plain insert path:
+			// a native-mode ODKU statement must fail closed on a persisted
+			// definition that needs the conditional boolean contracts.
+			if err := RequireMySQLConditionalBooleanConsumption(
+				builder.GetContext(), builder.compCtx.GetProcess(), genExpr); err != nil {
 				return 0, err
 			}
 			replaceColRefTag(genExpr, 0, scanTag)
@@ -5146,7 +5162,7 @@ func (builder *QueryBuilder) castInsertSourceColumn(projExpr, sourceExpr *plan.E
 	case isGeometryPlanType(&typ):
 		return funcCastForGeometryType(builder.GetContext(), projExpr, typ)
 	default:
-		return builder.forceProjectedAssignmentCastExpr(projExpr, sourceExpr, typ, builder.isInsertIgnore)
+		return builder.forceProjectedAssignmentCastExpr(projExpr, sourceExpr, typ, builder.isInsertIgnore, colDef.Name)
 	}
 }
 
@@ -5575,6 +5591,15 @@ func (builder *QueryBuilder) appendNodesForInsertStmt(
 		if err != nil {
 			return 0, nil, nil, -1, err
 		}
+		// The copied catalog expression is rebound against THIS statement: a
+		// definition that needs the conditional boolean contracts evaluates
+		// with those kernels only on a MySQL-mode session, and a native-mode
+		// DML statement must fail closed at plan time instead of pushing a
+		// persisted JSON condition into the pre-contract BOOL decoding.
+		if err := RequireMySQLConditionalBooleanConsumption(
+			builder.GetContext(), builder.compCtx.GetProcess(), genExpr); err != nil {
+			return 0, nil, nil, -1, err
+		}
 		proj1Pos := genColIdxToProj1Pos[i]
 		columnExprs[int32(i)] = genExpr
 		colIdxToProjPos[int32(i)] = int32(proj1Pos)
@@ -5894,7 +5919,7 @@ func (builder *QueryBuilder) buildValueScan(
 			if err != nil {
 				return 0, nil, err
 			}
-			defExpr, err = builder.forceCastExpr2(defExpr, colTyp, targetTyp, builder.isInsertIgnore)
+			defExpr, err = builder.forceCastExpr2(defExpr, colTyp, targetTyp, builder.isInsertIgnore, col.Name)
 			if err != nil {
 				return 0, nil, err
 			}
@@ -5951,7 +5976,11 @@ func (builder *QueryBuilder) buildValueScan(
 						continue
 					}
 				}
-				if nv, ok := r[i].(*tree.NumVal); ok && !isEnumOrSetPlanType(&col.Typ) && !isTypedArrayPlanType(&col.Typ) {
+				// An attributed decimal literal must bind in its natural type and
+				// pass through unsigned-domain admission; the const fast path
+				// materializes the target type directly and would bypass the
+				// admission composition.
+				if nv, ok := r[i].(*tree.NumVal); ok && !isEnumOrSetPlanType(&col.Typ) && !isTypedArrayPlanType(&col.Typ) && !isAttributedDecimalPlanType(col.Typ) {
 					expr, err := MakeInsertValueConstExpr(proc, nv, &colTyp, builder.isInsertIgnore)
 					if err != nil {
 						return 0, nil, err
@@ -5969,7 +5998,12 @@ func (builder *QueryBuilder) buildValueScan(
 					}
 				} else {
 					valueBinder := binder
-					if types.T(col.Typ.Id).IsInteger() {
+					if types.T(col.Typ.Id).IsInteger() || isAttributedDecimalPlanType(col.Typ) {
+						// Attributed decimals bind target-free like integers:
+						// raw string sources keep their text so unsigned-domain
+						// admission applies the string prefix grammar
+						// (including IGNORE retained-prefix truncation)
+						// instead of a context-typed early conversion.
 						valueBinder = funcBinder
 					}
 					boundWithNumericContext := false
@@ -6043,7 +6077,7 @@ func (builder *QueryBuilder) buildValueScan(
 				if err != nil {
 					return 0, nil, err
 				}
-				defExpr, err = builder.forceCastExpr2(defExpr, colTyp, targetTyp, builder.isInsertIgnore)
+				defExpr, err = builder.forceCastExpr2(defExpr, colTyp, targetTyp, builder.isInsertIgnore, col.Name)
 				if err != nil {
 					return 0, nil, err
 				}
@@ -6126,7 +6160,7 @@ func (builder *QueryBuilder) buildValueScan(
 			if err != nil {
 				return 0, nil, err
 			}
-			defExpr, err = builder.forceCastExpr2(defExpr, colTyp, targetTyp, builder.isInsertIgnore)
+			defExpr, err = builder.forceCastExpr2(defExpr, colTyp, targetTyp, builder.isInsertIgnore, col.Name)
 			if err != nil {
 				return 0, nil, err
 			}

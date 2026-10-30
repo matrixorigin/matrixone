@@ -201,13 +201,14 @@ func (builder *QueryBuilder) bindDelete(ctx CompilerContext, stmt *tree.Delete, 
 		return 0, moerr.NewUnsupportedDML(builder.GetContext(), "delete from multiple tables")
 	}
 
-	aliasMap := make(map[string][2]string)
-	for _, tbl := range stmt.TableRefs {
-		getAliasToName(builder.compCtx, tbl, "", aliasMap)
+	aliasMap, err := resolveDeleteTargetAliases(builder.compCtx, stmt)
+	if err != nil {
+		return 0, err
 	}
 
 	dmlCtx := NewDMLContext()
-	err := dmlCtx.ResolveTables(builder.compCtx, stmt.Tables, stmt.With, aliasMap, false)
+	// Target CTE/writability checks precede catalog lookup; SELECT keeps WITH.
+	err = dmlCtx.ResolveTables(builder.compCtx, stmt.Tables, nil, aliasMap, false)
 	if err != nil {
 		return 0, err
 	}
