@@ -220,7 +220,7 @@ class BaseAccountManager:
         """Build SQL to show accounts"""
         return "SHOW ACCOUNTS"
 
-    def _get_current_account_from_results(self, accounts: List[tuple]) -> str:
+    def _get_current_account_from_results(self, accounts: List[tuple], columns=None) -> str:
         """
         Determine current account from SHOW ACCOUNTS results.
 
@@ -239,16 +239,21 @@ class BaseAccountManager:
 
         # If only one account is returned, that's the current account
         if len(accounts) == 1:
-            return accounts[0][0]  # First column is account name
+            return self._row_to_account(accounts[0], columns).name
 
         # If multiple accounts are returned, we're in sys account
         # (sys can see all accounts)
         return "sys"
 
-    def _accounts_from_result(self, result):
+    @staticmethod
+    def _account_result_columns(result):
         columns = getattr(result, 'columns', None)
         if callable(columns):
             columns = list(result.keys())
+        return columns
+
+    def _accounts_from_result(self, result):
+        columns = self._account_result_columns(result)
         return [self._row_to_account(row, columns) for row in rows_from_result(result)]
 
     def _row_to_account(self, row: tuple, columns=None) -> Account:
@@ -487,7 +492,7 @@ class AccountManager(BaseAccountManager):
             show_sql = self._show_accounts_sql()
             result = self._get_executor().execute(show_sql)
             accounts = rows_from_result(result)
-            current_account = self._get_current_account_from_results(accounts)
+            current_account = self._get_current_account_from_results(accounts, self._account_result_columns(result))
 
             return User(
                 name=user_name,
@@ -635,7 +640,9 @@ class AccountManager(BaseAccountManager):
             show_sql = self._show_accounts_sql()
             show_result = self._get_executor().execute(show_sql)
             accounts = rows_from_result(show_result)
-            current_account = self._get_current_account_from_results(accounts)
+            current_account = self._get_current_account_from_results(
+                accounts, self._account_result_columns(show_result)
+            )
 
             return [User(name=current_user_name, host="%", account=current_account, status="OPEN")]
 
@@ -945,7 +952,7 @@ class AsyncAccountManager(BaseAccountManager):
             show_sql = self._show_accounts_sql()
             result = await self._get_executor().execute(show_sql)
             accounts = rows_from_result(result)
-            current_account = self._get_current_account_from_results(accounts)
+            current_account = self._get_current_account_from_results(accounts, self._account_result_columns(result))
 
             return User(
                 name=user_name,
@@ -983,7 +990,9 @@ class AsyncAccountManager(BaseAccountManager):
             show_sql = self._show_accounts_sql()
             show_result = await self._get_executor().execute(show_sql)
             accounts = rows_from_result(show_result)
-            current_account = self._get_current_account_from_results(accounts)
+            current_account = self._get_current_account_from_results(
+                accounts, self._account_result_columns(show_result)
+            )
 
             return [User(name=current_user_name, host="%", account=current_account, status="OPEN")]
 
