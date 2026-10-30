@@ -55,6 +55,12 @@ selection, generated-column DEFAULT exclusion, errors, and SQL generation.
 Do not scan the physical query graph for targets: it also contains cascade and
 index writes. Specialized UPDATE routes keep their existing independent owner.
 
+Validate every original generated-column assignment before nonsequential UPDATE
+collapses repeated SET targets. Any non-DEFAULT assignment must fail, even if a
+later DEFAULT replaces it in the final map; DEFAULT assignments are removed
+from the write set. This preserves the old self-FK validation and corrects the
+same invalid-SET acceptance in modern UPDATEs without foreign-key actions.
+
 Delete `getUpdateTableInfo` and its now-unused `updateKeys` field. Remove the
 legacy `dmlTableInfo` fields and computations that have no readers:
 `haveConstraint`, `nameToIdx`, `idToName`, `oldColPosMap`, `newColPosMap`.
@@ -74,7 +80,9 @@ legacy helper. No new persistent state, protocol, execution route or framework.
 - Verify self-FK detection SQL and actual rows for enabled/disabled checks,
   self-reference and non-self FK controls, multiple targets and aliases,
   generated DEFAULT and failed planning; ensure cascade/index targets are not
-  included. Exercise modern and specialized routes independently.
+  included. Check repeated generated-column assignments in both orders, with and
+  without self-FKs; invalid assignments fail before execution and DEFAULT stays
+  allowed. Exercise modern and specialized routes independently.
 - Preserve existing READ ONLY, foreign-key UPDATE and INSERT/DELETE SQL cases;
   compare actual results with cleanup. Repeat only where reuse or cleanup adds a
   distinct risk. Run affected owning-package normal and focused race tests plus
