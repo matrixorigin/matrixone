@@ -267,6 +267,11 @@ const (
 	// SET NULL action over a NOT NULL child column (MySQL error 1830,
 	// ER_FK_COLUMN_NOT_NULL). The action could never write NULL at runtime.
 	ErrFkColumnNotNull uint16 = 20484
+	// ErrAccountRestricted rejects a write or admin statement issued by an
+	// account in RESTRICTED status (ALTER ACCOUNT ... RESTRICTED). It has its
+	// own code so clients can tell it apart from storage-quota and other
+	// internal failures.
+	ErrAccountRestricted uint16 = 20485
 
 	// Group 5: rpc errors
 	//
@@ -639,6 +644,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrForeignKeyColumnCannotChangeChild:        {ER_FK_COLUMN_CANNOT_CHANGE_CHILD, []string{MySQLDefaultSqlState}, "Cannot change column '%-.192s': used in a foreign key constraint '%-.192s' of table '%-.192s'"},
 	ErrForeignKeyColumnCannotChange:             {ER_FK_COLUMN_CANNOT_CHANGE, []string{MySQLDefaultSqlState}, "Cannot change column '%-.192s': used in a foreign key constraint '%-.192s'"},
 	ErrFkColumnNotNull:                          {ER_FK_COLUMN_NOT_NULL, []string{MySQLDefaultSqlState}, "Column '%-.192s' cannot be NOT NULL: needed in a foreign key constraint '%-.192s' SET NULL"},
+	ErrAccountRestricted:                        {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "Account %s is restricted"},
 	ErrForeignKeyOnPartitioned:                  {ER_FOREIGN_KEY_ON_PARTITIONED, []string{MySQLDefaultSqlState}, "Foreign keys are not yet supported in conjunction with partitioning"},
 	ErrKeyColumnDoesNotExist:                    {ER_KEY_COLUMN_DOES_NOT_EXIST, []string{"42000"}, "Key column '%-.192s' doesn't exist in table"},
 	ErrKeyDoesNotExist:                          {ER_KEY_DOES_NOT_EXIST, []string{"42000"}, "Key '%-.192s' doesn't exist in table '%-.192s'"},
@@ -1901,6 +1907,12 @@ func NewErrForeignKeyColumnCannotChange(ctx context.Context, oriColName any, fkN
 
 func NewErrFkColumnNotNull(ctx context.Context, colName any, fkName any) *Error {
 	return newError(ctx, ErrFkColumnNotNull, colName, fkName)
+}
+
+// NewAccountRestricted reports that account is in RESTRICTED status and may
+// not run the statement.
+func NewAccountRestricted(ctx context.Context, account string) *Error {
+	return newError(ctx, ErrAccountRestricted, account)
 }
 
 func NewErrTableMustHaveColumns(ctx context.Context) *Error {

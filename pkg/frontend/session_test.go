@@ -1437,7 +1437,12 @@ func TestRestrictedAccountError(t *testing.T) {
 	defer stmts[0].Free()
 
 	_, err = authenticateUserCanExecuteStatement(ctx, ses, stmts[0])
-	require.EqualError(t, err, "internal error: Account restricted_account is restricted")
+	require.EqualError(t, err, "Account restricted_account is restricted")
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrAccountRestricted), "want ErrAccountRestricted, got %v", err)
+	require.False(t, moerr.IsMoErrCode(err, moerr.ErrInternal))
+	var moErr *moerr.Error
+	require.ErrorAs(t, err, &moErr)
+	require.Equal(t, moerr.ErrAccountRestricted, moErr.ErrorCode())
 }
 
 func Test_CheckLockTimeExpired(t *testing.T) {
