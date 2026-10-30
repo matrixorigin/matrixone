@@ -1,21 +1,6 @@
 name: Warm SCA caches
 
 on:
-  push:
-    branches:
-      - main
-    paths:
-      - go.mod
-      - go.sum
-      - .golangci.yml
-      - Makefile
-      - cgo/*.c
-      - cgo/*.h
-      - cgo/Makefile
-      - thirdparties/Makefile
-      - thirdparties/*.tar.gz
-      - thirdparties/download
-      - .github/workflows/sca-go-module-cache.yaml
   schedule:
     # Keep the pre-existing module/native/tool caches inside the configured
     # retention window. The expensive analysis below runs only on a cache miss,
