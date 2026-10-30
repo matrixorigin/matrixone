@@ -156,6 +156,42 @@ func LoadColumnsDataInto(
 	m *mpool.MPool,
 	policy fileservice.Policy,
 ) (deleteMask objectio.Bitmap, fromCache bool, err error) {
+	return loadColumnsDataInto(ctx, columns, typs, fs, location, destinations,
+		sels, visibilityTS, m, policy, false)
+}
+
+// LoadColumnsDataIntoReadonly materializes complete, non-appendable columns
+// into empty destinations. Varlen payloads have private retained backing so a
+// local pipeline can snapshot them without making another full payload copy.
+// Selected rows and appendable visibility keep LoadColumnsDataInto's owned path.
+func LoadColumnsDataIntoReadonly(
+	ctx context.Context,
+	columns []uint16,
+	typs []types.Type,
+	fs fileservice.FileService,
+	location objectio.Location,
+	destinations []*vector.Vector,
+	m *mpool.MPool,
+	policy fileservice.Policy,
+) (fromCache bool, err error) {
+	_, fromCache, err = loadColumnsDataInto(ctx, columns, typs, fs, location,
+		destinations, nil, nil, m, policy, true)
+	return
+}
+
+func loadColumnsDataInto(
+	ctx context.Context,
+	columns []uint16,
+	typs []types.Type,
+	fs fileservice.FileService,
+	location objectio.Location,
+	destinations []*vector.Vector,
+	sels []int64,
+	visibilityTS *types.TS,
+	m *mpool.MPool,
+	policy fileservice.Policy,
+	readonlyArea bool,
+) (deleteMask objectio.Bitmap, fromCache bool, err error) {
 	if len(columns) != len(destinations) {
 		err = moerr.NewInvalidInputNoCtxf(
 			"object column count %d does not match destination count %d",
@@ -173,6 +209,10 @@ func LoadColumnsDataInto(
 	for i := range destinations {
 		if destinations[i] == nil {
 			err = moerr.NewInvalidInputNoCtxf("nil destination for object column %d", columns[i])
+			return
+		}
+		if readonlyArea && destinations[i].Length() != 0 {
+			err = moerr.NewInvalidInputNoCtxf("readonly destination for object column %d is not empty", columns[i])
 			return
 		}
 	}
@@ -256,7 +296,13 @@ func LoadColumnsDataInto(
 	}
 
 	for i := range columns {
-		if sels == nil {
+		if readonlyArea {
+			err = objectio.CopyCachedVectorAllReadonly(
+				destinations[i],
+				ioVectors.Entries[i].CachedData,
+				m,
+			)
+		} else if sels == nil {
 			err = objectio.CopyCachedVectorAll(
 				destinations[i],
 				ioVectors.Entries[i].CachedData,

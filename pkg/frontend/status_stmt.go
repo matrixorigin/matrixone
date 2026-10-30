@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/util"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
 
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
@@ -282,6 +283,8 @@ func executeStatusStmt(ses *Session, execCtx *ExecCtx) (err error) {
 			if err != nil { // executor success, but processLoadLocal goroutine failed
 				return
 			}
+			// Test barrier after all LOAD work, before transaction finalization.
+			_, _, _ = fault.TriggerFault("load-local-before-finalize")
 		}
 
 		// only log if run time is longer than 1s
@@ -500,6 +503,10 @@ func (resper *MysqlResp) respStatus(ses *Session,
 			err = doDropProcedureWithDB(execCtx.reqCtx, ses, execCtx.stmt)
 
 		case *tree.Load:
+			res.lastInsertId = execCtx.proc.GetStatementLastInsertID()
+			if res.lastInsertId != 0 {
+				ses.SetLastInsertID(res.lastInsertId)
+			}
 			if st.Local && execCtx.isIssue3482 {
 				isIssue3482 = true
 				localFileName = st.Param.Filepath

@@ -180,6 +180,17 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 			err = moerr.NewNYI(b.GetContext(), "CAST to MEDIUMINT is not supported")
 			return
 		}
+		if typ, ok := exprImpl.Type.(*tree.T); ok &&
+			defines.MysqlType(typ.InternalType.Oid) == defines.MYSQL_TYPE_DECIMAL &&
+			(typ.InternalType.Unsigned || typ.InternalType.Zerofill) {
+			// MySQL's restricted cast_type grammar admits no UNSIGNED/ZEROFILL
+			// modifiers on a DECIMAL CAST target and rejects the spelling at
+			// parse time (1064). Column declarations keep the attribute; only
+			// the user-written CAST target is refused here.
+			err = moerr.NewParseErrorf(b.GetContext(),
+				"UNSIGNED/ZEROFILL attribute is not allowed in DECIMAL CAST target")
+			return
+		}
 		var typ Type
 		typ, err = getTypeFromAst(b.GetContext(), exprImpl.Type)
 		if err != nil {
@@ -3075,10 +3086,10 @@ func (b *baseBinder) mysqlSpecialTypeNumericContext(expr tree.Expr) bool {
 		return mysqlSpecialTypeNumericLiteral(value)
 	case *tree.UnresolvedName:
 		typ, ok := b.numericColumnType(value)
-		return ok && makeTypeByPlan2Type(typ).IsNumeric()
+		return ok && !isEnumOrSetPlanType(&typ) && makeTypeByPlan2Type(typ).IsNumeric()
 	case *tree.UnaryExpr:
 		return (value.Op == tree.UNARY_PLUS || value.Op == tree.UNARY_MINUS) &&
-			b.mysqlSpecialTypeNumericContext(value.Expr)
+			(b.mysqlSpecialTypeNumericContext(value.Expr) || b.mysqlSpecialTypeAst(value.Expr))
 	case *tree.BinaryExpr:
 		return isNumericBinaryOp(value.Op) || isBitwiseBinaryOp(value.Op)
 	case *tree.CastExpr:
@@ -4906,6 +4917,18 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 			}
 			b.markPreparedResultCastsProvisional(
 				b.GetContext(), name, astArgs, preparedPeerSources, e, preparedNumericProvenance)
+			// Materialize temporal constants before relocation checks see their
+			// diagnostic flag, without folding unrelated enclosing functions.
+			// PREPARE retains sources for EXECUTE-time zero-date policy.
+			if !b.builder.isPrepareStatement && !defines.IsPublicationViewBinding(b.GetContext()) {
+				proc := b.builder.compCtx.GetProcess()
+				e = foldTemporalTextConstant(proc, e)
+				if fn := e.GetF(); fn != nil {
+					for i, arg := range fn.Args {
+						fn.Args[i] = foldTemporalTextConstant(proc, arg)
+					}
+				}
+			}
 			return e, nil
 		}
 		if !strings.Contains(err.Error(), "not supported") {
@@ -5659,6 +5682,19 @@ func rewriteFindInSetSetProvenance(
 	rewritten = append(rewritten, args[0], bitmap)
 	rewritten = append(rewritten, makePlan2StringConstExprWithType(storageType.Enumvalues))
 	return rewritten, true, nil
+}
+
+// Children were already bound; only the temporal call itself and casts added
+// by the current overload resolver need a warning-free materialization proof.
+func foldTemporalTextConstant(proc *process.Process, expr *Expr) *Expr {
+	if !function.IsTemporalTextDiagnosticCall(expr) {
+		return expr
+	}
+	folded, err := ConstantFold(batch.EmptyForConstFoldBatch, DeepCopyExpr(expr), proc, false, true)
+	if err != nil || folded == nil {
+		return expr
+	}
+	return folded
 }
 
 func bindFuncExprAndConstFold(ctx context.Context, proc *process.Process, name string, args []*Expr) (*plan.Expr, error) {
@@ -7480,6 +7516,16 @@ func bindFuncExprImplByPlanExpr(
 	allowInternalFunctionArgs bool,
 ) (*plan.Expr, error) {
 	var err error
+	// The unsigned-DECIMAL admission entries exist only for the plan-composed
+	// assignment boundary. Their retType mirrors the source type, so a public
+	// call with an ANY-typed source (for example a bare NULL) would publish an
+	// ANY result node and panic executor result allocation in
+	// vector/functionTools.go. Persisted-boundary rebinding carries
+	// allowInternalFunctionArgs and must keep resolving these names.
+	if isUnsignedDecimalAdmissionName(name) && !allowInternalFunctionArgs {
+		return nil, moerr.NewInvalidInputf(
+			ctx, "function %s is plan-internal and cannot be called directly", name)
+	}
 	preparedCalendarResult := preparedRawCalendarResult(name, args)
 	// Validate before rewriting or converting argument metadata. Checked public
 	// binding must not turn an unknown identity into a MustTypeFromPlan panic.
@@ -7886,10 +7932,10 @@ func bindFuncExprImplByPlanExpr(
 		} else if args[0].Typ.Id == int32(types.T_interval) && args[1].Typ.Id == int32(types.T_datetime) {
 			name = "date_add"
 			args, err = resetDateFunctionArgs(ctx, args[1], args[0])
-		} else if args[0].Typ.Id == int32(types.T_varchar) && args[1].Typ.Id == int32(types.T_interval) {
+		} else if intervalArithmeticTextOperand(args[0]) && args[1].Typ.Id == int32(types.T_interval) {
 			name = "date_add"
 			args, err = resetDateFunctionArgs(ctx, args[0], args[1])
-		} else if args[0].Typ.Id == int32(types.T_interval) && args[1].Typ.Id == int32(types.T_varchar) {
+		} else if args[0].Typ.Id == int32(types.T_interval) && intervalArithmeticTextOperand(args[1]) {
 			name = "date_add"
 			args, err = resetDateFunctionArgs(ctx, args[1], args[0])
 		} else if args[0].Typ.Id == int32(types.T_int32) && args[1].Typ.Id == int32(types.T_interval) && intervalUnitIsDayOrLarger(args[1]) {
@@ -7931,7 +7977,7 @@ func bindFuncExprImplByPlanExpr(
 		} else if args[0].Typ.Id == int32(types.T_timestamp) && args[1].Typ.Id == int32(types.T_interval) {
 			name = "date_sub"
 			args, err = resetDateFunctionArgs(ctx, args[0], args[1])
-		} else if args[0].Typ.Id == int32(types.T_varchar) && args[1].Typ.Id == int32(types.T_interval) {
+		} else if intervalArithmeticTextOperand(args[0]) && args[1].Typ.Id == int32(types.T_interval) {
 			name = "date_sub"
 			args, err = resetDateFunctionArgs(ctx, args[0], args[1])
 		} else if args[0].Typ.Id == int32(types.T_int32) && args[1].Typ.Id == int32(types.T_interval) && intervalUnitIsDayOrLarger(args[1]) {
@@ -9101,6 +9147,11 @@ func bindFuncExprImplByPlanExpr(
 				}
 				if isPadSpaceComparisonFunction(name) &&
 					argsType[idx].Oid == types.T_char && castType.Oid == types.T_varchar {
+					args[idx], err = appendComparisonCastBeforeExpr(ctx, args[idx], typ)
+				} else if (isDecimalComparisonOperator(name) || name == "between") &&
+					argsType[idx].Oid.IsMySQLString() && castType.Oid == types.T_time {
+					// A TIME column's string boundary retains comparison policy;
+					// expression CAST's invalid-to-NULL behavior does not apply.
 					args[idx], err = appendComparisonCastBeforeExpr(ctx, args[idx], typ)
 				} else if name == "char" &&
 					(argsType[idx].Oid == types.T_float32 || argsType[idx].Oid == types.T_float64) &&
@@ -13013,6 +13064,16 @@ func resetIntervalFunctionArgs(ctx context.Context, intervalExpr *Expr) ([]*Expr
 		numberExpr,
 		makePlan2Int64ConstExprWithType(int64(intervalType)),
 	}, nil
+}
+
+// intervalArithmeticTextOperand reports whether the non-INTERVAL operand of
+// `expr +/- INTERVAL n unit` is evaluated like DATE_ADD/DATE_SUB's first
+// argument: any MySQL string type (CHAR, VARCHAR, TEXT, BINARY, BLOB...) or a
+// prepared-statement parameter marker, whose value is only known at EXECUTE.
+// DATE_ADD/DATE_SUB already accept all of these; the operator spelling must
+// not depend on which string type or protocol supplied the value.
+func intervalArithmeticTextOperand(expr *Expr) bool {
+	return types.T(expr.Typ.Id).IsMySQLString() || temporalDirectMarker(expr)
 }
 
 func intervalUnitIsDayOrLarger(intervalExpr *Expr) bool {

@@ -15,9 +15,15 @@
 package datalink
 
 import (
+	"net/url"
 	"reflect"
 	"strconv"
 	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/stage"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/stretchr/testify/require"
 )
 
 func TestParseDatalink(t *testing.T) {
@@ -115,7 +121,7 @@ func TestParseDatalinkFailed(t *testing.T) {
 		},
 		{
 			name: "Test5 - Empty Stage",
-			data: "stage:///a/b/c/1.txt?size=c",
+			data: "stage:///?size=c",
 		},
 		{
 			name: "Test6 - Without scheme",
@@ -148,5 +154,26 @@ func TestParseDatalinkFailed(t *testing.T) {
 				t.Errorf("validation error=%v, want %v", validationErr, err)
 			}
 		})
+	}
+}
+
+// Path-form Stage names reach the same resolver and range parser as host names.
+func TestLogicalStageDatalink(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	base, err := url.Parse("file:///tmp/base")
+	require.NoError(t, err)
+	for _, name := range []string{"two words", "part/name", "literal%2F"} {
+		canonical := tree.NewCStr(name, 1).Compare()
+		proc.GetStageCache().Set(canonical, stage.StageDef{Name: canonical, Url: base, Status: "enabled"})
+		uri := "stage:///" + url.PathEscape(name) + "/data.csv?offset=1&size=2"
+		path, bounds, err := ParseDatalink(uri, proc)
+		require.NoError(t, err)
+		require.Equal(t, "/tmp/base/data.csv", path)
+		require.Equal(t, []int64{1, 2}, bounds)
+		require.NoError(t, ValidateDatalink(uri, proc))
+		_, _, err = ParseDatalink("stage:///"+url.PathEscape(name)+"/data.csv?size=bad", proc)
+		var number *strconv.NumError
+		require.ErrorAs(t, err, &number)
+		require.Equal(t, "bad", number.Num)
 	}
 }

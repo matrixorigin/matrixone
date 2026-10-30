@@ -20,6 +20,7 @@ from typing import Optional, List, Dict, Union
 from enum import Enum
 
 from ._sql_literals import sql_identifier, sql_string_token
+from ._utils import stage_file_uri
 
 
 class LoadDataFormat(str, Enum):
@@ -82,8 +83,11 @@ class BaseLoadDataManager:
         compression=None,
         set_clause=None,
     ):
-        if local and self.client._connection_params.get('local_infile') is not True:
-            raise ValueError('LOCAL INFILE requires connect(local_infile=True); adopted engines are not certified')
+        if local and (
+            'local_infile' not in self.client._connection_params
+            or self.client._connection_params['local_infile'] is False
+        ):
+            raise ValueError('LOCAL INFILE is disabled or the adopted engine is not certified')
         format = (format or 'csv').lower()
         if format not in ('csv', 'jsonline', 'parquet'):
             raise ValueError('Unsupported LOAD format')
@@ -589,7 +593,7 @@ class LoadDataManager(BaseLoadDataManager):
                 table='users', sep='\\t', skiprows=1)
         """
         # Build stage path
-        stage_path = f"stage://{stage_name}/{filename}"
+        stage_path = stage_file_uri(stage_name, filename)
 
         # Delegate to read_csv
         return self.read_csv(
@@ -705,17 +709,14 @@ class LoadDataManager(BaseLoadDataManager):
             json_data = '{"id":1,"name":"Alice"}\\n{"id":2,"name":"Bob"}\\n'
             client.load_data.read_json(json_data, table='users', inline=True)
         """
+        if lines is not True:
+            raise ValueError('Native JSON loading requires lines=True (JSON Lines)')
         # Handle inline data
         if inline:
             return self.read_json_inline(data=filepath_or_buffer, table=table, orient=orient, **kwargs)
 
         # Map pandas orient to MatrixOne jsondata
-        if orient == 'records':
-            structure_str = 'object'
-        elif orient == 'values':
-            structure_str = 'array'
-        else:
-            structure_str = 'object'  # Default
+        structure_str = _json_structure(orient)
 
         # Convert compression enum if needed
         compression_str = compression.value if isinstance(compression, CompressionFormat) else compression
@@ -855,7 +856,7 @@ class LoadDataManager(BaseLoadDataManager):
 
             client.load_data.read_json_stage('s3_stage', 'events.jsonl', table='events')
         """
-        stage_path = f"stage://{stage_name}/{filename}"
+        stage_path = stage_file_uri(stage_name, filename)
         return self.read_json(
             filepath_or_buffer=stage_path,
             table=table,
@@ -887,7 +888,7 @@ class LoadDataManager(BaseLoadDataManager):
 
             client.load_data.read_parquet_stage('s3_stage', 'data.parquet', table='users')
         """
-        stage_path = f"stage://{stage_name}/{filename}"
+        stage_path = stage_file_uri(stage_name, filename)
         return self.read_parquet(filepath_or_buffer=stage_path, table=table, **kwargs)
 
     def read_json_inline(
@@ -920,12 +921,7 @@ class LoadDataManager(BaseLoadDataManager):
             table_name = table
 
         # Map orient to jsontype
-        if orient == 'records':
-            jsontype_str = 'object'
-        elif orient == 'values':
-            jsontype_str = 'array'
-        else:
-            jsontype_str = 'object'
+        jsontype_str = _json_structure(orient)
 
         # Build SQL
         sql = self._build_load_data_inline_sql(
@@ -1193,8 +1189,7 @@ class LoadDataManager(BaseLoadDataManager):
 
         Examples::
 
-            # Enable LOCAL negotiation when creating the connection:
-            # client.connect(database='test', local_infile=True)
+            # Default SDK connections authorize only this file for this statement.
             >>> result = client.load_data.from_local_file(
             ...     '/local/path/to/data.csv',
             ...     'users',
@@ -1210,7 +1205,10 @@ class LoadDataManager(BaseLoadDataManager):
         # Build SQL with LOCAL keyword
         sql = self._build_load_data_sql(file_path=file_path, table_name=table_name, local=True, **kwargs)
 
-        return self._get_executor().execute(sql)
+        from ._session_execution import _LiteralSQL
+
+        statement = _LiteralSQL(sql).execution_options(_matrixone_local_path=file_path)
+        return self._get_executor().execute(statement)
 
 
 class AsyncLoadDataManager(BaseLoadDataManager):
@@ -1458,17 +1456,14 @@ class AsyncLoadDataManager(BaseLoadDataManager):
         **kwargs,
     ):
         """Async version of read_json (pandas-style)"""
+        if lines is not True:
+            raise ValueError('Native JSON loading requires lines=True (JSON Lines)')
         # Handle inline data
         if inline:
             return await self.read_json_inline(data=filepath_or_buffer, table=table, orient=orient, **kwargs)
 
         # Map pandas orient to MatrixOne jsondata
-        if orient == 'records':
-            structure_str = 'object'
-        elif orient == 'values':
-            structure_str = 'array'
-        else:
-            structure_str = 'object'
+        structure_str = _json_structure(orient)
 
         compression_str = compression.value if isinstance(compression, CompressionFormat) else compression
 
@@ -1505,7 +1500,7 @@ class AsyncLoadDataManager(BaseLoadDataManager):
         **kwargs,
     ):
         """Async version of read_csv_stage (pandas-style)"""
-        stage_path = f"stage://{stage_name}/{filename}"
+        stage_path = stage_file_uri(stage_name, filename)
         return await self.read_csv(
             filepath_or_buffer=stage_path,
             table=table,
@@ -1533,7 +1528,7 @@ class AsyncLoadDataManager(BaseLoadDataManager):
         **kwargs,
     ):
         """Async version of read_json_stage (pandas-style)"""
-        stage_path = f"stage://{stage_name}/{filename}"
+        stage_path = stage_file_uri(stage_name, filename)
         return await self.read_json(
             filepath_or_buffer=stage_path,
             table=table,
@@ -1551,7 +1546,7 @@ class AsyncLoadDataManager(BaseLoadDataManager):
         **kwargs,
     ):
         """Async version of read_parquet_stage (pandas-style)"""
-        stage_path = f"stage://{stage_name}/{filename}"
+        stage_path = stage_file_uri(stage_name, filename)
         return await self.read_parquet(filepath_or_buffer=stage_path, table=table, **kwargs)
 
     async def read_csv_inline(
@@ -1596,12 +1591,7 @@ class AsyncLoadDataManager(BaseLoadDataManager):
             table_name = table
 
         # Map orient to jsontype
-        if orient == 'records':
-            jsontype_str = 'object'
-        elif orient == 'values':
-            jsontype_str = 'array'
-        else:
-            jsontype_str = 'object'
+        jsontype_str = _json_structure(orient)
 
         # Build SQL
         sql = self._build_load_data_inline_sql(
@@ -1692,4 +1682,15 @@ class AsyncLoadDataManager(BaseLoadDataManager):
         # Build SQL with LOCAL keyword
         sql = self._build_load_data_sql(file_path=file_path, table_name=table_name, local=True, **kwargs)
 
-        return await self._get_executor().execute(sql)
+        from ._session_execution import _LiteralSQL
+
+        statement = _LiteralSQL(sql).execution_options(_matrixone_local_path=file_path)
+        return await self._get_executor().execute(statement)
+
+
+def _json_structure(orient):
+    if orient == 'records':
+        return 'object'
+    if orient == 'values':
+        return 'array'
+    raise ValueError('JSON orient must be records or values')

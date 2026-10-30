@@ -68,16 +68,19 @@ func TestLoadAutoIncrementObservedDemand(t *testing.T) {
 		// Four pipeline batches cross the default cache size and exercise learned
 		// demand through the real LOAD consumer without a throughput assertion.
 		const n = 32768
-		load(file("bulk.csv", strings.Repeat("7\n", n)), "generated", "(v)")
+		result := load(file("bulk.csv", strings.Repeat("7\n", n)), "generated", "(v)")
+		first, err := result.LastInsertId()
+		require.NoError(t, err)
+		require.Equal(t, int64(1), first)
 		require.Equal(t, uint64(n), number("select count(*) from generated"))
 		require.Equal(t, uint64(1), number("select min(id) from generated"))
 		require.Equal(t, uint64(n), number("select max(id) from generated"))
-		// LOAD preserves the session baseline (frontend status_stmt.go); INSERT
-		// below exercises the first-generated-ID protocol result.
-		require.Zero(t, number("select last_insert_id()"))
+		// LOAD publishes the first generated ID in both the protocol and session;
+		// subsequent INSERTs continue from the allocated range.
+		require.Equal(t, uint64(1), number("select last_insert_id()"))
 		require.Equal(t, uint64(n+1), number("select auto_increment from information_schema.tables where table_schema=database() and table_name='generated'"))
-		result := exec("insert into generated(v) values(8),(9)")
-		first, err := result.LastInsertId()
+		result = exec("insert into generated(v) values(8),(9)")
+		first, err = result.LastInsertId()
 		require.NoError(t, err)
 		require.Equal(t, int64(n+1), first)
 		result = exec("insert into generated values(NULL,10),(1000000,11),(NULL,12)")
@@ -105,9 +108,12 @@ func TestLoadAutoIncrementObservedDemand(t *testing.T) {
 		exec("set auto_increment_increment=4")
 		exec("set auto_increment_offset=3")
 		exec("create table series(id bigint auto_increment primary key,v int)")
-		load(file("series.csv", "1\n2\n3\n"), "series", "(v)")
+		result = load(file("series.csv", "1\n2\n3\n"), "series", "(v)")
+		first, err = result.LastInsertId()
+		require.NoError(t, err)
+		require.Equal(t, int64(3), first)
 		require.Equal(t, uint64(3), number("select count(*) from series where id in(3,7,11)"))
-		require.Equal(t, previous, number("select last_insert_id()"))
+		require.Equal(t, uint64(3), number("select last_insert_id()"))
 		exec("set auto_increment_increment=1")
 		exec("set auto_increment_offset=1")
 

@@ -324,6 +324,81 @@ func canonicalInformationSchemaViewDDL(definition string) string {
 	return definition
 }
 
+// informationSchemaColumnsWithUnsignedDecimalDDL layers the attributed-DECIMAL
+// rendering onto the local mo_columns branch only. The derived View and
+// subscription projections keep the plain decimal spelling this version: their
+// producers expose att_is_unsigned code-only, and a later gated template
+// generation references it there. The decoration uses only ancient constructs
+// (concat, upper, like, case and the two-argument mo_show_visible_bin) so the
+// persisted definition stays frozen-template safe; the guard on the rendered
+// base type keeps legacy unsigned-integer rows (att_is_unsigned = 1) byte
+// identical. The outer cast pins the decorated arm to varchar(65535): a bare
+// concat of the varchar(65535) base with the suffix promotes to TEXT, and the
+// UNION would then widen the public COLUMN_TYPE header away from main's.
+// cast-as-varchar is itself an ancient construct already used by the
+// historical templates (TABLE_SCHEMA/TABLE_NAME, EXTRA, GENERATION_EXPRESSION),
+// so the frozen-template rule is preserved.
+func informationSchemaColumnsWithUnsignedDecimalDDL() string {
+	current := informationSchemaCurrentColumnsDDL()
+	const columnTypeExpr = "(case when length(mc.attr_enum) > 0 then " +
+		"mo_show_visible_bin_enum(mc.atttyp, mc.attr_enum) else mo_show_visible_bin(mc.atttyp,3) end) as COLUMN_TYPE,"
+	const decoratedColumnTypeExpr = "cast(concat((case when length(mc.attr_enum) > 0 then " +
+		"mo_show_visible_bin_enum(mc.atttyp, mc.attr_enum) else mo_show_visible_bin(mc.atttyp,3) end), " +
+		"case when upper(mo_show_visible_bin(mc.atttyp,2)) like 'DECIMAL%' then " +
+		"case mc.att_is_unsigned when 3 then ' unsigned zerofill' when 1 then ' unsigned' else '' end " +
+		"else '' end) as varchar(65535)) as COLUMN_TYPE,"
+	branches := strings.SplitN(current, " UNION ALL ", 2)
+	branches[0] = strings.Replace(branches[0], columnTypeExpr, decoratedColumnTypeExpr, 1)
+	return strings.Join(branches, " UNION ALL ")
+}
+
+// The MEDIUMINT DATA_TYPE arm distinguishes the pre-change current template
+// from its frozen V109 lineage: the pre-change current text is exactly the
+// V109 historical constructor with this arm layered into DATA_TYPE.
+const (
+	columnsV109DataTypeArm = "upper(mo_show_visible_bin(mc.atttyp,2)) = 'BOOL' then 'TINYINT' "
+	columnsV110DataTypeArm = "when upper(mo_show_visible_bin(mc.atttyp,3)) like 'MEDIUMINT%' then 'MEDIUMINT' "
+)
+
+// informationSchemaColumnsPreAttributesDDL is the pre-change CURRENT template:
+// what a pre-change binary persists in information_schema.COLUMNS before the
+// v4_0_18 upgrade entry recreates it with the attributed-DECIMAL decoration.
+// It is built from the frozen V109 historical constructor and literal
+// replacements only, so this identity cannot drift with later revisions of
+// the current derivation; a test pins it byte-identical to the base-era
+// derivation of the current template, and integration adds each upstream
+// current-template revision (e.g. #31461's selector rewrite) as its own
+// frozen variant alongside this one.
+func informationSchemaColumnsPreAttributesDDL() string {
+	return strings.ReplaceAll(
+		InformationSchemaColumnsV109DDL(),
+		columnsV109DataTypeArm,
+		columnsV109DataTypeArm+columnsV110DataTypeArm,
+	)
+}
+
+// informationSchemaColumnsPreAttributesBinaryNullDDL is the second frozen
+// pre-change variant: the #31461 selector revision of the pre-change current
+// template (the T0 text with the binary-family charset selectors rendering
+// NULL). A binary from the #31461 era persists exactly this text before the
+// v4_0_18 entry recreates the view with the attributed-DECIMAL decoration.
+// It is built from the frozen T0 text and a literal replacement only, so it
+// cannot drift with later revisions of the current derivation; a test pins
+// it byte-identical to the live pre-decoration derivation.
+func informationSchemaColumnsPreAttributesBinaryNullDDL() string {
+	return strings.ReplaceAll(
+		informationSchemaColumnsPreAttributesDDL(),
+		"WHEN 2 then 'binary'", "WHEN 2 then NULL")
+}
+
+// isPreAttributesColumnsDDL reports membership in the frozen pre-change
+// identity set: every current-template variant a pre-change binary could
+// have persisted.
+func isPreAttributesColumnsDDL(definition string) bool {
+	return definition == informationSchemaColumnsPreAttributesDDL() ||
+		definition == informationSchemaColumnsPreAttributesBinaryNullDDL()
+}
+
 // AdaptLegacyInformationSchemaColumnsDDL changes only the column authority of
 // known historical templates. Keep their projection/formatting rules; reading
 // a snapshot must not change its character-set selectors or add subscriptions
@@ -342,6 +417,16 @@ func AdaptLegacyInformationSchemaColumnsDDL(definition string) (string, bool) {
 	if definition == InformationSchemaColumnsV109DDL() {
 		return definition, true
 	}
+	// The pre-change CURRENT template is what a pre-upgrade cluster persists
+	// as its live definition; once the decorated template becomes current,
+	// pre-upgrade snapshots and backups hold exactly this text. It already
+	// carries current column authority and projections, so it passes through
+	// byte-stable under the same rule as V109: a snapshot read is never
+	// re-derived against the decorated template, never injected with the
+	// mask CASE, and never given different charset selectors.
+	if isPreAttributesColumnsDDL(definition) {
+		return definition, true
+	}
 	for _, legacy := range []string{InformationSchemaColumnsV41DDL, InformationSchemaColumnsV46DDL, InformationSchemaColumnsV46UpgradeDDL, InformationSchemaColumnsV58DDL()} {
 		if definition == legacy {
 			return informationSchemaDerivedColumnsDDL(legacy), true
@@ -357,7 +442,8 @@ func AdaptLegacyInformationSchemaColumnsDDL(definition string) (string, bool) {
 func ViewMetadataColumnsDDL(definition string) (string, bool) {
 	definition = canonicalColumnsViewDDL(definition)
 	known := definition == InformationSchemaColumnsDDL ||
-		definition == InformationSchemaColumnsV100DDL() || definition == InformationSchemaColumnsV109DDL()
+		definition == InformationSchemaColumnsV100DDL() || definition == InformationSchemaColumnsV109DDL() ||
+		isPreAttributesColumnsDDL(definition)
 	if !known {
 		for _, legacy := range []string{InformationSchemaColumnsV41DDL, InformationSchemaColumnsV46DDL, InformationSchemaColumnsV46UpgradeDDL, InformationSchemaColumnsV58DDL()} {
 			derived := informationSchemaDerivedColumnsDDL(legacy)
@@ -642,7 +728,7 @@ var (
 	InformationSchemaColumnsV46UpgradeDDL = strings.NewReplacer(
 		" WHEN 3 then 'utf8'", "", " WHEN 3 then 'utf8_bin'", "",
 	).Replace(InformationSchemaColumnsV46DDL)
-	InformationSchemaColumnsDDL = informationSchemaCurrentColumnsDDL()
+	InformationSchemaColumnsDDL = informationSchemaColumnsWithUnsignedDecimalDDL()
 
 	InformationSchemaProfilingDDL = "CREATE TABLE information_schema.PROFILING (" +
 		"QUERY_ID int NOT NULL DEFAULT '0'," +
@@ -764,6 +850,8 @@ var (
 
 	InformationSchemaTablesDDL     = informationSchemaSubscriptionTablesDDL()
 	InformationSchemaTablesV118DDL = strings.NewReplacer(
+		"tbl.relname not like '"+catalog.IndexTableNamePrefix+"%'",
+		"not startswith(tbl.relname, '"+catalog.IndexTableNamePrefix+"')",
 		"'"+DefaultCollationForCharset("utf8mb4")+"' AS TABLE_COLLATION,",
 		"internal_table_collation(tbl.extra_info) AS TABLE_COLLATION,",
 		// A freshly created table has no UPDATE/CHECK time (issue #31163):
