@@ -328,7 +328,7 @@ func readClusterReplay(
 	reader, err := readutil.NewReader(
 		qryCtx, mp, pool, nil, tableDef,
 		timestamp.Timestamp{PhysicalTime: time.Now().UnixNano()},
-		expr, ls, 0, engine.FilterHint{},
+		expr, ls, engine.FilterHint{},
 	)
 	require.NoError(t, err)
 

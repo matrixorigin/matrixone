@@ -52,120 +52,128 @@ func (s *service) MaybeUpgradeTenant(
 	}
 
 	upgraded := false
-	pendingV407 := false
 	opts := executor.Options{}.WithTxn(txnOp).
 		WithAccountID(catalog.System_Account).
 		WithDatabase(catalog.MO_CATALOG).
 		WithMinCommittedTS(s.now()).
 		WithWaitCommittedLogApplied()
-	err = s.exec.ExecTxn(
-		ctx,
-		func(txn executor.TxnExecutor) error {
-			txn.Use(catalog.MO_CATALOG)
-			version, err := versions.GetTenantVersion(tenantID, txn)
-			if err != nil {
-				return err
-			}
-			// Check the persisted account version, not the serving CN's version.
-			currentCN := s.getFinalVersionHandle().Metadata()
-			if currentCN.Version == version {
-				return nil
-			} else if versions.Compare(currentCN.Version, version) < 0 {
-				// tenant create at 1.4.0, current tenant version 1.5.0, it must be cannot work
-				return moerr.NewInvalidInputNoCtxf("tenant version %s is greater than current cn version %s",
-					version, currentCN.Version)
-			}
-
-			// arrive here means tenant version < current cn version, need upgrade.
-			// and currentCN.Version == last cluster version
-
-			latestVersion, err := versions.GetLatestVersion(txn)
-			if err != nil {
-				return err
-			}
-			if latestVersion.Version != currentCN.Version {
-				return moerr.NewInvalidStateNoCtxf(
-					"tenant upgrade requires current cn version %s to match cluster latest version %s",
-					currentCN.Version, latestVersion.Version)
-			}
-
-			for {
-				// A restarted CN may not have observed completion locally. The
-				// persisted ready state also permits late-account compensation.
-				if latestVersion.IsReady() || s.upgrade.finalVersionCompleted.Load() {
-					break
-				}
-
-				upgrades, err := versions.GetUpgradeVersions(latestVersion.Version, latestVersion.VersionOffset, txn, false, true)
+	// The frozen consolidated 4.0.7 terminal crosses in a dedicated on-demand
+	// pass that first releases the planning transaction and account lock. Any
+	// forward handles after 4.0.7 (e.g. 4.0.18) still owe that tenant their
+	// entries, so re-enter planning after each paged crossing until a planning
+	// pass completes without another pending crossing.
+	for {
+		pendingV407 := false
+		err = s.exec.ExecTxn(
+			ctx,
+			func(txn executor.TxnExecutor) error {
+				txn.Use(catalog.MO_CATALOG)
+				version, err := versions.GetTenantVersion(tenantID, txn)
 				if err != nil {
 					return err
 				}
-				if len(upgrades) == 0 {
-					return moerr.NewInvalidStateNoCtx("tenant upgrade route is unavailable")
-				}
-				// latest cluster is already upgrade completed
-				if upgrades[len(upgrades)-1].State == versions.StateUpgradingTenant ||
-					upgrades[len(upgrades)-1].State == versions.StateReady {
-					break
+				// Check the persisted account version, not the serving CN's version.
+				currentCN := s.getFinalVersionHandle().Metadata()
+				if currentCN.Version == version {
+					return nil
+				} else if versions.Compare(currentCN.Version, version) < 0 {
+					// tenant create at 1.4.0, current tenant version 1.5.0, it must be cannot work
+					return moerr.NewInvalidInputNoCtxf("tenant version %s is greater than current cn version %s",
+						version, currentCN.Version)
 				}
 
-				select {
-				case <-ctx.Done():
-					return ctx.Err()
-				case <-time.After(time.Second):
-				}
-			}
+				// arrive here means tenant version < current cn version, need upgrade.
+				// and currentCN.Version == last cluster version
 
-			// upgrade in current goroutine immediately
-			version, err = versions.GetTenantCreateVersionForUpdate(tenantID, txn)
-			if err != nil {
-				return err
-			}
-			if versions.Compare(version, currentCN.Version) > 0 {
-				return moerr.NewInvalidInputNoCtxf("tenant version %s is greater than current cn version %s",
-					version, currentCN.Version)
-			}
-			from := version
-			for _, v := range s.handles {
-				if versions.Compare(v.Metadata().Version, from) > 0 &&
-					v.Metadata().CanDirectUpgrade(from) {
-					if v == v4_0_7.Handler {
-						if txnOp == nil {
-							pendingV407 = true
-							break // Release the planning transaction/account lock before paging.
-						}
-						_, err := v4_0_7.Handler.UpgradeTenant(ctx, tenantID, s.upgrade.catalogObjectLimit,
-							func(operation string, limit uint64, adjustable bool, work func(executor.TxnExecutor) error) (bool, error) {
-								err := work(txn)
-								if err != nil {
-									err = catalogOperationError(err, fmt.Sprintf("tenant %d", tenantID), operation, limit, adjustable)
-								}
-								return true, err
-							})
-						if err != nil {
+				latestVersion, err := versions.GetLatestVersion(txn)
+				if err != nil {
+					return err
+				}
+				if latestVersion.Version != currentCN.Version {
+					return moerr.NewInvalidStateNoCtxf(
+						"tenant upgrade requires current cn version %s to match cluster latest version %s",
+						currentCN.Version, latestVersion.Version)
+				}
+
+				for {
+					// A restarted CN may not have observed completion locally. The
+					// persisted ready state also permits late-account compensation.
+					if latestVersion.IsReady() || s.upgrade.finalVersionCompleted.Load() {
+						break
+					}
+
+					upgrades, err := versions.GetUpgradeVersions(latestVersion.Version, latestVersion.VersionOffset, txn, false, true)
+					if err != nil {
+						return err
+					}
+					if len(upgrades) == 0 {
+						return moerr.NewInvalidStateNoCtx("tenant upgrade route is unavailable")
+					}
+					// latest cluster is already upgrade completed
+					if upgrades[len(upgrades)-1].State == versions.StateUpgradingTenant ||
+						upgrades[len(upgrades)-1].State == versions.StateReady {
+						break
+					}
+
+					select {
+					case <-ctx.Done():
+						return ctx.Err()
+					case <-time.After(time.Second):
+					}
+				}
+
+				// upgrade in current goroutine immediately
+				version, err = versions.GetTenantCreateVersionForUpdate(tenantID, txn)
+				if err != nil {
+					return err
+				}
+				if versions.Compare(version, currentCN.Version) > 0 {
+					return moerr.NewInvalidInputNoCtxf("tenant version %s is greater than current cn version %s",
+						version, currentCN.Version)
+				}
+				from := version
+				for _, v := range s.handles {
+					if versions.Compare(v.Metadata().Version, from) > 0 &&
+						v.Metadata().CanDirectUpgrade(from) {
+						if v == v4_0_7.Handler {
+							if txnOp == nil {
+								pendingV407 = true
+								break // Release the planning transaction/account lock before paging.
+							}
+							_, err := v4_0_7.Handler.UpgradeTenant(ctx, tenantID, s.upgrade.catalogObjectLimit,
+								func(operation string, limit uint64, adjustable bool, work func(executor.TxnExecutor) error) (bool, error) {
+									err := work(txn)
+									if err != nil {
+										err = catalogOperationError(err, fmt.Sprintf("tenant %d", tenantID), operation, limit, adjustable)
+									}
+									return true, err
+								})
+							if err != nil {
+								return err
+							}
+						} else if err := v.HandleTenantUpgrade(ctx, tenantID, txn); err != nil {
 							return err
 						}
-					} else if err := v.HandleTenantUpgrade(ctx, tenantID, txn); err != nil {
-						return err
+						if err := versions.UpgradeTenantVersion(tenantID, v.Metadata().Version, txn); err != nil {
+							return err
+						}
+						from = v.Metadata().Version
+						upgraded = true
 					}
-					if err := versions.UpgradeTenantVersion(tenantID, v.Metadata().Version, txn); err != nil {
-						return err
-					}
-					from = v.Metadata().Version
-					upgraded = true
 				}
-			}
-			if !pendingV407 && from != currentCN.Version {
-				return moerr.NewInvalidInputNoCtxf("cannot upgrade tenant version %s to current cn version %s",
-					from, currentCN.Version)
-			}
-			return nil
-		},
-		opts)
-	if err != nil {
-		return false, err
-	}
-	if pendingV407 {
+				if !pendingV407 && from != currentCN.Version {
+					return moerr.NewInvalidInputNoCtxf("cannot upgrade tenant version %s to current cn version %s",
+						from, currentCN.Version)
+				}
+				return nil
+			},
+			opts)
+		if err != nil {
+			return false, err
+		}
+		if !pendingV407 {
+			break
+		}
 		changed, err := s.upgradeV407TenantOnDemand(ctx, tenantID)
 		if err != nil {
 			return false, err
@@ -422,9 +430,6 @@ func (s *service) newTenantUpgradePass(ctx context.Context) func() (bool, error)
 			defer cancel()
 			if err := s.maintainInformationSchemaViews(maintenanceCtx); err != nil {
 				return false, wrapUpgradeError(moerr.AttachCause(maintenanceCtx, err), "information schema views maintenance")
-			}
-			if err := s.maintainInformationSchemaColumnsTables(maintenanceCtx); err != nil {
-				return false, wrapUpgradeError(moerr.AttachCause(maintenanceCtx, err), "information schema columns/tables maintenance")
 			}
 			if err := s.maintainOrphanObjectPrivileges(maintenanceCtx); err != nil {
 				return false, wrapUpgradeError(moerr.AttachCause(maintenanceCtx, err), "orphan object privilege maintenance")

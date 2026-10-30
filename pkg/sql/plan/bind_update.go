@@ -225,7 +225,7 @@ func (builder *QueryBuilder) normalizeUpdateAssignment(
 	if isGeometryPlanType(&col.Typ) {
 		return funcCastForGeometryType(builder.GetContext(), rhs, col.Typ)
 	}
-	return builder.forceProjectedAssignmentCastExpr(rhs, rhs, col.Typ, ignore)
+	return builder.forceProjectedAssignmentCastExpr(rhs, rhs, col.Typ, ignore, col.Name)
 }
 
 // appendSequentialSingleTableUpdateAssignments materializes the current row in
@@ -830,6 +830,15 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 			newDefExpr := DeepCopyExpr(col.OnUpdate.Expr)
 			if err = replaceFuncId(builder.GetContext(), newDefExpr); err != nil {
 				return 0, err
+			}
+			if isAttributedDecimalPlanType(col.Typ) {
+				// Replay the persisted admission boundary under this
+				// statement's ignore policy instead of reusing the
+				// DDL-authored one verbatim.
+				if newDefExpr, err = rePoliceUnsignedDecimalAssignmentBoundary(
+					builder.GetContext(), newDefExpr, stmt.Ignore, builder.compCtx.GetProcess()); err != nil {
+					return 0, err
+				}
 			}
 			oldPos := oldColName2Idx[qualifiedName]
 			if changed := changedPredicates[alias]; changed != nil {

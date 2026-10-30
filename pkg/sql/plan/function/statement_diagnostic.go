@@ -80,11 +80,8 @@ func IsStatementConstantTemporalCall(expr *plan.Expr) bool {
 			return true
 		}
 		return false
-	case DATE:
-		// DATE(text) reports an out-of-range SQL error for malformed input.
-		// Typed temporal inputs use non-parsing overloads and need no owner.
-		return len(fn.Args) > 0 && fn.Args[0] != nil &&
-			types.T(fn.Args[0].Typ.Id).IsMySQLString()
+	case DATE, DATE_FORMAT:
+		return IsTemporalTextDiagnosticCall(expr)
 	case TIME, MAKETIME, SEC_TO_TIME, TIMESTAMP,
 		DATE_ADD, DATE_SUB, TIMESTAMPADD, ADDTIME, SUBTIME, TIMEDIFF,
 		PERIOD_ADD, PERIOD_DIFF:
@@ -92,6 +89,67 @@ func IsStatementConstantTemporalCall(expr *plan.Expr) bool {
 	default:
 		return false
 	}
+}
+
+func isTemporalTextSource(t types.T) bool {
+	return t == types.T_char || t == types.T_varchar || t == types.T_text
+}
+
+// IsTemporalTextDiagnosticCall identifies the parsing overloads whose warnings
+// must be owned by the actual evaluation context.
+func IsTemporalTextDiagnosticCall(expr *plan.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil || len(fn.Args) == 0 || fn.Args[0] == nil {
+		return false
+	}
+	source := types.T(fn.Args[0].Typ.Id)
+	if !isTemporalTextSource(source) && !(source == types.T_any && fn.Args[0].GetP() != nil) {
+		return false
+	}
+	id, overload := DecodeOverloadID(fn.Func.Obj)
+	switch id {
+	case CAST:
+		if overload != 0 && overload != 1 {
+			return false
+		}
+		switch types.T(expr.Typ.Id) {
+		case types.T_date, types.T_datetime, types.T_time:
+			return true
+		}
+	case DATE:
+		return overload == 3 || overload == 4
+	case DATE_FORMAT:
+		return overload == 2
+	}
+	return false
+}
+
+// ContainsTemporalTextDiagnostic detects this effect in an expression tree.
+func ContainsTemporalTextDiagnostic(expr *plan.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	if IsTemporalTextDiagnosticCall(expr) {
+		return true
+	}
+	if fn := expr.GetF(); fn != nil {
+		for _, arg := range fn.Args {
+			if ContainsTemporalTextDiagnostic(arg) {
+				return true
+			}
+		}
+	}
+	if list := expr.GetList(); list != nil {
+		for _, arg := range list.List {
+			if ContainsTemporalTextDiagnostic(arg) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // ContainsParameter reports a marker anywhere in an expression.
