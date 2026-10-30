@@ -1,0 +1,20 @@
+-- An integer dividend with a DECIMAL256 divisor divides exactly (issue #31637).
+select cast(10 as signed) / cast(2 as decimal(65,30));
+select cast(10 as unsigned) / cast(2 as decimal(65,30));
+select 7 / cast(2 as decimal(40,2)), cast(7 as tinyint) / cast(2 as decimal(40,2)), cast(7 as smallint unsigned) / cast(2 as decimal(40,2));
+select cast(7 as signed) div cast(2 as decimal(40,2)), cast(7 as unsigned) div cast(2 as decimal(40,2));
+select 1 / cast(0 as decimal(40,2));
+drop database if exists int_div_d256;
+create database int_div_d256;
+use int_div_d256;
+create table src(id int primary key, u bigint unsigned, i int, d decimal(65,30));
+insert into src values (1,10,-10,2),(2,18446744073709551615,7,1),(3,null,1,2),(4,1,1,null);
+select id, u / d, i / d from src order by id;
+create table dst(id int, v decimal(65,30));
+insert into dst select id, u / d from src;
+select * from dst order by id;
+prepare ps from 'select id, u / d from src where id >= ? order by id';
+set @a = 2;
+execute ps using @a;
+deallocate prepare ps;
+drop database int_div_d256;
