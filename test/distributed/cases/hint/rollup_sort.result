@@ -109,6 +109,70 @@ from t_rollup_sort group by a with rollup order by grouping_a, a;
 null  ¦  8.00  ¦  1
 set session rollup_algorithm = 'SORT';
 truncate table t_rollup_sort;
+insert into t_rollup_sort values
+(1, 7, 9), (2, 7, 9), (2, 7, 9), (2, 8, 10),
+(2, 8, null), (null, 7, 9), (null, null, 9);
+select a, b, count(distinct b, amount) as cnt,
+grouping(a) as grouping_a, grouping(b) as grouping_b
+from t_rollup_sort group by a, b with rollup
+order by grouping_a, grouping_b, a, b;
+➤ a[4,32,0]  ¦  b[4,32,0]  ¦  cnt[-5,64,0]  ¦  grouping_a[-5,64,0]  ¦  grouping_b[-5,64,0]  𝄀
+null  ¦  null  ¦  0  ¦  0  ¦  0  𝄀
+null  ¦  7  ¦  1  ¦  0  ¦  0  𝄀
+1  ¦  7  ¦  1  ¦  0  ¦  0  𝄀
+2  ¦  7  ¦  1  ¦  0  ¦  0  𝄀
+2  ¦  8  ¦  1  ¦  0  ¦  0  𝄀
+null  ¦  null  ¦  1  ¦  0  ¦  1  𝄀
+1  ¦  null  ¦  1  ¦  0  ¦  1  𝄀
+2  ¦  null  ¦  2  ¦  0  ¦  1  𝄀
+null  ¦  null  ¦  2  ¦  1  ¦  1
+select a, count(distinct amount, b) as cnt, grouping(a) as grouping_a
+from t_rollup_sort group by a with rollup order by grouping_a, a;
+➤ a[4,32,0]  ¦  cnt[-5,64,0]  ¦  grouping_a[-5,64,0]  𝄀
+null  ¦  1  ¦  0  𝄀
+1  ¦  1  ¦  0  𝄀
+2  ¦  2  ¦  0  𝄀
+null  ¦  2  ¦  1
+select a, count(distinct b, amount) as cnt, sum(distinct b) as total,
+grouping(a) as grouping_a
+from t_rollup_sort group by a with rollup order by grouping_a, a;
+➤ a[4,32,0]  ¦  cnt[-5,64,0]  ¦  total[-5,64,0]  ¦  grouping_a[-5,64,0]  𝄀
+null  ¦  1  ¦  7  ¦  0  𝄀
+1  ¦  1  ¦  7  ¦  0  𝄀
+2  ¦  2  ¦  15  ¦  0  𝄀
+null  ¦  2  ¦  15  ¦  1
+select d.x, d.y, cast(avg(d.v) as decimal(10,2)) as avg_v,
+grouping(d.x) as grouping_x, grouping(d.y) as grouping_y
+from (select e.y, e.v, e.x from
+(select amount as v, b as y, a as x from t_rollup_sort order by x, y) e
+where e.y is not null) d
+group by d.x, d.y with rollup order by grouping_x, grouping_y, d.x, d.y;
+➤ x[4,32,0]  ¦  y[4,32,0]  ¦  avg_v[3,10,2]  ¦  grouping_x[-5,64,0]  ¦  grouping_y[-5,64,0]  𝄀
+null  ¦  7  ¦  9.00  ¦  0  ¦  0  𝄀
+1  ¦  7  ¦  9.00  ¦  0  ¦  0  𝄀
+2  ¦  7  ¦  9.00  ¦  0  ¦  0  𝄀
+2  ¦  8  ¦  10.00  ¦  0  ¦  0  𝄀
+null  ¦  null  ¦  9.00  ¦  0  ¦  1  𝄀
+1  ¦  null  ¦  9.00  ¦  0  ¦  1  𝄀
+2  ¦  null  ¦  9.33  ¦  0  ¦  1  𝄀
+null  ¦  null  ¦  9.20  ¦  1  ¦  1
+set session rollup_algorithm = 'HASH';
+select a, b, count(distinct b, amount) as cnt,
+grouping(a) as grouping_a, grouping(b) as grouping_b
+from t_rollup_sort group by a, b with rollup
+order by grouping_a, grouping_b, a, b;
+➤ a[4,32,0]  ¦  b[4,32,0]  ¦  cnt[-5,64,0]  ¦  grouping_a[-5,64,0]  ¦  grouping_b[-5,64,0]  𝄀
+null  ¦  null  ¦  0  ¦  0  ¦  0  𝄀
+null  ¦  7  ¦  1  ¦  0  ¦  0  𝄀
+1  ¦  7  ¦  1  ¦  0  ¦  0  𝄀
+2  ¦  7  ¦  1  ¦  0  ¦  0  𝄀
+2  ¦  8  ¦  1  ¦  0  ¦  0  𝄀
+null  ¦  null  ¦  1  ¦  0  ¦  1  𝄀
+1  ¦  null  ¦  1  ¦  0  ¦  1  𝄀
+2  ¦  null  ¦  2  ¦  0  ¦  1  𝄀
+null  ¦  null  ¦  2  ¦  1  ¦  1
+set session rollup_algorithm = 'SORT';
+truncate table t_rollup_sort;
 select a, b, count(*) as cnt, sum(amount) as total,
 grouping(a) as grouping_a, grouping(b) as grouping_b
 from t_rollup_sort

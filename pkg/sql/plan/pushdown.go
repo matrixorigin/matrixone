@@ -1166,10 +1166,10 @@ type existenceJoinKey struct {
 // the OR can be evaluated, even though a WHERE predicate only needs to know
 // whether any branch has a match.
 //
-// The rule deliberately accepts only a consecutive MARK prefix whose branches
-// have the same deterministic outer equality keys.  Projected markers,
-// NOT EXISTS, IN/ANY three-valued markers, non-equality correlations, and mixed
-// outer keys retain the original MARK semantics.
+// The rule accepts a consecutive MARK prefix with proven-total equality keys.
+// Shared keys become hash keys; branch-specific keys remain residual conditions.
+// Projected markers, NOT EXISTS, IN/ANY three-valued markers, non-equality
+// correlations, and branches without a shared key retain their MARK semantics.
 func (builder *QueryBuilder) rewriteFilteringOrOfExists(
 	nodeID int32,
 	filters []*plan.Expr,
@@ -1244,98 +1244,10 @@ func (builder *QueryBuilder) rewriteOneFilteringOrOfExists(
 		if !ok {
 			return nodeID, false
 		}
-		if i == 0 {
-			branchKeys[i] = keys
-			continue
-		}
-
-		ordered := make([]existenceJoinKey, len(branchKeys[0]))
-		used := make([]bool, len(keys))
-		for keyIdx, reference := range branchKeys[0] {
-			match := -1
-			for candidateIdx, candidate := range keys {
-				if !used[candidateIdx] && exprStructuralEqual(reference.outer, candidate.outer) {
-					if match != -1 {
-						return nodeID, false
-					}
-					match = candidateIdx
-				}
-			}
-			if match == -1 || !makeTypeByPlan2Expr(reference.inner).Eq(makeTypeByPlan2Expr(keys[match].inner)) {
-				return nodeID, false
-			}
-			used[match] = true
-			ordered[keyIdx] = keys[match]
-		}
-		if len(keys) != len(ordered) {
-			return nodeID, false
-		}
-		branchKeys[i] = ordered
+		branchKeys[i] = keys
 	}
 
-	branchIDs := make([]int32, len(markNodes))
-	branchTags := make([]int32, len(markNodes))
-	for i, markNode := range markNodes {
-		projectList := make([]*plan.Expr, len(branchKeys[i]))
-		for keyIdx, key := range branchKeys[i] {
-			projectList[keyIdx] = DeepCopyExpr(key.inner)
-		}
-		branchTags[i] = builder.genNewBindTag()
-		branchIDs[i] = builder.appendNode(&plan.Node{
-			NodeType:    plan.Node_PROJECT,
-			Children:    []int32{markNode.Children[1]},
-			ProjectList: projectList,
-			BindingTags: []int32{branchTags[i]},
-		}, nil)
-	}
-
-	unionID := branchIDs[0]
-	unionTag := branchTags[0]
-	for i := 1; i < len(branchIDs); i++ {
-		leftProject := builder.qry.Nodes[unionID].ProjectList
-		rightProject := builder.qry.Nodes[branchIDs[i]].ProjectList
-		unionProject := make([]*plan.Expr, len(leftProject))
-		for keyIdx, leftExpr := range leftProject {
-			unionProject[keyIdx] = &plan.Expr{
-				Typ: setOperationOutputType(plan.Node_UNION_ALL, leftExpr.Typ, rightProject[keyIdx].Typ),
-				Expr: &plan.Expr_Col{Col: &plan.ColRef{
-					RelPos: unionTag,
-					ColPos: int32(keyIdx),
-				}},
-			}
-		}
-		unionTag = builder.genNewBindTag()
-		unionID = builder.appendNode(&plan.Node{
-			NodeType:    plan.Node_UNION_ALL,
-			Children:    []int32{unionID, branchIDs[i]},
-			ProjectList: unionProject,
-			BindingTags: []int32{unionTag},
-		}, nil)
-	}
-
-	unionProject := builder.qry.Nodes[unionID].ProjectList
-	joinPredicates := make([]*plan.Expr, len(branchKeys[0]))
-	for keyIdx, key := range branchKeys[0] {
-		equality := DeepCopyExpr(key.equality)
-		unionKey := &plan.Expr{
-			Typ: unionProject[keyIdx].Typ,
-			Expr: &plan.Expr_Col{Col: &plan.ColRef{
-				RelPos: unionTag,
-				ColPos: int32(keyIdx),
-			}},
-		}
-		equality.GetF().Args[key.innerArgIdx] = unionKey
-		equality.Typ.NotNullable = key.outer.Typ.NotNullable && unionKey.Typ.NotNullable
-		joinPredicates[keyIdx] = equality
-	}
-
-	return builder.appendNode(&plan.Node{
-		NodeType: plan.Node_JOIN,
-		Children: []int32{baseID, unionID},
-		JoinType: plan.Node_SEMI,
-		OnList:   joinPredicates,
-		SpillMem: builder.joinSpillMem,
-	}, nil), true
+	return builder.rewriteFilteringExistenceUnion(nodeID, baseID, markNodes, branchKeys)
 }
 
 func collectPositiveExistenceMarkTags(expr *plan.Expr, tags *[]int32) bool {
@@ -1418,7 +1330,8 @@ func (builder *QueryBuilder) planSubtreeContainsVolatile(nodeID int32) bool {
 }
 
 func (builder *QueryBuilder) extractExistenceJoinKeys(markNode *plan.Node) ([]existenceJoinKey, bool) {
-	if len(markNode.OnList) == 0 {
+	if len(markNode.OnList) == 0 ||
+		!builder.existentialJoinPredicatesAreTotal(markNode.OnList, markNode.Children...) {
 		return nil, false
 	}
 	leftTags := make(map[int32]bool)
@@ -1432,9 +1345,6 @@ func (builder *QueryBuilder) extractExistenceJoinKeys(markNode *plan.Node) ([]ex
 
 	keys := make([]existenceJoinKey, 0, len(markNode.OnList))
 	for _, predicate := range markNode.OnList {
-		if !isTruncationSafePredicateExpr(predicate) {
-			return nil, false
-		}
 		fn := predicate.GetF()
 		if fn == nil || fn.Func == nil || len(fn.Args) != 2 || !IsEqualFunc(fn.Func.GetObj()) {
 			return nil, false
@@ -1531,7 +1441,7 @@ func simplifyActiveGroupingFilter(expr *plan.Expr, groupTag int32, groupCount in
 			keyType.NotNullable, nullType.NotNullable, resultType.NotNullable = false, false, false
 			if probeID == function.GROUPING && proto.Equal(&keyType, &nullType) && proto.Equal(&keyType, &resultType) &&
 				containsTag(key, groupTag) && groupingFilterHasOnlyActiveKeys(key, groupTag, groupCount, flags) &&
-				exprCanRemoveProject(key) && !function.ContainsRowScopedConversion(key) {
+				exprCanRemoveProject(key) && !function.ContainsRowScopedConversion(key) && !function.ContainsTemporalTextDiagnostic(key) {
 				return key
 			}
 		}

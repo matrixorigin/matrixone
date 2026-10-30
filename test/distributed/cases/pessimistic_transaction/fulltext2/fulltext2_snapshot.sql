@@ -46,11 +46,14 @@ deallocate prepare capture;
 
 create snapshot ft2_snap_case_sp for account;
 
--- Diverge the current index from the snapshot.
+-- Commit both changes together: the durable tail must not advance for the UPDATE
+-- while the INSERT is still waiting for a later CDC flush.
+begin;
 update t set body='current beta' where id=1;
 insert into t values (3,'current beta');
+commit;
 
--- Wait for the update to advance the tail PAST the baseline (current index diverged).
+-- Wait for the committed changes to advance the tail PAST the baseline.
 set @wait_upd_sql = concat(
     'select coalesce(max(chunk_id), -1) > @tail_baseline as ready from `', database(), '`.`', @ft2_index,
     '` where index_id = ''cdc_tail'' and tag = 1');

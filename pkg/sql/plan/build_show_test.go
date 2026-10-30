@@ -575,3 +575,23 @@ func TestCoverage_buildShowColumnNumber(t *testing.T) {
 	}
 	runTestShouldPass(mock, t, sqls, false, false)
 }
+
+func TestShowTablesLiteralInternalIndexPrefix(t *testing.T) {
+	for _, statement := range []string{
+		"show tables from tpch",
+		"show full tables from tpch",
+		"show table_number from tpch",
+		"show table status from tpch",
+	} {
+		t.Run(statement, func(t *testing.T) {
+			mock := NewMockOptimizer(false, newPlanTestProcess(t))
+			stmt, err := mysql.ParseOne(mock.ctxt.GetContext(), statement, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			built, err := BuildPlan(mock.CurrentContext(), stmt, false)
+			require.NoError(t, err)
+			require.True(t, queryContainsStringLiteral(built.GetQuery(), "__mo_index_"))
+			require.False(t, queryContainsStringLiteral(built.GetQuery(), "__mo_index_%"))
+		})
+	}
+}

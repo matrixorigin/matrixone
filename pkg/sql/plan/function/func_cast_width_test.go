@@ -936,8 +936,6 @@ func TestCastBinaryAssignmentByteWidth(t *testing.T) {
 			{"nonstrict_multibyte", "中", false, castModeAssignment, string([]byte{0xe4, 0xb8}), false},
 			{"ignore_multibyte", "中", false, castModeAssignmentIgnore, string([]byte{0xe4, 0xb8}), false},
 			{"nonstrict_ascii", "abc", false, castModeAssignment, "ab", false},
-			{"legacy_ignore_fallback_multibyte", "中", false, castModeNormal, string([]byte{0xe4, 0xb8}), false},
-			{"legacy_ignore_fallback_ascii", "abc", false, castModeNormal, "ab", false},
 			{"strict_spaces_not_exempt", "ab ", true, castModeStrictStringWidth, "", true},
 			{"fits", "ab", true, castModeStrictStringWidth, "ab", false},
 		} {

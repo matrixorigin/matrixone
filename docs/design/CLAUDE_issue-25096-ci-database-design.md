@@ -1,5 +1,7 @@
 # 保留默认行为的 CI 数据库：范围与验收设计
 
+后续显式general-ci扩展见[独立设计](CLAUDE_issue-25096-general-ci-design.md)及其附录，须单独审批。本文件的UCA400范围和历史批准不覆盖该扩展；下文保留原设计记录。
+
 状态：**r2-draft.1，2026-10-26，待维护者设计评审**。关联 [#25096](https://github.com/matrixorigin/matrixone/issues/25096)；替代已关闭、未合并的 [#30684](https://github.com/matrixorigin/matrixone/pull/30684) 的交付方案，不认可或继承其实现审批。本 PR 只有设计文档；**本设计获批并合并之前，不修改实现或测试代码**。
 
 源码基线：`mo/main@83c1e23526fc0ed31188abd7fc2ca87cd3a6d4b3`。下文“已有”来自源码/测试定义检查，不表示本轮执行过测试。实现时重新核对当时 main，仅修复经复现确认的缺口，不整支 cherry-pick 旧 PR。
