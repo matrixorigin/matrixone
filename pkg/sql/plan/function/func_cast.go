@@ -3216,6 +3216,15 @@ func jsonToTemporal(proc *process.Process, source vector.FunctionParameterWrappe
 					return err
 				}
 				continue
+			case bj.Type == bytejson.TpCodeDate || bj.Type == bytejson.TpCodeTime || bj.Type == bytejson.TpCodeDatetime:
+				s, ok := jsonTypedTemporalText(bj, toType.Oid)
+				if !ok {
+					return jsonCastErr(proc.Ctx, toType.Oid)
+				}
+				if err := vector.AppendBytes(text, []byte(s), false, proc.Mp()); err != nil {
+					return err
+				}
+				continue
 			case bj.Type == bytejson.TpCodeLiteral && len(bj.Data) > 0 && bj.Data[0] == bytejson.LiteralNull:
 			default:
 				return jsonCastErr(proc.Ctx, toType.Oid)
@@ -3227,6 +3236,47 @@ func jsonToTemporal(proc *process.Process, source vector.FunctionParameterWrappe
 	}
 	return strTypeToOthers(proc, vector.GenerateFunctionStrParameter(text), toType, result, length,
 		selectList, mode, false, false)
+}
+
+// jsonTypedTemporalText renders a typed DATE/TIME/DATETIME JSON scalar (as
+// produced by CAST(... AS JSON), JSON_ARRAY, JSON_OBJECT and kept by
+// JSON_EXTRACT) as text the destination's string cast reads with the same
+// meaning as the SQL temporal cast: DATE -> TIME is midnight, DATETIME -> TIME
+// keeps the time of day, and TIME -> DATE/DATETIME/TIMESTAMP uses
+// Time.ToDate/ToDatetime like CAST(time AS DATE/DATETIME). A TIMESTAMP is
+// stored as DATETIME text in the session time zone, and the string cast to
+// TIMESTAMP reads it back in that same zone.
+func jsonTypedTemporalText(bj bytejson.ByteJson, to types.T) (string, bool) {
+	s := string(bj.GetString())
+	switch bj.Type {
+	case bytejson.TpCodeDate:
+		if to == types.T_time {
+			return "00:00:00", true
+		}
+		return s, true
+	case bytejson.TpCodeDatetime:
+		if to != types.T_time {
+			return s, true
+		}
+		dt, err := types.ParseDatetime(s, 6)
+		if err != nil {
+			return "", false
+		}
+		return dt.ToTime(6).String2(6), true
+	case bytejson.TpCodeTime:
+		if to == types.T_time {
+			return s, true
+		}
+		tm, err := types.ParseTime(s, 6)
+		if err != nil {
+			return "", false
+		}
+		if to == types.T_date {
+			return tm.ToDate().String(), true
+		}
+		return tm.ToDatetime(6).String2(6), true
+	}
+	return "", false
 }
 
 // jsonCastErr returns the standard error for an invalid JSON scalar cast.

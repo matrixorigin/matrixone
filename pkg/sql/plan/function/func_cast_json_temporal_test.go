@@ -18,6 +18,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
@@ -89,4 +90,67 @@ func TestCastJsonToTemporal(t *testing.T) {
 		succeed, info := fcTC.RunAndFree()
 		require.True(t, succeed, "%s: %s", text, info)
 	}
+}
+
+// CAST(date/time/datetime/timestamp AS JSON), JSON_ARRAY and JSON_OBJECT store
+// temporal values as typed DATE/TIME/DATETIME JSON scalars, and JSON_EXTRACT
+// keeps the tag. Casting such a scalar back to a temporal type must work and
+// mean the same as the SQL temporal cast, next to string and NULL controls.
+func TestCastTypedJsonTemporalToTemporal(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	zone := proc.GetSessionInfo().TimeZone
+
+	date, err := types.ParseDateCast("2026-01-31")
+	require.NoError(t, err)
+	tm, err := types.ParseTime("12:34:56.5", 6)
+	require.NoError(t, err)
+	dt, err := types.ParseDatetime("2024-02-29 13:14:15.25", 6)
+	require.NoError(t, err)
+	ts, err := types.ParseTimestamp(zone, "2024-02-29 13:14:15.25", 6)
+	require.NoError(t, err)
+
+	encode := func(bj bytejson.ByteJson) string {
+		enc, err := types.EncodeJson(bj)
+		require.NoError(t, err)
+		return string(enc)
+	}
+	// Built exactly as castToJSON builds them.
+	jDate := encode(newTypedByteJson(bytejson.TpCodeDate, date.String()))
+	jTime := encode(newTypedByteJson(bytejson.TpCodeTime, tm.String2(6)))
+	jDatetime := encode(newTypedByteJson(bytejson.TpCodeDatetime, dt.String2(6)))
+	jTimestamp := encode(newTypedByteJson(bytejson.TpCodeDatetime, ts.String2(zone, 6)))
+	controls := makeJSONEncodedFromText(t, []string{`"2026-01-31 01:02:03"`, `null`}, nil)
+
+	run := func(name string, in []string, to types.Type, expected any, nulls []bool) {
+		t.Helper()
+		fcTC := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_json.ToType(), in, nil),
+				NewFunctionTestInput(to, expected, []bool{}),
+			},
+			NewFunctionTestResult(to, false, expected, nulls), NewCast)
+		succeed, info := fcTC.RunAndFree()
+		require.True(t, succeed, "%s: %s", name, info)
+	}
+	rows := []string{jDate, jTime, jDatetime, jTimestamp, controls[0], controls[1]}
+	nulls := []bool{false, false, false, false, false, true}
+
+	ctrlDT, err := types.ParseDatetime("2026-01-31 01:02:03", 6)
+	require.NoError(t, err)
+
+	run("date", rows, types.T_date.ToType(),
+		[]types.Date{date, tm.ToDate(), dt.ToDate(), dt.ToDate(), date, 0}, nulls)
+
+	dt6 := types.New(types.T_datetime, 0, 6)
+	run("datetime", rows, dt6,
+		[]types.Datetime{date.ToDatetime(), tm.ToDatetime(6), dt, dt, ctrlDT, 0}, nulls)
+
+	ts6 := types.New(types.T_timestamp, 0, 6)
+	run("timestamp", rows, ts6,
+		[]types.Timestamp{date.ToDatetime().ToTimestamp(zone), tm.ToDatetime(6).ToTimestamp(zone),
+			ts, ts, ctrlDT.ToTimestamp(zone), 0}, nulls)
+
+	time6 := types.New(types.T_time, 0, 6)
+	run("time", rows, time6,
+		[]types.Time{0, tm, dt.ToTime(6), dt.ToTime(6), ctrlDT.ToTime(6), 0}, nulls)
 }
