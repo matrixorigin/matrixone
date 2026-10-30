@@ -1290,6 +1290,15 @@ func buildGeneratedExpr(bindCtx context.Context, col *tree.ColumnTableDef, typ p
 	if err != nil {
 		return nil, err
 	}
+	// The assignment wrapper is itself persisted: a BOOL target around an
+	// ENUM operand binds the conditional storage-truth cast the raw expression
+	// alone does not carry (g BOOL AS (e) is merely an ENUM reference before
+	// this point, so the first authoring check computed no requirement).
+	// Validate the final stored expression so this cast cannot be authored
+	// while the cluster is below the protocol floor.
+	if err = RequirePersistedIPFunctionProtocolForAuthoring(bindCtx, proc, genExpr); err != nil {
+		return nil, err
+	}
 
 	fmtCtx := tree.NewFmtCtx(dialect.MYSQL, tree.WithSingleQuoteString())
 	fmtCtx.PrintExpr(genAttr.Expr, genAttr.Expr, false)
@@ -2658,6 +2667,13 @@ func convertValueIntoBool(name string, args []*Expr, isLogic bool) error {
 		case *plan.Expr_Lit:
 			switch value := ex.Lit.Value.(type) {
 			case *plan.Literal_I64Val:
+				// In a comparison TRUE/FALSE are the integers 1/0 (MySQL), so
+				// only 0 and 1 are the same value as a BOOL: `b = 2` must not
+				// become `b = true`. Other literals keep the integer path,
+				// which compares CAST(b AS BIGINT) with the literal.
+				if !isLogic && value.I64Val != 0 && value.I64Val != 1 {
+					continue
+				}
 				if value.I64Val == 0 {
 					ex.Lit.Value = &plan.Literal_Bval{Bval: false}
 				} else {

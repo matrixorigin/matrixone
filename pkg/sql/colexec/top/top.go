@@ -449,13 +449,68 @@ func (ctr *container) build(ap *Top, bat *batch.Batch, proc *process.Process, an
 		}
 	}
 
+	start, err := ctr.verifiedBatchSuffix(bat, proc)
+	if err != nil {
+		return err
+	}
 	if ctr.spilling {
-		return ctr.processBatchSpill(ap.ctr.limit, bat, proc, analyzer)
+		return ctr.processBatchSpillFrom(ap.ctr.limit, bat, start, proc, analyzer)
 	}
 	if ctr.boundedResident {
-		return ctr.processBatchResident(bat, proc, analyzer)
+		return ctr.processBatchResident(bat, start, proc, analyzer)
 	}
-	return ctr.processBatch(ap.ctr.limit, bat, proc)
+	return ctr.processBatch(ap.ctr.limit, bat, start, proc)
+}
+
+// verifiedBatchSuffix discards a prefix only after proving the whole batch is
+// ordered opposite to the query. Every discarded row then has at least limit
+// rows in the suffix that compare no worse. The input remains in its original
+// order, including when the resident path later migrates to spill.
+func (ctr *container) verifiedBatchSuffix(bat *batch.Batch, proc *process.Process) (int, error) {
+	rows := bat.RowCount()
+	if ctr.limit == 0 || ctr.limit >= uint64(rows) {
+		return 0, nil
+	}
+	for _, pos := range ctr.poses {
+		vec := bat.Vecs[pos]
+		// Float-array and JSON numeric comparisons are not transitive for all
+		// values. Binding a constant fixed vector also expands it to batch size.
+		// Keep these keys on the ordinary path without speculative bindings.
+		if vec.IsConst() || vec.GetType().Oid.IsArray() || vec.GetType().Oid == types.T_json {
+			return 0, nil
+		}
+	}
+	for i, pos := range ctr.poses {
+		vec := bat.Vecs[pos]
+		if ctr.spilling {
+			ctr.cmps[i].Set(1, vec)
+		} else {
+			ctr.cmps[pos].Set(1, vec)
+		}
+	}
+	// Avoid a verification pass when the sample shows no progress beyond the
+	// first limit rows. This only selects the ordinary path; later rows may
+	// still improve the heap and must be processed there.
+	middle := rows / 2
+	if uint64(middle) < ctr.limit ||
+		ctr.compare(1, 1, int64(middle), int64(ctr.limit-1)) >= 0 ||
+		ctr.compare(1, 1, int64(rows-1), int64(middle)) > 0 {
+		return 0, nil
+	}
+	if err, canceled := vm.CancelCheck(proc); canceled {
+		return 0, err
+	}
+	for row := 1; row < rows; row++ {
+		if row%evalSpillChunkSize == 0 {
+			if err, canceled := vm.CancelCheck(proc); canceled {
+				return 0, err
+			}
+		}
+		if ctr.compare(1, 1, int64(row-1), int64(row)) < 0 {
+			return 0, nil
+		}
+	}
+	return rows - int(ctr.limit), nil
 }
 
 func (ctr *container) residentWindow() uint64 {
@@ -553,13 +608,13 @@ func (ctr *container) startResidentSpill(proc *process.Process, analyzer process
 	return nil
 }
 
-func (ctr *container) processBatchResident(bat *batch.Batch, proc *process.Process, analyzer process.Analyzer) error {
+func (ctr *container) processBatchResident(bat *batch.Batch, start int, proc *process.Process, analyzer process.Analyzer) error {
 	for i, cmp := range ctr.cmps {
 		cmp.Set(1, bat.Vecs[i])
 	}
 	window := ctr.residentWindow()
 	full := uint64(len(ctr.sels)) == ctr.limit
-	for row := 0; row < bat.RowCount(); row++ {
+	for row := start; row < bat.RowCount(); row++ {
 		if full {
 			// Reject contiguous losers with only the comparison hot path. Keep
 			// cancellation outside that loop but bound each scan segment.
@@ -633,9 +688,9 @@ func (ctr *container) processBatchResident(bat *batch.Batch, proc *process.Proce
 	return nil
 }
 
-func (ctr *container) processBatch(limit uint64, bat *batch.Batch, proc *process.Process) error {
+func (ctr *container) processBatch(limit uint64, bat *batch.Batch, start int, proc *process.Process) error {
 	rowCount := bat.RowCount()
-	processCount := rowsToFill(limit, len(ctr.sels), rowCount)
+	processCount := rowsToFill(limit, len(ctr.sels), rowCount-start)
 
 	if processCount > 0 {
 		if processCount > math.MaxInt-len(ctr.sels) {
@@ -656,7 +711,7 @@ func (ctr *container) processBatch(limit uint64, bat *batch.Batch, proc *process
 		for j, vec := range ctr.bat.Vecs {
 			if err := vec.UnionBatch(
 				bat.Vecs[j],
-				0,
+				int64(start),
 				processCount,
 				nil,
 				proc.Mp(),
@@ -674,7 +729,7 @@ func (ctr *container) processBatch(limit uint64, bat *batch.Batch, proc *process
 		}
 	}
 
-	if processCount == rowCount {
+	if start+processCount == rowCount {
 		return nil
 	}
 
@@ -682,7 +737,7 @@ func (ctr *container) processBatch(limit uint64, bat *batch.Batch, proc *process
 	for i, cmp := range ctr.cmps {
 		cmp.Set(1, bat.Vecs[i])
 	}
-	for i, j := processCount, rowCount; i < j; i++ {
+	for i, j := start+processCount, rowCount; i < j; i++ {
 		rowIdx := int64(i)
 		if ctr.compare(1, 0, rowIdx, ctr.sels[0]) < 0 {
 			for _, cmp := range ctr.cmps {
@@ -829,10 +884,6 @@ func (ctr *container) spillBatch(
 		analyzer.SpillRows(int64(bat.RowCount()))
 	}
 	return spillRecordRef{offset: offset, size: int64(payloadSize)}, nil
-}
-
-func (ctr *container) processBatchSpill(limit uint64, bat *batch.Batch, proc *process.Process, analyzer process.Analyzer) error {
-	return ctr.processBatchSpillFrom(limit, bat, 0, proc, analyzer)
 }
 
 func (ctr *container) processBatchSpillFrom(limit uint64, bat *batch.Batch, start int, proc *process.Process, analyzer process.Analyzer) error {

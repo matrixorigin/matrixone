@@ -76,7 +76,15 @@ func TestBlockScaledVectorParity(t *testing.T) {
 // TestConditionalsMixLowPrecisionAsFloat32 checks that IF/IFF/CASE/COALESCE mixing a
 // bf16/float16/float8/float4 value with another type return what they return for float32.
 func TestConditionalsMixLowPrecisionAsFloat32(t *testing.T) {
-	ctx := context.Background()
+	// default MySQL-compatible binding, and native mode's legacy IF/CASE checkers
+	for _, ctx := range []context.Context{
+		context.Background(), WithMySQLConditionalBooleanContracts(context.Background(), false),
+	} {
+		testConditionalsMixLowPrecisionAsFloat32(t, ctx)
+	}
+}
+
+func testConditionalsMixLowPrecisionAsFloat32(t *testing.T, ctx context.Context) {
 	cond := types.T_bool.ToType()
 	f32 := types.T_float32.ToType()
 	for _, other := range []types.Type{
@@ -107,7 +115,15 @@ func TestConditionalsMixLowPrecisionAsFloat32(t *testing.T) {
 }
 
 func TestControlFlowKeepsNarrowTypes(t *testing.T) {
-	ctx := context.Background()
+	// default MySQL-compatible binding, and native mode's legacy IF/CASE checkers
+	for _, ctx := range []context.Context{
+		context.Background(), WithMySQLConditionalBooleanContracts(context.Background(), false),
+	} {
+		testControlFlowKeepsNarrowTypes(t, ctx)
+	}
+}
+
+func testControlFlowKeepsNarrowTypes(t *testing.T, ctx context.Context) {
 	cond := types.T_bool.ToType()
 	null := types.T_any.ToType()
 	for _, typ := range []types.Type{

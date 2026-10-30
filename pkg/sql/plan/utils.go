@@ -441,6 +441,20 @@ func splitAndBindCondition(astExpr tree.Expr, expandAlias ExpandAliasMode, ctx *
 		// expr must be bool type, if not, try to do type convert
 		// but just ignore the subQuery. It will be solved at optimizer.
 		if expr.GetSub() == nil && needCast {
+			// A GROUP BY can flatten a bare HAVING ENUM/SET condition into its
+			// display reference. Restore the stored ordinal/bitmap before the
+			// BOOL cast so truth follows MySQL numeric semantics. Ungrouped
+			// display wrappers and unrelated operands stay untouched for the
+			// cast-time display rewrite below.
+			if b, ok := ctx.binder.(interface {
+				mysqlSpecialBooleanPredicateOperand(context.Context, *plan.Expr) (*plan.Expr, error)
+			}); ok {
+				recovered, recoveredErr := b.mysqlSpecialBooleanPredicateOperand(ctx.binder.GetContext(), expr)
+				if recoveredErr != nil {
+					return nil, recoveredErr
+				}
+				expr = recovered
+			}
 			expr, err = makePlan2CastExpr(ctx.binder.GetContext(), expr, plan.Type{Id: int32(types.T_bool)})
 			if err != nil {
 				return nil, err
@@ -2576,11 +2590,10 @@ func checkNoNeedCast(ctx context.Context, constT, columnT types.Type, constExpr 
 		}
 
 	case types.T_int8, types.T_int16, types.T_int32, types.T_int64:
-		val, valOk := lit.Value.(*plan.Literal_I64Val)
+		constVal, valOk := literalSignedValue(lit)
 		if !valOk {
 			return false
 		}
-		constVal := val.I64Val
 		switch columnT.Oid {
 		case types.T_bit:
 			return constVal >= 0 && uint64(constVal) <= uint64(1<<columnT.Width-1)
@@ -2622,11 +2635,10 @@ func checkNoNeedCast(ctx context.Context, constT, columnT types.Type, constExpr 
 		}
 
 	case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
-		val_u, valOk := lit.Value.(*plan.Literal_U64Val)
+		constVal, valOk := literalUnsignedValue(lit)
 		if !valOk {
 			return false
 		}
-		constVal := val_u.U64Val
 		switch columnT.Oid {
 		case types.T_bit:
 			return constVal <= uint64(1<<columnT.Width-1)
@@ -6376,9 +6388,19 @@ func preparedRuntimeParamExpr(ctx context.Context, value any, isBin bool, runtim
 		return &Expr{Typ: paramType, Expr: &plan.Expr_Lit{Lit: lit}}
 	}
 	castText := func() (*Expr, error) {
+		textExpr := makePlan2StringConstExprWithType(rawText, isBin)
+		if isBin && textExpr.GetLit() != nil {
+			// A prepared runtime parameter is a string value that arrived over
+			// the binary protocol, not a parsed bit/hex literal. Rebadge the
+			// isBin container's default HEX form to the binary-introducer form
+			// so the pending cast keeps ordinary string truthiness (the same
+			// contract _binary'..' text has) instead of being folded by the
+			// bit/hex literal BOOL rule.
+			textExpr.GetLit().LiteralForm = plan.StringLiteralForm_STRING_LITERAL_BINARY_INTRODUCER
+		}
 		return makePlan2CastExpr(
 			ctx,
-			makePlan2StringConstExprWithType(rawText, isBin),
+			textExpr,
 			paramType,
 		)
 	}

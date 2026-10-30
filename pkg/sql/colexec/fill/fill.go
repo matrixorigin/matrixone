@@ -211,6 +211,14 @@ func (ctr *container) copyToOutput(
 	return err
 }
 
+// resetColRef rebinds the column references of a LINEAR fill expression to
+// the two-column endpoint batch built by linearFillValue: column 0 is the left
+// endpoint and column 1 the right endpoint. The planner binds the midpoint as
+// (agg + agg) / 2, so the endpoint identity is decided by the first function
+// whose two arguments both read a column; every reference below one of those
+// arguments inherits its side. Implicit casts, such as the integer widening
+// inserted around each operand of +, must not change which endpoint a
+// reference reads.
 func resetColRef(expr *plan.Expr, idx int) {
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_Col:
@@ -218,10 +226,30 @@ func resetColRef(expr *plan.Expr, idx int) {
 		exprImpl.Col.ColPos = int32(idx)
 
 	case *plan.Expr_F:
-		for i, arg := range exprImpl.F.Args {
-			resetColRef(arg, i)
+		args := exprImpl.F.Args
+		if len(args) == 2 && exprHasColRef(args[0]) && exprHasColRef(args[1]) {
+			resetColRef(args[0], 0)
+			resetColRef(args[1], 1)
+			return
+		}
+		for _, arg := range args {
+			resetColRef(arg, idx)
 		}
 	}
+}
+
+func exprHasColRef(expr *plan.Expr) bool {
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		return true
+	case *plan.Expr_F:
+		for _, arg := range exprImpl.F.Args {
+			if exprHasColRef(arg) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func processValue(ctr *container, ap *Fill, proc *process.Process, analyzer process.Analyzer) (vm.CallResult, error) {
