@@ -1,9 +1,11 @@
 # Declared catalog metadata: publication admission and account repair
 
-Status: revision 15 (2026-10-30) - editorial consolidation of the
-independently approved revision 14; no design decision, invariant,
-oracle or validation entry changes. Owning issue:
-matrixorigin/matrixone#30936 (carrying #30935 and #30937).
+Status: revision 16 (2026-10-30) - documentation-only evidence
+linkage on top of revision 15; the delivered design content remains
+the independently approved revision 14, and no design decision,
+invariant, oracle or validation entry changed (revision 15 was the
+editorial consolidation of that same revision 14). Owning
+issue: matrixorigin/matrixone#30936 (carrying #30935 and #30937).
 Implementation: PR matrixorigin/matrixone#31489.
 
 Design-first approval and the delivered vehicle (this document's
@@ -26,6 +28,41 @@ commitment to the delivery record):
   revision 12 (sha256
   47ebfe15a45940221c3d2d5ad6955e11a5c89a1a909fa9d4e382e1ac9db0a599,
   PASS 2026-10-29, implemented at head efb7234682).
+- The design-first decision of record for the delivered content
+  names its reviewer and its retained evidence (recorded by revision
+  16; the decision itself is the 2026-10-30 PASS asserted above). The
+  reviewer is the issue-fix-loop controller's independent local
+  reviewer: a read-only, ephemeral Codex review session under the
+  private fix-issue-loop-local-reviewer contract, provider-separated
+  from the implementing handler (reviewer model gpt-6.1-sol,
+  reasoning effort xhigh; implementing handler Grok CLI
+  magpie/tass/glm-5.3). It returned approved: true (PASS - design
+  only, no findings) at 2026-10-30T07:59:46Z for exactly that
+  content hash (controller run
+  3dedc8b010734de9ba6a4c92c3fdf56e; review session thread
+  01a18bcc-5369-7d91-ae66-c072a48a5b1e; run window
+  2026-10-30T07:53:04Z to 07:59:46Z, exit 0).
+- The retained external evidence for that decision, every piece tied
+  to the content hash 22aaf464a18a8be7e7d4889e605850c0792bca6df7bd234e97569445b0c84c66:
+  the approved bytes are public at the PR head commit
+  61da7f8ef005f2ee14a3ea44e738e6baee24876d whose committed document
+  hashes to that value
+  (https://github.com/matrixorigin/matrixone/blob/61da7f8ef005f2ee14a3ea44e738e6baee24876d/docs/design/20261026-declared-catalog-metadata-publication-and-repair.md);
+  the verbatim decision record plus its provenance is durably
+  published at
+  https://gist.github.com/gouhongshen/f1120ed42e7a71f75afa79d1ff8b5bc2;
+  the controller retains the full review transcript and the exact
+  checkpoint submission the reviewer was sent
+  (state/logs/issue-30936/1793346784-b0837235.jsonl and
+  state/artifacts/issue-30936/pr-event-result-1793345798133.json).
+  Earlier reviewed rounds of this design have retained decision
+  records at the same location: revision 9 PASS
+  (pre-pr-review-1793174134562.json), revision 10 REQUEST_CHANGES
+  (pre-pr-review-1793224739314.json), revision 11 REQUEST_CHANGES
+  (pre-pr-review-1793225484685.json), revision 12 PASS
+  (pre-pr-review-1793226200902.json) and revision 13 REQUEST_CHANGES
+  (pre-pr-review-1793323124836.json), all under
+  state/artifacts/issue-30936/.
 - Revision 15 is a documentation-only consolidation requested by the
   PR's implementation review: the D13/D14 amendments are folded into
   the standing sections (2.2, 3, 5.2, 5.5, 5.6, 6, 7, 8), and the
@@ -951,8 +988,9 @@ The implementation of this design is delivered by PR
 matrixorigin/matrixone#31489 as one squashed semantic change, rebased
 per the design's rework rounds onto main's consolidated ladder; the
 head that carried the revision-14 implementation was
-61da7f8ef005f2ee14a3ea44e738e6baee24876d (this revision 15 changes
-documentation only). The committed production change is the design's
+61da7f8ef005f2ee14a3ea44e738e6baee24876d (revisions 15 and 16 of
+this document are documentation-only and change no production
+content). The committed production change is the design's
 selected shape:
 
 - the additive declared-label metadata helpers and the new
@@ -2107,4 +2145,32 @@ and 4.3 and rework the delivery to contract-conforming shapes:
   the PR's review threads and retained review evidence). No decision,
   invariant, oracle or validation entry changed from the approved
   revision 14 (sha256
+  22aaf464a18a8be7e7d4889e605850c0792bca6df7bd234e97569445b0c84c66).
+
+- Revision 16 (2026-10-30, this document): documentation-only
+  evidence linkage requested by PR #31489's design-gate review of
+  2026-10-30T13:43:27Z. The status block's approval trace now
+  identifies the actual design-first decision and its reviewer
+  instead of asserting the 2026-10-30 PASS by date and hash alone:
+  the controller-run independent local reviewer (a read-only,
+  ephemeral Codex review session under the fix-issue-loop-local-reviewer
+  contract, reviewer model gpt-6.1-sol, reasoning effort xhigh,
+  provider-separated from the Grok magpie/tass/glm-5.3 implementing
+  handler; controller run 3dedc8b010734de9ba6a4c92c3fdf56e, review
+  session thread 01a18bcc-5369-7d91-ae66-c072a48a5b1e, run window
+  2026-10-30T07:53:04Z to 07:59:46Z, exit 0) returned approved: true
+  (PASS - design only, no findings) at 2026-10-30T07:59:46Z for
+  revision 14 at exactly sha256
+  22aaf464a18a8be7e7d4889e605850c0792bca6df7bd234e97569445b0c84c66,
+  and the retained evidence is linked as external records: the
+  public byte link of the approved content (the document at PR head
+  61da7f8ef005f2ee14a3ea44e738e6baee24876d, which hashes to the
+  approved value), the durable verbatim decision record
+  https://gist.github.com/gouhongshen/f1120ed42e7a71f75afa79d1ff8b5bc2,
+  and the controller-retained transcript and checkpoint submission
+  (state/logs/issue-30936/1793346784-b0837235.jsonl and
+  state/artifacts/issue-30936/pr-event-result-1793345798133.json).
+  No completed review was repeated and no raw review transcript is
+  committed into this repository. No decision, invariant, oracle or
+  validation entry changed from the approved revision 14 (sha256
   22aaf464a18a8be7e7d4889e605850c0792bca6df7bd234e97569445b0c84c66).
