@@ -169,14 +169,6 @@ func (itr *strHashmapIterator) prepareHashKeys(
 			continue
 		}
 
-		if count > 0 && (vec.GetType().Oid == types.T_char ||
-			(types.IsUnicodeCollation(vec.GetType().Charset) && vec.GetType().Oid.IsMySQLString())) && !vec.IsConst() {
-			if err := itr.sizeCanonicalStringKeys(vec, start, count, prefix); err != nil {
-				return err
-			}
-			continue
-		}
-
 		// Most join keys are flat and non-null. Size them from the physical
 		// representation directly, avoiding repeated type/null/const dispatch
 		// before the encoder's required value pass.
@@ -204,7 +196,12 @@ func (itr *strHashmapIterator) prepareHashKeys(
 				continue
 			}
 			values, area := vector.MustVarlenaRawData(vec)
-			if vec.GetType().Oid == types.T_json {
+			if count > 0 && (vec.GetType().Oid == types.T_char ||
+				(types.IsUnicodeCollation(vec.GetType().Charset) && vec.GetType().Oid.IsMySQLString())) {
+				if err := itr.sizeCanonicalStringKeys(vec, start, count, prefix); err != nil {
+					return err
+				}
+			} else if vec.GetType().Oid == types.T_json {
 				for i := 0; i < count; i++ {
 					value := values[start+i].GetByteSlice(area)
 					if err := add(i, prefix+4+keycodec.CanonicalJSONSize(value)); err != nil {
@@ -225,6 +222,13 @@ func (itr *strHashmapIterator) prepareHashKeys(
 		}
 
 		fixed := vec.GetType().IsFixedLen()
+		if !fixed && count > 0 && (vec.GetType().Oid == types.T_char ||
+			(types.IsUnicodeCollation(vec.GetType().Charset) && vec.GetType().Oid.IsMySQLString())) && !vec.IsConst() {
+			if err := itr.sizeCanonicalStringKeys(vec, start, count, prefix); err != nil {
+				return err
+			}
+			continue
+		}
 		for i := 0; i < count; i++ {
 			row := start + i
 			if withDomain && vec.GetGrouping().Contains(uint64(row)) {
