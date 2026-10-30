@@ -89,6 +89,9 @@ func resolveDivPrecisionIncrement(ctx CompilerContext) int32 {
 // expressions with the same statement setting as ordinary SELECT expressions.
 func ddlExpressionContext(ctx CompilerContext, base context.Context) context.Context {
 	bound := function.WithDivPrecisionIncrement(base, resolveDivPrecisionIncrement(ctx))
+	if function.LegacyFloatStringBounds(ctx.GetContext()) {
+		bound = function.WithLegacyFloatStringBounds(bound)
+	}
 	if function.LegacySpecialConsumers(ctx.GetContext()) {
 		bound = function.WithLegacySpecialConsumers(bound)
 	}
@@ -101,8 +104,18 @@ func ddlExpressionContext(ctx CompilerContext, base context.Context) context.Con
 	if function.LegacyTemporalNullability(ctx.GetContext()) {
 		bound = function.WithLegacyTemporalNullability(bound)
 	}
+	if function.LegacyTimeNullability(ctx.GetContext()) {
+		bound = function.WithLegacyTimeNullability(bound)
+	}
 	if function.LegacyUnixTimestampDatetime(ctx.GetContext()) {
 		bound = function.WithLegacyUnixTimestampDatetime(bound)
+	}
+	// D11 carrier two: standalone DDL binders take no QueryBuilder and no
+	// BindContext, so the boolean-semantics statement setting rides this same
+	// carrier. A native-mode session authors persisted expressions with the
+	// exact pre-contract behavior, byte-identical to what SELECT binds.
+	if !function.MySQLConditionalBooleanContractsFromProcess(ctx.GetProcess()) {
+		bound = function.WithMySQLConditionalBooleanContracts(bound, false)
 	}
 	return bound
 }
@@ -131,6 +144,13 @@ func NewQueryBuilder(queryType plan.Query_StatementType, ctx CompilerContext, is
 	var boolSumAvgCompat bool
 	var noUnsignedSubtraction bool
 	divPrecisionIncrement := resolveDivPrecisionIncrement(ctx)
+	// D11 two-carrier scalar: resolve the statement's MatrixOneNativeMode
+	// decision with the same single resolver the BindContext and DDL
+	// expression contexts use, so the builder-scoped DML paths that resolve
+	// through QueryBuilder.GetContext (UPDATE / ODKU assignment casts,
+	// projected rewrites, plan checks) bind with the statement's actual
+	// boolean-contracts decision instead of the absent-scalar MySQL default.
+	matrixOneNativeMode := !function.MySQLConditionalBooleanContractsFromProcess(ctx.GetProcess())
 
 	mode, err := ctx.ResolveVariable("sql_mode", true, false)
 	if err == nil {
@@ -194,6 +214,7 @@ func NewQueryBuilder(queryType plan.Query_StatementType, ctx CompilerContext, is
 		mysqlFullGroupByCompat:   mysqlFullGroupByCompat,
 		boolSumAvgCompat:         boolSumAvgCompat,
 		noUnsignedSubtraction:    noUnsignedSubtraction,
+		matrixOneNativeMode:      matrixOneNativeMode,
 		divPrecisionIncrement:    divPrecisionIncrement,
 		aggSpillMem:              aggSpillMem,
 		joinSpillMem:             joinSpillMem,
@@ -695,6 +716,7 @@ func setOperationOutputType(
 	nodeType plan.Node_NodeType,
 	leftType, rightType plan.Type,
 ) plan.Type {
+	leftType = setOperationDecimalAttributes(nodeType, leftType, rightType)
 	switch nodeType {
 	case plan.Node_UNION, plan.Node_UNION_ALL:
 		if commonType, ok := function.CommonMediumIntType([]types.Type{
@@ -705,6 +727,33 @@ func setOperationOutputType(
 		}
 		leftType.NotNullable = leftType.NotNullable && rightType.NotNullable
 	}
+	return leftType
+}
+
+// setOperationDecimalAttributes derives the numeric attribute mask of one
+// materialized set-operation column. Set outputs are derived rows: MySQL
+// documents ZEROFILL as ignored for UNION queries, and the same materialized
+// boundary applies uniformly to INTERSECT/MINUS. UNION/UNION ALL clear the
+// ZEROFILL bit and keep UNSIGNED only when every branch carries it (the same
+// shape as the NotNullable AND-merge); every other set operation clears both
+// bits. Only numeric_attributes is touched; width/scale/nullability/collation
+// stay byte-identical, and non-decimal branches are unaffected. Domain
+// admission never keys on a set-op output mask: enforcement happens at
+// attributed target writes, and a set-op output is not ProvenanceSingleSource,
+// so CTAS over a UNION lands mask 0 under the computed-expression rule.
+func setOperationDecimalAttributes(
+	nodeType plan.Node_NodeType,
+	leftType, rightType plan.Type,
+) plan.Type {
+	if !types.T(leftType.Id).IsDecimal() {
+		return leftType
+	}
+	if nodeType == plan.Node_UNION || nodeType == plan.Node_UNION_ALL {
+		leftType.NumericAttributes = leftType.NumericAttributes &
+			rightType.NumericAttributes & types.NumericAttributeUnsigned
+		return leftType
+	}
+	leftType.NumericAttributes = 0
 	return leftType
 }
 
@@ -2296,7 +2345,9 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 			}
 
 			node.ProjectList = append(node.ProjectList, &plan.Expr{
-				Typ: groupingFlagOutputType(expr.Typ, node.GroupingFlag, int32(idx)),
+				Typ: groupingFlagOutputType(
+					expr.Typ, node.GroupingFlag, int32(idx),
+					IsSortRollupOption(node.ExtraOptions)),
 				Expr: &plan.Expr_Col{
 					Col: &ColRef{
 						RelPos: -1,
@@ -2352,7 +2403,9 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 				remapping.addColRef(globalRef)
 
 				node.ProjectList = append(node.ProjectList, &plan.Expr{
-					Typ: groupingFlagOutputType(node.GroupBy[0].Typ, node.GroupingFlag, 0),
+					Typ: groupingFlagOutputType(
+						node.GroupBy[0].Typ, node.GroupingFlag, 0,
+						IsSortRollupOption(node.ExtraOptions)),
 					Expr: &plan.Expr_Col{
 						Col: &plan.ColRef{
 							RelPos: -1,
@@ -4321,6 +4374,9 @@ func (builder *QueryBuilder) removeUnnecessaryProjections(nodeID int32) int32 {
 }
 
 func (builder *QueryBuilder) createQuery() (*Query, error) {
+	if err := builder.qry.ValidateIntegerPrecision(); err != nil {
+		return nil, err
+	}
 	if err := builder.bindPreparedPredicateDiagnostics(); err != nil {
 		return nil, err
 	}
@@ -4494,6 +4550,7 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		builder.determineWindowPartitionAlgorithms(rootID)
 		builder.deduplicateBlockFilters(rootID)
 		builder.forceJoinOnOneCN(rootID, false)
+		builder.addBoundedDeleteIndexRuntimeFilters(rootID)
 		// after this ,never call ReCalcNodeStats again !!!
 
 		builder.handleMessages(rootID)
@@ -4690,7 +4747,22 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 			nodeID, err = builder.bindSelect(&tree.Select{Select: sltStmt, Limit: astLimit, OrderBy: astOrderBy}, ctx, isRoot)
 		}
 		if err == nil {
+			// Identical UNION branches can collapse to one DISTINCT SELECT,
+			// but its SQL result still crosses a set-operation boundary.
+			var integerIDs []uint32
+			if builder.integerPrecision != nil {
+				integerIDs = make([]uint32, len(ctx.headings))
+				for i := range integerIDs {
+					integerIDs[i] = ctx.outputColumnProvenanceForProject(int32(i)).IntegerPrecisionID
+				}
+			}
 			ctx.clearOutputColumnProvenance()
+			for i, id := range integerIDs {
+				if !shareGroupingInput {
+					id = builder.integerPrecision.reference(id)
+				}
+				ctx.setOutputColumnProvenance(int32(i), OutputColumnProvenance{State: ProvenanceNone, IntegerPrecisionID: id})
+			}
 		}
 		return nodeID, err
 	}
@@ -4717,11 +4789,15 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 			subCtx.preserveOrderSemanticKeys = true
 		}
 		savedIsForUpdate := builder.isForUpdate
+		// Keep isRoot's binding semantics, but do not publish a branch's
+		// temporary headings as extra visible Query outputs.
+		savedHeadings := builder.qry.Headings
 		if slt, ok := sltStmt.(*tree.Select); ok {
 			nodeID, err = builder.bindSelect(slt, subCtx, isRoot)
 		} else {
 			nodeID, err = builder.bindSelect(&tree.Select{Select: sltStmt}, subCtx, isRoot)
 		}
+		builder.qry.Headings = savedHeadings
 		builder.isForUpdate = savedIsForUpdate
 		if err != nil {
 			return 0, err
@@ -4756,17 +4832,20 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 	// Capture both kinds of provenance before that mutation so a bare NULL can
 	// remain neutral even after transparent derived-table or CTE projection,
 	// without mistaking an explicit CAST(NULL AS string) for a neutral branch.
+	integerBranches := make([][]uint32, len(subCtxList))
 	setBranchPureNull := make([][]bool, len(subCtxList))
 	setBranchOrderTypes := make([][]*plan.Type, len(subCtxList))
 	setBranchPadSpaceProvenance := make([][]bool, len(subCtxList))
 	setOperationKeyRequired := make([]bool, projectLength)
 	for branchIdx, branchCtx := range subCtxList {
 		setBranchPureNull[branchIdx] = make([]bool, projectLength)
+		integerBranches[branchIdx] = make([]uint32, projectLength)
 		setBranchOrderTypes[branchIdx] = make([]*plan.Type, projectLength)
 		setBranchPadSpaceProvenance[branchIdx] = make([]bool, projectLength)
 		for colIdx := 0; colIdx < projectLength && colIdx < len(branchCtx.projects); colIdx++ {
 			setBranchPureNull[branchIdx][colIdx] =
 				branchCtx.outputColumnProvenanceForProject(int32(colIdx)).State == ProvenancePureNull
+			integerBranches[branchIdx][colIdx] = branchCtx.outputColumnProvenanceForProject(int32(colIdx)).IntegerPrecisionID
 			setBranchOrderTypes[branchIdx][colIdx] = branchCtx.mysqlSpecialOrderTypeForProject(int32(colIdx))
 			setBranchPadSpaceProvenance[branchIdx][colIdx] =
 				hasPadSpaceStringProvenance(builder.qry.Nodes[nodes[branchIdx]].ProjectList[colIdx])
@@ -5154,6 +5233,32 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 		})
 	}
 	ctx.clearOutputColumnProvenance()
+	if g := builder.integerPrecision; g != nil {
+		for colIdx, output := range ctx.projects {
+			if !types.T(output.Typ.Id).IsInteger() {
+				continue
+			}
+			id := integerBranches[0][colIdx]
+			if !shareGroupingInput {
+				var inputs []uint32
+				for branchIdx := range subCtxList {
+					if !setBranchPureNull[branchIdx][colIdx] {
+						inputs = append(inputs, integerBranches[branchIdx][colIdx])
+					}
+				}
+				g.captureFunction("case", inputs, output)
+				id = g.reference(g.ids[output])
+			}
+			// Grouping branches bind the same SQL projection. Their UNION is
+			// an execution rewrite: preserve that projection's source recipe
+			// and root class, including literal/declared/reference roots.
+			// Only a user-written set operation introduces a new SQL reference.
+			if id != 0 {
+				g.ids[output] = id
+				ctx.setOutputColumnProvenance(int32(colIdx), OutputColumnProvenance{State: ProvenanceNone, IntegerPrecisionID: id})
+			}
+		}
+	}
 	// A set-operation output is itself pure NULL only when every branch is pure
 	// NULL. Preserve that fact for another transparent derived-table or CTE
 	// boundary so a later set operation still treats the column as neutral.
@@ -6173,6 +6278,17 @@ func (builder *QueryBuilder) preprocessCte(stmt *tree.Select, ctx *BindContext) 
 }
 
 func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isRoot bool) (nodeID int32, err error) {
+	// This source was introduced solely to evaluate windows after grouping.
+	// Its AST identity, not its SQL alias, owns metadata transparency.
+	if ctx.parent != nil && ctx.parent.integerPrecisionGeneratedSource == stmt {
+		ctx.integerPrecisionTransparentBoundary = true
+	}
+	defer func() {
+		if err == nil && isRoot && builder.integerPrecision != nil {
+			builder.captureIntegerPrecisionOutputs(ctx)
+		}
+	}()
+
 	if isRoot {
 		defer func() { builder.stableCTERoots = nil }()
 	}
@@ -6346,6 +6462,55 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 			}
 			selectClause = &nextSelectClause
 		}
+		sortRollupCandidate := isRoot &&
+			selectClause.GroupBy != nil &&
+			selectClause.GroupBy.Rollup &&
+			// DISTINCT must stay on the legacy grouping-set path until its
+			// pre-dedup normalization converts grouping sentinels to SQL NULL.
+			// Sort rollup preserves the grouping bitmap for GROUPING(), so
+			// sending it directly to DISTINCT would keep source NULL and
+			// rollup NULL as different hash keys.
+			!selectClause.Distinct &&
+			// SAMPLE owns a separate node, so it cannot produce the additional
+			// prefixes after sort rollup suppresses grouping-set expansion.
+			!selectClauseHasSampleExpr(selectClause) &&
+			builder.sortRollupMode() != 2 &&
+			len(selectClause.GroupBy.GroupByExprsList) == 1 &&
+			sortRollupSourceEligible(selectClause.From.Tables) &&
+			sortRollupGroupingListEligible(
+				selectClause.GroupBy.GroupByExprsList[0], selectClause.Exprs) &&
+			sortRollupAggregateOrderEligible(
+				selectClause.Exprs,
+				sortRollupAdditionalExprs(selectClause.Having, astOrderBy)...) &&
+			len(selectClause.Windows) == 0 &&
+			!sortRollupSelectHasWindow(selectClause, astOrderBy)
+		useSortRollup := false
+		if sortRollupCandidate {
+			if builder.sortRollupMode() == 1 {
+				// Forced sort still has to pass the semantic/type probe, but
+				// does not pay for a statistics read or WHERE probe.
+				useSortRollup = builder.sortRollupGroupingTypesEligible(
+					ctx,
+					selectClause.From.Tables,
+					selectClause.GroupBy.GroupByExprsList[0],
+					isRoot)
+			} else {
+				// The automatic path performs the type and statistics probe once;
+				// an unsupported type or unknown statistics falls back to hash.
+				useSortRollup = builder.chooseSortRollup(
+					ctx,
+					selectClause.From.Tables,
+					selectClause.Where,
+					selectClause.GroupBy.GroupByExprsList[0],
+					selectClause.Exprs,
+					selectClause.Having,
+					astOrderBy,
+					isRoot)
+			}
+		}
+		if useSortRollup {
+			ctx.sortRollup = true
+		}
 		if selectClause.GroupBy != nil {
 			groupByExprsList := selectClause.GroupBy.GroupByExprsList
 			if selectClause.GroupBy.Rollup {
@@ -6377,7 +6542,7 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 				}
 			}
 			selectClause.GroupBy.GroupByExprsList = groupByExprsList
-			if len(groupByExprsList) > 1 && !selectClause.GroupBy.Apart {
+			if len(groupByExprsList) > 1 && !selectClause.GroupBy.Apart && !useSortRollup {
 				if rewrittenSelect, hasWindow, rewriteErr := rewriteRollupWindowSelectWithHeadingProvenance(ctx, selectClause, astOrderBy, astLimit, astRankOption); hasWindow {
 					if rewriteErr != nil {
 						return 0, rewriteErr
@@ -6846,6 +7011,24 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 	}
 
 	return
+}
+
+func sortRollupSelectHasWindow(selectClause *tree.SelectClause, orderBy tree.OrderBy) bool {
+	if selectClause == nil {
+		return false
+	}
+	for _, expr := range selectClause.Exprs {
+		if rollupWindowExprContainsWindow(expr.Expr) {
+			return true
+		}
+	}
+	for _, order := range orderBy {
+		if order != nil && rollupWindowExprContainsWindow(order.Expr) {
+			return true
+		}
+	}
+	return selectClause.Having != nil &&
+		rollupWindowExprContainsWindow(selectClause.Having.Expr)
 }
 
 // seedNumericTableProjectionTypes pushes numeric assignment targets through a
@@ -8049,6 +8232,7 @@ func rewriteRollupWindowSelectWithHeadingProvenance(
 		RankOption: astRankOption,
 	}
 	if ctx != nil {
+		ctx.integerPrecisionGeneratedSource = derived
 		// The rewritten projection is bound immediately below this call. Reset
 		// any metadata left by a previous bind of the same context so an ordinal
 		// cannot accidentally describe a later, unrelated select list.
@@ -10163,8 +10347,11 @@ func gapFillBoundContainsColumn(expr *Expr, timestamp *plan.ColRef) bool {
 }
 
 func gapFillBoundIsConstant(expr *Expr) bool {
+	// Inferred bounds are evaluated at EXECUTE, including parameterless
+	// prepared plans. Diagnostic relocation policy must not reject a value
+	// that is constant within that execution.
 	return expr != nil && !exprHasColRef(expr) && !hasCorrCol(expr) &&
-		!hasSubquery(expr) && !containsVolatileFunction(expr)
+		!hasSubquery(expr) && function.IsRuntimeConstant(expr)
 }
 
 func combineGapFillBounds(ctx context.Context, name string, candidates []*Expr, targetType plan.Type) (*Expr, error) {
@@ -11348,6 +11535,46 @@ func (builder *QueryBuilder) appendAggNode(
 		}
 	}
 
+	var sortRollupOrder []*plan.OrderBySpec
+	orderedRollupInput := false
+	if ctx.sortRollup {
+		// Sort by the physical equality keys when padding-aware grouping added
+		// hidden keys; otherwise the visible grouping expressions are enough.
+		sortExprs := groupBy
+		if len(groupByHashKey) > 0 {
+			sortExprs = make([]*plan.Expr, 0, len(groupByHashKey))
+			for _, idx := range groupByHashKey {
+				sortExprs = append(sortExprs, groupBy[idx])
+			}
+		}
+		// Reuse order only after the child plan proves a complete global SORT
+		// through direct projections and filters. The isolated cost probe's
+		// proof cannot replace checking this actual input's bound lineage.
+		// Never reuse the property when hidden pad-space equality keys were added:
+		// the visible AST order does not prove that physical key order.
+		orderedRollupInput = len(groupByHashKey) == 0 &&
+			builder.sortRollupNodeInputOrdered(nodeID, sortExprs)
+		if !orderedRollupInput {
+			sortRollupOrder = make([]*plan.OrderBySpec, len(sortExprs))
+			for i, expr := range sortExprs {
+				sortRollupOrder[i] = &plan.OrderBySpec{
+					Expr: DeepCopyExpr(expr),
+					Flag: plan.OrderBySpec_INTERNAL | plan.OrderBySpec_ASC | plan.OrderBySpec_NULLS_FIRST,
+				}
+			}
+			nodeID = builder.appendNode(&plan.Node{
+				NodeType: plan.Node_SORT,
+				Children: []int32{nodeID},
+				OrderBy:  sortRollupOrder,
+				SpillMem: builder.sortSpillMem,
+			}, ctx)
+		}
+	}
+
+	extraOptions := ""
+	if ctx.sortRollup {
+		extraOptions = EncodeSortRollupOption()
+	}
 	nodeID = builder.appendNode(&plan.Node{
 		NodeType:       plan.Node_AGG,
 		Children:       []int32{nodeID},
@@ -11357,6 +11584,7 @@ func (builder *QueryBuilder) appendAggNode(
 		AggList:        ctx.aggregates,
 		BindingTags:    []int32{ctx.groupTag, ctx.aggregateTag},
 		SpillMem:       builder.aggSpillMem,
+		ExtraOptions:   extraOptions,
 	}, ctx)
 
 	// Plan-level rewrite: count(not_null_col) -> starcount (ObjName + Obj) so compile uses countStarExec.
@@ -13936,6 +14164,15 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 				builder.GetContext(), builder.compCtx.GetProcess(), node.TableDef); err != nil {
 				return err
 			}
+			// Same-version cross-mode boundary: a definition that needs the
+			// conditional boolean contracts evaluates with those kernels only on
+			// a MySQL-mode statement. A native-mode session fails closed here
+			// instead of mis-executing the persisted JSON conditions or the
+			// ENUM storage-truth casts.
+			if err := RequireMySQLConditionalBooleanConsumption(
+				builder.GetContext(), builder.compCtx.GetProcess(), node.TableDef); err != nil {
+				return err
+			}
 		}
 		if len(alias.Cols) > len(node.TableDef.Cols) {
 			return moerr.NewSyntaxErrorf(builder.GetContext(), "table %q has %d columns available but %d columns specified", alias.Alias, len(node.TableDef.Cols), len(alias.Cols))
@@ -14080,6 +14317,16 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 				outputColumnProvenance = make([]OutputColumnProvenance, colLength)
 			}
 			outputColumnProvenance[i] = subCtx.outputColumnProvenanceForProject(int32(i))
+			if id := outputColumnProvenance[i].IntegerPrecisionID; id != 0 && builder.integerPrecision != nil {
+				if subCtx.integerPrecision != nil && subCtx.integerPrecision != builder.integerPrecision {
+					id = builder.integerPrecision.importID(subCtx.integerPrecision.graph, id)
+				}
+				if !subCtx.integerPrecisionTransparentBoundary {
+					id = builder.integerPrecision.reference(id)
+				}
+				outputColumnProvenance[i].IntegerPrecisionID = id
+			}
+
 			if outputColumnProvenance[i].CTASDefaultPolicy == CTASDefaultInheritSource {
 				outputColumnProvenance[i].CTASDefaultPolicy = CTASDefaultNone
 			}
@@ -14578,6 +14825,8 @@ func (builder *QueryBuilder) buildTableFunction(tbl *tree.TableFunction, ctx *Bi
 			nodeId = builder.buildTableStats(tbl, ctx, exprs, nil)
 		case "load_file_chunks":
 			nodeId = builder.buildLoadFileChunks(tbl, ctx, exprs, nil)
+		case indexFileChunksFuncName:
+			nodeId, err = builder.buildIndexFileChunks(tbl, ctx, exprs, nil)
 		default:
 			err = moerr.NewNotSupportedf(builder.GetContext(), "table function '%s' not supported", id)
 		}
@@ -14623,7 +14872,14 @@ func (builder *QueryBuilder) GetContext() context.Context {
 		return context.TODO()
 	}
 	ctx := function.WithNoUnsignedSubtraction(builder.compCtx.GetContext(), builder.noUnsignedSubtraction)
-	return function.WithDivPrecisionIncrement(ctx, builder.divPrecisionIncrement)
+	ctx = function.WithDivPrecisionIncrement(ctx, builder.divPrecisionIncrement)
+	// D11 carrier completion: the builder-scoped DML assignment casts and
+	// projected rewrites resolve through this context, so the statement's
+	// boolean-contracts scalar rides it exactly like the BindContext and DDL
+	// carriers. Without it a native-mode UPDATE / ODKU statement saw the
+	// MySQL default and folded BOOL-target BIT-literal assignments that base
+	// keeps rejecting on the raw payload.
+	return function.WithMySQLConditionalBooleanContracts(ctx, !builder.matrixOneNativeMode)
 }
 
 func (builder *QueryBuilder) checkPlanningCanceled() error {

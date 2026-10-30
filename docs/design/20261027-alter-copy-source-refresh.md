@@ -3,6 +3,12 @@
 Issue: #31401. This extends the speculative preparation and publication model
 in [ALTER COPY pre-publication](20261010-alter-copy-pre-publication.md).
 
+The scalar ADD COLUMN admission refinement is specified in
+[Scalar ALTER COPY admission](20261028-scalar-alter-copy-admission.md).
+It retains this refresh mechanism while removing the exclusive global gate
+from certified ordinary scalar replacements. The broad path below still
+applies to protected and complex tables.
+
 ## Contract
 
 COPY can prepare an old source snapshot while a LOAD is running. Publication

@@ -32,8 +32,33 @@ explain verbose select id from t order by l2_distance(v, '[0,0]') limit 2 by ran
 -- @regex("NProbe: 9",true)
 explain verbose select id from t order by l2_distance(v, '[0,0]') limit 2 by rank with option 'mode=post', 'nprobe=9';
 select @@probe_limit;
+-- A separate connection keeps its own base and query override.
+-- @session:id=1{
+use vector_rank_options;
+set @saved_probe_limit = @@probe_limit;
+set @saved_ivf = @@experimental_ivf_index;
+set @saved_auto = @@enable_vector_auto_mode_by_default;
+set @saved_pre = @@enable_vector_prefilter_by_default;
+set experimental_ivf_index = 1;
+set enable_vector_auto_mode_by_default = 0;
+set enable_vector_prefilter_by_default = 0;
+set probe_limit = 2;
+-- @regex("NProbe: 2",true)
+explain verbose select id from t order by l2_distance(v, '[0,0]') limit 2 by rank with option 'mode=post';
+-- @regex("NProbe: 9",true)
+explain verbose select id from t order by l2_distance(v, '[0,0]') limit 2 by rank with option 'mode=post', 'nprobe=9';
+select @@probe_limit;
+set probe_limit = @saved_probe_limit;
+set experimental_ivf_index = @saved_ivf;
+set enable_vector_auto_mode_by_default = @saved_auto;
+set enable_vector_prefilter_by_default = @saved_pre;
+-- @session}
+select @@probe_limit;
+-- @regex("NProbe: 4",true)
+explain verbose select id from t order by l2_distance(v, '[0,0]') limit 2 by rank with option 'mode=post';
 select id from t order by l2_distance(v, '[0,0]') limit 2 by rank with option 'nprobe=1';
 select id from t order by l2_distance(v, '[0,0]') limit 2 by rank with option 'mode=post', 'nprobe=9';
+select id from t order by l2_distance(v, '[0,0]') limit 2 by rank with option 'mode=force';
 prepare rank_stmt from "select id from t order by l2_distance(v, '[0,0]') limit 2 by rank with option 'nprobe=1'";
 execute rank_stmt;
 deallocate prepare rank_stmt;
@@ -46,6 +71,11 @@ select id from t limit 1 by rank with option 'fudge_factor=100';
 select id from t limit 1 by rank with option 'mode=post', 'nproeb=99';
 select id from t limit 1 by rank with option 'nprobe=1=2';
 select id from t limit 1 by rank with option 1;
+
+select @@probe_limit;
+-- @regex("NProbe: 4",true)
+explain verbose select id from t order by l2_distance(v, '[0,0]') limit 2 by rank with option 'mode=post';
+select id from t order by l2_distance(v, '[0,0]') limit 2 by rank with option 'mode=post';
 
 set probe_limit = @saved_probe_limit;
 set experimental_ivf_index = @saved_ivf;

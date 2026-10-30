@@ -1400,6 +1400,9 @@ func (c *Compile) compileQuery(qry *plan.Query) ([]*Scope, error) {
 
 	c.execType = vectorQueryExecType(sequenceExecType(
 		plan2.GetExecType(c.pn.GetQuery(), c.getHaveDDL(), c.isPrepare), qry), qry)
+	if executor.RequiresLocalExecution(c.proc.Ctx) && c.execType == plan2.ExecTypeAP_MULTICN {
+		c.execType = plan2.ExecTypeAP_ONECN
+	}
 
 	c.cnList, err = c.scheduleQueryWorkers()
 	if err != nil {
@@ -2022,6 +2025,22 @@ func (c *Compile) compilePlanScopeWithUnionAllDemand(
 
 		c.setAnalyzeCurrent(ss, int(curNodeIdx))
 		ss = c.ensureCoordinatorOnlyFunctions(node, ss)
+		if plan2.IsSortRollupOption(node.ExtraOptions) {
+			// The child SORT performs the global k-way merge when the input is
+			// distributed, so the ordered rollup aggregate must run once on the
+			// resulting coordinator scope. A second aggregate stage would destroy
+			// the prefix-boundary invariant.
+			if len(ss) != 1 || ss[0].HasPartialResults {
+				return nil, moerr.NewInternalErrorNoCtx(
+					"sort rollup requires one non-partial ordered input scope")
+			}
+			if !c.scopesRunOnCoordinator(ss) {
+				ss = []*Scope{c.newMergeScope(ss)}
+			}
+			ss = c.compileTPGroup(node, ss, nodes)
+			ss = c.compileSort(node, c.compileProjection(node, c.compileRestrict(node, ss)))
+			return ss, nil
+		}
 		if c.canCompileShuffleGroup(node) {
 			ss = c.compileSort(node, c.compileProjection(node, c.compileRestrict(node, c.compileShuffleGroup(node, ss, nodes))))
 			return ss, nil
@@ -7689,6 +7708,9 @@ func (c *Compile) compileSort(node *plan.Node, ss []*Scope) []*Scope {
 		return c.compileOrder(node, ss)
 
 	case node.Limit != nil && node.Offset != nil && len(node.OrderBy) > 0:
+		if topN, ok := c.preparedPaginationTop(node); ok {
+			return c.compileOffset(node, c.compileTop(node, plan2.MakePlan2Uint64ConstExprWithType(topN), ss))
+		}
 		if function.IsConstant(node.Limit, false) && function.IsConstant(node.Offset, false) {
 			// get limit
 			vec1, free1, err := colexec.GetReadonlyResultFromNoColumnExpression(c.proc, node.Limit)

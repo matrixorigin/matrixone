@@ -1760,9 +1760,9 @@ func TestPublicationSystemRelationProvisionedForFutureAccounts(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("the classification follows the account-initialization contract", func(t *testing.T) {
-		require.True(t, publicationSystemRelationProvisionedAtAccountCreation("", "mo_catalog", "mo_user"),
+		require.True(t, publicationSystemRelationProvisionedAtAccountCreation("mo_catalog", "mo_user"),
 			"CREATE ACCOUNT provisions mo_user for every account it creates")
-		require.False(t, publicationSystemRelationProvisionedAtAccountCreation("", "mo_catalog", "mo_account"),
+		require.False(t, publicationSystemRelationProvisionedAtAccountCreation("mo_catalog", "mo_account"),
 			"mo_account stays with the system account")
 	})
 
@@ -3438,4 +3438,40 @@ func TestPublicationBackgroundLowerCaseTableNamesResolution(t *testing.T) {
 	require.Error(t, err)
 	require.ErrorContains(t, err,
 		"session variable lower_case_table_names is unavailable")
+}
+
+// TestIsPublicationProbeInfrastructureErrorClassifiesFamilies pins the DDL
+// publication-probe's error identity contract after the lock-wait-timeout
+// family became statement-scoped in the shared whole-transaction rollback
+// policy: a timeout (local or owner-side), deadlock, retry/write-conflict,
+// backend loss and cancellation conditions keep their own infrastructure
+// identity instead of receiving the stable broken-view verdict, while
+// semantic definition failures (unknown table, bad input) and plain errors
+// stay probe-semantic.
+func TestIsPublicationProbeInfrastructureErrorClassifiesFamilies(t *testing.T) {
+	for name, err := range map[string]error{
+		"lock wait timeout":     moerr.NewLockWaitTimeoutNoCtx(),
+		"remote owner timeout":  moerr.NewRemoteLockWaitTimeoutNoCtx(),
+		"deadlock":              moerr.NewDeadLockDetectedNoCtx(),
+		"write conflict":        moerr.NewTxnWriteConflictNoCtx("concurrent change"),
+		"txn need retry":        moerr.NewTxnNeedRetryNoCtx(),
+		"retry with def change": moerr.NewTxnNeedRetryWithDefChangedNoCtx(),
+		"backend closed":        moerr.NewBackendClosedNoCtx(),
+		"cancellation":          context.Canceled,
+		"deadline exceeded":     context.DeadlineExceeded,
+		"wrapped lock timeout":  fmt.Errorf("probe depth: %w", moerr.NewLockWaitTimeoutNoCtx()),
+		"joined remote timeout": errors.Join(moerr.NewInternalErrorNoCtx("x"), moerr.NewRemoteLockWaitTimeoutNoCtx()),
+	} {
+		require.True(t, isPublicationProbeInfrastructureError(err),
+			"%s must keep its own infrastructure identity", name)
+	}
+	for name, err := range map[string]error{
+		"unknown table": moerr.NewNoSuchTableNoCtx("db", "v"),
+		"invalid input": moerr.NewInvalidInputNoCtx("stored definition does not bind"),
+		"plain error":   errors.New("resolution failed"),
+		"nil error":     nil,
+	} {
+		require.False(t, isPublicationProbeInfrastructureError(err),
+			"%s is a semantic property of the stored definition", name)
+	}
 }

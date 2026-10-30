@@ -869,6 +869,7 @@ var supportedTypeCast = map[types.T][]types.T{
 
 	types.T_enum: {
 		types.T_enum,
+		types.T_bool,
 		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_uint16, types.T_uint8, types.T_uint32, types.T_uint64, types.T_uint128,
 		types.T_float32, types.T_float64,
@@ -1361,7 +1362,18 @@ func newCastWithoutMediumIntBounds(parameters []*vector.Vector, result vector.Fu
 			strictStringWidth, allowTrailingSpaceTrim, mode.isAssignment(), mode == castModeExplicit, reportDataTooLong)
 	case types.T_enum:
 		s := vector.GenerateFunctionFixedTypeParameter[types.Enum](from)
-		err = enumToOthers(execProc.Ctx, s, *toType, result, length, selectList, strictStringWidth, reportDataTooLong)
+		if toType.Oid == types.T_bool && !MySQLConditionalBooleanContractsFromProcess(proc) {
+			// D11 execution boundary: base had no ENUM -> BOOL cast at all, so
+			// a native-mode session can never legitimately resolve this pair
+			// (the bind gate rejects it). Fail closed with the typed error if a
+			// cross-mode persisted expression reaches execution anyway, instead
+			// of applying the MySQL storage-truth ordinal kernel on a
+			// native-mode statement.
+			err = moerr.NewNotSupported(execProc.Ctx,
+				"cast ENUM to BOOL requires the MySQL conditional boolean contracts session mode")
+		} else {
+			err = enumToOthers(execProc.Ctx, s, *toType, result, length, selectList, strictStringWidth, reportDataTooLong)
+		}
 	default:
 		// XXX we set the function here to adapt to the BVT cases.
 		err = formatCastError(proc.Ctx, from, *toType, "")
@@ -3550,6 +3562,61 @@ func jsonDecimalToBool(text []byte) (value bool, valid bool) {
 	return false, true
 }
 
+// jsonScalarConditionalTruthy evaluates a JSON scalar the way MySQL's
+// conditional contexts (IF and searched CASE WHEN) coerce it: a string
+// converts through its leading numeric prefix, so "2tail" is true like 2 while
+// "abc" and the string "true" are false like 0; numbers compare against zero;
+// true/false keep their literal values; JSON null reports NULL exactly like a
+// SQL NULL condition. Composite values coerce to zero (false) instead of the
+// strict CAST's error. Explicit CAST ... AS BOOL keeps the strict ParseBool
+// kernel above; only conditional admission evaluates through this one.
+func jsonScalarConditionalTruthy(bj bytejson.ByteJson) (value bool, isNull bool, err error) {
+	switch bj.Type {
+	case bytejson.TpCodeLiteral:
+		if len(bj.Data) == 0 {
+			return false, false, nil
+		}
+		switch bj.Data[0] {
+		case bytejson.LiteralTrue:
+			return true, false, nil
+		case bytejson.LiteralNull:
+			return false, true, nil
+		case bytejson.LiteralFalse:
+			return false, false, nil
+		default:
+			return false, false, nil
+		}
+	case bytejson.TpCodeInt64:
+		return bj.GetInt64() != 0, false, nil
+	case bytejson.TpCodeUint64:
+		return bj.GetUint64() != 0, false, nil
+	case bytejson.TpCodeFloat64:
+		return bj.GetFloat64() != 0, false, nil
+	case bytejson.TpCodeDecimal:
+		// A decimal scalar compares its exact stored value against zero; the
+		// textual decimal compare never rounds through a float.
+		value, valid := jsonDecimalToBool(bj.GetString())
+		if !valid {
+			return false, false, nil
+		}
+		return value, false, nil
+	case bytejson.TpCodeString:
+		prefix, negative, ok := scanDecimalFloatPrefix(string(bj.GetString()))
+		if !ok {
+			return false, false, nil
+		}
+		value, valid := parseSaturatedDecimalFloatPrefix(prefix, negative, 64)
+		if !valid {
+			return false, false, nil
+		}
+		return value != 0, false, nil
+	default:
+		// Objects and arrays coerce to zero in a numeric context the same way
+		// their text has no numeric prefix.
+		return false, false, nil
+	}
+}
+
 func jsonAppendNull(result vector.FunctionResultWrapper, toType types.Type) error {
 	switch toType.Oid {
 	case types.T_int8:
@@ -3618,6 +3685,11 @@ func enumToOthers(ctx context.Context,
 	source vector.FunctionParameterWrapper[types.Enum],
 	toType types.Type, result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList, strictStringWidth ...bool) error {
 	switch toType.Oid {
+	case types.T_bool:
+		// A boolean context (WHERE, AND/OR/NOT, CASE WHEN, IS TRUE/FALSE)
+		// evaluates the stored ordinal numerically; MySQL keeps NULL as NULL.
+		rs := vector.MustFunctionResult[bool](result)
+		return numericToBool(source, rs, length, selectList)
 	case types.T_int8:
 		return numericToNumeric(ctx, source, vector.MustFunctionResult[int8](result), length, selectList)
 	case types.T_int16:
@@ -3735,6 +3807,31 @@ func floatNumToFixFloat[T1 constraints.Float](
 	return T1(v), nil
 }
 
+// widenIntegerBatch borrows a flat, non-NULL input and writes the result
+// prepared by PreExtendAndReset. Only these same-sign conversions preserve the
+// entire source domain. A handled result must return without further Append.
+func widenIntegerBatch[T1, T2 constraints.Integer | constraints.Float](
+	from vector.FunctionParameterWrapper[T1], to *vector.FunctionResult[T2], length int, selectList *FunctionSelectList) bool {
+	source := from.GetSourceVector()
+	if length <= 0 || source.IsConst() || !source.GetNulls().EmptyByFlag() ||
+		selectList.IgnoreAllRow() || !selectList.ShouldEvalAllRow() {
+		return false
+	}
+	sourceOID, targetOID := source.GetType().Oid, to.GetType().Oid
+	if !((targetOID == types.T_int64 && (sourceOID == types.T_int8 || sourceOID == types.T_int16 || sourceOID == types.T_int32)) ||
+		(targetOID == types.T_uint64 && (sourceOID == types.T_uint8 || sourceOID == types.T_uint16 || sourceOID == types.T_uint32))) {
+		return false
+	}
+	values := vector.MustFixedColWithTypeCheck[T1](source)
+	dst := vector.MustFixedColWithTypeCheck[T2](to.GetResultVector())
+	_ = values[length-1]
+	_ = dst[length-1]
+	for i := 0; i < length; i++ {
+		dst[i] = T2(values[i])
+	}
+	return true
+}
+
 // XXX do not use it to cast float to integer, please use floatToInteger
 func numericToNumeric[T1, T2 constraints.Integer | constraints.Float](
 	ctx context.Context,
@@ -3745,6 +3842,10 @@ func numericToNumeric[T1, T2 constraints.Integer | constraints.Float](
 
 	if to.GetType().Scale >= 0 && to.GetType().Width > 0 {
 		return integerToFixFloat(ctx, from, to, times)
+	}
+
+	if widenIntegerBatch(from, to, length, selectList) {
+		return nil
 	}
 
 	if err := overflowForNumericToNumeric[T1, T2](ctx, from.UnSafeGetAllValue(),
@@ -4629,6 +4730,10 @@ func floatToStr[T constraints.Float](
 	ctx context.Context,
 	from vector.FunctionParameterWrapper[T],
 	to *vector.FunctionResult[types.Varlena], length int, toType types.Type, strictStringWidth ...bool) error {
+	formatFloat := floatToBytes
+	if LegacyFloatStringFormatting(ctx) {
+		formatFloat = legacyFloatToBytes
+	}
 	var i uint64
 	l := uint64(length)
 	bitSize := int(unsafe.Sizeof(T(0)) * 8)
@@ -4636,7 +4741,7 @@ func floatToStr[T constraints.Float](
 	if toType.Oid == types.T_binary && toType.Scale == -1 {
 		for i = 0; i < l; i++ {
 			v, null := from.GetValue(i)
-			v1 := floatToBytes(float64(v), bitSize)
+			v1 := formatFloat(float64(v), bitSize)
 			if err := explicitCastToBinary(toType, v1, null, to); err != nil {
 				return err
 			}
@@ -4651,7 +4756,7 @@ func floatToStr[T constraints.Float](
 			}
 		} else {
 			// float to string, [-14,15] convert to exponent.
-			result := floatToBytes(float64(v), bitSize)
+			result := formatFloat(float64(v), bitSize)
 			if toType.Oid == types.T_binary || toType.Oid == types.T_varbinary {
 				if int32(len(result)) > toType.Width {
 					return moerr.NewDataTruncatedNoCtx("Float", "truncated for binary/varbinary")
@@ -7686,24 +7791,38 @@ func parseStringToFloatWithBitSize(s string, bitSize int, mode SQLCompatibilityM
 	if !ok {
 		return 0, nil
 	}
+	value, valid := parseSaturatedDecimalFloatPrefix(prefix, negative, bitSize)
+	if !valid {
+		return 0, moerr.NewInvalidInputNoCtxf("%q is invalid numeric string", s)
+	}
+	return value, nil
+}
 
+// parseSaturatedDecimalFloatPrefix converts the decimal-float prefix that
+// scanDecimalFloatPrefix scanned, with the below-extension-dispatch semantics
+// both callers need: an overflow saturates to the nearest finite bound
+// (+-MaxFloat64/MaxFloat32) instead of erroring, and an exact zero parses as
+// 0. The conditional JSON boolean kernel shares THIS conversion only; it
+// never takes the hex/binary/octal or NaN/Inf extension dispatch, so extension
+// text such as '0x10' flattens to its plain leading digits (0) rather than 16.
+func parseSaturatedDecimalFloatPrefix(prefix string, negative bool, bitSize int) (float64, bool) {
 	value, err := strconv.ParseFloat(prefix, bitSize)
 	if err == nil {
-		return value, nil
+		return value, true
 	}
 	if !errors.Is(err, strconv.ErrRange) {
-		return 0, moerr.NewInvalidInputNoCtxf("%q is invalid numeric string", s)
+		return 0, false
 	}
 	if math.IsInf(value, 0) {
 		if bitSize == 32 {
-			return math.Copysign(float64(math.MaxFloat32), value), nil
+			return math.Copysign(float64(math.MaxFloat32), value), true
 		}
-		return math.Copysign(math.MaxFloat64, value), nil
+		return math.Copysign(math.MaxFloat64, value), true
 	}
 	if negative {
-		return math.Copysign(0, -1), nil
+		return math.Copysign(0, -1), true
 	}
-	return 0, nil
+	return 0, true
 }
 
 func parseBytesToFloat(value []byte, isBinary bool, bitSize int, mode SQLCompatibilityMode) (float64, error) {
@@ -9624,8 +9743,13 @@ func strToDate(proc *process.Process,
 				if err := to.Append(types.ZeroDate, false); err != nil {
 					return err
 				}
-			} else if err := to.Append(dft, true); err != nil {
-				return err
+			} else {
+				if !isBinary && isTemporalTextSource(from.GetType().Oid) && (mode == castModeNormal || mode == castModeExplicit) {
+					appendStrToDateWarning(proc, moerr.ER_TRUNCATED_WRONG_VALUE, "Incorrect datetime value", "", v)
+				}
+				if err := to.Append(dft, true); err != nil {
+					return err
+				}
 			}
 		} else {
 			s := convertByteSliceToString(v)
@@ -9641,7 +9765,13 @@ func strToDate(proc *process.Process,
 				if assignmentCast {
 					return err
 				}
+				if (mode == castModeNormal || mode == castModeExplicit) && !isTemporalLexicalConversionError(err) {
+					return err
+				}
 				// Invalid date strings in expression casts return SQL NULL.
+				if !isBinary && isTemporalTextSource(from.GetType().Oid) && (mode == castModeNormal || mode == castModeExplicit) && isTemporalLexicalConversionError(err) {
+					appendStrToDateWarning(proc, moerr.ER_TRUNCATED_WRONG_VALUE, "Incorrect datetime value", "", v)
+				}
 				if err := to.Append(dft, true); err != nil {
 					return err
 				}
@@ -9711,12 +9841,17 @@ func strToTime(
 			// both strict and non-strict sessions. IGNORE explicitly adjusts
 			// invalid text to the target's zero value with a warning.
 			if mode == castModeAssignmentIgnore && !isBinary {
-				appendTimeConversionWarning(proc, "", mode, false)
+				appendTimeConversionWarning(proc, nil, mode, false)
 				if err := to.Append(dft, false); err != nil {
 					return err
 				}
-			} else if err := to.Append(dft, true); err != nil {
-				return err
+			} else {
+				if !isBinary && isTemporalTextSource(from.GetType().Oid) && (mode == castModeNormal || mode == castModeExplicit) {
+					appendTimeConversionWarning(proc, nil, mode, false)
+				}
+				if err := to.Append(dft, true); err != nil {
+					return err
+				}
 			}
 		} else {
 			s := convertByteSliceToString(v)
@@ -9751,15 +9886,18 @@ func strToTime(
 						continue
 					}
 				}
-				// In non-strict mode MySQL consumes a valid TIME prefix and
-				// converts the remainder to a warning.  A completely malformed
+				if (mode == castModeNormal || mode == castModeExplicit) && !isTemporalLexicalConversionError(err) {
+					return err
+				}
+				// Expression casts consume a valid TIME prefix and convert the
+				// remainder to a warning, including in strict SQL mode.  A completely malformed
 				// expression becomes NULL; an assignment stores zero TIME.
-				if (mode == castModeAssignmentIgnore || !isStrictSqlMode(proc)) && !isBinary {
+				if ((mode == castModeNormal || mode == castModeExplicit) && isTemporalTextSource(from.GetType().Oid) || mode == castModeAssignmentIgnore || !isStrictSqlMode(proc)) && !isBinary {
 					if prefix, ok := parseTimePrefix(s, parseScale, truncateFractional); ok {
 						if truncateFractional {
 							prefix = prefix.TruncateToScaleWithoutRounding(totype.Scale)
 						}
-						appendTimeConversionWarning(proc, s, mode, true)
+						appendTimeConversionWarning(proc, v, mode, true)
 						prefix, err = mysqlTimeForCast(ctx, proc, prefix, mode, totype.Scale, i)
 						if err != nil {
 							return err
@@ -9769,7 +9907,7 @@ func strToTime(
 						}
 						continue
 					}
-					appendTimeConversionWarning(proc, s, mode, false)
+					appendTimeConversionWarning(proc, v, mode, false)
 					// Expression casts publish SQL NULL; non-strict and IGNORE
 					// assignments publish the target's zero value instead.
 					nullResult := !mode.isAssignment() || mode == castModeStrictStringWidth
@@ -9819,23 +9957,22 @@ func parseTimePrefix(value string, scale int32, truncateFractional bool) (types.
 	return 0, false
 }
 
-func appendTimeConversionWarning(proc *process.Process, value string, mode castMode, prefix bool) {
+func appendTimeConversionWarning(proc *process.Process, value []byte, mode castMode, prefix bool) {
 	if proc == nil {
 		return
 	}
-	appender, ok := proc.GetWarningSink().(warningDiagnosticAppender)
-	if !ok {
-		return
-	}
 	if mode.isAssignment() {
+		appender, ok := proc.GetWarningSink().(warningDiagnosticAppender)
+		if !ok {
+			return
+		}
 		appender.AppendWarningDiagnostic(moerr.WARN_DATA_TRUNCATED,
 			fmt.Sprintf("Data truncated for TIME value: '%-.128s'", value))
 		return
 	}
 	// Keep the same 1292 diagnostic used by MySQL for expression casts.
 	_ = prefix
-	appender.AppendWarningDiagnostic(moerr.ER_TRUNCATED_WRONG_VALUE,
-		fmt.Sprintf("Truncated incorrect TIME value: '%-.128s'", value))
+	appendStrToDateWarning(proc, moerr.ER_TRUNCATED_WRONG_VALUE, "Truncated incorrect time value", "", value)
 }
 
 func strToDatetime(proc *process.Process,
@@ -9871,8 +10008,13 @@ func strToDatetime(proc *process.Process,
 				if err := to.Append(types.ZeroDatetime, false); err != nil {
 					return err
 				}
-			} else if err := to.Append(dft, true); err != nil {
-				return err
+			} else {
+				if !isBinary && isTemporalTextSource(from.GetType().Oid) && (mode == castModeNormal || mode == castModeExplicit) {
+					appendStrToDateWarning(proc, moerr.ER_TRUNCATED_WRONG_VALUE, "Incorrect datetime value", "", v)
+				}
+				if err := to.Append(dft, true); err != nil {
+					return err
+				}
 			}
 		} else {
 			s := convertByteSliceToString(v)
@@ -9896,6 +10038,9 @@ func strToDatetime(proc *process.Process,
 				// and dedicated comparison/set-operation modes retain their errors.
 				if (mode == castModeNormal || mode == castModeExplicit) &&
 					from.GetType().Oid.IsMySQLString() && isTemporalLexicalConversionError(err) {
+					if !isBinary && isTemporalTextSource(from.GetType().Oid) {
+						appendStrToDateWarning(proc, moerr.ER_TRUNCATED_WRONG_VALUE, "Incorrect datetime value", "", v)
+					}
 					if err = to.Append(dft, true); err != nil {
 						return err
 					}
@@ -10752,7 +10897,7 @@ func jsonToStr(
 				}
 				str = s
 			} else {
-				bs, err := bj.MarshalJSON()
+				bs, err := marshalJSONForFloatStringProof(ctx, bj)
 				if err != nil {
 					return err
 				}
@@ -11482,11 +11627,7 @@ func explicitCastToBinary(toType types.Type, v []byte, null bool, to *vector.Fun
 }
 
 func floatToBytes(v float64, bitSize int) []byte {
-	if v >= float64(1e15) || (v < float64(1e-13) && v > 0) || (v < 0 && v > -1e-13) || v <= -1e15 {
-		return []byte(strconv.FormatFloat(float64(v), 'E', -1, bitSize))
-	} else {
-		return []byte(strconv.FormatFloat(float64(v), 'f', -1, bitSize))
-	}
+	return util.AppendMySQLFloat(nil, v, bitSize)
 }
 
 // yearToOthers converts YEAR type to other types

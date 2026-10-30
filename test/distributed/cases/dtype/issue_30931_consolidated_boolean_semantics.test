@@ -1,0 +1,337 @@
+-- Umbrella #30931 consolidated boolean acceptance: BIT value literals
+-- (#30930), JSON scalar conditions (#30932), and grouped boolean consumers
+-- for ENUM/SET beyond the IF path (grouped CASE WHEN, logical operators and
+-- bare HAVING predicates). Expected values follow the MySQL 8 reference
+-- recorded with the issues; explicit-numeric, BIT-column, display-equality
+-- and SQL-NULL controls keep the neighboring contracts pinned.
+create database if not exists issue_30931_consolidated_bool;
+use issue_30931_consolidated_bool;
+
+-- ======== BIT value literals (#30930) ========
+-- MySQL gives b'..' and x'..' literals numeric semantics in boolean contexts.
+select b'1' and 1 as bit_and_true;
+select b'0' and 1 as bit_and_zero;
+select b'10000000' and 1 as bit_and_128;
+select b'0' or 0 as bit_or_zero;
+select not b'1' as not_bit_one;
+select b'1' xor 0 as bit_xor_one;
+select if(b'1', 1, 0) as if_bit_one;
+select if(b'0', 1, 0) as if_bit_zero;
+select case when b'1' then 'y' else 'n' end as case_bit_one;
+select case when b'0' then 'y' else 'n' end as case_bit_zero;
+-- controls: arithmetic keeps the numeric interpretation; BIT COLUMN truthiness
+-- in IF follows the stored numeric value (its AND admission stays with #30922).
+select b'1' + 0 as add_one, b'0' + 0 as add_zero, b'10000000' + 0 as add_128;
+create table bt (id int primary key, b bit(8));
+insert into bt values (1, b'1'), (2, b'0'), (3, b'10000000');
+select id, if(b, 1, 0) as if_col from bt order by id;
+select id, b + 0 as col_num from bt order by id;
+drop table bt;
+
+-- ======== JSON scalar conditions (#30932) ========
+-- Row order defines the reference vector 0,1,1,0,1,0,0 for IF and CASE WHEN,
+-- distinguishing the JSON null scalar (row 6) from a SQL NULL value (row 7).
+create table j (id int primary key, j json);
+insert into j values (1, '0'), (2, '1'), (3, 'true'), (4, 'false'), (5, '"1"'), (6, 'null');
+insert into j (id) values (7);
+select id, j as raw_value, j is null as sql_null_flag from j order by id;
+select id, if(j, 1, 0) as if_json from j order by id;
+select id, case when j then 1 else 0 end as case_json from j order by id;
+select id from j where j order by id;
+-- prepared execution keeps the contract on the server-prepared path.
+prepare pj from select id, if(j, 1, 0) as if_json, case when j then 1 else 0 end as case_json from j where j order by id;
+execute pj;
+execute pj;
+deallocate prepare pj;
+drop table j;
+
+-- ======== JSON string conditional boundaries (#30932) ========
+-- MySQL conditional numeric coercion: a JSON string evaluates its leading
+-- numeric prefix, so "2tail" is true like 2 while "abc", "" and the string
+-- "true" are false like 0; objects and arrays coerce to zero. The JSON null
+-- scalar (row 12) stays distinct from the SQL NULL row (row 13).
+create table js (id int primary key, j json);
+insert into js values (1, '"true"'), (2, '"abc"'), (3, '"2tail"'), (4, '""'),
+  (5, '"0.5"'), (6, '" 12"'), (7, '"1e2"'), (8, '{"x":1}'), (9, '[1,2]'),
+  (10, 'true'), (11, '"1"'), (12, 'null');
+insert into js (id) values (13);
+select id, ifnull(cast(j as char), '(sql-null)') as txt from js order by id;
+select id, if(j, 1, 0) as if_json from js order by id;
+select id, case when j then 1 else 0 end as case_json from js order by id;
+prepare pjs from select id, if(j, 1, 0) as if_json, case when j then 1 else 0 end as case_json from js order by id;
+execute pjs;
+execute pjs;
+deallocate prepare pjs;
+drop table js;
+
+-- ======== grouped boolean consumers for ENUM/SET ========
+-- After GROUP BY the display reference must not be re-parsed as label text;
+-- grouped CASE WHEN, logical operators and bare HAVING predicates follow the
+-- stored ordinal/bitmap, including the zero-ordinal sentinel row below.
+create table t (id int primary key, e enum('a','b'), s set('a','b'));
+insert into t values (1,'a','a'), (2,'b','b'), (3,null,null), (4,'a',''), (5,'b','a,b');
+set @saved_mode = @@session.sql_mode;
+set session sql_mode = '';
+insert ignore into t values (6, 'bad', '');
+set session sql_mode = @saved_mode;
+select case when e then 1 else 0 end as cwe, count(*) as cnt from t group by e order by cwe, cnt;
+select e and 1 as ea, count(*) as cnt from t group by e order by ea, cnt;
+select case when s then 1 else 0 end as cws, count(*) as cnt from t group by s order by cws, cnt;
+select count(*) as cnt from t group by e having e order by cnt;
+select count(*) as cnt from t group by s having s order by cnt;
+select count(*) as cnt from t group by e having not e order by cnt;
+select count(*) as cnt from t group by s having not s order by cnt;
+-- display-equality regression controls keep the label semantics of comparisons.
+select id from t where e = 'a' order by id;
+select id from t where s = 'a,b' order by id;
+drop table t;
+
+-- ======== grouped truthiness for ENUM('', ...)/SET('', ...) declarations ========
+-- An empty label displays like the zero sentinel, so grouped truth must come
+-- from the stored ordinal/bitmap instead of the display label; the ungrouped
+-- e+0/s+0 controls reveal the stored values that decide each truth.
+create table te (id int primary key, e enum('', 'a'));
+set @saved_mode = @@session.sql_mode;
+set session sql_mode = '';
+insert into te values (1, ''), (2, 'a'), (3, '');
+insert ignore into te values (4, 'zz');
+set session sql_mode = @saved_mode;
+insert into te (id) values (5);
+select id, e + 0 as ordi, if(e, 1, 0) as if_e from te order by id;
+select id, case when e then 1 else 0 end as cw from te order by id;
+select id from te where e order by id;
+select if(e, 1, 0) as g_if, count(*) as cnt, min(id) as minid from te group by e order by g_if desc, cnt, minid;
+select case when e then 1 else 0 end as g_cw, count(*) as cnt, min(id) as minid from te group by e order by g_cw desc, cnt, minid;
+select count(*) as cnt from te group by e having e order by cnt;
+select count(*) as cnt from te group by e having not e order by cnt;
+select not e as g_not, count(*) as cnt, min(id) as minid from te group by e order by g_not, cnt, minid;
+-- Cross-block truth recovery over an ambiguous declaration fails closed
+-- (zone 3): the empty label displays exactly like the zero sentinel, so a
+-- grouped or DISTINCT boundary cannot decide truth from display text. The
+-- same-block statements above stay exact through the hidden storage slot.
+select if(v, 1, 0) as d_if from (select e as v from te group by e) d;
+select if(v, 1, 0) as d_if from (select distinct e as v from te) d;
+select v and 1 as d_and from (select e as v from te group by e) d;
+-- The explicit CAST shares the same fail-closure: the ambiguous display
+-- cannot decide truth, so the pending bool cast fails with the typed error.
+select cast(v as bool) as d_cast from (select e as v from te group by e) d;
+select cast(v as bool) as d_cast from (select distinct e as v from te) d;
+-- The injective control keeps the derived recovery exact (zone 2): the setup
+-- succeeds per statement (valid labels in strict mode, the ordinal-zero
+-- sentinel through a warning insert), so every derived statement reads
+-- populated controls rather than an empty fixture.
+create table ti (id int primary key, e enum('a','b'));
+insert into ti values (1, 'a'), (2, 'b');
+set @saved_mode = @@session.sql_mode;
+set session sql_mode = '';
+insert ignore into ti values (3, 'zz');
+set session sql_mode = @saved_mode;
+select id, e + 0 as ordi from ti order by id;
+select if(v, 1, 0) as d_if, v + 0 as ordi from (select e as v from ti group by e) d order by ordi;
+select case when v then 1 else 0 end as d_cw, v + 0 as ordi from (select e as v from ti group by e) d order by ordi;
+select v and 1 as d_and, v + 0 as ordi from (select e as v from ti group by e) d order by ordi;
+select cast(v as bool) as d_cast, v + 0 as ordi from (select e as v from ti group by e) d order by ordi;
+select if(v, 1, 0) as d_if from (select distinct e as v from ti) d order by d_if;
+select cast(v as bool) as d_cast from (select distinct e as v from ti) d order by d_cast;
+drop table ti;
+drop table te;
+
+create table ts (id int primary key, s set('', 'a'));
+set @saved_mode = @@session.sql_mode;
+set session sql_mode = '';
+insert into ts values (1, ''), (2, 'a');
+insert ignore into ts values (3, 'zz');
+set session sql_mode = @saved_mode;
+insert into ts (id) values (4);
+select id, s + 0 as mask, if(s, 1, 0) as if_s from ts order by id;
+select id, case when s then 1 else 0 end as cw from ts order by id;
+select if(s, 1, 0) as g_if, count(*) as cnt, min(id) as minid from ts group by s order by g_if desc, cnt, minid;
+select count(*) as cnt from ts group by s having s order by cnt;
+select count(*) as cnt from ts group by s having not s order by cnt;
+select not s as g_not, count(*) as cnt, min(id) as minid from ts group by s order by g_not, cnt, minid;
+-- Zone 3 for SET: an empty member masks the zero bitmap, so the derived and
+-- DISTINCT boundaries fail closed; the same-block statements stay exact.
+select if(v, 1, 0) as d_if from (select s as v from ts group by s) d;
+select if(v, 1, 0) as d_if from (select distinct s as v from ts) d;
+-- The explicit CAST fails closed for the same ambiguous SET declaration.
+select cast(v as bool) as d_cast from (select s as v from ts group by s) d;
+-- Numeric IN/NOT IN lists read the stored bitmap, never the display text,
+-- across DISTINCT, GROUP BY and plain derived boundaries - even for the
+-- empty-member declaration whose labels overlap the zero bitmask's display.
+-- The numeric contract is the layer base already ships: the stored masks
+-- decide membership exactly, and it stays separate from the boolean-truth
+-- fail-closure above.
+select v in (2) as d_in2, v + 0 as mask from (select distinct s as v from ts) d order by mask;
+select v not in (2) as d_notin2, v + 0 as mask from (select distinct s as v from ts) d order by mask;
+select v in (2) as g_in2, v + 0 as mask from (select s as v from ts group by s) d order by mask;
+select v in (2) as t_in2, v + 0 as mask from (select s as v from ts) d order by mask;
+select v in (0) as d_in0, v + 0 as mask from (select distinct s as v from ts) d order by mask;
+-- The injective SET control keeps the derived recovery exact (zone 2), with
+-- the explicit CAST converting the recovered bitmasks the same way.
+create table tsi (id int primary key, s set('a','b'));
+insert into tsi values (1, 'a'), (2, 'b'), (3, '');
+select if(v, 1, 0) as d_if, v + 0 as mask from (select s as v from tsi group by s) d order by mask;
+select case when v then 1 else 0 end as d_cw, v + 0 as mask from (select s as v from tsi group by s) d order by mask;
+select cast(v as bool) as d_cast, v + 0 as mask from (select s as v from tsi group by s) d order by mask;
+select cast(v as bool) as d_cast from (select distinct s as v from tsi) d order by d_cast;
+drop table tsi;
+drop table ts;
+
+-- ======== explicit CAST ... AS BOOL over a numeric display label ========
+-- A label that happens to look numeric is the silent form of the CAST
+-- defect: text binding parses '0' as false even though the stored ordinal is
+-- 1, while ordinary labels text-parse to errors. Storage-truth recovery
+-- makes every row's CAST equal its nonzero ordinal.
+create table tz (id int primary key, z enum('0','x'));
+insert into tz values (1, '0'), (2, 'x');
+select id, z, z + 0 as ordi, cast(z as bool) as zc from tz order by id;
+select z, cast(z as bool) as zc, min(id) as mn from tz group by z order by mn;
+select cast(v as bool) as zc, v + 0 as ordi from (select z as v from tz group by z) d order by ordi;
+select cast(v as bool) as zc from (select distinct z as v from tz) d order by zc;
+drop table tz;
+
+-- ======== grouping extensions: WITH ROLLUP and GROUPING SETS ========
+-- Every expanded arm activates the visible display key and its hidden storage
+-- sibling together: active arms keep the stored truth, and only the synthetic
+-- arm reads the NULL key with the ELSE value.
+create table tgr (id int primary key, e enum('a','b'), s set('a','b'));
+insert into tgr values (1, 'a', 'a'), (2, 'b', 'b'), (3, 'a', ''), (4, null, null);
+select e, if(e, 1, 0) as ce, count(*) as cnt, min(id) as mn from tgr group by e with rollup order by ce, mn;
+select s, if(s, 1, 0) as cs, count(*) as cnt, min(id) as mn from tgr group by s with rollup order by cs, mn;
+select e, s, if(e, 1, 0) as ce, if(s, 1, 0) as cs, count(*) as cnt, min(id) as mn from tgr group by grouping sets ((e), (s)) order by e, s, cnt, mn;
+drop table tgr;
+
+-- ======== native-mode parity and cross-mode persisted consumption ========
+-- A MATRIXONE_NATIVE session keeps the pre-contract behavior on every
+-- surface: the label-typed IF truth base produced (silently NULL-ish for the
+-- label rows), the raw-ENUM/CASE/AND errors base produced at runtime, and a
+-- typed closed failure for a MySQL-authored generated column.
+set @saved_mode = @@session.sql_mode;
+set session sql_mode = 'MATRIXONE_NATIVE';
+create table tnat (id int primary key, e enum('a','b'), s set('a','b'));
+insert into tnat values (1, 'a', 'a'), (2, 'b', 'b'), (3, null, null);
+select id, if(e, 1, 0) as label_if from tnat order by id;
+select id, if(s, 1, 0) as label_set_if from tnat order by id;
+select id from tnat where e order by id;
+select id, case when e then 1 else 0 end as cw from tnat order by id;
+select id, e and 1 as ea from tnat order by id;
+-- The numeric SET IN-list contract is mode-unconditional, exactly like the
+-- base layer: a native session still answers empty-member SET membership from
+-- the stored bitmap across the DISTINCT boundary.
+create table tnatns (id int primary key, s set('', 'a'));
+insert into tnatns values (1, ''), (2, 'a');
+select v in (2) as ns_in2, v + 0 as mask from (select distinct s as v from tnatns) d order by mask;
+select 1 as alive_after_native_setin;
+-- DML assignment casts carry the same native-mode decision: the raw BIT
+-- literal payload keeps the base rejection instead of being folded to its
+-- numeric truth, the connection stays alive, and the rejected statements
+-- write nothing.
+create table tflag (id int primary key, flag bool);
+insert into tflag values (1, true), (2, false);
+update tflag set flag = b'1' where id = 1;
+select 1 as alive_after_native_update_cast;
+insert into tflag (id) values (1) on duplicate key update flag = b'1';
+select 1 as alive_after_native_odku_cast;
+select id, flag from tflag order by id;
+create table tnatddl (id int primary key, e enum('a','b'), g int generated always as (case when e then 1 else 0 end));
+select 1 as connection_alive_after_native_gaps;
+set session sql_mode = @saved_mode;
+-- The MySQL-mode contrast on the same tables keeps the repaired contract:
+-- the stored-truth IF and WHERE, and the numeric-truth BIT-literal folds.
+select id, if(e, 1, 0) as storage_if from tnat order by id;
+select id from tnat where e order by id;
+update tflag set flag = b'1' where id = 1;
+insert into tflag (id) values (1) on duplicate key update flag = b'1';
+select id, flag from tflag order by id;
+select v in (2) as mysql_ns_in2, v + 0 as mask from (select distinct s as v from tnatns) d order by mask;
+drop table tnatns;
+drop table tflag;
+drop table tnat;
+
+-- Cross-mode persisted consumption: a generated column authored under the
+-- MySQL contracts evaluates and inserts on a MySQL-mode session; a native
+-- session fails closed at DML/SELECT planning with the typed error, the
+-- connection stays usable, and the failed statement writes nothing.
+create table tgx (id int primary key, e enum('a','b'), g int generated always as (case when e then 1 else 0 end));
+insert into tgx (id, e) values (1, 'a'), (2, 'b');
+select id, e, g from tgx order by id;
+set @saved_mode = @@session.sql_mode;
+set session sql_mode = 'MATRIXONE_NATIVE';
+insert into tgx (id, e) values (3, 'a');
+select 1 as connection_alive_after_native_dml_failure;
+select id from tgx order by id;
+update tgx set e = 'b' where id = 1;
+select 1 as connection_alive_after_native_update_failure;
+set session sql_mode = @saved_mode;
+insert into tgx (id, e) values (3, 'a');
+update tgx set e = 'b' where id = 1;
+select id, e, g from tgx order by id;
+drop table tgx;
+
+-- ======== JSON persisted-expression round-trip (#30932) ========
+-- A JSON-condition generated column authored under the MySQL contracts is
+-- persisted to the catalog, reread by later statements, and evaluated across
+-- INSERT/UPDATE/SELECT with the JSON null scalar kept distinct from SQL NULL;
+-- a native-mode session fails closed on the persisted expression with the
+-- typed error, the connection survives, and the rejected statements write
+-- nothing.
+create table tjx (id int primary key, j json, g int generated always as (if(j, 1, 0)));
+insert into tjx (id, j) values (1, '1'), (2, '0'), (3, '2'), (4, '"2tail"'), (5, '"abc"'), (6, 'null'), (7, null);
+select id, g from tjx order by id;
+insert into tjx (id, j) values (8, '7');
+select id, g from tjx order by id;
+update tjx set j = '0' where id = 1;
+select id, g from tjx order by id;
+set @saved_mode = @@session.sql_mode;
+set session sql_mode = 'MATRIXONE_NATIVE';
+insert into tjx (id, j) values (9, '5');
+select 1 as alive_after_native_json_insert;
+select id, g from tjx order by id;
+update tjx set j = '1' where id = 2;
+select 1 as alive_after_native_json_update;
+set session sql_mode = @saved_mode;
+insert into tjx (id, j) values (9, '5');
+update tjx set j = '1' where id = 2;
+select id, j, g from tjx order by id;
+drop table tjx;
+
+-- ======== SET persisted-expression no-contract parity (revision 8, F8) ========
+-- SET generated IF / CAST-to-BOOL expressions execute on unchanged numeric
+-- kernels, so they carry no boolean-condition contract: a native-mode session
+-- keeps base access to them across native authoring, existing-catalog
+-- consumption, SELECT, INSERT and UPDATE with byte-identical storage-truth
+-- answers on both this writer and the base binary (design Section 9, H2
+-- rev-8 battery).
+create table tg8m (id int primary key, s set('a','b'), g bigint generated always as (if(s, 1, 0)) stored);
+insert into tg8m (id, s) values (1, 'a'), (2, 'b'), (3, ''), (4, 'a,b'), (5, null);
+select id, s+0 as mask, g from tg8m order by id;
+insert into tg8m (id, s) values (6, 'a');
+update tg8m set s = 'b' where id = 6;
+select id, s+0 as mask, g from tg8m order by id;
+create table tg8b (id int primary key, s set('a','b'), f bool generated always as (cast(s as bool)) stored);
+insert into tg8b (id, s) values (1, 'a'), (2, ''), (3, null);
+select id, s+0 as mask, f from tg8b order by id;
+set @saved_mode = @@session.sql_mode;
+set session sql_mode = 'MATRIXONE_NATIVE';
+-- native authoring admits exactly as base
+create table tg8n (id int primary key, s set('a','b'), g bigint generated always as (if(s, 1, 0)) stored);
+insert into tg8n (id, s) values (1, 'a'), (2, ''), (3, null);
+select id, s+0 as mask, g from tg8n order by id;
+update tg8n set s = 'a' where id = 2;
+select id, s+0 as mask, g from tg8n order by id;
+-- native consumption of the existing catalog definitions stays open
+select id, s+0 as mask, g from tg8m order by id;
+insert into tg8m (id, s) values (7, 'a');
+update tg8m set s = 'b' where id = 7;
+select id, s+0 as mask, g from tg8m order by id;
+select id, s+0 as mask, f from tg8b order by id;
+update tg8b set s = 'a' where id = 2;
+select id, s+0 as mask, f from tg8b order by id;
+select 1 as alive_after_native_setgen;
+set session sql_mode = @saved_mode;
+select id, s+0 as mask, g from tg8m order by id;
+drop table tg8n;
+drop table tg8b;
+drop table tg8m;
+
+drop database issue_30931_consolidated_bool;

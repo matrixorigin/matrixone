@@ -945,23 +945,22 @@ func (p *PartitionState) HandleRowsDelete(
 	ctx, task := trace.NewTask(ctx, "PartitionState.HandleRowsDelete")
 	defer task.End()
 
-	batch, err := batch.ProtoBatchToBatch(input)
+	sourceBatch, err := batch.ProtoBatchToBatch(input)
 	if err != nil {
 		panic(err)
 	}
-	rowIDVector := vector.MustFixedColWithTypeCheck[types.Rowid](batch.Vecs[0])
-	timeVector := vector.MustFixedColWithTypeCheck[types.TS](batch.Vecs[1])
-	tbRowIdVector := vector.MustFixedColWithTypeCheck[types.Rowid](batch.Vecs[3])
+	rowIDVector := vector.MustFixedColWithTypeCheck[types.Rowid](sourceBatch.Vecs[0])
+	timeVector := vector.MustFixedColWithTypeCheck[types.TS](sourceBatch.Vecs[1])
+	tbRowIdVector := vector.MustFixedColWithTypeCheck[types.Rowid](sourceBatch.Vecs[3])
 
 	var primaryKeys [][]byte
 	if len(input.Vecs) > 2 {
 		// has primary key
 		primaryKeys = readutil.EncodePrimaryKeyVector(
-			batch.Vecs[2],
+			sourceBatch.Vecs[2],
 			packer,
 		)
 	}
-
 	numDeletes := int64(0)
 	for i, rowID := range rowIDVector {
 		blockID := rowID.CloneBlockID()
@@ -991,7 +990,7 @@ func (p *PartitionState) HandleRowsDelete(
 			entry.PrimaryIndexBytes = primaryKeys[i]
 		}
 		if !p.noData {
-			entry.Batch = batch
+			entry.Batch = sourceBatch
 			entry.Offset = int64(i)
 		}
 		p.rows.Set(entry)
@@ -1024,6 +1023,16 @@ func (p *PartitionState) HandleRowsDelete(
 
 		p.inMemTombstoneRowIdIndex.Set(&index)
 	}
+	if !p.noData {
+		// No reader can observe this mutable replay state until the handler
+		// returns. Reuse its batch header and vector slice, but clear every
+		// reference beyond the PK before shortening the slice: GC scans the
+		// entire backing array, including elements past len.
+		sourceBatch.Vecs[0] = sourceBatch.Vecs[2]
+		clear(sourceBatch.Vecs[1:])
+		sourceBatch.Vecs = sourceBatch.Vecs[:1]
+		sourceBatch.Attrs = nil
+	}
 
 	perfcounter.Update(ctx, func(c *perfcounter.CounterSet) {
 	})
@@ -1034,7 +1043,7 @@ func (p *PartitionState) HandleRowsInsert(
 	input *api.Batch,
 	primarySeqnum int,
 	packer *types.Packer,
-	_ *mpool.MPool,
+	mp *mpool.MPool,
 	keys ...*readutil.ClusterKeyDescriptor,
 ) (
 	primaryKeys [][]byte,
@@ -1042,18 +1051,17 @@ func (p *PartitionState) HandleRowsInsert(
 	ctx, task := trace.NewTask(ctx, "PartitionState.HandleRowsInsert")
 	defer task.End()
 
-	batch, err := batch.ProtoBatchToBatch(input)
+	sourceBatch, err := batch.ProtoBatchToBatch(input)
 	if err != nil {
 		panic(err)
 	}
-	rowIDVector := vector.MustFixedColWithTypeCheck[types.Rowid](batch.Vecs[0])
-	timeVector := vector.MustFixedColWithTypeCheck[types.TS](batch.Vecs[1])
+	rowIDVector := vector.MustFixedColWithTypeCheck[types.Rowid](sourceBatch.Vecs[0])
+	timeVector := vector.MustFixedColWithTypeCheck[types.TS](sourceBatch.Vecs[1])
 	primaryKeys = readutil.EncodePrimaryKeyVector(
-		batch.Vecs[2+primarySeqnum],
+		sourceBatch.Vecs[2+primarySeqnum],
 		packer,
 	)
-
-	clusterKeys := p.encodeClusterKeys(batch, packer, keys)
+	clusterKeys := p.encodeClusterKeys(sourceBatch, packer, keys)
 
 	var numInserted int64
 	for i, rowID := range rowIDVector {
@@ -1075,7 +1083,7 @@ func (p *PartitionState) HandleRowsInsert(
 		}
 
 		if !p.noData {
-			entry.Batch = batch
+			entry.Batch = sourceBatch
 			entry.Offset = int64(i)
 		}
 		entry.PrimaryIndexBytes = primaryKeys[i]
@@ -1104,6 +1112,14 @@ func (p *PartitionState) HandleRowsInsert(
 			}
 			p.rowClusterIndex.Set(pe)
 		}
+	}
+	if !p.noData {
+		// ProtoBatchToBatch borrows the input vector bytes. RowEntry owns
+		// the physical RowID and commit time, so release the decoded vectors'
+		// references after the entire replay loop has consumed them. Their
+		// types and positions remain for existing in-memory column readers.
+		sourceBatch.Vecs[0].Free(mp)
+		sourceBatch.Vecs[1].Free(mp)
 	}
 
 	perfcounter.Update(ctx, func(c *perfcounter.CounterSet) {
@@ -1801,7 +1817,13 @@ func (p *PartitionState) CollectDataStats(
 			if estimatedOneRowSize > 0 {
 				stats.Size += estimatedOneRowSize
 			} else if entry.Batch != nil {
-				stats.Size += float64(entry.Batch.Size()) / float64(entry.Batch.RowCount())
+				rowSize := float64(entry.Batch.Size()) / float64(entry.Batch.RowCount())
+				// Compact replay keeps these two physical values on RowEntry,
+				// but they still contribute to the logical row-size estimate.
+				if len(entry.Batch.Vecs) >= 2 && entry.Batch.Vecs[0].Length() == 0 && entry.Batch.Vecs[1].Length() == 0 {
+					rowSize += types.RowidSize + types.TxnTsSize
+				}
+				stats.Size += rowSize
 			}
 		}
 		return true

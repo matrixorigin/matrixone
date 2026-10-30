@@ -242,7 +242,7 @@ func autoIncrementValueToOffset(value uint64) uint64 {
 	return 0
 }
 
-func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext, bindings alterColumnBindings) (*Plan, error) {
+func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext, bindings alterColumnBindings, pureAddColumns bool) (*Plan, error) {
 	ctx := cctx.GetContext()
 	// 1. get origin table name and Schema name
 	schemaName, tableName := string(stmt.Table.Schema()), string(stmt.Table.Name())
@@ -570,6 +570,12 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext, bindings a
 			newPluginIndexes[pluginIndexName] = true
 		}
 	}
+	// A dropped PRIMARY rebinds only once the COPY's final key set exists, so a
+	// same-statement ADD UNIQUE on the same columns can supply the surviving
+	// key regardless of SQL clause order (review 5691776262).
+	if err = applyAlterCopyPrimaryRebind(cctx, copyTableDef, alterTableCtx); err != nil {
+		return nil, err
+	}
 	// Foreign keys bind to the final index set. Materialize every pending index
 	// first so a self-reference can use a UNIQUE index added by the same ALTER,
 	// independent of the SQL clause order.
@@ -653,6 +659,25 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext, bindings a
 
 	alterTablePlan.ChangeTblColIdMap = alterTableCtx.changColDefMap
 	alterTablePlan.UpdateFkSqls = append(alterTablePlan.UpdateFkSqls, alterTableCtx.UpdateSqls...)
+	if pureAddColumns && len(alterTablePlan.Actions) == 0 {
+		// COPY markers describe the final layout, not a sequence of engine ADDs.
+		// Purity was established from the complete original option list, before
+		// constraint resolution can remove no-op clauses.
+		for pos, col := range copyTableDef.Cols {
+			if FindColumn(tableDef.Cols, col.Name) != nil {
+				continue
+			}
+			previous := ""
+			if pos > 0 {
+				previous = copyTableDef.Cols[pos-1].Name
+			}
+			alterTablePlan.Actions = append(alterTablePlan.Actions, &plan.AlterTable_Action{
+				Action: &plan.AlterTable_Action_AddColumn{AddColumn: &plan.AlterAddColumn{
+					Name: col.Name, Type: *DeepCopyType(&col.Typ), Pos: int32(pos), PreName: previous,
+				}},
+			})
+		}
+	}
 	return &Plan{
 		Plan: &plan.Plan_Ddl{
 			Ddl: &plan.DataDefinition{
@@ -1015,6 +1040,9 @@ type AlterTableContext struct {
 	// key oldColId -> new ColDef
 	changColDefMap map[uint64]*ColDef
 	UpdateSqls     []string
+	// pendingPrimaryRebind holds a DROP PRIMARY KEY's key columns until the
+	// COPY's final key set is assembled (see applyAlterCopyPrimaryRebind).
+	pendingPrimaryRebind []string
 }
 
 // originalAlterSourceColumn resolves the original source column currently
@@ -1462,6 +1490,7 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 	if objRef.PubInfo != nil {
 		return nil, moerr.NewInternalError(ctx.GetContext(), "cannot alter table in subscription database")
 	}
+	pureAddColumns := pureAlterAddColumns(stmt.Options)
 	bindings := analyzeAlterColumnBindings(tableDef, stmt.Options)
 	options, err := resolveAlterConstraintOptions(ctx, tableDef, stmt.Options, bindings)
 	if err != nil {
@@ -1509,10 +1538,36 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 	}
 
 	if algorithm == plan.AlterTable_COPY {
-		return buildAlterTableCopy(stmt, ctx, bindings)
+		return buildAlterTableCopy(stmt, ctx, bindings, pureAddColumns)
 	} else {
 		return buildAlterTableInplace(stmt, ctx)
 	}
+}
+
+// Only the validated algorithm/lock hints may accompany a pure ADD certificate.
+// Call this before filtering or resolving the parser's option list.
+func pureAlterAddColumns(options []tree.AlterTableOption) bool {
+	added := false
+	for _, option := range options {
+		switch value := option.(type) {
+		case *tree.AlterAddCol:
+			if value == nil || value.Column == nil {
+				return false
+			}
+			added = true
+		case *tree.AlterOptionAlgorithm:
+			if value == nil {
+				return false
+			}
+		case *tree.AlterOptionLock:
+			if value == nil {
+				return false
+			}
+		default:
+			return false
+		}
+	}
+	return added
 }
 
 func hasVersionedIndexMutation(options []tree.AlterTableOption) bool {
@@ -1977,7 +2032,12 @@ func storageAgnosticType(
 		oTy.Enumvalues != nTy.Enumvalues ||
 		oTy.AutoIncr != nTy.AutoIncr ||
 		oTy.Charset != nTy.Charset ||
-		oTy.CollationVersion != nTy.CollationVersion {
+		oTy.CollationVersion != nTy.CollationVersion ||
+		oTy.GetNumericAttributes() != nTy.GetNumericAttributes() {
+		// A DECIMAL UNSIGNED/ZEROFILL mask change re-domains the stored values
+		// without changing their storage layout: it must take the COPY path so
+		// every existing row re-enters through the write-side assignment
+		// admission instead of publishing metadata over unchecked data.
 		return
 	}
 

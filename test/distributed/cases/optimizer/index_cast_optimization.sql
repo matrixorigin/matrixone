@@ -33,6 +33,100 @@ SELECT * FROM t_int32 WHERE val = 9;
 SELECT * FROM t_int32 WHERE val = 9.0;
 SELECT * FROM t_int32 WHERE val = 9.5;
 
+-- Value-preserving integer casts expose the same native key predicates.
+-- @separator:table
+EXPLAIN SELECT * FROM t_int32 WHERE CAST(id AS INT) = 1;
+-- @separator:table
+EXPLAIN SELECT * FROM t_int32 WHERE CAST(val AS INT) = 9;
+-- @separator:table
+EXPLAIN SELECT * FROM t_int32 WHERE CAST(CAST(val AS INT) AS SIGNED) = 9;
+SELECT CAST(val AS SIGNED) AS widened FROM t_int32 WHERE CAST(val AS INT) = 9;
+SELECT id FROM t_int32 WHERE 9 < CAST(val AS SIGNED) ORDER BY id;
+SELECT id FROM t_int32 WHERE CAST(val AS INT) IN (9, 100) ORDER BY id;
+SELECT id FROM t_int32 WHERE CAST(val AS SIGNED) BETWEEN 9 AND 10 ORDER BY id;
+-- A narrowing intermediate remains executable even when the endpoints match.
+-- @separator:table
+EXPLAIN SELECT id FROM t_int32 WHERE CAST(CAST(val AS SMALLINT) AS INT) = 9;
+SELECT id FROM t_int32 WHERE CAST(CAST(val AS SMALLINT) AS INT) = 9;
+
+-- Prepared peers must be proved for each execution, not frozen in the plan.
+PREPARE integer_cast_key FROM 'SELECT id FROM t_int32 WHERE CAST(val AS INT) = ? ORDER BY id';
+SET @integer_cast_value = 9;
+-- @separator:table
+EXPLAIN FORCE EXECUTE integer_cast_key USING @integer_cast_value;
+EXECUTE integer_cast_key USING @integer_cast_value;
+SET @integer_cast_value = 2147483648;
+EXECUTE integer_cast_key USING @integer_cast_value;
+SET @integer_cast_value = NULL;
+EXECUTE integer_cast_key USING @integer_cast_value;
+SET @integer_cast_value = '9.0';
+EXECUTE integer_cast_key USING @integer_cast_value;
+SET @integer_cast_value = '9.5';
+EXECUTE integer_cast_key USING @integer_cast_value;
+SET @integer_cast_value = 100;
+EXECUTE integer_cast_key USING @integer_cast_value;
+DEALLOCATE PREPARE integer_cast_key;
+
+-- Exact extrema, nullable secondary keys, and three-valued logic.
+DROP TABLE IF EXISTS t_integer_cast_bounds;
+CREATE TABLE t_integer_cast_bounds (
+    id BIGINT PRIMARY KEY,
+    u BIGINT UNSIGNED,
+    KEY idx_u (u)
+);
+INSERT INTO t_integer_cast_bounds VALUES
+(-9223372036854775808, 0), (0, NULL),
+(9007199254740993, 9007199254740993), (9223372036854775807, 18446744073709551615);
+-- @separator:table
+EXPLAIN SELECT id FROM t_integer_cast_bounds WHERE CAST(id AS SIGNED) = 9007199254740993;
+-- @separator:table
+EXPLAIN SELECT id FROM t_integer_cast_bounds WHERE CAST(u AS UNSIGNED) = 18446744073709551615;
+SELECT id FROM t_integer_cast_bounds WHERE CAST(id AS SIGNED) IN (-9223372036854775808, 9223372036854775807) ORDER BY id;
+SELECT id FROM t_integer_cast_bounds WHERE CAST(u AS UNSIGNED) = 9007199254740993;
+SELECT id FROM t_integer_cast_bounds WHERE CAST(u AS UNSIGNED) <=> NULL;
+SELECT id FROM t_integer_cast_bounds WHERE CAST(u AS UNSIGNED) NOT IN (0, NULL) ORDER BY id;
+SELECT id FROM t_integer_cast_bounds WHERE NOT (CAST(u AS UNSIGNED) = 0) ORDER BY id;
+SELECT id FROM t_integer_cast_bounds WHERE CAST(u AS UNSIGNED) = -1;
+SELECT id FROM t_integer_cast_bounds WHERE CAST(id AS SIGNED) = 9223372036854775808;
+DROP TABLE t_integer_cast_bounds;
+
+-- Narrow integer keys use the same access paths after safe widening.
+DROP TABLE IF EXISTS t_narrow_integer_cast;
+CREATE TABLE t_narrow_integer_cast (
+    id SMALLINT PRIMARY KEY,
+    k TINYINT,
+    u SMALLINT UNSIGNED,
+    KEY idx_k (k),
+    KEY idx_u (u)
+);
+INSERT INTO t_narrow_integer_cast VALUES
+(-32768, -128, 0), (-1, NULL, NULL), (1, 1, 1), (3, 3, 3), (32767, 127, 65535);
+-- @separator:table
+EXPLAIN SELECT id FROM t_narrow_integer_cast WHERE CAST(id AS INT) IN (1, 3);
+SELECT id FROM t_narrow_integer_cast WHERE CAST(id AS INT) IN (1, 3) ORDER BY id;
+-- @separator:table
+EXPLAIN SELECT id FROM t_narrow_integer_cast WHERE CAST(id AS INT) = CAST(3 AS INT);
+SELECT id FROM t_narrow_integer_cast WHERE CAST(id AS INT) = CAST(3 AS INT);
+-- @separator:table
+EXPLAIN SELECT id FROM t_narrow_integer_cast WHERE CAST(id AS INT) BETWEEN CAST(1 AS INT) AND CAST(3 AS INT);
+SELECT id FROM t_narrow_integer_cast WHERE CAST(id AS INT) BETWEEN CAST(1 AS INT) AND CAST(3 AS INT) ORDER BY id;
+-- @separator:table
+EXPLAIN SELECT id FROM t_narrow_integer_cast FORCE INDEX(idx_k) WHERE CAST(k AS INT) IN (1, 3);
+SELECT id FROM t_narrow_integer_cast FORCE INDEX(idx_k) WHERE CAST(k AS INT) IN (1, 3) ORDER BY id;
+-- @separator:table
+EXPLAIN SELECT id FROM t_narrow_integer_cast FORCE INDEX(idx_k) WHERE CAST(k AS SMALLINT) IN (1, 3);
+SELECT id FROM t_narrow_integer_cast FORCE INDEX(idx_k) WHERE CAST(k AS SMALLINT) IN (1, 3) ORDER BY id;
+-- @separator:table
+EXPLAIN SELECT id FROM t_narrow_integer_cast FORCE INDEX(idx_u) WHERE CAST(u AS INT UNSIGNED) IN (1, 3);
+SELECT id FROM t_narrow_integer_cast FORCE INDEX(idx_u) WHERE CAST(u AS INT UNSIGNED) IN (1, 3) ORDER BY id;
+-- All bounds must fit before publishing the native-domain rewrite.
+-- @separator:table
+EXPLAIN SELECT id FROM t_narrow_integer_cast WHERE CAST(id AS INT) IN (1, 32768);
+SELECT id FROM t_narrow_integer_cast WHERE CAST(id AS INT) IN (1, 32768) ORDER BY id;
+SELECT id FROM t_narrow_integer_cast WHERE CAST(id AS INT) = CAST(-32769 AS INT);
+SELECT id FROM t_narrow_integer_cast WHERE CAST(k AS INT) NOT IN (1, NULL) ORDER BY id;
+DROP TABLE t_narrow_integer_cast;
+
 -- Test 2: FLOAT32 column with index
 CREATE TABLE t_float32 (
     id INT PRIMARY KEY,

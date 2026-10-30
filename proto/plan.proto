@@ -48,6 +48,11 @@ message Type {
   bool collation_merge_conflict = 12;
   // Zero retains the historical meaning of charset. New semantics stay gated.
   uint32 collation_version = 13;
+  // Numeric type attribute bitmask; bit 0 = UNSIGNED, bit 1 = ZEROFILL.
+  // Legal only on T_decimal64/128/256 OIDs; every other OID must carry 0.
+  // Declared ZEROFILL is normalized to 3 at authoring (unsigned is implied),
+  // so bit 1 never appears without bit 0 in persisted metadata.
+  uint32 numeric_attributes = 14;
 }
 
 message msgHeader {
@@ -465,6 +470,8 @@ message ColDef {
   // of origin/key metadata, which can be lost across set operations. UNKNOWN
   // preserves compatibility with plans produced before this field existed.
   ResultColumnKind result_column_kind = 23;
+  // Result publication only; never persisted as a table/view schema attribute.
+  IntegerResultPresentation integer_result_presentation = 24;
 }
 
 message Default {
@@ -1772,6 +1779,50 @@ message PostDmlCtx {
   PostDmlFullTextCtx full_text = 8;
 }
 
+// Logical metadata only. Executors never consult this graph for values or vector
+// types. One-based edges are topologically ordered; zero means unknown.
+message IntegerPrecisionNode {
+  enum Kind {
+    DECLARED = 0;
+    SQL_LITERAL = 1;
+    EXPLICIT_CAST = 2;
+    PARAMETER = 3;
+    ADD = 4;
+    MUL = 5;
+    REFERENCE = 6;
+    COMMON_INTEGER = 7;
+  }
+  Kind kind = 1;
+  uint32 precision = 2;
+  bool unsigned = 3;
+  repeated uint32 inputs = 4;
+  int32 param_pos = 5;
+  bool arithmetic = 6;
+}
+
+message IntegerPrecisionOutput {
+  enum RootClass {
+    DECLARED_SOURCE = 0;
+    DIRECT_FUNCTION = 1;
+    SQL_REFERENCE = 2;
+    SQL_LITERAL = 3;
+  }
+  uint32 node = 1;
+  RootClass root_class = 2;
+}
+
+message IntegerPrecisionGraph {
+  repeated IntegerPrecisionNode nodes = 1;
+  repeated IntegerPrecisionOutput outputs = 2;
+  // Covers all admitted source tokens, including imported persisted view bodies.
+  uint64 source_budget = 3;
+  uint32 parameter_count = 4;
+}
+
+message IntegerResultPresentation {
+  uint32 display_length = 1;
+}
+
 message Query {
   enum StatementType {
     UNKNOWN = 0;
@@ -1851,6 +1902,7 @@ message Query {
   // Logical access paths, not grants or resolved security roles.
   repeated ViewReference view_references = 18;
   CorrelationSpec correlation = 19;
+  IntegerPrecisionGraph integer_precision = 20;
 }
 
 message TransationControl {

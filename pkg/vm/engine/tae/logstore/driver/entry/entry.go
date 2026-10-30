@@ -25,12 +25,14 @@ import (
 )
 
 type Entry struct {
-	Entry entry.Entry
-	Info  *entry.Info //for wal in post append
-	DSN   uint64      // driver sequence number
-	Ctx   any         //for addr in batchstore
-	err   error
-	wg    *sync.WaitGroup
+	Entry       entry.Entry
+	Info        *entry.Info //for wal in post append
+	DSN         uint64      // driver sequence number
+	Ctx         any         //for addr in batchstore
+	err         error
+	wg          *sync.WaitGroup
+	prepareOnce sync.Once
+	prepareErr  error
 
 	//for replay
 	isEnd bool
@@ -115,6 +117,15 @@ func (e *Entry) WriteTo(w io.Writer) (int64, error) {
 	n, err := e.Entry.WriteTo(w)
 	n += 8
 	return n, err
+}
+
+// Prepare materializes the entry payload and metadata once, so callers can
+// measure the exact encoded size before grouping it into a Log Service record.
+func (e *Entry) Prepare() error {
+	e.prepareOnce.Do(func() {
+		e.prepareErr = e.Entry.ExecuteGroupWalPreCallbacks()
+	})
+	return e.prepareErr
 }
 
 func (e *Entry) WaitDone() error {

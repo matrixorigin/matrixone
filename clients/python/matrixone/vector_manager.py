@@ -64,17 +64,23 @@ class _VectorManagerBase:
         if not isinstance(batch_size, int) or isinstance(batch_size, bool) or batch_size <= 0:
             raise ValueError("batch_size must be a positive integer")
         if data_list:
-            columns = set(data_list[0])
-            if not columns or any(set(row) != columns for row in data_list):
-                raise ValueError("Batch records must have identical nonempty column sets")
+            from .base_client import insert_row_values
+
+            columns = tuple(data_list[0])
+            for row in data_list:
+                insert_row_values(row, columns)
 
     @staticmethod
     def _batch_sql(table_name, data_list, batch_size):
         from .base_client import BaseMatrixOneClient
 
         builder = BaseMatrixOneClient()
+        columns = tuple(data_list[0]) if data_list else ()
         for offset in range(0, len(data_list), batch_size):
-            yield builder._build_batch_insert_sql(table_name, data_list[offset : offset + batch_size])
+            # Keep the first operation-wide column order even when a chunk's
+            # first record omits fields. Copy only this bounded chunk.
+            chunk = [{column: row.get(column) for column in columns} for row in data_list[offset : offset + batch_size]]
+            yield builder._build_batch_insert_sql(table_name, chunk)
 
     @staticmethod
     def _build_create_ivf_sql(table_name: str, name: str, column: str, lists: int, op_type: "VectorOpType") -> tuple:
