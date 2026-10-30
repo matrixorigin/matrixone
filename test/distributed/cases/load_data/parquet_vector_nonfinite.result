@@ -6,9 +6,9 @@ create table bf16(id bigint primary key, v vecbf16(2));
 create table f32(id bigint primary key, v vecf32(2));
 create table f64(id bigint primary key, v vecf64(2));
 insert into f16 values(9, '[100000,100000]');
-internal error: vector element cannot be NaN or Inf: +Inf
+Data truncation: data out of range: data type VECF16, element 100000
 insert into bf16 values(9, '[3.4e38,3.4e38]');
-internal error: vector element cannot be NaN or Inf: +Inf
+Data truncation: data out of range: data type VECBF16, element 3.4e38
 insert into f32 values(9, '[NaN,1]');
 internal error: vector element cannot be NaN or Inf: NaN
 insert into f64 values(9, '[Inf,1]');
