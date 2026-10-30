@@ -114,6 +114,8 @@ func TestSortedPrimaryPrefixPointPreference(t *testing.T) {
 			}
 			b := makeRangeFilterExpr(tag, 2, op, 2)
 			b.Selectivity = tc.secondarySel
+			bindEncodedIndexCostFilterTypes(t, builder.GetContext(), table, a)
+			bindEncodedIndexCostFilterTypes(t, builder.GetContext(), table, b)
 			node := &pb.Node{NodeType: pb.Node_TABLE_SCAN, ObjRef: mock.ctxt.objects[table.Name], TableDef: table, BindingTags: []int32{tag}, FilterList: []*pb.Expr{a, b}}
 			scan := builder.appendNode(node, NewBindContext(builder, nil))
 			node = builder.qry.Nodes[scan]
