@@ -190,10 +190,10 @@ func TestCompilerContextUnsupportedOperations(t *testing.T) {
 		_, _ = c.ResolveAccountIds(nil)
 	}()
 
-	func() {
-		defer r()
-		_, _, _ = c.GetQueryResultMeta("")
-	}()
+	// Without a session delegate RESULT_SCAN metadata is an error, not a
+	// panic (#31536).
+	_, _, err = c.GetQueryResultMeta("")
+	require.Error(t, err)
 }
 
 type recordingSessionCompilerContext struct {
