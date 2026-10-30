@@ -40,6 +40,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -1141,7 +1142,7 @@ var (
 		stage_credentials,
 		stage_status,
 		created_time,
-		comment) values ('%s','%s', '%s', '%s','%s', '%s');`
+		comment) values (%s,%s, %s, %s,%s, %s);`
 
 	initMoUserDefinedFunctionFormat = `insert into mo_catalog.mo_user_defined_function(
 			name,
@@ -1628,17 +1629,17 @@ const (
 
 	updateConfigurationByAccountNameFormat = `update mo_catalog.mo_mysql_compatibility_mode set variable_value = '%s' where account_name = '%s' and variable_name = '%s';`
 
-	checkStageFormat = `select stage_id, stage_name from mo_catalog.mo_stages where stage_name = "%s" order by stage_id;`
+	checkStageFormat = `select stage_id, stage_name from mo_catalog.mo_stages where stage_name = %s order by stage_id;`
 
-	dropStageFormat = `delete from mo_catalog.mo_stages where stage_name = '%s' order by stage_id;`
+	dropStageFormat = `delete from mo_catalog.mo_stages where stage_name = %s order by stage_id;`
 
-	updateStageUrlFormat = `update mo_catalog.mo_stages set url = '%s'  where stage_name = '%s' order by stage_id;`
+	updateStageUrlFormat = `update mo_catalog.mo_stages set url = %s  where stage_name = %s order by stage_id;`
 
-	updateStageCredentialsFormat = `update mo_catalog.mo_stages set stage_credentials = '%s'  where stage_name = '%s' order by stage_id;`
+	updateStageCredentialsFormat = `update mo_catalog.mo_stages set stage_credentials = %s  where stage_name = %s order by stage_id;`
 
-	updateStageStatusFormat = `update mo_catalog.mo_stages set stage_status = '%s'  where stage_name = '%s' order by stage_id;`
+	updateStageStatusFormat = `update mo_catalog.mo_stages set stage_status = %s  where stage_name = %s order by stage_id;`
 
-	updateStageCommentFormat = `update mo_catalog.mo_stages set comment = '%s'  where stage_name = '%s' order by stage_id;`
+	updateStageCommentFormat = `update mo_catalog.mo_stages set comment = %s  where stage_name = %s order by stage_id;`
 
 	getAccountIdAndStatusFormat = `select account_id,status from mo_catalog.mo_account where account_name = '%s';`
 
@@ -1708,12 +1709,12 @@ func getSqlForCheckTenant(ctx context.Context, tenant string) (string, error) {
 	return fmt.Sprintf(checkTenantFormat, tenant), nil
 }
 
-func getSqlForCheckStage(ctx context.Context, stage string) (string, error) {
-	err := inputNameIsInvalid(ctx, stage)
+func getSqlForCheckStage(ctx context.Context, stageName string) (string, error) {
+	err := stage.ValidateName(ctx, stageName)
 	if err != nil {
 		return "", err
 	}
-	return fmt.Sprintf(checkStageFormat, stage), nil
+	return fmt.Sprintf(checkStageFormat, sqlquote.String(stageName)), nil
 }
 
 func getSqlForCheckUdfWithDb(dbName string) string {
@@ -1721,31 +1722,31 @@ func getSqlForCheckUdfWithDb(dbName string) string {
 }
 
 func getSqlForInsertIntoMoStages(ctx context.Context, stageName, url, credentials, status, createdTime, comment string) (string, error) {
-	err := inputNameIsInvalid(ctx, stageName)
+	err := stage.ValidateName(ctx, stageName)
 	if err != nil {
 		return "", err
 	}
-	return fmt.Sprintf(insertIntoMoStages, stageName, url, credentials, status, createdTime, comment), nil
+	return fmt.Sprintf(insertIntoMoStages, sqlquote.String(stageName), sqlquote.String(url), sqlquote.String(credentials), sqlquote.String(status), sqlquote.String(createdTime), sqlquote.String(comment)), nil
 }
 
 func getSqlForDropStage(stageName string) string {
-	return fmt.Sprintf(dropStageFormat, stageName)
+	return fmt.Sprintf(dropStageFormat, sqlquote.String(stageName))
 }
 
 func getsqlForUpdateStageUrl(stageName, url string) string {
-	return fmt.Sprintf(updateStageUrlFormat, url, stageName)
+	return fmt.Sprintf(updateStageUrlFormat, sqlquote.String(url), sqlquote.String(stageName))
 }
 
 func getsqlForUpdateStageCredentials(stageName, credentials string) string {
-	return fmt.Sprintf(updateStageCredentialsFormat, credentials, stageName)
+	return fmt.Sprintf(updateStageCredentialsFormat, sqlquote.String(credentials), sqlquote.String(stageName))
 }
 
 func getsqlForUpdateStageStatus(stageName, status string) string {
-	return fmt.Sprintf(updateStageStatusFormat, status, stageName)
+	return fmt.Sprintf(updateStageStatusFormat, sqlquote.String(status), sqlquote.String(stageName))
 }
 
 func getsqlForUpdateStageComment(stageName, comment string) string {
-	return fmt.Sprintf(updateStageCommentFormat, comment, stageName)
+	return fmt.Sprintf(updateStageCommentFormat, sqlquote.String(comment), sqlquote.String(stageName))
 }
 
 func getSqlForUpdateCommentsOfAccount(ctx context.Context, comment, account string) (string, error) {
@@ -3789,6 +3790,29 @@ func checkStageExistOrNot(ctx context.Context, bh BackgroundExec, stageName stri
 	return false, nil
 }
 
+// validateStageCredentials preserves the existing comma-separated catalog format.
+// Delimiters cannot be represented in keys/values; reject before any mutation.
+func validateStageCredentials(ctx context.Context, credentials tree.StageCredentials) error {
+	if !credentials.Exist {
+		return nil
+	}
+	if len(credentials.Credentials)%2 != 0 {
+		return moerr.NewInvalidInput(ctx, "stage credentials require key/value pairs")
+	}
+	seen := make(map[string]struct{}, len(credentials.Credentials)/2)
+	for i := 0; i < len(credentials.Credentials); i += 2 {
+		if strings.ContainsAny(credentials.Credentials[i], ",=") || strings.Contains(credentials.Credentials[i+1], ",") {
+			return moerr.NewInvalidInput(ctx, "stage credential delimiters are not representable")
+		}
+		key := strings.ToLower(credentials.Credentials[i])
+		if _, ok := seen[key]; ok {
+			return moerr.NewInvalidInput(ctx, "duplicate stage credential key")
+		}
+		seen[key] = struct{}{}
+	}
+	return nil
+}
+
 func formatCredentials(credentials tree.StageCredentials) string {
 	var rstr string
 	if credentials.Exist {
@@ -3809,6 +3833,9 @@ func doCreateStage(ctx context.Context, ses *Session, cs *tree.CreateStage) (err
 	var credentials string
 	var StageStatus string
 	var comment string
+	if err = validateStageCredentials(ctx, cs.Credentials); err != nil {
+		return err
+	}
 	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 
@@ -3960,6 +3987,9 @@ func doAlterStage(ctx context.Context, ses *Session, as *tree.AlterStage) (err e
 	// var err error
 	var stageExist bool
 	var credentials string
+	if err = validateStageCredentials(ctx, as.CredentialsOption); err != nil {
+		return err
+	}
 	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 
@@ -3969,25 +3999,8 @@ func doAlterStage(ctx context.Context, ses *Session, as *tree.AlterStage) (err e
 		return err
 	}
 
-	optionBits := uint8(0)
-	if as.UrlOption.Exist {
-		optionBits |= 1
-	}
-	if as.CredentialsOption.Exist {
-		optionBits |= 1 << 1
-	}
-	if as.StatusOption.Exist {
-		optionBits |= 1 << 2
-	}
-	if as.Comment.Exist {
-		optionBits |= 1 << 3
-	}
-	optionCount := bits.OnesCount8(optionBits)
-	if optionCount == 0 {
+	if !as.UrlOption.Exist && !as.CredentialsOption.Exist && !as.StatusOption.Exist && !as.Comment.Exist {
 		return moerr.NewInternalError(ctx, "at least one option at a time")
-	}
-	if optionCount > 1 {
-		return moerr.NewInternalError(ctx, "at most one option at a time")
 	}
 
 	err = bh.Exec(ctx, "begin;")

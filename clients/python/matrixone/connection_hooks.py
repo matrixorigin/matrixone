@@ -19,6 +19,7 @@ Connection hooks for MatrixOne clients
 from enum import Enum
 from contextvars import ContextVar
 import inspect
+import threading
 from typing import Callable, List, Optional, Union
 
 from sqlalchemy import event, text
@@ -26,6 +27,7 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 _initializing_clients = ContextVar('matrixone_initializing_clients', default=())
+_settings_registration = threading.Lock()
 
 
 def assert_not_in_hook(client):
@@ -70,6 +72,11 @@ class ConnectionHook:
         }
         self._client_ref = None  # Will be set when hook is attached to a client
         self._async_engine = False
+        self._settings = {}
+        self._settings_revision = 0
+        self._settings_lock = threading.Lock()
+        self._settings_publication_lock = threading.Lock()
+        self._settings_token = object()
 
     def set_client(self, client):
         """Set the client reference for this hook"""
@@ -87,6 +94,22 @@ class ConnectionHook:
         # Existing engine connections may predate hook attachment. Record.info
         # is cleared by SQLAlchemy when a physical connection is replaced.
         self._on_connect_sync(dbapi_connection, connection_record)
+        self._apply_settings(dbapi_connection, connection_record)
+
+    def _apply_settings(self, connection, record):
+        if not self._settings:
+            return
+        with self._settings_lock:
+            revision, settings = self._settings_revision, self._settings
+        if record.info.get(self._settings_token) == revision:
+            return
+        cursor = connection.cursor()
+        try:
+            for name, value in settings.items():
+                cursor.execute('SET ' + name + ' = %s', (value,))
+        finally:
+            cursor.close()
+        record.info[self._settings_token] = revision
 
     def _on_connect_sync(self, dbapi_connection, connection_record):
         client = self._client_ref
@@ -345,3 +368,58 @@ def create_connection_hook(
         )
     """
     return ConnectionHook(actions, custom_hook)
+
+
+def pool_settings_version(engine):
+    """Identity of the existing checkout policy, for observation caches."""
+    engine = getattr(engine, 'sync_engine', engine)
+    hook = getattr(engine, '_matrixone_pool_settings', None)
+    if hook is None:
+        return None
+    with hook._settings_lock:
+        return hook, hook._settings_revision
+
+
+def configure_pool_settings(engine, **values):
+    """Apply desired settings on future checkouts, including recycled sessions.
+
+    Connections already borrowed by another owner are deliberately untouched.
+    Checkout owns failed-connection invalidation; no query is retried here.
+    """
+    allowed = {'experimental_ivf_index', 'experimental_hnsw_index', 'probe_limit'}
+    if not values or not set(values) <= allowed:
+        raise ValueError('Unsupported pool setting')
+    if not isinstance(engine, Engine):
+        raise TypeError('Pool settings require a synchronous SQLAlchemy Engine')
+    with _settings_registration:
+        hook = getattr(engine, '_matrixone_pool_settings', None)
+        if hook is None:
+            hook = ConnectionHook()
+            hook.attach_to_engine(engine)
+            engine._matrixone_pool_settings = hook
+    with hook._settings_publication_lock:
+        with hook._settings_lock:
+            previous = hook._settings
+            hook._settings = dict(previous, **values)
+            hook._settings_revision += 1
+            revision = hook._settings_revision
+        try:
+            # The checkout listener applies and validates the published generation.
+            with engine.connect():
+                pass
+        except BaseException as primary:
+            restored = False
+            with hook._settings_lock:
+                if hook._settings_revision == revision:
+                    hook._settings = previous
+                    hook._settings_revision += 1
+                    restored = True
+            if restored:
+                # A concurrent checkout may have applied part of the rejected
+                # generation. Retire idle sessions; borrowed sessions keep their
+                # existing owner and will not reenter the replacement pool.
+                try:
+                    engine.dispose()
+                except BaseException as cleanup_error:
+                    primary.cleanup_error = cleanup_error
+            raise

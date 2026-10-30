@@ -18,11 +18,11 @@ MatrixOne Snapshot Management
 Unified snapshot management supporting sync/async and client/session executors.
 """
 
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from enum import Enum
 from typing import List, Optional, Union
 
-from .exceptions import ConnectionError, SnapshotError
+from .exceptions import ConnectionError, SnapshotError, SnapshotNotFound
 from .version import requires_version
 from ._sql_literals import identifier_parts, sql_object_name
 
@@ -163,7 +163,8 @@ class BaseSnapshotManager:
     def _parse_snapshot_row(self, row) -> Snapshot:
         """Parse a snapshot row from database query result"""
         # Convert timestamp to datetime
-        timestamp = datetime.fromtimestamp(row[1] / 1000000000)  # Convert nanoseconds to seconds
+        seconds, nanoseconds = divmod(int(row[1]), 1_000_000_000)
+        timestamp = datetime.fromtimestamp(seconds, timezone.utc) + timedelta(microseconds=nanoseconds // 1000)
 
         # Convert level string to enum
         level_str = row[2]
@@ -314,7 +315,11 @@ class SnapshotManager(BaseSnapshotManager):
         try:
             return self.get(name)
         except Exception as e:
-            raise SnapshotError(f"Snapshot CREATE acknowledged for '{name}'; metadata readback failed: {e}") from e
+            raise SnapshotError(
+                f"Snapshot CREATE acknowledged for '{name}'; metadata readback failed: {e}",
+                phase='metadata_readback',
+                statement_acknowledged=True,
+            ) from e
 
     def list(self) -> List[Snapshot]:
         """
@@ -366,14 +371,14 @@ class SnapshotManager(BaseSnapshotManager):
 
             row = result.fetchone()
             if not row:
-                raise SnapshotError(f"Snapshot '{name}' not found")
+                raise SnapshotNotFound(f"Snapshot '{name}' not found")
 
             return self._parse_snapshot_row(row)
 
+        except SnapshotNotFound:
+            raise
         except Exception as e:
-            if "not found" in str(e):
-                raise e
-            raise SnapshotError(f"Failed to get snapshot: {e}")
+            raise SnapshotError(f"Failed to get snapshot: {e}") from e
 
     def delete(self, name: str) -> None:
         """
@@ -403,7 +408,7 @@ class SnapshotManager(BaseSnapshotManager):
         try:
             self.get(name)
             return True
-        except SnapshotError:
+        except SnapshotNotFound:
             return False
 
 
@@ -455,7 +460,11 @@ class AsyncSnapshotManager(BaseSnapshotManager):
         try:
             return await self.get(name)
         except Exception as e:
-            raise SnapshotError(f"Snapshot CREATE acknowledged for '{name}'; metadata readback failed: {e}") from e
+            raise SnapshotError(
+                f"Snapshot CREATE acknowledged for '{name}'; metadata readback failed: {e}",
+                phase='metadata_readback',
+                statement_acknowledged=True,
+            ) from e
 
     async def list(self) -> List[Snapshot]:
         """
@@ -507,14 +516,14 @@ class AsyncSnapshotManager(BaseSnapshotManager):
 
             row = result.fetchone()
             if not row:
-                raise SnapshotError(f"Snapshot '{name}' not found")
+                raise SnapshotNotFound(f"Snapshot '{name}' not found")
 
             return self._parse_snapshot_row(row)
 
+        except SnapshotNotFound:
+            raise
         except Exception as e:
-            if "not found" in str(e):
-                raise e
-            raise SnapshotError(f"Failed to get snapshot: {e}")
+            raise SnapshotError(f"Failed to get snapshot: {e}") from e
 
     async def delete(self, name: str) -> None:
         """
@@ -544,5 +553,5 @@ class AsyncSnapshotManager(BaseSnapshotManager):
         try:
             await self.get(name)
             return True
-        except SnapshotError:
+        except SnapshotNotFound:
             return False

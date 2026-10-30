@@ -810,7 +810,9 @@ type service struct {
 	aicm                *defines.AutoIncrCacheManager
 	startMu             sync.Mutex
 	startCtx            context.Context
-	startCancel         context.CancelFunc
+	startCancel         context.CancelCauseFunc
+	startInProgress     bool
+	startUpgradeActive  bool
 	startClosing        bool
 	lifecycleMu         sync.Mutex
 	frontendLifecycleMu sync.Mutex
