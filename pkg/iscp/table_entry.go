@@ -188,11 +188,11 @@ func (t *TableEntry) getCandidate() (iter []*IterationContext, minFromTS types.T
 			// Each index selects from its own watermark. In-step indexes may
 			// share the same read; a lagging index catches up separately.
 			if sinker.jobSpec.JobType == TriggerType_Default {
-				ok, from, to, share = checkAlwaysUpdateJobConfig(nil, sinker, types.MaxTs())
+				ok, from, to, _ = checkAlwaysUpdateJobConfig(nil, sinker, types.MaxTs())
 			} else {
 				spec := *sinker.jobSpec
 				spec.Share = false
-				ok, from, to, share = spec.Check(nil, sinker, types.MaxTs())
+				ok, from, to, _ = spec.Check(nil, sinker, types.MaxTs())
 			}
 			share = sinker.jobSpec.JobType != TriggerType_Timed || sinker.jobSpec.Share
 		} else {
