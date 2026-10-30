@@ -412,6 +412,577 @@ execute date_conversion_stmt using @date_conversion_value, @date_conversion_valu
 ➤ d[91,10,0]  ¦  dt[93,26,0]  𝄀
 null  ¦  null
 deallocate prepare date_conversion_stmt;
+set @temporal_saved_max_error_count = @@max_error_count;
+set session max_error_count = 1024;
+drop table if exists temporal_warning_inputs;
+create table temporal_warning_inputs (id int primary key, v varchar(64));
+insert into temporal_warning_inputs values (1, 'abc'), (2, 'not a time');
+prepare temporal_warning_stmt from 'select cast(? as time) as t from temporal_warning_inputs';
+prepare temporal_format_stmt from 'select date_format(?, ?) as d from temporal_warning_inputs';
+set session sql_mode = '';
+select date('') as d;
+➤ d[91,10,0]  𝄀
+null
+show count(*) warnings;
+➤ @@session.warning_count[-5,0,0]  𝄀
+1
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1292  ¦  Incorrect datetime value: ''
+select cast('2026-02-30' as date) as d;
+➤ d[91,10,0]  𝄀
+null
+show count(*) warnings;
+➤ @@session.warning_count[-5,0,0]  𝄀
+1
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1292  ¦  Incorrect datetime value: '2026-02-30'
+select cast('' as datetime) as dt;
+➤ dt[93,19,0]  𝄀
+null
+show count(*) warnings;
+➤ @@session.warning_count[-5,0,0]  𝄀
+1
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1292  ¦  Incorrect datetime value: ''
+select date_format('', '%Y-%m-%d') as d;
+➤ d[12,10,0]  𝄀
+null
+show count(*) warnings;
+➤ @@session.warning_count[-5,0,0]  𝄀
+1
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1292  ¦  Incorrect datetime value: ''
+select date_format(NULL, '%Y-%m-%d') as d, date_format('', '') as empty_format, date_format('', NULL) as null_format;
+➤ d[12,10,0]  ¦  empty_format[12,536870911,0]  ¦  null_format[12,65535,0]  𝄀
+null  ¦  null  ¦  null
+show count(*) warnings;
+➤ @@session.warning_count[-5,0,0]  𝄀
+0
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]
+select cast('abc' as time) as t;
+➤ t[92,10,0]  𝄀
+null
+show count(*) warnings;
+➤ @@session.warning_count[-5,0,0]  𝄀
+1
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1292  ¦  Truncated incorrect time value: 'abc'
+select cast('' as time) as t;
+➤ t[92,10,0]  𝄀
+null
+show count(*) warnings;
+➤ @@session.warning_count[-5,0,0]  𝄀
+1
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1292  ¦  Truncated incorrect time value: ''
+select cast('12:34:56xyz' as time) as t;
+➤ t[92,10,0]  𝄀
+12:34:56
+show count(*) warnings;
+➤ @@session.warning_count[-5,0,0]  𝄀
+1
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1292  ¦  Truncated incorrect time value: '12:34:56xyz'
+select cast('12:34:56' as time) as t, cast(NULL as time) as n;
+➤ t[92,10,0]  ¦  n[92,10,0]  𝄀
+12:34:56  ¦  null
+show count(*) warnings;
+➤ @@session.warning_count[-5,0,0]  𝄀
+0
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]
+select cast('abc' as time) as t from date_conversion_inputs where id < 0;
+➤ t[92,10,0]
+show count(*) warnings;
+➤ @@session.warning_count[-5,0,0]  𝄀
+0
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]
+select cast('abc' as time) as t from date_conversion_inputs where id = 1;
+➤ t[92,10,0]  𝄀
+null
+show count(*) warnings;
+➤ @@session.warning_count[-5,0,0]  𝄀
+1
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1292  ¦  Truncated incorrect time value: 'abc'
+select cast('abc' as time) as t from date_conversion_inputs where id <= 2;
+➤ t[92,10,0]  𝄀
+null  𝄀
+null
+show count(*) warnings;
+➤ @@session.warning_count[-5,0,0]  𝄀
+2
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1292  ¦  Truncated incorrect time value: 'abc'  𝄀
+Warning  ¦  1292  ¦  Truncated incorrect time value: 'abc'
+select date('2026-02-30') as d from date_conversion_inputs where id <= 2;
+➤ d[91,10,0]  𝄀
+null  𝄀
+null
+show count(*) warnings;
+➤ @@session.warning_count[-5,0,0]  𝄀
+2
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1292  ¦  Incorrect datetime value: '2026-02-30'  𝄀
+Warning  ¦  1292  ¦  Incorrect datetime value: '2026-02-30'
+select cast('2026-02-30' as date) as d from date_conversion_inputs where id <= 2;
+➤ d[91,10,0]  𝄀
+null  𝄀
+null
+show count(*) warnings;
+➤ @@session.warning_count[-5,0,0]  𝄀
+2
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1292  ¦  Incorrect datetime value: '2026-02-30'  𝄀
+Warning  ¦  1292  ¦  Incorrect datetime value: '2026-02-30'
+select cast('2026-02-30' as datetime) as d from date_conversion_inputs where id <= 2;
+➤ d[93,19,0]  𝄀
+null  𝄀
+null
+show count(*) warnings;
+➤ @@session.warning_count[-5,0,0]  𝄀
+2
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1292  ¦  Incorrect datetime value: '2026-02-30'  𝄀
+Warning  ¦  1292  ¦  Incorrect datetime value: '2026-02-30'
+select date_format('2026-02-30', '%Y-%m-%d') as d from date_conversion_inputs where id <= 2;
+➤ d[12,10,0]  𝄀
+null  𝄀
+null
+show count(*) warnings;
+➤ @@session.warning_count[-5,0,0]  𝄀
+2
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1292  ¦  Incorrect datetime value: '2026-02-30'  𝄀
+Warning  ¦  1292  ¦  Incorrect datetime value: '2026-02-30'
+select id from temporal_warning_inputs where cast('abc' as time) is null order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2
+show count(*) warnings;
+➤ @@session.warning_count[-5,0,0]  𝄀
+1
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1292  ¦  Truncated incorrect time value: 'abc'
+select id from temporal_warning_inputs where cast(v as time) is null order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2
+show count(*) warnings;
+➤ @@session.warning_count[-5,0,0]  𝄀
+2
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1292  ¦  Truncated incorrect time value: 'abc'  𝄀
+Warning  ¦  1292  ¦  Truncated incorrect time value: 'not a time'
+select case when id > 0 then cast('12:34:56' as time) else cast('abc' as time) end as v from temporal_warning_inputs order by id;
+➤ v[92,10,0]  𝄀
+12:34:56  𝄀
+12:34:56
+show count(*) warnings;
+➤ @@session.warning_count[-5,0,0]  𝄀
+0
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]
+select case when id = 1 then cast(v as time) else NULL end as v from temporal_warning_inputs order by id;
+➤ v[92,10,0]  𝄀
+null  𝄀
+null
+show count(*) warnings;
+➤ @@session.warning_count[-5,0,0]  𝄀
+1
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1292  ¦  Truncated incorrect time value: 'abc'
+set @temporal_warning_value = 'abc';
+execute temporal_warning_stmt using @temporal_warning_value;
+➤ t[92,10,0]  𝄀
+null  𝄀
+null
+show count(*) warnings;
+➤ @@session.warning_count[-5,0,0]  𝄀
+2
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1292  ¦  Truncated incorrect time value: 'abc'  𝄀
+Warning  ¦  1292  ¦  Truncated incorrect time value: 'abc'
+set @temporal_warning_value = '12:34:56';
+execute temporal_warning_stmt using @temporal_warning_value;
+➤ t[92,10,0]  𝄀
+12:34:56  𝄀
+12:34:56
+show count(*) warnings;
+➤ @@session.warning_count[-5,0,0]  𝄀
+0
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]
+set @temporal_warning_value = NULL;
+execute temporal_warning_stmt using @temporal_warning_value;
+➤ t[92,10,0]  𝄀
+null  𝄀
+null
+show count(*) warnings;
+➤ @@session.warning_count[-5,0,0]  𝄀
+0
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]
+set @temporal_warning_value = 'abc';
+execute temporal_warning_stmt using @temporal_warning_value;
+➤ t[92,10,0]  𝄀
+null  𝄀
+null
+show count(*) warnings;
+➤ @@session.warning_count[-5,0,0]  𝄀
+2
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1292  ¦  Truncated incorrect time value: 'abc'  𝄀
+Warning  ¦  1292  ¦  Truncated incorrect time value: 'abc'
+set @temporal_format_pattern = '%Y-%m-%d';
+set @temporal_format_value = 'not a date';
+execute temporal_format_stmt using @temporal_format_value, @temporal_format_pattern;
+➤ d[12,65535,0]  𝄀
+null  𝄀
+null
+show count(*) warnings;
+➤ @@session.warning_count[-5,0,0]  𝄀
+2
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1292  ¦  Incorrect datetime value: 'not a date'  𝄀
+Warning  ¦  1292  ¦  Incorrect datetime value: 'not a date'
+set @temporal_format_value = '2024-02-29';
+execute temporal_format_stmt using @temporal_format_value, @temporal_format_pattern;
+➤ d[12,65535,0]  𝄀
+2024-02-29  𝄀
+2024-02-29
+show count(*) warnings;
+➤ @@session.warning_count[-5,0,0]  𝄀
+0
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]
+set @temporal_format_value = NULL;
+execute temporal_format_stmt using @temporal_format_value, @temporal_format_pattern;
+➤ d[12,65535,0]  𝄀
+null  𝄀
+null
+show count(*) warnings;
+➤ @@session.warning_count[-5,0,0]  𝄀
+0
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]
+set @temporal_format_value = 'not a date';
+execute temporal_format_stmt using @temporal_format_value, @temporal_format_pattern;
+➤ d[12,65535,0]  𝄀
+null  𝄀
+null
+show count(*) warnings;
+➤ @@session.warning_count[-5,0,0]  𝄀
+2
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1292  ¦  Incorrect datetime value: 'not a date'  𝄀
+Warning  ¦  1292  ¦  Incorrect datetime value: 'not a date'
+set session sql_mode = 'STRICT_TRANS_TABLES,NO_ZERO_DATE,NO_ZERO_IN_DATE';
+select date('') as d;
+➤ d[91,10,0]  𝄀
+null
+show count(*) warnings;
+➤ @@session.warning_count[-5,0,0]  𝄀
+1
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1292  ¦  Incorrect datetime value: ''
+select cast('2026-02-30' as date) as d;
+➤ d[91,10,0]  𝄀
+null
+show count(*) warnings;
+➤ @@session.warning_count[-5,0,0]  𝄀
+1
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1292  ¦  Incorrect datetime value: '2026-02-30'
+select cast('' as datetime) as dt;
+➤ dt[93,19,0]  𝄀
+null
+show count(*) warnings;
+➤ @@session.warning_count[-5,0,0]  𝄀
+1
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1292  ¦  Incorrect datetime value: ''
+select date_format('', '%Y-%m-%d') as d;
+➤ d[12,10,0]  𝄀
+null
+show count(*) warnings;
+➤ @@session.warning_count[-5,0,0]  𝄀
+1
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1292  ¦  Incorrect datetime value: ''
+select date_format(NULL, '%Y-%m-%d') as d, date_format('', '') as empty_format, date_format('', NULL) as null_format;
+➤ d[12,10,0]  ¦  empty_format[12,536870911,0]  ¦  null_format[12,65535,0]  𝄀
+null  ¦  null  ¦  null
+show count(*) warnings;
+➤ @@session.warning_count[-5,0,0]  𝄀
+0
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]
+select cast('abc' as time) as t;
+➤ t[92,10,0]  𝄀
+null
+show count(*) warnings;
+➤ @@session.warning_count[-5,0,0]  𝄀
+1
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1292  ¦  Truncated incorrect time value: 'abc'
+select cast('' as time) as t;
+➤ t[92,10,0]  𝄀
+null
+show count(*) warnings;
+➤ @@session.warning_count[-5,0,0]  𝄀
+1
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1292  ¦  Truncated incorrect time value: ''
+select cast('12:34:56xyz' as time) as t;
+➤ t[92,10,0]  𝄀
+12:34:56
+show count(*) warnings;
+➤ @@session.warning_count[-5,0,0]  𝄀
+1
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1292  ¦  Truncated incorrect time value: '12:34:56xyz'
+select cast('12:34:56' as time) as t, cast(NULL as time) as n;
+➤ t[92,10,0]  ¦  n[92,10,0]  𝄀
+12:34:56  ¦  null
+show count(*) warnings;
+➤ @@session.warning_count[-5,0,0]  𝄀
+0
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]
+select cast('abc' as time) as t from date_conversion_inputs where id < 0;
+➤ t[92,10,0]
+show count(*) warnings;
+➤ @@session.warning_count[-5,0,0]  𝄀
+0
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]
+select cast('abc' as time) as t from date_conversion_inputs where id = 1;
+➤ t[92,10,0]  𝄀
+null
+show count(*) warnings;
+➤ @@session.warning_count[-5,0,0]  𝄀
+1
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1292  ¦  Truncated incorrect time value: 'abc'
+select cast('abc' as time) as t from date_conversion_inputs where id <= 2;
+➤ t[92,10,0]  𝄀
+null  𝄀
+null
+show count(*) warnings;
+➤ @@session.warning_count[-5,0,0]  𝄀
+2
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1292  ¦  Truncated incorrect time value: 'abc'  𝄀
+Warning  ¦  1292  ¦  Truncated incorrect time value: 'abc'
+select date('2026-02-30') as d from date_conversion_inputs where id <= 2;
+➤ d[91,10,0]  𝄀
+null  𝄀
+null
+show count(*) warnings;
+➤ @@session.warning_count[-5,0,0]  𝄀
+2
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1292  ¦  Incorrect datetime value: '2026-02-30'  𝄀
+Warning  ¦  1292  ¦  Incorrect datetime value: '2026-02-30'
+select cast('2026-02-30' as date) as d from date_conversion_inputs where id <= 2;
+➤ d[91,10,0]  𝄀
+null  𝄀
+null
+show count(*) warnings;
+➤ @@session.warning_count[-5,0,0]  𝄀
+2
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1292  ¦  Incorrect datetime value: '2026-02-30'  𝄀
+Warning  ¦  1292  ¦  Incorrect datetime value: '2026-02-30'
+select cast('2026-02-30' as datetime) as d from date_conversion_inputs where id <= 2;
+➤ d[93,19,0]  𝄀
+null  𝄀
+null
+show count(*) warnings;
+➤ @@session.warning_count[-5,0,0]  𝄀
+2
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1292  ¦  Incorrect datetime value: '2026-02-30'  𝄀
+Warning  ¦  1292  ¦  Incorrect datetime value: '2026-02-30'
+select date_format('2026-02-30', '%Y-%m-%d') as d from date_conversion_inputs where id <= 2;
+➤ d[12,10,0]  𝄀
+null  𝄀
+null
+show count(*) warnings;
+➤ @@session.warning_count[-5,0,0]  𝄀
+2
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1292  ¦  Incorrect datetime value: '2026-02-30'  𝄀
+Warning  ¦  1292  ¦  Incorrect datetime value: '2026-02-30'
+select id from temporal_warning_inputs where cast('abc' as time) is null order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2
+show count(*) warnings;
+➤ @@session.warning_count[-5,0,0]  𝄀
+1
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1292  ¦  Truncated incorrect time value: 'abc'
+select id from temporal_warning_inputs where cast(v as time) is null order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2
+show count(*) warnings;
+➤ @@session.warning_count[-5,0,0]  𝄀
+2
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1292  ¦  Truncated incorrect time value: 'abc'  𝄀
+Warning  ¦  1292  ¦  Truncated incorrect time value: 'not a time'
+select case when id > 0 then cast('12:34:56' as time) else cast('abc' as time) end as v from temporal_warning_inputs order by id;
+➤ v[92,10,0]  𝄀
+12:34:56  𝄀
+12:34:56
+show count(*) warnings;
+➤ @@session.warning_count[-5,0,0]  𝄀
+0
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]
+select case when id = 1 then cast(v as time) else NULL end as v from temporal_warning_inputs order by id;
+➤ v[92,10,0]  𝄀
+null  𝄀
+null
+show count(*) warnings;
+➤ @@session.warning_count[-5,0,0]  𝄀
+1
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1292  ¦  Truncated incorrect time value: 'abc'
+set @temporal_warning_value = 'abc';
+execute temporal_warning_stmt using @temporal_warning_value;
+➤ t[92,10,0]  𝄀
+null  𝄀
+null
+show count(*) warnings;
+➤ @@session.warning_count[-5,0,0]  𝄀
+2
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1292  ¦  Truncated incorrect time value: 'abc'  𝄀
+Warning  ¦  1292  ¦  Truncated incorrect time value: 'abc'
+set @temporal_warning_value = '12:34:56';
+execute temporal_warning_stmt using @temporal_warning_value;
+➤ t[92,10,0]  𝄀
+12:34:56  𝄀
+12:34:56
+show count(*) warnings;
+➤ @@session.warning_count[-5,0,0]  𝄀
+0
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]
+set @temporal_warning_value = NULL;
+execute temporal_warning_stmt using @temporal_warning_value;
+➤ t[92,10,0]  𝄀
+null  𝄀
+null
+show count(*) warnings;
+➤ @@session.warning_count[-5,0,0]  𝄀
+0
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]
+set @temporal_warning_value = 'abc';
+execute temporal_warning_stmt using @temporal_warning_value;
+➤ t[92,10,0]  𝄀
+null  𝄀
+null
+show count(*) warnings;
+➤ @@session.warning_count[-5,0,0]  𝄀
+2
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1292  ¦  Truncated incorrect time value: 'abc'  𝄀
+Warning  ¦  1292  ¦  Truncated incorrect time value: 'abc'
+set @temporal_format_pattern = '%Y-%m-%d';
+set @temporal_format_value = 'not a date';
+execute temporal_format_stmt using @temporal_format_value, @temporal_format_pattern;
+➤ d[12,65535,0]  𝄀
+null  𝄀
+null
+show count(*) warnings;
+➤ @@session.warning_count[-5,0,0]  𝄀
+2
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1292  ¦  Incorrect datetime value: 'not a date'  𝄀
+Warning  ¦  1292  ¦  Incorrect datetime value: 'not a date'
+set @temporal_format_value = '2024-02-29';
+execute temporal_format_stmt using @temporal_format_value, @temporal_format_pattern;
+➤ d[12,65535,0]  𝄀
+2024-02-29  𝄀
+2024-02-29
+show count(*) warnings;
+➤ @@session.warning_count[-5,0,0]  𝄀
+0
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]
+set @temporal_format_value = NULL;
+execute temporal_format_stmt using @temporal_format_value, @temporal_format_pattern;
+➤ d[12,65535,0]  𝄀
+null  𝄀
+null
+show count(*) warnings;
+➤ @@session.warning_count[-5,0,0]  𝄀
+0
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]
+set @temporal_format_value = 'not a date';
+execute temporal_format_stmt using @temporal_format_value, @temporal_format_pattern;
+➤ d[12,65535,0]  𝄀
+null  𝄀
+null
+show count(*) warnings;
+➤ @@session.warning_count[-5,0,0]  𝄀
+2
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1292  ¦  Incorrect datetime value: 'not a date'  𝄀
+Warning  ¦  1292  ¦  Incorrect datetime value: 'not a date'
+deallocate prepare temporal_format_stmt;
+deallocate prepare temporal_warning_stmt;
+drop table temporal_warning_inputs;
+set session max_error_count = @temporal_saved_max_error_count;
 create table date_conversion_target (d datetime);
 insert into date_conversion_target select v from date_conversion_inputs where id = 1;
 invalid input: invalid datetime value 2026-02-30

@@ -24,6 +24,7 @@ from typing import Optional
 from .exceptions import CloneError, ConnectionError
 from .version import requires_version
 from ._sql_literals import sql_object_name, sql_string_token, identifier_parts, sql_literal
+from ._utils import rows_from_result
 
 
 class BaseCloneManager:
@@ -99,7 +100,7 @@ class BaseCloneManager:
     @staticmethod
     def _has_rows(result):
         try:
-            rows = result.rows if hasattr(result, 'rows') else result.fetchall()
+            rows = rows_from_result(result)
             return bool(rows)
         finally:
             close = getattr(result, 'close', None)

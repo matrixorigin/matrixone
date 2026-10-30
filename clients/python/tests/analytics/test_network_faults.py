@@ -77,9 +77,9 @@ def proxied(proxy):
         host="127.0.0.1",
         port=proxy.port,
         ssl_mode="disabled",  # This local packet proxy deliberately inspects plaintext protocol frames.
-        user="root",
-        password="111",
-        database="mo_analytics_test",
+        user=os.environ.get("MO_USER", "root"),
+        password=os.environ.get("MO_PASSWORD", "111"),
+        database=os.environ.get("MO_DATABASE", "mo_analytics_test"),
         query_timeout=3,
         connection_timeout=3,
         sql_log_mode="off",

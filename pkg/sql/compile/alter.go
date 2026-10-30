@@ -2022,6 +2022,13 @@ func (s *Scope) alterTableCopy(c *Compile, cleanup *alterAutoIncrementResetClean
 				return err
 			}
 		}
+		// Keep each referencing child's stored ForeignKeyDef binding in step
+		// with the catalog rows updated above, in this same DDL transaction,
+		// so the durable constraint and the catalog binding commit together
+		// (review 5691776262).
+		if err = c.syncDurableForeignKeyIndexBindings(qry); err != nil {
+			return err
+		}
 		prepareFkSqls, _ := plan2.GetSqlForTransferAlterCopyFk(
 			qry.Database,
 			qry.TableDef.Name,
@@ -2269,20 +2276,11 @@ func (s *Scope) alterTableCopy(c *Compile, cleanup *alterAutoIncrementResetClean
 			return err
 		}
 
-		if err = applyAlterCopyForeignKeyState(
-			c,
-			newRel,
-			sourceForeignKeys,
-			addedForeignKeys,
-			sourceRefChildTbls,
-			qry.ChangeTblColIdMap,
-			originRel.GetTableID(c.proc.Ctx),
-			newRel.GetTableID(c.proc.Ctx),
+		if err = c.finalizeAlterCopyForeignKeyState(
+			qry, originRel, newRel,
+			sourceForeignKeys, addedForeignKeys, sourceRefChildTbls,
+			isTemp,
 		); err != nil {
-			c.proc.Error(c.proc.Ctx, "restore and reconcile foreign keys for alter table copy",
-				zap.String("origin tableName", qry.GetTableDef().Name),
-				zap.String("copy table name", qry.CopyTableDef.Name),
-				zap.Error(err))
 			return err
 		}
 	}
@@ -2894,6 +2892,11 @@ func (s *Scope) doAlterTable(c *Compile, cleanup *alterAutoIncrementResetCleanup
 				return err
 			}
 		}
+		// Same-transaction durable alignment of every referencing child's
+		// stored binding (review 5691776262).
+		if err = c.syncDurableForeignKeyIndexBindings(qry); err != nil {
+			return err
+		}
 	}
 	databaseName := qry.Database
 	if databaseName == "" {
@@ -3118,6 +3121,58 @@ func checkAlterCopyForeignKeyColumnsForKeys(
 					ctx, columnName, foreignKey.Name, referencingTable,
 				)
 			}
+		}
+	}
+	return nil
+}
+
+// finalizeAlterCopyForeignKeyState runs a COPY statement's post-publication
+// foreign-key reconciliation as one production boundary: first the
+// snapshot-authoritative state restore onto the published replacement, then
+// the same-transaction durable alignment of the replacement's own
+// (self-referencing) stored binding with the mo_foreign_keys rows this
+// statement updated. One error return covers both steps, so the DDL
+// transaction rolls the catalog rebinding and the durable repair back
+// together instead of publishing half of the change (review 5695003826).
+func (c *Compile) finalizeAlterCopyForeignKeyState(
+	qry *plan.AlterTable,
+	originRel engine.Relation,
+	newRel engine.Relation,
+	sourceForeignKeys []*plan.ForeignKeyDef,
+	addedForeignKeys []*plan.ForeignKeyDef,
+	sourceRefChildTbls []uint64,
+	isTemp bool,
+) error {
+	if err := applyAlterCopyForeignKeyState(
+		c,
+		newRel,
+		sourceForeignKeys,
+		addedForeignKeys,
+		sourceRefChildTbls,
+		qry.ChangeTblColIdMap,
+		originRel.GetTableID(c.proc.Ctx),
+		newRel.GetTableID(c.proc.Ctx),
+	); err != nil {
+		c.proc.Error(c.proc.Ctx, "restore and reconcile foreign keys for alter table copy",
+			zap.String("origin tableName", qry.GetTableDef().Name),
+			zap.String("copy table name", qry.CopyTableDef.Name),
+			zap.Error(err))
+		return err
+	}
+	// The restore above republished the pre-transition snapshot, whose
+	// self-referencing binding still names the removed key. Align the
+	// published relation's stored ForeignKeyDef with the mo_foreign_keys
+	// rows this statement updated (those rows were already renamed back to
+	// the original table name), in the same DDL transaction: the catalog
+	// rebind and the durable constraint commit together immediately,
+	// without waiting for any later re-materialization (review 5695003826).
+	if !isTemp && !plan2.IsFkBannedDatabase(qry.Database) && len(qry.GetUpdateFkSqls()) > 0 {
+		if err := c.syncChildDurableForeignKeyIndexBinding(newRel.GetTableID(c.proc.Ctx)); err != nil {
+			c.proc.Error(c.proc.Ctx, "align self-referencing durable fk binding for alter table copy",
+				zap.String("origin tableName", qry.GetTableDef().Name),
+				zap.String("copy table name", qry.CopyTableDef.Name),
+				zap.Error(err))
+			return err
 		}
 	}
 	return nil
