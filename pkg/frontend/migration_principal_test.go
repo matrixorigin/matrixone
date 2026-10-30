@@ -1,3 +1,17 @@
+// Copyright 2026 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package frontend
 
 import (
@@ -62,8 +76,10 @@ func TestMigrationPrincipalPreflightPreservesOnce(t *testing.T) {
 	bad := *principal
 	bad.UserID++
 	req.Principal = &bad
+	req.VerifyPrincipalOnly = false
 	require.Error(t, rt.migrateConnectionTo(context.Background(), req), "consumed once cannot bypass identity guard")
 	req.Principal = principal
+	req.VerifyPrincipalOnly = true
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	require.ErrorIs(t, rt.migrateConnectionTo(ctx, req), context.Canceled)
@@ -75,4 +91,35 @@ func TestMigrationPrincipalPreflightPreservesOnce(t *testing.T) {
 	require.Equal(t, principal.UserID, ses.GetTenantInfo().GetUserID(), "response owns scalar copy")
 	ses.SetTenantInfo(nil)
 	require.Error(t, rt.migrateConnectionFrom(&query.MigrateConnFromResponse{}))
+}
+
+func TestMigrationPrincipalLeaseCancellation(t *testing.T) {
+	ses := newTestSession(t, gomock.NewController(t))
+	rt := &Routine{mc: newMigrateController()}
+	rt.setSession(ses)
+	tenant := ses.GetTenantInfo()
+	req := &query.MigrateConnToRequest{Principal: &query.MigrateSessionPrincipal{AccountID: tenant.GetTenantID(), UserID: tenant.GetUserID()}, VerifyPrincipalOnly: true}
+	waited := make(chan struct{})
+	rt.mc.operationWaitHook = func() { close(waited) }
+	require.True(t, rt.mc.beginOperation())
+	released := false
+	defer func() {
+		if !released {
+			rt.mc.endOperation()
+		}
+	}()
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	result := make(chan error, 1)
+	go func() { result <- rt.migrateConnectionTo(ctx, req) }()
+	<-waited
+	cancel()
+	require.ErrorIs(t, <-result, context.Canceled)
+	rt.mc.endOperation()
+	released = true
+	rt.mc.operationWaitHook = nil
+	require.NoError(t, rt.migrateConnectionTo(t.Context(), req))
+	ran := false
+	rt.mc.migrateOnce.Do(func() { ran = true })
+	require.True(t, ran)
 }

@@ -725,14 +725,14 @@ func (s *service) handleMigrateConnTo(
 		logutil.Errorf("failed to migrate conn to: %v", err)
 		return err
 	}
+	resp.MigrateConnToResponse = &query.MigrateConnToResponse{Success: true, PrincipalVerified: true}
+	if req.MigrateConnToRequest.VerifyPrincipalOnly {
+		return nil
+	}
 	logutil.Infof("migrate ok, conn ID: %d, DB: %s, prepared stmt count: %d",
 		req.MigrateConnToRequest.ConnID, req.MigrateConnToRequest.DB, len(req.MigrateConnToRequest.PrepareStmts))
 	for _, stmt := range req.MigrateConnToRequest.PrepareStmts {
 		logutil.Infof("migrated prepare stmt on conn %d, %s, %s", req.MigrateConnToRequest.ConnID, stmt.Name, stmt.SQL)
-	}
-	resp.MigrateConnToResponse = &query.MigrateConnToResponse{
-		Success:           true,
-		PrincipalVerified: true,
 	}
 	return nil
 }
