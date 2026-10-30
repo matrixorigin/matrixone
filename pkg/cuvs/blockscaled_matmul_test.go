@@ -327,7 +327,7 @@ func TestBlockScaledMatmulAgreesAcrossMagnitudes(t *testing.T) {
 		{cuvs.BlockScaledMatmulL2sq, metric.Metric_L2sqDistance},
 	}
 	parse := func(cells [][]byte) ([]types.BlockScaledCell, []byte) {
-		var out []types.BlockScaledCell
+		out := make([]types.BlockScaledCell, 0, len(cells))
 		var packed []byte
 		for _, b := range cells {
 			c, err := types.ParseBlockScaledCell(b)
