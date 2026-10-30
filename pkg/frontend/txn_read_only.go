@@ -259,6 +259,9 @@ func statementRequiresPersistentWriteAccess(
 					// Unresolvable target; fail closed.
 					return true
 				}
+				if _, found := aliasMap[string(name.ObjectName)]; !found {
+					return true // Missing or derived source: fail closed.
+				}
 				dbName, tableName, _ := plan.ResolveDMLTargetName(
 					string(name.SchemaName), string(name.ObjectName), "", aliasMap)
 				resolved := *name
