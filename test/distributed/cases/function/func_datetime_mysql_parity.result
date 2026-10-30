@@ -1,0 +1,89 @@
+drop database if exists cov_dt;
+create database cov_dt;
+use cov_dt;
+select date_add('2024-01-31', interval 1 month), date_add('2024-02-29', interval 1 year), date_sub('2024-03-31', interval 1 month);
+➤ date_add(2024-01-31, INTERVAL 1 month)[12,65535,0]  ¦  date_add(2024-02-29, INTERVAL 1 year)[12,65535,0]  ¦  date_sub(2024-03-31, INTERVAL 1 month)[12,65535,0]  𝄀
+2024-02-29  ¦  2025-02-28  ¦  2024-02-29
+select date_add('2024-01-01', interval '1:2' hour_minute), date_add('2024-01-01', interval '1 2' day_hour), date_add('2024-01-01 00:00:00', interval '1.5' second);
+➤ date_add(2024-01-01, INTERVAL 1:2 hour_minute)[12,65535,0]  ¦  date_add(2024-01-01, INTERVAL 1 2 day_hour)[12,65535,0]  ¦  date_add(2024-01-01 00:00:00, INTERVAL 1.5 second)[12,65535,0]  𝄀
+2024-01-01 01:02:00  ¦  2024-01-02 02:00:00  ¦  2024-01-01 00:00:01.500000
+select date_add('2024-01-01', interval -1 day), adddate('2024-01-01', 31), subdate('2024-01-01', 1);
+➤ date_add(2024-01-01, INTERVAL -1 day)[12,65535,0]  ¦  adddate(2024-01-01, 31)[12,65535,0]  ¦  subdate(2024-01-01, 1)[12,65535,0]  𝄀
+2023-12-31  ¦  2024-02-01  ¦  2023-12-31
+select datediff('2024-03-01','2024-02-01'), datediff('2024-01-01 23:59:59','2024-01-02'), timediff('10:00:00','12:30:00'), timediff('2024-01-02 00:00:00','2024-01-01 00:00:00');
+➤ datediff(2024-03-01, 2024-02-01)[-5,64,0]  ¦  datediff(2024-01-01 23:59:59, 2024-01-02)[-5,64,0]  ¦  timediff(10:00:00, 12:30:00)[92,10,0]  ¦  timediff(2024-01-02 00:00:00, 2024-01-01 00:00:00)[92,10,0]  𝄀
+29  ¦  -1  ¦  -2:30:00  ¦  24:00:00
+select timestampdiff(month,'2024-01-31','2024-02-29'), timestampdiff(year,'2000-02-29','2001-02-28'), timestampdiff(second,'2024-01-01','2024-01-02'), timestampdiff(quarter, '2024-01-01','2024-12-31');
+➤ timestampdiff(month, 2024-01-31, 2024-02-29)[-5,64,0]  ¦  timestampdiff(year, 2000-02-29, 2001-02-28)[-5,64,0]  ¦  timestampdiff(second, 2024-01-01, 2024-01-02)[-5,64,0]  ¦  timestampdiff(quarter, 2024-01-01, 2024-12-31)[-5,64,0]  𝄀
+0  ¦  0  ¦  86400  ¦  3
+select last_day('2024-02-10'), last_day('2023-02-10'), last_day('2024-13-01'), dayofyear('2024-12-31'), week('2024-01-01'), week('2024-01-01',1), week('2024-12-31',3), yearweek('2024-12-31');
+➤ last_day(2024-02-10)[91,10,0]  ¦  last_day(2023-02-10)[91,10,0]  ¦  last_day(2024-13-01)[91,10,0]  ¦  dayofyear(2024-12-31)[-5,4,0]  ¦  week(2024-01-01)[-5,3,0]  ¦  week(2024-01-01, 1)[-5,3,0]  ¦  week(2024-12-31, 3)[-5,3,0]  ¦  yearweek(2024-12-31)[-5,64,0]  𝄀
+2024-02-29  ¦  2023-02-28  ¦  null  ¦  366  ¦  0  ¦  1  ¦  1  ¦  202452
+select weekday('2024-01-01'), dayofweek('2024-01-01'), dayname('2024-01-01'), monthname('2024-01-01'), quarter('2024-05-01');
+➤ weekday(2024-01-01)[-5,64,0]  ¦  dayofweek(2024-01-01)[-5,64,0]  ¦  dayname(2024-01-01)[12,65535,0]  ¦  monthname(2024-01-01)[12,65535,0]  ¦  quarter(2024-05-01)[-6,8,0]  𝄀
+0  ¦  2  ¦  Monday  ¦  January  ¦  2
+select str_to_date('2024-01-15','%Y-%m-%d'), str_to_date('15/01/2024','%d/%m/%Y'), str_to_date('Jan 15 2024','%b %d %Y'), str_to_date('abc','%Y'), str_to_date('2024-02-30','%Y-%m-%d');
+➤ str_to_date(2024-01-15, %Y-%m-%d)[91,10,0]  ¦  str_to_date(15/01/2024, %d/%m/%Y)[91,10,0]  ¦  str_to_date(Jan 15 2024, %b %d %Y)[91,10,0]  ¦  str_to_date(abc, %Y)[91,10,0]  ¦  str_to_date(2024-02-30, %Y-%m-%d)[91,10,0]  𝄀
+2024-01-15  ¦  2024-01-15  ¦  2024-01-15  ¦  null  ¦  null
+select str_to_date('10:20:30','%H:%i:%s'), str_to_date('10:20:30 PM','%h:%i:%s %p'), str_to_date('2024','%Y'), str_to_date('202401','%Y%m');
+➤ str_to_date(10:20:30, %H:%i:%s)[92,10,0]  ¦  str_to_date(10:20:30 PM, %h:%i:%s %p)[92,10,0]  ¦  str_to_date(2024, %Y)[91,10,0]  ¦  str_to_date(202401, %Y%m)[91,10,0]  𝄀
+10:20:30  ¦  22:20:30  ¦  null  ¦  null
+select date_format('2024-01-05 13:04:05.123456','%a %b %c %D %e %f %H %h %I %i %j %k %l %M %p %r %S %s %T %U %u %V %v %W %w %X %x %y %%');
+➤ date_format('2024-01-05 13:04:05.123456', '%a %b %c %D %e %f %H %h %I %i %j %k %l %M %p %r %S %s %T %U %u %V %v %W %w %X %x %y %%')[12,344,0]  𝄀
+Fri Jan 1 5th 5 123456 13 01 01 04 005 13 1 January PM 01:04:05 PM 05 05 13:04:05 00 01 53 01 Friday 5 2023 2024 24 %
+select date_format('2024-01-05','%Q'), date_format(NULL,'%Y'), time_format('25:30:00','%H %k %h %l'), time_format('-01:00:00','%H');
+➤ date_format('2024-01-05', '%Q')[12,1,0]  ¦  date_format(null, '%Y')[12,4,0]  ¦  time_format('25:30:00', '%H %k %h %l')[12,28,0]  ¦  time_format('-01:00:00', '%H')[12,11,0]  𝄀
+Q  ¦  null  ¦  25 25 01 1  ¦  -01
+select makedate(2024, 60), makedate(2024, 0), maketime(12, 30, 45.5), maketime(-1, 0, 0), sec_to_time(3661), sec_to_time(-1), time_to_sec('-01:00:00');
+➤ makedate(2024, 60)[91,10,0]  ¦  makedate(2024, 0)[91,10,0]  ¦  maketime(12, 30, 45.5)[92,12,0]  ¦  maketime(-1, 0, 0)[92,10,0]  ¦  sec_to_time(3661)[92,10,0]  ¦  sec_to_time(-1)[92,10,0]  ¦  time_to_sec(-01:00:00)[-5,64,0]  𝄀
+2024-02-29  ¦  null  ¦  12:30:45.500000000  ¦  -1:00:00  ¦  01:01:01  ¦  00:00:01  ¦  -3600
+select from_days(738000), to_days('2024-01-01'), to_seconds('2024-01-01');
+➤ from_days(738000)[91,10,0]  ¦  to_days(2024-01-01)[-5,64,0]  ¦  to_seconds(2024-01-01)[-5,64,0]  𝄀
+2020-07-29  ¦  739251  ¦  63871286400
+select period_add(202401, 13), period_diff(202401, 202312), period_add(0, 1);
+Incorrect arguments to PERIOD_ADD
+select extract(year_month from '2024-05-06'), extract(day_microsecond from '2024-05-06 01:02:03.5'), extract(week from '2024-05-06');
+➤ extract(year_month from 2024-05-06)[-5,64,0]  ¦  extract(day_microsecond from 2024-05-06 01:02:03.5)[-5,64,0]  ¦  extract(week from 2024-05-06)[-5,64,0]  𝄀
+202405  ¦  6010203500000  ¦  18
+select cast('2024-1-1' as date), cast('24-01-01' as date), cast('20240101' as date), cast('2024/01/01' as date), cast('2024-01-01T10:00:00' as datetime);
+➤ cast(2024-1-1 as date)[91,10,0]  ¦  cast(24-01-01 as date)[91,10,0]  ¦  cast(20240101 as date)[91,10,0]  ¦  cast(2024/01/01 as date)[91,10,0]  ¦  cast(2024-01-01T10:00:00 as datetime)[93,19,0]  𝄀
+2024-01-01  ¦  2024-01-01  ¦  2024-01-01  ¦  2024-01-01  ¦  2024-01-01 10:00:00
+select cast('0000-00-00' as date), cast('2024-00-01' as date), cast('2024-02-30' as date);
+➤ cast(0000-00-00 as date)[91,10,0]  ¦  cast(2024-00-01 as date)[91,10,0]  ¦  cast(2024-02-30 as date)[91,10,0]  𝄀
+null  ¦  null  ¦  null
+select date('2024-01-01 23:59:59.999'), time('2024-01-01 23:59:59.999'), year('2024-01-01'), hour('100:00:00'), minute('10:61:00');
+➤ date(2024-01-01 23:59:59.999)[91,10,0]  ¦  time(2024-01-01 23:59:59.999)[92,14,0]  ¦  year(2024-01-01)[-5,64,0]  ¦  hour(100:00:00)[4,32,0]  ¦  minute(10:61:00)[-6,8,0]  𝄀
+2024-01-01  ¦  23:59:59.999000000  ¦  2024  ¦  100  ¦  null
+select timestamp('2024-01-01'), timestamp('2024-01-01','12:00:00'), timestampadd(month, 1, '2024-01-31'), timestampadd(microsecond, 1, '2024-01-01');
+➤ timestamp(2024-01-01)[93,19,0]  ¦  timestamp(2024-01-01, 12:00:00)[93,19,0]  ¦  timestampadd(month, 1, 2024-01-31)[12,65535,0]  ¦  timestampadd(microsecond, 1, 2024-01-01)[12,65535,0]  𝄀
+2024-01-01 00:00:00  ¦  2024-01-01 12:00:00  ¦  2024-02-29  ¦  2024-01-01 00:00:00.000001
+select date '2024-01-01' + interval 1 day, '2024-01-01' + interval 1 day, interval 1 day + '2024-01-01';
+➤ date(2024-01-01) + INTERVAL 1 day[91,10,0]  ¦  2024-01-01 + INTERVAL 1 day[12,65535,0]  ¦  INTERVAL 1 day + 2024-01-01[12,65535,0]  𝄀
+2024-01-02  ¦  2024-01-02  ¦  2024-01-02
+select date '2024-01-01' - date '2023-01-01', datetime'2024-01-01 00:00:00' + 0, time'10:00:00' + 0, date'2024-01-01' + 0;
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 77 near " + 0, time'10:00:00' + 0, date'2024-01-01' + 0;";
+select str_to_date('2024-01-01 10:00:00.123','%Y-%m-%d %H:%i:%s.%f'), get_format(date,'usa'), get_format(datetime,'iso');
+➤ str_to_date(2024-01-01 10:00:00.123, %Y-%m-%d %H:%i:%s.%f)[93,26,0]  ¦  get_format(DATE, usa)[12,65535,0]  ¦  get_format(DATETIME, iso)[12,65535,0]  𝄀
+2024-01-01 10:00:00.123000000  ¦  %m.%d.%Y  ¦  %Y-%m-%d %H:%i:%s
+select dayofmonth('2024-00-00'), month('2024-00-00'), dayname('0000-00-00');
+➤ dayofmonth(2024-00-00)[-6,8,0]  ¦  month(2024-00-00)[-6,8,0]  ¦  dayname(0000-00-00)[12,65535,0]  𝄀
+0  ¦  0  ¦  null
+select utc_date() = curdate() or 1, sysdate() is not null, localtime() is not null, current_timestamp(3) is not null;
+➤ utc_date() = curdate() or 1[-6,8,0]  ¦  sysdate() is not null[-6,8,0]  ¦  localtime() is not null[-6,8,0]  ¦  current_timestamp(3) is not null[-6,8,0]  𝄀
+1  ¦  1  ¦  1  ¦  1
+select '2024-01-01' < '2024-1-2', date'2024-01-01' < '2024-1-2', cast('2024-01-01' as date) = '2024-01-01 00:00:00';
+➤ 2024-01-01 < 2024-1-2[-6,8,0]  ¦  date(2024-01-01) < 2024-1-2[-6,8,0]  ¦  cast(2024-01-01 as date) = 2024-01-01 00:00:00[-6,8,0]  𝄀
+1  ¦  1  ¦  1
+select timestampdiff(day, '2024-01-01 12:00', '2024-01-02 11:59'), datediff('2024-01-02 11:59', '2024-01-01 12:00');
+➤ timestampdiff(day, 2024-01-01 12:00, 2024-01-02 11:59)[-5,64,0]  ¦  datediff(2024-01-02 11:59, 2024-01-01 12:00)[-5,64,0]  𝄀
+0  ¦  1
+select time(cast('2024-01-01 10:20:30.456' as datetime(3))), cast(time'10:20:30.4567' as time(2));
+➤ time(cast(2024-01-01 10:20:30.456 as datetime(3)))[92,14,0]  ¦  cast(time(10:20:30.4567) as time(2))[92,13,0]  𝄀
+10:20:30.456000000  ¦  10:20:30.460000000
+select date_format('2024-01-01', '%W %M %Y'), date_format('2024-01-01 00:00:00', '%l %p');
+➤ date_format('2024-01-01', '%W %M %Y')[12,134,0]  ¦  date_format('2024-01-01 00:00:00', '%l %p')[12,5,0]  𝄀
+Monday January 2024  ¦  12 AM
+select week('2024-12-29', 0), week('2024-12-29', 2), week('2024-12-29', 4), week('2024-12-29', 5), week('2024-12-29', 6), week('2024-12-29', 7);
+➤ week(2024-12-29, 0)[-5,3,0]  ¦  week(2024-12-29, 2)[-5,3,0]  ¦  week(2024-12-29, 4)[-5,3,0]  ¦  week(2024-12-29, 5)[-5,3,0]  ¦  week(2024-12-29, 6)[-5,3,0]  ¦  week(2024-12-29, 7)[-5,3,0]  𝄀
+52  ¦  52  ¦  53  ¦  52  ¦  1  ¦  52
+drop database cov_dt;

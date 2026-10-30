@@ -1,0 +1,191 @@
+drop database if exists cov_win;
+create database cov_win;
+use cov_win;
+create table w (id int primary key, g int, v int, s varchar(10));
+insert into w values (1,1,10,'a'),(2,1,20,'b'),(3,1,20,'c'),(4,2,5,'d'),(5,2,NULL,'e'),(6,3,7,'f');
+select id, row_number() over (partition by g order by v, id) from w order by id;
+➤ id[4,32,0]  ¦  row_number() over (partition by g order by v, id)[-5,64,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  2  𝄀
+3  ¦  3  𝄀
+4  ¦  2  𝄀
+5  ¦  1  𝄀
+6  ¦  1
+select id, rank() over (order by v), dense_rank() over (order by v) from w order by id;
+➤ id[4,32,0]  ¦  rank() over (order by v)[-5,64,0]  ¦  dense_rank() over (order by v)[-5,64,0]  𝄀
+1  ¦  4  ¦  4  𝄀
+2  ¦  5  ¦  5  𝄀
+3  ¦  5  ¦  5  𝄀
+4  ¦  2  ¦  2  𝄀
+5  ¦  1  ¦  1  𝄀
+6  ¦  3  ¦  3
+select id, percent_rank() over (order by v), cume_dist() over (order by v) from w order by id;
+➤ id[4,32,0]  ¦  percent_rank() over (order by v)[8,53,31]  ¦  cume_dist() over (order by v)[8,53,31]  𝄀
+1  ¦  0.6  ¦  0.6666666666666666  𝄀
+2  ¦  0.8  ¦  1.0  𝄀
+3  ¦  0.8  ¦  1.0  𝄀
+4  ¦  0.2  ¦  0.3333333333333333  𝄀
+5  ¦  0.0  ¦  0.16666666666666666  𝄀
+6  ¦  0.4  ¦  0.5
+select id, ntile(4) over (order by id) from w order by id;
+➤ id[4,32,0]  ¦  ntile(4) over (order by id)[-5,64,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  1  𝄀
+3  ¦  2  𝄀
+4  ¦  2  𝄀
+5  ¦  3  𝄀
+6  ¦  4
+select id, lag(v) over (order by id), lead(v, 2, -1) over (order by id) from w order by id;
+➤ id[4,32,0]  ¦  lag(v) over (order by id)[4,32,0]  ¦  lead(v, 2, -1) over (order by id)[-5,64,0]  𝄀
+1  ¦  null  ¦  20  𝄀
+2  ¦  10  ¦  5  𝄀
+3  ¦  20  ¦  null  𝄀
+4  ¦  20  ¦  7  𝄀
+5  ¦  5  ¦  -1  𝄀
+6  ¦  null  ¦  -1
+select id, first_value(v) over (partition by g order by id), last_value(v) over (partition by g order by id rows between unbounded preceding and unbounded following) from w order by id;
+➤ id[4,32,0]  ¦  first_value(v) over (partition by g order by id)[4,32,0]  ¦  last_value(v) over (partition by g order by id rows between unbounded preceding and unbounded following)[4,32,0]  𝄀
+1  ¦  10  ¦  20  𝄀
+2  ¦  10  ¦  20  𝄀
+3  ¦  10  ¦  20  𝄀
+4  ¦  5  ¦  null  𝄀
+5  ¦  5  ¦  null  𝄀
+6  ¦  7  ¦  7
+select id, nth_value(v, 2) over (partition by g order by id) from w order by id;
+➤ id[4,32,0]  ¦  nth_value(v, 2) over (partition by g order by id)[4,32,0]  𝄀
+1  ¦  null  𝄀
+2  ¦  20  𝄀
+3  ¦  20  𝄀
+4  ¦  null  𝄀
+5  ¦  null  𝄀
+6  ¦  null
+select id, sum(v) over (order by id rows between 1 preceding and 1 following) from w order by id;
+➤ id[4,32,0]  ¦  sum(v) over (order by id rows between 1 preceding and 1 following)[-5,64,0]  𝄀
+1  ¦  30  𝄀
+2  ¦  50  𝄀
+3  ¦  45  𝄀
+4  ¦  25  𝄀
+5  ¦  12  𝄀
+6  ¦  7
+select id, sum(v) over (order by v range between 5 preceding and current row) from w order by id;
+➤ id[4,32,0]  ¦  sum(v) over (order by v range between 5 preceding and current row)[-5,64,0]  𝄀
+1  ¦  22  𝄀
+2  ¦  40  𝄀
+3  ¦  40  𝄀
+4  ¦  5  𝄀
+5  ¦  null  𝄀
+6  ¦  12
+select id, avg(v) over (partition by g) from w order by id;
+➤ id[4,32,0]  ¦  avg(v) over (partition by g)[3,14,4]  𝄀
+1  ¦  16.6667  𝄀
+2  ¦  16.6667  𝄀
+3  ¦  16.6667  𝄀
+4  ¦  5.0000  𝄀
+5  ¦  5.0000  𝄀
+6  ¦  7.0000
+select id, count(*) over (), count(v) over () from w order by id;
+➤ id[4,32,0]  ¦  count(*) over ()[-5,64,0]  ¦  count(v) over ()[-5,64,0]  𝄀
+1  ¦  6  ¦  5  𝄀
+2  ¦  6  ¦  5  𝄀
+3  ¦  6  ¦  5  𝄀
+4  ¦  6  ¦  5  𝄀
+5  ¦  6  ¦  5  𝄀
+6  ¦  6  ¦  5
+select id, sum(v) over w1 from w window w1 as (partition by g order by id) order by id;
+➤ id[4,32,0]  ¦  sum(v) over (partition by g order by id)[-5,64,0]  𝄀
+1  ¦  10  𝄀
+2  ¦  30  𝄀
+3  ¦  50  𝄀
+4  ¦  5  𝄀
+5  ¦  5  𝄀
+6  ¦  7
+select g, sum(v), group_concat(s order by s desc separator '|') from w group by g order by g;
+➤ g[4,32,0]  ¦  sum(v)[-5,64,0]  ¦  group_concat(s order by s desc separator |)[-1,16383,0]  𝄀
+1  ¦  50  ¦  c|b|a  𝄀
+2  ¦  5  ¦  e|d  𝄀
+3  ¦  7  ¦  f
+select g, count(distinct v), max(s), min(v) from w group by g having count(*) > 1 order by g;
+➤ g[4,32,0]  ¦  count(distinct v)[-5,64,0]  ¦  max(s)[12,10,0]  ¦  min(v)[4,32,0]  𝄀
+1  ¦  2  ¦  c  ¦  10  𝄀
+2  ¦  1  ¦  e  ¦  5
+select bit_and(v), bit_or(v), bit_xor(v) from w;
+➤ bit_and(v)[-5,64,0]  ¦  bit_or(v)[-5,64,0]  ¦  bit_xor(v)[-5,64,0]  𝄀
+0  ¦  31  ¦  8
+select std(v), stddev_samp(v), variance(v), var_samp(v) from w;
+➤ std(v)[8,53,31]  ¦  stddev_samp(v)[8,53,31]  ¦  variance(v)[8,53,31]  ¦  var_samp(v)[8,53,31]  𝄀
+6.406246951218788  ¦  7.162401831787994  ¦  41.040000000000006  ¦  51.30000000000001
+select group_concat(distinct v order by v) from w;
+➤ group_concat(distinct v order by v separator ,)[-1,16383,0]  𝄀
+5,7,10,20
+select g, v, sum(v) over (partition by g order by v) from w order by id;
+➤ g[4,32,0]  ¦  v[4,32,0]  ¦  sum(v) over (partition by g order by v)[-5,64,0]  𝄀
+1  ¦  10  ¦  10  𝄀
+1  ¦  20  ¦  50  𝄀
+1  ¦  20  ¦  50  𝄀
+2  ¦  5  ¦  5  𝄀
+2  ¦  null  ¦  null  𝄀
+3  ¦  7  ¦  7
+select id, max(v) over (order by id rows 2 preceding) from w order by id;
+➤ id[4,32,0]  ¦  max(v) over (order by id rows 2 preceding)[4,32,0]  𝄀
+1  ¦  10  𝄀
+2  ¦  20  𝄀
+3  ¦  20  𝄀
+4  ¦  20  𝄀
+5  ¦  20  𝄀
+6  ¦  7
+select id, lag(v, 0) over (order by id) from w order by id;
+➤ id[4,32,0]  ¦  lag(v, 0) over (order by id)[4,32,0]  𝄀
+1  ¦  10  𝄀
+2  ¦  20  𝄀
+3  ¦  20  𝄀
+4  ¦  5  𝄀
+5  ¦  null  𝄀
+6  ¦  7
+select id, ntile(0) over (order by id) from w;
+invalid input: ntile bucket count must be positive
+select id, nth_value(v, 0) over (order by id) from w;
+Incorrect arguments to nth_value
+select id, lead(v, -1) over (order by id) from w;
+Incorrect arguments to lead
+select sum(v) over () from w limit 1;
+➤ sum(v) over ()[-5,64,0]  𝄀
+62
+select id, sum(v) over (order by id groups between 1 preceding and current row) from w;
+GROUPS in WINDOW FUNCTION condition is not yet implemented
+select avg(distinct v) from w;
+➤ avg(distinct v)[3,14,4]  𝄀
+10.5000
+select id, row_number() over () > 0 from w order by id;
+➤ id[4,32,0]  ¦  row_number() over () > 0[-6,8,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  1  𝄀
+3  ¦  1  𝄀
+4  ¦  1  𝄀
+5  ¦  1  𝄀
+6  ¦  1
+select g, any_value(s) is not null from w group by g order by g;
+➤ g[4,32,0]  ¦  any_value(s) is not null[-6,8,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  1  𝄀
+3  ¦  1
+select count(*) from w where v > (select avg(v) from w);
+➤ count(*)[-5,64,0]  𝄀
+2
+select id, v - lag(v) over (order by id) d from w order by d desc, id limit 3;
+➤ id[4,32,0]  ¦  d[4,32,0]  𝄀
+2  ¦  10  𝄀
+3  ¦  0  𝄀
+4  ¦  -15
+select id, sum(v) over (partition by g order by id range unbounded preceding) from w order by id;
+➤ id[4,32,0]  ¦  sum(v) over (partition by g order by id range unbounded preceding)[-5,64,0]  𝄀
+1  ¦  10  𝄀
+2  ¦  30  𝄀
+3  ¦  50  𝄀
+4  ¦  5  𝄀
+5  ¦  5  𝄀
+6  ¦  7
+select id, first_value(s) over (order by v desc nulls last) from w;
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. NULLS LAST is not supported in MySQL syntax at line 1 column 58 near " last) from w;";
+select id, sum(distinct v) over (partition by g) from w;
+DISTINCT in window function is not yet implemented
+drop database cov_win;

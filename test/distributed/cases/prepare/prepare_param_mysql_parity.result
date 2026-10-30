@@ -1,0 +1,110 @@
+drop database if exists cov_prep;
+create database cov_prep;
+use cov_prep;
+create table p (a int primary key, b varchar(10), c decimal(10,2), d datetime);
+prepare s1 from 'insert into p values (?, ?, ?, ?)';
+set @a=1, @b='x', @c=1.5, @d='2024-01-01 10:00:00';
+execute s1 using @a, @b, @c, @d;
+set @a=2, @b=NULL, @c='3.333', @d=NULL;
+execute s1 using @a, @b, @c, @d;
+select * from p order by a;
+➤ a[4,32,0]  ¦  b[12,10,0]  ¦  c[3,10,2]  ¦  d[93,19,0]  𝄀
+1  ¦  x  ¦  1.50  ¦  2024-01-01 10:00:00  𝄀
+2  ¦  null  ¦  3.33  ¦  null
+prepare s2 from 'select * from p where a = ?';
+set @x = '1';
+execute s2 using @x;
+➤ a[4,32,0]  ¦  b[12,10,0]  ¦  c[3,10,2]  ¦  d[93,19,0]  𝄀
+1  ¦  x  ¦  1.50  ¦  2024-01-01 10:00:00
+set @x = 1.0;
+execute s2 using @x;
+➤ a[4,32,0]  ¦  b[12,10,0]  ¦  c[3,10,2]  ¦  d[93,19,0]  𝄀
+1  ¦  x  ¦  1.50  ¦  2024-01-01 10:00:00
+set @x = NULL;
+execute s2 using @x;
+➤ a[4,32,0]  ¦  b[12,10,0]  ¦  c[3,10,2]  ¦  d[93,19,0]
+prepare s3 from 'select ? + ?';
+set @p = 1, @q = 2;
+set @p = '1', @q = '2';
+set @p = 1.5, @q = 2;
+prepare s4 from 'select * from p limit ?';
+set @l = 1;
+execute s4 using @l;
+➤ a[4,32,0]  ¦  b[12,10,0]  ¦  c[3,10,2]  ¦  d[93,19,0]  𝄀
+1  ¦  x  ¦  1.50  ¦  2024-01-01 10:00:00
+prepare s5 from 'select * from p order by ?';
+prepare s6 from 'select concat(?, ?)';
+set @s = 'a';
+execute s6 using @s, @s;
+➤ concat(?, ?)[-1,16383,0]  𝄀
+aa
+execute s6 using @s;
+Incorrect arguments to EXECUTE
+deallocate prepare s6;
+execute s6 using @s, @s;
+invalid state prepared statement 's6' does not exist
+prepare s7 from 'select ? is null, ? = 1';
+execute s7 using @nonexist, @nonexist;
+➤ ? is null[-6,8,0]  ¦  ? = 1[-6,8,0]  𝄀
+1  ¦  null
+prepare s8 from 'update p set b = ? where a = ?';
+set @b = 'upd', @a = 2;
+execute s8 using @b, @a;
+select * from p order by a;
+➤ a[4,32,0]  ¦  b[12,10,0]  ¦  c[3,10,2]  ¦  d[93,19,0]  𝄀
+1  ¦  x  ¦  1.50  ¦  2024-01-01 10:00:00  𝄀
+2  ¦  upd  ¦  3.33  ¦  null
+prepare s9 from 'select a from p where b like ?';
+set @pat = 'u%';
+execute s9 using @pat;
+➤ a[4,32,0]  𝄀
+2
+prepare s10 from 'select ?';
+set @v = 9223372036854775807;
+set @v = 18446744073709551615;
+set @v = -1.5e300;
+set @v = x'41';
+set @v = true;
+prepare s11 from 'select * from p where a in (?, ?)';
+set @a1 = 1, @a2 = 2;
+execute s11 using @a1, @a2;
+➤ a[4,32,0]  ¦  b[12,10,0]  ¦  c[3,10,2]  ¦  d[93,19,0]  𝄀
+1  ¦  x  ¦  1.50  ¦  2024-01-01 10:00:00  𝄀
+2  ¦  upd  ¦  3.33  ¦  null
+prepare s12 from 'select a from p where d > ?';
+set @dt = '2023-12-31';
+execute s12 using @dt;
+➤ a[4,32,0]  𝄀
+1
+prepare s13 from 'select cast(? as signed)';
+set @v = '12abc';
+execute s13 using @v;
+➤ cast(? as signed)[-5,64,0]  𝄀
+12
+prepare s14 from 'select date_add(?, interval ? day)';
+set @d1 = '2024-01-01', @n = 3;
+execute s14 using @d1, @n;
+➤ date_add(?, INTERVAL ? day)[91,10,0]  𝄀
+2024-01-04
+prepare s15 from 'select a from p where a = ? for update';
+execute s15 using @a1;
+➤ a[4,32,0]  𝄀
+1
+prepare s16 from 'create table pp (x int)';
+execute s16;
+show tables;
+➤ Tables_in_cov_prep[12,5000,0]  𝄀
+p  𝄀
+pp
+prepare s17 from 'select ? as x union select ?';
+set @u1 = 1, @u2 = 'a';
+prepare s18 from 'select round(?, ?)';
+set @r1 = 2.567, @r2 = 1;
+prepare s19 from 'select substring(?, ?, ?)';
+set @s1 = 'abcdef', @s2 = 2, @s3 = 3;
+execute s19 using @s1, @s2, @s3;
+➤ substring(?, ?, ?)[12,65535,0]  𝄀
+bcd
+prepare s20 from 'select ? div ?, ? mod ?';
+set @m1 = 7, @m2 = 2;
+drop database cov_prep;
