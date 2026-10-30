@@ -815,10 +815,6 @@ class AsyncClient(BaseMatrixOneClient):
 
         configure_engine(engine, self._connection_params.get('local_infile'))
 
-        # Older SQLAlchemy dialects infer ping's signature from PyMySQL,
-        # but their aiomysql adapter requires reconnect=False. This also
-        # affects 2.0 releases; newer dialects already pass False directly.
-        engine.dialect._send_false_to_ping = True
         from .sqlalchemy_ext.dialect import adapt_engine_dialect
 
         adapt_engine_dialect(engine.sync_engine)

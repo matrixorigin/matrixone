@@ -9,6 +9,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
 
+from matrixone import with_snapshot
+
 import pytest
 import pymysql
 import sqlalchemy as sa
@@ -132,7 +134,7 @@ def test_snapshot_driver_formatting_preserves_identity(mysql_transport, snapshot
     table = sa.table('t', sa.column('id'))
     other = sa.table('other', sa.column('id'))
     columns = [sa.literal(42).label('projection'), table.c.id] if bound else [table.c.id]
-    statement = select(*columns).select_from(table.join(other, table.c.id == other.c.id)).with_snapshot(snapshot)
+    statement = with_snapshot(select(*columns).select_from(table.join(other, table.c.id == other.c.id)), snapshot)
     if bound:
         statement = statement.where(table.c.id == sa.bindparam('id', 7)).where(
             table.c.id.in_(sa.bindparam('ids', [7, 8], expanding=True))
@@ -172,7 +174,7 @@ def test_snapshot_raw_export_sql_keeps_original_percents(mysql_transport, snapsh
     engine, wire, formatter = mysql_transport
     client = Client.from_engine(engine, logger=Mock(), sql_log_mode='off')
     table = sa.table('t', sa.column('id'))
-    statement = select(table.c.id).where(table.c.id == 7).with_snapshot(snapshot)
+    statement = with_snapshot(select(table.c.id).where(table.c.id == 7), snapshot)
     hint = "{snapshot = '" + snapshot.replace("'", "''") + "'}"
     for sql in (
         compile_select_to_sql(statement),
@@ -208,7 +210,7 @@ def test_snapshot_annotation_isolated_from_caller_bind_namespace(mysql_transport
     live = select(table.c.id).where(predicate)
     assert client.execute(live).scalar() == 1
     assert ('t.id IN (5, 6)' if expanding else 't.id = 5') in wire[-1]
-    snapshot = live.with_snapshot('expected_history')
+    snapshot = with_snapshot(live, 'expected_history')
     supplied = {parameter: value}
     supplied.update(
         {
@@ -237,11 +239,11 @@ def test_snapshot_binding_avoids_multiple_occupied_caller_names(mysql_transport)
     engine, wire, _ = mysql_transport
     client = Client.from_engine(engine.execution_options(compiled_cache={}), logger=Mock(), sql_log_mode='off')
     table = sa.table('t', sa.column('id'))
-    statement = (
+    statement = with_snapshot(
         select(table.c.id)
         .where(table.c.id >= sa.bindparam('_matrixone_snapshot_0_value', 3))
-        .where(table.c.id <= sa.bindparam('_matrixone_snapshot_1_value', 5))
-        .with_snapshot('expected_history')
+        .where(table.c.id <= sa.bindparam('_matrixone_snapshot_1_value', 5)),
+        'expected_history',
     )
     for lower, upper in ((7, 9), (8, 10)):
         parameters = {
@@ -274,7 +276,7 @@ def test_raw_compilation_preserves_escaped_bind_processors(mysql_transport, snap
     bind = sa.bindparam('ordinary name', [7, 8] if expanding else 7, type_=OffsetInteger(), expanding=expanding)
     statement = select(table.c.id).where(table.c.id.in_(bind) if expanding else table.c.id == bind)
     if snapshot is not None:
-        statement = statement.with_snapshot(snapshot)
+        statement = with_snapshot(statement, snapshot)
     assert client.execute(statement).scalar() == 1
     expected = 't.id IN (8, 9)' if expanding else 't.id = 8'
     assert expected in wire[-1]
@@ -379,8 +381,8 @@ def snapshot_tables():
 def test_snapshot_select_is_generative_and_cache_keyed_across_consumers():
     a, b = snapshot_tables()
     live = select(a.c.id).select_from(a.join(b, a.c.id == b.c.ref))
-    first = live.with_snapshot('first')
-    second = live.with_snapshot('second')
+    first = with_snapshot(live, 'first')
+    second = with_snapshot(live, 'second')
     assert first is not live
     assert 'matrixone_snapshot' not in live._annotations
     assert live._generate_cache_key() != first._generate_cache_key() != second._generate_cache_key()
@@ -402,13 +404,13 @@ def test_snapshot_select_is_generative_and_cache_keyed_across_consumers():
 @pytest.mark.parametrize('shape', ['subquery', 'cte', 'outer_cte'])
 def test_nested_snapshot_statement_rejects_complete_query(shape):
     a, _ = snapshot_tables()
-    inner = select(a.c.id).with_snapshot('historical')
+    inner = with_snapshot(select(a.c.id), 'historical')
     if shape == 'subquery':
         statement = select(inner.subquery())
     elif shape == 'cte':
         statement = select(inner.cte())
     else:
-        statement = select(select(a.c.id).cte()).with_snapshot('historical')
+        statement = with_snapshot(select(select(a.c.id).cte()), 'historical')
     with pytest.raises(ValueError, match='Snapshot|snapshot'):
         compile_select_to_sql(statement)
 
@@ -801,3 +803,141 @@ def test_explicit_driver_binding_uses_existing_owner_without_sdk_rewriting(mysql
     # Native-driver opt-in must not change existing SDK parameter semantics.
     assert client.execute('SELECT ? AS value', ("marker %s :name",)).scalar() == 1
     assert wire[-1] == "SELECT 'marker %s :name' AS value"
+
+
+@pytest.mark.parametrize('kind', ['ivfflat', 'hnsw', 'generic'])
+@pytest.mark.parametrize('ddl_kind', ['standard', 'vector'])
+def test_vector_ddl_uses_driver_and_schema_owners(mysql_transport, kind, ddl_kind):
+    from matrixone.sqlalchemy_ext.vector_index import IVFVectorIndex, HnswVectorIndex, VectorIndex, CreateVectorIndex
+
+    engine, wire, _ = mysql_transport
+    Client.from_engine(engine, logger=Mock(), sql_log_mode='off')
+    table = sa.Table('vectors%', sa.MetaData(), sa.Column('fulltext2', sa.Integer), schema='logical')
+    index = {'ivfflat': IVFVectorIndex, 'hnsw': HnswVectorIndex, 'generic': VectorIndex}[kind](
+        'ix`%(id)s', table.c.fulltext2
+    )
+    original = (table.name, table.schema, index.name, engine.dialect.identifier_preparer)
+    schema_formatter = engine.dialect.identifier_preparer.quote_schema
+    ddl = (
+        sa.schema.CreateIndex(index, if_not_exists=True)
+        if ddl_kind == 'standard'
+        else CreateVectorIndex(index, if_not_exists=True)
+    )
+    with engine.connect().execution_options(schema_translate_map={'logical': 'tenant%s'}) as connection:
+        connection.execute(ddl)
+    algorithm = 'hnsw' if kind == 'hnsw' else 'ivfflat'
+    assert wire[-1].startswith(
+        'CREATE INDEX IF NOT EXISTS `ix``%(id)s` USING ' + algorithm + ' ON `tenant%s`.`vectors%`(`fulltext2`)'
+    )
+    assert table.name is original[0] and table.schema is original[1] and index.name is original[2]
+    assert engine.dialect.identifier_preparer is original[3]
+    assert engine.dialect.identifier_preparer.quote_schema == schema_formatter
+
+
+@pytest.mark.parametrize(
+    'name,token',
+    [
+        ('ordinary', '`ordinary`'),
+        ('ix%name', '`ix%name`'),
+        ('ix%s', '`ix%s`'),
+        ('ix%%name', '`ix%%name`'),
+        ('ix%(id)s', '`ix%(id)s`'),
+        ('ix`name', '`ix``name`'),
+        ('`ix%s`', '`ix%s`'),
+        (sa.sql.quoted_name('`ix%s`', True), '```ix%s```'),
+        ('中文.name%', '`中文.name%`'),
+    ],
+)
+def test_vector_ddl_percent_names_match_standalone_wire_identity(mysql_transport, name, token):
+    from matrixone.sqlalchemy_ext.vector_index import IVFVectorIndex
+
+    engine, wire, _ = mysql_transport
+    table = sa.Table('vectors', sa.MetaData(), sa.Column('v', sa.Integer), schema='physical')
+    index = IVFVectorIndex(name, table.c.v, lists=1)
+    expected = 'CREATE INDEX ' + token + " USING ivfflat ON `physical`.`vectors`(`v`) lists = 1 op_type 'vector_l2_ops'"
+    with engine.connect() as connection:
+        connection.execute(sa.schema.CreateIndex(index))
+    assert wire[-1] == expected
+    assert index.create_sql('physical.vectors') == expected
+    assert index.create(engine, 'physical.vectors') is True
+    assert wire[-1] == expected
+    assert index.drop(engine, 'physical.vectors') is True
+    assert wire[-1] == 'DROP INDEX ' + token + ' ON `physical`.`vectors`'
+
+
+@pytest.mark.parametrize(
+    'schema,mapping,prefix',
+    [
+        ('logical', {'logical': 'tenant_actual'}, '`tenant_actual`.'),
+        ('fulltext2', None, '`fulltext2`.'),
+        ('logical', {'logical': 'fulltext2'}, '`fulltext2`.'),
+        ('logical', {'logical': None}, '`default%s`.'),
+        (None, {None: 'tenant_actual'}, '`tenant_actual`.'),
+        (None, {None: None}, '`default%s`.'),
+        (None, None, ''),
+        ('plain', None, '`plain`.'),
+        ('logical%src', {'logical%src': 'tenant%%actual'}, '`tenant%%actual`.'),
+        (sa.sql.quoted_name('schema%quoted', True), None, '`schema%quoted`.'),
+        (sa.sql.quoted_name('literal', False), None, 'literal.'),
+        ('logical', {'logical': sa.sql.quoted_name('tenant_actual', False)}, 'tenant_actual.'),
+    ],
+)
+def test_vector_ddl_preserves_schema_translation_semantics(mysql_transport, schema, mapping, prefix):
+    from matrixone.sqlalchemy_ext.vector_index import VectorIndex, CreateVectorIndex
+
+    engine, wire, _ = mysql_transport
+    engine.dialect.default_schema_name = 'default%s'
+    table = sa.Table('vectors%', sa.MetaData(), sa.Column('v%', sa.Integer), schema=schema)
+    index = VectorIndex('ix%s', table.c['v%'])
+    original = (table.schema, table.name, index.name)
+    options = {'schema_translate_map': dict(mapping)} if mapping is not None else {}
+    with engine.connect().execution_options(**options) as connection:
+        connection.execute(CreateVectorIndex(index))
+    assert ' ON ' + prefix + '`vectors%`(`v%`)' in wire[-1]
+    assert 'CREATE INDEX `ix%s` USING ivfflat' in wire[-1]
+    assert table.schema is original[0] and table.name is original[1] and index.name is original[2]
+
+
+def test_vector_ddl_schema_mapping_reuse_and_other_index_dispatch(mysql_transport):
+    from matrixone.sqlalchemy_ext.vector_index import IVFVectorIndex
+
+    engine, wire, _ = mysql_transport
+    table = sa.Table('vectors', sa.MetaData(), sa.Column('v', sa.Integer), schema='logical')
+    index = IVFVectorIndex('ix%s', table.c.v)
+    statement = sa.schema.CreateIndex(index)
+    for physical in ('tenant%s', 'fulltext2'):
+        with engine.connect().execution_options(schema_translate_map={'logical': physical}) as connection:
+            connection.execute(statement)
+        assert ' ON `' + physical + '`.`vectors`(`v`)' in wire[-1]
+    ordinary = sa.Index('plain%index', table.c.v)
+    with engine.connect().execution_options(schema_translate_map={'logical': 'tenant_actual'}) as connection:
+        connection.execute(sa.schema.CreateIndex(ordinary))
+    assert 'plain%index' in wire[-1] and 'tenant_actual' in wire[-1] and 'USING ivfflat' not in wire[-1]
+
+
+def test_vector_ddl_respects_dialect_omit_schema(mysql_transport):
+    from matrixone.sqlalchemy_ext.vector_index import IVFVectorIndex
+
+    engine, wire, _ = mysql_transport
+    table = sa.Table('vectors', sa.MetaData(), sa.Column('v', sa.Integer), schema='logical')
+    index = IVFVectorIndex('ix', table.c.v)
+    engine.dialect.identifier_preparer.omit_schema = True
+    with engine.connect().execution_options(schema_translate_map={'logical': 'tenant_actual'}) as connection:
+        connection.execute(sa.schema.CreateIndex(index))
+    assert ' ON `vectors`(`v`)' in wire[-1] and 'tenant_actual' not in wire[-1]
+
+
+def test_vector_ddl_missing_default_schema_fails_before_transport(mysql_transport):
+    from matrixone.sqlalchemy_ext.vector_index import IVFVectorIndex
+
+    engine, wire, _ = mysql_transport
+    engine.dialect.default_schema_name = None
+    table = sa.Table('vectors', sa.MetaData(), sa.Column('v', sa.Integer), schema='logical')
+    index = IVFVectorIndex('ix', table.c.v)
+    with engine.connect().execution_options(schema_translate_map={'logical': None}) as connection:
+        wire.clear()
+        with pytest.raises((sa.exc.CompileError, sa.exc.StatementError), match='default schema name') as caught:
+            connection.execute(sa.schema.CreateIndex(index))
+    error = caught.value.orig if isinstance(caught.value, sa.exc.StatementError) else caught.value
+    assert isinstance(error, sa.exc.CompileError)
+    assert wire == []
