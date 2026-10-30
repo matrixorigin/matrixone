@@ -1,0 +1,44 @@
+select ifnull(json_extract('{"a":null}', '$.a'), 'x');
+➤ ifnull(json_extract({"a":null}, $.a), x)[-1,16383,0]  𝄀
+null
+select ifnull(json_extract('{"a":7}', '$.a'), 'x');
+➤ ifnull(json_extract({"a":7}, $.a), x)[-1,16383,0]  𝄀
+7
+select ifnull(json_extract('{"a":1}', '$.zz'), 'x');
+➤ ifnull(json_extract({"a":1}, $.zz), x)[-1,16383,0]  𝄀
+x
+select ifnull(json_extract('{"a":"s"}', '$.a'), 0);
+➤ ifnull(json_extract({"a":"s"}, $.a), 0)[-1,16383,0]  𝄀
+s
+select if(json_extract('{"a":null}', '$.a'), 'y', 'n');
+➤ if(json_extract({"a":null}, $.a), y, n)[12,1,0]  𝄀
+n
+select if(json_extract('{"a":7}', '$.a'), 'y', 'n');
+➤ if(json_extract({"a":7}, $.a), y, n)[12,1,0]  𝄀
+y
+select if(json_extract('{"a":0}', '$.a'), 'y', 'n');
+➤ if(json_extract({"a":0}, $.a), y, n)[12,1,0]  𝄀
+n
+select if(json_extract('{"a":1}', '$.zz'), 'y', 'n');
+➤ if(json_extract({"a":1}, $.zz), y, n)[12,1,0]  𝄀
+n
+select if(true, json_extract('{"a":[1,2]}', '$.a'), 'n'), if(false, json_extract('{"a":7}', '$.a'), 'n');
+➤ if(true, json_extract({"a":[1,2]}, $.a), n)[-1,16383,0]  ¦  if(false, json_extract({"a":7}, $.a), n)[-1,16383,0]  𝄀
+[1, 2]  ¦  n
+select case when 1 = 1 then json_extract('{"a":7}', '$.a') else 'n' end;
+➤ case when 1 = 1 then json_extract({"a":7}, $.a) else n end[-1,16383,0]  𝄀
+7
+select coalesce(json_extract('{"a":null}', '$.a'), 'x'), coalesce(json_extract('{"a":1}', '$.zz'), 'x');
+➤ coalesce(json_extract({"a":null}, $.a), x)[-1,16383,0]  ¦  coalesce(json_extract({"a":1}, $.zz), x)[-1,16383,0]  𝄀
+null  ¦  x
+drop database if exists cond_json;
+create database cond_json;
+use cond_json;
+create table t (id int primary key, j json);
+insert into t values (1, '{"name":"a","n":1}'), (2, '{"n":null}'), (3, null);
+select id, ifnull(json_extract(j, '$.name'), 'none'), if(json_extract(j, '$.n'), 'set', 'unset') from t order by id;
+➤ id[4,32,0]  ¦  ifnull(json_extract(j, $.name), none)[-1,16383,0]  ¦  if(json_extract(j, $.n), set, unset)[12,5,0]  𝄀
+1  ¦  a  ¦  set  𝄀
+2  ¦  none  ¦  unset  𝄀
+3  ¦  none  ¦  unset
+drop database cond_json;

@@ -484,6 +484,20 @@ func caseCheck(_ []overload, inputs []types.Type) checkResult {
 			return newCheckResultWithCast(0, finalTypes)
 		}
 
+		if retType, applies, ok := conditionalJSONTextType(source); applies {
+			if !ok {
+				return newCheckResultWithFailure(failedFunctionParametersWrong)
+			}
+			finalTypes := make([]types.Type, len(inputs))
+			for i := range finalTypes {
+				if i%2 == 0 && !(len(inputs)%2 == 1 && i == len(inputs)-1) {
+					finalTypes[i] = types.T_bool.ToType()
+				} else {
+					finalTypes[i] = retType
+				}
+			}
+			return newCheckResultWithCast(0, finalTypes)
+		}
 		if retType, ok := binaryStringCommonType(source); ok {
 			finalTypes := make([]types.Type, len(inputs))
 			for i := range finalTypes {
@@ -782,7 +796,9 @@ func iffCheck(_ []overload, inputs []types.Type) checkResult {
 	// iff(x, y, z)
 	if len(inputs) == 3 {
 		conditionType := inputs[0]
-		needCast := conditionType.Oid == types.T_any
+		// A JSON condition is read through the JSON -> BOOL cast (JSON null
+		// is NULL, so the ELSE branch is taken), as MySQL does.
+		needCast := conditionType.Oid == types.T_any || conditionType.Oid == types.T_json
 		if needCast {
 			conditionType = types.T_bool.ToType()
 		} else if conditionType.Oid != types.T_bool &&
@@ -851,6 +867,12 @@ func iffCheck(_ []overload, inputs []types.Type) checkResult {
 				finalTypes := []types.Type{conditionType, retType, retType}
 				return newCheckResultWithCast(0, finalTypes)
 			}
+		}
+		if retType, applies, ok := conditionalJSONTextType(source); applies {
+			if !ok {
+				return newCheckResultWithFailure(failedFunctionParametersWrong)
+			}
+			return newCheckResultWithCast(0, []types.Type{conditionType, retType, retType})
 		}
 		if retType, ok := binaryStringCommonType(source); ok {
 			return newCheckResultWithCast(0, []types.Type{conditionType, retType, retType})

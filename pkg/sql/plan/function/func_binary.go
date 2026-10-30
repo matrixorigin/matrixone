@@ -1281,14 +1281,18 @@ func coalesceBinaryStringReturnType(resultOID types.T, parameters []types.Type) 
 
 // coalesceJSONResult must run before the generic string-numeric rule. It scans
 // every branch so a numeric argument cannot hide a bounded or binary JSON cast.
-func coalesceJSONResult(overloads []overload, inputs []types.Type) (checkResult, bool) {
+// conditionalJSONTextType resolves value branches that mix JSON with
+// character or numeric values (COALESCE, IFNULL, IF, CASE) to TEXT, the
+// JSON text form. applies is false when no JSON branch needs this rule;
+// ok is false when the mix cannot be resolved (JSON with binary strings).
+func conditionalJSONTextType(source []types.Type) (target types.Type, applies bool, ok bool) {
 	hasJSON := false
 	hasCharacter := false
 	hasNumeric := false
 	hasOther := false
 	hasBinary := false
-	for i := range inputs {
-		oid := inputs[i].Oid
+	for i := range source {
+		oid := source[i].Oid
 		switch {
 		case oid == types.T_any:
 		case oid == types.T_json:
@@ -1304,19 +1308,28 @@ func coalesceJSONResult(overloads []overload, inputs []types.Type) (checkResult,
 		}
 	}
 	if !hasJSON {
-		return checkResult{}, false
+		return types.Type{}, false, false
 	}
 	if hasBinary {
-		return newCheckResultWithFailure(failedFunctionParametersWrong), true
+		return types.Type{}, true, false
 	}
 	if hasOther && !hasNumeric {
-		return checkResult{}, false
+		return types.Type{}, false, false
 	}
 	if !hasCharacter && !hasNumeric {
+		return types.Type{}, false, false
+	}
+	return commonConditionalStringType(types.T_text.ToType(), source), true, true
+}
+
+func coalesceJSONResult(overloads []overload, inputs []types.Type) (checkResult, bool) {
+	target, applies, ok := conditionalJSONTextType(inputs)
+	if !applies {
 		return checkResult{}, false
 	}
-
-	target := commonConditionalStringType(types.T_text.ToType(), inputs)
+	if !ok {
+		return newCheckResultWithFailure(failedFunctionParametersWrong), true
+	}
 	for i, over := range overloads {
 		if len(over.args) != 1 || over.args[0] != target.Oid {
 			continue
