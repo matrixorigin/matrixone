@@ -1,6 +1,6 @@
 # Boolean existence MARK through hash membership
 
-Design revision 1.2. Owning issue: [#31829](https://github.com/matrixorigin/matrixone/issues/31829).
+Design revision 1.2. Owning issue: [#31829](https://github.com/matrixorigin/matrixone/issues/31829). Implementation PR: [#31848](https://github.com/matrixorigin/matrixone/pull/31848).
 
 Projected correlated EXISTS with nullable composite keys can scan a duplicate-heavy witness relation once for every outer row. Explicit DISTINCT can reduce that work, but adds an aggregation and its own high-distinct-cardinality cost. The existing planner already identifies predicates whose evaluation can safely move to hash keys and consumers that need only Boolean existence. Preserve that information through compilation and reuse the existing membership hash table.
 
