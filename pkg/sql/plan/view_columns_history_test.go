@@ -38,6 +38,18 @@ func (c *historicalColumnsContext) Resolve(db, table string, snapshot *Snapshot)
 	return c.resolve(db, table, snapshot)
 }
 
+// preChangeCurrentColumnsDDL reproduces the undecorated current template a
+// pre-change binary persists as information_schema.COLUMNS: the V109 lineage
+// plus the MEDIUMINT DATA_TYPE arm. The sysview package pins this exact
+// construction byte-identical to its frozen pass-through identity and to the
+// base-era derivation of the current template
+// (pkg/util/sysview/view_columns_history_test.go).
+func preChangeCurrentColumnsDDL() string {
+	const v109DataType = "upper(mo_show_visible_bin(mc.atttyp,2)) = 'BOOL' then 'TINYINT' "
+	const v110DataType = v109DataType + "when upper(mo_show_visible_bin(mc.atttyp,3)) like 'MEDIUMINT%' then 'MEDIUMINT' "
+	return strings.ReplaceAll(sysview.InformationSchemaColumnsV109DDL(), v109DataType, v110DataType)
+}
+
 func TestHistoricalViewColumnsSQL(t *testing.T) {
 	legacy := sysview.InformationSchemaColumnsV58DDL()
 	replacement := strings.Replace(sysview.InformationSchemaColumnsDDL, "CREATE VIEW ", "CREATE OR REPLACE VIEW ", 1)
@@ -67,6 +79,9 @@ func TestHistoricalViewColumnsSQL(t *testing.T) {
 		{name: "current v110 gate adapts v109 template", current: sysview.InformationSchemaColumnsDDL, definition: sysview.InformationSchemaColumnsV109DDL(), wantResolve: true, wantAdapt: true},
 		{name: "current v110 gate normalizes lowercase v109 template", current: sysview.InformationSchemaColumnsDDL, definition: strings.Replace(sysview.InformationSchemaColumnsV109DDL(), "information_schema.COLUMNS", "information_schema.columns", 1), wantResolve: true, wantAdapt: true},
 		{name: "current v110 gate rejects modified v109 template", current: sysview.InformationSchemaColumnsDDL, definition: sysview.InformationSchemaColumnsV109DDL() + " ", wantResolve: true, wantError: true},
+		{name: "current v4_0_18 gate adapts pre-change current template", current: sysview.InformationSchemaColumnsDDL, definition: preChangeCurrentColumnsDDL(), wantResolve: true, wantAdapt: true},
+		{name: "current v4_0_18 gate normalizes lowercase pre-change template", current: sysview.InformationSchemaColumnsDDL, definition: strings.Replace(preChangeCurrentColumnsDDL(), "information_schema.COLUMNS", "information_schema.columns", 1), wantResolve: true, wantAdapt: true},
+		{name: "current v4_0_18 gate rejects modified pre-change template", current: sysview.InformationSchemaColumnsDDL, definition: preChangeCurrentColumnsDDL() + " ", wantResolve: true, wantError: true},
 		{name: "pre-migration gate keeps v109 template unchanged", current: legacy, definition: sysview.InformationSchemaColumnsV109DDL(), wantResolve: true},
 		{name: "after migration", current: sysview.InformationSchemaColumnsDDL, wantResolve: true, wantAdapt: true},
 		{name: "after identity-preserving migration", current: replacement, wantResolve: true, wantAdapt: true},

@@ -237,7 +237,7 @@ func (mc *oneBatchMemoryCache) setSuitableDataAreaToVector(
 			if !mc.buffers[i].CanAttachTo(vec, firstKind) {
 				continue
 			}
-			if difference := mc.buffers[i].Capacity() - first; difference > 0 {
+			if difference := mc.buffers[i].Capacity() - first; difference >= 0 {
 				if difference < suitDifference {
 					suitIdx = i
 					suitDifference = difference
@@ -262,7 +262,7 @@ func (mc *oneBatchMemoryCache) setSuitableDataAreaToVector(
 			if !mc.buffers[i].CanAttachTo(vec, secondKind) {
 				continue
 			}
-			if difference := mc.buffers[i].Capacity() - second; difference > 0 {
+			if difference := mc.buffers[i].Capacity() - second; difference >= 0 {
 				if difference < suitDifference {
 					suitIdx = i
 					suitDifference = difference

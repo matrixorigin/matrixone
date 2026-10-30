@@ -61,6 +61,11 @@ type TargetColumn struct {
 	AttrName string
 	// SetValues carries logical SET metadata separately from physical uint64.
 	SetValues string
+	// TextStage marks the LOAD attributed-DECIMAL text staging contract: the
+	// target is a scan-owned staging varchar and eligible scalar sources
+	// materialize rendered text instead of rejecting the decimal-to-VARCHAR
+	// conversion. Unset targets keep the exact LOAD type policy.
+	TextStage bool
 }
 
 type conversionKind uint8
@@ -76,6 +81,7 @@ const (
 	conversionMaterializeWiden
 	conversionMaterializeTime
 	conversionMaterializeNull
+	conversionMaterializeText
 )
 
 type setBitmapConstraint struct {
@@ -180,7 +186,7 @@ func BindLoad(
 		}
 		used[sourceIndex] = true
 
-		kind, err := selectLoadConversion(schema.Field(sourceIndex).Type, target.Type)
+		kind, err := selectLoadConversion(schema.Field(sourceIndex).Type, target.Type, target.TextStage)
 		if err != nil {
 			return nil, moerr.NewNotSupportedf(ctx, "Arrow field %q (%s) to MatrixOne column %q (%s): %v",
 				schema.Field(sourceIndex).Name, schema.Field(sourceIndex).Type, target.Name, target.Type, err)
@@ -401,6 +407,7 @@ func planFingerprint(plan *Plan, mode MatchMode) [sha256.Size]byte {
 		writeFingerprintUint64(h, uint64(uint32(column.target.Type.Size)))
 		writeFingerprintUint64(h, uint64(uint32(column.target.Type.Width)))
 		writeFingerprintUint64(h, uint64(uint32(column.target.Type.Scale)))
+		writeFingerprintBool(h, column.target.TextStage)
 		writeFingerprintUint64(h, uint64(column.kind))
 	}
 	var fingerprint [sha256.Size]byte
@@ -440,7 +447,7 @@ func fieldIndicesFold(schema *arrow.Schema, name string) []int {
 // selectLoadConversion is intentionally private: its result is an execution
 // kernel choice, not a reusable Arrow ABI declaration. Consumers with an
 // exact protocol must first validate their own versioned logical descriptor.
-func selectLoadConversion(source arrow.DataType, target types.Type) (conversionKind, error) {
+func selectLoadConversion(source arrow.DataType, target types.Type, textStage bool) (conversionKind, error) {
 	if source.ID() == arrow.DICTIONARY {
 		dictionary, ok := source.(*arrow.DictionaryType)
 		if !ok || dictionary.IndexType == nil || dictionary.ValueType == nil {
@@ -455,8 +462,16 @@ func selectLoadConversion(source arrow.DataType, target types.Type) (conversionK
 		if dictionary.ValueType.ID() == arrow.DICTIONARY {
 			return 0, moerr.NewInvalidInputNoCtx("nested Arrow dictionaries are not supported")
 		}
-		if _, err := selectLoadConversion(dictionary.ValueType, target); err != nil {
+		valueKind, err := selectLoadConversion(dictionary.ValueType, target, textStage)
+		if err != nil {
 			return 0, err
+		}
+		if textStage && valueKind != conversionBorrowVarlen && valueKind != conversionMaterializeNull &&
+			valueKind != conversionMaterializeText {
+			// Staged text under a dictionary encoding supports the borrowed
+			// string path and the rendered decimal-text path; every other
+			// non-string value type keeps the existing rejection.
+			return 0, moerr.NewInvalidInputNoCtx("no exact long-term conversion")
 		}
 		return conversionMaterializeDictionary, nil
 	}
@@ -495,6 +510,13 @@ func selectLoadConversion(source arrow.DataType, target types.Type) (conversionK
 		}
 	case arrow.NULL:
 		return conversionMaterializeNull, nil
+	}
+	if textStage && target.Oid == types.T_varchar && isArrowStageTextSource(source.ID()) {
+		// The LOAD attributed-DECIMAL staging contract renders eligible scalar
+		// sources to text into the scan-owned staging varchar; admission
+		// classifies the rendered text downstream. Unmarked targets keep the
+		// existing rejection of these source-to-varchar pairs.
+		return conversionMaterializeText, nil
 	}
 	if isCheckedWidening(source.ID(), target.Oid) {
 		return conversionMaterializeWiden, nil

@@ -154,7 +154,7 @@ class IVFVectorIndex(Index):
         self.op_type = op_type
 
         # Store column name for later use
-        self._column_name = str(column) if not isinstance(column, str) else column
+        self._column_name = column if isinstance(column, str) else column.name
 
         # Call parent constructor first
         super().__init__(name, column, **kwargs)
@@ -166,11 +166,7 @@ class IVFVectorIndex(Index):
 
     def _create_index_sql(self, table_name: str) -> str:
         """Generate the CREATE INDEX SQL for IVFFLAT vector index."""
-        column_name = self._column_name
-        sql_parts = [f"CREATE INDEX {self.name} USING {self.index_type} ON {table_name}({column_name})"]
-        sql_parts.append(f"LISTS {self.lists}")
-        sql_parts.append(f"op_type '{self.op_type}'")
-        return " ".join(sql_parts)
+        return _standalone_vector_index_sql(self, table_name)
 
     def create_sql(self, table_name: str) -> str:
         """Generate CREATE INDEX SQL for the given table name."""
@@ -420,7 +416,7 @@ class HnswVectorIndex(Index):
         self.op_type = op_type
 
         # Store column name for later use
-        self._column_name = str(column) if not isinstance(column, str) else column
+        self._column_name = column if isinstance(column, str) else column.name
 
         # Call parent constructor first
         super().__init__(name, column, **kwargs)
@@ -432,13 +428,7 @@ class HnswVectorIndex(Index):
 
     def _create_index_sql(self, table_name: str) -> str:
         """Generate the CREATE INDEX SQL for HNSW vector index."""
-        column_name = self._column_name
-        sql_parts = [f"CREATE INDEX {self.name} USING {self.index_type} ON {table_name}({column_name})"]
-        sql_parts.append(f"M {self.m}")
-        sql_parts.append(f"EF_CONSTRUCTION {self.ef_construction}")
-        sql_parts.append(f"EF_SEARCH {self.ef_search}")
-        sql_parts.append(f"op_type '{self.op_type}'")
-        return " ".join(sql_parts)
+        return _standalone_vector_index_sql(self, table_name)
 
     def create_sql(self, table_name: str) -> str:
         """Generate CREATE INDEX SQL for the given table name."""
@@ -666,7 +656,7 @@ class VectorIndex(Index):
         self.ef_search = ef_search
 
         # Store column name for later use
-        self._column_name = str(column) if not isinstance(column, str) else column
+        self._column_name = column if isinstance(column, str) else column.name
 
         # Call parent constructor first
         super().__init__(name, column, **kwargs)
@@ -680,26 +670,7 @@ class VectorIndex(Index):
         """Generate the CREATE INDEX SQL for vector index."""
         # For simplicity, we'll use the column name passed during initialization
         # This should be stored as a string in most cases
-        column_name = self._column_name
-
-        sql_parts = [f"CREATE INDEX {self.name} USING {self.index_type} ON {table_name}({column_name})"]
-
-        # Add parameters based on index type
-        if self.index_type == VectorIndexType.IVFFLAT and self.lists is not None:
-            sql_parts.append(f"lists = {self.lists}")
-        elif self.index_type == VectorIndexType.HNSW:
-            # Add HNSW parameters
-            if self.m is not None:
-                sql_parts.append(f"M {self.m}")
-            if self.ef_construction is not None:
-                sql_parts.append(f"EF_CONSTRUCTION {self.ef_construction}")
-            if self.ef_search is not None:
-                sql_parts.append(f"EF_SEARCH {self.ef_search}")
-
-        # Add operation type
-        sql_parts.append(f"op_type '{self.op_type}'")
-
-        return " ".join(sql_parts)
+        return _standalone_vector_index_sql(self, table_name)
 
     def create_sql(self, table_name: str) -> str:
         """Generate CREATE INDEX SQL for the given table name."""
@@ -841,110 +812,40 @@ class CreateVectorIndex(DDLElement):
 @compiles(CreateVectorIndex)
 def compile_create_vector_index(element: CreateVectorIndex, compiler, **kw):
     """Compile CREATE VECTOR INDEX statement."""
-    index = element.index
+    from .fulltext_index import FulltextIndex, compile_create_index
 
-    # Use the stored column name
-    column_name = index._column_name
-
-    sql_parts = ["CREATE INDEX"]
-
-    if element.if_not_exists:
-        sql_parts.append("IF NOT EXISTS")
-
-    sql_parts.append(f"{index.name} USING {index.index_type} ON {index.table.name}({column_name})")
-
-    # Add parameters based on index type
-    if index.index_type == VectorIndexType.IVFFLAT and index.lists is not None:
-        sql_parts.append(f"lists = {index.lists}")
-    elif index.index_type == VectorIndexType.HNSW:
-        # Add HNSW parameters
-        if index.m is not None:
-            sql_parts.append(f"M {index.m}")
-        if index.ef_construction is not None:
-            sql_parts.append(f"EF_CONSTRUCTION {index.ef_construction}")
-        if index.ef_search is not None:
-            sql_parts.append(f"EF_SEARCH {index.ef_search}")
-
-    # Add operation type
-    sql_parts.append(f"op_type '{index.op_type}'")
-
-    return " ".join(sql_parts)
+    index = getattr(element, 'index', None) or element.element
+    if isinstance(index, FulltextIndex):
+        return compile_create_index(element, compiler, **kw)
+    if not isinstance(index, (VectorIndex, IVFVectorIndex, HnswVectorIndex)):
+        return compiler.visit_create_index(element, **kw)
+    return _compile_vector_index(index, compiler, element.if_not_exists)
 
 
 @compiles(SQLAlchemyCreateIndex, "matrixone")
 def compile_create_vector_index_matrixone(element: SQLAlchemyCreateIndex, compiler, **kw):
     """Compile CREATE INDEX for VectorIndex on MatrixOne dialect."""
-    index = element.element
+    from .fulltext_index import FulltextIndex, compile_create_index
 
-    # Check if this is a VectorIndex
-    if isinstance(index, VectorIndex):
-        # Use the stored column name
-        column_name = index._column_name
-
-        sql_parts = ["CREATE INDEX"]
-
-        if element.if_not_exists:
-            sql_parts.append("IF NOT EXISTS")
-
-        sql_parts.append(f"{index.name} USING {index.index_type} ON {index.table.name}({column_name})")
-
-        # Add parameters based on index type
-        if index.index_type == VectorIndexType.IVFFLAT and index.lists is not None:
-            sql_parts.append(f"lists = {index.lists}")
-        elif index.index_type == VectorIndexType.HNSW:
-            # Add HNSW parameters
-            if index.m is not None:
-                sql_parts.append(f"M {index.m}")
-            if index.ef_construction is not None:
-                sql_parts.append(f"EF_CONSTRUCTION {index.ef_construction}")
-            if index.ef_search is not None:
-                sql_parts.append(f"EF_SEARCH {index.ef_search}")
-
-        # Add operation type
-        sql_parts.append(f"op_type '{index.op_type}'")
-
-        return " ".join(sql_parts)
-    else:
-        # Fall back to default compilation
+    index = getattr(element, 'index', None) or element.element
+    if isinstance(index, FulltextIndex):
+        return compile_create_index(element, compiler, **kw)
+    if not isinstance(index, (VectorIndex, IVFVectorIndex, HnswVectorIndex)):
         return compiler.visit_create_index(element, **kw)
+    return _compile_vector_index(index, compiler, element.if_not_exists)
 
 
 @compiles(SQLAlchemyCreateIndex, "mysql")
 def compile_create_vector_index_mysql(element: SQLAlchemyCreateIndex, compiler, **kw):
     """Compile CREATE INDEX for VectorIndex on MySQL dialect."""
-    index = element.element
+    from .fulltext_index import FulltextIndex, compile_create_index
 
-    # Check if this is a VectorIndex
-    if isinstance(index, VectorIndex):
-        # Use the stored column name
-        column_name = index._column_name
-
-        sql_parts = ["CREATE INDEX"]
-
-        if element.if_not_exists:
-            sql_parts.append("IF NOT EXISTS")
-
-        sql_parts.append(f"{index.name} USING {index.index_type} ON {index.table.name}({column_name})")
-
-        # Add parameters based on index type
-        if index.index_type == VectorIndexType.IVFFLAT and index.lists is not None:
-            sql_parts.append(f"lists = {index.lists}")
-        elif index.index_type == VectorIndexType.HNSW:
-            # Add HNSW parameters
-            if index.m is not None:
-                sql_parts.append(f"M {index.m}")
-            if index.ef_construction is not None:
-                sql_parts.append(f"EF_CONSTRUCTION {index.ef_construction}")
-            if index.ef_search is not None:
-                sql_parts.append(f"EF_SEARCH {index.ef_search}")
-
-        # Add operation type
-        sql_parts.append(f"op_type '{index.op_type}'")
-
-        return " ".join(sql_parts)
-    else:
-        # Fall back to default MySQL index compilation
+    index = getattr(element, 'index', None) or element.element
+    if isinstance(index, FulltextIndex):
+        return compile_create_index(element, compiler, **kw)
+    if not isinstance(index, (VectorIndex, IVFVectorIndex, HnswVectorIndex)):
         return compiler.visit_create_index(element, **kw)
+    return _compile_vector_index(index, compiler, element.if_not_exists)
 
 
 def create_vector_index(
@@ -1345,3 +1246,44 @@ def vector_index_builder(column: Union[str, Column]) -> VectorIndexBuilder:
         .build()
     """
     return VectorIndexBuilder(column)
+
+
+def _standalone_vector_index_sql(index, table_name):
+    from .._sql_literals import identifier_parts
+    from .dialect import MatrixOneDialect
+
+    preparer = MatrixOneDialect(paramstyle='qmark').identifier_preparer
+    table_sql = '.'.join(preparer.quote(part) for part in identifier_parts(table_name, qualified=True))
+    return _render_vector_index(index, preparer, table_sql)
+
+
+def _compile_vector_index(index, compiler, if_not_exists=False):
+    if index.table is None:
+        raise ValueError('Vector index must be bound to a table')
+    return _render_vector_index(index, compiler.preparer, compiler.preparer.format_table(index.table), if_not_exists)
+
+
+def _render_vector_index(index, preparer, table_sql, if_not_exists=False):
+    parts = ['CREATE INDEX']
+    if if_not_exists:
+        parts.append('IF NOT EXISTS')
+    parts.append(
+        '%s USING %s ON %s(%s)'
+        % (
+            preparer.quote(index.name),
+            index.index_type,
+            table_sql,
+            preparer.quote(index._column_name),
+        )
+    )
+    if index.index_type == VectorIndexType.IVFFLAT and index.lists is not None:
+        parts.append('lists = %s' % index.lists)
+    elif index.index_type == VectorIndexType.HNSW:
+        for attribute, keyword in [('m', 'M'), ('ef_construction', 'EF_CONSTRUCTION'), ('ef_search', 'EF_SEARCH')]:
+            value = getattr(index, attribute, None)
+            if value is not None:
+                parts.append('%s %s' % (keyword, value))
+    from .._sql_literals import sql_literal
+
+    parts.append('op_type ' + sql_literal(index.op_type))
+    return ' '.join(parts)

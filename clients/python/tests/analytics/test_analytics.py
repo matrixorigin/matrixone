@@ -474,11 +474,13 @@ def test_s3_compatible_external_query(analytics, tmp_path):
     s3 = boto3.client(
         "s3", endpoint_url=endpoint, aws_access_key_id="test", aws_secret_access_key="test", region_name="us-east-1"
     )
-    bucket = "mo-analytics-test"
-    s3.create_bucket(Bucket=bucket)
+    from contextlib import ExitStack
+    import uuid
+
+    bucket = "mo-analytics-" + uuid.uuid4().hex
+    stage = "analytics_s3_" + uuid.uuid4().hex
     path = tmp_path / "remote.parquet"
     pq.write_table(pa.table({"id": [1, 2], "amount": [2.5, 3.5]}), path)
-    s3.put_object(Bucket=bucket, Key="remote.parquet", Body=path.read_bytes())
     arrow_fs = fs.S3FileSystem(
         access_key="test",
         secret_key="test",
@@ -487,9 +489,13 @@ def test_s3_compatible_external_query(analytics, tmp_path):
         scheme="http",
         force_virtual_addressing=False,
     )
-    try:
+    with ExitStack() as cleanup:
+        s3.create_bucket(Bucket=bucket)
+        cleanup.callback(s3.delete_bucket, Bucket=bucket)
+        s3.put_object(Bucket=bucket, Key="remote.parquet", Body=path.read_bytes())
+        cleanup.callback(s3.delete_object, Bucket=bucket, Key="remote.parquet")
         analytics.client.stage.create(
-            "analytics_s3",
+            stage,
             "s3://" + bucket + "/",
             credentials={
                 "AWS_KEY_ID": "test",
@@ -499,15 +505,12 @@ def test_s3_compatible_external_query(analytics, tmp_path):
                 "PROVIDER": "minio",
             },
         )
+        cleanup.callback(analytics.client.stage.drop, stage, if_exists=True)
         with analytics.read_parquet(
-            [bucket + "/remote.parquet"], filesystem=arrow_fs, server_paths=["stage://analytics_s3/remote.parquet"]
+            [bucket + "/remote.parquet"], filesystem=arrow_fs, server_paths=["stage://" + stage + "/remote.parquet"]
         ) as relation:
             result = _query(analytics, "SELECT count(*) AS n, sum(amount) AS total FROM " + relation.sql + " AS f")
             assert result.to_pylist() == [{"n": 2, "total": 6.0}]
-    finally:
-        analytics.client.execute("DROP STAGE IF EXISTS analytics_s3")
-        s3.delete_object(Bucket=bucket, Key="remote.parquet")
-        s3.delete_bucket(Bucket=bucket)
 
 
 def test_parquet_scalar_types_and_large_text(analytics, tmp_path):
