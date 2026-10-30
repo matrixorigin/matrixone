@@ -39,7 +39,7 @@ func TestMigrationPrincipalGuard(t *testing.T) {
 		{"reused-name", &TenantInfo{TenantID: 7, UserID: 9, User: "a"}, &query.MigrateSessionPrincipal{AccountID: 7, UserID: 8}, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			ses := &Session{}
+			ses := newTestSession(t, gomock.NewController(t))
 			ses.SetTenantInfo(tc.tenant)
 			req := &query.MigrateConnToRequest{Principal: tc.principal, VerifyPrincipalOnly: true, LastInsertID: 99, FoundRows: 99, DB: "must_not_import"}
 			err := Migrate(context.Background(), ses, req)

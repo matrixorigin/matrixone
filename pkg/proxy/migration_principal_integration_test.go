@@ -99,7 +99,13 @@ func TestRenameUserProxyMigrationPrincipal(t *testing.T) {
 		}
 		checkA()
 		require.NoError(t, old.QueryRowContext(ctx, "select connection_id()").Scan(&connID))
-		before, after, err := proxy.MigrationTestTransfer(ctx, server, connID)
+		canceled, cancelTransfer := context.WithCancel(ctx)
+		cancelTransfer()
+		before, after, err := proxy.MigrationTestTransfer(canceled, server, connID)
+		require.Error(t, err)
+		require.Equal(t, before, after)
+		checkA()
+		before, after, err = proxy.MigrationTestTransfer(ctx, server, connID)
 		require.NoError(t, err)
 		require.NotEqual(t, before, after)
 		checkA()
@@ -116,5 +122,27 @@ func TestRenameUserProxyMigrationPrincipal(t *testing.T) {
 		require.NoError(t, fresh.QueryRowContext(ctx, "select current_user_id()").Scan(&userID))
 		require.Equal(t, bID, userID)
 		require.Error(t, fresh.QueryRowContext(ctx, "select v from migration_identity.a").Scan(&value))
+		var freshID uint32
+		require.NoError(t, fresh.QueryRowContext(ctx, "select connection_id()").Scan(&freshID))
+		checkB := func() {
+			t.Helper()
+			require.NoError(t, fresh.QueryRowContext(ctx, "select v from migration_identity.b").Scan(&value))
+			require.Equal(t, 9, value)
+			require.NoError(t, fresh.QueryRowContext(ctx, "select current_user_id()").Scan(&userID))
+			require.Equal(t, bID, userID)
+			require.Error(t, fresh.QueryRowContext(ctx, "select v from migration_identity.a").Scan(&value))
+		}
+		// These controls fail at authentication, not at the same-password ID guard.
+		exec("rename user migration_a to migration_b")
+		before, after, err = proxy.MigrationTestTransfer(ctx, server, freshID)
+		require.Error(t, err)
+		require.Equal(t, before, after)
+		checkB()
+		exec("create user migration_a identified by 'different-password'")
+		before, after, err = proxy.MigrationTestTransfer(ctx, server, freshID)
+		require.Error(t, err)
+		require.Equal(t, before, after)
+		checkB()
+
 	})
 }
