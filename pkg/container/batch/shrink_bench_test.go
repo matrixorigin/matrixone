@@ -26,7 +26,7 @@ import (
 // The control uses unique columns and applies the same selection directly,
 // without Batch's duplicate-pointer and preparation checks.
 func BenchmarkShrinkOwnedColumns(b *testing.B) {
-	for _, columns := range []int{8, 128, 1024} {
+	for _, columns := range []int{8, 128, 1024, 1025, 2048} {
 		for _, direct := range []bool{false, true} {
 			b.Run(fmt.Sprintf("columns=%d/direct=%t", columns, direct), func(b *testing.B) {
 				mp := mpool.MustNewZero()
