@@ -1048,14 +1048,33 @@ func TestHAKeeperBootstrapErrorUsesConfiguredCadence(t *testing.T) {
 		projected, err := s.readCheckerState(ctx, &hakeeper.StateQuery{StateOnly: true})
 		require.NoError(t, err)
 		require.Equal(t, &pb.CheckerState{State: actual.State}, projected)
-		// A canceled authoritative read must still fail in either mode.
-		canceled, stop := context.WithTimeout(context.Background(), testIOTimeout)
+		// Cancellation before admission must reject both full and projected reads.
+		// Keep this deadline valid independently of the earlier heartbeat/read
+		// budget, including a pause before either cancellation assertion.
+		cancelDeadline := time.Now().Add(24 * time.Hour)
+		if deadline, ok := t.Deadline(); ok {
+			cancelDeadline = deadline.Add(time.Minute)
+		}
+		canceled, stop := context.WithDeadline(context.Background(), cancelDeadline)
+		defer stop()
 		stop()
-		_, fullErr := s.getCheckerStateWithContext(canceled)
-		projected, projectedErr := s.readCheckerState(canceled, &hakeeper.StateQuery{StateOnly: true})
-		require.Error(t, fullErr)
-		require.ErrorIs(t, projectedErr, fullErr)
-		require.Equal(t, &pb.CheckerState{}, projected)
+		withoutDeadline, cancelWithoutDeadline := context.WithCancel(context.Background())
+		cancelWithoutDeadline()
+		expired, expire := context.WithDeadline(ctx, time.Now().Add(-time.Second))
+		defer expire()
+		for _, query := range []*hakeeper.StateQuery{{}, {StateOnly: true}} {
+			state, readErr := s.readCheckerState(canceled, query)
+			require.ErrorIs(t, readErr, dragonboat.ErrCanceled)
+			require.Equal(t, &pb.CheckerState{}, state)
+			state, readErr = s.readCheckerState(withoutDeadline, query)
+			require.ErrorIs(t, readErr, dragonboat.ErrDeadlineNotSet)
+			require.Equal(t, &pb.CheckerState{}, state)
+			// Deadline validation precedes Raft admission and is deterministic.
+			state, readErr = s.readCheckerState(expired, query)
+			require.ErrorIs(t, readErr, dragonboat.ErrInvalidDeadline)
+			require.Equal(t, &pb.CheckerState{}, state)
+		}
+
 	})
 }
 

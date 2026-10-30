@@ -1002,6 +1002,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 		}
 		relList, colList := getRelColList(t.ResultCols)
 		in.HashJoin = &pipeline.HashJoin{
+			ExistenceOnly:          t.ExistenceOnly,
 			JoinType:               t.JoinType,
 			IsRightJoin:            t.IsRightJoin,
 			HashOnPk:               t.HashOnPK,
@@ -1649,6 +1650,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 	case vm.HashJoin:
 		t := opr.GetHashJoin()
 		arg := hashjoin.NewArgument()
+		arg.ExistenceOnly = t.ExistenceOnly
 		arg.JoinType = t.JoinType
 		arg.IsRightJoin = t.IsRightJoin
 		arg.ResultCols = convertToResultPos(t.RelList, t.ColList)
