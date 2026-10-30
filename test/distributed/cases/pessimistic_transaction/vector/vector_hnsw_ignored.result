@@ -228,8 +228,8 @@ pi  ¦  2  ¦  20345  ¦  vector element is out of the range the index stores  �
 pi  ¦  3  ¦  20345  ¦  vector element is out of the range the index stores  ¦  2026-10-30 10:59:13
 show index status from hnsw_ignored.p;
 ➤ Key_name[12,65535,0]  ¦  Table[12,65535,0]  ¦  State[12,7,0]  ¦  Error_message[12,65535,0]  ¦  Ignored_rows[-5,64,0]  ¦  Max_bad_records[-5,64,0]  ¦  Synced_at[93,19,0]  𝄀
-pi  ¦  %!%p0%!%p  ¦  running  ¦  null  ¦  1  ¦  1  ¦  2026-10-30 11:00:11  𝄀
-pi  ¦  %!%p1%!%p  ¦  running  ¦  null  ¦  1  ¦  1  ¦  2026-10-30 11:00:11
+pi  ¦  p0  ¦  running  ¦  null  ¦  1  ¦  1  ¦  2026-10-30 11:00:11  𝄀
+pi  ¦  p1  ¦  running  ¦  null  ¦  1  ¦  1  ¦  2026-10-30 11:00:11
 create table e(a int primary key, b int, key kb(b));
 show index ignored from e;
 ➤ Key_name[12,65535,0]  ¦  Primary_key[12,65535,0]  ¦  Error_code[4,32,0]  ¦  Reason[12,65535,0]  ¦  Ignored_at[93,19,0]

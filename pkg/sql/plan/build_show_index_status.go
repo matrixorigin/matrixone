@@ -63,7 +63,7 @@ func buildShowIndexStatus(stmt *tree.ShowIndexStatus, ctx CompilerContext) (*Pla
 	if tableDef == nil {
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
 	}
-	defs, err := tableWithPartitions(ctx, dbName, tableDef)
+	defs, names, err := tableWithPartitions(ctx, dbName, tableDef)
 	if err != nil {
 		return nil, err
 	}
@@ -72,7 +72,7 @@ func buildShowIndexStatus(stmt *tree.ShowIndexStatus, ctx CompilerContext) (*Pla
 		return nil, err
 	}
 
-	sql, ignoredTables, err := showIndexStatusSql(dbName, defs, jobs)
+	sql, ignoredTables, err := showIndexStatusSql(dbName, defs, names, jobs)
 	if err != nil {
 		return nil, err
 	}
@@ -93,11 +93,12 @@ func buildShowIndexStatus(stmt *tree.ShowIndexStatus, ctx CompilerContext) (*Pla
 }
 
 // showIndexStatusSql returns the rows of SHOW INDEX STATUS of the indexes of the tables defs of
-// database dbName, whose sync jobs are jobs, and the ignored tables the rows read.
-func showIndexStatusSql(dbName string, defs []*TableDef, jobs map[indexJobKey]indexJob) (string, map[string]struct{}, error) {
+// database dbName, named tableNames, whose sync jobs are jobs, and the ignored tables the rows
+// read.
+func showIndexStatusSql(dbName string, defs []*TableDef, tableNames []string, jobs map[indexJobKey]indexJob) (string, map[string]struct{}, error) {
 	var selects []string
 	ignoredTables := make(map[string]struct{})
-	for _, def := range defs {
+	for d, def := range defs {
 		var names []string
 		ignored := make(map[string]*plan.IndexDef)
 		for _, idx := range def.Indexes {
@@ -137,7 +138,7 @@ func showIndexStatusSql(dbName string, defs []*TableDef, jobs map[indexJobKey]in
 			}
 			selects = append(selects, fmt.Sprintf(
 				"SELECT CAST(%s AS VARCHAR) AS `Key_name`, CAST(%s AS VARCHAR) AS `Table`, %s AS `State`, %s AS `Error_message`, %s AS `Ignored_rows`, %s AS `Max_bad_records`, %s AS `Synced_at`",
-				sqlquote.String(name), sqlquote.String(def.Name), state, errMsg, ignoredRows, maxBadRecords, syncedAt))
+				sqlquote.String(name), sqlquote.String(tableNames[d]), state, errMsg, ignoredRows, maxBadRecords, syncedAt))
 		}
 	}
 	sql := showIndexStatusEmpty
