@@ -42,8 +42,9 @@ returns success without mutation. Rejection occurs before the no-op. Transaction
 admission accepts the statement without adding it to the implicit-commit class.
 Prepared statements are rejected before publication so EXECUTE cannot bypass
 this authorization. There are no new resources, caches, persistent data,
-background work, retries, cross-node messages or migrations. Failure or
-cancellation does not change any state; no shutdown-upgrade migration is needed.
+background work, retries, cross-node messages or migrations. The no-op adds no state mutation on failure or cancellation. Existing error
+handling, including `mo_rollback_txn_on_error`, still governs transaction
+rollback; no shutdown-upgrade migration is needed.
 
 ## Validation
 
