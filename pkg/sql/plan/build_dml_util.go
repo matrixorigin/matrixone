@@ -2267,7 +2267,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 						if err != nil {
 							return err
 						}
-						assertExpr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "assert", []*Expr{isEmptyExpr, errExpr})
+						assertExpr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "assert", []*Expr{isEmptyExpr, errExpr, makePlan2StringConstExprWithType(foreignKeyRowIsReferencedAssert)})
 						if err != nil {
 							return err
 						}
@@ -6124,6 +6124,13 @@ func GetSqlForUpdateFkReferencedIndex(db, table, constraintName, referencedIndex
 		quoteSQLStringLiteral(table),
 		quoteSQLStringLiteral(constraintName),
 	)
+}
+
+// QuoteSQLStringLiteral exposes the literal quoting used by the catalog
+// binding-update statements so executor-side internal SQL escapes values
+// exactly the way the writer did.
+func QuoteSQLStringLiteral(s string) string {
+	return quoteSQLStringLiteral(s)
 }
 
 // getSqlForDeleteTable returns the delete sql that deletes all the fk relationships from mo_foreign_keys

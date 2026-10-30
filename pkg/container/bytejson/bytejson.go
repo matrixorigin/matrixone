@@ -16,6 +16,7 @@ package bytejson
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -40,6 +41,16 @@ func (bj ByteJson) String() string {
 }
 
 func (bj ByteJson) Unquote() (string, error) {
+	return bj.unquote(false)
+}
+
+// UnquoteWithLegacyFloat reconstructs pre-MySQL-format folded catalog values.
+// Ordinary SQL and binary storage must continue using Unquote and Marshal.
+func (bj ByteJson) UnquoteWithLegacyFloat() (string, error) {
+	return bj.unquote(true)
+}
+
+func (bj ByteJson) unquote(legacyFloat bool) (string, error) {
 	if bj.Type == TpCodeBlob {
 		if _, encoded, ok := mysqlOpaqueValue(bj.GetString()); ok {
 			return string(appendMySQLOpaqueVisible(nil, bj.GetString(), encoded, false)), nil
@@ -61,7 +72,8 @@ func (bj ByteJson) Unquote() (string, error) {
 	if bj.Type != TpCodeDate &&
 		bj.Type != TpCodeTime &&
 		bj.Type != TpCodeDatetime {
-		return bj.String(), nil
+		data, _ := bj.marshalJSON(legacyFloat)
+		return string(data), nil
 	}
 	str := bj.GetString()
 	if len(str) < 2 || (str[0] != '"' || str[len(str)-1] != '"') {
@@ -100,8 +112,18 @@ func (bj ByteJson) Unquote() (string, error) {
 
 // MarshalJSON transform bytejson to []byte,for visible
 func (bj ByteJson) MarshalJSON() ([]byte, error) {
+	return bj.marshalJSON(false)
+}
+
+// MarshalJSONWithLegacyFloat is a proof-only rendering of historical catalog
+// constants. It preserves predecessor float spelling at every JSON depth.
+func (bj ByteJson) MarshalJSONWithLegacyFloat() ([]byte, error) {
+	return bj.marshalJSON(true)
+}
+
+func (bj ByteJson) marshalJSON(legacyFloat bool) ([]byte, error) {
 	ret := make([]byte, 0, len(bj.Data)*3/2)
-	return bj.to(ret)
+	return bj.toWithFloatFormat(ret, legacyFloat)
 }
 
 // Marshal transform bytejson to []byte,for storage
@@ -140,7 +162,11 @@ func (bj *ByteJson) Unmarshal(buf []byte) error {
 
 // UnmarshalJSON transform visible []byte to bytejson
 func (bj *ByteJson) UnmarshalJSON(data []byte) error {
-	bs, err := ParseJsonByte(data)
+	return bj.unmarshalJSONWithContext(defaultParseContext, data)
+}
+
+func (bj *ByteJson) unmarshalJSONWithContext(ctx context.Context, data []byte) error {
+	bs, err := parseJsonByteWithContext(ctx, data, 0)
 	if err != nil {
 		return err
 	}
@@ -191,13 +217,13 @@ func (bj ByteJson) GetString() []byte {
 	return bj.Data[length : length+num]
 }
 
-func (bj ByteJson) to(buf []byte) ([]byte, error) {
+func (bj ByteJson) toWithFloatFormat(buf []byte, legacyFloat bool) ([]byte, error) {
 	var err error
 	switch bj.Type {
 	case TpCodeArray:
-		buf, err = bj.toArray(buf)
+		buf, err = bj.toArray(buf, legacyFloat)
 	case TpCodeObject:
-		buf, err = bj.toObject(buf)
+		buf, err = bj.toObject(buf, legacyFloat)
 	case TpCodeInt64:
 		buf = bj.toInt64(buf)
 	case TpCodeUint64:
@@ -205,7 +231,11 @@ func (bj ByteJson) to(buf []byte) ([]byte, error) {
 	case TpCodeLiteral:
 		buf = bj.toLiteral(buf)
 	case TpCodeFloat64:
-		buf, err = bj.toFloat64(buf)
+		if legacyFloat {
+			buf, err = bj.toFloat64Token(buf)
+		} else {
+			buf, err = bj.toFloat64(buf)
+		}
 	case TpCodeString:
 		buf, err = bj.toString(buf)
 	case TpCodeDecimal:
@@ -242,7 +272,7 @@ func (bj ByteJson) to(buf []byte) ([]byte, error) {
 	return buf, err
 }
 
-func (bj ByteJson) toArray(buf []byte) ([]byte, error) {
+func (bj ByteJson) toArray(buf []byte, legacyFloat bool) ([]byte, error) {
 	cnt := bj.GetElemCnt()
 	buf = append(buf, '[')
 	var err error
@@ -250,7 +280,7 @@ func (bj ByteJson) toArray(buf []byte) ([]byte, error) {
 		if i != 0 {
 			buf = append(buf, ", "...)
 		}
-		buf, err = bj.getArrayElem(i).to(buf)
+		buf, err = bj.getArrayElem(i).toWithFloatFormat(buf, legacyFloat)
 		if err != nil {
 			return nil, err
 		}
@@ -258,7 +288,7 @@ func (bj ByteJson) toArray(buf []byte) ([]byte, error) {
 	return append(buf, ']'), nil
 }
 
-func (bj ByteJson) toObject(buf []byte) ([]byte, error) {
+func (bj ByteJson) toObject(buf []byte, legacyFloat bool) ([]byte, error) {
 	cnt := bj.GetElemCnt()
 	buf = append(buf, '{')
 	for i := 0; i < cnt; i++ {
@@ -271,7 +301,7 @@ func (bj ByteJson) toObject(buf []byte) ([]byte, error) {
 			return nil, err
 		}
 		buf = append(buf, ": "...)
-		buf, err = bj.getObjectVal(i).to(buf)
+		buf, err = bj.getObjectVal(i).toWithFloatFormat(buf, legacyFloat)
 		if err != nil {
 			return nil, err
 		}
@@ -308,15 +338,12 @@ func (bj ByteJson) toFloat64(buf []byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	// https://github.com/golang/go/issues/14135
-	var format byte
-	abs := math.Abs(f)
-	if abs == 0 || 1e-6 <= abs && abs < 1e21 {
-		format = 'f'
-	} else {
-		format = 'e'
+	start := len(buf)
+	buf = util.AppendMySQLFloat(buf, f, 64)
+	// Keep DOUBLE distinguishable from integer JSON numbers when reparsed.
+	if !bytes.ContainsAny(buf[start:], ".e") {
+		buf = append(buf, '.', '0')
 	}
-	buf = strconv.AppendFloat(buf, f, format, -1, 64)
 	return buf, nil
 }
 
@@ -1562,18 +1589,22 @@ func ParseJsonByteFromString(s string) ([]byte, error) {
 }
 
 func ParseJsonByte(data []byte) ([]byte, error) {
-	return parseJsonByte(data, 0)
+	return parseJsonByteWithContext(defaultParseContext, data, 0)
 }
 
 func parseJsonByte(data []byte, maxDepth int) ([]byte, error) {
-	n, err := parseNode(data, maxDepth)
+	return parseJsonByteWithContext(defaultParseContext, data, maxDepth)
+}
+
+func parseJsonByteWithContext(ctx context.Context, data []byte, maxDepth int) ([]byte, error) {
+	n, err := parseNodeWithContext(ctx, data, maxDepth)
 	if err != nil {
 		return nil, err
 	}
 	w := byteJsonWriter{
 		buf: make([]byte, 0, len(data)*2),
 	}
-	_, _, err = w.writeNode(true, n)
+	_, _, err = w.writeNodeWithContext(ctx, true, n)
 	n.Free()
 	if err != nil {
 		return nil, err
@@ -1590,11 +1621,16 @@ func ParseNode(data []byte) (Node, error) {
 }
 
 func parseNode(data []byte, maxDepth int) (Node, error) {
-	p := parser{src: data, maxDepth: maxDepth}
+	return parseNodeWithContext(defaultParseContext, data, maxDepth)
+}
+
+func parseNodeWithContext(ctx context.Context, data []byte, maxDepth int) (Node, error) {
+	p := parser{ctx: ctx, src: data, maxDepth: maxDepth}
 	return p.do()
 }
 
 type parser struct {
+	ctx      context.Context
 	src      []byte
 	stack    []*Group
 	tz       *json2.Tokenizer
@@ -1631,17 +1667,17 @@ func (p *parser) do() (Node, error) {
 			if p.tz.Remaining() == 0 && errors.As(p.tz.Err, &se) {
 				return z, io.ErrUnexpectedEOF
 			}
-			return z, moerr.NewInternalErrorNoCtxf("parse json: %v", p.tz.Err)
+			return z, moerr.NewInternalErrorf(parseErrorContext(p.ctx), "parse json: %v", p.tz.Err)
 		case scanEnd:
 			if p.tz.Next() {
 				p.top.Free()
 				p.top = Node{}
-				return z, moerr.NewInvalidInputNoCtxf("invalid json: %s", p.src)
+				return z, moerr.NewInvalidInputf(parseErrorContext(p.ctx), "invalid json: %s", p.src)
 			}
 			if p.tz.Err != nil {
 				p.top.Free()
 				p.top = Node{}
-				return z, moerr.NewInternalErrorNoCtxf("parse json: %v", p.tz.Err)
+				return z, moerr.NewInternalErrorf(parseErrorContext(p.ctx), "parse json: %v", p.tz.Err)
 			}
 			return p.top, nil
 		}
@@ -1683,7 +1719,7 @@ func (p *parser) stateBeginValue() int {
 	case json2.Null:
 		n = Node{nil}
 	default:
-		p.tz.Err = moerr.NewInvalidInputNoCtx("invalid json: looking for beginning of value")
+		p.tz.Err = moerr.NewInvalidInput(parseErrorContext(p.ctx), "invalid json: looking for beginning of value")
 		return scanError
 	}
 	if p.tz.Depth != 0 {
@@ -1707,7 +1743,7 @@ func (p *parser) stateBeginValueOrEmpty() int {
 
 func (p *parser) stateObjectKey() int {
 	if p.tz.Kind().Class() != json2.String || !p.tz.IsKey {
-		p.tz.Err = moerr.NewInvalidInputNoCtx("invalid json: object key")
+		p.tz.Err = moerr.NewInvalidInput(parseErrorContext(p.ctx), "invalid json: object key")
 		return scanError
 	}
 
@@ -1727,7 +1763,7 @@ func (p *parser) stateObjectKeyOrEmpty() int {
 
 func (p *parser) stateColon() int {
 	if p.tz.Delim != ':' {
-		p.tz.Err = moerr.NewInvalidInputNoCtx("invalid json: after object key")
+		p.tz.Err = moerr.NewInvalidInput(parseErrorContext(p.ctx), "invalid json: after object key")
 		return scanError
 	}
 	p.state = (*parser).stateBeginValue
@@ -1755,7 +1791,7 @@ func (p *parser) stateEndValue() int {
 		return scanContinue
 	}
 
-	p.tz.Err = moerr.NewInvalidInputNoCtx("invalid json: end value")
+	p.tz.Err = moerr.NewInvalidInput(parseErrorContext(p.ctx), "invalid json: end value")
 	return scanError
 }
 
@@ -1866,6 +1902,10 @@ type byteJsonWriter struct {
 }
 
 func (w *byteJsonWriter) writeNode(root bool, node Node) (TpCode, uint32, error) {
+	return w.writeNodeWithContext(defaultParseContext, root, node)
+}
+
+func (w *byteJsonWriter) writeNodeWithContext(ctx context.Context, root bool, node Node) (TpCode, uint32, error) {
 	start := len(w.buf)
 	switch val := node.V.(type) {
 	case *Group:
@@ -1888,7 +1928,7 @@ func (w *byteJsonWriter) writeNode(root bool, node Node) (TpCode, uint32, error)
 				o := baseOffset + headerSize + i*keyEntrySize
 				length := uint32(len(k))
 				if length > math.MaxUint16 {
-					return 0, 0, moerr.NewInvalidInputNoCtxf("json key %s", k)
+					return 0, 0, moerr.NewInvalidInputf(parseErrorContext(ctx), "json key %s", k)
 				}
 				endian.PutUint32(w.buf[o:], loc)
 				endian.PutUint16(w.buf[o+keyOriginOff:], uint16(length))
@@ -1897,7 +1937,7 @@ func (w *byteJsonWriter) writeNode(root bool, node Node) (TpCode, uint32, error)
 			}
 
 			for i := range keys {
-				tp, length, err := w.writeNode(false, obj.Values[i])
+				tp, length, err := w.writeNodeWithContext(ctx, false, obj.Values[i])
 				if err != nil {
 					return 0, 0, err
 				}
@@ -1928,7 +1968,7 @@ func (w *byteJsonWriter) writeNode(root bool, node Node) (TpCode, uint32, error)
 
 		loc := uint32(headerSize + n*valEntrySize)
 		for i := range arr.Values {
-			tp, length, err := w.writeNode(false, arr.Values[i])
+			tp, length, err := w.writeNodeWithContext(ctx, false, arr.Values[i])
 			if err != nil {
 				return 0, 0, err
 			}
@@ -1959,7 +1999,7 @@ func (w *byteJsonWriter) writeNode(root bool, node Node) (TpCode, uint32, error)
 		}
 		return TpCodeLiteral, uint32(LiteralNull), nil
 	case json.Number:
-		tp, data, err := w.parseNumber(val)
+		tp, data, err := w.parseNumberWithContext(ctx, val)
 		if err != nil {
 			return 0, 0, err
 		}
@@ -1975,19 +2015,19 @@ func (w *byteJsonWriter) writeNode(root bool, node Node) (TpCode, uint32, error)
 		w.buf = addString(w.buf, val)
 		return TpCodeString, uint32(len(w.buf) - start), nil
 	default:
-		return 0, 0, moerr.NewInvalidInputNoCtxf("unknown type %T", node)
+		return 0, 0, moerr.NewInvalidInputf(parseErrorContext(ctx), "unknown type %T", node)
 	}
 }
 
-func (w *byteJsonWriter) parseNumber(in json.Number) (TpCode, []byte, error) {
+func (w *byteJsonWriter) parseNumberWithContext(ctx context.Context, in json.Number) (TpCode, []byte, error) {
 	var data [8]byte
 	//check if it is a float
 	if strings.ContainsAny(string(in), "Ee.") {
 		val, err := in.Float64()
 		if err != nil {
-			return TpCodeFloat64, nil, moerr.NewInvalidInputNoCtxf("json number %v", in)
+			return TpCodeFloat64, nil, moerr.NewInvalidInputf(parseErrorContext(ctx), "json number %v", in)
 		}
-		if err = checkFloat64(val); err != nil {
+		if err = checkFloat64WithContext(ctx, val); err != nil {
 			return TpCodeFloat64, nil, err
 		}
 		endian.PutUint64(data[:], math.Float64bits(val))
@@ -2002,14 +2042,14 @@ func (w *byteJsonWriter) parseNumber(in json.Number) (TpCode, []byte, error) {
 		return TpCodeUint64, data[:], nil
 	}
 	if val, err := in.Float64(); err == nil { //check if it is a float
-		if err = checkFloat64(val); err != nil {
+		if err = checkFloat64WithContext(ctx, val); err != nil {
 			return TpCodeFloat64, nil, err
 		}
 		endian.PutUint64(data[:], math.Float64bits(val))
 		return TpCodeFloat64, data[:], nil
 	}
 	var tpCode TpCode
-	return tpCode, nil, moerr.NewInvalidInputNoCtxf("json number %v", in)
+	return tpCode, nil, moerr.NewInvalidInputf(parseErrorContext(ctx), "json number %v", in)
 }
 
 type Node struct {

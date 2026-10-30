@@ -44,8 +44,8 @@ Require a design when the feature/refactor does any of the following:
   persistent state, configuration semantics, or compatibility contract;
 - adds or materially changes a distributed protocol, state machine, concurrency
   or lifecycle model, retry/idempotency behavior, or failure-recovery protocol;
-- affects upgrade, downgrade, mixed-version operation, migration, restart, backup,
-  restore, or rollback;
+- affects upgrade, migration, restart, backup, or restore of persisted state
+  (shutdown upgrade only; see [upgrade-compatibility.md](upgrade-compatibility.md));
 - changes authentication, authorization, tenant isolation, secrets, or another
   security boundary;
 - introduces a background worker, cache, queue, scheduler, resource controller,
@@ -144,8 +144,10 @@ following areas that apply.
 
 ### Compatibility, delivery, and operations
 
-- Cover upgrade, downgrade, mixed-version operation, migration, rollback,
-  backup/restore, and restart where persisted or distributed state is involved.
+- Cover upgrade, migration, backup/restore, and restart where persisted state is
+  involved. Upgrade is shutdown-only: in-cluster mixed-version operation,
+  downgrade, and per-feature protocol gates are out of scope
+  ([upgrade-compatibility.md](upgrade-compatibility.md)).
 - Define defaults, feature gates, phased rollout, observability, alerting,
   operational diagnosis, failure containment, and fallback/removal plans.
 - State the performance and capacity model for affected hot paths: expected
@@ -184,8 +186,8 @@ of these design-level failures remains:
 - the proposal is solution-first and does not define the problem or invariant;
 - definitions, assumptions, state transitions, or end-to-end flows contradict
   one another or omit a critical terminal path;
-- persistent, wire, or distributed behavior lacks a compatibility, migration,
-  mixed-version, restart, or rollback story;
+- persistent or external-boundary behavior lacks a compatibility, migration,
+  or restart story (in-cluster mixed-version support is not required);
 - state or resource growth has no explicit owner or bound;
 - applicable interoperability/security requirements or credible alternatives
   were not evaluated;

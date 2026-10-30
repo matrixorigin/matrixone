@@ -349,6 +349,9 @@ func resolveNumericBinaryTypesMode(op numericBinaryOp, left, right types.Type, o
 	if !ok {
 		return numericTypeResolution{}, false
 	}
+	if operands, result, _, ok := resolveIntegerAddMulExecution(op, left, right); ok {
+		return numericTypeResolution{left: operands[0], right: operands[1], result: result}, true
+	}
 	if (op == numericOpAdd || op == numericOpSub || op == numericOpMul) &&
 		isMixedUnsignedInteger(left, right) {
 		return numericTypeResolution{
@@ -363,7 +366,7 @@ func resolveNumericBinaryTypesMode(op numericBinaryOp, left, right types.Type, o
 			if operands, unsigned := decimalIntegerDivUnsignedTypes([]types.Type{left, right}); unsigned {
 				return numericTypeResolution{left: operands[0], right: operands[1], result: result}, true
 			}
-			cast, physicalLeft, physicalRight := fixedTypeCastRule2(left, right)
+			cast, physicalLeft, physicalRight := integerDivTypeCastRule(left, right)
 			if cast {
 				left, right = physicalLeft, physicalRight
 			}
@@ -387,8 +390,11 @@ func resolveNumericBinaryTypesMode(op numericBinaryOp, left, right types.Type, o
 			left, right = mixedLeft, mixedRight
 		} else if exactLeft, exactRight, exact := integerDivExactTypes(left, right); exact {
 			left, right = exactLeft, exactRight
-		} else {
+		} else if legacyDecimalDiv {
+			// Historical catalog verification compares the original cast tree.
 			cast, castLeft, castRight = fixedTypeCastRule2(left, right)
+		} else {
+			cast, castLeft, castRight = integerDivTypeCastRule(left, right)
 		}
 	case numericOpDiv:
 		cast, castLeft, castRight = fixedTypeCastRule2(left, right)

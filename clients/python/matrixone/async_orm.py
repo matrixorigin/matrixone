@@ -16,6 +16,8 @@
 MatrixOne Async ORM - SQLAlchemy-like interface for MatrixOne database (Async)
 """
 
+from __future__ import annotations
+
 from typing import Any, List, Optional, TypeVar
 
 from .orm import BaseMatrixOneQuery, _count_sql, _first_query
@@ -30,17 +32,47 @@ class AsyncMatrixOneQuery(BaseMatrixOneQuery):
         super().__init__(model_class, client, transaction_wrapper, snapshot)
         self.database = database
 
-    def _build_sql(self) -> tuple[str, List[Any]]:
-        """Build SQL query with database prefix support"""
-        # Add database prefix if provided
-        original_table_name = self._table_name
-        if self.database:
-            self._table_name = f"{self.database}.{original_table_name}"
+    def _qualified_table_name(self):
+        if not self.database:
+            return super()._qualified_table_name()
+        from ._sql_literals import sql_identifier
 
-        try:
-            return super()._build_sql()
-        finally:
-            self._table_name = original_table_name
+        if self._source_selectable is not None:
+            from sqlalchemy import table as sqlalchemy_table
+            from sqlalchemy.sql.elements import _anonymous_label, quoted_name
+            from sqlalchemy.sql.selectable import AliasedReturnsRows, TableClause
+            from ._query_compilation import compile_from
+
+            physical = self._source_selectable
+            while isinstance(physical, AliasedReturnsRows):
+                physical = physical.element
+            if not isinstance(physical, TableClause):
+                raise ValueError('Explicit database requires a physical table source')
+            if physical.schema and physical.schema != self.database:
+                raise ValueError('Explicit database conflicts with mapped table schema')
+            database_sql, table_sql = sql_identifier(self.database), sql_identifier(physical.name)
+            qualified = database_sql + '.' + table_sql
+            if self._root_selectable is not physical:
+                name = self._root_selectable.name
+                if not isinstance(name, _anonymous_label):
+                    return qualified + ' AS ' + sql_identifier(name)
+                name_in_db = quoted_name(str(physical.name), table_sql.startswith('`'))
+                database = quoted_name(str(self.database), database_sql.startswith('`'))
+                return compile_from(sqlalchemy_table(name_in_db, schema=database).alias(name))
+            return qualified
+        table = super()._qualified_table_name()
+        if not table:
+            return table
+        if any(sql_identifier(cte.get('name') if isinstance(cte, dict) else cte.name) == table for cte in self._ctes):
+            return table  # A CTE is statement-local, never a database table.
+        from ._sql_literals import identifier_parts
+
+        parts = identifier_parts(table, qualified=True)
+        if len(parts) > 1:
+            if len(parts) != 2 or parts[0] != self.database:
+                raise ValueError('Explicit database conflicts with qualified table name')
+            return '.'.join(sql_identifier(part) for part in parts)
+        return sql_identifier(self.database) + '.' + sql_identifier(parts[0])
 
     async def _execute(self, sql, params=None):
         """Execute SQL using either transaction wrapper or client asynchronously"""
@@ -50,55 +82,20 @@ class AsyncMatrixOneQuery(BaseMatrixOneQuery):
             return await self.client.execute(sql, params)
 
     async def all(self) -> List:
-        """Execute query and return all results - SQLAlchemy style"""
         sql, params = self._build_sql()
-        result = await self._execute(sql, params)
-
-        # Handle both AsyncResultSet and SQLAlchemy CursorResult
-        if hasattr(result, 'rows'):
-            # AsyncResultSet from client.execute()
-            rows = result.rows
-        else:
-            # SQLAlchemy CursorResult from session.execute()
-            rows = result.fetchall()
-
-        models = []
-        for row in rows:
-            # Check if this is an aggregate query (has custom select columns)
-            if self._select_columns:
-                # For aggregate queries, return raw row data as a simple object
-                select_cols = self._extract_select_columns()
-                row_data = self._create_row_data(row, select_cols)
-                models.append(row_data)
-            else:
-                # Regular model query
-                if self._is_sqlalchemy_model:
-                    # For SQLAlchemy models, create instance directly
-                    row_dict = {}
-                    for i, col_name in enumerate(self._columns.keys()):
-                        if i < len(row):
-                            row_dict[col_name] = row[i]
-
-                    # Create SQLAlchemy model instance
-                    model = self.model_class(**row_dict)
-                    models.append(model)
-                else:
-                    # For non-SQLAlchemy models, create instance directly
-                    row_dict = {}
-                    for i, col_name in enumerate(self._columns.keys()):
-                        if i < len(row):
-                            row_dict[col_name] = row[i]
-
-                    # Create model instance
-                    model = self.model_class(**row_dict)
-                    models.append(model)
-
-        return models
+        return self._materialize(await self._execute(sql, params))
 
     async def first(self) -> Optional:
         """Execute query and return first result - SQLAlchemy style"""
         results = await _first_query(self).all()
         return results[0] if results else None
+
+    async def scalar(self):
+        """Return the first projected value by position, preserving its type."""
+        query = _first_query(self)
+        sql, params = query._build_sql()
+        result = await query._execute(sql, params)
+        return query._scalar_from_result(result)
 
     async def count(self) -> int:
         """Execute query and return count of results - SQLAlchemy style"""
@@ -116,17 +113,16 @@ class AsyncMatrixOneQuery(BaseMatrixOneQuery):
 
     async def execute(self) -> Any:
         """Execute the query based on its type"""
-        if self._query_type == "SELECT":
-            sql, params = self._build_sql()
-            return await self._execute(sql, params)
-        elif self._query_type == "INSERT":
-            sql, params = self._build_insert_sql()
-            return await self._execute(sql, params)
-        elif self._query_type == "UPDATE":
-            sql, params = self._build_update_sql()
-            return await self._execute(sql, params)
-        elif self._query_type == "DELETE":
-            sql, params = self._build_delete_sql()
-            return await self._execute(sql, params)
-        else:
-            raise ValueError(f"Unknown query type: {self._query_type}")
+        sql, params = self._build_current_sql()
+        return await self._execute(sql, params)
+
+    async def explain(self, verbose=False):
+        """Explain the current statement, including UPDATE/DELETE when supported."""
+        sql, params = self._build_current_sql()
+        return await self._execute(('EXPLAIN VERBOSE ' if verbose else 'EXPLAIN ') + sql, params)
+
+    async def explain_analyze(self, verbose=False):
+        """Execute EXPLAIN ANALYZE; mutations can modify data."""
+        sql, params = self._build_current_sql()
+        prefix = 'EXPLAIN ANALYZE VERBOSE ' if verbose else 'EXPLAIN ANALYZE '
+        return await self._execute(prefix + sql, params)

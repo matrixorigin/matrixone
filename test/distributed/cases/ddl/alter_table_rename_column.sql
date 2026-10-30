@@ -253,6 +253,21 @@ drop table if exists ex_table_2_1;
 create external table ex_table_2_1(num_col1 tinyint,num_col2 smallint,num_col3 int,num_col4 bigint,num_col5 tinyint unsigned,num_col6 smallint unsigned,num_col7 int unsigned,num_col8 bigint unsigned ,num_col9 float(5,3),num_col10 double(6,5),num_col11 decimal(38,19))infile{"filepath"='$resources/external_table_file/ex_table_2_1.csv'} fields terminated by ',' enclosed by '\"' lines terminated by '\n';
 alter table ex_table_2_1 rename column num_col1 to newnum_col1;
 alter table ex_table_2_1 rename column num_col2 to `shurhenwjkrferveg`;
+-- @regex("CREATE EXTERNAL TABLE `ex_table_2_1`", true)
+-- @regex("`num_col1` tinyint DEFAULT NULL", true)
+-- @regex("`num_col2` smallint DEFAULT NULL", true)
+-- @regex("`num_col3` int DEFAULT NULL", true)
+-- @regex("`num_col4` bigint DEFAULT NULL", true)
+-- @regex("`num_col5` tinyint unsigned DEFAULT NULL", true)
+-- @regex("`num_col6` smallint unsigned DEFAULT NULL", true)
+-- @regex("`num_col7` int unsigned DEFAULT NULL", true)
+-- @regex("`num_col8` bigint unsigned DEFAULT NULL", true)
+-- @regex("`num_col9` float\(5,3\) DEFAULT NULL", true)
+-- @regex("`num_col10` double\(6,5\) DEFAULT NULL", true)
+-- @regex("`num_col11` decimal\(38,19\) DEFAULT NULL", true)
+-- @regex("FIELDS TERMINATED BY ',' ENCLOSED BY '"' LINES TERMINATED BY '\\n'", true)
+-- @regex("FILEPATH'='[^']*external_table_file/ex_table_2_1\.csv'", true)
+-- @regex("'FORMAT'='csv'", true)
 show create table ex_table_2_1;
 select * from ex_table_2_1;
 

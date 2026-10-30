@@ -164,8 +164,10 @@ func TestGetStoredProcedureInfosUsesSnapshotAndTenant(t *testing.T) {
 		Tenant: &plan.SnapshotTenant{TenantID: 7},
 	}
 	querySQL := "select name, args, lang, body, sql_mode from mo_catalog.mo_stored_procedure {MO_TS = 42} where db = 'source_db' order by name"
+	modeSQL := "select attname from mo_catalog.mo_columns {MO_TS = 42} where account_id = 7 and att_database = 'mo_catalog' and att_relname = 'mo_stored_procedure' and attname = 'sql_mode' limit 2"
 	base := &backgroundExecTest{}
 	base.init()
+	base.sql2result[modeSQL] = newMrsForSqlForShowDatabases([][]interface{}{{"sql_mode"}})
 	base.sql2result[querySQL] = newStoredProcedureMetadataResultSet([][]interface{}{
 		{"p_answer", "[]", "sql", "begin select 42; end", "PIPES_AS_CONCAT"},
 	})
@@ -186,12 +188,27 @@ func TestGetStoredProcedureInfosUsesSnapshotAndTenant(t *testing.T) {
 	t.Run("catalog query failure is propagated", func(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
+		bh.sql2result[modeSQL] = newMrsForSqlForShowDatabases([][]interface{}{{"sql_mode"}})
 		wantErr := errors.New("stored procedure query failed")
 		bh.sql2err[querySQL] = wantErr
 
 		procedures, err := getStoredProcedureInfos(context.Background(), bh, snapshot, dbName)
 		require.ErrorIs(t, err, wantErr)
 		require.Nil(t, procedures)
+	})
+	t.Run("legacy snapshot has no sql_mode", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		bh.sql2result[modeSQL] = newMrsForSqlForShowDatabases(nil)
+		legacySQL := strings.Replace(querySQL, "sql_mode", "'PIPES_AS_CONCAT'", 1)
+		bh.sql2result[legacySQL] = newStoredProcedureMetadataResultSet([][]interface{}{
+			{"p_answer", "[]", "sql", "begin select 42; end", "PIPES_AS_CONCAT"},
+		})
+		procedures, err := getStoredProcedureInfos(context.Background(), bh, snapshot, dbName)
+		require.NoError(t, err)
+		require.Len(t, procedures, 1)
+		require.Equal(t, "PIPES_AS_CONCAT", procedures[0].sqlMode)
+		require.Equal(t, []string{modeSQL, legacySQL}, bh.executedSQLs)
 	})
 }
 
@@ -202,8 +219,10 @@ func TestGetUserDefinedFunctionInfosUsesSnapshotAndTenant(t *testing.T) {
 		Tenant: &plan.SnapshotTenant{TenantID: 7},
 	}
 	querySQL := "select name, args, retType, body, language, sql_mode from mo_catalog.mo_user_defined_function {MO_TS = 42} where db = 'source_db' order by name"
+	modeSQL := "select attname from mo_catalog.mo_columns {MO_TS = 42} where account_id = 7 and att_database = 'mo_catalog' and att_relname = 'mo_user_defined_function' and attname = 'sql_mode' limit 2"
 	base := &backgroundExecTest{}
 	base.init()
+	base.sql2result[modeSQL] = newMrsForSqlForShowDatabases([][]interface{}{{"sql_mode"}})
 	base.sql2result[querySQL] = newUserDefinedFunctionMetadataResultSet([][]interface{}{
 		{"f_answer", `[{"name":"arg","type":"int"}]`, "int", "select 42", "sql", "PIPES_AS_CONCAT"},
 	})
@@ -226,12 +245,36 @@ func TestGetUserDefinedFunctionInfosUsesSnapshotAndTenant(t *testing.T) {
 	t.Run("catalog query failure is propagated", func(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
+		bh.sql2result[modeSQL] = newMrsForSqlForShowDatabases([][]interface{}{{"sql_mode"}})
 		wantErr := errors.New("user defined function query failed")
 		bh.sql2err[querySQL] = wantErr
 
 		functions, err := getUserDefinedFunctionInfos(context.Background(), bh, snapshot, dbName)
 		require.ErrorIs(t, err, wantErr)
 		require.Nil(t, functions)
+	})
+	t.Run("legacy snapshot has no sql_mode", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		bh.sql2result[modeSQL] = newMrsForSqlForShowDatabases(nil)
+		legacySQL := strings.Replace(querySQL, "sql_mode", "'PIPES_AS_CONCAT'", 1)
+		bh.sql2result[legacySQL] = newUserDefinedFunctionMetadataResultSet([][]interface{}{
+			{"f_answer", `[{"name":"arg","type":"int"}]`, "int", "select 42", "sql", "PIPES_AS_CONCAT"},
+		})
+		functions, err := getUserDefinedFunctionInfos(context.Background(), bh, snapshot, dbName)
+		require.NoError(t, err)
+		require.Len(t, functions, 1)
+		require.Equal(t, "PIPES_AS_CONCAT", functions[0].sqlMode)
+		require.Equal(t, []string{modeSQL, legacySQL}, bh.executedSQLs)
+	})
+	t.Run("metadata error prevents routine query", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		wantErr := errors.New("historical column lookup failed")
+		bh.sql2err[modeSQL] = wantErr
+		_, err := getUserDefinedFunctionInfos(context.Background(), bh, snapshot, dbName)
+		require.ErrorIs(t, err, wantErr)
+		require.Equal(t, []string{modeSQL}, bh.executedSQLs)
 	})
 }
 
