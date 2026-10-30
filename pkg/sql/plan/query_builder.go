@@ -104,6 +104,9 @@ func ddlExpressionContext(ctx CompilerContext, base context.Context) context.Con
 	if function.LegacyTemporalNullability(ctx.GetContext()) {
 		bound = function.WithLegacyTemporalNullability(bound)
 	}
+	if function.LegacyTimeNullability(ctx.GetContext()) {
+		bound = function.WithLegacyTimeNullability(bound)
+	}
 	if function.LegacyUnixTimestampDatetime(ctx.GetContext()) {
 		bound = function.WithLegacyUnixTimestampDatetime(bound)
 	}
@@ -713,6 +716,7 @@ func setOperationOutputType(
 	nodeType plan.Node_NodeType,
 	leftType, rightType plan.Type,
 ) plan.Type {
+	leftType = setOperationDecimalAttributes(nodeType, leftType, rightType)
 	switch nodeType {
 	case plan.Node_UNION, plan.Node_UNION_ALL:
 		if commonType, ok := function.CommonMediumIntType([]types.Type{
@@ -723,6 +727,33 @@ func setOperationOutputType(
 		}
 		leftType.NotNullable = leftType.NotNullable && rightType.NotNullable
 	}
+	return leftType
+}
+
+// setOperationDecimalAttributes derives the numeric attribute mask of one
+// materialized set-operation column. Set outputs are derived rows: MySQL
+// documents ZEROFILL as ignored for UNION queries, and the same materialized
+// boundary applies uniformly to INTERSECT/MINUS. UNION/UNION ALL clear the
+// ZEROFILL bit and keep UNSIGNED only when every branch carries it (the same
+// shape as the NotNullable AND-merge); every other set operation clears both
+// bits. Only numeric_attributes is touched; width/scale/nullability/collation
+// stay byte-identical, and non-decimal branches are unaffected. Domain
+// admission never keys on a set-op output mask: enforcement happens at
+// attributed target writes, and a set-op output is not ProvenanceSingleSource,
+// so CTAS over a UNION lands mask 0 under the computed-expression rule.
+func setOperationDecimalAttributes(
+	nodeType plan.Node_NodeType,
+	leftType, rightType plan.Type,
+) plan.Type {
+	if !types.T(leftType.Id).IsDecimal() {
+		return leftType
+	}
+	if nodeType == plan.Node_UNION || nodeType == plan.Node_UNION_ALL {
+		leftType.NumericAttributes = leftType.NumericAttributes &
+			rightType.NumericAttributes & types.NumericAttributeUnsigned
+		return leftType
+	}
+	leftType.NumericAttributes = 0
 	return leftType
 }
 
@@ -4519,6 +4550,7 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		builder.determineWindowPartitionAlgorithms(rootID)
 		builder.deduplicateBlockFilters(rootID)
 		builder.forceJoinOnOneCN(rootID, false)
+		builder.addBoundedDeleteIndexRuntimeFilters(rootID)
 		// after this ,never call ReCalcNodeStats again !!!
 
 		builder.handleMessages(rootID)
@@ -6444,10 +6476,7 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 			!selectClauseHasSampleExpr(selectClause) &&
 			builder.sortRollupMode() != 2 &&
 			len(selectClause.GroupBy.GroupByExprsList) == 1 &&
-			(sortRollupSimpleBaseTableSource(selectClause.From.Tables) ||
-				sortRollupOrderedDerivedSource(
-					selectClause.From.Tables,
-					selectClause.GroupBy.GroupByExprsList[0])) &&
+			sortRollupSourceEligible(selectClause.From.Tables) &&
 			sortRollupGroupingListEligible(
 				selectClause.GroupBy.GroupByExprsList[0], selectClause.Exprs) &&
 			sortRollupAggregateOrderEligible(
@@ -10318,8 +10347,11 @@ func gapFillBoundContainsColumn(expr *Expr, timestamp *plan.ColRef) bool {
 }
 
 func gapFillBoundIsConstant(expr *Expr) bool {
+	// Inferred bounds are evaluated at EXECUTE, including parameterless
+	// prepared plans. Diagnostic relocation policy must not reject a value
+	// that is constant within that execution.
 	return expr != nil && !exprHasColRef(expr) && !hasCorrCol(expr) &&
-		!hasSubquery(expr) && !containsVolatileFunction(expr)
+		!hasSubquery(expr) && function.IsRuntimeConstant(expr)
 }
 
 func combineGapFillBounds(ctx context.Context, name string, candidates []*Expr, targetType plan.Type) (*Expr, error) {
@@ -11516,8 +11548,8 @@ func (builder *QueryBuilder) appendAggNode(
 			}
 		}
 		// Reuse order only after the child plan proves a complete global SORT
-		// (or a transparent FILTER over one). An AST-level ORDER BY is useful for
-		// cost estimation, but it must not by itself let this node skip sorting.
+		// through direct projections and filters. The isolated cost probe's
+		// proof cannot replace checking this actual input's bound lineage.
 		// Never reuse the property when hidden pad-space equality keys were added:
 		// the visible AST order does not prove that physical key order.
 		orderedRollupInput = len(groupByHashKey) == 0 &&

@@ -3807,6 +3807,31 @@ func floatNumToFixFloat[T1 constraints.Float](
 	return T1(v), nil
 }
 
+// widenIntegerBatch borrows a flat, non-NULL input and writes the result
+// prepared by PreExtendAndReset. Only these same-sign conversions preserve the
+// entire source domain. A handled result must return without further Append.
+func widenIntegerBatch[T1, T2 constraints.Integer | constraints.Float](
+	from vector.FunctionParameterWrapper[T1], to *vector.FunctionResult[T2], length int, selectList *FunctionSelectList) bool {
+	source := from.GetSourceVector()
+	if length <= 0 || source.IsConst() || !source.GetNulls().EmptyByFlag() ||
+		selectList.IgnoreAllRow() || !selectList.ShouldEvalAllRow() {
+		return false
+	}
+	sourceOID, targetOID := source.GetType().Oid, to.GetType().Oid
+	if !((targetOID == types.T_int64 && (sourceOID == types.T_int8 || sourceOID == types.T_int16 || sourceOID == types.T_int32)) ||
+		(targetOID == types.T_uint64 && (sourceOID == types.T_uint8 || sourceOID == types.T_uint16 || sourceOID == types.T_uint32))) {
+		return false
+	}
+	values := vector.MustFixedColWithTypeCheck[T1](source)
+	dst := vector.MustFixedColWithTypeCheck[T2](to.GetResultVector())
+	_ = values[length-1]
+	_ = dst[length-1]
+	for i := 0; i < length; i++ {
+		dst[i] = T2(values[i])
+	}
+	return true
+}
+
 // XXX do not use it to cast float to integer, please use floatToInteger
 func numericToNumeric[T1, T2 constraints.Integer | constraints.Float](
 	ctx context.Context,
@@ -3817,6 +3842,10 @@ func numericToNumeric[T1, T2 constraints.Integer | constraints.Float](
 
 	if to.GetType().Scale >= 0 && to.GetType().Width > 0 {
 		return integerToFixFloat(ctx, from, to, times)
+	}
+
+	if widenIntegerBatch(from, to, length, selectList) {
+		return nil
 	}
 
 	if err := overflowForNumericToNumeric[T1, T2](ctx, from.UnSafeGetAllValue(),
@@ -9714,8 +9743,13 @@ func strToDate(proc *process.Process,
 				if err := to.Append(types.ZeroDate, false); err != nil {
 					return err
 				}
-			} else if err := to.Append(dft, true); err != nil {
-				return err
+			} else {
+				if !isBinary && isTemporalTextSource(from.GetType().Oid) && (mode == castModeNormal || mode == castModeExplicit) {
+					appendStrToDateWarning(proc, moerr.ER_TRUNCATED_WRONG_VALUE, "Incorrect datetime value", "", v)
+				}
+				if err := to.Append(dft, true); err != nil {
+					return err
+				}
 			}
 		} else {
 			s := convertByteSliceToString(v)
@@ -9731,7 +9765,13 @@ func strToDate(proc *process.Process,
 				if assignmentCast {
 					return err
 				}
+				if (mode == castModeNormal || mode == castModeExplicit) && !isTemporalLexicalConversionError(err) {
+					return err
+				}
 				// Invalid date strings in expression casts return SQL NULL.
+				if !isBinary && isTemporalTextSource(from.GetType().Oid) && (mode == castModeNormal || mode == castModeExplicit) && isTemporalLexicalConversionError(err) {
+					appendStrToDateWarning(proc, moerr.ER_TRUNCATED_WRONG_VALUE, "Incorrect datetime value", "", v)
+				}
 				if err := to.Append(dft, true); err != nil {
 					return err
 				}
@@ -9801,12 +9841,17 @@ func strToTime(
 			// both strict and non-strict sessions. IGNORE explicitly adjusts
 			// invalid text to the target's zero value with a warning.
 			if mode == castModeAssignmentIgnore && !isBinary {
-				appendTimeConversionWarning(proc, "", mode, false)
+				appendTimeConversionWarning(proc, nil, mode, false)
 				if err := to.Append(dft, false); err != nil {
 					return err
 				}
-			} else if err := to.Append(dft, true); err != nil {
-				return err
+			} else {
+				if !isBinary && isTemporalTextSource(from.GetType().Oid) && (mode == castModeNormal || mode == castModeExplicit) {
+					appendTimeConversionWarning(proc, nil, mode, false)
+				}
+				if err := to.Append(dft, true); err != nil {
+					return err
+				}
 			}
 		} else {
 			s := convertByteSliceToString(v)
@@ -9841,15 +9886,18 @@ func strToTime(
 						continue
 					}
 				}
-				// In non-strict mode MySQL consumes a valid TIME prefix and
-				// converts the remainder to a warning.  A completely malformed
+				if (mode == castModeNormal || mode == castModeExplicit) && !isTemporalLexicalConversionError(err) {
+					return err
+				}
+				// Expression casts consume a valid TIME prefix and convert the
+				// remainder to a warning, including in strict SQL mode.  A completely malformed
 				// expression becomes NULL; an assignment stores zero TIME.
-				if (mode == castModeAssignmentIgnore || !isStrictSqlMode(proc)) && !isBinary {
+				if ((mode == castModeNormal || mode == castModeExplicit) && isTemporalTextSource(from.GetType().Oid) || mode == castModeAssignmentIgnore || !isStrictSqlMode(proc)) && !isBinary {
 					if prefix, ok := parseTimePrefix(s, parseScale, truncateFractional); ok {
 						if truncateFractional {
 							prefix = prefix.TruncateToScaleWithoutRounding(totype.Scale)
 						}
-						appendTimeConversionWarning(proc, s, mode, true)
+						appendTimeConversionWarning(proc, v, mode, true)
 						prefix, err = mysqlTimeForCast(ctx, proc, prefix, mode, totype.Scale, i)
 						if err != nil {
 							return err
@@ -9859,7 +9907,7 @@ func strToTime(
 						}
 						continue
 					}
-					appendTimeConversionWarning(proc, s, mode, false)
+					appendTimeConversionWarning(proc, v, mode, false)
 					// Expression casts publish SQL NULL; non-strict and IGNORE
 					// assignments publish the target's zero value instead.
 					nullResult := !mode.isAssignment() || mode == castModeStrictStringWidth
@@ -9909,23 +9957,22 @@ func parseTimePrefix(value string, scale int32, truncateFractional bool) (types.
 	return 0, false
 }
 
-func appendTimeConversionWarning(proc *process.Process, value string, mode castMode, prefix bool) {
+func appendTimeConversionWarning(proc *process.Process, value []byte, mode castMode, prefix bool) {
 	if proc == nil {
 		return
 	}
-	appender, ok := proc.GetWarningSink().(warningDiagnosticAppender)
-	if !ok {
-		return
-	}
 	if mode.isAssignment() {
+		appender, ok := proc.GetWarningSink().(warningDiagnosticAppender)
+		if !ok {
+			return
+		}
 		appender.AppendWarningDiagnostic(moerr.WARN_DATA_TRUNCATED,
 			fmt.Sprintf("Data truncated for TIME value: '%-.128s'", value))
 		return
 	}
 	// Keep the same 1292 diagnostic used by MySQL for expression casts.
 	_ = prefix
-	appender.AppendWarningDiagnostic(moerr.ER_TRUNCATED_WRONG_VALUE,
-		fmt.Sprintf("Truncated incorrect TIME value: '%-.128s'", value))
+	appendStrToDateWarning(proc, moerr.ER_TRUNCATED_WRONG_VALUE, "Truncated incorrect time value", "", value)
 }
 
 func strToDatetime(proc *process.Process,
@@ -9961,8 +10008,13 @@ func strToDatetime(proc *process.Process,
 				if err := to.Append(types.ZeroDatetime, false); err != nil {
 					return err
 				}
-			} else if err := to.Append(dft, true); err != nil {
-				return err
+			} else {
+				if !isBinary && isTemporalTextSource(from.GetType().Oid) && (mode == castModeNormal || mode == castModeExplicit) {
+					appendStrToDateWarning(proc, moerr.ER_TRUNCATED_WRONG_VALUE, "Incorrect datetime value", "", v)
+				}
+				if err := to.Append(dft, true); err != nil {
+					return err
+				}
 			}
 		} else {
 			s := convertByteSliceToString(v)
@@ -9986,6 +10038,9 @@ func strToDatetime(proc *process.Process,
 				// and dedicated comparison/set-operation modes retain their errors.
 				if (mode == castModeNormal || mode == castModeExplicit) &&
 					from.GetType().Oid.IsMySQLString() && isTemporalLexicalConversionError(err) {
+					if !isBinary && isTemporalTextSource(from.GetType().Oid) {
+						appendStrToDateWarning(proc, moerr.ER_TRUNCATED_WRONG_VALUE, "Incorrect datetime value", "", v)
+					}
 					if err = to.Append(dft, true); err != nil {
 						return err
 					}

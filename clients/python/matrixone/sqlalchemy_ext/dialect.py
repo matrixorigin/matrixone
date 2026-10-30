@@ -38,10 +38,34 @@ class _Vecf64Type(VectorType):
         super().__init__(dimension=dimension, precision=VectorPrecision.F64)
 
 
+class _Vecf16Type(VectorType):
+    def __init__(self, dimension=None):
+        super().__init__(dimension=dimension, precision='f16')
+
+
+class _Vecbf16Type(VectorType):
+    def __init__(self, dimension=None):
+        super().__init__(dimension=dimension, precision='bf16')
+
+
+class _Vecint8Type(VectorType):
+    def __init__(self, dimension=None):
+        super().__init__(dimension=dimension, precision='int8')
+
+
+class _Vecuint8Type(VectorType):
+    def __init__(self, dimension=None):
+        super().__init__(dimension=dimension, precision='uint8')
+
+
 # Extend MySQL's ischema_names with MatrixOne-specific types
 _mo_ischema_names = mysql_ischema_names.copy()
 _mo_ischema_names["vecf32"] = _Vecf32Type
 _mo_ischema_names["vecf64"] = _Vecf64Type
+_mo_ischema_names["vecf16"] = _Vecf16Type
+_mo_ischema_names["vecbf16"] = _Vecbf16Type
+_mo_ischema_names["vecint8"] = _Vecint8Type
+_mo_ischema_names["vecuint8"] = _Vecuint8Type
 _mo_ischema_names["bool"] = mysql_ischema_names["boolean"]
 # Older servers emit uppercase types when describing views. Keep MySQL's
 # global registry untouched while accepting both server spellings.

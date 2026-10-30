@@ -3781,6 +3781,34 @@ func TestQueryBuilderTimeWindowMicrosecondBoundaryTypes(t *testing.T) {
 	}
 }
 
+func TestPreparedGapFillPreservesLiteralTemporalBounds(t *testing.T) {
+	for _, oid := range []types.T{types.T_date, types.T_datetime} {
+		t.Run(oid.String(), func(t *testing.T) {
+			mock := NewMockOptimizer(false, newPlanTestProcess(t))
+			mockTimeWindowScaleTable(t, mock, oid.ToType())
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL,
+				"select _wstart, sum(v) from tw_scale where ts >= '2026-01-01' and ts < '2026-01-04' interval(ts, 1, day) gapfill(partition) fill(null)", 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			logicPlan, err := BuildPlan(mock.CurrentContext(), stmt, true)
+			require.NoError(t, err)
+			var window *plan.Node
+			for _, node := range logicPlan.GetQuery().Nodes {
+				if node.NodeType == plan.Node_TIME_WINDOW {
+					window = node
+					break
+				}
+			}
+			require.NotNil(t, window)
+			for _, bound := range []*plan.Expr{window.GapFillStart, window.GapFillEnd} {
+				require.NotNil(t, bound)
+				require.True(t, function.IsRuntimeConstant(bound))
+				require.True(t, ContainsVolatileFunction(bound), "diagnostic relocation stays conservative")
+			}
+		})
+	}
+}
+
 func TestInferGapFillBoundsNormalizesTemporalTypesToDatetime(t *testing.T) {
 	for _, tc := range []struct {
 		name  string

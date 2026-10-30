@@ -376,6 +376,30 @@ func L2NormArray[T types.RealNumbers](ivecs []*vector.Vector, result vector.Func
 	}, selectList)
 }
 
+// L1NormNarrowArray is l1_norm of a bf16/f16/int8/uint8 vector, computed on its float32
+// values, which hold every element exactly.
+func L1NormNarrowArray[T types.ArrayElement](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryBytesToFixedWithErrorCheck[float64](ivecs, result, proc, length, func(in []byte) (float64, error) {
+		return moarray.L1Norm(types.ToFloat32Array(types.BytesToArray[T](in)))
+	}, selectList)
+}
+
+// L2NormNarrowArray is l2_norm of a bf16/f16/int8/uint8 vector, computed on its float32
+// values.
+func L2NormNarrowArray[T types.ArrayElement](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryBytesToFixedWithErrorCheck[float64](ivecs, result, proc, length, func(in []byte) (float64, error) {
+		return moarray.L2Norm(types.ToFloat32Array(types.BytesToArray[T](in)))
+	}, selectList)
+}
+
+// SummationNarrowArray is summation of a bf16/f16/int8/uint8 vector, computed on its
+// float32 values.
+func SummationNarrowArray[T types.ArrayElement](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryBytesToFixedWithErrorCheck[float64](ivecs, result, proc, length, func(in []byte) (float64, error) {
+		return moarray.Summation(types.ToFloat32Array(types.BytesToArray[T](in)))
+	}, selectList)
+}
+
 func VectorDimsArray[T types.ArrayElement](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return opUnaryBytesToFixed[int64](ivecs, result, proc, length, func(in []byte) (out int64) {
 		_in := types.BytesToArray[T](in)
@@ -391,7 +415,7 @@ func SummationArray[T types.RealNumbers](ivecs []*vector.Vector, result vector.F
 	}, selectList)
 }
 
-func SubVectorWith2Args[T types.RealNumbers](ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
+func SubVectorWith2Args[T types.ArrayElement](ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	vs := vector.GenerateFunctionStrParameter(ivecs[0])
 	starts := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
@@ -421,7 +445,7 @@ func SubVectorWith2Args[T types.RealNumbers](ivecs []*vector.Vector, result vect
 	return nil
 }
 
-func SubVectorWith3Args[T types.RealNumbers](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
+func SubVectorWith3Args[T types.ArrayElement](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	vs := vector.GenerateFunctionStrParameter(ivecs[0])
 	starts := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
@@ -1167,6 +1191,9 @@ func DateStringToDate(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 			// ParseDatetime reports only invalid-input errors. Malformed strings
 			// share the input-NULL path without consulting the zero-date policy.
 			parsed, err = types.ParseDatetime(functionUtil.QuickBytesToStr(value), 6)
+			if err != nil && !ivecs[0].GetIsBin() && isTemporalTextSource(ivecs[0].GetType().Oid) {
+				appendStrToDateWarning(proc, moerr.ER_TRUNCATED_WRONG_VALUE, "Incorrect datetime value", "", value)
+			}
 			null = err != nil
 		}
 		if null {
@@ -6406,10 +6433,18 @@ func Int64ToTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 
 func DateStringToTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	scale := result.GetResultVector().GetType().Scale
-	return opUnaryBytesToFixedWithErrorCheck[types.Time](ivecs, result, proc, length, func(v []byte) (types.Time, error) {
+	return opUnaryBytesToFixedWithNullOnError[types.Time](ivecs, result, proc, length, func(v []byte) (types.Time, error) {
 		t, e := types.ParseTime(string(v), scale)
 		if e != nil {
-			return 0, moerr.NewOutOfRangeNoCtxf("time", "'%s'", string(v))
+			// MySQL doctrine: TIME() yields NULL with a truncation warning for
+			// an invalid argument instead of failing the whole statement.
+			if proc != nil {
+				if appender, ok := proc.GetWarningSink().(warningDiagnosticAppender); ok {
+					appender.AppendWarningDiagnostic(moerr.ER_TRUNCATED_WRONG_VALUE,
+						fmt.Sprintf("Truncated incorrect time value: '%s'", string(v)))
+				}
+			}
+			return 0, e
 		}
 		return clampPublicTimeResult(proc, t, scale), nil
 	}, selectList)

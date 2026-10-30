@@ -18,8 +18,9 @@ import (
 	"reflect"
 	"strings"
 
-	containertypes "github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	plan "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
@@ -39,29 +40,6 @@ func EncodeSortRollupOption() string {
 func IsSortRollupOption(extra string) bool {
 	return extra == sortRollupExtraOption ||
 		strings.HasPrefix(extra, sortRollupExtraOption+":")
-}
-
-// sortRollupTypeEligible mirrors the executor's fail-closed whitelist. The
-// physical SORT uses SQL order equality, while the aggregate's ordinary hash
-// path uses the equality key codec. Types without a proven identical domain
-// must stay on the legacy grouping-set rewrite instead of reaching the sort
-// executor and failing after a plan has already been selected.
-func sortRollupTypeEligible(oid int32) bool {
-	switch containertypes.T(oid) {
-	case containertypes.T_bool,
-		containertypes.T_bit,
-		containertypes.T_int8, containertypes.T_int16, containertypes.T_int32,
-		containertypes.T_int64,
-		containertypes.T_uint8, containertypes.T_uint16, containertypes.T_uint32,
-		containertypes.T_uint64,
-		containertypes.T_decimal64, containertypes.T_decimal128, containertypes.T_decimal256,
-		containertypes.T_date, containertypes.T_time, containertypes.T_datetime,
-		containertypes.T_timestamp, containertypes.T_year,
-		containertypes.T_uuid, containertypes.T_enum:
-		return true
-	default:
-		return false
-	}
 }
 
 // sortRollupGroupingTypesEligible performs a planning-only binding probe. The
@@ -107,12 +85,8 @@ func (builder *QueryBuilder) probeSortRollupInput(
 	if builder == nil || ctx == nil || len(exprs) == 0 {
 		return nil, false
 	}
-	orderedInput := false
-	if !sortRollupSimpleBaseTableSource(from) {
-		if !sortRollupOrderedDerivedSource(from, exprs) {
-			return nil, false
-		}
-		orderedInput = true
+	if !sortRollupSourceEligible(from) {
+		return nil, false
 	}
 	for current := ctx; current != nil; current = current.parent {
 		if len(current.cteByName) > 0 || len(current.boundCtes) > 0 {
@@ -194,7 +168,7 @@ func (builder *QueryBuilder) probeSortRollupInput(
 			return nil, false
 		}
 		bound, err := groupBinder.BindExpr(qualified, 0, true)
-		if err != nil || bound == nil || !sortRollupTypeEligible(bound.Typ.Id) {
+		if err != nil || bound == nil || !colexec.SortRollupTypeEligible(types.T(bound.Typ.Id)) {
 			return nil, false
 		}
 		boundExprs = append(boundExprs, bound)
@@ -204,24 +178,18 @@ func (builder *QueryBuilder) probeSortRollupInput(
 	if source == nil || source.Stats == nil {
 		return nil, false
 	}
-	if orderedInput {
-		// Keep the cost estimate aligned with the physical plan. The AST proof
-		// admits only a narrow derived-table shape, but the isolated builder is
-		// still the authority on whether that ORDER BY survived as an actual
-		// complete Sort plus transparent projections.
-		orderedInput = probeBuilder.sortRollupNodeInputOrdered(
-			probeNodeID, boundExprs)
-	}
-	tableDef := source.TableDef
-	if tableDef == nil {
-		tableDef = sortRollupLeafTableDef(probeBuilder, probeNodeID)
+	// Resolve both order and statistics through the same bound column lineage.
+	// A derived alias/slot is not a base-column NDV lookup key.
+	baseExprs, scan, orderedInput := probeBuilder.sortRollupInputLineage(probeNodeID, boundExprs)
+	if scan == nil || !sortRollupSimpleBaseTableSource(from) && !orderedInput {
+		return nil, false
 	}
 	return &sortRollupProbe{
 		builder:                        probeBuilder,
 		ctx:                            probeCtx,
 		source:                         source,
-		tableDef:                       tableDef,
-		groupExprs:                     boundExprs,
+		tableDef:                       scan.TableDef,
+		groupExprs:                     baseExprs,
 		orderedInput:                   orderedInput,
 		hashGroupingSetSharingMayApply: builder.groupingSetInputSharingMayApply(),
 	}, true
@@ -250,18 +218,16 @@ func sortRollupSimpleBaseTableSource(from tree.TableExprs) bool {
 	}
 }
 
-// sortRollupOrderedDerivedSource recognizes the one derived-table shape where
-// an existing ORDER BY is a physical input property we can safely reuse. The
-// inner query must expose the ordered columns directly and in the same prefix
-// as ROLLUP. Expressions, aliases, DESC, and NULLS LAST are intentionally not
-// accepted because translating their order/equality domains would require a
-// stronger property framework than the current plan wire carries.
-func sortRollupOrderedDerivedSource(from tree.TableExprs, grouping tree.Exprs) bool {
-	if len(from) != 1 || len(grouping) == 0 {
+// The AST gate restricts topology, not column identity or order. The bound
+// lineage proof below owns aliases, projection mappings and global ordering.
+func sortRollupSourceEligible(from tree.TableExprs) bool {
+	if len(from) != 1 {
 		return false
 	}
 	source := from[0]
-	for {
+	// Bound this optional probe's work on deeply nested source wrappers.
+	// Deeper queries retain the ordinary grouping-set implementation.
+	for depth := 0; depth < 64; depth++ {
 		switch expr := source.(type) {
 		case *tree.AliasedTableExpr:
 			source = expr.Expr
@@ -272,127 +238,133 @@ func sortRollupOrderedDerivedSource(from tree.TableExprs, grouping tree.Exprs) b
 				return false
 			}
 			source = expr.Left
-		default:
-			goto unwrapped
-		}
-	}
-
-unwrapped:
-	derived, ok := source.(*tree.Select)
-	if !ok || derived.Limit != nil || derived.RankOption != nil || len(derived.OrderBy) < len(grouping) {
-		return false
-	}
-	clause, ok := derived.Select.(*tree.SelectClause)
-	if !ok || clause.Distinct || clause.Where != nil || clause.GroupBy != nil || clause.Having != nil {
-		return false
-	}
-
-	for i, groupExpr := range grouping {
-		groupName, ok := sortRollupASTColumnName(groupExpr)
-		if !ok {
-			return false
-		}
-		order := derived.OrderBy[i]
-		if order == nil || order.Direction == tree.Descending || order.NullsPosition == tree.NullsLast {
-			return false
-		}
-		orderName, ok := sortRollupASTColumnName(order.Expr)
-		if !ok || orderName != groupName {
-			return false
-		}
-		if !sortRollupDerivedProjectsColumn(clause.Exprs, orderName) {
-			return false
-		}
-	}
-	return true
-}
-
-func sortRollupASTColumnName(expr tree.Expr) (string, bool) {
-	name, ok := unwrapParenExpr(expr).(*tree.UnresolvedName)
-	if !ok || name == nil || name.Star || name.NumParts == 0 {
-		return "", false
-	}
-	return strings.ToLower(name.ColName()), true
-}
-
-func sortRollupDerivedProjectsColumn(exprs tree.SelectExprs, name string) bool {
-	for _, expr := range exprs {
-		column, ok := sortRollupASTColumnName(expr.Expr)
-		if !ok || column != name {
-			continue
-		}
-		if expr.As == nil || expr.As.Empty() || strings.EqualFold(expr.As.Compare(), name) {
+		case *tree.TableName:
 			return true
+		case *tree.Select:
+			if expr.Limit != nil || expr.RankOption != nil || expr.With != nil ||
+				expr.TimeWindow != nil || expr.RewriteOption != nil || expr.SelectLockInfo != nil {
+				return false
+			}
+			clause, ok := expr.Select.(*tree.SelectClause)
+			if !ok || clause.From == nil || len(clause.From.Tables) != 1 ||
+				clause.Distinct || clause.GroupBy != nil || clause.Having != nil || len(clause.Windows) != 0 {
+				return false
+			}
+			for _, projection := range clause.Exprs {
+				name, ok := unwrapParenExpr(projection.Expr).(*tree.UnresolvedName)
+				if !ok || name == nil || name.Star {
+					return false
+				}
+			}
+			source = clause.From.Tables[0]
+		default:
+			return false
 		}
 	}
 	return false
 }
 
-func sortRollupLeafTableDef(builder *QueryBuilder, nodeID int32) *TableDef {
-	if builder == nil || nodeID < 0 || int(nodeID) >= len(builder.qry.Nodes) {
-		return nil
-	}
-	node := builder.qry.Nodes[nodeID]
-	if node == nil {
-		return nil
-	}
-	if node.TableDef != nil {
-		return node.TableDef
-	}
-	for _, childID := range node.Children {
-		if tableDef := sortRollupLeafTableDef(builder, childID); tableDef != nil {
-			return tableDef
-		}
-	}
-	return nil
+// Both the isolated cost probe and the real aggregate input use this proof.
+// A TABLE_SCAN's OrderBy is CN-local and is never a global-order proof.
+func (builder *QueryBuilder) sortRollupNodeInputOrdered(nodeID int32, groupExprs []*Expr) bool {
+	_, scan, ordered := builder.sortRollupInputLineage(nodeID, groupExprs)
+	return scan != nil && ordered
 }
 
-// sortRollupNodeInputOrdered is the plan-level counterpart of the derived
-// table proof. It is deliberately limited to a complete global SORT, with
-// transparent FILTERs and positional identity PROJECTs; a TABLE_SCAN's
-// OrderBy is local to a CN unless the compiler also constructs a MergeOrder,
-// so treating it as globally ordered here would be an incorrect distributed
-// optimization.
-func (builder *QueryBuilder) sortRollupNodeInputOrdered(
-	nodeID int32,
-	groupExprs []*Expr,
-) bool {
-	if builder == nil || nodeID < 0 || int(nodeID) >= len(builder.qry.Nodes) || len(groupExprs) == 0 {
-		return false
+// sortRollupInputLineage resolves grouping columns to their exact base slots,
+// checking every output binding before crossing a projection. The first Sort
+// determines the consumer's order; an earlier, different Sort cannot restore
+// an order overwritten later. Traversal is bounded by the plan size, including
+// malformed cycles, and never mutates producer expressions.
+func (builder *QueryBuilder) sortRollupInputLineage(
+	nodeID int32, groupExprs []*Expr,
+) ([]*Expr, *Node, bool) {
+	if builder == nil || builder.qry == nil || len(groupExprs) == 0 {
+		return nil, nil, false
 	}
-	node := builder.qry.Nodes[nodeID]
-	if node == nil || len(node.Children) != 1 {
-		return false
-	}
-	switch node.NodeType {
-	case plan.Node_SORT:
-		return node.Limit == nil && node.Offset == nil && node.RankOption == nil &&
-			sortRollupPlanOrderMatches(node.OrderBy, groupExprs)
-	case plan.Node_FILTER:
-		return builder.sortRollupNodeInputOrdered(node.Children[0], groupExprs)
-	case plan.Node_PROJECT:
-		// Derived-table binding may insert an identity projection between the
-		// producer Sort and this aggregate. Only remove that wrapper when every
-		// grouping column is forwarded positionally with the same type; a
-		// reordered/computed projection must fall back to a fresh Sort.
-		for _, expr := range groupExprs {
-			col := expr.GetCol()
-			if col == nil || col.ColPos < 0 || int(col.ColPos) >= len(node.ProjectList) {
-				return false
-			}
-			projected := node.ProjectList[col.ColPos]
-			projectedCol := projected.GetCol()
-			if projectedCol == nil || projectedCol.ColPos != col.ColPos ||
-				projected.Typ.Id != expr.Typ.Id ||
-				projected.Typ.Width != expr.Typ.Width ||
-				projected.Typ.Scale != expr.Typ.Scale {
-				return false
-			}
+	ordered, seenSort := false, false
+	for remaining := len(builder.qry.Nodes); remaining > 0; remaining-- {
+		if nodeID < 0 || int(nodeID) >= len(builder.qry.Nodes) {
+			break
 		}
-		return builder.sortRollupNodeInputOrdered(node.Children[0], groupExprs)
-	default:
-		return false
+		node := builder.qry.Nodes[nodeID]
+		if node == nil || node.Limit != nil || node.Offset != nil || node.RankOption != nil {
+			break
+		}
+		switch node.NodeType {
+		case plan.Node_TABLE_SCAN:
+			if len(node.Children) != 0 || len(node.BindingTags) != 1 || node.TableDef == nil || len(node.ProjectList) != 0 {
+				return nil, nil, false
+			}
+			for _, expr := range groupExprs {
+				col := expr.GetCol()
+				if col == nil || col.RelPos != node.BindingTags[0] || col.ColPos < 0 ||
+					int(col.ColPos) >= len(node.TableDef.Cols) || node.TableDef.Cols[col.ColPos] == nil ||
+					!sortRollupSameKeyType(expr.Typ, node.TableDef.Cols[col.ColPos].Typ) {
+					return nil, nil, false
+				}
+			}
+			return groupExprs, node, ordered
+		case plan.Node_PROJECT:
+			var ok bool
+			groupExprs, ok = sortRollupProjectInputColumns(node, groupExprs)
+			if !ok {
+				return nil, nil, false
+			}
+		case plan.Node_FILTER:
+			if len(node.ProjectList) != 0 || len(node.BindingTags) != 0 {
+				return nil, nil, false
+			}
+		case plan.Node_SORT:
+			if len(node.ProjectList) != 0 || len(node.BindingTags) != 0 {
+				var ok bool
+				groupExprs, ok = sortRollupProjectInputColumns(node, groupExprs)
+				if !ok {
+					return nil, nil, false
+				}
+			}
+			if !seenSort {
+				ordered = sortRollupPlanOrderMatches(node.OrderBy, groupExprs)
+				seenSort = true
+			}
+		default:
+			return nil, nil, false
+		}
+		if len(node.Children) != 1 {
+			break
+		}
+		nodeID = node.Children[0]
 	}
+	return nil, nil, false
+}
+
+func sortRollupProjectInputColumns(node *Node, columns []*Expr) ([]*Expr, bool) {
+	if len(node.BindingTags) != 1 || len(node.ProjectList) == 0 {
+		return nil, false
+	}
+	for _, projected := range node.ProjectList {
+		if projected.GetCol() == nil {
+			return nil, false
+		}
+	}
+	inputs := make([]*Expr, len(columns))
+	for i, expr := range columns {
+		col := expr.GetCol()
+		if col == nil || col.RelPos != node.BindingTags[0] || col.ColPos < 0 || int(col.ColPos) >= len(node.ProjectList) {
+			return nil, false
+		}
+		projected := node.ProjectList[col.ColPos]
+		if !sortRollupSameKeyType(expr.Typ, projected.Typ) {
+			return nil, false
+		}
+		inputs[i] = projected
+	}
+	return inputs, true
+}
+
+func sortRollupSameKeyType(left, right plan.Type) bool {
+	return left.Id == right.Id && left.Width == right.Width && left.Scale == right.Scale &&
+		left.Enumvalues == right.Enumvalues && left.PadSpace == right.PadSpace && left.SameCollation(right)
 }
 
 func sortRollupPlanOrderMatches(orderBy []*plan.OrderBySpec, groupExprs []*Expr) bool {
@@ -409,14 +381,8 @@ func sortRollupPlanOrderMatches(orderBy []*plan.OrderBySpec, groupExprs []*Expr)
 			return false
 		}
 		left, right := expr.GetCol(), spec.Expr.GetCol()
-		// Binding and projection nodes assign different relation tags to the
-		// same positional column. For the candidate shapes (a single base or
-		// direct derived source), position plus type is the stable identity; the
-		// caller has already ruled out joins and computed/reordered projections.
-		if left.ColPos != right.ColPos ||
-			expr.Typ.Id != spec.Expr.Typ.Id ||
-			expr.Typ.Width != spec.Expr.Typ.Width ||
-			expr.Typ.Scale != spec.Expr.Typ.Scale {
+		if left.RelPos != right.RelPos || left.ColPos != right.ColPos ||
+			!sortRollupSameKeyType(expr.Typ, spec.Expr.Typ) {
 			return false
 		}
 	}

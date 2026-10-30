@@ -20,6 +20,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/stretchr/testify/require"
 )
 
@@ -60,6 +61,8 @@ func requireTimeParamCast(t *testing.T, expr *planpb.Expr, argPos int, scale int
 	require.NotNil(t, cast)
 	require.Equal(t, "cast", cast.Func.GetObjName())
 	require.Len(t, cast.Args, 2)
+	_, overload := function.DecodeOverloadID(cast.Func.Obj)
+	require.Equal(t, int32(2), overload, "TIME comparison must retain its conversion policy")
 	require.NotNil(t, cast.Args[0].GetP())
 }
 
