@@ -61,11 +61,10 @@ func preChangeCurrentColumnsDDL() string {
 // like a pre-change deployment.
 func newColumnsUpgradeCluster(
 	t *testing.T,
-	setupCtx context.Context,
 	handles []bootstrap.VersionHandle,
 ) Cluster {
 	t.Helper()
-	c, err := NewCluster(WithTesting(), WithTestAdmissionContext(setupCtx), WithCNCount(1), WithPreStart(func(svc ServiceOperator) {
+	c, err := NewCluster(WithTesting(), WithTestAdmissionContext(t.Context()), WithCNCount(1), WithPreStart(func(svc ServiceOperator) {
 		adjustBasicClusterService(svc)
 		if svc.ServiceType() == metadata.ServiceType_CN {
 			svc.Adjust(func(cfg *ServiceConfig) { cfg.CN.AutomaticUpgrade = true })
@@ -87,6 +86,15 @@ func newColumnsUpgradeCluster(
 	return c
 }
 
+// startColumnsUpgradePhase starts the SQL/recovery work budget only after
+// cluster admission and startup finish. The runner-wide queue is bounded by
+// t.Context instead, so another test process cannot consume this phase budget.
+func startColumnsUpgradePhase(t *testing.T, c Cluster) (context.Context, context.CancelFunc) {
+	t.Helper()
+	require.NoError(t, c.Start())
+	return context.WithTimeout(t.Context(), 5*time.Minute)
+}
+
 // columnsPredecessorChain is the consolidated chain up to the frozen terminal.
 func columnsPredecessorChain() []bootstrap.VersionHandle {
 	return []bootstrap.VersionHandle{v4_0_4.Handler, v4_0_5.Handler, v4_0_6.Handler, v4_0_7.Handler}
@@ -103,10 +111,11 @@ func columnsPredecessorChain() []bootstrap.VersionHandle {
 // definition in the sys tenant and in columns_upgrade_tenant. The returned
 // stopped cluster holds the READY-4.0.7/41 predecessor content the v4_0_18
 // entry must recreate.
-func stageReady407Predecessor(t *testing.T, ctx context.Context) Cluster {
+func stageReady407Predecessor(t *testing.T) Cluster {
 	t.Helper()
-	c := newColumnsUpgradeCluster(t, ctx, columnsPredecessorChain())
-	require.NoError(t, c.Start())
+	c := newColumnsUpgradeCluster(t, columnsPredecessorChain())
+	ctx, cancel := startColumnsUpgradePhase(t, c)
+	defer cancel()
 	cn, err := c.GetCNService(0)
 	require.NoError(t, err)
 	createColumnsFixtures(t, ctx, cn)
@@ -323,12 +332,11 @@ func requireColumnsUpgradeComplete(t *testing.T, ctx context.Context, cn Service
 func TestColumnsUpgradeAutomaticScenarioCompletion(t *testing.T) {
 	require.NoError(t, CloseBaseClusterTests())
 	require.NoError(t, CloseSingleCNBaseClusterTests())
-	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Minute)
-	defer cancel()
-	c := stageReady407Predecessor(t, ctx)
+	c := stageReady407Predecessor(t)
 
 	setRecoveryCNHandles(c, append(columnsPredecessorChain(), v4_0_18.Handler), true)
-	require.NoError(t, c.Start())
+	ctx, cancel := startColumnsUpgradePhase(t, c)
+	defer cancel()
 	cn, err := c.GetCNService(0)
 	require.NoError(t, err)
 	stepIDs := requireColumnsUpgradeComplete(t, ctx, cn)
@@ -338,7 +346,9 @@ func TestColumnsUpgradeAutomaticScenarioCompletion(t *testing.T) {
 
 	// Restart: the published route and the decorated definitions stay; no new
 	// route is created.
-	require.NoError(t, c.Start())
+	cancel()
+	ctx, cancel = startColumnsUpgradePhase(t, c)
+	defer cancel()
 	cn, err = c.GetCNService(0)
 	require.NoError(t, err)
 	final, steps := readRecoveryCatalog(t, ctx, cn, v4_0_18.Handler.Metadata())
@@ -359,9 +369,7 @@ func TestColumnsUpgradeAutomaticScenarioCompletion(t *testing.T) {
 func TestColumnsUpgradeManualFailFastThenComplete(t *testing.T) {
 	require.NoError(t, CloseBaseClusterTests())
 	require.NoError(t, CloseSingleCNBaseClusterTests())
-	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Minute)
-	defer cancel()
-	c := stageReady407Predecessor(t, ctx)
+	c := stageReady407Predecessor(t)
 
 	setRecoveryCNHandles(c, append(columnsPredecessorChain(), v4_0_18.Handler), false)
 	err := c.Start()
@@ -372,7 +380,8 @@ func TestColumnsUpgradeManualFailFastThenComplete(t *testing.T) {
 	require.NoError(t, err)
 
 	setRecoveryCNHandles(c, append(columnsPredecessorChain(), v4_0_18.Handler), true)
-	require.NoError(t, c.Start())
+	ctx, cancel := startColumnsUpgradePhase(t, c)
+	defer cancel()
 	cn, err := c.GetCNService(0)
 	require.NoError(t, err)
 	requireColumnsUpgradeComplete(t, ctx, cn)
@@ -391,13 +400,12 @@ func TestColumnsUpgradeManualFailFastThenComplete(t *testing.T) {
 func TestColumnsUpgradeWithoutEntryKeepsPredecessorDefinitions(t *testing.T) {
 	require.NoError(t, CloseBaseClusterTests())
 	require.NoError(t, CloseSingleCNBaseClusterTests())
-	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Minute)
-	defer cancel()
-	c := stageReady407Predecessor(t, ctx)
+	c := stageReady407Predecessor(t)
 
 	// Ablation generation: the frozen 4.0.7/41 chain with no v4_0_18 handle.
 	setRecoveryCNHandles(c, columnsPredecessorChain(), true)
-	require.NoError(t, c.Start())
+	ctx, cancel := startColumnsUpgradePhase(t, c)
+	defer cancel()
 	cn, err := c.GetCNService(0)
 	require.NoError(t, err)
 	final, steps := readRecoveryCatalog(t, ctx, cn, v4_0_7.Handler.Metadata())
@@ -432,7 +440,9 @@ func TestColumnsUpgradeWithoutEntryKeepsPredecessorDefinitions(t *testing.T) {
 	// now does the repair execute, proving the completion legs' decorated
 	// state comes from the v4_0_18 entry and not from background machinery.
 	setRecoveryCNHandles(c, append(columnsPredecessorChain(), v4_0_18.Handler), true)
-	require.NoError(t, c.Start())
+	cancel()
+	ctx, cancel = startColumnsUpgradePhase(t, c)
+	defer cancel()
 	cn, err = c.GetCNService(0)
 	require.NoError(t, err)
 	requireColumnsUpgradeComplete(t, ctx, cn)
@@ -554,9 +564,7 @@ func (h *postReplacementCrashHandler) rollbackEvidence() map[int32]rollbackObser
 func TestColumnsUpgradeInterruptedRouteResumes(t *testing.T) {
 	require.NoError(t, CloseBaseClusterTests())
 	require.NoError(t, CloseSingleCNBaseClusterTests())
-	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Minute)
-	defer cancel()
-	c := stageReady407Predecessor(t, ctx)
+	c := stageReady407Predecessor(t)
 
 	crash := &postReplacementCrashHandler{
 		VersionHandle: v4_0_18.Handler,
@@ -564,7 +572,8 @@ func TestColumnsUpgradeInterruptedRouteResumes(t *testing.T) {
 		observed:      map[int32]rollbackObservation{},
 	}
 	setRecoveryCNHandles(c, append(columnsPredecessorChain(), crash), true)
-	require.NoError(t, c.Start())
+	ctx, cancel := startColumnsUpgradePhase(t, c)
+	defer cancel()
 	cn, err := c.GetCNService(0)
 	require.NoError(t, err)
 
@@ -589,7 +598,9 @@ func TestColumnsUpgradeInterruptedRouteResumes(t *testing.T) {
 
 	// Restart: the completed route and decorated definitions persist; replay
 	// is a no-op and no new route is created.
-	require.NoError(t, c.Start())
+	cancel()
+	ctx, cancel = startColumnsUpgradePhase(t, c)
+	defer cancel()
 	cn, err = c.GetCNService(0)
 	require.NoError(t, err)
 	final, steps := readRecoveryCatalog(t, ctx, cn, v4_0_18.Handler.Metadata())

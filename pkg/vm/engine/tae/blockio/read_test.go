@@ -581,9 +581,9 @@ func TestCanFuseExactMembershipTopK(t *testing.T) {
 	require.False(t, canFuseExactMembershipTopK(info, filter, search, []uint16{0}, top, -1, 2, nil))
 	top.Desc = false
 	require.False(t, canFuseExactMembershipTopK(info, filter, search, []uint16{0}, top, -1, 2,
-		func(*batch.Batch, []int) (engine.ReaderFilterResult, error) {
+		&engine.ReaderFilterRequest{Apply: func(*batch.Batch, []int) (engine.ReaderFilterResult, error) {
 			return engine.ReaderFilterResult{}, nil
-		}))
+		}}))
 }
 
 func TestBlockDataReadInnerAppendableVectorTopNUsesLegacyPath(t *testing.T) {
@@ -704,10 +704,57 @@ func TestBlockDataReadWithFilterDefersPayload(t *testing.T) {
 			queryMP,
 			fs,
 			[]int{0},
-			filter,
+			&engine.ReaderFilterRequest{Apply: filter},
 		)
 		return err
 	}
+
+	t.Run("exact selection observes tombstones and owns output", func(t *testing.T) {
+		intType := colTypes[0]
+		target := batch.NewWithSize(1)
+		target.Vecs[0] = vector.NewOffHeapVecWithType(intType)
+		t.Cleanup(func() { target.Clean(queryMP) })
+		state := objectio.NewExactScanState(objectio.NewExactScanFilter([]objectio.ExactScanPredicate{{Column: 0, Type: intType, Op: objectio.ExactScanGE, Value: 2}}))
+		t.Cleanup(state.Close)
+		genericCalls, observed := 0, 0
+		request := &engine.ReaderFilterRequest{Exact: state, Apply: func(*batch.Batch, []int) (engine.ReaderFilterResult, error) {
+			genericCalls++
+			return engine.ReaderFilterResult{}, nil
+		}, Observe: func(stats objectio.ExactScanStats) {
+			observed++
+			require.Equal(t, 7, stats.InputRows)
+			require.Equal(t, 5, stats.OutputRows)
+		}}
+		_, err := BlockDataReadWithFilter(ctx, &info, ds, []uint16{0}, []types.Type{intType}, -1, timestamp.Timestamp{}, nil, nil, objectio.BlockReadFilter{}, nil, fileservice.Policy(0), "exact-test", target, cacheVectors, queryMP, fs, []int{0}, request)
+		require.NoError(t, err)
+		require.Zero(t, genericCalls)
+		require.Equal(t, 1, observed)
+		require.Equal(t, []int32{2, 4, 5, 6, 7}, vector.MustFixedColNoTypeCheck[int32](target.Vecs[0]))
+	})
+	t.Run("exact unsupported projection reuses generic filtering", func(t *testing.T) {
+		output.CleanOnlyData()
+		state := objectio.NewExactScanState(objectio.NewExactScanFilter([]objectio.ExactScanPredicate{{Column: 0, Type: colTypes[0], Op: objectio.ExactScanGE, Value: 2}}))
+		t.Cleanup(state.Close)
+		calls := 0
+		request := &engine.ReaderFilterRequest{Exact: state, Apply: func(bat *batch.Batch, loaded []int) (engine.ReaderFilterResult, error) {
+			calls++
+			require.Nil(t, loaded)
+			var rows []int64
+			for row, value := range vector.MustFixedColNoTypeCheck[int32](bat.Vecs[0]) {
+				if value >= 2 {
+					rows = append(rows, int64(row))
+				}
+			}
+			bat.Shrink(rows, false)
+			return engine.ReaderFilterResult{}, nil
+		}}
+		_, err := BlockDataReadWithFilter(ctx, &info, ds, []uint16{0, 1}, colTypes, -1, timestamp.Timestamp{}, nil, nil, objectio.BlockReadFilter{}, nil, fileservice.Policy(0), "exact-fallback-test", output, cacheVectors, queryMP, fs, []int{0, 1}, request)
+		require.NoError(t, err)
+		require.Equal(t, 1, calls)
+		require.Equal(t, []int32{2, 4, 5, 6, 7}, vector.MustFixedColNoTypeCheck[int32](output.Vecs[0]))
+		require.Equal(t, "payload-2", output.Vecs[1].GetStringAt(0))
+		output.CleanOnlyData()
+	})
 
 	t.Run("partial survivors map through tombstones", func(t *testing.T) {
 		require.NoError(t, read(func(bat *batch.Batch, loaded []int) (engine.ReaderFilterResult, error) {
@@ -784,9 +831,9 @@ func TestBlockDataReadWithFilterDefersPayload(t *testing.T) {
 			queryMP,
 			fs,
 			[]int{0},
-			func(*batch.Batch, []int) (engine.ReaderFilterResult, error) {
+			&engine.ReaderFilterRequest{Apply: func(*batch.Batch, []int) (engine.ReaderFilterResult, error) {
 				return engine.ReaderFilterResult{All: true}, nil
-			},
+			}},
 		)
 		require.ErrorContains(t, err, "column count 2 does not match type count 1")
 	})
@@ -808,12 +855,12 @@ func TestBlockDataReadWithFilterDefersPayload(t *testing.T) {
 			queryMP,
 			fs,
 			[]int{0},
-			func(bat *batch.Batch, _ []int) (engine.ReaderFilterResult, error) {
+			&engine.ReaderFilterRequest{Apply: func(bat *batch.Batch, _ []int) (engine.ReaderFilterResult, error) {
 				sels := []int64{1}
 				bat.Vecs[0].Shrink(sels, false)
 				bat.SetRowCount(1)
 				return engine.ReaderFilterResult{Sels: sels}, nil
-			},
+			}},
 			nil,
 			nil,
 		))
@@ -889,7 +936,7 @@ func TestBlockDataReadWithFilterAppliesVectorTopKAfterResidual(t *testing.T) {
 		queryMP,
 		fs,
 		[]int{0},
-		func(bat *batch.Batch, loaded []int) (engine.ReaderFilterResult, error) {
+		&engine.ReaderFilterRequest{Apply: func(bat *batch.Batch, loaded []int) (engine.ReaderFilterResult, error) {
 			require.Equal(t, []int{0}, loaded)
 			require.Zero(t, bat.Vecs[1].Length(), "distance column must remain deferred until after filtering")
 			require.Zero(t, bat.Vecs[2].Length(), "payload must remain deferred until after filtering")
@@ -903,7 +950,7 @@ func TestBlockDataReadWithFilterAppliesVectorTopKAfterResidual(t *testing.T) {
 			bat.Vecs[0].Shrink(sels, false)
 			bat.SetRowCount(len(sels))
 			return engine.ReaderFilterResult{Sels: sels}, nil
-		},
+		}},
 	)
 	require.NoError(t, err)
 	require.Equal(t, 7, preFilterRows)
@@ -928,7 +975,7 @@ func TestBlockDataReadWithFilterAppliesVectorTopKAfterResidual(t *testing.T) {
 		[]uint16{0, 1, 2}, colTypes, -1, types.TS{},
 		[]int64{1, 2, 4, 5, 7}, fileservice.Policy(0), output,
 		cacheVectors, queryMP, fs, []int{0},
-		func(bat *batch.Batch, _ []int) (engine.ReaderFilterResult, error) {
+		&engine.ReaderFilterRequest{Apply: func(bat *batch.Batch, _ []int) (engine.ReaderFilterResult, error) {
 			ids := vector.MustFixedColWithTypeCheck[int32](bat.Vecs[0])
 			sels := make([]int64, 0, len(ids))
 			for pos, id := range ids {
@@ -939,7 +986,7 @@ func TestBlockDataReadWithFilterAppliesVectorTopKAfterResidual(t *testing.T) {
 			bat.Vecs[0].Shrink(sels, false)
 			bat.SetRowCount(len(sels))
 			return engine.ReaderFilterResult{Sels: sels}, nil
-		},
+		}},
 		top, &preFilterRows,
 	)
 	require.NoError(t, err)
@@ -965,11 +1012,11 @@ func TestBlockDataReadWithFilterAppliesVectorTopKAfterResidual(t *testing.T) {
 		[]uint16{0, 1, 2}, colTypes, -1, types.TS{},
 		[]int64{1, 2, 4, 5, 7}, fileservice.Policy(0), output,
 		cacheVectors, queryMP, fs, []int{0},
-		func(bat *batch.Batch, _ []int) (engine.ReaderFilterResult, error) {
+		&engine.ReaderFilterRequest{Apply: func(bat *batch.Batch, _ []int) (engine.ReaderFilterResult, error) {
 			bat.Vecs[0].CleanOnlyData()
 			bat.SetRowCount(0)
 			return engine.ReaderFilterResult{Sels: []int64{}}, nil
-		},
+		}},
 		top, &preFilterRows,
 	)
 	require.NoError(t, err)
@@ -989,11 +1036,11 @@ func TestBlockDataReadWithFilterAppliesVectorTopKAfterResidual(t *testing.T) {
 		[]uint16{0, 1, 2}, colTypes, -1, timestamp.Timestamp{}, nil, nil,
 		objectio.BlockReadFilter{}, top, fileservice.Policy(0), "filtered-topk-empty-test",
 		output, cacheVectors, queryMP, fs, []int{0},
-		func(bat *batch.Batch, _ []int) (engine.ReaderFilterResult, error) {
+		&engine.ReaderFilterRequest{Apply: func(bat *batch.Batch, _ []int) (engine.ReaderFilterResult, error) {
 			bat.Vecs[0].CleanOnlyData()
 			bat.SetRowCount(0)
 			return engine.ReaderFilterResult{}, nil
-		},
+		}},
 	)
 	require.NoError(t, err)
 	require.Equal(t, 7, preFilterRows)
@@ -1054,14 +1101,14 @@ func TestBlockDataReadWithFilterAppliesVectorTopKAfterResidual(t *testing.T) {
 				readErr = blockDataReadWithFilter(
 					ctx, &info, nil, []uint16{0, 1, 2}, colTypes, -1, types.TS{},
 					tc.storageRows, fileservice.Policy(0), output, cacheVectors, queryMP, fs,
-					[]int{0}, filter, top, &preRows,
+					[]int{0}, &engine.ReaderFilterRequest{Apply: filter}, top, &preRows,
 				)
 			} else {
 				preRows, readErr = BlockDataReadWithFilter(
 					ctx, &info, &blockReadTestDataSource{deleted: tc.deleted},
 					[]uint16{0, 1, 2}, colTypes, -1, timestamp.Timestamp{}, nil, nil,
 					objectio.BlockReadFilter{}, top, fileservice.Policy(0), "filtered-topk-test",
-					output, cacheVectors, queryMP, fs, []int{0}, filter,
+					output, cacheVectors, queryMP, fs, []int{0}, &engine.ReaderFilterRequest{Apply: filter},
 				)
 			}
 			require.NoError(t, readErr)
@@ -1359,7 +1406,7 @@ func TestBlockDataReadInnerAppendableVisibility(t *testing.T) {
 		queryMP,
 		fs,
 		[]int{1},
-		func(bat *batch.Batch, _ []int) (engine.ReaderFilterResult, error) {
+		&engine.ReaderFilterRequest{Apply: func(bat *batch.Batch, _ []int) (engine.ReaderFilterResult, error) {
 			require.Zero(t, bat.Vecs[0].Length(), "payload must remain deferred")
 			visibleRowids := vector.MustFixedColWithTypeCheck[types.Rowid](bat.Vecs[1])
 			require.Equal(t, []uint32{0, 2}, []uint32{
@@ -1370,7 +1417,7 @@ func TestBlockDataReadInnerAppendableVisibility(t *testing.T) {
 			bat.Vecs[1].Shrink(sels, false)
 			bat.SetRowCount(1)
 			return engine.ReaderFilterResult{Sels: sels}, nil
-		},
+		}},
 	)
 	require.NoError(t, err)
 	require.Equal(t, "k2", lateOutput.Vecs[0].GetStringAt(0))

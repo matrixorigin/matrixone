@@ -46,7 +46,7 @@ func columns46ShapeChain() []bootstrap.VersionHandle {
 // in the sys tenant, and stops holding READY-4.0.6/5 content.
 func stageReady406Predecessor(t *testing.T, ctx context.Context) Cluster {
 	t.Helper()
-	c := newColumnsUpgradeCluster(t, ctx, columns46ShapeChain())
+	c := newColumnsUpgradeCluster(t, columns46ShapeChain())
 	require.NoError(t, c.Start())
 	cn, err := c.GetCNService(0)
 	require.NoError(t, err)
@@ -277,7 +277,7 @@ func TestColumnsUpgradeTaskSurvivalCrossingEmbed(t *testing.T) {
 	require.NoError(t, CloseSingleCNBaseClusterTests())
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Minute)
 	defer cancel()
-	c := stageReady407Predecessor(t, ctx)
+	c := stageReady407Predecessor(t)
 
 	func() {
 		require.NoError(t, c.Start())

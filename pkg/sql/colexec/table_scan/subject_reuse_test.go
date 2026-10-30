@@ -124,7 +124,7 @@ func orLikeScanEval(t testing.TB, proc *process.Process, arg *TableScan, input *
 	before := input.RowCount()
 	if late {
 		require.NotNil(t, arg.ctr.readerFilter)
-		result, err := arg.ctr.readerFilter(input, []int{0, 1})
+		result, err := arg.ctr.readerFilter.Apply(input, []int{0, 1})
 		require.NoError(t, err)
 		require.Zero(t, input.Vecs[2].Length())
 		if len(want) == before {
@@ -240,7 +240,7 @@ func TestORLikeSubjectReuseTableScanPrecedingShrinkAndExclusions(t *testing.T) {
 			t.Cleanup(func() { arg.Free(proc, false, nil); input.Clean(proc.Mp()); require.Zero(t, proc.Mp().CurrNB()) })
 			require.NoError(t, arg.Prepare(proc))
 			if kind == "unreached_error" {
-				_, err := arg.ctr.readerFilter(input, []int{0, 1})
+				_, err := arg.ctr.readerFilter.Apply(input, []int{0, 1})
 				require.ErrorContains(t, err, "filter condition is not boolean")
 			} else {
 				if kind == "runtime_shrink" || kind == "static_shrink" || kind == "earlier_admitted" {
@@ -297,7 +297,7 @@ func BenchmarkORLikeSubjectReuseTableScanFirstBatch(b *testing.B) {
 						if baseline {
 							arg.ctr.subjectReuseAdmissionDone = true
 						}
-						_, err = arg.ctr.readerFilter(input, []int{0, 1})
+						_, err = arg.ctr.readerFilter.Apply(input, []int{0, 1})
 						if err != nil {
 							b.Fatal(err)
 						}

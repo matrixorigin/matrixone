@@ -1288,6 +1288,16 @@ type ReaderFilter func(
 	loadedColumns []int,
 ) (ReaderFilterResult, error)
 
+// ReaderFilterRequest owns one prepared scan's two execution forms. Readers
+// invoke Apply on owned batches unless Exact completed the same predicate chain.
+// Observe consumes scalar input/work metadata only; cached vectors never escape.
+// Like ReaderFilter, requests are sequential and must not be shared concurrently.
+type ReaderFilterRequest struct {
+	Apply   ReaderFilter
+	Exact   *objectio.ExactScanState
+	Observe func(objectio.ExactScanStats)
+}
+
 // LateMaterializationReader is an optional Reader capability. It reads the
 // early columns, applies filter, and materializes the remaining columns only
 // for surviving persisted rows. Readers must fall back to an eager read for
@@ -1297,7 +1307,7 @@ type LateMaterializationReader interface {
 		ctx context.Context,
 		cols []string,
 		earlyColumns []int,
-		filter ReaderFilter,
+		filter *ReaderFilterRequest,
 		mp *mpool.MPool,
 		outBatch *batch.Batch,
 	) (isEnd bool, err error)
@@ -1313,7 +1323,7 @@ type FilteredTopKReader interface {
 		ctx context.Context,
 		cols []string,
 		earlyColumns []int,
-		filter ReaderFilter,
+		filter *ReaderFilterRequest,
 		indexParam *plan.IndexReaderParam,
 		mp *mpool.MPool,
 		outBatch *batch.Batch,

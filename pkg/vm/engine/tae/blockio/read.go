@@ -205,12 +205,20 @@ func BlockDataReadWithFilter(
 	mp *mpool.MPool,
 	fs fileservice.FileService,
 	earlyColumns []int,
-	applyFilter engine.ReaderFilter,
+	applyFilter *engine.ReaderFilterRequest,
 ) (preFilterRows int, err error) {
-	if applyFilter == nil {
+	if applyFilter == nil || applyFilter.Apply == nil {
 		return 0, moerr.NewInvalidInputNoCtx("nil residual block filter")
 	}
-	if err := validateEarlyColumns(earlyColumns, len(columns)); err != nil {
+	if applyFilter.Exact != nil && len(columns) > 0 && len(earlyColumns) == len(columns) {
+		// Exact filtering consumes the full requested schema. The legacy
+		// late-materialization contract still requires a proper subset.
+		for i, pos := range earlyColumns {
+			if pos != i {
+				return 0, moerr.NewInvalidInputNoCtx("invalid complete exact-filter column positions")
+			}
+		}
+	} else if err := validateEarlyColumns(earlyColumns, len(columns)); err != nil {
 		return 0, err
 	}
 	err = blockDataRead(
@@ -257,7 +265,7 @@ func blockDataRead(
 	mp *mpool.MPool,
 	fs fileservice.FileService,
 	earlyColumns []int,
-	applyFilter engine.ReaderFilter,
+	applyFilter *engine.ReaderFilterRequest,
 	preFilterRows *int,
 ) error {
 	if logutil.GetSkip1Logger().Core().Enabled(zap.DebugLevel) {
@@ -341,6 +349,12 @@ func blockDataRead(
 		}
 	}
 
+	if applyFilter != nil && applyFilter.Exact != nil &&
+		orderByLimit == nil && !info.IsAppendable() && phyAddrColumnPos < 0 {
+		cacheVectors.Free(mp)
+		return blockDataReadExactFilter(ctx, info, ds, columns, colTypes, sels, policy, bat, mp, fs, applyFilter, preFilterRows)
+	}
+
 	if applyFilter == nil {
 		err = BlockDataReadInner(
 			ctx,
@@ -397,7 +411,7 @@ func canFuseExactMembershipTopK(
 	top *objectio.IndexReaderTopOp,
 	phyAddrColumnPos int,
 	columnCount int,
-	applyFilter engine.ReaderFilter,
+	applyFilter *engine.ReaderFilterRequest,
 ) bool {
 	if info == nil || info.IsAppendable() || !filter.ExactMembership || filter.HasFakePK ||
 		filter.CachedSearch != nil || searchFunc == nil || len(filterColumns) == 0 ||
@@ -924,6 +938,9 @@ func materializeBlockColumnsAtPositions(
 	if outputBat == nil {
 		return objectio.NullBitmap, moerr.NewInvalidInputNoCtx("nil output batch for block columns")
 	}
+	if len(positions) == 0 {
+		return objectio.NullBitmap, nil
+	}
 	selectedColumns := make([]uint16, len(positions))
 	selectedTypes := make([]types.Type, len(positions))
 	selectedOutput := batch.NewWithSize(len(positions))
@@ -1011,7 +1028,7 @@ func blockDataReadWithFilter(
 	mp *mpool.MPool,
 	fs fileservice.FileService,
 	earlyColumns []int,
-	applyFilter engine.ReaderFilter,
+	applyFilter *engine.ReaderFilterRequest,
 	orderByLimit *objectio.IndexReaderTopOp,
 	preFilterRows *int,
 ) (err error) {
@@ -1138,7 +1155,7 @@ func blockDataReadWithFilter(
 		return nil
 	}
 
-	filterResult, err := applyFilter(outputBat, earlyColumns)
+	filterResult, err := applyFilter.Apply(outputBat, earlyColumns)
 	if err != nil {
 		return err
 	}
@@ -1290,7 +1307,7 @@ func blockDataReadWithSelectedFilterTopK(
 	mp *mpool.MPool,
 	fs fileservice.FileService,
 	earlyColumns []int,
-	applyFilter engine.ReaderFilter,
+	applyFilter *engine.ReaderFilterRequest,
 	orderByLimit *objectio.IndexReaderTopOp,
 	preFilterRows *int,
 ) error {
@@ -1352,7 +1369,7 @@ func blockDataReadWithSelectedFilterTopK(
 			}
 
 			var filterErr error
-			filterResult, filterErr = applyFilter(outputBat, earlyColumns)
+			filterResult, filterErr = applyFilter.Apply(outputBat, earlyColumns)
 			if filterErr != nil {
 				return nil, filterErr
 			}
