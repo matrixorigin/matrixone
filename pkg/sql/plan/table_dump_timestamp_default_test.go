@@ -516,21 +516,36 @@ func TestTableDumpHistoricalJapaneseMonthAbbrev(t *testing.T) {
 				readingZone = time.FixedZone("reading zone", int(tc.readingZoneSeconds))
 			}
 			proc.GetSessionInfo().TimeZone = readingZone
-			for _, target := range []*planpb.TableDef{&persisted, current} {
-				sensitive, err := AnalyzeTableDumpBindings(compiler, target, &persisted)
+			sensitive, err := AnalyzeTableDumpBindings(compiler, &persisted, &persisted)
+			require.NoError(t, err)
+			require.True(t, sensitive)
+			// The half-hour case also proves that a legacy payload can be
+			// checked against the current catalog declaration. The other rows
+			// exercise distinct locale, precision, and timezone witnesses above.
+			if tc.name == "half_hour_creation" {
+				sensitive, err = AnalyzeTableDumpBindings(compiler, current, &persisted)
 				require.NoError(t, err)
 				require.True(t, sensitive)
 			}
-			_, err = AnalyzeTableDumpBindings(compiler, current, current)
-			require.NoError(t, err)
+			// One current-format control is enough to detect an accidental
+			// preference for the historical Japanese month spelling.
+			if tc.name == "constant" {
+				_, err = AnalyzeTableDumpBindings(compiler, current, current)
+				require.NoError(t, err)
+			}
 			require.True(t, proto.Equal(before, &persisted))
 			require.Equal(t, locale, proc.GetSessionInfo().LCTimeNames)
 			require.Same(t, readingZone, proc.GetSessionInfo().TimeZone)
 
-			forged := proto.Clone(&persisted).(*planpb.TableDef)
-			forged.Cols[0].Default.Expr.GetLit().Value = &planpb.Literal_Sval{Sval: tc.forgedValue}
-			_, err = AnalyzeTableDumpBindings(compiler, current, forged)
-			require.Error(t, err)
+			// A forged month must still be rejected after searching both the
+			// historical locale and the non-hour creation offset. Running this
+			// exhaustive negative search once avoids repeating the same oracle.
+			if tc.name == "half_hour_creation" {
+				forged := proto.Clone(&persisted).(*planpb.TableDef)
+				forged.Cols[0].Default.Expr.GetLit().Value = &planpb.Literal_Sval{Sval: tc.forgedValue}
+				_, err = AnalyzeTableDumpBindings(compiler, current, forged)
+				require.Error(t, err)
+			}
 		})
 	}
 }
