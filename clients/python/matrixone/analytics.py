@@ -573,9 +573,17 @@ class ArrowStream:
                 # Avoid SSCursor.close() draining millions of unread rows.
                 if self._cursor is not None and self._cursor._result is not None:
                     self._cursor._result.unbuffered_active = False
-                self._raw.invalidate()
-                if self._cursor is not None:
-                    self._cursor.connection = None
+                try:
+                    self._raw.invalidate()
+                finally:
+                    if self._cursor is not None:
+                        result = self._cursor._result
+                        if result is not None:
+                            # PyMySQL retains its connection in an unfinished
+                            # MySQLResult. The connection also holds the result,
+                            # so sever this cycle after invalidating the socket.
+                            result.connection = None
+                        self._cursor.connection = None
         except BaseException:
             self._raw.invalidate()
             raise

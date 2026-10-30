@@ -336,6 +336,12 @@ class AsyncArrowStream:
         # drains unread rows. Conversion may continue but owns detached rows only.
         if self._driver is not None and not self._complete:
             self._driver.close()
+            if self._cursor is not None and self._cursor._result is not None:
+                # An unfinished aiomysql result retains its connection, while
+                # the connection retains the result. The transport is closed;
+                # sever that cycle without draining unread rows.
+                self._cursor._result.unbuffered_active = False
+                self._cursor._result.connection = None
         if self._lease is not None:
             self._lease.release()
         self._manager._streams.discard(self)
