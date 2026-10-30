@@ -1052,7 +1052,10 @@ func buildShowIndex(stmt *tree.ShowIndex, ctx CompilerContext) (*Plan, error) {
 		"`idx`.`ordinal_position` as `Seq_in_index`, " +
 		"if(`tcl`.`att_is_hidden` = 1 and `tcl`.`attr_has_generated` = 1, NULL, `idx`.`column_name`) as `Column_name`, " +
 		"'A' as `Collation`, 0 as `Cardinality`, " +
-		"'NULL' as `Sub_part`, " +
+		// Retained prefix lengths come from the canonical index metadata:
+		// the number of indexed characters when the part carries a prefix,
+		// actual SQL NULL for whole-column index parts (#30935).
+		"mo_index_sub_part(`idx`.`algo_params`, `idx`.`column_name`) as `Sub_part`, " +
 		"'NULL' as `Packed`, " +
 		"if(`tcl`.`attnotnull` = 0, 'YES', '') as `Null`, " +
 		"coalesce(nullif(`idx`.`algo`, ''), 'BTREE') as 'Index_type', " +

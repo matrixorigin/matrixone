@@ -266,8 +266,11 @@ func TestCallerOwnedTenantUpgradeRollsBackAndRetries(t *testing.T) {
 				require.NoError(t, err)
 			}
 			require.True(t, didUpgrade, "a rolled-back migration must not publish completion to the CN cache")
+			// The walk continues past the paged 4.0.7 stage to the cluster's
+			// final registered version (#31489 publishes declared catalog
+			// metadata through the renumbered final tenant hop).
 			require.Equal(t, final, observed[versionSQL])
-			require.NotEqual(t, oldDefinition, observed[definitionSQL], "the real v407 walker must replace the old view")
+			require.NotEqual(t, oldDefinition, observed[definitionSQL], "the final tenant walker must replace the old view")
 			var version, definition string
 			require.NoError(t, sys.QueryRowContext(ctx, versionSQL).Scan(&version))
 			require.NoError(t, sys.QueryRowContext(ctx, definitionSQL).Scan(&definition))
