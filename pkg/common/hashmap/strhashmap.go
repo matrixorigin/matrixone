@@ -184,11 +184,7 @@ func (itr *strHashmapIterator) prepareHashKeys(
 			}
 			if vec.IsConst() {
 				value := canonicalVarlenaHashValueForType(*vec.GetType(), vec.GetBytesAt(0))
-				valueSize := len(value)
-				if vec.GetType().Oid == types.T_json {
-					valueSize = keycodec.CanonicalJSONSize(value)
-				}
-				size := prefix + 4 + valueSize
+				size := prefix + 4 + hashKeyValueSize(vec.GetType().Oid, value)
 				if size < 0 || uniformRowSize > maxInt-size {
 					return mpool.ErrAllocationAccountInvalid
 				}
@@ -201,10 +197,10 @@ func (itr *strHashmapIterator) prepareHashKeys(
 				if err := itr.sizeCanonicalStringKeys(vec, start, count, prefix); err != nil {
 					return err
 				}
-			} else if vec.GetType().Oid == types.T_json {
+			} else if oid := vec.GetType().Oid; oid == types.T_json || oid.IsBlockScaledArray() {
 				for i := 0; i < count; i++ {
 					value := values[start+i].GetByteSlice(area)
-					if err := add(i, prefix+4+keycodec.CanonicalJSONSize(value)); err != nil {
+					if err := add(i, prefix+4+hashKeyValueSize(oid, value)); err != nil {
 						return err
 					}
 				}
@@ -256,11 +252,7 @@ func (itr *strHashmapIterator) prepareHashKeys(
 				valueRow = 0
 			}
 			value := canonicalVarlenaHashValueForType(*vec.GetType(), vec.GetBytesAt(valueRow))
-			valueSize := len(value)
-			if vec.GetType().Oid == types.T_json {
-				valueSize = keycodec.CanonicalJSONSize(value)
-			}
-			if err := add(i, prefix+4+valueSize); err != nil {
+			if err := add(i, prefix+4+hashKeyValueSize(vec.GetType().Oid, value)); err != nil {
 				return err
 			}
 		}
@@ -385,7 +377,7 @@ func (itr *strHashmapIterator) encodeHashKeys(vecs []*vector.Vector, start, coun
 		if itr.mp.groupingAware || itr.mp.hasNull {
 			switch vec.GetType().Oid {
 			case types.T_json, types.T_array_float32, types.T_array_float64,
-				types.T_array_bf16, types.T_array_float16:
+				types.T_array_bf16, types.T_array_float16, types.T_array_float8, types.T_array_float4:
 				fillCanonicalGroupingAwareVarlena(itr, vec, count, start)
 			default:
 				fillGroupingAwareStr(itr, vec, count, start)
@@ -404,7 +396,7 @@ func (itr *strHashmapIterator) encodeHashKeys(vecs []*vector.Vector, start, coun
 		} else {
 			switch vec.GetType().Oid {
 			case types.T_json, types.T_array_float32, types.T_array_float64,
-				types.T_array_bf16, types.T_array_float16:
+				types.T_array_bf16, types.T_array_float16, types.T_array_float8, types.T_array_float4:
 				fillCanonicalStringGroupStr(itr, vec, count, start)
 			default:
 				fillStringGroupStr(itr, vec, count, start, len(vecs))
@@ -417,6 +409,20 @@ func (itr *strHashmapIterator) encodeHashKeys(vecs []*vector.Vector, start, coun
 			keys[i] = append(keys[i], hashtable.StrKeyPadding[l:]...)
 		}
 	}
+}
+
+// hashKeyValueSize is the length appendVarlenaHashKey appends for a value already passed
+// through canonicalVarlenaHashValueForType: a JSON or vecf8/vecf4 key differs in length
+// from the stored value. keycodec.CanonicalValueSize takes the stored value instead and
+// would apply the collation key a second time.
+func hashKeyValueSize(oid types.T, value []byte) int {
+	switch {
+	case oid == types.T_json:
+		return keycodec.CanonicalJSONSize(value)
+	case oid.IsBlockScaledArray():
+		return keycodec.CanonicalVecBlockSize(value)
+	}
+	return len(value)
 }
 
 func appendVarlenaHashKey(dst []byte, typ types.Type, value []byte) []byte {
@@ -435,6 +441,8 @@ func appendVarlenaHashKey(dst []byte, typ types.Type, value []byte) []byte {
 		return keycodec.AppendCanonicalVecF64(dst, value)
 	case types.T_array_bf16, types.T_array_float16:
 		return keycodec.AppendCanonicalVecF16(dst, value)
+	case types.T_array_float8, types.T_array_float4:
+		return keycodec.AppendCanonicalVecBlock(dst, value)
 	default:
 		return append(dst, value...)
 	}

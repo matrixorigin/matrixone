@@ -476,7 +476,7 @@ func (ctr *container) verifiedBatchSuffix(bat *batch.Batch, proc *process.Proces
 		// Float-array and JSON numeric comparisons are not transitive for all
 		// values. Binding a constant fixed vector also expands it to batch size.
 		// Keep these keys on the ordinary path without speculative bindings.
-		if vec.IsConst() || vec.GetType().Oid.IsArrayRelate() || vec.GetType().Oid == types.T_json {
+		if vec.IsConst() || vec.GetType().Oid.IsArray() || vec.GetType().Oid == types.T_json {
 			return 0, nil
 		}
 	}
@@ -1365,6 +1365,14 @@ func (top *Top) getTopValue() ([]byte, bool) {
 	case types.T_float64:
 		v := vector.GetFixedAtNoTypeCheck[float64](vec, x)
 		return types.EncodeFloat64(&v), true
+	case types.T_bf16:
+		return types.EncodeFixed(vector.GetFixedAtNoTypeCheck[types.BF16](vec, x)), true
+	case types.T_float16:
+		return types.EncodeFixed(vector.GetFixedAtNoTypeCheck[types.Float16](vec, x)), true
+	case types.T_float8:
+		return types.EncodeFixed(vector.GetFixedAtNoTypeCheck[types.Float8](vec, x)), true
+	case types.T_float4:
+		return types.EncodeFixed(vector.GetFixedAtNoTypeCheck[types.Float4](vec, x)), true
 	case types.T_date:
 		v := vector.GetFixedAtNoTypeCheck[types.Date](vec, x)
 		return types.EncodeDate(&v), true

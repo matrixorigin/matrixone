@@ -19,9 +19,9 @@ package search
 import (
 	"context"
 	"fmt"
-	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/cuvs"
 	"github.com/matrixorigin/matrixone/pkg/indexplugin/search/planreader"
@@ -86,7 +86,7 @@ func (s *gpuSearcher) Next(ctx context.Context) (planreader.Chunk, bool, error) 
 		h := types.BytesToArray[types.Float16](s.query)
 		dims = len(h)
 		if len(h) > 0 {
-			query = unsafe.Slice((*cuvs.Float16)(unsafe.Pointer(&h[0])), len(h))
+			query = util.UnsafeSliceCast[cuvs.Float16](h)
 		}
 	} else {
 		f := types.BytesToArray[float32](s.query)

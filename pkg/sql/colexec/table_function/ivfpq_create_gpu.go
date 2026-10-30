@@ -20,7 +20,6 @@ import (
 	"fmt"
 	"strconv"
 	"time"
-	"unsafe"
 
 	"github.com/bytedance/sonic"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -60,7 +59,7 @@ func f16ToCuvs(s []types.Float16) []cuvs.Float16 {
 	if len(s) == 0 {
 		return nil
 	}
-	return unsafe.Slice((*cuvs.Float16)(unsafe.Pointer(&s[0])), len(s))
+	return util.UnsafeSliceCast[cuvs.Float16](s)
 }
 
 // ivfpqBuilder is the (B, Q)-erased build interface the create state drives.

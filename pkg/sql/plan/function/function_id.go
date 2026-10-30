@@ -948,8 +948,17 @@ const (
 	// is by name, so this entry renumbers to 623 (design D13-5).
 	MO_INDEX_SUB_PART = 623
 
+	// VECTOR_MATMUL is the batch dot-product top-k aggregate over vecf8/vecf4 columns.
+	VECTOR_MATMUL = 624
+
+	// VECBLOCK_JSON returns the exact text of a vecf8/vecf4 value: its blocks as stored.
+	VECBLOCK_JSON = 625
+
+	// VECBLOCK_BINARY returns the stored cell of a vecf8/vecf4 value as a BLOB.
+	VECBLOCK_BINARY = 626
+
 	// Keep FUNCTION_END_NUMBER one past the highest allocated function id.
-	FUNCTION_END_NUMBER = 624
+	FUNCTION_END_NUMBER = 627
 )
 
 // functionIdRegister is what function we have registered already.
@@ -1278,6 +1287,7 @@ var functionIdRegister = map[string]int32{
 	"json_agg_to_double":             JSON_AGG_TO_DOUBLE,
 	"json_storage_free":              JSON_STORAGE_FREE,
 	"json_depth":                     JSON_DEPTH,
+	"vector_matmul":                  VECTOR_MATMUL,
 	"json_contains":                  JSON_CONTAINS,
 	"json_contains_path":             JSON_CONTAINS_PATH,
 	"json_merge":                     JSON_MERGE_PRESERVE,
@@ -1580,6 +1590,8 @@ var functionIdRegister = map[string]int32{
 	"cosine_similarity": COSINE_SIMILARITY,
 	"vector_dims":       VECTOR_DIMS,
 	"normalize_l2":      NORMALIZE_L2,
+	"vecblock_json":     VECBLOCK_JSON,
+	"vecblock_binary":   VECBLOCK_BINARY,
 	"l1_distance":       L1_DISTANCE,
 	"l2_distance":       L2_DISTANCE,
 	"l2_distance_xc":    L2_DISTANCE_XC,

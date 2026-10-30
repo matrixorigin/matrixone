@@ -1020,6 +1020,15 @@ func bindWindowSpec(
 		if len(w.OrderBy) == 0 {
 			break
 		}
+		if types.T(w.OrderBy[0].Expr.Typ.Id).IsLowPrecisionFloat() && isNRange(ws.Frame) {
+			// bf16/float16/float8/float4 order and offset as float32, which holds them exactly
+			f32 := plan.Type{Id: int32(types.T_float32)}
+			expr, err := appendCastBeforeExpr(b.GetContext(), w.OrderBy[0].Expr, f32)
+			if err != nil {
+				return nil, err
+			}
+			w.OrderBy[0].Expr = expr
+		}
 		typ = rangeFrameBoundType(w.OrderBy[0].Expr.Typ)
 		t := types.Type{Oid: types.T(typ.Id)}
 		if consumerSpecific && !function.GetFunctionIsWinOrderFunByName(funcName) && isNRange(ws.Frame) && !t.IsNumericOrTemporal() {
@@ -1154,6 +1163,16 @@ func bindWindowFuncExpr(b windowFuncExprBinder, ctx *BindContext, funcName strin
 	if astExpr.Type == tree.FUNC_TYPE_DISTINCT {
 		if f := windowFunc.GetF(); f != nil {
 			f.Func.Obj = int64(uint64(f.Func.Obj) | function.Distinct)
+		}
+	}
+	if function.GetFunctionIsWinIndicatorFunByName(funcName) || isLocalSlidingRankWindowFunction(funcName) {
+		// bf16/float16/float8/float4 values reach the kernels as float32, which holds them exactly
+		if f := windowFunc.GetF(); f != nil && len(f.Args) > 0 && types.T(f.Args[0].Typ.Id).IsLowPrecisionFloat() {
+			arg, err := appendCastBeforeExpr(b.GetContext(), f.Args[0], plan.Type{Id: int32(types.T_float32)})
+			if err != nil {
+				return nil, err
+			}
+			f.Args[0] = arg
 		}
 	}
 	if function.GetFunctionIsWinIndicatorFunByName(funcName) {

@@ -101,6 +101,7 @@ func (builder *QueryBuilder) buildJSONTable(tbl *tree.TableFunction, ctx *BindCo
 					typ.NotNullable = false
 				}
 				bound.Type = MakeTypeByPlan2Type(typ)
+				// typeswitch:partial JSON_TABLE admits no low-precision float target type
 				switch bound.Type.Oid {
 				case types.T_bool, types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 					types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,

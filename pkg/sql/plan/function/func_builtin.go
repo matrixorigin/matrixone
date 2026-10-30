@@ -1149,6 +1149,15 @@ func internalNumericPrecision(typ types.Type) (int64, bool) {
 			return int64(typ.Width), true
 		}
 		return 22, true
+	case types.T_bf16:
+		// the significand bits, the implicit leading bit included
+		return 8, true
+	case types.T_float16:
+		return 11, true
+	case types.T_float8:
+		return 4, true
+	case types.T_float4:
+		return 2, true
 	case types.T_decimal64, types.T_decimal128, types.T_decimal256:
 		if typ.Width > 0 {
 			return int64(typ.Width), true
@@ -1616,6 +1625,14 @@ func makeIntervalParam(v *vector.Vector) (intervalParam, error) {
 			v, null := fp.GetValue(idx)
 			return float64(v), null, nil
 		}
+	case types.T_bf16:
+		p.float = lowPrecisionIntervalFloat[types.BF16](v)
+	case types.T_float16:
+		p.float = lowPrecisionIntervalFloat[types.Float16](v)
+	case types.T_float8:
+		p.float = lowPrecisionIntervalFloat[types.Float8](v)
+	case types.T_float4:
+		p.float = lowPrecisionIntervalFloat[types.Float4](v)
 	case types.T_int64:
 		fp := vector.GenerateFunctionFixedTypeParameter[int64](v)
 		p.float = func(idx uint64) (float64, bool, error) {
@@ -1743,6 +1760,14 @@ func makeIntervalParam(v *vector.Vector) (intervalParam, error) {
 		return p, moerr.NewInvalidInputNoCtxf("interval function have invalid input args type %s", typ.Oid.String())
 	}
 	return p, nil
+}
+
+func lowPrecisionIntervalFloat[T types.LowPrecFloat](v *vector.Vector) func(uint64) (float64, bool, error) {
+	fp := vector.GenerateFunctionFixedTypeParameter[T](v)
+	return func(idx uint64) (float64, bool, error) {
+		v, null := fp.GetValue(idx)
+		return float64(v.ToFloat32()), null, nil
+	}
 }
 
 func (p intervalParam) useDecimalComparison() bool {
@@ -2908,6 +2933,7 @@ func builtInBinToUUID(parameters []*vector.Vector, result vector.FunctionResultW
 }
 
 func makeUUIDSwapFlagGetter(param *vector.Vector) func(uint64) (bool, bool, error) {
+	// typeswitch:partial low-precision floats (bf16/f16/f8/f4) are rejected as index keys (lowPrecisionKeyError), so this physical-serial path never receives them
 	switch param.GetType().Oid {
 	case types.T_bool:
 		p := vector.GenerateFunctionFixedTypeParameter[bool](param)
@@ -3707,6 +3733,7 @@ func getPackFun(v *vector.Vector) (func(v *vector.Vector, idx int, ps *types.Pac
 }
 
 func getPackFunWithPhysical(v *vector.Vector, physicalKey bool) (func(v *vector.Vector, idx int, ps *types.Packer), error) {
+	// typeswitch:partial scalar low-precision floats (bf16/f16/f8/f4) are not serial/key-packable: rejected as index keys (lowPrecisionKeyError) and the default returns the unsupported-type error
 	switch v.GetType().Oid {
 	case types.T_bool:
 		return func(v *vector.Vector, idx int, ps *types.Packer) {
@@ -3768,6 +3795,22 @@ func getPackFunWithPhysical(v *vector.Vector, physicalKey bool) (func(v *vector.
 			val := vector.GetFixedAtNoTypeCheck[float64](v, idx)
 			ps.EncodeFloat64(val)
 		}, nil
+	case types.T_bf16:
+		return func(v *vector.Vector, idx int, ps *types.Packer) {
+			ps.EncodeBF16(vector.GetFixedAtNoTypeCheck[types.BF16](v, idx))
+		}, nil
+	case types.T_float16:
+		return func(v *vector.Vector, idx int, ps *types.Packer) {
+			ps.EncodeFloat16(vector.GetFixedAtNoTypeCheck[types.Float16](v, idx))
+		}, nil
+	case types.T_float8:
+		return func(v *vector.Vector, idx int, ps *types.Packer) {
+			ps.EncodeFloat8(vector.GetFixedAtNoTypeCheck[types.Float8](v, idx))
+		}, nil
+	case types.T_float4:
+		return func(v *vector.Vector, idx int, ps *types.Packer) {
+			ps.EncodeFloat4(vector.GetFixedAtNoTypeCheck[types.Float4](v, idx))
+		}, nil
 	case types.T_date:
 		return func(v *vector.Vector, idx int, ps *types.Packer) {
 			val := vector.GetFixedAtNoTypeCheck[types.Date](v, idx)
@@ -3822,6 +3865,7 @@ func getPackFunWithPhysical(v *vector.Vector, physicalKey bool) (func(v *vector.
 		types.T_geometry,
 		types.T_array_float32, types.T_array_float64,
 		types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8,
+		types.T_array_float8, types.T_array_float4,
 		types.T_datalink:
 		return func(v *vector.Vector, idx int, ps *types.Packer) {
 			val := v.GetBytesAt(idx)
@@ -3919,6 +3963,7 @@ func serialHelper(v *vector.Vector, bitMap *nulls.Nulls, ps []*types.Packer, isF
 		panic("for builtInSerial(), bitmap should not be nil")
 	}
 	hasNull := v.HasNull()
+	// typeswitch:partial scalar low-precision floats (bf16/f16/f8/f4) are not serial/key-packable: rejected as index keys (lowPrecisionKeyError) and not packed by serial
 	switch v.GetType().Oid {
 	case types.T_bool:
 		s := vector.ExpandFixedCol[bool](v)
@@ -4336,6 +4381,7 @@ func serialHelper(v *vector.Vector, bitMap *nulls.Nulls, ps []*types.Packer, isF
 		types.T_geometry,
 		types.T_array_float32, types.T_array_float64,
 		types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8,
+		types.T_array_float8, types.T_array_float4,
 		types.T_datalink:
 		if hasNull {
 			fv := vector.GenerateFunctionStrParameter(v)
@@ -4411,6 +4457,18 @@ func builtInSerialExtract(parameters []*vector.Vector, result vector.FunctionRes
 	case types.T_float64:
 		rs := vector.MustFunctionResult[float64](result)
 		return serialExtractExceptStrings(p1, p2, rs, proc, length, selectList)
+	case types.T_bf16:
+		rs := vector.MustFunctionResult[types.BF16](result)
+		return serialExtractExceptStrings(p1, p2, rs, proc, length, selectList)
+	case types.T_float16:
+		rs := vector.MustFunctionResult[types.Float16](result)
+		return serialExtractExceptStrings(p1, p2, rs, proc, length, selectList)
+	case types.T_float8:
+		rs := vector.MustFunctionResult[types.Float8](result)
+		return serialExtractExceptStrings(p1, p2, rs, proc, length, selectList)
+	case types.T_float4:
+		rs := vector.MustFunctionResult[types.Float4](result)
+		return serialExtractExceptStrings(p1, p2, rs, proc, length, selectList)
 	case types.T_decimal64:
 		rs := vector.MustFunctionResult[types.Decimal64](result)
 		return serialExtractExceptStrings(p1, p2, rs, proc, length, selectList)
@@ -4449,6 +4507,7 @@ func builtInSerialExtract(parameters []*vector.Vector, result vector.FunctionRes
 		types.T_binary, types.T_varbinary, types.T_blob, types.T_geometry,
 		types.T_array_float32, types.T_array_float64,
 		types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8,
+		types.T_array_float8, types.T_array_float4,
 		types.T_datalink:
 		rs := vector.MustFunctionResult[types.Varlena](result)
 		return serialExtractForString(p1, p2, rs, proc, length, selectList)
@@ -4467,7 +4526,7 @@ func getConstInt64(p vector.FunctionParameterWrapper[int64]) (int64, bool) {
 	return 0, false
 }
 
-func serialExtractExceptStrings[T types.Number | bool | types.Date | types.Datetime | types.Time | types.Timestamp | types.Uuid | types.Enum | types.MoYear](
+func serialExtractExceptStrings[T types.Number | types.BF16 | types.Float16 | types.Float8 | types.Float4 | bool | types.Date | types.Datetime | types.Time | types.Timestamp | types.Uuid | types.Enum | types.MoYear](
 	p1 vector.FunctionParameterWrapper[types.Varlena],
 	p2 vector.FunctionParameterWrapper[int64],
 	result *vector.FunctionResult[T], proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -4550,9 +4609,30 @@ func serialExtractExceptStrings[T types.Number | bool | types.Date | types.Datet
 	return nil
 }
 
+// serialExtractCheckCell validates an element extracted as a vecf8/vecf4 value: it must be
+// a stored cell of that format and, when the type declares a dimension, of that dimension.
+func serialExtractCheckCell(typ *types.Type, value []byte) error {
+	f, ok := typ.Oid.BlockScaledFormat()
+	if !ok {
+		return nil
+	}
+	c, err := types.ParseBlockScaledCell(value)
+	if err != nil {
+		return err
+	}
+	if c.Format != f {
+		return moerr.NewInvalidInputNoCtxf("%s cell is not a %s cell", c.Format, f)
+	}
+	if int(typ.Width) != types.MaxArrayDimension && int(typ.Width) != c.Dim {
+		return moerr.NewArrayDefMismatchNoCtx(int(typ.Width), c.Dim)
+	}
+	return nil
+}
+
 func serialExtractForString(p1 vector.FunctionParameterWrapper[types.Varlena],
 	p2 vector.FunctionParameterWrapper[int64],
 	result *vector.FunctionResult[types.Varlena], proc *process.Process, length int, selectList *FunctionSelectList) error {
+	resTyp := result.GetResultVector().GetType()
 
 	// Fast path: when p2 is constant, use UnpackNthElement to avoid full tuple deserialization
 	if p2.WithAnyNullValue() {
@@ -4580,6 +4660,9 @@ func serialExtractForString(p1 vector.FunctionParameterWrapper[types.Varlena],
 			}
 
 			if value, ok := el.([]byte); ok {
+				if err := serialExtractCheckCell(resTyp, value); err != nil {
+					return err
+				}
 				if err := result.AppendBytes(value, false); err != nil {
 					return err
 				}
@@ -4617,6 +4700,9 @@ func serialExtractForString(p1 vector.FunctionParameterWrapper[types.Varlena],
 		}
 
 		if value, ok := tuple[v2].([]byte); ok {
+			if err := serialExtractCheckCell(resTyp, value); err != nil {
+				return err
+			}
 			if err := result.AppendBytes(value, false); err != nil {
 				return err
 			}

@@ -391,6 +391,7 @@ func newTypedHnswBuilder[T types.ArrayElement](sqlproc *sqlexec.SqlProcess, uid 
 // newHnswBuilder returns a build that takes vectors of the column type partType as they are.
 func newHnswBuilder(sqlproc *sqlexec.SqlProcess, uid string, partType int32,
 	idxcfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig) (hnswBuilder, error) {
+	// typeswitch:partial vecf8/vecf4 cannot carry a vector index (rejected at DDL)
 	switch types.T(partType) {
 	case types.T_array_float32:
 		return newTypedHnswBuilder[float32](sqlproc, uid, idxcfg, tblcfg)

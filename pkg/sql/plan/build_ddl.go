@@ -3010,7 +3010,8 @@ func buildCreateTable(
 	}
 	// The catalog stores MEDIUMINT using the existing 32-bit OIDs plus Width=24.
 	// Old CNs can deserialize that metadata but do not enforce the narrower write
-	// domain, so only author the schema after the cluster protocol fence opens.
+	// domain; bf16/float16/float8/float4/vecf8/vecf4 OIDs are unknown to them.
+	// Only author the schema after the cluster protocol fence opens.
 	for _, col := range createTable.TableDef.Cols {
 		if err = requireMediumIntProtocolForAuthoring(
 			ctx.GetContext(), ctx.GetProcess(), col.Typ); err != nil {
@@ -3813,8 +3814,11 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 					if colType.GetId() == int32(types.T_json) {
 						return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("JSON column '%s' cannot be in primary key", colNameOrigin))
 					}
-					if types.T(colType.GetId()).IsArrayRelate() {
+					if types.T(colType.GetId()).IsArray() {
 						return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("VECTOR column '%s' cannot be in primary key", colNameOrigin))
+					}
+					if err := lowPrecisionKeyError(ctx.GetContext(), colType.GetId(), colNameOrigin, "primary"); err != nil {
+						return err
 					}
 					if isSetPlanType(&colType) {
 						return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("SET column '%s' cannot be in primary key", colNameOrigin))
@@ -3841,6 +3845,9 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 					}
 					if isGeometryPlanType(&colType) {
 						return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("GEOMETRY column '%s' cannot be in unique index", colNameOrigin))
+					}
+					if err := lowPrecisionKeyError(ctx.GetContext(), colType.GetId(), colNameOrigin, "unique"); err != nil {
+						return err
 					}
 					uniqueIndexInfos = append(uniqueIndexInfos, &tree.UniqueIndex{
 						KeyParts: []*tree.KeyPart{{ColName: def.Name}},
@@ -4488,8 +4495,12 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 		var clusterByKeys []string
 		for i := 0; i < lenClusterBy; i++ {
 			colName := stmt.ClusterByOption.ColumnList[i].ColName()
-			if _, ok := colMap[colName]; !ok {
+			col, ok := colMap[colName]
+			if !ok {
 				return moerr.NewInvalidInputf(ctx.GetContext(), "column '%s' doesn't exist in table", stmt.ClusterByOption.ColumnList[i].ColNameOrigin())
+			}
+			if err := lowPrecisionKeyError(ctx.GetContext(), col.Typ.Id, stmt.ClusterByOption.ColumnList[i].ColNameOrigin(), "cluster"); err != nil {
+				return err
 			}
 			clusterByKeys = append(clusterByKeys, colName)
 		}
@@ -9324,11 +9335,14 @@ func validateAndSetHivePartitionOptions(ctx context.Context, proc *process.Proce
 			return moerr.NewBadConfigf(ctx, "partition column '%s' cannot be a generated column", pc)
 		}
 		typId := types.T(col.Typ.Id)
-		if typId.IsArrayRelate() {
+		if typId.IsArray() {
 			// IsArrayRelate covers all six vector types: a vector can never
 			// round-trip through a `col=value` path component, so the rejection
 			// applies to the narrow types exactly as it does to vecf32/vecf64.
 			return moerr.NewBadConfigf(ctx, "partition column '%s' cannot be a VECTOR type", pc)
+		}
+		if typId.IsLowPrecisionFloat() {
+			return moerr.NewBadConfigf(ctx, "partition column '%s' cannot be a %s type", pc, typId)
 		}
 		canonical := strings.ToLower(col.Name)
 		if seen[canonical] {

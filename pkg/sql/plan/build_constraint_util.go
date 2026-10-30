@@ -1057,7 +1057,7 @@ func useSqlModeStringAssignmentCast(targetType Type) bool {
 
 func useSqlModeAssignmentCast(targetType Type) bool {
 	return useSqlModeStringAssignmentCast(targetType) ||
-		targetType.Id == int32(types.T_float32) || targetType.Id == int32(types.T_float64) ||
+		types.T(targetType.Id).IsFloat() ||
 		isMediumIntPlanType(targetType) ||
 		targetType.Id == int32(types.T_year) ||
 		targetType.Id == int32(types.T_time)
@@ -1312,7 +1312,7 @@ func needsSameTypeAssignmentCast(targetType Type) bool {
 		targetType.Id == int32(types.T_blob) ||
 		targetType.Id == int32(types.T_text) ||
 		targetType.Id == int32(types.T_time) ||
-		(types.T(targetType.Id).IsArrayRelate() && targetType.Width > 0 && targetType.Width != types.MaxArrayDimension)
+		(types.T(targetType.Id).IsArray() && targetType.Width > 0 && targetType.Width != types.MaxArrayDimension)
 }
 
 func forceCastExpr2(ctx context.Context, expr *Expr, t2 types.Type, targetType *plan.Expr, columnName ...string) (*Expr, error) {

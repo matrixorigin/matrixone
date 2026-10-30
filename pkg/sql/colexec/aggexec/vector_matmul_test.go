@@ -1,0 +1,2360 @@
+// Copyright 2026 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package aggexec
+
+import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"math"
+	"math/rand"
+	"runtime"
+	"slices"
+	"sort"
+	"strconv"
+	"strings"
+	"sync"
+	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
+	"github.com/stretchr/testify/require"
+)
+
+const vmDim = 4
+
+func vmVecType() types.Type { return types.New(types.T_array_float8, vmDim, 0) }
+
+func vmConfig(topk int, queries [][]float32) []byte {
+	q, _ := json.Marshal(queries)
+	return EncodeVectorMatmulConfig(int64(topk), string(q), "", false)
+}
+
+func vmExec(t *testing.T, mp *mpool.MPool, idType types.Type, groups int, cfg []byte) *vectorMatmulExec {
+	t.Helper()
+	exec, err := makeVectorMatmul(mp, AggIdOfVectorMatmul, false, []types.Type{idType, vmVecType()})
+	require.NoError(t, err)
+	require.NoError(t, exec.GroupGrow(groups))
+	require.NoError(t, exec.SetExtraInformation(cfg, 0))
+	return exec.(*vectorMatmulExec)
+}
+
+// vmVectors builds int64 ids and vecf8 cells; a nil row is NULL.
+func vmVectors(t *testing.T, mp *mpool.MPool, ids []int64, rows [][]float32) []*vector.Vector {
+	t.Helper()
+	idv := vector.NewVec(types.T_int64.ToType())
+	vv := vector.NewVec(vmVecType())
+	for i, r := range rows {
+		require.NoError(t, vector.AppendFixed(idv, ids[i], false, mp))
+		if r == nil {
+			require.NoError(t, vector.AppendBytes(vv, nil, true, mp))
+			continue
+		}
+		cell, err := types.AppendBlockScaled(nil, types.BlockScaledMXFP8, r)
+		require.NoError(t, err)
+		require.NoError(t, vector.AppendBytes(vv, cell, false, mp))
+	}
+	return []*vector.Vector{idv, vv}
+}
+
+func vmFree(mp *mpool.MPool, vecs []*vector.Vector) {
+	for _, v := range vecs {
+		v.Free(mp)
+	}
+}
+
+func vmFlush(t *testing.T, mp *mpool.MPool, exec AggFuncExec) []string {
+	t.Helper()
+	ret, err := exec.Flush()
+	require.NoError(t, err)
+	var out []string
+	for _, v := range ret {
+		for i := 0; i < v.Length(); i++ {
+			var c bytes.Buffer
+			require.NoError(t, json.Compact(&c, []byte(types.DecodeJson(v.GetBytesAt(i)).String())))
+			out = append(out, c.String())
+		}
+		v.Free(mp)
+	}
+	return out
+}
+
+func TestVectorMatmulTopK(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() { require.Zero(t, mp.CurrNB()) }()
+	exec := vmExec(t, mp, types.T_int64.ToType(), 1, vmConfig(2, [][]float32{{1, 0, 0, 0}, {0, 1, 0, 0}}))
+	defer exec.Free()
+	vecs := vmVectors(t, mp,
+		[]int64{10, 2, 30, 4, 5},
+		[][]float32{{1, 0, 0, 0}, {0, 1, 0, 0}, {1, 1, 0, 0}, {-1, 0, 0, 0}, nil})
+	defer vmFree(mp, vecs)
+	require.NoError(t, exec.BulkFill(0, vecs))
+	// query 0: ids 10 and 30 tie at 1, ordered by id text ("10" < "30")
+	// query 1: ids 2 and 30 tie at 1 ("2" < "30")
+	require.Equal(t, []string{`[[["10",-1],["30",-1]],[["2",-1],["30",-1]]]`}, vmFlush(t, mp, exec))
+}
+
+func TestVectorMatmulEmptyGroupAndGroups(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() { require.Zero(t, mp.CurrNB()) }()
+	exec := vmExec(t, mp, types.T_int64.ToType(), 3, vmConfig(1, [][]float32{{1, 0, 0, 0}, {0, 0, 1, 0}}))
+	defer exec.Free()
+	vecs := vmVectors(t, mp, []int64{1, 2, 3}, [][]float32{{1, 0, 0, 0}, {0, 0, 1, 0}, {2, 0, 0, 0}})
+	defer vmFree(mp, vecs)
+	// groups are 1-based; group 2 receives no row; row 1 is not matched
+	require.NoError(t, exec.BatchFill(0, []uint64{1, GroupNotMatched, 3}, vecs))
+	require.NoError(t, exec.Fill(0, 1, vecs))
+	require.Equal(t, []string{
+		`[[["1",-1]],[["2",-1]]]`,
+		`[[],[]]`,
+		`[[["3",-2]],[["3",0]]]`,
+	}, vmFlush(t, mp, exec))
+}
+
+// vmReference returns the expected JSON from a brute-force sort.
+func vmReference(ids []int64, rows [][]float32, queries [][]float32, k int) string {
+	type hit struct {
+		id    string
+		score float64
+	}
+	out := make([]string, 0, len(queries))
+	for _, q := range queries {
+		qc, _ := types.AppendBlockScaled(nil, types.BlockScaledMXFP8, q)
+		qv, _ := types.BlockScaledToFloat32(qc)
+		var hits []hit
+		for i, r := range rows {
+			if r == nil {
+				continue
+			}
+			rc, _ := types.AppendBlockScaled(nil, types.BlockScaledMXFP8, r)
+			rv, _ := types.BlockScaledToFloat32(rc)
+			var dot float64
+			for d := range rv {
+				dot += float64(rv[d]) * float64(qv[d])
+			}
+			hits = append(hits, hit{strconv.FormatInt(ids[i], 10), float64(float32(dot))})
+		}
+		sort.Slice(hits, func(a, b int) bool {
+			if hits[a].score != hits[b].score {
+				return hits[a].score > hits[b].score
+			}
+			return hits[a].id < hits[b].id
+		})
+		hits = hits[:min(k, len(hits))]
+		parts := make([]string, len(hits))
+		for i, h := range hits {
+			// the inner product distance is -dot
+			parts[i] = `["` + h.id + `",` + strconv.FormatFloat(-h.score+0, 'g', -1, 32) + `]`
+		}
+		out = append(out, "["+strings.Join(parts, ",")+"]")
+	}
+	return "[" + strings.Join(out, ",") + "]"
+}
+
+func vmRandom(r *rand.Rand, n int) ([]int64, [][]float32) {
+	ids := make([]int64, n)
+	rows := make([][]float32, n)
+	for i := range rows {
+		ids[i] = int64(r.Intn(1000))
+		if r.Intn(10) == 0 {
+			continue
+		}
+		rows[i] = make([]float32, vmDim)
+		for d := range rows[i] {
+			rows[i][d] = float32(r.Intn(5) - 2)
+		}
+	}
+	return ids, rows
+}
+
+func TestVectorMatmulMergeMatchesReference(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() { require.Zero(t, mp.CurrNB()) }()
+	r := rand.New(rand.NewSource(3))
+	queries := [][]float32{{1, 2, 0, -1}, {0, 0, 1, 1}, {-1, 1, -1, 1}}
+	const k = 5
+	ids, rows := vmRandom(r, 300)
+	want := vmReference(ids, rows, queries, k)
+
+	whole := vmExec(t, mp, types.T_int64.ToType(), 1, vmConfig(k, queries))
+	defer whole.Free()
+	all := vmVectors(t, mp, ids, rows)
+	defer vmFree(mp, all)
+	require.NoError(t, whole.BulkFill(0, all))
+	require.Equal(t, []string{want}, vmFlush(t, mp, whole))
+
+	// three partials merged in both orders
+	cuts := []int{0, 70, 210, 300}
+	parts := make([]*vectorMatmulExec, 3)
+	for p := range parts {
+		parts[p] = vmExec(t, mp, types.T_int64.ToType(), 1, vmConfig(k, queries))
+		defer parts[p].Free()
+		vecs := vmVectors(t, mp, ids[cuts[p]:cuts[p+1]], rows[cuts[p]:cuts[p+1]])
+		require.NoError(t, parts[p].BulkFill(0, vecs))
+		vmFree(mp, vecs)
+	}
+	for _, order := range [][]int{{0, 1, 2}, {2, 1, 0}} {
+		target := vmExec(t, mp, types.T_int64.ToType(), 1, vmConfig(k, queries))
+		for _, p := range order {
+			require.NoError(t, target.BatchMerge(parts[p], 0, []uint64{1}))
+		}
+		require.Equal(t, []string{want}, vmFlush(t, mp, target))
+		target.Free()
+	}
+}
+
+func TestVectorMatmulIntermediateRoundTrip(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() { require.Zero(t, mp.CurrNB()) }()
+	cfg := vmConfig(3, [][]float32{{1, 1, 0, 0}})
+	src := vmExec(t, mp, types.T_int64.ToType(), 2, cfg)
+	defer src.Free()
+	vecs := vmVectors(t, mp, []int64{7, 8, 9}, [][]float32{{1, 0, 0, 0}, {1, 1, 0, 0}, {0, 0, 1, 0}})
+	defer vmFree(mp, vecs)
+	require.NoError(t, src.BulkFill(0, vecs))
+	want := vmFlush(t, mp, src)
+
+	var buf bytes.Buffer
+	require.NoError(t, src.SaveIntermediateResult(2, [][]uint8{{1, 1}}, &buf))
+	dst, err := makeVectorMatmul(mp, AggIdOfVectorMatmul, false, []types.Type{types.T_int64.ToType(), vmVecType()})
+	require.NoError(t, err)
+	defer dst.Free()
+	require.NoError(t, dst.SetExtraInformation(cfg, 0))
+	require.NoError(t, dst.UnmarshalFromReader(bytes.NewReader(buf.Bytes()), mp))
+	require.Equal(t, want, vmFlush(t, mp, dst))
+	require.Equal(t, []string{`[[["8",-2],["7",-1],["9",0]]]`, `[[]]`}, want)
+}
+
+func TestVectorMatmulAccountedFill(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() { require.Zero(t, mp.CurrNB()) }()
+	registry, err := mpool.NewAllocationAccountRegistry(1, 512)
+	require.NoError(t, err)
+	account, err := registry.Open(64 << 20)
+	require.NoError(t, err)
+	allocation, err := NewAllocationAccount(account, mpool.AllocationOwnerGroup, AllocationAccountSites{
+		VectorData: 1, VectorArea: 2, VectorNulls: 3, VectorGrouping: 4, ArgumentCount: 5, ArgumentArena: 6,
+	})
+	require.NoError(t, err)
+
+	exec, err := makeVectorMatmul(mp, AggIdOfVectorMatmul, false, []types.Type{types.T_varchar.ToType(), vmVecType()})
+	require.NoError(t, err)
+	require.NoError(t, exec.SetExtraInformation(vmConfig(2, [][]float32{{1, 0, 0, 0}}), 0))
+	require.NoError(t, exec.(AllocationAccountOwner).SetAllocationAccount(allocation))
+	require.NoError(t, exec.GroupGrow(1))
+
+	// long, churning string ids: the arena compacts in place instead of growing
+	r := rand.New(rand.NewSource(5))
+	for batch := 0; batch < 50; batch++ {
+		idv := vector.NewVec(types.T_varchar.ToType())
+		vv := vector.NewVec(vmVecType())
+		groups := make([]uint64, 64)
+		for i := range groups {
+			groups[i] = 1
+			id := strings.Repeat(strconv.Itoa(batch*64+i), 20)
+			require.NoError(t, vector.AppendBytes(idv, []byte(id), false, mp))
+			cell, err := types.AppendBlockScaled(nil, types.BlockScaledMXFP8, []float32{float32(r.Intn(100)), 0, 0, 0})
+			require.NoError(t, err)
+			require.NoError(t, vector.AppendBytes(vv, cell, false, mp))
+		}
+		vecs := []*vector.Vector{idv, vv}
+		require.NoError(t, exec.(BatchCapacityPreflight).PreflightBatchFill(0, groups, vecs))
+		require.NoError(t, exec.BatchFill(0, groups, vecs))
+		vmFree(mp, vecs)
+	}
+	s := exec.(*vectorMatmulExec).state[0].mobs[0].(*vectorMatmulState)
+	require.LessOrEqual(t, len(s.arena), 8<<10)
+	out := vmFlush(t, mp, exec)
+	require.Len(t, out, 1)
+	var got [][][]any
+	require.NoError(t, json.Unmarshal([]byte(out[0]), &got))
+	require.Len(t, got[0], 2)
+	exec.Free()
+}
+
+func TestVectorMatmulIDText(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() { require.Zero(t, mp.CurrNB()) }()
+	u, err := types.ParseUuid("6ba7b810-9dad-11d1-80b4-00c04fd430c8")
+	require.NoError(t, err)
+	cases := []struct {
+		typ  types.Type
+		add  func(v *vector.Vector) error
+		want string
+	}{
+		{types.T_int8.ToType(), func(v *vector.Vector) error { return vector.AppendFixed(v, int8(-8), false, mp) }, "-8"},
+		{types.T_int16.ToType(), func(v *vector.Vector) error { return vector.AppendFixed(v, int16(-16), false, mp) }, "-16"},
+		{types.T_int32.ToType(), func(v *vector.Vector) error { return vector.AppendFixed(v, int32(-32), false, mp) }, "-32"},
+		{types.T_int64.ToType(), func(v *vector.Vector) error {
+			return vector.AppendFixed(v, int64(9223372036854775807), false, mp)
+		}, "9223372036854775807"},
+		{types.T_uint8.ToType(), func(v *vector.Vector) error { return vector.AppendFixed(v, uint8(8), false, mp) }, "8"},
+		{types.T_uint16.ToType(), func(v *vector.Vector) error { return vector.AppendFixed(v, uint16(16), false, mp) }, "16"},
+		{types.T_uint32.ToType(), func(v *vector.Vector) error { return vector.AppendFixed(v, uint32(32), false, mp) }, "32"},
+		{types.T_uint64.ToType(), func(v *vector.Vector) error {
+			return vector.AppendFixed(v, uint64(18446744073709551615), false, mp)
+		}, "18446744073709551615"},
+		{types.T_uuid.ToType(), func(v *vector.Vector) error { return vector.AppendFixed(v, u, false, mp) }, "6ba7b810-9dad-11d1-80b4-00c04fd430c8"},
+		{types.T_varchar.ToType(), func(v *vector.Vector) error { return vector.AppendBytes(v, []byte(`a"b`), false, mp) }, `a"b`},
+	}
+	for _, c := range cases {
+		require.True(t, VectorMatmulIDSupported(c.typ.Oid))
+		v := vector.NewVec(c.typ)
+		require.NoError(t, c.add(v))
+		require.Equal(t, c.want, string(appendVectorMatmulID(nil, v, 0)), c.typ.String())
+		require.GreaterOrEqual(t, vectorMatmulIDLenBound(v, 0), len(c.want), c.typ.String())
+		v.Free(mp)
+	}
+	require.False(t, VectorMatmulIDSupported(types.T_float64))
+
+	// a quote in a string id is JSON-escaped
+	exec := vmExec(t, mp, types.T_varchar.ToType(), 1, vmConfig(1, [][]float32{{1, 0, 0, 0}}))
+	defer exec.Free()
+	idv := vector.NewVec(types.T_varchar.ToType())
+	require.NoError(t, vector.AppendBytes(idv, []byte(`a"b`), false, mp))
+	vv := vector.NewVec(vmVecType())
+	cell, err := types.AppendBlockScaled(nil, types.BlockScaledMXFP8, []float32{1, 0, 0, 0})
+	require.NoError(t, err)
+	require.NoError(t, vector.AppendBytes(vv, cell, false, mp))
+	defer vmFree(mp, []*vector.Vector{idv, vv})
+	require.NoError(t, exec.BulkFill(0, []*vector.Vector{idv, vv}))
+	require.Equal(t, []string{`[[["a\"b",-1]]]`}, vmFlush(t, mp, exec))
+}
+
+func TestVectorMatmulConfigErrors(t *testing.T) {
+	vt := vmVecType()
+	for _, tc := range []struct {
+		topk             int64
+		queries, options string
+		want             string
+	}{
+		{0, `[[1,0,0,0]]`, ``, `topk 0 out of range`},
+		{vectorMatmulMaxTopK + 1, `[[1,0,0,0]]`, ``, `out of range`},
+		{2, `[]`, ``, `query count`},
+		{2, `[1,2]`, ``, `JSON array of vectors`},
+		{2, `[[1,0,0]]`, ``, `different dimensions`},
+		{2, `[[1,0,0,"x"]]`, ``, `JSON array of vectors`},
+		{2, `[[null,1,0,0]]`, ``, `query 0: coordinate 0 is null`},
+		{2, `[[1,0,0,0],[0,1,0,null]]`, ``, `query 1: coordinate 3 is null`},
+		{2, `[[1,0,0,0],null]`, ``, `query 1 is null`},
+	} {
+		_, err := parseVectorMatmulConfig(EncodeVectorMatmulConfig(tc.topk, tc.queries, tc.options, false), vt)
+		require.ErrorContains(t, err, tc.want, "%d %s %s", tc.topk, tc.queries, tc.options)
+	}
+	// a vecf16/vecbf16 query value just above the largest finite element is not representable,
+	// although it rounds back to it
+	for _, tc := range []struct {
+		oid          types.T
+		above, limit string
+	}{
+		{types.T_array_float16, "65505", "65504"},
+		{types.T_array_bf16, "3.39e38", "3.38e38"},
+	} {
+		_, err := parseVectorMatmulConfig(EncodeVectorMatmulConfig(1, `[[`+tc.above+`,0,0,0]]`, "", false), types.New(tc.oid, 4, 0))
+		require.ErrorContains(t, err, "not representable", tc.oid.String())
+		_, err = parseVectorMatmulConfig(EncodeVectorMatmulConfig(1, `[[-`+tc.above+`,0,0,0]]`, "", false), types.New(tc.oid, 4, 0))
+		require.ErrorContains(t, err, "not representable", tc.oid.String())
+		_, err = parseVectorMatmulConfig(EncodeVectorMatmulConfig(1, `[[`+tc.limit+`,0,0,0]]`, "", false), types.New(tc.oid, 4, 0))
+		require.NoError(t, err, tc.oid.String())
+	}
+	// a null coordinate is an error for every column type
+	for _, oid := range []types.T{types.T_array_float32, types.T_array_float16, types.T_array_bf16,
+		types.T_array_float8, types.T_array_float4, types.T_array_int8, types.T_array_uint8} {
+		_, err := parseVectorMatmulConfig(EncodeVectorMatmulConfig(1, `[[null,1,0,0]]`, "", false), types.New(oid, 4, 0))
+		require.ErrorContains(t, err, "coordinate 0 is null", oid.String())
+	}
+	many := "[" + strings.TrimSuffix(strings.Repeat(`[1,0,0,0],`, vectorMatmulMaxEntries/vectorMatmulMaxTopK+1), ",") + "]"
+	_, err := parseVectorMatmulConfig(EncodeVectorMatmulConfig(vectorMatmulMaxTopK, many, "", false), vt)
+	require.ErrorContains(t, err, "queries x topk exceeds")
+	// the options are a JSON object; only "metric" is read, other keys are ignored
+	for options, metric := range map[string]int{
+		``: vectorMatmulInnerProduct, `{"no_such_key":"a"}`: vectorMatmulInnerProduct, `{"no_such_key":1,"other_unknown":-1}`: vectorMatmulInnerProduct,
+		`{"metric":"inner_product"}`: vectorMatmulInnerProduct, `{"metric":"cosine","x":[1]}`: vectorMatmulCosine, `{"metric":"l2sq"}`: vectorMatmulL2sq,
+	} {
+		cfg, err := parseVectorMatmulConfig(EncodeVectorMatmulConfig(1, `[[1,0,0,0]]`, options, false), vt)
+		require.NoError(t, err, options)
+		require.Equal(t, metric, cfg.metric, options)
+	}
+	for options, want := range map[string]string{
+		`not json`: "JSON object", `[1]`: "JSON object", `null`: "JSON object",
+		`{"metric":"l2"}`: "not inner_product, cosine or l2sq", `{"metric":1}`: "not inner_product, cosine or l2sq",
+		`{"metric":"COSINE"}`: "not inner_product, cosine or l2sq",
+	} {
+		_, err := parseVectorMatmulConfig(EncodeVectorMatmulConfig(1, `[[1,0,0,0]]`, options, false), vt)
+		require.ErrorContains(t, err, want, options)
+	}
+	badFlag := EncodeVectorMatmulConfig(1, `[[1]]`, "", true)
+	badFlag[len(badFlag)-1] = 4
+	for _, bad := range [][]byte{{1, 2}, EncodeVectorMatmulConfig(1, `[[1]]`, "", false)[:12], append(EncodeVectorMatmulConfig(1, `[[1]]`, "", false), 0), badFlag} {
+		_, _, _, _, _, err := decodeVectorMatmulConfig(bad)
+		require.Error(t, err)
+	}
+	for _, gpu := range []bool{false, true} {
+		topk, queries, options, got, _, err := decodeVectorMatmulConfig(EncodeVectorMatmulConfig(7, `[[1]]`, `{}`, gpu))
+		require.NoError(t, err)
+		require.Equal(t, []any{int64(7), `[[1]]`, `{}`, gpu}, []any{topk, queries, options, got})
+		_, queries, _, got, binaryQueries, err := decodeVectorMatmulConfig(EncodeVectorMatmulBinaryConfig(7, []byte{1, 2, 3, 4}, ``, gpu))
+		require.NoError(t, err)
+		require.Equal(t, []any{"\x01\x02\x03\x04", gpu, true}, []any{queries, got, binaryQueries})
+	}
+
+	mp := mpool.MustNewZero()
+	exec, err := makeVectorMatmul(mp, AggIdOfVectorMatmul, false, []types.Type{types.T_int64.ToType(), vt})
+	require.NoError(t, err)
+	require.Error(t, exec.SetExtraInformation("not bytes", 0))
+	_, err = exec.Flush()
+	require.ErrorContains(t, err, "configuration is not set")
+	exec.Free()
+	_, err = makeVectorMatmul(mp, AggIdOfVectorMatmul, true, []types.Type{types.T_int64.ToType(), vt})
+	require.Error(t, err)
+	_, err = makeVectorMatmul(mp, AggIdOfVectorMatmul, false, []types.Type{types.T_float64.ToType(), vt})
+	require.Error(t, err)
+}
+
+func vmAllocation(t *testing.T) *AllocationAccount {
+	t.Helper()
+	registry, err := mpool.NewAllocationAccountRegistry(1, 512)
+	require.NoError(t, err)
+	account, err := registry.Open(64 << 20)
+	require.NoError(t, err)
+	allocation, err := NewAllocationAccount(account, mpool.AllocationOwnerGroup, AllocationAccountSites{
+		VectorData: 1, VectorArea: 2, VectorNulls: 3, VectorGrouping: 4, ArgumentCount: 5, ArgumentArena: 6,
+	})
+	require.NoError(t, err)
+	return allocation
+}
+
+func TestVectorMatmulAccountedMerge(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() { require.Zero(t, mp.CurrNB()) }()
+	cfg := vmConfig(2, [][]float32{{1, 0, 0, 0}, {0, 1, 0, 0}})
+	allocation := vmAllocation(t)
+	mk := func() *vectorMatmulExec {
+		exec, err := makeVectorMatmul(mp, AggIdOfVectorMatmul, false, []types.Type{types.T_int64.ToType(), vmVecType()})
+		require.NoError(t, err)
+		require.NoError(t, exec.SetExtraInformation(cfg, 0))
+		require.NoError(t, exec.(AllocationAccountOwner).SetAllocationAccount(allocation))
+		require.NoError(t, exec.GroupGrow(2))
+		return exec.(*vectorMatmulExec)
+	}
+	src, dst := mk(), mk()
+	defer src.Free()
+	defer dst.Free()
+	vecs := vmVectors(t, mp, []int64{1, 2, 3}, [][]float32{{1, 0, 0, 0}, {0, 1, 0, 0}, {1, 1, 0, 0}})
+	defer vmFree(mp, vecs)
+	groups := []uint64{1, 1, 1}
+	require.NoError(t, src.PreflightBatchFill(0, groups, vecs))
+	require.NoError(t, src.BatchFill(0, groups, vecs))
+	require.Positive(t, src.Size())
+
+	// source group 0 has state, source group 1 is empty
+	merge := []uint64{2, 1}
+	require.NoError(t, dst.PreflightBatchMerge(src, 0, merge))
+	require.NoError(t, dst.BatchMerge(src, 0, merge))
+	require.Equal(t, []string{`[[],[]]`, `[[["1",-1],["3",-1]],[["2",-1],["3",-1]]]`}, vmFlush(t, mp, dst))
+
+	require.ErrorIs(t, dst.PreflightBatchMerge(nil, 0, merge), mpool.ErrAllocationAccountInvalid)
+	require.ErrorIs(t, dst.PreflightBatchMerge(src, 5, merge), mpool.ErrAllocationAccountInvalid)
+}
+
+// vmTextVectors builds varchar ids and vecf8 cells.
+func vmTextVectors(t *testing.T, mp *mpool.MPool, ids []string, rows [][]float32) []*vector.Vector {
+	t.Helper()
+	idv := vector.NewVec(types.T_varchar.ToType())
+	vv := vector.NewVec(vmVecType())
+	for i, r := range rows {
+		require.NoError(t, vector.AppendBytes(idv, []byte(ids[i]), false, mp))
+		cell, err := types.AppendBlockScaled(nil, types.BlockScaledMXFP8, r)
+		require.NoError(t, err)
+		require.NoError(t, vector.AppendBytes(vv, cell, false, mp))
+	}
+	return []*vector.Vector{idv, vv}
+}
+
+// An empty id is stored at the arena offset the next id starts at; merge and compaction keep
+// both spans.
+func TestVectorMatmulEmptyIDSharesOffset(t *testing.T) {
+	query := [][]float32{{1, 0, 0, 0}}
+	long := strings.Repeat("z", 100)
+	for _, accounted := range []bool{false, true} {
+		t.Run(fmt.Sprintf("accounted=%v", accounted), func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			defer func() { require.Zero(t, mp.CurrNB()) }()
+			var allocation *AllocationAccount
+			if accounted {
+				allocation = vmAllocation(t)
+			}
+			mk := func(topk int) *vectorMatmulExec {
+				exec, err := makeVectorMatmul(mp, AggIdOfVectorMatmul, false, []types.Type{types.T_varchar.ToType(), vmVecType()})
+				require.NoError(t, err)
+				require.NoError(t, exec.SetExtraInformation(vmConfig(topk, query), 0))
+				if accounted {
+					require.NoError(t, exec.(AllocationAccountOwner).SetAllocationAccount(allocation))
+				}
+				require.NoError(t, exec.GroupGrow(1))
+				return exec.(*vectorMatmulExec)
+			}
+			fill := func(exec *vectorMatmulExec, ids []string, rows [][]float32) {
+				vecs := vmTextVectors(t, mp, ids, rows)
+				defer vmFree(mp, vecs)
+				groups := make([]uint64, len(ids))
+				for i := range groups {
+					groups[i] = 1
+				}
+				require.NoError(t, exec.PreflightBatchFill(0, groups, vecs))
+				require.NoError(t, exec.BatchFill(0, groups, vecs))
+			}
+
+			// merge into an empty destination
+			src, dst := mk(2), mk(2)
+			fill(src, []string{"", "winner"}, [][]float32{{0, 0, 0, 0}, {1, 0, 0, 0}})
+			require.NoError(t, dst.PreflightBatchMerge(src, 0, []uint64{1}))
+			require.NoError(t, dst.BatchMerge(src, 0, []uint64{1}))
+			require.Equal(t, []string{`[[["winner",-1],["",0]]]`}, vmFlush(t, mp, dst))
+			require.Equal(t, []string{`[[["winner",-1],["",0]]]`}, vmFlush(t, mp, src))
+			src.Free()
+			dst.Free()
+
+			// the long id overflows the arena and compacts it
+			exec := mk(3)
+			fill(exec, []string{"", "winner"}, [][]float32{{0, 0, 0, 0}, {1, 0, 0, 0}})
+			fill(exec, []string{long}, [][]float32{{2, 0, 0, 0}})
+			require.Equal(t, []string{`[[["` + long + `",-2],["winner",-1],["",0]]]`}, vmFlush(t, mp, exec))
+			exec.Free()
+		})
+	}
+}
+
+func TestVectorMatmulMergeRejectsDifferentConfig(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() { require.Zero(t, mp.CurrNB()) }()
+	a := vmExec(t, mp, types.T_int64.ToType(), 1, vmConfig(2, [][]float32{{1, 0, 0, 0}}))
+	b := vmExec(t, mp, types.T_int64.ToType(), 1, vmConfig(2, [][]float32{{1, 0, 0, 0}, {0, 1, 0, 0}}))
+	defer a.Free()
+	defer b.Free()
+	vecs := vmVectors(t, mp, []int64{1}, [][]float32{{1, 0, 0, 0}})
+	defer vmFree(mp, vecs)
+	require.NoError(t, b.BulkFill(0, vecs))
+	require.ErrorContains(t, a.Merge(b, 0, 0), "different query configurations")
+
+	other, err := makeVectorMatmul(mp, AggIdOfVectorMatmul, false, []types.Type{types.T_varchar.ToType(), vmVecType()})
+	require.NoError(t, err)
+	defer other.Free()
+	require.ErrorIs(t, a.Merge(other, 0, 0), mpool.ErrAllocationAccountMismatch)
+}
+
+func TestVectorMatmulStateCodec(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() { require.Zero(t, mp.CurrNB()) }()
+	s, err := newVectorMatmulState(mp, nil, 2, 3)
+	require.NoError(t, err)
+	defer s.Free()
+	require.NoError(t, s.offer([]float64{1, 5}, []byte("a")))
+	require.NoError(t, s.offer([]float64{2, 4}, []byte("bb")))
+	data, err := s.MarshalBinary()
+	require.NoError(t, err)
+	require.Len(t, data, s.MarshaledSize())
+
+	// a state built for another configuration takes the encoded q and k
+	r, err := newVectorMatmulState(mp, nil, 1, 1)
+	require.NoError(t, err)
+	defer r.Free()
+	require.NoError(t, r.UnmarshalBinary(data))
+	got, want := vmStateJSON(t, mp, r), vmStateJSON(t, mp, s)
+	require.Equal(t, want.String(), got.String())
+	require.Equal(t, `[[["bb", -2], ["a", -1]], [["a", -5], ["bb", -4]]]`, got.String())
+
+	for _, bad := range [][]byte{
+		{},
+		{2, 0, 0, 0, 0, 0, 0, 0, 0},
+		append([]byte{1}, binary32(1<<20, 1<<20)...),
+		append(append([]byte{1}, binary32(2, 3)...), 9, 0, 0, 0),
+		data[:len(data)-1],
+	} {
+		m, err := newVectorMatmulState(mp, nil, 2, 3)
+		require.NoError(t, err)
+		require.Error(t, m.UnmarshalBinary(bad), "%v", bad)
+		m.Free()
+	}
+}
+
+func binary32(a, b uint32) []byte {
+	return []byte{byte(a), byte(a >> 8), byte(a >> 16), byte(a >> 24), byte(b), byte(b >> 8), byte(b >> 16), byte(b >> 24)}
+}
+
+func TestVectorMatmulNullAndConstInputs(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() { require.Zero(t, mp.CurrNB()) }()
+	exec := vmExec(t, mp, types.T_int64.ToType(), 1, vmConfig(3, [][]float32{{1, 0, 0, 0}}))
+	defer exec.Free()
+	idv := vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixed(idv, int64(1), true, mp))
+	require.NoError(t, vector.AppendFixed(idv, int64(2), false, mp))
+	cell, err := types.AppendBlockScaled(nil, types.BlockScaledMXFP8, []float32{2, 0, 0, 0})
+	require.NoError(t, err)
+	constVec, err := vector.NewConstBytes(vmVecType(), cell, 2, mp)
+	require.NoError(t, err)
+	defer vmFree(mp, []*vector.Vector{idv, constVec})
+	require.NoError(t, exec.BulkFill(0, []*vector.Vector{idv, constVec}))
+	require.Equal(t, []string{`[[["2",-2]]]`}, vmFlush(t, mp, exec))
+
+	// a malformed cell is an error
+	bad := vector.NewVec(vmVecType())
+	require.NoError(t, vector.AppendBytes(bad, []byte{0x7f, 1, 0, 0, 4, 0, 0, 0}, false, mp))
+	defer bad.Free(mp)
+	one := vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixed(one, int64(9), false, mp))
+	defer one.Free(mp)
+	require.Error(t, exec.Fill(0, 0, []*vector.Vector{one, bad}))
+}
+
+// A row whose float32 products overflow but cancel scores its exact distance: the kernel
+// recomputes an overflowed lane sum in float64. A distance outside the float32 range is an
+// error when it reaches the result.
+func TestVectorMatmulLaneOverflowScoresExactDistance(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() { require.Zero(t, mp.CurrNB()) }()
+	const m = 3e38
+	big := make([]float32, 32)
+	alternating := make([]float32, 32)
+	for i := range big {
+		big[i], alternating[i] = m, m
+		if i%2 == 1 {
+			alternating[i] = -m
+		}
+	}
+	vt := types.New(types.T_array_float8, 32, 0)
+	mk := func(topk int, query []float32) *vectorMatmulExec {
+		q, _ := json.Marshal([][]float32{query})
+		exec, err := makeVectorMatmul(mp, AggIdOfVectorMatmul, false, []types.Type{types.T_int64.ToType(), vt})
+		require.NoError(t, err)
+		require.NoError(t, exec.GroupGrow(1))
+		require.NoError(t, exec.SetExtraInformation(EncodeVectorMatmulConfig(int64(topk), string(q), "", false), 0))
+		return exec.(*vectorMatmulExec)
+	}
+	idv := vector.NewVec(types.T_int64.ToType())
+	vv := vector.NewVec(vt)
+	small := make([]float32, 32)
+	small[0] = 1
+	for i, row := range [][]float32{big, small, small} {
+		require.NoError(t, vector.AppendFixed(idv, int64(i), false, mp))
+		cell, err := types.AppendBlockScaled(nil, types.BlockScaledMXFP8, row)
+		require.NoError(t, err)
+		require.NoError(t, vector.AppendBytes(vv, cell, false, mp))
+	}
+	defer vmFree(mp, []*vector.Vector{idv, vv})
+
+	// big . alternating cancels pairwise to 0; small . alternating is about -3e38
+	top3 := mk(3, alternating)
+	defer top3.Free()
+	require.NoError(t, top3.BulkFill(0, []*vector.Vector{idv, vv}))
+	out := vmFlush(t, mp, top3)
+	require.Len(t, out, 1)
+	var got [][][]any
+	require.NoError(t, json.Unmarshal([]byte(out[0]), &got))
+	require.Len(t, got[0], 3)
+	require.Equal(t, "1", got[0][0][0])
+	require.Equal(t, "2", got[0][1][0])
+	require.Equal(t, "0", got[0][2][0])
+	require.Equal(t, 0.0, got[0][2][1])
+
+	// big . big is 32 * 3e38^2, beyond the float32 range
+	over := mk(1, big)
+	defer over.Free()
+	require.NoError(t, over.BulkFill(0, []*vector.Vector{idv, vv}))
+	_, err := over.Flush()
+	require.ErrorContains(t, err, "overflows the float32 domain")
+}
+
+// Merging must keep each hit's id text when appending an id compacts the target arena:
+// the target carries garbage from evicted ids, and source ids are shared across queries.
+func TestVectorMatmulStateMergeAcrossCompaction(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() { require.Zero(t, mp.CurrNB()) }()
+	r := rand.New(rand.NewSource(11))
+	const q, k = 3, 4
+	type hit struct {
+		id    string
+		score float64
+	}
+	for iter := 0; iter < 200; iter++ {
+		var all []hit
+		perQuery := make([][]hit, q)
+		mkState := func(rows int) *vectorMatmulState {
+			s, err := newVectorMatmulState(mp, nil, q, k)
+			require.NoError(t, err)
+			for i := 0; i < rows; i++ {
+				id := strings.Repeat(string(rune('a'+r.Intn(26))), 1+r.Intn(40)) + strconv.Itoa(len(all))
+				scores := make([]float64, q)
+				for j := range scores {
+					scores[j] = float64(r.Intn(1000))
+					perQuery[j] = append(perQuery[j], hit{id, scores[j]})
+				}
+				all = append(all, hit{id, 0})
+				require.NoError(t, s.offer(scores, []byte(id)))
+			}
+			return s
+		}
+		target := mkState(30)
+		for src := 0; src < 4; src++ {
+			s := mkState(10)
+			require.NoError(t, target.Merge(s))
+			s.Free()
+		}
+		for j := 0; j < q; j++ {
+			want := perQuery[j]
+			sort.Slice(want, func(a, b int) bool {
+				if want[a].score != want[b].score {
+					return want[a].score > want[b].score
+				}
+				return want[a].id < want[b].id
+			})
+			got := target.sorted(j)
+			require.Len(t, got, k)
+			for i, e := range got {
+				require.Equal(t, want[i].id, string(target.id(e)), "iter %d query %d rank %d", iter, j, i)
+				require.Equal(t, want[i].score, e.score)
+			}
+		}
+		target.Free()
+	}
+}
+
+// vmAccountWithLimit opens an allocation account with the given byte limit.
+func vmAccountWithLimit(t *testing.T, limit uint64) *AllocationAccount {
+	t.Helper()
+	registry, err := mpool.NewAllocationAccountRegistry(1, 512)
+	require.NoError(t, err)
+	account, err := registry.Open(limit)
+	require.NoError(t, err)
+	allocation, err := NewAllocationAccount(account, mpool.AllocationOwnerGroup, AllocationAccountSites{
+		VectorData: 1, VectorArea: 2, VectorNulls: 3, VectorGrouping: 4, ArgumentCount: 5, ArgumentArena: 6,
+	})
+	require.NoError(t, err)
+	return allocation
+}
+
+// Compaction of a state holding many distinct hits allocates nothing on the Go heap; its
+// scratch is the accounted order slice, counted by Size.
+func TestVectorMatmulCompactionLargeHitCardinality(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() { require.Zero(t, mp.CurrNB()) }()
+	const q, k = 128, 256
+	allocation := vmAllocation(t)
+	s, err := newVectorMatmulState(mp, allocation, q, k)
+	require.NoError(t, err)
+	defer s.Free()
+	r := rand.New(rand.NewSource(17))
+	scores := make([]float64, q)
+	for row := 0; row < 4*q*k; row++ {
+		for j := range scores {
+			scores[j] = r.Float64()
+		}
+		require.NoError(t, s.offer(scores, []byte(fmt.Sprintf("id-%012d", row))))
+	}
+	distinct := map[string]struct{}{}
+	for j := 0; j < q; j++ {
+		require.Len(t, s.hits(j), k)
+		for _, e := range s.hits(j) {
+			distinct[string(s.id(e))] = struct{}{}
+		}
+	}
+	require.Greater(t, len(distinct), q*k/2)
+	require.Len(t, s.order, q*k)
+	require.Equal(t, int64(cap(s.counts))*4+int64(cap(s.entries))*16+int64(cap(s.arena))+int64(q*k)*4, s.Size())
+
+	before := make([][]string, q)
+	for j := range before {
+		for _, e := range s.sorted(j) {
+			before[j] = append(before[j], string(s.id(e)))
+		}
+	}
+	var compactErr error
+	allocs := testing.AllocsPerRun(5, func() {
+		if err := s.compact(); err != nil {
+			compactErr = err
+		}
+	})
+	require.NoError(t, compactErr)
+	require.Zero(t, allocs)
+	require.Equal(t, len(distinct)*len("id-000000000000"), s.used)
+	for j := range before {
+		var got []string
+		for _, e := range s.sorted(j) {
+			got = append(got, string(s.id(e)))
+		}
+		require.Equal(t, before[j], got)
+	}
+}
+
+// When the account cannot admit the compaction scratch, the fill and the merge that need
+// it fail with the capacity error and the retained hits are unchanged.
+func TestVectorMatmulCompactionScratchAdmission(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() { require.Zero(t, mp.CurrNB()) }()
+	const q, k = 4, 4
+	first := []byte(strings.Repeat("a", 64))
+	second := []byte(strings.Repeat("b", 64))
+	scores := []float64{1, 1, 1, 1}
+
+	probe := vmAllocation(t)
+	p, err := newVectorMatmulState(mp, probe, q, k)
+	require.NoError(t, err)
+	require.NoError(t, p.offer(scores, first))
+	limit := probe.account.Snapshot().Used
+	p.Free()
+
+	allocation := vmAccountWithLimit(t, limit)
+	s, err := newVectorMatmulState(mp, allocation, q, k)
+	require.NoError(t, err)
+	defer s.Free()
+	require.NoError(t, s.offer(scores, first))
+	require.Equal(t, limit, allocation.account.Snapshot().Used)
+
+	require.ErrorIs(t, s.offer(scores, second), mpool.ErrAllocationAccountCapacity)
+	require.Nil(t, s.order)
+
+	other, err := newVectorMatmulState(mp, nil, q, k)
+	require.NoError(t, err)
+	defer other.Free()
+	require.NoError(t, other.offer([]float64{2, 2, 2, 2}, second))
+	require.ErrorIs(t, s.Merge(other), mpool.ErrAllocationAccountCapacity)
+
+	require.Equal(t, limit, allocation.account.Snapshot().Used)
+	for j := 0; j < q; j++ {
+		hits := s.hits(j)
+		require.Len(t, hits, 1)
+		require.Equal(t, first, s.id(hits[0]))
+	}
+}
+
+// At every account limit, a merge whose preflight succeeds also succeeds, into an empty
+// destination and into one whose arena has spare room.
+func TestVectorMatmulPreflightMergeAdmitsOrder(t *testing.T) {
+	cfg := vmConfig(2, [][]float32{{1, 0, 0, 0}, {0, 1, 0, 0}})
+	for _, prefill := range []bool{false, true} {
+		t.Run(fmt.Sprintf("prefill=%v", prefill), func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			defer func() { require.Zero(t, mp.CurrNB()) }()
+			mk := func(allocation *AllocationAccount) (*vectorMatmulExec, error) {
+				agg, err := makeVectorMatmul(mp, AggIdOfVectorMatmul, false, []types.Type{types.T_int64.ToType(), vmVecType()})
+				require.NoError(t, err)
+				exec := agg.(*vectorMatmulExec)
+				require.NoError(t, exec.SetExtraInformation(cfg, 0))
+				if err := exec.SetAllocationAccount(allocation); err != nil {
+					exec.Free()
+					return nil, err
+				}
+				if err := exec.GroupGrow(1); err != nil {
+					exec.Free()
+					return nil, err
+				}
+				if prefill {
+					vecs := vmVectors(t, mp, []int64{9}, [][]float32{{0, 0, 1, 0}})
+					defer vmFree(mp, vecs)
+					if err := exec.PreflightBatchFill(0, []uint64{1}, vecs); err != nil {
+						exec.Free()
+						return nil, err
+					}
+					require.NoError(t, exec.BatchFill(0, []uint64{1}, vecs))
+				}
+				return exec, nil
+			}
+			src, err := mk(vmAllocation(t))
+			require.NoError(t, err)
+			defer src.Free()
+			vecs := vmVectors(t, mp, []int64{1, 2, 3}, [][]float32{{1, 0, 0, 0}, {0, 1, 0, 0}, {1, 1, 0, 0}})
+			defer vmFree(mp, vecs)
+			require.NoError(t, src.PreflightBatchFill(0, []uint64{1, 1, 1}, vecs))
+			require.NoError(t, src.BatchFill(0, []uint64{1, 1, 1}, vecs))
+
+			probe := vmAllocation(t)
+			dst, err := mk(probe)
+			require.NoError(t, err)
+			require.NoError(t, dst.PreflightBatchMerge(src, 0, []uint64{1}))
+			used := probe.account.Snapshot().Used
+			dst.Free()
+
+			admitted := 0
+			for limit := uint64(0); limit <= used; limit++ {
+				dst, err := mk(vmAccountWithLimit(t, limit))
+				if err != nil {
+					require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
+					continue
+				}
+				if err := dst.PreflightBatchMerge(src, 0, []uint64{1}); err != nil {
+					require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
+					require.Less(t, limit, used)
+				} else {
+					admitted++
+					require.NoError(t, dst.BatchMerge(src, 0, []uint64{1}))
+				}
+				dst.Free()
+			}
+			require.Equal(t, 1, admitted)
+		})
+	}
+}
+
+// vmPlainCase holds a plain vector type and how a float32 maps to it.
+type vmPlainCase struct {
+	oid    types.T
+	toCell func(v []float32) []byte
+	value  func(v float32) float64
+}
+
+func vmPlainCases() []vmPlainCase {
+	return []vmPlainCase{
+		{types.T_array_float32, func(v []float32) []byte { return types.ArrayToBytes(v) }, func(v float32) float64 { return float64(v) }},
+		{types.T_array_float16, func(v []float32) []byte {
+			out := make([]types.Float16, len(v))
+			for i, x := range v {
+				out[i] = types.Float16FromFloat32(x)
+			}
+			return types.ArrayToBytes(out)
+		}, func(v float32) float64 { return float64(types.Float16FromFloat32(v).ToFloat32()) }},
+		{types.T_array_bf16, func(v []float32) []byte {
+			out := make([]types.BF16, len(v))
+			for i, x := range v {
+				out[i] = types.BF16FromFloat32(x)
+			}
+			return types.ArrayToBytes(out)
+		}, func(v float32) float64 { return float64(types.BF16FromFloat32(v).ToFloat32()) }},
+		{types.T_array_int8, func(v []float32) []byte {
+			out := make([]int8, len(v))
+			for i, x := range v {
+				out[i] = int8(x)
+			}
+			return types.ArrayToBytes(out)
+		}, func(v float32) float64 { return float64(v) }},
+		{types.T_array_uint8, func(v []float32) []byte {
+			out := make([]uint8, len(v))
+			for i, x := range v {
+				out[i] = uint8(x)
+			}
+			return types.ArrayToBytes(out)
+		}, func(v float32) float64 { return float64(v) }},
+	}
+}
+
+func TestVectorMatmulPlainTypes(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() { require.Zero(t, mp.CurrNB()) }()
+	r := rand.New(rand.NewSource(9))
+	const dim, nrows, k = 8, 200, 5
+	for _, c := range vmPlainCases() {
+		gen := func() []float32 {
+			v := make([]float32, dim)
+			for i := range v {
+				switch c.oid {
+				case types.T_array_int8:
+					v[i] = float32(r.Intn(255) - 127)
+				case types.T_array_uint8:
+					v[i] = float32(r.Intn(256))
+				default:
+					v[i] = float32(r.NormFloat64())
+				}
+			}
+			return v
+		}
+		queries := [][]float32{gen(), gen()}
+		rows := make([][]float32, nrows)
+		for i := range rows {
+			rows[i] = gen()
+		}
+		vt := types.New(c.oid, dim, 0)
+		q, _ := json.Marshal(queries)
+		exec, err := makeVectorMatmul(mp, AggIdOfVectorMatmul, false, []types.Type{types.T_int64.ToType(), vt})
+		require.NoError(t, err)
+		require.NoError(t, exec.GroupGrow(1))
+		require.NoError(t, exec.SetExtraInformation(EncodeVectorMatmulConfig(k, string(q), "", false), 0))
+		idv := vector.NewVec(types.T_int64.ToType())
+		vv := vector.NewVec(vt)
+		for i, row := range rows {
+			require.NoError(t, vector.AppendFixed(idv, int64(i), false, mp))
+			require.NoError(t, vector.AppendBytes(vv, c.toCell(row), false, mp))
+		}
+		require.NoError(t, exec.BulkFill(0, []*vector.Vector{idv, vv}))
+		out := vmFlush(t, mp, exec)
+		exec.Free()
+		vmFree(mp, []*vector.Vector{idv, vv})
+
+		var got [][][]any
+		require.NoError(t, json.Unmarshal([]byte(out[0]), &got))
+		for j, qv := range queries {
+			type hit struct {
+				id    int
+				score float64
+			}
+			hits := make([]hit, nrows)
+			for i, row := range rows {
+				var dot float64
+				for d := range row {
+					dot += c.value(row[d]) * c.value(qv[d])
+				}
+				hits[i] = hit{i, float64(float32(dot))}
+			}
+			sort.Slice(hits, func(a, b int) bool {
+				if hits[a].score != hits[b].score {
+					return hits[a].score > hits[b].score
+				}
+				return strconv.Itoa(hits[a].id) < strconv.Itoa(hits[b].id)
+			})
+			require.Len(t, got[j], k, c.oid.String())
+			for i := 0; i < k; i++ {
+				require.Equal(t, strconv.Itoa(hits[i].id), got[j][i][0], "%s query %d rank %d", c.oid, j, i)
+				require.InDelta(t, -hits[i].score, got[j][i][1], 1e-4*math.Max(1, math.Abs(hits[i].score)), c.oid.String())
+			}
+		}
+	}
+
+	// integer columns take integer queries in range
+	for _, tc := range []struct {
+		oid     types.T
+		queries string
+	}{
+		{types.T_array_int8, `[[1.5,0,0,0,0,0,0,0]]`},
+		{types.T_array_int8, `[[200,0,0,0,0,0,0,0]]`},
+		{types.T_array_uint8, `[[-1,0,0,0,0,0,0,0]]`},
+	} {
+		_, err := parseVectorMatmulConfig(EncodeVectorMatmulConfig(1, tc.queries, "", false), types.New(tc.oid, dim, 0))
+		require.ErrorContains(t, err, "not representable", tc.queries)
+	}
+	_, err := makeVectorMatmul(mp, AggIdOfVectorMatmul, false, []types.Type{types.T_int64.ToType(), types.New(types.T_array_float64, dim, 0)})
+	require.Error(t, err)
+}
+
+// TestVectorMatmulConfigShared checks that executors holding the same configuration share
+// one parsed configuration, that the entry is dropped when the last executor is freed, and
+// that a configuration error is returned to every executor without being kept.
+func TestVectorMatmulConfigShared(t *testing.T) {
+	mp := mpool.MustNewZero()
+	cfg := vmConfig(3, [][]float32{{1, 0, 0, 0}, {0, 1, 0, 0}})
+	vt := vmVecType()
+	mk := func() *vectorMatmulExec {
+		exec, err := makeVectorMatmul(mp, AggIdOfVectorMatmul, false, []types.Type{types.T_int64.ToType(), vt})
+		require.NoError(t, err)
+		return exec.(*vectorMatmulExec)
+	}
+	execs := make([]*vectorMatmulExec, 8)
+	var wg sync.WaitGroup
+	for i := range execs {
+		execs[i] = mk()
+		wg.Add(1)
+		go func(e *vectorMatmulExec) {
+			defer wg.Done()
+			require.NoError(t, e.SetExtraInformation(cfg, 0))
+		}(execs[i])
+	}
+	wg.Wait()
+	for _, e := range execs[1:] {
+		require.Same(t, execs[0].cfg, e.cfg)
+	}
+	// setting the configuration again keeps one hold per executor
+	require.NoError(t, execs[0].SetExtraInformation(cfg, 0))
+	vectorMatmulConfigs.Lock()
+	require.Len(t, vectorMatmulConfigs.m, 1)
+	vectorMatmulConfigs.Unlock()
+
+	// another column type is another entry
+	other, err := makeVectorMatmul(mp, AggIdOfVectorMatmul, false, []types.Type{types.T_int64.ToType(), types.New(types.T_array_float4, vmDim, 0)})
+	require.NoError(t, err)
+	require.NoError(t, other.SetExtraInformation(cfg, 0))
+	require.NotSame(t, execs[0].cfg, other.(*vectorMatmulExec).cfg)
+	other.Free()
+
+	for _, e := range execs {
+		e.Free()
+	}
+	vectorMatmulConfigs.Lock()
+	require.Empty(t, vectorMatmulConfigs.m)
+	vectorMatmulConfigs.Unlock()
+
+	bad := vmConfig(0, [][]float32{{1, 0, 0, 0}})
+	for i := 0; i < 2; i++ {
+		e := mk()
+		require.Error(t, e.SetExtraInformation(bad, 0))
+		e.Free()
+	}
+	vectorMatmulConfigs.Lock()
+	require.Empty(t, vectorMatmulConfigs.m)
+	vectorMatmulConfigs.Unlock()
+	require.Zero(t, mp.CurrNB())
+}
+
+// vmFakeEngine is a shape-only GPU engine: it keeps no row and reports no hit.
+type vmFakeEngine struct {
+	maxRows, cellBytes, topk int
+	closed                   *int
+}
+
+func (e *vmFakeEngine) MaxRows() int   { return e.maxRows }
+func (e *vmFakeEngine) CellBytes() int { return e.cellBytes }
+func (e *vmFakeEngine) TopK() int      { return e.topk }
+func (e *vmFakeEngine) Close()         { *e.closed++ }
+func (e *vmFakeEngine) Run(cells []byte, scores []float32) error {
+	clear(scores)
+	return nil
+}
+func (e *vmFakeEngine) RunTopK(cells []byte, top []float32, rows []int32, full []float32, tied []uint8) error {
+	for i := range rows {
+		rows[i] = -1
+	}
+	clear(tied)
+	return nil
+}
+
+// TestVectorMatmulGPUMemoryAdmission checks that the engine's native host memory and the
+// tile buffers are charged to the allocation account before they are allocated, counted in
+// Size and released by Free, and that with a device in play an account without room or an
+// engine error fails the fill instead of scoring on the CPU.
+func TestVectorMatmulGPUMemoryAdmission(t *testing.T) {
+	saved := vectorMatmulGPU
+	defer func() { vectorMatmulGPU = saved }()
+	const hostBytes = 1 << 20
+	created, closed := 0, 0
+	var createErr error
+	vectorMatmulGPU = &vectorMatmulGPUHooks{
+		available: func() bool { return true },
+		hostBytes: func(format, dim, nq, maxRows int) uint64 { return hostBytes },
+		create: func(format, dim, nq int, queryCells []byte, cellBytes, maxRows, topk, metric int) (vectorMatmulEngine, error) {
+			created++
+			if createErr != nil {
+				return nil, createErr
+			}
+			return &vmFakeEngine{maxRows: (maxRows + 127) / 128 * 128, cellBytes: cellBytes, topk: min(topk, maxRows), closed: &closed}, nil
+		},
+	}
+	q, _ := json.Marshal([][]float32{{1, 0, 0, 0}})
+	gpuCfg := EncodeVectorMatmulConfig(1, string(q), "", true)
+	run := func(limit uint64) (*vectorMatmulExec, *mpool.AllocationAccount, []*vector.Vector, *mpool.MPool, error) {
+		mp := mpool.MustNewZero()
+		registry, err := mpool.NewAllocationAccountRegistry(1, 512)
+		require.NoError(t, err)
+		account, err := registry.Open(limit)
+		require.NoError(t, err)
+		allocation, err := NewAllocationAccount(account, mpool.AllocationOwnerGroup, AllocationAccountSites{
+			VectorData: 1, VectorArea: 2, VectorNulls: 3, VectorGrouping: 4, ArgumentCount: 5, ArgumentArena: 6,
+		})
+		require.NoError(t, err)
+		agg, err := makeVectorMatmul(mp, AggIdOfVectorMatmul, false, []types.Type{types.T_int64.ToType(), vmVecType()})
+		require.NoError(t, err)
+		exec := agg.(*vectorMatmulExec)
+		require.NoError(t, exec.SetExtraInformation(gpuCfg, 0))
+		require.NoError(t, exec.SetAllocationAccount(allocation))
+		require.NoError(t, exec.GroupGrow(1))
+		vecs := vmVectors(t, mp, []int64{1, 2}, [][]float32{{1, 0, 0, 0}, {2, 0, 0, 0}})
+		groups := []uint64{1, 1}
+		if err := exec.PreflightBatchFill(0, groups, vecs); err != nil {
+			return exec, account, vecs, mp, err
+		}
+		return exec, account, vecs, mp, exec.BatchFill(0, groups, vecs)
+	}
+	release := func(exec *vectorMatmulExec, account *mpool.AllocationAccount, vecs []*vector.Vector, mp *mpool.MPool) {
+		exec.Free()
+		vmFree(mp, vecs)
+		require.Zero(t, account.Snapshot().Used)
+		require.Zero(t, mp.CurrNB())
+	}
+
+	// room for the engine: native memory and tile are charged and counted
+	exec, account, vecs, mp, err := run(256 << 20)
+	require.NoError(t, err)
+	require.Equal(t, 1, created)
+	require.NotNil(t, exec.engine)
+	tile := exec.tileSize()
+	require.Greater(t, tile, int64(hostBytes))
+	require.GreaterOrEqual(t, account.Snapshot().Used, uint64(tile))
+	require.GreaterOrEqual(t, exec.Size(), tile)
+	release(exec, account, vecs, mp)
+	require.Equal(t, 1, closed)
+
+	// no room for the native memory: the fill fails before an engine is created
+	exec, account, vecs, mp, err = run(hostBytes / 2)
+	require.Error(t, err)
+	require.Equal(t, 1, created)
+	require.Nil(t, exec.engine)
+	release(exec, account, vecs, mp)
+
+	// room for the native memory but not the tile: the fill fails, the engine is closed
+	exec, account, vecs, mp, err = run(hostBytes + 64<<10)
+	require.Error(t, err)
+	require.Equal(t, 2, created)
+	require.Equal(t, 2, closed)
+	require.Nil(t, exec.engine)
+	release(exec, account, vecs, mp)
+
+	// an engine error (no algorithm for the shape, device memory, CUDA) fails the fill
+	createErr = moerr.NewInternalErrorNoCtx("blockscaled_matmul: no cuBLASLt algorithm")
+	exec, account, vecs, mp, err = run(256 << 20)
+	require.ErrorContains(t, err, "no cuBLASLt algorithm")
+	require.Equal(t, 3, created)
+	require.Nil(t, exec.engine)
+	// a retry of the batch on the same executor creates the engine again, not the CPU path
+	groups := []uint64{1, 1}
+	err = exec.PreflightBatchFill(0, groups, vecs)
+	if err == nil {
+		err = exec.BatchFill(0, groups, vecs)
+	}
+	require.ErrorContains(t, err, "no cuBLASLt algorithm")
+	require.Equal(t, 4, created)
+	require.Nil(t, exec.engine)
+	release(exec, account, vecs, mp)
+}
+
+// TestVectorMatmulBinaryQueries checks that queries given as a BLOB of little-endian float32
+// values configure the same queries as the JSON array, and its malformed forms.
+func TestVectorMatmulBinaryQueries(t *testing.T) {
+	queries := [][]float32{{1, 0, -0.5, 2}, {0, 3, 0, -1}}
+	blob := func(qs [][]float32) []byte {
+		n := 0
+		for _, q := range qs {
+			n += 4 * len(q)
+		}
+		b := make([]byte, 0, n)
+		for _, q := range qs {
+			b = append(b, types.ArrayToBytes(q)...)
+		}
+		return b
+	}
+	for _, vt := range []types.Type{
+		types.New(types.T_array_float8, vmDim, 0), types.New(types.T_array_float4, vmDim, 0),
+		types.New(types.T_array_float32, vmDim, 0), types.New(types.T_array_bf16, vmDim, 0),
+	} {
+		text, err := parseVectorMatmulConfig(vmConfig(3, queries), vt)
+		require.NoError(t, err, vt.String())
+		bin, err := parseVectorMatmulConfig(EncodeVectorMatmulBinaryConfig(3, blob(queries), "", false), vt)
+		require.NoError(t, err, vt.String())
+		require.Equal(t, text.nq, bin.nq, vt.String())
+		require.Equal(t, text.queryCells, bin.queryCells, vt.String())
+		require.Equal(t, text.cellBytes, bin.cellBytes, vt.String())
+	}
+
+	// the same rows give the same result
+	mp := mpool.MustNewZero()
+	rows := [][]float32{{1, 0, 0, 0}, {0, 1, 0, 0}, {2, 2, 0, 0}}
+	results := make([][]string, 2)
+	for i, cfg := range [][]byte{vmConfig(2, queries), EncodeVectorMatmulBinaryConfig(2, blob(queries), "", false)} {
+		exec := vmExec(t, mp, types.T_int64.ToType(), 1, cfg)
+		vecs := vmVectors(t, mp, []int64{1, 2, 3}, rows)
+		require.NoError(t, exec.BulkFill(0, vecs))
+		results[i] = vmFlush(t, mp, exec)
+		exec.Free()
+		vmFree(mp, vecs)
+	}
+	require.Equal(t, results[0], results[1])
+	require.Zero(t, mp.CurrNB())
+
+	vt := vmVecType()
+	for name, tc := range map[string]struct {
+		b    []byte
+		want string
+	}{
+		"empty":      {nil, "non-zero multiple"},
+		"misaligned": {blob(queries)[:13], "non-zero multiple"},
+		"other dim":  {blob([][]float32{{1, 2, 3}}), "non-zero multiple"},
+		"non-finite": {blob([][]float32{{1, float32(math.NaN()), 0, 0}}), "not finite"},
+		"infinite":   {blob([][]float32{{1, 0, float32(math.Inf(-1)), 0}}), "not finite"},
+		"too many":   {make([]byte, 4*vmDim*(vectorMatmulMaxQueries+1)), "query count"},
+	} {
+		_, err := parseVectorMatmulConfig(EncodeVectorMatmulBinaryConfig(3, tc.b, "", false), vt)
+		require.ErrorContains(t, err, tc.want, name)
+	}
+	bad := EncodeVectorMatmulConfig(3, `[[1,0,0,0]]`, "", false)
+	bad[len(bad)-1] = 4
+	_, err := parseVectorMatmulConfig(bad, vt)
+	require.ErrorContains(t, err, "malformed configuration")
+}
+
+// TestVectorMatmulMetrics checks the reported distances of each metric against a float64
+// reference on the stored values: -dot, 1 - cos (1 with a zero vector) and the squared L2
+// distance computed directly, nearest first; a row equal to a query has distance 0.
+func TestVectorMatmulMetrics(t *testing.T) {
+	const dim = 8
+	rng := rand.New(rand.NewSource(3))
+	queries := [][]float32{make([]float32, dim), make([]float32, dim)}
+	rows := make([][]float32, 40)
+	for q := range queries {
+		for d := range queries[q] {
+			queries[q][d] = float32(rng.Intn(9) - 4)
+		}
+	}
+	for i := range rows {
+		rows[i] = make([]float32, dim)
+		for d := range rows[i] {
+			rows[i][d] = float32(rng.Intn(9) - 4)
+		}
+	}
+	rows[0] = make([]float32, dim) // zero vector
+	copy(rows[1], queries[0])      // equal to query 0
+	qtext, err := json.Marshal(queries)
+	require.NoError(t, err)
+	mp := mpool.MustNewZero()
+	for name, m := range map[string]int{"inner_product": vectorMatmulInnerProduct, "cosine": vectorMatmulCosine, "l2sq": vectorMatmulL2sq} {
+		for _, vt := range []types.Type{types.New(types.T_array_float32, dim, 0), types.New(types.T_array_float8, dim, 0), types.New(types.T_array_int8, dim, 0)} {
+			const k = 6
+			cfg := EncodeVectorMatmulConfig(k, string(qtext), `{"metric":"`+name+`"}`, false)
+			agg, err := makeVectorMatmul(mp, AggIdOfVectorMatmul, false, []types.Type{types.T_int64.ToType(), vt})
+			require.NoError(t, err)
+			exec := agg.(*vectorMatmulExec)
+			require.NoError(t, exec.GroupGrow(1))
+			require.NoError(t, exec.SetExtraInformation(cfg, 0))
+			idv, vv := vector.NewVec(types.T_int64.ToType()), vector.NewVec(vt)
+			for i, r := range rows {
+				require.NoError(t, vector.AppendFixed(idv, int64(i), false, mp))
+				switch vt.Oid {
+				case types.T_array_float32:
+					require.NoError(t, vector.AppendArray(vv, r, false, mp))
+				case types.T_array_int8:
+					b := make([]int8, dim)
+					for d, x := range r {
+						b[d] = int8(x)
+					}
+					require.NoError(t, vector.AppendArray(vv, b, false, mp))
+				default:
+					cell, err := types.AppendBlockScaled(nil, types.BlockScaledMXFP8, r)
+					require.NoError(t, err)
+					require.NoError(t, vector.AppendBytes(vv, cell, false, mp))
+				}
+			}
+			require.NoError(t, exec.BulkFill(0, []*vector.Vector{idv, vv}))
+			out := vmFlush(t, mp, exec)
+			exec.Free()
+			vmFree(mp, []*vector.Vector{idv, vv})
+
+			var got [][][]any
+			require.NoError(t, json.Unmarshal([]byte(out[0]), &got))
+			for q, qv := range queries {
+				type hit struct {
+					id   int
+					dist float64
+				}
+				hits := make([]hit, len(rows))
+				for i, r := range rows {
+					var dot, nr, nq, l2 float64
+					for d := range r {
+						x, y := float64(r[d]), float64(qv[d])
+						dot, nr, nq, l2 = dot+x*y, nr+x*x, nq+y*y, l2+(x-y)*(x-y)
+					}
+					dist := -dot
+					switch m {
+					case vectorMatmulCosine:
+						dist = 1
+						if nr > 0 && nq > 0 {
+							dist = 1 - dot/math.Sqrt(nr*nq)
+						}
+					case vectorMatmulL2sq:
+						dist = l2
+					}
+					hits[i] = hit{i, dist}
+				}
+				sort.Slice(hits, func(a, b int) bool {
+					if hits[a].dist != hits[b].dist {
+						return hits[a].dist < hits[b].dist
+					}
+					return strconv.Itoa(hits[a].id) < strconv.Itoa(hits[b].id)
+				})
+				require.Len(t, got[q], k)
+				for i := 0; i < k; i++ {
+					require.InDelta(t, hits[i].dist, got[q][i][1], 1e-5*math.Max(1, math.Abs(hits[i].dist)), "%s %s query %d rank %d", name, vt.Oid, q, i)
+				}
+				if m == vectorMatmulL2sq {
+					require.Equal(t, "1", got[0][0][0], "a row equal to the query is nearest")
+					require.Equal(t, float64(0), got[0][0][1])
+				}
+			}
+		}
+	}
+	require.Zero(t, mp.CurrNB())
+}
+
+// TestVectorMatmulVecBlockQueries checks query_format vecblock: queries given as vecf8/vecf4
+// cells, a BLOB back to back or a JSON array of vecblock JSON objects, are used as given.
+func TestVectorMatmulVecBlockQueries(t *testing.T) {
+	queries := [][]float32{{1, 0, -0.5, 2}, {0, 3, 0, -1}}
+	const vecblock = `{"query_format":"vecblock","metric":"l2sq"}`
+	forms := func(t *testing.T, f types.BlockScaledFormat, qs [][]float32) (blob []byte, text string, cells [][]byte) {
+		texts := make([]string, 0, len(qs))
+		for _, q := range qs {
+			cell, err := types.AppendBlockScaled(nil, f, q)
+			require.NoError(t, err)
+			cells = append(cells, cell)
+			blob = append(blob, cell...)
+			j, err := types.BlockScaledToJSON(cell)
+			require.NoError(t, err)
+			texts = append(texts, j)
+		}
+		return blob, "[" + strings.Join(texts, ",") + "]", cells
+	}
+	for _, oid := range []types.T{types.T_array_float8, types.T_array_float4} {
+		vt := types.New(oid, vmDim, 0)
+		f, _ := oid.BlockScaledFormat()
+		blob, text, _ := forms(t, f, queries)
+		q, _ := json.Marshal(queries)
+		want, err := parseVectorMatmulConfig(EncodeVectorMatmulConfig(3, string(q), `{"metric":"l2sq"}`, false), vt)
+		require.NoError(t, err)
+		for name, raw := range map[string][]byte{
+			"blob": EncodeVectorMatmulBinaryConfig(3, blob, vecblock, false),
+			"json": EncodeVectorMatmulConfig(3, text, vecblock, false),
+		} {
+			got, err := parseVectorMatmulConfig(raw, vt)
+			require.NoError(t, err, "%s %s", oid, name)
+			require.Equal(t, want.nq, got.nq, "%s %s", oid, name)
+			require.Equal(t, want.queryCells, got.queryCells, "%s %s", oid, name)
+			require.Equal(t, want.cellBytes, got.cellBytes, "%s %s", oid, name)
+			require.Equal(t, vectorMatmulL2sq, got.metric)
+		}
+	}
+
+	// a vecf4 cell whose decoded values quantize to another cell is kept as given
+	review := make([]float32, 17)
+	review[0], review[16] = 8.7649145, 5.7432985
+	vt := types.New(types.T_array_float4, 17, 0)
+	blob, _, cells := forms(t, types.BlockScaledNVFP4, [][]float32{review})
+	decoded, err := types.BlockScaledToFloat32(cells[0])
+	require.NoError(t, err)
+	exact, err := parseVectorMatmulConfig(EncodeVectorMatmulBinaryConfig(1, blob, vecblock, false), vt)
+	require.NoError(t, err)
+	require.Equal(t, cells[0], exact.queryCells)
+	q, _ := json.Marshal([][]float32{decoded})
+	requantized, err := parseVectorMatmulConfig(EncodeVectorMatmulConfig(1, string(q), "", false), vt)
+	require.NoError(t, err)
+	require.NotEqual(t, cells[0], requantized.queryCells)
+
+	// a row equal to the query is at distance 0, from either form
+	mp := mpool.MustNewZero()
+	rows := [][]float32{{1, 0, 0, 0}, {1, 0, -0.5, 2}, {2, 2, 0, 0}}
+	blob8, text8, _ := forms(t, types.BlockScaledMXFP8, [][]float32{{1, 0, -0.5, 2}})
+	cfgs := [][]byte{
+		EncodeVectorMatmulBinaryConfig(1, blob8, vecblock, false),
+		EncodeVectorMatmulConfig(1, text8, vecblock, false),
+	}
+	results := make([]string, 0, len(cfgs))
+	for _, cfg := range cfgs {
+		exec := vmExec(t, mp, types.T_int64.ToType(), 1, cfg)
+		vecs := vmVectors(t, mp, []int64{1, 2, 3}, rows)
+		require.NoError(t, exec.BulkFill(0, vecs))
+		results = append(results, vmFlush(t, mp, exec)...)
+		exec.Free()
+		vmFree(mp, vecs)
+	}
+	require.Equal(t, []string{`[[["2",0]]]`, `[[["2",0]]]`}, results)
+	require.Zero(t, mp.CurrNB())
+
+	f8 := types.New(types.T_array_float8, vmDim, 0)
+	blob4, text4, _ := forms(t, types.BlockScaledNVFP4, queries)
+	blob8, text8, _ = forms(t, types.BlockScaledMXFP8, queries)
+	_, otherDim, _ := forms(t, types.BlockScaledMXFP8, [][]float32{{1, 2, 3}})
+	for name, tc := range map[string]struct {
+		raw  []byte
+		vt   types.Type
+		want string
+	}{
+		"plain column":   {EncodeVectorMatmulBinaryConfig(1, blob8, vecblock, false), types.New(types.T_array_float32, vmDim, 0), "needs a vecf8 or vecf4 column"},
+		"length":         {EncodeVectorMatmulBinaryConfig(1, blob8[:len(blob8)-1], vecblock, false), f8, "non-zero multiple"},
+		"empty":          {EncodeVectorMatmulBinaryConfig(1, nil, vecblock, false), f8, "non-zero multiple"},
+		"other format":   {EncodeVectorMatmulBinaryConfig(1, blob4, vecblock, false), types.New(types.T_array_float4, 5, 0), "cell"},
+		"json format":    {EncodeVectorMatmulConfig(1, text4, vecblock, false), f8, "query 0"},
+		"json dimension": {EncodeVectorMatmulConfig(1, otherDim, vecblock, false), f8, "want VECF8(4)"},
+		"json floats":    {EncodeVectorMatmulConfig(1, `[[1,0,0,0]]`, vecblock, false), f8, "query 0"},
+		"json not array": {EncodeVectorMatmulConfig(1, text8[1:], vecblock, false), f8, "JSON array"},
+		"json empty":     {EncodeVectorMatmulConfig(1, `[]`, vecblock, false), f8, "query count"},
+		"format value":   {EncodeVectorMatmulConfig(1, `[[1,0,0,0]]`, `{"query_format":"cells"}`, false), f8, "query_format"},
+	} {
+		_, err := parseVectorMatmulConfig(tc.raw, tc.vt)
+		require.ErrorContains(t, err, tc.want, name)
+	}
+}
+
+// TestVectorMatmulCPUDistanceAtExtremeMagnitudes scores, on the CPU, a query of magnitude m
+// (elements m times {1, 1.5, 2}) against itself, twice itself and minus itself, for each
+// column type holding m, at dimensions around the 16-element kernel unit. The distances are
+// those of cosine_distance and l2_distance_sq on the stored values: cosine 0, 0 and 2 and
+// squared L2 0, |q|^2 and 4|q|^2, or an overflow where the squared distance exceeds float32.
+// vecf32, vecf8 and vecf4 take magnitudes whose float32 products overflow or underflow.
+func TestVectorMatmulCPUDistanceAtExtremeMagnitudes(t *testing.T) {
+	type column struct {
+		vt   func(dim int) types.Type
+		cell func(v []float32) []byte
+		mags []float64
+	}
+	block := func(f types.BlockScaledFormat) func(v []float32) []byte {
+		return func(v []float32) []byte {
+			c, err := types.AppendBlockScaled(nil, f, v)
+			require.NoError(t, err)
+			return c
+		}
+	}
+	plain := map[types.T]func(v []float32) []byte{}
+	for _, c := range vmPlainCases() {
+		plain[c.oid] = c.toCell
+	}
+	columns := map[string]column{
+		"vecf32": {func(d int) types.Type { return types.New(types.T_array_float32, int32(d), 0) }, plain[types.T_array_float32], []float64{1e30, 1e-30, 1, math.Ldexp(1, -140)}},
+		// bf16 and f16 cosine accumulate in float32 (the narrow kernels' contract): magnitudes
+		// whose float32 lanes stay in range
+		"vecbf16": {func(d int) types.Type { return types.New(types.T_array_bf16, int32(d), 0) }, plain[types.T_array_bf16], []float64{1, 1e-3, 1e3}},
+		"vecf16":  {func(d int) types.Type { return types.New(types.T_array_float16, int32(d), 0) }, plain[types.T_array_float16], []float64{1, 1e-3, 1e3}},
+		"vecf8":   {func(d int) types.Type { return types.New(types.T_array_float8, int32(d), 0) }, block(types.BlockScaledMXFP8), []float64{1e30, 1e-30, 1}},
+		"vecf4":   {func(d int) types.Type { return types.New(types.T_array_float4, int32(d), 0) }, block(types.BlockScaledNVFP4), []float64{1e30, 1e-30, 1}},
+	}
+	pattern := []float32{1, 1.5, 2}
+	for name, col := range columns {
+		for _, dim := range []int{15, 16, 17, 33} {
+			for _, m := range col.mags {
+				vec := func(f float64) []float32 {
+					v := make([]float32, dim)
+					for k := range v {
+						v[k] = float32(f * m * float64(pattern[k%3]))
+					}
+					return v
+				}
+				q := vec(1)
+				rows := [][]byte{col.cell(vec(1)), col.cell(vec(2)), col.cell(vec(-1))}
+				qj, _ := json.Marshal([][]float32{q})
+				for _, options := range []string{`{"metric":"cosine"}`, `{"metric":"l2sq"}`} {
+					cfg, err := parseVectorMatmulConfig(EncodeVectorMatmulConfig(1, string(qj), options, false), col.vt(dim))
+					require.NoError(t, err)
+					// the stored query and rows, decoded, for the reference
+					stored := func(cell []byte) []float64 {
+						var x []float32
+						if oid := col.vt(dim).Oid; oid.IsBlockScaledArray() {
+							x, err = types.BlockScaledToFloat32(cell)
+							require.NoError(t, err)
+						} else {
+							row := make([]float32, dim)
+							for k := range row {
+								switch oid {
+								case types.T_array_float32:
+									row[k] = types.BytesToArray[float32](cell)[k]
+								case types.T_array_bf16:
+									row[k] = types.BytesToArray[types.BF16](cell)[k].ToFloat32()
+								default:
+									row[k] = types.BytesToArray[types.Float16](cell)[k].ToFloat32()
+								}
+							}
+							x = row
+						}
+						out := make([]float64, len(x))
+						for k, v := range x {
+							out[k] = float64(v)
+						}
+						return out
+					}
+					qv := stored(cfg.queryCells)
+					for r, cell := range rows {
+						msg := fmt.Sprintf("%s dim %d m %g %s row %d", name, dim, m, options, r)
+						xv := stored(cell)
+						var dot, nx, nq, l2 float64
+						for k := range xv {
+							dot += xv[k] * qv[k]
+							nx += xv[k] * xv[k]
+							nq += qv[k] * qv[k]
+							l2 += (xv[k] - qv[k]) * (xv[k] - qv[k])
+						}
+						out := make([]float64, 1)
+						err := cfg.score(cell, new(metric.VecBlockOperand), out)
+						if strings.Contains(options, "cosine") {
+							require.NoError(t, err, msg)
+							want := 1.0
+							if nx > 0 && nq > 0 {
+								want = 1 - dot/math.Sqrt(nx*nq)
+							}
+							require.InDelta(t, want, -out[0], 1e-6, msg)
+							continue
+						}
+						if l2 > math.MaxFloat32 {
+							require.True(t, err != nil || math.IsInf(out[0], -1), msg)
+							continue
+						}
+						require.NoError(t, err, msg)
+						require.InDelta(t, l2, -out[0], 1e-6*(nx+nq)+1e-45, msg)
+					}
+				}
+			}
+		}
+	}
+}
+
+// TestVectorMatmulConfigAdmission checks that the parsed configuration (the query storage
+// and the score scratch) is charged to the allocation account of every executor holding
+// it, through the aggregate factory: a configuration larger than the account fails the
+// factory, a shared configuration stays charged to each holder until it is freed, and every
+// charge returns on Free.
+func TestVectorMatmulConfigAdmission(t *testing.T) {
+	const limit = 64 << 10
+	openAccount := func(t *testing.T) (*mpool.AllocationAccount, *AllocationAccount) {
+		registry, err := mpool.NewAllocationAccountRegistry(1, 512)
+		require.NoError(t, err)
+		account, err := registry.Open(limit)
+		require.NoError(t, err)
+		allocation, err := NewAllocationAccount(account, mpool.AllocationOwnerGroup, AllocationAccountSites{
+			VectorData: 1, VectorArea: 2, VectorNulls: 3, VectorGrouping: 4, ArgumentCount: 5, ArgumentArena: 6,
+		})
+		require.NoError(t, err)
+		return account, allocation
+	}
+	// newPool's pool is deleted after the test's other cleanups.
+	newPool := func(t *testing.T) *mpool.MPool {
+		mp := mpool.MustNewZero()
+		t.Cleanup(func() { mpool.DeleteMPool(mp) })
+		return mp
+	}
+	// releaser returns a function running f once; cleanup runs it if the test did not.
+	releaser := func(t *testing.T, f func()) func() {
+		var once sync.Once
+		release := func() { once.Do(f) }
+		t.Cleanup(release)
+		return release
+	}
+	ones := func(n int) []float32 {
+		v := make([]float32, n)
+		for i := range v {
+			v[i] = 1
+		}
+		return v
+	}
+	configs := func() int {
+		vectorMatmulConfigs.Lock()
+		defer vectorMatmulConfigs.Unlock()
+		return len(vectorMatmulConfigs.m)
+	}
+	for _, oid := range []types.T{types.T_array_float32, types.T_array_float8} {
+		for _, tc := range []struct {
+			name    string
+			dim, nq int
+			denied  bool
+		}{{"small", 4, 1, false}, {"large", 8192, 64, true}} {
+			t.Run(oid.String()+"/"+tc.name, func(t *testing.T) {
+				mp := newPool(t)
+				account, allocation := openAccount(t)
+				before := configs()
+				typ := types.New(oid, int32(tc.dim), 0)
+				raw := EncodeVectorMatmulBinaryConfig(1, types.ArrayToBytes(ones(tc.nq*tc.dim)), "", false)
+				ag, err := MakeGroupAgg(mp, AggIdOfVectorMatmul, false, allocation, raw, types.T_int64.ToType(), typ)
+				if tc.denied {
+					require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
+					require.Zero(t, account.Snapshot().Used)
+					require.Equal(t, before, configs())
+					return
+				}
+				require.NoError(t, err)
+				exec := ag.(*vectorMatmulExec)
+				freeExec := releaser(t, exec.Free)
+				charged := exec.configBytes()
+				require.GreaterOrEqual(t, charged, uint64(len(exec.cfg.queryCells)))
+				require.Equal(t, charged, account.Snapshot().Used)
+				require.GreaterOrEqual(t, exec.Size(), int64(charged))
+
+				require.NoError(t, exec.GroupGrow(1))
+				cell := types.ArrayToBytes(ones(tc.dim))
+				if oid == types.T_array_float8 {
+					cell, err = types.AppendBlockScaled(nil, types.BlockScaledMXFP8, ones(tc.dim))
+					require.NoError(t, err)
+				}
+				ids, v := vector.NewVec(types.T_int64.ToType()), vector.NewVec(typ)
+				vecs := []*vector.Vector{ids, v}
+				freeVecs := releaser(t, func() { vmFree(mp, vecs) })
+				require.NoError(t, vector.AppendFixed(ids, int64(7), false, mp))
+				require.NoError(t, vector.AppendBytes(v, cell, false, mp))
+				require.NoError(t, exec.PreflightBatchFill(0, []uint64{1}, vecs))
+				require.NoError(t, exec.BatchFill(0, []uint64{1}, vecs))
+				out, err := exec.Flush()
+				freeOut := releaser(t, func() { vmFree(mp, out) })
+				require.NoError(t, err)
+				freeOut()
+				freeExec()
+				freeVecs()
+				require.Zero(t, account.Snapshot().Used)
+				require.Equal(t, before, configs())
+				require.Zero(t, mp.CurrNB())
+			})
+		}
+	}
+
+	t.Run("shared", func(t *testing.T) {
+		mp := newPool(t)
+		before := configs()
+		typ := types.New(types.T_array_float32, 4, 0)
+		raw := EncodeVectorMatmulBinaryConfig(1, types.ArrayToBytes(ones(8)), "", false)
+		accounts := make([]*mpool.AllocationAccount, 2)
+		execs := make([]*vectorMatmulExec, 2)
+		frees := make([]func(), 2)
+		for i := range execs {
+			var allocation *AllocationAccount
+			accounts[i], allocation = openAccount(t)
+			ag, err := MakeGroupAgg(mp, AggIdOfVectorMatmul, false, allocation, raw, types.T_int64.ToType(), typ)
+			require.NoError(t, err)
+			execs[i] = ag.(*vectorMatmulExec)
+			frees[i] = releaser(t, execs[i].Free)
+		}
+		require.Same(t, execs[0].cfg, execs[1].cfg)
+		require.Equal(t, before+1, configs())
+		for i := range execs {
+			require.Equal(t, execs[i].configBytes(), accounts[i].Snapshot().Used)
+		}
+		frees[0]()
+		require.Zero(t, accounts[0].Snapshot().Used)
+		require.Equal(t, execs[1].configBytes(), accounts[1].Snapshot().Used)
+		require.Equal(t, before+1, configs())
+		frees[1]()
+		require.Zero(t, accounts[1].Snapshot().Used)
+		require.Equal(t, before, configs())
+	})
+
+	t.Run("replaced", func(t *testing.T) {
+		mp := newPool(t)
+		account, allocation := openAccount(t)
+		typ := types.New(types.T_array_float32, 4, 0)
+		ag, err := MakeGroupAgg(mp, AggIdOfVectorMatmul, false, allocation,
+			EncodeVectorMatmulBinaryConfig(1, types.ArrayToBytes(ones(4)), "", false), types.T_int64.ToType(), typ)
+		require.NoError(t, err)
+		exec := ag.(*vectorMatmulExec)
+		freeExec := releaser(t, exec.Free)
+		// a larger configuration replaces the charge; one beyond the account releases it
+		require.NoError(t, exec.SetExtraInformation(EncodeVectorMatmulBinaryConfig(1, types.ArrayToBytes(ones(64)), "", false), 0))
+		require.Equal(t, exec.configBytes(), account.Snapshot().Used)
+		big := EncodeVectorMatmulBinaryConfig(1, types.ArrayToBytes(ones(4*4000)), "", false)
+		require.ErrorIs(t, exec.SetExtraInformation(big, 0), mpool.ErrAllocationAccountCapacity)
+		require.Nil(t, exec.cfg)
+		require.Zero(t, account.Snapshot().Used)
+		freeExec()
+		require.Zero(t, account.Snapshot().Used)
+	})
+}
+
+// A finite float32 query that narrows to infinity in the column type is rejected, from JSON
+// and binary queries, with and without the GPU flag.
+func TestVectorMatmulQueryNarrowsToInfinity(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() { require.Zero(t, mp.CurrNB()) }()
+	blob := func(v float32) []byte { return types.ArrayToBytes([]float32{v}) }
+	setup := func(oid types.T, cfg []byte) error {
+		exec, err := makeVectorMatmul(mp, AggIdOfVectorMatmul, false, []types.Type{types.T_int64.ToType(), types.New(oid, 1, 0)})
+		require.NoError(t, err)
+		defer exec.Free()
+		return exec.SetExtraInformation(cfg, 0)
+	}
+	for _, gpu := range []bool{false, true} {
+		for _, tc := range []struct {
+			oid  types.T
+			v    float32
+			text string
+			ok   bool
+		}{
+			{types.T_array_float16, 70000, "70000", false},
+			{types.T_array_float16, -70000, "-70000", false},
+			{types.T_array_bf16, math.MaxFloat32, "3.4028234663852886e+38", false},
+			{types.T_array_float16, 65504, "65504", true},
+			{types.T_array_float16, 2, "2", true},
+			{types.T_array_bf16, 2, "2", true},
+			{types.T_array_float32, 70000, "70000", true},
+		} {
+			for name, cfg := range map[string][]byte{
+				"json":   EncodeVectorMatmulConfig(1, "[["+tc.text+"]]", `{"metric":"l2sq"}`, gpu),
+				"binary": EncodeVectorMatmulBinaryConfig(1, blob(tc.v), `{"metric":"l2sq"}`, gpu),
+			} {
+				err := setup(tc.oid, cfg)
+				if tc.ok {
+					require.NoError(t, err, "%s %v %s gpu=%v", tc.oid, tc.v, name, gpu)
+				} else {
+					require.ErrorContains(t, err, "not representable in the column type", "%s %v %s gpu=%v", tc.oid, tc.v, name, gpu)
+				}
+			}
+		}
+	}
+}
+
+// sorted returns query j's hits best first.
+func (s *vectorMatmulState) sorted(j int) []vectorMatmulEntry {
+	e := &vectorMatmulJSON{s: s, sorted: make([]vectorMatmulEntry, 0, s.k)}
+	return slices.Clone(e.sortedHits(j))
+}
+
+// vmStateJSON encodes s as Flush does and returns a copy of the value.
+func vmStateJSON(t *testing.T, mp *mpool.MPool, s *vectorMatmulState) bytejson.ByteJson {
+	t.Helper()
+	vec := vector.NewVec(types.T_json.ToType())
+	defer vec.Free(mp)
+	enc := &vectorMatmulJSON{s: s, sorted: make([]vectorMatmulEntry, 0, s.k)}
+	require.NoError(t, vector.AppendByteJsonEncoded(vec, enc, mp))
+	raw := slices.Clone(vec.GetBytesAt(0))
+	return bytejson.ByteJson{Type: raw[0], Data: raw[1:]}
+}
+
+// vmReferenceJSON is the result as JSON text parsed to a ByteJson.
+func vmReferenceJSON(s *vectorMatmulState) (bytejson.ByteJson, error) {
+	out := []byte{'['}
+	for j := 0; j < s.q; j++ {
+		if j > 0 {
+			out = append(out, ',')
+		}
+		out = append(out, '[')
+		for i, e := range s.sorted(j) {
+			if i > 0 {
+				out = append(out, ',')
+			}
+			if math.IsInf(e.score, 0) || math.IsNaN(e.score) {
+				return bytejson.ByteJson{}, moerr.NewInvalidInputNoCtx("vector_matmul: the distance overflows the float32 domain")
+			}
+			id, err := json.Marshal(string(s.id(e)))
+			if err != nil {
+				return bytejson.ByteJson{}, err
+			}
+			dist := -e.score
+			if dist == 0 {
+				dist = 0
+			}
+			bitSize := 64
+			if float64(float32(dist)) == dist {
+				bitSize = 32
+			}
+			out = append(out, '[')
+			out = append(out, id...)
+			out = append(out, ',')
+			out = strconv.AppendFloat(out, dist, 'g', -1, bitSize)
+			out = append(out, ']')
+		}
+		out = append(out, ']')
+	}
+	out = append(out, ']')
+	return types.ParseSliceToByteJson(out)
+}
+
+// The encoded result is the ByteJson its JSON text parses to: ids with escapes, non-ASCII,
+// invalid UTF-8 and empty ids; integral, float32, float64, signed-zero and extreme distances;
+// empty queries and a group with no rows.
+func TestVectorMatmulJSONMatchesText(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() { require.Zero(t, mp.CurrNB()) }()
+	ids := []string{"a", "", "id-7", "\"q\"\\", "\x00\n\t\u2028<&>", "\u00e9\U0001f600", "\xff\xfeok\xc3", strings.Repeat("z", 300)}
+	scores := []float64{
+		-1, 1, 0, math.Copysign(0, -1), -1000000, -123456789, -1e21, -float64(float32(0.1)), -0.1,
+		-1.0 / 3, -float64(math.MaxFloat32), -math.MaxFloat64, -math.SmallestNonzeroFloat64, 5e-324, -9007199254740993,
+	}
+	r := rand.New(rand.NewSource(3))
+	for _, shape := range [][2]int{{1, 1}, {3, 5}, {4, 16}} {
+		s, err := newVectorMatmulState(mp, nil, shape[0], shape[1])
+		require.NoError(t, err)
+		for row := 0; row < 40; row++ {
+			sc := make([]float64, shape[0])
+			for j := range sc {
+				sc[j] = scores[r.Intn(len(scores))]
+			}
+			require.NoError(t, s.offer(sc, []byte(ids[r.Intn(len(ids))]+strconv.Itoa(row%3))))
+		}
+		require.NoError(t, s.offer(make([]float64, shape[0]), []byte(ids[1])))
+		want, err := vmReferenceJSON(s)
+		require.NoError(t, err)
+		got := vmStateJSON(t, mp, s)
+		require.Equal(t, want.Type, got.Type)
+		require.Equal(t, want.Data, got.Data, "%s", want.String())
+		s.Free()
+	}
+
+	empty := &vectorMatmulState{q: 3, k: 2}
+	want, err := vmReferenceJSON(empty)
+	require.NoError(t, err)
+	got := vmStateJSON(t, mp, empty)
+	require.Equal(t, want.Data, got.Data)
+	require.Equal(t, `[[], [], []]`, got.String())
+
+	for _, bad := range []float64{math.NaN(), math.Inf(1), math.Inf(-1)} {
+		s, err := newVectorMatmulState(mp, nil, 1, 2)
+		require.NoError(t, err)
+		require.NoError(t, s.offer([]float64{bad}, []byte("x")))
+		vec := vector.NewVec(types.T_json.ToType())
+		err = vector.AppendByteJsonEncoded(vec, &vectorMatmulJSON{s: s, sorted: make([]vectorMatmulEntry, 0, 2)}, mp)
+		require.ErrorContains(t, err, "overflows the float32 domain")
+		require.Zero(t, vec.Length())
+		vec.Free(mp)
+		s.Free()
+	}
+}
+
+// vmGoAlloc returns the Go heap bytes f allocates.
+func vmGoAlloc(f func()) uint64 {
+	var before, after runtime.MemStats
+	runtime.GC()
+	runtime.ReadMemStats(&before)
+	f()
+	runtime.ReadMemStats(&after)
+	return after.TotalAlloc - before.TotalAlloc
+}
+
+// A fill offers a string id from the input vector and a fixed-size id from a fixed buffer:
+// a fill with a large id, admitted or rejected, does not copy it on the Go heap, and an
+// executor retains no id buffer.
+func TestVectorMatmulFillIDNotCopied(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() { require.Zero(t, mp.CurrNB()) }()
+	cfg := vmConfig(1, [][]float32{{1, 0, 0, 0}})
+	for _, size := range []int{64 << 10, 1 << 20, 8 << 20} {
+		exec, err := makeVectorMatmul(mp, AggIdOfVectorMatmul, false, []types.Type{types.T_text.ToType(), vmVecType()})
+		require.NoError(t, err)
+		ex := exec.(*vectorMatmulExec)
+		require.NoError(t, ex.SetExtraInformation(cfg, 0))
+		require.NoError(t, ex.SetAllocationAccount(vmAllocation(t)))
+		require.NoError(t, ex.GroupGrow(1))
+		long := strings.Repeat("x", size)
+		vecs := vmTextVectors(t, mp, []string{long, long + "y"}, [][]float32{{1, 0, 0, 0}, {0, 0, 0, 0}})
+		vecs[0].SetType(types.T_text.ToType())
+		groups := []uint64{1, 1}
+		require.NoError(t, ex.PreflightBatchFill(0, groups, vecs))
+		sizeBefore := ex.Size()
+		allocated := vmGoAlloc(func() { require.NoError(t, ex.BatchFill(0, groups, vecs)) })
+		require.Less(t, allocated, uint64(4<<10), "size %d", size)
+		require.Equal(t, sizeBefore, ex.Size())
+		require.Equal(t, []string{`[[["` + long + `",-1]]]`}, vmFlush(t, mp, ex))
+		vmFree(mp, vecs)
+		ex.Free()
+	}
+
+	exec, err := makeVectorMatmul(mp, AggIdOfVectorMatmul, false, []types.Type{types.T_uuid.ToType(), vmVecType()})
+	require.NoError(t, err)
+	ex := exec.(*vectorMatmulExec)
+	defer ex.Free()
+	require.NoError(t, ex.SetExtraInformation(vmConfig(2, [][]float32{{1, 0, 0, 0}}), 0))
+	require.NoError(t, ex.GroupGrow(1))
+	u := types.Uuid{0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef, 0xfe, 0xdc, 0xba, 0x98, 0x76, 0x54, 0x32, 0x10}
+	idv := vector.NewVec(types.T_uuid.ToType())
+	require.NoError(t, vector.AppendFixed(idv, u, false, mp))
+	vv := vmVectors(t, mp, []int64{0}, [][]float32{{1, 0, 0, 0}})
+	vecs := []*vector.Vector{idv, vv[1]}
+	defer vmFree(mp, []*vector.Vector{idv, vv[0], vv[1]})
+	require.NoError(t, ex.BatchFill(0, []uint64{1}, vecs))
+	st, err := ex.stateAt(0)
+	require.NoError(t, err)
+	require.NoError(t, st.reserve(1<<10))
+	allocs := testing.AllocsPerRun(20, func() {
+		if err := ex.BatchFill(0, []uint64{1}, vecs); err != nil {
+			panic(err)
+		}
+	})
+	require.Zero(t, allocs)
+	require.Equal(t, []string{`[[["` + u.String() + `",-1],["` + u.String() + `",-1]]]`}, vmFlush(t, mp, ex))
+}
+
+// Flush writes each group's result into the result vector: its Go heap allocation does not
+// grow with the result size.
+func TestVectorMatmulFlushGoAllocation(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		scale float32
+	}{
+		{"integral", 1},
+		{"fractional", 0.125},
+		{"exponent", 1e-7},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			vmFlushGoAllocation(t, tc.scale)
+		})
+	}
+}
+
+func TestVectorMatmulJSONPutDistanceNoAlloc(t *testing.T) {
+	dists := []float64{0, -3, 1e6, -0.125, float64(float32(0.1)), 0.1, 1e21, 3e-7, math.MaxFloat64, 5e-324}
+	var dst [8]byte
+	for _, d := range dists {
+		require.Zero(t, testing.AllocsPerRun(10, func() {
+			vectorMatmulJSONPutDistance(dst[:], d)
+		}), "%v", d)
+	}
+}
+
+func vmFlushGoAllocation(t *testing.T, scale float32) {
+	mp := mpool.MustNewZero()
+	defer func() { require.Zero(t, mp.CurrNB()) }()
+	allocated := map[int]uint64{}
+	for _, topk := range []int{16, 1024} {
+		queries := make([][]float32, 8)
+		for j := range queries {
+			queries[j] = []float32{float32(j + 1), 1, 0, 0}
+		}
+		exec, err := makeVectorMatmul(mp, AggIdOfVectorMatmul, false, []types.Type{types.T_varchar.ToType(), vmVecType()})
+		require.NoError(t, err)
+		ex := exec.(*vectorMatmulExec)
+		require.NoError(t, ex.SetExtraInformation(vmConfig(topk, queries), 0))
+		require.NoError(t, ex.SetAllocationAccount(vmAllocation(t)))
+		require.NoError(t, ex.GroupGrow(2))
+		ids := make([]string, 2*topk)
+		rows := make([][]float32, len(ids))
+		groups := make([]uint64, len(ids))
+		for i := range ids {
+			ids[i] = fmt.Sprintf("%064d", i)
+			rows[i] = []float32{float32(i%7) * scale, float32(i%5) * scale, 0, 0}
+			groups[i] = 1
+		}
+		for start := 0; start < len(ids); start += hashmap.UnitLimit {
+			end := min(start+hashmap.UnitLimit, len(ids))
+			vecs := vmTextVectors(t, mp, ids[start:end], rows[start:end])
+			require.NoError(t, ex.PreflightBatchFill(0, groups[start:end], vecs))
+			require.NoError(t, ex.BatchFill(0, groups[start:end], vecs))
+			vmFree(mp, vecs)
+		}
+		var results []*vector.Vector
+		allocated[topk] = vmGoAlloc(func() {
+			results, err = ex.Flush()
+		})
+		require.NoError(t, err)
+		require.Equal(t, 2, results[0].Length())
+		require.Greater(t, len(results[0].GetBytesAt(0)), 8*topk*64)
+		for _, r := range results {
+			r.Free(mp)
+		}
+		ex.Free()
+	}
+	require.Less(t, allocated[1024], uint64(64<<10))
+	require.Less(t, allocated[1024], 2*allocated[16]+(16<<10))
+}
+
+// vmJSONQueries is a JSON array of nq vectors of dim elements; withNull writes one null.
+func vmJSONQueries(nq, dim int, withNull bool) string {
+	var b strings.Builder
+	b.WriteByte('[')
+	for q := 0; q < nq; q++ {
+		if q > 0 {
+			b.WriteByte(',')
+		}
+		b.WriteByte('[')
+		for j := 0; j < dim; j++ {
+			if j > 0 {
+				b.WriteByte(',')
+			}
+			if withNull && q == nq-1 && j == dim-1 {
+				b.WriteString("null")
+			} else {
+				b.WriteString(strconv.Itoa((q+j)%5 - 2))
+			}
+		}
+		b.WriteByte(']')
+	}
+	b.WriteByte(']')
+	return b.String()
+}
+
+// The account admits the bound of the configuration parse before the parse allocates: a
+// configuration beyond the account is refused with little Go heap allocation, binary or JSON.
+func TestVectorMatmulConfigAdmittedBeforeParse(t *testing.T) {
+	const limit = 64 << 10
+	for _, oid := range []types.T{types.T_array_float32, types.T_array_float8} {
+		typ := types.New(oid, 8192, 0)
+		ones := make([]float32, 64*8192)
+		for i := range ones {
+			ones[i] = 1
+		}
+		for name, raw := range map[string][]byte{
+			"binary": EncodeVectorMatmulBinaryConfig(1, types.ArrayToBytes(ones), "", false),
+			"json":   EncodeVectorMatmulConfig(1, vmJSONQueries(64, 8192, false), "", false),
+		} {
+			t.Run(oid.String()+"/"+name, func(t *testing.T) {
+				mp := mpool.MustNewZero()
+				defer mpool.DeleteMPool(mp)
+				registry, err := mpool.NewAllocationAccountRegistry(1, 512)
+				require.NoError(t, err)
+				account, err := registry.Open(limit)
+				require.NoError(t, err)
+				allocation, err := NewAllocationAccount(account, mpool.AllocationOwnerGroup, AllocationAccountSites{
+					VectorData: 1, VectorArea: 2, VectorNulls: 3, VectorGrouping: 4, ArgumentCount: 5, ArgumentArena: 6,
+				})
+				require.NoError(t, err)
+				var aggErr error
+				alloc := vmGoAlloc(func() {
+					_, aggErr = MakeGroupAgg(mp, AggIdOfVectorMatmul, false, allocation, raw, types.T_int64.ToType(), typ)
+				})
+				require.ErrorIs(t, aggErr, mpool.ErrAllocationAccountCapacity)
+				require.Less(t, alloc, uint64(64<<10))
+				require.Zero(t, account.Snapshot().Used)
+			})
+		}
+	}
+}
+
+// The bound rejects a query count or dimension beyond the limits before decoding, with the
+// errors parsing reports.
+func TestVectorMatmulParseBoundLimits(t *testing.T) {
+	typ := types.New(types.T_array_float32, 2, 0)
+	for _, tc := range []struct {
+		raw  []byte
+		want string
+	}{
+		{EncodeVectorMatmulConfig(1, vmJSONQueries(vectorMatmulMaxQueries+1, 2, false), "", false), "query count 4097 out of range"},
+		{EncodeVectorMatmulConfig(1, "[]", "", false), "query count 0 out of range"},
+		{EncodeVectorMatmulConfig(vectorMatmulMaxTopK, vmJSONQueries(vectorMatmulMaxQueries, 2, false), "", false), "queries x topk exceeds"},
+		{EncodeVectorMatmulConfig(0, "[[1,2]]", "", false), "topk 0 out of range"},
+	} {
+		var err error
+		alloc := vmGoAlloc(func() { _, err = vectorMatmulParseBound(tc.raw, typ) })
+		require.ErrorContains(t, err, tc.want)
+		require.Less(t, alloc, uint64(16<<10))
+		_, parseErr := parseVectorMatmulConfig(tc.raw, typ)
+		require.ErrorContains(t, parseErr, tc.want)
+	}
+}
+
+// The bound leaves a dimension mismatch to parsing: JSON vecblock queries have one value a row.
+func TestVectorMatmulParseBoundDimension(t *testing.T) {
+	typ := types.New(types.T_array_float32, 2, 0)
+	raw := EncodeVectorMatmulConfig(1, "[[1,2],[1,2,3]]", "", false)
+	_, err := vectorMatmulParseBound(raw, typ)
+	require.NoError(t, err)
+	_, err = parseVectorMatmulConfig(raw, typ)
+	require.ErrorContains(t, err, "vector ops between different dimensions")
+}
+
+// The bound reads neither the options nor the queries' values: it allocates nothing for
+// large options, escaped strings included, or for large queries.
+func TestVectorMatmulParseBoundAllocatesNothing(t *testing.T) {
+	var opts strings.Builder
+	opts.WriteString(`{"metric":"cosine"`)
+	for i := 0; i < 20000; i++ {
+		opts.WriteString(`,"k` + strconv.Itoa(i) + `":"v\nalue \u00e9"`)
+	}
+	opts.WriteString(`}`)
+	typ := types.New(types.T_array_float32, 64, 0)
+	for _, raw := range [][]byte{
+		EncodeVectorMatmulConfig(4, vmJSONQueries(64, 64, false), opts.String(), false),
+		EncodeVectorMatmulBinaryConfig(4, make([]byte, 64*64*4), opts.String(), false),
+	} {
+		var err error
+		require.Zero(t, testing.AllocsPerRun(5, func() { _, err = vectorMatmulParseBound(raw, typ) }))
+		require.NoError(t, err)
+	}
+}
+
+// Large options beyond the account are refused before they are read.
+func TestVectorMatmulLargeOptionsRefused(t *testing.T) {
+	var opts strings.Builder
+	opts.WriteString(`{"metric":"cosine"`)
+	for i := 0; i < 20000; i++ {
+		opts.WriteString(`,"k` + strconv.Itoa(i) + `":"v\nalue"`)
+	}
+	opts.WriteString(`}`)
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	registry, err := mpool.NewAllocationAccountRegistry(1, 512)
+	require.NoError(t, err)
+	account, err := registry.Open(64 << 10)
+	require.NoError(t, err)
+	allocation, err := NewAllocationAccount(account, mpool.AllocationOwnerGroup, AllocationAccountSites{
+		VectorData: 1, VectorArea: 2, VectorNulls: 3, VectorGrouping: 4, ArgumentCount: 5, ArgumentArena: 6,
+	})
+	require.NoError(t, err)
+	raw := EncodeVectorMatmulConfig(1, "[[1,0,0,0]]", opts.String(), false)
+	_, err = MakeGroupAgg(mp, AggIdOfVectorMatmul, false, allocation, raw, types.T_int64.ToType(), types.New(types.T_array_float32, 4, 0))
+	require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
+	require.Zero(t, account.Snapshot().Used)
+}
+
+func TestVectorMatmulOptions(t *testing.T) {
+	for _, tc := range []struct {
+		options  string
+		metric   int
+		vecblock bool
+		err      string
+	}{
+		{"", vectorMatmulInnerProduct, false, ""},
+		{`{"metric":"cosine"}`, vectorMatmulCosine, false, ""},
+		{` { "metric" : "l2sq" , "query_format" : "vecblock" } `, vectorMatmulL2sq, true, ""},
+		{`{"metric":"l2sq","metric":"cosine"}`, vectorMatmulCosine, false, ""},
+		{`{"x":{"metric":"l2sq","query_format":"bad"},"metric":"cos\u0069ne"}`, vectorMatmulCosine, false, ""},
+		{`{"other":[1,{"a":null}],"query_format":"float32"}`, vectorMatmulInnerProduct, false, ""},
+		{`{}`, vectorMatmulInnerProduct, false, ""},
+		{`{"metric":"l2"}`, 0, false, `metric "l2" is not inner_product`},
+		{`{"metric":5}`, 0, false, "metric 5 is not inner_product"},
+		{`{"metric":{"a":1}}`, 0, false, `metric {"a":1} is not inner_product`},
+		{`{"query_format":"cells"}`, 0, false, `query_format "cells" is not float32 or vecblock`},
+		{`[1]`, 0, false, "options must be a JSON object"},
+		{`null`, 0, false, "options must be a JSON object"},
+		{`"x"`, 0, false, "options must be a JSON object"},
+		{`{"metric":"cosine"`, 0, false, "options must be a JSON object"},
+		{`not json`, 0, false, "options must be a JSON object"},
+		{`{"metric":"cosine"}{"metric":"l2sq"}`, 0, false, "options must be a JSON object"},
+		{`{"metric":"cosine"} x`, 0, false, "options must be a JSON object"},
+		{`{"metric":"cosine","metric":"bogus"}`, 0, false, `metric "bogus" is not inner_product`},
+		{`{"metric":"bogus","metric":"cosine","query_format":true}`, 0, false, "query_format true is not float32 or vecblock"},
+		{`{"a":` + strings.Repeat("[", 1_000_000) + strings.Repeat("]", 1_000_000) + `}`, 0, false, "options must be a JSON object"},
+	} {
+		m, vb, err := parseVectorMatmulOptions(tc.options)
+		if tc.err != "" {
+			require.ErrorContains(t, err, tc.err, tc.options)
+			continue
+		}
+		require.NoError(t, err, tc.options)
+		require.Equal(t, tc.metric, m, tc.options)
+		require.Equal(t, tc.vecblock, vb, tc.options)
+	}
+}
+
+// A JSON query value is rounded once from its text to float32: 1.00000005960464478 lies
+// just above the midpoint of 1 and the next float32, which a float64 step rounds to 1.
+func TestVectorMatmulJSONQueriesRoundOnce(t *testing.T) {
+	text := "[[1.00000005960464478, 1e-46, 3.4028235e38, -0, 7]]"
+	queries, err := decodeVectorMatmulJSONQueries(text)
+	require.NoError(t, err)
+	for i, s := range []string{"1.00000005960464478", "1e-46", "3.4028235e38", "-0", "7"} {
+		want, err := strconv.ParseFloat(s, 32)
+		require.NoError(t, err)
+		require.Equal(t, math.Float32bits(float32(want)), math.Float32bits(queries[0][i]), s)
+	}
+	require.Equal(t, float32(1.0000001), queries[0][0])
+	for _, bad := range []string{`[[1e39]]`, `[["1"]]`, `[[true]]`, `[[[1]]]`, `[[{"a":1}]]`, `[1,2]`, `{}`, `[[1,2]`} {
+		_, err := decodeVectorMatmulJSONQueries(bad)
+		require.ErrorContains(t, err, "queries must be a JSON array of vectors", bad)
+	}
+	_, err = decodeVectorMatmulJSONQueries(`[[1,2],null]`)
+	require.ErrorContains(t, err, "query 1 is null")
+	_, err = decodeVectorMatmulJSONQueries(`[[1,2],[3,null]]`)
+	require.ErrorContains(t, err, "query 1: coordinate 1 is null")
+	queries, err = decodeVectorMatmulJSONQueries(`[]`)
+	require.NoError(t, err)
+	require.Empty(t, queries)
+}
+
+// Nesting beyond what queries use is rejected by the row scan, without deep recursion.
+func TestVectorMatmulDeepNesting(t *testing.T) {
+	deep := strings.Repeat("[", 10_000_000)
+	_, ok := vectorMatmulJSONRows(deep, nil)
+	require.False(t, ok)
+	_, ok = vectorMatmulJSONRows(strings.Repeat("[", vectorMatmulJSONMaxDepth)+strings.Repeat("]", vectorMatmulJSONMaxDepth), nil)
+	require.True(t, ok)
+	_, ok = vectorMatmulJSONRows(strings.Repeat("[", vectorMatmulJSONMaxDepth+1)+strings.Repeat("]", vectorMatmulJSONMaxDepth+1), nil)
+	require.False(t, ok)
+	typ := types.New(types.T_array_float32, 2, 0)
+	for _, raw := range [][]byte{
+		EncodeVectorMatmulConfig(1, deep, "", false),
+		EncodeVectorMatmulConfig(1, "[[1,2]]", `{"a":`+deep, false),
+		EncodeVectorMatmulConfig(1, deep, `{"query_format":"vecblock"}`, false),
+	} {
+		_, err := parseVectorMatmulConfig(raw, typ)
+		require.Error(t, err)
+	}
+}
+
+// The vecblock JSON bound grows with a cell's text, which its JSON decoding allocates for,
+// not only with the column's dimension.
+func TestVectorMatmulParseBoundVecblockText(t *testing.T) {
+	typ := types.New(types.T_array_float8, 4, 0)
+	small := EncodeVectorMatmulConfig(1, `[{"g":1,"s":[1],"v":[0,0,0,0]}]`, `{"query_format":"vecblock"}`, false)
+	long := `[{"g":1,"s":[1],"v":[` + strings.Repeat("0,", 1_000_000) + `0]}]`
+	large := EncodeVectorMatmulConfig(1, long, `{"query_format":"vecblock"}`, false)
+	b1, err := vectorMatmulParseBound(small, typ)
+	require.NoError(t, err)
+	b2, err := vectorMatmulParseBound(large, typ)
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, b2, 64*uint64(len(long)))
+	require.Less(t, b1, uint64(64<<10))
+	_, err = parseVectorMatmulConfig(large, typ)
+	require.Error(t, err)
+}
+
+// A binary length whose float32 count is within the limit is bounded by that count even when
+// its cell count is not.
+func TestVectorMatmulParseBoundBinaryCount(t *testing.T) {
+	typ := types.New(types.T_array_float4, 4, 0)
+	cell := types.BlockScaledCellSize(types.BlockScaledNVFP4, 4) // 15 bytes, a float32 query 16
+	n := 3900                                                    // 3900 float32 queries; the same length holds 4160 cells
+	l := n * 16
+	require.Zero(t, l%cell)
+	require.Greater(t, l/cell, vectorMatmulMaxQueries)
+	b, err := vectorMatmulParseBound(EncodeVectorMatmulBinaryConfig(1, make([]byte, l), "", false), typ)
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, b, uint64(n)*uint64(4*cell+8*4))
+}
+
+// The limits come before the options with or without an account.
+func TestVectorMatmulParseErrorOrder(t *testing.T) {
+	typ := types.New(types.T_array_float32, 3, 0)
+	raw := EncodeVectorMatmulConfig(0, "[[1,2,3]]", `{"metric":"bad"}`, false)
+	_, err := parseVectorMatmulConfig(raw, typ)
+	require.ErrorContains(t, err, "topk 0 out of range")
+	_, err = vectorMatmulParseBound(raw, typ)
+	require.ErrorContains(t, err, "topk 0 out of range")
+}
+
+func TestVectorMatmulJSONRows(t *testing.T) {
+	for _, tc := range []struct {
+		text  string
+		rows  int
+		lens  []int
+		valid bool
+		nulls []int
+	}{
+		{"[[1,2],[3,4]]", 2, []int{2, 2}, true, nil},
+		{"[[1,null],[null,2,null]]", 2, []int{2, 3}, true, []int{1, 0}},
+		{"[[1,2], null, [3]]", 3, []int{2, 1, 1}, true, []int{-1, -2, -1}},
+		{`[["null", 1], [nullx]]`, 2, []int{2, 1}, true, []int{-1, -1}},
+		{" [ [ 1 , 2.5e3 ] , [ -3 ] ] ", 2, []int{2, 1}, true, nil},
+		{"[]", 0, nil, true, nil},
+		{"[[]]", 1, []int{0}, true, nil},
+		{`[{"g":1,"s":[1,2],"v":[3]},{"g":2}]`, 2, []int{1, 1}, true, nil},
+		{`[["a,]b", "c\"]"],[1]]`, 2, []int{2, 1}, true, nil},
+		{"[[1,2],[3,4]", 0, nil, false, nil},
+		{"[[1,2]]x", 0, nil, false, nil},
+		{"{}", 0, nil, false, nil},
+		{"[[1,,2]]", 0, nil, false, nil},
+		{"", 0, nil, false, nil},
+	} {
+		var lens, nulls []int
+		rows, ok := vectorMatmulJSONRows(tc.text, func(_, n, null int, _ string) {
+			lens = append(lens, n)
+			nulls = append(nulls, null)
+		})
+		require.Equal(t, tc.valid, ok, tc.text)
+		if tc.valid {
+			require.Equal(t, tc.rows, rows, tc.text)
+			require.Equal(t, tc.lens, lens, tc.text)
+			if tc.nulls != nil {
+				require.Equal(t, tc.nulls, nulls, tc.text)
+			}
+		}
+	}
+}
+
+// vmVecblockMalformed is a vecblock JSON text with n complete objects and an unterminated one.
+func vmVecblockMalformed(n int) string { return "[" + strings.Repeat("{},", n) + "{" }
+
+// A malformed or over-limit vecblock JSON text is rejected, and the aggregate refuses it
+// under a small account with nothing charged.
+func TestVectorMatmulVecblockJSONRejectedBeforeCollecting(t *testing.T) {
+	typ := types.New(types.T_array_float8, 4, 0)
+	malformed := vmVecblockMalformed
+	_, err := decodeVectorMatmulCells(malformed(10000), false, typ)
+	require.ErrorContains(t, err, "must be a JSON array of vecblock JSON objects")
+
+	overLimit := "[" + strings.Repeat("{},", vectorMatmulMaxQueries) + "{}]"
+	_, err = decodeVectorMatmulCells(overLimit, false, typ)
+	require.ErrorContains(t, err, "query count 4097 out of range")
+
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	registry, err := mpool.NewAllocationAccountRegistry(1, 512)
+	require.NoError(t, err)
+	account, err := registry.Open(64 << 10)
+	require.NoError(t, err)
+	allocation, err := NewAllocationAccount(account, mpool.AllocationOwnerGroup, AllocationAccountSites{
+		VectorData: 1, VectorArea: 2, VectorNulls: 3, VectorGrouping: 4, ArgumentCount: 5, ArgumentArena: 6,
+	})
+	require.NoError(t, err)
+	raw := EncodeVectorMatmulConfig(1, malformed(10000), `{"query_format":"vecblock"}`, false)
+	_, err = MakeGroupAgg(mp, AggIdOfVectorMatmul, false, allocation, raw, types.T_int64.ToType(), typ)
+	require.Error(t, err)
+	require.Zero(t, account.Snapshot().Used)
+}

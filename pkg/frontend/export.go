@@ -986,6 +986,9 @@ func constructByte(ctx context.Context, obj FeSession, bat *batch.Batch, index i
 			case types.T_uint64:
 				val := vector.GetFixedAtNoTypeCheck[uint64](vec, i)
 				out([]byte(strconv.FormatUint(uint64(val), 10)), symbol[j], closeby, flag[j], j == len(bat.Vecs)-1)
+			case types.T_bf16, types.T_float16, types.T_float8, types.T_float4:
+				val, _ := vector.GetLowPrecisionFloatAt(vec, i)
+				out([]byte(strconv.FormatFloat(float64(val), 'f', -1, 32)), symbol[j], closeby, flag[j], j == len(bat.Vecs)-1)
 			case types.T_float32:
 				val := vector.GetFixedAtNoTypeCheck[float32](vec, i)
 				if vec.GetType().Scale < 0 || vec.GetType().Width == 0 {
@@ -1017,6 +1020,15 @@ func constructByte(ctx context.Context, obj FeSession, bat *batch.Batch, index i
 				out(value, symbol[j], closeby, true, j == len(bat.Vecs)-1)
 			case types.T_array_float64:
 				arrStr := types.BytesToArrayToString[float64](vec.GetBytesAt(i))
+				value := util2.UnsafeStringToBytes(arrStr)
+				out(value, symbol[j], closeby, true, j == len(bat.Vecs)-1)
+			case types.T_array_float8, types.T_array_float4:
+				// the exact text, which LOAD reads back as the same cell
+				arrStr, err := types.BlockScaledToJSON(vec.GetBytesAt(i))
+				if err != nil {
+					sendExportBatchByte(ctx, ByteChan, &BatchByte{err: err})
+					return
+				}
 				value := util2.UnsafeStringToBytes(arrStr)
 				out(value, symbol[j], closeby, true, j == len(bat.Vecs)-1)
 			case types.T_array_bf16:
@@ -1369,6 +1381,22 @@ func addEscapeToString(ep *ExportConfig, s []byte, enclosed byte) []byte {
 		result = append(result, b)
 	}
 	return result
+}
+
+// setVecBlockExactText replaces the decoded values of row j's vecf8/vecf4 cells in row with
+// their exact text, which LOAD rebuilds into the same cells.
+func setVecBlockExactText(bat *batch.Batch, j int, row []any) error {
+	for i, vec := range bat.Vecs {
+		if !vec.GetType().Oid.IsBlockScaledArray() || vec.IsNull(uint64(j)) {
+			continue
+		}
+		text, err := types.BlockScaledToJSON(vec.GetBytesAt(j))
+		if err != nil {
+			return err
+		}
+		row[i] = []byte(text)
+	}
+	return nil
 }
 
 func exportDataFromResultSetToCSVFile(oq *ExportConfig) error {
@@ -2166,6 +2194,9 @@ func vectorValueToJSON(vec *vector.Vector, i int, ss *Session, backSes *backSess
 		return vector.GetFixedAtNoTypeCheck[uint64](vec, i), nil
 	case types.T_float32:
 		return vector.GetFixedAtNoTypeCheck[float32](vec, i), nil
+	case types.T_bf16, types.T_float16, types.T_float8, types.T_float4:
+		val, _ := vector.GetLowPrecisionFloatAt(vec, i)
+		return val, nil
 	case types.T_float64:
 		return vector.GetFixedAtNoTypeCheck[float64](vec, i), nil
 	case types.T_char, types.T_varchar, types.T_text, types.T_datalink:
@@ -2186,6 +2217,13 @@ func vectorValueToJSON(vec *vector.Vector, i int, ss *Session, backSes *backSess
 		return types.BytesToArray[float32](vec.GetBytesAt(i)), nil
 	case types.T_array_float64:
 		return types.BytesToArray[float64](vec.GetBytesAt(i)), nil
+	case types.T_array_float8, types.T_array_float4:
+		// the exact text as a JSON object, which LOAD reads back as the same cell
+		text, err := types.BlockScaledToJSON(vec.GetBytesAt(i))
+		if err != nil {
+			return nil, err
+		}
+		return json.RawMessage(text), nil
 	case types.T_array_bf16:
 		// bf16/f16 are uint16-backed; widen to float32 so JSON emits their float values
 		// (a raw []BF16 would marshal the uint16 bit patterns).

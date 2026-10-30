@@ -158,7 +158,7 @@ func hasFloatDefaultFormatting(expr *planpb.Expr) bool {
 			}
 		}
 		for _, arg := range fn.Args {
-			if arg != nil && types.T(expr.Typ.Id).IsMySQLString() && (arg.Typ.Id == int32(types.T_float64) || arg.Typ.Id == int32(types.T_float32)) {
+			if arg != nil && types.T(expr.Typ.Id).IsMySQLString() && types.T(arg.Typ.Id).IsFloat() {
 				return true
 			}
 			if hasFloatDefaultFormatting(arg) {

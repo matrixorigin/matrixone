@@ -354,6 +354,14 @@ func literalVecElementText(vec *vector.Vector, index int) string {
 		return strconv.FormatFloat(float64(vector.GetFixedAtWithTypeCheck[float32](vec, index)), 'g', -1, 32)
 	case types.T_float64:
 		return strconv.FormatFloat(vector.GetFixedAtWithTypeCheck[float64](vec, index), 'g', -1, 64)
+	case types.T_bf16:
+		return strconv.FormatFloat(float64(vector.GetFixedAtWithTypeCheck[types.BF16](vec, index).ToFloat32()), 'g', -1, 32)
+	case types.T_float16:
+		return strconv.FormatFloat(float64(vector.GetFixedAtWithTypeCheck[types.Float16](vec, index).ToFloat32()), 'g', -1, 32)
+	case types.T_float8:
+		return strconv.FormatFloat(float64(vector.GetFixedAtWithTypeCheck[types.Float8](vec, index).ToFloat32()), 'g', -1, 32)
+	case types.T_float4:
+		return strconv.FormatFloat(float64(vector.GetFixedAtWithTypeCheck[types.Float4](vec, index).ToFloat32()), 'g', -1, 32)
 	case types.T_date:
 		return vector.GetFixedAtWithTypeCheck[types.Date](vec, index).String()
 	case types.T_datetime:
@@ -402,6 +410,14 @@ func literalVecElementText(vec *vector.Vector, index int) string {
 		return fmt.Sprintf("%v", vector.GetArrayAt[int8](vec, index))
 	case types.T_array_uint8:
 		return fmt.Sprintf("%v", vector.GetArrayAt[uint8](vec, index))
+	case types.T_array_float8, types.T_array_float4:
+		// vecf8/vecf4 render as their dequantized values; an invalid cell as its bytes.
+		cell := vec.GetBytesAt(index)
+		arr, err := types.BlockScaledToFloat32(cell)
+		if err != nil {
+			return fmt.Sprintf("0x%X", cell)
+		}
+		return fmt.Sprintf("%v", arr)
 	default:
 		return printableVectorText(fmt.Sprint(vec.String()))
 	}

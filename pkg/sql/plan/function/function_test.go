@@ -718,7 +718,8 @@ func TestMakeTimeReturnScale(t *testing.T) {
 func TestTimeArithmeticFloatDurationKeepsFractionalPrecision(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	for _, name := range []string{"addtime", "subtime"} {
-		for _, floatType := range []types.T{types.T_float32, types.T_float64} {
+		for _, floatType := range []types.T{types.T_float32, types.T_float64,
+			types.T_bf16, types.T_float16, types.T_float8, types.T_float4} {
 			result, err := GetFunctionByName(proc.Ctx, name, []types.Type{
 				types.T_time.ToType(), floatType.ToType(),
 			})

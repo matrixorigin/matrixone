@@ -286,6 +286,7 @@ func newIndicatorValueRowFn(name string, vec *vector.Vector, ctx context.Context
 			return v, true, nil
 		}
 	}
+	// typeswitch:partial bf16/float16/float8/float4 arguments are cast to float32 when the window function binds
 	switch oid := vec.GetType().Oid; oid {
 	case types.T_int8:
 		col := vector.MustFixedColNoTypeCheck[int8](vec)

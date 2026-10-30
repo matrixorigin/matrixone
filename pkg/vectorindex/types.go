@@ -16,6 +16,7 @@ package vectorindex
 
 import (
 	"encoding/binary"
+	"encoding/json"
 	"fmt"
 	"github.com/bytedance/sonic"
 	"github.com/matrixorigin/matrixone/pkg/common/docfilter"
@@ -25,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	usearch "github.com/unum-cloud/usearch/golang"
 	"hash/crc32"
+	"reflect"
 )
 
 // QUANTIZATION lives in pkg/vectorindex/quantizer: ToVectorType, Int8Params,
@@ -498,6 +500,22 @@ func (h *VectorIndexCdc[T]) Delete(key int64) {
 	}
 
 	h.Data = append(h.Data, e)
+}
+
+// vectorIndexCdcFields is VectorIndexCdc without its methods, decoded by UnmarshalJSON.
+type vectorIndexCdcFields[T types.ArrayElement] VectorIndexCdc[T]
+
+// UnmarshalJSON decodes a batch from ToJson: float32 vectors with encoding/json, other
+// element types (integers, float64) with sonic.
+func (h *VectorIndexCdc[T]) UnmarshalJSON(data []byte) error {
+	if reflect.TypeFor[T]().Kind() == reflect.Float32 {
+		// Not sonic: its native decoder rounds float32 twice (text -> float64 -> float32),
+		// unfixed upstream in every release (bytedance/sonic#884), so a synced vector would
+		// differ from the stored one (7.038531e-26 reads as the next float32). encoding/json
+		// parses each value with strconv.ParseFloat(text, 32), a single rounding.
+		return json.Unmarshal(data, (*vectorIndexCdcFields[T])(h))
+	}
+	return sonic.Unmarshal(data, (*vectorIndexCdcFields[T])(h))
 }
 
 func (h *VectorIndexCdc[T]) ToJson() (string, error) {

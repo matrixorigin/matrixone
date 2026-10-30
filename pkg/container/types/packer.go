@@ -295,6 +295,34 @@ func (p *Packer) EncodeFloat32(e float32) {
 	p.encodeFloat32(e)
 }
 
+// EncodeBF16, EncodeFloat16, EncodeFloat8 and EncodeFloat4 write the stored bits of the
+// value, ordered as a float32 is.
+func (p *Packer) EncodeBF16(e BF16) {
+	p.encodeLowPrecFloat(bf16Code, uint16(e), 2)
+}
+
+func (p *Packer) EncodeFloat16(e Float16) {
+	p.encodeLowPrecFloat(float16Code, uint16(e), 2)
+}
+
+func (p *Packer) EncodeFloat8(e Float8) {
+	p.encodeLowPrecFloat(float8Code, uint16(e)<<8, 1)
+}
+
+// EncodeFloat4 writes the 4-bit code in the high nibble, so the sign is the top bit.
+func (p *Packer) EncodeFloat4(e Float4) {
+	p.encodeLowPrecFloat(float4Code, uint16(e&0x0f)<<12, 1)
+}
+
+// encodeLowPrecFloat writes the n high bytes of bits, sign first, as encodeFloat32 does.
+func (p *Packer) encodeLowPrecFloat(code byte, bits uint16, n int) {
+	var scratch [2]byte
+	binary.BigEndian.PutUint16(scratch[:], bits)
+	adjustFloatBytes(scratch[:n], true)
+	p.putByte(code)
+	p.putBytes(scratch[:n])
+}
+
 func (p *Packer) EncodeFloat64(e float64) {
 	p.encodeFloat64(e)
 }

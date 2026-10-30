@@ -70,6 +70,7 @@ func l2sqUint8SIMD(a, b []uint8) (float64, error) {
 		acc = acc.Add(d.DotProductPairs(d))
 	}
 	sum := sumI32x16(acc)
+	archsimd.ClearAVXUpperBits()
 	for ; i < n; i++ {
 		d := int32(a[i]) - int32(b[i])
 		sum += int64(d * d)
@@ -91,6 +92,7 @@ func innerProductUint8SIMD(a, b []uint8) (float64, error) {
 		acc = acc.Add(va.DotProductPairs(vb))
 	}
 	sum := sumI32x16(acc)
+	archsimd.ClearAVXUpperBits()
 	for ; i < n; i++ {
 		sum += int64(int32(a[i]) * int32(b[i]))
 	}
@@ -128,6 +130,7 @@ func l1DistanceUint8SIMD(a, b []uint8) (float64, error) {
 	for _, v := range lanes {
 		sum += v
 	}
+	archsimd.ClearAVXUpperBits()
 	for ; i < n; i++ {
 		d := int32(a[i]) - int32(b[i])
 		if d < 0 {
@@ -158,6 +161,7 @@ func cosineDistanceUint8SIMD(a, b []uint8) (float64, error) {
 		nbA = nbA.Add(vb.DotProductPairs(vb))
 	}
 	dot, na2, nb2 := sumI32x16(dotA), sumI32x16(naA), sumI32x16(nbA)
+	archsimd.ClearAVXUpperBits()
 	for ; i < n; i++ {
 		ai, bi := int64(a[i]), int64(b[i])
 		dot += ai * bi
@@ -189,6 +193,7 @@ func l2sqUint8AVX2(a, b []uint8) (float64, error) {
 		acc = acc.Add(dlo.DotProductPairs(dlo)).Add(dhi.DotProductPairs(dhi))
 	}
 	sum := sumI32x8(acc)
+	archsimd.ClearAVXUpperBits()
 	for ; i < n; i++ {
 		d := int32(a[i]) - int32(b[i])
 		sum += int64(d * d)
@@ -212,6 +217,7 @@ func innerProductUint8AVX2(a, b []uint8) (float64, error) {
 		acc = acc.Add(lo).Add(hi)
 	}
 	sum := sumI32x8(acc)
+	archsimd.ClearAVXUpperBits()
 	for ; i < n; i++ {
 		sum += int64(int32(a[i]) * int32(b[i]))
 	}
@@ -237,6 +243,7 @@ func l1DistanceUint8AVX2(a, b []uint8) (float64, error) {
 	for _, v := range lanes {
 		sum += v
 	}
+	archsimd.ClearAVXUpperBits()
 	for ; i < n; i++ {
 		d := int32(a[i]) - int32(b[i])
 		if d < 0 {
@@ -270,6 +277,7 @@ func cosineDistanceUint8AVX2(a, b []uint8) (float64, error) {
 		nbA = nbA.Add(blo.DotProductPairs(blo)).Add(bhi.DotProductPairs(bhi))
 	}
 	dot, na2, nb2 := sumI32x8(dotA), sumI32x8(naA), sumI32x8(nbA)
+	archsimd.ClearAVXUpperBits()
 	for ; i < n; i++ {
 		ai, bi := int64(a[i]), int64(b[i])
 		dot += ai * bi
