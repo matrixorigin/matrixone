@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/gogo/protobuf/proto"
+	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/stretchr/testify/require"
@@ -124,6 +125,12 @@ func TestDecimalHistoricalDumpRoundtrip(t *testing.T) {
 				exec("insert into " + table("source") + "(i,tm) values(1000000000000000000,'00:00:00')")
 				var flush string
 				require.NoError(t, conn.QueryRowContext(ctx, "select mo_ctl('dn','flush','"+table("source")+"')").Scan(&flush))
+				// The TN acknowledgement does not mean this CN has applied the
+				// flush's object replacement. DUMP must take a snapshot after it.
+				service := cn.RawService().(cnservice.Service)
+				frontier, _ := service.GetClock().Now()
+				_, err = service.GetTxnClient().WaitLogTailAppliedAt(ctx, frontier)
+				require.NoError(t, err)
 				exec("dump table " + table("source") + " to '" + dumpPath + "'")
 				exported := readManifest(dumpPath)
 				require.NoError(t, json.Unmarshal(exported["bound_expressions"], &payload))
