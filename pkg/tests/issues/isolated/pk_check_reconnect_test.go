@@ -67,6 +67,8 @@ func TestPKCheckReconnectRollsBackAndFreshTxnSucceeds(t *testing.T) {
 	execSQLRequire(t, ctx, db, "create database reconnect_guard")
 	execSQLRequire(t, ctx, db, "create table reconnect_guard.t(id int primary key)")
 	execSQLRequire(t, ctx, db, "insert into reconnect_guard.t values (1)")
+	execSQLRequire(t, ctx, db, "create database reconnect_frontier")
+	execSQLRequire(t, ctx, db, "create table reconnect_frontier.marker(id int primary key)")
 	execSQLRequire(t, ctx, db, "create database reconnect_target")
 	execSQLRequire(t, ctx, db, "create table reconnect_target.retained(id int primary key)")
 	execSQLRequire(t, ctx, db, "insert into reconnect_target.retained values (10)")
@@ -148,6 +150,11 @@ func TestPKCheckReconnectRollsBackAndFreshTxnSucceeds(t *testing.T) {
 	case <-ctx.Done():
 		t.Fatal(ctx.Err())
 	}
+	// ReadBarrier reports the latest committed logtail, which can precede
+	// the parked transaction's snapshot when no later transaction has
+	// committed. Commit on an unrelated table after the DELETE is parked so
+	// the conflict timestamp is both applied and newer than that snapshot.
+	execSQLRequire(t, ctx, db, "insert into reconnect_frontier.marker values (1)")
 	frontier, err = pushClient.AcquireLogtailReadBarrier(ctx)
 	require.NoError(t, err)
 	found := false
