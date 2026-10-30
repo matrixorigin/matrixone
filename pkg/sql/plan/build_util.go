@@ -142,6 +142,12 @@ func GetFunctionTypeFromAst(typRef tree.ResolvableTypeReference) (types.Type, er
 	if err != nil {
 		return types.Type{}, err
 	}
+	// The external routine descriptor has no numeric-attribute channel. Reject
+	// attributed DECIMAL declarations before narrowing to types.Type, whose
+	// native layout deliberately does not carry these plan-side flags.
+	if typ.NumericAttributes != 0 {
+		return types.Type{}, moerr.NewNotSupportedNoCtx("Python UDF does not support attributed DECIMAL declarations")
+	}
 	return types.NewWithCharset(types.T(typ.Id), typ.Width, typ.Scale, uint8(typ.Charset)), nil
 }
 

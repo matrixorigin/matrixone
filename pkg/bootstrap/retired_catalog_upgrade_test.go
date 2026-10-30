@@ -62,7 +62,7 @@ func TestRetiredCatalogTenantAdmission(t *testing.T) {
 		for _, locked := range []bool{false, true} {
 			t.Run(fmt.Sprintf("manual=%v/locked=%v", manual, locked), func(t *testing.T) {
 				runtime.RunTest("", func(runtime.Runtime) {
-					repair := &routineRepairTestHandle{VersionHandle: newTestVersionHandler("4.0.18", "4.0.7", versions.No, versions.Yes, 1)}
+					repair := &routineRepairTestHandle{VersionHandle: newTestVersionHandler("4.0.19", "4.0.7", versions.No, versions.Yes, 1)}
 					reads := 0
 					exec := executor.NewMemExecutor2(func(sql string) (executor.Result, error) {
 						switch {
@@ -109,7 +109,7 @@ func TestRetiredCatalogPendingRouteAndScheduledTenant(t *testing.T) {
 	for _, mode := range []string{"recheck", "recovery", "worker route", "worker account"} {
 		t.Run(mode, func(t *testing.T) {
 			runtime.RunTest("", func(runtime.Runtime) {
-				repair := &routineRepairTestHandle{VersionHandle: newTestVersionHandler("4.0.18", "4.0.7", versions.No, versions.Yes, 1)}
+				repair := &routineRepairTestHandle{VersionHandle: newTestVersionHandler("4.0.19", "4.0.7", versions.No, versions.Yes, 1)}
 				from := "4.0.17"
 				if mode == "worker account" {
 					from = "4.0.7"
@@ -123,7 +123,7 @@ func TestRetiredCatalogPendingRouteAndScheduledTenant(t *testing.T) {
 					case strings.Contains(sql, "from mo_upgrade_tenant"):
 						return buildUpgradeTenantTaskRows([]uint64{20}, []int32{7}, []int32{8}), nil
 					case strings.Contains(sql, "from mo_upgrade"):
-						return ownRecoveryResult(t, buildUpgradeVersionResult(10, versions.StateUpgradingTenant, from, "4.0.18", 1, 0, versions.No, versions.Yes, 2, 0)), nil
+						return ownRecoveryResult(t, buildUpgradeVersionResult(10, versions.StateUpgradingTenant, from, "4.0.19", 1, 0, versions.No, versions.Yes, 2, 0)), nil
 					case strings.Contains(sql, "from mo_account"):
 						// Even a later bad account must be checked before the first handler.
 						return buildUpgradeTenantAccountRows([]int32{7, 8}, []string{"4.0.7", "4.0.17"}), nil
@@ -160,7 +160,7 @@ func TestRetiredCatalogExplicitRegistration(t *testing.T) {
 	require.Error(t, s.checkRetiredCatalogSource("4.0.17"))
 	s.handles = append(s.handles, newTestVersionHandler("4.0.17", "4.0.7", versions.No, versions.Yes, 1))
 	require.NoError(t, s.checkRetiredCatalogSource("4.0.17"))
-	for _, source := range []string{"4.0.1", "4.0.6", "4.0.7", "4.0.18"} {
+	for _, source := range []string{"4.0.1", "4.0.6", "4.0.7", "4.0.19"} {
 		require.NoError(t, s.checkRetiredCatalogSource(source))
 	}
 }

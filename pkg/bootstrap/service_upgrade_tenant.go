@@ -69,6 +69,9 @@ func (s *service) MaybeUpgradeTenant(
 				if err != nil {
 					return err
 				}
+				if err := s.checkRetiredCatalogSource(version); err != nil {
+					return err
+				}
 				// Check the persisted account version, not the serving CN's version.
 				currentCN := s.getFinalVersionHandle().Metadata()
 				if currentCN.Version == version {
@@ -124,6 +127,9 @@ func (s *service) MaybeUpgradeTenant(
 				if err != nil {
 					return err
 				}
+				if err := s.checkRetiredCatalogSource(version); err != nil {
+					return err
+				}
 				if versions.Compare(version, currentCN.Version) > 0 {
 					return moerr.NewInvalidInputNoCtxf("tenant version %s is greater than current cn version %s",
 						version, currentCN.Version)
@@ -175,16 +181,7 @@ func (s *service) MaybeUpgradeTenant(
 		if err != nil {
 			return false, err
 		}
-		// Paging committed at least 4.0.7 (or observed another worker past it).
-		// Re-enter with committed state so later repairs run before caching. The
-		// next pass cannot select 4.0.7 again because account versions only advance.
-		later, err := s.MaybeUpgradeTenant(ctx, func() (int32, string, error) {
-			return tenantID, "", nil
-		}, nil)
-		if err != nil {
-			return false, err
-		}
-		return upgraded || changed || later, nil
+		upgraded = upgraded || changed
 	}
 	// A caller-owned transaction can still roll back; only cache committed checks.
 	if txnOp == nil {

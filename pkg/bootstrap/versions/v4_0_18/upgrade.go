@@ -22,20 +22,25 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"go.uber.org/zap"
 )
 
-// 4.0.18 owns the shared routine repair after the frozen 4.0.7 catalog.
-// Older released sources must complete 4.0.7 before these idempotent entries;
-// an already-4.0.7 tenant is still eligible for scheduled and login repair.
+// Install the current information_schema.COLUMNS definition for tenants that
+// never crossed an entry-carrying transition on the new binary (catalogs
+// READY at the frozen consolidated 4.0.7 terminal, offset 41). The frozen
+// 4.0.7 chain is unchanged; this forward handle is the new semantic version
+// the upstream contract assigns to later migrations
+// (docs/design/20261028-catalog-upgrade-407.md).
 var Handler = &versionHandle{
 	metadata: versions.Version{
-		Version:           "4.0.18",
-		MinUpgradeVersion: "4.0.7",
-		UpgradeCluster:    versions.No,
-		UpgradeTenant:     versions.Yes,
-		VersionOffset:     uint32(len(tenantUpgEntries)),
+		Version:                 "4.0.18",
+		MinUpgradeVersion:       "4.0.7",
+		UpgradeCluster:          versions.No,
+		UpgradeTenant:           versions.Yes,
+		VersionOffset:           uint32(len(tenantUpgEntries)),
+		RequiredProtocolVersion: defines.MORPCVersion126,
 	},
 }
 
@@ -47,12 +52,12 @@ func (v *versionHandle) Metadata() versions.Version {
 	return v.metadata
 }
 
-func (v *versionHandle) Prepare(ctx context.Context, txn executor.TxnExecutor, final bool) error {
+func (v *versionHandle) Prepare(_ context.Context, txn executor.TxnExecutor, _ bool) error {
 	txn.Use(catalog.MO_CATALOG)
 	return nil
 }
 
-func (v *versionHandle) HandleTenantUpgrade(ctx context.Context, tenantID int32, txn executor.TxnExecutor) error {
+func (v *versionHandle) HandleTenantUpgrade(_ context.Context, tenantID int32, txn executor.TxnExecutor) error {
 	logger := runtime.ServiceRuntime(txn.Txn().TxnOptions().CN).Logger()
 	for _, entry := range tenantUpgEntries {
 		start := time.Now()
@@ -73,10 +78,10 @@ func (v *versionHandle) HandleTenantUpgrade(ctx context.Context, tenantID int32,
 	return nil
 }
 
-func (v *versionHandle) HandleClusterUpgrade(ctx context.Context, txn executor.TxnExecutor) error {
+func (v *versionHandle) HandleClusterUpgrade(_ context.Context, _ executor.TxnExecutor) error {
 	return nil
 }
 
-func (v *versionHandle) HandleCreateFrameworkDeps(txn executor.TxnExecutor) error {
+func (v *versionHandle) HandleCreateFrameworkDeps(_ executor.TxnExecutor) error {
 	return moerr.NewInternalErrorNoCtxf("Only v1.2.0 can initialize upgrade framework, current version is:%s", v.metadata.Version)
 }
