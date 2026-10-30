@@ -23,8 +23,8 @@ package cuvs
 import "C"
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"runtime"
-	"unsafe"
 )
 
 // GpuKMeans represents the C++ gpu_kmeans_t object
@@ -46,12 +46,12 @@ func NewGpuKMeans[T VectorType](nClusters uint32, dimension uint32, metric Dista
 		C.int(deviceID),
 		C.uint32_t(nthread),
 		C.quantization_t(qtype),
-		unsafe.Pointer(&errmsg),
+		util.UnsafePointer(&errmsg),
 	)
 
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
-		C.free(unsafe.Pointer(errmsg))
+		C.free(util.UnsafePointer(errmsg))
 		return nil, moerr.NewInternalErrorNoCtx(errStr)
 	}
 
@@ -68,11 +68,11 @@ func (gk *GpuKMeans[T]) Destroy() error {
 		return nil
 	}
 	var errmsg *C.char
-	C.gpu_kmeans_destroy(gk.cKMeans, unsafe.Pointer(&errmsg))
+	C.gpu_kmeans_destroy(gk.cKMeans, util.UnsafePointer(&errmsg))
 	gk.cKMeans = nil
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
-		C.free(unsafe.Pointer(errmsg))
+		C.free(util.UnsafePointer(errmsg))
 		return moerr.NewInternalErrorNoCtx(errStr)
 	}
 	return nil
@@ -84,10 +84,10 @@ func (gk *GpuKMeans[T]) Start() error {
 		return moerr.NewInternalErrorNoCtx("GpuKMeans is not initialized")
 	}
 	var errmsg *C.char
-	C.gpu_kmeans_start(gk.cKMeans, unsafe.Pointer(&errmsg))
+	C.gpu_kmeans_start(gk.cKMeans, util.UnsafePointer(&errmsg))
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
-		C.free(unsafe.Pointer(errmsg))
+		C.free(util.UnsafePointer(errmsg))
 		return moerr.NewInternalErrorNoCtx(errStr)
 	}
 	return nil
@@ -107,13 +107,13 @@ func (gk *GpuKMeans[T]) TrainQuantizer(trainData []float32, nSamples uint64) err
 		gk.cKMeans,
 		(*C.float)(&trainData[0]),
 		C.uint64_t(nSamples),
-		unsafe.Pointer(&errmsg),
+		util.UnsafePointer(&errmsg),
 	)
 	runtime.KeepAlive(trainData)
 
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
-		C.free(unsafe.Pointer(errmsg))
+		C.free(util.UnsafePointer(errmsg))
 		return moerr.NewInternalErrorNoCtx(errStr)
 	}
 	return nil
@@ -130,12 +130,12 @@ func (gk *GpuKMeans[T]) SetQuantizer(min, max float32) error {
 		gk.cKMeans,
 		C.float(min),
 		C.float(max),
-		unsafe.Pointer(&errmsg),
+		util.UnsafePointer(&errmsg),
 	)
 
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
-		C.free(unsafe.Pointer(errmsg))
+		C.free(util.UnsafePointer(errmsg))
 		return moerr.NewInternalErrorNoCtx(errStr)
 	}
 	return nil
@@ -153,12 +153,12 @@ func (gk *GpuKMeans[T]) GetQuantizer() (float32, float32, error) {
 		gk.cKMeans,
 		&cMin,
 		&cMax,
-		unsafe.Pointer(&errmsg),
+		util.UnsafePointer(&errmsg),
 	)
 
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
-		C.free(unsafe.Pointer(errmsg))
+		C.free(util.UnsafePointer(errmsg))
 		return 0, 0, moerr.NewInternalErrorNoCtx(errStr)
 	}
 	return float32(cMin), float32(cMax), nil
@@ -176,15 +176,15 @@ func (gk *GpuKMeans[T]) Fit(dataset []T, nSamples uint64) (float32, int64, error
 	var errmsg *C.char
 	res := C.gpu_kmeans_fit(
 		gk.cKMeans,
-		unsafe.Pointer(&dataset[0]),
+		util.UnsafePointer(&dataset[0]),
 		C.uint64_t(nSamples),
-		unsafe.Pointer(&errmsg),
+		util.UnsafePointer(&errmsg),
 	)
 	runtime.KeepAlive(dataset)
 
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
-		C.free(unsafe.Pointer(errmsg))
+		C.free(util.UnsafePointer(errmsg))
 		return 0, 0, moerr.NewInternalErrorNoCtx(errStr)
 	}
 
@@ -203,15 +203,15 @@ func (gk *GpuKMeans[T]) Predict(dataset []T, nSamples uint64) ([]int64, float32,
 	var errmsg *C.char
 	res := C.gpu_kmeans_predict(
 		gk.cKMeans,
-		unsafe.Pointer(&dataset[0]),
+		util.UnsafePointer(&dataset[0]),
 		C.uint64_t(nSamples),
-		unsafe.Pointer(&errmsg),
+		util.UnsafePointer(&errmsg),
 	)
 	runtime.KeepAlive(dataset)
 
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
-		C.free(unsafe.Pointer(errmsg))
+		C.free(util.UnsafePointer(errmsg))
 		return nil, 0, moerr.NewInternalErrorNoCtx(errStr)
 	}
 
@@ -220,7 +220,7 @@ func (gk *GpuKMeans[T]) Predict(dataset []T, nSamples uint64) ([]int64, float32,
 	}
 
 	labels := make([]int64, nSamples)
-	C.gpu_kmeans_get_labels(res.result_ptr, C.uint64_t(nSamples), (*C.int64_t)(unsafe.Pointer(&labels[0])))
+	C.gpu_kmeans_get_labels(res.result_ptr, C.uint64_t(nSamples), (*C.int64_t)(util.UnsafePointer(&labels[0])))
 	runtime.KeepAlive(labels)
 
 	C.gpu_kmeans_free_result(res.result_ptr)
@@ -240,15 +240,15 @@ func (gk *GpuKMeans[T]) PredictFloat(dataset []float32, nSamples uint64) ([]int6
 	var errmsg *C.char
 	res := C.gpu_kmeans_predict_float(
 		gk.cKMeans,
-		(*C.float)(unsafe.Pointer(&dataset[0])),
+		(*C.float)(util.UnsafePointer(&dataset[0])),
 		C.uint64_t(nSamples),
-		unsafe.Pointer(&errmsg),
+		util.UnsafePointer(&errmsg),
 	)
 	runtime.KeepAlive(dataset)
 
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
-		C.free(unsafe.Pointer(errmsg))
+		C.free(util.UnsafePointer(errmsg))
 		return nil, 0, moerr.NewInternalErrorNoCtx(errStr)
 	}
 
@@ -257,7 +257,7 @@ func (gk *GpuKMeans[T]) PredictFloat(dataset []float32, nSamples uint64) ([]int6
 	}
 
 	labels := make([]int64, nSamples)
-	C.gpu_kmeans_get_labels(res.result_ptr, C.uint64_t(nSamples), (*C.int64_t)(unsafe.Pointer(&labels[0])))
+	C.gpu_kmeans_get_labels(res.result_ptr, C.uint64_t(nSamples), (*C.int64_t)(util.UnsafePointer(&labels[0])))
 	runtime.KeepAlive(labels)
 
 	C.gpu_kmeans_free_result(res.result_ptr)
@@ -277,15 +277,15 @@ func (gk *GpuKMeans[T]) FitPredict(dataset []T, nSamples uint64) ([]int64, float
 	var errmsg *C.char
 	res := C.gpu_kmeans_fit_predict(
 		gk.cKMeans,
-		unsafe.Pointer(&dataset[0]),
+		util.UnsafePointer(&dataset[0]),
 		C.uint64_t(nSamples),
-		unsafe.Pointer(&errmsg),
+		util.UnsafePointer(&errmsg),
 	)
 	runtime.KeepAlive(dataset)
 
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
-		C.free(unsafe.Pointer(errmsg))
+		C.free(util.UnsafePointer(errmsg))
 		return nil, 0, 0, moerr.NewInternalErrorNoCtx(errStr)
 	}
 
@@ -294,7 +294,7 @@ func (gk *GpuKMeans[T]) FitPredict(dataset []T, nSamples uint64) ([]int64, float
 	}
 
 	labels := make([]int64, nSamples)
-	C.gpu_kmeans_get_labels(res.result_ptr, C.uint64_t(nSamples), (*C.int64_t)(unsafe.Pointer(&labels[0])))
+	C.gpu_kmeans_get_labels(res.result_ptr, C.uint64_t(nSamples), (*C.int64_t)(util.UnsafePointer(&labels[0])))
 	runtime.KeepAlive(labels)
 
 	C.gpu_kmeans_free_result(res.result_ptr)
@@ -314,15 +314,15 @@ func (gk *GpuKMeans[T]) FitPredictFloat(dataset []float32, nSamples uint64) ([]i
 	var errmsg *C.char
 	res := C.gpu_kmeans_fit_predict_float(
 		gk.cKMeans,
-		(*C.float)(unsafe.Pointer(&dataset[0])),
+		(*C.float)(util.UnsafePointer(&dataset[0])),
 		C.uint64_t(nSamples),
-		unsafe.Pointer(&errmsg),
+		util.UnsafePointer(&errmsg),
 	)
 	runtime.KeepAlive(dataset)
 
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
-		C.free(unsafe.Pointer(errmsg))
+		C.free(util.UnsafePointer(errmsg))
 		return nil, 0, 0, moerr.NewInternalErrorNoCtx(errStr)
 	}
 
@@ -331,7 +331,7 @@ func (gk *GpuKMeans[T]) FitPredictFloat(dataset []float32, nSamples uint64) ([]i
 	}
 
 	labels := make([]int64, nSamples)
-	C.gpu_kmeans_get_labels(res.result_ptr, C.uint64_t(nSamples), (*C.int64_t)(unsafe.Pointer(&labels[0])))
+	C.gpu_kmeans_get_labels(res.result_ptr, C.uint64_t(nSamples), (*C.int64_t)(util.UnsafePointer(&labels[0])))
 	runtime.KeepAlive(labels)
 
 	C.gpu_kmeans_free_result(res.result_ptr)
@@ -346,12 +346,12 @@ func (gk *GpuKMeans[T]) GetCentroids() ([]T, error) {
 	}
 	centroids := make([]T, gk.nClusters*gk.dimension)
 	var errmsg *C.char
-	C.gpu_kmeans_get_centroids(gk.cKMeans, unsafe.Pointer(&centroids[0]), unsafe.Pointer(&errmsg))
+	C.gpu_kmeans_get_centroids(gk.cKMeans, util.UnsafePointer(&centroids[0]), util.UnsafePointer(&errmsg))
 	runtime.KeepAlive(centroids)
 
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
-		C.free(unsafe.Pointer(errmsg))
+		C.free(util.UnsafePointer(errmsg))
 		return nil, moerr.NewInternalErrorNoCtx(errStr)
 	}
 	return centroids, nil
@@ -363,12 +363,12 @@ func (gk *GpuKMeans[T]) Info() (string, error) {
 		return "", moerr.NewInternalErrorNoCtx("GpuKMeans is not initialized")
 	}
 	var errmsg *C.char
-	infoPtr := C.gpu_kmeans_info(gk.cKMeans, unsafe.Pointer(&errmsg))
+	infoPtr := C.gpu_kmeans_info(gk.cKMeans, util.UnsafePointer(&errmsg))
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
-		C.free(unsafe.Pointer(errmsg))
+		C.free(util.UnsafePointer(errmsg))
 		if infoPtr != nil {
-			C.free(unsafe.Pointer(infoPtr))
+			C.free(util.UnsafePointer(infoPtr))
 		}
 		return "", moerr.NewInternalErrorNoCtx(errStr)
 	}
@@ -376,6 +376,6 @@ func (gk *GpuKMeans[T]) Info() (string, error) {
 		return "{}", nil
 	}
 	info := C.GoString(infoPtr)
-	C.free(unsafe.Pointer(infoPtr))
+	C.free(util.UnsafePointer(infoPtr))
 	return info, nil
 }

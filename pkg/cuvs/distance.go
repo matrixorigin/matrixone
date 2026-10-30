@@ -25,8 +25,8 @@ package cuvs
 import "C"
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"runtime"
-	"unsafe"
 )
 
 // PairwiseDistance performs a pairwise distance calculation on GPU.
@@ -48,15 +48,15 @@ func PairwiseDistance[T VectorType](
 
 	var errmsg *C.char
 	C.gpu_pairwise_distance(
-		unsafe.Pointer(&x[0]),
+		util.UnsafePointer(&x[0]),
 		C.uint64_t(nX),
-		unsafe.Pointer(&y[0]),
+		util.UnsafePointer(&y[0]),
 		C.uint64_t(nY),
 		C.uint32_t(dim),
 		C.distance_type_t(metric),
 		C.quantization_t(qtype),
-		(*C.float)(unsafe.Pointer(&dist[0])),
-		unsafe.Pointer(&errmsg),
+		(*C.float)(util.UnsafePointer(&dist[0])),
+		util.UnsafePointer(&errmsg),
 	)
 	runtime.KeepAlive(x)
 	runtime.KeepAlive(y)
@@ -64,7 +64,7 @@ func PairwiseDistance[T VectorType](
 
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
-		C.free(unsafe.Pointer(errmsg))
+		C.free(util.UnsafePointer(errmsg))
 		return nil, moerr.NewInternalErrorNoCtx(errStr)
 	}
 
@@ -90,15 +90,15 @@ func PairwiseDistanceLaunch[T VectorType](
 
 	var errmsg *C.char
 	jobID := C.gpu_pairwise_distance_launch(
-		unsafe.Pointer(&x[0]),
+		util.UnsafePointer(&x[0]),
 		C.uint64_t(nX),
-		unsafe.Pointer(&y[0]),
+		util.UnsafePointer(&y[0]),
 		C.uint64_t(nY),
 		C.uint32_t(dim),
 		C.distance_type_t(metric),
 		C.quantization_t(qtype),
-		(*C.float)(unsafe.Pointer(&dist[0])),
-		unsafe.Pointer(&errmsg),
+		(*C.float)(util.UnsafePointer(&dist[0])),
+		util.UnsafePointer(&errmsg),
 	)
 
 	// x and y must remain live until PairwiseDistanceWait returns, because the
@@ -110,7 +110,7 @@ func PairwiseDistanceLaunch[T VectorType](
 
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
-		C.free(unsafe.Pointer(errmsg))
+		C.free(util.UnsafePointer(errmsg))
 		return 0, moerr.NewInternalErrorNoCtx(errStr)
 	}
 
@@ -120,11 +120,11 @@ func PairwiseDistanceLaunch[T VectorType](
 // PairwiseDistanceWait waits for a pairwise distance calculation to complete.
 func PairwiseDistanceWait(jobID uint64) error {
 	var errmsg *C.char
-	C.gpu_pairwise_distance_wait(C.uint64_t(jobID), unsafe.Pointer(&errmsg))
+	C.gpu_pairwise_distance_wait(C.uint64_t(jobID), util.UnsafePointer(&errmsg))
 
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
-		C.free(unsafe.Pointer(errmsg))
+		C.free(util.UnsafePointer(errmsg))
 		return moerr.NewInternalErrorNoCtx(errStr)
 	}
 
