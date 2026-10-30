@@ -1,0 +1,39 @@
+drop database if exists func_least_greatest_bool;
+create database func_least_greatest_bool;
+use func_least_greatest_bool;
+select greatest(2, true) as a, least(2, true) as b, greatest(true, 0) as c, least(false, 3) as d, greatest(-1, false) as e;
+➤ a[-5,64,0]  ¦  b[-5,64,0]  ¦  c[-5,64,0]  ¦  d[-5,64,0]  ¦  e[-5,64,0]  𝄀
+2  ¦  1  ¦  1  ¦  0  ¦  0
+select greatest(1e0, true) as a, least(0.5e0, true) as b, greatest(true, 2.5e0) as c;
+➤ a[8,53,31]  ¦  b[8,53,31]  ¦  c[8,53,31]  𝄀
+1.0  ¦  0.5  ¦  2.5
+select greatest('a', true) as a, least('a', true) as b, greatest('0', false) as c;
+➤ a[12,65535,0]  ¦  b[12,65535,0]  ¦  c[12,65535,0]  𝄀
+a  ¦  1  ¦  0
+select greatest(null, true, 2) as a, least(true, null) as b, greatest(true, false) as c;
+➤ a[-5,64,0]  ¦  b[-6,8,0]  ¦  c[-6,8,0]  𝄀
+null  ¦  null  ¦  1
+create table t(id int primary key, i int, u bigint unsigned, d double, s varchar(10), b bool);
+insert into t values (1, 5, 7, 2.5, 'x', true), (2, -5, 0, 0.25, '0', false), (3, null, null, null, null, null), (4, 0, 1, -1, '', true);
+select id, greatest(i, b) as gi, least(i, b) as li, greatest(u, b) as gu, least(u, b) as lu from t order by id;
+➤ id[4,32,0]  ¦  gi[4,32,0]  ¦  li[4,32,0]  ¦  gu[-5,64,0]  ¦  lu[-5,64,0]  𝄀
+1  ¦  5  ¦  1  ¦  7  ¦  1  𝄀
+2  ¦  0  ¦  -5  ¦  0  ¦  0  𝄀
+3  ¦  null  ¦  null  ¦  null  ¦  null  𝄀
+4  ¦  1  ¦  0  ¦  1  ¦  1
+select id, greatest(d, b) as gd, least(d, b) as ld, greatest(s, b) as gs, least(s, b) as ls from t order by id;
+➤ id[4,32,0]  ¦  gd[8,53,31]  ¦  ld[8,53,31]  ¦  gs[12,65535,0]  ¦  ls[12,65535,0]  𝄀
+1  ¦  2.5  ¦  1.0  ¦  x  ¦  1  𝄀
+2  ¦  0.25  ¦  0.0  ¦  0  ¦  0  𝄀
+3  ¦  null  ¦  null  ¦  null  ¦  null  𝄀
+4  ¦  1.0  ¦  -1.0  ¦  1  ¦  
+select id from t where greatest(i, b) = 1 order by id;
+➤ id[4,32,0]  𝄀
+4
+select id, greatest(i, b, d) as g3, least(b, u) as l2, least(b, i, d) as l3 from t order by id;
+➤ id[4,32,0]  ¦  g3[8,53,31]  ¦  l2[-5,64,0]  ¦  l3[8,53,31]  𝄀
+1  ¦  5.0  ¦  1  ¦  1.0  𝄀
+2  ¦  0.25  ¦  0  ¦  -5.0  𝄀
+3  ¦  null  ¦  null  ¦  null  𝄀
+4  ¦  1.0  ¦  1  ¦  -1.0
+drop database if exists func_least_greatest_bool;

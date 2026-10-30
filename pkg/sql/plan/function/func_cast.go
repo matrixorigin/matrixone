@@ -7719,7 +7719,7 @@ func strToSignedWithProc[T constraints.Signed](
 				if len(explicit) > 1 && explicit[1] {
 					appendIntegerNumericCoercionWarning(proc, s, integerPrefix, integerHasPrefix, integerOutOfRange)
 				} else if rangeWarning != explicitIntegerCastTruncated {
-					appendNumericCoercionWarning(proc, s)
+					appendNumericCoercionWarningAs(proc, s, integerCastWarningType(explicit))
 				}
 				appendExplicitIntegerCastWarning(proc, s, rangeWarning)
 				result = T(r)
@@ -8267,6 +8267,20 @@ func diagnoseFloatText(proc *process.Process, ctx context.Context, mode castMode
 // whose numeric prefix was consumed and whose remaining text was discarded.
 // Empty strings intentionally coerce to zero without a warning.
 func appendNumericCoercionWarning(proc *process.Process, value string) {
+	appendNumericCoercionWarningAs(proc, value, "DOUBLE")
+}
+
+// integerCastWarningType names the conversion in a string-to-integer
+// truncation warning. MySQL reports an explicit CAST(... AS SIGNED/UNSIGNED)
+// as an INTEGER conversion; implicit numeric coercion stays DOUBLE.
+func integerCastWarningType(explicit []bool) string {
+	if len(explicit) > 0 && explicit[0] {
+		return "INTEGER"
+	}
+	return "DOUBLE"
+}
+
+func appendNumericCoercionWarningAs(proc *process.Process, value, typeName string) {
 	trimmed := trimASCIISpace(value)
 	if !FloatTextTruncated(trimmed) {
 		return
@@ -8281,7 +8295,7 @@ func appendNumericCoercionWarning(proc *process.Process, value string) {
 	}
 	appender.AppendWarningDiagnostic(
 		moerr.ER_TRUNCATED_WRONG_VALUE,
-		fmt.Sprintf("Truncated incorrect DOUBLE value: '%-.128s'", trimmed),
+		fmt.Sprintf("Truncated incorrect %s value: '%-.128s'", typeName, trimmed),
 	)
 }
 
@@ -8847,7 +8861,7 @@ func strToUnsignedWithProc[T constraints.Unsigned](
 				if len(explicit) > 1 && explicit[1] {
 					appendIntegerNumericCoercionWarning(proc, *res, integerPrefix, integerHasPrefix, integerOutOfRange)
 				} else if rangeWarning != explicitIntegerCastTruncated {
-					appendNumericCoercionWarning(proc, *res)
+					appendNumericCoercionWarningAs(proc, *res, integerCastWarningType(explicit))
 				}
 				appendExplicitIntegerCastWarning(proc, *res, rangeWarning)
 			}
@@ -8866,6 +8880,24 @@ func strToFloat[T constraints.Float](
 	to *vector.FunctionResult[T], bitSize int,
 	length int, selectList *FunctionSelectList) error {
 	return strToFloatWithProc(ctx, nil, mode, from, to, bitSize, length, selectList)
+}
+
+// preparedNonFiniteFloat restores a non-finite FLOAT/DOUBLE prepared
+// parameter from its canonical transport text. Ordinary SQL strings, and
+// parameters of any other kind, keep the MySQL string conversion.
+func preparedNonFiniteFloat(kind vector.PrepareParamKind, v []byte) (float64, bool) {
+	if kind != vector.PrepareParamFloat {
+		return 0, false
+	}
+	switch convertByteSliceToString(v) {
+	case "NaN":
+		return math.NaN(), true
+	case "+Inf":
+		return math.Inf(1), true
+	case "-Inf":
+		return math.Inf(-1), true
+	}
+	return 0, false
 }
 
 func strToFloatWithProc[T constraints.Float](
@@ -8908,7 +8940,14 @@ func strToFloatWithProc[T constraints.Float](
 			if !isBinary && bitSize == 32 && to.GetType().Width > 0 && to.GetType().Scale >= 0 {
 				parseBitSize = 64
 			}
-			if from.GetSourceVector().GetPrepareParamKindAt(int(i)) == vector.PrepareParamBoolean {
+			paramKind := from.GetSourceVector().GetPrepareParamKindAt(int(i))
+			if nonFinite, ok := preparedNonFiniteFloat(paramKind, v); ok {
+				// A FLOAT/DOUBLE parameter travels as Go's canonical text, so
+				// NaN and infinities arrive as "NaN", "+Inf" and "-Inf". The
+				// SQL string parser reads those as 0; restore the source value
+				// so consumers can see and reject it like the direct double.
+				r2 = nonFinite
+			} else if paramKind == vector.PrepareParamBoolean {
 				// Prepared Boolean values travel as canonical text. Restore their
 				// numeric category without changing ordinary SQL string coercion.
 				b, err := strconv.ParseBool(convertByteSliceToString(v))

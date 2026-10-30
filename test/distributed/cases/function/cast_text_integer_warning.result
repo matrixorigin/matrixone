@@ -1,0 +1,29 @@
+select cast('42tail' as signed);
+➤ cast(42tail as signed)[-5,64,0]  𝄀
+42
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1292  ¦  Truncated incorrect INTEGER value: '42tail'
+select cast('42tail' as unsigned);
+➤ cast(42tail as unsigned)[-5,64,0]  𝄀
+42
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1292  ¦  Truncated incorrect INTEGER value: '42tail'
+select cast('42tail' as signed integer);
+➤ cast(42tail as integer)[-5,64,0]  𝄀
+42
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1292  ¦  Truncated incorrect INTEGER value: '42tail'
+select cast('abc' as signed);
+➤ cast(abc as signed)[-5,64,0]  𝄀
+0
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1292  ¦  Truncated incorrect INTEGER value: 'abc'
+select cast('42' as signed);
+➤ cast(42 as signed)[-5,64,0]  𝄀
+42
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]
