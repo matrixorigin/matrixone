@@ -28,6 +28,17 @@ func compileExactScanFilter(exprs []*pb.Expr, columns []pb.Type) *objectio.Exact
 	if len(exprs) == 0 {
 		return nil
 	}
+	if len(exprs) == 1 && exprs[0] != nil {
+		if call := exprs[0].GetF(); call != nil && call.Func != nil {
+			fid, _ := function.DecodeOverloadID(call.Func.Obj)
+			if fid == function.BETWEEN && call.Func.ObjName == "between" {
+				// A lone BETWEEN already has one fused native value pass.
+				// Keep that path rather than adding selection/gather work;
+				// compound filters can amortize cached exact materialization.
+				return nil
+			}
+		}
+	}
 	// V1 keeps varlen projection materialization and its metadata on the old path.
 	for _, typ := range columns {
 		if !types.T(typ.Id).IsFixedLen() {

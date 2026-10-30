@@ -19,6 +19,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
@@ -27,6 +28,7 @@ func TestCompileExactScanFilterAdmission(t *testing.T) {
 	typ := types.T_int32.ToType()
 	columns := make([]pb.Type, 1, 2)
 	columns[0] = pb.Type{Id: int32(typ.Oid)}
+	require.Nil(t, compileExactScanFilter([]*pb.Expr{nil}, columns))
 	expr := lateTestCompare(t, ">=", 0, 2)
 	require.NotNil(t, compileExactScanFilter([]*pb.Expr{expr}, columns))
 	mismatch := lateTestCompare(t, ">=", 0, 2)
@@ -37,7 +39,25 @@ func TestCompileExactScanFilterAdmission(t *testing.T) {
 	require.Nil(t, compileExactScanFilter([]*pb.Expr{dynamic}, columns))
 	require.Nil(t, compileExactScanFilter([]*pb.Expr{expr, lateTestCol(0, typ)}, columns))
 	require.Nil(t, compileExactScanFilter([]*pb.Expr{expr}, append(columns, pb.Type{Id: int32(types.T_text)})))
+	between := lateTestCompare(t, ">=", 0, 2)
+	fn, err := function.GetFunctionByName(t.Context(), "between", []types.Type{typ, typ, typ})
+	require.NoError(t, err)
+	between.GetF().Func = &pb.ObjectRef{ObjName: "between", Obj: fn.GetEncodedOverloadID()}
+	between.GetF().Args = append(between.GetF().Args, lateTestCompare(t, "<=", 0, 8).GetF().Args[1])
+	require.Nil(t, compileExactScanFilter([]*pb.Expr{between}, columns))
+	require.NotNil(t, compileExactScanFilter([]*pb.Expr{between, expr}, columns))
+	andFn, err := function.GetFunctionByName(t.Context(), "and", []types.Type{types.T_bool.ToType(), types.T_bool.ToType()})
+	require.NoError(t, err)
+	compound := &pb.Expr{Typ: between.Typ, Expr: &pb.Expr_F{F: &pb.Function{
+		Func: &pb.ObjectRef{ObjName: "and", Obj: andFn.GetEncodedOverloadID()},
+		Args: []*pb.Expr{between, expr},
+	}}}
+	require.NotNil(t, compileExactScanFilter([]*pb.Expr{compound}, columns))
 	proc := testutil.NewProc(t)
+	nativeScan := &TableScan{Attrs: []string{"v"}, Types: columns, FilterExprs: []*pb.Expr{between}}
+	t.Cleanup(func() { nativeScan.Free(proc, false, nil) })
+	require.NoError(t, nativeScan.Prepare(proc))
+	require.Nil(t, nativeScan.ctr.readerFilter)
 	scan := &TableScan{Attrs: []string{"v"}, Types: columns, FilterExprs: []*pb.Expr{expr}}
 	t.Cleanup(func() { scan.Free(proc, false, nil) })
 	require.NoError(t, scan.Prepare(proc))

@@ -17,6 +17,10 @@ OID/scale. BETWEEN lowers to two ordered comparisons. Admission never evaluates
 another expression, parses a literal again, or changes type coercion. Reject
 casts, unresolved parameters/folds, OR, strings/collations, floating point,
 volatility, runtime filters, or any unsupported subtree as a whole.
+A lone native BETWEEN remains on its existing fused vector evaluator. It has
+one value pass already, so replacing it introduces selection/gather work rather
+than eliminating repeated predicate passes. BETWEEN inside a larger admitted
+conjunction still lowers to its two ordered comparisons.
 
 ## Interfaces and execution
 
