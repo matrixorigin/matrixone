@@ -188,9 +188,13 @@ type ExplainFor struct {
 }
 
 func (node *ExplainFor) Format(ctx *FmtCtx) {
-	ctx.WriteString("explain format = ")
-	ctx.WriteString(node.explainImpl.Format)
-	ctx.WriteString(" for connection ")
+	ctx.WriteString("explain ")
+	if node.explainImpl.Format != "" {
+		ctx.WriteString("format = '")
+		ctx.WriteString(node.explainImpl.Format)
+		ctx.WriteString("' ")
+	}
+	ctx.WriteString("for connection ")
 	ctx.WriteString(strconv.FormatInt(int64(node.ID), 10))
 }
 
