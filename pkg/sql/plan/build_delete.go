@@ -27,8 +27,11 @@ func buildDelete(stmt *tree.Delete, ctx CompilerContext, isPrepareStmt bool) (*P
 	defer func() {
 		v2.TxnStatementBuildDeleteHistogram.Observe(time.Since(start).Seconds())
 	}()
-	aliasMap := CollectDeleteSourceAliases(stmt.TableRefs)
-	tblInfo, err := getDmlTableInfo(ctx, stmt.Tables, stmt.With, aliasMap, "delete")
+	aliasMap, err := resolveDeleteTargetAliases(ctx, stmt)
+	if err != nil {
+		return nil, err
+	}
+	tblInfo, err := getDmlTableInfo(ctx, stmt.Tables, nil, aliasMap, "delete")
 	if err != nil {
 		return nil, err
 	}
@@ -38,7 +41,7 @@ func buildDelete(stmt *tree.Delete, ctx CompilerContext, isPrepareStmt bool) (*P
 	builder := NewQueryBuilder(plan.Query_SELECT, ctx, isPrepareStmt, false)
 
 	queryBindCtx := NewBindContext(builder, nil)
-	lastNodeId, colName2Idx, err := deleteToSelect(builder, queryBindCtx, stmt, true, tblInfo)
+	lastNodeId, colName2Idx, err := deleteToSelect(builder, queryBindCtx, stmt, tblInfo)
 	if err != nil {
 		return nil, err
 	}
