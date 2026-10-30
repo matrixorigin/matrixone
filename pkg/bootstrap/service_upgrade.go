@@ -499,6 +499,14 @@ func (s *service) checkUpgradeRecovery(target versions.Version, txn executor.Txn
 			(u.State != versions.StateCreated && u.State != versions.StateUpgradingTenant && u.State != versions.StateReady) {
 			return &terminalUpgradeError{moerr.NewInvalidStateNoCtxf("cannot resume invalid upgrade step %s", u.String())}
 		}
+		// Offset-only legs target only the frozen 4.0.7 stage, whose only
+		// durable per-account progress marker cannot identify two offsets
+		// of the same version. Reject resumption here exactly as the
+		// pre-mutation check rejects creating it.
+		if u.FromVersion == v4_0_7.Handler.Metadata().Version &&
+			u.ToVersion == v4_0_7.Handler.Metadata().Version {
+			return &terminalUpgradeError{moerr.NewInvalidStateNoCtx("unsupported in-progress 4.0.7 offset-only upgrade; 4.0.7 is frozen and further migrations require a new catalog version")}
+		}
 		supported := false
 		for _, h := range s.handles {
 			v := h.Metadata()
@@ -510,6 +518,16 @@ func (s *service) checkUpgradeRecovery(target versions.Version, txn executor.Txn
 		}
 		if !supported {
 			return &terminalUpgradeError{moerr.NewInvalidStateNoCtxf("cannot resume unsupported upgrade step %s", u.String())}
+		}
+	}
+	// A retained route to the frozen 4.0.7 stage needs the same catalog
+	// admission upstream enforces before creating it: a final above 4.0.7
+	// reaches this resume path without any other admission check.
+	// canResumeUpgrade already pinned the route to the registered frozen
+	// handle's offset.
+	if target.Version == v4_0_7.Handler.Metadata().Version {
+		if err := rejectLegacyCDCTasks(txn); err != nil {
+			return err
 		}
 	}
 	return nil

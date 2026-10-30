@@ -22,6 +22,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/embed"
@@ -77,7 +78,10 @@ func TestCreateAccountCatalogInitialization(t *testing.T) {
 		require.NoError(t, err, "the same account name must be reusable after recovery")
 		var version string
 		require.NoError(t, sys.QueryRowContext(ctx, "select create_version from mo_catalog.mo_account where account_name=?", account).Scan(&version))
-		require.Equal(t, "4.0.18", version)
+		// CREATE ACCOUNT stamps the cluster's registered final bootstrap version
+		// (see InitGeneralTenant), so the oracle follows the registry instead
+		// of pinning a version literal that every new upgrade hop retires.
+		require.Equal(t, cn.RawService().(cnservice.Service).GetBootstrapService().GetFinalVersion(), version)
 
 		tenant, err := sql.Open("mysql", fmt.Sprintf(account+"#root#accountadmin:111@tcp(127.0.0.1:%d)/", port))
 		require.NoError(t, err)
