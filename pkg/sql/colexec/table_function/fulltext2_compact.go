@@ -78,9 +78,9 @@ func (u *fulltext2CompactState) start(tf *TableFunction, proc *process.Process, 
 		}
 	}
 	u.tblcfg = fulltext2.TableConfig{
-		DbName:        tf.ctr.argVecs[0].UnsafeGetStringAt(0),
-		IndexTable:    tf.ctr.argVecs[1].UnsafeGetStringAt(0),
-		MetadataTable: tf.ctr.argVecs[2].UnsafeGetStringAt(0),
+		DbName:        tf.ctr.argVecs[0].GetStringAt(0),
+		IndexTable:    tf.ctr.argVecs[1].GetStringAt(0),
+		MetadataTable: tf.ctr.argVecs[2].GetStringAt(0),
 	}
 	if u.tblcfg.DbName == "" || u.tblcfg.IndexTable == "" || u.tblcfg.MetadataTable == "" {
 		return moerr.NewInternalError(proc.Ctx, "fulltext2_compact: db/store/meta must be non-empty")

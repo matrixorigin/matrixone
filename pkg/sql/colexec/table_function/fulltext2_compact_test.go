@@ -152,15 +152,25 @@ func TestFulltext2CompactStartOptionalArgs(t *testing.T) {
 
 	// 6 args: capacity + position_free=true + posting_capacity=4096 all parsed.
 	st := &fulltext2CompactState{}
+	arg := func(s string) *vector.Vector {
+		v := ft2ConstStr(t, mp, s)
+		t.Cleanup(func() { v.Free(mp) })
+		return v
+	}
 	tf.ctr.argVecs = []*vector.Vector{
-		ft2ConstStr(t, mp, "db"),
-		ft2ConstStr(t, mp, "store"),
-		ft2ConstStr(t, mp, "meta"),
-		ft2ConstStr(t, mp, "7"),
-		ft2ConstStr(t, mp, "true"),
-		ft2ConstStr(t, mp, "4096"),
+		arg("db"),
+		arg("store"),
+		arg("meta"),
+		arg("7"),
+		arg("true"),
+		arg("4096"),
 	}
 	require.NoError(t, st.start(tf, proc, 0, nil))
+	// end() runs after further input batches can replace the argument vectors.
+	for _, v := range tf.ctr.argVecs[:3] {
+		clear(v.GetData())
+		clear(v.GetArea())
+	}
 	require.True(t, st.inited)
 	require.Equal(t, int64(7), st.capacity)
 	require.True(t, st.tblcfg.PositionFree)
