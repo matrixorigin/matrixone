@@ -58,6 +58,8 @@ index writes. Specialized UPDATE routes keep their existing independent owner.
 Delete `getUpdateTableInfo` and its now-unused `updateKeys` field. Remove the
 legacy `dmlTableInfo` fields and computations that have no readers:
 `haveConstraint`, `nameToIdx`, `idToName`, `oldColPosMap`, `newColPosMap`.
+The legacy `deleteToSelect` constraint switch is always passed true by its
+only caller; remove the unreachable false branch and its unused parameter.
 Keep `isMulti`, `needAggFilter`, aliases and all live insert/delete state. Update
 existing internal tests to consume modern binding facts instead of the removed
 legacy helper. No new persistent state, protocol, execution route or framework.
