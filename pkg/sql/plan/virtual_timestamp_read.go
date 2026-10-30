@@ -68,7 +68,7 @@ func (bc *BindContext) bindVirtualTimestampRead(binding *Binding, pos, depth int
 		make(map[int32]bool), binding.virtualTimestampClass)
 	if computed == nil {
 		return nil, true, moerr.NewNotSupportedf(bc.builder.GetContext(),
-			"virtual generated column '%s' needs %d read-expression nodes (limit %d); run the virtual timestamp preflight and migrate this table before upgrade",
+			"virtual generated column '%s' needs %d read-expression nodes (limit %d); staged evaluation is unavailable for this read",
 			table.Cols[pos].Name, virtualTimestampReadCost(table, pos), maxVirtualTimestampExpansionNodes)
 	}
 	// A sequential UPDATE projection has already converted physical ENUM/SET

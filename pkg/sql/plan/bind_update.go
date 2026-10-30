@@ -269,6 +269,18 @@ func (builder *QueryBuilder) appendSequentialSingleTableUpdateAssignments(
 	currentNodeID := lastNodeID
 	currentNode := selectNode
 	currentTag := selectNodeTag
+	// Historical catalogs may exceed the expression-inlining limit. Their
+	// virtual values must be staged from the current row image before each RHS:
+	// an earlier assignment can change a dependency such as TIMESTAMP.
+	stageLegacy := mayHaveVirtualTimestampRead(tableDef) && len(VirtualTimestampExpansionFindings(tableDef)) > 0
+	var stageOrder []int32
+	if stageLegacy {
+		var err error
+		stageOrder, err = builder.virtualTimestampStageOrder(tableDef)
+		if err != nil {
+			return 0, nil, 0, err
+		}
+	}
 	for _, assignment := range assignments {
 		colName := assignment.Column
 		astExpr := assignment.Expr
@@ -277,8 +289,20 @@ func (builder *QueryBuilder) appendSequentialSingleTableUpdateAssignments(
 		if !ok {
 			return 0, nil, 0, moerr.NewInternalErrorf(builder.GetContext(), "update column %s not found", colName)
 		}
+		if stageLegacy {
+			for _, generatedPos := range stageOrder {
+				var err error
+				currentNodeID, currentTag, err = builder.appendVirtualTimestampStage(
+					currentNodeID, currentTag, tableDef, generatedPos, bindCtx, true)
+				if err != nil {
+					return 0, nil, 0, err
+				}
+			}
+			currentNode = builder.qry.Nodes[currentNodeID]
+			currentProjectList = currentNode.ProjectList
+		}
 		rhsBindCtx, rhsBinder := builder.newSequentialUpdateProjectionBinder(
-			bindCtx, currentNodeID, currentTag, tableDef, alias, currentProjectList,
+			bindCtx, currentNodeID, currentTag, tableDef, alias, currentProjectList, stageLegacy,
 		)
 		if useNumericAssignmentContext(tableDef.Cols[columnIndex].Typ, ignore) && !isPreparedAssignmentParam(builder, astExpr) {
 			target := tableDef.Cols[columnIndex].Typ
@@ -366,6 +390,7 @@ func (builder *QueryBuilder) newSequentialUpdateProjectionBinder(
 	tableDef *plan.TableDef,
 	alias string,
 	currentProjectList []*plan.Expr,
+	staged bool,
 ) (*BindContext, *ProjectionBinder) {
 	ctx := NewBindContext(builder, parent)
 	cols := make([]string, len(tableDef.Cols))
@@ -387,6 +412,7 @@ func (builder *QueryBuilder) newSequentialUpdateProjectionBinder(
 	}
 	binding := NewBinding(tag, nodeID, tableDef.DbName, alias, tableDef.TblId, cols, hidden, types, false, defaults)
 	binding.virtualTimestampTable = tableDef
+	binding.virtualTimestampStaged = staged
 	ctx.bindings = append(ctx.bindings, binding)
 	ctx.bindingByTag[tag] = binding
 	ctx.bindingByTable[alias] = binding

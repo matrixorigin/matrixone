@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
@@ -162,6 +163,16 @@ func TestVirtualTimestampHistoricalOversizeCatalogPlans(t *testing.T) {
 		table.Cols = append(table.Cols, &pb.ColDef{Name: name, ColId: uint64(level + 2), Typ: expr.Typ, GeneratedCol: &pb.GeneratedCol{Expr: expr}})
 		table.Name2ColIndex[name] = int32(level + 1)
 	}
+	table.Name2ColIndex["val"] = int32(len(table.Cols))
+	table.Cols = append(table.Cols, &pb.ColDef{Name: "val", ColId: 20, Typ: types.T_int64.ToType().PlanType()})
+	table.Name2ColIndex["updated_at"] = int32(len(table.Cols))
+	table.Cols = append(table.Cols, &pb.ColDef{Name: "updated_at", ColId: 21, Typ: types.T_datetime.ToType().PlanType()})
+	table.Name2ColIndex["id"] = int32(len(table.Cols))
+	table.Cols = append(table.Cols, &pb.ColDef{Name: "id", ColId: 22, Typ: types.T_int64.ToType().PlanType()})
+	table.Pkey = &pb.PrimaryKeyDef{Names: []string{"id"}, PkeyColName: "id"}
+	table.Name2ColIndex[catalog.Row_ID] = int32(len(table.Cols))
+	table.Cols = append(table.Cols, &pb.ColDef{Name: catalog.Row_ID, ColId: 23, Hidden: true,
+		Typ: pb.Type{Id: int32(types.T_Rowid), Width: 16, NotNullable: true}})
 	require.NotEmpty(t, VirtualTimestampExpansionFindings(table))
 	compiler := NewMockCompilerContext(false, newPlanTestProcess(t))
 	compiler.tables["legacydag"] = table
@@ -201,4 +212,27 @@ func TestVirtualTimestampHistoricalOversizeCatalogPlans(t *testing.T) {
 	}
 	require.Equal(t, 18, projectCount)
 	require.Less(t, exprNodes, 2000)
+
+	// A sequential UPDATE binds each RHS to the current row image. Re-stage
+	// the historical DAG for that image, including after a TIMESTAMP write.
+	compiler.isDml = true
+	for _, sql := range []string{
+		"update legacydag set val=g17, updated_at=now()",
+		"update legacydag set ts=now(), val=g17",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			update, err := BuildPlan(compiler, stmt, false)
+			require.NoError(t, err)
+			stages := 0
+			for _, node := range update.GetQuery().Nodes {
+				if node != nil && node.NodeType == pb.Node_PROJECT && node.ExtraOptions == virtualTimestampStageOption {
+					stages++
+				}
+			}
+			require.GreaterOrEqual(t, stages, 36, "sequential UPDATE must stage the current row beyond the scan")
+		})
+	}
 }

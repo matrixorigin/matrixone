@@ -4,6 +4,9 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
+	"io"
+	"os"
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
@@ -188,4 +191,58 @@ func TestAuditCatalogTablesRequiresCompleteInventory(t *testing.T) {
 	delete(accounts, 0)
 	_, err = auditCatalogTables(accounts, tables)
 	require.ErrorContains(t, err, "incomplete account")
+}
+
+func TestPreflightReportsOversizedCatalogAsAdvisory(t *testing.T) {
+	db, mock := preflightMockDB(t)
+	defer func() {
+		require.NoError(t, db.Close())
+		require.NoError(t, mock.ExpectationsWereMet())
+	}()
+	expectPreflightAccounts(mock, 0)
+	expectPreflightTable(mock, 0, 42)
+	columns := sqlmock.NewRows([]string{
+		"account_id", "att_relname_id", "att_database", "att_relname", "attname",
+		"attnum", "atttyp", "attr_has_generated", "attr_generated", "attisdropped",
+	})
+	stamp := types.T_timestamp.ToType()
+	stampType, err := stamp.Marshal()
+	require.NoError(t, err)
+	integer := types.T_int64.ToType()
+	integerType, err := integer.Marshal()
+	require.NoError(t, err)
+	columns.AddRow(0, 42, "db", "t", "ts", 1, stampType, 0, nil, 0)
+	for level := 0; level <= 17; level++ {
+		previous := &pb.Expr{Typ: pb.Type{Id: int32(types.T_int64)},
+			Expr: &pb.Expr_Col{Col: &pb.ColRef{ColPos: int32(level)}}}
+		expr := previous
+		if level > 0 {
+			expr = &pb.Expr{Typ: previous.Typ, Expr: &pb.Expr_F{F: &pb.Function{
+				Args: []*pb.Expr{previous, previous},
+			}}}
+		}
+		encoded, encodeErr := types.Encode(&pb.GeneratedCol{Expr: expr})
+		require.NoError(t, encodeErr)
+		columns.AddRow(0, 42, "db", "t", fmt.Sprintf("g%d", level), level+2, integerType, 1, encoded, 0)
+	}
+	mock.ExpectQuery("from mo_catalog.mo_columns").WillReturnRows(columns).RowsWillBeClosed()
+	mock.ExpectCommit()
+	mock.ExpectClose()
+	read, write, err := os.Pipe()
+	require.NoError(t, err)
+	previousStdout := os.Stdout
+	os.Stdout = write
+	t.Cleanup(func() {
+		os.Stdout = previousStdout
+		read.Close()
+		write.Close()
+	})
+	runErr := run(context.Background(), db)
+	require.NoError(t, write.Close())
+	os.Stdout = previousStdout
+	output, err := io.ReadAll(read)
+	require.NoError(t, err)
+	require.NoError(t, runErr)
+	require.Contains(t, string(output), "ADVISORY account=0 database=db table=t column=g17")
+	require.Contains(t, string(output), "PASS accounts=1 tables=1 columns=19 oversized=2")
 }
