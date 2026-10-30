@@ -97,42 +97,55 @@ func TestExactDecimalNativeIntegerFilters(t *testing.T) {
 }
 
 func TestExplicitIntegerCastNativeFilters(t *testing.T) {
-	for _, predicate := range []string{
-		"cast(id as int)=3", "cast(id as signed)=3", "3=cast(id as signed)",
-		"cast(cast(id as int) as signed)=3", "cast(id as signed)>=3", "3<cast(id as int)",
-		"cast(id as int) in (1,3)", "cast(id as signed) between 1 and 3",
-		"cast(id as int)<=>3",
-	} {
-		t.Run(predicate, func(t *testing.T) {
-			mock := NewMockOptimizer(true, newPlanTestProcess(t))
-			addIndexHintChoiceTableForTest(mock)
-			query, err := runOneStmt(mock, t, "select id from index_hint_t use index() where "+predicate)
-			require.NoError(t, err)
-			var scan *pb.Node
-			for _, node := range query.GetQuery().Nodes {
-				if node.NodeType == pb.Node_TABLE_SCAN && !node.IndexScanInfo.IsIndexScan {
-					scan = node
+	for _, columnType := range []types.T{types.T_int8, types.T_int16, types.T_int32, types.T_uint8, types.T_uint16} {
+		for _, predicate := range []string{
+			"id in (1,3)", "cast(id as int)=3", "cast(id as signed)=3", "3=cast(id as signed)",
+			"cast(cast(id as int) as signed)=3", "cast(id as signed)>=3", "3<cast(id as int)",
+			"cast(id as int) in (1,3)", "cast(id as signed) between 1 and 3",
+			"cast(id as int)=cast(3 as int)", "cast(3 as int)>cast(id as int)",
+			"cast(id as int) between cast(1 as int) and cast(3 as int)",
+			"cast(id as int)<=>3",
+		} {
+			t.Run(columnType.String()+"/"+predicate, func(t *testing.T) {
+				mock := NewMockOptimizer(true, newPlanTestProcess(t))
+				addIndexHintChoiceTableForTest(mock)
+				mock.ctxt.tables["index_hint_t"].Cols[0].Typ = makeSimplePlan2Type(columnType)
+				mock.ctxt.tables["index_hint_t"].Cols[0].Typ.NotNullable = true
+				query, err := runOneStmt(mock, t, "select id from index_hint_t use index() where "+predicate)
+				require.NoError(t, err)
+				var scan *pb.Node
+				for _, node := range query.GetQuery().Nodes {
+					if node.NodeType == pb.Node_TABLE_SCAN && !node.IndexScanInfo.IsIndexScan {
+						scan = node
+					}
 				}
-			}
-			require.NotNil(t, scan)
-			require.NotEmpty(t, scan.FilterList)
-			for _, filter := range scan.FilterList {
-				require.NotNil(t, filter.GetF().Args[0].GetCol(), filter.String())
-				require.Equal(t, int32(types.T_int32), filter.GetF().Args[0].Typ.Id)
-			}
-		})
+				require.NotNil(t, scan)
+				require.NotEmpty(t, scan.FilterList)
+				for _, filter := range scan.FilterList {
+					require.NotNil(t, filter.GetF().Args[0].GetCol(), filter.String())
+					require.Equal(t, int32(columnType), filter.GetF().Args[0].Typ.Id)
+				}
+			})
+		}
 	}
 }
 
 func TestExplicitIntegerCastSecondaryAccess(t *testing.T) {
-	for _, predicate := range []string{"a=7", "cast(a as int)=7", "cast(a as signed)=7", "cast(cast(a as int) as signed)=7"} {
-		t.Run(predicate, func(t *testing.T) {
-			mock := NewMockOptimizer(true, newPlanTestProcess(t))
-			addIndexHintChoiceTableForTest(mock)
-			query, err := runOneStmt(mock, t, "select id from index_hint_t force index(idx_a) where "+predicate)
-			require.NoError(t, err)
-			require.Equal(t, "idx_a", findFirstIndexScanName(query), query.String())
-		})
+	for _, columnType := range []types.T{types.T_int8, types.T_int16, types.T_int32, types.T_uint8, types.T_uint16} {
+		for _, predicate := range []string{
+			"a=7", "cast(a as int)=7", "cast(a as signed)=7", "cast(cast(a as int) as signed)=7",
+			"cast(a as int) in (1,3)", "cast(a as int)=cast(3 as int)",
+			"cast(a as int) between cast(1 as int) and cast(3 as int)",
+		} {
+			t.Run(columnType.String()+"/"+predicate, func(t *testing.T) {
+				mock := NewMockOptimizer(true, newPlanTestProcess(t))
+				addIndexHintChoiceTableForTest(mock)
+				mock.ctxt.tables["index_hint_t"].Cols[1].Typ = makeSimplePlan2Type(columnType)
+				query, err := runOneStmt(mock, t, "select id from index_hint_t force index(idx_a) where "+predicate)
+				require.NoError(t, err)
+				require.Equal(t, "idx_a", findFirstIndexScanName(query), query.String())
+			})
+		}
 	}
 }
 

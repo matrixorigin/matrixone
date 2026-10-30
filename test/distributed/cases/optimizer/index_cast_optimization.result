@@ -148,6 +148,88 @@ SELECT id FROM t_integer_cast_bounds WHERE CAST(u AS UNSIGNED) = -1;
 SELECT id FROM t_integer_cast_bounds WHERE CAST(id AS SIGNED) = 9223372036854775808;
 ➤ id[-5,64,0]
 DROP TABLE t_integer_cast_bounds;
+DROP TABLE IF EXISTS t_narrow_integer_cast;
+CREATE TABLE t_narrow_integer_cast (
+id SMALLINT PRIMARY KEY,
+k TINYINT,
+u SMALLINT UNSIGNED,
+KEY idx_k (k),
+KEY idx_u (u)
+);
+INSERT INTO t_narrow_integer_cast VALUES
+(-32768, -128, 0), (-1, NULL, NULL), (1, 1, 1), (3, 3, 3), (32767, 127, 65535);
+EXPLAIN SELECT id FROM t_narrow_integer_cast WHERE CAST(id AS INT) IN (1, 3);
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Table Scan on index_cast_optimization.t_narrow_integer_cast  𝄀
+        Filter Cond: t_narrow_integer_cast.id in ([1 3])  𝄀
+        Block Filter Cond: t_narrow_integer_cast.id in ([1 3])
+SELECT id FROM t_narrow_integer_cast WHERE CAST(id AS INT) IN (1, 3) ORDER BY id;
+➤ id[5,16,0]  𝄀
+1  𝄀
+3
+EXPLAIN SELECT id FROM t_narrow_integer_cast WHERE CAST(id AS INT) = CAST(3 AS INT);
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Table Scan on index_cast_optimization.t_narrow_integer_cast  𝄀
+        Filter Cond: (t_narrow_integer_cast.id = 3)  𝄀
+        Block Filter Cond: (t_narrow_integer_cast.id = 3)
+SELECT id FROM t_narrow_integer_cast WHERE CAST(id AS INT) = CAST(3 AS INT);
+➤ id[5,16,0]  𝄀
+3
+EXPLAIN SELECT id FROM t_narrow_integer_cast WHERE CAST(id AS INT) BETWEEN CAST(1 AS INT) AND CAST(3 AS INT);
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Table Scan on index_cast_optimization.t_narrow_integer_cast  𝄀
+        Filter Cond: t_narrow_integer_cast.id BETWEEN 1 AND 3  𝄀
+        Block Filter Cond: t_narrow_integer_cast.id BETWEEN 1 AND 3
+SELECT id FROM t_narrow_integer_cast WHERE CAST(id AS INT) BETWEEN CAST(1 AS INT) AND CAST(3 AS INT) ORDER BY id;
+➤ id[5,16,0]  𝄀
+1  𝄀
+3
+EXPLAIN SELECT id FROM t_narrow_integer_cast FORCE INDEX(idx_k) WHERE CAST(k AS INT) IN (1, 3);
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Index Table Scan on t_narrow_integer_cast.idx_k  𝄀
+        Filter Cond: prefix_in(__mo_index_idx_col)  𝄀
+        Block Filter Cond: prefix_in(__mo_index_idx_col)
+SELECT id FROM t_narrow_integer_cast FORCE INDEX(idx_k) WHERE CAST(k AS INT) IN (1, 3) ORDER BY id;
+➤ id[5,16,0]  𝄀
+1  𝄀
+3
+EXPLAIN SELECT id FROM t_narrow_integer_cast FORCE INDEX(idx_k) WHERE CAST(k AS SMALLINT) IN (1, 3);
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Index Table Scan on t_narrow_integer_cast.idx_k  𝄀
+        Filter Cond: prefix_in(__mo_index_idx_col)  𝄀
+        Block Filter Cond: prefix_in(__mo_index_idx_col)
+SELECT id FROM t_narrow_integer_cast FORCE INDEX(idx_k) WHERE CAST(k AS SMALLINT) IN (1, 3) ORDER BY id;
+➤ id[5,16,0]  𝄀
+1  𝄀
+3
+EXPLAIN SELECT id FROM t_narrow_integer_cast FORCE INDEX(idx_u) WHERE CAST(u AS INT UNSIGNED) IN (1, 3);
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Index Table Scan on t_narrow_integer_cast.idx_u  𝄀
+        Filter Cond: prefix_in(__mo_index_idx_col)  𝄀
+        Block Filter Cond: prefix_in(__mo_index_idx_col)
+SELECT id FROM t_narrow_integer_cast FORCE INDEX(idx_u) WHERE CAST(u AS INT UNSIGNED) IN (1, 3) ORDER BY id;
+➤ id[5,16,0]  𝄀
+1  𝄀
+3
+EXPLAIN SELECT id FROM t_narrow_integer_cast WHERE CAST(id AS INT) IN (1, 32768);
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Table Scan on index_cast_optimization.t_narrow_integer_cast  𝄀
+        Filter Cond: cast(t_narrow_integer_cast.id AS INT) in ([1 32768])
+SELECT id FROM t_narrow_integer_cast WHERE CAST(id AS INT) IN (1, 32768) ORDER BY id;
+➤ id[5,16,0]  𝄀
+1
+SELECT id FROM t_narrow_integer_cast WHERE CAST(id AS INT) = CAST(-32769 AS INT);
+➤ id[5,16,0]
+SELECT id FROM t_narrow_integer_cast WHERE CAST(k AS INT) NOT IN (1, NULL) ORDER BY id;
+➤ id[5,16,0]
+DROP TABLE t_narrow_integer_cast;
 CREATE TABLE t_float32 (
 id INT PRIMARY KEY,
 val FLOAT,

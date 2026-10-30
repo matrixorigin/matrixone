@@ -90,6 +90,43 @@ SELECT id FROM t_integer_cast_bounds WHERE CAST(u AS UNSIGNED) = -1;
 SELECT id FROM t_integer_cast_bounds WHERE CAST(id AS SIGNED) = 9223372036854775808;
 DROP TABLE t_integer_cast_bounds;
 
+-- Narrow integer keys use the same access paths after safe widening.
+DROP TABLE IF EXISTS t_narrow_integer_cast;
+CREATE TABLE t_narrow_integer_cast (
+    id SMALLINT PRIMARY KEY,
+    k TINYINT,
+    u SMALLINT UNSIGNED,
+    KEY idx_k (k),
+    KEY idx_u (u)
+);
+INSERT INTO t_narrow_integer_cast VALUES
+(-32768, -128, 0), (-1, NULL, NULL), (1, 1, 1), (3, 3, 3), (32767, 127, 65535);
+-- @separator:table
+EXPLAIN SELECT id FROM t_narrow_integer_cast WHERE CAST(id AS INT) IN (1, 3);
+SELECT id FROM t_narrow_integer_cast WHERE CAST(id AS INT) IN (1, 3) ORDER BY id;
+-- @separator:table
+EXPLAIN SELECT id FROM t_narrow_integer_cast WHERE CAST(id AS INT) = CAST(3 AS INT);
+SELECT id FROM t_narrow_integer_cast WHERE CAST(id AS INT) = CAST(3 AS INT);
+-- @separator:table
+EXPLAIN SELECT id FROM t_narrow_integer_cast WHERE CAST(id AS INT) BETWEEN CAST(1 AS INT) AND CAST(3 AS INT);
+SELECT id FROM t_narrow_integer_cast WHERE CAST(id AS INT) BETWEEN CAST(1 AS INT) AND CAST(3 AS INT) ORDER BY id;
+-- @separator:table
+EXPLAIN SELECT id FROM t_narrow_integer_cast FORCE INDEX(idx_k) WHERE CAST(k AS INT) IN (1, 3);
+SELECT id FROM t_narrow_integer_cast FORCE INDEX(idx_k) WHERE CAST(k AS INT) IN (1, 3) ORDER BY id;
+-- @separator:table
+EXPLAIN SELECT id FROM t_narrow_integer_cast FORCE INDEX(idx_k) WHERE CAST(k AS SMALLINT) IN (1, 3);
+SELECT id FROM t_narrow_integer_cast FORCE INDEX(idx_k) WHERE CAST(k AS SMALLINT) IN (1, 3) ORDER BY id;
+-- @separator:table
+EXPLAIN SELECT id FROM t_narrow_integer_cast FORCE INDEX(idx_u) WHERE CAST(u AS INT UNSIGNED) IN (1, 3);
+SELECT id FROM t_narrow_integer_cast FORCE INDEX(idx_u) WHERE CAST(u AS INT UNSIGNED) IN (1, 3) ORDER BY id;
+-- All bounds must fit before publishing the native-domain rewrite.
+-- @separator:table
+EXPLAIN SELECT id FROM t_narrow_integer_cast WHERE CAST(id AS INT) IN (1, 32768);
+SELECT id FROM t_narrow_integer_cast WHERE CAST(id AS INT) IN (1, 32768) ORDER BY id;
+SELECT id FROM t_narrow_integer_cast WHERE CAST(id AS INT) = CAST(-32769 AS INT);
+SELECT id FROM t_narrow_integer_cast WHERE CAST(k AS INT) NOT IN (1, NULL) ORDER BY id;
+DROP TABLE t_narrow_integer_cast;
+
 -- Test 2: FLOAT32 column with index
 CREATE TABLE t_float32 (
     id INT PRIMARY KEY,
