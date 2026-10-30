@@ -68,3 +68,50 @@ func TestShuffleBackingOwnership(t *testing.T) {
 		})
 	}
 }
+
+type failingRetainLease struct{ releases int }
+
+func (*failingRetainLease) Retain() bool          { return false }
+func (l *failingRetainLease) Release()            { l.releases++ }
+func (*failingRetainLease) Bytes() []byte         { return nil }
+func (*failingRetainLease) AccountedBytes() int64 { return 0 }
+
+func TestWindowPartialRetainFailure(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	data := types.EncodeSlice([]types.Varlena{{}})
+	dataLease, err := NewRefCountedBufferLease(data, int64(cap(data)), func() {})
+	require.NoError(t, err)
+	areaLease := &failingRetainLease{}
+	v := NewOffHeapVecWithType(types.T_varchar.ToType())
+	require.NoError(t, v.InstallBorrowedData(data, dataLease))
+	dataLease.Release()
+	v.area, v.areaLease, v.cantFreeArea, v.length = []byte("payload"), areaLease, true, 1
+	_, err = v.Window(0, 1)
+	require.Error(t, err)
+	require.Equal(t, 0, areaLease.releases)
+	require.Equal(t, data, v.data)
+	v.Free(mp)
+	require.Equal(t, 1, areaLease.releases)
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestDetachedBufferRejectsEmptyLease(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	source := NewOffHeapVecWithType(types.T_int64.ToType())
+	require.NoError(t, AppendFixed(source, int64(7), false, mp))
+	buffer := DetachVectorData(source)
+	defer buffer.Free(mp)
+	defer source.Free(mp)
+	var releases int
+	lease, err := NewRefCountedBufferLease(nil, 0, func() { releases++ })
+	require.NoError(t, err)
+	dest := NewOffHeapVecWithType(types.T_int64.ToType())
+	require.NoError(t, dest.InstallBorrowedData(nil, lease))
+	lease.Release()
+	require.Error(t, buffer.AttachTo(dest, DetachedDataBuffer))
+	require.NotZero(t, buffer.Capacity())
+	dest.Free(mp)
+	require.Equal(t, 1, releases)
+}

@@ -250,6 +250,18 @@ func (v *Vector) releaseBorrowedData() {
 	lease.Release()
 }
 
+// replaceOwnedData publishes an already allocated backing before retiring the
+// old owner. Legacy aliases have no release responsibility here.
+func (v *Vector) replaceOwnedData(data []byte, mp *mpool.MPool) {
+	old, lease, alias := v.data, v.dataLease, v.cantFreeData
+	v.data, v.dataLease, v.cantFreeData = data, nil, false
+	if lease != nil {
+		lease.Release()
+	} else if !alias {
+		mp.Free(old)
+	}
+}
+
 func (v *Vector) releaseBorrowedArea() {
 	if v == nil || v.areaLease == nil {
 		return

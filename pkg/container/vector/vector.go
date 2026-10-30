@@ -10701,8 +10701,6 @@ func shrinkFixedByMask[T types.FixedSizeT](v *Vector, sels *bitmap.Bitmap, negat
 
 // shuffleFixedNoTypeCheck is always used after type check. and we can use ToSliceNoTypeCheck here.
 func shuffleFixedNoTypeCheck[T types.FixedSizeT](v *Vector, sels []int64, mp *mpool.MPool) error {
-	sz := v.typ.TypeSize()
-	olddata := v.data[:v.length*sz]
 	ns := len(sels)
 	var vs []T
 	ToFixedColNoTypeCheck(v, &vs)
@@ -10717,13 +10715,7 @@ func shuffleFixedNoTypeCheck[T types.FixedSizeT](v *Vector, sels []int64, mp *mp
 		mp.Free(data)
 		return err
 	}
-	v.data = data
-	// XXX We should never allow "half-owned" vectors later. And unowned vector should be strictly read-only.
-	if v.cantFreeData {
-		v.cantFreeData = false
-	} else {
-		mp.Free(olddata)
-	}
+	v.replaceOwnedData(data, mp)
 	v.length = ns
 	return nil
 }
@@ -10948,6 +10940,10 @@ func (v *Vector) window(
 		w.Free(mp)
 		return nil, err
 	}
+	// Until retained, these views are aliases and must never be freed on a
+	// partial retain failure. Each successful retain transfers that duty to w.
+	w.cantFreeData = true
+	w.cantFreeArea = true
 	if v.IsConst() {
 		if v.typ.IsVarlen() {
 			w.areaDisjoint = false

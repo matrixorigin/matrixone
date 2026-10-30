@@ -93,7 +93,7 @@ func (b *DetachedBuffer) AttachTo(
 		)
 	}
 	if kind == DetachedAreaBuffer {
-		if cap(v.area) != 0 {
+		if cap(v.area) != 0 || v.areaLease != nil || v.cantFreeArea {
 			return allocationAccountInvalid(
 				"vector area already has backing storage",
 			)
@@ -101,7 +101,7 @@ func (b *DetachedBuffer) AttachTo(
 		v.area = b.data
 		v.areaDisjoint = false
 	} else {
-		if cap(v.data) != 0 {
+		if cap(v.data) != 0 || v.dataLease != nil || v.cantFreeData {
 			return allocationAccountInvalid(
 				"vector data already has backing storage",
 			)
