@@ -114,6 +114,28 @@ func TestFunctionalJSONTextEligibility(t *testing.T) {
 		physical = physical || node.TableDef.Name == table.Indexes[0].IndexTableName
 		residual = residual || node.TableDef.Name == "docs" && len(node.FilterList) > 0
 	}
+	require.False(t, physical, "CHAR equality can match several padded physical values; a raw key cannot narrow candidates")
+	require.True(t, residual)
+
+	// A byte-preserving VARCHAR functional key retains the physical lookup.
+	p, err = build("create table docs_v(id int primary key,doc json,index k((cast(doc ->> '$.kind' as varchar(20)))))")
+	require.NoError(t, err)
+	table = p.GetDdl().GetCreateTable().TableDef
+	ctx.tables["docs_v"] = table
+	ctx.objects["docs_v"] = &ObjectRef{ObjName: "docs_v", SchemaName: "tpch"}
+	for _, indexTable := range p.GetDdl().GetCreateTable().IndexTables {
+		ctx.tables[indexTable.Name] = indexTable
+		ctx.objects[indexTable.Name] = &ObjectRef{ObjName: indexTable.Name, SchemaName: "tpch"}
+	}
+	query, err = build("select id from docs_v where cast(doc ->> '$.kind' as varchar(20))='alpha'")
+	require.NoError(t, err)
+	physical, residual = false, false
+	for _, node := range query.GetQuery().Nodes {
+		if node.NodeType == pb.Node_TABLE_SCAN && node.TableDef != nil {
+			physical = physical || node.TableDef.Name == table.Indexes[0].IndexTableName
+			residual = residual || node.TableDef.Name == "docs_v" && len(node.FilterList) > 0
+		}
+	}
 	require.True(t, physical)
 	require.True(t, residual)
 }
