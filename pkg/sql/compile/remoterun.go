@@ -189,6 +189,9 @@ func encodeRemoteScopeWithProtocol(s *Scope, proc *process.Process, requiredProt
 	if requiredProtocol != nil && (features.JSONStringConsumerOverload || features.JSONOpaqueTextContracts) {
 		*requiredProtocol = max(*requiredProtocol, defines.MORPCVersion129)
 	}
+	if requiredProtocol != nil && features.JSONSearch {
+		*requiredProtocol = max(*requiredProtocol, defines.MORPCVersion136)
+	}
 	// Decision D10 of the exact weighted percentile design: the encoded
 	// aggregate travels by encoded ID, so every destination receiving this
 	// pipeline must advertise the aggregate's dispatch capability version;
@@ -2511,6 +2514,9 @@ func validateRemoteExpressionFeatures(proc *process.Process, features plan.Remot
 	}
 	if features.JSONMinMaxTypedComparison && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion133) {
 		return moerr.NewNotSupportedNoCtx("typed JSON MIN/MAX requires MORPC protocol version 133")
+	}
+	if features.JSONSearch && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion136) {
+		return moerr.NewNotSupportedNoCtx("JSON_SEARCH requires MORPC protocol version 136")
 	}
 	if (features.JSONStringConsumerOverload || features.JSONOpaqueTextContracts) && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion129) {
 		return moerr.NewNotSupportedNoCtx("JSON string consumer execution requires MORPC protocol version 129")
