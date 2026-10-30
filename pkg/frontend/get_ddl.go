@@ -15,6 +15,7 @@
 package frontend
 
 import (
+	"bytes"
 	"context"
 	"slices"
 	"strings"
@@ -515,13 +516,13 @@ func FillDdlMysqlResultSet(resultBatch *batch.Batch, mrs *MysqlResultSet) {
 		for i := 0; i < resultBatch.RowCount(); i++ {
 			row := make([]interface{}, 4)
 			// dbname
-			row[0] = resultBatch.Vecs[0].GetBytesAt(i)
+			row[0] = bytes.Clone(resultBatch.Vecs[0].GetBytesAt(i))
 			// tablename
-			row[1] = resultBatch.Vecs[1].GetBytesAt(i)
+			row[1] = bytes.Clone(resultBatch.Vecs[1].GetBytesAt(i))
 			// tableid
 			row[2] = vector.GetFixedAtNoTypeCheck[int64](resultBatch.Vecs[2], i)
 			// tablesql
-			row[3] = resultBatch.Vecs[3].GetBytesAt(i)
+			row[3] = bytes.Clone(resultBatch.Vecs[3].GetBytesAt(i))
 			mrs.AddRow(row)
 		}
 	}

@@ -441,6 +441,11 @@ func Test_FillDdlMysqlResultSet_GoodPath(t *testing.T) {
 		mrs := &MysqlResultSet{}
 		BuildDdlMysqlResultSet(mrs)
 		FillDdlMysqlResultSet(bat, mrs)
+		// The caller releases the input batch before the result set is consumed.
+		for _, i := range []int{0, 1, 3} {
+			clear(bat.Vecs[i].GetData())
+			clear(bat.Vecs[i].GetArea())
+		}
 
 		// Verify row count
 		convey.So(mrs.GetRowCount(), convey.ShouldEqual, uint64(1))

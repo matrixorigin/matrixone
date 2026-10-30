@@ -106,11 +106,7 @@ func BackupData(
 		return err
 	}
 
-	var retByts [][][]byte
-	res.ReadRows(func(_ int, cols []*vector.Vector) bool {
-		retByts = append(retByts, executor.GetBytesRows(cols[0]))
-		return true
-	})
+	retByts := copyBackupResultRows(res)
 	res.Close()
 
 	fileName, err := getFileNames(ctx, retByts)
@@ -125,6 +121,19 @@ func BackupData(
 
 	count := config.Parallelism
 	return execBackup(ctx, sid, srcFs, dstFs, fileName, int(count), config.BackupTs, config.BackupType, nil, protectionMgr, globalIndex)
+}
+
+func copyBackupResultRows(res executor.Result) [][][]byte {
+	var result [][][]byte
+	res.ReadRows(func(_ int, cols []*vector.Vector) bool {
+		rows := executor.GetBytesRows(cols[0])
+		for i := range rows {
+			rows[i] = bytes.Clone(rows[i])
+		}
+		result = append(result, rows)
+		return true
+	})
+	return result
 }
 
 func getParallelCount(count int) int {
