@@ -358,27 +358,29 @@ func (s *controlledS3) reportCounters(analyzer process.Analyzer) {
 	}
 }
 
-func (s *controlledS3) spoolStats(stats []objectio.ObjectStats) (err error) {
-	if len(stats) == 0 {
-		return nil
-	}
-	var blocks int64
+func (s *controlledS3) spoolStats(stats []objectio.ObjectStats) error {
+	// Completed uploads can arrive in bursts. The metadata frame contract
+	// bounds one complete object, not the combined backlog.
 	for i := range stats {
-		if blocks > math.MaxInt64-int64(stats[i].BlkCnt()) {
-			return moerr.NewInternalErrorNoCtx("insert block metadata count overflow")
+		if err := s.spoolObjectStats(stats[i]); err != nil {
+			return err
 		}
-		blocks += int64(stats[i].BlkCnt())
 	}
+	return nil
+}
+
+func (s *controlledS3) spoolObjectStats(stats objectio.ObjectStats) (err error) {
+	blocks := int64(stats.BlkCnt())
 	frameLimit, err := s.metadataFrameLimit()
 	if err != nil {
 		return err
 	}
 	// Fixed encoding/footer and vector headers have ample room in the output
 	// envelope's fixed overhead. Check the variable payload before allocation.
-	if blocks > math.MaxInt64/int64(objectio.BlockInfoSize+24) || int64(len(stats)) > math.MaxInt64/int64(objectio.ObjectStatsLen+24) {
+	if blocks > math.MaxInt64/int64(objectio.BlockInfoSize+24) {
 		return moerr.NewInternalErrorNoCtx("insert block metadata size overflow")
 	}
-	bound := blocks*int64(objectio.BlockInfoSize+24) + int64(len(stats))*int64(objectio.ObjectStatsLen+24)
+	bound := blocks*int64(objectio.BlockInfoSize+24) + int64(objectio.ObjectStatsLen+24)
 	if bound < 0 || bound > frameLimit-4096 {
 		return moerr.NewInternalErrorNoCtxf("insert metadata exceeds admitted frame capacity: %d", bound)
 	}
@@ -390,7 +392,7 @@ func (s *controlledS3) spoolStats(stats []objectio.ObjectStats) (err error) {
 		s.output.Clean(s.outputMP)
 		s.output = nil
 	}()
-	counts := []int64{blocks, int64(len(stats))}
+	counts := []int64{blocks, 1}
 	widths := []int64{int64(objectio.BlockInfoSize), int64(objectio.ObjectStatsLen)}
 	var allocation int64
 	for i, count := range counts {
@@ -407,7 +409,7 @@ func (s *controlledS3) spoolStats(stats []objectio.ObjectStats) (err error) {
 			return err
 		}
 	}
-	if err = colexec.ExpandObjectStatsToBatch(s.outputMP, false, s.output, true, stats...); err != nil {
+	if err = colexec.ExpandObjectStatsToBatch(s.outputMP, false, s.output, true, stats); err != nil {
 		return err
 	}
 	n := s.output.MarshalBinarySize()

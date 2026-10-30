@@ -144,10 +144,11 @@ deletes and unadmitted writers keep their existing retirement policy.
 
 Empty reusable source buffers retain their D grant until destruction. Completed
 stats are collected at subsequent boundaries; residual work is bounded by the
-existing queues/workers and W. MultiUpdate materializes one object's metadata at
-a time in its output pool. Async counters stay separate from per-call analyzer
-resets and are reported after uploads join. Transaction output becomes visible
-only after upload success.
+existing queues/workers and W. Insert and INSERT-only MultiUpdate materialize one
+complete object's metadata per frame in their output pool; a completed-object
+backlog never enlarges the frame bound. Async counters stay separate from
+per-call analyzer resets and are reported after uploads join. Transaction output
+becomes visible only after upload success.
 
 Serial upload boundaries prevent overlap. Reserving a worst-case W maximum per
 worker wastes capacity or overcommits it. The selected mechanism charges actual
