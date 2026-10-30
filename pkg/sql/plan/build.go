@@ -252,9 +252,12 @@ func bindAndOptimizeInsertQuery(ctx CompilerContext, stmt *tree.Insert, isPrepar
 	// modernInsertFkCheckEnabled / appendForeignConstrantPlan), and INSERT IGNORE
 	// drops the offending rows (see buildInsertIgnoreFkFilter). Only self-referencing
 	// FKs still need a post-execution DetectSql, generated here for all of them.
-	tblInfo, err := getDmlTableInfo(ctx, tree.TableExprs{stmt.Table}, stmt.With, nil, "insert")
+	tblInfo, err := getDmlTableInfo(ctx, tree.TableExprs{stmt.Table}, nil, nil, "insert")
 	if err != nil {
 		return nil, err
+	}
+	if len(tblInfo.tableDefs) != 1 {
+		return nil, moerr.NewInvalidInput(ctx.GetContext(), "INSERT requires one physical target table")
 	}
 	if len(tblInfo.tableDefs) == 1 && len(tblInfo.tableDefs[0].Fkeys) > 0 {
 		// The in-plan child checks and self-reference DetectSqls depend on the

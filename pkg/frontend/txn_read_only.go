@@ -227,7 +227,7 @@ func classifyStatementWrite(
 					return writePersistent
 				}
 				if _, found := aliasMap[string(name.ObjectName)]; !found {
-					return true // Missing or derived source: fail closed.
+					return writePersistent // Missing or derived source: fail closed.
 				}
 				dbName, tableName, _ := plan.ResolveDMLTargetName(
 					string(name.SchemaName), string(name.ObjectName), "", aliasMap)
@@ -657,8 +657,8 @@ func sequenceFuncExprMutates(fn *tree.FuncExpr) bool {
 // classifyUpdateWrite determines whether an UPDATE writes a persistent table
 // or needs a catalog transaction before its SET owners can be identified.
 // Written tables derive from SET targets, which resolve through the source
-// alias map — an explicitly aliased source
-// by its alias, an unaliased one by its object name, WITH-clause names never
+// alias map — an explicitly aliased source by its alias, an unaliased one by
+// its object name. Unqualified WITH-clause names never
 // resolve. A qualified target the sources cannot name never writes (the
 // planner reports it as an unknown table before execution). An unqualified
 // column targets the unique source owning it; the gate resolves column
@@ -821,15 +821,15 @@ var resolveSourceColumnNames = func(ses FeSession, schemaName, tableName, defaul
 	return columns, nil
 }
 
-// collectUpdateSource mirrors how setTableExprToDmlTableInfo maps the UPDATE
+// collectUpdateSource mirrors how DMLContext maps the UPDATE
 // sources: an explicitly aliased source resolves by its alias, an unaliased
-// one by its object name; joins recurse into both sides; WITH-clause names
+// one by its object name; joins recurse into both sides; unqualified WITH-clause names
 // and derived sources never resolve to a table.
 func collectUpdateSource(expr tree.TableExpr, ctes map[string]struct{}, sources map[string][2]string) {
 	switch t := expr.(type) {
 	case *tree.TableName:
 		name := string(t.ObjectName)
-		if _, isCTE := ctes[name]; isCTE {
+		if _, isCTE := ctes[name]; t.SchemaName == "" && isCTE {
 			return
 		}
 		sources[name] = [2]string{string(t.SchemaName), name}
@@ -839,7 +839,7 @@ func collectUpdateSource(expr tree.TableExpr, ctes map[string]struct{}, sources 
 			return
 		}
 		name := string(base.ObjectName)
-		if _, isCTE := ctes[name]; isCTE {
+		if _, isCTE := ctes[name]; base.SchemaName == "" && isCTE {
 			return
 		}
 		alias := string(t.As.Alias)

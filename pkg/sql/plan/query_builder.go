@@ -14386,6 +14386,9 @@ func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindCo
 	if err != nil {
 		return 0, err
 	}
+	if scope := builder.updateTargetScope; scope != nil && scope.join == tbl {
+		scope.context = leftCtx
+	}
 
 	if _, ok := tbl.Right.(*tree.TableFunction); ok {
 		return 0, moerr.NewSyntaxError(builder.GetContext(), "Every table function must have an alias")
