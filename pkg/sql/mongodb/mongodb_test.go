@@ -522,6 +522,13 @@ func TestPlanPredicatePushesTryNullBSONDateTimeWithSafeRounding(t *testing.T) {
 	require.Equal(t, bson.DateTime(10124), predicate.Value,
 		">= must round its BSON millisecond candidate outward")
 
+	literalExpr.GetLit().Value = &planpb.Literal_Datetimeval{Datetimeval: int64(literalDatetime)}
+	pushed, _ = PushdownPlanFilters(t.Context(), []*planpb.Expr{filter}, columns)
+	require.NotNil(t, pushed, "folded DATETIME literals keep the same BSON candidate")
+	predicate, err = PredicateFromPlan(t.Context(), pushed)
+	require.NoError(t, err)
+	require.Equal(t, bson.DateTime(10124), predicate.Value)
+
 	castLiteral := &planpb.Expr{
 		Typ: planpb.Type{Id: int32(types.T_datetime), Scale: 3},
 		Expr: &planpb.Expr_F{F: &planpb.Function{

@@ -172,6 +172,11 @@ func (builder *QueryBuilder) bindExternalScan(
 	)
 
 	if len(tbColToDataCol) == 0 {
+		// Without a column list the file fields map to the writable columns in
+		// order. The external reader emits one vector per non-hidden scan
+		// column, so a stored generated column left in the scan table would
+		// take an output slot and shift every later field (#31737).
+		dropLoadScanGeneratedColumns(tableDef)
 		idx := 0
 		for _, col := range tableDef.Cols {
 			if !col.Hidden && col.GeneratedCol == nil {
@@ -282,6 +287,26 @@ func (builder *QueryBuilder) bindExternalScan(
 	return lastNodeId, insertColToExpr, nil
 }
 
+// dropLoadScanGeneratedColumns removes generated columns from the LOAD scan
+// table copy. Their values are computed by the insert pipeline from the
+// target table definition, never read from the file.
+func dropLoadScanGeneratedColumns(tableDef *plan.TableDef) {
+	cols := make([]*ColDef, 0, len(tableDef.Cols))
+	for _, col := range tableDef.Cols {
+		if col.GeneratedCol == nil {
+			cols = append(cols, col)
+		}
+	}
+	if len(cols) == len(tableDef.Cols) {
+		return
+	}
+	tableDef.Cols = cols
+	tableDef.Name2ColIndex = make(map[string]int32, len(cols))
+	for i, col := range cols {
+		tableDef.Name2ColIndex[col.Name] = int32(i)
+	}
+}
+
 // LOAD IGNORE/REPLACE conflict resolution is separate from ordinary LOAD's
 // primary-key validation. Keep those modes on their existing path.
 func loadChecksPrimaryKey(stmt *tree.Load, tableDef *plan.TableDef) bool {
@@ -342,10 +367,14 @@ func (builder *QueryBuilder) applyLoadAssignmentCasts(
 	for _, col := range tableDef.Cols {
 		expr, ok := insertColToExpr[col.Name]
 		if !ok || (col.Typ.Id != int32(types.T_blob) && col.Typ.Id != int32(types.T_text) &&
-			col.Typ.Id != int32(types.T_time) && !isMediumIntPlanType(col.Typ)) {
+			col.Typ.Id != int32(types.T_time) && !isMediumIntPlanType(col.Typ) &&
+			!isAttributedDecimalPlanType(col.Typ)) {
 			continue
 		}
-		casted, err := builder.forceAssignmentCastExpr(expr, col.Typ, assignmentIgnore)
+		// Attributed DECIMAL staged text takes the same admission -> assignment
+		// composition as DML; loadAssignmentIgnore keeps its LOCAL/IGNORE
+		// mapping on the statement-policy axis.
+		casted, err := builder.forceAssignmentCastExpr(expr, col.Typ, assignmentIgnore, col.Name)
 		if err != nil {
 			return err
 		}

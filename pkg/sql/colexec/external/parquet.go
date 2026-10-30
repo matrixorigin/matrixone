@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
+	"github.com/matrixorigin/matrixone/pkg/container/arrowbridge"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
@@ -502,7 +503,11 @@ func (h *ParquetHandler) prepare(param *ExternalParam) error {
 				fn = h.getNestedMapper(col, def.Typ)
 			}
 		} else {
-			fn = h.getMapper(col, def.Typ)
+			// Mapper selection uses the same LOAD staging predicate as the
+			// output vector allocation in external.go: an external-table scan
+			// over an attributed DECIMAL column receives a physical DECIMAL
+			// vector and must not be handed the varlena text staging mapper.
+			fn = h.getMapperWithStaging(col, def.Typ, loadAttributedDecimalTextInput(param, &def.Typ))
 		}
 		if fn == nil {
 			st := col.Type().String()
@@ -759,12 +764,17 @@ func (*ParquetHandler) getNestedListMapper(sc *parquet.Column, dt plan.Type) (*p
 	case types.T_array_float32:
 		switch leaf.Type().Kind() {
 		case parquet.Float:
-			configureParquetListMapper(mp, width, func(_ context.Context, v parquet.Value) (float32, error) {
-				return v.Float(), nil
+			configureParquetListMapper(mp, width, func(ctx context.Context, v parquet.Value) (float32, error) {
+				f := v.Float()
+				return f, parquetVectorElemFinite(ctx, float64(f))
 			})
 		case parquet.Double:
 			configureParquetListMapper(mp, width, func(ctx context.Context, v parquet.Value) (float32, error) {
-				return parquetFloat64ToFloat32(ctx, v.Double())
+				f, err := parquetFloat64ToFloat32(ctx, v.Double())
+				if err != nil {
+					return 0, err
+				}
+				return f, parquetVectorElemFinite(ctx, float64(f))
 			})
 		default:
 			return nil, nil
@@ -772,12 +782,14 @@ func (*ParquetHandler) getNestedListMapper(sc *parquet.Column, dt plan.Type) (*p
 	case types.T_array_float64:
 		switch leaf.Type().Kind() {
 		case parquet.Float:
-			configureParquetListMapper(mp, width, func(_ context.Context, v parquet.Value) (float64, error) {
-				return float64(v.Float()), nil
+			configureParquetListMapper(mp, width, func(ctx context.Context, v parquet.Value) (float64, error) {
+				f := float64(v.Float())
+				return f, parquetVectorElemFinite(ctx, f)
 			})
 		case parquet.Double:
-			configureParquetListMapper(mp, width, func(_ context.Context, v parquet.Value) (float64, error) {
-				return v.Double(), nil
+			configureParquetListMapper(mp, width, func(ctx context.Context, v parquet.Value) (float64, error) {
+				f := v.Double()
+				return f, parquetVectorElemFinite(ctx, f)
 			})
 		default:
 			return nil, nil
@@ -787,15 +799,19 @@ func (*ParquetHandler) getNestedListMapper(sc *parquet.Column, dt plan.Type) (*p
 		if leaf.Type().Kind() != parquet.Float {
 			return nil, nil
 		}
-		configureParquetListMapper(mp, width, func(_ context.Context, v parquet.Value) (types.BF16, error) {
-			return types.BF16FromFloat32(v.Float()), nil
+		configureParquetListMapper(mp, width, func(ctx context.Context, v parquet.Value) (types.BF16, error) {
+			// Check the narrowed value: a finite FLOAT beyond the bf16 range
+			// becomes ±Inf only after narrowing, as in the SQL input path.
+			bf := types.BF16FromFloat32(v.Float())
+			return bf, parquetVectorElemFinite(ctx, float64(bf.ToFloat32()))
 		})
 	case types.T_array_float16:
 		if leaf.Type().Kind() != parquet.Float {
 			return nil, nil
 		}
-		configureParquetListMapper(mp, width, func(_ context.Context, v parquet.Value) (types.Float16, error) {
-			return types.Float16FromFloat32(v.Float()), nil
+		configureParquetListMapper(mp, width, func(ctx context.Context, v parquet.Value) (types.Float16, error) {
+			h := types.Float16FromFloat32(v.Float())
+			return h, parquetVectorElemFinite(ctx, float64(h.ToFloat32()))
 		})
 	case types.T_array_int8:
 		// int8/uint8 vectors are stored in parquet as INT32 leaves; load is strict
@@ -955,13 +971,132 @@ func makeMediumIntMapper(st parquet.Type, unsigned bool) func(*columnMapper, par
 	}
 }
 
+// getAttributedDecimalTextMapper stages an attributed DECIMAL LOAD target as
+// rendered text. Encoding rule per source kind: DECIMAL logical types decode
+// the unbounded coefficient and render coeff x 10^-sf through the shared
+// arrowbridge staging renderer (fixed-point text for a well-formed schema
+// 0 <= sf <= 76 and pf <= 76, bounded scientific text otherwise); STRING
+// physicals yield the raw field text; integer physicals render exact integer
+// text; float/double physicals render shortest round-trip text. The engine's
+// decimal parsers consume both rendered forms, including exponent forms whose
+// scale application is allocation-free.
+func (h *ParquetHandler) getAttributedDecimalTextMapper(sc *parquet.Column, dt plan.Type) *columnMapper {
+	st := sc.Type()
+	mp := &columnMapper{
+		srcNull:            sc.Optional(),
+		dstNull:            !dt.NotNullable,
+		maxDefinitionLevel: byte(sc.MaxDefinitionLevel()),
+	}
+	if isDecimalLogicalType(st.LogicalType()) {
+		pf, sf := parquetDecimalPrecision(st), parquetDecimalScale(st)
+		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+			return processParquetValuesToStagingBytes(proc.Ctx, mp, page, proc, vec,
+				func(v parquet.Value) ([]byte, error) {
+					coeff, err := parquetDecimalValueToBigInt(proc.Ctx, st, v)
+					if err != nil {
+						return nil, err
+					}
+					return []byte(arrowbridge.RenderStagingDecimalText(coeff, pf, sf)), nil
+				})
+		}
+		return mp
+	}
+	switch st.Kind() {
+	case parquet.Boolean:
+		// Boolean stages through the shared scalar decimal renderer
+		// (true/false -> 1/0 text), matching the typed decimal mapper's
+		// accepted cast sources. NULL values record as nulls and never
+		// reach this value-level rendering.
+		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+			return processParquetValuesToStagingBytes(proc.Ctx, mp, page, proc, vec,
+				func(v parquet.Value) ([]byte, error) {
+					s, err := parquetValueToDecimalString(proc.Ctx, st, v)
+					if err != nil {
+						return nil, err
+					}
+					return []byte(s), nil
+				})
+		}
+	case parquet.ByteArray, parquet.FixedLenByteArray:
+		// STRING-physical decimal: raw field text.
+		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+			return processParquetValuesToStagingBytes(proc.Ctx, mp, page, proc, vec,
+				func(v parquet.Value) ([]byte, error) {
+					return v.ByteArray(), nil
+				})
+		}
+	case parquet.Int32, parquet.Int64:
+		// Plain integer physicals render exact integer text, sign faithful.
+		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+			return processParquetValuesToStagingBytes(proc.Ctx, mp, page, proc, vec,
+				func(v parquet.Value) ([]byte, error) {
+					if lt := st.LogicalType(); lt != nil && lt.Integer != nil && !lt.Integer.IsSigned {
+						val, err := parquetValueToUint64(proc.Ctx, st, v)
+						if err != nil {
+							return nil, err
+						}
+						return []byte(strconv.FormatUint(val, 10)), nil
+					}
+					val, err := parquetValueToInt64(proc.Ctx, st, v)
+					if err != nil {
+						return nil, err
+					}
+					return []byte(strconv.FormatInt(val, 10)), nil
+				})
+		}
+	case parquet.Float:
+		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+			return processParquetValuesToStagingBytes(proc.Ctx, mp, page, proc, vec,
+				func(v parquet.Value) ([]byte, error) {
+					return []byte(strconv.FormatFloat(float64(v.Float()), 'g', -1, 32)), nil
+				})
+		}
+	case parquet.Double:
+		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+			return processParquetValuesToStagingBytes(proc.Ctx, mp, page, proc, vec,
+				func(v parquet.Value) ([]byte, error) {
+					return []byte(strconv.FormatFloat(v.Double(), 'g', -1, 64)), nil
+				})
+		}
+	default:
+		return nil
+	}
+	return mp
+}
+
+// parquetDecimalPrecision reads the file schema's declared DECIMAL precision;
+// an absent DECIMAL logical type reports zero (the raw-text branch).
+func parquetDecimalPrecision(st parquet.Type) int32 {
+	if lt := st.LogicalType(); lt != nil && lt.Decimal != nil {
+		return lt.Decimal.Precision
+	}
+	return 0
+}
+
 func (h *ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper {
+	return h.getMapperWithStaging(sc, dt, false)
+}
+
+// getMapperWithStaging selects the leaf page mapper. loadStaging is the shared
+// LOAD staging predicate (loadAttributedDecimalTextInput in external.go): the
+// attributed-DECIMAL text mapper writes varlena staging text that only a LOAD
+// scan's VARCHAR staging vector can receive. External-table scans project the
+// physical DECIMAL vector, so they must take the typed mapper even when the
+// column carries the unsigned attribute.
+func (h *ParquetHandler) getMapperWithStaging(sc *parquet.Column, dt plan.Type, loadStaging bool) *columnMapper {
 	if sc == nil || sc.Type() == nil {
 		return nil
 	}
 	st := sc.Type()
 	if st.PhysicalType() == nil {
 		return nil
+	}
+	if loadStaging && isAttributedDecimalStagingTarget(&dt) {
+		// Attributed DECIMAL LOAD stages text rendered from the decoded value,
+		// never a target-rescaled decimal: the shared admission boundary
+		// classifies the exact source sign and digits. NULL values record as
+		// nulls and are never rendered.
+		return h.getAttributedDecimalTextMapper(sc, dt)
 	}
 	mp := &columnMapper{
 		srcNull:            sc.Optional(),
@@ -3356,6 +3491,61 @@ func processParquetValuesToBytes(
 	return nil
 }
 
+// processParquetValuesToStagingBytes mirrors processParquetValuesToBytes but
+// appends into the scan-owned text staging vector with no target-string
+// semantics: the staging varchar is an unbounded carrier, and width/padding
+// policy belongs to the downstream assignment composition.
+func processParquetValuesToStagingBytes(
+	ctx context.Context,
+	mp *columnMapper,
+	page parquet.Page,
+	proc *process.Process,
+	vec *vector.Vector,
+	convert func(parquet.Value) ([]byte, error),
+) error {
+	nc, err := prepareNullCheck(ctx, mp, page)
+	if err != nil {
+		return err
+	}
+	if err := validateParquetDictionaryPage(ctx, page, &nc.actualNonNulls); err != nil {
+		return err
+	}
+	values, err := readParquetPageValues(ctx, page)
+	if err != nil {
+		return err
+	}
+	if err := vec.PreExtend(vec.Length()+len(values), proc.Mp()); err != nil {
+		return err
+	}
+	checkpoint := vec.MakeAppendCheckpoint()
+	rollback := func(err error) error {
+		vec.RollbackAppend(checkpoint, len(values))
+		return err
+	}
+	for i, v := range values {
+		if err := validateParquetValueNullness(ctx, nc, i, v); err != nil {
+			return rollback(err)
+		}
+		if parquetValueIsNull(nc, i) {
+			if !mp.dstNull {
+				return rollback(moerr.NewConstraintViolationf(ctx, "cannot load NULL value into NOT NULL column"))
+			}
+			if err := vector.AppendBytes(vec, nil, true, proc.Mp()); err != nil {
+				return rollback(err)
+			}
+			continue
+		}
+		val, err := convert(v)
+		if err != nil {
+			return rollback(wrapParseError(ctx, i, err))
+		}
+		if err := vector.AppendBytes(vec, val, false, proc.Mp()); err != nil {
+			return rollback(err)
+		}
+	}
+	return nil
+}
+
 // parquetGeometryToStorage restores textual geometry while enforcing the
 // assignment constraints that a direct target-typed Parquet vector bypasses.
 func parquetGeometryToStorage(proc *process.Process, data []byte, typ types.Type) ([]byte, error) {
@@ -4111,6 +4301,15 @@ func parquetValueToFloat32(ctx context.Context, st parquet.Type, v parquet.Value
 		return 0, err
 	}
 	return parquetFloat64ToFloat32(ctx, val)
+}
+
+// parquetVectorElemFinite rejects NaN and ±Inf vector elements, matching the
+// vector column's SQL input check ("vector element cannot be NaN or Inf").
+func parquetVectorElemFinite(ctx context.Context, f float64) error {
+	if math.IsNaN(f) || math.IsInf(f, 0) {
+		return moerr.NewInternalErrorf(ctx, "vector element cannot be NaN or Inf: %v", f)
+	}
+	return nil
 }
 
 func parquetFloat64ToFloat32(ctx context.Context, val float64) (float32, error) {
