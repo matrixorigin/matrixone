@@ -29,7 +29,7 @@ import pytest
 from unittest.mock import Mock, patch, AsyncMock
 import sys
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 
 # Store original modules to restore later
 _original_modules = {}
@@ -521,8 +521,8 @@ class TestAsyncSnapshotManager(unittest.IsolatedAsyncioTestCase):
 
     async def test_create_returns_persisted_snapshot_metadata(self):
         """Creation should return the metadata persisted by MatrixOne."""
-        created_at = datetime(2025, 1, 2, 3, 4, 5)
-        timestamp_ns = int(created_at.timestamp() * 1000000000)
+        created_at = datetime(2025, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
+        timestamp_ns = 1735787045000000000
         self.mock_client.execute.side_effect = [
             AsyncResultSet([], []),
             AsyncResultSet(
@@ -742,10 +742,14 @@ class TestAsyncSnapshotManager(unittest.IsolatedAsyncioTestCase):
         # Test not exists
         from matrixone.exceptions import SnapshotError
 
-        self.mock_client.execute.side_effect = SnapshotError("Snapshot 'nonexistent' not found")
+        self.mock_client.execute.return_value = AsyncResultSet([], [])
 
         exists = await self.snapshot_manager.exists("nonexistent")
         self.assertFalse(exists)
+
+        self.mock_client.execute.side_effect = SnapshotError('lookup permission denied')
+        with self.assertRaisesRegex(SnapshotError, 'permission denied'):
+            await self.snapshot_manager.exists('unreadable')
 
 
 class TestAsyncCloneManager(unittest.IsolatedAsyncioTestCase):

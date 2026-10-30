@@ -225,7 +225,7 @@ func TestStatementRequiresPersistentWriteAccess(t *testing.T) {
 	}
 	for _, sql := range writingSQLs {
 		stmt := parseSingleStatement(t, sql)
-		require.True(t, statementRequiresPersistentWriteAccess(ses, stmt, "testdb"), sql)
+		require.Equal(t, writePersistent, classifyStatementWrite(ses, stmt, "testdb"), sql)
 	}
 
 	nonWritingSQLs := []string{
@@ -263,7 +263,7 @@ func TestStatementRequiresPersistentWriteAccess(t *testing.T) {
 	}
 	for _, sql := range nonWritingSQLs {
 		stmt := parseSingleStatement(t, sql)
-		require.False(t, statementRequiresPersistentWriteAccess(ses, stmt, "testdb"), sql)
+		require.Equal(t, writeAllowed, classifyStatementWrite(ses, stmt, "testdb"), sql)
 	}
 }
 
@@ -307,14 +307,15 @@ func TestStatementRequiresPersistentWriteAccessTemporaryTables(t *testing.T) {
 		"delete x from tt as x",
 		"delete x, y from tt as x join tt2 as y on x.a = y.a",
 		// A schema-qualified target naming a temporary table stays exempt, and
-		// a qualified target whose FROM alias resolves to a temporary table
-		// writes that temporary table.
+		// an unqualified target resolves through the source schema.
 		"delete testdb.tt from testdb.tt",
-		"delete testdb.tt from tt2 as tt",
+		"delete tt from testdb.tt",
+		"delete x from (testdb.tt as x)",
+		"delete tt from tt2 as tt",
 	}
 	for _, sql := range temporaryAllowedSQLs {
 		stmt := parseSingleStatement(t, sql)
-		require.False(t, statementRequiresPersistentWriteAccess(ses, stmt, "testdb"), sql)
+		require.Equal(t, writeAllowed, classifyStatementWrite(ses, stmt, "testdb"), sql)
 	}
 
 	// Mixed writes still touch persistent tables and must be gated.
@@ -329,21 +330,41 @@ func TestStatementRequiresPersistentWriteAccessTemporaryTables(t *testing.T) {
 		"update tt as x join t as y on x.a = y.a set y.a = 1",
 		"update tt, t set a = 1",
 		"update tt, t set common = 1",
+		"update tt, t set t.a = 1, v = 2",
 		"drop table tt, t",
 		// A DELETE target alias resolves to its FROM source first; a temporary
 		// table sharing the alias' spelling must not shadow the persistent
 		// victim (the x alias resolves to the persistent table here).
 		"delete x from t as x",
 		"delete tt, t from tt join t on tt.a = t.a",
-		// Schema-qualified targets resolve through the alias map exactly like
-		// unqualified ones: the planner matches by object name and overwrites
-		// the qualifier, so the temporary-table spelling of the target must
-		// not shadow the persistent victim either.
+		// A qualified target or same-named temporary table must not hide
+		// a persistent source. Invalid targets remain conservatively gated.
 		"delete testdb.tt from t as tt",
+		"delete tt from otherdb.tt",
+		"delete x from (otherdb.tt as x)",
+		"delete tt from (select 1 as a) as tt",
+		"delete missing from tt",
 	} {
 		stmt := parseSingleStatement(t, sql)
-		require.True(t, statementRequiresPersistentWriteAccess(ses, stmt, "testdb"), sql)
+		require.Equal(t, writePersistent, classifyStatementWrite(ses, stmt, "testdb"), sql)
 	}
+}
+
+func TestDeleteReadOnlyClassificationReusesAST(t *testing.T) {
+	ses := newTestSession(t, gomock.NewController(t))
+	ses.SetDatabaseName("testdb")
+	stmt := parseSingleStatement(t, "delete otherdb.x from t as x")
+	defer stmt.Free()
+	before := tree.String(stmt, dialect.MYSQL)
+
+	// The alias names t in the effective database, not otherdb.x or testdb.x.
+	ses.AddTempTable("testdb", "x", "temp_x")
+	require.Equal(t, writePersistent, classifyStatementWrite(ses, stmt, "testdb"))
+	ses.AddTempTable("testdb", "t", "temp_t")
+	require.Equal(t, writeAllowed, classifyStatementWrite(ses, stmt, "testdb"))
+	ses.removeTempTable("testdb", "t", "txnkey", "stmtkey")
+	require.Equal(t, writePersistent, classifyStatementWrite(ses, stmt, "testdb"))
+	require.Equal(t, before, tree.String(stmt, dialect.MYSQL))
 }
 
 func readOnlyGateExecCtx(ses FeSession, stmt tree.Statement, input *UserInput) *ExecCtx {
@@ -433,11 +454,13 @@ func TestUpdateOwnershipDeferral(t *testing.T) {
 		"update tt, t set v = 1",
 		"update tt, t set a = 1",
 		"update tt, t set common = 1",
+		// Deferral wins even when an earlier qualified assignment is persistent.
+		"update tt, t set t.a = 1, v = 2",
 		"explain analyze update tt, t set a = 1",
 		"explain phyplan update tt, t set a = 1",
 	} {
 		stmt := parseSingleStatement(t, sql)
-		require.True(t, updateOwnershipDeferred(ses, stmt, "testdb"), sql)
+		require.Equal(t, writeDeferred, classifyStatementWrite(ses, stmt, "testdb"), sql)
 	}
 	for _, sql := range []string{
 		"update tt, t set t.a = 1",
@@ -447,7 +470,7 @@ func TestUpdateOwnershipDeferral(t *testing.T) {
 		"insert into t values (1)",
 	} {
 		stmt := parseSingleStatement(t, sql)
-		require.False(t, updateOwnershipDeferred(ses, stmt, "testdb"), sql)
+		require.NotEqual(t, writeDeferred, classifyStatementWrite(ses, stmt, "testdb"), sql)
 	}
 
 	// Deferred but not rejected up front: under a READ ONLY session default
@@ -459,8 +482,58 @@ func TestUpdateOwnershipDeferral(t *testing.T) {
 	execCtx := &ExecCtx{reqCtx: context.Background(), ses: ses, stmt: stmt, input: &UserInput{}}
 	require.NoError(t, enforceReadOnlyTxnAccessMode(ses, execCtx, stmt, "testdb"))
 	require.True(t, execCtx.deferReadOnlyOwnership)
-	require.True(t, statementRequiresPersistentWriteAccess(ses, stmt, "testdb"))
+	require.Equal(t, writeDeferred, classifyStatementWrite(ses, stmt, "testdb"))
 	require.NoError(t, ses.SetSessionSysVar(context.Background(), transactionReadOnlySystemVariable, int64(0)))
+}
+
+func TestUpdateReadOnlyOwnershipLookupLifetime(t *testing.T) {
+	ses := newTestSession(t, gomock.NewController(t))
+	ses.SetDatabaseName("testdb")
+	ses.AddTempTable("testdb", "tt", "temp_tt")
+	stmt := parseSingleStatement(t, "update tt join t on tt.a=t.a set b=1,c=2")
+	defer stmt.Free()
+	resolvable := gostub.Stub(&catalogOwnershipResolvable, func(FeSession) bool { return true })
+	defer resolvable.Reset()
+	calls := map[string]int{}
+	failFirst := false
+	resolver := gostub.Stub(&resolveSourceColumnNames, func(_ FeSession, _, name, _ string) (map[string]struct{}, error) {
+		calls[name]++
+		if name == "tt" {
+			return map[string]struct{}{"b": {}, "c": {}}, nil
+		}
+		if failFirst && calls[name] == 1 {
+			return nil, moerr.NewInternalError(context.Background(), "catalog unavailable")
+		}
+		return map[string]struct{}{"a": {}}, nil
+	})
+	defer resolver.Reset()
+
+	// READ WRITE needs no owner resolution after the access mode is stamped.
+	ses.GetTxnHandler().txnReadOnly = false
+	require.NoError(t, enforceReadOnlyTxnAccessMode(ses, readOnlyGateExecCtx(ses, stmt, &UserInput{}), stmt, "testdb"))
+	require.Empty(t, calls)
+
+	// READ ONLY resolves successful sources once per statement, not per SET.
+	ses.GetTxnHandler().txnReadOnly = true
+	for i := 1; i <= 2; i++ {
+		require.NoError(t, enforceReadOnlyTxnAccessMode(ses, readOnlyGateExecCtx(ses, stmt, &UserInput{}), stmt, "testdb"))
+		require.Equal(t, i, calls["tt"])
+		require.Equal(t, i, calls["t"])
+	}
+	// Failed resolutions are retried for the next assignment, never cached.
+	calls = map[string]int{}
+	failFirst = true
+	require.NoError(t, enforceReadOnlyTxnAccessMode(ses, readOnlyGateExecCtx(ses, stmt, &UserInput{}), stmt, "testdb"))
+	require.Equal(t, 1, calls["tt"])
+	require.Equal(t, 2, calls["t"])
+
+	// A failed lookup on an earlier SET must not taint a later assignment.
+	calls = map[string]int{}
+	missing := parseSingleStatement(t, "update tt join t on tt.a=t.a set b=1,missing=2")
+	defer missing.Free()
+	require.NoError(t, enforceReadOnlyTxnAccessMode(ses, readOnlyGateExecCtx(ses, missing, &UserInput{}), missing, "testdb"))
+	require.Equal(t, 1, calls["tt"])
+	require.Equal(t, 2, calls["t"])
 }
 
 func TestEnforceReadOnlyTxnAccessModeBackSessionOrigin(t *testing.T) {
@@ -663,6 +736,21 @@ func TestReadOnlyGateRemapEffectiveDatabase(t *testing.T) {
 	insertOkt := parseSingleStatement(t, "insert into okt values (1)")
 	require.NoError(t, enforceReadOnlyTxnAccessMode(ses, remapCtx(insertOkt), insertOkt, ""))
 	require.NoError(t, enforceReadOnlyTxnAccessMode(ses, remapCtx(insertOkt), insertOkt, "r7_src"))
+
+	// A prepared statement retains its threaded database after USE changes the session.
+	ses.SetDatabaseName("other")
+	require.Equal(t, "r7_dst", effectiveDefaultDatabaseWithRemap(ses, remapCtx(nil), "r7_src"))
+	require.NoError(t, enforceReadOnlyTxnAccessMode(ses, remapCtx(insertOkt), insertOkt, "r7_src"))
+	require.Equal(t, "other", effectiveDefaultDatabaseWithRemap(ses, remapCtx(nil), ""))
+	require.Equal(t, "other", effectiveDefaultDatabaseWithRemap(ses, nil, ""))
+	ses.sesSysVars.Set("lower_case_table_names", int64(2))
+	mode2 := &ExecCtx{ses: ses, remapDb: map[string]string{"r7_src": "Destination"}}
+	require.Equal(t, "Destination", effectiveDefaultDatabaseWithRemap(ses, mode2, "R7_SRC"))
+	mode2.remapDb["r7_src"] = ""
+	require.Empty(t, effectiveDefaultDatabaseWithRemap(ses, mode2, "R7_SRC"))
+	ses.SetDatabaseName("")
+	emptyKey := &ExecCtx{ses: ses, remapDb: map[string]string{"": "unexpected"}}
+	require.Empty(t, effectiveDefaultDatabaseWithRemap(ses, emptyKey, ""))
 }
 
 func TestSequenceMutationClassification(t *testing.T) {
@@ -699,7 +787,7 @@ func TestSequenceMutationClassification(t *testing.T) {
 		"select setval('s', nextval('s'))",
 	} {
 		stmt := parseSingleStatement(t, sql)
-		require.True(t, statementRequiresPersistentWriteAccess(ses, stmt, "testdb"), sql)
+		require.Equal(t, writePersistent, classifyStatementWrite(ses, stmt, "testdb"), sql)
 	}
 
 	// Session-local sequence reads and ordinary reads stay exempt.
@@ -712,7 +800,7 @@ func TestSequenceMutationClassification(t *testing.T) {
 		"set @v = currval('s')",
 	} {
 		stmt := parseSingleStatement(t, sql)
-		require.False(t, statementRequiresPersistentWriteAccess(ses, stmt, "testdb"), sql)
+		require.Equal(t, writeAllowed, classifyStatementWrite(ses, stmt, "testdb"), sql)
 	}
 
 	// Gate-level: a NEXTVAL read-carrier raises 1792 under the session
