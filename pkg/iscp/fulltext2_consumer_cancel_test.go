@@ -52,6 +52,19 @@ type fulltext2BlockedRetriever struct {
 	errOnce     sync.Once
 }
 
+// Done reports when RunFulltext2 reaches its blocking select. Cancellation
+// after this signal exercises the in-flight wait, rather than the precheck.
+type fulltext2WaitingContext struct {
+	context.Context
+	waiting chan struct{}
+	once    sync.Once
+}
+
+func (c *fulltext2WaitingContext) Done() <-chan struct{} {
+	c.once.Do(func() { close(c.waiting) })
+	return c.Context.Done()
+}
+
 func (r *fulltext2BlockedRetriever) Next() *ISCPData {
 	r.nextOnce.Do(func() { close(r.nextEntered) })
 	return &ISCPData{noMoreData: true, err: <-r.errCh}
@@ -104,5 +117,45 @@ func TestFulltext2ConsumerContextCancelUnblocksRetrieverNext(t *testing.T) {
 		require.ErrorIs(t, err, context.Canceled)
 	case <-time.After(5 * time.Second):
 		t.Fatal("Fulltext2 Consume stayed blocked in DataRetriever.Next after cancellation")
+	}
+}
+
+func TestFulltext2ConsumerCancelWhileWaitingForInput(t *testing.T) {
+	base, cancel := context.WithCancel(t.Context())
+	t.Cleanup(cancel)
+	ctx := &fulltext2WaitingContext{Context: base, waiting: make(chan struct{})}
+	writer := newFT2Writer(fulltext2.ParserNgram)
+	writer.capacity, writer.postingCap = 64, 1024
+	consumer := &IndexConsumer{sqlWriter: writer, algo: testFulltext2CancelAlgo}
+	errch := make(chan error, 1)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		RunFulltext2(consumer, ctx, errch, &fulltext2BlockedRetriever{})
+	}()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Error("Fulltext2 worker did not stop during cleanup")
+		}
+	})
+	select {
+	case <-ctx.waiting:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Fulltext2 worker did not enter its input wait")
+	}
+	cancel()
+	select {
+	case err := <-errch:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(5 * time.Second):
+		t.Fatal("Fulltext2 worker did not report cancellation")
+	}
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Fulltext2 worker did not finish cleanup after cancellation")
 	}
 }
