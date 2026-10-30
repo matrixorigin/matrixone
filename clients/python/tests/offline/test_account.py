@@ -1021,3 +1021,28 @@ def test_show_accounts_uses_column_names_even_when_fields_move(asynchronous):
     assert selected.admin_name == 'admin' and selected.status == 'suspend'
     assert selected.comment == 'actual comment' and selected.suspended_time == '2026-01-01'
     assert selected.suspended_reason is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('asynchronous', [False, True])
+@pytest.mark.parametrize('operation', ['create_user', 'list_users'])
+async def test_user_account_uses_show_column_metadata(asynchronous, operation):
+    from matrixone.client import ResultSet
+
+    account = ResultSet(['comments', 'account_name', 'admin_name'], [('description', 'tenant', 'admin')])
+
+    def execute(sql):
+        if sql.startswith('SHOW ACCOUNTS'):
+            return account
+        return ResultSet(['user_name'], [('alice',)])
+
+    from matrixone import Client, AsyncClient
+
+    client = AsyncClient() if asynchronous else Client()
+    client.execute = AsyncMock(side_effect=execute) if asynchronous else Mock(side_effect=execute)
+    manager = AsyncAccountManager(client) if asynchronous else AccountManager(client)
+    result = manager.create_user('alice', 'pw') if operation == 'create_user' else manager.list_users()
+    if asynchronous:
+        result = await result
+    user = result if operation == 'create_user' else result[0]
+    assert user.account == 'tenant'
