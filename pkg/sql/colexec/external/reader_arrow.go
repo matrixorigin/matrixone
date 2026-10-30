@@ -33,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external/arrowio"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -297,6 +298,22 @@ func (r *ArrowReader) Open(param *ExternalParam, proc *process.Process) (_ bool,
 	if err != nil {
 		r.Close()
 		return false, err
+	}
+	// LOAD attributed-DECIMAL targets render Arrow values to text into a
+	// scan-owned staging varchar; the shared admission boundary classifies the
+	// rendered text. Text materialization happens during conversion before
+	// batch publication; the converted intermediate batch keeps the existing
+	// cleanup lifecycle, and the marker joins the conversion fingerprint.
+	if param.Extern != nil && param.Extern.ExternType == int32(plan.ExternType_LOAD) {
+		for i := range targets {
+			attr := param.Attrs[targets[i].MOIndex]
+			colIdx := int(attr.ColIndex)
+			if colIdx >= 0 && colIdx < len(param.Cols) && param.Cols[colIdx] != nil &&
+				isAttributedDecimalStagingTarget(&param.Cols[colIdx].Typ) {
+				targets[i].Type = types.New(types.T_varchar, 0, 0)
+				targets[i].TextStage = true
+			}
+		}
 	}
 	mode := arrowbridge.MatchByName
 	if param.Extern.ArrowMatchByPosition {

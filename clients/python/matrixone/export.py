@@ -22,6 +22,7 @@ or stages using MatrixOne's SELECT ... INTO OUTFILE commands.
 import warnings
 from ._query_compilation import compile_expression
 from ._sql_literals import sql_string_token, substitute_parameters
+from ._utils import stage_file_uri
 
 from typing import Any, Optional, Union
 
@@ -91,6 +92,9 @@ def _validate_csv_params(sep: str, quotechar: Optional[str], lineterminator: str
     """
     if not sep:
         raise ValueError("sep cannot be empty")
+
+    if quotechar is not None and len(quotechar.encode('utf-8')) > 1:
+        raise ValueError('quotechar must contain at most one UTF-8 byte')
 
     if len(sep) > 1:
         warnings.warn(
@@ -392,7 +396,7 @@ class ExportManager:
             - sep and quotechar can be used together
         """
         # Build stage path
-        stage_path = f"stage://{stage_name}/{filename}"
+        stage_path = stage_file_uri(stage_name, filename)
 
         # Delegate to to_csv method
         return self.to_csv(
@@ -442,7 +446,7 @@ class ExportManager:
             - Use client.stage.create_s3() or client.stage.create_local() to create stages
         """
         # Build stage path
-        stage_path = f"stage://{stage_name}/{filename}"
+        stage_path = stage_file_uri(stage_name, filename)
 
         # Delegate to to_jsonl method
         return self.to_jsonl(path=stage_path, query=query, **kwargs)
@@ -587,7 +591,7 @@ class AsyncExportManager:
             await client.export.to_csv_stage('active_stage', 'active_users.csv', stmt)
         """
         # Build stage path
-        stage_path = f"stage://{stage_name}/{filename}"
+        stage_path = stage_file_uri(stage_name, filename)
 
         # Delegate to to_csv method
         return await self.to_csv(
@@ -633,7 +637,7 @@ class AsyncExportManager:
             await client.export.to_jsonl_stage('verified_stage', 'verified.jsonl', stmt)
         """
         # Build stage path
-        stage_path = f"stage://{stage_name}/{filename}"
+        stage_path = stage_file_uri(stage_name, filename)
 
         # Delegate to to_jsonl method
         return await self.to_jsonl(path=stage_path, query=query, **kwargs)

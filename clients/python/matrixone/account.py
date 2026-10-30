@@ -25,6 +25,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING, List, Optional
 
 from matrixone.exceptions import AccountError
+from ._utils import rows_from_result
 
 if TYPE_CHECKING:
     from matrixone.client import Client
@@ -109,17 +110,25 @@ _SHOW_ACCOUNTS_SUSPENDED_TIME = 4
 _SHOW_ACCOUNTS_COMMENTS = 9
 
 
-def _show_accounts_row_to_account(row: tuple) -> Account:
-    def column(index):
-        return row[index] if len(row) > index else None
+def _show_accounts_row_to_account(row: tuple, columns=None) -> Account:
+    positions = None
+    if columns is not None:
+        names = [name.casefold() for name in columns]
+        if len(names) != len(set(names)) or not {'account_name', 'admin_name'} <= set(names):
+            raise ValueError('SHOW ACCOUNTS metadata needs unique account_name and admin_name columns')
+        positions = dict(zip(names, range(len(names))))
+
+    def column(name, legacy_index):
+        index = legacy_index if positions is None else positions.get(name)
+        return row[index] if index is not None and len(row) > index else None
 
     return Account(
-        name=row[0],
-        admin_name=row[1],
-        created_time=column(2),
-        status=column(3),
-        comment=column(_SHOW_ACCOUNTS_COMMENTS),
-        suspended_time=column(_SHOW_ACCOUNTS_SUSPENDED_TIME),
+        name=column('account_name', 0),
+        admin_name=column('admin_name', 1),
+        created_time=column('created_time', 2),
+        status=column('status', 3),
+        comment=column('comments', _SHOW_ACCOUNTS_COMMENTS),
+        suspended_time=column('suspended_time', _SHOW_ACCOUNTS_SUSPENDED_TIME),
         suspended_reason=None,
     )
 
@@ -236,9 +245,15 @@ class BaseAccountManager:
         # (sys can see all accounts)
         return "sys"
 
-    def _row_to_account(self, row: tuple) -> Account:
+    def _accounts_from_result(self, result):
+        columns = getattr(result, 'columns', None)
+        if callable(columns):
+            columns = list(result.keys())
+        return [self._row_to_account(row, columns) for row in rows_from_result(result)]
+
+    def _row_to_account(self, row: tuple, columns=None) -> Account:
         """Convert database row to Account object"""
-        return _show_accounts_row_to_account(row)
+        return _show_accounts_row_to_account(row, columns)
 
     def _row_to_role(self, row: tuple) -> Role:
         """Convert database row to Role object"""
@@ -422,12 +437,9 @@ class AccountManager(BaseAccountManager):
             sql = self._build_get_account_sql()
             result = self._get_executor().execute(sql)
 
-            if not result or not result.rows:
-                raise AccountError(f"Account '{account_name}' not found") from None
-
-            for row in result.rows:
-                if row[0] == account_name:
-                    return self._row_to_account(row)
+            for account in self._accounts_from_result(result):
+                if account.name == account_name:
+                    return account
 
             raise AccountError(f"Account '{account_name}' not found") from None
 
@@ -440,10 +452,7 @@ class AccountManager(BaseAccountManager):
             sql = self._build_list_accounts_sql()
             result = self._get_executor().execute(sql)
 
-            if not result or not result.rows:
-                return []
-
-            return [self._row_to_account(row) for row in result.rows]
+            return self._accounts_from_result(result)
 
         except Exception as e:
             raise AccountError(f"Failed to list accounts: {e}") from e
@@ -477,7 +486,7 @@ class AccountManager(BaseAccountManager):
             # Get current account by executing SHOW ACCOUNTS
             show_sql = self._show_accounts_sql()
             result = self._get_executor().execute(show_sql)
-            accounts = result.rows if result and hasattr(result, 'rows') else []
+            accounts = rows_from_result(result)
             current_account = self._get_current_account_from_results(accounts)
 
             return User(
@@ -577,11 +586,12 @@ class AccountManager(BaseAccountManager):
             sql = "SELECT USER()"
             result = self._get_executor().execute(sql)
 
-            if not result or not result.rows:
+            rows = rows_from_result(result)
+            if not rows:
                 raise AccountError("Failed to get current user") from None
 
             # Parse current user from USER() function result
-            current_user_str = result.rows[0][0]  # e.g., 'root@localhost'
+            current_user_str = rows[0][0]  # e.g., 'root@localhost'
             if "@" in current_user_str:
                 username, host = current_user_str.split("@", 1)
             else:
@@ -615,15 +625,16 @@ class AccountManager(BaseAccountManager):
             sql = self._build_list_users_sql()
             result = self._get_executor().execute(sql)
 
-            if not result or not result.rows:
+            rows = rows_from_result(result)
+            if not rows:
                 return []
 
-            current_user_name = result.rows[0][0]
+            current_user_name = rows[0][0]
 
             # Get current account by executing SHOW ACCOUNTS
             show_sql = self._show_accounts_sql()
             show_result = self._get_executor().execute(show_sql)
-            accounts = show_result.rows if show_result and hasattr(show_result, 'rows') else []
+            accounts = rows_from_result(show_result)
             current_account = self._get_current_account_from_results(accounts)
 
             return [User(name=current_user_name, host="%", account=current_account, status="OPEN")]
@@ -670,10 +681,11 @@ class AccountManager(BaseAccountManager):
             sql = "SHOW ROLES"
             result = self._get_executor().execute(sql)
 
-            if not result or not result.rows:
+            rows = rows_from_result(result)
+            if not rows:
                 raise AccountError(f"Role '{role_name}' not found") from None
 
-            for row in result.rows:
+            for row in rows:
                 if row[0] == role_name:
                     return self._row_to_role(row)
 
@@ -688,10 +700,11 @@ class AccountManager(BaseAccountManager):
             sql = "SHOW ROLES"
             result = self._get_executor().execute(sql)
 
-            if not result or not result.rows:
+            rows = rows_from_result(result)
+            if not rows:
                 return []
 
-            return [self._row_to_role(row) for row in result.rows]
+            return [self._row_to_role(row) for row in rows]
 
         except Exception as e:
             raise AccountError(f"Failed to list roles: {e}") from e
@@ -789,11 +802,12 @@ class AccountManager(BaseAccountManager):
 
             result = self._get_executor().execute(sql)
 
-            if not result or not result.rows:
+            rows = rows_from_result(result)
+            if not rows:
                 return []
 
             grants = []
-            for row in result.rows:
+            for row in rows:
                 grant = self._parse_grant_statement(row[0])
                 grants.append(grant)
 
@@ -813,9 +827,9 @@ class AccountManager(BaseAccountManager):
         except Exception:
             return "sys"
 
-    def _row_to_account(self, row: tuple) -> Account:
+    def _row_to_account(self, row: tuple, columns=None) -> Account:
         """Convert database row to Account object"""
-        return _show_accounts_row_to_account(row)
+        return _show_accounts_row_to_account(row, columns)
 
     def _row_to_role(self, row: tuple) -> Role:
         """Convert database row to Role object"""
@@ -901,12 +915,9 @@ class AsyncAccountManager(BaseAccountManager):
             sql = self._build_get_account_sql()
             result = await self._get_executor().execute(sql)
 
-            if not result or not result.rows:
-                raise AccountError(f"Account '{account_name}' not found")
-
-            for row in result.rows:
-                if row[0] == account_name:
-                    return self._row_to_account(row)
+            for account in self._accounts_from_result(result):
+                if account.name == account_name:
+                    return account
 
             raise AccountError(f"Account '{account_name}' not found")
 
@@ -919,14 +930,7 @@ class AsyncAccountManager(BaseAccountManager):
             sql = self._build_list_accounts_sql()
             result = await self._get_executor().execute(sql)
 
-            if not result or not result.rows:
-                return []
-
-            accounts = []
-            for row in result.rows:
-                accounts.append(self._row_to_account(row))
-
-            return accounts
+            return self._accounts_from_result(result)
 
         except Exception as e:
             raise AccountError(f"Failed to list accounts: {e}")
@@ -940,7 +944,7 @@ class AsyncAccountManager(BaseAccountManager):
             # Get current account by executing SHOW ACCOUNTS
             show_sql = self._show_accounts_sql()
             result = await self._get_executor().execute(show_sql)
-            accounts = result.rows if result and hasattr(result, 'rows') else []
+            accounts = rows_from_result(result)
             current_account = self._get_current_account_from_results(accounts)
 
             return User(
@@ -969,15 +973,16 @@ class AsyncAccountManager(BaseAccountManager):
             sql = self._build_list_users_sql()
             result = await self._get_executor().execute(sql)
 
-            if not result or not result.rows:
+            rows = rows_from_result(result)
+            if not rows:
                 return []
 
-            current_user_name = result.rows[0][0]
+            current_user_name = rows[0][0]
 
             # Get current account by executing SHOW ACCOUNTS
             show_sql = self._show_accounts_sql()
             show_result = await self._get_executor().execute(show_sql)
-            accounts = show_result.rows if show_result and hasattr(show_result, 'rows') else []
+            accounts = rows_from_result(show_result)
             current_account = self._get_current_account_from_results(accounts)
 
             return [User(name=current_user_name, host="%", account=current_account, status="OPEN")]

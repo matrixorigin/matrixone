@@ -438,11 +438,7 @@ func (dmlCtx *DMLContext) resolveSingleTable(
 		return nil
 	}
 
-	if aliasNames, exist := aliasMap[tblName]; exist {
-		alias = tblName // work in delete statement
-		dbName = aliasNames[0]
-		tblName = aliasNames[1]
-	}
+	dbName, tblName, alias = ResolveDMLTargetName(dbName, tblName, alias, aliasMap)
 
 	if len(tblName) == 0 {
 		return moerr.NewUnsupportedDML(ctx.GetContext(), "empty table name")

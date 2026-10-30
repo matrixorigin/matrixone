@@ -201,10 +201,7 @@ func (builder *QueryBuilder) bindDelete(ctx CompilerContext, stmt *tree.Delete, 
 		return 0, moerr.NewUnsupportedDML(builder.GetContext(), "delete from multiple tables")
 	}
 
-	aliasMap := make(map[string][2]string)
-	for _, tbl := range stmt.TableRefs {
-		getAliasToName(builder.compCtx, tbl, "", aliasMap)
-	}
+	aliasMap := CollectDeleteSourceAliases(stmt.TableRefs)
 
 	dmlCtx := NewDMLContext()
 	err := dmlCtx.ResolveTables(builder.compCtx, stmt.Tables, stmt.With, aliasMap, false)
@@ -395,6 +392,12 @@ func (builder *QueryBuilder) bindDelete(ctx CompilerContext, stmt *tree.Delete, 
 				ScanSnapshot: bindCtx.snapshot,
 			}
 			idxTableNodeID := builder.appendNode(idxScanNodes[i][j], bindCtx)
+			if catalog.IsRegularIndexAlgo(idxDef.IndexAlgo) && !isSpatialIndexDef(idxDef) {
+				if builder.deleteIndexScanTables == nil {
+					builder.deleteIndexScanTables = make(map[int32]deleteIndexScan)
+				}
+				builder.deleteIndexScanTables[idxTag] = deleteIndexScan{tableID: idxTableDef.TblId}
+			}
 
 			lookupColName := indexLookupColumnName(idxDef)
 			rightPkPos := idxTableDef.Name2ColIndex[lookupColName]
