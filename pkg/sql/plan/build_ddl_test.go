@@ -3401,7 +3401,7 @@ func TestBuildNullableLOBCTASDefaultFromOrigin(t *testing.T) {
 	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 	for _, oid := range []types.T{types.T_text, types.T_blob} {
 		defaultDef, err := buildCTASDefaultFromOrigin(
-			ctx, plan.Type{Id: int32(oid)}, true, "('seed')")
+			ctx, plan.Type{Id: int32(oid)}, true, "('seed')", "col")
 		require.NoError(t, err)
 		require.True(t, defaultDef.GetNullAbility())
 		require.Equal(t, "('seed')", defaultDef.GetOriginString())
@@ -7976,6 +7976,194 @@ func TestSessionDatabaseNullability(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestBuildCTASUnsignedDecimalAttributeProvenance pins the CTAS attribute
+// channel: a direct single-source projection carries the source column's
+// numeric attribute mask into the CTAS target; a computed expression is a
+// semantic boundary and yields an unattributed target.
+func TestBuildCTASUnsignedDecimalAttributeProvenance(t *testing.T) {
+	proc := newPlanTestProcess(t)
+	ctx := NewMockCompilerContext(false, proc)
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	origProtocol, hadProtocol := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	origFloor, hadFloor := rt.GetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor)
+	t.Cleanup(func() {
+		if hadProtocol {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, origProtocol)
+		}
+		if hadFloor {
+			rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, origFloor)
+		}
+	})
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, defines.MORPCLatestVersion)
+
+	ctx.tables["nation"].Cols = append(ctx.tables["nation"].Cols,
+		&plan.ColDef{
+			Name: "ud_amount",
+			Typ: plan.Type{
+				Id: int32(types.T_decimal128), Width: 18, Scale: 2,
+				NumericAttributes: types.NumericAttributeUnsigned, NotNullable: true,
+			},
+		},
+		&plan.ColDef{
+			Name: "uz_count",
+			Typ: plan.Type{
+				Id: int32(types.T_decimal64), Width: 10, Scale: 0,
+				NumericAttributes: types.NumericAttributeZerofillMask,
+			},
+		},
+	)
+
+	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL,
+		"create table copied as select ud_amount, uz_count, ud_amount + 0 as computed_amount, n_name from nation", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	built, err := BuildPlan(ctx, stmt, false)
+	require.NoError(t, err)
+	cols := built.GetDdl().GetCreateTable().GetTableDef().GetCols()
+	require.GreaterOrEqual(t, len(cols), 4)
+	require.Equal(t, "ud_amount", cols[0].Name)
+	require.Equal(t, uint32(types.NumericAttributeUnsigned), cols[0].Typ.GetNumericAttributes())
+	require.Equal(t, int32(18), cols[0].Typ.GetWidth())
+	require.Equal(t, int32(2), cols[0].Typ.GetScale())
+	require.Equal(t, "uz_count", cols[1].Name)
+	require.Equal(t, uint32(types.NumericAttributeZerofillMask), cols[1].Typ.GetNumericAttributes())
+	require.Equal(t, "computed_amount", cols[2].Name)
+	require.Equal(t, uint32(0), cols[2].Typ.GetNumericAttributes())
+	require.Equal(t, uint32(0), cols[3].Typ.GetNumericAttributes())
+}
+
+// TestBuildCTASUnsignedDecimalSetOperationProvenance pins the approved
+// provenance rule at the persistence seam: a set-operation projection is not
+// single-source, so CTAS over UNION/UNION ALL must persist plain signed
+// decimals even when every branch carries the same mask (the set-op output
+// type only retains a packet-only UNSIGNED bit; persisting it would make the
+// new table reject negative assignments, contradicting MySQL's metadata
+// contract). A direct single-source projection keeps the mask (control), and
+// a negative literal insertion into the union-shaped destination binds no
+// admission, proving the stored table behaves signed.
+func TestBuildCTASUnsignedDecimalSetOperationProvenance(t *testing.T) {
+	proc := newPlanTestProcess(t)
+	ctx := NewMockCompilerContext(false, proc)
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	origProtocol, hadProtocol := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	origFloor, hadFloor := rt.GetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor)
+	t.Cleanup(func() {
+		if hadProtocol {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, origProtocol)
+		}
+		if hadFloor {
+			rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, origFloor)
+		}
+	})
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, defines.MORPCLatestVersion)
+
+	ctx.tables["nation"].Cols = append(ctx.tables["nation"].Cols,
+		&plan.ColDef{
+			Name: "ud_amount",
+			Typ: plan.Type{
+				Id: int32(types.T_decimal128), Width: 18, Scale: 2,
+				NumericAttributes: types.NumericAttributeUnsigned, NotNullable: true,
+			},
+		},
+	)
+
+	buildCTASCols := func(t *testing.T, sql string) []*plan.ColDef {
+		t.Helper()
+		stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
+		require.NoError(t, err)
+		defer stmt.Free()
+		built, err := BuildPlan(ctx, stmt, false)
+		require.NoError(t, err, sql)
+		return built.GetDdl().GetCreateTable().GetTableDef().GetCols()
+	}
+
+	admissionNames := []string{
+		unsignedDecimalAdmissionName,
+		unsignedDecimalAdmissionStrictName,
+		unsignedDecimalAdmissionIgnoreName,
+	}
+
+	unionShapes := map[string]*plan.Type{}
+	for _, tc := range []struct{ name, sql string }{
+		{"union all", "create table dst_uall as select ud_amount from nation union all select ud_amount from nation"},
+		{"union distinct", "create table dst_u as select ud_amount from nation union select ud_amount from nation"},
+		{"union all aliased", "create table dst_ualias as select ud_amount as amount from nation union all select ud_amount from nation"},
+	} {
+		t.Run(tc.name+" persists plain signed decimal", func(t *testing.T) {
+			cols := buildCTASCols(t, tc.sql)
+			require.Equal(t, uint32(0), cols[0].Typ.GetNumericAttributes(),
+				"a set-operation CTAS column is a semantic boundary and must not persist the mask")
+			require.Equal(t, int32(18), cols[0].Typ.GetWidth())
+			require.Equal(t, int32(2), cols[0].Typ.GetScale())
+			typCopy := cols[0].Typ
+			unionShapes[tc.name] = &typCopy
+		})
+	}
+
+	t.Run("direct single-source control retains the mask", func(t *testing.T) {
+		cols := buildCTASCols(t, "create table dst_direct as select ud_amount from nation")
+		require.Equal(t, uint32(types.NumericAttributeUnsigned), cols[0].Typ.GetNumericAttributes())
+	})
+
+	t.Run("subsequent negative insertion binds no admission on the union result", func(t *testing.T) {
+		// Mirror the exact persisted shape the UNION ALL build produced and
+		// insert a negative literal: a signed destination admits it (the plain
+		// assignment cast), while the pre-fix defect composed the strict-ish
+		// admission boundary that rejects negative values at execution.
+		shape := unionShapes["union all"]
+		require.NotNil(t, shape)
+		// INSERT binding needs the DML resolve path: with isDml unset,
+		// Resolve strips the Row_ID column and the dedup/multi-update
+		// machinery in bindInsert panics on the shortened TableDef.
+		ctx.isDml = true
+		ctx.tables["dst_uall"] = unsignedDecimalDMLTable("dst_uall",
+			&plan.ColDef{Name: "a", OriginName: "a",
+				Typ: plan.Type{
+					Id: shape.Id, Width: shape.Width, Scale: shape.Scale,
+					NumericAttributes: shape.NumericAttributes,
+				},
+				Default: &plan.Default{NullAbility: true}},
+		)
+		ctx.objects["dst_uall"] = &plan.ObjectRef{SchemaName: "tpch", ObjName: "dst_uall"}
+
+		stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL,
+			"insert into dst_uall(a) values (-1.5)", 1)
+		require.NoError(t, err)
+		defer stmt.Free()
+		built, err := BuildPlan(ctx, stmt, false)
+		require.NoError(t, err)
+		require.Empty(t,
+			collectAssignmentFunctionExprs(built, admissionNames...),
+			"a set-operation CTAS result is plain signed decimal; negative insertion composes no admission: %s",
+			built.String())
+	})
+
+	t.Run("negative insertion control: attributed shape composes admission", func(t *testing.T) {
+		ctx.isDml = true
+		ctx.tables["dst_att"] = unsignedDecimalDMLTable("dst_att",
+			&plan.ColDef{Name: "a", OriginName: "a",
+				Typ: plan.Type{
+					Id: int32(types.T_decimal128), Width: 18, Scale: 2,
+					NumericAttributes: types.NumericAttributeUnsigned,
+				},
+				Default: &plan.Default{NullAbility: true}},
+		)
+		ctx.objects["dst_att"] = &plan.ObjectRef{SchemaName: "tpch", ObjName: "dst_att"}
+		stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL,
+			"insert into dst_att(a) values (-1.5)", 1)
+		require.NoError(t, err)
+		defer stmt.Free()
+		built, err := BuildPlan(ctx, stmt, false)
+		require.NoError(t, err)
+		require.NotEmpty(t,
+			collectAssignmentFunctionExprs(built, unsignedDecimalAdmissionName),
+			"the comparison control proves the negative-insertion assertion above is discriminating")
+	})
 }
 
 // Review 5690727734: legacy bindings only protect eligible keys, so ordinary

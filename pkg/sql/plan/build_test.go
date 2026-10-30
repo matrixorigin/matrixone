@@ -7366,6 +7366,15 @@ func TestUpdateSelfReferCascadeUsesModernPlan(t *testing.T) {
 		query := logicPlan.GetQuery()
 		require.NotNil(t, query)
 		require.True(t, query.GetHasForeignKeyAction())
+		var selfChecks []string
+		for _, sql := range query.GetDetectSqls() {
+			if strings.HasPrefix(sql, "select count(*)") {
+				selfChecks = append(selfChecks, sql)
+			}
+		}
+		require.Len(t, selfChecks, 1)
+		require.Contains(t, selfChecks[0], "self_ref_cascade")
+		require.Contains(t, selfChecks[0], "parent_id")
 		require.Equal(t, 1, countUpdateFkPlanNodes(query, plan.Node_MULTI_UPDATE),
 			"the root UPDATE and self-referencing CASCADE must share one physical writer")
 		foundAffectedRowsSelector := false
@@ -10801,7 +10810,7 @@ func TestUpdateIgnoreRepeatedAliasPlanningObservesCancellation(t *testing.T) {
 		defer stmt.Free()
 		mock := NewMockOptimizer(true, newPlanTestProcess(t))
 		builder := NewQueryBuilder(plan.Query_UPDATE, mock.CurrentContext(), false, true)
-		rootID, bindErr := builder.bindUpdate(stmt.(*tree.Update), NewBindContext(builder, nil))
+		rootID, bindErr := builder.bindUpdate(stmt.(*tree.Update), NewBindContext(builder, nil), NewDMLContext())
 		require.NoError(t, bindErr)
 
 		cancelCtx, cancel := context.WithCancel(t.Context())
@@ -10822,7 +10831,7 @@ func TestUpdateIgnoreRepeatedAliasPlanningObservesCancellation(t *testing.T) {
 		defer stmt.Free()
 		mock := NewMockOptimizer(true, newPlanTestProcess(t))
 		builder := NewQueryBuilder(plan.Query_UPDATE, mock.CurrentContext(), false, true)
-		rootID, bindErr := builder.bindUpdate(stmt.(*tree.Update), NewBindContext(builder, nil))
+		rootID, bindErr := builder.bindUpdate(stmt.(*tree.Update), NewBindContext(builder, nil), NewDMLContext())
 		require.NoError(t, bindErr)
 		builder.qry.Steps = append(builder.qry.Steps, rootID)
 

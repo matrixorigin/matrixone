@@ -30,6 +30,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.engine import URL, Engine
 from sqlalchemy.orm import Session as SQLAlchemySession
 
+from ._telemetry import observe, pool_wait
 from ._utils import discard_unrestored_connection, is_non_transactional_statement, result_returns_rows
 from .account import AccountManager
 from .base_client import BaseMatrixOneClient, BaseMatrixOneExecutor
@@ -126,6 +127,9 @@ def _classify_db_error(exc: Union[Exception, str], sql_or_stmt: Any = None) -> Q
     error = _query_error_message(exc, sql_or_stmt)
     error.orig = exc if isinstance(exc, Exception) else None
     error.errno = _extract_errno(exc) if not isinstance(exc, str) else None
+    driver = getattr(exc, 'orig', exc)
+    error.sqlstate = getattr(driver, 'sqlstate', None)
+    error.phase = 'execute'
     return error
 
 
@@ -341,7 +345,7 @@ class Client(BaseMatrixOneClient):
         auto_commit: bool = True,
         charset: str = "utf8mb4",
         logger: Optional[MatrixOneLogger] = None,
-        sql_log_mode: str = "auto",
+        sql_log_mode: str = "off",
         slow_query_threshold: float = 1.0,
         max_sql_display_length: int = 500,
     ):
@@ -371,8 +375,8 @@ class Client(BaseMatrixOneClient):
             charset: Character set for connection
             logger: Custom logger instance. If None, creates a default logger
             sql_log_mode: SQL logging mode ('off', 'auto', 'simple', 'full')
-                - 'off': No SQL logging
-                - 'auto': Smart logging - short SQL shown fully, long SQL summarized (default)
+                - 'off': No SQL logging (default)
+                - 'auto': Smart logging - short SQL shown fully, long SQL summarized (opt-in)
                 - 'simple': Show operation summary only
                 - 'full': Show complete SQL regardless of length
             slow_query_threshold: Threshold in seconds for slow query warnings (default: 1.0)
@@ -466,7 +470,7 @@ class Client(BaseMatrixOneClient):
         auto_commit: bool = True,
         on_connect: Optional[Union[ConnectionHook, List[Union[ConnectionAction, str]], Callable]] = None,
         capability_overrides: Optional[dict] = None,
-        local_infile: bool = False,
+        local_infile: Optional[bool] = None,
     ) -> None:
         """
         Connect to MatrixOne database using SQLAlchemy engine
@@ -512,8 +516,8 @@ class Client(BaseMatrixOneClient):
             client.connect(host, port, user, password, database,
                           on_connect=my_callback)
         """
-        if not isinstance(local_infile, bool):
-            raise TypeError('local_infile must be a boolean')
+        if local_infile is not None and not isinstance(local_infile, bool):
+            raise TypeError('local_infile must be None or a boolean')
         from .connection_hooks import assert_not_in_hook
 
         assert_not_in_hook(self)
@@ -766,12 +770,13 @@ class Client(BaseMatrixOneClient):
         # Build connection URL using SQLAlchemy's URL.create() for proper escaping
         # of special characters in user/password (e.g., @, #, %, etc.)
         from ._connection_options import tls_options
+        from ._local_infile import connection_options, configure_engine
 
         connect_args = {
             'connect_timeout': self._connection_params['connect_timeout'],
             'read_timeout': self.query_timeout,
             'write_timeout': self.query_timeout,
-            'local_infile': self._connection_params.get('local_infile', False),
+            **connection_options(self._connection_params.get('local_infile')),
             'charset': self._connection_params['charset'],
             **tls_options(self._connection_params),
         }
@@ -797,12 +802,11 @@ class Client(BaseMatrixOneClient):
         )
 
         # Replace the dialect with MatrixOne dialect for proper vector type support
-        if self._connection_params.get('ssl_mode') == 'required':
-            from sqlalchemy import event
-
-            from ._connection_options import connect_required_tls
-
-            event.listen(engine, 'do_connect', connect_required_tls)
+        configure_engine(
+            engine,
+            self._connection_params.get('local_infile'),
+            required_tls=self._connection_params.get('ssl_mode') == 'required',
+        )
 
         from .sqlalchemy_ext.dialect import adapt_engine_dialect
 
@@ -1065,7 +1069,20 @@ class Client(BaseMatrixOneClient):
 
         return AnalyticsManager(self)
 
-    def execute(self, sql_or_stmt, params: Optional[Tuple] = None, log_mode: str = None) -> "ResultSet":
+    def execute_driver(self, sql, params=None, log_mode=None):
+        """Execute unchanged SQL with the owning DBAPI driver's parameter grammar.
+
+        PyMySQL uses %s or %(name)s. Existing execute() keeps SDK ?/:name
+        semantics. SQLAlchemy statements remain available for typed binding.
+        """
+        if not isinstance(sql, str):
+            raise TypeError('execute_driver requires SQL text')
+        return self.execute(sql, params, log_mode, _driver_bound=True)
+
+    @observe('query')
+    def execute(
+        self, sql_or_stmt, params: Optional[Tuple] = None, log_mode: str = None, *, _driver_bound=False
+    ) -> "ResultSet":
         """
         Execute SQL query or SQLAlchemy statement without transaction isolation.
 
@@ -1346,9 +1363,10 @@ class Client(BaseMatrixOneClient):
                     # Convert SQLAlchemy result to ResultSet
                     if result_returns_rows(result):
                         # SELECT query
-                        columns = list(result.keys())
-                        rows = result.fetchall()
-                        result_set = ResultSet(columns, rows)
+                        from ._query_compilation import buffer_result
+
+                        result_set = buffer_result(ResultSet, result)
+                        rows = result_set.rows
                         execution_time = time.time() - start_time
                         self.logger.log_query(
                             f"<SQLAlchemy {type(sql_or_stmt).__name__}>",
@@ -1372,13 +1390,18 @@ class Client(BaseMatrixOneClient):
                         return result_set
 
             # String SQL - original implementation
-            mode_sensitive = params is not None and '\\' in sql_or_stmt
-            final_sql = None if mode_sensitive else self._substitute_parameters(sql_or_stmt, params)
+            mode_sensitive = not _driver_bound and params is not None and '\\' in sql_or_stmt
+            final_sql = (
+                sql_or_stmt
+                if _driver_bound
+                else None if mode_sensitive else self._substitute_parameters(sql_or_stmt, params)
+            )
 
             # MERGE/PICK require autocommit outside explicit sessions. Change
             # only this checkout, restoring its baseline before pool reuse.
             # Ordinary SQL retains the engine.begin() transaction path.
             non_transactional = is_non_transactional_statement(sql_or_stmt)
+            pool_wait()
             with self._engine.connect() if non_transactional else self._engine.begin() as conn:
                 restore_autocommit = False
                 prev_autocommit = None
@@ -1403,8 +1426,13 @@ class Client(BaseMatrixOneClient):
                     # This prevents JSON strings like {"a":1} from being parsed as :1 bind params
                     if hasattr(conn, 'exec_driver_sql'):
                         # Escape % to %% for pymysql's format string handling in exec_driver_sql
-                        escaped_sql = final_sql.replace('%', '%%')
-                        result = conn.exec_driver_sql(escaped_sql)
+                        escaped_sql = final_sql if _driver_bound else final_sql.replace('%', '%%')
+                        if _driver_bound:
+                            result = conn.exec_driver_sql(
+                                escaped_sql, params, execution_options={'no_parameters': params is None}
+                            )
+                        else:
+                            result = conn.exec_driver_sql(escaped_sql)
                     else:
                         # Fallback for testing or older SQLAlchemy versions
                         from sqlalchemy import text
@@ -1436,9 +1464,10 @@ class Client(BaseMatrixOneClient):
 
                 if result.returns_rows:
                     # SELECT query
-                    columns = list(result.keys())
-                    rows = result.fetchall()
-                    result_set = ResultSet(columns, rows)
+                    from ._query_compilation import buffer_result
+
+                    result_set = buffer_result(ResultSet, result)
+                    rows = result_set.rows
                     self.logger.log_query(sql_or_stmt, execution_time, len(rows), success=True, log_mode=log_mode)
                     return result_set
                 else:
@@ -1528,12 +1557,7 @@ class Client(BaseMatrixOneClient):
                 ... })
         """
         # Handle model class input
-        if hasattr(table_name_or_model, '__tablename__'):
-            # It's a model class
-            table_name = table_name_or_model.__tablename__
-        else:
-            # It's a table name string
-            table_name = table_name_or_model
+        table_name = table_name_or_model
 
         executor = ClientExecutor(self)
         return executor.insert(table_name, data)
@@ -1589,12 +1613,7 @@ class Client(BaseMatrixOneClient):
                 >>> result = client.batch_insert('products', products)
         """
         # Handle model class input
-        if hasattr(table_name_or_model, '__tablename__'):
-            # It's a model class
-            table_name = table_name_or_model.__tablename__
-        else:
-            # It's a table name string
-            table_name = table_name_or_model
+        table_name = table_name_or_model
 
         executor = ClientExecutor(self)
         return executor.batch_insert(table_name, data_list)
@@ -1649,76 +1668,10 @@ class Client(BaseMatrixOneClient):
 
                 MatrixOneQuery instance configured for the specified columns
         """
+        from .orm import create_query
         from .orm import MatrixOneQuery
 
-        if len(columns) == 1:
-            # Traditional single model class usage
-            column = columns[0]
-            if isinstance(column, str):
-                # String table name
-                return MatrixOneQuery(column, self, snapshot=snapshot)
-            elif hasattr(column, '__tablename__'):
-                # This is a model class
-                return MatrixOneQuery(column, self, snapshot=snapshot)
-            elif hasattr(column, 'name') and hasattr(column, 'as_sql'):
-                # This is a CTE object
-                from .orm import CTE
-
-                if isinstance(column, CTE):
-                    query = MatrixOneQuery(None, self, snapshot=snapshot)
-                    query._table_name = column.name
-                    query._select_columns = ["*"]  # Default to select all from CTE
-                    query._ctes = [column]  # Add the CTE to the query
-                    return query
-            else:
-                # This is a single column/expression - need to handle specially
-                # For now, we'll create a query that can handle column selections
-                query = MatrixOneQuery(None, self, snapshot=snapshot)
-                query._select_columns = [column]
-                # Try to infer table name from column
-                if hasattr(column, 'table') and hasattr(column.table, 'name'):
-                    query._table_name = column.table.name
-                return query
-        else:
-            # Multiple columns/expressions
-            model_class = None
-            select_columns = []
-
-            for column in columns:
-                if hasattr(column, '__tablename__'):
-                    # This is a model class - use its table
-                    model_class = column
-                else:
-                    # This is a column or expression
-                    select_columns.append(column)
-
-            if model_class:
-                query = MatrixOneQuery(model_class, self, snapshot=snapshot)
-                if select_columns:
-                    # Add additional columns to the model's default columns
-                    query._select_columns = select_columns
-                return query
-            else:
-                # No model class provided, need to infer table from columns
-                query = MatrixOneQuery(None, self, snapshot=snapshot)
-                query._select_columns = select_columns
-
-                # Try to infer table name from first column that has table info
-                for col in select_columns:
-                    if hasattr(col, 'table') and hasattr(col.table, 'name'):
-                        query._table_name = col.table.name
-                        break
-                    elif isinstance(col, str) and '.' in col:
-                        # String column like "table.column" - extract table name
-                        parts = col.split('.')
-                        if len(parts) >= 2:
-                            # For "db.table.column" format, use "db.table"
-                            # For "table.column" format, use "table"
-                            table_name = '.'.join(parts[:-1])
-                            query._table_name = table_name
-                            break
-
-                return query
+        return create_query(MatrixOneQuery, self, columns, snapshot=snapshot)
 
     @contextmanager
     def snapshot(self, snapshot_name: str) -> Generator[SnapshotClient, None, None]:
@@ -1778,6 +1731,7 @@ class Client(BaseMatrixOneClient):
             session_wrapper.begin()
             # Logical SQLAlchemy begin alone does not start MatrixOne's DDL
             # transaction. Admit work only after BEGIN on this Session's owner.
+            pool_wait()
             session_wrapper.connection().exec_driver_sql('BEGIN')
             yield session_wrapper
             session_wrapper.commit()
@@ -2250,7 +2204,7 @@ class Client(BaseMatrixOneClient):
                     error_msg = redact_error(e, password)
                     if entered:
                         if isinstance(e, QueryError):
-                            raise QueryError(error_msg) from None
+                            raise
                         raise QueryError(f"Failed to create table '{table_name}': {error_msg}") from None
                     if 'Unknown database' in error_msg or '1049' in error_msg:
                         db_name = self._connection_params.get('database', 'unknown')
@@ -2314,156 +2268,28 @@ class Client(BaseMatrixOneClient):
                         # Generic error with cleaner message
                         raise QueryError(f"Failed to create table '{table_name}': {error_msg}") from None
 
-                # Create indexes separately with proper types
+                # SQLAlchemy's DDL compiler owns target schemas and index kinds.
                 for index in table.indexes:
-                    if isinstance(index, FulltextIndex):
-                        # Create fulltext index using custom DDL
-                        columns_str = ", ".join(col.name for col in index.columns)
-                        fulltext_sql = f"CREATE FULLTEXT INDEX {index.name} ON {table_name} ({columns_str})"
-                        if hasattr(index, 'parser') and index.parser:
-                            fulltext_sql += f" WITH PARSER {index.parser}"
-                        try:
-                            _exec_sql(fulltext_sql)
-                            self.logger.info(f"✓ Created fulltext index '{index.name}'")
-                        except Exception as e:
-                            self.logger.warning(
-                                f"Failed to create fulltext index {index.name}: {redact_error(e, password)}"
-                            )
-                    elif isinstance(index, VectorIndex):
-                        # Create vector index using custom method
-                        try:
-                            vector_sql = str(CreateIndex(index).compile(dialect=conn.dialect))
-                            _exec_sql(vector_sql)
-                            self.logger.info(f"✓ Created vector index '{index.name}'")
-                        except Exception as e:
-                            self.logger.warning(
-                                f"Failed to create vector index {index.name}: {redact_error(e, password)}"
-                            )
-                    else:
-                        # Create regular index using manual SQL to avoid dialect issues
-                        try:
-                            columns_str = ', '.join([str(col.name) for col in index.columns])
-                            unique_str = 'UNIQUE ' if index.unique else ''
-                            index_sql = f"CREATE {unique_str}INDEX {index.name} ON {table_name} ({columns_str})"
-                            _exec_sql(index_sql)
-                            self.logger.info(f"✓ Created index '{index.name}'")
-                        except Exception as e:
-                            self.logger.warning(f"Failed to create index {index.name}: {redact_error(e, password)}")
+                    try:
+                        _exec_sql(str(CreateIndex(index).compile(dialect=conn.dialect)))
+                    except Exception as original:
+                        error = QueryError(
+                            'CREATE TABLE was acknowledged but index creation failed; '
+                            'the enclosing transaction is being rolled back: ' + redact_error(original, password)
+                        )
+                        error.orig = original
+                        error.errno = _extract_errno(original)
+                        error.phase = 'ddl_index'
+                        error.statement_acknowledged = True
+                        raise error from None
 
             return self
+        from .sqlalchemy_ext.table_builder import simplified_table
 
-        # It's a table name string
-        table_name = table_name_or_model
         if columns is None:
-            raise ValueError("columns parameter is required when table_name_or_model is a string")
-
-        # Parse primary key from kwargs
-        primary_key = kwargs.get("primary_key", None)
-
-        # Create table using VectorTableBuilder
-        builder = VectorTableBuilder(table_name)
-
-        # Add columns based on simplified format
-        for column_name, column_def in columns.items():
-            is_primary = primary_key == column_name
-
-            if column_def.lower().startswith("vecf32(") or column_def.lower().startswith("vecf64("):
-                # Parse vecf32(64) or vecf64(64) format (case insensitive)
-                import re
-
-                match = re.match(r"vecf(\d+)\((\d+)\)", column_def.lower())
-                if match:
-                    precision = f"f{match.group(1)}"
-                    dimension = int(match.group(2))
-                    builder.add_vector_column(column_name, dimension, precision)
-                else:
-                    raise ValueError(f"Invalid vecf format: {column_def}")
-
-            elif column_def.startswith("varchar("):
-                # Parse varchar type: varchar(100)
-                import re
-
-                match = re.match(r"varchar\((\d+)\)", column_def)
-                if match:
-                    length = int(match.group(1))
-                    builder.add_string_column(column_name, length)
-                else:
-                    raise ValueError(f"Invalid varchar format: {column_def}")
-
-            elif column_def.startswith("char("):
-                # Parse char type: char(10)
-                import re
-
-                match = re.match(r"char\((\d+)\)", column_def)
-                if match:
-                    length = int(match.group(1))
-                    builder.add_string_column(column_name, length)
-                else:
-                    raise ValueError(f"Invalid char format: {column_def}")
-
-            elif column_def.startswith("decimal("):
-                # Parse decimal type: decimal(10,2)
-                import re
-
-                match = re.match(r"decimal\((\d+),(\d+)\)", column_def)
-                if match:
-                    precision = int(match.group(1))
-                    scale = int(match.group(2))
-                    builder.add_numeric_column(column_name, "decimal", precision, scale)
-                else:
-                    raise ValueError(f"Invalid decimal format: {column_def}")
-
-            elif column_def.startswith("float("):
-                # Parse float type: float(10)
-                import re
-
-                match = re.match(r"float\((\d+)\)", column_def)
-                if match:
-                    precision = int(match.group(1))
-                    builder.add_numeric_column(column_name, "float", precision)
-                else:
-                    raise ValueError(f"Invalid float format: {column_def}")
-
-            elif column_def in ("int", "integer"):
-                builder.add_int_column(column_name, primary_key=is_primary)
-            elif column_def in ("bigint", "bigint unsigned"):
-                builder.add_bigint_column(column_name, primary_key=is_primary)
-            elif column_def in ("smallint", "tinyint"):
-                if column_def == "smallint":
-                    builder.add_smallint_column(column_name, primary_key=is_primary)
-                else:
-                    builder.add_tinyint_column(column_name, primary_key=is_primary)
-            elif column_def in ("text", "longtext", "mediumtext", "tinytext"):
-                builder.add_text_column(column_name)
-            elif column_def in ("float", "double"):
-                builder.add_numeric_column(column_name, column_def)
-            elif column_def in ("date", "datetime", "timestamp", "time"):
-                builder.add_datetime_column(column_name, column_def)
-            elif column_def in ("boolean", "bool"):
-                builder.add_boolean_column(column_name)
-            elif column_def in ("json", "jsonb"):
-                builder.add_json_column(column_name)
-            elif column_def in (
-                "blob",
-                "longblob",
-                "mediumblob",
-                "tinyblob",
-                "binary",
-                "varbinary",
-            ):
-                builder.add_binary_column(column_name, column_def)
-            else:
-                raise ValueError(
-                    f"Unsupported column type '{column_def}' for column '{column_name}'. "
-                    f"Supported types: int, bigint, smallint, tinyint, varchar(n), char(n), "
-                    f"text, float, double, decimal(p,s), date, datetime, timestamp, time, "
-                    f"boolean, json, blob, vecf32(n), vecf64(n)"
-                )
-
-        # Create table
-        table = builder.build()
+            raise ValueError('columns is required for a table name')
+        table = simplified_table(table_name_or_model, columns, **kwargs)
         table.create(self.get_sqlalchemy_engine())
-
         return self
 
     def drop_table(self, table_name_or_model) -> "Client":
@@ -2486,13 +2312,9 @@ class Client(BaseMatrixOneClient):
                 # Drop table by model class
                 client.drop_table(UserModel)
         """
-        # Handle model class input
-        if hasattr(table_name_or_model, '__tablename__'):
-            # It's a model class
-            table_name = table_name_or_model.__tablename__
-        else:
-            # It's a table name string
-            table_name = table_name_or_model
+        from ._utils import get_table_name
+
+        table_name = get_table_name(table_name_or_model, quoted=True)
 
         with self.get_sqlalchemy_engine().begin() as conn:
             sql = f"DROP TABLE IF EXISTS {table_name}"
@@ -2540,114 +2362,7 @@ class Client(BaseMatrixOneClient):
             ], primary_key='id')
         """
 
-        from .sqlalchemy_ext import VectorTableBuilder
-
-        # Parse primary key from kwargs
-        primary_key = kwargs.get("primary_key", None)
-
-        # Create table using VectorTableBuilder
-        builder = VectorTableBuilder(table_name)
-
-        # Add columns based on simplified format (same logic as create_table)
-        for column_name, column_def in columns.items():
-            is_primary = primary_key == column_name
-
-            if column_def.startswith("vector("):
-                # Parse vector type: vector(128,f32) or vector(128)
-                import re
-
-                match = re.match(r"vector\((\d+)(?:,(\w+))?\)", column_def)
-                if match:
-                    dimension = int(match.group(1))
-                    precision = match.group(2) or "f32"
-                    builder.add_vector_column(column_name, dimension, precision)
-                else:
-                    raise ValueError(f"Invalid vector format: {column_def}")
-
-            elif column_def.startswith("varchar("):
-                # Parse varchar type: varchar(100)
-                import re
-
-                match = re.match(r"varchar\((\d+)\)", column_def)
-                if match:
-                    length = int(match.group(1))
-                    builder.add_string_column(column_name, length)
-                else:
-                    raise ValueError(f"Invalid varchar format: {column_def}")
-
-            elif column_def.startswith("char("):
-                # Parse char type: char(10)
-                import re
-
-                match = re.match(r"char\((\d+)\)", column_def)
-                if match:
-                    length = int(match.group(1))
-                    builder.add_string_column(column_name, length)
-                else:
-                    raise ValueError(f"Invalid char format: {column_def}")
-
-            elif column_def.startswith("decimal("):
-                # Parse decimal type: decimal(10,2)
-                import re
-
-                match = re.match(r"decimal\((\d+),(\d+)\)", column_def)
-                if match:
-                    precision = int(match.group(1))
-                    scale = int(match.group(2))
-                    builder.add_numeric_column(column_name, "decimal", precision, scale)
-                else:
-                    raise ValueError(f"Invalid decimal format: {column_def}")
-
-            elif column_def.startswith("float("):
-                # Parse float type: float(10)
-                import re
-
-                match = re.match(r"float\((\d+)\)", column_def)
-                if match:
-                    precision = int(match.group(1))
-                    builder.add_numeric_column(column_name, "float", precision)
-                else:
-                    raise ValueError(f"Invalid float format: {column_def}")
-
-            elif column_def in ("int", "integer"):
-                builder.add_int_column(column_name, primary_key=is_primary)
-            elif column_def in ("bigint", "bigint unsigned"):
-                builder.add_bigint_column(column_name, primary_key=is_primary)
-            elif column_def in ("smallint", "tinyint"):
-                if column_def == "smallint":
-                    builder.add_smallint_column(column_name, primary_key=is_primary)
-                else:
-                    builder.add_tinyint_column(column_name, primary_key=is_primary)
-            elif column_def in ("text", "longtext", "mediumtext", "tinytext"):
-                builder.add_text_column(column_name)
-            elif column_def in ("float", "double"):
-                builder.add_numeric_column(column_name, column_def)
-            elif column_def in ("date", "datetime", "timestamp", "time"):
-                builder.add_datetime_column(column_name, column_def)
-            elif column_def in ("boolean", "bool"):
-                builder.add_boolean_column(column_name)
-            elif column_def in ("json", "jsonb"):
-                builder.add_json_column(column_name)
-            elif column_def in (
-                "blob",
-                "longblob",
-                "mediumblob",
-                "tinyblob",
-                "binary",
-                "varbinary",
-            ):
-                builder.add_binary_column(column_name, column_def)
-            else:
-                raise ValueError(
-                    f"Unsupported column type '{column_def}' for column '{column_name}'. "
-                    f"Supported types: int, bigint, smallint, tinyint, varchar(n), char(n), "
-                    f"text, float, double, decimal(p,s), date, datetime, timestamp, time, "
-                    f"boolean, json, blob, vecf32(n), vecf64(n)"
-                )
-
-        # Create table
-        table = builder.build()
-        table.create(self.get_sqlalchemy_engine())
+        self.create_table(table_name, columns, **kwargs)
 
         # Create indexes if specified
         if indexes:
@@ -2821,15 +2536,11 @@ class Client(BaseMatrixOneClient):
             >>> print(index_tables)
             ['__mo_index_secondary_..._cms_id', '__mo_index_unique_..._email']
         """
-        from .index_utils import build_get_index_tables_sql
+        from .index_utils import read_index_metadata
 
-        # Use provided database_name or get current database from connection params
-        if database_name is None:
-            database_name = self._connection_params.get('database') if hasattr(self, '_connection_params') else None
-
-        sql, params = build_get_index_tables_sql(table_name, database_name)
-        result = self.execute(sql, params)
-        return [row[0] for row in result.fetchall()]
+        with self.get_sqlalchemy_engine().begin() as connection:
+            _, _, rows = read_index_metadata(connection, table_name, database_name)
+        return list(dict.fromkeys(row[2] for row in rows if row[2]))
 
     def get_secondary_index_table_by_name(
         self, table_name: str, index_name: str, database_name: str = None
@@ -2856,16 +2567,11 @@ class Client(BaseMatrixOneClient):
             >>> print(index_table)
             '__mo_index_secondary_018cfbda-bde1-7c3e-805c-3f8e71769f75_cms_id'
         """
-        from .index_utils import build_get_index_table_by_name_sql
+        from .index_utils import read_index_metadata
 
-        # Use provided database_name or get current database from connection params
-        if database_name is None:
-            database_name = self._connection_params.get('database') if hasattr(self, '_connection_params') else None
-
-        sql, params = build_get_index_table_by_name_sql(table_name, index_name, database_name)
-        result = self.execute(sql, params)
-        row = result.fetchone()
-        return row[0] if row else None
+        with self.get_sqlalchemy_engine().begin() as connection:
+            _, _, rows = read_index_metadata(connection, table_name, database_name)
+        return next((row[2] for row in rows if row[1] == index_name and row[2]), None)
 
     def get_table_indexes_detail(self, table_name: str, database_name: str = None) -> List[dict]:
         """
@@ -2997,18 +2703,11 @@ class Client(BaseMatrixOneClient):
             ... except ValueError as e:
             ...     print(f"Verification failed: {e}")
         """
-        from .index_utils import build_verify_counts_sql, process_verify_result
+        from .index_utils import index_count_report, verify_count_report
 
-        # Get all secondary index tables
-        index_tables = self.get_secondary_index_tables(table_name)
-
-        # Build and execute verification SQL
-        sql = build_verify_counts_sql(table_name, index_tables)
-        result = self.execute(sql)
-        row = result.fetchone()
-
-        # Process result and raise exception if verification fails
-        return process_verify_result(table_name, index_tables, row)
+        with self.get_sqlalchemy_engine().begin() as connection:
+            report = index_count_report(connection, table_name)
+        return verify_count_report(report)
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.disconnect()
@@ -3116,6 +2815,7 @@ class SnapshotClient:
         self.client = client
         self.snapshot_name = snapshot_name
 
+    @observe('query')
     def execute(self, sql: str, params: Optional[Tuple] = None) -> ResultSet:
         """Execute SQL with snapshot"""
         from ._snapshot_sql import rewrite_snapshot
@@ -3189,6 +2889,22 @@ class Session(SQLAlchemySession):
 
         self.export = ExportManager(self)
 
+    @observe('session')
+    def execute_driver(self, sql, params=None):
+        """Driver-bound SQL on this session; the result belongs to the session."""
+        if not isinstance(sql, str):
+            raise TypeError('execute_driver requires SQL text')
+        try:
+            return self.connection().exec_driver_sql(sql, params, execution_options={'no_parameters': params is None})
+        except Exception as error:
+            from .client import _classify_db_error
+
+            classified = _classify_db_error(error, sql)
+            if classified is error:
+                raise
+            raise classified from error
+
+    @observe('session')
     def execute(self, sql_or_stmt, params: Optional[Tuple] = None, **kwargs):
         """
         Execute SQL or SQLAlchemy statement within session.
@@ -3339,75 +3055,10 @@ class Session(SQLAlchemySession):
 
             MatrixOneQuery instance configured for the specified columns within transaction
         """
+        from .orm import create_query
         from .orm import MatrixOneQuery
 
-        if len(columns) == 1:
-            # Traditional single model class usage
-            column = columns[0]
-            if isinstance(column, str):
-                # String table name
-                return MatrixOneQuery(column, self.client, transaction_wrapper=self, snapshot=snapshot)
-            elif hasattr(column, '__tablename__'):
-                # This is a model class
-                return MatrixOneQuery(column, self.client, transaction_wrapper=self, snapshot=snapshot)
-            elif hasattr(column, 'name') and hasattr(column, 'as_sql'):
-                # This is a CTE object
-                from .orm import CTE
-
-                if isinstance(column, CTE):
-                    query = MatrixOneQuery(None, self.client, transaction_wrapper=self, snapshot=snapshot)
-                    query._table_name = column.name
-                    query._select_columns = ["*"]  # Default to select all from CTE
-                    query._ctes = [column]  # Add the CTE to the query
-                    return query
-            else:
-                # This is a single column/expression - need to handle specially
-                query = MatrixOneQuery(None, self.client, transaction_wrapper=self, snapshot=snapshot)
-                query._select_columns = [column]
-                # Try to infer table name from column
-                if hasattr(column, 'table') and hasattr(column.table, 'name'):
-                    query._table_name = column.table.name
-                return query
-        else:
-            # Multiple columns/expressions
-            model_class = None
-            select_columns = []
-
-            for column in columns:
-                if hasattr(column, '__tablename__'):
-                    # This is a model class - use its table
-                    model_class = column
-                else:
-                    # This is a column or expression
-                    select_columns.append(column)
-
-            if model_class:
-                query = MatrixOneQuery(model_class, self.client, transaction_wrapper=self, snapshot=snapshot)
-                if select_columns:
-                    # Add additional columns to the model's default columns
-                    query._select_columns = select_columns
-                return query
-            else:
-                # No model class provided, need to infer table from columns
-                query = MatrixOneQuery(None, self.client, transaction_wrapper=self, snapshot=snapshot)
-                query._select_columns = select_columns
-
-                # Try to infer table name from first column that has table info
-                for col in select_columns:
-                    if hasattr(col, 'table') and hasattr(col.table, 'name'):
-                        query._table_name = col.table.name
-                        break
-                    elif isinstance(col, str) and '.' in col:
-                        # String column like "table.column" - extract table name
-                        parts = col.split('.')
-                        if len(parts) >= 2:
-                            # For "db.table.column" format, use "db.table"
-                            # For "table.column" format, use "table"
-                            table_name = '.'.join(parts[:-1])
-                            query._table_name = table_name
-                            break
-
-                return query
+        return create_query(MatrixOneQuery, self.client, columns, snapshot=snapshot, transaction_wrapper=self)
 
     def create_table(self, table_name: str, columns: dict, **kwargs) -> "Session":
         """
@@ -3423,119 +3074,11 @@ class Session(SQLAlchemySession):
 
             Session: Self for chaining
         """
+        from .sqlalchemy_ext.table_builder import simplified_table
         from sqlalchemy.schema import CreateTable
 
-        from .sqlalchemy_ext import VectorTableBuilder
-
-        # Parse primary key from kwargs
-        primary_key = kwargs.get("primary_key", None)
-
-        # Create table using VectorTableBuilder
-        builder = VectorTableBuilder(table_name)
-
-        # Add columns based on simplified format (same logic as client.create_table)
-        for column_name, column_def in columns.items():
-            is_primary = primary_key == column_name
-
-            if column_def.startswith("vector("):
-                # Parse vector type: vector(128,f32) or vector(128)
-                import re
-
-                match = re.match(r"vector\((\d+)(?:,(\w+))?\)", column_def)
-                if match:
-                    dimension = int(match.group(1))
-                    precision = match.group(2) or "f32"
-                    builder.add_vector_column(column_name, dimension, precision)
-                else:
-                    raise ValueError(f"Invalid vector format: {column_def}")
-
-            elif column_def.startswith("varchar("):
-                # Parse varchar type: varchar(100)
-                import re
-
-                match = re.match(r"varchar\((\d+)\)", column_def)
-                if match:
-                    length = int(match.group(1))
-                    builder.add_string_column(column_name, length)
-                else:
-                    raise ValueError(f"Invalid varchar format: {column_def}")
-
-            elif column_def.startswith("char("):
-                # Parse char type: char(10)
-                import re
-
-                match = re.match(r"char\((\d+)\)", column_def)
-                if match:
-                    length = int(match.group(1))
-                    builder.add_string_column(column_name, length)
-                else:
-                    raise ValueError(f"Invalid char format: {column_def}")
-
-            elif column_def.startswith("decimal("):
-                # Parse decimal type: decimal(10,2)
-                import re
-
-                match = re.match(r"decimal\((\d+),(\d+)\)", column_def)
-                if match:
-                    precision = int(match.group(1))
-                    scale = int(match.group(2))
-                    builder.add_numeric_column(column_name, "decimal", precision, scale)
-                else:
-                    raise ValueError(f"Invalid decimal format: {column_def}")
-
-            elif column_def.startswith("float("):
-                # Parse float type: float(10)
-                import re
-
-                match = re.match(r"float\((\d+)\)", column_def)
-                if match:
-                    precision = int(match.group(1))
-                    builder.add_numeric_column(column_name, "float", precision)
-                else:
-                    raise ValueError(f"Invalid float format: {column_def}")
-
-            elif column_def in ("int", "integer"):
-                builder.add_int_column(column_name, primary_key=is_primary)
-            elif column_def in ("bigint", "bigint unsigned"):
-                builder.add_bigint_column(column_name, primary_key=is_primary)
-            elif column_def in ("smallint", "tinyint"):
-                if column_def == "smallint":
-                    builder.add_smallint_column(column_name, primary_key=is_primary)
-                else:
-                    builder.add_tinyint_column(column_name, primary_key=is_primary)
-            elif column_def in ("text", "longtext", "mediumtext", "tinytext"):
-                builder.add_text_column(column_name)
-            elif column_def in ("float", "double"):
-                builder.add_numeric_column(column_name, column_def)
-            elif column_def in ("date", "datetime", "timestamp", "time"):
-                builder.add_datetime_column(column_name, column_def)
-            elif column_def in ("boolean", "bool"):
-                builder.add_boolean_column(column_name)
-            elif column_def in ("json", "jsonb"):
-                builder.add_json_column(column_name)
-            elif column_def in (
-                "blob",
-                "longblob",
-                "mediumblob",
-                "tinyblob",
-                "binary",
-                "varbinary",
-            ):
-                builder.add_binary_column(column_name, column_def)
-            else:
-                raise ValueError(
-                    f"Unsupported column type '{column_def}' for column '{column_name}'. "
-                    f"Supported types: int, bigint, smallint, tinyint, varchar(n), char(n), "
-                    f"text, float, double, decimal(p,s), date, datetime, timestamp, time, "
-                    f"boolean, json, blob, vecf32(n), vecf64(n)"
-                )
-
-        # Create table using transaction wrapper's execute method
-        table = builder.build()
-        create_sql = CreateTable(table)
-        sql = str(create_sql.compile(dialect=self.get_bind().dialect))
-        self.execute(sql)
-
+        table = simplified_table(table_name, columns, **kwargs)
+        self.execute(CreateTable(table))
         return self
 
     def drop_table(self, table_name: str) -> "Session":
@@ -3550,7 +3093,9 @@ class Session(SQLAlchemySession):
 
             Session: Self for chaining
         """
-        sql = f"DROP TABLE IF EXISTS {table_name}"
+        from ._utils import get_table_name
+
+        sql = 'DROP TABLE IF EXISTS ' + get_table_name(table_name, quoted=True)
         self.execute(sql)
         return self
 
@@ -3569,118 +3114,7 @@ class Session(SQLAlchemySession):
 
             Session: Self for chaining
         """
-        from sqlalchemy.schema import CreateTable
-
-        from .sqlalchemy_ext import VectorTableBuilder
-
-        # Parse primary key from kwargs
-        primary_key = kwargs.get("primary_key", None)
-
-        # Create table using VectorTableBuilder
-        builder = VectorTableBuilder(table_name)
-
-        # Add columns based on simplified format (same logic as client.create_table)
-        for column_name, column_def in columns.items():
-            is_primary = primary_key == column_name
-
-            if column_def.startswith("vector("):
-                # Parse vector type: vector(128,f32) or vector(128)
-                import re
-
-                match = re.match(r"vector\((\d+)(?:,(\w+))?\)", column_def)
-                if match:
-                    dimension = int(match.group(1))
-                    precision = match.group(2) or "f32"
-                    builder.add_vector_column(column_name, dimension, precision)
-                else:
-                    raise ValueError(f"Invalid vector format: {column_def}")
-
-            elif column_def.startswith("varchar("):
-                # Parse varchar type: varchar(100)
-                import re
-
-                match = re.match(r"varchar\((\d+)\)", column_def)
-                if match:
-                    length = int(match.group(1))
-                    builder.add_string_column(column_name, length)
-                else:
-                    raise ValueError(f"Invalid varchar format: {column_def}")
-
-            elif column_def.startswith("char("):
-                # Parse char type: char(10)
-                import re
-
-                match = re.match(r"char\((\d+)\)", column_def)
-                if match:
-                    length = int(match.group(1))
-                    builder.add_string_column(column_name, length)
-                else:
-                    raise ValueError(f"Invalid char format: {column_def}")
-
-            elif column_def.startswith("decimal("):
-                # Parse decimal type: decimal(10,2)
-                import re
-
-                match = re.match(r"decimal\((\d+),(\d+)\)", column_def)
-                if match:
-                    precision = int(match.group(1))
-                    scale = int(match.group(2))
-                    builder.add_numeric_column(column_name, "decimal", precision, scale)
-                else:
-                    raise ValueError(f"Invalid decimal format: {column_def}")
-
-            elif column_def.startswith("float("):
-                # Parse float type: float(10)
-                import re
-
-                match = re.match(r"float\((\d+)\)", column_def)
-                if match:
-                    precision = int(match.group(1))
-                    builder.add_numeric_column(column_name, "float", precision)
-                else:
-                    raise ValueError(f"Invalid float format: {column_def}")
-
-            elif column_def in ("int", "integer"):
-                builder.add_int_column(column_name, primary_key=is_primary)
-            elif column_def in ("bigint", "bigint unsigned"):
-                builder.add_bigint_column(column_name, primary_key=is_primary)
-            elif column_def in ("smallint", "tinyint"):
-                if column_def == "smallint":
-                    builder.add_smallint_column(column_name, primary_key=is_primary)
-                else:
-                    builder.add_tinyint_column(column_name, primary_key=is_primary)
-            elif column_def in ("text", "longtext", "mediumtext", "tinytext"):
-                builder.add_text_column(column_name)
-            elif column_def in ("float", "double"):
-                builder.add_numeric_column(column_name, column_def)
-            elif column_def in ("date", "datetime", "timestamp", "time"):
-                builder.add_datetime_column(column_name, column_def)
-            elif column_def in ("boolean", "bool"):
-                builder.add_boolean_column(column_name)
-            elif column_def in ("json", "jsonb"):
-                builder.add_json_column(column_name)
-            elif column_def in (
-                "blob",
-                "longblob",
-                "mediumblob",
-                "tinyblob",
-                "binary",
-                "varbinary",
-            ):
-                builder.add_binary_column(column_name, column_def)
-            else:
-                raise ValueError(
-                    f"Unsupported column type '{column_def}' for column '{column_name}'. "
-                    f"Supported types: int, bigint, smallint, tinyint, varchar(n), char(n), "
-                    f"text, float, double, decimal(p,s), date, datetime, timestamp, time, "
-                    f"boolean, json, blob, vecf32(n), vecf64(n)"
-                )
-
-        # Create table using transaction wrapper's execute method
-        table = builder.build()
-        create_sql = CreateTable(table)
-        sql = str(create_sql.compile(dialect=self.get_bind().dialect))
-        self.execute(sql)
+        self.create_table(table_name, columns, **kwargs)
 
         # Create indexes if specified
         if indexes:
