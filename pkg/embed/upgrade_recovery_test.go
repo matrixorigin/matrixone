@@ -125,11 +125,10 @@ func TestCrossTargetUpgradeRecovery(t *testing.T) {
 		})
 	}
 	require.NoError(t, err)
-	// Preserve the aggregate SQL budget across generations without charging
-	// runner admission or service startup to it.
-	start, finish := newRecoveryClusterStarterWithBudget(setupCtx, c.Start, time.Now, 3*time.Minute)
-	defer finish()
-	ctx, err := start()
+	start, cleanup := newRecoveryClusterStarterWithBudget(setupCtx, c.Start, time.Now, 3*time.Minute)
+	t.Cleanup(cleanup)
+	var ctx context.Context
+	ctx, err = start()
 	require.NoError(t, err)
 	cn, err := c.GetCNService(0)
 	require.NoError(t, err)
@@ -159,21 +158,22 @@ func TestCrossTargetUpgradeRecovery(t *testing.T) {
 	interrupted := &interruptedUpgradeHandler{VersionHandle: v4_0_6.Handler, entered: make(chan struct{})}
 	setRecoveryCNHandles(c, []bootstrap.VersionHandle{v4_0_4.Handler, v4_0_5.Handler, interrupted}, true)
 	started := make(chan error, 1)
-	startupDone := make(chan struct{})
-	go func() {
-		defer close(startupDone)
-		_, err := start()
-		started <- err
-	}()
-	defer func() {
-		// Join the starter before its budget cleanup, including early failures.
-		select {
-		case <-startupDone:
-			return
-		default:
+	var stopped chan error
+	// Join startup before the starter's context cleanup, including FailNow paths.
+	t.Cleanup(func() {
+		stopErr := c.Stop()
+		for range started {
 		}
-		assert.NoError(t, c.Stop())
-		<-startupDone
+		if stopped != nil {
+			for range stopped {
+			}
+		}
+		require.NoError(t, stopErr)
+	})
+	go func() {
+		defer close(started)
+		_, startErr := start()
+		started <- startErr
 	}()
 	select {
 	case <-interrupted.entered:
@@ -182,29 +182,28 @@ func TestCrossTargetUpgradeRecovery(t *testing.T) {
 	case <-setupCtx.Done():
 		t.Fatal("retained step was not reached", setupCtx.Err())
 	}
+	controlCtx, cancelControl := context.WithTimeout(setupCtx, time.Minute)
+	defer cancelControl()
 	// Use the saved frontend address rather than the cluster lock while Start is blocked.
-	// The previous generation's SQL context was canceled before this start.
-	stopCtx, stopCancel := context.WithTimeout(setupCtx, 3*time.Minute)
-	defer stopCancel()
-	pingCtx, pingCancel := context.WithTimeout(stopCtx, time.Second)
+	pingCtx, pingCancel := context.WithTimeout(controlCtx, time.Second)
 	db, err = sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/", frontendPort))
 	require.NoError(t, err)
 	require.Error(t, db.PingContext(pingCtx), "unfinished catalog must not admit SQL")
 	pingCancel()
 	require.NoError(t, db.Close())
-	stopped := make(chan error, 1)
-	go func() { stopped <- c.Stop() }()
+	stopped = make(chan error, 1)
+	go func() { defer close(stopped); stopped <- c.Stop() }()
 	select {
 	case err := <-started:
 		require.ErrorIs(t, err, context.Canceled)
-	case <-stopCtx.Done():
-		t.Fatal("stop did not cancel the upgrade startup", stopCtx.Err())
+	case <-controlCtx.Done():
+		t.Fatal("stop did not cancel the upgrade startup", controlCtx.Err())
 	}
 	select {
 	case err := <-stopped:
 		require.NoError(t, err)
-	case <-stopCtx.Done():
-		t.Fatal("cluster did not finish stopping", stopCtx.Err())
+	case <-controlCtx.Done():
+		t.Fatal("cluster did not finish stopping", controlCtx.Err())
 	}
 
 	setRecoveryCNHandles(c, []bootstrap.VersionHandle{v4_0_4.Handler, v4_0_5.Handler, v4_0_6.Handler}, true)
@@ -319,29 +318,37 @@ func TestRecoveryClusterStartupBudget(t *testing.T) {
 		})
 	}
 
-	t.Run("interrupted startup does not consume workload budget", func(t *testing.T) {
-		base := time.Now().Add(time.Hour)
-		now := base
-		starts := 0
-		start, cleanup := newRecoveryClusterStarterWithBudget(t.Context(), func() error {
-			starts++
-			now = now.Add(10 * time.Minute) // Admission may exceed the SQL budget.
-			if starts == 1 {
-				return context.Canceled
-			}
-			return nil
-		}, func() time.Time { return now }, 3*time.Minute)
-		defer cleanup()
-		ctx, err := start()
-		require.ErrorIs(t, err, context.Canceled)
-		require.Nil(t, ctx)
-		ctx, err = start()
-		require.NoError(t, err)
-		deadline, ok := ctx.Deadline()
-		require.True(t, ok)
-		require.Equal(t, 3*time.Minute, deadline.Sub(now))
-		require.Equal(t, 2, starts)
-	})
+	for _, tc := range []struct {
+		name    string
+		failure error
+		budget  time.Duration
+	}{
+		{"failed startup", errors.New("startup failed"), 5 * time.Minute},
+		{"interrupted startup", context.Canceled, 3 * time.Minute},
+	} {
+		t.Run(tc.name+" does not consume workload budget", func(t *testing.T) {
+			now := time.Now().Add(time.Hour)
+			attempts := 0
+			start, cleanup := newRecoveryClusterStarterWithBudget(t.Context(), func() error {
+				attempts++
+				now = now.Add(10 * time.Minute)
+				if attempts == 1 {
+					return tc.failure
+				}
+				return nil
+			}, func() time.Time { return now }, tc.budget)
+			defer cleanup()
+			ctx, err := start()
+			require.ErrorIs(t, err, tc.failure)
+			require.Nil(t, ctx)
+			ctx, err = start()
+			require.NoError(t, err)
+			deadline, ok := ctx.Deadline()
+			require.True(t, ok)
+			require.Equal(t, tc.budget, deadline.Sub(now))
+			require.Equal(t, 2, attempts)
+		})
+	}
 
 	t.Run("parent deadline and workload cancellation", func(t *testing.T) {
 		deadline := time.Now().Add(time.Minute)
