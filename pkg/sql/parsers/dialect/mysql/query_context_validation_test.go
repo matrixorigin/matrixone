@@ -15,8 +15,10 @@
 package mysql
 
 import (
-	"github.com/stretchr/testify/require"
+	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 func TestQueryLockAndIntoContext(t *testing.T) {
@@ -36,6 +38,19 @@ func TestQueryLockAndIntoContext(t *testing.T) {
 		{"SELECT (WITH nation AS (SELECT 1) SELECT 1), (((SELECT n_nationkey FROM nation FOR SHARE) FOR UPDATE))", false},
 		{"WITH c AS (SELECT 1) (SELECT 1 INTO @x FROM c)", true},
 		{"(SELECT * FROM nation INTO @x)", true},
+		{"EXPLAIN (SELECT n_nationkey FROM nation FOR SHARE) FOR UPDATE", true},
+		{"EXPLAIN ANALYZE (SELECT n_nationkey FROM nation FOR SHARE) FOR UPDATE", true},
+		{"(SELECT * FROM nation UNION (SELECT * FROM region FOR SHARE)) FOR UPDATE", false},
+		{"((SELECT * FROM nation FOR SHARE) UNION (SELECT * FROM region)) FOR UPDATE", true},
+		{"(SELECT * FROM nation UNION (SELECT * FROM (SELECT * FROM region FOR SHARE) d)) FOR UPDATE", true},
+		{"(SELECT 1 FROM `dual` FOR SHARE) FOR UPDATE", false},
+		{"WITH c AS (SELECT 1) (WITH d AS (SELECT 2) ((SELECT * FROM c FOR SHARE) FOR UPDATE))", false},
+		{"WITH c AS (SELECT 1) (WITH d AS (SELECT 2) ((SELECT * FROM d FOR SHARE) FOR UPDATE))", true},
+		{"WITH c AS (SELECT 1) SELECT * FROM (WITH d AS (SELECT 2) ((SELECT * FROM c FOR SHARE) FOR UPDATE)) q", true},
+		{"SELECT (WITH c AS (SELECT 1) (WITH d AS (SELECT 2) SELECT * FROM d)), (((SELECT * FROM c FOR SHARE) FOR UPDATE))", false},
+		{"WITH c AS (SELECT 1) (SELECT 1 FROM nation INTO OUTFILE '/tmp/claude_no_execute')", false},
+		{"WITH c AS (SELECT 1) (SELECT 1 INTO OUTFILE '/tmp/claude_no_execute' FROM nation)", true},
+		{"(SELECT 1 FROM nation INTO OUTFILE '/tmp/claude_no_execute')", true},
 	} {
 		t.Run(tc.sql, func(t *testing.T) {
 			// Reuse a real parser so lock admission state cannot leak across calls.
@@ -56,6 +71,37 @@ func TestQueryLockAndIntoContext(t *testing.T) {
 					require.Len(t, statements, 1)
 				}()
 			}
+		})
+	}
+}
+
+func TestNestedSetIntoPlacement(t *testing.T) {
+	// A small deep right spine catches collector/validator mutual recursion
+	// without starting a service, allocating rows, or asserting wall time.
+	const depth = 48
+	for _, tc := range []struct {
+		body  string
+		valid bool
+	}{
+		{"SELECT 1", true},
+		{"SELECT 1 INTO @x", true},
+		{"SELECT 1 FROM nation INTO @x", false},
+		{"SELECT 1 FROM nation INTO OUTFILE '/tmp/claude_no_execute'", false},
+	} {
+		sql := strings.Repeat("SELECT 1 UNION (", depth) + tc.body + strings.Repeat(")", depth)
+		t.Run(tc.body, func(t *testing.T) {
+			statements, err := (&MySQLParser{}).ParseWithSQLMode(t.Context(), sql, 0, "")
+			if !tc.valid {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			defer func() {
+				for _, statement := range statements {
+					statement.Free()
+				}
+			}()
+			require.Len(t, statements, 1)
 		})
 	}
 }

@@ -193,6 +193,7 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
     str string
     item interface{}
     pos int
+    quotedIdentifier bool
 }
 
 %union {
@@ -7127,14 +7128,14 @@ select_no_parens:
             return 1
         }
     }
-|   with_clause select_with_parens
+|   with_clause select_with_parens select_lock_opt
     {
         intoVars, deprecatedInto, intoErr := tree.SelectIntoVariablesForTopLevel($2)
         if intoErr != "" {
             yylex.Error(intoErr)
             return 1
         }
-        $$ = &tree.Select{Select: $2, With: $1, Ep: tree.SelectIntoExport($2), IntoVars: intoVars, DeprecatedInto: deprecatedInto}
+        $$ = &tree.Select{Select: $2, With: $1, Ep: tree.SelectIntoExport($2), IntoVars: intoVars, DeprecatedInto: deprecatedInto, SelectLockInfo: $3}
         if intoErr := tree.ValidateSelectIntoPlacement($$); intoErr != "" {
             yylex.Error(intoErr)
             return 1
@@ -12204,6 +12205,7 @@ table_name:
         prefix := tree.ObjectNamePrefix{ExplicitSchema: false}
         $$ = tree.NewTableName(tree.Identifier(tblName), prefix, $2)
         $$.IcebergRef = $3
+        $$.IsQuoted = $1.Quoted
     }
 |   ident '.' ident table_snapshot_opt iceberg_ref_opt
     {
@@ -12212,6 +12214,7 @@ table_name:
         prefix := tree.ObjectNamePrefix{SchemaName: tree.Identifier(dbName), ExplicitSchema: true}
         $$ = tree.NewTableName(tree.Identifier(tblName), prefix, $4)
         $$.IcebergRef = $5
+        $$.IsQuoted = $3.Quoted
     }
 
 iceberg_ref_opt:
@@ -12660,10 +12663,12 @@ ident:
     ID
     {
 		if rejectSQLModeReservedFunctionName(yylex, $1) { goto ret1 }; $$ = tree.NewCStr($1, 1)
+        $$.Quoted = $<quotedIdentifier>1
     }
 |	QUOTE_ID
 	{
     	$$ = tree.NewCStr($1, 1)
+        $$.Quoted = true
     }
 |   not_keyword
 	{

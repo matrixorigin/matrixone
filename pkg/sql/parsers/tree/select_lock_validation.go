@@ -38,8 +38,12 @@ func validateSelectLockValue(value reflect.Value, ctes map[string]int) string {
 		}
 		if value.CanInterface() {
 			switch node := value.Interface().(type) {
+			case *ExplainStmt, *ExplainAnalyze, *ExplainPhyPlan:
+				// MySQL does not contextualize locking clauses in EXPLAIN mode,
+				// including ANALYZE. Other syntax validation still applies.
+				return ""
 			case *Select:
-				return validateSelectLockQuery(node, ctes)
+				return validateSelectLockQuery(node, ctes, 0)
 			case *SampleExpr:
 				// SampleExpr owns private expression fields. Do not lose their queries
 				// by reflecting through fields which cannot be interfaced.
@@ -65,21 +69,25 @@ func validateSelectLockValue(value reflect.Value, ctes map[string]int) string {
 	return ""
 }
 
-func validateSelectLockQuery(query *Select, ctes map[string]int) string {
-	locks := 0
+func validateSelectLockQuery(query *Select, ctes map[string]int, locks int) string {
 	var introduced []string
 	// Share one invocation-local scope map rather than cloning the accumulated
 	// CTE set at every depth. Restore bindings on every return/error path.
-	defer func() {
+	restore := func() {
 		for _, name := range introduced {
 			ctes[name]--
 			if ctes[name] == 0 {
 				delete(ctes, name)
 			}
 		}
-	}()
+		introduced = introduced[:0]
+	}
+	defer restore()
 	for {
 		if query.With != nil {
+			// Parentheses and set operands still own the same query expression.
+			// A later WITH replaces its local bindings, not the enclosing query's.
+			restore()
 			for _, cte := range query.With.CTEs {
 				name := strings.ToLower(string(cte.Name.Alias))
 				if query.With.IsRecursive {
@@ -110,27 +118,46 @@ func validateSelectLockQuery(query *Select, ctes map[string]int) string {
 				return err
 			}
 		}
-		if parenthesized, ok := query.Select.(*ParenSelect); ok {
-			query = parenthesized.Select
-			continue
-		}
-		if clause, ok := query.Select.(*SelectClause); ok && locks > 1 && clause.From != nil {
-			for _, table := range clause.From.Tables {
-				if name := directSelectLockTable(table, ctes); name != "" {
-					return fmt.Sprintf("Table %s appears in multiple locking clauses.", name)
+		body := query.Select
+		for {
+			switch node := body.(type) {
+			case *ParenSelect:
+				query = node.Select
+			case *Select:
+				query = node
+			case *UnionClause:
+				// Contextualization leaves the final operand as the active block.
+				// Earlier operands and true nested queries do not inherit this lock.
+				if err := validateSelectLockValue(reflect.ValueOf(node.Left), ctes); err != "" {
+					return err
 				}
+				body = node.Right
+				continue
+			default:
+				return validateSelectLockBody(body, ctes, locks)
 			}
+			break
 		}
-		return validateSelectLockValue(reflect.ValueOf(query.Select), ctes)
 	}
 }
 
-func directSelectLockTable(table TableExpr, ctes map[string]int) string {
+func validateSelectLockBody(body SelectStatement, ctes map[string]int, locks int) string {
+	if clause, ok := body.(*SelectClause); ok && locks > 1 && clause.From != nil {
+		for _, table := range clause.From.Tables {
+			if name := directSelectLockTable(table, ctes, true); name != "" {
+				return fmt.Sprintf("Table %s appears in multiple locking clauses.", name)
+			}
+		}
+	}
+	return validateSelectLockValue(reflect.ValueOf(body), ctes)
+}
+
+func directSelectLockTable(table TableExpr, ctes map[string]int, allowDual bool) string {
 	switch node := table.(type) {
 	case *TableName:
 		name := string(node.ObjectName)
 		if !node.ExplicitSchema && !node.ExplicitCatalog {
-			if strings.EqualFold(name, "dual") {
+			if allowDual && !node.IsQuoted && strings.EqualFold(name, "dual") {
 				return ""
 			}
 			if ctes[strings.ToLower(name)] > 0 {
@@ -139,19 +166,19 @@ func directSelectLockTable(table TableExpr, ctes map[string]int) string {
 		}
 		return name
 	case *AliasedTableExpr:
-		return directSelectLockTable(node.Expr, ctes)
+		return directSelectLockTable(node.Expr, ctes, allowDual && node.As.Alias == "")
 	case *ParenTableExpr:
-		return directSelectLockTable(node.Expr, ctes)
+		return directSelectLockTable(node.Expr, ctes, false)
 	case *JoinTableExpr:
-		if name := directSelectLockTable(node.Left, ctes); name != "" {
+		if name := directSelectLockTable(node.Left, ctes, allowDual && node.Right == nil); name != "" {
 			return name
 		}
-		return directSelectLockTable(node.Right, ctes)
+		return directSelectLockTable(node.Right, ctes, false)
 	case *ApplyTableExpr:
-		if name := directSelectLockTable(node.Left, ctes); name != "" {
+		if name := directSelectLockTable(node.Left, ctes, false); name != "" {
 			return name
 		}
-		return directSelectLockTable(node.Right, ctes)
+		return directSelectLockTable(node.Right, ctes, false)
 	}
 	return ""
 }

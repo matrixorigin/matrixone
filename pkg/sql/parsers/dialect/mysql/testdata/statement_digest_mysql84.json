@@ -8503,5 +8503,680 @@
     "sql_mode": "",
     "sql": "SELECT (WITH nation AS (SELECT 1) SELECT 1), (((SELECT n_nationkey FROM nation FOR SHARE) FOR UPDATE))",
     "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "(SELECT a FROM t FOR SHARE) FOR UPDATE",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "(SELECT 1 FROM `dual` FOR SHARE) FOR UPDATE",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "(SELECT * FROM t UNION (SELECT * FROM u FOR SHARE)) FOR UPDATE",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "EXPLAIN (SELECT a FROM t FOR SHARE) FOR UPDATE",
+    "text": "EXPLAIN ( SELECT `a` FROM `t` FOR SHARE ) FOR UPDATE",
+    "digest": "d97694a05d055531fa40cedb9b902afc916b243b299d17e4d3af97ba0c0d14f6"
+  },
+  {
+    "sql_mode": "",
+    "sql": "EXPLAIN (SELECT 1 FROM `dual` FOR SHARE) FOR UPDATE",
+    "text": "EXPLAIN ( SELECT ? FROM `dual` FOR SHARE ) FOR UPDATE",
+    "digest": "e96289b12c0f6286925e817a84e04bd83f3075fc3726ceba61976f4278c38c01"
+  },
+  {
+    "sql_mode": "",
+    "sql": "EXPLAIN (SELECT * FROM t UNION (SELECT * FROM u FOR SHARE)) FOR UPDATE",
+    "text": "EXPLAIN ( SELECT * FROM `t` UNION ( SELECT * FROM `u` FOR SHARE ) ) FOR UPDATE",
+    "digest": "2c320112e8650cdf8a07cbcb8109342534b27e60ac6c8477d841392922529ef6"
+  },
+  {
+    "sql_mode": "",
+    "sql": "EXPLAIN FORMAT=JSON (SELECT a FROM t FOR SHARE) FOR UPDATE",
+    "text": "EXPLAIN FORMAT = JSON ( SELECT `a` FROM `t` FOR SHARE ) FOR UPDATE",
+    "digest": "68ba73bb8450164d70cbeaf80ae0e1bbb79b91184de0736626cec8fd835f6a4a"
+  },
+  {
+    "sql_mode": "",
+    "sql": "EXPLAIN FORMAT=JSON (SELECT 1 FROM `dual` FOR SHARE) FOR UPDATE",
+    "text": "EXPLAIN FORMAT = JSON ( SELECT ? FROM `dual` FOR SHARE ) FOR UPDATE",
+    "digest": "1b23450a60e6d962712afed2d91b3fa5642110dbf8909b6834cba9122ca5d7a1"
+  },
+  {
+    "sql_mode": "",
+    "sql": "EXPLAIN FORMAT=JSON (SELECT * FROM t UNION (SELECT * FROM u FOR SHARE)) FOR UPDATE",
+    "text": "EXPLAIN FORMAT = JSON ( SELECT * FROM `t` UNION ( SELECT * FROM `u` FOR SHARE ) ) FOR UPDATE",
+    "digest": "970cffe173c332005086dd51ec50b7f0bec8483a79f0b0ae83269d654bcfbcaa"
+  },
+  {
+    "sql_mode": "",
+    "sql": "EXPLAIN ANALYZE (SELECT a FROM t FOR SHARE) FOR UPDATE",
+    "text": "EXPLAIN ANALYZE ( SELECT `a` FROM `t` FOR SHARE ) FOR UPDATE",
+    "digest": "09982b77bb679308addf917b89107c50ffd0541ae31f8b3adc4360d211e0152c"
+  },
+  {
+    "sql_mode": "",
+    "sql": "EXPLAIN ANALYZE (SELECT 1 FROM `dual` FOR SHARE) FOR UPDATE",
+    "text": "EXPLAIN ANALYZE ( SELECT ? FROM `dual` FOR SHARE ) FOR UPDATE",
+    "digest": "8d2afb32fd02ca30b1110583c544a239fba5a3fba42e4c337649171711992d81"
+  },
+  {
+    "sql_mode": "",
+    "sql": "EXPLAIN ANALYZE (SELECT * FROM t UNION (SELECT * FROM u FOR SHARE)) FOR UPDATE",
+    "text": "EXPLAIN ANALYZE ( SELECT * FROM `t` UNION ( SELECT * FROM `u` FOR SHARE ) ) FOR UPDATE",
+    "digest": "670575306555b52a8866948ebc4762ee6877cacd69e01050a910612c33f55ec7"
+  },
+  {
+    "sql_mode": "",
+    "sql": "((SELECT * FROM t FOR SHARE) UNION (SELECT * FROM u)) FOR UPDATE",
+    "text": "( ( SELECT * FROM `t` FOR SHARE ) UNION ( SELECT * FROM `u` ) ) FOR UPDATE",
+    "digest": "2fec543cc2cd74cae710f020bf93e3a4e891239dceb5114dbafd19dc1db7528a"
+  },
+  {
+    "sql_mode": "",
+    "sql": "(SELECT 1 UNION (SELECT 1 FOR SHARE)) FOR UPDATE",
+    "text": "( SELECT ? UNION ( SELECT ? FOR SHARE ) ) FOR UPDATE",
+    "digest": "55c7b61bab0eb3412a5994b6daa8e4b5a555b77d807c56cab401c6aaa77bbe00"
+  },
+  {
+    "sql_mode": "",
+    "sql": "(SELECT * FROM t UNION (SELECT * FROM (SELECT * FROM u FOR SHARE) d)) FOR UPDATE",
+    "text": "( SELECT * FROM `t` UNION ( SELECT * FROM ( SELECT * FROM `u` FOR SHARE ) `d` ) ) FOR UPDATE",
+    "digest": "dff139cf55e574b043c197a8838a4bea5196d708302a22735691de5fc117d0f5"
+  },
+  {
+    "sql_mode": "",
+    "sql": "(SELECT * FROM t UNION (SELECT * FROM u)) FOR UPDATE",
+    "text": "( SELECT * FROM `t` UNION ( SELECT * FROM `u` ) ) FOR UPDATE",
+    "digest": "bd9bb2076a25c7d17a52c6360d0b2e0d3dd683dae3dec3794be233981268913e"
+  },
+  {
+    "sql_mode": "",
+    "sql": "((SELECT * FROM t UNION (SELECT * FROM u FOR SHARE))) FOR UPDATE",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "(SELECT * FROM t UNION (SELECT * FROM u UNION (SELECT * FROM v FOR SHARE))) FOR UPDATE",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "(SELECT * FROM t UNION ALL (SELECT * FROM u FOR SHARE)) FOR UPDATE",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "((SELECT * FROM t FOR SHARE) UNION ALL (SELECT * FROM u)) FOR UPDATE",
+    "text": "( ( SELECT * FROM `t` FOR SHARE ) UNION ALL ( SELECT * FROM `u` ) ) FOR UPDATE",
+    "digest": "51a031c202d7c12464e60eed795dd8b9a689be3f4cab659fb49136df726b2e52"
+  },
+  {
+    "sql_mode": "",
+    "sql": "(SELECT 1 UNION ALL (SELECT 1 FOR SHARE)) FOR UPDATE",
+    "text": "( SELECT ? UNION ALL ( SELECT ? FOR SHARE ) ) FOR UPDATE",
+    "digest": "114e612f89e26f86b546392d9e0875ca11b34e8f8928b0b7ac5c6d668273a980"
+  },
+  {
+    "sql_mode": "",
+    "sql": "(SELECT * FROM t UNION ALL (SELECT * FROM (SELECT * FROM u FOR SHARE) d)) FOR UPDATE",
+    "text": "( SELECT * FROM `t` UNION ALL ( SELECT * FROM ( SELECT * FROM `u` FOR SHARE ) `d` ) ) FOR UPDATE",
+    "digest": "0ccc63aa0a434fe13eb967ae15adae9325808c6bfcc1637acea8e148d1cfaef0"
+  },
+  {
+    "sql_mode": "",
+    "sql": "(SELECT * FROM t UNION ALL (SELECT * FROM u)) FOR UPDATE",
+    "text": "( SELECT * FROM `t` UNION ALL ( SELECT * FROM `u` ) ) FOR UPDATE",
+    "digest": "cea7a0ec11a25d2a517a44e9078ec0b16f6d6bab9248563b2e56480bf88b49be"
+  },
+  {
+    "sql_mode": "",
+    "sql": "((SELECT * FROM t UNION ALL (SELECT * FROM u FOR SHARE))) FOR UPDATE",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "(SELECT * FROM t UNION ALL (SELECT * FROM u UNION ALL (SELECT * FROM v FOR SHARE))) FOR UPDATE",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "(SELECT * FROM t INTERSECT (SELECT * FROM u FOR SHARE)) FOR UPDATE",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "((SELECT * FROM t FOR SHARE) INTERSECT (SELECT * FROM u)) FOR UPDATE",
+    "text": "( ( SELECT * FROM `t` FOR SHARE ) INTERSECT ( SELECT * FROM `u` ) ) FOR UPDATE",
+    "digest": "c69f7c2f96475b2f9cf2aedc627475413e240e0d0d8c5fd16b8c10e4000629af"
+  },
+  {
+    "sql_mode": "",
+    "sql": "(SELECT 1 INTERSECT (SELECT 1 FOR SHARE)) FOR UPDATE",
+    "text": "( SELECT ? INTERSECT ( SELECT ? FOR SHARE ) ) FOR UPDATE",
+    "digest": "d8ff5100142d3500f7effd8c816e0137e1f06cce17cc90427c9c908dfea81c35"
+  },
+  {
+    "sql_mode": "",
+    "sql": "(SELECT * FROM t INTERSECT (SELECT * FROM (SELECT * FROM u FOR SHARE) d)) FOR UPDATE",
+    "text": "( SELECT * FROM `t` INTERSECT ( SELECT * FROM ( SELECT * FROM `u` FOR SHARE ) `d` ) ) FOR UPDATE",
+    "digest": "7b5087aa61c94f8ae083b6406ae829ca428582c27ab40a44ff0269b85a435fc9"
+  },
+  {
+    "sql_mode": "",
+    "sql": "(SELECT * FROM t INTERSECT (SELECT * FROM u)) FOR UPDATE",
+    "text": "( SELECT * FROM `t` INTERSECT ( SELECT * FROM `u` ) ) FOR UPDATE",
+    "digest": "144fecdbf4111c3a53177d29ff3abb453a5d443ad3cfa98679bb17d46dca62e0"
+  },
+  {
+    "sql_mode": "",
+    "sql": "((SELECT * FROM t INTERSECT (SELECT * FROM u FOR SHARE))) FOR UPDATE",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "(SELECT * FROM t INTERSECT (SELECT * FROM u INTERSECT (SELECT * FROM v FOR SHARE))) FOR UPDATE",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "(SELECT * FROM t EXCEPT (SELECT * FROM u FOR SHARE)) FOR UPDATE",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "((SELECT * FROM t FOR SHARE) EXCEPT (SELECT * FROM u)) FOR UPDATE",
+    "text": "( ( SELECT * FROM `t` FOR SHARE ) EXCEPT ( SELECT * FROM `u` ) ) FOR UPDATE",
+    "digest": "77f5843cdc03facc805ec9c3a7316ac87fe179e27182ab7307675701713884b1"
+  },
+  {
+    "sql_mode": "",
+    "sql": "(SELECT 1 EXCEPT (SELECT 1 FOR SHARE)) FOR UPDATE",
+    "text": "( SELECT ? EXCEPT ( SELECT ? FOR SHARE ) ) FOR UPDATE",
+    "digest": "113183a13fe627a0006f81099b7e59a2cbc7662a053bc3d525ae16555cc29f98"
+  },
+  {
+    "sql_mode": "",
+    "sql": "(SELECT * FROM t EXCEPT (SELECT * FROM (SELECT * FROM u FOR SHARE) d)) FOR UPDATE",
+    "text": "( SELECT * FROM `t` EXCEPT ( SELECT * FROM ( SELECT * FROM `u` FOR SHARE ) `d` ) ) FOR UPDATE",
+    "digest": "7d2c7ec680da9896306b94628361fe6775c9ec363014d40dbe8634623c234a29"
+  },
+  {
+    "sql_mode": "",
+    "sql": "(SELECT * FROM t EXCEPT (SELECT * FROM u)) FOR UPDATE",
+    "text": "( SELECT * FROM `t` EXCEPT ( SELECT * FROM `u` ) ) FOR UPDATE",
+    "digest": "cc902b69f7e01c4b014eca6cfa792a9f38e7467779c7270fa8282aaef67070ab"
+  },
+  {
+    "sql_mode": "",
+    "sql": "((SELECT * FROM t EXCEPT (SELECT * FROM u FOR SHARE))) FOR UPDATE",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "(SELECT * FROM t EXCEPT (SELECT * FROM u EXCEPT (SELECT * FROM v FOR SHARE))) FOR UPDATE",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "(SELECT 1 FROM dual FOR SHARE) FOR UPDATE",
+    "text": "( SELECT ? FROM DUAL FOR SHARE ) FOR UPDATE",
+    "digest": "3caf0ca83d8e0e8a7c0b3326af6f1f4e2971a52022fe33908c8ecbbf30d41df5"
+  },
+  {
+    "sql_mode": "",
+    "sql": "(SELECT 1 FROM `DUAL` FOR SHARE) FOR UPDATE",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "(SELECT 1 FROM test.dual FOR SHARE) FOR UPDATE",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "(SELECT 1 FROM test.`dual` FOR SHARE) FOR UPDATE",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "(SELECT 1 FROM (`dual`) FOR SHARE) FOR UPDATE",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "(SELECT 1 FROM dual AS d FOR SHARE) FOR UPDATE",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "(SELECT 1 FROM `dual` AS d FOR SHARE) FOR UPDATE",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "(SELECT 1 FROM \"dual\" FOR SHARE) FOR UPDATE",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "(SELECT 1 FROM dual FOR SHARE) FOR UPDATE",
+    "text": "( SELECT ? FROM DUAL FOR SHARE ) FOR UPDATE",
+    "digest": "3caf0ca83d8e0e8a7c0b3326af6f1f4e2971a52022fe33908c8ecbbf30d41df5"
+  },
+  {
+    "sql_mode": "",
+    "sql": "(SELECT 1 FROM \"dual\" FOR SHARE) FOR UPDATE",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT 1) (WITH d AS (SELECT 2) ((SELECT * FROM c FOR SHARE) FOR UPDATE))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT 1) SELECT * FROM (WITH d AS (SELECT 2) ((SELECT * FROM c FOR SHARE) FOR UPDATE)) q",
+    "text": "WITH `c` AS ( SELECT ? ) SELECT * FROM ( WITH `d` AS ( SELECT ? ) ( ( SELECT * FROM `c` FOR SHARE ) FOR UPDATE ) ) `q`",
+    "digest": "fb68de610d3b405a22aa226660579a11a1ee727e736bb8de9d2f1a7a7e89de56"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT 1) SELECT (WITH d AS (SELECT 2) ((SELECT * FROM c FOR SHARE) FOR UPDATE))",
+    "text": "WITH `c` AS ( SELECT ? ) SELECT ( WITH `d` AS ( SELECT ? ) ( ( SELECT * FROM `c` FOR SHARE ) FOR UPDATE ) )",
+    "digest": "e1e6d44c4c531683a036fe5ac5dfd32c090c68719ec8b4247f49f911faf5b79f"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT 1) (WITH d AS (SELECT 2) ((SELECT * FROM d FOR SHARE) FOR UPDATE))",
+    "text": "WITH `c` AS ( SELECT ? ) ( WITH `d` AS ( SELECT ? ) ( ( SELECT * FROM `d` FOR SHARE ) FOR UPDATE ) )",
+    "digest": "000b46090fa62056476e07f1a7cbdf120443e197228b45dcabbe6f2e52713743"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT 1) SELECT * FROM (WITH d AS (SELECT 2) ((SELECT * FROM d FOR SHARE) FOR UPDATE)) q",
+    "text": "WITH `c` AS ( SELECT ? ) SELECT * FROM ( WITH `d` AS ( SELECT ? ) ( ( SELECT * FROM `d` FOR SHARE ) FOR UPDATE ) ) `q`",
+    "digest": "df7c1ba4a92ca3a67868748325cb90dd5f791d1f4ffc5f97c71004481041d3db"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT 1) SELECT (WITH d AS (SELECT 2) ((SELECT * FROM d FOR SHARE) FOR UPDATE))",
+    "text": "WITH `c` AS ( SELECT ? ) SELECT ( WITH `d` AS ( SELECT ? ) ( ( SELECT * FROM `d` FOR SHARE ) FOR UPDATE ) )",
+    "digest": "f6fccc2c72bb4a6da9d19d5c7857cdf086911159cc07a355e767c06d79490e5f"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT 1) (WITH d AS (SELECT 2) ((SELECT * FROM c JOIN d ON 1=1 FOR SHARE) FOR UPDATE))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT 1) SELECT * FROM (WITH d AS (SELECT 2) ((SELECT * FROM c JOIN d ON 1=1 FOR SHARE) FOR UPDATE)) q",
+    "text": "WITH `c` AS ( SELECT ? ) SELECT * FROM ( WITH `d` AS ( SELECT ? ) ( ( SELECT * FROM `c` JOIN `d` ON ? = ? FOR SHARE ) FOR UPDATE ) ) `q`",
+    "digest": "9dbf88bcf036b82491747f7d8fe05e0ae1196818d48fc7bbb1d52048eb732376"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT 1) SELECT (WITH d AS (SELECT 2) ((SELECT * FROM c JOIN d ON 1=1 FOR SHARE) FOR UPDATE))",
+    "text": "WITH `c` AS ( SELECT ? ) SELECT ( WITH `d` AS ( SELECT ? ) ( ( SELECT * FROM `c` JOIN `d` ON ? = ? FOR SHARE ) FOR UPDATE ) )",
+    "digest": "86360ef0a1cbbb075a4fd48507d4d101455ebb007e84140f22d88240d58032f5"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT 1) (WITH d AS (SELECT 2) ((SELECT 1 FOR SHARE) FOR UPDATE))",
+    "text": "WITH `c` AS ( SELECT ? ) ( WITH `d` AS ( SELECT ? ) ( ( SELECT ? FOR SHARE ) FOR UPDATE ) )",
+    "digest": "15911d2a935eb9a26301e18de907123aa9a10b8df2f42df0559cbc383a5b0532"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT 1) SELECT * FROM (WITH d AS (SELECT 2) ((SELECT 1 FOR SHARE) FOR UPDATE)) q",
+    "text": "WITH `c` AS ( SELECT ? ) SELECT * FROM ( WITH `d` AS ( SELECT ? ) ( ( SELECT ? FOR SHARE ) FOR UPDATE ) ) `q`",
+    "digest": "0ddd737f3c13cc729df65bf615d710137ea683094c0265f9cfe25f1621cd6090"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT 1) SELECT (WITH d AS (SELECT 2) ((SELECT 1 FOR SHARE) FOR UPDATE))",
+    "text": "WITH `c` AS ( SELECT ? ) SELECT ( WITH `d` AS ( SELECT ? ) ( ( SELECT ? FOR SHARE ) FOR UPDATE ) )",
+    "digest": "436b8f39f08be847b5adfeb7fac44cb4ad54751f9116ff4ec4d0c74d46de45f4"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT 1) (WITH c AS (SELECT 2) ((SELECT * FROM c FOR SHARE) FOR UPDATE))",
+    "text": "WITH `c` AS ( SELECT ? ) ( WITH `c` AS ( SELECT ? ) ( ( SELECT * FROM `c` FOR SHARE ) FOR UPDATE ) )",
+    "digest": "e99ed714023cd7464ec527b1bb6c97874b150a99ae4c4870dc02ce9d3585dd06"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT 1) (WITH d AS (SELECT * FROM c) ((SELECT * FROM d FOR SHARE) FOR UPDATE))",
+    "text": "WITH `c` AS ( SELECT ? ) ( WITH `d` AS ( SELECT * FROM `c` ) ( ( SELECT * FROM `d` FOR SHARE ) FOR UPDATE ) )",
+    "digest": "321b9af8995aabbbaff2d5a5e02f74b423fab430890bb1674f80cd6b86c306ef"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT 1) (SELECT * FROM c UNION (WITH d AS (SELECT 2) ((SELECT * FROM c FOR SHARE) FOR UPDATE)))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT 1) (SELECT * FROM c UNION (WITH d AS (SELECT 2) ((SELECT * FROM d FOR SHARE) FOR UPDATE)))",
+    "text": "WITH `c` AS ( SELECT ? ) ( SELECT * FROM `c` UNION ( WITH `d` AS ( SELECT ? ) ( ( SELECT * FROM `d` FOR SHARE ) FOR UPDATE ) ) )",
+    "digest": "23451a6121c11484bfde5f1b902c88a8a1921275873f7453d766bec83d38ee62"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT 1) (SELECT * FROM t UNION (SELECT * FROM c FOR SHARE)) FOR UPDATE",
+    "text": "WITH `c` AS ( SELECT ? ) ( SELECT * FROM `t` UNION ( SELECT * FROM `c` FOR SHARE ) ) FOR UPDATE",
+    "digest": "3fa7c976656787557307c8874a784bd5ff93417ddc5f1662f7f1fe7ae36a8aaa"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT 1) SELECT (SELECT * FROM c FOR SHARE) FROM t FOR UPDATE",
+    "text": "WITH `c` AS ( SELECT ? ) SELECT ( SELECT * FROM `c` FOR SHARE ) FROM `t` FOR UPDATE",
+    "digest": "c0042b7651e5b43a9bcd251d7a42ba1d848341027d1d60cdf63aa7f93c480a0f"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT 1) (WITH d AS (SELECT 2) SELECT * FROM d), ((SELECT * FROM c FOR SHARE) FOR UPDATE)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 FROM t INTO @x",
+    "text": "SELECT ? FROM `t` INTO @?",
+    "digest": "2aa7224a597d80e70ac56fd5cd3935fd54593b23ddb8f6d095dcb31b023f38e3"
+  },
+  {
+    "sql_mode": "",
+    "sql": "(SELECT 1 FROM t INTO @x)",
+    "text": "( SELECT ? FROM `t` INTO @? )",
+    "digest": "ef8ab49e1398d2f0359d3102a8c22ad96df36fb98ad2044b2c7ba3f513304623"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT 1) (SELECT 1 FROM t INTO @x)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT 1) ((SELECT 1 FROM t INTO @x))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "(SELECT 1 FROM t INTO @x) ORDER BY 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "(SELECT 1 FROM t INTO @x) LIMIT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "(SELECT 1 FROM t INTO @x) FOR UPDATE",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 UNION (SELECT 1 FROM t INTO @x)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT 1) SELECT 1 UNION (SELECT 1 FROM t INTO @x)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT (SELECT 1 FROM t INTO @x)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 INTO @x FROM t",
+    "text": "SELECT ? INTO @? FROM `t`",
+    "digest": "03f8e5ff0f31f1923a52a3f680f39ff426f65c55ead0c3b93e2619cbfdfeec7d"
+  },
+  {
+    "sql_mode": "",
+    "sql": "(SELECT 1 INTO @x FROM t)",
+    "text": "( SELECT ? INTO @? FROM `t` )",
+    "digest": "fd827f16f47c058ac370f5e5042184c4801a42d0d6145ae97be5e13652407ff3"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT 1) (SELECT 1 INTO @x FROM t)",
+    "text": "WITH `c` AS ( SELECT ? ) ( SELECT ? INTO @? FROM `t` )",
+    "digest": "3e71790c960c82f7817dcd9e7af3ad01891c8ee975ecf1ff07f5fc8cdcabcfbf"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT 1) ((SELECT 1 INTO @x FROM t))",
+    "text": "WITH `c` AS ( SELECT ? ) ( ( SELECT ? INTO @? FROM `t` ) )",
+    "digest": "774cb87c3f2278841925ececd2867895b740b2d1307b1c6d472732e1de34aa87"
+  },
+  {
+    "sql_mode": "",
+    "sql": "(SELECT 1 INTO @x FROM t) ORDER BY 1",
+    "text": "( SELECT ? INTO @? FROM `t` ) ORDER BY ?",
+    "digest": "6cd26b724d748cf370456f9c7328aca3314f00f7105400703b6550b8febea082"
+  },
+  {
+    "sql_mode": "",
+    "sql": "(SELECT 1 INTO @x FROM t) LIMIT 1",
+    "text": "( SELECT ? INTO @? FROM `t` ) LIMIT ?",
+    "digest": "a666f9f391a14f4bd0da9a03b903a79cc40fa2239f8ac9f77aef0b477d6751e5"
+  },
+  {
+    "sql_mode": "",
+    "sql": "(SELECT 1 INTO @x FROM t) FOR UPDATE",
+    "text": "( SELECT ? INTO @? FROM `t` ) FOR UPDATE",
+    "digest": "0e5633e2e7d7d27105334ef5cc268ce8f677ad5e798ff29aaf27b5e3ff88a019"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 UNION (SELECT 1 INTO @x FROM t)",
+    "text": "SELECT ? UNION ( SELECT ? INTO @? FROM `t` )",
+    "digest": "5b6532e354686cfa2691da781f166bfc16f423df1de1aafd0d75e0f38598c1b3"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT 1) SELECT 1 UNION (SELECT 1 INTO @x FROM t)",
+    "text": "WITH `c` AS ( SELECT ? ) SELECT ? UNION ( SELECT ? INTO @? FROM `t` )",
+    "digest": "eef0d124b19917044fcb10dae1d0ca1788c46740dc8d72fa39ac21dcdb705d70"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT (SELECT 1 INTO @x FROM t)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 INTO @x",
+    "text": "SELECT ? INTO @?",
+    "digest": "b6e99cb183730f657a520cd4fa97cf05d8724a6ac08437d26c0635a481b447d5"
+  },
+  {
+    "sql_mode": "",
+    "sql": "(SELECT 1 INTO @x)",
+    "text": "( SELECT ? INTO @? )",
+    "digest": "400292b8e921317f76d46d373ad0062e4b3877d5fe470e3ba3b3ea81a3018678"
+  },
+  {
+    "sql_mode": "",
+    "sql": "(SELECT 1 INTO @x) LIMIT 1",
+    "text": "( SELECT ? INTO @? ) LIMIT ?",
+    "digest": "22c0003baac95330c75e8c42e62c54b20e038c17709cf17d7f2be3dc594ed49f"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 UNION (SELECT 1 INTO @x)",
+    "text": "SELECT ? UNION ( SELECT ? INTO @? )",
+    "digest": "56343fe5be9e2ade77522e9e208ab0bb7e2ee70f1545177ebef2d09f76eee0da"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT 1) SELECT 1 UNION (SELECT 1 INTO @x)",
+    "text": "WITH `c` AS ( SELECT ? ) SELECT ? UNION ( SELECT ? INTO @? )",
+    "digest": "d553ada4f941514cb1b5bd21c95b27f91e6fc782b2b2c2375ae57c2bbc7703f6"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT (SELECT 1 INTO @x)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 FROM t INTO OUTFILE '/tmp/claude_no_execute'",
+    "text": "SELECT ? FROM `t` INTO OUTFILE ?",
+    "digest": "4cbb55e8c6a7d45015225325007350f70f0a68b4eaa40f414a5eb7f4cba7cf27"
+  },
+  {
+    "sql_mode": "",
+    "sql": "(SELECT 1 FROM t INTO OUTFILE '/tmp/claude_no_execute')",
+    "text": "( SELECT ? FROM `t` INTO OUTFILE ? )",
+    "digest": "cd445d9e2c22663b0bf094c69bf74f8506865faed78d6e328cbacc6de0c4a49c"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT 1) (SELECT 1 FROM t INTO OUTFILE '/tmp/claude_no_execute')",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT 1) ((SELECT 1 FROM t INTO OUTFILE '/tmp/claude_no_execute'))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "(SELECT 1 FROM t INTO OUTFILE '/tmp/claude_no_execute') ORDER BY 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "(SELECT 1 FROM t INTO OUTFILE '/tmp/claude_no_execute') LIMIT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "(SELECT 1 FROM t INTO OUTFILE '/tmp/claude_no_execute') FOR UPDATE",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 UNION (SELECT 1 FROM t INTO OUTFILE '/tmp/claude_no_execute')",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT 1) SELECT 1 UNION (SELECT 1 FROM t INTO OUTFILE '/tmp/claude_no_execute')",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT (SELECT 1 FROM t INTO OUTFILE '/tmp/claude_no_execute')",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 INTO OUTFILE '/tmp/claude_no_execute' FROM t",
+    "text": "SELECT ? INTO OUTFILE ? FROM `t`",
+    "digest": "ab51ec1a3c174823af840bbde248652de726863bcb542a72228c1ea417eac899"
+  },
+  {
+    "sql_mode": "",
+    "sql": "(SELECT 1 INTO OUTFILE '/tmp/claude_no_execute' FROM t)",
+    "text": "( SELECT ? INTO OUTFILE ? FROM `t` )",
+    "digest": "2c45ae28b110e596b2dd2beb1e9abcc928ba8884a961bb0fd98c10c8f2564925"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT 1) (SELECT 1 INTO OUTFILE '/tmp/claude_no_execute' FROM t)",
+    "text": "WITH `c` AS ( SELECT ? ) ( SELECT ? INTO OUTFILE ? FROM `t` )",
+    "digest": "d9633bb55837bb2d2e8db1ddf824ec57dcbf4320addba4175c94f9bc0ee881b9"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT 1) ((SELECT 1 INTO OUTFILE '/tmp/claude_no_execute' FROM t))",
+    "text": "WITH `c` AS ( SELECT ? ) ( ( SELECT ? INTO OUTFILE ? FROM `t` ) )",
+    "digest": "dab53c9c4a71aceb4c6bdb4c6a7eca3cea0a35e502c2239833337d94bd01cff6"
+  },
+  {
+    "sql_mode": "",
+    "sql": "(SELECT 1 INTO OUTFILE '/tmp/claude_no_execute' FROM t) ORDER BY 1",
+    "text": "( SELECT ? INTO OUTFILE ? FROM `t` ) ORDER BY ?",
+    "digest": "f2c3db9bc3357c0184b394f20010fc33766f97242624a1d5c00cb07c297e9005"
+  },
+  {
+    "sql_mode": "",
+    "sql": "(SELECT 1 INTO OUTFILE '/tmp/claude_no_execute' FROM t) LIMIT 1",
+    "text": "( SELECT ? INTO OUTFILE ? FROM `t` ) LIMIT ?",
+    "digest": "6f7bbae61b7ee3d09e3d1e8f1f0d99ae794314a9ef01c93c0e836a5d05669920"
+  },
+  {
+    "sql_mode": "",
+    "sql": "(SELECT 1 INTO OUTFILE '/tmp/claude_no_execute' FROM t) FOR UPDATE",
+    "text": "( SELECT ? INTO OUTFILE ? FROM `t` ) FOR UPDATE",
+    "digest": "ea27ccea1bed371e16b0bf57ffbb679455e04c6df61510e6d4ee2023c0773db8"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 UNION (SELECT 1 INTO OUTFILE '/tmp/claude_no_execute' FROM t)",
+    "text": "SELECT ? UNION ( SELECT ? INTO OUTFILE ? FROM `t` )",
+    "digest": "f6afb6a5c7581d18ca8b27e2ef06c9a0870e6e23b4c06edbe21d7112424b155d"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT 1) SELECT 1 UNION (SELECT 1 INTO OUTFILE '/tmp/claude_no_execute' FROM t)",
+    "text": "WITH `c` AS ( SELECT ? ) SELECT ? UNION ( SELECT ? INTO OUTFILE ? FROM `t` )",
+    "digest": "ceef9614aa5c5ba4532fbd1db20bae871c06ec30379ec5e04c3016fba1eb849d"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT (SELECT 1 INTO OUTFILE '/tmp/claude_no_execute' FROM t)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT 1) ((SELECT 1 INTO OUTFILE '/tmp/claude_no_execute'))",
+    "text": "WITH `c` AS ( SELECT ? ) ( ( SELECT ? INTO OUTFILE ? ) )",
+    "digest": "2af4bd0fb32d9e5a8f4f13082b553c02efa001b953e163c749863cea4bea44ae"
+  },
+  {
+    "sql_mode": "",
+    "sql": "(SELECT 1 INTO OUTFILE '/tmp/claude_no_execute') ORDER BY 1",
+    "text": "( SELECT ? INTO OUTFILE ? ) ORDER BY ?",
+    "digest": "d71c56ca1617339d7ebc89e7ac043e1a40ea15f6d3deb25f98d96a5f8c5e3643"
+  },
+  {
+    "sql_mode": "",
+    "sql": "(SELECT 1 INTO OUTFILE '/tmp/claude_no_execute') LIMIT 1",
+    "text": "( SELECT ? INTO OUTFILE ? ) LIMIT ?",
+    "digest": "b58f5339f317be1b3afda7f133157ca195e0ff7cf5970ce7ab158558107d370e"
+  },
+  {
+    "sql_mode": "",
+    "sql": "(SELECT 1 INTO OUTFILE '/tmp/claude_no_execute') FOR UPDATE",
+    "text": "( SELECT ? INTO OUTFILE ? ) FOR UPDATE",
+    "digest": "cc28bbf38cf8204f748996b0559d4c6d3b7f3fe60933278dc5a3fc7be31cdee5"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 UNION (SELECT 1 INTO OUTFILE '/tmp/claude_no_execute')",
+    "text": "SELECT ? UNION ( SELECT ? INTO OUTFILE ? )",
+    "digest": "56817b2416945a05d6b373dd150e09d8269fda74a71437c7d84682fd03e39a31"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT 1) SELECT 1 UNION (SELECT 1 INTO OUTFILE '/tmp/claude_no_execute')",
+    "text": "WITH `c` AS ( SELECT ? ) SELECT ? UNION ( SELECT ? INTO OUTFILE ? )",
+    "digest": "57a2e56dee4fe6f8de98ba0ee4d22d002df817fee1f87fb75551e816f82eb7fb"
   }
 ]

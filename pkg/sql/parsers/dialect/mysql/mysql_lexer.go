@@ -421,6 +421,9 @@ func (l *Lexer) Lex(lval *yySymType) int {
 	} else {
 		typ, str = l.scanner.Scan()
 	}
+	// Preserve identifier identity even when digest-only grammar adaptation
+	// below turns QUOTE_ID into ID. This is token-local, never scanner state.
+	lval.quotedIdentifier = typ == QUOTE_ID
 	// Digest input is parsed, never bound/executed. Admit MySQL's explicit
 	// ROW constructor and quoted user-variable names without changing ordinary
 	// SQL execution syntax. The independent digest scanner keeps their tokens.

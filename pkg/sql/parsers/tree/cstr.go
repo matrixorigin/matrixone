@@ -25,7 +25,8 @@ type CStr struct {
 	o string
 	// use for compare
 	c string
-	// quote bool
+	// Quoted distinguishes an identifier token from a quoted identifier token.
+	Quoted bool
 }
 
 func NewCStr(str string, lower int64) *CStr {

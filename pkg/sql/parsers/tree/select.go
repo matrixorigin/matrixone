@@ -541,6 +541,11 @@ func selectIntoVariablesForTopLevel(stmt SelectStatement, insideUnion bool) (var
 	case *ParenSelect:
 		return selectIntoVariablesForTopLevel(node.Select, insideUnion)
 	case *UnionClause:
+		if _, parenthesized := node.Right.(*ParenSelect); parenthesized {
+			if err := validateSelectIntoOriginalPlacement(node.Right, false); err != "" {
+				return nil, false, err
+			}
+		}
 		if selectTreeHasInto(node.Left) || selectTreeHasExport(node.Left) {
 			return nil, false, MisplacedIntoClauseMessage
 		}
@@ -558,32 +563,47 @@ func selectIntoVariablesForTopLevel(stmt SelectStatement, insideUnion bool) (var
 }
 
 // ValidateSelectIntoInParentheses preserves the original SELECT-clause
-// placement. Promoted Select.IntoVars alone cannot distinguish INTO before
+// placement. Promoted Select.IntoVars/Ep alone cannot distinguish INTO before
 // FROM from the query-level suffix after FROM.
 func ValidateSelectIntoInParentheses(stmt SelectStatement) string {
 	vars, deprecated, err := SelectIntoVariablesForTopLevel(stmt)
 	if err != "" {
 		return err
 	}
-	if len(vars) == 0 {
+	if len(vars) == 0 && SelectIntoExport(stmt) == nil {
 		return ""
 	}
 	if deprecated {
 		return MisplacedIntoClauseMessage
 	}
+	return validateSelectIntoOriginalPlacement(stmt, true)
+}
+
+// Inspect only the original query envelope. Do not call the top-level INTO
+// collector from its own UNION recursion: that would revisit the right subtree
+// exponentially for nested set operations.
+func validateSelectIntoOriginalPlacement(stmt SelectStatement, hasInto bool) string {
 	for {
 		switch node := stmt.(type) {
 		case *Select:
+			hasInto = hasInto || len(node.IntoVars) > 0 || node.Ep != nil
 			stmt = node.Select
 		case *ParenSelect:
 			stmt = node.Select
+		case *UnionClause:
+			// A grouped final set operand can still own a pre-FROM INTO.
+			// Its original placement is in the final clause, not this wrapper.
+			stmt = node.Right
 		case *SelectClause:
-			if len(node.IntoVars) == 0 && node.From != nil && len(node.From.Tables) > 0 {
+			if hasInto && len(node.IntoVars) == 0 && node.IntoExport == nil && node.From != nil && len(node.From.Tables) > 0 {
 				return MisplacedIntoClauseMessage
 			}
 			return ""
 		default:
-			return MisplacedIntoClauseMessage
+			if hasInto {
+				return MisplacedIntoClauseMessage
+			}
+			return ""
 		}
 	}
 }
