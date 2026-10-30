@@ -211,6 +211,13 @@ func extendWithBitmaps(
 	needNulls bool,
 	needGrouping bool,
 ) error {
+	// COW may replace data and shrink spare capacity. Complete it before
+	// admitting rows or handing descriptor slices to append callers.
+	if v.HasBorrowedBacking() {
+		if err := v.MaterializeOwned(m); err != nil {
+			return err
+		}
+	}
 	if m != nil && v.prepareParamKinds == nil {
 		v.prepareParamKindsMP = m
 	}
