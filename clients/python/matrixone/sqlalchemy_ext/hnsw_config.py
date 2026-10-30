@@ -66,15 +66,15 @@ class HNSWConfig:
 
             bool: True if successful, False otherwise
         """
+        from ..connection_hooks import configure_pool_settings
+
         try:
-            if connection:
-                _exec_sql_safe(connection, "SET experimental_hnsw_index = 1")
+            if connection is not None:
+                _exec_sql_safe(connection, 'SET experimental_hnsw_index = 1').close()
             else:
-                with self.engine.begin() as conn:
-                    _exec_sql_safe(conn, "SET experimental_hnsw_index = 1")
+                configure_pool_settings(self.engine, experimental_hnsw_index=1)
             return True
-        except Exception as e:
-            print(f"Failed to enable HNSW indexing: {e}")
+        except Exception:
             return False
 
     def disable_hnsw_indexing(self, connection: Optional[Connection] = None) -> bool:
@@ -89,15 +89,15 @@ class HNSWConfig:
 
             bool: True if successful, False otherwise
         """
+        from ..connection_hooks import configure_pool_settings
+
         try:
-            if connection:
-                _exec_sql_safe(connection, "SET experimental_hnsw_index = 0")
+            if connection is not None:
+                _exec_sql_safe(connection, 'SET experimental_hnsw_index = 0').close()
             else:
-                with self.engine.begin() as conn:
-                    _exec_sql_safe(conn, "SET experimental_hnsw_index = 0")
+                configure_pool_settings(self.engine, experimental_hnsw_index=0)
             return True
-        except Exception as e:
-            print(f"Failed to disable HNSW indexing: {e}")
+        except Exception:
             return False
 
     def get_hnsw_status(self, connection: Optional[Connection] = None) -> Optional[bool]:

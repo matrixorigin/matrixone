@@ -252,9 +252,12 @@ func bindAndOptimizeInsertQuery(ctx CompilerContext, stmt *tree.Insert, isPrepar
 	// modernInsertFkCheckEnabled / appendForeignConstrantPlan), and INSERT IGNORE
 	// drops the offending rows (see buildInsertIgnoreFkFilter). Only self-referencing
 	// FKs still need a post-execution DetectSql, generated here for all of them.
-	tblInfo, err := getDmlTableInfo(ctx, tree.TableExprs{stmt.Table}, stmt.With, nil, "insert")
+	tblInfo, err := getDmlTableInfo(ctx, tree.TableExprs{stmt.Table}, nil, nil, "insert")
 	if err != nil {
 		return nil, err
+	}
+	if len(tblInfo.tableDefs) != 1 {
+		return nil, moerr.NewInvalidInput(ctx.GetContext(), "INSERT requires one physical target table")
 	}
 	if len(tblInfo.tableDefs) == 1 && len(tblInfo.tableDefs[0].Fkeys) > 0 {
 		// The in-plan child checks and self-reference DetectSqls depend on the
@@ -511,7 +514,8 @@ func bindAndOptimizeUpdateQuery(ctx CompilerContext, stmt *tree.Update, isPrepar
 	}
 	builder.returningRequested = stmt.HasReturning()
 
-	rootId, err := builder.bindUpdate(stmt, bindCtx)
+	dmlCtx := NewDMLContext()
+	rootId, err := builder.bindUpdate(stmt, bindCtx, dmlCtx)
 	if err != nil {
 		route, reason, routedErr := classifyUpdatePlannerError(err)
 		switch route {
@@ -558,12 +562,8 @@ func bindAndOptimizeUpdateQuery(ctx CompilerContext, stmt *tree.Update, isPrepar
 		return nil, err
 	}
 	if enabled && query.HasForeignKeyAction {
-		tblInfo, resolveErr := getUpdateTableInfo(ctx, stmt)
-		if resolveErr != nil {
-			return nil, resolveErr
-		}
-		for i, tableDef := range tblInfo.tableDefs {
-			if len(tblInfo.updateKeys[i]) == 0 {
+		for i, tableDef := range dmlCtx.tableDefs {
+			if len(dmlCtx.updateCol2Expr[i]) == 0 {
 				continue
 			}
 			selfFkeys := make([]*plan.ForeignKeyDef, 0, len(tableDef.Fkeys))
@@ -577,7 +577,7 @@ func bindAndOptimizeUpdateQuery(ctx CompilerContext, stmt *tree.Update, isPrepar
 			}
 			sqls, genErr := genSqlsForCheckFKSelfRefer(
 				ctx.GetContext(),
-				tblInfo.objRef[i].SchemaName,
+				dmlCtx.objRefs[i].SchemaName,
 				tableDef.Name,
 				tableDef.Cols,
 				selfFkeys,
@@ -894,6 +894,8 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bool) (re
 		return nil, moerr.NewInternalErrorf(ctx.GetContext(), "statement: '%v'", tree.String(stmt, dialect.MYSQL))
 	case *tree.Do, *tree.Declare:
 		return nil, moerr.NewNotSupported(ctx.GetContext(), tree.String(stmt, dialect.MYSQL))
+	case *tree.ExplainFor:
+		return nil, moerr.NewNotSupported(ctx.GetContext(), "EXPLAIN FOR CONNECTION")
 	case *tree.CreateExtension, *tree.LoadExtension:
 		return nil, moerr.NewNotSupported(ctx.GetContext(), "extension statements are not supported in MatrixOne")
 	case *tree.ValuesStatement:

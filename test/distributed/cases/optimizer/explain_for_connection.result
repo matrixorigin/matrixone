@@ -1,0 +1,14 @@
+explain for connection 328;
+not supported: EXPLAIN FOR CONNECTION
+explain for connection 999;
+not supported: EXPLAIN FOR CONNECTION
+explain format = 'json' for connection 999;
+not supported: EXPLAIN FOR CONNECTION
+describe for connection 1;
+not supported: EXPLAIN FOR CONNECTION
+desc format = 'tree' for connection 2;
+not supported: EXPLAIN FOR CONNECTION
+explain select 1;
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Values Scan "*VALUES*" 

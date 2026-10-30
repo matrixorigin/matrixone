@@ -64,6 +64,22 @@ func buildIcebergUpdatePlan(stmt *tree.Update, ctx CompilerContext, isPrepareStm
 		return nil, err
 	}
 
+	qualifier := target.alias
+	if qualifier == "" {
+		qualifier = target.tableName
+	}
+	for _, assignment := range stmt.Exprs {
+		for _, lhs := range assignment.Names {
+			binding, bindErr := resolveUpdateAssignmentTarget(builder.GetContext(), bindCtx, lhs)
+			if bindErr != nil {
+				return nil, bindErr
+			}
+			if binding.table != qualifier || binding.tableID != target.tableDef.TblId {
+				return nil, moerr.NewInvalidInputf(builder.GetContext(), "UPDATE target table '%s' is not updatable", binding.table)
+			}
+		}
+	}
+
 	insertNode := &plan.Node{
 		NodeType:     plan.Node_INSERT,
 		Children:     []int32{lastNodeID},

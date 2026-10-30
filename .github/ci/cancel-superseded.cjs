@@ -38,24 +38,65 @@ async function releaseSupersededRuns({ github, context, core, runId, wait = slee
   }
   if (!active.has(successor.status)) return;
 
+  const matches = run => isSuperseded(run, successor);
+  const candidates = await findActiveRuns(github, repo, workflow.id, successor.head_branch, matches);
+  const stillCurrent = async () => {
+    const current = await get(successor.id);
+    return active.has(current.status) && current.run_attempt === successor.run_attempt;
+  };
+  await cancelMatchingRuns({ github, repo, core, get, candidates, matches, stillCurrent, wait });
+}
+
+// Both policies use the same bounded discovery, teardown grace and escalation.
+async function findActiveRuns(github, repo, workflowId, branch, matches) {
   const candidates = new Map();
   // Bound discovery to active runs of this workflow and branch. Reject an
   // unexpectedly incomplete response rather than silently claiming recovery.
   for (const status of active) {
     const { data } = await github.rest.actions.listWorkflowRuns({
-      ...repo, workflow_id: workflow.id, branch: successor.head_branch,
+      ...repo, workflow_id: workflowId, branch,
       event: 'pull_request_target', status, per_page: 100,
     });
     if (data.total_count > 100) throw new Error('Too many active runs; inspect cancellation manually');
     for (const run of data.workflow_runs) {
-      if (isSuperseded(run, successor)) candidates.set(run.id, run);
+      if (matches(run)) candidates.set(run.id, run);
     }
   }
-  const pending = new Map();
+  return candidates;
+}
+
+async function releaseClosedPullRequestRuns({ github, context, core, wait = sleep }) {
+  const closed = context.payload.pull_request;
+  if (context.payload.action !== 'closed' || !closed?.number || !closed.closed_at) {
+    throw new Error('Expected a closed pull request event');
+  }
+  const repo = context.repo;
   const stillCurrent = async () => {
-    const current = await get(successor.id);
-    return active.has(current.status) && current.run_attempt === successor.run_attempt;
+    const { data: pr } = await github.rest.pulls.get({ ...repo, pull_number: closed.number });
+    if (pr.state !== 'closed' || pr.closed_at !== closed.closed_at ||
+        !closed.head.repo?.id || pr.head.repo?.id !== closed.head.repo.id ||
+        pr.head.ref !== closed.head.ref) return false;
+    // A head branch can serve another open PR against a different base. The
+    // Actions branch identity alone must not authorize cancelling its work.
+    const { data: open } = await github.rest.pulls.list({
+      ...repo, state: 'open', head: `${closed.head.repo.owner.login}:${closed.head.ref}`, per_page: 1,
+    });
+    return open.length === 0;
   };
+  if (!await stillCurrent()) return;
+  const workflow = (await github.rest.actions.getWorkflow({ ...repo, workflow_id: 'entrypoint.yaml' })).data;
+  const matches = run => active.has(run.status) && run.event === 'pull_request_target' &&
+    run.workflow_id === workflow.id && run.head_repository?.id === closed.head.repo.id &&
+    run.head_branch === closed.head.ref &&
+    Date.parse(run.created_at) <= Date.parse(closed.closed_at) &&
+    Date.parse(run.run_started_at) <= Date.parse(closed.closed_at);
+  const candidates = await findActiveRuns(github, repo, workflow.id, closed.head.ref, matches);
+  const get = async id => (await github.rest.actions.getWorkflowRun({ ...repo, run_id: id })).data;
+  await cancelMatchingRuns({ github, repo, core, get, candidates, matches, stillCurrent, wait });
+}
+
+async function cancelMatchingRuns({ github, repo, core, get, candidates, matches, stillCurrent, wait }) {
+  const pending = new Map();
   const requestCancel = async (run, force) => {
     try {
       if (force) {
@@ -73,7 +114,7 @@ async function releaseSupersededRuns({ github, context, core, runId, wait = slee
       // Normal cancellation may already have been requested by concurrency.
       // Revalidate before allowing the ordinary grace/escalation path; a 409
       // alone is never evidence that the run has finished or is safe to kill.
-      if (!isSuperseded(current, successor) || current.run_attempt !== run.run_attempt) return;
+      if (!matches(current) || current.run_attempt !== run.run_attempt) return;
       core.info(`Run ${run.id} is still active after cancellation conflict; waiting before escalation`);
     }
     core.info(`${force ? 'Force cancellation' : 'Cancellation'} requested for run ${run.id}, attempt ${run.run_attempt}`);
@@ -81,7 +122,7 @@ async function releaseSupersededRuns({ github, context, core, runId, wait = slee
   for (const candidate of candidates.values()) {
     if (!await stillCurrent()) return;
     const run = await get(candidate.id);
-    if (!isSuperseded(run, successor) || run.run_attempt !== candidate.run_attempt) continue;
+    if (!matches(run) || run.run_attempt !== candidate.run_attempt) continue;
     await requestCancel(run, false);
     pending.set(run.id, run);
   }
@@ -92,18 +133,18 @@ async function releaseSupersededRuns({ github, context, core, runId, wait = slee
     if (!await stillCurrent()) return;
     for (const [id, initial] of pending) {
       const run = await get(id);
-      if (!isSuperseded(run, successor) || run.run_attempt !== initial.run_attempt) pending.delete(id);
+      if (!matches(run) || run.run_attempt !== initial.run_attempt) pending.delete(id);
     }
   }
   for (const [id, initial] of pending) {
     if (!await stillCurrent()) return;
     const run = await get(id);
-    if (!isSuperseded(run, successor) || run.run_attempt !== initial.run_attempt) continue;
+    if (!matches(run) || run.run_attempt !== initial.run_attempt) continue;
     await requestCancel(run, true);
   }
-  await core.summary.addHeading('Superseded CI cancellation')
-    .addRaw(`Successor: ${successor.id}; matched older runs: ${candidates.size}; escalation candidates after grace: ${pending.size}. Cancellation acceptance is not proof that runner cleanup has finished.`)
+  await core.summary.addHeading('CI cancellation')
+    .addRaw(`Matched obsolete runs: ${candidates.size}; escalation candidates after grace: ${pending.size}. Cancellation acceptance is not proof that runner cleanup has finished.`)
     .write();
 }
 
-module.exports = { isSuperseded, releaseSupersededRuns };
+module.exports = { isSuperseded, releaseSupersededRuns, releaseClosedPullRequestRuns };

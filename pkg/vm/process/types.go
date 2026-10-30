@@ -346,6 +346,8 @@ func (sp *StmtProfile) SetSqlSourceType(st string) {
 }
 
 func (sp *StmtProfile) GetSqlSourceType() string {
+	sp.mu.Lock()
+	defer sp.mu.Unlock()
 	return sp.sqlSourceType
 }
 

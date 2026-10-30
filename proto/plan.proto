@@ -1411,11 +1411,19 @@ message Node {
   // on_list continues to use the opaque physical comparison key.
   repeated Expr dedup_key_exprs = 95;
 
+  // MARK only: a proven Boolean existence consumer with total, pure predicates.
+  // Permits Boolean membership lowering; the generated IS TRUE consumer stays.
+  bool mark_existence_only = 96;
+
   // Locking-read current-read provenance of this scan occurrence, captured
   // at bind time (ScanReadRole). Additive field; see the enum: rev 14
   // narrows the zero value to "unset" for above-gate plans (a lost mark is
   // declined by the execution-read closure check; legacy decode unchanged).
-  ScanReadRole scan_read_role = 96;
+  // Field 97: upstream main claimed Node field 96 (mark_existence_only)
+  // while this change sat on its branch, so this additive field moved to the
+  // next free number; nothing persisted field 96 as scan_read_role.
+  ScanReadRole scan_read_role = 97;
+
 }
 
 message SnapshotExtraInfo {

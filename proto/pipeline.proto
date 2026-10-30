@@ -322,6 +322,8 @@ message HashJoin {
   bool emit_compressed_row_count = 16;
   int32 asof_right_col = 17;
   bool asof_build_left = 18;
+  // Boolean EXISTS marker: NULL keys never witness a TRUE equality match.
+  bool existence_only = 19;
 }
 
 message LoopJoin {

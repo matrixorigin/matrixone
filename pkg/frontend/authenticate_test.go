@@ -676,6 +676,42 @@ func TestInitInformationSchemaSysTablesForProtocol_UsesProtocolAwareViews(t *tes
 	require.NotContains(t, current, sysview.InformationSchemaViewsLegacyDDL)
 }
 
+// TestCreateTablesInformationSchemaPublishesDeclaredMetadataUnconditionally
+// pins the account-creation publication contract of the declared catalog
+// metadata: the corrected COLUMNS identity (declared ENUM/SET label
+// character metadata with SQL NULL numeric classification and the unbounded
+// generated expression) and the prefix-aware STATISTICS identity publish
+// whenever account creation succeeds. Account creation installs the complete
+// current definition set or aborts, so no peer answer or deferral can leave a
+// fresh account with pre-correction metadata, and a predecessor identity is
+// never authored.
+func TestCreateTablesInformationSchemaPublishesDeclaredMetadataUnconditionally(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	ctx = defines.AttachAccount(ctx, 42, 1, 2)
+	bh := mock_frontend.NewMockBackgroundExec(gomock.NewController(t))
+	bh.EXPECT().ClearExecResultSet().AnyTimes()
+	bh.EXPECT().GetExecResultSet().Return([]interface{}{
+		newMrsForCheckTenant([][]interface{}{{`{"result":"cn-a:126,cn-b:126"}`}}),
+	}).AnyTimes()
+	var executed []string
+	bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(
+		func(_ context.Context, sql string) error {
+			executed = append(executed, sql)
+			return nil
+		}).AnyTimes()
+
+	require.NoError(t, createTablesInInformationSchemaOfGeneralTenant(ctx, bh))
+	require.Contains(t, executed, sysview.InformationSchemaColumnsDDL)
+	require.Contains(t, executed, sysview.InformationSchemaStatisticsPrefixSubPartDDL)
+	// A fresh publication never installs the predecessor templates; they are
+	// recognized only for reading state older binaries persisted (historical
+	// snapshots), never authored here.
+	require.NotContains(t, executed, sysview.InformationSchemaColumnsV100DDL())
+	require.NotContains(t, executed, sysview.InformationSchemaColumnsV110DDL())
+	require.NotContains(t, executed, sysview.InformationSchemaStatisticsDDL)
+}
+
 func containsSQL(sqls []string, expected string) bool {
 	for _, sql := range sqls {
 		if sql == expected {
@@ -10154,8 +10190,8 @@ func Test_doDropRole(t *testing.T) {
 		convey.So(err, convey.ShouldBeNil)
 		roleLookup, lookupErr := getSqlForRoleIdOfRole(context.TODO(), stmt.Roles[0].UserName)
 		require.NoError(t, lookupErr)
-		require.Equal(t, []string{"begin;", "select 1", roleLookup}, bh.executedSQLs[:3])
-		require.Equal(t, fmt.Sprintf(deleteRoleFromMoRoleRuleFormat, int64(0)), bh.executedSQLs[3])
+		require.Equal(t, []string{"begin;", "select 1", "select 1", roleLookup}, bh.executedSQLs[:4])
+		require.Equal(t, fmt.Sprintf(deleteRoleFromMoRoleRuleFormat, int64(0)), bh.executedSQLs[4])
 		require.Nil(t, ses.ruleCache)
 	})
 	convey.Convey("drop role succ (if exists)", t, func() {
@@ -16924,7 +16960,7 @@ func TestDoCreateStage(t *testing.T) {
 }
 
 func TestDoAlterStage(t *testing.T) {
-	convey.Convey("doAlterStage success", t, func() {
+	convey.Convey("doAlterStage combined options success", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
@@ -16963,13 +16999,16 @@ func TestDoAlterStage(t *testing.T) {
 				Url:   "s3://load/files/",
 			},
 			CredentialsOption: tree.StageCredentials{
-				Exist: false,
+				Exist:       true,
+				Credentials: []string{"AWS_SECRET_KEY", "quoted'value"},
 			},
 			StatusOption: tree.StageStatus{
-				Exist: false,
+				Exist:  true,
+				Option: tree.StageStatusEnabled,
 			},
 			Comment: tree.StageComment{
-				Exist: false,
+				Exist:   true,
+				Comment: "quoted'comment",
 			},
 		}
 
@@ -17176,7 +17215,7 @@ func TestDoAlterStage(t *testing.T) {
 		convey.So(err, convey.ShouldNotBeNil)
 	})
 
-	convey.Convey("doAlterStage fail", t, func() {
+	convey.Convey("doAlterStage IF EXISTS missing combined options is a no-op", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
@@ -17236,7 +17275,7 @@ func TestDoAlterStage(t *testing.T) {
 		bh.sql2result[sql] = mrs
 
 		err := doAlterStage(ctx, ses, as)
-		convey.So(err, convey.ShouldNotBeNil)
+		convey.So(err, convey.ShouldBeNil)
 	})
 
 	convey.Convey("doAlterStage fail", t, func() {

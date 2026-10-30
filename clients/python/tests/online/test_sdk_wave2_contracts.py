@@ -276,7 +276,7 @@ async def test_cancelled_upsert_rolls_back_first_write(client, async_client, mon
 @pytest.mark.asyncio
 @pytest.mark.parametrize('kind', ['sync', 'async'])
 async def test_fulltext_terms_match_native_in_both_modes(client, async_client, kind, record_property):
-    from matrixone._sql_literals import fulltext_term_token
+    from matrixone._sql_literals import string_grammar_token
     from matrixone.sqlalchemy_ext.fulltext_search import natural_match
 
     c = client if kind == 'sync' else async_client

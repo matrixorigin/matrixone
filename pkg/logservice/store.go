@@ -850,6 +850,14 @@ func (l *store) read(ctx context.Context,
 	shardID uint64, query interface{}) (interface{}, error) {
 	count := 0
 	for {
+		// Preserve Dragonboat's cancellation error while refusing a request
+		// canceled before admission (including a retry of an unready shard).
+		if ctx.Err() == context.Canceled {
+			// Keep the driver's missing/expired-deadline error precedence.
+			if deadline, ok := ctx.Deadline(); ok && time.Now().Before(deadline) {
+				return nil, dragonboat.ErrCanceled
+			}
+		}
 		count++
 		result, err := l.nh.SyncRead(ctx, shardID, query)
 		if err != nil {

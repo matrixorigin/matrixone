@@ -64,7 +64,7 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, bindCtx *BindContext)
 	// existence via DetectSqls generated in bindAndOptimizeInsertQuery.
 	origCtx := builder.GetContext()
 	builder.compCtx.SetContext(context.WithValue(origCtx, defines.IgnoreForeignKey{}, true))
-	err := dmlCtx.ResolveTables(builder.compCtx, tree.TableExprs{stmt.Table}, stmt.With, nil, true)
+	err := dmlCtx.ResolveTables(builder.compCtx, tree.TableExprs{stmt.Table}, nil, nil, true)
 	builder.compCtx.SetContext(origCtx)
 	if err != nil {
 		return 0, err
@@ -104,21 +104,19 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, bindCtx *BindContext)
 		}()
 	}
 
-	// Pass WITH clause from INSERT to SELECT if present. The parsed AST can be
-	// retained by PREPARE, so keep the binding-specific rewrite off that shared
-	// wrapper.
-	rowsForBinding := stmt.Rows
-	if stmt.With != nil && stmt.Rows != nil && stmt.Rows.With == nil {
-		rowsCopy := *stmt.Rows
-		rowsCopy.With = stmt.With
-		rowsForBinding = &rowsCopy
+	if err = builder.prepareInsertSourceScope(stmt, bindCtx); err != nil {
+		return 0, err
 	}
+	rowsForBinding := stmt.Rows
 
 	// Capture irregular (IVF/fulltext/master) indexes before appendNodesForInsertStmt
 	// strips them from the 1:1 dedup+MULTI_UPDATE plan (which only covers the base
 	// table and regular indexes). Their computed 1:N maintenance is appended after
 	// createQuery from the materialized new-row image. HNSW/CAGRA/IVF-PQ are cron-
 	// maintained and ride the modern path with no inline sub-plan.
+	if len(dmlCtx.tableDefs) != 1 {
+		return 0, moerr.NewInvalidInput(builder.GetContext(), "INSERT requires one physical target table")
+	}
 	tableDef := dmlCtx.tableDefs[0]
 	if tableDef.TableType == catalog.SystemClusterRel {
 		if stmt.Overwrite {
@@ -2967,6 +2965,13 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 			if err != nil {
 				return 0, err
 			}
+			// Same cross-mode consumption boundary as the plain insert path:
+			// a native-mode ODKU statement must fail closed on a persisted
+			// definition that needs the conditional boolean contracts.
+			if err := RequireMySQLConditionalBooleanConsumption(
+				builder.GetContext(), builder.compCtx.GetProcess(), genExpr); err != nil {
+				return 0, err
+			}
 			replaceColRefTag(genExpr, 0, scanTag)
 			updateExprs[col.Name] = genExpr
 			updateColIdxList = append(updateColIdxList, int32(i))
@@ -5584,6 +5589,15 @@ func (builder *QueryBuilder) appendNodesForInsertStmt(
 		if err != nil {
 			return 0, nil, nil, -1, err
 		}
+		// The copied catalog expression is rebound against THIS statement: a
+		// definition that needs the conditional boolean contracts evaluates
+		// with those kernels only on a MySQL-mode session, and a native-mode
+		// DML statement must fail closed at plan time instead of pushing a
+		// persisted JSON condition into the pre-contract BOOL decoding.
+		if err := RequireMySQLConditionalBooleanConsumption(
+			builder.GetContext(), builder.compCtx.GetProcess(), genExpr); err != nil {
+			return 0, nil, nil, -1, err
+		}
 		proj1Pos := genColIdxToProj1Pos[i]
 		columnExprs[int32(i)] = genExpr
 		colIdxToProjPos[int32(i)] = int32(proj1Pos)
@@ -6422,4 +6436,18 @@ func (builder *QueryBuilder) buildValueScanWithSubqueries(
 		Children:    []int32{orderedID},
 		BindingTags: []int32{outputTag},
 	}, outputCtx), nil
+}
+
+// prepareInsertSourceScope registers INSERT's outer WITH using the existing
+// SELECT declaration owner. The source SELECT binds in its normal child context,
+// retaining its own WITH and normal lexical shadowing without changing the AST.
+func (builder *QueryBuilder) prepareInsertSourceScope(stmt *tree.Insert, bindCtx *BindContext) error {
+	if stmt.With == nil {
+		return nil
+	}
+	declarations := &tree.Select{With: stmt.With}
+	if registerNumericCteDefinitions(declarations, bindCtx) {
+		seedNumericCteProjectionTypes(builder, bindCtx)
+	}
+	return builder.preprocessCte(declarations, bindCtx)
 }
