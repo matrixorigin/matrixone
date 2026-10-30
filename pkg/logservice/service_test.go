@@ -856,6 +856,7 @@ func TestServiceViewMetadataAdmissionReconcilesPendingBeforeProtocolRaise(t *tes
 			})
 			require.Equal(t, uint32(moerr.Ok), response.ErrorCode)
 		}
+		ingressReady := true
 		cnHeartbeat := func(generation, observed, fenced uint64) pb.Response {
 			response := s.handleCNHeartbeat(ctx, pb.Request{
 				Method: pb.CN_HEARTBEAT,
@@ -866,7 +867,7 @@ func TestServiceViewMetadataAdmissionReconcilesPendingBeforeProtocolRaise(t *tes
 					ViewMetadataAdmissionGeneration:    generation,
 					ViewMetadataObservedEpoch:          observed,
 					ViewMetadataCatalogFencedEpoch:     fenced,
-					ViewMetadataIngressReady:           true,
+					ViewMetadataIngressReady:           ingressReady,
 					ViewMetadataRefreshSupported:       false,
 					CommandDeliveryAckSupported:        true,
 				},
@@ -912,6 +913,7 @@ func TestServiceViewMetadataAdmissionReconcilesPendingBeforeProtocolRaise(t *tes
 		state, err := s.store.getCheckerStateWithContext(ctx)
 		require.NoError(t, err)
 		oldTargetTick := state.Tick
+		ingressReady = false
 		restartResponse := cnHeartbeat(11, 2, 2)
 		require.NotNil(t, restartResponse.CommandBatch)
 		require.NotNil(t, restartResponse.CommandBatch.ViewMetadataAdmission)
@@ -930,6 +932,8 @@ func TestServiceViewMetadataAdmissionReconcilesPendingBeforeProtocolRaise(t *tes
 			}
 			propose(hapkg.GetTickCmd())
 		}
+		// Keep the replacement live while the old generation's target expires.
+		cnHeartbeat(11, restartEpoch, restartEpoch)
 		// The first checker pass after expiry must use legacy reconciliation.
 		// It clears the old-generation target while the durable floor remains 0.
 		state, err = s.store.getCheckerStateWithContext(ctx)
@@ -955,8 +959,10 @@ func TestServiceViewMetadataAdmissionReconcilesPendingBeforeProtocolRaise(t *tes
 		state, err = s.store.getCheckerStateWithContext(ctx)
 		require.NoError(t, err)
 		newEpoch := restartEpoch + 1
-		cnHeartbeat(11, newEpoch, newEpoch)
 		proxyHeartbeat(20, newEpoch)
+		fenced := cnHeartbeat(11, newEpoch, newEpoch)
+		require.True(t, fenced.CommandBatch.ViewMetadataAdmission.Admitted)
+		require.False(t, fenced.CommandBatch.ViewMetadataAdmission.Ready)
 		state, err = s.store.getCheckerStateWithContext(ctx)
 		require.NoError(t, err)
 		enabled, err := s.store.tryEnableViewMetadataAdmission(ctx, state)
@@ -966,6 +972,9 @@ func TestServiceViewMetadataAdmissionReconcilesPendingBeforeProtocolRaise(t *tes
 		require.NoError(t, err)
 		require.False(t, admission.Pending)
 		require.Equal(t, uint64(defines.MORPCLatestVersion), admission.RequiredProtocolVersion)
+		ingressReady = true
+		routable := cnHeartbeat(11, newEpoch, newEpoch)
+		require.True(t, routable.CommandBatch.ViewMetadataAdmission.Ready)
 	}
 	runServiceTest(t, true, true, fn)
 }

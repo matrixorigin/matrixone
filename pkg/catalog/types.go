@@ -385,6 +385,7 @@ const (
 	MO_COLUMNS        = "mo_columns"
 	MO_COLUMNS_UPDATE = "mo_columns_update"
 	MO_USER           = "mo_user"
+	MO_ROLE_GRANT     = "mo_role_grant"
 	MO_ROLE_RULE      = "mo_role_rule"
 
 	// mo_tables logical_id index table name (fixed name, no UUID)

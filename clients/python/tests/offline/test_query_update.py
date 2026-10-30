@@ -102,7 +102,7 @@ class TestQueryUpdate:
         assert query._query_type == "UPDATE"
 
         # Check that SQLAlchemy expression is handled correctly
-        assert "last_login = NOW()" in query._update_set_columns
+        assert "last_login = NOW()" in query._build_update_sql()[0]
 
     def test_update_with_complex_expressions(self):
         """Test update with complex SQLAlchemy expressions"""
@@ -117,7 +117,7 @@ class TestQueryUpdate:
         assert query._query_type == "UPDATE"
 
         # Check that complex expression is handled correctly
-        assert "login_count = login_count + 1" in query._update_set_columns
+        assert "login_count = login_count + 1" in query._build_update_sql()[0]
 
     def test_update_build_sql_simple(self):
         """Test building UPDATE SQL with simple values"""
@@ -211,7 +211,7 @@ class TestQueryUpdate:
         from sqlalchemy import func
 
         query = self.base_query.update(name=func.upper('a.b'))
-        assert "name = upper('a.b')" in query._update_set_columns
+        assert "name = upper('a.b')" in query._build_update_sql()[0]
 
     def test_matrixone_query_update(self):
         """Test MatrixOneQuery update functionality"""

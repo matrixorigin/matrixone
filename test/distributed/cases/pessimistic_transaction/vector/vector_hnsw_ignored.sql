@@ -175,7 +175,7 @@ show index ignored from m where Key_name = 'm1';
 -- @ignore:4
 show index ignored from m where Key_name = 'm2';
 -- @ignore:4
-show index ignored from m where Primary_key = '3' and Error_code = 20345 and Reason like '%range%';
+show index ignored from m where Primary_key = '3' and Error_code = 20347 and Reason like '%range%';
 show index ignored from m where Key_name = 'nope';
 -- SHOW INDEX STATUS counts them per index
 -- @ignore:6

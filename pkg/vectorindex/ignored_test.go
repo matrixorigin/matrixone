@@ -32,7 +32,7 @@ func TestIgnoredRowsSql(t *testing.T) {
 
 	sqls := IgnoredRowsSql("db", "t", cols, []IgnoredRow{{Pk: "1", Code: moerr.ErrIndexVectorOutOfRange, Ts: 5}, {Pk: "'x'", Code: moerr.ErrIndexVectorNonFinite, Ts: 6}})
 	require.Equal(t, []string{
-		"REPLACE INTO `db`.`t` (`__mo_index_pk`, `__mo_index_code`, `__mo_index_ts`) VALUES (1, 20345, 5), ('x', 20344, 6)",
+		"REPLACE INTO `db`.`t` (`__mo_index_pk`, `__mo_index_code`, `__mo_index_ts`) VALUES (1, 20347, 5), ('x', 20346, 6)",
 	}, sqls)
 
 	rows := make([]IgnoredRow, ignoredRowsPerSql+1)
@@ -41,8 +41,8 @@ func TestIgnoredRowsSql(t *testing.T) {
 	}
 	sqls = IgnoredRowsSql("db", "t", cols, rows)
 	require.Len(t, sqls, 2)
-	require.Equal(t, ignoredRowsPerSql, strings.Count(sqls[0], ", 20343, "))
-	require.Equal(t, 1, strings.Count(sqls[1], ", 20343, "))
+	require.Equal(t, ignoredRowsPerSql, strings.Count(sqls[0], ", 20345, "))
+	require.Equal(t, 1, strings.Count(sqls[1], ", 20345, "))
 }
 
 func TestUnstorableCode(t *testing.T) {
@@ -94,10 +94,10 @@ func TestIgnoredSpill(t *testing.T) {
 	var sqls []string
 	require.NoError(t, s.Sqls("db", "t", cols, 7, func(sql string) error { sqls = append(sqls, sql); return nil }))
 	require.Len(t, sqls, 2)
-	require.True(t, strings.HasPrefix(sqls[0], "REPLACE INTO `db`.`t` (`pk`, `code`, `ts`) VALUES (0, 20345, 7), ('a''b\nc', 20345, 7), (2, 20345, 7)"))
-	require.Equal(t, ignoredRowsPerSql, strings.Count(sqls[0], ", 20345, 7)"))
-	require.Equal(t, 3, strings.Count(sqls[1], ", 20345, 7)"))
-	require.True(t, strings.HasSuffix(sqls[1], fmt.Sprintf("(%d, 20345, 7)", n-1)))
+	require.True(t, strings.HasPrefix(sqls[0], "REPLACE INTO `db`.`t` (`pk`, `code`, `ts`) VALUES (0, 20347, 7), ('a''b\nc', 20347, 7), (2, 20347, 7)"))
+	require.Equal(t, ignoredRowsPerSql, strings.Count(sqls[0], ", 20347, 7)"))
+	require.Equal(t, 3, strings.Count(sqls[1], ", 20347, 7)"))
+	require.True(t, strings.HasSuffix(sqls[1], fmt.Sprintf("(%d, 20347, 7)", n-1)))
 
 	boom := errors.New("boom")
 	require.ErrorIs(t, s.Sqls("db", "t", cols, 7, func(string) error { return boom }), boom)

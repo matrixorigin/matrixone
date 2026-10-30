@@ -231,9 +231,9 @@ func TestCatalogVersionOrderingUsesSemanticVersionAndOffset(t *testing.T) {
 		rollback := errors.New("rollback test catalog versions")
 		err = exec.ExecTxn(ctx, func(tx executor.TxnExecutor) error {
 			for _, statement := range []string{
-				"insert into mo_catalog.mo_version values ('4.0.9', 1, 2, '2099-01-01 00:00:00', '2099-01-01 00:00:00')",
-				"insert into mo_catalog.mo_version values ('4.0.10', 1, 2, '2099-01-01 00:00:00', '2099-01-01 00:00:00')",
-				"insert into mo_catalog.mo_version values ('4.0.10', 2, 2, '2098-01-01 00:00:00', '2098-01-01 00:00:00')",
+				"insert into mo_catalog.mo_version values ('4.1.9', 1, 2, '2099-01-01 00:00:00', '2099-01-01 00:00:00')",
+				"insert into mo_catalog.mo_version values ('4.1.10', 1, 2, '2099-01-01 00:00:00', '2099-01-01 00:00:00')",
+				"insert into mo_catalog.mo_version values ('4.1.10', 2, 2, '2098-01-01 00:00:00', '2098-01-01 00:00:00')",
 			} {
 				result, err := tx.Exec(statement, executor.StatementOption{})
 				if err != nil {
@@ -245,9 +245,9 @@ func TestCatalogVersionOrderingUsesSemanticVersionAndOffset(t *testing.T) {
 			if err != nil {
 				return err
 			}
-			require.Equal(t, "4.0.10", latest.Version)
+			require.Equal(t, "4.1.10", latest.Version)
 			require.Equal(t, uint32(2), latest.VersionOffset)
-			result, err := tx.Exec("insert into mo_catalog.mo_version values ('4.0.11', 1, 0, '2097-01-01 00:00:00', '2097-01-01 00:00:00')", executor.StatementOption{})
+			result, err := tx.Exec("insert into mo_catalog.mo_version values ('4.1.11', 1, 0, '2097-01-01 00:00:00', '2097-01-01 00:00:00')", executor.StatementOption{})
 			if err != nil {
 				return err
 			}
@@ -256,12 +256,12 @@ func TestCatalogVersionOrderingUsesSemanticVersionAndOffset(t *testing.T) {
 			if err != nil {
 				return err
 			}
-			require.Equal(t, "4.0.11", latest.Version)
+			require.Equal(t, "4.1.11", latest.Version)
 			ready, err := versions.MustGetLatestReadyVersion(tx)
 			if err != nil {
 				return err
 			}
-			require.Equal(t, "4.0.10", ready)
+			require.Equal(t, "4.1.10", ready)
 			return rollback
 		}, executor.Options{}.WithDatabase(catalog.MO_CATALOG).WithAccountID(0).WithWaitCommittedLogApplied())
 		require.ErrorIs(t, err, rollback)

@@ -157,6 +157,7 @@ func TestBlockDataReadInnerScopedMaterialization(t *testing.T) {
 	require.Equal(t, "row-value-longer-than-inline-b", output.Vecs[2].GetStringAt(0))
 	require.Equal(t, "row-value-longer-than-inline-h", output.Vecs[2].GetStringAt(1))
 	require.Equal(t, "row-value-longer-than-inline-p", output.Vecs[2].GetStringAt(2))
+	require.False(t, output.Vecs[2].HasBorrowedBacking(), "selected materialization stays owned")
 	rowids := vector.MustFixedColWithTypeCheck[types.Rowid](output.Vecs[1])
 	for i, sel := range sels {
 		require.Equal(t, uint32(sel), rowids[i].GetRowOffset())
@@ -192,6 +193,23 @@ func TestBlockDataReadInnerScopedMaterialization(t *testing.T) {
 	for i := range colTypes {
 		full.Vecs[i] = vector.NewOffHeapVecWithType(colTypes[i])
 	}
+	registry, err := mpool.NewAllocationAccountRegistry(1, 16)
+	require.NoError(t, err)
+	account, err := registry.Open(2048)
+	require.NoError(t, err)
+	defer func() {
+		full.Clean(queryMP)
+		require.Zero(t, account.Seal().Used)
+		_, finalizeErr := registry.Finalize(account)
+		require.NoError(t, finalizeErr)
+	}()
+	selection, err := vector.NewAllocationAccountSelection(account, 1, 1, 2, 3, 4)
+	require.NoError(t, err)
+	require.NoError(t, full.Vecs[2].SetAllocationAccount(selection))
+	// An earlier owned/selected read may leave empty scratch in the reused
+	// output. The next full block fits this account, but staging another copy
+	// alongside unused scratch does not. End that old generation first.
+	require.NoError(t, full.Vecs[2].PreExtendWithArea(16, 1024, queryMP))
 	require.NoError(t, BlockDataReadInner(
 		ctx,
 		&info,
@@ -214,11 +232,19 @@ func TestBlockDataReadInnerScopedMaterialization(t *testing.T) {
 		[]int32{0, 10, 30, 40, 50, 60, 70, 80, 100, 110, 120, 130, 140, 150},
 		vector.MustFixedColWithTypeCheck[int32](full.Vecs[0]),
 	)
+	require.True(t, full.Vecs[2].HasBorrowedBacking(), "full persisted read publishes private readonly payload")
+	require.False(t, full.Vecs[0].HasBorrowedBacking(), "fixed-width materialization stays owned")
 	fullRowids := vector.MustFixedColWithTypeCheck[types.Rowid](full.Vecs[1])
 	for i, expected := range []uint32{0, 1, 3, 4, 5, 6, 7, 8, 10, 11, 12, 13, 14, 15} {
 		require.Equal(t, expected, fullRowids[i].GetRowOffset())
+		require.Equal(t, "row-value-longer-than-inline-"+string(rune('a'+expected)), full.Vecs[2].GetStringAt(i))
 	}
+	retained, err := full.Vecs[2].RetainedReadonlyViewWithMP(queryMP)
+	require.NoError(t, err)
 	full.Clean(queryMP)
+	require.Equal(t, "row-value-longer-than-inline-p", retained.GetStringAt(13))
+	retained.Free(queryMP)
+	require.Zero(t, account.Snapshot().Used)
 
 	errorOutput := batch.NewWithSize(len(columns))
 	for i := range colTypes {
