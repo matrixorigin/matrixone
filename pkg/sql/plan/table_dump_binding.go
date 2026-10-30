@@ -1383,6 +1383,28 @@ func analyzeTableDumpBindingsWithCandidateVisitLimit(ctx CompilerContext, target
 								break
 							}
 						}
+						if !matched && (dependency.timeZone || dependency.locale) {
+							// Reuse a proven table timezone, but bind this historical
+							// spelling only under ja_JP and compare the whole tree.
+							readingDependency := dependency
+							var hintErr error
+							matched, hintErr = budget.matchSessionHints(zone, "ja_JP",
+								func(tz *time.Location, _ string) (*planpb.Expr, error) {
+									dependency = tableDumpDefaultSession{}
+									bound, _ := bind(increment, legacyMode, tz, "ja_JP")
+									return bound, fatal
+								}, func(bound *planpb.Expr) (bool, error) { return matchCandidate(legacyMode, bound) })
+							dependency = readingDependency
+							proc.GetSessionInfo().TimeZone, proc.GetSessionInfo().LCTimeNames = zone, locale
+							if hintErr != nil {
+								stmt.Free()
+								return false, hintErr
+							}
+							if matched {
+								sensitive = true
+								break
+							}
+						}
 						_, folded := tableDumpTimestampLiteral(candidate)
 						_, stored := tableDumpTimestampLiteral(want)
 						typeCanMatch := bindErr != nil || candidate == nil || want == nil || sameTableDumpBoundType(candidate.Typ, want.Typ)

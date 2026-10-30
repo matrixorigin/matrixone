@@ -627,6 +627,59 @@ func TestTableDumpSharedTimezoneWitnessAcrossDefaults(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestTableDumpHistoricalJapaneseSharedTimezoneWitness(t *testing.T) {
+	proc := newPlanTestProcess(t)
+	proc.GetSessionInfo().TimeZone = time.FixedZone("creation zone", 5*3600+30*60)
+	proc.GetSessionInfo().LCTimeNames = "ja_JP"
+	compiler := NewMockCompilerContext(false, proc)
+	compiler.ResolveVariableFunc = func(name string, _, _ bool) (any, error) {
+		switch name {
+		case "lc_time_names":
+			return proc.GetSessionInfo().LCTimeNames, nil
+		case "div_precision_increment":
+			return int64(0), nil
+		case "explicit_defaults_for_timestamp":
+			return true, nil
+		}
+		return "", nil
+	}
+	columns := make([]string, 8)
+	for i := range columns {
+		columns[i] = fmt.Sprintf("c%d varchar(200) default (concat("+
+			"cast(cast(1 as decimal(10,0))/cast(3 as decimal(10,0)) as char), ':', "+
+			"date_format(from_unixtime(%d),'%%b %%Y-%%m-%%d %%H:%%i:%%s')))", i, 1709251200+i*3600)
+	}
+	stmt, err := mysql.ParseOne(t.Context(), "create table t("+strings.Join(columns, ",")+")", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	built, err := BuildPlan(compiler, stmt, false)
+	require.NoError(t, err)
+	current := built.GetDdl().GetCreateTable().GetTableDef()
+	legacy := proto.Clone(current).(*planpb.TableDef)
+	for i := range columns {
+		currentValue := fmt.Sprintf("0: 3月 2024-03-01 %02d:30:00", 5+i)
+		require.Equal(t, currentValue, current.Cols[i].Default.Expr.GetLit().GetSval())
+		legacy.Cols[i].Default.Expr.GetLit().Value = &planpb.Literal_Sval{
+			Sval: strings.Replace(currentValue, " 3月", "3月", 1),
+		}
+	}
+	encoded, err := proto.Marshal(legacy)
+	require.NoError(t, err)
+	var persisted planpb.TableDef
+	require.NoError(t, proto.Unmarshal(encoded, &persisted))
+	before := proto.Clone(&persisted)
+	proc.GetSessionInfo().TimeZone = time.UTC
+	proc.GetSessionInfo().LCTimeNames = "en_US"
+	for _, target := range []*planpb.TableDef{&persisted, current} {
+		sensitive, err := AnalyzeTableDumpBindings(compiler, target, &persisted)
+		require.NoError(t, err)
+		require.True(t, sensitive)
+	}
+	require.True(t, proto.Equal(before, &persisted))
+	require.Same(t, time.UTC, proc.GetSessionInfo().TimeZone)
+	require.Equal(t, "en_US", proc.GetSessionInfo().LCTimeNames)
+}
+
 func TestTableDumpSharedTimezoneWitnessAcrossDistinctDefaults(t *testing.T) {
 	proc := newPlanTestProcess(t)
 	proc.GetSessionInfo().TimeZone = time.FixedZone("creation zone", 5*3600+30*60)
