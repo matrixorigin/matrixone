@@ -858,6 +858,30 @@ func sendExportBatchByte(
 	}
 }
 
+// exportDecimalZerofillPadDigits maps each output vector index to its result
+// column's ZEROFILL integer-part digit target (#30940). Exports gate on the
+// same plan-propagated MysqlColumn flags as the protocol serializers; plain
+// and derived decimals keep digit target zero, so their text is unchanged.
+func exportDecimalZerofillPadDigits(ep *ExportConfig, n int) []int {
+	if ep == nil || ep.mrs == nil || n <= 0 {
+		return nil
+	}
+	pads := make([]int, n)
+	for j := 0; j < n && j < len(ep.mrs.Columns); j++ {
+		if mc, mok := ep.mrs.Columns[j].(*MysqlColumn); mok && mc != nil {
+			pads[j] = mc.zerofillPadDigitsForRender()
+		}
+	}
+	return pads
+}
+
+func exportDecimalPadAt(pads []int, j int) int {
+	if j >= 0 && j < len(pads) {
+		return pads[j]
+	}
+	return 0
+}
+
 func constructByte(ctx context.Context, obj FeSession, bat *batch.Batch, index int32, ByteChan chan *BatchByte, ep *ExportConfig) {
 	var (
 		ok      bool
@@ -907,6 +931,7 @@ func constructByte(ctx context.Context, obj FeSession, bat *batch.Batch, index i
 	if getEffectiveMaxFileSize(ep) != 0 {
 		rowEnds = make([]int, 0, rowCount)
 	}
+	decimalPads := exportDecimalZerofillPadDigits(ep, len(bat.Vecs))
 	for i := 0; i < rowCount; i++ {
 		if len(startingBy) > 0 {
 			buffer.Write(startingBy)
@@ -1051,15 +1076,15 @@ func constructByte(ctx context.Context, obj FeSession, bat *batch.Batch, index i
 			case types.T_decimal64:
 				scale := vec.GetType().Scale
 				val := vector.GetFixedAtNoTypeCheck[types.Decimal64](vec, i).Format(scale)
-				out([]byte(val), symbol[j], closeby, flag[j], j == len(bat.Vecs)-1)
+				out([]byte(padZerofillDecimalText(val, exportDecimalPadAt(decimalPads, j))), symbol[j], closeby, flag[j], j == len(bat.Vecs)-1)
 			case types.T_decimal128:
 				scale := vec.GetType().Scale
 				val := vector.GetFixedAtNoTypeCheck[types.Decimal128](vec, i).Format(scale)
-				out([]byte(val), symbol[j], closeby, flag[j], j == len(bat.Vecs)-1)
+				out([]byte(padZerofillDecimalText(val, exportDecimalPadAt(decimalPads, j))), symbol[j], closeby, flag[j], j == len(bat.Vecs)-1)
 			case types.T_decimal256:
 				scale := vec.GetType().Scale
 				val := vector.GetFixedAtNoTypeCheck[types.Decimal256](vec, i).Format(scale)
-				out([]byte(val), symbol[j], closeby, flag[j], j == len(bat.Vecs)-1)
+				out([]byte(padZerofillDecimalText(val, exportDecimalPadAt(decimalPads, j))), symbol[j], closeby, flag[j], j == len(bat.Vecs)-1)
 			case types.T_uuid:
 				val := vector.GetFixedAtNoTypeCheck[types.Uuid](vec, i).String()
 				out([]byte(val), symbol[j], closeby, flag[j], j == len(bat.Vecs)-1)
@@ -2079,6 +2104,7 @@ func constructJSONLine(ctx context.Context, obj FeSession, bat *batch.Batch, ind
 		return
 	}
 
+	decimalPads := exportDecimalZerofillPadDigits(ep, len(bat.Vecs))
 	for i := 0; i < bat.RowCount(); i++ {
 		if ctx.Err() != nil {
 			return
@@ -2098,6 +2124,14 @@ func constructJSONLine(ctx context.Context, obj FeSession, bat *batch.Batch, ind
 					return
 				}
 				return
+			}
+			if digits := exportDecimalPadAt(decimalPads, j); digits > 0 {
+				switch vec.GetType().Oid {
+				case types.T_decimal64, types.T_decimal128, types.T_decimal256:
+					if s, isStr := val.(string); isStr {
+						val = padZerofillDecimalText(s, digits)
+					}
+				}
 			}
 			row[colName] = val
 		}

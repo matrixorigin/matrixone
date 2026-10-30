@@ -28,14 +28,15 @@ import (
 func TestDeleteSourceAliases(t *testing.T) {
 	for _, tc := range []struct {
 		sql  string
-		want map[string][2]string
+		want map[string]deleteSource
 	}{
-		{"delete nation from nation", map[string][2]string{}},
-		{"delete x from ((nation as x))", map[string][2]string{"x": {"", "nation"}}},
-		{"delete x,y from tpch.nation x join nation2 y on x.n_nationkey=y.n_nationkey", map[string][2]string{"x": {"tpch", "nation"}, "y": {"", "nation2"}}},
-		{"delete x from (select * from nation) as x", map[string][2]string{}},
+		{"delete nation from nation", map[string]deleteSource{"nation": {"", "nation", false}}},
+		{"delete x from ((nation as x))", map[string]deleteSource{"x": {"", "nation", true}}},
+		{"delete x,y from tpch.nation x join nation2 y on x.n_nationkey=y.n_nationkey", map[string]deleteSource{"x": {"tpch", "nation", true}, "y": {"", "nation2", true}}},
+		{"delete nation from tpch.nation as nation", map[string]deleteSource{"nation": {"tpch", "nation", true}}},
+		{"delete x from (select * from nation) as x", map[string]deleteSource{}},
 		// Collection preserves traversal order; duplicate validation belongs to binding.
-		{"delete x from nation x join nation2 x on 1=1", map[string][2]string{"x": {"", "nation2"}}},
+		{"delete x from nation x join nation2 x on 1=1", map[string]deleteSource{"x": {"", "nation2", true}}},
 	} {
 		t.Run(tc.sql, func(t *testing.T) {
 			stmt, err := mysql.ParseOne(context.Background(), tc.sql, 1)

@@ -46,6 +46,7 @@ import (
 	planPb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/proxy"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -447,14 +448,17 @@ func (mp *MysqlProtocolImpl) WriteHandshake() error {
 }
 
 func (mp *MysqlProtocolImpl) WriteOK(affectedRows, lastInsertId uint64, status, warnings uint16, message string) error {
+	status = mp.responseStatus(status)
 	return mp.sendOKPacket(affectedRows, lastInsertId, status, warnings, message)
 }
 
 func (mp *MysqlProtocolImpl) WriteOKtWithEOF(affectedRows, lastInsertId uint64, status, warnings uint16, message string) error {
+	status = mp.responseStatus(status)
 	return mp.sendOKPacketWithEof(affectedRows, lastInsertId, status, warnings, message)
 }
 
 func (mp *MysqlProtocolImpl) WriteEOF(warnings, status uint16) error {
+	status = mp.responseStatus(status)
 	return mp.sendEOFPacket(warnings, status)
 }
 
@@ -462,6 +466,7 @@ func (mp *MysqlProtocolImpl) WriteEOFIF(warnings uint16, status uint16) error {
 	return mp.SendEOFPacketIf(warnings, status)
 }
 func (mp *MysqlProtocolImpl) WriteEOFIFAndNoFlush(warnings uint16, status uint16) error {
+	status = mp.responseStatus(status)
 	if mp.capability&CLIENT_DEPRECATE_EOF == 0 {
 		data := mp.makeEOFPayload(warnings, status)
 		return mp.appendPacket(data)
@@ -470,10 +475,12 @@ func (mp *MysqlProtocolImpl) WriteEOFIFAndNoFlush(warnings uint16, status uint16
 }
 
 func (mp *MysqlProtocolImpl) WriteEOFOrOK(warnings uint16, status uint16) error {
+	status = mp.responseStatus(status)
 	return mp.sendEOFOrOkPacket(warnings, status)
 }
 
 func (mp *MysqlProtocolImpl) WriteEOFOrOKWithAffectedRows(affectedRows uint64, warnings uint16, status uint16) error {
+	status = mp.responseStatus(status)
 	if mp.capability&CLIENT_DEPRECATE_EOF != 0 {
 		return mp.sendOKPacketWithEof(affectedRows, 0, status, warnings, "")
 	}
@@ -1891,7 +1898,7 @@ func (mp *MysqlProtocolImpl) Authenticate(ctx context.Context) error {
 
 	ses.Debugf(ctx, "handle handshake end")
 	ses.timestampMap[TSSendOKPacketStart] = time.Now()
-	err := mp.sendOKPacket(0, 0, 0, 0, "")
+	err := mp.sendOKPacket(0, 0, mp.responseStatus(0), 0, "")
 	ses.timestampMap[TSSendOKPacketEnd] = time.Now()
 	v2.SendOKPacketDurationHistogram.Observe(ses.timestampMap[TSSendOKPacketEnd].Sub(ses.timestampMap[TSSendOKPacketStart]).Seconds())
 	ses.Debugf(ctx, "handle handshake response ok")
@@ -2214,6 +2221,17 @@ func extendStatus(old uint16) uint16 {
 	return old | SERVER_QUERY_WAS_SLOW | SERVER_STATUS_NO_GOOD_INDEX_USED
 }
 
+// responseStatus derives DBAPI escaping mode from the executing session, so
+// SET/reset cannot leave a second cached mode behind. The pre-authentication
+// handshake has no authenticated tenant mode.
+func (mp *MysqlProtocolImpl) responseStatus(status uint16) uint16 {
+	status &^= SERVER_STATUS_NO_BACKSLASH_ESCAPES
+	if ses := mp.GetSession(); ses != nil && ses.sqlModeParserFlags()&mysql.SQLModeFlags(mysql.SQLModeNoBackslashEscapes) != 0 {
+		status |= SERVER_STATUS_NO_BACKSLASH_ESCAPES
+	}
+	return status
+}
+
 // make a OK packet
 func (mp *MysqlProtocolImpl) makeOKPayload(affectedRows, lastInsertId uint64, statusFlags, warnings uint16, message string) []byte {
 	data := make([]byte, HeaderOffset+128+len(message)+10)
@@ -2346,6 +2364,7 @@ func (mp *MysqlProtocolImpl) sendEOFPacket(warnings, status uint16) error {
 }
 
 func (mp *MysqlProtocolImpl) SendEOFPacketIf(warnings, status uint16) error {
+	status = mp.responseStatus(status)
 	//If the CLIENT_DEPRECATE_EOF client capabilities flag is not set, EOF_Packet
 	if mp.capability&CLIENT_DEPRECATE_EOF == 0 {
 		return mp.sendEOFPacket(warnings, status)
@@ -2763,7 +2782,7 @@ func (mp *MysqlProtocolImpl) appendResultSetBinaryRow(mrs *MysqlResultSet, rowId
 			if value, err := mrs.GetString(mp.ctx, rowIdx, i); err != nil {
 				return err
 			} else {
-				err = mp.appendStringLenEnc(value)
+				err = mp.appendStringLenEnc(padZerofillDecimalText(value, mysqlColumn.zerofillPadDigitsForRender()))
 				if err != nil {
 					return err
 				}
@@ -2898,7 +2917,7 @@ func (mp *MysqlProtocolImpl) appendResultSetTextRow(mrs *MysqlResultSet, r uint6
 			if value, err2 := mrs.GetString(mp.ctx, r, i); err2 != nil {
 				return err2
 			} else {
-				err = mp.appendStringLenEnc(value)
+				err = mp.appendStringLenEnc(padZerofillDecimalText(value, mysqlColumn.zerofillPadDigitsForRender()))
 				if err != nil {
 					return err
 				}
@@ -3338,7 +3357,7 @@ func (mp *MysqlProtocolImpl) appendResultSetBinaryRow2(mrs *MysqlResultSet, colS
 			if err != nil {
 				return err
 			}
-			err = AppendStringLenEnc(mp, value)
+			err = AppendStringLenEnc(mp, padZerofillDecimalText(value, mysqlColumn.zerofillPadDigitsForRender()))
 			if err != nil {
 				return err
 			}
@@ -3504,7 +3523,7 @@ func (mp *MysqlProtocolImpl) appendResultSetTextRow2(mrs *MysqlResultSet, colSli
 			if err != nil {
 				return err
 			}
-			err = AppendStringLenEnc(mp, value)
+			err = AppendStringLenEnc(mp, padZerofillDecimalText(value, mysqlColumn.zerofillPadDigitsForRender()))
 			if err != nil {
 				return err
 			}
@@ -4145,7 +4164,7 @@ func (mp *MysqlProtocolImpl) WritePacket(payload []byte) error {
 
 // MakeOKPayload exposes (*MysqlProtocolImpl).makeOKPayload() function.
 func (mp *MysqlProtocolImpl) MakeOKPayload(affectedRows, lastInsertId uint64, statusFlags, warnings uint16, message string) []byte {
-	return mp.makeOKPayload(affectedRows, lastInsertId, statusFlags, warnings, message)
+	return mp.makeOKPayload(affectedRows, lastInsertId, mp.responseStatus(statusFlags), warnings, message)
 }
 
 // MakeErrPayload exposes (*MysqlProtocolImpl).makeErrPayload() function.
@@ -4155,7 +4174,7 @@ func (mp *MysqlProtocolImpl) MakeErrPayload(errCode uint16, sqlState, errorMessa
 
 // MakeEOFPayload exposes (*MysqlProtocolImpl).makeEOFPayload() function.
 func (mp *MysqlProtocolImpl) MakeEOFPayload(warnings, status uint16) []byte {
-	return mp.makeEOFPayload(warnings, status)
+	return mp.makeEOFPayload(warnings, mp.responseStatus(status))
 }
 
 // receiveExtraInfo tries to receive salt and labels read from proxy module.

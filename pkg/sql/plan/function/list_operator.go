@@ -3010,6 +3010,102 @@ var supportedOperators = []FuncNew{
 		},
 	},
 
+	// operator `unsigned_decimal_admission`
+	// Plan-internal domain admission for attributed (UNSIGNED/ZEROFILL)
+	// DECIMAL assignment targets. It runs on the raw source value before the
+	// assignment cast quantizes to the target scale; the result type equals
+	// the input type. parameters[1] is the target type carrier, exactly like
+	// cast; parameters[2] is a constant carrying the destination column name
+	// for the 1264 strict/lenient diagnostics. Volatile so prepared
+	// statements resolve sql_mode at execution time, mirroring cast_assign.
+	{
+		functionId: UNSIGNED_DECIMAL_ADMISSION,
+		class:      plan.Function_STRICT,
+		layout:     CAST_EXPRESSION,
+		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
+			if len(inputs) == 3 && inputs[1].Oid.IsDecimal() &&
+				(inputs[2].Oid == types.T_varchar || inputs[2].Oid == types.T_char) {
+				return newCheckResultWithSuccess(0)
+			}
+			return newCheckResultWithFailure(failedFunctionParametersWrong)
+		},
+
+		Overloads: []overload{
+			{
+				overloadId:      0,
+				volatile:        true,
+				executionStable: true,
+				retType: func(parameters []types.Type) types.Type {
+					return parameters[0]
+				},
+				newOp: func() executeLogicOfOverload {
+					return NewUnsignedDecimalAdmission
+				},
+			},
+		},
+	},
+
+	// operator `unsigned_decimal_admission_strict`
+	// Authoring-time entry: always strict, used only inside the DDL DEFAULT
+	// validation composition so a non-strict authoring session cannot route
+	// the check through a clip+warning branch.
+	{
+		functionId: UNSIGNED_DECIMAL_ADMISSION_STRICT,
+		class:      plan.Function_STRICT,
+		layout:     CAST_EXPRESSION,
+		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
+			if len(inputs) == 3 && inputs[1].Oid.IsDecimal() &&
+				(inputs[2].Oid == types.T_varchar || inputs[2].Oid == types.T_char) {
+				return newCheckResultWithSuccess(0)
+			}
+			return newCheckResultWithFailure(failedFunctionParametersWrong)
+		},
+
+		Overloads: []overload{
+			{
+				overloadId:      0,
+				volatile:        true,
+				executionStable: true,
+				retType: func(parameters []types.Type) types.Type {
+					return parameters[0]
+				},
+				newOp: func() executeLogicOfOverload {
+					return NewUnsignedDecimalAdmissionStrict
+				},
+			},
+		},
+	},
+
+	// operator `unsigned_decimal_admission_ignore`
+	// INSERT/UPDATE IGNORE entry: always adjusts out-of-domain values with the
+	// truncation diagnostic preceding the 1264 clip diagnostic.
+	{
+		functionId: UNSIGNED_DECIMAL_ADMISSION_IGNORE,
+		class:      plan.Function_STRICT,
+		layout:     CAST_EXPRESSION,
+		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
+			if len(inputs) == 3 && inputs[1].Oid.IsDecimal() &&
+				(inputs[2].Oid == types.T_varchar || inputs[2].Oid == types.T_char) {
+				return newCheckResultWithSuccess(0)
+			}
+			return newCheckResultWithFailure(failedFunctionParametersWrong)
+		},
+
+		Overloads: []overload{
+			{
+				overloadId:      0,
+				volatile:        true,
+				executionStable: true,
+				retType: func(parameters []types.Type) types.Type {
+					return parameters[0]
+				},
+				newOp: func() executeLogicOfOverload {
+					return NewUnsignedDecimalAdmissionIgnore
+				},
+			},
+		},
+	},
+
 	// operator `bit_cast`
 	{
 		functionId: BIT_CAST,
@@ -3625,7 +3721,12 @@ var supportedOperators = []FuncNew{
 func isStrictAssignmentCastTarget(target types.T) bool {
 	switch target {
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_date, types.T_time, types.T_datetime, types.T_timestamp, types.T_year,
-		types.T_int32, types.T_uint32:
+		types.T_int32, types.T_uint32,
+		// DECIMAL targets join the explicit-name allow-list for the
+		// authoring-time unsigned-DECIMAL DEFAULT validation composition
+		// (MEDIUMINT int32/uint32 precedent). No plan-side selector chooses
+		// cast_strict for decimals, so ordinary casts are unaffected.
+		types.T_decimal64, types.T_decimal128, types.T_decimal256:
 		return true
 	default:
 		return false

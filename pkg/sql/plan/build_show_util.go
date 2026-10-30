@@ -1347,7 +1347,7 @@ func formatColTypeForSQLMode(colType plan.Type, sqlMode string) string {
 	}
 	typ := types.T(colType.Id).ToType()
 	typ.Width, typ.Scale = colType.Width, colType.Scale
-	if formatted, ok := types.FormatSQLColumnType(typ); ok {
+	if formatted, ok := types.FormatSQLColumnTypeWithAttributes(typ, colType.NumericAttributes); ok {
 		return formatted
 	}
 	switch typ.Oid {

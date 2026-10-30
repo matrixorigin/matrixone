@@ -961,6 +961,18 @@ func materializeConverted(
 			}
 			vec.SetNull(uint64(row))
 		}
+	case conversionMaterializeText:
+		for row := 0; row < column.Len(); row++ {
+			if err := checkConvertContext(ctx, row); err != nil {
+				return fail(err)
+			}
+			// Render the Arrow value to fresh text bytes before batch
+			// publication; borrowed Arrow buffers are never mutated, and the
+			// scan-owned staging vector is materialized by this conversion.
+			if err := appendArrowStageTextValue(ctx, vec, column, row, column.IsNull(row), mp); err != nil {
+				return fail(err)
+			}
+		}
 	default:
 		return fail(moerr.NewInternalErrorNoCtx("unknown Arrow conversion plan"))
 	}
@@ -1150,7 +1162,7 @@ func materializeDictionary(
 		return nil, ConvertStats{}, moerr.NewInvalidInput(ctx, "invalid Arrow Dictionary array")
 	}
 	values := dictionary.Dictionary()
-	valueKind, err := selectLoadConversion(values.DataType(), binding.target.Type)
+	valueKind, err := selectLoadConversion(values.DataType(), binding.target.Type, binding.target.TextStage)
 	if err != nil || valueKind == conversionMaterializeDictionary {
 		return nil, ConvertStats{}, moerr.NewInvalidInputf(ctx, "invalid Arrow Dictionary value type %s", values.DataType())
 	}
@@ -1269,6 +1281,12 @@ func appendDictionaryValue(
 			}
 		}
 		return appendLoadVarlenValue(vec, value, isNull, target, mp)
+	}
+	if valueKind == conversionMaterializeText {
+		// Rendered text staging under a dictionary encoding uses the same
+		// per-value renderer as the plain array path: the dictionary value
+		// slot replaces the row index.
+		return 0, appendArrowStageTextValue(ctx, vec, values, index, isNull, mp)
 	}
 	if isNull {
 		return 0, appendDictionaryNull(vec, target, mp)

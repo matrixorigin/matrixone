@@ -930,17 +930,28 @@ const (
 	// renumbering is safe.
 	QUANTILE_EXACT_WEIGHTED = 619
 
+	// Unsigned DECIMAL domain admission (issue #30940/#30941). Plan-composed
+	// identity step evaluated on the raw source value before the assignment
+	// cast quantizes to the target scale. The mode-resolved entry answers
+	// sql_mode at execution time (volatile, like cast_assign); the strict
+	// entry is built only by authoring-time DEFAULT validation; the ignore
+	// entry is chosen at build time for INSERT/UPDATE IGNORE. All are internal
+	// plan functions, never user-callable.
+	UNSIGNED_DECIMAL_ADMISSION        = 620
+	UNSIGNED_DECIMAL_ADMISSION_STRICT = 621
+	UNSIGNED_DECIMAL_ADMISSION_IGNORE = 622
+
 	// VECTOR_MATMUL is the batch dot-product top-k aggregate over vecf8/vecf4 columns.
-	VECTOR_MATMUL = 620
+	VECTOR_MATMUL = 623
 
 	// VECBLOCK_JSON returns the exact text of a vecf8/vecf4 value: its blocks as stored.
-	VECBLOCK_JSON = 621
+	VECBLOCK_JSON = 624
 
 	// VECBLOCK_BINARY returns the stored cell of a vecf8/vecf4 value as a BLOB.
-	VECBLOCK_BINARY = 622
+	VECBLOCK_BINARY = 625
 
 	// Keep FUNCTION_END_NUMBER one past the highest allocated function id.
-	FUNCTION_END_NUMBER = 623
+	FUNCTION_END_NUMBER = 626
 )
 
 // functionIdRegister is what function we have registered already.
@@ -955,62 +966,66 @@ var functionIdRegister = map[string]int32{
 	"extractvalue":            EXTRACTVALUE,
 	"updatexml":               UPDATEXML,
 	// operators
-	"=":            EQUAL,
-	"<=>":          NULL_SAFE_EQUAL,
-	">":            GREAT_THAN,
-	">=":           GREAT_EQUAL,
-	"<":            LESS_THAN,
-	"<=":           LESS_EQUAL,
-	"<>":           NOT_EQUAL,
-	"!=":           NOT_EQUAL,
-	"not":          NOT,
-	"and":          AND,
-	"or":           OR,
-	"xor":          XOR,
-	"like":         LIKE,
-	"between":      BETWEEN,
-	"in":           IN,
-	"not_in":       NOT_IN,
-	"in_range":     IN_RANGE,
-	"+":            PLUS,
-	"-":            MINUS,
-	"*":            MULTI,
-	"/":            DIV,
-	"div":          INTEGER_DIV,
-	"%":            MOD,
-	"mod":          MOD,
-	"unary_plus":   UNARY_PLUS,
-	"unary_minus":  UNARY_MINUS,
-	"unary_tilde":  UNARY_TILDE,
-	"unary_mark":   NOT,
-	"case":         CASE,
-	"coalesce":     COALESCE,
-	"cast":         CAST,
-	"cast_strict":  CAST_STRICT,
-	"cast_assign":  CAST_ASSIGN,
-	"cast_ignore":  CAST_IGNORE,
-	"bit_cast":     BIT_CAST,
-	"is":           IS,
-	"is_not":       ISNOT,
-	"isnot":        ISNOT,
-	"is_null":      ISNULL,
-	"isnull":       ISNULL,
-	"ifnull":       ISNULL,
-	"ilike":        ILIKE,
-	"is_not_null":  ISNOTNULL,
-	"isnotnull":    ISNOTNULL,
-	"isunknown":    ISNULL,
-	"isnotunknown": ISNOTNULL,
-	"istrue":       ISTRUE,
-	"isnottrue":    ISNOTTRUE,
-	"isfalse":      ISFALSE,
-	"isnotfalse":   ISNOTFALSE,
-	"&":            OP_BIT_AND,
-	"|":            OP_BIT_OR,
-	"^":            OP_BIT_XOR,
-	"<<":           OP_BIT_SHIFT_LEFT,
-	">>":           OP_BIT_SHIFT_RIGHT,
-	"decode":       DECODE,
+	"=":           EQUAL,
+	"<=>":         NULL_SAFE_EQUAL,
+	">":           GREAT_THAN,
+	">=":          GREAT_EQUAL,
+	"<":           LESS_THAN,
+	"<=":          LESS_EQUAL,
+	"<>":          NOT_EQUAL,
+	"!=":          NOT_EQUAL,
+	"not":         NOT,
+	"and":         AND,
+	"or":          OR,
+	"xor":         XOR,
+	"like":        LIKE,
+	"between":     BETWEEN,
+	"in":          IN,
+	"not_in":      NOT_IN,
+	"in_range":    IN_RANGE,
+	"+":           PLUS,
+	"-":           MINUS,
+	"*":           MULTI,
+	"/":           DIV,
+	"div":         INTEGER_DIV,
+	"%":           MOD,
+	"mod":         MOD,
+	"unary_plus":  UNARY_PLUS,
+	"unary_minus": UNARY_MINUS,
+	"unary_tilde": UNARY_TILDE,
+	"unary_mark":  NOT,
+	"case":        CASE,
+	"coalesce":    COALESCE,
+	"cast":        CAST,
+	"cast_strict": CAST_STRICT,
+	"cast_assign": CAST_ASSIGN,
+	"cast_ignore": CAST_IGNORE,
+
+	"unsigned_decimal_admission":        UNSIGNED_DECIMAL_ADMISSION,
+	"unsigned_decimal_admission_strict": UNSIGNED_DECIMAL_ADMISSION_STRICT,
+	"unsigned_decimal_admission_ignore": UNSIGNED_DECIMAL_ADMISSION_IGNORE,
+	"bit_cast":                          BIT_CAST,
+	"is":                                IS,
+	"is_not":                            ISNOT,
+	"isnot":                             ISNOT,
+	"is_null":                           ISNULL,
+	"isnull":                            ISNULL,
+	"ifnull":                            ISNULL,
+	"ilike":                             ILIKE,
+	"is_not_null":                       ISNOTNULL,
+	"isnotnull":                         ISNOTNULL,
+	"isunknown":                         ISNULL,
+	"isnotunknown":                      ISNOTNULL,
+	"istrue":                            ISTRUE,
+	"isnottrue":                         ISNOTTRUE,
+	"isfalse":                           ISFALSE,
+	"isnotfalse":                        ISNOTFALSE,
+	"&":                                 OP_BIT_AND,
+	"|":                                 OP_BIT_OR,
+	"^":                                 OP_BIT_XOR,
+	"<<":                                OP_BIT_SHIFT_LEFT,
+	">>":                                OP_BIT_SHIFT_RIGHT,
+	"decode":                            DECODE,
 
 	"prefix_eq":       PREFIX_EQ,
 	"prefix_in":       PREFIX_IN,

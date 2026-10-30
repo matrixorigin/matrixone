@@ -3285,3 +3285,58 @@ func TestWriteSQLLoadCSVFieldFromVec_LowPrecisionScalarRoundTrip(t *testing.T) {
 		})
 	}
 }
+
+func TestCatalogNumericAttributeMaskOracle(t *testing.T) {
+	// Legacy boolean values keep the legacy read byte-identically.
+	assert.Equal(t, uint32(0), catalogNumericAttributeMask("0"))
+	assert.Equal(t, uint32(1), catalogNumericAttributeMask("1"))
+	assert.Equal(t, uint32(1), catalogNumericAttributeMask("true"))
+	assert.Equal(t, uint32(1), catalogNumericAttributeMask("TRUE"))
+	assert.Equal(t, uint32(0), catalogNumericAttributeMask("false"))
+	assert.Equal(t, uint32(0), catalogNumericAttributeMask(""))
+	assert.Equal(t, uint32(0), catalogNumericAttributeMask("junk"))
+	// The attributed-DECIMAL masks (authoring normalizes ZEROFILL to 3).
+	assert.Equal(t, uint32(1), catalogNumericAttributeMask("1"))
+	assert.Equal(t, uint32(3), catalogNumericAttributeMask("3"))
+	assert.Equal(t, uint32(2), catalogNumericAttributeMask("2"))
+	// Out-of-range or negative integers degrade to the signed read.
+	assert.Equal(t, uint32(0), catalogNumericAttributeMask("4"))
+	assert.Equal(t, uint32(0), catalogNumericAttributeMask("-1"))
+}
+
+func TestRenderCreateTableDDLFromSchema_DecimalNumericAttributes(t *testing.T) {
+	ddl := RenderCreateTableDDLFromSchema(&TableSchema{
+		TableName: "t_money",
+		Columns: []TableColumn{
+			{Name: "amount", SQLType: "DECIMAL(10,2)", Position: 1, Unsigned: true},
+			{Name: "coded", SQLType: "DECIMAL(8,3)", Position: 2, Unsigned: true, Zerofill: true},
+			{Name: "signed_raw", SQLType: "DECIMAL(10,2)", Position: 3},
+			{Name: "big", SQLType: "BIGINT", Position: 4, Unsigned: true},
+		},
+	})
+
+	assert.Contains(t, ddl, "`amount` DECIMAL(10,2) UNSIGNED")
+	assert.Contains(t, ddl, "`coded` DECIMAL(8,3) UNSIGNED ZEROFILL")
+	assert.Contains(t, ddl, "`signed_raw` DECIMAL(10,2)")
+	assert.NotContains(t, ddl, "`signed_raw` DECIMAL(10,2) UNSIGNED")
+	// An unsigned integer control keeps exactly its legacy rendering and
+	// never gains ZEROFILL from the shared bits.
+	assert.Contains(t, ddl, "`big` BIGINT UNSIGNED")
+	assert.NotContains(t, ddl, "BIGINT UNSIGNED ZEROFILL")
+}
+
+func TestRenderCreateTableDDLFromSchema_ZerofillRequiresUnsigned(t *testing.T) {
+	// Mask 2 (ZEROFILL bit without UNSIGNED) is impossible under authoring
+	// normalization; a manual catalog row still degrades to the plain
+	// signed rendering just as a pre-change tool would produce.
+	ddl := RenderCreateTableDDLFromSchema(&TableSchema{
+		TableName: "t_orphan_mask",
+		Columns: []TableColumn{
+			{Name: "odd", SQLType: "DECIMAL(6,1)", Position: 1, Zerofill: true},
+		},
+	})
+
+	assert.Contains(t, ddl, "`odd` DECIMAL(6,1)")
+	assert.NotContains(t, ddl, "ZEROFILL")
+	assert.NotContains(t, ddl, "UNSIGNED")
+}

@@ -2220,6 +2220,28 @@ func mysqlDecimalDisplayLength(precision, scale int32, signed bool) uint32 {
 	return length
 }
 
+// padZerofillDecimalText left-pads the integer part of a formatted DECIMAL
+// cell with zeros to intDigits, matching MySQL's ZEROFILL rendering
+// (field.cc pads the pre-point digits when the column is declared ZEROFILL).
+// Callers gate on the result column's ZEROFILL flag, so derived expressions
+// (mask zero) and plain decimals always pass intDigits 0. NULLs are handled
+// by every caller before this point. Empty or negative text passes through
+// unchanged: the unsigned domain admission already keeps attributed values
+// non-negative, and a defensive pass-through can never corrupt such cells.
+func padZerofillDecimalText(text string, intDigits int) string {
+	if intDigits <= 0 || len(text) == 0 || text[0] == '-' {
+		return text
+	}
+	intLen := len(text)
+	if dot := strings.IndexByte(text, '.'); dot >= 0 {
+		intLen = dot
+	}
+	if intLen >= intDigits {
+		return text
+	}
+	return strings.Repeat("0", intDigits-intLen) + text
+}
+
 func mysqlDecimalType(precision, scale int32) types.Type {
 	switch {
 	case precision > types.T_decimal128.ToType().Width:
@@ -2970,6 +2992,21 @@ func colDef2MysqlColumn(ctx context.Context, col *plan.ColDef) (*MysqlColumn, er
 	typ, err := types.TypeFromPlan(col.Typ)
 	if err != nil {
 		return nil, err
+	}
+	// Result columns of an attributed DECIMAL carry the catalog numeric
+	// attribute mask in the plan type (#30940). The UNSIGNED flag must be
+	// installed before setMysqlColumnTypeInfo so the DECIMAL display length
+	// follows MySQL's unsigned form (mysqlDecimalDisplayLength signed=false);
+	// ZEROFILL additionally sets the protocol flag and the render pad digits.
+	// Derived expressions carry mask zero and keep the plain signed metadata.
+	if mask := col.Typ.GetNumericAttributes(); mask != 0 && typ.IsDecimal() {
+		c.SetSigned(false)
+		if mask&types.NumericAttributeZerofill != 0 {
+			c.SetFlag(c.Flag() | uint16(defines.ZEROFILL_FLAG))
+			if digits := typ.Width - typ.Scale; digits > 0 {
+				c.zerofillPadIntDigits = digits
+			}
+		}
 	}
 	if err = setMysqlColumnTypeInfo(ctx, typ, c); err != nil {
 		return nil, err

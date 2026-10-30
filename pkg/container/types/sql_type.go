@@ -77,3 +77,25 @@ func FormatSQLColumnType(t Type) (string, bool) {
 	}
 	return name, true
 }
+
+// FormatSQLColumnTypeWithAttributes formats the scalar column type and appends
+// the numeric attribute suffixes carried by attributed DECIMAL columns
+// (SHOW CREATE, dump, clone and the CDC/data-branch renderers inherit the
+// same spelling). Other oids and a zero mask format byte-identically to
+// FormatSQLColumnType. ZEROFILL implies UNSIGNED: the normalized stored mask
+// carries both bits and renders the combined suffix. Callers pass the raw
+// mask; unknown bits outside NumericAttributeMask are tolerated by the switch
+// on the masked value, and the unsigned bit alone renders UNSIGNED.
+func FormatSQLColumnTypeWithAttributes(t Type, attrs uint32) (string, bool) {
+	base, ok := FormatSQLColumnType(t)
+	if !ok || !t.IsDecimal() {
+		return base, ok
+	}
+	switch attrs & NumericAttributeMask {
+	case NumericAttributeZerofillMask:
+		return base + " UNSIGNED ZEROFILL", true
+	case NumericAttributeUnsigned:
+		return base + " UNSIGNED", true
+	}
+	return base, true
+}

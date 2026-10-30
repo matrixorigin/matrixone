@@ -1468,6 +1468,11 @@ func TestGetFunctionValueUnstableByID(t *testing.T) {
 		MO_LOG_DATE: true, MO_WIN_TRUNCATE: true, MO_WIN_DIVISOR: true, MO_EXPLAIN_PHY: true,
 		DATABASE: true, USER: true, FOUND_ROWS: true, ROW_COUNT: true, LAST_INSERT_ID: true, LAST_QUERY_ID: true,
 		CHECK_CONSTRAINT_ASSERT: true, LOAD_FK_IGNORE_CHECK: true,
+		// Admission entries mirror cast_assign/cast_ignore: volatile so
+		// sql_mode resolves at execution, execution-stable within one
+		// statement.
+		UNSIGNED_DECIMAL_ADMISSION: true, UNSIGNED_DECIMAL_ADMISSION_STRICT: true,
+		UNSIGNED_DECIMAL_ADMISSION_IGNORE: true,
 	}
 	annotated := 0
 	for _, fn := range allSupportedFunctions {
