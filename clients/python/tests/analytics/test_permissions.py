@@ -74,16 +74,19 @@ def test_external_catalog_is_account_isolated(tenants, hard_client, tmp_path):
     _, (a, b) = tenants
     p = tmp_path / 'input.parquet'
     pq.write_table(pa.table({'id': [1]}), p)
-    with a.analytics.read_parquet(p) as rel:
-        with pytest.raises(Exception):
-            b.analytics.query('SELECT * FROM ' + rel.sql + ' AS f')
-        # CREATE records metadata, but tenant scans cannot access local SQL paths.
-        with pytest.raises(Exception, match='only the sys account moadmin role'):
-            rel.query()
+    # Client/server source checks now fail before CREATE, rather than leaving
+    # a relation which can only fail later during its first scan.
+    with pytest.raises(Exception, match='only the sys account moadmin role'):
+        a.analytics.read_parquet(p)
     with hard_client.analytics.read_parquet(p) as rel:
+        for tenant in (a, b):
+            with pytest.raises(Exception):
+                with tenant.analytics.query('SELECT * FROM ' + rel.sql + ' AS f') as out:
+                    out.to_arrow()
         with rel.query() as out:
             assert out.to_arrow()['id'].to_pylist() == [1]
-    assert not [r for r in a.execute('SHOW TABLES').rows if r[0].startswith('mo_py_files_')]
+    for tenant in (a, b):
+        assert not [r for r in tenant.execute('SHOW TABLES').rows if r[0].startswith('mo_py_files_')]
 
 
 def test_read_only_user_cannot_create_or_append(tenants, tmp_path):

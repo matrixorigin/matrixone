@@ -268,7 +268,6 @@ func TestNewReaderConsumesSourceAndFilterOnConstructionError(t *testing.T) {
 		timestamp.Timestamp{},
 		expr,
 		source,
-		0,
 		engine.FilterHint{BF: filter},
 	)
 	require.Error(t, err)
@@ -303,7 +302,6 @@ func TestNewReaderTransfersSourceAndFilterToReader(t *testing.T) {
 		timestamp.Timestamp{},
 		nil,
 		source,
-		0,
 		engine.FilterHint{BF: filter},
 	)
 	require.NoError(t, err)
@@ -315,12 +313,18 @@ func TestNewReaderTransfersSourceAndFilterToReader(t *testing.T) {
 }
 
 func TestReaderLateMaterializationSkipsPersistedPayload(t *testing.T) {
-	for _, aboveThreshold := range []bool{false, true} {
-		t.Run(map[bool]string{false: "at_threshold", true: "above_threshold"}[aboveThreshold], func(t *testing.T) {
-			ctx := fileservice.WithFileServicePolicy(context.Background(), fileservice.SkipFullFilePreloads|fileservice.SkipDiskCacheWrites)
+	for _, skipWrites := range []bool{false, true} {
+		t.Run(map[bool]string{false: "normal_admission", true: "explicit_skip"}[skipWrites], func(t *testing.T) {
+			policy := fileservice.Policy(fileservice.SkipFullFilePreloads | fileservice.SkipDiskCacheWrites)
+			if skipWrites {
+				policy |= fileservice.SkipMemoryCacheWrites
+			}
+			ctx := fileservice.WithFileServicePolicy(context.Background(), policy)
 			fs := testutil.NewSharedFS()
 			writeMP := mpool.MustNewZero()
+			t.Cleanup(func() { defer mpool.DeleteMPool(writeMP); require.Zero(t, writeMP.CurrNB()) })
 			input := batch.NewWithSize(2)
+			t.Cleanup(func() { input.Clean(writeMP) })
 			input.Vecs[0] = vector.NewVec(types.T_int32.ToType())
 			input.Vecs[1] = vector.NewVec(types.T_text.ToType())
 			for i := 0; i < 8; i++ {
@@ -334,9 +338,6 @@ func TestReaderLateMaterializationSkipsPersistedPayload(t *testing.T) {
 			_, _, err = writer.Sync(ctx)
 			require.NoError(t, err)
 			stats := writer.GetObjectStats()
-			input.Clean(writeMP)
-			require.Zero(t, writeMP.CurrNB())
-			mpool.DeleteMPool(writeMP)
 
 			tableDef := &plan.TableDef{
 				Name:          "late_reader_test",
@@ -355,6 +356,7 @@ func TestReaderLateMaterializationSkipsPersistedPayload(t *testing.T) {
 			}
 			source := &singlePersistedBlockSource{info: stats.ConstructBlockInfo(0)}
 			queryMP := mpool.MustNewZero()
+			t.Cleanup(func() { defer mpool.DeleteMPool(queryMP); require.Zero(t, queryMP.CurrNB()) })
 			r, err := NewReader(
 				ctx,
 				queryMP,
@@ -364,53 +366,53 @@ func TestReaderLateMaterializationSkipsPersistedPayload(t *testing.T) {
 				timestamp.Timestamp{},
 				nil,
 				source,
-				0,
 				engine.FilterHint{},
 			)
 			require.NoError(t, err)
-			r.readBlockCnt = r.threshHold
-			if aboveThreshold {
-				r.readBlockCnt++
-			}
 			observed := &policyObservingFS{FileService: fs}
 			r.fs = observed
 			mr := NewMergeReader([]engine.Reader{r})
+			t.Cleanup(func() {
+				require.NoError(t, mr.Close())
+				require.Equal(t, int32(1), atomic.LoadInt32(&source.closeCount))
+			})
 
 			output := batch.NewWithSize(2)
+			t.Cleanup(func() { output.Clean(queryMP) })
 			output.Vecs[0] = vector.NewOffHeapVecWithType(types.T_int32.ToType())
 			output.Vecs[1] = vector.NewOffHeapVecWithType(types.T_text.ToType())
-			isEnd, err := mr.ReadWithFilter(
-				ctx,
-				[]string{"id", "payload"},
-				[]int{0},
-				func(bat *batch.Batch, loaded []int) (engine.ReaderFilterResult, error) {
-					require.Equal(t, []int{0}, loaded)
-					require.Equal(t, 8, bat.Vecs[0].Length())
-					require.Zero(t, bat.Vecs[1].Length())
-					bat.Vecs[0].CleanOnlyData()
-					bat.SetRowCount(0)
-					return engine.ReaderFilterResult{}, nil
-				},
-				queryMP,
-				output,
-			)
-			require.NoError(t, err)
-			require.False(t, isEnd)
-			require.Zero(t, output.RowCount())
-			require.Zero(t, output.Vecs[0].Length())
-			require.Zero(t, output.Vecs[1].Length())
-
-			want := fileservice.Policy(fileservice.SkipFullFilePreloads | fileservice.SkipDiskCacheWrites)
-			if aboveThreshold {
-				want |= fileservice.SkipMemoryCacheWrites
+			for read := 0; read < 130; read++ {
+				source.emitted = false
+				isEnd, err := mr.ReadWithFilter(
+					ctx,
+					[]string{"id", "payload"},
+					[]int{0},
+					func(bat *batch.Batch, loaded []int) (engine.ReaderFilterResult, error) {
+						require.Equal(t, []int{0}, loaded)
+						require.Equal(t, 8, bat.Vecs[0].Length())
+						require.Zero(t, bat.Vecs[1].Length())
+						bat.Vecs[0].CleanOnlyData()
+						bat.SetRowCount(0)
+						return engine.ReaderFilterResult{}, nil
+					},
+					queryMP,
+					output,
+				)
+				require.NoError(t, err)
+				require.False(t, isEnd)
+				require.Zero(t, output.RowCount())
+				require.Zero(t, output.Vecs[0].Length())
+				require.Zero(t, output.Vecs[1].Length())
 			}
-			require.Contains(t, observed.policies, want)
-			require.NoError(t, mr.Close())
-			require.Equal(t, int32(1), atomic.LoadInt32(&source.closeCount))
 
-			output.Clean(queryMP)
-			require.Zero(t, queryMP.CurrNB())
-			mpool.DeleteMPool(queryMP)
+			columnReads := 0
+			for _, got := range observed.policies {
+				// Metadata reads use their own policy; count inherited column reads.
+				if got == policy {
+					columnReads++
+				}
+			}
+			require.GreaterOrEqual(t, columnReads, 130)
 		})
 	}
 }
@@ -431,7 +433,7 @@ func TestReaderAppliesInMemoryFilterBeforeVectorTopK(t *testing.T) {
 	}
 	source := &singleInMemoryVectorSource{}
 	r, err := NewReader(
-		ctx, queryMP, nil, nil, tableDef, timestamp.Timestamp{}, nil, source, 0, engine.FilterHint{},
+		ctx, queryMP, nil, nil, tableDef, timestamp.Timestamp{}, nil, source, engine.FilterHint{},
 	)
 	require.NoError(t, err)
 

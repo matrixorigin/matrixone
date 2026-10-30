@@ -100,7 +100,11 @@ jobs:
     timeout-minutes: 15
     strategy:
       matrix:
-        python: ['3.8', '3.9']
+        include:
+          - python: '3.8'
+            sqlalchemy: '>=1.4,<1.5'
+          - python: '3.9'
+            sqlalchemy: '>=2.0,<2.1'
     defaults:
       run:
         working-directory: clients/python
@@ -114,7 +118,10 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python }}
-      - run: python -m pip install .
+      - name: Install core and runtime test dependencies without Arrow
+        env:
+          SQLALCHEMY_RANGE: ${{ matrix.sqlalchemy }}
+        run: python -m pip install '.[core-test]' "SQLAlchemy[asyncio]${SQLALCHEMY_RANGE}"
       - name: Import installed core without optional analytics dependencies
         working-directory: /tmp
         run: |
@@ -128,6 +135,14 @@ jobs:
               sql, params = client.query('t').filter_by(v=None)._build_sql()
               assert 'v IS NULL' in sql and params == []
           PYCORE
+      - name: Exercise core runtime, result identity and async ownership
+        run: |
+          python -m pytest -o addopts='' -q \
+            tests/offline/contracts/test_mapped_query_identity.py \
+            tests/offline/contracts/test_pool_settings.py \
+            tests/offline/contracts/test_capabilities.py \
+            tests/offline/contracts/test_telemetry_outcomes.py \
+            tests/analytics/test_async_workers.py
 
   online:
     if: github.event_name == 'workflow_dispatch' && inputs.online
@@ -158,6 +173,7 @@ jobs:
       MO_SDK_EXPORT_LOCAL_DIR: ${{ vars.MO_SDK_EXPORT_LOCAL_DIR }}
       MO_SDK_DISPOSABLE_SERVER: ${{ vars.MO_SDK_DISPOSABLE_SERVER }}
       MO_ANALYTICS_ONLINE: '1'
+      MO_EXPECT_STAGE_LITERAL_SUPPORT: ${{ matrix.server == 'current-source' && '1' || '0' }}
       MO_SDK_ONLINE: '1'
       MO_SECOND_CN_PORT: ${{ vars.MO_SECOND_CN_PORT }}
       MO_ANALYTICS_S3_ENDPOINT: ${{ vars.MO_ANALYTICS_S3_ENDPOINT }}
