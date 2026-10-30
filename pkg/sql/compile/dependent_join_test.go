@@ -74,6 +74,7 @@ func TestDependentJoinAlgorithm(t *testing.T) {
 		{"dependent_residual", plan.Node_INNER, []*plan.Expr{eq, bind("<", left, dep)}, vm.LoopJoin},
 		{"mark_single_nullable", plan.Node_MARK, []*plan.Expr{eq}, vm.HashJoin},
 		{"mark_nonnull_composite", plan.Node_MARK, nonNullComposite, vm.HashJoin},
+		{"mark_boolean_existential", plan.Node_MARK, []*plan.Expr{eq, bind("=", plan2.GetColExpr(typ, 0, 1), plan2.GetColExpr(typ, 1, 1))}, vm.HashJoin},
 		{"mark_nullable_composite", plan.Node_MARK, []*plan.Expr{eq, bind("=", plan2.GetColExpr(typ, 0, 1), plan2.GetColExpr(typ, 1, 1))}, vm.LoopJoin},
 		{"mark_residual", plan.Node_MARK, []*plan.Expr{eq, bind("<", left, right)}, vm.LoopJoin},
 	}
@@ -85,6 +86,11 @@ func TestDependentJoinAlgorithm(t *testing.T) {
 				n.Stats = &plan.Stats{HashmapStats: &plan.HashMapStats{Shuffle: true}}
 			}
 			inputs := children
+			if tc.name == "mark_boolean_existential" {
+				n.MarkExistenceOnly = true
+				inputs = []*plan.Node{plan2.DeepCopyNode(children[0]), plan2.DeepCopyNode(children[1])}
+				inputs[0].Stats = &plan.Stats{Outcnt: 20}
+			}
 			if tc.name == "mark_nonnull_composite" {
 				inputs = []*plan.Node{plan2.DeepCopyNode(children[0]), plan2.DeepCopyNode(children[1])}
 				for _, input := range inputs {
@@ -113,12 +119,13 @@ func TestDependentJoinAlgorithm(t *testing.T) {
 				require.True(t, root.Build.NeedHashMap)
 				require.True(t, root.Build.NeedBatches, "direct input retains its materialized build owner")
 				if tc.kind == plan.Node_MARK {
-					require.True(t, root.Build.TrackNullKeys)
+					require.Equal(t, !n.MarkExistenceOnly, root.Build.TrackNullKeys)
+					require.Equal(t, n.MarkExistenceOnly, root.Join.(*hashjoin.HashJoin).ExistenceOnly)
 					require.False(t, root.Build.NeedAllocateSels)
 					if len(tc.on) > 1 {
 						for _, keys := range root.Join.(*hashjoin.HashJoin).EqConds {
 							for _, key := range keys {
-								require.True(t, key.Typ.NotNullable)
+								require.Equal(t, !n.MarkExistenceOnly, key.Typ.NotNullable)
 							}
 						}
 					}

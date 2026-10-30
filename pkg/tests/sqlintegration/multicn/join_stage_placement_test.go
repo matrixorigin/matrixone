@@ -136,6 +136,7 @@ func TestJoinCoordinatorStage(t *testing.T) {
 		{"local window probe", `select d.id,d.rn,c.v from (select id,k,row_number() over(order by id) as rn from a) d left join c on d.k=c.k order by d.id,c.v`, "1\t1\t1\n1\t1\t3\n2\t2\t1\n2\t2\t3\n3\t3\tNULL\n4\t4\tNULL\n"},
 		{"local window build", `select a.id,d.v from a left join (select k,v,row_number() over(partition by k order by rid desc) as rn from c) d on a.k=d.k and d.rn=1 order by a.id`, "1\t3\n2\t3\n3\tNULL\n4\tNULL\n"},
 		{"numeric cast provenance", `with d as (select distinct k,x,k is null as kn,coalesce(k,0) as kv,x is null as xn,coalesce(x,0) as xv from a), f as (select d.kn,d.kv,d.xn,d.xv,coalesce(max(c.v),0) as result from d join c on c.k=d.k where c.rid>10 group by d.kn,d.kv,d.xn,d.xv) select a.id,coalesce(f.result,0) from a left join f on (a.k is null)=f.kn and coalesce(a.k,0)=f.kv and (a.x is null)=f.xn and coalesce(a.x,0)=f.xv order by a.id`, "1\t3\n2\t3\n3\t0\n4\t0\n"},
+		{"nullable existence and three-valued membership", `select a.id,exists(select 1 from c where c.k=a.k and c.v=a.x),not exists(select 1 from c where c.k=a.k and c.v=a.x),a.x in(select c.v from c where c.k=a.k),a.x not in(select c.v from c where c.k=a.k) from a order by a.id`, "1\t1\t0\t1\t0\n2\t1\t0\t1\t0\n3\t0\t1\tNULL\tNULL\n4\t0\t1\t0\t1\n"},
 		{"full outer unmatched build", `select a.id,c.rid from a full outer join c on a.k=c.k order by coalesce(a.id,999),c.rid`, "1\t11\n1\t12\n2\t11\n2\t12\n3\t13\n4\tNULL\nNULL\t14\n"},
 		{"right unmatched build", `select a.id,c.rid from a right join c on a.k=c.k order by coalesce(a.id,999),c.rid`, "1\t11\n1\t12\n2\t11\n2\t12\n3\t13\nNULL\t14\n"},
 	} {
@@ -143,6 +144,9 @@ func TestJoinCoordinatorStage(t *testing.T) {
 			require.Equal(t, tc.want, query(t, tc.statement))
 			require.Equal(t, strings.SplitN(tc.want, "\n", 2)[0]+"\n", query(t, tc.statement+" limit 1"))
 			physical := query(t, "explain phyplan analyze "+tc.statement)
+			if tc.name == "nullable existence and three-valued membership" {
+				require.Contains(t, physical, "hash join", "Boolean MARK must execute alongside three-valued MARK")
+			}
 			require.NotEmpty(t, peer)
 			require.Contains(t, physical, peer, "must execute a scan on the other CN")
 		})
@@ -154,6 +158,7 @@ func TestJoinCoordinatorStage(t *testing.T) {
 	waitWorkers(ctx, 2)
 	exec("set max_dop=2")
 	for _, tc := range []struct{ name, statement, want string }{
+		{"broadcast nullable existence", `select a.id,exists(select 1 from c where c.k=a.k and c.v=a.x) from a order by a.id`, "1\t1\n2\t1\n3\t0\n4\t0\n"},
 		{"broadcast product", `select count(*),sum(a.id*100+c.rid) from a cross join c`, "16\t4200\n"},
 		{"empty broadcast product", `select count(*) from a cross join c where a.id<0`, "0\n"},
 		{"nested product early stop", `select count(*) from (select a.id from a cross join c) d join a z on d.id=z.id where z.id<0`, "0\n"},

@@ -7265,8 +7265,8 @@ func (c *Compile) compileProbeSideForBroadcastJoin(node, left, right *plan.Node,
 		currentFirstFlag := c.anal.isFirst
 		for i := range rs {
 			var op vm.Operator
-			if canUseHashMarkJoinWithInputs(node, left, right) {
-				op = constructBroadcastHashMarkJoin(node, left, leftTypes, rightTypes, c.proc)
+			if canUseHashMarkJoinWithInputs(node, left, right) || canUseHashExistenceJoinWithInputs(node, left, right) {
+				op = constructBroadcastHashMarkJoin(node, left, right, leftTypes, rightTypes, c.proc)
 			} else {
 				op = constructLoopJoin(node, leftTypes, rightTypes, c.proc)
 			}
@@ -11767,3 +11767,48 @@ func (c *Compile) isCCPRTaskTransaction() bool {
 // before physical compilation or Compile.Reset. Zero keeps ordinary statements
 // fully dynamic.
 func (c *Compile) SetGroupConcatMaxLenFloor(floor uint64) { c.groupConcatMaxLenFloor = floor }
+
+// Boolean EXISTS needs only an exact TRUE witness. NULL comparisons do not
+// witness existence, unlike an ordinary MARK whose UNKNOWN is observable.
+// Recheck the final materialized keys after planner rewrites; keep functions,
+// residuals and unproved domains on the row-aware path.
+func canUseHashExistenceJoinWithInputs(node, left, right *plan.Node) bool {
+	if node == nil || node.JoinType != plan.Node_MARK || !node.MarkExistenceOnly || node.IsRightJoin ||
+		left == nil || right == nil || left.Stats == nil ||
+		math.IsNaN(left.Stats.Outcnt) || math.IsInf(left.Stats.Outcnt, 0) || left.Stats.Outcnt <= 1 ||
+		canUseHashMarkJoinWithInputs(node, left, right) {
+		return false
+	}
+	conditions := colexec.SplitAndExprs(node.OnList)
+	if len(conditions) < 2 {
+		return false
+	}
+	for _, condition := range conditions {
+		fn := condition.GetF()
+		if fn == nil || fn.Func == nil || !plan2.IsEqualFunc(fn.Func.GetObj()) || len(fn.Args) != 2 {
+			return false
+		}
+		a, b := fn.Args[0], fn.Args[1]
+		ac, bc := a.GetCol(), b.GetCol()
+		if ac == nil || bc == nil || !((ac.RelPos == 0 && bc.RelPos == 1) || (ac.RelPos == 1 && bc.RelPos == 0)) ||
+			!types.T(a.Typ.Id).IsInteger() || a.Typ.Id != b.Typ.Id || a.Typ.Width != b.Typ.Width || a.Typ.Scale != b.Typ.Scale {
+			return false
+		}
+		for _, arg := range fn.Args {
+			col := arg.GetCol()
+			child := left
+			if col.RelPos == 1 {
+				child = right
+			}
+			if col.ColPos < 0 || int(col.ColPos) >= len(child.ProjectList) {
+				return false
+			}
+			materialized := child.ProjectList[col.ColPos]
+			if materialized == nil || materialized.Typ.Id != arg.Typ.Id ||
+				materialized.Typ.Width != arg.Typ.Width || materialized.Typ.Scale != arg.Typ.Scale {
+				return false
+			}
+		}
+	}
+	return true
+}
