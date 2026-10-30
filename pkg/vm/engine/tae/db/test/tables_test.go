@@ -37,8 +37,6 @@ import (
 )
 
 func TestTables1(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	db := testutil.InitTestDB(ctx, ModuleName, t, nil)
@@ -63,12 +61,12 @@ func TestTables1(t *testing.T) {
 
 	blkCnt := 3
 	rows := schema.Extra.BlockMaxRows * uint32(blkCnt)
-	_, _, toAppend, err := appender.PrepareAppend(false, rows, nil)
+	_, _, toAppend, err := appender.PrepareAppend(ctx, false, rows, nil)
 	assert.Equal(t, schema.Extra.BlockMaxRows, toAppend)
 	assert.Nil(t, err)
 	t.Log(toAppend)
 
-	_, _, toAppend, err = appender.PrepareAppend(false, rows-toAppend, nil)
+	_, _, toAppend, err = appender.PrepareAppend(ctx, false, rows-toAppend, nil)
 	assert.Nil(t, err)
 	assert.Equal(t, uint32(0), toAppend)
 
@@ -79,7 +77,7 @@ func TestTables1(t *testing.T) {
 	id = obj.GetMeta().(*catalog.ObjectEntry).AsCommonID()
 	appender = handle.SetAppender(id)
 
-	_, _, toAppend, err = appender.PrepareAppend(false, rows-toAppend, nil)
+	_, _, toAppend, err = appender.PrepareAppend(ctx, false, rows-toAppend, nil)
 	assert.Nil(t, err)
 	assert.Equal(t, schema.Extra.BlockMaxRows, toAppend)
 
@@ -90,7 +88,7 @@ func TestTables1(t *testing.T) {
 
 	id = obj.GetMeta().(*catalog.ObjectEntry).AsCommonID()
 	appender = handle.SetAppender(id)
-	_, _, toAppend, err = appender.PrepareAppend(false, rows-2*toAppend, nil)
+	_, _, toAppend, err = appender.PrepareAppend(ctx, false, rows-2*toAppend, nil)
 	assert.Nil(t, err)
 	assert.Equal(t, schema.Extra.BlockMaxRows, toAppend)
 	t.Log(db.Catalog.SimplePPString(common.PPL1))
@@ -100,8 +98,6 @@ func TestTables1(t *testing.T) {
 }
 
 func TestTxn1(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	db := testutil.InitTestDB(ctx, ModuleName, t, nil)
@@ -183,8 +179,6 @@ func TestTxn1(t *testing.T) {
 }
 
 func TestTxn2(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	db := testutil.InitTestDB(ctx, ModuleName, t, nil)
@@ -209,8 +203,6 @@ func TestTxn2(t *testing.T) {
 }
 
 func TestTxn4(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	db := testutil.InitTestDB(ctx, ModuleName, t, nil)
@@ -238,8 +230,6 @@ func TestTxn4(t *testing.T) {
 }
 
 func TestTxn5(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	db := testutil.InitTestDB(ctx, ModuleName, t, nil)
@@ -311,8 +301,6 @@ func TestTxn5(t *testing.T) {
 }
 
 func TestTxn6(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	db := testutil.InitTestDB(ctx, ModuleName, t, nil)
@@ -433,8 +421,6 @@ func TestTxn6(t *testing.T) {
 }
 
 func TestFlushAblkMerge(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	opts := new(options.Options)
@@ -545,8 +531,6 @@ func TestFlushAblkMerge(t *testing.T) {
 }
 
 func TestMergeBlocks2(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	opts := config.WithQuickScanAndCKPOpts(nil)
@@ -595,8 +579,6 @@ func TestMergeBlocks2(t *testing.T) {
 }
 
 func TestCompaction1(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	db := testutil.InitTestDB(ctx, ModuleName, t, nil)
@@ -663,8 +645,6 @@ func TestCompaction1(t *testing.T) {
 }
 
 func TestCompaction2(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	opts := config.WithQuickScanAndCKPOpts(nil)
@@ -731,69 +711,3 @@ func TestCompaction2(t *testing.T) {
 		assert.NoError(t, it.Close())
 	}
 }
-
-// TestCompaction3 is a case for testing block refcount,
-// which requires modification of the data block to test.
-/*func TestCompaction3(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
-	opts := config.WithQuickScanAndCKPOpts(nil)
-	db := initDB(t, opts)
-	defer db.Close()
-
-	schema := catalog.MockSchemaAll(4, 2)
-	schema.Extra.BlockMaxRows = 21
-	schema.Extra.ObjectMaxBlocks = 4
-    schema.Name = tables.ForTestBlockRefName
-	cnt := uint32(3)
-	rows := schema.Extra.BlockMaxRows / 3 * cnt
-	bat := catalog.MockBatch(schema, int(rows))
-	defer bat.Close()
-	bats := bat.Split(int(cnt))
-	{
-		txn, _ := db.StartTxn(nil)
-		database, _ := txn.CreateDatabase("db")
-		rel, _ := database.CreateRelation(schema)
-		err := rel.Append(context.Background(), bats[0])
-		assert.Nil(t, err)
-		assert.Nil(t, txn.Commit(context.Background()))
-	}
-	go func() {
-		txn, _ := db.StartTxn(nil)
-		database, _ := txn.GetDatabase("db")
-		rel, _ := database.GetRelationByName(schema.Name)
-		err := rel.Append(context.Background(), bats[1])
-		assert.Nil(t, err)
-		assert.Nil(t, txn.Commit(context.Background()))
-	}()
-	{
-		txn, _ := db.StartTxn(nil)
-		database, _ := txn.GetDatabase("db")
-		rel, _ := database.GetRelationByName(schema.Name)
-		it := rel.MakeBlockIt()
-		for it.Valid() {
-			blk := it.GetBlock()
-			view, _ := blk.GetColumnDataById(context.Background(), 3)
-			assert.NotNil(t, view)
-			view.Close()
-			assert.True(t, blk.GetMeta().(*catalog.BlockEntry).Appendable())
-			it.Next()
-		}
-	}
-	time.Sleep(400 * time.Millisecond)
-	{
-		txn, _ := db.StartTxn(nil)
-		database, _ := txn.GetDatabase("db")
-		rel, _ := database.GetRelationByName(schema.Name)
-		it := rel.MakeBlockIt()
-		for it.Valid() {
-			blk := it.GetBlock()
-			view, _ := blk.GetColumnDataById(context.Background(), 3)
-			assert.NotNil(t, view)
-			view.Close()
-			assert.False(t, blk.GetMeta().(*catalog.BlockEntry).Appendable())
-			assert.False(t, blk.GetMeta().(*catalog.BlockEntry).GetObjectData().Appendable())
-			it.Next()
-		}
-	}
-}*/

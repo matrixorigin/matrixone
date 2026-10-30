@@ -1,0 +1,13 @@
+Project
+  Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=8 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=8 bytes (min=8 bytes, max=8 bytes)
+  ->  Aggregate
+        Analyze: timeConsumed=44ms group_time=[total=42ms,min=1ms,max=15ms,dop=8] mergegroup_time=[0ms] waitTime=2927ms inputRows=2500000 outputRows=1 (min=1, max=1) InputSize=19.07 MiB OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=640.00 KiB (min=128.00 KiB, max=128.00 KiB)
+        Aggregate Functions: count(#[0,0])
+        ->  Aggregate
+              Analyze: timeConsumed=6899ms group_time=[total=5195ms,min=581ms,max=734ms,dop=8] waitTime=2348ms inputRows=5000000 outputRows=2500000 (min=311933, max=313156) InputSize=76.29 MiB OutputSize=19.07 MiB ReadSize=0 bytes|0 bytes|0 bytes MemorySize=75.81 MiB (min=9.13 MiB, max=9.13 MiB) SpillRows=5000000 SpillSize=78.90 MiB (min=9.84 MiB, max=9.89 MiB)
+              Group Key: #[0,0], #[0,1] shuffle: hash(#[0,1])
+              ->  Aggregate
+                    Analyze: timeConsumed=914ms group_time=[total=914ms,min=29ms,max=206ms,dop=8] waitTime=0ms inputRows=5000000 outputRows=5000000 (min=196608, max=1048576) InputSize=76.29 MiB OutputSize=76.29 MiB ReadSize=0 bytes|0 bytes|0 bytes MemorySize=73.03 MiB (min=9.13 MiB, max=9.13 MiB)
+                    Group Key: remote_pairs.b, remote_pairs.a
+                    ->  Table Scan on qa30995.remote_pairs
+                          Analyze: timeConsumed=1ms scan_time=[total=1ms,min=0ms,max=0ms,dop=8] waitTime=1017ms inputBlocks=611 inputRows=5000000 outputRows=5000000 (min=196608, max=1048576) InputSize=76.29 MiB OutputSize=76.29 MiB ReadSize=19.31 MiB|0 bytes|0 bytes MemorySize=2.00 MiB (min=256.00 KiB, max=256.00 KiB)

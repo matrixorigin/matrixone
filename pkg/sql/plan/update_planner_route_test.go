@@ -281,7 +281,7 @@ func TestBindUpdateProducesTypedPlannerRoutes(t *testing.T) {
 
 			builder := NewQueryBuilder(planpb.Query_UPDATE, mock.CurrentContext(), false, true)
 			bindCtx := NewBindContext(builder, nil)
-			_, err = builder.bindUpdate(stmt.(*tree.Update), bindCtx)
+			_, err = builder.bindUpdate(stmt.(*tree.Update), bindCtx, NewDMLContext())
 			if test.wantRoute == updatePlannerModern {
 				require.NoError(t, err)
 				return
@@ -361,7 +361,7 @@ func TestModernUpdatePlansAvoidPreInsertKeyStaging(t *testing.T) {
 				require.NoError(t, err)
 				defer stmt.Free()
 				builder := NewQueryBuilder(planpb.Query_UPDATE, mock.CurrentContext(), false, true)
-				_, err = builder.bindUpdate(stmt.(*tree.Update), NewBindContext(builder, nil))
+				_, err = builder.bindUpdate(stmt.(*tree.Update), NewBindContext(builder, nil), NewDMLContext())
 				require.NoError(t, err)
 				query = builder.qry
 			} else {
@@ -443,7 +443,7 @@ func TestBindUpdateRejectsOverlappingForeignKeyMutationTargets(t *testing.T) {
 		require.NoError(t, err)
 		defer stmt.Free()
 		builder := NewQueryBuilder(planpb.Query_UPDATE, mock.CurrentContext(), false, true)
-		_, err = builder.bindUpdate(stmt.(*tree.Update), NewBindContext(builder, nil))
+		_, err = builder.bindUpdate(stmt.(*tree.Update), NewBindContext(builder, nil), NewDMLContext())
 		return err
 	}
 	assertRejected := func(t *testing.T, err error) {
@@ -586,7 +586,7 @@ func TestUpdateIrregularIndexLocksBeforeMaintenanceFanout(t *testing.T) {
 			defer stmt.Free()
 
 			builder := NewQueryBuilder(planpb.Query_UPDATE, mock.CurrentContext(), false, true)
-			rootID, err := builder.bindUpdate(stmt.(*tree.Update), NewBindContext(builder, nil))
+			rootID, err := builder.bindUpdate(stmt.(*tree.Update), NewBindContext(builder, nil), NewDMLContext())
 			require.NoError(t, err)
 
 			query := builder.qry
@@ -690,7 +690,7 @@ func TestUpdateIrregularIndexLockPreservesMultiTargetSelectors(t *testing.T) {
 	defer stmt.Free()
 
 	builder := NewQueryBuilder(planpb.Query_UPDATE, mock.CurrentContext(), false, true)
-	rootID, err := builder.bindUpdate(stmt.(*tree.Update), NewBindContext(builder, nil))
+	rootID, err := builder.bindUpdate(stmt.(*tree.Update), NewBindContext(builder, nil), NewDMLContext())
 	require.NoError(t, err)
 	builder.qry.Steps = append(builder.qry.Steps, rootID)
 	query, err := builder.createQuery()
@@ -749,7 +749,7 @@ func TestUpdateWithoutIrregularIndexKeepsLockAtDMLInput(t *testing.T) {
 	defer stmt.Free()
 
 	builder := NewQueryBuilder(planpb.Query_UPDATE, mock.CurrentContext(), false, true)
-	rootID, err := builder.bindUpdate(stmt.(*tree.Update), NewBindContext(builder, nil))
+	rootID, err := builder.bindUpdate(stmt.(*tree.Update), NewBindContext(builder, nil), NewDMLContext())
 	require.NoError(t, err)
 
 	root := builder.qry.Nodes[rootID]
@@ -888,7 +888,7 @@ func TestBindUpdateForeignKeyRoutingByAffectedColumns(t *testing.T) {
 		defer stmt.Free()
 
 		builder := NewQueryBuilder(planpb.Query_UPDATE, mock.CurrentContext(), false, true)
-		_, err = builder.bindUpdate(stmt.(*tree.Update), NewBindContext(builder, nil))
+		_, err = builder.bindUpdate(stmt.(*tree.Update), NewBindContext(builder, nil), NewDMLContext())
 		require.NoError(t, err)
 		require.Equal(t, 1, countUpdateFkPlanNodes(builder.qry, planpb.Node_PRE_INSERT))
 		require.Equal(t, 1, countUpdateFkAsserts(builder.qry))
@@ -962,6 +962,19 @@ func TestBindUpdateForeignKeyRoutingByAffectedColumns(t *testing.T) {
 		require.Equal(t, 1, countUpdateFkMarkJoins(query))
 		require.Equal(t, 1, countUpdateFkAsserts(query))
 		require.True(t, updateFkPlanContainsFunc(query, "<=>"))
+		require.True(t, updateFkPlanContainsTypedAssert(
+			query,
+			foreignKeyRowIsReferencedAssert,
+		))
+	})
+
+	t.Run("delete restricted parent carries typed fk assert", func(t *testing.T) {
+		mock := NewMockOptimizer(true, newPlanTestProcess(t))
+		prepareEmpDept(mock)
+
+		logicPlan, err := runOneStmt(mock, t, "DELETE FROM dept WHERE deptno = 2")
+		require.NoError(t, err)
+		query := logicPlan.GetQuery()
 		require.True(t, updateFkPlanContainsTypedAssert(
 			query,
 			foreignKeyRowIsReferencedAssert,
@@ -1077,7 +1090,7 @@ func TestBindUpdateForeignKeyRoutingByAffectedColumns(t *testing.T) {
 			defer stmt.Free()
 
 			builder := NewQueryBuilder(planpb.Query_UPDATE, mock.CurrentContext(), false, true)
-			_, err = builder.bindUpdate(stmt.(*tree.Update), NewBindContext(builder, nil))
+			_, err = builder.bindUpdate(stmt.(*tree.Update), NewBindContext(builder, nil), NewDMLContext())
 			require.ErrorContains(t, err, "complete child update row closure")
 			route, reason, _ := classifyUpdatePlannerError(err)
 			require.Equal(t, updatePlannerRejected, route)
@@ -1160,7 +1173,7 @@ func TestBindUpdateForeignKeyRoutingByAffectedColumns(t *testing.T) {
 		defer stmt.Free()
 
 		builder := NewQueryBuilder(planpb.Query_UPDATE, mock.CurrentContext(), false, true)
-		_, err = builder.bindUpdate(stmt.(*tree.Update), NewBindContext(builder, nil))
+		_, err = builder.bindUpdate(stmt.(*tree.Update), NewBindContext(builder, nil), NewDMLContext())
 		require.ErrorContains(t, err, "child column constrained by another foreign key")
 		route, _, _ := classifyUpdatePlannerError(err)
 		require.Equal(t, updatePlannerRejected, route)
@@ -1189,7 +1202,7 @@ func TestBindUpdateParentForeignKeySafetyGates(t *testing.T) {
 			defer stmt.Free()
 
 			builder := NewQueryBuilder(planpb.Query_UPDATE, mock.CurrentContext(), false, true)
-			_, err = builder.bindUpdate(stmt.(*tree.Update), NewBindContext(builder, nil))
+			_, err = builder.bindUpdate(stmt.(*tree.Update), NewBindContext(builder, nil), NewDMLContext())
 			require.ErrorContains(t, err, "optimistic transaction")
 			route, reason, _ := classifyUpdatePlannerError(err)
 			require.Equal(t, updatePlannerRejected, route)
@@ -1213,7 +1226,7 @@ func TestBindUpdateParentForeignKeySafetyGates(t *testing.T) {
 		defer stmt.Free()
 
 		builder := NewQueryBuilder(planpb.Query_UPDATE, mock.CurrentContext(), false, true)
-		_, err = builder.bindUpdate(stmt.(*tree.Update), NewBindContext(builder, nil))
+		_, err = builder.bindUpdate(stmt.(*tree.Update), NewBindContext(builder, nil), NewDMLContext())
 		require.NoError(t, err)
 		require.True(t, builder.qry.GetHasForeignKeyAction())
 		require.GreaterOrEqual(t, countUpdateFkPlanNodes(builder.qry, planpb.Node_MULTI_UPDATE), 2)
@@ -1275,7 +1288,7 @@ func TestBindUpdateParentForeignKeySafetyGates(t *testing.T) {
 		require.NoError(t, err)
 		defer stmt.Free()
 		builder := NewQueryBuilder(planpb.Query_UPDATE, mock.CurrentContext(), false, true)
-		_, err = builder.bindUpdate(stmt.(*tree.Update), NewBindContext(builder, nil))
+		_, err = builder.bindUpdate(stmt.(*tree.Update), NewBindContext(builder, nil), NewDMLContext())
 		require.NoError(t, err)
 
 		require.True(t, slices.ContainsFunc(builder.qry.Nodes, func(node *planpb.Node) bool {
@@ -1347,7 +1360,7 @@ func TestBindUpdateParentForeignKeySafetyGates(t *testing.T) {
 		require.NoError(t, err)
 		defer stmt.Free()
 		builder := NewQueryBuilder(planpb.Query_UPDATE, mock.CurrentContext(), false, true)
-		_, err = builder.bindUpdate(stmt.(*tree.Update), NewBindContext(builder, nil))
+		_, err = builder.bindUpdate(stmt.(*tree.Update), NewBindContext(builder, nil), NewDMLContext())
 		require.NoError(t, err)
 
 		found := false
@@ -1428,7 +1441,7 @@ func TestBindUpdateParentForeignKeySafetyGates(t *testing.T) {
 		defer stmt.Free()
 
 		builder := NewQueryBuilder(planpb.Query_UPDATE, mock.CurrentContext(), false, true)
-		_, err = builder.bindUpdate(stmt.(*tree.Update), NewBindContext(builder, nil))
+		_, err = builder.bindUpdate(stmt.(*tree.Update), NewBindContext(builder, nil), NewDMLContext())
 		require.ErrorContains(t, err, "multiple parent foreign key actions targeting the same child table")
 		route, reason, _ := classifyUpdatePlannerError(err)
 		require.Equal(t, updatePlannerRejected, route)
@@ -1459,7 +1472,7 @@ func TestBindUpdateParentForeignKeySafetyGates(t *testing.T) {
 			defer stmt.Free()
 
 			builder := NewQueryBuilder(planpb.Query_UPDATE, mock.CurrentContext(), false, true)
-			_, err = builder.bindUpdate(stmt.(*tree.Update), NewBindContext(builder, nil))
+			_, err = builder.bindUpdate(stmt.(*tree.Update), NewBindContext(builder, nil), NewDMLContext())
 			require.NoError(t, err)
 			require.Equal(t, test.ambiguous, updateFkPlanContainsTypedAssert(
 				builder.qry, foreignKeyAmbiguousMappingAssert))
@@ -1909,7 +1922,7 @@ func TestBindUpdateAutoIncrementRunsBeforeForeignKeys(t *testing.T) {
 		require.NoError(t, err)
 		defer stmt.Free()
 		builder := NewQueryBuilder(planpb.Query_UPDATE, mock.CurrentContext(), false, true)
-		_, err = builder.bindUpdate(stmt.(*tree.Update), NewBindContext(builder, nil))
+		_, err = builder.bindUpdate(stmt.(*tree.Update), NewBindContext(builder, nil), NewDMLContext())
 		require.NoError(t, err)
 		return builder.qry
 	}

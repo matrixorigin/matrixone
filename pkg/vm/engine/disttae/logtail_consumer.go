@@ -467,7 +467,18 @@ func (c *PushClient) init(
 }
 
 func (c *PushClient) SetReconnectHandler(handler func()) {
+	c.lifecycleMu.Lock()
+	defer c.lifecycleMu.Unlock()
 	c.reconnectHandler = handler
+}
+
+func (c *PushClient) notifyReconnect() {
+	c.lifecycleMu.Lock()
+	handler := c.reconnectHandler
+	c.lifecycleMu.Unlock()
+	if handler != nil {
+		handler()
+	}
 }
 
 func (c *PushClient) validLogTailMustApplied(snapshotTS timestamp.Timestamp) {
@@ -1236,9 +1247,7 @@ func (c *PushClient) connect(ctx context.Context, e *Engine) {
 		logutil.Infof("%s %s: client init finished", logTag, c.serviceID)
 
 		// This is only for test.
-		if c.reconnectHandler != nil {
-			c.reconnectHandler()
-		}
+		c.notifyReconnect()
 
 		// clean memory table.
 		err = e.init(ctx)

@@ -17,6 +17,7 @@ package function
 import (
 	"context"
 	"fmt"
+	"math"
 	"testing"
 	"unicode/utf8"
 
@@ -842,13 +843,16 @@ func TestIffConditionTruthyAt(t *testing.T) {
 			".5xyz", "1e2foo", "1eabc", "-0suffix", "   ",
 		}, nil)
 	for row, want := range []bool{
-		false, true, true, true, true, true, false, false,
+		false, true, true, true, false, true, false, false,
 		true, true, true, false, false,
 	} {
 		got, err := IffConditionTruthyAt(stringVec, uint64(row), SQLCompatibilityMySQL)
 		require.NoError(t, err)
 		require.Equal(t, want, got)
 	}
+	got, err := IffConditionTruthyAt(stringVec, 4, SQLCompatibilityMatrixOne)
+	require.NoError(t, err)
+	require.True(t, got, "native mode retains NaN truthiness")
 	for _, row := range []uint64{5, 6, 7, 8, 9, 10, 11, 12} {
 		_, err := IffConditionTruthyAt(stringVec, row, SQLCompatibilityMatrixOne)
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
@@ -894,6 +898,14 @@ func TestIffConditionTruthyAt(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, want, got)
 	}
+
+	enumVec := newVectorByType(proc.Mp(), types.T_enum.ToType(), []types.Enum{0, 2, 1}, nil)
+	enumVec.GetNulls().Add(2)
+	for row, want := range []bool{false, true, false} {
+		got, err := IffConditionTruthyAt(enumVec, uint64(row), SQLCompatibilityMySQL)
+		require.NoError(t, err)
+		require.Equal(t, want, got)
+	}
 }
 
 func TestIffFn_StringCondition(t *testing.T) {
@@ -907,6 +919,230 @@ func TestIffFn_StringCondition(t *testing.T) {
 		NewFunctionTestResult(types.T_int64.ToType(), false, []int64{20, 11, 12}, nil), iffFn)
 	succeed, info := tc.RunAndFree()
 	require.True(t, succeed, info)
+}
+
+// ENUM storage is admitted as an IF condition and keeps its own numeric
+// truthiness. A NULL condition selects the ELSE branch with its value, and
+// the display label never reaches IF through this path.
+func TestIffFn_EnumCondition(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	enumType := types.T_enum.ToType()
+	_, err := GetFunctionByName(context.Background(), "if",
+		[]types.Type{enumType, types.T_int64.ToType(), types.T_int64.ToType()})
+	require.NoError(t, err, "registry must admit ENUM storage as an IF condition")
+
+	tc := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(enumType, []types.Enum{0, 1, 2, 2}, []bool{false, false, false, true}),
+			NewFunctionTestInput(types.T_int64.ToType(), []int64{10, 11, 12, 13}, nil),
+			NewFunctionTestInput(types.T_int64.ToType(), []int64{20, 21, 22, 23}, nil),
+		},
+		NewFunctionTestResult(types.T_int64.ToType(), false,
+			[]int64{20, 11, 12, 23}, nil), iffFn)
+	succeed, info := tc.RunAndFree()
+	require.True(t, succeed, info)
+}
+
+func TestIffFn_JsonCondition(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	jsonType := types.T_json.ToType()
+	_, err := GetFunctionByName(context.Background(), "if",
+		[]types.Type{jsonType, types.T_int64.ToType(), types.T_int64.ToType()})
+	require.NoError(t, err, "registry must admit JSON scalars as an IF condition")
+
+	encodedJSON := func(text string) string {
+		bj, err := types.ParseStringToByteJson(text)
+		require.NoError(t, err)
+		encoded, err := bj.Marshal()
+		require.NoError(t, err)
+		return string(encoded)
+	}
+	// JSON scalars follow MySQL numeric truth in a boolean condition: 1, true
+	// and the string "1" are true; 0, false and the JSON null select the ELSE
+	// branch, as does a SQL NULL condition.
+	conditions := make([]string, 0, 7)
+	conditions = append(conditions,
+		encodedJSON("0"), encodedJSON("1"), encodedJSON("true"),
+		encodedJSON("false"), encodedJSON(`"1"`), encodedJSON("null"))
+	nulls := make([]bool, len(conditions)+1)
+	nulls[len(nulls)-1] = true
+	conditions = append(conditions, encodedJSON("0"))
+	thenValues := make([]int64, 0, len(conditions))
+	elseValues := make([]int64, 0, len(conditions))
+	for i := range conditions {
+		thenValues = append(thenValues, int64(10+i))
+		elseValues = append(elseValues, int64(20+i))
+	}
+
+	tc := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(jsonType, conditions, nulls),
+			NewFunctionTestInput(types.T_int64.ToType(), thenValues, nil),
+			NewFunctionTestInput(types.T_int64.ToType(), elseValues, nil),
+		},
+		NewFunctionTestResult(types.T_int64.ToType(), false,
+			[]int64{20, 11, 12, 23, 14, 25, 26}, nil), iffFn)
+	succeed, info := tc.RunAndFree()
+	require.True(t, succeed, info)
+}
+
+// MySQL conditional truth coerces a JSON STRING through its leading numeric
+// prefix, not through the strict boolean parser that explicit CAST keeps:
+// "2tail" is true like 2, "abc"/""/the string "true" are false like 0, objects
+// and arrays coerce to zero, and JSON null or a SQL NULL condition selects the
+// ELSE branch. This pins the reviewer-quoted reference boundary.
+func TestIffFn_JsonStringCondition(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	jsonType := types.T_json.ToType()
+	_, err := GetFunctionByName(context.Background(), "if",
+		[]types.Type{jsonType, types.T_int64.ToType(), types.T_int64.ToType()})
+	require.NoError(t, err, "registry must admit JSON scalars as an IF condition")
+
+	encodedJSON := func(text string) string {
+		bj, err := types.ParseStringToByteJson(text)
+		require.NoError(t, err)
+		b, err := bj.Marshal()
+		require.NoError(t, err)
+		return string(b)
+	}
+
+	texts := []string{
+		`"true"`,                             // string "true": 0 numerically -> FALSE, unlike the literal true
+		`"abc"`,                              // nonnumeric -> 0 -> FALSE
+		`"2tail"`, `"2.5"`, `" 12"`, `"1e2"`, // numeric prefixes -> TRUE
+		`""`,                // empty -> 0 -> FALSE
+		`"true"`, `"false"`, // behavior of the earlier vector
+	}
+	want := []bool{false, false, true, true, true, true, false, false, false}
+
+	conditions := make([]string, 0, len(texts)+2)
+	for _, text := range texts {
+		conditions = append(conditions, encodedJSON(text))
+	}
+	conditions = append(conditions,
+		encodedJSON(`{"x":1}`), // object coerces to zero -> FALSE
+		encodedJSON("[1,2]"),   // array coerces to zero -> FALSE
+	)
+	nulls := make([]bool, len(conditions)+2)
+	nulls[len(nulls)-1] = true // final row: SQL NULL condition
+	conditions = append(conditions, encodedJSON("0"), encodedJSON("null"))
+
+	result := make([]int64, len(conditions))
+	for i := range result {
+		if i < len(want) && want[i] {
+			result[i] = 1
+		} else {
+			result[i] = 0
+		}
+	}
+
+	thenValues := make([]int64, len(conditions))
+	elseValues := make([]int64, len(conditions))
+	for i := range thenValues {
+		thenValues[i] = 1
+	}
+
+	tc := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(jsonType, conditions, nulls),
+			NewFunctionTestInput(types.T_int64.ToType(), thenValues, nil),
+			NewFunctionTestInput(types.T_int64.ToType(), elseValues, nil),
+		},
+		NewFunctionTestResult(types.T_int64.ToType(), false, result, nil), iffFn)
+	succeed, info := tc.RunAndFree()
+	require.True(t, succeed, info)
+}
+
+// Searched CASE shares IF's conditional JSON kernel: a JSON condition stays
+// in-domain (no strict JSON-to-BOOL cast) and evaluates with the numeric
+// coercion above, while explicit CAST ... AS BOOL keeps the strict parser.
+func TestCaseFn_JsonCondition(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	jsonType := types.T_json.ToType()
+	strType := types.T_varchar.ToType()
+	_, err := GetFunctionByName(context.Background(), "case",
+		[]types.Type{jsonType, strType, strType})
+	require.NoError(t, err, "registry must resolve case(json, varchar, varchar)")
+
+	encodedJSON := func(text string) string {
+		bj, err := types.ParseStringToByteJson(text)
+		require.NoError(t, err)
+		b, err := bj.Marshal()
+		require.NoError(t, err)
+		return string(b)
+	}
+
+	texts := []string{`"true"`, `"abc"`, `"2tail"`, `""`, `"0.5"`, `"1e2"`, `true`}
+	conditions := make([]string, 0, len(texts))
+	for _, text := range texts {
+		conditions = append(conditions, encodedJSON(text))
+	}
+	want := []string{"n", "n", "y", "n", "y", "y", "y"}
+
+	thenValues := make([]string, len(texts))
+	for i := range thenValues {
+		thenValues[i] = "y"
+	}
+	elseValues := make([]string, len(texts))
+	for i := range elseValues {
+		elseValues[i] = "n"
+	}
+
+	tc := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(jsonType, conditions, nil),
+			NewFunctionTestInput(strType, thenValues, nil),
+			NewFunctionTestInput(strType, elseValues, nil),
+		},
+		NewFunctionTestResult(strType, false, want, nil), caseFn)
+	succeed, info := tc.RunAndFree()
+	require.True(t, succeed, info)
+}
+
+// TestJsonNumericPrefix pins MySQL string-to-number conversion for the JSON
+// conditional kernel: leading whitespace and sign, one decimal point, a
+// well-formed exponent, and zero when no numeric prefix exists.
+// TestParseSaturatedDecimalFloatPrefix pins the below-extension-dispatch
+// decimal-prefix conversion the conditional JSON kernel shares with ordinary
+// string->numeric casts: extension candidates (hex/binary/octal prefixes,
+// NaN/Inf text) have no numeric prefix here, and an overflowing prefix
+// saturates to +-MaxFloat64 instead of erroring - so the conditional IF/CASE
+// kernel reads "1e309" as true while a general string cast keeps its own
+// extension behavior (D9).
+func TestParseSaturatedDecimalFloatPrefix(t *testing.T) {
+	for _, tc := range []struct {
+		text string
+		want float64
+	}{
+		{"2tail", 2},
+		{"2.5x", 2.5},
+		{"abc", 0},
+		{"true", 0},
+		{"", 0},
+		{"  12", 12},
+		{"-0.01", -0.01},
+		{"+7", 7},
+		{".5", 0.5},
+		{"1e2", 100},
+		{"1e", 1},
+		{"1e+", 1},
+		{"0.00e1", 0},
+		{"0", 0},
+		{"1e309", math.MaxFloat64},
+		{"-1e309", -math.MaxFloat64},
+		{"0x10", 0},
+		{"nan", 0},
+		{"information", 0},
+	} {
+		prefix, negative, ok := scanDecimalFloatPrefix(tc.text)
+		if !ok {
+			require.Equal(t, float64(0), tc.want, "text %q must scan false without a numeric prefix", tc.text)
+			continue
+		}
+		value, valid := parseSaturatedDecimalFloatPrefix(prefix, negative, 64)
+		require.True(t, valid, "text %q", tc.text)
+		require.Equal(t, tc.want, value, "text %q", tc.text)
+	}
 }
 
 func TestIffFn_BinaryResults(t *testing.T) {
@@ -2324,4 +2560,102 @@ func Test_CaseWhen_WithNullAndStringComparison(t *testing.T) {
 	tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, strCaseFn)
 	succeed, info := tcc.RunAndFree()
 	require.True(t, succeed, tc.info, info)
+}
+
+// TestConditionalBooleanModeGates pins the D11 two-carrier contract at the
+// admission layer: the default statement keeps the MySQL contracts (JSON IF
+// and CASE conditions admitted), while a native-mode statement binds with the
+// pre-contract admission (JSON conditions reject, exactly as base did).
+func TestConditionalBooleanModeGates(t *testing.T) {
+	jsonType := types.T_json.ToType()
+	boolType := types.T_bool.ToType()
+	intType := types.T_int64.ToType()
+	mysqlCtx := context.Background()
+	nativeCtx := WithMySQLConditionalBooleanContracts(context.Background(), false)
+	require.True(t, MySQLConditionalBooleanContracts(mysqlCtx), "default statement keeps the MySQL contracts")
+	require.False(t, MySQLConditionalBooleanContracts(nativeCtx))
+
+	_, err := GetFunctionByName(mysqlCtx, "if",
+		[]types.Type{jsonType, intType, intType})
+	require.NoError(t, err, "MySQL statement admits a JSON scalar IF condition")
+	_, err = GetFunctionByName(nativeCtx, "if",
+		[]types.Type{jsonType, intType, intType})
+	require.Error(t, err, "native statement rejects a JSON IF condition like the pre-contract behavior")
+
+	_, err = GetFunctionByName(mysqlCtx, "case",
+		[]types.Type{jsonType, intType, boolType, intType})
+	require.NoError(t, err, "MySQL statement admits a JSON CASE WHEN condition")
+	_, err = GetFunctionByName(nativeCtx, "case",
+		[]types.Type{jsonType, intType, boolType, intType})
+	require.Error(t, err, "native statement rejects a JSON CASE WHEN condition like the pre-contract behavior")
+
+	// Raw ENUM conditions outside the display wrapper: the MySQL contracts
+	// admit them (the cut list keeps the storage-typed condition in-domain),
+	// while the pre-contract admission rejected them - the display-wrapped
+	// VARCHAR is what base silently consumed as text truth.
+	enumType := types.T_enum.ToType()
+	_, err = GetFunctionByName(mysqlCtx, "if", []types.Type{enumType, intType, intType})
+	require.NoError(t, err)
+	_, err = GetFunctionByName(nativeCtx, "if", []types.Type{enumType, intType, intType})
+	require.Error(t, err, "the pre-contract admission rejected a raw ENUM condition")
+
+	// The searched CASE keeps the same two-mode boundary: a raw ENUM
+	// condition binds through the storage-truth contracts only in MySQL mode,
+	// and a native-mode statement keeps the legacy admission that the
+	// pre-contract table rejected. The display-wrapped operand a native
+	// statement actually binds is handled below by the byte-identical legacy
+	// string path.
+	_, err = GetFunctionByName(mysqlCtx, "case", []types.Type{enumType, intType, intType})
+	require.NoError(t, err)
+	_, err = GetFunctionByName(nativeCtx, "case", []types.Type{enumType, intType, intType})
+	require.Error(t, err, "native statement rejects a raw ENUM CASE WHEN condition like the pre-contract behavior")
+}
+
+// TestEnumBoolCastContractBoundaries pins the D11 shared cast boundary after
+// the general implicit-cast rule reverted to base. The general table keeps no
+// ENUM -> BOOL row in any mode, so every context-free consumer (AND/OR/XOR,
+// NOT, IS TRUE/FALSE, legacy IF/CASE admission) keeps its base behavior; the
+// storage-truth BOOL cast stays reachable only through the explicitly
+// mode-gated cast bindings and the MySQL-only condition admissions.
+func TestEnumBoolCastContractBoundaries(t *testing.T) {
+	mysqlCtx := context.Background()
+	nativeCtx := WithMySQLConditionalBooleanContracts(context.Background(), false)
+	enumType := types.T_enum.ToType()
+	boolType := types.T_bool.ToType()
+	int64Type := types.T_int64.ToType()
+
+	// The general implicit-cast table is mode-free: the ENUM -> BOOL row base
+	// never had must stay absent, otherwise the byte-for-byte legacy checkers
+	// (AND/OR/XOR/NOT, legacy IF/CASE) would admit the new conversion on
+	// native-mode statements.
+	can, cost := fixedImplicitTypeCast(enumType, types.T_bool)
+	require.False(t, can)
+	require.Zero(t, cost)
+
+	// The explicit cast applications keep the pair in MySQL mode and reject
+	// it in native mode (base admitted no such pair). cast_strict resolves
+	// string/temporal targets only, so BOOL rejects in both modes before the
+	// mode gate is even consulted.
+	_, strictErr := GetFunctionByName(mysqlCtx, "cast_strict", []types.Type{enumType, boolType})
+	require.Error(t, strictErr, "BOOL is not a strict string/temporal assignment target in any mode")
+	for _, name := range []string{"cast", "cast_assign", "cast_ignore"} {
+		_, err := GetFunctionByName(mysqlCtx, name, []types.Type{enumType, boolType})
+		require.NoError(t, err, name, "MySQL-mode statements keep the ENUM storage-truth BOOL cast")
+		_, err = GetFunctionByName(nativeCtx, name, []types.Type{enumType, boolType})
+		require.Error(t, err, name, "native-mode statements keep the pre-contract cast rejection")
+	}
+
+	// The boolean-argument operators stay base-identical for raw ENUM
+	// operands in native mode; the MySQL-mode normalization hands them a
+	// BOOL-typed operand instead, through the explicit cast above.
+	for _, name := range []string{"and", "or", "xor", "not", "istrue", "isnottrue", "isfalse", "isnotfalse"} {
+		_, err := GetFunctionByName(nativeCtx, name, []types.Type{enumType})
+		if name == "and" || name == "or" || name == "xor" {
+			_, err = GetFunctionByName(nativeCtx, name, []types.Type{enumType, enumType})
+		}
+		require.Error(t, err, name, "the raw ENUM operand keeps the pre-contract rejection on native statements")
+	}
+	_, err := GetFunctionByName(mysqlCtx, "and", []types.Type{enumType, int64Type})
+	require.Error(t, err,
+		"the binding seam stays mode-free: a raw ENUM operand still rejects AND even in MySQL mode; the rewiring belongs to the binder-side recovery")
 }

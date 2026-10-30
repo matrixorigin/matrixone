@@ -18,7 +18,7 @@ cast('file://$resources/onnx/sklearn_randomforest.onnx' as datalink),
 '{"dim":[6,4],"dtype":"float32"}',
 NULL) as forest_batch;
 ➤ forest_batch[-1,2147483647,0]  𝄀
-{"output_label": [2, 1, 1, 2, 2, 1], "output_probability": [{"0": 0, "1": 0.12999998, "2": 0.86999947}, {"0": 0, "1": 0.76999956, "2": 0.23000003}, {"0": 0, "1": 0.9699994, "2": 0.03}, {"0": 0, "1": 0, "2": 0.99999934}, {"0": 0, "1": 0, "2": 0.99999934}, {"0": 0, "1": 0.99999934, "2": 0}]}
+{"output_label": [2, 1, 1, 2, 2, 1], "output_probability": [{"0": 0.0, "1": 0.12999998, "2": 0.86999947}, {"0": 0.0, "1": 0.76999956, "2": 0.23000003}, {"0": 0.0, "1": 0.9699994, "2": 0.03}, {"0": 0.0, "1": 0.0, "2": 0.99999934}, {"0": 0.0, "1": 0.0, "2": 0.99999934}, {"0": 0.0, "1": 0.99999934, "2": 0.0}]}
 drop table if exists iris;
 create table iris (id int primary key auto_increment, sl float, sw float, pl float, pw float, label int);
 load data infile '$resources/onnx/iris.csv' into table iris fields terminated by ',' (sl, sw, pl, pw, label);

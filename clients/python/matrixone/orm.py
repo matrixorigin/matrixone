@@ -26,7 +26,21 @@ For aggregate functions (COUNT, SUM, AVG, etc.), we recommend using SQLAlchemy's
 This provides better type safety and integration with SQLAlchemy.
 """
 
+from __future__ import annotations
+
 import logging
+from ._query_compilation import (
+    conjoin_conditions,
+    compile_expression,
+    compile_predicate,
+    compile_from,
+    selectable_of,
+    statement_compilation,
+    compile_cte,
+    normalize_expression,
+)
+from ._sql_literals import sql_identifier, sql_literal, substitute_parameters
+from copy import copy
 from typing import Any, Dict, List, Optional, TypeVar
 
 # SQLAlchemy compatibility import
@@ -41,6 +55,16 @@ T = TypeVar("T")
 
 # Export declarative_base for direct import
 __all__ = ["declarative_base", "Query", "MatrixOneQuery"]
+
+
+def _first_query(query):
+    """Limit a private copy without changing the caller's reusable query."""
+    return copy(query).limit(1)
+
+
+def _count_sql(sql):
+    """Count result rows, including projection, grouping and pagination."""
+    return f"SELECT COUNT(*) FROM ({sql}) AS _mo_count"
 
 
 # For SQL functions, we recommend using SQLAlchemy's func module for better integration:
@@ -61,6 +85,78 @@ __all__ = ["declarative_base", "Query", "MatrixOneQuery"]
 
 
 # Remove SimpleModel - use SQLAlchemy models directly
+
+
+def _model_table_name(model, legacy=False):
+    if isinstance(model, str):
+        return model
+    if legacy and getattr(model, '_table_name', None):
+        return model._table_name
+    from sqlalchemy import inspect
+
+    inspected = inspect(model, raiseerr=False)
+    if inspected is not None and getattr(inspected, 'is_aliased_class', False):
+        return compile_from(model)
+    table = getattr(model, '__table__', None)
+    if table is not None:
+        name = sql_identifier(table.name)
+        return sql_identifier(table.schema) + '.' + name if table.schema else name
+    return getattr(model, '__tablename__', None) or getattr(model, '_table_name', None) or model.__name__.lower()
+
+
+def _require_single_table_mutation(joins):
+    if joins:
+        raise ValueError('Joined UPDATE/DELETE is not supported; use explicit SQL')
+
+
+def create_query(query_type, client, columns, snapshot=None, transaction_wrapper=None):
+    """Resolve projection and FROM once for every buffered query entry point."""
+    from sqlalchemy import inspect
+    from sqlalchemy.sql import select
+
+    if not columns:
+        raise ValueError('query() requires a table, model or expression')
+    first = columns[0]
+    if len(columns) == 1 and isinstance(first, str):
+        return query_type(first, client, transaction_wrapper=transaction_wrapper, snapshot=snapshot)
+    if len(columns) == 1 and isinstance(first, CTE):
+        query = query_type(None, client, transaction_wrapper=transaction_wrapper, snapshot=snapshot)
+        query._table_name = sql_identifier(first.name)
+        query._select_columns = ['*']
+        query._ctes = [first]
+        return query
+    model = None
+    projection = []
+    for item in columns:
+        inspected = inspect(item, raiseerr=False)
+        if inspected is not None and (
+            getattr(inspected, 'is_mapper', False) or getattr(inspected, 'is_aliased_class', False)
+        ):
+            if model is None:
+                model = item
+            projection.extend(
+                getattr(item, inspected.mapper.get_property_by_column(c).key) for c in inspected.mapper.columns
+            )
+        else:
+            projection.append(normalize_expression(item))
+    query = query_type(model, client, transaction_wrapper=transaction_wrapper, snapshot=snapshot)
+    if len(columns) == 1 and model is first:
+        return query
+    query._select_columns = projection
+    if model is None:
+        expressions = [item for item in projection if not isinstance(item, str)]
+        sources = select(*expressions).get_final_froms() if expressions else []
+        if len(sources) == 1:
+            query._source_selectable = query._root_selectable = sources[0]
+            query._table_name = getattr(sources[0], 'name', None)
+        elif len(sources) > 1:
+            raise ValueError('Ambiguous query sources; provide a model and explicit JOIN')
+        else:
+            for item in projection:
+                if isinstance(item, str) and '.' in item:
+                    query._table_name = '.'.join(item.split('.')[:-1])
+                    break
+    return query
 
 
 class Query:
@@ -118,6 +214,9 @@ class Query:
         self._update_set_columns = []
         self._update_set_values = []
 
+    def _execute(self, sql, params=None):
+        return self.client.execute(sql, params)
+
     def snapshot(self, snapshot_name: str) -> "Query":
         """Set snapshot for this query - SQLAlchemy style chaining"""
         self.snapshot_name = snapshot_name
@@ -142,12 +241,35 @@ class Query:
         return self
 
     def filter_by(self, **kwargs) -> "Query":
-        """Add WHERE conditions from keyword arguments"""
+        """Add named predicates; reject unknown fields before modifying the query."""
+        table = getattr(self.model_class, '__table__', None)
+        mapper = getattr(self.model_class, '__mapper__', None)
+        if isinstance(self.model_class, str):
+            columns = None
+        elif table is not None and mapper is not None:
+            columns = {
+                prop.key: prop.columns[0].name
+                for prop in mapper.column_attrs
+                if len(prop.columns) == 1 and any(prop.columns[0] is col for col in table.columns)
+            }
+        elif table is not None:
+            columns = {col.name: col.name for col in table.columns}
+        else:
+            columns = getattr(self.model_class, '_columns', {})
+
+        predicates, values = [], []
         for key, value in kwargs.items():
-            # Check if the column exists in the SQLAlchemy model
-            if hasattr(self.model_class, "__table__") and key in [col.name for col in self.model_class.__table__.columns]:
-                self._where_conditions.append(f"{key} = ?")
-                self._where_params.append(value)
+            if columns is not None and key not in columns:
+                raise ValueError(f'Unknown model field: {key}')
+            column = key if columns is None else columns[key]
+            column = getattr(column, 'name', column)
+            if value is None:
+                predicates.append(f'{sql_identifier(column)} IS NULL')
+            else:
+                predicates.append(f'{sql_identifier(column)} = ?')
+                values.append(value)
+        self._where_conditions.extend(predicates)
+        self._where_params.extend(values)
         return self
 
     def join(self, table: str, condition: str) -> "Query":
@@ -312,7 +434,7 @@ class Query:
             builder.select_all()
 
         # Build FROM clause with snapshot
-        builder.from_table(self.model_class._table_name, self.snapshot_name)
+        builder.from_table(_model_table_name(self.model_class, legacy=True), self.snapshot_name)
 
         # Add JOIN clauses
         builder._joins = self._joins.copy()
@@ -342,27 +464,28 @@ class Query:
         return builder.build()
 
     def all(self) -> List:
-        """Execute query and return all results"""
+        """Execute query and return all results using mapped attribute names."""
         sql, params = self._build_select_sql()
         result = self._execute(sql, params)
-
-        models = []
-        for row in result.rows:
-            # Convert row to dictionary
-            row_dict = {}
-            if hasattr(self.model_class, "__table__"):
-                column_names = [col.name for col in self.model_class.__table__.columns]
-            else:
-                column_names = self._select_columns or []
-
-            for i, col_name in enumerate(column_names):
-                if i < len(row):
-                    row_dict[col_name] = row[i]
-            # Create SQLAlchemy model instance
-            model = self.model_class(**row_dict)
-            models.append(model)
-
-        return models
+        columns = getattr(result, 'columns', None)
+        if callable(columns):
+            columns = list(result.keys())
+        table = getattr(self.model_class, '__table__', None)
+        names = self._select_columns or ([col.name for col in table.columns] if table is not None else [])
+        columns = columns or names
+        mapper = getattr(self.model_class, '__mapper__', None)
+        attributes = (
+            {
+                col.name: mapper.get_property_by_column(col).key if mapper is not None else col.name
+                for col in table.columns
+            }
+            if table is not None
+            else {}
+        )
+        return [
+            self.model_class(**{attributes.get(name, name): value for name, value in zip(columns, row)})
+            for row in result.rows
+        ]
 
     def first(self) -> Optional:
         """Execute query and return first result"""
@@ -489,7 +612,9 @@ class Query:
             # Get the first column value from the model
             if hasattr(self.model_class, "__table__"):
                 first_column = list(self.model_class.__table__.columns)[0]
-                return getattr(result, first_column.name)
+                mapper = getattr(self.model_class, '__mapper__', None)
+                attribute = mapper.get_property_by_column(first_column).key if mapper is not None else first_column.name
+                return getattr(result, attribute)
             else:
                 # For raw queries, return the first attribute
                 attrs = [attr for attr in dir(result) if not attr.startswith('_')]
@@ -504,22 +629,8 @@ class Query:
 
     def count(self) -> int:
         """Execute query and return count of results"""
-        # Create a new query for counting
-        count_query = Query(self.model_class, self.client, self.snapshot_name)
-        count_query._where_conditions = self._where_conditions.copy()
-        count_query._where_params = self._where_params.copy()
-        count_query._joins = self._joins.copy()
-        count_query._group_by_columns = self._group_by_columns.copy()
-        count_query._having_conditions = self._having_conditions.copy()
-        count_query._having_params = self._having_params.copy()
-
-        sql, params = count_query._build_select_sql()
-        # Replace SELECT clause with COUNT(*)
-        sql = sql.replace("SELECT *", "SELECT COUNT(*)")
-        if count_query._select_columns:
-            sql = sql.replace(f"SELECT {', '.join(count_query._select_columns)}", "SELECT COUNT(*)")
-
-        result = self._execute(sql, params)
+        sql, params = self._build_select_sql()
+        result = self._execute(_count_sql(sql), params)
         return result.rows[0][0] if result.rows else 0
 
     def insert(self, **kwargs) -> "Query":
@@ -536,12 +647,16 @@ class Query:
 
     def _build_insert_sql(self) -> tuple[str, List[Any]]:
         """Build INSERT SQL query using unified SQL builder"""
+        if self.snapshot_name:
+            raise ValueError('Snapshot queries cannot mutate live data')
         from .sql_builder import build_insert_query
 
         if not self._insert_values:
             raise ValueError("No values provided for INSERT")
 
-        return build_insert_query(table_name=self.model_class._table_name, values=self._insert_values)
+        return build_insert_query(
+            table_name=_model_table_name(self.model_class, legacy=True), values=self._insert_values
+        )
 
     def update(self, **kwargs) -> "Query":
         """Start UPDATE operation"""
@@ -553,6 +668,9 @@ class Query:
 
     def _build_update_sql(self) -> tuple[str, List[Any]]:
         """Build UPDATE SQL query using unified SQL builder"""
+        if self.snapshot_name:
+            raise ValueError('Snapshot queries cannot mutate live data')
+        _require_single_table_mutation(self._joins)
         from .sql_builder import build_update_query
 
         if not self._update_set_columns:
@@ -566,10 +684,12 @@ class Query:
             set_values[col_name] = self._update_set_values[i]
 
         return build_update_query(
-            table_name=self.model_class._table_name,
+            table_name=_model_table_name(self.model_class, legacy=True),
             set_values=set_values,
             where_conditions=self._where_conditions,
             where_params=self._where_params,
+            order_by=self._order_by_columns,
+            limit=self._limit_count,
         )
 
     def delete(self) -> Any:
@@ -580,12 +700,17 @@ class Query:
 
     def _build_delete_sql(self) -> tuple[str, List[Any]]:
         """Build DELETE SQL query using unified SQL builder"""
+        if self.snapshot_name:
+            raise ValueError('Snapshot queries cannot mutate live data')
+        _require_single_table_mutation(self._joins)
         from .sql_builder import build_delete_query
 
         return build_delete_query(
-            table_name=self.model_class._table_name,
+            table_name=_model_table_name(self.model_class, legacy=True),
             where_conditions=self._where_conditions,
             where_params=self._where_params,
+            order_by=self._order_by_columns,
+            limit=self._limit_count,
         )
 
     def execute(self) -> Any:
@@ -613,23 +738,12 @@ class CTE:
         self.name = name
         self.query = query
         self.recursive = recursive
-        self._sql = None
-        self._params = None
 
     def _compile(self):
         """Compile the CTE query to SQL"""
-        if self._sql is None:
-            if hasattr(self.query, "_build_sql"):
-                # This is a BaseMatrixOneQuery object
-                self._sql, self._params = self.query._build_sql()
-            elif isinstance(self.query, str):
-                # This is a raw SQL string
-                self._sql = self.query
-                self._params = []
-            else:
-                raise ValueError("CTE query must be a BaseMatrixOneQuery object or SQL string")
-        return self._sql, self._params
+        return compile_cte(self)
 
+    @statement_compilation
     def as_sql(self) -> tuple[str, list]:
         """Get the compiled SQL and parameters for this CTE"""
         return self._compile()
@@ -670,6 +784,9 @@ class BaseMatrixOneQuery:
         self._where_conditions = []
         self._where_params = []
         self._group_by_columns = []
+        self._source_selectable = selectable_of(model_class)
+        self._root_selectable = self._source_selectable
+        self._joined_selectables = []
         self._having_conditions = []
         self._having_params = []
         self._order_by_columns = []
@@ -698,12 +815,137 @@ class BaseMatrixOneQuery:
                 self._table_name = model_class
                 self._columns = {}
             elif self._is_sqlalchemy_model:
-                self._table_name = model_class.__tablename__
-                self._columns = {col.name: col for col in model_class.__table__.columns}
+                from sqlalchemy import inspect
+
+                inspected = inspect(model_class)
+                # The selectable owns alias identity and is rendered only when
+                # building a statement, inside its binding scope.
+                self._table_name = None if inspected.is_aliased_class else _model_table_name(model_class)
+                mapper = inspected.mapper
+                self._columns = {prop.key: getattr(model_class, prop.key) for prop in mapper.column_attrs}
             else:
-                # Fallback to class name
+                # Fallback to class name for non-SQLAlchemy model objects.
                 self._table_name = getattr(model_class, "_table_name", model_class.__name__.lower())
                 self._columns = getattr(model_class, "_columns", {})
+
+    def _qualified_table_name(self):
+        if self._root_selectable is not None:
+            return compile_from(self._root_selectable)
+        return self._table_name
+
+    def _table_target(self):
+        table = self._qualified_table_name()
+        if not table:
+            raise ValueError("Table name is required. Provide a model class or set table name manually.")
+        if self._root_selectable is not None:
+            return table
+        return f"{table} AS {sql_identifier(self._table_alias)}" if self._table_alias else table
+
+    def _append_clause(self, attribute, render):
+        # One source of truth. SQLAlchemy expressions are compiled only when
+        # their enclosing statement and all its sources are known.
+        getattr(self, attribute).append(render)
+
+    def _clauses(self, attribute):
+        return [value() if callable(value) else value for value in getattr(self, attribute)]
+
+    def _compile(self, expression, params=(), *, projection=False, predicate=False, join_limit=None, dialect=None):
+        from sqlalchemy import table
+        from sqlalchemy.sql import visitors
+        from sqlalchemy.sql.elements import ClauseElement
+        from sqlalchemy.sql.selectable import FromClause, ScalarSelect, Select, TableClause
+        from ._sql_literals import identifier_parts
+
+        if not (predicate and hasattr(expression, 'compile_for_query')):
+            expression = normalize_expression(expression)
+        contextual_root = self._root_selectable
+        if isinstance(self.model_class, str):
+            nodes = list(visitors.iterate(expression)) if isinstance(expression, ClauseElement) else []
+            try:
+                parts = identifier_parts(self._table_name, qualified=True)
+            except ValueError:
+                if any(isinstance(node, ScalarSelect) for node in nodes):
+                    raise ValueError('Correlated expressions require an unambiguous table or mapped source')
+            else:
+                candidates = {}
+                for node in nodes:
+                    candidate = node if isinstance(node, FromClause) else getattr(node, 'table', None)
+                    if candidate is not None and getattr(candidate, 'name', None) == parts[-1]:
+                        if getattr(candidate, 'schema', None) == (parts[0] if len(parts) == 2 else None):
+                            if not isinstance(candidate, TableClause):
+                                raise ValueError('String table names cannot be replaced by derived or aliased sources')
+                            candidates[id(candidate._deannotate())] = candidate._deannotate()
+                if len(candidates) > 1:
+                    raise ValueError('Ambiguous SQLAlchemy source for string table')
+                if candidates:
+                    selected = next(iter(candidates.values()))
+                    if self._source_selectable is not None and selected is not self._source_selectable:
+                        raise ValueError('Ambiguous SQLAlchemy source for string table')
+                    if self._source_selectable is None:
+                        self._source_selectable = selected
+                        self._root_selectable = selected.alias(self._table_alias) if self._table_alias else selected
+                    contextual_root = self._root_selectable
+                elif self._root_selectable is None:
+                    contextual_root = table(parts[-1], schema=parts[0] if len(parts) == 2 else None)
+                    if self._table_alias:
+                        contextual_root = contextual_root.alias(self._table_alias)
+        visible = ([] if contextual_root is None else [contextual_root]) + [
+            source for source in self._joined_selectables[:join_limit] if source is not None
+        ]
+        if any(source is None for source in self._joined_selectables[:join_limit]):
+            known = {
+                id(source._deannotate())
+                for source in visible + ([] if self._source_selectable is None else [self._source_selectable])
+            }
+            if isinstance(expression, ClauseElement):
+                for node in visitors.iterate(expression):
+                    if not isinstance(node, Select) or not node.get_final_froms():
+                        continue
+                    explicit = node._correlate
+                    excluded = node._correlate_except
+                    if node._auto_correlate:
+                        unsafe = True
+                    elif excluded is not None:
+                        excluded_ids = {id(source._deannotate()) for source in excluded}
+                        unsafe = any(
+                            id(source._deannotate()) not in known | excluded_ids for source in node.get_final_froms()
+                        )
+                    else:
+                        unsafe = any(id(source._deannotate()) not in known for source in explicit)
+                    if unsafe:
+                        raise ValueError('Correlated subqueries with raw JOIN sources require SQLAlchemy selectables')
+        context = dict(
+            outer_froms=visible,
+            source=self._source_selectable,
+            target=self._root_selectable,
+            compiler_dialect=dialect,
+        )
+        if predicate:
+            if type(expression) is LogicalIn:
+                if params:
+                    raise ValueError('SQLAlchemy expressions carry their own parameters')
+
+                def source():
+                    return self._table_target() if self._root_selectable is not None else None
+
+                return expression.compile(
+                    model=self.model_class,
+                    alias=self._table_alias,
+                    table=self._table_name,
+                    _table_supplier=source,
+                    _column_compiler=lambda column: self._compile(column, join_limit=join_limit),
+                )
+            return compile_predicate(expression, params, self.model_class, self._table_alias, **context)
+        return compile_expression(expression, self.model_class, self._table_alias, projection, **context)
+
+    def _check_mutation_source(self):
+        from sqlalchemy.sql.selectable import AliasedReturnsRows, TableClause
+
+        source = self._source_selectable
+        while isinstance(source, AliasedReturnsRows):
+            source = source.element
+        if source is not None and not isinstance(source, TableClause):
+            raise ValueError('Derived query sources cannot mutate a physical table')
 
     def _execute(self, sql, params=None):
         """Execute SQL using either transaction wrapper or client"""
@@ -711,6 +953,19 @@ class BaseMatrixOneQuery:
             return self.transaction_wrapper.execute(sql, params)
         else:
             return self.client.execute(sql, params)
+
+    def _build_current_sql(self):
+        builders = {
+            'SELECT': '_build_sql',
+            'INSERT': '_build_insert_sql',
+            'UPDATE': '_build_update_sql',
+            'DELETE': '_build_delete_sql',
+        }
+        if self._query_type not in builders:
+            raise ValueError('Unknown query type: ' + self._query_type)
+        if self._snapshot_name and self._query_type != 'SELECT':
+            raise ValueError('Snapshot queries are read-only')
+        return getattr(self, builders[self._query_type])()
 
     def _detect_sqlalchemy_model(self) -> bool:
         """Detect if the model class is a SQLAlchemy model"""
@@ -722,7 +977,7 @@ class BaseMatrixOneQuery:
 
     def select(self, *columns) -> "BaseMatrixOneQuery":
         """Add SELECT columns - SQLAlchemy style"""
-        self._select_columns = list(columns)
+        self._select_columns = [normalize_expression(column) for column in columns]
         return self
 
     def cte(self, name: str, recursive: bool = False) -> CTE:
@@ -750,80 +1005,66 @@ class BaseMatrixOneQuery:
         """
         return CTE(name, self, recursive)
 
-    def join(self, target, onclause=None, isouter=False, full=False) -> "BaseMatrixOneQuery":
-        """Add JOIN clause - SQLAlchemy style
+    def join(self, target, onclause=None, isouter=False, full=False):
+        kind = 'FULL OUTER JOIN' if full else 'LEFT OUTER JOIN' if isouter else 'INNER JOIN'
+        return self._join(target, onclause, kind)
 
-        Args::
+    def _join(self, target, onclause, kind):
+        if onclause is not None and not hasattr(onclause, 'compile_for_query'):
+            onclause = normalize_expression(onclause)
+        right = selectable_of(target)
+        index = len(self._joined_selectables)
 
-            target: Table or model to join with
-            onclause: ON condition for the join (optional, will be inferred if not provided)
-            isouter: If True, creates LEFT OUTER JOIN (default: False for INNER JOIN)
-            full: If True, creates FULL OUTER JOIN (default: False)
+        def inferred_condition():
+            from sqlalchemy import inspect
+            from sqlalchemy.sql.util import join_condition
+            from sqlalchemy.exc import NoForeignKeysError, AmbiguousForeignKeysError
 
-        Returns::
+            root = self._root_selectable
+            root_info = inspect(self.model_class, raiseerr=False)
+            target_info = inspect(target, raiseerr=False)
+            if (
+                root_info is not None
+                and target_info is not None
+                and getattr(root_info, 'mapper', None) is getattr(target_info, 'mapper', None)
+                and getattr(root_info, 'mapper', None) is not None
+            ):
+                raise ValueError('Self JOIN inference requires an explicit ON clause')
+            if root is None or right is None:
+                raise ValueError('JOIN requires an explicit ON clause without mapped foreign keys')
+            sources = [root] + [source for source in self._joined_selectables[:index] if source is not None]
+            if any(right is source for source in sources):
+                raise ValueError('Self JOIN inference requires distinct selectables and an explicit ON clause')
+            candidates = []
+            for left in sources:
+                try:
+                    candidates.append(join_condition(left, right))
+                except NoForeignKeysError:
+                    continue
+                except AmbiguousForeignKeysError as error:
+                    raise ValueError('JOIN has ambiguous foreign keys; provide ON explicitly') from error
+            if len(candidates) != 1:
+                raise ValueError('JOIN requires one unambiguous foreign key relationship; provide ON explicitly')
+            return candidates[0]
 
-            Self for method chaining
+        if onclause is None:
+            inferred_condition()  # Reject invalid admission before changing the query.
 
-        Examples::
-
-            # Basic inner join with explicit condition
-            query.join(Address, User.id == Address.user_id)
-
-            # Inner join with string condition
-            query.join('addresses', 'users.id = addresses.user_id')
-
-            # Left outer join
-            query.join(Address, isouter=True)
-
-            # Join without explicit condition (will be inferred if possible)
-            query.join(Address)
-        """
-        # Determine join type
-        if full:
-            join_type = "FULL OUTER JOIN"
-        elif isouter:
-            join_type = "LEFT OUTER JOIN"
-        else:
-            join_type = "INNER JOIN"
-
-        # Handle different target types
-        if hasattr(target, 'name') and hasattr(target, 'as_sql'):
-            # This is a CTE object
-            table_name = target.name
-        elif hasattr(target, '__tablename__'):
-            # This is a SQLAlchemy model
-            table_name = target.__tablename__
-        elif hasattr(target, '_table_name'):
-            # This is a custom model with _table_name
-            table_name = target._table_name
-        else:
-            # String table name
-            table_name = str(target)
-
-        # Handle onclause
-        if onclause is not None:
-            # Process SQLAlchemy expressions
-            if hasattr(onclause, 'compile'):
-                # This is a SQLAlchemy expression, compile it
-                compiled = onclause.compile(compile_kwargs={"literal_binds": True})
-                on_condition = str(compiled)
-                # Fix SQLAlchemy's quoted column names for MatrixOne compatibility
-                import re
-
-                on_condition = re.sub(r"(\w+)\('([^']+)'\)", r"\1(\2)", on_condition)
-                # Note: Keep table prefixes for JOIN conditions to avoid ambiguity
-                # Do NOT remove table.column format, it's needed for proper JOIN
+        def render():
+            if isinstance(target, CTE):
+                source = sql_identifier(target.name)
+            elif right is not None:
+                source = compile_from(right)
             else:
-                # String condition
-                on_condition = str(onclause)
+                name = getattr(target, '_table_name', str(target))
+                source = name if isinstance(target, str) else sql_identifier(name, qualified=True)
+            clause = f'{kind} {source}'
+            condition = inferred_condition() if onclause is None else onclause
+            clause += ' ON ' + self._compile(condition, predicate=True, join_limit=index + 1)
+            return clause
 
-            join_clause = f"{join_type} {table_name} ON {on_condition}"
-        else:
-            # No explicit onclause - create join without ON condition
-            # This matches SQLAlchemy behavior where ON condition can be inferred
-            join_clause = f"{join_type} {table_name}"
-
-        self._joins.append(join_clause)
+        self._append_clause('_joins', render)
+        self._joined_selectables.append(right)
         return self
 
     def innerjoin(self, target, onclause=None) -> "BaseMatrixOneQuery":
@@ -834,30 +1075,9 @@ class BaseMatrixOneQuery:
         """Add LEFT JOIN clause - SQLAlchemy style (alias for join with isouter=True)"""
         return self.join(target, onclause, isouter=True)
 
-    def rightjoin(self, target, onclause=None) -> "BaseMatrixOneQuery":
-        """Add RIGHT JOIN clause - SQLAlchemy style"""
-        # MatrixOne doesn't support RIGHT JOIN, so we'll use LEFT JOIN with reversed tables
-        # This is a limitation of MatrixOne, but we provide the method for compatibility
-        if onclause is not None:
-            # Process SQLAlchemy expressions
-            if hasattr(onclause, 'compile'):
-                compiled = onclause.compile(compile_kwargs={"literal_binds": True})
-                on_condition = str(compiled)
-                import re
-
-                on_condition = re.sub(r"(\w+)\('([^']+)'\)", r"\1(\2)", on_condition)
-                on_condition = re.sub(r"\b([a-zA-Z_]\w*)\.([a-zA-Z_]\w*)\b", r"\2", on_condition)
-            else:
-                on_condition = str(onclause)
-
-            # For RIGHT JOIN, we need to reverse the condition
-            # This is a simplified approach - in practice, you might need more complex logic
-            join_clause = f"LEFT JOIN {target} ON {on_condition}"
-        else:
-            join_clause = f"LEFT JOIN {target}"
-
-        self._joins.append(join_clause)
-        return self
+    def rightjoin(self, target, onclause=None):
+        """Retain unmatched right rows using the server's native RIGHT JOIN."""
+        return self._join(target, onclause, 'RIGHT JOIN')
 
     def fullouterjoin(self, target, onclause=None) -> "BaseMatrixOneQuery":
         """Add FULL OUTER JOIN clause - SQLAlchemy style (alias for join with full=True)"""
@@ -867,189 +1087,23 @@ class BaseMatrixOneQuery:
         """Add LEFT OUTER JOIN clause - SQLAlchemy style (alias for leftjoin)"""
         return self.leftjoin(target, onclause)
 
-    def group_by(self, *columns) -> "BaseMatrixOneQuery":
-        """
-        Add GROUP BY clause to the query - SQLAlchemy style compatibility.
-
-        The GROUP BY clause is used to group rows that have the same values in specified columns,
-        typically used with aggregate functions like COUNT, SUM, AVG, etc.
-
-        Args::
-
-            *columns: Columns to group by. Can be:
-                - SQLAlchemy column expressions (e.g., User.department, func.year(User.created_at))
-                - String column names (e.g., "department", "created_at")
-                - SQLAlchemy function expressions (e.g., func.year(User.created_at))
-
-        Returns::
-
-            BaseMatrixOneQuery: Self for method chaining.
-
-        Examples::
-
-            # SQLAlchemy column expressions (recommended)
-            query.group_by(User.department)
-            query.group_by(User.department, User.status)
-            query.group_by(func.year(User.created_at))
-            query.group_by(func.date(User.created_at), User.department)
-
-            # String column names
-            query.group_by("department")
-            query.group_by("department", "status")
-
-            # Complex expressions
-            query.group_by(
-                User.department,
-                func.year(User.created_at),
-                func.month(User.created_at)
-            )
-
-        Notes:
-            - GROUP BY is typically used with aggregate functions (COUNT, SUM, AVG, etc.)
-            - SQLAlchemy expressions provide better type safety and integration
-            - Multiple columns can be grouped together
-            - Column references in SQLAlchemy expressions are automatically
-              converted to MatrixOne-compatible format
-
-        Raises::
-
-            ValueError: If invalid column type is provided
-            SQLAlchemyError: If SQLAlchemy expression compilation fails
-        """
-        for col in columns:
-            if isinstance(col, str):
-                self._group_by_columns.append(col)
-            elif hasattr(col, "compile"):  # SQLAlchemy expression
-                # Compile the expression to SQL string
-                compiled = col.compile(compile_kwargs={"literal_binds": True})
-                sql_str = str(compiled)
-                # Fix SQLAlchemy's quoted column names for MatrixOne compatibility
-                import re
-
-                sql_str = re.sub(r"(\w+)\('([^']+)'\)", r"\1(\2)", sql_str)
-                # Handle SQLAlchemy's table prefixes (e.g., "users.name" -> "name")
-                sql_str = re.sub(r"\b([a-zA-Z_]\w*)\.([a-zA-Z_]\w*)\b", r"\2", sql_str)
-                self._group_by_columns.append(sql_str)
+    def group_by(self, *columns):
+        for column in columns:
+            column = normalize_expression(column)
+            if hasattr(column, 'compile'):
+                self._append_clause('_group_by_columns', lambda c=column: self._compile(c))
             else:
-                self._group_by_columns.append(str(col))
+                self._group_by_columns.append(str(column))
         return self
 
-    def having(self, condition, *params) -> "BaseMatrixOneQuery":
-        """
-        Add HAVING clause to the query - SQLAlchemy style compatibility.
-
-        The HAVING clause is used to filter groups after GROUP BY operations,
-        similar to WHERE clause but applied to aggregated results.
-
-        Args::
-
-            condition: The HAVING condition. Can be:
-                - SQLAlchemy expression (e.g., func.count(User.id) > 5)
-                - String condition with placeholders (e.g., "COUNT(*) > ?")
-                - String condition without placeholders (e.g., "COUNT(*) > 5")
-            *params: Additional parameters for string-based conditions.
-                    Used to replace '?' placeholders in condition string.
-
-        Returns::
-
-            BaseMatrixOneQuery: Self for method chaining.
-
-        Examples::
-
-            # SQLAlchemy expression syntax (recommended)
-            query.group_by(User.department)
-            query.having(func.count(User.id) > 5)
-            query.having(func.avg(User.age) > 25)
-            query.having(func.count(func.distinct(User.id)) > 3)
-
-            # String-based syntax with placeholders
-            query.group_by(User.department)
-            query.having("COUNT(*) > ?", 5)
-            query.having("AVG(age) > ?", 25)
-
-            # String-based syntax without placeholders
-            query.group_by(User.department)
-            query.having("COUNT(*) > 5")
-            query.having("AVG(age) > 25")
-
-            # Multiple HAVING conditions
-            query.group_by(User.department)
-            query.having(func.count(User.id) > 5)
-            query.having(func.avg(User.age) > 25)
-            query.having(func.max(User.age) < 65)
-
-            # Mixed string and expression syntax
-            query.group_by(User.department)
-            query.having("COUNT(*) > ?", 5)  # String
-            query.having(func.avg(User.age) > 25)  # Expression
-
-        Notes:
-            - HAVING clauses are typically used with GROUP BY operations
-            - SQLAlchemy expressions provide better type safety and integration
-            - String conditions with placeholders are safer against SQL injection
-            - Multiple HAVING conditions are combined with AND logic
-            - Column references in SQLAlchemy expressions are automatically
-              converted to MatrixOne-compatible format
-
-        Supported SQLAlchemy Functions:
-            - func.count(): Count rows or distinct values
-            - func.avg(): Calculate average
-            - func.sum(): Calculate sum
-            - func.min(): Find minimum value
-            - func.max(): Find maximum value
-            - func.distinct(): Get distinct values
-
-        Raises::
-
-            ValueError: If invalid condition type is provided
-            SQLAlchemyError: If SQLAlchemy expression compilation fails
-        """
-        # Check if condition contains FulltextFilter objects
-        if hasattr(condition, "compile") and self._contains_fulltext_filter(condition):
-            # Handle SQLAlchemy expressions that contain FulltextFilter objects
-            formatted_condition = self._process_fulltext_expression(condition)
-            self._having_conditions.append(formatted_condition)
-        elif hasattr(condition, "compile"):
-            # This is a SQLAlchemy expression (OR, AND, BinaryExpression, etc.), compile it to SQL
-            compiled = condition.compile(compile_kwargs={"literal_binds": True})
-            formatted_condition = str(compiled)
-
-            # Fix SQLAlchemy's quoted column names for MatrixOne compatibility
-            import re
-
-            formatted_condition = re.sub(r"(\w+)\('([^']+)'\)", r"\1(\2)", formatted_condition)
-
-            # Handle SQLAlchemy's table prefixes (e.g., "users.name" -> "name")
-            formatted_condition = re.sub(r"\b([a-zA-Z_]\w*)\.([a-zA-Z_]\w*)\b", r"\2", formatted_condition)
-
-            self._having_conditions.append(formatted_condition)
+    def having(self, condition, *params):
+        """Append one validated predicate without consuming another clause's values."""
+        if not hasattr(condition, 'compile_for_query'):
+            condition = normalize_expression(condition)
+        if hasattr(condition, 'compile'):
+            self._append_clause('_having_conditions', lambda: self._compile(condition, params, predicate=True))
         else:
-            # Handle string conditions - replace ? placeholders with actual values
-            formatted_condition = str(condition)
-
-            # If there are params but no ? placeholders, append them to the condition
-            if params and "?" not in formatted_condition:
-                for param in params:
-                    if hasattr(param, "_build_sql"):
-                        # This is a MatrixOne expression, compile it
-                        sql, _ = param._build_sql()
-                        formatted_condition += f" AND {sql}"
-                    else:
-                        # Regular parameter
-                        if isinstance(param, str):
-                            formatted_condition += f" AND '{param}'"
-                        else:
-                            formatted_condition += f" AND {param}"
-            else:
-                # Replace ? placeholders with actual values
-                for param in params:
-                    if isinstance(param, str):
-                        formatted_condition = formatted_condition.replace("?", f"'{param}'", 1)
-                    else:
-                        formatted_condition = formatted_condition.replace("?", str(param), 1)
-
-            self._having_conditions.append(formatted_condition)
-
+            self._having_conditions.append(compile_predicate(condition, params))
         return self
 
     def snapshot(self, snapshot_name: str) -> "BaseMatrixOneQuery":
@@ -1060,332 +1114,78 @@ class BaseMatrixOneQuery:
     def alias(self, alias_name: str) -> "BaseMatrixOneQuery":
         """Set table alias for this query - SQLAlchemy style chaining"""
         self._table_alias = alias_name
+        if self._source_selectable is not None:
+            self._root_selectable = self._source_selectable.alias(alias_name)
         return self
 
     def subquery(self, alias_name: str = None) -> str:
         """Convert this query to a subquery with optional alias"""
         sql, params = self._build_sql()
+        sql = substitute_parameters(sql, params)
         if alias_name:
-            return f"({sql}) AS {alias_name}"
+            return f"({sql}) AS {sql_identifier(alias_name)}"
         else:
             return f"({sql})"
 
-    def filter(self, condition, *params) -> "BaseMatrixOneQuery":
-        """Add WHERE conditions - SQLAlchemy style unified interface"""
-
-        # Check if condition is a LogicalIn object
-        if hasattr(condition, "compile") and hasattr(condition, "column") and hasattr(condition, "values"):
-            # This is a LogicalIn object
-            formatted_condition = condition.compile()
-            self._where_conditions.append(formatted_condition)
-            # LogicalIn objects now generate complete SQL with values, no additional parameters needed
-        # Check if condition contains FulltextFilter objects
-        elif hasattr(condition, "compile") and self._contains_fulltext_filter(condition):
-            # Handle SQLAlchemy expressions that contain FulltextFilter objects
-            formatted_condition = self._process_fulltext_expression(condition)
-            self._where_conditions.append(formatted_condition)
-        elif hasattr(condition, "compile"):
-            # This is a SQLAlchemy expression (OR, AND, BinaryExpression, etc.), compile it to SQL
-            compiled = condition.compile(compile_kwargs={"literal_binds": True})
-            formatted_condition = str(compiled)
-
-            # Fix SQLAlchemy's quoted column names for MatrixOne compatibility
-            import re
-
-            formatted_condition = re.sub(r"(\w+)\('([^']+)'\)", r"\1(\2)", formatted_condition)
-
-            # Handle SQLAlchemy's table prefixes (e.g., "users.name" -> "name")
-            formatted_condition = re.sub(r"\b([a-zA-Z_]\w*)\.([a-zA-Z_]\w*)\b", r"\2", formatted_condition)
-
-            self._where_conditions.append(formatted_condition)
+    def filter(self, condition, *params):
+        """Append one validated predicate without consuming another clause's values."""
+        if not hasattr(condition, 'compile_for_query'):
+            condition = normalize_expression(condition)
+        if hasattr(condition, 'compile'):
+            self._append_clause('_where_conditions', lambda: self._compile(condition, params, predicate=True))
         else:
-            # Handle string conditions - replace ? placeholders with actual values
-            formatted_condition = str(condition)
-
-            # If there are params but no ? placeholders, append them to the condition
-            if params and "?" not in formatted_condition:
-                for param in params:
-                    if hasattr(param, "_build_sql"):
-                        # This is a subquery object, convert it to SQL
-                        subquery_sql, _ = param._build_sql()
-                        formatted_condition += f" ({subquery_sql})"
-                    else:
-                        formatted_condition += f" {param}"
-            else:
-                # Add params to _where_params for processing
-                if params:
-                    self._where_params.extend(params)
-
-                # Process any remaining ? placeholders by replacing them with the next parameter
-                while "?" in formatted_condition and self._where_params:
-                    param = self._where_params.pop(0)
-                    if isinstance(param, str):
-                        formatted_condition = formatted_condition.replace("?", f"'{param}'", 1)
-                    elif hasattr(param, "_build_sql"):
-                        # This is a subquery object, convert it to SQL
-                        subquery_sql, _ = param._build_sql()
-                        formatted_condition = formatted_condition.replace("?", f"({subquery_sql})", 1)
-                    else:
-                        formatted_condition = formatted_condition.replace("?", str(param), 1)
-
-            self._where_conditions.append(formatted_condition)
-
+            self._where_conditions.append(compile_predicate(condition, params))
         return self
 
-    def _contains_fulltext_filter(self, condition) -> bool:
-        """Check if a SQLAlchemy expression contains FulltextFilter objects."""
-        from .sqlalchemy_ext.fulltext_search import FulltextFilter
-
-        if isinstance(condition, FulltextFilter):
-            return True
-
-        # Check nested clauses
-        if hasattr(condition, 'clauses'):
-            for clause in condition.clauses:
-                if self._contains_fulltext_filter(clause):
-                    return True
-
-        return False
-
-    def _process_fulltext_expression(self, condition) -> str:
-        """Process SQLAlchemy expressions that contain FulltextFilter objects."""
-        import re
-        from sqlalchemy.sql import operators
-
-        from .sqlalchemy_ext.fulltext_search import FulltextFilter
-
-        if isinstance(condition, FulltextFilter):
-            return condition.compile()
-
-        # Handle and_() / or_() / not_() expressions
-        if hasattr(condition, 'clauses') and hasattr(condition, 'operator'):
-            parts = []
-            for clause in condition.clauses:
-                if isinstance(clause, FulltextFilter):
-                    parts.append(clause.compile())
-                elif hasattr(clause, 'compile'):
-                    # Regular SQLAlchemy expression
-                    compiled = clause.compile(compile_kwargs={"literal_binds": True})
-                    formatted = str(compiled)
-                    # Fix quoted column names and table prefixes
-                    formatted = re.sub(r"(\w+)\('([^']+)'\)", r"\1(\2)", formatted)
-                    formatted = re.sub(r"\w+\.(\w+)", r"\1", formatted)
-                    parts.append(formatted)
-                else:
-                    parts.append(str(clause))
-
-            # Determine operator - check against SQLAlchemy operator objects
-            if condition.operator is operators.and_:
-                return f"({' AND '.join(parts)})"
-            elif condition.operator is operators.or_:
-                return f"({' OR '.join(parts)})"
-            else:
-                # Fallback: try to get operator name
-                op_name = getattr(condition.operator, '__name__', str(condition.operator))
-                return f"({f' {op_name} '.join(parts)})"
-
-        # Fallback for other types
-        return str(condition)
-
-    def filter_by(self, **kwargs) -> "BaseMatrixOneQuery":
-        """Add WHERE conditions from keyword arguments - SQLAlchemy style"""
+    def filter_by(self, **kwargs):
+        """Filter named columns; unknown model fields cannot broaden a query."""
+        if not isinstance(self.model_class, str):
+            for key in kwargs:
+                if key not in self._columns:
+                    raise ValueError(f'Unknown model field: {key}')
+        renders = []
         for key, value in kwargs.items():
-            if key in self._columns:
-                if isinstance(value, str):
-                    self._where_conditions.append(f"{key} = '{value}'")
-                elif isinstance(value, (int, float)):
-                    self._where_conditions.append(f"{key} = {value}")
-                else:
-                    # For other types, use parameterized query
-                    self._where_conditions.append(f"{key} = ?")
-                    self._where_params.append(value)
+            physical_name = self._columns[key].name if self._is_sqlalchemy_model else key
+            if self._is_sqlalchemy_model:
+                from sqlalchemy.dialects.mysql import dialect
+
+                column_type = self._columns[key].type.dialect_impl(dialect())
+                processor = column_type.bind_processor(dialect())
+                if processor is not None and value is not None:
+                    value = processor(value)
+            suffix = ' IS NULL' if value is None else ' = ' + sql_literal(value)
+
+            def render(name=physical_name, suffix=suffix, mapped=self._columns.get(key)):
+                column = sql_identifier(name)
+                if self._is_sqlalchemy_model and (
+                    self._table_alias or self._joins or self._source_selectable is not self.model_class.__table__
+                ):
+                    return self._compile(mapped) + suffix
+                if self._table_alias:
+                    column = sql_identifier(self._table_alias) + '.' + column
+                elif self._joins and not isinstance(self.model_class, str):
+                    column = sql_identifier(self._table_name, qualified=True) + '.' + column
+                return column + suffix
+
+            renders.append(render)
+        for render in renders:
+            self._append_clause('_where_conditions', render)
         return self
 
     def where(self, condition: str, *params) -> "BaseMatrixOneQuery":
         """Add WHERE condition - alias for filter method"""
         return self.filter(condition, *params)
 
-    def logical_in(self, column, values) -> "BaseMatrixOneQuery":
-        """
-        Add IN condition with support for various value types.
+    def logical_in(self, column, values):
+        return self.filter(LogicalIn(column, values))
 
-        This method provides enhanced IN functionality that can handle:
-        - Lists of values: [1, 2, 3]
-        - SQLAlchemy expressions: func.count(User.id)
-        - FulltextFilter objects: boolean_match("title", "content").must("python")
-        - Subqueries: client.query(User).select(User.id)
-
-        Args::
-
-            column: Column to check (can be string or SQLAlchemy column)
-            values: Values to check against. Can be:
-                - List of values: [1, 2, 3, "a", "b"]
-                - SQLAlchemy expression: func.count(User.id)
-                - FulltextFilter object: boolean_match("title", "content").must("python")
-                - Subquery object: client.query(User).select(User.id)
-
-        Returns::
-
-            BaseMatrixOneQuery: Self for method chaining.
-
-        Examples::
-
-            # List of values
-            query.logical_in("city", ["北京", "上海", "广州"])
-            query.logical_in(User.id, [1, 2, 3, 4])
-
-            # SQLAlchemy expression
-            query.logical_in("id", func.count(User.id))
-
-            # FulltextFilter
-            query.logical_in("id", boolean_match("title", "content").must("python"))
-
-            # Subquery
-            subquery = client.query(User).select(User.id).filter(User.active == True)
-            query.logical_in("author_id", subquery)
-
-        Notes:
-            - This method automatically handles different value types
-            - For FulltextFilter objects, it creates a subquery using the fulltext search
-            - For SQLAlchemy expressions, it compiles them to SQL
-            - For lists, it creates standard IN clauses with proper parameter binding
-        """
-        # Handle column name
-        if hasattr(column, "name"):
-            column_name = column.name
-        else:
-            column_name = str(column)
-
-        # Handle different types of values
-        if hasattr(values, "compile") and hasattr(values, "columns"):
-            # This is a FulltextFilter object
-            if hasattr(values, "compile") and hasattr(values, "query_builder"):
-                # Convert FulltextFilter to subquery
-                fulltext_sql = values.compile()
-                # Create a subquery that selects IDs from the fulltext search
-                # We need to determine the table name from the context
-                table_name = self._table_name or "table"
-                subquery_sql = f"SELECT id FROM {table_name} WHERE {fulltext_sql}"
-                condition = f"{column_name} IN ({subquery_sql})"
-                self._where_conditions.append(condition)
+    def order_by(self, *columns):
+        for column in columns:
+            column = normalize_expression(column)
+            if hasattr(column, 'compile'):
+                self._append_clause('_order_by_columns', lambda c=column: self._compile(c))
             else:
-                # Handle other SQLAlchemy expressions
-                compiled = values.compile(compile_kwargs={"literal_binds": True})
-                sql_str = str(compiled)
-                # Fix SQLAlchemy's quoted column names for MatrixOne compatibility
-                import re
-
-                sql_str = re.sub(r"(\w+)\('([^']+)'\)", r"\1(\2)", sql_str)
-                sql_str = re.sub(r"\b([a-zA-Z_]\w*)\.([a-zA-Z_]\w*)\b", r"\2", sql_str)
-                condition = f"{column_name} IN ({sql_str})"
-                self._where_conditions.append(condition)
-        elif hasattr(values, "_build_sql"):
-            # This is a subquery object
-            subquery_sql, subquery_params = values._build_sql()
-            condition = f"{column_name} IN ({subquery_sql})"
-            self._where_conditions.append(condition)
-            self._where_params.extend(subquery_params)
-        elif isinstance(values, (list, tuple)):
-            # Handle list of values
-            if not values:
-                # Empty list means no matches
-                condition = "1=0"  # Always false
-                self._where_conditions.append(condition)
-            else:
-                # Create placeholders for each value
-                placeholders = ",".join(["?" for _ in values])
-                condition = f"{column_name} IN ({placeholders})"
-                self._where_conditions.append(condition)
-                self._where_params.extend(values)
-        else:
-            # Single value
-            condition = f"{column_name} IN (?)"
-            self._where_conditions.append(condition)
-            self._where_params.append(values)
-
-        return self
-
-    def order_by(self, *columns) -> "BaseMatrixOneQuery":
-        """
-        Add ORDER BY clause to the query - SQLAlchemy style compatibility.
-
-        The ORDER BY clause is used to sort the result set by one or more columns,
-        either in ascending (ASC) or descending (DESC) order.
-
-        Args::
-
-            *columns: Columns to order by. Can be:
-                - SQLAlchemy column expressions (e.g., User.name, User.created_at.desc())
-                - String column names (e.g., "name", "created_at DESC")
-                - SQLAlchemy function expressions (e.g., func.count(User.id))
-                - SQLAlchemy desc/asc expressions (e.g., desc(User.name), asc(User.age))
-
-        Returns::
-
-            BaseMatrixOneQuery: Self for method chaining.
-
-        Examples::
-
-            # SQLAlchemy column expressions (recommended)
-            query.order_by(User.name)
-            query.order_by(User.created_at.desc())
-            query.order_by(User.department, User.name.asc())
-
-            # String column names
-            query.order_by("name")
-            query.order_by("created_at DESC")
-            query.order_by("department ASC", "name DESC")
-
-            # SQLAlchemy desc/asc functions
-            from sqlalchemy import desc, asc
-            query.order_by(desc(User.created_at))
-            query.order_by(asc(User.name), desc(User.age))
-
-            # Function expressions
-            query.order_by(func.count(User.id).desc())
-            query.order_by(func.avg(User.salary).asc())
-
-            # Mixed expressions
-            query.order_by(User.department, "name DESC")
-            query.order_by(func.count(User.id).desc(), User.name.asc())
-
-            # Complex expressions
-            query.order_by(
-                User.department.asc(),
-                func.count(User.id).desc(),
-                User.name.asc()
-            )
-
-        Notes:
-            - ORDER BY sorts the result set in ascending order by default
-            - Use .desc() or desc() for descending order
-            - Use .asc() or asc() for explicit ascending order
-            - Multiple columns are ordered from left to right
-            - SQLAlchemy expressions provide better type safety and integration
-            - Column references in SQLAlchemy expressions are automatically
-              converted to MatrixOne-compatible format
-
-        Raises::
-
-            ValueError: If invalid column type is provided
-            SQLAlchemyError: If SQLAlchemy expression compilation fails
-        """
-        for col in columns:
-            if isinstance(col, str):
-                self._order_by_columns.append(col)
-            elif hasattr(col, "compile"):  # SQLAlchemy expression
-                # Compile the expression to SQL string
-                compiled = col.compile(compile_kwargs={"literal_binds": True})
-                sql_str = str(compiled)
-                # Fix SQLAlchemy's quoted column names for MatrixOne compatibility
-                import re
-
-                sql_str = re.sub(r"(\w+)\('([^']+)'\)", r"\1(\2)", sql_str)
-                # Handle SQLAlchemy's table prefixes (e.g., "users.name" -> "name")
-                sql_str = re.sub(r"\b([a-zA-Z_]\w*)\.([a-zA-Z_]\w*)\b", r"\2", sql_str)
-                self._order_by_columns.append(sql_str)
-            else:
-                self._order_by_columns.append(str(col))
+                self._order_by_columns.append(str(column))
         return self
 
     def limit(self, count: int) -> "BaseMatrixOneQuery":
@@ -1398,6 +1198,7 @@ class BaseMatrixOneQuery:
         self._offset_count = count
         return self
 
+    @statement_compilation
     def _build_sql(self) -> tuple[str, List[Any]]:
         """Build SQL query using unified SQL builder"""
         from .sql_builder import MatrixOneSQLBuilder
@@ -1409,72 +1210,46 @@ class BaseMatrixOneQuery:
             for cte in self._ctes:
                 if isinstance(cte, CTE):
                     cte_sql, cte_params = cte.as_sql()
-                    builder._ctes.append({'name': cte.name, 'sql': cte_sql, 'params': cte_params})
+                    builder._ctes.append(
+                        {'name': cte.name, 'sql': cte_sql, 'params': cte_params, 'recursive': cte.recursive}
+                    )
                 else:
                     # Handle legacy CTE format
                     builder._ctes.append(cte)
 
-        # Build SELECT clause with SQLAlchemy function support
         if self._select_columns:
-            # Convert SQLAlchemy function objects to strings
-            select_parts = []
-            for col in self._select_columns:
-                if hasattr(col, "compile"):  # SQLAlchemy function object
-                    # Check if this is a FulltextLabel (which already has AS in compile())
-                    if hasattr(col, "_compiler_dispatch") and hasattr(col, "name") and "FulltextLabel" in str(type(col)):
-                        # For FulltextLabel, use compile() which already includes AS
-                        sql_str = col.compile(compile_kwargs={"literal_binds": True})
-                    else:
-                        # For regular SQLAlchemy objects
-                        compiled = col.compile(compile_kwargs={"literal_binds": True})
-                        sql_str = str(compiled)
-                        # Fix SQLAlchemy's quoted column names for MatrixOne compatibility
-                        # Convert avg('column') to avg(column)
-                        import re
-
-                        sql_str = re.sub(r"(\w+)\('([^']+)'\)", r"\1(\2)", sql_str)
-
-                        # Handle SQLAlchemy label() method - add AS alias if present
-                        # But avoid using SQL reserved keywords as aliases
-                        if hasattr(col, "name") and col.name and col.name.upper() not in ["DISTINCT"]:
-                            sql_str = f"{sql_str} AS {col.name}"
-
-                    select_parts.append(sql_str)
-                else:
-                    select_parts.append(str(col))
-            builder._select_columns = select_parts
+            builder._select_columns = [
+                (self._compile(col, projection=True) if hasattr(col, 'compile') else str(col))
+                for col in self._select_columns
+            ]
+        elif self._is_sqlalchemy_model:
+            builder._select_columns = [self._compile(column, projection=True) for column in self._columns.values()]
         else:
             builder.select_all()
 
         # Build FROM clause with optional table alias and snapshot
-        if not self._table_name:
-            raise ValueError("Table name is required. Provide a model class or set table name manually.")
+        builder._from_table = self._table_target()
 
-        if self._table_alias:
-            builder._from_table = f"{self._table_name} AS {self._table_alias}"
-        else:
-            builder._from_table = self._table_name
-
-        builder._from_snapshot = self._snapshot_name
+        builder._from_snapshot = None
 
         # Add JOIN clauses
-        builder._joins = self._joins.copy()
+        builder._joins = self._clauses('_joins')
 
         # Add WHERE conditions and parameters
-        builder._where_conditions = self._where_conditions.copy()
+        builder._where_conditions = self._clauses('_where_conditions')
         builder._where_params = self._where_params.copy()
 
         # Add GROUP BY columns
         if self._group_by_columns:
-            builder.group_by(*self._group_by_columns)
+            builder.group_by(*self._clauses('_group_by_columns'))
 
         # Add HAVING conditions and parameters
-        builder._having_conditions = self._having_conditions.copy()
+        builder._having_conditions = self._clauses('_having_conditions')
         builder._having_params = self._having_params.copy()
 
         # Add ORDER BY columns
         if self._order_by_columns:
-            builder.order_by(*self._order_by_columns)
+            builder.order_by(*self._clauses('_order_by_columns'))
 
         # Add LIMIT and OFFSET
         if self._limit_count is not None:
@@ -1484,6 +1259,10 @@ class BaseMatrixOneQuery:
 
         # Build the final SQL and combine parameters
         sql, params = builder.build()
+        if self._snapshot_name:
+            from ._snapshot_sql import rewrite_snapshot
+
+            sql = rewrite_snapshot(sql, self._snapshot_name)
 
         # Parameters are already combined in builder.build() since we added CTEs to builder._ctes
         return sql, params
@@ -1509,16 +1288,16 @@ class BaseMatrixOneQuery:
 
         return RowData(row, select_cols)
 
-    def _extract_select_columns(self):
+    def _extract_select_columns(self, result_names=None):
         """Extract column names from select columns"""
         select_cols = []
-        for col in self._select_columns:
+        for position, col in enumerate(self._select_columns):
             # Check if this is a SQLAlchemy function with label
             if hasattr(col, "compile") and hasattr(col, "name") and col.name:
                 # Special handling for DISTINCT function to avoid reserved keyword issues
                 if hasattr(col, "name") and col.name.upper() == "DISTINCT":
                     # For DISTINCT functions, use the original logic to extract column name
-                    col_str = str(col.compile(compile_kwargs={"literal_binds": True}))
+                    col_str = str(col.compile())
                     if "(" in col_str and ")" in col_str:
                         func_name = col_str.split("(")[0].strip()
                         col_name = col_str.split("(")[1].split(")")[0].strip()
@@ -1532,7 +1311,11 @@ class BaseMatrixOneQuery:
             else:
                 # Convert SQLAlchemy function objects to strings first
                 if hasattr(col, "compile"):
-                    col_str = str(col.compile(compile_kwargs={"literal_binds": True}))
+                    if result_names is not None and position < len(result_names):
+                        select_cols.append(str(result_names[position]))
+                        continue
+                    # Naming a result must never evaluate a callable/default.
+                    col_str = str(col.compile())
                 else:
                     col_str = str(col)
 
@@ -1620,27 +1403,40 @@ class BaseMatrixOneQuery:
                 User.payment_status == "active"
             ).execute()
         """
+        if self._is_sqlalchemy_model:
+            unknown = set(kwargs) - self._columns.keys()
+            if unknown:
+                raise ValueError('Unknown mapped UPDATE attributes: ' + ', '.join(sorted(unknown)))
         self._query_type = "UPDATE"
 
         # Handle both SQLAlchemy expressions and simple values
         for key, value in kwargs.items():
+            value = normalize_expression(value)
             if hasattr(value, "compile"):  # SQLAlchemy expression
-                # Compile the expression to SQL
-                compiled = value.compile(compile_kwargs={"literal_binds": True})
-                sql_str = str(compiled)
+                physical_name = self._columns[key].name if self._is_sqlalchemy_model else key
+                self._append_clause(
+                    '_update_set_columns',
+                    lambda key=physical_name, value=value: f"{sql_identifier(key)} = "
+                    + self._compile(value, dialect=self._result_dialect()),
+                )
+            elif self._is_sqlalchemy_model:
+                from sqlalchemy import bindparam
 
-                # Fix SQLAlchemy's quoted column names for MatrixOne compatibility
-                import re
-
-                sql_str = re.sub(r"(\w+)\('([^']+)'\)", r"\1(\2)", sql_str)
-
-                self._update_set_columns.append(f"{key} = {sql_str}")
+                column = self._columns[key]
+                self._update_set_columns.append(
+                    sql_identifier(column.name)
+                    + ' = '
+                    + compile_expression(
+                        bindparam(None, value, type_=column.type), compiler_dialect=self._result_dialect()
+                    )
+                )
             else:  # Simple value
                 self._update_set_columns.append(f"{key} = ?")
                 self._update_set_values.append(value)
 
         return self
 
+    @statement_compilation
     def _build_update_sql(self) -> tuple[str, List[Any]]:
         """
         Build UPDATE SQL query directly to handle SQLAlchemy expressions
@@ -1653,35 +1449,26 @@ class BaseMatrixOneQuery:
 
             ValueError: If no SET clauses are provided for UPDATE
         """
+        if self._snapshot_name:
+            raise ValueError('Snapshot queries are read-only')
+        _require_single_table_mutation(self._joins)
+        self._check_mutation_source()
         if not self._update_set_columns:
             raise ValueError("No SET clauses provided for UPDATE")
 
-        # Build SET clause
-        set_clauses = []
-        params = []
+        from .sql_builder import MatrixOneSQLBuilder
 
-        value_index = 0
-        for col in self._update_set_columns:
-            if " = ?" in col:
-                # Simple value assignment
-                col_name = col.split(" = ?")[0]
-                set_clauses.append(f"{col_name} = ?")
-                params.append(self._update_set_values[value_index])
-                value_index += 1
-            else:
-                # SQLAlchemy expression (already compiled to SQL)
-                set_clauses.append(col)
-
-        # Build WHERE clause
-        where_clause = ""
-        if self._where_conditions:
-            where_clause = " WHERE " + " AND ".join(self._where_conditions)
-            params.extend(self._where_params)
-
-        # Build final SQL
-        sql = f"UPDATE {self._table_name} SET {', '.join(set_clauses)}{where_clause}"
-
-        return sql, params
+        # Assignment SQL and bound values are already recorded at construction;
+        # marker-looking text inside a compiled literal is never a placeholder.
+        builder = MatrixOneSQLBuilder().update(self._table_target())
+        builder._update_set_columns = self._clauses('_update_set_columns')
+        builder._update_set_values = self._update_set_values.copy()
+        builder._where_conditions = self._clauses('_where_conditions')
+        builder._where_params = self._where_params.copy()
+        builder.order_by(*self._clauses('_order_by_columns'))
+        if self._limit_count is not None:
+            builder.limit(self._limit_count)
+        return builder.build()
 
     def delete(self) -> Any:
         """Execute DELETE operation"""
@@ -1689,18 +1476,105 @@ class BaseMatrixOneQuery:
         sql, params = self._build_delete_sql()
         return self._execute(sql, params)
 
+    @statement_compilation
     def _build_delete_sql(self) -> tuple[str, List[Any]]:
         """Build DELETE SQL query using unified SQL builder"""
+        if self._snapshot_name:
+            raise ValueError('Snapshot queries are read-only')
+        _require_single_table_mutation(self._joins)
+        self._check_mutation_source()
         from .sql_builder import build_delete_query
 
         return build_delete_query(
-            table_name=self._table_name,
-            where_conditions=self._where_conditions,
+            table_name=self._table_target(),
+            where_conditions=self._clauses('_where_conditions'),
             where_params=self._where_params,
+            order_by=self._clauses('_order_by_columns'),
+            limit=self._limit_count,
         )
 
+    # MatrixOne Snapshot Query Builder - SQLAlchemy style
+    def _result_dialect(self, result=None):
+        from sqlalchemy.engine.interfaces import Dialect
+        from .sqlalchemy_ext.dialect import MatrixOneDialect
 
-# MatrixOne Snapshot Query Builder - SQLAlchemy style
+        dialect = getattr(result, '_matrixone_dialect', None)
+        if not isinstance(dialect, Dialect):
+            dialect = getattr(getattr(result, 'context', None), 'dialect', None)
+        if not isinstance(dialect, Dialect):
+            dialect = getattr(getattr(self.client, '_engine', None), 'dialect', None)
+        return dialect if isinstance(dialect, Dialect) else MatrixOneDialect()
+
+    def _scalar_from_result(self, result):
+        rows = self._materialize(result)
+        if not rows:
+            return None
+        if self._select_columns or isinstance(self.model_class, str):
+            return rows[0][0]
+        return getattr(rows[0], next(iter(self._columns)))
+
+    def _materialize(self, result):
+        rows = result.rows if hasattr(result, 'rows') else result.fetchall()
+        if not rows:
+            return []
+        dialect = self._result_dialect(result)
+        names = getattr(result, 'columns', None)
+        if names is None or callable(names):
+            if hasattr(result, 'keys'):
+                names = list(result.keys())
+            else:
+                names = (
+                    self._extract_select_columns()
+                    if self._select_columns
+                    else [column.name for column in self._columns.values()]
+                )
+        by_name = {column.name: column for column in self._columns.values()}
+        if any(len(row) != len(names) for row in rows):
+            raise ValueError('Query result column metadata does not match row width')
+        if not self._select_columns and self._is_sqlalchemy_model and not by_name.keys() <= set(names):
+            raise ValueError('Mapped query result is missing declared columns')
+        expressions = self._select_columns or [by_name.get(name) for name in names]
+        # These buffered builders execute raw SQL, so SQLAlchemy has no typed
+        # result metadata. Apply each declared processor exactly once here.
+        processors = []
+        description = getattr(result, '_matrixone_description', None)
+        if description is None:
+            description = getattr(getattr(result, 'cursor', None), 'description', None)
+        compiled = getattr(getattr(result, 'context', None), 'compiled', None)
+        typed = getattr(result, '_matrixone_typed', False) or bool(getattr(compiled, '_result_columns', ()))
+        for position, expression in enumerate(expressions):
+            dtype = getattr(expression, 'type', None)
+            code = description[position][1] if description is not None and position < len(description) else None
+            processors.append(
+                dtype._cached_result_processor(dialect, code) if dtype is not None and not typed else None
+            )
+        rows = [
+            tuple(
+                processors[i](value) if i < len(processors) and processors[i] is not None else value
+                for i, value in enumerate(row)
+            )
+            for row in rows
+        ]
+        if self._select_columns:
+            columns = self._extract_select_columns(names)
+        elif isinstance(self.model_class, str):
+            columns = getattr(result, 'columns', None)
+            if columns is None or callable(columns):
+                columns = list(result.keys())
+            if not columns or len(columns) != len(rows[0]):
+                raise ValueError('String-table results require complete column metadata')
+        else:
+            attributes = {column.name: key for key, column in self._columns.items()}
+            from sqlalchemy import inspect
+
+            constructor = inspect(self.model_class).mapper.class_ if self._is_sqlalchemy_model else self.model_class
+            return [
+                constructor(**{attributes[name]: value for name, value in zip(names, row) if name in attributes})
+                for row in rows
+            ]
+        return [self._create_row_data(row, columns) for row in rows]
+
+
 class MatrixOneQuery(BaseMatrixOneQuery):
     """
     MatrixOne Query builder that mimics SQLAlchemy Query interface.
@@ -1766,55 +1640,12 @@ class MatrixOneQuery(BaseMatrixOneQuery):
         return self
 
     def all(self) -> List:
-        """Execute query and return all results - SQLAlchemy style"""
         sql, params = self._build_sql()
-        result = self._execute(sql, params)
-
-        # Handle both ResultSet and SQLAlchemy Result
-        if hasattr(result, 'rows'):
-            # ResultSet from client.execute()
-            rows = result.rows
-        else:
-            # SQLAlchemy Result from session.execute()
-            rows = result.fetchall()
-
-        models = []
-        for row in rows:
-            # Check if this is an aggregate query (has custom select columns)
-            if self._select_columns:
-                # For aggregate queries, return raw row data as a simple object
-                select_cols = self._extract_select_columns()
-                row_data = self._create_row_data(row, select_cols)
-                models.append(row_data)
-            else:
-                # Regular model query
-                if self._is_sqlalchemy_model:
-                    # For SQLAlchemy models, create instance directly
-                    row_dict = {}
-                    for i, col_name in enumerate(self._columns.keys()):
-                        if i < len(row):
-                            row_dict[col_name] = row[i]
-
-                    # Create SQLAlchemy model instance
-                    model = self.model_class(**row_dict)
-                    models.append(model)
-                else:
-                    # For non-SQLAlchemy models, create instance directly
-                    row_dict = {}
-                    for i, col_name in enumerate(self._columns.keys()):
-                        if i < len(row):
-                            row_dict[col_name] = row[i]
-
-                    # Create model instance
-                    model = self.model_class(**row_dict)
-                    models.append(model)
-
-        return models
+        return self._materialize(self._execute(sql, params))
 
     def first(self) -> Optional:
         """Execute query and return first result - SQLAlchemy style"""
-        self._limit_count = 1
-        results = self.all()
+        results = _first_query(self).all()
         return results[0] if results else None
 
     def one(self):
@@ -1936,43 +1767,15 @@ class MatrixOneQuery(BaseMatrixOneQuery):
             - Returns None if no results are found
             - This method supports SQLAlchemy expressions and operators
         """
-        result = self.first()
-        if result is None:
-            return None
-
-        # If result is a model instance, return the first column value
-        if hasattr(result, '__dict__'):
-            # For custom select queries, check if we have select columns
-            if self._select_columns:
-                # For custom select, return the first selected column value
-                select_cols = self._extract_select_columns()
-                if select_cols:
-                    first_col_name = select_cols[0]
-                    return getattr(result, first_col_name)
-
-            # Get the first column value from the model
-            if hasattr(self.model_class, "__table__"):
-                first_column = list(self.model_class.__table__.columns)[0]
-                return getattr(result, first_column.name)
-            else:
-                # For raw queries, return the first attribute
-                attrs = [attr for attr in dir(result) if not attr.startswith('_')]
-                if attrs:
-                    return getattr(result, attrs[0])
-                return None
-        else:
-            # For raw data, return the first element
-            if isinstance(result, (list, tuple)) and len(result) > 0:
-                return result[0]
-            return result
+        query = _first_query(self)
+        sql, params = query._build_sql()
+        result = query._execute(sql, params)
+        return query._scalar_from_result(result)
 
     def count(self) -> int:
         """Execute query and return count of results - SQLAlchemy style"""
         sql, params = self._build_sql()
-        # Replace SELECT * with COUNT(*)
-        sql = sql.replace("SELECT *", "SELECT COUNT(*)")
-
-        result = self._execute(sql, params)
+        result = self._execute(_count_sql(sql), params)
 
         # Handle both ResultSet and SQLAlchemy Result
         if hasattr(result, 'rows'):
@@ -1985,20 +1788,8 @@ class MatrixOneQuery(BaseMatrixOneQuery):
 
     def execute(self) -> Any:
         """Execute the query based on its type"""
-        if self._query_type == "SELECT":
-            sql, params = self._build_sql()
-            return self._execute(sql, params)
-        elif self._query_type == "INSERT":
-            sql, params = self._build_insert_sql()
-            return self._execute(sql, params)
-        elif self._query_type == "UPDATE":
-            sql, params = self._build_update_sql()
-            return self._execute(sql, params)
-        elif self._query_type == "DELETE":
-            sql, params = self._build_delete_sql()
-            return self._execute(sql, params)
-        else:
-            raise ValueError(f"Unknown query type: {self._query_type}")
+        sql, params = self._build_current_sql()
+        return self._execute(sql, params)
 
     def to_sql(self) -> str:
         """
@@ -2026,27 +1817,8 @@ class MatrixOneQuery(BaseMatrixOneQuery):
                 - Use this for debugging or logging purposes
                 - The returned SQL is ready to be executed directly
         """
-        # Build SQL based on query type
-        if self._query_type == "UPDATE":
-            sql, params = self._build_update_sql()
-        elif self._query_type == "INSERT":
-            sql, params = self._build_insert_sql()
-        elif self._query_type == "DELETE":
-            sql, params = self._build_delete_sql()
-        else:
-            sql, params = self._build_sql()
-
-        # Substitute parameters for better readability
-        if params:
-            formatted_sql = sql
-            for param in params:
-                if isinstance(param, str):
-                    formatted_sql = formatted_sql.replace("?", f"'{param}'", 1)
-                else:
-                    formatted_sql = formatted_sql.replace("?", str(param), 1)
-            return formatted_sql
-        else:
-            return sql
+        sql, params = self._build_current_sql()
+        return substitute_parameters(sql, params)
 
     def explain(self, verbose: bool = False) -> Any:
         """
@@ -2084,7 +1856,7 @@ class MatrixOneQuery(BaseMatrixOneQuery):
             - Use verbose=True for more detailed information
             - Helpful for query optimization and performance tuning
         """
-        sql, params = self._build_sql()
+        sql, params = self._build_current_sql()
 
         # Build EXPLAIN statement
         if verbose:
@@ -2131,7 +1903,7 @@ class MatrixOneQuery(BaseMatrixOneQuery):
             - Provides actual execution time and row counts
             - Use with caution on large datasets as it executes the full query
         """
-        sql, params = self._build_sql()
+        sql, params = self._build_current_sql()
 
         # Build EXPLAIN ANALYZE statement
         if verbose:
@@ -2396,60 +2168,36 @@ class LogicalIn:
         self.column = column
         self.values = values
 
-    def compile(self, compile_kwargs=None):
-        """Compile to SQL expression for use in filter() method"""
-        # Handle column name
-        if hasattr(self.column, "name"):
-            column_name = self.column.name
-        else:
-            column_name = str(self.column)
+    def compile_for_query(self, model, alias):
+        return self.compile(model=model, alias=alias, table=model if isinstance(model, str) else None)
 
-        # Handle different types of values
-        if hasattr(self.values, "compile") and hasattr(self.values, "columns"):
-            # This is a FulltextFilter object
-            if hasattr(self.values, "compile") and hasattr(self.values, "query_builder"):
-                # Convert FulltextFilter to subquery
-                fulltext_sql = self.values.compile()
-                # Create a subquery that selects IDs from the fulltext search
-                # We need to determine the table name from the context
-                # For now, use a generic approach that works with most cases
-                table_name = "table"  # Default table name - will be handled by the query context
-                subquery_sql = f"SELECT id FROM {table_name} WHERE {fulltext_sql}"
-                return f"{column_name} IN ({subquery_sql})"
-            else:
-                # Handle other SQLAlchemy expressions
-                compiled = self.values.compile(compile_kwargs={"literal_binds": True})
-                sql_str = str(compiled)
-                # Fix SQLAlchemy's quoted column names for MatrixOne compatibility
-                import re
-
-                sql_str = re.sub(r"(\w+)\('([^']+)'\)", r"\1(\2)", sql_str)
-                sql_str = re.sub(r"\b([a-zA-Z_]\w*)\.([a-zA-Z_]\w*)\b", r"\2", sql_str)
-                return f"{column_name} IN ({sql_str})"
-        elif hasattr(self.values, "_build_sql"):
-            # This is a subquery object
-            subquery_sql, subquery_params = self.values._build_sql()
-            return f"{column_name} IN ({subquery_sql})"
-        elif isinstance(self.values, (list, tuple)):
-            # Handle list of values
-            if not self.values:
-                # Empty list means no matches
-                return "1=0"  # Always false
-            else:
-                # Create SQL with actual values for LogicalIn
-                formatted_values = []
-                for value in self.values:
-                    if isinstance(value, str):
-                        formatted_values.append(f"'{value}'")
-                    else:
-                        formatted_values.append(str(value))
-                return f"{column_name} IN ({','.join(formatted_values)})"
+    def compile(
+        self, compile_kwargs=None, model=None, alias=None, table=None, _table_supplier=None, _column_compiler=None
+    ):
+        if hasattr(self.column, 'compile'):
+            column = (
+                _column_compiler(self.column) if _column_compiler else compile_expression(self.column, model, alias)
+            )
         else:
-            # Single value
-            if isinstance(self.values, str):
-                return f"{column_name} IN ('{self.values}')"
-            else:
-                return f"{column_name} IN ({self.values})"
+            column = str(self.column)
+        values = self.values
+        if hasattr(values, 'query_builder'):
+            source = _table_supplier() if _table_supplier is not None else None
+            if source is None:
+                source = sql_identifier(table or getattr(model, '__tablename__', None) or 'table', qualified=True)
+            body = 'SELECT id FROM ' + source + ' WHERE ' + compile_expression(values)
+        elif hasattr(values, '_build_sql'):
+            sql, params = values._build_sql()
+            body = substitute_parameters(sql, params)
+        elif hasattr(values, 'compile'):
+            body = compile_expression(values)
+        elif isinstance(values, (list, tuple)):
+            if not values:
+                return '1=0'
+            body = ','.join(sql_literal(value) for value in values)
+        else:
+            body = sql_literal(values)
+        return f'{column} IN ({body})'
 
 
 def logical_in(column, values):

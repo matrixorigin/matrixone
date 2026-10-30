@@ -269,31 +269,6 @@ type ComputationWrapper interface {
 	BinaryExecute() (bool, string) //binary execute for COM_STMT_EXECUTE
 }
 
-type ColumnInfo interface {
-	GetName() string
-
-	GetType() types.T
-}
-
-var _ ColumnInfo = &engineColumnInfo{}
-
-type TableInfo interface {
-	GetColumns()
-}
-
-type engineColumnInfo struct {
-	name string
-	typ  types.Type
-}
-
-func (ec *engineColumnInfo) GetName() string {
-	return ec.name
-}
-
-func (ec *engineColumnInfo) GetType() types.T {
-	return ec.typ.Oid
-}
-
 type PrepareStmt struct {
 	fieldTypes *plan2.PreparedFieldTypes
 	// A committed type-generation rebuild can fail before execution metadata
@@ -317,13 +292,14 @@ type PrepareStmt struct {
 	sqlModeFlagsSet bool
 	// divPrecisionIncrementSet distinguishes a captured default value from
 	// legacy and minimal in-memory prepared-statement fixtures.
-	divPrecisionIncrementSet bool
-	ParamTypes               []byte
-	ColDefData               [][]byte
-	IsCloudNonuser           bool
-	proc                     *process.Process
-	remapDb                  map[string]string
-	defaultDatabase          string
+	divPrecisionIncrementSet  bool
+	ParamTypes                []byte
+	integerArithmeticBindings []plan2.PreparedSourceBinding
+	ColDefData                [][]byte
+	IsCloudNonuser            bool
+	proc                      *process.Process
+	remapDb                   map[string]string
+	defaultDatabase           string
 
 	params              *vector.Vector
 	getFromSendLongData map[int]struct{}
@@ -779,6 +755,13 @@ type BackgroundExecOption struct {
 	// transactions whose request context owns a blocked TxnClient.New call.
 	cancelTxnCreateWithRequest bool
 	authorizationSnapshot      *client.SnapshotAdmission
+	// internalExecution marks the produced executor as running trusted
+	// implementation SQL (e.g. the catalog writes generated for SET GLOBAL)
+	// rather than caller-authored statements. It flows to the back session's
+	// isInternal so internal-execution exemptions apply — including the
+	// client-facing READ ONLY transaction gate, which must never observe
+	// generated catalog maintenance as user writes.
+	internalExecution bool
 }
 
 // BackgroundExec executes the sql in background session without network output.
@@ -816,12 +799,6 @@ func getStatementType(stmt tree.Statement) tree.StatementType {
 		return unknownStatementType{}
 	}
 }
-
-// TableInfoCache tableInfos of a database
-//type TableInfoCache struct {
-//	db         string
-//	tableInfos map[string][]ColumnInfo
-//}
 
 func (prepareStmt *PrepareStmt) releaseRuntimeCompile(runtimeCompile *compile.Compile) {
 	if runtimeCompile == nil || runtimeCompile == prepareStmt.compile {
@@ -910,6 +887,7 @@ func (prepareStmt *PrepareStmt) Close() {
 	if prepareStmt.PrepareStmt != nil {
 		prepareStmt.PrepareStmt.Free()
 	}
+	prepareStmt.integerArithmeticBindings = nil
 	if prepareStmt.ParamTypes != nil {
 		prepareStmt.ParamTypes = nil
 	}
@@ -1180,6 +1158,13 @@ type ExecCtx struct {
 	// transaction-boundary policy and later execution use the same prepared AST.
 	// The statement is borrowed from the computation wrapper or prepare cache.
 	effectiveTxnStatement tree.Statement
+	// deferReadOnlyOwnership marks that the pre-Create READ ONLY admission
+	// deferred an unqualified multi-source UPDATE verdict because no catalog
+	// transaction existed yet for owner resolution. executeStmtWithWorkspace
+	// re-runs the gate right after Create with the transaction attached.
+	// Only that call site consumes the flag; every other admission site
+	// already runs with an active transaction and never produces it.
+	deferReadOnlyOwnership bool
 	// implicitCommitBefore is the generation-level policy for a top-level
 	// implicit-commit statement. It is copied into txnOpt after admission.
 	implicitCommitBefore bool
@@ -1913,6 +1898,12 @@ func (ses *Session) setSessionSysVar(ctx context.Context, name string, val inter
 	if name == "div_precision_increment" {
 		oldDivPrecisionIncrement = ses.currentDivPrecisionIncrement()
 	}
+	oldRollupAlgorithm := ""
+	if name == "rollup_algorithm" {
+		if old, getErr := ses.GetSessionSysVar(name); getErr == nil {
+			oldRollupAlgorithm, _ = old.(string)
+		}
+	}
 
 	oldWindowPartitionAlgorithm := ""
 	if name == "window_partition_algorithm" {
@@ -1945,9 +1936,10 @@ func (ses *Session) setSessionSysVar(ctx context.Context, name string, val inter
 			return err
 		}
 	}
-	// These values shape bound defaults, constant-folded expressions or LOAD validation.
+	// These values shape bound defaults, constant-folded expressions, LOAD validation or planned index scan options.
 	// Compare converted values so equivalent SET spellings retain warm plans.
-	planDependencyVariable := name == "sql_mode" || name == "lc_time_names" || name == "explicit_defaults_for_timestamp" || name == "mo_pk_check_by_cn"
+	planDependencyVariable := name == "sql_mode" || name == "lc_time_names" || name == "explicit_defaults_for_timestamp" || name == "mo_pk_check_by_cn" ||
+		name == "fulltext2_search_df_cutoff" || name == "fulltext2_threads_search" || name == "fulltext_bloom_filter_pushdown"
 	var oldPlanDependency interface{}
 	if planDependencyVariable {
 		oldValue, getErr := ses.GetSessionSysVar(name)
@@ -2036,6 +2028,12 @@ func (ses *Session) setSessionSysVar(ctx context.Context, name string, val inter
 	if err == nil && name == "div_precision_increment" {
 		if increment, ok := val.(int64); ok && increment != oldDivPrecisionIncrement {
 			ses.cleanCache()
+		}
+	}
+	if err == nil && name == "rollup_algorithm" {
+		if newValue, ok := val.(string); ok && oldRollupAlgorithm != newValue {
+			ses.cleanCache()
+			ses.markPreparedPlansForRollupAlgorithmChange()
 		}
 	}
 	if err == nil && vectorModeVariable {
@@ -2312,15 +2310,6 @@ type MysqlRrWr interface {
 	MysqlHelper
 }
 
-// MysqlPayloadWriter make final payload for the packet
-type MysqlPayloadWriter interface {
-	OpenRow() error
-	CloseRow() error
-	OpenPayload() error
-	FillPayload() error
-	ClosePayload(bool) error
-}
-
 // BinaryWriter write batch into fileservice
 type BinaryWriter interface {
 	MediaWriter
@@ -2338,11 +2327,6 @@ type StagedBinaryWriter interface {
 
 // CsvWriter write batch into csv file
 type CsvWriter interface {
-	MediaWriter
-}
-
-// MemWriter write batch into memory pool
-type MemWriter interface {
 	MediaWriter
 }
 

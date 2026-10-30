@@ -195,6 +195,9 @@ func requireSequence(ctx context.Context, rel engine.Relation) error {
 // Return advanced last_seq_num.
 
 func Nextval(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	if err = rejectSequenceMutationInReadOnly(proc); err != nil {
+		return err
+	}
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	ivec := vector.GenerateFunctionStrParameter(ivecs[0])
 	var databases vector.FunctionParameterWrapper[types.Varlena]
@@ -240,6 +243,27 @@ func Nextval(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *
 				return
 			}
 		}
+	}
+	return nil
+}
+
+// rejectSequenceMutationInReadOnly enforces the READ ONLY transaction access
+// mode at the sequence mutation boundary. Frontend admission cannot see every
+// carrier of a sequence builtin — a temporary-target INSERT keeps its target
+// exemption even when NEXTVAL hides in its SELECT arm, and stored views
+// expand only at binding — so the frontend gate stamps the effective caller
+// access mode (active transaction's declared mode, else the session
+// transaction_read_only default) onto the shared process Base for every
+// user statement. A stamped read-only mode rejects the mutation with
+// ERROR 1792 before any counter write; an unstamped (zero-value) mode —
+// internal, background or remote execution — keeps its previous behavior,
+// and session-local CURRVAL/LASTVAL do not pass through here.
+func rejectSequenceMutationInReadOnly(proc *process.Process) error {
+	if proc == nil || proc.Ctx == nil {
+		return nil
+	}
+	if proc.ReadOnlyTxnAccessMode() {
+		return moerr.NewCantExecuteInReadOnlyTransaction(proc.Ctx)
 	}
 	return nil
 }
@@ -441,6 +465,9 @@ func setIsCalled[T constraints.Integer](proc *process.Process, rel engine.Relati
 }
 
 func Setval(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	if err = rejectSequenceMutationInReadOnly(proc); err != nil {
+		return err
+	}
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	tblnames := vector.GenerateFunctionStrParameter(ivecs[0])
 	setnums := vector.GenerateFunctionStrParameter(ivecs[1])
@@ -522,7 +549,8 @@ func setval(tblname, setnum string, iscalled bool, db string, proc *process.Proc
 	}
 	values := _values[0]
 	prevCalled, _ := values[6].(bool)
-	//#30650: stored flag = prev || !third-arg; see setVal for the full rule.
+	// Preserve the established called-state contract. The third argument may
+	// mark a fresh sequence called, but cannot reset an already-called one.
 	storedCalled := prevCalled || !iscalled
 
 	switch values[0].(type) {
@@ -592,12 +620,10 @@ func setval(tblname, setnum string, iscalled bool, db string, proc *process.Proc
 }
 
 func setVal[T constraints.Integer](proc *process.Process, setv T, setisCalled, storedCalled bool, rel engine.Relation, db, tbl string) (string, error) {
-	//#30650: persist is_called together with last_seq_num; NEXTVAL advances
-	// only when the stored flag is set. The documented rule stores !setisCalled
-	// (SETVAL(n, true) returns n on the next NEXTVAL, SETVAL(n, false) returns
-	// n+increment), and a sequence that was ever called must keep its flag so
-	// that SETVAL(n, true) after a call still reports called=true (#28243), so
-	// the caller passes storedCalled = prevCalled || !setisCalled.
+	// Assign the value and called flag atomically in the caller's transaction.
+	// NEXTVAL advances when storedCalled is true. SETVAL(n, true) returns n on
+	// the next NEXTVAL only while the sequence was still uncalled; once marked
+	// called, both third-argument values retain the existing advancing behavior.
 	_, err := sequenceSQL(proc, db, fmt.Sprintf("update %s set last_seq_num = %d, is_called = %t", sequenceTableName(db, tbl), setv, storedCalled))
 	if err != nil {
 		return "", err

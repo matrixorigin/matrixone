@@ -15,6 +15,7 @@
 package frontend
 
 import (
+	"context"
 	"sync"
 	"sync/atomic"
 
@@ -84,6 +85,19 @@ type collectRange struct {
 	end              []types.TS
 	rel              []engine.Relation
 	startBoundaryRel []engine.Relation
+	// idents carries the physical identity each segment was opened under
+	// (design §6): the walking side's endpoint identity for the endpoint
+	// segment and the winning candidate identity for reopened lineage
+	// nodes. A nil slice means every segment runs under the caller
+	// context, the pre-routing behavior local-local diffs rely on.
+	idents []branchIdentity
+}
+
+func (r collectRange) segmentIdentity(i int, fallback branchIdentity) branchIdentity {
+	if i >= 0 && i < len(r.idents) {
+		return r.idents[i]
+	}
+	return fallback
 }
 
 func (r collectRange) startBoundary(i int) engine.Relation {
@@ -157,9 +171,9 @@ func (m *branchMetaInfo) hasLCA() bool {
 }
 
 // tarLCASnapshot is the snapshot of the LCA at which tar's view of
-// the LCA's state is anchored. It feeds tombstone resolution on the
-// tar side: tar's tombstones must be resolved against the LCA at
-// this moment.
+// the LCA's state is anchored. It is one of the two per-side anchors
+// that lcaProbeSnapshot composes into the shared divergence point
+// both sides resolve against.
 //
 // When tar forked off the LCA (len(pathFromLCAToTar) > 1), the
 // anchor is tar's own first-child CloneTS — the moment tar diverged.
@@ -205,10 +219,14 @@ func firstDataBranchForkTS(pathTS []types.TS, lineageOnly []bool) (types.TS, boo
 	return types.TS{}, false
 }
 
-// lcaProbeSnapshot is the snapshot used by diffOnBase to fetch the
-// LCA relation handle when the LCA is a third-party node (neither
-// tar nor base). It is the earlier of the two per-side snapshots so
-// the relation handle is valid on both sides' views of the LCA.
+// lcaProbeSnapshot is the shared divergence point of the two
+// lineages: the earlier of the two per-side fork anchors. diffOnBase
+// uses it to fetch the LCA relation handle when the LCA is a
+// third-party node (neither tar nor base), so the handle is valid on
+// both sides' views, and hashDiffIfHasLCA uses it to anchor both
+// sides' tombstone resolution so the LCA's writes between the two
+// forks surface as the later-forked side's divergence instead of
+// being absorbed into that side's fork baseline.
 func (m *branchMetaInfo) lcaProbeSnapshot(tarSP, baseSP types.TS) types.TS {
 	t := m.tarLCASnapshot(baseSP)
 	b := m.baseLCASnapshot(tarSP)
@@ -224,9 +242,20 @@ type tableStuff struct {
 	tarSnap  *plan.Snapshot
 	baseSnap *plan.Snapshot
 
+	// tarOperand/baseOperand are the operand descriptors of design §6.1,
+	// nil in unit tests that construct tableStuff directly. Their
+	// identities drive every catalog read that targets an operand's
+	// physical owner (design §6, I6).
+	tarOperand  *branchOperand
+	baseOperand *branchOperand
+
 	lcaRel            engine.Relation
 	lcaCTS            types.TS
 	lcaHasZeroHistory bool
+	// lcaIdent is the winning owner identity lcaRel was reopened under
+	// (design §6.4). Nil when the LCA is an endpoint of a legacy
+	// local-local diff; identity accessors fall back to the session.
+	lcaIdent *branchIdentity
 
 	def struct {
 		colNames      []string     // all columns
@@ -279,6 +308,44 @@ func (t *tableStuff) resolvedSnapshots(ses *Session) (tarSP, baseSP types.TS) {
 		baseSP = types.TimestampToTS(*t.baseSnap.TS)
 	}
 	return
+}
+
+// endpointIdentities resolves the physical owner identity of each endpoint
+// (design §6.1). Descriptors carry the routed identity; a nil descriptor
+// (unit tests, pre-routing constructions) falls back to the session
+// identity, which keeps local-local behavior unchanged.
+func (t *tableStuff) endpointIdentities(ctx context.Context, ses *Session) (tarIdent, baseIdent branchIdentity) {
+	if t.tarOperand != nil {
+		tarIdent = t.tarOperand.identity()
+	} else {
+		tarIdent = localOperandIdentity(ctx, ses.GetAccountId())
+	}
+	if t.baseOperand != nil {
+		baseIdent = t.baseOperand.identity()
+	} else {
+		baseIdent = localOperandIdentity(ctx, ses.GetAccountId())
+	}
+	return
+}
+
+// resolvedLCAIdentity returns the owner identity lcaRel was resolved
+// under (design §6.4), falling back to the session identity for legacy
+// constructions that never set it.
+func (t *tableStuff) resolvedLCAIdentity(ctx context.Context, ses *Session) branchIdentity {
+	if t.lcaIdent != nil {
+		return *t.lcaIdent
+	}
+	if t.lcaRel != nil {
+		if t.tarOperand != nil && t.tarRel != nil &&
+			t.lcaRel.GetTableID(ctx) == t.tarRel.GetTableID(ctx) {
+			return t.tarOperand.identity()
+		}
+		if t.baseOperand != nil && t.baseRel != nil &&
+			t.lcaRel.GetTableID(ctx) == t.baseRel.GetTableID(ctx) {
+			return t.baseOperand.identity()
+		}
+	}
+	return localOperandIdentity(ctx, ses.GetAccountId())
 }
 
 type batchWithKind struct {

@@ -441,6 +441,20 @@ func splitAndBindCondition(astExpr tree.Expr, expandAlias ExpandAliasMode, ctx *
 		// expr must be bool type, if not, try to do type convert
 		// but just ignore the subQuery. It will be solved at optimizer.
 		if expr.GetSub() == nil && needCast {
+			// A GROUP BY can flatten a bare HAVING ENUM/SET condition into its
+			// display reference. Restore the stored ordinal/bitmap before the
+			// BOOL cast so truth follows MySQL numeric semantics. Ungrouped
+			// display wrappers and unrelated operands stay untouched for the
+			// cast-time display rewrite below.
+			if b, ok := ctx.binder.(interface {
+				mysqlSpecialBooleanPredicateOperand(context.Context, *plan.Expr) (*plan.Expr, error)
+			}); ok {
+				recovered, recoveredErr := b.mysqlSpecialBooleanPredicateOperand(ctx.binder.GetContext(), expr)
+				if recoveredErr != nil {
+					return nil, recoveredErr
+				}
+				expr = recovered
+			}
 			expr, err = makePlan2CastExpr(ctx.binder.GetContext(), expr, plan.Type{Id: int32(types.T_bool)})
 			if err != nil {
 				return nil, err
@@ -1995,7 +2009,7 @@ func constantFoldWithPreparedExactSource(
 	if !spatialChecked || !jsonFeatureChecked {
 		features, featureErr := plan.RequiredRemoteExpressionFeatures(expr)
 		if featureErr != nil || (!spatialChecked && features.SpatialDistanceSemantics) ||
-			(!jsonFeatureChecked && (features.JSONStringConsumerOverload || features.JSONOpaqueTextContracts)) {
+			(!jsonFeatureChecked && (features.JSONStringConsumerOverload || features.JSONOpaqueTextContracts && !historicalFloatDefaultFolding(proc.Ctx))) {
 			return expr, nil
 		}
 		spatialChecked, jsonFeatureChecked = true, true
@@ -2050,9 +2064,18 @@ func constantFoldWithPreparedExactSource(
 		return expr, nil
 	}
 
+	if rule.ContainsTruncatedFloatTextConversion(expr) {
+		return expr, nil
+	}
+
 	// Preserve diagnostic-bearing division subtrees through their parents;
 	// a later execution may use a different sql_mode or statement policy.
 	if rule.ContainsSqlModeDependentDivision(expr) {
+		return expr, nil
+	}
+	// Catalog proof can pre-fold independent children once while retaining
+	// session-dependent islands for a later, private witness evaluation.
+	if preserved, _ := proc.Ctx.Value(legacyFloatSessionFoldKey{}).(map[*plan.Expr]bool); preserved[expr] {
 		return expr, nil
 	}
 
@@ -2470,6 +2493,35 @@ func boundedFloatComparisonPreservesValue(columnT types.Type, expr *plan.Expr) b
 		types.NewFloat32ScaleNormalizer(columnT.Scale).Normalize(float32(value)) == float32(value)
 }
 
+// integerConstantFitsDeclaredDecimalDomain reports whether an integer
+// constant magnitude stays inside the declared domain of a DECIMAL column.
+// Converting an integer to DECIMAL(w,s) multiplies it by 10^s, and the
+// strict integer->decimal conversion rejects scaled magnitudes that reach
+// 10^w. The col-vs-const comparison rewrite replaces the constant with
+// cast(const AS DECIMAL(w,s)); that replacement is only valid while the
+// cast cannot raise the range error. A non-positive column width marks a
+// synthesized decimal type whose conversion skips the declared-range check,
+// so the rewrite remains valid there.
+func integerConstantFitsDeclaredDecimalDomain(columnT types.Type, magnitude uint64) bool {
+	if columnT.Width <= 0 {
+		return true
+	}
+	intDigits := columnT.Width - columnT.Scale
+	if intDigits < 0 {
+		intDigits = 0
+	}
+	if intDigits > 18 {
+		// Declared integer digits beyond the int64 range impose no extra
+		// constraint on a 64-bit constant.
+		return true
+	}
+	bound := uint64(1)
+	for i := int32(0); i < intDigits; i++ {
+		bound *= 10
+	}
+	return magnitude < bound
+}
+
 func checkNoNeedCast(ctx context.Context, constT, columnT types.Type, constExpr *plan.Expr) bool {
 	if columnT.Oid.IsInteger() && constT.Oid.IsDecimal() {
 		return exactDecimalIntegerFits(constExpr, columnT.Oid)
@@ -2538,11 +2590,10 @@ func checkNoNeedCast(ctx context.Context, constT, columnT types.Type, constExpr 
 		}
 
 	case types.T_int8, types.T_int16, types.T_int32, types.T_int64:
-		val, valOk := lit.Value.(*plan.Literal_I64Val)
+		constVal, valOk := literalSignedValue(lit)
 		if !valOk {
 			return false
 		}
-		constVal := val.I64Val
 		switch columnT.Oid {
 		case types.T_bit:
 			return constVal >= 0 && uint64(constVal) <= uint64(1<<columnT.Width-1)
@@ -2573,17 +2624,21 @@ func checkNoNeedCast(ctx context.Context, constT, columnT types.Type, constExpr 
 			// Use MaxInt32 as conservative limit for practical purposes
 			return constVal <= int64(math.MaxInt32) && constVal >= int64(math.MinInt32)
 		case types.T_decimal64:
-			return constVal <= int64(math.MaxInt32) && constVal >= int64(math.MinInt32)
+			magnitude := uint64(constVal)
+			if constVal < 0 {
+				magnitude = -magnitude
+			}
+			return constVal <= int64(math.MaxInt32) && constVal >= int64(math.MinInt32) &&
+				integerConstantFitsDeclaredDecimalDomain(columnT, magnitude)
 		default:
 			return false
 		}
 
 	case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
-		val_u, valOk := lit.Value.(*plan.Literal_U64Val)
+		constVal, valOk := literalUnsignedValue(lit)
 		if !valOk {
 			return false
 		}
-		constVal := val_u.U64Val
 		switch columnT.Oid {
 		case types.T_bit:
 			return constVal <= uint64(1<<columnT.Width-1)
@@ -2611,7 +2666,8 @@ func checkNoNeedCast(ctx context.Context, constT, columnT types.Type, constExpr 
 			// Use MaxUint32 as conservative limit
 			return constVal <= math.MaxUint32
 		case types.T_decimal64:
-			return constVal <= math.MaxInt32
+			return constVal <= math.MaxInt32 &&
+				integerConstantFitsDeclaredDecimalDomain(columnT, constVal)
 		default:
 			return false
 		}
@@ -2756,6 +2812,8 @@ func InitInfileParam(param *tree.ExternParam) error {
 			}
 			param.JsonData = jsondata
 			param.Format = tree.JSONLINE
+		case JSONBinaryOptionKey:
+			// Parsed and validated by initJSONBinaryOption after format resolution.
 		case ExternalWriteFilePatternKey, CSVCommentKey:
 			// write_file_pattern is write-only; comment is read at parse time. Both
 			// are kept in Option and consumed elsewhere, ignored here.
@@ -2778,7 +2836,7 @@ func InitInfileParam(param *tree.ExternParam) error {
 	if err := validateArrowContainerOption(param); err != nil {
 		return err
 	}
-	return nil
+	return initJSONBinaryOption(param)
 }
 
 func InitS3Param(param *tree.ExternParam) error {
@@ -2831,6 +2889,8 @@ func InitS3Param(param *tree.ExternParam) error {
 			}
 			param.JsonData = jsondata
 			param.Format = tree.JSONLINE
+		case JSONBinaryOptionKey:
+			// Parsed and validated by initJSONBinaryOption after format resolution.
 		case ExternalWriteFilePatternKey, CSVCommentKey:
 			// write_file_pattern is write-only; comment is read at parse time. Both
 			// are kept in Option and consumed elsewhere, ignored here.
@@ -2850,6 +2910,45 @@ func InitS3Param(param *tree.ExternParam) error {
 	if err := validateArrowContainerOption(param); err != nil {
 		return err
 	}
+	return initJSONBinaryOption(param)
+}
+
+// JSONBinaryOptionKey explicitly identifies pre-wrapper MatrixOne JSONLINE
+// archives. Bare strings are otherwise ambiguous and must remain plain text.
+const JSONBinaryOptionKey = "json_binary"
+
+const JSONBinaryLegacyBase64 = "legacy_base64"
+
+func initJSONBinaryOption(param *tree.ExternParam) error {
+	mode, format := param.JsonBinary, param.Format
+	seen := false
+	for i := 0; i+1 < len(param.Option); i += 2 {
+		switch strings.ToLower(param.Option[i]) {
+		case "format":
+			format = strings.ToLower(param.Option[i+1])
+		case "jsondata":
+			format = tree.JSONLINE
+		case JSONBinaryOptionKey:
+			if seen {
+				return moerr.NewBadConfig(param.Ctx, "duplicate json_binary option")
+			}
+			seen = true
+			mode = strings.ToLower(strings.TrimSpace(param.Option[i+1]))
+		}
+	}
+	if !seen && mode == "" {
+		return nil
+	}
+	if mode != JSONBinaryLegacyBase64 {
+		return moerr.NewBadConfigf(param.Ctx, "unsupported json_binary '%s'; use 'legacy_base64' for old MatrixOne JSONLINE archives", mode)
+	}
+	if format != tree.JSONLINE {
+		return moerr.NewBadConfig(param.Ctx, "json_binary requires format='jsonline'")
+	}
+	if _, writable := GetWriteFilePattern(param); writable {
+		return moerr.NewBadConfig(param.Ctx, "json_binary is only supported on read-only JSONLINE inputs")
+	}
+	param.JsonBinary = mode
 	return nil
 }
 
@@ -3009,6 +3108,8 @@ func InitStageS3Param(param *tree.ExternParam, s stage.StageDef) error {
 			}
 			param.JsonData = jsondata
 			param.Format = tree.JSONLINE
+		case JSONBinaryOptionKey:
+			// Parsed and validated by initJSONBinaryOption after format resolution.
 		case ExternalWriteFilePatternKey, CSVCommentKey:
 			// write_file_pattern is write-only; comment is read at parse time. Both
 			// are kept in Option and consumed elsewhere, ignored here.
@@ -3030,8 +3131,7 @@ func InitStageS3Param(param *tree.ExternParam, s stage.StageDef) error {
 		return err
 	}
 
-	return nil
-
+	return initJSONBinaryOption(param)
 }
 
 func InitInfileOrStageParam(param *tree.ExternParam, proc *process.Process) error {
@@ -3276,44 +3376,6 @@ func AssignAuxIdForExpr(expr *plan.Expr, start int32) int32 {
 
 	return vertexCnt
 }
-
-func ResetAuxIdForExpr(expr *plan.Expr) {
-	expr.AuxId = 0
-
-	if f, ok := expr.Expr.(*plan.Expr_F); ok {
-		for _, child := range f.F.Args {
-			ResetAuxIdForExpr(child)
-		}
-	}
-}
-
-// func SubstitueParam(expr *plan.Expr, proc *process.Process) *plan.Expr {
-// 	switch t := expr.Expr.(type) {
-// 	case *plan.Expr_F:
-// 		for _, arg := range t.F.Args {
-// 			SubstitueParam(arg, proc)
-// 		}
-// 	case *plan.Expr_P:
-// 		vec, _ := proc.GetPrepareParamsAt(int(t.P.Pos))
-// 		c := rule.GetConstantValue(vec, false)
-// 		ec := &plan.Expr_C{
-// 			C: c,
-// 		}
-// 		expr.Typ = &plan.Type{Id: int32(vec.GetType().Oid), Scale: vec.GetType().Scale, Width: vec.GetType().Width}
-// 		expr.Expr = ec
-// 	case *plan.Expr_V:
-// 		val, _ := proc.GetResolveVariableFunc()(t.V.Name, t.V.System, t.V.Global)
-// 		typ := types.New(types.T(expr.Typ.Id), expr.Typ.Width, expr.Typ.Scale)
-// 		vec, _ := util.GenVectorByVarValue(proc, typ, val)
-// 		c := rule.GetConstantValue(vec, false)
-// 		ec := &plan.Expr_C{
-// 			C: c,
-// 		}
-// 		expr.Typ = &plan.Type{Id: int32(vec.GetType().Oid), Scale: vec.GetType().Scale, Width: vec.GetType().Width}
-// 		expr.Expr = ec
-// 	}
-// 	return expr
-// }
 
 func ExprType2Type(typ *plan.Type) types.Type {
 	return types.MustTypeFromPlan(*typ)
@@ -4736,6 +4798,7 @@ func fillValuesOfParamsInPlanWithSpecializationSelected(
 			if err != nil {
 				return nil, false, err
 			}
+			refreshIntegerPrecisionParameters(pp.Ddl.Query, effectiveParamVals, selected)
 			return copied, specialized || numericPrefixSpecialization, nil
 		}
 
@@ -4745,6 +4808,7 @@ func fillValuesOfParamsInPlanWithSpecializationSelected(
 		if err != nil {
 			return nil, false, err
 		}
+		refreshIntegerPrecisionParameters(copied.GetQuery(), effectiveParamVals, selected)
 		return copied, specialized || runtimeDecimalPrefix, nil
 	}
 	return copied, false, nil
@@ -4935,7 +4999,18 @@ func PreparedPlanHasPercentileParams(preparePlan *Plan) bool {
 			}
 			seen[expr] = struct{}{}
 			fn := expr.GetF()
-			if fn == nil || fn.Func == nil || len(fn.Args) != 2 {
+			if fn == nil || fn.Func == nil {
+				return nil
+			}
+			if strings.EqualFold(fn.Func.ObjName, NameQuantileExactWeighted) {
+				// quantileExactWeighted keeps [value, weight, level]; only
+				// the level is value-bound configuration.
+				if len(fn.Args) == 3 {
+					found = preparedExprContainsParam(fn.Args[2])
+				}
+				return nil
+			}
+			if len(fn.Args) != 2 {
 				return nil
 			}
 			switch strings.ToLower(fn.Func.ObjName) {
@@ -6313,9 +6388,19 @@ func preparedRuntimeParamExpr(ctx context.Context, value any, isBin bool, runtim
 		return &Expr{Typ: paramType, Expr: &plan.Expr_Lit{Lit: lit}}
 	}
 	castText := func() (*Expr, error) {
+		textExpr := makePlan2StringConstExprWithType(rawText, isBin)
+		if isBin && textExpr.GetLit() != nil {
+			// A prepared runtime parameter is a string value that arrived over
+			// the binary protocol, not a parsed bit/hex literal. Rebadge the
+			// isBin container's default HEX form to the binary-introducer form
+			// so the pending cast keeps ordinary string truthiness (the same
+			// contract _binary'..' text has) instead of being folded by the
+			// bit/hex literal BOOL rule.
+			textExpr.GetLit().LiteralForm = plan.StringLiteralForm_STRING_LITERAL_BINARY_INTRODUCER
+		}
 		return makePlan2CastExpr(
 			ctx,
-			makePlan2StringConstExprWithType(rawText, isBin),
+			textExpr,
 			paramType,
 		)
 	}
@@ -8669,31 +8754,6 @@ func getConstantBytes(vec *vector.Vector, transAll bool, row uint64) (ret []byte
 
 	return
 }
-
-//func getOffsetFromUTC() string {
-//	now := time.Now()
-//	_, localOffset := now.Zone()
-//	return offsetToString(localOffset)
-//}
-//
-//func offsetToString(offset int) string {
-//	hours := offset / 3600
-//	minutes := (offset % 3600) / 60
-//	if hours < 0 {
-//		return fmt.Sprintf("-%02d:%02d", -hours, -minutes)
-//	}
-//	return fmt.Sprintf("+%02d:%02d", hours, minutes)
-//}
-
-// do not lock table if lock no rows now.
-// if need to lock table, uncomment these codes
-// func getLockTableAtTheEnd(tableDef *TableDef) bool {
-// if tableDef.Pkey.PkeyColName == catalog.FakePrimaryKeyColName || //fake pk, skip
-// 	tableDef.Partition != nil { // unsupport partition table
-// 	return false
-// }
-// return !strings.HasPrefix(tableDef.Name, catalog.IndexTableNamePrefix)
-// }
 
 // DbNameOfObjRef return subscription name of ObjectRef if exists, to avoid the mismatching of account id and db name
 func DbNameOfObjRef(objRef *ObjectRef) string {

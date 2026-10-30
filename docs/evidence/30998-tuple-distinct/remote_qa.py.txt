@@ -1,0 +1,42 @@
+from harness import *
+from multicn import Secondary
+out=root/'remote-qa';out.mkdir(exist_ok=True)
+queries=[('duplicates','SELECT COUNT(DISTINCT b,a) FROM qa30995.remote_pairs',((2500000,),)),('char','SELECT COUNT(DISTINCT c,b) FROM qa30995.remote_pairs',((2500000,),)),('grouped','SELECT g,COUNT(DISTINCT b,a) FROM qa30995.remote_pairs GROUP BY g ORDER BY g',tuple((g,625000) for g in range(4)))]
+records=[]
+with Service('candidate','remote-qa') as svc:
+ s=svc.s;s.execute('SHOW TABLES FROM qa30995 LIKE "remote_pairs"')
+ if not s.fetchall():
+  s.execute('CREATE TABLE qa30995.remote_pairs(g INT NOT NULL,a BIGINT NOT NULL,b BIGINT NOT NULL,c CHAR(32) NOT NULL)')
+  s.execute("INSERT INTO qa30995.remote_pairs SELECT a%4,a,a%7,concat(cast(a as varchar),case when k%2=0 then ' ' else '  ' end) FROM (SELECT k,k%2500000 a FROM qa30982_history_20261024.natural_unique5m) x")
+  s.execute("SELECT mo_ctl('dn','flush','qa30995.remote_pairs')");s.fetchall()
+ s.execute("SELECT table_cnt,block_number,ndv_map FROM table_stats('qa30995.remote_pairs','refresh','full') t");print('REMOTE_STATS',s.fetchall(),flush=True)
+ with Secondary(svc,'tuple') as cn2:
+  s=svc.s;s.execute('SET SESSION max_dop=4')
+  deadline=time.monotonic()+60
+  while True:
+   s.execute('EXPLAIN PHYPLAN VERBOSE '+queries[0][1]);raw='\n'.join(str(x[0]) for x in s.fetchall())
+   if '127.0.0.1:54500' in raw:break
+   assert time.monotonic()<deadline,'second CN absent';time.sleep(.1)
+  for index,c in enumerate([svc.c,cn2.c]):
+   with c.cursor() as s:
+    s.execute('SET SESSION max_dop=4')
+    for table in ['remote_pairs']:
+     s.execute("SELECT table_cnt,block_number,ndv_map FROM table_stats(%s,'refresh','full') t",('qa30995.'+table,));s.fetchall()
+    for name,sql,want in queries:
+     r=run(s,sql,want);s.execute('EXPLAIN PHYPLAN VERBOSE '+sql);raw='\n'.join(str(x[0]) for x in s.fetchall())
+     assert '127.0.0.1:54200' in raw and '127.0.0.1:54500' in raw,(name,raw)
+     assert 'shuffle(' in raw
+     (out/f'{index}-{name}-physical.txt').write_text(raw)
+     records.append({'coordinator':index,'name':name,'result':r})
+    s.execute("PREPARE tuple30995 FROM 'SELECT COUNT(DISTINCT b,a) FROM qa30995.remote_pairs'")
+    try:
+     
+     for repeat in range(2):
+      records.append({'coordinator':index,'name':'prepared-'+str(repeat),'result':run(s,'EXECUTE tuple30995',((2500000,),))})
+    finally:s.execute('DEALLOCATE PREPARE tuple30995')
+    s.execute('SET SESSION agg_spill_mem=8388608')
+    records.append({'coordinator':index,'name':'forced-spill','result':run(s,queries[0][1],queries[0][2])})
+    s.execute('EXPLAIN ANALYZE '+queries[0][1]);raw='\n'.join(str(x[0]) for x in s.fetchall());(out/f'{index}-spill-analyze.txt').write_text(raw)
+    assert re.search(r'SpillRows=[1-9][0-9]*',raw),raw
+(out/'results.json').write_text(json.dumps(records,indent=2,default=str))
+print('REMOTE_QA_PASS',len(records),flush=True)

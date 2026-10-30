@@ -7,6 +7,10 @@
 
 A comprehensive, high-level Python SDK for MatrixOne that provides SQLAlchemy-like interface for database operations, vector similarity search, fulltext search, snapshot management, PITR, restore operations, table cloning, and more.
 
+For asynchronous file/Arrow APIs, cancellation and commit outcomes, explicit
+driver-bound parameters, and optional query measurements, see
+[async analytics and execution contracts](docs/async-analytics-and-execution.md).
+
 ---
 
 ## 📚 Documentation
@@ -219,9 +223,136 @@ client.disconnect()
 - ✅ Atomic operations - all succeed or fail together
 - ✅ Automatic rollback on errors
 - ✅ Access to all MatrixOne managers (snapshots, clones, load_data, etc.)
-- ✅ Full SQLAlchemy ORM support
+- ✅ SQLAlchemy mapped models and expressions through the SDK query interface
 
-### Data Loading (Pandas-Style)
+### File exploration and Arrow analytics (optional)
+
+Install `pip install 'matrixone-python-sdk[analytics]'`. These synchronous APIs
+reuse native external tables and Arrow IPC LOAD. Arrow LOAD must be supported
+and enabled on the connected server; the SDK does not infer capability from a
+version number. The local implementation was tested on an October 2026 source
+build, not the published 4.2.5 binary.
+
+```python
+# Files must be visible to both Python (schema inference) and MatrixOne (scan).
+with client.analytics.read_parquet('/shared/orders/*.parquet') as files:
+    with files.query('SELECT region, SUM(amount) AS total FROM ' + files.sql +
+                     ' AS f GROUP BY region') as batches:
+        for batch in batches:
+            print(batch.to_pydict())
+
+# pandas, Polars, Arrow Table, RecordBatch and RecordBatchReader are accepted.
+client.analytics.upload_dataframe('features', df, staging_dir='/shared/staging')
+with client.analytics.query('SELECT * FROM features WHERE id > %s', (10,),
+                            batch_size=4096) as batches:
+    for batch in batches:
+        process(batch)
+```
+
+- `read_csv` expects a header; `read_json` reads newline-delimited JSON objects.
+  CSV/JSON inference is based on an initial Arrow block. Supply an explicit
+  supported schema when later rows may change types. CSV follows MatrixOne's
+  `\\N` null convention, including quoted values, and is not identical to
+  DuckDB's CSV defaults. Empty strings remain empty strings.
+  CSV record widths, quoting and UTF-8 are validated across the entire file in
+  bounded Arrow blocks, because the native scan can ignore extra fields. This
+  adds client I/O, including for remote CSV sources. Quoted newlines and BOM are
+  supported. JSON schema inference remains based on the initial block.
+  On PyArrow 18, JSON inference reads at most 1 MiB and discards any partial
+  trailing record; a first record larger than that block is rejected.
+- Multiple files require matching schemas unless `union_by_name=True` is set.
+  Missing columns become typed NULLs; potentially lossy integer promotions are
+  rejected. `hive_partitioning=True` adds string partition values, preserving
+  zero-padding; `__HIVE_DEFAULT_PARTITION__` becomes NULL.
+- Nanosecond timestamp/time file columns are rejected because the native scan
+  truncates them to microseconds. Rewrite the source with a checked Arrow cast
+  first; an explicit schema cannot bypass the Parquet metadata precision check.
+- Remote sources accept an explicit path list, a PyArrow `filesystem`, and
+  matching `server_paths` such as `stage://my_stage/data.parquet`. Remote glob
+  expansion and credentials configuration are outside this API.
+- File relations create uniquely named **ordinary external tables**, requiring
+  CREATE/DROP privileges in the current database. Context exit drops owned
+  objects; a client process crash can leave catalog entries. They are not
+  connection-local SQL temporary tables and require a private workspace database
+  if other users have broad table visibility. Sources can change after inference;
+  this API does not establish an immutable file snapshot.
+  Accessing `files.sql`, querying, or importing rechecks source schemas/CSV
+  records; missing sources and observed schema drift fail. Mutation between the
+  preflight and native scan remains outside snapshot guarantees. Same-schema
+  updates are live data and can change the result.
+- `files.import_into('existing_table')` appends the scan in one transaction.
+  It uses the same strict SQL mode and TN primary-key checks as Arrow upload.
+- `upload_arrow` defaults to creating a new table; `create=False` appends to an
+  existing table. It enables strict SQL mode and TN primary-key checking through
+  COMMIT, then restores session settings. Existing tables are not overwritten.
+  The staging directory must exist and be server-readable; `server_staging_dir`
+  maps a shared directory mounted under a different server path. The temporary
+  IPC file is removed after success or failure. `max_staging_bytes` bounds file
+  size, checked after each batch; it is not a hard memory quota.
+  A process killed with SIGKILL cannot run cleanup: interrupted staging files and
+  managed external tables can remain. The caller's recovery process must track
+  and reclaim its own artifacts; never delete another client's active files.
+- Scalar integer, unsigned integer, floating, string, binary, boolean, Decimal128,
+  date, time and timestamp inputs are supported. Dictionary values are decoded.
+  Decimal precision below 19 is widened to 19 for the native Decimal128 path.
+  Timestamps normalize to microseconds, timezone-aware values to UTC; precision
+  loss fails. Nested lists/structs/maps, duration inputs and untyped all-NULL
+  columns require a different mapping and are rejected. String columns use `TEXT`,
+  avoiding charset-dependent VARCHAR length ceilings.
+- Results use a PyMySQL **unbuffered cursor**, converted into Arrow batches.
+  This is not Arrow Flight or zero-copy result transport. SQL protocol metadata
+  preserves empty/all-NULL result types; supply `schema=pa.schema(...)` for an
+  exact logical contract. SQL TIME defaults to Arrow `duration('us')` so negative
+  and >24-hour values survive. `to_arrow()` materializes the remaining result;
+  iterate for bounded row batches. A large individual value can exceed the
+  usual batch memory size. Close streams before exiting a file relation.
+  Checked result casts reject fractional-to-integer conversion, inexact float
+  narrowing, sub-unit timestamp loss and timestamp-to-date information loss.
+- Queries enable strict SQL mode and use UTC for protocol timestamps. Normal
+  stream exhaustion restores both session settings and returns the connection;
+  early close or conversion failure discards it instead of draining unread rows.
+  This is resource cleanup, not an explicit server-side KILL/cancel API.
+  `network_timeout=` sets a positive read/write inactivity timeout in seconds,
+  defaulting to the client's `query_timeout`. It is not a total query deadline.
+  The synchronous Client also passes its connection/read/write timeout settings
+  to PyMySQL. Normal exhaustion restores overridden socket timeouts.
+
+Write error outcomes must be handled explicitly:
+
+```python
+from matrixone.analytics import AnalyticsCleanupError, AnalyticsCommitUnknownError
+
+try:
+    client.analytics.upload_arrow('features', data, '/shared/staging')
+except AnalyticsCommitUnknownError:
+    # The server may have committed. Reconcile using a durable application key.
+    raise
+except AnalyticsCleanupError as error:
+    # committed=True means the transaction was acknowledged before cleanup failed.
+    # Do not blindly retry: that can duplicate data.
+    print(error.committed, error.rows)
+    raise
+```
+
+Secondary rollback/session/staging cleanup failures attach to the original
+exception as `rollback_error`, `cleanup_error`, or `staging_cleanup_error`.
+The SDK does not automatically retry uncertain writes.
+
+See `examples/example_35_arrow_analytics.py` and `tests/analytics/` for runnable
+examples and real-database validation. Query parameters use DBAPI `%s` binding,
+whereas the existing `client.execute()` API has its own parameter conventions.
+
+For expanded validation, `tests/analytics/test_adversarial.py` covers seeded
+mixed data, numeric endpoints, corrupt sources, schema drift, hostile identifiers,
+concurrent writes and resource cleanup. `test_network_faults.py` uses an actual
+local MySQL packet proxy to drop COMMIT acknowledgements and stall responses.
+`test_s3_adversarial.py` tests a local S3-compatible endpoint; it is not AWS
+provider certification. `test_permissions.py` checks account/role isolation.
+`test_multi_cn.py` requires `MO_SECOND_CN_PORT` and checks cross-CN visibility
+and conflicting writes. `run_soak.py` and `run_chaos.py` are opt-in operational
+tests, restricted to an isolated test service and uniquely owned data.
+
+### Loading into pre-created tables
 
 Load bulk data from files with pandas-compatible API:
 
@@ -537,11 +668,9 @@ async def main():
         await session.execute(insert(User).values(name='Alice', age=30))
         await session.execute(update(User).where(User.age < 18).values(status='minor'))
         
-        # Concurrent queries
-        user_result, order_result = await asyncio.gather(
-            session.execute(select(User)),
-            session.execute(select(Order))
-        )
+        # Operations in one session are sequential and share this transaction.
+        user_result = await session.execute(select(User))
+        order_result = await session.execute(select(Order))
         # Commits automatically
     
     await client.disconnect()
@@ -551,7 +680,7 @@ asyncio.run(main())
 
 **Async advantages:**
 - ✅ Non-blocking operations
-- ✅ Concurrent execution with `asyncio.gather()`
+- ✅ Run independent parallel operations with separate sessions
 - ✅ Perfect for web frameworks (FastAPI, aiohttp)
 
 ### Snapshot Management

@@ -33,7 +33,7 @@ requires-python = ">=3.8"
 dependencies = [
     "PyMySQL>=1.0.0",
     "aiomysql>=0.2.0",
-    "SQLAlchemy[asyncio]>=1.4.0,<3.0.0",
+    "SQLAlchemy[asyncio]>=1.4.24,<3.0.0",
     "typing-extensions>=4.0.0",
     "python-dateutil>=2.8.0",
     "numpy>=1.20.0",
@@ -41,11 +41,22 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+core-test = [
+    "pytest>=6.0", "pytest-asyncio>=0.18.0", "pytest-cov>=3.0",
+    "pytest-subtests", "aiosqlite>=0.20", "Faker>=10.0.0", "hypothesis>=6.0",
+]
+
+analytics = [
+    "pyarrow>=18.0.0",
+    "numpy>=2.0.0",
+]
 dev = [
     "pytest>=6.0",
     "pytest-asyncio>=0.18.0",
     "aiosqlite>=0.20",
     "pytest-cov>=3.0",
+    "pytest-subtests",
+    "hypothesis>=6.0",
     "Faker>=10.0.0",
     "pyarrow>=10.0.0",
     "black>=22.0",
@@ -69,6 +80,8 @@ test = [
     "pytest-asyncio>=0.18.0",
     "aiosqlite>=0.20",
     "pytest-cov>=3.0",
+    "pytest-subtests",
+    "hypothesis>=6.0",
     "Faker>=10.0.0",
     "pyarrow>=10.0.0",
 ]
@@ -174,38 +187,6 @@ module = [
 ignore_missing_imports = true
 
 # Pytest 配置
-[tool.pytest.ini_options]
-minversion = "6.0"
-addopts = [
-    "-ra",
-    "-q",
-    "--strict-markers",
-    "--strict-config",
-    "--cov=matrixone",
-    "--cov-report=term-missing",
-    "--cov-report=html",
-    "--cov-report=xml",
-    "--cov-fail-under=80"
-]
-testpaths = ["tests"]
-python_files = ["test_*.py", "*_test.py"]
-python_classes = ["Test*"]
-python_functions = ["test_*"]
-markers = [
-    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
-    "integration: marks tests as integration tests",
-    "unit: marks tests as unit tests",
-    "online: marks tests that require database connection",
-    "offline: marks tests that use mocks",
-]
-filterwarnings = [
-    "ignore::DeprecationWarning",
-    "ignore::PendingDeprecationWarning",
-    "ignore::UserWarning:pymysql",
-    "ignore::UserWarning:sqlalchemy",
-]
-
-# Coverage 配置
 [tool.coverage.run]
 source = ["matrixone"]
 omit = [
@@ -235,36 +216,5 @@ exclude_lines = [
 [tool.coverage.html]
 directory = "htmlcov"
 
-# Tox 配置
-[tool.tox]
-legacy_tox_ini = """
-[tox]
-envlist =
-    py38-sqlalchemy14,
-    py38-sqlalchemy20,
-    py39-sqlalchemy14,
-    py39-sqlalchemy20,
-    py310-sqlalchemy14,
-    py310-sqlalchemy20,
-    py311-sqlalchemy14,
-    py311-sqlalchemy20,
-    py312-sqlalchemy14,
-    py312-sqlalchemy20
-
-[testenv]
-extras = test
-deps =
-    sqlalchemy14: SQLAlchemy>=1.4.0,<2.0.0
-    sqlalchemy20: SQLAlchemy>=2.0.0,<3.0.0
-    pytest>=6.0
-    pytest-asyncio>=0.18.0
-    pytest-cov>=3.0
-    PyMySQL>=1.0.0
-    aiomysql>=0.1.0
-    typing-extensions>=4.0.0
-    python-dateutil>=2.8.0
-
-commands =
-    pytest tests/offline/ -v --tb=short
-    pytest tests/online/ -v --tb=short --maxfail=3
-"""
+[tool.setuptools.packages.find]
+include = ["matrixone*"]

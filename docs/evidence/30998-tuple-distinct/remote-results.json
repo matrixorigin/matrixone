@@ -1,0 +1,172 @@
+[
+  {
+    "coordinator": 0,
+    "name": "duplicates",
+    "result": {
+      "rows": [
+        [
+          2500000
+        ]
+      ],
+      "seconds": 0.492294707801193
+    }
+  },
+  {
+    "coordinator": 0,
+    "name": "char",
+    "result": {
+      "rows": [
+        [
+          2500000
+        ]
+      ],
+      "seconds": 0.6978917089290917
+    }
+  },
+  {
+    "coordinator": 0,
+    "name": "grouped",
+    "result": {
+      "rows": [
+        [
+          0,
+          625000
+        ],
+        [
+          1,
+          625000
+        ],
+        [
+          2,
+          625000
+        ],
+        [
+          3,
+          625000
+        ]
+      ],
+      "seconds": 0.4793395409360528
+    }
+  },
+  {
+    "coordinator": 0,
+    "name": "prepared-0",
+    "result": {
+      "rows": [
+        [
+          2500000
+        ]
+      ],
+      "seconds": 0.4126694155856967
+    }
+  },
+  {
+    "coordinator": 0,
+    "name": "prepared-1",
+    "result": {
+      "rows": [
+        [
+          2500000
+        ]
+      ],
+      "seconds": 0.5095149581320584
+    }
+  },
+  {
+    "coordinator": 0,
+    "name": "forced-spill",
+    "result": {
+      "rows": [
+        [
+          2500000
+        ]
+      ],
+      "seconds": 1.2195608341135085
+    }
+  },
+  {
+    "coordinator": 1,
+    "name": "duplicates",
+    "result": {
+      "rows": [
+        [
+          2500000
+        ]
+      ],
+      "seconds": 0.4742952920496464
+    }
+  },
+  {
+    "coordinator": 1,
+    "name": "char",
+    "result": {
+      "rows": [
+        [
+          2500000
+        ]
+      ],
+      "seconds": 0.8267748751677573
+    }
+  },
+  {
+    "coordinator": 1,
+    "name": "grouped",
+    "result": {
+      "rows": [
+        [
+          0,
+          625000
+        ],
+        [
+          1,
+          625000
+        ],
+        [
+          2,
+          625000
+        ],
+        [
+          3,
+          625000
+        ]
+      ],
+      "seconds": 0.514954041223973
+    }
+  },
+  {
+    "coordinator": 1,
+    "name": "prepared-0",
+    "result": {
+      "rows": [
+        [
+          2500000
+        ]
+      ],
+      "seconds": 0.47881295904517174
+    }
+  },
+  {
+    "coordinator": 1,
+    "name": "prepared-1",
+    "result": {
+      "rows": [
+        [
+          2500000
+        ]
+      ],
+      "seconds": 0.46162241604179144
+    }
+  },
+  {
+    "coordinator": 1,
+    "name": "forced-spill",
+    "result": {
+      "rows": [
+        [
+          2500000
+        ]
+      ],
+      "seconds": 0.9036469999700785
+    }
+  }
+]

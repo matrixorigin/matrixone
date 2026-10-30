@@ -281,6 +281,13 @@ ifneq ($(ARCHSIMD_ARCH),)
   endif
 endif
 
+# Keep unchanged amd64 hot loops at the same cache-line offset when other Go
+# functions change size. Other architectures retain their existing alignment.
+MO_GO_FUNCTION_ALIGNMENT_FLAG :=
+ifeq ($(ARCHSIMD_ARCH),amd64)
+  MO_GO_FUNCTION_ALIGNMENT_FLAG := -funcalign=64
+endif
+
 ifeq ($(MO_CL_CUDA),1)
 	include $(ROOT_DIR)/cgo/gpu-toolchain.mk
 	CUDA_CFLAGS := $(MO_GPU_CFLAGS)
@@ -328,10 +335,10 @@ endif
 endif
 
 CGO_OPTS :=$(SIRIUS_CGO_ENV) CGO_CFLAGS="-I$(CGO_DIR) -I$(THIRDPARTIES_INSTALL_DIR)/include $(CUDA_CFLAGS) $(SIRIUS_CFLAGS)"
-GOLDFLAGS=-ldflags="$(SIRIUS_EXTLD) -extldflags '$(CUDA_LDFLAGS) -L$(CGO_DIR) -lmo -L$(THIRDPARTIES_INSTALL_DIR)/lib $(SIRIUS_LDFLAGS) -Wl,-rpath,\$${ORIGIN}/lib -fopenmp' $(VERSION_INFO)"
+GOLDFLAGS=-ldflags="$(MO_GO_FUNCTION_ALIGNMENT_FLAG) $(SIRIUS_EXTLD) -extldflags '$(CUDA_LDFLAGS) -L$(CGO_DIR) -lmo -L$(THIRDPARTIES_INSTALL_DIR)/lib $(SIRIUS_LDFLAGS) -Wl,-rpath,\$${ORIGIN}/lib -fopenmp' $(VERSION_INFO)"
 
 ifeq ("$(UNAME_S)","darwin")
-GOLDFLAGS:=-ldflags="-extldflags '-L$(CGO_DIR) -lmo -L$(THIRDPARTIES_INSTALL_DIR)/lib -Wl,-rpath,@executable_path/lib' $(VERSION_INFO)"
+GOLDFLAGS:=-ldflags="$(MO_GO_FUNCTION_ALIGNMENT_FLAG) -extldflags '-L$(CGO_DIR) -lmo -L$(THIRDPARTIES_INSTALL_DIR)/lib -Wl,-rpath,@executable_path/lib' $(VERSION_INFO)"
 endif
 
 # Keep all mo-service build variants on one compiler/feature contract. Targets
@@ -500,7 +507,7 @@ musl-thirdparties: musl-install
 	
 .PHONY: musl
 musl: override CGO_OPTS += CC=$(MUSL_CC)
-musl: override GOLDFLAGS:=-ldflags="--linkmode 'external' --extldflags '-static -L$(THIRDPARTIES_INSTALL_DIR)/lib -lstdc++ -Wl,-rpath,\$${ORIGIN}/lib' $(VERSION_INFO)"
+musl: override GOLDFLAGS:=-ldflags="$(MO_GO_FUNCTION_ALIGNMENT_FLAG) --linkmode 'external' --extldflags '-static -L$(THIRDPARTIES_INSTALL_DIR)/lib -lstdc++ -Wl,-rpath,\$${ORIGIN}/lib' $(VERSION_INFO)"
 musl: override TAGS := -tags musl
 musl: musl-install musl-cgo config musl-thirdparties jieba-dict
 musl:
@@ -625,9 +632,11 @@ UT_PREBUILD_EMBEDDED ?= $(if $(filter 8:2 8:3 8:4,$(UT_ISSUES_BATCHES):$(UT_ISSU
 # Reuse released engine slots for plan while resource-heavy work finishes.
 # The heavy process budget is unchanged; set 0 for a sequential A/B baseline.
 UT_OVERLAP_PLAN ?= 1
-# Keep plan race execution serial by default until a representative same-inventory
-# run validates the combined timing and memory impact. Set 2 for controlled runs.
-PLAN_RACE_PARALLEL ?= 1
+# Two independent plan processes shorten the long planner tail within the
+# existing heavy-wave budget. Limit the default to the measured Linux 8-task
+# runner; other budgets, a one-slot heavy cap, and a single requested shard
+# stay serial. An explicit PLAN_RACE_PARALLEL remains an override.
+PLAN_RACE_PARALLEL ?= $(if $(filter 1,$(HEAVY_RACE_PARALLEL) $(PLAN_RACE_SHARDS)),1,$(if $(and $(filter linux,$(UNAME_S)),$(filter 8,$(UT_PARALLEL))),2,1))
 # The table-dump plan cases marked independent may run three at a time inside
 # each fresh plan race process. Keep 1 or 2 as explicit rollbacks for
 # constrained or diagnostic runs.
@@ -1538,14 +1547,31 @@ fmt:
 .PHONY: install-static-check-tools
 install-static-check-tools:
 	@GOBIN="$(GOPATH)/bin" go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.14.0
-	@go install github.com/matrixorigin/linter/cmd/molint@v0.0.0-20260602145143-222a0b8adf07
+	@go install github.com/matrixorigin/linter/cmd/molint@v0.0.0-20261028130237-35bd4d9a4055
 	@go install github.com/apache/skywalking-eyes/cmd/license-eye@v0.4.0
+
+FRONTEND_MOCKGEN = $(CGO_OPTS) CGO_LDFLAGS="-L$(THIRDPARTIES_INSTALL_DIR)/lib -L$(CGO_DIR) -Wl,-rpath,$(CGO_DIR) -Wl,-rpath,$(THIRDPARTIES_INSTALL_DIR)/lib" GOWORK=off $(GOPATH)/bin/mockgen -build_flags="$(GO_MODULE_MODE)"
+
+.PHONY: generate-frontend-mocks
+# Reflection mode selects the interfaces actually used by these shared mocks.
+generate-frontend-mocks: cgo
+	@if [ "$$($(GOPATH)/bin/mockgen -version 2>/dev/null)" != v1.6.0 ]; then \
+		GOBIN="$(GOPATH)/bin" go install github.com/golang/mock/mockgen@v1.6.0; \
+	fi
+	$(FRONTEND_MOCKGEN) -destination pkg/frontend/test/engine_mock.go -package mock_frontend github.com/matrixorigin/matrixone/pkg/vm/engine ChangesHandle,Relation,Reader,Database,Engine
+	$(FRONTEND_MOCKGEN) -destination pkg/frontend/test/txn_mock.go -package mock_frontend github.com/matrixorigin/matrixone/pkg/txn/client TxnClient,TxnOperator,Workspace
+	$(FRONTEND_MOCKGEN) -destination pkg/frontend/test/types_mock.go -package mock_frontend github.com/matrixorigin/matrixone/pkg/frontend ComputationRunner,ComputationWrapper,ExecResult,BackgroundExec
+	$(FRONTEND_MOCKGEN) -destination pkg/frontend/test/incrservice_mock.go -package mock_frontend github.com/matrixorigin/matrixone/pkg/incrservice AutoIncrementService
+	$(FRONTEND_MOCKGEN) -destination pkg/frontend/test/mock_lock/types.go -package mock_lock github.com/matrixorigin/matrixone/pkg/lockservice LockService
+	$(FRONTEND_MOCKGEN) -destination pkg/frontend/test/mock_moserver/server_mock.go -package mock_moserver github.com/matrixorigin/matrixone/pkg/frontend Server
+	$(FRONTEND_MOCKGEN) -destination pkg/frontend/test/mock_shard/types.go -package mock_shard github.com/matrixorigin/matrixone/pkg/shardservice ShardService
+	$(FRONTEND_MOCKGEN) -destination pkg/frontend/test/mock_task/types.go -package mock_task github.com/matrixorigin/matrixone/pkg/taskservice TaskRunner
 
 .PHONY: static-check static-check-analysis static-check-golangci
 GOLANGCI_LINT_CONCURRENCY ?=
 GOLANGCI_LINT_CONCURRENCY_FLAG := $(if $(strip $(GOLANGCI_LINT_CONCURRENCY)),--concurrency $(strip $(GOLANGCI_LINT_CONCURRENCY)))
 STATIC_CHECK_PACKAGES ?= ./...
-STATIC_CHECK_MOLINT = $(CGO_OPTS) go vet $(GO_MODULE_MODE) -vettool=`which molint` $(STATIC_CHECK_PACKAGES)
+STATIC_CHECK_MOLINT = $(CGO_OPTS) molint check $(GO_MODULE_MODE) $(STATIC_CHECK_PACKAGES)
 STATIC_CHECK_GOLANGCI = $(CGO_OPTS) golangci-lint run -v $(GOLANGCI_LINT_CONCURRENCY_FLAG) -c .golangci.yml $(STATIC_CHECK_PACKAGES)
 static-check: override STATIC_CHECK_PACKAGES = ./...
 static-check: config err-check
@@ -1555,13 +1581,18 @@ static-check: config err-check
 	$(STATIC_CHECK_GOLANGCI)
 
 # PR CI selects complete affected packages using the verified Go test/import
-# graph. Local use (including hosts without Node) retains the full checks.
+# graph. Local use and CI hosts without Node retain the full checks.
 # Both analyzers consume the same package list and their failures stay fatal.
 static-check-analysis: err-check
 	@set -e; packages='./...'; \
 	if [ "$${GITHUB_ACTIONS:-}" = true ] && command -v node >/dev/null 2>&1; then \
 		packages=$$($(CGO_OPTS) node .github/ci/static-analysis.cjs); \
 	else \
+		if [ "$${GITHUB_ACTIONS:-}" = true ]; then \
+			echo "SCA selection: full graph (Node unavailable on PATH in CI)" >&2; \
+		else \
+			echo "SCA selection: full graph (local invocation)" >&2; \
+		fi; \
 		$(MAKE) --no-print-directory config; \
 	fi; \
 	$(MAKE) --no-print-directory static-check-selected STATIC_CHECK_PACKAGES="$$packages"

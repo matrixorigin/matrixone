@@ -9,12 +9,12 @@ This module provides enhanced JSON type that supports:
 
 import json
 
-from sqlalchemy import cast, String, Integer, Float, Numeric
+from sqlalchemy import cast, String
 from sqlalchemy.types import TypeDecorator
 from sqlalchemy.dialects.mysql import JSON as MySQLJSON
 from sqlalchemy.sql.expression import ColumnElement
 
-from .json_functions import json_extract, json_extract_string, json_extract_float64
+from .json_functions import json_extract, json_extract_string
 
 
 class JSONPathElement(ColumnElement):
@@ -71,49 +71,47 @@ class JSONPathElement(ColumnElement):
         """
         Convert JSON boolean value to SQL boolean.
 
-        Handles both JSON true/false representations.
+        True only for a JSON boolean true, including nullable paths. A JSON
+        string containing "true" is a different value.
 
         Example:
             # Returns: True/False as boolean comparison
             Product.specs['active'].asbool
 
-            # SQL: json_extract(specs, '$."active"') = 'true'
+            # JSON string and boolean domains are checked separately.
         """
-        # Simply check if value equals 'true'
-        extracted = json_extract(self.column, self._current_path)
-        return extracted == 'true'
+        from sqlalchemy import and_, func
+
+        # A JSON string "true" is not a JSON boolean. Test its string domain
+        # separately rather than relying on JSON/string comparison coercion.
+        string = json_extract_string(self.column, self._current_path)
+        serialized = cast(json_extract(self.column, self._current_path), String)
+        return and_(string.is_(None), func.nullif(serialized, 'null') == 'true')
 
     def cast(self, type_):
         """
         Cast extracted JSON value to specific SQL type.
 
-        MatrixOne Note: Direct CAST on JSON values fails, so we use:
-        - json_extract_float64 for numeric types
-        - json_extract_string for string types
-        - Regular cast for other types (may fail)
+        Extract exact scalar text before applying the requested SQL type.
+        Numeric values never pass through float64, preserving large integers
+        and decimal digits. JSON null and missing paths become SQL NULL.
 
         Example:
-            Product.specs['price'].cast(Numeric)   # Uses json_extract_float64
-            Product.specs['count'].cast(Integer)   # Uses json_extract_float64
-            Product.specs['name'].cast(String)     # Uses json_extract_string
+            Product.specs['price'].cast(Numeric(30, 6))
+            Product.specs['count'].cast(Integer)
+            Product.specs['name'].cast(String(20))
         """
-        # Check if type is numeric
-        if isinstance(type_, type) and issubclass(type_, (Integer, Float, Numeric)):
-            # Use json_extract_float64 for numeric types
-            return json_extract_float64(self.column, self._current_path)
-        elif type_.__class__.__name__ in ('Integer', 'Float', 'Numeric', 'DECIMAL'):
-            # Handle type instances
-            return json_extract_float64(self.column, self._current_path)
-        elif isinstance(type_, type) and issubclass(type_, String):
-            # Use json_extract_string for string types
-            return json_extract_string(self.column, self._current_path)
-        elif type_.__class__.__name__ in ('String', 'VARCHAR', 'TEXT'):
-            # Handle type instances
-            return json_extract_string(self.column, self._current_path)
-        else:
-            # For other types, try regular cast (may fail in MatrixOne)
-            extracted = json_extract(self.column, self._current_path)
-            return cast(extracted, type_)
+        return cast(self._scalar_text(), type_)
+
+    def _scalar_text(self):
+        # JSON-to-numeric casts are not generally supported by MatrixOne.
+        # Serialize first, preserving exact integer/decimal digits; JSON null
+        # becomes SQL NULL while the JSON string "null" retains its quotes.
+        from sqlalchemy import func
+
+        string = json_extract_string(self.column, self._current_path)
+        serialized = cast(json_extract(self.column, self._current_path), String)
+        return func.coalesce(string, func.nullif(serialized, 'null'))
 
     def __eq__(self, other):
         """Support equality comparison with smart quote handling."""
@@ -127,7 +125,7 @@ class JSONPathElement(ColumnElement):
                 other_value = other
             else:
                 # Add quotes for regular strings
-                other_value = f'"{other}"'
+                other_value = json.dumps(other, ensure_ascii=False)
         elif isinstance(other, bool):
             # Convert Python bool to JSON boolean string
             other_value = 'true' if other else 'false'
@@ -146,7 +144,7 @@ class JSONPathElement(ColumnElement):
             if other in ('true', 'false', 'null') or other.startswith('"'):
                 other_value = other
             else:
-                other_value = f'"{other}"'
+                other_value = json.dumps(other, ensure_ascii=False)
         elif isinstance(other, bool):
             other_value = 'true' if other else 'false'
         else:

@@ -119,6 +119,24 @@ const (
                   	table_id in (%v)
 			  	order by table_id asc;`
 
+	// Keep the live catalog as the driving relation: statistics for dropped
+	// tables are removed asynchronously. Truncate each table's size before
+	// summing, as SHOW ACCOUNTS did in Go. Integer SUM is exact; the modulo
+	// preserves uint64 addition even when an account's total overflows.
+	getAccountTableSizesSQL = `
+				select
+					m.account_id,
+					cast(sum(cast(floor(coalesce(json_extract_float64(s.table_stats, '$.table_size'), 0))
+						as unsigned)) %% 18446744073709551616 as unsigned),
+					count(*)
+				from %s.%s as m
+				left join %s.%s as s
+					on m.account_id = s.account_id
+					and m.reldatabase_id = s.database_id
+					and m.rel_id = s.table_id
+				where m.account_id in (%s)
+				group by m.account_id;`
+
 	getDeleteFromStatsSQL = `
 				delete from
 				    %s.%s
@@ -1366,6 +1384,102 @@ func (d *dynamicCtx) QueryTableStatsByAccounts(
 	return statsVals, retAcc, ok, err
 }
 
+// QueryAccountTableSizes returns one size per account with live catalog tables.
+// Accounts without tables are absent, so callers can retain their TN fallback.
+// The normal path never materializes table IDs or per-table statistics in Go.
+func (d *dynamicCtx) QueryAccountTableSizes(
+	ctx context.Context, accs []uint64, forceUpdate bool,
+) (sizes map[uint64]uint64, ok bool, err error) {
+	if err = ctx.Err(); err != nil {
+		return nil, false, err
+	}
+	if len(accs) == 0 {
+		return nil, false, nil
+	}
+	d.RLock()
+	useOld := d.conf.StatsUsingOldImpl
+	forceUpdate = forceUpdate || d.conf.ForceUpdate
+	d.RUnlock()
+	if useOld {
+		return nil, false, nil
+	}
+
+	now := time.Now()
+	var tableCount int
+	defer func() {
+		logutil.Info(logHeader,
+			zap.String("action", "query.account.table.sizes"),
+			zap.Int("account-count", len(accs)),
+			zap.Int("table-count", tableCount),
+			zap.Bool("force-update", forceUpdate),
+			zap.Duration("takes", time.Since(now)),
+			zap.Bool("ok", ok),
+			zap.Error(err))
+	}()
+
+	accStr, release := intsJoin(accs, ",")
+	defer release()
+	if forceUpdate {
+		var tableAccounts []uint64
+		resolve := func() ([]uint64, []uint64, []uint64, error) {
+			sql := fmt.Sprintf(accumulateIdsByAccSQL, catalog.MO_CATALOG, catalog.MO_TABLES, accStr)
+			ret := d.executeSQL(ctx, sql, "query table sizes by account")
+			if err := ret.Error(); err != nil {
+				return nil, nil, nil, err
+			}
+			accounts, databases, tables, err := decodeIdsFromMOTablesSqlRet(ctx, ret)
+			tableAccounts = accounts
+			return accounts, databases, tables, err
+		}
+		var vals [][]any
+		// Reuse the admitted policy, including when configuration changes
+		// while the catalog query is executing.
+		vals, ok, tableCount, err = d.queryTableStatsWithPolicy(
+			ctx, []int{TableStatsTableSize}, resolve, true, false)
+		if err != nil || !ok {
+			return nil, ok, err
+		}
+		sizes = make(map[uint64]uint64)
+		for i, account := range tableAccounts {
+			sizes[account] += uint64(vals[0][i].(float64))
+		}
+		return sizes, true, nil
+	}
+
+	defer func() {
+		v2.MoTableSizeRowsNormalDurationHistogram.Observe(time.Since(now).Seconds())
+		v2.MoTableSizeRowsNormalCountingHistogram.Observe(float64(tableCount))
+	}()
+	sql := fmt.Sprintf(getAccountTableSizesSQL,
+		catalog.MO_CATALOG, catalog.MO_TABLES, catalog.MO_CATALOG, catalog.MO_TABLE_STATS, accStr)
+	ret := d.executeSQL(ctx, sql, "query account table sizes")
+	if err = ret.Error(); err != nil {
+		return nil, false, err
+	}
+	if err = ctx.Err(); err != nil {
+		return nil, false, err
+	}
+	sizes = make(map[uint64]uint64, ret.RowCount())
+	for i := range ret.RowCount() {
+		if err = ctx.Err(); err != nil {
+			return nil, false, err
+		}
+		var account, size, count uint64
+		if account, err = ret.GetUint64(ctx, i, 0); err != nil {
+			return nil, false, err
+		}
+		if size, err = ret.GetUint64(ctx, i, 1); err != nil {
+			return nil, false, err
+		}
+		if count, err = ret.GetUint64(ctx, i, 2); err != nil {
+			return nil, false, err
+		}
+		sizes[account] = size
+		tableCount += int(count)
+	}
+	return sizes, true, nil
+}
+
 func (d *dynamicCtx) QueryTableStatsByDatabase(
 	ctx context.Context,
 	wantedStatsIdxes []int,
@@ -1468,7 +1582,16 @@ func (d *dynamicCtx) queryTableStats(
 	if useOld {
 		return
 	}
+	return d.queryTableStatsWithPolicy(ctx, wantedStatsIdxes, resolve, forceUpdate, resetUpdateTime)
+}
 
+// queryTableStatsWithPolicy executes a query whose owner policy was already
+// captured at admission. In particular, metadata resolution must not cause a
+// second policy read to reinterpret in-flight work.
+func (d *dynamicCtx) queryTableStatsWithPolicy(
+	ctx context.Context, wantedStatsIdxes []int,
+	resolve function.MoTableStatsResolver, forceUpdate, resetUpdateTime bool,
+) (statsVals [][]any, ok bool, tableCount int, err error) {
 	accs, dbs, tbls, err := resolve()
 	if err != nil {
 		return nil, true, 0, err
@@ -1729,6 +1852,24 @@ func (d *dynamicCtx) cleanTableStock() {
 	d.tableStock.tbls = d.tableStock.tbls[:0]
 }
 
+// snapshotTableStock returns the pending table pairs as a copy that is
+// detached from d.tableStock.tbls's backing array. The collector's round hands
+// the copy to alphaTask: its ants workers write tablePair elements without
+// holding d.Lock, so they must never share memory with the collector's stock,
+// which getChangedTableList appends to and cleanTableStock rewrites under the
+// same lock while a second tableStatsExecutor round can already be running.
+// The copy cost is bounded by one stock length per round and is dominated by
+// the per-table work the round performs anyway.
+func (d *dynamicCtx) snapshotTableStock() []tablePair {
+	d.Lock()
+	defer d.Unlock()
+
+	tbls := make([]tablePair, len(d.tableStock.tbls))
+	copy(tbls, d.tableStock.tbls)
+
+	return tbls
+}
+
 func (d *dynamicCtx) tableStatsExecutor(
 	ctx context.Context,
 	service string,
@@ -1774,14 +1915,8 @@ func (d *dynamicCtx) tableStatsExecutor(
 				return err
 			}
 
-			d.Lock()
-			tbls := d.tableStock.tbls[:]
-			d.Unlock()
-
-			if timeout, err = d.alphaTask(
+			if timeout, err = d.runStatsCollectionRound(
 				newCtx, service,
-				tbls,
-				"main routine",
 			); err != nil {
 				logutil.Info(logHeader,
 					zap.String("source", "table stats top executor"),
@@ -1807,6 +1942,22 @@ func (d *dynamicCtx) tableStatsExecutor(
 			d.cleanTableStock()
 		}
 	}
+}
+
+// runStatsCollectionRound hands the stock collected by prepare to one alpha
+// collection round. It is the per-tick handoff tableStatsExecutor performs;
+// the statistics regression exercises this same production function so that
+// the ownership of the handed-over memory is proven on the path the executor
+// uses, not a test copy of it. alphaTask's ants workers write the given
+// tablePair elements without d.Lock, so the stock is passed as a detached
+// snapshot: any aliasing here races a concurrent tableStatsExecutor round's
+// getChangedTableList append and cleanTableStock rewrite on the shared
+// backing array, which is the data race reported in issue #27702.
+func (d *dynamicCtx) runStatsCollectionRound(
+	ctx context.Context,
+	service string,
+) (timeout bool, err error) {
+	return d.alphaTask(ctx, service, d.snapshotTableStock(), "main routine")
 }
 
 func (d *dynamicCtx) prepare(
@@ -1895,6 +2046,11 @@ func (d *dynamicCtx) callAlphaWithRetry(
 	return nil
 }
 
+// alphaTask collects the statistics of the given pairs through pool workers.
+// tbls must be exclusive to this invocation: the submitted workers write the
+// tablePair elements they own (pState, errChan) without d.Lock, and this call
+// itself rewrites and reslices tbls as batches advance, so no other goroutine
+// may read or write the referenced memory while alphaTask runs.
 func (d *dynamicCtx) alphaTask(
 	ctx context.Context,
 	service string,

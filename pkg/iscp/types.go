@@ -116,10 +116,10 @@ const (
 	JobStage_Running
 )
 
-// atomicInitLifecycleVersion marks job generations handled with the invariant
-// that InitSQL effects and the Init -> Running status transition share one
-// transaction. An absent/zero value means that invariant cannot be proven after
-// a restart; this includes legacy rows and fresh jobs not yet handled durably.
+// atomicInitLifecycleVersion marks generations whose InitSQL effects and
+// Init -> Running transition share one transaction. Persist it at registration,
+// before an executor can recover the fresh row. An absent/zero value cannot
+// establish that guarantee for an existing Init row.
 const atomicInitLifecycleVersion uint64 = 1
 
 type JobStatus struct {
@@ -135,20 +135,11 @@ type JobStatus struct {
 	ErrorMsg         string
 }
 
-type InitWatermark struct {
-	AccountID uint32
-	TableID   uint64
-	JobName   string
-	JobID     uint64
-	Watermark types.TS
-}
-
 // Intra-System Change Propagation Task Executor
 // iscp executor manages iterations, updates watermarks, and updates the iscp table.
 type ISCPTaskExecutor struct {
 	tables      *btree.BTreeG[*TableEntry]
 	tableMu     sync.RWMutex
-	packer      *types.Packer
 	mp          *mpool.MPool
 	cnUUID      string
 	txnEngine   engine.Engine
@@ -406,22 +397,6 @@ func (bat *AtomicBatch) GetRowIterator() RowIterator {
 		iter: bat.Rows.Iter(),
 	}
 }
-
-//func (bat *AtomicBatch) DebugString(tableDef *plan.TableDef, isDelete bool) string {
-//	ctx := context.Background()
-//	keys := make([]string, 0, bat.Rows.Len())
-//	iter := bat.Rows.Iter()
-//	defer iter.Release()
-//	for iter.Next() {
-//		row := iter.Item()
-//		s, err := getRowPkAndTsFromBat(ctx, row.Src, tableDef, isDelete, row.Offset)
-//		if err != nil {
-//			return ""
-//		}
-//		keys = append(keys, s)
-//	}
-//	return fmt.Sprintf("count=%d, key=%v", bat.Rows.Len(), keys)
-//}
 
 var _ RowIterator = new(atomicBatchRowIter)
 

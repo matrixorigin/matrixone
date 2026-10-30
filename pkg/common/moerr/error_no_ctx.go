@@ -25,10 +25,6 @@ func NewInfoNoCtx(msg string) *Error {
 	return newError(Context(), ErrInfo, msg)
 }
 
-func NewBadS3ConfigNoCtx(msg string) *Error {
-	return newError(Context(), ErrBadS3Config, msg)
-}
-
 func NewInternalErrorNoCtxf(format string, args ...any) *Error {
 	return newError(Context(), ErrInternal, fmt.Sprintf(format, args...))
 }
@@ -77,8 +73,8 @@ func NewOutOfRangeNoCtx(typ string, msg string) *Error {
 	return newError(Context(), ErrOutOfRange, typ, msg)
 }
 
-func NewDataTruncatedNoCtxf(typ string, format string, args ...any) *Error {
-	return newError(Context(), ErrDataTruncated, typ, fmt.Sprintf(format, args...))
+func NewOutOfRangeValueForColumnNoCtx(column string, row uint64) *Error {
+	return newError(Context(), ErrOutOfRangeValueForColumn, column, row)
 }
 
 func NewDataTruncatedNoCtx(typ string, msg string) *Error {
@@ -143,10 +139,6 @@ func NewSyntaxErrorNoCtx(msg string) *Error {
 	return newError(Context(), ErrSyntaxError, msg)
 }
 
-func NewParseErrorNoCtxf(format string, args ...any) *Error {
-	return newError(Context(), ErrParseError, fmt.Sprintf(format, args...))
-}
-
 func NewParseErrorNoCtx(msg string) *Error {
 	return newError(Context(), ErrParseError, msg)
 }
@@ -169,14 +161,6 @@ func NewFileNotFoundNoCtx(f string) *Error {
 
 func NewFileAlreadyExistsNoCtx(f string) *Error {
 	return newError(Context(), ErrFileAlreadyExists, f)
-}
-
-func NewDBAlreadyExistsNoCtx(db string) *Error {
-	return newError(Context(), ErrDBAlreadyExists, db)
-}
-
-func NewTableAlreadyExistsNoCtx(t string) *Error {
-	return newError(Context(), ErrTableAlreadyExists, t)
 }
 
 func NewUnexpectedEOFNoCtx(f string) *Error {
@@ -296,12 +280,19 @@ func NewTxnWriteConflictNoCtx(msg string) *Error {
 	return newError(Context(), ErrTxnWriteConflict, msg)
 }
 
-func NewMissingTxnNoCtx() *Error {
-	return newError(Context(), ErrMissingTxn)
+// NewDataBranchConflictNoCtxf creates the DATA BRANCH merge/pick
+// write-write conflict error (ErrDataBranchConflict, issue #31614).
+// The format string describes the two conflicting sides and the pk
+// WITHOUT the leading "conflict: ": the catalog message template in
+// errorMsgRefer supplies it. The error is a deterministic data
+// condition — MySQL ER_UNKNOWN_ERROR (1105), SQLSTATE HY000 — and is
+// never silently retried: the failing statement aborts atomically.
+func NewDataBranchConflictNoCtxf(format string, args ...any) *Error {
+	return newError(Context(), ErrDataBranchConflict, fmt.Sprintf(format, args...))
 }
 
-func NewTAEErrorNoCtxf(format string, args ...any) *Error {
-	return newError(Context(), ErrTAEError, fmt.Sprintf(format, args...))
+func NewMissingTxnNoCtx() *Error {
+	return newError(Context(), ErrMissingTxn)
 }
 
 func NewTAEErrorNoCtx(msg string) *Error {
@@ -342,14 +333,6 @@ func NewTAERollbackNoCtxf(format string, args ...any) *Error {
 
 func NewTAERollbackNoCtx(msg string) *Error {
 	return newError(Context(), ErrTAERollback, msg)
-}
-
-func NewTAEPrepareNoCtxf(format string, args ...any) *Error {
-	return newError(Context(), ErrTAEPrepare, fmt.Sprintf(format, args...))
-}
-
-func NewTAEPrepareNoCtx(msg string) *Error {
-	return newError(Context(), ErrTAEPrepare, msg)
 }
 
 func NewTxnRWConflictNoCtx() *Error {
@@ -402,32 +385,12 @@ func NewNotFoundNoCtx() *Error {
 	return newError(Context(), ErrNotFound)
 }
 
-func NewDuplicateNoCtx() *Error {
-	return newError(Context(), ErrDuplicate)
-}
-
 func NewDuplicateEntryNoCtx(entry string, key string) *Error {
 	return newError(Context(), ErrDuplicateEntry, entry, key)
 }
 
-func NewRoleGrantedToSelfNoCtx(from, to string) *Error {
-	return newError(Context(), ErrRoleGrantedToSelf, from, to)
-}
-
-func NewTxnReadConflictNoCtxf(format string, args ...any) *Error {
-	return newError(Context(), ErrTxnReadConflict, fmt.Sprintf(format, args...))
-}
-
-func NewTxnReadConflictNoCtx(msg string) *Error {
-	return newError(Context(), ErrTxnReadConflict, msg)
-}
-
 func NewAppendableObjectNotFoundNoCtx() *Error {
 	return newError(Context(), ErrAppendableObjectNotFound)
-}
-
-func NewAppendableBlockNotFoundNoCtx() *Error {
-	return newError(Context(), ErrAppendableBlockNotFound)
 }
 
 func NewDeadLockDetectedNoCtx() *Error {
@@ -494,10 +457,6 @@ func NewTxnNeedRetryWithDefChangedNoCtx() *Error {
 	return newError(Context(), ErrTxnNeedRetryWithDefChanged)
 }
 
-func NewTxnCannotRetryNoCtx() *Error {
-	return newError(Context(), ErrTxnCannotRetry)
-}
-
 // NewRPCTimeoutNoCtx creates an RPC timeout error without logging.
 // RPC errors use NoReportContext() to avoid log storms in retry loops.
 func NewRPCTimeoutNoCtx() *Error {
@@ -514,10 +473,6 @@ func NewErrTooLargeObjectSizeNoCtx(option uint64) *Error {
 
 func NewErrStaleReadNoCtx(minTS, start string) *Error {
 	return newError(Context(), ErrStaleRead, minTS, start)
-}
-
-func NewErrNoWatermarkFoundNoCtx(dbName, tblName string) *Error {
-	return newError(Context(), ErrNoWatermarkFound, dbName, tblName)
 }
 
 func NewArenaFullNoCtx() *Error {
@@ -571,4 +526,10 @@ func NewSyncProtectionExpiredNoCtx(jobID string, validTS, prepareTS int64) *Erro
 
 func NewVectorIndexSnapshotChangedNoCtx() *Error {
 	return newError(Context(), ErrVectorIndexSnapshotChanged)
+}
+
+// NewCantExecuteInReadOnlyTransactionNoCtx reports MySQL ERROR 1792 (25006)
+// for callers without a request context.
+func NewCantExecuteInReadOnlyTransactionNoCtx() *Error {
+	return newError(Context(), ErrCantExecuteInReadOnlyTransaction)
 }

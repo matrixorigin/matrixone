@@ -18,6 +18,8 @@ MatrixOne Client - Basic implementation
 
 from __future__ import annotations
 
+import operator
+
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any, Callable, Dict, Generator, List, Optional, Tuple, Union
 
@@ -25,17 +27,20 @@ if TYPE_CHECKING:
     from sqlalchemy.engine import Connection
 
 from sqlalchemy import create_engine
-from sqlalchemy.engine import Engine, URL
+from sqlalchemy.engine import URL, Engine
 from sqlalchemy.orm import Session as SQLAlchemySession
 
+from ._telemetry import observe, pool_wait
+from ._utils import discard_unrestored_connection, is_non_transactional_statement, result_returns_rows
 from .account import AccountManager
 from .base_client import BaseMatrixOneClient, BaseMatrixOneExecutor
+from .branch import BranchManager
+from .cdc import CDCManager
+from .clone import CloneManager
 from .connection_hooks import ConnectionAction, ConnectionHook, create_connection_hook
 from .exceptions import ConnectionError, QueryError
 from .fulltext_manager import FulltextIndexManager
 from .load_data import LoadDataManager
-from .stage import StageManager
-from .cdc import CDCManager
 from .logger import MatrixOneLogger, create_default_logger
 from .metadata import MetadataManager
 from .moctl import MoCtlManager
@@ -43,11 +48,9 @@ from .pitr import PitrManager
 from .pubsub import PubSubManager
 from .restore import RestoreManager
 from .snapshot import SnapshotManager
-from .clone import CloneManager
-from .branch import BranchManager
 from .sqlalchemy_ext import MatrixOneDialect
+from .stage import StageManager
 from .vector_manager import VectorManager
-from .version import get_version_manager
 
 _VALID_LOG_MODES = frozenset(('off', 'auto', 'simple', 'full', None))
 
@@ -117,7 +120,20 @@ _MO_DB_ALREADY_EXISTS = 20420  # Database already exists
 _MO_PRIMARY_KEY_DUP = 20623  # Primary key duplicated
 
 
-def _classify_db_error(exc: Exception, sql_or_stmt: Any = None) -> QueryError:
+def _classify_db_error(exc: Union[Exception, str], sql_or_stmt: Any = None) -> QueryError:
+    """Keep the original driver boundary and errno alongside stable diagnostics."""
+    if isinstance(exc, QueryError):
+        return exc
+    error = _query_error_message(exc, sql_or_stmt)
+    error.orig = exc if isinstance(exc, Exception) else None
+    error.errno = _extract_errno(exc) if not isinstance(exc, str) else None
+    driver = getattr(exc, 'orig', exc)
+    error.sqlstate = getattr(driver, 'sqlstate', None)
+    error.phase = 'execute'
+    return error
+
+
+def _query_error_message(exc: Union[Exception, str], sql_or_stmt: Any = None) -> QueryError:
     """Classify a database error into a user-friendly QueryError.
 
     Uses the numeric error code (MySQL or moerr) as the primary classifier,
@@ -329,7 +345,7 @@ class Client(BaseMatrixOneClient):
         auto_commit: bool = True,
         charset: str = "utf8mb4",
         logger: Optional[MatrixOneLogger] = None,
-        sql_log_mode: str = "auto",
+        sql_log_mode: str = "off",
         slow_query_threshold: float = 1.0,
         max_sql_display_length: int = 500,
     ):
@@ -359,8 +375,8 @@ class Client(BaseMatrixOneClient):
             charset: Character set for connection
             logger: Custom logger instance. If None, creates a default logger
             sql_log_mode: SQL logging mode ('off', 'auto', 'simple', 'full')
-                - 'off': No SQL logging
-                - 'auto': Smart logging - short SQL shown fully, long SQL summarized (default)
+                - 'off': No SQL logging (default)
+                - 'auto': Smart logging - short SQL shown fully, long SQL summarized (opt-in)
                 - 'simple': Show operation summary only
                 - 'full': Show complete SQL regardless of length
             slow_query_threshold: Threshold in seconds for slow query warnings (default: 1.0)
@@ -407,7 +423,7 @@ class Client(BaseMatrixOneClient):
         self._cdc = None
 
         # Initialize version manager
-        self._version_manager = get_version_manager()
+        self._reset_compatibility()
         self._backend_version = None
 
         # Auto-connect if connection parameters are provided
@@ -425,6 +441,15 @@ class Client(BaseMatrixOneClient):
                 account=account,
                 role=role,
             )
+
+    def get_capabilities(self, refresh=False):
+        """Observe this server/session without enabling features or mutating data."""
+        from .connection_hooks import assert_not_in_hook
+
+        assert_not_in_hook(self)
+        from .capabilities import get_capabilities
+
+        return get_capabilities(self, refresh)
 
     def connect(
         self,
@@ -444,6 +469,8 @@ class Client(BaseMatrixOneClient):
         connection_timeout: Optional[int] = None,
         auto_commit: bool = True,
         on_connect: Optional[Union[ConnectionHook, List[Union[ConnectionAction, str]], Callable]] = None,
+        capability_overrides: Optional[dict] = None,
+        local_infile: Optional[bool] = None,
     ) -> None:
         """
         Connect to MatrixOne database using SQLAlchemy engine
@@ -489,6 +516,14 @@ class Client(BaseMatrixOneClient):
             client.connect(host, port, user, password, database,
                           on_connect=my_callback)
         """
+        if local_infile is not None and not isinstance(local_infile, bool):
+            raise TypeError('local_infile must be None or a boolean')
+        from .connection_hooks import assert_not_in_hook
+
+        assert_not_in_hook(self)
+        from .capabilities import validate_overrides
+
+        overrides = validate_overrides(capability_overrides)
         from ._connection_options import positive_timeout
 
         positive_timeout(self.query_timeout, 'query_timeout')
@@ -498,6 +533,7 @@ class Client(BaseMatrixOneClient):
             raise ValueError('ssl_mode must be disabled, preferred or required')
         if self._engine is not None:
             self.disconnect()
+        self._reset_compatibility(overrides)
         self.connection_timeout = timeout
         # Build final login info based on user parameter and optional account/role
         final_user, parsed_info = self._build_login_info(user, account, role)
@@ -515,6 +551,7 @@ class Client(BaseMatrixOneClient):
             "connect_timeout": timeout,
             "ssl_mode": ssl_mode,
             "autocommit": auto_commit,
+            "local_infile": local_infile,
             "ssl_disabled": ssl_mode == "disabled",
             "ssl_verify_cert": ssl_mode == "required",
             "ssl_verify_identity": ssl_mode == "required",
@@ -531,6 +568,11 @@ class Client(BaseMatrixOneClient):
         try:
             # Create SQLAlchemy engine with connection pooling
             self._engine = self._create_engine()
+            if on_connect is None:
+                on_connect = [ConnectionAction.ENABLE_ALL]
+            if on_connect:
+                self._setup_connection_hook(on_connect)
+
             # Engine construction is lazy; do not report success until an
             # authenticated connection has completed a real query.
             with self._engine.connect() as connection:
@@ -544,16 +586,6 @@ class Client(BaseMatrixOneClient):
                 self._detect_backend_version()
             except Exception as e:
                 self.logger.warning(f"Failed to detect backend version: {e}")
-
-            # Setup connection hook (default to ENABLE_ALL if not provided)
-            # Allow empty list [] to explicitly disable hooks
-            if on_connect is None:
-                on_connect = [ConnectionAction.ENABLE_ALL]
-
-            if on_connect:  # Only setup if not empty list
-                self._setup_connection_hook(on_connect)
-                # Execute the hook once immediately for the initial connection
-                self._execute_connection_hook_immediately(on_connect)
 
             # Report success only after initialization returns. Unhandled
             # initialization failures are fatal, but ordinary callback errors
@@ -685,23 +717,9 @@ class Client(BaseMatrixOneClient):
         # Set the provided engine
         client._engine = engine
 
-        # Wrap the dialect with MatrixOne dialect for proper vector type support
-        # Instead of replacing, we create a new MatrixOne dialect that delegates to the original
-        if not isinstance(engine.dialect, MatrixOneDialect):
-            original_dialect = engine.dialect
-            original_dbapi = engine.dialect.dbapi
+        from .sqlalchemy_ext.dialect import adapt_engine_dialect
 
-            # Create MatrixOne dialect with same configuration
-            mo_dialect = MatrixOneDialect()
-            mo_dialect.dbapi = original_dbapi
-
-            # Copy important attributes from original dialect
-            if hasattr(original_dialect, '_connection_charset'):
-                mo_dialect._connection_charset = original_dialect._connection_charset
-
-            # Replace dialect (this is still a limitation of SQLAlchemy's design)
-            # but we've preserved the original configuration
-            engine.dialect = mo_dialect
+        adapt_engine_dialect(engine)
 
         # Initialize managers after engine is set
         client._initialize_managers()
@@ -752,11 +770,13 @@ class Client(BaseMatrixOneClient):
         # Build connection URL using SQLAlchemy's URL.create() for proper escaping
         # of special characters in user/password (e.g., @, #, %, etc.)
         from ._connection_options import tls_options
+        from ._local_infile import connection_options, configure_engine
 
         connect_args = {
             'connect_timeout': self._connection_params['connect_timeout'],
             'read_timeout': self.query_timeout,
             'write_timeout': self.query_timeout,
+            **connection_options(self._connection_params.get('local_infile')),
             'charset': self._connection_params['charset'],
             **tls_options(self._connection_params),
         }
@@ -782,15 +802,15 @@ class Client(BaseMatrixOneClient):
         )
 
         # Replace the dialect with MatrixOne dialect for proper vector type support
-        if self._connection_params.get('ssl_mode') == 'required':
-            from sqlalchemy import event
-            from ._connection_options import connect_required_tls
+        configure_engine(
+            engine,
+            self._connection_params.get('local_infile'),
+            required_tls=self._connection_params.get('ssl_mode') == 'required',
+        )
 
-            event.listen(engine, 'do_connect', connect_required_tls)
+        from .sqlalchemy_ext.dialect import adapt_engine_dialect
 
-        original_dbapi = engine.dialect.dbapi
-        engine.dialect = MatrixOneDialect()
-        engine.dialect.dbapi = original_dbapi
+        adapt_engine_dialect(engine)
 
         return engine
 
@@ -831,6 +851,10 @@ class Client(BaseMatrixOneClient):
                 >>> # ... perform database operations ...
                 >>> client.disconnect()  # Clean up resources
         """
+        from .connection_hooks import assert_not_in_hook
+
+        assert_not_in_hook(self)
+        self._reset_compatibility()
         if self._engine:
             try:
                 engine, self._engine = self._engine, None
@@ -871,13 +895,19 @@ class Client(BaseMatrixOneClient):
 
     def _escape_identifier(self, identifier: str) -> str:
         """Escapes an identifier to prevent SQL injection."""
-        return f"`{identifier.replace('`', '``')}`"
+        from ._sql_literals import sql_identifier
+
+        return sql_identifier(identifier, force=True)
 
     def _escape_string(self, value: str) -> str:
         """Escapes a string value for SQL queries."""
-        return f"'{value}'"
+        from ._sql_literals import sql_string_token
 
-    def _build_login_info(self, user: str, account: Optional[str] = None, role: Optional[str] = None) -> tuple[str, dict]:
+        return sql_string_token(value, context='Administrative SQL')
+
+    def _build_login_info(
+        self, user: str, account: Optional[str] = None, role: Optional[str] = None
+    ) -> tuple[str, dict]:
         """
         Build final login info based on user parameter and optional account/role
 
@@ -1023,9 +1053,36 @@ class Client(BaseMatrixOneClient):
             execution_time = time.time() - start_time
             self.logger.log_query(sql, execution_time, success=False, log_mode=log_mode)
             self.logger.log_error(e, context=context)
-            raise _classify_db_error(e, sql) from None
+            classified = _classify_db_error(e, sql)
+            if classified is e:
+                raise
+            raise classified from e
 
-    def execute(self, sql_or_stmt, params: Optional[Tuple] = None, log_mode: str = None) -> "ResultSet":
+    @property
+    def analytics(self):
+        """Optional file-query and Arrow APIs; requires the ``analytics`` extra.
+
+        Use ``with client.analytics.query(sql) as batches`` for bounded result
+        reads and ``read_parquet/read_csv/read_json`` for managed external scans.
+        """
+        from .analytics import AnalyticsManager
+
+        return AnalyticsManager(self)
+
+    def execute_driver(self, sql, params=None, log_mode=None):
+        """Execute unchanged SQL with the owning DBAPI driver's parameter grammar.
+
+        PyMySQL uses %s or %(name)s. Existing execute() keeps SDK ?/:name
+        semantics. SQLAlchemy statements remain available for typed binding.
+        """
+        if not isinstance(sql, str):
+            raise TypeError('execute_driver requires SQL text')
+        return self.execute(sql, params, log_mode, _driver_bound=True)
+
+    @observe('query')
+    def execute(
+        self, sql_or_stmt, params: Optional[Tuple] = None, log_mode: str = None, *, _driver_bound=False
+    ) -> "ResultSet":
         """
         Execute SQL query or SQLAlchemy statement without transaction isolation.
 
@@ -1283,6 +1340,9 @@ class Client(BaseMatrixOneClient):
             - Session.execute(): Execute within transaction context
             - AsyncClient.execute(): Async version for async/await workflows
         """
+        from .connection_hooks import assert_not_in_hook
+
+        assert_not_in_hook(self)
         if not self._engine:
             raise ConnectionError("Not connected to database")
 
@@ -1301,11 +1361,12 @@ class Client(BaseMatrixOneClient):
                     result = session.execute(sql_or_stmt, params, log_mode='off')
 
                     # Convert SQLAlchemy result to ResultSet
-                    if hasattr(result, 'returns_rows') and result.returns_rows:
+                    if result_returns_rows(result):
                         # SELECT query
-                        columns = list(result.keys())
-                        rows = result.fetchall()
-                        result_set = ResultSet(columns, rows)
+                        from ._query_compilation import buffer_result
+
+                        result_set = buffer_result(ResultSet, result)
+                        rows = result_set.rows
                         execution_time = time.time() - start_time
                         self.logger.log_query(
                             f"<SQLAlchemy {type(sql_or_stmt).__name__}>",
@@ -1329,28 +1390,84 @@ class Client(BaseMatrixOneClient):
                         return result_set
 
             # String SQL - original implementation
-            final_sql = self._substitute_parameters(sql_or_stmt, params)
+            mode_sensitive = not _driver_bound and params is not None and '\\' in sql_or_stmt
+            final_sql = (
+                sql_or_stmt
+                if _driver_bound
+                else None if mode_sensitive else self._substitute_parameters(sql_or_stmt, params)
+            )
 
-            with self._engine.begin() as conn:
-                # Use exec_driver_sql() to bypass SQLAlchemy's bind parameter parsing
-                # This prevents JSON strings like {"a":1} from being parsed as :1 bind params
-                if hasattr(conn, 'exec_driver_sql'):
-                    # Escape % to %% for pymysql's format string handling in exec_driver_sql
-                    escaped_sql = final_sql.replace('%', '%%')
-                    result = conn.exec_driver_sql(escaped_sql)
-                else:
-                    # Fallback for testing or older SQLAlchemy versions
-                    from sqlalchemy import text
+            # MERGE/PICK require autocommit outside explicit sessions. Change
+            # only this checkout, restoring its baseline before pool reuse.
+            # Ordinary SQL retains the engine.begin() transaction path.
+            non_transactional = is_non_transactional_statement(sql_or_stmt)
+            pool_wait()
+            with self._engine.connect() if non_transactional else self._engine.begin() as conn:
+                restore_autocommit = False
+                prev_autocommit = None
+                if non_transactional:
+                    prev_autocommit = conn.exec_driver_sql("SELECT @@autocommit").scalar()
+                    if isinstance(prev_autocommit, bytes):
+                        prev_autocommit = prev_autocommit.decode()
+                execution_failed = False
+                try:
+                    if mode_sensitive:
+                        from ._sql_literals import connection_sql_mode
 
-                    result = conn.execute(text(final_sql))
+                        mode = connection_sql_mode(conn)
+                        final_sql = self._substitute_parameters(sql_or_stmt, params, sql_mode=mode)
+                    if non_transactional and str(prev_autocommit).strip().lower() not in ("1", "true", "on"):
+                        # Record restoration responsibility BEFORE flipping, so a
+                        # SET whose result read dies after the server applied it
+                        # is still restored (or the connection invalidated).
+                        restore_autocommit = True
+                        conn.exec_driver_sql("SET autocommit = 1")
+                    # Use exec_driver_sql() to bypass SQLAlchemy's bind parameter parsing
+                    # This prevents JSON strings like {"a":1} from being parsed as :1 bind params
+                    if hasattr(conn, 'exec_driver_sql'):
+                        # Escape % to %% for pymysql's format string handling in exec_driver_sql
+                        escaped_sql = final_sql if _driver_bound else final_sql.replace('%', '%%')
+                        if _driver_bound:
+                            result = conn.exec_driver_sql(
+                                escaped_sql, params, execution_options={'no_parameters': params is None}
+                            )
+                        else:
+                            result = conn.exec_driver_sql(escaped_sql)
+                    else:
+                        # Fallback for testing or older SQLAlchemy versions
+                        from sqlalchemy import text
+
+                        result = conn.execute(text(final_sql.replace(':', r'\:')))
+                except BaseException:
+                    execution_failed = True
+                    raise
+                finally:
+                    if restore_autocommit:
+                        try:
+                            conn.exec_driver_sql("SET autocommit = 0")
+                        except BaseException as restore_error:
+                            try:
+                                discard_unrestored_connection(conn)
+                            except BaseException as discard_error:
+                                # Preserve an in-flight SQL error/cancellation.
+                                # A new interrupt after successful SQL still propagates.
+                                if (
+                                    not execution_failed
+                                    and isinstance(restore_error, Exception)
+                                    and not isinstance(discard_error, Exception)
+                                ):
+                                    raise
+                            if not execution_failed and not isinstance(restore_error, Exception):
+                                raise
 
                 execution_time = time.time() - start_time
 
                 if result.returns_rows:
                     # SELECT query
-                    columns = list(result.keys())
-                    rows = result.fetchall()
-                    result_set = ResultSet(columns, rows)
+                    from ._query_compilation import buffer_result
+
+                    result_set = buffer_result(ResultSet, result)
+                    rows = result_set.rows
                     self.logger.log_query(sql_or_stmt, execution_time, len(rows), success=True, log_mode=log_mode)
                     return result_set
                 else:
@@ -1365,7 +1482,9 @@ class Client(BaseMatrixOneClient):
             # Log error FIRST, before any error processing
             # Wrap in try-except to ensure logging failure doesn't hide the real error
             try:
-                sql_display = sql_or_stmt if isinstance(sql_or_stmt, str) else f"<SQLAlchemy {type(sql_or_stmt).__name__}>"
+                sql_display = (
+                    sql_or_stmt if isinstance(sql_or_stmt, str) else f"<SQLAlchemy {type(sql_or_stmt).__name__}>"
+                )
                 self.logger.log_query(sql_display, execution_time, success=False)
                 self.logger.log_error(e, context="Query execution")
             except Exception as log_err:
@@ -1374,7 +1493,10 @@ class Client(BaseMatrixOneClient):
 
                 print(f"Warning: Error logging failed: {log_err}", file=sys.stderr)
 
-            raise _classify_db_error(e, sql_or_stmt) from None
+            classified = _classify_db_error(e, sql_or_stmt)
+            if classified is e:
+                raise
+            raise classified from e
 
     def insert(self, table_name_or_model, data: dict) -> "ResultSet":
         """
@@ -1435,12 +1557,7 @@ class Client(BaseMatrixOneClient):
                 ... })
         """
         # Handle model class input
-        if hasattr(table_name_or_model, '__tablename__'):
-            # It's a model class
-            table_name = table_name_or_model.__tablename__
-        else:
-            # It's a table name string
-            table_name = table_name_or_model
+        table_name = table_name_or_model
 
         executor = ClientExecutor(self)
         return executor.insert(table_name, data)
@@ -1496,76 +1613,16 @@ class Client(BaseMatrixOneClient):
                 >>> result = client.batch_insert('products', products)
         """
         # Handle model class input
-        if hasattr(table_name_or_model, '__tablename__'):
-            # It's a model class
-            table_name = table_name_or_model.__tablename__
-        else:
-            # It's a table name string
-            table_name = table_name_or_model
+        table_name = table_name_or_model
 
         executor = ClientExecutor(self)
         return executor.batch_insert(table_name, data_list)
 
-    def _substitute_parameters(self, sql: str, params=None) -> str:
-        """
-        Substitute ? placeholders or named parameters with actual values since MatrixOne
-        doesn't support prepared statements
+    def _substitute_parameters(self, sql: str, params=None, *, sql_mode='') -> str:
+        """Render legacy parameters outside SQL literals, identifiers and comments."""
+        from ._sql_literals import substitute_parameters
 
-        Args::
-
-            sql: SQL query string with ? placeholders or named parameters (:name)
-            params: Tuple of parameter values or dict of named parameters
-
-        Returns::
-
-            SQL string with parameters substituted
-        """
-        if not params:
-            return sql
-
-        final_sql = sql
-
-        # Handle named parameters (dict)
-        if isinstance(params, dict):
-            for key, value in params.items():
-                placeholder = f":{key}"
-                if placeholder in final_sql:
-                    if isinstance(value, str):
-                        # Escape single quotes in string values
-                        escaped_value = value.replace("'", "''")
-                        final_sql = final_sql.replace(placeholder, f"'{escaped_value}'")
-                    elif value is None:
-                        final_sql = final_sql.replace(placeholder, "NULL")
-                    else:
-                        final_sql = final_sql.replace(placeholder, str(value))
-        # Handle positional parameters (tuple/list)
-        elif isinstance(params, (tuple, list)):
-            for param in params:
-                # Skip empty lists that might come from CTE queries
-                if isinstance(param, list) and len(param) == 0:
-                    continue
-                elif isinstance(param, str):
-                    # Escape single quotes in string values
-                    escaped_param = param.replace("'", "''")
-                    # Handle both ? and %s placeholders
-                    if "?" in final_sql:
-                        final_sql = final_sql.replace("?", f"'{escaped_param}'", 1)
-                    elif "%s" in final_sql:
-                        final_sql = final_sql.replace("%s", f"'{escaped_param}'", 1)
-                elif param is None:
-                    # Handle both ? and %s placeholders
-                    if "?" in final_sql:
-                        final_sql = final_sql.replace("?", "NULL", 1)
-                    elif "%s" in final_sql:
-                        final_sql = final_sql.replace("%s", "NULL", 1)
-                else:
-                    # Handle both ? and %s placeholders
-                    if "?" in final_sql:
-                        final_sql = final_sql.replace("?", str(param), 1)
-                    elif "%s" in final_sql:
-                        final_sql = final_sql.replace("%s", str(param), 1)
-
-        return final_sql
+        return substitute_parameters(sql, params, sql_mode=sql_mode)
 
     def get_sqlalchemy_engine(self) -> Engine:
         """
@@ -1575,6 +1632,9 @@ class Client(BaseMatrixOneClient):
 
             SQLAlchemy Engine
         """
+        from .connection_hooks import assert_not_in_hook
+
+        assert_not_in_hook(self)
         if not self._engine:
             raise ConnectionError("Not connected to database")
         return self._engine
@@ -1608,76 +1668,10 @@ class Client(BaseMatrixOneClient):
 
                 MatrixOneQuery instance configured for the specified columns
         """
+        from .orm import create_query
         from .orm import MatrixOneQuery
 
-        if len(columns) == 1:
-            # Traditional single model class usage
-            column = columns[0]
-            if isinstance(column, str):
-                # String table name
-                return MatrixOneQuery(column, self, snapshot=snapshot)
-            elif hasattr(column, '__tablename__'):
-                # This is a model class
-                return MatrixOneQuery(column, self, snapshot=snapshot)
-            elif hasattr(column, 'name') and hasattr(column, 'as_sql'):
-                # This is a CTE object
-                from .orm import CTE
-
-                if isinstance(column, CTE):
-                    query = MatrixOneQuery(None, self, snapshot=snapshot)
-                    query._table_name = column.name
-                    query._select_columns = ["*"]  # Default to select all from CTE
-                    query._ctes = [column]  # Add the CTE to the query
-                    return query
-            else:
-                # This is a single column/expression - need to handle specially
-                # For now, we'll create a query that can handle column selections
-                query = MatrixOneQuery(None, self, snapshot=snapshot)
-                query._select_columns = [column]
-                # Try to infer table name from column
-                if hasattr(column, 'table') and hasattr(column.table, 'name'):
-                    query._table_name = column.table.name
-                return query
-        else:
-            # Multiple columns/expressions
-            model_class = None
-            select_columns = []
-
-            for column in columns:
-                if hasattr(column, '__tablename__'):
-                    # This is a model class - use its table
-                    model_class = column
-                else:
-                    # This is a column or expression
-                    select_columns.append(column)
-
-            if model_class:
-                query = MatrixOneQuery(model_class, self, snapshot=snapshot)
-                if select_columns:
-                    # Add additional columns to the model's default columns
-                    query._select_columns = select_columns
-                return query
-            else:
-                # No model class provided, need to infer table from columns
-                query = MatrixOneQuery(None, self, snapshot=snapshot)
-                query._select_columns = select_columns
-
-                # Try to infer table name from first column that has table info
-                for col in select_columns:
-                    if hasattr(col, 'table') and hasattr(col.table, 'name'):
-                        query._table_name = col.table.name
-                        break
-                    elif isinstance(col, str) and '.' in col:
-                        # String column like "table.column" - extract table name
-                        parts = col.split('.')
-                        if len(parts) >= 2:
-                            # For "db.table.column" format, use "db.table"
-                            # For "table.column" format, use "table"
-                            table_name = '.'.join(parts[:-1])
-                            query._table_name = table_name
-                            break
-
-                return query
+        return create_query(MatrixOneQuery, self, columns, snapshot=snapshot)
 
     @contextmanager
     def snapshot(self, snapshot_name: str) -> Generator[SnapshotClient, None, None]:
@@ -1698,246 +1692,65 @@ class Client(BaseMatrixOneClient):
 
     @contextmanager
     def session(self) -> Generator[Session, None, None]:
+        """Synchronous SQLAlchemy session with MatrixOne managers.
+
+        Use ``client.session()`` to begin a server transaction before the first
+        operation. The context commits on success, rolls back on errors (including
+        cancellation), and closes the session. Explicit commits end that transaction;
+        further SQL follows SQLAlchemy's transaction rules.
+
+        A session belongs to one task. Await operations sequentially within an
+        AsyncSession. Parallel transactions require separate sessions, each owned
+        by its own task; they do not commit atomically together.
+
+        Example::
+
+            with client.session() as session:
+                result = session.execute("SELECT * FROM users")
+                session.execute("UPDATE users SET active = 1 WHERE id = 1")
+
+        Managers execute through the session's connection. Server transaction
+        restrictions still apply: manager availability does not make every DDL or
+        administrative command transactional. Create snapshots through
+        ``client.snapshots`` outside the transaction. CLONE and DML rollback are
+        covered by the supported-server contract suite.
+
+        Directly constructed or wrapped sessions retain their caller's transaction
+        ownership; use the client context for explicit server BEGIN and cleanup.
         """
-        Create a transaction-aware session for atomic database operations.
+        from .connection_hooks import assert_not_in_hook
 
-        This method returns a MatrixOne Session that extends SQLAlchemy Session with
-        MatrixOne-specific features. All operations within the session are executed
-        atomically - they either all succeed or all fail together.
-
-        The session is a context manager that automatically handles transaction lifecycle:
-        - Commits the transaction when the context exits normally
-        - Rolls back the transaction if any exception occurs
-        - Cleans up database resources automatically
-
-        Key Features:
-
-        - **Full SQLAlchemy ORM**: All standard SQLAlchemy Session methods (add, delete, query, etc.)
-        - **Atomic transactions**: Multiple operations commit or rollback together
-        - **MatrixOne managers**: Access to snapshots, clones, vector ops, etc.
-        - **ORM-style operations**: Use SQLAlchemy select(), insert(), update(), delete()
-        - **Automatic cleanup**: Transaction and connection resources managed automatically
-        - **Query logging**: Integrated query logging with performance tracking
-
-        Available Managers (transaction-aware):
-
-        - session.snapshots: SnapshotManager for creating/managing snapshots
-        - session.clone: CloneManager for cloning databases and tables
-        - session.restore: RestoreManager for restoring from snapshots
-        - session.pitr: PitrManager for point-in-time recovery
-        - session.pubsub: PubSubManager for publish-subscribe operations
-        - session.account: AccountManager for account/user management
-        - session.vector_ops: VectorManager for vector operations and indexing
-        - session.fulltext_index: FulltextIndexManager for fulltext search
-        - session.metadata: MetadataManager for table metadata analysis
-        - session.load_data: LoadDataManager for bulk data loading
-        - session.stage: StageManager for external stage management
-
-        Returns:
-            Generator[Session, None, None]: Context manager that yields a MatrixOne Session
-
-        Raises:
-            ConnectionError: If client is not connected to database
-
-        Usage Examples::
-
-            from matrixone import Client
-            from sqlalchemy import select, insert, update, delete
-            from sqlalchemy.orm import declarative_base
-
-            Base = declarative_base()
-
-            class User(Base):
-                __tablename__ = 'users'
-                id = Column(Integer, primary_key=True)
-                name = Column(String(100))
-                email = Column(String(255))
-                age = Column(Integer)
-
-            client = Client(host='localhost', port=6001, user='root', password='111', database='test')
-
-            # ========================================
-            # Example 1: Basic Transaction with ORM-style SQL
-            # ========================================
-            with client.session() as session:
-                # Insert using SQLAlchemy insert()
-                session.execute(insert(User).values(name='John', email='john@example.com', age=30))
-
-                # Update using SQLAlchemy update()
-                session.execute(update(User).where(User.age < 18).values(status='minor'))
-
-                # Select using SQLAlchemy select()
-                stmt = select(User).where(User.age > 25)
-                result = session.execute(stmt)
-                for user in result.scalars():
-                    print(f"User: {user.name}")
-
-                # Delete using SQLAlchemy delete()
-                session.execute(delete(User).where(User.status == 'inactive'))
-                # All operations commit atomically
-
-            # ========================================
-            # Example 2: SQLAlchemy ORM Operations
-            # ========================================
-            with client.session() as session:
-                # Create new objects
-                user1 = User(name='Alice', email='alice@example.com', age=28)
-                user2 = User(name='Bob', email='bob@example.com', age=35)
-
-                # Add to session
-                session.add(user1)
-                session.add(user2)
-
-                # Query using ORM
-                stmt = select(User).where(User.name == 'Alice')
-                result = session.execute(stmt)
-                alice = result.scalar_one()
-
-                # Update object
-                alice.email = 'newemail@example.com'
-
-                # Commit (or let context manager do it)
-                session.commit()
-
-            # ========================================
-            # Example 3: MatrixOne Snapshot Operations
-            # ========================================
-            with client.session() as session:
-                # Create snapshot within transaction
-                from matrixone import SnapshotLevel
-
-                snapshot = session.snapshots.create(
-                    name='daily_backup',
-                    level=SnapshotLevel.DATABASE,
-                    database='production'
-                )
-
-                # Clone database using snapshot
-                session.clone.clone_database(
-                    target_db='prod_copy',
-                    source_db='production',
-                    snapshot_name='daily_backup'
-                )
-                # Both operations commit atomically
-
-            # ========================================
-            # Example 4: Bulk Data Loading with Stages
-            # ========================================
-            with client.session() as session:
-                # Create stage using simple interface
-                session.stage.create_local('import_stage', '/data/imports/')
-
-                # Load data from stage using ORM model
-                session.load_data.from_stage_csv('import_stage', 'users.csv', User)
-
-                # Update statistics after loading
-                session.execute("ANALYZE TABLE users")
-                # All operations are atomic
-
-            # ========================================
-            # Example 5: Error Handling and Rollback
-            # ========================================
-            try:
-                with client.session() as session:
-                    session.execute(insert(User).values(name='Charlie', age=40))
-                    session.execute(insert(InvalidTable).values(data='test'))  # This fails
-                    # Transaction automatically rolls back - Charlie is NOT inserted
-            except Exception as e:
-                print(f"Transaction failed and rolled back: {e}")
-
-            # ========================================
-            # Example 6: Manual Transaction Control
-            # ========================================
-            with client.session() as session:
-                try:
-                    session.execute(insert(User).values(name='David', age=25))
-                    session.execute(update(Account).values(balance=Account.balance - 100))
-
-                    # Verify before committing
-                    stmt = select(Account.balance)
-                    balance = session.execute(stmt).scalar()
-
-                    if balance >= 0:
-                        session.commit()  # Explicit commit
-                    else:
-                        session.rollback()  # Explicit rollback
-                        print("Insufficient balance")
-                except Exception as e:
-                    session.rollback()
-                    raise
-
-            # ========================================
-            # Example 7: Complex Multi-Manager Transaction
-            # ========================================
-            with client.session() as session:
-                # Create publication
-                session.pubsub.create_database_publication(
-                    name='analytics_pub',
-                    database='analytics',
-                    account='subscriber_account'
-                )
-
-                # Create S3 stage for exports
-                session.stage.create_s3(
-                    name='export_stage',
-                    bucket='my-bucket',
-                    path='exports/',
-                    aws_key_id='key',
-                    aws_secret_key='secret'
-                )
-
-                # Load fresh data using ORM model
-                session.load_data.from_csv('/data/latest.csv', Analytics)
-
-                # Create snapshot after load
-                session.snapshots.create(
-                    name='post_load_snapshot',
-                    level=SnapshotLevel.DATABASE,
-                    database='analytics'
-                )
-                # All operations commit together
-
-        Best Practices:
-
-        1. **Always use context manager**: Use `with client.session()` for automatic cleanup
-        2. **Keep transactions short**: Long transactions can block other operations
-        3. **Handle exceptions**: Wrap session code in try-except for error handling
-        4. **Use ORM-style SQL**: Prefer SQLAlchemy insert(), update(), select(), delete()
-        5. **Avoid nested sessions**: SQLAlchemy doesn't support true nested transactions
-        6. **Test rollback behavior**: Ensure your application handles rollbacks correctly
-
-        See Also:
-
-            - Session: The session class returned by this method
-            - AsyncClient.session(): Async version for async/await workflows
-            - Client.execute(): Non-transactional query execution
-        """
+        assert_not_in_hook(self)
         if not self._engine:
             raise ConnectionError("Not connected to database")
 
         session_wrapper = None
+        failed = False
         try:
-            # Create session from engine (standard SQLAlchemy pattern)
-            # Session will automatically acquire connection from pool
             session_wrapper = Session(bind=self._engine, client=self)
-
-            # Begin transaction explicitly
             session_wrapper.begin()
-
+            # Logical SQLAlchemy begin alone does not start MatrixOne's DDL
+            # transaction. Admit work only after BEGIN on this Session's owner.
+            pool_wait()
+            session_wrapper.connection().exec_driver_sql('BEGIN')
             yield session_wrapper
-
-            # Commit the transaction on success
             session_wrapper.commit()
-
-        except Exception:
-            # Rollback on error
-            if session_wrapper:
-                session_wrapper.rollback()
+        except BaseException:
+            failed = True
+            if session_wrapper is not None:
+                try:
+                    session_wrapper.rollback()
+                except BaseException:
+                    self.logger.warning('Session rollback failed while preserving the original error')
             raise
         finally:
-            # Close session (returns connection to pool)
-            if session_wrapper:
-                session_wrapper.close()
+            if session_wrapper is not None:
+                try:
+                    session_wrapper.close()
+                except BaseException:
+                    if not failed:
+                        raise
+                    self.logger.warning('Session close failed while preserving the original error')
 
     @property
     def snapshots(self) -> Optional[SnapshotManager]:
@@ -2222,34 +2035,7 @@ class Client(BaseMatrixOneClient):
 
             Semantic version string or None if parsing fails
         """
-        import re
-
-        if not version_string:
-            return None
-
-        # Pattern 1: Development version "8.0.30-MatrixOne-v" (v followed by nothing)
-        dev_pattern = r"(\d+\.\d+\.\d+)-MatrixOne-v$"
-        dev_match = re.search(dev_pattern, version_string.strip())
-        if dev_match:
-            # Development version - assign highest version number
-            return "999.0.0"
-
-        # Pattern 2: Release version "8.0.30-MatrixOne-v3.0.0" (v followed by version number)
-        release_pattern = r"(\d+\.\d+\.\d+)-MatrixOne-v(\d+\.\d+\.\d+)"
-        release_match = re.search(release_pattern, version_string.strip())
-        if release_match:
-            # Extract the semantic version part
-            semantic_version = release_match.group(2)
-            return semantic_version
-
-        # Pattern 3: Fallback format "MatrixOne 3.0.1"
-        fallback_pattern = r"(\d+\.\d+\.\d+)"
-        fallback_match = re.search(fallback_pattern, version_string)
-        if fallback_match:
-            return fallback_match.group(1)
-
-        self.logger.warning(f"Could not parse version string: {version_string}")
-        return None
+        return self._version_manager._parse_matrixone_version(version_string)
 
     def set_backend_version(self, version: str) -> None:
         """
@@ -2418,7 +2204,7 @@ class Client(BaseMatrixOneClient):
                     error_msg = redact_error(e, password)
                     if entered:
                         if isinstance(e, QueryError):
-                            raise QueryError(error_msg) from None
+                            raise
                         raise QueryError(f"Failed to create table '{table_name}': {error_msg}") from None
                     if 'Unknown database' in error_msg or '1049' in error_msg:
                         db_name = self._connection_params.get('database', 'unknown')
@@ -2482,152 +2268,28 @@ class Client(BaseMatrixOneClient):
                         # Generic error with cleaner message
                         raise QueryError(f"Failed to create table '{table_name}': {error_msg}") from None
 
-                # Create indexes separately with proper types
+                # SQLAlchemy's DDL compiler owns target schemas and index kinds.
                 for index in table.indexes:
-                    if isinstance(index, FulltextIndex):
-                        # Create fulltext index using custom DDL
-                        columns_str = ", ".join(col.name for col in index.columns)
-                        fulltext_sql = f"CREATE FULLTEXT INDEX {index.name} ON {table_name} ({columns_str})"
-                        if hasattr(index, 'parser') and index.parser:
-                            fulltext_sql += f" WITH PARSER {index.parser}"
-                        try:
-                            _exec_sql(fulltext_sql)
-                            self.logger.info(f"✓ Created fulltext index '{index.name}'")
-                        except Exception as e:
-                            self.logger.warning(f"Failed to create fulltext index {index.name}: {redact_error(e, password)}")
-                    elif isinstance(index, VectorIndex):
-                        # Create vector index using custom method
-                        try:
-                            vector_sql = str(CreateIndex(index).compile(dialect=conn.dialect))
-                            _exec_sql(vector_sql)
-                            self.logger.info(f"✓ Created vector index '{index.name}'")
-                        except Exception as e:
-                            self.logger.warning(f"Failed to create vector index {index.name}: {redact_error(e, password)}")
-                    else:
-                        # Create regular index using manual SQL to avoid dialect issues
-                        try:
-                            columns_str = ', '.join([str(col.name) for col in index.columns])
-                            unique_str = 'UNIQUE ' if index.unique else ''
-                            index_sql = f"CREATE {unique_str}INDEX {index.name} ON {table_name} ({columns_str})"
-                            _exec_sql(index_sql)
-                            self.logger.info(f"✓ Created index '{index.name}'")
-                        except Exception as e:
-                            self.logger.warning(f"Failed to create index {index.name}: {redact_error(e, password)}")
+                    try:
+                        _exec_sql(str(CreateIndex(index).compile(dialect=conn.dialect)))
+                    except Exception as original:
+                        error = QueryError(
+                            'CREATE TABLE was acknowledged but index creation failed; '
+                            'the enclosing transaction is being rolled back: ' + redact_error(original, password)
+                        )
+                        error.orig = original
+                        error.errno = _extract_errno(original)
+                        error.phase = 'ddl_index'
+                        error.statement_acknowledged = True
+                        raise error from None
 
             return self
+        from .sqlalchemy_ext.table_builder import simplified_table
 
-        # It's a table name string
-        table_name = table_name_or_model
         if columns is None:
-            raise ValueError("columns parameter is required when table_name_or_model is a string")
-
-        # Parse primary key from kwargs
-        primary_key = kwargs.get("primary_key", None)
-
-        # Create table using VectorTableBuilder
-        builder = VectorTableBuilder(table_name)
-
-        # Add columns based on simplified format
-        for column_name, column_def in columns.items():
-            is_primary = primary_key == column_name
-
-            if column_def.lower().startswith("vecf32(") or column_def.lower().startswith("vecf64("):
-                # Parse vecf32(64) or vecf64(64) format (case insensitive)
-                import re
-
-                match = re.match(r"vecf(\d+)\((\d+)\)", column_def.lower())
-                if match:
-                    precision = f"f{match.group(1)}"
-                    dimension = int(match.group(2))
-                    builder.add_vector_column(column_name, dimension, precision)
-                else:
-                    raise ValueError(f"Invalid vecf format: {column_def}")
-
-            elif column_def.startswith("varchar("):
-                # Parse varchar type: varchar(100)
-                import re
-
-                match = re.match(r"varchar\((\d+)\)", column_def)
-                if match:
-                    length = int(match.group(1))
-                    builder.add_string_column(column_name, length)
-                else:
-                    raise ValueError(f"Invalid varchar format: {column_def}")
-
-            elif column_def.startswith("char("):
-                # Parse char type: char(10)
-                import re
-
-                match = re.match(r"char\((\d+)\)", column_def)
-                if match:
-                    length = int(match.group(1))
-                    builder.add_string_column(column_name, length)
-                else:
-                    raise ValueError(f"Invalid char format: {column_def}")
-
-            elif column_def.startswith("decimal("):
-                # Parse decimal type: decimal(10,2)
-                import re
-
-                match = re.match(r"decimal\((\d+),(\d+)\)", column_def)
-                if match:
-                    precision = int(match.group(1))
-                    scale = int(match.group(2))
-                    builder.add_numeric_column(column_name, "decimal", precision, scale)
-                else:
-                    raise ValueError(f"Invalid decimal format: {column_def}")
-
-            elif column_def.startswith("float("):
-                # Parse float type: float(10)
-                import re
-
-                match = re.match(r"float\((\d+)\)", column_def)
-                if match:
-                    precision = int(match.group(1))
-                    builder.add_numeric_column(column_name, "float", precision)
-                else:
-                    raise ValueError(f"Invalid float format: {column_def}")
-
-            elif column_def in ("int", "integer"):
-                builder.add_int_column(column_name, primary_key=is_primary)
-            elif column_def in ("bigint", "bigint unsigned"):
-                builder.add_bigint_column(column_name, primary_key=is_primary)
-            elif column_def in ("smallint", "tinyint"):
-                if column_def == "smallint":
-                    builder.add_smallint_column(column_name, primary_key=is_primary)
-                else:
-                    builder.add_tinyint_column(column_name, primary_key=is_primary)
-            elif column_def in ("text", "longtext", "mediumtext", "tinytext"):
-                builder.add_text_column(column_name)
-            elif column_def in ("float", "double"):
-                builder.add_numeric_column(column_name, column_def)
-            elif column_def in ("date", "datetime", "timestamp", "time"):
-                builder.add_datetime_column(column_name, column_def)
-            elif column_def in ("boolean", "bool"):
-                builder.add_boolean_column(column_name)
-            elif column_def in ("json", "jsonb"):
-                builder.add_json_column(column_name)
-            elif column_def in (
-                "blob",
-                "longblob",
-                "mediumblob",
-                "tinyblob",
-                "binary",
-                "varbinary",
-            ):
-                builder.add_binary_column(column_name, column_def)
-            else:
-                raise ValueError(
-                    f"Unsupported column type '{column_def}' for column '{column_name}'. "
-                    f"Supported types: int, bigint, smallint, tinyint, varchar(n), char(n), "
-                    f"text, float, double, decimal(p,s), date, datetime, timestamp, time, "
-                    f"boolean, json, blob, vecf32(n), vecf64(n)"
-                )
-
-        # Create table
-        table = builder.build()
+            raise ValueError('columns is required for a table name')
+        table = simplified_table(table_name_or_model, columns, **kwargs)
         table.create(self.get_sqlalchemy_engine())
-
         return self
 
     def drop_table(self, table_name_or_model) -> "Client":
@@ -2650,13 +2312,9 @@ class Client(BaseMatrixOneClient):
                 # Drop table by model class
                 client.drop_table(UserModel)
         """
-        # Handle model class input
-        if hasattr(table_name_or_model, '__tablename__'):
-            # It's a model class
-            table_name = table_name_or_model.__tablename__
-        else:
-            # It's a table name string
-            table_name = table_name_or_model
+        from ._utils import get_table_name
+
+        table_name = get_table_name(table_name_or_model, quoted=True)
 
         with self.get_sqlalchemy_engine().begin() as conn:
             sql = f"DROP TABLE IF EXISTS {table_name}"
@@ -2704,114 +2362,7 @@ class Client(BaseMatrixOneClient):
             ], primary_key='id')
         """
 
-        from .sqlalchemy_ext import VectorTableBuilder
-
-        # Parse primary key from kwargs
-        primary_key = kwargs.get("primary_key", None)
-
-        # Create table using VectorTableBuilder
-        builder = VectorTableBuilder(table_name)
-
-        # Add columns based on simplified format (same logic as create_table)
-        for column_name, column_def in columns.items():
-            is_primary = primary_key == column_name
-
-            if column_def.startswith("vector("):
-                # Parse vector type: vector(128,f32) or vector(128)
-                import re
-
-                match = re.match(r"vector\((\d+)(?:,(\w+))?\)", column_def)
-                if match:
-                    dimension = int(match.group(1))
-                    precision = match.group(2) or "f32"
-                    builder.add_vector_column(column_name, dimension, precision)
-                else:
-                    raise ValueError(f"Invalid vector format: {column_def}")
-
-            elif column_def.startswith("varchar("):
-                # Parse varchar type: varchar(100)
-                import re
-
-                match = re.match(r"varchar\((\d+)\)", column_def)
-                if match:
-                    length = int(match.group(1))
-                    builder.add_string_column(column_name, length)
-                else:
-                    raise ValueError(f"Invalid varchar format: {column_def}")
-
-            elif column_def.startswith("char("):
-                # Parse char type: char(10)
-                import re
-
-                match = re.match(r"char\((\d+)\)", column_def)
-                if match:
-                    length = int(match.group(1))
-                    builder.add_string_column(column_name, length)
-                else:
-                    raise ValueError(f"Invalid char format: {column_def}")
-
-            elif column_def.startswith("decimal("):
-                # Parse decimal type: decimal(10,2)
-                import re
-
-                match = re.match(r"decimal\((\d+),(\d+)\)", column_def)
-                if match:
-                    precision = int(match.group(1))
-                    scale = int(match.group(2))
-                    builder.add_numeric_column(column_name, "decimal", precision, scale)
-                else:
-                    raise ValueError(f"Invalid decimal format: {column_def}")
-
-            elif column_def.startswith("float("):
-                # Parse float type: float(10)
-                import re
-
-                match = re.match(r"float\((\d+)\)", column_def)
-                if match:
-                    precision = int(match.group(1))
-                    builder.add_numeric_column(column_name, "float", precision)
-                else:
-                    raise ValueError(f"Invalid float format: {column_def}")
-
-            elif column_def in ("int", "integer"):
-                builder.add_int_column(column_name, primary_key=is_primary)
-            elif column_def in ("bigint", "bigint unsigned"):
-                builder.add_bigint_column(column_name, primary_key=is_primary)
-            elif column_def in ("smallint", "tinyint"):
-                if column_def == "smallint":
-                    builder.add_smallint_column(column_name, primary_key=is_primary)
-                else:
-                    builder.add_tinyint_column(column_name, primary_key=is_primary)
-            elif column_def in ("text", "longtext", "mediumtext", "tinytext"):
-                builder.add_text_column(column_name)
-            elif column_def in ("float", "double"):
-                builder.add_numeric_column(column_name, column_def)
-            elif column_def in ("date", "datetime", "timestamp", "time"):
-                builder.add_datetime_column(column_name, column_def)
-            elif column_def in ("boolean", "bool"):
-                builder.add_boolean_column(column_name)
-            elif column_def in ("json", "jsonb"):
-                builder.add_json_column(column_name)
-            elif column_def in (
-                "blob",
-                "longblob",
-                "mediumblob",
-                "tinyblob",
-                "binary",
-                "varbinary",
-            ):
-                builder.add_binary_column(column_name, column_def)
-            else:
-                raise ValueError(
-                    f"Unsupported column type '{column_def}' for column '{column_name}'. "
-                    f"Supported types: int, bigint, smallint, tinyint, varchar(n), char(n), "
-                    f"text, float, double, decimal(p,s), date, datetime, timestamp, time, "
-                    f"boolean, json, blob, vecf32(n), vecf64(n)"
-                )
-
-        # Create table
-        table = builder.build()
-        table.create(self.get_sqlalchemy_engine())
+        self.create_table(table_name, columns, **kwargs)
 
         # Create indexes if specified
         if indexes:
@@ -2985,15 +2536,11 @@ class Client(BaseMatrixOneClient):
             >>> print(index_tables)
             ['__mo_index_secondary_..._cms_id', '__mo_index_unique_..._email']
         """
-        from .index_utils import build_get_index_tables_sql
+        from .index_utils import read_index_metadata
 
-        # Use provided database_name or get current database from connection params
-        if database_name is None:
-            database_name = self._connection_params.get('database') if hasattr(self, '_connection_params') else None
-
-        sql, params = build_get_index_tables_sql(table_name, database_name)
-        result = self.execute(sql, params)
-        return [row[0] for row in result.fetchall()]
+        with self.get_sqlalchemy_engine().begin() as connection:
+            _, _, rows = read_index_metadata(connection, table_name, database_name)
+        return list(dict.fromkeys(row[2] for row in rows if row[2]))
 
     def get_secondary_index_table_by_name(
         self, table_name: str, index_name: str, database_name: str = None
@@ -3020,16 +2567,11 @@ class Client(BaseMatrixOneClient):
             >>> print(index_table)
             '__mo_index_secondary_018cfbda-bde1-7c3e-805c-3f8e71769f75_cms_id'
         """
-        from .index_utils import build_get_index_table_by_name_sql
+        from .index_utils import read_index_metadata
 
-        # Use provided database_name or get current database from connection params
-        if database_name is None:
-            database_name = self._connection_params.get('database') if hasattr(self, '_connection_params') else None
-
-        sql, params = build_get_index_table_by_name_sql(table_name, index_name, database_name)
-        result = self.execute(sql, params)
-        row = result.fetchone()
-        return row[0] if row else None
+        with self.get_sqlalchemy_engine().begin() as connection:
+            _, _, rows = read_index_metadata(connection, table_name, database_name)
+        return next((row[2] for row in rows if row[1] == index_name and row[2]), None)
 
     def get_table_indexes_detail(self, table_name: str, database_name: str = None) -> List[dict]:
         """
@@ -3161,18 +2703,11 @@ class Client(BaseMatrixOneClient):
             ... except ValueError as e:
             ...     print(f"Verification failed: {e}")
         """
-        from .index_utils import build_verify_counts_sql, process_verify_result
+        from .index_utils import index_count_report, verify_count_report
 
-        # Get all secondary index tables
-        index_tables = self.get_secondary_index_tables(table_name)
-
-        # Build and execute verification SQL
-        sql = build_verify_counts_sql(table_name, index_tables)
-        result = self.execute(sql)
-        row = result.fetchone()
-
-        # Process result and raise exception if verification fails
-        return process_verify_result(table_name, index_tables, row)
+        with self.get_sqlalchemy_engine().begin() as connection:
+            report = index_count_report(connection, table_name)
+        return verify_count_report(report)
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.disconnect()
@@ -3247,6 +2782,9 @@ class ResultSet:
 
     def fetchmany(self, size: int = 1) -> List[Tuple[Any, ...]]:
         """Fetch many rows"""
+        size = operator.index(size)
+        if size < 0:
+            raise ValueError('size must be non-negative')
         start = self._cursor
         end = min(start + size, len(self.rows))
         rows = self.rows[start:end]
@@ -3277,78 +2815,40 @@ class SnapshotClient:
         self.client = client
         self.snapshot_name = snapshot_name
 
+    @observe('query')
     def execute(self, sql: str, params: Optional[Tuple] = None) -> ResultSet:
         """Execute SQL with snapshot"""
-        # Insert snapshot hint after the first table name in FROM clause
-        import re
+        from ._snapshot_sql import rewrite_snapshot
 
-        # Find the first table name after FROM and insert snapshot hint
-        pattern = r"(\bFROM\s+)(\w+)(\s|$)"
-
-        def replace_func(match):
-            return f"{match.group(1)}{match.group(2)}{{snapshot = '{self.snapshot_name}'}}{match.group(3)}"
-
-        snapshot_sql = re.sub(pattern, replace_func, sql, count=1)
-
-        # Handle parameter substitution for MatrixOne compatibility
-        final_sql = self.client._substitute_parameters(snapshot_sql, params)
-
-        return self.client.execute(final_sql)
+        return self.client.execute(rewrite_snapshot(sql, self.snapshot_name), params)
 
 
 class Session(SQLAlchemySession):
-    """
-    MatrixOne Session - extends SQLAlchemy Session with MatrixOne features.
+    """Synchronous SQLAlchemy session with MatrixOne managers.
 
-    This class inherits from SQLAlchemy Session and provides a transaction context
-    for executing multiple database operations atomically, while adding MatrixOne-specific
-    capabilities like snapshots, clones, vector operations, and fulltext search.
+    Use ``client.session()`` to begin a server transaction before the first
+    operation. The context commits on success, rolls back on errors (including
+    cancellation), and closes the session. Explicit commits end that transaction;
+    further SQL follows SQLAlchemy's transaction rules.
 
-    Key Features:
+    A session belongs to one task. Await operations sequentially within an
+    AsyncSession. Parallel transactions require separate sessions, each owned
+    by its own task; they do not commit atomically together.
 
-    - **Full SQLAlchemy Session API** - All inherited methods work as expected
-    - Atomic transaction execution with automatic rollback on errors
-    - Access to all MatrixOne managers within session context
-    - Support for both SQLAlchemy statements and string SQL
-    - Automatic commit/rollback handling
+    Example::
 
-    Available Managers:
-    - snapshots: SnapshotManager for snapshot operations
-    - clone: CloneManager for clone operations
-    - restore: RestoreManager for restore operations
-    - pitr: PitrManager for point-in-time recovery
-    - pubsub: PubSubManager for pub/sub operations
-    - account: AccountManager for account operations
-    - vector_ops: TransactionVectorIndexManager for vector operations
-    - fulltext_index: TransactionFulltextIndexManager for fulltext operations
+        with client.session() as session:
+            result = session.execute("SELECT * FROM users")
+            session.execute("UPDATE users SET active = 1 WHERE id = 1")
 
-    Usage Examples
+    Managers execute through the session's connection. Server transaction
+    restrictions still apply: manager availability does not make every DDL or
+    administrative command transactional. Create snapshots through
+    ``client.snapshots`` outside the transaction. CLONE and DML rollback are
+    covered by the supported-server contract suite.
 
-    .. code-block:: python
-
-            # Standard SQLAlchemy usage
-            from sqlalchemy import select
-            with client.session() as session:
-                # Execute SQLAlchemy statements
-                stmt = select(User).where(User.age > 25)
-                result = session.execute(stmt)
-                users = result.scalars().all()  # Returns ORM objects
-
-                # ORM operations
-                user = User(name="John", age=30)
-                session.add(user)
-                session.commit()
-
-            # MatrixOne features
-            with client.session() as session:
-                # Snapshot operations
-                session.snapshots.create("backup", SnapshotLevel.DATABASE, database="mydb")
-
-                # Clone operations
-                session.clone.clone_database("new_db", "source_db")
-
-    Note: This class is automatically created by the Client's session()
-    context manager and should not be instantiated directly.
+    Directly constructed or wrapped sessions retain their caller's transaction
+    ownership; use the client context for explicit server BEGIN and cleanup.
     """
 
     def __init__(self, bind=None, client=None, wrap_session=None, **kwargs):
@@ -3389,6 +2889,22 @@ class Session(SQLAlchemySession):
 
         self.export = ExportManager(self)
 
+    @observe('session')
+    def execute_driver(self, sql, params=None):
+        """Driver-bound SQL on this session; the result belongs to the session."""
+        if not isinstance(sql, str):
+            raise TypeError('execute_driver requires SQL text')
+        try:
+            return self.connection().exec_driver_sql(sql, params, execution_options={'no_parameters': params is None})
+        except Exception as error:
+            from .client import _classify_db_error
+
+            classified = _classify_db_error(error, sql)
+            if classified is error:
+                raise
+            raise classified from error
+
+    @observe('session')
     def execute(self, sql_or_stmt, params: Optional[Tuple] = None, **kwargs):
         """
         Execute SQL or SQLAlchemy statement within session.
@@ -3439,12 +2955,11 @@ class Session(SQLAlchemySession):
             # Check if this is a string SQL
             if isinstance(sql_or_stmt, str):
                 # String SQL - apply MatrixOne parameter substitution
-                final_sql = self.client._substitute_parameters(sql_or_stmt, params)
                 original_sql = sql_or_stmt
 
                 from ._session_execution import execute_session_sql
 
-                result = execute_session_sql(super().execute, final_sql, **kwargs)
+                result = execute_session_sql(super().execute, sql_or_stmt, client=self.client, params=params, **kwargs)
             else:
                 # SQLAlchemy statement - call parent's execute() directly
                 result = super().execute(sql_or_stmt, params, **kwargs)
@@ -3453,7 +2968,7 @@ class Session(SQLAlchemySession):
             execution_time = time.time() - start_time
 
             # Log query
-            if hasattr(result, 'returns_rows') and result.returns_rows:
+            if result_returns_rows(result):
                 self.client.logger.log_query(original_sql, execution_time, None, success=True, log_mode=log_mode)
             else:
                 self.client.logger.log_query(
@@ -3475,7 +2990,10 @@ class Session(SQLAlchemySession):
                 log_mode=log_mode,
             )
             self.client.logger.log_error(e, context="Session query execution")
-            raise _classify_db_error(e, sql_or_stmt) from None
+            classified = _classify_db_error(e, sql_or_stmt)
+            if classified is e:
+                raise
+            raise classified from e
 
     def get_connection(self):
         """
@@ -3537,75 +3055,10 @@ class Session(SQLAlchemySession):
 
             MatrixOneQuery instance configured for the specified columns within transaction
         """
+        from .orm import create_query
         from .orm import MatrixOneQuery
 
-        if len(columns) == 1:
-            # Traditional single model class usage
-            column = columns[0]
-            if isinstance(column, str):
-                # String table name
-                return MatrixOneQuery(column, self.client, transaction_wrapper=self, snapshot=snapshot)
-            elif hasattr(column, '__tablename__'):
-                # This is a model class
-                return MatrixOneQuery(column, self.client, transaction_wrapper=self, snapshot=snapshot)
-            elif hasattr(column, 'name') and hasattr(column, 'as_sql'):
-                # This is a CTE object
-                from .orm import CTE
-
-                if isinstance(column, CTE):
-                    query = MatrixOneQuery(None, self.client, transaction_wrapper=self, snapshot=snapshot)
-                    query._table_name = column.name
-                    query._select_columns = ["*"]  # Default to select all from CTE
-                    query._ctes = [column]  # Add the CTE to the query
-                    return query
-            else:
-                # This is a single column/expression - need to handle specially
-                query = MatrixOneQuery(None, self.client, transaction_wrapper=self, snapshot=snapshot)
-                query._select_columns = [column]
-                # Try to infer table name from column
-                if hasattr(column, 'table') and hasattr(column.table, 'name'):
-                    query._table_name = column.table.name
-                return query
-        else:
-            # Multiple columns/expressions
-            model_class = None
-            select_columns = []
-
-            for column in columns:
-                if hasattr(column, '__tablename__'):
-                    # This is a model class - use its table
-                    model_class = column
-                else:
-                    # This is a column or expression
-                    select_columns.append(column)
-
-            if model_class:
-                query = MatrixOneQuery(model_class, self.client, transaction_wrapper=self, snapshot=snapshot)
-                if select_columns:
-                    # Add additional columns to the model's default columns
-                    query._select_columns = select_columns
-                return query
-            else:
-                # No model class provided, need to infer table from columns
-                query = MatrixOneQuery(None, self.client, transaction_wrapper=self, snapshot=snapshot)
-                query._select_columns = select_columns
-
-                # Try to infer table name from first column that has table info
-                for col in select_columns:
-                    if hasattr(col, 'table') and hasattr(col.table, 'name'):
-                        query._table_name = col.table.name
-                        break
-                    elif isinstance(col, str) and '.' in col:
-                        # String column like "table.column" - extract table name
-                        parts = col.split('.')
-                        if len(parts) >= 2:
-                            # For "db.table.column" format, use "db.table"
-                            # For "table.column" format, use "table"
-                            table_name = '.'.join(parts[:-1])
-                            query._table_name = table_name
-                            break
-
-                return query
+        return create_query(MatrixOneQuery, self.client, columns, snapshot=snapshot, transaction_wrapper=self)
 
     def create_table(self, table_name: str, columns: dict, **kwargs) -> "Session":
         """
@@ -3621,119 +3074,11 @@ class Session(SQLAlchemySession):
 
             Session: Self for chaining
         """
+        from .sqlalchemy_ext.table_builder import simplified_table
         from sqlalchemy.schema import CreateTable
 
-        from .sqlalchemy_ext import VectorTableBuilder
-
-        # Parse primary key from kwargs
-        primary_key = kwargs.get("primary_key", None)
-
-        # Create table using VectorTableBuilder
-        builder = VectorTableBuilder(table_name)
-
-        # Add columns based on simplified format (same logic as client.create_table)
-        for column_name, column_def in columns.items():
-            is_primary = primary_key == column_name
-
-            if column_def.startswith("vector("):
-                # Parse vector type: vector(128,f32) or vector(128)
-                import re
-
-                match = re.match(r"vector\((\d+)(?:,(\w+))?\)", column_def)
-                if match:
-                    dimension = int(match.group(1))
-                    precision = match.group(2) or "f32"
-                    builder.add_vector_column(column_name, dimension, precision)
-                else:
-                    raise ValueError(f"Invalid vector format: {column_def}")
-
-            elif column_def.startswith("varchar("):
-                # Parse varchar type: varchar(100)
-                import re
-
-                match = re.match(r"varchar\((\d+)\)", column_def)
-                if match:
-                    length = int(match.group(1))
-                    builder.add_string_column(column_name, length)
-                else:
-                    raise ValueError(f"Invalid varchar format: {column_def}")
-
-            elif column_def.startswith("char("):
-                # Parse char type: char(10)
-                import re
-
-                match = re.match(r"char\((\d+)\)", column_def)
-                if match:
-                    length = int(match.group(1))
-                    builder.add_string_column(column_name, length)
-                else:
-                    raise ValueError(f"Invalid char format: {column_def}")
-
-            elif column_def.startswith("decimal("):
-                # Parse decimal type: decimal(10,2)
-                import re
-
-                match = re.match(r"decimal\((\d+),(\d+)\)", column_def)
-                if match:
-                    precision = int(match.group(1))
-                    scale = int(match.group(2))
-                    builder.add_numeric_column(column_name, "decimal", precision, scale)
-                else:
-                    raise ValueError(f"Invalid decimal format: {column_def}")
-
-            elif column_def.startswith("float("):
-                # Parse float type: float(10)
-                import re
-
-                match = re.match(r"float\((\d+)\)", column_def)
-                if match:
-                    precision = int(match.group(1))
-                    builder.add_numeric_column(column_name, "float", precision)
-                else:
-                    raise ValueError(f"Invalid float format: {column_def}")
-
-            elif column_def in ("int", "integer"):
-                builder.add_int_column(column_name, primary_key=is_primary)
-            elif column_def in ("bigint", "bigint unsigned"):
-                builder.add_bigint_column(column_name, primary_key=is_primary)
-            elif column_def in ("smallint", "tinyint"):
-                if column_def == "smallint":
-                    builder.add_smallint_column(column_name, primary_key=is_primary)
-                else:
-                    builder.add_tinyint_column(column_name, primary_key=is_primary)
-            elif column_def in ("text", "longtext", "mediumtext", "tinytext"):
-                builder.add_text_column(column_name)
-            elif column_def in ("float", "double"):
-                builder.add_numeric_column(column_name, column_def)
-            elif column_def in ("date", "datetime", "timestamp", "time"):
-                builder.add_datetime_column(column_name, column_def)
-            elif column_def in ("boolean", "bool"):
-                builder.add_boolean_column(column_name)
-            elif column_def in ("json", "jsonb"):
-                builder.add_json_column(column_name)
-            elif column_def in (
-                "blob",
-                "longblob",
-                "mediumblob",
-                "tinyblob",
-                "binary",
-                "varbinary",
-            ):
-                builder.add_binary_column(column_name, column_def)
-            else:
-                raise ValueError(
-                    f"Unsupported column type '{column_def}' for column '{column_name}'. "
-                    f"Supported types: int, bigint, smallint, tinyint, varchar(n), char(n), "
-                    f"text, float, double, decimal(p,s), date, datetime, timestamp, time, "
-                    f"boolean, json, blob, vecf32(n), vecf64(n)"
-                )
-
-        # Create table using transaction wrapper's execute method
-        table = builder.build()
-        create_sql = CreateTable(table)
-        sql = str(create_sql.compile(dialect=self.get_bind().dialect))
-        self.execute(sql)
-
+        table = simplified_table(table_name, columns, **kwargs)
+        self.execute(CreateTable(table))
         return self
 
     def drop_table(self, table_name: str) -> "Session":
@@ -3748,7 +3093,9 @@ class Session(SQLAlchemySession):
 
             Session: Self for chaining
         """
-        sql = f"DROP TABLE IF EXISTS {table_name}"
+        from ._utils import get_table_name
+
+        sql = 'DROP TABLE IF EXISTS ' + get_table_name(table_name, quoted=True)
         self.execute(sql)
         return self
 
@@ -3767,118 +3114,7 @@ class Session(SQLAlchemySession):
 
             Session: Self for chaining
         """
-        from sqlalchemy.schema import CreateTable
-
-        from .sqlalchemy_ext import VectorTableBuilder
-
-        # Parse primary key from kwargs
-        primary_key = kwargs.get("primary_key", None)
-
-        # Create table using VectorTableBuilder
-        builder = VectorTableBuilder(table_name)
-
-        # Add columns based on simplified format (same logic as client.create_table)
-        for column_name, column_def in columns.items():
-            is_primary = primary_key == column_name
-
-            if column_def.startswith("vector("):
-                # Parse vector type: vector(128,f32) or vector(128)
-                import re
-
-                match = re.match(r"vector\((\d+)(?:,(\w+))?\)", column_def)
-                if match:
-                    dimension = int(match.group(1))
-                    precision = match.group(2) or "f32"
-                    builder.add_vector_column(column_name, dimension, precision)
-                else:
-                    raise ValueError(f"Invalid vector format: {column_def}")
-
-            elif column_def.startswith("varchar("):
-                # Parse varchar type: varchar(100)
-                import re
-
-                match = re.match(r"varchar\((\d+)\)", column_def)
-                if match:
-                    length = int(match.group(1))
-                    builder.add_string_column(column_name, length)
-                else:
-                    raise ValueError(f"Invalid varchar format: {column_def}")
-
-            elif column_def.startswith("char("):
-                # Parse char type: char(10)
-                import re
-
-                match = re.match(r"char\((\d+)\)", column_def)
-                if match:
-                    length = int(match.group(1))
-                    builder.add_string_column(column_name, length)
-                else:
-                    raise ValueError(f"Invalid char format: {column_def}")
-
-            elif column_def.startswith("decimal("):
-                # Parse decimal type: decimal(10,2)
-                import re
-
-                match = re.match(r"decimal\((\d+),(\d+)\)", column_def)
-                if match:
-                    precision = int(match.group(1))
-                    scale = int(match.group(2))
-                    builder.add_numeric_column(column_name, "decimal", precision, scale)
-                else:
-                    raise ValueError(f"Invalid decimal format: {column_def}")
-
-            elif column_def.startswith("float("):
-                # Parse float type: float(10)
-                import re
-
-                match = re.match(r"float\((\d+)\)", column_def)
-                if match:
-                    precision = int(match.group(1))
-                    builder.add_numeric_column(column_name, "float", precision)
-                else:
-                    raise ValueError(f"Invalid float format: {column_def}")
-
-            elif column_def in ("int", "integer"):
-                builder.add_int_column(column_name, primary_key=is_primary)
-            elif column_def in ("bigint", "bigint unsigned"):
-                builder.add_bigint_column(column_name, primary_key=is_primary)
-            elif column_def in ("smallint", "tinyint"):
-                if column_def == "smallint":
-                    builder.add_smallint_column(column_name, primary_key=is_primary)
-                else:
-                    builder.add_tinyint_column(column_name, primary_key=is_primary)
-            elif column_def in ("text", "longtext", "mediumtext", "tinytext"):
-                builder.add_text_column(column_name)
-            elif column_def in ("float", "double"):
-                builder.add_numeric_column(column_name, column_def)
-            elif column_def in ("date", "datetime", "timestamp", "time"):
-                builder.add_datetime_column(column_name, column_def)
-            elif column_def in ("boolean", "bool"):
-                builder.add_boolean_column(column_name)
-            elif column_def in ("json", "jsonb"):
-                builder.add_json_column(column_name)
-            elif column_def in (
-                "blob",
-                "longblob",
-                "mediumblob",
-                "tinyblob",
-                "binary",
-                "varbinary",
-            ):
-                builder.add_binary_column(column_name, column_def)
-            else:
-                raise ValueError(
-                    f"Unsupported column type '{column_def}' for column '{column_name}'. "
-                    f"Supported types: int, bigint, smallint, tinyint, varchar(n), char(n), "
-                    f"text, float, double, decimal(p,s), date, datetime, timestamp, time, "
-                    f"boolean, json, blob, vecf32(n), vecf64(n)"
-                )
-
-        # Create table using transaction wrapper's execute method
-        table = builder.build()
-        create_sql = CreateTable(table)
-        sql = str(create_sql.compile(dialect=self.get_bind().dialect))
-        self.execute(sql)
+        self.create_table(table_name, columns, **kwargs)
 
         # Create indexes if specified
         if indexes:

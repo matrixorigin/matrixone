@@ -479,12 +479,6 @@ func (b *Blockid) Unmarshal(data []byte) error {
 	return nil
 }
 
-// Fixed bytes.   Decimal64/128 and Varlena are not included because they
-// has special meanings.  In general you cannot compare them as bytes.
-type FixedBytes interface {
-	TS | Rowid
-}
-
 type Ints interface {
 	int8 | int16 | int32 | int64
 }
@@ -1287,4 +1281,28 @@ func (t T) IsDecimal() bool {
 		return true
 	}
 	return false
+}
+
+// Numeric type attribute bits shared by the plan-side attribute channel
+// (plan.Type numeric_attributes), the durable catalog mask
+// (mo_columns.att_is_unsigned for DECIMAL rows), and the in-memory engine
+// mirror (engine.Attribute.NumericAttributes).
+const (
+	// NumericAttributeUnsigned marks the MySQL UNSIGNED domain bit.
+	NumericAttributeUnsigned uint32 = 0x1
+	// NumericAttributeZerofill marks the MySQL ZEROFILL presentation bit.
+	// Declared ZEROFILL implies UNSIGNED, so authoring normalizes a zerofill
+	// declaration to NumericAttributeZerofillMask (both bits set).
+	NumericAttributeZerofill uint32 = 0x2
+	// NumericAttributeMask is the union of the legal attribute bits.
+	NumericAttributeMask = NumericAttributeUnsigned | NumericAttributeZerofill
+	// NumericAttributeZerofillMask is the normalized stored form of a ZEROFILL
+	// declaration (unsigned bit set, since ZEROFILL implies UNSIGNED).
+	NumericAttributeZerofillMask = NumericAttributeUnsigned | NumericAttributeZerofill
+)
+
+// IsAttributedDecimalOid reports whether oid is a decimal family OID that can
+// legally carry a nonzero numeric attribute mask.
+func (t T) IsAttributedDecimalOid() bool {
+	return t.IsDecimal()
 }

@@ -28,6 +28,7 @@ import (
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/iceberg/model"
 	lockpb "github.com/matrixorigin/matrixone/pkg/pb/lock"
@@ -579,6 +580,9 @@ func TestBuildTableRejectsOutOfScopeSnapshot(t *testing.T) {
 		nil,
 	)
 	ctx.EXPECT().GetContext().Return(context.Background()).AnyTimes()
+	// The BindContext resolves the statement's boolean-contract mode from the
+	// session/process at build entry (MySQL default when nil).
+	ctx.EXPECT().GetProcess().Return(nil).AnyTimes()
 
 	builder := NewQueryBuilder(plan.Query_SELECT, ctx, false, false)
 	bindCtx := NewBindContext(builder, nil)
@@ -1355,6 +1359,521 @@ func TestQueryBuilderBuildRollupOrderByGroupingExpression(t *testing.T) {
 	require.Equal(t, int32(3), sortNode.OrderBy[0].Expr.GetCol().ColPos)
 	require.Equal(t, int32(4), sortNode.OrderBy[1].Expr.GetCol().ColPos)
 	require.Len(t, query.Nodes[sortNode.Children[0]].ProjectList, 5)
+}
+
+func TestQueryBuilderBuildSortRollupPlan(t *testing.T) {
+	rt := moruntime.ServiceRuntime("")
+	oldHints, hadHints := rt.GetGlobalVariables("optimizer_hints")
+	defer func() {
+		if hadHints {
+			rt.SetGlobalVariables("optimizer_hints", oldHints)
+		} else {
+			rt.SetGlobalVariables("optimizer_hints", "")
+		}
+	}()
+	rt.SetGlobalVariables("optimizer_hints", "rollupSort=1")
+
+	stmts, err := parsers.Parse(
+		context.TODO(), dialect.MYSQL,
+		`select a, b, count(*) as cnt, sum(c) as total,
+			grouping(a) as grouping_a, grouping(b) as grouping_b
+			from select_test.bind_select
+			group by a, b with rollup
+			order by grouping_a, grouping_b, a, b`,
+		1,
+	)
+	require.NoError(t, err)
+	queryPlan, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false)
+	require.NoError(t, err)
+
+	query := queryPlan.GetQuery()
+	var aggregate *plan.Node
+	for _, node := range query.Nodes {
+		if node.NodeType == plan.Node_AGG && IsSortRollupOption(node.ExtraOptions) {
+			aggregate = node
+			break
+		}
+	}
+	require.NotNil(t, aggregate)
+	require.Len(t, aggregate.Children, 1)
+	require.Equal(t, plan.Node_SORT, query.Nodes[aggregate.Children[0]].NodeType)
+	require.Len(t, query.Nodes[aggregate.Children[0]].OrderBy, 2)
+	// The aggregate owns the grouping keys and value aggregates. GROUPING()
+	// outputs are materialized by the projection above it.
+	require.Len(t, aggregate.ProjectList, 4)
+	require.False(t, aggregate.ProjectList[0].Typ.NotNullable)
+	require.False(t, aggregate.ProjectList[1].Typ.NotNullable)
+	var outputProject *plan.Node
+	for _, node := range query.Nodes {
+		if node.NodeType == plan.Node_PROJECT && len(node.ProjectList) == 6 {
+			outputProject = node
+			break
+		}
+	}
+	require.NotNil(t, outputProject)
+	for _, node := range query.Nodes {
+		require.NotEqual(t, plan.Node_UNION_ALL, node.NodeType)
+	}
+}
+
+func TestQueryBuilderDirectSortRollupPlanModes(t *testing.T) {
+	rt := moruntime.ServiceRuntime("")
+	oldHints, hadHints := rt.GetGlobalVariables("optimizer_hints")
+	defer func() {
+		if hadHints {
+			rt.SetGlobalVariables("optimizer_hints", oldHints)
+		} else {
+			rt.SetGlobalVariables("optimizer_hints", "")
+		}
+	}()
+
+	sql := `select a, b, count(*) as cnt, sum(c) as total,
+		grouping(a) as grouping_a, grouping(b) as grouping_b
+		from select_test.bind_select
+		group by a, b with rollup
+		order by grouping_a, grouping_b, a, b`
+	for _, tc := range []struct {
+		name string
+		hint string
+		sort bool
+	}{
+		{name: "sort", hint: "rollupSort=1", sort: true},
+		{name: "hash", hint: "rollupSort=2"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rt.SetGlobalVariables("optimizer_hints", tc.hint)
+			stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL, sql, 1)
+			require.NoError(t, err)
+			queryPlan, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false)
+			require.NoError(t, err)
+
+			if tc.sort {
+				require.True(t, planHasSortRollup(queryPlan.GetQuery()))
+				for _, node := range queryPlan.GetQuery().Nodes {
+					require.NotEqual(t, plan.Node_UNION_ALL, node.NodeType)
+				}
+			} else {
+				require.False(t, planHasSortRollup(queryPlan.GetQuery()))
+				var unionAll int
+				for _, node := range queryPlan.GetQuery().Nodes {
+					if node.NodeType == plan.Node_UNION_ALL {
+						unionAll++
+					}
+				}
+				require.NotZero(t, unionAll)
+			}
+		})
+	}
+}
+
+func TestQueryBuilderSortRollupPreservesDistinctAggregates(t *testing.T) {
+	rt := moruntime.ServiceRuntime("")
+	oldHints, hadHints := rt.GetGlobalVariables("optimizer_hints")
+	t.Cleanup(func() {
+		if hadHints {
+			rt.SetGlobalVariables("optimizer_hints", oldHints)
+		} else {
+			rt.SetGlobalVariables("optimizer_hints", "")
+		}
+	})
+	rt.SetGlobalVariables("optimizer_hints", "rollupSort=1")
+
+	for _, aggregate := range []string{"count", "sum", "avg"} {
+		for _, rollup := range []bool{true, false} {
+			t.Run(fmt.Sprintf("%s/rollup=%v", aggregate, rollup), func(t *testing.T) {
+				sql := fmt.Sprintf("select a, %s(distinct b) from select_test.bind_select group by a", aggregate)
+				if rollup {
+					sql += " with rollup"
+				}
+				stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL, sql, 1)
+				require.NoError(t, err)
+				queryPlan, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false)
+				require.NoError(t, err)
+				query := queryPlan.GetQuery()
+				seen := make(map[int32]bool)
+				var aggregates []*plan.Node
+				var visit func(int32)
+				visit = func(id int32) {
+					if seen[id] {
+						return
+					}
+					seen[id] = true
+					node := query.Nodes[id]
+					if node.NodeType == plan.Node_AGG {
+						aggregates = append(aggregates, node)
+					}
+					for _, child := range node.Children {
+						visit(child)
+					}
+				}
+				for _, root := range query.Steps {
+					visit(root)
+				}
+				if rollup {
+					require.Len(t, aggregates, 1, "detail-pair deduplication cannot replace per-prefix DISTINCT state")
+					node := aggregates[0]
+					require.True(t, IsSortRollupOption(node.ExtraOptions))
+					require.Len(t, node.AggList, 1)
+					require.NotZero(t, uint64(node.AggList[0].GetF().Func.Obj)&function.Distinct)
+					require.Equal(t, plan.Node_SORT, query.Nodes[node.Children[0]].NodeType)
+				} else {
+					require.Greater(t, len(aggregates), 1, "ordinary GROUP BY retains its distinct-pair rewrite")
+					for _, node := range aggregates {
+						require.False(t, IsSortRollupOption(node.ExtraOptions))
+						for _, expr := range node.AggList {
+							require.Zero(t, uint64(expr.GetF().Func.Obj)&function.Distinct)
+						}
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestQueryBuilderSortRollupFallsBackForDistinct(t *testing.T) {
+	rt := moruntime.ServiceRuntime("")
+	oldHints, hadHints := rt.GetGlobalVariables("optimizer_hints")
+	defer func() {
+		if hadHints {
+			rt.SetGlobalVariables("optimizer_hints", oldHints)
+		} else {
+			rt.SetGlobalVariables("optimizer_hints", "")
+		}
+	}()
+
+	queries := []string{
+		`select distinct a from select_test.bind_select
+			group by a with rollup`,
+		`select distinct a, grouping(a) from select_test.bind_select
+			group by a with rollup`,
+	}
+	for _, algorithm := range []string{"SORT", "HASH"} {
+		t.Run(algorithm, func(t *testing.T) {
+			hint := "rollupSort=1"
+			if algorithm == "HASH" {
+				hint = "rollupSort=2"
+			}
+			rt.SetGlobalVariables("optimizer_hints", hint)
+			for i, sql := range queries {
+				t.Run(fmt.Sprintf("query-%d", i), func(t *testing.T) {
+					stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL, sql, 1)
+					require.NoError(t, err)
+					queryPlan, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false)
+					require.NoError(t, err)
+					require.False(t, planHasSortRollup(queryPlan.GetQuery()),
+						"SELECT DISTINCT must use the legacy NULL-normalizing rollup path under %s", algorithm)
+					if algorithm == "SORT" {
+						var unionAll int
+						for _, node := range queryPlan.GetQuery().Nodes {
+							if node.NodeType == plan.Node_UNION_ALL {
+								unionAll++
+							}
+						}
+						require.NotZero(t, unionAll,
+							"SORT hint must fall back to legacy grouping-set expansion")
+					}
+				})
+			}
+		})
+	}
+}
+
+func TestQueryBuilderSortRollupFailsClosed(t *testing.T) {
+	rt := moruntime.ServiceRuntime("")
+	oldHints, hadHints := rt.GetGlobalVariables("optimizer_hints")
+	defer func() {
+		if hadHints {
+			rt.SetGlobalVariables("optimizer_hints", oldHints)
+		} else {
+			rt.SetGlobalVariables("optimizer_hints", "")
+		}
+	}()
+	rt.SetGlobalVariables("optimizer_hints", "rollupSort=1")
+
+	tests := []struct {
+		name string
+		sql  string
+	}{
+		{
+			name: "repeated grouping expression",
+			sql: `select a, count(*) from select_test.bind_select
+				group by a, a with rollup`,
+		},
+		{
+			name: "complex grouping expression",
+			sql: `select a + 1, count(*) from select_test.bind_select
+				group by a + 1 with rollup`,
+		},
+		{
+			name: "window expression",
+			sql: `select a, count(*), row_number() over ()
+				from select_test.bind_select group by a with rollup`,
+		},
+		{
+			name: "input-order-sensitive aggregate",
+			sql: `select a, group_concat(b) from select_test.bind_select
+				group by a with rollup`,
+		},
+		{
+			name: "hidden input-order-sensitive aggregate",
+			sql: `select a, count(*) from select_test.bind_select
+				group by a with rollup having group_concat(b) is not null`,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL, test.sql, 1)
+			require.NoError(t, err)
+			queryPlan, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false)
+			require.NoError(t, err)
+			for _, node := range queryPlan.GetQuery().Nodes {
+				require.False(t, node.NodeType == plan.Node_AGG &&
+					IsSortRollupOption(node.ExtraOptions))
+			}
+		})
+	}
+}
+
+func TestQueryBuilderSortRollupFallsBackForUnprovenKeyTypes(t *testing.T) {
+	rt := moruntime.ServiceRuntime("")
+	oldHints, hadHints := rt.GetGlobalVariables("optimizer_hints")
+	defer func() {
+		if hadHints {
+			rt.SetGlobalVariables("optimizer_hints", oldHints)
+		} else {
+			rt.SetGlobalVariables("optimizer_hints", "")
+		}
+	}()
+	rt.SetGlobalVariables("optimizer_hints", "rollupSort=1")
+
+	for _, oid := range []types.T{types.T_float32, types.T_float64, types.T_json} {
+		t.Run(oid.String(), func(t *testing.T) {
+			mock := NewMockCompilerContext(true, newPlanTestProcess(t))
+			mock.tables["bind_select"].Cols[0].Typ.Id = int32(oid)
+			stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL,
+				`select a, b, count(*) from select_test.bind_select
+				 group by a, b with rollup`, 1)
+			require.NoError(t, err)
+			queryPlan, err := BuildPlan(mock, stmts[0], false)
+			require.NoError(t, err)
+			for _, node := range queryPlan.GetQuery().Nodes {
+				require.False(t, node.NodeType == plan.Node_AGG &&
+					IsSortRollupOption(node.ExtraOptions))
+			}
+		})
+	}
+}
+
+func TestQueryBuilderSortRollupFallsBackForDerivedSource(t *testing.T) {
+	rt := moruntime.ServiceRuntime("")
+	oldHints, hadHints := rt.GetGlobalVariables("optimizer_hints")
+	defer func() {
+		if hadHints {
+			rt.SetGlobalVariables("optimizer_hints", oldHints)
+		} else {
+			rt.SetGlobalVariables("optimizer_hints", "")
+		}
+	}()
+	rt.SetGlobalVariables("optimizer_hints", "rollupSort=1")
+
+	stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL,
+		`select d.a, count(*) from
+			(select a from select_test.bind_select) d
+			group by d.a with rollup`, 1)
+	require.NoError(t, err)
+	queryPlan, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false)
+	require.NoError(t, err)
+	for _, node := range queryPlan.GetQuery().Nodes {
+		require.False(t, node.NodeType == plan.Node_AGG &&
+			IsSortRollupOption(node.ExtraOptions))
+	}
+}
+
+func TestQueryBuilderSortRollupFallsBackForNestedDerivedRollup(t *testing.T) {
+	rt := moruntime.ServiceRuntime("")
+	oldHints, hadHints := rt.GetGlobalVariables("optimizer_hints")
+	defer func() {
+		if hadHints {
+			rt.SetGlobalVariables("optimizer_hints", oldHints)
+		} else {
+			rt.SetGlobalVariables("optimizer_hints", "")
+		}
+	}()
+	rt.SetGlobalVariables("optimizer_hints", "rollupSort=1")
+
+	stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL,
+		`select * from (
+			select a, count(*) as c
+			from select_test.bind_select
+			group by a with rollup
+		) d`, 1)
+	require.NoError(t, err)
+	queryPlan, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false)
+	require.NoError(t, err)
+	require.False(t, planHasSortRollup(queryPlan.GetQuery()))
+}
+
+func TestQueryBuilderSortRollupReusesOrderedDerivedSource(t *testing.T) {
+	rt := moruntime.ServiceRuntime("")
+	oldHints, hadHints := rt.GetGlobalVariables("optimizer_hints")
+	defer func() {
+		if hadHints {
+			rt.SetGlobalVariables("optimizer_hints", oldHints)
+		} else {
+			rt.SetGlobalVariables("optimizer_hints", "")
+		}
+	}()
+	rt.SetGlobalVariables("optimizer_hints", "rollupSort=1")
+
+	stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL,
+		`select d.a, d.b, count(*) from
+			(select a, b from select_test.bind_select order by a, b) d
+			group by d.a, d.b with rollup`, 1)
+	require.NoError(t, err)
+	queryPlan, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false)
+	require.NoError(t, err)
+
+	var rollupAgg *plan.Node
+	for _, node := range queryPlan.GetQuery().Nodes {
+		if node.NodeType == plan.Node_AGG && IsSortRollupOption(node.ExtraOptions) {
+			rollupAgg = node
+			break
+		}
+	}
+	require.NotNil(t, rollupAgg)
+	require.Len(t, rollupAgg.Children, 1)
+	child := queryPlan.GetQuery().Nodes[rollupAgg.Children[0]]
+	// The inner derived ORDER BY is the only sort below the streaming AGG. A
+	// second internal sort would mean the input-order property was not reused.
+	require.Equal(t, plan.Node_SORT, child.NodeType)
+	var sortCount int
+	for _, node := range queryPlan.GetQuery().Nodes {
+		if node.NodeType == plan.Node_SORT {
+			sortCount++
+		}
+	}
+	require.Equal(t, 1, sortCount)
+}
+
+func TestQueryBuilderOrderedDerivedRollupPlanModes(t *testing.T) {
+	rt := moruntime.ServiceRuntime("")
+	oldHints, hadHints := rt.GetGlobalVariables("optimizer_hints")
+	defer func() {
+		if hadHints {
+			rt.SetGlobalVariables("optimizer_hints", oldHints)
+		} else {
+			rt.SetGlobalVariables("optimizer_hints", "")
+		}
+	}()
+
+	sql := `select d.a, d.b, d.c, count(*) from
+		(select a, b, c from select_test.bind_select order by a, b, c) d
+		group by d.a, d.b, d.c with rollup`
+	for _, tc := range []struct {
+		name string
+		hint string
+	}{
+		{name: "sort", hint: "rollupSort=1"},
+		{name: "hash", hint: "rollupSort=2"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rt.SetGlobalVariables("optimizer_hints", tc.hint)
+			stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL, sql, 1)
+			require.NoError(t, err)
+			queryPlan, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false)
+			require.NoError(t, err)
+
+			counts := make(map[plan.Node_NodeType]int)
+			for _, node := range queryPlan.GetQuery().Nodes {
+				counts[node.NodeType]++
+			}
+			if tc.name == "sort" {
+				require.Equal(t, 1, counts[plan.Node_TABLE_SCAN])
+				require.Equal(t, 1, counts[plan.Node_SORT])
+				require.Equal(t, 1, counts[plan.Node_AGG])
+				require.True(t, planHasSortRollup(queryPlan.GetQuery()))
+			} else {
+				require.Equal(t, 4, counts[plan.Node_TABLE_SCAN])
+				require.Equal(t, 4, counts[plan.Node_SORT])
+				require.Equal(t, 5, counts[plan.Node_AGG])
+				require.NotZero(t, counts[plan.Node_UNION_ALL],
+					"HASH rollup over an ordered derived source must retain legacy grouping-set expansion")
+				require.False(t, planHasSortRollup(queryPlan.GetQuery()))
+			}
+		})
+	}
+}
+
+func TestSortRollupTypeProbeDoesNotMutateAST(t *testing.T) {
+	stmt, err := parsers.Parse(context.TODO(), dialect.MYSQL,
+		`select a, b, count(*) from select_test.bind_select
+		 group by a, b with rollup`, 1)
+	require.NoError(t, err)
+	selectClause := stmt[0].(*tree.Select).Select.(*tree.SelectClause)
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, false)
+	ctx := NewBindContext(builder, nil)
+	ctx.defaultDatabase = "select_test"
+	ctx.lower = 1
+
+	beforeFrom := tree.String(selectClause.From.Tables[0], dialect.MYSQL)
+	beforeGrouping := tree.String(selectClause.GroupBy.GroupByExprsList[0][0], dialect.MYSQL) +
+		"," + tree.String(selectClause.GroupBy.GroupByExprsList[0][1], dialect.MYSQL)
+	require.True(t, builder.sortRollupGroupingTypesEligible(
+		ctx,
+		selectClause.From.Tables,
+		selectClause.GroupBy.GroupByExprsList[0],
+		true,
+	))
+	require.Equal(t, beforeFrom, tree.String(selectClause.From.Tables[0], dialect.MYSQL))
+	require.Equal(t, beforeGrouping,
+		tree.String(selectClause.GroupBy.GroupByExprsList[0][0], dialect.MYSQL)+
+			","+tree.String(selectClause.GroupBy.GroupByExprsList[0][1], dialect.MYSQL))
+}
+
+func TestSortRollupGroupingListRejectsProjectionAliases(t *testing.T) {
+	stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL,
+		`select a as x, a as y, count(*) from select_test.bind_select
+			group by x, y with rollup`, 1)
+	require.NoError(t, err)
+	selectClause := stmts[0].(*tree.Select).Select.(*tree.SelectClause)
+	require.NotNil(t, selectClause.GroupBy)
+	require.Len(t, selectClause.GroupBy.GroupByExprsList, 1)
+	require.False(t, sortRollupGroupingListEligible(
+		selectClause.GroupBy.GroupByExprsList[0], selectClause.Exprs))
+}
+
+func TestQueryBuilderSortRollupFilterIsAggregateBoundary(t *testing.T) {
+	rt := moruntime.ServiceRuntime("")
+	oldHints, hadHints := rt.GetGlobalVariables("optimizer_hints")
+	defer func() {
+		if hadHints {
+			rt.SetGlobalVariables("optimizer_hints", oldHints)
+		} else {
+			rt.SetGlobalVariables("optimizer_hints", "")
+		}
+	}()
+	rt.SetGlobalVariables("optimizer_hints", "rollupSort=1")
+
+	stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL,
+		`select a, b, count(*) as c
+			from select_test.bind_select
+			group by a, b with rollup
+			having a = 1`, 1)
+	require.NoError(t, err)
+	queryPlan, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false)
+	require.NoError(t, err)
+
+	var aggregate *plan.Node
+	for _, node := range queryPlan.GetQuery().Nodes {
+		if node.NodeType == plan.Node_AGG && IsSortRollupOption(node.ExtraOptions) {
+			aggregate = node
+			break
+		}
+	}
+	require.NotNil(t, aggregate)
+	require.NotEmpty(t, aggregate.FilterList,
+		"outer predicates must remain above the sort rollup aggregate")
 }
 
 func TestQueryBuilderBuildRollupWithGroupingFunctionExpressions(t *testing.T) {
@@ -3262,6 +3781,34 @@ func TestQueryBuilderTimeWindowMicrosecondBoundaryTypes(t *testing.T) {
 	}
 }
 
+func TestPreparedGapFillPreservesLiteralTemporalBounds(t *testing.T) {
+	for _, oid := range []types.T{types.T_date, types.T_datetime} {
+		t.Run(oid.String(), func(t *testing.T) {
+			mock := NewMockOptimizer(false, newPlanTestProcess(t))
+			mockTimeWindowScaleTable(t, mock, oid.ToType())
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL,
+				"select _wstart, sum(v) from tw_scale where ts >= '2026-01-01' and ts < '2026-01-04' interval(ts, 1, day) gapfill(partition) fill(null)", 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			logicPlan, err := BuildPlan(mock.CurrentContext(), stmt, true)
+			require.NoError(t, err)
+			var window *plan.Node
+			for _, node := range logicPlan.GetQuery().Nodes {
+				if node.NodeType == plan.Node_TIME_WINDOW {
+					window = node
+					break
+				}
+			}
+			require.NotNil(t, window)
+			for _, bound := range []*plan.Expr{window.GapFillStart, window.GapFillEnd} {
+				require.NotNil(t, bound)
+				require.True(t, function.IsRuntimeConstant(bound))
+				require.True(t, ContainsVolatileFunction(bound), "diagnostic relocation stays conservative")
+			}
+		})
+	}
+}
+
 func TestInferGapFillBoundsNormalizesTemporalTypesToDatetime(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
@@ -5055,6 +5602,110 @@ func TestSetOperationMixedWidthCharUsesCommonPaddedType(t *testing.T) {
 				require.Len(t, child.ProjectList, 1)
 				require.Equal(t, setNode.ProjectList[0].Typ, child.ProjectList[0].Typ,
 					"set-operation branch %d must use the common CHAR width", branch)
+			}
+		})
+	}
+}
+
+func TestSetOperationMixedWidthBinaryUsesCommonPaddedType(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		sql  string
+		kind plan.Node_NodeType
+	}{
+		{"union", "select cast('a' as binary(1)) union select cast('a' as binary(4))", plan.Node_UNION},
+		{"union all", "select cast('a' as binary(1)) union all select cast('a' as binary(4))", plan.Node_UNION_ALL},
+		{"reversed", "select cast('a' as binary(4)) union select cast('a' as binary(1))", plan.Node_UNION},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			logicPlan, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t, tc.sql)
+			require.NoError(t, err)
+			query := logicPlan.GetQuery()
+			var setNode *plan.Node
+			for _, node := range query.Nodes {
+				if node.NodeType == tc.kind {
+					setNode = node
+					break
+				}
+			}
+			require.NotNil(t, setNode)
+			require.Len(t, setNode.ProjectList, 1)
+			require.Equal(t, int32(types.T_binary), setNode.ProjectList[0].Typ.Id)
+			require.Equal(t, int32(4), setNode.ProjectList[0].Typ.Width)
+			for _, childID := range setNode.Children {
+				child := query.Nodes[childID]
+				require.Len(t, child.ProjectList, 1)
+				require.Equal(t, setNode.ProjectList[0].Typ.Id, child.ProjectList[0].Typ.Id)
+				require.Equal(t, setNode.ProjectList[0].Typ.Width, child.ProjectList[0].Typ.Width)
+			}
+		})
+	}
+}
+
+func TestSetOperationUnspecifiedBinaryWidthRemainsUnbounded(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		sql  string
+		kind plan.Node_NodeType
+	}{
+		{"unbounded first union all", "select cast('hello-long' as binary) v union all select cast('x' as binary(1))", plan.Node_UNION_ALL},
+		{"unbounded last union all", "select cast('x' as binary(1)) v union all select cast('hello-long' as binary)", plan.Node_UNION_ALL},
+		{"unbounded first distinct", "select cast('hello-long' as binary) v union select cast('x' as binary(1))", plan.Node_UNION},
+		{"unbounded last distinct", "select cast('x' as binary(1)) v union select cast('hello-long' as binary)", plan.Node_UNION},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			logicPlan, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t, tc.sql)
+			require.NoError(t, err)
+			query := logicPlan.GetQuery()
+			var setNode *plan.Node
+			for _, node := range query.Nodes {
+				if node.NodeType == tc.kind {
+					setNode = node
+					break
+				}
+			}
+			require.NotNil(t, setNode)
+			require.Len(t, setNode.ProjectList, 1)
+			require.Equal(t, int32(types.T_blob), setNode.ProjectList[0].Typ.Id)
+			require.Equal(t, int32(types.MaxLongTextLen), setNode.ProjectList[0].Typ.Width)
+			for _, childID := range setNode.Children {
+				child := query.Nodes[childID]
+				require.Len(t, child.ProjectList, 1)
+				require.Equal(t, int32(types.T_blob), child.ProjectList[0].Typ.Id)
+				require.Equal(t, int32(types.MaxLongTextLen), child.ProjectList[0].Typ.Width)
+			}
+		})
+	}
+}
+
+func TestSetOperationTextAndDatetimeKeepsFullTemporalWidth(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		sql  string
+	}{
+		{"literal first", "select '2026-01-01' as d union all select cast('2026-02-02 10:20:30' as datetime)"},
+		{"datetime first", "select cast('2026-02-02 10:20:30' as datetime) as d union all select '2026-01-01'"},
+		{"fractional seconds", "select 'x' as d union all select cast('2026-02-02 10:20:30.123456' as datetime(6))"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			logicPlan, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t, tc.sql)
+			require.NoError(t, err)
+			query := logicPlan.GetQuery()
+			var setNode *plan.Node
+			for _, node := range query.Nodes {
+				if node.NodeType == plan.Node_UNION_ALL {
+					setNode = node
+					break
+				}
+			}
+			require.NotNil(t, setNode)
+			require.Len(t, setNode.ProjectList, 1)
+			require.Equal(t, int32(types.T_varchar), setNode.ProjectList[0].Typ.Id)
+			require.GreaterOrEqual(t, setNode.ProjectList[0].Typ.Width, int32(26))
+			for _, childID := range setNode.Children {
+				child := query.Nodes[childID]
+				require.Len(t, child.ProjectList, 1)
+				require.Equal(t, setNode.ProjectList[0].Typ.Width, child.ProjectList[0].Typ.Width)
 			}
 		})
 	}

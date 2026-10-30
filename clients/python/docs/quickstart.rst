@@ -357,11 +357,11 @@ Full async/await support with async sessions for non-blocking operations:
                update(Product).where(Product.id == 1).values(price=899.99)
            )
            
-           # Concurrent queries with asyncio.gather
-           product_result, count_result = await asyncio.gather(
-               session.execute(select(Product).where(Product.category == 'Electronics')),
-               session.execute(select(func.count(Product.id)))
+           # Operations in one session are sequential and share this transaction.
+           product_result = await session.execute(
+               select(Product).where(Product.category == 'Electronics')
            )
+           count_result = await session.execute(select(func.count(Product.id)))
            # Commits automatically
        
        # Clean up
@@ -373,7 +373,7 @@ Full async/await support with async sessions for non-blocking operations:
 **Async Advantages:**
 
 - ✅ **Non-blocking operations** - don't block the event loop
-- ✅ **Concurrent execution** with ``asyncio.gather()``
+- ✅ **Run independent parallel operations** with separate sessions
 - ✅ **Perfect for web frameworks** (FastAPI, aiohttp)
 - ✅ **Same transaction guarantees** as sync version
 

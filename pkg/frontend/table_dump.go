@@ -359,7 +359,9 @@ func tableSchemaHashWithOptions(
 		clone.Name = "__table_dump_target__"
 		clone.DbName = ""
 		clone.Createsql = ""
-		canonical, _, err := sqlplan.ConstructCreateTableSQL(nil, &clone, nil, false, nil)
+		// This is persisted fingerprint input, not the replayable manifest DDL.
+		// Keep the historical comment and default bytes so existing archives remain loadable.
+		canonical, err := sqlplan.ConstructCreateTableSQLForSchemaHash(&clone)
 		if err != nil {
 			return "", moerr.NewInternalErrorNoCtxf("cannot reconstruct table schema: %v", err)
 		}
@@ -508,14 +510,16 @@ func normalizeTableDumpLegacyTextMetadata(def *plan.TableDef) {
 	if def.DefaultCharset == uint32(types.CharsetLegacy) {
 		def.DefaultCharset = uint32(types.CharsetUTF8MB4Bin)
 	}
-	for _, col := range def.Cols {
+	for i, col := range def.Cols {
 		if col == nil {
 			continue
 		}
 		switch types.T(col.Typ.Id) {
 		case types.T_char, types.T_varchar, types.T_text:
 			if col.Typ.Charset == uint32(types.CharsetLegacy) {
-				col.Typ.Charset = uint32(types.CharsetUTF8MB4Bin)
+				cloned := *col
+				cloned.Typ.Charset = uint32(types.CharsetUTF8MB4Bin)
+				def.Cols[i] = &cloned
 			}
 		}
 	}

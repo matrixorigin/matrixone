@@ -15,6 +15,7 @@
 package external
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -31,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	pbplan "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/crt"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -86,7 +88,10 @@ func (r *CsvReader) Open(param *ExternalParam, proc *process.Process) (fileEmpty
 		return true, nil
 	}
 
-	csvParser, err := newCSVParserFromReader(param.Extern, r.reader)
+	cfg := CSVConfigForLoad(param.Extern)
+	cfg.AllowUnterminatedEnclosureAtEOF = param.Extern.ExternType == int32(pbplan.ExternType_LOAD) &&
+		!param.Extern.Parallel && param.Extern.Format == tree.CSV
+	csvParser, err := csvparser.NewCSVParser(cfg, bufio.NewReader(r.reader), csvparser.ReadBlockSize, false)
 	if err != nil {
 		r.reader.Close()
 		r.reader = nil
@@ -366,7 +371,7 @@ func (r *CsvReader) transJsonObject2Lines(ctx context.Context, str string, attrs
 			continue
 		}
 
-		val, err := jsonLineScalarText(ctx, valN, types.T(tp))
+		val, err := jsonLineScalarText(ctx, valN, types.T(tp), r.legacyJSONBinary())
 		if err != nil {
 			return nil, err
 		}
@@ -426,7 +431,7 @@ func (r *CsvReader) transJsonArray2Lines(ctx context.Context, str string, attrs 
 			continue
 		}
 
-		val, err := jsonLineScalarText(ctx, valN, types.T(tp))
+		val, err := jsonLineScalarText(ctx, valN, types.T(tp), r.legacyJSONBinary())
 		if err != nil {
 			return nil, err
 		}
@@ -435,10 +440,14 @@ func (r *CsvReader) transJsonArray2Lines(ctx context.Context, str string, attrs 
 	return res, nil
 }
 
+func (r *CsvReader) legacyJSONBinary() bool {
+	return r.param != nil && r.param.Extern != nil && r.param.Extern.JsonBinary == plan.JSONBinaryLegacyBase64
+}
+
 // jsonLineScalarText preserves numeric array boundaries for vector columns.
 // Node.String uses Go slice formatting, whose spaces are removed by the vector
 // parser. Keep the original numeric lexemes to avoid intermediate rounding.
-func jsonLineScalarText(ctx context.Context, node bytejson.Node, typ types.T) (string, error) {
+func jsonLineScalarText(ctx context.Context, node bytejson.Node, typ types.T, legacyBinary bool) (string, error) {
 	group, ok := node.V.(*bytejson.Group)
 	if !typ.IsArrayRelate() || !ok || group.Obj {
 		//#30635: JSONLINE OUTFILE writes binary columns wrapped as
@@ -457,6 +466,17 @@ func jsonLineScalarText(ctx context.Context, node bytejson.Node, typ types.T) (s
 				}
 				return string(decoded), nil
 			}
+		}
+		if legacyBinary && (typ == types.T_binary || typ == types.T_varbinary || typ == types.T_blob) {
+			encoded, ok := node.V.(string)
+			if !ok {
+				return "", moerr.NewInvalidInput(ctx, "legacy JSONLINE binary value must be a base64 string or a $binary wrapper")
+			}
+			decoded, err := base64.StdEncoding.DecodeString(encoded)
+			if err != nil {
+				return "", moerr.NewInvalidInput(ctx, "invalid base64 payload in legacy JSONLINE binary column")
+			}
+			return string(decoded), nil
 		}
 		return fmt.Sprint(node), nil
 	}
