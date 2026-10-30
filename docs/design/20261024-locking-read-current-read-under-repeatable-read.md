@@ -6,8 +6,8 @@
 |---|---|
 | Owning issue | https://github.com/matrixorigin/matrixone/issues/30955 |
 | Revision | 15 (2026-10-29) — approved and delivered; the review-and-delivery record below the decision log cites the exact reviewed revision and the implementation PR. The approved decision set is the inherited mechanism set of revisions 12-14 (rev-12 passed design review; rev-13 added the staged-delivery contract D-10 after its review blocked a partial rollout; rev-14 moved D-4's transfer mask into stage-1, completed D-1's explicit-role representation and closed the D-8 window) plus exactly two new decisions: **R15-F1** — the rev-3–14 cluster capability gate contradicted the repository's shutdown-only upgrade contract (`upgrade-compatibility.md`), so the allocated `MORPCVersion135` design and every below-gate/legacy/transition mechanism are DELETED; D-7 is rewritten as the single-version deployment contract, D-8 loses its capability-transition layers, and D-9/D-10/section 6-8 clauses are amended accordingly; **R15-F2** — D-5 gains the marked-retry persistence invariant: an already-recorded marked floor must surface its retry on every terminal path of the lock batch, so a later SKIP LOCKED direct conflict cannot erase it. Revisions 1-11 were each rejected by pre-PR design review; the complete decision chronology of every earlier revision is preserved in this file's git history, and this document now retains only the current state of each decision. |
-| Status | **Approved and delivered** — the design-first phase is closed. Revision 15 was reviewed before its implementation, per the requested design-first order, and both of its decisions are implemented, together with the stage-1 primary relation-read surface, in PR #31587 below: R15-F1's gate removal (the entire mixed-version/capability machinery is absent from both design and implementation at the delivered head) and R15-F2's marked-retry persistence. The delivered implementation was approved on the PR at its pre-rebase head `8a705621ec` (iamlinjunhong, 2026-10-29: no remaining findings) and at the rebased head `8fc3801e8e` (iamlinjunhong again and the recorded mo-bot reviews, 2026-10-30). No approval-requiring decision in this document remains open. |
-| Implementation PR / PR series | **PR #31587 — "fix: REPEATABLE READ locking reads current-read the latest committed value"** (https://github.com/matrixorigin/matrixone/pull/31587). One PR delivers the complete approved contract: the stage-1 primary relation-read surface plus R15-F1's gate removal and R15-F2's marked-retry persistence. Exact reviewed revision-15 content: preserved verbatim in this file's git history at commit `6243db858e` (pre-rebase) / `cec189c19e` (the rebased PR branch), content SHA-256 `e2f7e37135778c60fe7f3604bd5d44974ff2e76fe1c186864247db5f8b3ae4c9`; delivered implementation heads `8a705621ec` → rebased `8fc3801e8e` (base main `97b2261005`). |
+| Status | **Approved and delivered** — the design-first phase is closed. Revision 15 was approved as a design BEFORE its implementation was delivered, per the requested design-first order: the independent pre-PR design review (the same read-only local design-review process that rejected revisions 1-11 and approved revisions 12 and 14; separate from this implementation and from the PR's implementation reviewers) reviewed exactly this revision's content on 2026-10-29 while the implementation was still the previously reviewed head `5415d839824` and returned PASS — verdict `approved=true`, verified Revision 15 at commit `6243db858e` with content SHA-256 `e2f7e37135778c60fe7f3604bd5d44974ff2e76fe1c186864247db5f8b3ae4c9`, recorded at `state/artifacts/issue-30955/pre-pr-review-1793297991115.json`, which states its own scope: "Approval covers this exact design, not implementation readiness or complete issue delivery." Both of its decisions are implemented, together with the stage-1 primary relation-read surface, in PR #31587 below: R15-F1's gate removal (the entire mixed-version/capability machinery is absent from both design and implementation at the delivered head) and R15-F2's marked-retry persistence. After delivery, the implementation received its own separate PR approvals at its pre-rebase head `8a705621ec` (iamlinjunhong, 2026-10-29: no remaining findings, including "Design revision 15's single-version deployment contract and retry-persistence changes are acceptable for its documented stage-1 scope") and at the rebased heads `8fc3801e8e` and `2b6dd91192` (the recorded mo-bot reviews, 2026-10-30). No approval-requiring decision in this document remains open. |
+| Implementation PR / PR series | **PR #31587 — "fix: REPEATABLE READ locking reads current-read the latest committed value"** (https://github.com/matrixorigin/matrixone/pull/31587). One PR delivers the complete approved contract: the stage-1 primary relation-read surface plus R15-F1's gate removal and R15-F2's marked-retry persistence. Exact reviewed revision-15 content: preserved verbatim in this file's git history at commit `6243db858e` (pre-rebase) / `cec189c19e` (the rebased PR branch), content SHA-256 `e2f7e37135778c60fe7f3604bd5d44974ff2e76fe1c186864247db5f8b3ae4c9` — this exact content was design-approved before delivery (independent pre-PR design review, PASS 2026-10-29, `approved=true`, recorded verdict `state/artifacts/issue-30955/pre-pr-review-1793297991115.json`; full record in the review-and-delivery record below the decision log); delivered implementation heads `8a705621ec` → rebased `8fc3801e8e` (base main `97b2261005`), plus the design-record reconciliation head `2b6dd91192`. |
 | Base revision | `d93d5d66c83d2927c233de17f21fe7f513bc7d32` |
 | Design gate trigger | complexity trigger: adds a per-read visibility mode inside a fixed SI read view, materially changes retry/idempotency behavior, crosses plan/executor/compile/engine/moerr boundaries (≥2 subsystems), and adds additive plan/pipeline wire fields (rev-15 note: the change introduces no cluster capability version, so rev-14's gate-design clause is removed). Not an ordinary focused bug fix. |
 
@@ -58,24 +58,58 @@ say so):
 | **R15-F2 a marked retry recorded on an earlier target can be lost to a later target's direct SKIP LOCKED conflict** | Verified at the delivered head (PR-review P1, confirmed by trace): the marked-SI branch of `doLock` records its observation only through `opts.markingFloor` (`lock_op.go:524`) and returns an EMPTY refreshTS (:1377-1395 `recordMarkingFloor(newSnapshotTS)` then `return true, false, timestamp.Timestamp{}, nil`); `performLock` persists an RC-style retry inside the target loop only when refreshTS is non-empty (:575-580) and defers the marked conversion to after the loop (:598-606, `ctr.lockingReadFloor` + `ErrTxnNeedRetryLockingRead` only `if ctr.retryError == nil`); a later target returning `lockservice.ErrLockConflict` exits the loop first at :548-549; `callSkipLocked` then sees `ctr.retryError == nil` and converts the returned direct conflict into an ordinary skip (:242-252). Counterexample: RR `SELECT a.id,b.id FROM a JOIN b ON b.id=a.k WHERE a.id=1 FOR SHARE SKIP LOCKED`, plan locking `a` before `b`; at frontier F, a(1).k=1; after F a writer commits a(1).k=2; another transaction holds b(1) exclusively while b(2) is free. The a-grant records the newer-version floor with an empty refreshTS; the b(1) conflict then silently skips the candidate, and the statement can return an empty result instead of retrying at the floor to the current pair (1,2) — no receipt the current-read contract was ever honored for the pair. | **D-5 marked-retry persistence invariant (rev 15):** once any target of a `performLock` call has recorded a marked floor, the call must surface the locking-read retry on EVERY terminal path — a later skippable conflict may shrink the accepted row set but never erases an already-recorded retry obligation. The conversion runs at the point of recording, before the next target is inspected; `ctr.lockingReadFloor` max-aggregates across targets and the tokenized retry is (re)generated from the CURRENT max; definition-retry precedence is retained (`retryWithDefChangedError` dominates whenever set, before or after a marked floor); fatal `doLock` errors still return immediately; `callSkipLocked`'s existing conflict branch then surfaces the retry with `result.Batch = nil` (no accepted prefix published, so a downstream LIMIT cannot consume partial output). Mandated item 8 (vii) members: the RR marked-SI counterpart of `TestLockOpSkipLockedPreservesRefreshBeforeLaterTargetConflict` (floor + empty refreshTS on the first target, direct conflict on the second), the two-floor max-aggregation member, the both-order definition-precedence members, and the LIMIT/no-output assertion including the all-candidates-skipped shape. |
 
 Revision 15 review and delivery record. Revision 15 answers the two
-findings of PR #31587's first review round, was reviewed before its
-implementation was delivered, and is the approved revision: R15-F1 removes
-the rev-3–14 cluster capability gate (raised by aunjgr, 2026-10-29: a
-per-feature MORPCVersion gate conflicts with the repository's
-shutdown-only upgrade contract) and R15-F2 adds the marked-retry
-persistence invariant (raised as P1 by iamlinjunhong, 2026-10-29). The
-exact reviewed revision-15 content is preserved verbatim in this file's
-git history at commit `6243db858e` (equivalently `cec189c19e` after the
-PR's rebase onto main), content SHA-256
-`e2f7e37135778c60fe7f3604bd5d44974ff2e76fe1c186864247db5f8b3ae4c9`; the
-decision table and sections below carry the same decisions in their
-approved post-revision-15 form — deleted mechanism text (the allocated
-gate constant, bind-time gate, per-Run validator, below-gate legacy
-plans, capability transitions and their test members) is removed rather
-than silently retained. The implementation of the complete approved set
-(stage-1 plus both revision-15 decisions) is PR #31587, heads
-`8a705621ec` → `8fc3801e8e`; the approving reviews are recorded on
-that PR (iamlinjunhong, 2026-10-29; the mo-bot reviews, 2026-10-30).
+findings of PR #31587's first review round, was approved as a design
+before its implementation was delivered, and is the approved revision:
+R15-F1 removes the rev-3–14 cluster capability gate (raised by aunjgr,
+2026-10-29: a per-feature MORPCVersion gate conflicts with the
+repository's shutdown-only upgrade contract) and R15-F2 adds the
+marked-retry persistence invariant (raised as P1 by iamlinjunhong,
+2026-10-29).
+
+Design-first approval of exactly this content — reviewer identity and
+reviewed revision. The independent pre-PR design review (a separate,
+read-only, controller-dispatched design-review session; the same
+review process that recorded the rejections of revisions 1-11 and the
+approvals of revisions 12 and 14, and distinct from both the
+implementation work and the PR's implementation reviewers) reviewed
+revision 15 on 2026-10-29, BEFORE the implementation revision existed:
+its reviewed tree was commit
+`6243db858e82a01c8c89ee8bc0d33d7f02274772` sitting directly above the
+previously reviewed implementation head `5415d839824` with NO
+implementation change (worktree clean, merge-base `9e29011e73`).
+The verdict is PASS, `approved=true`, recorded at
+`state/artifacts/issue-30955/pre-pr-review-1793297991115.json`:
+"PASS — design-only review for #30955 on main. Verified
+docs/design/20261024-locking-read-current-read-under-repeatable-read.md
+Revision 15 at commit `6243db858e82a01c8c89ee8bc0d33d7f02274772`,
+SHA-256 `e2f7e37135778c60fe7f3604bd5d44974ff2e76fe1c186864247db5f8b3ae4c9`.
+… R15-F1's gate-removal closure matches the repository's shutdown-only
+upgrade contract. R15-F2's immediate retry persistence, maximum-floor
+aggregation, definition-error precedence and fatal-error preservation
+address the verified later-target conflict path. … Approval covers
+this exact design, not implementation readiness or complete issue
+delivery. The planned repairs require red/green proof on
+implementation parent 5415d83982 and a separate full implementation
+review." The exact reviewed revision-15 content is preserved verbatim
+in this file's git history at commit `6243db858e` (equivalently
+`cec189c19e` after the PR's rebase onto main); the decision table and
+sections below carry the same decisions in their approved
+post-revision-15 form — deleted mechanism text (the allocated gate
+constant, bind-time gate, per-Run validator, below-gate legacy plans,
+capability transitions and their test members) is removed rather than
+silently retained.
+
+Implementation followed that design approval and then received its
+own separate reviews: the complete approved set (stage-1 plus both
+revision-15 decisions) is PR #31587, heads `8a705621ec` → `8fc3801e8e`
+(this document's record reconciliation is head `2b6dd91192`); the
+implementation approvals recorded on that PR are iamlinjunhong's
+APPROVED review of `8a705621ec` (2026-10-29: no remaining findings —
+"Design revision 15's single-version deployment contract and
+retry-persistence changes are acceptable for its documented stage-1
+scope") and the mo-bot reviews of `8fc3801e8e` and of
+`2b6dd91192` (2026-10-30), which reconfirm the same decisions after
+the rebase and the record reconciliation.
 
 ## 1. Problem and evidence
 
