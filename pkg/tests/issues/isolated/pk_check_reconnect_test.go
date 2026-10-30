@@ -151,16 +151,23 @@ func TestPKCheckReconnectRollsBackAndFreshTxnSucceeds(t *testing.T) {
 	frontier, err = pushClient.AcquireLogtailReadBarrier(ctx)
 	require.NoError(t, err)
 	found := false
+	var snapshot timestamp.Timestamp
 	cn.GetTxnClient().IterTxns(func(tx client.TxnOverview) bool {
 		if bytes.Equal(tx.Meta.ID, owner) {
 			found = true
 			require.True(t, tx.Meta.IsRCIsolation())
-			require.True(t, tx.Meta.SnapshotTS.LessEq(frontier))
+			snapshot = tx.Meta.SnapshotTS
 			return false
 		}
 		return true
 	})
 	require.True(t, found, "the parked DELETE must belong to an active transaction")
+	// The RC snapshot can advance between the first barrier and IterTxns.
+	// Keep the synthetic conflict timestamp inside the already-applied range.
+	for snapshot.Greater(frontier) {
+		frontier, err = pushClient.AcquireLogtailReadBarrier(ctx)
+		require.NoError(t, err)
+	}
 	require.NoError(t, pushClient.Disconnect())
 	select {
 	case <-reconnecting:
