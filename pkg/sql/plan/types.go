@@ -1332,11 +1332,12 @@ type Binding struct {
 	nodeId int32
 	// A sequential UPDATE binds RHS expressions against a projection of the
 	// current row. Its generated columns still use the base table expression.
-	virtualTimestampTable *plan.TableDef
-	virtualTimestampClass []uint8
-	db                    string
-	table                 string
-	tableID               uint64
+	virtualTimestampTable  *plan.TableDef
+	virtualTimestampClass  []uint8
+	virtualTimestampStaged bool
+	db                     string
+	table                  string
+	tableID                uint64
 	// lower case: used for binding/lookup
 	cols []string
 	// original case: only for SELECT * display, must be same length as cols (or empty)

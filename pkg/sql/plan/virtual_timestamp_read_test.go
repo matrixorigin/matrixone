@@ -15,12 +15,15 @@
 package plan
 
 import (
+	"context"
 	"fmt"
 	"testing"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/stretchr/testify/require"
 )
 
@@ -140,4 +143,62 @@ func TestVirtualTimestampExpansionAdmissionChecksDescendants(t *testing.T) {
 	require.ErrorContains(t, validateVirtualTimestampExpansion(t.Context(), table), "g16")
 	require.Equal(t, maxVirtualTimestampExpansionNodes, saturatingVirtualTimestampCost(maxVirtualTimestampExpansionNodes-1, 1))
 	require.Equal(t, maxVirtualTimestampExpansionNodes+1, saturatingVirtualTimestampCost(maxVirtualTimestampExpansionNodes, 1))
+}
+
+func TestVirtualTimestampHistoricalOversizeCatalogPlans(t *testing.T) {
+	ref := func(pos int32, typ pb.Type) *pb.Expr {
+		return &pb.Expr{Typ: typ, Expr: &pb.Expr_Col{Col: &pb.ColRef{ColPos: pos}}}
+	}
+	table := &pb.TableDef{Name: "legacydag", Cols: []*pb.ColDef{{Name: "ts", ColId: 1, Typ: types.T_timestamp.ToType().PlanType()}}, Name2ColIndex: map[string]int32{"ts": 0}}
+	year, err := BindFuncExprImplByPlanExpr(t.Context(), "year", []*pb.Expr{ref(0, table.Cols[0].Typ)})
+	require.NoError(t, err)
+	table.Cols = append(table.Cols, &pb.ColDef{Name: "g0", ColId: 2, Typ: year.Typ, GeneratedCol: &pb.GeneratedCol{Expr: year}})
+	table.Name2ColIndex["g0"] = 1
+	for level := 1; level <= 17; level++ {
+		previous := ref(int32(level), table.Cols[level].Typ)
+		expr, err := BindFuncExprImplByPlanExpr(t.Context(), "+", []*pb.Expr{previous, DeepCopyExpr(previous)})
+		require.NoError(t, err)
+		name := fmt.Sprintf("g%d", level)
+		table.Cols = append(table.Cols, &pb.ColDef{Name: name, ColId: uint64(level + 2), Typ: expr.Typ, GeneratedCol: &pb.GeneratedCol{Expr: expr}})
+		table.Name2ColIndex[name] = int32(level + 1)
+	}
+	require.NotEmpty(t, VirtualTimestampExpansionFindings(table))
+	compiler := NewMockCompilerContext(false, newPlanTestProcess(t))
+	compiler.tables["legacydag"] = table
+	compiler.objects["legacydag"] = &pb.ObjectRef{SchemaName: "tpch", ObjName: "legacydag", Obj: 12345}
+	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, "select g17 from legacydag where g17 > 0", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	pl, err := BuildPlan(compiler, stmt, false)
+	require.NoError(t, err)
+	projectCount := 0
+	exprNodes := 0
+	visited := make(map[int32]bool)
+	var walk func(int32)
+	walk = func(nodeID int32) {
+		if visited[nodeID] {
+			return
+		}
+		visited[nodeID] = true
+		node := pl.GetQuery().Nodes[nodeID]
+		if node.NodeType == pb.Node_PROJECT && node.ExtraOptions == virtualTimestampStageOption {
+			require.NotEmpty(t, node.ProjectList)
+			require.LessOrEqual(t, len(node.ProjectList), 2*len(table.Cols))
+			projectCount++
+			for _, expr := range node.ProjectList {
+				require.NoError(t, pb.VisitExprTree(expr, func(*pb.Expr) error {
+					exprNodes++
+					return nil
+				}))
+			}
+		}
+		for _, child := range node.Children {
+			walk(child)
+		}
+	}
+	for _, step := range pl.GetQuery().Steps {
+		walk(step)
+	}
+	require.Equal(t, 18, projectCount)
+	require.Less(t, exprNodes, 2000)
 }

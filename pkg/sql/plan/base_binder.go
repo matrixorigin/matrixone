@@ -758,13 +758,18 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 		})
 	}
 	var virtualRead *plan.Expr
+	_, physicalGeneratedRef := b.ctx.physicalGeneratedRefs[astExpr]
 	if colPos != NotFound {
-		_, physicalGeneratedRef := b.ctx.physicalGeneratedRefs[astExpr]
 		if !physicalGeneratedRef {
 			virtualRead, _, err = b.ctx.bindVirtualTimestampRead(resolvedBinding, colPos, depth)
 			if err != nil {
 				return nil, err
 			}
+		} else if resolvedBinding != nil && resolvedBinding.virtualTimestampStaged {
+			// The staged read value occupies the ordinary column position; the
+			// passthrough half of the projection retains the writer-time OLD
+			// value needed for secondary-index maintenance.
+			colPos += int32(len(resolvedBinding.types))
 		}
 	}
 

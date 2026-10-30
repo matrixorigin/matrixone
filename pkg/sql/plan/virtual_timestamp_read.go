@@ -43,6 +43,9 @@ func (bc *BindContext) bindVirtualTimestampRead(binding *Binding, pos, depth int
 	if bc == nil || binding == nil || bc.builder == nil {
 		return nil, false, nil
 	}
+	if binding.virtualTimestampStaged {
+		return nil, false, nil
+	}
 	table := binding.virtualTimestampTable
 	if table == nil && bc.builder.qry != nil && binding.nodeId >= 0 && int(binding.nodeId) < len(bc.builder.qry.Nodes) {
 		node := bc.builder.qry.Nodes[binding.nodeId]
