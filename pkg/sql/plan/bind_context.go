@@ -69,11 +69,20 @@ func NewBindContext(builder *QueryBuilder, parent *BindContext) *BindContext {
 			requiredProtocol := int64(0)
 			bc.persistedExpressionProtocolRequirement = &requiredProtocol
 		}
+		if parent == nil {
+			// D11 carrier one: resolve the statement compatibility scalar once
+			// at (root) BindContext entry from the session flag the executors
+			// read. Children inherit it below.
+			bc.mysqlConditionalBooleanContracts = function.MySQLConditionalBooleanContractsFromProcess(builder.compCtx.GetProcess())
+			bc.mysqlConditionalBooleanContractsValid = true
+		}
 	}
 
 	if parent != nil {
 		bc.persistedExpressionProtocolRequirement = parent.persistedExpressionProtocolRequirement
 		bc.ctasExecutionProtocolRequirement = parent.ctasExecutionProtocolRequirement
+		bc.mysqlConditionalBooleanContracts = parent.mysqlConditionalBooleanContracts
+		bc.mysqlConditionalBooleanContractsValid = parent.mysqlConditionalBooleanContractsValid
 		bc.existentialBlock = parent.existentialBlock
 		bc.subqueryNestingDepth = parent.subqueryNestingDepth
 		bc.lower = parent.lower
