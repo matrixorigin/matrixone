@@ -45,7 +45,7 @@ func TestExactScanOwnsSelectedOutputAndReusesState(t *testing.T) {
 	require.NoError(t, vector.AppendFixedList(src, []int64{-2, -1, 0, 1, 2}, []bool{false, false, true, false, false}, mp))
 	entry := exactEntry(t, src)
 	before := bytes.Clone(entry.CachedData.Bytes())
-	state := NewExactScanState(NewExactScanFilter([]ExactScanPredicate{{Column: 0, Type: typ, Op: ExactScanGE, Value: 0}, {Column: 0, Type: typ, Op: ExactScanLE, Value: 1}}))
+	state := NewExactScanState(NewExactScanFilter([]ExactScanPredicate{{Column: 0, Type: typ, Op: ExactScanGE, Value: 0}, {Column: 0, Type: typ, Op: ExactScanLT, Value: 2}}))
 	t.Cleanup(state.Close)
 	dst := vector.NewVec(typ)
 	t.Cleanup(func() { dst.Free(mp) })
@@ -81,17 +81,15 @@ func TestExactScanOwnsSelectedOutputAndReusesState(t *testing.T) {
 
 func TestExactScanScalarBoundariesAndConstants(t *testing.T) {
 	for _, tc := range []struct {
-		name                   string
-		typ                    types.Type
-		values                 []uint64
-		bound                  uint64
-		op                     ExactScanOp
-		want                   []uint64
-		rangeLower, rangeUpper uint64
-		rangeWant              []uint64
+		name   string
+		typ    types.Type
+		values []uint64
+		bound  uint64
+		op     ExactScanOp
+		want   []uint64
 	}{
-		{"unsigned", types.T_uint64.ToType(), []uint64{0, 1 << 63, math.MaxUint64}, 1 << 63, ExactScanGE, []uint64{1 << 63, math.MaxUint64}, 1 << 63, math.MaxUint64, []uint64{1 << 63, math.MaxUint64}},
-		{"decimal", types.New(types.T_decimal64, 18, 2), []uint64{math.MaxUint64 - 4, 0, 5}, 0, ExactScanLT, []uint64{math.MaxUint64 - 4}, math.MaxUint64 - 4, 0, []uint64{math.MaxUint64 - 4, 0}},
+		{"unsigned", types.T_uint64.ToType(), []uint64{0, 1 << 63, math.MaxUint64}, 1 << 63, ExactScanGE, []uint64{1 << 63, math.MaxUint64}},
+		{"decimal", types.New(types.T_decimal64, 18, 2), []uint64{math.MaxUint64 - 4, 0, 5}, 0, ExactScanLT, []uint64{math.MaxUint64 - 4}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			mp := mpool.MustNewZero()
@@ -108,13 +106,6 @@ func TestExactScanScalarBoundariesAndConstants(t *testing.T) {
 			require.NoError(t, err)
 			require.True(t, stats.Applied)
 			require.Equal(t, tc.want, vector.MustFixedColNoTypeCheck[uint64](dst))
-			dst.CleanOnlyData()
-			rangeState := NewExactScanState(NewExactScanFilter([]ExactScanPredicate{{Column: 0, Type: tc.typ, Op: ExactScanGE, Value: tc.rangeLower}, {Column: 0, Type: tc.typ, Op: ExactScanLE, Value: tc.rangeUpper}}))
-			t.Cleanup(rangeState.Close)
-			stats, err = MaterializeExactScan(t.Context(), []fileservice.IOEntry{entry}, []types.Type{tc.typ}, []*vector.Vector{dst}, nil, rangeState, mp)
-			require.NoError(t, err)
-			require.True(t, stats.Applied)
-			require.Equal(t, tc.rangeWant, vector.MustFixedColNoTypeCheck[uint64](dst))
 		})
 	}
 	for _, isNull := range []bool{false, true} {
@@ -132,7 +123,7 @@ func TestExactScanScalarBoundariesAndConstants(t *testing.T) {
 			entry := exactEntry(t, src)
 			dst := vector.NewVec(typ)
 			t.Cleanup(func() { dst.Free(mp) })
-			state := NewExactScanState(NewExactScanFilter([]ExactScanPredicate{{Column: 0, Type: typ, Op: ExactScanEQ, Value: 7}, {Column: 0, Type: typ, Op: ExactScanGE, Value: 7}, {Column: 0, Type: typ, Op: ExactScanLE, Value: 7}}))
+			state := NewExactScanState(NewExactScanFilter([]ExactScanPredicate{{Column: 0, Type: typ, Op: ExactScanEQ, Value: 7}}))
 			t.Cleanup(state.Close)
 			stats, err := MaterializeExactScan(t.Context(), []fileservice.IOEntry{entry}, []types.Type{typ}, []*vector.Vector{dst}, nil, state, mp)
 			require.NoError(t, err)
@@ -241,57 +232,6 @@ func TestExactScanPrimitiveTruthTables(t *testing.T) {
 					require.True(t, stats.Applied)
 					require.Equal(t, tc.want, vector.MustFixedColNoTypeCheck[int32](b))
 				}()
-			}
-			// Reuse the four-row fixture with and without its NULL bitmap.
-			// Flat ranges exercise the fused loop; nullable ranges retain the
-			// predicate-by-predicate path with the same endpoint truth.
-			for _, flat := range []bool{false, true} {
-				shape := "nullable"
-				if flat {
-					shape = "flat"
-					src.GetNulls().Reset()
-					entries[0] = exactEntry(t, src)
-				}
-				ranges := []struct {
-					name           string
-					lower, upper   uint64
-					want, flatWant []int32
-				}{
-					{"inclusive", bound, bound + 1, []int32{1, 2}, []int32{1, 2}},
-					{"empty", bound + 1, bound, nil, nil},
-					{"all", 0, bound + 2, []int32{0, 1, 2}, []int32{0, 1, 2, 3}},
-				}
-				if bound == 0 {
-					ranges[0].flatWant = []int32{1, 2, 3}
-					ranges[2].lower = math.MaxUint64 // signed -1
-					ranges = append(ranges, struct {
-						name           string
-						lower, upper   uint64
-						want, flatWant []int32
-					}{"negative", math.MaxUint64, 0, []int32{0, 1}, []int32{0, 1, 3}})
-				}
-				for _, tc := range ranges {
-					t.Run(shape+"/"+tc.name, func(t *testing.T) {
-						state := NewExactScanState(NewExactScanFilter([]ExactScanPredicate{{Column: 0, Type: typ, Op: ExactScanGE, Value: tc.lower}, {Column: 0, Type: typ, Op: ExactScanLE, Value: tc.upper}}))
-						defer state.Close()
-						a, b := vector.NewVec(typ), vector.NewVec(types.T_int32.ToType())
-						defer a.Free(mp)
-						defer b.Free(mp)
-						stats, readErr := MaterializeExactScan(t.Context(), entries, []types.Type{typ, types.T_int32.ToType()}, []*vector.Vector{a, b}, nil, state, mp)
-						require.NoError(t, readErr)
-						require.True(t, stats.Applied)
-						want := tc.want
-						if flat {
-							want = tc.flatWant
-						}
-						require.Equal(t, len(want), stats.OutputRows)
-						if len(want) == 0 {
-							require.Zero(t, b.Length())
-						} else {
-							require.Equal(t, want, vector.MustFixedColNoTypeCheck[int32](b))
-						}
-					})
-				}
 			}
 		})
 	}

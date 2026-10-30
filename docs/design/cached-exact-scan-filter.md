@@ -49,10 +49,6 @@ predicates. It returns owned output plus scalar counts/duration, never borrowed
 vectors or cache memory. Comparison kernels dispatch once per predicate/type;
 no per-row expression dispatcher, allocation, or indirect callback is added.
 Use the existing numeric comparison semantics, including signed Decimal64.
-Adjacent inclusive bounds on one flat, non-NULL column with no preselection
-execute as a single BETWEEN loop. This avoids an intermediate compaction and
-second gather of the lower-bound survivors. Constants, nullable sources and
-preselected inputs retain the existing per-predicate execution.
 
 ## Ownership, bounds, and observability
 
