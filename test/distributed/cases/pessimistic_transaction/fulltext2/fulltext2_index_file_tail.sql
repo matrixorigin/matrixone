@@ -19,6 +19,11 @@ set @covered_sql = concat(
     '` where index_id = ''cdc_tail'' and tag = 1) as covered');
 prepare covered from @covered_sql;
 
+-- a CN that did not write the tail sees new frames on its freshness sweep; shorten it so a
+-- search served by another CN observes each frame within the waits below
+set @freshness_override = mo_ctl('cn', 'SetVectorIndexFreshnessInterval', '1s');
+select @freshness_override not like '%failed=[%' as all_cn_updated;
+
 -- a CDC frame gets a metadata row covering its chunks, and is searched
 insert into t values (2,'hello matrix'),(3,'hello tail');
 -- @wait_expect(2, 120)
@@ -64,4 +69,6 @@ drop snapshot ft2_index_file_tail_sp;
 
 deallocate prepare frames;
 deallocate prepare covered;
+set @freshness_restore = mo_ctl('cn', 'SetVectorIndexFreshnessInterval', '0');
+select @freshness_restore not like '%failed=[%' as all_cn_restored;
 drop database ft2_index_file_tail;

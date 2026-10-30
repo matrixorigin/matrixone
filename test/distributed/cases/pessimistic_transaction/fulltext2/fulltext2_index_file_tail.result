@@ -14,6 +14,10 @@ set @covered_sql = concat(
 '` where index_id like ''cdc_tail:%'') = (select count(*) from `', database(), '`.`', @t_store,
 '` where index_id = ''cdc_tail'' and tag = 1) as covered');
 prepare covered from @covered_sql;
+set @freshness_override = mo_ctl('cn', 'SetVectorIndexFreshnessInterval', '1s');
+select @freshness_override not like '%failed=[%' as all_cn_updated;
+➤ all_cn_updated[-7,1,0]  𝄀
+1
 insert into t values (2,'hello matrix'),(3,'hello tail');
 execute frames;
 ➤ frames[-5,64,0]  𝄀
@@ -82,4 +86,8 @@ select id from t {snapshot = 'ft2_index_file_tail_sp'} where match(body) against
 drop snapshot ft2_index_file_tail_sp;
 deallocate prepare frames;
 deallocate prepare covered;
+set @freshness_restore = mo_ctl('cn', 'SetVectorIndexFreshnessInterval', '0');
+select @freshness_restore not like '%failed=[%' as all_cn_restored;
+➤ all_cn_restored[-7,1,0]  𝄀
+1
 drop database ft2_index_file_tail;
