@@ -356,8 +356,9 @@ rejection occurs before CREATE DATABASE.
   revalidation, ALTER current-ID checks, implicit SHOW GRANTS by current ID,
   ordered-pair atomic rename and all tenant/protected/DEFINER restrictions remain.
 
-No new catalog migration, distributed protocol, online-upgrade claim, restore
-concurrency support or special account creation is introduced. Real SQL, unique
+The v0.5/v0.6 changes introduced no new catalog migration, distributed protocol,
+online-upgrade claim, restore concurrency support or special account creation.
+The v0.7 amendment below adds only the bounded migration identity wire proof. Real SQL, unique
 index races, multi-CN and restart/restore acceptance still require independent
 execution evidence, not mock/race-detector extrapolation.
 

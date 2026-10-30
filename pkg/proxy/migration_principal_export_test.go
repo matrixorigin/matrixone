@@ -39,7 +39,10 @@ func MigrationTestTransfer(ctx context.Context, s *Server, id uint32) (before, a
 	selected.mu.Lock()
 	before = selected.mu.serverConn.RemoteAddr().String()
 	selected.mu.Unlock()
-	err = selected.transferSync(ctx)
+	if !selected.tryStartTransferAttempt() {
+		return before, before, fmt.Errorf("transfer already active")
+	}
+	err = selected.transfer(ctx)
 	selected.mu.Lock()
 	after = selected.mu.serverConn.RemoteAddr().String()
 	selected.mu.Unlock()

@@ -786,6 +786,9 @@ func (rt *Routine) migrateConnectionFromActionWithCapabilities(
 		return cause
 	}
 	ses := rt.getSession()
+	if ses == nil {
+		return moerr.GetOkExpectedNotSafeToStartTransfer()
+	}
 	switch action {
 	case query.MigrateConnFromAction_MigrateConnFromSkipUserLevelLockRelease:
 		if states := function.UserLevelLocksForMigration(ses.proc); len(states) > 0 {

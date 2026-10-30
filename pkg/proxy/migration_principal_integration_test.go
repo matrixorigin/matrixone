@@ -24,20 +24,40 @@ import (
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/embed"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/proxy"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
 
-// One existing two-CN fixture proves the wire/handshake/tunnel boundary that
+// One two-CN fixture with Proxy-preface enabled proves the wire/handshake/tunnel boundary that
 // component mocks cannot: equal credentials are not equal catalog identities.
 func TestRenameUserProxyMigrationPrincipal(t *testing.T) {
-	defer func() { require.NoError(t, embed.CloseBaseClusterTests()) }()
-	embed.RunBaseClusterTests(t, func(cluster embed.Cluster) {
+	cluster, err := embed.StartTestCluster(embed.WithCNCount(2), embed.WithPreStart(func(op embed.ServiceOperator) {
+		if op.ServiceType() == metadata.ServiceType_CN {
+			op.Adjust(func(cfg *embed.ServiceConfig) {
+				cfg.CN.Frontend.ProxyEnabled = true
+				cfg.CN.Frontend.SkipCheckUser = false
+			})
+		}
+	}))
+	if cluster != nil {
+		defer func() { require.NoError(t, cluster.Close()) }()
+	}
+	require.NoError(t, err)
+	func(cluster embed.Cluster) {
 		ctx, cancel := context.WithTimeout(t.Context(), 180*time.Second)
 		defer cancel()
 		cn, err := cluster.GetCNService(0)
 		require.NoError(t, err)
 		cfg := cn.GetServiceConfig()
+		for index := 0; index < 2; index++ {
+			op, e := cluster.GetCNService(index)
+			require.NoError(t, e)
+			getter, ok := op.RawService().(testutil.TaskServiceGetter)
+			require.True(t, ok)
+			require.NoError(t, testutil.WaitTaskServiceReady(ctx, getter, 100*time.Millisecond))
+		}
 		var cleanup []func()
 		defer func() {
 			for i := len(cleanup) - 1; i >= 0; i-- {
@@ -112,7 +132,11 @@ func TestRenameUserProxyMigrationPrincipal(t *testing.T) {
 		exec("rename user migration_a to migration_moved,migration_b to migration_a")
 		for i := 0; i < 2; i++ {
 			before, after, err = proxy.MigrationTestTransfer(ctx, server, connID)
-			require.Error(t, err)
+			require.NoError(t, err)
+			var observed uint32
+			require.NoError(t, old.QueryRowContext(ctx, "select current_user_id()").Scan(&observed))
+			t.Logf("same-password attempt=%d expected_user_id=%d observed_user_id=%d other_user_id=%d before=%s after=%s", i, aID, observed, bID, before, after)
+			require.Equal(t, aID, observed)
 			require.Equal(t, before, after)
 			checkA()
 		}
@@ -135,14 +159,14 @@ func TestRenameUserProxyMigrationPrincipal(t *testing.T) {
 		// These controls fail at authentication, not at the same-password ID guard.
 		exec("rename user migration_a to migration_b")
 		before, after, err = proxy.MigrationTestTransfer(ctx, server, freshID)
-		require.Error(t, err)
+		require.NoError(t, err)
 		require.Equal(t, before, after)
 		checkB()
 		exec("create user migration_a identified by 'different-password'")
 		before, after, err = proxy.MigrationTestTransfer(ctx, server, freshID)
-		require.Error(t, err)
+		require.NoError(t, err)
 		require.Equal(t, before, after)
 		checkB()
 
-	})
+	}(cluster)
 }
