@@ -1649,10 +1649,13 @@ func (bat *Batch) prepareOwnedDecodeVectors(count int, mp *mpool.MPool) error {
 	return nil
 }
 
-// forEachUniqueVector visits each pointer once without allocating on the owned path.
+// forEachUniqueVector visits each pointer once in column order.
 func forEachUniqueVector(vecs []*vector.Vector, visit func(*vector.Vector) error) error {
+	if len(vecs) > 4096 {
+		return forEachUniqueVectorVeryWide(vecs, visit)
+	}
 	if len(vecs) > 1024 {
-		return forEachUniqueVectorWide(vecs, visit, 0, 0)
+		return forEachUniqueVectorWide(vecs, visit)
 	}
 	if len(vecs) > 16 {
 		return forEachUniqueVectorSmall(vecs, visit)
@@ -1689,65 +1692,47 @@ func forEachUniqueVectorSmall(vecs []*vector.Vector, visit func(*vector.Vector) 
 	return nil
 }
 
-// Wide batches are partitioned by pointer hash when a stack table fills. Each
-// partition is checked before visiting anything, so splitting cannot visit a
-// vector twice. This keeps the owned path allocation-free for any batch width.
-func forEachUniqueVectorWide(vecs []*vector.Vector, visit func(*vector.Vector) error, prefix, bits uintptr) error {
-	var seen [2048]*vector.Vector
-	var visited [2048]bool
-	count := 0
+// Keep column order because distinct legacy aliases may share writable data.
+// A stack table covers the common widths; exceptionally wide batches use a
+// map to bound the work instead of repeatedly scanning the preceding columns.
+func forEachUniqueVectorWide(vecs []*vector.Vector, visit func(*vector.Vector) error) error {
+	var seen [8192]*vector.Vector
+	var nilSeen bool
 	for _, vec := range vecs {
-		hash := vectorPointerHash(vec)
-		if hash&((uintptr(1)<<bits)-1) != prefix {
-			continue
-		}
 		if vec == nil {
-			return visit(vec)
-		}
-		idx := (hash >> bits) & (uintptr(len(seen)) - 1)
-		for seen[idx] != nil && seen[idx] != vec {
-			idx = (idx + 1) & (uintptr(len(seen)) - 1)
-		}
-		if seen[idx] == vec {
-			continue
-		}
-		seen[idx] = vec
-		count++
-		if count > len(seen)/2 {
-			if err := forEachUniqueVectorWide(vecs, visit, prefix, bits+1); err != nil {
-				return err
+			if nilSeen {
+				continue
 			}
-			return forEachUniqueVectorWide(vecs, visit, prefix|(uintptr(1)<<bits), bits+1)
-		}
-	}
-	// Visit in input order within the partition.
-	for _, vec := range vecs {
-		hash := vectorPointerHash(vec)
-		if hash&((uintptr(1)<<bits)-1) != prefix {
-			continue
-		}
-		idx := (hash >> bits) & (uintptr(len(seen)) - 1)
-		for seen[idx] != nil && seen[idx] != vec {
-			idx = (idx + 1) & (uintptr(len(seen)) - 1)
-		}
-		if seen[idx] == vec && !visited[idx] {
-			visited[idx] = true
-			if err := visit(vec); err != nil {
-				return err
+			nilSeen = true
+		} else {
+			idx := (uintptr(unsafe.Pointer(vec)) >> 4) & (uintptr(len(seen)) - 1)
+			for seen[idx] != nil && seen[idx] != vec {
+				idx = (idx + 1) & (uintptr(len(seen)) - 1)
 			}
+			if seen[idx] == vec {
+				continue
+			}
+			seen[idx] = vec
+		}
+		if err := visit(vec); err != nil {
+			return err
 		}
 	}
 	return nil
 }
 
-func vectorPointerHash(vec *vector.Vector) uintptr {
-	x := uintptr(unsafe.Pointer(vec)) >> 3
-	x ^= x >> 17
-	x *= 0xed5ad4bb
-	x ^= x >> 11
-	x *= 0xac4c1b51
-	x ^= x >> 15
-	return x
+func forEachUniqueVectorVeryWide(vecs []*vector.Vector, visit func(*vector.Vector) error) error {
+	seen := make(map[*vector.Vector]struct{}, len(vecs))
+	for _, vec := range vecs {
+		if _, ok := seen[vec]; ok {
+			continue
+		}
+		seen[vec] = struct{}{}
+		if err := visit(vec); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // PrepareShrinkData prepares every unique vector before any selection is applied.

@@ -1196,35 +1196,39 @@ func TestShrinkBorrowedBatchRollsBackOnSecondAllocation(t *testing.T) {
 }
 
 func TestShrinkWideBorrowedBatchRollsBackOnSecondAllocation(t *testing.T) {
-	state := newTestBatchAllocationAccount(t, 1)
-	mp := mpool.MustNewZero()
-	t.Cleanup(func() {
-		require.Zero(t, mp.CurrNB())
-		finalizeTestBatchAllocationAccount(t, state)
-		mpool.DeleteMPool(mp)
-	})
-	bat := NewWithSize(1025)
-	bat.SetRowCount(3)
-	var releases, installed int
-	t.Cleanup(func() { bat.Clean(mp); require.Equal(t, installed, releases) })
-	for i := range bat.Vecs {
-		data := types.EncodeSlice([]int64{11, 22, 33})
-		lease, err := vector.NewRefCountedBufferLease(data, int64(cap(data)), func() { releases++ })
-		require.NoError(t, err)
-		vec, err := vector.NewBorrowedFixedVectorWithAllocation(types.T_int64.ToType(), 3, data, lease, state.selection)
-		lease.Release()
-		require.NoError(t, err)
-		bat.Vecs[i] = vec
-		installed++
+	for _, width := range []int{1025, 4097} {
+		t.Run(fmt.Sprint(width), func(t *testing.T) {
+			state := newTestBatchAllocationAccount(t, 1)
+			mp := mpool.MustNewZero()
+			t.Cleanup(func() {
+				require.Zero(t, mp.CurrNB())
+				finalizeTestBatchAllocationAccount(t, state)
+				mpool.DeleteMPool(mp)
+			})
+			bat := NewWithSize(width)
+			bat.SetRowCount(3)
+			var releases, installed int
+			t.Cleanup(func() { bat.Clean(mp); require.Equal(t, installed, releases) })
+			for i := range bat.Vecs {
+				data := types.EncodeSlice([]int64{11, 22, 33})
+				lease, err := vector.NewRefCountedBufferLease(data, int64(cap(data)), func() { releases++ })
+				require.NoError(t, err)
+				vec, err := vector.NewBorrowedFixedVectorWithAllocation(types.T_int64.ToType(), 3, data, lease, state.selection)
+				lease.Release()
+				require.NoError(t, err)
+				bat.Vecs[i] = vec
+				installed++
+			}
+			err := bat.Shrink([]int64{1, 2}, false, mp)
+			require.Error(t, err)
+			require.Equal(t, 3, bat.RowCount())
+			for _, vec := range bat.Vecs {
+				require.Equal(t, []int64{11, 22, 33}, vector.MustFixedColNoTypeCheck[int64](vec))
+			}
+			require.Zero(t, mp.CurrNB())
+			require.Zero(t, releases)
+		})
 	}
-	err := bat.Shrink([]int64{1, 2}, false, mp)
-	require.Error(t, err)
-	require.Equal(t, 3, bat.RowCount())
-	for _, vec := range bat.Vecs {
-		require.Equal(t, []int64{11, 22, 33}, vector.MustFixedColNoTypeCheck[int64](vec))
-	}
-	require.Zero(t, mp.CurrNB())
-	require.Zero(t, releases)
 }
 
 func TestShrinkBorrowedBatchMaskRollsBackOnSecondAllocation(t *testing.T) {
@@ -1299,7 +1303,7 @@ func TestShrinkWideBatchWithDuplicateVector(t *testing.T) {
 	for _, mask := range []bool{false, true} {
 		t.Run(fmt.Sprintf("mask=%t", mask), func(t *testing.T) {
 			mp := mpool.MustNewZero()
-			bat := NewWithSize(2050)
+			bat := NewWithSize(4097)
 			t.Cleanup(func() { bat.Clean(mp); require.Zero(t, mp.CurrNB()); mpool.DeleteMPool(mp) })
 			for i := 0; i < len(bat.Vecs)-1; i++ {
 				bat.Vecs[i] = vector.NewOffHeapVecWithType(types.T_int64.ToType())
@@ -1319,6 +1323,34 @@ func TestShrinkWideBatchWithDuplicateVector(t *testing.T) {
 			for _, vec := range bat.Vecs {
 				require.Equal(t, []int64{22, 33}, vector.MustFixedColNoTypeCheck[int64](vec))
 			}
+		})
+	}
+}
+
+func TestShrinkWideBatchPreservesAliasOrder(t *testing.T) {
+	for _, width := range []int{1025, 4097} {
+		t.Run(fmt.Sprint(width), func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			source := vector.NewOffHeapVecWithType(types.T_int64.ToType())
+			bat := NewWithSize(width)
+			t.Cleanup(func() {
+				bat.Clean(mp)
+				source.Free(mp)
+				require.Zero(t, mp.CurrNB())
+				mpool.DeleteMPool(mp)
+			})
+			require.NoError(t, vector.AppendFixedList(source, []int64{11, 22, 33, 44}, nil, mp))
+			first, err := source.Window(0, 3)
+			require.NoError(t, err)
+			for i := range bat.Vecs {
+				bat.Vecs[i] = first
+			}
+			second, err := source.Window(1, 4)
+			require.NoError(t, err)
+			bat.Vecs[width-1] = second
+			bat.SetRowCount(3)
+			require.NoError(t, bat.Shrink([]int64{1, 2}, false, mp))
+			require.Equal(t, []int64{22, 33, 44, 44}, vector.MustFixedColNoTypeCheck[int64](source))
 		})
 	}
 }
