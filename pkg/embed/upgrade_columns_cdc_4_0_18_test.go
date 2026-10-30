@@ -44,10 +44,13 @@ func columns46ShapeChain() []bootstrap.VersionHandle {
 // stageReady406Predecessor boots one generation on the 4.2-shaped chain,
 // installs the mask probes and the undecorated persisted COLUMNS definition
 // in the sys tenant, and stops holding READY-4.0.6/5 content.
-func stageReady406Predecessor(t *testing.T, ctx context.Context) Cluster {
+func stageReady406Predecessor(t *testing.T, budget time.Duration) (Cluster, func() (context.Context, error)) {
 	t.Helper()
-	c := newColumnsUpgradeCluster(t, ctx, columns46ShapeChain())
-	require.NoError(t, c.Start())
+	c := newColumnsUpgradeCluster(t, t.Context(), columns46ShapeChain())
+	start, cleanup := newRecoveryClusterStarterWithBudget(t.Context(), c.Start, time.Now, budget)
+	t.Cleanup(cleanup)
+	ctx, err := start()
+	require.NoError(t, err)
 	cn, err := c.GetCNService(0)
 	require.NoError(t, err)
 	db := recoverySQLClient(t, cn)
@@ -69,16 +72,13 @@ func stageReady406Predecessor(t *testing.T, ctx context.Context) Cluster {
 	// information_schema view) so every later boot starts from the predecessor
 	// content. The periodic COLUMNS/TABLES maintenance walker was removed
 	// upstream (#31662), so nothing recreates the staged predecessor text
-	// outside the versioned entries: read it back, settle across several
-	// tenant-upgrade passes, and re-assert, pinning the exact undecorated
-	// state every boot in these scenarios starts from.
+	// outside the versioned entries. Read back the exact predecessor state
+	// before crossing the next version boundary.
 	execInternalStatement(t, ctx, cn, "DROP VIEW IF EXISTS information_schema.COLUMNS;")
 	execInternalStatement(t, ctx, cn, preChangeCurrentColumnsDDL())
 	requireAccountColumnsDefinitionsPreChange(t, ctx, cn, 0)
-	time.Sleep(2 * time.Second)
-	requireAccountColumnsDefinitionsPreChange(t, ctx, cn, 0)
 	require.NoError(t, c.Stop())
-	return c
+	return c, start
 }
 
 // execInternalStatement runs one catalog fixture statement through the CN
@@ -192,12 +192,13 @@ func requireColumnsCrossingComplete(t *testing.T, ctx context.Context, cn Servic
 func TestColumnsUpgradeLegacyCDCAbortsBootBeforeCrossing(t *testing.T) {
 	require.NoError(t, CloseBaseClusterTests())
 	require.NoError(t, CloseSingleCNBaseClusterTests())
-	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Minute)
-	defer cancel()
-	c := stageReady406Predecessor(t, ctx)
+	c, start := stageReady406Predecessor(t, 10*time.Minute)
+	var ctx context.Context
+	var err error
 
 	func() {
-		require.NoError(t, c.Start())
+		ctx, err = start()
+		require.NoError(t, err)
 		cn, err := c.GetCNService(0)
 		require.NoError(t, err)
 		seedLegacyCDCTask(t, ctx, cn, "legacy-task", "paused")
@@ -205,7 +206,7 @@ func TestColumnsUpgradeLegacyCDCAbortsBootBeforeCrossing(t *testing.T) {
 	}()
 
 	setRecoveryCNHandles(c, append(columns46ShapeChain(), columnsPredecessorChain()[3], v4_0_18.Handler), true)
-	err := c.Start()
+	_, err = start()
 	require.Error(t, err, "a catalog with a legacy CDC task must abort the automatic boot")
 	require.Contains(t, err.Error(), "legacy CDC tasks must be exported and removed")
 	require.Contains(t, err.Error(), "legacy-task")
@@ -217,7 +218,8 @@ func TestColumnsUpgradeLegacyCDCAbortsBootBeforeCrossing(t *testing.T) {
 	// the staged undecorated COLUMNS definition persists — the abort leaves
 	// the predecessor content exactly as staged.
 	setRecoveryCNHandles(c, columns46ShapeChain(), true)
-	require.NoError(t, c.Start())
+	ctx, err = start()
+	require.NoError(t, err)
 	cn, err := c.GetCNService(0)
 	require.NoError(t, err)
 	requireNoRouteAdvance(t, ctx, cn)
@@ -229,7 +231,8 @@ func TestColumnsUpgradeLegacyCDCAbortsBootBeforeCrossing(t *testing.T) {
 	require.NoError(t, c.Stop())
 
 	setRecoveryCNHandles(c, append(columns46ShapeChain(), columnsPredecessorChain()[3], v4_0_18.Handler), true)
-	require.NoError(t, c.Start())
+	ctx, err = start()
+	require.NoError(t, err)
 	cn, err = c.GetCNService(0)
 	require.NoError(t, err)
 	requireColumnsCrossingComplete(t, ctx, cn, 1)
@@ -254,12 +257,13 @@ func requireSysColumnsDecorated(t *testing.T, ctx context.Context, cn ServiceOpe
 func TestColumnsUpgradeEmptyCDCControlCompletesCrossing(t *testing.T) {
 	require.NoError(t, CloseBaseClusterTests())
 	require.NoError(t, CloseSingleCNBaseClusterTests())
-	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Minute)
-	defer cancel()
-	c := stageReady406Predecessor(t, ctx)
+	c, start := stageReady406Predecessor(t, 10*time.Minute)
+	var ctx context.Context
+	var err error
 
 	setRecoveryCNHandles(c, append(columns46ShapeChain(), columnsPredecessorChain()[3], v4_0_18.Handler), true)
-	require.NoError(t, c.Start())
+	ctx, err = start()
+	require.NoError(t, err)
 	cn, err := c.GetCNService(0)
 	require.NoError(t, err)
 	requireColumnsCrossingComplete(t, ctx, cn, 1)
@@ -275,12 +279,13 @@ func TestColumnsUpgradeEmptyCDCControlCompletesCrossing(t *testing.T) {
 func TestColumnsUpgradeTaskSurvivalCrossingEmbed(t *testing.T) {
 	require.NoError(t, CloseBaseClusterTests())
 	require.NoError(t, CloseSingleCNBaseClusterTests())
-	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Minute)
-	defer cancel()
-	c := stageReady407Predecessor(t, ctx)
+	c, start := stageReady407Predecessor(t, 10*time.Minute)
+	var ctx context.Context
+	var err error
 
 	func() {
-		require.NoError(t, c.Start())
+		ctx, err = start()
+		require.NoError(t, err)
 		cn, err := c.GetCNService(0)
 		require.NoError(t, err)
 		seedLegacyCDCTask(t, ctx, cn, "valid-task", "running")
@@ -293,29 +298,53 @@ func TestColumnsUpgradeTaskSurvivalCrossingEmbed(t *testing.T) {
 	interrupted := &interruptedUpgradeHandler{VersionHandle: v4_0_18.Handler, entered: make(chan struct{}), tenant: true}
 	setRecoveryCNHandles(c, append(columnsPredecessorChain(), interrupted), true)
 	started := make(chan error, 1)
-	go func() { started <- c.Start() }()
+	var stopped chan error
+	// Join startup before the starter's context cleanup, including FailNow paths.
+	t.Cleanup(func() {
+		stopErr := c.Stop()
+		for range started {
+		}
+		if stopped != nil {
+			for range stopped {
+			}
+		}
+		require.NoError(t, stopErr)
+	})
+	go func() {
+		defer close(started)
+		_, startErr := start()
+		started <- startErr
+	}()
 	select {
 	case <-interrupted.entered:
 	case err := <-started:
 		t.Fatalf("startup failed before the v4_0_18 tenant entry: %v", err)
-	case <-ctx.Done():
-		t.Fatal("v4_0_18 tenant entry was not reached", ctx.Err())
+	case <-t.Context().Done():
+		t.Fatal("v4_0_18 tenant entry was not reached", t.Context().Err())
 	}
-	stopped := make(chan error, 1)
-	go func() { stopped <- c.Stop() }()
+	controlCtx, cancelControl := context.WithTimeout(t.Context(), time.Minute)
+	defer cancelControl()
+	stopped = make(chan error, 1)
+	go func() { defer close(stopped); stopped <- c.Stop() }()
 	select {
 	case err := <-started:
 		require.ErrorIs(t, err, context.Canceled)
-	case <-ctx.Done():
-		t.Fatal("stop did not cancel the upgrade startup", ctx.Err())
+	case <-controlCtx.Done():
+		t.Fatal("stop did not cancel the upgrade startup", controlCtx.Err())
 	}
-	require.NoError(t, <-stopped)
+	select {
+	case stopErr := <-stopped:
+		require.NoError(t, stopErr)
+	case <-controlCtx.Done():
+		t.Fatal("cluster did not finish stopping", controlCtx.Err())
+	}
 
 	// Restart: the in-flight route resumes without ever re-reading the task
 	// table for admission, completes to READY 4.0.18, and the task row is
 	// still present.
 	setRecoveryCNHandles(c, append(columnsPredecessorChain(), v4_0_18.Handler), true)
-	require.NoError(t, c.Start())
+	ctx, err = start()
+	require.NoError(t, err)
 	cn, err := c.GetCNService(0)
 	require.NoError(t, err)
 	requireColumnsUpgradeComplete(t, ctx, cn)

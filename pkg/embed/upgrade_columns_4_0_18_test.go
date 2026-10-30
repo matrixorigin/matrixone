@@ -69,11 +69,7 @@ func newColumnsUpgradeCluster(
 		adjustBasicClusterService(svc)
 		if svc.ServiceType() == metadata.ServiceType_CN {
 			svc.Adjust(func(cfg *ServiceConfig) { cfg.CN.AutomaticUpgrade = true })
-			// Suppress the background COLUMNS/TABLES repair walker (design
-			// validation item (iv) requires maintenance-disabled proof): with
-			// the walker off, the staged predecessor definition survives until
-			// the crossing entry recreates it, so restored metadata is
-			// attributable to the entry rather than to background maintenance.
+			// Versioned handles own catalog convergence; keep each staged chain explicit.
 			svc.(*operator).testingCNOptions = recoveryCNOptions(handles)
 		}
 	}))
@@ -103,32 +99,24 @@ func columnsPredecessorChain() []bootstrap.VersionHandle {
 // definition in the sys tenant and in columns_upgrade_tenant. The returned
 // stopped cluster holds the READY-4.0.7/41 predecessor content the v4_0_18
 // entry must recreate.
-func stageReady407Predecessor(t *testing.T, ctx context.Context) Cluster {
+func stageReady407Predecessor(t *testing.T, budget time.Duration) (Cluster, func() (context.Context, error)) {
 	t.Helper()
-	c := newColumnsUpgradeCluster(t, ctx, columnsPredecessorChain())
-	require.NoError(t, c.Start())
+	c := newColumnsUpgradeCluster(t, t.Context(), columnsPredecessorChain())
+	start, cleanup := newRecoveryClusterStarterWithBudget(t.Context(), c.Start, time.Now, budget)
+	t.Cleanup(cleanup)
+	ctx, err := start()
+	require.NoError(t, err)
 	cn, err := c.GetCNService(0)
 	require.NoError(t, err)
 	createColumnsFixtures(t, ctx, cn)
 	downgradeColumnsDefinitions(t, ctx, cn)
 	requireColumnsDefinitionsPreChange(t, ctx, cn)
-	// Settle across several tenant-upgrade passes, then re-assert. The final
-	// version of the staged chain is already completed at this point, so a
-	// repair walker would have converged the definition to the code template
-	// by now; the re-read both pins the predecessor state the next generation
-	// starts from and verifies the scenario's maintenance suppression.
-	time.Sleep(2 * time.Second)
-	requireColumnsDefinitionsPreChange(t, ctx, cn)
 	require.NoError(t, c.Stop())
-	return c
+	return c, start
 }
 
-// requireColumnsDefinitionsPreChange asserts through the internal executor
-// that both the sys tenant and columns_upgrade_tenant still persist the exact
-// pre-change COLUMNS definition. The walker is suppressed in these scenarios,
-// so this readback is deterministic: it proves the staged predecessor state
-// the crossing is expected to repair, and it fails if the suppression is
-// misconfigured (the walker would have recreated the canonical definition).
+// requireColumnsDefinitionsPreChange checks both tenant definitions before
+// the versioned entry runs; there is no periodic repair walker.
 func requireColumnsDefinitionsPreChange(t *testing.T, ctx context.Context, cn ServiceOperator) {
 	t.Helper()
 	db := recoverySQLClient(t, cn)
@@ -323,12 +311,13 @@ func requireColumnsUpgradeComplete(t *testing.T, ctx context.Context, cn Service
 func TestColumnsUpgradeAutomaticScenarioCompletion(t *testing.T) {
 	require.NoError(t, CloseBaseClusterTests())
 	require.NoError(t, CloseSingleCNBaseClusterTests())
-	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Minute)
-	defer cancel()
-	c := stageReady407Predecessor(t, ctx)
+	c, start := stageReady407Predecessor(t, 5*time.Minute)
+	var ctx context.Context
+	var err error
 
 	setRecoveryCNHandles(c, append(columnsPredecessorChain(), v4_0_18.Handler), true)
-	require.NoError(t, c.Start())
+	ctx, err = start()
+	require.NoError(t, err)
 	cn, err := c.GetCNService(0)
 	require.NoError(t, err)
 	stepIDs := requireColumnsUpgradeComplete(t, ctx, cn)
@@ -338,7 +327,8 @@ func TestColumnsUpgradeAutomaticScenarioCompletion(t *testing.T) {
 
 	// Restart: the published route and the decorated definitions stay; no new
 	// route is created.
-	require.NoError(t, c.Start())
+	ctx, err = start()
+	require.NoError(t, err)
 	cn, err = c.GetCNService(0)
 	require.NoError(t, err)
 	final, steps := readRecoveryCatalog(t, ctx, cn, v4_0_18.Handler.Metadata())
@@ -359,12 +349,12 @@ func TestColumnsUpgradeAutomaticScenarioCompletion(t *testing.T) {
 func TestColumnsUpgradeManualFailFastThenComplete(t *testing.T) {
 	require.NoError(t, CloseBaseClusterTests())
 	require.NoError(t, CloseSingleCNBaseClusterTests())
-	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Minute)
-	defer cancel()
-	c := stageReady407Predecessor(t, ctx)
+	c, start := stageReady407Predecessor(t, 5*time.Minute)
+	var ctx context.Context
+	var err error
 
 	setRecoveryCNHandles(c, append(columnsPredecessorChain(), v4_0_18.Handler), false)
-	err := c.Start()
+	_, err = start()
 	require.Error(t, err, "manual mode must fail startup against a not-ready final catalog")
 	require.Contains(t, err.Error(), "catalog version 4.0.7/41 is not ready for 4.0.18/1; enable auto-upgrade for the stopped upgrade and restart")
 
@@ -372,7 +362,8 @@ func TestColumnsUpgradeManualFailFastThenComplete(t *testing.T) {
 	require.NoError(t, err)
 
 	setRecoveryCNHandles(c, append(columnsPredecessorChain(), v4_0_18.Handler), true)
-	require.NoError(t, c.Start())
+	ctx, err = start()
+	require.NoError(t, err)
 	cn, err := c.GetCNService(0)
 	require.NoError(t, err)
 	requireColumnsUpgradeComplete(t, ctx, cn)
@@ -391,13 +382,14 @@ func TestColumnsUpgradeManualFailFastThenComplete(t *testing.T) {
 func TestColumnsUpgradeWithoutEntryKeepsPredecessorDefinitions(t *testing.T) {
 	require.NoError(t, CloseBaseClusterTests())
 	require.NoError(t, CloseSingleCNBaseClusterTests())
-	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Minute)
-	defer cancel()
-	c := stageReady407Predecessor(t, ctx)
+	c, start := stageReady407Predecessor(t, 5*time.Minute)
+	var ctx context.Context
+	var err error
 
 	// Ablation generation: the frozen 4.0.7/41 chain with no v4_0_18 handle.
 	setRecoveryCNHandles(c, columnsPredecessorChain(), true)
-	require.NoError(t, c.Start())
+	ctx, err = start()
+	require.NoError(t, err)
 	cn, err := c.GetCNService(0)
 	require.NoError(t, err)
 	final, steps := readRecoveryCatalog(t, ctx, cn, v4_0_7.Handler.Metadata())
@@ -424,7 +416,6 @@ func TestColumnsUpgradeWithoutEntryKeepsPredecessorDefinitions(t *testing.T) {
 			"zf": "decimal(10,2)",
 		})
 	}()
-	time.Sleep(2 * time.Second)
 	requireColumnsDefinitionsPreChange(t, ctx, cn)
 	require.NoError(t, c.Stop())
 
@@ -432,7 +423,8 @@ func TestColumnsUpgradeWithoutEntryKeepsPredecessorDefinitions(t *testing.T) {
 	// now does the repair execute, proving the completion legs' decorated
 	// state comes from the v4_0_18 entry and not from background machinery.
 	setRecoveryCNHandles(c, append(columnsPredecessorChain(), v4_0_18.Handler), true)
-	require.NoError(t, c.Start())
+	ctx, err = start()
+	require.NoError(t, err)
 	cn, err = c.GetCNService(0)
 	require.NoError(t, err)
 	requireColumnsUpgradeComplete(t, ctx, cn)
@@ -554,9 +546,9 @@ func (h *postReplacementCrashHandler) rollbackEvidence() map[int32]rollbackObser
 func TestColumnsUpgradeInterruptedRouteResumes(t *testing.T) {
 	require.NoError(t, CloseBaseClusterTests())
 	require.NoError(t, CloseSingleCNBaseClusterTests())
-	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Minute)
-	defer cancel()
-	c := stageReady407Predecessor(t, ctx)
+	c, start := stageReady407Predecessor(t, 5*time.Minute)
+	var ctx context.Context
+	var err error
 
 	crash := &postReplacementCrashHandler{
 		VersionHandle: v4_0_18.Handler,
@@ -564,7 +556,8 @@ func TestColumnsUpgradeInterruptedRouteResumes(t *testing.T) {
 		observed:      map[int32]rollbackObservation{},
 	}
 	setRecoveryCNHandles(c, append(columnsPredecessorChain(), crash), true)
-	require.NoError(t, c.Start())
+	ctx, err = start()
+	require.NoError(t, err)
 	cn, err := c.GetCNService(0)
 	require.NoError(t, err)
 
@@ -589,7 +582,8 @@ func TestColumnsUpgradeInterruptedRouteResumes(t *testing.T) {
 
 	// Restart: the completed route and decorated definitions persist; replay
 	// is a no-op and no new route is created.
-	require.NoError(t, c.Start())
+	ctx, err = start()
+	require.NoError(t, err)
 	cn, err = c.GetCNService(0)
 	require.NoError(t, err)
 	final, steps := readRecoveryCatalog(t, ctx, cn, v4_0_18.Handler.Metadata())
