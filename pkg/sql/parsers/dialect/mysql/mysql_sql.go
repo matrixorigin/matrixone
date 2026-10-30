@@ -16968,7 +16968,7 @@ yydefault:
 			} else if str == "false" {
 				yyLOCAL = 0
 			} else {
-				yylex.Error("error strict flag")
+				yylex.Error("error parallel flag")
 				goto ret1
 			}
 		}
@@ -16992,7 +16992,7 @@ yydefault:
 			} else if str == "false" {
 				yyLOCAL = false
 			} else {
-				yylex.Error("error parallel flag")
+				yylex.Error("error strict flag")
 				goto ret1
 			}
 		}

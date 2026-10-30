@@ -1001,13 +1001,11 @@ func TestPreparedSourceTransportDiagnosticOwnership(t *testing.T) {
 	for _, tc := range []struct {
 		typ        types.T
 		valid, bad string
-		badSafe    bool
 	}{
-		{types.T_int64, "12", "12.5", false},
-		{types.T_time, "00:00:01", "900:00:00", false},
-		// Expression DATE casts return NULL without a warning for lexical
-		// errors; conservative classification must still accept that proof.
-		{types.T_date, "2024-01-02", "invalid-date", true},
+		{types.T_int64, "12", "12.5"},
+		{types.T_time, "00:00:01", "900:00:00"},
+		// Invalid expression DATE casts emit a warning and cannot be folded.
+		{types.T_date, "2024-01-02", "invalid-date"},
 	} {
 		t.Run(tc.typ.String(), func(t *testing.T) {
 			proc := testutil.NewProcess(t)
@@ -1021,7 +1019,7 @@ func TestPreparedSourceTransportDiagnosticOwnership(t *testing.T) {
 			for _, binding := range []struct {
 				value      string
 				null, safe bool
-			}{{tc.valid, false, true}, {tc.bad, false, tc.badSafe}, {"", true, true}, {tc.valid, false, true}} {
+			}{{tc.valid, false, true}, {tc.bad, false, false}, {"", true, true}, {tc.valid, false, true}} {
 				func() {
 					params := vector.NewVec(types.T_text.ToType())
 					defer func() { proc.SetPrepareParams(nil); params.Free(proc.Mp()) }()
