@@ -53,6 +53,13 @@ import (
 type backExec struct {
 	backSes    *backSession
 	statsArray *statistic.StatsArray
+	// internalExecution tags every statement this executor runs as trusted
+	// implementation SQL (BackgroundExecOption.internalExecution), e.g. the
+	// catalog writes generated for SET GLOBAL, instead of caller-authored
+	// work. It flows into UserInput.isInternalInput so the READ ONLY
+	// transaction gate never observes generated catalog maintenance as user
+	// writes, while user-authored procedure statements stay gated.
+	internalExecution bool
 }
 
 // backExecProcessHook runs after a background statement has created its
@@ -254,6 +261,7 @@ func (back *backExec) exec(ctx context.Context, sql string, sqlMode string, useS
 		parserSQLMode:    sqlMode,
 		useParserSQLMode: useSQLMode,
 		isRestore:        isRestore,
+		isInternalInput:  back.internalExecution,
 	}
 	execCtx := ExecCtx{
 		reqCtx: ctx,
@@ -1271,6 +1279,9 @@ func (backSes *backSession) InitBackExec(txnOp TxnOperator, db string, callBack 
 		be := &backExec{}
 		be.init(backSes, txnOp, db, callBack)
 		be.backSes.upstream = backSes.upstream
+		if len(opts) > 0 && opts[0] != nil {
+			be.internalExecution = opts[0].internalExecution
+		}
 		return be
 	} else if backSes.upstream != nil {
 		// XXXSP

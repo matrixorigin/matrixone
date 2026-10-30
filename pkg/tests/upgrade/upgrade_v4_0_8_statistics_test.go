@@ -23,7 +23,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
-	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_8"
+	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_7"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/embed"
@@ -34,7 +34,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestV408UpgradeRefreshesStatistics(t *testing.T) {
+func TestV407UpgradeRefreshesStatistics(t *testing.T) {
 	embed.RunSingleCNBaseClusterTests(t, func(cluster embed.Cluster) {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 		defer cancel()
@@ -134,7 +134,7 @@ func TestV408UpgradeRefreshesStatistics(t *testing.T) {
 				require.Equal(t, "ivfflat", originalAlgorithm)
 
 				for run := 0; run < 2; run++ {
-					var creates int
+					var replacements int
 					// Run the tenant-upgrade transaction as the sys account, mirroring the
 					// production driver (service.MaybeUpgradeTenant scopes the txn to
 					// System_Account and targets the tenant via the tenantID passed to
@@ -142,14 +142,14 @@ func TestV408UpgradeRefreshesStatistics(t *testing.T) {
 					// UpgradeStatementOption(tenantID)). The cluster-wide protocol-version check
 					// runs mo_ctl, which only the sys account may execute.
 					require.NoError(t, sqlExecutor.ExecTxn(ctx, func(txn executor.TxnExecutor) error {
-						return v4_0_8.Handler.HandleTenantUpgrade(ctx, int32(test.accountID),
-							&statisticsUpgradeTxn{TxnExecutor: txn, creates: &creates})
+						return v4_0_7.Handler.HandleTenantUpgrade(ctx, int32(test.accountID),
+							&statisticsUpgradeTxn{TxnExecutor: txn, replacements: &replacements})
 					}, executor.Options{}.WithDatabase(catalog.MO_CATALOG).
 						WithAccountID(catalog.System_Account).WithWaitCommittedLogApplied()))
 					if run == 0 {
-						require.Equal(t, 1, creates, "the old view must be recreated")
+						require.Equal(t, 1, replacements, "the old view must be replaced")
 					} else {
-						require.Zero(t, creates, "the canonical view must not be recreated again")
+						require.Zero(t, replacements, "the canonical view must not be replaced again")
 					}
 					require.ElementsMatch(t, []string{"PRIMARY", "idx_code", "uq_code"},
 						statisticsIndexNames(t, ctx, conn, btreeQuery))
@@ -165,14 +165,14 @@ func TestV408UpgradeRefreshesStatistics(t *testing.T) {
 						return err
 					}, executor.Options{}.WithDatabase(catalog.MO_CATALOG).WithAccountID(test.accountID)))
 					require.True(t, exists)
-					require.Equal(t, sysview.InformationSchemaStatisticsDDL, definition)
+					require.Equal(t, strings.Replace(sysview.InformationSchemaStatisticsDDL, "CREATE VIEW ", "CREATE OR REPLACE VIEW ", 1), definition)
 				}
 			})
 		}
 	})
 }
 
-func TestV408LoginRepairsTenantCreatedAfterUpgradeSnapshot(t *testing.T) {
+func TestV407LoginRepairsTenantCreatedAfterUpgradeSnapshot(t *testing.T) {
 	embed.RunSingleCNBaseClusterTests(t, func(cluster embed.Cluster) {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 		defer cancel()
@@ -202,7 +202,7 @@ func TestV408LoginRepairsTenantCreatedAfterUpgradeSnapshot(t *testing.T) {
 		// Persist the bounded task before account creation. The fixture models
 		// an old writer's catalog, not a fresh account with the new view DDL.
 		require.NoError(t, sqlExecutor.ExecTxn(ctx, func(txn executor.TxnExecutor) error {
-			return versions.AddUpgradeTenantTask(upgradeID, "4.0.8", 0, lastSnapshotID, txn)
+			return versions.AddUpgradeTenantTask(upgradeID, "4.0.7", 0, lastSnapshotID, txn)
 		}, executor.Options{}.WithDatabase(catalog.MO_CATALOG).WithWaitCommittedLogApplied()))
 		defer func() {
 			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -242,7 +242,7 @@ func TestV408LoginRepairsTenantCreatedAfterUpgradeSnapshot(t *testing.T) {
 				}
 				res.Close()
 			}
-			return versions.UpgradeTenantVersion(int32(tenantID), "4.0.7", txn)
+			return versions.UpgradeTenantVersion(int32(tenantID), "4.0.6", txn)
 		}, executor.Options{}.WithDatabase(catalog.MO_CATALOG).WithWaitCommittedLogApplied()))
 		require.NoError(t, catalogExec(ctx,
 			fmt.Sprintf("update mo_catalog.mo_upgrade_tenant set ready = 1 where upgrade_id = %d", upgradeID)))
@@ -269,7 +269,7 @@ func TestV408LoginRepairsTenantCreatedAfterUpgradeSnapshot(t *testing.T) {
 		var createVersion string
 		require.NoError(t, sysDB.QueryRowContext(ctx,
 			fmt.Sprintf("select create_version from mo_catalog.mo_account where account_id = %d", tenantID)).Scan(&createVersion))
-		require.Equal(t, "4.0.7", createVersion)
+		require.Equal(t, "4.0.6", createVersion)
 
 		db, err := sql.Open("mysql", fmt.Sprintf("%s#root#accountadmin:111@tcp(127.0.0.1:%d)/", accountName, port))
 		require.NoError(t, err)
@@ -290,7 +290,7 @@ func TestV408LoginRepairsTenantCreatedAfterUpgradeSnapshot(t *testing.T) {
 	})
 }
 
-func TestV408LoginRejectsAccountDroppedAfterAuthentication(t *testing.T) {
+func TestV407LoginRejectsAccountDroppedAfterAuthentication(t *testing.T) {
 	embed.RunSingleCNBaseClusterTests(t, func(cluster embed.Cluster) {
 		ctx, cancel := context.WithTimeout(t.Context(), 10*time.Minute)
 		defer cancel()
@@ -316,7 +316,7 @@ func TestV408LoginRejectsAccountDroppedAfterAuthentication(t *testing.T) {
 		require.NoError(t, admin.QueryRowContext(ctx,
 			"select account_id from mo_catalog.mo_account where account_name = '"+accountName+"'").Scan(&tenantID))
 		require.NoError(t, testutils.GetSQLExecutor(cn).ExecTxn(ctx, func(txn executor.TxnExecutor) error {
-			return versions.UpgradeTenantVersion(tenantID, "4.0.7", txn)
+			return versions.UpgradeTenantVersion(tenantID, "4.0.6", txn)
 		}, executor.Options{}.WithDatabase(catalog.MO_CATALOG).WithWaitCommittedLogApplied()))
 
 		// Obtain a separate real frontend session without first logging into the
@@ -347,7 +347,7 @@ func TestV408LoginRejectsAccountDroppedAfterAuthentication(t *testing.T) {
 		require.NoError(t, err)
 		authenticatedVersion := ses.GetCreateVersion()
 		authenticatedTenantID := ses.GetTenantInfo().GetTenantID()
-		require.Equal(t, "4.0.7", authenticatedVersion)
+		require.Equal(t, "4.0.6", authenticatedVersion)
 		require.Equal(t, uint32(tenantID), authenticatedTenantID)
 		require.LessOrEqual(t, versions.Compare(authenticatedVersion, base.GetFinalVersion()), 0)
 		_, err = admin.ExecContext(ctx, "drop account "+accountName)
@@ -371,13 +371,13 @@ func TestV408LoginRejectsAccountDroppedAfterAuthentication(t *testing.T) {
 
 type statisticsUpgradeTxn struct {
 	executor.TxnExecutor
-	creates *int
+	replacements *int
 }
 
 func (txn *statisticsUpgradeTxn) Exec(statement string, opts executor.StatementOption) (executor.Result, error) {
 	res, err := txn.TxnExecutor.Exec(statement, opts)
-	if err == nil && statement == sysview.InformationSchemaStatisticsDDL {
-		(*txn.creates)++
+	if err == nil && statement == strings.Replace(sysview.InformationSchemaStatisticsDDL, "CREATE VIEW ", "CREATE OR REPLACE VIEW ", 1) {
+		(*txn.replacements)++
 	}
 	return res, err
 }

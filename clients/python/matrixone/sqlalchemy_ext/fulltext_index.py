@@ -16,6 +16,7 @@
 Fulltext index support for SQLAlchemy integration with MatrixOne.
 """
 
+from .._sql_literals import string_grammar_token
 from typing import Any, List, Union
 
 from sqlalchemy import Index, text
@@ -69,9 +70,9 @@ class FulltextAlgorithmType:
         # Set algorithm to BM25
         client.execute('SET ft_relevancy_algorithm = "BM25"')
 
-        # Create index with BM25 reference
+        # Create the index; select BM25 when executing a search
         index = FulltextIndex("ftidx_content", ["title", "content"],
-                             algorithm=FulltextAlgorithmType.BM25)
+                             algorithm=FulltextAlgorithmType.TF_IDF)
 
         # Perform searches with BM25 scoring
         result = client.query(Article).filter(
@@ -160,7 +161,7 @@ class FulltextIndex(Index):
             table_name='my_table',
             name='ftidx_content',
             columns=['title', 'content'],
-            algorithm=FulltextAlgorithmType.BM25
+            algorithm=FulltextAlgorithmType.TF_IDF
         )
 
         # Drop index using class method
@@ -173,7 +174,7 @@ class FulltextIndex(Index):
     2. Instance Methods (Useful for reusable index configurations)::
 
         # Create index object
-        index = FulltextIndex('ftidx_content', ['title', 'content'], algorithm=FulltextAlgorithmType.BM25)
+        index = FulltextIndex('ftidx_content', ['title', 'content'], algorithm=FulltextAlgorithmType.TF_IDF)
 
         # Create index using instance method
         success = index.create(engine, 'my_table')
@@ -201,7 +202,7 @@ class FulltextIndex(Index):
         # Auto-commit mode
         client.fulltext_index.create(
             'my_table', 'ftidx_content', ['title', 'content'],
-            algorithm=FulltextAlgorithmType.BM25
+            algorithm=FulltextAlgorithmType.TF_IDF
         )
 
         # Transaction context mode
@@ -230,7 +231,7 @@ class FulltextIndex(Index):
                 * Single column: "content" or ["content"]
                 * Multiple columns: ["title", "content"]
 
-            algorithm (str): Fulltext algorithm type (stored but not part of DDL)
+            algorithm (str): Compatibility TF-IDF default only; ranking is query-scoped
 
                 * FulltextAlgorithmType.TF_IDF (default): Traditional TF-IDF
                 * FulltextAlgorithmType.BM25: Modern BM25 ranking
@@ -249,7 +250,7 @@ class FulltextIndex(Index):
 
             # Multiple columns with BM25
             index = FulltextIndex("ftidx_search", ["title", "content"],
-                                 algorithm=FulltextAlgorithmType.BM25)
+                                 algorithm=FulltextAlgorithmType.TF_IDF)
 
             # JSON parser for JSON content
             index = FulltextIndex("ftidx_json", "json_data",
@@ -273,10 +274,21 @@ class FulltextIndex(Index):
         if not all(isinstance(col, str) for col in columns):
             raise TypeError("All columns must be strings")
 
+        self.validate_algorithm(algorithm)
+        if parser not in (None, FulltextParserType.JSON, FulltextParserType.NGRAM):
+            raise ValueError('Unsupported fulltext parser')
         self.algorithm = algorithm
         self.parser = parser
         self._column_names = columns.copy()  # Store column names for easy access
         super().__init__(name, *columns)
+
+    @staticmethod
+    def validate_algorithm(algorithm):
+        if algorithm != FulltextAlgorithmType.TF_IDF:
+            raise ValueError(
+                'Index DDL cannot configure ranking; use the search builder with_algorithm() '
+                'for BM25. The default TF-IDF argument is retained for compatibility.'
+            )
 
     def get_columns(self):
         """Get column names as a list"""
@@ -284,8 +296,14 @@ class FulltextIndex(Index):
 
     def _create_index_sql(self, table_name: str) -> str:
         """Generate the CREATE INDEX SQL for fulltext index."""
-        columns_str = ", ".join(self._column_names)
-        sql = f"CREATE FULLTEXT INDEX {self.name} ON {table_name} ({columns_str})"
+        from .._sql_literals import sql_object_name
+
+        columns_str = ", ".join(sql_object_name(name, force=True) for name in self._column_names)
+        sql = "CREATE FULLTEXT INDEX %s ON %s (%s)" % (
+            sql_object_name(self.name, force=True),
+            sql_object_name(table_name, qualified=True, force=True),
+            columns_str,
+        )
         if self.parser:
             sql += f" WITH PARSER {self.parser}"
         return sql
@@ -315,7 +333,7 @@ class FulltextIndex(Index):
                 * Single: "content" or ["content"]
                 * Multiple: ["title", "content", "summary"]
 
-            algorithm (str): Algorithm type (stored for reference, not in DDL)
+            algorithm (str): Compatibility TF-IDF default only; ranking is query-scoped
 
                 * FulltextAlgorithmType.TF_IDF (default)
                 * FulltextAlgorithmType.BM25
@@ -328,7 +346,7 @@ class FulltextIndex(Index):
                 * FulltextParserType.NGRAM: For Chinese/Asian languages
 
         Returns:
-            bool: True if succeeded, False otherwise
+            bool: True on acknowledgement; database errors propagate
 
         Examples::
 
@@ -350,22 +368,9 @@ class FulltextIndex(Index):
                 )
                 await session.commit()
         """
-        try:
-            if isinstance(columns, str):
-                columns = [columns]
-
-            columns_str = ", ".join(columns)
-            sql = f"CREATE FULLTEXT INDEX {name} ON {table_name} ({columns_str})"
-            if parser:
-                sql += f" WITH PARSER {parser}"
-
-            # Directly use the provided connection
-            _exec_sql_safe(bind, sql)
-
-            return True
-        except Exception as e:
-            print(f"Failed to create fulltext index: {e}")
-            return False
+        index = cls(name, columns, algorithm=algorithm, parser=parser)
+        _exec_sql_safe(bind, index._create_index_sql(table_name))
+        return True
 
     @classmethod
     def drop_index(cls, bind, table_name: str, name: str) -> bool:
@@ -380,18 +385,17 @@ class FulltextIndex(Index):
 
         Returns:
 
-            bool: True if successful, False otherwise
+            bool: True on acknowledgement; database errors propagate
         """
-        try:
-            sql = f"DROP INDEX {name} ON {table_name}"
+        from .._sql_literals import sql_object_name
 
-            # Directly use the provided connection
-            _exec_sql_safe(bind, sql)
-
-            return True
-        except Exception as e:
-            print(f"Failed to drop fulltext index: {e}")
-            return False
+        sql = "DROP INDEX %s ON %s" % (
+            sql_object_name(name, force=True),
+            sql_object_name(table_name, qualified=True, force=True),
+        )
+        # Directly use the provided connection
+        _exec_sql_safe(bind, sql)
+        return True
 
     def create(self, engine, table_name: str) -> bool:
         """
@@ -404,18 +408,12 @@ class FulltextIndex(Index):
 
         Returns:
 
-            bool: True if successful, False otherwise
+            bool: True on acknowledgement; database errors propagate
         """
-        try:
-            sql = self._create_index_sql(table_name)
-
-            with engine.begin() as conn:
-                _exec_sql_safe(conn, sql)
-
-            return True
-        except Exception as e:
-            print(f"Failed to create fulltext index: {e}")
-            return False
+        sql = self._create_index_sql(table_name)
+        with engine.begin() as conn:
+            _exec_sql_safe(conn, sql)
+        return True
 
     def drop(self, engine, table_name: str) -> bool:
         """
@@ -428,18 +426,17 @@ class FulltextIndex(Index):
 
         Returns:
 
-            bool: True if successful, False otherwise
+            bool: True on acknowledgement; database errors propagate
         """
-        try:
-            sql = f"DROP INDEX {self.name} ON {table_name}"
+        from .._sql_literals import sql_object_name
 
-            with engine.begin() as conn:
-                _exec_sql_safe(conn, sql)
-
-            return True
-        except Exception as e:
-            print(f"Failed to drop fulltext index: {e}")
-            return False
+        sql = "DROP INDEX %s ON %s" % (
+            sql_object_name(self.name, force=True),
+            sql_object_name(table_name, qualified=True, force=True),
+        )
+        with engine.begin() as conn:
+            _exec_sql_safe(conn, sql)
+        return True
 
 
 class FulltextSearchBuilder:
@@ -610,14 +607,16 @@ class FulltextSearchBuilder:
         columns_str = ", ".join(self.columns)
         # MatrixOne doesn't support "IN NATURAL_LANGUAGE" syntax, use simple AGAINST
         if self.search_mode == FulltextModeType.NATURAL_LANGUAGE or self.search_mode == "natural language mode":
-            match_clause = f"MATCH({columns_str}) AGAINST('{self.search_term}')"
+            match_clause = f"MATCH({columns_str}) AGAINST({string_grammar_token(self.search_term)})"
         elif self.search_mode == FulltextModeType.BOOLEAN or self.search_mode == "boolean mode":
-            match_clause = f"MATCH({columns_str}) AGAINST('{self.search_term}' IN BOOLEAN MODE)"
+            match_clause = f"MATCH({columns_str}) AGAINST({string_grammar_token(self.search_term)} IN BOOLEAN MODE)"
         elif self.search_mode == FulltextModeType.QUERY_EXPANSION or self.search_mode == "query expansion mode":
-            match_clause = f"MATCH({columns_str}) AGAINST('{self.search_term}' WITH QUERY EXPANSION)"
+            match_clause = (
+                f"MATCH({columns_str}) AGAINST({string_grammar_token(self.search_term)} WITH QUERY EXPANSION)"
+            )
         else:
             # Default to simple AGAINST for unknown modes
-            match_clause = f"MATCH({columns_str}) AGAINST('{self.search_term}')"
+            match_clause = f"MATCH({columns_str}) AGAINST({string_grammar_token(self.search_term)})"
 
         if self.include_score:
             builder.select("*", f"{match_clause} AS score")
@@ -641,7 +640,7 @@ class FulltextSearchBuilder:
             builder.order_by("score DESC")
 
         # Add LIMIT/OFFSET clause
-        if self.limit_value:
+        if self.limit_value is not None:
             builder.limit(self.limit_value)
             if self.offset_value:
                 builder.offset(self.offset_value)
@@ -687,7 +686,7 @@ def create_fulltext_index(
 
     Returns:
 
-        bool: True if successful, False otherwise
+        bool: True on acknowledgement; database errors propagate
     """
     return FulltextIndex.create_index(engine, table_name, name, columns, algorithm, parser)
 
@@ -729,35 +728,11 @@ def compile_create_index(element, compiler, **kw):
             )
 
         # Generate FULLTEXT index DDL
-        columns_str = ", ".join(col.name for col in index.columns)
-        sql = f"CREATE FULLTEXT INDEX {index.name} ON {index.table.name} ({columns_str})"
+        columns_str = ", ".join(compiler.preparer.quote(col.name) for col in index.columns)
+        sql = f"CREATE FULLTEXT INDEX {compiler.preparer.quote(index.name)} ON {compiler.preparer.format_table(index.table)} ({columns_str})"
         if hasattr(index, 'parser') and index.parser:
             sql += f" WITH PARSER {index.parser}"
         return sql
 
     # Default behavior for regular indexes
     return compiler.visit_create_index(element, **kw)
-
-
-# Monkey-patch MySQLDDLCompiler to handle FulltextIndex at dialect level
-# This ensures create_all() generates correct FULLTEXT INDEX DDL
-try:
-    from sqlalchemy.dialects.mysql.base import MySQLDDLCompiler
-
-    _original_visit_create_index = MySQLDDLCompiler.visit_create_index
-
-    def _patched_visit_create_index(self, create, **kw):
-        """Patched visit_create_index to handle FulltextIndex."""
-        index = create.element
-        if isinstance(index, FulltextIndex):
-            columns_str = ", ".join(col.name for col in index.columns)
-            sql = f"CREATE FULLTEXT INDEX {index.name} ON {index.table.name} ({columns_str})"
-            if hasattr(index, 'parser') and index.parser:
-                sql += f" WITH PARSER {index.parser}"
-            return sql
-        return _original_visit_create_index(self, create, **kw)
-
-    MySQLDDLCompiler.visit_create_index = _patched_visit_create_index
-except ImportError:
-    # SQLAlchemy not installed or MySQL dialect not available
-    pass

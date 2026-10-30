@@ -39,9 +39,9 @@ Cannot add or update a child row: a foreign key constraint fails
 insert into checked_rows values (3,1,1);
 Duplicate entry '1' for key 'v'
 delete from checked_rows where id=1;
-internal error: Cannot delete or update a parent row: a foreign key constraint fails
+Cannot delete or update a parent row: a foreign key constraint fails
 delete from parent_rows where id=1;
-internal error: Cannot delete or update a parent row: a foreign key constraint fails
+Cannot delete or update a parent row: a foreign key constraint fails
 alter table checked_rows drop check ck_positive;
 insert into checked_rows values (3,1,-1);
 insert into checked_rows values (4,1,101);
@@ -72,9 +72,9 @@ Cannot add or update a child row: a foreign key constraint fails
 insert into checked_rows values (4,1,1);
 Duplicate entry '1' for key 'v'
 delete from checked_rows where id=1;
-internal error: Cannot delete or update a parent row: a foreign key constraint fails
+Cannot delete or update a parent row: a foreign key constraint fails
 delete from parent_rows where id=1;
-internal error: Cannot delete or update a parent row: a foreign key constraint fails
+Cannot delete or update a parent row: a foreign key constraint fails
 delete from checked_rows where id=3;
 alter table checked_rows add constraint ck_positive check(v > 0);
 alter table checked_rows drop constraint ck_positive,
@@ -112,9 +112,9 @@ uv    0    v
 insert into checked_rows values (5,999,2);
 Cannot add or update a child row: a foreign key constraint fails
 delete from checked_rows where id=1;
-internal error: Cannot delete or update a parent row: a foreign key constraint fails
+Cannot delete or update a parent row: a foreign key constraint fails
 delete from parent_rows where id=1;
-internal error: Cannot delete or update a parent row: a foreign key constraint fails
+Cannot delete or update a parent row: a foreign key constraint fails
 create table last_check(id int primary key,v int,constraint ck_only check(v>=0));
 insert into last_check values (1,1);
 alter table last_check drop constraint ck_only;

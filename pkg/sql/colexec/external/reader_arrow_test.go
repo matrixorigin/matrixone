@@ -19,6 +19,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math/big"
 	"net"
 	"os"
 	"os/exec"
@@ -31,6 +32,7 @@ import (
 
 	"github.com/apache/arrow-go/v18/arrow"
 	"github.com/apache/arrow-go/v18/arrow/array"
+	"github.com/apache/arrow-go/v18/arrow/decimal128"
 	"github.com/apache/arrow-go/v18/arrow/ipc"
 	"github.com/apache/arrow-go/v18/arrow/memory"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -169,6 +171,100 @@ func TestExternalArrowForceMaterialize(t *testing.T) {
 	account.Seal()
 	_, err = registry.Finalize(account)
 	require.NoError(t, err)
+}
+
+func TestExternalArrowLoadStagesAttributedDecimalText(t *testing.T) {
+	for _, container := range []string{tree.ARROW_CONTAINER_FILE, tree.ARROW_CONTAINER_STREAM} {
+		t.Run(container, func(t *testing.T) {
+			fileBytes := makeExternalArrowDecimalIPC(t, container)
+			fs, err := fileservice.NewMemoryFS("etl", fileservice.DisabledCacheConfig, nil)
+			require.NoError(t, err)
+			path := "etl:load-decimal-" + container + ".arrow"
+			require.NoError(t, fs.Write(context.Background(), fileservice.IOVector{
+				FilePath: path,
+				Entries:  []fileservice.IOEntry{{Offset: 0, Size: int64(len(fileBytes)), Data: fileBytes}},
+			}))
+
+			registry, err := mpool.NewAllocationAccountRegistry(1, 128)
+			require.NoError(t, err)
+			account, err := registry.Open(64 << 20)
+			require.NoError(t, err)
+			proc := newArrowLoadTestProc(t)
+
+			arg := NewArgument().WithEs(externalArrowDecimalParam(fs, path, int64(len(fileBytes)), container, true))
+			require.NoError(t, arg.SetAllocationAccount(account))
+			require.NoError(t, arg.Prepare(proc))
+
+			result, err := arg.Call(proc)
+			require.NoError(t, err)
+			require.Equal(t, vm.ExecNext, result.Status)
+			require.Equal(t, 3, result.Batch.RowCount())
+			vec := result.Batch.Vecs[0]
+			// The staging contract is observable after ReadBatch: attributed
+			// targets produce a scan-owned VARCHAR vector carrying the rendered
+			// Arrow values, which the shared admission boundary classifies.
+			require.Equal(t, types.T_varchar, vec.GetType().Oid)
+			require.Equal(t, "123.45", vec.GetStringAt(0))
+			require.Equal(t, "-1.50", vec.GetStringAt(1))
+			require.True(t, vec.IsNull(2))
+
+			result, err = arg.Call(proc)
+			require.NoError(t, err)
+			require.Equal(t, vm.ExecStop, result.Status)
+			arg.Free(proc, false, nil)
+			require.Zero(t, account.Snapshot().Used)
+			require.NoError(t, arg.ClearAllocationAccount(account))
+			arg.Release()
+			account.Seal()
+			_, err = registry.Finalize(account)
+			require.NoError(t, err)
+		})
+	}
+
+	// Unattributed decimals keep the exact borrowed-layout conversion: the
+	// staging marker never activates and the physical vector is unchanged.
+	t.Run("unattributed keeps decimal physical", func(t *testing.T) {
+		fileBytes := makeExternalArrowDecimalIPC(t, tree.ARROW_CONTAINER_FILE)
+		fs, err := fileservice.NewMemoryFS("etl", fileservice.DisabledCacheConfig, nil)
+		require.NoError(t, err)
+		path := "etl:load-decimal-plain.arrow"
+		require.NoError(t, fs.Write(context.Background(), fileservice.IOVector{
+			FilePath: path,
+			Entries:  []fileservice.IOEntry{{Offset: 0, Size: int64(len(fileBytes)), Data: fileBytes}},
+		}))
+
+		registry, err := mpool.NewAllocationAccountRegistry(1, 128)
+		require.NoError(t, err)
+		account, err := registry.Open(64 << 20)
+		require.NoError(t, err)
+		proc := newArrowLoadTestProc(t)
+
+		arg := NewArgument().WithEs(externalArrowDecimalParam(fs, path, int64(len(fileBytes)), tree.ARROW_CONTAINER_FILE, false))
+		require.NoError(t, arg.SetAllocationAccount(account))
+		require.NoError(t, arg.Prepare(proc))
+
+		result, err := arg.Call(proc)
+		require.NoError(t, err)
+		require.Equal(t, vm.ExecNext, result.Status)
+		require.Equal(t, 3, result.Batch.RowCount())
+		vec := result.Batch.Vecs[0]
+		require.Equal(t, types.T_decimal128, vec.GetType().Oid)
+		values := vector.MustFixedColNoTypeCheck[types.Decimal128](vec)
+		require.Equal(t, "123.45", values[0].Format(2))
+		require.Equal(t, "-1.50", values[1].Format(2))
+		require.True(t, vec.IsNull(2))
+
+		result, err = arg.Call(proc)
+		require.NoError(t, err)
+		require.Equal(t, vm.ExecStop, result.Status)
+		arg.Free(proc, false, nil)
+		require.Zero(t, account.Snapshot().Used)
+		require.NoError(t, arg.ClearAllocationAccount(account))
+		arg.Release()
+		account.Seal()
+		_, err = registry.Finalize(account)
+		require.NoError(t, err)
+	})
 }
 
 func TestArrowLoadErrorCategory(t *testing.T) {
@@ -514,6 +610,29 @@ func TestExternalArrowPrepareEnforcesWorkerRolloutGate(t *testing.T) {
 	require.ErrorContains(t, err, "S3 or stage is disabled")
 	require.Nil(t, arg.reader)
 	arg.Release()
+
+	// A nil service on a borrowed parameter must be filled from this worker
+	// before classifying an S3-backed alias, without changing the template.
+	alias, err := fileservice.NewS3FS(proc.Ctx, fileservice.ObjectStorageArguments{
+		Name: "archive", Endpoint: "disk", Bucket: t.TempDir(), NoBucketValidation: true,
+	}, fileservice.DisabledCacheConfig, nil, true, true)
+	require.NoError(t, err)
+	t.Cleanup(func() { alias.Close(context.Background()) })
+	services, err := fileservice.NewFileServices("archive", alias)
+	require.NoError(t, err)
+	proc.Base.FileService = services
+	param = externalArrowParam(nil, "archive:missing.arrow", 1, tree.ARROW_CONTAINER_FILE)
+	borrowed := param.Extern
+	arg = NewArgument().WithEs(param)
+	defer func() {
+		arg.Free(proc, true, err)
+		arg.Release()
+	}()
+	err = arg.Prepare(proc)
+	require.ErrorContains(t, err, "S3 or stage is disabled")
+	require.Nil(t, arg.reader)
+	require.Nil(t, borrowed.FileService)
+	require.Same(t, services, arg.Es.Extern.FileService)
 }
 
 func TestExternalArrowAllocationAccountContract(t *testing.T) {
@@ -916,6 +1035,67 @@ func externalArrowParam(fs fileservice.FileService, path string, size int64, con
 		},
 		ExParam: ExParam{Fileparam: &ExFileparam{}, Filter: &FilterParam{}},
 	}
+}
+
+func externalArrowDecimalParam(fs fileservice.FileService, path string, size int64, container string, attributed bool) *ExternalParam {
+	typ := plan.Type{Id: int32(types.T_decimal128), Width: 18, Scale: 2}
+	if attributed {
+		typ.NumericAttributes = types.NumericAttributeUnsigned
+	}
+	return &ExternalParam{
+		ExParamConst: ExParamConst{
+			ArrowExecutionScope:        pipeline.ArrowExecutionScope_ArrowLoadData,
+			ArrowConversionPlanVersion: arrowbridge.ConversionPlanVersion,
+			Attrs: []plan.ExternAttr{
+				{ColName: "d", ColIndex: 0, ColFieldIndex: 0},
+			},
+			Cols: []*plan.ColDef{
+				{Name: "d", Typ: typ},
+			},
+			FileList: []string{path},
+			FileSize: []int64{size},
+			Extern: &tree.ExternParam{
+				ExParamConst: tree.ExParamConst{
+					ScanType: tree.INFILE, Filepath: path, Format: tree.ARROW,
+					ArrowContainer: container, Tail: &tree.TailParameter{},
+				},
+				ExParam: tree.ExParam{ExternType: int32(plan.ExternType_LOAD), FileService: fs},
+			},
+			Ctx: context.Background(),
+		},
+		ExParam: ExParam{Fileparam: &ExFileparam{}, Filter: &FilterParam{}},
+	}
+}
+
+func makeExternalArrowDecimalIPC(t *testing.T, container string) []byte {
+	t.Helper()
+	allocator := memory.NewGoAllocator()
+	decimalType := &arrow.Decimal128Type{Precision: 18, Scale: 2}
+	schema := arrow.NewSchema([]arrow.Field{{Name: "d", Type: decimalType, Nullable: true}}, nil)
+	var output bytes.Buffer
+	writeRecords := func(write func(arrow.RecordBatch) error) {
+		builder := array.NewRecordBuilder(allocator, schema)
+		builder.Field(0).(*array.Decimal128Builder).AppendValues([]decimal128.Num{
+			decimal128.FromBigInt(big.NewInt(12345)),
+			decimal128.FromBigInt(big.NewInt(-150)),
+			decimal128.FromBigInt(big.NewInt(0)),
+		}, []bool{true, true, false})
+		record := builder.NewRecordBatch()
+		require.NoError(t, write(record))
+		record.Release()
+		builder.Release()
+	}
+	if container == tree.ARROW_CONTAINER_FILE {
+		writer, err := ipc.NewFileWriter(&output, ipc.WithSchema(schema), ipc.WithAllocator(allocator))
+		require.NoError(t, err)
+		writeRecords(writer.Write)
+		require.NoError(t, writer.Close())
+	} else {
+		writer := ipc.NewWriter(&output, ipc.WithSchema(schema), ipc.WithAllocator(allocator))
+		writeRecords(writer.Write)
+		require.NoError(t, writer.Close())
+	}
+	return append([]byte(nil), output.Bytes()...)
 }
 
 func newArrowLoadTestProc(t *testing.T) *process.Process {

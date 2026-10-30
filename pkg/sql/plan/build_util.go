@@ -384,13 +384,22 @@ func getTypeFromAstWithoutCharset(ctx context.Context, typ tree.ResolvableTypeRe
 		case defines.MYSQL_TYPE_YEAR:
 			return plan.Type{Id: int32(types.T_year), Width: 4}, nil
 		case defines.MYSQL_TYPE_DECIMAL:
+			// UNSIGNED/ZEROFILL ride the plan-side attribute channel (proto
+			// field 14); ZEROFILL implies UNSIGNED and is normalized to both
+			// bits so the durable mask never shows bit 1 without bit 0.
+			var attrs uint32
+			if n.InternalType.Zerofill {
+				attrs = types.NumericAttributeZerofillMask
+			} else if n.InternalType.Unsigned {
+				attrs = types.NumericAttributeUnsigned
+			}
 			if n.InternalType.DisplayWith > 38 {
-				return plan.Type{Id: int32(types.T_decimal256), Width: n.InternalType.DisplayWith, Scale: n.InternalType.Scale}, nil
+				return plan.Type{Id: int32(types.T_decimal256), Width: n.InternalType.DisplayWith, Scale: n.InternalType.Scale, NumericAttributes: attrs}, nil
 			}
 			if n.InternalType.DisplayWith > 16 {
-				return plan.Type{Id: int32(types.T_decimal128), Width: n.InternalType.DisplayWith, Scale: n.InternalType.Scale}, nil
+				return plan.Type{Id: int32(types.T_decimal128), Width: n.InternalType.DisplayWith, Scale: n.InternalType.Scale, NumericAttributes: attrs}, nil
 			}
-			return plan.Type{Id: int32(types.T_decimal64), Width: n.InternalType.DisplayWith, Scale: n.InternalType.Scale}, nil
+			return plan.Type{Id: int32(types.T_decimal64), Width: n.InternalType.DisplayWith, Scale: n.InternalType.Scale, NumericAttributes: attrs}, nil
 		case defines.MYSQL_TYPE_BOOL:
 			return plan.Type{Id: int32(types.T_bool)}, nil
 		case defines.MYSQL_TYPE_BLOB:
@@ -998,6 +1007,12 @@ func buildDefaultExprWithColumnsObserved(
 	} else {
 		binder = NewDefaultBinder(bindCtx, nil, nil, typ, nil)
 	}
+	// Attributed DECIMAL destinations bind the DEFAULT source target-free:
+	// numeric literal precision and raw string text must reach the admission
+	// boundary unrounded (the same predicate as the VALUES builders).
+	if isAttributedDecimalPlanType(typ) {
+		binder.baseBinder.suppressDefaultValueBindType = true
+	}
 	planExpr, err := binder.bindPersistedExpr(semanticExpr, 0, false)
 	if err != nil {
 		return nil, err
@@ -1026,13 +1041,19 @@ func buildDefaultExprWithColumnsObserved(
 	if observe != nil {
 		observe(planExpr, nil)
 	}
-	defaultExpr, err := makePlan2AssignmentCastExpr(bindCtx, planExpr, typ)
+	defaultExpr, err := makePlan2AssignmentCastExprForColumn(bindCtx, planExpr, typ, colNameOrigin)
 	if err != nil {
 		return nil, err
 	}
 	// Constant folding removes the function identity, so rolling-upgrade
 	// admission must happen while the resolved HEX overload is still present.
 	if err = requireHexMySQLNumericProtocol(proc, defaultExpr); err != nil {
+		return nil, err
+	}
+	// Attributed DECIMAL strict constant validation: a constant negative
+	// default is ER_INVALID_DEFAULT (1067) regardless of session sql_mode,
+	// while volatile sources stay unevaluated here (I4).
+	if err = validateUnsignedDecimalStrictConstantDefault(bindCtx, proc, typ, planExpr, colNameOrigin); err != nil {
 		return nil, err
 	}
 	if observe != nil {
@@ -1139,6 +1160,11 @@ func buildOnUpdate(bindCtx context.Context, col *tree.ColumnTableDef, typ plan.T
 	}
 
 	binder := NewDefaultBinder(bindCtx, nil, nil, typ, nil)
+	// Attributed DECIMAL destinations bind the ON UPDATE source target-free,
+	// the same predicate as the DEFAULT owner.
+	if isAttributedDecimalPlanType(typ) {
+		binder.baseBinder.suppressDefaultValueBindType = true
+	}
 	planExpr, err := binder.bindPersistedExpr(expr, 0, false)
 	if err != nil {
 		return nil, err
@@ -1150,8 +1176,14 @@ func buildOnUpdate(bindCtx context.Context, col *tree.ColumnTableDef, typ plan.T
 		return nil, err
 	}
 
-	onUpdateExpr, err := makePlan2AssignmentCastExpr(bindCtx, planExpr, typ)
+	onUpdateExpr, err := makePlan2AssignmentCastExprForColumn(bindCtx, planExpr, typ, col.Name.ColName())
 	if err != nil {
+		return nil, err
+	}
+	// Attributed DECIMAL strict constant validation: a constant negative
+	// ON UPDATE source is ER_INVALID_DEFAULT (1067) regardless of session
+	// sql_mode; volatile sources stay unevaluated here (I4).
+	if err = validateUnsignedDecimalStrictConstantDefault(bindCtx, proc, typ, planExpr, col.Name.ColNameOrigin()); err != nil {
 		return nil, err
 	}
 
@@ -1251,8 +1283,17 @@ func buildGeneratedExpr(bindCtx context.Context, col *tree.ColumnTableDef, typ p
 	// Persist only stable function IDs in generated-column catalog metadata.
 	// DML plan construction rewrites this wrapper to cast_assign/cast_ignore
 	// when the active protocol supports those functions.
-	genExpr, err := makePlan2AssignmentCastExpr(bindCtx, planExpr, typ)
+	genExpr, err := makePlan2AssignmentCastExprForColumn(bindCtx, planExpr, typ, colNameOrigin)
 	if err != nil {
+		return nil, err
+	}
+	// The assignment wrapper is itself persisted: a BOOL target around an
+	// ENUM operand binds the conditional storage-truth cast the raw expression
+	// alone does not carry (g BOOL AS (e) is merely an ENUM reference before
+	// this point, so the first authoring check computed no requirement).
+	// Validate the final stored expression so this cast cannot be authored
+	// while the cluster is below the protocol floor.
+	if err = RequirePersistedIPFunctionProtocolForAuthoring(bindCtx, proc, genExpr); err != nil {
 		return nil, err
 	}
 
@@ -1271,6 +1312,57 @@ func mapDDLAssignmentCastError(ctx context.Context, typ plan.Type, colName strin
 		return moerr.NewErrInvalidDefault(ctx, colName)
 	}
 	return err
+}
+
+// validateUnsignedDecimalStrictConstantDefault is the shared DDL strict
+// constant-validation boundary for attributed DECIMAL defaults (MEDIUMINT
+// precedent, node-corrected): the raw target-free bound source is captured
+// BEFORE the admission/assignment composition, and only a constant source
+// (function.IsConstant(src, false)) is validated. The separate
+// authoring-time STRICT validation composition — the strict admission entry
+// selected by name over the source, wrapped by
+// forceAssignmentCastExprWithName cast_strict — is force-evaluated in an
+// isolated executor, so a non-strict authoring session cannot route the
+// inner admission through its clip+warning branch. A domain (out-of-range)
+// violation maps to ER_INVALID_DEFAULT; every other error keeps the owner's
+// mapDDLAssignmentCastError outcome. Volatile or non-constant sources are
+// never evaluated early, and unattributed destinations are unchanged (I4).
+func validateUnsignedDecimalStrictConstantDefault(ctx context.Context, proc *process.Process, typ plan.Type, src *plan.Expr, colNameOrigin string) error {
+	if src == nil || !isAttributedDecimalPlanType(typ) {
+		return nil
+	}
+	// NULL-by-construction defaults (DEFAULT NULL, including the shape the
+	// mo_sql replay carries) have no domain to validate.
+	if unsignedDecimalNullIdentitySource(src) {
+		return nil
+	}
+	if !function.IsConstant(src, false) {
+		return nil
+	}
+	inner, err := forceUnsignedDecimalAdmissionExpr(ctx, DeepCopyExpr(src), typ, unsignedDecimalAdmissionStrictName, colNameOrigin)
+	if err != nil {
+		return err
+	}
+	strictExpr, err := forceAssignmentCastExprWithName(ctx, inner, typ, "cast_strict")
+	if err != nil {
+		return err
+	}
+	executor, err := colexec.NewExpressionExecutor(proc, strictExpr)
+	if err != nil {
+		return err
+	}
+	_, err = executor.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
+	executor.Free()
+	if err == nil {
+		return nil
+	}
+	if moerr.IsMoErrCode(err, moerr.ErrOutOfRange) ||
+		moerr.IsMoErrCode(err, moerr.ErrOutOfRangeValueForColumn) {
+		// The strict admission rejects with the 1264 assignment vocabulary;
+		// the DDL boundary keeps its own MySQL contract (ER_INVALID_DEFAULT).
+		return moerr.NewErrInvalidDefault(ctx, colNameOrigin)
+	}
+	return mapDDLAssignmentCastError(ctx, typ, colNameOrigin, err)
 }
 
 // checkGeneratedExprReferences rejects variable references and auto-increment
@@ -2443,6 +2535,13 @@ func (builder *QueryBuilder) applyGeneratedColumnAssignmentCast(expr *plan.Expr,
 		}
 		return forceAssignmentCastExprWithName(builder.GetContext(), expr, expr.Typ, "cast")
 	}
+	if _, _, ok := matchUnsignedDecimalAssignmentComposition(expr); ok {
+		// Attributed DECIMAL generated columns persist the admission
+		// composition; re-police BOTH layers to the statement policy instead
+		// of swapping only the outer wrapper.
+		return rePoliceUnsignedDecimalAssignmentBoundary(
+			builder.GetContext(), expr, isIgnore, builder.compCtx.GetProcess())
+	}
 	if f != nil && f.Func != nil &&
 		(f.Func.ObjName == "cast_assign" || f.Func.ObjName == "cast_strict" || f.Func.ObjName == "cast_ignore") &&
 		len(f.Args) > 0 {
@@ -2599,6 +2698,12 @@ func getDefaultExprForAssignment(ctx context.Context, col *plan.ColDef, proc *pr
 	if err != nil {
 		return nil, err
 	}
+	if isAttributedDecimalPlanType(col.Typ) {
+		// Attributed DECIMAL defaults persist the DDL-authored boundary
+		// cast_assign(admission(src), target); replay it under the statement
+		// policy. Unattributed shapes pass through byte-identically.
+		return rePoliceUnsignedDecimalAssignmentBoundary(ctx, expr, ignore, proc)
+	}
 	if col.Typ.Id != int32(types.T_blob) && col.Typ.Id != int32(types.T_text) {
 		return expr, nil
 	}
@@ -2611,7 +2716,7 @@ func getDefaultExprForAssignment(ctx context.Context, col *plan.ColDef, proc *pr
 		// CAST expressions inside the default retain their own semantics.
 		expr = f.Args[0]
 	}
-	return forceAssignmentCastExprWithProcess(ctx, expr, col.Typ, ignore, proc)
+	return forceAssignmentCastExprWithProcess(ctx, expr, col.Typ, ignore, proc, col.Name)
 }
 
 func getDefaultExpr(ctx context.Context, d *plan.ColDef) (*Expr, error) {

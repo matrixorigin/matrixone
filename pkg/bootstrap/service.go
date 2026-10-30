@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/partitionservice"
@@ -148,10 +149,13 @@ type service struct {
 
 	upgrade struct {
 		upgradeTenantBatch                       int
+		catalogObjectLimit                       uint64
+		decisionFileService                      fileservice.FileService
 		checkUpgradeDuration                     time.Duration
 		checkUpgradeTenantDuration               time.Duration
 		upgradeTenantTasks                       int
 		finalVersionCompleted                    atomic.Bool
+		failure                                  atomic.Pointer[upgradeFailure]
 		orphanPrivilegeMaintenanceWorkerRunning  atomic.Bool
 		orphanPrivilegeMaintenanceRunning        atomic.Bool
 		orphanPrivilegeMaintenanceState          orphanPrivilegeMaintenanceState
@@ -191,6 +195,7 @@ func NewService(
 }
 
 func (s *service) Bootstrap(ctx context.Context) error {
+	ctx = executor.WithLocalExecution(ctx)
 	s.logger.Info("start to check bootstrap state")
 
 	if ok, err := s.checkAlreadyBootstrappedWithRetry(ctx); ok {
@@ -488,16 +493,11 @@ func InitSystemViews(ctx context.Context, exec executor.SQLExecutor) error {
 			// Publish the v118 TABLES consumer only after admission, atomically
 			// with the derived-schema completion views. A retry after an uncertain
 			// commit can safely reconcile both definitions again.
-			for _, sql := range []string{
-				"DROP VIEW IF EXISTS information_schema.TABLES",
-				sysview.InformationSchemaTablesV118DDL,
-			} {
-				result, err := txn.Exec(sql, executor.StatementOption{})
-				result.Close()
-				if err != nil {
-					return err
-				}
+			entry := versions.InformationSchemaTablesUpgradeEntry()
+			if err := entry.UpgradeAfterProtocolCheck(txn, catalog.System_Account); err != nil {
+				return err
 			}
+
 			return motrace.InitSchemaViewsWithTxn(ctx, txn)
 		}, opts)
 		if err == nil || !isSystemViewRetryableError(err) {

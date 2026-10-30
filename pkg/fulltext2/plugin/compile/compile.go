@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/fulltext2"
 	fulltext2runtime "github.com/matrixorigin/matrixone/pkg/fulltext2/plugin/runtime"
+	"github.com/matrixorigin/matrixone/pkg/fulltext2/tokenfilter"
 	compileplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/compile"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
@@ -44,6 +45,21 @@ func parserFromParams(params string) string {
 		return ""
 	}
 	return p.Parser
+}
+
+// tokenFiltersFromParams extracts the token_filter analyzer chain from an index's
+// IndexAlgoParams JSON so the build strips the same tokens the query does.
+func tokenFiltersFromParams(params string) []string {
+	if len(params) == 0 {
+		return nil
+	}
+	var p struct {
+		TokenFilter string `json:"token_filter"`
+	}
+	if err := json.Unmarshal([]byte(params), &p); err != nil {
+		return nil
+	}
+	return tokenfilter.ParseNames(p.TokenFilter)
 }
 
 // jsonTermShapeFromParams reads the json word breaker's persisted option. The
@@ -176,11 +192,25 @@ func buildFromSource(ctx compileplugin.CompileContext, storeDef, metaDef *plan.I
 	if err != nil {
 		return err
 	}
-	sql, err := genFulltext2BuildFromSourceSQL(origTable, storeDef, metaDef, db, capacity, postingCap)
+	sql, err := genFulltext2BuildFromSourceSQL(origTable, storeDef, metaDef, db, capacity, postingCap, resolveFulltext2ThreadsBuild(ctx))
 	if err != nil {
 		return err
 	}
 	return ctx.RunSql(sql)
+}
+
+// resolveFulltext2ThreadsBuild reads the fulltext2_threads_build session variable. It only
+// sizes the build's parallelism, so a context that cannot resolve it builds with the default.
+func resolveFulltext2ThreadsBuild(ctx compileplugin.CompileContext) int64 {
+	v, err := ctx.ResolveVariable("fulltext2_threads_build", true, false)
+	if err != nil {
+		return 0
+	}
+	n, ok := v.(int64)
+	if !ok || n < 0 {
+		return 0
+	}
+	return n
 }
 
 // resolveFulltext2Capacity reads max_index_capacity from the index's algo_params,
@@ -242,7 +272,7 @@ func resolveFulltext2PositionFree(algoParams string) (bool, error) {
 }
 
 // genFulltext2BuildFromSourceSQL emits the CROSS APPLY fulltext2_create build SQL.
-func genFulltext2BuildFromSourceSQL(origTable *plan.TableDef, storeDef, metaDef *plan.IndexDef, db string, capacity, postingCap int64) (string, error) {
+func genFulltext2BuildFromSourceSQL(origTable *plan.TableDef, storeDef, metaDef *plan.IndexDef, db string, capacity, postingCap, threadsBuild int64) (string, error) {
 	const srcAlias = "src"
 	positionFree, err := resolveFulltext2PositionFree(storeDef.IndexAlgoParams)
 	if err != nil {
@@ -256,8 +286,10 @@ func genFulltext2BuildFromSourceSQL(origTable *plan.TableDef, storeDef, metaDef 
 		MetadataTable:   metaDef.IndexTableName,
 		PKey:            origTable.Pkey.PkeyColName,
 		Parser:          parserFromParams(storeDef.IndexAlgoParams),
+		TokenFilters:    tokenFiltersFromParams(storeDef.IndexAlgoParams),
 		Capacity:        capacity,
 		PostingCapacity: postingCap,
+		ThreadsBuild:    threadsBuild,
 		PositionFree:    positionFree,
 		JSONNoKeys:      jsonNoKeys,
 		FromSource:      true,
@@ -433,6 +465,16 @@ func (Hooks) ValidateReindexParams(old map[string]string, alter compileplugin.Re
 			}
 			merged[catalog.IndexAlgoParamPositionFree] = "true"
 		} else {
+			// A token_filter index is bag-of-words only — it is BUILT with stopwords stripped,
+			// and only the BM25 query strips them back. Turning POSITION_FREE off would leave a
+			// positional index whose NL/boolean phrase queries (no longer rejected) cannot match
+			// the stripped terms. Reject rather than mint that broken state via REINDEX, which
+			// would otherwise bypass the CREATE-time token_filter⇒POSITION_FREE guard.
+			if old[catalog.IndexAlgoParamTokenFilter] != "" {
+				return nil, moerr.NewInvalidInputNoCtx(
+					"fulltext2: cannot turn POSITION_FREE off on a token_filter index (it is bag-of-words only); " +
+						"drop and recreate the index without token_filter for a positional index")
+			}
 			delete(merged, catalog.IndexAlgoParamPositionFree) // false ⇒ positional (param absent)
 		}
 	}
