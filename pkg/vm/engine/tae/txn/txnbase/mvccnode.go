@@ -306,16 +306,6 @@ func (un *TxnMVCCNode) Compare(o *TxnMVCCNode) int {
 	return 1
 }
 
-func (un *TxnMVCCNode) Compare2(o *TxnMVCCNode) int {
-	if un.Prepare.LT(&o.Prepare) {
-		return -1
-	}
-	if un.Prepare.Equal(&o.Prepare) {
-		return un.Compare(o)
-	}
-	return 1
-}
-
 func (un *TxnMVCCNode) ApplyCommit(id string) (ts types.TS, err error) {
 	if un.Txn == nil {
 		err = moerr.NewTxnNotFoundNoCtx()

@@ -4661,7 +4661,7 @@ func TestCCPRExecutorWithGC(t *testing.T) {
 
 	for time.Since(startTime2) < maxWaitTime2 {
 		taskEntry, ok := exec.GetTask(taskID)
-		if ok && taskEntry.DropAt != nil {
+		if ok && taskEntry.SubscriptionState == publication.SubscriptionStateDropped && taskEntry.DropAt != nil {
 			// Verify drop_at is approximately 2 hours ago (allow some tolerance)
 			expectedTime := dropAtTime
 			actualTime := *taskEntry.DropAt
@@ -4675,6 +4675,15 @@ func TestCCPRExecutorWithGC(t *testing.T) {
 	}
 
 	require.True(t, dropAtUpdatedInMemory, "drop_at should be updated in executor's task entry")
+
+	// The production run loop serializes logtail updates and GC. Stop and join
+	// that loop before invoking GC directly from this test goroutine.
+	exec.Stop()
+	taskEntry, ok := exec.GetTask(taskID)
+	require.True(t, ok)
+	require.Equal(t, publication.SubscriptionStateDropped, taskEntry.SubscriptionState)
+	require.NotNil(t, taskEntry.DropAt)
+	require.WithinDuration(t, dropAtTime, *taskEntry.DropAt, time.Minute)
 
 	// Step 8: Manually trigger GC
 	exec.GCInMemoryTask(0)

@@ -70,7 +70,7 @@ func TestMetadataInsertRecordsTheCallersBuildTS(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			seg := &Segment{Id: "s1", N: 7}
-			sqls := []string{seg.metadataInsertSQL(nil, cfg, 111, "checksum", 1, c.buildTS)}
+			sqls := []string{metadataInsertSQL(nil, cfg, seg.Id, 111, "checksum", 1, seg.Recency, seg.N, c.buildTS)}
 			ins := metadataInsert(t, sqls, cfg.MetadataTable)
 			require.Contains(t, ins, catalog.FullText2Index_TblCol_Metadata_Build_Ts,
 				"build_ts must be named explicitly, so the insert survives a column being appended")
@@ -88,7 +88,7 @@ func TestMetadataInsertUsesNamedColumns(t *testing.T) {
 	sqlexec.MarkProvenanceColumns(cfg.DbName, cfg.MetadataTable)
 	t.Cleanup(func() { sqlexec.ForgetProvenanceShape(cfg.DbName, cfg.MetadataTable) })
 	seg := &Segment{Id: "s1", N: 3}
-	sqls := []string{seg.metadataInsertSQL(nil, cfg, 1, "checksum", 1, 42)}
+	sqls := []string{metadataInsertSQL(nil, cfg, seg.Id, 1, "checksum", 1, seg.Recency, seg.N, 42)}
 	ins := metadataInsert(t, sqls, cfg.MetadataTable)
 	for _, col := range []string{
 		catalog.FullText2Index_TblCol_Metadata_Index_Id,
@@ -106,7 +106,7 @@ func TestMetadataInsertOmitsBuildTSOnALegacyTable(t *testing.T) {
 	sqlexec.ForgetProvenanceShape(cfg.DbName, cfg.MetadataTable)
 	seg := &Segment{Id: "s1", N: 3}
 
-	sqls := []string{seg.metadataInsertSQL(nil, cfg, 1, "checksum", 1, 42)}
+	sqls := []string{metadataInsertSQL(nil, cfg, seg.Id, 1, "checksum", 1, seg.Recency, seg.N, 42)}
 	ins := metadataInsertAny(t, sqls, cfg.MetadataTable)
 	require.NotContains(t, ins, catalog.FullText2Index_TblCol_Metadata_Build_Ts,
 		"naming a column the table does not have fails the whole write")

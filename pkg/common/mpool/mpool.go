@@ -512,7 +512,7 @@ type MPool struct {
 	stats    MPoolStats // stats
 	resource resourceMemoryStats
 	epoch    atomic.Pointer[ResourcePeakEpoch]
-	details  *mpoolDetails
+	details  atomic.Pointer[mpoolDetails]
 	onHeap   *onHeapOwnership
 
 	noLock bool
@@ -675,17 +675,20 @@ func (mp *MPool) deallocateAllPtrs() {
 }
 
 func (mp *MPool) EnableDetailRecording() {
-	if mp.details == nil {
-		mp.details = newMpoolDetails()
+	if mp.details.Load() != nil {
+		return
 	}
+	// Keep existing history if another enabler publishes first.
+	mp.details.CompareAndSwap(nil, newMpoolDetails())
 }
 
 func (mp *MPool) DisableDetailRecording() {
-	mp.details = nil
+	// Readers may finish recording or reporting through their own snapshot.
+	mp.details.Store(nil)
 }
 
 func (mp *MPool) getDetailK() string {
-	if mp == nil || mp.details == nil {
+	if mp == nil || mp.details.Load() == nil {
 		return ""
 	}
 	f := stack.Caller(2)
@@ -806,9 +809,9 @@ func (mp *MPool) ReportJson() string {
 	if bytes, objects := mp.OnHeapOutstanding(); objects != 0 {
 		ret += fmt.Sprintf(",\n \"on_heap\": {\"currBytes\": %d,\"currObjects\": %d}", bytes, objects)
 	}
-	if mp.details != nil {
+	if details := mp.details.Load(); details != nil {
 		ret += ",\n \"detailed_alloc\": "
-		ret += mp.details.reportJson()
+		ret += details.reportJson()
 	}
 
 	return ret + "}"
@@ -1194,13 +1197,13 @@ func (mp *MPool) alloc(
 	}
 	if !offHeap {
 		globalOnHeapStats.recordAlloc(sz)
-		if mp.details != nil {
-			mp.details.recordOnHeapAlloc(detailk, sz)
+		if details := mp.details.Load(); details != nil {
+			details.recordOnHeapAlloc(detailk, sz)
 		}
 	} else {
 		mp.recordResourcePeak(mp.resource.recordAlloc(sz))
-		if mp.details != nil {
-			mp.details.recordAlloc(detailk, sz)
+		if details := mp.details.Load(); details != nil {
+			details.recordAlloc(detailk, sz)
 		}
 		profileRecordAlloc(3, uintptr(ptr), sz)
 	}
@@ -1316,8 +1319,8 @@ func (mp *MPool) allocAccounted(
 	}
 	published = true
 	mp.recordResourcePeak(mp.resource.recordAlloc(sz))
-	if mp.details != nil {
-		mp.details.recordAlloc(detailk, sz)
+	if details := mp.details.Load(); details != nil {
+		details.recordAlloc(detailk, sz)
 	}
 	profileRecordAccountedAlloc(lease, sz)
 	return bs, nil
@@ -1396,8 +1399,8 @@ func (mp *MPool) freePtrInternal(
 		}
 		sz := int64(hdr.allocSz)
 		globalOnHeapStats.recordFree(sz, 1)
-		if mp.details != nil {
-			mp.details.recordOnHeapFree(detailk, sz)
+		if details := mp.details.Load(); details != nil {
+			details.recordOnHeapFree(detailk, sz)
 		}
 		return
 	}
@@ -1416,8 +1419,8 @@ func (mp *MPool) freePtrInternal(
 	mp.stats.RecordFree(mp.tag, sz)
 	globalStats.RecordFree("global", sz)
 	mp.resource.recordFree(sz)
-	if mp.details != nil {
-		mp.details.recordFree(detailk, sz)
+	if details := mp.details.Load(); details != nil {
+		details.recordFree(detailk, sz)
 	}
 
 	simpleCAllocator().Deallocate(unsafe.Slice((*byte)(ptr), sz), uint64(sz))
@@ -1665,7 +1668,21 @@ func (mp *MPool) ReallocZero(old []byte, sz int, offHeap bool) ([]byte, error) {
 func makeSliceWithCapWithDetailK[T any](detailk string, n, cap int, mp *MPool, offHeap bool) ([]T, error) {
 	var t T
 	tsz := unsafe.Sizeof(t)
-	bs, err := mp.allocWithDetailK(detailk, int64(tsz)*int64(cap), offHeap)
+	if n < 0 || cap < n {
+		return nil, moerr.NewInternalErrorNoCtxf("mpool make slice with invalid length %d and capacity %d", n, cap)
+	}
+	if cap == 0 {
+		return nil, nil
+	}
+	// Validate the element count before multiplying so the byte size cannot
+	// wrap around to a small or zero allocation.
+	maxSize := maxAllocationSize()
+	if tsz == 0 || maxSize <= 0 || uint64(cap) > uint64(maxSize)/uint64(tsz) {
+		return nil, moerr.NewInternalErrorNoCtxf(
+			"mpool memory allocation exceed limit with %d elements of size %d", cap, tsz,
+		)
+	}
+	bs, err := mp.allocWithDetailK(detailk, int64(uint64(tsz)*uint64(cap)), offHeap)
 	if err != nil {
 		return nil, err
 	}

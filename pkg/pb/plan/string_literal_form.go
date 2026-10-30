@@ -299,6 +299,7 @@ const (
 	planBooleanTypeID                int32 = 10
 	planJSONTypeID                   int32 = 62
 	planInt32TypeID                  int32 = 22
+	planEnumTypeID                   int32 = 66
 	// These stable function IDs are mirrored from pkg/sql/plan/function to
 	// avoid a dependency cycle. The generic CAST operator is not an assignment
 	// bounds check; these three internal assignment casts are.
@@ -400,6 +401,9 @@ const (
 // IncompleteTemporalStrings requires MORPC v130 for raw-calendar string
 // overloads and incomplete-input rejection diagnostics.
 type RemoteExpressionFeatures struct {
+	SessionLastInsertIDBaseline   bool
+	ODKUStatementResult           bool
+	JSONMinMaxTypedComparison     bool
 	FloatConversionSemantics      bool // v132: decimal rounding, MySQL text parsing and DML context
 	JSONStringConsumerOverload    bool
 	JSONOpaqueTextContracts       bool
@@ -455,10 +459,22 @@ type RemoteExpressionFeatures struct {
 	// LeastGreatestCollationSemantics requires v117 for appended overload 4.
 	// Released overload 0 retains its historical byte-order contract.
 	LeastGreatestCollationSemantics bool
+	// JSONBooleanConditionContracts marks expressions whose evaluation depends
+	// on the MySQL conditional-boolean contracts fixed by this change: IF/CASE
+	// condition slots that admit T_json in-domain (values evaluated with MySQL
+	// conditional numeric coercion) and the ENUM storage-truth admission that
+	// casts the stored ordinal to BOOL. Under the repository's shutdown-only
+	// upgrade contract every in-cluster peer runs the same binary, so the
+	// flag requires no protocol version; its consumer is the persisted
+	// expression cross-mode consumption gate (pkg/sql/plan/persisted_ip.go),
+	// which keeps a MatrixOne-native session from re-binding a catalog
+	// definition authored under the MySQL contracts.
+	JSONBooleanConditionContracts bool
 }
 
 func (features RemoteExpressionFeatures) Any() bool {
 	return features.FloatConversionSemantics || features.JSONStringConsumerOverload || features.JSONOpaqueTextContracts || features.JSONNumericComparisons || features.LoadFKIgnoreCheck || features.DependentPrograms || features.CalendarIntervalNormalization || features.ViewMetadataFunctions || features.JSONScalarLiteralContracts || features.JSONInputContracts || features.YearBitCast || features.NumericPrefix ||
+		features.ODKUStatementResult || features.SessionLastInsertIDBaseline || features.JSONMinMaxTypedComparison ||
 		features.JSONComparisonParam ||
 		features.MixedJSONBooleanEquality ||
 		features.FormatNumericArguments ||
@@ -492,7 +508,8 @@ func (features RemoteExpressionFeatures) Any() bool {
 		features.DecimalStatisticalResultContracts ||
 		features.TableCollationFunction ||
 		features.InvalidDecimalStatisticalResultContract || features.ScalarDivision ||
-		features.LeastGreatestCollationSemantics
+		features.LeastGreatestCollationSemantics ||
+		features.JSONBooleanConditionContracts
 }
 
 func isPlanMediumIntType(typ Type) bool {
@@ -930,6 +947,66 @@ func isExpressionResultMetadataContract(expr *Expr) bool {
 	}
 }
 
+// isMySQLBooleanConditionContractNode reports whether one expression node uses
+// a boolean-condition semantic that depends on the MySQL conditional-boolean
+// contracts fixed by this change: a T_json condition slot of IF/CASE that
+// evaluates in-domain with MySQL conditional numeric coercion (native-mode
+// statements keep the pre-change admission), or the ENUM storage-truth
+// admission that casts the stored ordinal to BOOL. The walk flag feeds only
+// the same-version cross-mode consumption gate in pkg/sql/plan/persisted_ip.go:
+// under the repository's shutdown-only upgrade contract every in-cluster
+// worker and rebinder runs the same binary, so the expression carries no
+// protocol requirement: no per-feature MORPC version and no
+// version gate. SET storage conditions are exempt (design revision
+// 8, finding F8): the persisted binder binds their raw uint64
+// storage type and
+// MySQL-mode query plans recover the same numeric operand, so the
+// pre-existing numeric admission, uint64 truth and numeric-to-BOOL cast
+// kernels evaluate them identically in any receiver and session mode -
+// classifying them would refuse an unchanged execution and lock native
+// sessions out of SET catalog definitions base already serves.
+func isMySQLBooleanConditionContractNode(expr *Expr, fn *Function, id int32) bool {
+	if fn == nil {
+		return false
+	}
+	switch id {
+	case 21: // generic CAST
+		if expr == nil || expr.Typ.Id != planBooleanTypeID {
+			return false
+		}
+		if len(fn.Args) == 0 || fn.Args[0] == nil {
+			return false
+		}
+		src := fn.Args[0].Typ
+		return src.Id == planEnumTypeID
+	case iffFunctionID:
+		if len(fn.Args) == 0 || fn.Args[0] == nil {
+			return false
+		}
+		// iffCheck admits the ENUM condition in-domain exactly the way
+		// caseCheck's condition slots stay typed, so the IFF condition needs
+		// the same consumption-gate mark the CASE contract does: an ENUM
+		// condition evaluates through the new storage-truth kernel on a
+		// MySQL-mode statement, while a native-mode session keeps the old
+		// admission. A SET condition keeps its raw numeric uint64 type here
+		// and everywhere else, so the unchanged kernel row never needs the
+		// mark.
+		cond := fn.Args[0].Typ
+		return cond.Id == planJSONTypeID || cond.Id == planEnumTypeID
+	case caseFunctionID:
+		for i := 0; i+1 < len(fn.Args); i += 2 {
+			arg := fn.Args[i]
+			if arg == nil {
+				continue
+			}
+			if arg.Typ.Id == planJSONTypeID || arg.Typ.Id == planEnumTypeID {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // RequiredRemoteExpressionFeatures reports the independent versioned
 // expression features present in owner. Keep the features separate so callers
 // can retain precise diagnostics, while sharing one owner walk so adding one
@@ -957,7 +1034,11 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 			}
 			fn := current.GetF()
 			if fn != nil && fn.Func != nil {
+				features.JSONMinMaxTypedComparison = features.JSONMinMaxTypedComparison || IsJSONMinMaxAggregate(fn.Func.Obj, fn.Args)
 				id, overload := int32(fn.Func.Obj>>32), int32(fn.Func.Obj)
+				// LAST_INSERT_ID() is function237/overload0; remote evaluation
+				// needs the captured session baseline, not a worker-local zero.
+				features.SessionLastInsertIDBaseline = features.SessionLastInsertIDBaseline || (id == 237 && overload == 0)
 				features.FloatConversionSemantics = features.FloatConversionSemantics || isFloatConversionContract(current, id)
 				features.JSONStringConsumerOverload = features.JSONStringConsumerOverload || isRemoteJSONStringConsumerOverload(id, overload)
 				features.JSONOpaqueTextContracts = features.JSONOpaqueTextContracts || isJSONOpaqueTextContract(current, fn, id)
@@ -1009,6 +1090,10 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 				if id == 21 && current.Typ.Id == 11 && len(fn.Args) > 0 &&
 					fn.Args[0] != nil && fn.Args[0].Typ.Id == 55 { // CAST YEAR -> BIT
 					features.YearBitCast = true
+				}
+				if id == 21 || id == caseFunctionID || id == iffFunctionID {
+					features.JSONBooleanConditionContracts = features.JSONBooleanConditionContracts ||
+						isMySQLBooleanConditionContractNode(current, fn, id)
 				}
 				if id == 16 || id == 76 { // CONCAT / CONCAT_WS
 					for _, arg := range fn.Args {
@@ -1232,6 +1317,19 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 			}
 			return nil
 		})
+	}, func(owner any) {
+		// The same owner walk sees lowered protobuf tracking metadata even
+		// when there are no session-function expressions. Getter interfaces
+		// avoid coupling plan to pipeline, which already imports plan.
+		switch metadata := owner.(type) {
+		case interface{ GetTrackOdkuResult() bool }:
+			features.ODKUStatementResult = features.ODKUStatementResult || metadata.GetTrackOdkuResult()
+		case interface{ GetOdkuResultTracking() bool }:
+			features.ODKUStatementResult = features.ODKUStatementResult || metadata.GetOdkuResultTracking()
+		case *DedupJoinCtx:
+			features.ODKUStatementResult = features.ODKUStatementResult ||
+				(metadata.OdkuOrdinalCol != nil && metadata.OdkuGeneratedCol != nil)
+		}
 	})
 	return
 }
@@ -1712,7 +1810,7 @@ func validateStringLiteralFormsInOwner(owner any) error {
 	})
 }
 
-func walkExpressionsInOwner(owner any, visitor func(*Expr) error) error {
+func walkExpressionsInOwner(owner any, visitor func(*Expr) error, metadataVisitors ...func(any)) error {
 	seen := make(map[uintptr]struct{})
 	var walk func(reflect.Value) error
 	walk = func(value reflect.Value) error {
@@ -1737,6 +1835,9 @@ func walkExpressionsInOwner(owner any, visitor func(*Expr) error) error {
 				return nil
 			}
 			seen[pointer] = struct{}{}
+			for _, observe := range metadataVisitors {
+				observe(value.Interface())
+			}
 			return walk(value.Elem())
 		}
 		switch value.Kind() {
@@ -1811,6 +1912,15 @@ func isRemoteJSONStringConsumerOverload(functionID, overloadID int32) bool {
 	default:
 		return false
 	}
+}
+
+// IsJSONMinMaxAggregate identifies the unchanged MIN/MAX overload zero with a
+// physical JSON argument. DISTINCT sets the high bit of the aggregate identity.
+// Lowered pipelines retain Op and arguments but no outer function expression.
+func IsJSONMinMaxAggregate(op int64, args []*Expr) bool {
+	op = int64(uint64(op) & ^(uint64(1) << 63))
+	return (op == int64(139)<<32 || op == int64(137)<<32) &&
+		len(args) > 0 && args[0] != nil && args[0].Typ.Id == planJSONTypeID
 }
 
 // isJSONOpaqueTextContract fences operations that create subtype-preserving

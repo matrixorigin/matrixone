@@ -34,11 +34,32 @@ Example connection with sys account:
 import json
 from typing import Any, Dict
 
+from ._sql_literals import sql_literal
+
 from .exceptions import MatrixOneError
+
+
+def _build_moctl_sql(method, target, params=''):
+    """mo_ctl arguments are expressions; both execution owners share rendering."""
+    return 'SELECT mo_ctl(' + ', '.join(sql_literal(value) for value in (method, target, params or '')) + ')'
 
 
 class MoCtlError(MatrixOneError):
     """Raised when mo_ctl operations fail"""
+
+
+_RAW_OUTPUT_PREVIEW = 500
+
+
+def _decode_moctl_result(raw_output, error_type=MoCtlError):
+    """Decode mo_ctl's JSON reply; a non-JSON reply keeps its raw text on the error."""
+    try:
+        return json.loads(raw_output)
+    except (json.JSONDecodeError, TypeError) as e:
+        preview = str(raw_output)[:_RAW_OUTPUT_PREVIEW]
+        error = error_type(f"Failed to parse mo_ctl result: {e}; raw output: {preview!r}")
+        error.raw_output = raw_output
+        raise error from e
 
 
 class MoCtlManager:
@@ -124,11 +145,8 @@ class MoCtlManager:
             MoCtlError: If the operation fails
         """
         try:
-            # Build mo_ctl SQL command
-            if params:
-                sql = f"SELECT mo_ctl('{method}', '{target}', '{params}')"
-            else:
-                sql = f"SELECT mo_ctl('{method}', '{target}', '')"
+            # mo_ctl arguments are expressions, not grammar-only STRINGs.
+            sql = _build_moctl_sql(method, target, params)
 
             # Execute the command
             result = self.client.execute(sql)
@@ -138,7 +156,7 @@ class MoCtlManager:
 
             # Parse the JSON result
             result_str = result.rows[0][0]
-            parsed_result = json.loads(result_str)
+            parsed_result = _decode_moctl_result(result_str)
 
             # Check for errors in the result
             if "result" in parsed_result and parsed_result["result"]:
@@ -148,10 +166,10 @@ class MoCtlManager:
 
             return parsed_result
 
-        except json.JSONDecodeError as e:
-            raise MoCtlError(f"Failed to parse mo_ctl result: {e}")
+        except MoCtlError:
+            raise
         except Exception as e:
-            raise MoCtlError(f"mo_ctl operation failed: {e}")
+            raise MoCtlError(f"mo_ctl operation failed: {e}") from e
 
     def flush_table(self, database: str, table: str) -> Dict[str, Any]:
         """

@@ -19,6 +19,9 @@ MatrixOne Load Data Manager - Provides high-level LOAD DATA operations
 from typing import Optional, List, Dict, Union
 from enum import Enum
 
+from ._sql_literals import sql_identifier, sql_string_token
+from ._utils import stage_file_uri
+
 
 class LoadDataFormat(str, Enum):
     """Supported file formats for LOAD DATA"""
@@ -62,226 +65,194 @@ class BaseLoadDataManager:
 
     def _build_load_data_sql(
         self,
-        file_path: str,
-        table_name: str,
-        fields_terminated_by: str = ",",
-        fields_enclosed_by: Optional[str] = None,
-        fields_optionally_enclosed: bool = False,
-        fields_escaped_by: Optional[str] = None,
-        lines_terminated_by: Optional[str] = None,
-        lines_starting_by: Optional[str] = None,
-        ignore_lines: int = 0,
-        character_set: Optional[str] = None,
-        parallel: bool = False,
-        columns: Optional[List[str]] = None,
-        local: bool = False,
-        format: Optional[str] = None,
-        jsondata: Optional[str] = None,
-        compression: Optional[str] = None,
-        set_clause: Optional[Dict[str, str]] = None,
-    ) -> str:
-        """
-        Build the LOAD DATA SQL statement.
-
-        Args:
-            See LoadDataManager.from_file() for parameter descriptions
-            local (bool): Whether to use LOCAL keyword
-
-        Returns:
-            str: Complete LOAD DATA SQL statement
-        """
-        # Check if we need to use brace syntax for JSONLINE or Parquet
-        use_brace_syntax = format in ('jsonline', 'parquet')
-
-        if use_brace_syntax:
-            return self._build_load_data_sql_with_braces(
-                file_path=file_path,
-                table_name=table_name,
-                format=format,
-                jsondata=jsondata,
-                compression=compression,
-                local=local,
+        file_path,
+        table_name,
+        fields_terminated_by=',',
+        fields_enclosed_by=None,
+        fields_optionally_enclosed=False,
+        fields_escaped_by=None,
+        lines_terminated_by=None,
+        lines_starting_by=None,
+        ignore_lines=0,
+        character_set=None,
+        parallel=False,
+        columns=None,
+        local=False,
+        format=None,
+        jsondata=None,
+        compression=None,
+        set_clause=None,
+    ):
+        if local and (
+            'local_infile' not in self.client._connection_params
+            or self.client._connection_params['local_infile'] is False
+        ):
+            raise ValueError('LOCAL INFILE is disabled or the adopted engine is not certified')
+        format = (format or 'csv').lower()
+        if format not in ('csv', 'jsonline', 'parquet'):
+            raise ValueError('Unsupported LOAD format')
+        if compression is not None:
+            compression = compression.lower()
+            if compression not in {item.value for item in CompressionFormat}:
+                raise ValueError('Unsupported LOAD compression')
+        if jsondata is not None and (format != 'jsonline' or jsondata not in ('object', 'array')):
+            raise ValueError('jsondata requires JSONLINE object or array format')
+        if format != 'csv' and any(
+            (
+                fields_terminated_by != ',',
+                fields_enclosed_by is not None,
+                fields_optionally_enclosed,
+                fields_escaped_by is not None,
+                lines_terminated_by is not None,
+                lines_starting_by is not None,
             )
+        ):
+            raise ValueError('FIELDS/LINES options require CSV format')
+        if format == 'parquet' and (ignore_lines or set_clause):
+            raise ValueError('Parquet IGNORE LINES and SET are not qualified; use columns for projection')
+        tail = self._build_load_tail(
+            table_name,
+            fields_terminated_by if format == 'csv' else None,
+            fields_enclosed_by,
+            fields_optionally_enclosed,
+            fields_escaped_by,
+            lines_terminated_by,
+            lines_starting_by,
+            ignore_lines,
+            character_set,
+            parallel,
+            columns,
+            set_clause,
+        )
+        prefix = 'LOAD DATA ' + ('LOCAL ' if local else '') + 'INFILE '
+        if format != 'csv' or compression is not None:
+            options = ["'filepath'=" + sql_string_token(file_path)]
+            if format != 'csv':
+                options.append("'format'=" + sql_string_token(format))
+            if jsondata is not None:
+                options.append("'jsondata'=" + sql_string_token(jsondata))
+            if compression is not None:
+                options.append("'compression'=" + sql_string_token(compression))
+            source = '{' + ', '.join(options) + '}'
         else:
-            return self._build_load_data_sql_standard(
-                file_path=file_path,
-                table_name=table_name,
-                fields_terminated_by=fields_terminated_by,
-                fields_enclosed_by=fields_enclosed_by,
-                fields_optionally_enclosed=fields_optionally_enclosed,
-                fields_escaped_by=fields_escaped_by,
-                lines_terminated_by=lines_terminated_by,
-                lines_starting_by=lines_starting_by,
-                ignore_lines=ignore_lines,
-                character_set=character_set,
-                parallel=parallel,
-                columns=columns,
-                local=local,
-                set_clause=set_clause,
-            )
+            source = sql_string_token(file_path)
+        return prefix + source + ' ' + tail
 
-    def _build_load_data_sql_standard(
+    def _build_load_tail(
         self,
-        file_path: str,
-        table_name: str,
-        fields_terminated_by: str = ",",
-        fields_enclosed_by: Optional[str] = None,
-        fields_optionally_enclosed: bool = False,
-        fields_escaped_by: Optional[str] = None,
-        lines_terminated_by: Optional[str] = None,
-        lines_starting_by: Optional[str] = None,
-        ignore_lines: int = 0,
-        character_set: Optional[str] = None,
-        parallel: bool = False,
-        columns: Optional[List[str]] = None,
-        local: bool = False,
-        set_clause: Optional[Dict[str, str]] = None,
-    ) -> str:
-        """Build standard LOAD DATA SQL statement (CSV format)."""
-        sql_parts = []
-
-        # LOAD DATA [LOCAL] INFILE
-        if local:
-            sql_parts.append("LOAD DATA LOCAL INFILE")
-        else:
-            sql_parts.append("LOAD DATA INFILE")
-
-        # File path
-        sql_parts.append(f"'{file_path}'")
-
-        # INTO TABLE
-        sql_parts.append(f"INTO TABLE {table_name}")
-
-        # CHARACTER SET
+        table_name,
+        fields_terminated_by=',',
+        fields_enclosed_by=None,
+        fields_optionally_enclosed=False,
+        fields_escaped_by=None,
+        lines_terminated_by=None,
+        lines_starting_by=None,
+        ignore_lines=0,
+        character_set=None,
+        parallel=False,
+        columns=None,
+        set_clause=None,
+    ):
+        if isinstance(ignore_lines, bool) or not isinstance(ignore_lines, int) or ignore_lines < 0:
+            raise ValueError('ignore_lines must be a non-negative integer')
+        if columns is not None and (not isinstance(columns, (list, tuple)) or not columns):
+            raise ValueError('columns must be a nonempty list of identifiers')
+        parts = ['INTO TABLE ' + sql_identifier(table_name, qualified=True)]
         if character_set:
-            sql_parts.append(f"CHARACTER SET {character_set}")
-
-        # FIELDS options
-        fields_options = []
-        if fields_terminated_by:
-            fields_options.append(f"TERMINATED BY '{fields_terminated_by}'")
-        if fields_enclosed_by:
-            if fields_optionally_enclosed:
-                fields_options.append(f"OPTIONALLY ENCLOSED BY '{fields_enclosed_by}'")
-            else:
-                fields_options.append(f"ENCLOSED BY '{fields_enclosed_by}'")
-        if fields_escaped_by:
-            fields_options.append(f"ESCAPED BY '{fields_escaped_by}'")
-
-        if fields_options:
-            sql_parts.append("FIELDS " + " ".join(fields_options))
-
-        # LINES options
-        lines_options = []
-        if lines_starting_by:
-            lines_options.append(f"STARTING BY '{lines_starting_by}'")
-        if lines_terminated_by:
-            lines_options.append(f"TERMINATED BY '{lines_terminated_by}'")
-
-        if lines_options:
-            sql_parts.append("LINES " + " ".join(lines_options))
-
-        # IGNORE LINES
-        if ignore_lines > 0:
-            sql_parts.append(f"IGNORE {ignore_lines} LINES")
-
-        # Column list
-        if columns:
-            column_list = ", ".join(columns)
-            sql_parts.append(f"({column_list})")
-
-        # SET clause
+            parts.append('CHARACTER SET ' + sql_identifier(character_set))
+        fields = []
+        if fields_terminated_by is not None:
+            fields.append('TERMINATED BY ' + sql_string_token(fields_terminated_by))
+        if fields_enclosed_by is not None:
+            fields.append(
+                ('OPTIONALLY ' if fields_optionally_enclosed else '')
+                + 'ENCLOSED BY '
+                + sql_string_token(fields_enclosed_by)
+            )
+        elif fields_optionally_enclosed:
+            raise ValueError('OPTIONALLY ENCLOSED requires a quote character')
+        if fields_escaped_by is not None:
+            fields.append('ESCAPED BY ' + sql_string_token(fields_escaped_by))
+        if fields:
+            parts.append('FIELDS ' + ' '.join(fields))
+        lines = []
+        if lines_starting_by is not None:
+            lines.append('STARTING BY ' + sql_string_token(lines_starting_by))
+        if lines_terminated_by is not None:
+            lines.append('TERMINATED BY ' + sql_string_token(lines_terminated_by))
+        if lines:
+            parts.append('LINES ' + ' '.join(lines))
+        if ignore_lines:
+            parts.append('IGNORE %d LINES' % ignore_lines)
+        if columns is not None:
+            parts.append('(' + ', '.join(sql_identifier(c) for c in columns) + ')')
         if set_clause:
-            set_parts = [f"{col}={expr}" for col, expr in set_clause.items()]
-            sql_parts.append("SET " + ", ".join(set_parts))
-
-        # PARALLEL option
+            if not isinstance(set_clause, dict) or any(not isinstance(v, str) or not v for v in set_clause.values()):
+                raise ValueError('set_clause must map column names to SQL expressions')
+            parts.append('SET ' + ', '.join(sql_identifier(k) + '=' + v for k, v in set_clause.items()))
         if parallel:
-            sql_parts.append("PARALLEL 'true'")
+            parts.append("PARALLEL 'true'")
+        return ' '.join(parts)
 
-        return " ".join(sql_parts)
+    def _build_load_data_sql_standard(self, file_path, table_name, **options):
+        return self._build_load_data_sql(file_path, table_name, **options)
 
     def _build_load_data_sql_with_braces(
-        self,
-        file_path: str,
-        table_name: str,
-        format: str,
-        jsondata: Optional[str] = None,
-        compression: Optional[str] = None,
-        local: bool = False,
-    ) -> str:
-        """Build LOAD DATA SQL with brace syntax for JSONLINE/Parquet."""
-        sql_parts = []
-
-        # LOAD DATA [LOCAL] INFILE
-        if local:
-            sql_parts.append("LOAD DATA LOCAL INFILE")
-        else:
-            sql_parts.append("LOAD DATA INFILE")
-
-        # Build brace parameters
-        brace_params = [f"'filepath'='{file_path}'"]
-        brace_params.append(f"'format'='{format}'")
-
-        if jsondata:
-            brace_params.append(f"'jsondata'='{jsondata}'")
-
-        if compression:
-            brace_params.append(f"'compression'='{compression}'")
-
-        # Combine into brace syntax
-        sql_parts.append("{" + ", ".join(brace_params) + "}")
-
-        # INTO TABLE
-        sql_parts.append(f"INTO TABLE {table_name}")
-
-        return " ".join(sql_parts)
+        self, file_path, table_name, format, jsondata=None, compression=None, local=False, **options
+    ):
+        return self._build_load_data_sql(
+            file_path, table_name, format=format, jsondata=jsondata, compression=compression, local=local, **options
+        )
 
     def _build_load_data_inline_sql(
         self,
-        data: str,
-        table_name: str,
-        format: str = 'csv',
-        delimiter: str = ",",
-        enclosed_by: Optional[str] = None,
-        jsontype: Optional[str] = None,
-    ) -> str:
-        """Build LOAD DATA INLINE SQL statement."""
-        sql_parts = []
+        data,
+        table_name,
+        format='csv',
+        delimiter=',',
+        enclosed_by=None,
+        jsontype=None,
+        ignore_lines=0,
+        columns=None,
+        escaped_by=None,
+        optionally_enclosed=False,
+    ):
+        if format not in ('csv', 'jsonline'):
+            raise ValueError('Inline LOAD requires csv or jsonline')
+        if jsontype is not None and (format != 'jsonline' or jsontype not in ('object', 'array')):
+            raise ValueError('JSONTYPE requires JSONLINE object or array format')
+        source = 'LOAD DATA INLINE FORMAT=' + sql_string_token(format) + ', DATA=' + sql_string_token(data)
+        if jsontype:
+            source += ', JSONTYPE=' + sql_string_token(jsontype)
+        tail = self._build_load_tail(
+            table_name,
+            delimiter if format == 'csv' else None,
+            enclosed_by,
+            optionally_enclosed,
+            escaped_by,
+            ignore_lines=ignore_lines,
+            columns=columns,
+        )
+        return source + ' ' + tail
 
-        # LOAD DATA INLINE
-        sql_parts.append("LOAD DATA INLINE")
-
-        # FORMAT and DATA (comma-separated)
-        inline_params = []
-        inline_params.append(f"FORMAT='{format}'")
-
-        # DATA - escape single quotes in data
-        escaped_data = data.replace("'", "''")
-        inline_params.append(f"DATA='{escaped_data}'")
-
-        # JSONTYPE (for JSONLINE format)
-        if jsontype and format == 'jsonline':
-            inline_params.append(f"JSONTYPE='{jsontype}'")
-
-        # Combine FORMAT, DATA, JSONTYPE with commas
-        sql_parts.append(", ".join(inline_params))
-
-        # INTO TABLE
-        sql_parts.append(f"INTO TABLE {table_name}")
-
-        # FIELDS options (for CSV)
-        if format == 'csv':
-            fields_options = []
-            if delimiter:
-                fields_options.append(f"TERMINATED BY '{delimiter}'")
-            if enclosed_by:
-                fields_options.append(f"ENCLOSED BY '{enclosed_by}'")
-
-            if fields_options:
-                sql_parts.append("FIELDS " + " ".join(fields_options))
-
-        return " ".join(sql_parts)
+    @staticmethod
+    def _inline_options(options):
+        aliases = {
+            'skiprows': 'ignore_lines',
+            'names': 'columns',
+            'escapechar': 'escaped_by',
+            'quoting': 'optionally_enclosed',
+        }
+        result = {}
+        allowed = {'ignore_lines', 'columns', 'escaped_by', 'optionally_enclosed'}
+        for key, value in options.items():
+            key = aliases.get(key, key)
+            if key not in allowed:
+                raise ValueError('Unsupported inline LOAD option: ' + key)
+            if key in result:
+                raise ValueError('Duplicate inline LOAD option: ' + key)
+            result[key] = value
+        return result
 
 
 class LoadDataManager(BaseLoadDataManager):
@@ -542,7 +513,19 @@ class LoadDataManager(BaseLoadDataManager):
         """
         # Handle inline data
         if inline:
-            return self.read_csv_inline(data=filepath_or_buffer, table=table, sep=sep, quotechar=quotechar, **kwargs)
+            if encoding is not None or parallel or compression is not None or set_clause is not None:
+                raise ValueError('Inline CSV does not support encoding, parallel, compression or SET')
+            return self.read_csv_inline(
+                data=filepath_or_buffer,
+                table=table,
+                sep=sep,
+                quotechar=quotechar,
+                skiprows=skiprows,
+                names=names,
+                escapechar=escapechar,
+                quoting=quoting,
+                **kwargs,
+            )
 
         # Call from_file with mapped parameters
         return self.from_file(
@@ -610,7 +593,7 @@ class LoadDataManager(BaseLoadDataManager):
                 table='users', sep='\\t', skiprows=1)
         """
         # Build stage path
-        stage_path = f"stage://{stage_name}/{filename}"
+        stage_path = stage_file_uri(stage_name, filename)
 
         # Delegate to read_csv
         return self.read_csv(
@@ -667,6 +650,7 @@ class LoadDataManager(BaseLoadDataManager):
             format='csv',
             delimiter=sep,
             enclosed_by=quotechar,
+            **self._inline_options(kwargs),
         )
 
         return self._get_executor().execute(sql)
@@ -725,17 +709,14 @@ class LoadDataManager(BaseLoadDataManager):
             json_data = '{"id":1,"name":"Alice"}\\n{"id":2,"name":"Bob"}\\n'
             client.load_data.read_json(json_data, table='users', inline=True)
         """
+        if lines is not True:
+            raise ValueError('Native JSON loading requires lines=True (JSON Lines)')
         # Handle inline data
         if inline:
             return self.read_json_inline(data=filepath_or_buffer, table=table, orient=orient, **kwargs)
 
         # Map pandas orient to MatrixOne jsondata
-        if orient == 'records':
-            structure_str = 'object'
-        elif orient == 'values':
-            structure_str = 'array'
-        else:
-            structure_str = 'object'  # Default
+        structure_str = _json_structure(orient)
 
         # Convert compression enum if needed
         compression_str = compression.value if isinstance(compression, CompressionFormat) else compression
@@ -875,7 +856,7 @@ class LoadDataManager(BaseLoadDataManager):
 
             client.load_data.read_json_stage('s3_stage', 'events.jsonl', table='events')
         """
-        stage_path = f"stage://{stage_name}/{filename}"
+        stage_path = stage_file_uri(stage_name, filename)
         return self.read_json(
             filepath_or_buffer=stage_path,
             table=table,
@@ -907,7 +888,7 @@ class LoadDataManager(BaseLoadDataManager):
 
             client.load_data.read_parquet_stage('s3_stage', 'data.parquet', table='users')
         """
-        stage_path = f"stage://{stage_name}/{filename}"
+        stage_path = stage_file_uri(stage_name, filename)
         return self.read_parquet(filepath_or_buffer=stage_path, table=table, **kwargs)
 
     def read_json_inline(
@@ -940,12 +921,7 @@ class LoadDataManager(BaseLoadDataManager):
             table_name = table
 
         # Map orient to jsontype
-        if orient == 'records':
-            jsontype_str = 'object'
-        elif orient == 'values':
-            jsontype_str = 'array'
-        else:
-            jsontype_str = 'object'
+        jsontype_str = _json_structure(orient)
 
         # Build SQL
         sql = self._build_load_data_inline_sql(
@@ -953,6 +929,7 @@ class LoadDataManager(BaseLoadDataManager):
             table_name=table_name,
             format='jsonline',
             jsontype=jsontype_str,
+            **self._inline_options(kwargs),
         )
 
         return self._get_executor().execute(sql)
@@ -1155,6 +1132,8 @@ class LoadDataManager(BaseLoadDataManager):
         else:
             table_name = table_name_or_model
 
+        if kwargs:
+            raise ValueError('Unknown LOAD options: ' + ', '.join(sorted(kwargs)))
         # Validate required parameters
         if not file_path or not isinstance(file_path, str):
             raise ValueError("file_path must be a non-empty string")
@@ -1210,7 +1189,7 @@ class LoadDataManager(BaseLoadDataManager):
 
         Examples::
 
-            # Load from client machine
+            # Default SDK connections authorize only this file for this statement.
             >>> result = client.load_data.from_local_file(
             ...     '/local/path/to/data.csv',
             ...     'users',
@@ -1226,7 +1205,10 @@ class LoadDataManager(BaseLoadDataManager):
         # Build SQL with LOCAL keyword
         sql = self._build_load_data_sql(file_path=file_path, table_name=table_name, local=True, **kwargs)
 
-        return self._get_executor().execute(sql)
+        from ._session_execution import _LiteralSQL
+
+        statement = _LiteralSQL(sql).execution_options(_matrixone_local_path=file_path)
+        return self._get_executor().execute(statement)
 
 
 class AsyncLoadDataManager(BaseLoadDataManager):
@@ -1433,7 +1415,19 @@ class AsyncLoadDataManager(BaseLoadDataManager):
         """Async version of read_csv (pandas-style)"""
         # Handle inline data
         if inline:
-            return await self.read_csv_inline(data=filepath_or_buffer, table=table, sep=sep, quotechar=quotechar, **kwargs)
+            if encoding is not None or parallel or compression is not None or set_clause is not None:
+                raise ValueError('Inline CSV does not support encoding, parallel, compression or SET')
+            return await self.read_csv_inline(
+                data=filepath_or_buffer,
+                table=table,
+                sep=sep,
+                quotechar=quotechar,
+                skiprows=skiprows,
+                names=names,
+                escapechar=escapechar,
+                quoting=quoting,
+                **kwargs,
+            )
 
         return await self.from_file(
             file_path=filepath_or_buffer,
@@ -1462,17 +1456,14 @@ class AsyncLoadDataManager(BaseLoadDataManager):
         **kwargs,
     ):
         """Async version of read_json (pandas-style)"""
+        if lines is not True:
+            raise ValueError('Native JSON loading requires lines=True (JSON Lines)')
         # Handle inline data
         if inline:
             return await self.read_json_inline(data=filepath_or_buffer, table=table, orient=orient, **kwargs)
 
         # Map pandas orient to MatrixOne jsondata
-        if orient == 'records':
-            structure_str = 'object'
-        elif orient == 'values':
-            structure_str = 'array'
-        else:
-            structure_str = 'object'
+        structure_str = _json_structure(orient)
 
         compression_str = compression.value if isinstance(compression, CompressionFormat) else compression
 
@@ -1509,7 +1500,7 @@ class AsyncLoadDataManager(BaseLoadDataManager):
         **kwargs,
     ):
         """Async version of read_csv_stage (pandas-style)"""
-        stage_path = f"stage://{stage_name}/{filename}"
+        stage_path = stage_file_uri(stage_name, filename)
         return await self.read_csv(
             filepath_or_buffer=stage_path,
             table=table,
@@ -1537,7 +1528,7 @@ class AsyncLoadDataManager(BaseLoadDataManager):
         **kwargs,
     ):
         """Async version of read_json_stage (pandas-style)"""
-        stage_path = f"stage://{stage_name}/{filename}"
+        stage_path = stage_file_uri(stage_name, filename)
         return await self.read_json(
             filepath_or_buffer=stage_path,
             table=table,
@@ -1555,7 +1546,7 @@ class AsyncLoadDataManager(BaseLoadDataManager):
         **kwargs,
     ):
         """Async version of read_parquet_stage (pandas-style)"""
-        stage_path = f"stage://{stage_name}/{filename}"
+        stage_path = stage_file_uri(stage_name, filename)
         return await self.read_parquet(filepath_or_buffer=stage_path, table=table, **kwargs)
 
     async def read_csv_inline(
@@ -1580,6 +1571,7 @@ class AsyncLoadDataManager(BaseLoadDataManager):
             format='csv',
             delimiter=sep,
             enclosed_by=quotechar,
+            **self._inline_options(kwargs),
         )
 
         return await self._get_executor().execute(sql)
@@ -1599,12 +1591,7 @@ class AsyncLoadDataManager(BaseLoadDataManager):
             table_name = table
 
         # Map orient to jsontype
-        if orient == 'records':
-            jsontype_str = 'object'
-        elif orient == 'values':
-            jsontype_str = 'array'
-        else:
-            jsontype_str = 'object'
+        jsontype_str = _json_structure(orient)
 
         # Build SQL
         sql = self._build_load_data_inline_sql(
@@ -1612,6 +1599,7 @@ class AsyncLoadDataManager(BaseLoadDataManager):
             table_name=table_name,
             format='jsonline',
             jsontype=jsontype_str,
+            **self._inline_options(kwargs),
         )
 
         return await self._get_executor().execute(sql)
@@ -1643,6 +1631,8 @@ class AsyncLoadDataManager(BaseLoadDataManager):
         else:
             table_name = table_name_or_model
 
+        if kwargs:
+            raise ValueError('Unknown LOAD options: ' + ', '.join(sorted(kwargs)))
         # Validate required parameters
         if not file_path or not isinstance(file_path, str):
             raise ValueError("file_path must be a non-empty string")
@@ -1692,4 +1682,15 @@ class AsyncLoadDataManager(BaseLoadDataManager):
         # Build SQL with LOCAL keyword
         sql = self._build_load_data_sql(file_path=file_path, table_name=table_name, local=True, **kwargs)
 
-        return await self._get_executor().execute(sql)
+        from ._session_execution import _LiteralSQL
+
+        statement = _LiteralSQL(sql).execution_options(_matrixone_local_path=file_path)
+        return await self._get_executor().execute(statement)
+
+
+def _json_structure(orient):
+    if orient == 'records':
+        return 'object'
+    if orient == 'values':
+        return 'array'
+    raise ValueError('JSON orient must be records or values')
