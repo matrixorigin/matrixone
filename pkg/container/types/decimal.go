@@ -2242,20 +2242,7 @@ func ParseDecimal64FromByte(x string, width, scale int32) (y Decimal64, err erro
 	if x == "" {
 		return 0, moerr.NewInvalidInputNoCtx("can't cast empty string to Decimal64")
 	}
-	y = 0
-	err = nil
-	n := len(x)
-	for i := 0; i < n; i++ {
-		y, err = y.Mul64(256)
-		if err != nil {
-			return
-		}
-		y, err = y.Add64(Decimal64(x[i]))
-		if err != nil {
-			return
-		}
-	}
-	return
+	return ParseDecimal64(binaryStringIntegerText(x), width, scale)
 }
 
 func Parse128(x string) (y Decimal128, scale int32, err error) {
@@ -2747,39 +2734,24 @@ func ParseDecimal128FromByte(x string, width, scale int32) (y Decimal128, err er
 	if x == "" {
 		return Decimal128{0, 0}, moerr.NewInvalidInputNoCtx("can't cast empty string to Decimal128")
 	}
-	y = Decimal128{0, 0}
-	err = nil
-	n := len(x)
-	for i := 0; i < n; i++ {
-		y, err = y.Mul128(Decimal128{256, 0})
-		if err != nil {
-			return
-		}
-		y, err = y.Add128(Decimal128{uint64(x[i]), 0})
-		if err != nil {
-			return
-		}
-	}
-	return
+	return ParseDecimal128(binaryStringIntegerText(x), width, scale)
 }
 
 func ParseDecimal256FromByte(x string, width, scale int32) (y Decimal256, err error) {
 	if x == "" {
 		return Decimal256{}, moerr.NewInvalidInputNoCtx("can't cast empty string to Decimal256")
 	}
-	y = Decimal256{}
-	n := len(x)
-	for i := 0; i < n; i++ {
-		y, err = y.Mul256(Decimal256{256, 0, 0, 0})
-		if err != nil {
-			return
-		}
-		y, err = y.Add256(Decimal256{uint64(x[i]), 0, 0, 0})
-		if err != nil {
-			return
-		}
-	}
-	return
+	return ParseDecimal256(binaryStringIntegerText(x), width, scale)
+}
+
+// binaryStringIntegerText renders the big-endian unsigned integer that a
+// HEX/BIT literal (or another IsBin payload) denotes in numeric context, e.g.
+// x'41' -> "65". The ParseDecimal*FromByte helpers parse this text with the
+// target width and scale, so x'41' cast to DECIMAL(5,1) is 65.0 (as in MySQL)
+// rather than the raw coefficient 65 read at scale 1 (6.5), and values wider
+// than the target precision report the usual overflow error.
+func binaryStringIntegerText(x string) string {
+	return new(big.Int).SetBytes([]byte(x)).String()
 }
 
 func (x Decimal64) Format(scale int32) string {

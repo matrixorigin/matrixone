@@ -1,0 +1,25 @@
+select cast(x'41' as decimal(5,1)), cast(x'41' as decimal(10,2)), cast(x'41' as decimal(10,0)), cast(x'41' as decimal);
+➤ cast(0x41 as decimal(5, 1))[3,5,1]  ¦  cast(0x41 as decimal(10, 2))[3,10,2]  ¦  cast(0x41 as decimal(10))[3,10,0]  ¦  cast(0x41 as decimal(10))[3,10,0]  𝄀
+65.0  ¦  65.00  ¦  65  ¦  65
+select cast(0x0100 as decimal(10,3)), cast(b'1000001' as decimal(6,2)), convert(x'41', decimal(5,1));
+➤ cast(0x0100 as decimal(10, 3))[3,10,3]  ¦  cast(0b1000001 as decimal(6, 2))[3,6,2]  ¦  cast(0x41 as decimal(5, 1))[3,5,1]  𝄀
+256.000  ¦  65.00  ¦  65.0
+select cast(x'41' as decimal(30,2)), cast(x'41' as decimal(50,2));
+➤ cast(0x41 as decimal(30, 2))[3,30,2]  ¦  cast(0x41 as decimal(50, 2))[3,50,2]  𝄀
+65.00  ¦  65.00
+select cast(x'ffffffffffffffff' as decimal(25,2));
+➤ cast(0xffffffffffffffff as decimal(25, 2))[3,25,2]  𝄀
+18446744073709551615.00
+select cast(x'41' as decimal(3,2));
+invalid input: 65 beyond the range, can't be converted to Decimal64(3,2).
+drop database if exists hex_dec_scale;
+create database hex_dec_scale;
+use hex_dec_scale;
+create table t (id int primary key, d decimal(10,2), u decimal(10,2) unsigned, w decimal(40,3));
+insert into t values (1, x'96', x'96', x'96');
+insert into t select 2, x'41', x'41', b'1000001';
+select * from t order by id;
+➤ id[4,32,0]  ¦  d[3,10,2]  ¦  u[3,10,2]  ¦  w[3,40,3]  𝄀
+1  ¦  150.00  ¦  150.00  ¦  150.000  𝄀
+2  ¦  65.00  ¦  65.00  ¦  65.000
+drop database hex_dec_scale;
