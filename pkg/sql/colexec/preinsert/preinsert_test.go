@@ -17,6 +17,7 @@ package preinsert
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -30,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -990,6 +992,69 @@ func TestGenAutoIncrColKeepsFirstGeneratedIDAcrossBatches(t *testing.T) {
 	defer second.Clean(proc.Mp())
 	require.NoError(t, genAutoIncrCol(second, proc, preInsert))
 	require.Equal(t, uint64(1), proc.GetLastInsertID())
+}
+
+func TestGenAutoIncrColProbesFromOldestConsumedRange(t *testing.T) {
+	for _, conflict := range []bool{false, true} {
+		t.Run(fmt.Sprintf("conflict=%t", conflict), func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			op := mock_frontend.NewMockTxnOperator(ctrl)
+			workspace := mock_frontend.NewMockWorkspace(ctrl)
+			op.EXPECT().GetWorkspace().Return(workspace)
+			snapshot := timestamp.Timestamp{PhysicalTime: 50}
+			op.EXPECT().SnapshotTS().Return(snapshot)
+			eng := mock_frontend.NewMockEngine(ctrl)
+			db := mock_frontend.NewMockDatabase(ctrl)
+			rel := mock_frontend.NewMockRelation(ctrl)
+			eng.EXPECT().Database(gomock.Any(), "db", op).Return(db, nil)
+			db.EXPECT().Relation(gomock.Any(), "t", nil).Return(rel, nil)
+			incr := mock_frontend.NewMockAutoIncrementService(ctrl)
+			proc := testutil.NewProc(t)
+			proc.Base.TxnOperator = op
+			proc.Base.IncrService = incr
+			proc.Base.SessionInfo.StorageEngine = eng
+			bat := batch.NewWithSize(1)
+			bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+			defer bat.Clean(proc.Mp())
+			for i := 0; i < 2; i++ {
+				require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(0), true, proc.Mp()))
+			}
+			bat.SetRowCount(2)
+			oldest := timestamp.Timestamp{PhysicalTime: 10}
+			gomock.InOrder(
+				incr.EXPECT().GetLastAllocateTS(gomock.Any(), uint64(42), uint32(0), op, "id").Return(oldest, nil),
+				incr.EXPECT().InsertValues(gomock.Any(), uint64(42), uint32(0), op, gomock.Any(), 2, int64(2)).
+					DoAndReturn(func(_ context.Context, _ uint64, _ uint32, _ client.TxnOperator, cols []*vector.Vector, _ int, _ int64) (uint64, error) {
+						// The batch uses the last ID of the old range and the first
+						// of the new one; allocation has advanced before the probe.
+						cols[0].CleanOnlyData()
+						require.NoError(t, vector.AppendFixed(cols[0], int64(99), false, proc.Mp()))
+						require.NoError(t, vector.AppendFixed(cols[0], int64(100), false, proc.Mp()))
+						return uint64(99), nil
+					}),
+				rel.EXPECT().PrimaryKeysMayBeUpserted(gomock.Any(), types.TimestampToTS(oldest), types.TimestampToTS(snapshot), bat, int32(0)).
+					DoAndReturn(func(_ context.Context, _, _ types.TS, got *batch.Batch, _ int32) (bool, error) {
+						require.Equal(t, []int64{99, 100}, vector.MustFixedColWithTypeCheck[int64](got.Vecs[0]))
+						return conflict, nil
+					}),
+			)
+			pre := &PreInsert{
+				SchemaName: "db", Attrs: []string{"id"}, EstimatedRowCount: 2,
+				TableDef: &plan.TableDef{
+					Name: "t", TblId: 42,
+					Cols: []*plan.ColDef{{Name: "id", Typ: i32typ}},
+					Pkey: &plan.PrimaryKeyDef{PkeyColName: "id", Names: []string{"id"}},
+				},
+			}
+			pre.ctr.tblId = 42
+			err := genAutoIncrCol(bat, proc, pre)
+			if conflict {
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry), err)
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
 }
 
 func TestGenAutoIncrColCoordinatesParallelFirstGeneratedID(t *testing.T) {
