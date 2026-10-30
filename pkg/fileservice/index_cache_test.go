@@ -34,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
+	"github.com/matrixorigin/matrixone/pkg/fileservice/lrucache"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -348,6 +349,61 @@ func TestIndexFileCacheHoldDefersRemoval(t *testing.T) {
 	requireEntryDir(t, c, "held", true)
 	require.True(t, c.disk.cache.Contains(heldPath), "a released entry stays")
 
+	_, temps, trash := listCacheDirs(t, dir)
+	require.Empty(t, temps)
+	require.Empty(t, trash)
+}
+
+// A hold taken after eviction chose the entry, but before it is removed, keeps the entry
+// on disk and in the cache's accounting.
+func TestIndexFileCacheHoldWinsOverChosenEviction(t *testing.T) {
+	ctx := context.Background()
+	data := bytes.Repeat([]byte("w"), 64<<10)
+	entrySize := measuredEntrySize(t, data)
+	dir := t.TempDir()
+	c := newTestIndexFileCache(t, dir, 2*entrySize+10)
+	for _, name := range []string{"a", "b"} {
+		written, err := c.Put(ctx, name, indexCacheEntry(data))
+		require.NoError(t, err)
+		require.True(t, written, name)
+	}
+	aPath, err := c.disk.pathForDir("a")
+	require.NoError(t, err)
+
+	lru := c.disk.cache.(*lrucache.Cache[string, struct{}])
+	var release func()
+	lru.SetEvictable(func(path string) bool {
+		if c.disk.dirHeld(path) {
+			return false
+		}
+		if path == aPath && release == nil {
+			release, err = c.Hold("a")
+			require.NoError(t, err)
+		}
+		return true
+	})
+	written, err := c.Put(ctx, "c", indexCacheEntry(data))
+	require.NoError(t, err)
+	require.True(t, written)
+	require.NotNil(t, release, "eviction chose a")
+
+	requireEntryDir(t, c, "a", true)
+	require.True(t, c.disk.cache.Contains(aPath), "a held entry stays in the cache")
+	require.GreaterOrEqual(t, c.disk.cache.Used(), 2*entrySize, "a held entry stays counted")
+	files, err := c.Open(ctx, "a", "data")
+	require.NoError(t, err)
+	require.Equal(t, data, readAllFile(t, files[0]))
+	closeFiles(files)
+
+	lru.SetEvictable(func(path string) bool { return !c.disk.dirHeld(path) })
+	release()
+	for _, name := range []string{"d", "e", "f"} {
+		_, err := c.Put(ctx, name, indexCacheEntry(data))
+		require.NoError(t, err)
+	}
+	requireEntryDir(t, c, "a", false)
+	require.False(t, c.disk.cache.Contains(aPath), "a released entry is evicted again")
+	require.LessOrEqual(t, c.disk.cache.Used(), 2*entrySize+10)
 	_, temps, trash := listCacheDirs(t, dir)
 	require.Empty(t, temps)
 	require.Empty(t, trash)

@@ -40,6 +40,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/lrucache"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	metric "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
 
 const (
@@ -591,6 +592,33 @@ func (d *DiskCache) releaseDir(path string) {
 	delete(d.held.m, path)
 	d.held.mu.Unlock()
 	_, _ = d.cache.Get(context.Background(), path)
+}
+
+// removeEvictedDir removes an evicted entry directory, or puts it back in the cache with
+// size when it has a hold.
+func (d *DiskCache) removeEvictedDir(path string, size int64) error {
+	d.held.mu.Lock()
+	if d.held.m[path] > 0 {
+		d.held.mu.Unlock()
+		if _, err := os.Stat(path); err != nil {
+			if os.IsNotExist(err) {
+				return nil
+			}
+			return err
+		}
+		d.cache.Set(context.Background(), path, struct{}{}, size)
+		return nil
+	}
+	trash, err := trashCacheDir(path)
+	d.held.mu.Unlock()
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	metric.FSDiskCacheEvictCounter.Add(1)
+	return os.RemoveAll(trash)
 }
 
 // removeIdleDir removes an entry directory that has no holds and was last used before

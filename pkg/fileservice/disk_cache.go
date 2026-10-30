@@ -93,6 +93,7 @@ type DiskCache struct {
 type diskCachePathUpdate struct {
 	_               byte
 	evictionPending bool
+	evictionSize    int64
 }
 
 // readGenerations contains only the current generation while at least one Read
@@ -210,8 +211,8 @@ func newDiskCache(
 		inuseBytes.Add(float64(size))
 		capacityBytes.Set(float64(capacityFunc()))
 	}
-	prepareEvict := func(path string, _ struct{}, _ int64, _ uint64) func() {
-		doneUpdate, ok := ret.startEviction(path)
+	prepareEvict := func(path string, _ struct{}, size int64, _ uint64) func() {
+		doneUpdate, ok := ret.startEviction(path, size)
 		if !ok {
 			return nil
 		}
@@ -223,7 +224,7 @@ func newDiskCache(
 					)
 				}
 			}()
-			if err := ret.removeEvictedFile(path); err != nil {
+			if err := ret.removeEvictedFile(path, size); err != nil {
 				logutil.Error("delete disk cache file",
 					zap.Any("error", err),
 				)
@@ -1285,11 +1286,12 @@ func (d *DiskCache) tryStartUpdateWithCleanup(
 // startEviction either owns the path cleanup or transfers that responsibility
 // to the current path owner. Both decisions happen while holding the same lock,
 // so eviction cannot be lost between observing and releasing a generation.
-func (d *DiskCache) startEviction(path string) (done func() error, ok bool) {
+func (d *DiskCache) startEviction(path string, size int64) (done func() error, ok bool) {
 	d.updatingPaths.L.Lock()
 	d.invalidatePathReadsLocked(path)
 	if update := d.updatingPaths.m[path]; update != nil {
 		update.evictionPending = true
+		update.evictionSize = size
 		d.updatingPaths.L.Unlock()
 		return nil, false
 	}
@@ -1333,15 +1335,19 @@ func (d *DiskCache) finishPathUpdate(path string, update *diskCachePathUpdate) (
 			return err
 		}
 		update.evictionPending = false
+		size := update.evictionSize
 		d.updatingPaths.L.Unlock()
 
-		err = errors.Join(err, d.removeEvictedFile(path))
+		err = errors.Join(err, d.removeEvictedFile(path, size))
 	}
 }
 
-func (d *DiskCache) removeEvictedFile(path string) error {
+func (d *DiskCache) removeEvictedFile(path string, size int64) error {
 	if d.cache.Contains(path) {
 		return nil
+	}
+	if d.dirEntries && strings.HasSuffix(path, cacheDirSuffix) {
+		return d.removeEvictedDir(path, size)
 	}
 	if err := d.removeCachePath(path); err != nil {
 		if os.IsNotExist(err) {
