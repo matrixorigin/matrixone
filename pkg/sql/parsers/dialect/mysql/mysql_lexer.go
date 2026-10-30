@@ -372,6 +372,11 @@ func (l *Lexer) isSQLModeReservedFunctionName(name string) bool {
 	if l.previousToken == int('.') {
 		return false
 	}
+	if l.digest != nil {
+		keywordID := keywords[strings.ToLower(name)]
+		return !l.scanner.qualifiedIdentifier && (l.scanner.digestFunctionCallAhead() ||
+			l.lastToken == int('(') && l.previousToken == keywordID)
+	}
 	if l.HasSQLMode(SQLModeIgnoreSpace) {
 		return true
 	}
@@ -455,7 +460,7 @@ func (l *Lexer) Lex(lval *yySymType) int {
 		} else if typ == ID && l.lastToken != '.' && strings.EqualFold(str, "n") && l.scanner.cur() == '\'' {
 			// National strings are one literal, not an identifier plus alias.
 			typ, str = l.scanner.Scan()
-		} else if typ == ID && strings.EqualFold(str, "dual") && digestDualIsKeyword(l.scanner, l.lastToken == '.') {
+		} else if typ == ID && strings.EqualFold(str, "dual") && !l.scanner.qualifiedIdentifier {
 			typ = DIGEST_DUAL
 		} else if typ == QUOTE_ID {
 			typ = ID
@@ -845,7 +850,11 @@ func validateSelectIntoStatements(lexer *Lexer) error {
 		// WITH/CTE scope is complete only at this boundary. Avoid a query-tree
 		// walk on the ordinary zero/single-lock path.
 		if lexer.selectLockClauses > 1 {
-			if errMsg := tree.ValidateSelectLocking(stmt); errMsg != "" {
+			nameKey := strings.ToLower
+			if lexer.digest != nil {
+				nameKey = digestIdentifierKey
+			}
+			if errMsg := tree.ValidateSelectLocking(stmt, nameKey); errMsg != "" {
 				lexer.Error(errMsg)
 				return lexer.scanner.LastError
 			}

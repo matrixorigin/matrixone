@@ -17,15 +17,16 @@ package tree
 import "fmt"
 
 // ValidateCTENames checks declaration syntax, independently of reference-time
-// itemization. Names already carry the parser's identifier comparison policy.
+// itemization. The caller supplies the dialect's identifier comparison policy;
+// do not discard original Unicode identity before applying that policy.
 // Call once for each complete WITH list, including unused definitions/EXPLAIN.
-func ValidateCTENames(ctes []*CTE) string {
+func ValidateCTENames(ctes []*CTE, nameKey func(string) string) string {
 	if len(ctes) < 2 {
 		return ""
 	}
-	names := make(map[Identifier]struct{}, len(ctes))
+	names := make(map[string]struct{}, len(ctes))
 	for _, cte := range ctes {
-		name := cte.Name.Alias
+		name := nameKey(string(cte.Name.Alias))
 		if _, exists := names[name]; exists {
 			return fmt.Sprintf("Not unique table/alias: '%s'", name)
 		}

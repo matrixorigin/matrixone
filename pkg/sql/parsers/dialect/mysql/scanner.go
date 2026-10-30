@@ -62,6 +62,9 @@ type Scanner struct {
 	identifierAfterDot     bool
 	// identifierDot keeps a following .digit in identifier context, not a decimal.
 	identifierDot bool
+	// These are digest lexical facts, shared by syntax and normalization.
+	qualifiedIdentifier bool
+	digestReservedWord  bool
 	// digestMode applies MySQL 8.4 lexical compatibility only to digest arguments.
 	digestMode bool
 }
@@ -84,6 +87,8 @@ func (s *Scanner) reset(clearLargeOnly bool, oversized bool) {
 	s.soundsPhraseLookahead = false
 	s.identifierAfterDot = false
 	s.identifierDot = false
+	s.qualifiedIdentifier = false
+	s.digestReservedWord = false
 	s.digestMode = false
 
 	if clearLargeOnly {
@@ -158,10 +163,29 @@ func (s *Scanner) scanQualified(comments bool) (int, string) {
 func (s *Scanner) ScanWithComments() (int, string) { return s.scan(true) }
 
 func (s *Scanner) scan(comments bool) (int, string) {
+	reserved := s.digestReservedWord
+	s.digestReservedWord = false
+	s.qualifiedIdentifier = false
 	for {
 		s.scanCheckpoint()
 		token, value := s.scanToken(comments)
 		if token != skippedScannerToken {
+			if s.digestMode {
+				if token == '.' && reserved {
+					// MO admits some MySQL reserved words as identifiers. A
+					// real keyword cannot become a qualifier after the fact.
+					return LEX_ERROR, value
+				}
+				if token == COMMENT {
+					s.digestReservedWord = reserved
+				} else if token != QUOTE_ID && token != STRING && token != AT_ID && token != AT_AT_ID && !s.qualifiedIdentifier {
+					symbol := digestSymbols[digestKeywordUpper(value)]
+					if s.identifierAfterDot && symbol.reserved {
+						return LEX_ERROR, value
+					}
+					s.digestReservedWord = symbol.reserved
+				}
+			}
 			s.identifierDot = s.digestMode && token == ID && s.cur() == '.' && isDigit(s.peek(1))
 			return token, value
 		}
@@ -222,7 +246,7 @@ func (s *Scanner) scanToken(comments bool) (int, string) {
 		}
 		return tokenID, tBytes
 	case isUnquotedIdentifierLetterAt(s.buf, s.Pos):
-		if s.digestMode && s.identifierAfterDot {
+		if s.digestMode && s.identifierAfterDot && s.Pos > 0 && s.buf[s.Pos-1] == '.' {
 			// A qualified name component is not a literal introducer.
 			return s.scanIdentifier(false)
 		}
@@ -959,7 +983,7 @@ func (s *Scanner) numberText(start int) string {
 
 func (s *Scanner) scanIdentifier(isVariable bool) (int, string) {
 	token, text := s.scanIdentifierToken(isVariable)
-	if token != BEGIN || s.aliasFollowerLookahead {
+	if token != BEGIN || s.aliasFollowerLookahead || s.digestMode {
 		return token, text
 	}
 	// BEGIN's transaction/block lookahead used to recursively scan a chain of
@@ -1029,12 +1053,27 @@ func (s *Scanner) scanIdentifierToken(isVariable bool) (int, string) {
 		s.inc()
 	}
 	keywordName := s.buf[start:s.Pos]
-	// MySQL permits even reserved words as unquoted qualified name components.
-	// Classify here so BEGIN and other contextual keywords cannot look ahead.
-	if s.identifierAfterDot && !isVariable {
-		return ID, keywordName
+	// MySQL bypasses keyword lookup before an adjacent dot only when its
+	// next byte starts an unquoted identifier. After a qualifying dot, the
+	// word is already an identifier. Decide before BEGIN/function lookahead
+	// and retain the fact for digest encoding; token ID alone is insufficient.
+	if !isVariable {
+		if s.digestMode {
+			if s.identifierAfterDot && start > 0 && s.buf[start-1] == '.' ||
+				s.cur() == '.' && (isUnquotedIdentifierLetterAt(s.buf, s.Pos+1) || isDigit(s.peek(1))) {
+				s.qualifiedIdentifier = true
+				return ID, keywordName
+			}
+		} else if s.identifierAfterDot {
+			return ID, keywordName
+		}
 	}
-	lower := strings.ToLower(keywordName)
+	var lower string
+	if s.digestMode {
+		lower = toLowerASCII(keywordName)
+	} else {
+		lower = strings.ToLower(keywordName)
+	}
 	if keywordID, found := keywords[lower]; found {
 		if isSQLModeSensitiveFunctionName(lower) && (!s.sqlMode.Has(SQLModeIgnoreSpace) || s.digestMode) {
 			pos := s.skipBlankAndCommentsFrom(s.Pos)

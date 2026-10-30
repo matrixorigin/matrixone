@@ -54,6 +54,7 @@ type statementDigestSyntax struct {
 type digestSymbol struct {
 	id       uint16
 	function bool
+	reserved bool
 }
 type digestToken struct {
 	id   uint16
@@ -101,6 +102,13 @@ func StatementDigest(ctx context.Context, sql, sqlMode string) (string, string, 
 		if token.id == digestIdentifier || token.id == digestIdentifierAt {
 			encoded = binary.LittleEndian.AppendUint16(encoded, uint16(len(token.name)))
 			encoded = append(encoded, token.name...)
+			// MySQL's utf8mb4-to-utf8mb3 display buffer admits at most 64
+			// source bytes. Ellipsis does not add a following separator; hash
+			// encoding above still includes the complete retained identifier.
+			if len(token.name) > 64 {
+				formatted.WriteString("...")
+				continue
+			}
 			formatted.WriteByte('`')
 			formatted.WriteString(token.name)
 			formatted.WriteByte('`')
@@ -142,7 +150,9 @@ func (d *statementDigest) scan(s *Scanner, syntax *statementDigestSyntax, hint b
 		if kind == 0 {
 			return nil
 		}
-		raw := strings.TrimSpace(s.buf[s.PrePos:s.Pos])
+		// Only scanner whitespace is removable; Unicode spaces can be
+		// identifier bytes and must not turn a name into a keyword.
+		raw := strings.Trim(s.buf[s.PrePos:s.Pos], " \t\r\n")
 		if kind == LEX_ERROR && hint {
 			// Invalid hints are warnings, not failures of the surrounding SQL.
 			// Keep the token prefix before the hint lexer stopped.
@@ -169,7 +179,6 @@ func (d *statementDigest) scan(s *Scanner, syntax *statementDigestSyntax, hint b
 		if !hint && (afterSemicolon || kind == ';' && len(d.tokens) == 0) {
 			return moerr.NewDigestParse(s.parseControl.ctx)
 		}
-		wasAfterDot := afterDot
 		afterDot, hintAllowed = kind == '.', false
 		priorEnd, priorRaw := previousEnd, previousRaw
 		previousEnd, previousRaw = s.Pos, raw
@@ -267,12 +276,11 @@ func (d *statementDigest) scan(s *Scanner, syntax *statementDigestSyntax, hint b
 			d.add(digestJSONUnquote, "", false)
 			continue
 		}
-		if kind == QUOTE_ID || wasAfterDot && kind == ID ||
-			!hint && kind == ID && strings.EqualFold(value, "dual") && !digestDualIsKeyword(s, wasAfterDot) {
+		if kind == QUOTE_ID || !hint && kind == ID && s.qualifiedIdentifier {
 			d.add(digestIdentifier, value, false)
 			continue
 		}
-		upper := strings.ToUpper(raw)
+		upper := digestKeywordUpper(raw)
 		if !hint && digestCharsetIntroducer(raw) {
 			d.add(digestCharset, "", false)
 			continue
@@ -288,13 +296,7 @@ func (d *statementDigest) scan(s *Scanner, syntax *statementDigestSyntax, hint b
 				continue
 			}
 		} else if symbol, ok := digestSymbols[upper]; ok {
-			position := s.Pos
-			if mode.Has(SQLModeIgnoreSpace) {
-				for position < len(s.buf) && strings.IndexByte(" \t\r\n\v\f", s.buf[position]) >= 0 {
-					position++
-				}
-			}
-			if !symbol.function || position < len(s.buf) && s.buf[position] == '(' {
+			if !symbol.function || s.digestFunctionCallAhead() {
 				d.add(symbol.id, "", false)
 				switch upper {
 				case "SELECT", "INSERT", "REPLACE", "UPDATE", "DELETE":
@@ -309,18 +311,6 @@ func (d *statementDigest) scan(s *Scanner, syntax *statementDigestSyntax, hint b
 			d.add(digestIdentifier, value, false)
 		}
 	}
-}
-
-// MySQL's identifier lexer bypasses keyword lookup before a dot only when
-// the following byte starts an unquoted identifier (including numeric names).
-// After a qualifying dot, the word is already an identifier. In particular,
-// dual.* and dual.`name` do not get the before-dot exception; db.dual.* does.
-func digestDualIsKeyword(s *Scanner, afterDot bool) bool {
-	start := s.Pos - len("dual")
-	if afterDot && start > 0 && s.buf[start-1] == '.' {
-		return false
-	}
-	return s.cur() != '.' || !(isUnquotedIdentifierLetterAt(s.buf, s.Pos+1) || isDigit(s.peek(1)))
 }
 
 func digestCharsetIntroducer(word string) bool {

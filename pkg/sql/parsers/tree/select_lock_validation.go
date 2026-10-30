@@ -23,17 +23,18 @@ import (
 // ValidateSelectLocking follows query-expression contextualization, not lexical
 // nesting alone. WITH replaces the expression's local scope; its definitions are
 // itemized only when referenced. No catalog lookup or query execution occurs.
-func ValidateSelectLocking(stmt Statement) string {
-	return validateSelectLockValue(reflect.ValueOf(stmt), nil)
+func ValidateSelectLocking(stmt Statement, nameKey func(string) string) string {
+	return validateSelectLockValue(reflect.ValueOf(stmt), &selectLockScope{nameKey: nameKey})
 }
 
 // Each real query owns a frame. Parentheses and set operands share that frame,
 // so a WITH encountered in the body remains effective for later operands and
 // ORDER BY. A true nested query gets a new frame and cannot mutate its parent.
 type selectLockScope struct {
-	outer *selectLockScope
-	with  *selectLockWith
-	limit int
+	outer   *selectLockScope
+	with    *selectLockWith
+	limit   int
+	nameKey func(string) string
 }
 
 type selectLockWith struct {
@@ -60,7 +61,7 @@ func (scope *selectLockScope) setWith(with *With) {
 		outer:    scope.outer, recursive: with.IsRecursive,
 	}
 	for i, cte := range with.CTEs {
-		local.bindings[strings.ToLower(string(cte.Name.Alias))] = &selectLockCTE{
+		local.bindings[scope.nameKey(string(cte.Name.Alias))] = &selectLockCTE{
 			stmt: cte.Stmt, owner: local, index: i,
 		}
 	}
@@ -71,7 +72,7 @@ func (scope *selectLockScope) lookup(table *TableName) *selectLockCTE {
 	if table.ExplicitSchema || table.ExplicitCatalog {
 		return nil
 	}
-	name := strings.ToLower(string(table.ObjectName))
+	name := scope.nameKey(string(table.ObjectName))
 	if name == "dual" && !table.IsQuoted {
 		// The virtual FROM DUAL form cannot reference a CTE named `dual`.
 		return nil
@@ -101,7 +102,7 @@ func validateSelectLockValue(value reflect.Value, scope *selectLockScope) string
 				// EXPLAIN skips locking; unused CTE definitions skip itemization.
 				return ""
 			case *Select:
-				return validateSelectLockQuery(node, &selectLockScope{outer: scope}, 0)
+				return validateSelectLockQuery(node, &selectLockScope{outer: scope, nameKey: scope.nameKey}, 0)
 			case *Update:
 				return validateSelectLockDML(value.Elem(), node.With, scope, false)
 			case *Delete:
@@ -109,7 +110,7 @@ func validateSelectLockValue(value reflect.Value, scope *selectLockScope) string
 			case *TableName:
 				if cte := scope.lookup(node); cte != nil && !cte.visited {
 					cte.visited = true
-					definition := &selectLockScope{outer: cte.owner.outer, with: cte.owner, limit: cte.index}
+					definition := &selectLockScope{outer: cte.owner.outer, with: cte.owner, limit: cte.index, nameKey: scope.nameKey}
 					if err := validateSelectLockValue(reflect.ValueOf(cte.stmt), definition); err != "" {
 						return err
 					}
@@ -140,7 +141,7 @@ func validateSelectLockValue(value reflect.Value, scope *selectLockScope) string
 }
 
 func validateSelectLockDML(value reflect.Value, with *With, outer *selectLockScope, deleteAliases bool) string {
-	scope := &selectLockScope{outer: outer}
+	scope := &selectLockScope{outer: outer, nameKey: outer.nameKey}
 	scope.setWith(with)
 	for i := 0; i < value.NumField(); i++ {
 		// Multi-table DELETE's target names refer to FROM aliases, not CTE

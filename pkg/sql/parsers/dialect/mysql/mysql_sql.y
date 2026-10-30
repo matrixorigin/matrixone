@@ -7425,7 +7425,7 @@ with_clause:
         // has no binder, so declaration syntax must be checked here, even in
         // unused definitions and EXPLAIN where lock itemization is skipped.
         if yylex.(*Lexer).digest != nil {
-            if err := tree.ValidateCTENames($2); err != "" {
+            if err := tree.ValidateCTENames($2, digestIdentifierKey); err != "" {
                 yylex.Error(err)
                 goto ret1
             }
@@ -7438,7 +7438,7 @@ with_clause:
 |    WITH RECURSIVE cte_list
     {
         if yylex.(*Lexer).digest != nil {
-            if err := tree.ValidateCTENames($3); err != "" {
+            if err := tree.ValidateCTENames($3, digestIdentifierKey); err != "" {
                 yylex.Error(err)
                 goto ret1
             }
@@ -7469,8 +7469,12 @@ common_table_expr:
             yylex.Error("empty common table expression body")
             goto ret1
         }
+        name := $1.Compare()
+        if yylex.(*Lexer).digest != nil {
+            name = $1.Origin()
+        }
         $$ = &tree.CTE{
-            Name: &tree.AliasClause{Alias: tree.Identifier($1.Compare()), Cols: $2},
+            Name: &tree.AliasClause{Alias: tree.Identifier(name), Cols: $2},
             Stmt: $5,
         }
     }
