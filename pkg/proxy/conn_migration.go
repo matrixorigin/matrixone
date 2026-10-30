@@ -243,13 +243,7 @@ func (c *clientConn) migrateConnToContext(
 		return moerr.AttachCause(ctx, err)
 	}
 
-	// Then, migrate other info with RPC.
-	if addr == "" {
-		addr = getQueryAddress(c.moCluster, sc.RawConn().RemoteAddr().String())
-	}
-	if addr == "" {
-		return moerr.NewInternalError(ctx, "cannot get query service address")
-	}
+	// Then, migrate other info with RPC to the verified target.
 	c.log.Info("connection migrate to server", zap.String("server address", addr),
 		zap.String("tenant", string(c.clientInfo.Tenant)),
 		zap.String("username", c.clientInfo.username),
