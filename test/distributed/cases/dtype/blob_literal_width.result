@@ -1,0 +1,28 @@
+drop database if exists blob_literal_width;
+create database blob_literal_width;
+use blob_literal_width;
+create table t(id int, b blob, s text);
+insert into t(id, b) values (1, cast(repeat('y', 65535) as char));
+set @stmt = concat("insert into t(id, b) values (2, '", repeat('y', 65536), "')");
+prepare q from @stmt;
+execute q;
+Data truncation: Can't cast column from BLOB type to BLOB type because of one or more values in that column. Src length 65536 is larger than Dest length 65535
+set @stmt = concat("insert into t(id, s) values (2, '", repeat('y', 65536), "')");
+prepare q2 from @stmt;
+execute q2;
+Data truncation: Can't cast column from TEXT type to TEXT type because of one or more values in that column. Src length 65536 is larger than Dest length 65535
+select id, length(b), length(s) from t order by id;
+➤ id[4,32,0]  ¦  length(b)[-5,64,0]  ¦  length(s)[-5,64,0]  𝄀
+1  ¦  65535  ¦  null
+set session sql_mode = '';
+execute q;
+execute q2;
+select id, length(b), length(s) from t order by id;
+➤ id[4,32,0]  ¦  length(b)[-5,64,0]  ¦  length(s)[-5,64,0]  𝄀
+1  ¦  65535  ¦  null  𝄀
+2  ¦  65535  ¦  null  𝄀
+2  ¦  null  ¦  65535
+set session sql_mode = default;
+deallocate prepare q;
+deallocate prepare q2;
+drop database blob_literal_width;

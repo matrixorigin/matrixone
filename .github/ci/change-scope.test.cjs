@@ -541,7 +541,7 @@ test('the reusable SDK owner preserves the matrix and isolates untrusted checkou
     .map(match => [match[1], match[2]]));
   assert.match(sdk, /^  workflow_call:$/m);
   assert.doesNotMatch(sdk, /^  pull_request(?:_target)?:$/m);
-  assert.match(sdk, /branches: \[main, develop\]/);
+  assert.match(sdk, /branches: \[develop\]/);
   const offline = sections.offline;
   assert.match(offline, /timeout-minutes: 30/);
   assert.match(offline, /runs-on: ubuntu-latest/);
@@ -625,4 +625,33 @@ test('Iceberg module checks retain the dependency path configuration', () => {
     '.github/workflows/iceberg-connector.yml', '.github/ci/**',
   ]);
   assert.match(readFileSync(join(__dirname, '../workflows/ci-scope-check.yml'), 'utf8'), /'\.github\/workflows\/iceberg-connector.yml'/);
+});
+
+test('main is validated before merge without post-merge test or cache producers', () => {
+  const workflow = name => readFileSync(join(__dirname, '../workflows', name), 'utf8');
+  const trigger = name => workflow(name).split('\npermissions:')[0].split('\njobs:')[0];
+  for (const name of ['merge-trigger-standalone.yaml', 'merge-trigger-tke.yaml']) {
+    assert.match(trigger(name), /branches: \[ '\[0-9\]\+\.\[0-9\]\+\*' \]/);
+    assert.doesNotMatch(trigger(name), /branches:.*\bmain\b/);
+  }
+  const sdk = trigger('python-sdk.yml');
+  assert.match(sdk, /workflow_call:/);
+  assert.match(sdk, /push:\n    branches: \[develop\]/);
+  assert.match(sdk, /workflow_dispatch:/);
+  assert.match(trigger('native-dependency-check.yml'), /pull_request:/);
+  assert.match(trigger('native-dependency-check.yml'), /workflow_dispatch:/);
+  for (const name of ['native-dependency-check.yml', 'sca-go-module-cache.yaml', 'jstfu-maven-cache.yaml']) {
+    assert.doesNotMatch(trigger(name), /^  push:/m);
+  }
+  for (const name of ['sca-go-module-cache.yaml', 'jstfu-maven-cache.yaml']) {
+    assert.match(trigger(name), /^  schedule:/m);
+    assert.match(trigger(name), /^  workflow_dispatch:/m);
+  }
+  const sca = workflow('sca-go-module-cache.yaml');
+  const saveTools = sca.indexOf('name: Save static-check tools');
+  assert.ok(saveTools >= 0);
+  assert.ok(saveTools < sca.indexOf('name: Restore golangci-lint analysis cache'));
+  assert.ok(saveTools < sca.indexOf('name: Build native SCA prerequisites'));
+  assert.match(trigger('entrypoint.yaml'), /branches: \[ main,/);
+  assert.match(trigger('ci-cancellation.yml'), /pull_request_target:\n    types: \[closed\]/);
 });

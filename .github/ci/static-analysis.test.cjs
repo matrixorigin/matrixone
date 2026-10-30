@@ -198,3 +198,90 @@ test('real Make consumer shares selection, keeps full override, and propagates a
   assert.notEqual(missingNodeInvalid.result.status, 0);
   assert.equal(missingNodeInvalid.commands.length, 0, 'full graph validation must precede either analyzer');
 });
+
+// Exercise the public Make target with the existing downloader boundary stubbed;
+// thirdparties/download_test owns network, checksum and byte-limit validation.
+test('tool installation avoids linter compilation and preserves failure/compatibility paths', t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sca-install-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const source = path.resolve(__dirname, '../..');
+  const target = fs.readFileSync(path.join(source, 'Makefile'), 'utf8')
+    .match(/^install-static-check-tools:\n[\s\S]*?(?=\n\n)/m)[0];
+  fs.writeFileSync(path.join(dir, 'Makefile'), target + '\n');
+  const bin = path.join(dir, 'bin'), fixtures = path.join(dir, 'fixtures');
+  fs.mkdirSync(bin); fs.mkdirSync(fixtures); fs.mkdirSync(path.join(dir, 'thirdparties'));
+  const log = path.join(dir, 'commands.log'), gopath = path.join(dir, 'gopath');
+  fs.writeFileSync(path.join(bin, 'go'), `#!/bin/sh
+set -eu
+if [ "$1" = env ]; then
+  case "$2" in
+    GOHOSTOS) echo "$INSTALL_OS" ;;
+    GOHOSTARCH) echo "$INSTALL_ARCH" ;;
+    GOVERSION) echo "$INSTALL_GO" ;;
+    *) exit 2 ;;
+  esac
+else
+  echo "$*" >> "$INSTALL_LOG"
+  case "$*" in *"\${FAIL_TOOL:-not-a-tool}"*) exit 9 ;; esac
+  tool=\${2%@*}; tool=\${tool##*/}
+  mkdir -p "$GOBIN"
+  printf '#!/bin/sh\\nexit 0\\n' > "$GOBIN/$tool"
+  chmod +x "$GOBIN/$tool"
+fi
+`, { mode: 0o755 });
+  fs.writeFileSync(path.join(dir, 'thirdparties/download'), `#!/bin/sh
+set -eu
+printf 'download %s %s\\n' "$1" "$2" >> "$INSTALL_LOG"
+test "\${#2}" -eq 64
+test "$MO_DOWNLOAD_ATTEMPTS/$MO_DOWNLOAD_RETRY_ROUNDS/$MO_DOWNLOAD_MAX_TIME_SECONDS" = 1/1/60
+if [ "\${FAIL_DOWNLOAD:-0}" = 1 ]; then exit 8; fi
+if [ "\${BAD_ARCHIVE:-0}" = 1 ]; then echo corrupt > "$3"; else cp "$INSTALL_FIXTURES/\${1##*/}" "$3"; fi
+`, { mode: 0o755 });
+  for (const platform of ['linux-amd64', 'linux-arm64', 'darwin-amd64', 'darwin-arm64']) {
+    const name = `golangci-lint-2.14.0-${platform}`;
+    fs.mkdirSync(path.join(fixtures, name));
+    fs.writeFileSync(path.join(fixtures, name, 'golangci-lint'), '#!/bin/sh\necho prebuilt\n');
+    execFileSync('tar', ['-czf', path.join(fixtures, `${name}.tar.gz`), '-C', fixtures, `${name}/golangci-lint`]);
+  }
+  function run(extra = {}) {
+    fs.writeFileSync(log, '');
+    const result = spawnSync('make', ['--no-print-directory', 'install-static-check-tools', `GOPATH=${gopath}`], {
+      cwd: dir, encoding: 'utf8', timeout: 10000,
+      env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, INSTALL_LOG: log, INSTALL_FIXTURES: fixtures,
+        INSTALL_OS: 'linux', INSTALL_ARCH: 'arm64', INSTALL_GO: 'go1.27.1', ...extra },
+    });
+    return { result, commands: fs.readFileSync(log, 'utf8').trim().split('\n').filter(Boolean) };
+  }
+  for (const [INSTALL_OS, INSTALL_ARCH] of [['linux', 'amd64'], ['linux', 'arm64'], ['darwin', 'amd64'], ['darwin', 'arm64']]) {
+    const { result, commands } = run({ INSTALL_OS, INSTALL_ARCH });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(commands.length, 3);
+    assert.match(commands[0], new RegExp(`^download https://github.com/golangci/golangci-lint/releases/download/v2.14.0/golangci-lint-2.14.0-${INSTALL_OS}-${INSTALL_ARCH}.tar.gz [a-f0-9]{64}$`));
+    assert.ok(commands[1].startsWith('install github.com/matrixorigin/linter/cmd/molint@'));
+    assert.ok(commands[2].startsWith('install github.com/apache/skywalking-eyes/cmd/license-eye@'));
+    assert.equal(execFileSync(path.join(gopath, 'bin/golangci-lint'), { encoding: 'utf8' }).trim(), 'prebuilt');
+  }
+  for (const extra of [{ INSTALL_GO: 'go1.28.0' }, { INSTALL_OS: 'freebsd' }]) {
+    const { result, commands } = run(extra);
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(commands.length, 3);
+    assert.ok(commands.every(command => command.startsWith('install ')));
+    assert.match(commands[0], /golangci-lint\/v2\/cmd\/golangci-lint@v2.14.0$/);
+  }
+  for (const extra of [{ FAIL_DOWNLOAD: '1' }, { BAD_ARCHIVE: '1' }]) {
+    const fallback = run(extra);
+    assert.equal(fallback.result.status, 0, fallback.result.stderr);
+    assert.equal(fallback.commands.length, 4);
+    assert.ok(fallback.commands.slice(1).every(command => command.startsWith('install ')));
+    assert.match(fallback.result.stderr, /installing the pinned version from source/);
+    fs.writeFileSync(path.join(gopath, 'bin/golangci-lint'), 'prior generation');
+    const failed = run({ ...extra, FAIL_TOOL: 'golangci-lint' });
+    assert.notEqual(failed.result.status, 0);
+    assert.equal(failed.commands.length, 2, 'a failed fallback must not install other tools');
+    assert.equal(fs.readFileSync(path.join(gopath, 'bin/golangci-lint'), 'utf8'), 'prior generation');
+    assert.ok(!fs.readdirSync(path.join(gopath, 'bin')).some(name => name.startsWith('.golangci-lint.')));
+  }
+  const failure = run({ FAIL_TOOL: 'molint' });
+  assert.notEqual(failure.result.status, 0);
+  assert.equal(failure.commands.length, 2, 'a failed source tool must stop the installer');
+});
