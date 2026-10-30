@@ -12290,7 +12290,7 @@ func appendSelectListWithGroupingOrder(
 			if selectExpr.As != nil && !selectExpr.As.Empty() {
 				ctx.appendHeading(selectExpr.As.Origin(), headingProvenance{})
 			} else {
-				ctx.appendHeading(tree.String(expr, dialect.MYSQL), headingProvenance{})
+				ctx.appendHeading(validUTF8Heading(tree.String(expr, dialect.MYSQL)), headingProvenance{})
 			}
 
 			selectList = append(selectList, tree.SelectExpr{
@@ -12310,10 +12310,10 @@ func appendSelectListWithGroupingOrder(
 					}
 				}
 				if heading, ok := tree.NameConstHeading(expr); ok {
-					ctx.appendHeading(heading, headingProvenance{})
+					ctx.appendHeading(validUTF8Heading(heading), headingProvenance{})
 				} else {
 					heading, provenance := formatSelectExpressionHeading(expr)
-					ctx.appendHeading(heading, provenance)
+					ctx.appendHeading(validUTF8Heading(heading), provenance)
 				}
 			}
 

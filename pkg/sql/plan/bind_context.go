@@ -18,6 +18,7 @@ import (
 	"context"
 	"slices"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -104,6 +105,30 @@ func (bc *BindContext) appendHeading(heading string, provenance headingProvenanc
 func (bc *BindContext) setHeading(index int, heading string, provenance headingProvenance) {
 	bc.headings[index] = heading
 	bc.setHeadingProvenance(int32(index), provenance)
+}
+
+// validUTF8Heading keeps a generated (unaliased) result column name valid
+// UTF-8. An unaliased binary literal such as _binary'\x00\xff' is named after
+// its raw bytes; the name travels in the column definition packet, where
+// clients decode it as UTF-8 before reading any row. Like MySQL, replace bytes
+// that do not form a character with '?', one per byte. Explicit aliases are
+// not touched (DDL still validates them), and the row value is unchanged.
+func validUTF8Heading(heading string) string {
+	if utf8.ValidString(heading) {
+		return heading
+	}
+	var b strings.Builder
+	b.Grow(len(heading))
+	for i := 0; i < len(heading); {
+		r, size := utf8.DecodeRuneInString(heading[i:])
+		if r == utf8.RuneError && size == 1 {
+			b.WriteByte('?')
+		} else {
+			b.WriteString(heading[i : i+size])
+		}
+		i += size
+	}
+	return b.String()
 }
 
 func (bc *BindContext) headingProvenanceFor(index int) headingProvenance {
