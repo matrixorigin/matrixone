@@ -63,3 +63,29 @@ func TestMixedStringNumericToVarcharSkipsBinaryBool(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, types.T_varchar, ret.Oid)
 }
+
+// A TEXT-family branch next to BOOL resolves to TEXT, not VARCHAR(65535), so
+// a MEDIUMTEXT/LONGTEXT value longer than 65,535 characters is not truncated.
+func TestBoolTextBranchesKeepTextDomain(t *testing.T) {
+	ctx := context.Background()
+	boolType := types.T_bool.ToType()
+	for _, width := range []int32{0, types.MaxMediumTextLen, types.MaxLongTextLen} {
+		text := types.New(types.T_text, width, 0)
+		for _, tc := range []struct {
+			name      string
+			args      []types.Type
+			valueArgs []int
+		}{
+			{"iff", []types.Type{boolType, text, boolType}, []int{1, 2}},
+			{"case", []types.Type{boolType, boolType, boolType, text}, []int{1, 3}},
+			{"coalesce", []types.Type{text, boolType}, []int{0, 1}},
+		} {
+			resolved, err := GetFunctionByName(ctx, tc.name, tc.args)
+			require.NoError(t, err, "%s %v", tc.name, tc.args)
+			require.Equal(t, types.T_text, resolved.GetReturnType().Oid, "%s %v", tc.name, tc.args)
+			for _, i := range tc.valueArgs {
+				require.Equal(t, types.T_text, resolved.targetTypes[i].Oid, "%s %v arg %d", tc.name, tc.args, i)
+			}
+		}
+	}
+}

@@ -10418,6 +10418,10 @@ func adjustControlFlowVarcharMetadata(args []*Expr, argTypes []types.Type, value
 		} else if temporalWidth, ok := temporalDisplayWidthForVarchar(typ); ok {
 			hasConvertible = true
 			candidate, known = temporalWidth, true
+		} else if typ.Oid == types.T_bool {
+			// A BOOL arm next to a string arm is rendered as '1' or '0'.
+			hasConvertible = true
+			candidate, known = 1, true
 		} else {
 			return false
 		}

@@ -2,16 +2,16 @@ drop database if exists func_string_bool_branches;
 create database func_string_bool_branches;
 use func_string_bool_branches;
 select if(1, 'x', true) as a, if(0, 'x', true) as b, if(0, true, 'y') as c, if(1, false, 'y') as d;
-➤ a[12,65535,0]  ¦  b[12,65535,0]  ¦  c[12,65535,0]  ¦  d[12,65535,0]  𝄀
+➤ a[12,1,0]  ¦  b[12,1,0]  ¦  c[12,1,0]  ¦  d[12,1,0]  𝄀
 x  ¦  1  ¦  y  ¦  0
 select case when 1 then 'x' else false end as a, case when 0 then 'x' else false end as b, case 2 when 1 then true when 2 then 'two' end as c;
-➤ a[12,65535,0]  ¦  b[12,65535,0]  ¦  c[12,65535,0]  𝄀
+➤ a[12,1,0]  ¦  b[12,1,0]  ¦  c[12,3,0]  𝄀
 x  ¦  0  ¦  two
 select if(1, 'true', false) as a, if(0, 'true', false) as b, case when 1 then 'false' else true end as c;
-➤ a[12,65535,0]  ¦  b[12,65535,0]  ¦  c[12,65535,0]  𝄀
+➤ a[12,4,0]  ¦  b[12,4,0]  ¦  c[12,5,0]  𝄀
 true  ¦  0  ¦  false
 select coalesce(null, 'x', true) as a, coalesce(null, true, 'x') as b, ifnull(null, 'x') as c, ifnull(false, 'x') as d;
-➤ a[12,65535,0]  ¦  b[12,65535,0]  ¦  c[12,1,0]  ¦  d[12,65535,0]  𝄀
+➤ a[12,1,0]  ¦  b[12,1,0]  ¦  c[12,1,0]  ¦  d[12,1,0]  𝄀
 x  ¦  1  ¦  x  ¦  0
 select if(1, 'x', null) as a, if(1, true, null) as b, if(1, true, 2) as c;
 ➤ a[12,1,0]  ¦  b[-6,8,0]  ¦  c[-6,8,0]  𝄀
@@ -19,13 +19,13 @@ x  ¦  1  ¦  1
 create table t(id int primary key, s varchar(10), b bool);
 insert into t values (1, 'abc', true), (2, 'def', false), (3, null, null), (4, '', true);
 select id, if(b, s, b) as a, if(b, b, s) as c, case when b then s else b end as d, coalesce(s, b) as e, ifnull(b, s) as f from t order by id;
-➤ id[4,32,0]  ¦  a[12,65535,0]  ¦  c[12,65535,0]  ¦  d[12,65535,0]  ¦  e[12,65535,0]  ¦  f[12,65535,0]  𝄀
+➤ id[4,32,0]  ¦  a[12,10,0]  ¦  c[12,10,0]  ¦  d[12,10,0]  ¦  e[12,10,0]  ¦  f[12,10,0]  𝄀
 1  ¦  abc  ¦  1  ¦  abc  ¦  abc  ¦  1  𝄀
 2  ¦  0  ¦  def  ¦  0  ¦  def  ¦  0  𝄀
 3  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  𝄀
 4  ¦    ¦  1  ¦    ¦    ¦  1
 select id, concat(if(id > 2, b, s), '!') as g from t order by id;
-➤ id[4,32,0]  ¦  g[-1,16383,0]  𝄀
+➤ id[4,32,0]  ¦  g[12,11,0]  𝄀
 1  ¦  abc!  𝄀
 2  ¦  def!  𝄀
 3  ¦  null  𝄀
@@ -33,4 +33,23 @@ select id, concat(if(id > 2, b, s), '!') as g from t order by id;
 select id from t where if(b, s, b) = 'abc' order by id;
 ➤ id[4,32,0]  𝄀
 1
+create table lt(id int primary key, m mediumtext);
+insert into lt values (1, repeat('x', 70000)), (2, 'short');
+select id, length(if(id = 1, m, false)) as a, length(case when id = 1 then m else true end) as b, length(coalesce(m, false)) as c from lt order by id;
+➤ id[4,32,0]  ¦  a[-5,64,0]  ¦  b[-5,64,0]  ¦  c[-5,64,0]  𝄀
+1  ¦  70000  ¦  70000  ¦  70000  𝄀
+2  ¦  1  ¦  1  ¦  5
+select length(if(true, cast(repeat('y', 65536) as mediumtext), false)) as a;
+➤ a[-5,64,0]  𝄀
+65536
+create table bool_ctas as select coalesce(cast('x' as char(10)), false) as v, if(true, cast('x' as char(10)), false) as w;
+show create table bool_ctas;
+➤ Table[12,9,0]  ¦  Create Table[12,83,0]  𝄀
+bool_ctas  ¦  CREATE TABLE `bool_ctas` (
+  `v` varchar(10) NOT NULL,
+  `w` varchar(10) NOT NULL
+)
+select * from bool_ctas;
+➤ v[12,10,0]  ¦  w[12,10,0]  𝄀
+x  ¦  x
 drop database if exists func_string_bool_branches;

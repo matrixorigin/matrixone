@@ -20,4 +20,14 @@ select id, if(b, s, b) as a, if(b, b, s) as c, case when b then s else b end as 
 select id, concat(if(id > 2, b, s), '!') as g from t order by id;
 select id from t where if(b, s, b) = 'abc' order by id;
 
+-- a TEXT-family branch next to BOOL keeps its full length (no VARCHAR(65535) truncation)
+create table lt(id int primary key, m mediumtext);
+insert into lt values (1, repeat('x', 70000)), (2, 'short');
+select id, length(if(id = 1, m, false)) as a, length(case when id = 1 then m else true end) as b, length(coalesce(m, false)) as c from lt order by id;
+select length(if(true, cast(repeat('y', 65536) as mediumtext), false)) as a;
+-- a short string next to BOOL keeps a rebuildable width
+create table bool_ctas as select coalesce(cast('x' as char(10)), false) as v, if(true, cast('x' as char(10)), false) as w;
+show create table bool_ctas;
+select * from bool_ctas;
+
 drop database if exists func_string_bool_branches;

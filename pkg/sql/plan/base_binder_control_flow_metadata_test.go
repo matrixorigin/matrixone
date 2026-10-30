@@ -355,9 +355,11 @@ func TestBindControlFlowMetadata(t *testing.T) {
 			width: 24,
 		},
 		{
-			name:  "bool keeps conservative varchar capacity",
+			// BOOL renders as '1'/'0' (one character) when it meets a string
+			// arm; the int64 literal arm's display bound (2) dominates.
+			name:  "bool uses its one-character display bound",
 			typ:   types.T_bool.ToType(),
-			width: types.MaxVarcharLen,
+			width: 2,
 		},
 		{
 			name:  "bit keeps conservative varchar capacity",
@@ -1292,4 +1294,52 @@ func TestBuildIfNullMetadataAfterOuterJoin(t *testing.T) {
 	require.Len(t, projectList, 2)
 	require.True(t, projectList[0].Typ.NotNullable)
 	require.False(t, projectList[1].Typ.NotNullable)
+}
+
+// A short string next to a BOOL arm must not persist VARCHAR(65535) (which
+// exported DDL cannot rebuild); BOOL contributes its one-character display
+// width. A TEXT-family arm keeps TEXT so long values are not truncated.
+func TestBuildControlFlowBoolStringMetadata(t *testing.T) {
+	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
+	ctx.tables["bool_text"] = &planpb.TableDef{
+		TblId:     1002,
+		Name:      "bool_text",
+		DbName:    "tpch",
+		TableType: "ORDINARY",
+		Cols: []*planpb.ColDef{
+			{Name: "id", OriginName: "id", Typ: planpb.Type{Id: int32(types.T_int32)}},
+			{Name: "medium_col", OriginName: "medium_col", Typ: planpb.Type{Id: int32(types.T_text), Width: types.MaxMediumTextLen}},
+		},
+	}
+	ctx.objects["bool_text"] = &ObjectRef{ObjName: "bool_text", SchemaName: "tpch"}
+
+	for _, test := range []struct {
+		name  string
+		sql   string
+		oid   types.T
+		width int32
+	}{
+		{name: "coalesce char", sql: "select coalesce(cast('x' as char(10)), false) from bool_text", oid: types.T_varchar, width: 10},
+		{name: "if char", sql: "select if(id = 1, cast('x' as char(10)), false) from bool_text", oid: types.T_varchar, width: 10},
+		{name: "case char", sql: "select case when id = 1 then true else cast('x' as char(10)) end from bool_text", oid: types.T_varchar, width: 10},
+		{name: "if mediumtext", sql: "select if(id = 1, medium_col, false) from bool_text", oid: types.T_text},
+		{name: "case mediumtext", sql: "select case when id = 1 then medium_col else true end from bool_text", oid: types.T_text},
+		{name: "coalesce mediumtext", sql: "select coalesce(medium_col, false) from bool_text", oid: types.T_text},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, test.sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+
+			pl, err := BuildPlan(ctx, stmt, false)
+			require.NoError(t, err)
+			query := pl.GetQuery()
+			projectList := query.Nodes[query.Steps[len(query.Steps)-1]].ProjectList
+			require.Len(t, projectList, 1)
+			require.Equal(t, int32(test.oid), projectList[0].Typ.Id)
+			if test.oid == types.T_varchar {
+				require.Equal(t, test.width, projectList[0].Typ.Width)
+			}
+		})
+	}
 }
