@@ -424,6 +424,24 @@ SELECT IF(a > 1, a, b), COALESCE(NULL, d), IFNULL(d, a), CASE WHEN a > 0 THEN d 
 SELECT IF(d, 'y', 'n'), INTERVAL(d, 1, 4), CONV(b, 10, 2) FROM m1;
 ➤ IF(d, y, n)[12,1,0]  ¦  INTERVAL(d, 1, 4)[-5,64,0]  ¦  CONV(b, 10, 2)[12,65,0]  𝄀
 y  ¦  1  ¦  11
+CREATE TABLE ud (id INT, x DECIMAL(10,2) UNSIGNED);
+INSERT INTO ud SELECT 1, a FROM m1;
+INSERT INTO ud SELECT 2, b FROM m1;
+INSERT INTO ud SELECT 3, c FROM m1;
+INSERT INTO ud SELECT 4, d FROM m1;
+SELECT * FROM ud ORDER BY id;
+➤ id[4,32,0]  ¦  x[3,10,2]  𝄀
+1  ¦  3.50  𝄀
+2  ¦  3.50  𝄀
+3  ¦  3.00  𝄀
+4  ¦  3.50
+SET @lp_ud_mode = @@sql_mode;
+SET sql_mode = 'STRICT_TRANS_TABLES';
+INSERT INTO ud SELECT 5, -d FROM m1;
+Data truncation: Out of range value for column 'x' at row 1
+INSERT INTO ud SELECT 6, -c FROM m1;
+Data truncation: Out of range value for column 'x' at row 1
+SET sql_mode = @lp_ud_mode;
 SELECT COALESCE(NULLIF(d, d), 16777217), IF(id = 0, a, 16777217), CASE WHEN id = 0 THEN b ELSE 1234567.89 END, COALESCE(NULLIF(c, c), 16777217) FROM m1;
 ➤ COALESCE(NULLIF(d, d), 16777217)[8,53,31]  ¦  IF(id = 0, a, 16777217)[8,53,31]  ¦  case when id = 0 then b else 1234567.89 end[8,53,31]  ¦  COALESCE(NULLIF(c, c), 16777217)[8,53,31]  𝄀
 1.6777217E7  ¦  1.6777217E7  ¦  1234567.89  ¦  1.6777217E7

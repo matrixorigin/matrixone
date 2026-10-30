@@ -241,6 +241,18 @@ UPDATE m1 JOIN m2 ON m1.id = m2.k SET m1.a = m2.a, m1.b = m2.b, m1.c = m2.c, m1.
 SELECT * FROM m1;
 SELECT IF(a > 1, a, b), COALESCE(NULL, d), IFNULL(d, a), CASE WHEN a > 0 THEN d END, NULLIF(d, 1) FROM m1;
 SELECT IF(d, 'y', 'n'), INTERVAL(d, 1, 4), CONV(b, 10, 2) FROM m1;
+-- DECIMAL UNSIGNED admits them as it admits FLOAT: non-negative values store, negative ones are out of range
+CREATE TABLE ud (id INT, x DECIMAL(10,2) UNSIGNED);
+INSERT INTO ud SELECT 1, a FROM m1;
+INSERT INTO ud SELECT 2, b FROM m1;
+INSERT INTO ud SELECT 3, c FROM m1;
+INSERT INTO ud SELECT 4, d FROM m1;
+SELECT * FROM ud ORDER BY id;
+SET @lp_ud_mode = @@sql_mode;
+SET sql_mode = 'STRICT_TRANS_TABLES';
+INSERT INTO ud SELECT 5, -d FROM m1;
+INSERT INTO ud SELECT 6, -c FROM m1;
+SET sql_mode = @lp_ud_mode;
 -- mixed with an integer or decimal they resolve as FLOAT does: 16777217 stays exact
 SELECT COALESCE(NULLIF(d, d), 16777217), IF(id = 0, a, 16777217), CASE WHEN id = 0 THEN b ELSE 1234567.89 END, COALESCE(NULLIF(c, c), 16777217) FROM m1;
 SELECT BIT_AND(d), BIT_OR(c) FROM m1;
