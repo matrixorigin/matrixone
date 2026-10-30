@@ -1096,6 +1096,9 @@ func (tcc *TxnCompilerContext) resolveUdfInDatabase(name string, args []*plan.Ex
 
 		if matchNum == 1 {
 			matchedList[0].Udf.ArgsType = function.UdfArgTypeCast(fromList, matchedList[0].TypeList)
+			if matchedList[0].Udf.Language == string(tree.SQL) {
+				matchedList[0].Udf.ValidateSQLBody = sqlUdfBodyValidator(ctx, ses)
+			}
 			return matchedList[0].Udf, err
 		}
 

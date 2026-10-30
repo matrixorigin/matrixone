@@ -5351,6 +5351,13 @@ func bindFuncExprImplUdf(
 				stmt.Free()
 			}
 		}()
+		if udf.ValidateSQLBody != nil {
+			for _, stmt := range substmts {
+				if err := udf.ValidateSQLBody(b.GetContext(), stmt); err != nil {
+					return nil, err
+				}
+			}
+		}
 		var bodyExpr tree.Expr
 		if expressionBody {
 			bodyExpr = substmts[0].(*tree.Select).Select.(*tree.SelectClause).Exprs[0].Expr

@@ -275,12 +275,11 @@ func TestColumnsUpgradeEmptyCDCControlCompletesCrossing(t *testing.T) {
 func TestColumnsUpgradeTaskSurvivalCrossingEmbed(t *testing.T) {
 	require.NoError(t, CloseBaseClusterTests())
 	require.NoError(t, CloseSingleCNBaseClusterTests())
-	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Minute)
-	defer cancel()
-	c := stageReady407Predecessor(t, ctx)
+	c, start := stageReady407Predecessor(t, 10*time.Minute)
 
 	func() {
-		require.NoError(t, c.Start())
+		ctx, err := start()
+		require.NoError(t, err)
 		cn, err := c.GetCNService(0)
 		require.NoError(t, err)
 		seedLegacyCDCTask(t, ctx, cn, "valid-task", "running")
@@ -293,21 +292,33 @@ func TestColumnsUpgradeTaskSurvivalCrossingEmbed(t *testing.T) {
 	interrupted := &interruptedUpgradeHandler{VersionHandle: v4_0_18.Handler, entered: make(chan struct{}), tenant: true}
 	setRecoveryCNHandles(c, append(columnsPredecessorChain(), interrupted), true)
 	started := make(chan error, 1)
-	go func() { started <- c.Start() }()
+	startDone := make(chan struct{})
+	go func() {
+		defer close(startDone)
+		_, err := start()
+		started <- err
+	}()
+	// Join before the starter's cleanup touches its context, including FailNow.
+	t.Cleanup(func() {
+		if err := c.Stop(); err != nil {
+			t.Errorf("stop interrupted columns upgrade: %v", err)
+		}
+		<-startDone
+	})
 	select {
 	case <-interrupted.entered:
 	case err := <-started:
 		t.Fatalf("startup failed before the v4_0_18 tenant entry: %v", err)
-	case <-ctx.Done():
-		t.Fatal("v4_0_18 tenant entry was not reached", ctx.Err())
+	case <-t.Context().Done():
+		t.Fatal("v4_0_18 tenant entry was not reached", t.Context().Err())
 	}
 	stopped := make(chan error, 1)
 	go func() { stopped <- c.Stop() }()
 	select {
 	case err := <-started:
 		require.ErrorIs(t, err, context.Canceled)
-	case <-ctx.Done():
-		t.Fatal("stop did not cancel the upgrade startup", ctx.Err())
+	case <-t.Context().Done():
+		t.Fatal("stop did not cancel the upgrade startup", t.Context().Err())
 	}
 	require.NoError(t, <-stopped)
 
@@ -315,7 +326,8 @@ func TestColumnsUpgradeTaskSurvivalCrossingEmbed(t *testing.T) {
 	// table for admission, completes to READY 4.0.18, and the task row is
 	// still present.
 	setRecoveryCNHandles(c, append(columnsPredecessorChain(), v4_0_18.Handler), true)
-	require.NoError(t, c.Start())
+	ctx, err := start()
+	require.NoError(t, err)
 	cn, err := c.GetCNService(0)
 	require.NoError(t, err)
 	requireColumnsUpgradeComplete(t, ctx, cn)

@@ -3086,6 +3086,9 @@ func createPrepareStmtInSession(
 	if !preparedOwnerPolicyCaptured(execCtx) {
 		return nil, moerr.NewInvalidState(execCtx.reqCtx, "prepared statement requires a captured owner policy before planning")
 	}
+	if err := verifyStoredSQLAgainstHiddenIndexTables(execCtx.reqCtx, saveStmt); err != nil {
+		return nil, err
+	}
 	// Nested planning may change the session's current statement. Capture the
 	// owner statement now; neighboring statements in the request are irrelevant.
 	nonuser := executionSes.GetStmtProfile().GetSqlSourceType() == constant.CloudNoUserSql
@@ -5100,6 +5103,12 @@ func authenticateUserCanExecuteStatement(reqCtx context.Context, ses *Session, s
 		return stats, nil
 	}
 	if ses.GetTenantInfo() != nil {
+		// A real client user must not reference hidden physical index tables
+		// ("__mo_index_*") directly in any statement; index access goes through
+		// the base table only. Internal/background sessions are excluded.
+		if err := verifyRealUserStatementAgainstHiddenIndexTables(reqCtx, ses, stmt); err != nil {
+			return stats, err
+		}
 		if _, ok := stmt.(*tree.AlterDatabase); ok {
 			// A persistent database-default change must recheck both the active role
 			// membership and its current privileges, including prepared execution.

@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 )
@@ -100,6 +101,13 @@ func (interpreter *Interpreter) evaluateStoredProcedureExpr(e tree.Expr, targetT
 }
 
 func (interpreter *Interpreter) evaluateExprInContext(ctx context.Context, e tree.Expr, targetType *plan.Type) (interface{}, error) {
+	if !directHiddenIndexTableAccessAllowed(storedSQLCaller(ctx, interpreter.ses)) {
+		finder := &hiddenIndexTableRefFinder{}
+		finder.scanExpr(e)
+		if err := finder.accessError(ctx); err != nil {
+			return nil, err
+		}
+	}
 	txnCompileCtx := interpreter.ses.GetTxnCompileCtx()
 	previousCtx := txnCompileCtx.GetContext()
 	txnCompileCtx.SetContext(ctx)
@@ -142,7 +150,7 @@ func (interpreter *Interpreter) GetStatementString(input tree.Statement) string 
 func (interpreter *Interpreter) executeSQL(sql string) (SpStatus, error) {
 	interpreter.bh.ClearExecResultSet()
 	interpreter.ctx = interpreter.storedProcedureContext()
-	if err := interpreter.bh.Exec(interpreter.ctx, sql); err != nil {
+	if err := interpreter.execStoredSQL(interpreter.ctx, sql); err != nil {
 		return SpNotOk, err
 	}
 	interpreter.recordAffectedRows()
@@ -154,6 +162,26 @@ func (interpreter *Interpreter) executeSQL(sql string) (SpStatus, error) {
 		interpreter.result = append(interpreter.result, erArray...)
 	}
 	return SpOk, nil
+}
+
+// Check only SQL supplied by the routine, before the background executor can
+// plan it. Generated maintenance SQL deliberately continues to use bh directly.
+// SQL bodies, branch conditions and Starlark mo.sql all share this boundary.
+func (interpreter *Interpreter) execStoredSQL(ctx context.Context, sql string) error {
+	caller := storedSQLCaller(ctx, interpreter.ses)
+	if !directHiddenIndexTableAccessAllowed(caller) {
+		stmts, err := mysql.Parse(ctx, sql, parserLowerCaseTableNames(interpreter.ses))
+		if err != nil {
+			return err
+		}
+		defer freeStatements(stmts)
+		for _, stmt := range stmts {
+			if err := verifyRealUserStatementAgainstHiddenIndexTables(ctx, caller, stmt); err != nil {
+				return err
+			}
+		}
+	}
+	return interpreter.bh.Exec(ctx, sql)
 }
 
 func (interpreter *Interpreter) GetSpVar(varName string) (interface{}, error) {
@@ -294,7 +322,7 @@ func (interpreter *Interpreter) EvalCond(cond string) (int, error) {
 
 	interpreter.bh.ClearExecResultSet()
 	interpreter.ctx = interpreter.storedProcedureContext()
-	err := interpreter.bh.Exec(interpreter.ctx, "select "+cond)
+	err := interpreter.execStoredSQL(interpreter.ctx, "select "+cond)
 	if err != nil {
 		return 0, err
 	}

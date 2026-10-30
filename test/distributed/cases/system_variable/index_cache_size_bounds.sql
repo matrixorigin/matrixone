@@ -34,6 +34,11 @@ create table u(id bigint primary key, v vecf32(3));
 insert into u values (1,'[0,0,0]'), (2,'[1,1,1]'), (3,'[9,9,9]');
 create index h2 using hnsw on u(v) op_type 'vector_l2_ops';
 
+-- Polling the hidden index-meta table for build readiness goes through the
+-- debugging escape hatch: direct access to hidden physical index tables is
+-- guarded for ordinary users (#31436).
+set session allow_hidden_index_table_access = on;
+
 set @meta = (select index_table_name from mo_catalog.mo_indexes
     where name = 'h' and algo = 'hnsw' and algo_table_type = 'hnsw_meta'
       and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 't')
@@ -53,6 +58,8 @@ prepare wait_ready2 from @wait_sql2;
 -- @wait_expect(1, 120)
 execute wait_ready2;
 deallocate prepare wait_ready2;
+
+set session allow_hidden_index_table_access = off;
 
 -- Baseline at the default: 0, no operator limit, budget derived from the machine -- which on
 -- any machine that can run a CN is far above one small index, so it does not bind.

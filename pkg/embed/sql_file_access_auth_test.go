@@ -204,7 +204,8 @@ func TestSQLFileAccessTenantStageCDC(t *testing.T) {
 		dir := t.TempDir()
 		require.NoError(t, os.WriteFile(filepath.Join(dir, "content.txt"), []byte("matrixone stage content"), 0o600))
 		require.NoError(t, os.WriteFile(filepath.Join(dir, "json.txt"), []byte("[1]"), 0o600))
-		tenant, err := sql.Open("mysql", fmt.Sprintf("%s#admin#accountadmin:sql-file-access-stage-test@tcp(127.0.0.1:%d)/", account, cn.GetServiceConfig().CN.Frontend.Port))
+		tenantDSN := fmt.Sprintf("%s#admin#accountadmin:sql-file-access-stage-test@tcp(127.0.0.1:%d)/", account, cn.GetServiceConfig().CN.Frontend.Port)
+		tenant, err := sql.Open("mysql", tenantDSN)
 		require.NoError(t, err)
 		defer tenant.Close()
 
@@ -475,9 +476,23 @@ func TestSQLFileAccessTenantStageCDC(t *testing.T) {
 		require.NoError(t, tenant.QueryRow("select index_table_name from mo_catalog.mo_indexes where name='mutation_ftidx' and algo_table_type='ftv2_index' and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase=database() and relname='mutation_documents') limit 1").Scan(&mutationStore))
 		tailSQL := fmt.Sprintf("select coalesce(max(chunk_id),-1) from `%s`.`%s` where index_id='cdc_tail' and tag=1", dbName, mutationStore)
 		var beforeTail int64
-		require.Eventually(t, func() bool { return tenant.QueryRow(tailSQL).Scan(&beforeTail) == nil && beforeTail >= 0 }, 30*time.Second, 250*time.Millisecond)
+		require.ErrorContains(t, tenant.QueryRow(tailSQL).Scan(&beforeTail), "do not have privilege to access the hidden internal table")
+		// Inspect durable index state only through a separate diagnostic pool.
+		// Foreground tenant operations retain their default hidden-table guard
+		// and local-file authorization; the debug setting grants no file access.
+		// The DSN initializes every diagnostic connection, without borrowing the
+		// foreground session's USE/SET state or returning debug access to it.
+		indexObserver, err := sql.Open("mysql", tenantDSN+dbName+"?allow_hidden_index_table_access=1")
+		require.NoError(t, err)
+		defer indexObserver.Close()
+		require.Eventually(t, func() bool {
+			return indexObserver.QueryRowContext(t.Context(), tailSQL).Scan(&beforeTail) == nil && beforeTail >= 0
+		}, 30*time.Second, 250*time.Millisecond)
 		mustExec(t, tenant, "update mutation_documents set fpath='stage://sql_file_access_stage/file-sample_100kB.docx' where id=4")
-		require.Eventually(t, func() bool { var now int64; return tenant.QueryRow(tailSQL).Scan(&now) == nil && now > beforeTail }, 30*time.Second, 250*time.Millisecond)
+		require.Eventually(t, func() bool {
+			var now int64
+			return indexObserver.QueryRowContext(t.Context(), tailSQL).Scan(&now) == nil && now > beforeTail
+		}, 30*time.Second, 250*time.Millisecond)
 		require.NoError(t, tenant.QueryRow("select id from mutation_documents where match(fpath) against('Nulla facilisi' in natural language mode)").Scan(&documentID))
 		require.Equal(t, int64(4), documentID)
 		require.ErrorIs(t, tenant.QueryRow("select id from mutation_documents where match(fpath) against('matrixone')").Scan(&documentID), sql.ErrNoRows)
@@ -499,7 +514,7 @@ func TestSQLFileAccessTenantStageCDC(t *testing.T) {
 		require.NoError(t, tenant.QueryRow("select index_table_name from mo_catalog.mo_indexes where name = 'build_ftidx' and algo_table_type = 'ftv2_meta' and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 'build_documents') limit 1").Scan(&meta))
 		require.Eventually(t, func() bool {
 			var n int
-			return tenant.QueryRow(fmt.Sprintf("select count(*) from `%s`.`%s` where index_id = 'cdc_tail' and tag = 1", dbName, store)).Scan(&n) == nil && n > 0
+			return indexObserver.QueryRowContext(t.Context(), fmt.Sprintf("select count(*) from `%s`.`%s` where index_id = 'cdc_tail' and tag = 1", dbName, store)).Scan(&n) == nil && n > 0
 		}, 30*time.Second, 250*time.Millisecond)
 		mustExec(t, tenant, fmt.Sprintf("select * from fulltext2_compact('%s', '%s', '%s', '1') as f", dbName, store, meta))
 		require.NoError(t, tenant.QueryRow("select id from build_documents where match(body) against('compaction')").Scan(&id))
@@ -515,13 +530,13 @@ func TestSQLFileAccessTenantStageCDC(t *testing.T) {
 		var hnswMeta string
 		require.NoError(t, tenant.QueryRow("select index_table_name from mo_catalog.mo_indexes where name = 'build_hidx' and algo = 'hnsw' and algo_table_type = 'hnsw_meta' and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 'build_vectors') limit 1").Scan(&hnswMeta))
 		var filesz int64
-		require.NoError(t, tenant.QueryRow(fmt.Sprintf("select filesize from `%s`.`%s` limit 1", dbName, hnswMeta)).Scan(&filesz))
+		require.NoError(t, indexObserver.QueryRowContext(t.Context(), fmt.Sprintf("select filesize from `%s`.`%s` limit 1", dbName, hnswMeta)).Scan(&filesz))
 		require.Greater(t, filesz, int64(0))
 
 		t.Run("HNSW loaded IDs remain data during persistence", func(t *testing.T) {
 			var hnswStore string
 			require.NoError(t, tenant.QueryRow("select index_table_name from mo_catalog.mo_indexes where name = 'build_hidx' and algo_table_type = 'hnsw_index' and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 'build_vectors') limit 1").Scan(&hnswStore))
-			conn, err := tenant.Conn(t.Context())
+			conn, err := indexObserver.Conn(t.Context())
 			require.NoError(t, err)
 			t.Cleanup(func() { _ = conn.Close() })
 			metaTable := sqlquote.QualifiedIdent(dbName, hnswMeta)
@@ -578,8 +593,8 @@ func TestSQLFileAccessTenantStageCDC(t *testing.T) {
 			t.Cleanup(func() { _, _ = tenant.Exec("drop view if exists authority_meta") })
 			counts := func() [2]int {
 				var n [2]int
-				require.NoError(t, tenant.QueryRow(fmt.Sprintf("select count(*) from `%s`.`%s`", dbName, store)).Scan(&n[0]))
-				require.NoError(t, tenant.QueryRow(fmt.Sprintf("select count(*) from `%s`.`%s`", dbName, meta)).Scan(&n[1]))
+				require.NoError(t, indexObserver.QueryRowContext(t.Context(), fmt.Sprintf("select count(*) from `%s`.`%s`", dbName, store)).Scan(&n[0]))
+				require.NoError(t, indexObserver.QueryRowContext(t.Context(), fmt.Sprintf("select count(*) from `%s`.`%s`", dbName, meta)).Scan(&n[1]))
 				return n
 			}
 			before := counts()
