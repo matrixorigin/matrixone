@@ -288,6 +288,9 @@ func buildInsertPlans(
 
 // buildUpdatePlans  build update plan.
 func buildUpdatePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindContext, updatePlanCtx *dmlPlanCtx, addAffectedRows bool) error {
+	if err := rejectLegacyCRC32GeneratedFallback(ctx.GetContext(), updatePlanCtx.tableDef); err != nil {
+		return err
+	}
 	var err error
 	// sink_scan -> project -> [agg] -> [filter] -> sink
 	lastNodeId := appendSinkScanNode(builder, bindCtx, updatePlanCtx.sourceStep)

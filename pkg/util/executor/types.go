@@ -119,6 +119,7 @@ type StatementOption struct {
 	disableLock               bool
 	allowMoColumnsUpdate      bool
 	optimizerHints            string
+	crc32CopyExpressions      *plan.TableDef
 	maxResultBytes            uint64
 	// trustedCheckConstraintNames lets an internal CREATE keep CHECK names it
 	// inherited from an owned source (ALTER ... COPY replica, partition backing

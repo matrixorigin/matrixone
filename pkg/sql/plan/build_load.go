@@ -577,6 +577,9 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 	if err != nil {
 		return nil, err
 	}
+	if err = rejectLegacyCRC32GeneratedFallback(ctx.GetContext(), tblInfo.tableDefs[0]); err != nil {
+		return nil, err
+	}
 
 	// Note on Hive partitioned external tables: LOAD DATA into any external
 	// table (hive or not) is rejected by checkTableType inside getDmlTableInfo

@@ -123,11 +123,19 @@ func (c *clientConn) migrateConnToContext(
 		return moerr.GetOkExpectedNotSafeToStartTransfer()
 	}
 	var requiredProtocol int64
+	certified := false
 	for _, prepared := range info.PrepareStmts {
 		if prepared == nil || prepared.RequiredProtocolVersion < 0 {
 			return moerr.NewInvalidInput(ctx, "invalid prepared statement migration contract")
 		}
 		requiredProtocol = max(requiredProtocol, prepared.RequiredProtocolVersion)
+		certified = certified || prepared.DirectTableSelect != nil
+	}
+	if certified && (!info.UserDefinedVarsExported || !info.SystemVariablesExported ||
+		info.UserDefinedVarsSnapshotTooLarge || info.SystemVariablesSnapshotTooLarge ||
+		len(info.TempTables) != 0 || len(info.UserLevelLocks) != 0 ||
+		requiredProtocol < defines.MORPCVersion136) {
+		return moerr.GetOkExpectedNotSafeToStartTransfer()
 	}
 	if typedMigration || info.FoundRows != 0 || info.LastInsertID != 0 ||
 		len(info.TempTables) > 0 || requiredProtocol != 0 {
@@ -227,20 +235,21 @@ func (c *clientConn) migrateConnToContext(
 	)
 	req := c.queryClient.NewRequest(query.CmdMethod_MigrateConnTo)
 	req.MigrateConnToRequest = &query.MigrateConnToRequest{
-		ConnID:                    c.connID,
-		DB:                        info.DB,
-		PrepareStmts:              info.PrepareStmts,
-		LastAffectedRows:          info.LastAffectedRows,
-		LastInsertID:              info.LastInsertID,
-		LastInsertIDExported:      info.LastInsertIDExported,
-		FoundRows:                 info.FoundRows,
-		UserDefinedVars:           nil,
-		UserDefinedVarsExported:   false,
-		SystemVariables:           nil,
-		SystemVariablesExported:   false,
-		UserDefinedVarsReplayable: info.UserDefinedVarsReplayable,
-		SystemVariablesReplayable: info.SystemVariablesReplayable,
-		TempTables:                info.TempTables,
+		CloseTargetOnReplayFailure: certified,
+		ConnID:                     c.connID,
+		DB:                         info.DB,
+		PrepareStmts:               info.PrepareStmts,
+		LastAffectedRows:           info.LastAffectedRows,
+		LastInsertID:               info.LastInsertID,
+		LastInsertIDExported:       info.LastInsertIDExported,
+		FoundRows:                  info.FoundRows,
+		UserDefinedVars:            nil,
+		UserDefinedVarsExported:    false,
+		SystemVariables:            nil,
+		SystemVariablesExported:    false,
+		UserDefinedVarsReplayable:  info.UserDefinedVarsReplayable,
+		SystemVariablesReplayable:  info.SystemVariablesReplayable,
+		TempTables:                 info.TempTables,
 	}
 	if typedMigrationSupported {
 		req.MigrateConnToRequest.UserDefinedVars = info.UserDefinedVars

@@ -36,6 +36,27 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// The TN read barrier is already applied, but a transaction snapshot can be
+// newer. In that case wait until that exact snapshot is applied before using it
+// as the synthetic conflict frontier. The waiter returns an exclusive timestamp.
+func appliedConflictFrontier(
+	ctx context.Context,
+	snapshot, frontier timestamp.Timestamp,
+	wait func(context.Context, timestamp.Timestamp) (timestamp.Timestamp, error),
+) (timestamp.Timestamp, error) {
+	if !frontier.Less(snapshot) {
+		return frontier, nil
+	}
+	appliedExclusive, err := wait(ctx, snapshot)
+	if err != nil {
+		return timestamp.Timestamp{}, err
+	}
+	if !snapshot.Less(appliedExclusive) {
+		return timestamp.Timestamp{}, fmt.Errorf("logtail waiter did not apply transaction snapshot")
+	}
+	return snapshot, nil
+}
+
 // A reconnect invalidates the subscription generation used by a PK check.
 // Exercise that error through the frontend after earlier DDL/DML, then retry
 // the entire transaction. The owned cluster isolates the reconnect callback
@@ -151,16 +172,20 @@ func TestPKCheckReconnectRollsBackAndFreshTxnSucceeds(t *testing.T) {
 	frontier, err = pushClient.AcquireLogtailReadBarrier(ctx)
 	require.NoError(t, err)
 	found := false
+	var snapshot timestamp.Timestamp
 	cn.GetTxnClient().IterTxns(func(tx client.TxnOverview) bool {
 		if bytes.Equal(tx.Meta.ID, owner) {
 			found = true
 			require.True(t, tx.Meta.IsRCIsolation())
-			require.True(t, tx.Meta.SnapshotTS.LessEq(frontier))
+			snapshot = tx.Meta.SnapshotTS
 			return false
 		}
 		return true
 	})
 	require.True(t, found, "the parked DELETE must belong to an active transaction")
+	frontier, err = appliedConflictFrontier(ctx, snapshot, frontier, cn.GetTxnClient().WaitLogTailAppliedAt)
+	require.NoError(t, err)
+	require.True(t, snapshot.LessEq(frontier))
 	require.NoError(t, pushClient.Disconnect())
 	select {
 	case <-reconnecting:

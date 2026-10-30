@@ -17,6 +17,7 @@ package issues
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"errors"
 	"fmt"
 	"strings"
@@ -27,6 +28,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
@@ -58,12 +61,17 @@ func TestIssue29148PreparedOwnerPolicyLifecycle(t *testing.T) {
 			t.Run(tc.name, func(t *testing.T) {
 				dbName := "issue29148_owner_" + tc.name
 				roleName, userName := dbName+"_role", dbName+"_user"
+				deniedRole, deniedUser := dbName+"_denied_role", dbName+"_denied_user"
 				adminDB, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/", sourceCN.GetServiceConfig().CN.Frontend.Port))
 				require.NoError(t, err)
 				t.Cleanup(func() { require.NoError(t, adminDB.Close()) })
 				t.Cleanup(func() {
 					cleanup, stop := context.WithTimeout(context.Background(), 30*time.Second)
 					defer stop()
+					if tc.migrate {
+						execSQLMaybe(t, cleanup, adminDB, "drop user if exists "+deniedUser)
+						execSQLMaybe(t, cleanup, adminDB, "drop role if exists "+deniedRole)
+					}
 					execSQLMaybe(t, cleanup, adminDB, "drop user if exists "+userName)
 					execSQLMaybe(t, cleanup, adminDB, "drop role if exists "+roleName)
 					execSQLMaybe(t, cleanup, adminDB, "drop database if exists "+dbName)
@@ -71,12 +79,28 @@ func TestIssue29148PreparedOwnerPolicyLifecycle(t *testing.T) {
 				execSQLRequire(t, ctx, adminDB, "create database "+dbName)
 				execSQLRequire(t, ctx, adminDB, "create table "+dbName+".t(id int, tenant int)")
 				execSQLRequire(t, ctx, adminDB, "insert into "+dbName+".t values (1,1),(2,2)")
+				if tc.migrate {
+					// Dedicated control state; do not alter the table or SELECT
+					// whose original owner-policy migration oracles follow.
+					execSQLRequire(t, ctx, adminDB, "create table "+dbName+".migration_seed(id bigint unsigned auto_increment primary key, marker int)")
+				}
 				execSQLRequire(t, ctx, adminDB, "create role "+roleName)
 				execSQLRequire(t, ctx, adminDB, "grant connect on account * to "+roleName)
 				execSQLRequire(t, ctx, adminDB, "grant select on table "+dbName+".t to "+roleName)
+				if tc.migrate {
+					execSQLRequire(t, ctx, adminDB, "grant insert on table "+dbName+".migration_seed to "+roleName)
+				}
 				// CALL currently uses the database CREATE VIEW privilege contract.
 				execSQLRequire(t, ctx, adminDB, "grant create view on database "+dbName+" to "+roleName)
 				execSQLRequire(t, ctx, adminDB, "create user "+userName+" identified by '123456' default role "+roleName)
+				if tc.migrate {
+					// Same account and database, but no SELECT on t. INSERT on the
+					// separate seed table permits USE without changing source grants.
+					execSQLRequire(t, ctx, adminDB, "create role "+deniedRole)
+					execSQLRequire(t, ctx, adminDB, "grant connect on account * to "+deniedRole)
+					execSQLRequire(t, ctx, adminDB, "grant insert on table "+dbName+".migration_seed to "+deniedRole)
+					execSQLRequire(t, ctx, adminDB, "create user "+deniedUser+" identified by '123456' default role "+deniedRole)
+				}
 
 				innerSQL := "select id from " + dbName + ".t order by id"
 				body := "prepare owner_handle from ''" + innerSQL + "'';"
@@ -87,19 +111,25 @@ func TestIssue29148PreparedOwnerPolicyLifecycle(t *testing.T) {
 					body = "prepare owner_handle from " + innerSQL + ";"
 				}
 				execSQLRequire(t, ctx, adminDB, "create procedure "+dbName+".make_handle() 'begin "+body+" end'")
-				openUser := func(cn embed.ServiceOperator) *sql.Conn {
+				openUser := func(cn embed.ServiceOperator, name string, disposable bool) *sql.Conn {
 					t.Helper()
-					db, err := sql.Open("mysql", fmt.Sprintf("%s:123456@tcp(127.0.0.1:%d)/%s", userName, cn.GetServiceConfig().CN.Frontend.Port, dbName))
+					db, err := sql.Open("mysql", fmt.Sprintf("%s:123456@tcp(127.0.0.1:%d)/%s", name, cn.GetServiceConfig().CN.Frontend.Port, dbName))
 					require.NoError(t, err)
 					t.Cleanup(func() { require.NoError(t, db.Close()) })
 					conn, err := db.Conn(ctx)
 					require.NoError(t, err)
-					t.Cleanup(func() { require.NoError(t, conn.Close()) })
+					t.Cleanup(func() {
+						err := conn.Close()
+						if disposable && errors.Is(err, sql.ErrConnDone) {
+							return // the asserted server disposal already invalidated it
+						}
+						require.NoError(t, err)
+					})
 					_, err = conn.ExecContext(ctx, "set enable_remap_hint = 0")
 					require.NoError(t, err)
 					return conn
 				}
-				conn := openUser(sourceCN)
+				conn := openUser(sourceCN, userName, false)
 				prepare := "call " + dbName + ".make_handle()"
 				if tc.name == "sql_migration" {
 					prepare = "prepare owner_handle from '" + innerSQL + "'"
@@ -124,8 +154,10 @@ func TestIssue29148PreparedOwnerPolicyLifecycle(t *testing.T) {
 				assertRows("execute owner_handle", []int{1, 2})
 
 				if tc.migrate {
-					target := openUser(targetCN)
-					migrateIssue29148PreparedConnection(t, ctx, sourceCN, targetCN, conn, target)
+					denied := openUser(targetCN, deniedUser, true)
+					target := migrateIssue29148PreparedConnection(t, ctx, sourceCN, targetCN, conn, denied, func() *sql.Conn {
+						return openUser(targetCN, userName, false)
+					})
 					conn = target
 					// No PREPARE on the target: this handle must have come from RPC replay.
 					assertRows("execute owner_handle", []int{1, 2})
@@ -158,11 +190,11 @@ func TestIssue29148PreparedOwnerPolicyLifecycle(t *testing.T) {
 	})
 }
 
-func migrateIssue29148PreparedConnection(t *testing.T, ctx context.Context, sourceCN, targetCN embed.ServiceOperator, source, target *sql.Conn) {
+func migrateIssue29148PreparedConnection(t *testing.T, ctx context.Context, sourceCN, targetCN embed.ServiceOperator, source, denied *sql.Conn, openTarget func() *sql.Conn) *sql.Conn {
 	t.Helper()
-	var sourceID, targetID uint32
+	var sourceID, deniedID uint32
 	require.NoError(t, source.QueryRowContext(ctx, "select connection_id()").Scan(&sourceID))
-	require.NoError(t, target.QueryRowContext(ctx, "select connection_id()").Scan(&targetID))
+	require.NoError(t, denied.QueryRowContext(ctx, "select connection_id()").Scan(&deniedID))
 	inventory, err := clusterservice.GetMOClusterWithContext(ctx, sourceCN.ServiceID())
 	require.NoError(t, err)
 	refresher, ok := inventory.(clusterservice.AuthoritativeRefresher)
@@ -186,9 +218,37 @@ func migrateIssue29148PreparedConnection(t *testing.T, ctx context.Context, sour
 	client, err := queryclient.NewQueryClient(sourceCN.ServiceID(), sourceCN.GetServiceConfig().CN.RPC)
 	require.NoError(t, err)
 	defer client.Close()
+	// An old control client cannot promise the required target floor. Export
+	// refusal must not consume or invalidate the source's prepared handle.
+	legacy := client.NewRequest(query.CmdMethod_MigrateConnFrom)
+	legacy.MigrateConnFromRequest = &query.MigrateConnFromRequest{
+		ConnID: sourceID, TempTableMigrationSupported: true, LastInsertIDMigrationSupported: true,
+	}
+	legacyResponse, legacyErr := client.SendMessage(ctx, sourceAddress, legacy)
+	if legacyResponse != nil {
+		client.Release(legacyResponse)
+	}
+	require.True(t, moerr.IsMoErrCode(legacyErr, moerr.OkExpectedNotSafeToStartTransfer))
+	assertSourceUsable := func() {
+		t.Helper()
+		rows, err := source.QueryContext(ctx, "execute owner_handle")
+		require.NoError(t, err)
+		defer rows.Close()
+		var sourceIDs []int
+		for rows.Next() {
+			var id int
+			require.NoError(t, rows.Scan(&id))
+			sourceIDs = append(sourceIDs, id)
+		}
+		require.NoError(t, rows.Err())
+		require.NoError(t, rows.Close())
+		require.Equal(t, []int{1, 2}, sourceIDs)
+	}
+	assertSourceUsable()
 	request := client.NewRequest(query.CmdMethod_MigrateConnFrom)
 	request.MigrateConnFromRequest = &query.MigrateConnFromRequest{
 		ConnID: sourceID, TempTableMigrationSupported: true, LastInsertIDMigrationSupported: true,
+		PreparedStatementProtocolSupported: true,
 	}
 	response, err := client.SendMessage(ctx, sourceAddress, request)
 	require.NoError(t, err, "export must accept a procedure-created empty-policy handle")
@@ -199,22 +259,115 @@ func migrateIssue29148PreparedConnection(t *testing.T, ctx context.Context, sour
 	require.Equal(t, "owner_handle", snapshot.PrepareStmts[0].Name)
 	require.True(t, snapshot.PreparedStmtLongDataChecked)
 	require.True(t, snapshot.PreparedStmtCursorsChecked)
-	request = client.NewRequest(query.CmdMethod_MigrateConnTo)
-	request.MigrateConnToRequest = &query.MigrateConnToRequest{
-		ConnID: targetID, DB: snapshot.DB, PrepareStmts: snapshot.PrepareStmts,
-		LastAffectedRows: snapshot.LastAffectedRows, LastInsertID: snapshot.LastInsertID,
-		LastInsertIDExported: snapshot.LastInsertIDExported, FoundRows: snapshot.FoundRows,
-		UserDefinedVars: snapshot.UserDefinedVars, UserDefinedVarsExported: snapshot.UserDefinedVarsExported,
-		UserDefinedVarsReplayable: snapshot.UserDefinedVarsReplayable,
-		SystemVariables:           snapshot.SystemVariables, SystemVariablesExported: snapshot.SystemVariablesExported,
-		SystemVariablesReplayable: snapshot.SystemVariablesReplayable, TempTables: snapshot.TempTables,
+	require.True(t, snapshot.UserDefinedVarsExported)
+	require.True(t, snapshot.SystemVariablesExported)
+	require.False(t, snapshot.UserDefinedVarsSnapshotTooLarge)
+	require.False(t, snapshot.SystemVariablesSnapshotTooLarge)
+	proof := snapshot.PrepareStmts[0].DirectTableSelect
+	require.NotNil(t, proof)
+	require.Equal(t, uint32(1), proof.Version)
+	require.NotZero(t, proof.DatabaseID)
+	require.NotZero(t, proof.TableID)
+	require.Equal(t, snapshot.DB, proof.DatabaseName)
+	require.Equal(t, "t", proof.TableName)
+	require.Len(t, proof.Columns, 2)
+	for _, c := range proof.Columns {
+		require.Equal(t, int32(22), c.TypeID)
 	}
+	require.GreaterOrEqual(t, snapshot.PrepareStmts[0].RequiredProtocolVersion, defines.MORPCVersion124)
+	type runtimeState struct {
+		value   any
+		present bool
+	}
+	globals := map[string]runtimeState{}
+	for _, name := range []string{"optimizer_hints", "runtime_filter_limit_in", "runtime_filter_limit_bloom_filter"} {
+		v, present := moruntime.ServiceRuntime(targetCN.ServiceID()).GetGlobalVariables(name)
+		globals[name] = runtimeState{v, present}
+	}
+	assertGlobalsUnchanged := func() {
+		t.Helper()
+		for name, want := range globals {
+			v, present := moruntime.ServiceRuntime(targetCN.ServiceID()).GetGlobalVariables(name)
+			require.Equal(t, want, runtimeState{v, present}, name)
+		}
+	}
+	newTargetRequest := func(id uint32, disposable bool) *query.Request {
+		req := client.NewRequest(query.CmdMethod_MigrateConnTo)
+		req.MigrateConnToRequest = &query.MigrateConnToRequest{
+			CloseTargetOnReplayFailure: disposable,
+			ConnID:                     id, DB: snapshot.DB, PrepareStmts: snapshot.PrepareStmts,
+			LastAffectedRows: snapshot.LastAffectedRows, LastInsertID: snapshot.LastInsertID,
+			LastInsertIDExported: snapshot.LastInsertIDExported, FoundRows: snapshot.FoundRows,
+			UserDefinedVars: snapshot.UserDefinedVars, UserDefinedVarsExported: snapshot.UserDefinedVarsExported,
+			UserDefinedVarsReplayable: snapshot.UserDefinedVarsReplayable,
+			SystemVariables:           snapshot.SystemVariables, SystemVariablesExported: snapshot.SystemVariablesExported,
+			SystemVariablesReplayable: snapshot.SystemVariablesReplayable, TempTables: snapshot.TempTables,
+		}
+		return req
+	}
+	// Catalog/type/account preflight is independent of this target's SELECT
+	// privilege. This exact authorization error is emitted by actual replay,
+	// not the conservative preflight refusal. No fake error or phase timer.
+	failed, authErr := client.SendMessage(ctx, targetAddress, newTargetRequest(deniedID, true))
+	if failed != nil {
+		client.Release(failed)
+	}
+	require.True(t, moerr.IsMoErrCode(authErr, moerr.ErrInternal), "replay authorization must be reached: %v", authErr)
+	require.ErrorContains(t, authErr, "do not have privilege to execute the statement")
+	assertGlobalsUnchanged()
+	// The pinned sql.Conn cannot reconnect through its sql.DB. Server disposal
+	// must make a round trip fail; another query must not execute the handle.
+	require.Error(t, denied.PingContext(ctx))
+	_, err = denied.ExecContext(ctx, "execute owner_handle")
+	require.True(t, errors.Is(err, sql.ErrConnDone) || errors.Is(err, driver.ErrBadConn),
+		"disposed pinned target must return a connection-terminal error: %v", err)
+	assertSourceUsable()
+	assertGlobalsUnchanged()
+	t.Log("authenticated replay authorization failure disposed target; source rows [1,2] and CN globals retained")
+	// Correct the privilege cause using a NEW authenticated target, not a
+	// same-ConnID retry after partially replayed state.
+	target := openTarget()
+	var targetID uint32
+	require.NoError(t, target.QueryRowContext(ctx, "select connection_id()").Scan(&targetID))
+	require.NotEqual(t, deniedID, targetID)
+	request = newTargetRequest(targetID, false)
+	// Missing disposal consent refuses before state replay and does not consume
+	// migrateOnce: correcting just that cause can reuse this untouched target.
+	_, err = target.ExecContext(ctx, "set @migration_keep = 71")
+	require.NoError(t, err)
+	var lastID uint64
+	// Only the zero-argument reader is supported. Seed a nonzero real session
+	// value through INSERT, as the existing embed migration fixture does.
+	_, err = target.ExecContext(ctx, "insert into "+snapshot.DB+".migration_seed(marker) values(1)")
+	require.NoError(t, err)
+	require.NoError(t, target.QueryRowContext(ctx, "select last_insert_id()").Scan(&lastID))
+	require.NotZero(t, lastID)
+	require.NotEqual(t, snapshot.LastInsertID, lastID)
+	rejected, rejectedErr := client.SendMessage(ctx, targetAddress, request)
+	if rejected != nil {
+		client.Release(rejected)
+	}
+	require.True(t, moerr.IsMoErrCode(rejectedErr, moerr.OkExpectedNotSafeToStartTransfer))
+	var keep int
+	var stillID uint64
+	var stillDB string
+	require.NoError(t, target.QueryRowContext(ctx, "select @migration_keep, last_insert_id(), database()").Scan(&keep, &stillID, &stillDB))
+	require.Equal(t, 71, keep)
+	require.Equal(t, lastID, stillID)
+	require.Equal(t, snapshot.DB, stillDB)
+	assertGlobalsUnchanged()
+	// Requests are released by SendMessage; allocate a fresh envelope for retry.
+	request = newTargetRequest(targetID, true)
 	response, err = client.SendMessage(ctx, targetAddress, request)
+	// An unconfirmed replay is fatal here: require invokes this subtest's
+	// existing dedicated target cleanup immediately, with no same-ConnID retry.
 	require.NoError(t, err)
 	defer client.Release(response)
 	require.NotNil(t, response.MigrateConnToResponse)
 	require.True(t, response.MigrateConnToResponse.Success)
+	assertGlobalsUnchanged()
 	t.Logf("prepared handle migrated from CN %s connection %d to CN %s connection %d", sourceCN.ServiceID(), sourceID, targetCN.ServiceID(), targetID)
+	return target
 }
 
 func TestIssue29148PreparedRowRuleProtocolLifecycle(t *testing.T) {
