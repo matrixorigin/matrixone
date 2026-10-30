@@ -212,6 +212,9 @@ func (exec *sumDecimal64FastExec) BatchFill(offset int, groups []uint64, vectors
 	if exec.IsDistinct() {
 		return exec.batchFillArgs(offset, groups, vectors, true)
 	}
+	if vectors[0].IsConst() && vectors[0].IsConstNull() {
+		return nil
+	}
 	// Keep the original general-path frame unchanged. Small admitted states
 	// can use their dense group IDs as direct local accumulator indices.
 	if len(exec.state) == 1 && exec.state[0].length > 0 && exec.state[0].length <= 256 {
@@ -222,9 +225,6 @@ func (exec *sumDecimal64FastExec) BatchFill(offset int, groups []uint64, vectors
 
 func (exec *sumDecimal64FastExec) batchFill(offset int, groups []uint64, vectors []*vector.Vector) error {
 	vec := vectors[0]
-	if vec.IsConstNull() {
-		return nil
-	}
 	vals := vector.MustFixedColNoTypeCheck[types.Decimal64](vec)
 	constMask := -min(1, len(vals)-1)
 	hasNull := vec.HasNull()
@@ -311,9 +311,6 @@ func (exec *sumDecimal64FastExec) batchFill(offset int, groups []uint64, vectors
 
 func (exec *sumDecimal64FastExec) batchFillDenseGroups(offset int, groups []uint64, vectors []*vector.Vector) error {
 	vec := vectors[0]
-	if vec.IsConstNull() {
-		return nil
-	}
 	vals := vector.MustFixedColNoTypeCheck[types.Decimal64](vec)
 	constMask := -min(1, len(vals)-1)
 	var np *bitmap.Bitmap

@@ -181,6 +181,78 @@ func TestDecimal64DenseBatchMatchesRowFill(t *testing.T) {
 	}
 }
 
+func TestDecimal64BatchConstNullPreservesState(t *testing.T) {
+	for _, groups := range []int{1, 255, 256, 257, AggBatchSize + 1} {
+		for _, sum := range []bool{true, false} {
+			for _, distinct := range []bool{true, false} {
+				t.Run(fmt.Sprintf("groups%d/sum%v/distinct%v", groups, sum, distinct), func(t *testing.T) {
+					mp := mpool.MustNewZero()
+					t.Cleanup(func() { defer mpool.DeleteMPool(mp); require.Zero(t, mp.CurrNB()) })
+					typ := types.New(types.T_decimal64, 18, 2)
+					input := vector.NewVec(typ)
+					defer input.Free(mp)
+					for _, value := range []int64{7, 11, 13, 17} {
+						require.NoError(t, vector.AppendFixed(input, types.Decimal64(value), false, mp))
+					}
+					nullInput := vector.NewConstNull(typ, 4, mp)
+					defer nullInput.Free(mp)
+					id := AggIdOfSum
+					if !sum {
+						id = AggIdOfAvg
+					}
+					actual := newSumDecimal64FastExec(mp, sum, id, distinct, typ).(*sumDecimal64FastExec)
+					defer actual.Free()
+					expected := newSumDecimal64FastExec(mp, sum, id, distinct, typ).(*sumDecimal64FastExec)
+					defer expected.Free()
+					require.NoError(t, actual.GroupGrow(groups))
+					require.NoError(t, expected.GroupGrow(groups))
+					ids := []uint64{1, GroupNotMatched, uint64(groups)}
+					for _, vec := range []*vector.Vector{input, nullInput, input} {
+						require.NoError(t, actual.BatchFill(1, ids, []*vector.Vector{vec}))
+						for i, group := range ids {
+							require.NoError(t, expected.Fill(int(group)-1, i+1, []*vector.Vector{vec}))
+						}
+						assertDecimal64StateEqual(t, actual, expected)
+					}
+					actualResults, actualErr := actual.Flush()
+					defer func() {
+						for _, result := range actualResults {
+							result.Free(mp)
+						}
+					}()
+					expectedResults, expectedErr := expected.Flush()
+					defer func() {
+						for _, result := range expectedResults {
+							result.Free(mp)
+						}
+					}()
+					require.NoError(t, actualErr)
+					require.NoError(t, expectedErr)
+					require.Len(t, actualResults, len(expectedResults))
+					for i, result := range actualResults {
+						reference := expectedResults[i]
+						require.Equal(t, reference.GetType(), result.GetType())
+						require.Equal(t, reference.Length(), result.Length())
+						for row := 0; row < result.Length(); row++ {
+							require.Equal(t, reference.IsNull(uint64(row)), result.IsNull(uint64(row)))
+						}
+						switch result.GetType().Oid {
+						case types.T_decimal128:
+							require.Equal(t, vector.MustFixedColNoTypeCheck[types.Decimal128](reference), vector.MustFixedColNoTypeCheck[types.Decimal128](result))
+						case types.T_float64:
+							require.Equal(t, vector.MustFixedColNoTypeCheck[float64](reference), vector.MustFixedColNoTypeCheck[float64](result))
+						default:
+							t.Fatalf("unexpected result type %s", result.GetType())
+						}
+					}
+					require.Equal(t, []types.Decimal64{7, 11, 13, 17}, vector.MustFixedColNoTypeCheck[types.Decimal64](input))
+					require.True(t, nullInput.IsConstNull())
+				})
+			}
+		}
+	}
+}
+
 func TestDecimal64DenseBatchGrowthBoundary(t *testing.T) {
 	mp := mpool.MustNewZero()
 	t.Cleanup(func() { defer mpool.DeleteMPool(mp); require.Zero(t, mp.CurrNB()) })
