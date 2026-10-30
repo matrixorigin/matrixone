@@ -1202,3 +1202,69 @@ func TestPipelineSpoolAbortReleasesBorrowedSnapshot(t *testing.T) {
 	require.Nil(t, got)
 	require.Same(t, ErrPipelineSpoolAborted, cause)
 }
+
+func TestPipelineSpoolCanceledSendReleasesBorrowedSnapshots(t *testing.T) {
+	for _, deadline := range []bool{false, true} {
+		name := "cancel"
+		if deadline {
+			name = "deadline"
+		}
+		t.Run(name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			releases := 0
+			t.Cleanup(func() { require.Equal(t, 1, releases); require.Zero(t, mp.CurrNB()); mpool.DeleteMPool(mp) })
+			data := types.EncodeSlice([]int64{11, 22, 33})
+			lease, err := vector.NewRefCountedBufferLease(data, int64(cap(data)), func() { releases++ })
+			require.NoError(t, err)
+			vec, err := vector.NewBorrowedFixedVector(types.T_int64.ToType(), 3, data, lease)
+			require.NoError(t, err)
+			lease.Release()
+			source := batch.NewOffHeap([]string{"v"})
+			source.Vecs[0] = vec
+			source.SetRowCount(3)
+			t.Cleanup(func() { source.Clean(mp) })
+			sp := InitMyPipelineSpool(mp, 1)
+			t.Cleanup(func() { sp.Abort(nil) })
+			for range cap(sp.freeShardPool) {
+				done, err := sp.SendBatch(context.Background(), 0, source, nil)
+				require.NoError(t, err)
+				require.False(t, done)
+			}
+			source.Clean(mp)
+			ctx := context.Background()
+			if deadline {
+				var cancel context.CancelFunc
+				ctx, cancel = context.WithDeadline(ctx, time.Now().Add(-time.Second))
+				t.Cleanup(cancel)
+			} else {
+				var cancel context.CancelFunc
+				ctx, cancel = context.WithCancel(ctx)
+				cancel()
+			}
+			done, err := sp.SendBatch(ctx, 0, nil, nil)
+			require.True(t, done)
+			require.NoError(t, err) // SendBatch reports cancellation through done.
+			require.Zero(t, releases)
+			sp.Abort(ctx.Err())
+			require.Equal(t, 1, releases)
+			got, cause := sp.ReceiveBatch(0)
+			require.Nil(t, got)
+			require.ErrorIs(t, cause, ctx.Err())
+			require.Zero(t, mp.CurrNB())
+			next := InitMyPipelineSpool(mp, 1)
+			t.Cleanup(func() { next.Abort(nil) })
+			fresh := newSpoolTestBatch(t, mp, 2)
+			t.Cleanup(func() { fresh.Clean(mp) })
+			done, err = next.SendBatch(context.Background(), 0, fresh, nil)
+			require.NoError(t, err)
+			require.False(t, done)
+			got, cause = next.ReceiveBatch(0)
+			require.NoError(t, cause)
+			require.Equal(t, []int64{1, 2}, vector.MustFixedColNoTypeCheck[int64](got.Vecs[0]))
+			next.ReleaseCurrent(0)
+			next.Abort(nil)
+			fresh.Clean(mp)
+			require.Zero(t, mp.CurrNB())
+		})
+	}
+}
