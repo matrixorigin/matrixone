@@ -5992,6 +5992,37 @@ func CreateIndexDef(ctx planplugin.CompilerContext, indexInfo *tree.Index,
 	return indexDef, nil
 }
 
+// referencingFkNames resolves a bounded, deterministic (constraint, child
+// table) pair for the dedicated user errors on an FK-referenced parent: the
+// first non-self child in TableDef.RefChildTbls, resolved by id, and the first
+// foreign key on it whose ForeignTbl matches the parent id. It reads the same
+// metadata the rejection gates rely on (HasFkSelfReferOnly guarantees a
+// non-self child exists whenever this is called), so the lookup is bounded to
+// one resolve that the gate already depended on. A resolve error is propagated
+// and never swallowed; an unresolved child or metadata without a matching FK
+// yields empty names — the caller still fails closed with the typed error.
+func referencingFkNames(ctx CompilerContext, parentTableDef *TableDef) (constraint string, childTable string, err error) {
+	for _, childID := range parentTableDef.RefChildTbls {
+		if childID == 0 || childID == parentTableDef.TblId {
+			continue
+		}
+		_, childDef, resolveErr := ctx.ResolveById(childID, nil)
+		if resolveErr != nil {
+			return "", "", resolveErr
+		}
+		if childDef == nil {
+			return "", "", nil
+		}
+		for _, fk := range childDef.Fkeys {
+			if fk.ForeignTbl == parentTableDef.TblId {
+				return fk.Name, childDef.Name, nil
+			}
+		}
+		return "", "", nil
+	}
+	return "", "", nil
+}
+
 func buildTruncateTable(stmt *tree.TruncateTable, ctx CompilerContext) (*Plan, error) {
 	truncateTable := &plan.TruncateTable{}
 
@@ -6042,7 +6073,11 @@ func buildTruncateTable(stmt *tree.TruncateTable, ctx CompilerContext) (*Plan, e
 		if len(tableDef.RefChildTbls) > 0 {
 			// if all children tables are self reference, we can drop the table
 			if !HasFkSelfReferOnly(tableDef) {
-				return nil, moerr.NewInternalErrorf(ctx.GetContext(), "can not truncate table '%v' referenced by some foreign key constraint", truncateTable.Table)
+				constraint, _, err := referencingFkNames(ctx, tableDef)
+				if err != nil {
+					return nil, err
+				}
+				return nil, moerr.NewTruncateIllegalFk(ctx.GetContext(), constraint)
 			}
 		}
 
@@ -6210,7 +6245,11 @@ func buildDropTableSingle(ifExists bool, temporary bool, name *tree.TableName, c
 	if enabled && len(tableDef.RefChildTbls) > 0 {
 		// if all children tables are self reference, we can drop the table
 		if !HasFkSelfReferOnly(tableDef) {
-			return nil, moerr.NewInternalErrorf(ctx.GetContext(), "can not drop table '%v' referenced by some foreign key constraint", dropTable.Table)
+			constraint, childTable, err := referencingFkNames(ctx, tableDef)
+			if err != nil {
+				return nil, err
+			}
+			return nil, moerr.NewFkCannotDropParent(ctx.GetContext(), dropTable.Table, constraint, childTable)
 		}
 	}
 

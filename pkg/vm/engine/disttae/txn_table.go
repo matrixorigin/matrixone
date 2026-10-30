@@ -2937,6 +2937,21 @@ func (tbl *txnTable) PKPersistedBetween(
 	keys *vector.Vector,
 	checkTombstone bool,
 ) (changed bool, err error) {
+	// A generated component of a composite primary key is not the stored
+	// primary-key vector. Keep the existing conservative policy until that
+	// caller can identify the component across the sharding boundary.
+	if !checkTombstone {
+		def := tbl.GetTableDef(ctx)
+		if def != nil && def.Pkey != nil &&
+			def.Pkey.PkeyColName != catalog.CPrimaryKeyColName &&
+			def.Pkey.PkeyColName != catalog.FakePrimaryKeyColName &&
+			tbl.primaryIdx >= 0 && tbl.primaryIdx < len(def.Cols) &&
+			def.Cols[tbl.primaryIdx] != nil &&
+			types.T(def.Cols[tbl.primaryIdx].Typ.Id).IsInteger() &&
+			types.T(def.Cols[tbl.primaryIdx].Typ.Id) == keys.GetType().Oid {
+			return tbl.pkUpsertPersistedBetween(ctx, p, from, to, keys)
+		}
+	}
 
 	start := time.Now()
 	reason := ""

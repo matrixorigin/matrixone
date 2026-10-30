@@ -66,26 +66,6 @@ type dmlTableInfo struct {
 	alias          map[string]int         // Mapping of table aliases to tableDefs array index,If there is no alias, replace it with the original name of the table
 }
 
-func getAliasToName(ctx CompilerContext, expr tree.TableExpr, alias string, aliasMap map[string][2]string) {
-	switch t := expr.(type) {
-	case *tree.TableName:
-		dbName := string(t.SchemaName)
-		if dbName == "" {
-			dbName = ctx.DefaultDatabase()
-		}
-		tblName := string(t.ObjectName)
-		if alias != "" {
-			aliasMap[alias] = [2]string{dbName, tblName}
-		}
-	case *tree.AliasedTableExpr:
-		alias := string(t.As.Alias)
-		getAliasToName(ctx, t.Expr, alias, aliasMap)
-	case *tree.JoinTableExpr:
-		getAliasToName(ctx, t.Left, alias, aliasMap)
-		getAliasToName(ctx, t.Right, alias, aliasMap)
-	}
-}
-
 func appendCheckConstraintPlan(
 	builder *QueryBuilder,
 	bindCtx *BindContext,
@@ -550,11 +530,7 @@ func setTableExprToDmlTableInfo(ctx CompilerContext, tbl tree.TableExpr, tblInfo
 		return nil
 	}
 
-	if aliasNames, exist := aliasMap[tblName]; exist {
-		alias = tblName // work in delete statement
-		dbName = aliasNames[0]
-		tblName = aliasNames[1]
-	}
+	dbName, tblName, alias = ResolveDMLTargetName(dbName, tblName, alias, aliasMap)
 
 	if tblName == "" {
 		return nil

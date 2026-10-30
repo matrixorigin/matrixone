@@ -33,7 +33,7 @@ create table truncate_parent (id int primary key);
 create table truncate_child (
     id int primary key,
     parent_id int,
-    foreign key(parent_id) references truncate_parent(id)
+    constraint fk_trunc_child foreign key(parent_id) references truncate_parent(id)
 );
 insert into truncate_parent values (1);
 insert into truncate_child values (1, 1);
