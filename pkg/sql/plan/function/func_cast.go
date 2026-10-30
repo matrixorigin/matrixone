@@ -869,6 +869,7 @@ var supportedTypeCast = map[types.T][]types.T{
 
 	types.T_enum: {
 		types.T_enum,
+		types.T_bool,
 		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_uint16, types.T_uint8, types.T_uint32, types.T_uint64, types.T_uint128,
 		types.T_float32, types.T_float64,
@@ -1361,7 +1362,18 @@ func newCastWithoutMediumIntBounds(parameters []*vector.Vector, result vector.Fu
 			strictStringWidth, allowTrailingSpaceTrim, mode.isAssignment(), mode == castModeExplicit, reportDataTooLong)
 	case types.T_enum:
 		s := vector.GenerateFunctionFixedTypeParameter[types.Enum](from)
-		err = enumToOthers(execProc.Ctx, s, *toType, result, length, selectList, strictStringWidth, reportDataTooLong)
+		if toType.Oid == types.T_bool && !MySQLConditionalBooleanContractsFromProcess(proc) {
+			// D11 execution boundary: base had no ENUM -> BOOL cast at all, so
+			// a native-mode session can never legitimately resolve this pair
+			// (the bind gate rejects it). Fail closed with the typed error if a
+			// cross-mode persisted expression reaches execution anyway, instead
+			// of applying the MySQL storage-truth ordinal kernel on a
+			// native-mode statement.
+			err = moerr.NewNotSupported(execProc.Ctx,
+				"cast ENUM to BOOL requires the MySQL conditional boolean contracts session mode")
+		} else {
+			err = enumToOthers(execProc.Ctx, s, *toType, result, length, selectList, strictStringWidth, reportDataTooLong)
+		}
 	default:
 		// XXX we set the function here to adapt to the BVT cases.
 		err = formatCastError(proc.Ctx, from, *toType, "")
@@ -3605,6 +3617,61 @@ func jsonDecimalToBool(text []byte) (value bool, valid bool) {
 	return false, true
 }
 
+// jsonScalarConditionalTruthy evaluates a JSON scalar the way MySQL's
+// conditional contexts (IF and searched CASE WHEN) coerce it: a string
+// converts through its leading numeric prefix, so "2tail" is true like 2 while
+// "abc" and the string "true" are false like 0; numbers compare against zero;
+// true/false keep their literal values; JSON null reports NULL exactly like a
+// SQL NULL condition. Composite values coerce to zero (false) instead of the
+// strict CAST's error. Explicit CAST ... AS BOOL keeps the strict ParseBool
+// kernel above; only conditional admission evaluates through this one.
+func jsonScalarConditionalTruthy(bj bytejson.ByteJson) (value bool, isNull bool, err error) {
+	switch bj.Type {
+	case bytejson.TpCodeLiteral:
+		if len(bj.Data) == 0 {
+			return false, false, nil
+		}
+		switch bj.Data[0] {
+		case bytejson.LiteralTrue:
+			return true, false, nil
+		case bytejson.LiteralNull:
+			return false, true, nil
+		case bytejson.LiteralFalse:
+			return false, false, nil
+		default:
+			return false, false, nil
+		}
+	case bytejson.TpCodeInt64:
+		return bj.GetInt64() != 0, false, nil
+	case bytejson.TpCodeUint64:
+		return bj.GetUint64() != 0, false, nil
+	case bytejson.TpCodeFloat64:
+		return bj.GetFloat64() != 0, false, nil
+	case bytejson.TpCodeDecimal:
+		// A decimal scalar compares its exact stored value against zero; the
+		// textual decimal compare never rounds through a float.
+		value, valid := jsonDecimalToBool(bj.GetString())
+		if !valid {
+			return false, false, nil
+		}
+		return value, false, nil
+	case bytejson.TpCodeString:
+		prefix, negative, ok := scanDecimalFloatPrefix(string(bj.GetString()))
+		if !ok {
+			return false, false, nil
+		}
+		value, valid := parseSaturatedDecimalFloatPrefix(prefix, negative, 64)
+		if !valid {
+			return false, false, nil
+		}
+		return value != 0, false, nil
+	default:
+		// Objects and arrays coerce to zero in a numeric context the same way
+		// their text has no numeric prefix.
+		return false, false, nil
+	}
+}
+
 func jsonAppendNull(result vector.FunctionResultWrapper, toType types.Type) error {
 	switch toType.Oid {
 	case types.T_int8:
@@ -3673,6 +3740,11 @@ func enumToOthers(ctx context.Context,
 	source vector.FunctionParameterWrapper[types.Enum],
 	toType types.Type, result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList, strictStringWidth ...bool) error {
 	switch toType.Oid {
+	case types.T_bool:
+		// A boolean context (WHERE, AND/OR/NOT, CASE WHEN, IS TRUE/FALSE)
+		// evaluates the stored ordinal numerically; MySQL keeps NULL as NULL.
+		rs := vector.MustFunctionResult[bool](result)
+		return numericToBool(source, rs, length, selectList)
 	case types.T_int8:
 		return numericToNumeric(ctx, source, vector.MustFunctionResult[int8](result), length, selectList)
 	case types.T_int16:
@@ -7774,24 +7846,38 @@ func parseStringToFloatWithBitSize(s string, bitSize int, mode SQLCompatibilityM
 	if !ok {
 		return 0, nil
 	}
+	value, valid := parseSaturatedDecimalFloatPrefix(prefix, negative, bitSize)
+	if !valid {
+		return 0, moerr.NewInvalidInputNoCtxf("%q is invalid numeric string", s)
+	}
+	return value, nil
+}
 
+// parseSaturatedDecimalFloatPrefix converts the decimal-float prefix that
+// scanDecimalFloatPrefix scanned, with the below-extension-dispatch semantics
+// both callers need: an overflow saturates to the nearest finite bound
+// (+-MaxFloat64/MaxFloat32) instead of erroring, and an exact zero parses as
+// 0. The conditional JSON boolean kernel shares THIS conversion only; it
+// never takes the hex/binary/octal or NaN/Inf extension dispatch, so extension
+// text such as '0x10' flattens to its plain leading digits (0) rather than 16.
+func parseSaturatedDecimalFloatPrefix(prefix string, negative bool, bitSize int) (float64, bool) {
 	value, err := strconv.ParseFloat(prefix, bitSize)
 	if err == nil {
-		return value, nil
+		return value, true
 	}
 	if !errors.Is(err, strconv.ErrRange) {
-		return 0, moerr.NewInvalidInputNoCtxf("%q is invalid numeric string", s)
+		return 0, false
 	}
 	if math.IsInf(value, 0) {
 		if bitSize == 32 {
-			return math.Copysign(float64(math.MaxFloat32), value), nil
+			return math.Copysign(float64(math.MaxFloat32), value), true
 		}
-		return math.Copysign(math.MaxFloat64, value), nil
+		return math.Copysign(math.MaxFloat64, value), true
 	}
 	if negative {
-		return math.Copysign(0, -1), nil
+		return math.Copysign(0, -1), true
 	}
-	return 0, nil
+	return 0, true
 }
 
 func parseBytesToFloat(value []byte, isBinary bool, bitSize int, mode SQLCompatibilityMode) (float64, error) {
