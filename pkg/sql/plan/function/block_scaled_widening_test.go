@@ -73,6 +73,39 @@ func TestBlockScaledVectorParity(t *testing.T) {
 // TestControlFlowKeepsNarrowTypes checks that IF/IFF/CASE/COALESCE over one
 // bf16/float16/float8/float4/vecf8/vecf4 type return that type, so a DML projection
 // built from them writes cells of the column's width.
+// TestConditionalsMixLowPrecisionAsFloat32 checks that IF/IFF/CASE/COALESCE mixing a
+// bf16/float16/float8/float4 value with another type return what they return for float32.
+func TestConditionalsMixLowPrecisionAsFloat32(t *testing.T) {
+	ctx := context.Background()
+	cond := types.T_bool.ToType()
+	f32 := types.T_float32.ToType()
+	for _, other := range []types.Type{
+		types.T_int64.ToType(), types.T_uint64.ToType(), types.New(types.T_decimal128, 38, 2),
+		types.T_float64.ToType(), types.T_varchar.ToType(),
+	} {
+		for _, c := range []struct {
+			name string
+			args func(x types.Type) []types.Type
+		}{
+			{"coalesce", func(x types.Type) []types.Type { return []types.Type{x, other} }},
+			{"coalesce", func(x types.Type) []types.Type { return []types.Type{other, x} }},
+			{"case", func(x types.Type) []types.Type { return []types.Type{cond, x, other} }},
+			{"case", func(x types.Type) []types.Type { return []types.Type{cond, x, cond, other, x} }},
+			{"iff", func(x types.Type) []types.Type { return []types.Type{cond, x, other} }},
+			{"if", func(x types.Type) []types.Type { return []types.Type{cond, other, x} }},
+		} {
+			want, err := GetFunctionByName(ctx, c.name, c.args(f32))
+			require.NoError(t, err, "%s%v", c.name, c.args(f32))
+			for _, oid := range []types.T{types.T_bf16, types.T_float16, types.T_float8, types.T_float4} {
+				args := c.args(oid.ToType())
+				fn, err := GetFunctionByName(ctx, c.name, args)
+				require.NoError(t, err, "%s%v", c.name, args)
+				require.Equal(t, want.GetReturnType(), fn.GetReturnType(), "%s%v", c.name, args)
+			}
+		}
+	}
+}
+
 func TestControlFlowKeepsNarrowTypes(t *testing.T) {
 	ctx := context.Background()
 	cond := types.T_bool.ToType()

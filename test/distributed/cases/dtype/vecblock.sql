@@ -89,6 +89,7 @@ deallocate prepare s2;
 
 -- NULL handling, conditionals, element math and JSON dequantize to vecf32
 select id, summation(a), l1_norm(b), l2_norm(a) from t where id in (1, 2) order by id;
+select id, subvector(a, 2), subvector(b, 2, 2), subvector(a, '-1') from t where id = 1;
 select id, abs(a), sqrt(abs(b)) from t where id = 1;
 select id, coalesce(a, '[0,0,0,0]'), greatest(a, b), case when id = 1 then a else b end from t where id in (1, 3) order by id;
 select json_object('a', a), json_array(b) from t where id = 1;
@@ -260,6 +261,10 @@ create table expt_jsonl like expt;
 load data infile {'filepath'='$resources/into_outfile/vecblock.jsonl', 'format'='jsonline', 'jsondata'='object'} into table expt_jsonl;
 select x.id, vecblock_json(x.v) <=> vecblock_json(c.v), vecblock_json(x.e) = vecblock_json(c.e), vecblock_json(x.v) <=> vecblock_json(j.v), vecblock_json(x.e) = vecblock_json(j.e) from expt x join expt_csv c on x.id = c.id join expt_jsonl j on x.id = j.id order by x.id;
 select id, v, e from expt_jsonl order by id;
+select * from expt order by id into outfile '$resources/into_outfile/vecblock.parquet' format 'parquet';
+create table expt_pq like expt;
+load data infile {'filepath'='$resources/into_outfile/vecblock.parquet', 'format'='parquet'} into table expt_pq;
+select x.id, vecblock_json(x.v) <=> vecblock_json(p.v), vecblock_json(x.e) = vecblock_json(p.e) from expt x join expt_pq p on x.id = p.id order by x.id;
 -- a negative-zero element keeps its code through export and reload
 select * from nz into outfile '$resources/into_outfile/vecblock_nz.jsonl';
 create table nz_jsonl like nz;

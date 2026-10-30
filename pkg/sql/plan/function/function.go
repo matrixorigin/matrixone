@@ -1365,12 +1365,13 @@ const (
 )
 
 // blockScaledWideningFunctions are the functions that take vecf8/vecf4 arguments
-// dequantized to vecf32: NULL handling and conditionals, element-wise math and JSON.
-// Comparisons have kernels of their own; hex, to_base64 and subvector are vecf32-only, as
-// for the other narrow vector types.
+// dequantized to vecf32: NULL handling and conditionals, element-wise math, subvector and
+// JSON. subvector returns vecf32, as a slice of a block-scaled cell has no scales of its
+// own. Comparisons have kernels of their own; hex and to_base64 are vecf32-only, as for
+// the other narrow vector types.
 var blockScaledWideningFunctions = map[int]bool{
 	COALESCE: true, CASE: true, GREATEST: true, LEAST: true,
-	ABS: true, SQRT: true, SUMMATION: true, L1_NORM: true, L2_NORM: true,
+	ABS: true, SQRT: true, SUMMATION: true, L1_NORM: true, L2_NORM: true, SUB_VECTOR: true,
 	JSON_ARRAY: true, JSON_OBJECT: true,
 }
 

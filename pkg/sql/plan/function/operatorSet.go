@@ -390,6 +390,10 @@ func caseVectorCommonType(source []types.Type) (retType types.Type, hasVector, v
 // caseCheck check `case X then Y case X1 then Y1 ... (else Z)`
 func caseCheck(_ []overload, inputs []types.Type) checkResult {
 	l := len(inputs)
+	isValue := func(i int) bool { return i%2 == 1 || (l%2 == 1 && i == l-1) }
+	if widened, ok := widenMixedLowPrecisionFloats(inputs, isValue); ok {
+		return castFromWidened(caseCheck(nil, widened), widened)
+	}
 
 	needCast := false
 	if l >= 2 {
@@ -809,6 +813,9 @@ var (
 func iffCheck(_ []overload, inputs []types.Type) checkResult {
 	// iff(x, y, z)
 	if len(inputs) == 3 {
+		if widened, ok := widenMixedLowPrecisionFloats(inputs, func(i int) bool { return i > 0 }); ok {
+			return castFromWidened(iffCheck(nil, widened), widened)
+		}
 		conditionType := inputs[0]
 		needCast := conditionType.Oid == types.T_any
 		if needCast {

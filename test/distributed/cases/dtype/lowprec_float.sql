@@ -241,6 +241,8 @@ UPDATE m1 JOIN m2 ON m1.id = m2.k SET m1.a = m2.a, m1.b = m2.b, m1.c = m2.c, m1.
 SELECT * FROM m1;
 SELECT IF(a > 1, a, b), COALESCE(NULL, d), IFNULL(d, a), CASE WHEN a > 0 THEN d END, NULLIF(d, 1) FROM m1;
 SELECT IF(d, 'y', 'n'), INTERVAL(d, 1, 4), CONV(b, 10, 2) FROM m1;
+-- mixed with an integer or decimal they resolve as FLOAT does: 16777217 stays exact
+SELECT COALESCE(NULLIF(d, d), 16777217), IF(id = 0, a, 16777217), CASE WHEN id = 0 THEN b ELSE 1234567.89 END, COALESCE(NULLIF(c, c), 16777217) FROM m1;
 SELECT BIT_AND(d), BIT_OR(c) FROM m1;
 -- data branch diff and merge see a conflicting bf16 value
 CREATE TABLE bx (id INT PRIMARY KEY, v bf16, w INT);

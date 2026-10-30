@@ -170,11 +170,11 @@ SELECT PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY c), PERCENTILE_DISC(0.5) WITH
 ➤ PERCENTILE_CONT(0.5) within group (order by c)[8,53,31]  ¦  PERCENTILE_DISC(0.5) within group (order by d)[7,23,31]  𝄀
 1.0  ¦  1.0
 SELECT COALESCE(a, 0), IFNULL(b, 1), GREATEST(c, 1), IF(d > 1, 'y', 'n'), JSON_OBJECT('k', a) FROM lp ORDER BY id;
-➤ COALESCE(a, 0)[7,23,31]  ¦  IFNULL(b, 1)[7,23,31]  ¦  GREATEST(c, 1)[8,53,31]  ¦  IF(d > 1, y, n)[12,1,0]  ¦  JSON_OBJECT(k, a)[-1,2147483647,0]  𝄀
+➤ COALESCE(a, 0)[8,53,31]  ¦  IFNULL(b, 1)[8,53,31]  ¦  GREATEST(c, 1)[8,53,31]  ¦  IF(d > 1, y, n)[12,1,0]  ¦  JSON_OBJECT(k, a)[-1,2147483647,0]  𝄀
 1.0  ¦  1.0  ¦  1.0  ¦  n  ¦  {"k": 1.0}  𝄀
 2.0  ¦  2.0  ¦  2.0  ¦  y  ¦  {"k": 2.0}  𝄀
 0.0  ¦  0.0  ¦  1.0  ¦  n  ¦  {"k": 0.0}  𝄀
--0.100097656  ¦  -0.099975586  ¦  1.0  ¦  n  ¦  {"k": -0.10009765625}  𝄀
+-0.10009765625  ¦  -0.0999755859375  ¦  1.0  ¦  n  ¦  {"k": -0.10009765625}  𝄀
 0.0  ¦  1.0  ¦  null  ¦  n  ¦  {"k": null}  𝄀
 1.5  ¦  1.5  ¦  1.5  ¦  y  ¦  {"k": 1.5}
 SELECT a FROM lp INTERSECT SELECT a FROM lp WHERE id < 3 ORDER BY 1;
@@ -424,6 +424,9 @@ SELECT IF(a > 1, a, b), COALESCE(NULL, d), IFNULL(d, a), CASE WHEN a > 0 THEN d 
 SELECT IF(d, 'y', 'n'), INTERVAL(d, 1, 4), CONV(b, 10, 2) FROM m1;
 ➤ IF(d, y, n)[12,1,0]  ¦  INTERVAL(d, 1, 4)[-5,64,0]  ¦  CONV(b, 10, 2)[12,65,0]  𝄀
 y  ¦  1  ¦  11
+SELECT COALESCE(NULLIF(d, d), 16777217), IF(id = 0, a, 16777217), CASE WHEN id = 0 THEN b ELSE 1234567.89 END, COALESCE(NULLIF(c, c), 16777217) FROM m1;
+➤ COALESCE(NULLIF(d, d), 16777217)[8,53,31]  ¦  IF(id = 0, a, 16777217)[8,53,31]  ¦  case when id = 0 then b else 1234567.89 end[8,53,31]  ¦  COALESCE(NULLIF(c, c), 16777217)[8,53,31]  𝄀
+1.6777217E7  ¦  1.6777217E7  ¦  1234567.89  ¦  1.6777217E7
 SELECT BIT_AND(d), BIT_OR(c) FROM m1;
 ➤ BIT_AND(d)[-5,64,0]  ¦  BIT_OR(c)[-5,64,0]  𝄀
 4  ¦  3
@@ -436,7 +439,7 @@ DATA BRANCH DIFF by2 AGAINST bx;
 by2  ¦  INSERT  ¦  1  ¦  3.5  ¦  1  𝄀
 bx  ¦  INSERT  ¦  1  ¦  1.5  ¦  1
 DATA BRANCH MERGE by2 INTO bx;
-internal error: conflict: by2 INSERT and bx INSERT on pk(1) with different values
+conflict: by2 INSERT and bx INSERT on pk(1) with different values
 CREATE TABLE sel (a INT, s VARCHAR(20));
 INSERT INTO sel VALUES (1, '1.5'), (0, 'invalid');
 SELECT a, CASE WHEN a = 1 THEN CAST(s AS bf16) END, CASE WHEN a = 1 THEN CAST(s AS float8) END FROM sel ORDER BY a;

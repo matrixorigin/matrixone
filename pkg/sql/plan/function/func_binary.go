@@ -1331,6 +1331,9 @@ func coalesceJSONResult(overloads []overload, inputs []types.Type) (checkResult,
 }
 
 func coalesceCheck(overloads []overload, inputs []types.Type) checkResult {
+	if widened, ok := widenMixedLowPrecisionFloats(inputs, func(int) bool { return true }); ok {
+		return castFromWidened(coalesceCheck(overloads, widened), widened)
+	}
 	if target, ok := sameLowPrecisionFloatType(inputs); ok {
 		for i, over := range overloads {
 			if over.args[0] != target.Oid {

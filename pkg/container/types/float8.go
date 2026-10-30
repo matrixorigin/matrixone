@@ -195,6 +195,22 @@ const (
 	f8e4m3MantW   = 3     // mantissa bits
 )
 
+// String formats the value as its float32, so %v prints the number, not the code.
+func (b BF16) String() string { return formatNarrowFloat(b.ToFloat32()) }
+
+// String formats the value as its float32, so %v prints the number, not the code.
+func (h Float16) String() string { return formatNarrowFloat(h.ToFloat32()) }
+
+// String formats the value as its float32, so %v prints the number, not the code.
+func (f Float8) String() string { return formatNarrowFloat(f.ToFloat32()) }
+
+// String formats the value as its float32, so %v prints the number, not the code.
+func (f Float4) String() string { return formatNarrowFloat(f.ToFloat32()) }
+
+func formatNarrowFloat(f float32) string {
+	return strconv.FormatFloat(float64(f), 'g', -1, 32)
+}
+
 // ToFloat32 widens an E4M3 value to float32 exactly (every E4M3 value is
 // representable in float32).
 func (f Float8) ToFloat32() float32 {

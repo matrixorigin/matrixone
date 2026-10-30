@@ -57,6 +57,41 @@ func coalesceVectorReturnType(parameters []types.Type) types.Type {
 
 // sameLowPrecisionFloatType returns the bf16/float16/float8/float4 type shared by every
 // branch; untyped NULL branches take that type.
+// widenMixedLowPrecisionFloats replaces the bf16/float16/float8/float4 value arguments
+// with float32 when the values mix them with another type; isValue selects the value
+// positions. A conditional then resolves them as it resolves float32.
+func widenMixedLowPrecisionFloats(inputs []types.Type, isValue func(int) bool) ([]types.Type, bool) {
+	values := make([]types.Type, 0, len(inputs))
+	hasLowPrecision := false
+	for i, input := range inputs {
+		if isValue(i) {
+			values = append(values, input)
+			hasLowPrecision = hasLowPrecision || input.Oid.IsLowPrecisionFloat()
+		}
+	}
+	if !hasLowPrecision {
+		return nil, false
+	}
+	if _, same := sameLowPrecisionFloatType(values); same {
+		return nil, false
+	}
+	widened := append([]types.Type(nil), inputs...)
+	for i, input := range widened {
+		if isValue(i) && input.Oid.IsLowPrecisionFloat() {
+			widened[i] = types.T_float32.ToType()
+		}
+	}
+	return widened, true
+}
+
+// castFromWidened returns a resolution of widened arguments as a cast of the original ones.
+func castFromWidened(result checkResult, widened []types.Type) checkResult {
+	if result.status == succeedMatched {
+		return newCheckResultWithCast(result.idx, widened)
+	}
+	return result
+}
+
 func sameLowPrecisionFloatType(inputs []types.Type) (types.Type, bool) {
 	var target types.Type
 	found := false

@@ -282,7 +282,7 @@ func (pw *ParquetWriter) vectorValueToParquet(vec *vector.Vector, colIdx, rowIdx
 
 // vectorValueToParquet converts a vector value to a parquet-compatible Go value
 func vectorValueToParquet(vec *vector.Vector, i int, timeZone *time.Location) (any, error) {
-	// typeswitch:partial parquet export writes vecf32/vecf64; other vector types fail as unsupported
+	// typeswitch:partial parquet export writes every vector type as text; types without a case fail as unsupported
 	switch vec.GetType().Oid {
 	case types.T_bool:
 		return vector.GetFixedAtNoTypeCheck[bool](vec, i), nil
@@ -359,6 +359,9 @@ func vectorValueToParquet(vec *vector.Vector, i int, timeZone *time.Location) (a
 		return types.BytesToArrayToString[int8](vec.GetBytesAt(i)), nil
 	case types.T_array_uint8:
 		return types.BytesToArrayToString[uint8](vec.GetBytesAt(i)), nil
+	case types.T_array_float8, types.T_array_float4:
+		// the exact cell, which LOAD reads back unchanged
+		return types.BlockScaledToJSON(vec.GetBytesAt(i))
 	case types.T_year:
 		return vector.GetFixedAtNoTypeCheck[types.MoYear](vec, i).String(), nil
 	case types.T_decimal64:

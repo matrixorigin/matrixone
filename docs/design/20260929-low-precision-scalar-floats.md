@@ -53,7 +53,8 @@ GPU kernels agree on the encoding.
   `IF`/`CASE`/`COALESCE`/`IFNULL`/`NULLIF` over one of these types keep the column
   type, so the projections a multi-table `UPDATE` or `INSERT ... ON DUPLICATE
   KEY UPDATE` builds from them write cells of the column's width. Branches of two
-  different narrow types widen to `float32`. A user variable holding one of these values
+  different narrow types widen to `float32`, and branches mixing one with another type
+  resolve as with a `float32` branch (`COALESCE(bf16, bigint)` is a `float64`). A user variable holding one of these values
   computes in `float64`, as a `float` variable does (`@v + 1` with `@v = 1.5` is `2.5`).
 - **Sources.** Every source that converts to `float` converts to these types the same
   way, then rounds once to the type: numbers, decimals, booleans, `BIT`, `YEAR`, `ENUM`

@@ -98,3 +98,25 @@ func TestLowPrecisionFloatParquetParamsAndBranchTuples(t *testing.T) {
 		vec.Free(mp)
 	}
 }
+
+func TestParquetExportVecBlockExactCell(t *testing.T) {
+	mp := mpool.MustNewZero()
+	for _, oid := range []types.T{types.T_array_float8, types.T_array_float4} {
+		f, ok := oid.BlockScaledFormat()
+		require.True(t, ok)
+		cell, err := types.AppendBlockScaled(nil, f, []float32{1.2031566, -447, 0.001, 6})
+		require.NoError(t, err)
+		vec := vector.NewVec(types.New(oid, 4, 0))
+		require.NoError(t, vector.AppendBytes(vec, cell, false, mp))
+
+		v, err := vectorValueToParquet(vec, 0, nil)
+		require.NoError(t, err, oid.String())
+		text, ok := v.(string)
+		require.True(t, ok, oid.String())
+		require.True(t, types.IsBlockScaledJSON(text), text)
+		back, err := types.BlockScaledFromJSON(f, text)
+		require.NoError(t, err, text)
+		require.Equal(t, cell, back, oid.String())
+		vec.Free(mp)
+	}
+}
