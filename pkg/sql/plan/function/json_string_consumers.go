@@ -77,10 +77,8 @@ func jsonStringConsumerUnaryDomainTypeMatch(overloads []overload, inputs []types
 	return jsonStringConsumerTypeMatch(overloads, inputs, stringDomainFixedTypeMatch)
 }
 
-// Direct JSON signatures are retained for local or previously serialized
-// expressions. Newly bound SQL lowers these consumers through JSON-aware
-// CONCAT so the existing remote expression protocol fence applies. Direct
-// pre-lowering plans still require a stopped-cluster upgrade.
+// Keep JSON as the bound input so the executor can serialize its complete
+// visible bytes without an intermediate string expression or width bound.
 func jsonStringConsumerTypeMatch(
 	overloads []overload,
 	inputs []types.Type,

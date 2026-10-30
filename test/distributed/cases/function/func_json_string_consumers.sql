@@ -1,6 +1,6 @@
 -- @suite
 -- @case
--- @desc: JSON operands in CONCAT, CONCAT_WS, and ELT
+-- @desc: JSON operands in string functions
 -- @label:bvt
 
 drop database if exists issue28905_json_string_consumers;
@@ -110,6 +110,8 @@ create view remaining_hash_view as select id, md5(js) as h from remaining;
 create table remaining_hash_ctas as select id, sha1(js) as h from remaining;
 select count(*) as view_rows from remaining_hash_view;
 select count(*) as ctas_rows from remaining_hash_ctas;
+select id, h from remaining_hash_view order by id;
+select id, h from remaining_hash_ctas order by id;
 set @json_param = '{"p":1}';
 prepare remaining_hash_stmt from 'select md5(cast(? as json)), sha1(cast(? as json)), sha2(cast(? as json),256)';
 execute remaining_hash_stmt using @json_param, @json_param, @json_param;

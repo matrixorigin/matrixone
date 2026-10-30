@@ -190,6 +190,20 @@ view_rows
 select count(*) as ctas_rows from remaining_hash_ctas;
 ctas_rows
 5
+select id, h from remaining_hash_view order by id;
+id    h
+1    8aacdb17187e6acf2b175d4aa08d7213
+2    1f1023597e1b9c9af1c8b6d089a40157
+3    c4ca4238a0b923820dcc509a6f75849b
+4    37a6259cc0c1dae299a7866489dff0bd
+5    NULL
+select id, h from remaining_hash_ctas order by id;
+id    h
+1    1744f53e00fc23bd3e515b298e42936485061dba
+2    0bb18612a0dba78a67adac7e447de4836c49efab
+3    356a192b7913b04c54574d18c28d46e6395428ab
+4    2be88ca4242c76e8253ac62474851065032d6833
+5    NULL
 set @json_param = '{"p":1}';
 prepare remaining_hash_stmt from 'select md5(cast(? as json)), sha1(cast(? as json)), sha2(cast(? as json),256)';
 execute remaining_hash_stmt using @json_param, @json_param, @json_param;
