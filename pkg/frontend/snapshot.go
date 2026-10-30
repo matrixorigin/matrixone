@@ -2235,6 +2235,7 @@ func restoreMaterializedViewDependencies(stmts []tree.Statement, defaultDB strin
 	var deps []string
 	var walkSelect func(tree.SelectStatement)
 	var walkTable func(tree.TableExpr)
+	var walkExpr func(tree.Expr)
 	walkTable = func(expr tree.TableExpr) {
 		switch t := expr.(type) {
 		case *tree.TableName:
@@ -2257,9 +2258,12 @@ func restoreMaterializedViewDependencies(stmts []tree.Statement, defaultDB strin
 		case *tree.JoinTableExpr:
 			walkTable(t.Left)
 			walkTable(t.Right)
+			if on, ok := t.Cond.(*tree.OnJoinCond); ok {
+				walkExpr(on.Expr)
+			}
+			walkExpr(t.Tolerance)
 		}
 	}
-	var walkExpr func(tree.Expr)
 	walkExpr = func(expr tree.Expr) {
 		switch e := expr.(type) {
 		case *tree.Subquery:
@@ -2275,6 +2279,10 @@ func restoreMaterializedViewDependencies(stmts []tree.Statement, defaultDB strin
 			walkExpr(e.Left)
 			walkExpr(e.Right)
 			walkExpr(e.Escape)
+		case *tree.RangeCond:
+			walkExpr(e.Left)
+			walkExpr(e.From)
+			walkExpr(e.To)
 		case *tree.AndExpr:
 			walkExpr(e.Left)
 			walkExpr(e.Right)
@@ -4184,7 +4192,6 @@ func createDroppedAccount(ctx context.Context, ses *Session, bh BackgroundExec, 
 	getLogger(ses.GetService()).Debug(fmt.Sprintf("[%s] start to re-create dropped account: %v, account id: %d", snapshotName, account.accountName, account.accountId))
 
 	createAccountSql := makeCreateAccountSqlByAccountRecord(account)
-	getLogger(ses.GetService()).Debug(fmt.Sprintf("[%s] start to create account: %v, create account sql: %s", snapshotName, account.accountName, createAccountSql))
 
 	var ast []tree.Statement
 	ast, err = mysql.Parse(ctx, createAccountSql, 1)
@@ -4714,24 +4721,8 @@ func createPubs(
 			return err
 		}
 		toCtx := defines.AttachAccount(ctx, identity.accountID, identity.userID, identity.roleID)
-		getLogger(sid).Debug(fmt.Sprintf("[%s] create pub: create pub sql: %s", snapshotName, pubInfo.GetCreateSql()))
-		var ast []tree.Statement
-		ast, err = mysql.Parse(toCtx, pubInfo.GetCreateSql(), 1)
-		if err != nil {
-			return
-		}
-
-		// The CREATE statement carries the stable database name. createPublication
-		// resolves it inside the target tenant and persists the current database
-		// ID, so the historical PubInfo.DbId must not be replayed.
-		var lowerCaseTableNames int64
-		if publicationCreateValidatesTableScope(ast[0].(*tree.CreatePublication)) {
-			if lowerCaseTableNames, err = publicationBackgroundLowerCaseTableNames(ctx, bh); err != nil {
-				return
-			}
-		}
-		err = createPublication(toCtx, bh, ast[0].(*tree.CreatePublication), lowerCaseTableNames)
-		freeStatements(ast)
+		getLogger(sid).Debug(fmt.Sprintf("[%s] recreate publication %s for database %s", snapshotName, pubInfo.PubName, pubInfo.DbName))
+		err = createPublicationFromRestoreInfo(toCtx, bh, pubInfo, snapshotTs, nil)
 		if err != nil {
 			return
 		}
@@ -4918,7 +4909,9 @@ func getAccountRecordByTs(ctx context.Context, ses *Session, bh BackgroundExec, 
 		if account.comments, err = erArray[0].GetString(ctx, 0, 3); err != nil {
 			return &accountRecord{}, err
 		}
-		account.pwd = "111"
+		if account.pwd, err = newSnapshotRestoreTempPassword(); err != nil {
+			return &accountRecord{}, err
+		}
 		return &account, nil
 	}
 

@@ -21,18 +21,24 @@ import (
 	"testing"
 	"testing/synctest"
 
+	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/catalog/mvdefinition"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/pb/lock"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	executortest "github.com/matrixorigin/matrixone/pkg/util/executor/test"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
 )
 
 func TestGetTableIDCountsRowsAcrossBatches(t *testing.T) {
@@ -382,4 +388,29 @@ func newTableIDResult(t *testing.T, tableIDBatches, dbIDBatches [][]uint64) (exe
 		require.NoError(t, executor.AppendFixedRows(memRes, 1, dbIDBatches[i]))
 	}
 	return memRes.GetResult(), mp
+}
+
+func TestExecWithResultStatementPolicy(t *testing.T) {
+	sid := t.Name()
+	rt := moruntime.NewRuntime(metadata.ServiceType_CN, sid, zap.NewNop())
+	sqlExec := executortest.NewMockSQLExecutor(gomock.NewController(t))
+	rt.SetGlobalVariables(moruntime.InternalSQLExecutor, sqlExec)
+	moruntime.SetupServiceBasedRuntime(sid, rt)
+	t.Cleanup(func() { rt.CompareAndDeleteGlobalVariables(moruntime.InternalSQLExecutor, sqlExec) })
+	txn := &iscpTxnForTest{}
+	for _, policy := range []lock.WaitPolicy{lock.WaitPolicy_Wait, lock.WaitPolicy_FastFail} {
+		sqlExec.EXPECT().Exec(gomock.Any(), "update job", gomock.Any()).DoAndReturn(func(_ context.Context, _ string, opts executor.Options) (executor.Result, error) {
+			require.Same(t, txn, opts.Txn())
+			require.True(t, opts.DisableIncrStatement())
+			require.Equal(t, policy, opts.StatementOption().WaitPolicy())
+			return executor.Result{}, nil
+		})
+		var options []executor.StatementOption
+		if policy == lock.WaitPolicy_FastFail {
+			options = []executor.StatementOption{executor.StatementOption{}.WithWaitPolicy(policy)}
+		}
+		result, err := ExecWithResult(context.Background(), "update job", sid, txn, options...)
+		require.NoError(t, err)
+		result.Close()
+	}
 }

@@ -121,6 +121,52 @@ func TestRestorePublicationsRejectsMissingTarget(t *testing.T) {
 	require.ErrorIs(t, createPubs(t.Context(), "", bh, "s", 42, []*pubsub.PubInfo{pub}), failure)
 }
 
+func TestCreatePubsPreservesEmptyAuthorizationAndTableSets(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		accounts string
+		tables   string
+	}{
+		{name: "empty accounts", accounts: "", tables: pubsub.TableAll},
+		{name: "empty tables", accounts: pubsub.AccountAll, tables: ""},
+		{name: "both empty", accounts: "", tables: ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			bh, ctx, _ := newCreatePublicationIfNotExistsTest(t, false, false)
+			bh.sql2result[getSubsSql+" and pub_account_name = 'sys' and pub_name = 'pub1'"] =
+				newMrsForSqlForGetSubs(nil)
+			for _, query := range []string{
+				"select cast(user_id as char), user_name from mo_catalog.mo_user {MO_TS = 42} order by user_id",
+				"select cast(user_id as char), user_name from mo_catalog.mo_user order by user_id",
+			} {
+				bh.sql2result[query] = newMrsForRestoreStringRows(
+					[]string{"user_id", "user_name"}, [][]interface{}{{fmt.Sprint(rootID), "root"}})
+			}
+			for _, query := range []string{
+				"select cast(role_id as char), role_name from mo_catalog.mo_role {MO_TS = 42} order by role_id",
+				"select cast(role_id as char), role_name from mo_catalog.mo_role order by role_id",
+			} {
+				bh.sql2result[query] = newMrsForRestoreStringRows(
+					[]string{"role_id", "role_name"}, [][]interface{}{{fmt.Sprint(moAdminRoleID), "moadmin"}})
+			}
+			pub := &pubsub.PubInfo{PubAccountId: sysAccountID, PubAccountName: sysAccountName,
+				PubName: "pub1", DbName: "db1", TablesStr: tc.tables, SubAccountsStr: tc.accounts,
+				Creator: rootID, Owner: moAdminRoleID}
+			err := createPubs(ctx, "", bh, "snapshot", 42, []*pubsub.PubInfo{pub})
+			require.NoError(t, err, "executed SQL: %v", bh.executedSQLs)
+			var insert string
+			for _, sql := range bh.executedSQLs {
+				if strings.HasPrefix(sql, "insert into mo_catalog.mo_pubs") {
+					insert = sql
+					break
+				}
+			}
+			require.NotEmpty(t, insert)
+			require.Contains(t, insert, fmt.Sprintf("'%s', '%s'", tc.tables, tc.accounts))
+		})
+	}
+}
+
 // Test_recreatePublicationsAfterDbRestoreTS pins #30610: a snapshot-time
 // database restore drops the database and its mo_pubs rows; the restore must
 // replay the publications so subscribers keep working, and must stay silent

@@ -38,6 +38,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	txnpb "github.com/matrixorigin/matrixone/pkg/pb/txn"
@@ -9200,4 +9201,246 @@ func TestAlterDropPrimaryKeyRebindsToSameStatementUnique(t *testing.T) {
 	t.Run("drop then add", newCase("alter table test_idx drop primary key, add unique index uk_new(n_nationkey)", false, "uk_new"))
 	t.Run("add then drop", newCase("alter table test_idx add unique index uk_new(n_nationkey), drop primary key", false, "uk_new"))
 	t.Run("no replacement keeps rejection", newCase("alter table test_idx drop primary key", true, ""))
+}
+
+func TestBuildCreateViewMetadataReplay(t *testing.T) {
+	selects := make([]string, 0, 27)
+	selects = append(selects,
+		`select 'ab' as c`,
+		`select 'a\\b' as c`,
+		`select 'é\\界' as c`,
+		`select src.ab from (select _binary 'ab') src`,
+		`select src.ab from (select _binary 'ab' as ab) src`,
+		`select src.`+"`n_nationkey + 1`"+` from (select n_nationkey + 1 from nation) src`,
+		`select src.`+"`a\\b`"+` from (select name_const('a\\b', 1)) src`,
+		`select src.ab from (select _binary 'ab') src (ab)`,
+		`with src as (select _binary 'ab') select ab from src`,
+		`with src(ab) as (select _binary 'ab') select ab from src`,
+		`select src.ab from ((select _binary 'ab') union all (select _binary 'cd')) src`,
+		`select src.ab from (select x.ab from (select _binary 'ab') x) src`,
+		`select (select src.ab from (select _binary 'ab') src) as c`,
+		`select 1 as c where exists (select src.ab from (select _binary 'ab') src)`,
+		`select * from (select src.ab from (select _binary 'ab') src) x`,
+		`select _binary 'ab' as ab having ab = _binary 'ab' order by ab`,
+		`select name_const('c', 'plain') as c`,
+		`select name_const('c', _binary 'a\\b') as c`,
+		`select length(name_const('c', 'a\\b')) as c`,
+		`select name_const('c', 'a\\b') as c`,
+		`select name_const('c', ('a\\b'))`,
+		`select name_const('c', 'a\\b' collate utf8mb4_bin)`,
+		`select c from (select name_const('c', 'a\\b')) src`,
+		`select name_const('c', 'a\\b$''é') as c`,
+	)
+	for _, width := range []int{65534, 65535, 65536} {
+		selects = append(selects, "select '"+strings.Repeat("a", width-1)+`\\' as c`)
+	}
+	for index, selectSQL := range selects {
+		name := selectSQL
+		if len(name) > 200 {
+			name = fmt.Sprintf("long_literal_%d", index)
+		}
+		t.Run(name, func(t *testing.T) {
+			build := func(sqlText, mode string) *TableDef {
+				stmt, err := parsers.ParseOneWithSQLMode(t.Context(), dialect.MYSQL, sqlText, 1, mode)
+				require.NoError(t, err)
+				defer stmt.Free()
+				ctx := &rootSQLCompilerContext{MockCompilerContext: NewMockCompilerContext(false, newPlanTestProcess(t)), rootSQL: sqlText}
+				ctx.SetSqlModeOverride(mode)
+				built, err := BuildPlan(ctx, stmt, false)
+				require.NoError(t, err, sqlText)
+				return built.GetDdl().GetCreateView().GetTableDef()
+			}
+			original := build("create view v as "+selectSQL, "")
+			var data ViewData
+			require.NoError(t, json.Unmarshal([]byte(original.GetViewSql().GetView()), &data))
+			for _, mode := range []string{"", "ANSI_QUOTES,NO_BACKSLASH_ESCAPES"} {
+				replayed := build("create view replayed as "+data.Definition, mode)
+				require.Len(t, replayed.Cols, len(original.Cols))
+				for i, col := range original.Cols {
+					require.Equal(t, col.Name, replayed.Cols[i].Name)
+					require.Equal(t, col.Typ.Id, replayed.Cols[i].Typ.Id)
+					require.Equal(t, col.Typ.Width, replayed.Cols[i].Typ.Width, data.Definition)
+					require.Equal(t, col.Typ.Charset, replayed.Cols[i].Typ.Charset)
+					require.Equal(t, col.Typ.CollationVersion, replayed.Cols[i].Typ.CollationVersion)
+				}
+			}
+		})
+	}
+}
+
+func TestBuildCreateViewPersistsParserDerivedInformationSchemaMetadata(t *testing.T) {
+	tests := []struct {
+		name        string
+		sql         string
+		contains    string
+		checkOption string
+		replay      bool
+		replayCols  []string
+	}{
+		{
+			name:     "dollar quoted definer cannot supply structural view tokens",
+			sql:      "CREATE DEFINER=$q$ view fake as select 0$q$ VIEW v AS SELECT 1;",
+			contains: "select 1",
+		},
+		{
+			name:     "executable comment preserves dollar quoted terminator text",
+			sql:      "/*!50001 CREATE VIEW v AS SELECT $q$x*/y$q$ AS s */;",
+			contains: "*/y",
+		},
+		{
+			name:     "executable comment preserves escaped double quoted terminator text",
+			sql:      "/*!50001 CREATE VIEW v AS SELECT \"x\\\"*/y\" AS s */;",
+			contains: "*/y",
+		},
+		{
+			name:     "double minus remains an arithmetic operator",
+			sql:      "/*!50001 CREATE VIEW v AS SELECT 1--2 AS x */;",
+			contains: "select",
+		},
+		{
+			name:        "check option is separate from the select definition",
+			sql:         "CREATE VIEW v AS SELECT 1 WITH CASCADED CHECK OPTION;",
+			contains:    "select 1",
+			checkOption: "CASCADED",
+		},
+		{
+			name:     "bound column references are normalized with the definition",
+			sql:      "CREATE VIEW v AS SELECT n_name FROM nation;",
+			contains: "select `nation`.`n_name` from `nation`",
+		},
+		{
+			name:       "explicit view columns preserve public names without changing inner aliases",
+			sql:        "CREATE VIEW v (view_name) AS SELECT n_name FROM nation;",
+			contains:   "as `__mo_view_definition`(`view_name`)",
+			replay:     true,
+			replayCols: []string{"view_name"},
+		},
+		{
+			name:       "explicit view columns preserve aliases used by order by",
+			sql:        "CREATE VIEW v (view_name) AS SELECT 1 AS source_name ORDER BY source_name;",
+			contains:   "source_name",
+			replay:     true,
+			replayCols: []string{"view_name"},
+		},
+		{
+			name:       "explicit view columns preserve aliases used by having",
+			sql:        "CREATE VIEW v (view_name) AS SELECT 1 AS source_name HAVING source_name = 1;",
+			contains:   "having `source_name` = 1",
+			replay:     true,
+			replayCols: []string{"view_name"},
+		},
+		{
+			name:       "explicit view columns cover parenthesized union output",
+			sql:        "CREATE VIEW v (view_name, region_name) AS (SELECT n_name, n_regionkey FROM nation UNION SELECT n_name, n_regionkey FROM nation);",
+			contains:   "as `__mo_view_definition`(`view_name`, `region_name`)",
+			replay:     true,
+			replayCols: []string{"view_name", "region_name"},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, test.sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+
+			ctx := &rootSQLCompilerContext{
+				MockCompilerContext: NewMockCompilerContext(false, newPlanTestProcess(t)),
+				rootSQL:             test.sql,
+			}
+			built, err := BuildPlan(ctx, stmt, false)
+			require.NoError(t, err)
+			var data ViewData
+			require.NoError(t, json.Unmarshal([]byte(built.GetDdl().GetCreateView().GetTableDef().GetViewSql().GetView()), &data))
+			require.NotEmpty(t, data.Definition)
+			assert.Contains(t, strings.ToLower(data.Definition), test.contains)
+			assert.NotContains(t, strings.ToLower(data.Definition), "create")
+			assert.NotContains(t, strings.ToLower(data.Definition), "check option")
+			expectedCheckOption := test.checkOption
+			if expectedCheckOption == "" {
+				expectedCheckOption = "NONE"
+			}
+			assert.Equal(t, expectedCheckOption, data.CheckOption)
+
+			definitions, err := parsers.Parse(t.Context(), dialect.MYSQL, data.Definition, 1)
+			require.NoError(t, err)
+			require.Len(t, definitions, 1)
+			_, ok := definitions[0].(*tree.Select)
+			assert.True(t, ok)
+			definitions[0].Free()
+
+			if test.replay {
+				replaySQL := "CREATE VIEW replayed AS " + data.Definition
+				replayStmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, replaySQL, 1)
+				require.NoError(t, err)
+				defer replayStmt.Free()
+				replayCtx := &rootSQLCompilerContext{
+					MockCompilerContext: NewMockCompilerContext(false, newPlanTestProcess(t)),
+					rootSQL:             replaySQL,
+				}
+				replayed, err := BuildPlan(replayCtx, replayStmt, false)
+				require.NoError(t, err)
+				replayCols := replayed.GetDdl().GetCreateView().GetTableDef().GetCols()
+				require.Len(t, replayCols, len(test.replayCols))
+				for i, name := range test.replayCols {
+					require.Equal(t, name, replayCols[i].Name)
+				}
+			}
+		})
+	}
+}
+
+func TestGenViewTableDefPersistsExpandedStarForMultiStatementRootSQL(t *testing.T) {
+	const rootSQL = "create view v_star_multi as select * from nation; select 1"
+	ctx := &rootSQLCompilerContext{
+		MockCompilerContext: NewMockCompilerContext(false, newPlanTestProcess(t)),
+		rootSQL:             rootSQL,
+	}
+	statements, err := parsers.Parse(context.Background(), dialect.MYSQL, rootSQL, 1)
+	require.NoError(t, err)
+	require.Len(t, statements, 2)
+	defer func() {
+		for _, statement := range statements {
+			statement.Free()
+		}
+	}()
+
+	p, err := BuildPlan(ctx, statements[0], false)
+	require.NoError(t, err)
+	tableDef := p.GetDdl().GetCreateView().GetTableDef()
+	require.NotNil(t, tableDef)
+
+	var viewData ViewData
+	require.NoError(t, json.Unmarshal([]byte(tableDef.GetViewSql().GetView()), &viewData))
+	require.Contains(t, viewData.Stmt, "; select 1")
+	require.NotContains(t, viewData.Definition, "*")
+	require.Contains(t, viewData.Definition, "`nation`.`n_nationkey`")
+}
+
+func TestInlineVectorIndexWithoutOptionsUsesParamsFromTree(t *testing.T) {
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
+	for _, algo := range []string{"ivfflat", "hnsw", "cagra", "ivfpq"} {
+		t.Run(algo, func(t *testing.T) {
+			p, ok := indexplugin.Get(algo)
+			require.True(t, ok)
+			want, wantErr := p.Catalog().ParamsFromTree(&tree.Index{IndexOption: &tree.IndexOption{}})
+			sql := "create table inline_" + algo + " (id bigint primary key, v vecf32(8), index i using " + algo + "(v))"
+			logicPlan, err := runOneStmt(mock, t, sql)
+			if wantErr != nil {
+				require.ErrorContains(t, err, wantErr.Error())
+				return
+			}
+			require.NoError(t, err)
+			var params string
+			for _, idx := range logicPlan.GetDdl().GetCreateTable().GetTableDef().GetIndexes() {
+				if idx.IndexAlgo == algo {
+					params = idx.IndexAlgoParams
+				}
+			}
+			got, err := catalog.IndexParamsStringToMap(params)
+			require.NoError(t, err)
+			delete(got, catalog.IndexParamSessionVars)
+			require.Equal(t, want, got)
+		})
+	}
 }

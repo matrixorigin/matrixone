@@ -296,6 +296,8 @@ func TestPartialRestoreMaterializedViewOrder(t *testing.T) {
 	}{
 		{name: "cte", sql: "create view cte as with c as (select id from mv) select * from c"},
 		{name: "scalar", sql: "create view scalar as select (select max(id) from mv) as id"},
+		{name: "between", sql: "create view between_view as select id from src where id between (select min(id) from mv) and 10"},
+		{name: "join_on", sql: "create view join_view as select src.id from src join other on src.id = (select min(id) from mv)"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			info := &tableInfo{dbName: "db", tblName: tc.name, typ: view, createSql: tc.sql}
