@@ -790,7 +790,7 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 %type <statement> revoke_stmt grant_stmt
 %type <statement> load_data_stmt load_table_stmt dump_table_stmt
 %type <statement> analyze_stmt check_table_stmt show_profile_stmt
-%type <statement> prepare_stmt prepareable_stmt deallocate_stmt execute_stmt reset_stmt
+%type <statement> prepare_stmt prepareable_stmt deallocate_stmt execute_stmt reset_stmt flush_privileges_stmt
 %type <statement> replace_stmt
 %type <statement> do_stmt perform_stmt
 %type <statement> declare_stmt
@@ -1161,7 +1161,7 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 // Explicit MySQL default for value-window null treatment.
 %token <str> RESPECT
 %left <str> MEMBER
-%token <str> AUTO_ID_CACHE
+%token <str> AUTO_ID_CACHE FLUSH
 // Shift the contextual SOUNDS LIKE phrase before reducing a bare select alias.
 %left <str> SOUNDS
 // MySQL SERIAL column-alias type. Declared last so every existing token
@@ -1247,7 +1247,11 @@ block_type_stmt:
     }
 
 stmt:
-    block_stmt
+    flush_privileges_stmt
+    {
+        $$ = $1
+    }
+|   block_stmt
     {
         $$ = $1
     }
@@ -1314,6 +1318,12 @@ normal_stmt:
 |   resume_ccpr_subscription_stmt
 |   pause_ccpr_subscription_stmt
 |   branch_stmt
+
+flush_privileges_stmt:
+    FLUSH PRIVILEGES
+    {
+        $$ = &tree.FlushPrivileges{}
+    }
 
 backup_stmt:
     BACKUP STRING FILESYSTEM STRING PARALLELISM STRING backup_type_opt backup_timestamp_opt
@@ -17013,7 +17023,8 @@ equal_opt:
 //|   MYSQL_COMPATIBILITY_MODE
 
 non_reserved_keyword:
-    ACCOUNT
+    FLUSH
+|   ACCOUNT
 |   JSON_TABLE_PATH
 |   JSON_TABLE_NESTED
 |   JSON_TABLE_ORDINALITY
