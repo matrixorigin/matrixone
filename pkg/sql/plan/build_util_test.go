@@ -1464,6 +1464,32 @@ func TestAssignmentCastProtocolGate(t *testing.T) {
 		)
 		require.NoError(t, err)
 		require.Equal(t, test.want, casted.GetF().GetFunc().GetObjName())
+		binaryWant := "cast_assign"
+		if test.ignore {
+			binaryWant = "cast_ignore"
+		}
+		for _, oid := range []types.T{types.T_binary, types.T_varbinary} {
+			binaryTarget := plan.Type{Id: int32(oid), Width: 1}
+			require.True(t, useAssignmentStrictCast(binaryTarget))
+			require.True(t, useSqlModeStringAssignmentCast(binaryTarget))
+			require.True(t, needsSameTypeAssignmentCast(binaryTarget))
+			require.Equal(t, binaryWant, assignmentCastFunctionName(binaryTarget, test.ignore, proc))
+			same := MakePlan2StringConstExprWithType(string([]byte{0xc3, 0xa9}))
+			same.Typ = binaryTarget
+			projected, err := forceCastExpr2WithProcess(t.Context(), DeepCopyExpr(same), makeTypeByPlan2Type(binaryTarget),
+				&plan.Expr{Typ: binaryTarget, Expr: &plan.Expr_T{T: &plan.TargetType{}}}, test.ignore, proc)
+			require.NoError(t, err)
+			require.Equal(t, binaryWant, projected.GetF().GetFunc().GetObjName())
+			forced, err := forceAssignmentCastExprWithProcess(t.Context(), DeepCopyExpr(same), binaryTarget, test.ignore, proc)
+			require.NoError(t, err)
+			require.Equal(t, binaryWant, forced.GetF().GetFunc().GetObjName())
+			ddl, err := makePlan2AssignmentCastExpr(t.Context(), DeepCopyExpr(same), binaryTarget)
+			require.NoError(t, err)
+			require.Equal(t, "cast_strict", ddl.GetF().GetFunc().GetObjName())
+			stored, err := MakePlan2AssignmentCastExpr(t.Context(), DeepCopyExpr(same), binaryTarget)
+			require.NoError(t, err)
+			require.Equal(t, "cast_assign", stored.GetF().GetFunc().GetObjName())
+		}
 		blobTargetType := &plan.Expr{
 			Typ:  blobTarget,
 			Expr: &plan.Expr_T{T: &plan.TargetType{}},

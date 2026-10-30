@@ -24,8 +24,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -63,7 +65,20 @@ func TestSerialExtractBinaryAssignment(t *testing.T) {
 	require.Equal(t, target, bound.Typ)
 	assigned, err := forceAssignmentCastExpr(t.Context(), bound, target)
 	require.NoError(t, err)
-	require.Same(t, bound, assigned)
+	require.NotNil(t, assigned.GetF(), "same binary type must retain the capacity assignment")
+	proc := testutil.NewProcess(t)
+	proc.SetResolveVariableFunc(func(string, bool, bool) (any, error) { return "STRICT_TRANS_TABLES", nil })
+	t.Cleanup(proc.Free)
+	exec, err := colexec.NewExpressionExecutor(proc, assigned)
+	require.NoError(t, err)
+	t.Cleanup(func() { exec.Free() })
+	value, err := exec.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
+	require.NoError(t, err)
+	// Typed physical replay validates the declared capacity without padding.
+	want := []byte{0x41, 0x42}
+	got, isNull := vector.GenerateFunctionStrParameter(value).GetStrValue(0)
+	require.False(t, isNull)
+	require.Equal(t, want, got)
 }
 
 func TestStoredProcedureVariablesUseDeclaredDecimalType(t *testing.T) {

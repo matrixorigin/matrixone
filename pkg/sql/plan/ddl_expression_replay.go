@@ -278,7 +278,18 @@ func WithPersistedDDLReplay(ctx context.Context, original, target *planpb.TableD
 		unchanged := DeepCopyExpr(source)
 		remapGeneratedColExprPositions(unchanged, rawPositions)
 		if proto.Equal(raw, target) || proto.Equal(unchanged, target) {
-			return copyExpr(source, visiblePositions)
+			visible := copyExpr(source, visiblePositions)
+			// The CONVERT skeleton still carries the old expression. Retarget
+			// its binary assignment without rebinding the typed computation.
+			if (typ.Id == int32(types.T_binary) || typ.Id == int32(types.T_varbinary)) &&
+				!ctasSameDefaultType(source.Typ, typ) {
+				converted, err := convertedPersistedAssignment(ctx, visible, typ)
+				if err != nil {
+					replay.err = err
+				}
+				return converted
+			}
+			return visible
 		}
 		converted, err := convertedPersistedAssignment(ctx, raw, typ)
 		if err != nil || !proto.Equal(converted, target) {

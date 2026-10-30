@@ -308,8 +308,8 @@ func remoteWorkerProtocolVersion(ctx context.Context, proc *process.Process, wor
 }
 
 // Cached compilations can survive a cluster capability rollback. Reject changed
-// result contracts and LOAD FK admission here, before Prepare or statement
-// effects; placement/receiver owners retain the other expression policies.
+// result contracts and LOAD FK admission here, before Prepare or statement effects;
+// placement/receiver owners retain the other expression policies.
 func validateTemporalResultProtocol(proc *process.Process, owner any) error {
 	var required int64
 	if queryPlan, ok := owner.(*plan.Plan); ok {
@@ -332,9 +332,6 @@ func validateTemporalResultProtocol(proc *process.Process, owner any) error {
 	}
 	if required > 0 && (!known || version < required) {
 		return moerr.NewNotSupportedf(context.Background(), "CTAS population requires MORPC protocol version %d", required)
-	}
-	if known && version >= defines.MORPCVersion125 {
-		return nil
 	}
 	features, err := plan.RequiredRemoteExpressionFeatures(owner)
 	if err != nil {

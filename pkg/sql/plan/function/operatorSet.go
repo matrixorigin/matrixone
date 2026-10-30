@@ -154,7 +154,7 @@ func binaryStringCommonType(source []types.Type) (types.Type, bool) {
 	sameFixedBinary := true
 	hasFixedBinary := false
 	fixedBinaryWidth := int32(0)
-	width := int32(0)
+	bound := stringResultBound{}
 	for _, typ := range source {
 		switch typ.Oid {
 		case types.T_any:
@@ -170,30 +170,17 @@ func binaryStringCommonType(source []types.Type) (types.Type, bool) {
 			} else if typ.Width != fixedBinaryWidth {
 				sameFixedBinary = false
 			}
-			if typ.Width > width {
-				width = typ.Width
-			}
 		case types.T_varbinary:
 			hasBinary = true
 			sameFixedBinary = false
-			if typ.Width > width {
-				width = typ.Width
-			}
 		case types.T_char, types.T_varchar:
 			sameFixedBinary = false
-			// Character widths count runes, while VARBINARY widths count bytes.
-			// Reserve the maximum utf8mb4 encoding size without exceeding the
-			// largest representable VARBINARY width.
-			byteWidth := int32(types.MaxVarBinaryLen)
-			if typ.Width >= 0 && typ.Width <= int32(types.MaxVarBinaryLen/utf8.UTFMax) {
-				byteWidth = typ.Width * utf8.UTFMax
-			}
-			if byteWidth > width {
-				width = byteWidth
-			}
 		default:
 			return types.Type{}, false
 		}
+		inputBound := declaredStringByteBound(typ)
+		bound.unknown = bound.unknown || inputBound.unknown
+		bound.bytes = max(bound.bytes, inputBound.bytes)
 	}
 	if !hasBinary {
 		return types.Type{}, false
@@ -201,7 +188,11 @@ func binaryStringCommonType(source []types.Type) (types.Type, bool) {
 	if sameFixedBinary {
 		return types.New(types.T_binary, fixedBinaryWidth, 0), true
 	}
-	return types.New(types.T_varbinary, width, 0), true
+	// This is an expression bound, not a storage assignment capacity. Capping
+	// UTF-8 bytes at MaxVarBinaryLen would make the implicit branch CAST discard
+	// selected bytes before the real assignment owner can check them. Promote
+	// large/unknown bounds to BLOB; keep finite small results indexable.
+	return binaryStringResultType(bound), true
 }
 
 // MixedTextBinaryCommonType returns a binary common type only when a set
