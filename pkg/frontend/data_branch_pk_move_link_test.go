@@ -6632,23 +6632,23 @@ func TestAppendPkMoveLinkWindow(t *testing.T) {
 	seen := make(map[uint64]int)
 	var wins []pkMoveLinkTableWindow
 
-	wins = appendPkMoveLinkWindow(wins, seen, 0, 100)
+	wins = appendPkMoveLinkWindow(wins, seen, 0, 100, branchIdentity{})
 	require.Empty(t, wins, "table id 0 is never windowed")
 
-	wins = appendPkMoveLinkWindow(wins, seen, 800, 100)
-	wins = appendPkMoveLinkWindow(wins, seen, 900, 200)
+	wins = appendPkMoveLinkWindow(wins, seen, 800, 100, branchIdentity{})
+	wins = appendPkMoveLinkWindow(wins, seen, 900, 200, branchIdentity{})
 	require.Equal(t, []pkMoveLinkTableWindow{
 		{tableID: 800, endPhys: 100},
 		{tableID: 900, endPhys: 200},
 	}, wins)
 
 	// Earlier duplicate: keeps the established (greater) endpoint.
-	wins = appendPkMoveLinkWindow(wins, seen, 800, 50)
+	wins = appendPkMoveLinkWindow(wins, seen, 800, 50, branchIdentity{})
 	require.Equal(t, uint64(100), wins[0].endPhys)
 
 	// Later duplicate: raises the shared window to the greatest required
 	// endpoint — first-wins dedup dropped exactly this destination bound.
-	wins = appendPkMoveLinkWindow(wins, seen, 800, 300)
+	wins = appendPkMoveLinkWindow(wins, seen, 800, 300, branchIdentity{})
 	require.Equal(t, uint64(300), wins[0].endPhys)
 
 	// Registration order and the sibling window stay untouched, and the
@@ -6657,8 +6657,8 @@ func TestAppendPkMoveLinkWindow(t *testing.T) {
 		{tableID: 800, endPhys: 300},
 		{tableID: 900, endPhys: 200},
 	}, wins)
-	wins = appendPkMoveLinkWindow(wins, seen, 700, 400)
-	wins = appendPkMoveLinkWindow(wins, seen, 800, 300)
+	wins = appendPkMoveLinkWindow(wins, seen, 700, 400, branchIdentity{})
+	wins = appendPkMoveLinkWindow(wins, seen, 800, 300, branchIdentity{})
 	require.Equal(t, []pkMoveLinkTableWindow{
 		{tableID: 800, endPhys: 300},
 		{tableID: 900, endPhys: 200},

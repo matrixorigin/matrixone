@@ -2847,3 +2847,192 @@ func TestResolvePkMoveRetentionSourceErrorClassification(t *testing.T) {
 		require.NotNil(t, rel)
 	})
 }
+
+// TestPrepareRebindsPkMoveRetentionSourceAcrossReuse pins D221 (r100): a
+// cached prepared-compile operator survives across executions while
+// MultiUpdate.Reset preserves updateCtxInfos, so the retention relation
+// handle cached by resolvePkMoveRetentionSource must be re-bound to the
+// EXECUTING transaction on every Prepare, exactly like info.Source.
+// Before the fix Prepare re-bound Source and ctr.sources but omitted
+// retentionSource, so a second execution staged identity rows through a
+// handle bound to the first, already-removed transaction (an I7
+// violation: a staged identity row can be lost while its link rows
+// commit). The reuse harness below drives ONE operator through
+// Prepare(txn1) -> a staged real move -> Reset -> Prepare(txn2).
+func TestPrepareRebindsPkMoveRetentionSourceAcrossReuse(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	txn1 := mock_frontend.NewMockTxnOperator(ctrl)
+	txn1.EXPECT().CreateTS().Return(types.BuildTS(100, 0).ToTimestamp()).AnyTimes()
+	txn2 := mock_frontend.NewMockTxnOperator(ctrl)
+	txn2.EXPECT().CreateTS().Return(types.BuildTS(200, 0).ToTimestamp()).AnyTimes()
+
+	ownerCtx := newTestPkMoveRetentionOwnerCtx()
+	linkCtx := newTestPkMoveLinkCtx(0)
+
+	newOp := func() (*MultiUpdate, *updateCtxInfo, *updateCtxInfo) {
+		update := &MultiUpdate{Action: UpdateWriteTable,
+			MultiUpdateCtx: []*MultiUpdateCtx{ownerCtx, linkCtx}}
+		update.resetMultiUpdateCtxs()
+		return update,
+			lookupUpdateCtxInfo(update.ctr.updateCtxInfos, ownerCtx),
+			lookupUpdateCtxInfo(update.ctr.updateCtxInfos, linkCtx)
+	}
+	bindSources := func(ownerInfo, linkInfo *updateCtxInfo) {
+		ownerSrc := mock_frontend.NewMockRelation(ctrl)
+		ownerSrc.EXPECT().Reset(gomock.Any()).Return(nil).AnyTimes()
+		linkSrc := mock_frontend.NewMockRelation(ctrl)
+		linkSrc.EXPECT().Reset(gomock.Any()).Return(nil).AnyTimes()
+		ownerInfo.Source = ownerSrc
+		linkInfo.Source = linkSrc
+	}
+
+	t.Run("the cached handle re-binds to the executing transaction", func(t *testing.T) {
+		update, ownerInfo, linkInfo := newOp()
+		bindSources(ownerInfo, linkInfo)
+
+		retention := mock_frontend.NewMockRelation(ctrl)
+		retention.EXPECT().GetTableDef(gomock.Any()).Return(newTestPkMoveRetentionDef()).AnyTimes()
+		var retentionOps []client.TxnOperator
+		retention.EXPECT().Reset(gomock.Any()).DoAndReturn(
+			func(op client.TxnOperator) error {
+				retentionOps = append(retentionOps, op)
+				return nil
+			},
+		).AnyTimes()
+		linkInfo.retentionSource = retention
+
+		proc.Base.TxnOperator = txn1
+		require.NoError(t, update.Prepare(proc))
+		require.Len(t, retentionOps, 1, "the first execution binds the cached handle once")
+		require.True(t, retentionOps[0] == client.TxnOperator(txn1))
+
+		// A staged real move writes through the handle bound to txn1.
+		var staged []engine.Relation
+		prevFn := pkMoveGenesisWriteFn
+		t.Cleanup(func() { pkMoveGenesisWriteFn = prevFn })
+		pkMoveGenesisWriteFn = func(
+			source engine.Relation, _ context.Context, _ *batch.Batch,
+		) error {
+			staged = append(staged, source)
+			return nil
+		}
+		require.NoError(t, update.stagePkMoveRetentionRows(
+			proc, process.NewAnalyzer(0, false, false, "MultiUpdate"), linkCtx, ownerCtx))
+		require.Len(t, staged, 1)
+		require.Same(t, retention, staged[0])
+
+		// The prepared-compile reuse cycle: Reset preserves the
+		// updateCtxInfos, including the cached retention handle (the
+		// defect's precondition, pinned so a future Reset change trips
+		// this test instead of silently reviving the defect).
+		update.Reset(proc, false, nil)
+		require.NotNil(t, linkInfo.retentionSource,
+			"MultiUpdate.Reset preserves the cached handle across reuse")
+
+		proc.Base.TxnOperator = txn2
+		require.NoError(t, update.Prepare(proc))
+		require.Len(t, retentionOps, 2, "one bind per execution")
+		require.True(t, retentionOps[1] == client.TxnOperator(txn2),
+			"the second execution re-binds the retention handle to ITS transaction")
+
+		// The second execution's staged identity row rides the re-bound
+		// handle — the workspace-of-record of txn2 under the re-bind
+		// discipline, never the removed first transaction's.
+		require.NoError(t, update.stagePkMoveRetentionRows(
+			proc, process.NewAnalyzer(0, false, false, "MultiUpdate"), linkCtx, ownerCtx))
+		require.Len(t, staged, 2)
+		require.Same(t, retention, staged[1])
+	})
+
+	t.Run("the sticky pre-upgrade degrade bit survives the reuse cycle", func(t *testing.T) {
+		update, ownerInfo, linkInfo := newOp()
+		bindSources(ownerInfo, linkInfo)
+
+		// A tenant whose retention catalog never resolved: the sticky
+		// bit is set and no handle is cached. The re-bind must never
+		// fire on it, and re-resolution must stay suppressed.
+		linkInfo.pkMoveRetentionDisabled = true
+		prevFn := pkMoveGenesisWriteFn
+		t.Cleanup(func() { pkMoveGenesisWriteFn = prevFn })
+		pkMoveGenesisWriteFn = func(
+			engine.Relation, context.Context, *batch.Batch,
+		) error {
+			t.Fatal("a degraded lane must never reach the write seam")
+			return nil
+		}
+
+		proc.Base.TxnOperator = txn1
+		require.NoError(t, update.Prepare(proc))
+		require.NoError(t, update.stagePkMoveRetentionRows(
+			proc, process.NewAnalyzer(0, false, false, "MultiUpdate"), linkCtx, ownerCtx))
+		update.Reset(proc, false, nil)
+		proc.Base.TxnOperator = txn2
+		require.NoError(t, update.Prepare(proc))
+		require.NoError(t, update.stagePkMoveRetentionRows(
+			proc, process.NewAnalyzer(0, false, false, "MultiUpdate"), linkCtx, ownerCtx))
+		require.True(t, linkInfo.pkMoveRetentionDisabled,
+			"the degrade decision sticks across prepared reuse")
+		require.Nil(t, linkInfo.retentionSource)
+	})
+
+	t.Run("a re-bind failure aborts the statement loudly", func(t *testing.T) {
+		update, ownerInfo, linkInfo := newOp()
+		bindSources(ownerInfo, linkInfo)
+
+		injected := moerr.NewInternalErrorNoCtx("retention re-bind blew up")
+		retention := mock_frontend.NewMockRelation(ctrl)
+		retention.EXPECT().Reset(gomock.Any()).Return(injected).Times(1)
+		linkInfo.retentionSource = retention
+
+		proc.Base.TxnOperator = txn1
+		err := update.Prepare(proc)
+		require.ErrorIs(t, err, injected,
+			"degrading past a dead handle would write into a removed workspace")
+	})
+}
+
+// TestResetMultiSourcesClearsPkMoveRetentionSource pins D221 (B.2): the
+// partition reset path clears the cached retention handle alongside
+// info.Source so the lazy resolver re-resolves it under the executing
+// transaction, while the sticky degrade bit stays untouched.
+func TestResetMultiSourcesClearsPkMoveRetentionSource(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	linkCtx := newTestPkMoveLinkCtx(0)
+
+	newOp := func(action UpdateAction) (*MultiUpdate, *updateCtxInfo) {
+		update := &MultiUpdate{Action: action,
+			MultiUpdateCtx: []*MultiUpdateCtx{linkCtx}}
+		update.resetMultiUpdateCtxs()
+		info := lookupUpdateCtxInfo(update.ctr.updateCtxInfos, linkCtx)
+		info.Source = mock_frontend.NewMockRelation(ctrl)
+		info.retentionSource = mock_frontend.NewMockRelation(ctrl)
+		return update, info
+	}
+
+	t.Run("the S3 ferry path clears both handles", func(t *testing.T) {
+		update, info := newOp(UpdateWriteS3)
+		info.pkMoveRetentionDisabled = true
+		require.NoError(t, update.resetMultiSources(proc))
+		require.Nil(t, info.Source)
+		require.Nil(t, info.retentionSource,
+			"the cached retention handle dies with its transaction")
+		require.True(t, info.pkMoveRetentionDisabled,
+			"the sticky degrade bit is preserved for the re-resolution")
+	})
+
+	t.Run("the link ctx on the mem route resolves lazily after clearing", func(t *testing.T) {
+		update, info := newOp(UpdateWriteTable)
+		require.NoError(t, update.resetMultiSources(proc))
+		require.Nil(t, info.Source)
+		require.Nil(t, info.retentionSource,
+			"the link ctx's continue path clears retentionSource before skipping resolution")
+	})
+}

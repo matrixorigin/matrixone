@@ -1208,24 +1208,52 @@ func diffMergeAgency(
 		if betweenTo != nil && betweenTo.LT(&tarEnd) {
 			tarEnd = *betweenTo
 		}
+		// Every closure window carries the physical owner its links were
+		// written under (D220 (B.3)): the endpoints already resolved their
+		// routing identity, and each non-endpoint lineage node resolves by
+		// the ordered-candidate rule of the reopen walk (walking side
+		// first, opposite endpoint second; equal accounts collapse). A
+		// table shared by both paths keeps the first resolved identity —
+		// one physical table has exactly one owner.
+		tarIdent, baseIdent := tblStuff.endpointIdentities(ctx, ses)
+		ownerCache := make(map[uint64]branchIdentity)
 		linkWindows := make([]pkMoveLinkTableWindow, 0,
 			len(dagInfo.pathFromLCAToTar)+len(dagInfo.pathFromLCAToBase)+2)
 		seenWin := make(map[uint64]int)
-		addWindow := func(id uint64, end types.TS) {
+		addWindow := func(id uint64, end types.TS, ident branchIdentity) {
 			linkWindows = appendPkMoveLinkWindow(
-				linkWindows, seenWin, id, uint64(end.Physical()))
+				linkWindows, seenWin, id, uint64(end.Physical()), ident)
+		}
+		addPathWindow := func(id uint64, end types.TS, walking, opposite branchIdentity) bool {
+			owner, cached := ownerCache[id]
+			if !cached {
+				var err3 error
+				owner, err3 = resolvePkMoveWindowOwner(
+					ctx, ses, bh, dedupeBranchIdentities(walking, opposite), id)
+				if err3 != nil {
+					err = err3
+					return false
+				}
+				ownerCache[id] = owner
+			}
+			addWindow(id, end, owner)
+			return true
 		}
 		for _, id := range dagInfo.pathFromLCAToTar {
-			addWindow(id, tarEnd)
+			if !addPathWindow(id, tarEnd, tarIdent, baseIdent) {
+				return
+			}
 		}
 		for _, id := range dagInfo.pathFromLCAToBase {
-			addWindow(id, baseSP)
+			if !addPathWindow(id, baseSP, baseIdent, tarIdent) {
+				return
+			}
 		}
 		if tblStuff.tarRel != nil {
-			addWindow(tblStuff.tarRel.GetTableID(ctx), tarEnd)
+			addWindow(tblStuff.tarRel.GetTableID(ctx), tarEnd, tarIdent)
 		}
 		if tblStuff.baseRel != nil {
-			addWindow(tblStuff.baseRel.GetTableID(ctx), baseSP)
+			addWindow(tblStuff.baseRel.GetTableID(ctx), baseSP, baseIdent)
 		}
 		if len(linkWindows) != 0 {
 			var err2 error
@@ -2582,7 +2610,11 @@ func constructChangeHandle(
 }
 
 // pkMoveLinkWindowsFromRange projects one collected change range to the
-// (table id, window end) pairs the pk-move provenance probes use.
+// (table id, window end, segment identity) triples the pk-move provenance
+// probes use: each window keeps the physical owner its segment was opened
+// under (D220 (B.1)), so a subscription-routed segment's links are read
+// from the account that wrote them. A range without routing identities
+// projects the zero identity, and its reads keep the caller context.
 func pkMoveLinkWindowsFromRange(ctx context.Context, r collectRange) []pkMoveLinkTableWindow {
 	if len(r.rel) == 0 {
 		return nil
@@ -2608,6 +2640,7 @@ func pkMoveLinkWindowsFromRange(ctx context.Context, r collectRange) []pkMoveLin
 			endPhys:   uint64(r.end[i].Physical()),
 			from:      fromTS,
 			end:       r.end[i],
+			ident:     r.segmentIdentity(i, branchIdentity{}),
 		})
 	}
 	return windows

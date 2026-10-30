@@ -2421,11 +2421,14 @@ func findDeleteAndUpdateBat(
 			}
 		}
 		if len(windows) != 0 && bh != nil {
-			var linkTableExists bool
-			if linkTableExists, err = pkMoveLinkTableExists(ctx, ses, bh); err != nil {
+			// Existence is per owner account (D220 (B.4)): a pre-upgrade
+			// owner degrades to complete absence for its own windows
+			// only; the provider serves every other owner's windows
+			// instead of collapsing the whole diff to legacy replay.
+			if windows, err = pkMoveWindowsWithCatalog(ctx, ses, bh, windows); err != nil {
 				return err
 			}
-			if linkTableExists {
+			if len(windows) != 0 {
 				pkMoveProvider = newPkMoveLinkProvider(ctx, ses, bh, windows)
 			}
 		}

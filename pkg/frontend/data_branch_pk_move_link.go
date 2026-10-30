@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/frontend/databranchutils"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -162,6 +163,20 @@ type pkMoveLinkTableWindow struct {
 	// probe-budget role and is never used to derive capture bounds.
 	from types.TS
 	end  types.TS
+	// ident carries the routing layer's authorized physical owner of this
+	// segment (D220 (B.1)): collectRange.idents' winner for collect
+	// windows, the ordered-candidate winner for pre-collect PICK closure
+	// windows. The zero identity keeps the caller context, the
+	// pre-routing posture unit fixtures and local-local diffs rely on.
+	ident branchIdentity
+}
+
+// readCtx derives this window's provenance-read context (D220 (B.2)): a
+// routing-resolved segment identity re-attaches its owner account so the
+// read lands in the physical owner's catalog, while a zero identity keeps
+// the caller context.
+func (w pkMoveLinkTableWindow) readCtx(base context.Context) context.Context {
+	return identityCtx(base, w.ident)
 }
 
 // captureBounds projects this window to the inclusive [from, end] the
@@ -185,15 +200,20 @@ func (w pkMoveLinkTableWindow) captureBounds() (from, end types.TS) {
 }
 
 // appendPkMoveLinkWindow registers tableID's closure window bounded by
-// endPhys. A table reachable from BOTH branch paths is registered once
-// per side; the closure must stay able to read every link either side
-// can fold, so a duplicate registration raises the surviving window to
-// the GREATEST required endpoint instead of dropping the later one
-// (r51 review F1). First registration order is preserved. These windows
-// bound closure expansion only; each diff side's data-collection bounds
-// are computed from its own snapshot elsewhere and never consulted here.
+// endPhys under the resolved segment identity. A table reachable from
+// BOTH branch paths is registered once per side; the closure must stay
+// able to read every link either side can fold, so a duplicate
+// registration raises the surviving window to the GREATEST required
+// endpoint instead of dropping the later one (r51 review F1). The first
+// registration's identity survives: a physical table has exactly one
+// owner account, so both paths' resolved identities for one table id
+// are the same (D220 (B.1)). First registration order is preserved.
+// These windows bound closure expansion only; each diff side's
+// data-collection bounds are computed from its own snapshot elsewhere
+// and never consulted here.
 func appendPkMoveLinkWindow(
 	windows []pkMoveLinkTableWindow, seen map[uint64]int, tableID uint64, endPhys uint64,
+	ident branchIdentity,
 ) []pkMoveLinkTableWindow {
 	if tableID == 0 {
 		return windows
@@ -205,7 +225,81 @@ func appendPkMoveLinkWindow(
 		return windows
 	}
 	seen[tableID] = len(windows)
-	return append(windows, pkMoveLinkTableWindow{tableID: tableID, endPhys: endPhys})
+	return append(windows, pkMoveLinkTableWindow{tableID: tableID, endPhys: endPhys, ident: ident})
+}
+
+// resolvePkMoveWindowOwner resolves the physical owner of tableID by the
+// ordered-candidate rule (D220 (B.3)): the first candidate whose catalog
+// owns the relation wins, mirroring the reopen walk's advance rule. A
+// single candidate needs no catalog probe (equal accounts collapse, so
+// the local-local posture pays nothing); a probe error propagates, and
+// when no candidate owns the table the ZERO identity keeps the
+// pre-routing caller-context posture instead of guessing an owner.
+func resolvePkMoveWindowOwner(
+	ctx context.Context,
+	ses *Session,
+	bh BackgroundExec,
+	candidates []branchIdentity,
+	tableID uint64,
+) (branchIdentity, error) {
+	if len(candidates) == 0 || tableID == 0 {
+		return branchIdentity{}, nil
+	}
+	if len(candidates) == 1 {
+		return candidates[0], nil
+	}
+	for _, candidate := range candidates {
+		probe, err := runSql(identityCtx(ctx, candidate), ses, bh, fmt.Sprintf(
+			"select rel_id from mo_catalog.mo_tables where rel_id = %d", tableID,
+		), nil, nil)
+		if err != nil {
+			return branchIdentity{}, err
+		}
+		owned := false
+		probe.ReadRows(func(rowCnt int, _ []*vector.Vector) bool {
+			owned = rowCnt > 0
+			return false
+		})
+		probe.Close()
+		if owned {
+			return candidate, nil
+		}
+	}
+	return branchIdentity{}, nil
+}
+
+// pkMoveWindowsWithCatalog filters windows to those whose owner account
+// carries the link catalog table (D220 (B.4)): an account created before
+// the catalog existed degrades to complete absence for its own windows
+// only, so the windows of every OTHER owner stay served. The existence
+// verdict is probed once per account and cached for this call; a zero
+// identity probes under the caller context, the pre-routing posture.
+func pkMoveWindowsWithCatalog(
+	ctx context.Context,
+	ses *Session,
+	bh BackgroundExec,
+	windows []pkMoveLinkTableWindow,
+) ([]pkMoveLinkTableWindow, error) {
+	exists := make(map[uint32]bool)
+	out := make([]pkMoveLinkTableWindow, 0, len(windows))
+	for _, w := range windows {
+		rctx := w.readCtx(ctx)
+		account, err := defines.GetAccountId(rctx)
+		if err != nil {
+			account = w.ident.account
+		}
+		have, probed := exists[account]
+		if !probed {
+			if have, err = pkMoveLinkTableExists(rctx, ses, bh); err != nil {
+				return nil, err
+			}
+			exists[account] = have
+		}
+		if have {
+			out = append(out, w)
+		}
+	}
+	return out, nil
 }
 
 // pkMoveLink records one row-level pk move: the row identified by oldRowID
@@ -838,7 +932,10 @@ func (p *pkMoveLinkProvider) probeOldPKs(window pkMoveLinkTableWindow, keys [][]
 	// would then read as complete absence downstream. Stream commit
 	// instants decide window membership during the walk, so the wider
 	// scan only adds provable evidence.
-	links, err := p.runProbeSQL(pkMoveLinkProbeSQL(lo, hi, window.endPhys, budget+1))
+	links, err := p.runProbeSQL(
+		window.readCtx(p.ctx),
+		pkMoveLinkProbeSQL(lo, hi, window.endPhys, budget+1),
+	)
 	if err != nil {
 		return err
 	}
@@ -913,9 +1010,10 @@ func pkMoveLinkProbeSQL(lo, hi []byte, endPhys uint64, limit int) string {
 	)
 }
 
-// runProbeSQL issues one bounded link probe and decodes its rows.
-func (p *pkMoveLinkProvider) runProbeSQL(sql string) ([]pkMoveLink, error) {
-	ret, err := runSql(p.ctx, p.ses, p.bh, sql, nil, nil)
+// runProbeSQL issues one bounded link probe under the window's resolved
+// read context (D220 (B.2)) and decodes its rows.
+func (p *pkMoveLinkProvider) runProbeSQL(ctx context.Context, sql string) ([]pkMoveLink, error) {
+	ret, err := runSql(ctx, p.ses, p.bh, sql, nil, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -1022,7 +1120,10 @@ func (p *pkMoveLinkProvider) probeKeysIndividually(
 			// already-answered key keeps its answer.
 			continue
 		}
-		links, err := p.runProbeSQL(pkMoveLinkProbeSQL(lo, hi, window.endPhys, budget+1))
+		links, err := p.runProbeSQL(
+			window.readCtx(p.ctx),
+			pkMoveLinkProbeSQL(lo, hi, window.endPhys, budget+1),
+		)
 		if err != nil {
 			return err
 		}
@@ -1114,7 +1215,7 @@ func (p *pkMoveLinkProvider) probeAnyLinkInWindow(window pkMoveLinkTableWindow) 
 		catalog.DataBranchUpdateLinkColLinkID, hi,
 		catalog.DataBranchUpdateLinkColWriteTS, window.endPhys,
 	)
-	ret, err := runSql(p.ctx, p.ses, p.bh, sql, nil, nil)
+	ret, err := runSql(window.readCtx(p.ctx), p.ses, p.bh, sql, nil, nil)
 	if err != nil {
 		return false, err
 	}
@@ -1611,7 +1712,7 @@ func (p *pkMoveLinkProvider) captureArrivalCommitsLocked() {
 		}
 		var err error
 		if p.streamLinkCommits != nil {
-			err = p.streamLinkCommits(p.ctx, w, from, end, accept)
+			err = p.streamLinkCommits(w.readCtx(p.ctx), w, from, end, accept)
 		} else {
 			err = p.captureWindowCommitsLocked(w, from, end, accept)
 		}
@@ -1658,14 +1759,18 @@ func (p *pkMoveLinkProvider) captureWindowCommitsLocked(
 		// complete absence (no link rows exist for this build).
 		return nil
 	}
-	rel, err := resolvePkMoveLinkRelation(p.ctx, p.ses, p.bh)
+	// The capture runs under the window's resolved owner context (D220
+	// (B.2)): relation resolution and the change-range read both target
+	// the physical account that wrote this segment's links.
+	rctx := w.readCtx(p.ctx)
+	rel, err := resolvePkMoveLinkRelation(rctx, p.ses, p.bh)
 	if err != nil {
 		return err
 	}
 	if rel == nil {
 		return nil
 	}
-	capCtx := engine.WithChangeRangeLimit(p.ctx, pkMoveLinkCaptureLimit())
+	capCtx := engine.WithChangeRangeLimit(rctx, pkMoveLinkCaptureLimit())
 	mp := p.ses.proc.Mp()
 	handle, err := rel.CollectChanges(capCtx, from, end, true, mp)
 	if err != nil {
@@ -3751,8 +3856,13 @@ func expandPickKeysWithPkMoveLinks(
 		// key is rejected, so nothing can expand.
 		return false, nil
 	}
-	exists, err := pkMoveLinkTableExists(ctx, ses, bh)
-	if err != nil || !exists {
+	// The existence probe is per owner account (D220 (B.4)): a
+	// pre-upgrade owner degrades to complete absence for its own windows
+	// only, so a subscription-routed window keeps reading the publisher's
+	// catalog while the subscriber's pre-existing absence drops just that
+	// account's windows.
+	usable, err = pkMoveWindowsWithCatalog(ctx, ses, bh, usable)
+	if err != nil || len(usable) == 0 {
 		return false, err
 	}
 
@@ -4011,6 +4121,8 @@ func probePickWindowLinks(
 	if len(keys) == 0 {
 		return links, false, nil
 	}
+	// The scan reads the physical owner's catalog (D220 (B.2)).
+	ctx = window.readCtx(ctx)
 	lo, hi, ok := pkMoveLinkPrefixRange(window.tableID, nil)
 	if !ok {
 		return links, false, nil
@@ -4078,6 +4190,8 @@ func probePickWindowKeysIndividually(
 	window pkMoveLinkTableWindow,
 	keys [][]byte,
 ) (links []pkMoveLink, err error) {
+	// The per-key probes read the physical owner's catalog (D220 (B.2)).
+	ctx = window.readCtx(ctx)
 	remainRows := pkMoveLinkReadBudget(window.tableID)
 	issued := 0
 	for _, k := range keys {

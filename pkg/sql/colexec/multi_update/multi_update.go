@@ -95,6 +95,20 @@ func (update *MultiUpdate) Prepare(proc *process.Process) error {
 	for _, updateCtx := range update.MultiUpdateCtx {
 		info := lookupUpdateCtxInfo(update.ctr.updateCtxInfos, updateCtx)
 		if update.Action != UpdateWriteS3 {
+			// D221: a cached prepared-compile operator survives across
+			// executions while MultiUpdate.Reset keeps updateCtxInfos,
+			// so the retention relation handle cached by
+			// resolvePkMoveRetentionSource must re-bind to the EXECUTING
+			// transaction here exactly like info.Source; otherwise
+			// staged identity rows ride the first, already-removed
+			// transaction's workspace. A re-bind failure aborts the
+			// statement — degrading would risk writing into a dead
+			// workspace.
+			if info.retentionSource != nil {
+				if err := info.retentionSource.Reset(proc.GetTxnOperator()); err != nil {
+					return err
+				}
+			}
 			if info.Source == nil && !info.pkMoveLinkDisabled {
 				rel, err := colexec.GetRelAndPartitionRelsByObjRef(proc.Ctx, proc, update.Engine, updateCtx.ObjRef)
 				if err != nil {
@@ -1011,6 +1025,11 @@ func (update *MultiUpdate) resetMultiSources(proc *process.Process) error {
 	for _, updateCtx := range update.MultiUpdateCtx {
 		info := lookupUpdateCtxInfo(update.ctr.updateCtxInfos, updateCtx)
 		info.Source = nil
+		// D221: the cached retention handle dies with its transaction
+		// too; clearing it lets the lazy resolver re-resolve under the
+		// executing txn (the sticky pkMoveRetentionDisabled degrade bit
+		// is preserved).
+		info.retentionSource = nil
 		if update.Action != UpdateWriteS3 {
 			if isUpdatePkMoveLinkCtx(updateCtx) {
 				// Resolved lazily by insertUpdatePkMoveLinkRows so tenants
