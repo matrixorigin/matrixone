@@ -33,6 +33,22 @@ const allowHiddenIndexTableAccessVariable = "allow_hidden_index_table_access"
 // the generated catalog/index-maintenance SQL those sessions also execute.
 type storedSQLCallerKey struct{}
 
+// Carry the caller check on the resolved, request-local UDF, not on a particular
+// compiler-context wrapper. The binder calls it on the already expanded body;
+// generated maintenance SQL without a stored caller keeps its exemption.
+func sqlUdfBodyValidator(ctx context.Context, ses FeSession) func(context.Context, tree.Statement) error {
+	caller, marked := ctx.Value(storedSQLCallerKey{}).(*Session)
+	if !marked {
+		caller, _ = ses.(*Session)
+	}
+	if directHiddenIndexTableAccessAllowed(caller) {
+		return nil
+	}
+	return func(ctx context.Context, stmt tree.Statement) error {
+		return verifyRealUserStatementAgainstHiddenIndexTables(ctx, caller, stmt)
+	}
+}
+
 func storedSQLCaller(ctx context.Context, ses FeSession) *Session {
 	if ctx != nil {
 		if caller, ok := ctx.Value(storedSQLCallerKey{}).(*Session); ok {
@@ -145,6 +161,12 @@ func (f *hiddenIndexTableRefFinder) scanStatement(stmt tree.Statement) {
 	switch st := stmt.(type) {
 	case *tree.Select:
 		f.scanSelect(st)
+	case *tree.ValuesStatement:
+		for _, row := range st.Rows {
+			f.scanExprs(row)
+		}
+		f.scanOrderBy(st.OrderBy)
+		f.scanLimit(st.Limit)
 	case *tree.Insert:
 		f.scanWith(st.With)
 		f.scanTableExpr(st.Table)
@@ -231,6 +253,8 @@ func (f *hiddenIndexTableRefFinder) scanStatement(stmt tree.Statement) {
 		f.scanUnresolvedObjectName(st.TableName)
 		f.scanWhere(st.Where)
 	case *tree.ShowTables:
+		f.scanWhere(st.Where)
+	case *tree.ShowSequences:
 		f.scanWhere(st.Where)
 	case *tree.ShowDatabases:
 		f.scanWhere(st.Where)

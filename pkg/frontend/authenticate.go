@@ -3742,11 +3742,15 @@ func doSwitchRole(ctx context.Context, ses *Session, sr *tree.SetRole) (err erro
 		}
 
 		// step3 : switch the default role and role id;
+		hadHiddenAccess := directHiddenIndexTableAccessAllowed(ses)
 		account.SetDefaultRoleID(uint32(roleId))
 		account.SetDefaultRole(sr.Role.UserName)
 		// then, reset secondary role to none
 		account.SetUseSecondaryRole(false)
 		ses.InvalidatePrivilegeCache()
+		if hadHiddenAccess != directHiddenIndexTableAccessAllowed(ses) {
+			ses.invalidateCachedPlans(true)
+		}
 		// Resolve the new active role's mandatory row rules before leaving the
 		// role switch. If the request was captured under an empty role, this
 		// current-policy check invalidates old handles only when the new role has

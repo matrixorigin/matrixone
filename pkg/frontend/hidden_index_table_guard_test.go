@@ -139,6 +139,9 @@ func TestFindHiddenIndexTableRefInStatement(t *testing.T) {
 		{"show table values", "show table_values from " + hidden},
 		{"show column number", "show column_number from " + hidden + " from db1"},
 		{"show tables predicate", "show tables where (select count(*) from " + hidden + ") > 0"},
+		{"show sequences predicate", "show sequences where (select count(*) from " + hidden + ") > 0"},
+		{"values row subquery", "values row((select count(*) from " + hidden + "))"},
+		{"values ordering subquery", "values row(2), row(1) order by case when (select count(*) from " + hidden + ")=2 then column_0 else -column_0 end"},
 		{"show columns predicate", "show columns from base where (select count(*) from " + hidden + ") > 0"},
 		{"show index predicate", "show index from base where (select count(*) from " + hidden + ") > 0"},
 		{"show databases predicate", "show databases where (select count(*) from " + hidden + ") > 0"},
@@ -201,6 +204,8 @@ func TestFindHiddenIndexTableRefInStatement(t *testing.T) {
 		{"show table values base", "show table_values from base"},
 		{"show column number base", "show column_number from base"},
 		{"show tables base predicate", "show tables where (select count(*) from base) > 0"},
+		{"show sequences base predicate", "show sequences where (select count(*) from base) > 0"},
+		{"values base ordering", "values row(2), row(1) order by case when (select count(*) from base)=2 then column_0 else -column_0 end"},
 		{"show columns base predicate", "show columns from base where (select count(*) from base2) > 0"},
 		{"show index base predicate", "show index from base where (select count(*) from base2) > 0"},
 		{"show databases base predicate", "show databases where (select count(*) from base) > 0"},
@@ -415,6 +420,13 @@ func TestStoredSQLHiddenIndexCallerPolicy(t *testing.T) {
 	t.Cleanup(prepared.Free)
 	require.ErrorContains(t, verifyStoredSQLAgainstHiddenIndexTables(callCtx, prepared), "hidden internal table")
 	require.NoError(t, verifyStoredSQLAgainstHiddenIndexTables(ctx, prepared), "maintenance is not a stored SQL call")
+	validate := sqlUdfBodyValidator(ctx, ses)
+	require.NotNil(t, validate)
+	require.ErrorContains(t, validate(ctx, prepared), "hidden internal table")
+	require.Nil(t, sqlUdfBodyValidator(ctx, child), "ordinary maintenance remains exempt")
+	validate = sqlUdfBodyValidator(callCtx, child)
+	require.NotNil(t, validate)
+	require.ErrorContains(t, validate(callCtx, prepared), "hidden internal table")
 
 	for _, tc := range []struct {
 		name string
@@ -470,6 +482,7 @@ func TestStoredSQLHiddenIndexCallerPolicy(t *testing.T) {
 			require.NoError(t, ses.SetSessionSysVar(ctx, allowHiddenIndexTableAccessVariable, tc.hatch))
 			require.NoError(t, interpreter.execStoredSQL(callCtx, "select * from "+hidden))
 			require.NoError(t, verifyStoredSQLAgainstHiddenIndexTables(callCtx, prepared))
+			require.Nil(t, sqlUdfBodyValidator(callCtx, child))
 			require.Equal(t, "select * from "+hidden, back.currentSql)
 		})
 	}

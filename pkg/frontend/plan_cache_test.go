@@ -534,6 +534,7 @@ func TestSessionPlanDependenciesInvalidatePreparedAndCachedPlans(t *testing.T) {
 	}{
 		{"lc_time_names", "en_US", "fr_FR"},
 		{"mo_pk_check_by_cn", int8(0), int8(1)},
+		{allowHiddenIndexTableAccessVariable, int8(0), int8(1)},
 		{"explicit_defaults_for_timestamp", int64(1), int64(0)},
 		{"sql_mode", "STRICT_TRANS_TABLES", "STRICT_TRANS_TABLES,TIME_TRUNCATE_FRACTIONAL"},
 		{"sql_mode", "", "STRICT_TRANS_TABLES"},

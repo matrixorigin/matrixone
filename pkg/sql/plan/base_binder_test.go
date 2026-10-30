@@ -328,6 +328,23 @@ func TestValidateNthValueArgsAllowsParamWithoutProcess(t *testing.T) {
 
 func TestBindSQLUDFUsesStoredParserMode(t *testing.T) {
 	binder := NewDefaultBinder(context.Background(), nil, nil, plan.Type{}, nil)
+	t.Run("validate expanded body before binding", func(t *testing.T) {
+		denied := moerr.NewInternalErrorNoCtx("caller policy denied")
+		for _, body := range []string{"$1 + 1", "select $1 from missing_hidden_table"} {
+			called := false
+			_, err := bindFuncExprImplUdf(&binder.baseBinder, "checked", &function.Udf{
+				Body: body, Language: string(tree.SQL),
+				ValidateSQLBody: func(_ context.Context, stmt tree.Statement) error {
+					called = true
+					require.IsType(t, &tree.Select{}, stmt)
+					require.NotContains(t, tree.String(stmt, dialect.MYSQL), "$1")
+					return denied
+				},
+			}, nil, []*plan.Expr{makePlan2Int64ConstExprWithType(1)}, 0)
+			require.ErrorIs(t, err, denied)
+			require.True(t, called)
+		}
+	})
 
 	t.Run("legacy UDF uses historical pipe concat mode", func(t *testing.T) {
 		expr, err := bindFuncExprImplUdf(&binder.baseBinder, "legacy_pipe", &function.Udf{

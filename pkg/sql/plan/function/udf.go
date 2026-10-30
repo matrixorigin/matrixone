@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/udf"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"golang.org/x/sync/errgroup"
@@ -41,6 +42,9 @@ type Udf struct {
 	Db           string  `json:"db"`
 	ModifiedTime string  `json:"modified_time"`
 	SQLMode      *string `json:"-"`
+	// ValidateSQLBody is a request-local caller-policy check, applied to the
+	// expanded SQL AST before binding. It is never catalog or wire metadata.
+	ValidateSQLBody func(context.Context, tree.Statement) error `json:"-"`
 
 	ArgsType []types.Type `json:"-"`
 }

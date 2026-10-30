@@ -7,6 +7,7 @@ create table hit_t(x int primary key, y int, key idx_y(y));
 insert into hit_t values (1,10),(2,20),(3,30);
 create unique index uidx_y on hit_t(y);
 create role hit_role_bvt;
+grant all on account * to hit_role_bvt;
 grant select,insert,update,delete on table hit_db_bvt.* to hit_role_bvt;
 grant alter view on database hit_db_bvt to hit_role_bvt;
 grant create view on database hit_db_bvt to hit_role_bvt;
@@ -34,6 +35,11 @@ select count(*) from hit_db_bvt.`__mo_index_secondary_hit_probe`;
 ➤ count(*)[-5,64,0]  𝄀
 2
 create view hit_db_bvt.hit_view_bvt as select x from hit_db_bvt.hit_t;
+create sequence hit_db_bvt.hit_seq_bvt;
+create function hit_db_bvt.hit_lookup() returns bigint language sql as 'select count(*) from hit_db_bvt.__mo_index_secondary_hit_probe';
+create function hit_db_bvt.hit_lookup_nested() returns bigint language sql as 'hit_lookup() + 1';
+create function hit_db_bvt.hit_lookup_base() returns bigint language sql as 'select count(*) from hit_db_bvt.hit_t';
+create procedure hit_db_bvt.hit_udf() 'begin select hit_lookup(); end';
 create procedure hit_db_bvt.hit_read() 'begin select count(*) as hidden_rows from hit_db_bvt.__mo_index_secondary_hit_probe; end';
 create procedure hit_db_bvt.hit_nested() 'begin call hit_db_bvt.hit_read(); end';
 create procedure hit_db_bvt.hit_prepare() 'begin prepare hit_sp from "select count(*) from hit_db_bvt.__mo_index_secondary_hit_probe"; execute hit_sp; deallocate prepare hit_sp; end';
@@ -57,6 +63,35 @@ use hit_db_bvt;
 select x,y from hit_db_bvt.hit_t where y = 20;
 ➤ x[4,32,0]  ¦  y[4,32,0]  𝄀
 2  ¦  20
+create function hit_user_lookup() returns bigint language sql as 'select count(*) from hit_db_bvt.__mo_index_secondary_hit_probe';
+select hit_user_lookup();
+-- @regex("do not have privilege to access the hidden internal table", true)
+internal error: do not have privilege to access the hidden internal table "hit_db_bvt.__mo_index_secondary_hit_probe"
+show sequences where (select count(*) from hit_db_bvt.__mo_index_secondary_hit_probe)=2;
+-- @regex("do not have privilege to access the hidden internal table", true)
+internal error: do not have privilege to access the hidden internal table "hit_db_bvt.__mo_index_secondary_hit_probe"
+values row(2), row(1) order by case when (select count(*) from hit_db_bvt.__mo_index_secondary_hit_probe)=2 then column_0 else -column_0 end;
+-- @regex("do not have privilege to access the hidden internal table", true)
+internal error: do not have privilege to access the hidden internal table "hit_db_bvt.__mo_index_secondary_hit_probe"
+select hit_lookup();
+-- @regex("do not have privilege to access the hidden internal table", true)
+internal error: do not have privilege to access the hidden internal table "hit_db_bvt.__mo_index_secondary_hit_probe"
+select hit_lookup_nested();
+-- @regex("do not have privilege to access the hidden internal table", true)
+internal error: do not have privilege to access the hidden internal table "hit_db_bvt.__mo_index_secondary_hit_probe"
+call hit_db_bvt.hit_udf();
+-- @regex("do not have privilege to access the hidden internal table", true)
+internal error: do not have privilege to access the hidden internal table "hit_db_bvt.__mo_index_secondary_hit_probe"
+show sequences where (select count(*) from hit_db_bvt.hit_t)=3;
+➤ Names[12,5000,0]  ¦  Data Type[12,65535,0]  𝄀
+hit_seq_bvt  ¦  BIGINT
+values row(2), row(1) order by column_0;
+➤ column_0[-5,64,0]  𝄀
+1  𝄀
+2
+select hit_lookup_base();
+➤ hit_lookup_base()[-5,64,0]  𝄀
+3
 call hit_db_bvt.hit_read();
 -- @regex("do not have privilege to access the hidden internal table", true)
 internal error: do not have privilege to access the hidden internal table "hit_db_bvt.__mo_index_secondary_hit_probe"
@@ -212,6 +247,29 @@ invalid state prepared statement 'deny_pl' does not exist
 deallocate prepare deny_pl;
 Unknown prepared statement handler (deny_pl) given to DEALLOCATE PREPARE
 set session allow_hidden_index_table_access = on;
+select hit_user_lookup();
+➤ hit_user_lookup()[-5,64,0]  𝄀
+2
+show sequences where (select count(*) from hit_db_bvt.__mo_index_secondary_hit_probe)=2;
+➤ Names[12,5000,0]  ¦  Data Type[12,65535,0]  𝄀
+hit_seq_bvt  ¦  BIGINT
+values row(2), row(1) order by case when (select count(*) from hit_db_bvt.__mo_index_secondary_hit_probe)=2 then column_0 else -column_0 end;
+➤ column_0[-5,64,0]  𝄀
+1  𝄀
+2
+select hit_lookup();
+➤ hit_lookup()[-5,64,0]  𝄀
+2
+select hit_lookup_nested();
+➤ hit_lookup_nested()[-5,21,0]  𝄀
+3
+call hit_db_bvt.hit_udf();
+➤ hit_lookup()[-5,64,0]  𝄀
+2
+prepare hit_udf_cached from 'select hit_lookup()';
+execute hit_udf_cached;
+➤ hit_lookup()[-5,64,0]  𝄀
+2
 show session variables like 'allow_hidden_index_table_access';
 ➤ Variable_name[12,0,0]  ¦  Value[12,0,0]  𝄀
 allow_hidden_index_table_access  ¦  on
@@ -238,6 +296,13 @@ select count(*) from hit_db_bvt.`__mo_index_secondary_hit_probe`;
 ➤ count(*)[-5,64,0]  𝄀
 3
 set session allow_hidden_index_table_access = off;
+execute hit_udf_cached;
+-- @regex("do not have privilege to access the hidden internal table", true)
+internal error: do not have privilege to access the hidden internal table "hit_db_bvt.__mo_index_secondary_hit_probe"
+deallocate prepare hit_udf_cached;
+select hit_lookup();
+-- @regex("do not have privilege to access the hidden internal table", true)
+internal error: do not have privilege to access the hidden internal table "hit_db_bvt.__mo_index_secondary_hit_probe"
 call hit_db_bvt.hit_nested();
 -- @regex("do not have privilege to access the hidden internal table", true)
 internal error: do not have privilege to access the hidden internal table "hit_db_bvt.__mo_index_secondary_hit_probe"
@@ -248,6 +313,24 @@ deallocate prepare hit_cached;
 select count(*) from hit_db_bvt.`__mo_index_secondary_hit_probe`;
 -- @regex("do not have privilege to access the hidden internal table", true)
 internal error: do not have privilege to access the hidden internal table "hit_db_bvt.__mo_index_secondary_hit_probe"
+select hit_lookup();
+➤ hit_lookup()[-5,64,0]  𝄀
+3
+grant hit_role_bvt to dump;
+prepare hit_admin_cached from 'select hit_lookup()';
+execute hit_admin_cached;
+➤ hit_lookup()[-5,64,0]  𝄀
+3
+set role hit_role_bvt;
+execute hit_admin_cached;
+-- @regex("do not have privilege to access the hidden internal table", true)
+internal error: do not have privilege to access the hidden internal table "hit_db_bvt.__mo_index_secondary_hit_probe"
+set role moadmin;
+execute hit_admin_cached;
+➤ hit_lookup()[-5,64,0]  𝄀
+3
+deallocate prepare hit_admin_cached;
+revoke hit_role_bvt from dump;
 create index idx_y2 on hit_db_bvt.hit_t(y);
 select name from mo_catalog.mo_indexes where table_id = (select rel_id from mo_catalog.mo_tables where reldatabase = 'hit_db_bvt' and relname = 'hit_t') and ordinal_position = 1 order by name;
 ➤ name[12,64,0]  𝄀

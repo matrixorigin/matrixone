@@ -11,6 +11,9 @@ create table hit_t(x int primary key, y int, key idx_y(y));
 insert into hit_t values (1,10),(2,20),(3,30);
 create unique index uidx_y on hit_t(y);
 create role hit_role_bvt;
+-- SHOW SEQUENCES requires account-wide authorization. The role is still not
+-- moadmin: hidden-table protection must hold independently of ordinary grants.
+grant all on account * to hit_role_bvt;
 grant select,insert,update,delete on table hit_db_bvt.* to hit_role_bvt;
 grant alter view on database hit_db_bvt to hit_role_bvt;
 -- CALL currently uses the create-view database privilege.
@@ -34,6 +37,11 @@ create table hit_db_bvt.`__mo_index_unique_hit_probe` (a int, b int);
 insert into hit_db_bvt.`__mo_index_unique_hit_probe` values (1,2),(3,4);
 select count(*) from hit_db_bvt.`__mo_index_secondary_hit_probe`;
 create view hit_db_bvt.hit_view_bvt as select x from hit_db_bvt.hit_t;
+create sequence hit_db_bvt.hit_seq_bvt;
+create function hit_db_bvt.hit_lookup() returns bigint language sql as 'select count(*) from hit_db_bvt.__mo_index_secondary_hit_probe';
+create function hit_db_bvt.hit_lookup_nested() returns bigint language sql as 'hit_lookup() + 1';
+create function hit_db_bvt.hit_lookup_base() returns bigint language sql as 'select count(*) from hit_db_bvt.hit_t';
+create procedure hit_db_bvt.hit_udf() 'begin select hit_lookup(); end';
 create procedure hit_db_bvt.hit_read() 'begin select count(*) as hidden_rows from hit_db_bvt.__mo_index_secondary_hit_probe; end';
 create procedure hit_db_bvt.hit_nested() 'begin call hit_db_bvt.hit_read(); end';
 create procedure hit_db_bvt.hit_prepare() 'begin prepare hit_sp from "select count(*) from hit_db_bvt.__mo_index_secondary_hit_probe"; execute hit_sp; deallocate prepare hit_sp; end';
@@ -57,6 +65,24 @@ call hit_db_bvt.hit_nested();
 -- @session:id=1&user=sys:hit_user_bvt:hit_role_bvt&password=123456
 use hit_db_bvt;
 select x,y from hit_db_bvt.hit_t where y = 20;
+
+-- Rewritten SHOW/VALUES and expanded SQL UDF bodies retain the caller policy.
+create function hit_user_lookup() returns bigint language sql as 'select count(*) from hit_db_bvt.__mo_index_secondary_hit_probe';
+-- @regex("do not have privilege to access the hidden internal table",true)
+select hit_user_lookup();
+-- @regex("do not have privilege to access the hidden internal table",true)
+show sequences where (select count(*) from hit_db_bvt.__mo_index_secondary_hit_probe)=2;
+-- @regex("do not have privilege to access the hidden internal table",true)
+values row(2), row(1) order by case when (select count(*) from hit_db_bvt.__mo_index_secondary_hit_probe)=2 then column_0 else -column_0 end;
+-- @regex("do not have privilege to access the hidden internal table",true)
+select hit_lookup();
+-- @regex("do not have privilege to access the hidden internal table",true)
+select hit_lookup_nested();
+-- @regex("do not have privilege to access the hidden internal table",true)
+call hit_db_bvt.hit_udf();
+show sequences where (select count(*) from hit_db_bvt.hit_t)=3;
+values row(2), row(1) order by column_0;
+select hit_lookup_base();
 
 -- Stored SQL retains its caller's policy, including nested/dynamic SQL and
 -- expressions evaluated outside the ordinary statement executor.
@@ -164,6 +190,14 @@ deallocate prepare deny_pl;
 
 -- the escape hatch lifts the guard for debugging (session scope)
 set session allow_hidden_index_table_access = on;
+select hit_user_lookup();
+show sequences where (select count(*) from hit_db_bvt.__mo_index_secondary_hit_probe)=2;
+values row(2), row(1) order by case when (select count(*) from hit_db_bvt.__mo_index_secondary_hit_probe)=2 then column_0 else -column_0 end;
+select hit_lookup();
+select hit_lookup_nested();
+call hit_db_bvt.hit_udf();
+prepare hit_udf_cached from 'select hit_lookup()';
+execute hit_udf_cached;
 show session variables like 'allow_hidden_index_table_access';
 call hit_db_bvt.hit_nested();
 call hit_db_bvt.hit_prepare();
@@ -179,6 +213,11 @@ select count(*) from hit_db_bvt.`__mo_index_secondary_hit_probe`;
 -- guarded again after the session variable is reset
 set session allow_hidden_index_table_access = off;
 -- @regex("do not have privilege to access the hidden internal table",true)
+execute hit_udf_cached;
+deallocate prepare hit_udf_cached;
+-- @regex("do not have privilege to access the hidden internal table",true)
+select hit_lookup();
+-- @regex("do not have privilege to access the hidden internal table",true)
 call hit_db_bvt.hit_nested();
 -- Recheck handles prepared earlier with diagnostic access enabled.
 -- @regex("do not have privilege to access the hidden internal table",true)
@@ -189,6 +228,18 @@ select count(*) from hit_db_bvt.`__mo_index_secondary_hit_probe`;
 -- @session
 
 -- index build/drop maintenance stays intact
+select hit_lookup();
+-- Leaving the administrative exemption also invalidates expanded UDF plans.
+grant hit_role_bvt to dump;
+prepare hit_admin_cached from 'select hit_lookup()';
+execute hit_admin_cached;
+set role hit_role_bvt;
+-- @regex("do not have privilege to access the hidden internal table",true)
+execute hit_admin_cached;
+set role moadmin;
+execute hit_admin_cached;
+deallocate prepare hit_admin_cached;
+revoke hit_role_bvt from dump;
 create index idx_y2 on hit_db_bvt.hit_t(y);
 select name from mo_catalog.mo_indexes where table_id = (select rel_id from mo_catalog.mo_tables where reldatabase = 'hit_db_bvt' and relname = 'hit_t') and ordinal_position = 1 order by name;
 drop index idx_y2 on hit_db_bvt.hit_t;
