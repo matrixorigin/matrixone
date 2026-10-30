@@ -3397,6 +3397,21 @@ func jsonToNumeric(ctx context.Context, source vector.FunctionParameterWrapper[t
 			continue
 		}
 		bj := types.DecodeJson(v)
+		if toType.Oid == types.T_decimal256 {
+			// DECIMAL256 holds up to 65 digits, far beyond float64's 53-bit
+			// mantissa, so exact JSON numbers convert through their digits.
+			// Only real floating-point JSON values keep the float path.
+			if text, exact := jsonExactNumericText(bj); exact {
+				d, err := types.ParseDecimal256(text, toType.Width, toType.Scale)
+				if err != nil {
+					return err
+				}
+				if err = vector.MustFunctionResult[types.Decimal256](result).Append(d, false); err != nil {
+					return err
+				}
+				continue
+			}
+		}
 		switch toType.Oid {
 		case types.T_int8, types.T_int16, types.T_int32, types.T_int64:
 			value, isNull, ok := jsonToInt64Scalar(bj)
@@ -3443,6 +3458,22 @@ func jsonToNumeric(ctx context.Context, source vector.FunctionParameterWrapper[t
 		}
 	}
 	return nil
+}
+
+// jsonExactNumericText returns the exact decimal digits of an integer,
+// unsigned or DECIMAL JSON scalar. Floats, strings and non-scalars report
+// false and keep their existing conversion.
+func jsonExactNumericText(bj bytejson.ByteJson) (string, bool) {
+	switch bj.Type {
+	case bytejson.TpCodeInt64:
+		return strconv.FormatInt(bj.GetInt64(), 10), true
+	case bytejson.TpCodeUint64:
+		return strconv.FormatUint(bj.GetUint64(), 10), true
+	case bytejson.TpCodeDecimal:
+		return string(bj.GetString()), true
+	default:
+		return "", false
+	}
 }
 
 func jsonAppendInt64(ctx context.Context, result vector.FunctionResultWrapper, oid types.T, value int64) error {

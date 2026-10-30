@@ -18,6 +18,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
@@ -95,4 +96,58 @@ func TestCastTemporalAndJSONToDecimal256(t *testing.T) {
 		NewFunctionTestResult(types.New(types.T_decimal256, 40, 30), true, []types.Decimal256{{}}, []bool{false}), NewCast)
 	succeed, info := fcTC.RunAndFree()
 	require.True(t, succeed, "overflow: %s", info)
+}
+
+// JSON integers, unsigned integers and DECIMAL scalars must reach DECIMAL256
+// digit for digit. Going through float64 rounded 9007199254740993 (2^53+1) to
+// ...992 and dropped most digits of wide decimals.
+func TestCastExactJSONNumbersToDecimal256(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	encode := func(bj bytejson.ByteJson) string {
+		enc, err := types.EncodeJson(bj)
+		require.NoError(t, err)
+		return string(enc)
+	}
+	parse := func(text string) string {
+		bj, err := types.ParseStringToByteJson(text)
+		require.NoError(t, err)
+		return encode(bj)
+	}
+	decimal := func(text string) string {
+		return encode(newTypedByteJson(bytejson.TpCodeDecimal, text))
+	}
+	run := func(name string, in []string, to types.Type, expected []string, wantErr bool) {
+		t.Helper()
+		nulls := make([]bool, len(in))
+		want := make([]types.Decimal256, len(expected))
+		for i, s := range expected {
+			d, err := types.ParseDecimal256(s, to.Width, to.Scale)
+			require.NoError(t, err)
+			want[i] = d
+		}
+		if wantErr {
+			want = []types.Decimal256{{}}
+		}
+		fcTC := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_json.ToType(), in, nulls),
+				NewFunctionTestInput(to, []types.Decimal256{}, []bool{})},
+			NewFunctionTestResult(to, wantErr, want, make([]bool, len(want))), NewCast)
+		succeed, info := fcTC.RunAndFree()
+		require.True(t, succeed, "%s: %s", name, info)
+	}
+	d50s0 := types.New(types.T_decimal256, 50, 0)
+	run("int64 above 2^53", []string{parse(`9007199254740993`), parse(`-9223372036854775808`)},
+		d50s0, []string{"9007199254740993", "-9223372036854775808"}, false)
+	run("uint64 max", []string{parse(`18446744073709551615`)},
+		d50s0, []string{"18446744073709551615"}, false)
+	run("wide decimal", []string{decimal("1234567890123456789012345678901234567890.123456789")},
+		types.New(types.T_decimal256, 60, 9), []string{"1234567890123456789012345678901234567890.123456789"}, false)
+	// Scale rounding follows DECIMAL parsing (half away from zero).
+	run("decimal rounding", []string{decimal("1.25"), decimal("-1.25")},
+		types.New(types.T_decimal256, 40, 1), []string{"1.3", "-1.3"}, false)
+	// Range is still enforced: 3 integer digits do not fit DECIMAL(40,38).
+	run("out of range", []string{parse(`123`)}, types.New(types.T_decimal256, 40, 38), nil, true)
+	// A real JSON float keeps the float conversion.
+	run("float", []string{parse(`1.5`)}, types.New(types.T_decimal256, 50, 2), []string{"1.50"}, false)
 }
