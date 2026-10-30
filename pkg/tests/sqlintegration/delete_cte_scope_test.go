@@ -64,7 +64,8 @@ func TestDeleteCTETargetScope(t *testing.T) {
 			{"mixed targets", "with s as (select 1 as id) delete x,y from t as x join s as y on x.id=y.id", 0, "cannot delete from CTE"},
 			{"qualified target reads CTE", "with t as (select 1 as id) delete delete_cte_scope.t from t where t.id=1", 0, "cannot delete from CTE"},
 			{"qualified target mismatch", "with q as (select 1) delete other.t from delete_cte_scope.t where t.id=1", 0, "does not match its source"},
-			{"derived source", "delete t from (select 1 as id) as t", 0, "not a writable source"},
+			{"target missing from USING", "delete from t using s where s.id=1", 0, "missing FROM-clause entry for table 't'"},
+			{"derived source", "delete t from (select 1 as id) as t", 0, "missing FROM-clause entry for table 't'"},
 		} {
 			t.Run(tc.name, func(t *testing.T) {
 				tx, err := db.BeginTx(ctx, nil)

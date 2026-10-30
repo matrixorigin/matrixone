@@ -29,7 +29,7 @@ type deleteSource struct {
 // CollectDeleteSourceAliases maps visible FROM names (explicit aliases or table
 // names) to their original sources. Omitted schemas remain empty for CTE checks
 // and the consumer's statement default.
-// Derived sources have no base table identity; their validation stays in binding.
+// Derived sources have no writable base table identity and are omitted.
 func CollectDeleteSourceAliases(tableRefs tree.TableExprs) map[string]deleteSource {
 	aliases := make(map[string]deleteSource)
 	for _, ref := range tableRefs {
@@ -102,7 +102,7 @@ func resolveDeleteTargetAliases(ctx CompilerContext, stmt *tree.Delete) (map[str
 			var found bool
 			source, found = aliases[tableName]
 			if !found {
-				return nil, moerr.NewInvalidInputf(ctx.GetContext(), "DELETE target %s is not a writable source", tableName)
+				return nil, moerr.NewInvalidInputf(ctx.GetContext(), "missing FROM-clause entry for table '%s'", tableName)
 			}
 		}
 		if source.schema == "" && ctes[source.table] {
