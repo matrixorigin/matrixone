@@ -38,6 +38,7 @@ import (
 func TestDependentPreparedMigrationProtocol(t *testing.T) {
 	ses, prepared, _, execCtx := newPreparedExecuteEnvForSQL(t, 112,
 		"select (select (select t.k limit 1)) from (select 1 as k union all select 2) t")
+	ses.SetTenantInfo(&TenantInfo{Tenant: sysAccountName, User: rootName, TenantID: sysAccountID, UserID: rootID})
 	defer ses.Close()
 	prepared.rewritePolicyCaptured = true
 	prepared.rewritePolicyGeneration = ses.rewritePolicyGeneration
@@ -74,6 +75,7 @@ func TestDependentPreparedMigrationProtocol(t *testing.T) {
 
 func TestDependentPreparedMigrationRejectsTargetBeforeStateChange(t *testing.T) {
 	ses, prepared, _, _ := newPreparedExecuteEnv(t, 111)
+	ses.SetTenantInfo(&TenantInfo{Tenant: sysAccountName, User: rootName, TenantID: sysAccountID, UserID: rootID})
 	defer ses.Close()
 	rt := moruntime.ServiceRuntime(ses.GetService())
 	previous, present := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
@@ -103,6 +105,11 @@ func TestDependentPreparedMigrationRejectsTargetBeforeStateChange(t *testing.T) 
 
 func TestMigrateConnectionFromPreservesPreparedVariableBinding(t *testing.T) {
 	ses, scratch, cw, execCtx := newPreparedExecuteEnv(t, 125)
+	ses.SetTenantInfo(&TenantInfo{Tenant: sysAccountName, User: rootName, TenantID: sysAccountID, UserID: rootID})
+	// This expression-only fixture has no catalog; retain its empty policy with
+	// the existing private proof after supplying the authenticated principal.
+	ses.ruleCache = map[string]string{}
+	seedRewriteRuleCacheProofForTest(ses)
 	t.Cleanup(ses.Close)
 	scratch.rewritePolicyCaptured = true
 	scratch.rewritePolicyGeneration = ses.rewritePolicyGeneration
