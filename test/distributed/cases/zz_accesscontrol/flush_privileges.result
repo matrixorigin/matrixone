@@ -32,7 +32,7 @@ deallocate prepare flush_privileges_existing;
 prepare flush_privileges_unsupported from 'flush privileges';
 not supported: preparing FLUSH PRIVILEGES
 flush tables;
-SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 12 near " tables";
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 12 near " tables;";
 set session enable_privilege_cache = on;
 begin;
 insert into flush_privileges_db.flush values (3);
