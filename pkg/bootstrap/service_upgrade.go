@@ -85,22 +85,6 @@ func crossingPending(v versions.Version, txn executor.TxnExecutor) (bool, error)
 	return crossingPendingInSteps(steps), nil
 }
 
-// crossingPendingInRoute is crossingPending instantiated on the final route.
-// On a 4.0.7 final the 4.0.7 step is the route's last step and the final
-// marker flips Ready only after every step is Ready, so a not-Ready marker
-// already implies the crossing step is not Ready and no added read is needed;
-// a later final scans its own persisted route steps.
-func crossingPendingInRoute(final versions.Version, txn executor.TxnExecutor) (bool, error) {
-	if final.Version == "4.0.7" {
-		return true, nil
-	}
-	steps, err := versions.GetUpgradeVersions(final.Version, final.VersionOffset, txn, false, false)
-	if err != nil {
-		return false, err
-	}
-	return crossingPendingInSteps(steps), nil
-}
-
 func crossingPendingInSteps(steps []versions.VersionUpgrade) bool {
 	for _, step := range steps {
 		if step.ToVersion == "4.0.7" && step.State != versions.StateReady {
@@ -277,14 +261,12 @@ func (s *service) checkUpgrade(ctx context.Context, recheck bool) error {
 				state, exists, err := versions.GetVersionState(final.Version, final.VersionOffset, txn, false)
 				if err != nil || exists {
 					if err == nil && exists && state != versions.StateReady && versions.Compare(final.Version, "4.0.7") >= 0 {
-						pending, cerr := crossingPendingInRoute(final, txn)
-						if cerr != nil {
-							return cerr
-						}
-						if pending {
+						if final.Version == "4.0.7" {
 							if err = rejectLegacyCDCTasks(txn); err != nil {
 								return err
 							}
+						} else if err = s.checkPendingV407Upgrade(final, txn); err != nil {
+							return err
 						}
 					}
 					completed = err == nil && exists && state == versions.StateReady
@@ -327,7 +309,15 @@ func (s *service) checkUpgrade(ctx context.Context, recheck bool) error {
 					"catalog 4.0.7 offset %d differs from binary offset %d; 4.0.7 is frozen and further migrations require a new catalog version",
 					v.VersionOffset, v4_0_7.Handler.Metadata().VersionOffset)}
 			}
-			if created && versions.Compare(final.Version, "4.0.7") >= 0 {
+			// Validate retained recovery before any catalog setup. That validation
+			// owns CDC admission for this route; do not run its preflight twice.
+			retainedRecovery := !v.IsReady() && v.Version != final.Version && s.canResumeUpgrade(v)
+			if retainedRecovery {
+				if err := s.checkUpgradeRecovery(v, txn); err != nil {
+					return err
+				}
+			}
+			if created && !retainedRecovery && versions.Compare(final.Version, "4.0.7") >= 0 {
 				pending, err := crossingPending(v, txn)
 				if err != nil {
 					return err
@@ -360,8 +350,8 @@ func (s *service) checkUpgrade(ctx context.Context, recheck bool) error {
 			// until its cluster and tenant stages have all committed completion.
 			if !v.IsReady() {
 				if v.Version != final.Version {
-					if s.canResumeUpgrade(v) {
-						return s.checkUpgradeRecovery(v, txn)
+					if retainedRecovery {
+						return nil
 					}
 					return &terminalUpgradeError{moerr.NewInvalidStateNoCtxf("cannot upgrade to version %s, because version %s is in upgrading",
 						final.Version, v.Version)}

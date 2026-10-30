@@ -16,197 +16,264 @@ package v4_0_18
 
 import (
 	"context"
-	"fmt"
+	"errors"
 	"strings"
 	"testing"
 
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
+	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_7"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	pbtxn "github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/util/sysview"
 	"github.com/stretchr/testify/require"
 )
 
-func TestPythonRevisionRepairUpgradePath(t *testing.T) {
-	metadata := Handler.Metadata()
-	require.Equal(t, "4.0.18", metadata.Version)
-	require.Equal(t, "4.0.7", metadata.MinUpgradeVersion)
-	require.Equal(t, versions.No, metadata.UpgradeCluster)
-	require.Equal(t, versions.Yes, metadata.UpgradeTenant)
-	require.Zero(t, metadata.RequiredProtocolVersion)
-	require.Equal(t, uint32(len(tenantUpgEntries)), metadata.VersionOffset)
-	require.True(t, metadata.CanDirectUpgrade("4.0.7"))
-	require.False(t, metadata.CanDirectUpgrade("4.0.6"))
-	require.Len(t, tenantUpgEntries, 9)
+// preChangeCurrentColumnsDDL reproduces the undecorated current template a
+// base-era pre-change binary persists: the V109 lineage with the MEDIUMINT
+// DATA_TYPE arm (the sysview package's frozen T0 identity). The sysview
+// package pins this exact construction byte-identical to its internal frozen
+// pre-change template (pkg/util/sysview/view_columns_history_test.go).
+func preChangeCurrentColumnsDDL() string {
+	const v109DataType = "upper(mo_show_visible_bin(mc.atttyp,2)) = 'BOOL' then 'TINYINT' "
+	const v110DataType = v109DataType + "when upper(mo_show_visible_bin(mc.atttyp,3)) like 'MEDIUMINT%' then 'MEDIUMINT' "
+	return strings.ReplaceAll(sysview.InformationSchemaColumnsV109DDL(), v109DataType, v110DataType)
 }
 
-func TestPythonRevisionRepairIsIdempotentForCatalogStates(t *testing.T) {
-	for _, test := range []struct {
-		name          string
-		schemaOrigin  string
-		columns       []string
-		newIndex      bool
-		legacyIndex   bool
-		revisionTable bool
-		wantFirstDDL  int
+// preChangeBinaryNullColumnsDDL is the second frozen pre-change variant (T1):
+// the #31461-era selector revision of the pre-change current template. A
+// binary of that era persists exactly this text before the v4_0_18 entry
+// recreates the view with the decorated definition.
+func preChangeBinaryNullColumnsDDL() string {
+	return strings.ReplaceAll(preChangeCurrentColumnsDDL(),
+		"WHEN 2 then 'binary'", "WHEN 2 then NULL")
+}
+
+func TestColumnsUpgradeMetadata(t *testing.T) {
+	m := Handler.Metadata()
+	require.Equal(t, "4.0.18", m.Version)
+	require.Equal(t, "4.0.7", m.MinUpgradeVersion)
+	require.Equal(t, versions.Yes, m.UpgradeTenant)
+	require.Equal(t, versions.No, m.UpgradeCluster)
+	// The protocol fence is inherited from the frozen consolidated terminal:
+	// the view writers and definitions this forward handle installs are the
+	// terminal's own.
+	require.Equal(t, defines.MORPCVersion126, m.RequiredProtocolVersion)
+	require.Equal(t, uint32(1), m.VersionOffset)
+	require.Len(t, tenantUpgEntries, 1)
+
+	// The frozen consolidated terminal pins: 41 = 27 tenant + 14 cluster
+	// entries, protocol 126, and the 4.0.6 floor.
+	terminal := v4_0_7.Handler.Metadata()
+	require.Equal(t, "4.0.7", terminal.Version)
+	require.Equal(t, "4.0.6", terminal.MinUpgradeVersion)
+	require.Equal(t, uint32(41), terminal.VersionOffset)
+	require.Equal(t, defines.MORPCVersion126, terminal.RequiredProtocolVersion)
+
+	// The entry is main's canonical COLUMNS constructor verbatim: its fence
+	// stays at main's 109, it carries no PreSql, and its UpgSql is the
+	// CREATE OR REPLACE form of the current (decorated) template resolved at
+	// runtime.
+	entry := tenantUpgEntries[0]
+	require.Equal(t, int64(defines.MORPCVersion109), entry.RequiredProtocolVersion)
+	require.Empty(t, entry.PreSql, "the canonical entry has no PreSql; the CREATE OR REPLACE is atomic")
+	require.Equal(t,
+		strings.Replace(sysview.InformationSchemaColumnsDDL, "CREATE VIEW ", "CREATE OR REPLACE VIEW ", 1),
+		entry.UpgSql)
+	require.Contains(t, entry.UpgSql, "mc.att_is_unsigned",
+		"the entry installs the attributed-DECIMAL decorated definition")
+
+	// CanDirectUpgrade chain boundary on the consolidated chain: the frozen
+	// terminal admits its 4.0.6 floor, and this forward handle's own floor
+	// is 4.0.7, so the exact READY-4.0.7/41 predecessor is admitted and
+	// 4.0.6 is not its direct input.
+	require.True(t, Handler.Metadata().CanDirectUpgrade("4.0.7"))
+	require.False(t, Handler.Metadata().CanDirectUpgrade("4.0.6"))
+	require.True(t, v4_0_7.Handler.Metadata().CanDirectUpgrade("4.0.6"))
+	require.False(t, v4_0_7.Handler.Metadata().CanDirectUpgrade("4.0.5"))
+}
+
+func TestColumnsUpgradeAdmissionAndIdempotence(t *testing.T) {
+	const protocolSQL = "SELECT mo_ctl('cn', 'GetProtocolVersion', '')"
+	entry := tenantUpgEntries[0]
+	injected := errors.New("injected columns upgrade failure")
+	for _, tc := range []struct {
+		name       string
+		definition string
+		folded     string
+		protocol   string
+		failSQL    string
+		wantDDL    []string
+		wantErr    bool
 	}{
+		{name: "already current", definition: sysview.InformationSchemaColumnsDDL},
 		{
-			name:         "frozen_4.0.7_missed_catalog",
-			schemaOrigin: "4.0.7",
-			legacyIndex:  true,
-			wantFirstDDL: 9,
+			name:       "pre-change current template recreates",
+			definition: preChangeCurrentColumnsDDL(),
+			protocol:   `{"result":"cn0:109,cn1:109"}`,
+			wantDDL:    []string{entry.UpgSql},
 		},
 		{
-			name:         "partial_revision_catalog",
-			schemaOrigin: "4.0.8",
-			columns: []string{
-				"active_revision", "namespace_version", "canonical_input_descriptor",
-				"return_descriptor", "signature_key_schema_version", "signature_fingerprint",
-			},
-			legacyIndex:  true,
-			wantFirstDDL: 3,
+			name:       "pre-change binary-null variant recreates",
+			definition: preChangeBinaryNullColumnsDDL(),
+			protocol:   `{"result":"cn0:109,cn1:109"}`,
+			wantDDL:    []string{entry.UpgSql},
 		},
 		{
-			name:         "complete_revision_catalog",
-			schemaOrigin: "4.0.8",
-			columns: []string{
-				"active_revision", "namespace_version", "canonical_input_descriptor",
-				"return_descriptor", "signature_key_schema_version", "signature_fingerprint",
-			},
-			newIndex:      true,
-			revisionTable: true,
-			wantFirstDDL:  0,
+			name:       "legacy V109 template recreates",
+			definition: sysview.InformationSchemaColumnsV109DDL(),
+			protocol:   `{"result":"cn0:109,cn1:109"}`,
+			wantDDL:    []string{entry.UpgSql},
+		},
+		{
+			name:       "legacy V58 template recreates",
+			definition: sysview.InformationSchemaColumnsV58DDL(),
+			protocol:   `{"result":"cn0:109,cn1:109"}`,
+			wantDDL:    []string{entry.UpgSql},
+		},
+		{
+			name:     "missing under both catalog spellings recreates",
+			protocol: `{"result":"cn0:109,cn1:109"}`,
+			wantDDL:  []string{entry.UpgSql},
+		},
+		{
+			name:   "canonical under the folded spelling stays read-only",
+			folded: sysview.InformationSchemaColumnsDDL,
+		},
+		{
+			name:     "pre-change template under the folded spelling recreates",
+			folded:   preChangeCurrentColumnsDDL(),
+			protocol: `{"result":"cn0:109,cn1:109"}`,
+			wantDDL:  []string{entry.UpgSql},
+		},
+		{
+			name:       "old protocol defers",
+			definition: sysview.InformationSchemaColumnsV109DDL(),
+			protocol:   `{"result":"cn0:109,cn1:108"}`,
+			wantErr:    true,
+		},
+		{
+			name:       "failed create or replace",
+			definition: sysview.InformationSchemaColumnsV109DDL(),
+			protocol:   `{"result":"cn0:109"}`,
+			failSQL:    entry.UpgSql,
+			wantErr:    true,
+			wantDDL:    []string{entry.UpgSql},
 		},
 	} {
-		t.Run(test.name, func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			runtime.RunTest("", func(runtime.Runtime) {
-				state := &pythonRevisionCatalogState{
-					columns:       make(map[string]bool),
-					newIndex:      test.newIndex,
-					legacyIndex:   test.legacyIndex,
-					revisionTable: test.revisionTable,
+				operator := mock_frontend.NewMockTxnOperator(gomock.NewController(t))
+				operator.EXPECT().TxnOptions().Return(pbtxn.TxnOptions{}).AnyTimes()
+				mp := mpool.MustNewZero()
+				defer func() { require.Zero(t, mp.CurrNB()) }()
+				result := func(value string) executor.Result {
+					r := executor.NewMemResult([]types.Type{types.T_varchar.ToType()}, mp)
+					if value != "" {
+						r.NewBatchWithRowCount(1)
+						require.NoError(t, executor.AppendStringRows(r, 0, []string{value}))
+					}
+					return r.GetResult()
 				}
-				for _, column := range test.columns {
-					state.columns[column] = true
+				definition := tc.definition
+				folded := tc.folded
+				var ddl []string
+				// Commit-fence emulation: the MemTxnExecutor cannot model
+				// transaction commit/rollback, so the mock stages the
+				// replacement into pending on a successful UpgSql and the
+				// test applies it only when entry.Upgrade returns nil; a
+				// returned error discards the staged write. The real
+				// transaction-level proof — replacement executed, owner
+				// transaction aborted before the tenant marker commits, view
+				// content and tenant progress both rolled back, restart
+				// completed — is TestColumnsUpgradeInterruptedRouteResumes in
+				// pkg/embed against a live cluster.
+				var pending *string
+				commit := func(err error) {
+					if err == nil && pending != nil {
+						definition = *pending
+					}
+					pending = nil
 				}
-				txn := newRepairTxnExecutor(t, state)
-				require.NoError(t, Handler.Prepare(context.Background(), txn, true))
-				require.NoError(t, Handler.HandleTenantUpgrade(context.Background(), 7, txn))
-				require.Len(t, state.ddl, test.wantFirstDDL,
-					"repair of %s schema must apply only missing catalog objects", test.schemaOrigin)
-				firstDDL := append([]string(nil), state.ddl...)
-				require.NoError(t, Handler.HandleTenantUpgrade(context.Background(), 7, txn))
-				require.Equal(t, firstDDL, state.ddl,
-					"a restart/retry of %s schema must not repeat DDL", test.schemaOrigin)
+				txn := executor.NewMemTxnExecutor(func(sql string) (executor.Result, error) {
+					switch {
+					case strings.Contains(sql, "tbl.relname = 'COLUMNS'"):
+						return result(definition), nil
+					case strings.Contains(sql, "tbl.relname = 'columns'"):
+						return result(folded), nil
+					case sql == protocolSQL:
+						return result(tc.protocol), nil
+					default:
+						ddl = append(ddl, sql)
+						if sql == tc.failSQL {
+							return executor.Result{}, injected
+						}
+						if sql == entry.UpgSql {
+							staged := sysview.InformationSchemaColumnsDDL
+							pending = &staged
+						}
+						return executor.Result{}, nil
+					}
+				}, operator)
+				err := entry.Upgrade(txn, 7)
+				commit(err)
+				if tc.failSQL != "" {
+					require.ErrorIs(t, err, injected)
+				} else if tc.wantErr {
+					require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), "%v", err)
+				} else {
+					require.NoError(t, err)
+				}
+				require.Equal(t, tc.wantDDL, ddl)
+
+				if tc.wantErr && tc.failSQL == "" {
+					return
+				}
+				if tc.failSQL != "" {
+					// The failed attempt's staged replacement was discarded
+					// at the commit fence above (the emulated rollback), so
+					// the retry must observe the staged legacy view and
+					// perform the complete repair again.
+					tc.failSQL = ""
+					ddl = nil
+					require.NoError(t, entry.Upgrade(txn, 7))
+					commit(nil)
+					require.Equal(t, []string{entry.UpgSql}, ddl)
+				}
+				ddl = nil
+				require.NoError(t, entry.Upgrade(txn, 7))
+				commit(nil)
+				require.Empty(t, ddl, "a completed refresh must be idempotent")
 			})
 		})
 	}
 }
 
-type pythonRevisionCatalogState struct {
-	columns       map[string]bool
-	newIndex      bool
-	legacyIndex   bool
-	revisionTable bool
-	ddl           []string
-}
+func TestColumnsUpgradeLifecycle(t *testing.T) {
+	runtime.RunTest("", func(runtime.Runtime) {
+		ctx := context.Background()
+		operator := mock_frontend.NewMockTxnOperator(gomock.NewController(t))
+		operator.EXPECT().TxnOptions().Return(pbtxn.TxnOptions{}).AnyTimes()
+		txn := executor.NewMemTxnExecutor(func(sql string) (executor.Result, error) {
+			require.True(t, strings.Contains(sql, "tbl.relname = 'COLUMNS'"), sql)
+			mp := mpool.MustNewZero()
+			r := executor.NewMemResult([]types.Type{types.T_varchar.ToType()}, mp)
+			r.NewBatchWithRowCount(1)
+			require.NoError(t, executor.AppendStringRows(r, 0, []string{sysview.InformationSchemaColumnsDDL}))
+			return r.GetResult(), nil
+		}, operator)
+		require.NoError(t, Handler.Prepare(ctx, txn, true))
+		require.NoError(t, Handler.HandleTenantUpgrade(ctx, 1, txn))
+		require.Error(t, Handler.HandleCreateFrameworkDeps(txn))
 
-func newRepairTxnExecutor(t *testing.T, state *pythonRevisionCatalogState) executor.TxnExecutor {
-	t.Helper()
-	txnOperator := mock_frontend.NewMockTxnOperator(gomock.NewController(t))
-	txnOperator.EXPECT().TxnOptions().Return(pbtxn.TxnOptions{}).AnyTimes()
-	return executor.NewMemTxnExecutor(func(sql string) (executor.Result, error) {
-		require.NotContains(t, sql, "GetProtocolVersion")
-		lower := strings.ToLower(sql)
-		switch {
-		case strings.Contains(lower, "from mo_catalog.mo_columns"):
-			for column := range state.columns {
-				if strings.Contains(sql, fmt.Sprintf("attname = '%s'", column)) {
-					return repairColumnResult(t), nil
-				}
-			}
-			return executor.Result{}, nil
-		case strings.Contains(lower, "from `mo_catalog`.`mo_indexes`"):
-			if strings.Contains(sql, "name_db_arg_types_descriptor") && state.newIndex {
-				return repairStringResult(t, "name_db_arg_types_descriptor"), nil
-			}
-			if strings.Contains(sql, "name_db_arg_types'") && state.legacyIndex {
-				return repairStringResult(t, "name_db_arg_types"), nil
-			}
-			return executor.Result{}, nil
-		case strings.Contains(lower, "from mo_catalog.mo_tables"):
-			if state.revisionTable && strings.Contains(sql, "relname = 'mo_function_revisions'") {
-				return repairStringResult(t, "mo_function_revisions"), nil
-			}
-			return executor.Result{}, nil
-		case strings.Contains(lower, "alter table mo_catalog.mo_user_defined_function add column"):
-			for column := range state.columns {
-				if strings.Contains(sql, "add column "+column+" ") {
-					return executor.Result{}, nil
-				}
-			}
-			for _, column := range []string{
-				"active_revision", "namespace_version", "canonical_input_descriptor",
-				"return_descriptor", "signature_key_schema_version", "signature_fingerprint",
-			} {
-				if strings.Contains(sql, "add column "+column+" ") {
-					state.columns[column] = true
-					state.ddl = append(state.ddl, sql)
-					return executor.Result{}, nil
-				}
-			}
-		case strings.Contains(lower, "create unique index name_db_arg_types_descriptor"):
-			state.newIndex = true
-			state.ddl = append(state.ddl, sql)
-			return executor.Result{}, nil
-		case strings.Contains(lower, "drop index name_db_arg_types"):
-			state.legacyIndex = false
-			state.ddl = append(state.ddl, sql)
-			return executor.Result{}, nil
-		case strings.Contains(lower, "create table mo_catalog.mo_function_revisions"):
-			state.revisionTable = true
-			state.ddl = append(state.ddl, sql)
-			return executor.Result{}, nil
-		default:
-			return executor.Result{}, fmt.Errorf("unexpected repair SQL: %s", sql)
-		}
-		return executor.Result{}, nil
-	}, txnOperator)
-}
-
-func repairStringResult(t *testing.T, value string) executor.Result {
-	t.Helper()
-	mp := mpool.MustNewZeroNoFixed()
-	t.Cleanup(func() { mpool.DeleteMPool(mp) })
-	result := executor.NewMemResult([]types.Type{types.T_varchar.ToType()}, mp)
-	result.NewBatchWithRowCount(1)
-	require.NoError(t, executor.AppendStringRows(result, 0, []string{value}))
-	return result.GetResult()
-}
-
-func repairColumnResult(t *testing.T) executor.Result {
-	t.Helper()
-	mp := mpool.MustNewZeroNoFixed()
-	t.Cleanup(func() { mpool.DeleteMPool(mp) })
-	result := executor.NewMemResult([]types.Type{
-		types.T_varchar.ToType(), types.T_varchar.ToType(),
-		types.T_int64.ToType(), types.T_int64.ToType(), types.T_int64.ToType(), types.T_int64.ToType(),
-		types.T_int32.ToType(), types.T_varchar.ToType(), types.T_varchar.ToType(), types.T_varchar.ToType(),
-	}, mp)
-	result.NewBatchWithRowCount(1)
-	require.NoError(t, executor.AppendStringRows(result, 0, []string{"BIGINT UNSIGNED"}))
-	require.NoError(t, executor.AppendStringRows(result, 1, []string{"NO"}))
-	require.NoError(t, executor.AppendFixedRows(result, 2, []int64{0}))
-	require.NoError(t, executor.AppendFixedRows(result, 3, []int64{0}))
-	require.NoError(t, executor.AppendFixedRows(result, 4, []int64{0}))
-	require.NoError(t, executor.AppendFixedRows(result, 5, []int64{0}))
-	require.NoError(t, executor.AppendFixedRows(result, 6, []int32{1}))
-	require.NoError(t, executor.AppendStringRows(result, 7, []string{"0"}))
-	require.NoError(t, executor.AppendStringRows(result, 8, []string{""}))
-	require.NoError(t, executor.AppendStringRows(result, 9, []string{""}))
-	return result.GetResult()
+		injected := errors.New("injected")
+		failed := executor.NewMemTxnExecutor(func(string) (executor.Result, error) { return executor.Result{}, injected }, operator)
+		require.ErrorIs(t, Handler.HandleTenantUpgrade(ctx, 7, failed), injected)
+	})
 }
