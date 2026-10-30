@@ -453,6 +453,41 @@ func TestDateFormatUsesTemporalLocaleForGenericPatterns(t *testing.T) {
 	require.True(t, succeeded, info)
 }
 
+func TestDateFormatReportedLocales(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	locale := "en_US"
+	proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
+		if name == "lc_time_names" {
+			return locale, nil
+		}
+		return "", nil
+	})
+	date := types.DatetimeFromClock(2024, 3, 1, 0, 0, 0, 0)
+	for _, tc := range []struct {
+		locale string
+		want   string
+	}{
+		{"zh_CN", "星期五|三月|五| 3月"},
+		{"ru_RU", "Пятница|Марта|Птн|Мар"},
+		{"tr_TR", "Cuma|Mart|Cum|Mar"},
+		{"ar_EG", "الجمعة|مارس|ج|مار"},
+		{"ja_JP", "金曜日|3月|金| 3月"},
+	} {
+		t.Run(tc.locale, func(t *testing.T) {
+			locale = tc.locale
+			caseTest := NewFunctionTestCase(proc,
+				[]FunctionTestInput{
+					NewFunctionTestInput(types.T_datetime.ToType(), []types.Datetime{date}, nil),
+					NewFunctionTestInput(types.T_varchar.ToType(), []string{"%W|%M|%a|%b"}, nil),
+				},
+				NewFunctionTestResult(types.T_varchar.ToType(), false, []string{tc.want}, nil),
+				DateFormat)
+			ok, info := caseTest.RunAndFree()
+			require.True(t, ok, info)
+		})
+	}
+}
+
 func TestTimestampWindowBoundaryLordHoweFold(t *testing.T) {
 	zone, err := time.LoadLocation("Australia/Lord_Howe")
 	require.NoError(t, err)

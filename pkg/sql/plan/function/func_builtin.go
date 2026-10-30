@@ -2915,6 +2915,16 @@ func unswapUUIDTimeParts(u types.Uuid) types.Uuid {
 	}
 }
 
+// MySQL accepts UNIX_TIMESTAMP arguments from one second after the epoch up to
+// the last microsecond representable by FROM_UNIXTIME on 64-bit platforms.
+// Check microseconds so the lower fractional second and upper fractional
+// second have the same behavior for every input and result overload.
+func unixTimestampArgumentMicroseconds(value types.Timestamp) (int64, bool) {
+	unixMicro := int64(value) - int64(types.UnixToTimestamp(0))
+	return unixMicro, unixMicro >= types.MicroSecsPerSec &&
+		unixMicro <= maxUnixTimestampInt*types.MicroSecsPerSec+types.MicroSecsPerSec-1
+}
+
 func builtInUnixTimestamp(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	if len(parameters) == 0 {
 		rs := vector.MustFunctionResult[int64](result)
@@ -2937,7 +2947,7 @@ func builtInUnixTimestamp(parameters []*vector.Vector, result vector.FunctionRes
 		var zero types.Decimal128
 		for i := uint64(0); i < uint64(length); i++ {
 			v1, null1 := p1.GetValue(i)
-			unixMicro := int64(v1) - int64(types.UnixToTimestamp(0))
+			unixMicro, inRange := unixTimestampArgumentMicroseconds(v1)
 			if null1 {
 				if err := rs.Append(zero, true); err != nil {
 					return err
@@ -2946,7 +2956,7 @@ func builtInUnixTimestamp(parameters []*vector.Vector, result vector.FunctionRes
 				if err := rs.Append(zero, true); err != nil {
 					return err
 				}
-			} else if unixMicro < 0 {
+			} else if !inRange {
 				if err := rs.Append(zero, false); err != nil {
 					return err
 				}
@@ -2963,7 +2973,7 @@ func builtInUnixTimestamp(parameters []*vector.Vector, result vector.FunctionRes
 	rs := vector.MustFunctionResult[int64](result)
 	for i := uint64(0); i < uint64(length); i++ {
 		v1, null1 := p1.GetValue(i)
-		val := v1.Unix()
+		unixMicro, inRange := unixTimestampArgumentMicroseconds(v1)
 		if null1 {
 			if err := rs.Append(0, true); err != nil {
 				return err
@@ -2972,12 +2982,12 @@ func builtInUnixTimestamp(parameters []*vector.Vector, result vector.FunctionRes
 			if err := rs.Append(0, true); err != nil {
 				return err
 			}
-		} else if val < 0 {
+		} else if !inRange {
 			if err := rs.Append(0, false); err != nil {
 				return err
 			}
 		} else {
-			if err := rs.Append(val, false); err != nil {
+			if err := rs.Append(unixMicro/types.MicroSecsPerSec, false); err != nil {
 				return err
 			}
 		}
@@ -3001,8 +3011,8 @@ func builtInUnixTimestampDatetime(parameters []*vector.Vector, result vector.Fun
 				}
 				continue
 			}
-			unixMicro := int64(value.ToTimestamp(zone)) - int64(types.UnixToTimestamp(0))
-			if unixMicro < 0 {
+			unixMicro, inRange := unixTimestampArgumentMicroseconds(value.ToTimestamp(zone))
+			if !inRange {
 				unixMicro = 0
 			}
 			if err := rs.Append(types.Decimal128{B0_63: uint64(unixMicro)}, false); err != nil {
@@ -3021,11 +3031,11 @@ func builtInUnixTimestampDatetime(parameters []*vector.Vector, result vector.Fun
 			}
 			continue
 		}
-		unix := value.ToTimestamp(zone).Unix()
-		if unix < 0 {
-			unix = 0
+		unixMicro, inRange := unixTimestampArgumentMicroseconds(value.ToTimestamp(zone))
+		if !inRange {
+			unixMicro = 0
 		}
-		if err := rs.Append(unix, false); err != nil {
+		if err := rs.Append(unixMicro/types.MicroSecsPerSec, false); err != nil {
 			return err
 		}
 	}
@@ -3058,19 +3068,19 @@ func builtInUnixTimestampVarcharToInt64(parameters []*vector.Vector, result vect
 				}
 				continue
 			}
-			val := timestamp.Unix()
+			unixMicro, inRange := unixTimestampArgumentMicroseconds(timestamp)
 			if timestamp == types.ZeroTimestamp {
 				if err := rs.Append(0, true); err != nil {
 					return err
 				}
 				continue
-			} else if val < 0 {
+			} else if !inRange {
 				if err := rs.Append(0, false); err != nil {
 					return err
 				}
 				continue
 			}
-			if err := rs.Append(val, false); err != nil {
+			if err := rs.Append(unixMicro/types.MicroSecsPerSec, false); err != nil {
 				return err
 			}
 		}
@@ -3098,19 +3108,19 @@ func builtInUnixTimestampVarcharToFloat64(parameters []*vector.Vector, result ve
 				}
 				continue
 			}
-			unix := val.UnixToFloat()
+			unixMicro, inRange := unixTimestampArgumentMicroseconds(val)
 			if val == types.ZeroTimestamp {
 				if err := rs.Append(0, true); err != nil {
 					return err
 				}
 				continue
-			} else if unix < 0 {
+			} else if !inRange {
 				if err := rs.Append(0, false); err != nil {
 					return err
 				}
 				continue
 			}
-			if err := rs.Append(unix, false); err != nil {
+			if err := rs.Append(float64(unixMicro)/float64(types.MicroSecsPerSec), false); err != nil {
 				return err
 			}
 		}
@@ -3143,17 +3153,14 @@ func builtInUnixTimestampVarcharToDecimal128(parameters []*vector.Vector, result
 				}
 				continue
 			}
-			if timestamp < types.UnixToTimestamp(0) {
+			unixMicro, inRange := unixTimestampArgumentMicroseconds(timestamp)
+			if !inRange {
 				if err := rs.Append(d, false); err != nil {
 					return err
 				}
 				continue
 			}
-			val, err := timestamp.UnixToDecimal128()
-			if err != nil {
-				return err
-			}
-			if err = rs.Append(val, false); err != nil {
+			if err := rs.Append(types.Decimal128{B0_63: uint64(unixMicro)}, false); err != nil {
 				return err
 			}
 		}

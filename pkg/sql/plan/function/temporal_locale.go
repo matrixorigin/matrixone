@@ -15,6 +15,7 @@
 package function
 
 import (
+	"context"
 	"sort"
 	"strings"
 
@@ -59,9 +60,51 @@ var temporalLocales = map[string]*temporalLocale{
 		weekdays:      [7]string{"日曜日", "月曜日", "火曜日", "水曜日", "木曜日", "金曜日", "土曜日"},
 		weekdayAbbrev: [7]string{"日", "月", "火", "水", "木", "金", "土"},
 		months:        [12]string{"1月", "2月", "3月", "4月", "5月", "6月", "7月", "8月", "9月", "10月", "11月", "12月"},
-		monthAbbrev:   [12]string{"1月", "2月", "3月", "4月", "5月", "6月", "7月", "8月", "9月", "10月", "11月", "12月"},
+		monthAbbrev:   [12]string{" 1月", " 2月", " 3月", " 4月", " 5月", " 6月", " 7月", " 8月", " 9月", "10月", "11月", "12月"},
+	},
+	"zh_CN": {
+		name:          "zh_CN",
+		weekdays:      [7]string{"星期日", "星期一", "星期二", "星期三", "星期四", "星期五", "星期六"},
+		weekdayAbbrev: [7]string{"日", "一", "二", "三", "四", "五", "六"},
+		months:        [12]string{"一月", "二月", "三月", "四月", "五月", "六月", "七月", "八月", "九月", "十月", "十一月", "十二月"},
+		monthAbbrev:   [12]string{" 1月", " 2月", " 3月", " 4月", " 5月", " 6月", " 7月", " 8月", " 9月", "10月", "11月", "12月"},
+	},
+	"ru_RU": {
+		name:          "ru_RU",
+		weekdays:      [7]string{"Воскресенье", "Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота"},
+		weekdayAbbrev: [7]string{"Вск", "Пнд", "Втр", "Срд", "Чтв", "Птн", "Сбт"},
+		months:        [12]string{"Января", "Февраля", "Марта", "Апреля", "Мая", "Июня", "Июля", "Августа", "Сентября", "Октября", "Ноября", "Декабря"},
+		monthAbbrev:   [12]string{"Янв", "Фев", "Мар", "Апр", "Май", "Июн", "Июл", "Авг", "Сен", "Окт", "Ноя", "Дек"},
+	},
+	"tr_TR": {
+		name:          "tr_TR",
+		weekdays:      [7]string{"Pazar", "Pazartesi", "Salı", "Çarşamba", "Perşembe", "Cuma", "Cumartesi"},
+		weekdayAbbrev: [7]string{"Paz", "Pzt", "Sal", "Çrş", "Prş", "Cum", "Cts"},
+		months:        [12]string{"Ocak", "Şubat", "Mart", "Nisan", "Mayıs", "Haziran", "Temmuz", "Ağustos", "Eylül", "Ekim", "Kasım", "Aralık"},
+		monthAbbrev:   [12]string{"Oca", "Şub", "Mar", "Nis", "May", "Haz", "Tem", "Ağu", "Eyl", "Eki", "Kas", "Ara"},
+	},
+	"ar_EG": {
+		name:          "ar_EG",
+		weekdays:      [7]string{"الأحد", "الاثنين", "الثلاثاء", "الأربعاء", "الخميس", "الجمعة", "السبت"},
+		weekdayAbbrev: [7]string{"ح", "ن", "ث", "ر", "خ", "ج", "س"},
+		months:        [12]string{"يناير", "فبراير", "مارس", "أبريل", "مايو", "يونيو", "يوليو", "أغسطس", "سبتمبر", "أكتوبر", "نوفمبر", "ديسمبر"},
+		monthAbbrev:   [12]string{"ينا", "فبر", "مار", "أبر", "ماي", "يون", "يول", "أغس", "سبت", "أكت", "نوف", "ديس"},
 	},
 }
+
+type legacyJapaneseMonthAbbrevKey struct{}
+
+// WithLegacyJapaneseMonthAbbrev is used only while verifying persisted table
+// defaults authored before Japanese %b adopted MySQL's leading-space format.
+func WithLegacyJapaneseMonthAbbrev(ctx context.Context) context.Context {
+	return context.WithValue(ctx, legacyJapaneseMonthAbbrevKey{}, true)
+}
+
+var legacyJapaneseTemporalLocale = func() *temporalLocale {
+	locale := *temporalLocales["ja_JP"]
+	locale.monthAbbrev = locale.months
+	return &locale
+}()
 
 // TemporalLocaleNames returns the supported temporal locale inventory in a
 // stable order. Callers own the returned slice; the evaluation registry stays private.
@@ -95,6 +138,12 @@ func temporalLocaleForProcess(proc *process.Process) *temporalLocale {
 		name = proc.GetSessionInfo().LCTimeNames
 	}
 	if locale, ok := temporalLocales[name]; ok {
+		if name == "ja_JP" && proc != nil {
+			legacy, _ := proc.GetTopContext().Value(legacyJapaneseMonthAbbrevKey{}).(bool)
+			if legacy {
+				return legacyJapaneseTemporalLocale
+			}
+		}
 		return locale
 	}
 	return temporalLocales["en_US"]
