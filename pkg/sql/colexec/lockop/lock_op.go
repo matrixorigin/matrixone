@@ -434,7 +434,7 @@ func LockTableWithContext(
 	pkType types.Type,
 	changeDef bool) error {
 	return lockTableWithModeAndContext(
-		ctx, eng, proc, tableID, pkType, lock.LockMode_Exclusive, changeDef)
+		ctx, eng, proc, tableID, pkType, lock.LockMode_Exclusive, changeDef, true)
 }
 
 // LockTableWithMode locks all rows in a table with the specified lock mode.
@@ -445,7 +445,7 @@ func LockTableWithMode(
 	pkType types.Type,
 	mode lock.LockMode,
 	changeDef bool) error {
-	return lockTableWithModeAndContext(proc.Ctx, eng, proc, tableID, pkType, mode, changeDef)
+	return lockTableWithModeAndContext(proc.Ctx, eng, proc, tableID, pkType, mode, changeDef, true)
 }
 
 func lockTableWithModeAndContext(
@@ -455,7 +455,8 @@ func lockTableWithModeAndContext(
 	tableID uint64,
 	pkType types.Type,
 	mode lock.LockMode,
-	changeDef bool) error {
+	changeDef bool,
+	retryOnRefresh bool) error {
 	txnOp := proc.GetTxnOperator()
 	if !txnOp.Txn().IsPessimistic() {
 		return nil
@@ -501,11 +502,23 @@ func lockTableWithModeAndContext(
 	// If the returned timestamp is not empty, we should return a retry error,
 	if !refreshTS.IsEmpty() {
 		if !defChanged {
+			if !retryOnRefresh {
+				return nil
+			}
 			return retryError
 		}
 		return retryWithDefChangedError
 	}
 	return nil
+}
+
+// LockTableForSnapshotRefreshWithContext holds the graph gate while allowing
+// the caller to advance its RC snapshot after a concurrent table commit.
+func LockTableForSnapshotRefreshWithContext(
+	ctx context.Context, eng engine.Engine, proc *process.Process,
+	tableID uint64, pkType types.Type, mode lock.LockMode, changeDef bool,
+) error {
+	return lockTableWithModeAndContext(ctx, eng, proc, tableID, pkType, mode, changeDef, false)
 }
 
 // LockRow lock rows in table, rows will be locked, and wait current txn closed.

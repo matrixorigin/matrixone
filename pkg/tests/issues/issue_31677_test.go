@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package sqlintegration
+package issues
 
 import (
 	"context"
@@ -25,8 +25,8 @@ import (
 	"github.com/go-sql-driver/mysql"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/embed"
-	"github.com/matrixorigin/matrixone/pkg/tests/testutils"
 	"github.com/stretchr/testify/require"
 )
 
@@ -34,15 +34,28 @@ import (
 // The lock hook releases both statements at their first graph lock so the
 // old read-before-lock path deterministically validates the stale graph.
 func TestConcurrentRoleGrantCannotCommitCycle(t *testing.T) {
-	runSQLIntegration(t, func(cluster embed.Cluster) {
+	embed.RunBaseClusterTests(t, func(cluster embed.Cluster) {
 		cn, err := cluster.GetCNService(0)
 		require.NoError(t, err)
 		runConcurrentRoleGrantCycle(t, cn, cn)
 	})
 }
 
+func TestConcurrentRoleGrantCannotCommitCycleLegacyProtocol(t *testing.T) {
+	embed.RunBaseClusterTests(t, func(cluster embed.Cluster) {
+		cn, err := cluster.GetCNService(0)
+		require.NoError(t, err)
+		rt := moruntime.ServiceRuntime(cn.ServiceID())
+		require.NotNil(t, rt)
+		previous, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+		require.True(t, ok)
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion10)
+		defer rt.SetGlobalVariables(moruntime.MOProtocolVersion, previous)
+		runConcurrentRoleGrantCycle(t, cn, cn)
+	})
+}
+
 func TestConcurrentRoleGrantCannotCommitCycleTwoCN(t *testing.T) {
-	require.NoError(t, embed.CloseSingleCNBaseClusterTests())
 	cluster, err := embed.StartTestCluster(embed.WithCNCount(2))
 	if cluster != nil {
 		defer func() { require.NoError(t, cluster.Close()) }()
@@ -63,11 +76,23 @@ func runConcurrentRoleGrantCycle(t *testing.T, firstCN, secondCN embed.ServiceOp
 	root, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/", firstPort))
 	require.NoError(t, err)
 	defer root.Close()
-	require.NoError(t, testutils.WaitSystemBootstrap(ctx, root))
+	require.Eventually(t, func() bool {
+		readyCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+		defer cancel()
+		var count int
+		return root.QueryRowContext(readyCtx,
+			"select count(*) from mo_catalog.mo_account").Scan(&count) == nil
+	}, 30*time.Second, 100*time.Millisecond)
 	const account = "role_grant_cycle_31677"
-	defer cleanupSQLIntegration(t, firstCN, "drop account if exists "+account)
 	_, err = root.ExecContext(ctx, "create account "+account+" admin_name 'root' identified by '111'")
 	require.NoError(t, err)
+	defer func() {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if _, err := root.ExecContext(cleanupCtx, "drop account if exists "+account); err != nil {
+			t.Errorf("drop test account: %v", err)
+		}
+	}()
 	tenant0, err := sql.Open("mysql", fmt.Sprintf(account+"#root#accountadmin:111@tcp(127.0.0.1:%d)/", firstPort))
 	require.NoError(t, err)
 	defer tenant0.Close()

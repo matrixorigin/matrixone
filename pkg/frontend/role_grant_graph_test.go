@@ -26,6 +26,10 @@ type roleGraphNoHookExec struct{ BackgroundExec }
 
 type roleGraphNilProcessExec struct{ BackgroundExec }
 
+func (bt *backgroundExecTest) execWithProcessHook(ctx context.Context, sql string, _ backExecProcessHook) error {
+	return bt.Exec(ctx, sql)
+}
+
 func (roleGraphNilProcessExec) execWithProcessHook(
 	ctx context.Context, _ string, hook backExecProcessHook,
 ) error {

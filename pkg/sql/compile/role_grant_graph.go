@@ -16,13 +16,60 @@ package compile
 
 import (
 	"context"
+	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
+
+func roleGrantGraphFrontier(ctx context.Context, eng engine.Engine, service string) (timestamp.Timestamp, error) {
+	rt := moruntime.ServiceRuntime(service)
+	if rt == nil {
+		return timestamp.Timestamp{}, moerr.NewInternalError(ctx, "missing service runtime for role grant graph")
+	}
+	value, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	version, valid := value.(int64)
+	if ok && valid && version >= defines.MORPCVersion11 {
+		barrier, available := getLogtailReadBarrier(eng)
+		if !available {
+			return timestamp.Timestamp{}, moerr.NewNotSupported(ctx,
+				"role membership changes are not supported without a logtail read barrier")
+		}
+		return barrier.AcquireLogtailReadBarrier(ctx)
+	}
+	clock := rt.Clock()
+	if clock == nil || clock.MaxOffset() < 0 {
+		return timestamp.Timestamp{}, moerr.NewInternalError(ctx, "invalid transaction clock for role grant graph")
+	}
+	_, upperBound := clock.Now()
+	if upperBound.PhysicalTime < 0 || upperBound.PhysicalTime == math.MaxInt64 {
+		return timestamp.Timestamp{}, moerr.NewInternalError(ctx, "role grant graph snapshot timestamp overflow")
+	}
+	// During a rolling upgrade, older TN services cannot provide the read
+	// barrier. The HLC uncertainty upper bound is later than every commit
+	// completed before this lock. UpdateSnapshot waits for local logtail apply.
+	return timestamp.Timestamp{PhysicalTime: upperBound.PhysicalTime + 1}, nil
+}
+
+func getLogtailReadBarrier(eng engine.Engine) (engine.LogtailReadBarrier, bool) {
+	for eng != nil {
+		if entire, ok := eng.(*engine.EntireEngine); ok {
+			if entire == nil || entire.Engine == nil {
+				return nil, false
+			}
+			eng = entire.Engine
+			continue
+		}
+		barrier, ok := eng.(engine.LogtailReadBarrier)
+		return barrier, ok
+	}
+	return nil, false
+}
 
 // LockRoleGrantGraph serializes role membership changes for this tenant.
 // The caller must retain the same pessimistic RC transaction through validation
@@ -51,12 +98,7 @@ func LockRoleGrantGraph(ctx context.Context, eng engine.Engine, proc *process.Pr
 	}
 	return advanceCatalogLifecycleSnapshot(ctx, catalogLifecycleSnapshotHooks{
 		acquireReadBarrier: func(ctx context.Context) (timestamp.Timestamp, error) {
-			barrier, ok := getLogtailReadBarrier(eng)
-			if !ok {
-				return timestamp.Timestamp{}, moerr.NewNotSupported(ctx,
-					"role membership changes are not supported without a logtail read barrier")
-			}
-			return barrier.AcquireLogtailReadBarrier(ctx)
+			return roleGrantGraphFrontier(ctx, eng, proc.GetService())
 		},
 		currentSnapshot: txnOp.SnapshotTS,
 		updateSnapshot:  txnOp.UpdateSnapshot,
