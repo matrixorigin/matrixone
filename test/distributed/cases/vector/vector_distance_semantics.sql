@@ -20,12 +20,18 @@ select inner_product(cast('[1,2]' as vecbf16(2)), cast('[1,2,3]' as vecbf16(3)))
 select l2_distance(cast('[1,2]' as vecint8(2)), cast('[1,2,3]' as vecint8(3)));
 select l1_distance(cast('[1,2]' as vecf16(2)), cast('[1,2,3]' as vecf16(3)));
 select cosine_distance(cast('[1,2]' as vecuint8(2)), cast('[1,2,3]' as vecuint8(3)));
+select cosine_similarity(cast('[1,2]' as vecint8(2)), cast('[1,2,3]' as vecint8(3)));
 select l2_distance_sq('[1e20,0]', '[0,0]');
 select inner_product('[1e30,1e30]', '[1e30,1e30]');
 select l2_distance('[]', '[]');
 select inner_product(cast('[1,2]' as vecf64(2)), cast('[3,4]' as vecf32(2))) mixed;
--- every distance but l2_distance_sq is rounded into the float32 domain
+-- vecf32 / vecf64: every distance but l2_distance_sq is rounded into the float32 domain
 select l2_distance(cast('[3.1]' as vecf64(1)), cast('[0]' as vecf64(1))) l2, l2_distance_sq(cast('[3.1]' as vecf64(1)), cast('[0]' as vecf64(1))) l2sq;
+select l2_distance(cast('[1.5,2.25,3]' as vecf32(3)), cast('[0.5,1,7]' as vecf32(3))) l2, cosine_distance(cast('[1.5,2.25,3]' as vecf32(3)), cast('[0.5,1,7]' as vecf32(3))) cd;
+-- narrow types: l2_distance and cosine_distance are not rounded, cosine_similarity is
+select l2_distance(cast('[1.5,2.25,3]' as vecbf16(3)), cast('[0.5,1,7]' as vecbf16(3))) l2, cosine_distance(cast('[1.5,2.25,3]' as vecbf16(3)), cast('[0.5,1,7]' as vecbf16(3))) cd, cosine_similarity(cast('[1.5,2.25,3]' as vecbf16(3)), cast('[0.5,1,7]' as vecbf16(3))) cs, l2_distance_sq(cast('[1.5,2.25,3]' as vecbf16(3)), cast('[0.5,1,7]' as vecbf16(3))) l2sq;
+select l2_distance(cast('[1.5,2.25,3]' as vecf16(3)), cast('[0.5,1,7]' as vecf16(3))) l2, cosine_distance(cast('[1.5,2.25,3]' as vecf16(3)), cast('[0.5,1,7]' as vecf16(3))) cd;
+select l2_distance(cast('[3,1]' as vecint8(2)), cast('[0,0]' as vecint8(2))) i8, l2_distance(cast('[3,1]' as vecuint8(2)), cast('[0,0]' as vecuint8(2))) u8;
 select normalize_l2('[0,0]') zero;
 
 -- result types of every function over every vector type
@@ -160,6 +166,15 @@ create index ixq using ivfflat on t(v) lists = 2 op_type 'vector_l1_ops' quantiz
 drop index ixq on t;
 create index ixq using hnsw on t(v) op_type 'vector_cosine_ops' quantization 'float16';
 drop index ixq on t;
+-- with QUANTIZATION the index scores the quantized vectors: [1.001,0] and [1.002,0] are both [1,0] in bf16
+create table tq (id bigint primary key, v vecf32(2));
+insert into tq values (1,'[1.001,0]'),(2,'[5,5]'),(3,'[9,9]');
+create index ixq using ivfflat on tq(v) lists = 1 op_type 'vector_l2_ops' quantization 'bf16';
+-- @separator:table
+-- @regex("Vector Index Scan on ixq \[l2_distance\]", true)
+explain select id from tq order by l2_distance(v, '[1.002,0]') limit 1;
+select id, l2_distance(v, '[1.002,0]') d from tq order by l2_distance(v, '[1.002,0]') limit 1;
+select id, l2_distance(v, '[1.002,0]') d from tq where id = 1;
 -- every column type builds IVF-FLAT and HNSW
 create table tf64 (id bigint primary key, v vecf64(3));
 create index ix using ivfflat on tf64(v) lists = 2 op_type 'vector_l2_ops';
@@ -178,6 +193,14 @@ create index ix8 using hnsw on t8(v) M 8 EF_CONSTRUCTION 32 EF_SEARCH 32 op_type
 -- @separator:table
 -- @regex("Vector Index Scan on ix8 \[cosine_distance\]", true)
 explain select id from t8 order by cosine_distance(v, '[1,1,1]') limit 2;
+drop index ix8 on t8;
+-- on a narrow column the index returns a float32 l2_distance, the scalar function a float64 one
+create index ix8 using hnsw on t8(v) M 8 EF_CONSTRUCTION 32 EF_SEARCH 32 op_type 'vector_l2_ops';
+-- @separator:table
+-- @regex("Vector Index Scan on ix8 \[l2_distance\]", true)
+explain select id from t8 order by l2_distance(v, '[0,0,0]') limit 1;
+select id, l2_distance(v, '[0,0,0]') d from t8 order by l2_distance(v, '[0,0,0]') limit 1;
+select id, l2_distance(v, '[0,0,0]') d from t8 where id = 2;
 drop index ix8 on t8;
 create table u8 (id bigint primary key, v vecuint8(3));
 insert into u8 values (1,'[1,2,3]'),(2,'[9,0,2]'),(3,'[3,1,7]');

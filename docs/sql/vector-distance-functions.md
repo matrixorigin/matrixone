@@ -52,17 +52,26 @@ Common rules:
 - **Types.** `a` and `b` are `vecf32`, `vecf64`, `vecbf16`, `vecf16`, `vecint8` or `vecuint8`;
   the overloads take two arguments of the same type. A `vecf32` and a `vecf64` argument are
   also accepted together (one is cast to the other's type).
-- **Precision.** Every function except `l2_distance_sq` rounds its result into the float32
-  domain (`metric.RoundDistanceToElemDomain`), so a `vecf64` input gives a float32-precision
-  value: `l2_distance` of `vecf64` `[3.1]` and `[0]` is `3.0999999046325684`, while
-  `l2_distance_sq` of the same pair is `9.610000000000001`.
+- **Precision** depends on the vector type:
+  - `vecf32`, `vecf64`: every function except `l2_distance_sq` rounds its result into the
+    float32 domain (`metric.RoundDistanceToElemDomain`), so a `vecf64` input gives a
+    float32-precision value: `l2_distance` of `vecf64` `[3.1]` and `[0]` is
+    `3.0999999046325684`, while `l2_distance_sq` of the same pair is `9.610000000000001`.
+  - `vecbf16`, `vecf16`, `vecint8`, `vecuint8`: the narrow kernels compute the sums
+    (`inner_product`, `l1_distance`, `l2_distance_sq`) in float32 for `vecbf16`/`vecf16` and
+    exactly in integers for `vecint8`/`vecuint8`. `l2_distance` and `cosine_distance` are
+    computed from those sums in float64 and **not** rounded: `l2_distance` of `vecint8`
+    `[3,1]` and `[0,0]` is `3.1622776601683795` (the `vecf32` value is `3.1622776985168457`),
+    and of `vecbf16` `[1.5,2.25,3]` and `[0.5,1,7]` it is `4.3084219849035215` (`vecf32`:
+    `4.308422088623047`). `cosine_similarity` is computed in float32 for every type.
 - **NULL.** A NULL argument gives NULL.
 - **Dimension mismatch** is an error:
-  - `cosine_distance`, `cosine_similarity`, `l2_distance`, `l2_distance_sq` and
-    `l1_distance` on `vecf32`/`vecf64`: `invalid input: vector ops between different
+  - `cosine_similarity` on any type, and `cosine_distance`, `l2_distance`, `l2_distance_sq`
+    and `l1_distance` on `vecf32`/`vecf64`: `invalid input: vector ops between different
     dimensions (2, 3) is not permitted.`
-  - `inner_product` on any type, and the other distances on `vecbf16`, `vecf16`, `vecint8`
-    and `vecuint8`: `internal error: vector dimension not matched`.
+  - `inner_product` on any type, and `cosine_distance`, `l2_distance`, `l2_distance_sq` and
+    `l1_distance` on `vecbf16`, `vecf16`, `vecint8` and `vecuint8`: `internal error: vector
+    dimension not matched`.
 - **Overflow.** A result that overflows is an error, e.g. `l2_distance_sq('[1e20,0]',
   '[0,0]')`: `l2 distance: vector magnitude is too large, the result overflows the element
   domain`.
@@ -144,7 +153,7 @@ returned score.
 
 | Index | `op_type`s | Internal metric | Value returned to SQL |
 |---|---|---|---|
-| IVF-FLAT | `l2`, `l2sq`, `ip`, `cosine`, `l1` | Ranks the probed entries with the SQL distance functions: `l2_distance_sq` for `l2`/`l2sq`, `inner_product`, `cosine_distance`, `l1_distance` (`ivfflat/search.go`) | The scalar function's value; for `l2_distance`, the square root of the squared L2 |
+| IVF-FLAT | `l2`, `l2sq`, `ip`, `cosine`, `l1` | Ranks the probed entries with the SQL distance functions: `l2_distance_sq` for `l2`/`l2sq`, `inner_product`, `cosine_distance`, `l1_distance` (`ivfflat/search.go`) | Without `QUANTIZATION`, the scalar function's value in the float32 domain; for `l2_distance`, the square root of the squared L2. With `QUANTIZATION`, the distance between the quantized entry and the quantized query (see Notes) |
 | HNSW (usearch) | `l2`, `l2sq`, `ip`, `cosine` | usearch `L2sq`, `InnerProduct`, `Cosine` (`OpTypeToUsearchMetric`) | Squared L2, or its square root for `l2_distance`; for `ip`, usearch's score minus 1, which is `-dot` (`DistanceTransformHnsw`); cosine distance |
 | CAGRA (cuVS, GPU) | `l2`, `l2sq`, `ip`, `cosine` | cuVS `L2Expanded`, `InnerProduct`, `CosineExpanded` (`metric/gpu.go`); the inner-product score is negated in `cgo/cuvs` (`transform_distance`) | Squared L2, or its square root for `l2_distance`; `-dot`; cosine distance |
 | IVF-PQ (cuVS, GPU) | `l2`, `l2sq`, `ip`, `cosine` | As CAGRA, on product-quantized codes | cuVS's distance from the compressed codes, transformed as for CAGRA and not re-ranked with the exact vectors (`ivfpq/search_gpu.go`): an **approximate** distance, which can differ from the scalar function, and so can the order |
@@ -157,6 +166,16 @@ Notes:
   `1.9399999380111694`. A CAGRA cosine distance near 0 carries float32 rounding, so it can
   be slightly below 0 (one test returned `-1.1920928955078125e-7` for two vectors with the
   same direction).
+- **Narrow columns.** On a `vecbf16`, `vecf16`, `vecint8` or `vecuint8` column, HNSW and
+  IVF-FLAT return a float32 `l2_distance`, while the scalar function returns an unrounded
+  float64 one (see Precision): for the `vecint8` row `[-1,0,2]` and the query `[0,0,0]` the
+  index returns `2.2360680103302`, the scalar function `2.23606797749979`.
+- **Quantization.** With `QUANTIZATION`, an index stores each vector in the quantized type and
+  quantizes the query as well, so the score it returns is the distance between the quantized
+  vectors, not the scalar function on the stored column. The difference is the quantization
+  error, which can be much larger than float32 rounding and can change the order:
+  `[1.001,0]` and `[1.002,0]` are both `[1,0]` in `bf16`, so an IVF-FLAT `QUANTIZATION
+  'bf16'` index returns `0` where `l2_distance` returns `0.0009999275207519531`.
 - **Zero cosine query.** HNSW rejects a zero (or subnormal) query vector for cosine.
 
 ## Where it is implemented

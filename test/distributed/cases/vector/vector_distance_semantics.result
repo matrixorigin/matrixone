@@ -29,6 +29,8 @@ select l1_distance(cast('[1,2]' as vecf16(2)), cast('[1,2,3]' as vecf16(3)));
 internal error: vector dimension not matched
 select cosine_distance(cast('[1,2]' as vecuint8(2)), cast('[1,2,3]' as vecuint8(3)));
 internal error: vector dimension not matched
+select cosine_similarity(cast('[1,2]' as vecint8(2)), cast('[1,2,3]' as vecint8(3)));
+invalid input: vector ops between different dimensions (2, 3) is not permitted.
 select l2_distance_sq('[1e20,0]', '[0,0]');
 internal error: l2 distance: vector magnitude is too large, the result overflows the element domain
 select inner_product('[1e30,1e30]', '[1e30,1e30]');
@@ -41,6 +43,18 @@ select inner_product(cast('[1,2]' as vecf64(2)), cast('[3,4]' as vecf32(2))) mix
 select l2_distance(cast('[3.1]' as vecf64(1)), cast('[0]' as vecf64(1))) l2, l2_distance_sq(cast('[3.1]' as vecf64(1)), cast('[0]' as vecf64(1))) l2sq;
 ➤ l2[8,53,31]  ¦  l2sq[8,53,31]  𝄀
 3.0999999046325684  ¦  9.610000000000001
+select l2_distance(cast('[1.5,2.25,3]' as vecf32(3)), cast('[0.5,1,7]' as vecf32(3))) l2, cosine_distance(cast('[1.5,2.25,3]' as vecf32(3)), cast('[0.5,1,7]' as vecf32(3))) cd;
+➤ l2[8,53,31]  ¦  cd[8,53,31]  𝄀
+4.308422088623047  ¦  0.16173188388347626
+select l2_distance(cast('[1.5,2.25,3]' as vecbf16(3)), cast('[0.5,1,7]' as vecbf16(3))) l2, cosine_distance(cast('[1.5,2.25,3]' as vecbf16(3)), cast('[0.5,1,7]' as vecbf16(3))) cd, cosine_similarity(cast('[1.5,2.25,3]' as vecbf16(3)), cast('[0.5,1,7]' as vecbf16(3))) cs, l2_distance_sq(cast('[1.5,2.25,3]' as vecbf16(3)), cast('[0.5,1,7]' as vecbf16(3))) l2sq;
+➤ l2[8,53,31]  ¦  cd[8,53,31]  ¦  cs[8,53,31]  ¦  l2sq[8,53,31]  𝄀
+4.3084219849035215  ¦  0.16173188692119467  ¦  0.8382681012153625  ¦  18.5625
+select l2_distance(cast('[1.5,2.25,3]' as vecf16(3)), cast('[0.5,1,7]' as vecf16(3))) l2, cosine_distance(cast('[1.5,2.25,3]' as vecf16(3)), cast('[0.5,1,7]' as vecf16(3))) cd;
+➤ l2[8,53,31]  ¦  cd[8,53,31]  𝄀
+4.3084219849035215  ¦  0.16173188692119467
+select l2_distance(cast('[3,1]' as vecint8(2)), cast('[0,0]' as vecint8(2))) i8, l2_distance(cast('[3,1]' as vecuint8(2)), cast('[0,0]' as vecuint8(2))) u8;
+➤ i8[8,53,31]  ¦  u8[8,53,31]  𝄀
+3.1622776601683795  ¦  3.1622776601683795
 select normalize_l2('[0,0]') zero;
 ➤ zero[12,65535,0]  𝄀
 [0, 0]
@@ -407,6 +421,24 @@ create index ixq using ivfflat on t(v) lists = 2 op_type 'vector_l1_ops' quantiz
 drop index ixq on t;
 create index ixq using hnsw on t(v) op_type 'vector_cosine_ops' quantization 'float16';
 drop index ixq on t;
+create table tq (id bigint primary key, v vecf32(2));
+insert into tq values (1,'[1.001,0]'),(2,'[5,5]'),(3,'[9,9]');
+create index ixq using ivfflat on tq(v) lists = 1 op_type 'vector_l2_ops' quantization 'bf16';
+explain select id from tq order by l2_distance(v, '[1.002,0]') limit 1;
+-- @regex("Vector Index Scan on ixq \[l2_distance\]", true)
+➤ AP QUERY PLAN ON MULTICN(8 core)[12,-1,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: #[0,1] INTERNAL  𝄀
+        Limit: 1  𝄀
+        ->  Vector Index Scan on ixq [l2_distance]  𝄀
+              Vector Index: ixq, Metric: l2_distance, Candidate Limit: 1, NProbe: 5
+select id, l2_distance(v, '[1.002,0]') d from tq order by l2_distance(v, '[1.002,0]') limit 1;
+➤ id[-5,64,0]  ¦  d[8,9,0]  𝄀
+1  ¦  0.0
+select id, l2_distance(v, '[1.002,0]') d from tq where id = 1;
+➤ id[-5,64,0]  ¦  d[8,53,31]  𝄀
+1  ¦  9.999275207519531E-4
 create table tf64 (id bigint primary key, v vecf64(3));
 create index ix using ivfflat on tf64(v) lists = 2 op_type 'vector_l2_ops';
 create table tbf (id bigint primary key, v vecbf16(3));
@@ -450,6 +482,29 @@ Project  𝄀
                     Runtime Filter Probe: t8.id  𝄀
               ->  Vector Index Scan on ix8 [cosine_distance]  𝄀
                     Vector Index: ix8, Metric: cosine_distance, Candidate Limit: 2
+drop index ix8 on t8;
+create index ix8 using hnsw on t8(v) M 8 EF_CONSTRUCTION 32 EF_SEARCH 32 op_type 'vector_l2_ops';
+explain select id from t8 order by l2_distance(v, '[0,0,0]') limit 1;
+-- @regex("Vector Index Scan on ix8 \[l2_distance\]", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: #[0,1] INTERNAL  𝄀
+        Limit: 1  𝄀
+        ->  Join  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (t8.id = #[1,0])  𝄀
+              Runtime Filter Build: #[-1,0]  𝄀
+              ->  Table Scan on vec_distance_semantics.t8  𝄀
+                    Runtime Filter Probe: t8.id  𝄀
+              ->  Vector Index Scan on ix8 [l2_distance]  𝄀
+                    Vector Index: ix8, Metric: l2_distance, Candidate Limit: 1
+select id, l2_distance(v, '[0,0,0]') d from t8 order by l2_distance(v, '[0,0,0]') limit 1;
+➤ id[-5,64,0]  ¦  d[8,9,0]  𝄀
+2  ¦  2.2360680103302
+select id, l2_distance(v, '[0,0,0]') d from t8 where id = 2;
+➤ id[-5,64,0]  ¦  d[8,53,31]  𝄀
+2  ¦  2.23606797749979
 drop index ix8 on t8;
 create table u8 (id bigint primary key, v vecuint8(3));
 insert into u8 values (1,'[1,2,3]'),(2,'[9,0,2]'),(3,'[3,1,7]');
