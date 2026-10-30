@@ -11,6 +11,11 @@ on:
       - '.github/workflows/iceberg-connector.yml'
       - '.github/workflows/ci-scope-check.yml'
       - '.github/workflows/ci-cancellation.yml'
+      - '.github/workflows/merge-trigger-standalone.yaml'
+      - '.github/workflows/merge-trigger-tke.yaml'
+      - '.github/workflows/native-dependency-check.yml'
+      - '.github/workflows/sca-go-module-cache.yaml'
+      - '.github/workflows/jstfu-maven-cache.yaml'
 
 permissions:
   contents: read
