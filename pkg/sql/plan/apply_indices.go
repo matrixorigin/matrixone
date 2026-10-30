@@ -415,7 +415,14 @@ func containsInt32(list []int32, target int32) bool {
 }
 
 func (builder *QueryBuilder) applyIndices(nodeID int32, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) (int32, error) {
-	return builder.applyIndicesWithOrder(nodeID, colRefCnt, idxColMap, false)
+	nodeID, err := builder.applyIndicesWithOrder(nodeID, colRefCnt, idxColMap, false)
+	if err != nil {
+		return -1, err
+	}
+	if err := builder.checkPlanningCanceled(); err != nil {
+		return -1, err
+	}
+	return nodeID, nil
 }
 
 // fullTextOrderOverwritten proves that an explicit ordering will replace a
@@ -1205,10 +1212,12 @@ func indexPartFixedByEquality(part string, scanNode *plan.Node) bool {
 		}
 		leftCol := fn.Args[0].GetCol()
 		rightCol := fn.Args[1].GetCol()
-		if leftCol != nil && leftCol.RelPos == tag && leftCol.ColPos == colPos && isRuntimeConstExpr(fn.Args[1]) {
+		if leftCol != nil && leftCol.RelPos == tag && leftCol.ColPos == colPos && isRuntimeConstExpr(fn.Args[1]) &&
+			indexEqualityPinsSingleValue(scanNode.TableDef.Cols[colPos].Typ, fn.Args[1].Typ) {
 			return true
 		}
-		if rightCol != nil && rightCol.RelPos == tag && rightCol.ColPos == colPos && isRuntimeConstExpr(fn.Args[0]) {
+		if rightCol != nil && rightCol.RelPos == tag && rightCol.ColPos == colPos && isRuntimeConstExpr(fn.Args[0]) &&
+			indexEqualityPinsSingleValue(scanNode.TableDef.Cols[colPos].Typ, fn.Args[0].Typ) {
 			return true
 		}
 	}
@@ -2540,13 +2549,17 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, no
 	}
 
 	if best.indexPos != -1 && best.shape == encodedRegularIndexCostIndexOnly {
-		return builder.applyRegularIndexOnlyScan(
+		ret := builder.applyRegularIndexOnlyScan(
 			indexes[best.indexPos], node, idxColMap, scanSnapshot,
 			&regularIndexOnlyMatch{
 				filterIdx: best.filterIdx, filterType: best.filterType,
 				leadingEqual: best.leadingEqual, residualLeadingPos: best.residualLeadingPos,
 			},
 		)
+		if ret != -1 {
+			return ret
+		}
+		return nodeID
 	}
 
 	// Preserve the established priority of a covering spatial access over a
@@ -2763,7 +2776,14 @@ func (builder *QueryBuilder) replaceEqualCondition(idxDef *IndexDef, filterList 
 	serialArgs := make([]*plan.Expr, len(filterPos))
 	for i := range filterPos {
 		filter := filterList[filterPos[i]]
-		var err error
+		column := indexComparisonColumn(filter.GetF())
+		if column == nil {
+			return nil, moerr.NewInternalError(builder.GetContext(), "missing index comparison column")
+		}
+		filter, err := normalizeSerializedIndexComparison(builder.GetContext(), filter, column.Typ)
+		if err != nil {
+			return nil, err
+		}
 		serialArgs[i], err = builder.makeIndexLookupPartExpr(idxDef, i, filter.GetF().Args[1])
 		if err != nil {
 			return nil, err
@@ -2801,6 +2821,16 @@ func (builder *QueryBuilder) replaceEqualCondition(idxDef *IndexDef, filterList 
 func (builder *QueryBuilder) replaceNonEqualCondition(idxDef *IndexDef, filter *plan.Expr, idxTag int32, idxTableDef *plan.TableDef) (*plan.Expr, error) {
 	numParts := len(idxDef.Parts)
 	expr := DeepCopyExpr(filter)
+	if numParts > 1 {
+		column := indexComparisonColumn(filter.GetF())
+		if column != nil {
+			var err error
+			expr, err = normalizeSerializedIndexComparison(builder.GetContext(), filter, column.Typ)
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
 	fn := expr.GetF()
 	if fn.Func.ObjName == "or" {
 		for i := range expr.GetF().Args {
@@ -2814,10 +2844,12 @@ func (builder *QueryBuilder) replaceNonEqualCondition(idxDef *IndexDef, filter *
 	}
 	comparesByteStringColumn := indexFunctionComparesByteStringColumn(fn)
 
+	commuted := false
 	switch fn.Func.ObjName {
 	case ">", ">=", "<", "<=":
 		// Canonicalize: ensure column is on the left
 		if isRuntimeConstExpr(fn.Args[0]) && fn.Args[1].GetCol() != nil {
+			commuted = true
 			fn.Args[0], fn.Args[1] = fn.Args[1], fn.Args[0]
 			switch fn.Func.ObjName {
 			case ">":
@@ -2832,7 +2864,6 @@ func (builder *QueryBuilder) replaceNonEqualCondition(idxDef *IndexDef, filter *
 		}
 	}
 
-	indexedPartType := fn.Args[0].Typ
 	fn.Args[0].GetCol().RelPos = idxTag
 	fn.Args[0].GetCol().ColPos = 0
 	fn.Args[0].GetCol().Name = idxTableDef.Cols[0].Name
@@ -2842,8 +2873,6 @@ func (builder *QueryBuilder) replaceNonEqualCondition(idxDef *IndexDef, filter *
 		var err error
 		switch fn.Func.ObjName {
 		case "between":
-			fn.Args[1] = builder.normalizeDecimalIndexRangeBound(fn.Args[1], indexedPartType)
-			fn.Args[2] = builder.normalizeDecimalIndexRangeBound(fn.Args[2], indexedPartType)
 			fn.Args[1], err = BindFuncExprImplByPlanExpr(builder.GetContext(), serialFunc, []*plan.Expr{fn.Args[1]})
 			if err != nil {
 				return nil, err
@@ -2860,15 +2889,12 @@ func (builder *QueryBuilder) replaceNonEqualCondition(idxDef *IndexDef, filter *
 			}
 			expr, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "prefix_in", fn.Args)
 		case ">", ">=", "<", "<=":
-			fn.Args[1] = builder.normalizeDecimalIndexRangeBound(fn.Args[1], indexedPartType)
 			fn.Args[1], err = BindFuncExprImplByPlanExpr(builder.GetContext(), serialFunc, []*plan.Expr{fn.Args[1]})
 			if err != nil {
 				return nil, err
 			}
 			expr, err = BindFuncExprImplByPlanExpr(builder.GetContext(), fn.Func.ObjName, fn.Args)
 		case "in_range":
-			fn.Args[1] = builder.normalizeDecimalIndexRangeBound(fn.Args[1], indexedPartType)
-			fn.Args[2] = builder.normalizeDecimalIndexRangeBound(fn.Args[2], indexedPartType)
 			fn.Args[1], err = BindFuncExprImplByPlanExpr(builder.GetContext(), serialFunc, []*plan.Expr{fn.Args[1]})
 			if err != nil {
 				return nil, err
@@ -2890,6 +2916,13 @@ func (builder *QueryBuilder) replaceNonEqualCondition(idxDef *IndexDef, filter *
 		if err != nil {
 			return nil, err
 		}
+	} else if commuted {
+		var err error
+		expr, err = BindFuncExprImplByPlanExpr(builder.GetContext(), fn.Func.ObjName, fn.Args)
+		if err != nil {
+			return nil, err
+		}
+		expr.Selectivity = filter.Selectivity
 	}
 	return expr, nil
 }
@@ -2908,15 +2941,21 @@ func indexOnlyResidualLeadingFilterPositions(idxDef *IndexDef, tableDef *plan.Ta
 }
 
 func indexOnlyResidualLeadingFilterPositionsForPrefix(idxDef *IndexDef, tableDef *plan.TableDef, filterList []*plan.Expr, leadingPos []int32, usesPrefixComparison bool) []int32 {
-	if indexTableStoredKeySerialFunc(idxDef) != "serial_full" {
-		return nil
-	}
+	return serializedLookupResidualLeadingFilterPositions(tableDef, filterList, leadingPos, usesPrefixComparison,
+		indexTableStoredKeySerialFunc(idxDef) == "serial_full")
+}
+
+// Both regular indexes and compound primary/cluster keys must retain the SQL
+// predicate whenever an encoded candidate is not an exact WHERE truth oracle.
+func serializedLookupResidualLeadingFilterPositions(tableDef *plan.TableDef, filterList []*plan.Expr, leadingPos []int32, usesPrefixComparison, storesNulls bool) []int32 {
 	residualPos := make([]int32, 0, len(leadingPos))
+	isRangePair := rangePairFilterPositions(filterList, leadingPos)
 	for _, pos := range leadingPos {
 		if pos < 0 || int(pos) >= len(filterList) {
 			continue
 		}
-		if indexFilterNeedsDecodedNullResidual(filterList[pos]) && !slices.Contains(residualPos, pos) {
+		// A paired lower bound already excludes stored NULLs.
+		if storesNulls && !isRangePair && indexFilterNeedsDecodedNullResidual(filterList[pos]) && !slices.Contains(residualPos, pos) {
 			residualPos = append(residualPos, pos)
 		}
 	}
@@ -2924,7 +2963,7 @@ func indexOnlyResidualLeadingFilterPositionsForPrefix(idxDef *IndexDef, tableDef
 	if len(leadingPos) == 0 || !usesPrefixComparison {
 		return residualPos
 	}
-	if rangePairFilterPositions(filterList, leadingPos) {
+	if isRangePair {
 		// A serialized range pair is widened for byte-string keys when needed.
 		// Keep both SQL bounds as exact rechecks because either encoded endpoint
 		// can share a prefix with a distinct stored value.
@@ -3039,11 +3078,10 @@ func indexFilterUsesPrefixAmbiguousStringColumn(tableDef *plan.TableDef, expr *p
 			return false
 		}
 		oid := types.T(colDef.Typ.Id)
-		// CHAR, VARCHAR, BINARY, and VARBINARY use Packer.EncodeStringType.
+		// MySQL string types use Packer.EncodeStringType.
 		// Its 0x00 terminator is also the first byte of an escaped embedded NUL,
 		// so an encoded lookup value can prefix a distinct stored encoding.
-		return oid == types.T_char || oid == types.T_varchar ||
-			oid == types.T_binary || oid == types.T_varbinary
+		return oid.IsMySQLString()
 	}
 	if fn := expr.GetF(); fn != nil {
 		for _, arg := range fn.Args {
@@ -3071,8 +3109,7 @@ func indexFunctionComparesByteStringColumn(fn *plan.Function) bool {
 			continue
 		}
 		oid := types.T(arg.Typ.Id)
-		return oid == types.T_char || oid == types.T_varchar ||
-			oid == types.T_binary || oid == types.T_varbinary
+		return oid.IsMySQLString()
 	}
 	return false
 }
@@ -3106,7 +3143,7 @@ func indexFilterNeedsDecodedNullResidual(expr *plan.Expr) bool {
 		if len(fn.Args) < 2 {
 			return false
 		}
-		if canonicalRangeOp(fn) != "<" {
+		if op := canonicalRangeOp(fn); op != "<" && op != "<=" {
 			return false
 		}
 		if fn.Args[0].GetCol() != nil && isRuntimeConstExpr(fn.Args[1]) {
@@ -3487,7 +3524,9 @@ func (ctx *encodedRegularIndexCostContext) matchPointBackfill(idxDef *IndexDef, 
 			break
 		}
 		matchedFilter := ctx.equalFilters[colPos]
-		if matchedFilter < 0 {
+		if matchedFilter < 0 || !ctx.builder.regularIndexEqualityUsable(
+			idxDef, ctx.node.TableDef, ctx.node.FilterList[matchedFilter].GetF(), partPos,
+		) {
 			break
 		}
 		filterIdx = append(filterIdx, matchedFilter)
@@ -3531,7 +3570,7 @@ func (ctx *encodedRegularIndexCostContext) matchRangeBackfill(idxDef *IndexDef) 
 				if int32(currentFilterIdx) != min(lowerIdx, upperIdx) || shouldSkipLargeRangeIndexByStats(ctx.node) {
 					continue
 				}
-				if !regularIndexRangeFunctionsUsable(
+				if !ctx.builder.regularIndexRangeFunctionsUsable(
 					idxDef,
 					ctx.node.TableDef,
 					ctx.node.FilterList[lowerIdx].GetF(),
@@ -3543,7 +3582,7 @@ func (ctx *encodedRegularIndexCostContext) matchRangeBackfill(idxDef *IndexDef) 
 				return []int32{lowerIdx, upperIdx}
 			}
 		}
-		if !regularIndexRangeFunctionsUsable(idxDef, ctx.node.TableDef, fn, nil, false) {
+		if !ctx.builder.regularIndexRangeFunctionsUsable(idxDef, ctx.node.TableDef, fn, nil, false) {
 			continue
 		}
 		if isRangeOp(fn) && shouldSkipLargeRangeIndexByStats(ctx.node) {
@@ -4032,6 +4071,9 @@ func (builder *QueryBuilder) matchRegularIndexOnlyScan(
 	leadingPos := []int32{firstFilter}
 	filterType := NonEqualIndexCondition
 	if leadingEqual {
+		if !builder.regularIndexEqualityUsable(idxDef, node.TableDef, node.FilterList[firstFilter].GetF(), 0) {
+			return nil, false
+		}
 		filterType = EqualIndexCondition
 		for partPos := 1; partPos < len(idxDef.Parts); partPos++ {
 			colPos, ok := node.TableDef.Name2ColIndex[catalog.ResolveAlias(idxDef.Parts[partPos])]
@@ -4039,7 +4081,9 @@ func (builder *QueryBuilder) matchRegularIndexOnlyScan(
 				break
 			}
 			filterPos := costCtx.firstEquals[colPos]
-			if filterPos < 0 {
+			if filterPos < 0 || !builder.regularIndexEqualityUsable(
+				idxDef, node.TableDef, node.FilterList[filterPos].GetF(), partPos,
+			) {
 				break
 			}
 			leadingPos = append(leadingPos, filterPos)
@@ -4049,7 +4093,7 @@ func (builder *QueryBuilder) matchRegularIndexOnlyScan(
 		upperPos := costCtx.upperFilters[leadingColPos]
 		if lowerPos >= 0 && upperPos >= 0 &&
 			(firstFilter == lowerPos || firstFilter == upperPos) &&
-			regularIndexRangeFunctionsUsable(
+			builder.regularIndexRangeFunctionsUsable(
 				idxDef, node.TableDef,
 				node.FilterList[lowerPos].GetF(), node.FilterList[upperPos].GetF(), true,
 			) {
@@ -4082,7 +4126,7 @@ func (builder *QueryBuilder) matchRegularIndexOnlyScan(
 			secondFn = node.FilterList[leadingPos[1]].GetF()
 			allowUnsafeRange = true
 		}
-		if !regularIndexRangeFunctionsUsable(idxDef, node.TableDef, firstFn, secondFn, allowUnsafeRange) {
+		if !builder.regularIndexRangeFunctionsUsable(idxDef, node.TableDef, firstFn, secondFn, allowUnsafeRange) {
 			return nil, false
 		}
 	}
@@ -4177,7 +4221,7 @@ func (builder *QueryBuilder) applyRegularIndexOnlyScan(
 		}
 	}
 
-	residualLeadingPos := indexOnlyResidualLeadingFilterPositions(idxDef, node.TableDef, node.FilterList, leadingPos, newLeadingFilter)
+	residualLeadingPos := match.residualLeadingPos
 	filterCapacity := 1 + len(missFilterIdx) + len(residualLeadingPos)
 	newFilterList := make([]*plan.Expr, 0, filterCapacity)
 	newFilterList = append(newFilterList, newLeadingFilter)
@@ -4347,7 +4391,7 @@ func classifyRangeBound(fn *plan.Function) (col *plan.ColRef, isLower bool) {
 // because the persisted key has a longer suffix. Opposing paired bounds may
 // use those operators because replaceRangePairCondition emits one bounded
 // prefix range.
-func regularIndexRangeFunctionsUsable(
+func (builder *QueryBuilder) regularIndexRangeFunctionsUsable(
 	idxDef *IndexDef,
 	tableDef *plan.TableDef,
 	first *plan.Function,
@@ -4358,15 +4402,17 @@ func regularIndexRangeFunctionsUsable(
 		return false
 	}
 	if !indexTableStoresSerializedKey(idxDef) {
-		return true
+		// A pair would be rebound as BETWEEN/IN_RANGE, whose mixed temporal
+		// precision contract need not equal the two original scalar comparisons.
+		return second == nil || !mixedTemporalIndexComparison(first) && !mixedTemporalIndexComparison(second)
 	}
 	leadingColPos, ok := tableDef.Name2ColIndex[catalog.ResolveAlias(idxDef.Parts[0])]
 	if !ok || leadingColPos < 0 || int(leadingColPos) >= len(tableDef.Cols) {
 		return false
 	}
 	indexedPartType := tableDef.Cols[leadingColPos].Typ
-	if !canSerializeDecimalIndexRangeBounds(first, indexedPartType) ||
-		(second != nil && !canSerializeDecimalIndexRangeBounds(second, indexedPartType)) {
+	if !serializedIndexComparisonUsable(builder.GetContext(), first, indexedPartType) ||
+		(second != nil && !serializedIndexComparisonUsable(builder.GetContext(), second, indexedPartType)) {
 		return false
 	}
 	if !allowUnsafeRange && (hasUnsafeRangeOp(first) || (second != nil && hasUnsafeRangeOp(second))) {
@@ -4419,7 +4465,7 @@ func (builder *QueryBuilder) getIndexForNonEquiCond(indexes []*IndexDef, node *p
 	// giving up on the index lookup altogether. Unsafe operators are allowed
 	// while discovering, and after selecting, a paired range.
 	selectIndex := func(candidates indexCandidates, first, second *plan.Function, allowUnsafeRange bool) (int, bool) {
-		if regularIndexRangeFunctionsUsable(
+		if builder.regularIndexRangeFunctionsUsable(
 			indexes[candidates.preferred], node.TableDef, first, second, allowUnsafeRange,
 		) {
 			return candidates.preferred, true
@@ -4591,68 +4637,13 @@ func rangeFilterColumnType(fn *plan.Function) (plan.Type, bool) {
 	return plan.Type{}, false
 }
 
-func canSerializeDecimalIndexRangeBound(bound *plan.Expr, indexedPartType plan.Type) bool {
-	indexedType := makeTypeByPlan2Type(indexedPartType)
-	if !indexedType.Oid.IsDecimal() {
-		return true
-	}
-	if bound == nil {
-		return false
-	}
-	boundType := makeTypeByPlan2Expr(bound)
-	if !boundType.Oid.IsDecimal() {
-		return false
-	}
-	if boundType.Oid == indexedType.Oid && boundType.Scale == indexedType.Scale {
-		return true
-	}
-	return checkNoNeedCast(context.Background(), boundType, indexedType, bound)
-}
-
-func canSerializeDecimalIndexRangeBounds(fn *plan.Function, indexedPartType plan.Type) bool {
-	if fn == nil || fn.Func == nil {
-		return false
-	}
-	if fn.Func.ObjName == "or" {
-		for _, arg := range fn.Args {
-			if !canSerializeDecimalIndexRangeBounds(arg.GetF(), indexedPartType) {
-				return false
-			}
-		}
-		return true
-	}
-	if !types.T(indexedPartType.Id).IsDecimal() {
-		return true
-	}
-	switch fn.Func.ObjName {
-	case "between", "in_range":
-		return len(fn.Args) >= 3 &&
-			canSerializeDecimalIndexRangeBound(fn.Args[1], indexedPartType) &&
-			canSerializeDecimalIndexRangeBound(fn.Args[2], indexedPartType)
-	case ">", ">=", "<", "<=":
-		return canSerializeDecimalIndexRangeBound(rangeFilterConstValue(fn), indexedPartType)
-	default:
-		return true
-	}
-}
-
-func (builder *QueryBuilder) normalizeDecimalIndexRangeBound(bound *plan.Expr, indexedPartType plan.Type) *plan.Expr {
-	if bound == nil || !types.T(indexedPartType.Id).IsDecimal() ||
-		(bound.Typ.Id == indexedPartType.Id && bound.Typ.Scale == indexedPartType.Scale) ||
-		!canSerializeDecimalIndexRangeBound(bound, indexedPartType) {
-		return bound
-	}
-	normalized, err := forceCastExpr(builder.GetContext(), bound, indexedPartType)
-	if err != nil {
-		return bound
-	}
-	return normalized
-}
-
 func (builder *QueryBuilder) replaceRangePairCondition(idxDef *IndexDef, filterList []*plan.Expr, filterIdx []int32, idxTag int32, idxTableDef *plan.TableDef) (*plan.Expr, error) {
 	numParts := len(idxDef.Parts)
 	lowerFn := filterList[filterIdx[0]].GetF()
 	upperFn := filterList[filterIdx[1]].GetF()
+	if numParts == 1 && (mixedTemporalIndexComparison(lowerFn) || mixedTemporalIndexComparison(upperFn)) {
+		return nil, moerr.NewInternalError(builder.GetContext(), "unsupported mixed temporal index range pair")
+	}
 
 	lowerOp := canonicalRangeOp(lowerFn)
 	upperOp := canonicalRangeOp(upperFn)
@@ -4665,14 +4656,21 @@ func (builder *QueryBuilder) replaceRangePairCondition(idxDef *IndexDef, filterL
 	compositeFilterSel := filterList[filterIdx[0]].Selectivity * filterList[filterIdx[1]].Selectivity
 
 	if numParts > 1 {
-		if indexedPartType, ok := rangeFilterColumnType(lowerFn); ok {
-			lowerVal = builder.normalizeDecimalIndexRangeBound(lowerVal, indexedPartType)
+		lowerType, lowerOK := rangeFilterColumnType(lowerFn)
+		upperType, upperOK := rangeFilterColumnType(upperFn)
+		if !lowerOK || !upperOK {
+			return nil, moerr.NewInternalError(builder.GetContext(), "missing index range column")
 		}
-		if indexedPartType, ok := rangeFilterColumnType(upperFn); ok {
-			upperVal = builder.normalizeDecimalIndexRangeBound(upperVal, indexedPartType)
+		var err error
+		lowerVal, err = normalizeIndexComparisonBound(builder.GetContext(), lowerVal, lowerType)
+		if err != nil {
+			return nil, err
+		}
+		upperVal, err = normalizeIndexComparisonBound(builder.GetContext(), upperVal, upperType)
+		if err != nil {
+			return nil, err
 		}
 		serialFunc := indexTableComparisonSerialFunc()
-		var err error
 		lowerVal, err = BindFuncExprImplByPlanExpr(builder.GetContext(), serialFunc, []*plan.Expr{lowerVal})
 		if err != nil {
 			return nil, err
