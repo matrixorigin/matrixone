@@ -51,6 +51,26 @@ grant select on table flush_privileges_db.flush to flush_privileges_role;
 -- @session:id=1&user=sys:flush_privileges_user:flush_privileges_role&password=123456{
 select count(*) from flush_privileges_db.flush;
 -- @session}
+-- A different tenant's no-op does not change data in the first tenant.
+drop account if exists flush_privileges_tenant_a;
+drop account if exists flush_privileges_tenant_b;
+create account flush_privileges_tenant_a admin_name 'admin' identified by '123456';
+create account flush_privileges_tenant_b admin_name 'admin' identified by '123456';
+-- @session:id=2&user=flush_privileges_tenant_a:admin&password=123456{
+create database flush_privileges_isolation;
+create table flush_privileges_isolation.t(v int);
+insert into flush_privileges_isolation.t values (1);
+flush privileges;
+-- @session}
+-- @session:id=3&user=flush_privileges_tenant_b:admin&password=123456{
+flush privileges;
+-- @session}
+-- @session:id=2&user=flush_privileges_tenant_a:admin&password=123456{
+select count(*) from flush_privileges_isolation.t;
+drop database flush_privileges_isolation;
+-- @session}
+drop account flush_privileges_tenant_a;
+drop account flush_privileges_tenant_b;
 drop user if exists flush_privileges_user;
 drop role if exists flush_privileges_role;
 drop database if exists flush_privileges_db;
