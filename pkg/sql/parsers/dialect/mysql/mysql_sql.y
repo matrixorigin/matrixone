@@ -741,6 +741,9 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 
 // Iceberg
 %token <str> ICEBERG CATALOG CATALOGS NAMESPACE NAMESPACES REF FOR_ICEBERG
+// DUAL is reserved only in MySQL digest syntax; ordinary MO identifiers keep
+// their existing grammar. Its only unqualified form is the entire FROM clause.
+%token <str> DIGEST_DUAL
 %token <str> MONGODB MONGODB_PATH MONGODB_CONVERT CONNECTIONS
 %token <str> DATASTREAM ESQL KAFKA
 
@@ -8139,6 +8142,11 @@ from_clause:
         $$ = &tree.From{
             Tables: tree.TableExprs{$2},
         }
+    }
+|   FROM DIGEST_DUAL
+    {
+        tn := tree.NewTableName(tree.Identifier($2), tree.ObjectNamePrefix{}, nil)
+        $$ = &tree.From{Tables: tree.TableExprs{&tree.AliasedTableExpr{Expr: tn}}}
     }
 
 table_references:

@@ -455,6 +455,8 @@ func (l *Lexer) Lex(lval *yySymType) int {
 		} else if typ == ID && l.lastToken != '.' && strings.EqualFold(str, "n") && l.scanner.cur() == '\'' {
 			// National strings are one literal, not an identifier plus alias.
 			typ, str = l.scanner.Scan()
+		} else if typ == ID && strings.EqualFold(str, "dual") && digestDualIsKeyword(l.scanner, l.lastToken == '.') {
+			typ = DIGEST_DUAL
 		} else if typ == QUOTE_ID {
 			typ = ID
 		} else if typ == ID && l.lastToken != '.' && digestCharsetIntroducer(str) {

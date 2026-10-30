@@ -522,90 +522,71 @@ const MisplacedIntoClauseMessage = "Misplaced INTO clause, INTO is not allowed i
 const PerformIntoClauseMessage = "INTO is not allowed with PERFORM statements."
 
 func SelectIntoVariablesForTopLevel(stmt SelectStatement) (vars []*VarExpr, deprecated bool, err string) {
-	return selectIntoVariablesForTopLevel(stmt, false)
+	info, err := collectSelectInto(stmt, false)
+	return info.vars, info.deprecated, err
 }
 
-func selectIntoVariablesForTopLevel(stmt SelectStatement, insideUnion bool) (vars []*VarExpr, deprecated bool, err string) {
+// Original placement and promotion are collected together, once per node.
+// Rescanning each UNION's final operand here makes a single collection quadratic
+// and the parser's repeated reductions cubic on a nested UNION spine.
+type selectIntoInfo struct {
+	vars            []*VarExpr
+	deprecated      bool
+	hasInto         bool
+	hasFrom         bool
+	suffixAfterFrom bool
+}
+
+func collectSelectInto(stmt SelectStatement, insideUnion bool) (selectIntoInfo, string) {
 	switch node := stmt.(type) {
 	case *Select:
+		info, err := collectSelectInto(node.Select, insideUnion)
+		if err != "" {
+			return info, err
+		}
+		if !info.hasInto && (len(node.IntoVars) > 0 || node.Ep != nil) {
+			info.hasInto = true
+			info.suffixAfterFrom = info.hasFrom
+		}
 		if len(node.IntoVars) > 0 {
-			return node.IntoVars, insideUnion || node.DeprecatedInto, ""
+			info.vars = node.IntoVars
 		}
-		vars, deprecated, err = selectIntoVariablesForTopLevel(node.Select, insideUnion)
-		if err != "" {
-			return nil, false, err
-		}
-		return vars, deprecated || node.DeprecatedInto, ""
+		info.deprecated = info.deprecated || node.DeprecatedInto || insideUnion && len(info.vars) > 0
+		return info, ""
 	case *SelectClause:
-		return node.IntoVars, insideUnion && len(node.IntoVars) > 0, ""
+		return selectIntoInfo{
+			vars: node.IntoVars, deprecated: insideUnion && len(node.IntoVars) > 0,
+			hasInto: len(node.IntoVars) > 0 || node.IntoExport != nil,
+			hasFrom: node.From != nil && len(node.From.Tables) > 0,
+		}, ""
 	case *ParenSelect:
-		return selectIntoVariablesForTopLevel(node.Select, insideUnion)
+		return collectSelectInto(node.Select, insideUnion)
 	case *UnionClause:
-		if _, parenthesized := node.Right.(*ParenSelect); parenthesized {
-			if err := validateSelectIntoOriginalPlacement(node.Right, false); err != "" {
-				return nil, false, err
-			}
+		left, err := collectSelectInto(node.Left, true)
+		if err != "" || left.hasInto {
+			return selectIntoInfo{}, MisplacedIntoClauseMessage
 		}
-		if selectTreeHasInto(node.Left) || selectTreeHasExport(node.Left) {
-			return nil, false, MisplacedIntoClauseMessage
+		right, err := collectSelectInto(node.Right, true)
+		if _, parenthesized := node.Right.(*ParenSelect); parenthesized && right.suffixAfterFrom {
+			return selectIntoInfo{}, MisplacedIntoClauseMessage
 		}
-		vars, deprecated, err = selectIntoVariablesForTopLevel(node.Right, true)
-		if err != "" {
-			return nil, false, err
-		}
-		if len(vars) > 0 {
-			deprecated = true
-		}
-		return vars, deprecated, ""
+		return right, err
 	default:
-		return nil, false, ""
+		return selectIntoInfo{}, ""
 	}
 }
 
-// ValidateSelectIntoInParentheses preserves the original SELECT-clause
-// placement. Promoted Select.IntoVars/Ep alone cannot distinguish INTO before
-// FROM from the query-level suffix after FROM.
+// ValidateSelectIntoInParentheses checks original placement, not the warning
+// metadata: a deprecated UNION INTO can still be a legal pre-FROM INTO.
 func ValidateSelectIntoInParentheses(stmt SelectStatement) string {
-	vars, deprecated, err := SelectIntoVariablesForTopLevel(stmt)
+	info, err := collectSelectInto(stmt, false)
 	if err != "" {
 		return err
 	}
-	if len(vars) == 0 && SelectIntoExport(stmt) == nil {
-		return ""
-	}
-	if deprecated {
+	if info.suffixAfterFrom {
 		return MisplacedIntoClauseMessage
 	}
-	return validateSelectIntoOriginalPlacement(stmt, true)
-}
-
-// Inspect only the original query envelope. Do not call the top-level INTO
-// collector from its own UNION recursion: that would revisit the right subtree
-// exponentially for nested set operations.
-func validateSelectIntoOriginalPlacement(stmt SelectStatement, hasInto bool) string {
-	for {
-		switch node := stmt.(type) {
-		case *Select:
-			hasInto = hasInto || len(node.IntoVars) > 0 || node.Ep != nil
-			stmt = node.Select
-		case *ParenSelect:
-			stmt = node.Select
-		case *UnionClause:
-			// A grouped final set operand can still own a pre-FROM INTO.
-			// Its original placement is in the final clause, not this wrapper.
-			stmt = node.Right
-		case *SelectClause:
-			if hasInto && len(node.IntoVars) == 0 && node.IntoExport == nil && node.From != nil && len(node.From.Tables) > 0 {
-				return MisplacedIntoClauseMessage
-			}
-			return ""
-		default:
-			if hasInto {
-				return MisplacedIntoClauseMessage
-			}
-			return ""
-		}
-	}
+	return ""
 }
 
 // ValidateSelectIntoInSubquery applies the subquery context independently of

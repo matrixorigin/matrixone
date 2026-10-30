@@ -267,7 +267,8 @@ func (d *statementDigest) scan(s *Scanner, syntax *statementDigestSyntax, hint b
 			d.add(digestJSONUnquote, "", false)
 			continue
 		}
-		if kind == QUOTE_ID || wasAfterDot && kind == ID {
+		if kind == QUOTE_ID || wasAfterDot && kind == ID ||
+			!hint && kind == ID && strings.EqualFold(value, "dual") && !digestDualIsKeyword(s, wasAfterDot) {
 			d.add(digestIdentifier, value, false)
 			continue
 		}
@@ -308,6 +309,16 @@ func (d *statementDigest) scan(s *Scanner, syntax *statementDigestSyntax, hint b
 			d.add(digestIdentifier, value, false)
 		}
 	}
+}
+
+// MySQL admits a reserved word as a qualified identifier only immediately
+// adjacent to the dot. Whitespace/comments break that lexical identity.
+func digestDualIsKeyword(s *Scanner, afterDot bool) bool {
+	start := s.Pos - len("dual")
+	if afterDot && start > 0 && s.buf[start-1] == '.' {
+		return false
+	}
+	return s.Pos == len(s.buf) || s.buf[s.Pos] != '.'
 }
 
 func digestCharsetIntroducer(word string) bool {

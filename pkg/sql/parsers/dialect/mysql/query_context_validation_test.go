@@ -51,6 +51,25 @@ func TestQueryLockAndIntoContext(t *testing.T) {
 		{"WITH c AS (SELECT 1) (SELECT 1 FROM nation INTO OUTFILE '/tmp/claude_no_execute')", false},
 		{"WITH c AS (SELECT 1) (SELECT 1 INTO OUTFILE '/tmp/claude_no_execute' FROM nation)", true},
 		{"(SELECT 1 FROM nation INTO OUTFILE '/tmp/claude_no_execute')", true},
+		{"WITH c AS (((SELECT * FROM nation FOR SHARE) FOR UPDATE)) SELECT 1", true},
+		{"WITH c AS (((SELECT * FROM nation FOR SHARE) FOR UPDATE)) SELECT * FROM c", false},
+		{"WITH c AS (((SELECT * FROM nation FOR SHARE) FOR UPDATE)), d AS (SELECT * FROM c) SELECT * FROM d", false},
+		{"WITH c AS (SELECT 1) UPDATE nation SET n_nationkey=((SELECT * FROM c FOR SHARE) FOR UPDATE)", true},
+		{"WITH c AS (SELECT 1) DELETE FROM nation WHERE n_nationkey=((SELECT * FROM c FOR SHARE) FOR UPDATE)", true},
+		{"WITH c AS (SELECT 1) UPDATE nation SET n_nationkey=((SELECT * FROM region FOR SHARE) FOR UPDATE)", false},
+		{"WITH c AS (SELECT 1) (WITH d AS (SELECT 2) SELECT 1) ORDER BY ((SELECT * FROM c FOR SHARE) FOR UPDATE)", false},
+		{"WITH c AS (SELECT 1) (WITH d AS (SELECT 2) SELECT 1) ORDER BY ((SELECT * FROM d FOR SHARE) FOR UPDATE)", true},
+		{"WITH c AS (SELECT 1) (WITH d AS (SELECT 2) SELECT 1) UNION ((SELECT * FROM c FOR SHARE) FOR UPDATE)", false},
+		{"WITH c AS (SELECT 1) (WITH d AS (SELECT 2) SELECT 1) UNION ((SELECT * FROM d FOR SHARE) FOR UPDATE)", true},
+		{"WITH c AS (SELECT 1) (((SELECT * FROM c FOR SHARE) FOR UPDATE) UNION (WITH d AS (SELECT 2) SELECT 1))", true},
+		{"WITH c AS (SELECT 1) SELECT (WITH d AS (SELECT 2) SELECT 1) ORDER BY ((SELECT * FROM c FOR SHARE) FOR UPDATE)", true},
+		{"(SELECT 1 UNION SELECT 2 INTO @x) ORDER BY 1", true},
+		{"(SELECT 1 UNION SELECT 2 INTO @x FROM nation) LIMIT 1", true},
+		{"(SELECT 1 UNION SELECT 2 FROM nation INTO @x) LIMIT 1", false},
+		{"WITH c AS (((SELECT * FROM nation FOR SHARE) FOR UPDATE)) DELETE c FROM nation AS c", true},
+		{"WITH c AS (((SELECT * FROM nation FOR SHARE) FOR UPDATE)) DELETE c FROM c", false},
+		{"WITH `dual` AS (((SELECT * FROM nation FOR SHARE) FOR UPDATE)) SELECT 1 FROM DUAL", true},
+		{"WITH `dual` AS (((SELECT * FROM nation FOR SHARE) FOR UPDATE)) SELECT 1 FROM `dual`", false},
 	} {
 		t.Run(tc.sql, func(t *testing.T) {
 			// Reuse a real parser so lock admission state cannot leak across calls.
@@ -71,6 +90,29 @@ func TestQueryLockAndIntoContext(t *testing.T) {
 					require.Len(t, statements, 1)
 				}()
 			}
+		})
+	}
+}
+
+func TestDigestDualSyntax(t *testing.T) {
+	// Digest follows MySQL's reserved DUAL grammar without changing MO's
+	// established execution grammar for unquoted identifiers/aliases.
+	for _, sql := range []string{
+		"SELECT 1 FROM dual d", "SELECT 1 FROM (dual)",
+		"SELECT 1 FROM dual,t", "SELECT 1 FROM (SELECT 1) dual",
+		"SELECT 1 AS dual", "SELECT dual", "CREATE TABLE dual(a INT)",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			_, _, err := StatementDigest(t.Context(), sql, "")
+			require.Error(t, err)
+			statements, err := (&MySQLParser{}).ParseWithSQLMode(t.Context(), sql, 0, "")
+			require.NoError(t, err)
+			defer func() {
+				for _, statement := range statements {
+					statement.Free()
+				}
+			}()
+			require.Len(t, statements, 1)
 		})
 	}
 }
