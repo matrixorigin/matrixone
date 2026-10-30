@@ -1,0 +1,88 @@
+drop database if exists charset_multibyte_parity;
+create database charset_multibyte_parity;
+use charset_multibyte_parity;
+select ord('中'), hex('中'), unhex('E4B8AD') = '中', length('中'), char_length('中'), bit_length('中'), octet_length('中');
+➤ ord(中)[-5,64,0]  ¦  hex(中)[12,8,0]  ¦  unhex(E4B8AD) = 中[-6,8,0]  ¦  length(中)[-5,64,0]  ¦  char_length(中)[-5,64,0]  ¦  bit_length(中)[-5,64,0]  ¦  octet_length(中)[-5,64,0]  𝄀
+14989485  ¦  E4B8AD  ¦  1  ¦  3  ¦  1  ¦  24  ¦  3
+select substr('中文字', 2, 1), left('中文字', 2), right('中文字', 1), reverse('中文'), lpad('中', 3, '文'), rpad('中', 3, 'é'), insert('中文字', 2, 1, 'X'), mid('中文字',-1,1);
+➤ substr(中文字, 2, 1)[12,1,0]  ¦  left(中文字, 2)[12,2,0]  ¦  right(中文字, 1)[12,1,0]  ¦  reverse(中文)[12,2,0]  ¦  lpad(中, 3, 文)[12,3,0]  ¦  rpad(中, 3, é)[12,3,0]  ¦  insert(中文字, 2, 1, X)[12,4,0]  ¦  mid(中文字, -1, 1)[12,1,0]  𝄀
+文  ¦  中文  ¦  字  ¦  文中  ¦  文文中  ¦  中éé  ¦  中X字  ¦  字
+select upper('中é'), lower('ÉÀ'), locate('文','中文'), instr('中文字','字'), position('字' in '中文字'), substring_index('中,文,字', ',', -2);
+➤ upper(中é)[12,2,0]  ¦  lower(ÉÀ)[12,2,0]  ¦  locate(文, 中文)[-5,64,0]  ¦  instr(中文字, 字)[-5,64,0]  ¦  position(字 in 中文字)[-5,64,0]  ¦  substring_index(中,文,字, ,, -2)[12,5,0]  𝄀
+中É  ¦  éà  ¦  2  ¦  3  ¦  3  ¦  文,字
+select hex(convert('中' using utf8mb4)), charset(convert('中' using utf8mb4)), charset(convert('中' using binary)), hex(convert('中' using binary));
+➤ hex(convert(中 using utf8mb4))[12,8,0]  ¦  charset(convert(中 using utf8mb4))[12,65535,0]  ¦  charset(convert(中 using binary))[12,65535,0]  ¦  hex(convert(中 using binary))[12,8,0]  𝄀
+E4B8AD  ¦  utf8mb4  ¦  binary  ¦  E4B8AD
+select hex(cast('中' as binary)), charset(cast('a' as char));
+➤ hex(cast(中 as binary))[-1,16383,0]  ¦  charset(cast(a as varchar))[12,65535,0]  𝄀
+E4B8AD  ¦  utf8mb4
+select _utf8mb4'中' = '中', charset(_utf8mb4'a'), charset(_binary'a');
+➤ 中 = 中[-6,8,0]  ¦  charset(a)[12,65535,0]  ¦  charset(a)[12,65535,0]  𝄀
+1  ¦  utf8mb4  ¦  binary
+select to_base64('中'), from_base64(to_base64('中')) = '中';
+➤ to_base64(中)[12,8,0]  ¦  from_base64(to_base64(中)) = 中[-6,8,0]  𝄀
+5Lit  ¦  1
+select length(_utf8mb4 x'E4B8AD'), char_length(convert(x'E4B8AD' using utf8mb4));
+➤ length(中)[-5,64,0]  ¦  char_length(convert(0xE4B8AD using utf8mb4))[-5,64,0]  𝄀
+3  ¦  1
+select '😀' = '😀', char_length('😀'), length('😀'), hex('😀'), upper('😀'), substr('a😀b',2,1), reverse('a😀b');
+➤ 😀 = 😀[-6,8,0]  ¦  char_length(😀)[-5,64,0]  ¦  length(😀)[-5,64,0]  ¦  hex(😀)[12,8,0]  ¦  upper(😀)[12,1,0]  ¦  substr(a😀b, 2, 1)[12,1,0]  ¦  reverse(a😀b)[12,3,0]  𝄀
+1  ¦  1  ¦  4  ¦  F09F9880  ¦  😀  ¦  😀  ¦  b😀a
+select 'a' < 'B' collate utf8mb4_bin, 'a' = 'A' collate utf8mb4_bin, strcmp('a' collate utf8mb4_bin, 'A');
+➤ a < (B) collate utf8mb4_bin[-6,8,0]  ¦  a = (A) collate utf8mb4_bin[-6,8,0]  ¦  strcmp((a) collate utf8mb4_bin, A)[-5,2,0]  𝄀
+0  ¦  0  ¦  1
+select 'abc' like 'ABC' collate utf8mb4_bin, 'a_c' like 'a\_c', 'ac' like 'a%c%', '中文' like '中_', '中文' like '_文%';
+➤ abc like (ABC) collate utf8mb4_bin[-6,8,0]  ¦  a_c like a\_c[-6,8,0]  ¦  ac like a%c%[-6,8,0]  ¦  中文 like 中_[-6,8,0]  ¦  中文 like _文%[-6,8,0]  𝄀
+0  ¦  1  ¦  1  ¦  1  ¦  1
+select replace('中文中', '中', 'x'), concat('中', 1, 'é'), concat_ws('、', '中', '文'), repeat('中', 3), space(2) = '  ';
+➤ replace(中文中, 中, x)[12,3,0]  ¦  concat(中, 1, é)[12,22,0]  ¦  concat_ws(、, 中, 文)[12,3,0]  ¦  repeat(中, 3)[12,3,0]  ¦  space(2) =   [-6,8,0]  𝄀
+x文x  ¦  中1é  ¦  中、文  ¦  中中中  ¦  1
+select char_length(trim('  中  ')), ltrim('  中'), rtrim('中  '), trim(both '中' from '中文中'), trim(leading 'x' from 'xx中');
+➤ char_length(trim(  中  ))[-5,64,0]  ¦  ltrim(  中)[12,3,0]  ¦  rtrim(中  )[12,3,0]  ¦  trim(both 中 from 中文中)[12,3,0]  ¦  trim(leading x from xx中)[12,3,0]  𝄀
+1  ¦  中  ¦  中  ¦  文  ¦  中
+select field('文', '中', '文'), find_in_set('文', '中,文,字'), elt(2, '中', '文'), make_set(3, '中', '文', '字'), export_set(5, '是', '否', ',', 4);
+➤ field(文, 中, 文)[-5,64,0]  ¦  find_in_set(文, 中,文,字)[-5,3,0]  ¦  elt(2, 中, 文)[12,1,0]  ¦  make_set(3, 中, 文, 字)[12,5,0]  ¦  export_set(5, 是, 否, ,, 4)[12,127,0]  𝄀
+2  ¦  2  ¦  文  ¦  中,文  ¦  是,否,是,否
+select hex(char(228,184,173 using utf8mb4)), char(65,66 using utf8mb4), charset(char(65 using utf8mb4));
+➤ hex(convert(char(228, 184, 173) using utf8mb4))[12,96,0]  ¦  convert(char(65, 66) using utf8mb4)[12,8,0]  ¦  charset(convert(char(65) using utf8mb4))[12,65535,0]  𝄀
+E4B8AD  ¦  AB  ¦  utf8mb4
+create table c(a varchar(3), b char(3), c text);
+insert into c values ('中文字','中文字','中文字'), ('😀','😀😀','😀');
+select a, b, c, length(a), char_length(b), length(c) from c order by a collate utf8mb4_bin;
+➤ a[12,3,0]  ¦  b[1,3,0]  ¦  c[-1,16383,0]  ¦  length(a)[-5,64,0]  ¦  char_length(b)[-5,64,0]  ¦  length(c)[-5,64,0]  𝄀
+中文字  ¦  中文字  ¦  中文字  ¦  9  ¦  3  ¦  9  𝄀
+😀  ¦  😀😀  ¦  😀  ¦  4  ¦  2  ¦  4
+insert into c values ('中文字x','a','a');
+Data truncation: Can't cast '中文字x' to VARCHAR type. Src length 4 is larger than Dest length 3
+select a from c where a like '中%';
+➤ a[12,3,0]  𝄀
+中文字
+select count(*) from c;
+➤ count(*)[-5,64,0]  𝄀
+2
+create table d(a varchar(10) character set utf8mb4 collate utf8mb4_bin, b varchar(10) character set utf8mb4);
+insert into d values ('x','x'),('X','X');
+select a from d order by a;
+➤ a[12,10,0]  𝄀
+X  𝄀
+x
+select count(distinct a) from d;
+➤ count(distinct a)[-5,64,0]  𝄀
+2
+create table u(a varchar(5) collate utf8mb4_bin, unique key(a));
+insert into u values ('a'),('A');
+insert into u values ('a');
+Duplicate entry 'a' for key 'a'
+select a from u order by a;
+➤ a[12,5,0]  𝄀
+A  𝄀
+a
+create table d2(a varchar(5)) character set utf8mb4;
+alter table d2 convert to character set utf8mb4;
+alter table d2 modify a varchar(5) character set utf8mb4;
+select cast('a' as char(5) character set utf8mb4), convert('a', char character set utf8mb4);
+➤ cast(a as char(5) character set utf8mb4)[1,5,0]  ¦  cast(a as char character set utf8mb4)[12,1,0]  𝄀
+a  ¦  a
+select 'a' collate nonexist;
+Unknown collation: 'nonexist'
+drop database charset_multibyte_parity;

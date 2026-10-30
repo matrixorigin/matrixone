@@ -1,0 +1,76 @@
+-- For every metric, the IVFFLAT and HNSW index paths must return the same
+-- top-k as an exact scan of an unindexed copy of the same rows.
+-- Points lie on x + y = 100, query vectors are chosen so there are no ties.
+drop database if exists vector_metric_consistency;
+create database vector_metric_consistency;
+use vector_metric_consistency;
+set experimental_ivf_index = 1;
+set experimental_hnsw_index = 1;
+
+create table base(id bigint primary key, v vecf32(2));
+insert into base select result, cast(concat('[', result, ',', 100-result, ']') as vecf32(2)) from generate_series(1,100,1) g;
+create table ivf_l2 like base;
+insert into ivf_l2 select * from base;
+create index i_l2 using ivfflat on ivf_l2(v) lists=4 op_type 'vector_l2_ops';
+create table ivf_cos like base;
+insert into ivf_cos select * from base;
+create index i_cos using ivfflat on ivf_cos(v) lists=4 op_type 'vector_cosine_ops';
+create table ivf_ip like base;
+insert into ivf_ip select * from base;
+create index i_ip using ivfflat on ivf_ip(v) lists=4 op_type 'vector_ip_ops';
+create table hnsw_l2 like base;
+insert into hnsw_l2 select * from base;
+create index h_l2 using hnsw on hnsw_l2(v) op_type 'vector_l2_ops';
+create table hnsw_cos like base;
+insert into hnsw_cos select * from base;
+create index h_cos using hnsw on hnsw_cos(v) op_type 'vector_cosine_ops';
+create table hnsw_ip like base;
+insert into hnsw_ip select * from base;
+create index h_ip using hnsw on hnsw_ip(v) op_type 'vector_ip_ops';
+
+-- l2
+select id from base order by l2_distance(v,'[60,30]') limit 3;
+select id from ivf_l2 order by l2_distance(v,'[60,30]') limit 3;
+select id from hnsw_l2 order by l2_distance(v,'[60,30]') limit 3;
+select id, round(l2_distance(v,'[60,30]'),4) d from base order by d limit 3;
+select id, round(l2_distance(v,'[60,30]'),4) d from ivf_l2 order by d limit 3;
+select id, round(l2_distance(v,'[60,30]'),4) d from hnsw_l2 order by d limit 3;
+select id from base order by l2_distance(v,'[90,10]') limit 3;
+select id from ivf_l2 order by l2_distance(v,'[90,10]') limit 3;
+select id from hnsw_l2 order by l2_distance(v,'[90,10]') limit 3;
+
+-- cosine
+select id from base order by cosine_distance(v,'[1,0]') limit 3;
+select id from ivf_cos order by cosine_distance(v,'[1,0]') limit 3;
+select id from hnsw_cos order by cosine_distance(v,'[1,0]') limit 3;
+select id from base order by cosine_distance(v,'[0,1]') limit 3;
+select id from ivf_cos order by cosine_distance(v,'[0,1]') limit 3;
+select id from hnsw_cos order by cosine_distance(v,'[0,1]') limit 3;
+select id, round(cosine_distance(v,'[1,0]'),6) d from base order by cosine_distance(v,'[1,0]') limit 2 offset 3;
+select id, round(cosine_distance(v,'[1,0]'),6) d from ivf_cos order by cosine_distance(v,'[1,0]') limit 2 offset 3;
+select id from ivf_cos order by cosine_distance(v, cast('[1,0]' as vecf64(2))) limit 3;
+
+-- inner product
+select id from base order by inner_product(v,'[1,0]') limit 3;
+select id from ivf_ip order by inner_product(v,'[1,0]') limit 3;
+select id from hnsw_ip order by inner_product(v,'[1,0]') limit 3;
+select id from base order by inner_product(v,'[0,1]') limit 3;
+select id from ivf_ip order by inner_product(v,'[0,1]') limit 3;
+select id from hnsw_ip order by inner_product(v,'[0,1]') limit 3;
+
+-- filters, prepared query vectors and dimension errors
+select id from base where id < 50 order by cosine_distance(v,'[1,0]') limit 3;
+select id from ivf_cos where id < 50 order by cosine_distance(v,'[1,0]') limit 3;
+prepare s1 from 'select id from ivf_cos order by cosine_distance(v,?) limit 3';
+set @q='[1,0]';
+execute s1 using @q;
+set @q='[0,1]';
+execute s1 using @q;
+set @q='[0,1,2]';
+execute s1 using @q;
+deallocate prepare s1;
+select id from base order by l2_distance(v,'[1,0,0]') limit 3;
+select id from ivf_l2 order by l2_distance(v,'[1,0,0]') limit 3;
+select id from hnsw_l2 order by l2_distance(v,'[1,0,0]') limit 3;
+
+drop database vector_metric_consistency;

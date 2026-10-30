@@ -1,0 +1,96 @@
+drop database if exists branch_shape_modes;
+create database branch_shape_modes;
+use branch_shape_modes;
+create table nopk(a int, b varchar(10));
+insert into nopk values (1,'x'),(1,'x'),(2,'y');
+data branch create table nopk_b from nopk;
+select a, b, count(*) from nopk_b group by a, b order by a;
+➤ a[4,32,0]  ¦  b[12,10,0]  ¦  count(*)[-5,64,0]  𝄀
+1  ¦  x  ¦  2  𝄀
+2  ¦  y  ¦  1
+insert into nopk_b values (1,'x');
+delete from nopk_b where a = 2;
+data branch diff nopk_b against nopk output count;
+➤ COUNT(*)[-5,0,0]  𝄀
+2
+data branch merge nopk_b into nopk when conflict accept;
+select a, b, count(*) from nopk group by a, b order by a;
+➤ a[4,32,0]  ¦  b[12,10,0]  ¦  count(*)[-5,64,0]  𝄀
+1  ¦  x  ¦  3
+create table ai(id int auto_increment primary key, v int);
+insert into ai(v) values (1),(2);
+data branch create table ai_b from ai;
+insert into ai_b(v) values (3);
+select * from ai_b order by id;
+➤ id[4,32,0]  ¦  v[4,32,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  2  𝄀
+3  ¦  3
+insert into ai(v) values (4);
+data branch diff ai_b against ai output count;
+➤ COUNT(*)[-5,0,0]  𝄀
+2
+data branch merge ai_b into ai when conflict fail;
+conflict: ai_b INSERT and ai INSERT on pk(3) with different values
+data branch merge ai_b into ai when conflict skip;
+select * from ai order by id;
+➤ id[4,32,0]  ¦  v[4,32,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  2  𝄀
+3  ¦  4
+insert into ai(v) values (5);
+select * from ai order by id;
+➤ id[4,32,0]  ¦  v[4,32,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  2  𝄀
+3  ¦  4  𝄀
+4  ¦  5
+create table g(id int primary key, a int, b int as (a*2) stored);
+insert into g(id,a) values (1,1),(2,2);
+data branch create table g_b from g;
+update g_b set a = 5 where id = 1;
+insert into g_b(id,a) values (3,7);
+data branch diff g_b against g output count;
+➤ COUNT(*)[-5,0,0]  𝄀
+2
+data branch merge g_b into g when conflict accept;
+select * from g order by id;
+➤ id[4,32,0]  ¦  a[4,32,0]  ¦  b[4,32,0]  𝄀
+1  ¦  5  ¦  10  𝄀
+2  ¦  2  ¦  4  𝄀
+3  ¦  7  ¦  14
+create table cp(a int, b varchar(5), c int, primary key(a,b));
+insert into cp values (1,'a',1),(1,'b',2),(2,'a',3);
+data branch create table cp_b from cp;
+update cp_b set c = 9 where a = 1 and b = 'a';
+update cp set c = 8 where a = 1 and b = 'a';
+insert into cp_b values (3,'z',4);
+data branch diff cp_b against cp output count;
+➤ COUNT(*)[-5,0,0]  𝄀
+3
+data branch merge cp_b into cp when conflict fail;
+conflict: cp_b UPDATE and cp UPDATE on pk(1,'a')
+select * from cp order by a, b;
+➤ a[4,32,0]  ¦  b[12,5,0]  ¦  c[4,32,0]  𝄀
+1  ¦  a  ¦  8  𝄀
+1  ¦  b  ¦  2  𝄀
+2  ¦  a  ¦  3
+data branch merge cp_b into cp when conflict skip;
+select * from cp order by a, b;
+➤ a[4,32,0]  ¦  b[12,5,0]  ¦  c[4,32,0]  𝄀
+1  ¦  a  ¦  8  𝄀
+1  ¦  b  ¦  2  𝄀
+2  ¦  a  ¦  3  𝄀
+3  ¦  z  ¦  4
+data branch merge cp_b into cp when conflict accept;
+select * from cp order by a, b;
+➤ a[4,32,0]  ¦  b[12,5,0]  ¦  c[4,32,0]  𝄀
+1  ¦  a  ¦  9  𝄀
+1  ¦  b  ¦  2  𝄀
+2  ¦  a  ¦  3  𝄀
+3  ¦  z  ¦  4
+data branch create table cp_b from cp;
+table cp_b already exists
+data branch create table cp_c from nosuch;
+SQL parser error: table "nosuch" does not exist
+drop database branch_shape_modes;
