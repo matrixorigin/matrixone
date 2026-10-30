@@ -110,6 +110,13 @@ func ddlExpressionContext(ctx CompilerContext, base context.Context) context.Con
 	if function.LegacyUnixTimestampDatetime(ctx.GetContext()) {
 		bound = function.WithLegacyUnixTimestampDatetime(bound)
 	}
+	// D11 carrier two: standalone DDL binders take no QueryBuilder and no
+	// BindContext, so the boolean-semantics statement setting rides this same
+	// carrier. A native-mode session authors persisted expressions with the
+	// exact pre-contract behavior, byte-identical to what SELECT binds.
+	if !function.MySQLConditionalBooleanContractsFromProcess(ctx.GetProcess()) {
+		bound = function.WithMySQLConditionalBooleanContracts(bound, false)
+	}
 	return bound
 }
 
@@ -137,6 +144,13 @@ func NewQueryBuilder(queryType plan.Query_StatementType, ctx CompilerContext, is
 	var boolSumAvgCompat bool
 	var noUnsignedSubtraction bool
 	divPrecisionIncrement := resolveDivPrecisionIncrement(ctx)
+	// D11 two-carrier scalar: resolve the statement's MatrixOneNativeMode
+	// decision with the same single resolver the BindContext and DDL
+	// expression contexts use, so the builder-scoped DML paths that resolve
+	// through QueryBuilder.GetContext (UPDATE / ODKU assignment casts,
+	// projected rewrites, plan checks) bind with the statement's actual
+	// boolean-contracts decision instead of the absent-scalar MySQL default.
+	matrixOneNativeMode := !function.MySQLConditionalBooleanContractsFromProcess(ctx.GetProcess())
 
 	mode, err := ctx.ResolveVariable("sql_mode", true, false)
 	if err == nil {
@@ -200,6 +214,7 @@ func NewQueryBuilder(queryType plan.Query_StatementType, ctx CompilerContext, is
 		mysqlFullGroupByCompat:   mysqlFullGroupByCompat,
 		boolSumAvgCompat:         boolSumAvgCompat,
 		noUnsignedSubtraction:    noUnsignedSubtraction,
+		matrixOneNativeMode:      matrixOneNativeMode,
 		divPrecisionIncrement:    divPrecisionIncrement,
 		aggSpillMem:              aggSpillMem,
 		joinSpillMem:             joinSpillMem,
@@ -14156,6 +14171,15 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 				builder.GetContext(), builder.compCtx.GetProcess(), node.TableDef); err != nil {
 				return err
 			}
+			// Same-version cross-mode boundary: a definition that needs the
+			// conditional boolean contracts evaluates with those kernels only on
+			// a MySQL-mode statement. A native-mode session fails closed here
+			// instead of mis-executing the persisted JSON conditions or the
+			// ENUM storage-truth casts.
+			if err := RequireMySQLConditionalBooleanConsumption(
+				builder.GetContext(), builder.compCtx.GetProcess(), node.TableDef); err != nil {
+				return err
+			}
 		}
 		if len(alias.Cols) > len(node.TableDef.Cols) {
 			return moerr.NewSyntaxErrorf(builder.GetContext(), "table %q has %d columns available but %d columns specified", alias.Alias, len(node.TableDef.Cols), len(alias.Cols))
@@ -14867,7 +14891,14 @@ func (builder *QueryBuilder) GetContext() context.Context {
 		return context.TODO()
 	}
 	ctx := function.WithNoUnsignedSubtraction(builder.compCtx.GetContext(), builder.noUnsignedSubtraction)
-	return function.WithDivPrecisionIncrement(ctx, builder.divPrecisionIncrement)
+	ctx = function.WithDivPrecisionIncrement(ctx, builder.divPrecisionIncrement)
+	// D11 carrier completion: the builder-scoped DML assignment casts and
+	// projected rewrites resolve through this context, so the statement's
+	// boolean-contracts scalar rides it exactly like the BindContext and DDL
+	// carriers. Without it a native-mode UPDATE / ODKU statement saw the
+	// MySQL default and folded BOOL-target BIT-literal assignments that base
+	// keeps rejecting on the raw payload.
+	return function.WithMySQLConditionalBooleanContracts(ctx, !builder.matrixOneNativeMode)
 }
 
 func (builder *QueryBuilder) checkPlanningCanceled() error {
