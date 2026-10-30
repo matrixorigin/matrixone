@@ -346,6 +346,23 @@ func TestStatementRequiresPersistentWriteAccessTemporaryTables(t *testing.T) {
 	}
 }
 
+func TestDeleteReadOnlyClassificationReusesAST(t *testing.T) {
+	ses := newTestSession(t, gomock.NewController(t))
+	ses.SetDatabaseName("testdb")
+	stmt := parseSingleStatement(t, "delete otherdb.x from t as x")
+	defer stmt.Free()
+	before := tree.String(stmt, dialect.MYSQL)
+
+	// The alias names t in the effective database, not otherdb.x or testdb.x.
+	ses.AddTempTable("testdb", "x", "temp_x")
+	require.True(t, statementRequiresPersistentWriteAccess(ses, stmt, "testdb"))
+	ses.AddTempTable("testdb", "t", "temp_t")
+	require.False(t, statementRequiresPersistentWriteAccess(ses, stmt, "testdb"))
+	ses.removeTempTable("testdb", "t", "txnkey", "stmtkey")
+	require.True(t, statementRequiresPersistentWriteAccess(ses, stmt, "testdb"))
+	require.Equal(t, before, tree.String(stmt, dialect.MYSQL))
+}
+
 func readOnlyGateExecCtx(ses FeSession, stmt tree.Statement, input *UserInput) *ExecCtx {
 	return &ExecCtx{
 		reqCtx: context.Background(),

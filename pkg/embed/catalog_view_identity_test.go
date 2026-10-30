@@ -209,6 +209,7 @@ func TestCallerOwnedTenantUpgradeRollsBackAndRetries(t *testing.T) {
 		require.NoError(t, sys.QueryRowContext(ctx, "select account_id from mo_catalog.mo_account where account_name=?", account).Scan(&accountID))
 		svc := cn.RawService().(cnservice.Service)
 		exec := svc.GetSQLExecutor()
+		final := svc.GetBootstrapService().GetFinalVersion()
 		internal := context.WithValue(ctx, defines.InternalExecutorKey{}, true)
 		opts := executor.Options{}.WithAccountID(0).WithDatabase("mo_catalog").WithWaitCommittedLogApplied().WithTxnMode(txnpb.TxnMode_Pessimistic).WithTxnIsolation(txnpb.TxnIsolation_RC)
 		versionSQL := fmt.Sprintf("select create_version from mo_catalog.mo_account where account_id=%d", accountID)
@@ -265,7 +266,7 @@ func TestCallerOwnedTenantUpgradeRollsBackAndRetries(t *testing.T) {
 				require.NoError(t, err)
 			}
 			require.True(t, didUpgrade, "a rolled-back migration must not publish completion to the CN cache")
-			require.Equal(t, "4.0.7", observed[versionSQL])
+			require.Equal(t, final, observed[versionSQL])
 			require.NotEqual(t, oldDefinition, observed[definitionSQL], "the real v407 walker must replace the old view")
 			var version, definition string
 			require.NoError(t, sys.QueryRowContext(ctx, versionSQL).Scan(&version))
@@ -274,7 +275,7 @@ func TestCallerOwnedTenantUpgradeRollsBackAndRetries(t *testing.T) {
 				require.Equal(t, "4.0.6", version)
 				require.Equal(t, oldDefinition, definition, "no migration operation may commit outside the caller transaction")
 			} else {
-				require.Equal(t, "4.0.7", version)
+				require.Equal(t, final, version)
 				require.NotEqual(t, oldDefinition, definition)
 			}
 		}
