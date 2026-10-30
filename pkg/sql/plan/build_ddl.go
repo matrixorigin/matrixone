@@ -6334,14 +6334,48 @@ func buildDropTableSingle(ifExists bool, temporary bool, name *tree.TableName, c
 }
 
 func buildDropView(stmt *tree.DropView, ctx CompilerContext) (*Plan, error) {
-	dropTable := &plan.DropTable{
-		IfExists: stmt.IfExists,
-	}
-	if len(stmt.Names) != 1 {
-		return nil, moerr.NewNotSupportedf(ctx.GetContext(), "drop multiple (%d) view", len(stmt.Names))
+	var dropTable *plan.DropTable
+	if len(stmt.Names) == 1 {
+		entry, err := buildDropViewSingle(stmt.IfExists, stmt.Names[0], ctx)
+		if err != nil {
+			return nil, err
+		}
+		dropTable = entry
+	} else {
+		// DROP VIEW v1, v2, ... uses the same multi-target DropTable plan as
+		// DROP TABLE t1, t2: every name is resolved before anything is dropped.
+		dropTable = &plan.DropTable{
+			IfExists: stmt.IfExists,
+			IsView:   true,
+			Tables:   make([]*plan.DropTable, 0, len(stmt.Names)),
+		}
+		for _, name := range stmt.Names {
+			entry, err := buildDropViewSingle(stmt.IfExists, name, ctx)
+			if err != nil {
+				return nil, err
+			}
+			dropTable.Tables = append(dropTable.Tables, entry)
+		}
 	}
 
-	dropTable.Database = string(stmt.Names[0].SchemaName)
+	return &Plan{
+		Plan: &plan.Plan_Ddl{
+			Ddl: &plan.DataDefinition{
+				DdlType: plan.DataDefinition_DROP_TABLE,
+				Definition: &plan.DataDefinition_DropTable{
+					DropTable: dropTable,
+				},
+			},
+		},
+	}, nil
+}
+
+func buildDropViewSingle(ifExists bool, name *tree.TableName, ctx CompilerContext) (*plan.DropTable, error) {
+	dropTable := &plan.DropTable{
+		IfExists: ifExists,
+	}
+
+	dropTable.Database = string(name.SchemaName)
 
 	// If the database name is empty, attempt to get default database name
 	if dropTable.Database == "" {
@@ -6352,7 +6386,7 @@ func buildDropView(stmt *tree.DropView, ctx CompilerContext) (*Plan, error) {
 		return nil, moerr.NewNoDB(ctx.GetContext())
 	}
 
-	dropTable.Table = string(stmt.Names[0].ObjectName)
+	dropTable.Table = string(name.ObjectName)
 
 	obj, tableDef, err := ctx.Resolve(dropTable.Database, dropTable.Table, nil)
 	if err != nil {
@@ -6376,17 +6410,7 @@ func buildDropView(stmt *tree.DropView, ctx CompilerContext) (*Plan, error) {
 		}
 	}
 	dropTable.IsView = true
-
-	return &Plan{
-		Plan: &plan.Plan_Ddl{
-			Ddl: &plan.DataDefinition{
-				DdlType: plan.DataDefinition_DROP_TABLE,
-				Definition: &plan.DataDefinition_DropTable{
-					DropTable: dropTable,
-				},
-			},
-		},
-	}, nil
+	return dropTable, nil
 }
 
 func buildCreateDatabase(stmt *tree.CreateDatabase, ctx CompilerContext) (*Plan, error) {

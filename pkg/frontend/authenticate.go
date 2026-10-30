@@ -8957,6 +8957,11 @@ func authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ctx con
 		stats.Add(&delta)
 		return ok, stats, err
 	}
+	if st, isDropView := stmt.(*tree.DropView); isDropView && len(st.Names) > 1 {
+		ok, delta, err = authenticateMultiDropViewTargets(ctx, ses, st)
+		stats.Add(&delta)
+		return ok, stats, err
+	}
 
 	// Only a normal denial may use object visibility. Errors (including revoked
 	// active-role membership) have already returned above.
@@ -9174,6 +9179,27 @@ func authenticateMultiDropTableTargets(ctx context.Context, ses *Session, st *tr
 		}
 
 		return false, stats, nil
+	}
+	return true, stats, nil
+}
+
+// authenticateMultiDropViewTargets checks DROP VIEW privileges for every
+// named view, so a list spanning databases is not authorized by the first one.
+func authenticateMultiDropViewTargets(ctx context.Context, ses *Session, st *tree.DropView) (bool, statistic.StatsArray, error) {
+	var stats statistic.StatsArray
+	stats.Reset()
+	if st == nil {
+		return true, stats, nil
+	}
+	for _, name := range st.Names {
+		targetPriv := determinePrivilegeSetOfStatement(&tree.DropView{
+			Names: tree.TableNames{name},
+		})
+		ok, delta, err := determineUserHasPrivilegeSet(ctx, ses, targetPriv)
+		stats.Add(&delta)
+		if err != nil || !ok {
+			return false, stats, err
+		}
 	}
 	return true, stats, nil
 }
