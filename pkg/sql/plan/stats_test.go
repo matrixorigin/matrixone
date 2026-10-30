@@ -97,6 +97,35 @@ func TestHintQueryTypeKeepsRuntimeFilterDeliveryLocal(t *testing.T) {
 	}
 }
 
+func TestHintQueryTypeMinimalEstimatesRespectShuffle(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		shuffle bool
+		want    ExecType
+	}{
+		{name: "without shuffle", want: ExecTypeTP},
+		{name: "with shuffle", shuffle: true, want: ExecTypeAP_ONECN},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stats := DefaultBigStats()
+			stats.HashmapStats.Shuffle = tc.shuffle
+			builder := &QueryBuilder{
+				qry: &planpb.Query{Nodes: []*planpb.Node{{
+					NodeType: planpb.Node_JOIN,
+					Stats:    stats,
+				}}},
+				optimizerHints: &OptimizerHints{execType: 1},
+			}
+
+			builder.hintQueryType()
+
+			require.Equal(t, DefaultMinimalStats().Cost, stats.Cost)
+			require.Equal(t, tc.shuffle, stats.HashmapStats.Shuffle)
+			require.Equal(t, tc.want, GetExecType(builder.qry, false, false))
+		})
+	}
+}
+
 func TestCalcBlockSelectivityUsingShuffleRangeBareColumn(t *testing.T) {
 	t.Run("bare column uses the generic overlap estimate", func(t *testing.T) {
 		expr := &planpb.Expr{
