@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/catalog/mvdefinition"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -53,6 +54,9 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 	if t == nil {
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
 	}
+	if IsMaterializedViewStateTableDef(t) && !mvdefinition.CanWrite(ctx.GetContext(), t) {
+		return nil, moerr.NewUnsupportedDML(ctx.GetContext(), "insert into materialized view internal state")
+	}
 	qualifierDB := string(stmt.TargetDatabaseName)
 	if qualifierDB == "" {
 		qualifierDB = dbName
@@ -80,6 +84,16 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 		tblInfo: tblInfo,
 	}
 	tableDef := tblInfo.tableDefs[0]
+	if (IsMaterializedViewTableDef(tableDef) || IsMaterializedViewStateTableDef(tableDef)) && !mvdefinition.CanWrite(ctx.GetContext(), tableDef) {
+		return nil, moerr.NewUnsupportedDML(ctx.GetContext(), "insert into materialized view")
+	}
+	// clusterTable, err := getAccountInfoOfClusterTable(ctx, stmt.Accounts, tableDef, tblInfo.isClusterTable[0])
+	// if err != nil {
+	// 	return nil, err
+	// }
+	// if len(stmt.OnDuplicateUpdate) > 0 && clusterTable.IsClusterTable {
+	// 	return nil, moerr.NewNotSupported(ctx.GetContext(), "INSERT ... ON DUPLICATE KEY UPDATE ... for cluster table")
+	// }
 
 	builder := NewQueryBuilder(plan.Query_SELECT, ctx, isPrepareStmt, false)
 	// INSERT IGNORE is a statement-level conversion policy and may coexist with
@@ -336,6 +350,14 @@ func appendExternalInsertPlanWithExtraOptions(builder *QueryBuilder, bindCtx *Bi
 
 // ------------------- pk filter relatived -------------------
 
+// isAuthorizedMaterializedViewHiddenColumn admits explicit internal state
+// columns only for the matching MV identity. Row IDs remain storage-owned.
+func isAuthorizedMaterializedViewHiddenColumn(ctx context.Context, tableDef *TableDef, col *ColDef) bool {
+	return col != nil && col.Name != catalog.Row_ID &&
+		(IsMaterializedViewTableDef(tableDef) || IsMaterializedViewStateTableDef(tableDef)) &&
+		mvdefinition.CanWrite(ctx, tableDef)
+}
+
 // getInsertColsFromStmt retrieves the list of column names to be inserted into a table
 // based on the given INSERT statement and table definition.
 // The legacy planner supplies a filtered schema; its implicit list omits the
@@ -360,7 +382,9 @@ func getInsertColsFromStmt(ctx context.Context, stmt *tree.Insert, tableDef *Tab
 		for _, column := range stmt.Columns {
 			colName := strings.ToLower(string(column))
 			idx, ok := colToIdx[colName]
-			if !ok || (tableDef.Cols[idx].Hidden && !isAlterCopyFakePrimaryKey(ctx, tableDef, tableDef.Cols[idx])) {
+			if !ok || (tableDef.Cols[idx].Hidden &&
+				!isAuthorizedMaterializedViewHiddenColumn(ctx, tableDef, tableDef.Cols[idx]) &&
+				!isAlterCopyFakePrimaryKey(ctx, tableDef, tableDef.Cols[idx])) {
 				return nil, moerr.NewBadFieldError(ctx, colName, tableDef.Name)
 			}
 			insertColsName = append(insertColsName, colName)

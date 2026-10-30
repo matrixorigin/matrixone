@@ -30,6 +30,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/catalog/mvdefinition"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -47,12 +48,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 type tableType string
 
 const view tableType = "VIEW"
+const materializedView tableType = "MATERIALIZED VIEW"
 
 const clusterTable tableType = "CLUSTER TABLE"
 
@@ -220,6 +223,13 @@ func dropViewIfExistsSQL(viewName string) string {
 	return "drop view if exists " + quoteIdentifierForSQL(viewName)
 }
 
+func dropRestoreViewIfExistsSQL(tblInfo *tableInfo) string {
+	if _, ok := materializedViewCreateSQL(tblInfo); ok {
+		return "drop materialized view if exists " + quoteIdentifierForSQL(tblInfo.tblName)
+	}
+	return dropViewIfExistsSQL(tblInfo.tblName)
+}
+
 type snapshotRecord struct {
 	snapshotId   string
 	snapshotName string
@@ -239,6 +249,7 @@ type tableInfo struct {
 	relKind   string
 	viewDef   string
 	createSql string
+	mvState   bool
 	// unservable marks a view whose stored definition can never run -- the #27027 refusal,
 	// raised while the dependency sort plans it. Such a view is still visited by the restore
 	// loop so the object it would replace is DROPped; only the CREATE is skipped. Set by
@@ -1731,7 +1742,7 @@ func restoreToDatabaseOrTable(
 		if err = execRestoreCreateDatabase(toCtx, bh, dbName, createDbSql); err != nil {
 			return
 		}
-		databaseRecreated = !restoreToTbl
+
 		return
 	} else {
 		createDbSql = appendDatabaseDefaultsSQL(createDatabaseIfNotExistsSQL(dbName), definition.defaults)
@@ -1740,8 +1751,9 @@ func restoreToDatabaseOrTable(
 		if err = execRestoreCreateDatabase(toCtx, bh, dbName, createDbSql); err != nil {
 			return
 		}
-		databaseRecreated = !restoreToTbl
 	}
+
+	databaseRecreated = !restoreToTbl
 
 	tempSnap := &plan.Snapshot{
 		TS:     &timestamp.Timestamp{PhysicalTime: snapshotTs},
@@ -1785,7 +1797,10 @@ func restoreToDatabaseOrTable(
 		}
 
 		// skip view
-		if tblInfo.typ == view {
+		if isMaterializedViewState(tblInfo) {
+			continue
+		}
+		if isViewLike(tblInfo) {
 			viewMap[key] = tblInfo
 			continue
 		}
@@ -1799,7 +1814,6 @@ func restoreToDatabaseOrTable(
 			return
 		}
 	}
-
 	return
 }
 
@@ -1983,7 +1997,7 @@ func restoreViews(
 				continue
 			}
 
-			if err = bh.Exec(toCtx, dropViewIfExistsSQL(tblInfo.tblName)); err != nil {
+			if err = bh.Exec(toCtx, dropRestoreViewIfExistsSQL(tblInfo)); err != nil {
 				return err
 			}
 
@@ -2000,7 +2014,6 @@ func restoreViews(
 				// Skip it regardless of skipIfDependencyMissing -- RESTORE ACCOUNT passes
 				// false, so gating on that flag would not help the case that matters.
 				if isUnservableViewError(err) {
-					tblInfo.unservable = true
 					getLogger(ses.GetService()).Warn(fmt.Sprintf(
 						"[%s] skip restore view %v.%v: its definition can never run (%v); "+
 							"the view is NOT present in the restored account",
@@ -2156,6 +2169,7 @@ func sortedViewInfos(
 		if err != nil {
 			return nil, err
 		}
+		materializedDeps := restoreMaterializedViewDependencies(stmts, viewEntry.dbName, viewMap)
 
 		viewCtx.SetDatabase(viewEntry.dbName)
 		// build create sql to find dependent views
@@ -2167,6 +2181,7 @@ func sortedViewInfos(
 			if err != nil {
 				return nil, err
 			}
+			materializedDeps = restoreMaterializedViewDependencies(stmts, viewEntry.dbName, viewMap)
 			_, err = buildViewCreatePlanForRestore(compCtx, viewEntry, stmts[0])
 			freeStatements(stmts)
 			if err != nil {
@@ -2192,6 +2207,9 @@ func sortedViewInfos(
 			}
 			g.addEdge(depView, key)
 		}
+		for _, dep := range materializedDeps {
+			g.addEdge(dep, key)
+		}
 	}
 
 	// toposort
@@ -2201,6 +2219,163 @@ func sortedViewInfos(
 	}
 
 	return sortedViews, nil
+}
+
+// The binder reports VIEW dependencies, but a materialized view is bound as a
+// table. Record direct FROM dependencies that are materialized views in this
+// restore set so a dependent ordinary view is recreated after its source.
+func restoreMaterializedViewDependencies(stmts []tree.Statement, defaultDB string, viewMap map[string]*tableInfo) []string {
+	if len(stmts) != 1 {
+		return nil
+	}
+	create, ok := stmts[0].(*tree.CreateView)
+	if !ok || create.AsSource == nil {
+		return nil
+	}
+	var deps []string
+	var walkSelect func(tree.SelectStatement)
+	var walkTable func(tree.TableExpr)
+	var walkExpr func(tree.Expr)
+	walkTable = func(expr tree.TableExpr) {
+		switch t := expr.(type) {
+		case *tree.TableName:
+			db := string(t.SchemaName)
+			if db == "" {
+				db = defaultDB
+			}
+			key := genKey(db, string(t.ObjectName))
+			if dep, found := viewMap[key]; found && dep.typ == materializedView {
+				deps = append(deps, key)
+			}
+		case *tree.AliasedTableExpr:
+			walkTable(t.Expr)
+		case *tree.ParenTableExpr:
+			walkTable(t.Expr)
+		case *tree.Subquery:
+			walkSelect(t.Select)
+		case *tree.Select:
+			walkSelect(t)
+		case *tree.JoinTableExpr:
+			walkTable(t.Left)
+			walkTable(t.Right)
+			if on, ok := t.Cond.(*tree.OnJoinCond); ok {
+				walkExpr(on.Expr)
+			}
+			walkExpr(t.Tolerance)
+		}
+	}
+	walkExpr = func(expr tree.Expr) {
+		switch e := expr.(type) {
+		case *tree.Subquery:
+			walkSelect(e.Select)
+		case *tree.ParenExpr:
+			walkExpr(e.Expr)
+		case *tree.BinaryExpr:
+			walkExpr(e.Left)
+			walkExpr(e.Right)
+		case *tree.UnaryExpr:
+			walkExpr(e.Expr)
+		case *tree.ComparisonExpr:
+			walkExpr(e.Left)
+			walkExpr(e.Right)
+			walkExpr(e.Escape)
+		case *tree.RangeCond:
+			walkExpr(e.Left)
+			walkExpr(e.From)
+			walkExpr(e.To)
+		case *tree.AndExpr:
+			walkExpr(e.Left)
+			walkExpr(e.Right)
+		case *tree.XorExpr:
+			walkExpr(e.Left)
+			walkExpr(e.Right)
+		case *tree.OrExpr:
+			walkExpr(e.Left)
+			walkExpr(e.Right)
+		case *tree.NotExpr:
+			walkExpr(e.Expr)
+		case *tree.IsNullExpr:
+			walkExpr(e.Expr)
+		case *tree.IsNotNullExpr:
+			walkExpr(e.Expr)
+		case *tree.CastExpr:
+			walkExpr(e.Expr)
+		case *tree.BitCastExpr:
+			walkExpr(e.Expr)
+		case *tree.Tuple:
+			for _, item := range e.Exprs {
+				walkExpr(item)
+			}
+		case *tree.CaseExpr:
+			walkExpr(e.Expr)
+			for _, when := range e.Whens {
+				walkExpr(when.Cond)
+				walkExpr(when.Val)
+			}
+			walkExpr(e.Else)
+		case *tree.IntervalExpr:
+			walkExpr(e.Expr)
+		case *tree.FuncExpr:
+			for _, arg := range e.Exprs {
+				walkExpr(arg)
+			}
+			for _, item := range e.OrderBy {
+				walkExpr(item.Expr)
+			}
+		case *tree.ExprList:
+			for _, item := range e.Exprs {
+				walkExpr(item)
+			}
+		}
+	}
+	walkSelect = func(stmt tree.SelectStatement) {
+		switch s := stmt.(type) {
+		case *tree.SelectClause:
+			for _, expr := range s.Exprs {
+				walkExpr(expr.Expr)
+			}
+			if s.Where != nil {
+				walkExpr(s.Where.Expr)
+			}
+			if s.Having != nil {
+				walkExpr(s.Having.Expr)
+			}
+			if s.GroupBy != nil {
+				for _, exprs := range s.GroupBy.GroupByExprsList {
+					for _, expr := range exprs {
+						walkExpr(expr)
+					}
+				}
+				for _, expr := range s.GroupBy.GroupingSet {
+					walkExpr(expr)
+				}
+			}
+			if s.From != nil {
+				for _, table := range s.From.Tables {
+					walkTable(table)
+				}
+			}
+		case *tree.Select:
+			if s.With != nil {
+				for _, cte := range s.With.CTEs {
+					if nested, ok := cte.Stmt.(tree.SelectStatement); ok {
+						walkSelect(nested)
+					}
+				}
+			}
+			walkSelect(s.Select)
+			for _, item := range s.OrderBy {
+				walkExpr(item.Expr)
+			}
+		case *tree.ParenSelect:
+			walkSelect(s.Select)
+		case *tree.UnionClause:
+			walkSelect(s.Left)
+			walkSelect(s.Right)
+		}
+	}
+	walkSelect(create.AsSource)
+	return deps
 }
 
 func recreateTable(
@@ -2678,7 +2853,6 @@ func showFullTables(
 			newCtx = defines.AttachAccountId(newCtx, snapshot.Tenant.TenantID)
 		}
 	}
-
 	accountId, err := defines.GetAccountId(newCtx)
 	if err != nil {
 		return nil, err
@@ -2697,13 +2871,21 @@ func showFullTables(
 
 	ans := make([]*tableInfo, len(colsList))
 	for i, cols := range colsList {
-		ans[i] = &tableInfo{
-			dbName:  dbName,
-			tblName: cols[0],
-			typ:     tableType(cols[1]),
-			relKind: cols[2],
-			viewDef: cols[3],
+		typ := tableType(cols[1])
+		relKind := cols[2]
+		if relKind == catalog.SystemViewRel && isMaterializedViewDefinition(cols[3]) {
+			typ = materializedView
+			relKind = catalog.SystemMaterializedRel
 		}
+		ans[i] = &tableInfo{
+			dbName: dbName, tblName: cols[0], typ: typ, relKind: relKind, viewDef: cols[3],
+		}
+	}
+	if err := annotateMaterializedViewStates(ans, dbName, ts, accountId,
+		func(query string, indices ...uint64) ([][]string, error) {
+			return getStringColsList(newCtx, bh, query, indices...)
+		}); err != nil {
+		return nil, err
 	}
 
 	getLogger(sid).Debug(fmt.Sprintf(
@@ -2720,12 +2902,10 @@ func buildTableInfoListSQL(dbName string, tblName string, ts int64, accountId ui
 	}
 	whereClause := buildTableInfoListWhereClause(dbName, tblName, accountId)
 	sql := fmt.Sprintf(
-		"select relname, case relkind when %s then 'VIEW' when %s then 'CLUSTER TABLE' else 'BASE TABLE' end as table_type, relkind, viewdef from %s.mo_tables%s where %s",
+		"select relname, case when relkind = %s then 'VIEW' when relkind = %s then 'CLUSTER TABLE' else 'BASE TABLE' end as table_type, relkind, viewdef from %s.mo_tables%s where %s",
 		quoteSQLStringLiteral(catalog.SystemViewRel),
 		quoteSQLStringLiteral(catalog.SystemClusterRel),
-		moCatalog,
-		snapshotSpec,
-		whereClause,
+		moCatalog, snapshotSpec, whereClause,
 	)
 	sql += fmt.Sprintf(" order by %s", catalog.SystemRelAttr_Name)
 	return sql
@@ -2825,6 +3005,9 @@ func getTableInfos(
 					},
 				)
 			}
+			if sql, ok := materializedViewCreateSQL(tblInfo); ok {
+				return sql, nil
+			}
 			return getCreateTableSql(ctx, bh, snapshot, tblInfo.dbName, tblInfo.tblName)
 		},
 	)
@@ -2841,6 +3024,119 @@ func snapshotPhysicalTime(snapshot *plan.Snapshot) int64 {
 
 func isSequence(tblInfo *tableInfo) bool {
 	return tblInfo != nil && tblInfo.relKind == catalog.SystemSequenceRel
+}
+
+func classifyMaterializedViewInfos(tableInfos []*tableInfo) {
+	for _, tblInfo := range tableInfos {
+		if tblInfo != nil && tblInfo.relKind == catalog.SystemViewRel && isMaterializedViewDefinition(tblInfo.viewDef) {
+			tblInfo.typ = materializedView
+		}
+	}
+}
+
+func isViewLike(tblInfo *tableInfo) bool {
+	return tblInfo != nil && (tblInfo.typ == view || tblInfo.typ == materializedView)
+}
+
+func isMaterializedViewState(tblInfo *tableInfo) bool {
+	return tblInfo != nil && tblInfo.mvState
+}
+
+// annotateMaterializedViewStates authenticates the auxiliary-state identity
+// from the catalog constraint payload. The name prefix is only a cheap query
+// filter; it is deliberately not an identity claim because ordinary Views may
+// legally use that prefix.
+func annotateMaterializedViewStates(
+	tableInfos []*tableInfo,
+	dbName string,
+	ts int64,
+	accountID uint32,
+	query func(string, ...uint64) ([][]string, error),
+) error {
+	for _, tblInfo := range tableInfos {
+		if tblInfo == nil || !mvdefinition.IsStateName(tblInfo.tblName) {
+			continue
+		}
+		stateSQL := fmt.Sprintf(
+			"select cast(rel_id as char), hex(`constraint`) from %s.mo_tables%s where reldatabase = %s and relname = %s and account_id = %d",
+			moCatalog,
+			snapshotSpecForRestore(ts),
+			quoteSQLStringLiteral(dbName),
+			quoteSQLStringLiteral(tblInfo.tblName),
+			accountID,
+		)
+		rows, err := query(stateSQL, 0, 1)
+		if err != nil {
+			return err
+		}
+		if len(rows) == 1 && materializedViewStateOwnerValid(rows[0][0], rows[0][1]) {
+			tblInfo.mvState = true
+		}
+	}
+	return nil
+}
+
+func snapshotSpecForRestore(ts int64) string {
+	if ts <= 0 {
+		return ""
+	}
+	return fmt.Sprintf(" {MO_TS = %d}", ts)
+}
+
+func materializedViewStateOwnerValid(relID, encodedConstraint string) bool {
+	id, err := strconv.ParseUint(relID, 10, 64)
+	if err != nil || id == 0 || encodedConstraint == "" {
+		return false
+	}
+	constraintBytes, err := hex.DecodeString(encodedConstraint)
+	if err != nil {
+		return false
+	}
+	constraint := &engine.ConstraintDef{}
+	if err = constraint.UnmarshalBinary(constraintBytes); err != nil {
+		return false
+	}
+	for _, item := range constraint.Cts {
+		configs, ok := item.(*engine.StreamConfigsDef)
+		if !ok {
+			continue
+		}
+		for _, property := range configs.Configs {
+			if property == nil || property.Key != mvdefinition.OwnerProperty {
+				continue
+			}
+			stateDef := &pbplan.TableDef{
+				TblId: id, TableType: "i",
+				Props: []*pbplan.PropertyDef{{Key: property.Key, Value: property.Value}},
+			}
+			_, err = mvdefinition.StateOwner(stateDef)
+			return err == nil
+		}
+	}
+	return false
+}
+
+func materializedViewCreateSQL(tblInfo *tableInfo) (string, bool) {
+	if tblInfo == nil || !isMaterializedViewDefinition(tblInfo.viewDef) {
+		return "", false
+	}
+	var data struct{ Stmt string }
+	if json.Unmarshal([]byte(tblInfo.viewDef), &data) != nil {
+		return "", false
+	}
+	stmt := strings.TrimSpace(data.Stmt)
+	if !strings.HasPrefix(strings.ToLower(stmt), "create materialized view ") {
+		return "", false
+	}
+	return stmt, true
+}
+
+func isMaterializedViewDefinition(viewDef string) bool {
+	var data struct{ Stmt string }
+	if json.Unmarshal([]byte(viewDef), &data) != nil {
+		return false
+	}
+	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(data.Stmt)), "create materialized view ")
 }
 
 func getCreateSequenceSQL(
@@ -2937,6 +3233,8 @@ func dropCurrentRestoreObject(
 		dropSQL = "drop sequence if exists " + name
 	case catalog.SystemViewRel:
 		dropSQL = "drop view if exists " + name
+	case catalog.SystemMaterializedRel:
+		dropSQL = "drop materialized view if exists " + name
 	default:
 		dropSQL = dropTableIfExistsSQL(dbName, tblName)
 	}
@@ -3186,6 +3484,22 @@ func getCreateTableSql(
 
 	return colsList[0][0], nil
 }
+
+//func getAccountIdBySnapshot(
+//	ctx context.Context,
+//	bh BackgroundExec,
+//	accountName string,
+//	snapshot string,
+//) (uint32, error) {
+//
+//	ctx = defines.AttachAccountId(ctx, catalog.System_Account)
+//	sql := fmt.Sprintf(
+//		"select account_id from mo_catalog.mo_account {SNAPSHOT = %s} where account_name = %s",
+//		snapshot, accountName,
+//	)
+//
+//	return getAccountIdHelper(ctx, bh, sql, accountName)
+//}
 
 func getAccountIdByTS(
 	ctx context.Context,
@@ -3437,7 +3751,7 @@ func getFkDepsFromTableInfos(
 ) (map[string][]string, error) {
 	deps := make(map[string][]string)
 	for _, info := range tableInfos {
-		if info == nil || info.typ == view || isSequence(info) || info.createSql == "" {
+		if info == nil || isViewLike(info) || isSequence(info) || info.createSql == "" {
 			continue
 		}
 		statements, err := parsers.Parse(ctx, dialect.MYSQL, info.createSql, 0)
@@ -3878,9 +4192,6 @@ func createDroppedAccount(ctx context.Context, ses *Session, bh BackgroundExec, 
 	getLogger(ses.GetService()).Debug(fmt.Sprintf("[%s] start to re-create dropped account: %v, account id: %d", snapshotName, account.accountName, account.accountId))
 
 	createAccountSql := makeCreateAccountSqlByAccountRecord(account)
-	// #30752: never log the bootstrap statement; it embeds the one-shot temp
-	// password and would leave a live credential in the log files.
-	getLogger(ses.GetService()).Debug(fmt.Sprintf("[%s] start to create account: %v, account id: %d", snapshotName, account.accountName, account.accountId))
 
 	var ast []tree.Statement
 	ast, err = mysql.Parse(ctx, createAccountSql, 1)
@@ -4229,10 +4540,8 @@ func getPastExistsAccounts(
 				return nil, err
 			}
 
-			// #30752: no password material exists in mo_account to restore
-			// from; give every account its own unguessable bootstrap password
-			// instead of the hardcoded factory default.
-			if account.pwd, err = newSnapshotRestoreTempPassword(); err != nil {
+			account.pwd, err = newSnapshotRestoreTempPassword()
+			if err != nil {
 				return nil, err
 			}
 
@@ -4413,10 +4722,6 @@ func createPubs(
 		}
 		toCtx := defines.AttachAccount(ctx, identity.accountID, identity.userID, identity.roleID)
 		getLogger(sid).Debug(fmt.Sprintf("[%s] recreate publication %s for database %s", snapshotName, pubInfo.PubName, pubInfo.DbName))
-
-		// The CREATE statement carries the stable database name. createPublication
-		// resolves it inside the target tenant and persists the current database
-		// ID, so the historical PubInfo.DbId must not be replayed.
 		err = createPublicationFromRestoreInfo(toCtx, bh, pubInfo, snapshotTs, nil)
 		if err != nil {
 			return
@@ -4604,7 +4909,6 @@ func getAccountRecordByTs(ctx context.Context, ses *Session, bh BackgroundExec, 
 		if account.comments, err = erArray[0].GetString(ctx, 0, 3); err != nil {
 			return &accountRecord{}, err
 		}
-		// #30752: unguessable per-restore bootstrap password, never "111".
 		if account.pwd, err = newSnapshotRestoreTempPassword(); err != nil {
 			return &accountRecord{}, err
 		}

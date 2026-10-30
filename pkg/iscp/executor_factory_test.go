@@ -36,7 +36,7 @@ func TestExecutorFactoryReturnsAttachErrorAndReleasesAdmission(t *testing.T) {
 		sync    time.Duration
 		persist time.Duration
 	}{
-		{"defaults", ISCPExecutorOption{}, 10 * time.Second, 5 * time.Second},
+		{"defaults", ISCPExecutorOption{}, DefaultSyncTaskInterval, DefaultIndexFlushWatermarkInterval},
 		{"configured", ISCPExecutorOption{SyncTaskInterval: 11 * time.Millisecond, IndexFlushWatermarkInterval: 23 * time.Millisecond}, 11 * time.Millisecond, 23 * time.Millisecond},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

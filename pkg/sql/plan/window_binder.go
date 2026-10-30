@@ -52,7 +52,7 @@ func validateQueryBlockWindowCount(ctx context.Context, clause *tree.SelectClaus
 		if expr == nil || count > maxWindowsPerQueryBlock {
 			return
 		}
-		walkGroupingSetOrderByExpr(expr, func(candidate tree.Expr) bool {
+		walkASTExpressions(expr, func(candidate tree.Expr) bool {
 			if _, subquery := candidate.(*tree.Subquery); subquery {
 				return false
 			}
@@ -524,7 +524,7 @@ func expandNamedWindowReferences(
 	}
 	walk := func(expr tree.Expr) {
 		if expr != nil && expandErr == nil {
-			walkGroupingSetOrderByExpr(expr, expand)
+			walkASTExpressions(expr, expand)
 		}
 	}
 	for _, selectExpr := range clonedClause.Exprs {
@@ -706,7 +706,7 @@ func validateNamedWindowDefinitions(builder *QueryBuilder, ctx *BindContext, def
 			}
 		}
 		collect := func(expr tree.Expr) {
-			walkGroupingSetOrderByExpr(expr, func(candidate tree.Expr) bool {
+			walkASTExpressions(expr, func(candidate tree.Expr) bool {
 				param, ok := candidate.(*tree.ParamExpr)
 				if !ok {
 					return true

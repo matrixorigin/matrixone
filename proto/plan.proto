@@ -1034,6 +1034,34 @@ message IndexSearchScan {
   uint64 max_nprobe = 24;
 }
 
+// Deprecated EXPLAIN-only compatibility contract for plans produced before
+// INDEX_SEARCH_SCAN replaced the original vector scan representation.
+message VectorIndexTableRef {
+  string role = 1;
+  ObjectRef object = 2;
+  TableDef table = 3;
+}
+
+message VectorIndexScan {
+  ObjectRef source_table = 1;
+  TableDef source_table_def = 2;
+  IndexDef index = 3;
+  repeated VectorIndexTableRef hidden_tables = 4;
+  Expr query_vector = 5;
+  string distance_function = 6;
+  OrderBySpec.OrderByFlag direction = 7;
+  Expr candidate_limit = 8;
+  DistRange distance_range = 9;
+  repeated Expr pre_filters = 10;
+  repeated string included_columns = 11;
+  uint32 initial_probe_count = 12;
+  Expr first_round_limit = 13;
+  uint32 bucket_expand_step = 14;
+  int64 threads_search = 15;
+  Snapshot scan_snapshot = 16;
+  bool post_filter_over_fetch = 17;
+}
+
 message Node {
   enum NodeType {
     UNKNOWN = 0;
@@ -1104,6 +1132,7 @@ message Node {
     // Coordinator-local scalar query-vector selection and its materialized readers.
     VECTOR_QUERY_TOP = 58;
     VECTOR_QUERY_SOURCE = 59;
+    VECTOR_INDEX_SCAN = 60; // deprecated EXPLAIN compatibility
   }
 
   enum JoinType {
@@ -1369,6 +1398,8 @@ message Node {
 
   // VECTOR_QUERY_TOP/SOURCE only: statement-local immutable provider identity.
   int32 vector_query_source_id = 93;
+  // Deprecated EXPLAIN-only compatibility payload for pre-INDEX_SEARCH_SCAN plans.
+  VectorIndexScan vector_index_scan = 96;
 
   // Ordered binding contexts used by view authorization.
   repeated ViewStep view_path = 94;
@@ -2024,6 +2055,7 @@ message DataDefinition {
     CREATE_TABLE_WITH_CLONE = 38;
     CREATE_CDC = 39;
     DROP_CDC = 40;
+    REFRESH_MATERIALIZED_VIEW = 41;
   }
 
   // DataDefinition type
@@ -2060,6 +2092,7 @@ message DataDefinition {
     CreateCDC create_cdc = 102;
     DropCDC drop_cdc = 103;
     CloneTable clone_table = 104;
+    RefreshMaterializedView refresh_materialized_view = 105;
   }
 }
 
@@ -2338,6 +2371,11 @@ message CreateView {
   string database = 2;
   bool replace = 3;
   TableDef table_def = 4;
+}
+
+message RefreshMaterializedView {
+  string database = 1;
+  string name = 2;
 }
 
 message AlterView {

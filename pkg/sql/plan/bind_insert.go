@@ -22,6 +22,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/catalog/mvdefinition"
 	"github.com/matrixorigin/matrixone/pkg/common/collation"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -79,6 +80,11 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, bindCtx *BindContext)
 	if targetDB == "" {
 		targetDB = builder.compCtx.DefaultDatabase()
 	}
+	tableDef := dmlCtx.tableDefs[0]
+	if (IsMaterializedViewTableDef(tableDef) || IsMaterializedViewStateTableDef(tableDef)) &&
+		!mvdefinition.CanWrite(builder.GetContext(), tableDef) {
+		return 0, moerr.NewUnsupportedDML(builder.GetContext(), "insert into materialized view")
+	}
 	dmlCtx.targetDBName = targetDB
 	dmlCtx.targetTableName = targetTable
 	if err = validateInsertColumnQualifiers(
@@ -119,7 +125,6 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, bindCtx *BindContext)
 	// table and regular indexes). Their computed 1:N maintenance is appended after
 	// createQuery from the materialized new-row image. HNSW/CAGRA/IVF-PQ are cron-
 	// maintained and ride the modern path with no inline sub-plan.
-	tableDef := dmlCtx.tableDefs[0]
 	if tableDef.TableType == catalog.SystemClusterRel {
 		if stmt.Overwrite {
 			return 0, moerr.NewNotSupported(builder.GetContext(), "INSERT OVERWRITE currently supports Iceberg table mappings")
@@ -2730,12 +2735,13 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 		for _, assignment := range astUpdateExprs {
 			name := assignment.Names[0].ColName()
 			idx, ok := tableDef.Name2ColIndex[name]
-			if !ok || tableDef.Cols[idx].Hidden {
+			if !ok || (tableDef.Cols[idx].Hidden &&
+				!isAuthorizedMaterializedViewHiddenColumn(builder.GetContext(), tableDef, tableDef.Cols[idx])) {
 				return 0, moerr.NewBadFieldErrorf(builder.GetContext(), "invalid input: column '%s' does not exist", assignment.Names[0].ColNameOrigin())
 			}
 		}
 	}
-	isRegularDMLTarget := tableDef.TableType == catalog.SystemOrdinaryRel ||
+	isRegularDMLTarget := mvdefinition.CanWrite(builder.GetContext(), tableDef) || tableDef.TableType == catalog.SystemOrdinaryRel ||
 		tableDef.TableType == catalog.SystemIndexRel ||
 		tableDef.TableType == catalog.SystemClusterRel ||
 		tableDef.TableType == catalog.SystemTemporaryTable ||
@@ -4846,7 +4852,9 @@ func (builder *QueryBuilder) getInsertColsFromStmt(astCols tree.IdentifierList, 
 		for _, column := range astCols {
 			colName := strings.ToLower(string(column))
 			idx, ok := colToIdx[colName]
-			if !ok || (tableDef.Cols[idx].Hidden && !isAlterCopyFakePrimaryKey(builder.GetContext(), tableDef, tableDef.Cols[idx])) {
+			if !ok || (tableDef.Cols[idx].Hidden &&
+				!isAuthorizedMaterializedViewHiddenColumn(builder.GetContext(), tableDef, tableDef.Cols[idx]) &&
+				!isAlterCopyFakePrimaryKey(builder.GetContext(), tableDef, tableDef.Cols[idx])) {
 				return nil, moerr.NewBadFieldError(builder.GetContext(), colName, tableDef.Name)
 			}
 			if tableDef.Cols[idx].GeneratedCol != nil {
@@ -4930,7 +4938,9 @@ func (builder *QueryBuilder) stripGeneratedDefaultCols(astCols tree.IdentifierLi
 	for i, col := range astCols {
 		colName := strings.ToLower(string(col))
 		if idx, ok := tableDef.Name2ColIndex[colName]; ok {
-			if tableDef.Cols[idx].Hidden && !isAlterCopyFakePrimaryKey(builder.GetContext(), tableDef, tableDef.Cols[idx]) {
+			if tableDef.Cols[idx].Hidden &&
+				!isAuthorizedMaterializedViewHiddenColumn(builder.GetContext(), tableDef, tableDef.Cols[idx]) &&
+				!isAlterCopyFakePrimaryKey(builder.GetContext(), tableDef, tableDef.Cols[idx]) {
 				return nil, nil, moerr.NewBadFieldError(builder.GetContext(), colName, tableDef.Name)
 			}
 			if tableDef.Cols[idx].GeneratedCol != nil {
@@ -5784,7 +5794,7 @@ func valueExprContainsSubquery(expr tree.Expr) bool {
 	}
 
 	found := false
-	walkGroupingSetOrderByExpr(expr, func(candidate tree.Expr) bool {
+	walkASTExpressions(expr, func(candidate tree.Expr) bool {
 		if _, ok := candidate.(*tree.Subquery); ok {
 			found = true
 			return false
