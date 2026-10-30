@@ -533,3 +533,109 @@ func newConnectorSpoolTestBatch(t *testing.T, mp *mpool.MPool, rows int) *batch.
 	src.SetRowCount(len(values))
 	return src
 }
+
+func TestConnectorCancelWithDeliveredBorrowedSnapshot(t *testing.T) {
+	mp := mpool.MustNewZeroNoFixed()
+	defer mpool.DeleteMPool(mp)
+	registry, err := mpool.NewAllocationAccountRegistry(1, 16)
+	require.NoError(t, err)
+	account, err := registry.Open(1 << 20)
+	require.NoError(t, err)
+	selection, err := vector.NewAllocationAccountSelection(account, 1, 102, 103, 104, 105)
+	require.NoError(t, err)
+	data := types.EncodeSlice([]int64{11, 22, 33})
+	releases := 0
+	lease, err := vector.NewRefCountedBufferLease(data, int64(cap(data)), func() { releases++ })
+	require.NoError(t, err)
+	vec, err := vector.NewBorrowedFixedVectorWithAllocation(types.T_int64.ToType(), 3, data, lease, selection)
+	require.NoError(t, err)
+	lease.Release()
+	source := batch.NewOffHeap([]string{"v"})
+	require.NoError(t, source.SetAllocationAccount(selection))
+	source.Vecs[0] = vec
+	source.SetRowCount(3)
+	defer source.Clean(mp)
+	sp := pSpool.InitMyPipelineSpool(mp, 1)
+	defer sp.Abort(nil)
+	done, err := sp.SendBatch(context.Background(), 0, source, nil)
+	require.NoError(t, err)
+	require.False(t, done)
+	reg := process.NewPipelineEdge(1, 0)
+	reg.Ch2 <- process.NewPipelineSignalToGetFromSpool(sp, 0)
+	conn := &Connector{Reg: reg}
+	conn.ctr.sp = sp
+	require.NoError(t, conn.SetAllocationAccount(account))
+
+	// The signal action installs the current receiver slot before the barrier.
+	delivered := make(chan *batch.Batch, 1)
+	release := make(chan struct{}, 1)
+	consumerDone := make(chan bool, 1)
+	receiver := process.InitPipelineSignalReceiver(context.Background(), []*process.WaitRegister{reg})
+	go func() {
+		got, _ := receiver.GetNextBatch(nil)
+		delivered <- got
+		<-release
+		consumerDone <- receiver.WaitingEndWithTimeout(time.Second)
+	}()
+	defer func() {
+		select {
+		case release <- struct{}{}:
+		default:
+		}
+		<-consumerDone
+	}()
+	got := <-delivered
+	require.NotNil(t, got)
+	require.NoError(t, source.Shrink([]int64{1, 2}, false, mp))
+	require.Equal(t, []int64{22, 33}, vector.MustFixedColNoTypeCheck[int64](source.Vecs[0]))
+	require.Positive(t, mp.CurrNB())
+	require.Positive(t, account.Snapshot().Used)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	resetDone := make(chan struct{})
+	go func() {
+		<-ctx.Done()
+		conn.Reset(nil, true, ctx.Err())
+		close(resetDone)
+	}()
+	cancel()
+	select {
+	case <-resetDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("connector cleanup did not finish")
+	}
+	require.Equal(t, []int64{11, 22, 33}, vector.MustFixedColNoTypeCheck[int64](got.Vecs[0]))
+	require.Zero(t, releases)
+	source.Clean(mp)
+	require.Zero(t, account.Snapshot().Used)
+	require.Zero(t, releases)
+	release <- struct{}{}
+	select {
+	case completed := <-consumerDone:
+		consumerDone <- completed
+		require.True(t, completed)
+	case <-time.After(5 * time.Second):
+		t.Fatal("consumer did not finish")
+	}
+	require.Equal(t, 1, releases)
+	conn.CleanupDeferredSpool()
+	require.NoError(t, conn.ClearAllocationAccount(account))
+	_, _, err = registry.CompleteTerminal(account)
+	require.NoError(t, err)
+	require.Zero(t, mp.CurrNB())
+
+	next := pSpool.InitMyPipelineSpool(mp, 1)
+	defer next.Abort(nil)
+	fresh := newConnectorSpoolTestBatch(t, mp, 2)
+	defer fresh.Clean(mp)
+	done, err = next.SendBatch(context.Background(), 0, fresh, nil)
+	require.NoError(t, err)
+	require.False(t, done)
+	got, err = next.ReceiveBatch(0)
+	require.NoError(t, err)
+	require.Equal(t, []int64{1, 2}, vector.MustFixedColNoTypeCheck[int64](got.Vecs[0]))
+	next.ReleaseCurrent(0)
+	next.Abort(nil)
+	fresh.Clean(mp)
+	require.Zero(t, mp.CurrNB())
+}
