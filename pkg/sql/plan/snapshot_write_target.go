@@ -37,15 +37,30 @@ func rejectSnapshotQualifiedWriteTarget(ctx CompilerContext, stmt tree.Statement
 	case *tree.Replace:
 		op, targets = "REPLACE", firstTableName(s.Table)
 	case *tree.Update:
-		op, targets = "UPDATE", updateWriteTargets(s)
+		op, targets = "UPDATE", updateWriteTargets(ctx, s)
 	case *tree.Delete:
-		op, targets = "DELETE", deleteWriteTargets(s)
+		op, targets = "DELETE", deleteWriteTargets(ctx, s)
 	case *tree.AlterTable:
 		op, targets = "ALTER TABLE", []*tree.TableName{s.Table}
 	case *tree.TruncateTable:
 		op, targets = "TRUNCATE TABLE", []*tree.TableName{s.Name}
 	case *tree.DropTable:
 		op, targets = "DROP TABLE", s.Names
+	case *tree.Load:
+		op, targets = "LOAD DATA", []*tree.TableName{s.Table}
+	case *tree.MultiInsert:
+		op, targets = "INSERT ALL", multiInsertTargets(s)
+	case *tree.CreateIndex:
+		op, targets = "CREATE INDEX", []*tree.TableName{s.Table}
+	case *tree.DropIndex:
+		op, targets = "DROP INDEX", []*tree.TableName{s.TableName}
+	case *tree.RenameTable:
+		op = "RENAME TABLE"
+		for _, alter := range s.AlterTables {
+			if alter != nil {
+				targets = append(targets, alter.Table)
+			}
+		}
 	default:
 		return nil
 	}
@@ -89,18 +104,63 @@ func firstTableName(expr tree.TableExpr) []*tree.TableName {
 	return []*tree.TableName{refs[0].name}
 }
 
-func (r snapshotTableRef) matches(name string) bool {
-	if r.alias != "" {
-		return strings.EqualFold(r.alias, name)
+// matches reports whether a qualifier names this table reference. Like table
+// names, aliases compare case-sensitively under lower_case_table_names=0.
+func (r snapshotTableRef) matches(name string, caseSensitive bool) bool {
+	refName := r.alias
+	if refName == "" {
+		refName = string(r.name.ObjectName)
 	}
-	return strings.EqualFold(string(r.name.ObjectName), name)
+	if caseSensitive {
+		return refName == name
+	}
+	return strings.EqualFold(refName, name)
+}
+
+func multiInsertTargets(stmt *tree.MultiInsert) []*tree.TableName {
+	var targets []*tree.TableName
+	add := func(list []*tree.MultiInsertTarget) {
+		for _, target := range list {
+			if target != nil {
+				targets = append(targets, target.Table)
+			}
+		}
+	}
+	add(stmt.Targets)
+	for _, when := range stmt.Whens {
+		if when != nil {
+			add(when.Targets)
+		}
+	}
+	add(stmt.Else)
+	return targets
+}
+
+// tableHasColumn reports whether a table reference's table has the column,
+// resolving it against the catalog. Unknown tables report false; the planner
+// reports them later.
+func tableHasColumn(ctx CompilerContext, ref snapshotTableRef, column string) bool {
+	schema := string(ref.name.SchemaName)
+	if schema == "" {
+		schema = ctx.DefaultDatabase()
+	}
+	_, def, err := ctx.Resolve(schema, string(ref.name.ObjectName), nil)
+	if err != nil || def == nil {
+		return false
+	}
+	for _, col := range def.Cols {
+		if strings.EqualFold(col.Name, column) || strings.EqualFold(col.OriginName, column) {
+			return true
+		}
+	}
+	return false
 }
 
 // updateWriteTargets returns the snapshot-qualified tables an UPDATE assigns
 // to: the table of a single-table UPDATE, or the tables named by qualified
-// SET columns of a multi-table UPDATE. Unqualified columns of a multi-table
-// UPDATE are left to column resolution.
-func updateWriteTargets(stmt *tree.Update) []*tree.TableName {
+// SET columns of a multi-table UPDATE. An unqualified SET column assigns to
+// the snapshot-qualified table that has that column.
+func updateWriteTargets(ctx CompilerContext, stmt *tree.Update) []*tree.TableName {
 	var refs []snapshotTableRef
 	for _, expr := range stmt.Tables {
 		refs = collectTableRefs(expr, refs)
@@ -108,14 +168,19 @@ func updateWriteTargets(stmt *tree.Update) []*tree.TableName {
 	if len(refs) == 1 {
 		return []*tree.TableName{refs[0].name}
 	}
+	caseSensitive := ctx.GetLowerCaseTableNames() == 0
 	var targets []*tree.TableName
 	for _, assignment := range stmt.Exprs {
 		for _, name := range assignment.Names {
-			if name == nil || name.NumParts < 2 {
+			if name == nil {
 				continue
 			}
 			for _, ref := range refs {
-				if ref.matches(name.TblNameOrigin()) {
+				if name.NumParts < 2 {
+					if ref.name.AtTsExpr != nil && tableHasColumn(ctx, ref, name.ColNameOrigin()) {
+						targets = append(targets, ref.name)
+					}
+				} else if ref.matches(name.TblNameOrigin(), caseSensitive) {
 					targets = append(targets, ref.name)
 				}
 			}
@@ -127,7 +192,8 @@ func updateWriteTargets(stmt *tree.Update) []*tree.TableName {
 // deleteWriteTargets returns the tables a DELETE removes rows from: the listed
 // tables of a single-table DELETE, or the TableRefs entries matched by the
 // multi-table DELETE target list.
-func deleteWriteTargets(stmt *tree.Delete) []*tree.TableName {
+func deleteWriteTargets(ctx CompilerContext, stmt *tree.Delete) []*tree.TableName {
+	caseSensitive := ctx.GetLowerCaseTableNames() == 0
 	var targetRefs []snapshotTableRef
 	for _, expr := range stmt.Tables {
 		targetRefs = collectTableRefs(expr, targetRefs)
@@ -150,7 +216,7 @@ func deleteWriteTargets(stmt *tree.Delete) []*tree.TableName {
 			continue
 		}
 		for _, source := range sources {
-			if source.matches(string(target.name.ObjectName)) {
+			if source.matches(string(target.name.ObjectName), caseSensitive) {
 				targets = append(targets, source.name)
 			}
 		}
