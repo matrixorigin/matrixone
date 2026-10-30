@@ -76,15 +76,74 @@ var stripContents = map[string]int8{
 }
 
 var HandleSqlForRecord = func(sql string) []string {
-	split := SplitSqlBySemicolon(sql)
-	for i := range split {
-		split[i] = handleSQLForRecordFragment(split[i])
-	}
-	return split
+	masked, _ := MaskSecretLiterals(sql)
+	return masked
 }
 
-func handleSQLForRecordFragment(sql string) string {
-	stripScanner := mysql.NewScanner(dialect.MYSQL, sql)
+// ContainsCredentialWord is an allocation-free, conservative precheck for the
+// credential keywords recognized by the diagnostic masker. It is not a lexer:
+// it also protects credentials following a token that cannot be lexed.
+func ContainsCredentialWord(text string) bool {
+	for i := 0; i < len(text); i++ {
+		var needle string
+		switch text[i] | 0x20 {
+		case 'p':
+			needle = "password"
+		case 'i':
+			needle = "identified"
+		case 'a':
+			needle = "access_key_id"
+		case 's':
+			needle = "secret_access_key"
+		default:
+			continue
+		}
+		if len(text)-i < len(needle) {
+			continue
+		}
+		j := 1
+		for ; j < len(needle); j++ {
+			if text[i+j]|0x20 != needle[j] {
+				break
+			}
+		}
+		if j == len(needle) {
+			return true
+		}
+	}
+	return false
+}
+
+// HandleSqlForRecordWithSQLMode masks records using execution's lexical rules.
+func HandleSqlForRecordWithSQLMode(sql, sqlMode string) []string {
+	masked, _ := MaskSecretLiteralsWithSQLMode(sql, sqlMode)
+	return masked
+}
+
+// MaskSecretLiterals returns the same statement fragments as
+// HandleSqlForRecord plus the raw source text of every masked secret
+// literal, so callers can also scrub lexer echoes of those secrets (for
+// example the `near "..."` tail of a parser error) from diagnostics.
+var MaskSecretLiterals = func(sql string) ([]string, []string) {
+	return MaskSecretLiteralsWithSQLMode(sql, "")
+}
+
+// MaskSecretLiteralsWithSQLMode keeps diagnostic statement boundaries and
+// secret spans on the same lexical rules as execution, including malformed SQL.
+func MaskSecretLiteralsWithSQLMode(sql, sqlMode string) ([]string, []string) {
+	mode := mysql.ParseSQLModeFlags(sqlMode)
+	split := splitSqlBySemicolonWithSQLMode(sql, mode)
+	var secrets []string
+	for i := range split {
+		var fragmentSecrets []string
+		split[i], fragmentSecrets = handleSQLForRecordFragmentWithSecrets(split[i], mode)
+		secrets = append(secrets, fragmentSecrets...)
+	}
+	return split, secrets
+}
+
+func handleSQLForRecordFragmentWithSecrets(sql string, mode mysql.SQLModeFlags) (string, []string) {
+	stripScanner := mysql.NewScannerWithSQLMode(dialect.MYSQL, sql, mode)
 	defer mysql.PutScanner(stripScanner)
 	//strip needed comment "/*XXX*/"
 	var commentIdx [][]int
@@ -130,28 +189,130 @@ func handleSQLForRecordFragment(sql string) string {
 	// And if len(sql) is 10, then we get slice indexes:
 	// -1, 1, 2, 3, 3, 10
 	// These mean we need to get (-1, 1), (2, 3), (3, 10) from sql
-	scanner := mysql.NewScanner(dialect.MYSQL, sql)
+	scanner := mysql.NewScannerWithSQLMode(dialect.MYSQL, sql, mode)
 	defer mysql.PutScanner(scanner)
 	previousToken := 0
 	indexes := []int{-1}
 	eq := int('=')
+	// secrets collect the raw source text of every masked literal so lexer
+	// echoes of the same secrets can be scrubbed from diagnostics too.
+	var secrets []string
+	mask := func(from, to int) {
+		indexes = append(indexes, from, to)
+		secrets = append(secrets, sql[from:to+1])
+	}
+	// sawSet / sawSetPassword track the SET PASSWORD [FOR user] = 'secret'
+	// shape so its literal can be masked like the IDENTIFIED BY secrets.
+	sawSet := false
+	sawSetPassword := false
+	// While the guard is armed, skipped tokens are tallied into a target
+	// prefix: a legitimate prefix is exactly nothing (bare SET PASSWORD =
+	// form) or FOR plus one target token (user / 'user' / CURRENT_USER) or
+	// user @ host. IDENTIFIED / PASSWORD or any extra token invalidates the
+	// prefix, so a later '=' cannot detach attacker text from the guard.
+	sawFor := false
+	sawAt := false
+	prefixBad := false
+	targetTokens := 0
 	for scanner.Pos < len(sql) {
 		typ, s := scanSQLToken(scanner, &previousToken)
+		if typ == mysql.LEX_ERROR && ContainsCredentialWord(sql) {
+			// A lexical error before a credential (for example an empty
+			// quoted identifier) makes subsequent tokens untrustworthy.
+			// Retain no raw fragment; its full span also marks parser-error
+			// echoes as credential-bearing for frontend error scrubbing.
+			return "******", []string{sql}
+		}
+		// SET PASSWORD owns its target and value. A target named
+		// access_key_id/secret_access_key is a user, not a credential option:
+		// generic lookahead must not consume '=' or PASSWORD('secret').
+		if sawSetPassword && typ != eq {
+			if !sawFor && typ == mysql.FOR && targetTokens == 0 {
+				sawFor = true
+			} else {
+				targetTokens++
+				if typ == int('@') && targetTokens == 2 {
+					sawAt = true
+				}
+			}
+			if typ == mysql.IDENTIFIED || typ == mysql.PASSWORD {
+				prefixBad = true
+			}
+			continue
+		}
 		if typ == mysql.IDENTIFIED {
 			typ, _ = scanSQLToken(scanner, &previousToken)
 			if typ == mysql.BY || typ == mysql.WITH {
 				typ, s = scanSQLToken(scanner, &previousToken)
 				if typ != mysql.RANDOM {
-					indexes = append(indexes, scanner.Pos-len(s)-1, scanner.Pos-2)
+					mask(scanner.Pos-len(s)-1, scanner.Pos-2)
 				}
 			}
 		} else if strings.ToLower(s) == "access_key_id" || strings.ToLower(s) == "secret_access_key" {
 			typ, _ = scanSQLToken(scanner, &previousToken)
 			if typ == eq {
 				_, s = scanSQLToken(scanner, &previousToken)
-				indexes = append(indexes, scanner.Pos-len(s)-1, scanner.Pos-2)
+				mask(scanner.Pos-len(s)-1, scanner.Pos-2)
 			}
+		} else if sawSetPassword && typ == eq {
+			// '=' only disarms the guard after a legitimate target prefix:
+			// [nothing] | FOR user | FOR user@host. Malformed prefix (an
+			// IDENTIFIED BY phrase, stray tokens) keeps the guard armed and
+			// this '=' is skipped like any other attacker character, so the
+			// end-of-fragment fallback below still fires.
+			validPrefix := !prefixBad &&
+				((!sawFor && targetTokens == 0) ||
+					(sawFor && targetTokens == 1) ||
+					(sawFor && targetTokens == 3 && sawAt))
+			if !validPrefix {
+				// Later tokens cannot repair an already malformed target.
+				prefixBad = true
+				continue
+			}
+			sawSet, sawSetPassword = false, false
+			// SET PASSWORD [= 'secret' | FOR user = 'secret']: mask the
+			// password literal after the '='. MySQL also accepts the
+			// PASSWORD('secret') function form, whose secret is the call
+			// argument rather than the token after '='. Mask by raw source
+			// span so escaped or doubled quotes stay aligned with the token
+			// text; an unterminated or lex-error literal fails closed and
+			// masks everything to the end of the fragment.
+			start := scanner.Pos
+			token, _ := scanSQLToken(scanner, &previousToken)
+			if token == mysql.PASSWORD {
+				if open, _ := scanSQLToken(scanner, &previousToken); open == int('(') {
+					start = scanner.Pos
+					token, _ = scanSQLToken(scanner, &previousToken)
+				}
+			}
+			for start < len(sql) && (sql[start] == ' ' || sql[start] == '\t' || sql[start] == '\n' || sql[start] == '\r') {
+				start++
+			}
+			if token == mysql.STRING && start < len(sql) && (sql[start] == '\'' || sql[start] == '"') {
+				// keep the quote characters, mask the raw content span
+				// (content is empty for '' — nothing to mask)
+				if start+1 <= scanner.Pos-2 {
+					mask(start+1, scanner.Pos-2)
+				}
+			} else if start < len(sql) {
+				// fail closed: everything after the '=' may carry the
+				// secret. Stop scanning: no later span may overlap this
+				// remainder (overlapping spans would make the builder slice
+				// out of order).
+				mask(start, len(sql)-1)
+				break
+			}
+		} else if sawSet && typ == mysql.PASSWORD {
+			sawSetPassword = true
+		} else if typ == mysql.SET {
+			sawSet = true
 		}
+	}
+	if sawSetPassword {
+		// Without a trustworthy assignment delimiter, target and secret cannot be
+		// separated reliably. Retain no raw fragment, and preserve its full
+		// provenance so frontend parser-error echoes are scrubbed as well.
+		return "******", []string{sql}
 	}
 	indexes = append(indexes, len(sql))
 
@@ -166,7 +327,7 @@ func handleSQLForRecordFragment(sql string) string {
 		sql = builder.String()
 	}
 	sql = strings.TrimSpace(sql)
-	return sql
+	return sql, secrets
 }
 
 // scanSQLToken preserves qualified identifier context across raw token scans.
@@ -183,12 +344,16 @@ func scanSQLToken(scanner *mysql.Scanner, previousToken *int) (int, string) {
 }
 
 func SplitSqlBySemicolon(sql string) []string {
+	return splitSqlBySemicolonWithSQLMode(sql, 0)
+}
+
+func splitSqlBySemicolonWithSQLMode(sql string, mode mysql.SQLModeFlags) []string {
 	var ret []string
 	if len(sql) == 0 {
 		// case 1 : "" => [""]
 		return []string{sql}
 	}
-	scanner := mysql.NewScanner(dialect.MYSQL, sql)
+	scanner := mysql.NewScannerWithSQLMode(dialect.MYSQL, sql, mode)
 	defer mysql.PutScanner(scanner)
 	previousToken := 0
 	lastEnd := 0
@@ -834,7 +999,7 @@ func HandleSqlForRecordByStatementWithSQLMode(ctx context.Context, sql string, s
 	}
 	records := make([]string, len(fragments))
 	for i, fragment := range fragments {
-		records[i] = strings.Join(HandleSqlForRecord(fragment), ";")
+		records[i] = strings.Join(HandleSqlForRecordWithSQLMode(fragment, sqlMode), ";")
 	}
 	return records, nil
 }

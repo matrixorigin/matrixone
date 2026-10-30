@@ -705,3 +705,15 @@ func TestConvertGoErrorKeepsContextIdentity(t *testing.T) {
 	require.True(t, IsMoErrCode(ConvertGoError(ctx, io.EOF), ErrUnexpectedEOF))
 	require.Nil(t, ConvertGoError(ctx, nil))
 }
+
+func TestNewPasswordExpired(t *testing.T) {
+	// The expired-password sandbox error must surface to MySQL clients as
+	// ER_MUST_CHANGE_PASSWORD_LOGIN (1862) with the stock MySQL message.
+	err := NewPasswordExpired(context.TODO())
+	require.Equal(t, ErrPasswordExpired, err.ErrorCode())
+	require.Equal(t, ER_MUST_CHANGE_PASSWORD_LOGIN, err.MySQLCode())
+	require.Equal(t, "HY000", err.SqlState())
+	require.Equal(t,
+		"Your password has expired. To log in you must change it using a client that supports expired passwords.",
+		err.Error())
+}

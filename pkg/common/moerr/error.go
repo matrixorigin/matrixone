@@ -474,6 +474,12 @@ const (
 	// error is never silently retried.
 	ErrDataBranchConflict uint16 = 22501
 
+	// Group 18: account security
+	// ErrPasswordExpired is raised when a statement is executed while the
+	// session is in the expired-password sandbox (mo_user.expired_time
+	// reached). It maps to MySQL ER_MUST_CHANGE_PASSWORD_LOGIN (1862).
+	ErrPasswordExpired uint16 = 22601
+
 	// ErrEnd, the max value of MOErrorCode
 	ErrEnd uint16 = 65535
 )
@@ -824,6 +830,9 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	// pass the two conflicting sides and the pk as a single pre-formatted
 	// detail; the leading "conflict: " comes from this catalog template.
 	ErrDataBranchConflict: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "conflict: %s"},
+
+	// Group 18: account security
+	ErrPasswordExpired: {ER_MUST_CHANGE_PASSWORD_LOGIN, []string{MySQLDefaultSqlState}, "Your password has expired. To log in you must change it using a client that supports expired passwords."},
 
 	// Group End: max value of MOErrorCode
 	ErrEnd: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "internal error: end of errcode code"},
@@ -2005,6 +2014,10 @@ func NewErrTooBigPrecision(ctx context.Context, precision int64, funcName string
 
 func NewCCPRReadOnly(ctx context.Context) *Error {
 	return newError(ctx, ErrCCPRReadOnly)
+}
+
+func NewPasswordExpired(ctx context.Context) *Error {
+	return newError(ctx, ErrPasswordExpired)
 }
 
 // NewCantExecuteInReadOnlyTransaction reports MySQL ERROR 1792 (25006): a

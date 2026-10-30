@@ -188,9 +188,115 @@ func TestDoComQueryParseErrorRedactsMongoDBSelector(t *testing.T) {
 	require.Error(t, err)
 	assertMongoDBSelectorIsRedacted(t, ses.GetSqlOfStmt())
 	assertMongoDBSelectorIsAbsent(t, err.Error())
-	redactedErr := redactStatementErrorForLogging(err, sql).Error()
+	redactedErr := redactStatementErrorForLogging(err, sql, nil).Error()
 	require.Contains(t, redactedErr, "<redacted MongoDB __mo_query statement>")
 	assertMongoDBSelectorIsAbsent(t, redactedErr)
+}
+
+func TestDoComQuerySetPasswordTargetNameRedaction(t *testing.T) {
+	for _, tc := range []struct {
+		name, user, value, mode string
+		missingAssignment       bool
+	}{
+		{"ordinary target", "ordinary_user", "= PASSWORD('%s') trailing", "", false},
+		{"access key target", "access_key_id", "= PASSWORD('%s') trailing", "", false},
+		{"secret key target", "secret_access_key", "= PASSWORD('%s') trailing", "", false},
+		{"missing assignment literal", "ordinary_user", "'%s'", "", true},
+		{"missing assignment function", "ordinary_user", "PASSWORD('%s')", "", true},
+		{"missing assignment identified", "ordinary_user", "IDENTIFIED BY '%s'", "", true},
+		{"missing assignment no backslash", "ordinary_user", "'%s'", "NO_BACKSLASH_ESCAPES", true},
+		{"missing assignment ansi", "ordinary_user", "'%s'", "ANSI_QUOTES,NO_BACKSLASH_ESCAPES", true},
+		{"identified then empty assignment", "ordinary_user", "IDENTIFIED BY '%s' = ''", "", true},
+		{"identified then bare assignment", "ordinary_user", "IDENTIFIED BY '%s' =", "", true},
+		{"identified then nonempty assignment", "ordinary_user", "IDENTIFIED BY 'EchoGuardSecret42' = PASSWORD('%s')", "", true},
+		{"identified assignment no backslash", "ordinary_user", "IDENTIFIED BY '%s' = ''", "NO_BACKSLASH_ESCAPES", true},
+		{"identified assignment ansi", "ordinary_user", "IDENTIFIED BY '%s' = ''", "ANSI_QUOTES,NO_BACKSLASH_ESCAPES", true},
+		{"assignment before user", "", "= '%s' = ''", "", true},
+		{"assignment before host", "ordinary_user @", "= '%s' = ''", "", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := defines.AttachAccountId(t.Context(), catalog.System_Account)
+			previousPU := getPuIfPresent("")
+			t.Cleanup(func() { setPu("", previousPU) })
+			ctrl := gomock.NewController(t)
+			ses := newTestSession(t, ctrl)
+			defer ses.Close()
+			require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", tc.mode))
+			params := getPu(ses.GetService()).SV
+			previousLimit := params.LengthOfQueryPrinted
+			t.Cleanup(func() { params.LengthOfQueryPrinted = previousLimit })
+			params.LengthOfQueryPrinted = 1024
+			observed, logs := newObservedProtocolSession()
+			ses.logger, ses.logLevel = observed.logger, observed.logLevel
+			ses.loggerOnce.Do(func() {})
+			execCtx := newTestExecCtx(ctx, ctrl)
+			execCtx.ses = ses
+			const secret = "ReviewSecret42"
+			query := "SET PASSWORD FOR " + tc.user + " " + fmt.Sprintf(tc.value, secret)
+			err := doComQuery(ses, execCtx, &UserInput{sql: query})
+			require.Error(t, err)
+			require.NotContains(t, err.Error(), secret)
+			require.NotContains(t, ses.GetSqlOfStmt(), secret)
+			if tc.missingAssignment {
+				require.Equal(t, "******", ses.GetSqlOfStmt())
+			} else {
+				require.Contains(t, ses.GetSqlOfStmt(), "SET PASSWORD FOR "+tc.user)
+			}
+			require.NotEmpty(t, logs.All(), "exercise the real frontend diagnostic sink")
+			for _, entry := range logs.All() {
+				require.NotContains(t, entry.Message+fmt.Sprint(entry.ContextMap()), secret)
+			}
+		})
+	}
+}
+
+func TestDoComQueryPasswordSQLModeRedaction(t *testing.T) {
+	for _, tc := range []struct {
+		name, mode, prefix, command string
+		lexicalError                bool
+	}{
+		{"default", "", "SELECT 1; ", "SET PASSWORD = '", false},
+		{"no-backslash ordinary prefix", "NO_BACKSLASH_ESCAPES", "SELECT 1; ", "SET PASSWORD = '", false},
+		{"no-backslash quoted prefix", "NO_BACKSLASH_ESCAPES", `SELECT '\'; `, "SET PASSWORD = '", false},
+		{"ansi and no-backslash", "ANSI_QUOTES,NO_BACKSLASH_ESCAPES", `SELECT '\'; `, "SET PASSWORD = '", false},
+		{"identified without PASSWORD keyword", "NO_BACKSLASH_ESCAPES", `SELECT '\'; `, "CREATE USER diagnostic_user IDENTIFIED BY '", false},
+		{"lexical error before credential", "", "CREATE ACCOUNT `` ", "ADMIN_NAME 'admin' IDENTIFIED BY '", true},
+	} {
+		for _, tail := range []string{"' trailing", ""} {
+			t.Run(tc.name+"/"+tail, func(t *testing.T) {
+				ctx := defines.AttachAccountId(t.Context(), catalog.System_Account)
+				previousPU := getPuIfPresent("")
+				t.Cleanup(func() { setPu("", previousPU) })
+				ctrl := gomock.NewController(t)
+				ses := newTestSession(t, ctrl)
+				defer ses.Close()
+				require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", tc.mode))
+				observed, logs := newObservedProtocolSession()
+				ses.logger, ses.logLevel = observed.logger, observed.logLevel
+				ses.loggerOnce.Do(func() {})
+				execCtx := newTestExecCtx(ctx, ctrl)
+				execCtx.ses = ses
+				const secret = "ReviewSQLModeSecret42"
+				valid := tc.prefix + tc.command + secret + "'"
+				stmts, err := mysql.ParseWithSQLMode(ctx, valid, 1, tc.mode)
+				freeStatements(stmts)
+				if tc.lexicalError {
+					require.Error(t, err, "the lexer must fail before reaching IDENTIFIED BY")
+				} else {
+					require.NoError(t, err)
+					require.Len(t, stmts, 2, "the prefix must be a real statement under the active mode")
+				}
+				err = doComQuery(ses, execCtx, &UserInput{sql: tc.prefix + tc.command + secret + tail})
+				require.Error(t, err)
+				require.NotContains(t, err.Error(), secret)
+				require.NotContains(t, ses.GetSqlOfStmt(), secret)
+				require.NotEmpty(t, logs.All())
+				for _, entry := range logs.All() {
+					require.NotContains(t, entry.Message+fmt.Sprint(entry.ContextMap()), secret)
+				}
+			})
+		}
+	}
 }
 
 func TestDoComQueryPrepareMultiReplacesPreviousDiagnostics(t *testing.T) {
@@ -12932,6 +13038,24 @@ func TestRecordStatementUTF8(t *testing.T) {
 				case "err_code":
 					require.Equal(t, fmt.Sprintf("%d", moerr.ErrParseError), row.ToStrings()[i])
 				}
+			}
+		})
+	}
+}
+
+func BenchmarkRedactCredentialDiagnostics(b *testing.B) {
+	for _, tc := range []struct {
+		name string
+		text string
+	}{
+		{"ordinary", "select id, name, price from orders where id = 42"},
+		{"password", "SET PASSWORD = 'benchmark_secret' trailing"},
+		{"identified", "CREATE USER diagnostic_user IDENTIFIED BY 'benchmark_secret' trailing"},
+	} {
+		b.Run(tc.name, func(b *testing.B) {
+			b.ReportAllocs()
+			for b.Loop() {
+				redactStatementTextForLogging(nil, tc.text, nil)
 			}
 		})
 	}

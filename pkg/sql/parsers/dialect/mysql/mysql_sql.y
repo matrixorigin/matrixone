@@ -4985,25 +4985,14 @@ alter_user_stmt:
         // Use the temporary variables to call the function
         $$ = tree.NewAlterUser(ifExists, users, role, miscOpt, commentOrAttribute)
     }
-|   ALTER USER exists_opt user_name UNLOCK user_comment_or_attribute_opt
+|   ALTER USER exists_opt user_name pwd_or_lck user_comment_or_attribute_opt
     {
         ifExists := $3
         var Username = $4.Username
         var Hostname = $4.Hostname
         user := tree.NewUser(Username,Hostname,nil)
         users := []*tree.User{user}
-        miscOpt := tree.NewUserMiscOptionAccountUnlock()
-        commentOrAttribute := $6
-        $$ = tree.NewAlterUser(ifExists, users, nil, miscOpt, commentOrAttribute)
-    }
-|   ALTER USER exists_opt user_name LOCK user_comment_or_attribute_opt
-    {
-        ifExists := $3
-        var Username = $4.Username
-        var Hostname = $4.Hostname
-        user := tree.NewUser(Username,Hostname,nil)
-        users := []*tree.User{user}
-        miscOpt := tree.NewUserMiscOptionAccountLock()
+        miscOpt := $5
         commentOrAttribute := $6
         $$ = tree.NewAlterUser(ifExists, users, nil, miscOpt, commentOrAttribute)
     }
@@ -5053,7 +5042,15 @@ pwd_or_lck:
     {
         $$ = tree.NewUserMiscOptionAccountUnlock()
     }
+|   ACCOUNT UNLOCK
+    {
+        $$ = tree.NewUserMiscOptionAccountUnlock()
+    }
 |   LOCK
+    {
+        $$ = tree.NewUserMiscOptionAccountLock()
+    }
+|   ACCOUNT LOCK
     {
         $$ = tree.NewUserMiscOptionAccountLock()
     }

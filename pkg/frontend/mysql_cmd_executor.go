@@ -201,7 +201,7 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 		copy(stmID[:], cw.GetUUID())
 		statement = cw.GetAst()
 	}
-	envStmt = redactStatementTextForLogging(statement, envStmt)
+	envStmt = redactStatementTextForLogging(statement, envStmt, ses)
 
 	if cw != nil {
 		ses.ast = statement
@@ -217,7 +217,7 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 	// envStmt has been redacted. Redact the completed diagnostic payload too:
 	// this is the final boundary before either session state or statement
 	// telemetry can retain it.
-	text = redactStatementTextForLogging(nil, text)
+	text = redactStatementTextForLogging(nil, text, ses)
 	ses.SetStmtId(stmID)
 	stmtTyp := getStatementType(statement).GetStatementType()
 	queryTyp := getStatementType(statement).GetQueryType()
@@ -334,7 +334,7 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 	return ctx, nil
 }
 
-func redactStatementTextForLogging(statement tree.Statement, text string) string {
+func redactStatementTextForLogging(statement tree.Statement, text string, ses FeSession) string {
 	// __mo_query is a user-supplied MongoDB filter or pipeline. It is valid in
 	// ordinary SELECT statements, whose AST formatting deliberately preserves
 	// string literals, so neither the default branch nor a re-rendered AST is a
@@ -350,6 +350,10 @@ func redactStatementTextForLogging(statement tree.Statement, text string) string
 	}
 
 	switch stmt := statement.(type) {
+	case *tree.SetPassword:
+		// The raw text carries the clear-text password; the AST render masks
+		// it (SetPassword.Format prints '******').
+		return tree.String(statement, dialect.MYSQL)
 	case *tree.CreateIcebergCatalog, *tree.AlterIcebergCatalog,
 		*tree.CreateMongoDBConnection, *tree.AlterMongoDBConnection:
 		return tree.String(statement, dialect.MYSQL)
@@ -364,17 +368,79 @@ func redactStatementTextForLogging(statement tree.Statement, text string) string
 		}
 		return text
 	default:
+		// AST-less paths (parse-failure terminal logs and completed
+		// diagnostic payloads) must not leak any statement fragment: mask
+		// every supported secret shape over the whole input, including
+		// fragments of multi-statement texts. The fold scan keeps ordinary
+		// texts on a zero-allocation pass-through.
+		if parsers.ContainsCredentialWord(text) {
+			return strings.Join(parsers.HandleSqlForRecordWithSQLMode(text, sessionSQLModeForParser(ses)), ";")
+		}
 		return text
 	}
 }
 
-// redactStatementErrorForLogging replaces a parser echo of __mo_query before it
-// reaches a client, statement telemetry, or the terminal statement logger.
-func redactStatementErrorForLogging(err error, text string) error {
-	if err == nil || sqlmongodb.RedactSQLForDiagnostics(text) == text {
+// redactStatementErrorForLogging replaces a parser echo of __mo_query or of
+// masked secret literals before it reaches a client, statement telemetry,
+// or the terminal statement logger.
+func redactStatementErrorForLogging(err error, text string, ses FeSession) error {
+	if err == nil {
 		return err
 	}
-	return moerr.NewParseErrorNoCtx("parse error in <redacted MongoDB __mo_query statement>")
+	if sqlmongodb.RedactSQLForDiagnostics(text) != text {
+		return moerr.NewParseErrorNoCtx("parse error in <redacted MongoDB __mo_query statement>")
+	}
+	return redactParseErrorSecrets(err, text, ses)
+}
+
+// redactParseErrorSecrets scrubs lexer echoes of masked secret literals out
+// of a parser error message: the `near "..."` tail of a syntax error quotes
+// the raw input, which replays an unterminated or otherwise malformed
+// secret verbatim into the terminal log and statement records. The echo is
+// cut before any secret replacement runs: a password whose text collides
+// with the framing delimiter (e.g. ` near `) must not be able to destroy
+// the boundary, so the echo tail is located on the RAW error and the whole
+// attacker-controlled remainder is dropped — comments, unterminated
+// fragments and the lexer's truncated >1024-byte echoes are never provably
+// clean.
+func redactParseErrorSecrets(err error, text string, ses FeSession) error {
+	if err == nil || !parsers.ContainsCredentialWord(text) {
+		return err
+	}
+	_, secrets := parsers.MaskSecretLiteralsWithSQLMode(text, sessionSQLModeForParser(ses))
+	if len(secrets) == 0 {
+		return err
+	}
+	raw := err.Error()
+
+	// Fail closed on the trailing `near "..."` lexer echo of a
+	// SET-PASSWORD-class statement: locate the framing delimiter on the raw
+	// error (the first occurrence precedes the echo), render a fixed
+	// sanitized tail and return without replaying any user bytes.
+	const nearAt = ` near "`
+	if idx := strings.Index(raw, nearAt); idx >= 0 {
+		tail := ` near "******"`
+		if strings.HasSuffix(raw, `";`) {
+			tail = ` near "******";`
+		}
+		return moerr.NewParseErrorNoCtx(raw[:idx] + tail)
+	}
+
+	// No lexer echo frame: scrub any verbatim replay of the masked secret
+	// literals out of the remaining message shapes.
+	msg := raw
+	changed := false
+	for _, secret := range secrets {
+		if secret == "" || !strings.Contains(msg, secret) {
+			continue
+		}
+		msg = strings.ReplaceAll(msg, secret, "******")
+		changed = true
+	}
+	if !changed {
+		return err
+	}
+	return moerr.NewParseErrorNoCtx(msg)
 }
 
 func refreshProcessStmtProfileForPreparedStmt(proc *process.Process, statement tree.Statement) {
@@ -3570,6 +3636,55 @@ func handleAlterUser(ses FeSession, execCtx *ExecCtx, st *tree.AlterUser) error 
 	return doAlterUser(execCtx.reqCtx, ses.(*Session), au)
 }
 
+// handleSetPassword implements SET PASSWORD [= 'literal'] and
+// SET PASSWORD FOR user = 'literal' by lowering the statement onto the
+// ALTER USER ... IDENTIFIED BY pipeline (password validation, reuse policy
+// and history included). Changing the password also clears the explicit
+// password expiration of the account (except PASSWORD EXPIRE NEVER) and,
+// when the current session user changes its own password, releases the
+// expired-password sandbox of the session once the change commits (see
+// doAlterUser).
+func handleSetPassword(ses FeSession, execCtx *ExecCtx, st *tree.SetPassword) error {
+	tenant := ses.GetTenantInfo()
+
+	userName := tenant.GetUser()
+	hostName := rootHost
+	if st.User != nil {
+		var err error
+		userName, err = normalizeName(execCtx.reqCtx, st.User.Username)
+		if err != nil {
+			return err
+		}
+		hostName = st.User.Hostname
+	}
+
+	// Changing another account's password is the ALTER USER privilege: run
+	// the exact privilege determination of ALTER USER on the session. MySQL
+	// lets every account change its own password without any grant, so the
+	// self-change path is intentionally not gated.
+	if userName != tenant.GetUser() {
+		s := ses.(*Session)
+		saved := s.GetPrivilege()
+		_, gateErr := authenticateUserCanExecuteStatement(execCtx.reqCtx, s, &tree.AlterUser{})
+		s.SetPrivilege(saved)
+		if gateErr != nil {
+			return gateErr
+		}
+	}
+
+	au := &alterUser{
+		IfExists: false,
+		Users: []*user{{
+			Username:  userName,
+			Hostname:  hostName,
+			AuthExist: true,
+			IdentTyp:  tree.AccountIdentifiedByPassword,
+			IdentStr:  st.Password,
+		}},
+	}
+	return doAlterUser(execCtx.reqCtx, ses.(*Session), au)
+}
+
 // handleCreateRole creates the new role
 func handleCreateRole(ses FeSession, execCtx *ExecCtx, cr *tree.CreateRole) error {
 	tenant := ses.GetTenantInfo()
@@ -4769,6 +4884,9 @@ func parseSql(execCtx *ExecCtx, p *mysql.MySQLParser) (stmts []tree.Statement, e
 }
 
 func sessionSQLMode(ses FeSession) string {
+	if ses == nil {
+		return ""
+	}
 	v, err := ses.GetSessionSysVar("sql_mode")
 	if err != nil {
 		return ""
@@ -5047,8 +5165,8 @@ func rewriteSQLStatementInput(ctx context.Context, ses *Session, input *UserInpu
 	return &rewrittenInput, nil
 }
 
-func sqlForRecord(sql string) string {
-	parts := parsers.HandleSqlForRecord(sql)
+func sqlForRecordWithSQLMode(sql, sqlMode string) string {
+	parts := parsers.HandleSqlForRecordWithSQLMode(sql, sqlMode)
 	if len(parts) == 0 {
 		return strings.TrimSpace(sql)
 	}
@@ -5118,9 +5236,13 @@ func authenticateUserCanExecuteStatement(reqCtx context.Context, ses *Session, s
 			return stats, moerr.NewInternalError(reqCtx, "do not have enough storage to execute the statement")
 		}
 
-		// can or not execute in password expired status
+		// can or not execute in password expired status.
+		// The account is in the expired-password sandbox (mo_user.expired_time
+		// reached): every statement except SET PASSWORD and ALTER USER (the
+		// ways to reset the password) is rejected with MySQL
+		// ER_MUST_CHANGE_PASSWORD_LOGIN (1862).
 		if ses.getRoutine() != nil && ses.getRoutine().isExpired() && !ses.GetPrivilege().canExecInPasswordExpired {
-			return stats, moerr.NewInternalError(reqCtx, "password has expired, please change the password")
+			return stats, moerr.NewPasswordExpired(reqCtx)
 		}
 		if call, isCall := stmt.(*tree.CallStmt); isCall {
 			if isCDCTargetGuardCapabilityCall(call) {
@@ -6551,7 +6673,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		// internal and diagnostic inputs outside the client boundary.
 		resetDiagnosticsForStatement(ses, execCtx, errorInput, nil)
 		statsInfo.ParseStage.ParseDuration = time.Since(beginInstant)
-		diagnosticErr := redactStatementErrorForLogging(parseErr, errorInput.getSql())
+		diagnosticErr := redactStatementErrorForLogging(parseErr, errorInput.getSql(), ses)
 		records, sources := errorInput.parseErrorRecords(ses)
 		var recordErr error
 		execCtx.reqCtx, recordErr = RecordParseErrorStatement(
@@ -6566,7 +6688,10 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		if recordErr != nil {
 			return recordErr
 		}
-		if sqlmongodb.RedactSQLForDiagnostics(errorInput.getSql()) != errorInput.getSql() {
+		if diagnosticErr != parseErr {
+			// The diagnostic error is the scrubbed form (selector or secret
+			// echoes replaced); the client must not see the original echo
+			// either when the raw text carried the same secret.
 			parseErr = diagnosticErr
 		} else if _, ok := parseErr.(*moerr.Error); !ok {
 			parseErr = moerr.NewParseError(execCtx.reqCtx, parseErr.Error())
@@ -6574,7 +6699,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		// Keep the terminal error log on the same diagnostic boundary as
 		// RecordParseErrorStatement. Parse failures have no AST, so use the raw
 		// text scanner and never pass the original selector to the logger.
-		logStatementStringStatus(execCtx.reqCtx, ses, redactStatementTextForLogging(nil, errorInput.getSql()), fail, diagnosticErr)
+		logStatementStringStatus(execCtx.reqCtx, ses, redactStatementTextForLogging(nil, errorInput.getSql(), ses), fail, diagnosticErr)
 		return parseErr
 	}
 
@@ -6622,7 +6747,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 	stagedSQLRecords := make([]string, 0, 1)
 	if stagedSQLMode {
 		stagedInputs = append(stagedInputs, executionInput)
-		stagedSQLRecords = append(stagedSQLRecords, sqlForRecord(executionInput.getSql()))
+		stagedSQLRecords = append(stagedSQLRecords, sqlForRecordWithSQLMode(executionInput.getSql(), sessionSQLModeForParser(ses)))
 	}
 
 	for i := 0; i < len(cws); i++ {
@@ -6976,7 +7101,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 			}
 			cws = append(cws, nextCWs[0])
 			stagedInputs = append(stagedInputs, nextInput)
-			stagedSQLRecords = append(stagedSQLRecords, sqlForRecord(nextInput.getSql()))
+			stagedSQLRecords = append(stagedSQLRecords, sqlForRecordWithSQLMode(nextInput.getSql(), sessionSQLModeForParser(ses)))
 			stagedRemaining = remaining
 		}
 
@@ -7086,7 +7211,7 @@ func sqlForRecordByStatementWithSQLMode(ctx context.Context, sql string, sqlMode
 }
 
 // schedulingSQLByStatementWithSQLMode keeps raw statement text (including
-// optimizer comments) aligned with the parser's AST list. Unlike sqlForRecord,
+// optimizer comments) aligned with the parser's AST list. Unlike sqlForRecordWithSQLMode,
 // this text is control-plane input and must never be sanitized first.
 func schedulingSQLByStatementWithSQLMode(ctx context.Context, sql string, sqlMode string, internalSource bool) ([]string, []string, error) {
 	if isCmdFieldListSql(sql) || isCmdGetSnapshotTsSql(sql) ||

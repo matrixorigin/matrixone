@@ -396,6 +396,185 @@ func TestHandleSqlForRecord(t *testing.T) {
 		input := first + "'first-test-value'; CREATE USER u IDENTIFIED BY 'password-test-value'; " + last + "'last-test-value'"
 		require.Equal(t, []string{first + "'******'", "CREATE USER u IDENTIFIED BY '******'", last + "'******'"}, HandleSqlForRecord(input))
 	})
+	t.Run("set password literal is masked", func(t *testing.T) {
+		require.Equal(t, []string{"SET PASSWORD = '******'"},
+			HandleSqlForRecord("SET PASSWORD = 'set-password-test-value'"))
+		require.Equal(t, []string{"SET PASSWORD FOR u1 = '******'"},
+			HandleSqlForRecord("SET PASSWORD FOR u1 = 'set-password-test-value'"))
+		require.Equal(t, []string{"SET PASSWORD FOR 'u1'@'%' = '******'"},
+			HandleSqlForRecord("SET PASSWORD FOR 'u1'@'%' = 'set-password-test-value'"))
+		require.Equal(t, []string{"set password = '******'", "SET PASSWORD FOR u1 = '******'"},
+			HandleSqlForRecord("set password = 'first-test-value'; SET PASSWORD FOR u1 = 'second-test-value'"))
+		// MySQL PASSWORD('secret') function form: the secret is the call
+		// argument, not the token after '='.
+		require.Equal(t, []string{"SET PASSWORD = PASSWORD('******')"},
+			HandleSqlForRecord("SET PASSWORD = PASSWORD('set-password-test-value')"))
+		require.Equal(t, []string{"SET PASSWORD FOR u1 = PASSWORD('******')"},
+			HandleSqlForRecord("SET PASSWORD FOR u1 = PASSWORD('set-password-test-value')"))
+		// Compact punctuation and comments do not defeat the masking, and a
+		// trailing syntax error still gets its secret masked.
+		require.Equal(t, []string{"SET PASSWORD='******' broken"},
+			HandleSqlForRecord("SET PASSWORD='set-password-test-value' broken"))
+		require.Equal(t, []string{"/* trace */ SET PASSWORD = '******' broken"},
+			HandleSqlForRecord("/* trace */ SET PASSWORD = 'set-password-test-value' broken"))
+		require.Equal(t, []string{"SET PASSWORD = PASSWORD('******') unexpected id"},
+			HandleSqlForRecord("SET PASSWORD = PASSWORD('set-password-test-value') unexpected id"))
+		// Doubled-quote secrets mask by raw span, not decoded length.
+		require.Equal(t, []string{"SET PASSWORD = '******'"},
+			HandleSqlForRecord("SET PASSWORD = 'sec''ret-doubled'"))
+		// An unterminated literal fails closed: mask to the end.
+		require.Equal(t, []string{"SET PASSWORD = ******"},
+			HandleSqlForRecord("SET PASSWORD = 'unter-minated"))
+		// Empty password literal carries no secret and stays as-is.
+		require.Equal(t, []string{"SET PASSWORD = ''"},
+			HandleSqlForRecord("SET PASSWORD = ''"))
+		// Only the password fragment is masked in a multi-statement text.
+		require.Equal(t, []string{"select 1", "set password = '******' broken"},
+			HandleSqlForRecord("select 1; set password = 'multi-statement-value' broken"))
+		// A comment before an unterminated literal fails closed over the
+		// whole remainder; no later span may overlap it (no panic).
+		require.Equal(t, []string{"SET PASSWORD = ******"},
+			HandleSqlForRecord("SET PASSWORD = /* annotation */ 'commented-tail42' identified by 'other-value42'"))
+	})
+	t.Run("set password owns credential-like target names", func(t *testing.T) {
+		for _, user := range []string{"ordinary_user", "access_key_id", "secret_access_key"} {
+			for _, value := range []string{"'ReviewSecret42'", "PASSWORD('ReviewSecret42')"} {
+				t.Run(user+"/"+value, func(t *testing.T) {
+					sql := "SET PASSWORD FOR " + user + " = " + value
+					stmt, err := ParseOne(t.Context(), dialect.MYSQL, sql, 1)
+					require.NoError(t, err, "credential-option names are legal users")
+					stmt.Free()
+					for _, tail := range []string{"", " trailing"} {
+						fragments, secrets := MaskSecretLiterals(sql + tail)
+						require.Equal(t, []string{strings.Replace(sql+tail, "ReviewSecret42", "******", 1)}, fragments)
+						require.Equal(t, []string{"ReviewSecret42"}, secrets, "mask the value, not the PASSWORD function or target")
+					}
+				})
+			}
+		}
+	})
+	t.Run("masked secrets are reported for echo scrubbing", func(t *testing.T) {
+		fragments, secrets := MaskSecretLiterals("SET PASSWORD = 'sec''ret-doubled'")
+		require.Len(t, secrets, 1)
+		require.Equal(t, "sec''ret-doubled", secrets[0])
+		require.NotContains(t, strings.Join(fragments, ";"), "ret-doubled")
+
+		fragments, secrets = MaskSecretLiterals("SET PASSWORD = PASSWORD('fn-secret42')")
+		require.Len(t, secrets, 1)
+		require.Equal(t, "fn-secret42", secrets[0])
+		require.NotContains(t, strings.Join(fragments, ";"), "fn-secret42")
+
+		_, secrets = MaskSecretLiterals("SET PASSWORD = 'unter-minated42")
+		require.Contains(t, secrets, "'unter-minated42")
+
+		_, secrets = MaskSecretLiterals("CREATE USER u IDENTIFIED BY 'ident-secret42'")
+		require.Contains(t, secrets, "ident-secret42")
+	})
+	t.Run("masking follows execution SQL mode", func(t *testing.T) {
+		for _, mode := range []string{"NO_BACKSLASH_ESCAPES", "ANSI_QUOTES,NO_BACKSLASH_ESCAPES"} {
+			for _, tail := range []string{"' trailing", ""} {
+				const prefix = `SELECT '\'; `
+				const secret = "ReviewSQLModeSecret42"
+				sql := prefix + "SET PASSWORD = '" + secret + tail
+				fragments, secrets := MaskSecretLiteralsWithSQLMode(sql, mode)
+				require.Len(t, fragments, 2)
+				require.NotContains(t, strings.Join(fragments, ";"), secret)
+				require.Len(t, secrets, 1)
+				require.Contains(t, secrets[0], secret)
+			}
+			valid := `SELECT '\'; SET PASSWORD = 'ReviewSQLModeSecret42'`
+			records, err := HandleSqlForRecordByStatementWithSQLMode(t.Context(), valid, mode)
+			require.NoError(t, err)
+			require.Equal(t, []string{`SELECT '\'`, "SET PASSWORD = '******'"}, records)
+		}
+	})
+	t.Run("lexical failure before a credential fails closed", func(t *testing.T) {
+		for _, mode := range []string{"", "NO_BACKSLASH_ESCAPES"} {
+			for _, tail := range []string{"'", ""} {
+				sql := "CREATE ACCOUNT `` ADMIN_NAME 'admin' IDENTIFIED BY 'LexicalSecret42" + tail
+				fragments, secrets := MaskSecretLiteralsWithSQLMode(sql, mode)
+				require.Equal(t, []string{"******"}, fragments)
+				require.Equal(t, []string{sql}, secrets)
+			}
+		}
+		// No credential keyword: preserve ordinary invalid SQL diagnostics.
+		require.Equal(t, []string{"SELECT ``"}, HandleSqlForRecord("SELECT ``"))
+	})
+	// Without '=', no target/value boundary can be trusted, regardless of
+	// whether the malformed value looks like a literal, call or IDENTIFIED BY.
+	t.Run("set password without assignment fails closed", func(t *testing.T) {
+		for _, mode := range []string{"", "NO_BACKSLASH_ESCAPES", "ANSI_QUOTES,NO_BACKSLASH_ESCAPES"} {
+			for _, value := range []string{"'ProbeSecret42'", "PASSWORD('ProbeSecret42')", "IDENTIFIED BY 'ProbeSecret42'"} {
+				raw := "SET PASSWORD FOR ordinary_user " + value
+				fragments, secrets := MaskSecretLiteralsWithSQLMode(raw, mode)
+				require.Equal(t, []string{"******"}, fragments, mode+"/"+value)
+				require.Equal(t, []string{raw}, secrets, "retain raw provenance for diagnostic echo scrubbing")
+			}
+
+			// The target-name guard still holds: a user named
+			// access_key_id is a target, not a credential option.
+			fragments, secrets := MaskSecretLiteralsWithSQLMode(
+				"SET PASSWORD FOR access_key_id = 'TargetGuardPw42'", mode)
+			joined := strings.Join(fragments, ";")
+			require.Contains(t, joined, "access_key_id", mode)
+			require.NotContains(t, joined, "TargetGuardPw42", mode)
+			require.NotEmpty(t, secrets, mode)
+		}
+	})
+	// A later '=' after a malformed prefix must not disarm the guard: the
+	// prefix before '=' is validated (nothing | FOR user | FOR user@host)
+	// and anything else keeps the fragment fail-closed regardless of how
+	// plausible the anonymous/empty/suffix shapes look.
+	t.Run("set password eq after invalid target stays fail closed", func(t *testing.T) {
+		for _, mode := range []string{"", "NO_BACKSLASH_ESCAPES", "ANSI_QUOTES,NO_BACKSLASH_ESCAPES"} {
+			// An invalid earlier delimiter must permanently taint the target:
+			// later literals cannot repair a missing user or host and let the
+			// next '=' hide a credential that has already been skipped.
+			for _, prefix := range []string{"FOR", "FOR ordinary_user @"} {
+				raw := "SET PASSWORD " + prefix + " = 'BrokenTargetSecret42' = ''"
+				fragments, secrets := MaskSecretLiteralsWithSQLMode(raw, mode)
+				require.Equal(t, []string{"******"}, fragments, mode+"/"+prefix)
+				require.Equal(t, []string{raw}, secrets)
+			}
+			// leak vector from the review: IDENTIFIED BY phrase then '= ''.
+			raw := "SET PASSWORD FOR ordinary_user IDENTIFIED BY 'ProbeSecret42' = ''"
+			fragments, secrets := MaskSecretLiteralsWithSQLMode(raw, mode)
+			require.Equal(t, []string{"******"}, fragments, mode)
+			require.Equal(t, []string{raw}, secrets, mode)
+
+			// trailing bare '='.
+			raw = "SET PASSWORD FOR ordinary_user IDENTIFIED BY 'ProbeSecret42' ="
+			fragments, secrets = MaskSecretLiteralsWithSQLMode(raw, mode)
+			require.Equal(t, []string{"******"}, fragments, mode)
+			require.Equal(t, []string{raw}, secrets, mode)
+
+			// nonempty suffix after an invalid prefix: no suffix-only mask.
+			raw = "SET PASSWORD FOR ordinary_user IDENTIFIED BY 'SecretA42' = PASSWORD('SecretB42')"
+			fragments, secrets = MaskSecretLiteralsWithSQLMode(raw, mode)
+			require.Equal(t, []string{"******"}, fragments, mode)
+			require.Equal(t, []string{raw}, secrets, mode)
+
+			// valid-target controls: value masked, target preserved.
+			for _, control := range []string{
+				"SET PASSWORD FOR u@'%' = 'ValidHostPw42'",
+				"SET PASSWORD FOR 'u2'@'h%.' = 'ValidQuotedPw42'",
+				"SET PASSWORD = 'BareFormPw42'",
+			} {
+				fragments, _ = MaskSecretLiteralsWithSQLMode(control, mode)
+				joined := strings.Join(fragments, ";")
+				require.NotContains(t, joined, "Pw42", mode+"/"+control)
+				require.NotEqual(t, []string{"******"}, fragments, mode+"/"+control)
+			}
+		}
+	})
+	t.Run("password keyword without set is not masked", func(t *testing.T) {
+		// ALTER USER ... PASSWORD EXPIRE has no secret literal to mask.
+		require.Equal(t, []string{"ALTER USER u1 PASSWORD EXPIRE INTERVAL 3 DAY"},
+			HandleSqlForRecord("ALTER USER u1 PASSWORD EXPIRE INTERVAL 3 DAY"))
+		// 'set password' inside a string literal is not a statement shape.
+		require.Equal(t, []string{"SELECT 'set password = x'"},
+			HandleSqlForRecord("SELECT 'set password = x'"))
+	})
 	// Test remove /* cloud_user */ prefix
 	var ret []string
 	ret = HandleSqlForRecord(" ;   ;  ")

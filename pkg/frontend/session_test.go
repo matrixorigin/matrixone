@@ -1376,21 +1376,20 @@ func TestCheckPasswordExpired(t *testing.T) {
 	}
 	ses.SetTenantInfo(tenant)
 
-	// password never expires
-	expired, err := checkPasswordExpired(0, "2022-01-01 00:00:00")
-	assert.NoError(t, err)
-	assert.False(t, expired)
-
-	// password not expires
+	// The server-side decision preserves the pre-existing UTC-digit reader
+	// without depending on catalog objects installed after authentication.
 	ses.gSysVars.Set(DefaultPasswordLifetime, int64(30))
-	expired, err = checkPasswordExpired(30, time.Now().AddDate(0, 0, -10).Format("2006-01-02 15:04:05"))
-	assert.NoError(t, err)
-	assert.False(t, expired)
+	expired30 := getExpiredTimeOfUserSql("u1", 30)
+	assert.Contains(t, expired30, "password_last_changed is not null")
+	assert.NotContains(t, expired30, "mo_pwd_ts_convention")
+	assert.Contains(t, expired30, "cast(password_last_changed as datetime) < utc_timestamp() - interval 30 day")
+	assert.Contains(t, expired30, `user_name = "u1"`)
 
-	// password not expires
-	expired, err = checkPasswordExpired(30, time.Now().AddDate(0, 0, -31).Format("2006-01-02 15:04:05"))
-	assert.NoError(t, err)
-	assert.True(t, expired)
+	// the produced SQL is valid MySQL grammar
+	rpLife, errLife := mysql.Parse(ctx, expired30, 1)
+	require.NoError(t, errLife)
+	require.Len(t, rpLife, 1)
+	defer rpLife[0].Free()
 
 	// exexpir can not execute stmt
 	ses.setRoutine(&Routine{})
@@ -1410,11 +1409,6 @@ func TestCheckPasswordExpired(t *testing.T) {
 	_, err = authenticateUserCanExecuteStatement(ctx, ses, rp[0])
 	assert.Error(t, err)
 
-	// getPasswordLifetime error
-	ses.gSysVars.Set(DefaultPasswordLifetime, int64(-1))
-	_, err = checkPasswordExpired(1, "1")
-	assert.Error(t, err)
-	assert.True(t, expired)
 }
 
 func Test_CheckLockTimeExpired(t *testing.T) {
