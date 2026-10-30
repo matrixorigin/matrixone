@@ -731,7 +731,8 @@ func (s *service) handleMigrateConnTo(
 		logutil.Infof("migrated prepare stmt on conn %d, %s, %s", req.MigrateConnToRequest.ConnID, stmt.Name, stmt.SQL)
 	}
 	resp.MigrateConnToResponse = &query.MigrateConnToResponse{
-		Success: true,
+		Success:           true,
+		PrincipalVerified: true,
 	}
 	return nil
 }

@@ -125,7 +125,7 @@ func runTestWithQueryServiceHandlersAndRefresh(
 				if !req.MigrateConnFromRequest.LastInsertIDMigrationSupported {
 					return moerr.NewInternalError(ctx, "missing LAST_INSERT_ID migration capability")
 				}
-				resp.MigrateConnFromResponse = &pb.MigrateConnFromResponse{
+				resp.MigrateConnFromResponse = &pb.MigrateConnFromResponse{Principal: &pb.MigrateSessionPrincipal{},
 					DB:                            "d1",
 					LastAffectedRows:              7,
 					LastInsertID:                  13,
@@ -146,13 +146,24 @@ func runTestWithQueryServiceHandlersAndRefresh(
 						return moerr.NewInternalErrorf(ctx, "unexpected last affected rows: %d",
 							req.MigrateConnToRequest.LastAffectedRows)
 					}
-					resp.MigrateConnToResponse = &pb.MigrateConnToResponse{
+					resp.MigrateConnToResponse = &pb.MigrateConnToResponse{PrincipalVerified: true,
 						Success: true,
 					}
 					return nil
 				}
 			}
-			qs.AddHandleFunc(pb.CmdMethod_MigrateConnTo, migrateConnToHandler, false)
+			// Existing state-replay oracles apply to final import. A state-free
+			// principal preflight precedes it and must not enter those handlers.
+			importHandler := migrateConnToHandler
+			qs.AddHandleFunc(pb.CmdMethod_MigrateConnTo, func(ctx context.Context, req *pb.Request, resp *pb.Response, buf *morpc.Buffer) error {
+				if req.MigrateConnToRequest != nil && req.MigrateConnToRequest.VerifyPrincipalOnly {
+					require.Equal(t, &pb.MigrateSessionPrincipal{}, req.MigrateConnToRequest.Principal)
+					require.False(t, req.MigrateConnToRequest.LastInsertIDExported)
+					resp.MigrateConnToResponse = &pb.MigrateConnToResponse{Success: true, PrincipalVerified: true}
+					return nil
+				}
+				return importHandler(ctx, req, resp, buf)
+			}, false)
 			qs.AddHandleFunc(pb.CmdMethod_ResetSession, func(ctx context.Context, req *pb.Request, resp *pb.Response, buf *morpc.Buffer) error {
 				if resetSessionHandler != nil {
 					return resetSessionHandler(ctx, req, resp, buf)
@@ -254,7 +265,7 @@ func TestQueryServiceMigrateTo(t *testing.T) {
 		if !req.MigrateConnToRequest.LastInsertIDExported {
 			return moerr.NewInternalError(ctx, "missing exported LAST_INSERT_ID state")
 		}
-		resp.MigrateConnToResponse = &pb.MigrateConnToResponse{Success: true}
+		resp.MigrateConnToResponse = &pb.MigrateConnToResponse{PrincipalVerified: true, Success: true}
 		return nil
 	}
 	runTestWithQueryServiceHandler(t, cn, handler, func(cc *clientConn, addr string) {
@@ -286,7 +297,7 @@ func TestQueryServiceMigrateToClearsReadDeadlineAfterControlReads(t *testing.T) 
 		defer sc.Close()
 
 		cc.migration.setVarStmts = []string{"set @mode = 'PIPES_AS_CONCAT'"}
-		require.NoError(t, cc.migrateConnTo(sc, &pb.MigrateConnFromResponse{
+		require.NoError(t, cc.migrateConnTo(sc, &pb.MigrateConnFromResponse{Principal: &pb.MigrateSessionPrincipal{},
 			LastAffectedRows:     7,
 			LastInsertIDExported: true,
 		}))
@@ -311,7 +322,7 @@ func TestQueryServiceMigrateToRejectsReadDeadlineClearFailure(t *testing.T) {
 		}
 		defer sc.Close()
 
-		err := cc.migrateConnTo(sc, &pb.MigrateConnFromResponse{LastInsertIDExported: true})
+		err := cc.migrateConnTo(sc, &pb.MigrateConnFromResponse{Principal: &pb.MigrateSessionPrincipal{}, LastInsertIDExported: true})
 		assert.ErrorContains(t, err, "read deadline clear failed")
 		assert.False(t, raw.readDeadline().IsZero(),
 			"a failed clear must not make the backend eligible for handoff")
@@ -329,7 +340,7 @@ func TestQueryServiceMigrateToRejectsDependentPreparedOnOldTarget(t *testing.T) 
 		defer remote.Close()
 		sc := &recordingMigrationServerConn{mockServerConn: newMockServerConn(local)}
 		defer sc.Close()
-		err := cc.migrateConnTo(sc, &pb.MigrateConnFromResponse{
+		err := cc.migrateConnTo(sc, &pb.MigrateConnFromResponse{Principal: &pb.MigrateSessionPrincipal{},
 			LastInsertIDExported: true,
 			PrepareStmts:         []*pb.PrepareStmt{{Name: "p", SQL: "select 1", RequiredProtocolVersion: defines.MORPCVersion112}},
 		})
@@ -357,7 +368,7 @@ func TestQueryServiceMigrateToRejectsNonZeroFoundRowsForPreV29Target(t *testing.
 		sc := &recordingMigrationServerConn{mockServerConn: newMockServerConn(local)}
 		defer sc.Close()
 
-		err := cc.migrateConnTo(sc, &pb.MigrateConnFromResponse{
+		err := cc.migrateConnTo(sc, &pb.MigrateConnFromResponse{Principal: &pb.MigrateSessionPrincipal{},
 			FoundRows:            11,
 			LastInsertIDExported: true,
 		})
@@ -385,7 +396,7 @@ func TestQueryServiceMigrateToRejectsNonZeroLastInsertIDForPreV93Target(t *testi
 		sc := &recordingMigrationServerConn{mockServerConn: newMockServerConn(local)}
 		defer sc.Close()
 
-		err := cc.migrateConnTo(sc, &pb.MigrateConnFromResponse{
+		err := cc.migrateConnTo(sc, &pb.MigrateConnFromResponse{Principal: &pb.MigrateSessionPrincipal{},
 			LastInsertID:         13,
 			LastInsertIDExported: true,
 		})
@@ -413,7 +424,7 @@ func TestQueryServiceMigrateToAllowsZeroFoundRowsForPreV22Target(t *testing.T) {
 		sc := &recordingMigrationServerConn{mockServerConn: newMockServerConn(local)}
 		defer sc.Close()
 
-		assert.NoError(t, cc.migrateConnTo(sc, &pb.MigrateConnFromResponse{
+		assert.NoError(t, cc.migrateConnTo(sc, &pb.MigrateConnFromResponse{Principal: &pb.MigrateSessionPrincipal{},
 			LastAffectedRows:     7,
 			LastInsertIDExported: true,
 		}))
@@ -432,7 +443,7 @@ func TestQueryServiceMigrateToCarriesTemporaryTables(t *testing.T) {
 			return moerr.NewInternalError(ctx, "bad request")
 		}
 		assert.Equal(t, tables, migration.TempTables)
-		resp.MigrateConnToResponse = &pb.MigrateConnToResponse{Success: true}
+		resp.MigrateConnToResponse = &pb.MigrateConnToResponse{PrincipalVerified: true, Success: true}
 		return nil
 	}
 	runTestWithQueryServiceHandler(t, cn, handler, func(cc *clientConn, _ string) {
@@ -441,7 +452,7 @@ func TestQueryServiceMigrateToCarriesTemporaryTables(t *testing.T) {
 		sc := &recordingMigrationServerConn{mockServerConn: newMockServerConn(local)}
 		defer sc.Close()
 
-		require.NoError(t, cc.migrateConnTo(sc, &pb.MigrateConnFromResponse{
+		require.NoError(t, cc.migrateConnTo(sc, &pb.MigrateConnFromResponse{Principal: &pb.MigrateSessionPrincipal{},
 			TempTables:           tables,
 			LastInsertIDExported: true,
 		}))
@@ -468,7 +479,7 @@ func TestQueryServiceMigrateToRejectsTemporaryTablesForPreV38Target(t *testing.T
 		sc := &recordingMigrationServerConn{mockServerConn: newMockServerConn(local)}
 		defer sc.Close()
 
-		err := cc.migrateConnTo(sc, &pb.MigrateConnFromResponse{
+		err := cc.migrateConnTo(sc, &pb.MigrateConnFromResponse{Principal: &pb.MigrateSessionPrincipal{},
 			TempTables: []*pb.MigrateTempTable{{
 				Database: "d1", Alias: "tmp", PhysicalName: "__mo_tmp_source_d1_tmp",
 			}},
@@ -492,7 +503,7 @@ func TestQueryServiceMigrateToCarriesTypedUserVariables(t *testing.T) {
 		assert.Len(t, migration.UserDefinedVars, 1)
 		assert.Equal(t, "ts0", migration.UserDefinedVars[0].Name)
 		assert.Equal(t, []string{"set time_zone = @ts0"}, migration.SetVarStmts)
-		resp.MigrateConnToResponse = &pb.MigrateConnToResponse{Success: true}
+		resp.MigrateConnToResponse = &pb.MigrateConnToResponse{PrincipalVerified: true, Success: true}
 		return nil
 	}
 	runTestWithQueryServiceHandler(t, cn, handler, func(cc *clientConn, _ string) {
@@ -500,7 +511,7 @@ func TestQueryServiceMigrateToCarriesTypedUserVariables(t *testing.T) {
 		sc := newMockServerConn(c1)
 		cc.migration.setVarStmts = []string{"set @ts0 = now()"}
 		cc.migration.systemSetVarStmts = []string{"set time_zone = @ts0"}
-		info := &pb.MigrateConnFromResponse{
+		info := &pb.MigrateConnFromResponse{Principal: &pb.MigrateSessionPrincipal{},
 			UserDefinedVarsExported:       true,
 			UserDefinedVarsReplayable:     true,
 			SystemVariablesReplayable:     true,
@@ -527,14 +538,14 @@ func TestQueryServiceMigrateToCarriesTypedSystemVariables(t *testing.T) {
 		assert.Len(t, migration.SystemVariables, 1)
 		assert.Equal(t, "sql_mode", migration.SystemVariables[0].Name)
 		assert.Empty(t, migration.SetVarStmts)
-		resp.MigrateConnToResponse = &pb.MigrateConnToResponse{Success: true}
+		resp.MigrateConnToResponse = &pb.MigrateConnToResponse{PrincipalVerified: true, Success: true}
 		return nil
 	}
 	runTestWithQueryServiceHandler(t, cn, handler, func(cc *clientConn, _ string) {
 		c1, _ := net.Pipe()
 		sc := newMockServerConn(c1)
 		cc.migration.systemSetVarStmts = []string{"set sql_mode = @mode"}
-		info := &pb.MigrateConnFromResponse{
+		info := &pb.MigrateConnFromResponse{Principal: &pb.MigrateSessionPrincipal{},
 			UserDefinedVarsExported:       true,
 			SystemVariablesExported:       true,
 			UserLevelLockReleaseSupported: true,
@@ -573,7 +584,7 @@ func TestQueryServiceMigrateToFallsBackForPreV22Target(t *testing.T) {
 		assert.False(t, migration.SystemVariablesExported)
 		assert.Empty(t, migration.UserDefinedVars)
 		assert.Empty(t, migration.SystemVariables)
-		resp.MigrateConnToResponse = &pb.MigrateConnToResponse{Success: true}
+		resp.MigrateConnToResponse = &pb.MigrateConnToResponse{PrincipalVerified: true, Success: true}
 		return nil
 	}
 	runTestWithQueryServiceHandler(t, cn, handler, func(cc *clientConn, _ string) {
@@ -593,7 +604,7 @@ func TestQueryServiceMigrateToFallsBackForPreV22Target(t *testing.T) {
 		sc := &recordingMigrationServerConn{mockServerConn: newMockServerConn(local)}
 		defer sc.Close()
 		cc.migration.setVarStmts = []string{"set @mode = 'PIPES_AS_CONCAT'"}
-		info := &pb.MigrateConnFromResponse{
+		info := &pb.MigrateConnFromResponse{Principal: &pb.MigrateSessionPrincipal{},
 			UserDefinedVarsExported:   true,
 			SystemVariablesExported:   true,
 			UserDefinedVarsReplayable: true,
@@ -627,7 +638,7 @@ func TestQueryServiceMigrateToAllowsOversizedSystemSnapshotForPreV22Target(t *te
 		sc := &recordingMigrationServerConn{mockServerConn: newMockServerConn(local)}
 		defer sc.Close()
 		cc.migration.setVarStmts = []string{"set optimizer_hints = 'legacy'"}
-		info := &pb.MigrateConnFromResponse{
+		info := &pb.MigrateConnFromResponse{Principal: &pb.MigrateSessionPrincipal{},
 			LastAffectedRows:                7,
 			SystemVariablesSnapshotTooLarge: true,
 			SystemVariablesReplayable:       true,
@@ -649,7 +660,7 @@ func TestQueryServiceMigrateToRejectsOversizedSystemSnapshotForV22Target(t *test
 		defer remote.Close()
 		sc := &recordingMigrationServerConn{mockServerConn: newMockServerConn(local)}
 		defer sc.Close()
-		info := &pb.MigrateConnFromResponse{
+		info := &pb.MigrateConnFromResponse{Principal: &pb.MigrateSessionPrincipal{},
 			LastAffectedRows:                7,
 			SystemVariablesSnapshotTooLarge: true,
 			SystemVariablesReplayable:       true,
@@ -669,7 +680,7 @@ func TestQueryServiceMigrateToRejectsOversizedUserSnapshotForV22Target(t *testin
 		defer remote.Close()
 		sc := &recordingMigrationServerConn{mockServerConn: newMockServerConn(local)}
 		defer sc.Close()
-		info := &pb.MigrateConnFromResponse{
+		info := &pb.MigrateConnFromResponse{Principal: &pb.MigrateSessionPrincipal{},
 			LastAffectedRows:                7,
 			UserDefinedVarsSnapshotTooLarge: true,
 			UserDefinedVarsReplayable:       true,
@@ -700,7 +711,7 @@ func TestQueryServiceMigrateToRejectsUnreplayableTypedStateForPreV22Target(t *te
 		defer remote.Close()
 		sc := &recordingMigrationServerConn{mockServerConn: newMockServerConn(local)}
 		defer sc.Close()
-		info := &pb.MigrateConnFromResponse{
+		info := &pb.MigrateConnFromResponse{Principal: &pb.MigrateSessionPrincipal{},
 			UserDefinedVarsExported:       true,
 			UserDefinedVarsReplayable:     false,
 			UserDefinedVars:               []*pb.MigrateUserDefinedVar{{Name: "v"}},
@@ -731,7 +742,7 @@ func TestQueryServiceMigrateToRejectsUnreplayableTypedSystemStateForPreV22Target
 		defer remote.Close()
 		sc := &recordingMigrationServerConn{mockServerConn: newMockServerConn(local)}
 		defer sc.Close()
-		info := &pb.MigrateConnFromResponse{
+		info := &pb.MigrateConnFromResponse{Principal: &pb.MigrateSessionPrincipal{},
 			SystemVariablesExported:       true,
 			SystemVariablesReplayable:     false,
 			SystemVariables:               []*pb.MigrateSystemVariable{{Name: "optimizer_hints"}},
@@ -754,7 +765,7 @@ func TestQueryServiceMigrateToReplaysRawUserStateWhenTypedUserSnapshotMissing(t 
 		assert.False(t, migration.UserDefinedVarsExported)
 		assert.True(t, migration.SystemVariablesExported)
 		assert.Empty(t, migration.SetVarStmts)
-		resp.MigrateConnToResponse = &pb.MigrateConnToResponse{Success: true}
+		resp.MigrateConnToResponse = &pb.MigrateConnToResponse{PrincipalVerified: true, Success: true}
 		return nil
 	}
 	runTestWithQueryServiceHandler(t, cn, handler, func(cc *clientConn, _ string) {
@@ -763,7 +774,7 @@ func TestQueryServiceMigrateToReplaysRawUserStateWhenTypedUserSnapshotMissing(t 
 		sc := &recordingMigrationServerConn{mockServerConn: newMockServerConn(local)}
 		defer sc.Close()
 		cc.migration.setVarStmts = []string{"set @mode = 'PIPES_AS_CONCAT'"}
-		info := &pb.MigrateConnFromResponse{
+		info := &pb.MigrateConnFromResponse{Principal: &pb.MigrateSessionPrincipal{},
 			SystemVariablesExported: true,
 			LastInsertIDExported:    true,
 		}
@@ -792,7 +803,7 @@ func TestMigrateConnToUsesTransferDeadline(t *testing.T) {
 				"migration deadline %s is earlier than transfer deadline %s",
 				actualDeadline, expectedDeadline)
 		}
-		resp.MigrateConnToResponse = &pb.MigrateConnToResponse{Success: true}
+		resp.MigrateConnToResponse = &pb.MigrateConnToResponse{PrincipalVerified: true, Success: true}
 		return nil
 	}
 	runTestWithQueryServiceHandler(t, cn, handler, func(cc *clientConn, _ string) {
@@ -806,7 +817,7 @@ func TestMigrateConnToUsesTransferDeadline(t *testing.T) {
 		deadline, ok := ctx.Deadline()
 		assert.True(t, ok)
 		transferDeadline <- deadline
-		err := cc.migrateConnToContext(ctx, sc, &pb.MigrateConnFromResponse{
+		err := cc.migrateConnToContext(ctx, sc, &pb.MigrateConnFromResponse{Principal: &pb.MigrateSessionPrincipal{},
 			LastInsertIDExported: true,
 		})
 		assert.NoError(t, err)
@@ -825,7 +836,7 @@ func TestMigrateConnToPropagatesCancellation(t *testing.T) {
 		}
 		close(handlerEntered)
 		<-handlerRelease
-		resp.MigrateConnToResponse = &pb.MigrateConnToResponse{Success: true}
+		resp.MigrateConnToResponse = &pb.MigrateConnToResponse{PrincipalVerified: true, Success: true}
 		return nil
 	}
 	runTestWithQueryServiceHandler(t, cn, handler, func(cc *clientConn, _ string) {
@@ -838,7 +849,7 @@ func TestMigrateConnToPropagatesCancellation(t *testing.T) {
 		defer cancel()
 		result := make(chan error, 1)
 		go func() {
-			result <- cc.migrateConnToContext(ctx, sc, &pb.MigrateConnFromResponse{
+			result <- cc.migrateConnToContext(ctx, sc, &pb.MigrateConnFromResponse{Principal: &pb.MigrateSessionPrincipal{},
 				LastInsertIDExported: true,
 			})
 		}()
@@ -882,7 +893,7 @@ func TestMigrateConnToContextCancelsReplay(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	result := make(chan error, 1)
 	go func() {
-		result <- cc.migrateConnToContext(ctx, blocked, &pb.MigrateConnFromResponse{
+		result <- cc.migrateConnToContext(ctx, blocked, &pb.MigrateConnFromResponse{Principal: &pb.MigrateSessionPrincipal{},
 			LastInsertIDExported: true,
 		})
 	}()
@@ -924,7 +935,7 @@ func (c *migrationUserLockQueryClient) SendMessage(ctx context.Context, address 
 		if c.migrateFromErr != nil {
 			return nil, c.migrateFromErr
 		}
-		return &pb.Response{MigrateConnFromResponse: &pb.MigrateConnFromResponse{
+		return &pb.Response{MigrateConnFromResponse: &pb.MigrateConnFromResponse{Principal: &pb.MigrateSessionPrincipal{},
 			DB:                            "d1",
 			PrepareStmts:                  append([]*pb.PrepareStmt(nil), c.prepareStmts...),
 			UserLevelLocks:                c.userLevelLocks,
@@ -937,7 +948,7 @@ func (c *migrationUserLockQueryClient) SendMessage(ctx context.Context, address 
 	case pb.CmdMethod_MigrateConnTo:
 		c.migrateToPrepareStmts = append(
 			[]*pb.PrepareStmt(nil), req.MigrateConnToRequest.PrepareStmts...)
-		return &pb.Response{MigrateConnToResponse: &pb.MigrateConnToResponse{Success: true}}, nil
+		return &pb.Response{MigrateConnToResponse: &pb.MigrateConnToResponse{PrincipalVerified: true, Success: true}}, nil
 	default:
 		return nil, moerr.NewInternalError(ctx, "unexpected request")
 	}

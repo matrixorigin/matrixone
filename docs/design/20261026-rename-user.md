@@ -1,7 +1,7 @@
 # RENAME USER identity-preserving compatibility design
 
 - Owning issue: https://github.com/matrixorigin/matrixone/issues/30467
-- Revision: v0.6, 2026-10-27; approved scope and affected technical design review complete.
+- Revision: v0.7, 2026-10-30; approved scope and affected technical design review complete.
 - Source baseline: `83c1e23526fc0ed31188abd7fc2ca87cd3a6d4b3` (fresh main clone).
 - Implementation: parser, frontend and regression coverage are present. Maintainer
   PR review is separate from the completed technical design/runtime validation.
@@ -445,3 +445,39 @@ pinned historical released-version/catalog upgrade, rolling or mixed-version
 serving, downgrade, multi-host deployment and a runtime MySQL oracle were not run.
 Those results do not broaden the operational prerequisites in the reference
 contract or constitute maintainer/production release approval.
+
+
+## v0.7: preserve authenticated principal across Proxy migration
+
+Approved scope: source user explicitly authorized the v0.7 identity protocol fix
+on 2026-10-30. This amendment supersedes earlier statements excluding a wire
+change. The reviewed proposal SHA256 is
+`6ce17257e87b2967af26e80cff8c9c5295fa3a8683712eb2b1548924b009054f`.
+
+Source CN exports an optional account-ID/user-ID pair from its authenticated
+session under the existing routine operation lease. Missing proof differs from
+valid zero IDs and fails closed. Proxy verifies the pair against the freshly
+authenticated target through MigrateConnTo before SET transferred or raw replay,
+and carries the same pair into final import. The target checks identity under
+its operation lease, before mutation and outside the one-shot import guard;
+verify-only never consumes that guard. Final Migrate also checks independently
+before restore defers or replay. Never overwrite target authentication IDs.
+
+Mismatch, absent/negative attestation, cancellation or RPC failure rejects the
+candidate and leaves the unpublished source connection usable. Preserve existing
+transfer generation, retry and cleanup ownership. Release each owned RPC
+response once; copy principal scalar values out of the source response. No new
+worker/cache, SQL hot-path query, catalog mutation or version negotiation is
+introduced. Cost is one bounded extra control-plane RPC per migration.
+
+Full-stop replacement must include Proxy as well as every participating CN.
+No rolling/mixed-version or downgrade support is added; absent proof is rejected,
+not treated as zero. Existing unrelated protocol gates remain unchanged.
+
+Validation closure R3: proto/query -> CN RPC handler -> routine/session owner ->
+Proxy snapshot/preflight/replay/import -> tunnel publication/cleanup. Required
+proof includes nil/zero wire roundtrip; leased preflight and once-guard behavior;
+account/user mismatch, cancellation, retry and response ownership; real same-
+password A/B rename/name-reuse migration with source identity/grants preserved
+or refused candidate, plus successful ordinary migration and fresh-login B
+control. Existing SHOW GRANTS and ordered-rename BVT remain unchanged.

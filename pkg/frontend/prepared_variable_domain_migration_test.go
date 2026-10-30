@@ -87,7 +87,7 @@ func TestDependentPreparedMigrationRejectsTargetBeforeStateChange(t *testing.T) 
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion118)
 	ses.SetLastFoundRows(23)
 	ses.SetLastInsertID(7)
-	err := Migrate(context.Background(), ses, &query.MigrateConnToRequest{
+	err := Migrate(context.Background(), ses, &query.MigrateConnToRequest{Principal: &query.MigrateSessionPrincipal{},
 		LastInsertIDExported: true, LastInsertID: 99, FoundRows: 42,
 		PrepareStmts: []*query.PrepareStmt{{Name: "p", SQL: "select 1", RequiredProtocolVersion: defines.MORPCVersion119}},
 	})

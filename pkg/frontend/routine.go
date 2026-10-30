@@ -714,6 +714,16 @@ func (rt *Routine) migrateConnectionTo(ctx context.Context, req *query.MigrateCo
 		return moerr.NewInternalErrorNoCtx("cannot start migrate as routine has been closed")
 	}
 	defer rt.mc.endOperation()
+	if req == nil {
+		return moerr.GetOkExpectedNotSafeToStartTransfer()
+	}
+	if err := verifyMigrationPrincipal(operationCtx, rt.getSession(), req.Principal); err != nil {
+		return err
+	}
+	// Preflight is leased but must not consume the one-shot state import.
+	if req.VerifyPrincipalOnly {
+		return nil
+	}
 	if !req.LastInsertIDExported {
 		// Do not consume the one-shot migration slot for a request whose source
 		// snapshot cannot prove LAST_INSERT_ID state is authoritative.
@@ -786,6 +796,14 @@ func (rt *Routine) migrateConnectionFromActionWithCapabilities(
 	case query.MigrateConnFromAction_MigrateConnFromEnableUserLevelLockRelease:
 		ses.userLevelLocksMigrated = false
 		return nil
+	}
+	tenant := ses.GetTenantInfo()
+	if tenant == nil || resp == nil {
+		return moerr.GetOkExpectedNotSafeToStartTransfer()
+	}
+	resp.Principal = &query.MigrateSessionPrincipal{
+		AccountID: tenant.GetTenantID(),
+		UserID:    tenant.GetUserID(),
 	}
 	if !lastInsertIDMigrationSupported {
 		// A legacy Proxy cannot forward the value or prove that a zero is

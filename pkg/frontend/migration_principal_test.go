@@ -1,0 +1,78 @@
+package frontend
+
+import (
+	"context"
+	"testing"
+
+	"github.com/golang/mock/gomock"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/pb/query"
+	"github.com/stretchr/testify/require"
+)
+
+func TestMigrationPrincipalGuard(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		tenant    *TenantInfo
+		principal *query.MigrateSessionPrincipal
+		ok        bool
+	}{
+		{"same", &TenantInfo{TenantID: 7, UserID: 8}, &query.MigrateSessionPrincipal{AccountID: 7, UserID: 8}, true},
+		{"zero", &TenantInfo{}, &query.MigrateSessionPrincipal{}, true},
+		{"missing-proof", &TenantInfo{}, nil, false},
+		{"missing-auth", nil, &query.MigrateSessionPrincipal{}, false},
+		{"account", &TenantInfo{TenantID: 7, UserID: 8}, &query.MigrateSessionPrincipal{AccountID: 9, UserID: 8}, false},
+		{"reused-name", &TenantInfo{TenantID: 7, UserID: 9, User: "a"}, &query.MigrateSessionPrincipal{AccountID: 7, UserID: 8}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ses := &Session{}
+			ses.SetTenantInfo(tc.tenant)
+			req := &query.MigrateConnToRequest{Principal: tc.principal, VerifyPrincipalOnly: true, LastInsertID: 99, FoundRows: 99, DB: "must_not_import"}
+			err := Migrate(context.Background(), ses, req)
+			if tc.ok {
+				require.NoError(t, err)
+			} else {
+				require.True(t, moerr.IsMoErrCode(err, moerr.OkExpectedNotSafeToStartTransfer))
+			}
+			require.Empty(t, ses.GetDatabaseName())
+			require.Zero(t, ses.GetLastInsertID())
+			require.Zero(t, ses.GetLastFoundRows())
+			if !tc.ok {
+				req.VerifyPrincipalOnly = false
+				require.Error(t, Migrate(context.Background(), ses, req))
+			}
+		})
+	}
+}
+
+func TestMigrationPrincipalPreflightPreservesOnce(t *testing.T) {
+	ses := newTestSession(t, gomock.NewController(t))
+	rt := &Routine{mc: newMigrateController()}
+	rt.setSession(ses)
+	tenant := ses.GetTenantInfo()
+	principal := &query.MigrateSessionPrincipal{AccountID: tenant.GetTenantID(), UserID: tenant.GetUserID()}
+	req := &query.MigrateConnToRequest{Principal: principal, VerifyPrincipalOnly: true}
+	for i := 0; i < 2; i++ {
+		require.NoError(t, rt.migrateConnectionTo(context.Background(), req))
+	}
+	require.Nil(t, rt.mc.migrateErr)
+	ran := false
+	rt.mc.migrateOnce.Do(func() { ran = true })
+	require.True(t, ran, "preflight cannot consume final import")
+	bad := *principal
+	bad.UserID++
+	req.Principal = &bad
+	require.Error(t, rt.migrateConnectionTo(context.Background(), req), "consumed once cannot bypass identity guard")
+	req.Principal = principal
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	require.ErrorIs(t, rt.migrateConnectionTo(ctx, req), context.Canceled)
+	require.NoError(t, rt.migrateConnectionTo(context.Background(), req), "canceled preflight permits retry")
+	exported := &query.MigrateConnFromResponse{}
+	require.NoError(t, rt.migrateConnectionFrom(exported))
+	require.Equal(t, principal, exported.Principal)
+	exported.Principal.UserID++
+	require.Equal(t, principal.UserID, ses.GetTenantInfo().GetUserID(), "response owns scalar copy")
+	ses.SetTenantInfo(nil)
+	require.Error(t, rt.migrateConnectionFrom(&query.MigrateConnFromResponse{}))
+}

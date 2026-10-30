@@ -48,3 +48,12 @@ All pairs are checked before the transaction starts; an invalid later target
 cannot rename an earlier source. Source names do not gain these new restrictions,
 so addressable legacy catalog labels can migrate to a safe name. Existing shared
 credential/management guards and the login protocol are not loosened.
+
+### Proxy connection migration
+
+After a full-stop upgrade including Proxy and all CNs, migration compares the
+source authenticated account/user IDs with the target both before state replay
+and during final import. If the old login name now authenticates another user,
+the transfer is refused and the source connection remains usable. No target
+identity is overwritten. Mixed-version serving and online downgrade remain
+unsupported.

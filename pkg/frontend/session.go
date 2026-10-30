@@ -4523,7 +4523,35 @@ func migrateTempTables(
 	return nil
 }
 
+// verifyMigrationPrincipal never rebinds authentication or imports session state.
+// Callers hold the routine operation lease while inspecting its session.
+func verifyMigrationPrincipal(ctx context.Context, ses *Session, principal *query.MigrateSessionPrincipal) error {
+	if ctx != nil {
+		if err := context.Cause(ctx); err != nil {
+			return err
+		}
+	}
+	if ses == nil || principal == nil {
+		return moerr.GetOkExpectedNotSafeToStartTransfer()
+	}
+	tenant := ses.GetTenantInfo()
+	if tenant == nil || tenant.GetTenantID() != principal.AccountID || tenant.GetUserID() != principal.UserID {
+		return moerr.GetOkExpectedNotSafeToStartTransfer()
+	}
+	return nil
+}
+
 func Migrate(ctx context.Context, ses *Session, req *query.MigrateConnToRequest) error {
+	if req == nil {
+		return moerr.GetOkExpectedNotSafeToStartTransfer()
+	}
+	if err := verifyMigrationPrincipal(ctx, ses, req.Principal); err != nil {
+		return err
+	}
+	if req.VerifyPrincipalOnly {
+		return nil
+	}
+
 	ses.EnterFPrint(FPMigrate)
 	defer ses.ExitFPrint(FPMigrate)
 
