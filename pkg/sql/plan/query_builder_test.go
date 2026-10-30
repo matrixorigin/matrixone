@@ -580,6 +580,9 @@ func TestBuildTableRejectsOutOfScopeSnapshot(t *testing.T) {
 		nil,
 	)
 	ctx.EXPECT().GetContext().Return(context.Background()).AnyTimes()
+	// The BindContext resolves the statement's boolean-contract mode from the
+	// session/process at build entry (MySQL default when nil).
+	ctx.EXPECT().GetProcess().Return(nil).AnyTimes()
 
 	builder := NewQueryBuilder(plan.Query_SELECT, ctx, false, false)
 	bindCtx := NewBindContext(builder, nil)
