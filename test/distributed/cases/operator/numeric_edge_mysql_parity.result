@@ -1,0 +1,97 @@
+drop database if exists cov_num;
+create database cov_num;
+use cov_num;
+select abs(-9223372036854775808);
+Data truncation: data out of range: data type int, '-9223372036854775808'
+select abs(-2147483648), abs(cast(-128 as signed));
+➤ abs(-2147483648)[-5,64,0]  ¦  abs(cast(-128 as signed))[-5,64,0]  𝄀
+2147483648  ¦  128
+select 9223372036854775807 + 1;
+Data truncation: data out of range: data type int64, (9223372036854775807 + 1)
+select -9223372036854775808 - 1;
+Data truncation: data out of range: data type int64, (-9223372036854775808 - 1)
+select 18446744073709551615 + 0, 18446744073709551615 + 1;
+Data truncation: data out of range: data type BIGINT UNSIGNED, (mixed signed/unsigned + result 18446744073709551616)
+select cast(-1 as unsigned), cast(18446744073709551615 as signed), cast('18446744073709551616' as unsigned);
+➤ cast(-1 as unsigned)[-5,64,0]  ¦  cast(18446744073709551615 as signed)[-5,64,0]  ¦  cast(18446744073709551616 as unsigned)[-5,64,0]  𝄀
+18446744073709551615  ¦  -1  ¦  18446744073709551615
+select 5 div 2, -5 div 2, 5 div 0, 5.5 div 2, 5 mod 0, -5 mod 3, 5 mod -3, 5.5 mod 2, mod(-5.5, 2);
+➤ 5 div 2[-5,64,0]  ¦  -5 div 2[-5,64,0]  ¦  5 div 0[-5,64,0]  ¦  5.5 div 2[-5,64,0]  ¦  5 % 0[-5,64,0]  ¦  -5 % 3[-5,64,0]  ¦  5 % -3[-5,64,0]  ¦  5.5 % 2[3,2,1]  ¦  mod(-5.5, 2)[3,2,1]  𝄀
+2  ¦  -2  ¦  null  ¦  2  ¦  null  ¦  -2  ¦  2  ¦  1.5  ¦  -1.5
+select round(2.5), round(-2.5), round(2.5e0), round(-2.5e0), round(1.2345, 2), round(1234, -2), round(1.5, -1), round(15, -1), round(25, -1);
+➤ round(2.5)[3,2,0]  ¦  round(-2.5)[3,2,0]  ¦  round(2.5e0)[8,53,31]  ¦  round(-2.5e0)[8,53,31]  ¦  round(1.2345, 2)[3,4,2]  ¦  round(1234, -2)[-5,64,0]  ¦  round(1.5, -1)[3,2,0]  ¦  round(15, -1)[-5,64,0]  ¦  round(25, -1)[-5,64,0]  𝄀
+3  ¦  -3  ¦  2.0  ¦  -2.0  ¦  1.23  ¦  1200  ¦  0  ¦  20  ¦  30
+select truncate(1.999, 1), truncate(-1.999, 1), truncate(1234, -2), truncate(1.5e0, 0);
+➤ truncate(1.999, 1)[3,2,1]  ¦  truncate(-1.999, 1)[3,2,1]  ¦  truncate(1234, -2)[-5,64,0]  ¦  truncate(1.5e0, 0)[8,53,31]  𝄀
+1.9  ¦  -1.9  ¦  1200  ¦  1.0
+select ceil(1.1), ceil(-1.1), floor(-1.1), ceiling(1), ceil(1e0), floor(1.5e0);
+➤ ceil(1.1)[3,2,0]  ¦  ceil(-1.1)[3,2,0]  ¦  floor(-1.1)[3,2,0]  ¦  ceiling(1)[-5,64,0]  ¦  ceil(1e0)[8,53,31]  ¦  floor(1.5e0)[8,53,31]  𝄀
+2  ¦  -1  ¦  -2  ¦  1  ¦  1.0  ¦  1.0
+select sign(-3), sign(0), sign(2.5), sign(NULL);
+➤ sign(-3)[-5,64,0]  ¦  sign(0)[-5,64,0]  ¦  sign(2.5)[-5,64,0]  ¦  sign(null)[-5,64,0]  𝄀
+-1  ¦  0  ¦  1  ¦  null
+select crc32('abc'), crc32(NULL), crc32('');
+➤ crc32(abc)[-5,64,0]  ¦  crc32(null)[-5,64,0]  ¦  crc32()[-5,64,0]  𝄀
+891568578  ¦  null  ¦  0
+select conv(255, 10, 2), conv(-255, 10, -2), conv(10, 2, 37), conv('', 10, 2);
+➤ conv(255, 10, 2)[12,65,0]  ¦  conv(-255, 10, -2)[12,65,0]  ¦  conv(10, 2, 37)[12,65,0]  ¦  conv(, 10, 2)[12,65,0]  𝄀
+11111111  ¦  -11111111  ¦  null  ¦  null
+select 0.1 + 0.2 = 0.3, 0.1e0 + 0.2e0 = 0.3e0, 1e308 * 10, -1e308 * 10;
+Data truncation: data out of range: data type float64, DOUBLE value is out of range in '(1e+308 * 10)'
+select 1 / 0, 0 / 0, 1 % 0, null / 0;
+➤ 1 / 0[8,53,31]  ¦  0 / 0[8,53,31]  ¦  1 % 0[-5,64,0]  ¦  null / 0[0,2147483647,0]  𝄀
+null  ¦  null  ¦  null  ¦  null
+select 123456789012345678901234567890.123 + 1, 99999999999999999999999999999999999999 + 1;
+➤ 123456789012345678901234567890.123 + 1[3,34,3]  ¦  99999999999999999999999999999999999999 + 1[3,39,0]  𝄀
+123456789012345678901234567891.123  ¦  100000000000000000000000000000000000000
+select cast(1.5 as signed), cast(-1.5 as signed), cast(2.5 as signed), cast('1.5' as signed), cast(' 12 ' as signed);
+➤ cast(1.5 as signed)[-5,64,0]  ¦  cast(-1.5 as signed)[-5,64,0]  ¦  cast(2.5 as signed)[-5,64,0]  ¦  cast(1.5 as signed)[-5,64,0]  ¦  cast( 12  as signed)[-5,64,0]  𝄀
+2  ¦  -2  ¦  3  ¦  1  ¦  12
+select cast(1e19 as signed), cast(-1e19 as unsigned), cast('abc' as signed), cast('-0' as signed);
+Data truncation: data out of range: data type int64, value '1e+19'
+select cast(123.456 as decimal(5,2)), cast(999.999 as decimal(5,2)), cast(-999.999 as decimal(5,2)), cast('1e3' as decimal(10,2));
+➤ cast(123.456 as decimal(5, 2))[3,5,2]  ¦  cast(999.999 as decimal(5, 2))[3,5,2]  ¦  cast(-999.999 as decimal(5, 2))[3,5,2]  ¦  cast(1e3 as decimal(10, 2))[3,10,2]  𝄀
+123.46  ¦  999.99  ¦  -999.99  ¦  1000.00
+select cast(1.23456789 as float), cast(1.23456789 as double), cast(3.4e39 as float);
+Data truncation: data out of range: data type float32, value '3.4e+39'
+select 3 & 5, 3 | 5, 3 ^ 5, ~0, 1 << 63, 1 << 64, -1 >> 1, 1 << -1;
+➤ 3 & 5[-5,64,0]  ¦  3 | 5[-5,64,0]  ¦  3 ^ 5[-5,64,0]  ¦  ~0[-5,64,0]  ¦  1 << 63[-5,64,0]  ¦  1 << 64[-5,64,0]  ¦  -1 >> 1[-5,64,0]  ¦  1 << -1[-5,64,0]  𝄀
+1  ¦  7  ¦  6  ¦  18446744073709551615  ¦  9223372036854775808  ¦  0  ¦  9223372036854775807  ¦  0
+select bit_count(255), bit_count(-1), bit_count(NULL);
+➤ bit_count(255)[-5,64,0]  ¦  bit_count(-1)[-5,64,0]  ¦  bit_count(null)[-5,64,0]  𝄀
+8  ¦  64  ¦  null
+select 10 between 1 and 20, 'b' between 'a' and 'c', 5 not between 6 and 1;
+➤ 10 between 1 and 20[-6,8,0]  ¦  b between a and c[-6,8,0]  ¦  5 not between 6 and 1[-6,8,0]  𝄀
+1  ¦  1  ¦  1
+select 1 in (1, NULL), 2 in (1, NULL), 2 not in (1, NULL), NULL in (1);
+➤ 1 in (1, null)[-6,8,0]  ¦  2 in (1, null)[-6,8,0]  ¦  2 not in (1, null)[-6,8,0]  ¦  null in (1)[-6,8,0]  𝄀
+1  ¦  null  ¦  null  ¦  null
+select interval(5, 1, 3, 7), interval(NULL, 1), interval(10, 1, 10, 100), interval(0, 1);
+➤ interval(5, 1, 3, 7)[-5,64,0]  ¦  INTERVAL null 1[-5,64,0]  ¦  interval(10, 1, 10, 100)[-5,64,0]  ¦  INTERVAL 0 1[-5,64,0]  𝄀
+2  ¦  -1  ¦  2  ¦  0
+select 1 <=> NULL, NULL <=> NULL, 1 <=> 1;
+➤ 1 <=> null[-6,8,0]  ¦  null <=> null[-6,8,0]  ¦  1 <=> 1[-6,8,0]  𝄀
+0  ¦  1  ¦  1
+select -0.0, -0e0, 0.0 = -0.0, cast(-0.0 as char);
+➤ -0.0[3,1,1]  ¦  -0e0[8,53,31]  ¦  0.0 = -0.0[-6,8,0]  ¦  cast(-0.0 as varchar)[12,65535,0]  𝄀
+0.0  ¦  -0.0  ¦  1  ¦  0.0
+select 1e-400, 1e400;
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 20 near " 1e400;";
+select 0.000000000000000000000000000001 * 1;
+➤ 0.000000000000000000000000000001 * 1[3,31,30]  𝄀
+1E-30
+select format(0.0000001, 10), format(1e20, 2), format(-1234.567, 1);
+➤ format(0.0000001, 10)[12,65535,0]  ¦  format(1e20, 2)[12,65535,0]  ¦  format(-1234.567, 1)[12,65535,0]  𝄀
+0.0000001000  ¦  100,000,000,000,000,000,000.00  ¦  -1,234.6
+select hex(-1), hex(1.5), hex(255), hex('255'), unhex(hex(-1));
+➤ hex(-1)[12,16,0]  ¦  hex(1.5)[12,16,0]  ¦  hex(255)[12,16,0]  ¦  hex(255)[12,24,0]  ¦  unhex(hex(-1))[-3,32,0]  𝄀
+FFFFFFFFFFFFFFFF  ¦  2  ¦  FF  ¦  323535  ¦  ÿÿÿÿÿÿÿÿ
+select 9999999999999999999 * 9999999999999999999;
+Data truncation: data out of range: data type uint64, (9999999999999999999 * 9999999999999999999)
+select cast(9223372036854775807 as decimal(19,0)) * 10;
+➤ cast(9223372036854775807 as decimal(19)) * 10[3,21,0]  𝄀
+92233720368547758070
+select 5 div -2, -5 div -2, 7.5 div 2.5, mod(7.5, 2.5);
+➤ 5 div -2[-5,64,0]  ¦  -5 div -2[-5,64,0]  ¦  7.5 div 2.5[-5,64,0]  ¦  mod(7.5, 2.5)[3,2,1]  𝄀
+-2  ¦  2  ¦  3  ¦  0.0
+drop database cov_num;
