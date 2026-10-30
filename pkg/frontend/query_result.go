@@ -58,6 +58,11 @@ func canSaveQueryResult(ctx context.Context, ses *Session) bool {
 	if ses.ast == nil {
 		return false
 	}
+	// A saved result is read back without the SELECT check on the table these show.
+	switch ses.ast.(type) {
+	case *tree.ShowIndexIgnored, *tree.ShowIndexStatus:
+		return false
+	}
 
 	stmtProfile := ses.GetStmtProfile()
 	sqlSourceType := stmtProfile.GetSqlSourceType()
@@ -606,7 +611,7 @@ func simpleAstMarshal(stmt tree.Statement) ([]byte, error) {
 		s.Typ = int(astShowAboutTable)
 	case *tree.ShowProcessList, *tree.ShowErrors, *tree.ShowWarnings, *tree.ShowVariables,
 		*tree.ShowStatus, *tree.ShowTarget, *tree.ShowTableStatus,
-		*tree.ShowGrants, *tree.ShowIndex, *tree.ShowIndexIgnored, *tree.ShowIndexStatus,
+		*tree.ShowGrants, *tree.ShowIndex,
 		*tree.ShowTableNumber, *tree.ShowColumnNumber,
 		*tree.ShowTableValues, *tree.ShowNodeList,
 		*tree.ShowLocks, *tree.ShowFunctionOrProcedureStatus,

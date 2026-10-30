@@ -57,7 +57,7 @@ func buildShowIndexIgnored(stmt *tree.ShowIndexIgnored, ctx CompilerContext) (*P
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
 	}
 
-	defs, err := tableWithPartitions(ctx, dbName, tableDef)
+	defs, _, err := tableWithPartitions(ctx, dbName, tableDef)
 	if err != nil {
 		return nil, err
 	}
@@ -101,31 +101,31 @@ func buildShowIndexIgnored(stmt *tree.ShowIndexIgnored, ctx CompilerContext) (*P
 	return p, nil
 }
 
-// tableWithPartitions returns tableDef and the definitions of its partitions: a partitioned
-// table keeps its indexes on its partitions.
-func tableWithPartitions(ctx CompilerContext, dbName string, tableDef *TableDef) ([]*TableDef, error) {
-	defs := []*TableDef{tableDef}
+// tableWithPartitions returns tableDef and the definitions of its partitions, with the names
+// users know them by: a partitioned table keeps its indexes on its partitions.
+func tableWithPartitions(ctx CompilerContext, dbName string, tableDef *TableDef) ([]*TableDef, []string, error) {
+	defs, names := []*TableDef{tableDef}, []string{tableDef.Name}
 	if tableDef.Partition == nil {
-		return defs, nil
+		return defs, names, nil
 	}
 	ps := ctx.GetProcess().GetPartitionService()
 	if !ps.Enabled() {
-		return defs, nil
+		return defs, names, nil
 	}
 	meta, err := ps.GetPartitionMetadata(ctx.GetContext(), tableDef.GetTblId(), ctx.GetProcess().GetTxnOperator())
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	for _, p := range meta.Partitions {
 		_, def, err := ctx.Resolve(dbName, p.PartitionTableName, nil)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		if def != nil {
-			defs = append(defs, def)
+			defs, names = append(defs, def), append(names, p.Name)
 		}
 	}
-	return defs, nil
+	return defs, names, nil
 }
 
 // readOnBehalfOf makes the scans of the hidden tables of p checked as reads of the table objRef.

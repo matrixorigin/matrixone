@@ -52,8 +52,8 @@ the field name is recorded in the document's `_ignored` metadata.
   such as a lost connection, a failed write of the index or a missing model, keeps its existing
   handling.
 - **A search vector is not a row.** A query vector the index cannot store is rejected.
-- Each sync step that ignores rows writes one log line with the index, the count, a few primary
-  keys and the reason.
+- Each build or sync step that ignores rows writes one log line with the index or its table,
+  the count, and a primary key with its reason.
 
 ## Consistency, recovery and bounds
 

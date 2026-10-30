@@ -150,7 +150,7 @@ func TestShowIndexStatusSql(t *testing.T) {
 	// the latest job of an index is its job
 	require.Equal(t, uint64(2), jobs[indexJobKey{9001, "index_i"}].id)
 
-	sql, ignored, err := showIndexStatusSql("tpch", defs, jobs)
+	sql, ignored, err := showIndexStatusSql("tpch", defs, []string{"vt"}, jobs)
 	require.NoError(t, err)
 	require.Equal(t, map[string]struct{}{"__mo_index_i_ignored": {}, "__mo_index_j_ignored": {}}, ignored)
 	rows := strings.Split(sql, " UNION ALL ")
@@ -165,8 +165,16 @@ func TestShowIndexStatusSql(t *testing.T) {
 	require.Contains(t, rows[2], "CAST('old' AS VARCHAR) AS `Key_name`")
 	require.Contains(t, rows[2], "'retrying' AS `State`, 'lost connection' AS `Error_message`, CAST(NULL AS BIGINT) AS `Ignored_rows`, CAST(NULL AS BIGINT) AS `Max_bad_records`")
 
+	// a partition is shown by its name
+	part := *defs[0]
+	part.Name, part.TblId = "%!%p0%!%vt", 9002
+	sql, _, err = showIndexStatusSql("tpch", []*TableDef{&part}, []string{"p0"}, map[indexJobKey]indexJob{{9002, "index_i"}: {state: 2}})
+	require.NoError(t, err)
+	require.Contains(t, sql, "CAST('i' AS VARCHAR) AS `Key_name`, CAST('p0' AS VARCHAR) AS `Table`, 'running' AS `State`")
+	require.NotContains(t, sql, "%!%")
+
 	// an index without a job or an ignored table is not listed
-	sql, _, err = showIndexStatusSql("tpch", defs, nil)
+	sql, _, err = showIndexStatusSql("tpch", defs, []string{"vt"}, nil)
 	require.NoError(t, err)
 	require.Len(t, strings.Split(sql, " UNION ALL "), 2)
 	require.NotContains(t, sql, "'old'")
@@ -177,7 +185,7 @@ func TestShowIndexStatusSql(t *testing.T) {
 			idx.IndexAlgoParams = `{"max_bad_records":"x"}`
 		}
 	}
-	_, _, err = showIndexStatusSql("tpch", defs, jobs)
+	_, _, err = showIndexStatusSql("tpch", defs, []string{"vt"}, jobs)
 	require.Error(t, err)
 
 	for w, want := range map[string]int64{testWatermark: 1730000000000000000, "": 0, "0-0": 0, "x-1": 0, "12": 0, types.MaxTs().ToString(): 0} {

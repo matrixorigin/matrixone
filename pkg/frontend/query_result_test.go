@@ -152,6 +152,14 @@ func TestCanSaveQueryResultBySQLSource(t *testing.T) {
 			assert.Equal(t, test.want, canSaveQueryResult(ctx, ses))
 		})
 	}
+	// a saved result would be read back without the SELECT check on the table
+	for _, stmt := range []tree.Statement{&tree.ShowIndexIgnored{}, &tree.ShowIndexStatus{}} {
+		ses.ast = stmt
+		ses.SetStmtType("Show Index")
+		ses.SetSqlSourceType(constant.ExternSql)
+		assert.False(t, canSaveQueryResult(ctx, ses), "%T", stmt)
+	}
+	ses.ast = &tree.ShowColumns{}
 	t.Run("classified qualified statements", func(t *testing.T) {
 		// Exercise real profile publication without allocating statement telemetry.
 		tracing := motrace.GetTracerProvider().IsEnable()

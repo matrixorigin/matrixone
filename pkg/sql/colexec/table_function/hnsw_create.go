@@ -109,7 +109,8 @@ func (u *hnswCreateState) end(tf *TableFunction, proc *process.Process) error {
 		logutil.Warn("hnsw_create ignored rows",
 			zap.String("db", u.tblcfg.DbName),
 			zap.String("table", u.tblcfg.SrcTable),
-			zap.Int("ignored", u.left))
+			zap.Int("ignored", u.left),
+			zap.String("first", u.firstPk+": "+u.firstErr.Error()))
 	}
 
 	return sqlexec.RunTxn(sqlproc, func(exec executor.TxnExecutor) error {
