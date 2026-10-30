@@ -120,9 +120,34 @@ DIR="$OCF_RESKEY_dirpath"
 PRE="$(echo ${DIR##*/} | tr A-Z a-z | sed 's/[^a-z0-9]//g')"
 YML="$OCF_RESKEY_ymlfile"
 
+# 枚举本 compose 项目的容器 ID：
+# - YML 可读时交给 compose（ps -aq 列出项目全部容器，含已停止的），
+#   能覆盖 container_name 固定命名、compose v2 连字符命名等情况；
+# - YML 缺失时按命名约定匹配：compose v1 为 <pre>_<service>_<n>，
+#   compose v2 为 <pre>-<service>-<n>。
+# 枚举本身失败（dockerd/compose 报错）必须返回非 0，调用方不得把
+# “枚举失败”当成“没有容器在跑”——否则 stop/monitor 会在容器仍存活时
+# 上报成功/已停止，违反 Pacemaker 的资源所有权约定，在 DRBD 双活防护上
+# 等同于放行脑裂。
+container_ids()
+{
+	if [ -r "$DIR/$YML" ]; then
+		(cd $DIR || exit 1; $COMMAND -f $YML ps -aq)
+	else
+		ps_out=$(docker ps --all --format '{{.ID}} {{.Names}}') || return $OCF_ERR_GENERIC
+		printf '%s\n' "$ps_out" | awk '$NF ~ /^'"${PRE}"'[_-].*[_-][0-9]+$/ {print $1}'
+	fi
+}
+
 docker_kill()
 {
-	for i in $(docker ps --all | awk -e '$NF ~ /\<'"${PRE}"'_.*_[0-9]+\>/ {print $1}'); do
+	RTV=true
+	if ! ids=$(container_ids); then
+		ocf_log err "failed to enumerate docker containers"
+		RTV=false
+		return $OCF_ERR_GENERIC
+	fi
+	for i in $ids; do
 		docker kill $i >/dev/null 2>&1
 		docker rm $i >/dev/null 2>&1 || RTV=false
 	done
@@ -163,8 +188,11 @@ docker_compose_status()
 			RUN=false
 		fi
 	else
-		STAT_MSG=$(docker ps --all | awk -e '$NF ~ /\<'"$PRE"'_.*_[0-9]+\>/ {print $1}')
-		if [ -z "$STAT_MSG" ]; then
+		if ! ids=$(container_ids); then
+			ocf_log err "failed to enumerate docker containers"
+			return $OCF_ERR_GENERIC
+		fi
+		if [ -z "$ids" ]; then
 			RUN=false
 		else
 			ocf_log log "docker service is running without docker-compose, try to kill..."

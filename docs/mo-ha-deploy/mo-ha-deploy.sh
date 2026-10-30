@@ -696,7 +696,8 @@ stage_cluster(){
   # 报错点会指向 fencing/资源，而不是真正的根因。
   cluster_cmd(){
     if ! runq "$1"; then
-      die "集群组建失败：$1
+      # $1 含 hacluster 密码（pcs host auth -p '...'），必须先脱敏再打印
+      die "集群组建失败：$(mask_secrets "$1")
        常见原因：两台 --hacluster-password 不一致、主机名/IP 解析不通、pcsd 未运行。
        请修正后重跑：--stages cluster"
     fi
@@ -1070,6 +1071,16 @@ main(){
   detect_os
   stage_enabled pre && stage_pre
   stage_enabled pkg && stage_pkg
+  # 防火墙必须先于 drbd/cluster：pcsd(2224/tcp)、corosync(5405/udp,5404/udp)、
+  # DRBD($DRBD_PORT/tcp) 若被 firewalld/ufw 拦截，stage_cluster 等待 quorum
+  # 必然超时失败。曾排在全部阶段之后，等于从未在集群组建前放行端口。
+  # OPEN_PORTS 是独立开关(--no-open-ports 关闭)，且只在真正做部署的阶段才执行；
+  # 纯 --stages check 复检或 teardown 不改动防火墙状态。
+  local _fw=1 _s
+  for _s in pre pkg docker moconf drbd cluster fence resources; do
+    stage_enabled "$_s" && _fw=0
+  done
+  [ "$_fw" = 1 ] || open_ports
   stage_enabled docker && stage_docker
   stage_enabled moconf && stage_moconf
   stage_enabled drbd && stage_drbd
@@ -1077,13 +1088,6 @@ main(){
   stage_enabled fence && stage_fence
   stage_enabled resources && stage_resources
   stage_enabled teardown && stage_teardown
-  # 防火墙：OPEN_PORTS 是独立开关(--no-open-ports 关闭)，但只在真正做部署的阶段
-  # 才执行；纯 --stages check 复检或 teardown 不应改动防火墙状态。
-  local _fw=1 _s
-  for _s in pre pkg docker moconf drbd cluster fence resources; do
-    stage_enabled "$_s" && _fw=0
-  done
-  [ "$_fw" = 1 ] || open_ports
   if stage_enabled check; then stage_check; fi
   # $SELF 来自 --self，不能直接当 printf 格式串（% / \ 会被解释）
   printf "\n${G}完成${N}：%s (%s)\n" "$SELF" "$([ "$BOOTSTRAP" = 1 ] && echo 引导节点 || echo 普通节点)"
