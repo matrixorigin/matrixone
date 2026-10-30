@@ -64,7 +64,15 @@ func TestTopOrderedResidentDoesNotRequireSpillResources(t *testing.T) {
 				bat := batch.NewWithSize(1)
 				bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
 				resetChildren(tc.arg, []*batch.Batch{bat})
-				for key := 12; key > 0; key-- {
+				for next := 12; next > 0; next-- {
+					key := next
+					// Force the ordinary replacement path so this case continues
+					// to exercise reclamation with spill resources unavailable.
+					if next == 12 {
+						key = 11
+					} else if next == 11 {
+						key = 12
+					}
 					value := fmt.Sprintf("%02d%s", key, bytes.Repeat([]byte("x"), 62))
 					require.NoError(t, vector.AppendBytes(bat.Vecs[0], []byte(value), false, tc.proc.Mp()))
 				}
@@ -191,6 +199,13 @@ func testTopResidentWinnerAdmission(t *testing.T, ordered bool) {
 				bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
 				for row := 0; row < 128; row++ {
 					key := int64(128 - row)
+					// Keep this input non-monotone so the test still exercises
+					// replacement history, compaction, and spill admission.
+					if row == 0 {
+						key--
+					} else if row == 1 {
+						key++
+					}
 					size := 64
 					if row == scenario.wideAt {
 						size = 4096
