@@ -74,23 +74,86 @@ func init() {
 	constTextType = makePlan2Type(&typ)
 }
 
-func getAliasToName(ctx CompilerContext, expr tree.TableExpr, alias string, aliasMap map[string][2]string) {
+// deleteSource distinguishes explicit aliases from implicit table names when
+// validating a qualified DELETE target, without losing the source's CTE scope.
+type deleteSource struct {
+	schema, table string
+	explicitAlias bool
+}
+
+// resolveDeleteTargetAliases validates writable identity before either DELETE
+// planner resolves catalog tables. CTE names belong to the FROM source scope,
+// not to the target alias scope; keep source qualification until after that check.
+func resolveDeleteTargetAliases(ctx CompilerContext, stmt *tree.Delete) (map[string]deleteSource, error) {
+	aliases := make(map[string]deleteSource)
+	for _, source := range stmt.TableRefs {
+		collectDeleteSourceNames(source, "", aliases)
+	}
+	var ctes map[string]bool
+	if stmt.With != nil {
+		ctes = make(map[string]bool, len(stmt.With.CTEs))
+		for _, cte := range stmt.With.CTEs {
+			ctes[string(cte.Name.Alias)] = true
+		}
+	}
+	for _, target := range stmt.Tables {
+		if aliased, ok := target.(*tree.AliasedTableExpr); ok {
+			target = aliased.Expr
+		}
+		name, ok := target.(*tree.TableName)
+		if !ok {
+			return nil, moerr.NewInvalidInput(ctx.GetContext(), "unsupported DELETE target")
+		}
+		dbName, tableName := string(name.SchemaName), string(name.ObjectName)
+		source := deleteSource{schema: dbName, table: tableName}
+		if len(stmt.TableRefs) != 0 {
+			var found bool
+			source, found = aliases[tableName]
+			if !found {
+				return nil, moerr.NewInvalidInputf(ctx.GetContext(), "missing FROM-clause entry for table '%s'", tableName)
+			}
+		}
+		if source.schema == "" && ctes[source.table] {
+			return nil, moerr.NewInvalidInputf(ctx.GetContext(), "cannot delete from CTE %s", source.table)
+		}
+		if dbName != "" && !source.explicitAlias {
+			sourceDB := source.schema
+			if sourceDB == "" {
+				sourceDB = ctx.DefaultDatabase()
+			}
+			if dbName != sourceDB || tableName != source.table {
+				return nil, moerr.NewInvalidInputf(ctx.GetContext(), "DELETE target %s.%s does not match its source", dbName, tableName)
+			}
+		}
+	}
+	return aliases, nil
+}
+
+func collectDeleteSourceNames(expr tree.TableExpr, alias string, aliases map[string]deleteSource) {
 	switch t := expr.(type) {
 	case *tree.TableName:
-		dbName := string(t.SchemaName)
-		if dbName == "" {
-			dbName = ctx.DefaultDatabase()
+		source := deleteSource{schema: string(t.SchemaName), table: string(t.ObjectName), explicitAlias: alias != ""}
+		if alias == "" {
+			alias = source.table
 		}
-		tblName := string(t.ObjectName)
-		if alias != "" {
-			aliasMap[alias] = [2]string{dbName, tblName}
-		}
+		aliases[alias] = source
 	case *tree.AliasedTableExpr:
-		alias := string(t.As.Alias)
-		getAliasToName(ctx, t.Expr, alias, aliasMap)
+		if t.As.Alias != "" {
+			alias = string(t.As.Alias)
+		}
+		collectDeleteSourceNames(t.Expr, alias, aliases)
+	case *tree.ParenTableExpr:
+		collectDeleteSourceNames(t.Expr, alias, aliases)
+	case *tree.ApplyTableExpr:
+		if alias == "" {
+			collectDeleteSourceNames(t.Left, "", aliases)
+		}
 	case *tree.JoinTableExpr:
-		getAliasToName(ctx, t.Left, alias, aliasMap)
-		getAliasToName(ctx, t.Right, alias, aliasMap)
+		// A group alias never identifies an individual writable table.
+		if alias == "" {
+			collectDeleteSourceNames(t.Left, "", aliases)
+			collectDeleteSourceNames(t.Right, "", aliases)
+		}
 	}
 }
 
@@ -402,7 +465,7 @@ func checkTableType(ctx context.Context, tableDef *TableDef, op string) error {
 	return nil
 }
 
-func setTableExprToDmlTableInfo(ctx CompilerContext, tbl tree.TableExpr, tblInfo *dmlTableInfo, aliasMap map[string][2]string, withMap map[string]struct{}) error {
+func setTableExprToDmlTableInfo(ctx CompilerContext, tbl tree.TableExpr, tblInfo *dmlTableInfo, aliasMap map[string]deleteSource, withMap map[string]struct{}) error {
 	var tblName, dbName, alias string
 
 	if aliasTbl, ok := tbl.(*tree.AliasedTableExpr); ok {
@@ -433,8 +496,8 @@ func setTableExprToDmlTableInfo(ctx CompilerContext, tbl tree.TableExpr, tblInfo
 
 	if aliasNames, exist := aliasMap[tblName]; exist {
 		alias = tblName // work in delete statement
-		dbName = aliasNames[0]
-		tblName = aliasNames[1]
+		dbName = aliasNames.schema
+		tblName = aliasNames.table
 	}
 
 	if tblName == "" {
@@ -533,7 +596,7 @@ func setTableExprToDmlTableInfo(ctx CompilerContext, tbl tree.TableExpr, tblInfo
 	return nil
 }
 
-func getDmlTableInfo(ctx CompilerContext, tableExprs tree.TableExprs, with *tree.With, aliasMap map[string][2]string, typ string) (*dmlTableInfo, error) {
+func getDmlTableInfo(ctx CompilerContext, tableExprs tree.TableExprs, with *tree.With, aliasMap map[string]deleteSource, typ string) (*dmlTableInfo, error) {
 	tblInfo := &dmlTableInfo{
 		typ:       typ,
 		nameToIdx: make(map[string]int),
