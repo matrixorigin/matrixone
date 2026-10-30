@@ -16,133 +16,93 @@
 Index utilities - Shared logic for secondary index operations
 """
 
-from typing import List, Tuple
+
+def read_index_metadata(connection, table_name, database=None):
+    """Resolve the tenant/database and index keys on the counting connection."""
+    from sqlalchemy import text
+    from ._sql_literals import identifier_parts
+
+    parts = identifier_parts(table_name, qualified=True)
+    if len(parts) == 2:
+        if database is not None and database != parts[0]:
+            raise ValueError('Explicit database conflicts with qualified table name')
+        database = parts[0]
+    elif database is None:
+        result = connection.exec_driver_sql('SELECT DATABASE()')
+        try:
+            database = result.scalar()
+        finally:
+            result.close()
+    if not database:
+        raise ValueError('Index verification requires a database')
+    result = connection.execute(
+        text("""
+        SELECT i.id, i.name, i.index_table_name, i.type, i.column_name,
+               i.ordinal_position, i.algo, i.algo_table_type
+        FROM mo_catalog.mo_indexes i JOIN mo_catalog.mo_tables t ON i.table_id=t.rel_id
+        WHERE t.account_id=CURRENT_ACCOUNT_ID()
+          AND (t.reldatabase=:database OR (@@lower_case_table_names<>0 AND LOWER(t.reldatabase)=LOWER(:database)))
+          AND (t.relname=:table OR (@@lower_case_table_names<>0 AND LOWER(t.relname)=LOWER(:table)))
+          AND i.type IN ('MULTIPLE','UNIQUE')
+        ORDER BY i.id, i.ordinal_position
+    """),
+        {'database': database, 'table': parts[-1]},
+    )
+    try:
+        return database, parts[-1], result.fetchall()
+    finally:
+        result.close()
 
 
-def build_get_index_tables_sql(table_name: str, database: str = None) -> Tuple[str, Tuple]:
-    """
-    Build SQL to get all secondary index table names for a given table.
+def index_count_report(connection, table_name):
+    """Count UNIQUE entries against non-NULL keys, within one read transaction."""
+    from ._sql_literals import sql_identifier
 
-    This includes both MULTIPLE (regular secondary indexes) and UNIQUE indexes.
-
-    Args:
-        table_name: Name of the table
-        database: Name of the database (optional, but recommended to avoid cross-database conflicts)
-
-    Returns:
-        Tuple of (sql, params)
-    """
-    if database:
-        sql = """
-            SELECT DISTINCT index_table_name
-            FROM mo_catalog.mo_indexes
-            JOIN mo_catalog.mo_tables ON mo_indexes.table_id = mo_tables.rel_id
-            WHERE relname = ? AND reldatabase = ? AND type IN ('MULTIPLE', 'UNIQUE')
-        """
-        return sql, (table_name, database)
-    else:
-        # Fallback to old behavior if database is not provided
-        sql = """
-            SELECT DISTINCT index_table_name
-            FROM mo_catalog.mo_indexes
-            JOIN mo_catalog.mo_tables ON mo_indexes.table_id = mo_tables.rel_id
-            WHERE relname = ? AND type IN ('MULTIPLE', 'UNIQUE')
-        """
-        return sql, (table_name,)
-
-
-def build_get_index_table_by_name_sql(table_name: str, index_name: str, database: str = None) -> Tuple[str, Tuple]:
-    """
-    Build SQL to get the physical table name of a secondary index by its index name.
-
-    Args:
-        table_name: Name of the table
-        index_name: Name of the secondary index
-        database: Name of the database (optional, but recommended to avoid cross-database conflicts)
-
-    Returns:
-        Tuple of (sql, params)
-    """
-    if database:
-        sql = """
-            SELECT DISTINCT index_table_name
-            FROM mo_catalog.mo_indexes
-            JOIN mo_catalog.mo_tables ON mo_indexes.table_id = mo_tables.rel_id
-            WHERE relname = ? AND name = ? AND reldatabase = ?
-        """
-        return sql, (table_name, index_name, database)
-    else:
-        # Fallback to old behavior if database is not provided
-        sql = """
-            SELECT DISTINCT index_table_name
-            FROM mo_catalog.mo_indexes
-            JOIN mo_catalog.mo_tables ON mo_indexes.table_id = mo_tables.rel_id
-            WHERE relname = ? AND name = ?
-        """
-        return sql, (table_name, index_name)
+    database, table, metadata = read_index_metadata(connection, table_name)
+    quote = lambda name: sql_identifier(name, force=True)
+    target = quote(database) + '.' + quote(table)
+    groups = {}
+    for identity, name, physical, kind, column, ordinal, algorithm, family in metadata:
+        if not physical or str(algorithm or '').lower() not in ('', 'btree') or family:
+            raise ValueError('Count verification supports ordinary and UNIQUE B-tree indexes only')
+        key = (identity, name, physical, kind)
+        groups.setdefault(key, []).append((ordinal, column))
+    aggregates = ['COUNT(*) AS main_count']
+    expectations = []
+    actuals = []
+    for (_, name, physical, kind), columns in groups.items():
+        if kind == 'UNIQUE':
+            if [position for position, _ in columns] != list(range(1, len(columns) + 1)):
+                raise ValueError('Incomplete UNIQUE index key metadata')
+            predicate = ' AND '.join(quote(column) + ' IS NOT NULL' for _, column in columns)
+            expected_position = len(aggregates)
+            aggregates.append('COUNT(CASE WHEN ' + predicate + ' THEN 1 END) AS expected_' + str(expected_position))
+        else:
+            expected_position = 0
+        expectations.append((name, physical, expected_position))
+        actuals.append('(SELECT COUNT(*) FROM ' + quote(database) + '.' + quote(physical) + ')')
+    sql = 'SELECT counts.*' + (', ' + ', '.join(actuals) if actuals else '')
+    sql += ' FROM (SELECT ' + ', '.join(aggregates) + ' FROM ' + target + ') AS counts'
+    result = connection.exec_driver_sql(sql, execution_options={'no_parameters': True})
+    try:
+        row = result.fetchone()
+    finally:
+        result.close()
+    details = [
+        {'name': name, 'table': physical, 'expected': row[expected], 'actual': row[len(aggregates) + index]}
+        for index, (name, physical, expected) in enumerate(expectations)
+    ]
+    return row[0], details
 
 
-def build_verify_counts_sql(table_name: str, index_tables: List[str]) -> str:
-    """
-    Build SQL to verify counts of main table and all index tables in a single query.
-
-    Args:
-        table_name: Name of the main table
-        index_tables: List of index table names
-
-    Returns:
-        SQL string
-    """
-    table_name = table_name.replace("`", "``")
-    index_tables = [name.replace("`", "``") for name in index_tables]
-
-    if not index_tables:
-        return f"SELECT COUNT(*) FROM `{table_name}`"
-
-    select_parts = [f"(SELECT COUNT(*) FROM `{table_name}`) as main_count"]
-    for idx, index_table in enumerate(index_tables):
-        select_parts.append(f"(SELECT COUNT(*) FROM `{index_table}`) as idx{idx}_count")
-
-    return "SELECT " + ", ".join(select_parts)
-
-
-def process_verify_result(table_name: str, index_tables: List[str], row: Tuple) -> int:
-    """
-    Process the verification result and raise exception if counts don't match.
-
-    Args:
-        table_name: Name of the main table
-        index_tables: List of index table names
-        row: Result row from the verification SQL
-
-    Returns:
-        Row count if verification succeeds
-
-    Raises:
-        ValueError: If any index table has a different count
-    """
-    main_count = row[0]
-
-    if not index_tables:
-        return main_count
-
-    index_counts = {}
-    mismatch = []
-
-    for idx, index_table in enumerate(index_tables):
-        index_count = row[idx + 1]
-        index_counts[index_table] = index_count
-        if index_count != main_count:
-            mismatch.append(index_table)
-
-    # If there's a mismatch, raise an exception with details
-    if mismatch:
-        error_details = [f"Main table '{table_name}': {main_count} rows"]
-        for index_table, count in index_counts.items():
-            status = "✗ MISMATCH" if index_table in mismatch else "✓"
-            error_details.append(f"{status} Index '{index_table}': {count} rows")
-
-        error_msg = "Index count verification failed!\n" + "\n".join(error_details)
-        raise ValueError(error_msg)
-
-    return main_count
+def verify_count_report(report):
+    count, details = report
+    mismatches = [item for item in details if item['actual'] != item['expected']]
+    if mismatches:
+        raise ValueError(
+            'Index count verification failed!\n'
+            + '\n'.join(
+                '%s: %s entries, expected %s' % (item['name'], item['actual'], item['expected']) for item in mismatches
+            )
+        )
+    return count

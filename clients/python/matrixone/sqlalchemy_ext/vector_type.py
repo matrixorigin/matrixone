@@ -23,6 +23,28 @@ from sqlalchemy.dialects import mysql
 from sqlalchemy.types import UserDefinedType
 
 
+def _vector_literal(value):
+    """One wire representation for lists, tuples and numeric NumPy vectors."""
+    if value is None or isinstance(value, str):
+        return value
+    import numpy as np
+    import numbers
+    import math
+
+    if isinstance(value, np.ndarray):
+        if value.ndim != 1:
+            raise ValueError('A vector must be one-dimensional')
+        value = value.tolist()
+    if not isinstance(value, (list, tuple)):
+        raise TypeError('Vector values must be strings or one-dimensional numeric sequences')
+    if any(isinstance(item, (bool, np.bool_)) or not isinstance(item, numbers.Real) for item in value):
+        raise TypeError('Vector elements must be real numbers')
+    values = [int(item) if isinstance(item, numbers.Integral) else float(item) for item in value]
+    if any(not math.isfinite(item) for item in values):
+        raise ValueError('Vector elements must be finite')
+    return '[' + ','.join(map(str, values)) + ']'
+
+
 class VectorPrecision:
     """Enum-like class for vector precision types."""
 
@@ -96,29 +118,11 @@ class VectorType(UserDefinedType):
 
     def bind_processor(self, dialect):
         """Return a conversion function for processing bind values."""
-
-        def process(value):
-            if value is None:
-                return None
-            if isinstance(value, str):
-                return value
-            if isinstance(value, list):
-                # Convert list to MatrixOne vector format
-                return "[" + ",".join(map(str, value)) + "]"
-            return str(value)
-
-        return process
+        return _vector_literal
 
     def process_bind_param(self, value, dialect):
         """Process the value before binding to the database."""
-        if value is None:
-            return None
-        if isinstance(value, list):
-            # Convert list to MatrixOne vector format
-            return "[" + ",".join(map(str, value)) + "]"
-        if isinstance(value, str):
-            return value
-        return str(value)
+        return _vector_literal(value)
 
     def result_processor(self, dialect, coltype):
         """Return a conversion function for processing result values."""
@@ -179,14 +183,7 @@ class Vectorf32(TypeDecorator):
 
     def process_bind_param(self, value, dialect):
         """Process the value before binding to the database."""
-        if value is None:
-            return None
-        if isinstance(value, list):
-            # Convert list to MatrixOne vector format
-            return "[" + ",".join(map(str, value)) + "]"
-        if isinstance(value, str):
-            return value
-        return str(value)
+        return _vector_literal(value)
 
     def process_result_value(self, value, dialect):
         """Process the value after retrieving from the database."""
@@ -205,11 +202,7 @@ class Vectorf32(TypeDecorator):
 
     def bind_processor(self, dialect):
         """Return a conversion function for processing bind values."""
-
-        def process(value):
-            return self.process_bind_param(value, dialect)
-
-        return process
+        return _vector_literal
 
     def result_processor(self, dialect, coltype):
         """Return a conversion function for processing result values."""
@@ -257,14 +250,7 @@ class Vectorf64(TypeDecorator):
 
     def process_bind_param(self, value, dialect):
         """Process the value before binding to the database."""
-        if value is None:
-            return None
-        if isinstance(value, list):
-            # Convert list to MatrixOne vector format
-            return "[" + ",".join(map(str, value)) + "]"
-        if isinstance(value, str):
-            return value
-        return str(value)
+        return _vector_literal(value)
 
     def process_result_value(self, value, dialect):
         """Process the value after retrieving from the database."""
@@ -283,11 +269,7 @@ class Vectorf64(TypeDecorator):
 
     def bind_processor(self, dialect):
         """Return a conversion function for processing bind values."""
-
-        def process(value):
-            return self.process_bind_param(value, dialect)
-
-        return process
+        return _vector_literal
 
     def result_processor(self, dialect, coltype):
         """Return a conversion function for processing result values."""
@@ -341,14 +323,7 @@ class VectorTypeDecorator(TypeDecorator):
 
     def process_bind_param(self, value, dialect):
         """Process the value before binding to the database."""
-        if value is None:
-            return None
-        if isinstance(value, list):
-            # Convert list to MatrixOne vector format
-            return "[" + ",".join(map(str, value)) + "]"
-        if isinstance(value, str):
-            return value
-        return str(value)
+        return _vector_literal(value)
 
     def process_result_value(self, value, dialect):
         """Process the value after retrieving from the database."""

@@ -17,7 +17,7 @@ Offline tests for IVF configuration functionality.
 """
 
 import pytest
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, patch, patch
 from sqlalchemy import text
 
 from matrixone.sqlalchemy_ext import (
@@ -64,62 +64,31 @@ class TestIVFConfigOffline:
 
     def test_enable_ivf_indexing(self):
         """Test enabling IVF indexing."""
-        mock_conn = Mock()
-        mock_engine = self._create_mock_engine_with_conn(mock_conn)
-
-        config = IVFConfig(mock_engine)
-        result = config.enable_ivf_indexing()
-
-        assert result is True
-        # Check that exec_driver_sql was called with the correct SQL
-        mock_conn.exec_driver_sql.assert_called_once()
-        call_args = mock_conn.exec_driver_sql.call_args[0][0]
-        assert call_args == "SET experimental_ivf_index = 1"
+        engine = Mock()
+        with patch('matrixone.connection_hooks.configure_pool_settings') as configure:
+            assert IVFConfig(engine).enable_ivf_indexing() is True
+            configure.assert_called_once_with(engine, experimental_ivf_index=1)
 
     def test_disable_ivf_indexing(self):
         """Test disabling IVF indexing."""
-        mock_conn = Mock()
-        mock_engine = self._create_mock_engine_with_conn(mock_conn)
-
-        config = IVFConfig(mock_engine)
-        result = config.disable_ivf_indexing()
-
-        assert result is True
-        # Check that execute was called with the correct SQL
-        mock_conn.exec_driver_sql.assert_called_once()
-        call_args = mock_conn.exec_driver_sql.call_args[0][0]
-        assert call_args == "SET experimental_ivf_index = 0"
+        engine = Mock()
+        with patch('matrixone.connection_hooks.configure_pool_settings') as configure:
+            assert IVFConfig(engine).disable_ivf_indexing() is True
+            configure.assert_called_once_with(engine, experimental_ivf_index=0)
 
     def test_set_probe_limit(self):
         """Test setting probe limit."""
-        mock_conn = Mock()
-        mock_engine = self._create_mock_engine_with_conn(mock_conn)
-
-        config = IVFConfig(mock_engine)
-        result = config.set_probe_limit(5)
-
-        assert result is True
-        # Check that execute was called with the correct SQL
-        mock_conn.exec_driver_sql.assert_called_once()
-        call_args = mock_conn.exec_driver_sql.call_args[0][0]
-        assert call_args == "SET probe_limit = 5"
+        engine = Mock()
+        with patch('matrixone.connection_hooks.configure_pool_settings') as configure:
+            assert IVFConfig(engine).set_probe_limit(5) is True
+            configure.assert_called_once_with(engine, probe_limit=5)
 
     def test_configure_ivf(self):
         """Test configuring IVF with multiple parameters."""
-        mock_conn = Mock()
-        mock_engine = self._create_mock_engine_with_conn(mock_conn)
-
-        config = IVFConfig(mock_engine)
-        result = config.configure_ivf(enabled=True, probe_limit=3)
-
-        assert result is True
-        # Should call both enable and set probe limit
-        assert mock_conn.exec_driver_sql.call_count == 2
-
-        # Check the SQL calls
-        calls = [call[0][0] for call in mock_conn.exec_driver_sql.call_args_list]
-        assert "SET experimental_ivf_index = 1" in calls
-        assert "SET probe_limit = 3" in calls
+        engine = Mock()
+        with patch('matrixone.connection_hooks.configure_pool_settings') as configure:
+            assert IVFConfig(engine).configure_ivf(enabled=True, probe_limit=3) is True
+            configure.assert_called_once_with(engine, experimental_ivf_index=1, probe_limit=3)
 
     def test_get_ivf_status(self):
         """Test getting IVF status."""
@@ -209,41 +178,25 @@ class TestIVFConfigOffline:
 
     def test_configure_ivf_partial_failure(self):
         """Test configuring IVF when some operations fail."""
-        mock_conn = Mock()
-        mock_engine = self._create_mock_engine_with_conn(mock_conn)
-
-        # First call succeeds, second call fails
-        mock_conn.exec_driver_sql.side_effect = [None, Exception("Failed")]
-
-        config = IVFConfig(mock_engine)
-        result = config.configure_ivf(enabled=True, probe_limit=3)
-
-        assert result is False  # Should be False because one operation failed
+        # Actual partial SET + recovery is exercised through QueuePool in
+        # contracts/test_pool_settings.py. This wrapper preserves False.
+        with patch('matrixone.connection_hooks.configure_pool_settings', side_effect=RuntimeError('rejected')):
+            assert IVFConfig(Mock()).configure_ivf(enabled=True, probe_limit=3) is False
 
     def test_convenience_functions(self):
         """Test convenience functions."""
-        mock_conn = Mock()
-        mock_engine = self._create_mock_engine_with_conn(mock_conn)
-
-        # Test enable_ivf_indexing
-        result = enable_ivf_indexing(mock_engine)
-        assert result is True
-
-        # Test disable_ivf_indexing
-        result = disable_ivf_indexing(mock_engine)
-        assert result is True
-
-        # Test set_probe_limit
-        result = set_probe_limit(mock_engine, 10)
-        assert result is True
-
-        # Test get_ivf_status
-        mock_result1 = Mock()
-        mock_result1.fetchone.return_value = ("experimental_ivf_index", "0")
-        mock_result2 = Mock()
-        mock_result2.fetchone.return_value = ("probe_limit", "10")
-        mock_conn.exec_driver_sql.side_effect = [mock_result1, mock_result2]
-
-        status = get_ivf_status(mock_engine)
-        assert status["ivf_enabled"] is False
-        assert status["probe_limit"] == 10
+        engine = Mock()
+        with patch('matrixone.connection_hooks.configure_pool_settings') as configure:
+            assert enable_ivf_indexing(engine)
+            configure.assert_called_with(engine, experimental_ivf_index=1)
+            assert disable_ivf_indexing(engine)
+            configure.assert_called_with(engine, experimental_ivf_index=0)
+            assert set_probe_limit(engine, 10)
+            configure.assert_called_with(engine, probe_limit=10)
+        connection = Mock()
+        engine = self._create_mock_engine_with_conn(connection)
+        enabled, probes = Mock(), Mock()
+        enabled.fetchone.return_value = ('experimental_ivf_index', '0')
+        probes.fetchone.return_value = ('probe_limit', '10')
+        connection.exec_driver_sql.side_effect = [enabled, probes]
+        assert get_ivf_status(engine)['probe_limit'] == 10

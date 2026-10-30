@@ -110,6 +110,13 @@ func ddlExpressionContext(ctx CompilerContext, base context.Context) context.Con
 	if function.LegacyUnixTimestampDatetime(ctx.GetContext()) {
 		bound = function.WithLegacyUnixTimestampDatetime(bound)
 	}
+	// D11 carrier two: standalone DDL binders take no QueryBuilder and no
+	// BindContext, so the boolean-semantics statement setting rides this same
+	// carrier. A native-mode session authors persisted expressions with the
+	// exact pre-contract behavior, byte-identical to what SELECT binds.
+	if !function.MySQLConditionalBooleanContractsFromProcess(ctx.GetProcess()) {
+		bound = function.WithMySQLConditionalBooleanContracts(bound, false)
+	}
 	return bound
 }
 
@@ -137,6 +144,13 @@ func NewQueryBuilder(queryType plan.Query_StatementType, ctx CompilerContext, is
 	var boolSumAvgCompat bool
 	var noUnsignedSubtraction bool
 	divPrecisionIncrement := resolveDivPrecisionIncrement(ctx)
+	// D11 two-carrier scalar: resolve the statement's MatrixOneNativeMode
+	// decision with the same single resolver the BindContext and DDL
+	// expression contexts use, so the builder-scoped DML paths that resolve
+	// through QueryBuilder.GetContext (UPDATE / ODKU assignment casts,
+	// projected rewrites, plan checks) bind with the statement's actual
+	// boolean-contracts decision instead of the absent-scalar MySQL default.
+	matrixOneNativeMode := !function.MySQLConditionalBooleanContractsFromProcess(ctx.GetProcess())
 
 	mode, err := ctx.ResolveVariable("sql_mode", true, false)
 	if err == nil {
@@ -200,6 +214,7 @@ func NewQueryBuilder(queryType plan.Query_StatementType, ctx CompilerContext, is
 		mysqlFullGroupByCompat:   mysqlFullGroupByCompat,
 		boolSumAvgCompat:         boolSumAvgCompat,
 		noUnsignedSubtraction:    noUnsignedSubtraction,
+		matrixOneNativeMode:      matrixOneNativeMode,
 		divPrecisionIncrement:    divPrecisionIncrement,
 		aggSpillMem:              aggSpillMem,
 		joinSpillMem:             joinSpillMem,
@@ -701,6 +716,7 @@ func setOperationOutputType(
 	nodeType plan.Node_NodeType,
 	leftType, rightType plan.Type,
 ) plan.Type {
+	leftType = setOperationDecimalAttributes(nodeType, leftType, rightType)
 	switch nodeType {
 	case plan.Node_UNION, plan.Node_UNION_ALL:
 		if commonType, ok := function.CommonMediumIntType([]types.Type{
@@ -711,6 +727,33 @@ func setOperationOutputType(
 		}
 		leftType.NotNullable = leftType.NotNullable && rightType.NotNullable
 	}
+	return leftType
+}
+
+// setOperationDecimalAttributes derives the numeric attribute mask of one
+// materialized set-operation column. Set outputs are derived rows: MySQL
+// documents ZEROFILL as ignored for UNION queries, and the same materialized
+// boundary applies uniformly to INTERSECT/MINUS. UNION/UNION ALL clear the
+// ZEROFILL bit and keep UNSIGNED only when every branch carries it (the same
+// shape as the NotNullable AND-merge); every other set operation clears both
+// bits. Only numeric_attributes is touched; width/scale/nullability/collation
+// stay byte-identical, and non-decimal branches are unaffected. Domain
+// admission never keys on a set-op output mask: enforcement happens at
+// attributed target writes, and a set-op output is not ProvenanceSingleSource,
+// so CTAS over a UNION lands mask 0 under the computed-expression rule.
+func setOperationDecimalAttributes(
+	nodeType plan.Node_NodeType,
+	leftType, rightType plan.Type,
+) plan.Type {
+	if !types.T(leftType.Id).IsDecimal() {
+		return leftType
+	}
+	if nodeType == plan.Node_UNION || nodeType == plan.Node_UNION_ALL {
+		leftType.NumericAttributes = leftType.NumericAttributes &
+			rightType.NumericAttributes & types.NumericAttributeUnsigned
+		return leftType
+	}
+	leftType.NumericAttributes = 0
 	return leftType
 }
 
@@ -4507,6 +4550,7 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		builder.determineWindowPartitionAlgorithms(rootID)
 		builder.deduplicateBlockFilters(rootID)
 		builder.forceJoinOnOneCN(rootID, false)
+		builder.addBoundedDeleteIndexRuntimeFilters(rootID)
 		// after this ,never call ReCalcNodeStats again !!!
 
 		builder.handleMessages(rootID)
@@ -10303,8 +10347,11 @@ func gapFillBoundContainsColumn(expr *Expr, timestamp *plan.ColRef) bool {
 }
 
 func gapFillBoundIsConstant(expr *Expr) bool {
+	// Inferred bounds are evaluated at EXECUTE, including parameterless
+	// prepared plans. Diagnostic relocation policy must not reject a value
+	// that is constant within that execution.
 	return expr != nil && !exprHasColRef(expr) && !hasCorrCol(expr) &&
-		!hasSubquery(expr) && !containsVolatileFunction(expr)
+		!hasSubquery(expr) && function.IsRuntimeConstant(expr)
 }
 
 func combineGapFillBounds(ctx context.Context, name string, candidates []*Expr, targetType plan.Type) (*Expr, error) {
@@ -14117,6 +14164,15 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 				builder.GetContext(), builder.compCtx.GetProcess(), node.TableDef); err != nil {
 				return err
 			}
+			// Same-version cross-mode boundary: a definition that needs the
+			// conditional boolean contracts evaluates with those kernels only on
+			// a MySQL-mode statement. A native-mode session fails closed here
+			// instead of mis-executing the persisted JSON conditions or the
+			// ENUM storage-truth casts.
+			if err := RequireMySQLConditionalBooleanConsumption(
+				builder.GetContext(), builder.compCtx.GetProcess(), node.TableDef); err != nil {
+				return err
+			}
 		}
 		if len(alias.Cols) > len(node.TableDef.Cols) {
 			return moerr.NewSyntaxErrorf(builder.GetContext(), "table %q has %d columns available but %d columns specified", alias.Alias, len(node.TableDef.Cols), len(alias.Cols))
@@ -14816,7 +14872,14 @@ func (builder *QueryBuilder) GetContext() context.Context {
 		return context.TODO()
 	}
 	ctx := function.WithNoUnsignedSubtraction(builder.compCtx.GetContext(), builder.noUnsignedSubtraction)
-	return function.WithDivPrecisionIncrement(ctx, builder.divPrecisionIncrement)
+	ctx = function.WithDivPrecisionIncrement(ctx, builder.divPrecisionIncrement)
+	// D11 carrier completion: the builder-scoped DML assignment casts and
+	// projected rewrites resolve through this context, so the statement's
+	// boolean-contracts scalar rides it exactly like the BindContext and DDL
+	// carriers. Without it a native-mode UPDATE / ODKU statement saw the
+	// MySQL default and folded BOOL-target BIT-literal assignments that base
+	// keeps rejecting on the raw payload.
+	return function.WithMySQLConditionalBooleanContracts(ctx, !builder.matrixOneNativeMode)
 }
 
 func (builder *QueryBuilder) checkPlanningCanceled() error {
