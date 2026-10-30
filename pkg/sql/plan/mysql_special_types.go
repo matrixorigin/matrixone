@@ -771,6 +771,38 @@ func (bc *BindContext) mysqlSpecialOrderTypeForExpr(expr *plan.Expr) *plan.Type 
 	return DeepCopyType(binding.mysqlSpecialOrderTypes[col.ColPos])
 }
 
+// mysqlSpecialGroupStorageSlotFor recovers the hidden storage-identity slot a
+// GroupBinder registered beside a visible ENUM/SET display group key. The
+// sibling is itself a group key of the same GROUP BY, so referencing it above
+// the aggregation is remap-legal, and its per-group value is the stored
+// ordinal/bitmap instead of the display text. That distinction is decisive
+// for ENUM declarations containing an empty label (and for empty-member
+// SETs), whose zero sentinel and that member display identically as text
+// while their stored values decide opposite truths.
+func (bc *BindContext) mysqlSpecialGroupStorageSlotFor(expr *plan.Expr) *plan.Expr {
+	if bc == nil || bc.mysqlSpecialGroupStorageSlots == nil {
+		return nil
+	}
+	col := expr.GetCol()
+	if col == nil {
+		return nil
+	}
+	if bc.groupTag > 0 && col.RelPos != bc.groupTag {
+		return nil
+	}
+	storagePos, ok := bc.mysqlSpecialGroupStorageSlots[col.ColPos]
+	if !ok || storagePos < 0 || int(storagePos) >= len(bc.groups) || bc.groups[storagePos] == nil {
+		return nil
+	}
+	typ := bc.groups[storagePos].Typ
+	if isSetPlanType(&typ) {
+		// Truth reads the plain uint64 bitmap; SET metadata belongs only to
+		// display-value semantics.
+		typ.Enumvalues = ""
+	}
+	return GetColExpr(typ, col.RelPos, storagePos)
+}
+
 func (bc *BindContext) setMySQLSpecialOrderType(colPos int32, typ *plan.Type) {
 	if bc.mysqlSpecialOrderTypes == nil {
 		bc.mysqlSpecialOrderTypes = make(map[int32]*plan.Type)
@@ -936,6 +968,61 @@ func (b *baseBinder) useStoredMySQLSpecialTypesForNumericContractWithProvenance(
 			return []*plan.Expr{value}, nil
 		}
 	}
+	// Boolean-truth consumers evaluate the operand's MySQL numeric truth:
+	// IF/IFF and CASE WHEN conditions, AND/OR/XOR operands, NOT and IS
+	// TRUE/FALSE values. ENUM/SET storage supplies the ordinal/bitmap that
+	// decides truthiness, including for operands recovered across a GROUP BY or
+	// transparent query boundary. The registry keeps these operands in their
+	// own domain, so a display label would otherwise be re-parsed as unrelated
+	// text and silently evaluate to FALSE for every valid nonzero member.
+	if indexes := mysqlBooleanTruthOperandIndexes(name, len(args)); len(indexes) > 0 {
+		changed := false
+		for _, i := range indexes {
+			if args[i] == nil {
+				continue
+			}
+			// The display-wrapper recovery below needs the BindContext's
+			// provenance machinery; the standalone DDL expression binders carry
+			// none (their ENUM references arrive raw), and the recovery helper
+			// no-ops for them. The explicit storage-truth normalization ahead
+			// stays context-aware: it applies only to a raw ENUM operand and the
+			// statement's mode scalar gates it, so both the SELECT path and
+			// the DDL-generated-column path hand the bool-checker family a
+			// BOOL-typed operand.
+			recovered := args[i]
+			if b != nil && b.ctx != nil {
+				var recoveryErr error
+				recovered, recoveryErr = b.mysqlSpecialBooleanTruthyOperand(ctx, args[i])
+				if recoveryErr != nil {
+					return nil, recoveryErr
+				}
+			}
+			// AND/OR/XOR/NOT and the IS TRUE/FALSE family bind through checkers
+			// that only consult the general implicit-cast table - base keeps no
+			// ENUM -> BOOL row there, and adding one would leak the contract's
+			// admission into native-mode statements. Normalize a recovered ENUM
+			// condition through the explicit storage-truth BOOL cast instead,
+			// exactly the contract the caseCheck schedule and predicate casts
+			// already use. IF/CASE keep their in-domain condition admission. A
+			// native-mode statement skips this and keeps the base checker
+			// failure byte-identically.
+			if function.MySQLConditionalBooleanContracts(ctx) &&
+				mysqlBooleanOperandBindsBoolChecker(name) && isEnumPlanType(&recovered.Typ) {
+				casted, castErr := makePlan2CastExpr(ctx, recovered, plan.Type{Id: int32(types.T_bool)})
+				if castErr != nil {
+					return nil, castErr
+				}
+				recovered = casted
+			}
+			if recovered != args[i] {
+				if !changed {
+					args = append([]*plan.Expr(nil), args...)
+					changed = true
+				}
+				args[i] = recovered
+			}
+		}
+	}
 	result := useStoredMySQLSpecialTypesForNumericContract(ctx, name, args)
 	if b == nil || b.ctx == nil {
 		return result, nil
@@ -964,6 +1051,19 @@ func (b *baseBinder) useStoredMySQLSpecialTypesForNumericContractWithProvenance(
 	if mysqlSpecialNumericInList(name, args) {
 		if _, direct := storedMySQLSpecialTypeExpr(args[0]); !direct {
 			storageType := b.ctx.mysqlSpecialOrderTypeForExpr(args[0])
+			// A numeric IN/NOT IN list reads the stored value, never display
+			// text. SET operands always route through mysqlSpecialNumericOperand:
+			// its recovery is identity-based (canonical-materialized or
+			// transparent retained storage) and restores the stored bitmap
+			// exactly even for declarations with an empty member, whose label
+			// text overlaps the zero bitmask's display; when no exact identity
+			// exists the helper fails closed with its typed error instead of
+			// letting the pending comparison re-parse the labels. The narrow
+			// display-decode reversibility requirement stays the ENUM arm's
+			// policy - an empty/duplicate-label ENUM's text cannot decode
+			// uniquely across a boundary, so its numeric lists keep the display
+			// operand. The boolean-truth boundary policy (zone fail-closure)
+			// is separate and lives in mysqlSpecialBooleanTruthyOperand.
 			if storageType != nil && (isSetPlanType(storageType) || mysqlSpecialNumericTypeReversible(storageType)) {
 				recovered, err := b.mysqlSpecialNumericOperand(ctx, args[0])
 				if err != nil {
@@ -1013,6 +1113,127 @@ func (b *baseBinder) useStoredMySQLSpecialTypesForNumericContractWithProvenance(
 		result[i] = recovered
 	}
 	return result, nil
+}
+
+// mysqlBooleanTruthOperandIndexes reports the operands a function evaluates
+// with MySQL numeric truth. IF/IFF, NOT and the IS TRUE/FALSE family consume
+// their first argument, AND/OR/XOR consume both operands, and CASE WHEN
+// consumes the condition slot that leads each searched pair; value slots and
+// ELSE never decide truth. Operands with no ENUM/SET provenance pass through
+// the recovery unchanged, so JSON, BIT and ordinary columns are unaffected.
+func mysqlBooleanTruthOperandIndexes(name string, length int) []int {
+	switch name {
+	case "if", "iff":
+		if length == 3 {
+			return []int{0}
+		}
+	case "and", "or", "xor":
+		if length == 2 {
+			return []int{0, 1}
+		}
+	case "not", "istrue", "isnottrue", "isfalse", "isnotfalse":
+		if length == 1 {
+			return []int{0}
+		}
+	case "case":
+		indexes := make([]int, 0, length/2)
+		for i := 0; i < length-1; i += 2 {
+			indexes = append(indexes, i)
+		}
+		return indexes
+	}
+	return nil
+}
+
+// mysqlBooleanOperandBindsBoolChecker reports the boolean-truth consumers whose
+// registry checkers admit only operands the general implicit-cast table can
+// convert to BOOL (AND/OR/XOR, NOT, IS TRUE/FALSE). A recovered ENUM condition
+// for one of these consumers is normalized through the explicit storage-truth
+// BOOL cast, because the implicit table deliberately keeps no ENUM -> BOOL row:
+// a context-free row would admit the same operands on native-mode statements
+// through the byte-identical base checkers. IF/CASE conditions keep their
+// in-domain admission and are deliberately absent here.
+func mysqlBooleanOperandBindsBoolChecker(name string) bool {
+	switch name {
+	case "and", "or", "xor", "not", "istrue", "isnottrue", "isfalse", "isnotfalse":
+		return true
+	}
+	return false
+}
+
+// mysqlSpecialBooleanPredicateOperand recovers the stored ENUM ordinal or SET
+// bitmap for a bare predicate condition (HAVING/ON/WHERE) that a GROUP BY
+// flattened into a display-typed reference. Ungrouped display wrappers and
+// operands without ENUM/SET provenance pass through unchanged, leaving the
+// cast-time display rewrite in charge.
+func (b *baseBinder) mysqlSpecialBooleanPredicateOperand(ctx context.Context, expr *plan.Expr) (*plan.Expr, error) {
+	if b == nil || b.ctx == nil || expr == nil {
+		return expr, nil
+	}
+	if _, direct := storedMySQLSpecialTypeExpr(expr); direct {
+		return expr, nil
+	}
+	if b.ctx.mysqlSpecialOrderTypeForExpr(expr) == nil {
+		return expr, nil
+	}
+	return b.mysqlSpecialBooleanTruthyOperand(ctx, expr)
+}
+
+// mysqlSpecialBooleanTruthyOperand recovers the stored ENUM ordinal / SET
+// bitmap a boolean-truth consumer evaluates. Truth never converts back into a
+// label, so the display-label reversibility numeric contracts require does
+// not apply here: an empty-label ENUM declaration displays its zero sentinel
+// and that member identically, and only the recovered storage resolves the
+// correct MySQL truth for each. Direct display wrappers and the hidden
+// storage slot beside a grouped display key are recovered first; canonical
+// SET materializations and transparent boundaries follow; a reversible
+// display falls back to label reconstruction, and operands without a
+// recoverable stored value pass through unchanged so their pending cast keeps
+// the previous behavior.
+func (b *baseBinder) mysqlSpecialBooleanTruthyOperand(ctx context.Context, expr *plan.Expr) (*plan.Expr, error) {
+	if b == nil || b.ctx == nil || expr == nil {
+		return expr, nil
+	}
+	if !function.MySQLConditionalBooleanContracts(ctx) {
+		// D11: a native-mode statement keeps every boolean context exactly as
+		// the pre-contract behavior - no storage recovery, so display text
+		// decides truth the way base does.
+		return expr, nil
+	}
+	if raw, ok := storedMySQLSpecialTypeExpr(expr); ok {
+		return raw, nil
+	}
+	if raw := b.ctx.mysqlSpecialGroupStorageSlotFor(expr); raw != nil {
+		return raw, nil
+	}
+	typ := b.ctx.mysqlSpecialOrderTypeForExpr(expr)
+	if typ == nil {
+		return expr, nil
+	}
+	// Zone-1-class recovery first: through a proven row-preserving boundary the
+	// stored value itself is carried, so it stays exact for every declaration.
+	if b.builder != nil {
+		if raw, ok := b.builder.materializeTransparentMySQLSpecialValue(expr); ok {
+			return raw, nil
+		}
+	}
+	// D10 complete-domain rule: every reconstruction below decodes display
+	// text, so the declaration's whole stored domain must be reversibly
+	// decodable (ENUM also rejects duplicated labels and the empty label; SET
+	// also rejects an empty member). An ambiguous declaration cannot decide
+	// truth from display at all - a silent fallthrough would let the pending
+	// BOOL cast re-parse the labels and turn a valid nonzero member FALSE
+	// (probe 2's empty-label '' row), so the third zone fails closed with the
+	// typed error instead.
+	if !mysqlSpecialNumericTypeReversible(typ) {
+		return nil, moerr.NewNotSupportedNoCtxf(
+			"boolean truth of an ENUM/SET value from declaration %s cannot recover the stored value across a query boundary; use the stored value in the same query block",
+			typ.Enumvalues)
+	}
+	if isSetPlanType(typ) && b.ctx.mysqlSpecialCanonicalTypeForExpr(expr) != nil {
+		return makeCanonicalSetValue(ctx, expr, typ)
+	}
+	return makeMySQLSpecialNumericValue(ctx, expr, typ)
 }
 
 // Numeric consumers distinguish retained input identity from a canonical
