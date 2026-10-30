@@ -326,7 +326,7 @@ const unsupportedTableTypeDMLMsg = "unsupported DML: unsupported table type"
 
 const emptyTableNameDMLMsg = "unsupported DML: empty table name"
 
-func (dmlCtx *DMLContext) ResolveTables(ctx CompilerContext, tableExprs tree.TableExprs, with *tree.With, aliasMap map[string][2]string, respectFKCheck bool) error {
+func (dmlCtx *DMLContext) ResolveTables(ctx CompilerContext, tableExprs tree.TableExprs, with *tree.With, aliasMap map[string]deleteSource, respectFKCheck bool) error {
 	policy := foreignKeyResolveAlwaysReject
 	if respectFKCheck {
 		policy = foreignKeyResolveRespectSession
@@ -338,7 +338,7 @@ func (dmlCtx *DMLContext) resolveTables(
 	ctx CompilerContext,
 	tableExprs tree.TableExprs,
 	with *tree.With,
-	aliasMap map[string][2]string,
+	aliasMap map[string]deleteSource,
 	foreignKeyPolicy foreignKeyResolvePolicy,
 	allowReadOnlySources bool,
 ) error {
@@ -359,7 +359,7 @@ func (dmlCtx *DMLContext) resolveTables(
 	return nil
 }
 
-func (dmlCtx *DMLContext) ResolveSingleTable(ctx CompilerContext, tbl tree.TableExpr, aliasMap map[string][2]string, withMap map[string]bool, respectFKCheck bool) error {
+func (dmlCtx *DMLContext) ResolveSingleTable(ctx CompilerContext, tbl tree.TableExpr, aliasMap map[string]deleteSource, withMap map[string]bool, respectFKCheck bool) error {
 	policy := foreignKeyResolveAlwaysReject
 	if respectFKCheck {
 		policy = foreignKeyResolveRespectSession
@@ -370,7 +370,7 @@ func (dmlCtx *DMLContext) ResolveSingleTable(ctx CompilerContext, tbl tree.Table
 func (dmlCtx *DMLContext) resolveSingleTable(
 	ctx CompilerContext,
 	tbl tree.TableExpr,
-	aliasMap map[string][2]string,
+	aliasMap map[string]deleteSource,
 	withMap map[string]bool,
 	foreignKeyPolicy foreignKeyResolvePolicy,
 	allowReadOnlySources bool,

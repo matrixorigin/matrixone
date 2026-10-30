@@ -307,10 +307,11 @@ func TestStatementRequiresPersistentWriteAccessTemporaryTables(t *testing.T) {
 		"delete x from tt as x",
 		"delete x, y from tt as x join tt2 as y on x.a = y.a",
 		// A schema-qualified target naming a temporary table stays exempt, and
-		// a qualified target whose FROM alias resolves to a temporary table
-		// writes that temporary table.
+		// an unqualified target resolves through the source schema.
 		"delete testdb.tt from testdb.tt",
-		"delete testdb.tt from tt2 as tt",
+		"delete tt from testdb.tt",
+		"delete x from (testdb.tt as x)",
+		"delete tt from tt2 as tt",
 	}
 	for _, sql := range temporaryAllowedSQLs {
 		stmt := parseSingleStatement(t, sql)
@@ -336,11 +337,12 @@ func TestStatementRequiresPersistentWriteAccessTemporaryTables(t *testing.T) {
 		// victim (the x alias resolves to the persistent table here).
 		"delete x from t as x",
 		"delete tt, t from tt join t on tt.a = t.a",
-		// Schema-qualified targets resolve through the alias map exactly like
-		// unqualified ones: the planner matches by object name and overwrites
-		// the qualifier, so the temporary-table spelling of the target must
-		// not shadow the persistent victim either.
+		// A qualified target or same-named temporary table must not hide
+		// a persistent source. Invalid targets remain conservatively gated.
 		"delete testdb.tt from t as tt",
+		"delete tt from otherdb.tt",
+		"delete x from (otherdb.tt as x)",
+		"delete tt from (select 1 as a) as tt",
 	} {
 		stmt := parseSingleStatement(t, sql)
 		require.Equal(t, writePersistent, classifyStatementWrite(ses, stmt, "testdb"), sql)

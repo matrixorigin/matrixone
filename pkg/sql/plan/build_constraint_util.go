@@ -327,7 +327,7 @@ func checkTableType(ctx context.Context, tableDef *TableDef, op string) error {
 	return nil
 }
 
-func setTableExprToDmlTableInfo(ctx CompilerContext, tbl tree.TableExpr, tblInfo *dmlTableInfo, aliasMap map[string][2]string, withMap map[string]struct{}) error {
+func setTableExprToDmlTableInfo(ctx CompilerContext, tbl tree.TableExpr, tblInfo *dmlTableInfo, aliasMap map[string]deleteSource, withMap map[string]struct{}) error {
 	var tblName, dbName, alias string
 
 	if aliasTbl, ok := tbl.(*tree.AliasedTableExpr); ok {
@@ -442,7 +442,7 @@ func setTableExprToDmlTableInfo(ctx CompilerContext, tbl tree.TableExpr, tblInfo
 	return nil
 }
 
-func getDmlTableInfo(ctx CompilerContext, tableExprs tree.TableExprs, with *tree.With, aliasMap map[string][2]string, typ string) (*dmlTableInfo, error) {
+func getDmlTableInfo(ctx CompilerContext, tableExprs tree.TableExprs, with *tree.With, aliasMap map[string]deleteSource, typ string) (*dmlTableInfo, error) {
 	tblInfo := &dmlTableInfo{
 		typ:   typ,
 		alias: make(map[string]int),
