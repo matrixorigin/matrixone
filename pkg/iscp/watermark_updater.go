@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
+	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -947,17 +948,15 @@ func queryIndexLog(
 
 // The catalog JSON column stores ByteJson binary, not JSON text. Decode at
 // this boundary so malformed durable rows can be quarantined during replay.
-func decodeISCPJSON(data []byte) (decoded []byte, err error) {
+func decodeISCPJSON(data []byte) ([]byte, error) {
 	if len(data) == 0 {
 		return nil, mvdefinition.Invalid("empty ISCP storage JSON")
 	}
-	defer func() {
-		if recover() != nil {
-			decoded = nil
-			err = mvdefinition.Invalid("malformed ISCP storage JSON")
-		}
-	}()
-	decoded, err = types.DecodeJson(data).MarshalJSON()
+	value := types.DecodeJson(data)
+	if !bytejson.IsValidByteJson(value) {
+		return nil, mvdefinition.Invalid("malformed ISCP storage JSON")
+	}
+	decoded, err := value.MarshalJSON()
 	if err != nil || !json.Valid(decoded) {
 		return nil, mvdefinition.Invalid("malformed ISCP storage JSON")
 	}
