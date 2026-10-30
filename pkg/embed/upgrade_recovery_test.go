@@ -81,10 +81,11 @@ func newRecoveryClusterStarterWithBudget(
 		cleanup()
 		current = nil
 		begin := now()
-		if err := startCluster(); err != nil {
+		err := startCluster()
+		deadline = deadline.Add(now().Sub(begin))
+		if err != nil {
 			return nil, err
 		}
-		deadline = deadline.Add(now().Sub(begin))
 		if err := parent.Err(); err != nil {
 			return nil, err
 		}
@@ -291,11 +292,27 @@ func TestRecoveryClusterStartupBudget(t *testing.T) {
 
 	t.Run("startup error", func(t *testing.T) {
 		failure := errors.New("startup failed")
-		start, cleanup := newRecoveryClusterStarter(t.Context(), func() error { return failure }, time.Now)
+		base := time.Now().Add(time.Hour)
+		now := base
+		starts := 0
+		start, cleanup := newRecoveryClusterStarter(t.Context(), func() error {
+			starts++
+			now = now.Add(10 * time.Minute)
+			if starts == 1 {
+				return failure
+			}
+			return nil
+		}, func() time.Time { return now })
 		defer cleanup()
 		ctx, err := start()
 		require.ErrorIs(t, err, failure)
 		require.Nil(t, ctx)
+		ctx, err = start()
+		require.NoError(t, err, "a failed startup must not consume workload budget")
+		deadline, ok := ctx.Deadline()
+		require.True(t, ok)
+		require.Equal(t, 5*time.Minute, deadline.Sub(now))
+		require.Equal(t, 2, starts)
 	})
 
 	t.Run("parent deadline and workload cancellation", func(t *testing.T) {
