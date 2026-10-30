@@ -18,17 +18,15 @@ import (
 	"context"
 	"testing"
 
-	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
-	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
-	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
 
 // jsonBooleanConditionExpr builds a persisted-expression owner whose searched
-// CASE evaluates a T_json condition in-domain - the #30932 contract that
-// requires the minted v135 floor.
+// CASE evaluates a T_json condition in-domain - the #30932 conditional
+// contract that the same-version cross-mode consumption gate detects.
 func jsonBooleanConditionExpr() *planpb.Expr {
 	jsonCond := &planpb.Expr{
 		Typ:  planpb.Type{Id: int32(62)},
@@ -99,73 +97,88 @@ func tableDefOwner(exprs ...*planpb.Expr) *planpb.TableDef {
 	return &planpb.TableDef{Cols: cols}
 }
 
-// TestRequiredPersistedBooleanConditionContractsFloor is the H1 class (vii)(a)
-// plus the class (v) version-table oracle: a persisted expression with an
-// in-domain T_json CASE condition or an ENUM storage-truth BOOL cast raises
-// the minted v135 floor, so the authoring and read gates REJECT below the
-// floor before any expression evaluation. Plain CAST(int->bool) and CASE over
-// ordinary conditions raise nothing, and SET storage conditions are exempt
-// (TestSetStorageConditionsExemptFromBooleanContracts).
-func TestRequiredPersistedBooleanConditionContractsFloor(t *testing.T) {
+// TestBooleanConditionContractDetectionOnBoundExpressions pins the feature
+// walk over REAL bound expressions: the in-domain T_json CASE/IFF condition
+// slots and the ENUM storage-truth BOOL cast raise the
+// JSONBooleanConditionContracts detection that the same-version cross-mode
+// consumption gate consumes. Under the repository's shutdown-only upgrade
+// contract (same-binary workers and rebinders) the detected contracts carry
+// NO protocol requirement: RequiredPersistedExpressionProtocolVersion stays 0
+// for every tagged form - the executable record that this feature adds no
+// row to the durable feature->version table. Numeric controls raise nothing.
+func TestBooleanConditionContractDetectionOnBoundExpressions(t *testing.T) {
+	// ENUM storage (T_enum with declaration metadata), the raw storable the
+	// generated-column binder binds for an ENUM column.
+	bindEnumIFF, err := BindFuncExprImplByPlanExpr(context.Background(), "if", []*planpb.Expr{{
+		Typ:  planpb.Type{Id: int32(types.T_enum), Enumvalues: "low,mid,high"},
+		Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}},
+	}, MakePlan2Int64ConstExprWithType(1), MakePlan2Int64ConstExprWithType(0)})
+	require.NoError(t, err, "the MySQL contracts bind IF(e,1,0) with the raw ENUM condition in-domain")
+	require.Equal(t, int32(types.T_enum), bindEnumIFF.GetF().Args[0].Typ.Id,
+		"iffCheck preserves the ENUM condition in-domain instead of scheduling a cast")
+
+	jsonColumn := &planpb.Expr{
+		Typ:  planpb.Type{Id: int32(types.T_json)},
+		Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}},
+	}
+	bindJSONCase, err := BindFuncExprImplByPlanExpr(context.Background(), "case", []*planpb.Expr{
+		jsonColumn,
+		MakePlan2Int64ConstExprWithType(1),
+		MakePlan2Int64ConstExprWithType(0),
+	})
+	require.NoError(t, err)
+
 	for _, tc := range []struct {
 		name string
 		expr *planpb.Expr
 	}{
-		{"json case condition", jsonBooleanConditionExpr()},
-		{"enum storage bool cast", enumStorageBoolCastExpr()},
+		{"bound enum iff condition", bindEnumIFF},
+		{"bound json case condition", bindJSONCase},
+		{"stored json case condition", jsonBooleanConditionExpr()},
+		{"stored enum storage bool cast", enumStorageBoolCastExpr()},
 	} {
-		features, err := planpb.RequiredRemoteExpressionFeatures(tc.expr)
-		require.NoError(t, err)
-		require.True(t, features.JSONBooleanConditionContracts, tc.name)
+		features, walkErr := planpb.RequiredRemoteExpressionFeatures(tc.expr)
+		require.NoError(t, walkErr, tc.name)
+		require.True(t, features.JSONBooleanConditionContracts, tc.name,
+			"the conditional boolean contract is detected for the cross-mode consumption gate")
 
-		version, err := RequiredPersistedExpressionProtocolVersion(tc.expr)
-		require.NoError(t, err)
-		require.Equal(t, defines.MORPCVersion135, version, tc.name)
-
-		// The authoring gate refuses below the minted floor with the typed
-		// error, before any metadata is persisted.
-		err = RequirePersistedProtocolVersionForAuthoring(context.Background(), nil, version)
-		require.ErrorContains(t, err, "protocol version 135", tc.name)
-
-		// The read/rebind gate refuses below the runtime floors before any
-		// expression evaluation - the gate runs at the rebind boundary, not in
-		// the executor.
-		err = RequirePersistedProtocolVersion(context.Background(), nil, version)
-		require.ErrorContains(t, err, "protocol version 135", tc.name)
+		version, versionErr := RequiredPersistedExpressionProtocolVersion(tc.expr)
+		require.NoError(t, versionErr, tc.name)
+		require.Zero(t, version, tc.name,
+			"the boolean-condition contracts add no row to the durable feature->version table")
 	}
 
-	// Negative controls: neither an ordinary integer->BOOL cast nor a CASE
+	// Negative controls: neither an ordinary integer->BOOL cast nor IF/CASE
 	// over integer conditions is a boolean-condition contract.
 	plainBoolCast := castToBoolForTest(&planpb.Expr{
-		Typ:  planpb.Type{Id: int32(23)},
+		Typ:  planpb.Type{Id: int32(types.T_int64)},
 		Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}},
 	})
-	features, err := planpb.RequiredRemoteExpressionFeatures(plainBoolCast)
-	require.NoError(t, err)
-	require.False(t, features.JSONBooleanConditionContracts)
-
 	intCond := &planpb.Expr{
-		Typ:  planpb.Type{Id: int32(23)},
+		Typ:  planpb.Type{Id: int32(types.T_int64)},
 		Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}},
 	}
-	thenValue := &planpb.Expr{
-		Typ:  planpb.Type{Id: int32(30)},
-		Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Isnull: false}},
-	}
-	elseValue := &planpb.Expr{
-		Typ:  planpb.Type{Id: int32(30)},
-		Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Isnull: false}},
-	}
-	plainCase := &planpb.Expr{
-		Typ: planpb.Type{Id: int32(30)},
-		Expr: &planpb.Expr_F{F: &planpb.Function{
-			Func: &planpb.ObjectRef{Obj: encodeCaseFunctionID(), ObjName: "case"},
-			Args: []*planpb.Expr{intCond, thenValue, elseValue},
-		}},
-	}
-	features, err = planpb.RequiredRemoteExpressionFeatures(plainCase)
+	numericIf, err := BindFuncExprImplByPlanExpr(context.Background(), "if", []*planpb.Expr{
+		intCond,
+		MakePlan2Int64ConstExprWithType(1),
+		MakePlan2Int64ConstExprWithType(0),
+	})
 	require.NoError(t, err)
-	require.False(t, features.JSONBooleanConditionContracts)
+	for _, tc := range []struct {
+		name string
+		expr *planpb.Expr
+	}{
+		{"plain int->bool cast", plainBoolCast},
+		{"numeric iff condition", numericIf},
+	} {
+		features, walkErr := planpb.RequiredRemoteExpressionFeatures(tc.expr)
+		require.NoError(t, walkErr, tc.name)
+		require.False(t, features.JSONBooleanConditionContracts, tc.name)
+
+		version, versionErr := RequiredPersistedExpressionProtocolVersion(tc.expr)
+		require.NoError(t, versionErr, tc.name)
+		require.Zero(t, version, tc.name)
+	}
 }
 
 // TestSetStorageConditionsExemptFromBooleanContracts is the design revision-8
@@ -237,96 +250,4 @@ func TestSetStorageConditionsExemptFromBooleanContracts(t *testing.T) {
 	nativeProc.GetSessionInfo().MatrixOneNativeMode = true
 	require.NoError(t, RequireMySQLConditionalBooleanConsumption(context.Background(), mysqlProc, tableDefOwner(setIF(), setStorageBoolCastExpr())))
 	require.NoError(t, RequireMySQLConditionalBooleanConsumption(context.Background(), nativeProc, tableDefOwner(setIF(), setStorageBoolCastExpr())))
-}
-
-// TestPersistedBooleanContractsPassThroughReaderLackingDetector is the H1
-// class (vii)(b): the executable record that a reader whose feature walk lacks
-// the minted detector (every binary compiled before this fix) computes
-// requirement 0 for the same expression, and the read gate consequently
-// returns nil - it cannot reject before execution. This is why the verified
-// process-retirement rollout prerequisite (design Section 7, revision 7),
-// not any per-expression gate, closes the expired-but-serving path.
-func TestPersistedBooleanContractsPassThroughReaderLackingDetector(t *testing.T) {
-	// (1) The HEAD-shaped feature value: none of the pre-contract features
-	// detect a boolean-condition contract, so the same TABLE maps to floor 0.
-	require.Equal(t, int64(0),
-		RequiredPersistedExpressionProtocolVersionForFeatures(planpb.RemoteExpressionFeatures{}))
-
-	// (2) A HEAD reader that only sees an older contract still raises that
-	// contract - the parameterized mapping keeps old floors intact.
-	require.Equal(t, int64(defines.MORPCVersion80),
-		RequiredPersistedExpressionProtocolVersionForFeatures(
-			planpb.RemoteExpressionFeatures{StringNumericResultContracts: true}))
-
-	// (3) Requirement 0 bypasses the runtime checks entirely (persisted_ip
-	// requirement-0 early return): the read gate returns nil for the reader
-	// that detected nothing.
-	err := RequirePersistedProtocolVersion(context.Background(), nil, 0)
-	require.NoError(t, err)
-
-	// (4) The mixed-owner proof: the SAME owner raises 135 for this build's
-	// walk while the HEAD-shaped features value stays 0.
-	owner := tableDefOwner(jsonBooleanConditionExpr(), enumStorageBoolCastExpr())
-	version, err := RequiredPersistedExpressionProtocolVersion(owner)
-	require.NoError(t, err)
-	require.Equal(t, defines.MORPCVersion135, version)
-}
-
-// TestPersistedBooleanContractsGateSimulations is the H1 class (v) reader
-// variant simulation set, labeled as gate-behavior proof (NOT rollback
-// evidence): with a runtime whose session floors simulate a below-minted
-// deployment, the authoring gate refuses (nothing gets persisted) and the
-// read/rebind gate refuses with the typed error (no execution); with floors
-// at or above the minted version both gates admit.
-func TestPersistedBooleanContractsGateSimulations(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	rt := moruntime.ServiceRuntime(proc.GetService())
-	oldProtocol, hadProtocol := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
-	oldReadFloor, hadReadFloor := rt.GetGlobalVariables(moruntime.PersistedExpressionProtocolFloor)
-	oldAuthoringFloor, hadAuthoringFloor := rt.GetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor)
-	t.Cleanup(func() {
-		if hadProtocol {
-			rt.SetGlobalVariables(moruntime.MOProtocolVersion, oldProtocol)
-		} else {
-			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
-		}
-		if hadReadFloor {
-			rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, oldReadFloor)
-		} else if current, ok := rt.GetGlobalVariables(moruntime.PersistedExpressionProtocolFloor); ok {
-			rt.CompareAndDeleteGlobalVariables(moruntime.PersistedExpressionProtocolFloor, current)
-		}
-		if hadAuthoringFloor {
-			rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, oldAuthoringFloor)
-		} else if current, ok := rt.GetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor); ok {
-			rt.CompareAndDeleteGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, current)
-		}
-	})
-
-	const required = int64(defines.MORPCVersion135)
-
-	// Simulated below-floor reader: the runtime protocol and the published
-	// floors are all below the minted version.
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion128)
-	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, int64(defines.MORPCVersion128))
-	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, int64(defines.MORPCVersion128))
-	err := RequirePersistedProtocolVersion(context.Background(), proc, required)
-	require.ErrorContains(t, err, "protocol version 135")
-	err = RequirePersistedProtocolVersionForAuthoring(context.Background(), proc, required)
-	require.ErrorContains(t, err, "protocol version 135")
-
-	// The binary itself predates the minted version: the read floor is absent
-	// but the runtime protocol is still below the requirement.
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion131)
-	if current, ok := rt.GetGlobalVariables(moruntime.PersistedExpressionProtocolFloor); ok {
-		rt.CompareAndDeleteGlobalVariables(moruntime.PersistedExpressionProtocolFloor, current)
-	}
-	err = RequirePersistedProtocolVersion(context.Background(), proc, required)
-	require.ErrorContains(t, err, "protocol version 135")
-
-	// Admitted reader: an at-floor runtime passes both gates.
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion135)
-	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, int64(defines.MORPCVersion135))
-	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, int64(defines.MORPCVersion135))
-	require.NoError(t, RequirePersistedProtocolVersion(context.Background(), proc, required))
-	require.NoError(t, RequirePersistedProtocolVersionForAuthoring(context.Background(), proc, required))
 }

@@ -138,18 +138,6 @@ func RequiredPersistedExpressionProtocolVersion(owner any) (int64, error) {
 	if features.LegacyIntervalUnits {
 		return 0, moerr.NewNotSupportedNoCtx("persisted legacy interval unit contract requires rebinding")
 	}
-	return RequiredPersistedExpressionProtocolVersionForFeatures(features), nil
-}
-
-// RequiredPersistedExpressionProtocolVersionForFeatures maps the shared
-// feature walk to the durable persisted-expression floor. It takes the
-// feature set directly so the reader-lacking-detector regression can pin the
-// pre-v135 behavior: a reader whose compiled walk lacks a feature computes
-// requirement 0 from the same expression, and the read gate then returns nil
-// (persisted_ip requirement-0 pass-through) - the executable record that the
-// verified process-retirement rollout prerequisite, not this gate, closes the
-// expired-but-serving path.
-func RequiredPersistedExpressionProtocolVersionForFeatures(features planpb.RemoteExpressionFeatures) int64 {
 	requiredVersion := int64(0)
 	if features.FloatConversionSemantics {
 		requiredVersion = defines.MORPCVersion132
@@ -238,16 +226,7 @@ func RequiredPersistedExpressionProtocolVersionForFeatures(features planpb.Remot
 	if features.IncompleteTemporalStrings {
 		requiredVersion = max(requiredVersion, defines.MORPCVersion130)
 	}
-	// v135: the implicit boolean-condition contracts (in-domain T_json
-	// IF/CASE conditions, ENUM/SET storage-truth BOOL casts) change what a
-	// reader must evaluate in persisted expressions the same way they change
-	// remote pipelines; the authoring/read gates derive the requirement from
-	// this one mapping. Upstream main minted 132-134 first, so this feature
-	// owns 135.
-	if features.JSONBooleanConditionContracts {
-		requiredVersion = max(requiredVersion, defines.MORPCVersion135)
-	}
-	return requiredVersion
+	return requiredVersion, nil
 }
 
 // observeExpressionProtocol records the requirement while a

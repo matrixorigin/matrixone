@@ -459,10 +459,16 @@ type RemoteExpressionFeatures struct {
 	// LeastGreatestCollationSemantics requires v117 for appended overload 4.
 	// Released overload 0 retains its historical byte-order contract.
 	LeastGreatestCollationSemantics bool
-	// JSONBooleanConditionContracts requires v135: IF/CASE admit T_json
-	// condition slots that evaluate in-domain with MySQL conditional numeric
-	// coercion, and the ENUM/SET boolean-condition admission evaluates the
-	// stored ordinal/bitmap through the new CAST-to-BOOL contract.
+	// JSONBooleanConditionContracts marks expressions whose evaluation depends
+	// on the MySQL conditional-boolean contracts fixed by this change: IF/CASE
+	// condition slots that admit T_json in-domain (values evaluated with MySQL
+	// conditional numeric coercion) and the ENUM storage-truth admission that
+	// casts the stored ordinal to BOOL. Under the repository's shutdown-only
+	// upgrade contract every in-cluster peer runs the same binary, so the
+	// flag requires no protocol version; its consumer is the persisted
+	// expression cross-mode consumption gate (pkg/sql/plan/persisted_ip.go),
+	// which keeps a MatrixOne-native session from re-binding a catalog
+	// definition authored under the MySQL contracts.
 	JSONBooleanConditionContracts bool
 }
 
@@ -942,19 +948,23 @@ func isExpressionResultMetadataContract(expr *Expr) bool {
 }
 
 // isMySQLBooleanConditionContractNode reports whether one expression node uses
-// a boolean-condition semantic that requires MORPC version 135: a T_json
-// condition slot of IF/CASE that evaluates in-domain with MySQL conditional
-// numeric coercion (a pre-v135 receiver instead applies the strict
-// JSON-to-BOOL cast to the condition vector), or the ENUM storage-truth
-// admission that casts the stored ordinal to BOOL. Both change what a worker
-// must evaluate, so a below-floor receiver must refuse the expression
-// instead of mis-executing the old semantics. SET storage conditions are
-// exempt (design revision 8, finding F8): the persisted binder binds their
-// raw uint64 storage type and MySQL-mode query plans recover the same
-// numeric operand, so the pre-existing numeric admission, uint64 truth and
-// numeric-to-BOOL cast kernels evaluate them identically in any receiver and
-// session mode - classifying them would fence an unchanged execution and
-// lock native sessions out of SET catalog definitions base already serves.
+// a boolean-condition semantic that depends on the MySQL conditional-boolean
+// contracts fixed by this change: a T_json condition slot of IF/CASE that
+// evaluates in-domain with MySQL conditional numeric coercion (native-mode
+// statements keep the pre-change admission), or the ENUM storage-truth
+// admission that casts the stored ordinal to BOOL. The walk flag feeds only
+// the same-version cross-mode consumption gate in pkg/sql/plan/persisted_ip.go:
+// under the repository's shutdown-only upgrade contract every in-cluster
+// worker and rebinder runs the same binary, so the expression carries no
+// protocol requirement: no per-feature MORPC version and no
+// version gate. SET storage conditions are exempt (design revision
+// 8, finding F8): the persisted binder binds their raw uint64
+// storage type and
+// MySQL-mode query plans recover the same numeric operand, so the
+// pre-existing numeric admission, uint64 truth and numeric-to-BOOL cast
+// kernels evaluate them identically in any receiver and session mode -
+// classifying them would refuse an unchanged execution and lock native
+// sessions out of SET catalog definitions base already serves.
 func isMySQLBooleanConditionContractNode(expr *Expr, fn *Function, id int32) bool {
 	if fn == nil {
 		return false
@@ -975,11 +985,12 @@ func isMySQLBooleanConditionContractNode(expr *Expr, fn *Function, id int32) boo
 		}
 		// iffCheck admits the ENUM condition in-domain exactly the way
 		// caseCheck's condition slots stay typed, so the IFF condition needs
-		// the same capability bit the CASE contract does: an ENUM condition
-		// evaluates through the post-v135 kernel, while a pre-contract worker
-		// hits the old boolean admission and mis-executes the row. A SET
-		// condition keeps its raw numeric uint64 type here and everywhere
-		// else, so the unchanged kernel row never needs the capability bit.
+		// the same consumption-gate mark the CASE contract does: an ENUM
+		// condition evaluates through the new storage-truth kernel on a
+		// MySQL-mode statement, while a native-mode session keeps the old
+		// admission. A SET condition keeps its raw numeric uint64 type here
+		// and everywhere else, so the unchanged kernel row never needs the
+		// mark.
 		cond := fn.Args[0].Typ
 		return cond.Id == planJSONTypeID || cond.Id == planEnumTypeID
 	case caseFunctionID:

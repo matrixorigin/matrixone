@@ -22,7 +22,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -161,77 +160,6 @@ func TestNativeModeDDLBooleanParity(t *testing.T) {
 				"the persisted expression carries the conditional boolean contract for the feature gates")
 		})
 	}
-}
-
-// TestGeneratedColumnAssignmentCastRaisesPersistedFloor pins the review
-// finding about the authoring-gate ordering: for g BOOL AS (e) the RAW
-// expression is only an ENUM reference, so the pre-wrapper authoring check
-// computes no requirement; the assignment wrapper is what binds the new
-// ENUM->BOOL cast. The final stored expression must be validated too, so a
-// below-floor session cannot author the definition through the wrapper, while
-// the plain numeric control keeps authoring below the floor.
-func TestGeneratedColumnAssignmentCastRaisesPersistedFloor(t *testing.T) {
-	opt, proc := mysqlModeOptimizer(t)
-	rt := moruntime.ServiceRuntime(proc.GetService())
-	oldProtocol, hadProtocol := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
-	oldReadFloor, hadReadFloor := rt.GetGlobalVariables(moruntime.PersistedExpressionProtocolFloor)
-	oldAuthoringFloor, hadAuthoringFloor := rt.GetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor)
-	t.Cleanup(func() {
-		if hadProtocol {
-			rt.SetGlobalVariables(moruntime.MOProtocolVersion, oldProtocol)
-		} else {
-			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
-		}
-		if hadReadFloor {
-			rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, oldReadFloor)
-		} else if current, ok := rt.GetGlobalVariables(moruntime.PersistedExpressionProtocolFloor); ok {
-			rt.CompareAndDeleteGlobalVariables(moruntime.PersistedExpressionProtocolFloor, current)
-		}
-		if hadAuthoringFloor {
-			rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, oldAuthoringFloor)
-		} else if current, ok := rt.GetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor); ok {
-			rt.CompareAndDeleteGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, current)
-		}
-	})
-
-	// Below the minted floor in every dimension, the assignment wrapper must
-	// refuse BEFORE anything is persisted.
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion131)
-	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, int64(defines.MORPCVersion131))
-	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, int64(defines.MORPCVersion131))
-	_, err := buildOneGeneratedExpr(t, opt,
-		"create table tg (e enum('a','b'), g bool generated always as (e))")
-	require.Error(t, err,
-		"the wrapped ENUM->BOOL cast must not be authored below the minted floor")
-	require.ErrorContains(t, err, "protocol version 135")
-
-	// The plain numeric control raises no requirement: the raw-ENUM ordinal
-	// cast is the OLD contract, so it keeps authoring even at the old floor.
-	numericGenerated, err := buildOneGeneratedExpr(t, opt,
-		"create table tg (e enum('a','b'), g int generated always as (e + 0))")
-	require.NoError(t, err,
-		"the unchanged numeric generated-column contract keeps authoring at the old floor")
-	require.NotNil(t, numericGenerated)
-	features, walkErr := planpkgRequiredRemoteFeatures(numericGenerated.Expr)
-	require.NoError(t, walkErr)
-	require.False(t, features.JSONBooleanConditionContracts,
-		"no conditional boolean contract rides the numeric control")
-
-	// At or above the minted floor, the same BOOL-target definition authors
-	// and persists exactly the wrapped contract node.
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion135)
-	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, int64(defines.MORPCVersion135))
-	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, int64(defines.MORPCVersion135))
-	generated, err := buildOneGeneratedExpr(t, opt,
-		"create table tg (e enum('a','b'), g bool generated always as (e))")
-	require.NoError(t, err)
-	require.NotNil(t, generated)
-	features, walkErr = planpkgRequiredRemoteFeatures(generated.Expr)
-	require.NoError(t, walkErr)
-	require.True(t, features.JSONBooleanConditionContracts)
-	version, versionErr := RequiredPersistedExpressionProtocolVersion(generated.Expr)
-	require.NoError(t, versionErr)
-	require.Equal(t, int64(defines.MORPCVersion135), version)
 }
 
 // TestCrossModeConsumptionGateRequiresMySQLMode pins the same-version
