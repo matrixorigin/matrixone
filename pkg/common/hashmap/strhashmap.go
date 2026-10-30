@@ -386,6 +386,12 @@ func (itr *strHashmapIterator) encodeHashKeys(vecs []*vector.Vector, start, coun
 	for _, vec := range vecs {
 		if itr.mp.groupingAware || itr.mp.hasNull {
 			switch vec.GetType().Oid {
+			case types.T_char:
+				if !vec.IsConst() && !vec.HasGrouping() && !vec.GetNulls().Any() {
+					fillFlatCharCanonicalKeys(itr, vec, count, start)
+				} else {
+					fillGroupingAwareStr(itr, vec, count, start)
+				}
 			case types.T_json, types.T_array_float32, types.T_array_float64,
 				types.T_array_bf16, types.T_array_float16:
 				fillCanonicalGroupingAwareVarlena(itr, vec, count, start)
@@ -405,6 +411,12 @@ func (itr *strHashmapIterator) encodeHashKeys(vecs []*vector.Vector, start, coun
 			}
 		} else {
 			switch vec.GetType().Oid {
+			case types.T_char:
+				if !vec.IsConst() && !vec.HasGrouping() && !vec.GetNulls().Any() {
+					fillFlatCharCanonicalKeys(itr, vec, count, start)
+				} else {
+					fillStringGroupStr(itr, vec, count, start, len(vecs))
+				}
 			case types.T_json, types.T_array_float32, types.T_array_float64,
 				types.T_array_bf16, types.T_array_float16:
 				fillCanonicalStringGroupStr(itr, vec, count, start)
@@ -771,11 +783,6 @@ func fillGroupingAwareStr(
 		}
 		return
 	}
-	if vec.GetType().Oid == types.T_char && !vec.IsConst() &&
-		!vec.HasGrouping() && !vec.GetNulls().Any() {
-		fillFlatCharCanonicalKeys(itr, vec, n, start)
-		return
-	}
 	float32Codec := keycodec.NewFloat32Codec(vec.GetType().Scale)
 	for i := 0; i < n; i++ {
 		row := start + i
@@ -1001,11 +1008,6 @@ func fillStringGroupStr(itr *strHashmapIterator, vec *vector.Vector, lenV int, s
 	}
 	if vec.IsConst() {
 		fillStringGroupStrForConstVec(itr, vec, lenV, start)
-		return
-	}
-
-	if vec.GetType().Oid == types.T_char && !vec.HasGrouping() && !vec.GetNulls().Any() {
-		fillFlatCharCanonicalKeys(itr, vec, lenV, start)
 		return
 	}
 
