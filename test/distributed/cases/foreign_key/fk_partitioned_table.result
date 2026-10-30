@@ -40,4 +40,21 @@ c6  𝄀
 hash_parent  𝄀
 plain_parent  𝄀
 range_parent
+set foreign_key_checks = 0;
+create table fwd_child(a int, constraint fk_fwd foreign key(a) references fwd_parent(a));
+create table fwd_parent(a int primary key) partition by hash(a) partitions 2;
+Foreign keys are not yet supported in conjunction with partitioning
+set foreign_key_checks = 1;
+show tables;
+➤ Tables_in_fk_partitioned_table[12,5000,0]  𝄀
+c4  𝄀
+c5  𝄀
+c6  𝄀
+fwd_child  𝄀
+hash_parent  𝄀
+plain_parent  𝄀
+range_parent
+drop table fwd_child;
+create table fwd_parent(a int primary key) partition by hash(a) partitions 2;
+drop table fwd_parent;
 drop database fk_partitioned_table;

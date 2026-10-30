@@ -23,4 +23,14 @@ insert into c6 values (2);
 insert into hash_parent values (1), (2);
 select * from hash_parent order by a;
 show tables;
+-- a forward reference (child first, foreign_key_checks=0) must not bind to a
+-- parent that is then created partitioned
+set foreign_key_checks = 0;
+create table fwd_child(a int, constraint fk_fwd foreign key(a) references fwd_parent(a));
+create table fwd_parent(a int primary key) partition by hash(a) partitions 2;
+set foreign_key_checks = 1;
+show tables;
+drop table fwd_child;
+create table fwd_parent(a int primary key) partition by hash(a) partitions 2;
+drop table fwd_parent;
 drop database fk_partitioned_table;
