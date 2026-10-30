@@ -10154,8 +10154,8 @@ func Test_doDropRole(t *testing.T) {
 		convey.So(err, convey.ShouldBeNil)
 		roleLookup, lookupErr := getSqlForRoleIdOfRole(context.TODO(), stmt.Roles[0].UserName)
 		require.NoError(t, lookupErr)
-		require.Equal(t, []string{"begin;", "select 1", roleLookup}, bh.executedSQLs[:3])
-		require.Equal(t, fmt.Sprintf(deleteRoleFromMoRoleRuleFormat, int64(0)), bh.executedSQLs[3])
+		require.Equal(t, []string{"begin;", "select 1", "select 1", roleLookup}, bh.executedSQLs[:4])
+		require.Equal(t, fmt.Sprintf(deleteRoleFromMoRoleRuleFormat, int64(0)), bh.executedSQLs[4])
 		require.Nil(t, ses.ruleCache)
 	})
 	convey.Convey("drop role succ (if exists)", t, func() {
