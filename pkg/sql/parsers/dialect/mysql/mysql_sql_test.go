@@ -3724,7 +3724,13 @@ var (
 			output: "explain (analyze) select * from t",
 		}, {
 			input:  "explain format = 'tree' for connection 10",
-			output: "explain format = tree for connection 10",
+			output: "explain format = 'tree' for connection 10",
+		}, {
+			input:  "explain for connection 10",
+			output: "explain for connection 10",
+		}, {
+			input:  "describe for connection 328",
+			output: "explain for connection 328",
 		}, {
 			input:  "explain db.a",
 			output: "show columns from db.a",
