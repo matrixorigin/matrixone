@@ -303,6 +303,10 @@ func TestSnapshotEmptyPublicationTablesRestore(t *testing.T) {
 		defer sub.Close()
 		for _, accounts := range []string{"all", "named", "empty"} {
 			t.Run(accounts, func(t *testing.T) {
+				// Each case gets its own budget; sharing the setup context let
+				// the first two cases use up the deadline of the third.
+				ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
+				defer cancel()
 				exec := func(query string) {
 					t.Helper()
 					_, err := admin.ExecContext(ctx, query)
