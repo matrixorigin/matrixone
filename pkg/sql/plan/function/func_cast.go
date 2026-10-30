@@ -3413,6 +3413,30 @@ func jsonToNumeric(ctx context.Context, source vector.FunctionParameterWrapper[t
 			if err := jsonAppendUint64(ctx, result, toType.Oid, value); err != nil {
 				return err
 			}
+		case types.T_decimal64, types.T_decimal128:
+			if text, exact := jsonIntegerText(bj); exact {
+				// An exact JSON integer converts through its digits, not a
+				// float64, so values above 2^53 keep every digit. Values the
+				// target cannot hold keep the float path's error below.
+				if appended, err := jsonAppendDecimalText(result, toType, text); err != nil {
+					return err
+				} else if appended {
+					continue
+				}
+			}
+			f, isNull, ok := jsonToScalar(bj)
+			if !ok {
+				return jsonCastErr(ctx, toType.Oid)
+			}
+			if isNull {
+				if err := jsonAppendNull(result, toType); err != nil {
+					return err
+				}
+				continue
+			}
+			if err := jsonAppendValue(ctx, result, toType, f); err != nil {
+				return err
+			}
 		default:
 			f, isNull, ok := jsonToScalar(bj)
 			if !ok {
@@ -3430,6 +3454,37 @@ func jsonToNumeric(ctx context.Context, source vector.FunctionParameterWrapper[t
 		}
 	}
 	return nil
+}
+
+// jsonIntegerText returns the decimal digits of an INT64/UINT64 JSON scalar.
+func jsonIntegerText(bj bytejson.ByteJson) (string, bool) {
+	switch bj.Type {
+	case bytejson.TpCodeInt64:
+		return strconv.FormatInt(bj.GetInt64(), 10), true
+	case bytejson.TpCodeUint64:
+		return strconv.FormatUint(bj.GetUint64(), 10), true
+	default:
+		return "", false
+	}
+}
+
+func jsonAppendDecimalText(result vector.FunctionResultWrapper, toType types.Type, text string) (bool, error) {
+	switch toType.Oid {
+	case types.T_decimal64:
+		d, err := types.ParseDecimal64(text, toType.Width, toType.Scale)
+		if err != nil {
+			return false, nil
+		}
+		return true, vector.MustFunctionResult[types.Decimal64](result).Append(d, false)
+	case types.T_decimal128:
+		d, err := types.ParseDecimal128(text, toType.Width, toType.Scale)
+		if err != nil {
+			return false, nil
+		}
+		return true, vector.MustFunctionResult[types.Decimal128](result).Append(d, false)
+	default:
+		return false, nil
+	}
 }
 
 func jsonAppendInt64(ctx context.Context, result vector.FunctionResultWrapper, oid types.T, value int64) error {
