@@ -272,7 +272,8 @@ func (external *External) Prepare(proc *process.Process) error {
 		for i, attr := range param.Attrs {
 			colIndex := int(attr.ColIndex)
 			colType := &param.Cols[colIndex].Typ
-			typ := makeType(colType, flag || loadTimeTextInput(param, types.T(colType.Id)))
+			typ := makeType(colType, flag || loadTimeTextInput(param, types.T(colType.Id)) ||
+				loadAttributedDecimalTextInput(param, colType))
 			if external.OutputAllocation != nil {
 				vec, err := vector.NewOffHeapVecWithTypeAndAllocation(typ, external.OutputAllocation)
 				if err != nil {
@@ -2116,6 +2117,27 @@ func loadTimeTextInput(param *ExternalParam, id types.T) bool {
 		param.Extern.Format != tree.PARQUET && param.Extern.Format != tree.ARROW
 }
 
+// isAttributedDecimalStagingTarget reports a decimal target carrying the
+// unsigned attribute mask — the type contract the text-staging decisions
+// read at allocation, field decoding and mapper rendering.
+func isAttributedDecimalStagingTarget(typ *plan.Type) bool {
+	return typ != nil && types.T(typ.Id).IsDecimal() &&
+		typ.NumericAttributes&types.NumericAttributeUnsigned != 0
+}
+
+// loadAttributedDecimalTextInput is the attributed DECIMAL text staging
+// predicate: the shared admission boundary classifies raw field text
+// (CSV/JSONLINE) or mapper-rendered text (Parquet/Arrow) for LOAD targets
+// carrying the unsigned attribute. Unlike TIME's textual input, this covers
+// every physical format.
+func loadAttributedDecimalTextInput(param *ExternalParam, typ *plan.Type) bool {
+	if param == nil || param.Extern == nil ||
+		param.Extern.ExternType != int32(plan.ExternType_LOAD) {
+		return false
+	}
+	return isAttributedDecimalStagingTarget(typ)
+}
+
 // parseCSVInt preserves the integer fast path and LOAD conversion policy. Only
 // unquoted external CSV decimal text uses exact assignment rounding.
 // An initial integer overflow can precede an exponent that scales into range;
@@ -2213,7 +2235,11 @@ func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *Ext
 	if loadDataNonStrictAdjustments {
 		switch {
 		case isLoadNumericAdjustedValueType(id) && !isSet:
-			if !field.HasStringQuote {
+			// Attributed DECIMAL targets stage raw trimmed field bytes
+			// unmodified (raw-field preservation boundary): the source sign and
+			// every truncation/invalid-input diagnostic belong to the shared
+			// admission boundary. Unattributed types keep today's rewrite.
+			if !field.HasStringQuote && !isAttributedDecimalStagingTarget(&col.Typ) {
 				field.Val = loadDataNonStrictNumericPrefix(field.Val)
 			}
 		case id == types.T_date || id == types.T_datetime || id == types.T_timestamp:
@@ -2232,7 +2258,8 @@ func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *Ext
 		return moerr.NewInternalErrorf(param.Ctx, "Data too long for column '%s' at row %d", colName, rowIdx+1)
 	}
 
-	if (param.ParallelLoad && !isDirectParallelLoadType(id)) || loadTimeTextInput(param, id) {
+	if (param.ParallelLoad && !isDirectParallelLoadType(id)) || loadTimeTextInput(param, id) ||
+		loadAttributedDecimalTextInput(param, &col.Typ) {
 		err := vector.AppendBytes(vec, []byte(field.Val), false, mp)
 		if err != nil {
 			return err
