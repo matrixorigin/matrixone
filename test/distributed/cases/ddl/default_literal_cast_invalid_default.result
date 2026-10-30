@@ -1,0 +1,41 @@
+drop database if exists default_literal_cast;
+create database default_literal_cast;
+use default_literal_cast;
+create table t_bad1 (id int, c int default 'abc');
+Invalid default value for 'c'
+create table t_bad2 (id int, c int default '12x');
+Invalid default value for 'c'
+create table t_bad3 (id int, c int default 99999999999);
+Invalid default value for 'c'
+create table t_bad4 (id int, c tinyint default 300);
+Invalid default value for 'c'
+create table t_bad5 (id int, c tinyint unsigned default -1);
+Invalid default value for 'c'
+create table t_bad6 (id int, c date default 'abc');
+Invalid default value for 'c'
+create table t_bad7 (id int, c datetime default 'not a time');
+Invalid default value for 'c'
+create table t_bad8 (id int, c decimal(5,2) default 'abc');
+Invalid default value for 'c'
+create table t (id int, c int default 1, d date default '2026-10-30');
+alter table t alter column c set default 'abc';
+Invalid default value for 'c'
+alter table t alter column c set default '12x';
+Invalid default value for 'c'
+alter table t alter column c set default 99999999999;
+Invalid default value for 'c'
+alter table t alter column d set default 'abc';
+Invalid default value for 'd'
+alter table t modify column c int default 'abc';
+Invalid default value for 'c'
+alter table t change column c c2 int default 'abc';
+Invalid default value for 'c2'
+alter table t add column c3 tinyint default 300;
+Invalid default value for 'c3'
+alter table t alter column c set default '42';
+alter table t add column c4 tinyint default -128;
+insert into t(id) values (1);
+select * from t;
+➤ id[4,32,0]  ¦  c[4,32,0]  ¦  d[91,10,0]  ¦  c4[-6,8,0]  𝄀
+1  ¦  42  ¦  2026-10-30  ¦  -128
+drop database default_literal_cast;

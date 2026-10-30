@@ -1043,6 +1043,9 @@ func buildDefaultExprWithColumnsObserved(
 	}
 	defaultExpr, err := makePlan2AssignmentCastExprForColumn(bindCtx, planExpr, typ, colNameOrigin)
 	if err != nil {
+		if purpose == defaultExprForDDL && !isExpressionDefault {
+			err = mapLiteralDefaultCastError(bindCtx, semanticExpr, colNameOrigin, err)
+		}
 		return nil, err
 	}
 	// Constant folding removes the function identity, so rolling-upgrade
@@ -1087,6 +1090,9 @@ func buildDefaultExprWithColumnsObserved(
 	if err != nil {
 		if constantMediumIntDefault && moerr.IsMoErrCode(err, moerr.ErrOutOfRange) {
 			return nil, moerr.NewErrInvalidDefault(bindCtx, colNameOrigin)
+		}
+		if purpose == defaultExprForDDL && !isExpressionDefault {
+			err = mapLiteralDefaultCastError(bindCtx, semanticExpr, colNameOrigin, err)
 		}
 		return nil, mapDDLAssignmentCastError(bindCtx, typ, colNameOrigin, err)
 	}
