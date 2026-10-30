@@ -20,6 +20,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 )
 
 // enforceReadOnlyTxnAccessMode implements the MySQL READ ONLY transaction
@@ -251,17 +252,18 @@ func statementRequiresPersistentWriteAccess(
 			// buildDelete does before applying the temporary exemption, so a
 			// temporary table sharing a name with the alias never shadows the
 			// persistent victim.
-			aliasMap := make(map[string][2]string)
-			for _, ref := range st.TableRefs {
-				deleteSourceAlias(ref, aliasMap)
-			}
+			aliasMap := plan.CollectDeleteSourceAliases(st.TableRefs)
 			for _, target := range st.Tables {
-				resolved := resolveDeleteTarget(target, aliasMap)
-				if resolved == nil {
+				name, ok := target.(*tree.TableName)
+				if !ok || name == nil {
 					// Unresolvable target; fail closed.
 					return true
 				}
-				if !isSessionTemporaryTable(ses, resolved, defaultDatabase) {
+				dbName, tableName, _ := plan.ResolveDMLTargetName(
+					string(name.SchemaName), string(name.ObjectName), "", aliasMap)
+				resolved := *name
+				resolved.SchemaName, resolved.ObjectName = tree.Identifier(dbName), tree.Identifier(tableName)
+				if !isSessionTemporaryTable(ses, &resolved, defaultDatabase) {
 					return true
 				}
 			}
@@ -876,27 +878,6 @@ func collectUpdateSource(expr tree.TableExpr, ctes map[string]struct{}, sources 
 	}
 }
 
-// deleteSourceAlias mirrors the alias map buildDelete constructs over the
-// FROM sources of a multi-table DELETE (pkg/sql/plan/build_constraint_util.go
-// getAliasToName): only explicitly aliased sources contribute, and joins
-// recurse into both sides. Unaliased sources match a write target by name
-// directly and need no entry.
-func deleteSourceAlias(expr tree.TableExpr, aliasMap map[string][2]string) {
-	switch t := expr.(type) {
-	case *tree.TableName:
-		// Only aliased sources map; the caller records the alias itself.
-	case *tree.AliasedTableExpr:
-		if name := sourceTableName(t.Expr); name != nil {
-			if alias := string(t.As.Alias); alias != "" {
-				aliasMap[alias] = [2]string{string(name.SchemaName), string(name.ObjectName)}
-			}
-		}
-	case *tree.JoinTableExpr:
-		deleteSourceAlias(t.Left, aliasMap)
-		deleteSourceAlias(t.Right, aliasMap)
-	}
-}
-
 // sourceTableName unwraps aliases and parentheses to the base table name of
 // a FROM source, if the source is a real table.
 func sourceTableName(expr tree.TableExpr) *tree.TableName {
@@ -909,28 +890,6 @@ func sourceTableName(expr tree.TableExpr) *tree.TableName {
 		return sourceTableName(t.Expr)
 	}
 	return nil
-}
-
-// resolveDeleteTarget maps one write target of a multi-table DELETE to the
-// base table it names. The planner matches a target to an aliased FROM
-// source by object name alone, overwriting even an explicit schema qualifier
-// (build_constraint_util.go setTableExprToDmlTableInfo applies aliasMap
-// unconditionally), so an alias hit wins here as well; without an alias the
-// target names the table directly. Returns nil when the target cannot be
-// resolved statically.
-func resolveDeleteTarget(target tree.TableExpr, aliasMap map[string][2]string) *tree.TableName {
-	name, ok := target.(*tree.TableName)
-	if !ok || name == nil {
-		return nil
-	}
-	if resolved, hit := aliasMap[string(name.ObjectName)]; hit {
-		return tree.NewTableName(
-			tree.Identifier(resolved[1]),
-			tree.ObjectNamePrefix{SchemaName: tree.Identifier(resolved[0])},
-			name.AtTsExpr,
-		)
-	}
-	return name
 }
 
 // writeTargetIsSessionTemporary reports whether a single written table
