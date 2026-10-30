@@ -1,0 +1,37 @@
+set @dt = '2026-01-15';
+select @dt + interval 1 day;
+➤ @dt + INTERVAL 1 day[12,65535,0]  𝄀
+2026-01-16
+select interval 1 day + @dt;
+➤ INTERVAL 1 day + @dt[12,65535,0]  𝄀
+2026-01-16
+select @dt - interval 1 month;
+➤ @dt - INTERVAL 1 month[12,65535,0]  𝄀
+2025-12-15
+select (@dt) + interval 2 hour;
+➤ (@dt) + INTERVAL 2 hour[12,65535,0]  𝄀
+2026-01-15 02:00:00
+select @dt + interval 1 day = date_add(@dt, interval 1 day);
+➤ @dt + INTERVAL 1 day = date_add(@dt, INTERVAL 1 day)[-6,8,0]  𝄀
+1
+set @ts = '2026-01-15 10:20:30';
+select @ts + interval 90 minute, @ts - interval 1 second;
+➤ @ts + INTERVAL 90 minute[12,65535,0]  ¦  @ts - INTERVAL 1 second[12,65535,0]  𝄀
+2026-01-15 11:50:30  ¦  2026-01-15 10:20:29
+set @bad = 'abc';
+select @bad + interval 1 day;
+➤ @bad + INTERVAL 1 day[12,65535,0]  𝄀
+null
+set @n = null;
+select @n + interval 1 day;
+➤ @n + INTERVAL 1 day[-1,16383,0]  𝄀
+null
+drop database if exists uvar_interval;
+create database uvar_interval;
+use uvar_interval;
+create table t (id int primary key, d date);
+insert into t values (1, '2026-01-14'), (2, '2026-01-16');
+select id from t where d < @dt + interval 1 day order by id;
+➤ id[4,32,0]  𝄀
+1
+drop database uvar_interval;

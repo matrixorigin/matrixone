@@ -1335,6 +1335,24 @@ func (b *baseBinder) bindNumericExprWithContextMode(
 	return b.bindNumericExprWithCurrentContext(astExpr, depth)
 }
 
+func isIntervalArithmeticAst(expr *tree.BinaryExpr) bool {
+	if expr.Op != tree.PLUS && expr.Op != tree.MINUS {
+		return false
+	}
+	return isIntervalAst(expr.Left) || isIntervalAst(expr.Right)
+}
+
+// isIntervalAst reports whether expr is the parser's INTERVAL value, i.e.
+// interval(value, time_unit).
+func isIntervalAst(expr tree.Expr) bool {
+	fn, ok := unwrapParenExpr(expr).(*tree.FuncExpr)
+	if !ok || len(fn.Exprs) != 2 || numericAstFunctionName(fn) != "interval" {
+		return false
+	}
+	_, ok = fn.Exprs[1].(*tree.TimeUnitExpr)
+	return ok
+}
+
 func isDirectUserVariableExpr(expr tree.Expr) bool {
 	for {
 		paren, ok := expr.(*tree.ParenExpr)
@@ -1564,6 +1582,12 @@ func (b *baseBinder) numericAstTypesInternalWithHint(
 	case *tree.BinaryExpr:
 		if !isNumericBinaryOp(expr.Op) {
 			return numericAstTypeScan{}, nil
+		}
+		if isIntervalArithmeticAst(expr) {
+			// expr +/- INTERVAL is temporal arithmetic (DATE_ADD/DATE_SUB),
+			// not a numeric context: a text-backed user variable must keep
+			// its string type so it is read as a date, as in MySQL.
+			return numericAstTypeScan{incompatible: true}, nil
 		}
 		left, err := b.numericAstTypesInternalWithHint(expr.Left, depth, resolveColumn, hint)
 		if err != nil {
