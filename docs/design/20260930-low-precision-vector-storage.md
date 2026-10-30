@@ -383,7 +383,7 @@ only when it is stored into a `vecf8`/`vecf4` column (assignment cast).
 | `ORDER BY`, window `ORDER BY` | as for `vecf32`: by the dequantized values, element-wise, comparing the cells in place (no decoded copy of the column) |
 | `GROUP BY`, `DISTINCT`, hash joins, set operations, `IN (subquery)`, `COUNT(DISTINCT)`, `approx_count_distinct` | by the decoded values, as `=` compares: the equality key (`keycodec.AppendCanonicalVecBlock`) is the cell's decoded float32 values, so cells that encode equal values with other block or global scales (vecf8 `[447]` and `[449]` both store 448) are one key; the hash-key preflight reserves that decoded length (4 bytes per element), not the cell's |
 | window `PARTITION BY`, `ORDER BY` | by the decoded values, element-wise |
-| `subvector` | on the values dequantized to `vecf32`; returns `vecf32`, as a slice of a block-scaled cell has no scales of its own (the other narrow vector types keep their type) |
+| `subvector(v, start[, len])` | returns `vecf32`: the result equals `subvector(CAST(v AS vecf32(N)), start[, len])` for every `start` and `len` (1-based, negative from the end; a start of 0 or past the end gives `[]`, a NULL gives NULL), and its dimension is unknown at planning time, as for `vecf32` (see Decisions) |
 | comparison operators (`=`, `<>`, `<`, `<=`, `>`, `>=`, `<=>`, `IN`, `BETWEEN`) | as for `vecbf16`: a text literal is quantized to the column's type, as a stored value is, so a row matches the text it was inserted from (`'[3000, -12, 0.001, 1000000]'` matches the cell that displays as `[3072, -16, 0, 983040]`), and text of another dimension is rejected; cells compare by their dequantized values, element-wise |
 | `hex`, `to_base64` | not supported, as for the other narrow vector types (`vecf32` only) |
 | primary key, partition key, secondary/unique index, vector index | rejected at DDL |
@@ -957,6 +957,14 @@ cosine divides the norm out and squared L2 includes it.
   - *Exact results* are the CPU path's (`gpu_mode = 0`), which computes each distance with
     the scalar functions' kernels, and the scalar functions themselves: ordering near-ties
     exactly takes re-ranking the top-k rows with `cosine_distance` / `l2_distance_sq`.
+- `subvector` on `vecf8`/`vecf4` returns `vecf32`, not the column's type (the other narrow
+  vector types keep theirs, #31775). A block-scaled cell fixes the block size by format (32
+  elements for `vecf8`, 16 for `vecf4`), and every element of a block shares the block's
+  scale. A slice starting inside a block would put elements of two source blocks into one
+  block of the result, which has one scale, so the slice cannot be stored by copying the
+  codes; storing it in the same type would re-quantize it and change its values. The
+  dequantized `vecf32` slice holds every selected value exactly. `CAST(subvector(...) AS
+  vecf8(M))` quantizes it as any `vecf32` value is quantized.
 - The engine looks up a cuBLASLt algorithm for every tile shape it can run (rows in
   buckets of 128 × 2^i up to the tile capacity) when it is created, so a shape the device
   has no algorithm for fails before any row is scored.

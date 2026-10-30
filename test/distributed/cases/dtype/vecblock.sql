@@ -90,6 +90,14 @@ deallocate prepare s2;
 -- NULL handling, conditionals, element math and JSON dequantize to vecf32
 select id, summation(a), l1_norm(b), l2_norm(a) from t where id in (1, 2) order by id;
 select id, subvector(a, 2), subvector(b, 2, 2), subvector(a, '-1') from t where id = 1;
+-- subvector returns vecf32, equal to subvector over the vecf32 cast, also across block boundaries
+create table sv (id int, a vecf8(40), b vecf4(40));
+insert into sv values (1, '[-18.63,-17.26,-15.89,-14.52,-13.15,-11.78,-10.41,-9.04,-7.67,-6.3,-4.93,-3.56,-2.19,-0.82,0.55,1.92,3.29,4.66,6.03,7.4,8.77,10.14,11.51,12.88,14.25,15.62,16.99,18.36,19.73,21.1,22.47,23.84,25.21,26.58,27.95,29.32,30.69,32.06,33.43,34.8]', '[-8.29,-7.58,-6.87,-6.16,-5.45,-4.74,-4.03,-3.32,-2.61,-1.9,-1.19,-0.48,0.23,0.94,1.65,2.36,3.07,3.78,4.49,5.2,5.91,6.62,7.33,8.04,8.75,9.46,10.17,10.88,11.59,12.3,13.01,13.72,14.43,15.14,15.85,16.56,17.27,17.98,18.69,19.4]');
+insert into sv values (2, null, null);
+select id, subvector(a, 5, 30) = subvector(cast(a as vecf32(40)), 5, 30), subvector(b, 9, 20) = subvector(cast(b as vecf32(40)), 9, 20), subvector(a, 33) = subvector(cast(a as vecf32(40)), 33), subvector(b, -3) = subvector(cast(b as vecf32(40)), -3) from sv order by id;
+select id, subvector(a, 0), subvector(b, 99), subvector(a, 31, 3), subvector(b, 15, 3) from sv order by id;
+create table svc as select subvector(a, 2, 3) x, subvector(b, 2, 3) y from sv;
+show create table svc;
 select id, abs(a), sqrt(abs(b)) from t where id = 1;
 select id, coalesce(a, '[0,0,0,0]'), greatest(a, b), case when id = 1 then a else b end from t where id in (1, 3) order by id;
 select json_object('a', a), json_array(b) from t where id = 1;
