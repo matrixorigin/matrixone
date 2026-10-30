@@ -41,6 +41,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 	"github.com/tidwall/btree"
@@ -4492,6 +4493,130 @@ func TestDefaultPolicyAssemblyAccountingChargesInMemoryBuffer(t *testing.T) {
 	src.Clean(mp)
 	require.Zero(t, mp.CurrNB())
 	require.Zero(t, mp.OnHeapCurrNB())
+}
+
+// Replayed in-memory deletes are retained in the compact layout:
+// PartitionState.HandleRowsDelete replaces every delete entry's batch
+// with the lone PK vector. A bounded (ChangeRangeLimit-attached)
+// construction walks each retained tombstone through fillRowCols BEFORE
+// the delete writer sees the row, so the estimator must select the PK
+// vector the writer selects; indexing the legacy logtail position
+// (Vecs[2]) on a compact batch panics index-out-of-range. This test
+// drives the production constructor over replay-produced compact
+// deletes: an under-budget window is refused through the capacity
+// class — the estimator can only charge those rows by reading the
+// compact PK vector — and the admitted window drains the identical
+// tombstone stream with the compact batch's payloads.
+func TestDefaultPolicyTombstoneConstructionReadsCompactRetainedDeletes(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	const rows = 8
+	commitTS := types.BuildTS(2, 1)
+	packer := types.NewPacker()
+	defer packer.Close()
+
+	build := func() (*PartitionState, func()) {
+		// noData=false so replay retains each delete entry's batch, which
+		// HandleRowsDelete then compacts to the PK vector alone.
+		state := NewPartitionState("", false, 42, false)
+		state.start = types.TS{}
+		rowIDVec := vector.NewVec(types.T_Rowid.ToType())
+		tsVec := vector.NewVec(types.T_TS.ToType())
+		pkVec := vector.NewVec(types.T_int64.ToType())
+		tbRowIDVec := vector.NewVec(types.T_Rowid.ToType())
+		cleanup := func() {
+			rowIDVec.Free(mp)
+			tsVec.Free(mp)
+			pkVec.Free(mp)
+			tbRowIDVec.Free(mp)
+		}
+		blockID := types.Blockid{}
+		for row := 0; row < rows; row++ {
+			rowID := types.NewRowid(&blockID, uint32(row))
+			require.NoError(t, vector.AppendFixed(rowIDVec, rowID, false, mp))
+			require.NoError(t, vector.AppendFixed(tsVec, commitTS, false, mp))
+			require.NoError(t, vector.AppendFixed(pkVec, int64(row), false, mp))
+			require.NoError(t, vector.AppendFixed(tbRowIDVec, rowID, false, mp))
+		}
+		state.HandleRowsDelete(context.Background(), &api.Batch{
+			Attrs: []string{"rowid", "time", "pk", "tbrowid"},
+			Vecs: []api.Vector{
+				mustVectorToProto(rowIDVec),
+				mustVectorToProto(tsVec),
+				mustVectorToProto(pkVec),
+				mustVectorToProto(tbRowIDVec),
+			},
+		}, packer, mp)
+		// Pin the precondition: the retained delete batches are the
+		// replay-produced compact layout, the PK vector alone.
+		replayIter := state.NewRawReplayRowsIter()
+		defer replayIter.Close()
+		compact := 0
+		for replayIter.Next() {
+			require.Equal(t, 1, len(replayIter.Entry().Batch.Vecs))
+			compact++
+		}
+		require.Equal(t, rows, compact)
+		return state, cleanup
+	}
+
+	open := func(limit engine.ChangeRangeLimit) (*ChangeHandler, *PartitionState, func(), error) {
+		state, cleanup := build()
+		ctx := engine.WithChangeRangeLimit(context.Background(), limit)
+		handle, err := NewChangesHandler(
+			ctx, state, types.TS{}, types.BuildTS(3, 0),
+			false, objectio.BlockMaxRows, 0, mp, nil,
+		)
+		if err != nil {
+			cleanup()
+			return nil, nil, nil, err
+		}
+		return handle, state, cleanup, nil
+	}
+
+	// An under-budget window is refused through the capacity class.
+	_, _, _, err := open(engine.ChangeRangeLimit{
+		MaxInMemoryRows:  rows / 2,
+		MaxInMemoryBytes: 64 << 20,
+	})
+	require.Error(t, err)
+	require.True(t, engine.IsChangeRangeCapacityError(err), "got %v", err)
+	require.Zero(t, mp.CurrNB())
+
+	// The admitted window drains the identical tombstone stream. The row
+	// budget must also cover the construction sort, which retains the
+	// unsorted buffer and the sorted copy at once (2*rows live); the
+	// pre-admission charge for each buffered row is the estimator's, so
+	// this path stays the exact one the compact layout broke.
+	handle, _, cleanup, err := open(engine.ChangeRangeLimit{
+		MaxInMemoryRows:  3 * rows,
+		MaxInMemoryBytes: 64 << 20,
+	})
+	require.NoError(t, err)
+	got := make(map[int64]types.TS)
+	for {
+		data, tombstone, _, nextErr := handle.Next(context.Background(), mp)
+		require.NoError(t, nextErr)
+		if data == nil && tombstone == nil {
+			break
+		}
+		require.Nil(t, data, "no retained inserts exist in this state")
+		pks := vector.MustFixedColWithTypeCheck[int64](tombstone.Vecs[0])
+		tss := vector.MustFixedColWithTypeCheck[types.TS](tombstone.Vecs[1])
+		for i, pk := range pks {
+			got[pk] = tss[i]
+		}
+		tombstone.Clean(mp)
+	}
+	require.NoError(t, handle.Close())
+	require.Len(t, got, rows)
+	for row := 0; row < rows; row++ {
+		require.Equal(t, commitTS, got[int64(row)],
+			"the served payloads are the compact batch's PKs and each entry's commit time")
+	}
+	cleanup()
+	require.Zero(t, mp.CurrNB())
 }
 
 // A replay source batch stays fully allocated until its handle closes —

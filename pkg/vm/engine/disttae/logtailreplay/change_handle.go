@@ -5274,7 +5274,7 @@ func fillRowCols(entry *RowEntry, tombstone, retainRowID bool, logicalSeqnums []
 		if retainRowID {
 			cols = append(cols, fixedSpec(types.T_Rowid))
 		}
-		pkPayload, pkNulls, pkSize, pkVarlen := srcRow(entry.Batch.Vecs[2])
+		pkPayload, pkNulls, pkSize, pkVarlen := srcRow(deleteEntryPKVec(entry))
 		cols = append(cols, growColSpec{typeSize: pkSize, varlen: pkVarlen, payload: pkPayload, nulls: pkNulls})
 		cols = append(cols, fixedSpec(types.T_TS))
 		return cols
@@ -5306,16 +5306,21 @@ func fillRowCols(entry *RowEntry, tombstone, retainRowID bool, logicalSeqnums []
 	return cols
 }
 
-func fillInDeleteBatch(bat **batch.Batch, entry *RowEntry, retainRowID bool, mp *mpool.MPool) {
-	// Replayed delete entries retain only the PK vector. Older in-memory
-	// entries and test fixtures may still carry the original logtail layout.
-	compact := len(entry.Batch.Vecs) == 1
-	var pkVec *vector.Vector
-	if compact {
-		pkVec = entry.Batch.Vecs[0]
-	} else {
-		pkVec = entry.Batch.Vecs[2]
+// deleteEntryPKVec selects the delete row's primary-key source vector.
+// Replayed delete entries retain only the PK vector; older in-memory
+// entries and test fixtures may still carry the original logtail layout.
+// The construction estimator and the delete writer must agree on this
+// selection, or the admission pass indexes past the compact batch.
+func deleteEntryPKVec(entry *RowEntry) *vector.Vector {
+	if len(entry.Batch.Vecs) == 1 {
+		return entry.Batch.Vecs[0]
 	}
+	return entry.Batch.Vecs[2]
+}
+
+func fillInDeleteBatch(bat **batch.Batch, entry *RowEntry, retainRowID bool, mp *mpool.MPool) {
+	compact := len(entry.Batch.Vecs) == 1
+	pkVec := deleteEntryPKVec(entry)
 	if *bat == nil {
 		vecCnt := 2
 		attrs := []string{objectio.TombstoneAttr_PK_Attr, objectio.DefaultCommitTS_Attr}
