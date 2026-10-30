@@ -2976,9 +2976,9 @@ func TestTryIndexOnlyScan_RandomRangesNotRejected(t *testing.T) {
 						F: &planpb.Function{
 							Func: &ObjectRef{ObjName: "between"},
 							Args: []*planpb.Expr{
-								{Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: bindTag, ColPos: kColPos}}},
-								{Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_I64Val{I64Val: 100}}}},
-								{Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_I64Val{I64Val: 200}}}},
+								GetColExpr(planpb.Type{Id: int32(types.T_int32)}, bindTag, kColPos),
+								MakePlan2Int32ConstExprWithType(100),
+								MakePlan2Int32ConstExprWithType(200),
 							},
 						},
 					},
@@ -3134,6 +3134,54 @@ func (ctx *encodedIndexCostTestContext) GetStatsCache() *StatsCache {
 	return ctx.statsCache
 }
 
+// Cost fixtures start from convenience integer/string filters. Bind their
+// columns and parameters to the fixture catalog, just as the real binder does.
+func bindEncodedIndexCostFilterTypes(t testing.TB, ctx context.Context, table *planpb.TableDef, filter *planpb.Expr) {
+	t.Helper()
+	fn := filter.GetF()
+	if fn == nil || fn.Func == nil {
+		return
+	}
+	if fn.Func.ObjName == "or" {
+		for _, arg := range fn.Args {
+			bindEncodedIndexCostFilterTypes(t, ctx, table, arg)
+		}
+		return
+	}
+	col := indexComparisonColumn(fn)
+	if col == nil {
+		return
+	}
+	typ := table.Cols[col.GetCol().ColPos].Typ
+	col.Typ = typ
+	var bindValue func(*planpb.Expr) *planpb.Expr
+	bindValue = func(expr *planpb.Expr) *planpb.Expr {
+		if expr.GetP() != nil {
+			expr.Typ = typ
+			return expr
+		}
+		if list := expr.GetList(); list != nil {
+			expr.Typ = typ
+			for i, value := range list.List {
+				list.List[i] = bindValue(value)
+			}
+			return expr
+		}
+		if expr.GetLit() != nil && expr.Typ.Id != typ.Id {
+			bound, err := appendCastBeforeExpr(ctx, expr, typ)
+			require.NoError(t, err)
+			return bound
+		}
+		return expr
+	}
+	for i, arg := range fn.Args {
+		if arg == col || fn.Func.ObjName == "in_range" && i == 3 {
+			continue
+		}
+		fn.Args[i] = bindValue(arg)
+	}
+}
+
 func newEncodedIndexCostTestCase(
 	t testing.TB,
 	parts []string,
@@ -3200,6 +3248,9 @@ func newEncodedIndexCostTestCase(
 			},
 		},
 		FilterList: filters,
+	}
+	for _, filter := range filters {
+		bindEncodedIndexCostFilterTypes(t, builder.GetContext(), node.TableDef, filter)
 	}
 	scanID := builder.appendNode(node, ctx)
 	builder.qry.Nodes[scanID].Stats = stats
@@ -4732,7 +4783,8 @@ func TestSmallTablePreservesCoveringShapeOverCheaperBackfill(t *testing.T) {
 	)
 	node := builder.qry.Nodes[scanID]
 	node.TableDef.Pkey = &planpb.PrimaryKeyDef{PkeyColName: "event_id", Names: []string{"event_id"}}
-	node.TableDef.Cols[2].Typ = planpb.Type{Id: int32(types.T_char), Width: 35}
+	node.TableDef.Cols[2].Typ = planpb.Type{Id: int32(types.T_varchar), Width: 35}
+	node.FilterList[0].GetF().Args[0].Typ = node.TableDef.Cols[2].Typ
 	statsWrapper := builder.compCtx.(*encodedIndexCostTestContext).
 		statsCache.Get(encodedIndexCostUnitTableID)
 	stats := statsWrapper.GetStats()
@@ -4770,6 +4822,7 @@ func TestEncodedIndexCostChargesUnpushableResidualOnBackfillCandidates(t *testin
 	leading := makeStringEqFilterExpr(0, 2, "READY")
 	leading.Selectivity = 0.25
 	residual := makeRangeFilterExpr(0, 3, "=", 7)
+	residual.GetF().Args[1] = makeDatetimeConst("2026-08-10 12:00:00")
 	residual.Selectivity = 0.0005
 	builder, scanID, idxDef, colRefCnt := newEncodedIndexCostTestCase(
 		t,
@@ -7477,6 +7530,7 @@ func TestRegularIndexOnlyMatchRequiresContiguousPrefix(t *testing.T) {
 			node.FilterList = append([]*planpb.Expr{makeParamEqFilterExpr(0, 0, 0), makeParamEqFilterExpr(0, 3, 1)}, tc.add...)
 			for _, expr := range node.FilterList {
 				expr.GetF().Args[0].GetCol().RelPos = node.BindingTags[0]
+				bindEncodedIndexCostFilterTypes(t, builder.GetContext(), node.TableDef, expr)
 			}
 			match, ok := builder.matchRegularIndexOnlyScan(idxDef, node, builder.newEncodedRegularIndexCostContext(node, refs))
 			require.True(t, ok)
@@ -8774,6 +8828,7 @@ func TestTryIndexOnlyScanHandlesByteStringPrefixLookups(t *testing.T) {
 		makeFilter func(relPos int32) *planpb.Expr
 		lookupFunc string
 		residual   string
+		reject     bool
 	}{
 		{
 			name: "varbinary equality",
@@ -8839,8 +8894,9 @@ func TestTryIndexOnlyScanHandlesByteStringPrefixLookups(t *testing.T) {
 			residual:   "=",
 		},
 		{
-			name: "char in with encoded terminator collision",
-			typ:  types.T_char,
+			name:   "char in requires PAD SPACE domain instead of raw bytes",
+			typ:    types.T_char,
+			reject: true,
 			makeFilter: func(relPos int32) *planpb.Expr {
 				return makeStringInFilterExpr(relPos, 1, "a", "b")
 			},
@@ -8895,6 +8951,12 @@ func TestTryIndexOnlyScanHandlesByteStringPrefixLookups(t *testing.T) {
 			scanID := builder.appendNode(node, ctx)
 
 			idxNodeID := builder.tryIndexOnlyScan(idxDef, builder.qry.Nodes[scanID], map[[2]int32]int{{bindTag, 1}: 1}, map[[2]int32]*planpb.Expr{}, &Snapshot{})
+			if tt.reject {
+				// A CHAR IN needle also matches padded stored values. A decoded
+				// residual cannot restore values rejected by a raw byte prefix.
+				require.Equal(t, int32(-1), idxNodeID)
+				return
+			}
 			require.NotEqual(t, int32(-1), idxNodeID)
 
 			idxNode := builder.qry.Nodes[idxNodeID]
@@ -9398,30 +9460,7 @@ func TestGetIndexForNonEquiCond_KeepsEarlierNonPairedFilterPriority(t *testing.T
 }
 
 func makeEqFilterExpr(colPos int32) *planpb.Expr {
-	return &planpb.Expr{
-		Expr: &planpb.Expr_F{
-			F: &planpb.Function{
-				Func: &planpb.ObjectRef{ObjName: "="},
-				Args: []*planpb.Expr{
-					{
-						Expr: &planpb.Expr_Col{
-							Col: &planpb.ColRef{
-								RelPos: 0,
-								ColPos: colPos,
-							},
-						},
-					},
-					{
-						Expr: &planpb.Expr_Lit{
-							Lit: &planpb.Literal{
-								Value: &planpb.Literal_I64Val{I64Val: 1},
-							},
-						},
-					},
-				},
-			},
-		},
-	}
+	return makeRangeFilterExpr(0, colPos, "=", 1)
 }
 
 func makeTestIndexTableDef() *planpb.TableDef {
@@ -9906,30 +9945,7 @@ func makeParamRangeFilterExpr(relPos, colPos int32, op string, paramPos int32) *
 }
 
 func makeRangeFilterExpr(relPos, colPos int32, op string, val int64) *planpb.Expr {
-	return &planpb.Expr{
-		Expr: &planpb.Expr_F{
-			F: &planpb.Function{
-				Func: &planpb.ObjectRef{ObjName: op},
-				Args: []*planpb.Expr{
-					{
-						Expr: &planpb.Expr_Col{
-							Col: &planpb.ColRef{
-								RelPos: relPos,
-								ColPos: colPos,
-							},
-						},
-					},
-					{
-						Expr: &planpb.Expr_Lit{
-							Lit: &planpb.Literal{
-								Value: &planpb.Literal_I64Val{I64Val: val},
-							},
-						},
-					},
-				},
-			},
-		},
-	}
+	return makeTypedInt64RangeFilterExpr(relPos, colPos, op, val, planpb.Type{Id: int32(types.T_int64)})
 }
 
 func makeDecimalRangeFilterExpr(
@@ -9970,11 +9986,12 @@ func makeDecimalRangeFilterExpr(
 }
 
 func makeTypedInt64RangeFilterExpr(relPos, colPos int32, op string, val int64, typ planpb.Type) *planpb.Expr {
-	expr := makeRangeFilterExpr(relPos, colPos, op, val)
-	expr.Typ = planpb.Type{Id: int32(types.T_bool)}
-	expr.GetF().Args[0].Typ = typ
-	expr.GetF().Args[1].Typ = typ
-	return expr
+	return &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_bool)}, Expr: &planpb.Expr_F{F: &planpb.Function{
+		Func: &planpb.ObjectRef{ObjName: op}, Args: []*planpb.Expr{
+			GetColExpr(typ, relPos, colPos),
+			{Typ: typ, Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_I64Val{I64Val: val}}}},
+		},
+	}}}
 }
 
 func requireSerializedRangeBoundType(t *testing.T, expr *planpb.Expr, want planpb.Type, wantCast bool) {
