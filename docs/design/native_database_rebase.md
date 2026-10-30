@@ -2,6 +2,9 @@
 
 Status: P0 selected-PK contract recorded; REQUEST_CHANGES for production
 implementation until P1 transaction/recovery evidence closes.
+This historical v0.2 decision is superseded for minimal R1 by the reviewed
+[typed executor revision 1](native_rebase_r1_executor.md). P1 substrate is now
+qualified; R2 publication and no-PK replay remain separately gated.
 Execution plan: [native_rebase_development_plan.md](native_rebase_development_plan.md).
 Frozen dependencies, compatibility findings and P1 probe:
 [P0/P1 implementation record](native_rebase_p0_p1.md).

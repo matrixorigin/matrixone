@@ -7,6 +7,7 @@ See [P0/P1 record](native_rebase_p0_p1.md) and machine-readable
 Supersedes the informal proposal to immediately introduce a new branch catalog
 and multi-transaction publication protocol. Neither is an approved dependency.
 Semantic working draft: [native_database_rebase.md](native_database_rebase.md).
+Reviewed minimal R1 implementation design: [typed executor revision 1](native_rebase_r1_executor.md).
 
 ## Objective and exclusions
 
