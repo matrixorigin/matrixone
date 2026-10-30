@@ -78,6 +78,11 @@ func TestPKCheckReconnectRollsBackAndFreshTxnSucceeds(t *testing.T) {
 	defer writer.Close()
 	_, err = writer.ExecContext(ctx, "set mo_rollback_txn_on_error=0")
 	require.NoError(t, err)
+	// Reconnect recovery is an RC contract. Pin the owning session as well
+	// as BeginTx's next-transaction option: setup/planning must not leave the
+	// parked DELETE using the cluster's default isolation.
+	_, err = writer.ExecContext(ctx, "set session transaction isolation level read committed")
+	require.NoError(t, err)
 	txn, err := writer.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
 	require.NoError(t, err)
 	defer txn.Rollback()
