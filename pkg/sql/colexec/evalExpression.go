@@ -173,21 +173,43 @@ func (expr *memoRootExpressionExecutor) IsColumnExpr() bool { return expr.execut
 func (expr *memoRootExpressionExecutor) TypeName() string   { return expr.executor.TypeName() }
 
 type expressionExecutorBuildContext struct {
-	memos                       map[int32]*memoExpressionState
-	states                      []*memoExpressionState
+	memos          map[int32]*memoExpressionState
+	states         []*memoExpressionState
+	joinActivation *[]ExpressionExecutor
+}
+
+type temporalDiagnosticMode uint8
+
+const (
+	temporalPerRow temporalDiagnosticMode = iota
+	temporalOwnedFilter
+	temporalDeferredJoin
+)
+
+// Diagnostic policy is lexical: a child's policy cannot change its siblings.
+// Memo identities and borrowed activation references accumulate in buildCtx.
+type expressionDiagnosticScope struct {
 	foldOwnedLiteralNumericCast bool
-	joinBuildDiagnosticOwner    *DeferredJoinDiagnostic
-	joinActivation              *[]ExpressionExecutor
-	conditionalJoinDepth        int
-	ownedTemporalFilter         bool
-	temporalGuardDepth          int
-	deferredTemporal            bool
+	joinOwner                   *DeferredJoinDiagnostic
+	conditionalJoin             bool
+	temporalMode                temporalDiagnosticMode
+}
+
+func (scope expressionDiagnosticScope) temporalDiagnosticsPerRow(expr *plan.Expr, deferred bool) bool {
+	if deferred || scope.temporalMode == temporalDeferredJoin {
+		return false
+	}
+	return scope.temporalMode != temporalOwnedFilter ||
+		!function.IsStatementConstantInput(expr) || function.ContainsRowScopedConversion(expr)
 }
 
 // NewOwnedConstantFilterExecutors is only for a single coordinator filter
 // whose diagnostic constant casts were excluded from storage pruning.
 func NewOwnedConstantFilterExecutors(proc *process.Process, exprs []*plan.Expr) ([]ExpressionExecutor, error) {
-	return newExpressionExecutorsWithDiagnosticOwner(proc, exprs, nil, true, nil, true)
+	return newExpressionExecutorsWithScope(proc, exprs, nil, expressionDiagnosticScope{
+		foldOwnedLiteralNumericCast: true,
+		temporalMode:                temporalOwnedFilter,
+	})
 }
 
 func NewExpressionExecutorsFromPlanExpressions(proc *process.Process, planExprs []*plan.Expr) (executors []ExpressionExecutor, err error) {
@@ -203,10 +225,9 @@ func NewExpressionExecutorsFromPlanExpressionsWithAllocation(
 	selection *vector.AllocationAccountSelection,
 	foldOwnedConstantCasts ...bool,
 ) (executors []ExpressionExecutor, err error) {
-	return newExpressionExecutorsWithDiagnosticOwner(
-		proc, planExprs, selection,
-		len(foldOwnedConstantCasts) > 0 && foldOwnedConstantCasts[0], nil, false,
-	)
+	return newExpressionExecutorsWithScope(proc, planExprs, selection, expressionDiagnosticScope{
+		foldOwnedLiteralNumericCast: len(foldOwnedConstantCasts) > 0 && foldOwnedConstantCasts[0],
+	})
 }
 
 // NewJoinBuildExpressionExecutors isolates diagnostics from statement-constant
@@ -217,7 +238,10 @@ func NewJoinBuildExpressionExecutors(
 	selection *vector.AllocationAccountSelection,
 	owner *DeferredJoinDiagnostic,
 ) ([]ExpressionExecutor, error) {
-	return newExpressionExecutorsWithDiagnosticOwner(proc, planExprs, selection, true, owner, false)
+	return newExpressionExecutorsWithScope(proc, planExprs, selection, expressionDiagnosticScope{
+		foldOwnedLiteralNumericCast: true,
+		joinOwner:                   owner,
+	})
 }
 
 // NewJoinProbeExpressionExecutors returns borrowed references to the constant
@@ -238,14 +262,11 @@ func NewJoinProbeExpressionExecutors(
 	}
 	activation := make([]ExpressionExecutor, 0)
 	execs := make([]ExpressionExecutor, len(planExprs))
+	scope := expressionDiagnosticScope{foldOwnedLiteralNumericCast: true, joinOwner: owner}
 	for i, expr := range planExprs {
-		buildCtx := &expressionExecutorBuildContext{
-			foldOwnedLiteralNumericCast: true,
-			joinBuildDiagnosticOwner:    owner,
-			joinActivation:              &activation,
-		}
+		buildCtx := &expressionExecutorBuildContext{joinActivation: &activation}
 		var err error
-		execs[i], err = newExpressionExecutorWithAllocation(proc, expr, selection, buildCtx)
+		execs[i], err = newExpressionExecutorWithAllocation(proc, expr, selection, buildCtx, scope)
 		if err != nil {
 			for j := 0; j < i; j++ {
 				execs[j].Free()
@@ -259,25 +280,19 @@ func NewJoinProbeExpressionExecutors(
 	return execs, activation, nil
 }
 
-func newExpressionExecutorsWithDiagnosticOwner(
+func newExpressionExecutorsWithScope(
 	proc *process.Process,
 	planExprs []*plan.Expr,
 	selection *vector.AllocationAccountSelection,
-	foldOwnedConstantCasts bool,
-	owner *DeferredJoinDiagnostic,
-	ownedTemporalFilter bool,
+	scope expressionDiagnosticScope,
 ) (executors []ExpressionExecutor, err error) {
 	if err := plan.RequireLegacyCollations(planExprs); err != nil {
 		return nil, err
 	}
 	executors = make([]ExpressionExecutor, len(planExprs))
 	for i := range executors {
-		buildCtx := &expressionExecutorBuildContext{
-			foldOwnedLiteralNumericCast: foldOwnedConstantCasts,
-			joinBuildDiagnosticOwner:    owner,
-			ownedTemporalFilter:         ownedTemporalFilter,
-		}
-		executors[i], err = newExpressionExecutorWithAllocation(proc, planExprs[i], selection, buildCtx)
+		buildCtx := &expressionExecutorBuildContext{}
+		executors[i], err = newExpressionExecutorWithAllocation(proc, planExprs[i], selection, buildCtx, scope)
 		if err != nil {
 			for j := 0; j < i; j++ {
 				executors[j].Free()
@@ -304,7 +319,7 @@ func NewExpressionExecutorWithAllocation(
 		return nil, err
 	}
 	buildCtx := &expressionExecutorBuildContext{}
-	executor, err := newExpressionExecutorWithAllocation(proc, planExpr, selection, buildCtx)
+	executor, err := newExpressionExecutorWithAllocation(proc, planExpr, selection, buildCtx, expressionDiagnosticScope{})
 	if err != nil || len(buildCtx.states) == 0 {
 		return executor, err
 	}
@@ -316,6 +331,7 @@ func newExpressionExecutorWithAllocation(
 	planExpr *plan.Expr,
 	selection *vector.AllocationAccountSelection,
 	buildCtx *expressionExecutorBuildContext,
+	scope expressionDiagnosticScope,
 ) (ExpressionExecutor, error) {
 	typ, typeErr := types.TypeFromPlan(planExpr.Typ)
 	if typeErr != nil {
@@ -331,7 +347,7 @@ func newExpressionExecutorWithAllocation(
 		}
 		withoutMemo := *planExpr
 		withoutMemo.AuxId = 0
-		executor, err := newExpressionExecutorWithAllocation(proc, &withoutMemo, selection, buildCtx)
+		executor, err := newExpressionExecutorWithAllocation(proc, &withoutMemo, selection, buildCtx, scope)
 		if err != nil {
 			return nil, err
 		}
@@ -389,7 +405,7 @@ func newExpressionExecutorWithAllocation(
 					{Typ: planExpr.Typ, Expr: &plan.Expr_T{T: &plan.TargetType{}}},
 				},
 			}}}
-			return newExpressionExecutorWithAllocation(proc, physical, selection, buildCtx)
+			return newExpressionExecutorWithAllocation(proc, physical, selection, buildCtx, scope)
 		}
 		executor := NewParamExpressionExecutor(proc.Mp(), int(t.P.Pos), typ)
 		executor.allocation = selection
@@ -450,7 +466,7 @@ func newExpressionExecutorWithAllocation(
 			return nil, err
 		}
 		for i := range executor.parameterExecutor {
-			subExecutor, paramErr := newExpressionExecutorWithAllocation(proc, t.List.List[i], selection, buildCtx)
+			subExecutor, paramErr := newExpressionExecutorWithAllocation(proc, t.List.List[i], selection, buildCtx, scope)
 			if paramErr != nil {
 				executor.Free()
 				return nil, paramErr
@@ -483,7 +499,7 @@ func newExpressionExecutorWithAllocation(
 			return nil, err
 		}
 
-		deferDiagnostic := buildCtx.joinBuildDiagnosticOwner != nil &&
+		deferDiagnostic := scope.joinOwner != nil &&
 			function.IsStatementConstantInput(planExpr) && !function.ContainsRowScopedConversion(planExpr)
 		executor := NewFunctionExpressionExecutor()
 		{
@@ -496,12 +512,11 @@ func newExpressionExecutorWithAllocation(
 			// Dynamic casts retain row-level diagnostics. Only the designated
 			// coordinator filter may fold a literal cast once per execution.
 			executor.stringToNumericCast = !overload.CannotFold() &&
-				isStringToNumericCast(planExpr, buildCtx.foldOwnedLiteralNumericCast)
+				isStringToNumericCast(planExpr, scope.foldOwnedLiteralNumericCast)
 			executor.rowScopedDecimalCast = function.IsExplicitDecimalCast(planExpr)
 			executor.volatile = overload.IsVolatile() || executor.stringToNumericCast || executor.rowScopedDecimalCast
 			executor.rowScopedDiagnostics = overload.HasRowScopedDiagnostics() ||
-				(function.IsTemporalTextDiagnosticCall(planExpr) && !deferDiagnostic && !buildCtx.deferredTemporal &&
-					!(buildCtx.ownedTemporalFilter && buildCtx.temporalGuardDepth == 0 && function.IsStatementConstantInput(planExpr) && !function.ContainsRowScopedConversion(planExpr)))
+				(function.IsTemporalTextDiagnosticCall(planExpr) && scope.temporalDiagnosticsPerRow(planExpr, deferDiagnostic))
 			executor.timeDependent = overload.IsRealTimeRelated()
 			executor.fid, _ = function.DecodeOverloadID(overloadID)
 			executor.evalFn, executor.resetFn, executor.freeFn, _ = overload.GetExecuteMethod()
@@ -515,26 +530,23 @@ func newExpressionExecutorWithAllocation(
 			executor.parameterTypes[i] = types.MustTypeFromPlan(arg.Typ)
 		}
 
-		owner := buildCtx.joinBuildDiagnosticOwner
+		childScope := scope
 		if deferDiagnostic {
-			buildCtx.joinBuildDiagnosticOwner = nil
-			oldDeferred := buildCtx.deferredTemporal
-			buildCtx.deferredTemporal = true
-			defer func() { buildCtx.joinBuildDiagnosticOwner = owner; buildCtx.deferredTemporal = oldDeferred }()
+			childScope.joinOwner = nil
+			childScope.temporalMode = temporalDeferredJoin
 		}
-		conditional := !deferDiagnostic &&
-			(executor.fid == function.IFF || executor.fid == function.CASE || executor.fid == function.COALESCE ||
-				(executor.fid == function.ELT && int32(executor.overloadID) == 1))
-		if conditional {
-			buildCtx.conditionalJoinDepth++
-			defer func() { buildCtx.conditionalJoinDepth-- }()
+		conditional := executor.fid == function.IFF || executor.fid == function.CASE || executor.fid == function.COALESCE
+		if !deferDiagnostic && (conditional || executor.fid == function.ELT && int32(executor.overloadID) == 1) {
+			childScope.conditionalJoin = true
 		}
-		if (executor.fid == function.IFF || executor.fid == function.CASE || executor.fid == function.COALESCE || executor.fid == function.ELT) && !function.IsStatementConstantInput(planExpr) {
-			buildCtx.temporalGuardDepth++
-			defer func() { buildCtx.temporalGuardDepth-- }()
+		// Every row-dependent ELT guards temporal folding, while only its lazy
+		// overload guards join activation. Deferred ownership takes precedence.
+		if childScope.temporalMode == temporalOwnedFilter && (conditional || executor.fid == function.ELT) &&
+			!function.IsStatementConstantInput(planExpr) {
+			childScope.temporalMode = temporalPerRow
 		}
 		for i := range executor.parameterExecutor {
-			subExecutor, paramErr := newExpressionExecutorWithAllocation(proc, t.F.Args[i], selection, buildCtx)
+			subExecutor, paramErr := newExpressionExecutorWithAllocation(proc, t.F.Args[i], selection, buildCtx, childScope)
 			if paramErr != nil {
 				executor.Free()
 				return nil, paramErr
@@ -544,11 +556,11 @@ func newExpressionExecutorWithAllocation(
 		if deferDiagnostic {
 			wrapped := &deferredJoinConstantExecutor{
 				executor:  executor,
-				owner:     owner,
+				owner:     scope.joinOwner,
 				typ:       typ,
 				selection: selection,
 			}
-			if buildCtx.joinActivation != nil && buildCtx.conditionalJoinDepth == 0 {
+			if buildCtx.joinActivation != nil && !scope.conditionalJoin {
 				*buildCtx.joinActivation = append(*buildCtx.joinActivation, wrapped)
 			}
 			return wrapped, nil
@@ -1593,6 +1605,7 @@ func (expr *FunctionExpressionExecutor) iffNullResult(index, length int) (*vecto
 func (expr *FunctionExpressionExecutor) EvalCase(proc *process.Process, batches []*batch.Batch, selectList []bool) (err error) {
 	expr.resetFlowControlPrepareParamKind()
 	rowCount := expressionRowCount(batches)
+	mode := function.CompatibilityModeFromProcess(proc)
 	if len(expr.selectList1) < rowCount {
 		expr.selectList1 = make([]bool, rowCount)
 		expr.selectList2 = make([]bool, rowCount)
@@ -1612,15 +1625,47 @@ func (expr *FunctionExpressionExecutor) EvalCase(proc *process.Process, batches 
 			return err
 		}
 		if i != len(expr.parameterExecutor)-1 {
-			bs := vector.GenerateFunctionFixedTypeParameter[bool](expr.parameterResults[i])
+			if expr.parameterResults[i].GetType().Oid == types.T_json {
+				if mode != function.SQLCompatibilityMySQL {
+					// A native-mode statement never binds a JSON condition, so
+					// reaching one here means a persisted expression authored
+					// with the conditional contracts is being consumed
+					// cross-mode. Fail closed with the typed error instead of
+					// letting the BOOL parameter decoding assert on a T_json
+					// vector and never decode JSON as BOOL.
+					return moerr.NewNotSupported(proc.Ctx,
+						"JSON CASE condition requires the MySQL conditional boolean contracts; a MatrixOne native-mode session cannot evaluate it")
+				}
+				// A JSON condition keeps its own domain through the searched CASE
+				// and evaluates per row with MySQL conditional numeric coercion,
+				// the same kernel IF uses. Only an explicit CAST takes the strict
+				// JSON-to-BOOL path, which the BOOL parameter wrapper below would
+				// also wrongly demand here. A native-mode statement never binds a
+				// JSON condition (legacy admission), so it keeps the base
+				// behavior below byte-identically.
+				for j := 0; j < rowCount; j++ {
+					truth, evalErr := function.IffConditionTruthyAt(expr.parameterResults[i], uint64(j), mode)
+					if evalErr != nil {
+						return evalErr
+					}
+					if remaining[j] && truth {
+						remaining[j] = false
+						selectedBranch[j] = true
+					} else {
+						selectedBranch[j] = false
+					}
+				}
+			} else {
+				bs := vector.GenerateFunctionFixedTypeParameter[bool](expr.parameterResults[i])
 
-			for j := 0; j < rowCount; j++ {
-				b, null := bs.GetValue(uint64(j))
-				if remaining[j] && !null && b {
-					remaining[j] = false
-					selectedBranch[j] = true
-				} else {
-					selectedBranch[j] = false
+				for j := 0; j < rowCount; j++ {
+					b, null := bs.GetValue(uint64(j))
+					if remaining[j] && !null && b {
+						remaining[j] = false
+						selectedBranch[j] = true
+					} else {
+						selectedBranch[j] = false
+					}
 				}
 			}
 			expr.parameterResults[i+1], err = expr.parameterExecutor[i+1].Eval(proc, batches, selectedBranch)
