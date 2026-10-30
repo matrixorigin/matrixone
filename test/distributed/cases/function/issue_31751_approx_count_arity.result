@@ -1,0 +1,19 @@
+drop database if exists approx_count_arity;
+create database approx_count_arity;
+use approx_count_arity;
+create table t (a int, b int);
+insert into t values (1, 1), (2, 2), (null, 3);
+select approx_count(a, b) from t;
+invalid argument approx_count requires exactly one argument, bad value 2
+select approx_count(a, b, a) from t;
+invalid argument approx_count requires exactly one argument, bad value 3
+select approx_count(a) from t;
+➤ approx_count(a)[-5,64,0]  𝄀
+2
+select approx_count(*) from t;
+➤ approx_count(*)[-5,64,0]  𝄀
+3
+select approx_count(b) from t where a is null;
+➤ approx_count(b)[-5,64,0]  𝄀
+1
+drop database approx_count_arity;
