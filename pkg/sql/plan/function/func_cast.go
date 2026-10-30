@@ -8727,6 +8727,24 @@ func strToFloat[T constraints.Float](
 	return strToFloatWithProc(ctx, nil, mode, from, to, bitSize, length, selectList)
 }
 
+// preparedNonFiniteFloat restores a non-finite FLOAT/DOUBLE prepared
+// parameter from its canonical transport text. Ordinary SQL strings, and
+// parameters of any other kind, keep the MySQL string conversion.
+func preparedNonFiniteFloat(kind vector.PrepareParamKind, v []byte) (float64, bool) {
+	if kind != vector.PrepareParamFloat {
+		return 0, false
+	}
+	switch convertByteSliceToString(v) {
+	case "NaN":
+		return math.NaN(), true
+	case "+Inf":
+		return math.Inf(1), true
+	case "-Inf":
+		return math.Inf(-1), true
+	}
+	return 0, false
+}
+
 func strToFloatWithProc[T constraints.Float](
 	ctx context.Context,
 	proc *process.Process,
@@ -8767,7 +8785,14 @@ func strToFloatWithProc[T constraints.Float](
 			if !isBinary && bitSize == 32 && to.GetType().Width > 0 && to.GetType().Scale >= 0 {
 				parseBitSize = 64
 			}
-			if from.GetSourceVector().GetPrepareParamKindAt(int(i)) == vector.PrepareParamBoolean {
+			paramKind := from.GetSourceVector().GetPrepareParamKindAt(int(i))
+			if nonFinite, ok := preparedNonFiniteFloat(paramKind, v); ok {
+				// A FLOAT/DOUBLE parameter travels as Go's canonical text, so
+				// NaN and infinities arrive as "NaN", "+Inf" and "-Inf". The
+				// SQL string parser reads those as 0; restore the source value
+				// so consumers can see and reject it like the direct double.
+				r2 = nonFinite
+			} else if paramKind == vector.PrepareParamBoolean {
 				// Prepared Boolean values travel as canonical text. Restore their
 				// numeric category without changing ordinary SQL string coercion.
 				b, err := strconv.ParseBool(convertByteSliceToString(v))
