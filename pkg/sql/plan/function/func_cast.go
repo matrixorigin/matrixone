@@ -3413,6 +3413,30 @@ func jsonToNumeric(ctx context.Context, source vector.FunctionParameterWrapper[t
 			if err := jsonAppendUint64(ctx, result, toType.Oid, value); err != nil {
 				return err
 			}
+		case types.T_decimal64, types.T_decimal128:
+			if text, exact := jsonIntegerText(bj); exact {
+				// An exact JSON integer converts through its digits, not a
+				// float64, so values above 2^53 keep every digit. Values the
+				// target cannot hold keep the float path's error below.
+				if appended, err := jsonAppendDecimalText(result, toType, text); err != nil {
+					return err
+				} else if appended {
+					continue
+				}
+			}
+			f, isNull, ok := jsonToScalar(bj)
+			if !ok {
+				return jsonCastErr(ctx, toType.Oid)
+			}
+			if isNull {
+				if err := jsonAppendNull(result, toType); err != nil {
+					return err
+				}
+				continue
+			}
+			if err := jsonAppendValue(ctx, result, toType, f); err != nil {
+				return err
+			}
 		default:
 			f, isNull, ok := jsonToScalar(bj)
 			if !ok {
@@ -3430,6 +3454,37 @@ func jsonToNumeric(ctx context.Context, source vector.FunctionParameterWrapper[t
 		}
 	}
 	return nil
+}
+
+// jsonIntegerText returns the decimal digits of an INT64/UINT64 JSON scalar.
+func jsonIntegerText(bj bytejson.ByteJson) (string, bool) {
+	switch bj.Type {
+	case bytejson.TpCodeInt64:
+		return strconv.FormatInt(bj.GetInt64(), 10), true
+	case bytejson.TpCodeUint64:
+		return strconv.FormatUint(bj.GetUint64(), 10), true
+	default:
+		return "", false
+	}
+}
+
+func jsonAppendDecimalText(result vector.FunctionResultWrapper, toType types.Type, text string) (bool, error) {
+	switch toType.Oid {
+	case types.T_decimal64:
+		d, err := types.ParseDecimal64(text, toType.Width, toType.Scale)
+		if err != nil {
+			return false, nil
+		}
+		return true, vector.MustFunctionResult[types.Decimal64](result).Append(d, false)
+	case types.T_decimal128:
+		d, err := types.ParseDecimal128(text, toType.Width, toType.Scale)
+		if err != nil {
+			return false, nil
+		}
+		return true, vector.MustFunctionResult[types.Decimal128](result).Append(d, false)
+	default:
+		return false, nil
+	}
 }
 
 func jsonAppendInt64(ctx context.Context, result vector.FunctionResultWrapper, oid types.T, value int64) error {
@@ -7664,7 +7719,7 @@ func strToSignedWithProc[T constraints.Signed](
 				if len(explicit) > 1 && explicit[1] {
 					appendIntegerNumericCoercionWarning(proc, s, integerPrefix, integerHasPrefix, integerOutOfRange)
 				} else if rangeWarning != explicitIntegerCastTruncated {
-					appendNumericCoercionWarning(proc, s)
+					appendNumericCoercionWarningAs(proc, s, integerCastWarningType(explicit))
 				}
 				appendExplicitIntegerCastWarning(proc, s, rangeWarning)
 				result = T(r)
@@ -8212,6 +8267,20 @@ func diagnoseFloatText(proc *process.Process, ctx context.Context, mode castMode
 // whose numeric prefix was consumed and whose remaining text was discarded.
 // Empty strings intentionally coerce to zero without a warning.
 func appendNumericCoercionWarning(proc *process.Process, value string) {
+	appendNumericCoercionWarningAs(proc, value, "DOUBLE")
+}
+
+// integerCastWarningType names the conversion in a string-to-integer
+// truncation warning. MySQL reports an explicit CAST(... AS SIGNED/UNSIGNED)
+// as an INTEGER conversion; implicit numeric coercion stays DOUBLE.
+func integerCastWarningType(explicit []bool) string {
+	if len(explicit) > 0 && explicit[0] {
+		return "INTEGER"
+	}
+	return "DOUBLE"
+}
+
+func appendNumericCoercionWarningAs(proc *process.Process, value, typeName string) {
 	trimmed := trimASCIISpace(value)
 	if !FloatTextTruncated(trimmed) {
 		return
@@ -8226,7 +8295,7 @@ func appendNumericCoercionWarning(proc *process.Process, value string) {
 	}
 	appender.AppendWarningDiagnostic(
 		moerr.ER_TRUNCATED_WRONG_VALUE,
-		fmt.Sprintf("Truncated incorrect DOUBLE value: '%-.128s'", trimmed),
+		fmt.Sprintf("Truncated incorrect %s value: '%-.128s'", typeName, trimmed),
 	)
 }
 
@@ -8792,7 +8861,7 @@ func strToUnsignedWithProc[T constraints.Unsigned](
 				if len(explicit) > 1 && explicit[1] {
 					appendIntegerNumericCoercionWarning(proc, *res, integerPrefix, integerHasPrefix, integerOutOfRange)
 				} else if rangeWarning != explicitIntegerCastTruncated {
-					appendNumericCoercionWarning(proc, *res)
+					appendNumericCoercionWarningAs(proc, *res, integerCastWarningType(explicit))
 				}
 				appendExplicitIntegerCastWarning(proc, *res, rangeWarning)
 			}
@@ -8811,6 +8880,24 @@ func strToFloat[T constraints.Float](
 	to *vector.FunctionResult[T], bitSize int,
 	length int, selectList *FunctionSelectList) error {
 	return strToFloatWithProc(ctx, nil, mode, from, to, bitSize, length, selectList)
+}
+
+// preparedNonFiniteFloat restores a non-finite FLOAT/DOUBLE prepared
+// parameter from its canonical transport text. Ordinary SQL strings, and
+// parameters of any other kind, keep the MySQL string conversion.
+func preparedNonFiniteFloat(kind vector.PrepareParamKind, v []byte) (float64, bool) {
+	if kind != vector.PrepareParamFloat {
+		return 0, false
+	}
+	switch convertByteSliceToString(v) {
+	case "NaN":
+		return math.NaN(), true
+	case "+Inf":
+		return math.Inf(1), true
+	case "-Inf":
+		return math.Inf(-1), true
+	}
+	return 0, false
 }
 
 func strToFloatWithProc[T constraints.Float](
@@ -8853,7 +8940,14 @@ func strToFloatWithProc[T constraints.Float](
 			if !isBinary && bitSize == 32 && to.GetType().Width > 0 && to.GetType().Scale >= 0 {
 				parseBitSize = 64
 			}
-			if from.GetSourceVector().GetPrepareParamKindAt(int(i)) == vector.PrepareParamBoolean {
+			paramKind := from.GetSourceVector().GetPrepareParamKindAt(int(i))
+			if nonFinite, ok := preparedNonFiniteFloat(paramKind, v); ok {
+				// A FLOAT/DOUBLE parameter travels as Go's canonical text, so
+				// NaN and infinities arrive as "NaN", "+Inf" and "-Inf". The
+				// SQL string parser reads those as 0; restore the source value
+				// so consumers can see and reject it like the direct double.
+				r2 = nonFinite
+			} else if paramKind == vector.PrepareParamBoolean {
 				// Prepared Boolean values travel as canonical text. Restore their
 				// numeric category without changing ordinary SQL string coercion.
 				b, err := strconv.ParseBool(convertByteSliceToString(v))

@@ -135,6 +135,15 @@ func buildCloneTable(
 		); err != nil {
 			return nil, err
 		}
+		// The rest of this build needs the publisher's physical names, but the
+		// AST may be planned again (e.g. compile retry after the definition
+		// changed), and the subscriber can only resolve the subscription
+		// alias. Restore the original names once this build returns.
+		origObjectName, origSchemaName := stmt.SrcTable.ObjectName, stmt.SrcTable.SchemaName
+		defer func() {
+			stmt.SrcTable.ObjectName = origObjectName
+			stmt.SrcTable.SchemaName = origSchemaName
+		}()
 		stmt.SrcTable.ObjectName = tree.Identifier(srcTblDef.Name)
 		stmt.SrcTable.SchemaName = tree.Identifier(srcTblDef.DbName)
 	}
