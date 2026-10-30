@@ -4806,6 +4806,9 @@ func doDropRole(ctx context.Context, ses *Session, dr *tree.DropRole) (err error
 	if err = lockRoleRuleLifecycleInBackground(ctx, bh); err != nil {
 		return err
 	}
+	if err = lockRoleGrantGraphInBackground(ctx, bh); err != nil {
+		return err
+	}
 
 	// step1: check roles exists or not.
 	// handle "IF EXISTS"
@@ -6111,6 +6114,9 @@ func doRevokeRole(ctx context.Context, ses *Session, rr *tree.RevokeRole) (err e
 	if err != nil {
 		return err
 	}
+	if err = lockRoleGrantGraphInBackground(ctx, bh); err != nil {
+		return err
+	}
 
 	// handle "IF EXISTS"
 	// step1 : check Users are real Users or Roles,  exists or not
@@ -6254,7 +6260,7 @@ func doGrantRole(ctx context.Context, ses *Session, gr *tree.GrantRole) (err err
 	}
 
 	account := ses.GetTenantInfo()
-	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{internalExecution: true})
+	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{forcePessimisticRC: true, internalExecution: true})
 	defer bh.Close()
 
 	// step1 : check Roles exists or not
@@ -6275,6 +6281,9 @@ func doGrantRole(ctx context.Context, ses *Session, gr *tree.GrantRole) (err err
 		err = finishTxn(ctx, bh, err)
 	}()
 	if err != nil {
+		return err
+	}
+	if err = lockRoleGrantGraphInBackground(ctx, bh); err != nil {
 		return err
 	}
 

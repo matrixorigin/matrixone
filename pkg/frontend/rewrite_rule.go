@@ -1543,10 +1543,6 @@ func validateRewriteRuleSQL(ctx context.Context, rule string, lowerCaseTableName
 	}
 }
 
-type roleRuleLifecycleBackgroundExec interface {
-	execWithProcessHook(context.Context, string, backExecProcessHook) error
-}
-
 type roleRuleCacheInvalidator interface {
 	invalidateRoleRuleCache(accountID uint32)
 }
@@ -1590,7 +1586,7 @@ func invalidateRoleRuleCaches(ses *Session) {
 // publishing any data; all subsequent role/rule lookups then run after the
 // gate and in the same transaction.
 func lockRoleRuleLifecycleInBackground(ctx context.Context, bh BackgroundExec) error {
-	locker, ok := bh.(roleRuleLifecycleBackgroundExec)
+	locker, ok := bh.(catalogLockBackgroundExec)
 	if !ok {
 		return moerr.NewInternalError(ctx, "role-rule lifecycle requires a native background executor")
 	}
