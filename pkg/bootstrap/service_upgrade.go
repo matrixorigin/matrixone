@@ -66,6 +66,50 @@ type terminalUpgradeError struct{ error }
 
 func (e *terminalUpgradeError) Unwrap() error { return e.error }
 
+// crossingPending reports whether the frozen-4.0.7 crossing has not durably
+// committed for the persisted latest version row v. Intermediate route
+// progress is persisted only as mo_upgrade step rows, so a latest row beyond
+// 4.0.7 needs one scan of its own route; rows on or below 4.0.7 are answered
+// from the row itself with no added read.
+func crossingPending(v versions.Version, txn executor.TxnExecutor) (bool, error) {
+	if versions.Compare(v.Version, "4.0.7") < 0 {
+		return true, nil
+	}
+	if v.Version == "4.0.7" {
+		return !v.IsReady(), nil
+	}
+	steps, err := versions.GetUpgradeVersions(v.Version, v.VersionOffset, txn, false, false)
+	if err != nil {
+		return false, err
+	}
+	return crossingPendingInSteps(steps), nil
+}
+
+// crossingPendingInRoute is crossingPending instantiated on the final route.
+// On a 4.0.7 final the 4.0.7 step is the route's last step and the final
+// marker flips Ready only after every step is Ready, so a not-Ready marker
+// already implies the crossing step is not Ready and no added read is needed;
+// a later final scans its own persisted route steps.
+func crossingPendingInRoute(final versions.Version, txn executor.TxnExecutor) (bool, error) {
+	if final.Version == "4.0.7" {
+		return true, nil
+	}
+	steps, err := versions.GetUpgradeVersions(final.Version, final.VersionOffset, txn, false, false)
+	if err != nil {
+		return false, err
+	}
+	return crossingPendingInSteps(steps), nil
+}
+
+func crossingPendingInSteps(steps []versions.VersionUpgrade) bool {
+	for _, step := range steps {
+		if step.ToVersion == "4.0.7" && step.State != versions.StateReady {
+			return true
+		}
+	}
+	return false
+}
+
 func (s *service) UpgradeStatus() (bool, error) {
 	if s.upgrade.finalVersionCompleted.Load() {
 		return true, nil
@@ -232,9 +276,15 @@ func (s *service) checkUpgrade(ctx context.Context, recheck bool) error {
 			if recheck {
 				state, exists, err := versions.GetVersionState(final.Version, final.VersionOffset, txn, false)
 				if err != nil || exists {
-					if err == nil && exists && state != versions.StateReady && final.Version == "4.0.7" {
-						if err = rejectLegacyCDCTasks(txn); err != nil {
-							return err
+					if err == nil && exists && state != versions.StateReady && versions.Compare(final.Version, "4.0.7") >= 0 {
+						pending, cerr := crossingPendingInRoute(final, txn)
+						if cerr != nil {
+							return cerr
+						}
+						if pending {
+							if err = rejectLegacyCDCTasks(txn); err != nil {
+								return err
+							}
 						}
 					}
 					completed = err == nil && exists && state == versions.StateReady
@@ -252,13 +302,13 @@ func (s *service) checkUpgrade(ctx context.Context, recheck bool) error {
 			// A previously created offset-only route is equally unsupported. Its
 			// target can have this binary's offset even though account versions
 			// cannot record which accounts completed that route.
-			if !v.IsReady() && final.Version == "4.0.7" && v.Version == final.Version && v.VersionOffset == final.VersionOffset {
+			if !v.IsReady() && versions.Compare(final.Version, "4.0.7") >= 0 && v.Version == "4.0.7" && v.VersionOffset == v4_0_7.Handler.Metadata().VersionOffset {
 				steps, err := versions.GetUpgradeVersions(v.Version, v.VersionOffset, txn, false, false)
 				if err != nil {
 					return err
 				}
 				for _, step := range steps {
-					if step.FromVersion == final.Version && step.ToVersion == final.Version {
+					if step.FromVersion == "4.0.7" && step.ToVersion == "4.0.7" {
 						return &terminalUpgradeError{moerr.NewInvalidStateNoCtx("unsupported in-progress 4.0.7 offset-only upgrade; 4.0.7 is frozen and further migrations require a new catalog version")}
 					}
 				}
@@ -269,14 +319,20 @@ func (s *service) checkUpgrade(ctx context.Context, recheck bool) error {
 			// version. Reject that route before any catalog mutation instead of
 			// repeatedly advancing the tenant counter or hanging recovery. Once
 			// released, further catalog migrations must use a newer version.
-			if v.IsReady() && final.Version == "4.0.7" && v.Version == final.Version && v.VersionOffset != final.VersionOffset {
+			if v.IsReady() && versions.Compare(final.Version, "4.0.7") >= 0 && v.Version == "4.0.7" && v.VersionOffset != v4_0_7.Handler.Metadata().VersionOffset {
 				return &terminalUpgradeError{moerr.NewInvalidStateNoCtxf(
 					"catalog 4.0.7 offset %d differs from binary offset %d; 4.0.7 is frozen and further migrations require a new catalog version",
-					v.VersionOffset, final.VersionOffset)}
+					v.VersionOffset, v4_0_7.Handler.Metadata().VersionOffset)}
 			}
-			if created && final.Version == "4.0.7" && (versions.Compare(v.Version, "4.0.7") < 0 || (v.Version == final.Version && !v.IsReady())) {
-				if err := rejectLegacyCDCTasks(txn); err != nil {
+			if created && versions.Compare(final.Version, "4.0.7") >= 0 {
+				pending, err := crossingPending(v, txn)
+				if err != nil {
 					return err
+				}
+				if pending {
+					if err := rejectLegacyCDCTasks(txn); err != nil {
+						return err
+					}
 				}
 			}
 

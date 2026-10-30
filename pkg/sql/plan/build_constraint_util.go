@@ -841,7 +841,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 			}
 		} else {
 			projExpr, err = builder.forceProjectedAssignmentCastExpr(
-				projExpr, oldProject[i], tableDef.Cols[colIdx].Typ, builder.isInsertIgnore)
+				projExpr, oldProject[i], tableDef.Cols[colIdx].Typ, builder.isInsertIgnore, tableDef.Cols[colIdx].Name)
 			if err != nil {
 				return false, nil, nil, err
 			}
@@ -1050,7 +1050,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 							return false, nil, nil, err
 						}
 					}
-					defExpr, err = builder.forceAssignmentCastExpr(defExpr, col.Typ, builder.isInsertIgnore)
+					defExpr, err = builder.forceAssignmentCastExpr(defExpr, col.Typ, builder.isInsertIgnore, col.Name)
 					if err != nil {
 						return false, nil, nil, err
 					}
@@ -1316,28 +1316,235 @@ func assignmentCastProtocolSupported(proc *process.Process) bool {
 	return ok && valid && protocolVersion >= defines.MORPCVersion5
 }
 
+// isAttributedDecimalPlanType reports whether a DECIMAL plan type carries a
+// numeric attribute mask. After authoring normalization any nonzero mask has
+// the UNSIGNED bit set, so bit 0 is the enforcement gate.
+func isAttributedDecimalPlanType(t Type) bool {
+	return types.T(t.Id).IsDecimal() &&
+		t.NumericAttributes&types.NumericAttributeUnsigned != 0
+}
+
+const (
+	unsignedDecimalAdmissionName       = "unsigned_decimal_admission"
+	unsignedDecimalAdmissionStrictName = "unsigned_decimal_admission_strict"
+	unsignedDecimalAdmissionIgnoreName = "unsigned_decimal_admission_ignore"
+)
+
+// unsignedDecimalAdmissionFunctionName selects the admission entry on the
+// build-time ignore axis, mirroring assignmentCastFunctionName. The strict
+// entry is selected by name only inside the authoring-time strict-validation
+// composition.
+func unsignedDecimalAdmissionFunctionName(isIgnore bool) string {
+	if isIgnore {
+		return unsignedDecimalAdmissionIgnoreName
+	}
+	return unsignedDecimalAdmissionName
+}
+
+// forceUnsignedDecimalAdmissionExpr wraps expr in the unsigned DECIMAL domain
+// admission step for an attributed DECIMAL target. The admission preserves the
+// source type: the shape (0x02 = ignore entry) is decided at build time while
+// sql_mode strictness resolves at execution time inside the entry. The third
+// argument is a constant carrying the destination column name, which the
+// execution-time 1264 diagnostics report verbatim.
+func forceUnsignedDecimalAdmissionExpr(
+	ctx context.Context,
+	expr *Expr,
+	targetType Type,
+	admissionFuncName string,
+	columnName string,
+) (*Expr, error) {
+	t1 := makeTypeByPlan2Expr(expr)
+	t2 := makeTypeByPlan2Type(targetType)
+	nameType := types.T_varchar.ToType()
+	fGet, err := function.GetFunctionByName(ctx, admissionFuncName, []types.Type{t1, t2, nameType})
+	if err != nil {
+		return nil, err
+	}
+	return &plan.Expr{
+		Expr: &plan.Expr_F{
+			F: &plan.Function{
+				Func: &ObjectRef{Obj: fGet.GetEncodedOverloadID(), ObjName: admissionFuncName},
+				Args: []*Expr{expr, &plan.Expr{
+					Typ:  targetType,
+					Expr: &plan.Expr_T{T: &plan.TargetType{}},
+				}, {
+					Typ: plan.Type{
+						Id:          int32(types.T_varchar),
+						NotNullable: true,
+						Width:       int32(len(columnName)),
+					},
+					Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+						Isnull:      false,
+						LiteralForm: plan.StringLiteralForm_STRING_LITERAL_TEXT,
+						Value:       &plan.Literal_Sval{Sval: columnName},
+					}},
+				}},
+			},
+		},
+		Typ: expr.Typ,
+	}, nil
+}
+
+// unsignedDecimalAssignmentCastName selects the outer assignment cast for an
+// attributed DECIMAL target. IGNORE replays use cast_ignore so both layers of
+// the boundary carry the statement policy; other assignments use cast_assign
+// so sql_mode resolves at execution time.
+func unsignedDecimalAssignmentCastName(targetType Type, isIgnore bool, proc *process.Process) string {
+	if isIgnore && useIgnoreConversionAssignmentCast(targetType) && assignmentCastProtocolSupported(proc) {
+		return "cast_ignore"
+	}
+	if assignmentCastProtocolSupported(proc) {
+		return "cast_assign"
+	}
+	return "cast"
+}
+
+// unsignedDecimalNullIdentitySource reports sources that are NULL by
+// construction: a NULL literal or an ANY-typed expression (scalar null). A
+// NULL passes every domain check, so composing the admission over it adds
+// nothing but a spurious ANY-typed runtime dispatch; the boundary degrades to
+// the plain cast wrapper, byte-identical to the unattributed shape (I4).
+func unsignedDecimalNullIdentitySource(expr *Expr) bool {
+	if lit := expr.GetLit(); lit != nil && lit.GetIsnull() {
+		return true
+	}
+	return types.T(expr.Typ.Id) == types.T_any
+}
+
+// forceUnsignedDecimalAssignmentComposition builds the complete attributed
+// DECIMAL assignment boundary outerName(admission(src), target). The nullary
+// guard keeps unattributed plans byte-identical. NULL-by-construction sources
+// take only the plain cast wrapper: they have no domain to police and must
+// not leave an ANY-typed admission node in the persisted boundary.
+func forceUnsignedDecimalAssignmentComposition(
+	ctx context.Context,
+	expr *Expr,
+	targetType Type,
+	outerName string,
+	columnName string,
+) (*Expr, error) {
+	if unsignedDecimalNullIdentitySource(expr) {
+		return forceCastExprWithNameAndAssignment(ctx, expr, targetType, "cast", true, true)
+	}
+	inner, err := forceUnsignedDecimalAdmissionExpr(
+		ctx, expr, targetType, unsignedDecimalAdmissionFunctionName(outerName == "cast_ignore"), columnName)
+	if err != nil {
+		return nil, err
+	}
+	return forceCastExprWithNameAndAssignment(ctx, inner, targetType, outerName, true, true)
+}
+
+// isUnsignedDecimalAdmissionName reports the plan-owned admission entries.
+// Function names from user SQL arrive in the caller's spelling, so the
+// comparison folds case.
+func isUnsignedDecimalAdmissionName(name string) bool {
+	switch strings.ToLower(name) {
+	case unsignedDecimalAdmissionName,
+		unsignedDecimalAdmissionStrictName,
+		unsignedDecimalAdmissionIgnoreName:
+		return true
+	}
+	return false
+}
+
+// matchUnsignedDecimalAssignmentComposition recognizes a persisted attributed
+// DECIMAL assignment boundary by typed shape: an assignment-cast-family outer
+// node (the name set the existing consumers already match) whose arg0 is the
+// plan-owned admission node feeding the same attributed target. User-written
+// CASTs or subexpressions inside the source are never matched; the admission
+// arg1 must be the target-type carrier for the identical attributed type.
+func matchUnsignedDecimalAssignmentComposition(expr *plan.Expr) (src *plan.Expr, columnName string, ok bool) {
+	if expr == nil {
+		return nil, "", false
+	}
+	if !isAttributedDecimalPlanType(expr.Typ) {
+		return nil, "", false
+	}
+	f := expr.GetF()
+	if f == nil || f.Func == nil || len(f.Args) != 2 {
+		return nil, "", false
+	}
+	switch f.Func.ObjName {
+	case "cast", "cast_assign", "cast_strict", "cast_ignore":
+	default:
+		return nil, "", false
+	}
+	inner := f.Args[0].GetF()
+	if inner == nil || inner.Func == nil || !isUnsignedDecimalAdmissionName(inner.Func.ObjName) {
+		return nil, "", false
+	}
+	// The three-argument shape carries the destination column name; the
+	// two-argument shape predates it and replays with the label fallback.
+	if len(inner.Args) != 2 && len(inner.Args) != 3 {
+		return nil, "", false
+	}
+	carrier := inner.Args[1]
+	if carrier == nil || carrier.GetT() == nil || !isAttributedDecimalPlanType(carrier.Typ) {
+		return nil, "", false
+	}
+	if carrier.Typ.Id != expr.Typ.Id || carrier.Typ.Width != expr.Typ.Width ||
+		carrier.Typ.Scale != expr.Typ.Scale ||
+		carrier.Typ.NumericAttributes != expr.Typ.NumericAttributes {
+		return nil, "", false
+	}
+	name := ""
+	if len(inner.Args) == 3 {
+		if lit, isLit := inner.Args[2].Expr.(*plan.Expr_Lit); isLit && lit.Lit != nil {
+			if sval, isSval := lit.Lit.Value.(*plan.Literal_Sval); isSval {
+				name = sval.Sval
+			}
+		}
+	}
+	return inner.Args[0], name, true
+}
+
+// rePoliceUnsignedDecimalAssignmentBoundary restores the complete assignment
+// boundary of a persisted attributed DECIMAL expression under the current
+// statement policy: IGNORE switches BOTH layers to the ignore entries,
+// non-IGNORE to cast_assign plus the mode-resolved admission entry. Anything
+// outside the typed boundary shape passes through byte-identically. The
+// rewrite is idempotent under a fixed policy, and an IGNORE -> non-IGNORE
+// sequence reproduces the DDL-authored boundary.
+func rePoliceUnsignedDecimalAssignmentBoundary(
+	ctx context.Context,
+	expr *plan.Expr,
+	isIgnore bool,
+	proc *process.Process,
+) (*plan.Expr, error) {
+	src, columnName, ok := matchUnsignedDecimalAssignmentComposition(expr)
+	if !ok {
+		return expr, nil
+	}
+	return forceUnsignedDecimalAssignmentComposition(ctx, src, expr.Typ,
+		unsignedDecimalAssignmentCastName(expr.Typ, isIgnore, proc), columnName)
+}
+
 // needsSameTypeAssignmentCast 判断相同规划器类型是否仍需要赋值检查。
 // BLOB/TEXT 和扩展 TIME 可能携带超出目标列范围的值。
 // 固定维度向量的实际载荷长度也可能不符合其声明宽度。
 // 这些类型都不能仅根据元数据相等省略赋值检查。
 func needsSameTypeAssignmentCast(targetType Type) bool {
 	return isMediumIntPlanType(targetType) ||
+		isAttributedDecimalPlanType(targetType) ||
 		targetType.Id == int32(types.T_blob) ||
 		targetType.Id == int32(types.T_text) ||
 		targetType.Id == int32(types.T_time) ||
 		(types.T(targetType.Id).IsArrayRelate() && targetType.Width > 0 && targetType.Width != types.MaxArrayDimension)
 }
 
-func forceCastExpr2(ctx context.Context, expr *Expr, t2 types.Type, targetType *plan.Expr) (*Expr, error) {
-	return forceCastExpr2WithIgnore(ctx, expr, t2, targetType, false)
+func forceCastExpr2(ctx context.Context, expr *Expr, t2 types.Type, targetType *plan.Expr, columnName ...string) (*Expr, error) {
+	return forceCastExpr2WithIgnore(ctx, expr, t2, targetType, false, columnName...)
 }
 
 // forceCastExpr2WithIgnore builds the assignment cast for a DML write when the
 // target plan.Expr is already known. SQL-mode-sensitive targets normally use
 // cast_assign so width-constrained strings, YEAR values, and TIME range checks
-// can apply strict, non-strict, and IGNORE semantics at runtime.
-func forceCastExpr2WithIgnore(ctx context.Context, expr *Expr, t2 types.Type, targetType *plan.Expr, isIgnore bool) (*Expr, error) {
-	return forceCastExpr2WithProcess(ctx, expr, t2, targetType, isIgnore, nil)
+// can apply strict, non-strict, and IGNORE semantics at runtime. The optional
+// columnName is reported verbatim by the attributed-DECIMAL admission
+// boundary's 1264 diagnostics.
+func forceCastExpr2WithIgnore(ctx context.Context, expr *Expr, t2 types.Type, targetType *plan.Expr, isIgnore bool, columnName ...string) (*Expr, error) {
+	return forceCastExpr2WithProcess(ctx, expr, t2, targetType, isIgnore, nil, columnName...)
 }
 
 func forceCastExpr2WithProcess(
@@ -1347,9 +1554,14 @@ func forceCastExpr2WithProcess(
 	targetType *plan.Expr,
 	isIgnore bool,
 	proc *process.Process,
+	columnName ...string,
 ) (*Expr, error) {
 	if targetType.Typ.Id == 0 {
 		return expr, nil
+	}
+	admissionColumnName := ""
+	if len(columnName) > 0 {
+		admissionColumnName = columnName[0]
 	}
 	if err := requireMediumIntProtocolForAuthoring(ctx, proc, targetType.Typ); err != nil {
 		return nil, err
@@ -1369,6 +1581,20 @@ func forceCastExpr2WithProcess(
 	t1 := makeTypeByPlan2Expr(expr)
 	if t1.Eq(t2) && !needsSameTypeAssignmentCast(targetType.Typ) && !alterCopyBinaryAssignment(ctx, targetType.Typ) {
 		return expr, nil
+	}
+	if isAttributedDecimalPlanType(targetType.Typ) {
+		// An already-composed admission boundary (for example a persisted
+		// DEFAULT replay) is re-policed under this statement's policy instead
+		// of nesting a second composition around it.
+		if _, _, ok := matchUnsignedDecimalAssignmentComposition(expr); ok {
+			return rePoliceUnsignedDecimalAssignmentBoundary(ctx, expr, isIgnore, proc)
+		}
+		// Attributed DECIMAL targets route through the shared NULL-aware
+		// assignment composition: admission(src) keeps the source type, so a
+		// scalar-NULL (ANY) source would otherwise leave an ANY-typed
+		// admission node the executor's result allocation cannot represent.
+		return forceUnsignedDecimalAssignmentComposition(ctx, expr, targetType.Typ,
+			unsignedDecimalAssignmentCastName(targetType.Typ, isIgnore, proc), admissionColumnName)
 	}
 
 	targetType.Typ.NotNullable = expr.Typ.NotNullable
@@ -1396,6 +1622,7 @@ func (builder *QueryBuilder) forceCastExpr2(
 	t2 types.Type,
 	targetType *plan.Expr,
 	isIgnore bool,
+	columnName ...string,
 ) (*Expr, error) {
 	return forceCastExpr2WithProcess(
 		builder.GetContext(),
@@ -1404,6 +1631,7 @@ func (builder *QueryBuilder) forceCastExpr2(
 		targetType,
 		isIgnore,
 		builder.compCtx.GetProcess(),
+		columnName...,
 	)
 }
 
@@ -1440,8 +1668,8 @@ func assignmentCastFunctionName(targetType Type, isIgnore bool, proc *process.Pr
 // forceAssignmentCastExprWithIgnore builds the assignment cast for a DML write.
 // SQL-mode-sensitive targets normally use cast_assign; IGNORE paths use
 // cast_ignore so invalid writes are adjusted regardless of sql_mode.
-func forceAssignmentCastExprWithIgnore(ctx context.Context, expr *Expr, targetType Type, isIgnore bool) (*Expr, error) {
-	return forceAssignmentCastExprWithProcess(ctx, expr, targetType, isIgnore, nil)
+func forceAssignmentCastExprWithIgnore(ctx context.Context, expr *Expr, targetType Type, isIgnore bool, columnName ...string) (*Expr, error) {
+	return forceAssignmentCastExprWithProcess(ctx, expr, targetType, isIgnore, nil, columnName...)
 }
 
 func forceAssignmentCastExprWithProcess(
@@ -1450,9 +1678,18 @@ func forceAssignmentCastExprWithProcess(
 	targetType Type,
 	isIgnore bool,
 	proc *process.Process,
+	columnName ...string,
 ) (*Expr, error) {
 	if err := requireMediumIntProtocolForAuthoring(ctx, proc, targetType); err != nil {
 		return nil, err
+	}
+	if isAttributedDecimalPlanType(targetType) {
+		name := ""
+		if len(columnName) > 0 {
+			name = columnName[0]
+		}
+		return forceUnsignedDecimalAssignmentComposition(ctx, expr, targetType,
+			unsignedDecimalAssignmentCastName(targetType, isIgnore, proc), name)
 	}
 	return forceAssignmentCastExprWithName(ctx, expr, targetType,
 		assignmentCastFunctionNameForSource(ctx, expr, targetType, isIgnore, proc))
@@ -1493,13 +1730,14 @@ func assignmentCastFunctionNameForSource(ctx context.Context, expr *Expr, target
 	return name
 }
 
-func (builder *QueryBuilder) forceAssignmentCastExpr(expr *Expr, targetType Type, isIgnore bool) (*Expr, error) {
+func (builder *QueryBuilder) forceAssignmentCastExpr(expr *Expr, targetType Type, isIgnore bool, columnName ...string) (*Expr, error) {
 	return forceAssignmentCastExprWithProcess(
 		builder.GetContext(),
 		expr,
 		targetType,
 		isIgnore,
 		builder.compCtx.GetProcess(),
+		columnName...,
 	)
 }
 
@@ -1507,6 +1745,7 @@ func (builder *QueryBuilder) forceProjectedAssignmentCastExpr(
 	expr, sourceExpr *Expr,
 	targetType Type,
 	isIgnore bool,
+	columnName ...string,
 ) (*Expr, error) {
 	if err := requireMediumIntProtocolForAuthoring(
 		builder.GetContext(), builder.compCtx.GetProcess(), targetType,
@@ -1533,7 +1772,7 @@ func (builder *QueryBuilder) forceProjectedAssignmentCastExpr(
 			builder.GetContext(), expr, targetType,
 			assignmentCastFunctionName(targetType, isIgnore, builder.compCtx.GetProcess()), true, true)
 	}
-	return builder.forceAssignmentCastExpr(expr, targetType, isIgnore)
+	return builder.forceAssignmentCastExpr(expr, targetType, isIgnore, columnName...)
 }
 
 func (builder *QueryBuilder) rewriteProjectedMySQLSpecialTypeDisplayCast(expr, sourceExpr *Expr, targetType Type) (*Expr, bool, error) {
@@ -2196,7 +2435,7 @@ func buildValueScan(
 			if err != nil {
 				return nil, err
 			}
-			defExpr, err = builder.forceCastExpr2(defExpr, colTyp, targetTyp, builder.isInsertIgnore)
+			defExpr, err = builder.forceCastExpr2(defExpr, colTyp, targetTyp, builder.isInsertIgnore, col.Name)
 			if err != nil {
 				return nil, err
 			}
@@ -2209,7 +2448,12 @@ func buildValueScan(
 			}
 		} else {
 			sourceType := col.Typ
-			if types.T(col.Typ.Id).IsInteger() {
+			// Attributed decimals join integers on the target-free route: raw
+			// string sources keep their text so unsigned-domain admission
+			// applies the string prefix grammar (including IGNORE
+			// retained-prefix truncation) instead of a context-typed early
+			// conversion.
+			if types.T(col.Typ.Id).IsInteger() || isAttributedDecimalPlanType(col.Typ) {
 				sourceType = plan.Type{}
 			}
 			binder := NewDefaultBinder(builder.GetContext(), nil, nil, sourceType, nil)
@@ -2240,7 +2484,11 @@ func buildValueScan(
 						continue
 					}
 				}
-				if nv, ok := r[i].(*tree.NumVal); ok && !isEnumOrSetPlanType(&col.Typ) && !isTypedArrayPlanType(&col.Typ) {
+				// An attributed decimal literal must bind in its natural type
+				// and pass through unsigned-domain admission; the const fast
+				// path materializes the target type directly and would bypass
+				// the admission composition.
+				if nv, ok := r[i].(*tree.NumVal); ok && !isEnumOrSetPlanType(&col.Typ) && !isTypedArrayPlanType(&col.Typ) && !isAttributedDecimalPlanType(col.Typ) {
 					expr, err := MakeInsertValueConstExpr(proc, nv, &colTyp, builder.isInsertIgnore)
 					if err != nil {
 						return nil, err
@@ -2281,7 +2529,7 @@ func buildValueScan(
 						}
 					}
 				}
-				defExpr, err = builder.forceCastExpr2(defExpr, colTyp, targetTyp, builder.isInsertIgnore)
+				defExpr, err = builder.forceCastExpr2(defExpr, colTyp, targetTyp, builder.isInsertIgnore, col.Name)
 				if err != nil {
 					return nil, err
 				}
@@ -2340,7 +2588,7 @@ func buildValueScan(
 			if err != nil {
 				return nil, err
 			}
-			defExpr, err = builder.forceCastExpr2(defExpr, colTyp, targetTyp, builder.isInsertIgnore)
+			defExpr, err = builder.forceCastExpr2(defExpr, colTyp, targetTyp, builder.isInsertIgnore, col.Name)
 			if err != nil {
 				return nil, err
 			}
