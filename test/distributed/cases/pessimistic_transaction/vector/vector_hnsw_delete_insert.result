@@ -8,6 +8,9 @@ insert into t select result, cast(concat('[', result, ',1,2]') as vecf32(3)) fro
 create index hv using hnsw on t(v) op_type 'vector_l2_ops';
 alter table t alter reindex hv hnsw FORCE_SYNC;
 set @meta = (select index_table_name from mo_catalog.mo_indexes where name = 'hv' and algo = 'hnsw' and algo_table_type = 'hnsw_meta' and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 't') limit 1);
+set @storage = (select index_table_name from mo_catalog.mo_indexes where name = 'hv' and algo = 'hnsw' and algo_table_type = 'hnsw_index' and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 't') limit 1);
+set @evict_sql = concat('set @evict_result = mo_ctl(''cn'', ''EvictVectorIndexCache'', ''', @storage, ''')');
+prepare evict_stale from @evict_sql;
 set @wait_initial_sql = concat('select count(*) = 1 and sum(nrow) = 1000 as initial_ready from `', database(), '`.`', @meta, '`');
 prepare wait_initial from @wait_initial_sql;
 execute wait_initial;
@@ -29,6 +32,7 @@ execute wait_delta;
 ➤ delta_ready[-6,8,0]  𝄀
 1
 deallocate prepare wait_delta;
+execute evict_stale;
 select count(*), count(distinct id), sum(id < 100) as below_deleted from (select id from t order by l2_distance(v, '[1,1,2]') limit 1000) q;
 ➤ count(*)[-5,64,0]  ¦  count(distinct id)[-5,64,0]  ¦  below_deleted[-5,64,0]  𝄀
 1000  ¦  1000  ¦  99
@@ -57,6 +61,7 @@ execute wait_delta;
 ➤ delta_ready[-6,8,0]  𝄀
 1
 deallocate prepare wait_delta;
+execute evict_stale;
 select count(*), count(distinct id), sum(id < 500) as below_deleted from (select id from t order by l2_distance(v, '[888.8,1,2]') limit 1000) q;
 ➤ count(*)[-5,64,0]  ¦  count(distinct id)[-5,64,0]  ¦  below_deleted[-5,64,0]  𝄀
 1000  ¦  1000  ¦  498
@@ -65,6 +70,7 @@ select id from t order by l2_distance(v, '[1,1,2]') limit 3;
 1  𝄀
 2  𝄀
 3
+deallocate prepare evict_stale;
 drop database hnsw_delete_insert;
 SET experimental_hnsw_index = 0;
 SET hnsw_threads_build = 0;
