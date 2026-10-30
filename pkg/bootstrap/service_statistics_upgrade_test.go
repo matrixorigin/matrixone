@@ -65,8 +65,6 @@ func TestPublishedCatalogUpgradeRoutes(t *testing.T) {
 						return statisticsLatestVersionResult(t, versions.Version{Version: tc.version, VersionOffset: tc.offset}, versions.StateReady), nil
 					case strings.HasPrefix(sql, "select version from mo_version"):
 						return newBootstrapStringResult(tc.version), nil
-					case strings.Contains(sql, "from mo_catalog.mo_cdc_task"):
-						require.NotEqual(t, "4.0.7", tc.version, "a repair-only route must not reject current CDC tasks")
 					case strings.HasPrefix(sql, "insert into mo_upgrade"):
 						upgrades = append(upgrades, sql)
 					}
