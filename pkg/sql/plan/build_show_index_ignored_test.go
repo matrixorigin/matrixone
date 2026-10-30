@@ -15,9 +15,11 @@
 package plan
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
@@ -50,10 +52,11 @@ func newShowIndexIgnoredTestContext(t *testing.T) *MockCompilerContext {
 			TblId: uint64(9010 + i),
 			Cols: []*planpb.ColDef{
 				{Name: catalog.IndexIgnored_TblCol_Pk, Typ: planpb.Type{Id: int32(types.T_int64), NotNullable: true}, Primary: true},
+				{Name: catalog.IndexIgnored_TblCol_Code, Typ: planpb.Type{Id: int32(types.T_int32)}},
 				{Name: catalog.IndexIgnored_TblCol_Reason, Typ: planpb.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen}},
 				{Name: catalog.IndexIgnored_TblCol_Ts, Typ: planpb.Type{Id: int32(types.T_int64)}},
 			},
-			Name2ColIndex: map[string]int32{catalog.IndexIgnored_TblCol_Pk: 0, catalog.IndexIgnored_TblCol_Reason: 1, catalog.IndexIgnored_TblCol_Ts: 2},
+			Name2ColIndex: map[string]int32{catalog.IndexIgnored_TblCol_Pk: 0, catalog.IndexIgnored_TblCol_Code: 1, catalog.IndexIgnored_TblCol_Reason: 2, catalog.IndexIgnored_TblCol_Ts: 3},
 			Pkey:          &planpb.PrimaryKeyDef{Names: []string{catalog.IndexIgnored_TblCol_Pk}, PkeyColName: catalog.IndexIgnored_TblCol_Pk},
 		}
 		cc.objects[ignored] = &planpb.ObjectRef{SchemaName: "tpch", ObjName: ignored, Obj: int64(9010 + i)}
@@ -101,9 +104,9 @@ func TestShowIndexIgnored(t *testing.T) {
 			require.Equal(t, "vt", node.GetParentObjRef().GetObjName())
 		}
 	}
-	require.Equal(t, []string{"Key_name", "Primary_key", "Reason", "Ignored_at"}, query.Headings)
+	require.Equal(t, []string{"Key_name", "Primary_key", "Error_code", "Reason", "Ignored_at"}, query.Headings)
 
-	query, err = buildShowIndexIgnoredTestPlan(t, "show index ignored from tpch.vt where Key_name = 'i' and Reason like '%F16%'")
+	query, err = buildShowIndexIgnoredTestPlan(t, fmt.Sprintf("show index ignored from tpch.vt where Key_name = 'i' and Error_code = %d and Reason like '%%range%%'", moerr.ErrIndexVectorOutOfRange))
 	require.NoError(t, err)
 	require.NotEmpty(t, showIndexIgnoredScans(query))
 
@@ -111,8 +114,17 @@ func TestShowIndexIgnored(t *testing.T) {
 	query, err = buildShowIndexIgnoredTestPlan(t, "show index ignored from nation")
 	require.NoError(t, err)
 	require.Empty(t, showIndexIgnoredScans(query))
-	require.Equal(t, []string{"Key_name", "Primary_key", "Reason", "Ignored_at"}, query.Headings)
+	require.Equal(t, []string{"Key_name", "Primary_key", "Error_code", "Reason", "Ignored_at"}, query.Headings)
 
 	_, err = buildShowIndexIgnoredTestPlan(t, "show index ignored from nope")
 	require.Error(t, err)
+}
+
+// A row without a message shows the message of its code.
+func TestIgnoredReasonSql(t *testing.T) {
+	sql := ignoredReasonSql()
+	require.Contains(t, sql, "COALESCE(`__mo_index_reason`, CASE `__mo_index_code`")
+	for _, code := range []uint16{moerr.ErrIndexVectorDimension, moerr.ErrIndexVectorNonFinite, moerr.ErrIndexVectorOutOfRange} {
+		require.Contains(t, sql, fmt.Sprintf(" WHEN %d THEN '%s'", code, moerr.MessageOf(code)))
+	}
 }

@@ -842,14 +842,14 @@ select id from t_cap order by l2_distance(v,'[53,53,53,53]') limit 1;
 create table t_big(id bigint primary key, v vecf32(4));
 insert into t_big values (1,'[1,1,1,1]'),(2,'[100000,1,1,1]');
 create index i_big using hnsw on t_big(v) quantization 'float16';
-Data truncation: data out of range: data type hnsw quantization, vector element 100000 cannot be stored as F16
+the index cannot store more than max_bad_records = 0 rows; row 2: vector element is out of the range the index stores: vector element 100000 cannot be stored as F16
 delete from t_big where id = 2;
 create index i_big using hnsw on t_big(v) quantization 'float16';
 insert into t_big values (2,'[100000,1,1,1]');
-alter table t_big alter reindex i_big hnsw;
+alter table t_big alter reindex i_big hnsw max_bad_records 1;
 show index ignored from t_big;
-➤ Key_name[12,65535,0]  ¦  Primary_key[12,65535,0]  ¦  Reason[12,65535,0]  ¦  Ignored_at[93,19,0]  𝄀
-i_big  ¦  2  ¦  data out of range: data type hnsw quantization, vector element 100000 cannot be stored as F16  ¦  2026-10-28 12:16:11
+➤ Key_name[12,65535,0]  ¦  Primary_key[12,65535,0]  ¦  Error_code[4,32,0]  ¦  Reason[12,65535,0]  ¦  Ignored_at[93,19,0]  𝄀
+i_big  ¦  2  ¦  20345  ¦  vector element is out of the range the index stores  ¦  2026-10-30 09:46:29
 select id from t_f16 order by l2_distance(v,'[100000,1,1,1]') limit 1;
 Data truncation: data out of range: data type hnsw quantization, vector element 100000 cannot be stored as F16
 select mo_ctl('cn', 'SetVectorIndexFreshnessInterval', '0') not like '%failed=[%' as all_cn_restored;

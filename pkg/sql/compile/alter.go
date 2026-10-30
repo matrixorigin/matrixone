@@ -2159,7 +2159,7 @@ func (s *Scope) alterTableCopy(c *Compile, cleanup *alterAutoIncrementResetClean
 							startFromNow, initSQL := false, ""
 							if p, ok := indexplugin.Get(indexDef.IndexAlgo); ok {
 								if idxcronCctx == nil {
-									idxcronCctx = newPluginCompileCtx(s, c, id, extra, dbSource, qry.Database, newTableDef, nil, nil)
+									idxcronCctx = newPluginCompileCtx(s, c, id, extra, dbSource, qry.Database, newTableDef, nil)
 								}
 								startFromNow, initSQL, err = alterCopyCdcSeed(p.Compile(), idxcronCctx, indexDef.IndexName, newTableDef.Indexes)
 								if err != nil {
@@ -2185,7 +2185,7 @@ func (s *Scope) alterTableCopy(c *Compile, cleanup *alterAutoIncrementResetClean
 							d := p.Catalog().SyncDescriptor()
 							if d.IdxcronAction != "" {
 								if idxcronCctx == nil {
-									idxcronCctx = newPluginCompileCtx(s, c, id, extra, dbSource, qry.Database, newTableDef, nil, nil)
+									idxcronCctx = newPluginCompileCtx(s, c, id, extra, dbSource, qry.Database, newTableDef, nil)
 								}
 								metadata, err := p.Compile().IdxcronMetadata(idxcronCctx)
 								if err != nil {
@@ -2238,7 +2238,7 @@ func (s *Scope) alterTableCopy(c *Compile, cleanup *alterAutoIncrementResetClean
 
 			if p, ok := indexplugin.Get(multiTableIndex.IndexAlgo); ok {
 				if aggCctx == nil {
-					aggCctx = newPluginCompileCtx(s, c, id, extra, dbSource, qry.Database, newTableDef, nil, qry.Options.GetNewPluginIndexes())
+					aggCctx = newPluginCompileCtx(s, c, id, extra, dbSource, qry.Database, newTableDef, nil)
 				}
 				err = p.Compile().HandleCreateIndex(aggCctx, multiTableIndex.IndexDefs)
 			}

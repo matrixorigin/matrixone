@@ -231,10 +231,10 @@ const (
 // int8/uint8 index does not reject a vector.
 func CheckStorable[T types.ArrayElement](vec []T, kind usearch.Quantization) error {
 	if len(vec) == 0 {
-		return moerr.NewInternalErrorNoCtx("usearch vector is empty")
+		return moerr.NewIndexVectorDimensionNoCtx("the vector is empty")
 	}
 	if !allFinite(vec) {
-		return moerr.NewInvalidInputNoCtx("hnsw vector has a NaN or infinite element")
+		return moerr.NewIndexVectorNonFiniteNoCtx()
 	}
 	limit, overflows := float32(math.Inf(1)), kind
 	switch kind {
@@ -252,20 +252,20 @@ func CheckStorable[T types.ArrayElement](vec []T, kind usearch.Quantization) err
 	case []float32:
 		for _, e := range x {
 			if e >= limit || e <= -limit {
-				return narrowedError(float64(e), overflows)
+				return moerr.NewIndexVectorOutOfRangeNoCtx(narrowedDetail(float64(e), overflows))
 			}
 		}
 	case []float64:
 		for _, e := range x {
 			if f := float32(e); math.IsInf(float64(f), 0) || f >= limit || f <= -limit {
-				return narrowedError(e, overflows)
+				return moerr.NewIndexVectorOutOfRangeNoCtx(narrowedDetail(e, overflows))
 			}
 		}
 	default:
 		// bf16/f16/int8/uint8 elements widen to float32 exactly; bf16 can exceed f16
 		for _, f := range toFloat32(vec) {
 			if f >= limit || f <= -limit {
-				return narrowedError(float64(f), overflows)
+				return moerr.NewIndexVectorOutOfRangeNoCtx(narrowedDetail(float64(f), overflows))
 			}
 		}
 	}
@@ -358,7 +358,11 @@ func checkNarrowed(x, stored float64, kind usearch.Quantization) error {
 }
 
 func narrowedError(x float64, kind usearch.Quantization) error {
-	return moerr.NewOutOfRangeNoCtxf("hnsw quantization", "vector element %v cannot be stored as %s", x, kind.String())
+	return moerr.NewOutOfRangeNoCtx("hnsw quantization", narrowedDetail(x, kind))
+}
+
+func narrowedDetail(x float64, kind usearch.Quantization) string {
+	return fmt.Sprintf("vector element %v cannot be stored as %s", x, kind.String())
 }
 
 // BaseBounds returns the bounds an int8/uint8 index of a vecint8/vecuint8 column maps its

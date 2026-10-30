@@ -45,8 +45,6 @@ type pluginCompileCtx struct {
 	qryDatabase      string
 	originalTableDef *plan.TableDef
 	indexInfo        *plan.CreateTable
-	// newIndexes are the indexes a copying ALTER adds, by name.
-	newIndexes map[string]bool
 }
 
 func newPluginCompileCtx(
@@ -58,7 +56,6 @@ func newPluginCompileCtx(
 	qryDatabase string,
 	originalTableDef *plan.TableDef,
 	indexInfo *plan.CreateTable,
-	newIndexes map[string]bool,
 ) *pluginCompileCtx {
 	return &pluginCompileCtx{
 		scope:            scope,
@@ -69,7 +66,6 @@ func newPluginCompileCtx(
 		qryDatabase:      qryDatabase,
 		originalTableDef: originalTableDef,
 		indexInfo:        indexInfo,
-		newIndexes:       newIndexes,
 	}
 }
 
@@ -86,7 +82,6 @@ func (p *pluginCompileCtx) Database() engine.Database        { return p.dbSource
 func (p *pluginCompileCtx) QryDatabase() string              { return p.qryDatabase }
 func (p *pluginCompileCtx) OriginalTableDef() *plan.TableDef { return p.originalTableDef }
 func (p *pluginCompileCtx) IndexInfo() *plan.CreateTable     { return p.indexInfo }
-func (p *pluginCompileCtx) IsNewIndex(name string) bool      { return p.newIndexes[name] }
 func (p *pluginCompileCtx) MainTableID() uint64              { return p.mainTableID }
 func (p *pluginCompileCtx) MainExtra() *api.SchemaExtra      { return p.mainExtra }
 func (p *pluginCompileCtx) RunSql(sql string) error          { return p.c.runSql(sql) }

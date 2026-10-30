@@ -51,6 +51,31 @@ func TestIndexBuildParamsRoundTrip(t *testing.T) {
 	require.False(t, strings.Contains(s, IndexAlgoParamMaxIndexCapacity), s)
 }
 
+func TestIndexParamMaxBadRecords(t *testing.T) {
+	for _, c := range []struct {
+		params string
+		want   int64
+		err    bool
+	}{
+		{"", 0, false},
+		{`{"op_type":"vector_l2_ops"}`, 0, false},
+		{`{"max_bad_records":"0"}`, 0, false},
+		{`{"max_bad_records":"1000"}`, 1000, false},
+		{`{"max_bad_records":"-1"}`, 0, true},
+		{`{"max_bad_records":"x"}`, 0, true},
+		{`not json`, 0, true},
+	} {
+		got, err := IndexParamMaxBadRecords(c.params)
+		require.Equal(t, c.err, err != nil, c.params)
+		require.Equal(t, c.want, got, c.params)
+	}
+
+	// SHOW CREATE renders it, 0 included
+	s, err := IndexParamsToStringList(`{"max_bad_records":"0"}`)
+	require.NoError(t, err)
+	require.Contains(t, s, IndexAlgoParamMaxBadRecords+" = 0")
+}
+
 func newPrefixKeyPart(colName string, length int) *tree.KeyPart {
 	return &tree.KeyPart{
 		ColName: tree.NewUnresolvedColName(colName),

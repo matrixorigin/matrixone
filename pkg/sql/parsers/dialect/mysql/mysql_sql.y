@@ -152,6 +152,9 @@ func mergeIndexOption(left, right *tree.IndexOption) *tree.IndexOption {
         left.KmeansMaxIteration = right.KmeansMaxIteration
     } else if right.MaxIndexCapacity > 0 {
         left.MaxIndexCapacity = right.MaxIndexCapacity
+    } else if right.MaxBadRecordsSet {
+        left.MaxBadRecords = right.MaxBadRecords
+        left.MaxBadRecordsSet = true
     } else if right.MaxPostingsCapacity > 0 {
         left.MaxPostingsCapacity = right.MaxPostingsCapacity
     } else if right.QuantizerTrainLimit > 0 {
@@ -600,7 +603,7 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 
 // Secondary Index
 %token <str> PARSER VISIBLE INVISIBLE BTREE HASH RTREE BSI IVFFLAT MASTER HNSW CAGRA IVFPQ BM25
-%token <str> ZONEMAP LEADING BOTH TRAILING UNKNOWN LISTS OP_TYPE REINDEX EF_SEARCH EF_CONSTRUCTION M ASYNC FORCE_SYNC AUTO_UPDATE INTERMEDIATE_GRAPH_DEGREE GRAPH_DEGREE QUANTIZATION BITS_PER_CODE DISTRIBUTION_MODE ITOPK_SIZE INCLUDE KMEANS_TRAIN_PERCENT KMEANS_MAX_ITERATION MAX_INDEX_CAPACITY MAX_POSTINGS_CAPACITY QUANTIZER_TRAIN_LIMIT FULLTEXT2 POSITION_FREE FULLSCAN TOKEN_FILTER
+%token <str> ZONEMAP LEADING BOTH TRAILING UNKNOWN LISTS OP_TYPE REINDEX EF_SEARCH EF_CONSTRUCTION M ASYNC FORCE_SYNC AUTO_UPDATE INTERMEDIATE_GRAPH_DEGREE GRAPH_DEGREE QUANTIZATION BITS_PER_CODE DISTRIBUTION_MODE ITOPK_SIZE INCLUDE KMEANS_TRAIN_PERCENT KMEANS_MAX_ITERATION MAX_INDEX_CAPACITY MAX_BAD_RECORDS MAX_POSTINGS_CAPACITY QUANTIZER_TRAIN_LIMIT FULLTEXT2 POSITION_FREE FULLSCAN TOKEN_FILTER
 
 // Alter
 %token <str> EXPIRE ACCOUNT ACCOUNTS UNLOCK DAY NEVER PUMP MYSQL_COMPATIBILITY_MODE UNIQUE_CHECK_ON_AUTOINCR
@@ -765,7 +768,7 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 %type <statement> show_tables_stmt show_sequences_stmt show_process_stmt show_errors_stmt show_warnings_stmt show_target
 %type <statement> show_procedure_status_stmt show_function_status_stmt show_node_list_stmt show_locks_stmt
 %type <statement> show_table_num_stmt show_column_num_stmt show_table_values_stmt show_table_size_stmt
-%type <statement> show_variables_stmt show_status_stmt show_index_stmt show_index_ignored_stmt
+%type <statement> show_variables_stmt show_status_stmt show_index_stmt show_index_ignored_stmt show_index_status_stmt
 %type <statement> show_servers_stmt show_logservice_replicas_stmt show_logservice_stores_stmt show_logservice_settings_stmt
 %type <statement> alter_account_stmt alter_user_stmt alter_view_stmt update_stmt use_stmt update_no_with_stmt alter_database_config_stmt alter_table_stmt alter_role_stmt rename_stmt alter_iceberg_catalog_stmt alter_mongodb_connection_stmt alter_database_defaults_stmt
 %type <merge> merge_no_with_stmt
@@ -5161,6 +5164,7 @@ show_stmt:
 |   show_status_stmt
 |   show_index_stmt
 |   show_index_ignored_stmt
+|   show_index_status_stmt
 |   show_target_filter_stmt
 |   show_table_status_stmt
 |   show_grants_stmt
@@ -5588,6 +5592,15 @@ show_index_ignored_stmt:
     SHOW extended_opt index_kwd IGNORED from_or_in unresolved_object_name where_expression_opt
     {
         $$ = &tree.ShowIndexIgnored{
+            TableName: $6,
+            Where: $7,
+        }
+    }
+
+show_index_status_stmt:
+    SHOW extended_opt index_kwd STATUS from_or_in unresolved_object_name where_expression_opt
+    {
+        $$ = &tree.ShowIndexStatus{
             TableName: $6,
             Where: $7,
         }
@@ -10213,6 +10226,19 @@ index_option:
 	}
 	io := tree.NewIndexOption()
 	io.MaxIndexCapacity = val
+	$$ = io
+    }
+|   MAX_BAD_RECORDS equal_opt INTEGRAL
+    {
+	val, ok := signedIntegral(yylex, $3)
+	if !ok { goto ret1 }
+	if val < 0 {
+		yylex.Error("MAX_BAD_RECORDS should not be negative")
+		return 1
+	}
+	io := tree.NewIndexOption()
+	io.MaxBadRecords = val
+	io.MaxBadRecordsSet = true
 	$$ = io
     }
 |   MAX_POSTINGS_CAPACITY equal_opt INTEGRAL
@@ -16825,6 +16851,7 @@ non_reserved_keyword:
 |   KMEANS_TRAIN_PERCENT
 |   KMEANS_MAX_ITERATION
 |   MAX_INDEX_CAPACITY
+|   MAX_BAD_RECORDS
 |   MAX_POSTINGS_CAPACITY
 |   QUANTIZER_TRAIN_LIMIT
 |   POSITION_FREE

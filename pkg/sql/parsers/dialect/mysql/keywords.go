@@ -326,6 +326,7 @@ func init() {
 		"kmeans_train_percent":       KMEANS_TRAIN_PERCENT,
 		"kmeans_max_iteration":       KMEANS_MAX_ITERATION,
 		"max_index_capacity":         MAX_INDEX_CAPACITY,
+		"max_bad_records":            MAX_BAD_RECORDS,
 		"max_postings_capacity":      MAX_POSTINGS_CAPACITY,
 		"position_free":              POSITION_FREE,
 		"token_filter":               TOKEN_FILTER,

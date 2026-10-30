@@ -134,7 +134,10 @@ func NewIndexConsumer(cnUUID string,
 
 	var ignored *ignoredRows
 	if w, ok := sqlwriter.(ignoredRowWriter); ok {
-		if ignored = newIgnoredRows(info.DBName, tableDef, ie.indexes); ignored != nil {
+		if ignored, err = newIgnoredRows(info.DBName, tableDef, ie.indexes); err != nil {
+			return nil, err
+		}
+		if ignored != nil {
 			w.setIgnored(ignored)
 		}
 	}
@@ -588,8 +591,9 @@ func (c *IndexConsumer) Consume(ctx context.Context, r DataRetriever) error {
 	if c.ignored != nil {
 		err := runTxnWithSqlContext(ctx, c.cnEngine, c.cnTxnClient, c.cnUUID, r.GetAccountID(), 5*time.Minute, nil, nil,
 			func(sqlproc *sqlexec.SqlProcess, cbdata any) error {
-				return c.ignored.load(sqlproc.GetContext(), sqlproc.SqlCtx.GetService(), sqlproc.SqlCtx.Txn(), datatype == ISCPDataType_Snapshot)
+				return c.ignored.load(sqlproc.GetContext(), sqlproc.SqlCtx.GetService(), sqlproc.SqlCtx.Txn(), datatype == ISCPDataType_Snapshot, resolveHostSpillDir(sqlproc))
 			})
+		defer c.ignored.close()
 		if err != nil {
 			return err
 		}

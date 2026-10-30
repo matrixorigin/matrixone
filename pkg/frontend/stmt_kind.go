@@ -261,6 +261,7 @@ func statementCanBeExecutedInUncommittedTransaction(
 		*tree.ShowStatus,
 		*tree.ShowIndex,
 		*tree.ShowIndexIgnored,
+		*tree.ShowIndexStatus,
 		*tree.ShowFunctionOrProcedureStatus,
 		*tree.ShowNodeList,
 		*tree.ShowLocks,

@@ -410,6 +410,9 @@ func remapDbInStmt(stmt tree.Statement, remap remapDbContext) bool {
 	case *tree.ShowIndexIgnored:
 		remapObjectName(s.TableName, remap)
 		remapDbInWhere(s.Where, remap)
+	case *tree.ShowIndexStatus:
+		remapObjectName(s.TableName, remap)
+		remapDbInWhere(s.Where, remap)
 	case *tree.ShowColumnNumber:
 		remapObjectName(s.Table, remap)
 		remapDatabaseName(&s.DbName, remap)

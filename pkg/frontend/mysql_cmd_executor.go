@@ -4266,7 +4266,7 @@ func buildPlanWithPrepareMode(
 			case *tree.Select, *tree.ParenSelect, *tree.ValuesStatement,
 				*tree.Update, *tree.Delete, *tree.Insert, *tree.MultiInsert,
 				*tree.ShowDatabases, *tree.ShowTables, *tree.ShowSequences, *tree.ShowColumns, *tree.ShowColumnNumber,
-				*tree.ShowTableNumber, *tree.ShowCreateDatabase, *tree.ShowCreateTable, *tree.ShowIndex, *tree.ShowIndexIgnored,
+				*tree.ShowTableNumber, *tree.ShowCreateDatabase, *tree.ShowCreateTable, *tree.ShowIndex, *tree.ShowIndexIgnored, *tree.ShowIndexStatus,
 				*tree.ExplainStmt, *tree.ExplainAnalyze, *tree.ExplainPhyPlan:
 				opt := plan2.NewBaseOptimizer(ctx)
 				optimized, err := opt.Optimize(stmt, isPrepareStmt)

@@ -23,12 +23,26 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 )
 
-const showIndexIgnoredEmpty = "SELECT CAST('' AS VARCHAR) AS `Key_name`, CAST('' AS VARCHAR) AS `Primary_key`, CAST('' AS VARCHAR) AS `Reason`, FROM_UNIXTIME(0) AS `Ignored_at` WHERE FALSE"
+const showIndexIgnoredEmpty = "SELECT CAST('' AS VARCHAR) AS `Key_name`, CAST('' AS VARCHAR) AS `Primary_key`, CAST(0 AS INT) AS `Error_code`, CAST('' AS VARCHAR) AS `Reason`, FROM_UNIXTIME(0) AS `Ignored_at` WHERE FALSE"
+
+// ignoredReasonSql returns the expression of the reason of a row: its message, or the message
+// of its error code when it has none.
+func ignoredReasonSql() string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "CAST(COALESCE(%s, CASE %s", sqlquote.Ident(catalog.IndexIgnored_TblCol_Reason), sqlquote.Ident(catalog.IndexIgnored_TblCol_Code))
+	for _, code := range vectorindex.UnstorableCodes {
+		fmt.Fprintf(&b, " WHEN %d THEN %s", code, sqlquote.String(moerr.MessageOf(code)))
+	}
+	b.WriteString(" ELSE '' END) AS VARCHAR)")
+	return b.String()
+}
 
 // buildShowIndexIgnored lists, for each index of a table, the rows the index left out
-// because it cannot store them: the primary key, the reason and when the change was synced.
+// because it cannot store them: the primary key, the error code, the reason and when the
+// change was synced.
 func buildShowIndexIgnored(stmt *tree.ShowIndexIgnored, ctx CompilerContext) (*Plan, error) {
 	dbName, err := databaseIsValid(stmt.TableName.GetDBName(), ctx, nil)
 	if err != nil {
@@ -43,27 +57,13 @@ func buildShowIndexIgnored(stmt *tree.ShowIndexIgnored, ctx CompilerContext) (*P
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
 	}
 
-	// A partitioned table keeps its indexes on its partitions.
-	defs := []*TableDef{tableDef}
-	if tableDef.Partition != nil {
-		if ps := ctx.GetProcess().GetPartitionService(); ps.Enabled() {
-			meta, err := ps.GetPartitionMetadata(ctx.GetContext(), tableDef.GetTblId(), ctx.GetProcess().GetTxnOperator())
-			if err != nil {
-				return nil, err
-			}
-			for _, p := range meta.Partitions {
-				_, def, err := ctx.Resolve(dbName, p.PartitionTableName, nil)
-				if err != nil {
-					return nil, err
-				}
-				if def != nil {
-					defs = append(defs, def)
-				}
-			}
-		}
+	defs, err := tableWithPartitions(ctx, dbName, tableDef)
+	if err != nil {
+		return nil, err
 	}
 
 	var selects []string
+	reason := ignoredReasonSql()
 	ignoredTables := make(map[string]struct{})
 	for _, def := range defs {
 		for _, idx := range def.Indexes {
@@ -71,10 +71,11 @@ func buildShowIndexIgnored(stmt *tree.ShowIndexIgnored, ctx CompilerContext) (*P
 				continue
 			}
 			selects = append(selects, fmt.Sprintf(
-				"SELECT CAST(%s AS VARCHAR) AS `Key_name`, CAST(%s AS VARCHAR) AS `Primary_key`, CAST(%s AS VARCHAR) AS `Reason`, FROM_UNIXTIME(%s DIV 1000000000) AS `Ignored_at` FROM %s",
+				"SELECT CAST(%s AS VARCHAR) AS `Key_name`, CAST(%s AS VARCHAR) AS `Primary_key`, %s AS `Error_code`, %s AS `Reason`, FROM_UNIXTIME(%s DIV 1000000000) AS `Ignored_at` FROM %s",
 				sqlquote.String(idx.IndexName),
 				sqlquote.Ident(catalog.IndexIgnored_TblCol_Pk),
-				sqlquote.Ident(catalog.IndexIgnored_TblCol_Reason),
+				sqlquote.Ident(catalog.IndexIgnored_TblCol_Code),
+				reason,
 				sqlquote.Ident(catalog.IndexIgnored_TblCol_Ts),
 				sqlquote.QualifiedIdent(dbName, idx.IndexTableName)))
 			ignoredTables[idx.IndexTableName] = struct{}{}
@@ -96,14 +97,48 @@ func buildShowIndexIgnored(stmt *tree.ShowIndexIgnored, ctx CompilerContext) (*P
 	if err != nil {
 		return nil, err
 	}
-	// The ignored tables are read on behalf of the table: privileges are checked on it.
+	readOnBehalfOf(p, ignoredTables, objRef)
+	return p, nil
+}
+
+// tableWithPartitions returns tableDef and the definitions of its partitions: a partitioned
+// table keeps its indexes on its partitions.
+func tableWithPartitions(ctx CompilerContext, dbName string, tableDef *TableDef) ([]*TableDef, error) {
+	defs := []*TableDef{tableDef}
+	if tableDef.Partition == nil {
+		return defs, nil
+	}
+	ps := ctx.GetProcess().GetPartitionService()
+	if !ps.Enabled() {
+		return defs, nil
+	}
+	meta, err := ps.GetPartitionMetadata(ctx.GetContext(), tableDef.GetTblId(), ctx.GetProcess().GetTxnOperator())
+	if err != nil {
+		return nil, err
+	}
+	for _, p := range meta.Partitions {
+		_, def, err := ctx.Resolve(dbName, p.PartitionTableName, nil)
+		if err != nil {
+			return nil, err
+		}
+		if def != nil {
+			defs = append(defs, def)
+		}
+	}
+	return defs, nil
+}
+
+// readOnBehalfOf makes the scans of the hidden tables of p checked as reads of the table objRef.
+func readOnBehalfOf(p *Plan, hidden map[string]struct{}, objRef *ObjectRef) {
+	if objRef == nil {
+		return
+	}
 	for _, node := range p.GetQuery().GetNodes() {
 		if node.NodeType != plan.Node_TABLE_SCAN || node.ObjRef == nil {
 			continue
 		}
-		if _, ok := ignoredTables[node.ObjRef.ObjName]; ok && objRef != nil {
+		if _, ok := hidden[node.ObjRef.ObjName]; ok {
 			node.ParentObjRef = DeepCopyObjectRef(objRef)
 		}
 	}
-	return p, nil
 }

@@ -527,24 +527,23 @@ func (w *HnswSqlWriter[T]) Insert(ctx context.Context, row []any) error {
 		return nil
 	}
 
-	if w.unstorable(key, v) {
-		return nil
+	if skip, err := w.unstorable(key, v); skip || err != nil {
+		return err
 	}
 	w.cdc.Insert(key, v, nil)
 	return nil
 }
 
 // unstorable records whether the index cannot store v, the vector of the row with key.
-func (w *HnswSqlWriter[T]) unstorable(key int64, v []T) bool {
+func (w *HnswSqlWriter[T]) unstorable(key int64, v []T) (bool, error) {
 	if w.ignored == nil {
-		return false
+		return false, nil
 	}
 	if err := hnsw.CheckStorable(v, w.kind); err != nil {
-		w.ignored.ignore(key, err.Error())
-		return true
+		return true, w.ignored.ignore(key, err)
 	}
 	w.ignored.indexed(key)
-	return false
+	return false, nil
 }
 
 func (w *HnswSqlWriter[T]) setIgnored(ignored *ignoredRows) {
@@ -575,10 +574,10 @@ func (w *HnswSqlWriter[T]) Upsert(ctx context.Context, row []any) error {
 		return nil
 	}
 
-	if w.unstorable(key, v) {
+	if skip, err := w.unstorable(key, v); skip || err != nil {
 		// remove the version the index holds
 		w.cdc.Delete(key)
-		return nil
+		return err
 	}
 	w.cdc.Upsert(key, v, nil)
 	return nil
