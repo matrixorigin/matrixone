@@ -122,4 +122,47 @@ update float_folded set a=1.2345678901234567e-15,g=default;
 select g = '0.00000000000000123456789012345681e20' as current_default,j = '[1e20]' as current_json from float_folded;
 current_default    current_json
 1    1
+create table float_compat_oracle (id int primary key, d double);
+insert into float_compat_oracle values
+(1,cast('1e20' as double)),
+(2,cast('-1e20' as double)),
+(3,cast('1e-7' as double)),
+(4,cast('1e14' as double)),
+(5,cast('1e-8' as double));
+select id, hex(cast(d as char)) as cast_hex, hex(concat(d)) as concat_hex,
+hex(group_concat(d)) as aggregate_hex
+from float_compat_oracle group by id,d order by id;
+➤ id[4,32,0]  ¦  cast_hex[-1,16383,0]  ¦  concat_hex[12,272,0]  ¦  aggregate_hex[-1,16383,0]  𝄀
+1  ¦  31653230  ¦  31653230  ¦  31653230  𝄀
+2  ¦  2D31653230  ¦  2D31653230  ¦  2D31653230  𝄀
+3  ¦  302E30303030303031  ¦  302E30303030303031  ¦  302E30303030303031  𝄀
+4  ¦  313030303030303030303030303030  ¦  313030303030303030303030303030  ¦  313030303030303030303030303030  𝄀
+5  ¦  302E3030303030303031  ¦  302E3030303030303031  ¦  302E3030303030303031
+select greatest(9007199254740993,cast(9007199254740992 as double)) = 9007199254740992 as greatest_value,
+least(9007199254740993,cast(9007199254740992 as double)) = 9007199254740992 as least_value;
+➤ greatest_value[-6,8,0]  ¦  least_value[-6,8,0]  𝄀
+1  ¦  1
+select id, json_type(json_extract(json_array(d),'$[0]')) as numeric_type,
+hex(cast(json_array(d) as char)) as array_hex,
+hex(json_unquote(json_extract(json_array(d),'$[0]'))) as unquote_hex,
+json_contains(json_array(d),cast(d as char)) as contains_value
+from float_compat_oracle where id <= 3 order by id;
+➤ id[4,32,0]  ¦  numeric_type[12,65535,0]  ¦  array_hex[-1,16383,0]  ¦  unquote_hex[-1,16383,0]  ¦  contains_value[-5,64,0]  𝄀
+1  ¦  DOUBLE  ¦  5B316532305D  ¦  31653230  ¦  1  𝄀
+2  ¦  DOUBLE  ¦  5B2D316532305D  ¦  2D31653230  ¦  1  𝄀
+3  ¦  DOUBLE  ¦  5B302E303030303030315D  ¦  302E30303030303031  ¦  1
+select id, hex(cast(json_arrayagg(d) as char)) as arrayagg_hex,
+hex(cast(json_objectagg(cast(id as char),d) as char)) as objectagg_hex
+from float_compat_oracle where id <= 3 group by id order by id;
+➤ id[4,32,0]  ¦  arrayagg_hex[-1,16383,0]  ¦  objectagg_hex[-1,16383,0]  𝄀
+1  ¦  5B316532305D  ¦  7B2231223A20316532307D  𝄀
+2  ¦  5B2D316532305D  ¦  7B2232223A202D316532307D  𝄀
+3  ¦  5B302E303030303030315D  ¦  7B2233223A20302E303030303030317D
+select id, hex(cast(json_set(json_object(),'$.v',d) as char)) as set_hex
+from float_compat_oracle where id <= 3 order by id;
+➤ id[4,32,0]  ¦  set_hex[-1,16383,0]  𝄀
+1  ¦  7B2276223A20316532307D  𝄀
+2  ¦  7B2276223A202D316532307D  𝄀
+3  ¦  7B2276223A20302E303030303030317D
+drop table float_compat_oracle;
 drop database group_concat_float_28660;

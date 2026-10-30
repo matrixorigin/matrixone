@@ -1,10 +1,12 @@
 -- What a failed statement does to an open transaction.
 --
 -- MySQL rolls back only the failing statement and leaves the transaction open,
--- and that is MO's default for every error but the dozen infrastructure ones
--- (deadlock, lock timeout, a backend that went away) after which a transaction
--- cannot continue anyway. mo_rollback_txn_on_error = 1 opts a session into
--- treating ANY error as fatal to the whole transaction instead.
+-- and that is MO's default for every error but the handful of infrastructure
+-- ones (deadlock, a backend that went away) after which a transaction cannot
+-- continue anyway. An expired lock wait is statement-scoped here exactly like
+-- MySQL's innodb_rollback_on_timeout=OFF; that scope is pinned by
+-- lock_wait_timeout_stmt_rollback.sql. mo_rollback_txn_on_error = 1 opts a
+-- session into treating ANY error as fatal to the whole transaction instead.
 drop database if exists rbscope;
 create database rbscope;
 use rbscope;

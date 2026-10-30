@@ -1879,9 +1879,7 @@ func (tbl *txnTable) PrepareRollback() (err error) {
 		if tbl.txnEntries.IsDeleted(idx) {
 			continue
 		}
-		if err = txnEntry.PrepareRollback(); err != nil {
-			break
-		}
+		err = combineTxnLifecycleErrors(err, txnEntry.PrepareRollback())
 	}
 	return combineTxnLifecycleErrors(err, tbl.rollbackTransferredTombstones())
 }
@@ -2068,15 +2066,15 @@ func isAppendableObjectCreateEntry(entry txnif.TxnEntry) bool {
 
 func (tbl *txnTable) ApplyRollback() (err error) {
 	tbl.transferredTombstoneRollback = true
-	csn := tbl.csnStart
 	for idx, node := range tbl.txnEntries.entries {
 		if tbl.txnEntries.IsDeleted(idx) {
 			continue
 		}
-		if err = node.ApplyRollback(); err != nil {
-			break
+		if _, isCatalogTable := node.(*catalog.TableEntry); isCatalogTable {
+			// PrepareRollback has already detached this MVCC version.
+			continue
 		}
-		csn++
+		err = combineTxnLifecycleErrors(err, node.ApplyRollback())
 	}
 	return
 }

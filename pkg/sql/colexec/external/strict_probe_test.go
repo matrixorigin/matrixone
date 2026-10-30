@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -55,18 +56,21 @@ func TestStrictProbeInputBudget(t *testing.T) {
 		name, data, terminator, starting, comment string
 		success                                   bool
 	}{
-		{name: "unterminated", data: strings.Repeat("x", strictProbeMaxBytes+1)},
-		{name: "quoted field", data: "x,\"" + strings.Repeat("x", strictProbeMaxBytes) + "\"\n"},
-		{name: "quote prefix", data: strings.Repeat("\"", strictProbeMaxBytes+1)},
-		{name: "comments", data: strings.Repeat("#x\n", strictProbeMaxBytes/3+1), comment: "#"},
-		{name: "starting by", data: strings.Repeat("skip\n", strictProbeMaxBytes/5+1), starting: "keep:"},
-		{name: "quoted terminator", data: "x,\"" + strings.Repeat("x", strictProbeMaxBytes-3) + "\"\n"},
-		{name: "escape cutoff", data: "x,\"" + strings.Repeat("x", strictProbeMaxBytes-4) + "\\\"\"\n"},
-		{name: "CRLF cutoff", data: strings.Repeat("x", strictProbeMaxBytes-1) + "\r\n", terminator: "\r\n"},
-		{name: "multibyte cutoff", data: strings.Repeat("x", strictProbeMaxBytes-1) + "||", terminator: "||"},
-		{name: "complete record in partial final block", data: strings.Repeat("x", strictProbeMaxBytes-1) + "\n"},
+		{name: "complete record below cap", data: strings.Repeat("x", strictProbeSoftBytes-2) + "\n", success: true},
+		{name: "real EOF below cap without newline", data: strings.Repeat("x", strictProbeSoftBytes-1), success: true},
+		{name: "artificial EOF is not a final record", data: strings.Repeat("x", strictProbeSoftBytes)},
+		{name: "unterminated", data: strings.Repeat("x", strictProbeSoftBytes+1)},
+		{name: "quoted field", data: "x,\"" + strings.Repeat("x", strictProbeSoftBytes) + "\"\n"},
+		{name: "quote prefix", data: strings.Repeat("\"", strictProbeSoftBytes+1)},
+		{name: "comments", data: strings.Repeat("#x\n", strictProbeSoftBytes/3+1), comment: "#"},
+		{name: "starting by", data: strings.Repeat("skip\n", strictProbeSoftBytes/5+1), starting: "keep:"},
+		{name: "quoted terminator", data: "x,\"" + strings.Repeat("x", strictProbeSoftBytes-3) + "\"\n"},
+		{name: "escape cutoff", data: "x,\"" + strings.Repeat("x", strictProbeSoftBytes-4) + "\\\"\"\n"},
+		{name: "CRLF cutoff", data: strings.Repeat("x", strictProbeSoftBytes-1) + "\r\n", terminator: "\r\n"},
+		{name: "multibyte cutoff", data: strings.Repeat("x", strictProbeSoftBytes-1) + "||", terminator: "||"},
+		{name: "complete record in partial final block", data: strings.Repeat("x", strictProbeSoftBytes-1) + "\n"},
 		{name: "complete record on block boundary", data: strings.Repeat("x", strictProbeBlockSize*5*3-1) + "\n", success: true},
-		{name: "short record in large file", data: "1\n" + strings.Repeat("x", strictProbeMaxBytes), success: true},
+		{name: "short record in large file", data: "1\n" + strings.Repeat("x", strictProbeSoftBytes), success: true},
 		{name: "real EOF without newline", data: "last", success: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -77,7 +81,9 @@ func TestStrictProbeInputBudget(t *testing.T) {
 			}
 			p.Option = []string{"comment", tc.comment}
 			r := &strictCountingReader{Reader: strings.NewReader(tc.data)}
-			tail, err := getTailSizeStrict(p, cols, io.NopCloser(r))
+			cfg := *CSVConfigForLoad(p)
+			cfg.MaxRecordSize = 2 * strictProbeSoftBytes
+			tail, err := getTailSizeStrictWithLimit(p, cols, r, &cfg, strictProbeSoftBytes)
 			if tc.success {
 				require.NoError(t, err)
 				if tc.name == "short record in large file" {
@@ -89,8 +95,126 @@ func TestStrictProbeInputBudget(t *testing.T) {
 				require.ErrorIs(t, err, errStrictProbeBudgetExceeded)
 				require.Zero(t, tail)
 			}
-			require.LessOrEqual(t, r.bytes, strictProbeMaxBytes)
+			require.LessOrEqual(t, r.bytes, strictProbeSoftBytes)
 		})
+	}
+}
+
+func TestStrictProbeInputLimit(t *testing.T) {
+	for _, tc := range []struct {
+		name                       string
+		weight                     int64
+		field, quote, line, prefix string
+		scale                      int64
+		want                       int64
+	}{
+		{name: "default record weight", weight: 64 << 20, field: ",", quote: "\"", line: "\n", scale: 5, want: 403087372},
+		{name: "plain small weight", weight: 32, field: ",", scale: 5, want: 434252},
+		{name: "tokens and prefix", weight: 32, field: "::", quote: "'", line: "END", prefix: "keep:", scale: 5, want: 434456},
+		{name: "field bytes not runes", weight: 32, field: "分", quote: "\"", line: "\n", scale: 5, want: 434508},
+		{name: "enclosure bytes", weight: 32, field: ",", quote: "“", line: "\n", scale: 5, want: 434636},
+		{name: "read block scale", weight: 1, field: ",", quote: "\"", line: "\n", scale: 1, want: 303122},
+		{name: "largest representable budget", weight: (math.MaxInt64-434176)/2 - 6, field: ",", scale: 5, want: math.MaxInt64 - 1},
+		{name: "zero weight", field: ",", scale: 5},
+		{name: "negative weight", weight: -1, field: ",", scale: 5},
+		{name: "empty field token", weight: 32, scale: 5},
+		{name: "zero scale", weight: 32, field: ","},
+		{name: "negative scale", weight: 32, field: ",", scale: -1},
+		{name: "record product overflow", weight: math.MaxInt64, field: ",", quote: "\"", scale: 5},
+		{name: "record sum overflow", weight: math.MaxInt64, field: ",", scale: 5},
+		{name: "prefix sum overflow", weight: math.MaxInt64 - 2, field: ",", prefix: "p", scale: 5},
+		{name: "two records overflow", weight: math.MaxInt64 / 2, field: ",", scale: 5},
+		{name: "block product overflow", weight: 32, field: ",", scale: math.MaxInt64/strictProbeBlockSize + 1},
+		{name: "read ahead sum overflow", weight: 32, field: ",", scale: math.MaxInt64 / strictProbeBlockSize},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := csvparser.CSVConfig{MaxRecordSize: tc.weight, FieldsTerminatedBy: tc.field, FieldsEnclosedBy: tc.quote, LinesTerminatedBy: tc.line, LinesStartingBy: tc.prefix}
+			got, ok := strictProbeInputLimit(&cfg, tc.scale)
+			require.Equal(t, tc.want != 0, ok)
+			require.Equal(t, tc.want, got)
+		})
+	}
+}
+
+func TestStrictProbeRecordEnvelope(t *testing.T) {
+	for _, tc := range []struct {
+		name, field, data string
+		columns           int
+		weight            int64
+	}{
+		{name: "field metadata and multibyte separators", field: "::", data: "1" + strings.Repeat("::", 31) + "\n", columns: 32, weight: 33},
+		{name: "doubled quotes", field: ",", data: "1,\"" + strings.Repeat("\"\"", 4) + "\"\n", columns: 2, weight: 11},
+		{name: "raw backslash pairs", field: ",", data: "1,\"" + strings.Repeat("\\\\", 4) + "\"\n", columns: 2, weight: 11},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := strictProbeParam(t.Context())
+			cfg := *CSVConfigForLoad(p)
+			cfg.FieldsTerminatedBy = tc.field
+			for _, weight := range []int64{tc.weight, tc.weight - 1} {
+				cfg.MaxRecordSize = weight
+				limit, ok := strictProbeInputLimit(&cfg, csvparser.BufferSizeScale)
+				require.True(t, ok)
+				tail, err := getTailSizeStrictWithLimit(p, strictTextCols(tc.columns), strings.NewReader(tc.data), &cfg, limit)
+				if weight == tc.weight {
+					require.NoError(t, err)
+					require.Equal(t, int64(len(tc.data)), tail)
+				} else {
+					require.ErrorContains(t, err, "max record size")
+					require.Zero(t, tail)
+				}
+			}
+		})
+	}
+}
+
+func TestStrictProbeSoftBudget(t *testing.T) {
+	p := strictProbeParam(t.Context())
+	cfg := *CSVConfigForLoad(p)
+	cfg.MaxRecordSize = 2 * strictProbeSoftBytes
+	limit, ok := strictProbeInputLimit(&cfg, csvparser.BufferSizeScale)
+	require.True(t, ok)
+	cols := []*plan.ColDef{{Typ: plan.Type{Id: int32(types.T_int64)}}, {Typ: plan.Type{Id: int32(types.T_text)}}}
+	t.Run("second long candidate completes", func(t *testing.T) {
+		data := strings.Repeat("x", 150*1024) + "\n1," + strings.Repeat("y", 150*1024) + "\n"
+		a := &strictProbeAttempt{remaining: limit}
+		tail, err := getTailSizeStrictAttempt(p, cols, strings.NewReader(data), &cfg, a)
+		require.NoError(t, err)
+		require.Equal(t, int64(len(data)), tail)
+		require.Equal(t, 2, a.calls)
+		require.Greater(t, limit-a.remaining, int64(strictProbeSoftBytes))
+	})
+	for _, total := range []int{strictProbeSoftBytes - 1, strictProbeSoftBytes, strictProbeSoftBytes + 1} {
+		t.Run(fmt.Sprintf("third candidate after %d physical bytes", total), func(t *testing.T) {
+			const last = "1,ok\n"
+			first := (total - len(last)) / 2
+			second := total - len(last) - first
+			bad := func(size int) string { return "bad," + strings.Repeat("x", size-5) + "\n" }
+			data := bad(first) + bad(second) + last
+			a := &strictProbeAttempt{remaining: limit}
+			tail, err := getTailSizeStrictAttempt(p, cols, strings.NewReader(data), &cfg, a)
+			require.Equal(t, int64(total), limit-a.remaining, "include parser prefetch in the soft threshold")
+			if total < strictProbeSoftBytes {
+				require.NoError(t, err)
+				require.Equal(t, int64(total), tail)
+				require.Equal(t, 3, a.calls)
+			} else {
+				require.ErrorIs(t, err, errStrictProbeBudgetExceeded)
+				require.Zero(t, tail)
+				require.Equal(t, 2, a.calls)
+			}
+		})
+	}
+}
+
+func BenchmarkStrictProbeShortRecord(b *testing.B) {
+	p := strictProbeParam(b.Context())
+	cols := []*plan.ColDef{{Typ: plan.Type{Id: int32(types.T_int64)}}}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, err := getTailSizeStrict(p, cols, io.NopCloser(strings.NewReader("123\n"))); err != nil {
+			b.Fatal(err)
+		}
 	}
 }
 
@@ -119,7 +243,7 @@ func TestStrictProbeCandidateBudget(t *testing.T) {
 }
 
 func TestStrictProbeCancellation(t *testing.T) {
-	for _, data := range []string{strings.Repeat("x\n", 1000), strings.Repeat("x", strictProbeMaxBytes+1), strings.Repeat("\"", strictProbeMaxBytes+1)} {
+	for _, data := range []string{strings.Repeat("x\n", 1000), strings.Repeat("x", strictProbeSoftBytes+1), strings.Repeat("\"", strictProbeSoftBytes+1)} {
 		ctx, cancel := context.WithCancel(t.Context())
 		r := &strictCountingReader{Reader: strings.NewReader(data), onRead: cancel}
 		_, err := getTailSizeStrict(strictProbeParam(ctx), []*plan.ColDef{{Typ: plan.Type{Id: int32(types.T_int64)}}}, io.NopCloser(r))

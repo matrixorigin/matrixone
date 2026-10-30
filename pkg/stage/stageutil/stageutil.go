@@ -24,9 +24,11 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/stage"
 
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -112,6 +114,10 @@ func runSql(proc *process.Process, sql string) (executor.Result, error) {
 
 func StageLoadCatalog(proc *process.Process, stagename string) (s stage.StageDef, err error) {
 
+	// Stage grammar ident.Compare() always folds names, independently of the
+	// database/table case policy. Use that same owner for URI/cache identity.
+	stagename = tree.NewCStr(stagename, 1).Compare()
+
 	cache := proc.GetStageCache()
 	s, ok := cache.Get(stagename)
 	if ok {
@@ -121,7 +127,7 @@ func StageLoadCatalog(proc *process.Process, stagename string) (s stage.StageDef
 		return cloneStageDef(s), nil
 	}
 
-	getAllStagesSql := fmt.Sprintf("select stage_id, stage_name, url, stage_credentials, stage_status from `%s`.`%s` WHERE stage_name = '%s';", "mo_catalog", "mo_stages", stagename)
+	getAllStagesSql := fmt.Sprintf("select stage_id, stage_name, url, stage_credentials, stage_status from `%s`.`%s` WHERE stage_name = %s;", "mo_catalog", "mo_stages", sqlquote.String(stagename))
 	res, err := runSql(proc, getAllStagesSql)
 	if err != nil {
 		return stage.StageDef{}, err
@@ -238,14 +244,37 @@ func UrlToStageDefFromURL(aurl *url.URL, proc *process.Process) (s stage.StageDe
 func UrlToStageDefForExport(furl string, proc *process.Process) (s stage.StageDef, err error) {
 	// Use double URL-encoding for % to avoid issues with printf-style format specifiers
 	// like %d, %05d. After url.Parse decodes once, %2525 becomes %25, which is correct.
-	escapedUrl := strings.ReplaceAll(furl, "%", "%2525")
-
+	// Protect only the filename/prefix portion; the encoded logical Stage name
+	// must be decoded exactly once by ParseStageUrl.
+	schemeEnd := strings.Index(furl, "://")
+	if schemeEnd < 0 || !strings.EqualFold(furl[:schemeEnd], stage.STAGE_PROTOCOL) {
+		return stage.StageDef{}, moerr.NewBadConfig(context.TODO(), "URL is not stage URL")
+	}
+	nameEnd := schemeEnd + 3
+	if strings.HasPrefix(furl[nameEnd:], "/") {
+		nameEnd++
+	}
+	if end := strings.IndexAny(furl[nameEnd:], "/?#"); end >= 0 {
+		nameEnd += end
+	} else {
+		nameEnd = len(furl)
+	}
+	pathEnd := len(furl)
+	if end := strings.IndexAny(furl[nameEnd:], "?#"); end >= 0 {
+		pathEnd = nameEnd + end
+	}
+	escapedUrl := furl[:nameEnd] + strings.ReplaceAll(furl[nameEnd:pathEnd], "%", "%2525") + furl[pathEnd:]
 	aurl, err := url.Parse(escapedUrl)
 	if err != nil {
 		return stage.StageDef{}, err
 	}
-	// After parsing, %2525 becomes %25, we need to decode it to %
-	aurl.Path = strings.ReplaceAll(aurl.Path, "%25", "%")
+	decodedName, decodedPrefix, query, err := stage.ParseStageUrl(aurl)
+	if err != nil {
+		return stage.StageDef{}, err
+	}
+	decodedPrefix = strings.ReplaceAll(decodedPrefix, "%25", "%")
+	// Resolve through the same common Stage path owner without changing names.
+	aurl = &url.URL{Scheme: stage.STAGE_PROTOCOL, Host: decodedName, Path: decodedPrefix, RawQuery: query}
 
 	if aurl.Scheme != stage.STAGE_PROTOCOL {
 		return stage.StageDef{}, moerr.NewBadConfig(context.TODO(), "URL is not stage URL")
