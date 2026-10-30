@@ -20,6 +20,7 @@ create index hv using hnsw on t(v) op_type 'vector_l2_ops';
 alter table t alter reindex hv hnsw FORCE_SYNC;
 
 set @meta = (select index_table_name from mo_catalog.mo_indexes where name = 'hv' and algo = 'hnsw' and algo_table_type = 'hnsw_meta' and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 't') limit 1);
+set @cache_key = (select index_table_name from mo_catalog.mo_indexes where name = 'hv' and algo = 'hnsw' and algo_table_type = 'hnsw_index' and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 't') limit 1);
 set @wait_initial_sql = concat('select count(*) = 1 and sum(nrow) = 1000 as initial_ready from `', database(), '`.`', @meta, '`');
 prepare wait_initial from @wait_initial_sql;
 -- @metacmp(false)
@@ -54,6 +55,10 @@ prepare wait_delta from @wait_delta_sql;
 execute wait_delta;
 deallocate prepare wait_delta;
 
+-- Publication does not invalidate a warm search cache on another CN. Reload the
+-- persisted CDC graph on every CN before asserting its reachability/nearest row.
+set @cache_reload = mo_ctl('cn', 'EvictVectorIndexCache', @cache_key);
+
 -- The delta probe only proves the model was published to the hidden tables;
 -- the CN serving this connection must also have loaded that generation, through
 -- the freshness sweep set above, before the exact assertions below are meaningful.
@@ -87,6 +92,7 @@ prepare wait_delta from @wait_delta_sql;
 -- @wait_expect(1, 120)
 execute wait_delta;
 deallocate prepare wait_delta;
+set @cache_reload = mo_ctl('cn', 'EvictVectorIndexCache', @cache_key);
 
 -- Same serving-view readiness for the second cut (2002/'[888.8,1,2]').
 set @wait_serve_sql = 'select (select id from t order by l2_distance(v, ''[888.8,1,2]'') limit 1) = 2002 as serve_ready';
