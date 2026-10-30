@@ -676,16 +676,15 @@ type materializedViewIncrementalColumnCollector struct {
 	failed      bool
 }
 
-func (c *materializedViewIncrementalColumnCollector) collect(expr tree.Expr) (ok bool) {
+func (c *materializedViewIncrementalColumnCollector) collect(expr tree.Expr) bool {
 	if c.failed {
 		return false
 	}
 	if c.set == nil {
 		c.set = make(map[string]struct{})
 	}
-	defer func() { ok = ok && recover() == nil && !c.failed }()
-	_, ok = expr.Accept(c)
-	return ok
+	_, ok := expr.Accept(c)
+	return ok && !c.failed
 }
 
 func (c *materializedViewIncrementalColumnCollector) collectWithAliases(expr tree.Expr, aliases map[string]tree.Expr) bool {

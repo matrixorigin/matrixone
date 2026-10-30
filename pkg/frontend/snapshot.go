@@ -4533,7 +4533,10 @@ func getPastExistsAccounts(
 				return nil, err
 			}
 
-			account.pwd = "111"
+			account.pwd, err = newSnapshotRestoreTempPassword()
+			if err != nil {
+				return nil, err
+			}
 
 			accounts = append(accounts, account)
 		}

@@ -4851,7 +4851,9 @@ func (builder *QueryBuilder) getInsertColsFromStmt(astCols tree.IdentifierList, 
 		for _, column := range astCols {
 			colName := strings.ToLower(string(column))
 			idx, ok := colToIdx[colName]
-			if !ok || (tableDef.Cols[idx].Hidden && !isAlterCopyFakePrimaryKey(builder.GetContext(), tableDef, tableDef.Cols[idx])) {
+			if !ok || (tableDef.Cols[idx].Hidden &&
+				!isAuthorizedMaterializedViewHiddenColumn(builder.GetContext(), tableDef, tableDef.Cols[idx]) &&
+				!isAlterCopyFakePrimaryKey(builder.GetContext(), tableDef, tableDef.Cols[idx])) {
 				return nil, moerr.NewBadFieldError(builder.GetContext(), colName, tableDef.Name)
 			}
 			if tableDef.Cols[idx].GeneratedCol != nil {
@@ -4935,7 +4937,9 @@ func (builder *QueryBuilder) stripGeneratedDefaultCols(astCols tree.IdentifierLi
 	for i, col := range astCols {
 		colName := strings.ToLower(string(col))
 		if idx, ok := tableDef.Name2ColIndex[colName]; ok {
-			if tableDef.Cols[idx].Hidden && !isAlterCopyFakePrimaryKey(builder.GetContext(), tableDef, tableDef.Cols[idx]) {
+			if tableDef.Cols[idx].Hidden &&
+				!isAuthorizedMaterializedViewHiddenColumn(builder.GetContext(), tableDef, tableDef.Cols[idx]) &&
+				!isAlterCopyFakePrimaryKey(builder.GetContext(), tableDef, tableDef.Cols[idx]) {
 				return nil, nil, moerr.NewBadFieldError(builder.GetContext(), colName, tableDef.Name)
 			}
 			if tableDef.Cols[idx].GeneratedCol != nil {

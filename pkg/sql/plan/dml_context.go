@@ -112,7 +112,7 @@ func (dmlCtx *DMLContext) ResolveUpdateTables(ctx CompilerContext, stmt *tree.Up
 	for alias, idx := range dmlCtx.aliasMap {
 		allColumns[alias] = make(map[string]bool)
 		for _, col := range dmlCtx.tableDefs[idx].Cols {
-			if !col.Hidden {
+			if !col.Hidden || isAuthorizedMaterializedViewHiddenColumn(ctx.GetContext(), dmlCtx.tableDefs[idx], col) {
 				allColumns[alias][col.Name] = true
 			}
 		}
