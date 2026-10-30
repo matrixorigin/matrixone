@@ -81,6 +81,9 @@ func (hashJoin *HashJoin) OpType() vm.OpType {
 }
 
 func (hashJoin *HashJoin) Prepare(proc *process.Process) (err error) {
+	if hashJoin.ExistenceOnly && !hashJoin.IsMark() {
+		return moerr.NewInternalError(proc.Ctx, "existence mode requires MARK join")
+	}
 	hashJoin.ctr.asofResidualEquality = hashJoin.IsAsof() &&
 		colexec.HasMixedJSONNumericEquality(hashJoin.NonEqCond)
 	if hashJoin.AsofBuildLeft && hashJoin.ctr.asofResidualEquality {
@@ -219,7 +222,19 @@ func (hashJoin *HashJoin) validateMarkJoin(proc *process.Process) error {
 	if len(hashJoin.EqConds) != 2 || len(hashJoin.EqConds[0]) == 0 || len(hashJoin.EqConds[0]) != len(hashJoin.EqConds[1]) {
 		return moerr.NewInternalError(proc.Ctx, "hash MARK join requires matching non-empty probe and build keys")
 	}
-	if len(hashJoin.EqConds[0]) > 1 {
+	if hashJoin.ExistenceOnly {
+		if hashJoin.IsRightJoin || hashJoin.IsShuffle || hashJoin.HashOnPK || len(hashJoin.EqConds[0]) < 2 {
+			return moerr.NewInternalError(proc.Ctx, "existence MARK requires composite left broadcast membership")
+		}
+		for i, left := range hashJoin.EqConds[0] {
+			right := hashJoin.EqConds[1][i]
+			if left.GetCol() == nil || right.GetCol() == nil || !types.T(left.Typ.Id).IsInteger() ||
+				left.Typ.Id != right.Typ.Id || left.Typ.Width != right.Typ.Width || left.Typ.Scale != right.Typ.Scale {
+				return moerr.NewInternalError(proc.Ctx, "existence MARK requires matching integer column keys")
+			}
+		}
+	}
+	if len(hashJoin.EqConds[0]) > 1 && !hashJoin.ExistenceOnly {
 		for i := range hashJoin.EqConds[0] {
 			if !hashJoin.EqConds[0][i].Typ.NotNullable || !hashJoin.EqConds[1][i].Typ.NotNullable {
 				return moerr.NewInternalError(proc.Ctx, "hash MARK join requires composite keys to be not nullable")
@@ -790,7 +805,7 @@ func (ctr *container) probe(hashJoin *HashJoin, proc *process.Process, result *v
 
 			if ctr.probeMark {
 				markValue := z != 0 && v != 0
-				markNull := !markValue && (z == 0 || ctr.buildHasNullKey)
+				markNull := !hashJoin.ExistenceOnly && !markValue && (z == 0 || ctr.buildHasNullKey)
 				if err = ctr.appendOneMark(hashJoin, proc, row, markValue, markNull); err != nil {
 					return err
 				}

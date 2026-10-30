@@ -70,7 +70,7 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 		return nil, moerr.NewNYIf(ctx.GetContext(), "insert stream %s", tblName)
 	}
 
-	tblInfo, err := getDmlTableInfo(ctx, tree.TableExprs{stmt.Table}, stmt.With, nil, "insert")
+	tblInfo, err := getDmlTableInfo(ctx, tree.TableExprs{stmt.Table}, nil, nil, "insert")
 	if err != nil {
 		return nil, err
 	}
@@ -78,6 +78,9 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 		typ:     "insert",
 		rootId:  -1,
 		tblInfo: tblInfo,
+	}
+	if len(tblInfo.tableDefs) != 1 {
+		return nil, moerr.NewInvalidInput(ctx.GetContext(), "INSERT requires one physical target table")
 	}
 	tableDef := tblInfo.tableDefs[0]
 
@@ -104,9 +107,8 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 
 	bindCtx := NewBindContext(builder, nil)
 
-	// Pass WITH clause from INSERT to SELECT if present
-	if stmt.With != nil && stmt.Rows != nil {
-		stmt.Rows.With = stmt.With
+	if err = builder.prepareInsertSourceScope(stmt, bindCtx); err != nil {
+		return nil, err
 	}
 
 	ifExistAutoPkCol, insertWithoutUniqueKeyMap, ifInsertFromUniqueColMap, err := initInsertStmt(builder, bindCtx, stmt, rewriteInfo)

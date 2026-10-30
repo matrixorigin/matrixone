@@ -941,8 +941,15 @@ const (
 	UNSIGNED_DECIMAL_ADMISSION_STRICT = 621
 	UNSIGNED_DECIMAL_ADMISSION_IGNORE = 622
 
+	// Retained index prefix length of one index part, read from
+	// mo_catalog.mo_indexes.algo_params and reported by information_schema
+	// STATISTICS SUB_PART and SHOW INDEX Sub_part. Upstream #31739 allocated
+	// 620..622 first; the id is internal plan wiring only and every reference
+	// is by name, so this entry renumbers to 623 (design D13-5).
+	MO_INDEX_SUB_PART = 623
+
 	// Keep FUNCTION_END_NUMBER one past the highest allocated function id.
-	FUNCTION_END_NUMBER = 623
+	FUNCTION_END_NUMBER = 624
 )
 
 // functionIdRegister is what function we have registered already.
@@ -1359,6 +1366,7 @@ var functionIdRegister = map[string]int32{
 	"mo_ctl":                         MO_CTL,
 	"mo_show_visible_bin":            MO_SHOW_VISIBLE_BIN,
 	"mo_show_visible_bin_enum":       MO_SHOW_VISIBLE_BIN_ENUM,
+	"mo_index_sub_part":              MO_INDEX_SUB_PART,
 	"mo_show_col_unique":             MO_SHOW_COL_UNIQUE,
 	"substring_index":                SUBSTRING_INDEX,
 	"field":                          FIELD,

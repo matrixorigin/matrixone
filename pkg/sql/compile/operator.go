@@ -224,6 +224,7 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 	case vm.HashJoin:
 		t := sourceOp.(*hashjoin.HashJoin)
 		op := hashjoin.NewArgument()
+		op.ExistenceOnly = t.ExistenceOnly
 		op.JoinType = t.JoinType
 		op.IsRightJoin = t.IsRightJoin
 		op.NonEqCond = t.NonEqCond
@@ -1623,11 +1624,17 @@ func constructHashJoin(node, left *plan.Node, left_types, right_types []types.Ty
 // broadcast hash MARK contract accepts them. Clone before normalization to
 // avoid mutating a reusable plan.
 func constructBroadcastHashMarkJoin(
-	node, left *plan.Node,
+	node, left, right *plan.Node,
 	leftTypes, rightTypes []types.Type,
 	proc *process.Process,
 ) *hashjoin.HashJoin {
 	arg := constructHashJoin(node, left, leftTypes, rightTypes, proc)
+	if canUseHashExistenceJoinWithInputs(node, left, right) {
+		arg.ExistenceOnly = true
+		arg.HashOnPK = false
+		arg.IsShuffle = false
+		return arg
+	}
 	if len(arg.EqConds[0]) <= 1 {
 		return arg
 	}
@@ -2710,7 +2717,7 @@ func constructBroadcastHashBuild(op vm.Operator, proc *process.Process, mcpu int
 
 		ret.HashOnPK = arg.HashOnPK
 		ret.NeedAllocateSels = !arg.HashOnPK && !arg.IsMark()
-		ret.TrackNullKeys = arg.IsMark()
+		ret.TrackNullKeys = arg.IsMark() && !arg.ExistenceOnly
 		if !arg.AsofBuildLeft && len(arg.RuntimeFilterSpecs) > 0 {
 			ret.RuntimeFilterSpec = arg.RuntimeFilterSpecs[0]
 		}

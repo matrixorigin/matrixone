@@ -790,6 +790,13 @@ func TestCollectCloneRoutineReferencesScopesCTEs(t *testing.T) {
 		wantFunctions     []string
 		wantUninspectable bool
 	}{
+		{name: "INSERT physical target shadows source CTE", body: "begin with t as (select 1 n) insert into t select n from t; end", isProcedure: true, wantTables: []string{"t"}},
+		{name: "INSERT different source CTE", body: "begin with q as (select 1 n) insert into t select n from q; end", isProcedure: true, wantTables: []string{"t"}},
+		{name: "INSERT keeps conservative unused CTE dependencies", body: "begin with t as (select n from source_db.read_src) insert into t values(1); end", isProcedure: true, wantTables: []string{"t", "read_src"}},
+		{name: "INSERT keeps physical read source", body: "begin with t as (select n from source_db.read_src) insert into t select n from t; end", isProcedure: true, wantTables: []string{"t", "read_src"}},
+		{name: "multi INSERT physical target shadows CTE", body: "begin with t as (select 1 n) insert all into t(n) values(n) select n from t; end", isProcedure: true, wantTables: []string{"t"}},
+		{name: "multi INSERT keeps conservative unused CTE dependencies", body: "begin with t as (select n from source_db.read_src) insert all into t(n) values(n) select 1 n; end", isProcedure: true, wantTables: []string{"t", "read_src"}},
+
 		{
 			name: "cte shadows external table",
 			body: "with ext_t as (select 1 as n) select n from ext_t",

@@ -34,8 +34,8 @@ type remapDbContext struct {
 	// control-flow branches, and assigning one database to every unqualified
 	// reference would risk both false omission and an unsafe persisted body.
 	rejectUseStateChanges bool
-	// cteNames is populated only while dependency collection/remapping walks a
-	// SELECT. It prevents an unqualified CTE reference from being collected as
+	// cteNames is populated while dependency collection/remapping walks a
+	// WITH-bearing statement. It prevents an unqualified CTE reference from being collected as
 	// a source table while preserving qualified references such as db.cte.
 	cteNames             map[string]struct{}
 	collectTableName     func(*tree.TableName)
@@ -279,8 +279,11 @@ func remapDbInStmt(stmt tree.Statement, remap remapDbContext) bool {
 		remapDbInSelect(s.Select, remap)
 	case *tree.Insert:
 		scoped := remapDbInWithScope(s.With, remap)
-		remapDbInTableExpr(s.Table, scoped)
-		remapInsertTarget(s.ColumnNames, &s.TargetDatabaseName, scoped)
+		// INTO is a physical target; only the read side can name a CTE.
+		targetScope := scoped
+		targetScope.cteNames = nil
+		remapDbInTableExpr(s.Table, targetScope)
+		remapInsertTarget(s.ColumnNames, &s.TargetDatabaseName, targetScope)
 		if s.Rows != nil {
 			remapDbInSelect(s.Rows, scoped)
 		}
@@ -288,9 +291,11 @@ func remapDbInStmt(stmt tree.Statement, remap remapDbContext) bool {
 		remapDbInSelectExprs(s.Returning, scoped)
 	case *tree.MultiInsert:
 		scoped := remapDbInWithScope(s.With, remap)
+		targetScope := scoped
+		targetScope.cteNames = nil
 		for _, target := range s.AllTargets() {
-			remapDbInTableExpr(target.Table, scoped)
-			remapInsertTarget(target.ColumnNames, nil, scoped)
+			remapDbInTableExpr(target.Table, targetScope)
+			remapInsertTarget(target.ColumnNames, nil, targetScope)
 			remapDbInExprs(target.Values, scoped)
 		}
 		for _, when := range s.Whens {
