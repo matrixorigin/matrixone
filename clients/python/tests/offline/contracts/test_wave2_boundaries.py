@@ -8,7 +8,7 @@ import sqlalchemy as sa
 from sqlalchemy.orm import declarative_base
 
 from matrixone import Client, AsyncClient
-from matrixone._sql_literals import fulltext_term_token
+from matrixone._sql_literals import string_grammar_token
 from matrixone.exceptions import QueryError, PitrError
 from matrixone.search_vector_index import PineconeCompatibleIndex
 from matrixone.stage import StageManager, AsyncStageManager
@@ -51,12 +51,12 @@ def test_duplicate_labels_rejected_even_without_rows():
 @pytest.mark.parametrize('term', ['bad\0value', r'bad\$value'])
 def test_unrepresentable_fulltext_term_rejected(term):
     with pytest.raises(ValueError):
-        fulltext_term_token(term)
+        string_grammar_token(term)
 
 
 def test_fulltext_term_is_one_token():
-    assert fulltext_term_token("O'Reilly $tag$") == "'O''Reilly $tag$'"
-    assert fulltext_term_token(r'C:\path') == r'$sdk$C:\path$sdk$'
+    assert string_grammar_token("O'Reilly $tag$") == "'O''Reilly $tag$'"
+    assert string_grammar_token(r'C:\path') == r'$sdk$C:\path$sdk$'
 
 
 @pytest.mark.asyncio
@@ -110,7 +110,14 @@ def test_local_infile_driver_flag(monkeypatch, asynchronous, enabled):
         ssl_mode='disabled',
         local_infile=enabled,
     )
-    factory = Mock(return_value=MagicMock())
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    engine = (
+        create_async_engine('mysql+aiomysql://unused@localhost/db')
+        if asynchronous
+        else sa.create_engine('mysql+pymysql://unused@localhost/db')
+    )
+    factory = Mock(return_value=engine)
     if asynchronous:
         monkeypatch.setattr('matrixone.async_client.create_async_engine', factory)
         client._create_async_engine()
@@ -118,6 +125,10 @@ def test_local_infile_driver_flag(monkeypatch, asynchronous, enabled):
         monkeypatch.setattr('matrixone.client.create_engine', factory)
         client._create_engine()
     assert factory.call_args.kwargs['connect_args']['local_infile'] is enabled
+    if asynchronous:
+        asyncio.run(engine.dispose())
+    else:
+        engine.dispose()
 
 
 def test_join_missing_and_ambiguous_foreign_keys_are_not_cartesian():

@@ -5785,6 +5785,81 @@ func TestFullTextCandidateLimitRejectsVolatileResidualFilter(t *testing.T) {
 		"the volatile residual must be evaluated only by the final scan")
 }
 
+func TestFullTextMultiMatchBloomProbesStayOnProbeSpine(t *testing.T) {
+	for _, patterns := range [][]string{
+		{"+needle", "+alpha"},
+		{"+needle", "+alpha", "+beta"},
+	} {
+		t.Run(strings.Join(patterns, " "), func(t *testing.T) {
+			builder, joinID, leftScanID, _ := buildFullTextJoinRewriteTestPlan(t, true, false, true)
+			mockCtx := builder.compCtx.(*fullTextJoinMockCompilerContext)
+			mockCtx.fulltextBloomFilterPushdown = 1
+			scan := builder.qry.Nodes[leftScanID]
+			convertFullTextJoinTestToFulltext2(builder, scan)
+			pkType := planpb.Type{Id: int32(types.T_int64)}
+			scan.TableDef.Cols[0].Typ = pkType
+			indexTable := mockCtx.tables[strings.ToLower(scan.TableDef.Indexes[0].IndexTableName)]
+			indexTable.Cols[1].Typ = pkType
+
+			match := scan.FilterList[0]
+			residual := scan.FilterList[1:]
+			matches := make([]*planpb.Expr, 0, len(patterns))
+			for _, pattern := range patterns {
+				m := DeepCopyExpr(match)
+				m.GetF().Args[0] = makePlan2StringConstExprWithType(pattern, false)
+				m.GetF().Args[1] = makePlan2Int64ConstExprWithType(int64(tree.FULLTEXT_BOOLEAN))
+				matches = append(matches, m)
+			}
+			require.NotEmpty(t, residual)
+			scan.FilterList = append(matches, residual...)
+
+			newID, changed, err := builder.applyFullTextFiltersForScanInJoin(
+				joinID,
+				scan,
+				map[[2]int32]int{},
+				map[[2]int32]*planpb.Expr{},
+			)
+			require.NoError(t, err)
+			require.True(t, changed)
+			require.Len(t, collectFullTextFunctionScans(builder, newID), len(patterns))
+
+			builds := make(map[int32]int32)
+			var collect func(int32)
+			collect = func(nodeID int32) {
+				node := builder.qry.Nodes[nodeID]
+				for _, spec := range node.RuntimeFilterBuildList {
+					builds[spec.Tag] = nodeID
+				}
+				for _, childID := range node.Children {
+					collect(childID)
+				}
+			}
+			collect(newID)
+
+			ftProbes := 0
+			var check func(int32)
+			check = func(nodeID int32) {
+				node := builder.qry.Nodes[nodeID]
+				for _, spec := range node.RuntimeFilterProbeList {
+					buildID, ok := builds[spec.Tag]
+					require.True(t, ok, "probe tag %d has no producer", spec.Tag)
+					producer := builder.qry.Nodes[buildID]
+					require.True(t, builder.probeSpineNodeIDs(producer.Children[0])[nodeID],
+						"node %d probes tag %d off the probe side of its producer", nodeID, spec.Tag)
+					if isFulltext2SearchScan(node) {
+						ftProbes++
+					}
+				}
+				for _, childID := range node.Children {
+					check(childID)
+				}
+			}
+			check(newID)
+			require.Equal(t, 1, ftProbes)
+		})
+	}
+}
+
 func convertFullTextJoinTestToFulltext2(builder *QueryBuilder, scan *planpb.Node) {
 	logical := scan.TableDef.Indexes[0]
 	store := *logical

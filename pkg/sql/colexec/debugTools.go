@@ -35,6 +35,12 @@ func DebugShowExecutor(executor ExpressionExecutor) (string, error) {
 
 // printExpressionExecutor prints the tree of ExpressionExecutor starting from the given executor.
 func printExpressionExecutor(buffer *bytes.Buffer, executor ExpressionExecutor, prefix string, isTail bool, isRoot bool) error {
+	switch memo := executor.(type) {
+	case *memoRootExpressionExecutor:
+		return printExpressionExecutor(buffer, memo.executor, prefix, isTail, isRoot)
+	case *memoExpressionExecutor:
+		return printExpressionExecutor(buffer, memo.state.executor, prefix, isTail, isRoot)
+	}
 	var newPrefix string
 	var err error
 	if isRoot {

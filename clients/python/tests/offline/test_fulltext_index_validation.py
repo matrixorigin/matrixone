@@ -22,6 +22,7 @@ from unittest.mock import Mock, patch
 from sqlalchemy.schema import CreateIndex
 
 from matrixone.sqlalchemy_ext.fulltext_index import FulltextIndex, compile_create_index
+from matrixone.sqlalchemy_ext.dialect import MatrixOneDialect
 
 
 class TestFulltextIndexValidation:
@@ -88,7 +89,7 @@ class TestFulltextIndexValidation:
         mock_compiler = Mock()
 
         # Test that compilation succeeds
-        result = compile_create_index(mock_element, mock_compiler)
+        result = str(CreateIndex(index).compile(dialect=MatrixOneDialect()))
         assert "CREATE FULLTEXT INDEX test_idx ON test_table (content)" in result
 
     def test_parser_included_in_ddl(self):
@@ -112,7 +113,7 @@ class TestFulltextIndexValidation:
         mock_compiler = Mock()
 
         # Test that compilation includes parser
-        result = compile_create_index(mock_element, mock_compiler)
+        result = str(CreateIndex(index).compile(dialect=MatrixOneDialect()))
         assert "WITH PARSER json" in result
 
     def test_multiple_columns_in_ddl(self):
@@ -141,5 +142,62 @@ class TestFulltextIndexValidation:
         mock_compiler = Mock()
 
         # Test that compilation includes both columns
-        result = compile_create_index(mock_element, mock_compiler)
+        result = str(CreateIndex(index).compile(dialect=MatrixOneDialect()))
         assert "CREATE FULLTEXT INDEX test_idx ON test_table (title, content)" in result
+
+
+@pytest.mark.parametrize('action', ['create_class', 'drop_class', 'create_instance', 'drop_instance'])
+def test_fulltext_ddl_failure_preserves_original_driver_error_without_stdout(action, capsys):
+    from pymysql.err import OperationalError
+
+    original = OperationalError(1142, 'CREATE command denied')
+    connection = Mock(spec=['exec_driver_sql'])
+    connection.exec_driver_sql.side_effect = original
+    engine = Mock()
+    engine.begin.return_value.__enter__ = Mock(return_value=connection)
+    engine.begin.return_value.__exit__ = Mock(return_value=False)
+    index = FulltextIndex('idx', 'content')
+    with pytest.raises(OperationalError) as caught:
+        if action == 'create_class':
+            FulltextIndex.create_index(connection, 'docs', 'idx', 'content')
+        elif action == 'drop_class':
+            FulltextIndex.drop_index(connection, 'docs', 'idx')
+        elif action == 'create_instance':
+            index.create(engine, 'docs')
+        else:
+            index.drop(engine, 'docs')
+    assert caught.value is original and caught.value.args[0] == 1142
+    assert capsys.readouterr().out == ''
+
+
+def test_fulltext_class_ddl_preserves_qualified_quoted_identity():
+    connection = Mock(spec=['exec_driver_sql'])
+    FulltextIndex.create_index(connection, '`database-name`.`order`', 'index-name', ['select'])
+    assert connection.exec_driver_sql.call_args.args[0] == (
+        'CREATE FULLTEXT INDEX `index-name` ON `database-name`.`order` (`select`)'
+    )
+
+
+@pytest.mark.asyncio
+async def test_nondefault_index_ranking_rejected_by_every_entrypoint_before_checkout():
+    from matrixone import Client, AsyncClient
+    from matrixone.exceptions import QueryError
+    from matrixone.fulltext_manager import FulltextIndexManager, AsyncFulltextIndexManager
+    from matrixone.sqlalchemy_ext.fulltext_search import FulltextIndexManager as LegacyManager
+
+    for client in (Client(), AsyncClient()):
+        client.session = Mock(side_effect=AssertionError('checkout must not occur'))
+        manager = AsyncFulltextIndexManager(client) if isinstance(client, AsyncClient) else FulltextIndexManager(client)
+        with pytest.raises(QueryError) as raised:
+            call = manager.create('documents', 'ft', 'content', algorithm='BM25')
+            if isinstance(client, AsyncClient):
+                await call
+        assert isinstance(raised.value.__cause__, ValueError)
+        client.session.assert_not_called()
+    with pytest.raises(ValueError, match='Index DDL cannot configure ranking'):
+        FulltextIndex.create_index(Mock(), 'documents', 'ft', 'content', algorithm='BM25')
+    client = Client()
+    client.session = Mock(side_effect=AssertionError('checkout must not occur'))
+    with pytest.raises(QueryError):
+        LegacyManager(client).create('documents', 'ft', ['content'], algorithm='BM25')
+    client.session.assert_not_called()

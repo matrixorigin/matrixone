@@ -136,7 +136,7 @@ func TestSubscriptionMetadataQueryBuilders(t *testing.T) {
 	require.Contains(t, columnsSQL, "CAST("+sqlquote.String("sub'alias")+" AS VARCHAR(256))")
 	require.Contains(t, columnsSQL, "CAST(mk.key_priority AS BIGINT) AS key_priority")
 	require.Contains(t, columnsSQL, "JOIN mo_catalog.mo_tables mt")
-	require.Contains(t, columnsSQL, "CAST(8 AS INT UNSIGNED) AS table_owner")
+	require.Contains(t, columnsSQL, "CAST(8 AS INT UNSIGNED) AS table_owner, mc.att_is_unsigned ")
 	require.Contains(t, columnsSQL, "mc.att_relname IN ("+sqlquote.String("orders")+")")
 	require.Contains(t, columnsSQL, "kt.relname IN ("+sqlquote.String("orders")+")")
 	require.Contains(t, columnsSQL, "pt.relname IN ("+sqlquote.String("orders")+")")

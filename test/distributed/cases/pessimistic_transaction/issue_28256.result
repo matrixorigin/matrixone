@@ -26,14 +26,14 @@ create table truncate_parent (id int primary key);
 create table truncate_child (
 id int primary key,
 parent_id int,
-foreign key(parent_id) references truncate_parent(id)
+constraint fk_trunc_child foreign key(parent_id) references truncate_parent(id)
 );
 insert into truncate_parent values (1);
 insert into truncate_child values (1, 1);
 start transaction;
 insert into transaction_marker values (2);
 truncate table truncate_parent;
-internal error: can not truncate table 'truncate_parent' referenced by some foreign key constraint
+Cannot truncate a table referenced in a foreign key constraint (fk_trunc_child)
 rollback;
 select 'foreign_key_rejection' as scenario,
 (select count(*) from truncate_parent) as parent_rows,

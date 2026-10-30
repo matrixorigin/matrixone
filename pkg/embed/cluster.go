@@ -71,6 +71,7 @@ type clusterPortLease struct {
 
 type cluster struct {
 	sync.RWMutex
+	startup startControl
 
 	id       uint64
 	state    state
@@ -108,9 +109,8 @@ func NewCluster(
 ) (Cluster, error) {
 	started := time.Now()
 	c := &cluster{
-		id:      atomic.AddUint64(&clusterID, 1),
-		state:   stopped,
-		startFn: func(op *operator) error { return op.Start() },
+		id:    atomic.AddUint64(&clusterID, 1),
+		state: stopped,
 	}
 	for _, opt := range opts {
 		opt(c)
@@ -153,8 +153,16 @@ func (c *cluster) ID() uint64 {
 }
 
 func (c *cluster) Start() (err error) {
+	startCtx, err := c.startup.begin(context.Background())
+	if err != nil {
+		return err
+	}
+	defer func() { c.startup.finish(startCtx, err) }()
 	c.Lock()
 	defer c.Unlock()
+	if err = startCtx.Err(); err != nil {
+		return err
+	}
 
 	if c.state == started {
 		return moerr.NewInvalidStateNoCtx("embed mo cluster already started")
@@ -185,9 +193,12 @@ func (c *cluster) Start() (err error) {
 			mode |= clusteradmission.AllowConcurrent
 		}
 		admissionStarted := time.Now()
-		admissionCtx := c.options.testAdmissionContext
-		if admissionCtx == nil {
-			admissionCtx = context.Background()
+		admissionCtx := startCtx
+		if c.options.testAdmissionContext != nil {
+			var cancel context.CancelFunc
+			admissionCtx, cancel = context.WithCancel(c.options.testAdmissionContext)
+			stopCancel := context.AfterFunc(startCtx, cancel)
+			defer func() { stopCancel(); cancel() }()
 		}
 		admission, acquireErr := clusteradmission.Acquire(admissionCtx, mode)
 		if acquireErr != nil {
@@ -245,7 +256,7 @@ func (c *cluster) startServiceLocked(op *operator) error {
 	if c.startFn != nil {
 		err = c.startFn(op)
 	} else {
-		err = op.Start()
+		err = op.StartContext(c.startup.context())
 	}
 	if err != nil {
 		return errors.Join(
@@ -275,6 +286,8 @@ func (c *cluster) shutdown(releasePorts bool) error {
 	if c.options.testing {
 		fault.TriggerFault(ArrowLoadRolloutShutdown)
 	}
+	c.startup.stop()
+	defer c.startup.stopped()
 
 	c.Lock()
 	defer c.Unlock()
@@ -401,8 +414,12 @@ func (c *cluster) GetCNService(
 }
 
 func (c *cluster) StartNewCNService(n int) error {
+	ctx := c.startup.context()
 	c.Lock()
 	defer c.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 
 	if c.state != started {
 		panic("cannot start cn services in stopped cluster")

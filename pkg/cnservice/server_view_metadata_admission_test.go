@@ -24,6 +24,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 
@@ -37,9 +38,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
+	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -1126,6 +1129,88 @@ func TestServiceStartRejectsMixedCatalogFenceRollbackFailure(t *testing.T) {
 	}
 }
 
+func TestServiceStartPropagatesHeartbeatFenceFailureDuringUpgrade(t *testing.T) {
+	terminal := errors.New("terminal catalog fence failure")
+	var failure atomic.Int32
+	boot := &gatedBootstrapService{
+		testBootService: &testBootService{bootstrapUpgradeHook: func(ctx context.Context) error {
+			<-ctx.Done()
+			return ctx.Err()
+		}},
+		observed: make(chan struct{}),
+	}
+	sqlExecutor := executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+		if sql == catalog.ViewMetadataLifecycleGateSQL {
+			switch failure.Load() {
+			case 1:
+				return executor.Result{}, moerr.NewTxnNeedRetryNoCtx()
+			case 2:
+				return executor.Result{}, terminal
+			}
+			return viewMetadataLifecycleGateTestResult(), nil
+		}
+		return executor.Result{}, nil
+	})
+	s := newViewMetadataAdmissionStartService(t, boot.testBootService, sqlExecutor, time.Second)
+	s.bootstrapService = boot
+	done := make(chan error, 1)
+	go func() { done <- s.Start() }()
+	t.Cleanup(func() { _ = s.Close() })
+	select {
+	case <-boot.observed:
+	case <-time.After(time.Second):
+		t.Fatal("startup did not reach the upgrade wait")
+	}
+	require.Equal(t, uint64(5), s.viewMetadataCatalogFencedEpoch.Load())
+	snapshot := &logservicepb.ViewMetadataAdmission{Enabled: true, Epoch: 6, RevalidationRequired: true, Generation: 11, Admitted: true}
+	failure.Store(1)
+	require.NoError(t, s.applyViewMetadataAdmission(t.Context(), snapshot))
+	select {
+	case err := <-done:
+		t.Fatalf("retryable fence failure stopped startup: %v", err)
+	default:
+	}
+	failure.Store(2)
+	require.ErrorIs(t, s.applyViewMetadataAdmission(t.Context(), snapshot), terminal)
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, terminal)
+	case <-time.After(time.Second):
+		t.Fatal("terminal heartbeat fence failure did not stop startup")
+	}
+	require.False(t, s.viewMetadataIngressReady.Load())
+	require.Equal(t, uint64(5), s.viewMetadataCatalogFencedEpoch.Load())
+	require.Equal(t, 1, boot.closeCount)
+}
+
+func TestHeartbeatFenceFailureFromSupersededEpochDoesNotCancelStartup(t *testing.T) {
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	defer releaseOnce.Do(func() { close(release) })
+	terminal := errors.New("old epoch fence failure")
+	s := newViewMetadataAdmissionStartService(t, &testBootService{}, executor.NewMemExecutor(func(string) (executor.Result, error) {
+		close(entered)
+		<-release
+		return executor.Result{}, terminal
+	}), time.Second)
+	s.startCtx, s.startCancel = context.WithCancelCause(t.Context())
+	s.startInProgress = true
+	s.startUpgradeActive = true
+	s.viewMetadataCatalogFenceReady.Store(true)
+	done := make(chan error, 1)
+	go func() {
+		done <- s.applyViewMetadataAdmission(t.Context(), &logservicepb.ViewMetadataAdmission{Generation: 11, Epoch: 5, Enabled: true, RevalidationRequired: true})
+	}()
+	<-entered
+	require.NoError(t, s.applyViewMetadataAdmission(t.Context(), &logservicepb.ViewMetadataAdmission{Generation: 11, Epoch: 6, Enabled: true}))
+	releaseOnce.Do(func() { close(release) })
+	require.ErrorIs(t, <-done, terminal)
+	require.NoError(t, s.startCtx.Err())
+	s.startCancel(nil)
+	require.NoError(t, s.Close())
+}
+
 func TestCNViewMetadataCatalogFenceCancellationRetainsClosedIngress(t *testing.T) {
 	refreshCtx, cancelRefresh := context.WithTimeoutCause(t.Context(), 0, moerr.CauseRefresh)
 	defer cancelRefresh()
@@ -1580,11 +1665,15 @@ func TestCNCompletesSystemViewsAfterAdmissionBeforeIngress(t *testing.T) {
 			failure := errors.New("derived view creation failed")
 			var s *service
 			var creates int
-			exec := executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+			op := mock_frontend.NewMockTxnOperator(gomock.NewController(t))
+			op.EXPECT().TxnOptions().DoAndReturn(func() txn.TxnOptions {
+				return txn.TxnOptions{CN: s.cfg.UUID}
+			}).AnyTimes()
+			exec := executor.NewMemExecutor2(func(sql string) (executor.Result, error) {
 				if sql == catalog.ViewMetadataLifecycleGateSQL {
 					return viewMetadataLifecycleGateTestResult(), nil
 				}
-				if strings.HasPrefix(sql, "CREATE VIEW") {
+				if strings.HasPrefix(sql, "CREATE VIEW ") || strings.HasPrefix(sql, "CREATE OR REPLACE VIEW ") {
 					require.Equal(t, uint64(5), s.viewMetadataCatalogFencedEpoch.Load())
 					require.False(t, s.viewMetadataIngressReady.Load())
 					creates++
@@ -1593,7 +1682,7 @@ func TestCNCompletesSystemViewsAfterAdmissionBeforeIngress(t *testing.T) {
 					}
 				}
 				return executor.Result{}, nil
-			})
+			}, op)
 			s = newViewMetadataAdmissionStartService(t, &testBootService{}, exec, time.Second)
 			s.sqlExecutor = exec
 			snapshot := *s.viewMetadataAdmission.Load()

@@ -421,15 +421,7 @@ func validateRemapDb(ctx context.Context, remapDb map[string]string, lowerCaseTa
 
 // formatRewriteHint serializes a rules map into the /*+ {"rewrites": {...}} */ hint format.
 func formatRewriteHint(ctx context.Context, rules map[string]string) (string, error) {
-	payload := rewriteHintPayload{Rewrites: rules}
-	var buf bytes.Buffer
-	enc := json.NewEncoder(&buf)
-	enc.SetEscapeHTML(false)
-	if err := enc.Encode(payload); err != nil {
-		return "", moerr.NewInternalErrorf(ctx, "failed to serialize rewrite rules: %v", err)
-	}
-	// Encode appends a trailing newline, trim it
-	return hintPrefix + strings.TrimSpace(buf.String()) + hintSuffix, nil
+	return formatRewriteHintPayload(ctx, rewriteHintPayload{Rewrites: rules})
 }
 
 // formatRewriteHintChains serializes per-table rewrite chains into the
@@ -453,6 +445,11 @@ func formatRewriteHintChains(ctx context.Context, chains map[string][]string, re
 	if len(remapDb) > 0 {
 		payload["remapdb"] = remapDb
 	}
+	return formatRewriteHintPayload(ctx, payload)
+}
+
+// formatRewriteHintPayload protects the surrounding SQL comment after JSON encoding.
+func formatRewriteHintPayload(ctx context.Context, payload any) (string, error) {
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)
 	enc.SetEscapeHTML(false)
@@ -460,7 +457,8 @@ func formatRewriteHintChains(ctx context.Context, chains map[string][]string, re
 		return "", moerr.NewInternalErrorf(ctx, "failed to serialize rewrite rules: %v", err)
 	}
 	// Encode appends a trailing newline, trim it
-	return hintPrefix + strings.TrimSpace(buf.String()) + hintSuffix, nil
+	body := strings.TrimSpace(buf.String())
+	return hintPrefix + strings.ReplaceAll(body, "*/", "*\\/") + hintSuffix, nil
 }
 
 // parseRewriteHint parses a hint string back into a rules map.
@@ -1649,7 +1647,7 @@ func checkRoleRuleTargetExists(ctx context.Context, bh BackgroundExec, dbName, t
 func handleAlterRoleAddRule(ses *Session, execCtx *ExecCtx, stmt *tree.AlterRoleAddRule) (retErr error) {
 	ctx := execCtx.reqCtx
 
-	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{forcePessimisticRC: true})
+	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{forcePessimisticRC: true, internalExecution: true})
 	defer bh.Close()
 
 	// Begin transaction
@@ -1727,7 +1725,7 @@ func handleAlterRoleAddRule(ses *Session, execCtx *ExecCtx, stmt *tree.AlterRole
 func handleAlterRoleDropRule(ses *Session, execCtx *ExecCtx, stmt *tree.AlterRoleDropRule) (retErr error) {
 	ctx := execCtx.reqCtx
 
-	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{forcePessimisticRC: true})
+	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{forcePessimisticRC: true, internalExecution: true})
 	defer bh.Close()
 
 	// Begin transaction

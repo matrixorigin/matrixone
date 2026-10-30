@@ -17,6 +17,7 @@ package process
 import (
 	"context"
 	"io"
+	"math"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -117,6 +118,7 @@ type SessionInfo struct {
 	Role                string
 	ConnectionID        uint64
 	LastInsertID        uint64
+	LastInsertIDSet     bool // authoritative transported session baseline, including zero
 	Database            string
 	Version             string
 	TimeZone            *time.Location
@@ -474,6 +476,15 @@ type BaseProcess struct {
 	// value when an INSERT supplies all auto-increment values explicitly.
 	StatementLastInsertID *uint64
 	statementInsertIDMu   sync.Mutex
+	// ODKUResult keeps the transient facts needed to publish an
+	// INSERT ... ON DUPLICATE KEY UPDATE result.  It is statement-scoped and
+	// shared by child processes; unlike LastInsertID it is not visible to SQL
+	// expressions or the session until the statement succeeds.
+	ODKUResult       *ODKUResultState
+	ODKUInputOrdinal *uint64
+	// Immutable per-attempt range, initialized before child pipelines run.
+	odkuInputOrdinalBase  uint64
+	odkuInputOrdinalLimit uint64
 	// AffectedRows carries the number of rows affected by the previous
 	// statement in the same session, used by the ROW_COUNT() builtin.
 	// It follows MySQL semantics: -1 after a result-set statement (e.g. SELECT),
@@ -517,6 +528,14 @@ type BaseProcess struct {
 	// It is intentionally not part of SessionInfo: remote/rebuilt session state
 	// must not copy or replace a live synchronization object.
 	sequenceGate sequenceGate
+	// readOnlyTxnAccessMode stamps the effective client-facing READ ONLY
+	// access mode of the executing statement's transaction, resolved by the
+	// frontend gate once per user statement, for mutation boundaries that
+	// fire after admission (sequence builtins evaluating inside
+	// temporary-target DML or stored views). Child processes share this
+	// Base, so the stamp set before pipeline construction is visible to
+	// every operator in the statement.
+	readOnlyTxnAccessMode atomic.Bool
 	// groupConcatInputRowCounters gives each logical Group operator one
 	// statement-scoped source-row cursor. A BaseProcess is shared by local
 	// parallel child processes, so partial producers do not restart at row 1.
@@ -563,6 +582,86 @@ type BaseProcess struct {
 	// captured Metadata, ProcessInitSQL via executor.DefaultResolveVariable).
 	IsFrontend bool
 }
+
+// ODKUResultSummary is the reduced, statement-local result of the main-table
+// ODKU actions.  Valid bits are separate from the values because zero is a
+// valid explicit primary-key value in the protocol fallback path.
+type ODKUResultSummary struct {
+	HasGenerated          bool
+	FirstGeneratedOrdinal uint64
+	FirstGeneratedID      uint64
+	HasAction             bool
+	LastActionOrdinal     uint64
+	LastActionID          uint64
+	HasSuccessfulAction   bool
+	LastSuccessfulOrdinal uint64
+	LastSuccessfulID      uint64
+}
+
+func (summary *ODKUResultSummary) RecordGenerated(ordinal, id uint64) {
+	if summary == nil {
+		return
+	}
+	if !summary.HasGenerated || ordinal < summary.FirstGeneratedOrdinal {
+		summary.HasGenerated = true
+		summary.FirstGeneratedOrdinal = ordinal
+		summary.FirstGeneratedID = id
+	}
+}
+
+func (summary *ODKUResultSummary) RecordAction(ordinal, id uint64, successful bool) {
+	if summary == nil {
+		return
+	}
+	if !summary.HasAction || ordinal >= summary.LastActionOrdinal {
+		summary.HasAction = true
+		summary.LastActionOrdinal = ordinal
+		summary.LastActionID = id
+	}
+	if successful && (!summary.HasSuccessfulAction || ordinal >= summary.LastSuccessfulOrdinal) {
+		summary.HasSuccessfulAction = true
+		summary.LastSuccessfulOrdinal = ordinal
+		summary.LastSuccessfulID = id
+	}
+}
+
+func (summary *ODKUResultSummary) Merge(other ODKUResultSummary) {
+	if summary == nil {
+		return
+	}
+	if other.HasGenerated {
+		summary.RecordGenerated(other.FirstGeneratedOrdinal, other.FirstGeneratedID)
+	}
+	if other.HasAction {
+		if !summary.HasAction || other.LastActionOrdinal >= summary.LastActionOrdinal {
+			summary.HasAction = true
+			summary.LastActionOrdinal = other.LastActionOrdinal
+			summary.LastActionID = other.LastActionID
+		}
+	}
+	if other.HasSuccessfulAction {
+		if !summary.HasSuccessfulAction || other.LastSuccessfulOrdinal >= summary.LastSuccessfulOrdinal {
+			summary.HasSuccessfulAction = true
+			summary.LastSuccessfulOrdinal = other.LastSuccessfulOrdinal
+			summary.LastSuccessfulID = other.LastSuccessfulID
+		}
+	}
+}
+
+// ODKUResultState is shared by all parallel scopes of one statement. Operators
+// reduce rows locally and merge a bounded summary at batch or terminal
+// boundaries, so this mutex is not acquired for every input row.
+type ODKUResultState struct {
+	mu         sync.Mutex
+	generation uint64
+	Summary    ODKUResultSummary
+}
+
+// One remote pipeline gets a disjoint ordinal range before it starts. The
+// range is intentionally much larger than a practical batch/statement row
+// count, while local child processes continue reserving individual ordinals
+// from the same statement counter.
+const odkuRemoteOrdinalBlockSize uint64 = 1 << 32
 
 // StringShuffleHashAlgorithm identifies the exact owner mapping used for
 // string-key shuffle. It is execution metadata, not a service-local feature
@@ -881,6 +980,172 @@ func (proc *Process) SetStatementLastInsertID(num uint64) {
 	if proc.Base.StatementLastInsertID != nil {
 		atomic.StoreUint64(proc.Base.StatementLastInsertID, num)
 	}
+}
+
+// ResetODKUResult starts a fresh ODKU statement generation.  It deliberately
+// leaves the session-visible LastInsertID untouched.
+func (proc *Process) ResetODKUResult() {
+	if proc == nil || proc.Base == nil {
+		return
+	}
+	if proc.Base.ODKUResult != nil {
+		proc.Base.ODKUResult.mu.Lock()
+		proc.Base.ODKUResult.Summary = ODKUResultSummary{}
+		proc.Base.ODKUResult.generation++
+		proc.Base.ODKUResult.mu.Unlock()
+	}
+	if proc.Base.ODKUInputOrdinal != nil {
+		atomic.StoreUint64(proc.Base.ODKUInputOrdinal, proc.Base.odkuInputOrdinalBase)
+	}
+}
+
+// NextODKUInputOrdinal reserves one PRE_INSERT batch before any row is changed.
+// Ordinals describe the coordinator input stream, not generated ID magnitude.
+func (proc *Process) NextODKUInputOrdinal(count int) (uint64, error) {
+	if count < 0 {
+		return 0, moerr.NewInvalidInputNoCtx("negative ODKU input ordinal count")
+	}
+	return proc.reserveODKUInputOrdinals(uint64(count))
+}
+
+// NextODKURemoteOrdinalBase reserves a disjoint range, not SQL row order.
+func (proc *Process) NextODKURemoteOrdinalBase() (uint64, error) {
+	return proc.reserveODKUInputOrdinals(odkuRemoteOrdinalBlockSize)
+}
+
+func (proc *Process) reserveODKUInputOrdinals(count uint64) (uint64, error) {
+	if proc == nil || proc.Base == nil || proc.Base.ODKUInputOrdinal == nil {
+		return 0, moerr.NewInternalErrorNoCtx("ODKU input ordinal owner is missing")
+	}
+	limit := proc.Base.odkuInputOrdinalLimit
+	if limit == 0 {
+		limit = math.MaxUint64
+	}
+	for {
+		start := atomic.LoadUint64(proc.Base.ODKUInputOrdinal)
+		if start > limit || count > limit-start {
+			return 0, moerr.NewInvalidInputNoCtx("ODKU input ordinal range exhausted")
+		}
+		if atomic.CompareAndSwapUint64(proc.Base.ODKUInputOrdinal, start, start+count) {
+			return start, nil
+		}
+	}
+}
+
+// ValidateODKUInputOrdinalBase rejects an invalid wire range before allocating
+// the remote process or publishing its generation to child pipelines.
+func ValidateODKUInputOrdinalBase(base uint64) error {
+	if base > math.MaxUint64-odkuRemoteOrdinalBlockSize {
+		return moerr.NewInvalidInputNoCtx("ODKU input ordinal base overflows its range")
+	}
+	return nil
+}
+
+// SetODKUInputOrdinalBase initializes the immutable retry boundary before use.
+func (proc *Process) SetODKUInputOrdinalBase(base uint64) error {
+	if err := ValidateODKUInputOrdinalBase(base); err != nil {
+		return err
+	}
+	if proc == nil || proc.Base == nil || proc.Base.ODKUInputOrdinal == nil {
+		return moerr.NewInternalErrorNoCtx("ODKU input ordinal owner is missing")
+	}
+	proc.Base.odkuInputOrdinalBase = base
+	proc.Base.odkuInputOrdinalLimit = base + odkuRemoteOrdinalBlockSize
+	atomic.StoreUint64(proc.Base.ODKUInputOrdinal, base)
+	return nil
+}
+
+func (proc *Process) RecordODKUGenerated(ordinal, id uint64) {
+	if proc == nil || proc.Base == nil || proc.Base.ODKUResult == nil {
+		return
+	}
+	state := proc.Base.ODKUResult
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	state.Summary.RecordGenerated(ordinal, id)
+}
+
+func (proc *Process) RecordODKUAction(ordinal, id uint64, successful bool) {
+	if proc == nil || proc.Base == nil || proc.Base.ODKUResult == nil {
+		return
+	}
+	state := proc.Base.ODKUResult
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	state.Summary.RecordAction(ordinal, id, successful)
+}
+
+func (proc *Process) GetODKUResultSummary() ODKUResultSummary {
+	if proc == nil || proc.Base == nil || proc.Base.ODKUResult == nil {
+		return ODKUResultSummary{}
+	}
+	state := proc.Base.ODKUResult
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	return state.Summary
+}
+
+// MergeODKUResultSummary merges a remote terminal summary using the same
+// ordinal rules as local action owners.
+func (proc *Process) MergeODKUResultSummary(summary ODKUResultSummary) {
+	if proc == nil || proc.Base == nil || proc.Base.ODKUResult == nil {
+		return
+	}
+	state := proc.Base.ODKUResult
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	state.Summary.Merge(summary)
+}
+
+// ODKUResultGeneration captures the existing statement-result owner, rather
+// than looking up a new generation when an old remote callback arrives.
+func (proc *Process) ODKUResultGeneration() uint64 {
+	if proc == nil || proc.Base == nil || proc.Base.ODKUResult == nil {
+		return 0
+	}
+	state := proc.Base.ODKUResult
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	return state.generation
+}
+
+func (proc *Process) MergeODKUResultSummaryAtGeneration(summary ODKUResultSummary, generation uint64) {
+	if proc == nil || proc.Base == nil || proc.Base.ODKUResult == nil {
+		return
+	}
+	state := proc.Base.ODKUResult
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	if state.generation == generation {
+		state.Summary.Merge(summary)
+	}
+}
+
+// GetODKUProtocolID returns the OK-packet value. A successfully generated
+// value wins over the UPDATE fallback. When at least one action changed or
+// inserted a row, the fallback is the auto-increment value of the last logical
+// action (including a final no-op action); an all-no-op statement returns zero.
+// The fallback never updates the session value in LastInsertID.
+func (proc *Process) GetODKUProtocolID() (uint64, bool) {
+	summary := proc.GetODKUResultSummary()
+	if summary.HasGenerated {
+		return summary.FirstGeneratedID, true
+	}
+	if summary.HasSuccessfulAction {
+		return summary.LastActionID, false
+	}
+	return 0, false
+}
+
+// GetODKUProtocolIDForSource preserves MySQL's separate VALUES and SELECT
+// terminal owners. INSERT SELECT restores the default AUTO_INCREMENT field
+// before taking its non-generated fallback; that default is zero.
+func (proc *Process) GetODKUProtocolIDForSource(valuesSource bool) (uint64, bool) {
+	id, generated := proc.GetODKUProtocolID()
+	if !valuesSource && !generated {
+		return 0, false
+	}
+	return id, generated
 }
 
 // SetStatementLastInsertIDIfEarlier publishes the smallest non-zero generated

@@ -18,6 +18,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -46,6 +48,17 @@ type CacheConfig struct {
 	RPC                  morpc.Config   `toml:"rpc"`
 	CheckOverlaps        bool           `toml:"check-overlaps"`
 
+	// IndexFileDiskShare is the share of DiskCapacity given to the index-file cache,
+	// in [0, 1); 0 disables it. Default DefaultIndexFileDiskShare.
+	IndexFileDiskShare *float64 `toml:"index-file-disk-share"`
+	// IndexFileDiskPath is the index-file cache directory. Default DiskPath + "-index-file".
+	IndexFileDiskPath *string `toml:"index-file-disk-path"`
+	// IndexFileRebuildCache is how an index-file rebuild uses the memory and disk caches:
+	// "read-write" (default), "read" or "none".
+	IndexFileRebuildCache string `toml:"index-file-rebuild-cache"`
+	// IndexFileCacheEnabled is set by the service launcher for a CN's SHARED file service.
+	IndexFileCacheEnabled bool `toml:"-" json:"-"`
+
 	QueryClient      client.QueryClient            `json:"-"`
 	KeyRouterFactory KeyRouterFactory[pb.CacheKey] `json:"-"`
 	KeyRouter        client.KeyRouter[pb.CacheKey] `json:"-"`
@@ -66,6 +79,7 @@ type fileServiceCaches struct {
 	remote *RemoteCache
 	memory *MemCache
 	disk   *DiskCache
+	index  *IndexFileCache
 }
 
 func newFileServiceCaches(
@@ -108,21 +122,37 @@ func newFileServiceCaches(
 		logutil.Info("fileservice: remote cache initialized", zap.Any("fs-name", name))
 	}
 
+	indexShare, err := config.indexFileDiskShare()
+	if err != nil {
+		return caches, err
+	}
+	rebuildPolicy, err := ParseIndexFileRebuildCache(config.IndexFileRebuildCache)
+	if err != nil {
+		return caches, err
+	}
+
 	if enableDiskCache && config.DiskCapacity != nil &&
 		*config.DiskCapacity > DisableCacheCapacity && config.DiskPath != nil {
 		var cacheDataAllocator CacheDataAllocator
 		if caches.memory != nil {
 			cacheDataAllocator = caches.memory
 		}
-		caches.disk, err = newDiskCacheWithMetricScope(
+		capacity := int64(*config.DiskCapacity)
+		var opts diskCacheOptions
+		if indexShare > 0 {
+			capacity = int64(float64(capacity) * (1 - indexShare))
+			opts.sizeHintShare = 1 - indexShare
+		}
+		caches.disk, err = newDiskCache(
 			ctx,
 			*config.DiskPath,
-			fscache.ConstCapacity(int64(*config.DiskCapacity)),
+			fscache.ConstCapacity(capacity),
 			perfCounterSets,
 			true,
 			cacheDataAllocator,
 			name,
 			config.MetricScope,
+			opts,
 		)
 		if err != nil {
 			return caches, err
@@ -133,10 +163,81 @@ func newFileServiceCaches(
 		)
 	}
 
+	if indexShare > 0 {
+		path := filepath.Clean(*config.DiskPath) + "-index-file"
+		if config.IndexFileDiskPath != nil && *config.IndexFileDiskPath != "" {
+			path = filepath.Clean(*config.IndexFileDiskPath)
+		}
+		if err = checkIndexFileDiskPath(*config.DiskPath, path); err != nil {
+			return caches, err
+		}
+		capacity := int64(float64(*config.DiskCapacity) * indexShare)
+		caches.index, err = newIndexFileCache(
+			ctx,
+			path,
+			fscache.ConstCapacity(capacity),
+			name+"-index-file",
+			config.MetricScope,
+			indexShare,
+			rebuildPolicy,
+		)
+		if err != nil {
+			return caches, err
+		}
+		logutil.Info("fileservice: index file cache initialized",
+			zap.Any("fs-name", name),
+			zap.String("path", path),
+			zap.Int64("capacity", capacity),
+		)
+	}
+
 	return caches, nil
 }
 
+// checkIndexFileDiskPath rejects an index-file cache directory that is, contains or lies
+// inside the table-data disk cache directory: each cache's restart scan removes files it
+// does not own.
+func checkIndexFileDiskPath(diskPath, indexPath string) error {
+	disk, err := filepath.Abs(diskPath)
+	if err != nil {
+		return err
+	}
+	index, err := filepath.Abs(indexPath)
+	if err != nil {
+		return err
+	}
+	within := func(dir, path string) bool {
+		rel, err := filepath.Rel(dir, path)
+		return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+	}
+	if within(disk, index) || within(index, disk) {
+		return moerr.NewInvalidInputNoCtxf("index-file-disk-path %q overlaps disk-path %q", indexPath, diskPath)
+	}
+	return nil
+}
+
+// indexFileDiskShare returns the share of the disk capacity for the index-file cache, 0
+// when the cache is not enabled for this file service.
+func (c *CacheConfig) indexFileDiskShare() (float64, error) {
+	share := DefaultIndexFileDiskShare
+	if c.IndexFileDiskShare != nil {
+		share = *c.IndexFileDiskShare
+		if !(share >= 0 && share < 1) {
+			return 0, moerr.NewInvalidInputNoCtxf("invalid index-file-disk-share %v, want [0, 1)", share)
+		}
+	}
+	if !c.IndexFileCacheEnabled || c.DiskCapacity == nil ||
+		*c.DiskCapacity <= DisableCacheCapacity || c.DiskPath == nil {
+		return 0, nil
+	}
+	return share, nil
+}
+
 func (c *fileServiceCaches) close(ctx context.Context) {
+	if c.index != nil {
+		c.index.Close(ctx)
+		c.index = nil
+	}
 	if c.disk != nil {
 		c.disk.Close(ctx)
 		c.disk = nil

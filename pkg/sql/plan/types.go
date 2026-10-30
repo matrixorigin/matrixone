@@ -382,6 +382,10 @@ type ViewData struct {
 }
 
 type QueryBuilder struct {
+	// DELETE owns these generated scan identities. Optimizer consumers must
+	// revalidate the binding and table after join rewrites.
+	deleteIndexScanTables map[int32]deleteIndexScan
+	integerPrecision      *integerPrecisionBuilder
 	correlationRouteNodes map[int32]bool
 	dependentRelations    map[int32]bool
 	preparedBindingProof  *bool
@@ -475,6 +479,10 @@ type QueryBuilder struct {
 	// carries the final physical decision after shuffle planning.
 	distinctKeyShuffleCols map[*plan.Node]int32
 
+	// base-table joins built by the fulltext rewrite whose driving search an outer score
+	// sort may bound like the implicit LIMIT, keyed by join node id.
+	fulltextBoundableJoins map[int32]fulltextBoundableJoin
+
 	// ftJoinServed records the MATCHes rewritten while applyIndices walked a JOIN's children,
 	// paired with the fulltext node producing each score. applyIndices recurses children
 	// first, so those scans already exist when the PROJECT above the join is visited -- but
@@ -515,6 +523,7 @@ type QueryBuilder struct {
 	isRestoreByTs         bool
 	skipStats             bool
 	isInsertIgnore        bool             // INSERT IGNORE: over-length CHAR/VARCHAR writes are truncated instead of rejected
+	isODKU                bool             // INSERT ... ON DUPLICATE KEY UPDATE: retain action provenance
 	deleteNode            map[uint64]int32 //delete node in this query. key is tableId, value is the nodeId of sinkScan node in the delete plan
 
 	// Ordinary LOAD validates real primary keys while retaining the bulk-write plan.
@@ -710,6 +719,9 @@ type OptimizerHints struct {
 	printShuffle               int
 	skipDedup                  int
 	outerAntiPlanning          int
+	// rollupSort: 1 forces the sort rollup path, 2 forces the legacy hash/
+	// grouping-set path, and 0 selects using the ROLLUP cost model.
+	rollupSort int
 }
 
 type CTERef struct {
@@ -860,8 +872,13 @@ type orderResolutionMetadata struct {
 }
 
 type BindContext struct {
-	existentialBlock     uint64
-	subqueryNestingDepth uint32
+	// The grouping/window rewrite owns this exact generated source. Neither
+	// field is inherited by NewBindContext: genuine SQL boundaries stay real.
+	integerPrecisionGeneratedSource     *tree.Select
+	integerPrecisionTransparentBoundary bool
+	integerPrecision                    *integerPrecisionBuilder
+	existentialBlock                    uint64
+	subqueryNestingDepth                uint32
 
 	binder Binder
 
@@ -918,6 +935,9 @@ type BindContext struct {
 	hasSingleRow              bool
 	isGroupingSet             bool
 	groupingFuncAllowed       bool
+	// sortRollup is set only for the single-query-block ROLLUP fast path. The
+	// normal grouping-set rewrite remains available for all other forms.
+	sortRollup bool
 
 	//cteName denotes the alias of this BindContext.
 	//it may be from view name, cte name or subquery name
@@ -1092,14 +1112,16 @@ type BindContext struct {
 // source expression's nullability.
 func (bc *BindContext) groupOutputType(groupPos int32) Type {
 	typ := bc.groups[groupPos].Typ
-	if groupPos >= 0 && int(groupPos) < len(bc.groupingFlag) && !bc.groupingFlag[groupPos] {
+	if bc.sortRollup ||
+		(groupPos >= 0 && int(groupPos) < len(bc.groupingFlag) && !bc.groupingFlag[groupPos]) {
 		typ.NotNullable = false
 	}
 	return typ
 }
 
-func groupingFlagOutputType(typ Type, groupingFlag []bool, groupPos int32) Type {
-	if groupPos >= 0 && int(groupPos) < len(groupingFlag) && !groupingFlag[groupPos] {
+func groupingFlagOutputType(typ Type, groupingFlag []bool, groupPos int32, sortRollup bool) Type {
+	if sortRollup ||
+		(groupPos >= 0 && int(groupPos) < len(groupingFlag) && !groupingFlag[groupPos]) {
 		typ.NotNullable = false
 	}
 	return typ

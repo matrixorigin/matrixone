@@ -2494,6 +2494,18 @@ func (ses *Session) invalidateCachedPlans(prepared bool) {
 	}
 }
 
+// markPreparedPlansForRollupAlgorithmChange marks prepared plan generations
+// stale without closing their handles. The session variable is read while
+// building the physical rollup plan, so EXECUTE must rebuild the plan after
+// the value changes.
+func (ses *Session) markPreparedPlansForRollupAlgorithmChange() {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	for _, stmt := range ses.prepareStmts {
+		stmt.needsRebuild = true
+	}
+}
+
 // markPreparedPlansForWindowPartitionAlgorithmChange marks prepared plan
 // generations stale without closing their handles. The session variable is
 // read while building the logical plan, so EXECUTE must rebuild the plan and
@@ -2712,6 +2724,7 @@ func (ses *Session) InitBackExec(txnOp TxnOperator, db string, callBack outputCa
 		be.backSes.cloneSnapshotUsesBackgroundTxn = opts[0].cloneSnapshotUsesBackgroundTxn
 		be.backSes.cancelTxnCreateWithRequest = opts[0].cancelTxnCreateWithRequest
 		be.backSes.authorizationSnapshot = opts[0].authorizationSnapshot
+		be.internalExecution = opts[0].internalExecution
 	}
 	return be
 }

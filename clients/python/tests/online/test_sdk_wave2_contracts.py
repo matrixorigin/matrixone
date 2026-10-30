@@ -275,8 +275,8 @@ async def test_cancelled_upsert_rolls_back_first_write(client, async_client, mon
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('kind', ['sync', 'async'])
-async def test_fulltext_terms_match_native_in_both_modes(client, async_client, kind):
-    from matrixone._sql_literals import fulltext_term_token
+async def test_fulltext_terms_match_native_in_both_modes(client, async_client, kind, record_property):
+    from matrixone._sql_literals import string_grammar_token
     from matrixone.sqlalchemy_ext.fulltext_search import natural_match
 
     c = client if kind == 'sync' else async_client
@@ -287,6 +287,23 @@ async def test_fulltext_terms_match_native_in_both_modes(client, async_client, k
         f'INSERT INTO {table} VALUES(1,?),(2,?),(3,?)', ("O'Reilly handbook", r'C:\path guide', 'dollar $sdk$ 测试')
     )
     client.execute(f'CREATE FULLTEXT INDEX idx ON {table}(content)')
+
+    async def compare_composed(native_sql, operation, feature):
+        try:
+            expected_rows = (await resolve(c.execute(native_sql))).rows
+        except QueryError as error:
+            if error.errno != 20105 or 'full table scan with fulltext search is not supported' not in str(error):
+                raise
+            with pytest.raises(QueryError) as raised:
+                await resolve(operation())
+            assert raised.value.errno == 20105
+            record_property('matrixone.feature.' + feature, 'native-limitation:20105')
+        else:
+            result = await resolve(operation())
+            actual = result.rows if hasattr(result, 'rows') else [tuple(row) for row in result]
+            assert actual == expected_rows
+            record_property('matrixone.feature.' + feature, 'supported')
+
     previous = (await resolve(c.execute('SELECT @@sql_mode'))).scalar()
     try:
         for mode in ('', 'NO_BACKSLASH_ESCAPES'):
@@ -310,7 +327,8 @@ async def test_fulltext_terms_match_native_in_both_modes(client, async_client, k
 
                     generated = c.query(table).select('id').filter(natural_match('content', query=term))
                     nested = c.query(table).select('id').filter(logical_in('id', generated))
-                    assert (await resolve(nested.execute())).rows == native
+                    native_nested = f'SELECT id FROM {table} WHERE id IN (SELECT id FROM {table} WHERE MATCH(content) AGAINST({token}))'
+                    await compare_composed(native_nested, nested.execute, 'nested_fulltext_backslash')
                     assert (await resolve(c.execute(_query_to_sql(generated)))).rows == native
                 basic = FulltextSearchBuilder(table, 'content').search(term)
                 rows = (await resolve(c.execute(basic.build_sql()))).rows
@@ -325,10 +343,9 @@ async def test_fulltext_terms_match_native_in_both_modes(client, async_client, k
                 )
                 assert (await resolve(advanced.execute())).rows == native
                 sub = c.query(table).select('id').filter(natural_match('content', query=term)).subquery('s')
-                derived = await resolve(
-                    c.query(table + ' AS p').select('p.id').join(sub, 'p.id=s.id').order_by('p.id').all()
-                )
-                assert [r.id for r in derived] == [r[0] for r in native]
+                derived = c.query(table + ' AS p').select('p.id').join(sub, 'p.id=s.id').order_by('p.id')
+                native_derived = f'SELECT p.id FROM {table} AS p JOIN (SELECT id FROM {table} WHERE MATCH(content) AGAINST({token})) AS s ON p.id=s.id ORDER BY p.id'
+                await compare_composed(native_derived, derived.all, 'derived_fulltext')
             for term in ['bad\0term', r'bad\$term']:
                 with pytest.raises(ValueError):
                     FulltextSearchBuilder(table, 'content').search(term).build_sql()

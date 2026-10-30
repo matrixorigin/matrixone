@@ -1111,6 +1111,24 @@ func TestRequiredRemoteExpressionFeaturesMediumIntAssignmentBounds(t *testing.T)
 	}
 }
 
+func TestRequiredRemoteExpressionFeaturesODKUOwnerMetadata(t *testing.T) {
+	for _, owner := range []any{
+		&Query{Nodes: []*Node{{PreInsertCtx: &PreInsertCtx{TrackOdkuResult: true}}}},
+		&Plan{Plan: &Plan_Query{Query: &Query{Nodes: []*Node{{DedupJoinCtx: &DedupJoinCtx{
+			OdkuOrdinalCol: &ColRef{}, OdkuGeneratedCol: &ColRef{},
+		}}}}}},
+	} {
+		features, err := RequiredRemoteExpressionFeatures(owner)
+		require.NoError(t, err)
+		require.True(t, features.ODKUStatementResult)
+		require.True(t, features.Any())
+		require.False(t, features.SessionLastInsertIDBaseline, "tracking metadata needs a floor without any LAST_INSERT_ID expression")
+	}
+	features, err := RequiredRemoteExpressionFeatures(&PreInsertCtx{})
+	require.NoError(t, err)
+	require.False(t, features.ODKUStatementResult)
+}
+
 func TestDateNumericResultFeaturesRoundTrip(t *testing.T) {
 	for _, tc := range []struct {
 		name                 string

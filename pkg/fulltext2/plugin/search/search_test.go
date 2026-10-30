@@ -34,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/overfetch"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
@@ -140,6 +141,30 @@ func TestNewReaderValidatesItsInput(t *testing.T) {
 			require.True(t, end, "a closed reader is at its end")
 		}()
 	}
+}
+
+func TestNewReaderSearchesTheCandidateBudget(t *testing.T) {
+	proc := testutil.NewProc(t)
+	for _, tc := range []struct {
+		name        string
+		resultLimit uint64
+		budget      uint64
+		want        uint64
+	}{
+		{name: "budget over-fetches", resultLimit: 1, budget: 11, want: 11},
+		{name: "budget below the limit", resultLimit: 5, budget: 3, want: 5},
+		{name: "no budget", resultLimit: 4, want: 4},
+		{name: "unbounded search", budget: 11, want: 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r, err := Hooks{}.NewReader(proc, scanSpec(t, ft2plan.ScanOptions{Config: "{}"}),
+				searchplugin.Request{ResultLimit: tc.resultLimit, CandidateBudget: tc.budget})
+			require.NoError(t, err)
+			defer func() { require.NoError(t, r.Close()) }()
+			require.Equal(t, tc.want, r.(*reader).plannedLimit)
+		})
+	}
+	require.Equal(t, overfetch.PostFilterLimit(1), Hooks{}.PostFilterCandidateBudget(1))
 }
 
 func TestEmptyScanChecksTheGuard(t *testing.T) {
