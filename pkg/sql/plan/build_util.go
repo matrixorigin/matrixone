@@ -1091,7 +1091,10 @@ func buildDefaultExprWithColumnsObserved(
 		}
 		return nil, mapDDLAssignmentCastError(bindCtx, typ, colNameOrigin, err)
 	}
-	if !isExpressionDefault && isNumericDefaultLiteral(semanticExpr) {
+	// Only newly authored DDL is rejected. Verifying an existing catalog entry
+	// (TABLE DUMP) must reproduce the truncated default stored before this
+	// check existed.
+	if purpose == defaultExprForDDL && !isExpressionDefault && isNumericDefaultLiteral(semanticExpr) {
 		if err = validateNumericDefaultWidth(proc, typ, planExpr, colNameOrigin); err != nil {
 			return nil, err
 		}

@@ -1,0 +1,10 @@
+{
+  "varchar3_decimal": {
+    "sql": "create table dd(id int, v varchar(3) default 1.25)",
+    "table_def": "EgJkZCIgEgJpZCABKg8IFiAgKP///////////wE6AhgBmgECaWQiMAgBEgF2IAEqBgg9IANAAzobChEKCAg9EAEgA0ADEgVaAzEuMhIEMS4yNRgBmgEBdiIiCAISEF9fbW9fZmFrZV9wa19jb2wYASoECBwYATABOgBoAVokIhBfX21vX2Zha2VfcGtfY29sKhBfX21vX2Zha2VfcGtfY29sygFcCloKDAoHcmVsa2luZBIBcgpKCg1yZWxfY3JlYXRlc3FsEjljcmVhdGUgdGFibGUgYGRkYCAoYGlkYCBpbnQsIGB2YCB2YXJjaGFyKDMpIGRlZmF1bHQgMS4yNSm4AgM="
+  },
+  "varchar3_int": {
+    "sql": "create table dd(id int, v varchar(3) default 12345)",
+    "table_def": "EgJkZCIgEgJpZCABKg8IFiAgKP///////////wE6AhgBmgECaWQiMQgBEgF2IAEqBgg9IANAAzocChEKCAg9EAEgA0ADEgVaAzEyMxIFMTIzNDUYAZoBAXYiIggCEhBfX21vX2Zha2VfcGtfY29sGAEqBAgcGAEwAToAaAFaJCIQX19tb19mYWtlX3BrX2NvbCoQX19tb19mYWtlX3BrX2NvbMoBXQpbCgwKB3JlbGtpbmQSAXIKSwoNcmVsX2NyZWF0ZXNxbBI6Y3JlYXRlIHRhYmxlIGBkZGAgKGBpZGAgaW50LCBgdmAgdmFyY2hhcigzKSBkZWZhdWx0IDEyMzQ1KbgCAw=="
+  }
+}

@@ -15,11 +15,14 @@
 package plan
 
 import (
+	"encoding/json"
+	"os"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 )
 
@@ -62,6 +65,37 @@ func TestCreateTableRejectsTooWideNumericStringDefault(t *testing.T) {
 	} {
 		t.Run("accept "+def, func(t *testing.T) {
 			require.NoError(t, build("create table dd(id int, "+def+")"), def)
+		})
+	}
+}
+
+// Tables created before the width check stored the truncated default ('123'
+// for VARCHAR(3) DEFAULT 12345). The fixture TableDefs were built by the real
+// planner from main c32e75a2, before this fix. TABLE DUMP must still verify
+// them: the width rejection applies to newly authored DDL only.
+func TestTableDumpVerifiesLegacyTooWideNumericDefault(t *testing.T) {
+	data, err := os.ReadFile("testdata/legacy_numeric_width_defaults_c32e75a2.json")
+	require.NoError(t, err)
+	var fixtures map[string]struct {
+		SQL      string `json:"sql"`
+		TableDef []byte `json:"table_def"`
+	}
+	require.NoError(t, json.Unmarshal(data, &fixtures))
+	require.Len(t, fixtures, 2)
+	for name, fixture := range fixtures {
+		t.Run(name, func(t *testing.T) {
+			var source planpb.TableDef
+			require.NoError(t, source.Unmarshal(fixture.TableDef))
+			compiler := NewMockCompilerContext(false, newPlanTestProcess(t))
+			_, err := AnalyzeTableDumpBindings(compiler, &source, &source)
+			require.NoError(t, err, fixture.SQL)
+
+			// The same DDL authored today is still rejected.
+			stmt, err := mysql.ParseOne(t.Context(), fixture.SQL, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			_, err = BuildPlan(compiler, stmt, false)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidDefault), "%s: %v", fixture.SQL, err)
 		})
 	}
 }
