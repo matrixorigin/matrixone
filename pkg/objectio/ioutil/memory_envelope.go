@@ -19,6 +19,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/rscthrottler"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -167,4 +168,65 @@ func IOEnvelope(projections [][]types.Type, unit, maxRowBytes int64) (int64, err
 		total += part
 	}
 	return total, nil
+}
+
+// UploadEnvelope retires only the raw clone/merge vectors after Sink has
+// consumed them. Serialization, compression, arena growth and final metadata
+// remain covered until Sync and Close have finished.
+func UploadEnvelope(schema []types.Type, unit, payload int64) (int64, error) {
+	peak, err := IOEnvelope([][]types.Type{schema}, unit, payload)
+	if err != nil {
+		return 0, err
+	}
+	return peak - 3*mpool.GrowCapacity(0, max(unit, payload)), nil
+}
+
+// BatchIOEnvelope sizes a borrowed operation from the referenced window, not
+// the upstream vector's entire backing area or the graph's largest legal row.
+func BatchIOEnvelope(data *batch.Batch, unit int64) (peak, upload int64, err error) {
+	var payload int64
+	schema := make([]types.Type, 0, len(data.Vecs))
+	for _, v := range data.Vecs {
+		payload += v.WindowSize(0, data.RowCount())
+		schema = append(schema, *v.GetType())
+	}
+	unit = min(unit, max(1, payload))
+	peak, err = IOEnvelope([][]types.Type{schema}, unit, payload)
+	if err == nil {
+		upload, err = UploadEnvelope(schema, unit, payload)
+	}
+	return
+}
+
+// WriterBufferBytes separates the throttler's object target from the source
+// batch unit. A larger target is legal only under the existing admitted W;
+// singleton rows already have their independent complete graph bound.
+func WriterBufferBytes(w *rscthrottler.WorkingSet, target int64, schemas [][]types.Type) int64 {
+	if w == nil {
+		return target
+	}
+	// The unchanged metadata protocol is row-count based. Flat writer rows
+	// consume at least the fixed headers, so a wider byte target can preserve
+	// the source-unit row bound without enlarging any output slot or frame.
+	minimumRow := int64(math.MaxInt64)
+	for _, schema := range schemas {
+		var row int64
+		for _, typ := range schema {
+			row += int64(max(1, typ.TypeSize()))
+		}
+		minimumRow = min(minimumRow, row)
+	}
+	if minimumRow > 0 && minimumRow < math.MaxInt64/w.UnitBytes() {
+		target = min(target, w.UnitBytes()*minimumRow)
+	} else if minimumRow == 0 || len(schemas) == 0 {
+		return w.UnitBytes()
+	}
+	for target > w.UnitBytes() {
+		need, err := IOEnvelope(schemas, target, 0)
+		if err == nil && need <= w.IOBytes() {
+			return target
+		}
+		target = max(w.UnitBytes(), target/2)
+	}
+	return w.UnitBytes()
 }

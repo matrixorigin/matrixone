@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/rscthrottler"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
@@ -42,23 +43,25 @@ import (
 // admitted domains. Metadata is streamed to an anonymous file during Build;
 // Eval returns the original MergeBlock protocol one frame per Call.
 type controlledS3 struct {
-	owner      *Insert
-	fs         fileservice.FileService
-	memory     *process.ImportMemory
-	throttler  rscthrottler.RSCThrottler
-	dataMP     *mpool.MPool
-	outputMP   *mpool.MPool
-	outputSlot *rscthrottler.InputLease
-	writer     *colexec.CNS3Writer
-	unit       int64
-	staged     int64
-	mu         sync.Mutex
-	granted    int64
-	mutations  int
-	spool      *os.File
-	written    int64
-	read       int64
-	output     *batch.Batch
+	owner       *Insert
+	fs          fileservice.FileService
+	memory      *process.ImportMemory
+	throttler   rscthrottler.RSCThrottler
+	dataMP      *mpool.MPool
+	outputMP    *mpool.MPool
+	outputSlot  *rscthrottler.InputLease
+	writer      *colexec.CNS3Writer
+	unit        int64
+	bufferBytes int64
+	staged      int64
+	mu          sync.Mutex
+	granted     int64
+	mutations   int
+	spool       *os.File
+	written     int64
+	read        int64
+	output      *batch.Batch
+	counters    *perfcounter.CounterSet
 }
 
 func (insert *Insert) insertControlledS3(proc *process.Process, analyzer process.Analyzer) (result vm.CallResult, err error) {
@@ -121,8 +124,10 @@ func newControlledS3(proc *process.Process, owner *Insert, fs fileservice.FileSe
 	if lease == nil {
 		return nil, moerr.NewInternalErrorNoCtx("admitted insert has no output slot")
 	}
+	_, schema, _, _, _ := colexec.GetSequmsAttrsSortKeyIdxFromTableDef(owner.InsertCtx.TableDef)
+	bufferBytes := ioutil.WriterBufferBytes(memory.WorkingSet, rscthrottler.BatchBytes(throttler), [][]types.Type{schema})
 	return &controlledS3{owner: owner, fs: fs, memory: memory, throttler: throttler,
-		unit: unit, outputSlot: lease, dataMP: mpool.MustNew("insert-data"), outputMP: mpool.MustNew("insert-output")}, nil
+		unit: unit, bufferBytes: bufferBytes, outputSlot: lease, dataMP: mpool.MustNew("insert-data"), outputMP: mpool.MustNew("insert-output")}, nil
 }
 
 func (s *controlledS3) reconcileLocked() {
@@ -177,16 +182,13 @@ func (s *controlledS3) acquire(n int64) bool {
 	return false
 }
 
-func (s *controlledS3) ensureWriter(proc *process.Process) {
+func (s *controlledS3) ensureWriter() {
 	if s.writer != nil {
 		return
 	}
 	opts := []ioutil.SinkerOption{ioutil.WithMemoryWorkspace(s.memory.WorkingSet),
-		ioutil.WithBufferBytes(s.unit), ioutil.WithRetainedRelease(s.sourceReleased)}
-	if pipeline, _ := proc.Ctx.Value(ioutil.PipelineFlushKey).(bool); pipeline {
-		opts = append(opts, ioutil.WithPipelineFlush())
-	}
-	s.writer = colexec.NewCNS3DataWriter(s.dataMP, s.fs, s.owner.InsertCtx.TableDef, int(s.unit), false, opts...)
+		ioutil.WithBufferBytes(s.bufferBytes), ioutil.WithRetainedRelease(s.sourceReleased), ioutil.WithPipelineFlush()}
+	s.writer = colexec.NewCNS3DataWriter(s.dataMP, s.fs, s.owner.InsertCtx.TableDef, int(s.bufferBytes), false, opts...)
 }
 
 func insertWindowBytes(bat *batch.Batch, start, end int) int64 {
@@ -228,7 +230,7 @@ func (s *controlledS3) append(proc *process.Process, analyzer process.Analyzer, 
 		if err := context.Cause(proc.Ctx); err != nil {
 			return err
 		}
-		end := insertWindowEnd(projected, start, s.unit)
+		end := insertWindowEnd(projected, start, s.bufferBytes)
 		window, err := projected.Window(start, end)
 		if err != nil {
 			return err
@@ -245,26 +247,27 @@ func (s *controlledS3) append(proc *process.Process, analyzer process.Analyzer, 
 
 func (s *controlledS3) appendWindow(proc *process.Process, analyzer process.Analyzer, window *batch.Batch) error {
 	n := insertWindowBytes(window, 0, window.RowCount())
-	if s.staged > 0 && (n > s.unit || s.staged > s.unit-n) {
-		if err := s.flush(proc, analyzer); err != nil {
+	if s.staged > 0 && (n > s.bufferBytes || s.staged > s.bufferBytes-n) {
+		if err := s.flushPending(proc); err != nil {
 			return err
 		}
 	}
 	for {
-		s.ensureWriter(proc)
+		s.ensureWriter()
 		s.begin()
 		ok := s.acquire(s.writer.AppendAllocation(window))
 		if ok {
-			err := s.writer.Write(proc.Ctx, window)
+			err := s.writer.Write(s.writeContext(proc.Ctx), window)
 			s.end()
 			if err != nil {
 				return err
 			}
-			s.staged += n
-			if s.staged >= s.unit {
-				return s.flush(proc, analyzer)
+			s.staged = s.writer.StagedSize()
+			stats, err := s.writer.TakeCompletedStats()
+			if err != nil {
+				return err
 			}
-			return nil
+			return s.spoolStats(stats)
 		}
 		s.end()
 		if s.staged > 0 || s.dataMP.AllocatedBytes() > 0 {
@@ -276,18 +279,45 @@ func (s *controlledS3) appendWindow(proc *process.Process, analyzer process.Anal
 		}
 		// A cold writer cannot wait for D while its upstream input owns I.
 		// The pre-admitted W operation clones and writes the borrowed input.
-		lease, err := s.memory.AcquireIO(proc.Ctx)
+		need, _, err := ioutil.BatchIOEnvelope(window, s.bufferBytes)
 		if err != nil {
 			return err
 		}
-		err = s.writer.WriteBorrowedToFile(proc.Ctx, window, lease)
+		lease, err := s.memory.WorkingSet.AcquireIO(proc.Ctx, need)
+		if err != nil {
+			return err
+		}
+		err = s.writer.WriteBorrowedToFile(s.writeContext(proc.Ctx), window, lease)
 		lease.Release()
 		if err != nil {
 			return err
 		}
-		// Sync can drain jobs/acquire W; the borrowed W is already released.
-		return s.flush(proc, analyzer)
+		// Detached uploads already own their complete W and need no source
+		// progress. Keep them running after returning the borrowed parent W.
+		stats, err := s.writer.TakeCompletedStats()
+		if err != nil {
+			return err
+		}
+		return s.spoolStats(stats)
 	}
+}
+
+func (s *controlledS3) flushPending(proc *process.Process) error {
+	if s.writer == nil {
+		return nil
+	}
+	s.begin()
+	defer s.end()
+	ctx := s.writeContext(proc.Ctx)
+	if err := s.writer.Flush(ctx); err != nil {
+		return err
+	}
+	stats, err := s.writer.TakeCompletedStats()
+	if err != nil {
+		return err
+	}
+	s.staged = s.writer.StagedSize()
+	return s.spoolStats(stats)
 }
 
 func (s *controlledS3) flush(proc *process.Process, analyzer process.Analyzer) error {
@@ -298,44 +328,59 @@ func (s *controlledS3) flush(proc *process.Process, analyzer process.Analyzer) e
 	// backing. A worker callback must not inspect those lists mid-mutation.
 	s.begin()
 	defer s.end()
-	counters := analyzer.GetOpCounterSet()
-	ctx := perfcounter.AttachS3RequestKey(proc.Ctx, counters)
+	ctx := s.writeContext(proc.Ctx)
 	stats, err := s.writer.Sync(ctx)
 	if err == nil {
 		err = s.spoolStats(stats)
 	}
-	analyzer.AddS3RequestCount(counters)
-	analyzer.AddFileServiceCacheInfo(counters)
-	analyzer.AddDiskIO(counters)
 	// Close drains async jobs and destroys the retained free list. Its source
 	// callbacks may return only actual capacity, never the prepaid next N.
 	err = errors.Join(err, s.writer.Close())
 	s.writer = nil
 	s.staged = 0
+	s.reportCounters(analyzer)
 	return err
 }
 
-func (s *controlledS3) spoolStats(stats []objectio.ObjectStats) (err error) {
-	if len(stats) == 0 {
-		return nil
+func (s *controlledS3) writeContext(ctx context.Context) context.Context {
+	if s.counters == nil {
+		s.counters = new(perfcounter.CounterSet)
 	}
-	var blocks int64
+	return perfcounter.AttachS3RequestKey(ctx, s.counters)
+}
+
+func (s *controlledS3) reportCounters(analyzer process.Analyzer) {
+	if s.counters != nil {
+		analyzer.AddS3RequestCount(s.counters)
+		analyzer.AddFileServiceCacheInfo(s.counters)
+		analyzer.AddDiskIO(s.counters)
+		s.counters.Reset()
+	}
+}
+
+func (s *controlledS3) spoolStats(stats []objectio.ObjectStats) error {
+	// Completed uploads can arrive in bursts. The metadata frame contract
+	// bounds one complete object, not the combined backlog.
 	for i := range stats {
-		if blocks > math.MaxInt64-int64(stats[i].BlkCnt()) {
-			return moerr.NewInternalErrorNoCtx("insert block metadata count overflow")
+		if err := s.spoolObjectStats(stats[i]); err != nil {
+			return err
 		}
-		blocks += int64(stats[i].BlkCnt())
 	}
+	return nil
+}
+
+func (s *controlledS3) spoolObjectStats(stats objectio.ObjectStats) (err error) {
+	blocks := int64(stats.BlkCnt())
 	frameLimit, err := s.metadataFrameLimit()
 	if err != nil {
 		return err
 	}
 	// Fixed encoding/footer and vector headers have ample room in the output
 	// envelope's fixed overhead. Check the variable payload before allocation.
-	if blocks > math.MaxInt64/int64(objectio.BlockInfoSize+24) || int64(len(stats)) > math.MaxInt64/int64(objectio.ObjectStatsLen+24) {
+	if blocks > math.MaxInt64/int64(objectio.BlockInfoSize+24) {
 		return moerr.NewInternalErrorNoCtx("insert block metadata size overflow")
 	}
-	bound := blocks*int64(objectio.BlockInfoSize+24) + int64(len(stats))*int64(objectio.ObjectStatsLen+24)
+	bound := blocks*int64(objectio.BlockInfoSize+24) + int64(objectio.ObjectStatsLen+24)
 	if bound < 0 || bound > frameLimit-4096 {
 		return moerr.NewInternalErrorNoCtxf("insert metadata exceeds admitted frame capacity: %d", bound)
 	}
@@ -347,7 +392,7 @@ func (s *controlledS3) spoolStats(stats []objectio.ObjectStats) (err error) {
 		s.output.Clean(s.outputMP)
 		s.output = nil
 	}()
-	counts := []int64{blocks, int64(len(stats))}
+	counts := []int64{blocks, 1}
 	widths := []int64{int64(objectio.BlockInfoSize), int64(objectio.ObjectStatsLen)}
 	var allocation int64
 	for i, count := range counts {
@@ -364,7 +409,7 @@ func (s *controlledS3) spoolStats(stats []objectio.ObjectStats) (err error) {
 			return err
 		}
 	}
-	if err = colexec.ExpandObjectStatsToBatch(s.outputMP, false, s.output, true, stats...); err != nil {
+	if err = colexec.ExpandObjectStatsToBatch(s.outputMP, false, s.output, true, stats); err != nil {
 		return err
 	}
 	n := s.output.MarshalBinarySize()
@@ -451,6 +496,9 @@ func (s *controlledS3) close() (err error) {
 	if s.writer != nil {
 		err = s.writer.Close()
 		s.writer = nil
+	}
+	if s.owner != nil && s.owner.OpAnalyzer != nil {
+		s.reportCounters(s.owner.OpAnalyzer)
 	}
 	// Reconcile after the writer's callbacks have joined and before deleting
 	// its pool; otherwise the final grant would lose its measurable owner.

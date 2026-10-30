@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
@@ -87,13 +88,17 @@ func (t *controlledTestThrottler) BatchBytes() int64 { return 64 << 20 }
 
 func controlledInsertFixture(t *testing.T, throttler *controlledTestThrottler) (*process.Process, *Insert, *rscthrottler.WorkingSet) {
 	t.Helper()
+	return controlledInsertFixtureWithUnit(t, throttler, 512<<10)
+}
+
+func controlledInsertFixtureWithUnit(t *testing.T, throttler *controlledTestThrottler, unit int64) (*process.Process, *Insert, *rscthrottler.WorkingSet) {
+	t.Helper()
 	proc := testutil.NewProc(t)
 	t.Cleanup(proc.Free)
 	oldRuntime := runtime.ServiceRuntime(proc.GetService())
 	runtime.SetupServiceBasedRuntime(proc.GetService(), runtime.DefaultRuntime())
 	t.Cleanup(func() { runtime.SetupServiceBasedRuntime(proc.GetService(), oldRuntime) })
 	runtime.ServiceRuntime(proc.GetService()).SetGlobalVariables(runtime.CNMemoryThrottler, throttler)
-	const unit = 512 << 10
 	ioBytes, err := ioutil.IOEnvelope([][]types.Type{{types.T_int64.ToType(), types.T_varchar.ToType()}}, unit, unit)
 	require.NoError(t, err)
 	owner := rscthrottler.NewMemThrottler("insert-working-set", 1, rscthrottler.WithConstLimit(8<<30))
@@ -305,6 +310,62 @@ func TestControlledInsertInvalidMetadataAndCloseErrorReleaseOwners(t *testing.T)
 	lease.Release()
 }
 
+func TestControlledInsertCompletedMetadataFrames(t *testing.T) {
+	const unit = 4 << 20
+	const blocks = unit / objectio.BlockMaxRows
+	limit, err := colexec.InsertMetadataFrameLimit(unit, 1)
+	require.NoError(t, err)
+	objectBytes := int64(blocks*(objectio.BlockInfoSize+24) + objectio.ObjectStatsLen + 24)
+	require.LessOrEqual(t, objectBytes, limit-4096)
+	// Cross the frame bound with block payload alone, without allocating rows.
+	burst := int(limit/int64(blocks*objectio.BlockInfoSize)) + 1
+	require.Greater(t, int64(burst*blocks*objectio.BlockInfoSize), limit)
+	for _, objects := range []int{0, 1, burst} {
+		t.Run(fmt.Sprint(objects), func(t *testing.T) {
+			proc, op, _ := controlledInsertFixtureWithUnit(t, &controlledTestThrottler{t: t}, unit)
+			s := op.ctr.controlled
+			frameLimit, err := s.metadataFrameLimit()
+			require.NoError(t, err)
+			require.Equal(t, limit, frameLimit)
+			stats := make([]objectio.ObjectStats, objects)
+			for i := range stats {
+				id := objectio.NewObjectid()
+				stats[i] = *objectio.NewObjectStatsWithObjectID(&id, false, true, true)
+				require.NoError(t, objectio.SetObjectStatsBlkCnt(&stats[i], blocks))
+				require.NoError(t, objectio.SetObjectStatsRowCnt(&stats[i], blocks*objectio.BlockMaxRows))
+			}
+			require.NoError(t, s.spoolStats(stats))
+			require.Zero(t, s.outputMP.AllocatedBytes(), "each spooled frame retires its temporary backing")
+			for i := range stats {
+				frame, err := s.next()
+				require.NoError(t, err)
+				require.NotNil(t, frame)
+				require.EqualValues(t, blocks, frame.Vecs[0].Length(), "all blocks of one object stay together")
+				require.Equal(t, 1, frame.Vecs[1].Length())
+				require.Equal(t, stats[i][:], frame.Vecs[1].GetBytesAt(0), "preserve each object's identity and row count")
+				require.LessOrEqual(t, frame.MarshalBinarySize(), frameLimit)
+				require.LessOrEqual(t, s.outputMP.AllocatedBytes(), s.outputSlot.Capacity())
+			}
+			frame, err := s.next()
+			require.NoError(t, err)
+			require.Nil(t, frame, "no duplicate or trailing object")
+			outputMP := s.outputMP
+			op.Reset(proc, false, nil)
+			require.Zero(t, outputMP.AllocatedBytes())
+		})
+	}
+	t.Run("oversized-object", func(t *testing.T) {
+		_, op, _ := controlledInsertFixtureWithUnit(t, &controlledTestThrottler{t: t}, unit)
+		s := op.ctr.controlled
+		stat := objectio.NewObjectStats()
+		require.NoError(t, objectio.SetObjectStatsBlkCnt(stat, uint32((limit-4096)/int64(objectio.BlockInfoSize+24)+1)))
+		require.ErrorContains(t, s.spoolStats([]objectio.ObjectStats{*stat}), "insert metadata exceeds admitted frame capacity")
+		require.Zero(t, s.outputMP.AllocatedBytes())
+		require.Zero(t, s.written)
+		require.Nil(t, s.spool)
+	})
+}
+
 func TestControlledInsertReleaseCallbackPreservesPrepaidGrowth(t *testing.T) {
 	credits := &controlledTestThrottler{t: t, grants: 2}
 	proc, op, _ := controlledInsertFixture(t, credits)
@@ -331,4 +392,125 @@ func TestControlledInsertReleaseCallbackPreservesPrepaidGrowth(t *testing.T) {
 	require.Zero(t, credits.balance)
 	require.Zero(t, s.dataMP.AllocatedBytes())
 	_ = proc
+}
+
+type blockedImportFS struct {
+	fileservice.FileService
+	entered chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (fs *blockedImportFS) Write(ctx context.Context, v fileservice.IOVector) error {
+	fs.once.Do(func() { close(fs.entered) })
+	select {
+	case <-fs.release:
+		return fs.FileService.Write(ctx, v)
+	case <-ctx.Done():
+		return context.Cause(ctx)
+	}
+}
+
+func TestControlledInsertDefaultImportPipelinesUpload(t *testing.T) {
+	for _, collect := range []bool{false, true} {
+		for _, grants := range []int{0, 1} {
+			t.Run(fmt.Sprintf("grants=%d/incremental=%t", grants, collect), func(t *testing.T) {
+				checkControlledInsertPipeline(t, grants, false, collect)
+			})
+		}
+	}
+	t.Run("borrowed-cancel", func(t *testing.T) { checkControlledInsertPipeline(t, 0, true, false) })
+}
+
+func checkControlledInsertPipeline(t *testing.T, grants int, cancelUpload, collect bool) {
+	credits := &controlledTestThrottler{t: t, grants: grants}
+	proc, op, ws := controlledInsertFixture(t, credits)
+	ctx, cancel := context.WithTimeout(proc.Ctx, 10*time.Second)
+	t.Cleanup(cancel)
+	proc.Ctx = ctx
+	// One parent and two ready uploads must fit independently in this test.
+	require.NoError(t, ws.TryGrow(ctx, rscthrottler.WorkingSetSpec{
+		UnitBytes: ws.UnitBytes(), Inputs: []rscthrottler.InputSlotSpec{
+			{Name: "csv", Count: 1, Bytes: ws.InputCapacity(0)},
+			{Name: "output", Count: 1, Bytes: ws.InputCapacity(1)},
+		}, IOBytes: 3 * ws.IOBytes(),
+	}))
+	require.Nil(t, ctx.Value(ioutil.PipelineFlushKey), "ordinary LOAD needs no backfill context flag")
+	s := op.ctr.controlled
+	fs := &blockedImportFS{FileService: s.fs, entered: make(chan struct{}), release: make(chan struct{})}
+	s.fs = fs
+	var once sync.Once
+	unblock := func() { once.Do(func() { close(fs.release) }) }
+	t.Cleanup(unblock)
+	b := batch.NewWithSize(2)
+	t.Cleanup(func() { b.Clean(proc.Mp()) })
+	b.Vecs[0] = testutil.MakeInt64Vector([]int64{2, 1}, nil, proc.Mp())
+	b.Vecs[1] = testutil.MakeVarcharVector([]string{"b", "a"}, nil, proc.Mp())
+	b.SetRowCount(2)
+	require.NoError(t, s.append(proc, op.OpAnalyzer, b))
+	require.NoError(t, s.flushPending(proc), "boundary flush submits instead of awaiting S3")
+	select {
+	case <-fs.entered:
+	case <-ctx.Done():
+		t.Fatal(context.Cause(ctx))
+	}
+	// Ready jobs keep their own W; the borrowed parent must be available again.
+	need, _, err := ioutil.BatchIOEnvelope(b, s.bufferBytes)
+	require.NoError(t, err)
+	available, err := ws.AcquireIO(ctx, need)
+	require.NoError(t, err)
+	available.Release()
+	ids := vector.MustFixedColNoTypeCheck[int64](b.Vecs[0])
+	ids[0], ids[1] = 4, 3
+	require.NoError(t, s.append(proc, op.OpAnalyzer, b), "a cold D retry must not join the first upload")
+	require.NoError(t, s.flushPending(proc))
+	require.Zero(t, s.written, "incomplete uploads must not produce transaction metadata")
+	if cancelUpload {
+		cancel()
+		require.ErrorIs(t, s.flush(proc, op.OpAnalyzer), context.Canceled)
+		dataMP := s.dataMP
+		require.NoError(t, s.close())
+		require.Zero(t, dataMP.AllocatedBytes())
+		require.Zero(t, credits.balance)
+		checkCtx, stop := context.WithTimeout(context.Background(), 10*time.Second)
+		defer stop()
+		lease, err := ws.AcquireInput(checkCtx, 1)
+		require.NoError(t, err)
+		lease.Release()
+		available, err := ws.AcquireIO(checkCtx, ws.IOBytes())
+		require.NoError(t, err)
+		available.Release()
+		return
+	}
+	unblock()
+	if collect {
+		// Sync is a deterministic completion barrier here; it leaves stats
+		// available for the next incremental collection instead of spooling.
+		_, err := s.writer.Sync(s.writeContext(ctx))
+		require.NoError(t, err)
+		require.NoError(t, s.flushPending(proc))
+		require.Positive(t, s.written, "incremental collection must spool completed objects")
+	}
+	require.NoError(t, s.flush(proc, op.OpAnalyzer))
+	var rows uint32
+	var objects int
+	for {
+		frame, err := s.next()
+		require.NoError(t, err)
+		if frame == nil {
+			break
+		}
+		require.Equal(t, 1, frame.Vecs[1].Length(), "a completed-object burst must not coalesce metadata frames")
+		objects += frame.Vecs[1].Length()
+		for i := 0; i < frame.Vecs[1].Length(); i++ {
+			stats := objectio.ObjectStats(frame.Vecs[1].GetBytesAt(i))
+			rows += stats.Rows()
+		}
+	}
+	require.EqualValues(t, 4, rows)
+	require.Equal(t, 2, objects)
+	require.Zero(t, credits.balance)
+	lease, err := ws.AcquireIO(ctx, ws.IOBytes())
+	require.NoError(t, err)
+	lease.Release()
 }

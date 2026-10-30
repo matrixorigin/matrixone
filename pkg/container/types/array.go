@@ -79,34 +79,40 @@ func ArraysToString[T RealNumbers](input [][]T, sep string) string {
 }
 
 func StringToArray[T RealNumbers](str string) ([]T, error) {
-	input := strings.ReplaceAll(str, " ", "")
+	input := strings.Trim(str, " ")
 
-	if !(strings.HasPrefix(input, "[") && strings.HasSuffix(input, "]")) {
+	if len(input) < 2 || input[0] != '[' || input[len(input)-1] != ']' {
 		return nil, moerr.NewInternalErrorNoCtxf("malformed vector input: %s", str)
 	}
 
-	if len(input) == 2 {
+	input = strings.Trim(input[1:len(input)-1], " ")
+	if len(input) == 0 {
 		// We don't handle empty vector like "[]"
 		return nil, moerr.NewInternalErrorNoCtxf("malformed vector input: %s", str)
 	}
 
-	// remove "[" and "]"
-	input = input[1 : len(input)-1]
-
-	numStrs := strings.Split(input, ",")
-	if len(numStrs) > MaxArrayDimension {
+	commas := strings.Count(input, ",")
+	if commas >= MaxArrayDimension {
 		return nil, moerr.NewInternalErrorNoCtxf("typeLen is over the MaxVectorLen: %v", MaxArrayDimension)
 	}
-	result := make([]T, len(numStrs))
+	result := make([]T, commas+1)
+	hasSpaces := strings.Contains(input, " ")
 
-	var t T
-	var err error
-	for i, numStr := range numStrs {
-		t, err = stringToT[T](numStr)
+	for i := range result {
+		numStr, rest, _ := strings.Cut(input, ",")
+		if hasSpaces {
+			numStr = strings.Trim(numStr, " ")
+			// Preserve the legacy removal of ASCII spaces inside numbers, too.
+			if strings.Contains(numStr, " ") {
+				numStr = strings.ReplaceAll(numStr, " ", "")
+			}
+		}
+		t, err := stringToT[T](numStr)
 		if err != nil {
 			return nil, err
 		}
 		result[i] = t
+		input = rest
 	}
 
 	return result, nil
