@@ -7592,7 +7592,7 @@ func strToSignedWithProc[T constraints.Signed](
 				if len(explicit) > 1 && explicit[1] {
 					appendIntegerNumericCoercionWarning(proc, s, integerPrefix, integerHasPrefix, integerOutOfRange)
 				} else if rangeWarning != explicitIntegerCastTruncated {
-					appendNumericCoercionWarning(proc, s)
+					appendNumericCoercionWarningAs(proc, s, integerCastWarningType(explicit))
 				}
 				appendExplicitIntegerCastWarning(proc, s, rangeWarning)
 				result = T(r)
@@ -8126,6 +8126,20 @@ func diagnoseFloatText(proc *process.Process, ctx context.Context, mode castMode
 // whose numeric prefix was consumed and whose remaining text was discarded.
 // Empty strings intentionally coerce to zero without a warning.
 func appendNumericCoercionWarning(proc *process.Process, value string) {
+	appendNumericCoercionWarningAs(proc, value, "DOUBLE")
+}
+
+// integerCastWarningType names the conversion in a string-to-integer
+// truncation warning. MySQL reports an explicit CAST(... AS SIGNED/UNSIGNED)
+// as an INTEGER conversion; implicit numeric coercion stays DOUBLE.
+func integerCastWarningType(explicit []bool) string {
+	if len(explicit) > 0 && explicit[0] {
+		return "INTEGER"
+	}
+	return "DOUBLE"
+}
+
+func appendNumericCoercionWarningAs(proc *process.Process, value, typeName string) {
 	trimmed := trimASCIISpace(value)
 	if !FloatTextTruncated(trimmed) {
 		return
@@ -8140,7 +8154,7 @@ func appendNumericCoercionWarning(proc *process.Process, value string) {
 	}
 	appender.AppendWarningDiagnostic(
 		moerr.ER_TRUNCATED_WRONG_VALUE,
-		fmt.Sprintf("Truncated incorrect DOUBLE value: '%-.128s'", trimmed),
+		fmt.Sprintf("Truncated incorrect %s value: '%-.128s'", typeName, trimmed),
 	)
 }
 
@@ -8706,7 +8720,7 @@ func strToUnsignedWithProc[T constraints.Unsigned](
 				if len(explicit) > 1 && explicit[1] {
 					appendIntegerNumericCoercionWarning(proc, *res, integerPrefix, integerHasPrefix, integerOutOfRange)
 				} else if rangeWarning != explicitIntegerCastTruncated {
-					appendNumericCoercionWarning(proc, *res)
+					appendNumericCoercionWarningAs(proc, *res, integerCastWarningType(explicit))
 				}
 				appendExplicitIntegerCastWarning(proc, *res, rangeWarning)
 			}
