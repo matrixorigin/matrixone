@@ -559,6 +559,9 @@ from t_case_nullable_condition order by id;
 -- Invalid casts in unselected THEN branches must not be evaluated.
 select id, case when cond then cast(case when id = 3 then '7' else 'bad' end as decimal(18,2)) else null end as case_value
 from t_case_nullable_condition where id < 4 order by id;
+show warnings;
+-- A selected invalid SELECT cast returns zero and a warning, not an error.
 select case when cond then cast(case when id = 3 then '7' else 'bad' end as decimal(18,2)) else null end as case_value
 from t_case_nullable_condition where id = 4;
+show warnings;
 drop table t_case_nullable_condition;
