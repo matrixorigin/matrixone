@@ -112,7 +112,7 @@ func (itr *strHashmapIterator) prepareHashKeys(
 		itr.zValues[i] = 0
 	}
 	const maxInt = int(^uint(0) >> 1)
-	flatFixedSize := 0
+	uniformRowSize := 0
 	add := func(row int, size int) error {
 		if size < 0 || itr.zValues[row] > int64(maxInt-size) {
 			return mpool.ErrAllocationAccountInvalid
@@ -169,6 +169,14 @@ func (itr *strHashmapIterator) prepareHashKeys(
 			continue
 		}
 
+		if count > 0 && (vec.GetType().Oid == types.T_char ||
+			(types.IsUnicodeCollation(vec.GetType().Charset) && vec.GetType().Oid.IsMySQLString())) && !vec.IsConst() {
+			if err := itr.sizeCanonicalStringKeys(vec, start, count, prefix); err != nil {
+				return err
+			}
+			continue
+		}
+
 		// Most join keys are flat and non-null. Size them from the physical
 		// representation directly, avoiding repeated type/null/const dispatch
 		// before the encoder's required value pass.
@@ -176,10 +184,10 @@ func (itr *strHashmapIterator) prepareHashKeys(
 		if !hasGrouping && !vec.GetNulls().Any() {
 			if vec.GetType().IsFixedLen() {
 				size := prefix + vec.GetType().TypeSize()
-				if size < 0 || flatFixedSize > maxInt-size {
+				if size < 0 || uniformRowSize > maxInt-size {
 					return mpool.ErrAllocationAccountInvalid
 				}
-				flatFixedSize += size
+				uniformRowSize += size
 				continue
 			}
 			if vec.IsConst() {
@@ -189,20 +197,14 @@ func (itr *strHashmapIterator) prepareHashKeys(
 					valueSize = keycodec.CanonicalJSONSize(value)
 				}
 				size := prefix + 4 + valueSize
-				for i := 0; i < count; i++ {
-					if err := add(i, size); err != nil {
-						return err
-					}
+				if size < 0 || uniformRowSize > maxInt-size {
+					return mpool.ErrAllocationAccountInvalid
 				}
+				uniformRowSize += size
 				continue
 			}
 			values, area := vector.MustVarlenaRawData(vec)
-			if count > 0 && (vec.GetType().Oid == types.T_char ||
-				(types.IsUnicodeCollation(vec.GetType().Charset) && vec.GetType().Oid.IsMySQLString())) {
-				if err := itr.sizeFlatCanonicalStringKeys(vec, start, count, prefix); err != nil {
-					return err
-				}
-			} else if vec.GetType().Oid == types.T_json {
+			if vec.GetType().Oid == types.T_json {
 				for i := 0; i < count; i++ {
 					value := values[start+i].GetByteSlice(area)
 					if err := add(i, prefix+4+keycodec.CanonicalJSONSize(value)); err != nil {
@@ -259,10 +261,10 @@ func (itr *strHashmapIterator) prepareHashKeys(
 			}
 		}
 	}
-	// Fixed, flat columns contribute the same width to every row. Accumulate
-	// them once above instead of walking the row set once per key column.
+	// Fixed, flat columns and non-null constants contribute a uniform size.
+	// Accumulate it once instead of walking the row set per key column.
 	for i := 0; i < count; i++ {
-		if err := add(i, flatFixedSize); err != nil {
+		if err := add(i, uniformRowSize); err != nil {
 			return err
 		}
 	}
@@ -646,14 +648,25 @@ func isFlatRawStringHashKey(vec *vector.Vector) bool {
 		!types.IsUnicodeCollation(typ.Charset) && !vec.IsConst() && !vec.HasGrouping()
 }
 
-func (itr *strHashmapIterator) sizeFlatCanonicalStringKeys(vec *vector.Vector, start, n, prefix int) error {
+func (itr *strHashmapIterator) sizeCanonicalStringKeys(vec *vector.Vector, start, n, prefix int) error {
 	values, area := vector.MustVarlenaRawData(vec)
 	typ := vec.GetType()
+	nsp, gsp := vec.GetNulls(), vec.GetGrouping()
+	hasNulls, hasGrouping := nsp.Any(), prefix != 0 && vec.HasGrouping()
 	const maxInt = int(^uint(0) >> 1)
 	if types.IsUnicodeCollation(typ.Charset) {
 		for i := 0; i < n; i++ {
-			value := types.CollationKeyOrOriginal(typ.Charset, values[start+i].GetByteSlice(area))
-			size := prefix + 4 + len(value)
+			row, size := start+i, 0
+			if hasGrouping && gsp.Contains(uint64(row)) {
+				size = 1
+			} else if hasNulls && nsp.Contains(uint64(row)) {
+				if itr.mp.hasNull {
+					size = 1
+				}
+			} else {
+				value := types.CollationKeyOrOriginal(typ.Charset, values[row].GetByteSlice(area))
+				size = prefix + 4 + len(value)
+			}
 			if size < 0 || itr.zValues[i] > int64(maxInt-size) {
 				return mpool.ErrAllocationAccountInvalid
 			}
@@ -661,8 +674,17 @@ func (itr *strHashmapIterator) sizeFlatCanonicalStringKeys(vec *vector.Vector, s
 		}
 	} else {
 		for i := 0; i < n; i++ {
-			value := keycodec.CanonicalCharValue(values[start+i].GetByteSlice(area))
-			size := prefix + 4 + len(value)
+			row, size := start+i, 0
+			if hasGrouping && gsp.Contains(uint64(row)) {
+				size = 1
+			} else if hasNulls && nsp.Contains(uint64(row)) {
+				if itr.mp.hasNull {
+					size = 1
+				}
+			} else {
+				value := keycodec.CanonicalCharValue(values[row].GetByteSlice(area))
+				size = prefix + 4 + len(value)
+			}
 			if size < 0 || itr.zValues[i] > int64(maxInt-size) {
 				return mpool.ErrAllocationAccountInvalid
 			}

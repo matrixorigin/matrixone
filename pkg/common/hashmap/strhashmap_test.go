@@ -144,36 +144,52 @@ func TestStrHashMapPreviewInsertGrowsBeforePublication(t *testing.T) {
 }
 
 func TestStrHashMapPreviewInsertNullableGrouping(t *testing.T) {
-	mp := mpool.MustNewZero()
-	hashMap, err := NewStrHashMap(true, mp)
-	require.NoError(t, err)
-	require.NoError(t, hashMap.SetGroupingAware())
-	defer func() {
-		hashMap.Free()
-		require.Zero(t, mp.CurrNB())
-	}()
+	for _, typ := range []types.Type{
+		types.T_varchar.ToType(),
+		types.New(types.T_char, 32, 0),
+		types.NewWithCharset(types.T_char, 32, 0, types.CharsetUTF8MB4UnicodeCI),
+	} {
+		t.Run(typ.String(), func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			hashMap, err := NewStrHashMap(true, mp)
+			require.NoError(t, err)
+			t.Cleanup(func() {
+				hashMap.Free()
+				require.Zero(t, mp.CurrNB())
+			})
+			require.NoError(t, hashMap.SetGroupingAware())
 
-	input := vector.NewVec(types.T_varchar.ToType())
-	defer input.Free(mp)
-	require.NoError(t, vector.AppendBytes(input, []byte("x"), false, mp))
-	require.NoError(t, vector.AppendBytes(input, nil, true, mp))
-	require.NoError(t, vector.AppendBytes(input, []byte("x"), false, mp))
-	require.NoError(t, vector.AppendBytes(input, nil, true, mp))
-	input.GetGrouping().Add(2)
+			input := vector.NewVec(typ)
+			t.Cleanup(func() { input.Free(mp) })
+			require.NoError(t, vector.AppendBytes(input, []byte("abcdefghijklmnopqrstu"), false, mp))
+			require.NoError(t, vector.AppendBytes(input, nil, true, mp))
+			require.NoError(t, vector.AppendBytes(input, []byte("abcdefghijklmnopqrstu"), false, mp))
+			require.NoError(t, vector.AppendBytes(input, nil, true, mp))
+			input.GetGrouping().Add(2)
+			constant, err := vector.NewConstBytes(typ, []byte("z"), 1, mp)
+			require.NoError(t, err)
+			t.Cleanup(func() { constant.Free(mp) })
 
-	iterator := hashMap.NewTransactionalIterator()
-	var plan InsertPlan
-	err = iterator.PreviewInsert(
-		0, input.Length(), []*vector.Vector{input}, 0, &plan)
-	require.NoError(t, err)
-	preview := append([]uint64(nil), plan.Values()...)
-	require.Equal(t, []uint64{1, 2, 3, 2}, append([]uint64(nil), preview...))
-	require.Equal(t, []uint8{1, 1, 1, 0}, plan.Inserted())
-	require.Equal(t, uint64(3), plan.NewGroups())
-	published, _, err := iterator.CommitPreview(&plan)
-	require.NoError(t, err)
-	require.Equal(t, preview, published)
-	require.Equal(t, uint64(3), hashMap.GroupCount())
+			iterator := hashMap.NewTransactionalIterator()
+			var plan InsertPlan
+			err = iterator.PreviewInsert(
+				0, input.Length(), []*vector.Vector{input, constant}, 0, &plan)
+			require.NoError(t, err)
+			preview := append([]uint64(nil), plan.Values()...)
+			require.Equal(t, []uint64{1, 2, 3, 2}, preview)
+			require.Equal(t, []uint8{1, 1, 1, 0}, plan.Inserted())
+			require.Equal(t, uint64(3), plan.NewGroups())
+			if !types.IsUnicodeCollation(typ.Charset) {
+				// Ordinary row: (1+4+21)+(1+4+1)=32 bytes. NULL and
+				// GROUPING rows: 1+6 bytes, each padded to the minimum16.
+				require.Len(t, iterator.(*transactionalStrIterator).keyBuffer, 32+3*16)
+			}
+			published, _, err := iterator.CommitPreview(&plan)
+			require.NoError(t, err)
+			require.Equal(t, preview, published)
+			require.Equal(t, uint64(3), hashMap.GroupCount())
+		})
+	}
 }
 
 func TestStrHashMapRejectsCompositeJoinNaN(t *testing.T) {
