@@ -395,10 +395,22 @@ create index ixq using ivfflat on t(v) lists = 2 op_type 'vector_ip_ops' quantiz
 not supported: ivfflat quantization "int8" is only supported with L2 (op_type 'vector_l2_ops' or 'vector_l2sq_ops'); the int8/uint8 affine quantizer preserves L2 geometry only, and the quantized-score rescale assumes it
 create index ixq using ivfflat on t(v) lists = 2 op_type 'vector_cosine_ops' quantization 'uint8';
 not supported: ivfflat quantization "uint8" is only supported with L2 (op_type 'vector_l2_ops' or 'vector_l2sq_ops'); the int8/uint8 affine quantizer preserves L2 geometry only, and the quantized-score rescale assumes it
+create index ixq using ivfflat on t(v) lists = 2 op_type 'vector_l1_ops' quantization 'int8';
+not supported: ivfflat quantization "int8" is only supported with L2 (op_type 'vector_l2_ops' or 'vector_l2sq_ops'); the int8/uint8 affine quantizer preserves L2 geometry only, and the quantized-score rescale assumes it
 create index ixq using hnsw on t(v) op_type 'vector_ip_ops' quantization 'int8';
 not supported: hnsw quantization "int8" is only supported with L2 (op_type 'vector_l2_ops'); the int8/uint8 affine quantizer does not preserve inner-product / cosine geometry
 create index ixq using hnsw on t(v) op_type 'vector_cosine_ops' quantization 'uint8';
 not supported: hnsw quantization "uint8" is only supported with L2 (op_type 'vector_l2_ops'); the int8/uint8 affine quantizer does not preserve inner-product / cosine geometry
+create index ixq using ivfflat on t(v) lists = 2 op_type 'vector_l2sq_ops' quantization 'uint8';
+drop index ixq on t;
+create index ixq using ivfflat on t(v) lists = 2 op_type 'vector_l1_ops' quantization 'bf16';
+drop index ixq on t;
+create index ixq using hnsw on t(v) op_type 'vector_cosine_ops' quantization 'float16';
+drop index ixq on t;
+create table tf64 (id bigint primary key, v vecf64(3));
+create index ix using ivfflat on tf64(v) lists = 2 op_type 'vector_l2_ops';
+create table tbf (id bigint primary key, v vecbf16(3));
+create index ix using hnsw on tbf(v) op_type 'vector_l2_ops';
 create table t8 (id bigint primary key, v vecint8(3));
 insert into t8 values (1,'[1,2,3]'),(2,'[-1,0,2]'),(3,'[3,1,-2]');
 create index ix8 using hnsw on t8(v) M 8 EF_CONSTRUCTION 32 EF_SEARCH 32 op_type 'vector_ip_ops';
@@ -421,4 +433,49 @@ select id, inner_product(v, '[1,1,1]') d from t8 order by inner_product(v, '[1,1
 ➤ id[-5,64,0]  ¦  d[8,9,0]  𝄀
 1  ¦  -6.0  𝄀
 3  ¦  -2.0
+drop index ix8 on t8;
+create index ix8 using hnsw on t8(v) M 8 EF_CONSTRUCTION 32 EF_SEARCH 32 op_type 'vector_cosine_ops';
+explain select id from t8 order by cosine_distance(v, '[1,1,1]') limit 2;
+-- @regex("Vector Index Scan on ix8 \[cosine_distance\]", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: #[0,1] INTERNAL  𝄀
+        Limit: 2  𝄀
+        ->  Join  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (t8.id = #[1,0])  𝄀
+              Runtime Filter Build: #[-1,0]  𝄀
+              ->  Table Scan on vec_distance_semantics.t8  𝄀
+                    Runtime Filter Probe: t8.id  𝄀
+              ->  Vector Index Scan on ix8 [cosine_distance]  𝄀
+                    Vector Index: ix8, Metric: cosine_distance, Candidate Limit: 2
+drop index ix8 on t8;
+create table u8 (id bigint primary key, v vecuint8(3));
+insert into u8 values (1,'[1,2,3]'),(2,'[9,0,2]'),(3,'[3,1,7]');
+create index ix8 using ivfflat on u8(v) lists = 2 op_type 'vector_l1_ops';
+explain select id from u8 order by l1_distance(v, '[1,1,1]') limit 2;
+-- @regex("Vector Index Scan on ix8 \[l1_distance\]", true)
+➤ AP QUERY PLAN ON MULTICN(8 core)[12,-1,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: #[0,1] INTERNAL  𝄀
+        Limit: 2  𝄀
+        ->  Vector Index Scan on ix8 [l1_distance]  𝄀
+              Vector Index: ix8, Metric: l1_distance, Candidate Limit: 2, NProbe: 5
+select id, l1_distance(v, '[1,1,1]') d from u8 order by l1_distance(v, '[1,1,1]') limit 2;
+➤ id[-5,64,0]  ¦  d[8,9,0]  𝄀
+1  ¦  3.0  𝄀
+3  ¦  8.0
+drop index ix8 on u8;
+create index ix8 using ivfflat on u8(v) lists = 2 op_type 'vector_cosine_ops';
+explain select id from u8 order by cosine_distance(v, '[1,1,1]') limit 2;
+-- @regex("Vector Index Scan on ix8 \[cosine_distance\]", true)
+➤ AP QUERY PLAN ON MULTICN(8 core)[12,-1,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: #[0,1] INTERNAL  𝄀
+        Limit: 2  𝄀
+        ->  Vector Index Scan on ix8 [cosine_distance]  𝄀
+              Vector Index: ix8, Metric: cosine_distance, Candidate Limit: 2, NProbe: 5
 drop database vec_distance_semantics;

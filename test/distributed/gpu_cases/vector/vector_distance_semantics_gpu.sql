@@ -48,4 +48,22 @@ explain select id from t order by inner_product(v, '[1,2,3]') limit 3;
 drop index ix on t;
 create index ix using ivfpq on t(v) lists = 2 m = 3 op_type 'vector_l1_ops';
 
+-- CAGRA / IVF-PQ build only on vecf32 / vecf16 columns
+create table t64 (id bigint primary key, v vecf64(3));
+create index ix using cagra on t64(v) op_type 'vector_l2_ops';
+create table t8 (id bigint primary key, v vecint8(3));
+create index ix using ivfpq on t8(v) lists = 2 m = 3 op_type 'vector_l2_ops';
+create table t16 (id bigint primary key, v vecf16(3));
+create index ix using cagra on t16(v) op_type 'vector_ip_ops';
+drop index ix on t16;
+-- int8 / uint8 quantization is L2-only; bf16 quantization is rejected
+create index ix using cagra on t(v) op_type 'vector_ip_ops' quantization 'int8';
+create index ix using ivfpq on t(v) lists = 2 m = 3 op_type 'vector_cosine_ops' quantization 'uint8';
+create index ix using cagra on t(v) op_type 'vector_l2_ops' quantization 'bf16';
+create index ix using ivfpq on t(v) lists = 2 m = 3 op_type 'vector_l2_ops' quantization 'bf16';
+create index ix using cagra on t(v) op_type 'vector_l2sq_ops' quantization 'uint8';
+drop index ix on t;
+create index ix using ivfpq on t(v) lists = 2 m = 3 op_type 'vector_cosine_ops' quantization 'float16';
+drop index ix on t;
+
 drop database vec_distance_semantics_gpu;

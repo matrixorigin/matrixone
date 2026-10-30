@@ -108,6 +108,33 @@ index's `op_type`. `EXPLAIN` then shows `Vector Index Scan on <index> [<function
 | `l1_distance` | `vector_l1_ops` (IVF-FLAT only) |
 | `cosine_similarity` | none |
 
+## Column types and quantization per index
+
+Column types an index can be built on (with any `op_type` the index accepts):
+
+| Index | Vector column types |
+|---|---|
+| IVF-FLAT | `vecf32`, `vecf64`, `vecbf16`, `vecf16`, `vecint8`, `vecuint8` |
+| HNSW | `vecf32`, `vecf64`, `vecbf16`, `vecf16`, `vecint8`, `vecuint8` |
+| CAGRA | `vecf32`, `vecf16` only |
+| IVF-PQ | `vecf32`, `vecf16` only |
+
+On a `vecint8`/`vecuint8` column, IVF-FLAT serves all five `op_type`s and HNSW serves
+`l2`, `l2sq`, `ip` and `cosine`.
+
+`op_type`s accepted with a `QUANTIZATION` (here on a `vecf32` column):
+
+| Index | `float16` | `bf16` | `int8`, `uint8` |
+|---|---|---|---|
+| IVF-FLAT | `l2`, `l2sq`, `ip`, `cosine`, `l1` | `l2`, `l2sq`, `ip`, `cosine`, `l1` | `l2`, `l2sq` only |
+| HNSW | `l2`, `l2sq`, `ip`, `cosine` | `l2`, `l2sq`, `ip`, `cosine` | `l2`, `l2sq` only |
+| CAGRA | `l2`, `l2sq`, `ip`, `cosine` | rejected | `l2`, `l2sq` only |
+| IVF-PQ | `l2`, `l2sq`, `ip`, `cosine` | rejected | `l2`, `l2sq` only |
+
+`int8`/`uint8` quantization is L2-only in every index because its affine quantizer preserves
+L2 geometry only; `ip`, `cosine` and `l1` are rejected with it. This rule is about
+quantizing a float column; it does not apply to a `vecint8`/`vecuint8` column.
+
 ## What each index computes internally
 
 Every index ranks by a distance where smaller is nearer. The **L2 indexes rank by squared L2**
@@ -130,9 +157,6 @@ Notes:
   `1.9399999380111694`. A CAGRA cosine distance near 0 carries float32 rounding, so it can
   be slightly below 0 (one test returned `-1.1920928955078125e-7` for two vectors with the
   same direction).
-- **int8 / uint8 quantization.** IVF-FLAT and HNSW reject `quantization 'int8'` or `'uint8'`
-  with `vector_ip_ops` or `vector_cosine_ops`: the affine quantizer preserves L2 geometry
-  only. An index on a `vecint8`/`vecuint8` column itself is not affected by this rule.
 - **Zero cosine query.** HNSW rejects a zero (or subnormal) query vector for cosine.
 
 ## Where it is implemented

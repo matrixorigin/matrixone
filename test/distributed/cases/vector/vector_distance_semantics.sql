@@ -148,11 +148,24 @@ select id from t order by cosine_distance(v, '[0,0,0]') limit 3;
 drop index ix on t;
 create index ix using hnsw on t(v) M 8 EF_CONSTRUCTION 32 EF_SEARCH 32 op_type 'vector_l1_ops';
 
--- int8 / uint8 quantization is L2-only; an index on a vecint8 column is not affected
+-- int8 / uint8 quantization is L2-only (ip, cosine, l1 rejected); float16 / bf16 take every op_type
 create index ixq using ivfflat on t(v) lists = 2 op_type 'vector_ip_ops' quantization 'int8';
 create index ixq using ivfflat on t(v) lists = 2 op_type 'vector_cosine_ops' quantization 'uint8';
+create index ixq using ivfflat on t(v) lists = 2 op_type 'vector_l1_ops' quantization 'int8';
 create index ixq using hnsw on t(v) op_type 'vector_ip_ops' quantization 'int8';
 create index ixq using hnsw on t(v) op_type 'vector_cosine_ops' quantization 'uint8';
+create index ixq using ivfflat on t(v) lists = 2 op_type 'vector_l2sq_ops' quantization 'uint8';
+drop index ixq on t;
+create index ixq using ivfflat on t(v) lists = 2 op_type 'vector_l1_ops' quantization 'bf16';
+drop index ixq on t;
+create index ixq using hnsw on t(v) op_type 'vector_cosine_ops' quantization 'float16';
+drop index ixq on t;
+-- every column type builds IVF-FLAT and HNSW
+create table tf64 (id bigint primary key, v vecf64(3));
+create index ix using ivfflat on tf64(v) lists = 2 op_type 'vector_l2_ops';
+create table tbf (id bigint primary key, v vecbf16(3));
+create index ix using hnsw on tbf(v) op_type 'vector_l2_ops';
+-- on a vecint8 / vecuint8 column IVF-FLAT serves every op_type and HNSW all but l1
 create table t8 (id bigint primary key, v vecint8(3));
 insert into t8 values (1,'[1,2,3]'),(2,'[-1,0,2]'),(3,'[3,1,-2]');
 create index ix8 using hnsw on t8(v) M 8 EF_CONSTRUCTION 32 EF_SEARCH 32 op_type 'vector_ip_ops';
@@ -160,5 +173,23 @@ create index ix8 using hnsw on t8(v) M 8 EF_CONSTRUCTION 32 EF_SEARCH 32 op_type
 -- @regex("Vector Index Scan on ix8 \[inner_product\]", true)
 explain select id from t8 order by inner_product(v, '[1,1,1]') limit 2;
 select id, inner_product(v, '[1,1,1]') d from t8 order by inner_product(v, '[1,1,1]') limit 2;
+drop index ix8 on t8;
+create index ix8 using hnsw on t8(v) M 8 EF_CONSTRUCTION 32 EF_SEARCH 32 op_type 'vector_cosine_ops';
+-- @separator:table
+-- @regex("Vector Index Scan on ix8 \[cosine_distance\]", true)
+explain select id from t8 order by cosine_distance(v, '[1,1,1]') limit 2;
+drop index ix8 on t8;
+create table u8 (id bigint primary key, v vecuint8(3));
+insert into u8 values (1,'[1,2,3]'),(2,'[9,0,2]'),(3,'[3,1,7]');
+create index ix8 using ivfflat on u8(v) lists = 2 op_type 'vector_l1_ops';
+-- @separator:table
+-- @regex("Vector Index Scan on ix8 \[l1_distance\]", true)
+explain select id from u8 order by l1_distance(v, '[1,1,1]') limit 2;
+select id, l1_distance(v, '[1,1,1]') d from u8 order by l1_distance(v, '[1,1,1]') limit 2;
+drop index ix8 on u8;
+create index ix8 using ivfflat on u8(v) lists = 2 op_type 'vector_cosine_ops';
+-- @separator:table
+-- @regex("Vector Index Scan on ix8 \[cosine_distance\]", true)
+explain select id from u8 order by cosine_distance(v, '[1,1,1]') limit 2;
 
 drop database vec_distance_semantics;
