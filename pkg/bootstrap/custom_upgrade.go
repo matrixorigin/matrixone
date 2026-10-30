@@ -105,6 +105,9 @@ func (s *service) UpgradeOneTenant(ctx context.Context, tenantID int32) error {
 				if err != nil {
 					return err
 				}
+				if err := s.checkRetiredCatalogSource(version); err != nil {
+					return err
+				}
 
 				// tenant create at current cn, can work correctly
 				currentCN := s.getFinalVersionHandle().Metadata()
@@ -175,6 +178,9 @@ func (s *service) UpgradeOneTenant(ctx context.Context, tenantID int32) error {
 				if err != nil {
 					return err
 				}
+				if err := s.checkRetiredCatalogSource(version); err != nil {
+					return err
+				}
 				from := version
 				for _, v := range s.handles {
 					if versions.Compare(v.Metadata().Version, from) >= 0 &&
@@ -218,9 +224,6 @@ func (s *service) UpgradeOneTenant(ctx context.Context, tenantID int32) error {
 		if _, err := s.upgradeV407TenantOnDemand(ctx, tenantID); err != nil {
 			return err
 		}
-		// The paged owner committed 4.0.7 before returning. Re-read that state
-		// and complete later handlers before recording a checked tenant.
-		return s.UpgradeOneTenant(ctx, tenantID)
 	}
 	s.mu.Lock()
 	s.mu.tenants[tenantID] = true

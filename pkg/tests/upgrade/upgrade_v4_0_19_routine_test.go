@@ -23,7 +23,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
-	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_18"
+	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_19"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/embed"
@@ -34,7 +34,7 @@ import (
 
 // Reuse the upgrade package's single-CN fixture. A late tenant must be repaired
 // on its first real login, even when the cluster has already completed upgrade.
-func TestV4018LoginRepairsLegacyRoutineCatalog(t *testing.T) {
+func TestV4019LoginRepairsLegacyRoutineCatalog(t *testing.T) {
 	embed.RunSingleCNBaseClusterTests(t, func(cluster embed.Cluster) {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 		defer cancel()
@@ -44,9 +44,9 @@ func TestV4018LoginRepairsLegacyRoutineCatalog(t *testing.T) {
 		systemDB, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/", port))
 		require.NoError(t, err)
 		defer systemDB.Close()
-		for _, sourceVersion := range []string{"4.0.6", "4.0.7"} {
+		for _, sourceVersion := range []string{"4.0.6", "4.0.7", "4.0.18"} {
 			t.Run(sourceVersion, func(t *testing.T) {
-				account := "routine_repair_4018_" + strings.ReplaceAll(sourceVersion, ".", "")
+				account := "routine_repair_4019_" + strings.ReplaceAll(sourceVersion, ".", "")
 				_, err = systemDB.ExecContext(ctx, "create account "+account+" ADMIN_NAME 'root' IDENTIFIED BY '111'")
 				require.NoError(t, err)
 				defer func() {
@@ -140,18 +140,18 @@ func TestV4018LoginRepairsLegacyRoutineCatalog(t *testing.T) {
 					require.NoError(t, rows.Err())
 				}
 				checkResult()
-				checkCatalog("4.0.18", true)
+				checkCatalog("4.0.19", true)
 				// Explicit replay reaches the handler; a cached second login would not
 				// prove that its DDL is idempotent against the persisted catalog.
 				for range 2 {
 					var mutations int
 					require.NoError(t, sqlExecutor.ExecTxn(ctx, func(txn executor.TxnExecutor) error {
-						return v4_0_18.Handler.HandleTenantUpgrade(ctx, int32(accountID),
+						return v4_0_19.Handler.HandleTenantUpgrade(ctx, int32(accountID),
 							&routineRepairTxn{TxnExecutor: txn, mutations: &mutations})
 					}, executor.Options{}.WithDatabase(catalog.MO_CATALOG).
 						WithAccountID(catalog.System_Account).WithWaitCommittedLogApplied()))
 					require.Zero(t, mutations)
-					checkCatalog("4.0.18", true)
+					checkCatalog("4.0.19", true)
 					checkResult()
 				}
 			})

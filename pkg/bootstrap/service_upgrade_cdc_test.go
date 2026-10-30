@@ -75,9 +75,9 @@ func TestRejectLegacyCDCTasks(t *testing.T) {
 
 func TestLegacyCDCAdmissionBeforeUpgradeMutation(t *testing.T) {
 	predecessor := v4_0_7.Handler.Metadata()
-	final := v4_0_18.Handler.Metadata()
+	final := v4_0_19.Handler.Metadata()
 	for _, mode := range []string{"initial", "recheck", "recovery"} {
-		sources := []versions.Version{{Version: "4.0.18", VersionOffset: final.VersionOffset, State: versions.StateCreated}}
+		sources := []versions.Version{{Version: "4.0.19", VersionOffset: final.VersionOffset, State: versions.StateCreated}}
 		if mode == "initial" {
 			sources = append(sources, versions.Version{Version: "4.0.6", VersionOffset: 5, State: versions.StateReady}, versions.Version{Version: "4.0.7", VersionOffset: predecessor.VersionOffset, State: versions.StateCreated})
 		}
@@ -93,10 +93,11 @@ func TestLegacyCDCAdmissionBeforeUpgradeMutation(t *testing.T) {
 						case strings.HasPrefix(sql, "select state from mo_version") && mode == "recheck":
 							return testCatalogUpgradeState(t, versions.StateCreated), nil
 						case strings.Contains(sql, "from mo_upgrade"):
-							if current.Version == "4.0.18" {
+							if current.Version == "4.0.19" {
 								return recoveryRouteResult(t, []versions.VersionUpgrade{
-									{ID: 10, FromVersion: "4.0.6", ToVersion: "4.0.7", FinalVersion: "4.0.18", FinalVersionOffset: final.VersionOffset, State: versions.StateCreated, UpgradeOrder: 0, UpgradeCluster: versions.Yes, UpgradeTenant: versions.Yes},
-									{ID: 11, FromVersion: "4.0.7", ToVersion: "4.0.18", FinalVersion: "4.0.18", FinalVersionOffset: final.VersionOffset, State: versions.StateCreated, UpgradeOrder: 1, UpgradeCluster: versions.No, UpgradeTenant: versions.Yes},
+									{ID: 10, FromVersion: "4.0.6", ToVersion: "4.0.7", FinalVersion: "4.0.19", FinalVersionOffset: final.VersionOffset, State: versions.StateCreated, UpgradeOrder: 0, UpgradeCluster: versions.Yes, UpgradeTenant: versions.Yes},
+									{ID: 11, FromVersion: "4.0.7", ToVersion: "4.0.18", FinalVersion: "4.0.19", FinalVersionOffset: final.VersionOffset, State: versions.StateCreated, UpgradeOrder: 1, UpgradeCluster: versions.No, UpgradeTenant: versions.Yes},
+									{ID: 12, FromVersion: "4.0.18", ToVersion: "4.0.19", FinalVersion: "4.0.19", FinalVersionOffset: final.VersionOffset, State: versions.StateCreated, UpgradeOrder: 2, UpgradeCluster: versions.No, UpgradeTenant: versions.Yes},
 								}), nil
 							}
 							return ownRecoveryResult(t, buildUpgradeVersionResult(10, versions.StateCreated, "4.0.6", "4.0.7", predecessor.VersionOffset, 0, versions.Yes, versions.Yes, 0, 0)), nil
