@@ -74,6 +74,11 @@ func exactDivisionOperandType(source, effective types.Type) (precision, scale in
 		return integerDecimalDigits(source.Oid), 0, true
 	case source.Oid == types.T_bit:
 		return integerDecimalDigits(source.Oid), 0, true
+	case source.Oid == types.T_bool:
+		// TRUE/FALSE divide as 1/0: exactly one integral digit, scale zero.
+		// Skipping this would strand wide quotients in Decimal128 and ignore
+		// a nondefault div_precision_increment.
+		return 1, 0, true
 	case source.Oid.IsDateRelate() && effective.Oid.IsDecimal():
 		// Temporal decimals contain packed calendar fields, not an arbitrary
 		// value spanning the storage width of the implicit decimal cast.

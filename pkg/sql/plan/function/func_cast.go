@@ -196,6 +196,19 @@ func explicitNumericToDecimalTarget[D types.FixedSizeTExceptStrType](
 ) (bool, error) {
 	finite := func(value float64) bool { return !math.IsNaN(value) && !math.IsInf(value, 0) }
 	switch from.GetType().Oid {
+	case types.T_bool:
+		// TRUE is exactly 1 and FALSE exactly 0, so the explicit cast reuses
+		// the integer parse path, including the out-of-range clamp that
+		// CAST(1 AS DECIMAL(1,1)) already has.
+		return true, numericToDecimalExplicit(
+			vector.GenerateFunctionFixedTypeParameter[bool](from), to, length, proc, selectList,
+			func(value bool) (D, error) {
+				if value {
+					return parseString("1")
+				}
+				return parseString("0")
+			},
+			func(bool) bool { return false }, nil, clamp)
 	case types.T_bit, types.T_uint64:
 		return true, numericToDecimalExplicit(
 			vector.GenerateFunctionFixedTypeParameter[uint64](from), to, length, proc, selectList,
@@ -511,6 +524,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 		types.T_float32, types.T_float64,
+		types.T_decimal64, types.T_decimal128, types.T_decimal256,
 		types.T_year,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
@@ -1188,7 +1202,7 @@ func newCastWithoutMediumIntBounds(parameters []*vector.Vector, result vector.Fu
 			return decimalToUnsignedAssignment(proc.Ctx, vector.GenerateFunctionFixedTypeParameter[types.Decimal256](from), toType.Oid, result, length, selectList, decimal256RoundedIntegerString)
 		}
 	}
-	if mode == castModeExplicit && toType.IsDecimal() && fromType.IsNumeric() {
+	if mode == castModeExplicit && toType.IsDecimal() && (fromType.IsNumeric() || fromType.Oid == types.T_bool) {
 		if handled, err := explicitNumericToDecimal(from, *toType, result, length, proc, selectList); handled {
 			return err
 		}
@@ -1417,6 +1431,12 @@ func castToDecimal256(proc *process.Process, from *vector.Vector, toType types.T
 	switch from.GetType().Oid {
 	case types.T_any:
 		return appendNulls[types.Decimal256](result, length, selectList)
+	case types.T_bool:
+		one, err := types.Decimal256FromDecimal128(types.Decimal128{B0_63: 1}).Scale(toType.Scale)
+		if err != nil {
+			return err
+		}
+		return boolToDecimal(vector.GenerateFunctionFixedTypeParameter[bool](from), rs, length, selectList, one)
 	case types.T_bit:
 		s := vector.GenerateFunctionFixedTypeParameter[uint64](from)
 		return unsignedToDecimal256(s, rs, length, selectList)
@@ -1582,6 +1602,20 @@ func boolToOthers(ctx context.Context,
 	case types.T_float64:
 		rs := vector.MustFunctionResult[float64](result)
 		return boolToFloat(source, rs, length, selectList)
+	case types.T_decimal64:
+		rs := vector.MustFunctionResult[types.Decimal64](result)
+		one, err := types.Decimal64(1).Scale(toType.Scale)
+		if err != nil {
+			return err
+		}
+		return boolToDecimal(source, rs, length, selectList, one)
+	case types.T_decimal128:
+		rs := vector.MustFunctionResult[types.Decimal128](result)
+		one, err := types.Decimal128{B0_63: 1}.Scale(toType.Scale)
+		if err != nil {
+			return err
+		}
+		return boolToDecimal(source, rs, length, selectList, one)
 	case types.T_year:
 		rs := vector.MustFunctionResult[types.MoYear](result)
 		return boolToYear(source, rs, length, selectList)
@@ -4154,6 +4188,49 @@ func boolToInteger[T constraints.Integer](
 					return err
 				}
 			}
+		}
+	}
+	return nil
+}
+
+// boolToDecimal follows MySQL: TRUE is 1 and FALSE is 0 in a DECIMAL
+// context. one carries the value 1 already scaled to the target type, so the
+// loop only copies it and never loses the target scale. An assignment target
+// carries the declared column width, so TRUE has to fit exactly like the
+// integer 1 (#30639); a synthesized expression cast reports a zero width and
+// skips the bound, matching the integer conversion rules.
+func boolToDecimal[T types.Decimal64 | types.Decimal128 | types.Decimal256](
+	from vector.FunctionParameterWrapper[bool],
+	to *vector.FunctionResult[T], length int, selectList *FunctionSelectList, one T) error {
+	var zero T
+	toType := to.GetType()
+	// The check is constant per vector: every TRUE row carries the same one.
+	var oneErr error
+	switch v := any(one).(type) {
+	case types.Decimal64:
+		oneErr = checkIntDecimal64Width(int64(1), v, toType.Width, toType.Scale)
+	case types.Decimal128:
+		oneErr = checkIntDecimal128Width(int64(1), v, intDecimal128WidthLimit(toType.Width), toType.Width, toType.Scale)
+	case types.Decimal256:
+		oneErr = checkIntDecimal256Width(int64(1), v, intDecimal256WidthLimit(toType.Width), toType.Width, toType.Scale)
+	}
+	for i := uint64(0); i < uint64(length); i++ {
+		if functionRowSkipped(selectList, i) {
+			if err := to.Append(zero, true); err != nil {
+				return err
+			}
+			continue
+		}
+		v, null := from.GetValue(i)
+		r := zero
+		if v && !null {
+			if oneErr != nil {
+				return oneErr
+			}
+			r = one
+		}
+		if err := to.Append(r, null); err != nil {
+			return err
 		}
 	}
 	return nil
