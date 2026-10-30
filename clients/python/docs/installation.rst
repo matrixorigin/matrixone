@@ -66,9 +66,9 @@ Requirements
 ------------
 
 * Python 3.8 or higher
-* PyMySQL >= 1.0.0
-* aiomysql >= 0.1.0
-* SQLAlchemy >= 1.4.0
+* PyMySQL >= 1.0.0, != 1.2.1, != 1.2.2, < 1.3
+* aiomysql >= 0.2.0
+* SQLAlchemy >= 1.4.54, < 3
 * typing-extensions >= 4.0.0
 * python-dateutil >= 2.8.0
 

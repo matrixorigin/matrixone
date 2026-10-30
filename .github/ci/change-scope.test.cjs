@@ -558,15 +558,19 @@ test('the reusable SDK owner preserves the matrix and isolates untrusted checkou
   assert.match(offline, /flake8 matrixone --select=E9,F63,F7,F82/);
   assert.match(offline, /if: \$\{\{ matrix.python == '3.12' && matrix.sqlalchemy == '>=2.0,<2.1' \}\}/);
   assert.match(offline, /fail-fast: false/);
-  const pythons = ['3.10', '3.12'];
-  const sqlalchemy = ['>=1.4,<1.5', '>=2.0,<2.1', '>=2.1,<3'];
-  for (const python of pythons) assert.ok(offline.includes(`'${python}'`));
-  for (const range of sqlalchemy) assert.ok(offline.includes(`'${range}'`));
+  assert.match(offline, /^        python: \['3\.10', '3\.12'\]$/m);
+  assert.match(offline, /^        sqlalchemy: \['>=1\.4\.54,<1\.5', '>=2\.0,<2\.1', '>=2\.1,<3'\]$/m);
   assert.match(offline, /exclude:\n          - python: '3.10'\n            sqlalchemy: '>=2.1,<3'/);
+  assert.match(offline, /include:\n          - python: '3\.10'\n            sqlalchemy: '==1\.4\.54'/);
   assert.match(offline, /include:[\s\S]*?- python: '3.11'\n            sqlalchemy: '>=2.1,<3'/);
+  assert.match(offline, /SQLALCHEMY_RANGE: \$\{\{ matrix\.sqlalchemy \}\}/);
+  assert.match(offline, /"SQLAlchemy\[asyncio\]\$\{SQLALCHEMY_RANGE\}"/);
+  assert.match(offline, /- name: Assert exact supported SQLAlchemy floor\n        if: \$\{\{ matrix\.sqlalchemy == '==1\.4\.54' \}\}\n        run: python -c "import sqlalchemy; assert sqlalchemy\.__version__ == '1\.4\.54', sqlalchemy\.__version__"/);
+  assert.ok(offline.indexOf('Assert exact supported SQLAlchemy floor') < offline.indexOf('Run required offline contracts without skips'));
   assert.match(offline, /name: python-sdk-\$\{\{ github.event.pull_request.head.sha \|\| github.sha \}\}-\$\{\{ github.run_id \}\}-\$\{\{ github.run_attempt \}\}-\$\{\{ strategy.job-index \}\}/);
   assert.match(offline, /if: \$\{\{ !cancelled\(\) \}\}/);
   const core = checkoutSpec(sections['core-import']);
+  assert.match(sections['core-import'], /include:\n          - python: '3\.8'\n            sqlalchemy: '==1\.4\.54'/);
   assert.equal(core.repository, checkout.repository);
   assert.equal(core.ref, checkout.ref);
   assert.equal(core['persist-credentials'], 'false');
@@ -587,7 +591,7 @@ test('the reusable SDK owner preserves the matrix and isolates untrusted checkou
     assert.equal(result.status === 0, database !== '', result.stderr);
     if (!database) assert.match(result.stderr, /Configure MATRIXONE_DATABASE/);
   }
-  assert.match(offline, /python scripts\/run_contracts\.py --output offline-contracts/);
+  assert.match(offline, /- name: Run required offline contracts without skips\n        run: python scripts\/run_contracts\.py --output offline-contracts/);
   assert.match(sections.online, /python scripts\/run_contracts\.py --server "\$SDK_SERVER_TARGET" --output online-contracts/);
   assert.ok(readFileSync(join(__dirname, '../../clients/python/scripts/run_contracts.py'), 'utf8').length > 0);
   const group = sdk.match(/^  group: (.*)$/m)[1];

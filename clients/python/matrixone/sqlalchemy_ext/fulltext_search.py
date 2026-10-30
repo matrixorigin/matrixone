@@ -92,6 +92,36 @@ if TYPE_CHECKING:
     from ..client import Client
 
 
+def _match_columns(columns):
+    from .._sql_literals import identifier_parts, sql_identifier
+    from sqlalchemy.sql.elements import quoted_name
+
+    rendered = []
+    for column in columns:
+        name = quoted_name(column.name, True) if hasattr(column, 'name') else column
+        parts = identifier_parts(name, qualified=True, max_parts=3)
+        # MatrixOne has keywords beyond MySQL's preparer keyword set.
+        rendered.append('.'.join(sql_identifier(part, force=True) for part in parts))
+    return ', '.join(rendered)
+
+
+def _match_mode(mode, strict=False):
+    if isinstance(mode, str):
+        mode = ' '.join(mode.casefold().split())
+    if mode == FulltextSearchMode.QUERY_EXPANSION:
+        return ' WITH QUERY EXPANSION'
+    if mode == FulltextSearchMode.BOOLEAN:
+        return ' IN BOOLEAN MODE'
+    if mode == FulltextSearchMode.NATURAL_LANGUAGE:
+        return ' IN natural language mode' if strict else ''
+    if strict:
+        if mode in ('bm25 mode', 'natural language mode with query expansion'):
+            return ' IN ' + mode.upper()
+        raise ValueError('Unsupported fulltext search mode')
+    # Preserve the filter's legacy natural-language fallback for unknown modes.
+    return ''
+
+
 class FulltextSearchMode:
     """Enum-like class for fulltext search modes."""
 
@@ -655,7 +685,10 @@ class FulltextQueryBuilder:
             raise ValueError("Search columns are required")
 
         # Build columns string for MATCH()
-        columns_str = ", ".join(columns)
+        columns_str = _match_columns(columns)
+        fulltext_condition = (
+            f"MATCH({columns_str}) AGAINST({string_grammar_token(query_string)}{_match_mode(mode, strict=True)})"
+        )
 
         # Build SELECT clause
         if select_columns:
@@ -664,7 +697,7 @@ class FulltextQueryBuilder:
             select_parts = ["*"]
 
         if include_score:
-            score_expr = f"MATCH({columns_str}) AGAINST({string_grammar_token(query_string)} IN {mode}) AS score"
+            score_expr = f"{fulltext_condition} AS score"
             select_parts.append(score_expr)
 
         select_clause = f"SELECT {', '.join(select_parts)}"
@@ -675,8 +708,7 @@ class FulltextQueryBuilder:
         # Build WHERE clause
         where_parts = []
 
-        # Add fulltext search condition
-        fulltext_condition = f"MATCH({columns_str}) AGAINST({string_grammar_token(query_string)} IN {mode})"
+        # Reuse the same MATCH expression for scoring and filtering.
         where_parts.append(fulltext_condition)
 
         # Add additional WHERE conditions
@@ -692,7 +724,7 @@ class FulltextQueryBuilder:
         limit_clause = f"LIMIT {limit}" if limit is not None else ""
 
         # Build OFFSET clause
-        offset_clause = f"OFFSET {offset}" if offset else ""
+        offset_clause = f"OFFSET {offset}" if offset is not None else ""
 
         # Combine all clauses
         sql_parts = [
@@ -806,7 +838,9 @@ class FulltextFilter(ColumnElement):
 
     def __init__(self, columns: List[str], mode: str = FulltextSearchMode.BOOLEAN):
         super().__init__()
-        self.columns = columns
+        from sqlalchemy.sql.elements import quoted_name
+
+        self.columns = [quoted_name(col.name, True) if hasattr(col, 'name') else col for col in columns]
         self.mode = mode
         self.query_builder = FulltextQueryBuilder()
         self._natural_query = None  # Store natural language query separately
@@ -881,7 +915,7 @@ class FulltextFilter(ColumnElement):
         for child in filters:
             if not isinstance(child, FulltextFilter):
                 raise TypeError("group() expects FulltextFilter branches")
-            if child.mode != self.mode or child.columns != self.columns:
+            if child.mode != self.mode or _match_columns(child.columns) != _match_columns(self.columns):
                 raise ValueError("group() branches must use the same columns and BOOLEAN mode")
         builders = [f.query_builder for f in filters]
         self.query_builder.group(*builders)
@@ -907,7 +941,7 @@ class FulltextFilter(ColumnElement):
         if not self.columns:
             raise ValueError("Columns must be specified")
 
-        columns_str = ", ".join(self.columns)
+        columns_str = _match_columns(self.columns)
 
         # For natural language mode, use the stored natural query if available
         if self.mode == FulltextSearchMode.NATURAL_LANGUAGE and self._natural_query:
@@ -918,14 +952,7 @@ class FulltextFilter(ColumnElement):
         if not query_string:
             raise ValueError("Query cannot be empty")
 
-        if self.mode == FulltextSearchMode.NATURAL_LANGUAGE:
-            return f"MATCH({columns_str}) AGAINST({string_grammar_token(query_string)})"
-        elif self.mode == FulltextSearchMode.BOOLEAN:
-            return f"MATCH({columns_str}) AGAINST({string_grammar_token(query_string)} IN BOOLEAN MODE)"
-        elif self.mode == FulltextSearchMode.QUERY_EXPANSION:
-            return f"MATCH({columns_str}) AGAINST({string_grammar_token(query_string)} WITH QUERY EXPANSION)"
-        else:
-            return f"MATCH({columns_str}) AGAINST({string_grammar_token(query_string)})"
+        return f"MATCH({columns_str}) AGAINST({string_grammar_token(query_string)}{_match_mode(self.mode)})"
 
     def label(self, name: str):
         """Create a labeled version for use in SELECT clauses.
@@ -1084,20 +1111,7 @@ def boolean_match(*columns) -> FulltextFilter:
     Note: The columns specified must exactly match the FULLTEXT index columns. For example, if your
     index is FULLTEXT(title, content, tags), you must use boolean_match("title", "content", "tags")
     """
-    # Convert columns to strings
-    column_names = []
-    for col in columns:
-        if hasattr(col, 'name'):
-            # SQLAlchemy Column object
-            column_names.append(col.name)
-        elif hasattr(col, '__tablename__') and hasattr(col, 'name'):
-            # Model attribute
-            column_names.append(col.name)
-        else:
-            # String column name
-            column_names.append(str(col))
-
-    return FulltextFilter(column_names, FulltextSearchMode.BOOLEAN)
+    return FulltextFilter(list(columns), FulltextSearchMode.BOOLEAN)
 
 
 def natural_match(*columns, query: str) -> FulltextFilter:
@@ -1182,20 +1196,7 @@ def natural_match(*columns, query: str) -> FulltextFilter:
             natural_match(Article.content, query="programming tutorial")
         ).filter(Article.category == "Education").execute()
     """
-    # Convert columns to strings
-    column_names = []
-    for col in columns:
-        if hasattr(col, 'name'):
-            # SQLAlchemy Column object
-            column_names.append(col.name)
-        elif hasattr(col, '__tablename__') and hasattr(col, 'name'):
-            # Model attribute
-            column_names.append(col.name)
-        else:
-            # String column name
-            column_names.append(str(col))
-
-    return FulltextFilter(column_names, FulltextSearchMode.NATURAL_LANGUAGE).set_natural_query(query)
+    return FulltextFilter(list(columns), FulltextSearchMode.NATURAL_LANGUAGE).set_natural_query(query)
 
 
 def group() -> FulltextGroup:
@@ -1545,7 +1546,7 @@ class FulltextSearchBuilder:
 
     def where(self, condition: str) -> "FulltextSearchBuilder":
         """
-        Add a WHERE condition.
+        Add a caller-owned raw SQL predicate; bind or safely render untrusted values.
 
         Args::
 
@@ -1616,13 +1617,13 @@ class FulltextSearchBuilder:
         if not query_string:
             raise ValueError("Query is required")
 
+        columns_str = _match_columns(self._columns)
+        fulltext_condition = f"MATCH({columns_str}) AGAINST({string_grammar_token(query_string)}{_match_mode(self._search_mode, strict=True)})"
+
         # Build SELECT clause
         select_parts = self._select_columns.copy()
         if self._include_score:
-            columns_str = ", ".join(self._columns)
-            select_parts.append(
-                f"MATCH({columns_str}) AGAINST({string_grammar_token(query_string)} IN {self._search_mode}) AS score"
-            )
+            select_parts.append(f"{fulltext_condition} AS score")
 
         select_clause = f"SELECT {', '.join(select_parts)}"
 
@@ -1632,11 +1633,7 @@ class FulltextSearchBuilder:
         # Build WHERE clause
         where_parts = []
 
-        # Add fulltext search condition
-        columns_str = ", ".join(self._columns)
-        fulltext_condition = (
-            f"MATCH({columns_str}) AGAINST({string_grammar_token(query_string)} IN {self._search_mode})"
-        )
+        # Reuse the same MATCH expression for scoring and filtering.
         where_parts.append(fulltext_condition)
 
         # Add additional WHERE conditions
@@ -1651,7 +1648,7 @@ class FulltextSearchBuilder:
         limit_clause = f"LIMIT {self._limit_value}" if self._limit_value is not None else ""
 
         # Build OFFSET clause
-        offset_clause = f"OFFSET {self._offset_value}" if self._offset_value else ""
+        offset_clause = f"OFFSET {self._offset_value}" if self._offset_value is not None else ""
 
         # Combine all clauses
         sql_parts = [
