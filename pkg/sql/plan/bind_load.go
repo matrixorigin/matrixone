@@ -172,6 +172,11 @@ func (builder *QueryBuilder) bindExternalScan(
 	)
 
 	if len(tbColToDataCol) == 0 {
+		// Without a column list the file fields map to the writable columns in
+		// order. The external reader emits one vector per non-hidden scan
+		// column, so a stored generated column left in the scan table would
+		// take an output slot and shift every later field (#31737).
+		dropLoadScanGeneratedColumns(tableDef)
 		idx := 0
 		for _, col := range tableDef.Cols {
 			if !col.Hidden && col.GeneratedCol == nil {
@@ -280,6 +285,26 @@ func (builder *QueryBuilder) bindExternalScan(
 	lastNodeId := builder.appendNode(externalScanNode, bindCtx)
 
 	return lastNodeId, insertColToExpr, nil
+}
+
+// dropLoadScanGeneratedColumns removes generated columns from the LOAD scan
+// table copy. Their values are computed by the insert pipeline from the
+// target table definition, never read from the file.
+func dropLoadScanGeneratedColumns(tableDef *plan.TableDef) {
+	cols := make([]*ColDef, 0, len(tableDef.Cols))
+	for _, col := range tableDef.Cols {
+		if col.GeneratedCol == nil {
+			cols = append(cols, col)
+		}
+	}
+	if len(cols) == len(tableDef.Cols) {
+		return
+	}
+	tableDef.Cols = cols
+	tableDef.Name2ColIndex = make(map[string]int32, len(cols))
+	for i, col := range cols {
+		tableDef.Name2ColIndex[col.Name] = int32(i)
+	}
 }
 
 // LOAD IGNORE/REPLACE conflict resolution is separate from ordinary LOAD's
