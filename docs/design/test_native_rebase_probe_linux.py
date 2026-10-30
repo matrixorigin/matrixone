@@ -11,6 +11,42 @@ import native_rebase_probe_linux as probe
 
 
 class ProbeWrapperTests(unittest.TestCase):
+    def test_native_namespace_keeps_the_frozen_rootfs_and_no_ptrace_launcher(self):
+        command = probe.namespace_prefix(Path("/owned/run"), Path("/owned/old"))
+        self.assertEqual(command[0], "/usr/bin/bwrap")
+        self.assertIn("--die-with-parent", command)
+        self.assertIn("--unshare-pid", command)
+        self.assertIn(str(probe.COMPILER / "rootfs"), command)
+        self.assertNotIn(str(probe.COMPILER / "bootstrap/usr/bin/proot"), command)
+        self.assertEqual(command[command.index("--ro-bind") + 2], "/")
+
+    def test_closed_probe_rejects_foreign_path(self):
+        with self.assertRaisesRegex(ValueError, "unexpected closed probe"):
+            probe.closed_probe(Path("/tmp/foreign"))
+
+    def test_closed_probe_rejects_live_original_owner(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve() / "old"
+            root.mkdir()
+            probe.save(root / "identity.json", {"root": str(root), "unit": "old-worker", "supervisor": "old-supervisor"})
+            with patch.object(probe, "PARENT", root.parent), patch.object(
+                    probe, "props", return_value={"MainPID": "42", "ActiveState": "active", "ControlGroup": "owned"}):
+                with self.assertRaisesRegex(ValueError, "owner still active"):
+                    probe.closed_probe(root)
+
+    def test_child_abort_is_not_lost_when_parent_only_reports_eof(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            child = root / "cases/mo-rebase-crash-owned"
+            child.mkdir(parents=True)
+            (child / "prepare.log").write_text("double free or corruption (out)\n")
+            self.assertEqual(probe.native_abort_locations(root, "EOF"),
+                             ["cases/mo-rebase-crash-owned/prepare.log"])
+
+    def test_absent_child_log_is_not_native_abort_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(probe.native_abort_locations(Path(tmp), "EOF"), [])
+
     def test_git_archive_root_directory_is_accepted(self):
         root = tarfile.TarInfo("source")
         root.type = tarfile.DIRTYPE

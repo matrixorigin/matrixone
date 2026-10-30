@@ -163,7 +163,7 @@ not make R5 PASS or prove stability. There is no clean-baseline reproduction of
 this abort, so it is not attributed to main, proot, or the new tests. No allocator
 change or unchanged retry was attempted.
 
-Current status: P0 selected-PK contract recorded; P1 PARTIAL / BLOCKED, not
+Status at the 2026-10-29 checkpoint: P0 selected-PK contract recorded; P1 PARTIAL / BLOCKED, not
 completed. The typed four-endpoint admission and coordinated source DROP/actual
 snapshot-GC tests remain unproven. The verified single-owner clone/edge/pin path
 is still the preferred candidate; there is no evidence justifying a new staging
@@ -174,10 +174,43 @@ units, MainPID=0, empty ControlGroup, no owned lease. Five selected evidence
 archives were downloaded and re-read with SHA256/member checks. Sources, build
 output and failure records remain remote; no foreign resources were cleaned.
 
-The next discriminating action is a plain-main startup/restart control under the
+The next discriminating action at that checkpoint was a plain-main startup/restart control under the
 same native/toolchain environment to separate the allocator abort from Rebase
 SQL. A PASS there alone would not erase this failure or qualify arbitrary GC
 races. Resolve that admission blocker, then finish the missing P1 boundaries.
+
+### 2026-10-30 runtime qualification and P1 completion
+
+The bounded follow-up first preserved another native abort and a scoped real
+disk-GC PASS. It then qualified a native namespace environment on the same
+Ubuntu host: exact original test executable bytes, main/native library inputs
+and Ubuntu 22.04 rootfs, replacing the proot runtime launcher with bwrap.
+The plain startup/restart control passed (5.36s). Original DROP/crash probes no
+longer aborted but exposed deterministic fixture defects; their whole run
+remains FAIL, not relabeled as a successful qualification matrix.
+
+The source-DROP probe had compared mo_locks to serial(account, database)
+instead of the outer varlena encoding used by lockop.fetchVarlenaRows. The
+crash fixture's default 30s CN discovery budget could not cover the existing
+60s HAKeeper crashed-generation expiry. Only the test key and private discovery
+budget were corrected; no production timeout, expiry, fence or allocator changed.
+
+`nrp1-20261030T040500Z-b01e952a-native-p1` PASS:
+- Concurrent ordinary source DROP queues on the exact source key; clone
+  success and server cancellation both finish correctly (4.77s).
+- A real SIGKILL after committed and uncommitted multi-table preparation is
+  followed by a new process with the same persisted service identities. The
+  committed data/base/edges/pins recover together; incomplete destination and
+  its edges/pins remain absent (66.68s). No graceful Stop substitutes for kill.
+- Native input fingerprints unchanged, both phase units quiescent, cgroups
+  empty and lease released. Failed earlier evidence stays retained.
+
+Together with the earlier commit-failure, disconnection, cancellation and
+actual-GC proofs, this qualifies the existing transaction substrate for the
+selected minimal-PK design. It is NOT a native four-endpoint Rebase executor
+or proof of all future coordinator interleavings. P2 typed-executor review
+and implementation remain separate. Old proot heap corruption remains an
+unresolved execution-path issue, not a claimed allocator fix.
 
 ### Reproduce the cheap checks
 
@@ -189,9 +222,9 @@ NATIVE_REBASE_ADAPTER=/path/to/frozen/matrixone.py python3 -m unittest discover 
 ```
 
 The test loader checks the complete adapter file SHA256 before compiling only
-the two selected methods and their identifier quoting helper. Twenty-two
+the two selected methods and their identifier quoting helper. Twenty-seven
 offline tests are selected: ten original scalar/bag models, six actual adapter
-method checks and six wrapper checks. Bag cases describe a rejected proposal,
+method checks and eleven wrapper checks (27 total). Bag cases describe a rejected proposal,
 not the selected native no-PK contract. The expensive SQL probe is separately
 named `TestRebaseTransactionPrerequisites`; it must not be reported as one of
-these twenty-two passing database-independent checks.
+these twenty-seven passing database-independent checks.

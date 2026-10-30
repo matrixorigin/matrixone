@@ -1,12 +1,12 @@
 {
-  "date": "2026-10-29",
+  "date": "2026-10-30",
   "base": "b01e952ad1021ef8f188641f3a11a1360c001218",
   "p0": "SELECTED_PK_CONTRACT_RECORDED",
-  "p1": "PARTIAL_BLOCKED_NATIVE_STARTUP_ABORT",
-  "production_design": "REQUEST_CHANGES_UNTIL_P1_CLOSURE",
+  "p1": "EXISTING_TRANSACTION_SUBSTRATE_QUALIFIED_IN_BWRAP",
+  "production_design": "P1_SUBSTRATE_GATE_CLEARED_P2_TYPED_EXECUTOR_REVIEW_PENDING",
   "r1_native_replay": "NOT_IMPLEMENTED",
   "r2_adapter_publication": "NOT_IMPLEMENTED",
-  "offline": {"status": "PASS", "tests": 22, "model": 10, "adapter_methods": 6, "wrapper": 6},
+  "offline": {"status": "PASS", "tests": 27, "model": 10, "adapter_methods": 6, "wrapper": 11},
   "local_go": {"status": "NOT_RUN_MISSING_NATIVE_PREREQUISITE", "compiled": false},
   "linux": {
     "host": "100.89.164.105",
@@ -32,10 +32,27 @@
       "automatic_unchanged_retry": false
     }
   },
+  "latest_linux": {
+    "run_id": "nrp1-20261030T040500Z-b01e952a-native-p1",
+    "host": "100.89.164.105",
+    "base": "b01e952ad1021ef8f188641f3a11a1360c001218",
+    "status": "PASS_CORRECTED_P1_PROBES_ONLY",
+    "runtime": "bwrap kernel namespaces, original Ubuntu 22.04 rootfs; compiler unchanged",
+    "native_inputs_unchanged": true,
+    "tests": {
+      "TestRebaseSourceDropAdmission": {"status": "PASS", "seconds": 4.77, "success_and_cancellation": true, "exact_physical_waiter_key": true},
+      "TestRebaseCrashRecovery": {"status": "PASS", "seconds": 66.68, "real_sigkill": true, "fresh_process": true, "committed_data_base_edges_pins_recovered": true, "incomplete_target_edges_pins_absent": true}
+    },
+    "test_only_corrections": ["double_encode_catalog_primary_key_for_mo_locks", "120s_discovery_budget_allows_unchanged_60s_crashed_generation_expiry"],
+    "earlier_gc": {"run_id": "nrp1-20261030T044000Z-b01e952a-recovery", "status": "PASS_SCOPED_TEST_NOT_WHOLE_RUN", "seconds": 12.78, "physical_reclamation_verified": true},
+    "runtime_discriminator": {"run_id": "nrp1-20261030T035500Z-b01e952a-bwrap", "same_original_binary_bytes": true, "control": "PASS", "native_abort_observed": false, "original_tests": "FAIL_ON_SPECIFIC_FIXTURE_ASSERTIONS", "whole_run": "FAIL_PRESERVED"},
+    "old_proot_abort": "UNRESOLVED; qualified alternate runtime, not a proven allocator fix or precise proot root cause",
+    "lifecycle": {"units_independently_quiescent": 4, "empty_cgroups": true, "lease_absent": true, "old_failures_preserved": true},
+    "evidence_directory": "/Users/violet/Documents/Codex/2026-10-16/git-mo-129-skill-pr-matrixone/outputs/native-rebase-runtime-20261030"
+  },
   "not_proven": [
     "complete typed four-endpoint coordinator with bounded diff/apply",
-    "concurrent source DROP and actual snapshot GC at coordinated barriers",
-    "abrupt process crash recovery distinct from tested graceful stop/start",
+    "all-four-endpoint native coordinator concurrency and cancellation (executor not implemented)",
     "native no-PK replay, custom resolvers or schema reconciliation",
     "adapter generation publication/history/recovery",
     "performance or speedup",

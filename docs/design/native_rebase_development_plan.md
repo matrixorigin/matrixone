@@ -176,10 +176,23 @@ Unsupported features must be visible. R1 success, model PASS and reduced SQL cou
 are separate milestones, none of which alone proves complete native Rebase.
 
 Current evidence: 10 original model tests, 6 frozen adapter-method contract
-checks and 6 Linux-wrapper failure-path tests pass. A real SQL prerequisite
+checks and 11 Linux-wrapper failure-path checks pass. A real SQL prerequisite
 probe passed on Linux, and separate commit-failure/graceful-restart and
 deterministic server-cancellation probes produced scoped PASS evidence.
 A later isolated startup aborted in native malloc before its fixture SQL;
-P1 remains PARTIAL/BLOCKED, with the adverse result preserved. No production
-executor, abrupt crash test, native adapter validation or performance run exists yet.
+That historical failure remains preserved. No production executor, native
+adapter validation or performance run exists yet.
+The bounded 2026-10-30 follow-up adds real GC survival evidence but reproduces
+native heap corruption in the source-DROP observation and crash-helper startup.
+See the follow-up evidence directory in `native_rebase_validation.json`. No unchanged retry
+or allocator workaround was used for those results.
+The subsequent native-namespace qualification runs the original binaries with
+the same rootfs/native library bytes, without observed heap abort. It exposes
+and corrects two test issues: mo_locks needs the outer physical key encoding,
+and the crash fixture must allow the normal 60s old-generation expiry within
+its CN discovery budget. Concurrent source DROP (success/cancel) and real
+SIGKILL/fresh-process recovery now PASS in bwrap (4.77s/66.68s). This clears
+the existing-transaction P1 substrate blocker, not the typed native R1/R2
+implementation or its separate design/review obligations. The old proot abort
+has no proven allocator/root cause and remains unresolved.
 Do not estimate speedup or completion time until P0/P1 size and dependencies are known.
