@@ -24,6 +24,7 @@ import (
 	"sort"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/collation"
@@ -1090,6 +1091,11 @@ func buildDefaultExprWithColumnsObserved(
 		}
 		return nil, mapDDLAssignmentCastError(bindCtx, typ, colNameOrigin, err)
 	}
+	if !isExpressionDefault && isNumericDefaultLiteral(semanticExpr) {
+		if err = validateNumericDefaultWidth(proc, typ, planExpr, colNameOrigin); err != nil {
+			return nil, err
+		}
+	}
 	zeroTemporalDefault := false
 	if lit := newExpr.GetLit(); lit != nil && !lit.Isnull {
 		switch types.T(typ.Id) {
@@ -1295,6 +1301,61 @@ func buildGeneratedExpr(bindCtx context.Context, col *tree.ColumnTableDef, typ p
 		OriginString: fmtCtx.String(),
 		IsStored:     genAttr.Stored,
 	}, nil
+}
+
+// isNumericDefaultLiteral reports whether a DEFAULT is a (signed) numeric
+// literal such as 12345, -12, 1.25 or 1e10.
+func isNumericDefaultLiteral(expr tree.Expr) bool {
+	if unary, ok := expr.(*tree.UnaryExpr); ok && (unary.Op == tree.UNARY_MINUS || unary.Op == tree.UNARY_PLUS) {
+		expr = unary.Expr
+	}
+	num, ok := expr.(*tree.NumVal)
+	if !ok {
+		return false
+	}
+	switch num.ValType {
+	case tree.P_int64, tree.P_uint64, tree.P_float64, tree.P_decimal:
+		return true
+	}
+	return false
+}
+
+// validateNumericDefaultWidth rejects a numeric literal DEFAULT whose
+// text does not fit a CHAR/VARCHAR column. The default is folded with the
+// plain cast, which truncates a number to the column width (VARCHAR(3)
+// DEFAULT 12345 became '123'), while an over-long string literal already
+// fails. MySQL rejects both with ER_INVALID_DEFAULT. Expression defaults are
+// evaluated per row by the assignment cast and are not checked here.
+func validateNumericDefaultWidth(proc *process.Process, typ plan.Type, src *plan.Expr, colNameOrigin string) error {
+	if src == nil || (typ.Id != int32(types.T_char) && typ.Id != int32(types.T_varchar)) || typ.Width <= 0 {
+		return nil
+	}
+	// The default binder already wraps a literal in a cast to the column type.
+	if f := src.GetF(); f != nil && f.Func.GetObjName() == "cast" && len(f.Args) > 0 {
+		src = f.Args[0]
+	}
+	if types.T(src.Typ.Id) == types.T_any || isNullLiteralExpr(src) || !function.IsConstant(src, false) {
+		return nil
+	}
+	textType := typ
+	textType.Width = types.MaxVarcharLen
+	textType.Id = int32(types.T_varchar)
+	castExpr, err := forceCastExpr(proc.Ctx, DeepCopyExpr(src), textType)
+	if err != nil {
+		return err
+	}
+	folded, err := ConstantFold(batch.EmptyForConstFoldBatch, castExpr, proc, false, true)
+	if err != nil {
+		return err
+	}
+	lit := folded.GetLit()
+	if lit == nil || lit.Isnull {
+		return nil
+	}
+	if utf8.RuneCountInString(lit.GetSval()) > int(typ.Width) {
+		return moerr.NewErrInvalidDefault(proc.Ctx, colNameOrigin)
+	}
+	return nil
 }
 
 func mapDDLAssignmentCastError(ctx context.Context, typ plan.Type, colName string, err error) error {

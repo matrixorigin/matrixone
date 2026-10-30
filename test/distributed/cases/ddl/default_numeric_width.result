@@ -1,0 +1,40 @@
+drop database if exists default_numeric_width;
+create database default_numeric_width;
+use default_numeric_width;
+create table t1(v varchar(3) default 12345);
+Invalid default value for 'v'
+create table t2(v varchar(3) default 1.25);
+Invalid default value for 'v'
+create table t3(v char(2) default 123);
+Invalid default value for 'v'
+create table t4(v varchar(3) default 'abcd');
+Invalid default value for 'v'
+create table ok1(id int, v varchar(3) default 123, w char(5) default 12345, x varchar(4) default 1.25, y varchar(3) default -12);
+create table ok2(z varchar(3) default (12345));
+insert into ok1(id) values (1);
+select id, v, w, x, y from ok1;
+➤ id[4,32,0]  ¦  v[12,3,0]  ¦  w[1,5,0]  ¦  x[12,4,0]  ¦  y[12,3,0]  𝄀
+1  ¦  123  ¦  12345  ¦  1.25  ¦  -12
+create table a(id int primary key, v varchar(5), w varchar(3));
+alter table a alter column v set default 123456;
+Invalid default value for 'v'
+alter table a alter column v set default 12345;
+alter table a add column n varchar(2) default 100;
+Invalid default value for 'n'
+alter table a modify w varchar(3) default 1000;
+Invalid default value for 'w'
+alter table a change w w2 varchar(3) default 99.5;
+Invalid default value for 'w2'
+show create table a;
+➤ Table[12,1,0]  ¦  Create Table[12,125,0]  𝄀
+a  ¦  CREATE TABLE `a` (
+  `id` int NOT NULL,
+  `v` varchar(5) DEFAULT 12345,
+  `w` varchar(3) DEFAULT NULL,
+  PRIMARY KEY (`id`)
+)
+insert into a(id) values (1);
+select * from a;
+➤ id[4,32,0]  ¦  v[12,5,0]  ¦  w[12,3,0]  𝄀
+1  ¦  12345  ¦  null
+drop database default_numeric_width;
