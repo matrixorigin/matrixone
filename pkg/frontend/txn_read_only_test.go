@@ -164,6 +164,9 @@ func TestStatementRequiresPersistentWriteAccess(t *testing.T) {
 	stubUpdateSourceColumns(t)
 
 	writingSQLs := []string{
+		"with t as (select 1 a) update testdb.t set a=2",
+		"with t as (select 1 a) update testdb.t as x set x.a=2",
+
 		"insert into t values (1)",
 		"insert into testdb.t values (1)",
 		"replace into t values (1)",
@@ -279,6 +282,10 @@ func TestStatementRequiresPersistentWriteAccessTemporaryTables(t *testing.T) {
 	ses.AddTempTable("testdb", "tt2", "temp_tt2_real_name")
 
 	temporaryAllowedSQLs := []string{
+		"with tt as (select 1 v) update testdb.tt set v=2",
+		"with tt as (select 1 v) update testdb.tt as x set x.v=2",
+		"with tt as (select 1 v) update tt set v=2",
+
 		"create temporary table tt2 (a int)",
 		"insert into tt values (1)",
 		"replace into tt values (1)",

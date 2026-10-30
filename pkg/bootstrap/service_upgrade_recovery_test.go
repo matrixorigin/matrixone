@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
+	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_19"
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_7"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -557,6 +558,11 @@ func (e *recoveryTestExecutor) exec(sql string) (executor.Result, error) {
 		res.NewBatchWithRowCount(1)
 		require.NoError(e.t, executor.AppendFixedRows(res, 0, []int32{state}))
 		return res.GetResult(), nil
+	case strings.Contains(sql, "from mo_catalog.mo_cdc_task"):
+		// The re-keyed recheck admission probes the CDC catalog before a
+		// non-ready final row is accepted (design D11-1); an empty task
+		// catalog admits the retained route.
+		return executor.Result{}, nil
 	case strings.Contains(sql, "from mo_upgrade"):
 		if strings.Contains(sql, "'4.0.12'") {
 			return ownRecoveryResult(e.t, buildUpgradeVersionResult(11, versions.StateCreated, "4.0.11", "4.0.12", 1, 0, versions.No, versions.No, 0, 0)), nil
@@ -786,6 +792,68 @@ func TestV407RejectsInterruptedOffsetOnlyRouteBeforeMutation(t *testing.T) {
 		require.ErrorContains(t, err, "unsupported in-progress 4.0.7 offset-only upgrade")
 		var terminal *terminalUpgradeError
 		require.ErrorAs(t, err, &terminal)
+		require.False(t, s.upgrade.finalVersionCompleted.Load())
+	})
+}
+
+// TestV407InterruptedOffsetOnlyRouteRejectedAtRecoveryValidation closes the
+// resume path the successor registration newly reaches: an unfinished route
+// to the frozen identity that carries a 4.0.7 -> 4.0.7 leg terminates in the
+// recovery validation with the same message as the pre-mutation check.
+func TestV407InterruptedOffsetOnlyRouteRejectedAtRecoveryValidation(t *testing.T) {
+	runtime.RunTest("", func(runtime.Runtime) {
+		frozen := v4_0_7.Handler.Metadata()
+		target := versions.Version{Version: frozen.Version, VersionOffset: frozen.VersionOffset, State: versions.StateCreated}
+		txn := executor.NewMemTxnExecutor(func(sql string) (executor.Result, error) {
+			switch {
+			case strings.Contains(sql, "from mo_upgrade"):
+				return ownRecoveryResult(t, buildUpgradeVersionResult(10, versions.StateUpgradingTenant, frozen.Version, frozen.Version, frozen.VersionOffset, 0, versions.Yes, versions.Yes, 1, 0)), nil
+			default:
+				return executor.Result{}, fmt.Errorf("recovery validation may read only the retained route: %s", sql)
+			}
+		}, &testTxnOperator{})
+		s := newServiceForTest("", &memLocker{}, clock.NewHLCClock(func() int64 { return 0 }, 0), nil, nil, func(s *service) { s.initUpgrade() })
+		t.Cleanup(s.stopper.Stop)
+		require.True(t, s.canResumeUpgrade(target),
+			"the registered handle's offset keeps the frozen identity resumable; the offset-only leg must reject it")
+		err := s.checkUpgradeRecovery(target, txn)
+		require.ErrorContains(t, err, "unsupported in-progress 4.0.7 offset-only upgrade")
+		var terminal *terminalUpgradeError
+		require.ErrorAs(t, err, &terminal)
+	})
+}
+
+// TestV407ReadyFrozenSourceCreatesDirectRoute pins the one allowed
+// frozen-source transition at the successor final: a ready 4.0.7 row at the
+// registered handle's offset skips the pre-mutation rejections, admits with
+// no legacy CDC source below the frozen stage, and takes the single direct
+// succession hop.
+func TestV407ReadyFrozenSourceCreatesDirectRoute(t *testing.T) {
+	runtime.RunTest("", func(runtime.Runtime) {
+		frozen := v4_0_7.Handler.Metadata()
+		var routes []string
+		exec := executor.NewMemExecutor2(func(sql string) (executor.Result, error) {
+			switch {
+			case strings.HasPrefix(sql, "SELECT reldatabase, relname, account_id FROM mo_catalog.mo_tables"):
+				return newBootstrapStringResult("mo_catalog"), nil
+			case sql == versions.LatestVersionSQL:
+				return recoveryVersionResult(t, versions.Version{Version: frozen.Version, VersionOffset: frozen.VersionOffset, State: versions.StateReady}), nil
+			case strings.Contains(sql, "select version from mo_version"):
+				return newBootstrapStringResult(frozen.Version), nil
+			case strings.HasPrefix(sql, "insert into mo_upgrade"):
+				routes = append(routes, sql)
+				return executor.Result{}, nil
+			case strings.Contains(sql, "from mo_catalog.mo_cdc_task"):
+				return executor.Result{}, fmt.Errorf("a ready frozen identity is a post-4.0.7 source: %s", sql)
+			default:
+				return executor.Result{}, nil
+			}
+		}, &testTxnOperator{})
+		s := newServiceForTest("", &memLocker{}, clock.NewHLCClock(func() int64 { return 0 }, 0), nil, exec, func(s *service) { s.initUpgrade() })
+		t.Cleanup(s.stopper.Stop)
+		require.NoError(t, s.doCheckUpgrade(t.Context()))
+		require.Len(t, routes, 1, "the valid frozen identity takes the single direct succession hop")
+		require.Contains(t, routes[0], fmt.Sprintf("'%s', '%s', '%s',", frozen.Version, v4_0_19.Handler.Metadata().Version, v4_0_19.Handler.Metadata().Version))
 		require.False(t, s.upgrade.finalVersionCompleted.Load())
 	})
 }

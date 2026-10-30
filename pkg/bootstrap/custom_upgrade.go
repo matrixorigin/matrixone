@@ -201,6 +201,14 @@ func (s *service) UpgradeOneTenant(ctx context.Context, tenantID int32) error {
 						from = v.Metadata().Version
 					}
 				}
+				// A manual upgrade reports success only with the account at the
+				// cluster's final version. The re-planned loop below still takes
+				// over after a committed paged 4.0.7 stage, so only a non-pending
+				// shortfall is terminal here instead of being cached as success.
+				if !pendingV407 && from != currentCN.Version {
+					return moerr.NewInvalidInputNoCtxf("cannot upgrade tenant version %s to current cn version %s",
+						from, currentCN.Version)
+				}
 				return nil
 			},
 			opts)
