@@ -15,6 +15,9 @@
 package logtailreplay
 
 import (
+	"context"
+	"errors"
+	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -527,4 +530,105 @@ func TestFilterBatchCase2InsertThenDeleteMultiple(t *testing.T) {
 		assert.Equal(t, types.BuildTS(400, 0), remainingDeleteTs[0],
 			"The remaining delete should be at ts=400 (the last one)")
 	}
+}
+
+func TestVisitChangedDataObjectsProjection(t *testing.T) {
+	state := NewPartitionState("", false, 0, false)
+	ts := func(n int64) types.TS { return types.BuildTS(n, 0) }
+	for _, life := range []struct {
+		name             string
+		created, deleted types.TS
+	}{
+		{"old-deleted", ts(5), ts(15)},
+		{"at-begin-deleted", ts(10), ts(20)},
+		{"transient", ts(11), ts(15)},
+		{"same-time", ts(12), ts(12)},
+		{"live", ts(13), types.TS{}},
+		{"deleted-after-end", ts(14), ts(21)},
+		{"created-at-end", ts(20), types.TS{}},
+		{"created-after-end", ts(21), types.TS{}},
+	} {
+		var stats objectio.ObjectStats
+		require.NoError(t, objectio.SetObjectStatsObjectName(&stats, objectio.ObjectName(life.name)))
+		obj := objectio.ObjectEntry{ObjectStats: stats, CreateTime: life.created, DeleteTime: life.deleted}
+		state.dataObjectsNameIndex.Set(obj)
+		state.dataObjectTSIndex.Set(ObjectIndexByTSEntry{Time: life.created, ShortObjName: *obj.ObjectShortName()})
+		if !life.deleted.IsEmpty() {
+			state.dataObjectTSIndex.Set(ObjectIndexByTSEntry{Time: life.deleted, ShortObjName: *obj.ObjectShortName(), IsDelete: true})
+		}
+	}
+	// An index entry without an object is ignored by the old caller as well.
+	var missing objectio.ObjectStats
+	require.NoError(t, objectio.SetObjectStatsObjectName(&missing, objectio.ObjectName("missing")))
+	state.dataObjectTSIndex.Set(ObjectIndexByTSEntry{Time: ts(16), ShortObjName: *missing.ObjectShortName()})
+	boundary := ts(10)
+	times := []types.TS{ts(5), boundary, boundary.Next(), ts(12), ts(15), ts(20), ts(21), types.MaxTs()}
+	for i, begin := range times {
+		for _, end := range times[i:] {
+			t.Run(fmt.Sprintf("%s_%s", begin.ToString(), end.ToString()), func(t *testing.T) {
+				deleted, inserted := state.GetChangedObjsBetween(begin, end)
+				want := make(map[objectio.ObjectNameShort]bool)
+				for name := range inserted {
+					if _, ok := state.GetObject(name); ok {
+						want[name] = false
+					}
+				}
+				for name := range deleted {
+					if _, ok := state.GetObject(name); ok {
+						want[name] = true
+					}
+				}
+				got := make(map[objectio.ObjectNameShort]bool)
+				err := state.VisitChangedDataObjects(context.Background(), begin, end, func(obj objectio.ObjectEntry, isDelete bool) (bool, error) {
+					name := *obj.ObjectShortName()
+					require.NotContains(t, got, name)
+					got[name] = isDelete
+					return true, nil
+				})
+				require.NoError(t, err)
+				require.Equal(t, want, got)
+			})
+		}
+	}
+
+	t.Run("stop-error-cancel", func(t *testing.T) {
+		calls := 0
+		err := state.VisitChangedDataObjects(context.Background(), ts(5), types.MaxTs(), func(objectio.ObjectEntry, bool) (bool, error) {
+			calls++
+			return false, nil
+		})
+		require.NoError(t, err)
+		require.Equal(t, 1, calls)
+		failure := errors.New("injected visitor error")
+		err = state.VisitChangedDataObjects(context.Background(), ts(5), types.MaxTs(), func(objectio.ObjectEntry, bool) (bool, error) {
+			return false, failure
+		})
+		require.ErrorIs(t, err, failure)
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		err = state.VisitChangedDataObjects(ctx, ts(5), types.MaxTs(), func(objectio.ObjectEntry, bool) (bool, error) {
+			t.Fatal("cancelled visitor called")
+			return false, nil
+		})
+		require.ErrorIs(t, err, context.Canceled)
+		empty := NewPartitionState("", false, 0, false)
+		err = empty.VisitChangedDataObjects(ctx, ts(5), types.MaxTs(), func(objectio.ObjectEntry, bool) (bool, error) {
+			t.Fatal("empty visitor called")
+			return false, nil
+		})
+		require.ErrorIs(t, err, context.Canceled)
+		ctx, cancel = context.WithCancel(context.Background())
+		err = state.VisitChangedDataObjects(ctx, ts(5), types.MaxTs(), func(objectio.ObjectEntry, bool) (bool, error) {
+			cancel()
+			return true, nil
+		})
+		require.ErrorIs(t, err, context.Canceled)
+		ctx, cancel = context.WithCancel(context.Background())
+		defer cancel()
+		err = state.VisitChangedDataObjects(ctx, ts(5), types.MaxTs(), func(objectio.ObjectEntry, bool) (bool, error) {
+			cancel()
+			return false, nil // a result was already selected by the visitor
+		})
+		require.NoError(t, err)
+	})
 }
