@@ -778,6 +778,9 @@ func isMissingTableByIdForFkCleanup(err error) bool {
 // Drop the old view, and create the new view.
 func (s *Scope) AlterView(c *Compile) error {
 	qry := s.Plan.GetDdl().GetAlterView()
+	if err := plan2.RequirePersistedIPFunctionProtocol(c.proc.Ctx, c.proc, qry.GetTableDef()); err != nil {
+		return err
+	}
 
 	// The planner has already resolved the (possibly schema-qualified) target
 	// database into the plan. Use it instead of the current database so that
@@ -3133,6 +3136,9 @@ func (s *Scope) CreateView(c *Compile) error {
 	defer s.ScopeAnalyzer.Stop()
 
 	qry := s.Plan.GetDdl().GetCreateView()
+	if err := plan2.RequirePersistedIPFunctionProtocol(c.proc.Ctx, c.proc, qry.GetTableDef()); err != nil {
+		return err
+	}
 
 	// convert the plan's cols to the execution's cols
 	planCols := qry.GetTableDef().GetCols()
@@ -3507,6 +3513,12 @@ func (s *Scope) doCreateIndex(
 	originalTableDef := plan2.DeepCopyTableDef(qry.TableDef, true)
 	indexInfo := qry.GetIndex() // IndexInfo is named same as planner's IndexInfo
 	indexTableDef := indexInfo.GetTableDef()
+	if err := plan2.RequirePersistedIPFunctionProtocol(c.proc.Ctx, c.proc, qry.GetTableDef()); err != nil {
+		return err
+	}
+	if err := plan2.RequirePersistedIPFunctionProtocol(c.proc.Ctx, c.proc, indexTableDef); err != nil {
+		return err
+	}
 
 	// In MySQL, the `CREATE INDEX` syntax can only create one index instance at a time
 	// indexName -> meta      -> indexDef[0]

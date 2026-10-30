@@ -570,6 +570,22 @@ func fixedTypeMatchWithBoolNumericCast(overloads []overload, inputs []types.Type
 	return newCheckResultWithCast(matched.idx, finalTypes)
 }
 
+// jsonValueCheckFn keeps the public two-argument overloads compatible with
+// existing plans and accepts the planner-only seven-argument form. The
+// target type and response modes are encoded as typed plan arguments, so no
+// implicit cast may be inserted for this internal form.
+func jsonValueCheckFn(overloads []overload, inputs []types.Type) checkResult {
+	if len(inputs) == 7 {
+		for i, ov := range overloads {
+			if len(ov.args) == 7 {
+				return newCheckResultWithSuccess(i)
+			}
+		}
+		return newCheckResultWithFailure(failedFunctionParametersWrong)
+	}
+	return fixedTypeMatch(overloads, inputs)
+}
+
 // isLogicalBoolOperand reports whether one type can serve as an operand of the
 // logical operators AND/OR/XOR/NOT, whose arguments are a boolean context. It
 // accepts every type the fixed implicit-cast table converts to BOOL and,

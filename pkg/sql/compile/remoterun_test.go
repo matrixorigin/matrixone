@@ -1481,7 +1481,11 @@ func TestRemoteExpressionProtocolValidation(t *testing.T) {
 	require.GreaterOrEqual(t, defines.MORPCLatestVersion, defines.MORPCVersion36,
 		"the v36 remote-expression capability must remain available after later protocol increments")
 
-	proc := testutil.NewProcess(t)
+	// A successful sender needs an observed capable destination, not only a
+	// coordinator floor. Reuse the protocol fixture's real endpoint mapping.
+	c, client := expressionProtocolTestCompile(t)
+	client.version = defines.MORPCLatestVersion
+	proc := c.proc
 	proc.Ctx = context.WithValue(proc.Ctx, defines.TenantIDKey{}, uint32(0))
 	proc.Base.TxnOperator = fakeTxnOperator{}
 	proc.Base.SessionInfo.TimeZone = time.UTC
@@ -1544,11 +1548,31 @@ func TestRemoteExpressionProtocolValidation(t *testing.T) {
 			}},
 		}
 	}
+	jsonValueContract := func() *planpb.Expr {
+		args := make([]*planpb.Expr, 7)
+		for i := range args {
+			args[i] = &planpb.Expr{
+				Typ:  planpb.Type{Id: int32(types.T_varchar)},
+				Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Isnull: true}},
+			}
+		}
+		return &planpb.Expr{
+			Typ: planpb.Type{Id: int32(types.T_varchar)},
+			Expr: &planpb.Expr_F{F: &planpb.Function{
+				Func: &planpb.ObjectRef{
+					Obj:     planfunction.EncodeOverloadID(planfunction.JSON_VALUE, 2),
+					ObjName: "json_value",
+				},
+				Args: args,
+			}},
+		}
+	}
 	makeScope := func(expressions ...*planpb.Expr) *Scope {
 		return &Scope{
-			Magic:  Remote,
-			Proc:   proc,
-			RootOp: value_scan.NewArgument(),
+			Magic:    Remote,
+			Proc:     proc,
+			NodeInfo: engine.Node{Id: "old-worker", Addr: "remote:6001"},
+			RootOp:   value_scan.NewArgument(),
 			Plan: &planpb.Plan{Plan: &planpb.Plan_Query{Query: &planpb.Query{
 				Steps: []int32{0}, Nodes: []*planpb.Node{{NodeId: 0, ProjectList: expressions}},
 			}}},
@@ -1774,6 +1798,33 @@ func TestRemoteExpressionProtocolValidation(t *testing.T) {
 			incompatibleVersion: defines.MORPCVersion35,
 			compatibleVersion:   defines.MORPCVersion36,
 			errorContains:       "prepared JSON comparison parameters require MORPC protocol version 36",
+		},
+		{
+			name:                "JSON_VALUE seven-argument plan",
+			expressions:         []*planpb.Expr{jsonValueContract()},
+			incompatibleVersion: defines.MORPCVersion134,
+			compatibleVersion:   defines.MORPCVersion135,
+			errorContains:       "seven-argument JSON_VALUE plans require MORPC protocol version 135",
+		},
+		{
+			name: "signed WEEK without JSON_VALUE",
+			expressions: []*planpb.Expr{{Typ: planpb.Type{Id: int32(types.T_int32)}, Expr: &planpb.Expr_F{F: &planpb.Function{
+				Func: &planpb.ObjectRef{Obj: planfunction.EncodeOverloadID(planfunction.WEEK, 2), ObjName: "week"},
+				Args: []*planpb.Expr{{Typ: planpb.Type{Id: int32(types.T_date)}}, {Typ: planpb.Type{Id: int32(types.T_int64)}}},
+			}}}},
+			incompatibleVersion: defines.MORPCVersion111,
+			compatibleVersion:   defines.MORPCVersion112,
+			errorContains:       "signed date result contracts require MORPC protocol version 112",
+		},
+		{
+			name: "signed WEEK with JSON_VALUE",
+			expressions: []*planpb.Expr{jsonValueContract(), {Typ: planpb.Type{Id: int32(types.T_int32)}, Expr: &planpb.Expr_F{F: &planpb.Function{
+				Func: &planpb.ObjectRef{Obj: planfunction.EncodeOverloadID(planfunction.WEEK, 2), ObjName: "week"},
+				Args: []*planpb.Expr{{Typ: planpb.Type{Id: int32(types.T_date)}}, {Typ: planpb.Type{Id: int32(types.T_int64)}}},
+			}}}},
+			incompatibleVersion: defines.MORPCVersion134,
+			compatibleVersion:   defines.MORPCVersion135,
+			errorContains:       "seven-argument JSON_VALUE plans require MORPC protocol version 135",
 		},
 		{
 			name:                "numeric prefix and JSON comparison",

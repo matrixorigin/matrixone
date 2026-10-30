@@ -600,6 +600,70 @@ func TestRequiredRemoteExpressionFeaturesBoundedConditionalStringDomains(t *test
 		"the existing character overload remains wire-compatible")
 }
 
+func TestRequiresMORPCVersion135JSONValueContract(t *testing.T) {
+	text := func(value string) *Expr {
+		return &Expr{Typ: Type{Id: planVarcharTypeID}, Expr: &Expr_Lit{Lit: &Literal{Value: &Literal_Sval{Sval: value}}}}
+	}
+	nullResult := func() *Expr {
+		return &Expr{Typ: Type{Id: planInt64TypeID}, Expr: &Expr_Lit{Lit: &Literal{Isnull: true}}}
+	}
+	errorPolicy := func() *Expr {
+		return &Expr{Typ: Type{Id: planInt64TypeID}, Expr: &Expr_Lit{Lit: &Literal{Value: &Literal_I64Val{I64Val: 2}}}}
+	}
+	jsonValueContract := &Expr{Typ: Type{Id: planInt64TypeID}, Expr: &Expr_F{F: &Function{
+		Func: &ObjectRef{Obj: int64(462)<<32 | 2, ObjName: "json_value"},
+		Args: []*Expr{text(`{"a":1}`), text("$.a"), nullResult(), errorPolicy(), nullResult(), errorPolicy(), nullResult()},
+	}}}
+	legacy := &Expr{Typ: Type{Id: planVarcharTypeID}, Expr: &Expr_F{F: &Function{
+		Func: &ObjectRef{Obj: int64(462) << 32, ObjName: "json_value"},
+		Args: []*Expr{text(`{"a":1}`), text("$.a")},
+	}}}
+
+	required, err := RequiresMORPCVersion135JSONValueContract(jsonValueContract)
+	require.NoError(t, err)
+	require.True(t, required)
+
+	required, err = RequiresMORPCVersion135JSONValueContract(legacy)
+	require.NoError(t, err)
+	require.False(t, required)
+
+	// The new merged owner can hold the only versioned expression. A normal
+	// projection here would mask a missing traversal of algo_exprs.
+	jsonInput := &Expr{Expr: &Expr_F{F: &Function{
+		Func: &ObjectRef{Obj: int64(16) << 32, ObjName: "concat"},
+		Args: []*Expr{{Typ: Type{Id: planJSONTypeID}}},
+	}}}
+	for _, tc := range []struct {
+		name          string
+		expr          *Expr
+		want          bool
+		wantJSONInput bool
+	}{
+		{"contract", jsonValueContract, true, false},
+		{"legacy", legacy, false, false},
+		{"landed JSON input", jsonInput, false, true},
+	} {
+		t.Run(tc.name+" algo_exprs only", func(t *testing.T) {
+			scan := &IndexSearchScan{AlgoOptions: []byte(`{}`), AlgoExprs: []*Expr{tc.expr}}
+			node := &Node{NodeType: Node_INDEX_SEARCH_SCAN, IndexSearchScan: scan}
+			query := &Query{Nodes: []*Node{node}, Steps: []int32{0}}
+			owner := &Plan{Plan: &Plan_Query{Query: query}}
+			encoded, err := owner.Marshal()
+			require.NoError(t, err)
+			decoded := &Plan{}
+			require.NoError(t, decoded.Unmarshal(encoded))
+			for _, value := range []any{scan, node, query, owner, decoded} {
+				required, err := RequiresMORPCVersion135JSONValueContract(value)
+				require.NoError(t, err)
+				require.Equal(t, tc.want, required)
+				features, err := RequiredRemoteExpressionFeatures(value)
+				require.NoError(t, err)
+				require.Equal(t, tc.wantJSONInput, features.JSONInputContracts)
+			}
+		})
+	}
+}
+
 func TestRequiredRemoteExpressionFeaturesFollowupResultContracts(t *testing.T) {
 	expression := func(functionID, overloadID, resultType int32) *Expr {
 		return &Expr{
