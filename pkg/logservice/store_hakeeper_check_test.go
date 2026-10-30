@@ -1049,7 +1049,14 @@ func TestHAKeeperBootstrapErrorUsesConfiguredCadence(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, &pb.CheckerState{State: actual.State}, projected)
 		// Cancellation before admission must reject both full and projected reads.
-		canceled, stop := context.WithCancel(ctx)
+		// Keep this deadline valid independently of the earlier heartbeat/read
+		// budget, including a pause before either cancellation assertion.
+		cancelDeadline := time.Now().Add(24 * time.Hour)
+		if deadline, ok := t.Deadline(); ok {
+			cancelDeadline = deadline.Add(time.Minute)
+		}
+		canceled, stop := context.WithDeadline(context.Background(), cancelDeadline)
+		defer stop()
 		stop()
 		withoutDeadline, cancelWithoutDeadline := context.WithCancel(context.Background())
 		cancelWithoutDeadline()
