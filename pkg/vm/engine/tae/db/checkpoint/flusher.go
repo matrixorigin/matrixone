@@ -978,7 +978,7 @@ func (flusher *flushImpl) ForceFlushWithInterval(
 			return true, nil
 		}
 		if _, err = flusher.flushRequestQ.Enqueue(request); err != nil {
-			return true, nil
+			return true, err
 		}
 		return false, nil
 	}
@@ -1045,8 +1045,7 @@ func (flusher *flushImpl) FlushTable(
 			return true, nil
 		}
 		if _, err = flusher.flushRequestQ.Enqueue(request); err != nil {
-			// TODO: why (true,nil)???
-			return true, nil
+			return true, err
 		}
 		return false, nil
 	}
