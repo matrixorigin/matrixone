@@ -1,0 +1,17 @@
+select @@global.time_zone;
+➤ @@global.time_zone[-1,16383,0]  𝄀
+SYSTEM
+set global time_zone = 'Mars/Phobos';
+unknown time zone Mars/Phobos
+set global time_zone = '+25:00';
+wrong date/time format specifier: +25:00
+set global time_zone = 'not a zone';
+unknown time zone not a zone
+select @@global.time_zone;
+➤ @@global.time_zone[-1,16383,0]  𝄀
+SYSTEM
+set time_zone = 'Mars/Phobos';
+unknown time zone Mars/Phobos
+select @@session.time_zone;
+➤ @@time_zone[-1,16383,0]  𝄀
+SYSTEM

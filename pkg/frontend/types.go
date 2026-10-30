@@ -1795,6 +1795,13 @@ func (ses *Session) SetGlobalSysVar(ctx context.Context, name string, val interf
 			return err
 		}
 	}
+	if name == "time_zone" {
+		// An unknown zone stored globally would fail every new session's
+		// initialization, so reject it here like SET SESSION does.
+		if _, _, err = resolveTimeZone(ctx, val); err != nil {
+			return err
+		}
+	}
 
 	if name == ProtectedDatabases {
 		if newValue, ok := val.(string); ok && len(protectedDatabaseSetFromString(ses, newValue)) == 0 {
