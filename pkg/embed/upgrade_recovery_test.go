@@ -81,10 +81,11 @@ func newRecoveryClusterStarterWithBudget(
 		cleanup()
 		current = nil
 		begin := now()
-		if err := startCluster(); err != nil {
+		err := startCluster()
+		deadline = deadline.Add(now().Sub(begin))
+		if err != nil {
 			return nil, err
 		}
-		deadline = deadline.Add(now().Sub(begin))
 		if err := parent.Err(); err != nil {
 			return nil, err
 		}
@@ -104,9 +105,13 @@ func newRecoveryClusterStarterWithBudget(
 func TestCrossTargetUpgradeRecovery(t *testing.T) {
 	require.NoError(t, CloseBaseClusterTests())
 	require.NoError(t, CloseSingleCNBaseClusterTests())
-	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Minute)
-	defer cancel()
-	c, err := NewCluster(WithTesting(), WithTestAdmissionContext(ctx), WithCNCount(2), WithPreStart(func(svc ServiceOperator) {
+	setupCtx := t.Context()
+	if deadline, ok := t.Deadline(); ok {
+		var cancel context.CancelFunc
+		setupCtx, cancel = context.WithDeadline(setupCtx, deadline)
+		defer cancel()
+	}
+	c, err := NewCluster(WithTesting(), WithTestAdmissionContext(setupCtx), WithCNCount(2), WithPreStart(func(svc ServiceOperator) {
 		adjustBasicClusterService(svc)
 		if svc.ServiceType() == metadata.ServiceType_CN {
 			svc.Adjust(func(cfg *ServiceConfig) { cfg.CN.AutomaticUpgrade = true })
@@ -120,7 +125,11 @@ func TestCrossTargetUpgradeRecovery(t *testing.T) {
 		})
 	}
 	require.NoError(t, err)
-	require.NoError(t, c.Start())
+	start, cleanup := newRecoveryClusterStarterWithBudget(setupCtx, c.Start, time.Now, 3*time.Minute)
+	t.Cleanup(cleanup)
+	var ctx context.Context
+	ctx, err = start()
+	require.NoError(t, err)
 	cn, err := c.GetCNService(0)
 	require.NoError(t, err)
 	frontendPort := cn.GetServiceConfig().CN.Frontend.Port
@@ -149,38 +158,57 @@ func TestCrossTargetUpgradeRecovery(t *testing.T) {
 	interrupted := &interruptedUpgradeHandler{VersionHandle: v4_0_6.Handler, entered: make(chan struct{})}
 	setRecoveryCNHandles(c, []bootstrap.VersionHandle{v4_0_4.Handler, v4_0_5.Handler, interrupted}, true)
 	started := make(chan error, 1)
-	go func() { started <- c.Start() }()
+	var stopped chan error
+	// Join startup before the starter's context cleanup, including FailNow paths.
+	t.Cleanup(func() {
+		stopErr := c.Stop()
+		for range started {
+		}
+		if stopped != nil {
+			for range stopped {
+			}
+		}
+		require.NoError(t, stopErr)
+	})
+	go func() {
+		defer close(started)
+		_, startErr := start()
+		started <- startErr
+	}()
 	select {
 	case <-interrupted.entered:
 	case err := <-started:
 		t.Fatalf("startup failed before the retained step: %v", err)
-	case <-ctx.Done():
-		t.Fatal("retained step was not reached", ctx.Err())
+	case <-setupCtx.Done():
+		t.Fatal("retained step was not reached", setupCtx.Err())
 	}
+	controlCtx, cancelControl := context.WithTimeout(setupCtx, time.Minute)
+	defer cancelControl()
 	// Use the saved frontend address rather than the cluster lock while Start is blocked.
-	pingCtx, pingCancel := context.WithTimeout(ctx, time.Second)
+	pingCtx, pingCancel := context.WithTimeout(controlCtx, time.Second)
 	db, err = sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/", frontendPort))
 	require.NoError(t, err)
 	require.Error(t, db.PingContext(pingCtx), "unfinished catalog must not admit SQL")
 	pingCancel()
 	require.NoError(t, db.Close())
-	stopped := make(chan error, 1)
-	go func() { stopped <- c.Stop() }()
+	stopped = make(chan error, 1)
+	go func() { defer close(stopped); stopped <- c.Stop() }()
 	select {
 	case err := <-started:
 		require.ErrorIs(t, err, context.Canceled)
-	case <-ctx.Done():
-		t.Fatal("stop did not cancel the upgrade startup", ctx.Err())
+	case <-controlCtx.Done():
+		t.Fatal("stop did not cancel the upgrade startup", controlCtx.Err())
 	}
 	select {
 	case err := <-stopped:
 		require.NoError(t, err)
-	case <-ctx.Done():
-		t.Fatal("cluster did not finish stopping", ctx.Err())
+	case <-controlCtx.Done():
+		t.Fatal("cluster did not finish stopping", controlCtx.Err())
 	}
 
 	setRecoveryCNHandles(c, []bootstrap.VersionHandle{v4_0_4.Handler, v4_0_5.Handler, v4_0_6.Handler}, true)
-	require.NoError(t, c.Start())
+	ctx, err = start()
+	require.NoError(t, err)
 	cn, err = c.GetCNService(0)
 	require.NoError(t, err)
 	retained, steps := readRecoveryCatalog(t, ctx, cn, v4_0_6.Handler.Metadata())
@@ -196,7 +224,8 @@ func TestCrossTargetUpgradeRecovery(t *testing.T) {
 
 	setRecoveryCNHandles(c, []bootstrap.VersionHandle{v4_0_4.Handler, v4_0_5.Handler, v4_0_6.Handler, v4_0_7.Handler}, true)
 	for generation := 0; generation < 2; generation++ {
-		require.NoError(t, c.Start())
+		ctx, err = start()
+		require.NoError(t, err)
 		for i := 0; i < 2; i++ {
 			cn, err := c.GetCNService(i)
 			require.NoError(t, err)
@@ -289,14 +318,37 @@ func TestRecoveryClusterStartupBudget(t *testing.T) {
 		})
 	}
 
-	t.Run("startup error", func(t *testing.T) {
-		failure := errors.New("startup failed")
-		start, cleanup := newRecoveryClusterStarter(t.Context(), func() error { return failure }, time.Now)
-		defer cleanup()
-		ctx, err := start()
-		require.ErrorIs(t, err, failure)
-		require.Nil(t, ctx)
-	})
+	for _, tc := range []struct {
+		name    string
+		failure error
+		budget  time.Duration
+	}{
+		{"failed startup", errors.New("startup failed"), 5 * time.Minute},
+		{"interrupted startup", context.Canceled, 3 * time.Minute},
+	} {
+		t.Run(tc.name+" does not consume workload budget", func(t *testing.T) {
+			now := time.Now().Add(time.Hour)
+			attempts := 0
+			start, cleanup := newRecoveryClusterStarterWithBudget(t.Context(), func() error {
+				attempts++
+				now = now.Add(10 * time.Minute)
+				if attempts == 1 {
+					return tc.failure
+				}
+				return nil
+			}, func() time.Time { return now }, tc.budget)
+			defer cleanup()
+			ctx, err := start()
+			require.ErrorIs(t, err, tc.failure)
+			require.Nil(t, ctx)
+			ctx, err = start()
+			require.NoError(t, err)
+			deadline, ok := ctx.Deadline()
+			require.True(t, ok)
+			require.Equal(t, tc.budget, deadline.Sub(now))
+			require.Equal(t, 2, attempts)
+		})
+	}
 
 	t.Run("parent deadline and workload cancellation", func(t *testing.T) {
 		deadline := time.Now().Add(time.Minute)

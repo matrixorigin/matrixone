@@ -9492,6 +9492,9 @@ func TestSchedulingPreviewHasIndependentTimeout(t *testing.T) {
 
 type blockingPoolResolutionPreviewEngine struct {
 	engine.Engine
+	entered  chan struct{}
+	canceled chan error
+	release  chan struct{}
 }
 
 func (*blockingPoolResolutionPreviewEngine) DiscoverQueryCandidates(
@@ -9500,33 +9503,77 @@ func (*blockingPoolResolutionPreviewEngine) DiscoverQueryCandidates(
 	return nil, nil
 }
 
-func (*blockingPoolResolutionPreviewEngine) ResolveQueryCandidatePool(
+func (e *blockingPoolResolutionPreviewEngine) ResolveQueryCandidatePool(
 	ctx context.Context,
 	_ engine.QueryCandidates,
 	_ engine.QueryCandidatePoolRequest,
 ) (engine.ResolvedQueryPool, error) {
-	<-ctx.Done()
-	return engine.ResolvedQueryPool{}, ctx.Err()
+	close(e.entered)
+	select {
+	case <-ctx.Done():
+		err := ctx.Err()
+		e.canceled <- err
+		return engine.ResolvedQueryPool{}, err
+	case <-e.release:
+		return engine.ResolvedQueryPool{}, moerr.NewInternalErrorNoCtx("test cleanup released pool resolution")
+	}
 }
 
-func TestSchedulingPreviewTimeoutBoundsPoolResolution(t *testing.T) {
+func TestSchedulingPreviewCancellationDuringPoolResolution(t *testing.T) {
 	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
+	t.Cleanup(ctrl.Finish)
 	ses := newTestSession(t, ctrl)
-	ses.txnHandler.storage = &blockingPoolResolutionPreviewEngine{}
+	t.Cleanup(ses.Close)
+	e := &blockingPoolResolutionPreviewEngine{
+		entered:  make(chan struct{}),
+		canceled: make(chan error, 1),
+		release:  make(chan struct{}),
+	}
+	ses.txnHandler.storage = e
+	ctx, cancel := context.WithCancel(t.Context())
+	result := make(chan schedule.Trace, 1)
+	done := make(chan struct{})
+	t.Cleanup(func() {
+		cancel()
+		close(e.release)
+		<-done
+	})
+	go func() {
+		defer close(done)
+		result <- previewQuerySchedulingInContext(
+			ctx,
+			ses,
+			&plan0.Query{Nodes: []*plan0.Node{{NodeType: plan0.Node_TABLE_SCAN}}},
+			false,
+			ses.GetSql(),
+			nil,
+		)
+	}()
 
-	started := time.Now()
-	trace := previewQueryScheduling(
-		context.Background(),
-		ses,
-		&plan0.Query{Nodes: []*plan0.Node{{NodeType: plan0.Node_TABLE_SCAN}}},
-		false,
-		ses.GetSql(),
-		nil,
-	)
+	select {
+	case <-e.entered:
+	case trace := <-result:
+		t.Fatalf("preview returned before pool resolution: %+v", trace)
+	case <-time.After(10 * time.Second):
+		t.Fatal("preview did not enter pool resolution")
+	}
+	cancel()
+	var trace schedule.Trace
+	select {
+	case trace = <-result:
+	case <-time.After(10 * time.Second):
+		t.Fatal("preview did not finish after cancellation")
+	}
 
-	require.Less(t, time.Since(started), time.Second)
+	select {
+	case err := <-e.canceled:
+		require.ErrorIs(t, err, context.Canceled)
+	default:
+		t.Fatal("pool resolution did not observe cancellation")
+	}
 	require.Equal(t, schedule.TraceModePreview, trace.Mode)
+	require.Len(t, trace.Attempts, 1)
+	require.Len(t, trace.Attempts[0].Failures, 1)
 	require.Equal(t, "pool-resolution", trace.Attempts[0].Failures[0].Category)
 }
 
