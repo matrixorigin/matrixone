@@ -22,6 +22,7 @@ import (
 	"testing"
 	"time"
 
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	lockpb "github.com/matrixorigin/matrixone/pkg/pb/lock"
@@ -504,28 +505,35 @@ func TestSharedScalarSubqueryNestedOccurrenceKeepsLegacyConflictUnderRR(t *testi
 	})
 }
 
-// #30955, pre-PR review round 10, finding 1: promoted lock options must
-// derive from EFFECTIVE per-execution occurrence eligibility. A locked
-// occurrence with an ENGAGING explicit snapshot (H nonzero and strictly
-// earlier than the executing SnapshotTS — mo_ts) is withheld from this
-// execution's current read entirely (D-1/R8-F3: it reads its named snapshot
-// exactly as today with its lock target conserved), yet its plan target
-// still carries bind-time presence, so the promoted Shared table lock took
-// the MARKED pre-pipeline options even though NO occurrence current-reads:
-// a writer committing while that promoted historical LOCK IN SHARE MODE
-// waits was silently served (the marked acquisition suppresses the
-// mid-wait committed conflict) instead of surfacing today's terminal
-// "SI not support retry" legacy conflict — D-1's historical exemption
-// broken exactly at the promoted acquisition. This member pins the
-// deterministic promotion-plus-historical reproduction the review demanded:
-// 100000 rows over the embedded 10000 MaxLockRowCount budget force the
-// table-lock promotion, the literal mo_ts point sits after the bulk commit
-// and strictly before the reader transaction's snapshot, the wait is
-// observed on the real lock service, the commit lands mid-wait, and the
-// declined historical statement keeps today's legacy conflict while the
-// historical view itself stays intact and the eligible current-read shape
-// (the same row, no mo_ts, a fresh transaction) keeps the round-8
-// current-read contract.
+// #30955, PR review round 26 (mo-bot P2, head 13a19202): the historical
+// exemption member must OBSERVE the lock result it grades. The bounded
+// fresh-database trial loop previously accepted any successful trial, so a
+// silently completed execution followed by a legacy-conflict trial passed —
+// masking intermittent regressions — and the promoted aggregate was logged
+// without being validated. This member now runs the reproduction ONCE and
+// synchronizes on the acquisition's RESOLVED lock result through the
+// existing lock-result hook of doLock (lock_op.go:1276, fired on the
+// promoted pre-pipeline table path too): the observed flags decide the
+// strict per-execution oracle. A wait-resolved conflict (HasConflict AND
+// HasPrevCommit — the writer committed while this lock waited) MUST
+// surface today's terminal legacy conflict; ANY silently returned
+// aggregate on such an execution is exactly the suppression this member
+// exists to catch, and it fails this single execution. Any OTHER observed
+// flags are the pre-existing stale-flag window of the wait resolution
+// (present at this PR's base; CI observed it once on the mixed sibling:
+// run 41067443301, job 124102560211) — an acquisition that observably
+// resolved that way can ONLY complete silently on the pre-commit
+// historical view, with exactly that aggregate and no error. The graded
+// contract itself is round 10, finding 1, unchanged: promoted lock options
+// derive from EFFECTIVE per-execution occurrence eligibility, so a
+// promoted (100000 rows over the embedded 10000 MaxLockRowCount budget)
+// locking read with an ENGAGING explicit snapshot (mo_ts = H, H strictly
+// earlier than the executing SnapshotTS) is withheld from this execution's
+// current read, its promoted Shared table lock keeps today's legacy
+// options, and a mid-wait commit surfaces the legacy conflict — never a
+// silently current-read committed value; the historical view stays intact
+// and the eligible (no mo_ts) current-read control keeps the round-8
+// contract.
 func TestPromotedShareHistoricalStaysLegacyOnMidWaitCommitUnderRR(t *testing.T) {
 	embed.RunBaseClusterTests(t, func(c embed.Cluster) {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
@@ -553,199 +561,226 @@ func TestPromotedShareHistoricalStaysLegacyOnMidWaitCommitUnderRR(t *testing.T) 
 		}
 
 		dbName := strings.ToLower(testutils.GetDatabaseName(t))
+		exec(writer, "create database "+dbName)
+		defer func() {
+			dropCtx, dropCancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer dropCancel()
+			_, _ = sqlDB.ExecContext(dropCtx, "drop database if exists "+dbName)
+		}()
+		exec(writer, "use "+dbName)
+		exec(reader, "use "+dbName)
+		exec(writer, "create table f(id int primary key, v int)")
 
-		// Outcome grading against the real CI flake observed on this
-		// member's mixed sibling (workflow run 41067443301, UT job
-		// 124102560211, 2026-10-30): the lock service's wait resolution
-		// carries a pre-existing load-gated stale-flag window (at this
-		// PR's base: a resolved waiter crosses lock_op.go's
-		// early-proceed branch when its conflict/prev-commit flags read
-		// stale) under which a historical locking statement can
-		// complete SILENTLY once, on its pre-commit carrier view. The
-		// regression this member pins — a lowered historical exemption
-		// that lets the promoted acquisition take the marked options —
-		// completes silently on EVERY attempt instead. The reproduction
-		// therefore runs as bounded trials over a fresh database: a
-		// trial passes on today's terminal legacy conflict, a silent
-		// trial is retried (the upstream window is load-gated and
-		// rare), the retry fence error fails immediately, and a budget
-		// exhausted in silence fails the member.
-		const silentTrialBudget = 3
+		// The forced promotion fixture: 100000 rows over the embedded
+		// cluster's MaxLockRowCount budget of 10000 (adjustBasicClusterService).
+		const rows = 100000
+		exec(writer,
+			fmt.Sprintf("insert into f select result, result from generate_series(1,%d) g;", rows))
+		const touchedID = 7
+		const bumpedValue = int64(1000000000)
+		snapshotSum := int64(rows) * int64(rows+1) / 2
 
-		// runTrial executes the scored promoted reproduction once in a
-		// fresh database and reports whether today's terminal legacy
-		// conflict surfaced.
-		runTrial := func(trial int) (legacyFound bool) {
-			writerCommitted := false
-			readerDone := false
-			defer func() {
-				if !readerDone {
-					_, _ = reader.ExecContext(context.WithoutCancel(ctx), "rollback")
+		// The explicit historical point: taken AFTER the bulk commit has
+		// settled and strictly BEFORE the reader transaction opens, so the
+		// locked occurrence engages the historical cohort for that
+		// execution (H nonzero, H < executing SnapshotTS).
+		time.Sleep(3 * time.Second)
+		hPoint := time.Now().UTC().Format("2006-01-02 15:04:05.999999999")
+		histTable := fmt.Sprintf("{ mo_ts = '%s' }", hPoint)
+
+		var tableID uint64
+		require.NoError(t, writer.QueryRowContext(ctx,
+			"select rel_id from mo_catalog.mo_tables where reldatabase = ? and relname = 'f'",
+			dbName).Scan(&tableID))
+
+		// The writer holds an exclusive row lock inside an open transaction.
+		exec(writer, "begin")
+		writerCommitted := false
+		defer func() {
+			if !writerCommitted {
+				rollbackCtx, rollbackCancel := context.WithTimeout(context.Background(), 30*time.Second)
+				defer rollbackCancel()
+				_, _ = writer.ExecContext(rollbackCtx, "rollback")
+			}
+		}()
+		exec(writer, fmt.Sprintf("update f set v = %d where id = %d", bumpedValue, touchedID))
+
+		// Lock-result synchronization (round 26): the CN's existing
+		// lock-result testing hook publishes the resolved flags of every
+		// successful lock acquisition on the promoted table — the same
+		// flags doLock's wait resolution uses to choose today's terminal
+		// legacy conflict against the defensive early-proceed — scoped to
+		// the promoted table only and installed after the writer's own row
+		// locks, so the first captured result IS the reader's promoted
+		// historical acquisition.
+		promotedResults := make(chan lockpb.Result, 8)
+		testingContext := moruntime.MustGetTestingContext(cn.ServiceID())
+		// The runtime's GetBeforeLockFunc returns beforeLockFunc but guards
+		// on the adjustLockResultFunc state (pkg/common/runtime/testing.go),
+		// so a non-nil adjust hook must be paired with a non-nil before hook
+		// or every doLock entry calls a nil function value. Every other hook
+		// consumer in the repository pairs the two the same way.
+		testingContext.SetBeforeLockFunc(func(_ []byte, _ uint64) {})
+		defer testingContext.SetBeforeLockFunc(nil)
+		testingContext.SetAdjustLockResultFunc(func(_ []byte, lockedTable uint64, result *lockpb.Result) {
+			if lockedTable == tableID {
+				select {
+				case promotedResults <- *result:
+				default:
 				}
-				if !writerCommitted {
-					rollbackCtx, rollbackCancel := context.WithTimeout(context.Background(), 30*time.Second)
-					defer rollbackCancel()
-					_, _ = writer.ExecContext(rollbackCtx, "rollback")
-				}
-				dropCtx, dropCancel := context.WithTimeout(context.Background(), 30*time.Second)
-				defer dropCancel()
-				_, _ = sqlDB.ExecContext(dropCtx, "drop database if exists "+dbName)
-			}()
+			}
+		})
+		defer testingContext.SetAdjustLockResultFunc(nil)
 
-			exec(writer, "drop database if exists "+dbName)
-			exec(writer, "create database "+dbName)
-			exec(writer, "use "+dbName)
-			exec(reader, "use "+dbName)
-			exec(writer, "create table f(id int primary key, v int)")
+		// The reader opens its RR transaction here: its SnapshotTS is later
+		// than H by the sleep margins above, so the mo_ts occurrence below
+		// stays historical for this whole execution.
+		exec(reader, "set session transaction isolation level repeatable read")
+		exec(reader, "begin")
 
-			// The forced promotion fixture: 100000 rows over the embedded
-			// cluster's MaxLockRowCount budget of 10000 (adjustBasicClusterService).
-			const rows = 100000
-			exec(writer,
-				fmt.Sprintf("insert into f select result, result from generate_series(1,%d) g;", rows))
-			const touchedID = 7
-			const bumpedValue = int64(1000000000)
+		// The promoted historical LOCK IN SHARE MODE runs in the reader's
+		// transaction; its promoted shared table lock waits on the writer's
+		// row lock. SUM over an int column returns a MySQL DECIMAL, so the
+		// value is scanned as float64: the aggregates below are exact
+		// integrals below 2^53 and exactly representable.
+		done := make(chan float64, 1)
+		readErr := make(chan error, 1)
+		go func() {
+			var sum sql.NullFloat64
+			err := reader.QueryRowContext(ctx,
+				fmt.Sprintf("select sum(v) from f %s lock in share mode", histTable)).Scan(&sum)
+			if err != nil {
+				readErr <- err
+				return
+			}
+			done <- sum.Float64
+		}()
+		readerDone := false
+		defer func() {
+			if !readerDone {
+				_, _ = reader.ExecContext(context.WithoutCancel(ctx), "rollback")
+			}
+		}()
 
-			// The explicit historical point: taken AFTER the bulk commit
-			// has settled and strictly BEFORE the reader transaction
-			// opens, so the locked occurrence engages the historical
-			// cohort for that execution (H nonzero, H < executing
-			// SnapshotTS).
-			time.Sleep(3 * time.Second)
-			hPoint := time.Now().UTC().Format("2006-01-02 15:04:05.999999999")
-			histTable := fmt.Sprintf("{ mo_ts = '%s' }", hPoint)
+		// Observed wait: the promoted historical shared table lock really
+		// waits on the writer's row lock before the commit releases it.
+		require.Eventually(t, func() bool {
+			return issueLockWaiters30955(c, tableID) > 0
+		}, 30*time.Second, 10*time.Millisecond,
+			"the promoted historical shared table lock never waited on the writer")
 
-			var tableID uint64
-			require.NoError(t, writer.QueryRowContext(ctx,
-				"select rel_id from mo_catalog.mo_tables where reldatabase = ? and relname = 'f'",
-				dbName).Scan(&tableID))
+		// The writer commits WHILE the promoted historical lock waits: the
+		// historical statement's acquisition keeps today's options because
+		// no occurrence of the statement current-reads.
+		exec(writer, "commit")
+		writerCommitted = true
 
-			// The writer holds an exclusive row lock inside an open
-			// transaction.
-			exec(writer, "begin")
-			exec(writer, fmt.Sprintf("update f set v = %d where id = %d", bumpedValue, touchedID))
+		// The synchronized lock result: what the reader's own promoted
+		// historical acquisition resolved to, observed before the
+		// statement can report anything.
+		var resolved lockpb.Result
+		select {
+		case resolved = <-promotedResults:
+		case <-ctx.Done():
+			t.Fatal("the promoted historical acquisition never resolved")
+		}
 
-			// The reader opens its RR transaction here: its SnapshotTS is
-			// later than H by the sleep margins above, so the mo_ts
-			// occurrence below stays historical for this whole execution.
-			exec(reader, "set session transaction isolation level repeatable read")
-			exec(reader, "begin")
-
-			// The promoted historical LOCK IN SHARE MODE runs in the
-			// reader's transaction; its promoted shared table lock waits
-			// on the writer's row lock.
-			done := make(chan float64, 1)
-			readErr := make(chan error, 1)
-			go func() {
-				var sum sql.NullFloat64
-				err := reader.QueryRowContext(ctx,
-					fmt.Sprintf("select sum(v) from f %s lock in share mode", histTable)).Scan(&sum)
-				if err != nil {
-					readErr <- err
-					return
-				}
-				done <- sum.Float64
-			}()
-
-			// Observed wait: the promoted historical shared table lock
-			// really waits on the writer's row lock before the commit
-			// releases it.
-			require.Eventually(t, func() bool {
-				return issueLockWaiters30955(c, tableID) > 0
-			}, 30*time.Second, 10*time.Millisecond,
-				"the promoted historical shared table lock never waited on the writer")
-
-			// The writer commits WHILE the promoted historical lock
-			// waits: the historical statement must surface today's
-			// terminal legacy conflict — its acquisition keeps today's
-			// options because no occurrence of the statement
-			// current-reads.
-			exec(writer, "commit")
-			writerCommitted = true
-
+		if resolved.HasConflict && resolved.HasPrevCommit {
+			// The mid-wait commit, observed on this execution's lock
+			// result: today's terminal legacy conflict is the ONLY
+			// admissible outcome. Any silently returned aggregate here —
+			// a suppressed conflict restored onto snapshot semantics or a
+			// current-read retry — is exactly the regression this member
+			// pins, and it fails this execution with no later trial to
+			// hide behind.
 			select {
 			case sum := <-done:
-				// Silent completion on the pre-commit carrier view: this
-				// is expected only from the pre-existing load-gated
-				// stale-flag early-proceed window of the wait
-				// resolution; a lowered historical exemption is silent
-				// on every trial, so the budget below fails that world.
-				t.Logf("trial %d: the promoted historical locking read completed silently on the pre-commit carrier view (sum %v)", trial, sum)
+				t.Fatalf("the promoted historical locking read silently returned %v after a wait-resolved conflict (HasConflict=true, HasPrevCommit=true, commit ts %v): the historical exemption was lowered and this acquisition suppressed the observable mid-wait conflict",
+					sum, resolved.Timestamp)
 			case err := <-readErr:
 				require.Error(t, err)
-				switch {
-				case strings.Contains(err.Error(), "SI not support retry"):
-					require.Contains(t, err.Error(), "w-w conflict",
-						"the historical locked statement keeps today's terminal legacy conflict")
-					legacyFound = true
-				case strings.Contains(err.Error(), "invalid locking-read retry frontier"):
+				if strings.Contains(err.Error(), "invalid locking-read retry frontier") {
 					t.Fatalf("the marked machinery engaged the historical target and its strict-progress retry fence terminated the promoted historical statement: %v", err)
-				default:
-					t.Fatalf("the promoted historical locking read failed unexpectedly: %v", err)
 				}
+				require.Contains(t, err.Error(), "SI not support retry",
+					"the historical locked statement keeps today's terminal legacy conflict")
+				require.Contains(t, err.Error(), "w-w conflict")
 			case <-ctx.Done():
 				t.Fatal("the promoted historical locking read did not finish")
 			}
-
-			// A best-effort rollback clears the reader.
-			_, _ = reader.ExecContext(context.WithoutCancel(ctx), "rollback")
-			readerDone = true
-
-			// The historical view itself stays intact, and the eligible
-			// shape keeps the current-read contract, in one fresh RR
-			// transaction.
-			exec(reader, "begin")
-			var histV int64
-			require.NoError(t, reader.QueryRowContext(ctx,
-				fmt.Sprintf("select v from f %s where id = %d lock in share mode",
-					histTable, touchedID)).Scan(&histV))
-			require.Equal(t, int64(touchedID), histV,
-				"the locked historical read still returns the H view with its row lock")
-			var currentV int64
-			require.NoError(t, reader.QueryRowContext(ctx,
-				"select v from f where id = ? lock in share mode", touchedID).Scan(&currentV))
-			require.Equal(t, bumpedValue, currentV,
-				"the eligible (no mo_ts) locked read keeps the admitted current-read contract")
-			exec(reader, "commit")
-			readerDone = true
-
-			// A fresh transaction sees the committed value.
-			var fresh int64
-			require.NoError(t, sqlDB.QueryRowContext(ctx,
-				fmt.Sprintf("select v from `%s`.f where id = ?", dbName), touchedID).Scan(&fresh))
-			require.Equal(t, bumpedValue, fresh)
-			return legacyFound
+		} else {
+			// The pre-existing stale-flag window of the wait resolution,
+			// OBSERVED on this execution's lock result rather than merely
+			// claimed (round 26): the acquisition resolved without a
+			// confirmed committed conflict, doLock's defensive
+			// early-proceed serves the statement, and the ONLY admissible
+			// outcome is the pre-commit historical view — exactly the
+			// historical aggregate, and no error.
+			select {
+			case sum := <-done:
+				require.Equal(t, float64(snapshotSum), sum,
+					"the observed stale-flag window can only complete silently on the pre-commit historical view")
+			case err := <-readErr:
+				t.Fatalf("the promoted historical locking read failed even though its acquisition resolved without a confirmed committed conflict (lock result: HasConflict=%v, HasPrevCommit=%v): %v",
+					resolved.HasConflict, resolved.HasPrevCommit, err)
+			case <-ctx.Done():
+				t.Fatal("the promoted historical locking read did not finish")
+			}
 		}
 
-		legacyFound := false
-		for trial := 0; trial < silentTrialBudget && !legacyFound; trial++ {
-			legacyFound = runTrial(trial)
-		}
-		require.True(t, legacyFound,
-			"the promoted historical locked statement surfaced NEITHER today's terminal legacy conflict NOR any marked-retry fence error across %d fresh-database trials: every trial completed silently on the pre-commit carrier view, which a lowered historical exemption does on every attempt while the pre-existing load-gated stale-flag window of the wait resolution reaches it only rarely (CI observed that window once on this member's mixed sibling: workflow run 41067443301, UT job 124102560211)",
-			silentTrialBudget)
+		// A best-effort rollback clears the reader.
+		_, _ = reader.ExecContext(context.WithoutCancel(ctx), "rollback")
+		readerDone = true
+
+		// The historical view itself stays intact, and the eligible shape
+		// keeps the current-read contract, in one fresh RR transaction.
+		exec(reader, "begin")
+		var histV int64
+		require.NoError(t, reader.QueryRowContext(ctx,
+			fmt.Sprintf("select v from f %s where id = %d lock in share mode",
+				histTable, touchedID)).Scan(&histV))
+		require.Equal(t, int64(touchedID), histV,
+			"the locked historical read still returns the H view with its row lock")
+		var currentV int64
+		require.NoError(t, reader.QueryRowContext(ctx,
+			"select v from f where id = ? lock in share mode", touchedID).Scan(&currentV))
+		require.Equal(t, bumpedValue, currentV,
+			"the eligible (no mo_ts) locked read keeps the admitted current-read contract")
+		exec(reader, "commit")
+		readerDone = true
+
+		// A fresh transaction sees the committed value.
+		var fresh int64
+		require.NoError(t, sqlDB.QueryRowContext(ctx,
+			fmt.Sprintf("select v from `%s`.f where id = ?", dbName), touchedID).Scan(&fresh))
+		require.Equal(t, bumpedValue, fresh)
 	})
 }
 
-// #30955, pre-PR review round 11: the historical exemption must reach the
-// ROW-LOCK activation of a MIXED statement. The scored shape: a row-scale
-// LOCK IN SHARE MODE joining a HISTORICAL table (its own { mo_ts = H }
-// clause, H strictly earlier than the executing SnapshotTS) with an
-// ORDINARY current-read table. The ordinary occurrence is admitted and
-// stamps this attempt's frontier; the historical occurrence is withheld
-// from this execution's current read (compile's admission refuses the
-// engaging H<S scan) — but its plan target still carries bind-time
-// presence, and the stamped frontier activated that target's marked
-// revalidation, so a writer committing while the HISTORICAL target's
-// shared row lock waits was served through the marked suppression/retry
-// branches instead of surfacing today's terminal "SI not support retry"
-// legacy conflict — the exact occurrence whose read stays historical. This
-// member pins the deterministic mixed reproduction the review demanded:
-// row scale (no promotion), the writer's row inside the HISTORICAL
-// occurrence's scan only, an observed wait on the historical table, a
-// mid-wait commit, the historical target's LEGACY conflict required, and
-// the eligible (no mo_ts) current-read control retained in a fresh
-// transaction afterwards.
+// #30955, PR review round 26 (mo-bot P2, head 13a19202): the mixed member
+// takes the same oracle repair as its promoted sibling. The bounded
+// fresh-database trial loop let a silently completed execution pass behind
+// a later legacy-conflict trial; this member now runs the scored mixed
+// reproduction ONCE and synchronizes on the HISTORICAL target's resolved
+// lock result through the existing lock-result hook of doLock
+// (lock_op.go:1276, row path), grading every execution strictly on the
+// observed flags: a wait-resolved conflict (HasConflict AND HasPrevCommit
+// — the writer committed while the historical row lock waited) MUST
+// surface today's terminal legacy conflict, and any other observed flags —
+// the pre-existing stale-flag window of the wait resolution (CI observed
+// it here: run 41067443301, job 124102560211) — MUST complete silently
+// with EXACTLY the pre-commit join view. The graded contract is round 11,
+// unchanged: the historical exemption must reach the ROW-LOCK activation
+// of a mixed statement. A row-scale LOCK IN SHARE MODE joins a HISTORICAL
+// table (its own { mo_ts = H } clause, H strictly earlier than the
+// executing SnapshotTS) with an ORDINARY current-read table; the ordinary
+// occurrence is admitted and stamps this attempt's frontier, the
+// historical occurrence is withheld from this execution's current read,
+// and a writer committing while the HISTORICAL target's shared row lock
+// waits must surface today's legacy conflict — the exact occurrence whose
+// read stays historical — never a value served through the marked
+// suppression/retry branches; the eligible (no mo_ts) current-read
+// control is retained in a fresh transaction afterwards.
 func TestMixedHistoricalShareKeepsLegacyConflictOnHistoricalTargetUnderRR(t *testing.T) {
 	embed.RunBaseClusterTests(t, func(c embed.Cluster) {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
@@ -773,175 +808,194 @@ func TestMixedHistoricalShareKeepsLegacyConflictOnHistoricalTargetUnderRR(t *tes
 		}
 
 		dbName := strings.ToLower(testutils.GetDatabaseName(t))
+		exec(writer, "create database "+dbName)
+		defer func() {
+			dropCtx, dropCancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer dropCancel()
+			_, _ = sqlDB.ExecContext(dropCtx, "drop database if exists "+dbName)
+		}()
+		exec(writer, "use "+dbName)
+		exec(reader, "use "+dbName)
 
-		// Outcome grading against the real CI flake THIS member hit
-		// (workflow run 41067443301, UT job 124102560211, 2026-10-30):
-		// the lock service's wait resolution carries a pre-existing
-		// load-gated stale-flag window (at this PR's base: a resolved
-		// waiter crosses lock_op.go's early-proceed branch when its
-		// conflict/prev-commit flags read stale) under which this mixed
-		// statement completed SILENTLY once, on the pre-commit join
-		// view. The regression this member pins — the historical target
-		// re-marked into the retry cohort — completes silently on EVERY
-		// attempt instead. The reproduction therefore runs as bounded
-		// trials over a fresh database: a trial passes on today's
-		// terminal legacy conflict, a silent trial is retried (the
-		// upstream window is load-gated and rare), the retry fence error
-		// fails immediately, and a budget exhausted in silence fails
-		// the member.
-		const silentTrialBudget = 3
+		// Row scale on purpose: no promotion, so the historical target's
+		// own row-lock acquisition is directly observable.
+		exec(writer, "create table h(id int primary key, v int)")
+		exec(writer, "insert into h values (1, 100), (2, 100)")
+		exec(writer, "create table g(id int primary key, v int)")
+		exec(writer, "insert into g values (1, 100), (2, 100)")
 
-		// runTrial executes the scored mixed reproduction once in a
-		// fresh database and reports whether today's terminal legacy
-		// conflict surfaced.
-		runTrial := func(trial int) (legacyFound bool) {
-			writerCommitted := false
-			readerDone := false
-			defer func() {
-				if !readerDone {
-					_, _ = reader.ExecContext(context.WithoutCancel(ctx), "rollback")
+		const touchedID = 2
+		const bumpedValue = int64(999)
+
+		// The explicit historical point: after both tables' commits have
+		// settled and strictly before the reader transaction opens, so the
+		// historical occurrence ENGAGES the cohort for that execution.
+		time.Sleep(3 * time.Second)
+		hPoint := time.Now().UTC().Format("2006-01-02 15:04:05.999999999")
+		histTable := fmt.Sprintf("{ mo_ts = '%s' }", hPoint)
+
+		var historicalTableID uint64
+		require.NoError(t, writer.QueryRowContext(ctx,
+			"select rel_id from mo_catalog.mo_tables where reldatabase = ? and relname = 'h'",
+			dbName).Scan(&historicalTableID))
+
+		// The writer holds an exclusive row lock on the HISTORICAL table's
+		// scanned row; the ordinary table's row stays uncontended.
+		exec(writer, "begin")
+		writerCommitted := false
+		defer func() {
+			if !writerCommitted {
+				rollbackCtx, rollbackCancel := context.WithTimeout(context.Background(), 30*time.Second)
+				defer rollbackCancel()
+				_, _ = writer.ExecContext(rollbackCtx, "rollback")
+			}
+		}()
+		exec(writer, fmt.Sprintf("update h set v = %d where id = %d", bumpedValue, touchedID))
+
+		// Lock-result synchronization (round 26): scoped to the HISTORICAL
+		// table and installed after the writer's own row locks, so the
+		// first captured result IS the mixed statement's historical row
+		// acquisition. The captured flags are the same ones doLock's wait
+		// resolution uses to choose today's terminal legacy conflict
+		// against the defensive early-proceed, so this member grades the
+		// one execution it runs against what that acquisition actually
+		// observed — with no repeat trials to hide behind.
+		historicalResults := make(chan lockpb.Result, 8)
+		testingContext := moruntime.MustGetTestingContext(cn.ServiceID())
+		// The runtime's GetBeforeLockFunc returns beforeLockFunc but guards
+		// on the adjustLockResultFunc state (pkg/common/runtime/testing.go),
+		// so a non-nil adjust hook must be paired with a non-nil before hook
+		// or every doLock entry calls a nil function value. Every other hook
+		// consumer in the repository pairs the two the same way.
+		testingContext.SetBeforeLockFunc(func(_ []byte, _ uint64) {})
+		defer testingContext.SetBeforeLockFunc(nil)
+		testingContext.SetAdjustLockResultFunc(func(_ []byte, lockedTable uint64, result *lockpb.Result) {
+			if lockedTable == historicalTableID {
+				select {
+				case historicalResults <- *result:
+				default:
 				}
-				if !writerCommitted {
-					rollbackCtx, rollbackCancel := context.WithTimeout(context.Background(), 30*time.Second)
-					defer rollbackCancel()
-					_, _ = writer.ExecContext(rollbackCtx, "rollback")
-				}
-				dropCtx, dropCancel := context.WithTimeout(context.Background(), 30*time.Second)
-				defer dropCancel()
-				_, _ = sqlDB.ExecContext(dropCtx, "drop database if exists "+dbName)
-			}()
+			}
+		})
+		defer testingContext.SetAdjustLockResultFunc(nil)
 
-			exec(writer, "drop database if exists "+dbName)
-			exec(writer, "create database "+dbName)
-			exec(writer, "use "+dbName)
-			exec(reader, "use "+dbName)
+		exec(reader, "set session transaction isolation level repeatable read")
+		exec(reader, "begin")
 
-			// Row scale on purpose: no promotion, so the historical
-			// target's own row-lock acquisition is directly observable.
-			exec(writer, "create table h(id int primary key, v int)")
-			exec(writer, "insert into h values (1, 100), (2, 100)")
-			exec(writer, "create table g(id int primary key, v int)")
-			exec(writer, "insert into g values (1, 100), (2, 100)")
+		// The mixed locking read: the historical occurrence of h scans
+		// its named snapshot and locks row touchedID; the ordinary
+		// occurrence of g current-reads and locks its matched row.
+		done := make(chan int64, 1)
+		readErr := make(chan error, 1)
+		go func() {
+			var v sql.NullInt64
+			err := reader.QueryRowContext(ctx,
+				fmt.Sprintf("select g.v from h %s join g on h.id = g.id where h.id = %d lock in share mode",
+					histTable, touchedID)).Scan(&v)
+			if err != nil {
+				readErr <- err
+				return
+			}
+			done <- v.Int64
+		}()
+		readerDone := false
+		defer func() {
+			if !readerDone {
+				_, _ = reader.ExecContext(context.WithoutCancel(ctx), "rollback")
+			}
+		}()
 
-			const touchedID = 2
-			const bumpedValue = int64(999)
+		// Observed wait: the HISTORICAL table's shared row lock really
+		// waits on the writer's exclusive row lock before the commit
+		// releases it.
+		require.Eventually(t, func() bool {
+			return issueLockWaiters30955(c, historicalTableID) > 0
+		}, 30*time.Second, 10*time.Millisecond,
+			"the historical target's shared row lock never waited on the writer")
 
-			// The explicit historical point: after both tables' commits
-			// have settled and strictly before the reader transaction
-			// opens, so the historical occurrence ENGAGES the cohort
-			// for that execution.
-			time.Sleep(3 * time.Second)
-			hPoint := time.Now().UTC().Format("2006-01-02 15:04:05.999999999")
-			histTable := fmt.Sprintf("{ mo_ts = '%s' }", hPoint)
+		// The writer commits WHILE the historical target's lock waits.
+		exec(writer, "commit")
+		writerCommitted = true
 
-			var historicalTableID uint64
-			require.NoError(t, writer.QueryRowContext(ctx,
-				"select rel_id from mo_catalog.mo_tables where reldatabase = ? and relname = 'h'",
-				dbName).Scan(&historicalTableID))
+		// The synchronized lock result: what the mixed statement's own
+		// historical row acquisition resolved to, observed before the
+		// statement can report anything.
+		var resolved lockpb.Result
+		select {
+		case resolved = <-historicalResults:
+		case <-ctx.Done():
+			t.Fatal("the historical target's lock acquisition never resolved")
+		}
 
-			// The writer holds an exclusive row lock on the HISTORICAL
-			// table's scanned row; the ordinary table's row stays
-			// uncontended.
-			exec(writer, "begin")
-			exec(writer, fmt.Sprintf("update h set v = %d where id = %d", bumpedValue, touchedID))
-
-			exec(reader, "set session transaction isolation level repeatable read")
-			exec(reader, "begin")
-
-			// The mixed locking read: the historical occurrence of h
-			// scans its named snapshot and locks row touchedID; the
-			// ordinary occurrence of g current-reads and locks its
-			// matched row.
-			done := make(chan int64, 1)
-			readErr := make(chan error, 1)
-			go func() {
-				var v sql.NullInt64
-				err := reader.QueryRowContext(ctx,
-					fmt.Sprintf("select g.v from h %s join g on h.id = g.id where h.id = %d lock in share mode",
-						histTable, touchedID)).Scan(&v)
-				if err != nil {
-					readErr <- err
-					return
-				}
-				done <- v.Int64
-			}()
-
-			// Observed wait: the HISTORICAL table's shared row lock
-			// really waits on the writer's exclusive row lock before
-			// the commit releases it.
-			require.Eventually(t, func() bool {
-				return issueLockWaiters30955(c, historicalTableID) > 0
-			}, 30*time.Second, 10*time.Millisecond,
-				"the historical target's shared row lock never waited on the writer")
-
-			// The writer commits WHILE the historical target's lock
-			// waits.
-			exec(writer, "commit")
-			writerCommitted = true
-
+		if resolved.HasConflict && resolved.HasPrevCommit {
+			// The mid-wait commit, observed on this execution's lock
+			// result: today's terminal legacy conflict is the ONLY
+			// admissible outcome. A silently returned value here — the
+			// historical target re-marked into the retry cohort — is
+			// exactly the regression this member pins, and it fails this
+			// execution with no later trial to hide behind.
 			select {
 			case v := <-done:
-				// Silent completion can only carry the pre-commit join
-				// view: the ordinary occurrence never reads a value
-				// other than its initial 100, so any other value is a
-				// new behavior and fails immediately.
-				require.Equal(t, int64(100), v,
-					"a silently completed mixed statement can only carry the pre-commit join view")
-				t.Logf("trial %d: the mixed statement completed silently on the pre-commit join view (the pre-existing load-gated stale-flag window)", trial)
+				t.Fatalf("the mixed statement silently returned %v after a wait-resolved conflict on the historical target (HasConflict=true, HasPrevCommit=true, commit ts %v): the historical target was re-marked into the retry cohort and this acquisition suppressed the observable mid-wait conflict",
+					v, resolved.Timestamp)
 			case err := <-readErr:
 				require.Error(t, err)
-				switch {
-				case strings.Contains(err.Error(), "SI not support retry"):
-					require.Contains(t, err.Error(), "w-w conflict",
-						"the historical target keeps today's terminal legacy conflict")
-					legacyFound = true
-				case strings.Contains(err.Error(), "invalid locking-read retry frontier"):
+				if strings.Contains(err.Error(), "invalid locking-read retry frontier") {
 					t.Fatalf("the marked machinery engaged the historical target and its strict-progress retry fence terminated the mixed statement: %v", err)
-				default:
-					t.Fatalf("the mixed historical/current locking read failed unexpectedly: %v", err)
 				}
+				require.Contains(t, err.Error(), "SI not support retry",
+					"the historical target keeps today's terminal legacy conflict")
+				require.Contains(t, err.Error(), "w-w conflict")
 			case <-ctx.Done():
 				t.Fatal("the mixed historical/current locking read did not finish")
 			}
-
-			// A best-effort rollback clears the reader.
-			_, _ = reader.ExecContext(context.WithoutCancel(ctx), "rollback")
-			readerDone = true
-
-			// The eligible current-read control retained: in a fresh RR
-			// transaction the same row, WITHOUT the mo_ts clause, has
-			// NO engaging snapshot and the ordinary locked read
-			// current-reads the committed value; the historical view
-			// itself stays intact.
-			exec(reader, "begin")
-			var currentV int64
-			require.NoError(t, reader.QueryRowContext(ctx,
-				"select v from h where id = ? lock in share mode", touchedID).Scan(&currentV))
-			require.Equal(t, bumpedValue, currentV,
-				"the eligible (no mo_ts) locked read keeps the admitted current-read contract")
-			var histV int64
-			require.NoError(t, reader.QueryRowContext(ctx,
-				fmt.Sprintf("select v from h %s where id = %d", histTable, touchedID)).Scan(&histV))
-			require.Equal(t, int64(100), histV,
-				"the historical view at H is preserved")
-			exec(reader, "commit")
-			readerDone = true
-
-			// A fresh transaction sees the committed value.
-			var fresh int64
-			require.NoError(t, sqlDB.QueryRowContext(ctx,
-				fmt.Sprintf("select v from `%s`.h where id = ?", dbName), touchedID).Scan(&fresh))
-			require.Equal(t, bumpedValue, fresh)
-			return legacyFound
+		} else {
+			// The pre-existing stale-flag window of the wait resolution,
+			// OBSERVED on this execution's lock result rather than merely
+			// claimed (round 26): doLock's defensive early-proceed serves
+			// the acquisition, and the ONLY admissible outcome is the
+			// pre-commit join view (the writer's mid-wait row change stays
+			// invisible to the historical occurrence) — exactly that value,
+			// and no error.
+			select {
+			case v := <-done:
+				require.Equal(t, int64(100), v,
+					"the observed stale-flag window can only complete silently on the pre-commit join view")
+			case err := <-readErr:
+				t.Fatalf("the mixed historical/current locking read failed even though the historical target's acquisition resolved without a confirmed committed conflict (lock result: HasConflict=%v, HasPrevCommit=%v): %v",
+					resolved.HasConflict, resolved.HasPrevCommit, err)
+			case <-ctx.Done():
+				t.Fatal("the mixed historical/current locking read did not finish")
+			}
 		}
 
-		legacyFound := false
-		for trial := 0; trial < silentTrialBudget && !legacyFound; trial++ {
-			legacyFound = runTrial(trial)
-		}
-		require.True(t, legacyFound,
-			"the historical target surfaced NEITHER today's terminal legacy conflict NOR any marked-retry fence error across %d fresh-database trials: every mixed statement completed silently on the pre-commit join view, which a re-marked historical target does on every attempt while the pre-existing load-gated stale-flag window of the wait resolution reaches it only rarely (CI observed that window once: workflow run 41067443301, UT job 124102560211)",
-			silentTrialBudget)
+		// A best-effort rollback clears the reader.
+		_, _ = reader.ExecContext(context.WithoutCancel(ctx), "rollback")
+		readerDone = true
+
+		// The eligible current-read control retained: in a fresh RR
+		// transaction the same row, WITHOUT the mo_ts clause, has NO
+		// engaging snapshot and the ordinary locked read current-reads the
+		// committed value; the historical view itself stays intact.
+		exec(reader, "begin")
+		var currentV int64
+		require.NoError(t, reader.QueryRowContext(ctx,
+			"select v from h where id = ? lock in share mode", touchedID).Scan(&currentV))
+		require.Equal(t, bumpedValue, currentV,
+			"the eligible (no mo_ts) locked read keeps the admitted current-read contract")
+		var histV int64
+		require.NoError(t, reader.QueryRowContext(ctx,
+			fmt.Sprintf("select v from h %s where id = %d", histTable, touchedID)).Scan(&histV))
+		require.Equal(t, int64(100), histV,
+			"the historical view at H is preserved")
+		exec(reader, "commit")
+		readerDone = true
+
+		// A fresh transaction sees the committed value.
+		var fresh int64
+		require.NoError(t, sqlDB.QueryRowContext(ctx,
+			fmt.Sprintf("select v from `%s`.h where id = ?", dbName), touchedID).Scan(&fresh))
+		require.Equal(t, bumpedValue, fresh)
 	})
 }
 
