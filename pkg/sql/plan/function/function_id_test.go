@@ -877,7 +877,8 @@ var predefinedFunids = map[int]int{
 	UNSIGNED_DECIMAL_ADMISSION:        620,
 	UNSIGNED_DECIMAL_ADMISSION_STRICT: 621,
 	UNSIGNED_DECIMAL_ADMISSION_IGNORE: 622,
-	FUNCTION_END_NUMBER:               623,
+	MO_INDEX_SUB_PART:                 623,
+	FUNCTION_END_NUMBER:               624,
 }
 
 func Test_funids(t *testing.T) {

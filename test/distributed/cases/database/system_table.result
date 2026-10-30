@@ -161,7 +161,7 @@ column_key  ¦  varchar(3)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 extra  ¦  varchar(24)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 privileges  ¦  varchar(31)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 column_comment  ¦  varchar(2048)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-generation_expression  ¦  varchar(500)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+generation_expression  ¦  varchar(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 srs_id  ¦  bigint  ¦  YES  ¦    ¦  null  ¦    ¦  
 show columns from `PROFILING`;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
