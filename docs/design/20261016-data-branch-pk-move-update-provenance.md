@@ -6,7 +6,7 @@
 | --- | --- |
 | Owning issue | matrixorigin/matrixone#28026 |
 | Implementation | PR [matrixorigin/matrixone#31629](https://github.com/matrixorigin/matrixone/pull/31629) (branch `agent/issue-28026-688adec6` on fork `gouhongshen/matrixone`), single PR |
-| Current revision | r103, 2026-10-30, supersedes r102 |
+| Current revision | r104, 2026-10-31, supersedes r103 |
 
 | Revision | Date | Note |
 | --- | --- | --- |
@@ -14,6 +14,7 @@
 | r72-r101 | 2026-10-25 - 2026-10-30 | Post-review repair rounds; each round's disposition is recorded per-decision in section 11. |
 | r102 | 2026-10-30 | Editorial compaction only — no protocol or behavior-design change. Answers the PR #31629 review by aunjgr: the tracked artifact now keeps the durable content (the problem/invariant protocol of sections 2-9, the invariant validation anchors of section 10, and the complete 222-decision register with its refinement chain, open items and approval trace of section 11) and drops the transient material the repository delivery contract excludes (per-run verification logs and walkthroughs, temporary local paths, one-off proof narratives, and full review transcripts). The Implementation field is corrected to name PR #31629. The superseded full text of r101 remains reachable as linked external evidence at the pre-compaction blob: <https://github.com/matrixorigin/matrixone/blob/430914c128ee5afd36880afd8f44d242bcc50f7f/docs/design/20261016-data-branch-pk-move-update-provenance.md> |
 | r103 | 2026-10-30 | Editorial only — no protocol or decision change. Answers the PR #31629 design-gate review by aunjgr (2026-10-30T13:43:12Z): section 11 now identifies the independent design approval of record for the delivered revision with its reviewed content hash, public byte link, reviewer identity, and a durable artifact link. No completed review was rerun; no review transcripts are added to the repository. |
+| r104 | 2026-10-31 | Editorial only — no protocol or decision change. Answers the PR #31629 Codex automated follow-up review (2026-10-30T20:27:13Z, non-blocking P2): sections 3, 7 and 10 now name the delivered v4_0_19 tenant-upgrade vehicle and its real test package instead of the retired 4.0.8 design-time placeholder; the D149 register entry already states the version-neutral forward-placement rule, and no register entry changed. |
 ## 2. Problem, evidence, and invariants
 
 A pk-moving `UPDATE` executes in `multi_update` as a delete of the old row
@@ -99,7 +100,7 @@ Complexity triggers (any one suffices):
   bootstrap tenant-upgrade, and restore subsystems;
 - changes a catalog / persistent contract
   (`mo_catalog.mo_data_branch_update_link`), including its key schema;
-- affects tenant upgrade (v4.0.8, D149's forward version),
+- affects tenant upgrade (v4.0.19, D149's forward version),
   mixed-version operation (tenants
   without the table), restart, backup/restore (table skipped on restore);
 - adds a collaboration protocol between statement-time writes and
@@ -573,10 +574,11 @@ MERGE/PICK transaction, so abort semantics are I7-atomic.
 
 - Upgrade: a NEW forward tenant-upgrade version NEWER than the
   target branch's final registered version creates the r2 table
-  idempotently (`CheckTableDefinition` guard) — D149: 4.0.8 on the
-  landing target 3cf3888 (final registered version 4.0.7; upstream
-  #31497 folded and removed the unpublished 4.0.8-4.0.17
-  handlers), the
+  idempotently (`CheckTableDefinition` guard) — D149: 4.0.19 as
+  delivered on PR #31629 (upstream #31497 folded and removed the
+  unpublished 4.0.8-4.0.17 handlers, upstream #31489 published
+  4.0.18 and the 4.0.19 sysview identity refresh that this branch's
+  4.0.19 vehicle folds with), the
   number re-derived as predecessor-final-plus-one at landing, all
   existing migrations untouched. New accounts get it from
   predefined DDL. Nothing backfills history; links accrue from
@@ -723,7 +725,7 @@ Every invariant maps to the cheapest deterministic evidence:
 | I7 rollback/restart: ROLLBACK removes link rows with user rows; links survive a clean restart and keep resolving | live battery RB/RS scenarios |
 | I6 tenancy: a second tenant writes/reads only its own links; a tenant without the table degrades to legacy replay | live battery TI scenario |
 | I6 reclaim: DROP TABLE / DROP DATABASE / TRUNCATE remove the table's links; a dropped intermediate generation keeps its links while descendants are live and them both retire when the last descendant drops; global audit shows zero orphans | BVT reclaim probes + live counts + `TestComputeBranchReclaimTableIDs` |
-| Upgrade path and idempotence (D149): an existing tenant at the target's final registered version (4.0.7 on the landing target) lacking the table upgrades to the new forward-handler version and gains `mo_data_branch_update_link` with the §3 schema; a repeated upgrade run is a no-op; a tenant at the new version selects no further handler; DDL/schema agreement between `predefined.go`, plan TableDef, and writer batch | UT in `pkg/bootstrap/versions/v4_0_8`, `pkg/sql/plan`, plus the selection-witness and idempotence cases in the new forward version's package — the schema-agreement half owns the fresh-cluster/new-account predefined-DDL path (bootstrap at the final version, no handler selection), while the selection-witness, repeated-upgrade, and upgrade-path cases own existing-tenant reachability; post-upgrade MERGE/PICK pk-move cascade parity runs live on an upgraded cluster |
+| Upgrade path and idempotence (D149): an existing tenant at the target's final registered version (4.0.7 on the landing target) lacking the table upgrades to the new forward-handler version and gains `mo_data_branch_update_link` with the §3 schema; a repeated upgrade run is a no-op; a tenant at the new version selects no further handler; DDL/schema agreement between `predefined.go`, plan TableDef, and writer batch | UT in `pkg/bootstrap/versions/v4_0_19`, `pkg/sql/plan`, plus the selection-witness and idempotence cases in the new forward version's package — the schema-agreement half owns the fresh-cluster/new-account predefined-DDL path (bootstrap at the final version, no handler selection), while the selection-witness, repeated-upgrade, and upgrade-path cases own existing-tenant reachability; post-upgrade MERGE/PICK pk-move cascade parity runs live on an upgraded cluster |
 | I7 apply atomicity: RESTRICT rejects loudly; MERGE aborts atomically (parent/child unchanged) | BVT RESTRICT cases (MERGE and PICK) |
 
 The per-round, per-run evidence rows that followed this table in r101 were
@@ -1062,7 +1064,9 @@ contract, "the reviewed revision and approval decision must be traceable"):
   2026-10-30T13:43:12Z review. r102 = r101 with sections 2-9 byte-identical
   (block MD5 `102bf6b88108c5b1c8f3ed490e71a3fc` on both sides); delivered
   r102 content MD5 `483aaf9da027ac7fec1ed832ecb88acf` at commit
-  `053b5ffbac87bcc69613cd2667c4edff46d82919`.
+  `053b5ffbac87bcc69613cd2667c4edff46d82919`. r104 = r103 with the three
+  placement references (§3, §7's D149 prose, §10's anchor) corrected to the
+  delivered v4_0_19 vehicle; editorial only, no protocol or decision change.
 - Durable decision record and verbatim artifact:
   <https://gist.github.com/gouhongshen/5e3e7f1c103a8312e31c684676bf0cad>
   (decision record README plus the r100 PASS artifact JSON, MD5
