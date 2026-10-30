@@ -2570,6 +2570,7 @@ func (h *ParquetHandler) getMapperWithStaging(sc *parquet.Column, dt plan.Type, 
 	if mp.mapper != nil {
 		mapper := mp.mapper
 		expectedDataKind := parquetEncodingKind(st.Kind())
+		finalize := parquetTemporalRangeCheck(st, dt)
 		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
 			if page.Dictionary() == nil {
 				data := page.Data()
@@ -2579,9 +2580,79 @@ func (h *ParquetHandler) getMapperWithStaging(sc *parquet.Column, dt plan.Type, 
 						data.Kind(), expectedDataKind)
 				}
 			}
-			return mapper(mp, page, proc, vec)
+			if finalize == nil {
+				return mapper(mp, page, proc, vec)
+			}
+			start := vec.Length()
+			if err := mapper(mp, page, proc, vec); err != nil {
+				return err
+			}
+			return finalize(proc, vec, start)
 		}
 		return mp
+	}
+	return nil
+}
+
+var (
+	parquetMinDate     = types.DateFromCalendar(types.MinDateYear, 1, 1)
+	parquetMaxDate     = types.DateFromCalendar(types.MaxDateYear, 12, 31)
+	parquetMinDatetime = types.DatetimeFromClock(types.MinDatetimeYear, 1, 1, 0, 0, 0, 0)
+	parquetMaxDatetime = types.DatetimeFromClock(types.MaxDatetimeYear, 12, 31, 23, 59, 59, 999999)
+)
+
+// parquetTemporalRangeCheck returns a post-mapping check for numeric Parquet
+// temporal sources (DATE days, TIMESTAMP units) loaded into DATE, DATETIME or
+// TIMESTAMP columns. Those sources are decoded straight into the vector, so
+// unlike the string paths they skip the SQL range check; values outside the
+// supported years 0001..9999 are rejected instead of being persisted.
+func parquetTemporalRangeCheck(st parquet.Type, dt plan.Type) func(*process.Process, *vector.Vector, int) error {
+	if st.Kind() == parquet.ByteArray || st.Kind() == parquet.FixedLenByteArray {
+		return nil
+	}
+	lt := st.LogicalType()
+	if lt == nil || (lt.Date == nil && lt.Timestamp == nil) {
+		return nil
+	}
+	switch types.T(dt.Id) {
+	case types.T_date:
+		return func(proc *process.Process, vec *vector.Vector, start int) error {
+			vals := vector.MustFixedColNoTypeCheck[types.Date](vec)
+			nsp := vec.GetNulls()
+			for i := start; i < len(vals); i++ {
+				if !nsp.Contains(uint64(i)) && (vals[i] < parquetMinDate || vals[i] > parquetMaxDate) {
+					return moerr.NewOutOfRangef(proc.Ctx, "date", "parquet value %s", vals[i].String())
+				}
+			}
+			return nil
+		}
+	case types.T_datetime:
+		return func(proc *process.Process, vec *vector.Vector, start int) error {
+			vals := vector.MustFixedColNoTypeCheck[types.Datetime](vec)
+			nsp := vec.GetNulls()
+			for i := start; i < len(vals); i++ {
+				if !nsp.Contains(uint64(i)) && (vals[i] < parquetMinDatetime || vals[i] > parquetMaxDatetime) {
+					return moerr.NewOutOfRangef(proc.Ctx, "datetime", "parquet value %s", vals[i].String2(6))
+				}
+			}
+			return nil
+		}
+	case types.T_timestamp:
+		return func(proc *process.Process, vec *vector.Vector, start int) error {
+			loc := parquetSessionLocation(proc)
+			vals := vector.MustFixedColNoTypeCheck[types.Timestamp](vec)
+			nsp := vec.GetNulls()
+			for i := start; i < len(vals); i++ {
+				if nsp.Contains(uint64(i)) || vals[i] == types.ZeroTimestamp {
+					continue
+				}
+				// SQL validates the session-local datetime, not the UTC instant.
+				if local := vals[i].ToDatetime(loc); local > parquetMaxDatetime {
+					return moerr.NewOutOfRangef(proc.Ctx, "timestamp", "parquet value %s", local.String2(6))
+				}
+			}
+			return nil
+		}
 	}
 	return nil
 }

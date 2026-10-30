@@ -1,0 +1,38 @@
+drop database if exists parquet_temporal_range;
+create database parquet_temporal_range;
+use parquet_temporal_range;
+set time_zone = '+00:00';
+create table ts(id bigint primary key, v timestamp(6));
+create table dt(id bigint primary key, v datetime(6));
+create table d(id bigint primary key, v date);
+insert into ts values (99, '10000-01-01 00:00:00');
+invalid input: invalid datetime value 10000-01-01 00:00:00
+load data infile {'filepath'='$resources/parquet_temporal_range/ts_year10000.parquet', 'format'='parquet'} into table ts;
+Data truncation: data out of range: data type timestamp, parquet value 10000-01-01 00:00:00.000000
+load data infile {'filepath'='$resources/parquet_temporal_range/ts_year10000.parquet', 'format'='parquet'} into table dt;
+Data truncation: data out of range: data type datetime, parquet value 10000-01-01 00:00:00.000000
+load data infile {'filepath'='$resources/parquet_temporal_range/date_year10000.parquet', 'format'='parquet'} into table d;
+Data truncation: data out of range: data type date, parquet value 10000-01-01
+load data infile {'filepath'='$resources/parquet_temporal_range/date_year10000.parquet', 'format'='parquet'} into table dt;
+Data truncation: data out of range: data type datetime, parquet value 10000-01-01 00:00:00.000000
+select count(*) from ts;
+➤ count(*)[-5,64,0]  𝄀
+0
+select count(*) from dt;
+➤ count(*)[-5,64,0]  𝄀
+0
+select count(*) from d;
+➤ count(*)[-5,64,0]  𝄀
+0
+load data infile {'filepath'='$resources/parquet_temporal_range/ts_max.parquet', 'format'='parquet'} into table ts;
+load data infile {'filepath'='$resources/parquet_temporal_range/date_max.parquet', 'format'='parquet'} into table d;
+select id, cast(v as char) from ts order by id;
+➤ id[-5,64,0]  ¦  cast(v as varchar)[12,65535,0]  𝄀
+1  ¦  1970-01-01 00:00:01.000000  𝄀
+2  ¦  9999-12-31 23:59:59.999999
+select id, v from d order by id;
+➤ id[-5,64,0]  ¦  v[91,10,0]  𝄀
+1  ¦  1970-01-01  𝄀
+2  ¦  9999-12-31
+set time_zone = 'SYSTEM';
+drop database parquet_temporal_range;
