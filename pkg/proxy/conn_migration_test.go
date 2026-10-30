@@ -889,8 +889,21 @@ func TestMigrateConnToContextCancelsReplay(t *testing.T) {
 	defer remote.Close()
 	blocked := newBlockingContextServerConn(local)
 	defer blocked.Close()
-	cc := &clientConn{}
+	cluster := clusterservice.NewMOCluster("", nil, 0,
+		clusterservice.WithDisableRefresh(),
+		clusterservice.WithServices([]metadata.CNService{{ServiceID: "replay", SQLAddress: "pipe", QueryAddress: "query"}}, nil))
+	defer cluster.Close()
+	preflights := 0
+	client := &disconnectQueryClient{send: func(ctx context.Context, addr string, req *pb.Request) (*pb.Response, error) {
+		preflights++
+		if addr != "query" || req.MigrateConnToRequest == nil || !req.MigrateConnToRequest.VerifyPrincipalOnly {
+			return nil, moerr.NewInternalError(ctx, "expected identity preflight before blocked replay")
+		}
+		return &pb.Response{MigrateConnToResponse: &pb.MigrateConnToResponse{Success: true, PrincipalVerified: true}}, nil
+	}}
+	cc := &clientConn{moCluster: cluster, queryClient: client}
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	result := make(chan error, 1)
 	go func() {
 		result <- cc.migrateConnToContext(ctx, blocked, &pb.MigrateConnFromResponse{Principal: &pb.MigrateSessionPrincipal{},
@@ -907,6 +920,8 @@ func TestMigrateConnToContextCancelsReplay(t *testing.T) {
 	select {
 	case err := <-result:
 		assert.ErrorIs(t, err, context.Canceled)
+		require.Equal(t, 1, preflights, "canceled replay must not start final import")
+		require.Equal(t, 1, client.released)
 	case <-time.After(time.Second):
 		t.Fatal("migration replay ignored transfer cancellation")
 	}
