@@ -197,6 +197,11 @@ func getColumnTypeFromAst(
 		bounded.InternalType.DisplayWith = types.MaxVarcharLen
 		parseType = &bounded
 	}
+	if !internal && replay == nil {
+		if err := validateEnumSetMemberDuplicates(ctx, column, tableCharset); err != nil {
+			return plan.Type{}, err
+		}
+	}
 	typ, err := getTypeFromAst(ctx, parseType)
 	if err != nil {
 		return plan.Type{}, err
@@ -1089,6 +1094,11 @@ func buildDefaultExprWithColumnsObserved(
 			return nil, moerr.NewErrInvalidDefault(bindCtx, colNameOrigin)
 		}
 		return nil, mapDDLAssignmentCastError(bindCtx, typ, colNameOrigin, err)
+	}
+	if purpose == defaultExprForDDL && !isExpressionDefault {
+		if err = validateEnumSetConstantDefault(bindCtx, proc, typ, newExpr, colNameOrigin); err != nil {
+			return nil, err
+		}
 	}
 	zeroTemporalDefault := false
 	if lit := newExpr.GetLit(); lit != nil && !lit.Isnull {

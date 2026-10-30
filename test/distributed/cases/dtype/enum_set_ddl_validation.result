@@ -1,0 +1,74 @@
+drop database if exists enum_set_ddl_validation;
+create database enum_set_ddl_validation;
+use enum_set_ddl_validation;
+create table t_bad1 (id int, e enum('a','b') default 'zz');
+Invalid default value for 'e'
+create table t_bad2 (id int, s set('a','b') default 'c');
+Invalid default value for 's'
+create table t_bad3 (id int, s set('a','b') default 'a,c');
+Invalid default value for 's'
+create table t_bad4 (id int, e enum('a','b') default '');
+Invalid default value for 'e'
+create table t_bad5 (id int, e enum('a','b') default 3);
+Invalid default value for 'e'
+create table t_bad6 (id int, s set('a','b') default 4);
+Invalid default value for 's'
+create table t_bad7 (id int, e enum('a','b') not null default 'c');
+Invalid default value for 'e'
+create table t_ok (
+id int,
+e1 enum('a','b') default 'b',
+e2 enum('a','b') default 'A',
+e3 enum('a','b') default 'a  ',
+e4 enum('a','b') default null,
+e5 enum('','a') default '',
+s1 set('a','b') default 'b,a',
+s2 set('a','b') default ''
+);
+insert into t_ok(id) values (1);
+select id, e1, e2, e3, e4, e5, s1, s2 from t_ok;
+➤ id[4,32,0]  ¦  e1[12,65535,0]  ¦  e2[12,65535,0]  ¦  e3[12,65535,0]  ¦  e4[12,65535,0]  ¦  e5[12,65535,0]  ¦  s1[12,65535,0]  ¦  s2[12,65535,0]  𝄀
+1  ¦  b  ¦  a  ¦  a  ¦  null  ¦    ¦  a,b  ¦  
+create table t_alt (id int, e enum('a','b') default 'a', s set('x','y') default 'x');
+alter table t_alt alter column e set default 'zz';
+Invalid default value for 'e'
+alter table t_alt alter column s set default 'z';
+Invalid default value for 's'
+alter table t_alt modify column e enum('a','b') default 'q';
+Invalid default value for 'e'
+alter table t_alt change column e e2 enum('a','b') default 'q';
+Invalid default value for 'e2'
+alter table t_alt add column e3 enum('x','y') default 'z';
+Invalid default value for 'e3'
+alter table t_alt alter column e set default 'b';
+alter table t_alt add column e4 enum('x','y') default 'y';
+insert into t_alt(id) values (1);
+select * from t_alt;
+➤ id[4,32,0]  ¦  e[12,65535,0]  ¦  s[12,65535,0]  ¦  e4[12,65535,0]  𝄀
+1  ¦  b  ¦  x  ¦  y
+show create table t_alt;
+➤ Table[12,5,0]  ¦  Create Table[12,147,0]  𝄀
+t_alt  ¦  CREATE TABLE `t_alt` (
+  `id` int DEFAULT NULL,
+  `e` enum('a','b') DEFAULT 'b',
+  `s` set('x','y') DEFAULT 'x',
+  `e4` enum('x','y') DEFAULT 'y'
+)
+create table t_dup1 (id int, e enum('a','a'));
+Column 'e' has duplicated value 'a' in ENUM
+create table t_dup2 (id int, e enum('a','b','A'));
+Column 'e' has duplicated value 'a' in ENUM
+create table t_dup4 (id int, s set('a','b','a'));
+Column 's' has duplicated value 'a' in SET
+create table t_dup5 (id int, s set('x','X'));
+Column 's' has duplicated value 'x' in SET
+create table t_dup_ok (id int, e enum('a','A') collate utf8mb4_bin, e2 enum('a','ab',' a'));
+alter table t_dup_ok add column e3 enum('p','q','p');
+Column 'e3' has duplicated value 'p' in ENUM
+alter table t_dup_ok modify column e2 enum('a','ab','a');
+Column 'e2' has duplicated value 'a' in ENUM
+insert into t_dup_ok values (1, 'A', ' a');
+select id, e2 from t_dup_ok;
+➤ id[4,32,0]  ¦  e2[12,65535,0]  𝄀
+1  ¦   a
+drop database enum_set_ddl_validation;

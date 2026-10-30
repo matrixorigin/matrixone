@@ -20,6 +20,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/stretchr/testify/require"
@@ -358,13 +359,15 @@ func TestMySQLSpecialOrderProvenanceThroughQueryBoundaries(t *testing.T) {
 }
 
 func TestMySQLSpecialOrderProvenanceRejectsNonReversibleEnum(t *testing.T) {
-	t.Run("DDL currently accepts duplicate and EqualFold-equivalent labels", func(t *testing.T) {
+	// New DDL rejects such labels (ER_DUPLICATED_VALUE_IN_TYPE); catalogs
+	// created before that check can still carry them, as the mock tables do.
+	t.Run("DDL rejects duplicate and EqualFold-equivalent labels", func(t *testing.T) {
 		for _, sql := range []string{
 			"create table enum_duplicate_ddl (e enum('same', 'same', 'other'))",
 			"create table enum_equal_fold_ddl (e enum('low', 'LOW', 'high'))",
 		} {
 			_, err := runOneStmt(newMySQLSpecialOrderMock(t), t, sql)
-			require.NoError(t, err)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicatedValueInType), "%s: %v", sql, err)
 		}
 	})
 

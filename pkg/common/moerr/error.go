@@ -267,6 +267,9 @@ const (
 	// SET NULL action over a NOT NULL child column (MySQL error 1830,
 	// ER_FK_COLUMN_NOT_NULL). The action could never write NULL at runtime.
 	ErrFkColumnNotNull uint16 = 20484
+	// ErrDuplicatedValueInType rejects an ENUM/SET definition that lists the
+	// same member twice under the column collation (MySQL error 1291).
+	ErrDuplicatedValueInType uint16 = 20485
 
 	// Group 5: rpc errors
 	//
@@ -634,6 +637,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrWrongColumnName:                          {ER_WRONG_COLUMN_NAME, []string{"42000"}, "Incorrect column name '%-.100s'"},
 	ErrWrongNameForIndex:                        {ER_WRONG_NAME_FOR_INDEX, []string{"42000"}, "Incorrect index name '%-.100s'"},
 	ErrInvalidDefault:                           {ER_INVALID_DEFAULT, []string{"42000"}, "Invalid default value for '%-.192s'"},
+	ErrDuplicatedValueInType:                    {ER_DUPLICATED_VALUE_IN_TYPE, []string{MySQLDefaultSqlState}, "Column '%-.100s' has duplicated value '%-.64s' in %s"},
 	ErrDropIndexNeededInForeignKey:              {ER_DROP_INDEX_FK, []string{MySQLDefaultSqlState}, "Cannot drop index '%-.192s': needed in a foreign key constraint"},
 	ErrFKIncompatibleColumns:                    {ER_FK_INCOMPATIBLE_COLUMNS, []string{MySQLDefaultSqlState}, "Referencing column '%s' and referenced column '%s' in foreign key constraint '%s' are incompatible."},
 	ErrForeignKeyColumnCannotChangeChild:        {ER_FK_COLUMN_CANNOT_CHANGE_CHILD, []string{MySQLDefaultSqlState}, "Cannot change column '%-.192s': used in a foreign key constraint '%-.192s' of table '%-.192s'"},
@@ -1881,6 +1885,10 @@ func NewErrWrongNameForIndex(ctx context.Context, k any) *Error {
 
 func NewErrInvalidDefault(ctx context.Context, k any) *Error {
 	return newError(ctx, ErrInvalidDefault, k)
+}
+
+func NewErrDuplicatedValueInType(ctx context.Context, column, value, typ string) *Error {
+	return newError(ctx, ErrDuplicatedValueInType, column, value, typ)
 }
 
 func NewErrCastWidthExceeded(ctx context.Context, msg string) *Error {
