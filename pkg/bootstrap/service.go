@@ -148,23 +148,21 @@ type service struct {
 	}
 
 	upgrade struct {
-		upgradeTenantBatch                               int
-		catalogObjectLimit                               uint64
-		decisionFileService                              fileservice.FileService
-		checkUpgradeDuration                             time.Duration
-		checkUpgradeTenantDuration                       time.Duration
-		upgradeTenantTasks                               int
-		finalVersionCompleted                            atomic.Bool
-		failure                                          atomic.Pointer[upgradeFailure]
-		orphanPrivilegeMaintenanceWorkerRunning          atomic.Bool
-		orphanPrivilegeMaintenanceRunning                atomic.Bool
-		orphanPrivilegeMaintenanceState                  orphanPrivilegeMaintenanceState
-		orphanPrivilegeMaintenanceStart                  func() string
-		informationSchemaViewsMaintenanceRunning         atomic.Bool
-		informationSchemaViewsMaintenanceState           informationSchemaViewsMaintenanceState
-		informationSchemaColumnsTablesMaintenanceRunning atomic.Bool
-		informationSchemaColumnsTablesMaintenanceState   informationSchemaColumnsTablesMaintenanceState
-		kek                                              string
+		upgradeTenantBatch                       int
+		catalogObjectLimit                       uint64
+		decisionFileService                      fileservice.FileService
+		checkUpgradeDuration                     time.Duration
+		checkUpgradeTenantDuration               time.Duration
+		upgradeTenantTasks                       int
+		finalVersionCompleted                    atomic.Bool
+		failure                                  atomic.Pointer[upgradeFailure]
+		orphanPrivilegeMaintenanceWorkerRunning  atomic.Bool
+		orphanPrivilegeMaintenanceRunning        atomic.Bool
+		orphanPrivilegeMaintenanceState          orphanPrivilegeMaintenanceState
+		orphanPrivilegeMaintenanceStart          func() string
+		informationSchemaViewsMaintenanceRunning atomic.Bool
+		informationSchemaViewsMaintenanceState   informationSchemaViewsMaintenanceState
+		kek                                      string
 	}
 }
 
