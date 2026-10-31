@@ -524,10 +524,14 @@ func (b *baseBinder) baseBindVar(astExpr *tree.VarExpr, depth int32, isRoot bool
 	typ := types.T_text.ToType()
 	var boundStringDomain uint32
 	var nonStringNull bool
+	// Integer system variables resolve their registry-declared type here; a
+	// system variable keeps the historical TEXT envelope whenever the context
+	// resolves nothing for it, unchanged from before a declared resolution
+	// existed.
+	if resolved, ok := b.resolveUserVariableType(astExpr); ok {
+		typ = makeTypeByPlan2Type(resolved)
+	}
 	if !astExpr.System {
-		if resolved, ok := b.resolveUserVariableType(astExpr); ok {
-			typ = makeTypeByPlan2Type(resolved)
-		}
 		if typ.Oid == types.T_any {
 			if preparedBindingState(b.GetContext()) == nil {
 				stringResult := false
