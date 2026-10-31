@@ -135,7 +135,7 @@ func TestRegularIndexComparisonKeepsSafePrefixAndResidual(t *testing.T) {
 	match, ok := builder.matchRegularIndexOnlyScan(idx, node, cost)
 	require.True(t, ok)
 	require.Equal(t, []int32{0}, match.filterIdx, "unsafe later component cannot enter the encoded prefix")
-	require.Equal(t, []int32{0}, cost.matchPointBackfill(idx, true))
+	require.Equal(t, []int32{0}, cost.matchPointBackfill(idx))
 	id := builder.applyRegularIndexOnlyScan(idx, node, map[[2]int32]*planpb.Expr{}, &Snapshot{}, match)
 	require.NotEqual(t, int32(-1), id)
 	scan := builder.qry.Nodes[id]
@@ -151,7 +151,7 @@ func TestRegularIndexComparisonKeepsSafePrefixAndResidual(t *testing.T) {
 	unsafe.Parts = []string{"d", "id"}
 	_, ok = builder.matchRegularIndexOnlyScan(&unsafe, node, cost)
 	require.False(t, ok)
-	require.Empty(t, cost.matchPointBackfill(&unsafe, true))
+	require.Empty(t, cost.matchPointBackfill(&unsafe))
 }
 
 func TestDirectIndexComparisonPreservesScalarOverload(t *testing.T) {

@@ -127,6 +127,18 @@ func logicalPrefixOnTable(fn *plan.Function, table *plan.TableDef) bool {
 	return usable && col.Typ.Id == fn.Args[0].Typ.Id && col.Typ.Charset == fn.Args[0].Typ.Charset
 }
 
+// A typed text successor can cross a gap in raw byte order (for example
+// U+007F to U+0080). Only an identical byte successor proves that the range
+// alone is the exact content-prefix predicate, even for malformed stored bytes.
+func stringPrefixRangeIsExact(fn *plan.Function) bool {
+	prefix, upper, ok := logicalStringPrefix(fn)
+	if !ok {
+		return false
+	}
+	byteUpper, finite := stringPrefixSuccessor(prefix, true)
+	return finite && upper == byteUpper
+}
+
 func stringPrefixRange(ctx context.Context, fn *plan.Function) (*plan.Expr, bool) {
 	prefix, upper, ok := logicalStringPrefix(fn)
 	if !ok {
@@ -162,17 +174,8 @@ func stringPrefixSelectivity(fn *plan.Function, stats *statspb.StatsInfo, node *
 	return analyzestats.ByteRangeUpper(d, []byte(lower), []byte(upper))
 }
 
-func (ctx *encodedRegularIndexCostContext) skipPrefixIndexByStats(pos int32) bool {
-	if ctx.force {
-		return false
-	}
-	fact := ctx.filterFacts[pos]
-	if !ctx.valid || !fact.prefixKnown {
-		return true
-	}
-	limit := float64(GetInFilterCardLimitOnPK(ctx.builder.compCtx.GetProcess().GetService(), ctx.node.Stats.TableCnt))
-	if catalog.IsFakePkName(ctx.node.TableDef.Pkey.PkeyColName) {
-		limit = min(limit, float64(InFilterCardLimitNonPK))
-	}
-	return fact.prefixUpper > InFilterSelectivityLimit || ctx.node.Stats.TableCnt*fact.prefixUpper > limit
+// Statistics availability belongs to matching; shape costs and PK budgets
+// belong to the common scorer. Covering scans never build a PK filter.
+func (ctx *encodedRegularIndexCostContext) prefixStatsUsable(pos int32) bool {
+	return ctx.force || ctx.valid && ctx.filterFacts[pos].prefixKnown
 }

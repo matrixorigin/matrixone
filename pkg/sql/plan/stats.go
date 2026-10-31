@@ -1363,9 +1363,9 @@ func estimateFilterBlockSelectivity(ctx context.Context, expr *plan.Expr, tableD
 		return 1
 	}
 	col := extractColRefInFilter(expr)
-	if col != nil {
+	if col != nil && col.ColPos >= 0 && int(col.ColPos) < len(tableDef.Cols) {
 		sortOrder := GetSortOrder(tableDef, col.ColPos)
-		blocksel := calcBlockSelectivityUsingShuffleRange(s, col.Name, expr)
+		blocksel := calcBlockSelectivityUsingShuffleRange(s, tableDef.Cols[col.ColPos].Name, expr)
 		switch sortOrder {
 		case 0:
 			blocksel = math.Min(blocksel, 0.2)

@@ -47,7 +47,7 @@ func TestLikePrefixIndex(t *testing.T) {
 		exec("create database like_prefix_index")
 		exec("use like_prefix_index")
 		exec("create table t(id int primary key, name varchar(40), payload varchar(80), key ix(name),key ix_multi(name,payload))")
-		for i, value := range []any{"abc", "abcd", "abc_def", "abc%def", "abd", "ab", "", "中文", "中文尾", "ab\x00c", nil} {
+		for i, value := range []any{"abc", "abcd", "abc_def", "abc%def", "abd", "ab", "", "中文", "中文尾", "ab\x00c", nil, "\x7f", "\x7fa", "\x80", "\xc2\x80"} {
 			_, err := conn.ExecContext(ctx, "insert into t values(?,?,?)", i, value, "payload")
 			require.NoError(t, err)
 		}
@@ -65,6 +65,18 @@ func TestLikePrefixIndex(t *testing.T) {
 			require.NoError(t, rows.Err())
 			return out.String()
 		}
+		exec("create table t_unique(id int primary key,name varchar(40),payload varchar(80),unique key ux(name))")
+		exec("insert into t_unique select * from t")
+		exec("analyze table t_unique(name) fullscan")
+		exec("create table residual_rows(id int primary key,name varchar(40),amount int,other int,payload varchar(40),key ix(name,amount))")
+		exec("insert into residual_rows values(1,'rare',7,7,'p'),(2,'z2',1,2,'p'),(3,'z3',3,3,'p'),(4,'z4',4,5,'p'),(5,'z5',6,6,'p')")
+		exec("analyze table residual_rows(name,amount) fullscan")
+		exec("create table error_rows(name varchar(40),amount varchar(40),payload varchar(40),key ix(name,amount))")
+		for _, name := range []string{"abc\x00x", "\x80"} {
+			_, err := conn.ExecContext(ctx, "insert into error_rows values(?,'a','p')", name)
+			require.NoError(t, err)
+		}
+
 		equalityQuery := "select name from t where name like 'abc%' and name='abc'"
 		require.NotContains(t, explain(equalityQuery), "Join Type: INDEX", "a new prefix must not displace the existing covering equality")
 		require.Contains(t, explain(equalityQuery), "Index Table Scan")
@@ -74,7 +86,7 @@ func TestLikePrefixIndex(t *testing.T) {
 		require.NotContains(t, explain(equalityQuery), "Join Type: INDEX")
 		require.Contains(t, explain(equalityQuery), "Index Table Scan")
 		require.Contains(t, explain(query), "Index Table Scan")
-		require.NotContains(t, explain("select count(*) from t where name like 'abc%'"), "Index Table Scan", "a measured broad prefix must keep the scan")
+		require.NotContains(t, explain("select count(*) from t where name like 'a%'"), "Index Table Scan", "a measured broad prefix must keep the scan")
 		// Original issue scale and inclusive 30% threshold, collected through SQL.
 		exec("create table issue_rows(id int primary key,name varchar(20),key ix(name))")
 		exec("insert into issue_rows select result,case result%10 when 0 then 'apple' when 1 then 'apply' when 2 then 'apricot' when 3 then 'banana' when 4 then 'band' when 5 then 'bank' when 6 then 'zebra' when 7 then 'zoo' when 8 then 'orange' else 'pear' end from generate_series(0,499) g")
@@ -96,24 +108,44 @@ func TestLikePrefixIndex(t *testing.T) {
 		}{
 			{"'abc%'", []int64{0, 1, 2, 3}}, {"'abc%def'", []int64{2, 3}}, {"'abc_def'", []int64{2, 3}},
 			{`'abc\\_%'`, []int64{2}}, {`'abc\\%%'`, []int64{3}}, {"'中文%'", []int64{7, 8}},
-			{"'%def'", []int64{2, 3}}, {"'ab\\0%'", []int64{9}}, {"'abc'", []int64{0}}, {"NULL", []int64{}},
+			{"'%def'", []int64{2, 3}}, {"'ab\\0%'", []int64{9}}, {"'abc'", []int64{0}}, {"'\x7f%'", []int64{11, 12}}, {"NULL", []int64{}},
 		}
 		for _, phase := range []string{"memory", "persisted"} {
 			t.Run(phase, func(t *testing.T) {
 				if phase == "persisted" {
-					var indexTable string
-					require.NoError(t, conn.QueryRowContext(ctx, "select index_table_name from mo_catalog.mo_indexes where name='ix' and table_id=(select rel_id from mo_catalog.mo_tables where reldatabase='like_prefix_index' and relname='t') limit 1").Scan(&indexTable))
-					exec("select mo_ctl('dn','flush','like_prefix_index.t')")
-					exec("select mo_ctl('dn','flush','like_prefix_index." + indexTable + "')")
-					var multiIndex string
-					require.NoError(t, conn.QueryRowContext(ctx, "select index_table_name from mo_catalog.mo_indexes where name='ix_multi' and table_id=(select rel_id from mo_catalog.mo_tables where reldatabase='like_prefix_index' and relname='t') limit 1").Scan(&multiIndex))
-					exec("select mo_ctl('dn','flush','like_prefix_index." + multiIndex + "')")
+					for _, table := range []string{"t", "t_unique", "residual_rows", "error_rows"} {
+						exec("select mo_ctl('dn','flush','like_prefix_index." + table + "')")
+						indexes := func() []string {
+							rows, err := conn.QueryContext(ctx, "select distinct index_table_name from mo_catalog.mo_indexes where table_id=(select rel_id from mo_catalog.mo_tables where reldatabase='like_prefix_index' and relname=?) and index_table_name is not null", table)
+							require.NoError(t, err)
+							defer rows.Close()
+							var indexes []string
+							for rows.Next() {
+								var index string
+								require.NoError(t, rows.Scan(&index))
+								if index != "" {
+									indexes = append(indexes, index)
+								}
+							}
+							require.NoError(t, rows.Err())
+							return indexes
+						}()
+						for _, index := range indexes {
+							exec("select mo_ctl('dn','flush','like_prefix_index." + index + "')")
+						}
+					}
 					exec("analyze table t(name) fullscan")
 					require.Contains(t, explain(query), "Index Table Scan")
 				}
 				nulQuery := "select id from t where name like 'ab\\0%' order by id"
 				require.Contains(t, explain(nulQuery), "Index Table Scan")
 				require.Contains(t, explain(nulQuery), "prefix_in_range")
+				gapQuery := "select id from t force index(ix) where name like '\x7f%' order by id"
+				gapPlan := explain(gapQuery)
+				require.Contains(t, gapPlan, "Index Table Scan")
+				require.Contains(t, gapPlan, "prefix_eq", "Unicode-successor gaps require an exact prefix residual")
+				require.Equal(t, []int64{11, 12}, ids(gapQuery))
+
 				require.Equal(t, []int64{9}, ids(nulQuery))
 				require.Equal(t, []int64{9}, ids("select id from t force index(ix_multi) where name like 'ab\\0%' order by id"))
 				for _, pattern := range patterns {
@@ -127,6 +159,51 @@ func TestLikePrefixIndex(t *testing.T) {
 						}
 					})
 				}
+				for _, tc := range []struct {
+					pattern string
+					want    []int64
+					gap     bool
+				}{{"'abc%'", []int64{0, 1, 2, 3}, false}, {"'ab\\0%'", []int64{9}, false}, {"'\x7f%'", []int64{11, 12}, true}, {"'中文%'", []int64{7, 8}, false}} {
+					q := "select count(*) from t_unique force index(ux) where name like " + tc.pattern
+					plan := explain(q)
+					require.Contains(t, plan, "Index Table Scan")
+					require.Contains(t, plan, "in_range")
+					if tc.gap {
+						require.Contains(t, plan, "prefix_eq")
+					} else {
+						require.NotContains(t, plan, "prefix_eq")
+					}
+					var actual, control int64
+					require.NoError(t, conn.QueryRowContext(ctx, q).Scan(&actual))
+					require.NoError(t, conn.QueryRowContext(ctx, "select count(*) from t_unique ignore index(ux) where concat(name,'') like "+tc.pattern).Scan(&control))
+					require.Equal(t, int64(len(tc.want)), actual)
+					require.Equal(t, actual, control)
+				}
+
+				for _, bound := range []string{"name='rare'", "name between 'rar' and 'ras'"} {
+					q := "select id+length(payload)-1 from residual_rows where " + bound + " and amount=other order by id"
+					require.Contains(t, explain(q), "Join Type: INDEX", "automatic sparse noncovering access remains executable")
+					require.Equal(t, []int64{1}, ids(q))
+					require.Equal(t, []int64{1}, ids("select id+length(payload)-1 from residual_rows ignore index(ix) where "+bound+" and amount=other order by id"))
+				}
+
+				for _, predicate := range []string{
+					"name='abc' and amount like 'a%' escape 'xx'",
+					"name like '\x7f%' and amount=regexp_replace('x','[','y')",
+				} {
+					for _, projection := range []string{"count(payload)", "count(amount)"} {
+						for _, hint := range []string{" force index(ix)", " ignore index(ix)"} {
+							q := "select " + projection + " from error_rows" + hint + " where " + predicate
+							if strings.Contains(hint, "force") {
+								require.Contains(t, explain(q), "Index Table Scan")
+							}
+							var count int64
+							require.NoError(t, conn.QueryRowContext(ctx, q).Scan(&count), q)
+							require.Zero(t, count)
+						}
+					}
+				}
+
 				require.Equal(t, []int64{3}, ids("select id from t where name like 'abc%' order by name,id limit 1 offset 1"))
 			})
 		}
