@@ -69,8 +69,8 @@ func TestLikePrefixIndexAccess(t *testing.T) {
 	}{
 		{"abc", true},
 		{"abc%", true},
-		{"abc%def", true},
-		{"abc_def", true},
+		{"abc%def", false},
+		{"abc_def", false},
 		{"%abc", false},
 	} {
 		t.Run(tc.pattern, func(t *testing.T) {
@@ -578,7 +578,7 @@ func TestLikePrefixKeepsSelectiveINBackfill(t *testing.T) {
 	} {
 		query, err := runOneStmt(optimizer, t, sql)
 		require.NoError(t, err)
-		require.False(t, planHasIndexJoin(resolveQueryPlan(query)), "unproved evaluations retain historical prefix selection")
+		require.True(t, planHasIndexJoin(resolveQueryPlan(query)), "unproved prefix access preserves the ordinary IN candidate")
 	}
 
 	stats.ByteRangeMap = nil
@@ -647,13 +647,12 @@ func TestLikePrefixBackfillAlternativesUseBothCosts(t *testing.T) {
 				require.NotEmpty(t, unsafeCtx.matchRangeBackfills(index)[1], scenario+": both candidates reach the safety gate")
 				require.False(t, regularIndexFiltersHaveStableEvaluation(node), scenario)
 				selected := builder.applyIndicesForFiltersRegularIndex(scanID, node, refs, map[[2]int32]*planpb.Expr{})
-				if prefixFirst {
-					require.NotEqual(t, scanID, selected, scenario+": retain historical prefix access")
-					indexScan := builder.qry.Nodes[builder.qry.Nodes[selected].Children[1]]
-					require.Equal(t, "prefix_in_range", indexScan.FilterList[0].GetF().Func.ObjName, scenario)
-				} else {
-					require.Equal(t, scanID, selected, scenario+": rejected historical IN cannot expose the alternate prefix")
-				}
+				require.Equal(t, scanID, selected, scenario+": unsafe prefix must not displace the rejected ordinary baseline")
+				distributions := stats.ByteRangeMap
+				stats.ByteRangeMap = nil
+				withoutStats := builder.applyIndicesForFiltersRegularIndex(scanID, node, refs, map[[2]int32]*planpb.Expr{})
+				stats.ByteRangeMap = distributions
+				require.Equal(t, scanID, withoutStats, scenario+": absent samples retain the same ordinary baseline")
 			}
 			checkHistorical("throwing residual")
 			node.FilterList = slices.Clone(originalFilters)

@@ -164,3 +164,13 @@ Literal LIKE-to-equality rewrites refresh their former LIKE frequency before
 filter sorting only in linear, single-scan statements with proved stable filter
 evaluation. Multi-step or branched plans retain the historical estimate because
 repricing another branch can change observable error evaluation order.
+
+### Prefix access and error evaluation
+
+New logical-prefix access requires a whole-filter stable-evaluation proof,
+computed lazily once per scan. This applies to covering and backfill access,
+including FORCE; existing ordinary candidates remain eligible when proof fails.
+Potentially throwing IN bounds and residuals therefore retain their baseline
+hint-specific execution domains. Missing samples do not change this rule.
+The conservative proof currently excludes retained mixed LIKE predicates, so
+mixed patterns can fall back to the established scan/ordinary-index paths.

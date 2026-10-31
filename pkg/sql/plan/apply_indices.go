@@ -2457,8 +2457,24 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, no
 	best := regularIndexAccessCandidate{indexPos: -1, work: math.Inf(1)}
 	fallback := regularIndexAccessCandidate{indexPos: -1}
 	sawScorable := false
-	rangeAlternativesChecked, rangeAlternativesSafe := false, false
+	prefixEvaluationChecked, prefixEvaluationSafe := false, false
 	consider := func(candidate regularIndexAccessCandidate) {
+		for _, pos := range candidate.filterIdx {
+			if !costCtx.filterFacts[pos].logicalPrefix {
+				continue
+			}
+			// New prefix access must preserve the evaluation domain of existing
+			// predicates, including throwing bounds and residuals. Prove this
+			// once per scan, only when a prefix candidate is actually considered.
+			if !prefixEvaluationChecked {
+				prefixEvaluationSafe = regularIndexFiltersHaveStableEvaluation(node)
+				prefixEvaluationChecked = true
+			}
+			if !prefixEvaluationSafe {
+				return
+			}
+			break
+		}
 		idxDef := indexes[candidate.indexPos]
 		work, skip, valid := costCtx.score(idxDef, candidate.filterIdx, candidate.residualLeadingPos, candidate.shape)
 		if candidate.shape == encodedRegularIndexCostBackfill && !valid && !IsDefaultStats(node.Stats) && costCtx.backfillCapacityExceeded(node.Stats.Outcnt) {
@@ -2540,19 +2556,9 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, no
 			continue
 		}
 		matches := costCtx.matchRangeBackfills(idxDef)
-		if len(matches[1]) > 0 {
-			// Decoding a literal IN vector is proportional to query size. Prove
-			// evaluation safety only when needed, once for this scan's indexes.
-			if !rangeAlternativesChecked {
-				rangeAlternativesSafe = regularIndexFiltersHaveStableEvaluation(node)
-				rangeAlternativesChecked = true
-			}
-			if !rangeAlternativesSafe {
-				matches[1] = nil
-			} else if costCtx.filterFacts[matches[0][0]].logicalPrefix {
-				// Give ordinary access the tie, while either class can win on cost.
-				matches[0], matches[1] = matches[1], matches[0]
-			}
+		if len(matches[1]) > 0 && costCtx.filterFacts[matches[0][0]].logicalPrefix {
+			// Give ordinary access the tie, while either class can win on cost.
+			matches[0], matches[1] = matches[1], matches[0]
 		}
 		for _, filterIdx := range matches {
 			if len(filterIdx) == 0 {
