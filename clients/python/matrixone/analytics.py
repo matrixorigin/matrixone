@@ -43,6 +43,28 @@ class AnalyticsCommitUnknownError(MatrixOneError):
         super().__init__(message, committed=None, rows=rows, phase='commit')
 
 
+class AnalyticsCommitRejectedError(MatrixOneError):
+    """The server acknowledged a duplicate-key COMMIT rejection; no rows committed."""
+
+    def __init__(self, message, rows=None):
+        super().__init__(message, committed=False, rows=rows, phase='commit')
+
+
+def _commit_was_rejected(error):
+    # Only this structured server rejection has a proven rollback contract.
+    # A transport error, invalidated connection or arbitrary errno is unknown.
+    from sqlalchemy.exc import IntegrityError
+    from pymysql.err import IntegrityError as DriverIntegrityError
+
+    return (
+        isinstance(error, IntegrityError)
+        and error.connection_invalidated is False
+        and isinstance(error.orig, DriverIntegrityError)
+        and bool(error.orig.args)
+        and error.orig.args[0] == 1062
+    )
+
+
 @contextmanager
 def _write_transaction_impl(engine, rows=None):
     """Own a real autocommit-off transaction through its terminal outcome."""
@@ -85,11 +107,14 @@ def _write_transaction_impl(engine, rows=None):
             execution_phase = 'execute'
             yield conn
             commit_started = True
+            committed = None
             try:
                 with phase('commit'):
                     tx.commit()
             except Exception as error:
-                committed = None
+                if _commit_was_rejected(error):
+                    committed = False
+                    raise AnalyticsCommitRejectedError('Server rejected COMMIT: duplicate key', rows=rows) from error
                 raise AnalyticsCommitUnknownError(
                     'COMMIT did not return acknowledgement; reconcile before retrying', rows=rows
                 ) from error
@@ -100,7 +125,7 @@ def _write_transaction_impl(engine, rows=None):
                 primary,
                 phase='commit' if commit_started else execution_phase,
                 rows=rows,
-                committed=None if commit_started else False,
+                committed=committed,
             )
             if not commit_started and tx is not None and tx.is_active:
                 try:
@@ -1157,7 +1182,7 @@ class AnalyticsManager:
                         (server_path,),
                     )
                 committed = True
-            except (AnalyticsCleanupError, AnalyticsCommitUnknownError) as error:
+            except (AnalyticsCleanupError, AnalyticsCommitUnknownError, AnalyticsCommitRejectedError) as error:
                 committed = error.committed
                 raise
             return rows
