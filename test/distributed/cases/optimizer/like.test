@@ -24,6 +24,8 @@ select count(*) from t1 where c2 like '%12';
 explain select * from t1 where c2 like '1_2%3';
 select count(*) from t1 where c2 like '1_2%3';
 -- @separator:table
+-- A literal equality uses its own frequency and the covering index.
+-- @regex("Index Table Scan",true)
 explain select * from t1 where c2 like '123';
 select * from t1 where c2 like '123';
 drop database if exists d1;

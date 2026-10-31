@@ -245,19 +245,12 @@ select * from t1 where c2=1;
 ➤ c1[4,32,0]  ¦  c2[4,32,0]  ¦  c3[4,32,0]  𝄀
 1  ¦  1  ¦  1
 explain select * from t1 where c3<2000;
--- @regex("Index", true)
-➤ TP QUERY PLAN[12,0,0]  𝄀
+-- @regex("Table Scan on d1.t1", true)
+-- @regex("Join Type: INDEX", false)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
 Project  𝄀
-  ->  Join  𝄀
-        Join Type: INDEX  𝄀
-        Join Cond: (t1.__mo_fake_pk_col = __mo_index_pri_col)  𝄀
-        Runtime Filter Build: #[-1,0]  𝄀
-        ->  Table Scan on d1.t1 [ForceOneCN]  𝄀
-              Filter Cond: (t1.c3 < 2000)  𝄀
-              Runtime Filter Probe: t1.__mo_fake_pk_col  𝄀
-        ->  Index Table Scan on t1.id1 [ForceOneCN]  𝄀
-              Filter Cond: (__mo_index_idx_col < 2000)  𝄀
-              Block Filter Cond: (__mo_index_idx_col < 2000)
+  ->  Table Scan on d1.t1  𝄀
+        Filter Cond: (t1.c3 < 2000)
 select count(*) from t1 where c3<2000;
 ➤ count(*)[-5,64,0]  𝄀
 1999

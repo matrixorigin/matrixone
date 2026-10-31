@@ -2544,7 +2544,7 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, no
 			// Decoding a literal IN vector is proportional to query size. Prove
 			// evaluation safety only when needed, once for this scan's indexes.
 			if !rangeAlternativesChecked {
-				rangeAlternativesSafe = costCtx.rangeAlternativesSafe()
+				rangeAlternativesSafe = regularIndexFiltersHaveStableEvaluation(node)
 				rangeAlternativesChecked = true
 			}
 			if !rangeAlternativesSafe {
@@ -3791,12 +3791,18 @@ func (ctx *encodedRegularIndexCostContext) matchRangeBackfills(idxDef *IndexDef)
 }
 
 // A different driving predicate can expose or suppress evaluation on rows.
-// Reuse the existing totality contract; fixed byte prefixes have their own proof.
-func (ctx *encodedRegularIndexCostContext) rangeAlternativesSafe() bool {
-	for i, filter := range ctx.node.FilterList {
-		if !regularIndexFixedInputs(filter) || !ctx.filterFacts[i].logicalPrefix && !ctx.literalStringINIsTotal(filter) && !isTruncationSafePredicateExpr(filter) {
+// knownTotal contains exact expressions already proved by the rewriting owner;
+// fixed-input/provenance validation still applies to those expressions.
+func regularIndexFiltersHaveStableEvaluation(node *plan.Node, knownTotal ...*plan.Expr) bool {
+	for _, filter := range node.FilterList {
+		if !regularIndexFixedInputs(filter) {
 			return false
 		}
+		if slices.Contains(knownTotal, filter) || logicalPrefixOnTable(filter.GetF(), node.TableDef) ||
+			literalStringINIsTotal(filter, node) || isTruncationSafePredicateExpr(filter) {
+			continue
+		}
+		return false
 	}
 	return true
 }
@@ -3804,7 +3810,7 @@ func (ctx *encodedRegularIndexCostContext) rangeAlternativesSafe() bool {
 // Native non-UCA VARCHAR IN uses a byte-key hash lookup, independently of
 // SQL equality's identity-domain proof. Admit only its checked literal-vector
 // shape here; physical index key compatibility remains the matcher's concern.
-func (ctx *encodedRegularIndexCostContext) literalStringINIsTotal(expr *plan.Expr) bool {
+func literalStringINIsTotal(expr *plan.Expr, node *plan.Node) bool {
 	fn := expr.GetF()
 	if types.T(expr.Typ.Id) != types.T_bool || fn == nil || fn.Func == nil || fn.Func.ObjName != "in" || len(fn.Args) != 2 {
 		return false
@@ -3821,7 +3827,7 @@ func (ctx *encodedRegularIndexCostContext) literalStringINIsTotal(expr *plan.Exp
 		}
 	}
 	left, right := fn.Args[0], fn.Args[1]
-	if left == nil || right == nil || left.GetCol() == nil || left.GetCol().RelPos != ctx.node.BindingTags[0] ||
+	if left == nil || right == nil || left.GetCol() == nil || len(node.BindingTags) == 0 || left.GetCol().RelPos != node.BindingTags[0] ||
 		types.T(left.Typ.Id) != types.T_varchar || left.Typ.Charset > math.MaxUint8 || left.Typ.CollationVersion > math.MaxUint8 {
 		return false
 	}
