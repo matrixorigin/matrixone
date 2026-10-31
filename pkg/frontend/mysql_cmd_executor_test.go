@@ -9913,7 +9913,7 @@ func Test_getSqlType(t *testing.T) {
 			{name: "internal input", tenant: &TenantInfo{User: "dump"}, internal: true},
 			{name: "absent tenant"},
 			{name: "internal account", tenant: &TenantInfo{Tenant: "sys", User: "internal"}},
-			{name: "special user", tenant: &TenantInfo{User: specialUser}},
+			{name: "special user", tenant: &TenantInfo{Tenant: "sys", TenantID: sysAccountID, UserID: ^uint32(0), User: specialUser}},
 			{name: "field list", tenant: &TenantInfo{User: "dump"}, sql: cmdFieldListSql},
 		} {
 			t.Run(tc.name, func(t *testing.T) {
@@ -9977,7 +9977,7 @@ func Test_getSqlType(t *testing.T) {
 
 		user := "special_user"
 		tenant := &TenantInfo{
-			User: user,
+			Tenant: "sys", TenantID: sysAccountID, UserID: ^uint32(0), User: user,
 		}
 		ses.SetTenantInfo(tenant)
 		SetSpecialUser(user, nil)

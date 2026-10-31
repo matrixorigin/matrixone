@@ -52,17 +52,28 @@ func (c *clientConn) migrateConnFromContext(
 		return nil, moerr.NewInternalError(parent, "cannot get query service address")
 	}
 	resp, err := c.queryClient.SendMessage(ctx, addr, req)
+	if resp != nil {
+		defer c.queryClient.Release(resp)
+	}
 	if err != nil {
 		if c.tun != nil && moerr.IsMoErrCode(err, moerr.OkExpectedNotSafeToStartTransfer) {
 			c.tun.rejectPendingLongDataReconciliation()
 		}
 		return nil, moerr.AttachCause(ctx, err)
 	}
-	defer c.queryClient.Release(resp)
+	if resp == nil {
+		return nil, moerr.NewInternalError(parent, "bad response")
+	}
 	r := resp.MigrateConnFromResponse
 	if r == nil {
 		return nil, moerr.NewInternalError(parent, "bad response")
 	}
+	if r.Principal == nil {
+		return nil, moerr.GetOkExpectedNotSafeToStartTransfer()
+	}
+	// Retain our own scalar identity proof after releasing the RPC envelope.
+	principal := *r.Principal
+	r.Principal = &principal
 	if !r.PreparedStmtCursorsChecked {
 		// An older CN cannot attest that its prepared statements are free of
 		// active cursors. Their retained results are absent from the snapshot.
@@ -115,6 +126,10 @@ func (c *clientConn) migrateConnToContext(
 	ctx, cancel := context.WithTimeoutCause(parent, defaultTransferTimeout, moerr.CauseMigrateConnTo)
 	defer cancel()
 
+	if info == nil || info.Principal == nil {
+		return moerr.GetOkExpectedNotSafeToStartTransfer()
+	}
+	principal := *info.Principal
 	typedMigration := info.UserDefinedVarsExported || info.SystemVariablesExported ||
 		info.SystemVariablesSnapshotTooLarge || info.UserDefinedVarsSnapshotTooLarge
 	typedMigrationSupported := false
@@ -179,6 +194,22 @@ func (c *clientConn) migrateConnToContext(
 		}
 	}
 
+	// Authenticate identity before any initialization or raw SET replay. The
+	// final import repeats this check; successful login alone proves no identity.
+	if addr == "" {
+		addr = getQueryAddress(c.moCluster, sc.RawConn().RemoteAddr().String())
+	}
+	if addr == "" {
+		return moerr.NewInternalError(ctx, "cannot get query service address")
+	}
+	if err := c.sendMigrationWithPrincipal(ctx, addr, &query.MigrateConnToRequest{
+		ConnID:              c.connID,
+		Principal:           &principal,
+		VerifyPrincipalOnly: true,
+	}); err != nil {
+		return err
+	}
+
 	// Before migrate session info with RPC, we need to execute some
 	// SQLs to initialize the session and account in handler.
 	// Currently, the session variable transferred is not used anywhere else,
@@ -212,22 +243,16 @@ func (c *clientConn) migrateConnToContext(
 		return moerr.AttachCause(ctx, err)
 	}
 
-	// Then, migrate other info with RPC.
-	if addr == "" {
-		addr = getQueryAddress(c.moCluster, sc.RawConn().RemoteAddr().String())
-	}
-	if addr == "" {
-		return moerr.NewInternalError(ctx, "cannot get query service address")
-	}
+	// Then, migrate other info with RPC to the verified target.
 	c.log.Info("connection migrate to server", zap.String("server address", addr),
 		zap.String("tenant", string(c.clientInfo.Tenant)),
 		zap.String("username", c.clientInfo.username),
 		zap.Uint32("conn ID", c.connID),
 		zap.Int64("goId", goid.Get()),
 	)
-	req := c.queryClient.NewRequest(query.CmdMethod_MigrateConnTo)
-	req.MigrateConnToRequest = &query.MigrateConnToRequest{
+	migration := &query.MigrateConnToRequest{
 		ConnID:                    c.connID,
+		Principal:                 &principal,
 		DB:                        info.DB,
 		PrepareStmts:              info.PrepareStmts,
 		LastAffectedRows:          info.LastAffectedRows,
@@ -243,19 +268,31 @@ func (c *clientConn) migrateConnToContext(
 		TempTables:                info.TempTables,
 	}
 	if typedMigrationSupported {
-		req.MigrateConnToRequest.UserDefinedVars = info.UserDefinedVars
-		req.MigrateConnToRequest.UserDefinedVarsExported = info.UserDefinedVarsExported
-		req.MigrateConnToRequest.SystemVariables = info.SystemVariables
-		req.MigrateConnToRequest.SystemVariablesExported = info.SystemVariablesExported
+		migration.UserDefinedVars = info.UserDefinedVars
+		migration.UserDefinedVarsExported = info.UserDefinedVarsExported
+		migration.SystemVariables = info.SystemVariables
+		migration.SystemVariablesExported = info.SystemVariablesExported
 	}
 	if typedMigrationSupported && info.UserDefinedVarsExported && !info.SystemVariablesExported {
-		req.MigrateConnToRequest.SetVarStmts = append([]string(nil), c.migration.systemSetVarStmts...)
+		migration.SetVarStmts = append([]string(nil), c.migration.systemSetVarStmts...)
 	}
+	return c.sendMigrationWithPrincipal(ctx, addr, migration)
+}
+
+func (c *clientConn) sendMigrationWithPrincipal(ctx context.Context, addr string, migration *query.MigrateConnToRequest) error {
+	req := c.queryClient.NewRequest(query.CmdMethod_MigrateConnTo)
+	req.MigrateConnToRequest = migration
 	resp, err := c.queryClient.SendMessage(ctx, addr, req)
+	if resp != nil {
+		defer c.queryClient.Release(resp)
+	}
 	if err != nil {
 		return moerr.AttachCause(ctx, err)
 	}
-	c.queryClient.Release(resp)
+	if resp == nil || resp.MigrateConnToResponse == nil ||
+		!resp.MigrateConnToResponse.Success || !resp.MigrateConnToResponse.PrincipalVerified {
+		return moerr.GetOkExpectedNotSafeToStartTransfer()
+	}
 	return nil
 }
 

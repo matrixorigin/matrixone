@@ -196,6 +196,8 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 }
 
 %union {
+    renameUserPairs []tree.RenameUserPair
+
     statement tree.Statement
     statements []tree.Statement
 
@@ -476,6 +478,8 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 
 %token LEX_ERROR
 %token <str> JSON_TABLE JSON_TABLE_PATH JSON_TABLE_NESTED JSON_TABLE_ORDINALITY JSON_TABLE_EMPTY JSON_TABLE_ERROR
+%type <renameUserPairs> rename_user_pairs
+
 %type <jsonTableColumn> json_table_column json_table_policies
 %type <jsonTableColumns> json_table_columns
 %type <jsonTableResponse> json_table_response json_table_on_empty json_table_on_error
@@ -4228,6 +4232,15 @@ rename_stmt:
         renameTables := tree.NewRenameTable(alterTables)
         $$ = renameTables
     }
+
+|   RENAME USER rename_user_pairs
+    { $$ = &tree.RenameUser{Pairs: $3} }
+
+rename_user_pairs:
+    drop_user_spec TO drop_user_spec
+    { $$ = []tree.RenameUserPair{{From: $1, To: $3}} }
+|   rename_user_pairs ',' drop_user_spec TO drop_user_spec
+    { $$ = append($1, tree.RenameUserPair{From: $3, To: $5}) }
 
 rename_table_list:
     rename_option

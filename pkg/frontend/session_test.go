@@ -821,7 +821,7 @@ func TestSession_Migrate(t *testing.T) {
 		InitServerLevelVars(sid)
 		SetSessionAlloc(sid, NewSessionAllocator(&config.ParameterUnit{SV: sv}))
 		s := genSession(ctrl, "d1", nil)
-		err := Migrate(context.Background(), s, &query.MigrateConnToRequest{
+		err := Migrate(context.Background(), s, &query.MigrateConnToRequest{Principal: &query.MigrateSessionPrincipal{},
 			DB:                      "d1",
 			LastAffectedRows:        7,
 			LastInsertID:            13,
@@ -900,7 +900,7 @@ func TestSession_Migrate(t *testing.T) {
 		s.SetLastInsertID(9)
 		s.GetProc().SetLastInsertID(9)
 
-		err := Migrate(context.Background(), s, &query.MigrateConnToRequest{DB: "d1"})
+		err := Migrate(context.Background(), s, &query.MigrateConnToRequest{Principal: &query.MigrateSessionPrincipal{}, DB: "d1"})
 		require.True(t, moerr.IsMoErrCode(err, moerr.OkExpectedNotSafeToStartTransfer))
 		require.Equal(t, uint64(9), s.GetLastInsertID())
 		require.Equal(t, uint64(9), s.GetProc().GetLastInsertID())
@@ -952,7 +952,7 @@ func TestSession_Migrate(t *testing.T) {
 		require.False(t, exported.SystemVariablesReplayable)
 
 		target := genSession(ctrl, "d1", nil)
-		require.NoError(t, Migrate(context.Background(), target, &query.MigrateConnToRequest{
+		require.NoError(t, Migrate(context.Background(), target, &query.MigrateConnToRequest{Principal: &query.MigrateSessionPrincipal{},
 			ConnID:                  88,
 			DB:                      exported.DB,
 			LastInsertIDExported:    true,
@@ -991,7 +991,7 @@ func TestSession_Migrate(t *testing.T) {
 		require.Equal(t, int64(7), target.GetLastAffectedRows())
 
 		invalidTarget := genSession(ctrl, "d1", nil)
-		err = Migrate(context.Background(), invalidTarget, &query.MigrateConnToRequest{
+		err = Migrate(context.Background(), invalidTarget, &query.MigrateConnToRequest{Principal: &query.MigrateSessionPrincipal{},
 			DB:                      "d1",
 			LastInsertIDExported:    true,
 			UserDefinedVarsExported: true,
@@ -1028,7 +1028,7 @@ func TestSession_Migrate(t *testing.T) {
 				targetRuntime.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
 			}
 		}()
-		err := Migrate(context.Background(), target, &query.MigrateConnToRequest{
+		err := Migrate(context.Background(), target, &query.MigrateConnToRequest{Principal: &query.MigrateSessionPrincipal{},
 			DB:                      "d1",
 			LastInsertIDExported:    true,
 			UserDefinedVarsExported: true,
@@ -1042,7 +1042,7 @@ func TestSession_Migrate(t *testing.T) {
 		require.ErrorContains(t, getErr, "does not exist")
 
 		targetRuntime.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion22)
-		err = Migrate(context.Background(), target, &query.MigrateConnToRequest{
+		err = Migrate(context.Background(), target, &query.MigrateConnToRequest{Principal: &query.MigrateSessionPrincipal{},
 			DB:                      "d1",
 			LastInsertIDExported:    true,
 			UserDefinedVarsExported: true,
@@ -1077,7 +1077,7 @@ func TestSession_Migrate(t *testing.T) {
 			}
 		}()
 
-		err := Migrate(context.Background(), target, &query.MigrateConnToRequest{
+		err := Migrate(context.Background(), target, &query.MigrateConnToRequest{Principal: &query.MigrateSessionPrincipal{},
 			DB:                   "d1",
 			LastInsertIDExported: true,
 			TempTables: []*query.MigrateTempTable{{
@@ -1127,7 +1127,7 @@ func TestSession_Migrate(t *testing.T) {
 			}
 		}()
 
-		err := Migrate(context.Background(), target, &query.MigrateConnToRequest{
+		err := Migrate(context.Background(), target, &query.MigrateConnToRequest{Principal: &query.MigrateSessionPrincipal{},
 			DB:                        "d1",
 			LastInsertIDExported:      true,
 			SystemVariablesExported:   true,
@@ -1186,7 +1186,7 @@ func TestSession_Migrate(t *testing.T) {
 		// cache on the edge and then leaves the final value at the safe side.
 		// Typed migration carries only final values, so the target must
 		// invalidate when restoring either cache-control variable.
-		err := Migrate(context.Background(), target, &query.MigrateConnToRequest{
+		err := Migrate(context.Background(), target, &query.MigrateConnToRequest{Principal: &query.MigrateSessionPrincipal{},
 			DB:                        "d1",
 			LastInsertIDExported:      true,
 			SystemVariablesExported:   true,
@@ -1246,7 +1246,7 @@ func TestSession_Migrate(t *testing.T) {
 		target.GetTxnHandler().setAutocommitOn()
 		require.True(t, target.GetTxnHandler().OptionBitsIsSet(OPTION_AUTOCOMMIT))
 
-		require.NoError(t, Migrate(context.Background(), target, &query.MigrateConnToRequest{
+		require.NoError(t, Migrate(context.Background(), target, &query.MigrateConnToRequest{Principal: &query.MigrateSessionPrincipal{},
 			LastInsertIDExported:    true,
 			SystemVariablesExported: true,
 			SystemVariables:         exported,
@@ -1280,7 +1280,7 @@ func TestSession_Migrate(t *testing.T) {
 		InitServerLevelVars(sid)
 		SetSessionAlloc(sid, NewSessionAllocator(&config.ParameterUnit{SV: sv}))
 		s := genSession(ctrl, "d1", nil)
-		err := Migrate(context.Background(), s, &query.MigrateConnToRequest{
+		err := Migrate(context.Background(), s, &query.MigrateConnToRequest{Principal: &query.MigrateSessionPrincipal{},
 			ConnID:               88,
 			DB:                   "d1",
 			LastInsertIDExported: true,
@@ -1306,7 +1306,7 @@ func TestSession_Migrate(t *testing.T) {
 		InitServerLevelVars(sid)
 		SetSessionAlloc(sid, NewSessionAllocator(&config.ParameterUnit{SV: sv}))
 		s := genSession(ctrl, "d2", context.Canceled)
-		err := Migrate(context.Background(), s, &query.MigrateConnToRequest{
+		err := Migrate(context.Background(), s, &query.MigrateConnToRequest{Principal: &query.MigrateSessionPrincipal{},
 			DB:                   "d2",
 			LastInsertIDExported: true,
 		})
@@ -1326,7 +1326,7 @@ func TestSession_Migrate(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
 
-		err := Migrate(ctx, s, &query.MigrateConnToRequest{
+		err := Migrate(ctx, s, &query.MigrateConnToRequest{Principal: &query.MigrateSessionPrincipal{},
 			DB:                   "d3",
 			LastAffectedRows:     3,
 			LastInsertIDExported: true,
@@ -1494,19 +1494,19 @@ func Test_OperatorLock(t *testing.T) {
 	ses.SetTenantInfo(tenant)
 
 	// lock
-	err := setUserUnlock(ctx, "user1", bh)
+	err := setUserUnlock(ctx, 8, bh)
 	assert.NoError(t, err)
 
 	// increaseLoginAttempts
-	err = increaseLoginAttempts(ctx, "user1", bh)
+	err = increaseLoginAttempts(ctx, 8, bh)
 	assert.NoError(t, err)
 
 	// updateLockTime
-	err = updateLockTime(ctx, "user1", bh)
+	err = updateLockTime(ctx, 8, bh)
 	assert.NoError(t, err)
 
 	// unlock
-	err = setUserLock(ctx, "user1", bh)
+	err = setUserLock(ctx, 8, bh)
 	assert.NoError(t, err)
 }
 

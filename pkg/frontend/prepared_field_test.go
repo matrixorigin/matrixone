@@ -35,6 +35,7 @@ import (
 func TestPreparedFieldHistoryCacheAndMigration(t *testing.T) {
 	ses, prepared, cw, ec := newPreparedExecuteEnvForSQL(t, 25301,
 		"select field(case when ? then ? else null end, 'Z', 'A', 'a')")
+	ses.SetTenantInfo(&TenantInfo{Tenant: sysAccountName, User: rootName, TenantID: sysAccountID, UserID: rootID})
 	prepared.proc = cw.proc
 	t.Cleanup(func() { cw.proc.SetPrepareParams(nil); ses.Close() })
 	original := prepared.PreparePlan.String()

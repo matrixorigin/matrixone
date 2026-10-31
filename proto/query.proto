@@ -646,7 +646,14 @@ message MigrateConnFromRequest {
   bool PreparedStatementProtocolSupported = 6;
 }
 
+// Presence distinguishes authenticated zero IDs from absent identity proof.
+message MigrateSessionPrincipal {
+  uint32 AccountID = 1;
+  uint32 UserID = 2;
+}
+
 message MigrateConnFromResponse {
+  MigrateSessionPrincipal Principal = 21;
   string DB = 1;
   repeated PrepareStmt PrepareStmts = 2;
   int64 LastAffectedRows = 3;
@@ -689,6 +696,8 @@ message MigrateConnFromResponse {
 }
 
 message MigrateConnToRequest {
+  MigrateSessionPrincipal Principal = 17;
+  bool VerifyPrincipalOnly = 18;
   uint32 ConnID = 1;
   string DB = 2;
   repeated string SetVarStmts = 3;
@@ -730,6 +739,7 @@ message UserLevelLock {
 
 message MigrateConnToResponse {
   bool Success = 1;
+  bool PrincipalVerified = 2;
 }
 
 
