@@ -532,6 +532,26 @@ func (s *memTaskStorage) UpdateDaemonTaskStatus(
 	return 1, nil
 }
 
+func (s *memTaskStorage) RequestDaemonTaskStatus(
+	ctx context.Context, observed task.DaemonTask, status task.TaskStatus,
+) (int, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	if s.preUpdate != nil {
+		s.preUpdate()
+	}
+	s.Lock()
+	defer s.Unlock()
+	t, ok := s.daemonTasks[observed.ID]
+	if !ok || t.AccountID != observed.AccountID || t.TaskStatus != observed.TaskStatus || !sameDaemonClaim(t, observed) {
+		return 0, nil
+	}
+	t.TaskStatus = status
+	s.daemonTasks[observed.ID] = t
+	return 1, nil
+}
+
 func (s *memTaskStorage) DeleteDaemonTask(ctx context.Context, conds ...Condition) (int, error) {
 	c := newConditions(conds...)
 
@@ -694,22 +714,16 @@ func (s *memTaskStorage) filterDaemonTask(c *conditions, task task.DaemonTask) b
 		return false
 	}
 
-	if cond, e := (*c)[CondTaskType]; e {
-		ok = cond.eval(task.TaskType)
+	if cond, e := (*c)[CondTaskType]; e && !cond.eval(task.TaskType.String()) {
+		return false
 	}
-
-	if cond, e := (*c)[CondAccountID]; e {
-		ok = cond.eval(task.AccountID)
+	if cond, e := (*c)[CondAccountID]; e && !cond.eval(task.AccountID) {
+		return false
 	}
-
-	if cond, e := (*c)[CondAccount]; e {
-		ok = cond.eval(task.Account)
+	if cond, e := (*c)[CondAccount]; e && !cond.eval(task.Account) {
+		return false
 	}
-
-	if cond, e := (*c)[CondLastHeartbeat]; e {
-		ok = cond.eval(task.LastHeartbeat.UnixNano())
-	}
-	if !ok {
+	if cond, e := (*c)[CondLastHeartbeat]; e && !cond.eval(task.LastHeartbeat.UnixNano()) {
 		return false
 	}
 	if cond, e := (*c)[CondLastRun]; e {

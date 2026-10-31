@@ -272,7 +272,7 @@ func (c *accountCond) eval(v any) bool {
 }
 
 func (c *accountCond) sql() string {
-	return fmt.Sprintf("account%s%s", OpName[c.op], c.account)
+	return fmt.Sprintf("account%s?", OpName[c.op])
 }
 
 type lastHeartbeatCond struct {
@@ -714,6 +714,9 @@ type TaskService interface {
 	// claim. release also clears its lease and restores RestartRequested. It never
 	// rewrites last_run or unrelated metadata; zero means the claim was superseded.
 	UpdateDaemonTaskError(ctx context.Context, claim task.DaemonTask, release bool) (int, error)
+	// RequestDaemonTaskStatus changes only status when the observed account,
+	// state, runner and claim generation still match. Zero means superseded.
+	RequestDaemonTaskStatus(ctx context.Context, observed task.DaemonTask, status task.TaskStatus) (int, error)
 	// UpdateDaemonTaskStatus updates only status-owned fields. In particular, it
 	// preserves the runner lease (TaskRunner and LastHeartbeat) while applying
 	// the supplied compare-and-swap conditions.
@@ -829,6 +832,8 @@ type TaskStorage interface {
 	// UpdateDaemonTask updates daemon tasks and returns number of successful updated.
 	UpdateDaemonTask(ctx context.Context, tasks []task.DaemonTask, conds ...Condition) (int, error)
 	UpdateDaemonTaskError(ctx context.Context, claim task.DaemonTask, release bool) (int, error)
+	// RequestDaemonTaskStatus changes only status for the observed claim.
+	RequestDaemonTaskStatus(ctx context.Context, observed task.DaemonTask, status task.TaskStatus) (int, error)
 	// UpdateDaemonTaskStatus updates only task_status, update_at and end_at.
 	UpdateDaemonTaskStatus(
 		ctx context.Context,

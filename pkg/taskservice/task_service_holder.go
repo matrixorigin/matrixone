@@ -377,6 +377,23 @@ func (s *refreshableTaskStorage) UpdateDaemonTaskStatus(
 	return v, err
 }
 
+func (s *refreshableTaskStorage) RequestDaemonTaskStatus(ctx context.Context, observed task.DaemonTask, status task.TaskStatus) (int, error) {
+	var n int
+	var err error
+	s.mu.RLock()
+	lastAddress := s.mu.lastAddress
+	if s.mu.store == nil {
+		err = ErrNotReady
+	} else if err = s.mu.store.PingContext(ctx); err == nil {
+		n, err = s.mu.store.RequestDaemonTaskStatus(ctx, observed, status)
+	}
+	s.mu.RUnlock()
+	if err != nil {
+		s.maybeRefresh(lastAddress)
+	}
+	return n, err
+}
+
 func (s *refreshableTaskStorage) DeleteDaemonTask(ctx context.Context, conditions ...Condition) (int, error) {
 	var v int
 	var err error
