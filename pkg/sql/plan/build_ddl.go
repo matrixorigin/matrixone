@@ -6228,7 +6228,7 @@ func buildDropTableSingle(ifExists bool, temporary bool, name *tree.TableName, c
 	// non-temporary result means that the requested temporary table is absent.
 	if tableDef == nil || (temporary && !tableDef.IsTemporary) {
 		if !dropTable.IfExists {
-			return nil, moerr.NewNoSuchTable(ctx.GetContext(), dropTable.Database, dropTable.Table)
+			return nil, moerr.NewErrDropNonExistsTable(ctx.GetContext(), dropTable.Database, dropTable.Table)
 		}
 		return dropTable, nil
 	}
@@ -6962,7 +6962,7 @@ func buildDropIndex(stmt *tree.DropIndex, ctx CompilerContext) (*Plan, error) {
 			// An empty index name represents the no-op path for DROP INDEX IF EXISTS.
 			dropIndex.IndexName = ""
 		} else {
-			return nil, moerr.NewInternalErrorf(ctx.GetContext(), "not found index: %s", requestedIndexName)
+			return nil, moerr.NewErrCantDropFieldOrKey(ctx.GetContext(), requestedIndexName)
 		}
 	} else {
 		// MySQL equivalent-key transition: when the dropped key is recorded by

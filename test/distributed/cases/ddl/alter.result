@@ -96,7 +96,7 @@ no such table test.foreign02
 drop table foreign01;
 
 drop table foreign02;
-no such table test.foreign02
+Unknown table 'test.foreign02'
 drop table if exists ti1;
 
 drop table if exists tm1;
