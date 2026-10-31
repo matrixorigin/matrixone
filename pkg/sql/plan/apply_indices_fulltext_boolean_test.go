@@ -325,7 +325,9 @@ func TestFullTextBooleanProtectsEarlyIndexPaths(t *testing.T) {
 	require.True(t, builder.scanHasMatchedFullTextFilter(scan))
 	builder.prepareSpecialIndexGuards(projectID)
 	require.True(t, builder.isScanProtected(scanID))
-	require.Equal(t, scanID, builder.applyIndicesForFilters(scanID, scan, map[[2]int32]int{}, map[[2]int32]*planpb.Expr{}),
+	optimized, err := builder.applyIndicesForFilters(scanID, scan, map[[2]int32]int{}, map[[2]int32]*planpb.Expr{})
+	require.NoError(t, err)
+	require.Equal(t, scanID, optimized,
 		"a real secondary index must not consume the protected scan")
 	for _, algo := range []string{catalog.MoIndexHnswAlgo.ToString(), catalog.MoIndexIvfFlatAlgo.ToString()} {
 		require.False(t, builder.vectorIndexSupportsContext(&vectorSortContext{scanNode: scan}, algo), algo)

@@ -1068,15 +1068,13 @@ func existingCompositeBlockFilters(node *plan.Node) []*plan.Expr {
 		return nil
 	}
 	allowed := compositeKeyPartColumns(node.TableDef)
-	if allowed == nil {
-		return nil
-	}
-	if compoundPos, ok := compoundKeyColumn(node.TableDef); ok {
+	if compoundPos, ok := compoundKeyColumn(node.TableDef); ok && allowed != nil {
 		allowed[compoundPos] = struct{}{}
 	}
 	ret := node.BlockFilterList[:0]
 	for _, filter := range node.BlockFilterList {
-		if exprOnlyReferencesColumns(filter, node.BindingTags[0], allowed) {
+		if (filter.GetTemporalCandidateFilter() && function.ContainsTemporalBound(filter)) ||
+			(allowed != nil && exprOnlyReferencesColumns(filter, node.BindingTags[0], allowed)) {
 			// calcScanStats replaces BlockFilterList at the end of the pass and
 			// does not mutate preserved entries. Transfer the already-independent
 			// block-filter expression instead of deep-copying it on every stats

@@ -542,7 +542,9 @@ func (builder *QueryBuilder) applyIndicesWithOrder(nodeID int32, colRefCnt map[[
 		if scanHasFullTextBooleanComposition(node) {
 			return builder.applyFullTextBooleanComposition(nodeID, node, idxColMap)
 		}
-		return builder.applyIndicesForFilters(nodeID, node, colRefCnt, idxColMap), nil
+		// createQuery has finished its last leaf-statistics pass. Early vector
+		// and copied fulltext scans use the conservative wrapper instead.
+		return builder.applyIndicesForFiltersAtPhase(nodeID, node, colRefCnt, idxColMap, true)
 
 	case plan.Node_JOIN:
 		return builder.applyIndicesForJoins(nodeID, node, colRefCnt, idxColMap)
@@ -708,16 +710,21 @@ func joinCanConsumeIndexHints(node *plan.Node) bool {
 }
 
 func (builder *QueryBuilder) applyIndicesForFilters(nodeID int32, node *plan.Node,
-	colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) int32 {
+	colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) (int32, error) {
+	return builder.applyIndicesForFiltersAtPhase(nodeID, node, colRefCnt, idxColMap, false)
+}
+
+func (builder *QueryBuilder) applyIndicesForFiltersAtPhase(nodeID int32, node *plan.Node,
+	colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr, lateBaseStatsFinalized bool) (int32, error) {
 
 	if len(node.FilterList) == 0 || len(node.TableDef.Indexes) == 0 {
-		return nodeID
+		return nodeID, nil
 	}
 	if builder.scanHasMatchedFullTextFilter(node) {
-		return nodeID
+		return nodeID, nil
 	}
 	if builder.isScanProtected(node.NodeId) {
-		return nodeID
+		return nodeID, nil
 	}
 
 	// 1. Master Index Check
@@ -773,7 +780,7 @@ func (builder *QueryBuilder) applyIndicesForFilters(nodeID int32, node *plan.Nod
 				}
 			}
 			if isAllFilterColumnsIncluded {
-				return builder.applyIndicesForFiltersUsingMasterIndex(nodeID, node, indexDef)
+				return builder.applyIndicesForFiltersUsingMasterIndex(nodeID, node, indexDef), nil
 			}
 		}
 
@@ -781,7 +788,7 @@ func (builder *QueryBuilder) applyIndicesForFilters(nodeID int32, node *plan.Nod
 END0:
 	// 2. Regular Index Check
 	{
-		return builder.applyIndicesForFiltersRegularIndex(nodeID, node, colRefCnt, idxColMap)
+		return builder.applyIndicesForFiltersRegularIndexAtPhase(nodeID, node, colRefCnt, idxColMap, lateBaseStatsFinalized)
 	}
 }
 
@@ -2384,9 +2391,13 @@ func hasPrimaryKeyEquality(node *plan.Node) bool {
 	return true
 }
 
-func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, node *plan.Node, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) int32 {
+func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, node *plan.Node, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) (int32, error) {
+	return builder.applyIndicesForFiltersRegularIndexAtPhase(nodeID, node, colRefCnt, idxColMap, false)
+}
+
+func (builder *QueryBuilder) applyIndicesForFiltersRegularIndexAtPhase(nodeID int32, node *plan.Node, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr, lateBaseStatsFinalized bool) (int32, error) {
 	if len(node.FilterList) == 0 || len(node.TableDef.Indexes) == 0 {
-		return nodeID
+		return nodeID, nil
 	}
 
 	forceIndex := builder.scanHintsForceIndexes(node)
@@ -2394,7 +2405,7 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, no
 	if pointBlocked && node.TableDef.ClusterBy == nil && !catalog.IsFakePkName(node.TableDef.Pkey.PkeyColName) {
 		// A real, physically ordered full PK is already a point lookup.
 		// Do not build or score partial secondary candidates for a singleton.
-		return nodeID
+		return nodeID, nil
 	}
 	builder.addFunctionalIndexFilters(node)
 
@@ -2442,7 +2453,7 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, no
 	indexes = builder.filterRegularIndexesByScanHints(node, indexes)
 	spatialIndexes = builder.filterIndexesByScanHints(node, spatialIndexes)
 	if len(indexes) == 0 && len(spatialIndexes) == 0 {
-		return nodeID
+		return nodeID, nil
 	}
 
 	scanSnapshot := node.ScanSnapshot
@@ -2548,6 +2559,24 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, no
 		best = fallback
 	}
 
+	// A temporal path competes only where the original owner and the current
+	// rewritten path are both proved safe. Preserve FORCE, small-table and
+	// sorted-scan policies, and do not displace an unscorable existing path.
+	_, originalSafe := builder.temporalOriginalSafeScans[nodeID]
+	intent := builder.temporalPlanningIntent
+	_, fixedZone := types.FixedZoneOffset(intent.TimeZone)
+	if lateBaseStatsFinalized && originalSafe && !builder.sessionSelectLimitMayStopEarly && builder.hasTemporalPlanningIntent && intent.ParameterFree && fixedZone &&
+		intent.MatchesProcess(builder.compCtx.GetProcess()) && intent.Placement.AllowsFixedTemporalCandidate() &&
+		!forceIndex && !ignoreStats && !preferSortedScan && best.indexPos == -1 && fallback.indexPos == -1 {
+		ret, applied, err := builder.applyCostedTemporalIndex(nodeID, indexes, idxColMap, costCtx)
+		if err != nil {
+			return nodeID, err
+		}
+		if applied {
+			return ret, nil
+		}
+	}
+
 	if best.indexPos != -1 && best.shape == encodedRegularIndexCostIndexOnly {
 		ret := builder.applyRegularIndexOnlyScan(
 			indexes[best.indexPos], node, idxColMap, scanSnapshot,
@@ -2557,9 +2586,9 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, no
 			},
 		)
 		if ret != -1 {
-			return ret
+			return ret, nil
 		}
-		return nodeID
+		return nodeID, nil
 	}
 
 	// Preserve the established priority of a covering spatial access over a
@@ -2568,33 +2597,33 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, no
 		for i := range spatialIndexes {
 			ret := builder.trySpatialIndexOnlyScan(spatialIndexes[i], node, colRefCnt, idxColMap, scanSnapshot)
 			if ret != -1 {
-				return ret
+				return ret, nil
 			}
 		}
 	}
 	if !allowBackfill {
-		return nodeID
+		return nodeID, nil
 	}
 	if best.indexPos != -1 {
 		idxDef := indexes[best.indexPos]
 		retID, idxTableNodeID := builder.applyIndexJoin(idxDef, node, best.filterType, best.filterIdx, scanSnapshot)
 		if idxTableNodeID != -1 {
 			builder.applyExtraFiltersOnIndex(idxDef, node, builder.qry.Nodes[idxTableNodeID], best.filterIdx)
-			return retID
+			return retID, nil
 		}
 	}
 
 	if preferSortedScan {
-		return nodeID
+		return nodeID, nil
 	}
 	idxToChoose, filterIdx := builder.getIndexForSpatialCond(spatialIndexes, node)
 	if idxToChoose != -1 {
 		retID, _ := builder.applyIndexJoin(spatialIndexes[idxToChoose], node, SpatialIndexCondition, filterIdx, scanSnapshot)
-		return retID
+		return retID, nil
 	}
 
 	//no index applied
-	return nodeID
+	return nodeID, nil
 }
 
 func (builder *QueryBuilder) applyExtraFiltersOnIndex(idxDef *IndexDef, node *plan.Node, idxTableNode *plan.Node, filterIdx []int32) {
@@ -3179,6 +3208,9 @@ type encodedRegularIndexCostContext struct {
 	relPos    int32
 	valid     bool
 	force     bool
+	// Some callers retain all residuals on the base side of an index join.
+	// They cannot credit optional hidden-scan predicate pushdown.
+	skipBackfillResidualCredit bool
 
 	statsTableCnt float64
 	baseRows      float64
@@ -3677,8 +3709,26 @@ func (ctx *encodedRegularIndexCostContext) score(
 	residualLeadingPos []int32,
 	shape encodedRegularIndexCostShape,
 ) (work float64, shouldReject bool, valid bool) {
+	return ctx.scoreWithEstimate(idxDef, leadingPos, residualLeadingPos, shape, nil)
+}
+
+func (ctx *encodedRegularIndexCostContext) scoreWithEstimate(
+	idxDef *IndexDef,
+	leadingPos []int32,
+	residualLeadingPos []int32,
+	shape encodedRegularIndexCostShape,
+	estimate *encodedRegularIndexEstimate,
+) (work float64, shouldReject bool, valid bool) {
 	if idxDef == nil || len(idxDef.Parts) == 0 || !ctx.valid {
 		return 0, false, false
+	}
+	outputRows := ctx.outputRows
+	if estimate != nil {
+		if shape != encodedRegularIndexCostIndexOnly || len(leadingPos) != 1 || leadingPos[0] != estimate.filter ||
+			!estimate.valid(ctx.node.Stats.TableCnt) {
+			return 0, false, false
+		}
+		outputRows = estimate.outputRows
 	}
 	ctx.resetScratch()
 	if cap(ctx.partWidths) < len(idxDef.Parts) {
@@ -3725,6 +3775,9 @@ func (ctx *encodedRegularIndexCostContext) score(
 			continue
 		}
 		selectivity := ctx.node.FilterList[pos].Selectivity
+		if estimate != nil && pos == estimate.filter {
+			selectivity = estimate.selectivity
+		}
 		lowerSelectivity := selectivity
 		if ctx.filterFacts[pos].unknownRangeBounds {
 			// PREPARE has no range-bound values. The stats layer's optimistic dynamic
@@ -3749,7 +3802,7 @@ func (ctx *encodedRegularIndexCostContext) score(
 	}
 	leadingCandidateRows := ctx.node.Stats.TableCnt * candidateSelectivity
 	lowerCandidateRows := ctx.node.Stats.TableCnt * lowerCandidateSelectivity
-	candidateRows := max(ctx.outputRows, leadingCandidateRows)
+	candidateRows := max(outputRows, leadingCandidateRows)
 	if !finitePositive(candidateRows) {
 		ctx.resetScratch()
 		return 0, false, false
@@ -3772,7 +3825,7 @@ func (ctx *encodedRegularIndexCostContext) score(
 		}
 	}
 
-	hiddenRows := ctx.outputRows
+	hiddenRows := outputRows
 	lowerHiddenRows := 0.0
 	hiddenFilterCount := 1
 	if shape == encodedRegularIndexCostIndexOnly {
@@ -3812,6 +3865,9 @@ func (ctx *encodedRegularIndexCostContext) score(
 		hiddenSelectivity := candidateSelectivity
 		lowerHiddenSelectivity := lowerCandidateSelectivity
 		for filterIdx, fact := range ctx.filterFacts {
+			if ctx.skipBackfillResidualCredit {
+				break
+			}
 			if ctx.leadingFilters[filterIdx] || fact.directCol < 0 {
 				continue
 			}
@@ -3850,7 +3906,7 @@ func (ctx *encodedRegularIndexCostContext) score(
 			lowerHiddenSelectivity *= lowerSelectivity
 			hiddenFilterCount++
 		}
-		hiddenRows = max(ctx.outputRows, ctx.node.Stats.TableCnt*hiddenSelectivity)
+		hiddenRows = max(outputRows, ctx.node.Stats.TableCnt*hiddenSelectivity)
 		lowerHiddenRows = ctx.node.Stats.TableCnt * lowerHiddenSelectivity
 	}
 	if math.IsNaN(hiddenRows) || math.IsInf(hiddenRows, 0) || hiddenRows < 0 {
@@ -3882,10 +3938,17 @@ func (ctx *encodedRegularIndexCostContext) score(
 		hiddenOutputWidth = pkWidth
 	}
 	calculateWork := func(candidateRows, hiddenRows, outputRows float64) (float64, bool) {
-		hiddenScanInput := candidateRows * hiddenInputWidth
+		inputRows := candidateRows
+		if estimate != nil && estimate.blockInput {
+			inputRows = temporalCBOIndexInputRows(ctx.node.Stats.TableCnt, candidateRows)
+		}
+		hiddenScanInput := inputRows * hiddenInputWidth
 		hiddenScanOutput := hiddenRows * hiddenOutputWidth
 		hiddenPredicates := candidateRows * float64(hiddenFilterCount) * regularIndexPredicateRowWork
 		indexWork := hiddenScanInput + hiddenScanOutput + hiddenPredicates
+		if estimate != nil {
+			indexWork += estimate.fixedWork
+		}
 
 		prefixWidth := 0.0
 		for partPos, part := range idxDef.Parts {
@@ -3936,7 +3999,7 @@ func (ctx *encodedRegularIndexCostContext) score(
 		return indexWork, valid
 	}
 
-	indexWork, validWork := calculateWork(candidateRows, hiddenRows, ctx.outputRows)
+	indexWork, validWork := calculateWork(candidateRows, hiddenRows, outputRows)
 	rejectionWork := indexWork
 	baseComparisonWork := ctx.baseWork
 	if len(ctx.unknownRangeLowerSelectivities) > 0 && validWork {

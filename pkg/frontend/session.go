@@ -2364,6 +2364,22 @@ func (ses *Session) cachePlanWithSnapshotsAndStatsVersions(
 	planStatsVersions []map[optimizerStatsTableKey]uint64,
 	versions ...int64,
 ) {
+	ses.cachePlanWithSnapshotsAndStatsVersionsOwned(sql, stmts, plans, planSnapshotTS, planStatsVersions, nil, versions...)
+}
+
+func (ses *Session) cachePlanWithSnapshotsAndStatsVersionsOwned(
+	sql string,
+	stmts []tree.Statement,
+	plans []*plan.Plan,
+	planSnapshotTS []timestamp.Timestamp,
+	planStatsVersions []map[optimizerStatsTableKey]uint64,
+	seal *temporalCacheSeal,
+	versions ...int64,
+) {
+	if seal != nil && (len(plans) != 1 || !seal.permits(plans[0]) || seal.owner == nil || seal.owner.ses != ses || !temporalCacheRequestEligible(seal.owner, ses, true) || !temporalCacheEnvironment(seal.owner.reqCtx, ses, seal.raw) || !plan2.AuditTemporalCacheRaw(seal.owner.reqCtx, seal.raw, seal.proof, seal.owner.proc)) {
+		freeStmts(stmts)
+		return
+	}
 	if len(sql) == 0 {
 		return
 	}
@@ -2384,8 +2400,8 @@ func (ses *Session) cachePlanWithSnapshotsAndStatsVersions(
 	if len(versions) > 0 {
 		protocolVersion = versions[0]
 	}
-	ses.planCache.cacheWithPlanSnapshotsAndStatsVersions(
-		sql, stmts, plans, planSnapshotTS, planStatsVersions, protocolVersion)
+	ses.planCache.cacheWithPlanSnapshotsAndStatsVersionsOwned(
+		sql, stmts, plans, planSnapshotTS, planStatsVersions, seal, protocolVersion)
 }
 
 func (ses *Session) getCachedPlan(sql string) *cachedPlan {

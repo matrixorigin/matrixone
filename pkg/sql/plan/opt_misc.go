@@ -2332,7 +2332,7 @@ func (builder *QueryBuilder) forceJoinOnOneCN(nodeID int32, force bool) {
 
 	node := builder.qry.Nodes[nodeID]
 	if node.NodeType == plan.Node_TABLE_SCAN {
-		node.Stats.ForceOneCN = force
+		node.Stats.ForceOneCN = force || TemporalPhysicalIndexScan(node)
 	} else if node.NodeType == plan.Node_JOIN {
 		if node.JoinType == plan.Node_DEDUP && !node.Stats.HashmapStats.Shuffle {
 			force = true

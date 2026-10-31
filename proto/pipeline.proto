@@ -832,6 +832,9 @@ message SessionInfo {
   // distinguishes an older sender that did not transport this state.
   uint64 last_insert_id = 23;
   bool last_insert_id_set = 24;
+  // Preserve fixed offsets independently of the worker's local time zone.
+  bool fixed_offset_present = 25;
+  int64 fixed_offset_seconds = 26;
 }
 
 message SessionLoggerInfo {

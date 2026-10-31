@@ -31,6 +31,7 @@ import (
 	"time"
 
 	"github.com/apache/arrow-go/v18/arrow"
+	"github.com/gogo/protobuf/proto"
 	"github.com/google/uuid"
 	"github.com/parquet-go/parquet-go"
 
@@ -139,14 +140,50 @@ func NewCompile(
 	cnLabel map[string]string,
 	startAt time.Time,
 ) *Compile {
+	return newCompile(addr, db, sql, tenant, uid, e, proc, stmt, isInternal, cnLabel, startAt, false, false)
+}
+
+// NewTemporalCompile defers publishing Process state until the temporal
+// execution preflight has succeeded. It is only for an owned candidate plan.
+func NewTemporalCompile(
+	addr, db, sql, tenant, uid string,
+	e engine.Engine, proc *process.Process, stmt tree.Statement, isInternal bool,
+	cnLabel map[string]string, startAt time.Time,
+) *Compile {
+	return newCompile(addr, db, sql, tenant, uid, e, proc, stmt, isInternal, cnLabel, startAt, true, true)
+}
+
+// A definition retry must establish its existing workspace boundary before
+// replanning, even though Process publication still waits for preflight.
+func newTemporalRetryCompile(
+	addr, db, sql, tenant, uid string,
+	e engine.Engine, proc *process.Process, stmt tree.Statement, isInternal bool,
+	cnLabel map[string]string, startAt time.Time,
+) *Compile {
+	offset := txnOffsetOfCompile(proc)
+	c := newCompile(addr, db, sql, tenant, uid, e, proc, stmt, isInternal, cnLabel, startAt, true, true)
+	c.TxnOffset = offset
+	c.temporalTxnOffsetPending = false
+	return c
+}
+
+func newCompile(
+	addr, db, sql, tenant, uid string,
+	e engine.Engine, proc *process.Process, stmt tree.Statement, isInternal bool,
+	cnLabel map[string]string, startAt time.Time, deferred, deferTxnOffset bool,
+) *Compile {
 	c := allocateNewCompile(proc)
+	c.temporalPreflightPending = deferred
+	c.temporalTxnOffsetPending = deferTxnOffset
 
 	c.e = e
 	c.db = db
 	c.tenant = tenant
 	c.uid = uid
 	c.sql = sqlmongodb.RedactSQLForDiagnostics(sql)
-	c.proc.SetMessageBoard(c.MessageBoard)
+	if !deferred {
+		c.proc.SetMessageBoard(c.MessageBoard)
+	}
 	c.sequenceState = captureSequenceStatementState(proc)
 	c.stmt = stmt
 	c.addr = addr
@@ -164,8 +201,22 @@ func NewCompile(
 	// TODO: The action of updating the WriteOffset logic should be executed in the `func (c *Compile) Run(_ uint64)` method.
 	// However, considering that the delay ranges are not completed yet, the UpdateSnapshotWriteOffset() and
 	// the assignment of `Compile.TxnOffset` should be moved into the `func (c *Compile) Run(_ uint64)` method in the later stage.
-	c.TxnOffset = txnOffsetOfCompile(c.proc)
+	if !deferTxnOffset {
+		c.TxnOffset = txnOffsetOfCompile(c.proc)
+	}
 	return c
+}
+
+// DiscardTemporalPreflight releases an unstarted temporal Compile without
+// touching the shared Process. It is valid only after the preflight rejected.
+func (c *Compile) DiscardTemporalPreflight() {
+	if c == nil || !c.temporalPreflightPending {
+		panic("temporal preflight discard after publication")
+	}
+	c.isPrepare = false
+	c.preserveProcessOnPoolClear = true
+	c.cnLabel = nil
+	doCompileRelease(c)
 }
 
 // txnOffsetOfCompile returns the workspace write offset a new compile reads
@@ -191,6 +242,10 @@ func txnOffsetOfCompile(proc *process.Process) int {
 
 func (c *Compile) Release() {
 	if c == nil {
+		return
+	}
+	if c.temporalPreflightPending {
+		c.DiscardTemporalPreflight()
 		return
 	}
 	// Prepared Compiles can remain cached after Release. Semantic CTAS values
@@ -287,7 +342,13 @@ func (c *Compile) FreezeResultMetadata() {
 func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*batch.Batch, *perfcounter.CounterSet) error, sql string, diagnosticProof ...bool) error {
 	// A cached Compile must never expose the previous execution's CTAS values.
 	c.preparedParamValues = nil
+	c.temporalAccessIntent = nil
 	c.preparedJoinDiagnosticFree = len(diagnosticProof) != 0 && diagnosticProof[0]
+	// An existing physical topology can retain narrowed candidate expressions.
+	// Clearing the snapshot cannot revoke those expressions, so rebuild instead.
+	if c.temporalCandidateTopology || HasTemporalIndexCandidates(c.pn) {
+		return cantCompileForPrepareErr
+	}
 	// Reset only supports the TP topology admitted by prepare-time compilation.
 	// AP scan state and worker placement belong to one execution; updating the
 	// transaction offset cannot make them valid for another execution.
@@ -391,6 +452,9 @@ func (c *Compile) capturePlanSnapshot() {
 // applyPlanSnapshot binds the Process transport to this Compile's immutable
 // plan generation. In particular, Reset must apply rather than recapture it.
 func (c *Compile) applyPlanSnapshot() {
+	if c.temporalPreflightPending {
+		return
+	}
 	if !c.hasPlanSnapshotTS {
 		c.proc.ClearPlanSnapshotTS()
 		return
@@ -431,6 +495,9 @@ func (c *Compile) captureStringShuffleHashAlgorithm() {
 }
 
 func (c *Compile) applyStringShuffleHashAlgorithm() {
+	if c.temporalPreflightPending {
+		return
+	}
 	c.proc.SetStringShuffleHashAlgorithm(c.stringShuffleHashAlgorithm)
 }
 
@@ -504,6 +571,7 @@ func (c *Compile) clear() {
 	c.pn = nil
 	c.fill = nil
 	c.buildPlanFunc = nil
+	c.buildSafeTemporalPlanFunc = nil
 	c.preparedParamValues = nil
 	c.preparedJoinDiagnosticFree = false
 	c.resultSink = nil
@@ -527,8 +595,11 @@ func (c *Compile) clear() {
 		c.lockMeta = nil
 	}
 
-	c.proc.Free()
+	if !c.preserveProcessOnPoolClear {
+		c.proc.Free()
+	}
 	c.proc = nil
+	c.preserveProcessOnPoolClear = false
 	c.planSnapshotTS = timestamp.Timestamp{}
 	c.hasPlanSnapshotTS = false
 	c.planGenerationReused = false
@@ -542,6 +613,10 @@ func (c *Compile) clear() {
 	c.cnList = c.cnList[:0]
 	c.queryPlacement = schedule.QueryDecision{}
 	c.querySchedulingIntent = schedule.SchedulingIntent{}
+	c.temporalAccessIntent = nil
+	c.temporalCandidateTopology = false
+	c.temporalPreflightPending = false
+	c.temporalTxnOffsetPending = false
 	c.schedulingTrace = nil
 	c.schedulingAttempt = 0
 	c.stmt = nil
@@ -1411,6 +1486,9 @@ func (c *Compile) compileQuery(qry *plan.Query) ([]*Scope, error) {
 
 	c.execType = vectorQueryExecType(sequenceExecType(
 		plan2.GetExecType(c.pn.GetQuery(), c.getHaveDDL(), c.isPrepare), qry), qry)
+	if plan2.HasTemporalPhysicalIndexScans(qry) && c.execType != plan2.ExecTypeTP {
+		c.execType = plan2.ExecTypeAP_ONECN
+	}
 	if executor.RequiresLocalExecution(c.proc.Ctx) && c.execType == plan2.ExecTypeAP_MULTICN {
 		c.execType = plan2.ExecTypeAP_ONECN
 	}
@@ -5796,6 +5874,8 @@ func (c *Compile) compileTableScanDataSource(s *Scope) error {
 	c.filterExprMu.Lock()
 	defer c.filterExprMu.Unlock()
 	storageFilters := filterScanStorageExprs(c.proc, node.FilterList, c.preparedJoinDiagnosticFree)
+	blockFilters := filterScanStorageExprs(c.proc, node.BlockFilterList, c.preparedJoinDiagnosticFree)
+	storageFilters = appendTemporalStorageHints(storageFilters, blockFilters)
 	filters, executors, rebuilt, err := prepareFoldedFilterExprs(
 		c.proc, storageFilters, s.DataSource.FilterList, c.filterExprExes, true)
 	if err != nil {
@@ -5807,7 +5887,6 @@ func (c *Compile) compileTableScanDataSource(s *Scope) error {
 	}
 	s.DataSource.FilterExpr = colexec.RewriteFilterExprList(s.DataSource.FilterList)
 
-	blockFilters := filterScanStorageExprs(c.proc, node.BlockFilterList, c.preparedJoinDiagnosticFree)
 	if c.preparedJoinDiagnosticFree {
 		blockFilters = plan2.CompletePreparedDiagnosticBlockFilters(ctx, node, storageFilters, blockFilters)
 	}
@@ -5841,15 +5920,58 @@ func (c *Compile) compileTableScanDataSource(s *Scope) error {
 	return nil
 }
 
+// appendTemporalStorageHints gives memtable/PK readers the same execution-time
+// candidates as object pruning, without forwarding an identical row copy twice.
+func appendTemporalStorageHints(storage, block []*plan.Expr) []*plan.Expr {
+	cloned := false
+	for _, expr := range block {
+		if expr.GetTemporalCandidateFilter() && function.ContainsTemporalBound(expr) {
+			alreadyPresent := false
+			for _, existing := range storage {
+				if existing.GetTemporalCandidateFilter() && temporalStorageHintEqual(existing, expr) {
+					alreadyPresent = true
+					break
+				}
+			}
+			if alreadyPresent {
+				continue
+			}
+			if !cloned {
+				storage = append([]*plan.Expr(nil), storage...)
+				cloned = true
+			}
+			storage = append(storage, expr)
+		}
+	}
+	return storage
+}
+
+// Statistics are recalculated separately for row and block filters. They are
+// not part of execution identity, but permission and provenance remain part of
+// the comparison. Clone before clearing stats so reusable plans stay intact.
+func temporalStorageHintEqual(left, right *plan.Expr) bool {
+	if left == nil || right == nil {
+		return left == right
+	}
+	normalize := func(expr *plan.Expr) *plan.Expr {
+		copy := proto.Clone(expr).(*plan.Expr)
+		_ = plan.VisitExprTree(copy, func(item *plan.Expr) error {
+			item.Selectivity = 0
+			item.Ndv = 0
+			return nil
+		})
+		return copy
+	}
+	return proto.Equal(normalize(left), normalize(right))
+}
+
 // filterScanStorageExprs excludes row-dependent predicates from the engine
 // reader. The complete node.FilterList remains owned by TableScan or Restrict,
 // so these predicates are still evaluated once at the row-level boundary.
 func filterScanStorageExprs(proc *process.Process, exprs []*plan.Expr, provenFree bool) []*plan.Expr {
 	var filtered []*plan.Expr
 	for i, expr := range exprs {
-		exclude := plan2.ContainsVolatileFunction(expr) || plan2.ContainsConstantFilterDiagnostic(proc, expr) ||
-			plan2.ContainsStatementInvariantFilterDiagnosticWithProof(proc, expr, provenFree)
-		if exclude {
+		if !plan2.ScanStorageFilterEligible(proc, expr, provenFree) {
 			if filtered == nil {
 				filtered = make([]*plan.Expr, 0, len(exprs)-1)
 				filtered = append(filtered, exprs[:i]...)
@@ -11571,6 +11693,10 @@ func (c *Compile) SetResourceAttemptOwnerEligible() {
 
 func (c *Compile) SetBuildPlanFunc(buildPlanFunc func(ctx context.Context) (*plan2.Plan, error)) {
 	c.buildPlanFunc = buildPlanFunc
+}
+
+func (c *Compile) SetBuildSafeTemporalPlanFunc(build func(context.Context) (*plan2.Plan, error)) {
+	c.buildSafeTemporalPlanFunc = build
 }
 
 // detectFkSelfRefer checks if foreign key self refer confirmed

@@ -151,6 +151,68 @@ func TestCompileTemporalFilterExprUsesSessionTimezone(t *testing.T) {
 		require.True(t, selected)
 	})
 
+	t.Run("prepared clock precision retains matching block", func(t *testing.T) {
+		proc.Base.UnixTime = time.Date(2026, 8, 10, 12, 0, 0, 123000000, zone).UnixNano()
+		params := vector.NewVec(types.T_text.ToType())
+		require.NoError(t, vector.AppendBytes(params, []byte("3"), false, proc.Mp()))
+		proc.SetPrepareParams(params)
+		defer func() { proc.SetPrepareParams(nil); params.Free(proc.Mp()) }()
+		param := &plan.Expr{Typ: plan.Type{Id: int32(types.T_text)}, Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}}}
+		target := &plan.Expr{Typ: plan.Type{Id: int32(types.T_int64)}, Expr: &plan.Expr_T{T: &plan.TargetType{}}}
+		fsp, err := plan2.BindFuncExprImplByPlanExpr(proc.Ctx, "cast", []*plan.Expr{param, target})
+		require.NoError(t, err)
+		now, err := plan2.BindFuncExprImplByPlanExpr(proc.Ctx, "now", []*plan.Expr{fsp})
+		require.NoError(t, err)
+		now.Typ.Scale = 6 // the bound prepared plan's static scale
+		rowExpr, err := plan2.BindFuncExprImplByPlanExpr(proc.Ctx, "=", []*plan.Expr{column(), now})
+		require.NoError(t, err)
+		input := batch.NewWithSize(1)
+		input.Vecs[0] = vector.NewVec(types.New(types.T_datetime, 0, 6))
+		defer input.Clean(proc.Mp())
+		require.NoError(t, vector.AppendFixed(input.Vecs[0], parseDatetime("2026-08-10 12:00:00.123100"), false, proc.Mp()))
+		input.SetRowCount(1)
+		rowResult, free, err := colexec.GetReadonlyResultFromExpression(proc, rowExpr, []*batch.Batch{input})
+		require.NoError(t, err)
+		defer free()
+		require.True(t, vector.MustFixedColNoTypeCheck[bool](rowResult)[0])
+		blockFilter := compile(t, "=", []*plan.Expr{column(), now})
+		_, selected, err := blockFilter(0, makeDatetimeMeta(parseDatetime("2026-08-10 12:00:00.123100")), nil)
+		require.NoError(t, err)
+		require.True(t, selected, "the row comparator rounds the datetime to the runtime timestamp scale")
+	})
+	t.Run("invalid timestamp precision fails open", func(t *testing.T) {
+		value := int64(0)
+		for _, scale := range []int32{-1, 7} {
+			_, ok := makeTemporalFilterMatcher(types.T_datetime, types.EncodeInt64(&value), types.T_timestamp, scale, zone, "=")
+			require.False(t, ok)
+		}
+	})
+	t.Run("rounded range crossing zero timestamp retains matching row", func(t *testing.T) {
+		edge := types.Datetime(8 * 3600 * types.MicroSecsPerSec)
+		values := []types.Datetime{edge - 2, edge - 1}
+		bound := plan2.MakePlan2TimestampConstExprWithType(0)
+		bound.Typ.Scale = 0
+		rowExpr, err := plan2.BindFuncExprImplByPlanExpr(proc.Ctx, "=", []*plan.Expr{column(), bound})
+		require.NoError(t, err)
+		input := batch.NewWithSize(1)
+		input.Vecs[0] = vector.NewVec(types.New(types.T_datetime, 0, 6))
+		defer input.Clean(proc.Mp())
+		for _, value := range values {
+			require.NoError(t, vector.AppendFixed(input.Vecs[0], value, false, proc.Mp()))
+		}
+		require.NoError(t, vector.AppendFixed(input.Vecs[0], types.Datetime(0), true, proc.Mp()))
+		input.SetRowCount(3)
+		rows, free, err := colexec.GetReadonlyResultFromExpression(proc, rowExpr, []*batch.Batch{input})
+		require.NoError(t, err)
+		defer free()
+		require.Equal(t, []bool{true, false}, vector.MustFixedColNoTypeCheck[bool](rows)[:2])
+		require.True(t, rows.IsNull(2))
+		blockFilter := compile(t, "=", []*plan.Expr{column(), bound})
+		_, selected, err := blockFilter(0, makeDatetimeMeta(values...), nil)
+		require.NoError(t, err)
+		require.True(t, selected, "the compiled storage filter must retain the SQL-matching row")
+	})
+
 	t.Run("between preserves common value scale", func(t *testing.T) {
 		value := parseDatetime("2026-08-10 12:00:00.123456")
 		lower := makeTimestampExpr("2026-08-10 12:00:00.123456")

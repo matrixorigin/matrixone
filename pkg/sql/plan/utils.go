@@ -1915,6 +1915,12 @@ func constantFoldWithPreparedExactSource(
 	spatialChecked bool,
 	jsonFeatureChecked bool,
 ) (*plan.Expr, error) {
+	if fn := expr.GetF(); fn != nil && fn.Func != nil {
+		fid, _ := function.DecodeOverloadID(fn.Func.GetObj())
+		if function.IsTemporalBoundFunction(fid) {
+			return expr, nil
+		}
+	}
 	if expr.Typ.Id == int32(types.T_interval) {
 		// INTERVAL is an executable argument type but has no standalone scalar
 		// constant-fold representation. Keep it unchanged so callers can fold an
@@ -8660,7 +8666,8 @@ func ReplaceFoldExpr(proc *process.Process, expr *Expr, exes *[]colexec.Expressi
 					Typ: fn.Args[i].Typ,
 					Expr: &plan.Expr_Fold{
 						Fold: &plan.FoldVal{
-							Id: int32(newID),
+							Id:                     int32(newID),
+							TemporalCandidateGuard: fn.Args[i].TemporalCandidateGuard,
 						},
 					},
 					AuxId:       fn.Args[i].AuxId,
@@ -8704,6 +8711,12 @@ func EvalFoldExpr(proc *process.Process, expr *Expr, executors *[]colexec.Expres
 			vec, err = exe.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
 			if err != nil {
 				return err
+			}
+			// Timestamp functions can choose their result precision at execution
+			// time (for example NOW(?) uses the bound FSP). Storage comparisons
+			// must use the same precision as the row executor for this value.
+			if types.T(expr.Typ.Id) == types.T_timestamp && vec.GetType().Oid == types.T_timestamp {
+				expr.Typ.Scale = vec.GetType().Scale
 			}
 			data, _ = getConstantBytes(vec, false, 0)
 			ef.Fold.IsConst = true

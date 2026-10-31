@@ -127,8 +127,11 @@ func (builder *QueryBuilder) buildVectorPreFilterJoin(vecCtx *vectorSortContext,
 				extractColRefs(rebound, newTag, secondColRefCnt)
 			}
 		}
-		optimizedSecondScanID := builder.applyIndicesForFilters(
+		optimizedSecondScanID, err := builder.applyIndicesForFilters(
 			secondScanNodeID, secondScanNode, secondColRefCnt, secondIdxColMap)
+		if err != nil {
+			return 0, false, err
+		}
 		secondScanNodeID = optimizedSecondScanID
 	}
 
@@ -250,9 +253,13 @@ func (builder *QueryBuilder) buildVectorPreFilterJoin(vecCtx *vectorSortContext,
 	// to the row-fetch side of the outer join.
 	outerScanNodeID := scanNode.NodeId
 	if builder.canApplyRegularIndex(scanNode) {
+		var err error
 		builder.withSuspendedScanProtection(scanNode.NodeId, func() {
-			outerScanNodeID = builder.applyIndicesForFilters(scanNode.NodeId, scanNode, in.colRefCnt, in.idxColMap)
+			outerScanNodeID, err = builder.applyIndicesForFilters(scanNode.NodeId, scanNode, in.colRefCnt, in.idxColMap)
 		})
+		if err != nil {
+			return 0, false, err
+		}
 	}
 
 	outerPkExpr := builder.buildPkExprFromNode(outerScanNodeID, in.pkType, scanNode.TableDef.Pkey.PkeyColName)

@@ -50,7 +50,7 @@ func GetZoneMapEvaluation(fn *plan.Function) ZoneMapEvaluation {
 		}
 		// Parameters are a binding promise during planning. Execution still
 		// requires the current binding/materialized payload before publication.
-		constant = constant && IsConstant(arg, true)
+		constant = constant && (IsConstant(arg, true) || (ContainsTemporalBound(arg) && IsRuntimeConstant(arg)))
 	}
 	if !CanUseZoneMapComparison(id, args) {
 		return ZoneMapUnsupported

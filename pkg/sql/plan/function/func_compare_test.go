@@ -1104,6 +1104,190 @@ func TestDatetimeTimestampComparisonPreservesInstantSemantics(t *testing.T) {
 	})
 }
 
+// The conversion oracle remains the independent calendar implementation; the
+// fast integer helper must agree before any precision rounding or comparison.
+func TestFixedZoneMixedTimestampCalendarDomain(t *testing.T) {
+	require.Equal(t, types.DatetimeFromClock(9999, 12, 31, 23, 59, 59, 999999), mixedComparisonMaxDatetime)
+	const dayMicros = int64(86400 * types.MicroSecsPerSec)
+	for day := int64(0); day <= int64(mixedComparisonMaxDatetime)/dayMicros; day++ {
+		value := types.Datetime(day*dayMicros + day%types.MicroSecsPerSec)
+		if got, want := fixedZoneComparisonTimestamp(value, time.UTC, 0), value.ToTimestamp(time.UTC); got != want {
+			t.Fatalf("UTC day=%d got=%d want=%d", day, got, want)
+		}
+	}
+	for _, offset := range []int{math.MinInt32, -14 * 3600, -61, -1, 1, 61, 14 * 3600, math.MaxInt32} {
+		zone := time.FixedZone("fixed", offset)
+		micros := int64(offset) * types.MicroSecsPerSec
+		// A full Gregorian 400-year cycle exercises leap/century boundaries.
+		for day := int64(0); day < 146097; day++ {
+			value := types.Datetime(day*dayMicros + dayMicros - 1)
+			if got, want := fixedZoneComparisonTimestamp(value, zone, micros), value.ToTimestamp(zone); got != want {
+				t.Fatalf("offset=%d day=%d got=%d want=%d", offset, day, got, want)
+			}
+		}
+		for _, value := range []types.Datetime{types.ZeroDatetime, -2, math.MinInt64, mixedComparisonMaxDatetime, mixedComparisonMaxDatetime + 1, math.MaxInt64, types.Datetime(micros - 1)} {
+			require.Equal(t, value.ToTimestamp(zone), fixedZoneComparisonTimestamp(value, zone, micros), "offset=%d value=%d", offset, value)
+		}
+	}
+}
+
+func TestDatetimeTimestampFixedKernelMatchesCalendarOracle(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	zones := []*time.Location{nil, time.UTC, time.Local}
+	for _, offset := range []int{math.MinInt32, -14 * 3600, -61, -1, 1, 61, 14 * 3600, math.MaxInt32} {
+		zones = append(zones, time.FixedZone("America/New_York", offset))
+	}
+	if strconv.IntSize > 32 {
+		for _, offset := range []int64{int64(math.MinInt32) - 1, int64(math.MaxInt32) + 1} {
+			zones = append(zones, time.FixedZone("wide", int(offset)))
+		}
+	}
+	for _, name := range []string{"America/New_York", "Antarctica/Troll", "Pacific/Apia"} {
+		zone, err := time.LoadLocation(name)
+		require.NoError(t, err)
+		zones = append(zones, zone)
+	}
+	operators := []struct {
+		name string
+		fn   executeLogicOfOverload
+		cmp  func(types.Timestamp, types.Timestamp) bool
+	}{
+		{"=", equalFn, func(a, b types.Timestamp) bool { return a == b }},
+		{"!=", notEqualFn, func(a, b types.Timestamp) bool { return a != b }},
+		{"<", lessThanFn, func(a, b types.Timestamp) bool { return a < b }},
+		{"<=", lessEqualFn, func(a, b types.Timestamp) bool { return a <= b }},
+		{">", greatThanFn, func(a, b types.Timestamp) bool { return a > b }},
+		{">=", greatEqualFn, func(a, b types.Timestamp) bool { return a >= b }},
+	}
+	for zi, zone := range zones {
+		t.Run(fmt.Sprintf("zone=%d", zi), func(t *testing.T) {
+			proc.GetSessionInfo().TimeZone = zone
+			for scale := int32(0); scale <= 6; scale++ {
+				center := types.DatetimeFromClock(2024, 2, 29, 12, 0, 0, 0)
+				dates := make([]types.Datetime, 0, 22)
+				dates = append(dates, 0, 1, types.ZeroDatetime, -2, math.MinInt64, mixedComparisonMaxDatetime, mixedComparisonMaxDatetime+1, math.MaxInt64, 999999, types.Datetime(61*types.MicroSecsPerSec-1), types.Datetime(8*3600*types.MicroSecsPerSec-1), types.DatetimeFromClock(1900, 2, 28, 23, 59, 59, 999999), types.DatetimeFromClock(2000, 2, 29, 0, 0, 0, 1), types.DatetimeFromClock(2024, 3, 10, 2, 30, 0, 123456), types.DatetimeFromClock(2024, 11, 3, 1, 30, 0, 123456))
+				q := int64(1)
+				for i := scale; i < 6; i++ {
+					q *= 10
+				}
+				for _, delta := range []int64{-q/2 - 1, -q / 2, -q/2 + 1, 0, q/2 - 1, q / 2, q/2 + 1} {
+					dates = append(dates, center+types.Datetime(delta))
+				}
+				stamps := make([]types.Timestamp, len(dates))
+				dn, tn := make([]bool, len(dates)), make([]bool, len(dates))
+				for i, d := range dates {
+					stamps[i] = d.ToTimestamp(zone).TruncateToScale(scale) + types.Timestamp(i%3-1)
+					dn[i], tn[i] = i%13 == 12, i%17 == 16
+				}
+				stamps[0] = types.ZeroTimestamp
+				for _, op := range operators {
+					for _, reverse := range []bool{false, true} {
+						want, ns := make([]bool, len(dates)), make([]bool, len(dates))
+						for i, d := range dates {
+							ns[i] = dn[i] || tn[i]
+							if !ns[i] {
+								v := d.ToTimestamp(zone).TruncateToScale(scale)
+								if reverse {
+									want[i] = op.cmp(stamps[i], v)
+								} else {
+									want[i] = op.cmp(v, stamps[i])
+								}
+							}
+						}
+						inputs := []FunctionTestInput{NewFunctionTestInput(types.T_datetime.ToTypeWithScale(6), dates, dn), NewFunctionTestInput(types.T_timestamp.ToTypeWithScale(scale), stamps, tn)}
+						if reverse {
+							inputs[0], inputs[1] = inputs[1], inputs[0]
+						}
+						fc := NewFunctionTestCase(proc, inputs, NewFunctionTestResult(types.T_bool.ToType(), false, want, ns), op.fn)
+						ok, info := fc.RunAndFree()
+						require.True(t, ok, "scale=%d operator=%s reverse=%v: %s", scale, op.name, reverse, info)
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestDatetimeTimestampKernelConstantSelectionAndReuse(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	center := types.DatetimeFromClock(2024, 1, 1, 0, 0, 0, 123456)
+	for _, zone := range []*time.Location{time.UTC, time.FixedZone("fixed", 8*3600), time.Local} {
+		proc.GetSessionInfo().TimeZone = zone
+		for _, scenario := range []string{"flat", "datetime constant", "timestamp constant", "both constant", "constant NULL", "flat all NULL", "complementary NULL", "partial selection", "all selection", "empty", "single"} {
+			for _, reverse := range []bool{false, true} {
+				length := 4
+				if scenario == "empty" {
+					length = 0
+				}
+				if scenario == "single" {
+					length = 1
+				}
+				dates, stamps := make([]types.Datetime, length), make([]types.Timestamp, length)
+				dn, tn := make([]bool, length), make([]bool, length)
+				for i := range dates {
+					dates[i] = center + types.Datetime(i-2)
+					stamps[i] = center.ToTimestamp(zone).TruncateToScale(3)
+				}
+				dc, tc := scenario == "datetime constant" || scenario == "both constant", scenario == "timestamp constant" || scenario == "both constant" || scenario == "constant NULL"
+				var selected *FunctionSelectList
+				switch scenario {
+				case "constant NULL":
+					for i := range tn {
+						tn[i] = true
+					}
+				case "flat all NULL":
+					for i := range dn {
+						dn[i] = true
+					}
+				case "complementary NULL":
+					for i := range dn {
+						dn[i], tn[i] = i%2 == 0, i%2 != 0
+					}
+				case "partial selection":
+					selected = &FunctionSelectList{AnyNull: true, SelectList: []bool{true, false, true, false}}
+				case "all selection":
+					selected = &FunctionSelectList{AllNull: true}
+				}
+				want, ns := make([]bool, length), make([]bool, length)
+				for i := range dates {
+					di, ti := i, i
+					if dc {
+						di = 0
+					}
+					if tc {
+						ti = 0
+					}
+					ns[i] = dn[di] || tn[ti] || selected.IgnoreAllRow() || !selected.ShouldEvalAllRow() && selected.Contains(uint64(i))
+					if !ns[i] {
+						v := dates[di].ToTimestamp(zone).TruncateToScale(3)
+						if reverse {
+							want[i] = stamps[ti] > v
+						} else {
+							want[i] = v > stamps[ti]
+						}
+					}
+				}
+				dinput, tinput := NewFunctionTestInput(types.T_datetime.ToTypeWithScale(6), dates, dn), NewFunctionTestInput(types.T_timestamp.ToTypeWithScale(3), stamps, tn)
+				dinput.isConst, tinput.isConst = dc, tc
+				inputs := []FunctionTestInput{dinput, tinput}
+				if reverse {
+					inputs[0], inputs[1] = inputs[1], inputs[0]
+				}
+				func() {
+					fc := NewFunctionTestCase(proc, inputs, NewFunctionTestResult(types.T_bool.ToType(), false, want, ns), greatThanFn).WithSelectList(selected)
+					defer fc.Free()
+					for range 2 {
+						ok, info := fc.Run()
+						require.True(t, ok, "scenario=%s reverse=%v zone=%v: %s", scenario, reverse, zone, info)
+					}
+				}()
+			}
+		}
+	}
+}
+
 func TestJsonOrderingOperatorsUseExactComparison(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()

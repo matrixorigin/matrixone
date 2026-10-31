@@ -4526,12 +4526,14 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		idxColMap := make(map[[2]int32]*plan.Expr)
 		rootID, err = builder.applyForceIndexHints(rootID, nil, colRefCnt, idxColMap)
 		if err == nil {
+			builder.qry.Steps[i] = rootID
 			rootID, err = builder.applyIndices(rootID, colRefCnt, idxColMap)
 		}
 		builder.resetSpecialIndexGuards()
 		if err != nil {
 			return nil, err
 		}
+		builder.qry.Steps[i] = rootID
 		compositePartBlockFilters, needsLate := builder.collectCompositePartBlockFilters(rootID, true)
 		if needsLate {
 			builder.mergeFiltersOnCompositeKey(rootID, false)
@@ -6970,6 +6972,9 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 	}
 	if err != nil {
 		return
+	}
+	if isRoot && !ctx.normalizeGroupingSetDistinct {
+		builder.temporalCacheProject = builder.qry.Nodes[nodeID]
 	}
 
 	// append DISTINCT node
@@ -9426,6 +9431,9 @@ func (builder *QueryBuilder) bindSelectClause(
 		}
 
 		nodeID = builder.appendWhereNode(ctx, nodeID, boundFilterList, notCacheable)
+		if isRoot {
+			builder.temporalCacheFilter = builder.qry.Nodes[nodeID]
+		}
 	}
 
 	// Lock_OP must sit above WHERE/subquery rewrites so that EXISTS/IN/scalar

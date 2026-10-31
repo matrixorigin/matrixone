@@ -16,10 +16,18 @@ package disttae
 
 import (
 	"context"
+	"runtime"
 	"testing"
 	"testing/synctest"
+	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
+	"github.com/matrixorigin/matrixone/pkg/pb/logtail"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail/service"
 	"github.com/stretchr/testify/require"
 )
@@ -39,11 +47,14 @@ func TestFirstConnectDisconnectHandoff(t *testing.T) {
 				e := &Engine{cli: tc}
 				c := &e.pClient
 				ctx := c.start(context.Background())
-				t.Cleanup(func() { require.NoError(t, c.Close()) })
+				t.Cleanup(func() {
+					c.subscriber.swapClient(nil) // The fixture uses a client without a transport.
+					require.NoError(t, c.Close())
+				})
 				c.connector = newConnector(c, e)
 				c.subscriber = newLogTailSubscriber()
-				c.pauseC = make(chan bool, 1)
-				c.resumeC = make(chan struct{})
+				c.subscriber.swapClient(&service.LogtailClient{})
+				c.pauseC = make(chan *logtailPauseRequest, 1)
 
 				if phase == "after-completion" {
 					c.completeFirstConnect(e)
@@ -56,7 +67,7 @@ func TestFirstConnectDisconnectHandoff(t *testing.T) {
 				if phase == "delayed-pause" {
 					c.completeFirstConnect(e)
 				}
-				c.pause(reconnect)
+				req := c.pause(reconnect)
 				resumed := make(chan bool, 1)
 				c.runOwned(func() { resumed <- c.waitForResume(ctx, <-c.pauseC) })
 				synctest.Wait()
@@ -73,7 +84,7 @@ func TestFirstConnectDisconnectHandoff(t *testing.T) {
 				<-c.connector.signal
 				synctest.Wait()
 				require.Empty(t, c.connector.signal, "closed replay notification must not repeatedly reconnect")
-				c.resume()
+				require.True(t, c.resume(req))
 				require.True(t, <-resumed)
 				require.False(t, c.mu.paused)
 			})
@@ -85,11 +96,11 @@ func TestFirstConnectPauseRetryAndCancel(t *testing.T) {
 	for _, cancelWait := range []bool{false, true} {
 		t.Run(map[bool]string{false: "retry-before-replay", true: "owner-cancel"}[cancelWait], func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
-				c := &PushClient{pauseC: make(chan bool, 1), resumeC: make(chan struct{})}
+				c := &PushClient{pauseC: make(chan *logtailPauseRequest, 1)}
 				ctx := c.start(context.Background())
 				t.Cleanup(func() { require.NoError(t, c.Close()) })
 				c.connector = newConnector(c, nil)
-				c.pause(false)
+				req := c.pause(false)
 				resumed := make(chan bool, 1)
 				c.runOwned(func() { resumed <- c.waitForResume(ctx, <-c.pauseC) })
 				synctest.Wait()
@@ -98,7 +109,7 @@ func TestFirstConnectPauseRetryAndCancel(t *testing.T) {
 					require.NoError(t, c.Close())
 					require.False(t, <-resumed)
 				} else {
-					c.resume()
+					require.True(t, c.resume(req))
 					require.True(t, <-resumed)
 					require.True(t, c.connector.first.Load(), "retry must not complete first replay")
 				}
@@ -106,6 +117,131 @@ func TestFirstConnectPauseRetryAndCancel(t *testing.T) {
 			})
 		})
 	}
+}
+
+func TestPauseAcknowledgementAndStaleResume(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		c := &PushClient{pauseC: make(chan *logtailPauseRequest, 1)}
+		ctx := c.start(context.Background())
+		t.Cleanup(func() { require.NoError(t, c.Close()) })
+		c.connector = newConnector(c, nil)
+		first := c.pause(false)
+		require.Same(t, first, c.pause(false))
+		require.False(t, c.resume(first), "receiver must acknowledge before resume")
+		firstDone := make(chan bool, 1)
+		c.runOwned(func() { firstDone <- c.waitForResume(ctx, <-c.pauseC) })
+		synctest.Wait()
+		require.True(t, c.resume(first))
+		require.True(t, <-firstDone)
+
+		second := c.pause(false)
+		secondDone := make(chan bool, 1)
+		c.runOwned(func() { secondDone <- c.waitForResume(ctx, <-c.pauseC) })
+		synctest.Wait()
+		require.False(t, c.resume(first), "an old resume cannot release a later pause")
+		require.True(t, c.resume(second))
+		require.True(t, <-secondDone)
+	})
+}
+
+func TestPauseRejectsRetiredConsumerError(t *testing.T) {
+	c := &PushClient{pauseC: make(chan *logtailPauseRequest, 1), subscriber: newLogTailSubscriber()}
+	old, current := &service.LogtailClient{}, &service.LogtailClient{}
+	c.subscriber.swapClient(old)
+	_, oldGeneration := c.subscriber.clientAndGeneration()
+	c.subscriber.swapClient(current)
+	_, currentGeneration := c.subscriber.clientAndGeneration()
+	require.Nil(t, c.pauseIfCurrent(old, oldGeneration, true))
+	require.Empty(t, c.pauseC)
+	req := c.pauseIfCurrent(current, currentGeneration, true)
+	require.NotNil(t, req)
+	require.Same(t, req, <-c.pauseC)
+	c.subscriber.swapClient(nil)
+	require.NoError(t, c.Close())
+}
+
+func TestPausedReceiverStillWaitsForConsumerJoin(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		c := &PushClient{pauseC: make(chan *logtailPauseRequest, 1), consumeErrC: make(chan logtailConsumerError, 1)}
+		ctx := c.start(context.Background())
+		t.Cleanup(func() { require.NoError(t, c.Close()) })
+		c.connector = newConnector(c, nil)
+		rc := c.createRoutineToConsumeLogTails(ctx, 0, 1, nil)
+		c.receiver = []*routineController{rc}
+		started, release := make(chan struct{}), make(chan struct{})
+		require.True(t, rc.send(failingConsumerCommand(func() error {
+			close(started)
+			<-release
+			return nil
+		})))
+		<-started
+		req := c.pause(false)
+		resumed := make(chan bool, 1)
+		c.runOwned(func() { resumed <- c.waitForResume(ctx, <-c.pauseC) })
+		synctest.Wait()
+		require.True(t, waitLogtailPause(ctx, req))
+		joined := make(chan struct{})
+		go func() { c.stopConsumers(); close(joined) }()
+		synctest.Wait()
+		select {
+		case <-joined:
+			t.Fatal("receiver acknowledgement did not join the blocked consumer")
+		default:
+		}
+		close(release)
+		<-joined
+		require.True(t, c.resume(req))
+		require.True(t, <-resumed)
+	})
+}
+
+func TestPauseWaitsForDirectCatalogDispatch(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		part := logtailreplay.NewPartition("", nil, 0, catalog.MO_CATALOG_ID, catalog.MO_DATABASE_ID, nil)
+		require.NoError(t, part.Lock(context.Background()))
+		e := &Engine{partitions: map[[2]uint64]*logtailreplay.Partition{{catalog.MO_CATALOG_ID, catalog.MO_DATABASE_ID}: part}}
+		c := &e.pClient
+		ctx := c.start(context.Background())
+		e.globalStats = &GlobalStats{ctx: ctx, tailC: make(chan *logtail.TableLogtail, 1)}
+		c.subscribed.m = make(map[uint64]*subEntry)
+		c.receivedLogTailTime.initLogTailTimestamp(nil)
+		c.connector = newConnector(c, e)
+		c.subscriber = newLogTailSubscriber()
+		c.pauseC = make(chan *logtailPauseRequest, 1)
+		stream := newCloseRaceStream()
+		lc, err := service.NewLogtailClient(ctx, stream)
+		require.NoError(t, err)
+		c.subscriber.swapClient(lc)
+		t.Cleanup(func() { require.NoError(t, c.Close()) })
+		c.runOwned(func() { c.receiveLogtails(ctx, e) })
+		ts := timestamp.Timestamp{PhysicalTime: 1}
+		response := &service.LogtailResponse{LogtailResponse: logtail.LogtailResponse{
+			Response: &logtail.LogtailResponse_SubscribeResponse{SubscribeResponse: &logtail.SubscribeResponse{
+				Logtail: logtail.TableLogtail{Ts: &ts, Table: &api.TableID{DbId: catalog.MO_CATALOG_ID, TbId: catalog.MO_DATABASE_ID, DbName: catalog.MO_CATALOG, TbName: catalog.MO_DATABASE}},
+			}},
+		}}
+		payload, err := response.Marshal()
+		require.NoError(t, err)
+		stream.recv <- &service.LogtailResponseSegment{MessageSegment: logtail.MessageSegment{
+			MessageSize: int32(len(payload)), Sequence: 1, MaxSequence: 1, Payload: payload,
+		}}
+		synctest.Wait() // Real direct catalog dispatch waits for the partition lock.
+		req := c.pause(false)
+		synctest.Wait()
+		select {
+		case <-req.ack:
+			part.Unlock()
+			t.Fatal("receiver acknowledged while catalog dispatch was blocked")
+		default:
+		}
+		part.Unlock()
+		synctest.Wait()
+		select {
+		case <-req.ack:
+		default:
+			t.Fatal("receiver did not acknowledge after catalog dispatch finished")
+		}
+	})
 }
 
 func TestFirstConnectReceiverStreamFailure(t *testing.T) {
@@ -117,8 +253,7 @@ func TestFirstConnectReceiverStreamFailure(t *testing.T) {
 		t.Cleanup(func() { require.NoError(t, c.Close()) })
 		c.connector = newConnector(c, e)
 		c.subscriber = newLogTailSubscriber()
-		c.pauseC = make(chan bool, 1)
-		c.resumeC = make(chan struct{})
+		c.pauseC = make(chan *logtailPauseRequest, 1)
 		stream := newCloseRaceStream()
 		lc, err := service.NewLogtailClient(ctx, stream)
 		require.NoError(t, err)
@@ -134,4 +269,99 @@ func TestFirstConnectReceiverStreamFailure(t *testing.T) {
 		require.Zero(t, tc.resumes)
 		require.False(t, c.subscriber.ready())
 	})
+}
+
+func TestDisconnectPausesBeforeDetachingClient(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		tc := &firstConnectTxnClient{}
+		e := &Engine{cli: tc}
+		c := &e.pClient
+		ctx := c.start(context.Background())
+		t.Cleanup(func() { require.NoError(t, c.Close()) })
+		c.connector = newConnector(c, e)
+		c.subscriber = newLogTailSubscriber()
+		c.pauseC = make(chan *logtailPauseRequest, 1)
+		stream := newCloseRaceStream()
+		lc, err := service.NewLogtailClient(ctx, stream)
+		require.NoError(t, err)
+		c.subscriber.swapClient(lc)
+		c.runOwned(func() { c.receiveLogtails(ctx, e) })
+		require.NoError(t, c.Disconnect())
+		synctest.Wait()
+		c.mu.Lock()
+		req := c.mu.pause
+		c.mu.Unlock()
+		require.NotNil(t, req)
+		select {
+		case <-req.ack:
+		default:
+			t.Fatal("receiver did not acknowledge the disconnect pause")
+		}
+		require.Nil(t, c.subscriber.client())
+		c.completeFirstConnect(e)
+		synctest.Wait()
+		require.Len(t, c.connector.signal, 1)
+	})
+}
+
+func TestFirstConnectCannotPublishReadyAfterClose(t *testing.T) {
+	tc := &firstConnectTxnClient{}
+	e := &Engine{cli: tc}
+	c := &e.pClient
+	c.connector = newConnector(c, e)
+	c.subscriber = newLogTailSubscriber()
+	c.subscriber.setReady()
+	c.receivedLogTailTime.ready.Store(true)
+	require.NoError(t, c.Close())
+	c.completeFirstConnect(e)
+	require.Zero(t, tc.resumes)
+	require.False(t, c.subscriber.ready())
+	require.False(t, c.receivedLogTailTime.ready.Load())
+}
+
+func TestCloseCancelsInitBeforeWaitingForDisconnect(t *testing.T) {
+	c := &PushClient{subscriber: newLogTailSubscriber()}
+	ctx := c.start(context.Background())
+	started := make(chan struct{})
+	c.LogtailRPCClientFactory = func(ctx context.Context, _, _ string, _ morpc.RPCClient) (morpc.RPCClient, morpc.Stream, error) {
+		close(started)
+		<-ctx.Done()
+		return nil, nil, ctx.Err()
+	}
+	initDone := make(chan error, 1)
+	go func() { initDone <- c.init(ctx, "addr", nil, &Engine{}) }()
+	<-started
+	disconnected := make(chan error, 1)
+	go func() { disconnected <- c.Disconnect() }()
+	deadline := time.After(5 * time.Second)
+	for c.mu.TryLock() {
+		c.mu.Unlock()
+		select {
+		case <-deadline:
+			c.cancel()
+			t.Fatal("disconnect did not acquire its control lock")
+		default:
+			runtime.Gosched()
+		}
+	}
+	closed := make(chan error, 1)
+	go func() { closed <- c.Close() }()
+	for _, result := range []struct {
+		name string
+		ch   <-chan error
+	}{
+		{"init", initDone}, {"disconnect", disconnected}, {"close", closed},
+	} {
+		select {
+		case err := <-result.ch:
+			if result.name == "init" {
+				require.ErrorIs(t, err, context.Canceled)
+			} else {
+				require.NoError(t, err)
+			}
+		case <-time.After(5 * time.Second):
+			c.cancel()
+			t.Fatalf("%s did not finish after owner cancellation", result.name)
+		}
+	}
 }

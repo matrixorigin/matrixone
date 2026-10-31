@@ -2047,3 +2047,65 @@ func (fs *filterPolicyFS) Read(ctx context.Context, v *fileservice.IOVector) err
 	fs.policies = append(fs.policies, v.Policy)
 	return fs.FileService.Read(ctx, v)
 }
+
+// A persisted constant has a compact on-disk vector, but an ordinary scan
+// still materializes a full output column. The physical lower cost models
+// this output work, not BlockMaxRows independent disk decodes.
+func TestTemporalFullBlockConstantMaterialization(t *testing.T) {
+	ctx := t.Context()
+	fs := testutil.NewSharedFS()
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	value := types.DatetimeFromClock(2026, 6, 1, 0, 0, 0, 0)
+	typ := types.T_datetime.ToType()
+	input := batch.NewWithSize(2)
+	var err error
+	input.Vecs[0], err = vector.NewConstFixed(typ, value, objectio.BlockMaxRows, mp)
+	require.NoError(t, err)
+	input.Vecs[1] = vector.NewVec(types.T_int64.ToType())
+	for i := range objectio.BlockMaxRows {
+		require.NoError(t, vector.AppendFixed(input.Vecs[1], int64(i), false, mp))
+	}
+	input.SetRowCount(objectio.BlockMaxRows)
+	arena := objectio.NewArena(0)
+	defer arena.FreeBuffers()
+	id := objectio.NewObjectid()
+	writer, err := objectio.NewObjectWriter(objectio.BuildObjectNameWithObjectID(&id), fs, 0, []uint16{1, 2}, arena)
+	require.NoError(t, err)
+	_, err = writer.Write(input)
+	require.NoError(t, err)
+	_, err = writer.WriteEnd(ctx)
+	require.NoError(t, err)
+	stats := writer.GetObjectStats()
+	info := stats.ConstructBlockInfo(0)
+	input.Clean(mp)
+	for _, early := range []bool{false, true} {
+		output := batch.NewWithSize(2)
+		output.Vecs[0] = vector.NewOffHeapVecWithType(typ)
+		output.Vecs[1] = vector.NewOffHeapVecWithType(types.T_int64.ToType())
+		cache := containers.NewVectors(3)
+		if early {
+			rows, err := BlockDataReadWithFilter(ctx, &info, &blockReadTestDataSource{}, []uint16{1, 2}, []types.Type{typ, types.T_int64.ToType()}, -1,
+				timestamp.Timestamp{}, nil, nil, objectio.BlockReadFilter{}, nil, fileservice.Policy(0), "events", output, cache, mp, fs, []int{0},
+				func(bat *batch.Batch, loaded []int) (engine.ReaderFilterResult, error) {
+					require.Equal(t, []int{0}, loaded)
+					require.Equal(t, objectio.BlockMaxRows, bat.RowCount())
+					require.Equal(t, objectio.BlockMaxRows, bat.Vecs[0].Length())
+					require.False(t, bat.Vecs[0].IsConst())
+					return engine.ReaderFilterResult{All: true}, nil
+				})
+			require.NoError(t, err)
+			require.Equal(t, objectio.BlockMaxRows, rows)
+		} else {
+			require.NoError(t, BlockDataRead(ctx, &info, &blockReadTestDataSource{}, []uint16{1, 2}, []types.Type{typ, types.T_int64.ToType()}, -1,
+				timestamp.Timestamp{}, nil, nil, objectio.BlockReadFilter{}, nil, fileservice.Policy(0), "events", output, cache, mp, fs))
+		}
+		require.Equal(t, objectio.BlockMaxRows, output.RowCount())
+		require.Equal(t, objectio.BlockMaxRows, output.Vecs[0].Length())
+		require.False(t, output.Vecs[0].IsConst())
+		require.Equal(t, value, vector.GetFixedAtWithTypeCheck[types.Datetime](output.Vecs[0], objectio.BlockMaxRows-1))
+		output.Clean(mp)
+		cache.Free(mp)
+	}
+	require.Zero(t, mp.CurrNB())
+}

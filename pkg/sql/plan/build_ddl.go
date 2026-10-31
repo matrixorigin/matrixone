@@ -302,14 +302,14 @@ func inferViewColumns(
 	case *tree.ParenSelect:
 		stmtPlan, err = bindAndOptimizeSelectQueryWithValidatorAndCapture(
 			plan.Query_SELECT, ctx, s.Select, false, true, validate, captureColumnTypes, true,
-			objectkey.Encode(viewDatabase, viewName))
+			objectkey.Encode(viewDatabase, viewName), nil)
 		if err != nil {
 			return nil, err
 		}
 	default:
 		stmtPlan, err = bindAndOptimizeSelectQueryWithValidatorAndCapture(
 			plan.Query_SELECT, ctx, stmt, false, true, validate, captureColumnTypes, true,
-			objectkey.Encode(viewDatabase, viewName))
+			objectkey.Encode(viewDatabase, viewName), nil)
 		if err != nil {
 			return nil, err
 		}

@@ -624,6 +624,9 @@ func TestPrimaryKeyUnionIter(t *testing.T) {
 	empty := state.NewPrimaryKeyIterWithFilters(types.BuildTS(2, 0), nil)
 	require.False(t, empty.Next())
 	require.NoError(t, empty.Close())
+	emptyIn := state.NewPrimaryKeyIterWithFilters(types.BuildTS(2, 0), []readutil.MemPKFilterSpec{{Op: function.IN}})
+	require.False(t, emptyIn.Next())
+	require.NoError(t, emptyIn.Close())
 
 	deletedRowIDs := vector.NewVec(types.T_Rowid.ToType())
 	deleteTS := vector.NewVec(types.T_TS.ToType())

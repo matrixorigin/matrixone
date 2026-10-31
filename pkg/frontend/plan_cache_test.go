@@ -24,7 +24,9 @@ import (
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	pbplan "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	mysqlparser "github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -809,4 +811,105 @@ func TestSessionVectorModeChangeClearsPlanCache(t *testing.T) {
 			require.Equal(t, 1, off.freed)
 		})
 	}
+}
+
+func TestTemporalCacheGenericWriterRejectsUncertifiedDynamicPlan(t *testing.T) {
+	raw := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{StmtType: pbplan.Query_SELECT, TemporalIndexNeedsReplan: true}}}
+	for _, scenario := range []string{"generic", "not terminal", "wrong template", "running compile"} {
+		t.Run(scenario, func(t *testing.T) {
+			pc := newPlanCache(2)
+			stmt := &trackedStatement{}
+			var seal *temporalCacheSeal
+			if scenario != "generic" {
+				seal = &temporalCacheSeal{raw: raw, terminal: true}
+				switch scenario {
+				case "not terminal":
+					seal.terminal = false
+				case "wrong template":
+					seal.raw = &plan.Plan{}
+				case "running compile":
+					seal.running = &compile.Compile{}
+				}
+			}
+			pc.cacheWithPlanSnapshotsAndStatsVersionsOwned("dynamic", []tree.Statement{stmt}, []*plan.Plan{raw}, []timestamp.Timestamp{{}}, []map[optimizerStatsTableKey]uint64{nil}, seal)
+			require.False(t, pc.isCached("dynamic"))
+			require.Equal(t, 1, stmt.freed)
+		})
+	}
+}
+
+func TestTemporalCacheTrustedEntryCannotPublishRebuiltGeneration(t *testing.T) {
+	pc := newPlanCache(2)
+	raw := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{StmtType: pbplan.Query_SELECT, TemporalIndexNeedsReplan: true}}}
+	stmt := &trackedStatement{}
+	// This tests the LRU's private owner handoff, not the frontend certificate
+	// producer. Session separately requires the real terminal, original audit.
+	seal := &temporalCacheSeal{raw: raw, terminal: true}
+	pc.cacheWithPlanSnapshotsAndStatsVersionsOwned("dynamic", []tree.Statement{stmt}, []*plan.Plan{raw}, []timestamp.Timestamp{{}}, []map[optimizerStatsTableKey]uint64{nil}, seal)
+	cached := pc.get("dynamic")
+	require.NotNil(t, cached)
+	require.True(t, cached.temporal)
+	require.False(t, pc.updatePlanGeneration("dynamic", 0, raw, &plan.Plan{}, timestamp.Timestamp{}, nil))
+	require.True(t, cached.invalid)
+	require.Same(t, raw, cached.plans[0])
+	pc.clean()
+	require.Equal(t, 1, stmt.freed)
+}
+
+func TestTemporalCacheStatementOwner(t *testing.T) {
+	for _, sql := range []string{
+		"select d from t where d > now()",
+		"perform select d from t where d > now()",
+		"select d from t where d > now() into outfile '/tmp/temporal-cache-owner'",
+		"explain select d from t where d > now()",
+		"(select d from t where d > now())",
+		"select SQL_NO_CACHE d from t where d > now()",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			stmts, err := mysqlparser.Parse(t.Context(), sql, 1)
+			require.NoError(t, err)
+			require.Len(t, stmts, 1)
+			defer stmts[0].Free()
+			require.Equal(t, sql == "select d from t where d > now()", temporalCacheStatementEligible(stmts[0]))
+		})
+	}
+}
+
+func TestTemporalCacheCancelledCloneAndLookupPreserveCause(t *testing.T) {
+	ctx, cancel := context.WithCancelCause(t.Context())
+	cause := fmt.Errorf("cancelled before cache clone")
+	cancel(cause)
+	execCtx := &ExecCtx{reqCtx: ctx}
+	cloned, err := clonePrivateTemporalGeneration(ctx, nil)
+	require.Nil(t, cloned)
+	require.Same(t, cause, err)
+	// Neither entry may proceed to session lookup, clone, or parser work.
+	cached, err := temporalCachedPlanForExecution(nil, execCtx)
+	require.Nil(t, cached)
+	require.Same(t, cause, err)
+}
+
+func TestTemporalCacheRawInputQualification(t *testing.T) {
+	for _, sql := range []string{
+		"select d from t where d > now()",
+		"/*+ SET_VAR(max_dop=1) */ select d from t where d > now()",
+		"/*!+ SET_VAR(max_dop=1) */ select d from t where d > now()",
+		"/* cloud_user */ select d from t where d > now()",
+		"/* cloud_nonuser */ select d from t where d > now()",
+		"/* save_result */ select d from t where d > now()",
+	} {
+		require.Equal(t, sql == "select d from t where d > now()", temporalCacheRawInputEligible(&UserInput{sql: sql}, ""), sql)
+	}
+	require.False(t, temporalCacheRawInputEligible(&UserInput{sql: "select d from t where d > now()", stmt: &tree.Select{}}, ""))
+}
+
+func TestTemporalCacheMalformedGenerationRejected(t *testing.T) {
+	pc := newPlanCache(1)
+	defer pc.clean()
+	old := &pbplan.Plan{Plan: &pbplan.Plan_Query{Query: &pbplan.Query{}}}
+	pc.cache("q", []tree.Statement{&trackedStatement{}}, []*pbplan.Plan{old})
+	malformed := &pbplan.Plan{Plan: (*pbplan.Plan_Query)(nil)}
+	require.False(t, pc.updatePlanGeneration("q", 0, old, malformed, timestamp.Timestamp{}, nil))
+	require.Same(t, old, pc.get("q").plans[0])
+	require.False(t, pc.get("q").invalid)
 }

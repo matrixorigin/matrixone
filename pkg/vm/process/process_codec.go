@@ -160,7 +160,17 @@ func (proc *Process) BuildProcessInfo(
 			return procInfo, moerr.NewInvalidInputNoCtxf(
 				"invalid max_error_count %d", maxErrorCount)
 		}
-		timeBytes, err := time.Time{}.In(loc).MarshalBinary()
+		offset, fixed := types.FixedZoneOffset(loc)
+		fixed = fixed && int64(offset) >= math.MinInt32 && int64(offset) <= math.MaxInt32
+		encodedLoc := loc
+		zoneName := TimeZoneLocationName(loc)
+		if fixed {
+			encodedLoc = time.UTC
+			zoneName = ""
+		} else {
+			offset = 0
+		}
+		timeBytes, err := time.Time{}.In(encodedLoc).MarshalBinary()
 		if err != nil {
 			return procInfo, err
 		}
@@ -174,7 +184,9 @@ func (proc *Process) BuildProcessInfo(
 			Database:               proc.Base.SessionInfo.GetDatabase(),
 			Version:                proc.Base.SessionInfo.GetVersion(),
 			TimeZone:               timeBytes,
-			TimeZoneName:           TimeZoneLocationName(loc),
+			TimeZoneName:           zoneName,
+			FixedOffsetPresent:     fixed,
+			FixedOffsetSeconds:     int64(offset),
 			QueryId:                proc.Base.SessionInfo.QueryId,
 			LockWaitTimeout:        resolveLockWaitTimeoutSeconds(proc),
 			LockWaitTimeoutSet:     proc.Base.SessionInfo.LockWaitTimeoutSet,
@@ -514,6 +526,21 @@ func ConvertToProcessSessionInfo(
 		LastInsertIDSet:                     sei.LastInsertIdSet,
 		MaxErrorCount:                       int(sei.MaxErrorCount),
 		MaxErrorCountSet:                    sei.MaxErrorCountSet,
+	}
+	if sei.FixedOffsetPresent {
+		if sei.TimeZoneName != "" || sei.FixedOffsetSeconds < math.MinInt32 ||
+			sei.FixedOffsetSeconds > math.MaxInt32 || int64(int(sei.FixedOffsetSeconds)) != sei.FixedOffsetSeconds {
+			return sessionInfo, moerr.NewInvalidInputNoCtx("invalid fixed time zone metadata")
+		}
+		if sei.FixedOffsetSeconds == 0 {
+			sessionInfo.TimeZone = time.UTC
+		} else {
+			sessionInfo.TimeZone = time.FixedZone("", int(sei.FixedOffsetSeconds))
+		}
+		return sessionInfo, nil
+	}
+	if sei.FixedOffsetSeconds != 0 {
+		return sessionInfo, moerr.NewInvalidInputNoCtx("fixed time zone offset without presence")
 	}
 	if sei.TimeZoneName != "" {
 		if sei.TimeZoneName == "Local" {

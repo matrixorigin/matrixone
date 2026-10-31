@@ -33,3 +33,20 @@ func (tc *txnOperator) CatalogReadStamp() (CatalogReadStamp, error) {
 	}
 	return CatalogReadStamp{TransactionID: string(tc.mu.txn.ID), Snapshot: tc.mu.txn.SnapshotTS, Revision: tc.catalogReadRevision.Load(), Workspace: tc.reset.workspace}, nil
 }
+
+// TryCatalogReadStamp is the optional, bounded counterpart of CatalogReadStamp.
+// It never waits behind transaction work or changes a SQL error/diagnostic.
+// Callers must check their context and workspace visibility separately, outside
+// storage fences. A stamp does not permit concurrent workspace mutation.
+func (tc *txnOperator) TryCatalogReadStamp() (CatalogReadStamp, bool) {
+	if tc == nil || !tc.mu.TryRLock() {
+		return CatalogReadStamp{}, false
+	}
+	defer tc.mu.RUnlock()
+	// Native IDs are normally 16 bytes. Decline unusual IDs before copying so
+	// an optional observation cannot retain or allocate unbounded storage.
+	if tc.mu.closed || tc.mu.terminalAction != txnTerminalActionNone || len(tc.mu.txn.ID) == 0 || len(tc.mu.txn.ID) > 64 {
+		return CatalogReadStamp{}, false
+	}
+	return CatalogReadStamp{TransactionID: string(tc.mu.txn.ID), Snapshot: tc.mu.txn.SnapshotTS, Revision: tc.catalogReadRevision.Load(), Workspace: tc.reset.workspace}, true
+}

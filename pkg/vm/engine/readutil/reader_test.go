@@ -20,16 +20,19 @@ import (
 	"math"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
@@ -159,12 +162,12 @@ func (s *singlePersistedBlockSource) Next(
 }
 
 func (*singlePersistedBlockSource) ApplyTombstones(
-	context.Context,
-	*objectio.Blockid,
-	[]int64,
-	engine.TombstoneApplyPolicy,
+	_ context.Context,
+	_ *objectio.Blockid,
+	rows []int64,
+	_ engine.TombstoneApplyPolicy,
 ) ([]int64, error) {
-	return nil, nil
+	return rows, nil
 }
 
 func (*singlePersistedBlockSource) GetTombstones(
@@ -1028,4 +1031,134 @@ type policyObservingFS struct {
 func (fs *policyObservingFS) Read(ctx context.Context, v *fileservice.IOVector) error {
 	fs.policies = append(fs.policies, v.Policy)
 	return fs.FileService.Read(ctx, v)
+}
+
+// A storage hint is optional pruning. Its disappearance or a wider admitted
+// block must leave the original mixed temporal predicate authoritative.
+func TestReaderTemporalResidualAfterOptionalPKFilter(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	proc.SetBaseProcessRunningStatus(true)
+	proc.GetSessionInfo().TimeZone = time.UTC
+	ctx := proc.Ctx
+	fs, err := fileservice.NewMemoryFS(defines.SharedFileServiceName, fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	defer fs.Close(ctx)
+	packer := types.NewPacker()
+	defer packer.Close()
+	encode := func(value types.Datetime) []byte {
+		packer.Reset()
+		packer.EncodeDatetime(value)
+		return append([]byte(nil), packer.GetBuf()...)
+	}
+	center := types.DatetimeFromClock(2024, 4, 25, 0, 0, 0, 123000)
+	values := []types.Datetime{center - 1, center, center + 456, center + 1000, center + 2000}
+	stamp := center.ToTimestamp(time.UTC)
+	input := batch.NewWithSize(2)
+	defer input.Clean(proc.Mp())
+	input.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+	input.Vecs[1] = vector.NewVec(types.T_int64.ToType())
+	var expected []int64
+	for i, value := range values {
+		require.NoError(t, vector.AppendBytes(input.Vecs[0], encode(value), false, proc.Mp()))
+		require.NoError(t, vector.AppendFixed(input.Vecs[1], int64(i), false, proc.Mp()))
+		if value.ToTimestamp(time.UTC).TruncateToScale(3) > stamp {
+			expected = append(expected, int64(i))
+		}
+	}
+	require.Equal(t, []int64{3, 4}, expected)
+	input.SetRowCount(len(values))
+	writer := ioutil.ConstructWriter(0, []uint16{0, 1}, 0, false, false, fs)
+	_, err = writer.WriteBatch(input)
+	require.NoError(t, err)
+	_, _, err = writer.Sync(ctx)
+	require.NoError(t, err)
+	stats := writer.GetObjectStats(objectio.WithSorted())
+	table := &plan.TableDef{
+		Name: "temporal_residual_reader", Name2ColIndex: map[string]int32{"key": 0, "id": 1},
+		Pkey: &plan.PrimaryKeyDef{PkeyColName: "key", Names: []string{"key"}},
+		Cols: []*plan.ColDef{
+			{Name: "key", Primary: true, Typ: types.T_varchar.ToType().PlanType()},
+			{Name: "id", Seqnum: 1, Typ: types.T_int64.ToType().PlanType()},
+		},
+	}
+	bind := func(name string, args ...*plan.Expr) *plan.Expr {
+		expr, err := plan2.BindFuncExprImplByPlanExpr(ctx, name, args)
+		require.NoError(t, err)
+		return expr
+	}
+	key := MakeColExprForTest(0, types.T_varchar, "key")
+	extract := bind("serial_extract", key, plan2.MakePlan2Int64ConstExprWithType(0),
+		&plan.Expr{Typ: types.New(types.T_datetime, 0, 6).PlanType(), Expr: &plan.Expr_T{T: &plan.TargetType{}}})
+	bound := &plan.Expr{Typ: types.New(types.T_timestamp, 0, 3).PlanType(), Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Timestampval{Timestampval: int64(stamp)}}}}
+	residual := bind(">", extract, bound)
+	// This deliberately wider, valid encoded-key range includes equality and
+	// a fraction that rounds to equality. Neither is a true SQL match.
+	hint := bind("prefix_between", key,
+		plan2.MakePlan2StringConstExprWithType(string(encode(center)), true),
+		plan2.MakePlan2StringConstExprWithType(string(encode(values[len(values)-1])), true))
+	hint.TemporalCandidateFilter = true
+	var folds []colexec.ExpressionExecutor
+	defer func() {
+		for _, executor := range folds {
+			executor.Free()
+		}
+	}()
+	_, err = plan2.ReplaceFoldExpr(proc, hint, &folds)
+	require.NoError(t, err)
+	require.NoError(t, plan2.EvalFoldExpr(proc, hint, &folds))
+	for _, failOpen := range []bool{false, true} {
+		t.Run(map[bool]string{false: "wide_range", true: "unknown_pruning"}[failOpen], func(t *testing.T) {
+			candidate := plan2.DeepCopyExpr(hint)
+			if failOpen {
+				// Simulate an optional consumer that cannot narrow the hint. The
+				// optimizer need not emit this OR: unsupported pruning must be safe.
+				candidate = bind("or", candidate, plan2.MakePlan2BoolConstExprWithType(true))
+			}
+			storage := bind("and", plan2.DeepCopyExpr(residual), candidate)
+			base, err := ConstructBasePKFilter(storage, table, proc.Mp())
+			require.NoError(t, err)
+			defer base.Cleanup()
+			require.Equal(t, !failOpen, base.Valid)
+			source := &singlePersistedBlockSource{info: stats.ConstructBlockInfo(0)}
+			r, err := NewReader(ctx, proc.Mp(), nil, fs, table, timestamp.Timestamp{}, storage, source, engine.FilterHint{})
+			require.NoError(t, err)
+			defer func() {
+				require.NoError(t, r.Close())
+				require.Equal(t, int32(1), atomic.LoadInt32(&source.closeCount))
+			}()
+			executor, err := colexec.NewExpressionExecutor(proc, residual)
+			require.NoError(t, err)
+			defer executor.Free()
+			output := batch.NewWithSize(2)
+			defer output.Clean(proc.Mp())
+			output.Vecs[0] = vector.NewOffHeapVecWithType(types.T_varchar.ToType())
+			output.Vecs[1] = vector.NewOffHeapVecWithType(types.T_int64.ToType())
+			observed := 0
+			isEnd, err := r.ReadWithFilter(ctx, []string{"key", "id"}, []int{0},
+				func(bat *batch.Batch, loaded []int) (engine.ReaderFilterResult, error) {
+					require.Equal(t, []int{0}, loaded)
+					observed += bat.RowCount()
+					result, err := executor.Eval(proc, []*batch.Batch{bat}, nil)
+					if err != nil {
+						return engine.ReaderFilterResult{}, err
+					}
+					matches := vector.GenerateFunctionFixedTypeParameter[bool](result)
+					var selected []int64
+					for i := 0; i < bat.RowCount(); i++ {
+						value, null := matches.GetValue(uint64(i))
+						if value && !null {
+							selected = append(selected, int64(i))
+						}
+					}
+					bat.Vecs[0].Shrink(selected, false)
+					bat.SetRowCount(len(selected))
+					return engine.ReaderFilterResult{Sels: selected}, nil
+				}, proc.Mp(), output)
+			require.NoError(t, err)
+			require.False(t, isEnd)
+			require.Equal(t, map[bool]int{false: 4, true: 5}[failOpen], observed)
+			require.Equal(t, expected, vector.MustFixedColWithTypeCheck[int64](output.Vecs[1]))
+		})
+	}
 }

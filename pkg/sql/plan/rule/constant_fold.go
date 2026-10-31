@@ -139,6 +139,12 @@ func (r *ConstantFold) foldExpr(expr *plan.Expr, proc *process.Process, spatialC
 	if expr == nil {
 		return expr
 	}
+	if fn := expr.GetF(); fn != nil && fn.Func != nil {
+		fid, _ := function.DecodeOverloadID(fn.Func.GetObj())
+		if function.IsTemporalBoundFunction(fid) {
+			return expr
+		}
+	}
 
 	if expr.Typ.Id == int32(types.T_interval) {
 		// INTERVAL is meaningful as an argument to temporal functions, but the

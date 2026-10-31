@@ -3151,6 +3151,7 @@ func createPrepareStmtInSession(
 			nil,
 			nil,
 			groupConcatFloor,
+			nil,
 		)
 		if err != nil {
 			if !moerr.IsMoErrCode(err, moerr.ErrCantCompileForPrepare) {
@@ -4212,6 +4213,17 @@ func buildPlanWithPrepareMode(
 	stmt tree.Statement,
 	forcePrepare bool,
 ) (*plan2.Plan, error) {
+	return buildPlanWithPrepareModeAndTemporalScope(reqCtx, ses, ctx, stmt, forcePrepare, nil)
+}
+
+func buildPlanWithPrepareModeAndTemporalScope(
+	reqCtx context.Context,
+	ses FeSession,
+	ctx plan2.CompilerContext,
+	stmt tree.Statement,
+	forcePrepare bool,
+	temporalScope *plan2.TemporalPlanningScope,
+) (*plan2.Plan, error) {
 	return buildPlanWithStats(reqCtx, ses, ctx, func() (*plan2.Plan, error) {
 		// LOAD planning may inspect an external source before producing a plan.
 		// Authorize its target table at this common planning boundary so direct
@@ -4269,7 +4281,7 @@ func buildPlanWithPrepareMode(
 				*tree.ShowTableNumber, *tree.ShowCreateDatabase, *tree.ShowCreateTable, *tree.ShowIndex,
 				*tree.ExplainStmt, *tree.ExplainAnalyze, *tree.ExplainPhyPlan:
 				opt := plan2.NewBaseOptimizer(ctx)
-				optimized, err := opt.Optimize(stmt, isPrepareStmt)
+				optimized, err := opt.OptimizeWithTemporalScope(stmt, isPrepareStmt, temporalScope)
 				if err != nil {
 					return nil, err
 				}
@@ -4280,7 +4292,7 @@ func buildPlanWithPrepareMode(
 					},
 				}
 			default:
-				ret, err = plan2.BuildPlan(ctx, stmt, isPrepareStmt)
+				ret, err = plan2.BuildPlanWithTemporalScope(ctx, stmt, isPrepareStmt, temporalScope)
 			}
 		}
 
@@ -4549,6 +4561,14 @@ var GetComputationWrapper = func(execCtx *ExecCtx, db string, user string, eng e
 	execCtx.remapDb = nil
 	var cws []ComputationWrapper = nil
 	var statementRemaps []map[string]string
+	var cached *cachedPlan
+	if execCtx.input.getPreparePlan() == nil {
+		var cacheErr error
+		cached, cacheErr = temporalCachedPlanForExecution(ses, execCtx)
+		if cacheErr != nil {
+			return nil, cacheErr
+		}
+	}
 	if preparePlan := execCtx.input.getPreparePlan(); preparePlan != nil {
 		execCtx.input.genSqlSourceType(ses)
 		// Binary execute carries the prepared plan directly in UserInput. Check
@@ -4572,7 +4592,9 @@ var GetComputationWrapper = func(execCtx *ExecCtx, db string, user string, eng e
 		tcw.SetRemapDb(execCtx.input.remapDb)
 		cws = append(cws, tcw)
 		return cws, nil
-	} else if cached := cachedPlanForInput(ses, execCtx.input); cached != nil {
+	} else if cause := context.Cause(execCtx.reqCtx); cause != nil {
+		return nil, cause
+	} else if cached != nil {
 		var remapErr error
 		statementSchedulingSQL, sources, schedulingErr := schedulingSQLByStatementWithSQLMode(
 			execCtx.reqCtx, execCtx.input.getSql(), parserSQLMode, internalSource)
@@ -4596,12 +4618,18 @@ var GetComputationWrapper = func(execCtx *ExecCtx, db string, user string, eng e
 			// otherwise normal cleanup or stale-plan reset can return the same AST
 			// to the parser pool while the cache still owns or already freed it.
 			tcw.stmtBorrowed = true
-			tcw.plan = cached.plans[i]
+			// A certified raw temporal plan never escapes through Plan(), even
+			// to RecordStatement callbacks before dispatch admission.
+			if !cached.temporal {
+				tcw.plan = cached.plans[i]
+			}
+			tcw.temporalCacheHit = cached.temporal
 			tcw.cachedPlanSQL = execCtx.input.getHash()
 			tcw.cachedPlanIndex = i
 			tcw.cachedPlanGeneration = cached.plans[i]
-			tcw.setPlanSnapshotTS(cached.planSnapshotTS[i])
-			tcw.planGenerationReused = true
+			tcw.planSnapshotTS = cached.planSnapshotTS[i]
+			tcw.hasPlanSnapshotTS = !cached.temporal
+			tcw.planGenerationReused = !cached.temporal
 			tcw.protocolVersion = cached.protocolVersion
 			tcw.SetRemapDb(statementRemaps[i])
 			tcw.SetSchedulingSQL(statementSchedulingSQL[i])
@@ -6066,8 +6094,17 @@ func executeStmtWithIncrStmt(ses FeSession,
 func rebuildStaleCachedStatements(ses FeSession, execCtx *ExecCtx) (err error) {
 	// Evict this stale entry before rebuilding so a successful replan replaces
 	// it instead of paying the validation/rebuild cost forever.
+	if cause := context.Cause(execCtx.reqCtx); cause != nil {
+		return cause
+	}
 	if session, ok := ses.(*Session); ok {
-		session.removeCachedPlan(execCtx.input.getHash())
+		if cw, ok := execCtx.cw.(*TxnComputationWrapper); ok && cw.temporalCacheHit {
+			// Invalidation preserves the borrowed AST until its wrapper resets;
+			// a replacement generation is never removed by this stale borrower.
+			session.invalidateCachedPlanGeneration(cw.cachedPlanSQL, cw.cachedPlanIndex, cw.cachedPlanGeneration)
+		} else {
+			session.removeCachedPlan(execCtx.input.getHash())
+		}
 	}
 
 	stmts, err := parseSql(execCtx, ses.GetMySQLParser())
@@ -6110,6 +6147,19 @@ func rebuildStaleCachedStatements(ses FeSession, execCtx *ExecCtx) (err error) {
 // consumers validate the same generation boundary without publishing results.
 func checkCachedStatementPlan(ses FeSession, execCtx *ExecCtx) error {
 	ses.GetTxnCompileCtx().tcw = execCtx.cw
+	if cw, ok := execCtx.cw.(*TxnComputationWrapper); ok && cw.temporalCacheHit {
+		if cw.plan != nil {
+			return context.Cause(execCtx.reqCtx) // already admitted, including direct Compile
+		}
+		admitted, err := cw.admitTemporalCachedExecution(execCtx)
+		if err != nil {
+			return err
+		}
+		if !admitted {
+			return rebuildStaleCachedStatements(ses, execCtx)
+		}
+		return nil
+	}
 	//5. check plan within txn
 	if !execCtx.input.isBinaryProtExecute && execCtx.cw.Plan() != nil {
 		flag, err := checkModify(execCtx.cw.Plan(), ses.GetTxnCompileCtx().Resolve)
@@ -6121,6 +6171,9 @@ func checkCachedStatementPlan(ses FeSession, execCtx *ExecCtx) error {
 			if err != nil {
 				return err
 			}
+		}
+		if cause := context.Cause(execCtx.reqCtx); cause != nil {
+			return cause
 		}
 		if flag {
 			if err := rebuildStaleCachedStatements(ses, execCtx); err != nil {
@@ -7015,10 +7068,19 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		planStatsVersions[i] = tcw.optimizerStatsVersions
 	}
 
+	var temporalPublication *temporalCacheSeal
 	plans := make([]*plan.Plan, len(cws))
 	stmts := make([]tree.Statement, len(cws))
 	for i, cw := range cws {
-		if checkNodeCanCache(cw.Plan()) {
+		if len(cws) == 1 {
+			if tcw, ok := cw.(*TxnComputationWrapper); ok {
+				temporalPublication = tcw.temporalCachePublication(execCtx)
+			}
+		}
+		if temporalPublication != nil {
+			plans[i] = temporalPublication.raw
+			stmts[i] = cw.GetAst()
+		} else if checkNodeCanCache(cw.Plan()) {
 			plans[i] = cw.Plan()
 			stmts[i] = cw.GetAst()
 		} else {
@@ -7027,8 +7089,8 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		cw.Clear()
 	}
 	Cached = true
-	ses.cachePlanWithSnapshotsAndStatsVersions(
-		cacheKey, stmts, plans, planSnapshotTS, planStatsVersions, cacheProtocolVersion)
+	ses.cachePlanWithSnapshotsAndStatsVersionsOwned(
+		cacheKey, stmts, plans, planSnapshotTS, planStatsVersions, temporalPublication, cacheProtocolVersion)
 
 	return nil
 }
@@ -7141,7 +7203,7 @@ func checkNodeCanCache(p *plan2.Plan) bool {
 		return false
 	}
 	if q, ok := p.Plan.(*plan2.Plan_Query); ok {
-		if q.Query.GetHasForeignKeyAction() {
+		if q.Query.GetHasForeignKeyAction() || q.Query.GetTemporalIndexNeedsReplan() {
 			return false
 		}
 		for _, node := range q.Query.Nodes {

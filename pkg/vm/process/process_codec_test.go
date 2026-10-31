@@ -283,6 +283,44 @@ func TestProcessCodecHelpers(t *testing.T) {
 	})
 }
 
+func TestProcessCodecFixedTimeZoneAcrossForwards(t *testing.T) {
+	proc, _ := newCodecTestProcess(t)
+	defer proc.Free()
+	for _, offset := range []int{-14 * 3600, -61, -60, 0, 61, 14 * 3600} {
+		proc.Base.SessionInfo.TimeZone = time.FixedZone("fixed", offset)
+		first, err := proc.BuildProcessInfo("select 1")
+		require.NoError(t, err)
+		require.True(t, first.SessionInfo.FixedOffsetPresent)
+		require.Equal(t, int64(offset), first.SessionInfo.FixedOffsetSeconds)
+		require.Empty(t, first.SessionInfo.TimeZoneName)
+		wire, err := first.Marshal()
+		require.NoError(t, err)
+		var received pipeline.ProcessInfo
+		require.NoError(t, received.Unmarshal(wire))
+		decoded, err := ConvertToProcessSessionInfo(received.SessionInfo)
+		require.NoError(t, err)
+		for _, date := range []time.Time{{}, time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)} {
+			_, actual := date.In(decoded.TimeZone).Zone()
+			require.Equal(t, offset, actual)
+		}
+		proc.Base.SessionInfo.TimeZone = decoded.TimeZone
+		forwarded, err := proc.BuildProcessInfo("select 1")
+		require.NoError(t, err)
+		require.True(t, forwarded.SessionInfo.FixedOffsetPresent)
+		require.Equal(t, int64(offset), forwarded.SessionInfo.FixedOffsetSeconds)
+	}
+	_, err := ConvertToProcessSessionInfo(pipeline.SessionInfo{
+		FixedOffsetPresent: true, FixedOffsetSeconds: 1, TimeZoneName: "UTC",
+	})
+	require.Error(t, err)
+	_, err = ConvertToProcessSessionInfo(pipeline.SessionInfo{
+		FixedOffsetPresent: true, FixedOffsetSeconds: 1 << 32,
+	})
+	require.Error(t, err)
+	_, err = ConvertToProcessSessionInfo(pipeline.SessionInfo{FixedOffsetSeconds: 1})
+	require.Error(t, err)
+}
+
 func TestBuildProcessInfoPreservesBackgroundSqlModeAcrossForwards(t *testing.T) {
 	proc, _ := newCodecTestProcess(t)
 	proc.Base.IsFrontend = false

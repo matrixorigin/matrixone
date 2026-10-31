@@ -414,3 +414,27 @@ func TestJSONOpaqueExistingConsumerFences(t *testing.T) {
 		})
 	}
 }
+
+func TestLocalSourceFenceFastScanRetainsCompleteMixedFeaturePriority(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	trigger := bindJSONStringConsumerExpr(t, "concat")
+	invalidDecimal := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_decimal64)}, Expr: &planpb.Expr_F{F: &planpb.Function{
+		Func: &planpb.ObjectRef{Obj: int64(180) << 32},
+		Args: []*planpb.Expr{{Typ: planpb.Type{Id: int32(types.T_decimal64)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{}}}},
+	}}}
+	week := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_int32)}, Expr: &planpb.Expr_F{F: &planpb.Function{
+		Func: &planpb.ObjectRef{Obj: int64(216) << 32},
+	}}}
+	for _, extra := range []*planpb.Expr{invalidDecimal, week} {
+		owner := &planpb.Query{Nodes: []*planpb.Node{{ProjectList: []*planpb.Expr{trigger, extra}}}}
+		features, err := planpb.RequiredRemoteExpressionFeatures(owner)
+		require.NoError(t, err)
+		require.True(t, features.RequiresLocalSourceFence())
+		expected := validateRemoteExpressionFeatures(proc, features)
+		require.Error(t, expected)
+		actual := validateJSONStringConsumerProtocol(proc, owner)
+		require.IsType(t, expected, actual)
+		require.EqualError(t, actual, expected.Error())
+	}
+}
