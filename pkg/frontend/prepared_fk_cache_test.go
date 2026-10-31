@@ -122,6 +122,32 @@ func TestTemporalPlanningIntentUsesStatementSQL(t *testing.T) {
 	require.False(t, intent.ParameterFree, "placement is not a parameter diagnostic proof")
 }
 
+func TestTemporalPlanningIntentForExplain(t *testing.T) {
+	ses, prepared, _, execCtx := newPreparedExecuteEnv(t, 125)
+	defer prepared.Close()
+	for _, tc := range []struct {
+		sql      string
+		eligible bool
+	}{
+		{"explain select 1", true},
+		{"explain select ?", false},
+		{"explain execute missing", false},
+	} {
+		t.Run(tc.sql, func(t *testing.T) {
+			stmt, err := parsers.ParseOne(execCtx.reqCtx, dialect.MYSQL, tc.sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			root, _, ok := temporalPlanningIntentForStatement(ses, ses.GetProc(), tc.sql, "", stmt)
+			require.Equal(t, tc.eligible, ok)
+			if ok {
+				require.Same(t, temporalPlanningRoot(stmt), root)
+				_, _, ok = temporalPlanningIntentForStatement(ses, ses.GetProc(), "", "", stmt)
+				require.False(t, ok, "missing statement-local SQL cannot grant a scope")
+			}
+		})
+	}
+}
+
 func TestTemporalIndexPrepareRebuildsAtExecution(t *testing.T) {
 	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnv(t, 121)
 	defer prepareStmt.Close()

@@ -1,0 +1,50 @@
+drop database if exists temporal_explain_bvt;
+create database temporal_explain_bvt;
+use temporal_explain_bvt;
+set @temporal_explain_saved_tz = @@time_zone;
+set time_zone='+00:00';
+create table events(id int primary key, d datetime(6), key idx_d(d));
+insert into events
+select result, case when result < 99900 then date_add('2020-01-01 00:00:00', interval result second) else date_add(now(6), interval 1 day) end
+from generate_series(0,99999) g;
+select mo_ctl('dn','flush','temporal_explain_bvt.events');
+➤ mo_ctl(dn, flush, temporal_explain_bvt.events)[12,65535,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+set @temporal_explain_index = (select index_table_name from mo_catalog.mo_indexes where name='idx_d' and table_id=(select rel_id from mo_catalog.mo_tables where reldatabase='temporal_explain_bvt' and relname='events') limit 1);
+select mo_ctl('dn','flush',concat('temporal_explain_bvt.',@temporal_explain_index));
+➤ mo_ctl(dn, flush, concat(temporal_explain_bvt., @temporal_explain_index))[12,65535,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+analyze table events(d) fullscan;
+➤ table_name[12,0,0]  ¦  mode[12,0,0]  ¦  coverage[12,0,0]  ¦  columns_analyzed[-5,0,0]  ¦  population_rows[-5,0,0]  ¦  population_exact[-6,0,0]  ¦  sample_rows[-5,0,0]  ¦  sample_blocks[-5,0,0]  ¦  sample_bytes[-5,0,0]  ¦  status[12,0,0]  ¦  message[12,0,0]  𝄀
+temporal_explain_bvt.events  ¦  FULLSCAN  ¦  SNAPSHOT_VISIBLE_V1  ¦  1  ¦  100000  ¦  1  ¦  100000  ¦  14  ¦  3200000  ¦  OK  ¦  q=1/1
+explain select id,d from events where d > now(6);
+-- @regex("Index Table Scan on events.idx_d", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Index Table Scan on events.idx_d [ForceOneCN]  𝄀
+        Filter Cond: (serial_extract(__mo_index_idx_col, 0, DATETIME)) > now(6))  𝄀
+        Block Filter Cond: (__mo_temporal_bound_not_empty(now(6), 3, 6) and (prefix_between(__mo_index_idx_col) or prefix_between(__mo_index_idx_col)))
+select count(*) from events where d > now(6);
+➤ count(*)[-5,64,0]  𝄀
+100
+select count(*) from events ignore index(idx_d) where d > now(6);
+➤ count(*)[-5,64,0]  𝄀
+100
+set time_zone=@temporal_explain_saved_tz;
+drop database temporal_explain_bvt;

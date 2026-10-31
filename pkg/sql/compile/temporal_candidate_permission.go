@@ -16,9 +16,9 @@ package compile
 
 import (
 	"context"
-	"errors"
 	"math"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -28,7 +28,7 @@ import (
 
 // ErrTemporalAccessDrift is internal control flow: the execution owner must
 // rebuild the original plan without temporal access before retrying compile.
-var ErrTemporalAccessDrift = errors.New("temporal access intent changed before compilation")
+var ErrTemporalAccessDrift = moerr.NewInternalError(moerr.NoReportContext(), "temporal access intent changed before compilation")
 
 // prepareFixedZoneTemporalExecutionPlan makes an execution-owned copy whenever
 // an admitted candidate is present. Fixed offsets have an explicit process

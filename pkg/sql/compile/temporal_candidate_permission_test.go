@@ -16,6 +16,7 @@ package compile
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -34,6 +35,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
+
+func TestTemporalAccessDriftSentinelIdentity(t *testing.T) {
+	require.ErrorIs(t, ErrTemporalAccessDrift, ErrTemporalAccessDrift)
+	require.ErrorIs(t, fmt.Errorf("compile: %w", ErrTemporalAccessDrift), ErrTemporalAccessDrift)
+	require.NotErrorIs(t, moerr.NewInternalErrorNoCtx("different internal error"), ErrTemporalAccessDrift)
+}
 
 func TestTemporalCandidatePermissionRequiresProvenanceAndCopy(t *testing.T) {
 	helper := func() *plan.Expr {

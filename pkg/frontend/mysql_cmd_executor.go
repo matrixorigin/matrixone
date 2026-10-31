@@ -2555,14 +2555,38 @@ func handleShowProfileStmt(ses FeSession, execCtx *ExecCtx, stmt *tree.ShowProfi
 }
 
 func doExplainStmt(reqCtx context.Context, ses *Session, stmt *tree.ExplainStmt, statementSQL ...string) error {
+	rawSQL := ""
+	if len(statementSQL) > 0 {
+		rawSQL = statementSQL[0]
+	}
+	return doExplainStmtWithTemporalIntent(reqCtx, ses, stmt, nil, "", rawSQL)
+}
 
+// The caller supplies only statement-local scheduling text whose provenance is
+// known. Without it, EXPLAIN retains the unscoped planning path.
+func doExplainStmtWithTemporalIntent(reqCtx context.Context, ses *Session, stmt *tree.ExplainStmt, proc *process.Process, schedulingSQL, rawSQL string) error {
 	//1. generate the plan
 	es, err := getExplainOption(reqCtx, stmt.Options)
 	if err != nil {
 		return err
 	}
 	//get query optimizer and execute Optimize
-	exPlan, err := buildPlanWithAuthorization(reqCtx, ses, ses.GetTxnCompileCtx(), stmt.Statement)
+	var exPlan *plan.Plan
+	root, intent, eligible := temporalPlanningIntentForStatement(ses, proc, schedulingSQL, sessionSQLModeForScheduling(ses), stmt)
+	if eligible {
+		exPlan, err = func() (*plan.Plan, error) {
+			scope := plan2.NewTemporalPlanningScope(root, intent)
+			defer scope.Close()
+			return buildPlanWithAuthorizationAndTemporalScope(reqCtx, ses, ses.GetTxnCompileCtx(), stmt.Statement, scope)
+		}()
+		if err == nil {
+			exPlan, _, err = validateTemporalPlanBeforeCompile(exPlan, &intent, ses, proc, schedulingSQL, sessionSQLModeForScheduling(ses), stmt, func() (*plan.Plan, error) {
+				return buildPlanWithAuthorization(reqCtx, ses, ses.GetTxnCompileCtx(), stmt.Statement)
+			})
+		}
+	} else {
+		exPlan, err = buildPlanWithAuthorization(reqCtx, ses, ses.GetTxnCompileCtx(), stmt.Statement)
+	}
 	if err != nil {
 		return err
 	}
@@ -2586,10 +2610,6 @@ func doExplainStmt(reqCtx context.Context, ses *Session, stmt *tree.ExplainStmt,
 				return moerr.NewInternalError(reqCtx, "failed to copy exPlan")
 			}
 		}
-	}
-	rawSQL := ""
-	if len(statementSQL) > 0 {
-		rawSQL = statementSQL[0]
 	}
 	return writeExplainResult(reqCtx, ses, stmt, exPlan, es, rawSQL, nil)
 }
@@ -2748,8 +2768,10 @@ func explainSchedulingEnabled(ses *Session) bool {
 // Note: for pass the compile quickly. We will remove the comments in the future.
 func handleExplainStmt(ses FeSession, execCtx *ExecCtx, stmt *tree.ExplainStmt) error {
 	rawSQL := execCtx.sqlOfStmt
+	schedulingSQL := ""
 	if carrier, ok := execCtx.cw.(interface{ SchedulingSQL() string }); ok && carrier.SchedulingSQL() != "" {
-		rawSQL = carrier.SchedulingSQL()
+		schedulingSQL = carrier.SchedulingSQL()
+		rawSQL = schedulingSQL
 	}
 	if txnCW, ok := execCtx.cw.(*TxnComputationWrapper); ok && txnCW.ifIsExeccute {
 		es, err := getExplainOption(execCtx.reqCtx, stmt.Options)
@@ -2769,7 +2791,7 @@ func handleExplainStmt(ses FeSession, execCtx *ExecCtx, stmt *tree.ExplainStmt) 
 		}
 		return writeExplainResult(execCtx.reqCtx, ses.(*Session), stmt, exPlan, es, rawSQL, sqlMode)
 	}
-	return doExplainStmt(execCtx.reqCtx, ses.(*Session), stmt, rawSQL)
+	return doExplainStmtWithTemporalIntent(execCtx.reqCtx, ses.(*Session), stmt, execCtx.proc, schedulingSQL, rawSQL)
 }
 
 func preparedExplainPlan(ctx context.Context, txnCW *TxnComputationWrapper) (*plan.Plan, error) {
@@ -4370,11 +4392,15 @@ func buildPlanWithStats(reqCtx context.Context, ses FeSession, ctx plan2.Compile
 // check. LOAD's pre-plan target check is performed inside buildPlanWithPrepareMode,
 // the common planning boundary shared by this and direct compile paths.
 var buildPlanWithAuthorization = func(reqCtx context.Context, ses FeSession, ctx plan2.CompilerContext, stmt tree.Statement) (*plan2.Plan, error) {
+	return buildPlanWithAuthorizationAndTemporalScope(reqCtx, ses, ctx, stmt, nil)
+}
+
+func buildPlanWithAuthorizationAndTemporalScope(reqCtx context.Context, ses FeSession, ctx plan2.CompilerContext, stmt tree.Statement, scope *plan2.TemporalPlanningScope) (*plan2.Plan, error) {
 	planContext := ctx.GetContext()
 	stats := statistic.StatsInfoFromContext(planContext)
 
 	// Step 1: Call buildPlan to construct the execution plan
-	plan, err := buildPlan(reqCtx, ses, ctx, stmt)
+	plan, err := buildPlanWithPrepareModeAndTemporalScope(reqCtx, ses, ctx, stmt, false, scope)
 	if err != nil {
 		return nil, err
 	}
