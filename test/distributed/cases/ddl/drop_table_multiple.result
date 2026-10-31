@@ -31,7 +31,7 @@ show tables;
 ➤ Tables_in_drop_multi[12,-1,0]
 create table t1(a int);
 drop table t1, no_such_table;
-no such table drop_multi.no_such_table
+Unknown table 'drop_multi.no_such_table'
 show tables;
 ➤ Tables_in_drop_multi[12,-1,0]  𝄀
 t1

@@ -102,11 +102,35 @@ func TestBindUserVariableStringDomainErrorsAndNonStringControls(t *testing.T) {
 		require.Equal(t, assigned, expr.Typ)
 		require.Zero(t, expr.GetV().BoundStringDomain)
 	}
+	// A system variable consults the context exactly like a user variable: a
+	// declared integer binds its declared engine type — unsigned for a
+	// non-negative-domain declaration, signed for a negative-domain one —
+	// while a class the context leaves unresolved keeps the historical TEXT
+	// envelope.
+	ctx.ResolveVariableTypeFunc = func(name string, isSystemVar bool, _ bool) (Type, error) {
+		if !isSystemVar {
+			return assigned, nil
+		}
+		switch name {
+		case "max_connections":
+			return makeSimplePlan2Type(types.T_uint64), nil
+		case "optimizer_trace_offset":
+			return makeSimplePlan2Type(types.T_int64), nil
+		}
+		return Type{}, nil
+	}
+	unsignedSys, err := binder.baseBindVar(&tree.VarExpr{Name: "max_connections", System: true}, 0, true)
+	require.NoError(t, err)
+	require.Equal(t, makeSimplePlan2Type(types.T_uint64), unsignedSys.Typ)
+	require.Zero(t, unsignedSys.GetV().BoundStringDomain)
+	signedSys, err := binder.baseBindVar(&tree.VarExpr{Name: "optimizer_trace_offset", System: true}, 0, true)
+	require.NoError(t, err)
+	require.Equal(t, makeSimplePlan2Type(types.T_int64), signedSys.Typ)
+	require.Zero(t, signedSys.GetV().BoundStringDomain)
 	expr, err := binder.baseBindVar(&tree.VarExpr{Name: "version", System: true}, 0, true)
 	require.NoError(t, err)
 	require.Equal(t, makeSimplePlan2Type(types.T_text), expr.Typ)
 	require.Zero(t, expr.GetV().BoundStringDomain)
-
 	// Optional contexts still create a frozen INHERIT binding, not a legacy
 	// expression whose domain would be read again on every execution.
 	binder.builder.compCtx = &ctx.MockCompilerContext
