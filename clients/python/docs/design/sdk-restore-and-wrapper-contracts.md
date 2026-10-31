@@ -15,8 +15,9 @@ wrapper cannot introduce the corresponding LOAD variables.
 
 Column-only mapped queries infer their first selectable as root, but every
 other projected outer source must be supplied through an explicit join before
-compilation. This retains selectable identity for schema names and aliases and
-prevents accidental cross products. Explicit-root query behavior is unchanged.
+compilation, including mutation builders. This retains selectable identity for
+schema names and aliases and prevents accidentally ignoring a source during a
+mutation. Explicit-root query behavior is unchanged.
 
 Client-level ALTER TABLE and TRUNCATE, like DATA BRANCH MERGE/PICK, use a
 checkout temporarily set to autocommit and restore the original state before
@@ -27,9 +28,12 @@ lineage is server-owned and is not safe to infer from stale client metadata.
 
 IVF/HNSW status decoding recognizes server boolean forms and rejects unknown
 values. Analytics distinguishes a missing PyArrow package from an import error
-inside installed dependencies. Full-text index population quotes each atomic
-identifier before producing internal SQL; this changes no index dispatch or
-persistence format.
+inside installed dependencies. Full-text index population, post-DML maintenance
+and CDC writer SQL quote each atomic identifier. The CDC writer also carries
+the index's parser parameters into tokenization using the shared SQL literal
+owner. These changes do not alter index dispatch or persistence format.
+Advanced full-text builders accept documented raw natural-language and Boolean
+queries while retaining structured-term validation and SQL literal escaping.
 
 Public SQL, error and transaction contracts require native server validation in
 addition to offline grammar and failure-path tests. Account/cluster restores

@@ -261,6 +261,47 @@ def test_column_only_join_requires_all_sources_and_preserves_identity(factory):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize('factory', [Client, AsyncClient])
+async def test_unjoined_projection_rejects_mutations_before_dispatch(factory):
+    client = factory()
+    client.execute = AsyncMock() if factory is AsyncClient else Mock()
+    peer = aliased(Item, name='peer_mutation')
+    with pytest.raises(ValueError, match='explicit JOIN'):
+        result = client.query(Item.id, peer.id).update(label='changed').execute()
+        if factory is AsyncClient:
+            await result
+    with pytest.raises(ValueError, match='explicit JOIN'):
+        result = client.query(Item.id, peer.id).delete()
+        if factory is AsyncClient:
+            await result
+    client.execute.assert_not_called()
+
+
+def test_unjoined_projection_mutations_leave_real_rows_unchanged():
+    engine = create_engine('sqlite://')
+    try:
+        Base.metadata.create_all(engine)
+        with engine.begin() as connection:
+            connection.execute(
+                Item.__table__.insert(), [{'id': 1, 'physical_label': 'first'}, {'id': 2, 'physical_label': 'second'}]
+            )
+        client = Client()
+        client._engine = engine
+        peer = aliased(Item, name='peer_mutation')
+        with pytest.raises(ValueError, match='explicit JOIN'):
+            client.query(Item.id, peer.id).update(physical_label='changed').execute()
+        with pytest.raises(ValueError, match='explicit JOIN'):
+            client.query(Item.id, peer.id).delete()
+        with engine.connect() as connection:
+            assert connection.execute(select(Item.id, Item.label).order_by(Item.id)).all() == [
+                (1, 'first'),
+                (2, 'second'),
+            ]
+    finally:
+        engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_column_only_shorthand_works_through_all_session_entrypoints():
     from matrixone.client import Session as ClientSession
     from matrixone.session import Session, AsyncSession

@@ -1198,11 +1198,7 @@ class BaseMatrixOneQuery:
         self._offset_count = count
         return self
 
-    @statement_compilation
-    def _build_sql(self) -> tuple[str, List[Any]]:
-        """Build SQL query using unified SQL builder"""
-        from .sql_builder import MatrixOneSQLBuilder
-
+    def _validate_projection_sources(self):
         if self._check_projection_sources:
             from sqlalchemy.sql import select
 
@@ -1213,6 +1209,12 @@ class BaseMatrixOneQuery:
             if any(id(source._deannotate()) not in known for source in sources):
                 raise ValueError('Ambiguous query sources; provide an explicit JOIN')
 
+    @statement_compilation
+    def _build_sql(self) -> tuple[str, List[Any]]:
+        """Build SQL query using unified SQL builder"""
+        from .sql_builder import MatrixOneSQLBuilder
+
+        self._validate_projection_sources()
         builder = MatrixOneSQLBuilder()
 
         # Build CTE clause if any CTEs are defined
@@ -1461,6 +1463,7 @@ class BaseMatrixOneQuery:
         """
         if self._snapshot_name:
             raise ValueError('Snapshot queries are read-only')
+        self._validate_projection_sources()
         _require_single_table_mutation(self._joins)
         self._check_mutation_source()
         if not self._update_set_columns:
@@ -1491,6 +1494,7 @@ class BaseMatrixOneQuery:
         """Build DELETE SQL query using unified SQL builder"""
         if self._snapshot_name:
             raise ValueError('Snapshot queries are read-only')
+        self._validate_projection_sources()
         _require_single_table_mutation(self._joins)
         self._check_mutation_source()
         from .sql_builder import build_delete_query
