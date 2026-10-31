@@ -1034,14 +1034,9 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 			}
 			fn := current.GetF()
 			if fn != nil && fn.Func != nil {
-				features.JSONMinMaxTypedComparison = features.JSONMinMaxTypedComparison || IsJSONMinMaxAggregate(fn.Func.Obj, fn.Args)
+				features.addLocalSourceFenceExpr(current)
 				id, overload := int32(fn.Func.Obj>>32), int32(fn.Func.Obj)
-				// LAST_INSERT_ID() is function237/overload0; remote evaluation
-				// needs the captured session baseline, not a worker-local zero.
-				features.SessionLastInsertIDBaseline = features.SessionLastInsertIDBaseline || (id == 237 && overload == 0)
 				features.FloatConversionSemantics = features.FloatConversionSemantics || isFloatConversionContract(current, id)
-				features.JSONStringConsumerOverload = features.JSONStringConsumerOverload || isRemoteJSONStringConsumerOverload(id, overload)
-				features.JSONOpaqueTextContracts = features.JSONOpaqueTextContracts || isJSONOpaqueTextContract(current, fn, id)
 				if id == loadFKIgnoreCheckFunctionID {
 					features.LoadFKIgnoreCheck = true
 				}
@@ -1106,11 +1101,9 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 					staticStringDomainForPlanType(fn.Args[0].Typ) == planStringDomainBinary { // JSON_DEPTH
 					features.JSONInputContracts = true
 				}
-				special, err := isSpecialIntegerConsumer(fn, id, overload)
-				if err != nil {
+				if err := features.addSpecialIntegerConsumer(fn, id, overload); err != nil {
 					return err
 				}
-				features.SpecialIntegerConsumers = features.SpecialIntegerConsumers || special
 				// DIV overload 0 keeps its function identity, but v97 changes
 				// decimal result scale and coefficient interpretation.
 				if id == 13 && overload == 0 &&
@@ -1237,11 +1230,8 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 				}
 				// CAST is stable function ID 21. Match execution identity, not
 				// names or source types; legacy CAST 0..4 remains executable.
-				if id == 21 && overload >= 5 && overload <= 8 {
-					if err := validateIntegerArgumentCast(current, overload); err != nil {
-						return err
-					}
-					features.IntegerParameterCoercion = true
+				if err := features.addPrivateIntegerCast(current, id, overload); err != nil {
+					return err
 				}
 				// PLUS/MINUS/MULTI are stable function IDs 10/11/12.
 				if (id >= 10 && id <= 12 && overload == 2) || (id == 11 && overload == 3) {
@@ -1259,12 +1249,8 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 			if !features.MixedJSONBooleanEquality && isMixedJSONBooleanEquality(fn) {
 				features.MixedJSONBooleanEquality = true
 			}
-			formatNumericArguments, err := isNumericFormatFunction(fn)
-			if err != nil {
+			if err := features.addNumericFormat(fn); err != nil {
 				return err
-			}
-			if formatNumericArguments {
-				features.FormatNumericArguments = true
 			}
 			if !features.TypedConversionFunctions && isTypedConversionFunction(fn) {
 				features.TypedConversionFunctions = true

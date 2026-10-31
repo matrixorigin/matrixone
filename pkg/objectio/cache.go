@@ -278,7 +278,7 @@ func LoadObjectMetaByExtent(
 	v, ok := metaCache.Get(ctx, key)
 	if ok {
 		metric.FSReadHitMetaCounter.Add(1)
-		return MustObjectMeta(v), nil
+		return checkedObjectMeta(v)
 	}
 	if extent.Length() == 0 {
 		logutil.Warn("[LoadObjectMetaByExtent]",
@@ -291,8 +291,16 @@ func LoadObjectMetaByExtent(
 	if err != nil {
 		return
 	}
-	meta = MustObjectMeta(v)
-	return
+	return checkedObjectMeta(v)
+}
+
+// cached metadata and newly loaded metadata share the same checked boundary.
+// Keep MustObjectMeta for callers that explicitly require an assertion.
+func checkedObjectMeta(buffer []byte) (ObjectMeta, error) {
+	if len(buffer) < IOEntryHeaderSize || DecodeIOEntryHeader(buffer).Type != IOET_ObjMeta {
+		return nil, moerr.NewInvalidInputNoCtx("invalid object metadata header")
+	}
+	return ObjectMeta(buffer), nil
 }
 
 func validateLocation(ctx context.Context, location *Location) error {

@@ -13015,3 +13015,55 @@ func TestPreparedCTASCompileRetryPreservesNamesAndParameters(t *testing.T) {
 		require.Contains(t, got.GetDdl().Query.String(), fmt.Sprintf("sval:%q", fmt.Sprint(value)))
 	}
 }
+
+func TestTemporalCacheCancelledAfterDependencyCheckKeepsGeneration(t *testing.T) {
+	base := plan.NewMockCompilerContext(false, newPlanTestProcess(t))
+	ctx := &preparedStatsTestCompiler{preparedTestCompiler: &preparedTestCompiler{CompilerContext: base, proc: base.GetProcess()}, stats: &pbstats.StatsInfo{TableCnt: 128}}
+	const sql = "select n_name from nation where n_nationkey=1"
+	ses, prepared, initialCW, ec := newPreparedExecuteEnvForSQLWithCompilerContext(t, 31619, sql, ctx)
+	defer prepared.Close()
+	defer initialCW.Free()
+	ses.SetDatabaseName("tpch")
+	ses.GetTxnCompileCtx().SetDatabase("tpch")
+	defer ses.GetTxnCompileCtx().Close()
+	_, table, err := base.Resolve("tpch", "nation", nil)
+	require.NoError(t, err)
+	runCtx, cancel := context.WithCancelCause(ec.reqCtx)
+	defer cancel(nil)
+	cause := fmt.Errorf("stop after dependency validation")
+	observations := 0
+	installStatsAdmissionStorage(t, ses, table, func() *pbstats.StatsInfo {
+		observations++
+		cancel(cause)
+		return ctx.stats
+	})
+	stmts, err := mysql.Parse(ec.reqCtx, sql, 1)
+	require.NoError(t, err)
+	cached, err := plan.BuildPlan(ctx, stmts[0], false)
+	require.NoError(t, err)
+	for _, node := range cached.GetQuery().Nodes {
+		if node.NodeType == plan0.Node_TABLE_SCAN {
+			node.Stats.TableCnt = 128
+		}
+	}
+	input := &UserInput{sql: sql}
+	input.genHash()
+	ses.cachePlan(input.getHash(), stmts, []*plan0.Plan{cached})
+	defer ses.cleanCache()
+	ec.input = input
+	cws, err := GetComputationWrapper(ec, "tpch", "root", nil, ses.GetProc(), ses)
+	require.NoError(t, err)
+	require.Len(t, cws, 1)
+	cw := cws[0].(*TxnComputationWrapper)
+	defer cw.Free()
+	ec.cw, ec.cws, ec.stmt, ec.reqCtx = cw, cws, cw.GetAst(), runCtx
+	ec.proc = cw.proc
+	ses.GetTxnCompileCtx().SetExecCtx(ec)
+	originalAST := cw.GetAst()
+	err = checkCachedStatementPlan(ses, ec)
+	require.Same(t, cause, err)
+	require.Positive(t, observations, "ordinary stats admission is reached after dependency validation")
+	require.True(t, ses.isCached(input.getHash()), "stale rebuilding starts by removing this entry, before parsing")
+	require.Same(t, cached, cw.Plan())
+	require.Same(t, originalAST, cw.GetAst())
+}

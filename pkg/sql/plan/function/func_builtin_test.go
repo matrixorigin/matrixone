@@ -3498,6 +3498,27 @@ func TestBuiltInCurrentTimeNoArgDefaultsToZeroFSP(t *testing.T) {
 	}
 }
 
+func TestTimestampFunctionsIgnoreNullPrecisionValue(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	arg := vector.NewVec(types.T_int64.ToType())
+	defer arg.Free(proc.Mp())
+	require.NoError(t, vector.AppendFixed(arg, int64(6), false, proc.Mp()))
+	arg.SetNull(0) // A reused non-constant vector can retain its previous data.
+	for _, tc := range []struct {
+		name string
+		fn   executeLogicOfOverload
+	}{{"now", builtInCurrentTimestamp}, {"sysdate", builtInSysdate}} {
+		t.Run(tc.name, func(t *testing.T) {
+			result := vector.NewFunctionResultWrapper(types.T_timestamp.ToType(), proc.Mp())
+			defer result.Free()
+			require.NoError(t, result.PreExtendAndReset(1))
+			require.NoError(t, tc.fn([]*vector.Vector{arg}, result, proc, 1, nil))
+			require.Equal(t, int32(0), result.GetResultVector().GetType().Scale)
+		})
+	}
+}
+
 // TestBuiltInCurrentTimestampReadsStatementTimePerExecution reuses the same
 // overload ID while changing the statement timestamp. This mirrors repeated
 // executions of a cached NOW() plan and proves the value is read at execution

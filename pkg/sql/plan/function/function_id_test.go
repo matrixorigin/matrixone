@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	"github.com/stretchr/testify/require"
 )
@@ -880,12 +881,15 @@ var predefinedFunids = map[int]int{
 	MO_INDEX_SUB_PART:                 623,
 	// Exponentially weighted window statistics (issue #29945); renumbered
 	// above main's 605..623 allocation during the PR rebase.
-	EWM_MEAN:            624,
-	EWM_VAR:             625,
-	EWM_STD:             626,
-	EWM_COV:             627,
-	EWM_CORR:            628,
-	FUNCTION_END_NUMBER: 629,
+	EWM_MEAN:                 624,
+	EWM_VAR:                  625,
+	EWM_STD:                  626,
+	EWM_COV:                  627,
+	EWM_CORR:                 628,
+	TEMPORAL_DATETIME_BOUND:  629,
+	TEMPORAL_TIMESTAMP_BOUND: 630,
+	TEMPORAL_BOUND_NOT_EMPTY: 631,
+	FUNCTION_END_NUMBER:      632,
 }
 
 func Test_funids(t *testing.T) {
@@ -904,4 +908,62 @@ func Test_funids(t *testing.T) {
 	for _, fid := range functionIdRegister {
 		check(int(fid))
 	}
+}
+
+// The EWM window functions and temporal planning helpers were added on
+// parallel branches. Both families must survive binding and plan encoding.
+func TestEWMAndTemporalFunctionRegistryCoexist(t *testing.T) {
+	f := types.T_float64.ToType()
+	n := types.T_int32.ToType()
+	b := types.T_bool.ToType()
+	tests := []struct {
+		name   string
+		id     int32
+		args   []types.Type
+		window bool
+	}{
+		{"ewmmean", EWM_MEAN, []types.Type{f, f}, true},
+		{"ewmvar", EWM_VAR, []types.Type{f, f}, true},
+		{"ewmstd", EWM_STD, []types.Type{f, f}, true},
+		{"ewmcov", EWM_COV, []types.Type{f, f, f}, true},
+		{"ewmcorr", EWM_CORR, []types.Type{f, f, f}, true},
+		{"__mo_temporal_datetime_bound", TEMPORAL_DATETIME_BOUND, []types.Type{types.T_timestamp.ToType(), n, n, n, b}, false},
+		{"__mo_temporal_timestamp_bound", TEMPORAL_TIMESTAMP_BOUND, []types.Type{types.T_datetime.ToType(), n, n, n, b}, false},
+		{"__mo_temporal_bound_not_empty", TEMPORAL_BOUND_NOT_EMPTY, []types.Type{types.T_timestamp.ToType(), n, n}, false},
+		{"__mo_temporal_bound_not_empty", TEMPORAL_BOUND_NOT_EMPTY, []types.Type{types.T_datetime.ToType(), n, n}, false},
+	}
+	seen := make(map[int32]string)
+	for _, tc := range tests {
+		result, err := GetFunctionByName(context.Background(), tc.name, tc.args)
+		require.NoError(t, err, tc.name)
+		encoded := result.GetEncodedOverloadID()
+		id, overload := DecodeOverloadID(encoded)
+		require.Equal(t, tc.id, id, tc.name)
+		if tc.id == TEMPORAL_BOUND_NOT_EMPTY {
+			expected := int32(0)
+			if tc.args[0].Oid == types.T_datetime {
+				expected = 1
+			}
+			require.Equal(t, expected, overload, tc.name)
+		}
+		if old, exists := seen[id]; exists {
+			require.Equal(t, old, tc.name)
+		} else {
+			seen[id] = tc.name
+		}
+		implementation, ok := GetFunctionByIdWithoutError(encoded)
+		require.True(t, ok, tc.name)
+		require.Equal(t, tc.window, implementation.IsWin(), tc.name)
+		require.Equal(t, !tc.window, IsTemporalBoundFunction(id), tc.name)
+		expr := &planpb.Expr{Expr: &planpb.Expr_F{F: &planpb.Function{Func: &planpb.ObjectRef{Obj: encoded, ObjName: tc.name}}}}
+		wire, err := expr.Marshal()
+		require.NoError(t, err)
+		var decoded planpb.Expr
+		require.NoError(t, decoded.Unmarshal(wire))
+		require.Equal(t, encoded, decoded.GetF().Func.Obj)
+		actual, ok := GetFunctionByIdWithoutError(decoded.GetF().Func.Obj)
+		require.True(t, ok)
+		require.Equal(t, tc.window, actual.IsWin(), tc.name)
+	}
+	require.Len(t, seen, 8)
 }

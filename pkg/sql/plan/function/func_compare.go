@@ -19,6 +19,7 @@ import (
 	"context"
 	"encoding/binary"
 	"math"
+	"time"
 	"unicode/utf8"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -576,6 +577,18 @@ func equalAndNotEqualOperatorSupports(typ1, typ2 types.Type) bool {
 	return true
 }
 
+// The canonical DATETIME range uses the same year-1 microsecond epoch as
+// TIMESTAMP. Keep physical tails and the distinct -1 zero sentinel on the
+// calendar conversion path. Tests check this endpoint against DatetimeFromClock.
+const mixedComparisonMaxDatetime = types.Datetime(315537897599999999)
+
+func fixedZoneComparisonTimestamp(value types.Datetime, zone *time.Location, offsetMicros int64) types.Timestamp {
+	if value >= 0 && value <= mixedComparisonMaxDatetime {
+		return types.Timestamp(int64(value) - offsetMicros)
+	}
+	return value.ToTimestamp(zone)
+}
+
 func compareDatetimeAndTimestamp(
 	parameters []*vector.Vector,
 	result *vector.FunctionResult[bool],
@@ -585,20 +598,39 @@ func compareDatetimeAndTimestamp(
 	selectList *FunctionSelectList,
 ) error {
 	zone := proc.GetSessionInfo().TimeZone
+	fixed, offsetMicros := false, int64(0)
+	// Avoid timezone discovery on zero/single-evaluation and masked paths.
+	// Local can initialize lazily even when FLAT NULL bitmaps mask every row.
+	if zone != nil && zone != time.Local && length > 1 &&
+		!(parameters[0].IsConst() && parameters[1].IsConst()) &&
+		!parameters[0].IsConstNull() && !parameters[1].IsConstNull() &&
+		selectList.ShouldEvalAllRow() && !selectList.IgnoreAllRow() {
+		if offset, ok := types.FixedZoneOffset(zone); ok && int64(offset) >= math.MinInt32 && int64(offset) <= math.MaxInt32 {
+			fixed, offsetMicros = true, int64(offset)*types.MicroSecsPerSec
+		}
+	}
 	if parameters[0].GetType().Oid == types.T_datetime {
 		timestampScale := parameters[1].GetType().Scale
-		return opBinaryFixedFixedToFixed[types.Datetime, types.Timestamp, bool](
-			parameters, result, proc, length,
-			func(left types.Datetime, right types.Timestamp) bool {
-				return cmp(left.ToTimestamp(zone).TruncateToScale(timestampScale), right)
-			}, selectList)
+		compare := func(left types.Datetime, right types.Timestamp) bool {
+			return cmp(left.ToTimestamp(zone).TruncateToScale(timestampScale), right)
+		}
+		if fixed {
+			compare = func(left types.Datetime, right types.Timestamp) bool {
+				return cmp(fixedZoneComparisonTimestamp(left, zone, offsetMicros).TruncateToScale(timestampScale), right)
+			}
+		}
+		return opBinaryFixedFixedToFixed[types.Datetime, types.Timestamp, bool](parameters, result, proc, length, compare, selectList)
 	}
 	timestampScale := parameters[0].GetType().Scale
-	return opBinaryFixedFixedToFixed[types.Timestamp, types.Datetime, bool](
-		parameters, result, proc, length,
-		func(left types.Timestamp, right types.Datetime) bool {
-			return cmp(left, right.ToTimestamp(zone).TruncateToScale(timestampScale))
-		}, selectList)
+	compare := func(left types.Timestamp, right types.Datetime) bool {
+		return cmp(left, right.ToTimestamp(zone).TruncateToScale(timestampScale))
+	}
+	if fixed {
+		compare = func(left types.Timestamp, right types.Datetime) bool {
+			return cmp(left, fixedZoneComparisonTimestamp(right, zone, offsetMicros).TruncateToScale(timestampScale))
+		}
+	}
+	return opBinaryFixedFixedToFixed[types.Timestamp, types.Datetime, bool](parameters, result, proc, length, compare, selectList)
 }
 
 func floatArrayEqual[T constraints.Float](left, right []T) bool {

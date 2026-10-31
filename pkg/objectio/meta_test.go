@@ -15,16 +15,20 @@
 package objectio
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestObjectMetadataReadersRejectEmptyLocation(t *testing.T) {
@@ -423,4 +427,59 @@ func TestMetaCachePressureAdmissionExpires(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, []byte("1"), v)
 	assert.Equal(t, int64(1), metaCache.Used())
+}
+
+func TestLoadObjectMetaChecksCachedAndLoadedHeader(t *testing.T) {
+	ctx := t.Context()
+	oldCache := metaCache
+	metaCache = newMetaCache(fscache.ConstCapacity(1 << 20))
+	t.Cleanup(func() { metaCache = oldCache })
+	fs, err := fileservice.NewMemoryFS("header-test", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { fs.Close(ctx) })
+	valid := objectHeaderFixture(IOET_ObjectMeta_V1)
+	wrong := bytes.Clone(valid)
+	DecodeIOEntryHeader(wrong).Type = IOET_ColData
+	for n, raw := range [][]byte{nil, {1}, {1, 2, 3}, wrong, valid} {
+		for _, cached := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%d/cached=%v", n, cached), func(t *testing.T) {
+				id := NewObjectid()
+				name := BuildObjectNameWithObjectID(&id)
+				// Empty backing can only be supplied by cache: FS cannot read zero bytes.
+				if len(raw) == 0 && !cached {
+					return
+				}
+				if cached {
+					metaCache.Set(ctx, encodeCacheKey(*name.Short(), cacheKeyTypeMeta), raw, int64(len(raw)))
+				} else {
+					require.NoError(t, fs.Write(ctx, fileservice.IOVector{FilePath: name.String(), Entries: []fileservice.IOEntry{{Data: raw, Size: int64(len(raw))}}}))
+				}
+				extent := NewExtent(0, 0, uint32(len(raw)), uint32(len(raw)))
+				got, err := LoadObjectMetaByExtent(ctx, &name, &extent, false, 0, fs)
+				if n == 4 {
+					require.NoError(t, err)
+					require.Equal(t, raw, []byte(got))
+				} else {
+					require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput), err)
+					require.Nil(t, got)
+				}
+			})
+		}
+	}
+}
+
+func objectHeaderFixture(version uint16) []byte {
+	data := BuildMetaData(2, 2)
+	data.BlockHeader().SetMaxSeqnum(1)
+	header := IOEntryHeader{Type: IOET_ObjMeta, Version: version}
+	raw := bytes.Clone(EncodeIOEntryHeader(&header))
+	if version == IOET_ObjectMeta_V1 {
+		return append(raw, data...)
+	}
+	prefix := buildObjectMetaV3()
+	prefix.SetDataMetaCount(2)
+	prefix.SetDataMetaOffset(metaHeaderLen + schemaCountLen)
+	raw = append(raw, prefix...)
+	raw = append(raw, 0, 0)
+	return append(raw, data...)
 }

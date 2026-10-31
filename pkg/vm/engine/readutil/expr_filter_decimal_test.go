@@ -25,11 +25,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/stretchr/testify/require"
 )
@@ -667,6 +669,147 @@ func TestCompileFilterExprDecimalComparisonFailureSkipsBloom(t *testing.T) {
 			require.True(t, selected)
 		})
 	}
+}
+
+func TestCompileFilterExprORPrunesOnlyWhenAllArmsExclude(t *testing.T) {
+	typ := plan.Type{Id: int32(types.T_decimal64), Width: 12, Scale: 4}
+	table := decimalTableDef(typ, false)
+	table.Cols[0].ClusterBy = true
+	less := decimalFoldedFilter(t, typ, "<", decimalBound{"1", 0})
+	greater := decimalFoldedFilter(t, typ, ">", decimalBound{"3", 0})
+	expr := foldedFunction("or", []*plan.Expr{less, greater})
+	oldFast, _, _, _, _, compiled, _ := CompileFilterExpr(expr, table, nil)
+	require.True(t, compiled)
+	selected, err := oldFast(decimalObjectStats(t, typ, "2.0000"))
+	require.NoError(t, err)
+	require.True(t, selected, "unmarked OR retains the existing may-match behavior")
+	expr.TemporalCandidateFilter = true
+	fast, _, _, block, _, compiled, _ := CompileFilterExpr(expr, table, nil)
+	require.True(t, compiled)
+	require.NotNil(t, fast)
+	require.NotNil(t, block)
+
+	for _, tc := range []struct {
+		name  string
+		value string
+		want  bool
+	}{
+		{"neither arm", "2.0000", false},
+		{"first arm", "0.0000", true},
+		{"second arm", "4.0000", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			selected, err := fast(decimalObjectStats(t, typ, tc.value))
+			require.NoError(t, err)
+			require.Equal(t, tc.want, selected)
+			_, selected, err = block(0, makeDecimalBlockMeta(t, typ, tc.value), nil)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, selected)
+		})
+	}
+
+	// IS NULL has no fast object filter. Its absence means unknown, even if
+	// the comparison arm proves that the object's sort key cannot match.
+	isNull := foldedFunction("isnull", []*plan.Expr{less.GetF().Args[0]})
+	unknown := foldedFunction("or", []*plan.Expr{less, isNull})
+	unknown.TemporalCandidateFilter = true
+	fast, _, _, _, _, compiled, _ = CompileFilterExpr(unknown, table, nil)
+	require.True(t, compiled)
+	selected, err = fast(decimalObjectStats(t, typ, "2.0000"))
+	require.NoError(t, err)
+	require.True(t, selected)
+}
+
+func TestCompileFilterExprORSeekSkipsAbsentRange(t *testing.T) {
+	typ := plan.Type{Id: int32(types.T_decimal64), Width: 12, Scale: 4}
+	table := decimalTableDef(typ, false)
+	table.Cols[0].ClusterBy = true
+	absent := decimalFoldedFilter(t, typ, "between", decimalBound{"-10", 0}, decimalBound{"-5", 0})
+	present := decimalFoldedFilter(t, typ, "between", decimalBound{"2", 0}, decimalBound{"3", 0})
+	filter := foldedFunction("or", []*plan.Expr{absent, present})
+	filter.TemporalCandidateFilter = true
+	_, _, _, _, seek, compiled, _ := CompileFilterExpr(filter, table, nil)
+	require.True(t, compiled)
+	require.NotNil(t, seek)
+	meta := decimalObjectDataMeta(t, typ, "0.0000", "1.0000", "2.0000", "3.0000")
+	require.Equal(t, 2, seek(meta))
+
+	// An unknown block prevents a seek past it, even if the first known block
+	// lies above the absent arm's upper bound.
+	meta.GetBlockMeta(1).MustGetColumn(0).SetZoneMap(index.NewZM(types.T_decimal64, 4))
+	require.Equal(t, 0, seek(meta))
+}
+
+// A generic folded boolean has no proof that skipping rows preserves other
+// predicates' diagnostics. It must not be interpreted as a temporal guard.
+func TestUnmarkedFoldedBooleanDoesNotPrune(t *testing.T) {
+	value := false
+	guard := &plan.Expr{Typ: plan.Type{Id: int32(types.T_bool)}, Expr: &plan.Expr_Fold{Fold: &plan.FoldVal{
+		IsConst: true, Data: types.EncodeBool(&value),
+	}}}
+	typ := plan.Type{Id: int32(types.T_decimal64), Width: 12, Scale: 4}
+	comparison := decimalFoldedFilter(t, typ, "between", decimalBound{"2", 0}, decimalBound{"3", 0})
+	_, _, _, _, _, compiled, _ := CompileFilterExpr(foldedFunction("or", []*plan.Expr{guard, comparison}), decimalTableDef(typ, false), nil)
+	require.False(t, compiled)
+
+	table := &plan.TableDef{
+		Name2ColIndex: map[string]int32{"amount": 0},
+		Pkey:          &plan.PrimaryKeyDef{PkeyColName: "amount", Names: []string{"amount"}},
+		Cols:          []*plan.ColDef{{Name: "amount", Primary: true, Typ: plan.Type{Id: int32(types.T_int64)}}},
+	}
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	base, err := ConstructBasePKFilter(foldedFunction("or", []*plan.Expr{guard, int64FoldedFilter("=", 2)}), table, proc.Mp())
+	require.NoError(t, err)
+	defer base.Cleanup()
+	require.False(t, base.Valid)
+}
+
+func TestTemporalCandidateGuardRequiresBothProofs(t *testing.T) {
+	value := false
+	guard := &plan.Expr{Typ: plan.Type{Id: int32(types.T_bool)}, Expr: &plan.Expr_Fold{Fold: &plan.FoldVal{
+		IsConst: true, Data: types.EncodeBool(&value), TemporalCandidateGuard: true,
+	}}}
+	table := &plan.TableDef{
+		Name2ColIndex: map[string]int32{"amount": 0},
+		Pkey:          &plan.PrimaryKeyDef{PkeyColName: "amount", Names: []string{"amount"}},
+		Cols:          []*plan.ColDef{{Name: "amount", Primary: true, Typ: plan.Type{Id: int32(types.T_int64)}}},
+	}
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	filter := foldedFunction("and", []*plan.Expr{guard, int64FoldedFilter("=", 2)})
+	base, err := ConstructBasePKFilter(filter, table, proc.Mp())
+	require.NoError(t, err)
+	require.False(t, base.Empty)
+	base.Cleanup()
+	filter.TemporalCandidateFilter = true
+	base, err = ConstructBasePKFilter(filter, table, proc.Mp())
+	require.NoError(t, err)
+	require.True(t, base.Valid && base.Empty)
+	mem, err := NewMemPKFilter(table, timestamp.Timestamp{}, nil, base, engine.FilterHint{})
+	require.NoError(t, err)
+	require.False(t, mem.MayMatchKeyRange([]byte{1}, []byte{2}))
+	block, err := ConstructBlockPKFilter(false, base, nil)
+	require.NoError(t, err)
+	require.True(t, block.Valid)
+	require.Empty(t, block.SortedSearchFunc(nil))
+	require.Empty(t, block.UnSortedSearchFunc(nil))
+	base.Cleanup()
+	_, _, _, _, _, compiled, _ := CompileFilterExpr(filter, table, nil)
+	require.True(t, compiled)
+	for _, data := range [][]byte{nil, {1}, {2}, {0, 0}} {
+		guard.GetFold().Data = data
+		base, err = ConstructBasePKFilter(filter, table, proc.Mp())
+		require.NoError(t, err)
+		require.False(t, base.Empty, "invalid or true guard bytes %v", data)
+		base.Cleanup()
+	}
+	guard.GetFold().Data = []byte{0}
+	guard.GetFold().IsConst = false
+	base, err = ConstructBasePKFilter(filter, table, proc.Mp())
+	require.NoError(t, err)
+	require.False(t, base.Empty)
+	base.Cleanup()
 }
 
 func TestCompileFilterExprDecimalSortedBetweenPaths(t *testing.T) {
@@ -1446,4 +1589,58 @@ func makeDecimalBlockMeta(t *testing.T, typ plan.Type, values ...string) objecti
 	}
 	meta.MustGetColumn(0).SetZoneMap(zm)
 	return meta
+}
+
+func TestTemporalObjectFastFilterUsesSortedColumnProof(t *testing.T) {
+	typ := plan.Type{Id: int32(types.T_decimal64), Width: 18, Scale: 4}
+	for _, primary := range []bool{false, true} {
+		table := decimalTableDef(typ, primary)
+		// A Pkey descriptor alone is not the reader's sorted-key proof.
+		table.Pkey = &plan.PrimaryKeyDef{PkeyColName: "amount", Names: []string{"amount"}}
+		expr := decimalFoldedFilter(t, typ, "between", decimalBound{"10", 0}, decimalBound{"20", 0})
+		expr.TemporalCandidateFilter = true
+		fast, _, _, block, _, compiled, _ := CompileFilterExprs([]*plan.Expr{expr}, table, nil)
+		require.True(t, compiled)
+		_, blockMatches, err := block(0, makeDecimalBlockMeta(t, typ, "15"), nil)
+		require.NoError(t, err)
+		require.True(t, blockMatches)
+		if !primary {
+			require.Nil(t, fast, "a Pkey descriptor without ColDef.Primary cannot authorize object-stats exclusion")
+			continue
+		}
+		stats := decimalObjectStats(t, typ, "30")
+		matches, err := fast(stats)
+		require.NoError(t, err)
+		require.False(t, matches, "the fast path uses stats, even when separate metadata would match")
+		var blocks objectio.BlockInfoSlice
+		_, loads, _, _, _, _, fastTotal, fastHits, err := FilterObjects(t.Context(), engine.RangesParam{}, fast, nil, nil, nil, nil, nil, []objectio.ObjectStats{*stats}, nil, &blocks, false, nil, nil)
+		require.NoError(t, err)
+		require.Zero(t, loads)
+		require.Equal(t, 1, fastTotal)
+		require.Equal(t, 1, fastHits)
+		require.Zero(t, blocks.Len())
+	}
+}
+
+func TestTemporalEmptyGuardCannotBypassWholeFilterUnicodeCheck(t *testing.T) {
+	for _, charset := range []uint32{uint32(types.CharsetUTF8MB4Bin), uint32(types.CharsetUTF8MB4UnicodeCI)} {
+		typ := plan.Type{Id: int32(types.T_varchar), Width: 64, Charset: charset}
+		table := &plan.TableDef{Cols: []*plan.ColDef{{Name: "key", Typ: typ, Primary: true}}, Name2ColIndex: map[string]int32{"key": 0}, Pkey: &plan.PrimaryKeyDef{PkeyColName: "key", Names: []string{"key"}}}
+		column := &plan.Expr{Typ: typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{Name: "key"}}}
+		bound := &plan.Expr{Typ: typ, Expr: &plan.Expr_Fold{Fold: &plan.FoldVal{IsConst: true, Data: []byte("x")}}}
+		guard := &plan.Expr{Typ: plan.Type{Id: int32(types.T_bool)}, Expr: &plan.Expr_Fold{Fold: &plan.FoldVal{IsConst: true, Data: []byte{0}, TemporalCandidateGuard: true}}}
+		filter := foldedFunction("and", []*plan.Expr{guard, foldedFunction("prefix_eq", []*plan.Expr{column, bound})})
+		filter.TemporalCandidateFilter = true
+		fast, _, _, _, _, compiled, _ := CompileFilterExprs([]*plan.Expr{filter}, table, nil)
+		if charset == uint32(types.CharsetUTF8MB4UnicodeCI) {
+			require.False(t, compiled)
+			require.Nil(t, fast)
+		} else {
+			require.True(t, compiled)
+			require.NotNil(t, fast)
+			matches, err := fast(objectio.NewObjectStats())
+			require.NoError(t, err)
+			require.False(t, matches)
+		}
+	}
 }

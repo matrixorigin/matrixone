@@ -265,7 +265,7 @@ func builtInCurrentTimestamp(ivecs []*vector.Vector, result vector.FunctionResul
 	// MySQL defaults omitted fractional-seconds precision to zero. An explicit
 	// FSP is supplied as the single argument and overrides this below.
 	scale := int32(0)
-	if len(ivecs) == 1 && !ivecs[0].IsConstNull() && ivecs[0].Length() > 0 {
+	if len(ivecs) == 1 && ivecs[0].Length() > 0 && !ivecs[0].IsConstNull() && !ivecs[0].IsNull(0) {
 		scale = int32(vector.MustFixedColWithTypeCheck[int64](ivecs[0])[0])
 		// Validate scale range [0, 6] for TIMESTAMP
 		if scale < 0 || scale > 6 {
@@ -290,7 +290,7 @@ func builtInSysdate(ivecs []*vector.Vector, result vector.FunctionResultWrapper,
 	// SYSDATE() follows the same default FSP=0 rule as NOW() and
 	// CURRENT_TIMESTAMP(); an explicit argument still selects 0..6.
 	scale := int32(0)
-	if len(ivecs) == 1 && !ivecs[0].IsConstNull() && ivecs[0].Length() > 0 {
+	if len(ivecs) == 1 && ivecs[0].Length() > 0 && !ivecs[0].IsConstNull() && !ivecs[0].IsNull(0) {
 		scale = int32(vector.MustFixedColWithTypeCheck[int64](ivecs[0])[0])
 		// Validate scale range [0, 6] for TIMESTAMP
 		if scale < 0 || scale > 6 {

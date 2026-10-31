@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/hex"
 	"errors"
+	"maps"
 	"math"
 	gotrace "runtime/trace"
 	"strings"
@@ -148,10 +149,31 @@ func (c *Compile) Compile(
 		v2.TxnStatementCompileDurationHistogram.Observe(time.Since(compileStart).Seconds())
 	}()
 
+	if plan2.HasTemporalPhysicalIndexScans(queryPlan.GetQuery()) && (!c.temporalExecutionAllowed(execTopContext) || !c.temporalIndexPlacementAllowed(queryPlan)) {
+		return ErrTemporalAccessDrift
+	}
+
+	if c.temporalPreflightPending && (c.temporalCandidateTopology || HasTemporalIndexCandidates(queryPlan)) && c.temporalAccessIntent != nil &&
+		!c.temporalExecutionAllowed(execTopContext) {
+		return ErrTemporalAccessDrift
+	}
+	if c.temporalPreflightPending {
+		if c.temporalTxnOffsetPending {
+			c.TxnOffset = txnOffsetOfCompile(c.proc)
+			c.temporalTxnOffsetPending = false
+		}
+		c.proc.SetMessageBoard(c.MessageBoard)
+		c.temporalPreflightPending = false
+	}
+
 	// Reject unsupported lock policies before query scheduling, source/scope
 	// construction, Sirius offload, or any later MergeRun can publish work.
 	if err = c.validateNonBlockingLockPlan(queryPlan); err != nil {
 		return err
+	}
+	c.temporalCandidateTopology = c.temporalCandidateTopology || HasTemporalIndexCandidates(queryPlan)
+	if c.temporalCandidateTopology {
+		queryPlan = c.prepareTemporalExecutionPlan(execTopContext, queryPlan)
 	}
 
 	// Refresh borrowed CREATE plans before effects without advancing or
@@ -987,7 +1009,21 @@ func measureRetryRemoteWait(total *time.Duration, wait func() error) (err error)
 // therefore a terminal outcome of that new attempt instead of disappearing
 // into the previous attempt's closing phase.
 func (c *Compile) buildRetryCompile(rebuildPlan bool) (*Compile, error) {
+	return c.buildRetryCompileWithTemporalFallback(rebuildPlan, false, nil)
+}
+
+func (c *Compile) buildRetryCompileWithTemporalFallback(rebuildPlan, safeTemporal bool, existingOffset *int) (*Compile, error) {
 	topContext := c.proc.GetTopContext()
+	if safeTemporal {
+		rebuildPlan = true
+	}
+	if !safeTemporal && c.temporalRetryNeedsRebuild() {
+		if c.buildSafeTemporalPlanFunc == nil {
+			return nil, moerr.NewInternalError(topContext, "temporal retry has no safe plan rebuild owner")
+		}
+		rebuildPlan = true
+		safeTemporal = true
+	}
 	// Invalidate a completed proof before a different logical generation can be
 	// built or observed.
 	c.onLoadUniqueIndexPromotionRetry(rebuildPlan)
@@ -996,7 +1032,33 @@ func (c *Compile) buildRetryCompile(rebuildPlan bool) (*Compile, error) {
 	// improved to refresh expression in the future.
 
 	var e error
-	runC := NewCompile(c.addr, c.db, c.sql, c.tenant, c.uid, c.e, c.proc, c.stmt, c.isInternal, c.cnLabel, c.startAt)
+	newCompile := NewCompile
+	labels := c.cnLabel
+	if c.temporalAccessIntent != nil {
+		labels = maps.Clone(labels)
+		newCompile = newTemporalRetryCompile
+		if existingOffset != nil {
+			newCompile = NewTemporalCompile
+		}
+	}
+	runC := newCompile(c.addr, c.db, c.sql, c.tenant, c.uid, c.e, c.proc, c.stmt, c.isInternal, labels, c.startAt)
+	keepRun := false
+	releaseRun := func() {
+		if c.temporalAccessIntent != nil {
+			releaseRetryCompile(runC)
+		} else {
+			runC.Release()
+		}
+	}
+	defer func() {
+		if !keepRun && runC != nil {
+			releaseRun()
+		}
+	}()
+	if existingOffset != nil {
+		runC.TxnOffset = *existingOffset
+		runC.temporalTxnOffsetPending = false
+	}
 	runC.temporaryDropRetryStage = c.temporaryDropRetryStage
 	runC.temporaryDropRetryActive = c.temporaryDropRetryActive
 	runC.preparedJoinDiagnosticFree = c.preparedJoinDiagnosticFree
@@ -1014,22 +1076,31 @@ func (c *Compile) buildRetryCompile(rebuildPlan bool) (*Compile, error) {
 	runC.createNamePinsAdmitted = c.createNamePinsAdmitted
 	c.copyAllocationAccountLifecycleTo(runC)
 	runC.SetQuerySchedulingIntent(c.querySchedulingIntent)
+	if !safeTemporal {
+		runC.SetValidatedTemporalAccessIntent(c.temporalAccessIntent)
+	}
+	if !rebuildPlan {
+		runC.temporalCandidateTopology = c.temporalCandidateTopology
+	}
 	runC.SetSchedulingTraceRecorder(c.schedulingTrace)
 	runC.SetOriginSQL(c.originSQL)
-	defer func() {
-		if recovered := recover(); recovered != nil {
-			runC.Release()
-			panic(recovered)
-		}
-		if e != nil {
-			runC.Release()
-		}
-	}()
 	planForRetry := c.pn
 	if rebuildPlan {
 		runC.preparedJoinDiagnosticFree = false
-		planForRetry, e = c.buildPlanFunc(topContext)
+		if safeTemporal {
+			if c.buildSafeTemporalPlanFunc == nil {
+				e = moerr.NewInternalError(topContext, "temporal retry has no safe plan rebuild owner")
+				return nil, e
+			}
+			planForRetry, e = c.buildSafeTemporalPlanFunc(topContext)
+		} else {
+			planForRetry, e = c.buildPlanFunc(topContext)
+		}
 		if e != nil {
+			return nil, e
+		}
+		if safeTemporal && HasTemporalIndexCandidates(planForRetry) {
+			e = moerr.NewInternalError(topContext, "unscoped temporal retry retained a candidate")
 			return nil, e
 		}
 		if e = c.validateRetryResultMetadata(topContext, planForRetry); e != nil {
@@ -1047,6 +1118,12 @@ func (c *Compile) buildRetryCompile(rebuildPlan bool) (*Compile, error) {
 		return nil, e
 	}
 	if e = runC.Compile(topContext, planForRetry, c.fill); e != nil {
+		if errors.Is(e, ErrTemporalAccessDrift) && !safeTemporal {
+			offset := runC.TxnOffset
+			releaseRun()
+			runC = nil
+			return c.buildRetryCompileWithTemporalFallback(true, true, &offset)
+		}
 		return nil, e
 	}
 	if rebuildPlan {
@@ -1054,6 +1131,7 @@ func (c *Compile) buildRetryCompile(rebuildPlan bool) (*Compile, error) {
 		// after physical compilation succeeds. A subsequent ordinary retry must
 		// inherit this generation rather than the one that first hit the fence.
 		c.pn = planForRetry
+		c.temporalCandidateTopology = runC.temporalCandidateTopology
 		c.preparedJoinDiagnosticFree = runC.preparedJoinDiagnosticFree
 		c.inheritPlanSnapshot(runC)
 		// Update c.anal.qry to point to the new plan's Query. This ensures
@@ -1062,6 +1140,7 @@ func (c *Compile) buildRetryCompile(rebuildPlan bool) (*Compile, error) {
 			c.anal.qry = qry.Query
 		}
 	}
+	keepRun = true
 	return runC, nil
 }
 

@@ -154,13 +154,15 @@ type PushClient struct {
 
 	mu struct {
 		sync.Mutex
-		paused bool
+		paused         bool
+		pause          *logtailPauseRequest
+		connectPending *logtailPauseRequest
+		connectSet     bool
 	}
 	// pauseC is the channel used to control whether the receiver is paused.
-	pauseC  chan bool
-	resumeC chan struct{}
+	pauseC chan *logtailPauseRequest
 
-	consumeErrC chan error
+	consumeErrC chan logtailConsumerError
 	receiver    []*routineController
 	eng         *Engine
 
@@ -191,13 +193,6 @@ type delayedCacheApply struct {
 	sync.Mutex
 	replayed bool
 	flist    []func()
-}
-
-func (c *PushClient) dcaReset() {
-	c.dca.Lock()
-	defer c.dca.Unlock()
-	c.dca.replayed = false
-	c.dca.flist = c.dca.flist[:0]
 }
 
 func (c *PushClient) dcaTryDelay(isSub bool, f func()) (delayed bool) {
@@ -378,7 +373,7 @@ type connector struct {
 
 func newConnector(c *PushClient, e *Engine) *connector {
 	co := &connector{
-		signal:          make(chan struct{}, 10),
+		signal:          make(chan struct{}, 1),
 		firstReplayDone: make(chan struct{}),
 		client:          c,
 		engine:          e,
@@ -395,7 +390,15 @@ func (c *connector) run(ctx context.Context) {
 			return
 
 		case <-c.signal:
-			c.client.connect(ctx, c.engine)
+			c.client.mu.Lock()
+			req, pending := c.client.mu.connectPending, c.client.mu.connectSet
+			c.client.mu.connectPending, c.client.mu.connectSet = nil, false
+			valid := pending && (req == nil && c.first.Load() || req != nil && c.client.mu.pause == req)
+			c.client.mu.Unlock()
+			if !valid {
+				continue
+			}
+			c.client.connect(ctx, c.engine, req)
 		}
 	}
 }
@@ -443,9 +446,8 @@ func (c *PushClient) init(
 	if !c.initialized {
 		c.connector = newConnector(c, e)
 		c.receiver = make([]*routineController, consumerNumber)
-		c.consumeErrC = make(chan error, consumerNumber)
-		c.pauseC = make(chan bool, 1)
-		c.resumeC = make(chan struct{})
+		c.consumeErrC = make(chan logtailConsumerError, consumerNumber)
+		c.pauseC = make(chan *logtailPauseRequest, 1)
 	}
 	c.initialized = true
 
@@ -801,38 +803,96 @@ func (c *PushClient) subSysTables(ctx context.Context) error {
 	return err
 }
 
-func (c *PushClient) pause(s bool) {
+// A pause acknowledgement means the receiver has finished its current
+// receive and synchronous dispatch. Consumer work requires a separate join.
+type logtailPauseRequest struct {
+	reconnect bool
+	ack       chan struct{}
+	resume    chan struct{}
+}
+
+func (c *PushClient) pause(s bool) *logtailPauseRequest {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	return c.pauseLocked(s)
+}
+
+// pauseIfCurrent validates the error source in the same critical section that
+// creates the pause. A consumer from a retired stream cannot pause its successor.
+func (c *PushClient) pauseIfCurrent(source *service.LogtailClient, generation uint64, reconnect bool) *logtailPauseRequest {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.subscriber == nil {
+		return nil
+	}
+	c.subscriber.mu.RLock()
+	defer c.subscriber.mu.RUnlock()
+	if source == nil || c.subscriber.logTailClient != source || c.subscriber.transportGeneration != generation {
+		return nil
+	}
+	return c.pauseLockedWithClient(reconnect, source)
+}
+
+func (c *PushClient) pauseLocked(s bool) *logtailPauseRequest {
+	var client *service.LogtailClient
+	if c.subscriber != nil {
+		client = c.subscriber.client()
+	}
+	return c.pauseLockedWithClient(s, client)
+}
+
+func (c *PushClient) pauseLockedWithClient(s bool, client *service.LogtailClient) *logtailPauseRequest {
 	if c.mu.paused {
-		return
+		return c.mu.pause
 	}
 	// Note
 	// If subSysTables fails to send a successful request, receiveLogtails will receive nothing until the context is done. In this case, we attempt to stop the receiveLogtails goroutine immediately.
 	// The break signal left in the channel will interrupt the normal receiving process, but this is not an issue because reconnecting will create a new channel.
-	if c.subscriber != nil {
-		c.subscriber.breakoutReceive()
+	if client != nil {
+		client.BreakoutReceive()
 	}
+	req := &logtailPauseRequest{reconnect: s, ack: make(chan struct{}), resume: make(chan struct{})}
 	select {
-	case c.pauseC <- s:
+	case c.pauseC <- req:
 		c.mu.paused = true
+		c.mu.pause = req
 	default:
 		logutil.Info("logtail.consumer.already.set.to.pause")
+		return nil
 	}
+	return req
 }
 
-func (c *PushClient) resume() {
+func (c *PushClient) resume(req *logtailPauseRequest) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if req == nil || c.mu.pause != req {
+		return false
+	}
 	select {
-	case c.resumeC <- struct{}{}:
-		c.mu.paused = false
+	case <-req.ack:
 	default:
-		logutil.Info("logtail.consumer.not.in.pause.state")
+		return false
+	}
+	c.mu.paused = false
+	c.mu.pause = nil
+	close(req.resume)
+	return true
+}
+
+func waitLogtailPause(ctx context.Context, req *logtailPauseRequest) bool {
+	if req == nil {
+		return false
+	}
+	select {
+	case <-req.ack:
+		return true
+	case <-ctx.Done():
+		return false
 	}
 }
 
-func (c *PushClient) receiveOneLogtail(ctx context.Context, e *Engine) error {
+func (c *PushClient) receiveOneLogtail(ctx context.Context, e *Engine, client *service.LogtailClient, generation uint64) error {
 	ctx, cancel := context.WithTimeoutCause(ctx, maxTimeToWaitServerResponse, moerr.CauseReceiveOneLogtail)
 	defer cancel()
 
@@ -843,7 +903,7 @@ func (c *PushClient) receiveOneLogtail(ctx context.Context, e *Engine) error {
 		return moerr.NewInternalError(ctx, "FIND_TABLE random error")
 	}
 
-	resp := c.subscriber.receiveResponse(ctx)
+	resp := c.subscriber.receiveResponse(ctx, client)
 	if resp.err != nil {
 		resp.err = moerr.AttachCause(ctx, resp.err)
 		// POSSIBLE ERROR: context deadline exceeded, rpc closed, decode error.
@@ -894,10 +954,10 @@ func (c *PushClient) receiveOneLogtail(ctx context.Context, e *Engine) error {
 		}
 	} else if errRsp := resp.response.GetError(); errRsp != nil {
 		status := errRsp.GetStatus()
+		table := errRsp.GetTable()
+		database, tableID := table.GetDbId(), table.GetTbId()
 		if uint16(status.GetCode()) == moerr.OkExpectedEOB {
-			c.subscribed.setTableSubNotExist(
-				errRsp.GetTable().GetDbId(),
-				errRsp.GetTable().GetTbId())
+			c.subscribed.setTableSubNotExist(database, tableID)
 		}
 	}
 	return nil
@@ -917,21 +977,23 @@ func (c *PushClient) receiveLogtails(ctx context.Context, e *Engine) {
 			logutil.Info("logtail.consumer.receiver.resumed")
 
 		default:
-			if err := c.receiveOneLogtail(ctx, e); err != nil {
+			client, generation := c.subscriber.clientAndGeneration()
+			if err := c.receiveOneLogtail(ctx, e, client, generation); err != nil {
 				logutil.Error(
 					"logtail.consumer.receive.one.logtail.failed",
 					zap.Error(err),
 				)
-				c.pause(!c.connector.first.Load())
+				c.pauseIfCurrent(client, generation, !c.connector.first.Load())
 			}
 		}
 	}
 }
 
-func (c *PushClient) waitForResume(ctx context.Context, reconnect bool) bool {
+func (c *PushClient) waitForResume(ctx context.Context, req *logtailPauseRequest) bool {
+	close(req.ack)
 	var firstReplayDone <-chan struct{}
-	if reconnect {
-		c.sendConnectSig(ctx)
+	if req.reconnect {
+		c.sendConnectSig(ctx, req)
 	} else {
 		firstReplayDone = c.connector.firstReplayDone
 	}
@@ -939,12 +1001,12 @@ func (c *PushClient) waitForResume(ctx context.Context, reconnect bool) bool {
 		select {
 		case <-ctx.Done():
 			return false
-		case <-c.resumeC:
+		case <-req.resume:
 			return true
 		case <-firstReplayDone:
 			// First-connect retries own recovery until replay completes. After
 			// that handoff, even an earlier pause(false) needs a new connection.
-			c.sendConnectSig(ctx)
+			c.sendConnectSig(ctx, req)
 			firstReplayDone = nil
 		}
 	}
@@ -956,7 +1018,7 @@ func (c *PushClient) completeFirstConnect(e *Engine) {
 	c.connector.first.Store(false)
 	// Serialize readiness with pause. A failed first connection must recover
 	// through connect's existing reconnect branch before admitting transactions.
-	if !c.mu.paused {
+	if !c.mu.paused && !c.closed.Load() && c.subscriber != nil && c.subscriber.client() != nil {
 		e.setPushClientStatus(true)
 	}
 	close(c.connector.firstReplayDone)
@@ -994,28 +1056,19 @@ func (c *PushClient) stopConsumers() {
 	logutil.Infof("%s %s: logtail consumers stopped", logTag, c.serviceID)
 }
 
-func (c *PushClient) sendConnectSig(ctx context.Context) {
-	if c.connector.first.Load() {
-		select {
-		case c.connector.signal <- struct{}{}:
-		case <-ctx.Done():
-		}
+func (c *PushClient) sendConnectSig(ctx context.Context, req *logtailPauseRequest) {
+	if ctx.Err() != nil {
 		return
 	}
-
-	for {
-		select {
-		case c.connector.signal <- struct{}{}:
-			logutil.Infof("%s reconnect signal is received", logTag)
-			return
-		case <-ctx.Done():
-			return
-		default:
-			logutil.Infof("%s reconnect chan is full", logTag)
-			if !waitPushClient(ctx, time.Second) {
-				return
-			}
-		}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if req != nil && c.mu.pause != req || req == nil && !c.connector.first.Load() {
+		return
+	}
+	c.mu.connectPending, c.mu.connectSet = req, true
+	select {
+	case c.connector.signal <- struct{}{}:
+	default:
 	}
 }
 
@@ -1025,16 +1078,16 @@ func (c *PushClient) run(ctx context.Context, e *Engine) {
 	})
 
 	// for the first time connector.
-	c.sendConnectSig(ctx)
+	c.sendConnectSig(ctx, nil)
 
 	// A dead loop to receive log tail response from log tail service.
 	// if any error happened, we should do reconnection.
 	for {
 		select {
-		case err := <-c.consumeErrC:
+		case failure := <-c.consumeErrC:
 			// receive an error from sub-routine to consume log.
-			logutil.Errorf("%s consume log tail failed, err: %s", logTag, err)
-			c.pause(!c.connector.first.Load())
+			logutil.Errorf("%s consume log tail failed, err: %s", logTag, failure.err)
+			c.pauseIfCurrent(failure.client, failure.generation, !c.connector.first.Load())
 
 		case <-ctx.Done():
 			logutil.Infof("%s logtail consumer stopped", logTag)
@@ -1176,33 +1229,19 @@ func (c *PushClient) replayCatalogCache(ctx context.Context, e *Engine) (err err
 
 }
 
-func (c *PushClient) connect(ctx context.Context, e *Engine) {
+func (c *PushClient) connect(ctx context.Context, e *Engine, req *logtailPauseRequest) {
 	if c.connector.first.Load() {
 		c.startConsumers(ctx, e)
 
 		for {
-			c.dcaReset()
 			err := c.subSysTables(ctx)
 			if err != nil {
-				if errors.Is(err, context.Canceled) {
-					logutil.Errorf("%s connect failed as context canceled: %v", logTag, ctx.Err())
+				if ctx.Err() != nil || c.closed.Load() {
 					return
 				}
-				c.pause(false)
-				if !waitPushClient(ctx, time.Second) {
+				if !c.retryFirstConnection(ctx, e) {
 					return
 				}
-
-				tnLogTailServerBackend, err := e.getLogTailServiceAddr(ctx)
-				if err != nil {
-					return
-				}
-				if err := c.init(ctx, tnLogTailServerBackend, c.timestampWaiter, e); err != nil {
-					logutil.Errorf("%s init push client failed: %v", logTag, err)
-					continue
-				}
-
-				c.resume()
 				continue
 			}
 			if err := c.waitTimestamp(ctx); err != nil {
@@ -1210,8 +1249,10 @@ func (c *PushClient) connect(ctx context.Context, e *Engine) {
 			}
 
 			if err := c.replayCatalogCache(ctx, e); err != nil {
-				c.pause(false)
 				logutil.Errorf("%s replay catalog cache failed, err %v", logTag, err)
+				if !c.retryFirstConnection(ctx, e) {
+					return
+				}
 				continue
 			}
 
@@ -1220,6 +1261,9 @@ func (c *PushClient) connect(ctx context.Context, e *Engine) {
 		}
 	}
 
+	if !waitLogtailPause(ctx, req) {
+		return
+	}
 	e.setPushClientStatus(false)
 
 	// the consumer goroutine is supposed to be stopped.
@@ -1243,6 +1287,7 @@ func (c *PushClient) connect(ctx context.Context, e *Engine) {
 			}
 			continue
 		}
+		attemptClient, attemptGeneration := c.subscriber.clientAndGeneration()
 		logutil.Infof("%s %s: client init finished", logTag, c.serviceID)
 
 		// This is only for test.
@@ -1251,6 +1296,7 @@ func (c *PushClient) connect(ctx context.Context, e *Engine) {
 		// clean memory table.
 		err = e.init(ctx)
 		if err != nil {
+			// This new connection has not started any consumers yet.
 			logutil.Errorf("%s rebuild memory-table failed, err: %s", logTag, err)
 			if !waitPushClient(ctx, retryReconnect) {
 				return
@@ -1262,9 +1308,9 @@ func (c *PushClient) connect(ctx context.Context, e *Engine) {
 		// After init, start up again.
 		c.startConsumers(ctx, e)
 
-		c.resume()
-
-		c.dcaReset()
+		if !c.resume(req) {
+			return
+		}
 		err = c.subSysTables(ctx)
 		if err != nil {
 			//  send on closed channel error:
@@ -1288,11 +1334,49 @@ func (c *PushClient) connect(ctx context.Context, e *Engine) {
 			break
 		}
 
-		e.setPushClientStatus(true)
+		c.mu.Lock()
+		currentClient, currentGeneration := c.subscriber.clientAndGeneration()
+		if !c.mu.paused && !c.closed.Load() && attemptClient != nil && currentClient == attemptClient && currentGeneration == attemptGeneration {
+			e.setPushClientStatus(true)
+		}
+		c.mu.Unlock()
 		logutil.Infof("%s %s: connected to server", logTag, c.serviceID)
 
 		return
 	}
+}
+
+// retryFirstConnection joins both the receiver's in-flight dispatch and all
+// per-table consumers before rebuilding their partition and catalog state.
+func (c *PushClient) retryFirstConnection(ctx context.Context, e *Engine) bool {
+	req := c.pause(false)
+	if !waitLogtailPause(ctx, req) {
+		return false
+	}
+	c.stopConsumers()
+	for ctx.Err() == nil && !c.closed.Load() {
+		if !waitPushClient(ctx, time.Second) {
+			return false
+		}
+		addr, err := e.getLogTailServiceAddr(ctx)
+		if err != nil {
+			return false
+		}
+		if err = c.init(ctx, addr, c.timestampWaiter, e); err != nil {
+			logutil.Errorf("%s init push client failed: %v", logTag, err)
+			continue
+		}
+		if err = e.init(ctx); err != nil {
+			logutil.Errorf("%s rebuild memory-table failed: %v", logTag, err)
+			continue
+		}
+		if ctx.Err() != nil || c.closed.Load() {
+			return false
+		}
+		c.startConsumers(ctx, e)
+		return c.resume(req)
+	}
+	return false
 }
 
 // UnsubscribeTable implements the LogtailEngine interface.
@@ -1321,7 +1405,9 @@ func (c *PushClient) UnsubscribeTable(ctx context.Context, accId, dbID, tbID uin
 	dbID = ent.dbID
 	ent.state = Unsubscribing
 
-	if err := c.subscriber.sendUnSubscribe(ctx, api.TableID{DbId: dbID, TbId: tbID}); err != nil {
+	table := api.TableID{DbId: dbID, TbId: tbID}
+	err := c.subscriber.sendUnSubscribe(ctx, table)
+	if err != nil {
 		logutil.Errorf("%s cannot unsubscribe table %d-%d, err: %v", logTag, dbID, tbID, err)
 		return err
 	}
@@ -1768,6 +1854,9 @@ func (c *PushClient) loadAndConsumeLatestCkp(
 			return InvalidSubState, moerr.NewInternalErrorf(ctx, "subscription database mismatch for table %d", tableID)
 		}
 		if exist && (ent.state == SubRspReceived || ent.state == Subscribed) {
+			// Ordinary loading protects an actively used pending subscription
+			// from optional idle cleanup before releasing its state fence.
+			ent.lastTs.Store(time.Now().UnixNano())
 			// Pin the partition under the subscription generation, before I/O.
 			part := c.eng.GetOrCreateLatestPart(ctx, accId, dbID, tableID)
 			c.subscribed.rw.Unlock()
@@ -1918,26 +2007,48 @@ func (c *PushClient) isNotUnsubscribing(ctx context.Context, dbId, tblId uint64)
 
 func (c *PushClient) Disconnect() error {
 	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.subscriber == nil {
+	subscriber := c.subscriber
+	if subscriber == nil {
+		c.mu.Unlock()
 		return nil
 	}
 	// Disconnect is a transport-level fault injection used by reconnect
 	// handling. It must not retire the PushClient owner; Engine.Close is the
 	// lifecycle operation that marks the client permanently closed.
-	return c.subscriber.closeClient()
+	// Capture and detach under transportMu so a concurrent init cannot replace
+	// this client between the pause request and detachment.
+	subscriber.transportMu.Lock()
+	client := subscriber.client()
+	if client != nil && c.connector != nil && c.pauseC != nil && !c.closed.Load() {
+		c.pauseLockedWithClient(!c.connector.first.Load(), client)
+	}
+	subscriber.swapClient(nil)
+	subscriber.transportMu.Unlock()
+	c.mu.Unlock()
+	if client != nil {
+		return client.Close()
+	}
+	return nil
 }
 
 func (c *PushClient) Close() error {
 	c.closeOnce.Do(func() {
 		c.lifecycleMu.Lock()
-		c.closed.Store(true)
+		// Cancel before waiting for the control lock: a disconnect holding that
+		// lock may be waiting for transport initialization to observe shutdown.
 		cancel := c.cancel
-		subscriber := c.subscriber
-		c.lifecycleMu.Unlock()
 		if cancel != nil {
 			cancel()
 		}
+		c.mu.Lock()
+		c.closed.Store(true)
+		c.receivedLogTailTime.ready.Store(false)
+		if c.subscriber != nil {
+			c.subscriber.setNotReady()
+		}
+		c.mu.Unlock()
+		subscriber := c.subscriber
+		c.lifecycleMu.Unlock()
 
 		// Close the current logtail client before joining consumers. Receive can
 		// be blocked in the transport and only the transport close can release
@@ -1947,6 +2058,11 @@ func (c *PushClient) Close() error {
 			c.closeErr = subscriber.closeClient()
 		}
 		c.wg.Wait()
+		// All producers and the supervisor have exited. Drop queued source
+		// identities so a retained closed PushClient does not retain streams.
+		for len(c.consumeErrC) > 0 {
+			<-c.consumeErrC
+		}
 		if subscriber != nil {
 			if err := subscriber.closeTransport(); c.closeErr == nil {
 				c.closeErr = err
@@ -1959,6 +2075,10 @@ func (c *PushClient) Close() error {
 func (s *subscribedTable) setTableSubNotExist(dbId, tblId uint64) {
 	s.rw.Lock()
 	defer s.rw.Unlock()
+	s.setTableSubNotExistLocked(dbId, tblId)
+}
+
+func (s *subscribedTable) setTableSubNotExistLocked(dbId, tblId uint64) {
 	ent := &subEntry{
 		dbID:  dbId,
 		state: SubRspTableNotExist,
@@ -1997,6 +2117,10 @@ func (s *subscribedTable) setTableSubscribed(dbId, tblId uint64) {
 func (s *subscribedTable) setTableSubRspReceived(dbId, tblId uint64) {
 	s.rw.Lock()
 	defer s.rw.Unlock()
+	s.setTableSubRspReceivedLocked(dbId, tblId)
+}
+
+func (s *subscribedTable) setTableSubRspReceivedLocked(dbId, tblId uint64) {
 	ent := &subEntry{
 		dbID:  dbId,
 		state: SubRspReceived,
@@ -2015,6 +2139,10 @@ func (s *subscribedTable) setTableSubRspReceived(dbId, tblId uint64) {
 func (s *subscribedTable) setTableUnsubscribe(dbId, tblId uint64) {
 	s.rw.Lock()
 	defer s.rw.Unlock()
+	s.setTableUnsubscribeLocked(dbId, tblId)
+}
+
+func (s *subscribedTable) setTableUnsubscribeLocked(dbId, tblId uint64) {
 	s.eng.cleanMemoryTableWithTable(dbId, tblId)
 	delete(s.m, tblId)
 	logutil.Info(
@@ -2085,6 +2213,9 @@ type logTailSubscriber struct {
 	rpcClient     morpc.RPCClient
 	rpcStream     morpc.Stream
 	logTailClient *service.LogtailClient
+	// transportGeneration is guarded together with logTailClient by mu.
+	// Zero disables optional generation-based admission after exhaustion.
+	transportGeneration uint64
 
 	mu struct {
 		sync.RWMutex
@@ -2208,8 +2339,22 @@ func (s *logTailSubscriber) swapClient(client *service.LogtailClient) *service.L
 	s.mu.Lock()
 	old := s.logTailClient
 	s.logTailClient = client
+	if client == nil {
+		s.transportGeneration = 0
+	} else {
+		s.transportGeneration = nextLogtailClientGeneration()
+	}
 	s.mu.Unlock()
 	return old
+}
+
+// clientAndGeneration takes the client and its generation in one snapshot.
+// Queued errors retain this ordinary client incarnation across reconnects.
+func (s *logTailSubscriber) clientAndGeneration() (*service.LogtailClient, uint64) {
+	s.mu.RLock()
+	client, generation := s.logTailClient, s.transportGeneration
+	s.mu.RUnlock()
+	return client, generation
 }
 
 func (s *logTailSubscriber) client() *service.LogtailClient {
@@ -2362,8 +2507,7 @@ func (s *logTailSubscriber) unSubscribeTable(
 	return moerr.AttachCause(ctx, err)
 }
 
-func (s *logTailSubscriber) receiveResponse(deadlineCtx context.Context) logTailSubscriberResponse {
-	client := s.client()
+func (s *logTailSubscriber) receiveResponse(deadlineCtx context.Context, client *service.LogtailClient) logTailSubscriberResponse {
 	if client == nil {
 		return logTailSubscriberResponse{err: moerr.NewStreamClosedNoCtx()}
 	}
@@ -2687,6 +2831,14 @@ type routineController struct {
 	warningBufferLen int
 }
 
+// A queued consumer failure retains the stream that produced the consumer.
+// This identity must be checked when the failure is used to request recovery.
+type logtailConsumerError struct {
+	client     *service.LogtailClient
+	generation uint64
+	err        error
+}
+
 func (rc *routineController) sendSubscribeResponse(
 	_ context.Context,
 	r *logtail.SubscribeResponse,
@@ -2812,7 +2964,12 @@ func (c *PushClient) createRoutineToConsumeLogTails(
 	ctx context.Context, routineId int, signalBufferLength int, e *Engine,
 ) *routineController {
 
-	singleRoutineToConsumeLogTail := func(ctx context.Context, engine *Engine, receiver *routineController, errRet chan error) {
+	var transport *service.LogtailClient
+	var generation uint64
+	if c.subscriber != nil {
+		transport, generation = c.subscriber.clientAndGeneration()
+	}
+	singleRoutineToConsumeLogTail := func(ctx context.Context, engine *Engine, receiver *routineController, errRet chan logtailConsumerError) {
 		defer close(receiver.done)
 		errHappen := false
 		for {
@@ -2831,7 +2988,7 @@ func (c *PushClient) createRoutineToConsumeLogTails(
 					errHappen = true
 					// The supervisor may already have exited on owner cancellation.
 					select {
-					case errRet <- err:
+					case errRet <- (logtailConsumerError{client: transport, generation: generation, err: err}):
 					case <-ctx.Done():
 						return
 					}
@@ -2905,7 +3062,10 @@ func (cmd *cmdToConsumeSub) action(ctx context.Context, e *Engine, ctrl *routine
 	}
 	lt := response.GetLogtail()
 	tbl := lt.GetTable()
-	e.pClient.subscribed.setTableSubRspReceived(tbl.DbId, tbl.TbId)
+	s := &e.pClient.subscribed
+	s.rw.Lock()
+	s.setTableSubRspReceivedLocked(tbl.DbId, tbl.TbId)
+	s.rw.Unlock()
 	return nil
 }
 
@@ -2938,10 +3098,13 @@ func (cmd *cmdToUpdateTime) action(ctx context.Context, e *Engine, ctrl *routine
 	return nil
 }
 
-func (cmd *cmdToConsumeUnSub) action(ctx context.Context, e *Engine, _ *routineController) error {
+func (cmd *cmdToConsumeUnSub) action(ctx context.Context, e *Engine, ctrl *routineController) error {
 	table := cmd.log.Table
 	//e.cleanMemoryTableWithTable(table.DbId, table.TbId)
-	e.pClient.subscribed.setTableUnsubscribe(table.DbId, table.TbId)
+	s := &e.pClient.subscribed
+	s.rw.Lock()
+	s.setTableUnsubscribeLocked(table.DbId, table.TbId)
+	s.rw.Unlock()
 	return nil
 }
 
@@ -3222,4 +3385,19 @@ func (e *Engine) captureReplayClusterKey(tail *logtail.TableLogtail, at timestam
 		return nil
 	}
 	return e.GetLatestCatalogCache().ReplayClusterKey(uint32(table.AccId), table.DbId, table.TbId, table.TbName, at)
+}
+
+// Ordinary receiver recovery must not act on a retired client's queued error.
+var logtailClientGeneration atomic.Uint64
+
+func nextLogtailClientGeneration() uint64 {
+	for {
+		previous := logtailClientGeneration.Load()
+		if previous == ^uint64(0) {
+			return 0
+		}
+		if logtailClientGeneration.CompareAndSwap(previous, previous+1) {
+			return previous + 1
+		}
+	}
 }

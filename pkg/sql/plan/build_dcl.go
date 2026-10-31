@@ -27,6 +27,10 @@ import (
 )
 
 func getPreparePlan(ctx CompilerContext, stmt tree.Statement) (*Plan, *Query, error) {
+	return getPreparePlanWithTemporalScope(ctx, stmt, nil)
+}
+
+func getPreparePlanWithTemporalScope(ctx CompilerContext, stmt tree.Statement, temporalScope *TemporalPlanningScope) (*Plan, *Query, error) {
 	if state, _ := ctx.GetContext().Value(viewSchemaContextKey{}).(*viewSchemaDerivation); state != nil && state.planning {
 		switch source := stmt.(type) {
 		case *tree.Select, *tree.ParenSelect:
@@ -57,7 +61,7 @@ func getPreparePlan(ctx CompilerContext, stmt tree.Statement) (*Plan, *Query, er
 		*tree.ShowDatabases, *tree.ShowTables, *tree.ShowSequences, *tree.ShowColumns,
 		*tree.ShowCreateDatabase, *tree.ShowCreateTable:
 		opt := NewPrepareOptimizer(ctx)
-		optimized, err := opt.Optimize(stmt, true)
+		optimized, err := opt.OptimizeWithTemporalScope(stmt, true, temporalScope)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -103,6 +107,10 @@ func getPreparePlan(ctx CompilerContext, stmt tree.Statement) (*Plan, *Query, er
 }
 
 func buildPrepare(stmt tree.Prepare, ctx CompilerContext) (*Plan, error) {
+	return buildPrepareWithTemporalScope(stmt, ctx, nil)
+}
+
+func buildPrepareWithTemporalScope(stmt tree.Prepare, ctx CompilerContext, temporalScope *TemporalPlanningScope) (*Plan, error) {
 	// Views belong to the statement currently being built. Query/DML builders
 	// replace this state, but pure DDL builders do not, so clear the previous
 	// statement's dependencies before planning this PREPARE.
@@ -120,7 +128,7 @@ func buildPrepare(stmt tree.Prepare, ctx CompilerContext) (*Plan, error) {
 		stmtName = string(pstmt.Name)
 		preparedStmt = pstmt.Stmt
 		sourceParameterCount = tree.ParameterCount(preparedStmt)
-		preparePlan, transientQuery, err = getPreparePlan(ctx, pstmt.Stmt)
+		preparePlan, transientQuery, err = getPreparePlanWithTemporalScope(ctx, pstmt.Stmt, temporalScope)
 		if err != nil {
 			return nil, err
 		}

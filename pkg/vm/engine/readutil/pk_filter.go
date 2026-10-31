@@ -36,6 +36,14 @@ func ConstructBlockPKFilter(
 	basePKFilter BasePKFilter,
 	bf engine.MembershipFilter,
 ) (f objectio.BlockReadFilter, err error) {
+	if basePKFilter.Valid && basePKFilter.Empty {
+		empty := func(containers.Vectors) []int64 { return nil }
+		f = objectio.BlockReadFilter{Valid: true, HasFakePK: isFakePK, SortedSearchFunc: empty, UnSortedSearchFunc: empty}
+		if basePKFilter.cleanup != nil {
+			f.Cleanup = basePKFilter.cleanup.run
+		}
+		return f, nil
+	}
 	if bf != nil && !bf.Valid() {
 		bf = nil
 	}

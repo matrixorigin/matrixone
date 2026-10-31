@@ -393,11 +393,16 @@ type QueryBuilder struct {
 
 	// DELETE owns these generated scan identities. Optimizer consumers must
 	// revalidate the binding and table after join rewrites.
-	deleteIndexScanTables map[int32]deleteIndexScan
-	integerPrecision      *integerPrecisionBuilder
-	correlationRouteNodes map[int32]bool
-	dependentRelations    map[int32]bool
-	preparedBindingProof  *bool
+	deleteIndexScanTables                     map[int32]deleteIndexScan
+	temporalPlanningIntent                    TemporalPlanningIntent
+	temporalPlanningScope                     *TemporalPlanningScope
+	hasTemporalPlanningIntent                 bool
+	temporalOriginalSafeScans                 map[int32]bool
+	temporalCacheFilter, temporalCacheProject *Node
+	integerPrecision                          *integerPrecisionBuilder
+	correlationRouteNodes                     map[int32]bool
+	dependentRelations                        map[int32]bool
+	preparedBindingProof                      *bool
 	// Deep existential regions are owned by a SQL block, never by a partially
 	// constructed node. The registry stays nil on the ordinary flattening path.
 	nextExistentialBlock    uint64

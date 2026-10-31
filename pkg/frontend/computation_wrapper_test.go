@@ -6024,6 +6024,27 @@ func TestRebuildPreparePlanUsesFreshCloneStatement(t *testing.T) {
 	require.Empty(t, clone.CreateTable.Table.SchemaName)
 }
 
+func TestRebuildPreparePlanScopesBorrowedSelect(t *testing.T) {
+	ses, prepared, _, execCtx := newPreparedExecuteEnvForSQL(t, 109, "select 1")
+	defer prepared.Close()
+	root := temporalPlanningRoot(prepared.PrepareStmt)
+	require.NotNil(t, root)
+	intent := &plan2.TemporalPlanningIntent{ParameterFree: true}
+	for _, wantScope := range []bool{true, false} {
+		currentIntent := intent
+		if !wantScope {
+			currentIntent = nil
+		}
+		_, err := rebuildPreparePlanWithTemporalIntent(execCtx, ses, prepared, currentIntent,
+			func(_ context.Context, _ FeSession, _ plan2.CompilerContext, stmt tree.Statement, scope *plan2.TemporalPlanningScope) (*plan2.Plan, error) {
+				require.Same(t, root, stmt.(*tree.PrepareStmt).Stmt)
+				require.Equal(t, wantScope, scope != nil)
+				return &plan2.Plan{}, nil
+			})
+		require.NoError(t, err)
+	}
+}
+
 func TestModeMismatchRebuildsPreparedViewWithPreparedRootSQL(t *testing.T) {
 	const preparedSQL = "create view v as select 1"
 	const executeSQL = "execute prepared_view"

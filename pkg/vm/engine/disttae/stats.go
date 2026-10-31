@@ -235,6 +235,9 @@ type GlobalStats struct {
 
 	closeOnce sync.Once
 	workers   sync.WaitGroup
+	// Serializes installing every owned root with Close sealing startup.
+	startMu     sync.Mutex
+	startSealed bool
 
 	// engine is the global Engine instance.
 	engine *Engine
@@ -309,6 +312,9 @@ type GlobalStats struct {
 	// afterAutomaticUpdateStarted is for deterministic producer-cancellation
 	// tests only. It runs after worker admission and before refresh admission.
 	afterAutomaticUpdateStarted func(pb.StatsInfoKey, *updateRecord)
+
+	// afterRootsStarted is a deterministic test barrier under startMu.
+	afterRootsStarted func()
 }
 
 func NewGlobalStats(
@@ -340,7 +346,6 @@ func NewGlobalStats(
 			s.Close()
 		}
 	}()
-	publish(s)
 	s.updatingMu.updating = make(map[pb.StatsInfoKey]*updateRecord)
 	s.mu.statsInfoMap = make(map[pb.StatsInfoKey]*pb.StatsInfo)
 	s.mu.tableDefVersions = make(map[pb.StatsInfoKey]uint32)
@@ -349,6 +354,7 @@ func NewGlobalStats(
 	// stop. Register it once per GlobalStats rather than once per cache miss.
 	context.AfterFunc(ownerCtx, s.notifyStatsWaiters)
 	s.initStatsRefreshAdmission()
+	publish(s)
 	for _, opt := range opts {
 		opt(s)
 	}
@@ -360,19 +366,35 @@ func NewGlobalStats(
 	// This optimization reduces goroutine count significantly (e.g., 192 -> 120 in typical environments)
 	// while maintaining performance since updateWorker's actual concurrency is much lower.
 	executorConcurrency, updateWorkerConcurrency := globalStatsConcurrency(runtime.GOMAXPROCS(0), s.updateWorkerFactor)
-	s.concurrentExecutor = newConcurrentExecutor(executorConcurrency)
-	s.concurrentExecutor.Run(ownerCtx)
-	s.workers.Add(1)
-	go func() {
-		defer s.workers.Done()
-		s.logtailConsumer(ownerCtx)
+	started := func() bool {
+		s.startMu.Lock()
+		defer s.startMu.Unlock()
+		if s.startSealed {
+			return false
+		}
+		executor := newConcurrentExecutor(executorConcurrency)
+		executor.Run(ownerCtx)
+		s.concurrentExecutor = executor
+		s.workers.Add(1)
+		go func() {
+			defer s.workers.Done()
+			s.logtailConsumer(ownerCtx)
+		}()
+		s.spawnUpdateWorkers(ownerCtx, updateWorkerConcurrency)
+		s.workers.Add(1)
+		go func() {
+			defer s.workers.Done()
+			s.queueWatcher.run(ownerCtx)
+		}()
+		if s.afterRootsStarted != nil {
+			s.afterRootsStarted()
+		}
+		return true
 	}()
-	s.spawnUpdateWorkers(ownerCtx, updateWorkerConcurrency) // updateWorker内部已启动goroutines，不需要再用go
-	s.workers.Add(1)
-	go func() {
-		defer s.workers.Done()
-		s.queueWatcher.run(ownerCtx)
-	}()
+	if !started {
+		constructed = true
+		return s
+	}
 	logutil.Info(
 		"GlobalStats-Started",
 		zap.Int("exector-num", executorConcurrency),
@@ -403,12 +425,16 @@ func globalStatsConcurrency(gomaxprocs, updateWorkerFactor int) (executorConcurr
 // completion callback owned by this GlobalStats instance.
 func (gs *GlobalStats) Close() {
 	gs.closeOnce.Do(func() {
+		gs.startMu.Lock()
+		gs.startSealed = true
 		if gs.cancel != nil {
 			gs.cancel()
 		}
+		executor := gs.concurrentExecutor
+		gs.startMu.Unlock()
 		gs.notifyStatsWaiters()
 		gs.workers.Wait()
-		if waiter, ok := gs.concurrentExecutor.(interface{ Wait() }); ok {
+		if waiter, ok := executor.(interface{ Wait() }); ok {
 			waiter.Wait()
 		}
 	})
@@ -1381,7 +1407,9 @@ func (gs *GlobalStats) PatchStats(key pb.StatsInfoKey, patch *PatchArgs) error {
 			sr.Uniform = *update.Uniform
 		}
 		if update.Result != nil {
-			sr.Result = update.Result
+			result := make([]float64, len(update.Result))
+			copy(result, update.Result)
+			sr.Result = result
 		}
 	}
 

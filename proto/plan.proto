@@ -326,6 +326,11 @@ message Expr {
   }
 
   int32 aux_id = 16;
+  // Keep these flags next to aux_id so they use its alignment padding.
+  // Planner-only proof that this is an admitted temporal candidate guard.
+  bool temporal_candidate_guard = 26;
+  // Planner-only proof that this entire filter is an admitted candidate.
+  bool temporal_candidate_filter = 27;
   double ndv = 17;
   double selectivity = 18;
   // prepared_numeric is explicit planner metadata, not an executor memo
@@ -392,6 +397,8 @@ message FoldVal {
   int32 id = 1;
   bool is_const = 2;
   bytes data = 3;
+  // Copied only from an admitted temporal candidate guard expression.
+  bool temporal_candidate_guard = 4;
 }
 
 message LiteralVec {
@@ -1907,6 +1914,10 @@ message Query {
   repeated ViewReference view_references = 18;
   CorrelationSpec correlation = 19;
   IntegerPrecisionGraph integer_precision = 20;
+
+  // Access-path choice depends on execution-time temporal values or context.
+  // Rebuild from the original owner instead of reusing a physical choice.
+  bool temporal_index_needs_replan = 21;
 }
 
 message TransationControl {

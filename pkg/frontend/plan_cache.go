@@ -31,6 +31,7 @@ type cachedPlan struct {
 	statsVersions     map[optimizerStatsTableKey]uint64
 	planStatsVersions []map[optimizerStatsTableKey]uint64
 	invalid           bool
+	temporal          bool
 }
 
 // planCache uses LRU to cache plan for the same sql
@@ -72,6 +73,18 @@ func (pc *planCache) cacheWithPlanSnapshotsAndStatsVersions(
 	planStatsVersions []map[optimizerStatsTableKey]uint64,
 	versions ...int64,
 ) {
+	pc.cacheWithPlanSnapshotsAndStatsVersionsOwned(sql, stmts, plans, planSnapshotTS, planStatsVersions, nil, versions...)
+}
+
+func (pc *planCache) cacheWithPlanSnapshotsAndStatsVersionsOwned(
+	sql string,
+	stmts []tree.Statement,
+	plans []*plan.Plan,
+	planSnapshotTS []timestamp.Timestamp,
+	planStatsVersions []map[optimizerStatsTableKey]uint64,
+	seal *temporalCacheSeal,
+	versions ...int64,
+) {
 	protocolVersion := currentProtocolVersion(nil)
 	if len(versions) > 0 {
 		protocolVersion = versions[0]
@@ -91,7 +104,8 @@ func (pc *planCache) cacheWithPlanSnapshotsAndStatsVersions(
 		return
 	}
 	for i := range stmts {
-		if plans[i] == nil {
+		needsReplan, valid := temporalPlanReplanState(plans[i])
+		if !valid || needsReplan && (len(plans) != 1 || !seal.permits(plans[i])) || seal != nil && !seal.permits(plans[i]) {
 			// can not cache and clean all stmts
 			freeStmts(stmts)
 			return
@@ -101,6 +115,7 @@ func (pc *planCache) cacheWithPlanSnapshotsAndStatsVersions(
 		freeStmts(element.Value.(*cachedPlan).stmts)
 		element.Value = &cachedPlan{
 			sql:               sql,
+			temporal:          seal != nil,
 			stmts:             stmts,
 			plans:             plans,
 			planSnapshotTS:    planSnapshotTS,
@@ -113,6 +128,7 @@ func (pc *planCache) cacheWithPlanSnapshotsAndStatsVersions(
 	}
 	element := pc.lruList.PushFront(&cachedPlan{
 		sql:               sql,
+		temporal:          seal != nil,
 		stmts:             stmts,
 		plans:             plans,
 		planSnapshotTS:    planSnapshotTS,
@@ -253,6 +269,14 @@ func (pc *planCache) updatePlanGeneration(
 		len(cached.planSnapshotTS) != len(cached.plans) ||
 		len(cached.planStatsVersions) != len(cached.plans) ||
 		cached.plans[index] != expectedPlan {
+		return false
+	}
+	needsReplan, valid := temporalPlanReplanState(newPlan)
+	if !valid {
+		return false
+	}
+	if cached.temporal || needsReplan {
+		cached.invalid = true
 		return false
 	}
 	updatedPlanStatsVersions := clonePlanStatsVersions(cached.planStatsVersions)

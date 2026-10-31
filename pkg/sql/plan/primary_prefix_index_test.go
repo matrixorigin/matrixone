@@ -126,7 +126,8 @@ func TestSortedPrimaryPrefixPointPreference(t *testing.T) {
 			if tc.force {
 				require.NoError(t, builder.recordIndexHints(scan, table, []*tree.IndexHint{{HintType: tree.HintForce, HintScope: tree.HintForScan, IndexNames: []string{"uk_ab"}}}))
 			}
-			got := builder.applyIndicesForFiltersRegularIndex(scan, node, map[[2]int32]int{{tag, 1}: 1, {tag, 2}: 1, {tag, table.Name2ColIndex["payload"]}: 1}, map[[2]int32]*pb.Expr{})
+			got, indexErr := builder.applyIndicesForFiltersRegularIndex(scan, node, map[[2]int32]int{{tag, 1}: 1, {tag, 2}: 1, {tag, table.Name2ColIndex["payload"]}: 1}, map[[2]int32]*pb.Expr{})
+			require.NoError(t, indexErr)
 			if tc.wantIndex {
 				require.NotEqual(t, scan, got)
 				require.Equal(t, pb.Node_INDEX, builder.qry.Nodes[got].JoinType)

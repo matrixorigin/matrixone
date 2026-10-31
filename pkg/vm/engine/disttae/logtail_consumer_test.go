@@ -728,7 +728,7 @@ func TestPushClientCloseJoinsOwnedWorkers(t *testing.T) {
 }
 
 func TestRoutineControllerCloseStopsBlockedSend(t *testing.T) {
-	c := &PushClient{consumeErrC: make(chan error, 1)}
+	c := &PushClient{consumeErrC: make(chan logtailConsumerError, 1)}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	rc := c.createRoutineToConsumeLogTails(ctx, 0, 1, nil)
@@ -3789,9 +3789,9 @@ func TestEngineCloseWithPriorGenerationConsumerErrors(t *testing.T) {
 				c := &e.pClient
 				ctx := c.start(context.Background())
 				e.globalStats = &GlobalStats{ctx: ctx}
-				c.consumeErrC = make(chan error, consumerNumber)
+				c.consumeErrC = make(chan logtailConsumerError, consumerNumber)
 				for range pending {
-					c.consumeErrC <- errors.New("previous generation apply failure")
+					c.consumeErrC <- logtailConsumerError{err: errors.New("previous generation apply failure")}
 				}
 				part := logtailreplay.NewPartition("", nil, 0, 10, 20, nil)
 				e.partitions[[2]uint64{10, 20}] = part
@@ -3838,22 +3838,22 @@ func (cmd failingConsumerCommand) action(context.Context, *Engine, *routineContr
 
 func TestLogtailConsumerPreservesLiveOwnerError(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		c := &PushClient{consumeErrC: make(chan error, 1)}
+		c := &PushClient{consumeErrC: make(chan logtailConsumerError, 1)}
 		ctx := c.start(context.Background())
 		defer c.Close()
 		prior := errors.New("previous consumer failure")
 		failure := errors.New("current apply failure")
-		c.consumeErrC <- prior
+		c.consumeErrC <- logtailConsumerError{err: prior}
 		rc := c.createRoutineToConsumeLogTails(ctx, 0, 1, nil)
 		applied := 0
 		require.True(t, rc.send(failingConsumerCommand(func() error { return failure })))
 		synctest.Wait() // Error reporting is blocked on the full queue, not cancellation.
 		require.True(t, rc.send(failingConsumerCommand(func() error { applied++; return nil })))
-		require.ErrorIs(t, <-c.consumeErrC, prior)
+		require.ErrorIs(t, (<-c.consumeErrC).err, prior)
 		synctest.Wait()
 		select {
 		case err := <-c.consumeErrC:
-			require.ErrorIs(t, err, failure)
+			require.ErrorIs(t, err.err, failure)
 		default:
 			t.Fatal("live-owner apply error was discarded")
 		}

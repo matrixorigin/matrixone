@@ -1491,12 +1491,16 @@ func TestGetFunctionValueUnstableByID(t *testing.T) {
 		// Actual slice positions, not legacy overloadId labels, form wire IDs.
 		for index, ov := range fn.Overloads {
 			id := EncodeOverloadID(int32(fn.functionId), int32(index))
-			wantStable := stable[int32(fn.functionId)] && ov.IsVolatile()
+			// Temporal bound helpers are statement-stable real-time scalars, not
+			// legacy volatile/no-fold functions. Their own scalar policy is tested
+			// independently in TestZoneMapTemporalHelperScalarPolicy.
+			temporalScalar := fn.functionId == TEMPORAL_DATETIME_BOUND || fn.functionId == TEMPORAL_TIMESTAMP_BOUND || fn.functionId == TEMPORAL_BOUND_NOT_EMPTY
+			wantStable := temporalScalar || stable[int32(fn.functionId)] && ov.IsVolatile()
 			require.Equal(t, wantStable, ov.executionStable, "function %d overload %d", fn.functionId, index)
 			unstable, known := GetFunctionValueUnstableByID(id)
 			require.True(t, known)
 			require.Equal(t, ov.IsVolatile() && !wantStable, unstable, "function %d overload %d", fn.functionId, index)
-			if wantStable {
+			if wantStable && ov.IsVolatile() {
 				annotated++
 				require.True(t, ov.CannotFold(), "legacy execution restrictions must remain intact")
 				require.False(t, IsConstant(&plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{Func: &plan.ObjectRef{Obj: id}}}}, true))
