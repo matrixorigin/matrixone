@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/tests/testutils"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/util/sysview"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -99,22 +100,34 @@ func TestV407UpgradeRefreshesStatistics(t *testing.T) {
 				const dbName = "statistics_upgrade_28999"
 				exec("create database " + dbName)
 				defer func() {
-					cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
-					defer cleanupCancel()
 					// Restore the shared cluster's view even if an assertion fails mid-upgrade.
-					require.NoError(t, replaceView(cleanupCtx, test.accountID, sysview.InformationSchemaStatisticsDDL))
-					_, err := conn.ExecContext(cleanupCtx, "drop database "+dbName)
-					require.NoError(t, err)
+					restoreCtx, restoreCancel := context.WithTimeout(context.Background(), 30*time.Second)
+					restoreErr := replaceView(restoreCtx, test.accountID, sysview.InformationSchemaStatisticsPrefixSubPartDDL)
+					restoreCancel()
+					dropCtx, dropCancel := context.WithTimeout(context.Background(), 30*time.Second)
+					_, dropErr := conn.ExecContext(dropCtx, "drop database "+dbName)
+					dropCancel()
+					assert.NoError(t, restoreErr, "restore the current STATISTICS definition")
+					assert.NoError(t, dropErr, "drop the test database even if view restoration fails")
 				}()
 				exec("use " + dbName)
 				exec("set experimental_ivf_index = 1")
 				exec("create table t(id int primary key, code varchar(20), embedding vecf32(3), " +
-					"unique key uq_code(code), key idx_code(code))")
+					"unique key uq_code(code), key idx_code(code(3)))")
 				exec("create index vidx using ivfflat on t(embedding) lists = 2 op_type 'vector_l2_ops'")
 
 				// Reproduce the persisted view on an existing 4.0.6 / old-offset 4.0.7 tenant,
 				// rather than testing the fresh-bootstrap definition.
 				require.NoError(t, replaceView(ctx, test.accountID, legacy))
+				indexSubPart := func(indexName string) sql.NullInt64 {
+					t.Helper()
+					var subPart sql.NullInt64
+					require.NoError(t, conn.QueryRowContext(ctx,
+						"select sub_part from information_schema.statistics where table_schema = '"+dbName+
+							"' and table_name = 't' and index_name = ?", indexName).Scan(&subPart))
+					return subPart
+				}
+				require.Equal(t, sql.NullInt64{}, indexSubPart("idx_code"), "the legacy view hides retained prefix lengths")
 				btreeQuery := "select index_name from information_schema.statistics where table_schema = '" +
 					dbName + "' and table_name = 't' and index_type = 'BTREE' order by index_name"
 				require.Empty(t, statisticsIndexNames(t, ctx, conn, btreeQuery))
@@ -153,6 +166,8 @@ func TestV407UpgradeRefreshesStatistics(t *testing.T) {
 					}
 					require.ElementsMatch(t, []string{"PRIMARY", "idx_code", "uq_code"},
 						statisticsIndexNames(t, ctx, conn, btreeQuery))
+					require.Equal(t, sql.NullInt64{Int64: 3, Valid: true}, indexSubPart("idx_code"))
+					require.Equal(t, sql.NullInt64{}, indexSubPart("uq_code"), "whole-column index parts remain SQL NULL")
 					var specialized string
 					require.NoError(t, conn.QueryRowContext(ctx, specializedQuery).Scan(&specialized))
 					require.Equal(t, originalAlgorithm, specialized, "the specialized algorithm must not become BTREE")
@@ -165,7 +180,7 @@ func TestV407UpgradeRefreshesStatistics(t *testing.T) {
 						return err
 					}, executor.Options{}.WithDatabase(catalog.MO_CATALOG).WithAccountID(test.accountID)))
 					require.True(t, exists)
-					require.Equal(t, strings.Replace(sysview.InformationSchemaStatisticsDDL, "CREATE VIEW ", "CREATE OR REPLACE VIEW ", 1), definition)
+					require.Equal(t, strings.Replace(sysview.InformationSchemaStatisticsPrefixSubPartDDL, "CREATE VIEW ", "CREATE OR REPLACE VIEW ", 1), definition)
 				}
 			})
 		}
@@ -376,7 +391,7 @@ type statisticsUpgradeTxn struct {
 
 func (txn *statisticsUpgradeTxn) Exec(statement string, opts executor.StatementOption) (executor.Result, error) {
 	res, err := txn.TxnExecutor.Exec(statement, opts)
-	if err == nil && statement == strings.Replace(sysview.InformationSchemaStatisticsDDL, "CREATE VIEW ", "CREATE OR REPLACE VIEW ", 1) {
+	if err == nil && statement == strings.Replace(sysview.InformationSchemaStatisticsPrefixSubPartDDL, "CREATE VIEW ", "CREATE OR REPLACE VIEW ", 1) {
 		(*txn.replacements)++
 	}
 	return res, err
