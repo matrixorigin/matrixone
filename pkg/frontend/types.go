@@ -446,6 +446,28 @@ func (cursor *preparedStmtCursor) close() {
 	cursor.owner = nil
 }
 
+// resetAttempt discards the row set one failed statement generation
+// retained while preserving the statement-lifetime cursor state: the frozen
+// result metadata installed exactly once per EXECUTE before the pipeline
+// started (setPreparedCursorColumns) plus the retention limits and owner.
+// The compiler retries a cursor execute internally without repeating that
+// installation, so Columns must survive the retry transition; the retried
+// generation decodes and appends against them. The session byte reservation
+// of the discarded generation returns to the shared budget (#30359 review).
+func (cursor *preparedStmtCursor) resetAttempt() {
+	if cursor == nil {
+		return
+	}
+	if cursor.owner != nil && cursor.bytes > 0 {
+		cursor.owner.releasePreparedCursorBytes(cursor.bytes)
+	}
+	if cursor.result != nil {
+		cursor.result.Data = nil
+	}
+	cursor.offset = 0
+	cursor.bytes = 0
+}
+
 func (prepareStmt *PrepareStmt) closeCursor() {
 	if prepareStmt == nil {
 		return

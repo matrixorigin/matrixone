@@ -1,0 +1,93 @@
+drop database if exists seq_rollback_db;
+create database seq_rollback_db;
+use seq_rollback_db;
+create sequence sr as bigint increment by 1 start with 1 no cycle;
+create table t (id bigint primary key default nextval('sr'), v int);
+begin;
+insert into t(v) values (10);
+rollback;
+insert into t(v) values (20);
+select id, v from t;
+➤ id[-5,64,0]  ¦  v[4,32,0]  𝄀
+2  ¦  20
+select last_seq_num, is_called from sr;
+➤ last_seq_num[-5,64,0]  ¦  is_called[-7,1,0]  𝄀
+2  ¦  1
+begin;
+insert into t(v) values (30);
+commit;
+select id, v from t order by id;
+➤ id[-5,64,0]  ¦  v[4,32,0]  𝄀
+2  ¦  20  𝄀
+3  ¦  30
+select last_seq_num, is_called from sr;
+➤ last_seq_num[-5,64,0]  ¦  is_called[-7,1,0]  𝄀
+3  ¦  1
+begin;
+select nextval('sr');
+➤ nextval(sr)[12,65535,0]  𝄀
+4
+rollback;
+select nextval('sr');
+➤ nextval(sr)[12,65535,0]  𝄀
+5
+select last_seq_num, is_called from sr;
+➤ last_seq_num[-5,64,0]  ¦  is_called[-7,1,0]  𝄀
+5  ¦  1
+begin;
+insert into t(v) values (40);
+rollback;
+insert into t(id, v) values (100, 50);
+insert into t(v) values (60);
+select id, v from t order by id;
+➤ id[-5,64,0]  ¦  v[4,32,0]  𝄀
+2  ¦  20  𝄀
+3  ¦  30  𝄀
+7  ¦  60  𝄀
+100  ¦  50
+select last_seq_num, is_called from sr;
+➤ last_seq_num[-5,64,0]  ¦  is_called[-7,1,0]  𝄀
+7  ¦  1
+create sequence sd as bigint increment by -1 start with 10 minvalue 1 maxvalue 10 no cycle;
+create table td (id bigint primary key default nextval('sd'), v int);
+begin;
+insert into td(v) values (1);
+rollback;
+insert into td(v) values (2);
+select id, v from td;
+➤ id[-5,64,0]  ¦  v[4,32,0]  𝄀
+9  ¦  2
+select last_seq_num, is_called from sd;
+➤ last_seq_num[-5,64,0]  ¦  is_called[-7,1,0]  𝄀
+9  ¦  1
+drop database if exists nvr_merge_src;
+drop database if exists nvr_merge_br;
+create database nvr_merge_src;
+use nvr_merge_src;
+create sequence smr as bigint increment by 1 start with 1 no cycle;
+create table tmr (id bigint primary key default nextval('smr'), v int);
+insert into tmr(v) values (10);
+data branch create database nvr_merge_br from nvr_merge_src;
+use nvr_merge_br;
+insert into tmr(v) values (20);
+use nvr_merge_src;
+begin;
+data branch merge nvr_merge_br.tmr into nvr_merge_src.tmr;
+rollback;
+select id, v from tmr order by id;
+➤ id[-5,64,0]  ¦  v[4,32,0]  𝄀
+1  ¦  10
+select last_seq_num, is_called from smr;
+➤ last_seq_num[-5,64,0]  ¦  is_called[-7,1,0]  𝄀
+2  ¦  1
+insert into tmr(v) values (30);
+select id, v from tmr order by id;
+➤ id[-5,64,0]  ¦  v[4,32,0]  𝄀
+1  ¦  10  𝄀
+3  ¦  30
+select last_seq_num, is_called from smr;
+➤ last_seq_num[-5,64,0]  ¦  is_called[-7,1,0]  𝄀
+3  ¦  1
+drop database nvr_merge_br;
+drop database nvr_merge_src;
+drop database seq_rollback_db;

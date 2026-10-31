@@ -68,9 +68,138 @@ func Test_replaceFuncId(t *testing.T) {
 			Expr: case1,
 		},
 	}
-	case1Expr, err := getDefaultExpr(context.Background(), case1ColDef)
+	case1Expr, err := getDefaultExpr(context.Background(), case1ColDef, "")
 	assert.NoError(t, err)
 	assert.NotNil(t, case1Expr)
+}
+
+func makeSequenceFuncExpr(t *testing.T, name string, fid, overloadIdx int32, args ...*Expr) *Expr {
+	t.Helper()
+	return &Expr{
+		Expr: &plan.Expr_F{
+			F: &plan.Function{
+				Func: &ObjectRef{
+					ObjName: name,
+					Obj:     function.EncodeOverloadID(fid, overloadIdx),
+				},
+				Args: args,
+			},
+		},
+	}
+}
+
+func requireSequencePin(t *testing.T, expr *Expr, wantFid, wantOverloadIdx int32, wantArgs int) {
+	t.Helper()
+	fn := expr.GetF()
+	require.NotNil(t, fn)
+	require.Len(t, fn.Args, wantArgs)
+	require.Equal(t, function.EncodeOverloadID(wantFid, wantOverloadIdx), fn.Func.Obj)
+	dbArg := fn.Args[wantArgs-1]
+	require.Equal(t, "owner_db", dbArg.GetLit().GetSval())
+	require.Equal(t, int32(types.T_varchar), dbArg.Typ.Id)
+}
+
+func TestPinSequenceFunctionsToOwnerDb(t *testing.T) {
+	nextvalOf := func() *Expr {
+		return makeSequenceFuncExpr(t, "nextval", function.NEXTVAL, 0, makePlan2StringConstExprWithType("s"))
+	}
+
+	t.Run("nextval one arg is pinned", func(t *testing.T) {
+		expr := nextvalOf()
+		pinSequenceFunctionsToOwnerDb(expr, "owner_db")
+		requireSequencePin(t, expr, function.NEXTVAL, 1, 2)
+		require.Equal(t, "s", expr.GetF().Args[0].GetLit().GetSval())
+	})
+
+	t.Run("currval one arg is pinned", func(t *testing.T) {
+		expr := makeSequenceFuncExpr(t, "currval", function.CURRVAL, 0, makePlan2StringConstExprWithType("s"))
+		pinSequenceFunctionsToOwnerDb(expr, "owner_db")
+		requireSequencePin(t, expr, function.CURRVAL, 1, 2)
+	})
+
+	t.Run("qualified nextval keeps its database", func(t *testing.T) {
+		expr := makeSequenceFuncExpr(t, "nextval", function.NEXTVAL, 1,
+			makePlan2StringConstExprWithType("s"), makePlan2StringConstExprWithType("other_db"))
+		before := DeepCopyExpr(expr)
+		pinSequenceFunctionsToOwnerDb(expr, "owner_db")
+		require.Equal(t, before, expr)
+	})
+
+	t.Run("setval two args gains is_called and database", func(t *testing.T) {
+		expr := makeSequenceFuncExpr(t, "setval", function.SETVAL, 0,
+			makePlan2StringConstExprWithType("s"), makePlan2StringConstExprWithType("50"))
+		pinSequenceFunctionsToOwnerDb(expr, "owner_db")
+		requireSequencePin(t, expr, function.SETVAL, 2, 4)
+		isCalled := expr.GetF().Args[2]
+		require.True(t, isCalled.GetLit().GetBval())
+		require.Equal(t, int32(types.T_bool), isCalled.Typ.Id)
+	})
+
+	t.Run("setval three args gains only the database", func(t *testing.T) {
+		expr := makeSequenceFuncExpr(t, "setval", function.SETVAL, 1,
+			makePlan2StringConstExprWithType("s"), makePlan2StringConstExprWithType("50"),
+			makePlan2BoolConstExprWithType(false))
+		pinSequenceFunctionsToOwnerDb(expr, "owner_db")
+		requireSequencePin(t, expr, function.SETVAL, 2, 4)
+		require.False(t, expr.GetF().Args[2].GetLit().GetBval())
+	})
+
+	t.Run("setval four args is untouched", func(t *testing.T) {
+		expr := makeSequenceFuncExpr(t, "setval", function.SETVAL, 2,
+			makePlan2StringConstExprWithType("s"), makePlan2StringConstExprWithType("50"),
+			makePlan2BoolConstExprWithType(true), makePlan2StringConstExprWithType("other_db"))
+		before := DeepCopyExpr(expr)
+		pinSequenceFunctionsToOwnerDb(expr, "owner_db")
+		require.Equal(t, before, expr)
+	})
+
+	t.Run("nested sequence calls inside wrappers are pinned", func(t *testing.T) {
+		expr := makeSequenceFuncExpr(t, "coalesce", function.COALESCE, 0,
+			nextvalOf(), makePlan2StringConstExprWithType("x"))
+		before := DeepCopyExpr(expr)
+		pinSequenceFunctionsToOwnerDb(expr, "owner_db")
+		requireSequencePin(t, expr.GetF().Args[0], function.NEXTVAL, 1, 2)
+		require.Equal(t, before.GetF().Args[1], expr.GetF().Args[1])
+		require.Equal(t, before.GetF().Func, expr.GetF().Func, "coalesce itself must stay untouched")
+	})
+
+	t.Run("unrelated functions are untouched", func(t *testing.T) {
+		expr := makeSequenceFuncExpr(t, "abs", function.ABS, 0, makePlan2Int64ConstExprWithType(1))
+		before := DeepCopyExpr(expr)
+		pinSequenceFunctionsToOwnerDb(expr, "owner_db")
+		require.Equal(t, before, expr)
+	})
+
+	t.Run("empty owner database is a no-op", func(t *testing.T) {
+		expr := nextvalOf()
+		before := DeepCopyExpr(expr)
+		pinSequenceFunctionsToOwnerDb(expr, "")
+		require.Equal(t, before, expr)
+	})
+}
+
+func TestGetDefaultExprPinsSequenceToOwnerDb(t *testing.T) {
+	colDef := &plan.ColDef{
+		Name: "seq_col",
+		Typ:  plan.Type{Id: int32(types.T_varchar), Width: 64},
+		Default: &plan.Default{
+			Expr: makeSequenceFuncExpr(t, "nextval", function.NEXTVAL, 0, makePlan2StringConstExprWithType("s")),
+		},
+	}
+
+	expr, err := getDefaultExpr(context.Background(), colDef, "owner_db")
+	require.NoError(t, err)
+	requireSequencePin(t, expr, function.NEXTVAL, 1, 2)
+
+	// The catalog default must remain unpinned and immutable.
+	stored := colDef.Default.Expr.GetF()
+	require.Len(t, stored.Args, 1)
+	require.Equal(t, function.EncodeOverloadID(function.NEXTVAL, 0), stored.Func.Obj)
+
+	// Without an owner database the restored default stays caller-resolved.
+	expr, err = getDefaultExpr(context.Background(), colDef, "")
+	require.NoError(t, err)
+	require.Len(t, expr.GetF().Args, 1)
 }
 
 func TestForeignKeyDetectionSQLQuotesIdentifiers(t *testing.T) {
@@ -1585,7 +1714,7 @@ func TestDefaultBlobTextAssignmentPolicy(t *testing.T) {
 				col := &plan.ColDef{Typ: target, Default: &plan.Default{Expr: stored}}
 				before := DeepCopyExpr(stored)
 				for _, ignore := range []bool{false, true} {
-					got, err := getDefaultExprForAssignment(proc.Ctx, col, proc, ignore)
+					got, err := getDefaultExprForAssignment(proc.Ctx, col, "", proc, ignore)
 					require.NoError(t, err)
 					want := "cast_assign"
 					if ignore {
@@ -1608,7 +1737,7 @@ func TestDefaultBlobTextAssignmentPolicy(t *testing.T) {
 		ddl, err := makePlan2AssignmentCastExpr(proc.Ctx, sameType, target)
 		require.NoError(t, err)
 		require.Equal(t, "cast_strict", ddl.GetF().GetFunc().GetObjName())
-		null, err := getDefaultExprForAssignment(proc.Ctx, &plan.ColDef{Typ: target}, proc, true)
+		null, err := getDefaultExprForAssignment(proc.Ctx, &plan.ColDef{Typ: target}, "", proc, true)
 		require.NoError(t, err)
 		require.True(t, null.GetLit().GetIsnull())
 	}
