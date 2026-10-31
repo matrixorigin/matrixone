@@ -23,6 +23,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/stretchr/testify/require"
@@ -600,10 +601,30 @@ func TestJSONAggregateValueEncodingTypeMatrix(t *testing.T) {
 	} {
 		vec := vector.NewVec(typ)
 		require.NoError(t, vector.AppendBytes(vec, []byte{1}, false, mp))
-		_, err := appendJSONAggregateValue(nil, vec, 0)
-		require.Error(t, err)
+		size, err := jsonAggregateValueSizeWithProtocol(
+			vec, 0, bytejson.MySQLOpaqueProtocolVersion)
+		require.NoError(t, err)
+		encoded, err := appendJSONAggregateValueWithProtocol(
+			make([]byte, 0, size), vec, 0, bytejson.MySQLOpaqueProtocolVersion)
+		require.NoError(t, err)
+		require.Len(t, encoded, size)
+		require.Equal(t, bytejson.TpCodeBlob, types.DecodeJson(encoded).Type)
 		vec.Free(mp)
 	}
+	bit := vector.NewVec(types.New(types.T_bit, 8, 0))
+	require.NoError(t, vector.AppendFixed(bit, uint64(0xaa), false, mp))
+	size, err := jsonAggregateValueSizeWithProtocol(
+		bit, 0, bytejson.MySQLOpaqueProtocolVersion)
+	require.NoError(t, err)
+	encoded, err := appendJSONAggregateValueWithProtocol(
+		make([]byte, 0, size), bit, 0, bytejson.MySQLOpaqueProtocolVersion)
+	require.NoError(t, err)
+	require.Len(t, encoded, size)
+	value := types.DecodeJson(encoded)
+	unquoted, err := value.Unquote()
+	require.NoError(t, err)
+	require.Equal(t, "base64:type16:qg==", unquoted)
+	bit.Free(mp)
 	jsonVec := vector.NewVec(types.T_json.ToType())
 	// Invalid JSON is rejected before it can reach the aggregate consumer.
 	require.Error(t, vector.AppendBytes(jsonVec, nil, false, mp))

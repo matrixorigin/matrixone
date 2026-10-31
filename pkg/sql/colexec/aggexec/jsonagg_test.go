@@ -16,9 +16,11 @@ package aggexec
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -503,9 +505,21 @@ func runJSONArrayAggregate(
 	allocation *AllocationAccount,
 	locations ...*time.Location,
 ) bytejson.ByteJson {
+	return runJSONArrayAggregateWithProtocol(t, mp, input, allocation, 0, locations...)
+}
+
+func runJSONArrayAggregateWithProtocol(
+	t *testing.T,
+	mp *mpool.MPool,
+	input *vector.Vector,
+	allocation *AllocationAccount,
+	protocolVersion int64,
+	locations ...*time.Location,
+) bytejson.ByteJson {
 	t.Helper()
 	exec, err := MakeAgg(mp, AggIdOfJsonArrayAgg, false, *input.GetType())
 	require.NoError(t, err)
+	ConfigureJSONAggregateOpaqueProtocol(exec, protocolVersion)
 	if len(locations) > 0 {
 		ConfigureGroupConcatTimeZone(exec, locations[0])
 	}
@@ -534,6 +548,15 @@ func runJSONArrayAggregate(
 }
 
 func runJSONObjectAggregate(t *testing.T, mp *mpool.MPool, input *vector.Vector) bytejson.ByteJson {
+	return runJSONObjectAggregateWithProtocol(t, mp, input, 0)
+}
+
+func runJSONObjectAggregateWithProtocol(
+	t *testing.T,
+	mp *mpool.MPool,
+	input *vector.Vector,
+	protocolVersion int64,
+) bytejson.ByteJson {
 	t.Helper()
 	exec, err := MakeAgg(
 		mp,
@@ -543,6 +566,7 @@ func runJSONObjectAggregate(t *testing.T, mp *mpool.MPool, input *vector.Vector)
 		*input.GetType(),
 	)
 	require.NoError(t, err)
+	ConfigureJSONAggregateOpaqueProtocol(exec, protocolVersion)
 	require.NoError(t, exec.GroupGrow(1))
 	keys := buildVarlenVec(t, mp, types.T_varchar.ToType(), []string{"v"})
 	require.NoError(t, exec.BatchFill(0, []uint64{1}, []*vector.Vector{keys, input}))
@@ -622,7 +646,7 @@ func fromValueListToVector(
 	return v
 }
 
-func TestJsonArrayAggBinaryUnsupported(t *testing.T) {
+func TestJsonArrayAggOpaqueRequiresProtocolAdmission(t *testing.T) {
 	mg := mpool.MustNewZero()
 	info := multiAggInfo{
 		aggID:     32,
@@ -637,10 +661,340 @@ func TestJsonArrayAggBinaryUnsupported(t *testing.T) {
 	vec := fromValueListToVector(mg, types.T_binary.ToType(), []string{"abc"}, nil)
 	err := exec.Fill(0, 0, []*vector.Vector{vec})
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "binary data not supported")
+	require.Contains(t, err.Error(), "MORPC protocol version")
 
 	vec.Free(mg)
 	exec.Free()
+}
+
+func TestJSONAggregateOpaqueValueSurfaces(t *testing.T) {
+	const protocolVersion = bytejson.MySQLOpaqueProtocolVersion
+	mg := mpool.MustNewZero()
+
+	tests := []struct {
+		name        string
+		typ         types.Type
+		append      func(*vector.Vector) error
+		wantValue   string
+		wantType    string
+		fieldType   uint8
+		wantPayload []byte
+	}{
+		{
+			name: "bit", typ: types.New(types.T_bit, 8, 0),
+			append: func(v *vector.Vector) error {
+				return vector.AppendFixed(v, uint64(0xaa), false, mg)
+			},
+			wantValue: "base64:type16:qg==", wantType: "BIT",
+			fieldType: 16, wantPayload: []byte{0xaa},
+		},
+		{
+			name: "binary", typ: types.T_binary.ToType(),
+			append: func(v *vector.Vector) error {
+				return vector.AppendBytes(v, []byte{0, 0xff, 'A'}, false, mg)
+			},
+			wantValue: "base64:type254:AP9B", wantType: "BLOB",
+			fieldType: 254, wantPayload: []byte{0, 0xff, 'A'},
+		},
+		{
+			name: "varbinary", typ: types.T_varbinary.ToType(),
+			append: func(v *vector.Vector) error {
+				return vector.AppendBytes(v, []byte{}, false, mg)
+			},
+			wantValue: "base64:type15:", wantType: "BLOB",
+			fieldType: 15, wantPayload: []byte{},
+		},
+		{
+			name: "blob", typ: types.T_blob.ToType(),
+			append: func(v *vector.Vector) error {
+				return vector.AppendBytes(v, []byte{0}, false, mg)
+			},
+			wantValue: "base64:type252:AA==", wantType: "BLOB",
+			fieldType: 252, wantPayload: []byte{0},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			input := vector.NewVec(tc.typ)
+			require.NoError(t, tc.append(input))
+			defer input.Free(mg)
+
+			size := func() int {
+				t.Helper()
+				valueSize, err := jsonArrayAggregateValueSizeWithProtocol(input, 0, protocolVersion)
+				require.NoError(t, err)
+				return valueSize
+			}()
+			appended, err := appendJSONArrayAggregateValueWithProtocol(
+				make([]byte, 0, size), input, 0, protocolVersion)
+			require.NoError(t, err)
+			require.Len(t, appended, size)
+
+			built, err := buildJSONArrayValueByteJsonWithProtocol(input, 0, protocolVersion)
+			require.NoError(t, err)
+			require.Equal(t, appended, append([]byte{byte(built.Type)}, built.Data...))
+			unquoted, err := built.Unquote()
+			require.NoError(t, err)
+			require.Equal(t, tc.wantValue, unquoted)
+			require.Equal(t, tc.wantType, built.TYPE())
+			requireExactMySQLOpaqueValue(t, built, tc.fieldType, tc.wantPayload)
+
+			regular := runJSONArrayAggregateWithProtocol(t, mg, input, nil, protocolVersion)
+			registry, account, allocation := newTestAggregateAllocation(t)
+			accounted := runJSONArrayAggregateWithProtocol(t, mg, input, allocation, protocolVersion)
+			finishTestAggregateAllocation(t, registry, account)
+			require.Equal(t, regular.Type, accounted.Type)
+			require.Equal(t, regular.Data, accounted.Data)
+			require.Equal(t, `[`+strconv.Quote(tc.wantValue)+`]`, regular.String())
+
+			object := runJSONObjectAggregateWithProtocol(t, mg, input, protocolVersion)
+			require.Equal(t, `{"v": `+strconv.Quote(tc.wantValue)+`}`, object.String())
+			require.Equal(t, tc.wantType, object.GetObjectVal(0).TYPE())
+		})
+	}
+	require.Zero(t, mg.CurrNB())
+}
+
+func TestAccountedOpaqueJSONPartialsMergeSpillPreserveBytes(t *testing.T) {
+	const protocolVersion = bytejson.MySQLOpaqueProtocolVersion
+
+	for _, tc := range []struct {
+		name                                          string
+		typ                                           types.Type
+		fieldType                                     uint8
+		duplicate, replacement, empty, nulbytes, tail []byte
+	}{
+		{"varbinary", types.T_varbinary.ToType(), 15, []byte{0, 0xff, 'L', 0}, []byte{0, 0xff, 'R', 0}, []byte{}, []byte{0, 'R', 0}, []byte{0x7f}},
+		{"blob", types.T_blob.ToType(), 252, []byte{0, 0xff, 'L', 0}, []byte{0, 0xff, 'R', 0}, []byte{}, []byte{0, 'R', 0}, []byte{0x7f}},
+		{"binary", types.New(types.T_binary, 4, 0), 254, []byte{0, 0xff, 'L', 0}, []byte{0, 0xff, 'R', 0}, []byte{0, 0, 0, 0}, []byte{0, 'R', 0, 0}, []byte{0x7f, 0, 0, 0}},
+		{"bit7", types.New(types.T_bit, 7, 0), 16, []byte{0x7f}, []byte{0x55}, []byte{0}, []byte{0x40}, []byte{1}},
+		{"bit64", types.New(types.T_bit, 64, 0), 16, []byte{0, 0xff, 'L', 0, 0, 0, 0, 0}, []byte{0, 0xff, 'R', 0, 0, 0, 0, 0}, []byte{0, 0, 0, 0, 0, 0, 0, 0}, []byte{0, 'R', 0, 0, 0, 0, 0, 0}, []byte{0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Run("array-distinct", func(t *testing.T) {
+				mp := mpool.MustNewZero()
+				buildValues := func(values [][]byte, nulls []bool) *vector.Vector {
+					v := vector.NewVec(tc.typ)
+					t.Cleanup(func() { v.Free(mp) })
+					for i, raw := range values {
+						if tc.typ.Oid == types.T_bit {
+							var value uint64
+							for _, b := range raw {
+								value = value<<8 | uint64(b)
+							}
+							require.NoError(t, vector.AppendFixed(v, value, nulls[i], mp))
+						} else {
+							require.NoError(t, vector.AppendBytes(v, raw, nulls[i], mp))
+						}
+					}
+					return v
+				}
+
+				registry, account, allocation := newTestAggregateAllocation(t)
+				t.Cleanup(func() {
+					finishTestAggregateAllocation(t, registry, account)
+					require.Zero(t, mp.CurrNB())
+				})
+				newExec := func(grow bool) AggFuncExec {
+					exec, err := MakeAgg(mp, AggIdOfJsonArrayAgg, true,
+						tc.typ)
+					require.NoError(t, err)
+					owner := exec.(AllocationAccountOwner)
+					attached := false
+					t.Cleanup(func() {
+						exec.Free()
+						if attached {
+							require.NoError(t, owner.ClearAllocationAccount(allocation))
+						}
+					})
+					require.NoError(t, owner.SetAllocationAccount(allocation))
+					attached = true
+					ConfigureJSONAggregateOpaqueProtocol(exec, protocolVersion)
+					if grow {
+						require.NoError(t, exec.GroupGrow(1))
+					}
+					return exec
+				}
+
+				left := newExec(true)
+				right := newExec(true)
+
+				duplicate := tc.duplicate
+				leftValues := buildValues(
+					[][]byte{duplicate, tc.empty, nil}, []bool{false, false, true})
+				rightValues := buildValues(
+					[][]byte{duplicate, tc.empty, nil, tc.replacement},
+					[]bool{false, false, true, false})
+
+				leftGroups := []uint64{1, 1, 1}
+				rightGroups := []uint64{1, 1, 1, 1}
+				require.NoError(t, left.(BatchCapacityPreflight).PreflightBatchFill(
+					0, leftGroups, []*vector.Vector{leftValues}))
+				require.NoError(t, left.BatchFill(0, leftGroups, []*vector.Vector{leftValues}))
+				require.NoError(t, right.(BatchCapacityPreflight).PreflightBatchFill(
+					0, rightGroups, []*vector.Vector{rightValues}))
+				require.NoError(t, right.BatchFill(0, rightGroups, []*vector.Vector{rightValues}))
+				require.NoError(t, left.(BatchCapacityPreflight).PreflightBatchMerge(
+					right, 0, []uint64{1}))
+				require.NoError(t, left.BatchMerge(right, 0, []uint64{1}))
+
+				var spill bytes.Buffer
+				require.NoError(t, left.(SpillStateCodec).SaveSpillIntermediateRows(
+					0, []int32{0}, &spill))
+				restored := newExec(false)
+				require.NoError(t, restored.(SpillStateCodec).UnmarshalSpillFromReader(
+					bytes.NewReader(spill.Bytes()), mp))
+				results, err := restored.Flush()
+				t.Cleanup(func() {
+					for _, result := range results {
+						if result != nil {
+							result.Free(mp)
+						}
+					}
+				})
+				require.NoError(t, err)
+				require.Len(t, results, 1)
+				array := types.DecodeJson(append([]byte(nil), results[0].GetBytesAt(0)...))
+				require.Equal(t, 5, array.GetElemCnt(),
+					"two independent partials must deduplicate repeated opaque values")
+				requireExactMySQLOpaqueValue(t, array.GetArrayElem(0), tc.fieldType, duplicate)
+				requireExactMySQLOpaqueValue(t, array.GetArrayElem(1), tc.fieldType, tc.empty)
+				require.True(t, array.GetArrayElem(2).IsNull())
+				require.True(t, array.GetArrayElem(3).IsNull())
+				requireExactMySQLOpaqueValue(t, array.GetArrayElem(4), tc.fieldType,
+					tc.replacement)
+			})
+
+			t.Run("object-last-wins", func(t *testing.T) {
+				mp := mpool.MustNewZero()
+				buildValues := func(values [][]byte, nulls []bool) *vector.Vector {
+					v := vector.NewVec(tc.typ)
+					t.Cleanup(func() { v.Free(mp) })
+					for i, raw := range values {
+						if tc.typ.Oid == types.T_bit {
+							var value uint64
+							for _, b := range raw {
+								value = value<<8 | uint64(b)
+							}
+							require.NoError(t, vector.AppendFixed(v, value, nulls[i], mp))
+						} else {
+							require.NoError(t, vector.AppendBytes(v, raw, nulls[i], mp))
+						}
+					}
+					return v
+				}
+
+				registry, account, allocation := newTestAggregateAllocation(t)
+				t.Cleanup(func() {
+					finishTestAggregateAllocation(t, registry, account)
+					require.Zero(t, mp.CurrNB())
+				})
+				newExec := func(grow bool) AggFuncExec {
+					exec, err := MakeAgg(mp, AggIdOfJsonObjectAgg, false,
+						types.T_varchar.ToType(), tc.typ)
+					require.NoError(t, err)
+					owner := exec.(AllocationAccountOwner)
+					attached := false
+					t.Cleanup(func() {
+						exec.Free()
+						if attached {
+							require.NoError(t, owner.ClearAllocationAccount(allocation))
+						}
+					})
+					require.NoError(t, owner.SetAllocationAccount(allocation))
+					attached = true
+					ConfigureJSONAggregateOpaqueProtocol(exec, protocolVersion)
+					if grow {
+						require.NoError(t, exec.GroupGrow(1))
+					}
+					return exec
+				}
+
+				left := newExec(true)
+				right := newExec(true)
+
+				leftKeys := buildVarlenVec(t, mp, types.T_varchar.ToType(),
+					[]string{"dup", "empty", "null"})
+				t.Cleanup(func() { leftKeys.Free(mp) })
+				leftValues := buildValues(
+					[][]byte{tc.duplicate, tc.empty, nil}, []bool{false, false, true})
+				rightKeys := buildVarlenVec(t, mp, types.T_varchar.ToType(),
+					[]string{"dup", "empty", "nulbytes", "tail"})
+				t.Cleanup(func() { rightKeys.Free(mp) })
+				rightValues := buildValues(
+					[][]byte{tc.replacement, tc.empty, tc.nulbytes, tc.tail},
+					[]bool{false, false, false, false})
+
+				leftGroups := []uint64{1, 1, 1}
+				rightGroups := []uint64{1, 1, 1, 1}
+				require.NoError(t, left.(BatchCapacityPreflight).PreflightBatchFill(
+					0, leftGroups, []*vector.Vector{leftKeys, leftValues}))
+				require.NoError(t, left.BatchFill(0, leftGroups, []*vector.Vector{leftKeys, leftValues}))
+				require.NoError(t, right.(BatchCapacityPreflight).PreflightBatchFill(
+					0, rightGroups, []*vector.Vector{rightKeys, rightValues}))
+				require.NoError(t, right.BatchFill(0, rightGroups, []*vector.Vector{rightKeys, rightValues}))
+				require.NoError(t, left.(BatchCapacityPreflight).PreflightBatchMerge(
+					right, 0, []uint64{1}))
+				require.NoError(t, left.BatchMerge(right, 0, []uint64{1}))
+
+				var spill bytes.Buffer
+				require.NoError(t, left.(SpillStateCodec).SaveSpillIntermediateRows(
+					0, []int32{0}, &spill))
+				restored := newExec(false)
+				require.NoError(t, restored.(SpillStateCodec).UnmarshalSpillFromReader(
+					bytes.NewReader(spill.Bytes()), mp))
+				results, err := restored.Flush()
+				t.Cleanup(func() {
+					for _, result := range results {
+						if result != nil {
+							result.Free(mp)
+						}
+					}
+				})
+				require.NoError(t, err)
+				require.Len(t, results, 1)
+				object := types.DecodeJson(append([]byte(nil), results[0].GetBytesAt(0)...))
+				require.Equal(t, 5, object.GetElemCnt())
+				objectValue := func(key string) bytejson.ByteJson {
+					for i := 0; i < object.GetElemCnt(); i++ {
+						if string(object.GetObjectKey(i)) == key {
+							return object.GetObjectVal(i)
+						}
+					}
+					require.FailNowf(t, "missing object key", "key=%q", key)
+					return bytejson.ByteJson{}
+				}
+				requireExactMySQLOpaqueValue(t, objectValue("dup"), tc.fieldType,
+					tc.replacement)
+				requireExactMySQLOpaqueValue(t, objectValue("empty"), tc.fieldType, tc.empty)
+				require.True(t, objectValue("null").IsNull())
+				requireExactMySQLOpaqueValue(t, objectValue("nulbytes"), tc.fieldType,
+					tc.nulbytes)
+				requireExactMySQLOpaqueValue(t, objectValue("tail"), tc.fieldType, tc.tail)
+			})
+		})
+	}
+}
+
+func requireExactMySQLOpaqueValue(
+	t *testing.T, value bytejson.ByteJson, fieldType uint8, payload []byte,
+) {
+	t.Helper()
+	require.Equal(t, bytejson.TpCodeBlob, value.Type)
+	unquoted, err := value.Unquote()
+	require.NoError(t, err)
+	const prefix = "base64:type"
+	require.True(t, strings.HasPrefix(unquoted, prefix), "value=%q", unquoted)
+	body := strings.TrimPrefix(unquoted, prefix)
+	separator := strings.IndexByte(body, ':')
+	require.Positive(t, separator, "value=%q", unquoted)
+	gotType, err := strconv.ParseUint(body[:separator], 10, 8)
+	require.NoError(t, err)
+	gotPayload, err := base64.StdEncoding.DecodeString(body[separator+1:])
+	require.NoError(t, err)
+	require.Equal(t, fieldType, uint8(gotType))
+	require.Equal(t, payload, gotPayload)
 }
 
 func TestJsonObjectAggKeyMustBeString(t *testing.T) {
@@ -768,7 +1122,7 @@ func TestBuildValueByteJsonCoversTypes(t *testing.T) {
 			require.NoError(t, vector.AppendArrayList[uint8](v, [][]uint8{{0, 255}}, nil, mg))
 			return v
 		}(), 0, []any{float64(0), float64(255)}, ""},
-		{"binary-error", buildVarlenVec(t, mg, types.T_binary.ToType(), []string{"a"}), 0, "", "binary data not supported"},
+		{"binary-admission-error", buildVarlenVec(t, mg, types.T_binary.ToType(), []string{"a"}), 0, "", "MORPC protocol version"},
 		{"decimal256", buildFixedVec(t, mg, types.T_decimal256.ToType(), []types.Decimal256{{}}), 0, float64(0), ""},
 	}
 
