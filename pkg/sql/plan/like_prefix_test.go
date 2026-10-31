@@ -22,8 +22,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	statspb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/stretchr/testify/require"
 )
@@ -286,7 +288,7 @@ func TestPrefixCandidateCostAndIndependentPruning(t *testing.T) {
 	ctx := builder.newEncodedRegularIndexCostContext(node, refs)
 	require.Equal(t, 800000.0, ctx.baseRows, "an unsorted row predicate is not a block-count estimate")
 	require.False(t, ctx.prefixStatsUsable(0), "unknown frequency cannot admit a new automatic prefix path")
-	require.Empty(t, ctx.matchRangeBackfill(idx))
+	require.Empty(t, ctx.matchRangeBackfills(idx)[0])
 	testCtx := builder.compCtx.(*encodedIndexCostTestContext)
 	stats := NewStatsInfo()
 	stats.TableCnt = 800000
@@ -299,12 +301,12 @@ func TestPrefixCandidateCostAndIndependentPruning(t *testing.T) {
 	require.True(t, ctx.filterFacts[0].prefixKnown)
 	require.Less(t, ctx.filterFacts[0].prefixUpper, 0.12)
 	require.True(t, ctx.prefixStatsUsable(0))
-	require.NotEmpty(t, ctx.matchRangeBackfill(idx))
+	require.NotEmpty(t, ctx.matchRangeBackfills(idx)[0])
 	historical := *node
 	historical.ScanSnapshot = &Snapshot{TS: &timestamp.Timestamp{PhysicalTime: 1}}
 	historicalCtx := builder.newEncodedRegularIndexCostContext(&historical, refs)
 	require.False(t, historicalCtx.filterFacts[0].prefixKnown, "a sibling current scan's table-ID cache entry is not historical statistics")
-	require.Empty(t, historicalCtx.matchRangeBackfill(idx))
+	require.Empty(t, historicalCtx.matchRangeBackfills(idx)[0])
 
 	residual := DeepCopyExpr(node.FilterList[0])
 	residual.Selectivity = 0.2
@@ -327,7 +329,7 @@ func TestPrefixCandidateCostAndIndependentPruning(t *testing.T) {
 	ctx = builder.newEncodedRegularIndexCostContext(node, refs)
 	require.Equal(t, 1.0, ctx.filterFacts[0].prefixUpper)
 	require.True(t, ctx.prefixStatsUsable(0))
-	require.NotEmpty(t, ctx.matchRangeBackfill(idx))
+	require.NotEmpty(t, ctx.matchRangeBackfills(idx)[0])
 	_, rejected, valid := ctx.score(idx, []int32{0}, nil, encodedRegularIndexCostBackfill)
 	require.True(t, valid)
 	require.True(t, rejected)
@@ -529,5 +531,263 @@ func TestPrefixRangeExactnessAndResidualAgreement(t *testing.T) {
 				require.Equal(t, strings.HasPrefix(value, prefix), inRange, "p=%q v=%q", prefix, value)
 			}
 		}
+	}
+}
+
+func TestLikePrefixKeepsSelectiveINBackfill(t *testing.T) {
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
+	addIndexHintChoiceTableForTest(mock)
+	table := mock.ctxt.tables["index_hint_t"]
+	table.Cols[1].Typ = planpb.Type{Id: int32(types.T_varchar), Width: 40}
+	table.Indexes = table.Indexes[:1]
+	optimizer := likePrefixPlanOptimizer(mock)
+	stats := optimizer.ctx.statsByID[table.TblId]
+	stats.TableCnt = 100_000
+	for _, col := range table.Cols {
+		stats.NdvMap[col.Name] = 100_000
+		stats.SizeMap[col.Name] = 100_000 * 8
+	}
+	stats.SizeMap["a"] = 100_000 * 24
+	distribution := prefixDistribution(table, 1, 2048, 100)
+	distribution.PopulationRows, distribution.CompleteSample = 100_000, false
+	stats.ByteRangeMap["a"] = distribution
+	for _, tc := range []struct {
+		name, predicate, projection string
+		backfill                    bool
+	}{
+		{name: "IN only", predicate: "a in ('abc1','abc2')", projection: "b", backfill: true},
+		{name: "computed LIKE control", predicate: "a in ('abc1','abc2') and concat(a,'') like 'abc%'", projection: "b", backfill: true},
+		{name: "prefix first", predicate: "a like 'abc%' and a in ('abc1','abc2')", projection: "b", backfill: true},
+		{name: "IN first", predicate: "a in ('abc1','abc2') and a like 'abc%'", projection: "b", backfill: true},
+		{name: "existing covering path", predicate: "a like 'abc%' and a in ('abc1','abc2')", projection: "a"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			query, err := runOneStmt(optimizer, t, "select "+tc.projection+" from index_hint_t where "+tc.predicate)
+			require.NoError(t, err)
+			require.Equal(t, "idx_a", findFirstIndexScanName(query))
+			require.Equal(t, tc.backfill, planHasIndexJoin(query))
+			index := findFirstIndexScanNode(query)
+			require.NotNil(t, index)
+			require.Equal(t, "prefix_in", index.FilterList[0].GetF().Func.ObjName)
+		})
+	}
+	for _, sql := range []string{
+		"select b from index_hint_t where a like 'abc%def' and a in ('abc1','abc2')",
+		"prepare guarded_in from 'select b from index_hint_t where a like ''abc%'' and a in (?,?)'",
+	} {
+		query, err := runOneStmt(optimizer, t, sql)
+		require.NoError(t, err)
+		require.False(t, planHasIndexJoin(resolveQueryPlan(query)), "unproved evaluations retain historical prefix selection")
+	}
+
+	stats.ByteRangeMap = nil
+	query, err := runOneStmt(optimizer, t, "select b from index_hint_t where a like 'abc%' and a in ('abc1','abc2')")
+	require.NoError(t, err)
+	require.True(t, planHasIndexJoin(query), "unavailable prefix statistics cannot hide ordinary IN")
+}
+
+func TestLikePrefixBackfillAlternativesUseBothCosts(t *testing.T) {
+	for _, prefixFirst := range []bool{true, false} {
+		t.Run(map[bool]string{true: "prefix first", false: "ordinary first"}[prefixFirst], func(t *testing.T) {
+			prefix := makeStringEqFilterExpr(0, 2, "abc")
+			prefix.GetF().Func.ObjName = "prefix_eq"
+			prefix.Selectivity = 0.0001
+			ordinary := makeStringInFilterExpr(0, 2, "abc1", "zzz")
+			ordinary.Selectivity = 0.9
+			extra := makeRangeFilterExpr(0, 3, "=", 7)
+			extra.GetF().Args[1] = makeDatetimeConst("2026-08-10 12:00:00")
+			extra.Selectivity = 0.00001
+			builder, scanID, index, refs := newEncodedIndexCostTestCase(t,
+				[]string{"category", "event_time", catalog.CreateAlias(catalog.CPrimaryKeyColName)},
+				[]*planpb.Expr{prefix, ordinary, extra},
+				&planpb.Stats{TableCnt: 100_000, Outcnt: 1, Cost: 100_000}, map[int32]int{1: 1}, false)
+			node := builder.qry.Nodes[scanID]
+			node.TableDef.Indexes = []*planpb.IndexDef{index}
+			for i, predicate := range node.FilterList {
+				predicate.GetF().Args[0].GetCol().RelPos = node.BindingTags[0]
+				fn := predicate.GetF()
+				argTypes := make([]types.Type, len(fn.Args))
+				for j, arg := range fn.Args {
+					argTypes[j] = makeTypeByPlan2Expr(arg)
+				}
+				overload, err := function.GetFunctionByName(builder.GetContext(), fn.Func.ObjName, argTypes)
+				require.NoError(t, err)
+				fn.Func.Obj = overload.GetEncodedOverloadID()
+				node.FilterList[i] = predicate
+			}
+			wrapper := builder.compCtx.(*encodedIndexCostTestContext).statsCache.Get(encodedIndexCostUnitTableID)
+			stats := wrapper.GetStats()
+			for name, size := range stats.SizeMap {
+				stats.SizeMap[name] = size / 800_000 * 100_000
+			}
+			stats.TableCnt = 100_000
+			distribution := prefixDistribution(node.TableDef, 2, 2048, 1)
+			distribution.PopulationRows, distribution.CompleteSample = 100_000, false
+			stats.ByteRangeMap = map[string]*statspb.ByteRangeDistribution{"category": distribution}
+			if !prefixFirst {
+				node.FilterList[0], node.FilterList[1] = node.FilterList[1], node.FilterList[0]
+			}
+			ctx := builder.newEncodedRegularIndexCostContext(node, refs)
+			matches := ctx.matchRangeBackfills(index)
+			require.NotEmpty(t, matches[0])
+			require.NotEmpty(t, matches[1])
+			require.True(t, ctx.rangeAlternativesSafe())
+			originalFilters := node.FilterList
+			prefixPosition := 0
+			if !prefixFirst {
+				prefixPosition = 1
+			}
+			prefixFilter := originalFilters[prefixPosition]
+			ordinaryFilter := originalFilters[1-prefixPosition]
+			lower := DeepCopyExpr(ordinaryFilter)
+			lower.GetF().Func.ObjName = ">="
+			lower.GetF().Args[1] = DeepCopyExpr(ordinaryFilter.GetF().Args[1].GetList().List[0])
+			upper := DeepCopyExpr(lower)
+			upper.GetF().Func.ObjName = "<"
+			upper.GetF().Args[1].GetLit().Value = &planpb.Literal_Sval{Sval: "abd"}
+			for _, bound := range []*planpb.Expr{lower, upper} {
+				fn := bound.GetF()
+				overload, err := function.GetFunctionByName(builder.GetContext(), fn.Func.ObjName, []types.Type{makeTypeByPlan2Expr(fn.Args[0]), makeTypeByPlan2Expr(fn.Args[1])})
+				require.NoError(t, err)
+				fn.Func.Obj = overload.GetEncodedOverloadID()
+			}
+			if prefixFirst {
+				node.FilterList = []*planpb.Expr{prefixFilter, lower, upper, DeepCopyExpr(ordinaryFilter), DeepCopyExpr(prefixFilter)}
+			} else {
+				node.FilterList = []*planpb.Expr{lower, upper, DeepCopyExpr(ordinaryFilter), prefixFilter, DeepCopyExpr(prefixFilter)}
+			}
+			pairedCtx := builder.newEncodedRegularIndexCostContext(node, refs)
+			require.True(t, pairedCtx.rangeAlternativesSafe())
+			paired := pairedCtx.matchRangeBackfills(index)
+			if prefixFirst {
+				require.Equal(t, [2][]int32{{0}, {1, 2}}, paired)
+			} else {
+				require.Equal(t, [2][]int32{{0, 1}, {3}}, paired)
+			}
+			// Later same-class predicates cannot displace the first usable
+			// ordinary range pair or prefix. Restore the cost fixture below.
+			node.FilterList = originalFilters
+			for _, positions := range matches {
+				_, reject, valid := ctx.score(index, positions, nil, encodedRegularIndexCostBackfill)
+				require.True(t, valid)
+				require.Equal(t, !ctx.filterFacts[positions[0]].logicalPrefix, reject)
+			}
+			result := builder.applyIndicesForFiltersRegularIndex(scanID, node, refs, map[[2]int32]*planpb.Expr{})
+			require.NotEqual(t, scanID, result, "rejected broad IN must not hide useful prefix backfill")
+			indexScan := builder.qry.Nodes[builder.qry.Nodes[result].Children[1]]
+			require.Equal(t, "prefix_in_range", indexScan.FilterList[0].GetF().Func.ObjName)
+		})
+	}
+}
+
+func TestRegularIndexFixedInputsRejectsNestedDynamicValues(t *testing.T) {
+	literal := func() *planpb.Expr { return makePlan2StringConstExprWithType("abc") }
+	for _, tc := range []struct {
+		name string
+		expr *planpb.Expr
+		want bool
+	}{
+		{name: "literal", expr: literal(), want: true},
+		{name: "literal list", expr: &planpb.Expr{Expr: &planpb.Expr_List{List: &planpb.ExprList{List: []*planpb.Expr{literal()}}}}, want: true},
+		{name: "parameter in list", expr: &planpb.Expr{Expr: &planpb.Expr_List{List: &planpb.ExprList{List: []*planpb.Expr{{Expr: &planpb.Expr_P{P: &planpb.ParamRef{}}}}}}}},
+		{name: "variable in list", expr: &planpb.Expr{Expr: &planpb.Expr_List{List: &planpb.ExprList{List: []*planpb.Expr{{Expr: &planpb.Expr_V{V: &planpb.VarRef{Name: "value"}}}}}}}},
+		{name: "unknown expression", expr: &planpb.Expr{}},
+		{name: "nil"},
+		{name: "literal vector", expr: &planpb.Expr{Expr: &planpb.Expr_Vec{Vec: &planpb.LiteralVec{StringSource: uint32(types.StringSourceLiteral)}}}, want: true},
+		{name: "parameter vector", expr: &planpb.Expr{Expr: &planpb.Expr_Vec{Vec: &planpb.LiteralVec{StringSource: uint32(types.StringSourceCOMStmt)}}}},
+		{name: "unknown vector source", expr: &planpb.Expr{Expr: &planpb.Expr_Vec{Vec: &planpb.LiteralVec{}}}},
+		{name: "nil vector", expr: &planpb.Expr{Expr: &planpb.Expr_Vec{}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) { require.Equal(t, tc.want, regularIndexFixedInputs(tc.expr)) })
+	}
+	folded := literal()
+	folded.GetLit().Src = literal()
+	require.False(t, regularIndexFixedInputs(folded))
+	require.False(t, regularIndexFixedInputs(makeOrFilterExpr(folded, literal())))
+}
+
+func TestRangeAlternativeLiteralStringINTotality(t *testing.T) {
+	proc := newPlanTestProcess(t)
+	mock := NewMockOptimizer(true, proc)
+	builder := NewQueryBuilder(planpb.Query_SELECT, &mock.ctxt, false, true)
+	ctx := &encodedRegularIndexCostContext{builder: builder, node: &planpb.Node{BindingTags: []int32{7}}}
+	makeExpr := func(charset uint8) *planpb.Expr {
+		typ := types.NewWithCharset(types.T_varchar, 40, 0, charset)
+		values := vector.NewVec(typ)
+		defer values.Free(proc.Mp())
+		for _, value := range []string{"abc", "abc", "中文", "a\x00b", "\xff"} {
+			require.NoError(t, vector.AppendBytes(values, []byte(value), false, proc.Mp()))
+		}
+		require.NoError(t, vector.AppendBytes(values, nil, true, proc.Mp()))
+		data, err := values.MarshalBinary()
+		require.NoError(t, err)
+		left := &planpb.Expr{Typ: makePlan2Type(&typ), Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 7}}}
+		expr := MakeInExpr(builder.GetContext(), left, int32(values.Length()), data, false)
+		expr.GetF().Args[1].GetVec().StringSource = uint32(types.StringSourceLiteral)
+		return expr
+	}
+	for _, charset := range []uint8{types.CharsetLegacy, types.CharsetBinary, types.CharsetUTF8MB4Bin, types.CharsetUTF8} {
+		require.True(t, ctx.literalStringINIsTotal(makeExpr(charset)), "charset %d", charset)
+	}
+	for _, tc := range []struct {
+		name   string
+		mutate func(*planpb.Expr)
+	}{
+		{"unrelated overload", func(e *planpb.Expr) { e.GetF().Func.Obj = function.EqualFunctionEncodedID }},
+		{"unknown overload", func(e *planpb.Expr) { e.GetF().Func.Obj = -1 }},
+		{"unknown collation", func(e *planpb.Expr) { e.GetF().Args[0].Typ.Charset = 250 }},
+		{"staged collation", func(e *planpb.Expr) {
+			left := e.GetF().Args[0]
+			left.Typ.Charset, left.Typ.CollationVersion = 4, 1
+			_, err := types.TypeFromPlan(left.Typ)
+			require.NoError(t, err, "valid metadata is distinct from executable collation admission")
+			payload := e.GetF().Args[1].GetVec()
+			vec, _, ok := decodeLiteralVec(payload)
+			require.True(t, ok)
+			vec.GetType().Charset, vec.GetType().CollationVersion = 4, 1
+			payload.Data, err = vec.MarshalBinary()
+			require.NoError(t, err)
+		}},
+		{"UCA", func(e *planpb.Expr) { e.GetF().Args[0].Typ.Charset = uint32(types.CharsetUTF8MB4UnicodeCI) }},
+		{"pad space", func(e *planpb.Expr) { e.GetF().Args[0].Typ.PadSpace = true }},
+		{"CHAR", func(e *planpb.Expr) { e.GetF().Args[0].Typ.Id = int32(types.T_char) }},
+		{"width", func(e *planpb.Expr) { e.GetF().Args[0].Typ.Width++ }},
+		{"scale", func(e *planpb.Expr) { e.GetF().Args[0].Typ.Scale++ }},
+		{"collation mismatch", func(e *planpb.Expr) { e.GetF().Args[0].Typ.Charset = uint32(types.CharsetBinary) }},
+		{"revision", func(e *planpb.Expr) { e.GetF().Args[0].Typ.CollationVersion++ }},
+		{"different scan", func(e *planpb.Expr) { e.GetF().Args[0].GetCol().RelPos++ }},
+		{"malformed payload", func(e *planpb.Expr) { e.GetF().Args[1].GetVec().Data = []byte("bad") }},
+		{"length", func(e *planpb.Expr) { e.GetF().Args[1].GetVec().Len++ }},
+		{"empty", func(e *planpb.Expr) { e.GetF().Args[1].GetVec().Len = 0 }},
+		{"expression source", func(e *planpb.Expr) { e.GetF().Args[1].GetVec().StringSource = uint32(types.StringSourceExpression) }},
+		{"prepared source", func(e *planpb.Expr) { e.GetF().Args[1].GetVec().StringSource = uint32(types.StringSourceSQLPrepare) }},
+		{"serialized key", func(e *planpb.Expr) { e.GetF().Args[1].GetVec().IsSerialized = true }},
+		{"decimal provenance", func(e *planpb.Expr) { e.GetF().Args[1].GetVec().DecimalLiteralRequiresV82 = true }},
+		{"computed RHS", func(e *planpb.Expr) {
+			e.GetF().Args[1] = makeOrFilterExpr(makePlan2BoolConstExprWithType(true), makePlan2BoolConstExprWithType(false))
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := makeExpr(types.CharsetUTF8)
+			tc.mutate(e)
+			require.False(t, ctx.literalStringINIsTotal(e))
+			if tc.name == "serialized key" || tc.name == "decimal provenance" || tc.name == "expression source" || tc.name == "prepared source" {
+				// Even the older legacy-domain proof must not bypass the
+				// common provenance barrier, including nested predicates.
+				legacy := makeExpr(types.CharsetLegacy)
+				tc.mutate(legacy)
+				require.True(t, isTruncationSafePredicateExpr(legacy), "otherwise the generic proof masks this guard")
+				nested := makeOrFilterExpr(legacy, makePlan2BoolConstExprWithType(false))
+				overload, err := function.GetFunctionByName(builder.GetContext(), "or", []types.Type{types.T_bool.ToType(), types.T_bool.ToType()})
+				require.NoError(t, err)
+				nested.GetF().Func.Obj = overload.GetEncodedOverloadID()
+				require.True(t, isTruncationSafePredicateExpr(nested))
+				ctx.filterFacts = make([]encodedIndexFilterFact, 1)
+				for _, predicate := range []*planpb.Expr{legacy, nested} {
+					ctx.node.FilterList = []*planpb.Expr{predicate}
+					require.False(t, ctx.rangeAlternativesSafe())
+				}
+			}
+		})
 	}
 }

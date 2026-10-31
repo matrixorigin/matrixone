@@ -146,3 +146,16 @@ on an encoded-range false positive. Cross-column, volatile, diagnostic and LIKE
 residuals remain with the base scan. Published layout evidence must be nonempty
 and valid for the scan view; snapshots, transient workspace estimates and NULL
 frequency cannot borrow non-NULL object-layout credit.
+
+Range backfill preserves the first supported ordinary candidate and the first
+supported logical-prefix candidate, without enumerating every predicate.
+They compete through the existing scorer, so rejecting either cannot hide the
+other. Expanding the historical choice requires a lazy once-per-scan proof of
+the complete filter list using the existing total-predicate contract. Dynamic
+parameters/variables, folded-literal provenance and unproved error/diagnostic
+expressions keep the historical choice. This protects observable evaluation
+behavior while allowing selective literal IN alongside a broad prefix. Native
+non-UCA VARCHAR IN additionally admits a checked literal vector through its
+byte-hash evaluation contract; SQL equality identity and physical index-key
+compatibility remain separate proofs. Dynamic or encoded vector provenance
+cannot bypass the common fixed-input check.
