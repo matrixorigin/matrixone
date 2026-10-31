@@ -268,6 +268,7 @@ func TestNewReaderConsumesSourceAndFilterOnConstructionError(t *testing.T) {
 		timestamp.Timestamp{},
 		expr,
 		source,
+		0,
 		engine.FilterHint{BF: filter},
 	)
 	require.Error(t, err)
@@ -302,6 +303,7 @@ func TestNewReaderTransfersSourceAndFilterToReader(t *testing.T) {
 		timestamp.Timestamp{},
 		nil,
 		source,
+		0,
 		engine.FilterHint{BF: filter},
 	)
 	require.NoError(t, err)
@@ -313,6 +315,13 @@ func TestNewReaderTransfersSourceAndFilterToReader(t *testing.T) {
 }
 
 func TestReaderLateMaterializationSkipsPersistedPayload(t *testing.T) {
+	for _, tc := range []struct {
+		readers int
+		want    uint64
+	}{{1, 1024}, {3, 341}, {8, 128}, {9, 128}} {
+		require.Equal(t, tc.want, GetThresholdForReader(tc.readers), "readers=%d", tc.readers)
+	}
+
 	for _, skipWrites := range []bool{false, true} {
 		t.Run(map[bool]string{false: "normal_admission", true: "explicit_skip"}[skipWrites], func(t *testing.T) {
 			policy := fileservice.Policy(fileservice.SkipFullFilePreloads | fileservice.SkipDiskCacheWrites)
@@ -366,9 +375,11 @@ func TestReaderLateMaterializationSkipsPersistedPayload(t *testing.T) {
 				timestamp.Timestamp{},
 				nil,
 				source,
+				GetThresholdForReader(8),
 				engine.FilterHint{},
 			)
 			require.NoError(t, err)
+			r.readBlockCnt = r.threshHold
 			observed := &policyObservingFS{FileService: fs}
 			r.fs = observed
 			mr := NewMergeReader([]engine.Reader{r})
@@ -381,8 +392,9 @@ func TestReaderLateMaterializationSkipsPersistedPayload(t *testing.T) {
 			t.Cleanup(func() { output.Clean(queryMP) })
 			output.Vecs[0] = vector.NewOffHeapVecWithType(types.T_int32.ToType())
 			output.Vecs[1] = vector.NewOffHeapVecWithType(types.T_text.ToType())
-			for read := 0; read < 130; read++ {
+			for read := 0; read < 2; read++ {
 				source.emitted = false
+				observed.policies = nil
 				isEnd, err := mr.ReadWithFilter(
 					ctx,
 					[]string{"id", "payload"},
@@ -403,16 +415,21 @@ func TestReaderLateMaterializationSkipsPersistedPayload(t *testing.T) {
 				require.Zero(t, output.RowCount())
 				require.Zero(t, output.Vecs[0].Length())
 				require.Zero(t, output.Vecs[1].Length())
-			}
 
-			columnReads := 0
-			for _, got := range observed.policies {
-				// Metadata reads use their own policy; count inherited column reads.
-				if got == policy {
-					columnReads++
+				want := policy
+				if read > 0 {
+					want |= fileservice.SkipMemoryCacheWrites
 				}
+				columnReads := 0
+				for _, got := range observed.policies {
+					// Metadata has its own policy; column reads inherit this caller bit.
+					if got&fileservice.SkipDiskCacheWrites != 0 {
+						require.Equal(t, want, got, "read=%d", read)
+						columnReads++
+					}
+				}
+				require.Positive(t, columnReads)
 			}
-			require.GreaterOrEqual(t, columnReads, 130)
 		})
 	}
 }
@@ -433,7 +450,7 @@ func TestReaderAppliesInMemoryFilterBeforeVectorTopK(t *testing.T) {
 	}
 	source := &singleInMemoryVectorSource{}
 	r, err := NewReader(
-		ctx, queryMP, nil, nil, tableDef, timestamp.Timestamp{}, nil, source, engine.FilterHint{},
+		ctx, queryMP, nil, nil, tableDef, timestamp.Timestamp{}, nil, source, 0, engine.FilterHint{},
 	)
 	require.NoError(t, err)
 

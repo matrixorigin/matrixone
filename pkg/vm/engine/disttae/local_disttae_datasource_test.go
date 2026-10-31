@@ -440,7 +440,7 @@ func TestIvfWorkspaceReaderPreservesPhysicalPK(t *testing.T) {
 			}
 			// NewReader consumes source and the membership filter on all paths.
 			r, err := readutil.NewReader(ctx, mp, pool, nil, tableDef,
-				types.MaxTs().ToTimestamp(), expr, source, hint)
+				types.MaxTs().ToTimestamp(), expr, source, 0, hint)
 			require.NoError(t, err)
 			defer r.Close()
 			end, err := r.Read(ctx, cols, nil, mp, out)

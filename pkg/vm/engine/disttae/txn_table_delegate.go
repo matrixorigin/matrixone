@@ -706,6 +706,7 @@ func (tbl *txnTableDelegate) BuildShardingReaders(
 				tbl.origin.db.op.SnapshotTS(),
 				expr,
 				ds,
+				readutil.GetThresholdForReader(newNum),
 				engine.FilterHint{},
 			)
 			if err != nil {
