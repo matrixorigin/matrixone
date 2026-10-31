@@ -1,0 +1,35 @@
+drop role if exists r31806_admin_bvt;
+drop user if exists u31806_admin_bvt;
+drop user if exists u31806_grantee_bvt;
+create role r31806_admin_bvt;
+create user u31806_admin_bvt identified by 'Passw0rd_bvt1';
+create user u31806_grantee_bvt identified by 'Passw0rd_bvt2';
+grant r31806_admin_bvt to u31806_admin_bvt with admin option;
+select cast(g.with_grant_option as signed) as wgo from mo_catalog.mo_user_grant g, mo_catalog.mo_role r, mo_catalog.mo_user u where g.role_id = r.role_id and g.user_id = u.user_id and r.role_name = 'r31806_admin_bvt' and u.user_name = 'u31806_admin_bvt';
+➤ wgo[-5,64,0]  𝄀
+1
+grant r31806_admin_bvt to u31806_admin_bvt with grant option;
+select cast(g.with_grant_option as signed) as wgo from mo_catalog.mo_user_grant g, mo_catalog.mo_role r, mo_catalog.mo_user u where g.role_id = r.role_id and g.user_id = u.user_id and r.role_name = 'r31806_admin_bvt' and u.user_name = 'u31806_admin_bvt';
+➤ wgo[-5,64,0]  𝄀
+1
+grant select on database mo_catalog.* to u31806_admin_bvt with admin option; -- fail
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 68 near " admin option; -- fail";
+set role r31806_admin_bvt;
+grant r31806_admin_bvt to u31806_grantee_bvt;
+select cast(g.with_grant_option as signed) as wgo from mo_catalog.mo_user_grant g, mo_catalog.mo_role r, mo_catalog.mo_user u where g.role_id = r.role_id and g.user_id = u.user_id and r.role_name = 'r31806_admin_bvt' and u.user_name = 'u31806_grantee_bvt';
+➤ wgo[-5,64,0]  𝄀
+0
+grant r31806_admin_bvt to u31806_nosuch_bvt; -- fail
+internal error: there is no role or user u31806_nosuch_bvt
+select count(*) as granted_rows from mo_catalog.mo_user_grant g, mo_catalog.mo_user u where g.user_id = u.user_id and u.user_name = 'u31806_nosuch_bvt';
+➤ granted_rows[-5,64,0]  𝄀
+0
+drop user if exists u31806_admin_bvt;
+drop user if exists u31806_grantee_bvt;
+drop role if exists r31806_admin_bvt;
+select count(*) as leftover_roles from mo_catalog.mo_role where role_name = 'r31806_admin_bvt';
+➤ leftover_roles[-5,64,0]  𝄀
+0
+select count(*) as leftover_users from mo_catalog.mo_user where user_name in ('u31806_admin_bvt', 'u31806_grantee_bvt');
+➤ leftover_users[-5,64,0]  𝄀
+0
