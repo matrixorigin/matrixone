@@ -111,6 +111,7 @@ type PartitionChangesHandle struct {
 	primarySeqnum       int
 	snapshotReadPolicy  engine.SnapshotReadPolicy
 	preserveAllVersions bool
+	disableQuick        bool
 	keepTrailingDeletes bool
 	mp                  *mpool.MPool
 	fs                  fileservice.FileService
@@ -147,6 +148,7 @@ func NewPartitionChangesHandle(
 		primarySeqnum:       tbl.primarySeqnum,
 		snapshotReadPolicy:  snapshotReadPolicy,
 		preserveAllVersions: engine.CollectChangesPreserveAllVersionsFromContext(ctx),
+		disableQuick:        engine.CollectChangesDisableQuickFromContext(ctx),
 		keepTrailingDeletes: engine.CollectChangesKeepTrailingDeletesFromContext(ctx),
 		mp:                  mp,
 		fs:                  tbl.getTxn().engine.fs,
@@ -182,6 +184,9 @@ func (h *PartitionChangesHandle) Next(ctx context.Context, mp *mpool.MPool) (dat
 func (h *PartitionChangesHandle) collectChangesContext(ctx context.Context) context.Context {
 	if h.preserveAllVersions {
 		ctx = engine.WithCollectChangesPreserveAllVersions(ctx)
+	}
+	if h.disableQuick {
+		ctx = engine.WithCollectChangesDisableQuick(ctx)
 	}
 	if h.keepTrailingDeletes {
 		ctx = engine.WithCollectChangesKeepTrailingDeletes(ctx)
@@ -565,6 +570,7 @@ func (h *PartitionChangesHandle) installSnapshotStateRangeHandle(
 	debugLabel := engine.CollectChangesDebugLabelFromContext(ctx)
 	retainRowID := engine.RetainRowIDFromContext(ctx)
 	preserveAllVersions := h.preserveAllVersions
+	disableQuick := h.disableQuick
 	keepTrailingDeletes := h.keepTrailingDeletes
 	rangeFrom, rangeTo := h.currentPSFrom, h.currentPSTo
 	skipDeletes, primarySeqnum, primaryIdx := h.skipDeletes, snapshotTbl.primarySeqnum, snapshotTbl.primaryIdx
@@ -579,6 +585,9 @@ func (h *PartitionChangesHandle) installSnapshotStateRangeHandle(
 			nextCtx = engine.WithRetainRowID(nextCtx, retainRowID)
 			if preserveAllVersions {
 				nextCtx = engine.WithCollectChangesPreserveAllVersions(nextCtx)
+			}
+			if disableQuick {
+				nextCtx = engine.WithCollectChangesDisableQuick(nextCtx)
 			}
 			if keepTrailingDeletes {
 				nextCtx = engine.WithCollectChangesKeepTrailingDeletes(nextCtx)

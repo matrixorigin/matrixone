@@ -571,10 +571,7 @@ func (exec *ISCPTaskExecutor) run(ctx context.Context, worker Worker) {
 				if iter.toTS.EQ(&maxTS) {
 					iter.toTS = toTS
 				}
-				// if the interval is too long, truncate it to the max change interval
-				if iter.toTS.Physical()-iter.fromTS.Physical() > DefaultMaxChangeInterval.Nanoseconds() {
-					iter.toTS = types.BuildTS(iter.fromTS.Physical()+DefaultMaxChangeInterval.Nanoseconds(), 0)
-				}
+				limitIterationTimeSpan(iter)
 				// For initialized iterctx (fromTS is empty), do not check whether the table has changed
 				ok := shouldProcessIteration(iter, getDirtyTablesFailed, minTS, tables)
 				table, tableExists := exec.getTable(iter.accountID, iter.tableID)
@@ -646,6 +643,18 @@ func (exec *ISCPTaskExecutor) run(ctx context.Context, worker Worker) {
 			}
 			exec.GCInMemoryJob(exec.option.GCTTL)
 		}
+	}
+}
+
+// limitIterationTimeSpan bounds a catch-up range before either a
+// worker or the clean-table watermark path can advance it. Init snapshots
+// have no source range yet; their bound is chosen by the worker.
+func limitIterationTimeSpan(iter *IterationContext) {
+	if iter == nil || iter.fromTS.IsEmpty() {
+		return
+	}
+	if iter.toTS.Physical()-iter.fromTS.Physical() > DefaultMaxChangeInterval.Nanoseconds() {
+		iter.toTS = types.BuildTS(iter.fromTS.Physical()+DefaultMaxChangeInterval.Nanoseconds(), 0)
 	}
 }
 

@@ -230,6 +230,37 @@ func ExecuteIterationWithRuntime(
 	if iterCtx.fromTS.IsEmpty() {
 		iterCtx.toTS = types.TimestampToTS(txnOp.SnapshotTS())
 	}
+	collectCtx := collectChangesCtxForJobs(ctxWithoutTimeout, jobSpecs, prevStatus, committedWatermark)
+	if !iterCtx.fromTS.IsEmpty() {
+		var targetRows int
+		targetRows, err = rowBudgetForJobs(jobSpecs)
+		if err != nil {
+			return
+		}
+		if targetRows > 0 {
+			var observedRows int
+			iterCtx.toTS, observedRows, err = selectRowBudgetTo(
+				collectChangesCtxForJobs(ctx, jobSpecs, prevStatus, committedWatermark),
+				iterCtx.fromTS, iterCtx.toTS, targetRows,
+				func(probeCtx context.Context, from, to types.TS, target int) (int, error) {
+					return probeChangeRows(
+						probeCtx, from, to, target, mp,
+						func(readCtx context.Context, readFrom, readTo types.TS) (engine.ChangesHandle, error) {
+							return CollectChanges(readCtx, rel, readFrom, readTo, mp)
+						},
+					)
+				},
+			)
+			if err != nil {
+				return
+			}
+			if observedRows > targetRows {
+				// An oversized first commit is accepted but should still be
+				// streamed in ordinary batches rather than one quick batch.
+				collectCtx = engine.WithCollectChangesDisableQuick(collectCtx)
+			}
+		}
+	}
 
 	startAt := types.BuildTS(time.Now().UnixNano(), 0)
 	for i := range iterCtx.jobNames {
@@ -241,7 +272,7 @@ func ExecuteIterationWithRuntime(
 		statuses[i].StartAt = startAt
 	}
 	changes, err := CollectChanges(
-		collectChangesCtxForJobs(ctxWithoutTimeout, jobSpecs, prevStatus, committedWatermark),
+		collectCtx,
 		rel, iterCtx.fromTS, iterCtx.toTS, mp,
 	)
 	if err != nil {
@@ -495,10 +526,17 @@ func runISCPTaskIterationConsumers(
 	changeHandelWg.Add(1)
 	go func() {
 		var dataLength int
+		var pendingInsert, pendingDelete *AtomicBatch
+		defer changeHandelWg.Done()
 		defer func() {
+			if pendingInsert != nil {
+				pendingInsert.Close()
+			}
+			if pendingDelete != nil {
+				pendingDelete.Close()
+			}
 			logutil.Infof("ISCP-Task iteration %s, data length %d", iterCtx.String(), dataLength)
 		}()
-		defer changeHandelWg.Done()
 		for {
 			select {
 			case <-ctxWithCancel.Done():
@@ -506,64 +544,84 @@ func runISCPTaskIterationConsumers(
 			default:
 			}
 			var data *ISCPData
-			insertData, deleteData, currentHint, err := changes.Next(ctxWithCancel, mp)
-			if insertData != nil {
-				dataLength += insertData.RowCount()
-			}
-			// injection is for ut
-			if msg, injected := objectio.ISCPExecutorInjected(); injected && msg == "changesNext" {
-				err = moerr.NewInternalErrorNoCtx(msg)
-				objectio.WaitForISCPExecutorFault(ctxWithCancel, msg)
-			}
-			if err != nil {
-				jobNames := ""
-				for _, jobName := range iterCtx.jobNames {
-					jobNames = fmt.Sprintf("%s%s, ", jobNames, jobName)
+			// Keep current source batches in this iteration's scope. Appending a
+			// batch transfers ownership to an AtomicBatch; every other path
+			// releases it before the next source read.
+			func() {
+				insertData, deleteData, currentHint, err := changes.Next(ctxWithCancel, mp)
+				defer func() {
+					if insertData != nil {
+						insertData.Clean(mp)
+					}
+					if deleteData != nil {
+						deleteData.Clean(mp)
+					}
+				}()
+				if insertData != nil {
+					dataLength += insertData.RowCount()
 				}
-				logutil.Error(
-					"ISCP-Task sink iteration failed",
-					zap.Uint32("tenantID", iterCtx.accountID),
-					zap.Uint64("tableID", iterCtx.tableID),
-					zap.String("jobName", jobNames),
-					zap.Error(err),
-					zap.String("from", iterCtx.fromTS.ToString()),
-					zap.String("to", iterCtx.toTS.ToString()),
-				)
-				data = NewISCPData(true, nil, nil, err)
-			} else {
-				// both nil denote no more data (end of this tail)
-				if insertData == nil && deleteData == nil {
+				// injection is for ut
+				if msg, injected := objectio.ISCPExecutorInjected(); injected && msg == "changesNext" {
+					err = moerr.NewInternalErrorNoCtx(msg)
+					objectio.WaitForISCPExecutorFault(ctxWithCancel, msg)
+				}
+				if err != nil {
+					jobNames := ""
+					for _, jobName := range iterCtx.jobNames {
+						jobNames = fmt.Sprintf("%s%s, ", jobNames, jobName)
+					}
+					logutil.Error(
+						"ISCP-Task sink iteration failed",
+						zap.Uint32("tenantID", iterCtx.accountID),
+						zap.Uint64("tableID", iterCtx.tableID),
+						zap.String("jobName", jobNames),
+						zap.Error(err),
+						zap.String("from", iterCtx.fromTS.ToString()),
+						zap.String("to", iterCtx.toTS.ToString()),
+					)
+					data = NewISCPData(true, nil, nil, err)
+				} else if insertData == nil && deleteData == nil {
+					if pendingInsert != nil || currentHint == engine.ChangesHandle_Tail_wip {
+						err = moerr.NewInternalErrorNoCtx("incomplete ISCP tail change group")
+					}
 					data = NewISCPData(true, nil, nil, err)
 				} else {
-					var insertAtmBatch *AtomicBatch
-					var deleteAtmBatch *AtomicBatch
 					switch currentHint {
 					case engine.ChangesHandle_Snapshot:
-						if typ != ISCPDataType_Snapshot {
-							err = moerr.NewInternalErrorNoCtx(fmt.Sprintf("invalid type %d, should be snapshot", typ))
-							data = NewISCPData(true, nil, nil, err)
-						} else {
-							insertAtmBatch = allocateAtomicBatchIfNeed(insertAtmBatch)
-							insertAtmBatch.Append(packer, insertData, insTSColIdx, insCompositedPkColIdx)
-							data = NewISCPData(false, insertAtmBatch, nil, nil)
+						if typ != ISCPDataType_Snapshot || pendingInsert != nil || deleteData != nil {
+							err = moerr.NewInternalErrorNoCtx("invalid ISCP snapshot change group")
+							break
 						}
-					case engine.ChangesHandle_Tail_wip:
-						err = moerr.NewInternalErrorNoCtx(fmt.Sprintf("invalid hint %d", currentHint))
-						data = NewISCPData(true, nil, nil, err)
-					case engine.ChangesHandle_Tail_done:
+						insertAtmBatch := NewAtomicBatch(mp)
+						insertAtmBatch.Append(packer, insertData, insTSColIdx, insCompositedPkColIdx)
+						insertData = nil
+						data = NewISCPData(false, insertAtmBatch, nil, nil)
+					case engine.ChangesHandle_Tail_wip, engine.ChangesHandle_Tail_done:
 						if typ != ISCPDataType_Tail {
-							err = moerr.NewInternalErrorNoCtx(fmt.Sprintf("invalid type %d, should be tail", typ))
-							data = NewISCPData(true, nil, nil, err)
-						} else {
-							insertAtmBatch = allocateAtomicBatchIfNeed(insertAtmBatch)
-							deleteAtmBatch = allocateAtomicBatchIfNeed(deleteAtmBatch)
-							insertAtmBatch.Append(packer, insertData, insTSColIdx, insCompositedPkColIdx)
-							deleteAtmBatch.Append(packer, deleteData, delTSColIdx, delCompositedPkColIdx)
-							data = NewISCPData(false, insertAtmBatch, deleteAtmBatch, nil)
+							err = moerr.NewInternalErrorNoCtx("invalid ISCP tail change group")
+							break
 						}
-
+						pendingInsert = allocateAtomicBatchIfNeed(pendingInsert)
+						pendingDelete = allocateAtomicBatchIfNeed(pendingDelete)
+						pendingInsert.Append(packer, insertData, insTSColIdx, insCompositedPkColIdx)
+						insertData = nil
+						pendingDelete.Append(packer, deleteData, delTSColIdx, delCompositedPkColIdx)
+						deleteData = nil
+						if currentHint == engine.ChangesHandle_Tail_wip {
+							return
+						}
+						data = NewISCPData(false, pendingInsert, pendingDelete, nil)
+						pendingInsert, pendingDelete = nil, nil
+					default:
+						err = moerr.NewInternalErrorNoCtx(fmt.Sprintf("invalid hint %d", currentHint))
+					}
+					if err != nil {
+						data = NewISCPData(true, nil, nil, err)
 					}
 				}
+			}()
+			if data == nil {
+				continue
 			}
 
 			noMoreData := data.noMoreData

@@ -1774,6 +1774,21 @@ func TestBaseHandleGetObjectEntries_ClassifiesAndSorts(t *testing.T) {
 	require.Len(t, tnByCreateTS[types.BuildTS(9, 0)], 1)
 }
 
+func TestChangeHandlerDisableQuickForRowProbe(t *testing.T) {
+	data := &baseHandle{
+		aobjHandle:     &AObjectHandle{objects: []*objectio.ObjectEntry{{}}},
+		cnObjectHandle: &CNObjectHandle{},
+	}
+	tombstone := &baseHandle{aobjHandle: &AObjectHandle{}, cnObjectHandle: &CNObjectHandle{}}
+	ordinary := &ChangeHandler{dataHandle: data, tombstoneHandle: tombstone}
+	ordinary.decideMode()
+	require.True(t, ordinary.quick)
+
+	probe := &ChangeHandler{dataHandle: data, tombstoneHandle: tombstone, disableQuick: true}
+	probe.decideMode()
+	require.False(t, probe.quick)
+}
+
 func TestBaseHandleNextTS_SelectsEarliestHandle(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
