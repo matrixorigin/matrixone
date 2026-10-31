@@ -27,7 +27,7 @@ func TestPlanDescriptorMergedContracts(t *testing.T) {
 	want := map[string]map[string]int32{
 		"Type":             {"numeric_attributes": 14},
 		"Function":         {"routine_call": 6},
-		"Node":             {"dedup_key_exprs": 95},
+		"Node":             {"dedup_key_exprs": 95, "mark_existence_only": 96},
 		"PreInsertUkCtx":   {"key_diagnostic_exprs": 19},
 		"Query":            {"correlation": 19, "integer_precision": 20, "execution_dependent_access": 22, "select_lock_references": 21, "routine_dependencies": 23},
 		"Type":             {"numeric_attributes": 14},

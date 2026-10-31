@@ -5,7 +5,7 @@
 | Record | `python-udf-current-stage-r1-2026-09-24-approval` |
 | Issue | [MatrixOne #28132](https://github.com/matrixorigin/matrixone/issues/28132) |
 | Implementation PR | [MatrixOne #29152](https://github.com/matrixorigin/matrixone/pull/29152) |
-| Current-stage proposal | [`python-udf-current-stage-r38-2026-10-30`](python_udf_current_stage.md); historical r1 approval retained below |
+| Current-stage proposal | [`python-udf-current-stage-r39-2026-10-31`](python_udf_current_stage.md); historical r1 approval retained below |
 | Scope | Explicitly enabled test/development adapter; no production rollout or production-readiness claim |
 
 This record separates the immutable current-stage design artifact, the feature
@@ -812,3 +812,24 @@ official 134; no per-feature mixed-version gate is introduced. Historical r1
 acceptance and subsequent records are retained. Independent Architecture and
 SQL/Planner approval of r38 remains pending; this maintenance does not assert
 or supply that decision.
+
+
+## r39: preserve the published 4.0.19 metadata repair (2026-10-31)
+
+The governing proposal is `python-udf-current-stage-r39-2026-10-31`. Official
+main published the independent declared COLUMNS/STATISTICS metadata repair
+in 4.0.19. Its handler, two entries and offset remain byte-for-byte official,
+as do the frozen 4.0.7 and official 4.0.18 handlers. The nine unchanged routine
+repair entries move from the unpublished candidate 4.0.19 to 4.0.20, whose
+minimum direct predecessor is 4.0.19. Earlier released sources complete the
+registered predecessor chain; an already-4.0.19 account receives the routine
+repair on scheduled upgrade or first login. Existing unfinished-route CDC
+admission, retired-source rejection and commit-only completion caching remain
+in force. The real login/replay controls include official 4.0.19 as a source.
+
+The merged plan descriptor retains both the official Boolean EXISTS marker
+and this proposal's typed routine/numeric metadata. No new Python MORPC gate
+is introduced; official latest remains 134 and upgrade is full-cluster shutdown.
+The opt-in development scope and permanent artifact admission limit are unchanged.
+Independent Architecture and SQL/Planner approval of r39 remains pending; this
+maintenance does not assert independent approval or broaden production scope.

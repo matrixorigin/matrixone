@@ -2,10 +2,10 @@
 
 | Field | Value |
 | --- | --- |
-| Design revision | `python-udf-current-stage-r38-2026-10-30` |
+| Design revision | `python-udf-current-stage-r39-2026-10-31` |
 | Applies to | MatrixOne PR #29152, test/development-stage Python UDF |
 | Upstream repair baseline | `bbfe55669a1440424914d45a283a1d0e36f722fa` (unrelated existing MORPC gates through 134 and the frozen consolidated 4.0.7 catalog preserved) |
-| Approval | Feature owner approved the r1 current-stage contract on 2026-09-24 in [PR comment](https://github.com/matrixorigin/matrixone/pull/29152#issuecomment-5809313638). The r38 contract preserves the official consolidated and frozen 4.0.7 catalog, follows it with the separate shared-routine repair in 4.0.19 after the official 4.0.18 COLUMNS repair, and follows full-cluster shutdown upgrade, with no Python/shared-routine MORPC capability gate. Independent Architecture and SQL/Planner approval of this revision is pending; no production or security scope is added. The immutable approval artifact and independent-review status remain recorded in the [design approval record](python_udf_current_stage_approval.md). |
+| Approval | Feature owner approved the r1 current-stage contract on 2026-09-24 in [PR comment](https://github.com/matrixorigin/matrixone/pull/29152#issuecomment-5809313638). The r39 contract preserves the official consolidated and frozen 4.0.7 catalog, follows it with the separate shared-routine repair in 4.0.20 after the official 4.0.18 and 4.0.19 metadata repairs, and follows full-cluster shutdown upgrade, with no Python/shared-routine MORPC capability gate. Independent Architecture and SQL/Planner approval of this revision is pending; no production or security scope is added. The immutable approval artifact and independent-review status remain recorded in the [design approval record](python_udf_current_stage_approval.md). |
 | Not covered | Production tenant isolation, sandbox, Operator rollout, or cross-version rollback/restore |
 
 This is the versioned governing proposal for the current PR stage. The owner
@@ -124,11 +124,12 @@ demo's old execution behavior is not a compatibility promise.
 
 The official consolidated `4.0.7` handler, entry list and offset are frozen.
 The nine idempotent shared-function schema entries belong exclusively to the
-registered `4.0.19` repair, whose minimum direct source is `4.0.18`. Released
+registered `4.0.20` repair, whose minimum direct source is `4.0.19`. Released
 sources below that version finish the official upgrade route, including the
 bounded `4.0.7` cluster and tenant stages and the official `4.0.18` COLUMNS
-repair, before the routine repair. A tenant already at official `4.0.18` receives
-`4.0.19` directly; neither published predecessor is redefined.
+and `4.0.19` declared-metadata repairs, before the routine repair. A tenant
+already at official `4.0.19` receives `4.0.20` directly; published predecessors
+are not redefined.
 Unpublished intermediate `4.0.8` through `4.0.17` handlers are not restored.
 The consolidated route rejects those sources unless an explicit handler is
 registered. Cluster admission, pending-route recovery, login/manual reads and
@@ -139,7 +140,7 @@ merely because they satisfy the repair's minimum version.
 Appending the repair does not bypass the predecessor's safeguards: reject a
 ready `4.0.7` with a different offset and any `4.0.7` self-upgrade route before
 catalog mutation. The existing legacy CDC preflight follows an unfinished
-`4.0.7` step, including recovery/recheck of a route targeting `4.0.19`; an
+`4.0.7` step, including recovery/recheck of a route targeting `4.0.20`; an
 already-completed `4.0.7` repair-only route does not reclassify current CDC tasks
 as legacy. Snapshot decisions and paged cluster work retain their original
 step owner. Login and manual compensation continue from committed `4.0.7`
@@ -341,7 +342,7 @@ test/development correctness and backpressure, not hostile-code containment.
 
 | Contract | Evidence on the reviewed branch/head | Status |
 | --- | --- | --- |
-| Shared revision schema and shutdown-upgrade behavior | `pkg/bootstrap/versions/v4_0_19/upgrade_test.go`; `pkg/frontend/python_udf_catalog_test.go`; prepared, evaluator and remote payload regression tests | Schema-based historical SQL compatibility, malformed-head rejection, normal revision publication, evaluator execution without protocol state, and no routine-only destination probes. Real first-login repair models released 4.0.6, frozen 4.0.7 and official 4.0.18 sources, preserves legacy SQL results, and verifies idempotent replay. External ABI/Flight negotiation remains independently tested; old per-feature rollback assertions are superseded. |
+| Shared revision schema and shutdown-upgrade behavior | `pkg/bootstrap/versions/v4_0_20/upgrade_test.go`; `pkg/frontend/python_udf_catalog_test.go`; prepared, evaluator and remote payload regression tests | Schema-based historical SQL compatibility, malformed-head rejection, normal revision publication, evaluator execution without protocol state, and no routine-only destination probes. Real first-login repair models released 4.0.6, frozen 4.0.7 and official 4.0.18/4.0.19 sources, preserves legacy SQL results, and verifies idempotent replay. External ABI/Flight negotiation remains independently tested; old per-feature rollback assertions are superseded. |
 | Exact FunctionRef and overload invalidation | `pkg/frontend/routine_plan_validation_test.go`; `pkg/frontend/routine_namespace_test.go`; `test/distributed/cases/udf_python/overload_namespace.sql` | Unit and SQL prepared-plan cases present. |
 | SQL expression placement and result semantics | `pkg/sql/colexec/external_routine_eval.go`; `test/distributed/cases/udf_python/relational_positions.sql`, `dml_positions.sql`, `vector_mode.sql` | Physical evaluator and ordinary BVT cases present. |
 | Current-contract restore | `pkg/frontend/clone_database_source.go`; `pkg/frontend/snapshot_catalog_restore.go`; `snapshot_restore.sql` | Same-contract account restore case present; cross-version restore not verified. |
