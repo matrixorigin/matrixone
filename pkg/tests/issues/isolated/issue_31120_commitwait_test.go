@@ -55,10 +55,13 @@ func TestIssue31120CommitWaitBarrierAcceptance(t *testing.T) {
 		releaseAll = "issue31120_acceptance_release"
 	)
 	points := []string{tenantSel, txnSel, barrier, waiters, releaseAll}
+	// victimCount is the number of pinned sessions the legs below consume; it
+	// also sizes the cleanup-visible conns slice (prealloc).
+	const victimCount = 3
 	var (
 		cluster    embed.Cluster
 		dbs        []*sql.DB
-		conns      []*sql.Conn
+		conns      = make([]*sql.Conn, 0, victimCount)
 		goroutines sync.WaitGroup
 	)
 	t.Cleanup(func() {
@@ -114,7 +117,7 @@ func TestIssue31120CommitWaitBarrierAcceptance(t *testing.T) {
 
 	// Pin the victim sessions BEFORE arming: opening a connection performs
 	// commits, which a matching armed barrier would block.
-	victims := make([]*sql.Conn, 3)
+	victims := make([]*sql.Conn, victimCount)
 	for i := range victims {
 		victim, err := db.Conn(ctx)
 		require.NoError(t, err)
