@@ -336,9 +336,8 @@ func (w *CNS3Writer) Close() (err error) {
 	var mp *mpool.MPool
 	if w.sinker != nil {
 		mp = w.sinker.GetMPool()
-		if err = w.sinker.Close(); err != nil {
-			return
-		}
+		// Even if the pipeline flush fails, release the block-info batch.
+		err = w.sinker.Close()
 		w.sinker = nil
 	}
 
@@ -347,7 +346,7 @@ func (w *CNS3Writer) Close() (err error) {
 		w.blockInfoBat = nil
 	}
 
-	return nil
+	return err
 }
 
 // Reset discards any buffered or staged data accumulated since the last
