@@ -1,0 +1,15 @@
+--- @metacmp(true)
+-- Incomplete exponents after a decimal point are syntax errors, not aliases.
+select 1.5e;
+select 1.e;
+select .5e;
+select 1.5Efoo;
+prepare numeric_exponent_invalid from 'select 1.5e';
+
+-- Valid exponents and adjacent or separated aliases retain values and headers.
+select 1.e5, 1.5e+2, .5E-2;
+select 1.5 e;
+select 1.5/**/e;
+select 1.5 AS e;
+select 1.5foo;
+select 1.5e1foo;
