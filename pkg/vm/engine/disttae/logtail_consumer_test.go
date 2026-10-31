@@ -48,6 +48,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail/service"
 )
 
 /*
@@ -88,6 +89,11 @@ func (m *logtailer) RangeLogtail(
 }
 
 func (m *logtailer) RegisterCallback(cb func(from, to timestamp.Timestamp, closeCB func(), tails ...logtail.TableLogtail) error) {
+}
+
+func (m *logtailer) ReadBarrier(context.Context) (timestamp.Timestamp, error) {
+	frontier, _ := m.Now()
+	return frontier, nil
 }
 
 func (m *logtailer) TableLogtail(
@@ -269,6 +275,19 @@ func TestReconnectHandlerConcurrentUpdate(t *testing.T) {
 	}
 }
 
+type barrierTimestampWaiter struct {
+	get func(context.Context, timestamp.Timestamp) (timestamp.Timestamp, error)
+}
+
+func (w *barrierTimestampWaiter) GetTimestamp(
+	ctx context.Context, ts timestamp.Timestamp,
+) (timestamp.Timestamp, error) {
+	return w.get(ctx, ts)
+}
+func (*barrierTimestampWaiter) NotifyLatestCommitTS(timestamp.Timestamp) {}
+func (*barrierTimestampWaiter) Close()                                   {}
+func (*barrierTimestampWaiter) LatestTS() timestamp.Timestamp            { return timestamp.Timestamp{} }
+
 func TestPushClient_LatestLogtailAppliedTime(t *testing.T) {
 	var c PushClient
 	tw := client.NewTimestampWaiter(runtime.GetLogger(""))
@@ -281,6 +300,68 @@ func TestPushClient_LatestLogtailAppliedTime(t *testing.T) {
 		c.receivedLogTailTime.updateTimestamp(i, ts, time.Now())
 	}
 	assert.Equal(t, ts, c.LatestLogtailAppliedTime())
+}
+
+func TestAcquireAppliedLogtailReadBarrier(t *testing.T) {
+	frontier := timestamp.Timestamp{PhysicalTime: 20, LogicalTime: 2}
+	waiter := &barrierTimestampWaiter{get: func(
+		_ context.Context, target timestamp.Timestamp,
+	) (timestamp.Timestamp, error) {
+		require.Equal(t, frontier, target)
+		return target.Next(), nil
+	}}
+
+	got, err := acquireAppliedLogtailReadBarrier(
+		t.Context(), waiter, func(context.Context) (timestamp.Timestamp, error) {
+			return frontier, nil
+		},
+	)
+	require.NoError(t, err)
+	require.Equal(t, frontier, got)
+}
+
+func TestAcquireAppliedLogtailReadBarrierFailsClosed(t *testing.T) {
+	frontier := timestamp.Timestamp{PhysicalTime: 20}
+	wantErr := moerr.NewInternalErrorNoCtx("barrier failed")
+
+	t.Run("missing waiter", func(t *testing.T) {
+		_, err := acquireAppliedLogtailReadBarrier(
+			t.Context(), nil, func(context.Context) (timestamp.Timestamp, error) {
+				t.Fatal("barrier must not run without an apply waiter")
+				return timestamp.Timestamp{}, nil
+			},
+		)
+		require.ErrorContains(t, err, "waiter is not initialized")
+	})
+
+	t.Run("barrier failure", func(t *testing.T) {
+		waiter := &barrierTimestampWaiter{get: func(
+			context.Context, timestamp.Timestamp,
+		) (timestamp.Timestamp, error) {
+			t.Fatal("apply wait must not run after barrier failure")
+			return timestamp.Timestamp{}, nil
+		}}
+		_, err := acquireAppliedLogtailReadBarrier(
+			t.Context(), waiter, func(context.Context) (timestamp.Timestamp, error) {
+				return timestamp.Timestamp{}, wantErr
+			},
+		)
+		require.ErrorIs(t, err, wantErr)
+	})
+
+	t.Run("apply waiter regresses", func(t *testing.T) {
+		waiter := &barrierTimestampWaiter{get: func(
+			context.Context, timestamp.Timestamp,
+		) (timestamp.Timestamp, error) {
+			return timestamp.Timestamp{PhysicalTime: 19}, nil
+		}}
+		_, err := acquireAppliedLogtailReadBarrier(
+			t.Context(), waiter, func(context.Context) (timestamp.Timestamp, error) {
+				return frontier, nil
+			},
+		)
+		require.ErrorContains(t, err, "before read barrier")
+	})
 }
 
 func TestPushClient_GetState(t *testing.T) {
@@ -1512,6 +1593,40 @@ func TestLogTailSubscriberWaitReadyReturnsOnContextCancel(t *testing.T) {
 	}
 }
 
+func TestLogTailSubscriberWaitReadyClientDoesNotExposeInitializingClient(t *testing.T) {
+	subscriber := newLogTailSubscriber()
+	subscriber.swapClient(&service.LogtailClient{})
+	base, cancel := context.WithCancel(context.Background())
+	ctx := &waitReadyObservedContext{
+		Context: base,
+		checked: make(chan struct{}),
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := subscriber.waitReadyClient(ctx)
+		done <- err
+	}()
+
+	select {
+	case <-ctx.checked:
+	case <-time.After(time.Second):
+		t.Fatal("waitReadyClient did not reach its wait loop")
+	}
+	select {
+	case err := <-done:
+		t.Fatalf("initializing client escaped before ready: %v", err)
+	default:
+	}
+	cancel()
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(time.Second):
+		subscriber.setReady()
+		t.Fatal("waitReadyClient did not observe context cancellation")
+	}
+}
+
 func newTestRoutineControllers(buffer int) []*routineController {
 	recRoutines := make([]*routineController, consumerNumber)
 	for i := range recRoutines {
@@ -1576,10 +1691,8 @@ func TestCommandActions(t *testing.T) {
 
 }
 
-// =============================================================================
-// Tests for subscribedTable with RWMutex and atomic timestamp (Solution E)
-// =============================================================================
-
+// ======================================================================// Tests for subscribedTable with RWMutex and atomic timestamp (Solution E)
+// ======================================================================
 // TestSubEntry_AtomicTimestamp tests atomic timestamp operations
 func TestSubEntry_AtomicTimestamp(t *testing.T) {
 	t.Run("basic atomic operations", func(t *testing.T) {
@@ -2144,10 +2257,8 @@ func TestDoGCUnusedTable_NonSubscribedState(t *testing.T) {
 	assert.False(t, unsubCalled.Load(), "non-Subscribed entry should not be unsubscribed")
 }
 
-// =============================================================================
-// Additional tests for edge cases and complex concurrent scenarios
-// =============================================================================
-
+// ======================================================================// Additional tests for edge cases and complex concurrent scenarios
+// ======================================================================
 // TestGC_ConcurrentWithSubscribe tests GC running while new subscriptions are being added
 func TestGC_ConcurrentWithSubscribe(t *testing.T) {
 	ctx := context.Background()
@@ -2662,11 +2773,9 @@ func TestIsSubscribed_PartitionCreation(t *testing.T) {
 	assert.True(t, exists)
 }
 
-// =============================================================================
-// Tests for complex write operations that require Lock (not RLock)
+// ======================================================================// Tests for complex write operations that require Lock (not RLock)
 // These are the reasons why original implementation used Mutex instead of RWMutex
-// =============================================================================
-
+// ======================================================================
 // TestToSubIfUnsubscribed_Concurrent tests concurrent toSubIfUnsubscribed calls
 // This operation does read-then-write, requiring exclusive lock
 func TestToSubIfUnsubscribed_Concurrent(t *testing.T) {

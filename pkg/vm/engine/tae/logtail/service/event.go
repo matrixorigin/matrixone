@@ -60,6 +60,25 @@ func (n *Notifier) NotifyLogtail(
 	return nil
 }
 
+func (n *Notifier) NotifyReadBarrier(
+	ctx context.Context,
+	barrier readBarrierEvent,
+) error {
+	n.mu.RLock()
+	defer n.mu.RUnlock()
+	if n.closed {
+		return context.Canceled
+	}
+	select {
+	case <-n.ctx.Done():
+		return n.ctx.Err()
+	case <-ctx.Done():
+		return context.Cause(ctx)
+	case n.C <- event{barrier: &barrier}:
+		return nil
+	}
+}
+
 // Drain releases events which were accepted by the notifier but cannot be
 // published because the server is shutting down. Call it only after all event
 // consumers have stopped, otherwise ownership would race with publication.
@@ -72,6 +91,9 @@ func (n *Notifier) Drain() {
 		case event := <-n.C:
 			if event.closeCB != nil {
 				callbacks = append(callbacks, event.closeCB)
+			}
+			if event.barrier != nil && event.barrier.release != nil {
+				callbacks = append(callbacks, event.barrier.release)
 			}
 		default:
 			n.mu.Unlock()
@@ -87,4 +109,5 @@ type event struct {
 	from, to timestamp.Timestamp
 	closeCB  func()
 	logtails []logtail.TableLogtail
+	barrier  *readBarrierEvent
 }
