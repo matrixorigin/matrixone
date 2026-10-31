@@ -28,7 +28,7 @@ import (
 // IsJSONNumericComparison identifies the mixed domain supported by the binary
 // comparisons. BIT, YEAR and ENUM keep their independent conversion contracts.
 // This domain cannot be used as a hash key or a persisted metadata probe:
-// equality also depends on the numeric peer's width and floating-point domain.
+// equality also depends on the numeric peer's floating-point domain.
 func IsJSONNumericComparison(left, right types.T) bool {
 	return left == types.T_json && isJSONComparisonNumericType(right) ||
 		right == types.T_json && isJSONComparisonNumericType(left)
@@ -88,10 +88,9 @@ func makeJSONNumericPeer(ctx context.Context, value bytejson.ByteJson, typ types
 	return peer, nil
 }
 
-// checkJSONNumericDomain preserves the existing numeric CAST acceptance domain.
-// Its narrowed integer result is deliberately discarded: validation must not
-// turn 1.5 into 1 before the actual comparison. In particular, unsigned casts
-// continue to reject -0.5, and TINYINT accepts 127.9 but rejects 128.
+// checkJSONNumericDomain validates the numeric peer's declared adapter domain.
+// For JSON rows it is used only for floating-point conversion; integer peers
+// must not impose their CAST range on the JSON value being compared.
 func checkJSONNumericDomain(ctx context.Context, value bytejson.ByteJson, typ types.T, kind vector.PrepareParamKind) (float64, error) {
 	switch {
 	case typ.IsSignedInt():
@@ -132,11 +131,11 @@ func compareJSONNumeric(ctx context.Context, value bytejson.ByteJson, peer *json
 		// decide this comparison without scanning any container descendants.
 		return bytejson.CompareByteJsonTrusted(value, peer.value), false, nil
 	}
-	floatValue, err := checkJSONNumericDomain(ctx, value, peer.typ, peer.kind)
-	if err != nil {
-		return 0, false, err
-	}
 	if peer.typ.IsFloat() || peer.typ == types.T_any && peer.kind == vector.PrepareParamFloat {
+		floatValue, err := checkJSONNumericDomain(ctx, value, peer.typ, peer.kind)
+		if err != nil {
+			return 0, false, err
+		}
 		return compareFloat64Total(floatValue, peer.floatValue), false, nil
 	}
 	if peer.parsedReady {

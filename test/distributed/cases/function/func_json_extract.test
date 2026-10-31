@@ -397,32 +397,50 @@ prepare json_float_compare_stmt from 'select json_extract(''16777217'', ''$'') =
 set @json_float_compare_param = cast(16777216 as float);
 execute json_float_compare_stmt using @json_float_compare_param;
 deallocate prepare json_float_compare_stmt;
--- @regex("invalid argument operator cast, bad value \[JSON -> BIGINT\]",true)
-select json_extract('18446744073709551615', '$') = cast(9223372036854775807 as signed);
-prepare json_signed_compare_stmt from 'select json_extract(''18446744073709551615'', ''$'') = ?';
+select json_extract('18446744073709551615', '$') = cast(9223372036854775807 as signed) as signed_equal;
+prepare json_signed_compare_stmt from 'select json_extract(''18446744073709551615'', ''$'') = ? as signed_equal';
 set @json_signed_compare_param = cast(9223372036854775807 as signed);
--- @regex("invalid argument operator cast, bad value \[JSON -> BIGINT\]",true)
 execute json_signed_compare_stmt using @json_signed_compare_param;
 deallocate prepare json_signed_compare_stmt;
--- @regex("invalid argument operator cast, bad value \[JSON -> TINYINT\]",true)
-select json_extract('128', '$') = cast(1 as tinyint);
+select json_extract('128', '$') = cast(1 as tinyint) as narrow_equal;
 prepare json_tinyint_compare_stmt from 'select json_extract(''128'', ''$'') = ? as narrow_equal';
 set @json_narrow_compare_param = cast(1 as tinyint);
--- @regex("invalid argument operator cast, bad value \[JSON -> TINYINT\]",true)
 execute json_tinyint_compare_stmt using @json_narrow_compare_param;
 set @json_narrow_compare_param = cast(1 as signed);
 execute json_tinyint_compare_stmt using @json_narrow_compare_param;
 set @json_narrow_compare_param = cast(1 as tinyint);
--- @regex("invalid argument operator cast, bad value \[JSON -> TINYINT\]",true)
 execute json_tinyint_compare_stmt using @json_narrow_compare_param;
 deallocate prepare json_tinyint_compare_stmt;
--- @regex("invalid argument operator cast, bad value \[JSON -> TINYINT UNSIGNED\]",true)
-select json_extract('256', '$') = cast(1 as tinyint unsigned);
+select json_extract('256', '$') = cast(1 as tinyint unsigned) as unsigned_narrow_equal;
 prepare json_utinyint_compare_stmt from 'select json_extract(''256'', ''$'') = ? as unsigned_narrow_equal';
 set @json_unsigned_compare_param = cast(1 as tinyint unsigned);
--- @regex("invalid argument operator cast, bad value \[JSON -> TINYINT UNSIGNED\]",true)
 execute json_utinyint_compare_stmt using @json_unsigned_compare_param;
 deallocate prepare json_utinyint_compare_stmt;
+-- Implicit comparison never narrows valid JSON numbers to the integer peer (#30539).
+create table json_numeric_boundary(id int primary key, doc json);
+insert into json_numeric_boundary values
+    (1,'{"a":1}'),(2,'{"a":128}'),
+    (3,'{"a":18446744073709551615}'),(4,'{"a":1e100}'),
+    (5,'{"a":-1}'),(6,'{"a":1.5}');
+create table json_numeric_boundary_peer(n tinyint);
+insert into json_numeric_boundary_peer values(1);
+select id from json_numeric_boundary where id<=2 and json_extract(doc,'$.a')=(select n from json_numeric_boundary_peer) order by id;
+select id from json_numeric_boundary where id in (1,3) and json_extract(doc,'$.a')=1 order by id;
+select id from json_numeric_boundary where id in (1,4) and json_extract(doc,'$.a')=1 order by id;
+select id, json_extract(doc,'$.a')=1 as eq, 1<json_extract(doc,'$.a') as gt, json_extract(doc,'$.a')<cast(0 as unsigned) as negative from json_numeric_boundary order by id;
+select t.id from json_numeric_boundary t join json_numeric_boundary_peer p on json_extract(t.doc,'$.a')=p.n order by t.id;
+prepare json_boundary_stmt from 'select id from json_numeric_boundary where json_extract(doc,''$.a'')=? order by id';
+set @json_boundary_param=cast(1 as tinyint);
+execute json_boundary_stmt using @json_boundary_param;
+deallocate prepare json_boundary_stmt;
+select count(*), sum(id) from json_numeric_boundary;
+drop table json_numeric_boundary_peer;
+drop table json_numeric_boundary;
+-- Explicit CAST keeps its independent integer range errors.
+-- @regex("invalid argument operator cast, bad value \[JSON -> TINYINT\]",true)
+select cast(json_extract('128', '$') as tinyint);
+-- @regex("invalid argument operator cast, bad value \[JSON -> BIGINT\]",true)
+select cast(json_extract('18446744073709551615', '$') as signed);
 select json_extract(json_array(cast(0.00 as decimal(10,2))), '$[0]') = true, json_extract(json_array(cast(1.20 as decimal(10,2))), '$[0]') = true;
 select json_extract(json_object('enabled', true), '$.enabled') = true as json_eq_bool, true = json_extract(json_object('enabled', true), '$.enabled') as bool_eq_json, json_extract(json_object('enabled', true), '$.enabled') != false as json_ne_bool, false != json_extract(json_object('enabled', true), '$.enabled') as bool_ne_json;
 select json_extract(json_object('enabled', 'true'), '$.enabled') = true as string_eq_bool,
