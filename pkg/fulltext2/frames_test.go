@@ -56,6 +56,23 @@ func bigSegment(t *testing.T, n int) (*Segment, int64) {
 	return s, needle
 }
 
+// splitFrameChunks splits a complete frame into MaxChunkSize-bounded chunks at
+// consecutive chunk_ids from startChunkId. A frame <= MaxChunkSize yields a single
+// chunk.
+func splitFrameChunks(startChunkId int64, framed []byte) []TailChunk {
+	out := make([]TailChunk, 0, (len(framed)+vectorindex.MaxChunkSize-1)/vectorindex.MaxChunkSize)
+	cid := startChunkId
+	for off := 0; off < len(framed); off += vectorindex.MaxChunkSize {
+		end := off + vectorindex.MaxChunkSize
+		if end > len(framed) {
+			end = len(framed)
+		}
+		out = append(out, TailChunk{ChunkId: cid, Data: framed[off:end]})
+		cid++
+	}
+	return out
+}
+
 // TestFramesMultiChunkRoundtrip: a large segment framed, split into chunks,
 // shuffled, re-ordered O(n), reassembled, and unframed back to a queryable
 // segment. Exercises the multi-chunk path.

@@ -363,3 +363,54 @@ func TestCheckIndexColumnSupportability(t *testing.T) {
 		require.NoError(t, checkIndexColumnSupportability(ctx, colOf(types.T_varchar), keyPart, "secondary"))
 	})
 }
+
+func TestGeneratedIndexNames(t *testing.T) {
+	for _, kind := range []string{"ordinary", "unique", "fulltext"} {
+		for _, tc := range []struct {
+			name, initial, column, want string
+			existing                    []string
+			keyParts                    bool
+			inserted                    bool
+		}{
+			{name: "first name", column: "Orders", want: "orders", keyParts: true, inserted: true},
+			{name: "case insensitive collision", column: "Orders", existing: []string{"orders", "ORDERS_2"}, want: "orders_3", keyParts: true, inserted: true},
+			{name: "primary reserved", column: "pRiMaRy", want: "primary_2", keyParts: true, inserted: true},
+			{name: "primary collision", column: "pRiMaRy", existing: []string{"PRIMARY_2"}, want: "primary_3", keyParts: true, inserted: true},
+			{name: "explicit name", initial: "explicit", column: "Orders", want: "explicit", keyParts: true},
+			{name: "no key parts", want: ""},
+		} {
+			t.Run(kind+"/"+tc.name, func(t *testing.T) {
+				names := make(map[string]bool)
+				for _, name := range tc.existing {
+					names[indexNameKey(name)] = true
+				}
+				var parts []*tree.KeyPart
+				if tc.keyParts {
+					parts = []*tree.KeyPart{keyPartWithLength(tc.column, 0)}
+				}
+				var got string
+				switch kind {
+				case "ordinary":
+					index := &tree.Index{Name: tc.initial, KeyParts: parts}
+					setEmptyIndexName(names, index)
+					got = index.Name
+				case "unique":
+					index := &tree.UniqueIndex{Name: tc.initial, KeyParts: parts}
+					setEmptyUniqueIndexName(names, index)
+					got = index.Name
+				case "fulltext":
+					index := &tree.FullTextIndex{Name: tc.initial, KeyParts: parts}
+					setEmptyFullTextIndexName(names, index)
+					got = index.Name
+				}
+				require.Equal(t, tc.want, got)
+				wantLen := len(tc.existing)
+				if tc.inserted {
+					require.True(t, names[indexNameKey(tc.want)])
+					wantLen++
+				}
+				require.Len(t, names, wantLen)
+			})
+		}
+	}
+}

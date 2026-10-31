@@ -21,6 +21,7 @@ import (
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	commonutil "github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -900,7 +901,7 @@ func mysqlSpecialOrderTypeReversible(typ *plan.Type) bool {
 	case isEnumPlanType(typ):
 		seen := make(map[string]struct{})
 		for _, value := range strings.Split(typ.Enumvalues, ",") {
-			key := equalFoldKey(value)
+			key := commonutil.EqualFoldKey(value)
 			if _, exists := seen[key]; exists {
 				return false
 			}

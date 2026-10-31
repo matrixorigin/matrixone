@@ -37,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/objectkey"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	commonutil "github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -3500,7 +3501,7 @@ func validateUniquePersistedTableColumns(ctx context.Context, tableDef *plan.Tab
 		if compareName == "" {
 			compareName = name
 		}
-		key := equalFoldKey(compareName)
+		key := commonutil.EqualFoldKey(compareName)
 		if _, exists := columnNames[key]; exists {
 			return moerr.NewErrDupFieldName(ctx, name)
 		}

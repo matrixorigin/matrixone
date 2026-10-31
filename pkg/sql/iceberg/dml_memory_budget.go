@@ -103,7 +103,7 @@ func retainedDMLCollectorBatchBytes(bat *batch.Batch, equalityFields int) int64 
 		return 0
 	}
 	perRow := int64(160 + equalityFields*48)
-	return saturatingDMLAdd(retainedDMLBatchBytes(bat), saturatingDMLMul(int64(bat.RowCount()), perRow))
+	return saturatingDMLAdd(retainedDMLBatchBytes(bat), api.SaturatingMemoryMul(int64(bat.RowCount()), perRow))
 }
 
 func saturatingDMLAdd(left, right int64) int64 {
@@ -111,14 +111,4 @@ func saturatingDMLAdd(left, right int64) int64 {
 		return math.MaxInt64
 	}
 	return left + right
-}
-
-func saturatingDMLMul(left, right int64) int64 {
-	if left <= 0 || right <= 0 {
-		return 0
-	}
-	if left > math.MaxInt64/right {
-		return math.MaxInt64
-	}
-	return left * right
 }

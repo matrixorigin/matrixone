@@ -43,34 +43,12 @@ type LocalETLFS struct {
 var _ FileService = new(LocalETLFS)
 
 func NewLocalETLFS(name string, rootPath string) (*LocalETLFS, error) {
-	// An empty root historically meant the current working directory for final
-	// paths, but os.CreateTemp("", ...) uses the system temporary directory.
-	// Canonicalize the root first so temporary writes and their atomic rename
-	// target always belong to the same configured filesystem tree.
-	if rootPath == "" {
-		rootPath = "."
-	}
-	var err error
-	rootPath, err = filepath.Abs(rootPath)
+	rootPath, rootFile, err := prepareLocalRoot(rootPath)
 	if err != nil {
 		return nil, err
 	}
-
-	// ensure dir
-	f, err := os.Open(rootPath)
-	if os.IsNotExist(err) {
-		// not exists, create
-		err := os.MkdirAll(rootPath, 0755)
-		if err != nil {
-			return nil, err
-		}
-
-	} else if err != nil {
-		// stat error
-		return nil, err
-
-	} else {
-		defer f.Close()
+	if rootFile != nil {
+		defer rootFile.Close()
 	}
 
 	// resolve symlinks in the path to get the canonical path
@@ -539,29 +517,7 @@ func (l *LocalETLFS) deleteSingle(ctx context.Context, filePath string) error {
 	if err != nil {
 		return err
 	}
-	nativePath := l.toNativeFilePath(path.File)
-
-	_, err = os.Stat(nativePath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			// ignore not found error
-			return nil
-		}
-		return err
-	}
-
-	err = os.Remove(nativePath)
-	if err != nil {
-		return err
-	}
-
-	parentDir, _ := filepath.Split(nativePath)
-	err = l.syncDir(parentDir)
-	if err != nil {
-		return err
-	}
-
-	return nil
+	return deleteLocalFile(&l.RWMutex, l.dirFiles, l.toNativeFilePath(path.File))
 }
 
 var _ ReaderWriterFileService = new(LocalETLFS)
@@ -667,77 +623,11 @@ func (l *LocalETLFS) NewWriter(ctx context.Context, filePath string) (io.WriteCl
 }
 
 func (l *LocalETLFS) ensureDir(nativePath string) error {
-	nativePath = filepath.Clean(nativePath)
-	if nativePath == "" {
-		return nil
-	}
-
-	// check existence by l.dirFiles
-	l.RLock()
-	_, ok := l.dirFiles[nativePath]
-	if ok {
-		// dir existed
-		l.RUnlock()
-		return nil
-	}
-	l.RUnlock()
-
-	// check existence by fstat
-	_, err := os.Stat(nativePath)
-	if err == nil {
-		// existed
-		return nil
-	}
-
-	// ensure parent
-	parent, _ := filepath.Split(nativePath)
-	if parent != nativePath {
-		if err := l.ensureDir(parent); err != nil {
-			return err
-		}
-	}
-
-	// create
-	if err := os.Mkdir(nativePath, 0755); err != nil {
-		if os.IsExist(err) {
-			// existed
-			return nil
-		}
-		return err
-	}
-
-	// sync parent dir
-	if err := l.syncDir(parent); err != nil {
-		return err
-	}
-
-	return nil
-}
-
-func (l *LocalETLFS) toOSPath(filePath string) string {
-	if os.PathSeparator == '/' {
-		return filePath
-	}
-	return strings.ReplaceAll(filePath, "/", osPathSeparatorStr)
+	return ensureLocalDir(&l.RWMutex, l.dirFiles, nativePath)
 }
 
 func (l *LocalETLFS) syncDir(nativePath string) error {
-	l.Lock()
-	f, ok := l.dirFiles[nativePath]
-	if !ok {
-		var err error
-		f, err = os.Open(nativePath)
-		if err != nil {
-			l.Unlock()
-			return err
-		}
-		l.dirFiles[nativePath] = f
-	}
-	l.Unlock()
-	if err := f.Sync(); err != nil {
-		return err
-	}
-	return nil
+	return syncLocalDir(&l.RWMutex, l.dirFiles, nativePath)
 }
 
 func (l *LocalETLFS) Cost() *CostAttr {
@@ -747,7 +637,7 @@ func (l *LocalETLFS) Cost() *CostAttr {
 }
 
 func (l *LocalETLFS) toNativeFilePath(filePath string) string {
-	return filepath.Join(l.rootPath, l.toOSPath(filePath))
+	return filepath.Join(l.rootPath, toOSPath(filePath))
 }
 
 var _ ETLFileService = new(LocalETLFS)
@@ -757,21 +647,11 @@ func (l *LocalETLFS) ETLCompatible() {}
 var _ MutableFileService = new(LocalETLFS)
 
 func (l *LocalETLFS) NewMutator(ctx context.Context, filePath string) (Mutator, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	path, err := parseFilePathAtService(filePath, l.name)
+	f, err := openLocalMutatorFile(ctx, l.name, filePath, l.toNativeFilePath)
 	if err != nil {
 		return nil, err
 	}
-	nativePath := l.toNativeFilePath(path.File)
-	f, err := os.OpenFile(nativePath, os.O_RDWR, 0644)
-	if os.IsNotExist(err) {
-		return nil, moerr.NewFileNotFoundNoCtx(path.File)
-	}
-	return &LocalETLFSMutator{
-		osFile: f,
-	}, nil
+	return &LocalETLFSMutator{osFile: f}, nil
 }
 
 type LocalETLFSMutator struct {
@@ -797,40 +677,7 @@ func (l *LocalETLFSMutator) mutate(ctx context.Context, baseOffset int64, entrie
 	default:
 	}
 
-	// write
-	for _, entry := range entries {
-
-		if entry.ReaderForWrite != nil {
-			// seek and copy
-			_, err := l.osFile.Seek(int64(entry.Offset+baseOffset), 0)
-			if err != nil {
-				return err
-			}
-			var buf []byte
-			put := ioBufferPool.Get(&buf)
-			defer put.Put()
-			n, err := io.CopyBuffer(l.osFile, entry.ReaderForWrite, buf)
-			if err != nil {
-				return err
-			}
-			if n != entry.Size {
-				return moerr.NewSizeNotMatchNoCtx("")
-			}
-
-		} else {
-			// WriteAt
-			n, err := l.osFile.WriteAt(entry.Data, int64(entry.Offset+baseOffset))
-			if err != nil {
-				return err
-			}
-			if int64(n) != entry.Size {
-				return moerr.NewSizeNotMatchNoCtx("")
-			}
-		}
-
-	}
-
-	return nil
+	return writeLocalMutatorEntries(l.osFile, baseOffset, entries)
 }
 
 func (l *LocalETLFSMutator) Close() error {
@@ -847,63 +694,22 @@ func (l *LocalETLFSMutator) Close() error {
 	return nil
 }
 
-// open for read and write, raw os.File API.
 func (l *LocalETLFS) EnsureDir(ctx context.Context, filePath string) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	path, err := ParsePathAtService(filePath, l.name)
-	if err != nil {
-		return err
-	}
-	return l.ensureDir(l.toNativeFilePath(path.File))
+	return ensureMutableLocalDir(ctx, l.name, filePath, l.toNativeFilePath, l.ensureDir)
 }
 
 func (l *LocalETLFS) OpenFile(ctx context.Context, filePath string) (*os.File, error) {
-	err := ctx.Err()
-	if err != nil {
-		return nil, err
-	}
-
-	path, err := parseFilePathAtService(filePath, l.name)
-	if err != nil {
-		return nil, err
-	}
-	nativePath := l.toNativeFilePath(path.File)
-	return os.OpenFile(nativePath, os.O_RDWR, 0644)
+	return openMutableLocalFile(ctx, l.name, filePath, l.toNativeFilePath)
 }
 
-// create or truncate.
 func (l *LocalETLFS) CreateFile(ctx context.Context, filePath string) (*os.File, error) {
-	err := ctx.Err()
-	if err != nil {
-		return nil, err
-	}
-
-	path, err := parseFilePathAtService(filePath, l.name)
-	if err != nil {
-		return nil, err
-	}
-	nativePath := l.toNativeFilePath(path.File)
-	return os.Create(nativePath)
+	return createMutableLocalFile(ctx, l.name, filePath, l.toNativeFilePath)
 }
 
-// remove file
 func (l *LocalETLFS) RemoveFile(ctx context.Context, filePath string) error {
-	err := ctx.Err()
-	if err != nil {
-		return err
-	}
-
-	path, err := parseFilePathAtService(filePath, l.name)
-	if err != nil {
-		return err
-	}
-	nativePath := l.toNativeFilePath(path.File)
-	return os.Remove(nativePath)
+	return removeMutableLocalFile(ctx, l.name, filePath, l.toNativeFilePath)
 }
 
-// open/create then immediately remove.   the opend file is good for read/write.
 func (l *LocalETLFS) CreateAndRemoveFile(ctx context.Context, filePath string) (*os.File, error) {
 	err := ctx.Err()
 	if err != nil {

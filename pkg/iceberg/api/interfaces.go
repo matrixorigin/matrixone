@@ -17,10 +17,52 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"maps"
+	"strings"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/iceberg/model"
 )
+
+// FirstNonEmptyTrimmed returns the first value that is not whitespace, trimmed.
+func FirstNonEmptyTrimmed(values ...string) string {
+	for _, value := range values {
+		if value = strings.TrimSpace(value); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+// FirstNonBlankPreserveWhitespace returns the first nonblank value unchanged.
+func FirstNonBlankPreserveWhitespace(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+// CloneNonEmptyMap shallow-copies a map, normalizing empty maps to nil.
+func CloneNonEmptyMap[K comparable, V any](in map[K]V) map[K]V {
+	if len(in) == 0 {
+		return nil
+	}
+	return maps.Clone(in)
+}
+
+// CloneMetricBounds copies metric byte values and normalizes empty maps to nil.
+func CloneMetricBounds(in map[int][]byte) map[int][]byte {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[int][]byte, len(in))
+	for key, value := range in {
+		out[key] = append([]byte(nil), value...)
+	}
+	return out
+}
 
 type CatalogClient interface {
 	GetConfig(ctx context.Context, req GetConfigRequest) (*ConfigResponse, error)
@@ -83,6 +125,22 @@ type ConfigResponse struct {
 	Capabilities           CatalogCapabilities
 	Prefix                 string
 	Cached                 bool
+}
+
+// IsNessieCatalog reports whether either configuration map advertises Nessie.
+func (r *ConfigResponse) IsNessieCatalog() bool {
+	if r == nil {
+		return false
+	}
+	for _, cfg := range []map[string]string{r.Overrides, r.Defaults} {
+		for key, value := range cfg {
+			if strings.EqualFold(strings.TrimSpace(key), "nessie.is-nessie-catalog") &&
+				strings.EqualFold(strings.TrimSpace(value), "true") {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 type CatalogCapabilities struct {
@@ -196,4 +254,22 @@ type MetadataReader interface {
 
 type ObjectReader interface {
 	Read(ctx context.Context, location string, offset, length int64) ([]byte, error)
+}
+
+// ResolveCatalogRequestPrefix retrieves the catalog prefix when it is not already set.
+func ResolveCatalogRequestPrefix(ctx context.Context, client CatalogClient, req CatalogRequest) (CatalogRequest, error) {
+	if client == nil || strings.TrimSpace(req.Prefix) != "" {
+		return req, nil
+	}
+	resp, err := client.GetConfig(ctx, GetConfigRequest{
+		CatalogRequest: req,
+		Warehouse:      req.Catalog.Warehouse,
+	})
+	if err != nil {
+		return req, err
+	}
+	if resp != nil && strings.TrimSpace(resp.Prefix) != "" {
+		req.Prefix = strings.TrimSpace(resp.Prefix)
+	}
+	return req, nil
 }

@@ -15,8 +15,8 @@
 package pubsub
 
 import (
-	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -27,11 +27,11 @@ import (
 )
 
 func InSubMetaTables(m *plan.SubscriptionMeta, tableName string) bool {
-	if strings.ToLower(m.Tables) == TableAll {
+	if m.Tables == TableAll {
 		return true
 	}
 
-	for _, name := range strings.Split(m.Tables, Sep) {
+	for name := range strings.SplitSeq(m.Tables, Sep) {
 		if name == tableName {
 			return true
 		}
@@ -50,7 +50,8 @@ func SplitAccounts(s string) (accounts []string) {
 	if len(s) == 0 {
 		return
 	}
-	for _, split := range strings.Split(s, Sep) {
+	accounts = make([]string, 0, strings.Count(s, Sep)+1)
+	for split := range strings.SplitSeq(s, Sep) {
 		accounts = append(accounts, strings.TrimSpace(split))
 	}
 	return
@@ -65,23 +66,31 @@ func JoinAccounts(accountMap map[int32]*AccountInfo) string {
 	return strings.Join(accountNames, Sep)
 }
 
-func JoinAccountIds(accIds []int32) (s string) {
-	if len(accIds) == 0 {
-		return
+func JoinAccountIds(accIds []int32) string {
+	var result strings.Builder
+	var scratch [12]byte
+	for i, id := range accIds {
+		if i != 0 {
+			result.WriteByte(',')
+		}
+		result.Write(strconv.AppendInt(scratch[:0], int64(id), 10))
 	}
-
-	s += fmt.Sprintf("%d", accIds[0])
-	for i := 1; i < len(accIds); i++ {
-		s += "," + fmt.Sprintf("%d", accIds[i])
-	}
-	return
+	return result.String()
 }
 
 func CanPubToAll(accountName, pubAllAccounts string) bool {
 	if pubAllAccounts == PubAllAccounts {
 		return true
 	}
-	return slices.Contains(SplitAccounts(pubAllAccounts), accountName)
+	if pubAllAccounts == "" {
+		return false
+	}
+	for account := range strings.SplitSeq(pubAllAccounts, Sep) {
+		if strings.TrimSpace(account) == accountName {
+			return true
+		}
+	}
+	return false
 }
 
 func RemoveTable(oldTableListStr, tblName string) string {

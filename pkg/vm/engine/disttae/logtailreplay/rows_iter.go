@@ -125,13 +125,11 @@ func (p *rowsIter) Close() error {
 }
 
 type primaryKeyIter struct {
-	ts                types.TS
-	spec              PrimaryKeyMatchSpec
-	iter              btree.IterG[*PrimaryIndexEntry]
-	rows              *btree.BTreeG[*RowEntry]
-	primaryIndex      *btree.BTreeG[*PrimaryIndexEntry]
-	tombstoneRowIdIdx *btree.BTreeG[*PrimaryIndexEntry]
-	curRow            *RowEntry
+	ts     types.TS
+	spec   PrimaryKeyMatchSpec
+	iter   btree.IterG[*PrimaryIndexEntry]
+	rows   *btree.BTreeG[*RowEntry]
+	curRow *RowEntry
 
 	specHint struct {
 		isDelIter bool
@@ -649,7 +647,7 @@ func InKind(encodes [][]byte, kind int) PrimaryKeyMatchSpec {
 	spec := PrimaryKeyMatchSpec{
 		Name: "InKind",
 		moveInner: func(p *primaryKeyIter) (ret bool) {
-			// TODO: optimize the case where len(encodes) >> p.primaryIndex.Len(), refer to the UT TestPrefixIn
+			// TODO: optimize the case where len(encodes) >> the primary index size, refer to the UT TestPrefixIn
 			for {
 				switch currentPhase {
 				case seek:
@@ -881,11 +879,10 @@ func (p *PartitionState) NewPrimaryKeyIter(
 ) *primaryKeyIter {
 	index := p.rowPrimaryKeyIndex
 	return &primaryKeyIter{
-		ts:           ts,
-		spec:         buildSpec(op, keys),
-		iter:         index.Iter(),
-		primaryIndex: index,
-		rows:         p.rows,
+		ts:   ts,
+		spec: buildSpec(op, keys),
+		iter: index.Iter(),
+		rows: p.rows,
 	}
 }
 
@@ -1043,12 +1040,10 @@ func (p *PartitionState) NewPrimaryKeyDelIter(
 	index := p.rowPrimaryKeyIndex
 	delIter := &primaryKeyDelIter{
 		primaryKeyIter: primaryKeyIter{
-			ts:                *ts,
-			spec:              buildSpec(op, keys),
-			primaryIndex:      index,
-			iter:              index.Iter(),
-			rows:              p.rows,
-			tombstoneRowIdIdx: p.inMemTombstoneRowIdIndex,
+			ts:   *ts,
+			spec: buildSpec(op, keys),
+			iter: index.Iter(),
+			rows: p.rows,
 		},
 		bid: *bid,
 	}
@@ -1085,11 +1080,10 @@ func (p *PartitionState) NewClusterKeyIter(
 ) *primaryKeyIter {
 	index := p.rowClusterIndex
 	return &primaryKeyIter{
-		ts:           ts,
-		spec:         buildClusterSpec(op, keys),
-		iter:         index.Iter(),
-		primaryIndex: index,
-		rows:         p.rows,
+		ts:   ts,
+		spec: buildClusterSpec(op, keys),
+		iter: index.Iter(),
+		rows: p.rows,
 	}
 }
 

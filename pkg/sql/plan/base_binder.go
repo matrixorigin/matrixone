@@ -10804,7 +10804,7 @@ func adjustControlFlowDecimalLiteralMetadata(args []*Expr, argTypes []types.Type
 func decimalIntegerWidth(expr *Expr, typ types.Type, zeroWithoutIntegerDigit ...bool) (int32, bool) {
 	lit := expr.GetLit()
 	if lit == nil || lit.Isnull {
-		return integerMetadataWidth(typ.Oid), false
+		return integerDecimalDigits(typ.Oid), false
 	}
 
 	decimalDigits := func(value string) int32 {
@@ -10832,7 +10832,7 @@ func decimalIntegerWidth(expr *Expr, typ types.Type, zeroWithoutIntegerDigit ...
 	case *plan.Literal_U64Val:
 		return decimalDigits(strconv.FormatUint(value.U64Val, 10)), true
 	default:
-		return integerMetadataWidth(typ.Oid), false
+		return integerDecimalDigits(typ.Oid), false
 	}
 }
 
@@ -10874,7 +10874,7 @@ func controlFlowStringWidth(expr *Expr, typ types.Type) (int32, bool) {
 		}
 	}
 	if typ.Oid.IsInteger() {
-		width := integerMetadataWidth(typ.Oid)
+		width := integerDecimalDigits(typ.Oid)
 		if typ.Oid.IsSignedInt() {
 			width++
 		}
@@ -10915,7 +10915,7 @@ func signedIntegerLiteralWidth(value int64) int32 {
 	return width
 }
 
-func integerMetadataWidth(oid types.T) int32 {
+func integerDecimalDigits(oid types.T) int32 {
 	switch oid {
 	case types.T_int8, types.T_uint8:
 		return 3

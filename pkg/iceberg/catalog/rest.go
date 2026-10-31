@@ -236,11 +236,11 @@ func (c *RESTClient) GetConfig(ctx context.Context, req api.GetConfigRequest) (*
 		return nil, err
 	}
 	resp := api.ConfigResponse{
-		Defaults:               cloneStringMap(wire.Defaults),
-		Overrides:              cloneStringMap(wire.Overrides),
+		Defaults:               api.CloneNonEmptyMap(wire.Defaults),
+		Overrides:              api.CloneNonEmptyMap(wire.Overrides),
 		Endpoints:              append([]string(nil), wire.Endpoints...),
 		IdempotencyKeyLifetime: wire.IdempotencyKeyLifetime,
-		Prefix:                 normalizeCatalogPrefix(firstNonEmpty(wire.Overrides["prefix"], wire.Defaults["prefix"])),
+		Prefix:                 normalizeCatalogPrefix(api.FirstNonEmptyTrimmed(wire.Overrides["prefix"], wire.Defaults["prefix"])),
 	}
 	resp.Capabilities = negotiateCapabilities(resp.Defaults, resp.Overrides, resp.Endpoints)
 	if !req.NoCache {
@@ -346,8 +346,8 @@ func (c *RESTClient) LoadTable(ctx context.Context, req api.LoadTableRequest) (*
 		Namespace:           req.Namespace,
 		TableName:           req.Table,
 		MetadataLocation:    wire.MetadataLocation,
-		MetadataJSON:        cloneRawMessage(wire.Metadata),
-		Config:              cloneStringMap(wire.Config),
+		MetadataJSON:        append([]byte(nil), wire.Metadata...),
+		Config:              api.CloneNonEmptyMap(wire.Config),
 		TableToken:          tableTokenFromConfig(wire.Config),
 		StorageCredentials:  storageCredentialsFromWire(wire.StorageCredentials),
 		Capabilities:        negotiateCapabilities(nil, wire.Config, nil),
@@ -386,7 +386,7 @@ func (c *RESTClient) CreateTable(ctx context.Context, req api.CreateTableRequest
 		Schema:        schemaWireFromAPI(req.Schema),
 		PartitionSpec: partitionSpecWireFromAPI(req.PartitionSpec),
 		Location:      req.Location,
-		Properties:    cloneStringMap(req.Properties),
+		Properties:    api.CloneNonEmptyMap(req.Properties),
 		StageCreate:   req.StageCreate,
 	}
 	body, err := json.Marshal(payload)
@@ -408,9 +408,9 @@ func (c *RESTClient) CreateTable(ctx context.Context, req api.CreateTableRequest
 		TableName:            req.Table,
 		MetadataLocation:     wire.MetadataLocation,
 		MetadataLocationHash: api.PathHash(wire.MetadataLocation),
-		TableUUID:            firstNonEmpty(wire.Config["table-uuid"], wire.Config["uuid"]),
-		Config:               cloneStringMap(wire.Config),
-		MetadataJSON:         cloneRawMessage(wire.Metadata),
+		TableUUID:            api.FirstNonEmptyTrimmed(wire.Config["table-uuid"], wire.Config["uuid"]),
+		Config:               api.CloneNonEmptyMap(wire.Config),
+		MetadataJSON:         append([]byte(nil), wire.Metadata...),
 		StorageCredentials:   storageCredentialsFromWire(wire.StorageCredentials),
 	}, nil
 }
@@ -462,7 +462,7 @@ func (c *RESTClient) CommitTable(ctx context.Context, req api.CommitRequest) (*a
 		SnapshotID:           wire.SnapshotID,
 		MetadataLocation:     metadataLocation,
 		MetadataLocationHash: api.PathHash(metadataLocation),
-		CommitID:             firstNonEmpty(raw.headers.Get("X-Iceberg-Commit-ID"), raw.headers.Get("X-Request-ID")),
+		CommitID:             api.FirstNonEmptyTrimmed(raw.headers.Get("X-Iceberg-Commit-ID"), raw.headers.Get("X-Request-ID")),
 	}, nil
 }
 
@@ -537,7 +537,7 @@ func (c *RESTClient) ReportMetrics(ctx context.Context, req api.MetricsReportReq
 		MetadataLocationHash: req.MetadataLocationHash,
 		Rows:                 req.Rows,
 		Files:                req.Files,
-		Extra:                cloneStringMap(req.Extra),
+		Extra:                api.CloneNonEmptyMap(req.Extra),
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {
@@ -691,7 +691,7 @@ func (c *RESTClient) configURL(ctx context.Context, req api.GetConfigRequest) (s
 		return "", api.WrapError(api.ErrConfigInvalid, "Iceberg REST config URL is invalid", map[string]string{"uri": target}, err)
 	}
 	q := u.Query()
-	warehouse := firstNonEmpty(req.Warehouse, req.Catalog.Warehouse)
+	warehouse := api.FirstNonEmptyTrimmed(req.Warehouse, req.Catalog.Warehouse)
 	if warehouse != "" {
 		q.Set("warehouse", warehouse)
 	}
@@ -815,7 +815,7 @@ func (c *RESTClient) metricsURL(ctx context.Context, req api.MetricsReportReques
 }
 
 func (c *RESTClient) pathPrefix(req api.CatalogRequest) []string {
-	prefix := normalizeCatalogPrefix(firstNonEmpty(req.Prefix, prefixFromWarehouse(req.Catalog.Warehouse)))
+	prefix := normalizeCatalogPrefix(api.FirstNonEmptyTrimmed(req.Prefix, prefixFromWarehouse(req.Catalog.Warehouse)))
 	if prefix == "" {
 		return nil
 	}
@@ -823,23 +823,13 @@ func (c *RESTClient) pathPrefix(req api.CatalogRequest) []string {
 }
 
 func (c *RESTClient) configCacheKey(req api.GetConfigRequest) string {
-	return lengthPrefixedRESTCacheKey(
+	return api.LengthPrefixedKey(
 		strconv.FormatUint(uint64(req.Catalog.AccountID), 10),
 		strconv.FormatUint(req.Catalog.CatalogID, 10),
 		req.Catalog.URI,
-		firstNonEmpty(req.Warehouse, req.Catalog.Warehouse),
+		api.FirstNonEmptyTrimmed(req.Warehouse, req.Catalog.Warehouse),
 		req.ExternalPrincipal,
 	)
-}
-
-func lengthPrefixedRESTCacheKey(parts ...string) string {
-	var out strings.Builder
-	for _, part := range parts {
-		out.WriteString(strconv.Itoa(len(part)))
-		out.WriteByte(':')
-		out.WriteString(part)
-	}
-	return out.String()
 }
 
 func (c *RESTClient) getConfigCache(key string) (api.ConfigResponse, bool) {
@@ -1192,7 +1182,7 @@ func isCreateTableEndpoint(endpoint string) bool {
 }
 
 func mergeConfig(defaults, overrides map[string]string) map[string]string {
-	out := cloneStringMap(defaults)
+	out := api.CloneNonEmptyMap(defaults)
 	if out == nil {
 		out = make(map[string]string)
 	}
@@ -1220,7 +1210,7 @@ func storageCredentialsFromWire(in []storageCredentialWire) []api.StorageCredent
 	}
 	out := make([]api.StorageCredential, 0, len(in))
 	for _, cred := range in {
-		out = append(out, api.StorageCredential{Prefix: cred.Prefix, Config: cloneStringMap(cred.Config)})
+		out = append(out, api.StorageCredential{Prefix: cred.Prefix, Config: api.CloneNonEmptyMap(cred.Config)})
 	}
 	return out
 }
@@ -1250,40 +1240,11 @@ func selectStorageCredentialConfig(config map[string]string) map[string]string {
 	return out
 }
 
-func firstNonEmpty(values ...string) string {
-	for _, value := range values {
-		if strings.TrimSpace(value) != "" {
-			return strings.TrimSpace(value)
-		}
-	}
-	return ""
-}
-
-func cloneStringMap(in map[string]string) map[string]string {
-	if len(in) == 0 {
-		return nil
-	}
-	out := make(map[string]string, len(in))
-	for k, v := range in {
-		out[k] = v
-	}
-	return out
-}
-
 func cloneConfigResponse(in api.ConfigResponse) api.ConfigResponse {
 	out := in
-	out.Defaults = cloneStringMap(in.Defaults)
-	out.Overrides = cloneStringMap(in.Overrides)
+	out.Defaults = api.CloneNonEmptyMap(in.Defaults)
+	out.Overrides = api.CloneNonEmptyMap(in.Overrides)
 	out.Endpoints = append([]string(nil), in.Endpoints...)
-	return out
-}
-
-func cloneRawMessage(in json.RawMessage) json.RawMessage {
-	if len(in) == 0 {
-		return nil
-	}
-	out := make(json.RawMessage, len(in))
-	copy(out, in)
 	return out
 }
 
@@ -1330,10 +1291,10 @@ func commitUpdateWires(in []api.CommitUpdate) []commitUpdateWire {
 		case "add-snapshot":
 			if update.Snapshot != nil {
 				snapshot := *update.Snapshot
-				snapshot.Summary = cloneStringMap(snapshot.Summary)
+				snapshot.Summary = api.CloneNonEmptyMap(snapshot.Summary)
 				wire.Snapshot = &snapshot
 			} else {
-				wire.Payload = cloneStringMap(update.Payload)
+				wire.Payload = api.CloneNonEmptyMap(update.Payload)
 			}
 		case "set-snapshot-ref":
 			wire.RefName = update.Ref
@@ -1347,7 +1308,7 @@ func commitUpdateWires(in []api.CommitUpdate) []commitUpdateWire {
 		case "remove-snapshot-ref":
 			wire.RefName = update.Ref
 		default:
-			wire.Payload = cloneStringMap(update.Payload)
+			wire.Payload = api.CloneNonEmptyMap(update.Payload)
 			wire.FilePath = update.FilePath
 		}
 		out = append(out, wire)

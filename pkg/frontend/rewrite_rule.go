@@ -80,17 +80,6 @@ type rewritePolicySnapshot struct {
 	lowerCaseTableNames int64
 }
 
-func cloneRewriteMap(src map[string]string) map[string]string {
-	if src == nil {
-		return nil
-	}
-	dst := make(map[string]string, len(src))
-	for key, value := range src {
-		dst[key] = value
-	}
-	return dst
-}
-
 func normalizeRewriteRules(
 	ctx context.Context,
 	rules map[string]string,
@@ -334,7 +323,7 @@ func refreshRewritePolicy(ctx context.Context, ses *Session,
 				stamp = rewritePolicyRefreshStamp{identity, generation, revision}
 				roleRulesActive = len(ses.ruleCache) > 0
 				if materialize {
-					policy.roleRules = cloneRewriteMap(ses.ruleCache)
+					policy.roleRules = maps.Clone(ses.ruleCache)
 				}
 			}
 			ses.ruleCacheMu.RUnlock()
@@ -374,7 +363,7 @@ func refreshRewritePolicy(ctx context.Context, ses *Session,
 		policy.generation = ses.rewritePolicyGeneration
 		roleRulesActive = len(rules) > 0
 		if materialize {
-			policy.roleRules = cloneRewriteMap(rules)
+			policy.roleRules = maps.Clone(rules)
 		}
 		stamp = rewritePolicyRefreshStamp{identity, ses.rewritePolicyGeneration, ses.ruleCacheRevision}
 		ses.ruleCacheMu.Unlock()
@@ -386,8 +375,8 @@ func refreshRewritePolicy(ctx context.Context, ses *Session,
 	// Optional session layers are still gated by enable_remap_hint.
 	if materialize && sessionEnabled {
 		policy.sessionRules, policy.sessionRemapDb = getSessionRewriteRules(ctx, ses)
-		policy.sessionRules = cloneRewriteMap(policy.sessionRules)
-		policy.sessionRemapDb = cloneRewriteMap(policy.sessionRemapDb)
+		policy.sessionRules = maps.Clone(policy.sessionRules)
+		policy.sessionRemapDb = maps.Clone(policy.sessionRemapDb)
 	}
 
 	policy.enabled = sessionEnabled || roleRulesActive

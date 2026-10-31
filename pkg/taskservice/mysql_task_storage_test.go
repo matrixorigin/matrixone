@@ -986,20 +986,62 @@ func TestRemoveDuplicateTasks(t *testing.T) {
 	}
 	otherErr := errors.New("not mysql err")
 
-	remainingAsync, err := removeDuplicateAsyncTasks(dupErr, asyncTasks)
+	remainingAsync, err := removeDuplicateTasks(dupErr, asyncTasks, func(t task.AsyncTask) string { return t.Metadata.ID })
 	require.NoError(t, err)
 	require.Len(t, remainingAsync, 1)
 	require.Equal(t, "b", remainingAsync[0].Metadata.ID)
 
-	remainingDaemon, err := removeDuplicateDaemonTasks(dupErr, daemonTasks)
+	remainingDaemon, err := removeDuplicateTasks(dupErr, daemonTasks, func(t task.DaemonTask) string { return t.Metadata.ID })
 	require.NoError(t, err)
 	require.Len(t, remainingDaemon, 1)
 	require.Equal(t, "b", remainingDaemon[0].Metadata.ID)
 
-	_, err = removeDuplicateAsyncTasks(otherErr, asyncTasks)
+	_, err = removeDuplicateTasks(otherErr, asyncTasks, func(t task.AsyncTask) string { return t.Metadata.ID })
 	require.Error(t, err)
-	_, err = removeDuplicateDaemonTasks(otherErr, daemonTasks)
+	_, err = removeDuplicateTasks(otherErr, daemonTasks, func(t task.DaemonTask) string { return t.Metadata.ID })
 	require.Error(t, err)
+}
+
+func TestRemoveDuplicateTasksPreservesErrorAndSliceSemantics(t *testing.T) {
+	id := func(t task.AsyncTask) string { return t.Metadata.ID }
+	input := []task.AsyncTask{
+		{Metadata: task.TaskMetadata{ID: "first"}},
+		{Metadata: task.TaskMetadata{ID: "duplicate"}},
+		{Metadata: task.TaskMetadata{ID: "last"}},
+	}
+	duplicate := &mysqlDriver.MySQLError{Number: moerr.ER_DUP_ENTRY, Message: "duplicate"}
+	result, err := removeDuplicateTasks(fmt.Errorf("wrapped: %w", duplicate), input, id)
+	require.NoError(t, err)
+	require.Len(t, result, 2)
+	require.Equal(t, []string{"first", "last"}, []string{result[0].Metadata.ID, result[1].Metadata.ID})
+	require.Same(t, &input[0], &result[0])
+
+	other := &mysqlDriver.MySQLError{Number: 1, Message: "duplicate"}
+	result, err = removeDuplicateTasks(other, input, id)
+	require.Same(t, other, err)
+	require.Nil(t, result)
+
+	// An unmatched duplicate leaves the retry input unchanged and in place.
+	unmatchedInput := []task.AsyncTask{{Metadata: task.TaskMetadata{ID: "alpha"}}, {Metadata: task.TaskMetadata{ID: "beta"}}}
+	unmatchedWant := append([]task.AsyncTask(nil), unmatchedInput...)
+	result, err = removeDuplicateTasks(duplicate, unmatchedInput, id)
+	require.NoError(t, err)
+	require.Equal(t, unmatchedWant, result)
+	require.Len(t, result, 2)
+	require.Same(t, &unmatchedInput[0], &result[0])
+
+	daemonInput := []task.DaemonTask{{Metadata: task.TaskMetadata{ID: "alpha"}}, {Metadata: task.TaskMetadata{ID: "beta"}}}
+	daemonWant := append([]task.DaemonTask(nil), daemonInput...)
+	daemons, err := removeDuplicateTasks(duplicate, daemonInput, func(t task.DaemonTask) string { return t.Metadata.ID })
+	require.NoError(t, err)
+	require.Equal(t, daemonWant, daemons)
+	require.Len(t, daemons, 2)
+	require.Same(t, &daemonInput[0], &daemons[0])
+
+	var empty []task.AsyncTask
+	result, err = removeDuplicateTasks(duplicate, empty, id)
+	require.NoError(t, err)
+	require.Nil(t, result)
 }
 
 func TestAddAsyncTaskWithDuplicateEntry(t *testing.T) {
@@ -2324,5 +2366,99 @@ func TestUpdateCDCTaskBranchesInSqlMock(t *testing.T) {
 		require.Equal(t, 2, n)
 		mock.ExpectClose()
 		require.NoError(t, storage.Close())
+	})
+}
+
+type failingAffectedRows struct{ err error }
+
+func (f failingAffectedRows) LastInsertId() (int64, error) { return 0, nil }
+func (f failingAffectedRows) RowsAffected() (int64, error) { return 9, f.err }
+
+func TestExecRowsAffected(t *testing.T) {
+	failure := errors.New("planned failure")
+	for _, tc := range []struct {
+		name    string
+		result  sql.Result
+		execErr error
+		want    int64
+		wantErr error
+	}{
+		{"success", mockRowsAffectedResult{rows: 4}, nil, 4, nil},
+		{"execute error", nil, failure, 0, failure},
+		{"rows error", failingAffectedRows{failure}, nil, 0, failure},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tx := &mockSqlExecutor{execFn: func(_ context.Context, query string, args ...interface{}) (sql.Result, error) {
+				require.Equal(t, "update tasks set state = ?", query)
+				require.Equal(t, []interface{}{"ready"}, args)
+				return tc.result, tc.execErr
+			}}
+			rows, err := ExecRowsAffected(context.Background(), tx, "update tasks set state = ?", "ready")
+			require.Equal(t, tc.want, rows)
+			require.ErrorIs(t, err, tc.wantErr)
+		})
+	}
+}
+
+func TestBuildTaskInsertSQL(t *testing.T) {
+	for _, tc := range []struct {
+		name, prefix, row, suffix string
+		count                     int
+		want                      string
+	}{
+		{"empty", "insert ", "(?)", " suffix", 0, "insert  suffix"},
+		{"single", "insert ", "(?)", "", 1, "insert (?)"},
+		{"multiple", "insert ", "(?, ?)", " suffix", 3, "insert (?, ?),(?, ?),(?, ?) suffix"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, buildTaskInsertSQL(tc.prefix, tc.row, tc.suffix, tc.count))
+		})
+	}
+}
+
+func TestBatchTaskInsertSQLAndArguments(t *testing.T) {
+	t.Run("async", func(t *testing.T) {
+		storage, mock := newMockStorage(t)
+		mock.ExpectExec(insertAsyncTask+"(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?),(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").
+			WithArgs("a", 0, []byte(nil), "{}", "", 0, "", 0, 0, sqlmock.AnyArg(), 0,
+				"b", 0, []byte(nil), "{}", "", 0, "", 0, 0, sqlmock.AnyArg(), 0).
+			WillReturnResult(sqlmock.NewResult(0, 2))
+		n, err := storage.AddAsyncTask(context.Background(), newTaskFromMetadata(task.TaskMetadata{ID: "a"}), newTaskFromMetadata(task.TaskMetadata{ID: "b"}))
+		require.NoError(t, err)
+		require.Equal(t, 2, n)
+		mock.ExpectClose()
+		require.NoError(t, storage.Close())
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+	t.Run("cron", func(t *testing.T) {
+		storage, mock := newMockStorage(t)
+		mock.ExpectExec(insertCronTask+"(?, ?, ?, ?, ?, ?, ?, ?, ?),(?, ?, ?, ?, ?, ?, ?, ?, ?)"+cronTaskOnDuplicate).
+			WithArgs("a", 0, []byte(nil), "{}", "cron-a", sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(),
+				"b", 0, []byte(nil), "{}", "cron-b", sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
+			WillReturnResult(sqlmock.NewResult(0, 2))
+		n, err := storage.AddCronTask(context.Background(), newTestCronTask("a", "cron-a"), newTestCronTask("b", "cron-b"))
+		require.NoError(t, err)
+		require.Equal(t, 2, n)
+		mock.ExpectClose()
+		require.NoError(t, storage.Close())
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+	t.Run("daemon", func(t *testing.T) {
+		a := newDaemonTaskForTest(1, task.TaskStatus_Created, "")
+		b := newDaemonTaskForTest(2, task.TaskStatus_Created, "")
+		a.Metadata.ID, b.Metadata.ID = "a", "b"
+		calls := 0
+		executor := &mockSqlExecutor{execFn: func(_ context.Context, query string, args ...interface{}) (sql.Result, error) {
+			calls++
+			require.Equal(t, insertDaemonTask+"(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?),(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", query)
+			require.Len(t, args, 22)
+			require.Equal(t, "a", args[0])
+			require.Equal(t, "b", args[11])
+			return mockRowsAffectedResult{rows: 2}, nil
+		}}
+		n, err := (&mysqlTaskStorage{}).RunAddDaemonTask(context.Background(), executor, a, b)
+		require.NoError(t, err)
+		require.Equal(t, 2, n)
+		require.Equal(t, 1, calls)
 	})
 }

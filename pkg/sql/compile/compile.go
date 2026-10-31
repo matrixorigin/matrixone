@@ -3512,7 +3512,7 @@ func (c *Compile) hydrateMongoScan(node *plan.Node) error {
 		scan.Database = string(cols[3].GetBytesAt(0))
 		scan.Collection = string(cols[4].GetBytesAt(0))
 		scan.Columns = sqlmongodb.ColumnsToPlan(columns)
-		scan.ProjectedPaths = projectedMongoPlanPaths(columns)
+		scan.ProjectedPaths = sqlmongodb.ProjectedPaths(columns)
 		scan.MaxParallelism = parallelism[0]
 		found = true
 		return false
@@ -3545,12 +3545,7 @@ func projectedMongoColumns(
 	if tableDef == nil {
 		return nil, moerr.NewInternalError(ctx, "MongoDB external scan is missing its table definition")
 	}
-	names := make([]string, 0, len(tableDef.Cols))
-	for _, column := range tableDef.Cols {
-		if column != nil && !column.Hidden && !catalog.IsForeignQueryCol(column.Name, column.ColId) {
-			names = append(names, column.Name)
-		}
-	}
+	names := sqlmongodb.RetainedColumnNames(tableDef.Cols)
 	if len(names) == 0 {
 		if allowEmpty {
 			return nil, nil
@@ -3558,19 +3553,6 @@ func projectedMongoColumns(
 		return nil, moerr.NewInternalError(ctx, "MongoDB external scan has no retained mapped columns")
 	}
 	return sqlmongodb.ProjectColumnsByName(ctx, columns, names)
-}
-
-func projectedMongoPlanPaths(columns []sqlmongodb.ColumnMapping) []string {
-	result := make([]string, 0, len(columns))
-	seen := make(map[string]struct{}, len(columns))
-	for _, column := range columns {
-		if _, ok := seen[column.Path]; ok {
-			continue
-		}
-		seen[column.Path] = struct{}{}
-		result = append(result, column.Path)
-	}
-	return result
 }
 
 func (c *Compile) getParallelSizeForExternalScan(node *plan.Node, cpuNum int) int {

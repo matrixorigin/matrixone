@@ -338,7 +338,7 @@ func BuildDMLOverwriteActionStream(ctx context.Context, req DMLOverwriteActionSt
 	stream, err := (dml.NativePlanner{}).PlanOverwrite(ctx, dml.OverwriteRequest{
 		Base:              req.Base,
 		Scope:             req.Scope,
-		Partition:         cloneDMLAnyMap(req.Partition),
+		Partition:         api.CloneNonEmptyMap(req.Partition),
 		AffectedDataFiles: affectedDataFiles,
 		ReplacementFiles:  replacementFiles,
 	})
@@ -702,15 +702,4 @@ func dmlPartitionValueToken(value any) string {
 	default:
 		return fmt.Sprintf("%T:%v", value, value)
 	}
-}
-
-func cloneDMLAnyMap(in map[string]any) map[string]any {
-	if len(in) == 0 {
-		return nil
-	}
-	out := make(map[string]any, len(in))
-	for key, value := range in {
-		out[key] = value
-	}
-	return out
 }

@@ -50,10 +50,10 @@ func (v *versionHandle) HandleTenantUpgrade(_ context.Context, tenantID int32, t
 	for _, entry := range tenantUpgEntries {
 		start := time.Now()
 		if err := entry.Upgrade(txn, uint32(tenantID)); err != nil {
-			getLogger(txn.Txn().TxnOptions().CN).Error("tenant upgrade entry execute error", zap.Error(err), zap.Int32("tenantId", tenantID), zap.String("version", v.metadata.Version), zap.String("upgrade entry", entry.String()))
+			versions.StrictServiceLogger(txn.Txn().TxnOptions().CN).Error("tenant upgrade entry execute error", zap.Error(err), zap.Int32("tenantId", tenantID), zap.String("version", v.metadata.Version), zap.String("upgrade entry", entry.String()))
 			return err
 		}
-		getLogger(txn.Txn().TxnOptions().CN).Info("tenant upgrade entry complete", zap.String("upgrade entry", entry.String()), zap.Int64("time cost(ms)", time.Since(start).Milliseconds()), zap.String("toVersion", v.metadata.Version))
+		versions.StrictServiceLogger(txn.Txn().TxnOptions().CN).Info("tenant upgrade entry complete", zap.String("upgrade entry", entry.String()), zap.Int64("time cost(ms)", time.Since(start).Milliseconds()), zap.String("toVersion", v.metadata.Version))
 	}
 	return nil
 }

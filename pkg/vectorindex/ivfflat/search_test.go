@@ -239,7 +239,7 @@ func TestIvfflatEmptyGeneration(t *testing.T) {
 	load := func(id int64, isNull bool) *IvfflatSearch[float32] {
 		proc := testutil.NewProcessWithMPool(t, "", mp)
 		sqlproc := sqlexec.NewSqlProcess(proc)
-		sqlproc.RelationScanner = &scriptedRelationScanner{t: t, run: func(req sqlexec.RelationScanRequest) executor.Result {
+		sqlproc.RelationScanner = &scriptedRelationScanner{run: func(req sqlexec.RelationScanRequest) executor.Result {
 			bat := batch.NewWithSize(3)
 			bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
 			bat.Vecs[1] = vector.NewVec(types.T_int64.ToType())

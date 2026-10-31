@@ -24,26 +24,6 @@ import (
 
 type balanceOption func(*balanceScheduler)
 
-func withBalanceOrder(tables []uint64) balanceOption {
-	return func(s *balanceScheduler) {
-		s.option.orderFunc = func(
-			r *rt,
-			apply func(*table) (bool, error),
-		) error {
-			for _, id := range tables {
-				ok, err := apply(r.tables[id])
-				if err != nil {
-					return err
-				}
-				if !ok {
-					return nil
-				}
-			}
-			return nil
-		}
-	}
-}
-
 // balanceScheduler balance the number of shards between CNs, with the goal of
 // ensuring that for each Table, shards are distributed evenly across available
 // CNs.

@@ -46,32 +46,6 @@ func newTestDriver(t *testing.T, size int) driver.Driver {
 	return s
 }
 
-func restartTestDriver(t *testing.T, size int) driver.Driver {
-	dir := testutils.InitTestEnv(ModuleName, t)
-	name := "test"
-	cfg := &batchstoredriver.StoreCfg{
-		RotateChecker: batchstoredriver.NewMaxSizeRotateChecker(size),
-	}
-	s, err := batchstoredriver.NewBaseStore(dir, name, cfg)
-	assert.NoError(t, err)
-	return s
-}
-
-// func TestAppendRead(t *testing.T) {
-// 	driver := newTestDriver(t, int(mpool.MB)*64)
-// 	wal := NewStore(driver)
-// 	defer wal.Close()
-
-// 	err = e.WaitDone()
-// 	assert.NoError(t, err)
-
-// 	e2, err := wal.Load(10, lsn)
-// 	assert.NoError(t, err)
-// 	assert.Equal(t, e.GetPayload(), e2.GetPayload())
-// 	e.Free()
-// 	e2.Free()
-// }
-
 func mockEntry() entry.Entry {
 	e := entry.GetBase()
 	e.SetType(entry.IOET_WALEntry_Test)
@@ -79,9 +53,6 @@ func mockEntry() entry.Entry {
 	if err != nil {
 		panic(err)
 	}
-	// payload:=make([]byte,mpool.KB)
-	// copy(payload,buf)
-	// e.SetPayload(payload)
 	return e
 }
 
@@ -127,7 +98,7 @@ func TestReplay(t *testing.T) {
 
 	wal.Close()
 
-	driver = restartTestDriver(t, int(mpool.KB)*3)
+	driver = newTestDriver(t, int(mpool.KB)*3)
 	wal = NewStore(driver)
 	wal.Close()
 }

@@ -873,29 +873,18 @@ func (n *Bitmap) MarshalTo(w io.Writer) error {
 		if err := typed.WriteUint64(dataLength); err != nil {
 			return err
 		}
-		return writeBitmapMarshalBytes(w, types.EncodeSlice(n.data))
+		return types.WriteFull(w, types.EncodeSlice(n.data))
 	}
-	if err := writeBitmapMarshalBytes(w, types.EncodeInt64(&n.count)); err != nil {
+	if err := types.WriteFull(w, types.EncodeInt64(&n.count)); err != nil {
 		return err
 	}
-	if err := writeBitmapMarshalBytes(w, types.EncodeUint64(&bitLength)); err != nil {
+	if err := types.WriteFull(w, types.EncodeUint64(&bitLength)); err != nil {
 		return err
 	}
-	if err := writeBitmapMarshalBytes(w, types.EncodeUint64(&dataLength)); err != nil {
+	if err := types.WriteFull(w, types.EncodeUint64(&dataLength)); err != nil {
 		return err
 	}
-	return writeBitmapMarshalBytes(w, types.EncodeSlice(n.data))
-}
-
-func writeBitmapMarshalBytes(w io.Writer, value []byte) error {
-	written, err := w.Write(value)
-	if err != nil {
-		return err
-	}
-	if written != len(value) {
-		return io.ErrShortWrite
-	}
-	return nil
+	return types.WriteFull(w, types.EncodeSlice(n.data))
 }
 
 // MarshalV1 in version 1, Bitmap.emptyFlag is type int32, now we use Bitmap.count replace it

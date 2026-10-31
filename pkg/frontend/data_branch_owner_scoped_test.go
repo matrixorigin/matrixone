@@ -244,8 +244,7 @@ func TestLCAScanDerivesOwnerContextFromLiveCallerContext(t *testing.T) {
 		tblStuff.lcaRel = lcaRel
 		tblStuff.tarRel = tarRel
 		tblStuff.tarOperand = &branchOperand{
-			userDb: "subdb", userTable: "t",
-			physAccount: 100, physDb: "pubdb", tableName: "t",
+			physAccount: 100, physDb: "pubdb",
 			// resolution-time context: attached at classification, with no
 			// cancellation of its own; the live caller context must win.
 			ctx:            context.Background(),

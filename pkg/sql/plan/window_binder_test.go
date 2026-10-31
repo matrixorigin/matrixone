@@ -1931,15 +1931,15 @@ func TestResetWindowIntervalExprRejectsNegativeValues(t *testing.T) {
 		value *planpb.Expr
 		unit  string
 	}{
-		{name: "integer", value: makeInt64ConstForProjection(-1), unit: "DAY"},
-		{name: "string", value: makeVarcharConstForProjection("-1"), unit: "MONTH"},
-		{name: "float rounds to zero", value: makeFloat64ConstForProjection(-0.0000001), unit: "SECOND"},
-		{name: "decimal", value: makeDecimal64ConstForProjection(-0.5, 1), unit: "HOUR"},
+		{name: "integer", value: makeInt64Const(-1), unit: "DAY"},
+		{name: "string", value: makeVarcharConst("-1"), unit: "MONTH"},
+		{name: "float rounds to zero", value: makeFloat64Const(-0.0000001), unit: "SECOND"},
+		{name: "decimal", value: makeDecimal64Const(-0.5, 1), unit: "HOUR"},
 	}
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			expr := makeIntervalExprForProjection(tc.value, tc.unit)
+			expr := makeIntervalExpr(tc.value, tc.unit)
 			got, err := resetWindowIntervalExpr(context.Background(), proc, expr)
 			require.Nil(t, got)
 			require.ErrorContains(t, err, "frame start or end is negative")

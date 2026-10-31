@@ -610,19 +610,15 @@ func (bh *branchHashmap) PopByVectorsStream(keyVecs []*vector.Vector, removeAll 
 		}
 		for _, probe := range probes {
 			var (
-				removedBytes uint64
 				removedCount int
 				err          error
 			)
 			if collectValues {
-				removedBytes, removedCount, err = shard.mem.collectStream(probe.hash, probe.key, probe.plan, func(row []byte) error {
+				removedCount, err = shard.mem.collectStream(probe.hash, probe.key, probe.plan, func(row []byte) error {
 					return fn(probe.idx, probe.key, row)
 				})
 			} else {
-				_, removedBytes, removedCount = shard.mem.collect(probe.hash, probe.key, probe.plan, true, false)
-			}
-			if removedBytes > 0 {
-				shard.memInUse -= removedBytes
+				_, removedCount = shard.mem.collect(probe.hash, probe.key, probe.plan, true, false)
 			}
 			if removedCount > 0 {
 				removedTotal += int64(removedCount)
@@ -729,15 +725,12 @@ func (bh *branchHashmap) lookupByVectors(keyVecs []*vector.Vector, removeAll *bo
 		copyValues := removeAll != nil
 		for _, probe := range probes {
 			if removeAll == nil {
-				rows, _, _ := shard.mem.collect(probe.hash, probe.key, nil, false, true)
+				rows, _ := shard.mem.collect(probe.hash, probe.key, nil, false, true)
 				results[probe.idx].Rows = rows
 				continue
 			}
-			rows, removedBytes, removedCount := shard.mem.collect(probe.hash, probe.key, probe.plan, copyValues, true)
+			rows, removedCount := shard.mem.collect(probe.hash, probe.key, probe.plan, copyValues, true)
 			results[probe.idx].Rows = rows
-			if removedBytes > 0 {
-				shard.memInUse -= removedBytes
-			}
 			if removedCount > 0 {
 				removedTotal += int64(removedCount)
 			}
@@ -1277,8 +1270,7 @@ type hashShard struct {
 	id        int
 	spillRoot string
 
-	mem      *memStore
-	memInUse uint64
+	mem *memStore
 
 	spill                *spillStore
 	spillDir             string
@@ -1349,14 +1341,13 @@ func (hs *hashShard) insertEntryLocked(entry memEntry) {
 		hs.mem = newMemStore()
 	}
 	hs.mem.insert(entry)
-	hs.memInUse += entry.size()
 	atomic.AddInt64(&hs.items, 1)
 	// TODO(monitoring): track shard-level insertion metrics.
 }
 func (hs *hashShard) getRows(hash uint64, key []byte) ([][]byte, error) {
 	hs.lock()
 	defer hs.unlock()
-	rows, _, _ := hs.mem.collect(hash, key, nil, false, true)
+	rows, _ := hs.mem.collect(hash, key, nil, false, true)
 	if hs.spill == nil {
 		return rows, nil
 	}
@@ -1369,7 +1360,7 @@ func (hs *hashShard) getRowsDuringIteration(hash uint64, key []byte) ([][]byte, 
 	if !hs.iterating {
 		return nil, moerr.NewInternalErrorNoCtx("shard iteration context required")
 	}
-	rows, _, _ := hs.mem.collect(hash, key, nil, false, true)
+	rows, _ := hs.mem.collect(hash, key, nil, false, true)
 	if hs.spill == nil {
 		return rows, nil
 	}
@@ -1409,10 +1400,7 @@ func (hs *hashShard) popRowsUnsafe(hash uint64, key []byte, removeAll bool) ([][
 		return nil, hs.spill.failed
 	}
 	plan := newRemovalPlan(removeAll)
-	rows, removedBytes, removedCount := hs.mem.collect(hash, key, plan, true, true)
-	if removedBytes > 0 {
-		hs.memInUse -= removedBytes
-	}
+	rows, removedCount := hs.mem.collect(hash, key, plan, true, true)
 	if hs.spill == nil {
 		if removedCount > 0 {
 			atomic.AddInt64(&hs.items, -int64(removedCount))
@@ -1440,10 +1428,7 @@ func (hs *hashShard) popRowsByValueUnsafe(hash uint64, key []byte, value []byte,
 		copy(matchValue, value)
 	}
 	plan := newValueRemovalPlan(removeAll, matchValue)
-	_, removedBytes, removedCount := hs.mem.collect(hash, key, plan, false, false)
-	if removedBytes > 0 {
-		hs.memInUse -= removedBytes
-	}
+	_, removedCount := hs.mem.collect(hash, key, plan, false, false)
 	if hs.spill == nil {
 		if removedCount > 0 {
 			atomic.AddInt64(&hs.items, -int64(removedCount))
@@ -1510,7 +1495,6 @@ func (hs *hashShard) spillLocked(required uint64) (uint64, error) {
 		for _, idx := range group.indices {
 			freedBytes := hs.mem.removeEntry(idx)
 			if freedBytes > 0 {
-				hs.memInUse -= freedBytes
 				freed += freedBytes
 			}
 		}
@@ -1564,14 +1548,12 @@ func (hs *hashShard) close() error {
 			if !entry.inUse {
 				continue
 			}
-			hs.memInUse -= entry.size()
 			if entry.block != nil {
 				entry.block.release()
 			}
 		}
 		hs.mem = newMemStore()
 	}
-	hs.memInUse = 0
 
 	if hs.spill != nil {
 		if err := hs.spill.close(); err != nil {
@@ -2360,14 +2342,13 @@ func (ms *memStore) removeEntry(idx int32) uint64 {
 	return size
 }
 
-func (ms *memStore) collect(hash uint64, key []byte, plan *removalPlan, copyValues bool, collectValues bool) ([][]byte, uint64, int) {
+func (ms *memStore) collect(hash uint64, key []byte, plan *removalPlan, copyValues bool, collectValues bool) ([][]byte, int) {
 	if len(ms.index) == 0 || ms.count == 0 {
-		return nil, 0, 0
+		return nil, 0
 	}
 	var (
 		rows         [][]byte
 		removedCount int
-		removedBytes uint64
 	)
 	mask := len(ms.index) - 1
 	slot := int(hash & uint64(mask))
@@ -2400,23 +2381,20 @@ func (ms *memStore) collect(hash uint64, key []byte, plan *removalPlan, copyValu
 					}
 					removedCount++
 					ms.lruTouch(cur)
-					removedBytes += ms.removeEntry(cur)
+					ms.removeEntry(cur)
 				}
 			}
 		}
 		slot = (slot + 1) & mask
 	}
-	return rows, removedBytes, removedCount
+	return rows, removedCount
 }
 
-func (ms *memStore) collectStream(hash uint64, key []byte, plan *removalPlan, fn func(row []byte) error) (uint64, int, error) {
+func (ms *memStore) collectStream(hash uint64, key []byte, plan *removalPlan, fn func(row []byte) error) (int, error) {
 	if len(ms.index) == 0 || ms.count == 0 {
-		return 0, 0, nil
+		return 0, nil
 	}
-	var (
-		removedCount int
-		removedBytes uint64
-	)
+	var removedCount int
 	mask := len(ms.index) - 1
 	slot := int(hash & uint64(mask))
 	for {
@@ -2432,15 +2410,15 @@ func (ms *memStore) collectStream(hash uint64, key []byte, plan *removalPlan, fn
 				payload := make([]byte, len(value))
 				copy(payload, value)
 				removedCount++
-				removedBytes += ms.removeEntry(cur)
+				ms.removeEntry(cur)
 				if err := fn(payload); err != nil {
-					return removedBytes, removedCount, err
+					return removedCount, err
 				}
 			}
 		}
 		slot = (slot + 1) & mask
 	}
-	return removedBytes, removedCount, nil
+	return removedCount, nil
 }
 
 func (ms *memStore) forEach(fn func(entry *memEntry) error) error {

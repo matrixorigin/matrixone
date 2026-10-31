@@ -570,7 +570,7 @@ func writeSpillRecordInt64(w io.Writer, value int64) error {
 	}
 	var data [8]byte
 	binary.NativeEndian.PutUint64(data[:], uint64(value))
-	return writeSpillRecordBytes(w, data[:])
+	return types.WriteFull(w, data[:])
 }
 
 func writeSpillRecordUint64(w io.Writer, value uint64) error {
@@ -579,18 +579,7 @@ func writeSpillRecordUint64(w io.Writer, value uint64) error {
 	}
 	var data [8]byte
 	binary.NativeEndian.PutUint64(data[:], value)
-	return writeSpillRecordBytes(w, data[:])
-}
-
-func writeSpillRecordBytes(w io.Writer, value []byte) error {
-	written, err := w.Write(value)
-	if err != nil {
-		return err
-	}
-	if written != len(value) {
-		return io.ErrShortWrite
-	}
-	return nil
+	return types.WriteFull(w, data[:])
 }
 
 // writeBucketPayload performs disk/FD admission and one physical write for a

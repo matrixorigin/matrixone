@@ -334,40 +334,9 @@ func (builder *QueryBuilder) exactRuntimeFilterPairContractValid(
 	}
 }
 
-// makeSerializedExactRuntimeFilterPair constructs the component contract for
-// an index tuple key. finalProbeExpr is the encoded index-table column;
-// componentProbeExprs are the original indexed columns in encoder order; and
-// buildExpr must be serial/serial_full over the corresponding build slots.
-//
-// A tuple encoder is safe only when every component is raw-compatible. Float
-// signed-zero closure cannot be expressed by adding one final tuple value
-// without a combinatorial expansion, so float components remain unsupported.
-func runtimeFilterIntegerWidth(oid types.T) (int, bool, bool) {
-	switch oid {
-	case types.T_int8:
-		return 8, true, true
-	case types.T_int16:
-		return 16, true, true
-	case types.T_int32:
-		return 32, true, true
-	case types.T_int64:
-		return 64, true, true
-	case types.T_uint8:
-		return 8, false, true
-	case types.T_uint16:
-		return 16, false, true
-	case types.T_uint32:
-		return 32, false, true
-	case types.T_uint64:
-		return 64, false, true
-	default:
-		return 0, false, false
-	}
-}
-
 func safeRuntimeFilterIntegerCast(source, target types.T, narrowing bool) bool {
-	sourceWidth, sourceSigned, sourceOK := runtimeFilterIntegerWidth(source)
-	targetWidth, targetSigned, targetOK := runtimeFilterIntegerWidth(target)
+	sourceWidth, sourceSigned, sourceOK := keycodec.RuntimeFilterIntegerWidth(source)
+	targetWidth, targetSigned, targetOK := keycodec.RuntimeFilterIntegerWidth(target)
 	if !sourceOK || !targetOK || sourceSigned != targetSigned {
 		return false
 	}
@@ -391,6 +360,14 @@ func serializedRuntimeFilterComponentCol(expr *plan.Expr) *plan.ColRef {
 	return fn.Args[0].GetCol()
 }
 
+// makeSerializedExactRuntimeFilterPair constructs the component contract for
+// an index tuple key. finalProbeExpr is the encoded index-table column;
+// componentProbeExprs are the original indexed columns in encoder order; and
+// buildExpr must be serial/serial_full over the corresponding build slots.
+//
+// A tuple encoder is safe only when every component is raw-compatible. Float
+// signed-zero closure cannot be expressed by adding one final tuple value
+// without a combinatorial expansion, so float components remain unsupported.
 func (builder *QueryBuilder) makeSerializedExactRuntimeFilterPair(
 	tag int32,
 	matchPrefix bool,

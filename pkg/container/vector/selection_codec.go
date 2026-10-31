@@ -26,7 +26,7 @@ import (
 
 func writeSelectedRowsInt32(w io.Writer, value int32, encoded *[4]byte) error {
 	binary.LittleEndian.PutUint32(encoded[:], uint32(value))
-	return writeVectorMarshalBytes(w, encoded[:])
+	return types.WriteFull(w, encoded[:])
 }
 
 func writeSelectedRowsByte(w io.Writer, value byte, encoded *[4]byte) error {
@@ -34,7 +34,7 @@ func writeSelectedRowsByte(w io.Writer, value byte, encoded *[4]byte) error {
 		return typed.WriteByte(value)
 	}
 	encoded[0] = value
-	return writeVectorMarshalBytes(w, encoded[:1])
+	return types.WriteFull(w, encoded[:1])
 }
 
 const (
@@ -303,7 +303,7 @@ func (v *Vector) marshalSelectedRowsTo(
 				return err
 			}
 		}
-		if err := writeVectorMarshalBytes(w, value); err != nil {
+		if err := types.WriteFull(w, value); err != nil {
 			return err
 		}
 	}

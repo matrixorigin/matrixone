@@ -33,8 +33,7 @@ import (
 // terms need no special handling, and prefix iteration works on whole-token
 // (character-boundary) prefixes.
 type termDict struct {
-	fst  *vellum.FST
-	data []byte // backing bytes; vellum.Load references (does not copy) this
+	fst *vellum.FST
 }
 
 // buildTermDictFST encodes ascending (term → value) pairs into vellum FST bytes.
@@ -65,7 +64,7 @@ func loadTermDict(data []byte) (*termDict, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &termDict{fst: fst, data: data}, nil
+	return &termDict{fst: fst}, nil
 }
 
 // get returns the value (posting-offset) for an exact term, or ok=false if the

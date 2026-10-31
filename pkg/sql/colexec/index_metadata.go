@@ -87,7 +87,8 @@ const (
 	INDEX_TYPE_SPATIAL  = "SPATIAL"
 )
 
-func indexMetadataType(unique bool, algo string) string {
+// IndexMetadataType classifies an index for the mo_indexes type column.
+func IndexMetadataType(unique bool, algo string) string {
 	switch {
 	case unique:
 		return INDEX_TYPE_UNIQUE
@@ -303,7 +304,7 @@ func buildInsertIndexMetaBatch(tableId uint64, databaseId uint64, ct *engine.Con
 					if err != nil {
 						return nil, err
 					}
-					err = vector.AppendBytes(vec_type, []byte(indexMetadataType(index.Unique, index.IndexAlgo)), false, proc.Mp())
+					err = vector.AppendBytes(vec_type, []byte(IndexMetadataType(index.Unique, index.IndexAlgo)), false, proc.Mp())
 					if err != nil {
 						return nil, err
 					}

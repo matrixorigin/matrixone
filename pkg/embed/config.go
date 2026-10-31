@@ -19,7 +19,6 @@ import (
 	"fmt"
 	"hash/fnv"
 	"math"
-	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -234,7 +233,7 @@ func (c *ServiceConfig) validate() error {
 		c.Log.StacktraceLevel = zap.PanicLevel.String()
 	}
 
-	if err := c.resolveGossipSeedAddresses(); err != nil {
+	if err := c.LogService.ResolveGossipSeedAddresses(); err != nil {
 		return err
 	}
 	return nil
@@ -356,7 +355,7 @@ func (c *ServiceConfig) createFileService(
 
 	// set distributed cache callbacks
 	for i := range c.FileServices {
-		c.setCacheCallbacks(&c.FileServices[i])
+		c.FileServices[i].Cache.SetRemoteCacheCallback()
 	}
 
 	services := make([]fileservice.FileService, 0, len(c.FileServices))
@@ -485,37 +484,6 @@ func (c *ServiceConfig) getCNServiceConfig() cnservice.Config {
 	return cfg
 }
 
-// memberlist requires all gossip seed addresses to be provided as IP:PORT
-func (c *ServiceConfig) resolveGossipSeedAddresses() error {
-	result := make([]string, 0)
-	for _, addr := range c.LogService.GossipSeedAddresses {
-		host, port, err := net.SplitHostPort(addr)
-		if err != nil {
-			return err
-		}
-		ips, err := net.LookupIP(host)
-		if err != nil {
-			// the configured member may be failed currently, keep the host name anyway since
-			// memberlist would try to resolve it again
-			result = append(result, addr)
-			continue
-		}
-		// only keep IPv4 addresses
-		filtered := make([]string, 0)
-		for _, ip := range ips {
-			if ip.To4() != nil {
-				filtered = append(filtered, ip.String())
-			}
-		}
-		if len(filtered) != 1 {
-			return moerr.NewBadConfigf(context.Background(), "GossipSeedAddress %s", addr)
-		}
-		result = append(result, net.JoinHostPort(filtered[0], port))
-	}
-	c.LogService.GossipSeedAddresses = result
-	return nil
-}
-
 func (c *ServiceConfig) hashNodeID() uint16 {
 	st, err := c.getServiceType()
 	if err != nil {
@@ -573,10 +541,6 @@ func (c *ServiceConfig) mustGetServiceUUID() string {
 		return c.ProxyConfig.UUID
 	}
 	panic("impossible")
-}
-
-func (c *ServiceConfig) setCacheCallbacks(fsConfig *fileservice.Config) {
-	fsConfig.Cache.SetRemoteCacheCallback()
 }
 
 func (c *ServiceConfig) setFileserviceDefaultValues() {

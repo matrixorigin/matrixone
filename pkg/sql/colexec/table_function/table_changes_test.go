@@ -329,7 +329,7 @@ func TestValidateTableChangesWindow(t *testing.T) {
 }
 
 func TestValidateRuntimeTableChangesSourceTemporaryTable(t *testing.T) {
-	err := validateRuntimeTableChangesSource(&plan.TableDef{
+	err := catalog.ValidateTableChangesSource(nil, &plan.TableDef{
 		TableType:   catalog.SystemTemporaryTable,
 		IsTemporary: true,
 	})
@@ -343,17 +343,17 @@ func TestValidateRuntimeTableChangesSourceContracts(t *testing.T) {
 			Pkey:      &plan.PrimaryKeyDef{Names: []string{"id"}, PkeyColName: "id"},
 		}
 	}
-	require.EqualError(t, validateRuntimeTableChangesSource(nil),
+	require.EqualError(t, catalog.ValidateTableChangesSource(nil, nil),
 		"invalid input: table_changes source table does not exist")
 
 	unsupported := valid()
 	unsupported.TableType = catalog.SystemViewRel
-	require.ErrorContains(t, validateRuntimeTableChangesSource(unsupported),
+	require.ErrorContains(t, catalog.ValidateTableChangesSource(nil, unsupported),
 		"table_changes does not support table type")
 
 	partitioned := valid()
 	partitioned.Partition = &plan.Partition{}
-	require.EqualError(t, validateRuntimeTableChangesSource(partitioned),
+	require.EqualError(t, catalog.ValidateTableChangesSource(nil, partitioned),
 		"not supported: table_changes does not support partitioned tables")
 
 	for _, pkey := range []*plan.PrimaryKeyDef{
@@ -363,18 +363,16 @@ func TestValidateRuntimeTableChangesSourceContracts(t *testing.T) {
 	} {
 		withoutPK := valid()
 		withoutPK.Pkey = pkey
-		require.EqualError(t, validateRuntimeTableChangesSource(withoutPK),
+		require.EqualError(t, catalog.ValidateTableChangesSource(nil, withoutPK),
 			"not supported: table_changes requires an explicit primary key")
 	}
 
 	cluster := valid()
 	cluster.TableType = catalog.SystemClusterRel
-	require.EqualError(t, validateRuntimeTableChangesSource(cluster),
+	require.EqualError(t, catalog.ValidateTableChangesSource(nil, cluster),
 		"not supported: table_changes requires cluster table primary keys to include account_id")
 	cluster.Pkey.Names = append(cluster.Pkey.Names, "ACCOUNT_ID")
-	require.NoError(t, validateRuntimeTableChangesSource(cluster))
-	require.True(t, containsTableChangesKey(cluster.Pkey.Names, "account_id"))
-	require.False(t, containsTableChangesKey(cluster.Pkey.Names, "missing"))
+	require.NoError(t, catalog.ValidateTableChangesSource(nil, cluster))
 }
 
 func TestRequiredTableChangesString(t *testing.T) {
@@ -513,7 +511,7 @@ func TestValidateRuntimeTableChangesSourceRejectsMetadataColumnNames(t *testing.
 		catalog.TableChangesAttrSchemaVersion,
 	} {
 		t.Run(name, func(t *testing.T) {
-			err := validateRuntimeTableChangesColumnNames(&plan.TableDef{
+			err := catalog.ValidateTableChangesSource(nil, &plan.TableDef{
 				Cols: []*plan.ColDef{{Name: name}},
 			})
 			require.EqualError(t, err,

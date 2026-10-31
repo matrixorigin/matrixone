@@ -146,13 +146,7 @@ func TestPauseResumeRaceCondition_DataLoss(t *testing.T) {
 	require.NoError(t, err)
 	defer mpool.DeleteMPool(mp)
 
-	// Setup: Create a sinker that tracks data
-	sinker := &raceTestSinker{
-		insertedRows:        make([]int, 0),
-		commitDelayMs:       50, // Simulate slow commit to increase race window
-		commitInProgress:    false,
-		pauseSignalReceived: false,
-	}
+	sinker := &raceTestSinker{}
 
 	updater := &raceTestWatermarkUpdater{
 		watermarks:  make(map[string]types.TS),
@@ -162,33 +156,26 @@ func TestPauseResumeRaceCondition_DataLoss(t *testing.T) {
 
 	tm := NewTransactionManager(sinker, updater, 1, "race-test", "db1", "table1")
 
-	// Test scenario: Insert 5000 rows, pause during commit, check data consistency
+	// Pause while the transaction is about to update its watermark.
 	fromTs := types.BuildTS(100, 1)
-	toTs1 := types.BuildTS(200, 1) // First batch: 3000 rows
-	toTs2 := types.BuildTS(300, 1) // Second batch: 2000 rows
+	toTs1 := types.BuildTS(200, 1)
+	toTs2 := types.BuildTS(300, 1)
 
-	// Step 1: Begin transaction and insert first batch
+	// Step 1: Begin the transaction.
 	err = tm.BeginTransaction(ctx, fromTs, toTs1)
 	require.NoError(t, err)
 
-	sinker.recordInsert(3000)
-
-	// Step 2: Update to second batch
+	// Step 2: Advance the transaction watermark.
 	tracker := tm.GetTracker()
 	tracker.UpdateToTs(toTs2)
-	sinker.recordInsert(2000)
 
 	// Step 3: Set up hooks to control timing precisely
 	// The updater will signal when watermark update is about to happen
-	watermarkUpdateStarted := make(chan struct{}, 1)
+	watermarkUpdateStarted := make(chan struct{})
+	resumeWatermarkUpdate := make(chan struct{})
 	updater.beforeUpdateHook = func() {
-		// Signal that we're about to update watermark
-		select {
-		case watermarkUpdateStarted <- struct{}{}:
-		default:
-		}
-		// Give pause signal a chance to arrive during watermark update
-		time.Sleep(20 * time.Millisecond)
+		close(watermarkUpdateStarted)
+		<-resumeWatermarkUpdate
 	}
 
 	// Step 4: Start commit in background
@@ -204,16 +191,23 @@ func TestPauseResumeRaceCondition_DataLoss(t *testing.T) {
 
 	// FIX: Mark task as paused (simulates MarkTaskPaused call)
 	updater.markTaskPaused("race-test")
-	sinker.signalPause()
 	updater.signalPause()
+	close(resumeWatermarkUpdate)
 	t.Logf("Pause signal sent during watermark update")
 
 	// Wait for commit to complete
 	commitErr := <-commitDone
 	require.NoError(t, commitErr)
+	require.Equal(t, 1, sinker.commits)
 
 	// Step 6: Verify NO watermark updates happened during pause (with fix, should be blocked)
 	updateLog := updater.getUpdateLog()
+	require.Len(t, updateLog, 1)
+	require.Equal(t, toTs2, updateLog[0].watermark)
+	updater.mu.Lock()
+	storedWatermarks := len(updater.watermarks)
+	updater.mu.Unlock()
+	require.Zero(t, storedWatermarks, "paused task must not publish a watermark")
 	for _, update := range updateLog {
 		if update.pausedDuringUpdate {
 			assert.Fail(t,
@@ -224,29 +218,9 @@ func TestPauseResumeRaceCondition_DataLoss(t *testing.T) {
 	}
 }
 
-// raceTestSinker tracks insert operations and simulates commit delays
+// raceTestSinker records whether the transaction reached its commit path.
 type raceTestSinker struct {
-	mu                  sync.Mutex
-	insertedRows        []int
-	commitDelayMs       int
-	commitInProgress    bool
-	pauseSignalReceived bool
-	raceDetected        bool
-}
-
-func (s *raceTestSinker) recordInsert(rows int) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.insertedRows = append(s.insertedRows, rows)
-}
-
-func (s *raceTestSinker) signalPause() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.pauseSignalReceived = true
-	if s.commitInProgress {
-		s.raceDetected = true
-	}
+	commits int
 }
 
 func (u *raceTestWatermarkUpdater) signalPause() {
@@ -276,24 +250,7 @@ func (s *raceTestSinker) SendBegin() {
 }
 
 func (s *raceTestSinker) SendCommit() {
-	s.mu.Lock()
-	s.commitInProgress = true
-	isPaused := s.pauseSignalReceived
-	s.mu.Unlock()
-
-	// Simulate slow commit operation
-	if s.commitDelayMs > 0 {
-		time.Sleep(time.Duration(s.commitDelayMs) * time.Millisecond)
-	}
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.commitInProgress = false
-
-	// Check if pause signal arrived during commit
-	if !isPaused && s.pauseSignalReceived {
-		s.raceDetected = true
-	}
+	s.commits++
 }
 
 func (s *raceTestSinker) SendRollback() {
@@ -302,19 +259,17 @@ func (s *raceTestSinker) SendRollback() {
 
 // raceTestWatermarkUpdater tracks watermark updates and pause state
 type raceTestWatermarkUpdater struct {
-	mu                      sync.Mutex
-	watermarks              map[string]types.TS
-	updateLog               []watermarkUpdate
-	paused                  bool
-	beforeUpdateHook        func()
-	pauseSignalDuringUpdate bool
-	pausedTasks             map[string]time.Time // Tracks paused tasks (matches real implementation)
+	mu               sync.Mutex
+	watermarks       map[string]types.TS
+	updateLog        []watermarkUpdate
+	paused           bool
+	beforeUpdateHook func()
+	pausedTasks      map[string]time.Time // Tracks paused tasks (matches real implementation)
 }
 
 type watermarkUpdate struct {
 	watermark          types.TS
 	pausedDuringUpdate bool
-	timestamp          time.Time
 }
 
 func (u *raceTestWatermarkUpdater) getUpdateLog() []watermarkUpdate {
@@ -342,7 +297,6 @@ func (u *raceTestWatermarkUpdater) UpdateWatermarkOnly(ctx context.Context, key 
 		u.updateLog = append(u.updateLog, watermarkUpdate{
 			watermark:          *watermark,
 			pausedDuringUpdate: false, // Not a violation - properly blocked
-			timestamp:          time.Now(),
 		})
 		return nil // Blocked successfully!
 	}
@@ -352,13 +306,7 @@ func (u *raceTestWatermarkUpdater) UpdateWatermarkOnly(ctx context.Context, key 
 	u.updateLog = append(u.updateLog, watermarkUpdate{
 		watermark:          *watermark,
 		pausedDuringUpdate: u.paused,
-		timestamp:          time.Now(),
 	})
-
-	// Check if pause was signaled during this update
-	if u.paused {
-		u.pauseSignalDuringUpdate = true
-	}
 
 	return nil
 }

@@ -281,7 +281,6 @@ func (e *InternalSQLExecutor) ExecSQL(
 	backoff := &defChangedBackoff{
 		baseInterval: e.retryOpt.RetryInterval,
 		getLastErr:   func() error { return lastErr },
-		getAttempt:   func() int { return attemptCount },
 	}
 
 	policy := Policy{
@@ -433,7 +432,6 @@ func (e *InternalSQLExecutor) ExecSQLInDatabase(
 	backoff := &defChangedBackoff{
 		baseInterval: e.retryOpt.RetryInterval,
 		getLastErr:   func() error { return lastErr },
-		getAttempt:   func() int { return attemptCount },
 	}
 
 	policy := Policy{
@@ -625,56 +623,11 @@ func (r *InternalResult) Scan(dest ...interface{}) error {
 		}
 
 		if vec.IsNull(uint64(rowIdx)) {
-			// Handle NULL values - set destination to nil or zero value
+			// NULL resets byte slices; other destinations are left unchanged.
 			switch d := dest[i].(type) {
-			// case *string:
-			// 	*d = ""
 			case *[]byte:
 				*d = nil
-			// case *sql.NullString:
-			// 	d.Valid = false
-			// 	d.String = ""
-			// case *sql.NullInt16:
-			// 	d.Valid = false
-			// 	d.Int16 = 0
-			// case *sql.NullInt32:
-			// 	d.Valid = false
-			// 	d.Int32 = 0
-			// case *sql.NullInt64:
-			// 	d.Valid = false
-			// 	d.Int64 = 0
-			// case *sql.NullBool:
-			// 	d.Valid = false
-			// 	d.Bool = false
-			// case *bool:
-			// 	*d = false
-			// case *sql.NullFloat64:
-			// 	d.Valid = false
-			// 	d.Float64 = 0
-			// case *sql.NullTime:
-			// 	d.Valid = false
-			// 	d.Time = time.Time{}
-			// case *int8:
-			// 	*d = 0
-			// case *int16:
-			// 	*d = 0
-			// case *int32:
-			// 	*d = 0
-			// case *int64:
-			// 	*d = 0
-			// case *uint8:
-			// 	*d = 0
-			// case *uint16:
-			// 	*d = 0
-			// case *uint32:
-			// 	*d = 0
-			// case *uint64:
-			// 	*d = 0
-			// case *types.TS:
-			// 	*d = types.TS{}
 			default:
-				// For other types, try to set to nil if possible
-				// This is a simplified implementation
 			}
 			continue
 		}
@@ -803,7 +756,6 @@ var _ SQLExecutor = (*InternalSQLExecutor)(nil)
 type defChangedBackoff struct {
 	baseInterval time.Duration
 	getLastErr   func() error
-	getAttempt   func() int
 }
 
 // Next implements BackoffStrategy

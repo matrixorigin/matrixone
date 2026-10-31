@@ -1303,3 +1303,25 @@ func rewriteDataFilesParquetInt64Values(t *testing.T, data []byte) []int64 {
 	}
 	return out
 }
+
+func TestRewriteDataFilesPositionDeleteRejectsRepeatedOrNullValues(t *testing.T) {
+	repeatedText := parquet.Row{
+		parquet.ValueOf("first").Level(0, 1, 0),
+		parquet.ValueOf("second").Level(1, 1, 0),
+	}
+	_, ok := rewriteDataFilesRowString(repeatedText, 0)
+	require.False(t, ok)
+
+	repeatedPosition := parquet.Row{
+		parquet.Int64Value(1).Level(0, 1, 0),
+		parquet.Int64Value(2).Level(1, 1, 0),
+	}
+	_, ok = rewriteDataFilesRowInt64(repeatedPosition, 0)
+	require.False(t, ok)
+
+	null := parquet.Row{parquet.NullValue().Level(0, 0, 0)}
+	_, ok = rewriteDataFilesRowString(null, 0)
+	require.False(t, ok)
+	_, ok = rewriteDataFilesRowInt64(null, 0)
+	require.False(t, ok)
+}

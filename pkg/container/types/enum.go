@@ -169,12 +169,9 @@ func parseEnumNameWithContext(ctx context.Context, elems []string, name string) 
 
 // ParseEnumValue return item index with special number.
 func ParseEnumValue(enumStr string, number uint16) (Enum, error) {
-	elems := strings.Split(enumStr, ",")
-	return parseEnumValue(elems, number)
-}
-func parseEnumValue(elems []string, number uint16) (Enum, error) {
-	if number == 0 || number > uint16(len(elems)) {
-		return 0, moerr.NewInternalErrorNoCtxf("convert to MySQL enum failed: number %d overflow enum boundary [1, %d]", number, len(elems))
+	count := strings.Count(enumStr, ",") + 1
+	if number == 0 || number > uint16(count) {
+		return 0, moerr.NewInternalErrorNoCtxf("convert to MySQL enum failed: number %d overflow enum boundary [1, %d]", number, count)
 	}
 
 	return Enum(number), nil

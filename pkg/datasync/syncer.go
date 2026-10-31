@@ -43,8 +43,6 @@ var (
 
 type syncer struct {
 	common
-	ctx context.Context
-
 	// producer worker dequeues the items from the data queue and
 	// write the entries which is storage related to the datasync
 	// shard.
@@ -74,7 +72,6 @@ func NewDataSync(
 	fs fileservice.FileService,
 ) (logservice.DataSync, error) {
 	ss := &syncer{
-		ctx: context.Background(),
 		common: common{
 			stopper:        stopper,
 			log:            rt.Logger().With(zap.String("module", "datasync")),
