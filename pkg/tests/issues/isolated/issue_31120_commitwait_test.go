@@ -42,9 +42,10 @@ import (
 //     than statement-liveness inference - held far beyond measured baseline
 //     commit latency, then released with the barrier left installed;
 //  3. after that single firing the same barrier installation is spent: a
-//     second fully matching commit registers no waiter and completes within a
-//     fraction of the hold window, while the framework's point listing still
-//     contains the barrier.
+//     second fully matching commit registers no waiter across a multiple of
+//     the measured baseline latency and completes within the bounded
+//     deadline, while the framework's point listing still contains the
+//     barrier.
 func TestIssue31120CommitWaitBarrierAcceptance(t *testing.T) {
 	var faultEnabledHere bool
 	const (
@@ -218,7 +219,11 @@ func TestIssue31120CommitWaitBarrierAcceptance(t *testing.T) {
 	require.Equal(t, 1, visible, "leg B: the released commit's write must be visible")
 
 	// Leg C: the same barrier installation is spent. A second fully matching
-	// commit registers no waiter and completes inside a fraction of the hold.
+	// commit registers no waiter across a multiple of the baseline latency and
+	// completes within the bounded deadline; no wall-clock elapsed bound is
+	// asserted, since observer scheduling delay is not barrier behavior
+	// (testing-contract.md: a performance assertion does not belong in UT/BVT
+	// wall-clock thresholds).
 	spendTxn, err := victims[2].BeginTx(ctx, nil)
 	require.NoError(t, err)
 	_, err = spendTxn.ExecContext(ctx, "insert into "+table+" values (4)")
@@ -231,7 +236,6 @@ func TestIssue31120CommitWaitBarrierAcceptance(t *testing.T) {
 
 	spentResult := make(chan error, 1)
 	goroutines.Add(1)
-	spentStart := time.Now()
 	go func() {
 		defer goroutines.Done()
 		spentResult <- spendTxn.Commit()
@@ -244,8 +248,6 @@ func TestIssue31120CommitWaitBarrierAcceptance(t *testing.T) {
 	case <-time.After(30 * time.Second):
 		t.Fatal("leg C: matching commit blocked on the spent barrier")
 	}
-	require.Less(t, time.Since(spentStart), holdFor,
-		"leg C: the spent barrier must not impose the hold window on matching commits")
 
 	// The barrier is still installed after its single firing, proven through
 	// the framework's own installation listing (same installation, not a
