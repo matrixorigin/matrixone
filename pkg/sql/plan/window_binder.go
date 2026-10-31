@@ -1957,14 +1957,22 @@ func validateEwmWindowCallSignatures(
 			"invalid argument: ewm statistics require a declared decay (alpha or 'halflife' half-life)")
 	}
 	// §9: decay and policy arguments are constant per execution — a
-	// prepare-time marker, a session variable or a real-time
-	// expression (SECOND(CURRENT_TIMESTAMP()) and kin) resolves to a
-	// constant at every EXECUTE and the prepared caches are gated
+	// prepare-time marker, a session variable, a real-time expression
+	// (SECOND(CURRENT_TIMESTAMP()) and kin), and a statement-level
+	// constant expression (a constant CASE, or IFNULL which binding
+	// lowers to CASE) each resolve to one row-independent value at
+	// every execution, so admission is judged with runtime-constant
+	// semantics: function.IsRuntimeConstant reports input-row
+	// independence, while the foldability policy of IsConstant rejects
+	// every CASE node — including fully constant ones, which would
+	// never reach the per-execution configuration evaluation that
+	// already owns them. The prepared caches are gated
 	// (PreparedPlanHasEwmParams) so each execution rebuilds its
 	// configuration from a fresh evaluation; column-dependent
-	// expressions are still rejected here.
+	// expressions, volatile functions and nested aggregate/window calls
+	// are still rejected here.
 	for i := valueArgs; i < len(f.Args); i++ {
-		if f.Args[i].GetP() == nil && !function.IsConstant(f.Args[i], true) {
+		if !function.IsRuntimeConstant(f.Args[i]) {
 			return moerr.NewInvalidInput(ctx,
 				"ewm statistics require constant decay and policy arguments")
 		}

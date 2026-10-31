@@ -386,6 +386,62 @@ func TestEwmWindowOutputsRemainNullable(t *testing.T) {
 	}
 }
 
+// TestEwmConstantExpressionConfigs (review-22 P1): §4 admits constant
+// EXPRESSIONS at every decay/policy position, and binding lowers IFNULL
+// to CASE (CASE WHEN ISNULL(a) THEN b ELSE a), so admission is judged by
+// input-row independence at each execution (function.IsRuntimeConstant):
+// a statement-constant CASE or IFNULL binds like its literal equivalent
+// and reaches the per-execution configuration evaluation, while a CASE
+// that reads an input column stays the §7 non-constant rejection. The
+// foldability check (IsConstant) rejects every CASE node, including
+// fully constant ones — the reviewed bug.
+func TestEwmConstantExpressionConfigs(t *testing.T) {
+	for _, sql := range []string{
+		// the review's witness: a constant CASE in the adjust position
+		"select ewmmean(n_nationkey, 0.5, case when true then false else true end) over (order by n_nationkey) from nation",
+		// constant CASE spellings in every other policy position
+		"select ewmmean(n_nationkey, 0.5, false, case when false then true else false end) over (order by n_nationkey) from nation",
+		"select ewmmean(n_nationkey, 0.5, false, false, case when true then 2 else 1 end) over (order by n_nationkey) from nation",
+		// constant CASE in the decay position resolves at construction
+		"select ewmmean(n_nationkey, case when 1 = 1 then 0.5 else 0.25 end) over (order by n_nationkey) from nation",
+		// IFNULL lowers to CASE and shares the constant admission
+		"select ewmmean(n_nationkey, 0.5, ifnull(null, false)) over (order by n_nationkey) from nation",
+		"select ewmmean(n_nationkey, ifnull(null, 0.5)) over (order by n_nationkey) from nation",
+		// cov/corr shift the constant positions by one argument
+		"select ewmcov(n_nationkey, n_regionkey, case when true then 0.5 else 0.25 end, ifnull(null, true)) over (order by n_nationkey) from nation",
+	} {
+		t.Run("", func(t *testing.T) {
+			logicPlan, err := runOneStmt(
+				NewMockOptimizer(true, newPlanTestProcess(t)), t, sql)
+			require.NoError(t, err,
+				"a constant expression is input-row independent and binds like its literal equivalent")
+			require.NotEmpty(t, logicPlan.GetQuery().Nodes)
+		})
+	}
+	rejections := []struct {
+		name string
+		sql  string
+	}{
+		{"column-dependent case policy",
+			"select ewmmean(n_nationkey, 0.5, case when n_regionkey > 0 then true else false end) over (order by n_nationkey) from nation"},
+		{"column-dependent case decay",
+			"select ewmmean(n_nationkey, case when n_regionkey > 0 then 0.5 else 0.25 end) over (order by n_nationkey) from nation"},
+		{"column flows through lowered ifnull",
+			"select ewmmean(n_nationkey, 0.5, ifnull(null, n_regionkey > 0)) over (order by n_nationkey) from nation"},
+		{"volatile case branch",
+			"select ewmmean(n_nationkey, 0.5, case when true then false else rand() > 0.5 end) over (order by n_nationkey) from nation"},
+	}
+	for _, tc := range rejections {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := runOneStmt(
+				NewMockOptimizer(true, newPlanTestProcess(t)), t, tc.sql)
+			require.Error(t, err)
+			require.Contains(t, strings.ToLower(err.Error()),
+				strings.ToLower("ewm statistics require constant decay and policy arguments"))
+		})
+	}
+}
+
 // TestEwmMarkerDecayBindsDecimal256HalfLife (ninth review round): the
 // tag-form half-life position behind an unresolved decay marker shares
 // the numeric classification of the literal tag form (§4 position h;

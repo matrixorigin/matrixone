@@ -75,6 +75,21 @@ insert into pol values (1, 1, 1),(2, 1, 2);
 select id, ewmmean(x, 0.5, k > 1) over (order by k) from pol order by id;
 drop table pol;
 
+-- constant-expression configs (review 22): §4 admits constant
+-- expressions at every decay/policy position, and binding lowers IFNULL
+-- to CASE, so a statement-constant CASE/IFNULL must publish exactly like
+-- its literal equivalent, while a column-dependent CASE keeps the §7
+-- rejection
+select id, ewmmean(x, 0.5, case when true then false else true end) over (order by id) from s order by id;
+select id, ewmmean(x, case when 1 = 1 then 0.5 else 0.25 end) over (order by id) from s order by id;
+select id, ewmmean(x, 0.5, ifnull(null, false)) over (order by id) from s order by id;
+select id, ewmvar(x, 0.5, ifnull(null, false)) over (order by id) from s order by id;
+select id, ewmmean(x, case when true then 0.5 else 0.25 end, case when false then true else false end) over (order by id) from s order by id;
+select id, ewmmean(x, 0.5, case when id > 2 then true else false end) over (order by id) from s order by id;
+select id, ewmmean(x, case when id > 2 then 0.5 else 0.25 end) over (order by id) from s order by id;
+select id, ewmmean(x, 0.5, ifnull(null, id > 2)) over (order by id) from s order by id;
+select 1 as recover_case;
+
 -- ties_keys122: a tied batch shares one group-post value at every row
 create table t122 (id bigint primary key, k bigint, x double);
 insert into t122 values (1, 1, 0),(2, 2, 10),(3, 2, 20),(4, 3, 30);

@@ -266,6 +266,128 @@ func TestConstructEwmConfig(t *testing.T) {
 	}
 }
 
+// ewmConstFnTree binds a constant function tree exactly as the planner
+// leaves it for the configuration positions (CASE is one: the fold rules
+// keep every CASE node unfolded, and binding lowers IFNULL to CASE), so
+// constructEwmConfig must evaluate the tree against the executing
+// process rather than read a folded literal.
+func ewmConstFnTree(
+	t *testing.T, proc *process.Process, name string,
+	branches []*plan.Expr, argTypes ...types.Type,
+) *plan.Expr {
+	t.Helper()
+	resolved, err := function.GetFunctionByName(proc.Ctx, name, argTypes)
+	require.NoError(t, err)
+	return &plan.Expr{
+		Typ: argTypes[len(argTypes)-1].PlanType(),
+		Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{
+				ObjName: name, Obj: resolved.GetEncodedOverloadID()},
+			Args: branches,
+		}},
+	}
+}
+
+// TestEwmConstantCaseConfigEvaluation (review-22 P1): a statement-level
+// constant CASE — and IFNULL, lowered by binding to CASE — is a
+// runtime-constant decay/policy expression the binder now admits; this
+// pins the per-execution evaluation they were always promised
+// (§9): the unfolded tree evaluates against the executing process, so
+// the same CASE spelling resolves to the same encoded configuration as
+// its literal equivalent, at every reachable position and in both
+// decay modes.
+func TestEwmConstantCaseConfigEvaluation(t *testing.T) {
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	boolType := types.T_bool.ToType()
+	floatType := types.T_float64.ToType()
+	varcharType := types.T_varchar.ToType()
+	boolLit := func(v bool) *plan.Expr { return plan2.MakePlan2BoolConstExprWithType(v) }
+	floatLit := func(v float64) *plan.Expr {
+		return plan2.MakePlan2Float64ConstExprWithType(v)
+	}
+
+	// case when true then false else true end — the review's policy
+	// witness — in the adjust position: the constant-CASE call must
+	// decode exactly like ewmmean(x, 0.5, false)
+	constCasePolicy := ewmConstFnTree(t, proc, "case",
+		[]*plan.Expr{boolLit(true), boolLit(false), boolLit(true)},
+		boolType, boolType, boolType)
+	_, config, err := constructEwmConfig(&plan.Function{
+		Func: &plan.ObjectRef{ObjName: plan2.NameEwmMean},
+		Args: []*plan.Expr{ewmValueArg(), floatLit(0.5), constCasePolicy},
+	}, proc)
+	require.NoError(t, err)
+	cfg, err := aggexec.DecodeEwmConfig(config)
+	require.NoError(t, err)
+	require.Equal(t, aggexec.EwmModeRow, cfg.Mode)
+	require.Equal(t, 0.5, cfg.Alpha)
+	require.False(t, cfg.Adjust, "the constant CASE policy must resolve to adjust=false")
+
+	// ifnull(null, false) in the adjust position: binding lowers IFNULL
+	// to case(isnull(x), y, x); the lowered shape shares the admission
+	nullBoolLit := &plan.Expr{
+		Typ:  boolType.PlanType(),
+		Expr: &plan.Expr_Lit{Lit: &plan.Literal{Isnull: true}},
+	}
+	isnullResolved, err := function.GetFunctionByName(proc.Ctx, "isnull", []types.Type{boolType})
+	require.NoError(t, err)
+	isnullNode := &plan.Expr{
+		Typ: boolType.PlanType(),
+		Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{
+				ObjName: "isnull", Obj: isnullResolved.GetEncodedOverloadID()},
+			Args: []*plan.Expr{nullBoolLit},
+		}},
+	}
+	constIfnullPolicy := ewmConstFnTree(t, proc, "case",
+		[]*plan.Expr{isnullNode, boolLit(false), nullBoolLit},
+		boolType, boolType, boolType)
+	_, config, err = constructEwmConfig(&plan.Function{
+		Func: &plan.ObjectRef{ObjName: plan2.NameEwmMean},
+		Args: []*plan.Expr{ewmValueArg(), floatLit(0.5), constIfnullPolicy},
+	}, proc)
+	require.NoError(t, err)
+	cfg, err = aggexec.DecodeEwmConfig(config)
+	require.NoError(t, err)
+	require.False(t, cfg.Adjust, "ifnull(null, false) must resolve to adjust=false")
+
+	// case when true then 0.5 else 0.25 end in the decay position: the
+	// numeric branch carries the alpha, exactly like the literal 0.5
+	constCaseDecay := ewmConstFnTree(t, proc, "case",
+		[]*plan.Expr{boolLit(true), floatLit(0.5), floatLit(0.25)},
+		boolType, floatType, floatType)
+	_, config, err = constructEwmConfig(&plan.Function{
+		Func: &plan.ObjectRef{ObjName: plan2.NameEwmVar},
+		Args: []*plan.Expr{ewmValueArg(), constCaseDecay},
+	}, proc)
+	require.NoError(t, err)
+	cfg, err = aggexec.DecodeEwmConfig(config)
+	require.NoError(t, err)
+	require.Equal(t, aggexec.EwmModeRow, cfg.Mode)
+	require.Equal(t, 0.5, cfg.Alpha, "the constant CASE decay evaluates to its taken branch")
+
+	// the event-time form resolves identically behind the tag spelled
+	// as a constant CASE: the tag form keeps its own ORDER BY verdict
+	// at the per-execution boundary (TestValidateEwmWindowConfigsAfterModeResolution)
+	constCaseTag := ewmConstFnTree(t, proc, "case",
+		[]*plan.Expr{
+			boolLit(true),
+			plan2.MakePlan2StringConstExprWithType("halflife"),
+			plan2.MakePlan2StringConstExprWithType("x")},
+		boolType, varcharType, varcharType)
+	_, config, err = constructEwmConfig(&plan.Function{
+		Func: &plan.ObjectRef{ObjName: plan2.NameEwmCov},
+		Args: []*plan.Expr{ewmValueArg(), ewmValueArg(), constCaseTag, floatLit(3600)},
+	}, proc)
+	require.NoError(t, err)
+	cfg, err = aggexec.DecodeEwmConfig(config)
+	require.NoError(t, err)
+	require.Equal(t, aggexec.EwmModeTime, cfg.Mode)
+	require.Equal(t, 3600.0, cfg.HalfLife)
+}
+
 // TestValidateEwmWindowConfigsAfterModeResolution: after the per-execution
 // configuration boundary resolves the decay mode, an event-time
 // configuration must satisfy its ORDER BY shape (exactly one ascending

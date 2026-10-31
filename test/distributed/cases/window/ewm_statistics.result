@@ -116,6 +116,45 @@ insert into pol values (1, 1, 1),(2, 1, 2);
 select id, ewmmean(x, 0.5, k > 1) over (order by k) from pol order by id;
 invalid input: ewm statistics require constant decay and policy arguments
 drop table pol;
+select id, ewmmean(x, 0.5, case when true then false else true end) over (order by id) from s order by id;
+➤ id[-5,64,0]  ¦  ewmmean(x, 0.5, case when true then false else true end) over (order by id)[8,53,31]  𝄀
+1  ¦  1.0  𝄀
+2  ¦  1.5  𝄀
+3  ¦  2.25  𝄀
+4  ¦  3.125
+select id, ewmmean(x, case when 1 = 1 then 0.5 else 0.25 end) over (order by id) from s order by id;
+➤ id[-5,64,0]  ¦  ewmmean(x, case when 1 = 1 then 0.5 else 0.25 end) over (order by id)[8,53,31]  𝄀
+1  ¦  1.0  𝄀
+2  ¦  1.6666666666666667  𝄀
+3  ¦  2.4285714285714284  𝄀
+4  ¦  3.2666666666666666
+select id, ewmmean(x, 0.5, ifnull(null, false)) over (order by id) from s order by id;
+➤ id[-5,64,0]  ¦  ewmmean(x, 0.5, ifnull(null, false)) over (order by id)[8,53,31]  𝄀
+1  ¦  1.0  𝄀
+2  ¦  1.5  𝄀
+3  ¦  2.25  𝄀
+4  ¦  3.125
+select id, ewmvar(x, 0.5, ifnull(null, false)) over (order by id) from s order by id;
+➤ id[-5,64,0]  ¦  ewmvar(x, 0.5, ifnull(null, false)) over (order by id)[8,53,31]  𝄀
+1  ¦  0.0  𝄀
+2  ¦  0.25  𝄀
+3  ¦  0.6875  𝄀
+4  ¦  1.109375
+select id, ewmmean(x, case when true then 0.5 else 0.25 end, case when false then true else false end) over (order by id) from s order by id;
+➤ id[-5,64,0]  ¦  ewmmean(x, case when true then 0.5 else 0.25 end, case when false then true else false end) over (order by id)[8,53,31]  𝄀
+1  ¦  1.0  𝄀
+2  ¦  1.5  𝄀
+3  ¦  2.25  𝄀
+4  ¦  3.125
+select id, ewmmean(x, 0.5, case when id > 2 then true else false end) over (order by id) from s order by id;
+invalid input: ewm statistics require constant decay and policy arguments
+select id, ewmmean(x, case when id > 2 then 0.5 else 0.25 end) over (order by id) from s order by id;
+invalid input: ewm statistics require constant decay and policy arguments
+select id, ewmmean(x, 0.5, ifnull(null, id > 2)) over (order by id) from s order by id;
+invalid input: ewm statistics require constant decay and policy arguments
+select 1 as recover_case;
+➤ recover_case[-5,64,0]  𝄀
+1
 create table t122 (id bigint primary key, k bigint, x double);
 insert into t122 values (1, 1, 0),(2, 2, 10),(3, 2, 20),(4, 3, 30);
 select id, ewmmean(x, 0.5, true) over (order by k) from t122 order by id;
