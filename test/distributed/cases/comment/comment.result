@@ -20,7 +20,7 @@ invalid input: comment for column 'col3' is too long
 show create table t2;
 no such table comment.t2
 drop table t2;
-no such table comment.t2
+Unknown table 'comment.t2'
 drop table if exists t3;
 create table t3(
 col1 int comment '"这是第一列"/',
@@ -76,7 +76,7 @@ invalid input: comment for field 't7' is too long
 show create table t7;
 no such table comment.t7
 drop table t7;
-no such table comment.t7
+Unknown table 'comment.t7'
 drop table if exists t8;
 create table t8(
 col1 int comment '这是第一列',
