@@ -7122,7 +7122,7 @@ func buildRenameTable(stmt *tree.RenameTable, ctx CompilerContext) (*Plan, error
 		} else if removed[srcKey] {
 			return nil, moerr.NewNoSuchTable(ctx.GetContext(), schemaName, tableName)
 		} else {
-			objRef, tableDef, err = ctx.Resolve(schemaName, tableName, nil)
+			objRef, tableDef, err = ctx.ResolveWithoutTemporaryAlias(schemaName, tableName, nil)
 			if err != nil {
 				return nil, err
 			}
@@ -7183,7 +7183,7 @@ func buildRenameTable(stmt *tree.RenameTable, ctx CompilerContext) (*Plan, error
 						return nil, moerr.NewTableAlreadyExists(ctx.GetContext(), newName)
 					}
 					if !removed[dstKey] {
-						_, existDef, err := ctx.Resolve(schemaName, newName, nil)
+						_, existDef, err := ctx.ResolveWithoutTemporaryAlias(schemaName, newName, nil)
 						if err != nil {
 							return nil, err
 						}
