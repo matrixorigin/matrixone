@@ -17,24 +17,18 @@ package embed
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"fmt"
 	"os"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/bootstrap"
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
-	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_18"
-	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_4"
-	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_5"
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_6"
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_7"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/util/sysview"
@@ -56,9 +50,8 @@ func preChangeCurrentColumnsDDL() string {
 }
 
 // newColumnsUpgradeCluster starts a generation with the CN handle list
-// replaced by handles: truncating the list at v4_0_7 makes bootstrap finalize
-// the cluster READY at the frozen consolidated 4.0.7/41 terminal, exactly
-// like a pre-change deployment.
+// replaced by handles: the source fixture uses a registry ending at the released 4.0.6/5 identity.
+// This stages a catalog on the current engine; it is not an old-binary test.
 func newColumnsUpgradeCluster(
 	t *testing.T,
 	setupCtx context.Context,
@@ -83,25 +76,20 @@ func newColumnsUpgradeCluster(
 	return c
 }
 
-// columnsPredecessorChain is the consolidated chain up to the frozen terminal.
-func columnsPredecessorChain() []bootstrap.VersionHandle {
-	return []bootstrap.VersionHandle{v4_0_4.Handler, v4_0_5.Handler, v4_0_6.Handler, v4_0_7.Handler}
-}
-
 // Note on background maintenance: the periodic COLUMNS/TABLES repair walker
 // was removed upstream (#31662); the versioned 4.0.7 entry and CREATE ACCOUNT
 // initialization now own convergence. These scenario clusters therefore prove
 // entry attribution with no suppression option at all: nothing besides the
-// v4_0_18 crossing entry recreates a staged predecessor definition.
+// v4_0_7 crossing entry recreates a staged predecessor definition.
 
-// stageReady407Predecessor runs generation one on the truncated chain, then
+// stageReleasedMetadataPredecessor runs generation one on the truncated chain, then
 // installs the probe fixtures and the exact pre-change persisted COLUMNS
 // definition in the sys tenant and in columns_upgrade_tenant. The returned
-// stopped cluster holds the READY-4.0.7/41 predecessor content the v4_0_18
+// stopped cluster holds the READY-4.0.6/5 predecessor content the v4_0_7
 // entry must recreate.
-func stageReady407Predecessor(t *testing.T, budget time.Duration) (Cluster, func() (context.Context, error)) {
+func stageReleasedMetadataPredecessor(t *testing.T, budget time.Duration) (Cluster, func() (context.Context, error)) {
 	t.Helper()
-	c := newColumnsUpgradeCluster(t, t.Context(), columnsPredecessorChain())
+	c := newColumnsUpgradeCluster(t, t.Context(), columns46ShapeChain())
 	start, cleanup := newRecoveryClusterStarterWithBudget(t.Context(), c.Start, time.Now, budget)
 	t.Cleanup(cleanup)
 	ctx, err := start()
@@ -162,6 +150,7 @@ func createColumnsFixtures(t *testing.T, ctx context.Context, cn ServiceOperator
 		defer db.Close()
 		for _, statement := range []string{
 			"create database columns_upgrade",
+			"create table columns_upgrade.prefixes (id int primary key, v varchar(20), key prefix_key(v(4)), key whole_key(v))",
 			"create table columns_upgrade.zf (x decimal(10,2) unsigned zerofill)",
 			"create table columns_upgrade.u (x decimal(10,2) unsigned)",
 			"create table columns_upgrade.plain (x decimal(10,2))",
@@ -179,6 +168,7 @@ func createColumnsFixtures(t *testing.T, ctx context.Context, cn ServiceOperator
 		defer db.Close()
 		for _, statement := range []string{
 			"create database columns_upgrade",
+			"create table columns_upgrade.prefixes (id int primary key, v varchar(20), key prefix_key(v(4)), key whole_key(v))",
 			"create table columns_upgrade.zf (x decimal(10,2) unsigned zerofill)",
 			"create table columns_upgrade.u (x decimal(10,2) unsigned)",
 			"insert into columns_upgrade.u values (1.5)",
@@ -200,8 +190,8 @@ func columnsTenantSQLClient(t *testing.T, cn ServiceOperator) *sql.DB {
 
 // downgradeColumnsDefinitions restores the exact pre-change persisted COLUMNS
 // definition in the sys tenant and in columns_upgrade_tenant: the cluster
-// then holds the predecessor content (READY 4.0.7/41, undecorated template)
-// that a carried-forward catalog presents to the v4_0_18 entry.
+// then holds the predecessor content (READY 4.0.6/5, undecorated template)
+// that a carried-forward catalog presents to the v4_0_7 entry.
 func downgradeColumnsDefinitions(t *testing.T, ctx context.Context, cn ServiceOperator) {
 	t.Helper()
 	db := recoverySQLClient(t, cn)
@@ -215,6 +205,8 @@ func downgradeColumnsDefinitions(t *testing.T, ctx context.Context, cn ServiceOp
 		for _, statement := range []string{
 			"DROP VIEW IF EXISTS information_schema.COLUMNS;",
 			preChangeCurrentColumnsDDL(),
+			"DROP VIEW IF EXISTS information_schema.STATISTICS;",
+			sysview.InformationSchemaStatisticsDDL,
 		} {
 			res, err := exec.Exec(ctx, statement,
 				executor.Options{}.WithDatabase(catalog.MO_CATALOG).WithAccountID(accountID).WithWaitCommittedLogApplied())
@@ -239,11 +231,30 @@ func requireColumnsDecorated(t *testing.T, ctx context.Context, db *sql.DB, tabl
 }
 
 // requireDecoratedColumns asserts the decorated rendering in both tenants.
+func requireIndexPrefixMetadata(t *testing.T, ctx context.Context, db *sql.DB) {
+	t.Helper()
+	for _, tc := range []struct {
+		name   string
+		valid  bool
+		length int64
+	}{
+		{"prefix_key", true, 4}, {"whole_key", false, 0},
+	} {
+		var length sql.NullInt64
+		require.NoError(t, db.QueryRowContext(ctx, "select sub_part from information_schema.statistics where table_schema='columns_upgrade' and table_name='prefixes' and index_name=?", tc.name).Scan(&length))
+		require.Equal(t, tc.valid, length.Valid, tc.name)
+		if tc.valid {
+			require.Equal(t, tc.length, length.Int64)
+		}
+	}
+}
+
 func requireDecoratedColumns(t *testing.T, ctx context.Context, cn ServiceOperator) {
 	t.Helper()
 	func() {
 		db := recoverySQLClient(t, cn)
 		defer db.Close()
+		requireIndexPrefixMetadata(t, ctx, db)
 		requireColumnsDecorated(t, ctx, db, map[string]string{
 			"plain": "decimal(10,2)",
 			"u":     "decimal(10,2) unsigned",
@@ -253,6 +264,7 @@ func requireDecoratedColumns(t *testing.T, ctx context.Context, cn ServiceOperat
 	func() {
 		db := columnsTenantSQLClient(t, cn)
 		defer db.Close()
+		requireIndexPrefixMetadata(t, ctx, db)
 		requireColumnsDecorated(t, ctx, db, map[string]string{
 			"u":  "decimal(10,2) unsigned",
 			"zf": "decimal(10,2) unsigned zerofill",
@@ -287,15 +299,15 @@ func requireColumnsEntryNoop(t *testing.T, ctx context.Context, cn ServiceOperat
 }
 
 // requireColumnsUpgradeComplete pins the completed forward route: the final
-// version marker is Ready at 4.0.18/1, and the single 4.0.7 -> 4.0.18 step is
+// version marker is Ready at 4.0.7/41, and the single 4.0.6 -> 4.0.7 step is
 // Ready with converged tenant counters.
 func requireColumnsUpgradeComplete(t *testing.T, ctx context.Context, cn ServiceOperator) []uint64 {
 	t.Helper()
-	final, steps := readRecoveryCatalog(t, ctx, cn, v4_0_18.Handler.Metadata())
+	final, steps := readRecoveryCatalog(t, ctx, cn, v4_0_7.Handler.Metadata())
 	require.Equal(t, versions.StateReady, final.State)
 	require.Len(t, steps, 1)
-	require.Equal(t, "4.0.7", steps[0].FromVersion)
-	require.Equal(t, "4.0.18", steps[0].ToVersion)
+	require.Equal(t, "4.0.6", steps[0].FromVersion)
+	require.Equal(t, "4.0.7", steps[0].ToVersion)
 	require.Equal(t, versions.StateReady, steps[0].State)
 	require.Equal(t, int32(2), steps[0].TotalTenant)
 	require.Equal(t, steps[0].TotalTenant, steps[0].ReadyTenant)
@@ -304,25 +316,48 @@ func requireColumnsUpgradeComplete(t *testing.T, ctx context.Context, cn Service
 
 // TestColumnsUpgradeAutomaticScenarioCompletion is validation item (iv)'s
 // startup-owned completion leg on the integrated source: from the
-// READY-4.0.7/41 predecessor with the undecorated persisted template, a
-// binary carrying the v4_0_18 forward handle drives the route to Ready before
+// READY-4.0.6/5 predecessor with the undecorated persisted template, a
+// binary carrying the v4_0_7 forward handle drives the route to Ready before
 // SQL admission, recreates every account's COLUMNS with the decorated
 // definition, and a restart replays the route as a no-op.
 func TestColumnsUpgradeAutomaticScenarioCompletion(t *testing.T) {
 	require.NoError(t, CloseBaseClusterTests())
 	require.NoError(t, CloseSingleCNBaseClusterTests())
-	c, start := stageReady407Predecessor(t, 5*time.Minute)
+	c, start := stageReleasedMetadataPredecessor(t, 5*time.Minute)
 	var ctx context.Context
 	var err error
 
-	setRecoveryCNHandles(c, append(columnsPredecessorChain(), v4_0_18.Handler), true)
+	setRecoveryCNHandles(c, append(columns46ShapeChain(), v4_0_7.Handler), true)
 	ctx, err = start()
 	require.NoError(t, err)
 	cn, err := c.GetCNService(0)
 	require.NoError(t, err)
 	stepIDs := requireColumnsUpgradeComplete(t, ctx, cn)
+	func() {
+		db := recoverySQLClient(t, cn)
+		defer db.Close()
+		_, err := db.ExecContext(ctx, "create account metadata_fresh admin_name 'root' identified by '111'")
+		require.NoError(t, err)
+		fresh, err := sql.Open("mysql", fmt.Sprintf("metadata_fresh#root:111@tcp(127.0.0.1:%d)/", cn.GetServiceConfig().CN.Frontend.Port))
+		require.NoError(t, err)
+		defer fresh.Close()
+		for _, statement := range []string{
+			"create database columns_upgrade",
+			"create table columns_upgrade.zf (x decimal(10,2) unsigned zerofill)",
+			"create table columns_upgrade.plain (x decimal(10,2))",
+			"create table columns_upgrade.prefixes (id int primary key, v varchar(20), key prefix_key(v(4)), key whole_key(v))",
+		} {
+			_, err := fresh.ExecContext(ctx, statement)
+			require.NoError(t, err, statement)
+		}
+		requireColumnsDecorated(t, ctx, fresh, map[string]string{"zf": "decimal(10,2) unsigned zerofill", "plain": "decimal(10,2)"})
+		requireIndexPrefixMetadata(t, ctx, fresh)
+		_, err = db.ExecContext(ctx, "drop account metadata_fresh")
+		require.NoError(t, err)
+	}()
 	requireDecoratedColumns(t, ctx, cn)
 	requireColumnsEntryNoop(t, ctx, cn)
+	seedLegacyCDCTask(t, ctx, cn, "current-task", "paused")
 	require.NoError(t, c.Stop())
 
 	// Restart: the published route and the decorated definitions stay; no new
@@ -331,37 +366,38 @@ func TestColumnsUpgradeAutomaticScenarioCompletion(t *testing.T) {
 	require.NoError(t, err)
 	cn, err = c.GetCNService(0)
 	require.NoError(t, err)
-	final, steps := readRecoveryCatalog(t, ctx, cn, v4_0_18.Handler.Metadata())
+	final, steps := readRecoveryCatalog(t, ctx, cn, v4_0_7.Handler.Metadata())
 	require.Equal(t, versions.StateReady, final.State)
 	require.Len(t, steps, len(stepIDs))
 	for i, step := range steps {
 		require.Equal(t, stepIDs[i], step.ID, "published route must not be replaced")
 	}
 	requireDecoratedColumns(t, ctx, cn)
+	require.Equal(t, []string{"current-task"}, readCDCTaskNames(t, ctx, cn))
 	require.NoError(t, c.Stop())
 }
 
 // TestColumnsUpgradeManualFailFastThenComplete is validation item (iv)'s
 // fail-fast leg on the integrated source: with the automatic worker off, a
-// v4_0_18 binary refuses to start against a catalog that is not READY at its
+// v4_0_7 binary refuses to start against a catalog that is not READY at its
 // final version, and the operator remedy — enabling the worker and
 // restarting — drives the same completion.
 func TestColumnsUpgradeManualFailFastThenComplete(t *testing.T) {
 	require.NoError(t, CloseBaseClusterTests())
 	require.NoError(t, CloseSingleCNBaseClusterTests())
-	c, start := stageReady407Predecessor(t, 5*time.Minute)
+	c, start := stageReleasedMetadataPredecessor(t, 5*time.Minute)
 	var ctx context.Context
 	var err error
 
-	setRecoveryCNHandles(c, append(columnsPredecessorChain(), v4_0_18.Handler), false)
+	setRecoveryCNHandles(c, append(columns46ShapeChain(), v4_0_7.Handler), false)
 	_, err = start()
 	require.Error(t, err, "manual mode must fail startup against a not-ready final catalog")
-	require.Contains(t, err.Error(), "catalog version 4.0.7/41 is not ready for 4.0.18/1; enable auto-upgrade for the stopped upgrade and restart")
+	require.Contains(t, err.Error(), "catalog version 4.0.6/5 is not ready for 4.0.7/41; enable auto-upgrade for the stopped upgrade and restart")
 
 	err = c.Stop()
 	require.NoError(t, err)
 
-	setRecoveryCNHandles(c, append(columnsPredecessorChain(), v4_0_18.Handler), true)
+	setRecoveryCNHandles(c, append(columns46ShapeChain(), v4_0_7.Handler), true)
 	ctx, err = start()
 	require.NoError(t, err)
 	cn, err := c.GetCNService(0)
@@ -374,27 +410,27 @@ func TestColumnsUpgradeManualFailFastThenComplete(t *testing.T) {
 
 // TestColumnsUpgradeWithoutEntryKeepsPredecessorDefinitions is the ablation
 // control for the restoration claim: with the background walker suppressed,
-// a generation that carries no v4_0_18 entry leaves every account's staged
+// a generation that carries no v4_0_7 entry leaves every account's staged
 // predecessor definition untouched — the decorated presentation the
 // completion legs assert is absent — and only the generation that again
 // carries the entry performs the repair. This pins the restored metadata to
-// the v4_0_18 entry itself, for the sys tenant and columns_upgrade_tenant.
+// the v4_0_7 entry itself, for the sys tenant and columns_upgrade_tenant.
 func TestColumnsUpgradeWithoutEntryKeepsPredecessorDefinitions(t *testing.T) {
 	require.NoError(t, CloseBaseClusterTests())
 	require.NoError(t, CloseSingleCNBaseClusterTests())
-	c, start := stageReady407Predecessor(t, 5*time.Minute)
+	c, start := stageReleasedMetadataPredecessor(t, 5*time.Minute)
 	var ctx context.Context
 	var err error
 
-	// Ablation generation: the frozen 4.0.7/41 chain with no v4_0_18 handle.
-	setRecoveryCNHandles(c, columnsPredecessorChain(), true)
+	// Ablation generation: the frozen 4.0.7/41 chain with no v4_0_7 handle.
+	setRecoveryCNHandles(c, columns46ShapeChain(), true)
 	ctx, err = start()
 	require.NoError(t, err)
 	cn, err := c.GetCNService(0)
 	require.NoError(t, err)
-	final, steps := readRecoveryCatalog(t, ctx, cn, v4_0_7.Handler.Metadata())
+	final, steps := readRecoveryCatalog(t, ctx, cn, v4_0_6.Handler.Metadata())
 	require.Equal(t, versions.StateReady, final.State)
-	require.Len(t, steps, 0, "no new route may be created without the v4_0_18 handle")
+	require.Len(t, steps, 0, "no new route may be created without the v4_0_7 handle")
 	// Restoration assertion fails as designed: both tenants still present the
 	// bare undecorated rendering, and the persisted definition is the staged
 	// pre-change text, stable across maintenance passes.
@@ -421,177 +457,13 @@ func TestColumnsUpgradeWithoutEntryKeepsPredecessorDefinitions(t *testing.T) {
 
 	// Attribution leg: the same data directory, the entry carried again. Only
 	// now does the repair execute, proving the completion legs' decorated
-	// state comes from the v4_0_18 entry and not from background machinery.
-	setRecoveryCNHandles(c, append(columnsPredecessorChain(), v4_0_18.Handler), true)
+	// state comes from the v4_0_7 entry and not from background machinery.
+	setRecoveryCNHandles(c, append(columns46ShapeChain(), v4_0_7.Handler), true)
 	ctx, err = start()
 	require.NoError(t, err)
 	cn, err = c.GetCNService(0)
 	require.NoError(t, err)
 	requireColumnsUpgradeComplete(t, ctx, cn)
-	requireDecoratedColumns(t, ctx, cn)
-	requireColumnsEntryNoop(t, ctx, cn)
-	require.NoError(t, c.Stop())
-}
-
-// errCrashAfterReplacement is the injected tenant-upgrade crash: it fires
-// after the real CREATE OR REPLACE executed inside the tenant upgrade
-// transaction and before that transaction (view text plus tenant version
-// marker) commits.
-var errCrashAfterReplacement = errors.New("test crash after real replacement, before tenant-version commit")
-
-// rollbackObservation records what a tenant's retry observes about the
-// aborted attempt's aftermath, read inside the retry's fresh transaction,
-// i.e. from committed state only. Tenant upgrade progress is the tenant's
-// mo_account.create_version row: versions.UpgradeTenantVersion updates it in
-// the same route transaction, after the handle returns (see
-// service_upgrade_tenant.go's execute-upgrade-tenant loop), so an aborted
-// attempt must leave it at the predecessor version.
-type rollbackObservation struct {
-	persistsPreChangeDefinition bool
-	createVersionRead           bool
-	tenantCreateVersion         string
-}
-
-// postReplacementCrashHandler wraps the real v4_0_18 tenant handle: the first
-// attempt for each tenant runs the complete entry (the CREATE OR REPLACE
-// executes) and then returns errCrashAfterReplacement so the framework rolls
-// the tenant-version transaction back. The retry observes and records the
-// committed aftermath — predecessor view text, no 4.0.18 version marker —
-// before completing the same entry to success.
-type postReplacementCrashHandler struct {
-	bootstrap.VersionHandle
-	mu       sync.Mutex
-	crashed  map[int32]bool
-	observed map[int32]rollbackObservation
-}
-
-func (h *postReplacementCrashHandler) HandleTenantUpgrade(ctx context.Context, tenantID int32, txn executor.TxnExecutor) error {
-	h.mu.Lock()
-	crashed := h.crashed[tenantID]
-	h.mu.Unlock()
-	if crashed {
-		h.observeRollback(tenantID, txn)
-		return h.VersionHandle.HandleTenantUpgrade(ctx, tenantID, txn)
-	}
-	if err := h.VersionHandle.HandleTenantUpgrade(ctx, tenantID, txn); err != nil {
-		return err
-	}
-	h.mu.Lock()
-	h.crashed[tenantID] = true
-	h.mu.Unlock()
-	return errCrashAfterReplacement
-}
-
-// observeRollback reads the committed state a retry sees after the aborted
-// attempt, from inside the retry's fresh transaction: the persisted
-// definition must be back at the predecessor text (the replacement rolled
-// back) and the tenant's create_version must still be the predecessor 4.0.7
-// (the post-handler progress update rolled back in the same transaction). It
-// records only the first post-crash invocation per tenant: after the retry
-// commits, a later pass legitimately observes the tenant's own advanced
-// create_version, but that is no longer rollback evidence. It only records —
-// assertions belong to the test goroutine after Start returns; require inside
-// a bootstrap worker callback would not fail reliably.
-func (h *postReplacementCrashHandler) observeRollback(tenantID int32, txn executor.TxnExecutor) {
-	h.mu.Lock()
-	if _, recorded := h.observed[tenantID]; recorded {
-		h.mu.Unlock()
-		return
-	}
-	h.mu.Unlock()
-	obs := rollbackObservation{}
-	if exists, definition, err := versions.CheckInformationSchemaViewDefinition(txn, uint32(tenantID), "COLUMNS"); err == nil && exists {
-		obs.persistsPreChangeDefinition = sysview.InformationSchemaViewDefinitionMatches(definition, preChangeCurrentColumnsDDL())
-	}
-	res, err := txn.Exec(
-		fmt.Sprintf("select create_version from mo_account where account_id = %d", uint32(tenantID)),
-		executor.StatementOption{})
-	if err == nil {
-		res.ReadRows(func(rows int, cols []*vector.Vector) bool {
-			values := executor.GetStringRows(cols[0])
-			if len(values) == 1 {
-				obs.tenantCreateVersion = values[0]
-				obs.createVersionRead = true
-			}
-			return true
-		})
-		res.Close()
-	}
-	h.mu.Lock()
-	if _, recorded := h.observed[tenantID]; !recorded {
-		h.observed[tenantID] = obs
-	}
-	h.mu.Unlock()
-}
-
-// rollbackEvidence returns the observations keyed by tenant id.
-func (h *postReplacementCrashHandler) rollbackEvidence() map[int32]rollbackObservation {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	out := make(map[int32]rollbackObservation, len(h.observed))
-	for id, obs := range h.observed {
-		out[id] = obs
-	}
-	return out
-}
-
-// TestColumnsUpgradeInterruptedRouteResumes is validation item (iii)'s crash
-// replay leg on the integrated source, against the real replacement: every
-// tenant's first attempt executes the actual CREATE OR REPLACE and then
-// crashes before the tenant-version transaction commits, so that transaction
-// (view text and tenant progress together) rolls back. The retry reads the
-// committed aftermath — predecessor definition, create_version still at the
-// 4.0.7 predecessor — and replays the complete entry, advancing each tenant
-// to Ready exactly once. A full process restart afterwards is a no-op replay.
-func TestColumnsUpgradeInterruptedRouteResumes(t *testing.T) {
-	require.NoError(t, CloseBaseClusterTests())
-	require.NoError(t, CloseSingleCNBaseClusterTests())
-	c, start := stageReady407Predecessor(t, 5*time.Minute)
-	var ctx context.Context
-	var err error
-
-	crash := &postReplacementCrashHandler{
-		VersionHandle: v4_0_18.Handler,
-		crashed:       map[int32]bool{},
-		observed:      map[int32]rollbackObservation{},
-	}
-	setRecoveryCNHandles(c, append(columnsPredecessorChain(), crash), true)
-	ctx, err = start()
-	require.NoError(t, err)
-	cn, err := c.GetCNService(0)
-	require.NoError(t, err)
-
-	// Both tenants ran the real replacement once, crashed, observed the
-	// rollback, and completed on the retry. The recorded evidence is the
-	// atomicity proof: aborting after the CREATE OR REPLACE reverts both the
-	// view content and the tenant progress.
-	evidence := crash.rollbackEvidence()
-	require.Len(t, evidence, 2, "sys tenant and columns_upgrade_tenant must each crash and replay once")
-	for id, obs := range evidence {
-		require.True(t, obs.persistsPreChangeDefinition,
-			"tenant %d: the aborted attempt must leave the predecessor COLUMNS definition committed", id)
-		require.True(t, obs.createVersionRead,
-			"tenant %d: the retry must be able to read the tenant's own account row", id)
-		require.Equal(t, "4.0.7", obs.tenantCreateVersion,
-			"tenant %d: the aborted attempt must leave create_version at the predecessor", id)
-	}
-	stepIDs := requireColumnsUpgradeComplete(t, ctx, cn)
-	requireDecoratedColumns(t, ctx, cn)
-	requireColumnsEntryNoop(t, ctx, cn)
-	require.NoError(t, c.Stop())
-
-	// Restart: the completed route and decorated definitions persist; replay
-	// is a no-op and no new route is created.
-	ctx, err = start()
-	require.NoError(t, err)
-	cn, err = c.GetCNService(0)
-	require.NoError(t, err)
-	final, steps := readRecoveryCatalog(t, ctx, cn, v4_0_18.Handler.Metadata())
-	require.Equal(t, versions.StateReady, final.State)
-	require.Len(t, steps, len(stepIDs))
-	for i, step := range steps {
-		require.Equal(t, stepIDs[i], step.ID, "published route must not be replaced")
-	}
 	requireDecoratedColumns(t, ctx, cn)
 	requireColumnsEntryNoop(t, ctx, cn)
 	require.NoError(t, c.Stop())

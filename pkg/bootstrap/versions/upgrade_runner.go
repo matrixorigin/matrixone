@@ -15,12 +15,13 @@
 package versions
 
 import (
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"go.uber.org/zap"
-	"time"
 )
 
 // RunTenantUpgradeEntries executes and logs the legacy per-tenant upgrade sequence.
@@ -84,27 +85,6 @@ func RunClusterUpgradeEntries(txn executor.TxnExecutor, entries []UpgradeEntry, 
 		logger(txn.Txn().TxnOptions().CN).Info("cluster upgrade entry complete",
 			zap.String("upgrade entry", upgEntry.String()),
 			zap.Int64("time cost(ms)", duration.Milliseconds()),
-			zap.String("toVersion", version()))
-	}
-	return nil
-}
-
-// RunTenantUpgradeEntriesWithLogger executes the later tenant upgrade sequence.
-func RunTenantUpgradeEntriesWithLogger(tenantID int32, txn executor.TxnExecutor, entries []UpgradeEntry, logger *log.MOLogger, version func() string) error {
-	for _, entry := range entries {
-		start := time.Now()
-		if err := entry.Upgrade(txn, uint32(tenantID)); err != nil {
-			logger.Error("tenant upgrade entry execute error",
-				zap.Error(err),
-				zap.Int32("tenantId", tenantID),
-				zap.String("version", version()),
-				zap.String("upgrade entry", entry.String()))
-			return err
-		}
-		logger.Info("tenant upgrade entry complete",
-			zap.Int32("tenantId", tenantID),
-			zap.String("upgrade entry", entry.String()),
-			zap.Int64("time cost(ms)", time.Since(start).Milliseconds()),
 			zap.String("toVersion", version()))
 	}
 	return nil

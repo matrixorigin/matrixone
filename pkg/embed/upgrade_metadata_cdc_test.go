@@ -22,10 +22,10 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/bootstrap"
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
-	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_18"
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_4"
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_5"
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_6"
+	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_7"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -131,14 +131,14 @@ func seedLegacyCDCTask(t *testing.T, ctx context.Context, cn ServiceOperator, na
 		name, state))
 }
 
-// requireNoRouteAdvance pins the pre-mutation abort: no 4.0.7 or 4.0.18
+// requireNoRouteAdvance pins the pre-mutation abort: no 4.0.7 or 4.0.7
 // version marker, and no mo_upgrade rows at all. Reads go through the
 // internal executor like the upgrade framework's own catalog probes; the
 // wire user holds no mo_catalog read privilege.
 func requireNoRouteAdvance(t *testing.T, ctx context.Context, cn ServiceOperator) {
 	t.Helper()
 	require.Zero(t, countInternalRows(t, ctx, cn,
-		"select count(*) from mo_catalog.mo_version where version in ('4.0.7', '4.0.18')"),
+		"select count(*) from mo_catalog.mo_version where version = '4.0.7'"),
 		"the aborted boot must not persist any new version marker")
 	require.Zero(t, countInternalRows(t, ctx, cn,
 		"select count(*) from mo_catalog.mo_upgrade"),
@@ -163,24 +163,20 @@ func countInternalRows(t *testing.T, ctx context.Context, cn ServiceOperator, st
 	return counts[0]
 }
 
-// requireColumnsCrossingComplete pins a completed 4.0.6 -> 4.0.18 crossing
+// requireColumnsCrossingComplete pins a completed 4.0.6 -> 4.0.7 crossing
 // route: both steps Ready with converged tenant counters for the staged
 // account count.
 func requireColumnsCrossingComplete(t *testing.T, ctx context.Context, cn ServiceOperator, tenants int32) {
 	t.Helper()
-	final, steps := readRecoveryCatalog(t, ctx, cn, v4_0_18.Handler.Metadata())
+	final, steps := readRecoveryCatalog(t, ctx, cn, v4_0_7.Handler.Metadata())
 	require.Equal(t, versions.StateReady, final.State)
-	require.Len(t, steps, 2)
+	require.Len(t, steps, 1)
 	require.Equal(t, "4.0.6", steps[0].FromVersion)
 	require.Equal(t, "4.0.7", steps[0].ToVersion)
 	require.Equal(t, versions.StateReady, steps[0].State)
 	require.Equal(t, tenants, steps[0].TotalTenant)
 	require.Equal(t, steps[0].TotalTenant, steps[0].ReadyTenant)
-	require.Equal(t, "4.0.7", steps[1].FromVersion)
-	require.Equal(t, "4.0.18", steps[1].ToVersion)
-	require.Equal(t, versions.StateReady, steps[1].State)
-	require.Equal(t, tenants, steps[1].TotalTenant)
-	require.Equal(t, steps[1].TotalTenant, steps[1].ReadyTenant)
+
 }
 
 // TestColumnsUpgradeLegacyCDCAbortsBootBeforeCrossing is validation item
@@ -188,7 +184,7 @@ func requireColumnsCrossingComplete(t *testing.T, ctx context.Context, cn Servic
 // mo_cdc_task row aborts the automatic boot with the terminal task
 // attribution before the 4.0.7 step commits — no route advance, the named
 // task row preserved — and the operator remedy (remove the task on the
-// source version) completes the crossing to READY 4.0.18.
+// source version) completes the crossing to READY 4.0.7.
 func TestColumnsUpgradeLegacyCDCAbortsBootBeforeCrossing(t *testing.T) {
 	require.NoError(t, CloseBaseClusterTests())
 	require.NoError(t, CloseSingleCNBaseClusterTests())
@@ -205,7 +201,7 @@ func TestColumnsUpgradeLegacyCDCAbortsBootBeforeCrossing(t *testing.T) {
 		require.NoError(t, c.Stop())
 	}()
 
-	setRecoveryCNHandles(c, append(columns46ShapeChain(), columnsPredecessorChain()[3], v4_0_18.Handler), true)
+	setRecoveryCNHandles(c, append(columns46ShapeChain(), v4_0_7.Handler), true)
 	_, err = start()
 	require.Error(t, err, "a catalog with a legacy CDC task must abort the automatic boot")
 	require.Contains(t, err.Error(), "legacy CDC tasks must be exported and removed")
@@ -230,7 +226,7 @@ func TestColumnsUpgradeLegacyCDCAbortsBootBeforeCrossing(t *testing.T) {
 	execInternalStatement(t, ctx, cn, "delete from mo_catalog.mo_cdc_task")
 	require.NoError(t, c.Stop())
 
-	setRecoveryCNHandles(c, append(columns46ShapeChain(), columnsPredecessorChain()[3], v4_0_18.Handler), true)
+	setRecoveryCNHandles(c, append(columns46ShapeChain(), v4_0_7.Handler), true)
 	ctx, err = start()
 	require.NoError(t, err)
 	cn, err = c.GetCNService(0)
@@ -253,7 +249,7 @@ func requireSysColumnsDecorated(t *testing.T, ctx context.Context, cn ServiceOpe
 
 // TestColumnsUpgradeEmptyCDCControlCompletesCrossing is the empty-seed
 // control: the same 4.2-shaped catalog without any mo_cdc_task row drives
-// the full 4.0.6 -> 4.0.18 crossing to READY 4.0.18.
+// the full 4.0.6 -> 4.0.7 crossing to READY 4.0.7.
 func TestColumnsUpgradeEmptyCDCControlCompletesCrossing(t *testing.T) {
 	require.NoError(t, CloseBaseClusterTests())
 	require.NoError(t, CloseSingleCNBaseClusterTests())
@@ -261,95 +257,12 @@ func TestColumnsUpgradeEmptyCDCControlCompletesCrossing(t *testing.T) {
 	var ctx context.Context
 	var err error
 
-	setRecoveryCNHandles(c, append(columns46ShapeChain(), columnsPredecessorChain()[3], v4_0_18.Handler), true)
+	setRecoveryCNHandles(c, append(columns46ShapeChain(), v4_0_7.Handler), true)
 	ctx, err = start()
 	require.NoError(t, err)
 	cn, err := c.GetCNService(0)
 	require.NoError(t, err)
 	requireColumnsCrossingComplete(t, ctx, cn, 1)
 	requireSysColumnsDecorated(t, ctx, cn)
-	require.NoError(t, c.Stop())
-}
-
-// TestColumnsUpgradeTaskSurvivalCrossingEmbed is validation item (vi)'s
-// task-survival embed leg: a READY-4.0.7/41 staged catalog holding one valid
-// post-crossing task boots into the 4.0.18 route with no preflight
-// rejection, is interrupted mid-route, and the restart completes to READY
-// 4.0.18 with the task row still present.
-func TestColumnsUpgradeTaskSurvivalCrossingEmbed(t *testing.T) {
-	require.NoError(t, CloseBaseClusterTests())
-	require.NoError(t, CloseSingleCNBaseClusterTests())
-	c, start := stageReady407Predecessor(t, 10*time.Minute)
-	var ctx context.Context
-	var err error
-
-	func() {
-		ctx, err = start()
-		require.NoError(t, err)
-		cn, err := c.GetCNService(0)
-		require.NoError(t, err)
-		seedLegacyCDCTask(t, ctx, cn, "valid-task", "running")
-		require.NoError(t, c.Stop())
-	}()
-
-	// First boot: the supported READY-4.0.7/41 source skips the preflight
-	// despite the task row and proceeds into the route; interrupt inside the
-	// v4_0_18 tenant entry so the route row exists but is not finished.
-	interrupted := &interruptedUpgradeHandler{VersionHandle: v4_0_18.Handler, entered: make(chan struct{}), tenant: true}
-	setRecoveryCNHandles(c, append(columnsPredecessorChain(), interrupted), true)
-	started := make(chan error, 1)
-	var stopped chan error
-	// Join startup before the starter's context cleanup, including FailNow paths.
-	t.Cleanup(func() {
-		stopErr := c.Stop()
-		for range started {
-		}
-		if stopped != nil {
-			for range stopped {
-			}
-		}
-		require.NoError(t, stopErr)
-	})
-	go func() {
-		defer close(started)
-		_, startErr := start()
-		started <- startErr
-	}()
-	select {
-	case <-interrupted.entered:
-	case err := <-started:
-		t.Fatalf("startup failed before the v4_0_18 tenant entry: %v", err)
-	case <-t.Context().Done():
-		t.Fatal("v4_0_18 tenant entry was not reached", t.Context().Err())
-	}
-	controlCtx, cancelControl := context.WithTimeout(t.Context(), time.Minute)
-	defer cancelControl()
-	stopped = make(chan error, 1)
-	go func() { defer close(stopped); stopped <- c.Stop() }()
-	select {
-	case err := <-started:
-		require.ErrorIs(t, err, context.Canceled)
-	case <-controlCtx.Done():
-		t.Fatal("stop did not cancel the upgrade startup", controlCtx.Err())
-	}
-	select {
-	case stopErr := <-stopped:
-		require.NoError(t, stopErr)
-	case <-controlCtx.Done():
-		t.Fatal("cluster did not finish stopping", controlCtx.Err())
-	}
-
-	// Restart: the in-flight route resumes without ever re-reading the task
-	// table for admission, completes to READY 4.0.18, and the task row is
-	// still present.
-	setRecoveryCNHandles(c, append(columnsPredecessorChain(), v4_0_18.Handler), true)
-	ctx, err = start()
-	require.NoError(t, err)
-	cn, err := c.GetCNService(0)
-	require.NoError(t, err)
-	requireColumnsUpgradeComplete(t, ctx, cn)
-	requireDecoratedColumns(t, ctx, cn)
-	require.Equal(t, []string{"valid-task"}, readCDCTaskNames(t, ctx, cn),
-		"the valid post-crossing task row must survive the upgrade")
 	require.NoError(t, c.Stop())
 }
