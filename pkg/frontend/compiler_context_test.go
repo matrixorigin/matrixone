@@ -89,7 +89,11 @@ func TestDropPlanForgetsOnlyConfirmedMissingTemporaryTable(t *testing.T) {
 					} else if failure == "database" {
 						require.True(t, moerr.IsMoErrCode(err, moerr.ErrBadDB), "%v", err)
 					} else {
-						require.True(t, moerr.IsMoErrCode(err, moerr.ErrNoSuchTable), "%v", err)
+						// meow-31451 contract: a confirmed-missing DROP TABLE fails
+						// with the public 1051/42S02 error now. The alias-forget
+						// side effect above keys on the resolver-level error, so
+						// this change does not affect the forget semantics below.
+						require.True(t, moerr.IsMoErrCode(err, moerr.ErrDropNonExistsTable), "%v", err)
 					}
 					_, exists = ses.GetTempTable("mo_catalog", "stale")
 					require.Equal(t, failure == "lookup_error", exists)
