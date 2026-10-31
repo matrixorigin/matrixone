@@ -217,10 +217,11 @@ func testArrowLoadLocalMinIO(t *testing.T, db *sql.DB) {
 		case <-time.After(5 * time.Second):
 			t.Fatal("the in-flight MinIO range request did not observe cancellation")
 		}
-		// go-sql-driver/mysql discards the connection after ExecContext is
-		// canceled. Re-establish session-local database state on the replacement
-		// connection before checking durable table state.
-		mustExec(t, db, "use arrow_bvt")
+		// The schema-scoped pool must restore the database on a replacement
+		// physical connection after the canceled query.
+		var schema string
+		require.NoError(t, db.QueryRow("select database()").Scan(&schema))
+		require.Equal(t, "arrow_bvt", schema)
 		require.Equal(t, int64(0), queryCount(t, db, "select count(*) from minio_cancel"))
 	})
 }

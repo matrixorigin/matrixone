@@ -25,6 +25,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-sql-driver/mysql"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
@@ -43,17 +44,19 @@ import (
 // separate release evidence.
 func TestArrowLoadBVT(t *testing.T) {
 	c := startArrowLoadClusterWithDefaults(t, 2)
-	db := openArrowLoadDB(t, c, 0)
-	mustExec(t, db, "create database if not exists arrow_bvt")
-	mustExec(t, db, "use arrow_bvt")
+	admin := openArrowLoadDB(t, c, 0)
+	mustExec(t, admin, "create database if not exists arrow_bvt")
+	require.NoError(t, admin.Close())
+	db := openArrowLoadDBInSchema(t, c, 0, "arrow_bvt")
 
 	// Keep the established DistributedRecordBatchFanout selector. It runs before
 	// ClusterRestartPersistence, which deliberately invalidates every connection
 	// and must remain the final subtest in this lifecycle.
 	t.Run("DistributedRecordBatchFanout", func(t *testing.T) {
-		multiDB := openArrowLoadDB(t, c, 0)
-		mustExec(t, multiDB, "create database if not exists arrow_multicn")
-		mustExec(t, multiDB, "use arrow_multicn")
+		bootstrap := openArrowLoadDB(t, c, 0)
+		mustExec(t, bootstrap, "create database if not exists arrow_multicn")
+		require.NoError(t, bootstrap.Close())
+		multiDB := openArrowLoadDBInSchema(t, c, 0, "arrow_multicn")
 		path, ddl := fixtureFanout(t)
 		testArrowRecordBatchFanout(t, multiDB, path, ddl)
 	})
@@ -74,6 +77,60 @@ func TestArrowLoadBVT(t *testing.T) {
 		for _, run := range []string{"Initial", "SameInstance"} {
 			t.Run(run, func(t *testing.T) { testArrowLoadPreparedDatabaseBinding(t, c, db) })
 		}
+	})
+	t.Run("PoolReconnectKeepsDatabase", func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
+		defer cancel()
+		unscoped := openArrowLoadDB(t, c, 0)
+		original, err := unscoped.Conn(ctx)
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = original.Close() })
+		_, err = original.ExecContext(ctx, "use arrow_bvt")
+		require.NoError(t, err)
+		var originalID uint64
+		var originalSchema string
+		require.NoError(t, original.QueryRowContext(ctx, "select connection_id(), database()").Scan(&originalID, &originalSchema))
+		require.Equal(t, "arrow_bvt", originalSchema)
+		require.NoError(t, original.Close())
+		unscoped.SetMaxIdleConns(0)
+		var oldSchema sql.NullString
+		var unscopedID uint64
+		require.NoError(t, unscoped.QueryRowContext(ctx, "select connection_id(), database()").Scan(&unscopedID, &oldSchema))
+		require.NotEqual(t, originalID, unscopedID)
+		require.False(t, oldSchema.Valid, "USE applies to the discarded connection")
+		_, err = unscoped.ExecContext(ctx, "drop table if exists pool_reconnect")
+		var mysqlErr *mysql.MySQLError
+		require.ErrorAs(t, err, &mysqlErr)
+		require.Equal(t, uint16(1046), mysqlErr.Number)
+		var before, after uint64
+		require.NoError(t, db.QueryRowContext(ctx, "select connection_id()").Scan(&before))
+		db.SetMaxIdleConns(0) // Close the physical connection after each operation.
+		t.Cleanup(func() { db.SetMaxIdleConns(2) })
+		var schema string
+		require.NoError(t, db.QueryRowContext(ctx, "select connection_id(), database()").Scan(&after, &schema))
+		require.NotEqual(t, before, after)
+		require.Equal(t, "arrow_bvt", schema)
+		exec := func(query string) {
+			t.Helper()
+			_, err := db.ExecContext(ctx, query)
+			require.NoError(t, err, query)
+		}
+		exec("drop table if exists pool_reconnect")
+		t.Cleanup(func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			if _, err := db.ExecContext(ctx, "drop table if exists pool_reconnect"); err != nil {
+				t.Errorf("drop reconnect table: %v", err)
+			}
+		})
+		exec("create table pool_reconnect(id bigint not null, name varchar(50))")
+		path := fixtureIDName(t, t.TempDir(), "pool.arrow", containerFile, [][]idNameRow{{{id: 1, name: "reconnected"}}})
+		exec(fmt.Sprintf("load data infile {'filepath'='%s','format'='arrow'} into table pool_reconnect", path))
+		var matching, total int64
+		require.NoError(t, db.QueryRowContext(ctx, "select count(*) from pool_reconnect where id=1 and name='reconnected'").Scan(&matching))
+		require.NoError(t, db.QueryRowContext(ctx, "select count(*) from pool_reconnect").Scan(&total))
+		require.Equal(t, int64(1), matching)
+		require.Equal(t, int64(1), total)
 	})
 	t.Run("DifferentialVsInsert", func(t *testing.T) { testArrowDifferentialVsInsert(t, db) })
 	t.Run("CommitPhaseFailureRollback", func(t *testing.T) { testArrowCommitPhaseFailureRollback(t, db) })
@@ -547,46 +604,75 @@ func testArrowCorruptInputRollback(t *testing.T, db *sql.DB) {
 // directly as a Go test (no mo-tester, no @bvt:issue wrapper) against a dedicated
 // connection so the transaction stays open across statements.
 func testArrowExplicitTransaction(t *testing.T, c embed.Cluster) {
-	db := openArrowLoadDB(t, c, 0)
-	mustExec(t, db, "use arrow_bvt")
-	mustExec(t, db, "drop table if exists txn_visibility")
-	mustExec(t, db, "create table txn_visibility(id bigint not null, name varchar(50))")
+	db := openArrowLoadDBInSchema(t, c, 0, "arrow_bvt")
+	conn, err := db.Conn(t.Context())
+	require.NoError(t, err)
+	defer conn.Close()
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_, err := conn.ExecContext(ctx, "rollback")
+		if err != nil {
+			t.Errorf("rollback Arrow transaction cleanup: %v", err)
+		}
+	}()
+	exec := func(query string) {
+		t.Helper()
+		_, err := conn.ExecContext(t.Context(), query)
+		require.NoError(t, err, query)
+	}
+	count := func() int64 {
+		t.Helper()
+		var n int64
+		require.NoError(t, conn.QueryRowContext(t.Context(), "select count(*) from txn_visibility").Scan(&n))
+		return n
+	}
+	exec("drop table if exists txn_visibility")
+	exec("create table txn_visibility(id bigint not null, name varchar(50))")
 	path := fixtureIDName(t, t.TempDir(), "txn.arrow", containerFile, [][]idNameRow{{{id: 1, name: "a"}, {id: 2, name: "b"}}})
 
-	mustExec(t, db, "begin")
-	mustExec(t, db, fmt.Sprintf(
+	exec("begin")
+	exec(fmt.Sprintf(
 		"load data infile {'filepath'='%s','format'='arrow'} into table txn_visibility", path))
-	require.Equal(t, int64(2), queryCount(t, db, "select count(*) from txn_visibility"))
-	mustExec(t, db, "rollback")
-	require.Equal(t, int64(0), queryCount(t, db, "select count(*) from txn_visibility"))
+	require.Equal(t, int64(2), count())
+	exec("rollback")
+	require.Equal(t, int64(0), count())
 
-	mustExec(t, db, "start transaction")
-	mustExec(t, db, fmt.Sprintf(
+	exec("start transaction")
+	exec(fmt.Sprintf(
 		"load data infile {'filepath'='%s','format'='arrow'} into table txn_visibility", path))
-	mustExec(t, db, "commit")
-	require.Equal(t, int64(2), queryCount(t, db, "select count(*) from txn_visibility"))
+	exec("commit")
+	require.Equal(t, int64(2), count())
 }
 
 // testArrowTwoSessionIsolation proves an uncommitted Arrow LOAD is invisible to a
 // concurrent session until commit, using a real second connection and a channel
 // (not a sleep) to sequence "A has loaded but not committed" before B observes.
 func testArrowTwoSessionIsolation(t *testing.T, c embed.Cluster) {
-	sessionA := openArrowLoadDB(t, c, 0)
-	sessionB := openArrowLoadDB(t, c, 0)
-	// Keep the transaction's session state (including `USE arrow_bvt`) on the
-	// same physical connection. The transaction itself is also bound explicitly
-	// below with BeginTx instead of relying on database/sql pool reuse.
+	// COMMIT and ROLLBACK use driver I/O that is not context-cancelable once
+	// started. Bound the physical connection so cleanup can join the worker.
+	sessionA := openArrowLoadDBWithTimeout(t, c, 0, "arrow_bvt", 30*time.Second)
+	sessionB := openArrowLoadDBInSchema(t, c, 0, "arrow_bvt")
 	sessionA.SetMaxOpenConns(1)
 	sessionA.SetMaxIdleConns(1)
 	sessionB.SetMaxOpenConns(1)
 	sessionB.SetMaxIdleConns(1)
-	mustExec(t, sessionA, "use arrow_bvt")
-	mustExec(t, sessionB, "use arrow_bvt")
 	mustExec(t, sessionA, "drop table if exists two_session_isolation")
 	mustExec(t, sessionA, "create table two_session_isolation(id bigint not null, name varchar(50))")
 	path := fixtureIDName(t, t.TempDir(), "isolation.arrow", containerFile, [][]idNameRow{{{id: 1, name: "a"}}})
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	t.Cleanup(cancel)
+	connA, err := sessionA.Conn(ctx)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = connA.Close() })
+	connB, err := sessionB.Conn(ctx)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = connB.Close() })
+	var idA, idB uint64
+	require.NoError(t, connA.QueryRowContext(ctx, "select connection_id()").Scan(&idA))
+	require.NoError(t, connB.QueryRowContext(ctx, "select connection_id()").Scan(&idB))
+	require.NotEqual(t, idA, idB)
 	loaded := make(chan error, 1)
 	committed := make(chan struct{})
 	commitOnce := sync.Once{}
@@ -601,14 +687,14 @@ func testArrowTwoSessionIsolation(t *testing.T, c embed.Cluster) {
 		releaseCommit()
 		select {
 		case <-workerDone:
-		case <-time.After(30 * time.Second):
+		case <-time.After(time.Minute):
 			t.Errorf("timed out waiting for Arrow two-session worker cleanup")
 		}
 	})
 
 	go func() {
 		defer close(workerDone)
-		tx, err := sessionA.BeginTx(ctx, nil)
+		tx, err := connA.BeginTx(ctx, nil)
 		if err != nil {
 			loaded <- fmt.Errorf("begin transaction: %w", err)
 			workerResult <- err
@@ -644,7 +730,9 @@ func testArrowTwoSessionIsolation(t *testing.T, c embed.Cluster) {
 		t.Fatal("timed out waiting for Arrow LOAD transaction")
 	}
 	require.NoError(t, loadErr)
-	require.Equal(t, int64(0), queryCount(t, sessionB, "select count(*) from two_session_isolation"),
+	var count int64
+	require.NoError(t, connB.QueryRowContext(ctx, "select count(*) from two_session_isolation").Scan(&count))
+	require.Equal(t, int64(0), count,
 		"uncommitted Arrow LOAD rows must not be visible to another session")
 	releaseCommit()
 	var commitErr error
@@ -654,7 +742,8 @@ func testArrowTwoSessionIsolation(t *testing.T, c embed.Cluster) {
 		t.Fatal("timed out waiting for Arrow transaction commit")
 	}
 	require.NoError(t, commitErr)
-	require.Equal(t, int64(1), queryCount(t, sessionB, "select count(*) from two_session_isolation"),
+	require.NoError(t, connB.QueryRowContext(ctx, "select count(*) from two_session_isolation").Scan(&count))
+	require.Equal(t, int64(1), count,
 		"committed Arrow LOAD rows must become visible to another session")
 }
 
@@ -690,7 +779,6 @@ func testArrowDifferentialVsInsert(t *testing.T, db *sql.DB) {
 func testArrowClusterRestart(t *testing.T, c embed.Cluster, db *sql.DB) {
 	path := fixtureIDName(t, t.TempDir(), "restart.arrow", containerFile,
 		[][]idNameRow{{{id: 1, name: "before-restart"}}})
-	mustExec(t, db, "use arrow_bvt")
 	mustExec(t, db, "drop table if exists restart_persistence")
 	mustExec(t, db, "create table restart_persistence(id bigint not null, name varchar(50))")
 	mustExec(t, db, fmt.Sprintf(
@@ -701,8 +789,7 @@ func testArrowClusterRestart(t *testing.T, c embed.Cluster, db *sql.DB) {
 	require.NoError(t, c.Stop())
 	require.NoError(t, c.Start())
 
-	restartedDB := openArrowLoadDB(t, c, 0)
-	mustExec(t, restartedDB, "use arrow_bvt")
+	restartedDB := openArrowLoadDBInSchema(t, c, 0, "arrow_bvt")
 	require.Equal(t, int64(1), queryCount(t, restartedDB, "select count(*) from restart_persistence"),
 		"a committed Arrow LOAD must survive a complete local cluster restart")
 	mustExec(t, restartedDB, "truncate table restart_persistence")
