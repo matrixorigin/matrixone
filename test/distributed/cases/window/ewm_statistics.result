@@ -1,0 +1,1015 @@
+drop database if exists ewm_stat_test;
+create database ewm_stat_test;
+use ewm_stat_test;
+create table ewmmean (ewmStd int);
+insert into ewmmean values (7);
+select ewmStd from ewmmean;
+➤ ewmStd[4,32,0]  𝄀
+7
+drop table ewmmean;
+create table s (id bigint primary key, x double, y double);
+insert into s values (1, 1, null),(2, 2, null),(3, 3, null),(4, 4, null);
+select id, ewmmean(x, 0.5, false) over (order by id) from s order by id;
+➤ id[-5,64,0]  ¦  ewmmean(x, 0.5, false) over (order by id)[8,53,31]  𝄀
+1  ¦  1.0  𝄀
+2  ¦  1.5  𝄀
+3  ¦  2.25  𝄀
+4  ¦  3.125
+select id, ewmvar(x, 0.5, false) over (order by id) from s order by id;
+➤ id[-5,64,0]  ¦  ewmvar(x, 0.5, false) over (order by id)[8,53,31]  𝄀
+1  ¦  0.0  𝄀
+2  ¦  0.25  𝄀
+3  ¦  0.6875  𝄀
+4  ¦  1.109375
+select id, ewmstd(x, 0.5, false) over (order by id) from s order by id;
+➤ id[-5,64,0]  ¦  ewmstd(x, 0.5, false) over (order by id)[8,53,31]  𝄀
+1  ¦  0.0  𝄀
+2  ¦  0.5  𝄀
+3  ¦  0.82915619758885  𝄀
+4  ¦  1.0532687216470449
+select id, ewmmean(x, 0.5, true) over (order by id) from s order by id;
+➤ id[-5,64,0]  ¦  ewmmean(x, 0.5, true) over (order by id)[8,53,31]  𝄀
+1  ¦  1.0  𝄀
+2  ¦  1.6666666666666667  𝄀
+3  ¦  2.4285714285714284  𝄀
+4  ¦  3.2666666666666666
+select id, ewmmean(x, 1, false) over (order by id) from s order by id;
+➤ id[-5,64,0]  ¦  ewmmean(x, 1, false) over (order by id)[8,53,31]  𝄀
+1  ¦  1.0  𝄀
+2  ¦  2.0  𝄀
+3  ¦  3.0  𝄀
+4  ¦  4.0
+select id, ewmvar(x, 1, false) over (order by id) from s order by id;
+➤ id[-5,64,0]  ¦  ewmvar(x, 1, false) over (order by id)[8,53,31]  𝄀
+1  ¦  0.0  𝄀
+2  ¦  0.0  𝄀
+3  ¦  0.0  𝄀
+4  ¦  0.0
+select id, ewmmean(x, 0.5, false, false, 2) over (order by id) from s order by id;
+➤ id[-5,64,0]  ¦  ewmmean(x, 0.5, false, false, 2) over (order by id)[8,53,31]  𝄀
+1  ¦  null  𝄀
+2  ¦  1.5  𝄀
+3  ¦  2.25  𝄀
+4  ¦  3.125
+select id, avg(x) over (order by id) from s order by id;
+➤ id[-5,64,0]  ¦  avg(x) over (order by id)[8,53,31]  𝄀
+1  ¦  1.0  𝄀
+2  ¦  1.5  𝄀
+3  ¦  2.0  𝄀
+4  ¦  2.5
+select id, cast(var_pop(x) over (order by id) as decimal(18,6)) from s order by id;
+➤ id[-5,64,0]  ¦  cast(var_pop(x) over (order by id) as decimal(18, 6))[3,18,6]  𝄀
+1  ¦  0.000000  𝄀
+2  ¦  0.250000  𝄀
+3  ¦  0.666667  𝄀
+4  ¦  1.250000
+select id, cast(stddev_pop(x) over (order by id) as decimal(18,6)) from s order by id;
+➤ id[-5,64,0]  ¦  cast(stddev_pop(x) over (order by id) as decimal(18, 6))[3,18,6]  𝄀
+1  ¦  0.000000  𝄀
+2  ¦  0.500000  𝄀
+3  ¦  0.816497  𝄀
+4  ¦  1.118034
+WITH raw AS (SELECT *
+FROM (
+SELECT 1 id,CAST(1 AS DOUBLE) v
+UNION ALL SELECT 2,2
+UNION ALL SELECT 3,3
+UNION ALL SELECT 4,4) fixture) SELECT a.id,SUM(b.v*CASE WHEN b.id=1 THEN POWER(CAST(0.5 AS DOUBLE),a.id-1) ELSE CAST(0.5 AS DOUBLE)*POWER(CAST(0.5 AS DOUBLE),a.id-b.id) END) result FROM raw a JOIN raw b ON b.id<=a.id GROUP BY a.id ORDER BY a.id;
+➤ id[-5,64,0]  ¦  result[8,53,31]  𝄀
+1  ¦  1.0  𝄀
+2  ¦  1.5  𝄀
+3  ¦  2.25  𝄀
+4  ¦  3.125
+select ewmmean(cast(1 as double),3) result;
+SQL syntax error: Window function 'ewmmean' requires an OVER clause
+select ewmmean(x) over (order by id) from s order by id;
+invalid input: invalid argument: ewm statistics require a declared decay (alpha or 'halflife' half-life)
+select ewmmean(x, 0.5, false) over (partition by id) from s order by id;
+invalid input: ewm statistics require an ORDER BY in the OVER clause
+select ewmmean(x, 0.5, false) over (order by id rows between 1 preceding and current row) from s order by id;
+invalid input: ewm statistics do not support explicit window frames
+select ewmmean(x, 3, false) over (order by id) from s order by id;
+invalid input: invalid argument: ewm statistics require alpha in (0,1]
+select ewmmean(x, 0, false) over (order by id) from s order by id;
+invalid input: invalid argument: ewm statistics require alpha in (0,1]
+select ewmmean(x, 1.5, false) over (order by id) from s order by id;
+invalid input: invalid argument: ewm statistics require alpha in (0,1]
+select ewmmean(x, 'halflife') over (order by id) from s order by id;
+invalid input: invalid argument: ewm halflife decay requires a strictly positive half-life constant
+select ewmmean(x, 'halflife', 0) over (order by id) from s order by id;
+invalid input: invalid argument: ewm halflife decay requires a strictly positive half-life constant
+select ewmmean(x, 'span') over (order by id) from s order by id;
+invalid argument function ewmmean, bad value [DOUBLE VARCHAR]
+select ewmmean(x, 'halflife', 10, true) over (order by id desc) from s order by id;
+invalid input: invalid argument: event-time ewm statistics require ascending ORDER BY
+select ewmmean(x, 'halflife', 10, true) over (order by id, x) from s order by id;
+invalid input: invalid argument: event-time ewm statistics require exactly one ORDER BY expression
+select ewmmean(x, y) over (order by id) from s order by id;
+invalid input: ewm statistics require constant decay and policy arguments
+create table named (id bigint primary key, nm varchar(8), x double);
+insert into named values (1, 'a', 1),(2, 'b', 2);
+select id, ewmmean(x, 'halflife', 10, true) over (order by nm) from named order by id;
+invalid input: event-time ewm statistics require a numeric or temporal ORDER BY key
+drop table named;
+create table pol (id bigint primary key, k int, x double);
+insert into pol values (1, 1, 1),(2, 1, 2);
+select id, ewmmean(x, 0.5, k > 1) over (order by k) from pol order by id;
+invalid input: ewm statistics require constant decay and policy arguments
+drop table pol;
+create table t122 (id bigint primary key, k bigint, x double);
+insert into t122 values (1, 1, 0),(2, 2, 10),(3, 2, 20),(4, 3, 30);
+select id, ewmmean(x, 0.5, true) over (order by k) from t122 order by id;
+➤ id[-5,64,0]  ¦  ewmmean(x, 0.5, true) over (order by k)[8,53,31]  𝄀
+1  ¦  0.0  𝄀
+2  ¦  12.0  𝄀
+3  ¦  12.0  𝄀
+4  ¦  20.0
+select id, ewmvar(x, 0.5, true) over (order by k) from t122 order by id;
+➤ id[-5,64,0]  ¦  ewmvar(x, 0.5, true) over (order by k)[8,53,31]  𝄀
+1  ¦  0.0  𝄀
+2  ¦  56.0  𝄀
+3  ¦  56.0  𝄀
+4  ¦  111.11111111111111
+select id, ewmstd(x, 0.5, true) over (order by k) from t122 order by id;
+➤ id[-5,64,0]  ¦  ewmstd(x, 0.5, true) over (order by k)[8,53,31]  𝄀
+1  ¦  0.0  𝄀
+2  ¦  7.483314773547883  𝄀
+3  ¦  7.483314773547883  𝄀
+4  ¦  10.540925533894598
+select id, ewmmean(x, 0.5, false) over (order by k) from t122 order by id;
+➤ id[-5,64,0]  ¦  ewmmean(x, 0.5, false) over (order by k)[8,53,31]  𝄀
+1  ¦  0.0  𝄀
+2  ¦  10.0  𝄀
+3  ¦  10.0  𝄀
+4  ¦  18.0
+select id, ewmvar(x, 0.5, false) over (order by k) from t122 order by id;
+➤ id[-5,64,0]  ¦  ewmvar(x, 0.5, false) over (order by k)[8,53,31]  𝄀
+1  ¦  0.0  𝄀
+2  ¦  66.66666666666667  𝄀
+3  ¦  66.66666666666667  𝄀
+4  ¦  136.0
+select id, ewmstd(x, 0.5, false) over (order by k) from t122 order by id;
+➤ id[-5,64,0]  ¦  ewmstd(x, 0.5, false) over (order by k)[8,53,31]  𝄀
+1  ¦  0.0  𝄀
+2  ¦  8.16496580927726  𝄀
+3  ¦  8.16496580927726  𝄀
+4  ¦  11.661903789690601
+create table tp (id bigint primary key, k bigint, x double, y double);
+insert into tp values (1, 1, 10, 10),(2, 2, 20, -20),(3, 2, 40, -40);
+select id, ewmcov(x, y, 0.5, true) over (order by k) from tp order by id;
+➤ id[-5,64,0]  ¦  ewmcov(x, y, 0.5, true) over (order by k)[8,53,31]  𝄀
+1  ¦  0.0  𝄀
+2  ¦  -208.0  𝄀
+3  ¦  -208.0
+select id, ewmcorr(x, y, 0.5, true) over (order by k) from tp order by id;
+➤ id[-5,64,0]  ¦  ewmcorr(x, y, 0.5, true) over (order by k)[8,53,31]  𝄀
+1  ¦  null  𝄀
+2  ¦  -0.9456108576893003  𝄀
+3  ¦  -0.9456108576893003
+select id, ewmmean(x, 0.5, true) over (order by k) from tp order by id;
+➤ id[-5,64,0]  ¦  ewmmean(x, 0.5, true) over (order by k)[8,53,31]  𝄀
+1  ¦  10.0  𝄀
+2  ¦  26.0  𝄀
+3  ¦  26.0
+select id, ewmcov(x, y, 0.5, false) over (order by k) from tp order by id;
+➤ id[-5,64,0]  ¦  ewmcov(x, y, 0.5, false) over (order by k)[8,53,31]  𝄀
+1  ¦  0.0  𝄀
+2  ¦  -244.44444444444449  𝄀
+3  ¦  -244.44444444444449
+select id, ewmcorr(x, y, 0.5, false) over (order by k) from tp order by id;
+➤ id[-5,64,0]  ¦  ewmcorr(x, y, 0.5, false) over (order by k)[8,53,31]  𝄀
+1  ¦  null  𝄀
+2  ¦  -0.953820966476532  𝄀
+3  ¦  -0.953820966476532
+create table instant (id bigint primary key, k int, x double, y double);
+insert into instant values (1, 1, 0, 0),(2, 1, 2, 2),(3, 1, 6, 6);
+select id, ewmmean(x, 0.5, true) over (order by k) from instant order by id;
+➤ id[-5,64,0]  ¦  ewmmean(x, 0.5, true) over (order by k)[8,53,31]  𝄀
+1  ¦  2.6666666666666665  𝄀
+2  ¦  2.6666666666666665  𝄀
+3  ¦  2.6666666666666665
+select id, ewmstd(x, 0.5, true) over (order by k) from instant order by id;
+➤ id[-5,64,0]  ¦  ewmstd(x, 0.5, true) over (order by k)[8,53,31]  𝄀
+1  ¦  2.494438257849294  𝄀
+2  ¦  2.494438257849294  𝄀
+3  ¦  2.494438257849294
+select id, ewmcorr(x, y, 0.5, true) over (order by k) from instant order by id;
+➤ id[-5,64,0]  ¦  ewmcorr(x, y, 0.5, true) over (order by k)[8,53,31]  𝄀
+1  ¦  1.0000000000000002  𝄀
+2  ¦  1.0000000000000002  𝄀
+3  ¦  1.0000000000000002
+create table clk (id bigint primary key, k bigint, x double, y double);
+insert into clk values (1, 1, 0, 0),(2, 2, null, null),(3, 2, null, null),(4, 3, 3, 3);
+select id, ewmmean(x, 0.5, true, true) over (order by k) from clk order by id;
+➤ id[-5,64,0]  ¦  ewmmean(x, 0.5, true, true) over (order by k)[8,53,31]  𝄀
+1  ¦  0.0  𝄀
+2  ¦  0.0  𝄀
+3  ¦  0.0  𝄀
+4  ¦  2.0
+select id, ewmvar(x, 0.5, true, true) over (order by k) from clk order by id;
+➤ id[-5,64,0]  ¦  ewmvar(x, 0.5, true, true) over (order by k)[8,53,31]  𝄀
+1  ¦  0.0  𝄀
+2  ¦  0.0  𝄀
+3  ¦  0.0  𝄀
+4  ¦  2.0
+select id, ewmcorr(x, y, 0.5, true, true) over (order by k) from clk order by id;
+➤ id[-5,64,0]  ¦  ewmcorr(x, y, 0.5, true, true) over (order by k)[8,53,31]  𝄀
+1  ¦  null  𝄀
+2  ¦  null  𝄀
+3  ¦  null  𝄀
+4  ¦  0.9999999999999998
+select id, ewmmean(x, 0.5, true, false) over (order by k) from clk order by id;
+➤ id[-5,64,0]  ¦  ewmmean(x, 0.5, true, false) over (order by k)[8,53,31]  𝄀
+1  ¦  0.0  𝄀
+2  ¦  0.0  𝄀
+3  ¦  0.0  𝄀
+4  ¦  2.6666666666666665
+select id, ewmvar(x, 0.5, true, false) over (order by k) from clk order by id;
+➤ id[-5,64,0]  ¦  ewmvar(x, 0.5, true, false) over (order by k)[8,53,31]  𝄀
+1  ¦  0.0  𝄀
+2  ¦  0.0  𝄀
+3  ¦  0.0  𝄀
+4  ¦  0.8888888888888888
+select id, ewmmean(x, 0.5, false, true) over (order by k) from clk order by id;
+➤ id[-5,64,0]  ¦  ewmmean(x, 0.5, false, true) over (order by k)[8,53,31]  𝄀
+1  ¦  0.0  𝄀
+2  ¦  0.0  𝄀
+3  ¦  0.0  𝄀
+4  ¦  1.5
+select id, ewmvar(x, 0.5, false, true) over (order by k) from clk order by id;
+➤ id[-5,64,0]  ¦  ewmvar(x, 0.5, false, true) over (order by k)[8,53,31]  𝄀
+1  ¦  0.0  𝄀
+2  ¦  0.0  𝄀
+3  ¦  0.0  𝄀
+4  ¦  2.25
+select id, ewmmean(x, 0.5, false, false) over (order by k) from clk order by id;
+➤ id[-5,64,0]  ¦  ewmmean(x, 0.5, false, false) over (order by k)[8,53,31]  𝄀
+1  ¦  0.0  𝄀
+2  ¦  0.0  𝄀
+3  ¦  0.0  𝄀
+4  ¦  2.4
+select id, ewmvar(x, 0.5, false, false) over (order by k) from clk order by id;
+➤ id[-5,64,0]  ¦  ewmvar(x, 0.5, false, false) over (order by k)[8,53,31]  𝄀
+1  ¦  0.0  𝄀
+2  ¦  0.0  𝄀
+3  ¦  0.0  𝄀
+4  ¦  1.44
+drop table clk;
+create table p3 (id bigint primary key, x double);
+insert into p3 values (1, 1),(2, null),(3, 3),(4, 4);
+select id, ewmmean(x, 0.5, false, false) over (order by id) from p3 order by id;
+➤ id[-5,64,0]  ¦  ewmmean(x, 0.5, false, false) over (order by id)[8,53,31]  𝄀
+1  ¦  1.0  𝄀
+2  ¦  1.0  𝄀
+3  ¦  2.3333333333333335  𝄀
+4  ¦  3.2857142857142856
+select id, ewmvar(x, 0.5, false, false) over (order by id) from p3 order by id;
+➤ id[-5,64,0]  ¦  ewmvar(x, 0.5, false, false) over (order by id)[8,53,31]  𝄀
+1  ¦  0.0  𝄀
+2  ¦  0.0  𝄀
+3  ¦  0.8888888888888888  𝄀
+4  ¦  1.0612244897959182
+select id, ewmstd(x, 0.5, false, false) over (order by id) from p3 order by id;
+➤ id[-5,64,0]  ¦  ewmstd(x, 0.5, false, false) over (order by id)[8,53,31]  𝄀
+1  ¦  0.0  𝄀
+2  ¦  0.0  𝄀
+3  ¦  0.9428090415820634  𝄀
+4  ¦  1.0301575072754254
+select id, ewmmean(x, 0.5, true, false) over (order by id) from p3 order by id;
+➤ id[-5,64,0]  ¦  ewmmean(x, 0.5, true, false) over (order by id)[8,53,31]  𝄀
+1  ¦  1.0  𝄀
+2  ¦  1.0  𝄀
+3  ¦  2.6  𝄀
+4  ¦  3.4615384615384617
+select id, ewmvar(x, 0.5, true, false) over (order by id) from p3 order by id;
+➤ id[-5,64,0]  ¦  ewmvar(x, 0.5, true, false) over (order by id)[8,53,31]  𝄀
+1  ¦  0.0  𝄀
+2  ¦  0.0  𝄀
+3  ¦  0.6400000000000001  𝄀
+4  ¦  0.7100591715976331
+create table nul (id bigint primary key, x double);
+insert into nul values (1, null),(2, null),(3, null);
+select id, ewmmean(x, 0.5, false) over (order by id) from nul order by id;
+➤ id[-5,64,0]  ¦  ewmmean(x, 0.5, false) over (order by id)[8,53,31]  𝄀
+1  ¦  null  𝄀
+2  ¦  null  𝄀
+3  ¦  null
+select id, ewmvar(x, 0.5, false) over (order by id) from nul order by id;
+➤ id[-5,64,0]  ¦  ewmvar(x, 0.5, false) over (order by id)[8,53,31]  𝄀
+1  ¦  null  𝄀
+2  ¦  null  𝄀
+3  ¦  null
+select id, ewmstd(x, 0.5, false) over (order by id) from nul order by id;
+➤ id[-5,64,0]  ¦  ewmstd(x, 0.5, false) over (order by id)[8,53,31]  𝄀
+1  ¦  null  𝄀
+2  ¦  null  𝄀
+3  ¦  null
+drop table nul;
+create table parts (id bigint primary key, p int, x double);
+insert into parts values (1, 1, 1),(2, 1, 2),(3, 2, 3),(4, 2, 4);
+select id, p, ewmmean(x, 0.5, false) over (partition by p order by id) from parts order by id;
+➤ id[-5,64,0]  ¦  p[4,32,0]  ¦  ewmmean(x, 0.5, false) over (partition by p order by id)[8,53,31]  𝄀
+1  ¦  1  ¦  1.0  𝄀
+2  ¦  1  ¦  1.5  𝄀
+3  ¦  2  ¦  3.0  𝄀
+4  ¦  2  ¦  3.5
+select id, p, ewmvar(x, 0.5, false) over (partition by p order by id) from parts order by id;
+➤ id[-5,64,0]  ¦  p[4,32,0]  ¦  ewmvar(x, 0.5, false) over (partition by p order by id)[8,53,31]  𝄀
+1  ¦  1  ¦  0.0  𝄀
+2  ¦  1  ¦  0.25  𝄀
+3  ¦  2  ¦  0.0  𝄀
+4  ¦  2  ¦  0.25
+create table cst (id bigint primary key, x double);
+insert into cst values (1, 10),(2, null),(3, 10);
+select id, ewmmean(x, 0.5, true, false) over (order by id) from cst order by id;
+➤ id[-5,64,0]  ¦  ewmmean(x, 0.5, true, false) over (order by id)[8,53,31]  𝄀
+1  ¦  10.0  𝄀
+2  ¦  10.0  𝄀
+3  ¦  10.0
+select id, ewmmean(x, 0.5, true, true) over (order by id) from cst order by id;
+➤ id[-5,64,0]  ¦  ewmmean(x, 0.5, true, true) over (order by id)[8,53,31]  𝄀
+1  ¦  10.0  𝄀
+2  ¦  10.0  𝄀
+3  ¦  10.0
+select id, ewmmean(x, 0.5, false, false) over (order by id) from cst order by id;
+➤ id[-5,64,0]  ¦  ewmmean(x, 0.5, false, false) over (order by id)[8,53,31]  𝄀
+1  ¦  10.0  𝄀
+2  ¦  10.0  𝄀
+3  ¦  10.0
+select id, ewmmean(x, 0.5, false, true) over (order by id) from cst order by id;
+➤ id[-5,64,0]  ¦  ewmmean(x, 0.5, false, true) over (order by id)[8,53,31]  𝄀
+1  ¦  10.0  𝄀
+2  ¦  10.0  𝄀
+3  ¦  10.0
+select id, ewmvar(x, 0.5, true, false) over (order by id) from cst order by id;
+➤ id[-5,64,0]  ¦  ewmvar(x, 0.5, true, false) over (order by id)[8,53,31]  𝄀
+1  ¦  0.0  𝄀
+2  ¦  0.0  𝄀
+3  ¦  0.0
+select id, ewmstd(x, 0.5, false, false) over (order by id) from cst order by id;
+➤ id[-5,64,0]  ¦  ewmstd(x, 0.5, false, false) over (order by id)[8,53,31]  𝄀
+1  ¦  0.0  𝄀
+2  ¦  0.0  𝄀
+3  ¦  0.0
+select id, ewmmean(x, 1, true, false) over (order by id) from cst order by id;
+➤ id[-5,64,0]  ¦  ewmmean(x, 1, true, false) over (order by id)[8,53,31]  𝄀
+1  ¦  10.0  𝄀
+2  ¦  10.0  𝄀
+3  ¦  10.0
+select id, ewmmean(x, 1, false, false) over (order by id) from cst order by id;
+➤ id[-5,64,0]  ¦  ewmmean(x, 1, false, false) over (order by id)[8,53,31]  𝄀
+1  ¦  10.0  𝄀
+2  ¦  10.0  𝄀
+3  ¦  10.0
+create table cst2 (id bigint primary key, k bigint, x double, y double);
+insert into cst2 values (1, 1, 10, 10),(2, 2, 10, 10),(3, 2, 10, 10);
+select id, ewmmean(x, 0.5, false) over (order by k) from cst2 order by id;
+➤ id[-5,64,0]  ¦  ewmmean(x, 0.5, false) over (order by k)[8,53,31]  𝄀
+1  ¦  10.0  𝄀
+2  ¦  10.0  𝄀
+3  ¦  10.0
+select id, ewmvar(x, 0.5, false) over (order by k) from cst2 order by id;
+➤ id[-5,64,0]  ¦  ewmvar(x, 0.5, false) over (order by k)[8,53,31]  𝄀
+1  ¦  0.0  𝄀
+2  ¦  0.0  𝄀
+3  ¦  0.0
+select id, ewmstd(x, 0.5, false) over (order by k) from cst2 order by id;
+➤ id[-5,64,0]  ¦  ewmstd(x, 0.5, false) over (order by k)[8,53,31]  𝄀
+1  ¦  0.0  𝄀
+2  ¦  0.0  𝄀
+3  ¦  0.0
+select id, ewmcorr(x, y, 0.5, false) over (order by k) from cst2 order by id;
+➤ id[-5,64,0]  ¦  ewmcorr(x, y, 0.5, false) over (order by k)[8,53,31]  𝄀
+1  ¦  null  𝄀
+2  ¦  null  𝄀
+3  ¦  null
+select id, ewmmean(x, 0.5, true) over (order by k) from cst2 order by id;
+➤ id[-5,64,0]  ¦  ewmmean(x, 0.5, true) over (order by k)[8,53,31]  𝄀
+1  ¦  10.0  𝄀
+2  ¦  10.0  𝄀
+3  ¦  10.0
+drop table cst;
+drop table cst2;
+set @ewm_alpha = 0.5;
+prepare mm from 'select id, ewmmean(x, ?, false) over (order by id) from ewm_stat_test.s order by id';
+execute mm using @ewm_alpha;
+➤ id[-5,64,0]  ¦  ewmmean(s.x, ?, false) over (order by s.id)[8,53,31]  𝄀
+1  ¦  1.0  𝄀
+2  ¦  1.5  𝄀
+3  ¦  2.25  𝄀
+4  ¦  3.125
+set @ewm_alpha = 3.0;
+execute mm using @ewm_alpha;
+invalid input: invalid argument: ewm statistics require alpha in (0,1]
+set @ewm_alpha = 0.5;
+execute mm using @ewm_alpha;
+➤ id[-5,64,0]  ¦  ewmmean(s.x, ?, false) over (order by s.id)[8,53,31]  𝄀
+1  ¦  1.0  𝄀
+2  ¦  1.5  𝄀
+3  ¦  2.25  𝄀
+4  ¦  3.125
+deallocate prepare mm;
+set @ewm_decay = 0.5;
+set @ewm_adjust = true;
+set @ewm_igna = false;
+set @ewm_minp = 2;
+prepare ma from 'select id, ewmmean(x, abs(?), ?, ?, ?) over (order by id) from ewm_stat_test.s order by id';
+execute ma using @ewm_decay, @ewm_adjust, @ewm_igna, @ewm_minp;
+➤ id[-5,64,0]  ¦  ewmmean(s.x, abs(?), ?, ?, ?) over (order by s.id)[8,53,31]  𝄀
+1  ¦  null  𝄀
+2  ¦  1.6666666666666667  𝄀
+3  ¦  2.4285714285714284  𝄀
+4  ¦  3.2666666666666666
+set @ewm_decay = -1.0;
+execute ma using @ewm_decay, @ewm_adjust, @ewm_igna, @ewm_minp;
+➤ id[-5,64,0]  ¦  ewmmean(s.x, abs(?), ?, ?, ?) over (order by s.id)[8,53,31]  𝄀
+1  ¦  null  𝄀
+2  ¦  2.0  𝄀
+3  ¦  3.0  𝄀
+4  ¦  4.0
+set @ewm_decay = 3.0;
+execute ma using @ewm_decay, @ewm_adjust, @ewm_igna, @ewm_minp;
+invalid input: invalid argument: ewm statistics require alpha in (0,1]
+set @ewm_decay = 0.5;
+execute ma using @ewm_decay, @ewm_adjust, @ewm_igna, @ewm_minp;
+➤ id[-5,64,0]  ¦  ewmmean(s.x, abs(?), ?, ?, ?) over (order by s.id)[8,53,31]  𝄀
+1  ¦  null  𝄀
+2  ¦  1.6666666666666667  𝄀
+3  ¦  2.4285714285714284  𝄀
+4  ¦  3.2666666666666666
+select id, ewmmean(x, 0.5, true, false, 2) over (order by id) from ewm_stat_test.s order by id;
+➤ id[-5,64,0]  ¦  ewmmean(x, 0.5, true, false, 2) over (order by id)[8,53,31]  𝄀
+1  ¦  null  𝄀
+2  ¦  1.6666666666666667  𝄀
+3  ¦  2.4285714285714284  𝄀
+4  ¦  3.2666666666666666
+deallocate prepare ma;
+set @ewm_h = 3600;
+prepare mh from 'select id, ewmmean(x, ''halflife'', ?, false) over (order by id) from ewm_stat_test.s order by id';
+execute mh using @ewm_h;
+➤ id[-5,64,0]  ¦  ewmmean(s.x, halflife, ?, false) over (order by s.id)[8,53,31]  𝄀
+1  ¦  1.0  𝄀
+2  ¦  1.0001925223486825  𝄀
+3  ¦  1.000577529981193  𝄀
+4  ¦  1.0011549858398123
+set @ewm_h = 0;
+execute mh using @ewm_h;
+invalid input: invalid argument: ewm halflife decay requires a strictly positive half-life constant
+set @ewm_h = 3600;
+execute mh using @ewm_h;
+➤ id[-5,64,0]  ¦  ewmmean(s.x, halflife, ?, false) over (order by s.id)[8,53,31]  𝄀
+1  ¦  1.0  𝄀
+2  ¦  1.0001925223486825  𝄀
+3  ¦  1.000577529981193  𝄀
+4  ¦  1.0011549858398123
+select id, ewmmean(x, 'halflife', 3600, false) over (order by id) from ewm_stat_test.s order by id;
+➤ id[-5,64,0]  ¦  ewmmean(x, halflife, 3600, false) over (order by id)[8,53,31]  𝄀
+1  ¦  1.0  𝄀
+2  ¦  1.0001925223486825  𝄀
+3  ¦  1.000577529981193  𝄀
+4  ¦  1.0011549858398123
+deallocate prepare mh;
+select id, ewmmean(x, 0.25, false) over (order by id) from s order by id;
+➤ id[-5,64,0]  ¦  ewmmean(x, 0.25, false) over (order by id)[8,53,31]  𝄀
+1  ¦  1.0  𝄀
+2  ¦  1.25  𝄀
+3  ¦  1.6875  𝄀
+4  ¦  2.265625
+select id, ewmmean(x, 0.25, true) over (order by id) from s order by id;
+➤ id[-5,64,0]  ¦  ewmmean(x, 0.25, true) over (order by id)[8,53,31]  𝄀
+1  ¦  1.0  𝄀
+2  ¦  1.5714285714285714  𝄀
+3  ¦  2.189189189189189  𝄀
+4  ¦  2.8514285714285714
+create table mk (id bigint primary key, a int, b int, x double);
+insert into mk values (1, 2, 1, 30),(2, 1, 1, 10),(3, 1, 1, 20);
+select id, ewmmean(x, 0.5, true) over (order by a, b) from mk order by id;
+➤ id[-5,64,0]  ¦  ewmmean(x, 0.5, true) over (order by a, b)[8,53,31]  𝄀
+1  ¦  22.5  𝄀
+2  ¦  15.0  𝄀
+3  ¦  15.0
+drop table mk;
+create table lat (id bigint primary key, k varchar(8), x double);
+insert into lat values (1, 'bee', 10),(2, 'ant', 20),(3, 'ant', 30);
+select id, ewmmean(x, 0.5, true) over (order by k desc) from lat order by id;
+➤ id[-5,64,0]  ¦  ewmmean(x, 0.5, true) over (order by k desc)[8,53,31]  𝄀
+1  ¦  10.0  𝄀
+2  ¦  22.0  𝄀
+3  ¦  22.0
+select id, ewmmean(x, 0.5, true) over (order by k) from lat order by id;
+➤ id[-5,64,0]  ¦  ewmmean(x, 0.5, true) over (order by k)[8,53,31]  𝄀
+1  ¦  17.5  𝄀
+2  ¦  25.0  𝄀
+3  ¦  25.0
+drop table lat;
+create table latn (id bigint primary key, k varchar(8), x double);
+insert into latn values (1, null, 10),(2, 'x', 20),(3, 'x', 30);
+select id, ewmmean(x, 0.5, true) over (order by k) from latn order by id;
+➤ id[-5,64,0]  ¦  ewmmean(x, 0.5, true) over (order by k)[8,53,31]  𝄀
+1  ¦  10.0  𝄀
+2  ¦  22.0  𝄀
+3  ¦  22.0
+drop table latn;
+select id, ewmmean(cast(7.0 as double), 0.5, false) over (order by id) from s order by id;
+➤ id[-5,64,0]  ¦  ewmmean(cast(7.0 as double), 0.5, false) over (order by id)[8,53,31]  𝄀
+1  ¦  7.0  𝄀
+2  ¦  7.0  𝄀
+3  ¦  7.0  𝄀
+4  ¦  7.0
+select id, ewmmean(x, 0.5, false) over (order by cast(9 as char)) from s order by id;
+➤ id[-5,64,0]  ¦  ewmmean(x, 0.5, false) over (order by cast(9 as varchar))[8,53,31]  𝄀
+1  ¦  2.5  𝄀
+2  ¦  2.5  𝄀
+3  ¦  2.5  𝄀
+4  ¦  2.5
+set @ewm_a = 0.5;
+prepare sd from 'select id, ewmmean(x, ?, false) over (order by id desc) from ewm_stat_test.s order by id';
+execute sd using @ewm_a;
+➤ id[-5,64,0]  ¦  ewmmean(s.x, ?, false) over (order by s.id desc)[8,53,31]  𝄀
+1  ¦  1.875  𝄀
+2  ¦  2.75  𝄀
+3  ¦  3.5  𝄀
+4  ¦  4.0
+deallocate prepare sd;
+prepare sm from 'select id, ewmmean(x, ?) over (order by id, x) from ewm_stat_test.s order by id';
+execute sm using @ewm_a;
+➤ id[-5,64,0]  ¦  ewmmean(s.x, ?) over (order by s.id, s.x)[8,53,31]  𝄀
+1  ¦  1.0  𝄀
+2  ¦  1.6666666666666667  𝄀
+3  ¦  2.4285714285714284  𝄀
+4  ¦  3.2666666666666666
+deallocate prepare sm;
+set @ewm_tag = 'halflife';
+set @ewm_hp = 10;
+prepare sh from 'select id, ewmmean(x, ?, ?, false) over (order by id desc) from ewm_stat_test.s order by id';
+execute sh using @ewm_tag, @ewm_hp;
+invalid input: invalid argument: event-time ewm statistics require ascending ORDER BY
+set @ewm_hp = 0;
+execute sh using @ewm_tag, @ewm_hp;
+invalid input: invalid argument: ewm halflife decay requires a strictly positive half-life constant
+deallocate prepare sh;
+drop table s;
+drop table t122;
+drop table tp;
+drop table instant;
+drop table p3;
+drop table parts;
+drop database ewm_stat_test;
+create database ewm_stat_time;
+use ewm_stat_time;
+create table ev (t bigint primary key, x double, y double);
+insert into ev values (0, 0, 0),(1, 5, 5);
+select t, ewmmean(x, 'halflife', 1, true) over (order by t) from ev order by t;
+➤ t[-5,64,0]  ¦  ewmmean(x, halflife, 1, true) over (order by t)[8,53,31]  𝄀
+0  ¦  0.0  𝄀
+1  ¦  3.3333333333333335
+select t, ewmvar(x, 'halflife', 1, true) over (order by t) from ev order by t;
+➤ t[-5,64,0]  ¦  ewmvar(x, halflife, 1, true) over (order by t)[8,53,31]  𝄀
+0  ¦  0.0  𝄀
+1  ¦  5.555555555555556
+select t, ewmstd(x, 'halflife', 1, true) over (order by t) from ev order by t;
+➤ t[-5,64,0]  ¦  ewmstd(x, halflife, 1, true) over (order by t)[8,53,31]  𝄀
+0  ¦  0.0  𝄀
+1  ¦  2.3570226039551585
+delete from ev;
+insert into ev values (0, 1, 1),(250000, 2, 2);
+select t, ewmmean(x, 'halflife', 1000000, true) over (order by t) from ev order by t;
+➤ t[-5,64,0]  ¦  ewmmean(x, halflife, 1000000, true) over (order by t)[8,53,31]  𝄀
+0  ¦  1.0  𝄀
+250000  ¦  1.543213616862945
+select t, ewmvar(x, 'halflife', 1000000, true) over (order by t) from ev order by t;
+➤ t[-5,64,0]  ¦  ewmvar(x, halflife, 1000000, true) over (order by t)[8,53,31]  𝄀
+0  ¦  0.0  𝄀
+250000  ¦  0.24813258331762264
+delete from ev;
+insert into ev values (-9223372036854775808, 0, 0),(9223372036854775807, 10, 10);
+select t, ewmmean(x, 'halflife', 1, false) over (order by t) from ev order by t;
+➤ t[-5,64,0]  ¦  ewmmean(x, halflife, 1, false) over (order by t)[8,53,31]  𝄀
+-9223372036854775808  ¦  0.0  𝄀
+9223372036854775807  ¦  10.0
+select t, ewmcov(x, y, 'halflife', 1, false) over (order by t) from ev order by t;
+➤ t[-5,64,0]  ¦  ewmcov(x, y, halflife, 1, false) over (order by t)[8,53,31]  𝄀
+-9223372036854775808  ¦  0.0  𝄀
+9223372036854775807  ¦  0.0
+select t, ewmcorr(x, y, 'halflife', 1, false) over (order by t) from ev order by t;
+➤ t[-5,64,0]  ¦  ewmcorr(x, y, halflife, 1, false) over (order by t)[8,53,31]  𝄀
+-9223372036854775808  ¦  null  𝄀
+9223372036854775807  ¦  null
+delete from ev;
+insert into ev values (0, 2, 2),(2000, 1, 1);
+select t, ewmmean(x, 'halflife', 1, false) over (order by t) from ev order by t;
+➤ t[-5,64,0]  ¦  ewmmean(x, halflife, 1, false) over (order by t)[8,53,31]  𝄀
+0  ¦  2.0  𝄀
+2000  ¦  1.0
+select t, ewmvar(x, 'halflife', 1, false) over (order by t) from ev order by t;
+➤ t[-5,64,0]  ¦  ewmvar(x, halflife, 1, false) over (order by t)[8,53,31]  𝄀
+0  ¦  0.0  𝄀
+2000  ¦  0.0
+create table evd (t decimal(2,1), x double);
+insert into evd values (1.5, 2),(3.5, 4);
+select t, ewmmean(x, 'halflife', 1, true) over (order by t) from evd order by t;
+➤ t[3,2,1]  ¦  ewmmean(x, halflife, 1, true) over (order by t)[8,53,31]  𝄀
+1.5  ¦  2.0  𝄀
+3.5  ¦  3.6
+select t, ewmvar(x, 'halflife', 1, true) over (order by t) from evd order by t;
+➤ t[3,2,1]  ¦  ewmvar(x, halflife, 1, true) over (order by t)[8,53,31]  𝄀
+1.5  ¦  0.0  𝄀
+3.5  ¦  0.6400000000000001
+select t, ewmstd(x, 'halflife', 1, true) over (order by t) from evd order by t;
+➤ t[3,2,1]  ¦  ewmstd(x, halflife, 1, true) over (order by t)[8,53,31]  𝄀
+1.5  ¦  0.0  𝄀
+3.5  ¦  0.8
+drop table evd;
+create table evf (t double, x double, y double);
+insert into evf values (-1e308, 0, 0),(1e308, 10, 0);
+select t, ewmmean(x, 'halflife', 1e308, false) over (order by t) from evf order by t;
+➤ t[8,53,31]  ¦  ewmmean(x, halflife, 1e308, false) over (order by t)[8,53,31]  𝄀
+-1.0E308  ¦  0.0  𝄀
+1.0E308  ¦  7.5
+select t, ewmvar(x, 'halflife', 1e308, false) over (order by t) from evf order by t;
+➤ t[8,53,31]  ¦  ewmvar(x, halflife, 1e308, false) over (order by t)[8,53,31]  𝄀
+-1.0E308  ¦  0.0  𝄀
+1.0E308  ¦  18.75
+select t, ewmcorr(x, y, 'halflife', 1e308, false) over (order by t) from evf order by t;
+➤ t[8,53,31]  ¦  ewmcorr(x, y, halflife, 1e308, false) over (order by t)[8,53,31]  𝄀
+-1.0E308  ¦  null  𝄀
+1.0E308  ¦  null
+delete from evf;
+insert into evf values (-1e308, 7, 7),(1e308, 7, 7);
+select t, ewmmean(x, 'halflife', 1e308, false) over (order by t) from evf order by t;
+➤ t[8,53,31]  ¦  ewmmean(x, halflife, 1e308, false) over (order by t)[8,53,31]  𝄀
+-1.0E308  ¦  7.0  𝄀
+1.0E308  ¦  7.0
+select t, ewmvar(x, 'halflife', 1e308, false) over (order by t) from evf order by t;
+➤ t[8,53,31]  ¦  ewmvar(x, halflife, 1e308, false) over (order by t)[8,53,31]  𝄀
+-1.0E308  ¦  0.0  𝄀
+1.0E308  ¦  0.0
+delete from evf;
+insert into evf values (0, 7, 7),(1e-20, 9, -9);
+select t, ewmmean(x, 'halflife', 1e308, true) over (order by t) from evf order by t;
+➤ t[8,53,31]  ¦  ewmmean(x, halflife, 1e308, true) over (order by t)[8,53,31]  𝄀
+0.0  ¦  7.0  𝄀
+1.0E-20  ¦  8.0
+select t, ewmvar(x, 'halflife', 1e308, true) over (order by t) from evf order by t;
+➤ t[8,53,31]  ¦  ewmvar(x, halflife, 1e308, true) over (order by t)[8,53,31]  𝄀
+0.0  ¦  0.0  𝄀
+1.0E-20  ¦  1.0
+select t, ewmcov(x, y, 'halflife', 1e308, true) over (order by t) from evf order by t;
+➤ t[8,53,31]  ¦  ewmcov(x, y, halflife, 1e308, true) over (order by t)[8,53,31]  𝄀
+0.0  ¦  0.0  𝄀
+1.0E-20  ¦  -8.0
+select t, ewmcorr(x, y, 'halflife', 1e308, true) over (order by t) from evf order by t;
+➤ t[8,53,31]  ¦  ewmcorr(x, y, halflife, 1e308, true) over (order by t)[8,53,31]  𝄀
+0.0  ¦  null  𝄀
+1.0E-20  ¦  -1.0
+delete from evf;
+insert into evf values (0, 10000, 10000),(1074, 0, 0);
+select t, ewmmean(x, 'halflife', 1, false) over (order by t) from evf order by t;
+➤ t[8,53,31]  ¦  ewmmean(x, halflife, 1, false) over (order by t)[8,53,31]  𝄀
+0.0  ¦  10000.0  𝄀
+1074.0  ¦  4.9407E-320
+select t, ewmvar(x, 'halflife', 1, false) over (order by t) from evf order by t;
+➤ t[8,53,31]  ¦  ewmvar(x, halflife, 1, false) over (order by t)[8,53,31]  𝄀
+0.0  ¦  0.0  𝄀
+1074.0  ¦  4.94065646E-316
+select t, ewmstd(x, 'halflife', 1, false) over (order by t) from evf order by t;
+➤ t[8,53,31]  ¦  ewmstd(x, halflife, 1, false) over (order by t)[8,53,31]  𝄀
+0.0  ¦  0.0  𝄀
+1074.0  ¦  2.2227587494850775E-158
+select t, ewmcov(x, y, 'halflife', 1, false) over (order by t) from evf order by t;
+➤ t[8,53,31]  ¦  ewmcov(x, y, halflife, 1, false) over (order by t)[8,53,31]  𝄀
+0.0  ¦  0.0  𝄀
+1074.0  ¦  4.94065646E-316
+select t, ewmcorr(x, y, 'halflife', 1, false) over (order by t) from evf order by t;
+➤ t[8,53,31]  ¦  ewmcorr(x, y, halflife, 1, false) over (order by t)[8,53,31]  𝄀
+0.0  ¦  null  𝄀
+1074.0  ¦  1.0
+delete from ev;
+insert into ev values (0, 1, 1),(1, null, null),(2, 3, 3),(3, 4, null),(4, 5, 6);
+select t, x, y, ewmmean(x, 'halflife', 1, true, true) over (order by t) from ev order by t;
+➤ t[-5,64,0]  ¦  x[8,53,31]  ¦  y[8,53,31]  ¦  ewmmean(x, halflife, 1, true, true) over (order by t)[8,53,31]  𝄀
+0  ¦  1.0  ¦  1.0  ¦  1.0  𝄀
+1  ¦  null  ¦  null  ¦  null  𝄀
+2  ¦  3.0  ¦  3.0  ¦  2.6  𝄀
+3  ¦  4.0  ¦  null  ¦  3.4615384615384617  𝄀
+4  ¦  5.0  ¦  6.0  ¦  4.310344827586207
+select t, ewmmean(x, 'halflife', 1, true, false) over (order by t) from ev order by t;
+➤ t[-5,64,0]  ¦  ewmmean(x, halflife, 1, true, false) over (order by t)[8,53,31]  𝄀
+0  ¦  1.0  𝄀
+1  ¦  1.0  𝄀
+2  ¦  2.6  𝄀
+3  ¦  3.4615384615384617  𝄀
+4  ¦  4.310344827586207
+select t, ewmcorr(x, y, 'halflife', 1, true, true) over (order by t) from ev order by t;
+➤ t[-5,64,0]  ¦  ewmcorr(x, y, halflife, 1, true, true) over (order by t)[8,53,31]  𝄀
+0  ¦  null  𝄀
+1  ¦  null  𝄀
+2  ¦  1.0  𝄀
+3  ¦  null  𝄀
+4  ¦  0.9948547986421094
+delete from ev;
+create table evc (t bigint, x double, y double);
+insert into evc values (0, 7, 7),(35, 7, 7),(100, 7, 7),(100, 7, 7);
+select t, ewmmean(x, 'halflife', 100, true, true) over (order by t) from evc order by t;
+➤ t[-5,64,0]  ¦  ewmmean(x, halflife, 100, true, true) over (order by t)[8,53,31]  𝄀
+0  ¦  7.0  𝄀
+35  ¦  7.0  𝄀
+100  ¦  7.0  𝄀
+100  ¦  7.0
+select t, ewmmean(x, 'halflife', 100, true, false) over (order by t) from evc order by t;
+➤ t[-5,64,0]  ¦  ewmmean(x, halflife, 100, true, false) over (order by t)[8,53,31]  𝄀
+0  ¦  7.0  𝄀
+35  ¦  7.0  𝄀
+100  ¦  7.0  𝄀
+100  ¦  7.0
+select t, ewmvar(x, 'halflife', 100, true, false) over (order by t) from evc order by t;
+➤ t[-5,64,0]  ¦  ewmvar(x, halflife, 100, true, false) over (order by t)[8,53,31]  𝄀
+0  ¦  0.0  𝄀
+35  ¦  0.0  𝄀
+100  ¦  0.0  𝄀
+100  ¦  0.0
+drop table evc;
+create table uk (t bigint unsigned, x double);
+insert into uk values (9223372036854775808, 0),(9223372036854775809, 10);
+select t, ewmmean(x, 'halflife', 1, false) over (order by t) from uk order by t;
+➤ t[-5,64,0]  ¦  ewmmean(x, halflife, 1, false) over (order by t)[8,53,31]  𝄀
+9223372036854775808  ¦  0.0  𝄀
+9223372036854775809  ¦  5.0
+delete from uk;
+insert into uk values (18446744073709551614, 0),(18446744073709551615, 10);
+select t, ewmmean(x, 'halflife', 1, false) over (order by t) from uk order by t;
+➤ t[-5,64,0]  ¦  ewmmean(x, halflife, 1, false) over (order by t)[8,53,31]  𝄀
+18446744073709551614  ¦  0.0  𝄀
+18446744073709551615  ¦  5.0
+delete from uk;
+insert into uk values (0, 0),(18446744073709551615, 10);
+select t, ewmmean(x, 'halflife', 1, false) over (order by t) from uk order by t;
+➤ t[-5,64,0]  ¦  ewmmean(x, halflife, 1, false) over (order by t)[8,53,31]  𝄀
+0  ¦  0.0  𝄀
+18446744073709551615  ¦  10.0
+delete from uk;
+insert into uk values (9223372036854775808, 10),(9223372036854775808, 20);
+select t, ewmmean(x, 'halflife', 1, false) over (order by t) from uk order by t;
+➤ t[-5,64,0]  ¦  ewmmean(x, halflife, 1, false) over (order by t)[8,53,31]  𝄀
+9223372036854775808  ¦  15.0  𝄀
+9223372036854775808  ¦  15.0
+drop table uk;
+create table evu (t bigint, x double);
+insert into evu values (0, 0),(1, null),(2, 10);
+select t, ewmmean(x, 'halflife', 1, false, false) over (order by t) from evu order by t;
+➤ t[-5,64,0]  ¦  ewmmean(x, halflife, 1, false, false) over (order by t)[8,53,31]  𝄀
+0  ¦  0.0  𝄀
+1  ¦  0.0  𝄀
+2  ¦  6.666666666666667
+select t, ewmmean(x, 'halflife', 1, false, true) over (order by t) from evu order by t;
+➤ t[-5,64,0]  ¦  ewmmean(x, halflife, 1, false, true) over (order by t)[8,53,31]  𝄀
+0  ¦  0.0  𝄀
+1  ¦  null  𝄀
+2  ¦  6.666666666666667
+select t, ewmmean(x, 'halflife', 1, true, false) over (order by t) from evu order by t;
+➤ t[-5,64,0]  ¦  ewmmean(x, halflife, 1, true, false) over (order by t)[8,53,31]  𝄀
+0  ¦  0.0  𝄀
+1  ¦  0.0  𝄀
+2  ¦  8.0
+select t, ewmvar(x, 'halflife', 1, true, false) over (order by t) from evu order by t;
+➤ t[-5,64,0]  ¦  ewmvar(x, halflife, 1, true, false) over (order by t)[8,53,31]  𝄀
+0  ¦  0.0  𝄀
+1  ¦  0.0  𝄀
+2  ¦  16.0
+drop table evu;
+create table evt (t bigint, x double);
+insert into evt values (0, 0),(1, 10);
+prepare mr5a from 'select t, ewmmean(x, ?, ?) over (order by t) from evt order by t';
+set @ev_decay = 'halflife';
+set @ev_h = 1.0;
+execute mr5a using @ev_decay, @ev_h;
+➤ t[-5,64,0]  ¦  ewmmean(evt.x, ?, ?) over (order by evt.t)[8,53,31]  𝄀
+0  ¦  0.0  𝄀
+1  ¦  6.666666666666667
+set @ev_decay = 0.5;
+set @ev_h = false;
+execute mr5a using @ev_decay, @ev_h;
+➤ t[-5,64,0]  ¦  ewmmean(evt.x, ?, ?) over (order by evt.t)[8,53,31]  𝄀
+0  ¦  0.0  𝄀
+1  ¦  5.0
+deallocate prepare mr5a;
+prepare mr5b from 'select t, ewmmean(x, ?, ?, ?) over (order by t) from evt order by t';
+set @ev_decay = 'halflife';
+set @ev_h = 1.0;
+set @ev_adjust = false;
+execute mr5b using @ev_decay, @ev_h, @ev_adjust;
+➤ t[-5,64,0]  ¦  ewmmean(evt.x, ?, ?, ?) over (order by evt.t)[8,53,31]  𝄀
+0  ¦  0.0  𝄀
+1  ¦  5.0
+deallocate prepare mr5b;
+drop table evt;
+create table mev (i int, m mediumint);
+insert into mev values (1, 1),(2, 2),(3, 3);
+select i, m, ewmmean(m, 0.5, false) over (order by i) from mev order by i;
+➤ i[4,32,0]  ¦  m[4,9,0]  ¦  ewmmean(m, 0.5, false) over (order by i)[8,53,31]  𝄀
+1  ¦  1  ¦  1.0  𝄀
+2  ¦  2  ¦  1.5  𝄀
+3  ¦  3  ¦  2.25
+drop table mev;
+select cast(1 as mediumint);
+CAST to MEDIUMINT is not supported is not yet implemented
+select 1;
+➤ 1[-5,64,0]  𝄀
+1
+create table npl (t bigint, x double);
+insert into npl values (0, 0),(1, 10);
+select t, ewmmean(x, 0.5, bit_cast(unhex('000000000000f87f') as double)) over (order by t) from npl order by t;
+invalid input: invalid argument: ewm statistics require constant adjust and ignoreNA booleans
+select t, ewmmean(x, 0.5, cast(1 as double)) over (order by t) from npl order by t;
+➤ t[-5,64,0]  ¦  ewmmean(x, 0.5, cast(1 as double)) over (order by t)[8,53,31]  𝄀
+0  ¦  0.0  𝄀
+1  ¦  6.666666666666667
+select t, ewmmean(x, 0.5, false, bit_cast(unhex('000000000000f0ff') as double)) over (order by t) from npl order by t;
+invalid input: invalid argument: ewm statistics require constant adjust and ignoreNA booleans
+select t, ewmmean(x, 0.5, cast(0 as double), true) over (order by t) from npl order by t;
+➤ t[-5,64,0]  ¦  ewmmean(x, 0.5, cast(0 as double), true) over (order by t)[8,53,31]  𝄀
+0  ¦  0.0  𝄀
+1  ¦  5.0
+prepare npp from 'select t, ewmmean(x, 0.5, ?, true) over (order by t) from npl order by t';
+set @np_adjust = bit_cast(unhex('000000000000f87f') as double);
+execute npp using @np_adjust;
+invalid input: invalid argument: ewm statistics require constant adjust and ignoreNA booleans
+select 1;
+➤ 1[-5,64,0]  𝄀
+1
+set @np_adjust = cast(0 as double);
+execute npp using @np_adjust;
+➤ t[-5,64,0]  ¦  ewmmean(npl.x, 0.5, ?, true) over (order by npl.t)[8,53,31]  𝄀
+0  ¦  0.0  𝄀
+1  ¦  5.0
+deallocate prepare npp;
+drop table npl;
+create table dn (t bigint, x double);
+insert into dn values (0, 10),(1, 20);
+select t, ewmmean(null, 0.5, false) over (order by t) from dn order by t;
+➤ t[-5,64,0]  ¦  ewmmean(null, 0.5, false) over (order by t)[8,53,31]  𝄀
+0  ¦  null  𝄀
+1  ¦  null
+select t, ewmvar(null, 0.5, false) over (order by t) from dn order by t;
+➤ t[-5,64,0]  ¦  ewmvar(null, 0.5, false) over (order by t)[8,53,31]  𝄀
+0  ¦  null  𝄀
+1  ¦  null
+select t, ewmstd(null, 0.5, false) over (order by t) from dn order by t;
+➤ t[-5,64,0]  ¦  ewmstd(null, 0.5, false) over (order by t)[8,53,31]  𝄀
+0  ¦  null  𝄀
+1  ¦  null
+select t, ewmcov(null, x, 0.5, false) over (order by t) from dn order by t;
+➤ t[-5,64,0]  ¦  ewmcov(null, x, 0.5, false) over (order by t)[8,53,31]  𝄀
+0  ¦  null  𝄀
+1  ¦  null
+select t, ewmcov(x, null, 0.5, false) over (order by t) from dn order by t;
+➤ t[-5,64,0]  ¦  ewmcov(x, null, 0.5, false) over (order by t)[8,53,31]  𝄀
+0  ¦  null  𝄀
+1  ¦  null
+select t, ewmcorr(null, x, 0.5, false) over (order by t) from dn order by t;
+➤ t[-5,64,0]  ¦  ewmcorr(null, x, 0.5, false) over (order by t)[8,53,31]  𝄀
+0  ¦  null  𝄀
+1  ¦  null
+select t, ewmcorr(x, null, 0.5, false) over (order by t) from dn order by t;
+➤ t[-5,64,0]  ¦  ewmcorr(x, null, 0.5, false) over (order by t)[8,53,31]  𝄀
+0  ¦  null  𝄀
+1  ¦  null
+drop table dn;
+create table m9 (id bigint primary key, x double);
+insert into m9 values (1, 1),(2, 2),(3, 3),(4, 4);
+create table ctas_m9 as select ewmmean(x, 0.5, true, false, 2) over (order by id) as c from m9;
+show columns from ctas_m9;
+➤ Field[12,-1,0]  ¦  Type[12,-1,0]  ¦  Null[12,-1,0]  ¦  Key[12,-1,0]  ¦  Default[12,-1,0]  ¦  Extra[12,-1,0]  ¦  Comment[12,-1,0]  𝄀
+c  ¦  double  ¦  YES  ¦    ¦  null  ¦    ¦  
+select c from ctas_m9 order by c;
+➤ c[8,53,31]  𝄀
+null  𝄀
+1.6666666666666667  𝄀
+2.4285714285714284  𝄀
+3.2666666666666666
+create table ctas_c9 as select ewmcorr(1e0, 1e0, 0.5, false) over (order by id) as c from m9;
+show columns from ctas_c9;
+➤ Field[12,-1,0]  ¦  Type[12,-1,0]  ¦  Null[12,-1,0]  ¦  Key[12,-1,0]  ¦  Default[12,-1,0]  ¦  Extra[12,-1,0]  ¦  Comment[12,-1,0]  𝄀
+c  ¦  double  ¦  YES  ¦    ¦  null  ¦    ¦  
+select c from ctas_c9 order by c;
+➤ c[8,53,31]  𝄀
+null  𝄀
+null  𝄀
+null  𝄀
+null
+drop table ctas_m9;
+drop table ctas_c9;
+drop table m9;
+create table d9 (t bigint, x double, y double);
+insert into d9 values (0, 0, 0),(1, 10, 10);
+set @ewm_tag9 = 'halflife';
+prepare d9m from 'select t, ewmmean(x, ?, cast(1 as decimal(65,0)), false, false, 0) over (order by t) from d9 order by t';
+execute d9m using @ewm_tag9;
+➤ t[-5,64,0]  ¦  ewmmean(d9.x, ?, cast(1 as decimal(65)), false, false, 0) over (order by d9.t)[8,53,31]  𝄀
+0  ¦  0.0  𝄀
+1  ¦  5.0
+prepare d9c from 'select t, ewmcov(x, y, ?, cast(1 as decimal(65,0)), true, false, 0) over (order by t) from d9 order by t';
+execute d9c using @ewm_tag9;
+➤ t[-5,64,0]  ¦  ewmcov(d9.x, d9.y, ?, cast(1 as decimal(65)), true, false, 0) over (order by d9.t)[8,53,31]  𝄀
+0  ¦  0.0  𝄀
+1  ¦  22.222222222222225
+prepare d9r from 'select t, ewmcorr(x, y, ?, cast(1 as decimal(65,0)), true, false, 0) over (order by t) from d9 order by t';
+execute d9r using @ewm_tag9;
+➤ t[-5,64,0]  ¦  ewmcorr(d9.x, d9.y, ?, cast(1 as decimal(65)), true, false, 0) over (order by d9.t)[8,53,31]  𝄀
+0  ¦  null  𝄀
+1  ¦  1.0
+deallocate prepare d9m;
+deallocate prepare d9c;
+deallocate prepare d9r;
+drop table d9;
+create table rtt (i int, v double, primary key(i));
+insert into rtt values (1, 0.0),(2, 10.0);
+set session timestamp = 1793600401;
+prepare rt1 from 'select ewmmean(v, 0.5, second(current_timestamp()) = 1) over (order by i) from rtt order by i';
+execute rt1;
+➤ ewmmean(v, 0.5, second(current_timestamp()) = 1) over (order by i)[8,53,31]  𝄀
+0.0  𝄀
+6.666666666666667
+set session timestamp = 1793600403;
+execute rt1;
+➤ ewmmean(v, 0.5, second(current_timestamp()) = 1) over (order by i)[8,53,31]  𝄀
+0.0  𝄀
+5.0
+set session timestamp = 0;
+prepare rt2 from 'select ewmmean(v, 0.5, false) over (order by i) from rtt order by i';
+execute rt2;
+➤ ewmmean(v, 0.5, false) over (order by i)[8,53,31]  𝄀
+0.0  𝄀
+5.0
+deallocate prepare rt1;
+deallocate prepare rt2;
+drop table rtt;
+create table m11 (id bigint primary key, x double);
+insert into m11 values (1, 1),(2, 2),(3, 3),(4, 4);
+select id, ewmmean(x, 0.5, false, false, cast('2.0' as decimal(18,1))) over (order by id) from m11 order by id;
+➤ id[-5,64,0]  ¦  ewmmean(x, 0.5, false, false, cast(2.0 as decimal(18, 1))) over (order by id)[8,53,31]  𝄀
+1  ¦  null  𝄀
+2  ¦  1.5  𝄀
+3  ¦  2.25  𝄀
+4  ¦  3.125
+select id, ewmmean(x, 0.5, false, false, 2147483647) over (order by id) from m11 order by id;
+➤ id[-5,64,0]  ¦  ewmmean(x, 0.5, false, false, 2147483647) over (order by id)[8,53,31]  𝄀
+1  ¦  null  𝄀
+2  ¦  null  𝄀
+3  ¦  null  𝄀
+4  ¦  null
+select id, ewmmean(x, 0.5, false, false, 2147483648) over (order by id) from m11 order by id;
+➤ id[-5,64,0]  ¦  ewmmean(x, 0.5, false, false, 2147483648) over (order by id)[8,53,31]  𝄀
+1  ¦  null  𝄀
+2  ¦  null  𝄀
+3  ¦  null  𝄀
+4  ¦  null
+select id, ewmmean(x, 0.5, false, false, 4611686018427387905) over (order by id) from m11 order by id;
+➤ id[-5,64,0]  ¦  ewmmean(x, 0.5, false, false, 4611686018427387905) over (order by id)[8,53,31]  𝄀
+1  ¦  null  𝄀
+2  ¦  null  𝄀
+3  ¦  null  𝄀
+4  ¦  null
+select id, ewmmean(x, 0.5, false, false, cast('0.999999999999999999' as decimal(18,18))) over (order by id) from m11 order by id;
+invalid input: invalid argument: ewm statistics require minPeriods to be a constant integer >= 0
+select 1 as recover_a;
+➤ recover_a[-5,64,0]  𝄀
+1
+select id, ewmmean(x, 0.5, false, false, cast('9.99999999999999999' as decimal(18,17))) over (order by id) from m11 order by id;
+invalid input: invalid argument: ewm statistics require minPeriods to be a constant integer >= 0
+select id, ewmmean(x, 0.5, false, false, cast('0.99999999999999999999999999999999999999' as decimal(38,38))) over (order by id) from m11 order by id;
+invalid input: invalid argument: ewm statistics require minPeriods to be a constant integer >= 0
+select id, ewmmean(x, 0.5, false, false, cast('0.9999999999999999999999999999999999999999999999999999999999999999' as decimal(64,64))) over (order by id) from m11 order by id;
+invalid input: invalid argument: ewm statistics require minPeriods to be a constant integer >= 0
+select 1 as recover_b;
+➤ recover_b[-5,64,0]  𝄀
+1
+set @mpb_frac = cast('0.999999999999999999' as decimal(18,18));
+set @mpb_big = 2147483648;
+set @mpb_two = cast('2.0' as decimal(18,1));
+prepare mpb from 'select id, ewmmean(x, 0.5, false, false, ?) over (order by id) from m11 order by id';
+execute mpb using @mpb_frac;
+invalid input: invalid argument: ewm statistics require minPeriods to be a constant integer >= 0
+select 1 as recover_c;
+➤ recover_c[-5,64,0]  𝄀
+1
+execute mpb using @mpb_big;
+➤ id[-5,64,0]  ¦  ewmmean(m11.x, 0.5, false, false, ?) over (order by m11.id)[8,53,31]  𝄀
+1  ¦  null  𝄀
+2  ¦  null  𝄀
+3  ¦  null  𝄀
+4  ¦  null
+select 1 as recover_d;
+➤ recover_d[-5,64,0]  𝄀
+1
+execute mpb using @mpb_two;
+➤ id[-5,64,0]  ¦  ewmmean(m11.x, 0.5, false, false, ?) over (order by m11.id)[8,53,31]  𝄀
+1  ¦  null  𝄀
+2  ¦  1.5  𝄀
+3  ¦  2.25  𝄀
+4  ¦  3.125
+deallocate prepare mpb;
+drop table m11;
+drop table ev;
+drop table evf;
+drop database ewm_stat_time;

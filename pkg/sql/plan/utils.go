@@ -5023,6 +5023,116 @@ func PreparedPlanHasPercentileParams(preparePlan *Plan) bool {
 	return found
 }
 
+// preparedEwmConfigIsExecutionDependent reports whether one ewm decay or
+// policy argument depends on the EXECUTING statement rather than on the
+// prepare-time plan alone: a prepared marker, a user variable, or a
+// real-time function subtree (CURRENT_TIMESTAMP and kin) that the window
+// binder admits as a per-execution constant. constructEwmConfig evaluates
+// such a position with the executing process (its statement clock) while
+// the aggregate configuration bytes stay immutable, so every prepared
+// cache must treat the statement as execution-dependent: excluding it
+// makes each EXECUTE rebuild the configuration from a fresh evaluation.
+func preparedEwmConfigIsExecutionDependent(expr *plan.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_P, *plan.Expr_V:
+		return true
+	case *plan.Expr_F:
+		if exprImpl.F == nil {
+			return false
+		}
+		if exprImpl.F.Func != nil {
+			if overload, ok := function.GetFunctionByIdWithoutError(exprImpl.F.Func.GetObj()); ok && overload.IsRealTimeRelated() {
+				return true
+			}
+		}
+		for _, arg := range exprImpl.F.Args {
+			if preparedEwmConfigIsExecutionDependent(arg) {
+				return true
+			}
+		}
+	case *plan.Expr_W:
+		if exprImpl.W == nil {
+			return false
+		}
+		if preparedEwmConfigIsExecutionDependent(exprImpl.W.WindowFunc) {
+			return true
+		}
+		for _, part := range exprImpl.W.PartitionBy {
+			if preparedEwmConfigIsExecutionDependent(part) {
+				return true
+			}
+		}
+		for _, order := range exprImpl.W.OrderBy {
+			if order != nil && preparedEwmConfigIsExecutionDependent(order.Expr) {
+				return true
+			}
+		}
+	case *plan.Expr_List:
+		if exprImpl.List == nil {
+			return false
+		}
+		for _, item := range exprImpl.List.List {
+			if preparedEwmConfigIsExecutionDependent(item) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// PreparedPlanHasEwmParams reports whether an ewm window statistic's decay
+// or policy positions are execution-dependent: a prepared marker, a user
+// variable, or a real-time function subtree the binder admits as a
+// per-execution constant. Those values are compiled into
+// the immutable window-arg configuration at construction time (constructEwmConfig),
+// so a plan with such a position must rebuild the physical configuration for every
+// EXECUTE value: both the prepare-compile cache and the diagnostic-free
+// runtime-specialization cache must exclude such statements.
+func PreparedPlanHasEwmParams(preparePlan *Plan) bool {
+	if preparePlan == nil {
+		return false
+	}
+	found := false
+	seen := make(map[*plan.Expr]struct{})
+	_ = plan.VisitExpressionsInOwner(preparePlan, func(root *plan.Expr) error {
+		if found {
+			return nil
+		}
+		return plan.VisitExprTree(root, func(expr *plan.Expr) error {
+			if found || expr == nil {
+				return nil
+			}
+			if _, ok := seen[expr]; ok {
+				return nil
+			}
+			seen[expr] = struct{}{}
+			fn := expr.GetF()
+			if fn == nil || fn.Func == nil {
+				return nil
+			}
+			switch strings.ToLower(fn.Func.ObjName) {
+			case NameEwmMean, NameEwmVar, NameEwmStd, NameEwmCov, NameEwmCorr:
+				valueArgs := 1
+				if strings.ToLower(fn.Func.ObjName) == NameEwmCov ||
+					strings.ToLower(fn.Func.ObjName) == NameEwmCorr {
+					valueArgs = 2
+				}
+				for i := valueArgs; i < len(fn.Args); i++ {
+					if preparedEwmConfigIsExecutionDependent(fn.Args[i]) {
+						found = true
+						return nil
+					}
+				}
+			}
+			return nil
+		})
+	})
+	return found
+}
+
 // PreparedPlanHasDirectResultParams reports whether a visible SELECT result
 // column is ultimately sourced from a parameter marker.
 func PreparedPlanHasDirectResultParams(preparePlan *Plan) bool {

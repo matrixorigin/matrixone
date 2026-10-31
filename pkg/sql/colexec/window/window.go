@@ -40,6 +40,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sort"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeorder"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/window/ewm"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -47,6 +48,15 @@ import (
 )
 
 const opName = "window"
+
+// The EWM dispatch's staged-row layout factors (bytes): this file is this
+// package's allocation-owner for physical size/layout accounting (the
+// repository's unsafe allowlist covers it), so the EWM dispatch file itself
+// stays unsafe-free and reads these values for its staging budget.
+var (
+	ewmRowSize = int(unsafe.Sizeof(ewm.Row{}))
+	ewmKeySize = int(unsafe.Sizeof(ewm.KeyVal{}))
+)
 
 // A Window call can spend a long time inside one frame evaluation, especially
 // for running frames whose aggregate work is quadratic in the partition size.
@@ -378,6 +388,7 @@ func (window *Window) Call(proc *process.Process) (callResult vm.CallResult, cal
 			// the other generation-scoped state.
 			ctr.clearCivilOrder()
 			ctr.freeIndicatorState(proc.Mp())
+			ctr.freeEwmState()
 			if err = ctr.evalAggVector(ctr.bat, proc); err != nil {
 				return result, err
 			}
@@ -507,6 +518,11 @@ func (ctr *container) processFuncRange(
 		// materialization and emit from a cached, incrementally advanced
 		// prefix (docs/design/technical_indicator_window_kernels.md 5.2).
 		vec, err = ctr.processIndicatorFuncRange(idx, ap, proc, outputStart, outputEnd)
+	case function.GetFunctionIsWinEwmFunByName(funcName):
+		// The ewm window statistics own a dedicated resumable dispatch:
+		// whole peer groups, exactly-once merges, per-partition accounts
+		// and the bounded in-loop cancellation contract (§9).
+		vec, err = ctr.processEwmFuncRange(idx, ap, proc, funcName, outputStart, outputEnd)
 	case function.GetFunctionIsWinValueFunByName(funcName):
 		// Value window functions use direct source-row lookup and therefore can
 		// materialize only the rows requested by this output chunk.

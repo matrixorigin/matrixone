@@ -5726,6 +5726,12 @@ const NameApproxPercentile = "approx_percentile"
 const NamePercentileCont = "percentile_cont"
 const NamePercentileDisc = "percentile_disc"
 const NameQuantileExactWeighted = "quantileExactWeighted"
+const NameEwmMean = "ewmmean"
+const NameEwmVar = "ewmvar"
+const NameEwmStd = "ewmstd"
+const NameEwmCov = "ewmcov"
+const NameEwmCorr = "ewmcorr"
+const NameEwmHalfLifeTag = "halflife"
 
 func (builder *QueryBuilder) bindNoRecursiveCte(
 	ctx *BindContext,
