@@ -134,3 +134,51 @@ func TestLoadAutoIncrementObservedDemand(t *testing.T) {
 		}
 	})
 }
+
+// A manual insert on a second allocator owner can claim an ID still cached on
+// the first CN. One CN cannot construct this state: its manual insert also
+// advances that same cache. Reuse the canonical two-CN fixture, with three rows.
+func TestLoadAutoIncrementManualConflict(t *testing.T) {
+	defer func() { require.NoError(t, embed.CloseBaseClusterTests()) }()
+	embed.RunBaseClusterTests(t, func(c embed.Cluster) {
+		ctx, cancel := context.WithTimeout(t.Context(), 90*time.Second)
+		defer cancel()
+		var conns [2]*sql.Conn
+		for i := range conns {
+			cn, err := c.GetCNService(i)
+			require.NoError(t, err)
+			db, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/", cn.GetServiceConfig().CN.Frontend.Port))
+			require.NoError(t, err)
+			defer db.Close()
+			conns[i], err = db.Conn(ctx)
+			require.NoError(t, err)
+			defer conns[i].Close()
+		}
+		cn, err := c.GetCNService(0)
+		require.NoError(t, err)
+		defer cleanupSQLIntegration(t, cn, "drop database if exists auto_increment_manual_conflict")
+		exec := func(i int, q string) {
+			t.Helper()
+			_, err := conns[i].ExecContext(ctx, q)
+			require.NoError(t, err, q)
+		}
+		exec(0, "create database auto_increment_manual_conflict")
+		exec(0, "create table auto_increment_manual_conflict.t(id bigint auto_increment primary key,v int)")
+		exec(0, "insert into auto_increment_manual_conflict.t(v) values(1)") // CN 0 retains ID 2.
+		exec(1, "insert into auto_increment_manual_conflict.t values(2,2)")
+		var flush string
+		require.NoError(t, conns[1].QueryRowContext(ctx, "select mo_ctl('dn','flush','auto_increment_manual_conflict.t')").Scan(&flush))
+		var next uint64
+		require.NoError(t, conns[0].QueryRowContext(ctx, "select auto_increment from information_schema.tables where table_schema='auto_increment_manual_conflict' and table_name='t'").Scan(&next))
+		require.Equal(t, uint64(2), next, "the first CN must still hold the colliding cached ID")
+		path := filepath.Join(t.TempDir(), "one.csv")
+		require.NoError(t, os.WriteFile(path, []byte("3\n"), 0600))
+		exec(0, "load data infile '"+strings.ReplaceAll(path, "'", "''")+"' into table auto_increment_manual_conflict.t(v)")
+		var rows, distinct, manual, generated uint64
+		require.NoError(t, conns[0].QueryRowContext(ctx, "select count(*),count(distinct id),sum(id=2 and v=2),sum(id=3 and v=3) from auto_increment_manual_conflict.t").Scan(&rows, &distinct, &manual, &generated))
+		require.Equal(t, uint64(3), rows)
+		require.Equal(t, rows, distinct)
+		require.Equal(t, uint64(1), manual)
+		require.Equal(t, uint64(1), generated)
+	})
+}
