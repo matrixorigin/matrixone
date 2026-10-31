@@ -5523,3 +5523,17 @@ func TestNonGeometrySRIDSyntaxRoundTrip(t *testing.T) {
 		})
 	}
 }
+
+func TestLimitByRankOptionStructure(t *testing.T) {
+	for _, option := range []string{"1", "NULL", "concat('nprobe=', '1')", "'nprobe'", "'nprobe=1=2'", "'=1'", "'nprobe='"} {
+		t.Run(option, func(t *testing.T) {
+			_, err := ParseOne(context.Background(), "SELECT 1 LIMIT 1 BY RANK WITH OPTION "+option, 1)
+			require.Error(t, err)
+			require.Contains(t, err.Error(), "rank options must")
+		})
+	}
+	stmt, err := ParseOne(context.Background(), "SELECT 1 LIMIT 1 BY RANK WITH OPTION ' NPROBE = 1 ', 'nprobe=2'", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	require.Equal(t, "2", stmt.(*tree.Select).RankOption.Option["nprobe"])
+}
