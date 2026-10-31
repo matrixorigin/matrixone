@@ -214,14 +214,19 @@ func (exec *sumDecimal64FastExec) BatchFill(offset int, groups []uint64, vectors
 	if exec.IsDistinct() {
 		return exec.batchFillArgs(offset, groups, vectors, true)
 	}
+	if vectors[0].IsConst() && vectors[0].IsConstNull() {
+		return nil
+	}
+	// Keep the original general-path frame unchanged. Small admitted states
+	// can use their dense group IDs as direct local accumulator indices.
+	if len(exec.state) == 1 && exec.state[0].length > 0 && exec.state[0].length <= 256 {
+		return exec.batchFillDenseGroups(offset, groups, vectors)
+	}
 	return exec.batchFill(offset, groups, vectors)
 }
 
 func (exec *sumDecimal64FastExec) batchFill(offset int, groups []uint64, vectors []*vector.Vector) error {
 	vec := vectors[0]
-	if vec.IsConstNull() {
-		return nil
-	}
 	vals := vector.MustFixedColNoTypeCheck[types.Decimal64](vec)
 	constMask := -min(1, len(vals)-1)
 	hasNull := vec.HasNull()
@@ -302,6 +307,49 @@ func (exec *sumDecimal64FastExec) batchFill(offset int, groups []uint64, vectors
 		y := g & aggBatchSizeMask
 		sums[y] = sums[y].Add128Unchecked(localSums[s])
 		cnts[y] += localCnts[s]
+	}
+	return nil
+}
+
+func (exec *sumDecimal64FastExec) batchFillDenseGroups(offset int, groups []uint64, vectors []*vector.Vector) error {
+	vec := vectors[0]
+	vals := vector.MustFixedColNoTypeCheck[types.Decimal64](vec)
+	constMask := -min(1, len(vals)-1)
+	var np *bitmap.Bitmap
+	if vec.HasNull() {
+		np = vec.GetNulls().GetBitmap()
+	}
+
+	var localSums [256]types.Decimal128
+	var localCnts [256]int64
+	var touched [256]uint8
+	nTouched := 0
+	for i, grp := range groups {
+		if grp == GroupNotMatched {
+			continue
+		}
+		idx := i + offset
+		if np != nil && np.Contains(uint64(idx)) {
+			continue
+		}
+		g := grp - 1
+		raw := vals[idx&constMask]
+		value := types.Decimal128{B0_63: uint64(raw), B64_127: uint64(int64(raw) >> 63)}
+		if localCnts[g] == 0 {
+			touched[nTouched] = uint8(g)
+			nTouched++
+			localSums[g] = value
+		} else {
+			localSums[g] = localSums[g].Add128Unchecked(value)
+		}
+		localCnts[g]++
+	}
+
+	sums := chunkArr[types.Decimal128](exec.state[0].vecs[0])
+	cnts := vector.MustFixedColNoTypeCheck[int64](exec.state[0].vecs[1])
+	for _, g := range touched[:nTouched] {
+		sums[g] = sums[g].Add128Unchecked(localSums[g])
+		cnts[g] += localCnts[g]
 	}
 	return nil
 }
