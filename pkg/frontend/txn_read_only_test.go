@@ -356,6 +356,23 @@ func TestStatementRequiresPersistentWriteAccessTemporaryTables(t *testing.T) {
 	}
 }
 
+func TestDeleteReadOnlyMissingOrDerivedSourceFailsClosed(t *testing.T) {
+	ses := newTestSession(t, gomock.NewController(t))
+	ses.SetDatabaseName("testdb")
+	// A temporary table with the target name must not make an unresolved
+	// target or a derived source eligible for the temporary-table exemption.
+	ses.AddTempTable("testdb", "missing", "temp_missing")
+	ses.AddTempTable("testdb", "derived", "temp_derived")
+	for _, sql := range []string{
+		"delete missing from t as x",
+		"delete derived from (select 1 as a) as derived",
+	} {
+		stmt := parseSingleStatement(t, sql)
+		require.Equal(t, writePersistent, classifyStatementWrite(ses, stmt, "testdb"), sql)
+		stmt.Free()
+	}
+}
+
 func TestDeleteReadOnlyClassificationReusesAST(t *testing.T) {
 	ses := newTestSession(t, gomock.NewController(t))
 	ses.SetDatabaseName("testdb")

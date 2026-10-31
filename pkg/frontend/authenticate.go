@@ -6521,6 +6521,10 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		return string(name.Name.SchemaName)
 	}
 	switch st := stmt.(type) {
+	case *tree.FlushPrivileges:
+		objType = objectTypeNone
+		kind = privilegeKindSpecial
+		special = specialTagAdmin
 	case *tree.CreateAccount:
 		typs = append(typs, PrivilegeTypeCreateAccount)
 	case *tree.DropAccount:
@@ -10586,6 +10590,8 @@ func authenticateUserCanExecuteStatementWithObjectTypeNone(ctx context.Context, 
 		case *tree.ShowAccounts:
 			yes, err := checkShowAccountsPrivilege()
 			return yes, stats, err
+		case *tree.FlushPrivileges:
+			return tenant.IsAdminRole(), stats, nil
 		case *tree.ShowAccountUpgrade:
 			return tenant.IsMoAdminRole(), stats, nil
 		case *tree.UpgradeStatement:
