@@ -422,6 +422,9 @@ type Compile struct {
 	// runtime-filter producers which were actually visited by compilePlanScope.
 	// It is statement-local and excludes physically pruned subtrees.
 	compiledLocalRuntimeFilterNodes []int32
+	// Non-owning, compileQuery-generation evidence for optional deep filters.
+	deepRuntimeFilterTags           map[int32]bool
+	completeDeepRuntimeFilterBuilds map[vm.Operator]bool
 
 	needLockMeta bool
 	needBlock    bool

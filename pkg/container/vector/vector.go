@@ -8563,7 +8563,32 @@ func unionT[T int32 | int64](v, w *Vector, sels []T, mp *mpool.MPool) error {
 		if err = pregrowVarlenaArea(v, total, mp); err != nil {
 			return err
 		}
-		if !w.GetNulls().EmptyByFlag() {
+		// Reuse the area sizing pass to select an inline-copy batch. The small
+		// check still handles non-inline zero-length descriptors correctly.
+		// Mixed/area payloads and Unicode admission keep the original loops.
+		if total == 0 && !types.IsUnicodeCollation(v.typ.Charset) {
+			if hasNull {
+				for i, sel := range sels {
+					if w.nsp.Contains(uint64(sel)) {
+						nulls.Add(&v.nsp, uint64(oldLen+i))
+						continue
+					}
+					if wCol[sel].IsSmall() {
+						vCol[oldLen+i] = wCol[sel]
+					} else if err = BuildVarlenaFromVarlena(v, &vCol[oldLen+i], &wCol[sel], &w.area, mp); err != nil {
+						return err
+					}
+				}
+			} else {
+				for i, sel := range sels {
+					if wCol[sel].IsSmall() {
+						vCol[oldLen+i] = wCol[sel]
+					} else if err = BuildVarlenaFromVarlena(v, &vCol[oldLen+i], &wCol[sel], &w.area, mp); err != nil {
+						return err
+					}
+				}
+			}
+		} else if hasNull {
 			for i, sel := range sels {
 				if w.nsp.Contains(uint64(sel)) {
 					nulls.Add(&v.nsp, uint64(oldLen+i))
@@ -8576,7 +8601,6 @@ func unionT[T int32 | int64](v, w *Vector, sels []T, mp *mpool.MPool) error {
 			}
 		} else {
 			for i, sel := range sels {
-
 				err = BuildVarlenaFromVarlena(v, &vCol[oldLen+i], &wCol[sel], &w.area, mp)
 				if err != nil {
 					return err

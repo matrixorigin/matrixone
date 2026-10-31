@@ -400,6 +400,21 @@ func (ht *Int64HashMap) FindBatch(n int, hashes []uint64, keysPtr unsafe.Pointer
 		Int64BatchHash(keysPtr, &hashes[0], n)
 	}
 
+	if len(ht.cells) == 1 {
+		// A single physical block needs no block lookup for each probe.
+		cells, mask := ht.cells[0], ht.cellCntMask
+		for i, hash := range hashes {
+			for idx := hash & mask; ; idx = (idx + 1) & mask {
+				cell := &cells[idx]
+				if cell.Key == hash || cell.Mapped == 0 {
+					values[i] = cell.Mapped
+					break
+				}
+			}
+		}
+		return
+	}
+
 	for i, hash := range hashes {
 		cell := ht.findCell(hash)
 		values[i] = cell.Mapped
