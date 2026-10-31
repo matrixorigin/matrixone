@@ -263,18 +263,7 @@ func (db *crossingFakeDB) mutations() []string {
 func newCrossingService(t *testing.T, db *crossingFakeDB) *service {
 	t.Helper()
 	s := newServiceForTest("", &memLocker{}, clock.NewHLCClock(func() int64 { return 0 }, 0), nil, db,
-		func(s *service) {
-			s.initUpgrade()
-			// Pin the published 4.0.18 crossing contract. Later routine repair
-			// is exercised through the full chain by the real first-login test.
-			for i, h := range s.handles {
-				if h.Metadata().Version == "4.0.18" {
-					s.handles = s.handles[:i+1]
-					break
-				}
-			}
-			require.Equal(t, "4.0.18", s.GetFinalVersion())
-		})
+		func(s *service) { s.initUpgrade() })
 	t.Cleanup(s.stopper.Stop)
 	return s
 }

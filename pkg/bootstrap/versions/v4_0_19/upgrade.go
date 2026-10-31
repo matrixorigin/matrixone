@@ -18,24 +18,37 @@ import (
 	"context"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
-	"go.uber.org/zap"
 )
 
-// 4.0.19 owns the shared routine repair after the official 4.0.18 COLUMNS repair.
-// Older released sources must complete the preceding official handlers first;
-// an already-4.0.18 tenant remains eligible for scheduled and login repair.
+// Handler refreshes the declared-label COLUMNS identities and the
+// prefix-aware STATISTICS projection for accounts that already reached the
+// frozen 4.0.7 stage. "4.0.19" is the next semantic catalog version after
+// upstream "4.0.18" (docs/design/20261028-catalog-upgrade-407.md forbids
+// registering the unpublished 4.0.8..4.0.17 identities as upgrade steps):
+// below-4.0.7 sources cross the frozen 4.0.7 stage first and then step
+// 4.0.18 and 4.0.19, a ready 4.0.7 cluster's background route is the
+// single direct [4.0.7 -> 4.0.19] upgrade executed by this handler alone
+// (final.CanDirectUpgrade admits it), tenants a main-era binary stamped
+// 4.0.18 take the direct [4.0.18 -> 4.0.19] upgrade, and fresh clusters
+// initialize at 4.0.19 with the corrected identities already installed.
 var Handler = &versionHandle{
 	metadata: versions.Version{
 		Version:           "4.0.19",
-		MinUpgradeVersion: "4.0.18",
+		MinUpgradeVersion: "4.0.7",
 		UpgradeCluster:    versions.No,
 		UpgradeTenant:     versions.Yes,
 		VersionOffset:     uint32(len(tenantUpgEntries)),
+		// The identity publication writes require the consolidated 4.0.7
+		// protocol floor; per-entry gates stay with the shared entries.
+		RequiredProtocolVersion: defines.MORPCVersion118,
 	},
 }
 
@@ -47,12 +60,12 @@ func (v *versionHandle) Metadata() versions.Version {
 	return v.metadata
 }
 
-func (v *versionHandle) Prepare(ctx context.Context, txn executor.TxnExecutor, final bool) error {
+func (v *versionHandle) Prepare(_ context.Context, txn executor.TxnExecutor, _ bool) error {
 	txn.Use(catalog.MO_CATALOG)
 	return nil
 }
 
-func (v *versionHandle) HandleTenantUpgrade(ctx context.Context, tenantID int32, txn executor.TxnExecutor) error {
+func (v *versionHandle) HandleTenantUpgrade(_ context.Context, tenantID int32, txn executor.TxnExecutor) error {
 	logger := runtime.ServiceRuntime(txn.Txn().TxnOptions().CN).Logger()
 	for _, entry := range tenantUpgEntries {
 		start := time.Now()
@@ -73,10 +86,10 @@ func (v *versionHandle) HandleTenantUpgrade(ctx context.Context, tenantID int32,
 	return nil
 }
 
-func (v *versionHandle) HandleClusterUpgrade(ctx context.Context, txn executor.TxnExecutor) error {
+func (v *versionHandle) HandleClusterUpgrade(_ context.Context, _ executor.TxnExecutor) error {
 	return nil
 }
 
-func (v *versionHandle) HandleCreateFrameworkDeps(txn executor.TxnExecutor) error {
+func (v *versionHandle) HandleCreateFrameworkDeps(_ executor.TxnExecutor) error {
 	return moerr.NewInternalErrorNoCtxf("Only v1.2.0 can initialize upgrade framework, current version is:%s", v.metadata.Version)
 }

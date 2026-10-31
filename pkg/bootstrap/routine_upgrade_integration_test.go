@@ -46,7 +46,7 @@ func TestRoutineRepairContinuesAfterFrozenCatalog(t *testing.T) {
 			runtime.RunTest("", func(runtime.Runtime) {
 				tenantVersion := "4.0.7"
 				injected := errors.New("repair failed")
-				repair := &routineRepairTestHandle{VersionHandle: newTestVersionHandler("4.0.19", "4.0.7", versions.No, versions.Yes, 1), err: injected}
+				repair := &routineRepairTestHandle{VersionHandle: newTestVersionHandler("4.0.20", "4.0.7", versions.No, versions.Yes, 1), err: injected}
 				reads := 0
 				exec := executor.NewMemExecutor2(func(sql string) (executor.Result, error) {
 					switch {
@@ -55,8 +55,8 @@ func TestRoutineRepairContinuesAfterFrozenCatalog(t *testing.T) {
 						return newBootstrapStringResult(tenantVersion), nil
 					case sql == versions.LatestVersionSQL:
 						return statisticsLatestVersionResult(t, repair.Metadata(), versions.StateReady), nil
-					case strings.HasPrefix(sql, "update mo_account set create_version = '4.0.19'"):
-						tenantVersion = "4.0.19"
+					case strings.HasPrefix(sql, "update mo_account set create_version = '4.0.20'"):
+						tenantVersion = "4.0.20"
 						return executor.Result{AffectedRows: 1}, nil
 					default:
 						return executor.Result{}, fmt.Errorf("unexpected upgrade SQL: %s", sql)
@@ -79,7 +79,7 @@ func TestRoutineRepairContinuesAfterFrozenCatalog(t *testing.T) {
 				require.False(t, s.mu.tenants[7], "failed repair must remain retryable")
 				repair.err = nil
 				require.NoError(t, run())
-				require.Equal(t, "4.0.19", tenantVersion)
+				require.Equal(t, "4.0.20", tenantVersion)
 				require.True(t, s.mu.tenants[7])
 				require.Equal(t, 2, repair.calls)
 				completedReads := reads
