@@ -15,199 +15,120 @@
 package v4_0_19
 
 import (
-	"context"
-	"fmt"
 	"strings"
 	"testing"
 
-	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
-	pbtxn "github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/util/sysview"
 	"github.com/stretchr/testify/require"
 )
 
-func TestPythonRevisionRepairUpgradePath(t *testing.T) {
-	metadata := Handler.Metadata()
-	require.Equal(t, "4.0.19", metadata.Version)
-	require.Equal(t, "4.0.18", metadata.MinUpgradeVersion)
-	require.Equal(t, versions.No, metadata.UpgradeCluster)
-	require.Equal(t, versions.Yes, metadata.UpgradeTenant)
-	require.Zero(t, metadata.RequiredProtocolVersion)
-	require.Equal(t, uint32(len(tenantUpgEntries)), metadata.VersionOffset)
-	require.True(t, metadata.CanDirectUpgrade("4.0.18"))
-	require.False(t, metadata.CanDirectUpgrade("4.0.7"))
-	require.False(t, metadata.CanDirectUpgrade("4.0.6"))
-	require.Len(t, tenantUpgEntries, 9)
+// The final vehicle hop follows the upstream 4.0.18 handle on the registered
+// ladder: its offset equals its own tenant entries only, and it reaches
+// accounts exactly through those two shared-builder legs.
+func TestHandlerRegistersConsolidatedSuccessorIdentity(t *testing.T) {
+	runtime.RunTest("", func(runtime.Runtime) {
+		metadata := Handler.Metadata()
+		require.Equal(t, "4.0.19", metadata.Version)
+		require.Equal(t, "4.0.7", metadata.MinUpgradeVersion)
+		require.Equal(t, versions.No, metadata.UpgradeCluster)
+		require.Equal(t, versions.Yes, metadata.UpgradeTenant)
+		require.Equal(t, uint32(len(tenantUpgEntries)), metadata.VersionOffset)
+		require.Equal(t, int64(defines.MORPCVersion118), metadata.RequiredProtocolVersion)
+		require.Len(t, tenantUpgEntries, 2)
+
+		columns, statistics := tenantUpgEntries[0], tenantUpgEntries[1]
+		require.Equal(t, sysview.InformationDBConst, columns.Schema)
+		require.Equal(t, "COLUMNS", columns.TableName)
+		require.Equal(t, sysview.InformationDBConst, statistics.Schema)
+		require.Equal(t, "STATISTICS", statistics.TableName)
+	})
 }
 
-func TestPythonRevisionRepairIsIdempotentForCatalogStates(t *testing.T) {
-	for _, test := range []struct {
-		name          string
-		schemaOrigin  string
-		columns       []string
-		newIndex      bool
-		legacyIndex   bool
-		revisionTable bool
-		wantFirstDDL  int
+// Both legs rebuild on the upstream shared builder: CREATE OR REPLACE
+// authoring, the historical COLUMNS gate (109) and the historical
+// prefix-aware STATISTICS gate (41) stand; no new gate exists.
+func TestSuccessorEntriesShareTheUpstreamBuilders(t *testing.T) {
+	runtime.RunTest("", func(runtime.Runtime) {
+		columns, statistics := tenantUpgEntries[0], tenantUpgEntries[1]
+		require.Equal(t,
+			strings.Replace(sysview.InformationSchemaColumnsDDL, "CREATE VIEW ", "CREATE OR REPLACE VIEW ", 1),
+			columns.UpgSql)
+		require.Equal(t, int64(defines.MORPCVersion109), columns.RequiredProtocolVersion)
+		require.Equal(t,
+			strings.Replace(sysview.InformationSchemaStatisticsPrefixSubPartDDL, "CREATE VIEW ", "CREATE OR REPLACE VIEW ", 1),
+			statistics.UpgSql)
+		require.Equal(t, int64(defines.MORPCVersion41), statistics.RequiredProtocolVersion)
+	})
+}
+
+// The entries' checks are idempotent against the current published
+// definitions and demand the re-publication a stale account needs: an
+// account already carrying the corrected identities skips each write, and a
+// pre-correction identity reports not done so the hop rewrites it.
+func TestSuccessorEntryChecksRecognizeCurrentAndHistoricalIdentities(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		entry      versions.UpgradeEntry
+		current    string
+		historical string
 	}{
 		{
-			name:         "frozen_4.0.7_missed_catalog",
-			schemaOrigin: "4.0.7",
-			legacyIndex:  true,
-			wantFirstDDL: 9,
+			name:       "COLUMNS",
+			entry:      tenantUpgEntries[0],
+			current:    sysview.InformationSchemaColumnsDDL,
+			historical: sysview.InformationSchemaColumnsBinaryFamilyNullDDL(),
 		},
 		{
-			name:         "partial_revision_catalog",
-			schemaOrigin: "4.0.8",
-			columns: []string{
-				"active_revision", "namespace_version", "canonical_input_descriptor",
-				"return_descriptor", "signature_key_schema_version", "signature_fingerprint",
-			},
-			legacyIndex:  true,
-			wantFirstDDL: 3,
+			name:  "COLUMNS-from-upstream-4.0.18",
+			entry: tenantUpgEntries[0],
+			// A main-era binary stamped tenants with the published 4.0.18
+			// identity; the merged current differs, so the hop rewrites them.
+			current:    sysview.InformationSchemaColumnsDDL,
+			historical: sysview.InformationSchemaColumns4018DDL(),
 		},
 		{
-			name:         "complete_revision_catalog",
-			schemaOrigin: "4.0.8",
-			columns: []string{
-				"active_revision", "namespace_version", "canonical_input_descriptor",
-				"return_descriptor", "signature_key_schema_version", "signature_fingerprint",
-			},
-			newIndex:      true,
-			revisionTable: true,
-			wantFirstDDL:  0,
+			name:       "STATISTICS",
+			entry:      tenantUpgEntries[1],
+			current:    sysview.InformationSchemaStatisticsPrefixSubPartDDL,
+			historical: sysview.InformationSchemaStatisticsDDL,
 		},
 	} {
-		t.Run(test.name, func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			runtime.RunTest("", func(runtime.Runtime) {
-				state := &pythonRevisionCatalogState{
-					columns:       make(map[string]bool),
-					newIndex:      test.newIndex,
-					legacyIndex:   test.legacyIndex,
-					revisionTable: test.revisionTable,
-				}
-				for _, column := range test.columns {
-					state.columns[column] = true
-				}
-				txn := newRepairTxnExecutor(t, state)
-				require.NoError(t, Handler.Prepare(context.Background(), txn, true))
-				require.NoError(t, Handler.HandleTenantUpgrade(context.Background(), 7, txn))
-				require.Len(t, state.ddl, test.wantFirstDDL,
-					"repair of %s schema must apply only missing catalog objects", test.schemaOrigin)
-				firstDDL := append([]string(nil), state.ddl...)
-				require.NoError(t, Handler.HandleTenantUpgrade(context.Background(), 7, txn))
-				require.Equal(t, firstDDL, state.ddl,
-					"a restart/retry of %s schema must not repeat DDL", test.schemaOrigin)
+				served := tc.current
+				txn := executor.NewMemTxnExecutor(func(sql string) (executor.Result, error) {
+					require.Contains(t, sql, "SELECT tbl.rel_createsql")
+					return newSingleStringResult(t, served), nil
+				}, nil)
+				done, err := tc.entry.CheckFunc(txn, 7)
+				require.NoError(t, err)
+				require.True(t, done, "a current definition makes the leg a no-op")
+
+				served = tc.historical
+				txn = executor.NewMemTxnExecutor(func(sql string) (executor.Result, error) {
+					return newSingleStringResult(t, served), nil
+				}, nil)
+				done, err = tc.entry.CheckFunc(txn, 7)
+				require.NoError(t, err)
+				require.False(t, done, "a historical identity must be rewritten by the hop")
 			})
 		})
 	}
 }
 
-type pythonRevisionCatalogState struct {
-	columns       map[string]bool
-	newIndex      bool
-	legacyIndex   bool
-	revisionTable bool
-	ddl           []string
-}
-
-func newRepairTxnExecutor(t *testing.T, state *pythonRevisionCatalogState) executor.TxnExecutor {
-	t.Helper()
-	txnOperator := mock_frontend.NewMockTxnOperator(gomock.NewController(t))
-	txnOperator.EXPECT().TxnOptions().Return(pbtxn.TxnOptions{}).AnyTimes()
-	return executor.NewMemTxnExecutor(func(sql string) (executor.Result, error) {
-		require.NotContains(t, sql, "GetProtocolVersion")
-		lower := strings.ToLower(sql)
-		switch {
-		case strings.Contains(lower, "from mo_catalog.mo_columns"):
-			for column := range state.columns {
-				if strings.Contains(sql, fmt.Sprintf("attname = '%s'", column)) {
-					return repairColumnResult(t), nil
-				}
-			}
-			return executor.Result{}, nil
-		case strings.Contains(lower, "from `mo_catalog`.`mo_indexes`"):
-			if strings.Contains(sql, "name_db_arg_types_descriptor") && state.newIndex {
-				return repairStringResult(t, "name_db_arg_types_descriptor"), nil
-			}
-			if strings.Contains(sql, "name_db_arg_types'") && state.legacyIndex {
-				return repairStringResult(t, "name_db_arg_types"), nil
-			}
-			return executor.Result{}, nil
-		case strings.Contains(lower, "from mo_catalog.mo_tables"):
-			if state.revisionTable && strings.Contains(sql, "relname = 'mo_function_revisions'") {
-				return repairStringResult(t, "mo_function_revisions"), nil
-			}
-			return executor.Result{}, nil
-		case strings.Contains(lower, "alter table mo_catalog.mo_user_defined_function add column"):
-			for column := range state.columns {
-				if strings.Contains(sql, "add column "+column+" ") {
-					return executor.Result{}, nil
-				}
-			}
-			for _, column := range []string{
-				"active_revision", "namespace_version", "canonical_input_descriptor",
-				"return_descriptor", "signature_key_schema_version", "signature_fingerprint",
-			} {
-				if strings.Contains(sql, "add column "+column+" ") {
-					state.columns[column] = true
-					state.ddl = append(state.ddl, sql)
-					return executor.Result{}, nil
-				}
-			}
-		case strings.Contains(lower, "create unique index name_db_arg_types_descriptor"):
-			state.newIndex = true
-			state.ddl = append(state.ddl, sql)
-			return executor.Result{}, nil
-		case strings.Contains(lower, "drop index name_db_arg_types"):
-			state.legacyIndex = false
-			state.ddl = append(state.ddl, sql)
-			return executor.Result{}, nil
-		case strings.Contains(lower, "create table mo_catalog.mo_function_revisions"):
-			state.revisionTable = true
-			state.ddl = append(state.ddl, sql)
-			return executor.Result{}, nil
-		default:
-			return executor.Result{}, fmt.Errorf("unexpected repair SQL: %s", sql)
-		}
-		return executor.Result{}, nil
-	}, txnOperator)
-}
-
-func repairStringResult(t *testing.T, value string) executor.Result {
-	t.Helper()
+// newSingleStringResult serves one varchar row: the persisted view
+// definition a definition read returns.
+func newSingleStringResult(t *testing.T, definition string) executor.Result {
 	mp := mpool.MustNewZeroNoFixed()
 	t.Cleanup(func() { mpool.DeleteMPool(mp) })
 	result := executor.NewMemResult([]types.Type{types.T_varchar.ToType()}, mp)
 	result.NewBatchWithRowCount(1)
-	require.NoError(t, executor.AppendStringRows(result, 0, []string{value}))
-	return result.GetResult()
-}
-
-func repairColumnResult(t *testing.T) executor.Result {
-	t.Helper()
-	mp := mpool.MustNewZeroNoFixed()
-	t.Cleanup(func() { mpool.DeleteMPool(mp) })
-	result := executor.NewMemResult([]types.Type{
-		types.T_varchar.ToType(), types.T_varchar.ToType(),
-		types.T_int64.ToType(), types.T_int64.ToType(), types.T_int64.ToType(), types.T_int64.ToType(),
-		types.T_int32.ToType(), types.T_varchar.ToType(), types.T_varchar.ToType(), types.T_varchar.ToType(),
-	}, mp)
-	result.NewBatchWithRowCount(1)
-	require.NoError(t, executor.AppendStringRows(result, 0, []string{"BIGINT UNSIGNED"}))
-	require.NoError(t, executor.AppendStringRows(result, 1, []string{"NO"}))
-	require.NoError(t, executor.AppendFixedRows(result, 2, []int64{0}))
-	require.NoError(t, executor.AppendFixedRows(result, 3, []int64{0}))
-	require.NoError(t, executor.AppendFixedRows(result, 4, []int64{0}))
-	require.NoError(t, executor.AppendFixedRows(result, 5, []int64{0}))
-	require.NoError(t, executor.AppendFixedRows(result, 6, []int32{1}))
-	require.NoError(t, executor.AppendStringRows(result, 7, []string{"0"}))
-	require.NoError(t, executor.AppendStringRows(result, 8, []string{""}))
-	require.NoError(t, executor.AppendStringRows(result, 9, []string{""}))
+	require.NoError(t, executor.AppendStringRows(result, 0, []string{definition}))
 	return result.GetResult()
 }
