@@ -1858,12 +1858,29 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 	lockTargets := make([]*plan.LockTarget, 0, len(tableDef.Indexes)+1)
 	for _, col := range tableDef.Cols {
 		if col.Name == pkName && pkName != catalog.FakePrimaryKeyColName {
+			lockPkPos := colName2Idx[tableDef.Name+"."+col.Name]
+			lockPkTyp := col.Typ
+			if useTargetPk {
+				// Lock the existing row selected by a unique-key conflict. A new
+				// row has a NULL target_pk, so retain its incoming PK as the lock
+				// identity without changing the DEDUP join's NULL-means-INSERT key.
+				lockPkExpr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "coalesce", []*plan.Expr{
+					DeepCopyExpr(selectNode.ProjectList[targetPkPos]),
+					DeepCopyExpr(selectNode.ProjectList[lockPkPos]),
+				})
+				if err != nil {
+					return 0, err
+				}
+				lockPkPos = int32(len(selectNode.ProjectList))
+				selectNode.ProjectList = append(selectNode.ProjectList, lockPkExpr)
+				lockPkTyp = lockPkExpr.Typ
+			}
 			lockTarget := &plan.LockTarget{
 				TableId:            tableDef.TblId,
 				ObjRef:             DeepCopyObjectRef(objRef),
-				PrimaryColIdxInBat: colName2Idx[tableDef.Name+"."+col.Name],
+				PrimaryColIdxInBat: lockPkPos,
 				PrimaryColRelPos:   selectTag,
-				PrimaryColTyp:      col.Typ,
+				PrimaryColTyp:      lockPkTyp,
 			}
 			lockTargets = append(lockTargets, lockTarget)
 			break
