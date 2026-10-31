@@ -23,7 +23,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
-	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_20"
+	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_7"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/embed"
@@ -34,7 +34,7 @@ import (
 
 // Reuse the upgrade package's single-CN fixture. A late tenant must be repaired
 // on its first real login, even when the cluster has already completed upgrade.
-func TestV4020LoginRepairsLegacyRoutineCatalog(t *testing.T) {
+func TestReleasedCatalogLoginRepairsRoutineSchema(t *testing.T) {
 	embed.RunSingleCNBaseClusterTests(t, func(cluster embed.Cluster) {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 		defer cancel()
@@ -44,9 +44,13 @@ func TestV4020LoginRepairsLegacyRoutineCatalog(t *testing.T) {
 		systemDB, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/", port))
 		require.NoError(t, err)
 		defer systemDB.Close()
-		for _, sourceVersion := range []string{"4.0.6", "4.0.7", "4.0.18", "4.0.19"} {
+		for _, source := range []struct{ version, ddl string }{
+			{"4.0.1", releasedV410RoutineDDL},
+			{"4.0.6", strings.Replace(releasedV410RoutineDDL, "primary key(function_id)", "sql_mode varchar(1024) not null default 'PIPES_AS_CONCAT', primary key(function_id)", 1)},
+		} {
+			sourceVersion := source.version
 			t.Run(sourceVersion, func(t *testing.T) {
-				account := "routine_repair_4020_" + strings.ReplaceAll(sourceVersion, ".", "")
+				account := "routine_repair_release_" + strings.ReplaceAll(sourceVersion, ".", "")
 				_, err = systemDB.ExecContext(ctx, "create account "+account+" ADMIN_NAME 'root' IDENTIFIED BY '111'")
 				require.NoError(t, err)
 				defer func() {
@@ -67,8 +71,10 @@ func TestV4020LoginRepairsLegacyRoutineCatalog(t *testing.T) {
 				// authentication populating the bootstrap service's checked-tenant cache.
 				require.NoError(t, sqlExecutor.ExecTxn(ctx, func(txn executor.TxnExecutor) error {
 					for _, statement := range []string{
+						"drop table mo_catalog.mo_user_defined_function",
+						source.ddl,
 						"create database routine_repair",
-						`insert into mo_catalog.mo_user_defined_function(name,owner,args,arg_types,rettype,body,language,db,definer,type,security_type) values ('legacy_plus_seven',2,'[{"name":"x","type":"bigint"}]','["bigint"]','bigint','$1 + 7','sql','routine_repair','root','SQL','INVOKER')`,
+						`insert into mo_catalog.mo_user_defined_function(name,owner,args,rettype,body,language,db,definer,type,security_type) values ('legacy_plus_seven',2,'[{"name":"x","type":"bigint"}]','bigint','$1 + 7','sql','routine_repair','root','SQL','INVOKER')`,
 						"drop table mo_catalog.mo_function_revisions",
 					} {
 						res, err := txn.Exec(statement, versions.UpgradeStatementOption(accountID))
@@ -93,7 +99,11 @@ func TestV4020LoginRepairsLegacyRoutineCatalog(t *testing.T) {
 							return err
 						}
 						require.Equal(t, wantTable, exists)
-						res, err := txn.Exec("select function_id,body,active_revision,namespace_version from mo_catalog.mo_user_defined_function where name = 'legacy_plus_seven'", versions.UpgradeStatementOption(accountID))
+						fields := "function_id,body"
+						if wantTable {
+							fields += ",active_revision,namespace_version"
+						}
+						res, err := txn.Exec("select "+fields+" from mo_catalog.mo_user_defined_function where name = 'legacy_plus_seven'", versions.UpgradeStatementOption(accountID))
 						if err != nil {
 							return err
 						}
@@ -107,8 +117,10 @@ func TestV4020LoginRepairsLegacyRoutineCatalog(t *testing.T) {
 						}
 						require.Equal(t, functionID, id)
 						require.Equal(t, "$1 + 7", batch.Vecs[1].GetStringAt(0))
-						require.Equal(t, uint64(0), vector.GetFixedAtWithTypeCheck[uint64](batch.Vecs[2], 0))
-						require.Equal(t, uint64(0), vector.GetFixedAtWithTypeCheck[uint64](batch.Vecs[3], 0))
+						if wantTable {
+							require.Equal(t, uint64(0), vector.GetFixedAtWithTypeCheck[uint64](batch.Vecs[2], 0))
+							require.Equal(t, uint64(0), vector.GetFixedAtWithTypeCheck[uint64](batch.Vecs[3], 0))
+						}
 						return nil
 					}, executor.Options{}.WithDatabase(catalog.MO_CATALOG).WithAccountID(catalog.System_Account)))
 				}
@@ -140,18 +152,18 @@ func TestV4020LoginRepairsLegacyRoutineCatalog(t *testing.T) {
 					require.NoError(t, rows.Err())
 				}
 				checkResult()
-				checkCatalog("4.0.20", true)
+				checkCatalog("4.0.7", true)
 				// Explicit replay reaches the handler; a cached second login would not
 				// prove that its DDL is idempotent against the persisted catalog.
 				for range 2 {
 					var mutations int
 					require.NoError(t, sqlExecutor.ExecTxn(ctx, func(txn executor.TxnExecutor) error {
-						return v4_0_20.Handler.HandleTenantUpgrade(ctx, int32(accountID),
+						return v4_0_7.Handler.HandleTenantUpgrade(ctx, int32(accountID),
 							&routineRepairTxn{TxnExecutor: txn, mutations: &mutations})
 					}, executor.Options{}.WithDatabase(catalog.MO_CATALOG).
 						WithAccountID(catalog.System_Account).WithWaitCommittedLogApplied()))
 					require.Zero(t, mutations)
-					checkCatalog("4.0.20", true)
+					checkCatalog("4.0.7", true)
 					checkResult()
 				}
 			})
@@ -172,3 +184,28 @@ func (txn *routineRepairTxn) Exec(statement string, opts executor.StatementOptio
 	}
 	return res, err
 }
+
+// Source fixtures: v4.1.0 c58a0e62c382b3fefe8eb9ddbd2ad8d18d100b7d and
+// v4.2.6 71498157cc21f833b8e717f45d50d1f926be3134, frontend/predefined.go.
+// The latter adds only sql_mode to this table. Both lack arg_types and the
+// revision schema; the consolidated migration must preserve their SQL UDF row.
+const releasedV410RoutineDDL = `create table mo_catalog.mo_user_defined_function (
+				function_id int auto_increment,
+				name     varchar(100) unique key,
+				owner  int unsigned,
+				args     json,
+				retType  varchar(20),
+				body     text,
+				language varchar(20),
+				db       varchar(100),
+				definer  varchar(50),
+				modified_time timestamp,
+				created_time  timestamp,
+				type    varchar(10),
+				security_type varchar(10),
+				comment  varchar(5000),
+				character_set_client varchar(64),
+				collation_connection varchar(64),
+				database_collation varchar(64),
+				primary key(function_id)
+			)`

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package v4_0_20
+package v4_0_7
 
 import (
 	"context"
@@ -33,17 +33,14 @@ import (
 
 func TestPythonRevisionRepairUpgradePath(t *testing.T) {
 	metadata := Handler.Metadata()
-	require.Equal(t, "4.0.20", metadata.Version)
-	require.Equal(t, "4.0.19", metadata.MinUpgradeVersion)
-	require.Equal(t, versions.No, metadata.UpgradeCluster)
+	require.Equal(t, "4.0.7", metadata.Version)
+	require.Equal(t, "4.0.6", metadata.MinUpgradeVersion)
+	require.Equal(t, versions.Yes, metadata.UpgradeCluster)
 	require.Equal(t, versions.Yes, metadata.UpgradeTenant)
-	require.Zero(t, metadata.RequiredProtocolVersion)
-	require.Equal(t, uint32(len(tenantUpgEntries)), metadata.VersionOffset)
-	require.True(t, metadata.CanDirectUpgrade("4.0.19"))
-	require.False(t, metadata.CanDirectUpgrade("4.0.18"))
-	require.False(t, metadata.CanDirectUpgrade("4.0.7"))
-	require.False(t, metadata.CanDirectUpgrade("4.0.6"))
-	require.Len(t, tenantUpgEntries, 9)
+	require.Equal(t, uint32(len(tenantUpgEntries)+len(clusterUpgEntries)), metadata.VersionOffset)
+	require.True(t, metadata.CanDirectUpgrade("4.0.6"))
+	require.False(t, metadata.CanDirectUpgrade("4.0.1"))
+	require.Len(t, routineUpgEntries, 9)
 }
 
 func TestPythonRevisionRepairIsIdempotentForCatalogStates(t *testing.T) {
@@ -57,14 +54,14 @@ func TestPythonRevisionRepairIsIdempotentForCatalogStates(t *testing.T) {
 		wantFirstDDL  int
 	}{
 		{
-			name:         "frozen_4.0.7_missed_catalog",
-			schemaOrigin: "4.0.7",
+			name:         "released_4.0.6_missing_routine_schema",
+			schemaOrigin: "released 4.0.6",
 			legacyIndex:  true,
 			wantFirstDDL: 9,
 		},
 		{
 			name:         "partial_revision_catalog",
-			schemaOrigin: "4.0.8",
+			schemaOrigin: "interrupted current migration",
 			columns: []string{
 				"active_revision", "namespace_version", "canonical_input_descriptor",
 				"return_descriptor", "signature_key_schema_version", "signature_fingerprint",
@@ -74,7 +71,7 @@ func TestPythonRevisionRepairIsIdempotentForCatalogStates(t *testing.T) {
 		},
 		{
 			name:         "complete_revision_catalog",
-			schemaOrigin: "4.0.8",
+			schemaOrigin: "interrupted current migration",
 			columns: []string{
 				"active_revision", "namespace_version", "canonical_input_descriptor",
 				"return_descriptor", "signature_key_schema_version", "signature_fingerprint",
@@ -97,11 +94,19 @@ func TestPythonRevisionRepairIsIdempotentForCatalogStates(t *testing.T) {
 				}
 				txn := newRepairTxnExecutor(t, state)
 				require.NoError(t, Handler.Prepare(context.Background(), txn, true))
-				require.NoError(t, Handler.HandleTenantUpgrade(context.Background(), 7, txn))
+				for _, entry := range routineUpgEntries {
+					require.NoError(t, entry.Upgrade(txn, 7))
+				}
 				require.Len(t, state.ddl, test.wantFirstDDL,
 					"repair of %s schema must apply only missing catalog objects", test.schemaOrigin)
 				firstDDL := append([]string(nil), state.ddl...)
-				require.NoError(t, Handler.HandleTenantUpgrade(context.Background(), 7, txn))
+				// Re-entering the full migration first visits the old signature entry.
+				// The final descriptor index must complete it without recreate/drop churn.
+				predecessor := addUserDefinedFunctionSignatureIndex()
+				require.NoError(t, predecessor.Upgrade(txn, 7))
+				for _, entry := range routineUpgEntries {
+					require.NoError(t, entry.Upgrade(txn, 7))
+				}
 				require.Equal(t, firstDDL, state.ddl,
 					"a restart/retry of %s schema must not repeat DDL", test.schemaOrigin)
 			})
@@ -125,6 +130,17 @@ func newRepairTxnExecutor(t *testing.T, state *pythonRevisionCatalogState) execu
 		require.NotContains(t, sql, "GetProtocolVersion")
 		lower := strings.ToLower(sql)
 		switch {
+		case strings.HasPrefix(sql, "SHOW CREATE TABLE"):
+			ddl := "create table mo_user_defined_function (name varchar(100), db varchar(100), arg_types varchar(255), canonical_input_descriptor varchar(255)"
+			if state.legacyIndex {
+				ddl += ", unique key name_db_arg_types(name, db, arg_types)"
+			}
+			if state.newIndex {
+				ddl += ", unique key name_db_arg_types_descriptor(name, db, arg_types, canonical_input_descriptor)"
+			}
+			return newShowCreateTableResult(t, "mo_user_defined_function", ddl+")"), nil
+		case strings.HasPrefix(sql, "select count(distinct i.id)"):
+			return indexCatalogCounts(t, [3]int64{1, 1, 1}), nil
 		case strings.Contains(lower, "from mo_catalog.mo_columns"):
 			for column := range state.columns {
 				if strings.Contains(sql, fmt.Sprintf("attname = '%s'", column)) {
