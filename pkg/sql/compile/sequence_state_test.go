@@ -21,7 +21,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
 
@@ -205,4 +207,165 @@ func TestInternalSequenceStateIsolatesNestedAttempts(t *testing.T) {
 	require.Equal(t, []string{"successful"}, info.SeqLastValue)
 	info.SeqAddValues[11] = "later-parent-mutation"
 	require.Equal(t, "successful", handoff.output.addValues[11])
+}
+
+// The CTAS child process is built by NewTopProcess with a fresh SessionInfo,
+// so without the handoff carry its transaction-local sequence allocations
+// would see a nil obligation store (#30896; v12-review F5). The carried
+// store is the session's same set: no clone, no restore, no clear.
+func TestInternalSequenceStateCarriesObligationStore(t *testing.T) {
+	parent := testutil.NewProcess(t)
+	defer parent.Free()
+	parent.InitSeq()
+	set := process.NewSequenceObligationSet()
+	parent.GetSessionInfo().SeqObligations = set
+
+	ctx, handoff := attachInternalSequenceState(context.Background(), parent)
+	require.Same(t, set, handoff.obligations)
+	childCtx, consumed := consumeInternalSequenceState(ctx)
+	require.Same(t, handoff, consumed)
+	_, again := consumeInternalSequenceState(childCtx)
+	require.Nil(t, again,
+		"a consumed handoff must not be republished to nested metadata SQL")
+
+	child := testutil.NewProcess(t)
+	defer child.Free()
+	initInternalSequenceState(child, "ctas_database", consumed)
+	require.Same(t, set, child.GetSequenceObligationSet(),
+		"CTAS population must allocate against the session's obligation store")
+
+	// An obligation raised by the child's allocation is visible to the outer
+	// transaction's pre-commit stamp through the parent's store.
+	ob := process.SequenceObligation{RelID: 42, Db: "d", Table: "s",
+		PassStart: 10, Floor: 12}
+	require.NoError(t, child.GetSequenceObligationSet().Raise(ob))
+	got, ok := parent.GetSequenceObligationSet().Get(42)
+	require.True(t, ok)
+	require.Equal(t, ob, got)
+
+	// The store is not cloned or cleared by the handoff: the entry the child
+	// raised survives the attach/init cycle intact.
+	require.Equal(t, []process.SequenceObligation{ob},
+		parent.GetSequenceObligationSet().Snapshot())
+
+	// Nested metadata SQL receives no handoff; its process keeps the fresh
+	// nil store, so an allocation there still fails loudly in Raise instead
+	// of silently losing issued values.
+	nested := testutil.NewProcess(t)
+	defer nested.Free()
+	initInternalSequenceState(nested, "metadata_database", nil)
+	require.Nil(t, nested.GetSequenceObligationSet())
+	require.Error(t, nested.GetSequenceObligationSet().Raise(ob))
+}
+
+// A parent whose session never seeded an obligation store (e.g. a session
+// that has not hosted transaction-local generations) must hand a nil store
+// down unaltered; the child must not synthesize one.
+func TestInternalSequenceStateNilObligationStoreStaysNil(t *testing.T) {
+	parent := testutil.NewProcess(t)
+	defer parent.Free()
+	parent.InitSeq()
+	require.Nil(t, parent.GetSequenceObligationSet())
+
+	ctx, handoff := attachInternalSequenceState(context.Background(), parent)
+	require.Nil(t, handoff.obligations)
+	childCtx, consumed := consumeInternalSequenceState(ctx)
+	require.Same(t, handoff, consumed)
+	_, again := consumeInternalSequenceState(childCtx)
+	require.Nil(t, again,
+		"a consumed handoff must not be republished to nested metadata SQL")
+
+	child := testutil.NewProcess(t)
+	defer child.Free()
+	initInternalSequenceState(child, "ctas_database", consumed)
+	require.Nil(t, child.GetSequenceObligationSet())
+}
+
+// Retry-transition obligation oracle (#30359 review): the compiler retry
+// transition rewinds the failed attempt's workspace writes exactly like a
+// frontend statement rollback, so a SETVAL/restart boundary the failed
+// attempt staged must come back into enforcement there too. Issued-value
+// obligations of the failed attempt stay recorded — envelope-restored
+// protection only ever produces gaps, never reuse.
+func TestRetryTransitionRestoresStagedSequenceObligations(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	_, txnOp := newTestTxnClientAndOp(ctrl)
+
+	c := NewMockCompile(t)
+	c.proc.Base.TxnOperator = txnOp
+	set := process.NewSequenceObligationSet()
+	c.proc.GetSessionInfo().SeqObligations = set
+
+	// The failed attempt issued values on a transaction-local generation,
+	// then staged a SETVAL boundary mid-statement.
+	require.NoError(t, set.Raise(process.SequenceObligation{
+		RelID: 5, PassStart: 10, Floor: 12,
+	}))
+	set.StageRemoval(5)
+	_, ok := set.Get(5)
+	require.False(t, ok, "staged entries leave enforcement until resolved")
+
+	var wait time.Duration
+	require.NoError(t, c.prepareRetryTransition(&wait))
+	ob, ok := set.Get(5)
+	require.True(t, ok, "the retry transition must restore the staged boundary: its workspace reposition was rewound")
+	require.Equal(t, uint64(10), ob.PassStart)
+	require.Equal(t, uint64(12), ob.Floor)
+
+	// The same transition envelope-merges an obligation raised after the
+	// staged boundary (client-observed post-SETVAL emission), so both
+	// sides' issued values stay protected across the retry.
+	set.StageRemoval(5)
+	require.NoError(t, set.Raise(process.SequenceObligation{
+		RelID: 5, PassStart: 60, Floor: 63,
+	}))
+	require.NoError(t, c.prepareRetryTransition(&wait))
+	ob, ok = set.Get(5)
+	require.True(t, ok)
+	require.Equal(t, uint64(10), ob.PassStart)
+	require.Equal(t, uint64(63), ob.Floor)
+	require.True(t, ob.IssuedContains(11))
+	require.True(t, ob.IssuedContains(62))
+
+	// A transition with nothing staged leaves issued obligations standing.
+	require.NoError(t, c.prepareRetryTransition(&wait))
+	ob, ok = set.Get(5)
+	require.True(t, ok)
+	require.Equal(t, uint64(63), ob.Floor)
+
+	// A process without a session obligation store transitions silently.
+	c2 := NewMockCompile(t)
+	c2.proc.Base.TxnOperator = txnOp
+	require.Nil(t, c2.proc.GetSequenceObligationSet())
+	require.NoError(t, c2.prepareRetryTransition(&wait))
+}
+
+// Retry-transition retained-output discard oracle (#30359 review N1): a
+// prepared-cursor EXECUTE retains its result for COM_STMT_FETCH without
+// publishing it, so the failed generation's prefix would otherwise sit
+// beside the retried generation's result. The transition invokes the
+// armed discard hook exactly once per retry, and a nil hook (every
+// non-cursor statement and every remote process — the hook is never
+// serialized) transitions silently.
+func TestRetryTransitionDiscardsRetainedOutput(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	_, txnOp := newTestTxnClientAndOp(ctrl)
+
+	discarded := 0
+	c := NewMockCompile(t)
+	c.proc.Base.TxnOperator = txnOp
+	c.proc.GetSessionInfo().RetryDiscardOutput = func() error { discarded++; return nil }
+
+	var wait time.Duration
+	require.NoError(t, c.prepareRetryTransition(&wait))
+	require.Equal(t, 1, discarded, "exactly one discard per retry transition")
+	require.NoError(t, c.prepareRetryTransition(&wait))
+	require.Equal(t, 2, discarded, "each transition discards only its own failed generation")
+
+	c2 := NewMockCompile(t)
+	c2.proc.Base.TxnOperator = txnOp
+	require.Nil(t, c2.proc.GetSessionInfo().RetryDiscardOutput)
+	require.NoError(t, c2.prepareRetryTransition(&wait))
 }

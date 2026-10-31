@@ -1,0 +1,53 @@
+drop database if exists seq_owner_db;
+drop database if exists seq_caller_db;
+create database seq_owner_db;
+create database seq_caller_db;
+use seq_owner_db;
+create sequence s as bigint increment by 1 start with 1 no cycle;
+create table t (id bigint primary key default nextval('s'), v int);
+use seq_caller_db;
+create sequence s as bigint increment by 1 start with 100 no cycle;
+insert into seq_owner_db.t(v) values (10);
+select id, v from seq_owner_db.t;
+➤ id[-5,64,0]  ¦  v[4,32,0]  𝄀
+1  ¦  10
+select last_seq_num, is_called from seq_owner_db.s;
+➤ last_seq_num[-5,64,0]  ¦  is_called[-7,1,0]  𝄀
+1  ¦  1
+select last_seq_num, is_called from seq_caller_db.s;
+➤ last_seq_num[-5,64,0]  ¦  is_called[-7,1,0]  𝄀
+100  ¦  0
+insert into seq_owner_db.t(v) values (20);
+select id, v from seq_owner_db.t order by id;
+➤ id[-5,64,0]  ¦  v[4,32,0]  𝄀
+1  ¦  10  𝄀
+2  ¦  20
+select last_seq_num, is_called from seq_owner_db.s;
+➤ last_seq_num[-5,64,0]  ¦  is_called[-7,1,0]  𝄀
+2  ¦  1
+select last_seq_num, is_called from seq_caller_db.s;
+➤ last_seq_num[-5,64,0]  ¦  is_called[-7,1,0]  𝄀
+100  ¦  0
+drop sequence s;
+insert into seq_owner_db.t(v) values (30);
+select id, v from seq_owner_db.t order by id;
+➤ id[-5,64,0]  ¦  v[4,32,0]  𝄀
+1  ¦  10  𝄀
+2  ¦  20  𝄀
+3  ¦  30
+select last_seq_num, is_called from seq_owner_db.s;
+➤ last_seq_num[-5,64,0]  ¦  is_called[-7,1,0]  𝄀
+3  ¦  1
+use seq_owner_db;
+insert into t(v) values (40);
+select id, v from t order by id;
+➤ id[-5,64,0]  ¦  v[4,32,0]  𝄀
+1  ¦  10  𝄀
+2  ¦  20  𝄀
+3  ¦  30  𝄀
+4  ¦  40
+select last_seq_num, is_called from s;
+➤ last_seq_num[-5,64,0]  ¦  is_called[-7,1,0]  𝄀
+4  ¦  1
+drop database seq_owner_db;
+drop database seq_caller_db;

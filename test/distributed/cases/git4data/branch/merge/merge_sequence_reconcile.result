@@ -1,0 +1,452 @@
+drop database if exists seq_merge_src;
+drop database if exists seq_merge_br;
+create database seq_merge_src;
+use seq_merge_src;
+create sequence s as bigint increment by 1 start with 1 no cycle;
+create table t (id bigint primary key default nextval('s'), v int);
+insert into t(v) values (10);
+data branch create database seq_merge_br from seq_merge_src;
+use seq_merge_br;
+insert into t(v) values (20);
+use seq_merge_src;
+data branch merge seq_merge_br.t into seq_merge_src.t;
+use seq_merge_src;
+select id, v from t order by id;
+➤ id[-5,64,0]  ¦  v[4,32,0]  𝄀
+1  ¦  10  𝄀
+2  ¦  20
+select last_seq_num, is_called from s;
+➤ last_seq_num[-5,64,0]  ¦  is_called[-7,1,0]  𝄀
+2  ¦  1
+insert into t(v) values (30);
+select id, v from t order by id;
+➤ id[-5,64,0]  ¦  v[4,32,0]  𝄀
+1  ¦  10  𝄀
+2  ¦  20  𝄀
+3  ¦  30
+select last_seq_num, is_called from s;
+➤ last_seq_num[-5,64,0]  ¦  is_called[-7,1,0]  𝄀
+3  ¦  1
+drop database seq_merge_br;
+create sequence s3 as bigint increment by 3 start with 7 no cycle;
+create table t3 (id bigint primary key default nextval('s3'), v int);
+insert into t3(v) values (70);
+data branch create database seq_merge_br from seq_merge_src;
+use seq_merge_br;
+insert into t3(v) values (71);
+insert into t3(id, v) values (16, 72);
+use seq_merge_src;
+data branch merge seq_merge_br.t3 into seq_merge_src.t3;
+use seq_merge_src;
+select id, v from t3 order by id;
+➤ id[-5,64,0]  ¦  v[4,32,0]  𝄀
+7  ¦  70  𝄀
+10  ¦  71  𝄀
+16  ¦  72
+select last_seq_num, is_called from s3;
+➤ last_seq_num[-5,64,0]  ¦  is_called[-7,1,0]  𝄀
+16  ¦  1
+insert into t3(v) values (73);
+select id, v from t3 order by id;
+➤ id[-5,64,0]  ¦  v[4,32,0]  𝄀
+7  ¦  70  𝄀
+10  ¦  71  𝄀
+16  ¦  72  𝄀
+19  ¦  73
+drop database seq_merge_br;
+create sequence s2 as bigint increment by 1 start with 1 no cycle;
+create table t2 (id bigint primary key default nextval('s2'), v int);
+insert into t2(v) values (1), (2), (3);
+data branch create database seq_merge_br from seq_merge_src;
+use seq_merge_br;
+delete from t2 where id >= 2;
+use seq_merge_src;
+data branch merge seq_merge_br.t2 into seq_merge_src.t2;
+use seq_merge_src;
+select id, v from t2 order by id;
+➤ id[-5,64,0]  ¦  v[4,32,0]  𝄀
+1  ¦  1
+select last_seq_num, is_called from s2;
+➤ last_seq_num[-5,64,0]  ¦  is_called[-7,1,0]  𝄀
+3  ¦  1
+insert into t2(v) values (4);
+select id, v from t2 order by id;
+➤ id[-5,64,0]  ¦  v[4,32,0]  𝄀
+1  ¦  1  𝄀
+4  ¦  4
+drop database seq_merge_br;
+create sequence sd as bigint increment by -1 start with 10 minvalue 1 maxvalue 10 no cycle;
+create table td (id bigint primary key default nextval('sd'), v int);
+insert into td(v) values (100);
+data branch create database seq_merge_br from seq_merge_src;
+use seq_merge_br;
+insert into td(v) values (90), (80);
+use seq_merge_src;
+data branch merge seq_merge_br.td into seq_merge_src.td;
+use seq_merge_src;
+select id, v from td order by id;
+➤ id[-5,64,0]  ¦  v[4,32,0]  𝄀
+8  ¦  80  𝄀
+9  ¦  90  𝄀
+10  ¦  100
+select last_seq_num, is_called from sd;
+➤ last_seq_num[-5,64,0]  ¦  is_called[-7,1,0]  𝄀
+8  ¦  1
+insert into td(v) values (70);
+select id, v from td order by id;
+➤ id[-5,64,0]  ¦  v[4,32,0]  𝄀
+7  ¦  70  𝄀
+8  ¦  80  𝄀
+9  ¦  90  𝄀
+10  ¦  100
+drop database seq_merge_br;
+create sequence sm as bigint increment by 1 start with 1 maxvalue 4 no cycle;
+create table tm (id bigint primary key default nextval('sm'), v int);
+insert into tm(v) values (10);
+data branch create database seq_merge_br from seq_merge_src;
+insert into seq_merge_br.tm(id, v) values (2, 20), (3, 30), (4, 40);
+use seq_merge_src;
+data branch merge seq_merge_br.tm into seq_merge_src.tm;
+-- @regex("Reached maximum value of sequence sm", true)
+internal error: Reached maximum value of sequence sm
+use seq_merge_src;
+select id, v from tm order by id;
+➤ id[-5,64,0]  ¦  v[4,32,0]  𝄀
+1  ¦  10
+select last_seq_num, is_called from sm;
+➤ last_seq_num[-5,64,0]  ¦  is_called[-7,1,0]  𝄀
+1  ¦  1
+insert into tm(v) values (101);
+select id, v from tm order by id;
+➤ id[-5,64,0]  ¦  v[4,32,0]  𝄀
+1  ¦  10  𝄀
+2  ¦  101
+select last_seq_num, is_called from sm;
+➤ last_seq_num[-5,64,0]  ¦  is_called[-7,1,0]  𝄀
+2  ¦  1
+drop database seq_merge_br;
+create sequence sa as bigint increment by 1 start with 1 no cycle;
+create table ta (id bigint primary key default nextval('sa'), v int);
+insert into ta(v) values (1);
+data branch create database seq_merge_br from seq_merge_src;
+use seq_merge_br;
+insert into ta(v) values (2);
+use seq_merge_src;
+select setval('sa', 50);
+➤ setval(sa, 50)[12,65535,0]  𝄀
+50
+data branch merge seq_merge_br.ta into seq_merge_src.ta;
+select id, v from ta order by id;
+➤ id[-5,64,0]  ¦  v[4,32,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  2
+select last_seq_num, is_called from sa;
+➤ last_seq_num[-5,64,0]  ¦  is_called[-7,1,0]  𝄀
+50  ¦  1
+insert into ta(v) values (60);
+select id, v from ta order by id;
+➤ id[-5,64,0]  ¦  v[4,32,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  2  𝄀
+51  ¦  60
+drop database seq_merge_br;
+drop database if exists ms_ord_src;
+drop database if exists ms_ord_br;
+create database ms_ord_src;
+use ms_ord_src;
+create sequence s as bigint increment by 1 start with 1 no cycle;
+create table t (id bigint primary key default nextval('s'), v int);
+insert into t(v) values (10);
+data branch create database ms_ord_br from ms_ord_src;
+use ms_ord_br;
+insert into t(v) values (20);
+use ms_ord_src;
+drop sequence s;
+create table s (last_seq_num bigint, min_value bigint, max_value bigint, start_value bigint, increment_value bigint, cycle boolean, is_called boolean);
+insert into s values (111, 1, 1000, 1, 1, false, true);
+data branch merge ms_ord_br.t into ms_ord_src.t;
+-- @regex("sequence", true)
+internal error: Table input is not a sequence
+select id, v from t order by id;
+➤ id[-5,64,0]  ¦  v[4,32,0]  𝄀
+1  ¦  10
+select * from s;
+➤ last_seq_num[-5,64,0]  ¦  min_value[-5,64,0]  ¦  max_value[-5,64,0]  ¦  start_value[-5,64,0]  ¦  increment_value[-5,64,0]  ¦  cycle[-7,1,0]  ¦  is_called[-7,1,0]  𝄀
+111  ¦  1  ¦  1000  ¦  1  ¦  1  ¦  0  ¦  1
+drop table s;
+create sequence s as bigint increment by 1 start with 1 no cycle;
+data branch merge ms_ord_br.t into ms_ord_src.t;
+use ms_ord_src;
+select id, v from t order by id;
+➤ id[-5,64,0]  ¦  v[4,32,0]  𝄀
+1  ¦  10  𝄀
+2  ¦  20
+select last_seq_num, is_called from s;
+➤ last_seq_num[-5,64,0]  ¦  is_called[-7,1,0]  𝄀
+2  ¦  1
+insert into t(v) values (30);
+select id, v from t order by id;
+➤ id[-5,64,0]  ¦  v[4,32,0]  𝄀
+1  ¦  10  𝄀
+2  ¦  20  𝄀
+3  ¦  30
+drop database ms_ord_br;
+drop database ms_ord_src;
+drop database if exists ms_case_src;
+drop database if exists ms_case_br;
+create database ms_case_src;
+use ms_case_src;
+create sequence MixS as bigint increment by 1 start with 1 no cycle;
+create table tc (id bigint primary key default nextval('mixs'), v int);
+insert into tc(v) values (10);
+data branch create database ms_case_br from ms_case_src;
+use ms_case_br;
+insert into tc(v) values (20);
+use ms_case_src;
+data branch merge ms_case_br.tc into ms_case_src.tc;
+select id, v from tc order by id;
+➤ id[-5,64,0]  ¦  v[4,32,0]  𝄀
+1  ¦  10  𝄀
+2  ¦  20
+select last_seq_num, is_called from MixS;
+➤ last_seq_num[-5,64,0]  ¦  is_called[-7,1,0]  𝄀
+2  ¦  1
+insert into tc(v) values (30);
+select id, v from tc order by id;
+➤ id[-5,64,0]  ¦  v[4,32,0]  𝄀
+1  ¦  10  𝄀
+2  ¦  20  𝄀
+3  ¦  30
+drop database ms_case_br;
+drop database ms_case_src;
+drop database if exists ms_cast_src;
+drop database if exists ms_cast_br;
+create database ms_cast_src;
+use ms_cast_src;
+create sequence sv as bigint increment by 1 start with 1 no cycle;
+create table tv (id varchar(32) primary key default nextval('sv'), v int);
+insert into tv(v) values (10);
+data branch create database ms_cast_br from ms_cast_src;
+use ms_cast_br;
+insert into tv(v) values (20);
+use ms_cast_src;
+data branch merge ms_cast_br.tv into ms_cast_src.tv;
+select id, v from tv order by id;
+➤ id[12,32,0]  ¦  v[4,32,0]  𝄀
+1  ¦  10  𝄀
+2  ¦  20
+select last_seq_num, is_called from sv;
+➤ last_seq_num[-5,64,0]  ¦  is_called[-7,1,0]  𝄀
+2  ¦  1
+insert into tv(v) values (30);
+select id, v from tv order by id;
+➤ id[12,32,0]  ¦  v[4,32,0]  𝄀
+1  ¦  10  𝄀
+2  ¦  20  𝄀
+3  ¦  30
+select last_seq_num, is_called from sv;
+➤ last_seq_num[-5,64,0]  ¦  is_called[-7,1,0]  𝄀
+3  ¦  1
+drop database ms_cast_br;
+create sequence sm as bigint increment by 1 start with 1 no cycle;
+create table tm (id mediumint primary key default nextval('sm'), v int);
+insert into tm(v) values (10);
+data branch create database ms_cast_br from ms_cast_src;
+use ms_cast_br;
+insert into tm(v) values (20);
+use ms_cast_src;
+data branch merge ms_cast_br.tm into ms_cast_src.tm;
+select id, v from tm order by id;
+➤ id[4,9,0]  ¦  v[4,32,0]  𝄀
+1  ¦  10  𝄀
+2  ¦  20
+select last_seq_num, is_called from sm;
+➤ last_seq_num[-5,64,0]  ¦  is_called[-7,1,0]  𝄀
+2  ¦  1
+insert into tm(v) values (30);
+select id, v from tm order by id;
+➤ id[4,9,0]  ¦  v[4,32,0]  𝄀
+1  ¦  10  𝄀
+2  ¦  20  𝄀
+3  ¦  30
+select last_seq_num, is_called from sm;
+➤ last_seq_num[-5,64,0]  ¦  is_called[-7,1,0]  𝄀
+3  ¦  1
+drop database ms_cast_br;
+drop database ms_cast_src;
+drop database if exists ms_u64_src;
+drop database if exists ms_u64_br;
+create database ms_u64_src;
+use ms_u64_src;
+create sequence su as bigint unsigned increment by 1 start with 9223372036854775806 no cycle;
+create table tu (id varchar(32) primary key default nextval('su'), v int);
+insert into tu(v) values (10);
+data branch create database ms_u64_br from ms_u64_src;
+use ms_u64_br;
+insert into tu(v) values (20);
+insert into tu(v) values (30);
+use ms_u64_src;
+data branch merge ms_u64_br.tu into ms_u64_src.tu;
+select id, v from tu order by id;
+➤ id[12,32,0]  ¦  v[4,32,0]  𝄀
+9223372036854775806  ¦  10  𝄀
+9223372036854775807  ¦  20  𝄀
+9223372036854775808  ¦  30
+select last_seq_num, is_called from su;
+➤ last_seq_num[-5,64,0]  ¦  is_called[-7,1,0]  𝄀
+9223372036854775808  ¦  1
+insert into tu(v) values (40);
+select id, v from tu order by id;
+➤ id[12,32,0]  ¦  v[4,32,0]  𝄀
+9223372036854775806  ¦  10  𝄀
+9223372036854775807  ¦  20  𝄀
+9223372036854775808  ¦  30  𝄀
+9223372036854775809  ¦  40
+select last_seq_num, is_called from su;
+➤ last_seq_num[-5,64,0]  ¦  is_called[-7,1,0]  𝄀
+9223372036854775809  ¦  1
+drop database ms_u64_br;
+drop database ms_u64_src;
+drop database if exists ms_mixed_src;
+drop database if exists ms_mixed_br;
+create database ms_mixed_src;
+use ms_mixed_src;
+create sequence smu as bigint unsigned increment by 1 start with 18446744073709551613 no cycle;
+create table tmix (id varchar(32) primary key default nextval('smu'), v int);
+insert into tmix(v) values (10);
+data branch create database ms_mixed_br from ms_mixed_src;
+use ms_mixed_br;
+insert into tmix(v) values (20);
+insert into tmix(id, v) values ('-1', 21);
+use ms_mixed_src;
+data branch merge ms_mixed_br.tmix into ms_mixed_src.tmix;
+select id, v from tmix order by id;
+➤ id[12,32,0]  ¦  v[4,32,0]  𝄀
+-1  ¦  21  𝄀
+18446744073709551613  ¦  10  𝄀
+18446744073709551614  ¦  20
+select last_seq_num, is_called from smu;
+➤ last_seq_num[-5,64,0]  ¦  is_called[-7,1,0]  𝄀
+18446744073709551614  ¦  1
+insert into tmix(v) values (30);
+select id, v from tmix order by id;
+➤ id[12,32,0]  ¦  v[4,32,0]  𝄀
+-1  ¦  21  𝄀
+18446744073709551613  ¦  10  𝄀
+18446744073709551614  ¦  20  𝄀
+18446744073709551615  ¦  30
+select last_seq_num, is_called from smu;
+➤ last_seq_num[-5,64,0]  ¦  is_called[-7,1,0]  𝄀
+18446744073709551615  ¦  1
+drop database ms_mixed_br;
+drop database ms_mixed_src;
+drop database if exists ms_smallu_src;
+drop database if exists ms_smallu_br;
+create database ms_smallu_src;
+use ms_smallu_src;
+create sequence ssu as smallint unsigned increment by 1 start with 60000 no cycle;
+create table tsu (id bigint primary key default nextval('ssu'), v int);
+insert into tsu(v) values (10);
+data branch create database ms_smallu_br from ms_smallu_src;
+use ms_smallu_br;
+insert into tsu(v) values (20);
+insert into tsu(id, v) values (70000, 21);
+use ms_smallu_src;
+data branch merge ms_smallu_br.tsu into ms_smallu_src.tsu;
+select id, v from tsu order by id;
+➤ id[-5,64,0]  ¦  v[4,32,0]  𝄀
+60000  ¦  10  𝄀
+60001  ¦  20  𝄀
+70000  ¦  21
+select last_seq_num, is_called from ssu;
+➤ last_seq_num[5,16,0]  ¦  is_called[-7,1,0]  𝄀
+60001  ¦  1
+insert into tsu(v) values (30);
+select id, v from tsu order by id;
+➤ id[-5,64,0]  ¦  v[4,32,0]  𝄀
+60000  ¦  10  𝄀
+60001  ¦  20  𝄀
+60002  ¦  30  𝄀
+70000  ¦  21
+select last_seq_num, is_called from ssu;
+➤ last_seq_num[5,16,0]  ¦  is_called[-7,1,0]  𝄀
+60002  ¦  1
+drop database ms_smallu_br;
+drop database ms_smallu_src;
+use seq_merge_src;
+create sequence sdec18 as bigint increment by 1 start with 1 no cycle;
+create table tdec18 (id decimal(18,0) primary key default nextval('sdec18'), v int);
+insert into tdec18(v) values (10);
+data branch create database seq_merge_br from seq_merge_src;
+use seq_merge_br;
+insert into tdec18(v) values (20);
+use seq_merge_src;
+data branch merge seq_merge_br.tdec18 into seq_merge_src.tdec18;
+select id, v from tdec18 order by id;
+➤ id[3,18,0]  ¦  v[4,32,0]  𝄀
+1  ¦  10  𝄀
+2  ¦  20
+select last_seq_num, is_called from sdec18;
+➤ last_seq_num[-5,64,0]  ¦  is_called[-7,1,0]  𝄀
+2  ¦  1
+insert into tdec18(v) values (30);
+select id, v from tdec18 order by id;
+➤ id[3,18,0]  ¦  v[4,32,0]  𝄀
+1  ¦  10  𝄀
+2  ¦  20  𝄀
+3  ¦  30
+select last_seq_num, is_called from sdec18;
+➤ last_seq_num[-5,64,0]  ¦  is_called[-7,1,0]  𝄀
+3  ¦  1
+drop database seq_merge_br;
+create sequence sdec18s2 as bigint increment by 1 start with 1 no cycle;
+create table tdec18s2 (id decimal(18,2) primary key default nextval('sdec18s2'), v int);
+insert into tdec18s2(v) values (10);
+data branch create database seq_merge_br from seq_merge_src;
+use seq_merge_br;
+insert into tdec18s2(v) values (20);
+use seq_merge_src;
+data branch merge seq_merge_br.tdec18s2 into seq_merge_src.tdec18s2;
+select id, v from tdec18s2 order by id;
+➤ id[3,18,2]  ¦  v[4,32,0]  𝄀
+1.00  ¦  10  𝄀
+2.00  ¦  20
+select last_seq_num, is_called from sdec18s2;
+➤ last_seq_num[-5,64,0]  ¦  is_called[-7,1,0]  𝄀
+2  ¦  1
+insert into tdec18s2(v) values (30);
+select id, v from tdec18s2 order by id;
+➤ id[3,18,2]  ¦  v[4,32,0]  𝄀
+1.00  ¦  10  𝄀
+2.00  ¦  20  𝄀
+3.00  ¦  30
+select last_seq_num, is_called from sdec18s2;
+➤ last_seq_num[-5,64,0]  ¦  is_called[-7,1,0]  𝄀
+3  ¦  1
+drop database seq_merge_br;
+create sequence sdec38 as bigint increment by 1 start with 1 no cycle;
+create table tdec38 (id decimal(38,0) primary key default nextval('sdec38'), v int);
+insert into tdec38(v) values (10);
+data branch create database seq_merge_br from seq_merge_src;
+use seq_merge_br;
+insert into tdec38(v) values (20);
+use seq_merge_src;
+data branch merge seq_merge_br.tdec38 into seq_merge_src.tdec38;
+select id, v from tdec38 order by id;
+➤ id[3,38,0]  ¦  v[4,32,0]  𝄀
+1  ¦  10  𝄀
+2  ¦  20
+select last_seq_num, is_called from sdec38;
+➤ last_seq_num[-5,64,0]  ¦  is_called[-7,1,0]  𝄀
+2  ¦  1
+insert into tdec38(v) values (30);
+select id, v from tdec38 order by id;
+➤ id[3,38,0]  ¦  v[4,32,0]  𝄀
+1  ¦  10  𝄀
+2  ¦  20  𝄀
+3  ¦  30
+select last_seq_num, is_called from sdec38;
+➤ last_seq_num[-5,64,0]  ¦  is_called[-7,1,0]  𝄀
+3  ¦  1
+drop database seq_merge_br;
+drop database seq_merge_src;
