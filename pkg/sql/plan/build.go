@@ -856,6 +856,10 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bool) (re
 		return buildShowTarget(stmt, ctx)
 	case *tree.ShowIndex:
 		return buildShowIndex(stmt, ctx)
+	case *tree.ShowIndexIgnored:
+		return buildShowIndexIgnored(stmt, ctx)
+	case *tree.ShowIndexStatus:
+		return buildShowIndexStatus(stmt, ctx)
 	case *tree.ShowGrants:
 		return buildShowGrants(stmt, ctx)
 	case *tree.ShowVariables:

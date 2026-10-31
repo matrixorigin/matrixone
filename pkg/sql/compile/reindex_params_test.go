@@ -82,6 +82,13 @@ func TestReindexSpecifiedParams_SkipsUnset(t *testing.T) {
 	require.Equal(t, map[string]string{catalog.IndexAlgoParamLists: "4"}, got)
 }
 
+// MAX_BAD_RECORDS = 0 is a specified value, not an unset one.
+func TestReindexSpecifiedParams_MaxBadRecords(t *testing.T) {
+	ro := &tree.AlterOptionAlterReIndex{Name: tree.Identifier("idx1"), MaxBadRecordsSet: true}
+	at := &tree.AlterTable{Options: tree.AlterTableOptions{ro}}
+	require.Equal(t, map[string]string{catalog.IndexAlgoParamMaxBadRecords: "0"}, reindexSpecifiedParams(at, "idx1"))
+}
+
 func TestReindexSpecifiedParamsMatchesIndexNameCaseInsensitively(t *testing.T) {
 	ro := &tree.AlterOptionAlterReIndex{
 		Name:          tree.Identifier("MixedCaseIdx"),

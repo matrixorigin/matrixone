@@ -323,3 +323,52 @@ func withLoadPrivilegeFixture(
 
 	fn(ses, bh)
 }
+
+func TestShowIndexIgnoredTableName(t *testing.T) {
+	ses := newSes(nil, nil)
+	ses.SetDatabaseName("session_db")
+
+	for _, tc := range []struct {
+		name      string
+		stmt      tree.Statement
+		wantDB    string
+		wantTable string
+		wantOK    bool
+	}{
+		{name: "nil statement"},
+		{name: "other statement", stmt: &tree.ShowIndex{}},
+		{name: "missing table", stmt: &tree.ShowIndexIgnored{}},
+		{
+			name:      "qualified table",
+			stmt:      &tree.ShowIndexIgnored{TableName: tree.NewUnresolvedObjectName("qualified_db", "qualified_target")},
+			wantDB:    "qualified_db",
+			wantTable: "qualified_target",
+			wantOK:    true,
+		},
+		{
+			name:      "session database",
+			stmt:      &tree.ShowIndexIgnored{TableName: tree.NewUnresolvedObjectName("session_target")},
+			wantDB:    "session_db",
+			wantTable: "session_target",
+			wantOK:    true,
+		},
+		{
+			name:      "show index status",
+			stmt:      &tree.ShowIndexStatus{TableName: tree.NewUnresolvedObjectName("qualified_db", "status_target")},
+			wantDB:    "qualified_db",
+			wantTable: "status_target",
+			wantOK:    true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dbName, tableName, ok := getShowIndexTableName(showIndexTableName(tc.stmt), ses)
+			require.Equal(t, tc.wantDB, dbName)
+			require.Equal(t, tc.wantTable, tableName)
+			require.Equal(t, tc.wantOK, ok)
+		})
+	}
+
+	ses.SetDatabaseName("")
+	_, _, ok := getShowIndexTableName(tree.NewUnresolvedObjectName("t"), ses)
+	require.False(t, ok)
+}

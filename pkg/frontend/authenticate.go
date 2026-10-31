@@ -6859,6 +6859,12 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		if st.Table != nil {
 			dbName = string(st.Table.SchemaName)
 		}
+	case *tree.ShowIndexIgnored, *tree.ShowIndexStatus:
+		// lists primary keys of the table's rows, or the state of its indexes: SELECT on the
+		// named table and on what the plan reads
+		objType = objectTypeTable
+		typs = append(typs, PrivilegeTypeSelect, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership)
+		canExecInRestricted = true
 	case *tree.DropIndex:
 		objType = objectTypeTable
 		typs = append(typs, PrivilegeTypeIndex, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership)
@@ -9405,6 +9411,20 @@ func authenticateUserCanExecuteStatementWithObjectTypeDatabaseAndTable(ctx conte
 				})
 			}
 		}
+		// SHOW INDEX IGNORED and STATUS need SELECT on the named table, which their plans may not
+		// read: the table may have no ignored-rows table, and a WHERE subquery reads other tables.
+		if name := showIndexTableName(stmt); name != nil {
+			if dbName, tableName, ok := getShowIndexTableName(name, ses); ok {
+				arr = append(arr, privilegeTips{
+					typ:                   PrivilegeTypeSelect,
+					objType:               objectTypeTable,
+					databaseName:          dbName,
+					tableName:             tableName,
+					isClusterTable:        isClusterTable(dbName, tableName),
+					clusterTableOperation: clusterTableSelect,
+				})
+			}
+		}
 		if len(arr) == 0 {
 			return true, stats, nil
 		}
@@ -9440,6 +9460,32 @@ func getInsertTargetTableName(stmt *tree.Insert, ses *Session) (string, string, 
 		dbName = ses.GetDatabaseName()
 	}
 	tableName := string(name.ObjectName)
+	if dbName == "" || tableName == "" {
+		return "", "", false
+	}
+	return dbName, tableName, true
+}
+
+// showIndexTableName returns the table named by SHOW INDEX IGNORED or STATUS, or nil.
+func showIndexTableName(stmt tree.Statement) *tree.UnresolvedObjectName {
+	switch st := stmt.(type) {
+	case *tree.ShowIndexIgnored:
+		return st.TableName
+	case *tree.ShowIndexStatus:
+		return st.TableName
+	}
+	return nil
+}
+
+func getShowIndexTableName(name *tree.UnresolvedObjectName, ses *Session) (string, string, bool) {
+	if name == nil {
+		return "", "", false
+	}
+	dbName := name.GetDBName()
+	if dbName == "" {
+		dbName = ses.GetDatabaseName()
+	}
+	tableName := name.GetTableName()
 	if dbName == "" || tableName == "" {
 		return "", "", false
 	}

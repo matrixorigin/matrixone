@@ -17,6 +17,7 @@ package table_function
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -388,4 +389,58 @@ func modelInfos[T types.ArrayElement](models []*hnsw.HnswModel[T]) []hnswModelIn
 		out = append(out, hnswModelInfo{m.Len.Load(), m.MaxCapacity, m.Bounds})
 	}
 	return out
+}
+
+// A row the index cannot store fails the build of an index without an ignored table. Otherwise
+// the build leaves out and records up to max_bad_records such rows and fails on one more, or
+// when it can store none of its rows.
+func TestHnswCreateIgnoresUnstorableRows(t *testing.T) {
+	src := hnswSource{typ: types.T_array_float32, dim: 2, rows: [][]float64{{1, 1}, {100000, 1}, {2, 2}}}
+	twoBad := hnswSource{typ: types.T_array_float32, dim: 2, rows: [][]float64{{1, 1}, {100000, 1}, {2, 2}, {-100000, 3}}}
+	params := `{"op_type": "vector_l2_ops", "quantization": "float16"}`
+	cfg := func(ignored bool, maxBadRecords int64) string {
+		c := vectorindex.IndexTableConfig{DbName: "db", SrcTable: "src", MetadataTable: "__meta", IndexTable: "__index",
+			PKey: "id", KeyPart: "v", KeyPartType: int32(src.typ), KeyPartWidth: src.dim,
+			MaxBadRecords: maxBadRecords}
+		if ignored {
+			c.IgnoredTable = "__ignored"
+		}
+		b, _ := json.Marshal(c)
+		return string(b)
+	}
+	ignoredSqls := func(sqls []string) []string {
+		var out []string
+		for _, sql := range sqls {
+			if strings.Contains(sql, "`__ignored`") {
+				out = append(out, sql)
+			}
+		}
+		return out
+	}
+
+	_, err := runHnswCreate(t, params, cfg(false, 10), src)
+	require.ErrorContains(t, err, "cannot be stored as F16")
+
+	_, err = runHnswCreate(t, params, cfg(true, 0), src)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrIndexTooManyBadRecords), "%v", err)
+	require.ErrorContains(t, err, "max_bad_records = 0 rows; row 1: ")
+	require.ErrorContains(t, err, "cannot be stored as F16")
+
+	run, err := runHnswCreate(t, params, cfg(true, 1), src)
+	require.NoError(t, err)
+	recorded := ignoredSqls(run.sqls)
+	require.Len(t, recorded, 2, "the clear and the record of the ignored row")
+	require.Contains(t, recorded[0], "DELETE FROM `db`.`__ignored`")
+	require.Contains(t, recorded[1], "REPLACE INTO `db`.`__ignored`")
+	require.Contains(t, recorded[1], fmt.Sprintf("(1, %d, ", moerr.ErrIndexVectorOutOfRange))
+
+	_, err = runHnswCreate(t, params, cfg(true, 1), twoBad)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrIndexTooManyBadRecords), "%v", err)
+	require.ErrorContains(t, err, "row 3: ")
+
+	// a build that can store none of its rows fails within the limit
+	allBad := hnswSource{typ: types.T_array_float32, dim: 2, rows: [][]float64{{100000, 1}, {-100000, 3}}}
+	_, err = runHnswCreate(t, params, cfg(true, 10), allBad)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrIndexAllRowsBad), "%v", err)
+	require.ErrorContains(t, err, "any of the 2 rows; row 0: ")
 }

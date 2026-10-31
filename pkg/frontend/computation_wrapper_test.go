@@ -5142,6 +5142,9 @@ func TestPreparedDDLNeedsCatalogRefresh(t *testing.T) {
 		{sql: "drop database db", expected: true},
 		{sql: "create table dst clone src", expected: true},
 		{sql: "truncate table t", expected: false},
+		{sql: "show index status from t", expected: true},
+		{sql: "show index ignored from t", expected: true},
+		{sql: "show index from t", expected: false},
 	}
 	for _, testCase := range testCases {
 		statements, err := mysql.Parse(context.Background(), testCase.sql, 1)

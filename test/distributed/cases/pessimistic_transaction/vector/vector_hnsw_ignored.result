@@ -1,0 +1,303 @@
+drop database if exists hnsw_ignored;
+create database hnsw_ignored;
+use hnsw_ignored;
+set experimental_hnsw_index = 1;
+select mo_ctl('cn', 'SetVectorIndexFreshnessInterval', '1s') not like '%failed=[%' as all_cn_updated;
+➤ all_cn_updated[-6,8,0]  𝄀
+1
+create table t(id bigint primary key, v vecf32(2));
+insert into t values (1,'[1,1]'),(4,'[100000,1]');
+create index i using hnsw on t(v) op_type 'vector_l2_ops' quantization 'float16';
+the index cannot store more than max_bad_records = 0 rows; row 4: vector element is out of the range the index stores: vector element 100000 cannot be stored as F16
+alter table t add index i using hnsw (v) op_type 'vector_l2_ops' quantization 'float16';
+the index cannot store more than max_bad_records = 0 rows; row 4: vector element is out of the range the index stores: vector element 100000 cannot be stored as F16
+alter table t add column c0 int, add index i using hnsw (v) op_type 'vector_l2_ops' quantization 'float16';
+the index cannot store more than max_bad_records = 0 rows; row 4: vector element is out of the range the index stores: vector element 100000 cannot be stored as F16
+show index ignored from t;
+➤ Key_name[12,65535,0]  ¦  Primary_key[12,65535,0]  ¦  Error_code[4,32,0]  ¦  Reason[12,65535,0]  ¦  Ignored_at[93,19,0]
+select count(*) from mo_catalog.mo_indexes where name = 'i' and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = 'hnsw_ignored' and relname = 't');
+➤ count(*)[-5,64,0]  𝄀
+0
+create table b(id bigint primary key, v vecbf16(2));
+insert into b values (1,'[1,1]'),(2,'[100000,1]');
+create index ib using hnsw on b(v) op_type 'vector_l2_ops' quantization 'float16';
+the index cannot store more than max_bad_records = 0 rows; row 2: vector element is out of the range the index stores: vector element 99840 cannot be stored as F16
+create index i using hnsw on t(v) op_type 'vector_l2_ops' quantization 'float16' max_bad_records 1;
+show index ignored from t;
+➤ Key_name[12,65535,0]  ¦  Primary_key[12,65535,0]  ¦  Error_code[4,32,0]  ¦  Reason[12,65535,0]  ¦  Ignored_at[93,19,0]  𝄀
+i  ¦  4  ¦  20347  ¦  vector element is out of the range the index stores  ¦  2026-10-30 10:39:11
+insert into t values (5,'[1,100000]');
+alter table t alter reindex i hnsw force_sync;
+the index cannot store more than max_bad_records = 1 rows; row 5: vector element is out of the range the index stores: vector element 100000 cannot be stored as F16
+show index ignored from t;
+➤ Key_name[12,65535,0]  ¦  Primary_key[12,65535,0]  ¦  Error_code[4,32,0]  ¦  Reason[12,65535,0]  ¦  Ignored_at[93,19,0]  𝄀
+i  ¦  4  ¦  20347  ¦  vector element is out of the range the index stores  ¦  2026-10-30 10:39:11
+delete from t where id = 5;
+drop index i on t;
+create table z(id bigint primary key, v vecf32(2));
+insert into z values (1,'[100000,1]'),(2,'[1,100000]');
+create index iz using hnsw on z(v) op_type 'vector_l2_ops' quantization 'float16' max_bad_records 10;
+the index cannot store any of the 2 rows; row 1: vector element is out of the range the index stores: vector element 100000 cannot be stored as F16
+create index i using hnsw on t(v) op_type 'vector_l2_ops' quantization 'float16' max_bad_records 10;
+insert into t values (2,'[100000,100000]');
+insert into t values (3,'[2,2]');
+show index ignored from t;
+➤ Key_name[12,65535,0]  ¦  Primary_key[12,65535,0]  ¦  Error_code[4,32,0]  ¦  Reason[12,65535,0]  ¦  Ignored_at[93,19,0]  𝄀
+i  ¦  2  ¦  20347  ¦  vector element is out of the range the index stores  ¦  2026-10-30 10:39:11  𝄀
+i  ¦  4  ¦  20347  ¦  vector element is out of the range the index stores  ¦  2026-10-30 10:39:11
+select id from t order by l2_distance(v,'[2,2]') limit 3 by rank with option 'mode=pre';
+➤ id[-5,64,0]  𝄀
+3  𝄀
+1
+select id from t order by l2_distance(v,'[2,2]') limit 3 by rank with option 'mode=force';
+➤ id[-5,64,0]  𝄀
+3  𝄀
+1  𝄀
+4
+create index ib using hnsw on b(v) op_type 'vector_l2_ops' quantization 'float16' async max_bad_records 10;
+insert into b values (3,'[2,2]'),(4,'[1,99999]');
+show index ignored from b;
+➤ Key_name[12,65535,0]  ¦  Primary_key[12,65535,0]  ¦  Error_code[4,32,0]  ¦  Reason[12,65535,0]  ¦  Ignored_at[93,19,0]  𝄀
+ib  ¦  2  ¦  20347  ¦  vector element is out of the range the index stores  ¦  2026-10-30 10:41:21  𝄀
+ib  ¦  4  ¦  20347  ¦  vector element is out of the range the index stores  ¦  2026-10-30 10:41:21
+select id from b order by l2_distance(v,'[2,2]') limit 2 by rank with option 'mode=pre';
+➤ id[-5,64,0]  𝄀
+3  𝄀
+1
+update t set v = '[1,99999]' where id = 1;
+show index ignored from t where Primary_key = '1';
+➤ Key_name[12,65535,0]  ¦  Primary_key[12,65535,0]  ¦  Error_code[4,32,0]  ¦  Reason[12,65535,0]  ¦  Ignored_at[93,19,0]  𝄀
+i  ¦  1  ¦  20347  ¦  vector element is out of the range the index stores  ¦  2026-10-30 10:43:12
+update t set v = '[1,70000]' where id = 1;
+update t set v = '[3,3]' where id = 2;
+update t set v = '[1,70000]' where id = 3;
+delete from t where id = 4;
+show index ignored from t;
+➤ Key_name[12,65535,0]  ¦  Primary_key[12,65535,0]  ¦  Error_code[4,32,0]  ¦  Reason[12,65535,0]  ¦  Ignored_at[93,19,0]  𝄀
+i  ¦  1  ¦  20347  ¦  vector element is out of the range the index stores  ¦  2026-10-30 10:44:12  𝄀
+i  ¦  3  ¦  20347  ¦  vector element is out of the range the index stores  ¦  2026-10-30 10:44:12
+select id from t order by l2_distance(v,'[2,2]') limit 3 by rank with option 'mode=pre';
+➤ id[-5,64,0]  𝄀
+2
+update t set v = '[1,1]' where id = 1;
+alter table t alter reindex i hnsw;
+show index ignored from t;
+➤ Key_name[12,65535,0]  ¦  Primary_key[12,65535,0]  ¦  Error_code[4,32,0]  ¦  Reason[12,65535,0]  ¦  Ignored_at[93,19,0]  𝄀
+i  ¦  3  ¦  20347  ¦  vector element is out of the range the index stores  ¦  2026-10-30 10:46:12
+alter table t alter reindex i hnsw force_sync;
+show index ignored from t;
+➤ Key_name[12,65535,0]  ¦  Primary_key[12,65535,0]  ¦  Error_code[4,32,0]  ¦  Reason[12,65535,0]  ¦  Ignored_at[93,19,0]  𝄀
+i  ¦  3  ¦  20347  ¦  vector element is out of the range the index stores  ¦  2026-10-30 10:46:12
+alter table t add column c int;
+show index ignored from t;
+➤ Key_name[12,65535,0]  ¦  Primary_key[12,65535,0]  ¦  Error_code[4,32,0]  ¦  Reason[12,65535,0]  ¦  Ignored_at[93,19,0]  𝄀
+i  ¦  3  ¦  20347  ¦  vector element is out of the range the index stores  ¦  2026-10-30 10:46:21
+create table a(id bigint primary key, v vecf32(2));
+insert into a values (1,'[1,1]'),(2,'[100000,1]');
+create index ia using hnsw on a(v) op_type 'vector_l2_ops' quantization 'float16' async;
+show index status from a;
+➤ Key_name[12,65535,0]  ¦  Table[12,65535,0]  ¦  State[12,7,0]  ¦  Error_message[12,164,0]  ¦  Ignored_rows[-5,64,0]  ¦  Max_bad_records[-5,64,0]  ¦  Synced_at[93,19,0]  𝄀
+ia  ¦  a  ¦  stopped  ¦  the index cannot store more than max_bad_records = 0 rows; row 2: vector element is out of the range the index stores: vector element 100000 cannot be stored as F16  ¦  0  ¦  0  ¦  null
+show index ignored from a;
+➤ Key_name[12,65535,0]  ¦  Primary_key[12,65535,0]  ¦  Error_code[4,32,0]  ¦  Reason[12,65535,0]  ¦  Ignored_at[93,19,0]
+create table s(id bigint primary key, v vecf32(2));
+insert into s values (1,'[1,1]');
+create index si using hnsw on s(v) op_type 'vector_l2_ops' quantization 'float16' async;
+insert into s values (2,'[2,2]');
+select id from s order by l2_distance(v,'[2,2]') limit 2 by rank with option 'mode=pre';
+➤ id[-5,64,0]  𝄀
+2  𝄀
+1
+insert into s values (3,'[1,100000]'),(4,'[3,3]');
+show index status from s;
+➤ Key_name[12,65535,0]  ¦  Table[12,65535,0]  ¦  State[12,7,0]  ¦  Error_message[12,117,0]  ¦  Ignored_rows[-5,64,0]  ¦  Max_bad_records[-5,64,0]  ¦  Synced_at[93,19,0]  𝄀
+si  ¦  s  ¦  stopped  ¦  the index cannot store more than max_bad_records = 0 rows; row 3: vector element is out of the range the index stores  ¦  0  ¦  0  ¦  2026-10-30 10:49:11
+show index ignored from s;
+➤ Key_name[12,65535,0]  ¦  Primary_key[12,65535,0]  ¦  Error_code[4,32,0]  ¦  Reason[12,65535,0]  ¦  Ignored_at[93,19,0]
+select id from s order by l2_distance(v,'[3,3]') limit 2 by rank with option 'mode=pre';
+➤ id[-5,64,0]  𝄀
+2  𝄀
+1
+truncate t;
+insert into t(id, v) values (9,'[1,99999]'),(10,'[1,1]');
+show index ignored from hnsw_ignored.t;
+➤ Key_name[12,65535,0]  ¦  Primary_key[12,65535,0]  ¦  Error_code[4,32,0]  ¦  Reason[12,65535,0]  ¦  Ignored_at[93,19,0]  𝄀
+i  ¦  9  ¦  20347  ¦  vector element is out of the range the index stores  ¦  2026-10-30 10:50:21
+create table tc clone t;
+create table sc clone s;
+select t.relname, cast(json_unquote(json_extract(j.job_status, '$.ErrorCode')) as signed) as error_code
+from mo_catalog.mo_iscp_log j join mo_catalog.mo_tables t on t.rel_id = j.table_id
+where t.reldatabase = 'hnsw_ignored' and t.relname = 'tc' and j.job_name = 'index_i'
+and j.job_id = (select max(g.job_id) from mo_catalog.mo_iscp_log g where g.table_id = j.table_id and g.job_name = j.job_name)
+and cast(json_unquote(json_extract(j.job_status, '$.Stage')) as signed) = 1
+and cast(json_unquote(json_extract(j.job_status, '$.LSN')) as unsigned) > 0;
+➤ relname[12,5000,0]  ¦  error_code[-5,64,0]  𝄀
+tc  ¦  0
+show index ignored from tc;
+➤ Key_name[12,65535,0]  ¦  Primary_key[12,65535,0]  ¦  Error_code[4,32,0]  ¦  Reason[12,65535,0]  ¦  Ignored_at[93,19,0]  𝄀
+i  ¦  9  ¦  20347  ¦  vector element is out of the range the index stores  ¦  2026-10-30 10:51:21
+show index status from tc;
+➤ Key_name[12,65535,0]  ¦  Table[12,65535,0]  ¦  State[12,7,0]  ¦  Error_message[12,65535,0]  ¦  Ignored_rows[-5,64,0]  ¦  Max_bad_records[-5,64,0]  ¦  Synced_at[93,19,0]  𝄀
+i  ¦  tc  ¦  running  ¦  null  ¦  1  ¦  10  ¦  2026-10-30 10:52:11
+select id from tc order by l2_distance(v,'[1,1]') limit 2 by rank with option 'mode=pre';
+➤ id[-5,64,0]  𝄀
+10
+show index status from sc;
+➤ Key_name[12,65535,0]  ¦  Table[12,65535,0]  ¦  State[12,7,0]  ¦  Error_message[12,164,0]  ¦  Ignored_rows[-5,64,0]  ¦  Max_bad_records[-5,64,0]  ¦  Synced_at[93,19,0]  𝄀
+si  ¦  sc  ¦  stopped  ¦  the index cannot store more than max_bad_records = 0 rows; row 3: vector element is out of the range the index stores: vector element 100000 cannot be stored as F16  ¦  0  ¦  0  ¦  2262-04-12 00:47:16
+show index ignored from sc;
+➤ Key_name[12,65535,0]  ¦  Primary_key[12,65535,0]  ¦  Error_code[4,32,0]  ¦  Reason[12,65535,0]  ¦  Ignored_at[93,19,0]
+alter table a alter reindex ia hnsw max_bad_records = 5;
+show index ignored from a;
+➤ Key_name[12,65535,0]  ¦  Primary_key[12,65535,0]  ¦  Error_code[4,32,0]  ¦  Reason[12,65535,0]  ¦  Ignored_at[93,19,0]  𝄀
+ia  ¦  2  ¦  20347  ¦  vector element is out of the range the index stores  ¦  2026-10-30 10:54:21
+show index status from a;
+➤ Key_name[12,65535,0]  ¦  Table[12,65535,0]  ¦  State[12,7,0]  ¦  Error_message[12,65535,0]  ¦  Ignored_rows[-5,64,0]  ¦  Max_bad_records[-5,64,0]  ¦  Synced_at[93,19,0]  𝄀
+ia  ¦  a  ¦  running  ¦  null  ¦  1  ¦  5  ¦  2026-10-30 10:55:11
+insert into a values (3,'[2,2]');
+select id from a order by l2_distance(v,'[2,2]') limit 2 by rank with option 'mode=pre';
+➤ id[-5,64,0]  𝄀
+3  𝄀
+1
+alter table s alter reindex si hnsw force_sync max_bad_records 1;
+show index ignored from s;
+➤ Key_name[12,65535,0]  ¦  Primary_key[12,65535,0]  ¦  Error_code[4,32,0]  ¦  Reason[12,65535,0]  ¦  Ignored_at[93,19,0]  𝄀
+si  ¦  3  ¦  20347  ¦  vector element is out of the range the index stores  ¦  2026-10-30 10:56:13
+show index status from s where State = 'running';
+➤ Key_name[12,65535,0]  ¦  Table[12,65535,0]  ¦  State[12,7,0]  ¦  Error_message[12,65535,0]  ¦  Ignored_rows[-5,64,0]  ¦  Max_bad_records[-5,64,0]  ¦  Synced_at[93,19,0]  𝄀
+si  ¦  s  ¦  running  ¦  null  ¦  1  ¦  1  ¦  2026-10-30 10:56:13
+insert into s values (5,'[4,4]');
+select id from s order by l2_distance(v,'[4,4]') limit 2 by rank with option 'mode=pre';
+➤ id[-5,64,0]  𝄀
+5  𝄀
+4
+show create table s;
+➤ Table[12,1,0]  ¦  Create Table[12,201,0]  𝄀
+s  ¦  CREATE TABLE `s` (
+  `id` bigint NOT NULL,
+  `v` vecf32(2) DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  KEY `si` USING hnsw (`v`) op_type 'vector_l2_ops'  async  quantization 'float16'  max_bad_records = 1 
+)
+select id from t order by l2_distance(v,'[1,100000]') limit 1;
+Data truncation: data out of range: data type hnsw quantization, vector element 100000 cannot be stored as F16
+create table m(id bigint primary key, v1 vecf32(2), v2 vecf32(2));
+insert into m values (4,'[1,1]','[1,1]');
+create index m1 using hnsw on m(v1) op_type 'vector_l2_ops' quantization 'float16' max_bad_records 10;
+create index m2 using hnsw on m(v2) op_type 'vector_l2_ops' quantization 'float16' max_bad_records 10;
+insert into m values (1,'[70000,1]','[1,1]'),(2,'[1,1]','[1,70000]'),(3,'[70000,1]','[1,70000]');
+show index ignored from m;
+➤ Key_name[12,65535,0]  ¦  Primary_key[12,65535,0]  ¦  Error_code[4,32,0]  ¦  Reason[12,65535,0]  ¦  Ignored_at[93,19,0]  𝄀
+m1  ¦  1  ¦  20347  ¦  vector element is out of the range the index stores  ¦  2026-10-30 10:57:13  𝄀
+m1  ¦  3  ¦  20347  ¦  vector element is out of the range the index stores  ¦  2026-10-30 10:57:13  𝄀
+m2  ¦  2  ¦  20347  ¦  vector element is out of the range the index stores  ¦  2026-10-30 10:57:13  𝄀
+m2  ¦  3  ¦  20347  ¦  vector element is out of the range the index stores  ¦  2026-10-30 10:57:13
+show index ignored from m where Key_name = 'm1';
+➤ Key_name[12,65535,0]  ¦  Primary_key[12,65535,0]  ¦  Error_code[4,32,0]  ¦  Reason[12,65535,0]  ¦  Ignored_at[93,19,0]  𝄀
+m1  ¦  1  ¦  20347  ¦  vector element is out of the range the index stores  ¦  2026-10-30 10:57:13  𝄀
+m1  ¦  3  ¦  20347  ¦  vector element is out of the range the index stores  ¦  2026-10-30 10:57:13
+show index ignored from m where Key_name = 'm2';
+➤ Key_name[12,65535,0]  ¦  Primary_key[12,65535,0]  ¦  Error_code[4,32,0]  ¦  Reason[12,65535,0]  ¦  Ignored_at[93,19,0]  𝄀
+m2  ¦  2  ¦  20347  ¦  vector element is out of the range the index stores  ¦  2026-10-30 10:57:13  𝄀
+m2  ¦  3  ¦  20347  ¦  vector element is out of the range the index stores  ¦  2026-10-30 10:57:13
+show index ignored from m where Primary_key = '3' and Error_code = 20347 and Reason like '%range%';
+➤ Key_name[12,65535,0]  ¦  Primary_key[12,65535,0]  ¦  Error_code[4,32,0]  ¦  Reason[12,65535,0]  ¦  Ignored_at[93,19,0]  𝄀
+m1  ¦  3  ¦  20347  ¦  vector element is out of the range the index stores  ¦  2026-10-30 10:57:13  𝄀
+m2  ¦  3  ¦  20347  ¦  vector element is out of the range the index stores  ¦  2026-10-30 10:57:13
+show index ignored from m where Key_name = 'nope';
+➤ Key_name[12,65535,0]  ¦  Primary_key[12,65535,0]  ¦  Error_code[4,32,0]  ¦  Reason[12,65535,0]  ¦  Ignored_at[93,19,0]
+show index status from m;
+➤ Key_name[12,65535,0]  ¦  Table[12,65535,0]  ¦  State[12,7,0]  ¦  Error_message[12,65535,0]  ¦  Ignored_rows[-5,64,0]  ¦  Max_bad_records[-5,64,0]  ¦  Synced_at[93,19,0]  𝄀
+m1  ¦  m  ¦  running  ¦  null  ¦  2  ¦  10  ¦  2026-10-30 10:58:11  𝄀
+m2  ¦  m  ¦  running  ¦  null  ¦  2  ¦  10  ¦  2026-10-30 10:58:11
+update m set v1 = '[2,2]' where id = 3;
+show index ignored from m where Key_name = 'm1';
+➤ Key_name[12,65535,0]  ¦  Primary_key[12,65535,0]  ¦  Error_code[4,32,0]  ¦  Reason[12,65535,0]  ¦  Ignored_at[93,19,0]  𝄀
+m1  ¦  1  ¦  20347  ¦  vector element is out of the range the index stores  ¦  2026-10-30 10:57:13
+show index ignored from m where Key_name = 'm2';
+➤ Key_name[12,65535,0]  ¦  Primary_key[12,65535,0]  ¦  Error_code[4,32,0]  ¦  Reason[12,65535,0]  ¦  Ignored_at[93,19,0]  𝄀
+m2  ¦  2  ¦  20347  ¦  vector element is out of the range the index stores  ¦  2026-10-30 10:57:13  𝄀
+m2  ¦  3  ¦  20347  ¦  vector element is out of the range the index stores  ¦  2026-10-30 10:58:13
+create table p(id bigint primary key, v vecf32(2)) partition by hash(id) partitions 2;
+insert into p values (1,'[1,1]');
+create index pi using hnsw on p(v) op_type 'vector_l2_ops' quantization 'float16' max_bad_records 1;
+insert into p values (2,'[1,70000]'),(3,'[70000,1]');
+show index ignored from hnsw_ignored.p;
+➤ Key_name[12,65535,0]  ¦  Primary_key[12,65535,0]  ¦  Error_code[4,32,0]  ¦  Reason[12,65535,0]  ¦  Ignored_at[93,19,0]  𝄀
+pi  ¦  2  ¦  20347  ¦  vector element is out of the range the index stores  ¦  2026-10-30 10:59:13  𝄀
+pi  ¦  3  ¦  20347  ¦  vector element is out of the range the index stores  ¦  2026-10-30 10:59:13
+show index status from hnsw_ignored.p;
+➤ Key_name[12,65535,0]  ¦  Table[12,65535,0]  ¦  State[12,7,0]  ¦  Error_message[12,65535,0]  ¦  Ignored_rows[-5,64,0]  ¦  Max_bad_records[-5,64,0]  ¦  Synced_at[93,19,0]  𝄀
+pi  ¦  p0  ¦  running  ¦  null  ¦  1  ¦  1  ¦  2026-10-30 11:00:11  𝄀
+pi  ¦  p1  ¦  running  ¦  null  ¦  1  ¦  1  ¦  2026-10-30 11:00:11
+create table e(a int primary key, b int, key kb(b));
+show index ignored from e;
+➤ Key_name[12,65535,0]  ¦  Primary_key[12,65535,0]  ¦  Error_code[4,32,0]  ¦  Reason[12,65535,0]  ¦  Ignored_at[93,19,0]
+show index ignored from nope;
+no such table hnsw_ignored.nope
+show index status from e;
+➤ Key_name[12,65535,0]  ¦  Table[12,65535,0]  ¦  State[12,65535,0]  ¦  Error_message[12,65535,0]  ¦  Ignored_rows[-5,64,0]  ¦  Max_bad_records[-5,64,0]  ¦  Synced_at[93,19,0]
+show index status from nope;
+no such table hnsw_ignored.nope
+drop role if exists hnsw_ignored_r;
+drop user if exists hnsw_ignored_u;
+create role hnsw_ignored_r;
+grant connect on account * to hnsw_ignored_r;
+grant show tables on database hnsw_ignored to hnsw_ignored_r;
+create user hnsw_ignored_u identified by '111' default role hnsw_ignored_r;
+show index ignored from hnsw_ignored.m;
+internal error: do not have privilege to execute the statement
+show index ignored from hnsw_ignored.e;
+internal error: do not have privilege to execute the statement
+show index status from hnsw_ignored.m;
+internal error: do not have privilege to execute the statement
+grant select on table hnsw_ignored.m to hnsw_ignored_r;
+show index ignored from hnsw_ignored.e where exists (select 1 from hnsw_ignored.m);
+internal error: do not have privilege to execute the statement
+show index ignored from hnsw_ignored.e where Key_name = (select 'm2' from hnsw_ignored.m limit 1);
+internal error: do not have privilege to execute the statement
+grant select on table hnsw_ignored.e to hnsw_ignored_r;
+show index ignored from hnsw_ignored.m where Key_name = 'm2';
+➤ Key_name[12,65535,0]  ¦  Primary_key[12,65535,0]  ¦  Error_code[4,32,0]  ¦  Reason[12,65535,0]  ¦  Ignored_at[93,19,0]  𝄀
+m2  ¦  2  ¦  20347  ¦  vector element is out of the range the index stores  ¦  2026-10-30 10:57:13  𝄀
+m2  ¦  3  ¦  20347  ¦  vector element is out of the range the index stores  ¦  2026-10-30 10:58:13
+show index ignored from hnsw_ignored.e;
+➤ Key_name[12,65535,0]  ¦  Primary_key[12,65535,0]  ¦  Error_code[4,32,0]  ¦  Reason[12,65535,0]  ¦  Ignored_at[93,19,0]
+show index ignored from hnsw_ignored.e where exists (select 1 from hnsw_ignored.m);
+➤ Key_name[12,65535,0]  ¦  Primary_key[12,65535,0]  ¦  Error_code[4,32,0]  ¦  Reason[12,65535,0]  ¦  Ignored_at[93,19,0]
+show index status from hnsw_ignored.m;
+➤ Key_name[12,65535,0]  ¦  Table[12,65535,0]  ¦  State[12,7,0]  ¦  Error_message[12,65535,0]  ¦  Ignored_rows[-5,64,0]  ¦  Max_bad_records[-5,64,0]  ¦  Synced_at[93,19,0]  𝄀
+m1  ¦  m  ¦  running  ¦  null  ¦  1  ¦  10  ¦  2026-10-30 11:00:11  𝄀
+m2  ¦  m  ¦  running  ¦  null  ¦  2  ¦  10  ¦  2026-10-30 11:00:11
+drop user hnsw_ignored_u;
+drop role hnsw_ignored_r;
+drop account if exists acc_hnsw_ignored;
+create account acc_hnsw_ignored admin_name 'admin' identified by '111';
+set experimental_hnsw_index = 1;
+create database hnsw_ignored_acc;
+use hnsw_ignored_acc;
+create table a(id bigint primary key, v vecf32(2));
+insert into a values (1,'[1,1]'),(2,'[100000,1]');
+create index ia using hnsw on a(v) op_type 'vector_l2_ops' quantization 'float16' async;
+show index status from a;
+➤ Key_name[12,65535,0]  ¦  Table[12,65535,0]  ¦  State[12,7,0]  ¦  Error_message[12,164,0]  ¦  Ignored_rows[-5,64,0]  ¦  Max_bad_records[-5,64,0]  ¦  Synced_at[93,19,0]  𝄀
+ia  ¦  a  ¦  stopped  ¦  the index cannot store more than max_bad_records = 0 rows; row 2: vector element is out of the range the index stores: vector element 100000 cannot be stored as F16  ¦  0  ¦  0  ¦  null
+alter table a alter reindex ia hnsw max_bad_records 1;
+show index status from a;
+➤ Key_name[12,65535,0]  ¦  Table[12,65535,0]  ¦  State[12,7,0]  ¦  Error_message[12,65535,0]  ¦  Ignored_rows[-5,64,0]  ¦  Max_bad_records[-5,64,0]  ¦  Synced_at[93,19,0]  𝄀
+ia  ¦  a  ¦  running  ¦  null  ¦  1  ¦  1  ¦  2026-10-30 11:02:01
+show index ignored from a;
+➤ Key_name[12,65535,0]  ¦  Primary_key[12,65535,0]  ¦  Error_code[4,32,0]  ¦  Reason[12,65535,0]  ¦  Ignored_at[93,19,0]  𝄀
+ia  ¦  2  ¦  20347  ¦  vector element is out of the range the index stores  ¦  2026-10-30 11:01:21
+drop database hnsw_ignored_acc;
+drop account acc_hnsw_ignored;
+drop index i on t;
+show index ignored from t;
+➤ Key_name[12,65535,0]  ¦  Primary_key[12,65535,0]  ¦  Error_code[4,32,0]  ¦  Reason[12,65535,0]  ¦  Ignored_at[93,19,0]
+select count(*) from mo_catalog.mo_indexes where name = 'i' and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = 'hnsw_ignored' and relname = 't');
+➤ count(*)[-5,64,0]  𝄀
+0
+select mo_ctl('cn', 'SetVectorIndexFreshnessInterval', '0') not like '%failed=[%' as all_cn_restored;
+➤ all_cn_restored[-6,8,0]  𝄀
+1
+drop database hnsw_ignored;

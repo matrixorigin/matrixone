@@ -81,7 +81,7 @@ func (Hooks) handleCreate(ctx compileplugin.CompileContext, indexDefs map[string
 		}
 	}
 
-	if len(indexDefs) != 2 && len(indexDefs) != 3 {
+	if len(indexDefs) < 2 || len(indexDefs) > 4 {
 		return moerr.NewInternalErrorNoCtx("invalid hnsw index table definition")
 	}
 	metaDef, ok := indexDefs[catalog.Hnsw_TblType_Metadata]
@@ -209,6 +209,7 @@ func (Hooks) ValidateReindexParams(old map[string]string, alter compileplugin.Re
 		catalog.HnswEfConstruction,
 		catalog.HnswEfSearch,
 		catalog.IndexAlgoParamMaxIndexCapacity,
+		catalog.IndexAlgoParamMaxBadRecords,
 	)
 }
 
@@ -257,6 +258,9 @@ func genDeleteSQL(indexDefs map[string]*plan.IndexDef, qryDatabase string) ([]st
 	if dict, ok := indexDefs[catalog.Hnsw_TblType_Dict]; ok {
 		sqls = append(sqls, fmt.Sprintf("DELETE FROM %s WHERE TRUE", sqlquote.QualifiedIdent(qryDatabase, dict.IndexTableName)))
 	}
+	if ignored, ok := indexDefs[catalog.IndexIgnored_TblType]; ok {
+		sqls = append(sqls, fmt.Sprintf("DELETE FROM %s WHERE TRUE", sqlquote.QualifiedIdent(qryDatabase, ignored.IndexTableName)))
+	}
 	return sqls, nil
 }
 
@@ -293,6 +297,14 @@ func genBuildSQL(ctx compileplugin.CompileContext, indexDefs map[string]*plan.In
 	if dict, ok := indexDefs[catalog.Hnsw_TblType_Dict]; ok {
 		cfg.DictTable = dict.IndexTableName
 	}
+	if ignored, ok := indexDefs[catalog.IndexIgnored_TblType]; ok {
+		cfg.IgnoredTable = ignored.IndexTableName
+	}
+	maxBadRecords, err := catalog.IndexParamMaxBadRecords(idx.IndexAlgoParams)
+	if err != nil {
+		return nil, err
+	}
+	cfg.MaxBadRecords = maxBadRecords
 
 	threads, err := ctx.ResolveVariable("hnsw_threads_build", true, false)
 	if err != nil {

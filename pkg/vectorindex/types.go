@@ -152,6 +152,10 @@ type IndexTableConfig struct {
 	MetadataTable string `json:"metadata"`
 	IndexTable    string `json:"index"`
 	DictTable     string `json:"dict,omitempty"`
+	IgnoredTable  string `json:"ignored,omitempty"`
+	// MaxBadRecords is the number of rows the build may leave out because the index cannot
+	// store them; one more fails the build.
+	MaxBadRecords int64  `json:"max_bad_records,omitempty"`
 	PKey          string `json:"pkey"`
 	KeyPart       string `json:"part"`
 	OrigFuncName  string `json:"orig_func_name"`

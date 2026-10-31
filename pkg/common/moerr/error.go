@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"sync/atomic"
 
 	moerrpb "github.com/matrixorigin/matrixone/pkg/pb/moerr"
@@ -170,6 +171,13 @@ const (
 	// HY000) contract for DROP on a parent table: a dedicated user error
 	// naming the referenced table, the constraint, and the child table.
 	ErrFkCannotDropParent uint16 = 20344
+	// The reasons an index cannot store a source row, recorded as the row's code in the
+	// index's ignored rows, and the error of more such rows than the index may leave out.
+	ErrIndexVectorDimension   uint16 = 20345
+	ErrIndexVectorNonFinite   uint16 = 20346
+	ErrIndexVectorOutOfRange  uint16 = 20347
+	ErrIndexTooManyBadRecords uint16 = 20348
+	ErrIndexAllRowsBad        uint16 = 20349
 
 	// Group 4: unexpected state and io errors
 	ErrInvalidState                             uint16 = 20400
@@ -536,8 +544,13 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	// upstream table in mysql_error_define.go (ER_TRUNCATE_ILLEGAL_FK 1701
 	// /42000, ER_FK_CANNOT_DROP_PARENT 3730/HY000); TestSqlStateMatchesMySQL
 	// pins that pairing. Missing FK metadata yields empty names, never success.
-	ErrTruncateIllegalFk:  {ER_TRUNCATE_ILLEGAL_FK, []string{"42000"}, "Cannot truncate a table referenced in a foreign key constraint (%.192s)"},
-	ErrFkCannotDropParent: {ER_FK_CANNOT_DROP_PARENT, []string{"HY000"}, "Cannot drop table '%s' referenced by a foreign key constraint '%s' on table '%s'."},
+	ErrTruncateIllegalFk:      {ER_TRUNCATE_ILLEGAL_FK, []string{"42000"}, "Cannot truncate a table referenced in a foreign key constraint (%.192s)"},
+	ErrFkCannotDropParent:     {ER_FK_CANNOT_DROP_PARENT, []string{"HY000"}, "Cannot drop table '%s' referenced by a foreign key constraint '%s' on table '%s'."},
+	ErrIndexVectorDimension:   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "vector dimension does not match the index: %s"},
+	ErrIndexVectorNonFinite:   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "vector has a NaN or infinite element"},
+	ErrIndexVectorOutOfRange:  {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "vector element is out of the range the index stores: %s"},
+	ErrIndexTooManyBadRecords: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "the index cannot store more than max_bad_records = %d rows; row %s: %s"},
+	ErrIndexAllRowsBad:        {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "the index cannot store any of the %d rows; row %s: %s"},
 
 	ErrDuplicate:               {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "tae data: duplicate"},
 	ErrRoleGrantedToSelf:       {ER_ROLE_GRANTED_TO_ITSELF, []string{MySQLDefaultSqlState}, "cannot grant role %s to %s"},
@@ -891,6 +904,15 @@ func (e *Error) Display() string {
 		return e.message
 	}
 	return fmt.Sprintf("%s: %s", e.message, e.detail)
+}
+
+// MessageOf returns the message of code without its details.
+func MessageOf(code uint16) string {
+	item, ok := errorMsgRefer[code]
+	if !ok {
+		return ""
+	}
+	return strings.TrimSuffix(item.errorMsgOrFormat, ": %s")
 }
 
 func (e *Error) ErrorCode() uint16 {

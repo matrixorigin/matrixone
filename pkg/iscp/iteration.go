@@ -202,6 +202,23 @@ func ExecuteIterationWithRuntime(
 			if errors.Is(err, errInitSQLJobFenced) {
 				return nil
 			}
+			if isPermanentError(err) {
+				return FlushPermanentErrorMessage(
+					ctx,
+					cnUUID,
+					cnEngine,
+					cnTxnClient,
+					iterCtx.accountID,
+					iterCtx.tableID,
+					iterCtx.jobNames,
+					iterCtx.jobIDs,
+					iterCtx.lsn,
+					statuses,
+					types.MaxTs(),
+					err.Error(),
+					preLSN,
+				)
+			}
 			return
 		}
 		return nil
@@ -903,13 +920,25 @@ var GetJobSpecs = func(
 	return
 }
 
-type permanentError struct{}
+// permanentError stops its job instead of having it retried.
+type permanentError struct{ cause error }
 
-func (permanentError) Error() string {
-	return "permanent error"
+func (e permanentError) Error() string {
+	if e.cause == nil {
+		return "permanent error"
+	}
+	return e.cause.Error()
 }
 
+func (e permanentError) Unwrap() error { return e.cause }
+
 var errPermanent error = permanentError{}
+
+// NewPermanentError returns err as an error that stops its job: the job is not retried until
+// the index is rebuilt.
+func NewPermanentError(err error) error {
+	return permanentError{cause: err}
+}
 
 type iscpStatusCASLostError struct {
 	operation    string
@@ -991,9 +1020,16 @@ func FlushPermanentErrorMessage(
 	)
 }
 
+// isPermanentError reports whether err stops its job: a permanentError, or an index that cannot
+// store more of the source rows than it may, which fails the same way until it is rebuilt.
 func isPermanentError(err error) bool {
 	var target permanentError
-	return errors.As(err, &target)
+	if errors.As(err, &target) {
+		return true
+	}
+	var me *moerr.Error
+	return errors.As(err, &me) &&
+		(me.ErrorCode() == moerr.ErrIndexTooManyBadRecords || me.ErrorCode() == moerr.ErrIndexAllRowsBad)
 }
 
 func (status *JobStatus) SetError(err error) {
