@@ -429,7 +429,6 @@ func (c *PushClient) init(
 	// lock all.
 	// release subscribed lock when init finished.
 	// release subscriber lock when we received enough response from service.
-	c.receivedLogTailTime.e = e
 	c.receivedLogTailTime.ready.Store(false)
 	c.dca = delayedCacheApply{}
 	c.subscriber.setNotReady()
@@ -2032,7 +2031,6 @@ type syncLogTailTimestamp struct {
 	ready                  atomic.Bool
 	tList                  []atomic.Value
 	latestAppliedLogTailTS atomic.Pointer[timestamp.Timestamp]
-	e                      *Engine
 }
 
 func (r *syncLogTailTimestamp) initLogTailTimestamp(timestampWaiter client.TimestampWaiter) {
@@ -2083,7 +2081,6 @@ func (r *syncLogTailTimestamp) updateTimestamp(
 
 type logTailSubscriber struct {
 	sid           string
-	tnNodeID      int
 	transportMu   sync.Mutex
 	rpcClient     morpc.RPCClient
 	rpcStream     morpc.Stream
@@ -2169,8 +2166,6 @@ func (s *logTailSubscriber) init(
 	s.transportMu.Lock()
 	defer s.transportMu.Unlock()
 
-	// XXX we assume that we have only 1 tn now.
-	s.tnNodeID = 0
 	s.sid = sid
 
 	// clear the old status.

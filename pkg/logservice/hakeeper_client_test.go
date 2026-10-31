@@ -169,6 +169,59 @@ func TestHAKeeperClientConstructorsRejectContextWithoutDeadline(t *testing.T) {
 	}
 }
 
+func TestHAKeeperConstructorValidationOrderAndDefaults(t *testing.T) {
+	original := newHAKeeperClientFunc
+	t.Cleanup(func() { newHAKeeperClientFunc = original })
+	dialErr := errors.New("dial failed")
+	var captured HAKeeperClientConfig
+	calls := 0
+	newHAKeeperClientFunc = func(_ context.Context, _ string, cfg HAKeeperClientConfig) (*hakeeperClient, error) {
+		calls++
+		captured = cfg
+		return nil, dialErr
+	}
+	constructors := []struct {
+		name string
+		fn   func(context.Context, string, HAKeeperClientConfig) (any, error)
+	}{
+		{"cluster", func(ctx context.Context, sid string, cfg HAKeeperClientConfig) (any, error) {
+			return NewClusterHAKeeperClient(ctx, sid, cfg)
+		}},
+		{"cn", func(ctx context.Context, sid string, cfg HAKeeperClientConfig) (any, error) {
+			return NewCNHAKeeperClient(ctx, sid, cfg)
+		}},
+		{"tn", func(ctx context.Context, sid string, cfg HAKeeperClientConfig) (any, error) {
+			return NewTNHAKeeperClient(ctx, sid, cfg)
+		}},
+		{"log", func(ctx context.Context, sid string, cfg HAKeeperClientConfig) (any, error) {
+			return NewLogHAKeeperClient(ctx, sid, cfg)
+		}},
+		{"proxy", func(ctx context.Context, sid string, cfg HAKeeperClientConfig) (any, error) {
+			return NewProxyHAKeeperClient(ctx, sid, cfg)
+		}},
+	}
+	for _, c := range constructors {
+		t.Run(c.name, func(t *testing.T) {
+			invalid := HAKeeperClientConfig{}
+			invalid.BackendReadTimeout.Duration = -time.Second
+			before := calls
+			client, err := c.fn(context.Background(), "service", invalid)
+			require.Nil(t, client)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrBadConfig), "%v", err)
+			require.Equal(t, before, calls)
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			client, err = c.fn(ctx, "service", HAKeeperClientConfig{})
+			require.ErrorIs(t, err, dialErr)
+			require.True(t, client != nil, "constructor preserves a typed nil on dial failure")
+			require.Equal(t, before+1, calls)
+			require.Equal(t, []string{DefaultLogServiceServiceAddress}, captured.ServiceAddresses)
+			require.EqualValues(t, 100, captured.AllocateIDBatch)
+			require.Equal(t, defaultBackendReadTimeout, captured.BackendReadTimeout.Duration)
+		})
+	}
+}
+
 func TestHAKeeperClientsCanBeCreated(t *testing.T) {
 	fn := func(t *testing.T, s *Service) {
 		cfg := HAKeeperClientConfig{

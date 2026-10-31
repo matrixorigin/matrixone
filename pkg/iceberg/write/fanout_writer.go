@@ -311,8 +311,8 @@ func (w *FanoutParquetDataWriter) closeActive(ctx context.Context, key string) e
 
 func (w *FanoutParquetDataWriter) nextDataFileLocation(partitionPath string) string {
 	w.seq++
-	dataDir := firstNonEmpty(w.cfg.DataDir, "data")
-	fileName := "part-" + safePathToken(firstNonEmpty(w.cfg.WriterID, "mo")) + "-" + strconv.FormatInt(w.seq, 10) + ".parquet"
+	dataDir := api.FirstNonEmptyTrimmed(w.cfg.DataDir, "data")
+	fileName := "part-" + safePathToken(api.FirstNonEmptyTrimmed(w.cfg.WriterID, "mo")) + "-" + strconv.FormatInt(w.seq, 10) + ".parquet"
 	parts := []string{dataDir}
 	if partitionPath != "" {
 		parts = append(parts, strings.Split(partitionPath, "/")...)

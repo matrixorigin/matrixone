@@ -228,5 +228,5 @@ func upgradeInformationSchemaTableConstraints() versions.UpgradeEntry {
 // Refresh STATISTICS for tenants that completed an earlier v4.0.6 offset.
 
 func upgradeInformationSchemaStatistics() versions.UpgradeEntry {
-	return versions.InformationSchemaViewUpgradeEntry("STATISTICS", sysview.InformationSchemaStatisticsDDL, defines.MORPCVersion107)
+	return versions.InformationSchemaViewUpgradeEntry("STATISTICS", sysview.InformationSchemaStatisticsPrefixSubPartDDL, defines.MORPCVersion107)
 }

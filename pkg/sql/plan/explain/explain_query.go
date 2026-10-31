@@ -505,12 +505,7 @@ func explainSinglePlan(qry *plan.Query, ctx context.Context, buffer *ExplainData
 
 	for index, rootNodeID := range qry.Steps {
 		logutil.Debugf("------------------------------------Query Plan-%v ---------------------------------------------", index)
-		settings := FormatSettings{
-			buffer: buffer,
-			offset: 0,
-			indent: 2,
-			level:  0,
-		}
+		settings := FormatSettings{buffer: buffer}
 
 		if isForest {
 			title := fmt.Sprintf("Plan %v:", index)

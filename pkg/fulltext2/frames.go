@@ -19,7 +19,6 @@ import (
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	cuvscdc "github.com/matrixorigin/matrixone/pkg/vectorindex/cuvs"
 )
 
@@ -97,23 +96,6 @@ type TailChunk struct {
 type TailFrame struct {
 	ChunkId int64
 	Data    []byte
-}
-
-// splitFrameChunks splits a complete frame into MaxChunkSize-bounded chunks at
-// consecutive chunk_ids from startChunkId. A frame <= MaxChunkSize yields a single
-// chunk.
-func splitFrameChunks(startChunkId int64, framed []byte) []TailChunk {
-	out := make([]TailChunk, 0, (len(framed)+vectorindex.MaxChunkSize-1)/vectorindex.MaxChunkSize)
-	cid := startChunkId
-	for off := 0; off < len(framed); off += vectorindex.MaxChunkSize {
-		end := off + vectorindex.MaxChunkSize
-		if end > len(framed) {
-			end = len(framed)
-		}
-		out = append(out, TailChunk{ChunkId: cid, Data: framed[off:end]})
-		cid++
-	}
-	return out
 }
 
 // orderTailChunks returns the chunks ordered by chunk_id WITHOUT a comparison

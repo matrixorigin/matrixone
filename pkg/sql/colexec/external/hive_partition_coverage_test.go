@@ -875,8 +875,11 @@ func TestHivePartitionBetweenCoverageHack(t *testing.T) {
 	assert.Equal(t, MatchFalse, matchUintRange("0", "1", "3", 32))
 	assert.Equal(t, MatchTrue, matchUintRange("2", "1", "3", 32))
 
-	assert.True(t, filterPartitionDir("2", tree.HivePartColType{Id: int32(types.T_int32)},
-		&PartitionPredicate{Op: PartitionOp(99), Values: []string{"1"}}))
+	expr := predicateListToPruneExpr([]PartitionPredicate{{ColName: "year", Op: PartitionOp(99), Values: []string{"1"}}})
+	assert.Equal(t, MatchUnknown, expr.EvalPartial(
+		map[string]string{"year": "2"},
+		map[string]tree.HivePartColType{"year": {Id: int32(types.T_int32)}},
+	))
 }
 
 func TestTryExtractBetweenCoverageHack(t *testing.T) {

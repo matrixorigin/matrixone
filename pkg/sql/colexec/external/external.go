@@ -457,129 +457,19 @@ func (external *External) finishCurrentFile(param *ExternalParam) {
 }
 
 func isFileLevelColumn(node *plan.Node, col *plan.ColRef) bool {
-	if node == nil || node.TableDef == nil || node.ExternScan == nil || col == nil {
-		return false
-	}
-
-	colPos := int(col.ColPos)
-	if colPos < 0 || colPos >= len(node.TableDef.Cols) || colPos != len(node.TableDef.Cols)-1 {
-		return false
-	}
-	// Two hidden trailing columns exist: __mo_filepath on ordinary external
-	// tables and __mo_query on ESQL/SQL foreign tables. Either one is the
-	// "file-level" column of its scan (the query text plays the file-name
-	// role for foreign tables).
-	switch node.TableDef.Cols[colPos].Name {
-	case catalog.ExternalFilePath:
-		return node.TableDef.Cols[colPos].ColId == catalog.ExternalFilePathColId
-	case catalog.ExternalQuery:
-		return node.TableDef.Cols[colPos].ColId == catalog.ExternalQueryColId
-	}
-	return false
+	return colexec.FileLevelExecution.IsFileLevelColumn(node, col)
 }
 
 func isSafeFileLevelFunction(ref *plan.ObjectRef) bool {
-	if ref == nil {
-		return false
-	}
-	overload, exists := function.GetFunctionByIdWithoutError(ref.Obj)
-	if !exists {
-		return false
-	}
-	// last_kafka_message_id is realTimeRelated (never constant-folded into a
-	// cached plan) but is deterministic WITHIN one compile on the session CN —
-	// it reads session state. Allowing it here is what makes server-side
-	// gap-free chaining work:
-	//   where __mo_read_start_id = last_kafka_message_id()
-	functionID, _ := function.DecodeOverloadID(ref.Obj)
-	if functionID == function.LAST_KAFKA_MESSAGE_ID {
-		return true
-	}
-	if overload.IsRealTimeRelated() {
-		return false
-	}
-	if !overload.CannotFold() {
-		return true
-	}
-
-	// mo_log_date is marked volatile to prevent ordinary constant folding, but
-	// it is a deterministic transform of __mo_filepath and is the established
-	// file-pruning primitive. Other volatile functions (for example rand) are
-	// row-dependent and must remain at row level.
-	return functionID == function.MO_LOG_DATE
+	return colexec.FileLevelExecution.IsSafeFileLevelFunction(ref)
 }
 
-func classifyFileLevelColumns(node *plan.Node, expr *plan.Expr) (hasFileLevelColumn, hasUnsupportedColumn bool) {
-	if expr == nil {
-		return false, false
-	}
-
-	switch typedExpr := expr.Expr.(type) {
-	case *plan.Expr_Col:
-		if typedExpr.Col == nil {
-			return false, true
-		}
-		if isFileLevelColumn(node, typedExpr.Col) {
-			return true, false
-		}
-		return false, true
-	case *plan.Expr_F:
-		if typedExpr.F == nil || typedExpr.F.Func == nil {
-			return false, true
-		}
-		if !isSafeFileLevelFunction(typedExpr.F.Func) {
-			return false, true
-		}
-		for _, arg := range typedExpr.F.Args {
-			hasFileLevel, hasUnsupported := classifyFileLevelColumns(node, arg)
-			hasFileLevelColumn = hasFileLevelColumn || hasFileLevel
-			hasUnsupportedColumn = hasUnsupportedColumn || hasUnsupported
-		}
-		return hasFileLevelColumn, hasUnsupportedColumn
-	case *plan.Expr_List:
-		if typedExpr.List == nil {
-			return false, false
-		}
-		for _, item := range typedExpr.List.List {
-			hasFileLevel, hasUnsupported := classifyFileLevelColumns(node, item)
-			hasFileLevelColumn = hasFileLevelColumn || hasFileLevel
-			hasUnsupportedColumn = hasUnsupportedColumn || hasUnsupported
-		}
-		return hasFileLevelColumn, hasUnsupportedColumn
-	case *plan.Expr_Lit, *plan.Expr_P, *plan.Expr_V, *plan.Expr_T,
-		*plan.Expr_Max, *plan.Expr_Vec, *plan.Expr_Fold:
-		return false, false
-	default:
-		return false, true
-	}
+func classifyFileLevelColumns(node *plan.Node, expr *plan.Expr) (bool, bool) {
+	return colexec.FileLevelExecution.ClassifyFileLevelColumns(node, expr)
 }
 
 func isFileLevelFilter(node *plan.Node, expr *plan.Expr) bool {
-	if expr == nil {
-		return false
-	}
-
-	functionExpr, ok := expr.Expr.(*plan.Expr_F)
-	if !ok || functionExpr.F == nil || functionExpr.F.Func == nil {
-		return false
-	}
-	if !isSafeFileLevelFunction(functionExpr.F.Func) {
-		return false
-	}
-	if functionExpr.F.Func.ObjName == "or" {
-		if len(functionExpr.F.Args) == 0 {
-			return false
-		}
-		for _, arg := range functionExpr.F.Args {
-			if !isFileLevelFilter(node, arg) {
-				return false
-			}
-		}
-		return true
-	}
-
-	hasFileLevelColumn, hasUnsupportedColumn := classifyFileLevelColumns(node, expr)
-	return hasFileLevelColumn && !hasUnsupportedColumn
+	return colexec.FileLevelExecution.IsFileLevelFilter(node, expr)
 }
 
 func makeFilepathBatch(node *plan.Node, proc *process.Process, fileList []string) (bat *batch.Batch, err error) {

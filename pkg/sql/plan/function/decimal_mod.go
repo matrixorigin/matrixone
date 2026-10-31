@@ -31,7 +31,7 @@ func DecimalModReturnType(original []types.Type, selected types.Type) types.Type
 		case operand.Oid.IsDecimal():
 			width = operand.Width
 			if width <= 0 {
-				width = decimalStorageWidth(operand.Oid)
+				width = types.DecimalMaxPrecision(operand.Oid)
 			}
 			operandScale = max32(operand.Scale, 0)
 		case operand.Oid.IsInteger():

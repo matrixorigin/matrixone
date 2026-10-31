@@ -13099,18 +13099,6 @@ func detachUserLevelLocksForOwner(owner, sessionID string) uint64 {
 	return detached
 }
 
-func getUserLevelLock(name string, timeout float64, proc *process.Process) (int64, error) {
-	name, err := validateUserLevelLockName(name)
-	if err != nil {
-		return 0, err
-	}
-	timeoutSeconds, err := userLevelLockTimeoutSeconds(timeout)
-	if err != nil {
-		return 0, err
-	}
-	return getUserLevelLockValidated(name, timeoutSeconds, proc)
-}
-
 // getUserLevelLockValidated expects an already normalized lock name and a
 // bounded timeout in whole seconds. Vector wrappers prevalidate their entire
 // evaluated batch before calling it, so an invalid later row cannot leave an
@@ -13182,18 +13170,11 @@ func getUserLevelLockValidated(name string, timeoutSeconds uint32, proc *process
 	return 1, nil
 }
 
-// releaseUserLevelLock releases a user-level lock.
+// releaseUserLevelLockValidated releases a user-level lock.
 // It returns (value, isNull, error):
 //   - (1, false, nil): lock was released by this call.
 //   - (0, false, nil): lock exists but is held by another session.
 //   - (0, true, nil):  lock does not exist (MySQL returns NULL).
-func releaseUserLevelLock(name string, proc *process.Process) (int64, bool, error) {
-	name, err := validateUserLevelLockName(name)
-	if err != nil {
-		return 0, false, err
-	}
-	return releaseUserLevelLockValidated(name, proc)
-}
 
 func releaseUserLevelLockValidated(name string, proc *process.Process) (int64, bool, error) {
 	ls, err := userLevelLockService(proc)
@@ -13256,14 +13237,6 @@ func releaseUserLevelLockValidated(name string, proc *process.Process) (int64, b
 	return 1, false, nil
 }
 
-func isUserLevelLockFree(name string, proc *process.Process) (int64, error) {
-	name, err := validateUserLevelLockName(name)
-	if err != nil {
-		return 0, err
-	}
-	return isUserLevelLockFreeValidated(name, proc)
-}
-
 func isUserLevelLockFreeValidated(name string, proc *process.Process) (int64, error) {
 	ls, err := userLevelLockService(proc)
 	if err != nil {
@@ -13306,14 +13279,6 @@ func isUserLevelLockFreeValidated(name string, proc *process.Process) (int64, er
 	}
 	releaseRetainedUserLevelLockTxnCleanupSlot(probeCleanupKey)
 	return 1, nil
-}
-
-func isUserLevelLockUsed(name string, proc *process.Process) (uint64, bool, error) {
-	name, err := validateUserLevelLockName(name)
-	if err != nil {
-		return 0, false, err
-	}
-	return isUserLevelLockUsedValidated(name, proc)
 }
 
 func isUserLevelLockUsedValidated(name string, proc *process.Process) (uint64, bool, error) {

@@ -168,7 +168,7 @@ func NewService(
 		addressMgr:  address.NewAddressManager(cfg.ServiceHost, cfg.PortBase),
 		gossipNode:  gossipNode,
 	}
-	srv.colexecServer = colexec.NewServer(cfg.UUID)
+	colexec.NewServer(cfg.UUID)
 	constructed := false
 	defer func() {
 		if constructed {

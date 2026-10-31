@@ -109,7 +109,7 @@ func (remap remapDbContext) isVisibleCTE(name string) bool {
 	return ok
 }
 
-// applyRemapDb substitutes the database of qualified table and column
+// applyRemapDbByStatement substitutes the database of qualified table and column
 // references in parsed statements (db.table -> remap[db].table and
 // db.table.column -> remap[db].table.column). It runs after parsing and before
 // privilege checks / planning, which otherwise resolve the original database
@@ -127,29 +127,6 @@ func (remap remapDbContext) isVisibleCTE(name string) bool {
 // Sub-selects nested in
 // expressions (e.g. WHERE id IN (SELECT ... FROM dbx.t), EXISTS (...), join ON, projections,
 // GROUP/HAVING) are also walked so their qualified references are remapped.
-func applyRemapDb(
-	ctx context.Context,
-	stmts []tree.Statement,
-	remap map[string]string,
-	lowerCaseTableNames int64,
-) error {
-	if len(remap) == 0 {
-		return nil
-	}
-	normalized, err := parsers.NormalizeAndValidateRemapDb(ctx, remap, lowerCaseTableNames)
-	if err != nil {
-		return err
-	}
-	var walkErr error
-	remapCtx := remapDbContext{
-		ctx: ctx, databases: normalized, lowerCaseTableNames: lowerCaseTableNames, err: &walkErr,
-	}
-	for _, stmt := range stmts {
-		remapDbInStmt(stmt, remapCtx)
-	}
-	return walkErr
-}
-
 func applyRemapDbByStatement(
 	ctx context.Context,
 	stmts []tree.Statement,

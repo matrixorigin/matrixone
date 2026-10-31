@@ -80,7 +80,7 @@ func GetSQLWriterDBUser() (*DBUser, error) {
 	if dbUser == nil {
 		return nil, errNotReady
 	} else {
-		return sqlWriterDBUser.Load().(*DBUser), nil
+		return dbUser.(*DBUser), nil
 
 	}
 }
@@ -302,19 +302,17 @@ func putBuffer(buf *bytes.Buffer) {
 var _ table.RowWriter = (*CSVWriter)(nil)
 
 type CSVWriter struct {
-	ctx       context.Context
 	formatter *csv.Writer
 	buf       *bytes.Buffer
 	release   func(buffer *bytes.Buffer)
 }
 
-func NewCSVWriter(ctx context.Context) *CSVWriter {
+func NewCSVWriter(_ context.Context) *CSVWriter {
 	buf := getBuffer()
 	buf.Reset()
 	writer := csv.NewWriter(buf)
 
 	w := &CSVWriter{
-		ctx:       ctx,
 		buf:       buf,
 		formatter: writer,
 		release:   putBuffer,
@@ -322,11 +320,10 @@ func NewCSVWriter(ctx context.Context) *CSVWriter {
 	return w
 }
 
-func NewCSVWriterWithBuffer(ctx context.Context, buf *bytes.Buffer) *CSVWriter {
+func NewCSVWriterWithBuffer(_ context.Context, buf *bytes.Buffer) *CSVWriter {
 	writer := csv.NewWriter(buf)
 
 	w := &CSVWriter{
-		ctx:       ctx,
 		buf:       buf,
 		formatter: writer,
 		release:   nil,

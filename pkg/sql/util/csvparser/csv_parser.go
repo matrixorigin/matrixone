@@ -168,7 +168,6 @@ type CSVParser struct {
 	allowEmptyLine   bool
 	quotedNullIsText bool
 	unescapedQuote   bool
-	isLastChunk      bool
 
 	// see csv.Reader
 	comment []byte
@@ -202,7 +201,7 @@ type CSVParser struct {
 }
 
 // Reset re-points the parser at a new input stream and clears all buffered
-// stream state (buf/pos/chunk flags and scratch buffers), so one parser —
+// stream state (buf/pos and scratch buffers), so one parser —
 // and its large block buffer — can be reused across many small independent
 // inputs with no possibility of cross-input bleed. Configuration and the
 // per-record scratch space are kept.
@@ -212,7 +211,6 @@ func (parser *CSVParser) Reset(reader io.Reader) {
 	parser.pos = 0
 	parser.lineNo = 0
 	parser.recordStartLine = 0
-	parser.isLastChunk = false
 	parser.unterminatedAtEOF = false
 	parser.remainBuf.Reset()
 	parser.appendBuf.Reset()
@@ -1089,10 +1087,7 @@ func (parser *CSVParser) readBlock() error {
 	n, err := io.ReadFull(parser.reader, parser.blockBuf)
 
 	switch {
-	case errors.Is(err, io.ErrUnexpectedEOF), err == io.EOF:
-		parser.isLastChunk = true
-		fallthrough
-	case err == nil:
+	case errors.Is(err, io.ErrUnexpectedEOF), err == io.EOF, err == nil:
 
 		blockData := parser.blockBuf[:n]
 		if parser.pos == 0 {

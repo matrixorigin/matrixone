@@ -819,7 +819,8 @@ func (x Decimal256) Div(y Decimal256, scale1, scale2 int32) (z Decimal256, scale
 	return
 }
 
-func decimal256MagnitudeBigInt(x Decimal256) *big.Int {
+// MagnitudeBigInt returns the absolute coefficient as a newly allocated integer.
+func (x Decimal256) MagnitudeBigInt() *big.Int {
 	if x.Sign() {
 		x = x.Minus()
 	}
@@ -849,12 +850,12 @@ func decimal256FromMagnitudeBigInt(value *big.Int) Decimal256 {
 // rejects the normal, allocation-free path; the modular exponent keeps memory
 // bounded even when a caller supplies a large scale difference.
 func decimal256ModScaleUp(x, y Decimal256, scaleDiff int32) (Decimal256, error) {
-	modulus := decimal256MagnitudeBigInt(y)
+	modulus := y.MagnitudeBigInt()
 	if modulus.Sign() == 0 {
 		return Decimal256{}, moerr.NewDivByZeroNoCtx()
 	}
 	power := new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(scaleDiff)), modulus)
-	value := decimal256MagnitudeBigInt(x)
+	value := x.MagnitudeBigInt()
 	value.Mul(value, power)
 	value.Mod(value, modulus)
 	return decimal256FromMagnitudeBigInt(value), nil
@@ -864,7 +865,7 @@ func decimal256ModScaleUp(x, y Decimal256, scaleDiff int32) (Decimal256, error) 
 // overflows. For scaleDiff>=77, 10^scaleDiff is already greater than the
 // largest unsigned Decimal256 magnitude, so the positive remainder is x.
 func decimal256ModByScaledDivisor(x, y Decimal256, scaleDiff int32) (Decimal256, error) {
-	divisor := decimal256MagnitudeBigInt(y)
+	divisor := y.MagnitudeBigInt()
 	if divisor.Sign() == 0 {
 		return Decimal256{}, moerr.NewDivByZeroNoCtx()
 	}
@@ -873,7 +874,7 @@ func decimal256ModByScaledDivisor(x, y Decimal256, scaleDiff int32) (Decimal256,
 	}
 	power := new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(scaleDiff)), nil)
 	divisor.Mul(divisor, power)
-	value := decimal256MagnitudeBigInt(x)
+	value := x.MagnitudeBigInt()
 	value.Mod(value, divisor)
 	return decimal256FromMagnitudeBigInt(value), nil
 }

@@ -20,8 +20,6 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"net/url"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -842,7 +840,7 @@ func (s *CNServer) connectContext(
 	}
 	defer cancel()
 
-	network, address, err := parseBackendAddress(s.addr)
+	network, address, err := parseProxyAddress(s.addr)
 	if err != nil {
 		return nil, newConnectErr(err)
 	}
@@ -963,18 +961,4 @@ func writeAll(conn net.Conn, data []byte) error {
 		data = data[n:]
 	}
 	return nil
-}
-
-func parseBackendAddress(address string) (string, string, error) {
-	if !strings.Contains(address, "//") {
-		return "tcp4", address, nil
-	}
-	u, err := url.Parse(address)
-	if err != nil {
-		return "", "", err
-	}
-	if strings.EqualFold(u.Scheme, "unix") {
-		return u.Scheme, u.Path, nil
-	}
-	return u.Scheme, u.Host, nil
 }

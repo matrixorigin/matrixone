@@ -111,14 +111,9 @@ func New(
 	if err != nil {
 		panic(err)
 	}
-	services, err := clusterservice.GetAllTNServicesWithContext(ctx, cluster)
+	_, err = clusterservice.GetAllTNServicesWithContext(ctx, cluster)
 	if err != nil {
 		panic(err)
-	}
-
-	var tnID string
-	if len(services) > 0 {
-		tnID = services[0].ServiceID
 	}
 
 	ls, ok := moruntime.ServiceRuntime(service).GetGlobalVariables(moruntime.LockService)
@@ -134,7 +129,6 @@ func New(
 		hakeeper: hakeeper,
 		cli:      cli,
 		idGen:    hakeeper,
-		tnID:     tnID,
 		packerPool: fileservice.NewPool(
 			128,
 			func() *types.Packer {

@@ -47,9 +47,21 @@ func populateInformationSchemaCharacterSets() versions.UpgradeEntry {
 		UpgType:   versions.MODIFY_METADATA,
 		PreSql: "DELETE FROM information_schema.CHARACTER_SETS " +
 			"WHERE lower(CHARACTER_SET_NAME) IN ('binary','utf8','utf8mb4')",
-		UpgSql: sysview.InformationSchemaCharacterSetsData,
+		// Keep the released rows independent of main's current charset defaults.
+		UpgSql: "INSERT INTO information_schema.CHARACTER_SETS " +
+			"(CHARACTER_SET_NAME, DEFAULT_COLLATE_NAME, DESCRIPTION, MAXLEN) VALUES " +
+			"('binary','binary','Binary pseudo charset',1)," +
+			"('utf8','utf8_bin','UTF-8 Unicode',4)," +
+			"('utf8mb4','utf8mb4_bin','UTF-8 Unicode',4)",
 		CheckFunc: func(txn executor.TxnExecutor, accountID uint32) (bool, error) {
-			return versions.CheckTableDataExist(txn, accountID, sysview.InformationSchemaCharacterSetsCheckSQL())
+			return versions.CheckTableDataExist(txn, accountID,
+				"SELECT 1 FROM information_schema.CHARACTER_SETS "+
+					"WHERE CHARACTER_SET_NAME = 'binary' AND DEFAULT_COLLATE_NAME = 'binary' AND MAXLEN = 1 "+
+					"AND EXISTS (SELECT 1 FROM information_schema.CHARACTER_SETS "+
+					"WHERE CHARACTER_SET_NAME = 'utf8' AND DEFAULT_COLLATE_NAME = 'utf8_bin' AND MAXLEN = 4) "+
+					"AND EXISTS (SELECT 1 FROM information_schema.CHARACTER_SETS "+
+					"WHERE CHARACTER_SET_NAME = 'utf8mb4' AND DEFAULT_COLLATE_NAME = 'utf8mb4_bin' AND MAXLEN = 4) "+
+					"LIMIT 1")
 		},
 	}
 }

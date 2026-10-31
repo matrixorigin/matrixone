@@ -250,7 +250,7 @@ func startService(
 	if err := cfg.validate(); err != nil {
 		return err
 	}
-	if err := cfg.resolveGossipSeedAddresses(); err != nil {
+	if err := cfg.LogService.ResolveGossipSeedAddresses(); err != nil {
 		return err
 	}
 	st, err := cfg.getServiceType()

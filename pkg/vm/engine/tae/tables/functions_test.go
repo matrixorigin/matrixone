@@ -410,6 +410,23 @@ func TestCommitTSIsNotLoadedWithoutExactPKMatch(t *testing.T) {
 }
 
 func BenchmarkFunctions(b *testing.B) {
+	makeRowIDs := func(b *testing.B, length int) containers.Vector {
+		b.Helper()
+		rowIDs := containers.MakeVector(types.T_Rowid.ToType(), common.DefaultAllocator)
+		b.Cleanup(rowIDs.Close)
+		for range length {
+			rowIDs.Append(nil, true)
+		}
+		return rowIDs
+	}
+	checkNoMatches := func(b *testing.B, rowIDs containers.Vector) {
+		b.Helper()
+		for i := 0; i < rowIDs.Length(); i++ {
+			if !rowIDs.IsNull(i) {
+				b.Fatal("benchmark probes must not match the block")
+			}
+		}
+	}
 	vec := containers.MockVector2(types.T_int64.ToType(), 10000, 0)
 	defer vec.Close()
 	vec2 := containers.MakeVector(*vec.GetType(), common.DefaultAllocator)
@@ -418,18 +435,17 @@ func BenchmarkFunctions(b *testing.B) {
 		vec2.Append(int64(i), false)
 	}
 
-	b.Run("old-dedup-int64", func(b *testing.B) {
-		b.ResetTimer()
-		for i := 0; i < b.N; i++ {
-			vec2.Foreach(dedupNABlkClosure(vec, nil, nil, nil), nil)
-		}
-	})
 	b.Run("new-dedup-int64", func(b *testing.B) {
-		op := containers.MakeForeachVectorOp(vec2.GetType().Oid, getDuplicatedRowIDNABlkFunctions, vec, nil, nil)
+		rowIDs := makeRowIDs(b, vec2.Length())
+		op := containers.MakeForeachVectorOp(vec2.GetType().Oid, getDuplicatedRowIDNABlkFunctions, vec, rowIDs, types.Blockid{})
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
-			containers.ForeachVectorWindow(vec2, 0, vec2.Length(), op, nil, nil)
+			if err := containers.ForeachVectorWindow(vec2, 0, vec2.Length(), op, nil, nil); err != nil {
+				b.Fatal(err)
+			}
 		}
+		b.StopTimer()
+		checkNoMatches(b, rowIDs)
 	})
 
 	vec3 := containers.MockVector(types.T_decimal128.ToType(), 20000, true, nil)
@@ -438,18 +454,18 @@ func BenchmarkFunctions(b *testing.B) {
 	defer vec4.Close()
 	vec5 := vec3.CloneWindow(11000, 100)
 	defer vec5.Close()
-	b.Run("old-dedup-d128", func(b *testing.B) {
-		b.ResetTimer()
-		for i := 0; i < b.N; i++ {
-			vec5.Foreach(dedupNABlkClosure(vec4, nil, nil, nil), nil)
-		}
-	})
+
 	b.Run("new-dedup-d128", func(b *testing.B) {
-		op := containers.MakeForeachVectorOp(vec4.GetType().Oid, getDuplicatedRowIDNABlkFunctions, vec4, nil, nil)
+		rowIDs := makeRowIDs(b, vec5.Length())
+		op := containers.MakeForeachVectorOp(vec4.GetType().Oid, getDuplicatedRowIDNABlkFunctions, vec4, rowIDs, types.Blockid{})
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
-			containers.ForeachVectorWindow(vec5, 0, vec5.Length(), op, nil, nil)
+			if err := containers.ForeachVectorWindow(vec5, 0, vec5.Length(), op, nil, nil); err != nil {
+				b.Fatal(err)
+			}
 		}
+		b.StopTimer()
+		checkNoMatches(b, rowIDs)
 	})
 
 	vec6 := containers.MockVector2(types.T_varchar.ToType(), 12000, 0)
@@ -459,32 +475,35 @@ func BenchmarkFunctions(b *testing.B) {
 	vec8 := vec6.CloneWindow(10500, 10)
 	defer vec8.Close()
 
-	b.Run("old-dedup-chars", func(b *testing.B) {
-		b.ResetTimer()
-		for i := 0; i < b.N; i++ {
-			vec8.Foreach(dedupNABlkClosure(vec7, nil, nil, nil), nil)
-		}
-	})
 	b.Run("new-dedup-chars", func(b *testing.B) {
-		op := containers.MakeForeachVectorOp(vec7.GetType().Oid, getDuplicatedRowIDNABlkFunctions, vec7, nil, nil)
+		rowIDs := makeRowIDs(b, vec8.Length())
+		op := containers.MakeForeachVectorOp(vec7.GetType().Oid, getDuplicatedRowIDNABlkFunctions, vec7, rowIDs, types.Blockid{})
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
-			containers.ForeachVectorWindow(vec8, 0, vec8.Length(), op, nil, nil)
+			if err := containers.ForeachVectorWindow(vec8, 0, vec8.Length(), op, nil, nil); err != nil {
+				b.Fatal(err)
+			}
 		}
-	})
-
-	b.Run("old-dedup-achars", func(b *testing.B) {
-		b.ResetTimer()
-		for i := 0; i < b.N; i++ {
-			vec8.Foreach(dedupABlkClosureFactory(nil)(vec7, nil, nil, nil), nil)
-		}
+		b.StopTimer()
+		checkNoMatches(b, rowIDs)
 	})
 
 	b.Run("new-dedup-achars", func(b *testing.B) {
-		op := containers.MakeForeachVectorOp(vec7.GetType().Oid, getRowIDAlkFunctions, vec7, nil, nil, nil, nil)
+		rowIDs := makeRowIDs(b, vec8.Length())
+		loader := &commitTSLoader{load: func() (containers.Vector, containers.Vector, error) {
+			return nil, nil, errors.New("benchmark probes must not match the block")
+		}}
+		b.Cleanup(loader.close)
+		txn := txnbase.MockTxnReaderWithStartTS(types.BuildTS(10, 0))
+		op := containers.MakeForeachVectorOp(vec7.GetType().Oid, getRowIDAlkFunctions,
+			vec7, rowIDs, types.Blockid{}, loader, txn, types.TS{}, types.MaxTs())
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
-			containers.ForeachVectorWindow(vec8, 0, vec8.Length(), op, nil, nil)
+			if err := containers.ForeachVectorWindow(vec8, 0, vec8.Length(), op, nil, nil); err != nil {
+				b.Fatal(err)
+			}
 		}
+		b.StopTimer()
+		checkNoMatches(b, rowIDs)
 	})
 }

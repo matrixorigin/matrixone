@@ -22,8 +22,6 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
-	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_18"
-	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_19"
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_6"
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_7"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -119,7 +117,7 @@ func TestLegacyCDCAdmissionBeforeUpgradeMutation(t *testing.T) {
 // TestLegacyCDCAdmissionEmptyCatalogAdmitsSourceOnward pins that a source
 // below the frozen stage with no legacy CDC tasks admits past the gate and
 // proceeds to create the consolidated route - the successor keeps upstream's
-// admission/passage contract at the 4.0.19 final.
+// admission/passage contract at the 4.0.7 final.
 func TestLegacyCDCAdmissionEmptyCatalogAdmitsSourceOnward(t *testing.T) {
 	runtime.RunTest("", func(runtime.Runtime) {
 		source := v4_0_6.Handler.Metadata()
@@ -144,10 +142,8 @@ func TestLegacyCDCAdmissionEmptyCatalogAdmitsSourceOnward(t *testing.T) {
 		s := newServiceForTest("", &memLocker{}, clock.NewHLCClock(func() int64 { return 0 }, 0), nil, exec, func(s *service) { s.initUpgrade() })
 		t.Cleanup(s.stopper.Stop)
 		require.NoError(t, s.doCheckUpgrade(t.Context()))
-		require.Len(t, routes, 3, "an admitted 4.0.6 source chains through the frozen stage, the upstream 4.0.18 handle and the final vehicle")
-		require.Contains(t, fmt.Sprint(routes), fmt.Sprintf("'%s', '%s', '4.0.19',", source.Version, v4_0_7.Handler.Metadata().Version))
-		require.Contains(t, fmt.Sprint(routes), fmt.Sprintf("'%s', '%s', '4.0.19',", v4_0_7.Handler.Metadata().Version, v4_0_18.Handler.Metadata().Version))
-		require.Contains(t, fmt.Sprint(routes), fmt.Sprintf("'%s', '%s', '4.0.19',", v4_0_18.Handler.Metadata().Version, v4_0_19.Handler.Metadata().Version))
+		require.Len(t, routes, 1, "a released 4.0.6 source crosses only the consolidated 4.0.7 step")
+		require.Contains(t, fmt.Sprint(routes), fmt.Sprintf("'%s', '%s', '4.0.7',", source.Version, v4_0_7.Handler.Metadata().Version))
 	})
 }
 

@@ -48,7 +48,7 @@ func (f VendedObjectReaderFactory) NewObjectReader(ctx context.Context, catalog 
 		Namespace:      req.Namespace,
 		Table:          req.Table,
 		PlanID:         f.PlanID,
-		ReferencedBy:   cloneStringSlice(f.ReferencedBy),
+		ReferencedBy:   append([]string(nil), f.ReferencedBy...),
 	})
 	if err != nil {
 		return nil, ObjectReaderContext{}, err
@@ -98,7 +98,7 @@ func (f VendedObjectReaderFactory) newRemoteSigningObjectReader(ctx context.Cont
 		Namespace:      req.Namespace,
 		Table:          req.Table,
 		Snapshots:      "all",
-		ReferencedBy:   cloneStringSlice(f.ReferencedBy),
+		ReferencedBy:   append([]string(nil), f.ReferencedBy...),
 	})
 	if err != nil {
 		return nil, ObjectReaderContext{}, err
@@ -271,13 +271,6 @@ func writeObjectReaderIdentityPart(out *strings.Builder, value string) {
 	out.WriteString(strconv.Itoa(len(value)))
 	out.WriteByte(':')
 	out.WriteString(value)
-}
-
-func cloneStringSlice(in []string) []string {
-	if len(in) == 0 {
-		return nil
-	}
-	return append([]string(nil), in...)
 }
 
 var _ ObjectReaderFactory = VendedObjectReaderFactory{}.NewObjectReader

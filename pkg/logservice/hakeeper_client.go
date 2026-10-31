@@ -260,10 +260,7 @@ var sendCNAllocateIDWithRequestIDFunc = (*hakeeperClient).sendCNAllocateIDWithRe
 func NewClusterHAKeeperClient(
 	ctx context.Context, sid string, cfg HAKeeperClientConfig,
 ) (ClusterHAKeeperClient, error) {
-	if err := cfg.Validate(); err != nil {
-		return nil, err
-	}
-	if err := validateHAKeeperClientContext(ctx); err != nil {
+	if err := validateHAKeeperClientConfigAndContext(&cfg, ctx); err != nil {
 		return nil, err
 	}
 	return newManagedHAKeeperClient(ctx, sid, cfg)
@@ -277,10 +274,7 @@ func NewCNHAKeeperClient(
 	sid string,
 	cfg HAKeeperClientConfig,
 ) (CNHAKeeperClient, error) {
-	if err := cfg.Validate(); err != nil {
-		return nil, err
-	}
-	if err := validateHAKeeperClientContext(ctx); err != nil {
+	if err := validateHAKeeperClientConfigAndContext(&cfg, ctx); err != nil {
 		return nil, err
 	}
 	return newManagedHAKeeperClient(ctx, sid, cfg)
@@ -294,10 +288,7 @@ func NewTNHAKeeperClient(
 	sid string,
 	cfg HAKeeperClientConfig,
 ) (TNHAKeeperClient, error) {
-	if err := cfg.Validate(); err != nil {
-		return nil, err
-	}
-	if err := validateHAKeeperClientContext(ctx); err != nil {
+	if err := validateHAKeeperClientConfigAndContext(&cfg, ctx); err != nil {
 		return nil, err
 	}
 	return newManagedHAKeeperClient(ctx, sid, cfg)
@@ -311,10 +302,7 @@ func NewLogHAKeeperClient(
 	sid string,
 	cfg HAKeeperClientConfig,
 ) (LogHAKeeperClient, error) {
-	if err := cfg.Validate(); err != nil {
-		return nil, err
-	}
-	if err := validateHAKeeperClientContext(ctx); err != nil {
+	if err := validateHAKeeperClientConfigAndContext(&cfg, ctx); err != nil {
 		return nil, err
 	}
 	return newManagedHAKeeperClient(ctx, sid, cfg)
@@ -373,13 +361,17 @@ func NewProxyHAKeeperClient(
 	sid string,
 	cfg HAKeeperClientConfig,
 ) (ProxyHAKeeperClient, error) {
-	if err := cfg.Validate(); err != nil {
-		return nil, err
-	}
-	if err := validateHAKeeperClientContext(ctx); err != nil {
+	if err := validateHAKeeperClientConfigAndContext(&cfg, ctx); err != nil {
 		return nil, err
 	}
 	return newManagedHAKeeperClient(ctx, sid, cfg)
+}
+
+func validateHAKeeperClientConfigAndContext(cfg *HAKeeperClientConfig, ctx context.Context) error {
+	if err := cfg.Validate(); err != nil {
+		return err
+	}
+	return validateHAKeeperClientContext(ctx)
 }
 
 func validateHAKeeperClientContext(ctx context.Context) error {

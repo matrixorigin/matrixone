@@ -801,7 +801,7 @@ func TestSelectedRowsCodecRejectsInvalidMetadataBeforePublishingRows(t *testing.
 				require.NoError(t, types.WriteInt32(buf, 1))
 				require.NoError(t, buf.WriteByte(0))
 				require.NoError(t, types.WriteInt32(buf, int32(types.T_int64.TypeLen())))
-				require.NoError(t, writeVectorMarshalBytes(buf, make([]byte, 7)))
+				require.NoError(t, types.WriteFull(buf, make([]byte, 7)))
 			},
 			want: "EOF",
 		},

@@ -16,7 +16,6 @@ package v4_0_5
 
 import (
 	"context"
-	"time"
 
 	"go.uber.org/zap"
 
@@ -56,45 +55,17 @@ func (v *versionHandle) Prepare(ctx context.Context, txn executor.TxnExecutor, f
 }
 
 func (v *versionHandle) HandleTenantUpgrade(ctx context.Context, tenantID int32, txn executor.TxnExecutor) error {
-	for _, upgEntry := range tenantUpgEntries {
-		start := time.Now()
-		if err := upgEntry.Upgrade(txn, uint32(tenantID)); err != nil {
-			getLogger(txn.Txn().TxnOptions().CN).Error("tenant upgrade entry execute error",
-				zap.Error(err),
-				zap.Int32("tenantId", tenantID),
-				zap.String("version", v.Metadata().Version),
-				zap.String("upgrade entry", upgEntry.String()))
-			return err
-		}
-		getLogger(txn.Txn().TxnOptions().CN).Info("tenant upgrade entry complete",
-			zap.String("upgrade entry", upgEntry.String()),
-			zap.Int64("time cost(ms)", time.Since(start).Milliseconds()),
-			zap.String("toVersion", v.Metadata().Version))
+	if err := versions.RunServiceTenantUpgradeEntries(tenantID, txn, tenantUpgEntries, versions.StrictServiceLogger, func() string { return v.Metadata().Version }); err != nil {
+		return err
 	}
-	getLogger(txn.Txn().TxnOptions().CN).Info("tenant upgrade success",
+	versions.StrictServiceLogger(txn.Txn().TxnOptions().CN).Info("tenant upgrade success",
 		zap.Int32("tenantId", tenantID),
 		zap.String("toVersion", v.Metadata().Version))
 	return nil
 }
 
 func (v *versionHandle) HandleClusterUpgrade(ctx context.Context, txn executor.TxnExecutor) error {
-	for _, upgEntry := range clusterUpgEntries {
-		start := time.Now()
-		if err := upgEntry.Upgrade(txn, uint32(txn.Txn().TxnOptions().AccountID)); err != nil {
-			getLogger(txn.Txn().TxnOptions().CN).Error("cluster upgrade entry execute error",
-				zap.Error(err),
-				zap.String("version", v.Metadata().Version),
-				zap.String("upgrade entry", upgEntry.String()))
-			return err
-		}
-		getLogger(txn.Txn().TxnOptions().CN).Info("cluster upgrade entry complete",
-			zap.String("upgrade entry", upgEntry.String()),
-			zap.Int64("time cost(ms)", time.Since(start).Milliseconds()),
-			zap.String("toVersion", v.Metadata().Version))
-	}
-	getLogger(txn.Txn().TxnOptions().CN).Info("cluster upgrade success",
-		zap.String("toVersion", v.Metadata().Version))
-	return nil
+	return versions.RunCurrentAccountClusterUpgradeEntries(txn, clusterUpgEntries, versions.StrictServiceLogger, func() string { return v.Metadata().Version })
 }
 
 func (v *versionHandle) HandleCreateFrameworkDeps(txn executor.TxnExecutor) error {
