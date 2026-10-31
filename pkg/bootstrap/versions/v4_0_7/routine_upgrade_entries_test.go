@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package v4_0_20
+package v4_0_7
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
@@ -22,7 +22,7 @@ import (
 )
 
 func TestSharedRoutineRevisionUpgradeContract(t *testing.T) {
-	entries := tenantUpgEntries
+	entries := routineUpgEntries
 	for _, entry := range entries {
 		if entry.RequiredProtocolVersion != 0 {
 			t.Fatalf("Python repair must not probe a feature protocol: %+v", entry)

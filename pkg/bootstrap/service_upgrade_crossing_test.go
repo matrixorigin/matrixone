@@ -102,7 +102,7 @@ func (db *crossingFakeDB) exec(sql string) (executor.Result, error) {
 	case sql == versions.LatestVersionSQL:
 		v := db.latest
 		if db.finalExists {
-			v = versions.Version{Version: "4.0.7", VersionOffset: 41, State: db.finalState}
+			v = versions.Version{Version: "4.0.7", VersionOffset: v4_0_7.Handler.Metadata().VersionOffset, State: db.finalState}
 		}
 		return recoveryVersionResult(db.t, v), nil
 	case strings.HasPrefix(sql, "select state from mo_version"):
@@ -377,7 +377,7 @@ func TestCrossingRestartMidCrossingRejectsLegacyTask(t *testing.T) {
 		db.finalExists = true
 		db.finalSteps = crossingFinalSteps()
 		db.cdcTasks = [][]string{{"10001", "task-uuid", "old-task", "paused"}}
-		db.latest = versions.Version{Version: "4.0.7", VersionOffset: 41, State: versions.StateCreated}
+		db.latest = versions.Version{Version: "4.0.7", VersionOffset: v4_0_7.Handler.Metadata().VersionOffset, State: versions.StateCreated}
 		s := newCrossingService(t, db)
 		err := s.doCheckUpgrade(t.Context())
 		requireCrossingTerminalLegacyTask(t, err, "10001", "task-uuid", "paused")

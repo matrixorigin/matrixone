@@ -105,9 +105,6 @@ func (s *service) UpgradeOneTenant(ctx context.Context, tenantID int32) error {
 				if err != nil {
 					return err
 				}
-				if err := s.checkRetiredCatalogSource(version); err != nil {
-					return err
-				}
 
 				// tenant create at current cn, can work correctly
 				currentCN := s.getFinalVersionHandle().Metadata()
@@ -176,9 +173,6 @@ func (s *service) UpgradeOneTenant(ctx context.Context, tenantID int32) error {
 				// upgrade in current goroutine immediately
 				version, err = versions.GetTenantCreateVersionForUpdate(tenantID, txn)
 				if err != nil {
-					return err
-				}
-				if err := s.checkRetiredCatalogSource(version); err != nil {
 					return err
 				}
 				from := version
