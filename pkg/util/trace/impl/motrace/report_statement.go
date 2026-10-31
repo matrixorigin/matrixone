@@ -82,6 +82,13 @@ func StatementInfoNew(i table.Item, ctx context.Context) table.Item {
 		// copy value
 		stmt := s.CloneWithoutExecPlan() // Get a new statement from the pool
 		stmt.exported = false
+		// constituent ownership: the clone starts a fresh batch linkage; the
+		// record's spool sequence rides the aggregate instead.
+		stmt.spoolSeq = 0
+		stmt.spoolSeqs = stmt.spoolSeqs[:0]
+		if s.spoolSeq != 0 {
+			stmt.spoolSeqs = append(stmt.spoolSeqs, s.spoolSeq)
+		}
 
 		// initialize the AggrCount as 0 here since aggr is not started
 		stmt.AggrCount = 0
@@ -138,6 +145,12 @@ func StatementInfoUpdate(ctx context.Context, existing, new table.Item) {
 	e.AggrCount += 1
 	e.Duration += n.Duration
 	e.ResultCount += n.ResultCount
+	// carry constituent ownership: every merged statement's spool sequence
+	// retires only when THIS aggregated record's export batch commits.
+	if n.spoolSeq != 0 {
+		e.spoolSeqs = append(e.spoolSeqs, n.spoolSeq)
+	}
+	e.spoolSeqs = append(e.spoolSeqs, n.spoolSeqs...)
 	// responseAt is the last response time
 	n.ExecPlan2Stats(context.Background())
 	if err := mergeStats(e, n); err != nil {
@@ -228,6 +241,24 @@ type StatementInfo struct {
 	ResultCount int64 `json:"result_count"` // see EndStatement
 
 	ConnType statistic.ConnType `json:"-"` // see frontend.RecordStatement
+
+	// spoolSeq carries the record's crash-durable spool sequence (see
+	// statementInfoSpool): stamped by spoolStatementInfo right before the
+	// record is handed to the collector; the statement_info buffer's Add
+	// hook reads it to parent the record to its export batch (the export
+	// watermark protocol). 0 = not spooled. Written once on the report
+	// goroutine before the collector hand-off, read after the queue
+	// hand-off — never serialized, never compared.
+	spoolSeq uint64
+	// spoolSeqs carries the CONSTITUENT spool sequences of an aggregated
+	// statement: aggregation clones/merges discard spoolSeq (each
+	// constituent keeps its own ownership), so the aggregate item
+	// accumulates every constituent sequence and the buffer's Add hook
+	// parents ALL of them to the aggregate's batch (round-3 review:
+	// unowned constituents silently lost their durability coverage).
+	// Only aggregate items use it; never serialized; pooled objects reset
+	// it in free().
+	spoolSeqs []uint64
 
 	// flow ctrl
 	// #		|case 1 |case 2 |case 3 |case 4|
@@ -436,6 +467,8 @@ func (s *StatementInfo) free() {
 	s.disableAgg = false
 	s.outfileReceipt = nil
 	// clean skipTxn ctrl
+	s.spoolSeq = 0
+	s.spoolSeqs = s.spoolSeqs[:0]
 	s.skipTxnOnce = false
 	s.skipTxnID = nil
 	stmtPool.Put(s)
@@ -498,6 +531,55 @@ func (s *StatementInfo) CloneWithoutExecPlan() *StatementInfo {
 	stmt.skipTxnOnce = s.skipTxnOnce
 	stmt.skipTxnID = s.skipTxnID
 	return stmt
+}
+
+// cloneForSpool returns a flat (heap) copy of the statement's export state
+// for the statement_info spool. The copy is not pooled and does not share
+// ownerships: the source keeps its ExecPlan; the snapshot borrows the ExecPlan
+// read-only and the already marshaled plan json, so the plan is marshaled at
+// most once per statement. Callers must hold s.mux (or own s exclusively).
+func (s *StatementInfo) cloneForSpool(ctx context.Context) *StatementInfo {
+	// Materialize the plan json once: the snapshot and the later in-memory
+	// export share it. On a statement without plan this returns noExecPlan
+	// without caching side effects beyond jsonByte.
+	jsonByte := s.ExecPlan2Json(ctx)
+	snapshot := &StatementInfo{
+		StatementID:          s.StatementID,
+		TransactionID:        s.TransactionID,
+		SessionID:            s.SessionID,
+		ConnectionId:         s.ConnectionId,
+		Account:              s.Account,
+		AccountID:            s.AccountID,
+		User:                 s.User,
+		Host:                 s.Host,
+		RoleId:               s.RoleId,
+		Database:             s.Database,
+		Statement:            s.Statement,
+		StatementFingerprint: s.StatementFingerprint,
+		StatementTag:         s.StatementTag,
+		SqlSourceType:        s.SqlSourceType,
+		RequestAt:            s.RequestAt,
+		StatementType:        s.StatementType,
+		QueryType:            s.QueryType,
+		Status:               s.Status,
+		Error:                s.Error,
+		ResponseAt:           s.ResponseAt,
+		Duration:             s.Duration,
+		RowsRead:             s.RowsRead,
+		BytesScan:            s.BytesScan,
+		AggrCount:            s.AggrCount,
+		AggrMemoryTime:       s.AggrMemoryTime,
+		ResultCount:          s.ResultCount,
+		ConnType:             s.ConnType,
+		jsonByte:             jsonByte,
+		statsArray:           s.statsArray,
+		stated:               s.stated,
+		cuStated:             s.cuStated,
+		resourceSummary:      s.resourceSummary,
+		resourceStated:       s.resourceStated,
+		disableAgg:           s.disableAgg,
+	}
+	return snapshot
 }
 
 func (s *StatementInfo) GetTable() *table.Table { return SingleStatementTable }
@@ -981,6 +1063,12 @@ var ReportStatement = func(ctx context.Context, s *StatementInfo) error {
 	}
 
 	s.reported = true
+	// Make the record crash-durable before handing it to the in-memory
+	// collector: after this point an abrupt process exit cannot silently
+	// lose the audit record any more (see statement_spool.go). Spooling must
+	// never break the statement path; any failure downgrades to the previous
+	// in-memory-only behavior.
+	spoolStatementInfo(ctx, s)
 	return GetGlobalBatchProcessor().Collect(ctx, s)
 DiscardAndFreeL:
 	s.freeNoLocked()

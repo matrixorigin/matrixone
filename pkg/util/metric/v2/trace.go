@@ -31,6 +31,7 @@ func initTraceMetrics() {
 	registry.MustRegister(traceMOLoggerExportDataHistogram)
 	registry.MustRegister(traceCheckStorageUsageCounter)
 	registry.MustRegister(traceMOLoggerErrorCounter)
+	registry.MustRegister(traceMOLoggerSpoolCounter)
 	registry.MustRegister(traceMOLoggerBufferActionCounter)
 	registry.MustRegister(traceMOLoggerAggrCounter)
 	registry.MustRegister(traceMOLoggerLogToLongCounter)
@@ -177,6 +178,18 @@ var (
 	TraceMOLoggerErrorFlushCounter     = traceMOLoggerErrorCounter.WithLabelValues("flush")
 	TraceMOLoggerErrorConnDBCounter    = traceMOLoggerErrorCounter.WithLabelValues("conn_db")
 	TraceMOLoggerErrorPingDBCounter    = traceMOLoggerErrorCounter.WithLabelValues("ping_db")
+
+	traceMOLoggerSpoolCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "trace",
+			Name:      "mologger_spool_total",
+			Help:      "Count of statement_info crash-durable spool actions.",
+		}, []string{"type"})
+	TraceMOLoggerSpoolWriteCounter  = traceMOLoggerSpoolCounter.WithLabelValues("write")
+	TraceMOLoggerSpoolReplayCounter = traceMOLoggerSpoolCounter.WithLabelValues("replay")
+	TraceMOLoggerSpoolDropCounter   = traceMOLoggerSpoolCounter.WithLabelValues("drop")
+	TraceMOLoggerSpoolErrorCounter  = traceMOLoggerSpoolCounter.WithLabelValues("error")
 
 	traceMOLoggerBufferActionCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{

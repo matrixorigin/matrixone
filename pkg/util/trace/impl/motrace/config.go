@@ -67,6 +67,11 @@ type tracerProviderConfig struct {
 	aggregationWindow      time.Duration // WithAggregationWindow
 	selectAggrThreshold    time.Duration // WithSelectThreshold
 
+	// statement_info crash-durable spool
+	disableStmtInfoSpool bool   // WithStatementInfoSpoolDisable
+	stmtInfoSpoolDir     string // WithStatementInfoSpoolDir
+	stmtInfoSpoolMaxSize int64  // WithStatementInfoSpoolMaxSize
+
 	sqlExecutor func() ie.InternalExecutor // WithSQLExecutor
 	// needInit control table schema create
 	needInit bool // WithInitAction
@@ -269,6 +274,29 @@ func WithAggregatorWindow(window time.Duration) tracerProviderOption {
 func WithSelectThreshold(window time.Duration) tracerProviderOption {
 	return func(cfg *tracerProviderConfig) {
 		cfg.selectAggrThreshold = window
+	}
+}
+
+// WithStatementInfoSpoolDisable turns off the crash-durable statement_info
+// spool so statement records keep the previous in-memory-only staging.
+func WithStatementInfoSpoolDisable(disable bool) tracerProviderOption {
+	return func(cfg *tracerProviderConfig) {
+		cfg.disableStmtInfoSpool = disable
+	}
+}
+
+// WithStatementInfoSpoolDir sets the directory of the crash-durable
+// statement_info spool. Empty means no spool.
+func WithStatementInfoSpoolDir(dir string) tracerProviderOption {
+	return func(cfg *tracerProviderConfig) {
+		cfg.stmtInfoSpoolDir = dir
+	}
+}
+
+// WithStatementInfoSpoolMaxSize bounds the spool's total disk usage.
+func WithStatementInfoSpoolMaxSize(size int64) tracerProviderOption {
+	return func(cfg *tracerProviderConfig) {
+		cfg.stmtInfoSpoolMaxSize = size
 	}
 }
 

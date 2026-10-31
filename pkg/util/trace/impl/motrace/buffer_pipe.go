@@ -72,7 +72,17 @@ func (t batchETLHandler) NewItemBuffer(name string) bp.ItemBuffer[bp.HasName, an
 	}
 	opts = append(opts, BufferWithGenBatchFunc(f), BufferWithType(name))
 	opts = append(opts, t.defaultOpts...)
-	return NewContentBuffer(opts...)
+	buf := NewContentBuffer(opts...)
+	if name == SingleStatementTable.GetName() {
+		// Wrap the statement_info buffer so every export batch also advances
+		// the crash-durable spool's segment lifecycle (rotate before generate,
+		// confirm after commit). A nil spool (disabled or failed) keeps the
+		// plain buffer.
+		if spool := GetTracerProvider().stmtInfoSpool; spool != nil && buf != nil {
+			return &spooledItemBuffer{Buffer: buf, spool: spool}
+		}
+	}
+	return buf
 }
 
 // NewItemBatchHandler implement batchpipe.PipeImpl
