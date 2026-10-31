@@ -1121,7 +1121,7 @@ func TestReaderTemporalResidualAfterOptionalPKFilter(t *testing.T) {
 			defer base.Cleanup()
 			require.Equal(t, !failOpen, base.Valid)
 			source := &singlePersistedBlockSource{info: stats.ConstructBlockInfo(0)}
-			r, err := NewReader(ctx, proc.Mp(), nil, fs, table, timestamp.Timestamp{}, storage, source, engine.FilterHint{})
+			r, err := NewReader(ctx, proc.Mp(), nil, fs, table, timestamp.Timestamp{}, storage, source, 0, engine.FilterHint{})
 			require.NoError(t, err)
 			defer func() {
 				require.NoError(t, r.Close())
