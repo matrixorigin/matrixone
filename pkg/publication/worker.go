@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -295,7 +296,6 @@ type WriteObjectJobInfo interface {
 
 // syncProtectionEntry represents a registered sync protection job
 type syncProtectionEntry struct {
-	jobID       string
 	ttlExpireTS atomic.Int64
 }
 
@@ -311,7 +311,7 @@ type worker struct {
 	ctx                      context.Context
 	closed                   atomic.Bool
 	stopOnce                 sync.Once
-	admissions               workerAdmissionGate
+	admissions               stopper.AdmissionGate
 	filterObjectWorker       FilterObjectWorker
 	getChunkWorker           GetChunkWorker
 	writeObjectWorker        WriteObjectWorker
@@ -324,37 +324,6 @@ type worker struct {
 type TaskContext struct {
 	TaskID string
 	LSN    uint64
-}
-
-type workerAdmissionGate struct {
-	mu sync.RWMutex
-	wg sync.WaitGroup
-}
-
-// enter registers a sender before it can block. seal excludes new senders,
-// cancels blocked ones, and waits until no sender can arrive after draining.
-func (g *workerAdmissionGate) enter(closed *atomic.Bool) bool {
-	if closed.Load() {
-		return false
-	}
-	g.mu.RLock()
-	defer g.mu.RUnlock()
-	if closed.Load() {
-		return false
-	}
-	g.wg.Add(1)
-	return true
-}
-
-func (g *workerAdmissionGate) leave() {
-	g.wg.Done()
-}
-
-func (g *workerAdmissionGate) seal(cancel context.CancelFunc) {
-	g.mu.Lock()
-	cancel()
-	g.mu.Unlock()
-	g.wg.Wait()
 }
 
 func doneChan(ctx context.Context) <-chan struct{} {
@@ -507,10 +476,10 @@ func (w *worker) RunStatsPrinter() {
 }
 
 func (w *worker) Submit(taskID string, lsn uint64, state int8) error {
-	if !w.admissions.enter(&w.closed) {
+	if !w.admissions.Enter(&w.closed) {
 		return moerr.NewInternalErrorNoCtx("Publication-Worker is closed")
 	}
-	defer w.admissions.leave()
+	defer w.admissions.Leave()
 	task := &TaskContext{
 		TaskID: taskID,
 		LSN:    lsn,
@@ -582,7 +551,7 @@ func (w *worker) onItem(taskCtx *TaskContext) {
 func (w *worker) Stop() {
 	w.stopOnce.Do(func() {
 		w.closed.Store(true)
-		w.admissions.seal(w.cancel)
+		w.admissions.Seal(w.cancel)
 		// Stop leaf pools before their callers. A running filter job can wait on
 		// get-chunk/write jobs, and a top-level iteration can wait on a filter job.
 		if w.getChunkWorker != nil {
@@ -624,9 +593,7 @@ func (w *worker) RegisterSyncProtection(jobID string, ttlExpireTS int64) {
 		return
 	}
 
-	entry := &syncProtectionEntry{
-		jobID: jobID,
-	}
+	entry := &syncProtectionEntry{}
 	entry.ttlExpireTS.Store(ttlExpireTS)
 	w.syncProtectionJobs[jobID] = entry
 
@@ -790,7 +757,7 @@ type filterObjectWorker struct {
 	ctx        context.Context
 	closed     atomic.Bool
 	stopOnce   sync.Once
-	admissions workerAdmissionGate
+	admissions stopper.AdmissionGate
 }
 
 // NewFilterObjectWorker creates a new filter object worker pool
@@ -843,10 +810,10 @@ func (w *filterObjectWorker) cancelPending() {
 }
 
 func (w *filterObjectWorker) SubmitFilterObject(job Job) error {
-	if !w.admissions.enter(&w.closed) {
+	if !w.admissions.Enter(&w.closed) {
 		return rejectJob(job, "FilterObjectWorker")
 	}
-	defer w.admissions.leave()
+	defer w.admissions.Leave()
 	if job == nil {
 		return moerr.NewInternalErrorNoCtx("cannot submit a nil filter object job")
 	}
@@ -867,7 +834,7 @@ func (w *filterObjectWorker) SubmitFilterObject(job Job) error {
 func (w *filterObjectWorker) Stop() {
 	w.stopOnce.Do(func() {
 		w.closed.Store(true)
-		w.admissions.seal(w.cancel)
+		w.admissions.Seal(w.cancel)
 		w.wg.Wait()
 		for {
 			select {
@@ -892,7 +859,7 @@ type getChunkWorker struct {
 	ctx        context.Context
 	closed     atomic.Bool
 	stopOnce   sync.Once
-	admissions workerAdmissionGate
+	admissions stopper.AdmissionGate
 }
 
 // NewGetChunkWorker creates a new get chunk worker pool
@@ -962,10 +929,10 @@ func (w *getChunkWorker) cancelPending(jobType int8) {
 }
 
 func (w *getChunkWorker) SubmitGetChunk(job Job) error {
-	if !w.admissions.enter(&w.closed) {
+	if !w.admissions.Enter(&w.closed) {
 		return rejectJob(job, "GetChunkWorker")
 	}
-	defer w.admissions.leave()
+	defer w.admissions.Leave()
 	if job == nil {
 		return moerr.NewInternalErrorNoCtx("cannot submit a nil get chunk job")
 	}
@@ -991,7 +958,7 @@ func (w *getChunkWorker) SubmitGetChunk(job Job) error {
 func (w *getChunkWorker) Stop() {
 	w.stopOnce.Do(func() {
 		w.closed.Store(true)
-		w.admissions.seal(w.cancel)
+		w.admissions.Seal(w.cancel)
 		w.wg.Wait()
 		for {
 			select {
@@ -1017,7 +984,7 @@ type simpleJobWorker struct {
 	ctx               context.Context
 	closed            atomic.Bool
 	stopOnce          sync.Once
-	admissions        workerAdmissionGate
+	admissions        stopper.AdmissionGate
 	onPending         func()
 	onPendingCanceled func()
 	onRunningStart    func()
@@ -1087,10 +1054,10 @@ func (w *simpleJobWorker) cancelPending() {
 }
 
 func (w *simpleJobWorker) submit(job Job) error {
-	if !w.admissions.enter(&w.closed) {
+	if !w.admissions.Enter(&w.closed) {
 		return rejectJob(job, w.name)
 	}
-	defer w.admissions.leave()
+	defer w.admissions.Leave()
 	if job == nil {
 		return moerr.NewInternalErrorf(context.Background(), "cannot submit a nil job to %s", w.name)
 	}
@@ -1110,7 +1077,7 @@ func (w *simpleJobWorker) submit(job Job) error {
 func (w *simpleJobWorker) stop() {
 	w.stopOnce.Do(func() {
 		w.closed.Store(true)
-		w.admissions.seal(w.cancel)
+		w.admissions.Seal(w.cancel)
 		w.wg.Wait()
 		for {
 			select {

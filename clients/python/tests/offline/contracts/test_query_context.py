@@ -211,9 +211,9 @@ def test_derived_alias_fulltext_source_uses_the_statement_bind_scope():
     query = Client().query(parent).logical_in(parent.id, boolean_match('id').must('term'))
     assert calls == []
     sql, _ = query._build_sql()
-    assert 'MATCH(id)' in sql and calls == [1]
+    assert 'MATCH(`id`)' in sql and calls == [1]
     sql, _ = query._build_sql()
-    assert 'MATCH(id)' in sql and calls == [1, 2]
+    assert 'MATCH(`id`)' in sql and calls == [1, 2]
 
 
 def test_alias_fulltext_filter_attribute_is_checked_once():
@@ -236,7 +236,7 @@ def test_alias_fulltext_filter_attribute_is_checked_once():
 
     parent, value = aliased(Parent, name='p'), Filter()
     query = Client().query(parent).logical_in(parent.id, value)
-    assert 'MATCH(id)' in query.to_sql()
+    assert 'MATCH(`id`)' in query.to_sql()
     assert value.lookups == 1
 
 
@@ -279,7 +279,7 @@ def test_logical_in_fulltext_alias_rendering_and_extension_controls():
             query.logical_in('id', condition) if method == 'logical_in' else query.filter(logical_in('id', condition))
         )
         sql = query.to_sql()
-        assert 'SELECT id FROM context_parent AS p WHERE MATCH(id)' in sql
+        assert 'SELECT id FROM context_parent AS p WHERE MATCH(`id`)' in sql
 
     class CustomLogicalIn(LogicalIn):
         def compile_for_query(self, model, alias):
@@ -289,7 +289,7 @@ def test_logical_in_fulltext_alias_rendering_and_extension_controls():
     with pytest.raises(ValueError, match='carry their own parameters'):
         Client().query(Parent).filter(logical_in('id', [1]), 1).to_sql()
     sql = Client().query('odd;table').logical_in('id', boolean_match('id').must('term')).to_sql()
-    assert 'SELECT id FROM `odd;table` WHERE MATCH(id)' in sql
+    assert 'SELECT id FROM `odd;table` WHERE MATCH(`id`)' in sql
 
 
 @pytest.mark.parametrize('method', ['logical_in', 'filter'])

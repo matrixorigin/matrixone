@@ -9,6 +9,44 @@ is not supported.
 Apply this contract when designing, implementing, or reviewing any change that
 touches RPC messages, plan/pipeline encoding, persisted state, or upgrade.
 
+## Catalog upgrades follow release boundaries
+
+The supported upgrade boundary is a **released deployment to the target
+release**, not one Git commit to the next. Product release numbers and internal
+catalog versions are separate identifiers; resolve the catalog identity from
+the actual supported source release.
+
+- Maintain one pending catalog target for the upcoming release. Before that
+  target is released, consolidate necessary migrations under its existing
+  owners. Do not create a new catalog version, intermediate route, compatibility
+  branch or compatibility test solely to upgrade from an earlier unreleased main commit.
+- Freeze the catalog version, offset, entry ordering and migration effects when
+  released. Do not let a published migration change indirectly through mutable
+  shared SQL definitions. Subsequent changes belong to the next release's
+  target; retain published steps needed by supported upgrade paths.
+- Unreleased main catalogs are not supported upgrade sources. Development
+  environments may need to be rebuilt when their catalog layout changes. Do
+  not infer a supported path merely because two commits have different offsets,
+  or assume identical version/offset markers identify identical unreleased
+  layouts.
+- For a new upgrade version or compatibility branch, name the supported released
+  source and the persisted input that requires it. Compatibility only with an
+  unpublished commit is not sufficient justification. Any exception requires an
+  explicit supported deployment and upgrade contract.
+
+Validate fresh installation and upgrades from supported releases, using pinned
+release tags and resolved commits as source fixtures. Use the latest supported
+release as the default baseline; retain older-source cases where their supported
+paths exercise distinct contracts. Do not use the previous commit or a moving
+main branch as the release compatibility baseline. Synthetic versions in unit
+tests may exercise framework behavior; they do not establish supported
+deployment sources.
+
+This boundary does not weaken recovery within a supported upgrade: still verify
+transaction rollback, retry, committed partial progress, restart and completion
+without duplicate effects. Reuse the existing upgrade owners and recovery paths
+rather than adding a separate state machine for development history.
+
 ## In-cluster RPC: no mixed-version obligations
 
 Peers inside one cluster always run the same binary. Therefore:
@@ -49,8 +87,10 @@ wrote. These remain hard compatibility contracts and valid review findings:
 - **Persisted state:** catalog rows and system tables, TAE object/block and
   checkpoint formats, WAL/LogService records, persisted views/plans/expressions,
   index metadata and index files, configuration files. A new binary must read
-  everything an older binary wrote, either directly or through a bootstrap
-  upgrade step. New on-disk formats are opt-in; never flip a global default.
+  persisted data from supported released sources, either directly or through a
+  bootstrap upgrade step. A supported deployment's retained data and snapshots
+  remain in scope even when originally created by an earlier release. New on-disk
+  formats are opt-in; never flip a global default.
 - **Upgrade steps:** catalog/schema migrations run once at startup, are
   idempotent, and survive a crash part-way through followed by a restart.
 - **Backup/restore:** a backup taken by an older binary restores on a newer one.

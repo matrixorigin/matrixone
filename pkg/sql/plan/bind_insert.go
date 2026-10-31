@@ -64,7 +64,7 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, bindCtx *BindContext)
 	// existence via DetectSqls generated in bindAndOptimizeInsertQuery.
 	origCtx := builder.GetContext()
 	builder.compCtx.SetContext(context.WithValue(origCtx, defines.IgnoreForeignKey{}, true))
-	err := dmlCtx.ResolveTables(builder.compCtx, tree.TableExprs{stmt.Table}, stmt.With, nil, true)
+	err := dmlCtx.ResolveTables(builder.compCtx, tree.TableExprs{stmt.Table}, nil, nil, true)
 	builder.compCtx.SetContext(origCtx)
 	if err != nil {
 		return 0, err
@@ -104,21 +104,19 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, bindCtx *BindContext)
 		}()
 	}
 
-	// Pass WITH clause from INSERT to SELECT if present. The parsed AST can be
-	// retained by PREPARE, so keep the binding-specific rewrite off that shared
-	// wrapper.
-	rowsForBinding := stmt.Rows
-	if stmt.With != nil && stmt.Rows != nil && stmt.Rows.With == nil {
-		rowsCopy := *stmt.Rows
-		rowsCopy.With = stmt.With
-		rowsForBinding = &rowsCopy
+	if err = builder.prepareInsertSourceScope(stmt, bindCtx); err != nil {
+		return 0, err
 	}
+	rowsForBinding := stmt.Rows
 
 	// Capture irregular (IVF/fulltext/master) indexes before appendNodesForInsertStmt
 	// strips them from the 1:1 dedup+MULTI_UPDATE plan (which only covers the base
 	// table and regular indexes). Their computed 1:N maintenance is appended after
 	// createQuery from the materialized new-row image. HNSW/CAGRA/IVF-PQ are cron-
 	// maintained and ride the modern path with no inline sub-plan.
+	if len(dmlCtx.tableDefs) != 1 {
+		return 0, moerr.NewInvalidInput(builder.GetContext(), "INSERT requires one physical target table")
+	}
 	tableDef := dmlCtx.tableDefs[0]
 	if tableDef.TableType == catalog.SystemClusterRel {
 		if stmt.Overwrite {
@@ -2814,7 +2812,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 					return 0, moerr.NewUnsupportedDML(builder.compCtx.GetContext(), "auto_increment default value")
 				}
 
-				updateExpr, err = getDefaultExprForAssignment(builder.GetContext(), colDef, builder.compCtx.GetProcess(), builder.isInsertIgnore)
+				updateExpr, err = getDefaultExprForAssignment(builder.GetContext(), colDef, tableDef.DbName, builder.compCtx.GetProcess(), builder.isInsertIgnore)
 				if err != nil {
 					return 0, err
 				}
@@ -5549,7 +5547,7 @@ func (builder *QueryBuilder) appendNodesForInsertStmt(
 			projList2 = append(projList2, nil)
 			colName2Idx[tableDef.Name+"."+col.Name] = int32(len(projList2) - 1)
 		} else {
-			defExpr, err := getDefaultExprForAssignment(builder.GetContext(), col, builder.compCtx.GetProcess(), assignmentIgnore)
+			defExpr, err := getDefaultExprForAssignment(builder.GetContext(), col, tableDef.DbName, builder.compCtx.GetProcess(), assignmentIgnore)
 			if err != nil {
 				return 0, nil, nil, -1, err
 			}
@@ -5915,7 +5913,7 @@ func (builder *QueryBuilder) buildValueScan(
 		}
 		var defExpr *plan.Expr
 		if isAllDefault {
-			defExpr, err := getDefaultExprForAssignment(builder.GetContext(), col, builder.compCtx.GetProcess(), builder.isInsertIgnore)
+			defExpr, err := getDefaultExprForAssignment(builder.GetContext(), col, tableDef.DbName, builder.compCtx.GetProcess(), builder.isInsertIgnore)
 			if err != nil {
 				return 0, nil, err
 			}
@@ -5992,7 +5990,7 @@ func (builder *QueryBuilder) buildValueScan(
 				}
 
 				if _, ok := r[i].(*tree.DefaultVal); ok {
-					defExpr, err = getDefaultExprForAssignment(builder.GetContext(), col, builder.compCtx.GetProcess(), builder.isInsertIgnore)
+					defExpr, err = getDefaultExprForAssignment(builder.GetContext(), col, tableDef.DbName, builder.compCtx.GetProcess(), builder.isInsertIgnore)
 					if err != nil {
 						return 0, nil, err
 					}
@@ -6156,7 +6154,7 @@ func (builder *QueryBuilder) buildValueScan(
 			col := tableDef.Cols[colIdx]
 			colTyp := makeTypeByPlan2Type(col.Typ)
 			targetTyp := &plan.Expr{Typ: col.Typ, Expr: &plan.Expr_T{T: &plan.TargetType{}}}
-			defExpr, err := getDefaultExprForAssignment(builder.GetContext(), col, builder.compCtx.GetProcess(), builder.isInsertIgnore)
+			defExpr, err := getDefaultExprForAssignment(builder.GetContext(), col, tableDef.DbName, builder.compCtx.GetProcess(), builder.isInsertIgnore)
 			if err != nil {
 				return 0, nil, err
 			}
@@ -6438,4 +6436,18 @@ func (builder *QueryBuilder) buildValueScanWithSubqueries(
 		Children:    []int32{orderedID},
 		BindingTags: []int32{outputTag},
 	}, outputCtx), nil
+}
+
+// prepareInsertSourceScope registers INSERT's outer WITH using the existing
+// SELECT declaration owner. The source SELECT binds in its normal child context,
+// retaining its own WITH and normal lexical shadowing without changing the AST.
+func (builder *QueryBuilder) prepareInsertSourceScope(stmt *tree.Insert, bindCtx *BindContext) error {
+	if stmt.With == nil {
+		return nil
+	}
+	declarations := &tree.Select{With: stmt.With}
+	if registerNumericCteDefinitions(declarations, bindCtx) {
+		seedNumericCteProjectionTypes(builder, bindCtx)
+	}
+	return builder.preprocessCte(declarations, bindCtx)
 }

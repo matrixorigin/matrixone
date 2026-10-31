@@ -290,6 +290,10 @@ func (s *taskService) UpdateDaemonTaskError(ctx context.Context, claim task.Daem
 	return s.store.UpdateDaemonTaskError(ctx, claim, release)
 }
 
+func (s *taskService) RequestDaemonTaskStatus(ctx context.Context, observed task.DaemonTask, status task.TaskStatus) (int, error) {
+	return s.store.RequestDaemonTaskStatus(ctx, observed, status)
+}
+
 func (s *taskService) UpdateDaemonTaskStatus(
 	ctx context.Context,
 	taskID uint64,

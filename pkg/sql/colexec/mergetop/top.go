@@ -263,7 +263,7 @@ func (ctr *container) build(ap *MergeTop, proc *process.Process, analyzer proces
 
 func (ctr *container) processBatch(limit uint64, bat *batch.Batch, proc *process.Process) error {
 	rowCount := bat.RowCount()
-	processCount := rowsToFill(limit, len(ctr.sels), rowCount)
+	processCount := colexec.TopRowsToFill(limit, len(ctr.sels), rowCount)
 
 	if processCount > 0 {
 		if processCount > math.MaxInt-len(ctr.sels) {
@@ -336,17 +336,6 @@ func (ctr *container) processBatch(limit uint64, bat *batch.Batch, proc *process
 		}
 	}
 	return nil
-}
-
-func rowsToFill(limit uint64, currentRows int, batchRows int) int {
-	if uint64(currentRows) >= limit {
-		return 0
-	}
-	remaining := limit - uint64(currentRows)
-	if remaining >= uint64(batchRows) {
-		return batchRows
-	}
-	return int(remaining)
 }
 
 func (ctr *container) eval(limit uint64, proc *process.Process, analyzer process.Analyzer, result *vm.CallResult) error {

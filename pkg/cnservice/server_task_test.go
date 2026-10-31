@@ -385,6 +385,10 @@ func (ts *testTS) UpdateDaemonTaskError(context.Context, task.DaemonTask, bool) 
 	panic("unexpected UpdateDaemonTaskError")
 }
 
+func (ts *testTS) RequestDaemonTaskStatus(context.Context, task.DaemonTask, task.TaskStatus) (int, error) {
+	panic("unexpected RequestDaemonTaskStatus")
+}
+
 func (ts *testTS) UpdateDaemonTaskStatus(
 	ctx context.Context,
 	taskID uint64,

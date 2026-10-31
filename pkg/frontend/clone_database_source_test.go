@@ -33,6 +33,27 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
+// filterCloneDatabaseRoutines keeps independent routine families and omits
+// families whose direct or transitive dependencies cannot exist in the target.
+// SQL routines whose bodies cannot be inspected are omitted when the source
+// has an omitted relation. Supported non-SQL UDFs are opaque but cloneable and
+// are preserved after validateCloneUserDefinedFunctions rejects imported
+// package bodies. UDF overloads are one family here: call sites do not carry
+// enough resolved type information for this metadata pass to distinguish
+// overloads safely.
+func filterCloneDatabaseRoutines(
+	ctx context.Context,
+	source cloneDatabaseSource,
+	lowerCaseTableNames int64,
+) ([]userDefinedFunctionDefinition, []storedProcedureDefinition, error) {
+	omissions, err := collectCloneDatabaseOmissionSet(ctx, source, lowerCaseTableNames)
+	if err != nil {
+		return nil, nil, err
+	}
+	applyCloneDatabaseOmissionSet(&source, omissions, lowerCaseTableNames)
+	return source.userDefinedFuncs, source.storedProcedures, nil
+}
+
 func TestCollectCloneDatabaseSourceReusesFKDefinitions(t *testing.T) {
 	for _, ts := range []int64{0, 42} {
 		t.Run(fmt.Sprint(ts), func(t *testing.T) {
@@ -790,6 +811,13 @@ func TestCollectCloneRoutineReferencesScopesCTEs(t *testing.T) {
 		wantFunctions     []string
 		wantUninspectable bool
 	}{
+		{name: "INSERT physical target shadows source CTE", body: "begin with t as (select 1 n) insert into t select n from t; end", isProcedure: true, wantTables: []string{"t"}},
+		{name: "INSERT different source CTE", body: "begin with q as (select 1 n) insert into t select n from q; end", isProcedure: true, wantTables: []string{"t"}},
+		{name: "INSERT keeps conservative unused CTE dependencies", body: "begin with t as (select n from source_db.read_src) insert into t values(1); end", isProcedure: true, wantTables: []string{"t", "read_src"}},
+		{name: "INSERT keeps physical read source", body: "begin with t as (select n from source_db.read_src) insert into t select n from t; end", isProcedure: true, wantTables: []string{"t", "read_src"}},
+		{name: "multi INSERT physical target shadows CTE", body: "begin with t as (select 1 n) insert all into t(n) values(n) select n from t; end", isProcedure: true, wantTables: []string{"t"}},
+		{name: "multi INSERT keeps conservative unused CTE dependencies", body: "begin with t as (select n from source_db.read_src) insert all into t(n) values(n) select 1 n; end", isProcedure: true, wantTables: []string{"t", "read_src"}},
+
 		{
 			name: "cte shadows external table",
 			body: "with ext_t as (select 1 as n) select n from ext_t",

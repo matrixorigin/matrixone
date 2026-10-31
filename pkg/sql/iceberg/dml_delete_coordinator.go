@@ -260,7 +260,7 @@ func dmlDeleteCoordinatorSpecForRequest(spec DMLDeleteCoordinatorSpec, req icebe
 		spec.Base.BaseSchemaID = req.DMLScan.BaseSchemaID
 	}
 	if strings.TrimSpace(spec.Base.TargetRef) == "" {
-		spec.Base.TargetRef = firstNonEmpty(strings.TrimSpace(req.DMLScan.Ref), strings.TrimSpace(req.DefaultRef), "main")
+		spec.Base.TargetRef = api.FirstNonBlankPreserveWhitespace(strings.TrimSpace(req.DMLScan.Ref), strings.TrimSpace(req.DefaultRef), "main")
 	}
 	if spec.Schema.SchemaID == 0 {
 		spec.Schema.SchemaID = req.DMLScan.BaseSchemaID

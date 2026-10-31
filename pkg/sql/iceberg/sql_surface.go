@@ -16,10 +16,12 @@ package iceberg
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/iceberg/api"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/iceberg/model"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
@@ -32,6 +34,51 @@ const (
 	optionReadMode   = "read_mode"
 	optionWriteMode  = "write_mode"
 )
+
+// IsBuiltinProcedure identifies an unqualified Iceberg builtin CALL.
+func IsBuiltinProcedure(call *tree.CallStmt) bool {
+	if call == nil || call.Name == nil || !call.Name.HasNoNameQualifier() {
+		return false
+	}
+	name := strings.ToLower(strings.TrimSpace(tree.String(call.Name, dialect.MYSQL)))
+	return strings.HasPrefix(name, "iceberg_")
+}
+
+// BuiltinProcedureArgs validates and extracts the common Iceberg CALL arguments.
+// The caller is responsible for checking that call is a recognized builtin.
+func BuiltinProcedureArgs(ctx context.Context, call *tree.CallStmt) (name, target, options string, err error) {
+	name = strings.TrimSpace(tree.String(call.Name, dialect.MYSQL))
+	if len(call.Args) < 1 || len(call.Args) > 2 {
+		return "", "", "", moerr.NewInvalidInputf(ctx, "Iceberg builtin procedure %s requires target and optional options string arguments", name)
+	}
+	target, err = builtinProcedureStringArg(ctx, name, "target", call.Args[0])
+	if err != nil {
+		return "", "", "", err
+	}
+	if len(call.Args) == 2 {
+		options, err = builtinProcedureStringArg(ctx, name, "options", call.Args[1])
+		if err != nil {
+			return "", "", "", err
+		}
+	}
+	return name, target, options, nil
+}
+
+func builtinProcedureStringArg(ctx context.Context, procedure, argName string, expr tree.Expr) (string, error) {
+	var out string
+	switch value := expr.(type) {
+	case *tree.StrVal:
+		out = strings.TrimSpace(value.String())
+	case *tree.NumVal:
+		if value.Kind() == tree.Str {
+			out = strings.TrimSpace(value.String())
+		}
+	}
+	if out == "" {
+		return "", moerr.NewInvalidInputf(ctx, "Iceberg builtin procedure %s requires %s as a string literal", procedure, argName)
+	}
+	return out, nil
+}
 
 type TableMappingSpec struct {
 	CatalogName string
@@ -68,9 +115,9 @@ func ParseTableMappingSpec(ctx context.Context, param *tree.IcebergTableParam) (
 		return TableMappingSpec{}, moerr.NewInvalidInput(ctx, "iceberg table mapping requires catalog, namespace, and table options")
 	}
 
-	defaultRef := firstNonEmpty(values[optionRef], values[optionDefaultRef], model.DefaultRefMain)
-	readMode := firstNonEmpty(values[optionReadMode], model.ReadModeAppendOnly)
-	writeMode := firstNonEmpty(values[optionWriteMode], model.WriteModeReadOnly)
+	defaultRef := api.FirstNonBlankPreserveWhitespace(values[optionRef], values[optionDefaultRef], model.DefaultRefMain)
+	readMode := api.FirstNonBlankPreserveWhitespace(values[optionReadMode], model.ReadModeAppendOnly)
+	writeMode := api.FirstNonBlankPreserveWhitespace(values[optionWriteMode], model.WriteModeReadOnly)
 	if readMode != model.ReadModeAppendOnly && readMode != model.ReadModeMergeOnRead {
 		return TableMappingSpec{}, moerr.NewInvalidInputf(ctx, "unsupported iceberg read_mode %s", readMode)
 	}
@@ -90,13 +137,4 @@ func ParseTableMappingSpec(ctx context.Context, param *tree.IcebergTableParam) (
 			WriteMode:  writeMode,
 		},
 	}, nil
-}
-
-func firstNonEmpty(values ...string) string {
-	for _, value := range values {
-		if strings.TrimSpace(value) != "" {
-			return value
-		}
-	}
-	return ""
 }

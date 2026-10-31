@@ -524,10 +524,14 @@ func (b *baseBinder) baseBindVar(astExpr *tree.VarExpr, depth int32, isRoot bool
 	typ := types.T_text.ToType()
 	var boundStringDomain uint32
 	var nonStringNull bool
+	// Integer system variables resolve their registry-declared type here; a
+	// system variable keeps the historical TEXT envelope whenever the context
+	// resolves nothing for it, unchanged from before a declared resolution
+	// existed.
+	if resolved, ok := b.resolveUserVariableType(astExpr); ok {
+		typ = makeTypeByPlan2Type(resolved)
+	}
 	if !astExpr.System {
-		if resolved, ok := b.resolveUserVariableType(astExpr); ok {
-			typ = makeTypeByPlan2Type(resolved)
-		}
 		if typ.Oid == types.T_any {
 			if preparedBindingState(b.GetContext()) == nil {
 				stringResult := false
@@ -5922,7 +5926,13 @@ func bindFuncExprAndConstFoldInternal(
 			}
 		}
 
-		retExpr, _ = ConstantFold(batch.EmptyForConstFoldBatch, retExpr, proc, false, true)
+		// The final fold can fail (e.g. '1.5' BETWEEN 1 AND 20 casts the
+		// string operand to INT). Surface the error like the >=/<= form does;
+		// discarding it would bind a nil expression.
+		retExpr, err = ConstantFold(batch.EmptyForConstFoldBatch, retExpr, proc, false, true)
+		if err != nil {
+			return nil, err
+		}
 
 	case "in_range":
 		if proc == nil {
@@ -7973,6 +7983,13 @@ func bindFuncExprImplByPlanExpr(
 		} else if args[0].Typ.Id == int32(types.T_interval) && args[1].Typ.Id == int32(types.T_datetime) {
 			name = "date_add"
 			args, err = resetDateFunctionArgs(ctx, args[1], args[0])
+		} else if args[0].Typ.Id == int32(types.T_time) && args[1].Typ.Id == int32(types.T_interval) {
+			// TIME +/- INTERVAL is DATE_ADD/DATE_SUB(TIME, ...), as in MySQL.
+			name = "date_add"
+			args, err = resetDateFunctionArgs(ctx, args[0], args[1])
+		} else if args[0].Typ.Id == int32(types.T_interval) && args[1].Typ.Id == int32(types.T_time) {
+			name = "date_add"
+			args, err = resetDateFunctionArgs(ctx, args[1], args[0])
 		} else if intervalArithmeticTextOperand(args[0]) && args[1].Typ.Id == int32(types.T_interval) {
 			name = "date_add"
 			args, err = resetDateFunctionArgs(ctx, args[0], args[1])
@@ -8016,6 +8033,9 @@ func bindFuncExprImplByPlanExpr(
 			name = "date_sub"
 			args, err = resetDateFunctionArgs(ctx, args[0], args[1])
 		} else if args[0].Typ.Id == int32(types.T_timestamp) && args[1].Typ.Id == int32(types.T_interval) {
+			name = "date_sub"
+			args, err = resetDateFunctionArgs(ctx, args[0], args[1])
+		} else if args[0].Typ.Id == int32(types.T_time) && args[1].Typ.Id == int32(types.T_interval) {
 			name = "date_sub"
 			args, err = resetDateFunctionArgs(ctx, args[0], args[1])
 		} else if intervalArithmeticTextOperand(args[0]) && args[1].Typ.Id == int32(types.T_interval) {
@@ -10788,7 +10808,7 @@ func adjustControlFlowDecimalLiteralMetadata(args []*Expr, argTypes []types.Type
 func decimalIntegerWidth(expr *Expr, typ types.Type, zeroWithoutIntegerDigit ...bool) (int32, bool) {
 	lit := expr.GetLit()
 	if lit == nil || lit.Isnull {
-		return integerMetadataWidth(typ.Oid), false
+		return integerDecimalDigits(typ.Oid), false
 	}
 
 	decimalDigits := func(value string) int32 {
@@ -10816,7 +10836,7 @@ func decimalIntegerWidth(expr *Expr, typ types.Type, zeroWithoutIntegerDigit ...
 	case *plan.Literal_U64Val:
 		return decimalDigits(strconv.FormatUint(value.U64Val, 10)), true
 	default:
-		return integerMetadataWidth(typ.Oid), false
+		return integerDecimalDigits(typ.Oid), false
 	}
 }
 
@@ -10858,7 +10878,7 @@ func controlFlowStringWidth(expr *Expr, typ types.Type) (int32, bool) {
 		}
 	}
 	if typ.Oid.IsInteger() {
-		width := integerMetadataWidth(typ.Oid)
+		width := integerDecimalDigits(typ.Oid)
 		if typ.Oid.IsSignedInt() {
 			width++
 		}
@@ -10899,7 +10919,7 @@ func signedIntegerLiteralWidth(value int64) int32 {
 	return width
 }
 
-func integerMetadataWidth(oid types.T) int32 {
+func integerDecimalDigits(oid types.T) int32 {
 	switch oid {
 	case types.T_int8, types.T_uint8:
 		return 3

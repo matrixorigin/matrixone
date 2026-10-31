@@ -128,7 +128,7 @@ def _read_word(sql: str, pos: int) -> tuple:
 
 
 def is_non_transactional_statement(sql: Optional[str]) -> bool:
-    """True when a string statement is DATA BRANCH MERGE or DATA BRANCH PICK.
+    """True for client-level branch operations and table DDL requiring autocommit.
 
     Leading and inter-keyword whitespace/comments are consumed with the
     server's lexical rules, so "data /* trace */ branch merge ...",
@@ -137,6 +137,16 @@ def is_non_transactional_statement(sql: Optional[str]) -> bool:
     them, while a MERGE/PICK-shaped phrase sitting only inside an inert
     comment (e.g. "-- data branch merge a into b\\nSELECT 1") does not.
     """
+    if not isinstance(sql, str):
+        from sqlalchemy.sql.elements import TextClause
+        from sqlalchemy.sql.ddl import DDL
+
+        if isinstance(sql, TextClause):
+            sql = sql.text
+        elif isinstance(sql, DDL):
+            sql = sql.statement
+        else:
+            return False
     if not sql:
         return False
     pos = 0
@@ -145,9 +155,17 @@ def is_non_transactional_statement(sql: Optional[str]) -> bool:
         pos = _skip_space_and_comments(sql, pos)
         word, pos = _read_word(sql, pos)
         if not word:
-            return False
+            break
         words.append(word.lower())
-    return words[0] == "data" and words[1] == "branch" and words[2] in ("merge", "pick")
+    return (
+        bool(words)
+        and words[0] == 'truncate'
+        or len(words) >= 2
+        and words[:2] == ['alter', 'table']
+        or len(words) >= 3
+        and words[:2] == ['data', 'branch']
+        and words[2] in ('merge', 'pick')
+    )
 
 
 def discard_unrestored_connection(conn):

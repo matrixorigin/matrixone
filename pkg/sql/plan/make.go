@@ -1213,24 +1213,6 @@ func funcCastForSetType(ctx context.Context, expr *Expr, targetType Type) (*Expr
 	return expr, nil
 }
 
-// if typ is decimal128 and decimal64 without scalar and width
-// set a default value for it.
-func rewriteDecimalTypeIfNecessary(typ *plan.Type) *plan.Type {
-	if typ.Id == int32(types.T_decimal128) && typ.Scale == 0 && typ.Width == 0 {
-		typ.Scale = 10
-		typ.Width = 38 // width
-	}
-	if typ.Id == int32(types.T_decimal64) && typ.Scale == 0 && typ.Width == 0 {
-		typ.Scale = 2
-		typ.Width = 6 // width
-	}
-	if typ.Id == int32(types.T_decimal256) && typ.Scale == 0 && typ.Width == 0 {
-		typ.Scale = 10
-		typ.Width = 65 // width
-	}
-	return typ
-}
-
 var MakePlan2Type = makePlan2Type
 
 func makeSimplePlan2Type(typT types.T) plan.Type {

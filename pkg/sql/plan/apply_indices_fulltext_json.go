@@ -672,7 +672,7 @@ func (builder *QueryBuilder) decideJSONProbe(scanNode *plan.Node, idx *plan.Inde
 	// The operator completes the gap with a table_changes tail. If that TVF cannot serve this table
 	// (partitioned, temporary, no explicit pk, or a column colliding with its reserved metadata
 	// names), self-completion is impossible -- decline to a full scan.
-	if validateTableChangesSource(scanNode.ObjRef, scanNode.TableDef) != nil {
+	if catalog.ValidateTableChangesSource(scanNode.ObjRef, scanNode.TableDef) != nil {
 		return jsonProbeSkip, types.TS{}
 	}
 	// table_changes emits only non-hidden source columns, so a composite (or otherwise hidden)

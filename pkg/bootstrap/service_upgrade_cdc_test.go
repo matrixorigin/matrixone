@@ -22,6 +22,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
+	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_6"
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_7"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -108,6 +109,116 @@ func TestLegacyCDCAdmissionBeforeUpgradeMutation(t *testing.T) {
 				require.ErrorAs(t, err, &terminal)
 				require.ErrorContains(t, err, "account=10001 task_id=task-uuid")
 				require.ErrorContains(t, err, "state=\"paused\"")
+			})
+		})
+	}
+}
+
+// TestLegacyCDCAdmissionEmptyCatalogAdmitsSourceOnward pins that a source
+// below the frozen stage with no legacy CDC tasks admits past the gate and
+// proceeds to create the consolidated route - the successor keeps upstream's
+// admission/passage contract at the 4.0.7 final.
+func TestLegacyCDCAdmissionEmptyCatalogAdmitsSourceOnward(t *testing.T) {
+	runtime.RunTest("", func(runtime.Runtime) {
+		source := v4_0_6.Handler.Metadata()
+		var routes []string
+		exec := executor.NewMemExecutor2(func(sql string) (executor.Result, error) {
+			switch {
+			case strings.HasPrefix(sql, "SELECT reldatabase, relname, account_id FROM mo_catalog.mo_tables"):
+				return newBootstrapStringResult("mo_catalog"), nil
+			case sql == versions.LatestVersionSQL:
+				return recoveryVersionResult(t, versions.Version{Version: source.Version, VersionOffset: source.VersionOffset, State: versions.StateReady}), nil
+			case strings.Contains(sql, "from mo_catalog.mo_cdc_task"):
+				return executor.Result{}, nil
+			case strings.Contains(sql, "select version from mo_version"):
+				return newBootstrapStringResult(source.Version), nil
+			case strings.HasPrefix(sql, "insert into mo_upgrade"):
+				routes = append(routes, sql)
+				return executor.Result{}, nil
+			default:
+				return executor.Result{}, nil
+			}
+		}, &testTxnOperator{})
+		s := newServiceForTest("", &memLocker{}, clock.NewHLCClock(func() int64 { return 0 }, 0), nil, exec, func(s *service) { s.initUpgrade() })
+		t.Cleanup(s.stopper.Stop)
+		require.NoError(t, s.doCheckUpgrade(t.Context()))
+		require.Len(t, routes, 1, "a released 4.0.6 source crosses only the consolidated 4.0.7 step")
+		require.Contains(t, fmt.Sprint(routes), fmt.Sprintf("'%s', '%s', '4.0.7',", source.Version, v4_0_7.Handler.Metadata().Version))
+	})
+}
+
+// TestLegacyCDCReadErrorStaysRetryableAtAdmission pins the successor's
+// create-admission contract for a transient catalog read: the wrapped error
+// stays retryable, terminates nothing, and no mutation runs.
+func TestLegacyCDCReadErrorStaysRetryableAtAdmission(t *testing.T) {
+	runtime.RunTest("", func(runtime.Runtime) {
+		source := v4_0_6.Handler.Metadata()
+		want := errors.New("catalog read failed")
+		exec := executor.NewMemExecutor2(func(sql string) (executor.Result, error) {
+			switch {
+			case strings.HasPrefix(sql, "SELECT reldatabase, relname, account_id FROM mo_catalog.mo_tables"):
+				return newBootstrapStringResult("mo_catalog"), nil
+			case sql == versions.LatestVersionSQL:
+				return recoveryVersionResult(t, versions.Version{Version: source.Version, VersionOffset: source.VersionOffset, State: versions.StateReady}), nil
+			case strings.Contains(sql, "from mo_catalog.mo_cdc_task"):
+				return executor.Result{}, want
+			default:
+				return executor.Result{}, fmt.Errorf("no mutation may follow a failed read: %s", sql)
+			}
+		}, &testTxnOperator{})
+		s := newServiceForTest("", &memLocker{}, clock.NewHLCClock(func() int64 { return 0 }, 0), nil, exec, func(s *service) { s.initUpgrade() })
+		t.Cleanup(s.stopper.Stop)
+		err := s.doCheckUpgrade(t.Context())
+		require.ErrorIs(t, err, want)
+		var terminal *terminalUpgradeError
+		require.False(t, errors.As(err, &terminal))
+		require.False(t, s.upgrade.finalVersionCompleted.Load())
+	})
+}
+
+// TestLegacyCDCAdmissionRecoveryEnforcedBeforeResumeVerdict pins the
+// recovery-path admission the successor registration newly reaches: a
+// retained route to the frozen 4.0.7 stage admits only after the legacy CDC
+// catalog is clean, and the paused-task rejection stays terminal before the
+// resume verdict.
+func TestLegacyCDCAdmissionRecoveryEnforcedBeforeResumeVerdict(t *testing.T) {
+	frozen := v4_0_7.Handler.Metadata()
+	target := versions.Version{Version: frozen.Version, VersionOffset: frozen.VersionOffset, State: versions.StateCreated}
+	from := v4_0_6.Handler.Metadata().Version
+	for _, paused := range []bool{true, false} {
+		t.Run(fmt.Sprintf("paused=%v", paused), func(t *testing.T) {
+			runtime.RunTest("", func(runtime.Runtime) {
+				txn := executor.NewMemTxnExecutor(func(sql string) (executor.Result, error) {
+					switch {
+					case strings.Contains(sql, "from mo_upgrade"):
+						return ownRecoveryResult(t, buildUpgradeVersionResult(10, versions.StateUpgradingTenant, from, frozen.Version, frozen.VersionOffset, 0, versions.Yes, versions.Yes, 2, 1)), nil
+					case strings.Contains(sql, "from mo_catalog.mo_cdc_task"):
+						if paused {
+							mp := mpool.MustNewZeroNoFixed()
+							t.Cleanup(func() { mpool.DeleteMPool(mp) })
+							res := executor.NewMemResult([]types.Type{types.T_varchar.ToType(), types.T_varchar.ToType(), types.T_varchar.ToType(), types.T_varchar.ToType()}, mp)
+							res.NewBatchWithRowCount(1)
+							for i, value := range []string{"10001", "task-uuid", "old-task", "paused"} {
+								executor.AppendStringRows(res, i, []string{value})
+							}
+							return res.GetResult(), nil
+						}
+						return executor.Result{}, nil
+					default:
+						return executor.Result{}, fmt.Errorf("validation must read only the retained route and the CDC catalog: %s", sql)
+					}
+				}, &testTxnOperator{})
+				s := newServiceForTest("", &memLocker{}, clock.NewHLCClock(func() int64 { return 0 }, 0), nil, nil, func(s *service) { s.initUpgrade() })
+				t.Cleanup(s.stopper.Stop)
+				err := s.checkUpgradeRecovery(target, txn)
+				if paused {
+					var terminal *terminalUpgradeError
+					require.ErrorAs(t, err, &terminal)
+					require.ErrorContains(t, err, "account=10001 task_id=task-uuid")
+					require.ErrorContains(t, err, "state=\"paused\"")
+				} else {
+					require.NoError(t, err, "a clean CDC catalog admits the retained route's resume verdict")
+				}
 			})
 		})
 	}

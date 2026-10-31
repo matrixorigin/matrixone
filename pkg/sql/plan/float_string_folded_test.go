@@ -77,7 +77,7 @@ func TestLegacyFloatStringFoldedDefaults(t *testing.T) {
 			if !tc.mixed || tc.name == "mixed_explicit" {
 				require.True(t, proto.Equal(source.Cols[1].Default.Expr, execution.Cols[1].Default.Expr), "folded values and explicit limits must remain unchanged")
 			}
-			expr, err := getDefaultExprForAssignment(compiler.GetContext(), execution.Cols[1], compiler.GetProcess(), false)
+			expr, err := getDefaultExprForAssignment(compiler.GetContext(), execution.Cols[1], execution.DbName, compiler.GetProcess(), false)
 			require.NoError(t, err)
 			proc := compiler.GetProcess()
 			exec, err := colexec.NewExpressionExecutor(proc, expr)
@@ -249,7 +249,7 @@ func TestLegacyFloatDefaultSessionWitnesses(t *testing.T) {
 			proc.WarningSink = warnings
 			execution := CloneTableDefForPlan(source, true)
 			require.NoError(t, MigrateLegacyFloatStringTableDef(compiler, execution))
-			expr, err := getDefaultExprForAssignment(reading, execution.Cols[1], proc, false)
+			expr, err := getDefaultExprForAssignment(reading, execution.Cols[1], execution.DbName, proc, false)
 			require.NoError(t, err)
 			exec, err := colexec.NewExpressionExecutor(proc, expr)
 			require.NoError(t, err)

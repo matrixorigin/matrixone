@@ -40,7 +40,7 @@ func handlePauseDaemonTask(ctx context.Context, ses *Session, st *tree.PauseDaem
 		return moerr.NewErrTaskNotFound(ctx, st.TaskID)
 	}
 	// Already in paused status.
-	if tasks[0].TaskStatus == task.TaskStatus_Paused || tasks[0].TaskStatus == task.TaskStatus_PauseRequested {
+	if daemonControlSatisfied(tasks[0].TaskStatus, task.TaskStatus_PauseRequested) {
 		return nil
 	} else if tasks[0].TaskStatus != task.TaskStatus_Running {
 		return moerr.NewInternalErrorf(ctx,
@@ -48,15 +48,7 @@ func handlePauseDaemonTask(ctx context.Context, ses *Session, st *tree.PauseDaem
 			task.TaskStatus_Running,
 			tasks[0].TaskStatus)
 	}
-	tasks[0].TaskStatus = task.TaskStatus_PauseRequested
-	c, err := ts.UpdateDaemonTask(ctx, tasks)
-	if err != nil {
-		return err
-	}
-	if c != 1 {
-		return moerr.NewErrTaskNotFound(ctx, st.TaskID)
-	}
-	return nil
+	return requestDaemonTaskStatus(ctx, ts, tasks[0], task.TaskStatus_PauseRequested)
 }
 
 func handleCancelDaemonTask(ctx context.Context, ses *Session, taskID uint64) error {
@@ -76,21 +68,13 @@ func handleCancelDaemonTask(ctx context.Context, ses *Session, taskID uint64) er
 		return moerr.NewErrTaskNotFound(ctx, taskID)
 	}
 	// Already in canceled status.
-	if tasks[0].TaskStatus == task.TaskStatus_Canceled || tasks[0].TaskStatus == task.TaskStatus_CancelRequested {
+	if daemonControlSatisfied(tasks[0].TaskStatus, task.TaskStatus_CancelRequested) {
 		return nil
 	} else if tasks[0].TaskStatus == task.TaskStatus_Error {
 		return moerr.NewInternalErrorf(ctx,
 			"task can not be canceled because it is in %s state", task.TaskStatus_Error)
 	}
-	tasks[0].TaskStatus = task.TaskStatus_CancelRequested
-	c, err := ts.UpdateDaemonTask(ctx, tasks)
-	if err != nil {
-		return err
-	}
-	if c != 1 {
-		return moerr.NewErrTaskNotFound(ctx, taskID)
-	}
-	return nil
+	return requestDaemonTaskStatus(ctx, ts, tasks[0], task.TaskStatus_CancelRequested)
 }
 
 func handleResumeDaemonTask(ctx context.Context, ses *Session, st *tree.ResumeDaemonTask) error {
@@ -110,7 +94,7 @@ func handleResumeDaemonTask(ctx context.Context, ses *Session, st *tree.ResumeDa
 		return moerr.NewErrTaskNotFound(ctx, st.TaskID)
 	}
 	// Already in canceled status.
-	if tasks[0].TaskStatus == task.TaskStatus_Running || tasks[0].TaskStatus == task.TaskStatus_ResumeRequested {
+	if daemonControlSatisfied(tasks[0].TaskStatus, task.TaskStatus_ResumeRequested) {
 		return nil
 	} else if tasks[0].TaskStatus != task.TaskStatus_Paused {
 		return moerr.NewInternalErrorf(ctx,
@@ -118,13 +102,45 @@ func handleResumeDaemonTask(ctx context.Context, ses *Session, st *tree.ResumeDa
 			task.TaskStatus_Paused,
 			tasks[0].TaskStatus)
 	}
-	tasks[0].TaskStatus = task.TaskStatus_ResumeRequested
-	c, err := ts.UpdateDaemonTask(ctx, tasks)
+	return requestDaemonTaskStatus(ctx, ts, tasks[0], task.TaskStatus_ResumeRequested)
+}
+
+func requestDaemonTaskStatus(ctx context.Context, ts taskservice.TaskService, observed task.DaemonTask, status task.TaskStatus) error {
+	c, err := ts.RequestDaemonTaskStatus(ctx, observed, status)
 	if err != nil {
 		return err
 	}
-	if c != 1 {
-		return moerr.NewErrTaskNotFound(ctx, st.TaskID)
+	if c == 1 {
+		return nil
 	}
-	return nil
+	if c != 0 {
+		return moerr.NewInternalErrorf(ctx, "daemon task %d status request matched %d rows", observed.ID, c)
+	}
+	current, err := ts.QueryDaemonTask(ctx,
+		taskservice.WithTaskIDCond(taskservice.EQ, observed.ID),
+		taskservice.WithAccountID(taskservice.EQ, observed.AccountID),
+	)
+	if err != nil {
+		return err
+	}
+	if len(current) != 1 {
+		return moerr.NewErrTaskNotFound(ctx, observed.ID)
+	}
+	if current[0].Metadata.ID == observed.Metadata.ID && daemonControlSatisfied(current[0].TaskStatus, status) {
+		return nil
+	}
+	return moerr.NewTxnWriteConflictf(ctx, "daemon task %d changed during control request", observed.ID)
+}
+
+func daemonControlSatisfied(current, requested task.TaskStatus) bool {
+	switch requested {
+	case task.TaskStatus_PauseRequested:
+		return current == requested || current == task.TaskStatus_Paused
+	case task.TaskStatus_CancelRequested:
+		return current == requested || current == task.TaskStatus_Canceled
+	case task.TaskStatus_ResumeRequested:
+		return current == requested || current == task.TaskStatus_Running
+	default:
+		return false
+	}
 }

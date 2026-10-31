@@ -131,8 +131,9 @@ var (
 
 	// defaultWaitTimeoutMin default: 1 second
 	defaultWaitTimeoutMin int64 = 1
-	// defaultWaitTimeoutMax default: 24 hours (in seconds)
-	defaultWaitTimeoutMax int64 = 24 * 60 * 60
+	// defaultWaitTimeoutMax default: 1 year (31536000 seconds), matching the
+	// MySQL documented non-Windows wait_timeout ceiling.
+	defaultWaitTimeoutMax int64 = 365 * 24 * 60 * 60
 
 	// defaultInteractiveTimeoutMin default: 1 second
 	defaultInteractiveTimeoutMin int64 = 1

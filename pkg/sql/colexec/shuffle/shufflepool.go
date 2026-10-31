@@ -640,6 +640,24 @@ func (sp *ShufflePool) getLastBatch(shuffleIDX int32) *batch.Batch {
 	return nil
 }
 
+func (sp *ShufflePool) getStoppedBatch(shuffleIDX int32) *batch.Batch {
+	// The caller's earlier ready check can race with the final publication.
+	// Once all producers stop, recheck ready batches before draining tails.
+	if bat := sp.getFullBatch(shuffleIDX); bat != nil {
+		return bat
+	}
+	return sp.getLastBatch(shuffleIDX)
+}
+
+func (sp *ShufflePool) getAnyStoppedBatch() *batch.Batch {
+	// Claim the ready token normally; getAnyLastBatch must not steal a full
+	// batch whose token another consumer has already claimed.
+	if bat := sp.getAnyFullBatch(); bat != nil {
+		return bat
+	}
+	return sp.getAnyLastBatch()
+}
+
 // getLastPartialBatch claims only a non-ready tail. Full batches remain owned
 // by their ready queue tokens, including tokens already claimed by a consumer.
 func (sp *ShufflePool) getLastPartialBatch(shuffleIDX, producer int32) *batch.Batch {

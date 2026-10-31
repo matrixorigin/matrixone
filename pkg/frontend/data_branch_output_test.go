@@ -1447,16 +1447,16 @@ func TestDataBranchOutputWriteRowValues(t *testing.T) {
 	require.Equal(t, "(7,'alice')", insertBuf.String())
 
 	deleteBuf := &bytes.Buffer{}
-	require.NoError(t, writeDeleteRowValues(nil, tblStuff, row, deleteBuf))
+	require.NoError(t, writeDeleteRowValuesWithColIdxes(nil, tblStuff, row, tblStuff.def.pkColIdxes, deleteBuf, false))
 	require.Equal(t, "7", deleteBuf.String())
 
 	tblStuff.def.pkColIdxes = []int{0, 1}
 	deleteTupleBuf := &bytes.Buffer{}
-	require.NoError(t, writeDeleteRowValues(nil, tblStuff, row, deleteTupleBuf))
+	require.NoError(t, writeDeleteRowValuesWithColIdxes(nil, tblStuff, row, tblStuff.def.pkColIdxes, deleteTupleBuf, false))
 	require.Equal(t, "(7,'alice')", deleteTupleBuf.String())
 
 	alwaysTupleBuf := &bytes.Buffer{}
-	require.NoError(t, writeDeleteRowValuesAsTuple(nil, tblStuff, row, alwaysTupleBuf))
+	require.NoError(t, writeDeleteRowValuesWithColIdxes(nil, tblStuff, row, tblStuff.def.pkColIdxes, alwaysTupleBuf, true))
 	require.Equal(t, "(7,'alice')", alwaysTupleBuf.String())
 
 	emptyKeyBuf := &bytes.Buffer{}

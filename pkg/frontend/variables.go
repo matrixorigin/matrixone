@@ -1586,7 +1586,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Scope:             ScopeBoth,
 		Dynamic:           true,
 		SetVarHintApplies: false,
-		Type:              InitSystemVariableIntType("wait_timeout", 1, 2147483, false),
+		Type:              InitSystemVariableIntType("wait_timeout", 1, 31536000, false),
 		Default:           int64(86400),
 	},
 	warningCountSystemVariable: {

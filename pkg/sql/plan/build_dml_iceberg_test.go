@@ -1045,3 +1045,26 @@ func icebergDMLExprContainsColumn(expr *planpb.Expr, name string) bool {
 	}
 	return false
 }
+
+func TestIcebergUpdateTargetSchemaScope(t *testing.T) {
+	for _, tc := range []struct {
+		sql    string
+		reject bool
+	}{
+		{"update gold_orders set wrong.gold_orders.id=7", true},
+		{"update gold_orders set id=7", false},
+	} {
+		t.Run(tc.sql, func(t *testing.T) {
+			ctx := newIcebergTestCompilerContext(t, nil)
+			stmt, err := mysql.ParseOne(t.Context(), tc.sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			_, err = BuildPlan(ctx, stmt, false)
+			if tc.reject {
+				require.ErrorContains(t, err, "unknown UPDATE target")
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
+}

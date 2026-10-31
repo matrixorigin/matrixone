@@ -888,7 +888,7 @@ func (d Date) Week(mode int) int {
 // DayOfWeekFromCalendar returns the weekday for a validated calendar date,
 // including MySQL's year-0 date values.
 func DayOfWeekFromCalendar(year int32, month, day uint8) Weekday {
-	weekday := calcWeekday(calcDaynr(int(year), int(month), int(day)), false)
+	weekday := calcWeekday(MySQLDayNumber(int(year), int(month), int(day)), false)
 	return Weekday((weekday + 1) % 7)
 }
 
@@ -912,8 +912,8 @@ func calcWeek(d Date, wb WeekBehaviour) (year int, week int) {
 
 func calcWeekFromCalendar(ty, tm, td int, wb WeekBehaviour) (year int, week int) {
 	var days int
-	daynr := calcDaynr(ty, tm, td)
-	firstDaynr := calcDaynr(ty, 1, 1)
+	daynr := MySQLDayNumber(ty, tm, td)
+	firstDaynr := MySQLDayNumber(ty, 1, 1)
 	mondayFirst := wb.bitAnd(WeekMondayFirst)
 	weekYear := wb.bitAnd(WeekYear)
 	firstWeekday := wb.bitAnd(WeekFirstWeekday)
@@ -971,8 +971,8 @@ func calcWeekday(daynr int, sundayFirstDayOfWeek bool) int {
 	return daynr % 7
 }
 
-// Calculate nr of day since year 0 in new date-system (from 1615).
-func calcDaynr(year, month, day int) int {
+// MySQLDayNumber calculates the MySQL day number from calendar components.
+func MySQLDayNumber(year, month, day int) int {
 	if year == 0 && month == 0 {
 		return 0
 	}

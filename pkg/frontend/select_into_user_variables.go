@@ -74,6 +74,25 @@ func selectIntoUserVariablesOutputCallback(
 	// statement.
 	collector := newSelectIntoUserVariables(selectStmt.IntoVars)
 	execCtx.selectInto = collector
+	// A tier-2 retry replays the statement with the capture closure below,
+	// so the collector must shed the failed generation's rows before that
+	// replay (design §4 D's discard-before-replay attempt-output
+	// lifecycle): otherwise rowCount leaks into the retried generation and
+	// a legitimate one-row result surfaces moerr.NewTooManyRows, while an
+	// empty retried result would assign the failed generation's stale row
+	// (#30359 review). The compiler's retry transition invokes the armed
+	// hook after the failed generation's running SQL has quiesced and
+	// before the replay; the per-statement SessionInfo rebuild clears it at
+	// the next statement boundary.
+	if execCtx != nil && execCtx.proc != nil && execCtx.proc.Base != nil {
+		execCtx.proc.Base.SessionInfo.RetryDiscardOutput = func() error {
+			// The reset only scrubs the collector's in-memory capture and
+			// cannot fail; the hook's error contract exists for cleanup
+			// that can (#30359 review).
+			collector.resetForRetry()
+			return nil
+		}
+	}
 	return func(bat *batch.Batch, _ *perfcounter.CounterSet) error {
 		return collector.capture(execCtx.reqCtx, ses, bat)
 	}
@@ -111,6 +130,23 @@ func (collector *selectIntoUserVariables) capture(ctx context.Context, ses FeSes
 	}
 	collector.rowCount += uint64(bat.RowCount())
 	return nil
+}
+
+// resetForRetry discards everything one failed statement generation
+// captured before the compiler's retry transition replays the statement.
+// The collector belongs to the whole statement — the compiler reuses its
+// capture closure across generations and executeStatusStmt applies it once
+// the final run succeeds — so the collector identity and its variable list
+// survive, while the captured row and its count return to the zero state
+// (#30359 review).
+func (collector *selectIntoUserVariables) resetForRetry() {
+	collector.mu.Lock()
+	defer collector.mu.Unlock()
+	collector.row = nil
+	collector.rowIsBin = nil
+	collector.rowType = nil
+	collector.rowDomain = nil
+	collector.rowCount = 0
 }
 
 func selectIntoUserVariableValueAndType(value any, typ types.Type) (any, plan2.Type) {

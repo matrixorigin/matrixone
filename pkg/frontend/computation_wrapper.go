@@ -1695,6 +1695,10 @@ func initExecuteStmtParamWithResolverInSession(
 		prepareStmt.percentileParamPlan = executionPlan
 		prepareStmt.hasPercentileParams = plan2.PreparedPlanHasPercentileParams(executionPlan)
 	}
+	if prepareStmt.ewmParamPlan != executionPlan {
+		prepareStmt.ewmParamPlan = executionPlan
+		prepareStmt.hasEwmParams = plan2.PreparedPlanHasEwmParams(executionPlan)
+	}
 	cwft.paramVals = nil
 	if prepareStmt.params != nil && prepareStmt.params.Length() > 0 { // use binary protocol
 		if prepareStmt.params.Length() != numParams {
@@ -1910,7 +1914,7 @@ func initExecuteStmtParamWithResolverInSession(
 			key = preparedFieldBindingKey(bindingKey, fieldTypes)
 			runtimePlanApplied = true
 			cwft.preparedJoinDiagnosticFree = bound.DiagnosticFree
-			cacheable := bound.DiagnosticFree && !bound.ValueDependent && !prepareStmt.hasPaginationParams && !prepareStmt.hasPercentileParams
+			cacheable := bound.DiagnosticFree && !bound.ValueDependent && !prepareStmt.hasPaginationParams && !prepareStmt.hasPercentileParams && !prepareStmt.hasEwmParams
 			switch prepareStmt.PrepareStmt.(type) {
 			case *tree.ExplainStmt, *tree.ExplainAnalyze, *tree.ExplainPhyPlan:
 				cacheable = false
@@ -2803,6 +2807,14 @@ func shouldCachePrepareCompile(p *plan.Plan) bool {
 		// The percentile marker is evaluated while the physical aggregate is
 		// constructed and becomes immutable executor configuration. Reusing that
 		// compile would reuse an earlier EXECUTE value for the same parameter type.
+		return false
+	}
+	if plan2.PreparedPlanHasEwmParams(p) {
+		// The ewm decay/policy positions are evaluated while the window
+		// arguments' configuration bytes are constructed — execution-
+		// dependent forms (markers, user variables, real-time expressions)
+		// all resolve there per EXECUTE; a reused compile would freeze an
+		// earlier execution's evaluation for the same parameter types.
 		return false
 	}
 	query := p.GetQuery()

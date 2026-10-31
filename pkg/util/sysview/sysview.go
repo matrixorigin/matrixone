@@ -56,7 +56,10 @@ var (
 		InformationSchemaTablesV118DDL,
 		InformationSchemaPartitionsDDL,
 		InformationSchemaViewsDDL,
-		InformationSchemaStatisticsDDL,
+		// The current STATISTICS identity reports retained prefix lengths
+		// as a typed SUB_PART and keeps actual SQL NULL for whole-column
+		// parts (#30935).
+		InformationSchemaStatisticsPrefixSubPartDDL,
 		InformationSchemaReferentialConstraintsDDL,
 		InformationSchemaCheckConstraintsDDL,
 		InformationSchemaEnginesDDL,

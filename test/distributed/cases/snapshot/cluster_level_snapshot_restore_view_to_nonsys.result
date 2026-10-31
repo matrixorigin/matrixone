@@ -522,7 +522,7 @@ drop view if exists employees_by_department_view;
 drop view if exists employees_by_salary_view;
 drop view if exists avg_salary_per_department_view;
 drop table test02.employees;
-no such table test02.employees
+Unknown table 'test02.employees'
 drop database test02;
 Can't drop database 'test02'; database doesn't exist
 drop snapshot sp10;

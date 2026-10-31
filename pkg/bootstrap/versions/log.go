@@ -22,3 +22,8 @@ import (
 func getLogger(sid string) *log.MOLogger {
 	return runtime.GetLogger(sid)
 }
+
+// StrictServiceLogger preserves the historical version handlers' service-only lookup.
+func StrictServiceLogger(sid string) *log.MOLogger {
+	return runtime.ServiceRuntime(sid).Logger()
+}

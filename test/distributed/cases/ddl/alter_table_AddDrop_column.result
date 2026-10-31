@@ -326,7 +326,7 @@ alter table test01 drop column col1;
 no such table test.test01
 create table t(a int);
 drop table test01;
-no such table test.test01
+Unknown table 'test.test01'
 drop role role_r1;
 drop user role_u1;
 drop table if exists transaction01;
@@ -515,7 +515,7 @@ c    d
 select * from test_transaction;
 SQL parser error: table "test_transaction" does not exist
 drop table test_transaction;
-no such table test.test_transaction
+Unknown table 'test.test_transaction'
 drop table if exists transaction03;
 create table transaction03 (c int primary key,d int);
 insert into transaction03 values(1,1);

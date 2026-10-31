@@ -676,6 +676,42 @@ func TestInitInformationSchemaSysTablesForProtocol_UsesProtocolAwareViews(t *tes
 	require.NotContains(t, current, sysview.InformationSchemaViewsLegacyDDL)
 }
 
+// TestCreateTablesInformationSchemaPublishesDeclaredMetadataUnconditionally
+// pins the account-creation publication contract of the declared catalog
+// metadata: the corrected COLUMNS identity (declared ENUM/SET label
+// character metadata with SQL NULL numeric classification and the unbounded
+// generated expression) and the prefix-aware STATISTICS identity publish
+// whenever account creation succeeds. Account creation installs the complete
+// current definition set or aborts, so no peer answer or deferral can leave a
+// fresh account with pre-correction metadata, and a predecessor identity is
+// never authored.
+func TestCreateTablesInformationSchemaPublishesDeclaredMetadataUnconditionally(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	ctx = defines.AttachAccount(ctx, 42, 1, 2)
+	bh := mock_frontend.NewMockBackgroundExec(gomock.NewController(t))
+	bh.EXPECT().ClearExecResultSet().AnyTimes()
+	bh.EXPECT().GetExecResultSet().Return([]interface{}{
+		newMrsForCheckTenant([][]interface{}{{`{"result":"cn-a:126,cn-b:126"}`}}),
+	}).AnyTimes()
+	var executed []string
+	bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(
+		func(_ context.Context, sql string) error {
+			executed = append(executed, sql)
+			return nil
+		}).AnyTimes()
+
+	require.NoError(t, createTablesInInformationSchemaOfGeneralTenant(ctx, bh))
+	require.Contains(t, executed, sysview.InformationSchemaColumnsDDL)
+	require.Contains(t, executed, sysview.InformationSchemaStatisticsPrefixSubPartDDL)
+	// A fresh publication never installs the predecessor templates; they are
+	// recognized only for reading state older binaries persisted (historical
+	// snapshots), never authored here.
+	require.NotContains(t, executed, sysview.InformationSchemaColumnsV100DDL())
+	require.NotContains(t, executed, sysview.InformationSchemaColumnsV110DDL())
+	require.NotContains(t, executed, sysview.InformationSchemaStatisticsDDL)
+}
+
 func containsSQL(sqls []string, expected string) bool {
 	for _, sql := range sqls {
 		if sql == expected {
@@ -13285,24 +13321,7 @@ func newMrsForRoleIdOfUserId(rows [][]interface{}) *MysqlResultSet {
 }
 
 func newMrsForCheckRoleHasPrivilege(rows [][]interface{}) *MysqlResultSet {
-	mrs := &MysqlResultSet{}
-
-	col1 := &MysqlColumn{}
-	col1.SetName("role_id")
-	col1.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
-
-	col2 := &MysqlColumn{}
-	col2.SetName("with_grant_option")
-	col2.SetColumnType(defines.MYSQL_TYPE_BOOL)
-
-	mrs.AddColumn(col1)
-	mrs.AddColumn(col2)
-
-	for _, row := range rows {
-		mrs.AddRow(row)
-	}
-
-	return mrs
+	return newMrsForRoleIdOfUserId(rows)
 }
 
 func newMrsForInheritedRoleIdOfRoleId(rows [][]interface{}) *MysqlResultSet {
@@ -13353,29 +13372,7 @@ func newMrsForGetAllStuffRoleGrant(rows [][]interface{}) *MysqlResultSet {
 }
 
 func newMrsForCheckRoleGrant(rows [][]interface{}) *MysqlResultSet {
-	mrs := &MysqlResultSet{}
-
-	col1 := &MysqlColumn{}
-	col1.SetName("granted_id")
-	col1.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
-
-	col2 := &MysqlColumn{}
-	col2.SetName("grantee_id")
-	col2.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
-
-	col3 := &MysqlColumn{}
-	col3.SetName("with_grant_option")
-	col3.SetColumnType(defines.MYSQL_TYPE_BOOL)
-
-	mrs.AddColumn(col1)
-	mrs.AddColumn(col2)
-	mrs.AddColumn(col3)
-
-	for _, row := range rows {
-		mrs.AddRow(row)
-	}
-
-	return mrs
+	return newMrsForGetAllStuffRoleGrant(rows)
 }
 
 func newMrsForPasswordOfUser(rows [][]interface{}) *MysqlResultSet {
@@ -13631,19 +13628,7 @@ func newMrsForCheckUserGrant(rows [][]interface{}) *MysqlResultSet {
 }
 
 func newMrsForRoleOfUser(rows [][]interface{}) *MysqlResultSet {
-	mrs := &MysqlResultSet{}
-
-	col1 := &MysqlColumn{}
-	col1.SetName("role_id")
-	col1.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
-
-	mrs.AddColumn(col1)
-
-	for _, row := range rows {
-		mrs.AddRow(row)
-	}
-
-	return mrs
+	return newMrsForRoleIdOfRole(rows)
 }
 
 func newMrsForCheckDatabase(rows [][]interface{}) *MysqlResultSet {
@@ -13929,19 +13914,7 @@ func newMrsForRoleWGO(rows [][]interface{}) *MysqlResultSet {
 }
 
 func newMrsForPrivilegeWGO(rows [][]interface{}) *MysqlResultSet {
-	mrs := &MysqlResultSet{}
-
-	col1 := &MysqlColumn{}
-	col1.SetName("role_id")
-	col1.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
-
-	mrs.AddColumn(col1)
-
-	for _, row := range rows {
-		mrs.AddRow(row)
-	}
-
-	return mrs
+	return newMrsForRoleIdOfRole(rows)
 }
 
 func newMrsForSystemVariableNameOfAccount(rows [][]interface{}) *MysqlResultSet {

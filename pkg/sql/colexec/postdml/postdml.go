@@ -119,13 +119,13 @@ func (postdml *PostDml) runPostDml(proc *process.Process, result vm.CallResult) 
 		dbname := postdml.PostDmlCtx.Ref.GetSchemaName()
 
 		alias := "src"
-		sourcetbl := fmt.Sprintf("`%s`.`%s`", dbname, ftctx.SourceTableName)
-		indextbl := fmt.Sprintf("`%s`.`%s`", dbname, ftctx.IndexTableName)
-		pkcolname := fmt.Sprintf("%s.%s", alias, postdml.PostDmlCtx.PrimaryKeyName)
+		sourcetbl := sqlquote.QualifiedIdent(dbname, ftctx.SourceTableName)
+		indextbl := sqlquote.QualifiedIdent(dbname, ftctx.IndexTableName)
+		pkcolname := sqlquote.QualifiedIdent(alias, postdml.PostDmlCtx.PrimaryKeyName)
 
 		var parts []string
 		for _, p := range ftctx.Parts {
-			parts = append(parts, fmt.Sprintf("%s.%s", alias, p))
+			parts = append(parts, sqlquote.QualifiedIdent(alias, p))
 		}
 
 		if postdml.PostDmlCtx.IsDelete {

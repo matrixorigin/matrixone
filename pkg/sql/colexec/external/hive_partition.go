@@ -820,30 +820,6 @@ func collectFiles(
 	return nil
 }
 
-// filterPartitionDir returns true if the directory should be kept (not pruned).
-// Only MatchFalse causes pruning; MatchUnknown is conservative (keeps directory).
-func filterPartitionDir(dirValue string, colType tree.HivePartColType, pred *PartitionPredicate) bool {
-	if pred == nil {
-		return true
-	}
-	var result MatchResult
-	switch pred.Op {
-	case PartOpEq, PartOpIn:
-		result = matchPartitionValue(dirValue, pred.Values, colType)
-	case PartOpLt, PartOpLe, PartOpGt, PartOpGe:
-		result = matchPartitionCompare(dirValue, pred.Values, colType, pred.Op)
-	case PartOpBetween:
-		result = matchPartitionRange(dirValue, pred.Values, colType)
-	case PartOpIsNull:
-		result = matchPartitionNull(dirValue, true)
-	case PartOpIsNotNull:
-		result = matchPartitionNull(dirValue, false)
-	default:
-		result = MatchUnknown
-	}
-	return result != MatchFalse
-}
-
 // MatchResult is a three-state result for partition value comparison.
 type MatchResult int
 
@@ -983,7 +959,7 @@ func matchIntCompare(dirVal, predVal string, bitSize int, op PartitionOp) MatchR
 	if err != nil {
 		return MatchUnknown
 	}
-	if compareSigned(dv, pv, op) {
+	if comparePartitionInteger(dv, pv, op) {
 		return MatchTrue
 	}
 	return MatchFalse
@@ -998,28 +974,13 @@ func matchUintCompare(dirVal, predVal string, bitSize int, op PartitionOp) Match
 	if err != nil {
 		return MatchUnknown
 	}
-	if compareUnsigned(dv, pv, op) {
+	if comparePartitionInteger(dv, pv, op) {
 		return MatchTrue
 	}
 	return MatchFalse
 }
 
-func compareSigned(left, right int64, op PartitionOp) bool {
-	switch op {
-	case PartOpLt:
-		return left < right
-	case PartOpLe:
-		return left <= right
-	case PartOpGt:
-		return left > right
-	case PartOpGe:
-		return left >= right
-	default:
-		return false
-	}
-}
-
-func compareUnsigned(left, right uint64, op PartitionOp) bool {
+func comparePartitionInteger[T int64 | uint64](left, right T, op PartitionOp) bool {
 	switch op {
 	case PartOpLt:
 		return left < right

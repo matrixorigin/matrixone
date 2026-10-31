@@ -148,6 +148,13 @@ func NewCompile(
 	c.sql = sqlmongodb.RedactSQLForDiagnostics(sql)
 	c.proc.SetMessageBoard(c.MessageBoard)
 	c.sequenceState = captureSequenceStatementState(proc)
+	// One fresh tier-2 retry state per statement execution (design §4 D):
+	// publication unset, no retry window until this statement's own first
+	// arbitrated admission. Retry generations carry this instance over the
+	// reseed (buildRetryCompile re-installs it after calling NewCompile), so
+	// the flag and the sticky window survive retries of THIS statement while
+	// a new statement can never inherit a predecessor's window.
+	proc.ReplaceSequenceRetryState(process.NewSequenceRetryState())
 	c.stmt = stmt
 	c.addr = addr
 	c.isInternal = isInternal
@@ -305,6 +312,10 @@ func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*bat
 	proc.ResetCloneTxnOperator()
 	c.proc = proc
 	c.sequenceState = captureSequenceStatementState(proc)
+	// Per-statement tier-2 retry state (see NewCompile): a pooled Compile
+	// serving a new query starts with a fresh publication flag and no retry
+	// window.
+	proc.ReplaceSequenceRetryState(process.NewSequenceRetryState())
 	c.proc.BeginFoundRowsStatement(statementHasSQLCalcFoundRows(c.stmt))
 	c.applyPlanSnapshot()
 	c.captureStringShuffleHashAlgorithm()
@@ -1389,8 +1400,19 @@ func (c *Compile) compileQuery(qry *plan.Query) ([]*Scope, error) {
 	c.foundRowsOwnerNode = c.selectFoundRowsOwnerNode(qry)
 	c.auxiliaryProductScopes = nil
 	c.compiledLocalRuntimeFilterNodes = nil
+	deepTags, deepLogicalSafe := plan2.DeepOrdinaryRuntimeFilterTags(qry)
+	c.deepRuntimeFilterTags = nil
+	c.completeDeepRuntimeFilterBuilds = nil
+	if len(deepTags) > 0 {
+		c.deepRuntimeFilterTags = make(map[int32]bool, len(deepTags))
+		for _, tag := range deepTags {
+			c.deepRuntimeFilterTags[tag] = true
+		}
+	}
 	defer func() {
 		c.compiledLocalRuntimeFilterNodes = nil
+		c.deepRuntimeFilterTags = nil
+		c.completeDeepRuntimeFilterBuilds = nil
 	}()
 
 	start := time.Now()
@@ -1468,6 +1490,7 @@ func (c *Compile) compileQuery(qry *plan.Query) ([]*Scope, error) {
 	if err = validateLocalRuntimeFilterTopology(qry, c.compiledLocalRuntimeFilterNodes, steps); err != nil {
 		return nil, err
 	}
+	c.validateDeepRuntimeFilterTopology(deepTags, deepLogicalSafe, steps)
 	if queryNeedsGroupingTransport(qry) {
 		attachGroupingTransportPlan(steps, &plan.Plan{Plan: &plan.Plan_Query{Query: qry}})
 	}
@@ -1982,6 +2005,15 @@ func (c *Compile) compilePlanScopeWithUnionAllDemand(
 		ss = c.compileTableScanFiltersAndProjection(node, ss)
 		return ss, nil
 	case plan.Node_FILTER, plan.Node_ASSERT, plan.Node_PROJECT:
+		if c.canCompileParallelUnionAllProjection(step, curNodeIdx, nodes, outerUnionAllDemand) {
+			ss, err = c.compileParallelUnionAllInput(step, node.Children[0], nodes)
+			if err != nil {
+				return nil, err
+			}
+			c.setAnalyzeCurrent(ss, int(curNodeIdx))
+			ss = c.compileProjection(node, ss)
+			return []*Scope{c.newMergeScope(ss)}, nil
+		}
 		childDemand := streamingUnionAllDemand(node, outerUnionAllDemand)
 		ss, err = c.compilePlanScopeWithUnionAllDemand(step, node.Children[0], nodes, childDemand)
 		if err != nil {
@@ -3512,7 +3544,7 @@ func (c *Compile) hydrateMongoScan(node *plan.Node) error {
 		scan.Database = string(cols[3].GetBytesAt(0))
 		scan.Collection = string(cols[4].GetBytesAt(0))
 		scan.Columns = sqlmongodb.ColumnsToPlan(columns)
-		scan.ProjectedPaths = projectedMongoPlanPaths(columns)
+		scan.ProjectedPaths = sqlmongodb.ProjectedPaths(columns)
 		scan.MaxParallelism = parallelism[0]
 		found = true
 		return false
@@ -3545,12 +3577,7 @@ func projectedMongoColumns(
 	if tableDef == nil {
 		return nil, moerr.NewInternalError(ctx, "MongoDB external scan is missing its table definition")
 	}
-	names := make([]string, 0, len(tableDef.Cols))
-	for _, column := range tableDef.Cols {
-		if column != nil && !column.Hidden && !catalog.IsForeignQueryCol(column.Name, column.ColId) {
-			names = append(names, column.Name)
-		}
-	}
+	names := sqlmongodb.RetainedColumnNames(tableDef.Cols)
 	if len(names) == 0 {
 		if allowEmpty {
 			return nil, nil
@@ -3558,19 +3585,6 @@ func projectedMongoColumns(
 		return nil, moerr.NewInternalError(ctx, "MongoDB external scan has no retained mapped columns")
 	}
 	return sqlmongodb.ProjectColumnsByName(ctx, columns, names)
-}
-
-func projectedMongoPlanPaths(columns []sqlmongodb.ColumnMapping) []string {
-	result := make([]string, 0, len(columns))
-	seen := make(map[string]struct{}, len(columns))
-	for _, column := range columns {
-		if _, ok := seen[column.Path]; ok {
-			continue
-		}
-		seen[column.Path] = struct{}{}
-		result = append(result, column.Path)
-	}
-	return result
 }
 
 func (c *Compile) getParallelSizeForExternalScan(node *plan.Node, cpuNum int) int {
@@ -6292,22 +6306,24 @@ func (c *Compile) compileUnion(node *plan.Node, left []*Scope, right []*Scope) [
 // copy of a set key per worker, so their local operator-level deduplication is
 // insufficient once those worker outputs are merged.
 func (c *Compile) mergeDistinctSetScopes(node *plan.Node, scopes []*Scope, isFirst bool) []*Scope {
-	rs := c.newMergeScope(scopes)
-	gn := new(plan.Node)
+	gn := &plan.Node{SpillMem: node.SpillMem}
 	gn.GroupBy = make([]*plan.Expr, len(node.ProjectList))
 	for i := range gn.GroupBy {
 		gn.GroupBy[i] = plan2.DeepCopyExpr(node.ProjectList[i])
 		gn.GroupBy[i].Typ.NotNullable = false
 	}
 	if len(node.PhysicalEqualityKeyList) > 0 {
-		visibleCount := len(gn.GroupBy)
-		for i, expr := range node.PhysicalEqualityKeyList {
-			key := plan2.DeepCopyExpr(expr)
+		keys := plan2.DeepCopyExprList(node.PhysicalEqualityKeyList)
+		for _, key := range keys {
 			key.Typ.NotNullable = false
-			gn.GroupBy = append(gn.GroupBy, key)
-			gn.GroupByHashKey = append(gn.GroupByHashKey, int32(visibleCount+i))
+		}
+		var err error
+		gn.GroupBy, gn.GroupByHashKey, err = plan2.CompactPhysicalGroupKeys(gn.GroupBy, keys)
+		if err != nil {
+			panic(err)
 		}
 	}
+	rs := c.newMergeScope(scopes)
 	op := constructGroup(c.proc.Ctx, gn, node, true, 0, c.proc)
 	if len(node.PhysicalEqualityKeyList) > 0 {
 		op.ProjectList = make([]*plan.Expr, len(node.ProjectList))
@@ -7265,8 +7281,8 @@ func (c *Compile) compileProbeSideForBroadcastJoin(node, left, right *plan.Node,
 		currentFirstFlag := c.anal.isFirst
 		for i := range rs {
 			var op vm.Operator
-			if canUseHashMarkJoinWithInputs(node, left, right) {
-				op = constructBroadcastHashMarkJoin(node, left, leftTypes, rightTypes, c.proc)
+			if canUseHashMarkJoinWithInputs(node, left, right) || canUseHashExistenceJoinWithInputs(node, left, right) {
+				op = constructBroadcastHashMarkJoin(node, left, right, leftTypes, rightTypes, c.proc)
 			} else {
 				op = constructLoopJoin(node, leftTypes, rightTypes, c.proc)
 			}
@@ -7287,8 +7303,8 @@ func (c *Compile) compileBuildSideForBroadcastJoin(node *plan.Node, rs, buildSco
 	}
 
 	if len(rs) == 1 { // broadcast join on single cn
-		buildScopes[0].setRootOperator(constructJoinBuildOperator(
-			c, rs[0].RootOp, int32(rs[0].NodeInfo.Mcpu), node.RuntimeFilterBuildList))
+		buildScopes[0].setRootOperator(c.noteCompleteBroadcastRuntimeFilterBuild(constructJoinBuildOperator(
+			c, rs[0].RootOp, int32(rs[0].NodeInfo.Mcpu), node.RuntimeFilterBuildList)))
 		rs[0].PreScopes = append(rs[0].PreScopes, buildScopes[0])
 		return rs
 	}
@@ -7338,8 +7354,8 @@ func (c *Compile) compileBuildSideForBroadcastJoin(node *plan.Node, rs, buildSco
 			c.hasMergeOp = true
 			mergeOp.SetAnalyzeControl(c.anal.curNodeIdx, false)
 			bs.setRootOperator(mergeOp)
-			bs.setRootOperator(constructJoinBuildOperator(
-				c, tmp[0].RootOp, probeWorkers, node.RuntimeFilterBuildList))
+			bs.setRootOperator(c.noteCompleteBroadcastRuntimeFilterBuild(constructJoinBuildOperator(
+				c, tmp[0].RootOp, probeWorkers, node.RuntimeFilterBuildList)))
 			tmp[0].PreScopes = append(tmp[0].PreScopes, bs)
 			buildOpScopes = append(buildOpScopes, bs)
 		}
@@ -7362,8 +7378,8 @@ func (c *Compile) compileBuildSideForBroadcastJoin(node *plan.Node, rs, buildSco
 		c.hasMergeOp = true
 		mergeOp.SetAnalyzeControl(c.anal.curNodeIdx, false)
 		bs.setRootOperator(mergeOp)
-		bs.setRootOperator(constructJoinBuildOperator(
-			c, rs[i].RootOp, int32(rs[i].NodeInfo.Mcpu), node.RuntimeFilterBuildList))
+		bs.setRootOperator(c.noteCompleteBroadcastRuntimeFilterBuild(constructJoinBuildOperator(
+			c, rs[i].RootOp, int32(rs[i].NodeInfo.Mcpu), node.RuntimeFilterBuildList)))
 		rs[i].PreScopes = append(rs[i].PreScopes, bs)
 		buildOpScopes = append(buildOpScopes, bs)
 	}
@@ -7394,7 +7410,7 @@ func (c *Compile) compileSharedBroadcastJoin(node *plan.Node, probes []*Scope, s
 		mergeOp := merge.NewArgument()
 		mergeOp.SetAnalyzeControl(c.anal.curNodeIdx, false)
 		build.setRootOperator(mergeOp)
-		build.setRootOperator(constructJoinBuildOperator(c, group[0].RootOp, 0, node.RuntimeFilterBuildList))
+		build.setRootOperator(c.noteCompleteBroadcastRuntimeFilterBuild(constructJoinBuildOperator(c, group[0].RootOp, 0, node.RuntimeFilterBuildList)))
 		pending.builds = append(pending.builds, build)
 	}
 	// Dispatch is wired now, while the probe still owns the join-node analysis.
@@ -11767,3 +11783,48 @@ func (c *Compile) isCCPRTaskTransaction() bool {
 // before physical compilation or Compile.Reset. Zero keeps ordinary statements
 // fully dynamic.
 func (c *Compile) SetGroupConcatMaxLenFloor(floor uint64) { c.groupConcatMaxLenFloor = floor }
+
+// Boolean EXISTS needs only an exact TRUE witness. NULL comparisons do not
+// witness existence, unlike an ordinary MARK whose UNKNOWN is observable.
+// Recheck the final materialized keys after planner rewrites; keep functions,
+// residuals and unproved domains on the row-aware path.
+func canUseHashExistenceJoinWithInputs(node, left, right *plan.Node) bool {
+	if node == nil || node.JoinType != plan.Node_MARK || !node.MarkExistenceOnly || node.IsRightJoin ||
+		left == nil || right == nil || left.Stats == nil ||
+		math.IsNaN(left.Stats.Outcnt) || math.IsInf(left.Stats.Outcnt, 0) || left.Stats.Outcnt <= 1 ||
+		canUseHashMarkJoinWithInputs(node, left, right) {
+		return false
+	}
+	conditions := colexec.SplitAndExprs(node.OnList)
+	if len(conditions) < 2 {
+		return false
+	}
+	for _, condition := range conditions {
+		fn := condition.GetF()
+		if fn == nil || fn.Func == nil || !plan2.IsEqualFunc(fn.Func.GetObj()) || len(fn.Args) != 2 {
+			return false
+		}
+		a, b := fn.Args[0], fn.Args[1]
+		ac, bc := a.GetCol(), b.GetCol()
+		if ac == nil || bc == nil || !((ac.RelPos == 0 && bc.RelPos == 1) || (ac.RelPos == 1 && bc.RelPos == 0)) ||
+			!types.T(a.Typ.Id).IsInteger() || a.Typ.Id != b.Typ.Id || a.Typ.Width != b.Typ.Width || a.Typ.Scale != b.Typ.Scale {
+			return false
+		}
+		for _, arg := range fn.Args {
+			col := arg.GetCol()
+			child := left
+			if col.RelPos == 1 {
+				child = right
+			}
+			if col.ColPos < 0 || int(col.ColPos) >= len(child.ProjectList) {
+				return false
+			}
+			materialized := child.ProjectList[col.ColPos]
+			if materialized == nil || materialized.Typ.Id != arg.Typ.Id ||
+				materialized.Typ.Width != arg.Typ.Width || materialized.Typ.Scale != arg.Typ.Scale {
+				return false
+			}
+		}
+	}
+	return true
+}

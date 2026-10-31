@@ -318,6 +318,52 @@ func TestUpdateDaemonTaskStatusPreservesLeaseAndPayload(t *testing.T) {
 	}
 }
 
+func TestRequestDaemonTaskStatusPreservesClaim(t *testing.T) {
+	for name, factory := range storages {
+		t.Run(name, func(t *testing.T) {
+			s := factory(t)
+			defer func() { require.NoError(t, s.Close()) }()
+			ctx := context.Background()
+			observed := newDaemonTaskForTest(42, task.TaskStatus_Running, "owner")
+			observed.Metadata.ID = "request-status"
+			observed.AccountID = 17
+			observed.Account = "tenant"
+			observed.TaskType = task.TaskType_CreateCdc
+			observed.LastRun = time.Date(2026, 8, 1, 12, 0, 0, 123456000, time.UTC)
+			current := observed
+			current.LastHeartbeat = observed.LastRun.Add(time.Second)
+			mustAddTestDaemonTask(t, s, 1, current)
+			for _, stale := range []task.DaemonTask{
+				func() task.DaemonTask { v := observed; v.AccountID++; return v }(),
+				func() task.DaemonTask { v := observed; v.TaskStatus = task.TaskStatus_Paused; return v }(),
+				func() task.DaemonTask { v := observed; v.TaskRunner = "other"; return v }(),
+				func() task.DaemonTask { v := observed; v.LastRun = v.LastRun.Add(time.Microsecond); return v }(),
+			} {
+				n, err := s.RequestDaemonTaskStatus(ctx, stale, task.TaskStatus_PauseRequested)
+				require.NoError(t, err)
+				require.Zero(t, n)
+			}
+			n, err := s.RequestDaemonTaskStatus(ctx, observed, task.TaskStatus_PauseRequested)
+			require.NoError(t, err)
+			require.Equal(t, 1, n)
+			rows, err := s.QueryDaemonTask(ctx, WithTaskIDCond(EQ, observed.ID))
+			require.NoError(t, err)
+			require.Len(t, rows, 1)
+			current.TaskStatus = task.TaskStatus_PauseRequested
+			require.Equal(t, current, rows[0])
+			n, err = s.RequestDaemonTaskStatus(ctx, current, current.TaskStatus)
+			require.NoError(t, err)
+			require.Equal(t, 1, n, "matched same-state requests count as matched rows")
+			rows, err = s.QueryDaemonTask(ctx, WithTaskType(EQ, task.TaskType_CreateCdc.String()), WithAccountID(EQ, 18), WithAccount(EQ, "tenant"))
+			require.NoError(t, err)
+			require.Empty(t, rows, "a later matching condition cannot override a failed account predicate")
+			rows, err = s.QueryDaemonTask(ctx, WithTaskType(EQ, task.TaskType_CreateCdc.String()), WithAccountID(EQ, 17), WithAccount(EQ, "tenant"))
+			require.NoError(t, err)
+			require.Len(t, rows, 1)
+		})
+	}
+}
+
 func TestDeleteDaemonTaskWithConditions(t *testing.T) {
 	for name, factory := range storages {
 		t.Run(name, func(t *testing.T) {
