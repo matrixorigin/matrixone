@@ -465,7 +465,7 @@ type ResetParamRefRule struct {
 	// consumes these expressions positionally; rebuilding the outer function
 	// can change its assignment-cast contract even when the predicate needs a
 	// different execute-time overload.
-	preserveRoots map[*plan.Expr]struct{}
+	preserveRoots map[*plan.Expr]plan.Type
 	// specialized is set when execute-time rebinding changes the cached plan's
 	// execution semantics, including value-only rewrites whose overload and
 	// result type remain stable.
@@ -2581,6 +2581,28 @@ func (rule *ResetParamRefRule) applyExprPreservingRoot(e *plan.Expr) (*plan.Expr
 		if exprImpl.F == nil {
 			return e, nil
 		}
+		if _, _, generated := preparedCalendarResultCast(e); generated {
+			rewritten, err := rule.applyExpr(e)
+			if err != nil {
+				return nil, err
+			}
+			if target := rule.preserveRoots[e]; target.Id != 0 {
+				return appendCastBeforeExpr(rule.ctx, rewritten, target)
+			}
+			return rewritten, nil
+		}
+		if exprImpl.F.Func != nil && strings.EqualFold(exprImpl.F.Func.GetObjName(), "from_unixtime") &&
+			len(exprImpl.F.Args) == 1 && temporalDirectMarker(exprImpl.F.Args[0]) {
+			// FSP6 can make the consumer itself a positional write root, with
+			// no surrounding assignment cast. Rebind its numeric input anyway;
+			// preserving the PREPARE-time INT64 cast rejects decimal parameters.
+			target := e.Typ
+			rewritten, err := rule.applyExpr(e)
+			if err != nil {
+				return nil, err
+			}
+			return appendCastBeforeExpr(rule.ctx, rewritten, target)
+		}
 		if exprImpl.F.Func != nil && strings.EqualFold(exprImpl.F.Func.GetObjName(), "inet_ntoa") &&
 			len(exprImpl.F.Args) == 1 {
 			// INET_NTOA owns the source-domain contract for a direct marker. A
@@ -2926,6 +2948,7 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 	case *plan.Expr_Dependent:
 		return applyDependentOperands(e, rule.ApplyExpr)
 	case *plan.Expr_F:
+		calendarPosition, calendarOnly, calendarCast := preparedCalendarResultCast(e)
 		functionName := ""
 		if exprImpl.F.Func != nil {
 			functionName = exprImpl.F.Func.GetObjName()
@@ -3875,6 +3898,20 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 			}
 		}
 
+		if calendarCast {
+			// Generic COM_STMT strings intentionally have no concrete runtime
+			// type metadata. They still carry a known text source and value.
+			source, known, sourceErr := rule.preparedRuntimeSourceExpr(calendarPosition, true)
+			if sourceErr != nil {
+				return nil, sourceErr
+			}
+			if known {
+				target := inferPreparedCalendarResult(makeTypeByPlan2Expr(source), true, temporalParamValue(rule.paramValues[calendarPosition]), calendarOnly)
+				rule.specialized = true
+				return appendCastBeforeExpr(rule.ctx, boundArgs[0], makePlan2Type(&target))
+			}
+		}
+
 		// reset function
 		if needResetFunction {
 			restorePreparedIntegerArithmeticOperands(functionName, boundArgs)
@@ -3890,7 +3927,7 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 			} else {
 				var originalBoundExpr *Expr
 				switch functionName {
-				case "+", "-", "*", "date_add", "date_sub", "str_to_date", "to_date", "addtime", "subtime", "timediff", "time", "timestamp", "timestampadd":
+				case "+", "-", "*", "date_add", "date_sub", "str_to_date", "to_date", "addtime", "subtime", "timediff", "time", "timestamp", "timestampadd", "from_unixtime":
 					// The saved operands already own immutable provenance. Share
 					// them only when rebinding, without copying the tree again.
 					originalFunction := *exprImpl.F

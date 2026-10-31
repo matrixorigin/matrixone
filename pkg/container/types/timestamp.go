@@ -129,10 +129,14 @@ var scaleTable = [...]uint32{1000000, 100000, 10000, 1000, 100, 10, 1}
 var OneSecInMicroSeconds = uint32(1000000)
 
 func getMsecWithContext(ctx context.Context, msecStr string, scale int32) (uint32, uint32, error) {
+	return parseMsec(ctx, msecStr, scale, false)
+}
+
+func parseMsec(ctx context.Context, msecStr string, scale int32, observe bool) (uint32, uint32, error) {
 	// Validate the whole fraction before rounding; discarded digits still
 	// belong to the input grammar (including for a target scale of zero).
 	if scale < 0 || scale > 6 || len(msecStr) == 0 || !isAllDigit(msecStr) {
-		return 0, 0, moerr.NewInvalidArg(parseErrorContext(ctx), "get ms", msecStr)
+		return 0, 0, temporalInvalidArg(ctx, "get ms", msecStr, observe)
 	}
 	msecs := uint32(0)
 	carry := uint32(0)
@@ -143,7 +147,7 @@ func getMsecWithContext(ctx context.Context, msecStr string, scale int32) (uint3
 		} else if msecStr[scale] >= '0' && msecStr[scale] <= '4' {
 			msecCarry = 0
 		} else {
-			return 0, 0, moerr.NewInvalidArg(parseErrorContext(ctx), "get ms", msecStr)
+			return 0, 0, temporalInvalidArg(ctx, "get ms", msecStr, observe)
 		}
 		msecStr = msecStr[:scale]
 	} else if len(msecStr) < int(scale) {
@@ -152,7 +156,7 @@ func getMsecWithContext(ctx context.Context, msecStr string, scale int32) (uint3
 		padZeros := int(scale) - len(msecStr)
 		m, err := strconv.ParseUint(msecStr, 10, 64)
 		if err != nil {
-			return 0, 0, moerr.NewInvalidArg(parseErrorContext(ctx), "get ms", msecStr)
+			return 0, 0, temporalInvalidArg(ctx, "get ms", msecStr, observe)
 		}
 		for i := 0; i < padZeros; i++ {
 			m *= 10
@@ -169,7 +173,7 @@ func getMsecWithContext(ctx context.Context, msecStr string, scale int32) (uint3
 	}
 	m, err := strconv.ParseUint(msecStr, 10, 32)
 	if err != nil {
-		return 0, 0, moerr.NewInvalidArg(parseErrorContext(ctx), "get ms", msecStr)
+		return 0, 0, temporalInvalidArg(ctx, "get ms", msecStr, observe)
 	}
 	msecs = (uint32(m) + msecCarry) * scaleTable[scale]
 	if msecs == OneSecInMicroSeconds {

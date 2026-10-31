@@ -1494,6 +1494,7 @@ func initExecuteStmtParamWithResolverInSession(
 	}
 	cwft.planGenerationReused = !needRebuild
 	fieldTypes := prepareStmt.fieldTypes
+	temporalTypes := prepareStmt.temporalTypes
 	// Session DDL and temporary-table revisions conservatively invalidate plans,
 	// not SQL type history. Reset only for changed captured dependencies or
 	// type-affecting mode/protocol changes. Rebinding may discover a different
@@ -1502,6 +1503,10 @@ func initExecuteStmtParamWithResolverInSession(
 	numericModeMismatch := boolModeMismatch ||
 		prepareStmt.sqlModeFlagsSet && prepareStmt.NoUnsignedSubtraction != currentNoUnsignedSubtraction ||
 		prepareStmt.divPrecisionIncrementSet && prepareStmt.divPrecisionIncrement != currentDivPrecisionIncrement
+	resetTemporalTypes := schemaChanged || prepareStmt.NativeMode != currentNativeMode || protocolMismatch || prepareStmt.temporalTypesResetPending
+	if resetTemporalTypes {
+		temporalTypes = nil
+	}
 	resetFieldTypes := schemaChanged || prepareStmt.NativeMode != currentNativeMode || protocolMismatch || prepareStmt.fieldTypesResetPending
 	if resetFieldTypes {
 		fieldTypes = nil
@@ -1526,6 +1531,9 @@ func initExecuteStmtParamWithResolverInSession(
 			if resetFieldTypes {
 				prepareStmt.fieldTypesResetPending = true
 			}
+			if resetTemporalTypes {
+				prepareStmt.temporalTypesResetPending = true
+			}
 		}
 	}()
 
@@ -1543,6 +1551,8 @@ func initExecuteStmtParamWithResolverInSession(
 		if preparedFieldDependenciesChanged(preparePlan.GetSchemas(), newPreparePlan.GetSchemas()) {
 			resetFieldTypes = true
 			fieldTypes = nil
+			resetTemporalTypes = true
+			temporalTypes = nil
 		}
 		var txnHaveDDL bool
 		switch prepareStmt.PrepareStmt.(type) {
@@ -1851,7 +1861,7 @@ func initExecuteStmtParamWithResolverInSession(
 		// admitted. The effective domain also owns the specialization/packet key.
 		prepareStmt.rememberIntegerArithmeticBindings(preparePlan.Plan, cwft.paramBindings, cwft.paramVals)
 		bindingKey := preparedExecutionBindingKey(cwft.paramBindings, cwft.paramVals)
-		key := preparedFieldBindingKey(bindingKey, fieldTypes)
+		key := preparedTemporalBindingKey(preparedFieldBindingKey(bindingKey, fieldTypes), temporalTypes)
 		var proof func(*plan.Expr) bool
 		if binaryExecute {
 			proof = func(expr *plan.Expr) bool { return preparedBinaryIntegerCastDiagnosticFree(prepareStmt, expr, true) }
@@ -1887,6 +1897,7 @@ func initExecuteStmtParamWithResolverInSession(
 				}
 				build := func(history *plan2.PreparedFieldTypes) (*plan2.PreparedExecutionPlan, error) {
 					ctx := plan2.WithPreparedFieldTypes(planningCtx, history, preparePlan.Plan)
+					ctx = plan2.WithPreparedTemporalTypes(ctx, temporalTypes)
 					return buildPreparedBoundQuery(ctx, executionSes, planningContext, prepareStmt.PrepareStmt, cwft.paramBindings, cwft.paramVals)
 				}
 				if previousNumericContext != nil && fieldTypes != nil {
@@ -1911,7 +1922,8 @@ func initExecuteStmtParamWithResolverInSession(
 			}
 			executionPlan = bound.Plan
 			fieldTypes = bound.FieldTypes
-			key = preparedFieldBindingKey(bindingKey, fieldTypes)
+			temporalTypes = bound.TemporalTypes
+			key = preparedTemporalBindingKey(preparedFieldBindingKey(bindingKey, fieldTypes), temporalTypes)
 			runtimePlanApplied = true
 			cwft.preparedJoinDiagnosticFree = bound.DiagnosticFree
 			cacheable := bound.DiagnosticFree && !bound.ValueDependent && !prepareStmt.hasPaginationParams && !prepareStmt.hasPercentileParams && !prepareStmt.hasEwmParams
@@ -2009,6 +2021,8 @@ func initExecuteStmtParamWithResolverInSession(
 		// succeed. A rejected execution leaves the previous snapshot intact.
 		prepareStmt.fieldTypes = fieldTypes
 		prepareStmt.fieldTypesResetPending = false
+		prepareStmt.temporalTypes = temporalTypes
+		prepareStmt.temporalTypesResetPending = false
 	}
 	if needRebuild {
 		// These describe the last successfully bound numeric environment, not
@@ -2076,6 +2090,7 @@ func (cwft *TxnComputationWrapper) releaseRuntimeCacheRetiredCompiles() {
 // slice must not alias TxnComputationWrapper.paramVals because that field is
 // replaced on the next execution of the cached prepared statement.
 type preparedExecutionRetry struct {
+	temporalTypes      *plan2.PreparedTemporalTypes
 	fieldTypes         *plan2.PreparedFieldTypes
 	fieldSchemas       []*plan2.ObjectRef
 	bindings           []plan2.PreparedSourceBinding
@@ -3045,12 +3060,13 @@ func buildPlanForCompileRetry(
 	if preparedRetry != nil && preparedRetry.bindings != nil && !forcePrepare {
 		ctx = plan2.WithPreparedUserVariableBindings(ctx, preparedRetry.preparedPlan)
 		ctx = plan2.WithPreparedFieldTypes(ctx, preparedRetry.fieldTypes)
-		if preparedRetry.fieldTypes != nil {
+		ctx = plan2.WithPreparedTemporalTypes(ctx, preparedRetry.temporalTypes)
+		if preparedRetry.fieldTypes != nil || preparedRetry.temporalTypes != nil {
 			previous := compilerContext.GetContext()
 			compilerContext.SetContext(ctx)
 			defer compilerContext.SetContext(previous)
-			// FIELD's result metadata can stay unchanged when its source switches
-			// TEXT/BINARY. Validate the original declaration generation before
+			// Retained FIELD and temporal history belongs to one declaration
+			// generation. Validate that generation before
 			// binding with retained history; retry is not another history publisher.
 			dependencies := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{
 				CatalogDependencies: preparedRetry.fieldSchemas,
