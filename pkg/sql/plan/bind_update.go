@@ -198,7 +198,7 @@ func (builder *QueryBuilder) normalizeUpdateAssignment(
 ) (*plan.Expr, error) {
 	var err error
 	if isDefaultValExpr(rhs) {
-		rhs, err = getDefaultExprForAssignment(builder.GetContext(), col, builder.compCtx.GetProcess(), ignore)
+		rhs, err = getDefaultExprForAssignment(builder.GetContext(), col, table.DbName, builder.compCtx.GetProcess(), ignore)
 		if err != nil {
 			return nil, err
 		}

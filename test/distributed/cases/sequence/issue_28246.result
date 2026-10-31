@@ -9,18 +9,18 @@ select nextval('s') as n;
 rollback;
 select nextval('s') as n;
 ➤ n[12,65535,0]  𝄀
-1
+2
 begin;
 select nextval('s') as n;
 ➤ n[12,65535,0]  𝄀
-2
-select nextval('s') as n;
-➤ n[12,65535,0]  𝄀
 3
-commit;
 select nextval('s') as n;
 ➤ n[12,65535,0]  𝄀
 4
+commit;
+select nextval('s') as n;
+➤ n[12,65535,0]  𝄀
+5
 select setval('s', 10) as n;
 ➤ n[12,65535,0]  𝄀
 10
