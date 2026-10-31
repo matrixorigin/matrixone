@@ -20,16 +20,219 @@ import (
 	"testing"
 	"time"
 
+	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 )
+
+func TestDaemonTaskStatementPrivileges(t *testing.T) {
+	ses := newTestSession(t, gomock.NewController(t))
+	defer ses.Close()
+	ctx := context.Background()
+	// No task service is installed: denied users must not reach task lookup,
+	// regardless of whether an ID exists or the service is ready.
+	require.Nil(t, getPu(ses.GetService()).GetTaskService())
+	statements := []func(uint64) tree.Statement{
+		func(id uint64) tree.Statement { return &tree.PauseDaemonTask{TaskID: id} },
+		func(id uint64) tree.Statement { return &tree.ResumeDaemonTask{TaskID: id} },
+		func(id uint64) tree.Statement { return &tree.CancelDaemonTask{TaskID: id} },
+	}
+	roles := []struct {
+		account, role string
+		allowed       bool
+	}{
+		{sysAccountName, moAdminRoleName, true},
+		{"tenant", accountAdminRoleName, true},
+		{sysAccountName, publicRoleName, false},
+		{"tenant", publicRoleName, false},
+		{sysAccountName, "custom", false},
+		{"tenant", "custom", false},
+		{sysAccountName, accountAdminRoleName, false},
+		{"tenant", moAdminRoleName, false},
+	}
+	for _, statement := range statements {
+		stmt := statement(1)
+		t.Run(stmt.GetStatementType(), func(t *testing.T) {
+			priv := determinePrivilegeSetOfStatement(stmt)
+			require.Equal(t, objectTypeNone, priv.objectType())
+			require.Equal(t, privilegeKindSpecial, priv.privilegeKind())
+			require.Equal(t, specialTagAdmin, priv.special)
+			require.True(t, priv.canExecInRestricted)
+			require.False(t, priv.canExecInPasswordExpired)
+			for _, role := range roles {
+				t.Run(role.account+"/"+role.role, func(t *testing.T) {
+					// Keep the same user while changing its active role. Authorization
+					// must not infer authority from a username or a previous role.
+					ses.SetTenantInfo(&TenantInfo{Tenant: role.account, User: "task_user", DefaultRole: role.role})
+					for _, id := range []uint64{0, 1, ^uint64(0)} {
+						stmt := statement(id)
+						ses.SetPrivilege(determinePrivilegeSetOfStatement(stmt))
+						allowed, _, err := authenticateUserCanExecuteStatementWithObjectTypeNone(ctx, ses, stmt)
+						require.NoError(t, err)
+						require.Equal(t, role.allowed, allowed)
+						_, err = authenticateUserCanExecuteStatement(ctx, ses, stmt)
+						if role.allowed {
+							require.NoError(t, err)
+						} else {
+							require.EqualError(t, err, "internal error: do not have privilege to execute the statement")
+							require.True(t, moerr.IsMoErrCode(err, moerr.ErrInternal))
+						}
+					}
+				})
+			}
+		})
+	}
+}
+
+func TestDaemonTaskStateTransitions(t *testing.T) {
+	const service = "daemon-state-test"
+	InitServerLevelVars(service)
+	store := taskservice.NewMemTaskStorage()
+	ts := taskservice.NewTaskService(runtime.DefaultRuntime(), store)
+	t.Cleanup(func() { require.NoError(t, ts.Close()) })
+	setPu(service, &config.ParameterUnit{SV: &config.FrontendParameters{}, TaskService: ts})
+	ses := &Session{feSessionImpl: feSessionImpl{service: service}}
+	ctx := defines.AttachAccountId(context.Background(), 1)
+	row := task.DaemonTask{ID: 1, Metadata: task.TaskMetadata{ID: t.Name()}, AccountID: 1,
+		Details: &task.Details{AccountID: 1, Account: "tenant"}}
+	n, err := store.AddDaemonTask(ctx, row)
+	require.NoError(t, err)
+	require.Equal(t, 1, n)
+	tests := []struct {
+		name          string
+		run           func() error
+		before, after task.TaskStatus
+		wantError     string
+	}{
+		{"pause", func() error { return handlePauseDaemonTask(ctx, ses, &tree.PauseDaemonTask{TaskID: 1}) }, task.TaskStatus_Running, task.TaskStatus_PauseRequested, ""},
+		{"pause paused", func() error { return handlePauseDaemonTask(ctx, ses, &tree.PauseDaemonTask{TaskID: 1}) }, task.TaskStatus_Paused, task.TaskStatus_Paused, ""},
+		{"pause requested", func() error { return handlePauseDaemonTask(ctx, ses, &tree.PauseDaemonTask{TaskID: 1}) }, task.TaskStatus_PauseRequested, task.TaskStatus_PauseRequested, ""},
+		{"pause canceled", func() error { return handlePauseDaemonTask(ctx, ses, &tree.PauseDaemonTask{TaskID: 1}) }, task.TaskStatus_Canceled, task.TaskStatus_Canceled, "now it is Canceled"},
+		{"resume", func() error { return handleResumeDaemonTask(ctx, ses, &tree.ResumeDaemonTask{TaskID: 1}) }, task.TaskStatus_Paused, task.TaskStatus_ResumeRequested, ""},
+		{"resume running", func() error { return handleResumeDaemonTask(ctx, ses, &tree.ResumeDaemonTask{TaskID: 1}) }, task.TaskStatus_Running, task.TaskStatus_Running, ""},
+		{"resume requested", func() error { return handleResumeDaemonTask(ctx, ses, &tree.ResumeDaemonTask{TaskID: 1}) }, task.TaskStatus_ResumeRequested, task.TaskStatus_ResumeRequested, ""},
+		{"resume canceled", func() error { return handleResumeDaemonTask(ctx, ses, &tree.ResumeDaemonTask{TaskID: 1}) }, task.TaskStatus_Canceled, task.TaskStatus_Canceled, "now it is Canceled"},
+		{"cancel", func() error { return handleCancelDaemonTask(ctx, ses, 1) }, task.TaskStatus_Running, task.TaskStatus_CancelRequested, ""},
+		{"cancel canceled", func() error { return handleCancelDaemonTask(ctx, ses, 1) }, task.TaskStatus_Canceled, task.TaskStatus_Canceled, ""},
+		{"cancel requested", func() error { return handleCancelDaemonTask(ctx, ses, 1) }, task.TaskStatus_CancelRequested, task.TaskStatus_CancelRequested, ""},
+		{"cancel error", func() error { return handleCancelDaemonTask(ctx, ses, 1) }, task.TaskStatus_Error, task.TaskStatus_Error, "task can not be canceled"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			row.TaskStatus = tc.before
+			n, err := store.UpdateDaemonTask(ctx, []task.DaemonTask{row})
+			require.NoError(t, err)
+			require.Equal(t, 1, n)
+			err = tc.run()
+			if tc.wantError == "" {
+				require.NoError(t, err)
+			} else {
+				require.ErrorContains(t, err, tc.wantError)
+			}
+			rows, err := store.QueryDaemonTask(ctx, taskservice.WithTaskIDCond(taskservice.EQ, row.ID))
+			require.NoError(t, err)
+			require.Len(t, rows, 1)
+			want := row
+			want.TaskStatus = tc.after
+			require.Equal(t, want, rows[0])
+		})
+	}
+}
+
+type daemonTaskCountingStorage struct {
+	taskservice.TaskStorage
+	queries, updates int
+}
+
+func (s *daemonTaskCountingStorage) QueryDaemonTask(ctx context.Context, conds ...taskservice.Condition) ([]task.DaemonTask, error) {
+	s.queries++
+	return s.TaskStorage.QueryDaemonTask(ctx, conds...)
+}
+
+func (s *daemonTaskCountingStorage) RequestDaemonTaskStatus(ctx context.Context, observed task.DaemonTask, status task.TaskStatus) (int, error) {
+	s.updates++
+	return s.TaskStorage.RequestDaemonTaskStatus(ctx, observed, status)
+}
+
+func TestDaemonTaskAccountIdentity(t *testing.T) {
+	const service = "daemon-identity-test"
+	InitServerLevelVars(service)
+	store := &daemonTaskCountingStorage{TaskStorage: taskservice.NewMemTaskStorage()}
+	ts := taskservice.NewTaskService(runtime.DefaultRuntime(), store)
+	t.Cleanup(func() { require.NoError(t, ts.Close()) })
+	setPu(service, &config.ParameterUnit{SV: &config.FrontendParameters{}, TaskService: ts})
+	ses := &Session{feSessionImpl: feSessionImpl{service: service}}
+	rows := []task.DaemonTask{
+		{ID: 1, Metadata: task.TaskMetadata{ID: "identity-sys"}, AccountID: 0, Details: &task.Details{Account: "sys"}},
+		{ID: 2, Metadata: task.TaskMetadata{ID: "identity-tenant"}, AccountID: 1, Details: &task.Details{AccountID: 1, Account: "tenant"}},
+	}
+	n, err := store.AddDaemonTask(context.Background(), rows...)
+	require.NoError(t, err)
+	require.Equal(t, 2, n)
+	for _, verb := range []struct {
+		name          string
+		run           func(context.Context, uint64) error
+		before, after task.TaskStatus
+	}{
+		{"pause", func(ctx context.Context, id uint64) error {
+			return handlePauseDaemonTask(ctx, ses, &tree.PauseDaemonTask{TaskID: id})
+		}, task.TaskStatus_Running, task.TaskStatus_PauseRequested},
+		{"resume", func(ctx context.Context, id uint64) error {
+			return handleResumeDaemonTask(ctx, ses, &tree.ResumeDaemonTask{TaskID: id})
+		}, task.TaskStatus_Paused, task.TaskStatus_ResumeRequested},
+		{"cancel", func(ctx context.Context, id uint64) error {
+			return handleCancelDaemonTask(ctx, ses, id)
+		}, task.TaskStatus_Running, task.TaskStatus_CancelRequested},
+	} {
+		t.Run(verb.name, func(t *testing.T) {
+			store.queries, store.updates = 0, 0
+			ses.accountId = 0
+			require.EqualError(t, verb.run(context.Background(), 1), "internal error: no account id in context")
+			require.Zero(t, store.queries, "missing identity must fail before task lookup")
+			require.Zero(t, store.updates)
+			for _, account := range []struct {
+				name             string
+				id, cachedID     uint32
+				ownID, foreignID uint64
+			}{
+				{"cold tenant", 1, 0, 2, 1},
+				{"explicit sys", 0, 9, 1, 2},
+			} {
+				t.Run(account.name, func(t *testing.T) {
+					ctx := defines.AttachAccountId(context.Background(), account.id)
+					ses.accountId = account.cachedID
+					for i := range rows {
+						rows[i].TaskStatus = verb.before
+					}
+					n, err := store.TaskStorage.UpdateDaemonTask(ctx, rows)
+					require.NoError(t, err)
+					require.Equal(t, 2, n)
+					store.queries, store.updates = 0, 0
+					err = verb.run(ctx, account.foreignID)
+					require.True(t, moerr.IsMoErrCode(err, moerr.ErrTaskNotFound), "%v", err)
+					require.Equal(t, 1, store.queries)
+					require.Zero(t, store.updates)
+					require.NoError(t, verb.run(ctx, account.ownID))
+					require.Equal(t, 2, store.queries)
+					require.Equal(t, 1, store.updates)
+					actual, err := store.TaskStorage.QueryDaemonTask(ctx)
+					require.NoError(t, err)
+					want := append([]task.DaemonTask(nil), rows...)
+					want[account.ownID-1].TaskStatus = verb.after
+					require.Equal(t, want, actual, "only the context account's row may change")
+				})
+			}
+		})
+	}
+}
 
 type controlRaceService struct {
 	taskservice.TaskService
@@ -178,6 +381,7 @@ func TestDaemonControlConcurrentChange(t *testing.T) {
 			if tc.change == "wrong-account" {
 				accountID++
 			}
+			ctx = defines.AttachAccountId(ctx, accountID)
 			ses := &Session{feSessionImpl: feSessionImpl{service: name, accountId: accountID}}
 			switch tc.operation {
 			case "pause":

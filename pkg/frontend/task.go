@@ -18,6 +18,7 @@ import (
 	"context"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
@@ -29,9 +30,13 @@ func handlePauseDaemonTask(ctx context.Context, ses *Session, st *tree.PauseDaem
 		return moerr.NewInternalError(ctx,
 			"task service not ready yet, please try again later.")
 	}
+	accountID, err := defines.GetAccountId(ctx)
+	if err != nil {
+		return err
+	}
 	tasks, err := ts.QueryDaemonTask(ctx,
 		taskservice.WithTaskIDCond(taskservice.EQ, st.TaskID),
-		taskservice.WithAccountID(taskservice.EQ, ses.accountId),
+		taskservice.WithAccountID(taskservice.EQ, accountID),
 	)
 	if err != nil {
 		return err
@@ -57,9 +62,13 @@ func handleCancelDaemonTask(ctx context.Context, ses *Session, taskID uint64) er
 		return moerr.NewInternalError(ctx,
 			"task service not ready yet, please try again later.")
 	}
+	accountID, err := defines.GetAccountId(ctx)
+	if err != nil {
+		return err
+	}
 	tasks, err := ts.QueryDaemonTask(ctx,
 		taskservice.WithTaskIDCond(taskservice.EQ, taskID),
-		taskservice.WithAccountID(taskservice.EQ, ses.accountId),
+		taskservice.WithAccountID(taskservice.EQ, accountID),
 	)
 	if err != nil {
 		return err
@@ -83,9 +92,13 @@ func handleResumeDaemonTask(ctx context.Context, ses *Session, st *tree.ResumeDa
 		return moerr.NewInternalError(ctx,
 			"task service not ready yet, please try again later.")
 	}
+	accountID, err := defines.GetAccountId(ctx)
+	if err != nil {
+		return err
+	}
 	tasks, err := ts.QueryDaemonTask(ctx,
 		taskservice.WithTaskIDCond(taskservice.EQ, st.TaskID),
-		taskservice.WithAccountID(taskservice.EQ, ses.accountId),
+		taskservice.WithAccountID(taskservice.EQ, accountID),
 	)
 	if err != nil {
 		return err
