@@ -37,6 +37,8 @@ select c2,c5 from t1 where c2 in(11,15,110,210);
 explain select c2,c5 from t1 where c2 between 1 and 17;
 select c2,c5 from t1 where c2 between 1 and 17;
 -- @separator:table
+-- Sparse keys still load whole base-column blocks and the compound PK.
+-- The costed base scan is cheaper here; narrow backfill is covered separately.
 explain select * from t1 where c3=1;
 select * from t1 where c3=1;
 -- @separator:table

@@ -923,7 +923,12 @@ func TestWorkspaceInsertRowEstimate(t *testing.T) {
 func TestTransientTableStatsPreservePublishedOwner(t *testing.T) {
 	published := &pbstats.StatsInfo{TableName: "events", TableCnt: 5, AccurateObjectNumber: 1,
 		NdvMap: map[string]float64{"id": 5}, SizeMap: map[string]uint64{"id": 40, "payload": 40960}}
+	published.ByteRangeMap = map[string]*pbstats.ByteRangeDistribution{"name": {Version: 1}}
+
 	got := transientTableStats(published, 10005)
+	require.Empty(t, got.ByteRangeMap)
+	require.NotEmpty(t, published.ByteRangeMap)
+
 	require.Equal(t, float64(10005), got.TableCnt)
 	require.Empty(t, got.TableName)
 	require.Equal(t, published.AccurateObjectNumber, got.AccurateObjectNumber)
@@ -936,6 +941,8 @@ func TestTransientTableStatsPreservePublishedOwner(t *testing.T) {
 	require.Equal(t, float64(5), published.TableCnt, "workspace overlay cannot mutate committed Rows/Size statistics")
 	txn := newTransactionWithActivePKTableForTest(t, "pk")
 	tbl := txn.tableOps.existAndActive(genTableKey(1, "tbl", 7, "db"))
+	snapshot := false
+	tbl.db.op.(*mock_frontend.MockTxnOperator).EXPECT().IsSnapOp().DoAndReturn(func() bool { return snapshot }).AnyTimes()
 	tbl.tableId = 43 // a committed table, distinct from the fixture's created ID
 	eng := mock_frontend.NewMockEngine(gomock.NewController(t))
 	tbl.eng = eng
@@ -953,6 +960,19 @@ func TestTransientTableStatsPreservePublishedOwner(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, float64(^uint64(0)), actual.TableCnt, "remote workspace cannot publish a partial global bound")
 	require.Empty(t, actual.TableName)
+	tbl.remoteWorkspace = false
+	actual, err = tbl.Stats(context.Background(), false)
+	require.NoError(t, err)
+	require.Empty(t, actual.ByteRangeMap, "nonreadonly view cannot borrow samples even without inserted rows")
+	require.NotEmpty(t, published.ByteRangeMap)
+
+	txn.readOnly.Store(true)
+	snapshot = true
+	actual, err = tbl.Stats(context.Background(), false)
+	require.NoError(t, err)
+	require.Empty(t, actual.ByteRangeMap, "historical views cannot borrow the current population sample")
+	require.NotEmpty(t, published.ByteRangeMap)
+
 }
 
 func TestPartitionRowEstimate(t *testing.T) {

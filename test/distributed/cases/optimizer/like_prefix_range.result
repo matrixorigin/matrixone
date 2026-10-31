@@ -1,0 +1,107 @@
+drop database if exists like_prefix_range;
+create database like_prefix_range;
+use like_prefix_range;
+create table names(id int primary key, name varchar(20), payload int, key ix(name));
+insert into names
+select result, case result%10 when 0 then 'apple' when 1 then 'apply' when 2 then 'apricot' when 3 then 'banana' when 4 then 'band' when 5 then 'bank' when 6 then 'zebra' when 7 then 'zoo' when 8 then 'orange' else 'pear' end, result*2 from generate_series(0,499) g;
+explain select count(*) from names where name like 'ap%';
+-- @regex("Index Table Scan", false)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Aggregate  𝄀
+        Aggregate Functions: starcount(1)  𝄀
+        ->  Table Scan on like_prefix_range.names  𝄀
+              Filter Cond: prefix_eq(names.name)  𝄀
+              Block Filter Cond: prefix_eq(names.name)
+analyze table names(name) fullscan;
+➤ table_name[12,0,0]  ¦  mode[12,0,0]  ¦  coverage[12,0,0]  ¦  columns_analyzed[-5,0,0]  ¦  population_rows[-5,0,0]  ¦  population_exact[-6,0,0]  ¦  sample_rows[-5,0,0]  ¦  sample_blocks[-5,0,0]  ¦  sample_bytes[-5,0,0]  ¦  status[12,0,0]  ¦  message[12,0,0]  𝄀
+like_prefix_range.names  ¦  FULLSCAN  ¦  SNAPSHOT_VISIBLE_V1  ¦  1  ¦  500  ¦  1  ¦  500  ¦  1  ¦  24000  ¦  OK  ¦  q=1/1
+explain select count(*) from names where name like 'ap%';
+-- @regex("Index Table Scan", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Aggregate  𝄀
+        Aggregate Functions: starcount(1)  𝄀
+        ->  Index Table Scan on names.ix  𝄀
+              Filter Cond: prefix_in_range(__mo_index_idx_col)  𝄀
+              Block Filter Cond: prefix_in_range(__mo_index_idx_col)
+select count(*) as matches, sum(id) as ids from names where name like 'ap%';
+➤ matches[-5,64,0]  ¦  ids[-5,64,0]  𝄀
+150  ¦  36900
+select count(*) as matches, sum(id) as ids from names ignore index(ix)
+where concat(name,'') like 'ap%';
+➤ matches[-5,64,0]  ¦  ids[-5,64,0]  𝄀
+150  ¦  36900
+select count(*) as mixed_matches from names where name like 'app_%';
+➤ mixed_matches[-5,64,0]  𝄀
+100
+select count(*) as suffix_matches from names where name like 'ap%y';
+➤ suffix_matches[-5,64,0]  𝄀
+50
+explain select name from names where name like 'ap%' and name='apple';
+-- @regex("Join Type: INDEX", false)
+-- @regex("Index Table Scan", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Index Table Scan on names.ix  𝄀
+        Filter Cond: prefix_eq(__mo_index_idx_col), (serial_extract(__mo_index_idx_col, 0, VARCHAR)) = 'apple'), prefix_eq(serial_extract(__mo_index_idx_col, 0, VARCHAR)))  𝄀
+        Block Filter Cond: prefix_eq(__mo_index_idx_col)
+explain select sum(payload) from names where name like 'ap%' and name in ('apple','apply');
+-- @regex("Join Type: INDEX", true)
+-- @regex("prefix_in[(]", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Aggregate  𝄀
+        Aggregate Functions: sum(names.payload)  𝄀
+        ->  Join  𝄀
+              Join Type: INDEX  𝄀
+              Join Cond: (names.id = __mo_index_pri_col)  𝄀
+              Runtime Filter Build: #[-1,0]  𝄀
+              ->  Table Scan on like_prefix_range.names [ForceOneCN]  𝄀
+                    Filter Cond: prefix_eq(names.name), names.name in ([apple apply])  𝄀
+                    Block Filter Cond: prefix_eq(names.name)  𝄀
+                    Runtime Filter Probe: names.id  𝄀
+              ->  Index Table Scan on names.ix [ForceOneCN]  𝄀
+                    Filter Cond: prefix_in(__mo_index_idx_col), prefix_eq(serial_extract(__mo_index_idx_col, 0, VARCHAR)))  𝄀
+                    Block Filter Cond: prefix_in(__mo_index_idx_col)
+select sum(payload) as payloads from names where name like 'ap%' and name in ('apple','apply');
+➤ payloads[-5,64,0]  𝄀
+49100
+explain select sum(payload) from names where name in ('apple','apply') and name like 'ap%';
+-- @regex("Join Type: INDEX", true)
+-- @regex("prefix_in[(]", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Aggregate  𝄀
+        Aggregate Functions: sum(names.payload)  𝄀
+        ->  Join  𝄀
+              Join Type: INDEX  𝄀
+              Join Cond: (names.id = __mo_index_pri_col)  𝄀
+              Runtime Filter Build: #[-1,0]  𝄀
+              ->  Table Scan on like_prefix_range.names [ForceOneCN]  𝄀
+                    Filter Cond: prefix_eq(names.name), names.name in ([apple apply])  𝄀
+                    Block Filter Cond: prefix_eq(names.name)  𝄀
+                    Runtime Filter Probe: names.id  𝄀
+              ->  Index Table Scan on names.ix [ForceOneCN]  𝄀
+                    Filter Cond: prefix_in(__mo_index_idx_col), prefix_eq(serial_extract(__mo_index_idx_col, 0, VARCHAR)))  𝄀
+                    Block Filter Cond: prefix_in(__mo_index_idx_col)
+select sum(payload) as payloads from names ignore index(ix) where name in ('apple','apply') and concat(name,'') like 'ap%';
+➤ payloads[-5,64,0]  𝄀
+49100
+update names set name=concat('ap',id);
+analyze table names(name) fullscan;
+➤ table_name[12,0,0]  ¦  mode[12,0,0]  ¦  coverage[12,0,0]  ¦  columns_analyzed[-5,0,0]  ¦  population_rows[-5,0,0]  ¦  population_exact[-6,0,0]  ¦  sample_rows[-5,0,0]  ¦  sample_blocks[-5,0,0]  ¦  sample_bytes[-5,0,0]  ¦  status[12,0,0]  ¦  message[12,0,0]  𝄀
+like_prefix_range.names  ¦  FULLSCAN  ¦  SNAPSHOT_VISIBLE_V1  ¦  1  ¦  500  ¦  1  ¦  500  ¦  1  ¦  24000  ¦  OK  ¦  q=1/1
+explain select count(*) from names where name like 'ap%';
+-- @regex("Index Table Scan", false)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Aggregate  𝄀
+        Aggregate Functions: starcount(1)  𝄀
+        ->  Table Scan on like_prefix_range.names  𝄀
+              Filter Cond: prefix_eq(names.name)  𝄀
+              Block Filter Cond: prefix_eq(names.name)
+select count(*) as broad_matches from names where name like 'ap%';
+➤ broad_matches[-5,64,0]  𝄀
+500
+drop database like_prefix_range;

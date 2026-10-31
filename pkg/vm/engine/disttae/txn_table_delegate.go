@@ -217,6 +217,12 @@ func (tbl *txnTableDelegate) Stats(
 		return transientTableStats(&stats, float64(^uint64(0))), nil
 	}
 
+	// A readonly remote owner cannot see this CN's delete/update workspace.
+	// The decoded response is owned here, so clearing its sample cannot mutate
+	// the published generation at either CN.
+	if len(stats.ByteRangeMap) > 0 && (!tbl.origin.getTxn().Readonly() || tbl.origin.db.op.IsSnapOp()) {
+		stats.ByteRangeMap = nil
+	}
 	return &stats, nil
 }
 

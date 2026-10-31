@@ -20,6 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	statspb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/stretchr/testify/require"
 )
@@ -89,9 +90,10 @@ func TestSortedPrimaryPrefixPointPreference(t *testing.T) {
 		rangeFilter, force, noStats                  bool
 		wantIndex                                    bool
 	}{
-		{name: "selective point below threshold", sortedSel: 0.0009, secondarySel: 0.0001, tableRows: 1e6, scanRows: 8192, wantIndex: true},
-		{name: "selective point at threshold", sortedSel: 0.001, secondarySel: 0.0001, tableRows: 1e6, scanRows: 8192, wantIndex: true},
-		{name: "ordinary prefix above threshold", sortedSel: 0.0011, secondarySel: 0.0001, tableRows: 1e6, scanRows: 8192, wantIndex: true},
+		{name: "selective point below threshold", sortedSel: 0.0009, secondarySel: 0.0001, tableRows: 1e6, scanRows: 8192},
+		{name: "selective point at threshold", sortedSel: 0.001, secondarySel: 0.0001, tableRows: 1e6, scanRows: 8192},
+		{name: "ordinary prefix above threshold", sortedSel: 0.0011, secondarySel: 0.0001, tableRows: 1e6, scanRows: 8192},
+		{name: "one key avoids three base blocks", sortedSel: 0.001, secondarySel: 0.000001, tableRows: 1e6, scanRows: 32768, wantIndex: true},
 		{name: "no better point", sortedSel: 0.001, secondarySel: 1, tableRows: 1e6, scanRows: 1},
 		{name: "small table still needs better point", sortedSel: 0.001, secondarySel: 1, tableRows: 20000, scanRows: 1},
 		{name: "unknown cost keeps sorted scan", sortedSel: 0.001, secondarySel: 0.0001, tableRows: 1e6, scanRows: 8192, noStats: true},
@@ -102,12 +104,20 @@ func TestSortedPrimaryPrefixPointPreference(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			mock := NewMockOptimizer(true, newPlanTestProcess(t))
 			addPrimaryPrefixIndexTableForTest(mock)
-			builder := NewQueryBuilder(pb.Query_SELECT, &mock.ctxt, false, true)
+			stats := NewStatsInfo()
+			stats.TableCnt = tc.tableRows
+			stats.TableName = "index_hint_t"
+			stats.ShuffleRangeMap["a"] = &statspb.ShuffleRange{Sz: int64(tc.tableRows), Overlap: 0.1}
+			cache := NewStatsCache()
+			cache.Set(mock.ctxt.tables["index_hint_t"].TblId, stats)
+			ctx := &encodedIndexCostTestContext{MockCompilerContext: &mock.ctxt, statsCache: cache}
+			builder := NewQueryBuilder(pb.Query_SELECT, ctx, false, true)
 			tag := builder.genNewBindTag()
 			table := mock.ctxt.tables["index_hint_t"]
 			table.Indexes = []*pb.IndexDef{table.Indexes[2]}
 			a := makeRangeFilterExpr(tag, 1, "=", 1)
 			a.Selectivity = tc.sortedSel
+			a.GetF().Args[0].GetCol().Name = "a"
 			op := "="
 			if tc.rangeFilter {
 				op = ">"
