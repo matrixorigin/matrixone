@@ -212,6 +212,12 @@ func TestLikePrefixIndex(t *testing.T) {
 						// IN lookup can avoid a throwing residual on excluded rows.
 						check("select payload from residual_errors"+hint+" where name like 'abc%' and name in ('zzz','xy') and payload=regexp_replace('x','[','y')", strings.Contains(hint, "ignore"))
 					}
+					for _, scoped := range []struct{ hint, suffix string }{
+						{" force index for order by(ix)", " order by name"},
+						{" force index for group by(ix)", " group by name"},
+					} {
+						check("select name from candidate_errors"+scoped.hint+" where name like 'abc%' and name in (regexp_replace('x','[','y'),'abc1')"+scoped.suffix, false)
+					}
 				})
 
 				for _, tc := range []struct {
