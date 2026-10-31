@@ -2014,10 +2014,19 @@ func Test_SetSafeDecimalWidthAndScaleFromSourceBranches(t *testing.T) {
 	noDecimalOrInteger := types.New(types.T_decimal64, 18, 0)
 	originalNoDecimalOrInteger := noDecimalOrInteger
 	require.True(t, setSafeDecimalWidthAndScaleFromSource(&noDecimalOrInteger, []types.Type{
-		types.T_bool.ToType(),
 		types.T_varchar.ToType(),
+		types.T_date.ToType(),
 	}))
 	require.Equal(t, originalNoDecimalOrInteger, noDecimalOrInteger)
+
+	// TRUE/FALSE count as a numeric 0/1 source with exactly one integral
+	// digit, matching MySQL semantics when a BOOL value meets a DECIMAL.
+	boolNumericSource := types.New(types.T_decimal64, 18, 0)
+	require.True(t, setSafeDecimalWidthAndScaleFromSource(&boolNumericSource, []types.Type{
+		types.T_bool.ToType(),
+		types.New(types.T_decimal64, 2, 2),
+	}))
+	require.Equal(t, types.New(types.T_decimal64, 3, 2), boolNumericSource)
 
 	decimalScaleLargerThanWidth := types.New(types.T_decimal64, 18, 0)
 	require.True(t, setSafeDecimalWidthAndScaleFromSource(&decimalScaleLargerThanWidth, []types.Type{

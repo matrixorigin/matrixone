@@ -34,8 +34,8 @@ const DecimalIntegerDivUnsignedOverload = 1
 func DecimalIntegerDivReturnType(original []types.Type) (types.Type, bool) {
 	if len(original) != 2 ||
 		!(original[0].Oid.IsDecimal() || original[1].Oid.IsDecimal()) ||
-		!(original[0].Oid.IsDecimal() || original[0].Oid.IsInteger()) ||
-		!(original[1].Oid.IsDecimal() || original[1].Oid.IsInteger()) {
+		!(original[0].Oid.IsDecimal() || original[0].Oid.IsInteger() || original[0].Oid == types.T_bool) ||
+		!(original[1].Oid.IsDecimal() || original[1].Oid.IsInteger() || original[1].Oid == types.T_bool) {
 		return types.Type{}, false
 	}
 	p0, s0, _ := exactDivisionOperandType(original[0], original[0])
