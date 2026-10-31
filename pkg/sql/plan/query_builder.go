@@ -9785,113 +9785,19 @@ func (builder *QueryBuilder) collectSqlAutoIsNullScopeTags(nodeID int32, into ma
 }
 
 // colRefOnOuterJoinNullSide reports whether a bound reference reaches a
-// relation an outer join null-extends, either directly or through the
-// projections and derived-table blocks that re-expose it. Direct references
-// resolve through the raw walk in colOnOuterJoinNullSide; a derived-table
-// column resolves through its producing projection, so a projected
-// null-extended column keeps plain IS NULL semantics exactly like a bare
-// reference to the underlying JOIN side.
+// relation an outer join null-extends. Only bare raw bindings can reach this
+// check: sqlAutoIsNullBaseFieldRef already rejected every projected or
+// materialized binding as a REF_ITEM, so a direct tag match decides. A
+// null-extended reference keeps plain IS NULL semantics and selects the
+// join's null-extended rows, exactly the MySQL odbc.result contract.
 func (builder *QueryBuilder) colRefOnOuterJoinNullSide(fromNodeID int32, col *plan.ColRef) bool {
 	if col == nil {
 		return false
 	}
 	nullSideTags := make(map[int32]struct{})
 	builder.collectOuterJoinNullSideTags(fromNodeID, nullSideTags)
-	if _, ok := nullSideTags[col.RelPos]; ok {
-		return true
-	}
-	return builder.colRefProducedOnNullSide(fromNodeID, col, nullSideTags,
-		map[[2]int32]bool{{col.RelPos, col.ColPos}: true})
-}
-
-// colRefProducedOnNullSide resolves (tag, column) through the nodes in the
-// FROM subtree that project that tag: the projected expression's own column
-// references decide the lineage. References landing on raw relations are
-// terminal (they already answered in nullSideTags); references landing on
-// other projections recurse. Materialization boundaries end the resolution
-// with an exclusion: MySQL materializes a derived table that contains GROUP
-// BY or aggregates, LIMIT/OFFSET, DISTINCT, HAVING, window functions or a
-// UNION, and the materialized temporary field loses the AUTO_INCREMENT
-// resolution property, so the whole-clause form keeps plain IS NULL
-// semantics whenever the lineage crosses one (reviews 5691534789 and
-// 5692189512). visited bounds the resolution against cycles.
-func (builder *QueryBuilder) colRefProducedOnNullSide(fromNodeID int32, col *plan.ColRef,
-	nullSideTags map[int32]struct{}, visited map[[2]int32]bool) bool {
-	if col == nil {
-		return false
-	}
-	var producers []int32
-	materialized := false
-	parents := make(map[int32]int32)
-	var collect func(nodeID, parent int32)
-	collect = func(nodeID, parent int32) {
-		if nodeID < 0 || int(nodeID) >= len(builder.qry.Nodes) {
-			return
-		}
-		parents[nodeID] = parent
-		node := builder.qry.Nodes[nodeID]
-		if slices.Contains(node.BindingTags, col.RelPos) {
-			switch {
-			case len(node.ProjectList) > 0 && !sqlAutoIsNullSetOperationNode(node.NodeType):
-				producers = append(producers, nodeID)
-			case len(node.ProjectList) == 0 && sqlAutoIsNullRawScanNode(node.NodeType):
-				// Raw relation: a plain column reference, not block output.
-			default:
-				// Structural (non-relation) tag owners - aggregate, union or
-				// window output tags - and set-operation outputs that expose
-				// branch columns through their own ProjectList only exist for
-				// materialized blocks.
-				materialized = true
-			}
-			if node.Limit != nil || node.Offset != nil {
-				materialized = true
-			}
-		}
-		for _, child := range node.Children {
-			collect(child, nodeID)
-		}
-	}
-	collect(fromNodeID, -1)
-	if materialized {
-		// MySQL cannot merge a derived table containing any materializing
-		// construct, so the outer statement observes a materialized column
-		// that no longer resolves to the AUTO_INCREMENT definition; the
-		// whole-clause form keeps plain IS NULL semantics across the
-		// materialization boundary.
-		return true
-	}
-	for _, producer := range producers {
-		project := builder.qry.Nodes[producer].ProjectList
-		if col.ColPos < 0 || int(col.ColPos) >= len(project) {
-			continue
-		}
-		refs := make([]*plan.ColRef, 0, 2)
-		collectSqlAutoIsNullColRefs(project[col.ColPos], &refs)
-		for _, ref := range refs {
-			if ref != nil {
-				if _, ok := nullSideTags[ref.RelPos]; ok {
-					return true
-				}
-			}
-		}
-		for _, ref := range refs {
-			if ref == nil {
-				continue
-			}
-			if builder.sqlAutoIsNullRefMaterializes(producer, ref, parents) {
-				return true
-			}
-			key := [2]int32{ref.RelPos, ref.ColPos}
-			if visited[key] {
-				continue
-			}
-			visited[key] = true
-			if builder.colRefProducedOnNullSide(fromNodeID, ref, nullSideTags, visited) {
-				return true
-			}
-		}
-	}
-	return false
+	_, ok := nullSideTags[col.RelPos]
+	return ok
 }
 
 // sqlAutoIsNullRawScanNode mirrors the relation node types addBinding treats
@@ -9928,96 +9834,6 @@ func (builder *QueryBuilder) sqlAutoIsNullBaseFieldRef(fromNodeID int32, col *pl
 		}
 	}
 	return false
-}
-
-// sqlAutoIsNullSetOperationNode reports the set-operation node types: their
-// ProjectList re-exposes branch outputs, but MySQL materializes any block
-// carrying a set operation, so a reference resolving to one always crosses a
-// materialization boundary.
-func sqlAutoIsNullSetOperationNode(t plan.Node_NodeType) bool {
-	switch t {
-	case plan.Node_UNION, plan.Node_UNION_ALL,
-		plan.Node_INTERSECT, plan.Node_INTERSECT_ALL,
-		plan.Node_MINUS, plan.Node_MINUS_ALL:
-		return true
-	}
-	return false
-}
-
-// sqlAutoIsNullRefMaterializes reports whether the reference resolves across
-// materialization structure between its producing projection and the node
-// that binds the referenced tag: set-operation, DISTINCT, window or
-// limit-carrying nodes, or a post-projection FILTER (a HAVING boundary).
-// A FILTER above a raw relation stays an ordinary inner WHERE and never
-// materializes, so WHERE-based derived tables keep their merge semantics,
-// unless the binder marked that filter as a non-aggregate HAVING.
-func (builder *QueryBuilder) sqlAutoIsNullRefMaterializes(producer int32, ref *plan.ColRef,
-	parents map[int32]int32) bool {
-	if ref == nil {
-		return false
-	}
-	boundary := false
-	var dfs func(nodeID int32)
-	dfs = func(nodeID int32) {
-		if nodeID < 0 || int(nodeID) >= len(builder.qry.Nodes) || boundary {
-			return
-		}
-		node := builder.qry.Nodes[nodeID]
-		if slices.Contains(node.BindingTags, ref.RelPos) {
-			lowerIsRaw := sqlAutoIsNullRawScanNode(node.NodeType)
-			cur := parents[nodeID]
-			for cur != -1 && cur != producer {
-				intermediate := builder.qry.Nodes[cur]
-				switch intermediate.NodeType {
-				case plan.Node_DISTINCT, plan.Node_WINDOW,
-					plan.Node_UNION, plan.Node_UNION_ALL, plan.Node_INTERSECT,
-					plan.Node_INTERSECT_ALL, plan.Node_MINUS, plan.Node_MINUS_ALL:
-					boundary = true
-				case plan.Node_FILTER:
-					// A predicate between the producer and another projection
-					// binds after projection (HAVING) and materializes the block;
-					// above a raw relation it is an inner WHERE and merges.
-					if _, marked := builder.sqlAutoIsNullMaterialNodes[cur]; marked || !lowerIsRaw {
-						boundary = true
-					}
-				}
-				if boundary || intermediate.Limit != nil || intermediate.Offset != nil ||
-					len(intermediate.WinSpecList) > 0 {
-					boundary = true
-					return
-				}
-				cur = parents[cur]
-			}
-		}
-		for _, child := range node.Children {
-			dfs(child)
-		}
-	}
-	for _, child := range builder.qry.Nodes[producer].Children {
-		dfs(child)
-	}
-	return boundary
-}
-
-// collectSqlAutoIsNullColRefs gathers every column reference of a projection
-// expression; scalar functions and IN lists stay transparent.
-func collectSqlAutoIsNullColRefs(expr *plan.Expr, into *[]*plan.ColRef) {
-	if expr == nil {
-		return
-	}
-	if col := expr.GetCol(); col != nil {
-		*into = append(*into, col)
-	}
-	if fn := expr.GetF(); fn != nil {
-		for _, arg := range fn.Args {
-			collectSqlAutoIsNullColRefs(arg, into)
-		}
-	}
-	if list := expr.GetList(); list != nil {
-		for _, item := range list.List {
-			collectSqlAutoIsNullColRefs(item, into)
-		}
-	}
 }
 
 // isAccountConvertibleTable checks whether a binding refers to statement_info or metric table.
@@ -11892,14 +11708,6 @@ func (builder *QueryBuilder) appendNonAggregateHavingNode(
 		Children:   []int32{nodeID},
 		FilterList: newFilterList,
 	}, ctx)
-	if builder.sqlAutoIsNullMaterialNodes == nil {
-		builder.sqlAutoIsNullMaterialNodes = make(map[int32]struct{})
-	}
-	builder.sqlAutoIsNullMaterialNodes[nodeID] = struct{}{}
-	// MySQL materializes a derived table containing HAVING even without
-	// aggregates, while this filter appends into the FROM chain exactly like
-	// an inner WHERE; the mark carries the materialization boundary of the
-	// sql_auto_is_null whole-clause gate (it must stop here, not rewrite).
 	return nodeID, nil
 }
 

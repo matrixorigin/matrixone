@@ -546,183 +546,16 @@ func TestSqlAutoIsNullOrderedLimitDerivedNotRewritten(t *testing.T) {
 	require.False(t, sqlAutoIsNullAnyNodeNotCacheable(qry))
 }
 
-// sqlAutoIsNullTestColExpr builds a plan expression that references
-// (relPos, colPos); the lineage walks only read the expression tree, so a
-// bare column reference suffices.
-func sqlAutoIsNullTestColExpr(relPos, colPos int32) *plan.Expr {
-	return &plan.Expr{Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: relPos, ColPos: colPos}}}
-}
-
 // sqlAutoIsNullTestColRef builds the bound column reference the walk resolves.
 func sqlAutoIsNullTestColRef(relPos, colPos int32) *plan.ColRef {
 	return &plan.ColRef{RelPos: relPos, ColPos: colPos}
 }
 
-// TestSqlAutoIsNullLineageThroughProjections pins the projection-resolution
-// walk behind colRefOnOuterJoinNullSide: a projected re-exposure of a
-// null-extended join side keeps plain IS NULL semantics exactly like the bare
-// reference (reviews 5691534789 and 5692189512), chained projections resolve
-// transitively, self-referential projections terminate through the visited
-// guard, and structural block owners (set-operation output, LIMIT/OFFSET
-// carriers) only exist for materialized blocks.
-func TestSqlAutoIsNullLineageThroughProjections(t *testing.T) {
-	scan := func(tag int32) *plan.Node {
-		return &plan.Node{NodeType: plan.Node_TABLE_SCAN, BindingTags: []int32{tag}}
-	}
-	project := func(tag int32, children []int32, list ...*plan.Expr) *plan.Node {
-		return &plan.Node{NodeType: plan.Node_PROJECT, BindingTags: []int32{tag},
-			ProjectList: list, Children: children}
-	}
-
-	// LEFT(a, b) wrapped by a projection re-exposing b: the projected column
-	// inherits the null-extended lineage of its source.
-	nodes := []*plan.Node{
-		scan(1), // 0: preserved side
-		scan(2), // 1: null-extended side
-		{JoinType: plan.Node_LEFT, Children: []int32{0, 1}},     // 2
-		project(20, []int32{2}, sqlAutoIsNullTestColExpr(2, 0)), // 3
-	}
-	builder := &QueryBuilder{qry: &plan.Query{Nodes: nodes}}
-	require.True(t, builder.colRefOnOuterJoinNullSide(3, sqlAutoIsNullTestColRef(20, 0)),
-		"a projected re-exposure of a null-extended join side keeps plain IS NULL semantics")
-
-	// Chained projections resolve transitively down to the null-extended source.
-	nodes = []*plan.Node{
-		scan(2), // 0
-		project(21, []int32{0}, sqlAutoIsNullTestColExpr(2, 0)),  // 1
-		project(22, []int32{1}, sqlAutoIsNullTestColExpr(21, 0)), // 2
-		{JoinType: plan.Node_INNER, Children: []int32{2}},        // 3: FROM root
-	}
-	builder = &QueryBuilder{qry: &plan.Query{Nodes: nodes}}
-	require.True(t, builder.colRefProducedOnNullSide(3, sqlAutoIsNullTestColRef(22, 0),
-		map[int32]struct{}{2: {}}, map[[2]int32]bool{{22, 0}: true}),
-		"a lineage chained through projections resolves down to the null-extended source")
-
-	// A self-referential projection must terminate through the visited guard.
-	builder = &QueryBuilder{qry: &plan.Query{Nodes: []*plan.Node{
-		project(21, nil, sqlAutoIsNullTestColExpr(21, 0)),
-	}}}
-	require.False(t, builder.colRefProducedOnNullSide(0, sqlAutoIsNullTestColRef(21, 0),
-		map[int32]struct{}{2: {}}, map[[2]int32]bool{{21, 0}: true}),
-		"a cyclic projection terminates without reporting a null-side lineage")
-
-	// A reference beyond the projection width resolves to nothing.
-	builder = &QueryBuilder{qry: &plan.Query{Nodes: []*plan.Node{
-		scan(2),
-		project(21, []int32{0}, sqlAutoIsNullTestColExpr(2, 0)),
-	}}}
-	require.False(t, builder.colRefProducedOnNullSide(1, sqlAutoIsNullTestColRef(21, 7),
-		map[int32]struct{}{}, map[[2]int32]bool{{21, 0}: true}),
-		"a column position beyond the projection width keeps plain semantics")
-
-	// A set-operation-owned binding only exists for a materialized block, so
-	// the whole-clause form must keep plain IS NULL semantics across it.
-	builder = &QueryBuilder{qry: &plan.Query{Nodes: []*plan.Node{
-		{NodeType: plan.Node_UNION, BindingTags: []int32{30}},
-	}}}
-	require.True(t, builder.colRefProducedOnNullSide(0, sqlAutoIsNullTestColRef(30, 0),
-		map[int32]struct{}{}, map[[2]int32]bool{{30, 0}: true}),
-		"a set-operation-owned binding is a materialized block and keeps plain IS NULL semantics")
-
-	// LIMIT/OFFSET carriers on a block owner materialize the block; both
-	// spellings (reviews 5692189512, 5693247633) must count.
-	over := func(owner *plan.Node) *QueryBuilder {
-		return &QueryBuilder{qry: &plan.Query{Nodes: []*plan.Node{owner,
-			{NodeType: plan.Node_TABLE_SCAN, BindingTags: []int32{40}}}}}
-	}
-	limitOwner := &plan.Node{NodeType: plan.Node_PROJECT, BindingTags: []int32{31},
-		ProjectList: []*plan.Expr{sqlAutoIsNullTestColExpr(40, 0)},
-		Children:    []int32{1}, Limit: &plan.Expr{}}
-	require.True(t, over(limitOwner).colRefProducedOnNullSide(0, sqlAutoIsNullTestColRef(31, 0),
-		map[int32]struct{}{}, map[[2]int32]bool{{31, 0}: true}),
-		"a LIMIT-carrying block owner materializes and keeps plain IS NULL semantics")
-	offsetOwner := &plan.Node{NodeType: plan.Node_PROJECT, BindingTags: []int32{31},
-		ProjectList: []*plan.Expr{sqlAutoIsNullTestColExpr(40, 0)},
-		Children:    []int32{1}, Offset: &plan.Expr{}}
-	require.True(t, over(offsetOwner).colRefProducedOnNullSide(0, sqlAutoIsNullTestColRef(31, 0),
-		map[int32]struct{}{}, map[[2]int32]bool{{31, 0}: true}),
-		"an OFFSET-carrying block owner materializes and keeps plain IS NULL semantics")
-}
-
-// TestSqlAutoIsNullMaterializesBoundaryShapes pins the boundary walk between a
-// projecting binding and the relation it references: DISTINCT, window and
-// set-operation stages, HAVING-marked or window-spec filters, LIMIT/OFFSET
-// stages and any filter above a non-relation producer all materialize the
-// block, while a plain filter above a raw relation stays a mergeable inner
-// WHERE (reviews 5691534789, 5692189512, 5693247633).
-func TestSqlAutoIsNullMaterializesBoundaryShapes(t *testing.T) {
-	shapes := []struct {
-		name       string
-		boundary   *plan.Node
-		markHaving bool
-		nonRaw     bool
-		want       bool
-	}{
-		{"distinct boundary", &plan.Node{NodeType: plan.Node_DISTINCT, Children: []int32{0}},
-			false, false, true},
-		{"window boundary", &plan.Node{NodeType: plan.Node_WINDOW, Children: []int32{0}},
-			false, false, true},
-		{"union boundary", &plan.Node{NodeType: plan.Node_UNION, Children: []int32{0}},
-			false, false, true},
-		{"having-marked filter", &plan.Node{NodeType: plan.Node_FILTER, Children: []int32{0}},
-			true, false, true},
-		{"window-spec filter", &plan.Node{NodeType: plan.Node_FILTER, Children: []int32{0},
-			WinSpecList: []*plan.Expr{{}}}, false, false, true},
-		{"limit stage", &plan.Node{NodeType: plan.Node_FILTER, Children: []int32{0},
-			Limit: &plan.Expr{}}, false, false, true},
-		{"offset stage", &plan.Node{NodeType: plan.Node_FILTER, Children: []int32{0},
-			Offset: &plan.Expr{}}, false, false, true},
-		{"filter above a non-relation producer", &plan.Node{NodeType: plan.Node_FILTER,
-			Children: []int32{0}}, false, true, true},
-		{"plain inner where stays mergeable", &plan.Node{NodeType: plan.Node_FILTER,
-			Children: []int32{0}}, false, false, false},
-	}
-	for _, shape := range shapes {
-		relation := &plan.Node{NodeType: plan.Node_TABLE_SCAN, BindingTags: []int32{1}}
-		if shape.nonRaw {
-			relation = &plan.Node{NodeType: plan.Node_PROJECT, BindingTags: []int32{1},
-				ProjectList: []*plan.Expr{sqlAutoIsNullTestColExpr(9, 0)}}
-		}
-		nodes := []*plan.Node{
-			relation,       // 0: referenced relation
-			shape.boundary, // 1: intermediate stage
-			{NodeType: plan.Node_PROJECT, BindingTags: []int32{20}, // 2: projecting binding
-				ProjectList: []*plan.Expr{sqlAutoIsNullTestColExpr(1, 0)},
-				Children:    []int32{1}},
-		}
-		builder := &QueryBuilder{qry: &plan.Query{Nodes: nodes}}
-		if shape.markHaving {
-			builder.sqlAutoIsNullMaterialNodes = map[int32]struct{}{1: {}}
-		}
-		got := builder.colRefProducedOnNullSide(2, sqlAutoIsNullTestColRef(20, 0),
-			map[int32]struct{}{}, map[[2]int32]bool{{20, 0}: true})
-		if shape.want {
-			require.True(t, got, "%s materializes the block", shape.name)
-		} else {
-			require.False(t, got, "%s stays mergeable", shape.name)
-		}
-	}
-}
-
-// TestSqlAutoIsNullNodeClassificationTables pins the node classification the
-// gate depends on: set-operation outputs (UNION/INTERSECT/MINUS and their ALL
-// variants) always materialize, while the raw relations are exactly the scan
-// node types addBinding treats as raw bindings.
-func TestSqlAutoIsNullNodeClassificationTables(t *testing.T) {
-	for _, typ := range []plan.Node_NodeType{
-		plan.Node_UNION, plan.Node_UNION_ALL,
-		plan.Node_INTERSECT, plan.Node_INTERSECT_ALL,
-		plan.Node_MINUS, plan.Node_MINUS_ALL,
-	} {
-		require.True(t, sqlAutoIsNullSetOperationNode(typ),
-			"%v is a set operation and must count as a materialization boundary", typ)
-	}
-	for _, typ := range []plan.Node_NodeType{
-		plan.Node_TABLE_SCAN, plan.Node_PROJECT, plan.Node_FILTER, plan.Node_WINDOW,
-	} {
-		require.False(t, sqlAutoIsNullSetOperationNode(typ),
-			"%v is not a set operation", typ)
-	}
+// TestSqlAutoIsNullRawScanNodeClassification pins the raw-relation node
+// classification the FIELD_ITEM gate depends on: exactly the scan node
+// types addBinding treats as raw bindings stay eligible, and block-producing
+// node types never do.
+func TestSqlAutoIsNullRawScanNodeClassification(t *testing.T) {
 	for _, typ := range []plan.Node_NodeType{
 		plan.Node_TABLE_SCAN, plan.Node_MATERIAL_SCAN, plan.Node_EXTERNAL_SCAN,
 		plan.Node_FUNCTION_SCAN, plan.Node_VALUE_SCAN, plan.Node_SINK_SCAN,
@@ -739,45 +572,8 @@ func TestSqlAutoIsNullNodeClassificationTables(t *testing.T) {
 	}
 }
 
-// TestSqlAutoIsNullCollectColRefsExpressionWalk pins the reference collector:
-// scalar functions and IN lists stay transparent, so every column reference
-// inside a projection expression contributes to the lineage resolution.
-func TestSqlAutoIsNullCollectColRefsExpressionWalk(t *testing.T) {
-	var refs []*plan.ColRef
-	collectSqlAutoIsNullColRefs(nil, &refs)
-	require.Empty(t, refs, "a nil expression contributes no references")
-
-	refs = nil
-	collectSqlAutoIsNullColRefs(sqlAutoIsNullTestColExpr(7, 1), &refs)
-	require.Len(t, refs, 1)
-	require.Equal(t, int32(7), refs[0].RelPos)
-	require.Equal(t, int32(1), refs[0].ColPos)
-
-	refs = nil
-	nested := &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{Args: []*plan.Expr{
-		sqlAutoIsNullTestColExpr(1, 0),
-		{Expr: &plan.Expr_F{F: &plan.Function{Args: []*plan.Expr{
-			sqlAutoIsNullTestColExpr(2, 0),
-		}}}},
-	}}}}
-	collectSqlAutoIsNullColRefs(nested, &refs)
-	require.Len(t, refs, 2, "scalar function arguments stay transparent")
-	require.Equal(t, int32(1), refs[0].RelPos)
-	require.Equal(t, int32(2), refs[1].RelPos)
-
-	refs = nil
-	list := &plan.Expr{Expr: &plan.Expr_List{List: &plan.ExprList{List: []*plan.Expr{
-		sqlAutoIsNullTestColExpr(3, 0),
-		sqlAutoIsNullTestColExpr(4, 0),
-	}}}}
-	collectSqlAutoIsNullColRefs(list, &refs)
-	require.Len(t, refs, 2, "IN-list items stay transparent")
-	require.Equal(t, int32(3), refs[0].RelPos)
-	require.Equal(t, int32(4), refs[1].RelPos)
-}
-
 // TestSqlAutoIsNullCorruptReferencesStayNoOp extends the null-side walk's
-// corrupt-input contract to the whole lineage family: nil references and
+// corrupt-input contract to the retained gate family: nil references and
 // out-of-range node ids must stay a no-op instead of panicking, while a real
 // raw binding keeps its FIELD_ITEM eligibility.
 func TestSqlAutoIsNullCorruptReferencesStayNoOp(t *testing.T) {
@@ -785,12 +581,6 @@ func TestSqlAutoIsNullCorruptReferencesStayNoOp(t *testing.T) {
 		{NodeType: plan.Node_TABLE_SCAN, BindingTags: []int32{1}},
 	}}}
 	require.False(t, builder.colRefOnOuterJoinNullSide(0, nil),
-		"a nil reference must stay a no-op")
-	require.False(t, builder.colRefProducedOnNullSide(0, nil, nil, nil),
-		"a nil reference must stay a no-op")
-	require.False(t, builder.colRefProducedOnNullSide(99, sqlAutoIsNullTestColRef(1, 0), nil, nil),
-		"an out-of-range FROM node must stay a no-op")
-	require.False(t, builder.sqlAutoIsNullRefMaterializes(0, nil, nil),
 		"a nil reference must stay a no-op")
 	require.False(t, builder.sqlAutoIsNullBaseFieldRef(-1, sqlAutoIsNullTestColRef(1, 0)),
 		"an out-of-range FROM node must stay a no-op")
@@ -803,7 +593,7 @@ func TestSqlAutoIsNullCorruptReferencesStayNoOp(t *testing.T) {
 
 	projecting := &QueryBuilder{qry: &plan.Query{Nodes: []*plan.Node{
 		{NodeType: plan.Node_PROJECT, BindingTags: []int32{1},
-			ProjectList: []*plan.Expr{sqlAutoIsNullTestColExpr(9, 0)}},
+			ProjectList: []*plan.Expr{{Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 9}}}}},
 	}}}
 	require.False(t, projecting.sqlAutoIsNullBaseFieldRef(0, sqlAutoIsNullTestColRef(1, 0)),
 		"a block-projected binding is never a raw FIELD_ITEM reference")
