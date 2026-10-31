@@ -257,6 +257,80 @@ func waitUntilPipelineBatchFlowDrained(
 	return err
 }
 
+// settleRemoteFragmentWorkspaceAfterDrain is the r6 terminal settlement
+// of a remote-run fragment's mirror workspace (issue #25590 round-22
+// review, finding H1): it first waits the message's batch flow DRAINED —
+// the adoption barrier, because the recording side's transport client
+// adopts every relayed object name at its intake BEFORE it acks the
+// batch — and then settles the fragment's workspace while the run's
+// Compile and Process are still alive (a non-transferred settlement
+// runs the full workspace Rollback, which needs the process to release
+// the workspace's entry batches). The run's error travels by pointer:
+// a post-run drain failure cancels the whole message.
+func settleRemoteFragmentWorkspaceAfterDrain(
+	receiver *messageReceiverOnServer,
+	runCompile *Compile,
+	runErr *error,
+) error {
+	txnOp := runCompile.proc.GetTxnOperator()
+	if txnOp == nil {
+		return nil
+	}
+	dtRun, ok := txnOp.GetWorkspace().(*disttae.Transaction)
+	if !ok {
+		return nil
+	}
+	// r23 registered-producer boundary (issue #25590 round-23 review,
+	// finding 3): a clean, drained run may transfer only when the
+	// fragment's own operator tree contains a REGISTERED persistence
+	// producer — the same predicate the coordinator's intake uses to
+	// admit its relayed ownership metadata for adoption. Every other
+	// fragment keeps a reachable local owner on every ending, so a
+	// producer class the intake does not cover cannot release files the
+	// recording side never adopted.
+	if !remoteRunScopesAdmitAdoption(runCompile.scopes) {
+		return dtRun.FinalizeRemoteFragmentWorkspace(runCompile.proc.Ctx, false)
+	}
+	// r17 run-scoped barrier (issue #25590 round-52 review): the drain
+	// is the adoption proof in BOTH stream modes. A negotiated stream
+	// carries its windowed flow, and the run case late-registers an
+	// accounting-only (no-window) flow for admitted scopes on a fresh
+	// stream, so an admitted run has one here in every supported
+	// configuration. The admission stays fail-closed: a missing barrier
+	// keeps the ending local — transfer requires the clean run's own
+	// flow to exist AND drain, so no configuration can release names
+	// before the recording side's intake has adopted them.
+	transferred := *runErr == nil
+	if *runErr == nil {
+		flow := (*pipelineBatchFlow)(nil)
+		if receiver.streamLifecycle != nil {
+			flow = receiver.streamLifecycle.batchFlow
+		}
+		if flow == nil {
+			transferred = false
+		} else {
+			drainErr := waitUntilPipelineBatchFlowDrained(
+				receiver.messageCtx,
+				receiver.connectionCtx,
+				flow,
+				func(count int, bytes uint64) {
+					logutil.Warn("pipeline batch drain delayed before fragment settlement",
+						zap.Uint64("stream-id", receiver.messageId),
+						zap.String("remote-address", receiver.clientSession.RemoteAddress()),
+						zap.Int("outstanding-batches", count),
+						zap.Uint64("outstanding-bytes", bytes))
+				})
+			// A receiver-driven stop maps an aborted flow to a drained
+			// terminal: batches the stream dropped after the stop never
+			// reached the recording side, so the fragment must keep its
+			// local owner for them instead of transferring.
+			transferred = drainErr == nil && !flow.wasStoppedByReceiver()
+			*runErr = drainErr
+		}
+	}
+	return dtRun.FinalizeRemoteFragmentWorkspace(runCompile.proc.Ctx, transferred)
+}
+
 // waitUntilDisconnectedOrCancelled blocks until either the client connection is
 // closed or the message context is cancelled (e.g. the query was killed). It
 // keeps listening so a remote dispatch can still stream data back, but no longer
@@ -293,6 +367,20 @@ func (receiver *messageReceiverOnServer) hasLiveReceiverStop() bool {
 }
 
 func handlePipelineMessage(receiver *messageReceiverOnServer) (err error) {
+	// r17 run-scoped ownership barrier (issue #25590 round-52 review):
+	// the batch flow the run case late-registers below is owned by this
+	// message's handling; removal at return keeps the barrier from
+	// outliving the message stream. ACKs flushed after removal are
+	// handled as benign registration misses by handlePipelineBatchAck,
+	// and a StopSending that arrives during the run aborts the flow by
+	// key through abortPipelineBatchFlow, so no terminal leaves a flow
+	// unowned behind it.
+	var lateLifecycle *pipelineStreamLifecycle
+	defer func() {
+		if lateLifecycle != nil {
+			lateLifecycle.remove()
+		}
+	}()
 
 	switch receiver.messageTyp {
 	case pipeline.Method_PrepareDoneNotifyMessage:
@@ -610,6 +698,36 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) (err error) {
 		}
 
 		runCompile.scopes = []*Scope{s}
+		// r17 run-scoped ownership barrier (issue #25590 round-52
+		// review): a run whose decoded scopes admit adoption must
+		// sequence its names' release behind the recording side's
+		// intake adoption in EVERY supported configuration. A
+		// negotiated stream already carries its windowed flow
+		// (registered in cnPipelineHandler); a fresh stream — stream
+		// reuse disabled, or a run without a FinishAck request — has
+		// no flow at all, and before r17 the settlement then
+		// transferred the clean run with no adoption proof. The run
+		// registers an accounting-only (no-window) flow here: after
+		// the scope decode, the same classification the settlement
+		// uses, and before any emission. The sequences it stamps are
+		// acked by the recording side's unchanged receive loops after
+		// their intake adoption, so the settlement's drain proves
+		// adoption without imposing any credit window on the stream.
+		if receiver.streamLifecycle == nil &&
+			remoteRunScopesAdmitAdoption(runCompile.scopes) {
+			lateLifecycle, runErr = registerPipelineStreamLifecycle(
+				receiver.clientSession,
+				receiver.messageId,
+				newRunScopedPipelineBatchFlow())
+			if runErr != nil {
+				return runErr
+			}
+			receiver.streamLifecycle = lateLifecycle
+			// Close the same StopSending registration race the
+			// negotiated path closes: a stop that arrived before this
+			// registration is already in the cancellation tombstone.
+			receiver.abortBatchFlowForPendingStop()
+		}
 		if runErr = validateRemoteAllocationTopologyCapability(
 			runCompile.scopes,
 			runCompile.remoteFragmentCounts,
@@ -649,6 +767,47 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) (err error) {
 		if runErr == nil {
 			runCompile.GenPhyPlan(runCompile)
 			receiver.phyPlan = runCompile.anal.GetPhyPlan()
+		}
+
+		// Issue #25590 round-22 review, finding H1 (design r6 §5.3): the
+		// fragment's ONE terminal settlement runs AFTER this run's batch
+		// flow drained — while the run's Compile and Process are still
+		// alive, because a non-transferred settlement runs the full
+		// workspace Rollback and needs the process to release the
+		// workspace's entry batches.
+		//
+		// The r5 settlement classified transfer from the run's error
+		// alone (round-21 finding G2): a clean fragment released every
+		// reserved and retained name on the wire's word — but the wire's
+		// acknowledgment only proves the recording side DECODED each
+		// batch (a discarded decoded batch acks the same), and nothing
+		// before the release listed the names on a workspace that could
+		// enumerate them, so cancellation and discarded metadata between
+		// the ack and the record left physical files ownerless.
+		//
+		// r6 makes the release structurally depend on adoption: the
+		// coordinator's transport client ADOPTS each relayed S3 object at
+		// its intake — before forwarding the batch into its pipeline,
+		// before the ack — through the SAME per-object reservation the
+		// writers use, so the batch-flow drain that finishes below proves
+		// every emitted metadata batch already has an enumerable cleanup
+		// owner on the recording side. Only then does the fragment
+		// TRANSFER: the drained, non-stopped, clean run releases its
+		// reservations and retained names without deleting anything (the
+		// adopted reservations own the files' fate on the recording
+		// side). Every other ending — the run failed, the drain failed
+		// (cancellation), the receiver stopped the stream before its
+		// end — settles through the ordinary rollback terminal and keeps
+		// a reachable deletion owner on THIS engine for exactly the names
+		// whose records can still land nowhere. A stream that ends
+		// without a batch flow keeps the same local settlement: r17
+		// made the barrier a property of the run — every admitted
+		// scope set carries a flow, negotiated windowed or late
+		// registered no-window, and a missing flow is fail-closed
+		// non-transfer, never the r5 clean-run release.
+		settleErr := settleRemoteFragmentWorkspaceAfterDrain(receiver, runCompile, &runErr)
+		if settleErr != nil && runErr == nil {
+			runErr = settleErr
 		}
 		return runErr
 

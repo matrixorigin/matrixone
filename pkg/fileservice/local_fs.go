@@ -1028,6 +1028,13 @@ func deleteLocalFile(mu *sync.RWMutex, dirFiles map[string]*os.File, nativePath 
 
 	err = os.Remove(nativePath)
 	if err != nil {
+		// A concurrent deletion already removed the file between this
+		// check's Stat and its Remove: the file is gone, which is the
+		// documented not-found outcome, not an error (the cleanup
+		// subsystem's drains race benignly over one-ownership names).
+		if os.IsNotExist(err) {
+			return nil
+		}
 		return err
 	}
 

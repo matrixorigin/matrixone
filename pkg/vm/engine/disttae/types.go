@@ -295,9 +295,31 @@ type Engine struct {
 
 	gcPool *ants.Pool
 
+	// unpublishedPending is the engine's ownership sink for storage-object
+	// names whose publication failed before any workspace entry recorded
+	// them and whose on-the-spot and transaction-terminal deletions failed
+	// on a dirty file service (issue #25590 round-8 review). The queue
+	// retains a name until a delete actually succeeds; the GC pool drains
+	// it asynchronously, a failed drain leaves the names right here for
+	// the next drain to retry, and a submission that cannot be scheduled
+	// loses nothing — the queue already owns the names.
+	unpublishedPending unpublishedPendingQueue
+
 	gcMu              sync.Mutex
 	gcSchedulerCancel context.CancelFunc
 	gcSchedulerDone   chan struct{}
+
+	// gcProducers counts producers of queue names whose names have not
+	// yet all reached an owner: GC callers admitted past gcFiles' admission
+	// snapshot but not yet through every name entering an owner (issue
+	// #25590 round-14 review), and in-flight orphan handoffs between the
+	// moment their transfer clears the transaction's list and the moment
+	// the enqueue makes the names visible on the queue (issue #25590
+	// round-15 review). Anything descheduled in either window still owns
+	// names no owner sees, so Engine.Close's coordinated final drain
+	// consults this count under gcMu before concluding on an empty queue,
+	// and waits for it inside the same shutdown deadline.
+	gcProducers int64
 
 	closeOnce sync.Once
 	closeErr  error
@@ -348,16 +370,22 @@ func (e *Engine) ResetGCWorkerPool(pool *ants.Pool) error {
 		return moerr.NewInvalidStateNoCtx("engine GC is closed")
 	}
 	e.gcMu.Lock()
-	defer e.gcMu.Unlock()
 	if e.dynamicCtx.closed.Load() {
+		e.gcMu.Unlock()
 		return moerr.NewInvalidStateNoCtx("engine GC is closed")
 	}
-	if e.gcPool != nil {
-		if err := e.gcPool.ReleaseContext(context.Background()); err != nil {
+	old := e.gcPool
+	e.gcPool = pool
+	e.gcMu.Unlock()
+	// The old pool's release — a worker-exit wait — runs OUTSIDE gcMu:
+	// where the pool's workers can stall on storage, the lock may not
+	// stand between the wait and every other gcMu user (issue #25590
+	// round-13 review).
+	if old != nil {
+		if err := old.ReleaseContext(context.Background()); err != nil {
 			return err
 		}
 	}
-	e.gcPool = pool
 	return nil
 }
 
@@ -373,6 +401,109 @@ func (txn *Transaction) String() string {
 type statementTransferState struct {
 	lastTransferred types.TS
 	pendingTransfer bool
+}
+
+// txnRecordedUnpublished is the independently allocated holder of a
+// transaction's recorded-name copy of the storage-object names its
+// recorded workspace entries created — every name a ROLLBACK could owe
+// the engine's cleanup queue. The guarding mutex and the live-name map
+// live in THIS small object, never inline in the transaction, so a
+// cleanup job the GC pool already accepted can capture the holder — plus
+// the engine — as the whole settle state of its parked callback: a
+// worker stalled inside its delete then parks at most this
+// admission-bounded set, never the completed transaction's entire graph
+// (statement-offset history, writes backing slice and process
+// reference) after the transaction's terminal ended every obligation
+// (issue #25590 round-41 review, finding 1). Every section is short and
+// never reaches back out to the transaction lock or the engine queue;
+// lock order stays txn.Lock -> txnRecordedUnpublished.mu. Production
+// transactions install the holder at construction; the transaction's
+// own record choke can install it lazily for workspaces built outside
+// NewTxnWorkSpace, always on the transaction's own goroutine before any
+// producer can hand a member to a worker.
+type txnRecordedUnpublished struct {
+	mu    sync.Mutex
+	names map[string]struct{}
+}
+
+// merge adds names to the recorded copy, admitting each name exactly
+// once like the record choke that calls it.
+func (r *txnRecordedUnpublished) merge(names []string) {
+	if r == nil || len(names) == 0 {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.names == nil {
+		r.names = make(map[string]struct{}, len(names))
+	}
+	for _, n := range names {
+		r.names[n] = struct{}{}
+	}
+}
+
+// has reports whether the record's lifecycle still owns the name — the
+// read the retain funnels, the pending-cleanup handoff and the remote
+// adoption gate on.
+func (r *txnRecordedUnpublished) has(name string) bool {
+	if r == nil {
+		return false
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	_, ok := r.names[name]
+	return ok
+}
+
+// retract removes exactly the staged record's own admissions — the
+// back-out whose staged records were never published.
+func (r *txnRecordedUnpublished) retract(names []string) {
+	if r == nil || len(names) == 0 {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, n := range names {
+		delete(r.names, n)
+	}
+}
+
+// retireSettled retires the members whose cleanup ownership JUST ENDED:
+// the gcFiles pool worker and the queue drain call it for exactly the
+// batch whose proof of deletion they just produced, never with the
+// transaction lock. Names never recorded, and a released holder, simply
+// no-op.
+func (r *txnRecordedUnpublished) retireSettled(names []string) {
+	if r == nil || len(names) == 0 {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, n := range names {
+		delete(r.names, n)
+	}
+}
+
+// takeAll drops the holder's whole copy and returns exactly the members
+// it still tracked: the terminal release then retires those members'
+// ledger ownership, and every state that still points at them — the
+// queue's recorded-owner registrations included — detaches. An empty or
+// absent holder takes nothing, preserving the release's early return.
+func (r *txnRecordedUnpublished) takeAll() (names []string, took bool) {
+	if r == nil {
+		return nil, false
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if len(r.names) == 0 {
+		return nil, false
+	}
+	names = make([]string, 0, len(r.names))
+	for n := range r.names {
+		names = append(names, n)
+	}
+	r.names = nil
+	return names, true
 }
 
 // Transaction represents a transaction
@@ -426,6 +557,108 @@ type Transaction struct {
 	databaseOps         *dbOpsChain
 	restoreTxnTableFunc []func()
 
+	// admissionInterrupted is set when IncrStatementID has published its
+	// statement bookkeeping (boundary, compaction) but still returns a
+	// deferred maintenance error (merge or dump). The frontend then ends
+	// the failed statement with RollbackLastStatement. A failed admission
+	// happens before the statement executes, so the pending delete state
+	// (batchSelectList, deletedBlocks) at that point belongs to earlier
+	// successful statements — the failed admission is the one that would
+	// have applied it, and the next admission reapplies it. The rollback
+	// must therefore not wipe that state (issue #25590): wiping it here
+	// would resurrect the rows those earlier statements deleted.
+	admissionInterrupted bool
+
+	// unpublishedDumpReservations maps the per-object admission
+	// reservations a spilling writer holds under the engine's bound: the
+	// capacity hook reserved each object's name BEFORE it persisted, and
+	// the record choke — or the failed-publication epilogue — converts a
+	// reservation into retained ownership by retiring exactly one
+	// in-flight unit per name (issue #25590 round-18 review). Keyed by
+	// name so records that arrive without a reservation (every non-dump
+	// record creator) are still admitted fail-closed at creation, and so
+	// direct dump consumers — statement admission, commit and the tests
+	// alike — stay correct without any surrounding window flag.
+	//
+	// round-19: the hook now fires on worker and pipeline goroutines that
+	// do NOT hold the transaction lock (the compaction rewriters, the
+	// direct-S3 insert writer and its sink-pool jobs), so the map has its
+	// own small guard. Every mutation takes unpublishedDumpReservationsMu
+	// in one short section and never reaches back out to the transaction
+	// lock or the engine queue — lock order is txn.Lock ->
+	// unpublishedDumpReservationsMu -> engine queue — while the
+	// reservation's capacity accounting itself stays where r13/r18 put
+	// it: behind the engine queue's single mutex (issue #25590
+	// round-19 review).
+	unpublishedDumpReservationsMu sync.Mutex
+	unpublishedDumpReservations   map[string]struct{}
+
+	// recordedUnpublishedObjectNames is this transaction's copy of the
+	// storage-object names its recorded workspace entries created — the
+	// obligations a ROLLBACK would hand to the engine's cleanup queue.
+	// They joined the engine's capacity ledger at creation (the record
+	// choke). The copy holds a member for exactly as long as the name's
+	// obligation is LIVE: the record choke merges every recorded name at
+	// creation, a staged record's back-out retracts exactly its own
+	// admissions, and the GC settle that retires a deleted object's
+	// ledger membership retires this copy in the same worker step
+	// (issue #25590 round-37 review; round-38 review, finding 1 closed
+	// the gap on the queue's own settle: the recorded-name handoffs —
+	// the statement rollback's gcFilesToOwner transfer and the gcFiles
+	// pool-failure tail — register the recording transaction per queued
+	// name, and the drain's batch delete retires the members exactly
+	// when the file is provably gone) — so a long transaction that
+	// repeatedly spills and fully deletes objects keeps the set
+	// proportional to the LIVE working set rather than the full spill
+	// history, and the terminal paths retire exactly the members whose
+	// ownership is still real (commit published them, CCPR rollback
+	// shares them, other transfers moved them already). A name whose
+	// file is already deleted keeps no recorded-name protection: every
+	// late producer handoff of such a name can only re-adopt a deleted
+	// file whose queue membership the drain's tolerated no-op delete
+	// retires again, so the boundary classification still needs exactly
+	// the LIVE members. The terminal paths keep their round-18
+	// semantics, and members settled by an earlier transfer — transfer
+	// moved them, the drain deleted them — simply no-op on release
+	// (issue #25590 round-18 review).
+	//
+	// round-37 gave the copy its own small guard instead of the
+	// transaction lock for the same reason the reservation map gained
+	// one in round 19 — the gcFiles pool worker that settles a deleted
+	// object's names holds NO transaction lock, and taking the
+	// transaction lock there would put a GC worker behind any
+	// transaction's lock while pool callers park in ants' worker wait,
+	// exactly the admission-chain the round-13 decoupling removed.
+	// round-41 moved the guard and the map into an INDEPENDENTLY
+	// ALLOCATED holder (txnRecordedUnpublished) the gcFiles worker
+	// captures together with the engine instead of the transaction, so
+	// a cleanup job the pool already accepted parks at most this
+	// admission-bounded set — never the completed transaction's whole
+	// graph — on stalled storage; lock order stays
+	// txn.Lock -> recordedUnpublishedObjects.mu.
+	recordedUnpublishedObjects *txnRecordedUnpublished
+
+	// pendingObjectCleanup holds the storage-object names this transaction
+	// owns as unrecorded cleanup obligations — files persisted by a failed
+	// dump publication whose deletion could not be completed on the spot,
+	// or handed over by a producer teardown whose metadata record never
+	// landed. The objects belong to no workspace entry, so only this list
+	// can collect them: every dump attempt retries the publication, and
+	// Commit/Rollback purge what is left — keeping this ownership makes a
+	// failed publication leak-free after retry or transaction death
+	// (issue #25590).
+	//
+	// r5 (issue #25590 round-21 review, finding G1): every entry couples
+	// its name with the statement epoch that retained it. An entry retained
+	// by an operator teardown — whose downstream recording consumer can
+	// still run inside the SAME statement — is a publication IN FLIGHT: a
+	// mid-statement handoff may not move current-epoch entries, and every
+	// quiesced boundary rechecks recorded membership before enqueuing, so
+	// the engine queue only ever receives definite orphans. Definite
+	// orphans stamp retainedIfRecordingLater=false and keep the round-14
+	// immediate-transfer semantics.
+	pendingObjectCleanup []pendingObjectCleanupItem
+
 	// record the table dropped in the txn,
 	// for filtering effortless inserts and deletes before committing.
 	// tableid -> statementId
@@ -433,6 +666,18 @@ type Transaction struct {
 
 	//deletes for uncommitted blocks generated by CN writing S3.
 	deletedBlocks *deletedBlocks
+
+	// workspaceSegments is this workspace's private ledger of the CN
+	// segment-map registrations publishStagedWorkspaceRecordLocked and
+	// publishStagedRepublicationLocked made under this transaction's ID,
+	// so delTransaction retires exactly what this workspace registered —
+	// at a cost proportional to its own registrations and never
+	// touching registrations owned by other workspaces, including other
+	// fragments of the same distributed transaction that share the txn
+	// ID (issue #25590 review finding P2). Guarded by the colexec
+	// server's segment-map mutex, whose Put/retire operations are the
+	// only readers and writers.
+	workspaceSegments colexec.TxnWorkspaceSegments
 
 	// map uncommitted data block generated by CN writing S3 to block's meta location.
 	// notice that it's guarded by txn.Lock() and has the same lifecycle as transaction.
@@ -449,6 +694,12 @@ type Transaction struct {
 	rollbackCount int
 	//current statement id
 	statementID int
+	// statementLifecycle is the r5 retain-boundary ordinal (issue #25590
+	// round-21 review, finding G1): advanced at every StartStatement, so a
+	// publication-in-flight cleanup entry stamps its retaining statement
+	// and every boundary whose ordinal moved past the stamp classifies the
+	// entry quiesced.
+	statementLifecycle atomic.Int64
 	//offsets of the txn.writes for statements in a txn.
 	offsets []int
 
@@ -755,6 +1006,10 @@ func NewTxnWorkSpace(eng *Engine, proc *process.Process) *Transaction {
 		},
 		cnObjsSummary:   map[types.Objectid]Summary{},
 		batchSelectList: make(map[*batch.Batch][]int64),
+		// The recorded-name holder installs at construction (round-41):
+		// a GC job the pool accepts captures it — never the
+		// transaction — as the settle state of its parked callback.
+		recordedUnpublishedObjects:                &txnRecordedUnpublished{},
 		cn_flushed_s3_tombstone_object_stats_list: new(sync.Map),
 
 		commitWorkspaceThreshold: eng.config.commitWorkspaceThreshold,
@@ -838,6 +1093,13 @@ func (txn *Transaction) StartStatement() {
 	if txn.startStatementCalled {
 		logutil.Fatal("BUG: StartStatement called twice")
 	}
+	// r5 (issue #25590 round-21 review, finding G1): the lifecycle ordinal a
+	// retained cleanup entry stamps — advanced HERE, at the START of the
+	// statement ceremony, so the admission dump's boundary classifies
+	// entries against the ordinal of the statement now OPENING, and an
+	// in-flight publication of the PREVIOUS statement is already
+	// quiesced at the admission that ends it.
+	txn.statementLifecycle.Add(1)
 	txn.startStatementCalled = true
 	txn.incrStatementCalled = false
 	if callbacks, ok := txn.op.(client.StatementCallbackOperator); ok {
@@ -871,14 +1133,42 @@ func (txn *Transaction) IncrStatementID(ctx context.Context, commit bool) error 
 
 	txn.Lock()
 	defer txn.Unlock()
-	//merge writes for the last statement
-	if err := txn.mergeTxnWorkspaceLocked(ctx); err != nil {
-		return err
+	// A failed admission must leave the bookkeeping exactly as a successful
+	// one published it, for BOTH fallible maintenance phases of admission
+	// (issue #25590): the merge (pending-mark application, retirements and
+	// the fallible object-compaction resolve) and the s3 dump. The
+	// statement boundary is appended — and retired nil slots compacted —
+	// even when either fails, so the RollbackLastStatement the frontend
+	// issues on the admission error
+	// (pkg/frontend/txn.go) rolls back THIS statement's post-compaction
+	// boundary instead of popping a previous successful statement's
+	// boundary and truncating that statement's writes. The dump only runs
+	// when the merge succeeded: a workspace that just failed maintenance
+	// must not be published to storage half-maintained.
+	txn.admissionInterrupted = false
+	mergeErr := txn.mergeTxnWorkspaceLocked(ctx)
+	var dumpErr error
+	if mergeErr == nil {
+		// dump batch to s3, starting from 0 (begining of the workspace).
+		dumpErr = txn.dumpBatchLocked(ctx, 0)
+	} else {
+		// The boundary's pending-cleanup handoff rides inside the dump's
+		// opening call, so the failing merge above skipped it, yet the
+		// failed maintenance already retained its orphaned replacements
+		// as transaction-owned pendings the engine's scheduled pass never
+		// collects. Left behind the admission they would own members of
+		// the bound forever, and every retried merge would refuse its
+		// fresh replacement reservations before this boundary runs again,
+		// wedging the still-open transaction even after the storage
+		// service recovered (issue #25590 round-34 review finding; design
+		// decision 3: a failed statement transfers cleanup ownership with
+		// no storage call). Hand them off under the dump's own statement-
+		// boundary classification (offset 0, so not quiesced) - recorded
+		// names, borrowed clones and current-epoch in-flight publications
+		// stay behind exactly as they do on every successful boundary.
+		txn.handoffPendingObjectCleanupLocked(false)
 	}
-	// dump batch to s3, starting from 0 (begining of the workspace)
-	if err := txn.dumpBatchLocked(ctx, 0); err != nil {
-		return err
-	}
+	txn.compactNilWorkspaceSlotsLocked()
 	txn.offsets = append(txn.offsets, len(txn.writes))
 
 	txn.statementID++
@@ -897,13 +1187,33 @@ func (txn *Transaction) IncrStatementID(ctx context.Context, commit bool) error 
 
 		updated, err := txn.handleRCSnapshot(ctx, commit)
 		if err != nil {
+			txn.admissionInterrupted = true
 			return err
 		}
 
-		return txn.transferTombstonesByStatement(ctx, updated, commit)
+		if err := txn.transferTombstonesByStatement(ctx, updated, commit); err != nil {
+			// Post-publication failures are as interrupting as the deferred
+			// ones below: the rollback that follows must keep the pending
+			// delete state of earlier successful statements.
+			txn.admissionInterrupted = true
+			return err
+		}
 	}
 
-	return nil
+	// Bookkeeping is fully published by now; the deferred maintenance
+	// error only affects the caller's admission outcome, never the
+	// recorded boundaries rollback may reuse (issue #25590). It does mark
+	// the admission as interrupted, so the statement rollback that
+	// follows knows any pending delete state belongs to earlier
+	// statements and must be kept for the next admission to apply.
+	if mergeErr != nil {
+		txn.admissionInterrupted = true
+		return mergeErr
+	}
+	if dumpErr != nil {
+		txn.admissionInterrupted = true
+	}
+	return dumpErr
 }
 
 func (txn *Transaction) AdvanceSnapshot(ctx context.Context, ts timestamp.Timestamp) error {
@@ -1015,6 +1325,60 @@ const (
 	cloneGCTxnRollback
 )
 
+// gcFilesAfterAdmit is the issue-25590 round-14 regression seam: nil in
+// production, armed only by tests to park a real gcFiles caller inside
+// the window between its admission snapshot and its first pool
+// submission — the descheduled-caller state whose handoff Close's
+// coordinated final drain must wait for before concluding the queue is
+// empty.
+var gcFilesAfterAdmit func()
+
+// filterGCNamesLocked applies the clone-scope admission filter and must
+// run under gcMu: names a clone transaction's committed state or an
+// intermediate ALTER still references survive, everything else stays
+// dead. It preserves the original condition — only clone transactions
+// filter — and only the transaction-rollback scope keeps txn-local
+// shared files unconditionally unshared.
+func filterGCNamesLocked(
+	e *Engine, txn *Transaction, scope cloneGCScope, names []string,
+) []string {
+	if !txn.isCloneTxn {
+		return names
+	}
+	return readutil.RemoveIf(names, func(name string) bool {
+		txnID := txn.op.Txn().ID
+		if e.cloneTxnCache.IsSharedFile(txnID, name) {
+			return true
+		}
+		return scope == cloneGCIntermediate &&
+			e.cloneTxnCache.IsTxnLocalSharedFile(txnID, name)
+	})
+}
+
+// borrowsCommittedCloneShare reports whether name is a
+// CLONE-COMMITTED-BORROWED object for this transaction — the exact
+// class gcFiles' filter protects at every scope: this clone
+// transaction borrowed the object from committed state
+// (cloneTxnCache.IsSharedFile), so it is owned OUTSIDE the transaction
+// by the clone completion and the gcFiles scope rules. The orphan
+// machinery — pendingObjectCleanup and the engine's unpublished queue
+// — must never touch these names (issue #25590 round-24 finding F1,
+// design r11 INV1): their prior owners still reference them, and a
+// failed record preparation or a saturated admission bound must not
+// delete committed data the txn merely borrowed.
+//
+// TRANSACTION-LOCAL shared names (IsTxnLocalSharedFile) are NOT this
+// class: this transaction materialized them, statement-failure
+// atomicity still owns them, and the terminal full rollback still
+// deletes them — exactly the r21/r22 definite-orphan semantics they
+// keep through every retain and handoff path.
+func borrowsCommittedCloneShare(e *Engine, txn *Transaction, name string) bool {
+	if e == nil || !txn.isCloneTxn {
+		return false
+	}
+	return e.cloneTxnCache.IsSharedFile(txn.op.Txn().ID, name)
+}
+
 func gcFiles(txn *Transaction, scope cloneGCScope, names ...string) error {
 	if len(names) == 0 {
 		return nil
@@ -1024,44 +1388,172 @@ func gcFiles(txn *Transaction, scope cloneGCScope, names ...string) error {
 	if e.dynamicCtx.closed.Load() {
 		return moerr.NewInvalidStateNoCtx("engine GC is closed")
 	}
+	// The admission decision under gcMu stays SHORT — the closed flag,
+	// the pool and the file service are all that talk. The blocking part,
+	// the pool admission below, runs OUTSIDE gcMu: gcPool.Submit parks
+	// its caller in ants' unbounded worker wait whenever every GC worker
+	// is stalled, and gcMu held across that wait chains every gcMu user
+	// onto the storage stall — the terminal ownership transfer's
+	// scheduling and Engine.Close's entry among them, neither of which
+	// touches this storage (issue #25590 round-13 review). A pool
+	// released between admission and submit reports itself through the
+	// submit error, exactly like the admission checks above.
 	e.gcMu.Lock()
-	defer e.gcMu.Unlock()
-	if e.dynamicCtx.closed.Load() {
+	closed := e.dynamicCtx.closed.Load()
+	pool, fs := e.gcPool, e.fs
+	admitted := !closed && pool != nil
+	if admitted {
+		names = filterGCNamesLocked(e, txn, scope, names)
+		// Register as an outstanding producer for the whole window between
+		// this snapshot and every name entering an owner: a caller
+		// descheduled here still owns names no owner sees. The count moves
+		// in the same section that observed the engine open, so every
+		// caller a later Close can miss was registered with its snapshot,
+		// and anyone registering after Close began sees the closed flag
+		// and never submits (issue #25590 round-14 review).
+		e.gcProducers++
+	}
+	e.gcMu.Unlock()
+	if admitted {
+		defer func() {
+			e.gcMu.Lock()
+			e.gcProducers--
+			e.gcMu.Unlock()
+		}()
+	}
+	if closed {
 		return moerr.NewInvalidStateNoCtx("engine GC is closed")
 	}
-	if e.gcPool == nil {
+	if pool == nil {
 		return moerr.NewInvalidStateNoCtx("engine GC pool is unavailable")
-	}
-
-	if txn.isCloneTxn {
-		names = readutil.RemoveIf(names, func(name string) bool {
-			txnID := txn.op.Txn().ID
-			if txn.engine.cloneTxnCache.IsSharedFile(txnID, name) {
-				return true
-			}
-			return scope == cloneGCIntermediate &&
-				txn.engine.cloneTxnCache.IsTxnLocalSharedFile(txnID, name)
-		})
 	}
 
 	if len(names) == 0 {
 		return nil
 	}
 
+	if gcFilesAfterAdmit != nil {
+		// The round-14 producer regression parks a real caller inside
+		// exactly this window; nil in production.
+		gcFilesAfterAdmit()
+	}
+
 	logutil.Info("GC-WORKSPACE-FILES", zap.Strings("names", names),
 		zap.String("txn-info", txn.op.Txn().DebugString()))
-	fs := e.fs
+	// Round-41 (issue #25590 review of 2026-10-25, finding 1): the
+	// accepted worker's settle state is INDEPENDENTLY OWNED — the
+	// engine, the file service and the transaction's recorded-name
+	// holder, never the transaction itself. Compaction
+	// (compactDeletionOnObjsLocked -> GCObjsByStats) and dropped-table
+	// cleanup (GCObjsByIdxRange) submit these jobs on an OPEN
+	// transaction's behalf, and FinalizeCommit never joins them, so a
+	// callback holding the transaction would park the whole completed
+	// graph — statement-offset history, the writes backing slice and the
+	// process reference — inside the pool for as long as stalled storage
+	// holds the worker. The holder is read on the submitting transaction
+	// goroutine (installed before any name this batch could settle was
+	// recorded), so the closure inherits a plain holder pointer through
+	// the pool submission's own synchronization.
+	recordedSets := txn.recordedUnpublishedObjects
 	for start := 0; start < len(names); start += GCBatchOfFileCount {
 		end := min(start+GCBatchOfFileCount, len(names))
 		batch := append([]string(nil), names[start:end]...)
-		if err := e.gcPool.Submit(func() {
+		// Round-58 (issue #25590 review of 2026-10-28): the pool is about
+		// to own this batch's deletions, so their names' admission
+		// capacity takes the ENGINE-OWNED GC claim here — registered
+		// BEFORE the submit, on the submitting goroutine, so no worker
+		// settle can race the refcount in. Compaction and dropped-table
+		// cleanup submit these deletes on an OPEN transaction's behalf,
+		// and the transaction that commits while the accepted worker
+		// stalls must not release the obsolete objects' capacity as
+		// published: the obligation is the delete job's now, counted
+		// until the worker's settle retires it with the whole membership,
+		// and keyed by name alone so the completed transaction stays
+		// collectible (round-40/41).
+		e.retainUnpublishedPendingGCNames(batch)
+		if err := pool.Submit(func() {
 			// Rollback cleanup must survive query cancellation. The existing helper
-			// bounds each storage attempt; engine close waits for the actual return.
+			// bounds each storage attempt; engine close waits for the actual return
+			// within the round-11 shutdown budget (issue #25590).
 			if _, err := ioutil.DeleteUnpublishedObjects(context.Background(), fs, batch...); err != nil {
 				logutil.Warnf("failed to delete objects:%v, err:%v", batch, err)
+				// Round-60 (issue #25590 review of 2026-10-29): an
+				// unsuccessful delete call is NOT a completed deletion.
+				// The helper stops at its own first failing storage
+				// sub-batch, so an unknown prefix of the batch may
+				// already be gone while the remainder may still exist,
+				// and the settle below would retire the ledger
+				// membership (the capacity) and the recorded-name copy
+				// on exactly that unproven state - the last enumerable
+				// owner dropped while the objects may still exist, the
+				// loss class the ledger's lossless-ownership contract
+				// (design I2) removed from every other move. The whole
+				// batch therefore transfers to the engine's bounded
+				// retry owner instead: the transfer holds every name's
+				// unit through the outage - deletion or not-found is the
+				// only proof that may retire it - registers the holder
+				// for the queue's settle, and the queue's own machinery
+				// (r9/r10 ladder behind the GC tick) deletes what
+				// remains once storage recovers, tolerating the prefix
+				// the failure already took.
+				e.requeueFailedGCUnpublishedPending(recordedSets, batch)
+				return
 			}
+			// The delete returned is PROVEN — every storage sub-batch
+			// deleted its names or reported them absent — so the batch
+			// left the caller's hands for good and its ledger membership
+			// retires here, returning the capacity the names held at
+			// creation to the bound (issue #25590 round-18 review).
+			e.settleUnpublishedPendingDeleted(batch)
+			// round-37 (issue #25590 review of 2026-10-24, finding 1):
+			// ending the obligation also retires the TRANSACTION's
+			// recorded-name copy of the same names. The settle above ends
+			// every cleanup ownership the set was protecting — the file is
+			// gone for good, so no commit release, rollback transfer or
+			// boundary classification can ever reference this name again —
+			// and keeping the member until termination instead made a long
+			// transaction's set grow with its whole spill history,
+			// memory no admission bound ever counted, with the terminal
+			// release copying and scanning it all. The prune runs under
+			// the recorded-name guard only — NOT the transaction lock: a
+			// GC worker behind any transaction's lock would chain pool
+			// callers through ants' worker wait again. Round-41 kept the
+			// prune reachable WITHOUT the transaction: the holder carries
+			// the member, so a stalled worker parks exactly this
+			// bounded set and the recorded copy still retires.
+			recordedSets.retireSettled(batch)
 		}); err != nil {
-			return err
+			// A pool released between admission and submit — most
+			// commonly Engine.Close racing a capacity-parked GC caller
+			// left the submit wait at the pool-closed error (issue
+			// #25590 round-13) — must not abandon proven-dead names:
+			// the whole unsent tail transfers to the engine queue, the
+			// same lossless ownership the terminal paths use. Close's
+			// shutdown tail drains what storage already accepts
+			// before its deadline and the queue's own machinery keeps
+			// the rest owned, exactly like a handoff at finalization.
+			//
+			// round-38 (issue #25590 review of 2026-10-24, finding 1):
+			// the tail still moves names the recording transaction
+			// records, and the pool worker's settle above never ran for
+			// them — so the transfer registers THIS transaction as the
+			// names' recorded-copy owner and the queue drain's settle
+			// retires the members with the same rule.
+			//
+			// round-58 (issue #25590 review of 2026-10-28): no worker
+			// owes this failed batch a delete, so the accepted-job claim
+			// its registration took retires here; the queue tail below
+			// takes the names over whole — the enqueue retires the
+			// ledger membership into the queue's own slot — and no
+			// phantom engine claim may double-count it.
+			e.releaseUnpublishedPendingGCNames(batch)
+			e.enqueueUnpublishedPendingFrom(txn, names[start:])
+			logutil.Warn(
+				"GC-WORKSPACE-FILES-HANDOFF",
+				zap.Int("names", len(names)-start),
+				zap.Error(err),
+			)
+			return nil
 		}
 	}
 	return nil
@@ -1092,19 +1584,14 @@ func (txn *Transaction) GCObjsByIdxRange(start, end int) (err error) {
 	return txn.gcObjsByIdxRange(start, end, cloneGCIntermediate)
 }
 
-func (txn *Transaction) gcObjsByIdxRange(start, end int, scope cloneGCScope) (err error) {
+// recordedWorkspaceNames selects the storage-object names the workspace
+// entries in [start, end] recorded — every write entry that carries a
+// published file — and retires tombstone objects from the CN summary
+// list the moment their GC is scheduled (their producer can no longer
+// flush them). Both GC front doors share this selection so the clone
+// filters downstream see identical name sets.
+func (txn *Transaction) recordedWorkspaceNames(start, end int) []string {
 	var objsName []string
-
-	defer func() {
-		if err != nil {
-			logutil.Warn("gc objects by index range failed",
-				zap.String("txn", txn.op.Txn().DebugString()),
-				zap.Strings("names", objsName),
-				zap.Error(err),
-			)
-		}
-	}()
-
 	for i := start; i <= end; i++ {
 		if txn.writes[i].bat == nil ||
 			txn.writes[i].bat.RowCount() == 0 {
@@ -1132,8 +1619,105 @@ func (txn *Transaction) gcObjsByIdxRange(start, end int, scope cloneGCScope) (er
 			}
 		}
 	}
+	return objsName
+}
+
+func (txn *Transaction) gcObjsByIdxRange(start, end int, scope cloneGCScope) (err error) {
+	objsName := txn.recordedWorkspaceNames(start, end)
+
+	defer func() {
+		if err != nil {
+			logutil.Warn("gc objects by index range failed",
+				zap.String("txn", txn.op.Txn().DebugString()),
+				zap.Strings("names", objsName),
+				zap.Error(err),
+			)
+		}
+	}()
 
 	return gcFiles(txn, scope, objsName...)
+}
+
+// gcObjsByIdxRangeToOwner selects exactly the same recorded names and
+// applies exactly the same clone/CCPR scoping as gcObjsByIdxRange, but
+// hands them to the engine's lossless unpublished-pending queue instead
+// of submitting them to the GC pool (issue #25590 round-14 review): the
+// statement-rollback and transaction-rollback paths run under the
+// transaction's locks, and with every GC worker parked in stalled
+// storage the pool submission would hold the caller — and behind it the
+// transaction's final moment, the transaction locks and the request's
+// cancellation — in ants' unbounded worker wait. The queue carries the
+// names to the engine's own scheduled drain, whose retry ladder owns
+// everything until a delete actually succeeds.
+func (txn *Transaction) gcObjsByIdxRangeToOwner(start, end int, scope cloneGCScope) (err error) {
+	objsName := txn.recordedWorkspaceNames(start, end)
+
+	defer func() {
+		if err != nil {
+			logutil.Warn("gc objects by index range failed",
+				zap.String("txn", txn.op.Txn().DebugString()),
+				zap.Strings("names", objsName),
+				zap.Error(err),
+			)
+		}
+	}()
+
+	if len(objsName) == 0 {
+		return nil
+	}
+	return gcFilesToOwner(txn, scope, objsName...)
+}
+
+// gcFilesToOwner is the nonblocking twin of gcFiles for callers that hold
+// transaction locks: it runs the same admission snapshot — the closed
+// check, the clone-scope filter, the producer registration — but performs
+// no pool submission at all, transferring the names straight to the
+// engine's lossless queue. Every name is owned the moment the transfer
+// completes; Close's coordinated final drain and the GC scheduler tick
+// are the only retries that follow, so nothing on the caller's critical
+// path can touch the file service.
+func gcFilesToOwner(txn *Transaction, scope cloneGCScope, names ...string) error {
+	if len(names) == 0 {
+		return nil
+	}
+	e := txn.engine
+	if e.dynamicCtx.closed.Load() {
+		return moerr.NewInvalidStateNoCtx("engine GC is closed")
+	}
+	e.gcMu.Lock()
+	closed := e.dynamicCtx.closed.Load()
+	filtered := names
+	if !closed {
+		filtered = filterGCNamesLocked(e, txn, scope, filtered)
+		e.gcProducers++
+	}
+	e.gcMu.Unlock()
+	if closed {
+		return moerr.NewInvalidStateNoCtx("engine GC is closed")
+	}
+	// The producer reservation ends only after the enqueue to the queue
+	// completed — a caller between this snapshot and the queue keeps
+	// count, so Close's drain cannot conclude before its names arrive.
+	defer func() {
+		e.gcMu.Lock()
+		e.gcProducers--
+		e.gcMu.Unlock()
+	}()
+	logutil.Info("GC-WORKSPACE-FILES-OWNER",
+		zap.Strings("names", filtered),
+		zap.String("txn-info", txn.op.Txn().DebugString()))
+	// round-38 (issue #25590 review of 2026-10-24, finding 1): the
+	// moved names are members of THIS transaction's recorded set — the
+	// rolled-back statement recorded them — and no gcFiles worker will
+	// ever run for them, so the transfer registers the transaction as
+	// the names' recorded-copy owner in the same queue-mutex section as
+	// the enqueue. The drain's settle then retires the members exactly
+	// when the batch delete proves each file gone: the member keeps
+	// protecting the still-existing file against late producer
+	// handoffs, and the open transaction keeps its recorded set at the
+	// LIVE obligations instead of its failed-statement history.
+	e.enqueueUnpublishedPendingFrom(txn, filtered)
+	return nil
 }
 
 func (txn *Transaction) RollbackLastStatement(ctx context.Context) (err error) {
@@ -1168,6 +1752,16 @@ func (txn *Transaction) RollbackLastStatement(ctx context.Context) (err error) {
 	txn.Lock()
 	defer txn.Unlock()
 
+	// An interrupted admission (issue #25590) published its bookkeeping but
+	// returned a deferred merge/dump error, and this rollback ends THAT
+	// failed statement. The failed statement never executed, so any pending
+	// delete state still belongs to earlier successful statements — the
+	// failed admission is the one that would have applied it, and the next
+	// admission reapplies it. Wiping it here would resurrect the rows those
+	// statements deleted and let a later commit publish the damage.
+	interrupted := txn.admissionInterrupted
+	txn.admissionInterrupted = false
+
 	beforeEntries = len(txn.writes)
 
 	txn.rollbackCount++
@@ -1177,9 +1771,26 @@ func (txn *Transaction) RollbackLastStatement(ctx context.Context) (err error) {
 
 		txn.statementID--
 		end := txn.offsets[txn.statementID]
+		// Defensive clamp (issue #25590): nil-slot compaction before a
+		// previous admission's dump success, or an admission that failed
+		// inside an older IncrStatementID, may leave a recorded boundary
+		// past the live length. Re-slicing past len would resurrect
+		// compacted-out entries (duplicated batches, double-Clean), so
+		// the truncation target is clamped to the live workspace; with
+		// failure-atomic admission bookkeeping the clamp never changes a
+		// boundary the rollback should honor (that boundary is always
+		// appended after compaction).
+		if end > len(txn.writes) {
+			end = len(txn.writes)
+		}
 		// Skip GC for CCPR transactions - CCPRTxnCache handles GC to avoid deleting shared objects
 		if !txn.isCCPRTxn {
-			if err := txn.GCObjsByIdxRange(end, len(txn.writes)-1); err != nil {
+			// The recorded files transfer to the engine's lossless queue
+			// instead of a pool submission: this rollback runs under the
+			// transaction's locks, and a saturated pool would otherwise
+			// park the caller — and the locks — behind stalled storage
+			// (issue #25590 round-14 review).
+			if err := txn.gcObjsByIdxRangeToOwner(end, len(txn.writes)-1, cloneGCIntermediate); err != nil {
 				panic("to gc objects generated by CN failed")
 			}
 		}
@@ -1203,10 +1814,32 @@ func (txn *Transaction) RollbackLastStatement(ctx context.Context) (err error) {
 			txn.transfer.pendingTransfer = entry.pendingTransfer || entry.lastTransferred.LT(&snapshot)
 		}
 	}
+
+	// round-33 review, finding 2: the quiesced STATEMENT-ROLLBACK boundary
+	// recycles the aborted statement's unrecorded reservations to cleanup
+	// ownership exactly design r11's decision 3 shapes the failure path —
+	// ownership transfers HERE with no storage call, and the queue handoff
+	// at the next boundary plus the engine's scheduled drain collect the
+	// files afterwards. The pre-fix rollback left the reservations booked
+	// until a transaction/fragment terminal, so repeated failed statements
+	// of an open transaction accumulated in-flight units until the shared
+	// admission bound rejected other writers' spills, with healthy storage
+	// and an empty cleanup queue. The drain's recorded-membership recheck
+	// keeps prior recorded writes on their own lifecycle, the
+	// committed-borrowed exemption keeps clone-cache shares owned, and the
+	// retained names are definite orphans deferred-for-collection, so the
+	// transaction keeps its full admission budget for the retry.
+	txn.drainUnpublishedDumpReservationsLocked(
+		"statement rollback reservation recycle: the rolled-back statement's records can never land, so the quiesced boundary transfers each unrecorded reservation to cleanup ownership and releases its in-flight unit before the transaction retries (issue #25590 round-33 review, finding 2)")
+
 	txn.assertWorkspaceAccountingLocked()
-	// rollback current statement's writes info
-	for b := range txn.batchSelectList {
-		delete(txn.batchSelectList, b)
+	// rollback current statement's writes info. After an interrupted
+	// admission the pending state belongs to earlier successful statements
+	// and must survive (see the flag read above).
+	if !interrupted {
+		for b := range txn.batchSelectList {
+			delete(txn.batchSelectList, b)
+		}
 	}
 
 	afterEntries = len(txn.writes)
@@ -1216,7 +1849,12 @@ func (txn *Transaction) RollbackLastStatement(ctx context.Context) (err error) {
 	}
 	txn.restoreTxnTableFunc = txn.restoreTxnTableFunc[:0]
 	//rollback the deleted blocks for the current statement.
-	txn.deletedBlocks.clean()
+	// After an interrupted admission the pending block deletions belong to
+	// earlier successful statements and must survive for the next
+	// admission's object compaction (issue #25590).
+	if !interrupted {
+		txn.deletedBlocks.clean()
+	}
 
 	// current statement has been rolled back, make can call IncrStatementID again.
 	txn.incrStatementCalled = false

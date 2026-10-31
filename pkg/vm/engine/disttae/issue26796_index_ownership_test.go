@@ -280,19 +280,21 @@ func TestIssue26796AlterTransferResetsKeyIndexOwnership(t *testing.T) {
 	require.Len(t, sels, 4, "the original's rows are all marked deleted for the boundary shrink")
 	txn.Unlock()
 
-	// statement boundary: the fully-selected original shrinks away and
-	// refunds its index exactly once; only the duplicate's data remains
+	// statement boundary: the fully-selected original retires instead of
+	// lingering (issue #25590 retire-on-supersession) and refunds its
+	// index exactly once; only the duplicate's data remains
 	require.NoError(t, txn.mergeTxnWorkspaceLocked(context.Background()))
 	txn.Lock()
 	require.NoError(t, txn.checkWorkspaceAccountingLocked())
 	require.Nil(t, txn.writes[0].keyOffsets, "the shrunk original must have dropped its index")
 	require.Zero(t, txn.writes[0].keyIndexAccountedSize)
-	require.Zero(t, txn.writes[0].bat.RowCount())
-	// the zero-row entry must fail closed on hydration: its index is
-	// provably empty, so a charge here would book bytes no probe can ever
-	// answer from
+	require.Nil(t, txn.writes[0].bat,
+		"a fully-superseded entry retires at the boundary as a nil slot until the post-dump compaction (issue #25590)")
+	// a retired nil-bat slot, like a zero-row entry, must fail closed on
+	// hydration: its index is provably empty, so a charge here would book
+	// bytes no probe can ever answer from
 	index, built := txn.ensureInsertKeyOffsetsLocked(&txn.writes[0])
-	require.False(t, built, "a zero-row entry must never hydrate an index")
+	require.False(t, built, "a retired zero-row entry must never hydrate an index")
 	require.Nil(t, index)
 	require.Zero(t, txn.writes[0].keyIndexAccountedSize)
 	require.Equal(t, origBatBytes, txn.workspaceSize,
@@ -304,7 +306,7 @@ func TestIssue26796AlterTransferResetsKeyIndexOwnership(t *testing.T) {
 	values, d = probe(t, txn, pool, 9)
 	require.Equal(t, []int64{9}, values)
 	require.Equal(t, uint64(1), d.IndexBuilds,
-		"only the duplicate's index is built: the zero-row original must fail closed, not build an empty charged index")
+		"only the duplicate's index is built: the retired original cannot hydrate, so only it is the first cold probe's construction")
 	txn.Lock()
 	dupCharge := insertKeyOffsetsEstimateSize(keysOf(t, txn, pool, 1))
 	require.Equal(t, dupCharge, txn.writes[1].keyIndexAccountedSize,
@@ -367,9 +369,15 @@ func TestIssue26796WorkspaceCompactionClearsRetiredIndexSlots(t *testing.T) {
 	require.Positive(t, savedCharge)
 	txn.Unlock()
 
-	// statement boundary: fillers merge into one fat batch, the hydrated
-	// entry moves forward over the holes, the tail truncates
+	// statement boundary as production runs it (issue #25590 order): the
+	// merge retires merged-away sources as nil slots and IncrStatementID
+	// compacts only after the fallible dump; fillers become one fat
+	// batch, the hydrated entry moves forward over the holes, the tail
+	// truncates
 	require.NoError(t, txn.mergeTxnWorkspaceLocked(context.Background()))
+	txn.Lock()
+	txn.compactNilWorkspaceSlotsLocked()
+	txn.Unlock()
 
 	txn.Lock()
 	require.NoError(t, txn.checkWorkspaceAccountingLocked())
@@ -383,18 +391,22 @@ func TestIssue26796WorkspaceCompactionClearsRetiredIndexSlots(t *testing.T) {
 	txn.Unlock()
 
 	// subsequent invalidation of the moved entry: its rows are all selected
-	// at the next boundary, so the index refunds and drops on its live slot
-	// — vacated slots must not resurrect the map through a stale copy
+	// at the next boundary, so the entry fully retires (nil slot, the #25590
+	// retire-on-supersession) — the index refunds on its live slot before
+	// the retirement, and the post-dump compaction must leave vacated slots
+	// unable to resurrect the map through a stale copy
 	txn.Lock()
 	txn.addBatchSelectionsLocked(txn.writes[1].bat, []int64{0})
 	txn.Unlock()
 	require.NoError(t, txn.mergeTxnWorkspaceLocked(context.Background()))
+	txn.Lock()
+	txn.compactNilWorkspaceSlotsLocked()
+	txn.Unlock()
 
 	txn.Lock()
 	require.NoError(t, txn.checkWorkspaceAccountingLocked())
-	require.Nil(t, txn.writes[1].keyOffsets, "the shrunk entry's index is gone")
-	require.Zero(t, txn.writes[1].keyIndexAccountedSize)
-	require.Zero(t, txn.writes[1].bat.RowCount())
+	require.Len(t, txn.writes, 1,
+		"the fully-superseded entry retires at the boundary and compacts away; only the merged batch remains")
 	vacatedAreClear(t, txn, 30, savedIndex)
 	txn.Unlock()
 }

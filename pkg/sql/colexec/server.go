@@ -33,7 +33,10 @@ func NewServer(serviceID string) *Server {
 			mp:      make(map[uuid.UUID]uuidProcMapItem, 1024),
 			waiters: make(map[uuid.UUID]*remoteReceiverWaitState, 1024),
 		},
-		cnSegmentMap: CnSegmentMap{mp: make(map[string]int32, 1024)},
+		cnSegmentMap: CnSegmentMap{
+			mp:   make(map[string]int32, 1024),
+			refs: make(map[string]int, 1024),
+		},
 		receivedRunningPipeline: RunningPipelineMapForRemoteNode{
 			fromRpcClientToRelatedPipeline: make(map[rpcClientItem]runningPipelineInfo, 1024),
 			sessionCleanupWaiters:          make(map[morpc.ClientSession]struct{}, 128),
@@ -266,20 +269,68 @@ func (srv *Server) retainClosedReceiverForWaitersLocked(
 		waiter.ownerCh == item.ownerCh
 }
 
-func (srv *Server) PutCnSegment(txnID []byte, tableId uint64, sid *objectio.Segmentid, segmentType int32) {
+// PutCnSegment registers one workspace segment type for txnID and
+// records the exact map key in the REGISTERING workspace's ledger, so
+// that workspace's terminal can retire its own claim of the entry
+// instead of sweeping the whole CN segment map. Re-registering a key
+// the same ledger already claimed adds no second claim (retirement
+// stays proportional to distinct registrations), and a key a DIFFERENT
+// ledger claimed — the coordinator's re-record of an adopted
+// transferred object — keeps the map entry alive until both ledgers
+// retire (issue #25590 round-55 review). owned is never nil.
+func (srv *Server) PutCnSegment(
+	owned *TxnWorkspaceSegments,
+	txnID []byte, tableId uint64,
+	sid *objectio.Segmentid, segmentType int32,
+) {
 	srv.cnSegmentMap.Lock()
 	defer srv.cnSegmentMap.Unlock()
-	srv.cnSegmentMap.mp[segmentKey(txnID, tableId, sid)] = segmentType
+	key := segmentKey(txnID, tableId, sid)
+	srv.cnSegmentMap.mp[key] = segmentType
+	if owned.keys == nil {
+		owned.keys = make(map[string]struct{})
+	}
+	if _, ok := owned.keys[key]; !ok {
+		owned.keys[key] = struct{}{}
+		if srv.cnSegmentMap.refs == nil {
+			srv.cnSegmentMap.refs = make(map[string]int)
+		}
+		srv.cnSegmentMap.refs[key]++
+	}
 }
 
-func (srv *Server) DeleteTxnSegmentIds(txnID []byte) {
+// RetireTxnWorkspaceSegments releases exactly the segment-map claims one
+// workspace's ledger holds. A map entry leaves the map only when no other
+// ledger claims it: the dual-claim shape a coordinator's re-record of an
+// adopted transferred object builds on this CN leaves the entry serving
+// the recording workspace's reads until that workspace's own terminal
+// retires its claim (issue #25590 round-55 review), while a claim no
+// other workspace shares — the registrations a remote fragment's mirror
+// made on a CN that never re-records them — retires with THIS ledger, so
+// no successful fragment leaks its entries forever. A workspace that
+// owns no claim — every ordinary read-only remote fragment among them —
+// returns without opening the segment mutex, so its settlement keeps no
+// coupling to unrelated writers' segment registrations and lookups on
+// this CN (issue #25590 review finding P2). Claims registered by other
+// workspaces stay theirs, including other fragments of the same
+// distributed transaction that share this workspace's txn ID.
+func (srv *Server) RetireTxnWorkspaceSegments(owned *TxnWorkspaceSegments) {
+	if owned == nil || len(owned.keys) == 0 {
+		return
+	}
 	srv.cnSegmentMap.Lock()
 	defer srv.cnSegmentMap.Unlock()
-	for key := range srv.cnSegmentMap.mp {
-		if segmentKeyHasTxn(key, txnID) {
+	for key := range owned.keys {
+		if srv.cnSegmentMap.refs[key] <= 1 {
+			// The last claim — or a pre-refs entry a zero-value map
+			// never counted — owns the entry outright.
 			delete(srv.cnSegmentMap.mp, key)
+			delete(srv.cnSegmentMap.refs, key)
+		} else {
+			srv.cnSegmentMap.refs[key]--
 		}
 	}
+	owned.keys = nil
 }
 
 func (srv *Server) GetCnSegmentMap() map[string]int32 {

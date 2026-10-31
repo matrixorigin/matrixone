@@ -230,6 +230,39 @@ func New(
 	return e
 }
 
+// snapshotShutdownObligations reads the shutdown obligations — the
+// queue length, the producer count and the arrival sequence of the
+// queue — as ONE consistent triple (issue #25590 round-16 review): the
+// queue mutex first, then gcMu, held together while all three values
+// are read. The orphan-handoff window (clear to enqueue) runs whole
+// under the same queue mutex, and every producer registration runs
+// under gcMu BEFORE its transfer enters that window with its decrement
+// only after the enqueue: a triple therefore observes a transfer
+// either before its registration (names still transaction-owned), at
+// registration mid-window (producers >= 1 — the queue-mutex exclusion
+// keeps the triple out of the window itself), or after the enqueue
+// (names queued and the arrival sequence bumped). A conclusion drawn
+// on a triple with producers == 0, an empty queue and an unchanged
+// arrival horizon therefore cut none of the two observations of a
+// transfer apart the way the round-15 loop's separately-read count
+// could, and the no-progress rule can tell a genuinely progress-free
+// attempt from one whose retirable names a mid-attempt enqueue
+// compensated. The order — queue mutex then gcMu — is the only nested
+// acquisition of the two in the package, and no site acquires gcMu
+// while holding the queue mutex, so the triple cannot deadlock.
+func (e *Engine) snapshotShutdownObligations() (
+	producers int64, queued int, arrivals uint64,
+) {
+	e.unpublishedPending.mu.Lock()
+	e.gcMu.Lock()
+	queued = len(e.unpublishedPending.names)
+	producers = e.gcProducers
+	arrivals = e.unpublishedPending.arrivalSeq
+	e.gcMu.Unlock()
+	e.unpublishedPending.mu.Unlock()
+	return producers, queued, arrivals
+}
+
 func (e *Engine) Close() error {
 	e.closeOnce.Do(func() {
 		// Linearize statistics admission before waiting on any engine-owned
@@ -261,6 +294,29 @@ func (e *Engine) Close() error {
 			e.globalStats.Close()
 		}
 
+		// Shutdown drains under ONE overall deadline (issue #25590
+		// round-11 review): the bounded join of an already-running drain,
+		// the final deletion attempt and the GC pool release all fit in
+		// the same budget. A deletion that honors its context aborts on
+		// the engine-owned cancellation; one that IGNORES it (LocalFS
+		// deleteSingle does synchronous filesystem work without looking
+		// at its context) can no longer hold Close: the final attempt
+		// detaches behind the deadline and keeps the engine, the file
+		// service and the queue alive by reference until it finishes —
+		// ownership is untouched, only a successful delete retires
+		// names, and what a still-dirty file service keeps leaks exactly
+		// like a crash-mid-queue would.
+		closeDeadline := time.Now().Add(unpublishedPendingCloseDrainTimeout)
+		e.cancelUnpublishedPendingDrains()
+		e.waitUnpublishedPendingDrains(time.Until(closeDeadline))
+
+		// The one shutdown deadline every tail step below shares — the
+		// GC pool release and the final delete attempt both fit inside
+		// it, each consuming only what it needs.
+		closeCtx, closeCancel := context.WithDeadline(
+			context.Background(), closeDeadline)
+		defer closeCancel()
+
 		if err := e.pClient.Close(); err != nil {
 			e.closeErr = err
 		}
@@ -272,10 +328,102 @@ func (e *Engine) Close() error {
 		}
 
 		if e.gcPool != nil {
-			if err := e.gcPool.ReleaseContext(context.Background()); err != nil {
+			// The pool release stops waiting on the SAME deadline: ants
+			// closes the pool immediately and bounds only the worker-exit
+			// wait, so a worker parked in a context-blind deletion cannot
+			// hold Close here either — it finishes and exits on its own,
+			// its pool and task references keeping the unfinished work's
+			// dependencies alive (issue #25590 round-11 review). A failed
+			// release joins into closeErr but never stops the tail: the
+			// parked worker is exactly what the detached final deletion
+			// attempt below exists for, and skipping it would leave the
+			// freed callers' unsent tails with no attempt at all.
+			if err := e.gcPool.ReleaseContext(closeCtx); err != nil {
 				e.closeErr = errors.Join(e.closeErr, err)
-				return
 			}
+		}
+
+		// One bounded drain of the engine-owned unpublished-pending
+		// queue: names that survived a refused scheduling or an exhausted
+		// ladder get their final attempt at graceful shutdown, while
+		// Close never waits for a drain ladder (issue #25590 round-9
+		// review). The attempt runs detached under the same deadline and
+		// logs its own failure, removing only successfully deleted names.
+		// It runs AFTER the GC pool release on purpose (issue #25590
+		// round-13): releasing the pool is what frees every GC caller
+		// parked in the worker wait with the pool-closed error, and each
+		// freed caller hands its unsent tail to this queue exactly then.
+		// The loop is co-ordinated with those callers and with
+		// transaction-owned orphan handoffs through the producer count
+		// (issue #25590 round-14 and round-15 reviews). Round 16 makes
+		// every conclusion read that count and the queue as ONE
+		// consistent pair — snapshot under the queue mutex and gcMu,
+		// never behind gcMu alone — because the orphan-transferring
+		// window (clear to enqueue) now runs whole under the queue
+		// mutex: a handoff that registers while the drain is mid-flight
+		// can no longer slip behind a decision the drain already made
+		// off a stale separately-read count, and the no-progress rule
+		// decides on a FRESH pair taken after its own attempt (issue
+		// #25590 round-16 review). It stops once the queue is empty of
+		// names and producing callers alike, on the deadline, or when
+		// an attempt retires nothing with nobody en route; whatever
+		// remains stays owned by the queue exactly like a crash
+		// mid-queue would.
+		finalDone := make(chan struct{})
+		go func() {
+			defer close(finalDone)
+			for {
+				producers, queued, arrivals := e.snapshotShutdownObligations()
+				switch {
+				case queued == 0 && producers == 0:
+					return
+				case queued > 0:
+					attemptErr := e.deleteQueuedUnpublishedPendingOnce(closeCtx)
+					if closeCtx.Err() != nil {
+						return
+					}
+					// The no-progress rule decides on a triple taken
+					// AFTER this attempt: a handoff that registered
+					// while the attempt ran must hold the loop open,
+					// and an enqueue that landed mid-attempt is owed
+					// a fresh decision even when its arrivals
+					// compensate the retired count.
+					producersAfter, remaining, arrivalsAfter :=
+						e.snapshotShutdownObligations()
+					if attemptErr == nil || remaining < queued ||
+						arrivalsAfter != arrivals {
+						continue
+					}
+					if producersAfter == 0 {
+						return
+					}
+					// Nothing retired while a producer is still en
+					// route: poll inside the deadline instead of
+					// spinning on stalled storage.
+					select {
+					case <-time.After(10 * time.Millisecond):
+					case <-closeCtx.Done():
+						return
+					}
+				default:
+					// Only producers outstanding: the queue is empty
+					// while a caller still owns names on its way to an
+					// owner. Wait for it inside the same deadline.
+					select {
+					case <-time.After(10 * time.Millisecond):
+					case <-closeCtx.Done():
+						return
+					}
+				}
+			}
+		}()
+		select {
+		case <-finalDone:
+		case <-closeCtx.Done():
+			logutil.Warn(
+				"WORKSPACE-UNPUBLISHED-PENDING-CLOSE-DETACH",
+				zap.Time("deadline", closeDeadline),
+			)
 		}
 		e.cloneTxnCache = nil
 		e.ccprTxnCache = nil
@@ -1533,10 +1681,12 @@ func (e *Engine) runGCScheduler(ctx context.Context) {
 	unusedTableTicker := time.NewTicker(unsubscribeProcessTicker)
 	partitionStateTicker := time.NewTicker(gcPartitionStateTicker)
 	snapshotTicker := time.NewTicker(gcSnapshotTicker)
+	unpublishedPendingObjectTicker := time.NewTicker(gcUnpublishedPendingObjectTicker)
 
 	defer unusedTableTicker.Stop()
 	defer partitionStateTicker.Stop()
 	defer snapshotTicker.Stop()
+	defer unpublishedPendingObjectTicker.Stop()
 
 	for {
 		select {
@@ -1555,6 +1705,14 @@ func (e *Engine) runGCScheduler(ctx context.Context) {
 		case <-snapshotTicker.C:
 			// GC snapshot partitions
 			e.snapshotMgr.MaybeStartGC()
+
+		case <-unpublishedPendingObjectTicker.C:
+			// The engine-owned retry of the unpublished-pending queue: a
+			// backlog stranded by a refused submission or an exhausted
+			// drain ladder may not wait for the next orphan — the tick
+			// costs one mutex round-trip while the queue is empty and
+			// coalesces behind an in-flight drain (issue #25590 round-9).
+			e.scheduleUnpublishedPendingDrain()
 		}
 	}
 }
