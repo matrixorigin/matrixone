@@ -306,6 +306,9 @@ func genCreateTables(rows [][]any) []CreateTable {
 		cmds[i].Constraint = row[MO_TABLES_CONSTRAINT_IDX].([]byte)
 		cmds[i].RelKind = string(row[MO_TABLES_RELKIND_IDX].([]byte))
 		cmds[i].ExtraInfo = row[MO_TABLES_EXTRA_INFO_IDX].([]byte)
+		if version := row[MO_TABLES_VERSION_IDX].(uint32); version != 0 {
+			cmds[i].Defs = append(cmds[i].Defs, &engine.VersionDef{Version: version})
+		}
 	}
 
 	for i := range cmds {

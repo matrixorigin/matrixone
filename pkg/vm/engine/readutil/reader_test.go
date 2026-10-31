@@ -21,10 +21,12 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
@@ -312,6 +314,132 @@ func TestNewReaderTransfersSourceAndFilterToReader(t *testing.T) {
 	require.NoError(t, reader.Close())
 	require.Equal(t, int32(1), atomic.LoadInt32(&source.closeCount))
 	require.Equal(t, int32(1), atomic.LoadInt32(&filter.freeCount))
+}
+
+func TestReaderM0ProofHandoffContract(t *testing.T) {
+	ctx := context.Background()
+	fs, err := fileservice.NewMemoryFS(defines.SharedFileServiceName, fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { fs.Close(ctx) })
+	mp := mpool.MustNewZero()
+	t.Cleanup(func() {
+		require.Zero(t, mp.CurrNB())
+		mpool.DeleteMPool(mp)
+	})
+	input := batch.NewWithSize(1)
+	input.Vecs[0] = vector.NewVec(types.T_int32.ToType())
+	t.Cleanup(func() { input.Clean(mp) })
+	require.NoError(t, vector.AppendFixedList(input.Vecs[0], []int32{11, 22}, nil, mp))
+	input.SetRowCount(2)
+	writer := ioutil.ConstructWriter(0, []uint16{0}, -1, false, false, fs)
+	_, err = writer.WriteBatch(input)
+	require.NoError(t, err)
+	_, _, err = writer.Sync(ctx)
+	require.NoError(t, err)
+	stats := writer.GetObjectStats()
+	info := stats.ConstructBlockInfo(0)
+	proof := objectio.M0ObjectProof{ObjectName: info.MetaLocation().Name().String(), WrittenSize: 1, SchemaSize: 2}
+	table := &plan.TableDef{
+		Name: "proof_handoff", Name2ColIndex: map[string]int32{"id": 0, "added": 1},
+		Pkey: &plan.PrimaryKeyDef{Names: []string{"id"}, PkeyColName: "id"},
+		Cols: []*plan.ColDef{
+			{Name: "id", Seqnum: 0, Primary: true, Typ: plan.Type{Id: int32(types.T_int32)}},
+			{Name: "added", Seqnum: 1, Typ: plan.Type{Id: int32(types.T_int32)}},
+		},
+	}
+	previousEnabled, previousHook := activeM0ReadLocationProofEnabled, activeM0ReadLocationProof
+	activeM0ReadLocationProofEnabled = true
+	t.Cleanup(func() {
+		activeM0ReadLocationProofEnabled, activeM0ReadLocationProof = previousEnabled, previousHook
+	})
+	cause := moerr.NewInternalErrorNoCtx("proof rejected")
+	for _, tc := range []struct {
+		name         string
+		contextProof bool
+		wrongProof   bool
+		unproven     bool
+		failure      error
+	}{
+		{name: "bound context", contextProof: true},
+		{name: "callback and reader reuse"},
+		{name: "wrong object", wrongProof: true},
+		{name: "no proof", unproven: true},
+		{name: "proof failure", failure: cause},
+		{name: "canceled proof", failure: context.Canceled},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			calls := 0
+			activeM0ReadLocationProof = func(gotCtx context.Context, gotTable *plan.TableDef, loc objectio.Location, gotFS fileservice.FileService) (bool, objectio.M0ObjectProof, error) {
+				calls++
+				require.Same(t, table, gotTable)
+				require.Same(t, fs, gotFS)
+				require.Equal(t, proof.ObjectName, loc.Name().String())
+				if tc.failure != nil {
+					if tc.failure == context.Canceled {
+						require.ErrorIs(t, gotCtx.Err(), context.Canceled)
+					}
+					return false, objectio.M0ObjectProof{}, tc.failure
+				}
+				gotProof := proof
+				if tc.wrongProof {
+					gotProof.ObjectName = "wrong-object"
+				}
+				return !tc.unproven, gotProof, nil
+			}
+			readCtx := objectio.WithM0ProvenObject(ctx, objectio.M0ObjectProof{ObjectName: "unrelated", WrittenSize: 1, SchemaSize: 2})
+			if tc.contextProof {
+				readCtx = objectio.WithM0ProvenObject(ctx, proof)
+			}
+			if tc.failure == context.Canceled {
+				var cancel context.CancelFunc
+				readCtx, cancel = context.WithCancel(readCtx)
+				cancel()
+			}
+			source := &singlePersistedBlockSource{info: info}
+			r, err := NewReader(readCtx, mp, nil, fs, table, timestamp.Timestamp{}, nil, source, 0, engine.FilterHint{})
+			require.NoError(t, err)
+			closeReader := func() {
+				if atomic.LoadInt32(&source.closeCount) == 0 {
+					require.NoError(t, r.Close())
+				}
+			}
+			t.Cleanup(closeReader)
+			out := batch.NewWithSize(2)
+			for i := range out.Vecs {
+				out.Vecs[i] = vector.NewVec(types.T_int32.ToType())
+			}
+			t.Cleanup(func() { out.Clean(mp) })
+			_, err = r.Read(readCtx, []string{"id", "added"}, nil, mp, out)
+			if tc.failure != nil {
+				require.ErrorIs(t, err, tc.failure)
+			} else if tc.wrongProof || tc.unproven {
+				require.ErrorIs(t, err, objectio.ErrMissingColumnWithoutProof)
+			} else {
+				require.NoError(t, err)
+				require.Equal(t, 2, out.RowCount())
+				require.Equal(t, []int32{11, 22}, vector.MustFixedColWithTypeCheck[int32](out.Vecs[0]))
+				require.Equal(t, 2, out.Vecs[1].Length())
+				require.True(t, out.Vecs[1].IsNull(0))
+				require.True(t, out.Vecs[1].IsNull(1))
+				// Re-read the same persisted block without a context proof: only this
+				// reader's matching object proof may be reused, not the unrelated one.
+				source.emitted = false
+				_, err = r.Read(ctx, []string{"id", "added"}, nil, mp, out)
+				require.NoError(t, err)
+				require.Equal(t, 2, out.RowCount())
+				require.Equal(t, 2, out.Vecs[1].Length())
+				require.True(t, out.Vecs[1].IsNull(0))
+				require.True(t, out.Vecs[1].IsNull(1))
+			}
+			if tc.contextProof {
+				require.Zero(t, calls)
+			} else {
+				require.Equal(t, 1, calls)
+			}
+			closeReader()
+			require.Equal(t, int32(1), atomic.LoadInt32(&source.closeCount))
+		})
+	}
 }
 
 func TestReaderLateMaterializationSkipsPersistedPayload(t *testing.T) {

@@ -3004,8 +3004,14 @@ func GetExprZoneMap(
 			case function.ISNULL:
 				switch exprImpl := args[0].Expr.(type) {
 				case *plan.Expr_Col:
-					nullCnt := meta.MustGetColumn(uint16(columnMap[int(exprImpl.Col.ColPos)])).NullCnt()
-					zms[expr.AuxId] = index.SetBool(zms[expr.AuxId], nullCnt > 0)
+					seqnum := uint16(columnMap[int(exprImpl.Col.ColPos)])
+					colMeta := meta.MustGetColumn(seqnum)
+					matches := colMeta.NullCnt() > 0
+					if proof, ok := objectio.M0ProvenObject(ctx); ok &&
+						uint32(seqnum) >= proof.WrittenSize {
+						matches = true
+					}
+					zms[expr.AuxId] = index.SetBool(zms[expr.AuxId], matches)
 					return zms[expr.AuxId]
 				default:
 					zms[expr.AuxId].Reset()
@@ -3014,8 +3020,14 @@ func GetExprZoneMap(
 			case function.ISNOTNULL:
 				switch exprImpl := args[0].Expr.(type) {
 				case *plan.Expr_Col:
-					zm := meta.MustGetColumn(uint16(columnMap[int(exprImpl.Col.ColPos)])).ZoneMap()
-					zms[expr.AuxId] = index.SetBool(zms[expr.AuxId], zm.IsInited())
+					seqnum := uint16(columnMap[int(exprImpl.Col.ColPos)])
+					colMeta := meta.MustGetColumn(seqnum)
+					matches := colMeta.ZoneMap().IsInited()
+					if proof, ok := objectio.M0ProvenObject(ctx); ok &&
+						uint32(seqnum) >= proof.WrittenSize {
+						matches = false
+					}
+					zms[expr.AuxId] = index.SetBool(zms[expr.AuxId], matches)
 					return zms[expr.AuxId]
 				default:
 					zms[expr.AuxId].Reset()

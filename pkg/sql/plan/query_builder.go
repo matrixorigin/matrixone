@@ -12798,6 +12798,7 @@ func (builder *QueryBuilder) bindView(
 		}
 	}
 
+	publicColumnOrdinals := knownInformationSchemaColumns(schema, table, viewData.Stmt)
 	viewData.Stmt, err = builder.metadataViewColumnsSQL(schema, table, viewData.Stmt, snapshot)
 	if err != nil {
 		return 0, err
@@ -12838,6 +12839,9 @@ func (builder *QueryBuilder) bindView(
 		viewStmt.Name = alterstmt.Name
 		viewStmt.ColNames = alterstmt.ColNames
 		viewStmt.AsSource = alterstmt.AsSource
+	}
+	if publicColumnOrdinals && !rewriteInformationSchemaColumnOrdinals(viewStmt.AsSource) {
+		return 0, moerr.NewInternalError(builder.GetContext(), "unsupported system COLUMNS ordinal projection")
 	}
 
 	if state, _ := builder.GetContext().Value(viewSchemaContextKey{}).(*viewSchemaDerivation); state != nil {

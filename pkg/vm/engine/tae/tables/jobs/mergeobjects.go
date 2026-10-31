@@ -80,6 +80,8 @@ type mergeObjectsTask struct {
 
 	arena      *objectio.WriteArena
 	tnDataBats []*containers.Batch // cached TN batch wrappers, one per merged object
+	m0Proofs   []objectio.M0ObjectProof
+	m0ProofSet []bool
 }
 
 func NewMergeObjectsTask(
@@ -115,6 +117,8 @@ func NewMergeObjectsTask(
 		nMergedBlk:       make([]int, len(mergedObjs)),
 		blkCnt:           make([]int, len(mergedObjs)),
 		tnDataBats:       make([]*containers.Batch, len(mergedObjs)),
+		m0Proofs:         make([]objectio.M0ObjectProof, len(mergedObjs)),
+		m0ProofSet:       make([]bool, len(mergedObjs)),
 		targetObjSize:    targetObjSize,
 		createAt:         time.Now(),
 		segmentID:        objectio.NewSegmentid(),
@@ -266,6 +270,24 @@ func (task *mergeObjectsTask) LoadNextBatch(
 	obj := task.mergedObjsHandle[objIdx]
 	ctx = fileservice.WithFileServicePolicy(ctx, fileservice.SkipAllCache)
 	ctx = tables.WithPreservePhysicalRows(ctx)
+	if !task.isTombstone {
+		if !task.m0ProofSet[objIdx] {
+			proven, proof, proofErr := activeM0MergeProof(
+				ctx,
+				task.schema,
+				task.mergedObjs[objIdx].GetLocation(),
+				task.rt.Fs,
+			)
+			if proofErr != nil {
+				return nil, nil, nil, proofErr
+			}
+			task.m0Proofs[objIdx] = proof
+			task.m0ProofSet[objIdx] = proven
+		}
+		if task.m0ProofSet[objIdx] {
+			ctx = objectio.WithM0ProvenObject(ctx, task.m0Proofs[objIdx])
+		}
+	}
 	if task.isTombstone {
 		err = obj.Scan(
 			ctx,
@@ -404,7 +426,7 @@ func (task *mergeObjectsTask) PrepareNewWriter() *ioutil.BlockWriter {
 	writer := ioutil.ConstructWriterWithSegmentID(
 		task.segmentID,
 		task.num,
-		task.schema.Version,
+		activeM0WriteSchemaVersion(task.schema, seqnums, task.schema.Version),
 		seqnums,
 		sortkeyPos,
 		sortkeyIsPK,

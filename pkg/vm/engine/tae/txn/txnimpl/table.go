@@ -1426,6 +1426,9 @@ func (tbl *txnTable) AlterTable(ctx context.Context, req *apipb.AlterTableReq) e
 
 	tbl.dataTable.schema = newSchema // update new schema to txn local schema
 	//TODO(aptend): handle written data in localobj, keep the batch aligned with the new schema
+	if req.Kind == apipb.AlterKind_AddColumn {
+		return m0AfterApplyAddColumn(ctx)
+	}
 	return err
 }
 

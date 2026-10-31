@@ -7809,6 +7809,36 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 				},
 			}
 
+		case *tree.AlterAddCol:
+			if activeM0PlanHooks.validateAdd == nil {
+				return nil, moerr.NewInvalidInputf(
+					ctx.GetContext(),
+					unsupportedErrFmt,
+					formatTreeNode(opt),
+				)
+			}
+			bindPlan := &plan.AlterTable{
+				TableDef:     tableDef,
+				CopyTableDef: DeepCopyTableDef(currentTableDef, true),
+			}
+			bindCtx := initAlterTableContext(tableDef, bindPlan.CopyTableDef, databaseName)
+			if _, err = AddColumn(ctx, bindPlan, opt, bindCtx); err != nil {
+				return nil, err
+			}
+			newCol := FindColumn(bindPlan.CopyTableDef.Cols, opt.Column.Name.ColName())
+			if err = m0ValidateBoundAddColumn(newCol); err != nil {
+				return nil, err
+			}
+			alterTable.Actions[i] = &plan.AlterTable_Action{
+				Action: &plan.AlterTable_Action_AddColumn{
+					AddColumn: &plan.AlterAddColumn{
+						Name: newCol.Name,
+						Type: newCol.Typ,
+						Pos:  -1,
+					},
+				},
+			}
+
 		case *tree.AlterOptionTableName:
 			oldName := tableDef.Name
 			newName := string(opt.Name.ToTableName().ObjectName)

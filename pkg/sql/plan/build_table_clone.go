@@ -166,6 +166,11 @@ func buildCloneTable(
 	if createTablePlan, err = buildCreateTable(ctx, &stmt.CreateTable, stmt, false); err != nil {
 		return nil, err
 	}
+	if _, err = m0PreserveCloneLayout(
+		srcTblDef, createTablePlan, dstDatabaseName, dstTableName, stmt.CreateTable.Temporary,
+	); err != nil {
+		return nil, err
+	}
 
 	return &Plan{
 		Plan: &plan.Plan_Ddl{

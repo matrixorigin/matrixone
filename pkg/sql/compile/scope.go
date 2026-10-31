@@ -1749,6 +1749,9 @@ const defaultStarCountTombstoneThreshold = 5000000
 
 // isSingleStarCountNoFilterNoGroupBy returns true if node has exactly one agg and it is starcount, with no filter and no groupby.
 func isSingleStarCountNoFilterNoGroupBy(node *plan.Node) bool {
+	if activeM0DisableCountNotNullRewrite {
+		return false
+	}
 	if node == nil || len(node.AggList) != 1 || len(node.FilterList) != 0 || len(node.GroupBy) != 0 {
 		return false
 	}

@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
 const (
@@ -717,6 +718,84 @@ func TestParseColumnsBatchPreservesUnsignedFlag(t *testing.T) {
 			require.Equal(t, types.T_uint64, decoded.Oid)
 		}
 	})
+}
+
+func TestParseColumnsBatchUsesAuthoritativeNullability(t *testing.T) {
+	mp := mpool.MustNewZero()
+	packer := types.NewPacker()
+	defer packer.Close()
+	typ := types.T_int32.ToType()
+	typBytes, err := types.Encode(&typ)
+	require.NoError(t, err)
+	staleDefault, err := types.Encode(&plan.Default{NullAbility: false})
+	require.NoError(t, err)
+
+	columnBatch, err := catalog.GenCreateColumnTuples([]catalog.Column{
+		{
+			AccountId:    7,
+			DatabaseId:   8,
+			TableId:      9,
+			DatabaseName: "m0",
+			TableName:    "customer",
+			Name:         "optional",
+			Typ:          typBytes,
+			TypLen:       int32(len(typBytes)),
+			Num:          1,
+			Seqnum:       0,
+			NotNull:      0,
+			HasDef:       1,
+			DefaultExpr:  staleDefault,
+		},
+		{
+			AccountId:    7,
+			DatabaseId:   8,
+			TableId:      9,
+			DatabaseName: "m0",
+			TableName:    "customer",
+			Name:         "required",
+			Typ:          typBytes,
+			TypLen:       int32(len(typBytes)),
+			Num:          2,
+			Seqnum:       1,
+			NotNull:      1,
+		},
+	}, mp, packer)
+	require.NoError(t, err)
+
+	logtailBatch := batch.NewWithSize(len(columnBatch.Vecs) + MO_OFF)
+	logtailBatch.Vecs[MO_ROWID_IDX] = vector.NewVec(types.T_Rowid.ToType())
+	logtailBatch.Vecs[MO_TIMESTAMP_IDX] = vector.NewVec(types.T_TS.ToType())
+	for i := 0; i < 2; i++ {
+		require.NoError(t, vector.AppendFixed(
+			logtailBatch.Vecs[MO_ROWID_IDX], types.Rowid{}, false, mp))
+		require.NoError(t, vector.AppendFixed(
+			logtailBatch.Vecs[MO_TIMESTAMP_IDX], types.BuildTS(1, 0), false, mp))
+	}
+	copy(logtailBatch.Vecs[MO_OFF:], columnBatch.Vecs)
+	logtailBatch.SetRowCount(2)
+	defer logtailBatch.Clean(mp)
+
+	var columns Columns
+	ParseColumnsBatchAnd(logtailBatch, func(columnsByTable map[TableItemKey]Columns) {
+		require.Len(t, columnsByTable, 1)
+		for _, parsed := range columnsByTable {
+			columns = parsed
+		}
+	})
+	require.Len(t, columns, 2)
+	require.Equal(t, int8(0), columns[0].NotNull)
+	require.Equal(t, int8(1), columns[1].NotNull)
+
+	colDefs := make([]engine.TableDef, 0, len(columns))
+	for _, col := range columns {
+		colDefs = append(colDefs, genTableDefOfColumn(col))
+	}
+	tableDef, _ := getTableDef(&TableItem{Name: "customer"}, colDefs)
+	require.Len(t, tableDef.Cols, 2)
+	require.True(t, tableDef.Cols[0].Default.NullAbility)
+	require.False(t, tableDef.Cols[0].Typ.NotNullable)
+	require.False(t, tableDef.Cols[1].Default.NullAbility)
+	require.True(t, tableDef.Cols[1].Typ.NotNullable)
 }
 
 func newTestTableBatch(mp *mpool.MPool) *batch.Batch {

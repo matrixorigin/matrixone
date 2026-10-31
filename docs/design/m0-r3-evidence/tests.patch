@@ -1,0 +1,394 @@
+diff --git a/pkg/objectio/r3_local_compat_test.go b/pkg/objectio/r3_local_compat_test.go
+new file mode 100644
+--- /dev/null
++++ b/pkg/objectio/r3_local_compat_test.go
+@@ -0,0 +1,94 @@
++package objectio
++
++import (
++	"context"
++	"crypto/sha256"
++	"encoding/hex"
++	"os"
++	"path/filepath"
++	"strings"
++	"testing"
++
++	"github.com/matrixorigin/matrixone/pkg/common/mpool"
++	"github.com/matrixorigin/matrixone/pkg/container/batch"
++	"github.com/matrixorigin/matrixone/pkg/container/types"
++	"github.com/matrixorigin/matrixone/pkg/container/vector"
++	"github.com/matrixorigin/matrixone/pkg/defines"
++	"github.com/matrixorigin/matrixone/pkg/fileservice"
++	"github.com/stretchr/testify/require"
++)
++
++func TestR3LocalOrdinaryMissingColumn(t *testing.T) {
++	root, nameFile := os.Getenv("R3_OBJECT_DIR"), os.Getenv("R3_OBJECT_NAME_FILE")
++	require.NotEmpty(t, root)
++	require.NotEmpty(t, nameFile)
++	ctx := context.Background()
++	fs, err := fileservice.NewLocalFS2(ctx, defines.SharedFileServiceName, root, fileservice.DisabledCacheConfig, nil)
++	require.NoError(t, err)
++	t.Cleanup(func() { fs.Close(ctx) })
++	mp := mpool.MustNewZero()
++	t.Cleanup(func() {
++		require.Zero(t, mp.CurrNB())
++		mpool.DeleteMPool(mp)
++	})
++
++	if os.Getenv("R3_CREATE") == "1" {
++		bat := batch.NewWithSize(1)
++		t.Cleanup(func() { bat.Clean(mp) })
++		bat.SetVector(0, vector.NewVec(types.T_int32.ToType()))
++		require.NoError(t, vector.AppendFixedList(bat.Vecs[0], []int32{11, 22}, nil, mp))
++		bat.SetRowCount(2)
++		id := NewObjectid()
++		name := BuildObjectNameWithObjectID(&id)
++		writer, e := NewObjectWriter(name, fs, 0, []uint16{0}, nil)
++		require.NoError(t, e)
++		_, e = writer.Write(bat)
++		require.NoError(t, e)
++		_, e = writer.WriteEnd(ctx)
++		require.NoError(t, e)
++		bat.Clean(mp)
++		require.NoError(t, os.WriteFile(nameFile, []byte(name.String()), 0600))
++	}
++	nameData, err := os.ReadFile(nameFile)
++	require.NoError(t, err)
++	name := strings.TrimSpace(string(nameData))
++	raw, err := os.ReadFile(filepath.Join(root, name))
++	require.NoError(t, err)
++	hash := sha256.Sum256(raw)
++	t.Logf("R3_OBJECT name=%s sha256=%s bytes=%d", name, hex.EncodeToString(hash[:]), len(raw))
++	reader, err := NewObjectReaderWithStr(name, fs)
++	require.NoError(t, err)
++	metadata, err := reader.ReadAllMeta(ctx, mp)
++	require.NoError(t, err)
++	meta := metadata.MustDataMeta()
++	require.Equal(t, uint32(2), meta.GetBlockMeta(0).GetRows())
++	io, err := ReadOneBlock(ctx, &meta, name, 0, []uint16{0}, []types.Type{types.T_int32.ToType()}, mp, fs, fileservice.SkipAllCache)
++	require.NoError(t, err)
++	presentAny, err := DecodeCached(io.Entries[0].CachedData)
++	require.NoError(t, err)
++	present := presentAny.(*vector.Vector)
++	require.Equal(t, []int32{11, 22}, vector.MustFixedColWithTypeCheck[int32](present))
++	require.Equal(t, types.T_int32, present.GetType().Oid)
++	ReleaseIOVector(&io)
++
++	io, err = ReadOneBlock(ctx, &meta, name, 0, []uint16{1}, []types.Type{types.T_int32.ToType()}, mp, fs, fileservice.SkipAllCache)
++	if os.Getenv("R3_EXPECT") == "reject" {
++		require.Error(t, err)
++		require.ErrorContains(t, err, "objectio: missing normal column without proof")
++		t.Logf("R3_MISSING result=reject stage=ReadOneBlock")
++	} else {
++		require.NoError(t, err)
++		missingAny, e := DecodeCached(io.Entries[0].CachedData)
++		require.NoError(t, e)
++		missing := missingAny.(*vector.Vector)
++		require.Equal(t, types.T_int32, missing.GetType().Oid)
++		require.Equal(t, 2, missing.Length())
++		require.True(t, missing.IsNull(0))
++		require.True(t, missing.IsNull(1))
++		ReleaseIOVector(&io)
++		t.Logf("R3_MISSING result=null rows=2 type=int32")
++	}
++	rawAfter, err := os.ReadFile(filepath.Join(root, name))
++	require.NoError(t, err)
++	require.Equal(t, hash, sha256.Sum256(rawAfter))
++}
+diff --git a/pkg/vm/engine/readutil/r3_local_real_reader_test.go b/pkg/vm/engine/readutil/r3_local_real_reader_test.go
+new file mode 100644
+--- /dev/null
++++ b/pkg/vm/engine/readutil/r3_local_real_reader_test.go
+@@ -0,0 +1,196 @@
++//go:build mo_m0
++
++package readutil
++
++import (
++	"context"
++	"sync/atomic"
++	"testing"
++
++	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
++	"github.com/matrixorigin/matrixone/pkg/common/mpool"
++	"github.com/matrixorigin/matrixone/pkg/container/batch"
++	"github.com/matrixorigin/matrixone/pkg/container/types"
++	"github.com/matrixorigin/matrixone/pkg/container/vector"
++	"github.com/matrixorigin/matrixone/pkg/defines"
++	"github.com/matrixorigin/matrixone/pkg/fileservice"
++	"github.com/matrixorigin/matrixone/pkg/objectio"
++	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
++	"github.com/matrixorigin/matrixone/pkg/pb/plan"
++	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
++	"github.com/matrixorigin/matrixone/pkg/vm/engine"
++	"github.com/stretchr/testify/require"
++)
++
++func r3Table(version uint32) *plan.TableDef {
++	id := &plan.ColDef{Name: "id", Seqnum: 0, Typ: plan.Type{Id: int32(types.T_int32)}}
++	tenant := &plan.ColDef{Name: "tenant", Seqnum: 1, Typ: plan.Type{Id: int32(types.T_int32)}}
++	pk := &plan.ColDef{Name: pkgcatalog.CPrimaryKeyColName, Seqnum: 2, Hidden: true, Primary: true, Typ: plan.Type{Id: int32(types.T_varchar)}}
++	added := &plan.ColDef{Name: "added", Seqnum: 3, Typ: plan.Type{Id: int32(types.T_int32)}, Default: &plan.Default{NullAbility: true}}
++	rowid := &plan.ColDef{Name: pkgcatalog.Row_ID, Seqnum: 4, Hidden: true, Typ: plan.Type{Id: int32(types.T_Rowid)}}
++	return &plan.TableDef{
++		Name: "r3", Version: version,
++		Pkey:          &plan.PrimaryKeyDef{Names: []string{"id", "tenant"}, PkeyColName: pk.Name, CompPkeyCol: pk},
++		Cols:          []*plan.ColDef{id, tenant, pk, added, rowid},
++		Name2ColIndex: map[string]int32{"id": 0, "tenant": 1, pk.Name: 2, "added": 3, rowid.Name: 4},
++	}
++}
++
++func r3WriteBlock(t *testing.T, fs fileservice.FileService, mp *mpool.MPool, badType, hole bool) objectio.BlockInfo {
++	t.Helper()
++	seqs := []uint16{0, 1, 2}
++	if hole {
++		seqs = []uint16{0, 2}
++	}
++	bat := batch.NewWithSize(len(seqs))
++	t.Cleanup(func() { bat.Clean(mp) })
++	for i, seq := range seqs {
++		switch {
++		case seq == 2:
++			bat.Vecs[i] = vector.NewVec(types.T_varchar.ToType())
++			require.NoError(t, vector.AppendBytes(bat.Vecs[i], []byte("one"), false, mp))
++			require.NoError(t, vector.AppendBytes(bat.Vecs[i], []byte("two"), false, mp))
++		case seq == 0 && badType:
++			bat.Vecs[i] = vector.NewVec(types.T_int64.ToType())
++			require.NoError(t, vector.AppendFixedList(bat.Vecs[i], []int64{11, 22}, nil, mp))
++		default:
++			bat.Vecs[i] = vector.NewVec(types.T_int32.ToType())
++			values := []int32{11, 22}
++			if seq == 1 {
++				values = []int32{1, 2}
++			}
++			require.NoError(t, vector.AppendFixedList(bat.Vecs[i], values, nil, mp))
++		}
++	}
++	bat.SetRowCount(2)
++	writer := ioutil.ConstructWriter(0, seqs, len(seqs)-1, true, false, fs)
++	_, err := writer.WriteBatch(bat)
++	require.NoError(t, err)
++	_, _, err = writer.Sync(context.Background())
++	require.NoError(t, err)
++	stats := writer.GetObjectStats()
++	return stats.ConstructBlockInfo(0)
++}
++
++func r3Env(t *testing.T) (fileservice.FileService, *mpool.MPool) {
++	t.Helper()
++	fs, err := fileservice.NewMemoryFS(defines.SharedFileServiceName, fileservice.DisabledCacheConfig, nil)
++	require.NoError(t, err)
++	t.Cleanup(func() { fs.Close(context.Background()) })
++	mp := mpool.MustNewZero()
++	t.Cleanup(func() { require.Zero(t, mp.CurrNB()); mpool.DeleteMPool(mp) })
++	return fs, mp
++}
++
++func r3Read(t *testing.T, fs fileservice.FileService, mp *mpool.MPool, table *plan.TableDef, info objectio.BlockInfo, columns []string) error {
++	t.Helper()
++	ctx := context.Background()
++	source := &singlePersistedBlockSource{info: info}
++	r, err := NewReader(ctx, mp, nil, fs, table, timestamp.Timestamp{}, nil, source, 0, engine.FilterHint{})
++	require.NoError(t, err)
++	closed := false
++	t.Cleanup(func() {
++		if !closed {
++			_ = r.Close()
++		}
++	})
++	out := batch.NewWithSize(len(columns))
++	t.Cleanup(func() { out.Clean(mp) })
++	for i := range out.Vecs {
++		out.Vecs[i] = vector.NewVec(types.T_int32.ToType())
++	}
++	_, err = r.Read(ctx, columns, nil, mp, out)
++	if err == nil {
++		require.Equal(t, 2, out.RowCount())
++		require.Equal(t, []int32{11, 22}, vector.MustFixedColWithTypeCheck[int32](out.Vecs[0]))
++		if len(columns) == 2 {
++			require.Equal(t, 2, out.Vecs[1].Length())
++			require.True(t, out.Vecs[1].IsNull(0))
++			require.True(t, out.Vecs[1].IsNull(1))
++		}
++	}
++	if atomic.LoadInt32(&source.closeCount) == 0 {
++		require.NoError(t, r.Close())
++	}
++	closed = true
++	require.Equal(t, int32(1), atomic.LoadInt32(&source.closeCount))
++	out.Clean(mp)
++	return err
++}
++
++func TestR3RealClassificationAndReader(t *testing.T) {
++	require.True(t, activeM0ReadLocationProofEnabled)
++	t.Run("same_object_valid_then_version_mismatch", func(t *testing.T) {
++		fs, mp := r3Env(t)
++		info := r3WriteBlock(t, fs, mp, false, false)
++		valid := r3Table(1)
++		proven, proof, err := proveM0ReadLocation(context.Background(), valid, info.MetaLocation(), fs)
++		require.NoError(t, err)
++		require.True(t, proven)
++		require.Equal(t, uint32(3), proof.WrittenSize)
++		require.Equal(t, uint32(4), proof.SchemaSize)
++		require.NoError(t, r3Read(t, fs, mp, valid, info, []string{"id", "added"}))
++		mismatch := r3Table(0)
++		proven, _, err = proveM0ReadLocation(context.Background(), mismatch, info.MetaLocation(), fs)
++		require.NoError(t, err)
++		require.False(t, proven)
++		err = r3Read(t, fs, mp, mismatch, info, []string{"id", "added"})
++		require.ErrorIs(t, err, objectio.ErrMissingColumnWithoutProof)
++		t.Logf("R3_FLOW valid=proof+NULL mismatch=not_M0,reader,ObjectIO_reject object=%s", info.MetaLocation().Name().String())
++	})
++	for _, tc := range []struct {
++		name          string
++		badType, hole bool
++	}{
++		{name: "wrong_type", badType: true}, {name: "prefix_hole", hole: true},
++	} {
++		t.Run(tc.name, func(t *testing.T) {
++			fs, mp := r3Env(t)
++			info := r3WriteBlock(t, fs, mp, tc.badType, tc.hole)
++			proven, _, err := proveM0ReadLocation(context.Background(), r3Table(1), info.MetaLocation(), fs)
++			require.True(t, proven)
++			require.Error(t, err)
++			readErr := r3Read(t, fs, mp, r3Table(1), info, []string{"id", "added"})
++			require.Error(t, readErr)
++			t.Logf("R3_FLOW %s classification=error reader=error", tc.name)
++		})
++	}
++	t.Run("proof_bound_to_object", func(t *testing.T) {
++		fs, mp := r3Env(t)
++		first := r3WriteBlock(t, fs, mp, false, false)
++		second := r3WriteBlock(t, fs, mp, false, false)
++		ok, proof, err := proveM0ReadLocation(context.Background(), r3Table(1), first.MetaLocation(), fs)
++		require.NoError(t, err)
++		require.True(t, ok)
++		obj, err := objectio.NewObjectReaderWithStr(second.MetaLocation().Name().String(), fs)
++		require.NoError(t, err)
++		meta, err := obj.ReadAllMeta(context.Background(), mp)
++		require.NoError(t, err)
++		data := meta.MustDataMeta()
++		ctx := objectio.WithM0ProvenObject(context.Background(), proof)
++		_, err = objectio.ReadOneBlock(ctx, &data, second.MetaLocation().Name().String(), 0, []uint16{3}, []types.Type{types.T_int32.ToType()}, mp, fs, fileservice.SkipAllCache)
++		require.ErrorIs(t, err, objectio.ErrMissingColumnWithoutProof)
++		t.Log("R3_FLOW real_proof_wrong_object=ObjectIO_reject; relation_membership=external_owner")
++	})
++	t.Run("lookalike_source_requires_membership", func(t *testing.T) {
++		fs, mp := r3Env(t)
++		first := r3WriteBlock(t, fs, mp, false, false)
++		foreign := r3WriteBlock(t, fs, mp, false, false)
++		require.NotEqual(t, first.MetaLocation().Name().String(), foreign.MetaLocation().Name().String())
++		proven, _, err := proveM0ReadLocation(context.Background(), r3Table(1), foreign.MetaLocation(), fs)
++		require.NoError(t, err)
++		require.True(t, proven)
++		require.NoError(t, r3Read(t, fs, mp, r3Table(1), foreign, []string{"id", "added"}))
++		t.Log("R3_FLOW synthetic_foreign_source=accepted_by_location_reader; relation_membership_not_exercised")
++	})
++	t.Run("ordinary_present_column", func(t *testing.T) {
++		fs, mp := r3Env(t)
++		info := r3WriteBlock(t, fs, mp, false, false)
++		ordinary := &plan.TableDef{Name: "ordinary", Pkey: &plan.PrimaryKeyDef{Names: []string{"id"}, PkeyColName: "id"}, Cols: []*plan.ColDef{{Name: "id", Seqnum: 0, Primary: true, Typ: plan.Type{Id: int32(types.T_int32)}}}, Name2ColIndex: map[string]int32{"id": 0}}
++		proven, _, err := proveM0ReadLocation(context.Background(), ordinary, info.MetaLocation(), fs)
++		require.NoError(t, err)
++		require.False(t, proven)
++		require.NoError(t, r3Read(t, fs, mp, ordinary, info, []string{"id"}))
++		t.Log("R3_FLOW ordinary=not_M0,present_column_OK")
++	})
++}
+diff --git a/pkg/tests/sqlintegration/r3_create_copy_sql_test.go b/pkg/tests/sqlintegration/r3_create_copy_sql_test.go
+new file mode 100644
+--- /dev/null
++++ b/pkg/tests/sqlintegration/r3_create_copy_sql_test.go
+@@ -0,0 +1,89 @@
++//go:build mo_m0
++
++package sqlintegration
++
++import (
++	"context"
++	"testing"
++	"time"
++
++	"github.com/matrixorigin/matrixone/pkg/embed"
++	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
++	"github.com/stretchr/testify/require"
++)
++
++func TestR3CreateCopyCloneRestartIdentity(t *testing.T) {
++	runSQLIntegration(t, func(cluster embed.Cluster) {
++		ctx, cancel := context.WithTimeout(t.Context(), 4*time.Minute)
++		defer cancel()
++		cn, err := cluster.GetCNService(0)
++		require.NoError(t, err)
++		db := openM0SQL(t, cn)
++		defer func() { _ = db.Close() }()
++		const schema = "r3_create_copy_root"
++		const parent = schema + ".customer"
++		const child = schema + ".customer_clone"
++		defer cleanupSQLIntegration(t, cn, "drop database if exists "+schema)
++
++		m0Exec(t, ctx, db, "create database "+schema)
++		m0Exec(t, ctx, db, "create table "+parent+m0RollbackCustomerSchema)
++		m0Exec(t, ctx, db, "insert into "+parent+" values (1,1,1,100,10,1),(2,2,2,200,20,2)")
++		m0Exec(t, ctx, db, "select mo_ctl('dn','flush','"+parent+"')")
++		initialID, initialVersion := m0TableGeneration(t, ctx, db, schema, "customer")
++		initialLayout := m0StoredColumnLayout(t, ctx, db, schema, "customer")
++		initialObjects := m0ObjectHeaderProofs(t, ctx, db, cn, parent)
++		require.NotEmpty(t, initialObjects)
++		require.Equal(t, uint32(0), initialVersion)
++		t.Logf("R3_CREATE id=%d version=%d tn_version=%d layout=%v objects=%v", initialID, initialVersion, m0TNCatalogSchemaVersion(t, ctx, db, parent), initialLayout, initialObjects)
++
++		m0Exec(t, ctx, db, "alter table "+parent+" add column copied int, algorithm=copy")
++		m0Exec(t, ctx, db, "select mo_ctl('dn','flush','"+parent+"')")
++		copyID, copyVersion := m0TableGeneration(t, ctx, db, schema, "customer")
++		copyLayout := m0StoredColumnLayout(t, ctx, db, schema, "customer")
++		copyObjects := m0ObjectHeaderProofs(t, ctx, db, cn, parent)
++		require.NotEmpty(t, copyObjects)
++		require.NotEqual(t, initialID, copyID)
++		require.Equal(t, 2, m0Count(t, ctx, db, "select count(*) from "+parent+" where copied is null"))
++		t.Logf("R3_COPY id=%d version=%d tn_version=%d layout=%v objects=%v", copyID, copyVersion, m0TNCatalogSchemaVersion(t, ctx, db, parent), copyLayout, copyObjects)
++
++		m0Exec(t, ctx, db, "create table "+child+" clone "+parent)
++		childID, childVersion := m0TableGeneration(t, ctx, db, schema, "customer_clone")
++		childLayout := m0StoredColumnLayout(t, ctx, db, schema, "customer_clone")
++		childObjects := m0ObjectHeaderProofs(t, ctx, db, cn, child)
++		require.NotEqual(t, copyID, childID)
++		require.Equal(t, copyVersion, childVersion)
++		require.Equal(t, copyLayout, childLayout)
++		require.Equal(t, copyObjects, childObjects)
++		t.Logf("R3_CLONE id=%d version=%d tn_version=%d layout=%v objects=%v", childID, childVersion, m0TNCatalogSchemaVersion(t, ctx, db, child), childLayout, childObjects)
++
++		m0Exec(t, ctx, db, "select mo_ctl('dn','globalcheckpoint','')")
++		tn := m0ServiceOfType(t, cluster, metadata.ServiceType_TN)
++		require.NoError(t, db.Close())
++		require.NoError(t, cn.Close())
++		require.NoError(t, tn.Close())
++		require.NoError(t, tn.Start())
++		require.NoError(t, cn.Start())
++		db = openM0SQL(t, cn)
++		parentIDAfter, parentVersionAfter := m0TableGeneration(t, ctx, db, schema, "customer")
++		childIDAfter, childVersionAfter := m0TableGeneration(t, ctx, db, schema, "customer_clone")
++		require.Equal(t, copyID, parentIDAfter)
++		require.Equal(t, copyVersion, parentVersionAfter)
++		require.Equal(t, childID, childIDAfter)
++		require.Equal(t, childVersion, childVersionAfter)
++		require.Equal(t, copyLayout, m0StoredColumnLayout(t, ctx, db, schema, "customer"))
++		require.Equal(t, childLayout, m0StoredColumnLayout(t, ctx, db, schema, "customer_clone"))
++		require.Equal(t, copyObjects, m0ObjectHeaderProofs(t, ctx, db, cn, parent))
++		require.Equal(t, childObjects, m0ObjectHeaderProofs(t, ctx, db, cn, child))
++		require.Equal(t, 2, m0Count(t, ctx, db, "select count(*) from "+child+" where copied is null"))
++		t.Logf("R3_RESTART parent_id=%d parent_version=%d parent_tn_version=%d child_id=%d child_version=%d child_tn_version=%d", parentIDAfter, parentVersionAfter, m0TNCatalogSchemaVersion(t, ctx, db, parent), childIDAfter, childVersionAfter, m0TNCatalogSchemaVersion(t, ctx, db, child))
++
++		m0Exec(t, ctx, db, "alter table "+child+" add column after_clone int")
++		childIDFinal, childVersionFinal := m0TableGeneration(t, ctx, db, schema, "customer_clone")
++		require.Equal(t, childID, childIDFinal)
++		require.Equal(t, childVersion+1, childVersionFinal)
++		require.Equal(t, childObjects, m0ObjectHeaderProofs(t, ctx, db, cn, child))
++		require.Equal(t, 2, m0Count(t, ctx, db, "select count(*) from "+child+" where copied is null and after_clone is null"))
++		require.Equal(t, 0, m0Count(t, ctx, db, "select count(*) from information_schema.columns where table_schema='"+schema+"' and table_name='customer' and column_name='after_clone'"))
++		t.Logf("R3_APPEND id=%d version=%d tn_version=%d layout=%v", childIDFinal, childVersionFinal, m0TNCatalogSchemaVersion(t, ctx, db, child), m0StoredColumnLayout(t, ctx, db, schema, "customer_clone"))
++	})
++}
