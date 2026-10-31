@@ -143,25 +143,39 @@ func (v *Vector) marshalSelectedRowsTo(
 	var firstKind PrepareParamKind
 	kindSeen := false
 	kindMixed := false
-	for i := 0; i < count; i++ {
-		row := rowAt(i)
-		if row < 0 || row >= v.length {
-			return moerr.NewInvalidInputNoCtx("selected vector row out of range")
-		}
-		if v.IsNull(uint64(row)) {
-			metadata |= selectedRowsHasNull
-		} else {
-			if v.prepareParamKindSeen || len(v.prepareParamKinds) != 0 {
-				kind := v.GetPrepareParamKindAt(row)
-				if !kindSeen {
-					firstKind, kindSeen = kind, true
-				} else if kind != firstKind {
-					kindMixed = true
-				}
+	if rows != nil && count == len(rows) && !v.IsConst() && v.nsp.EmptyByFlag() &&
+		v.gsp.EmptyByFlag() && len(v.prepareParamKinds) == 0 {
+		// Every selected row has uniform metadata, but selection bounds still
+		// need validation before passing rows to a specialized writer.
+		for _, row := range rows {
+			if row < 0 || int(row) >= v.length {
+				return moerr.NewInvalidInputNoCtx("selected vector row out of range")
 			}
 		}
-		if v.gsp.Contains(uint64(row)) {
-			metadata |= selectedRowsHasGrouping
+		if count > 0 && v.prepareParamKindSeen {
+			firstKind, kindSeen = v.prepareParamKind, true
+		}
+	} else {
+		for i := 0; i < count; i++ {
+			row := rowAt(i)
+			if row < 0 || row >= v.length {
+				return moerr.NewInvalidInputNoCtx("selected vector row out of range")
+			}
+			if v.IsNull(uint64(row)) {
+				metadata |= selectedRowsHasNull
+			} else {
+				if v.prepareParamKindSeen || len(v.prepareParamKinds) != 0 {
+					kind := v.GetPrepareParamKindAt(row)
+					if !kindSeen {
+						firstKind, kindSeen = kind, true
+					} else if kind != firstKind {
+						kindMixed = true
+					}
+				}
+			}
+			if v.gsp.Contains(uint64(row)) {
+				metadata |= selectedRowsHasGrouping
+			}
 		}
 	}
 	kindMode := selectedRowsKindNone

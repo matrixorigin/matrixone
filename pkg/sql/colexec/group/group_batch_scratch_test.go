@@ -18,6 +18,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -28,6 +29,131 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/stretchr/testify/require"
 )
+
+func TestDynamicGroupingAggregateMarker(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		constant     bool
+		values       []bool
+		nulls        []uint64
+		offset       int
+		empty        bool
+		shortScratch bool
+		masked       bool
+		want         []uint64
+		wantErr      string
+	}{
+		{name: "constant-real", constant: true, values: []bool{false}, offset: 1, want: []uint64{11, 12}},
+		{name: "constant-synthetic", constant: true, values: []bool{true}, offset: 1, masked: true, want: []uint64{0, 0}},
+		{name: "constant-null", constant: true, offset: 1, wantErr: "cannot be NULL"},
+		{name: "empty-constant-null", constant: true, offset: 4, empty: true, want: []uint64{}},
+		{name: "flat-offset", values: []bool{true, false, true, false}, offset: 1, masked: true, want: []uint64{11, 0}},
+		{name: "flat-null-outside-window", values: []bool{false, false, false, false}, nulls: []uint64{0, 3}, offset: 1, want: []uint64{11, 12}},
+		{name: "flat-null-after-synthetic", values: []bool{false, true, false, false}, nulls: []uint64{2}, offset: 1, wantErr: "cannot be NULL"},
+		{name: "short-scratch", constant: true, values: []bool{false}, offset: 1, shortScratch: true, wantErr: "missing its aggregate marker"},
+		{name: "empty-outside-window", constant: true, offset: 5, empty: true, wantErr: "invalid dynamic grouping aggregate marker"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
+			var marker *vector.Vector
+			t.Cleanup(func() {
+				if marker != nil {
+					marker.Free(mp)
+				}
+			})
+			if tc.constant {
+				if len(tc.values) == 0 {
+					marker = vector.NewConstNull(types.T_bool.ToType(), 4, mp)
+				} else {
+					var err error
+					marker, err = vector.NewConstFixed(types.T_bool.ToType(), tc.values[0], 4, mp)
+					require.NoError(t, err)
+				}
+			} else {
+				marker = testutil.MakeBoolVector(tc.values, tc.nulls, mp)
+			}
+			input := &batch.Batch{Vecs: []*vector.Vector{marker, nil}}
+			groups := []uint64{11, 12}
+			scratch := []uint64{91, 92, 93}
+			selected := groups
+			if tc.empty {
+				selected = groups[:0]
+			}
+			work := scratch
+			if tc.shortScratch {
+				work = scratch[:1]
+			}
+			got, err := dynamicGroupingAggregateGroups(input, tc.offset, selected, work)
+			require.Equal(t, []uint64{11, 12}, groups, "hash group IDs must remain unchanged")
+			if tc.wantErr != "" {
+				require.ErrorContains(t, err, tc.wantErr)
+				require.Nil(t, got)
+			} else {
+				require.NoError(t, err)
+				require.Equal(t, tc.want, got)
+				if len(got) > 0 {
+					if tc.masked {
+						require.Same(t, &scratch[0], &got[0])
+					} else {
+						require.Same(t, &groups[0], &got[0])
+					}
+				}
+			}
+			if !tc.masked {
+				require.Equal(t, []uint64{91, 92, 93}, scratch)
+			}
+			require.Equal(t, uint64(93), scratch[2], "only the selected scratch window may change")
+		})
+	}
+}
+
+// One hash mini-batch isolates marker selection from hash and aggregate costs.
+func BenchmarkDynamicGroupingAggregateMarker(b *testing.B) {
+	const rows = hashmap.UnitLimit
+	for _, name := range []string{"constant-real", "constant-synthetic", "flat-real", "flat-mixed"} {
+		b.Run(name, func(b *testing.B) {
+			mp := mpool.MustNewZero()
+			b.Cleanup(func() { require.Zero(b, mp.CurrNB()) })
+			values := make([]bool, rows+1)
+			var marker *vector.Vector
+			b.Cleanup(func() {
+				if marker != nil {
+					marker.Free(mp)
+				}
+			})
+			if name == "constant-real" || name == "constant-synthetic" {
+				var err error
+				marker, err = vector.NewConstFixed(types.T_bool.ToType(), name == "constant-synthetic", rows+1, mp)
+				require.NoError(b, err)
+			} else {
+				if name == "flat-mixed" {
+					values[rows/2] = true
+				}
+				marker = testutil.MakeBoolVector(values, nil, mp)
+			}
+			input := &batch.Batch{Vecs: []*vector.Vector{marker, nil}}
+			groups, scratch := make([]uint64, rows), make([]uint64, rows)
+			for i := range groups {
+				groups[i] = uint64(i + 1)
+			}
+			b.ReportAllocs()
+			var got []uint64
+			var err error
+			for b.Loop() {
+				got, err = dynamicGroupingAggregateGroups(input, 1, groups, scratch)
+				if err != nil {
+					b.Fatal(err)
+				}
+			}
+			want := groups[rows/2-1]
+			if name == "constant-synthetic" || name == "flat-mixed" {
+				want = aggexec.GroupNotMatched
+			}
+			require.Equal(b, want, got[rows/2-1])
+		})
+	}
+}
 
 func TestGroupMiniBatchScratchResults(t *testing.T) {
 	const rows = hashmap.UnitLimit + 3

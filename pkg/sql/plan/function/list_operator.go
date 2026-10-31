@@ -181,6 +181,13 @@ func decimalArithmeticDomain(input types.Type) (width, scale int32, ok bool) {
 	if input.Oid == types.T_bit {
 		return 20, 0, true
 	}
+	// TRUE/FALSE participate in exact numeric coercion as 1/0 with one
+	// integral digit and zero scale, matching the comparison aligner; without
+	// this a full-scale DECIMAL128 operand would miss the Decimal256 widening
+	// an integer operand receives and overflow during execution.
+	if input.Oid == types.T_bool {
+		return 1, 0, true
+	}
 	return 0, 0, false
 }
 
@@ -380,7 +387,11 @@ func alignDecimalComparisonTypesMode(targets, inputs []types.Type, legacy bool) 
 		if targets[i].Oid.TypeLen() > target.Oid.TypeLen() {
 			target = targets[i]
 		}
-		if input.Oid.IsDecimal() || input.IsIntOrUint() {
+		// BOOL participates in the decimal comparison domain as a 0/1 value
+		// with one integral digit (MySQL TRUE/FALSE semantics), so its digit
+		// contribution is computed from the operand itself rather than from
+		// the catch-all cast envelope of the fixed rule table.
+		if input.Oid.IsDecimal() || input.IsIntOrUint() || input.Oid == types.T_bool {
 			sources[i] = input
 			if input.Oid.IsDecimal() && input.Width <= 0 {
 				sources[i].Width = input.Oid.ToType().Width

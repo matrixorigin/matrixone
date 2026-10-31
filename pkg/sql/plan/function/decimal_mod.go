@@ -42,6 +42,9 @@ func DecimalModReturnType(original []types.Type, selected types.Type) types.Type
 					width = 8
 				}
 			}
+		case operand.Oid == types.T_bool:
+			// TRUE/FALSE modulo as 1/0: one integral digit, zero scale.
+			width = 1
 		default:
 			// Preserve existing coercion semantics for temporal, approximate,
 			// string, BIT and unknown operands.

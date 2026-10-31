@@ -98,6 +98,10 @@ type container struct {
 	i         int
 	// indexList[i] = k means the number of rows before k in batchList[i] has been merged and send.
 	indexList []int64
+	// mergeHeap contains stable batchList indexes; exhausted slots are cleared,
+	// not compacted, so equal keys retain input-run order.
+	mergeHeap    []int
+	useMergeHeap bool
 
 	// expression executors for order columns.
 	executors []colexec.ExpressionExecutor
@@ -138,7 +142,11 @@ func (partition *Partition) Free(proc *process.Process, pipelineFailed bool, err
 		return
 	}
 	ctr := &partition.ctr
+	ctr.resetParam()
+	ctr.freeVector(proc.Mp())
+	ctr.freeBatch(proc.Mp())
 	ctr.freeExes()
+	ctr.compares = nil
 	if ctr.buf != nil {
 		ctr.buf.Clean(proc.Mp())
 		ctr.buf = nil
@@ -187,5 +195,6 @@ func (ctr *container) resetExes() {
 func (ctr *container) resetParam() {
 	ctr.i = 0
 	ctr.indexList = nil
+	ctr.mergeHeap = nil
 	ctr.status = receive
 }
