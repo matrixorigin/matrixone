@@ -27,6 +27,26 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestDecimal256MagnitudeBigInt(t *testing.T) {
+	min := Decimal256{B192_255: 1 << 63}
+	for _, tc := range []struct {
+		value Decimal256
+		want  *big.Int
+	}{
+		{Decimal256{}, big.NewInt(0)},
+		{Decimal256{B0_63: 7}, big.NewInt(7)},
+		{(Decimal256{B0_63: 7}).Minus(), big.NewInt(7)},
+		{min, new(big.Int).Lsh(big.NewInt(1), 255)},
+		{Decimal256{B192_255: 1, B128_191: 2, B64_127: 3, B0_63: 4},
+			new(big.Int).SetBytes([]byte{1, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 0, 0, 0, 0, 4})},
+	} {
+		got := tc.value.MagnitudeBigInt()
+		require.Equal(t, tc.want, got)
+		got.SetInt64(0)
+		require.Equal(t, tc.want, tc.value.MagnitudeBigInt())
+	}
+}
+
 func TestDecimalPrecisionCheckedOwner(t *testing.T) {
 	for _, tc := range []struct {
 		x, ceil, floor, round int64

@@ -770,12 +770,14 @@ func builtInMoShowVisibleBinEnum(parameters []*vector.Vector, result vector.Func
 			return nil, moerr.NewNotSupportedf(proc.Ctx, "show visible bin enum, the type must be enum/set, but got %s", typ.String())
 		}
 
-		members := strings.Split(enumStr, ",")
+		var members []string
 		if typ.Oid == types.T_uint64 {
 			if enumStr == "" {
 				return nil, nil
 			}
 			members = types.DecodeSetValues(enumStr)
+		} else {
+			members = strings.Split(enumStr, ",")
 		}
 		for i := range members {
 			members[i] = sqlquote.String(members[i])
@@ -2191,10 +2193,6 @@ func builtInCurrentUserName(_ []*vector.Vector, result vector.FunctionResultWrap
 		}
 	}
 	return nil
-}
-
-func padResultByteLength(src string, tgtLen int64, pad string, maxBytes int64) (int, bool) {
-	return padResultByteLengthWithCharacterWidth(src, tgtLen, pad, maxBytes, utf8.UTFMax)
 }
 
 func padResultByteLengthWithCharacterWidth(
@@ -4824,8 +4822,8 @@ func calcDateTimeInterval(t1 types.Datetime, t2 types.Datetime, sign int) (secon
 	second := int(t2.Sec())
 	microsecond := int(t2.MicroSec())
 
-	days1 := calcDaysSinceZero(int(t1.Year()), int(t1.Month()), int(t1.Day()))
-	days2 := calcDaysSinceZero(year, month, day)
+	days1 := types.MySQLDayNumber(int(t1.Year()), int(t1.Month()), int(t1.Day()))
+	days2 := types.MySQLDayNumber(year, month, day)
 	days1 -= sign * days2
 
 	tmp := (int64(days1)*SecondsIn24Hours+
@@ -4843,22 +4841,6 @@ func calcDateTimeInterval(t1 types.Datetime, t2 types.Datetime, sign int) (secon
 	seconds = int(tmp / 1e6)
 	microseconds = int(tmp % 1e6)
 	return
-}
-
-// calcDaynr calculates days since 0000-00-00.
-func calcDaysSinceZero(year int, month int, day int) int {
-	if year == 0 && month == 0 {
-		return 0
-	}
-
-	delsum := 365*year + 31*(month-1) + day
-	if month <= 2 {
-		year--
-	} else {
-		delsum -= (month*4 + 23) / 10
-	}
-	temp := ((year/100 + 1) * 3) / 4
-	return delsum + year/4 - temp
 }
 
 // Seconds in 0000 AD

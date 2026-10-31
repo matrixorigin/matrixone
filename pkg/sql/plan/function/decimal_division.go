@@ -67,7 +67,7 @@ func exactDivisionOperandType(source, effective types.Type) (precision, scale in
 	case source.Oid.IsDecimal():
 		precision = source.Width
 		if precision <= 0 {
-			precision = decimalStorageWidth(source.Oid)
+			precision = types.DecimalMaxPrecision(source.Oid)
 		}
 		return precision, max32(source.Scale, 0), true
 	case source.Oid.IsInteger():
@@ -95,7 +95,7 @@ func exactDivisionOperandType(source, effective types.Type) (precision, scale in
 	case source.Oid == types.T_any && effective.Oid.IsDecimal():
 		precision = effective.Width
 		if precision <= 0 {
-			precision = decimalStorageWidth(effective.Oid)
+			precision = types.DecimalMaxPrecision(effective.Oid)
 		}
 		return precision, max32(effective.Scale, 0), true
 	default:
@@ -144,7 +144,7 @@ func decimal256DivisionOperandType(source, effective types.Type) types.Type {
 		precision, scale = effective.Width, effective.Scale
 	}
 	if precision <= 0 {
-		precision = decimalStorageWidth(types.T_decimal256)
+		precision = types.DecimalMaxPrecision(types.T_decimal256)
 	}
 	return types.New(types.T_decimal256, precision, scale)
 }

@@ -4730,7 +4730,7 @@ func (p MarshalBinaryPlan) MarshalTo(w io.Writer) error {
 	if err := writeVectorMarshalByte(w, uint8(v.class)); err != nil {
 		return err
 	}
-	if err := writeVectorMarshalBytes(w, types.EncodeType(&v.typ)); err != nil {
+	if err := types.WriteFull(w, types.EncodeType(&v.typ)); err != nil {
 		return err
 	}
 
@@ -4752,7 +4752,7 @@ func (p MarshalBinaryPlan) MarshalTo(w io.Writer) error {
 					canonical.SetOffsetLen(p.canonicalOffset[index], length)
 				}
 				bytes := unsafe.Slice((*byte)(unsafe.Pointer(&canonical)), types.VarlenaSize)
-				if err := writeVectorMarshalBytes(w, bytes); err != nil {
+				if err := types.WriteFull(w, bytes); err != nil {
 					return err
 				}
 			}
@@ -4761,7 +4761,7 @@ func (p MarshalBinaryPlan) MarshalTo(w io.Writer) error {
 			if p.normalizedVarlenData != nil {
 				data = p.normalizedVarlenData
 			}
-			if err := writeVectorMarshalBytes(w, data); err != nil {
+			if err := types.WriteFull(w, data); err != nil {
 				return err
 			}
 		}
@@ -4777,12 +4777,12 @@ func (p MarshalBinaryPlan) MarshalTo(w io.Writer) error {
 					continue
 				}
 				offset, length := descriptor.OffsetLen()
-				if err := writeVectorMarshalBytes(w, v.area[offset:offset+length]); err != nil {
+				if err := types.WriteFull(w, v.area[offset:offset+length]); err != nil {
 					return err
 				}
 			}
 		} else {
-			if err := writeVectorMarshalBytes(w, v.area); err != nil {
+			if err := types.WriteFull(w, v.area); err != nil {
 				return err
 			}
 		}
@@ -4814,7 +4814,7 @@ func writeVectorMarshalByte(w io.Writer, value byte) error {
 	}
 	var data [1]byte
 	data[0] = value
-	return writeVectorMarshalBytes(w, data[:])
+	return types.WriteFull(w, data[:])
 }
 
 func writeVectorMarshalUint32(w io.Writer, value uint32) error {
@@ -4823,18 +4823,7 @@ func writeVectorMarshalUint32(w io.Writer, value uint32) error {
 	}
 	var data [4]byte
 	binary.NativeEndian.PutUint32(data[:], value)
-	return writeVectorMarshalBytes(w, data[:])
-}
-
-func writeVectorMarshalBytes(w io.Writer, value []byte) error {
-	written, err := w.Write(value)
-	if err != nil {
-		return err
-	}
-	if written != len(value) {
-		return io.ErrShortWrite
-	}
-	return nil
+	return types.WriteFull(w, data[:])
 }
 
 // UnmarshalBinary binds a vector to its binary encoding after fully validating
@@ -8574,7 +8563,32 @@ func unionT[T int32 | int64](v, w *Vector, sels []T, mp *mpool.MPool) error {
 		if err = pregrowVarlenaArea(v, total, mp); err != nil {
 			return err
 		}
-		if !w.GetNulls().EmptyByFlag() {
+		// Reuse the area sizing pass to select an inline-copy batch. The small
+		// check still handles non-inline zero-length descriptors correctly.
+		// Mixed/area payloads and Unicode admission keep the original loops.
+		if total == 0 && !types.IsUnicodeCollation(v.typ.Charset) {
+			if hasNull {
+				for i, sel := range sels {
+					if w.nsp.Contains(uint64(sel)) {
+						nulls.Add(&v.nsp, uint64(oldLen+i))
+						continue
+					}
+					if wCol[sel].IsSmall() {
+						vCol[oldLen+i] = wCol[sel]
+					} else if err = BuildVarlenaFromVarlena(v, &vCol[oldLen+i], &wCol[sel], &w.area, mp); err != nil {
+						return err
+					}
+				}
+			} else {
+				for i, sel := range sels {
+					if wCol[sel].IsSmall() {
+						vCol[oldLen+i] = wCol[sel]
+					} else if err = BuildVarlenaFromVarlena(v, &vCol[oldLen+i], &wCol[sel], &w.area, mp); err != nil {
+						return err
+					}
+				}
+			}
+		} else if hasNull {
 			for i, sel := range sels {
 				if w.nsp.Contains(uint64(sel)) {
 					nulls.Add(&v.nsp, uint64(oldLen+i))
@@ -8587,7 +8601,6 @@ func unionT[T int32 | int64](v, w *Vector, sels []T, mp *mpool.MPool) error {
 			}
 		} else {
 			for i, sel := range sels {
-
 				err = BuildVarlenaFromVarlena(v, &vCol[oldLen+i], &wCol[sel], &w.area, mp)
 				if err != nil {
 					return err

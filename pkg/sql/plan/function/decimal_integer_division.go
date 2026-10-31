@@ -162,9 +162,9 @@ func decimalIntegerDivUnsignedScaleOverflow(a, b types.Decimal256, adjustment in
 	if adjustment >= 96 {
 		return 0, moerr.NewOutOfRangeNoCtx("BIGINT UNSIGNED", "")
 	}
-	numerator := d256MagnitudeBigInt(a)
+	numerator := a.MagnitudeBigInt()
 	numerator.Mul(numerator, new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(adjustment)), nil))
-	quotient := new(big.Int).Quo(numerator, d256MagnitudeBigInt(b))
+	quotient := new(big.Int).Quo(numerator, b.MagnitudeBigInt())
 	if !quotient.IsUint64() || (negative && quotient.Sign() != 0) {
 		return 0, moerr.NewOutOfRangeNoCtx("BIGINT UNSIGNED", "")
 	}

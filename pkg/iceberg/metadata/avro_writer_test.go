@@ -63,6 +63,10 @@ func TestWriteManifestRoundTrip(t *testing.T) {
 	require.Equal(t, "parquet", got[0].DataFile.FileFormat)
 	require.Equal(t, int64(100), got[0].DataFile.RecordCount)
 	require.Equal(t, int64(1024), got[0].DataFile.ColumnSizes[1])
+	require.Equal(t, entries[0].DataFile.ValueCounts, got[0].DataFile.ValueCounts)
+	require.Equal(t, entries[0].DataFile.NullValueCounts, got[0].DataFile.NullValueCounts)
+	require.Equal(t, entries[0].DataFile.LowerBounds, got[0].DataFile.LowerBounds)
+	require.Equal(t, entries[0].DataFile.UpperBounds, got[0].DataFile.UpperBounds)
 	require.Equal(t, 19815, got[0].DataFile.Partition["created_day"])
 }
 
@@ -541,8 +545,8 @@ func TestManifestPartitionTypeValidation(t *testing.T) {
 	require.Equal(t, api.TypeInt, field.Kind)
 	_, err = manifestPartitionFields(api.Schema{}, api.PartitionSpec{Fields: []api.PartitionField{{Name: "part", SourceID: 1}}})
 	require.Error(t, err)
-	require.Equal(t, "value", firstNonEmpty("", " value ", "ignored"))
-	require.Empty(t, firstNonEmpty("", "  "))
+	require.Equal(t, "value", api.FirstNonEmptyTrimmed("", " value ", "ignored"))
+	require.Empty(t, api.FirstNonEmptyTrimmed("", "  "))
 }
 
 func TestManifestRecordEncodingHelpers(t *testing.T) {

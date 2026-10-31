@@ -7441,33 +7441,8 @@ func deleteManyWatermark(
 	return
 }
 
-const (
-	defaultCDCTaskMaxRetryTimes = 10
-	defaultCDCTaskRetryInterval = int64(time.Second * 10)
-)
-
 func (opts *CDCCreateTaskOptions) BuildTaskMetadata() task.TaskMetadata {
-	executor := task.TaskCode_InitCdc
-	switch {
-	case cdc.UsesGenerationAwareProtocol(opts.ExtraOpts):
-		executor = task.TaskCode_InitCdcSourcePatternV1
-	case cdc.UsesSourcePatternProtocol(opts.ExtraOpts):
-		executor = task.TaskCode_InitCdcSourcePatternV1
-	case opts.NoFull && cdc.UsesLosslessNoFullStart(opts.ExtraOpts):
-		executor = task.TaskCode_InitCdcLosslessStart
-	case !opts.NoFull && cdc.UsesStableEpochInitialSnapshot(opts.ExtraOpts):
-		executor = task.TaskCode_InitCdcStableEpoch
-	}
-	return task.TaskMetadata{
-		ID:       opts.TaskId,
-		Executor: executor,
-		Options: task.TaskOptions{
-			MaxRetryTimes: defaultCDCTaskMaxRetryTimes,
-			RetryInterval: defaultCDCTaskRetryInterval,
-			DelayDuration: 0,
-			Concurrency:   0,
-		},
-	}
+	return cdc.BuildTaskMetadata(opts.TaskId, opts.ExtraOpts, opts.NoFull)
 }
 
 func ExecuteAndGetRowsAffected(
@@ -7476,36 +7451,12 @@ func ExecuteAndGetRowsAffected(
 	query string,
 	args ...interface{},
 ) (int64, error) {
-	exec, err := tx.ExecContext(ctx, query, args...)
-	if err != nil {
-		return 0, err
-	}
-	rows, err := exec.RowsAffected()
-	if err != nil {
-		return 0, err
-	}
-	return rows, nil
+	return taskservice.ExecRowsAffected(ctx, tx, query, args...)
 }
 
 func (opts *CDCCreateTaskOptions) BuildTaskDetails() (details *task.Details, err error) {
-	details = &task.Details{
-		AccountID: opts.UserInfo.AccountId,
-		Account:   opts.UserInfo.AccountName,
-		Username:  opts.UserInfo.UserName,
-		Details: &task.Details_CreateCdc{
-			CreateCdc: &task.CreateCdcDetails{
-				TaskName: opts.TaskName,
-				TaskId:   opts.TaskId,
-				Accounts: []*task.Account{
-					{
-						Id:   uint64(opts.UserInfo.AccountId),
-						Name: opts.UserInfo.AccountName,
-					},
-				},
-			},
-		},
-	}
-	return
+	return cdc.BuildTaskDetails(opts.UserInfo.AccountId, opts.UserInfo.AccountName,
+		opts.UserInfo.UserName, opts.TaskName, opts.TaskId), nil
 }
 
 var initAesKeyBySqlExecutor = func(
@@ -7551,37 +7502,7 @@ var initAesKeyBySqlExecutor = func(
 	return
 }
 
-var ForeachQueriedRow = func(
-	ctx context.Context,
-	tx taskservice.SqlExecutor,
-	query string,
-	onEachRow func(context.Context, *sql.Rows) (bool, error),
-) (cnt int64, err error) {
-	var (
-		ok   bool
-		rows *sql.Rows
-	)
-	if rows, err = tx.QueryContext(ctx, query); err != nil {
-		return
-	}
-	if rows.Err() != nil {
-		err = rows.Err()
-		return
-	}
-	defer func() {
-		_ = rows.Close()
-	}()
-
-	for rows.Next() {
-		if ok, err = onEachRow(ctx, rows); err != nil {
-			return
-		}
-		if ok {
-			cnt++
-		}
-	}
-	return
-}
+var ForeachQueriedRow = taskservice.ForeachQueriedRow
 
 func (opts *CDCCreateTaskOptions) ToInsertTaskSQL(
 	ctx context.Context,
@@ -7945,21 +7866,8 @@ func validateLosslessNoFullStartCompileProtocol(ctx context.Context, c *Compile)
 	return cdc.ValidateLosslessNoFullStartProtocol(ctx, protocolVersion)
 }
 
-func CDCStrToTime(tsStr string, tz *time.Location) (ts time.Time, err error) {
-	if tsStr == "" {
-		return
-	}
-
-	if tz != nil {
-		if ts, err = time.ParseInLocation(
-			time.DateTime, tsStr, tz,
-		); err == nil {
-			return
-		}
-	}
-
-	ts, err = time.Parse(time.RFC3339, tsStr)
-	return
+func CDCStrToTime(tsStr string, tz *time.Location) (time.Time, error) {
+	return cdc.CDCStrToTime(tsStr, tz)
 }
 
 func (opts *CDCCreateTaskOptions) handleLevel(
@@ -7990,55 +7898,6 @@ func (opts *CDCCreateTaskOptions) handleLevel(
 
 	opts.PitrTables, err = cdc.JsonEncode(patterTupples)
 	return
-}
-
-// only accept positive integers that end with m or h
-func isValidFrequency(freq string) bool {
-	if !strings.HasSuffix(freq, "m") && !strings.HasSuffix(freq, "h") {
-		return false
-	}
-
-	numPart := strings.TrimSuffix(strings.TrimSuffix(freq, "m"), "h")
-
-	matched, _ := regexp.MatchString(`^[1-9]\d*$`, numPart)
-	if !matched {
-		return false
-	}
-
-	num, err := strconv.Atoi(numPart)
-	if err != nil {
-		return false
-	}
-
-	if num < 0 {
-		return false
-	}
-
-	if num > 10000000 {
-		return false
-	}
-
-	return true
-}
-
-// call isValidFrequency before calling this function
-func transformIntoHours(freq string) int64 {
-	if strings.HasSuffix(freq, "h") {
-		hoursStr := strings.TrimSuffix(freq, "h")
-		hours, _ := strconv.Atoi(hoursStr)
-		return int64(hours)
-	}
-
-	if strings.HasSuffix(freq, "m") {
-		minStr := strings.TrimSuffix(freq, "m")
-		minutes, _ := strconv.Atoi(minStr)
-
-		hours := int(math.Ceil(float64(minutes) / 60.0))
-
-		return int64(hours)
-	}
-
-	return 0
 }
 
 func (c *Compile) checkPitrGranularity(
@@ -8300,11 +8159,11 @@ func (opts *CDCCreateTaskOptions) handleFrequency(
 		err = moerr.NewInternalErrorf(ctx, "invalid level: %s", level)
 		return
 	}
-	if !isValidFrequency(frequency) {
+	if !cdc.IsValidFrequency(frequency) {
 		return moerr.NewInternalErrorf(ctx, "invalid frequency: %s", frequency)
 	}
 
-	normalized := transformIntoHours(frequency)
+	normalized := cdc.FrequencyHours(frequency)
 	var patterTupples *cdc.PatternTuples
 	if patterTupples, err = CDCParsePitrGranularity(
 		ctx, level, tables,
@@ -8321,176 +8180,16 @@ func (opts *CDCCreateTaskOptions) handleFrequency(
 	return nil
 }
 
-func CDCParsePitrGranularity(
-	ctx context.Context,
-	level string,
-	tables string,
-) (pts *cdc.PatternTuples, err error) {
-	pts = &cdc.PatternTuples{}
-
-	if level == cdc.CDCPitrGranularity_Account {
-		pts.Append(&cdc.PatternTuple{
-			Source: cdc.PatternTable{
-				Database: cdc.CDCPitrGranularity_All,
-				Table:    cdc.CDCPitrGranularity_All,
-			},
-			Sink: cdc.PatternTable{
-				Database: cdc.CDCPitrGranularity_All,
-				Table:    cdc.CDCPitrGranularity_All,
-			},
-		})
-		return
-	}
-
-	// split tables by ',' => table pair
-	var pt *cdc.PatternTuple
-	tablePairs := strings.Split(strings.TrimSpace(tables), ",")
-	dup := make(map[string]struct{})
-	for _, pair := range tablePairs {
-		if pt, err = CDCParseGranularityTuple(
-			ctx, level, pair, dup,
-		); err != nil {
-			return
-		}
-		pts.Append(pt)
-	}
-	return
+func CDCParsePitrGranularity(ctx context.Context, level string, tables string) (*cdc.PatternTuples, error) {
+	return cdc.CDCParsePitrGranularity(ctx, level, tables)
 }
 
-func CDCParseGranularityTuple(
-	ctx context.Context,
-	level string,
-	pattern string,
-	dup map[string]struct{},
-) (pt *cdc.PatternTuple, err error) {
-	splitRes := strings.Split(strings.TrimSpace(pattern), ":")
-	if len(splitRes) > 2 {
-		err = moerr.NewInternalErrorf(
-			ctx, "invalid pattern format: %s, must be `source` or `source:sink`.", pattern,
-		)
-		return
-	}
-
-	pt = &cdc.PatternTuple{OriginString: pattern}
-
-	// handle source part
-	if pt.Source.Database, pt.Source.Table, err = CDCParseTableInfo(
-		ctx, splitRes[0], level,
-	); err != nil {
-		return
-	}
-	key := cdc.GenDbTblKey(pt.Source.Database, pt.Source.Table)
-	if _, ok := dup[key]; ok {
-		err = moerr.NewInternalErrorf(
-			ctx, "one db/table: %s can't be used as multi sources in a cdc task", key,
-		)
-		return
-	}
-	dup[key] = struct{}{}
-
-	// handle sink part
-	if len(splitRes) > 1 {
-		if pt.Sink.Database, pt.Sink.Table, err = CDCParseTableInfo(
-			ctx, splitRes[1], level,
-		); err != nil {
-			return
-		}
-	} else {
-		// if not specify sink, then sink = source
-		pt.Sink.Database = pt.Source.Database
-		pt.Sink.Table = pt.Source.Table
-	}
-	return
+func CDCParseGranularityTuple(ctx context.Context, level string, pattern string, dup map[string]struct{}) (*cdc.PatternTuple, error) {
+	return cdc.CDCParseGranularityTuple(ctx, level, pattern, dup)
 }
 
-func CDCParseTableInfo(
-	ctx context.Context,
-	input string,
-	level string,
-) (db string, table string, err error) {
-	parts := strings.Split(strings.TrimSpace(input), ".")
-	if level == cdc.CDCPitrGranularity_DB && len(parts) != 1 {
-		err = moerr.NewInternalErrorf(ctx, "invalid databases format: %s", input)
-		return
-	} else if level == cdc.CDCPitrGranularity_Table && len(parts) != 2 {
-		err = moerr.NewInternalErrorf(ctx, "invalid tables format: %s", input)
-		return
-	}
-
-	db = strings.TrimSpace(parts[0])
-	if !dbNameIsLegal(db) {
-		err = moerr.NewInternalErrorf(ctx, "invalid database name: %s", db)
-		return
-	}
-
-	if level == cdc.CDCPitrGranularity_Table {
-		table = strings.TrimSpace(parts[1])
-		if !tableNameIsLegal(table) {
-			err = moerr.NewInternalErrorf(ctx, "invalid table name: %s", table)
-			return
-		}
-	} else {
-		table = cdc.CDCPitrGranularity_All
-	}
-	return
-}
-
-func dbNameIsLegal(name string) bool {
-	name = strings.TrimSpace(name)
-	if hasSpecialChars(name) {
-		return false
-	}
-	if name == cdc.CDCPitrGranularity_All {
-		return true
-	}
-
-	createDBSqls := []string{
-		"create database " + name,
-		"create database `" + name + "`",
-	}
-	return isLegal(name, createDBSqls)
-}
-
-func tableNameIsLegal(name string) bool {
-	name = strings.TrimSpace(name)
-	if hasSpecialChars(name) {
-		return false
-	}
-	if name == cdc.CDCPitrGranularity_All {
-		return true
-	}
-
-	createTableSqls := []string{
-		"create table " + name + "(a int)",
-		"create table `" + name + "`(a int)",
-	}
-	return isLegal(name, createTableSqls)
-}
-
-func hasSpecialChars(s string) bool {
-	return strings.ContainsAny(s, ",.:`")
-}
-
-func isLegal(name string, sqls []string) bool {
-	name = strings.TrimSpace(name)
-	if len(name) == 0 || len(sqls) == 0 {
-		return false
-	}
-	for _, sql := range sqls {
-		if len(sql) == 0 {
-			return false
-		}
-	}
-	yes := false
-	for _, sql := range sqls {
-		_, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql, 1)
-		if err != nil {
-			continue
-		}
-		yes = true
-		break
-	}
-	return yes
+func CDCParseTableInfo(ctx context.Context, input string, level string) (string, string, error) {
+	return cdc.CDCParseTableInfo(ctx, input, level)
 }
 
 // checkCCPRTableBeforeDrop checks if a table can be dropped based on CCPR rules.

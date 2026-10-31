@@ -99,7 +99,7 @@ func decimalReferenceForTarget(input string, target types.Type) (*big.Int, bool,
 		return nil, false, true
 	}
 	width := target.Width
-	if limit := decimalWidthLimit(target.Oid); width > limit {
+	if limit := types.DecimalMaxPrecision(target.Oid); width > limit {
 		width = limit
 	}
 	limit := new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(width)), nil)

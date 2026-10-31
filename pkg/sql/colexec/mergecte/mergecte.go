@@ -199,81 +199,10 @@ func (ctr *container) cacheBatch(
 		}
 	}
 
-	var cached *batch.Batch
-	if ctr.i < len(ctr.freeBats) {
-		cached = ctr.freeBats[ctr.i]
-	}
-	replacement, err := ctr.memory.BeginReplacement(proc.Ctx, cached, src)
+	appBat, err := ctr.memory.CacheBatch(proc, analyzer, &ctr.freeBats, ctr.i, src, insertedRows)
 	if err != nil {
 		return nil, err
 	}
-
-	if ctr.i == len(ctr.freeBats) {
-		appBat, err := src.Dup(proc.Mp())
-		if err != nil {
-			replacement.Rollback()
-			return nil, err
-		}
-		if insertedRows != nil {
-			appBat.Shrink(insertedRows, false)
-		}
-		if err = replacement.Commit(appBat); err != nil {
-			appBat.Clean(proc.Mp())
-			replacement.Discard()
-			return nil, err
-		}
-		analyzer.Alloc(int64(appBat.Size()))
-		ctr.freeBats = append(ctr.freeBats, appBat)
-		ctr.i++
-		return appBat, nil
-	}
-
-	if !src.Last() && sameBatchSchema(cached, src) {
-		cached.CleanOnlyData()
-		appBat, err := cached.AppendWithCopy(proc.Ctx, proc.Mp(), src)
-		if err != nil {
-			cached.Clean(proc.Mp())
-			ctr.freeBats[ctr.i] = nil
-			replacement.Discard()
-			return nil, err
-		}
-		appBat.Recursive = src.Recursive
-		appBat.ShuffleIDX = src.ShuffleIDX
-		appBat.Attrs = append(appBat.Attrs[:0], src.Attrs...)
-		appBat.SetRowCount(src.RowCount())
-		if insertedRows != nil {
-			appBat.Shrink(insertedRows, false)
-		}
-		if err = replacement.Commit(appBat); err != nil {
-			appBat.Clean(proc.Mp())
-			ctr.freeBats[ctr.i] = nil
-			replacement.Discard()
-			return nil, err
-		}
-		ctr.i++
-		return appBat, nil
-	}
-
-	// The number of batches produced before this slot may change after Reset,
-	// so a cache slot is not guaranteed to keep the same schema.
-	appBat, err := src.Dup(proc.Mp())
-	if err != nil {
-		replacement.Rollback()
-		return nil, err
-	}
-	if insertedRows != nil {
-		appBat.Shrink(insertedRows, false)
-	}
-	if err = replacement.Commit(appBat); err != nil {
-		appBat.Clean(proc.Mp())
-		replacement.Rollback()
-		return nil, err
-	}
-	analyzer.Alloc(int64(appBat.Size()))
-	if cached != nil {
-		cached.Clean(proc.Mp())
-	}
-	ctr.freeBats[ctr.i] = appBat
 	ctr.i++
 	return appBat, nil
 }
@@ -313,19 +242,6 @@ func (ctr *container) filterInsertedRows(
 		analyzer.Alloc(allocated)
 	}
 	return ctr.insertedRows, nil
-}
-
-func sameBatchSchema(left, right *batch.Batch) bool {
-	if left == nil || right == nil || len(left.Vecs) != len(right.Vecs) {
-		return false
-	}
-	for i := range left.Vecs {
-		if left.Vecs[i] == nil || right.Vecs[i] == nil ||
-			!left.Vecs[i].GetType().Eq(*right.Vecs[i].GetType()) {
-			return false
-		}
-	}
-	return true
 }
 
 func (ctr *container) cacheRecursiveBatch(proc *process.Process) (*batch.Batch, error) {

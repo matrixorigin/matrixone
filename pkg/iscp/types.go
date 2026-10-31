@@ -190,9 +190,8 @@ type JobFence struct {
 }
 
 type RunningJobConsumer struct {
-	key    JobRuntimeKey
-	jobID  uint64
-	iterID uint64
+	key   JobRuntimeKey
+	jobID uint64
 
 	cancel          context.CancelFunc
 	cancelRetriever func(error)

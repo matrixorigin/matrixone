@@ -55,6 +55,9 @@ func TestBitwiseBinaryOperatorsMatchBinaryDomain(t *testing.T) {
 					get, err = GetFunctionByName(ctx, op, []types.Type{test.typ, countType})
 					require.NoError(t, err)
 					wantID := test.leftID
+					if op == ">>" {
+						wantID = test.rightID
+					}
 					if countType.Oid == types.T_uint64 {
 						wantID++
 					}

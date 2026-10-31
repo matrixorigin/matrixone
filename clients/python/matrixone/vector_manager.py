@@ -113,7 +113,9 @@ class _VectorManagerBase:
     @staticmethod
     def _build_drop_sql(table_name: str, name: str) -> str:
         """Build SQL for dropping index."""
-        return f"DROP INDEX {name} ON {table_name}"
+        from .sqlalchemy_ext.vector_index import _drop_vector_index_sql
+
+        return _drop_vector_index_sql(name, table_name)
 
     @staticmethod
     def _build_enable_ivf_sql(probe_limit: int) -> list:

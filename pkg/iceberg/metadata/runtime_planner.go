@@ -177,7 +177,7 @@ func (p RuntimeScanPlanner) resolveCatalogPrefix(ctx context.Context, client api
 	if resp != nil && strings.TrimSpace(resp.Prefix) != "" {
 		req.Prefix = strings.TrimSpace(resp.Prefix)
 	}
-	if resp != nil && isNessieCatalogConfig(resp) {
+	if resp.IsNessieCatalog() {
 		if rewritten, ok := rewriteNessieRefPrefix(req.Prefix, refSpec); ok {
 			req.Prefix = rewritten
 			req.Ref = ""
@@ -186,21 +186,6 @@ func (p RuntimeScanPlanner) resolveCatalogPrefix(ctx context.Context, client api
 		}
 	}
 	return req, nil
-}
-
-func isNessieCatalogConfig(resp *api.ConfigResponse) bool {
-	if resp == nil {
-		return false
-	}
-	for _, cfg := range []map[string]string{resp.Overrides, resp.Defaults} {
-		for key, value := range cfg {
-			if strings.EqualFold(strings.TrimSpace(key), "nessie.is-nessie-catalog") &&
-				strings.EqualFold(strings.TrimSpace(value), "true") {
-				return true
-			}
-		}
-	}
-	return false
 }
 
 func rewriteNessieRefPrefix(prefix string, spec icebergref.Spec) (string, bool) {

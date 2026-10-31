@@ -432,7 +432,7 @@ func TestLogString(t *testing.T) {
 			expected: "L/Remove storeA storeB:1:4:1",
 		},
 		{
-			desc: "remove log replica",
+			desc: "start log replica",
 			command: ScheduleCommand{
 				UUID:          "storeA",
 				Bootstrapping: false,
@@ -453,7 +453,7 @@ func TestLogString(t *testing.T) {
 			expected: "L/Start storeA storeA:1:4:1",
 		},
 		{
-			desc: "remove log replica",
+			desc: "start TN replica",
 			command: ScheduleCommand{
 				UUID:          "storeA",
 				Bootstrapping: false,
@@ -474,7 +474,7 @@ func TestLogString(t *testing.T) {
 			expected: "D/Start storeA storeA:1:4:1",
 		},
 		{
-			desc: "remove log replica",
+			desc: "shutdown log store",
 			command: ScheduleCommand{
 				UUID:          "storeA",
 				Bootstrapping: false,
@@ -522,8 +522,9 @@ func TestLogString(t *testing.T) {
 	}
 
 	for _, c := range cases {
-		output := c.command.LogString()
-		assert.Equal(t, c.expected, output)
+		t.Run(c.desc, func(t *testing.T) {
+			assert.Equal(t, c.expected, c.command.LogString())
+		})
 	}
 }
 

@@ -20,6 +20,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/iceberg/maintenance"
+	sqliceberg "github.com/matrixorigin/matrixone/pkg/sql/iceberg"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
@@ -33,7 +34,7 @@ func TestIcebergBuiltinCallIsInterceptedBeforeStoredProcedure(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected CallStmt, got %T", stmt)
 	}
-	if !isIcebergBuiltinCall(call) {
+	if !sqliceberg.IsBuiltinProcedure(call) {
 		t.Fatalf("expected Iceberg builtin call to be recognized")
 	}
 	_, err = BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmt, false)
@@ -87,7 +88,7 @@ func TestQualifiedIcebergCallIsNotBuiltin(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected CallStmt, got %T", stmt)
 	}
-	if isIcebergBuiltinCall(call) {
+	if sqliceberg.IsBuiltinProcedure(call) {
 		t.Fatalf("qualified procedure names should not be treated as Iceberg builtins")
 	}
 }

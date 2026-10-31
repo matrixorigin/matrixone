@@ -73,6 +73,30 @@ const (
 	ExactRuntimeFilterFloatZeroClosed
 )
 
+// RuntimeFilterIntegerWidth classifies integer widths and signedness for exact runtime filters.
+func RuntimeFilterIntegerWidth(oid types.T) (int, bool, bool) {
+	switch oid {
+	case types.T_int8:
+		return 8, true, true
+	case types.T_int16:
+		return 16, true, true
+	case types.T_int32:
+		return 32, true, true
+	case types.T_int64:
+		return 64, true, true
+	case types.T_uint8:
+		return 8, false, true
+	case types.T_uint16:
+		return 16, false, true
+	case types.T_uint32:
+		return 32, false, true
+	case types.T_uint64:
+		return 64, false, true
+	default:
+		return 0, false, false
+	}
+}
+
 // SupportsExactRawRuntimeFilter reports whether a raw vector payload can be
 // used as an exact join runtime filter for this type without transformation.
 // Keep this as an explicit allowlist: a new type must prove that its raw

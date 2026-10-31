@@ -100,7 +100,6 @@ type container struct {
 
 type IcebergWrite struct {
 	ctr                    container
-	input                  vm.CallResult
 	Request                AppendRequest
 	Coordinator            Coordinator
 	Factory                CoordinatorFactory

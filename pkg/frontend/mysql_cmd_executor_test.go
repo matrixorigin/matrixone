@@ -23,6 +23,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"math"
 	"net/url"
 	"strings"
@@ -4494,7 +4495,7 @@ func TestExecRequestStmtPreparePreservesMandatoryRewritePolicy(t *testing.T) {
 			defer ses.Close()
 			ses.txnHandler = &TxnHandler{}
 			ses.rewriteEnabled.Store(tt.sessionEnabled)
-			ses.ruleCache = cloneRewriteMap(tt.roleRules)
+			ses.ruleCache = maps.Clone(tt.roleRules)
 			if tt.sessionRules != "" {
 				require.NoError(t, ses.SetSessionSysVar(ctx, "remap_rewrites", tt.sessionRules))
 			}

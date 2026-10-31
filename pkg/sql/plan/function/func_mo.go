@@ -23,7 +23,6 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
-	"unicode"
 	"unicode/utf8"
 
 	"go.uber.org/zap"
@@ -1148,7 +1147,7 @@ func buildEnumValueIndex(enumValues string) *enumValueIndex {
 		foldedIndexes: make(map[string]types.Enum, len(values)),
 	}
 	for i, value := range values {
-		foldKey := enumEqualFoldKey(value)
+		foldKey := commonutil.EqualFoldKey(value)
 		firstIndex, ok := index.foldedIndexes[foldKey]
 		if !ok {
 			firstIndex = types.Enum(i + 1)
@@ -1164,7 +1163,7 @@ func (index *enumValueIndex) parse(value string) (types.Enum, bool, error) {
 		if enumIndex := index.exactIndexes[value]; enumIndex != 0 {
 			return enumIndex, false, nil
 		}
-		if enumIndex := index.foldedIndexes[enumEqualFoldKey(value)]; enumIndex != 0 {
+		if enumIndex := index.foldedIndexes[commonutil.EqualFoldKey(value)]; enumIndex != 0 {
 			return enumIndex, false, nil
 		}
 		trimmed := strings.TrimRight(value, " ")
@@ -1173,20 +1172,6 @@ func (index *enumValueIndex) parse(value string) (types.Enum, bool, error) {
 		}
 		value = trimmed
 	}
-}
-
-func enumEqualFoldKey(value string) string {
-	var folded strings.Builder
-	for _, r := range value {
-		min := r
-		for next := unicode.SimpleFold(r); next != r; next = unicode.SimpleFold(next) {
-			if next < min {
-				min = next
-			}
-		}
-		folded.WriteRune(min)
-	}
-	return folded.String()
 }
 
 // enum("a","b","c") -> CastIndexValueToIndex(1) -> 1
@@ -1461,7 +1446,6 @@ func CastJsonToArray(ivecs []*vector.Vector, result vector.FunctionResultWrapper
 }
 
 type typedArrayElementSpec struct {
-	raw      string
 	name     string
 	width    int
 	unsigned bool
@@ -1489,7 +1473,7 @@ func parseTypedArrayTypeSpec(declaredType string) (typedArrayElementSpec, error)
 	if err != nil {
 		return typedArrayElementSpec{}, err
 	}
-	return typedArrayElementSpec{raw: raw, name: "array", nested: &elem}, nil
+	return typedArrayElementSpec{name: "array", nested: &elem}, nil
 }
 
 func parseTypedArrayScalarSpec(rawType string) (typedArrayElementSpec, error) {
@@ -1520,7 +1504,7 @@ func parseTypedArrayScalarSpec(rawType string) (typedArrayElementSpec, error) {
 		params = strings.TrimSpace(lower[idx+1 : len(lower)-1])
 	}
 
-	spec := typedArrayElementSpec{raw: raw, name: normalizeTypedArrayElementName(name), width: -1, unsigned: unsigned}
+	spec := typedArrayElementSpec{name: normalizeTypedArrayElementName(name), width: -1, unsigned: unsigned}
 	if params != "" {
 		if width, ok := parseFirstArrayTypeParam(params); ok {
 			spec.width = width
@@ -1567,7 +1551,8 @@ func normalizeTypedArrayElementName(name string) string {
 }
 
 func parseFirstArrayTypeParam(params string) (int, bool) {
-	first := strings.TrimSpace(strings.Split(params, ",")[0])
+	first, _, _ := strings.Cut(params, ",")
+	first = strings.TrimSpace(first)
 	if first == "" {
 		return -1, false
 	}

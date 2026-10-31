@@ -1002,7 +1002,7 @@ func TestValidateDefaultColumnDependenciesCoversInvalidAndSharedGraphs(t *testin
 	require.NoError(t, validateDefaultColumnDependencies(ctx, nil))
 }
 
-func TestDefaultExprExpanderAndProjectionBoundaryCases(t *testing.T) {
+func TestDefaultExprExpanderBoundaryCases(t *testing.T) {
 	ctx := context.Background()
 	literal := expressionDefaultInt(10)
 	expander := newDefaultExprExpander(ctx, func(colIdx int32) (*planpb.Expr, bool) {
@@ -1064,21 +1064,6 @@ func TestDefaultExprExpanderAndProjectionBoundaryCases(t *testing.T) {
 	require.False(t, exprHasLocalColumnRef(outer))
 	require.True(t, exprHasLocalColumnRef(list))
 	require.False(t, exprHasLocalColumnRef(literal))
-
-	projection := []*planpb.Expr{expressionDefaultCol(0, 0), nil}
-	require.NoError(t, expandDefaultExprsInProjection(
-		ctx, projection, []int32{-1, 2, 1, 0},
-		map[int32]*planpb.Expr{0: literal},
-	))
-	require.Equal(t, int64(10), projection[0].GetLit().GetI64Val())
-
-	err = expandDefaultExprsInProjection(
-		ctx,
-		[]*planpb.Expr{expressionDefaultCol(0, 0)},
-		[]int32{0},
-		map[int32]*planpb.Expr{0: expressionDefaultCol(0, 0)},
-	)
-	require.ErrorContains(t, err, "circular dependency")
 }
 
 func TestExpandDefaultExprsInValueScanRejectsMalformedInputs(t *testing.T) {

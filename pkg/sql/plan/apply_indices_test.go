@@ -7539,7 +7539,7 @@ func TestRegularIndexOnlyMatchRequiresContiguousPrefix(t *testing.T) {
 	}
 }
 
-func TestGetIndexForNonEquiCond_DetectsPairedRangeOnIndexColumn(t *testing.T) {
+func TestRangeBackfillDetectsPairedRangeOnIndexColumn(t *testing.T) {
 	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	bindTag := builder.genNewBindTag()
 	idxDef := &IndexDef{
@@ -7569,12 +7569,18 @@ func TestGetIndexForNonEquiCond_DetectsPairedRangeOnIndexColumn(t *testing.T) {
 		},
 	}
 
-	idxPos, filterIdx := builder.getIndexForNonEquiCond([]*planpb.IndexDef{idxDef}, node)
-	require.Equal(t, 0, idxPos)
-	require.ElementsMatch(t, []int32{0, 1}, filterIdx)
+	node.Stats = &planpb.Stats{TableCnt: 1000, Outcnt: 10}
+	costCtx := builder.newEncodedRegularIndexCostContext(node, nil)
+	require.ElementsMatch(t, []int32{0, 1}, costCtx.matchRangeBackfill(idxDef))
+	prefixIndex := *idxDef
+	prefixIndex.IndexAlgoParams = `{"prefix_lengths":"price:3"}`
+	require.Empty(t, costCtx.matchRangeBackfill(&prefixIndex))
+	node.Stats.TableCnt = 100_000
+	node.Stats.Selectivity = 1
+	require.Empty(t, costCtx.matchRangeBackfill(idxDef))
 }
 
-func TestGetIndexForNonEquiCondSkipsNonEqualityOnDeclaredPrefix(t *testing.T) {
+func TestRangeBackfillSkipsNonEqualityOnDeclaredPrefix(t *testing.T) {
 	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	bindTag := builder.genNewBindTag()
 	prefixParams := `{"prefix_lengths":"name:3"}`
@@ -7605,26 +7611,22 @@ func TestGetIndexForNonEquiCondSkipsNonEqualityOnDeclaredPrefix(t *testing.T) {
 		name        string
 		idxDef      *planpb.IndexDef
 		filters     []*planpb.Expr
-		wantIdx     int
 		wantFilters []int32
 	}{
 		{
 			name:    "non-unique prefix between",
 			idxDef:  makeIndex(false, []string{"name", catalog.FakePrimaryKeyColName}, prefixParams),
 			filters: []*planpb.Expr{makeStringBetweenFilterExpr(bindTag, 1, "abcX", "abdA")},
-			wantIdx: -1,
 		},
 		{
 			name:    "unique prefix between",
 			idxDef:  makeIndex(true, []string{"name"}, prefixParams),
 			filters: []*planpb.Expr{makeStringBetweenFilterExpr(bindTag, 1, "abcX", "abdA")},
-			wantIdx: -1,
 		},
 		{
 			name:    "prefix single lower bound",
 			idxDef:  makeIndex(false, []string{"name", catalog.FakePrimaryKeyColName}, prefixParams),
 			filters: []*planpb.Expr{makeRangeFilterExpr(bindTag, 1, ">=", 99)},
-			wantIdx: -1,
 		},
 		{
 			name:   "prefix paired range",
@@ -7633,13 +7635,11 @@ func TestGetIndexForNonEquiCondSkipsNonEqualityOnDeclaredPrefix(t *testing.T) {
 				makeRangeFilterExpr(bindTag, 1, ">=", 99),
 				makeRangeFilterExpr(bindTag, 1, "<=", 299),
 			},
-			wantIdx: -1,
 		},
 		{
 			name:    "prefix in range",
 			idxDef:  makeIndex(false, []string{"name", catalog.FakePrimaryKeyColName}, prefixParams),
 			filters: []*planpb.Expr{makeInRange()},
-			wantIdx: -1,
 		},
 		{
 			name:   "prefix or containing range",
@@ -7648,32 +7648,27 @@ func TestGetIndexForNonEquiCondSkipsNonEqualityOnDeclaredPrefix(t *testing.T) {
 				makeStringBetweenFilterExpr(bindTag, 1, "abcX", "abdA"),
 				makeStringInFilterExpr(bindTag, 1, "abe"),
 			)},
-			wantIdx: -1,
 		},
 		{
 			name:    "prefix in is rejected with other non equality predicates",
 			idxDef:  makeIndex(false, []string{"name", catalog.FakePrimaryKeyColName}, prefixParams),
 			filters: []*planpb.Expr{makeStringInFilterExpr(bindTag, 1, "abcX", "abdA")},
-			wantIdx: -1,
 		},
 		{
 			name:        "complete index between remains eligible",
 			idxDef:      makeIndex(false, []string{"name", catalog.FakePrimaryKeyColName}, ""),
 			filters:     []*planpb.Expr{makeStringBetweenFilterExpr(bindTag, 1, "abcX", "abdA")},
-			wantIdx:     0,
 			wantFilters: []int32{0},
 		},
 		{
 			name:    "non-leading declared prefix also rejects range",
 			idxDef:  makeIndex(false, []string{"name", "suffix", catalog.FakePrimaryKeyColName}, `{"prefix_lengths":"suffix:3"}`),
 			filters: []*planpb.Expr{makeStringBetweenFilterExpr(bindTag, 1, "abcX", "abdA")},
-			wantIdx: -1,
 		},
 		{
 			name:    "invalid prefix metadata fails closed for range",
 			idxDef:  makeIndex(false, []string{"name", catalog.FakePrimaryKeyColName}, "{bad json"),
 			filters: []*planpb.Expr{makeStringBetweenFilterExpr(bindTag, 1, "abcX", "abdA")},
-			wantIdx: -1,
 		},
 	}
 
@@ -7698,14 +7693,14 @@ func TestGetIndexForNonEquiCondSkipsNonEqualityOnDeclaredPrefix(t *testing.T) {
 				FilterList: tt.filters,
 			}
 
-			idxPos, filterIdx := builder.getIndexForNonEquiCond([]*planpb.IndexDef{tt.idxDef}, node)
-			require.Equal(t, tt.wantIdx, idxPos)
-			require.ElementsMatch(t, tt.wantFilters, filterIdx)
+			node.Stats = &planpb.Stats{TableCnt: 1000, Outcnt: 10}
+			costCtx := builder.newEncodedRegularIndexCostContext(node, nil)
+			require.ElementsMatch(t, tt.wantFilters, costCtx.matchRangeBackfill(tt.idxDef))
 		})
 	}
 }
 
-func TestGetIndexForNonEquiCondUsesCompleteRangeIndexAlternative(t *testing.T) {
+func TestRangeBackfillUsesCompleteRangeIndexAlternative(t *testing.T) {
 	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	bindTag := builder.genNewBindTag()
 	prefixIdx := &planpb.IndexDef{
@@ -7746,9 +7741,17 @@ func TestGetIndexForNonEquiCondUsesCompleteRangeIndexAlternative(t *testing.T) {
 				},
 			}
 
-			idxPos, filterIdx := builder.getIndexForNonEquiCond(tt.indexes, node)
-			require.Equal(t, tt.wantIdx, idxPos)
-			require.Equal(t, []int32{0}, filterIdx)
+			node.BindingTags = []int32{bindTag}
+			node.TableDef.Pkey = &planpb.PrimaryKeyDef{PkeyColName: catalog.FakePrimaryKeyColName}
+			node.Stats = &planpb.Stats{TableCnt: 1000, Outcnt: 10}
+			costCtx := builder.newEncodedRegularIndexCostContext(node, nil)
+			for i, index := range tt.indexes {
+				if i == tt.wantIdx {
+					require.Equal(t, []int32{0}, costCtx.matchRangeBackfill(index))
+				} else {
+					require.Empty(t, costCtx.matchRangeBackfill(index))
+				}
+			}
 		})
 	}
 }
@@ -7782,7 +7785,7 @@ func TestScopedForceHintsRejectLossyPrefixIndex(t *testing.T) {
 		})
 	}
 }
-func TestGetIndexForNonEquiCond_SkipsLargePairedRangeByStats(t *testing.T) {
+func TestRangeBackfillSkipsLargePairedRangeByStats(t *testing.T) {
 	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	bindTag := builder.genNewBindTag()
 	idxDef := &IndexDef{
@@ -7817,9 +7820,8 @@ func TestGetIndexForNonEquiCond_SkipsLargePairedRangeByStats(t *testing.T) {
 		},
 	}
 
-	idxPos, filterIdx := builder.getIndexForNonEquiCond([]*planpb.IndexDef{idxDef}, node)
-	require.Equal(t, -1, idxPos)
-	require.Nil(t, filterIdx)
+	costCtx := builder.newEncodedRegularIndexCostContext(node, nil)
+	require.Empty(t, costCtx.matchRangeBackfill(idxDef))
 }
 
 func TestIndexTableSerialFunctionsSeparateStorageFromComparison(t *testing.T) {
@@ -7933,7 +7935,7 @@ func TestRegularIndexPrefixMetadataUsable(t *testing.T) {
 	}), "rebuild the index")
 }
 
-func TestGetIndexForNonEquiCondSkipsDeclaredPrefixIndexes(t *testing.T) {
+func TestRangeBackfillSkipsDeclaredPrefixIndexes(t *testing.T) {
 	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	bindTag := builder.genNewBindTag()
 	node := &planpb.Node{
@@ -7971,18 +7973,18 @@ func TestGetIndexForNonEquiCondSkipsDeclaredPrefixIndexes(t *testing.T) {
 		for _, filter := range filters {
 			t.Run(idxDef.IndexName+"/"+filter.name, func(t *testing.T) {
 				node.FilterList = []*planpb.Expr{filter.expr}
-				idxPos, filterIdx := builder.getIndexForNonEquiCond([]*planpb.IndexDef{idxDef}, node)
-				require.Equal(t, -1, idxPos)
-				require.Nil(t, filterIdx)
+				node.Stats = &planpb.Stats{TableCnt: 1000, Outcnt: 10}
+				costCtx := builder.newEncodedRegularIndexCostContext(node, nil)
+				require.Empty(t, costCtx.matchRangeBackfill(idxDef))
 			})
 		}
 	}
 
 	complete := &planpb.IndexDef{IndexName: "idx_name_full", Parts: []string{"name", catalog.CreateAlias("id")}}
 	node.FilterList = []*planpb.Expr{makeStringInFilterExpr(bindTag, 1, "abcdx", "abcex")}
-	idxPos, filterIdx := builder.getIndexForNonEquiCond([]*planpb.IndexDef{prefixNonUnique, complete}, node)
-	require.Equal(t, 1, idxPos)
-	require.Equal(t, []int32{0}, filterIdx)
+	costCtx := builder.newEncodedRegularIndexCostContext(node, nil)
+	require.Empty(t, costCtx.matchRangeBackfill(prefixNonUnique))
+	require.Equal(t, []int32{0}, costCtx.matchRangeBackfill(complete))
 }
 
 func TestMakeIndexLookupPartExprDoesNotFailOpen(t *testing.T) {
@@ -9278,7 +9280,10 @@ func TestIndexRangeSerializationNormalizesDecimalBounds(t *testing.T) {
 		}
 		makeNode := func(filterList []*planpb.Expr) *planpb.Node {
 			return &planpb.Node{
+				BindingTags: []int32{bindTag},
+				Stats:       &planpb.Stats{TableCnt: 1000, Outcnt: 10},
 				TableDef: &planpb.TableDef{
+					Pkey: &planpb.PrimaryKeyDef{PkeyColName: catalog.FakePrimaryKeyColName},
 					Name2ColIndex: map[string]int32{
 						catalog.FakePrimaryKeyColName: 0,
 						"price":                       1,
@@ -9293,11 +9298,8 @@ func TestIndexRangeSerializationNormalizesDecimalBounds(t *testing.T) {
 		}
 
 		t.Run("serialized composite falls back", func(t *testing.T) {
-			idxPos, filterIdx := builder.getIndexForNonEquiCond(
-				[]*planpb.IndexDef{idxDef}, makeNode(filters))
-
-			require.Equal(t, -1, idxPos)
-			require.Nil(t, filterIdx)
+			costCtx := builder.newEncodedRegularIndexCostContext(makeNode(filters), nil)
+			require.Empty(t, costCtx.matchRangeBackfill(idxDef))
 		})
 
 		directUniqueIdxDef := &planpb.IndexDef{
@@ -9306,19 +9308,13 @@ func TestIndexRangeSerializationNormalizesDecimalBounds(t *testing.T) {
 		}
 
 		t.Run("direct unique single bound remains eligible", func(t *testing.T) {
-			idxPos, filterIdx := builder.getIndexForNonEquiCond(
-				[]*planpb.IndexDef{directUniqueIdxDef}, makeNode(filters[:1]))
-
-			require.Equal(t, 0, idxPos)
-			require.Equal(t, []int32{0}, filterIdx)
+			costCtx := builder.newEncodedRegularIndexCostContext(makeNode(filters[:1]), nil)
+			require.Equal(t, []int32{0}, costCtx.matchRangeBackfill(directUniqueIdxDef))
 		})
 
 		t.Run("direct unique paired bounds remain eligible", func(t *testing.T) {
-			idxPos, filterIdx := builder.getIndexForNonEquiCond(
-				[]*planpb.IndexDef{directUniqueIdxDef}, makeNode(filters))
-
-			require.Equal(t, 0, idxPos)
-			require.Equal(t, []int32{0, 1}, filterIdx)
+			costCtx := builder.newEncodedRegularIndexCostContext(makeNode(filters), nil)
+			require.Equal(t, []int32{0, 1}, costCtx.matchRangeBackfill(directUniqueIdxDef))
 		})
 
 		for _, tc := range []struct {
@@ -9338,10 +9334,14 @@ func TestIndexRangeSerializationNormalizesDecimalBounds(t *testing.T) {
 			},
 		} {
 			t.Run(tc.name, func(t *testing.T) {
-				idxPos, filterIdx := builder.getIndexForNonEquiCond(tc.indexes, makeNode(filters))
-
-				require.Equal(t, tc.wantIdx, idxPos)
-				require.Equal(t, []int32{0, 1}, filterIdx)
+				costCtx := builder.newEncodedRegularIndexCostContext(makeNode(filters), nil)
+				for i, index := range tc.indexes {
+					if i == tc.wantIdx {
+						require.Equal(t, []int32{0, 1}, costCtx.matchRangeBackfill(index))
+					} else {
+						require.Empty(t, costCtx.matchRangeBackfill(index))
+					}
+				}
 			})
 		}
 
@@ -9351,26 +9351,22 @@ func TestIndexRangeSerializationNormalizesDecimalBounds(t *testing.T) {
 				filters[1],
 			}
 
-			idxPos, filterIdx := builder.getIndexForNonEquiCond(
-				[]*planpb.IndexDef{directUniqueIdxDef, idxDef}, makeNode(mixedBounds))
-
-			require.Equal(t, 0, idxPos)
-			require.Equal(t, []int32{0, 1}, filterIdx)
+			costCtx := builder.newEncodedRegularIndexCostContext(makeNode(mixedBounds), nil)
+			require.Equal(t, []int32{0, 1}, costCtx.matchRangeBackfill(directUniqueIdxDef))
+			require.Empty(t, costCtx.matchRangeBackfill(idxDef))
 		})
 
 		t.Run("direct unique bypasses serialized operator restriction", func(t *testing.T) {
 			filter := makeDecimalRangeFilterExpr(t, bindTag, 1, ">", "10.25", columnType, columnType)
 
-			idxPos, filterIdx := builder.getIndexForNonEquiCond(
-				[]*planpb.IndexDef{directUniqueIdxDef, idxDef}, makeNode([]*planpb.Expr{filter}))
-
-			require.Equal(t, 0, idxPos)
-			require.Equal(t, []int32{0}, filterIdx)
+			costCtx := builder.newEncodedRegularIndexCostContext(makeNode([]*planpb.Expr{filter}), nil)
+			require.Equal(t, []int32{0}, costCtx.matchRangeBackfill(directUniqueIdxDef))
+			require.Empty(t, costCtx.matchRangeBackfill(idxDef))
 		})
 	})
 }
 
-func TestGetIndexForNonEquiCond_PrefersFirstPairedRangeByFilterOrder(t *testing.T) {
+func TestRangeBackfillMatchesPairedRangesOnMultipleColumns(t *testing.T) {
 	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	bindTag := builder.genNewBindTag()
 	idxPrice := &IndexDef{
@@ -9388,6 +9384,7 @@ func TestGetIndexForNonEquiCond_PrefersFirstPairedRangeByFilterOrder(t *testing.
 
 	node := &planpb.Node{
 		BindingTags: []int32{bindTag},
+		Stats:       &planpb.Stats{TableCnt: 1000, Outcnt: 10},
 		TableDef: &planpb.TableDef{
 			Name2ColIndex: map[string]int32{
 				catalog.FakePrimaryKeyColName: 0,
@@ -9410,12 +9407,12 @@ func TestGetIndexForNonEquiCond_PrefersFirstPairedRangeByFilterOrder(t *testing.
 		},
 	}
 
-	idxPos, filterIdx := builder.getIndexForNonEquiCond([]*planpb.IndexDef{idxPrice, idxQuantity}, node)
-	require.Equal(t, 1, idxPos)
-	require.Equal(t, []int32{0, 1}, filterIdx)
+	costCtx := builder.newEncodedRegularIndexCostContext(node, nil)
+	require.Equal(t, []int32{0, 1}, costCtx.matchRangeBackfill(idxQuantity))
+	require.Equal(t, []int32{2, 3}, costCtx.matchRangeBackfill(idxPrice))
 }
 
-func TestGetIndexForNonEquiCond_KeepsEarlierNonPairedFilterPriority(t *testing.T) {
+func TestRangeBackfillMatchesSingleAndPairedRangesOnMultipleColumns(t *testing.T) {
 	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	bindTag := builder.genNewBindTag()
 	idxPrice := &IndexDef{
@@ -9433,6 +9430,7 @@ func TestGetIndexForNonEquiCond_KeepsEarlierNonPairedFilterPriority(t *testing.T
 
 	node := &planpb.Node{
 		BindingTags: []int32{bindTag},
+		Stats:       &planpb.Stats{TableCnt: 1000, Outcnt: 10},
 		TableDef: &planpb.TableDef{
 			Name2ColIndex: map[string]int32{
 				catalog.FakePrimaryKeyColName: 0,
@@ -9454,9 +9452,9 @@ func TestGetIndexForNonEquiCond_KeepsEarlierNonPairedFilterPriority(t *testing.T
 		},
 	}
 
-	idxPos, filterIdx := builder.getIndexForNonEquiCond([]*planpb.IndexDef{idxPrice, idxQuantity}, node)
-	require.Equal(t, 0, idxPos)
-	require.Equal(t, []int32{0}, filterIdx)
+	costCtx := builder.newEncodedRegularIndexCostContext(node, nil)
+	require.Equal(t, []int32{0}, costCtx.matchRangeBackfill(idxPrice))
+	require.Equal(t, []int32{1, 2}, costCtx.matchRangeBackfill(idxQuantity))
 }
 
 func makeEqFilterExpr(colPos int32) *planpb.Expr {

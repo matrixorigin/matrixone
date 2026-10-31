@@ -196,21 +196,9 @@ func Open(
 	if fs == nil || path == "" || size < 0 || admission == nil {
 		return nil, moerr.NewInvalidInput(ctx, "invalid Arrow IPC source")
 	}
-	rangeReader := fileservice.NewLeasedRangeReader(fs)
-	if options.ExpectedIdentity != nil {
-		expected := *options.ExpectedIdentity
-		if err := expected.Validate(); err != nil {
-			return nil, err
-		}
-		if expected.Size != size {
-			return nil, moerr.NewInvalidInputf(ctx,
-				"Arrow object identity size %d does not match planned size %d", expected.Size, size)
-		}
-		conditional, ok := rangeReader.(fileservice.ConditionalLeasedRangeReader)
-		if !ok {
-			return nil, moerr.NewNotSupported(ctx, "conditional Arrow object reads")
-		}
-		rangeReader = fixedIdentityRangeReader{reader: conditional, expected: expected}
+	rangeReader, err := newIdentityRangeReader(ctx, fs, size, options.ExpectedIdentity)
+	if err != nil {
+		return nil, err
 	}
 	var ownedAllocator *admissionAllocator
 	if options.Allocator == nil {
@@ -480,6 +468,27 @@ func detectContainer(
 		}
 	}
 	return ContainerStream, nil
+}
+
+// newIdentityRangeReader binds conditional reads to the planned object version.
+func newIdentityRangeReader(ctx context.Context, fs fileservice.FileService, size int64, identity *fileservice.ObjectIdentity) (fileservice.LeasedRangeReader, error) {
+	rangeReader := fileservice.NewLeasedRangeReader(fs)
+	if identity == nil {
+		return rangeReader, nil
+	}
+	expected := *identity
+	if err := expected.Validate(); err != nil {
+		return nil, err
+	}
+	if expected.Size != size {
+		return nil, moerr.NewInvalidInputf(ctx,
+			"Arrow object identity size %d does not match planned size %d", expected.Size, size)
+	}
+	conditional, ok := rangeReader.(fileservice.ConditionalLeasedRangeReader)
+	if !ok {
+		return nil, moerr.NewNotSupported(ctx, "conditional Arrow object reads")
+	}
+	return fixedIdentityRangeReader{reader: conditional, expected: expected}, nil
 }
 
 type fixedIdentityRangeReader struct {

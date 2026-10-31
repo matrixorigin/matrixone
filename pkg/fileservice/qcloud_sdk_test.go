@@ -191,6 +191,8 @@ func TestQCloudSDKConditionalObjectIdentityReads(t *testing.T) {
 	defer server.Close()
 
 	sdk := newTestCOSClient(t, server)
+	testOrdinaryObjectReadRanges(t, sdk)
+
 	identity, err := sdk.StatObjectIdentity(context.Background(), "object")
 	require.NoError(t, err)
 	wantLastModified, err := time.Parse(http.TimeFormat, lastModRaw)
@@ -685,6 +687,13 @@ func TestQCloudSDKReadOnlyOperationsPreserveInFlightCancellation(t *testing.T) {
 			name: "stat",
 			run: func(ctx context.Context, sdk *QCloudSDK) error {
 				_, err := sdk.statObject(ctx, "object")
+				return err
+			},
+		},
+		{
+			name: "exists",
+			run: func(ctx context.Context, sdk *QCloudSDK) error {
+				_, err := sdk.Exists(ctx, "object")
 				return err
 			},
 		},

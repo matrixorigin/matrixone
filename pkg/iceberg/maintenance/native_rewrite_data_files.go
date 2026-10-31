@@ -220,7 +220,7 @@ func (p NativeRewriteDataFilesPlanner) BuildMaintenanceCommit(ctx context.Contex
 		Selection:      *selection,
 		JobID:          req.JobID,
 		IdempotencyKey: req.IdempotencyKey,
-		Options:        cloneOptions(req.Options),
+		Options:        api.CloneNonEmptyMap(req.Options),
 	})
 	if err != nil {
 		return nil, err
@@ -236,8 +236,8 @@ func (p NativeRewriteDataFilesPlanner) BuildMaintenanceCommit(ctx context.Contex
 	}
 	now := maintenanceNow(p.Now)
 	newSnapshotID := nextMaintenanceSnapshotID(now, meta)
-	dataManifestPath := joinObjectPath(basePath, "data-manifest.avro")
-	manifestListPath := joinObjectPath(basePath, "manifest-list.avro")
+	dataManifestPath := api.JoinObjectPath(basePath, "data-manifest.avro")
+	manifestListPath := api.JoinObjectPath(basePath, "manifest-list.avro")
 	memoryLimit := maintenanceMemoryLimit(selector.MaxMemoryBytes)
 	memoryUsed := compacted.RetainedMemoryBytes
 	if memoryUsed < selection.RetainedMemoryBytes {
@@ -273,10 +273,10 @@ func (p NativeRewriteDataFilesPlanner) BuildMaintenanceCommit(ctx context.Contex
 		SequenceNumber:     nextMaintenanceSequenceNumber(meta),
 		TimestampMS:        now.UnixMilli(),
 		SchemaID:           meta.CurrentSchemaID,
-		TargetRef:          firstNonEmptyString(req.TargetRef, "main"),
+		TargetRef:          api.FirstNonBlankPreserveWhitespace(req.TargetRef, "main"),
 		TargetRefType:      req.TargetRefType,
-		TargetRefRetention: meta.Refs[firstNonEmptyString(req.TargetRef, "main")],
-		IdempotencyKey:     firstNonEmptyString(req.IdempotencyKey, req.JobID),
+		TargetRefRetention: meta.Refs[api.FirstNonBlankPreserveWhitespace(req.TargetRef, "main")],
+		IdempotencyKey:     api.FirstNonBlankPreserveWhitespace(req.IdempotencyKey, req.JobID),
 		DataManifestPath:   dataManifestPath,
 		ManifestListPath:   manifestListPath,
 		PreservedManifests: append(
@@ -286,7 +286,7 @@ func (p NativeRewriteDataFilesPlanner) BuildMaintenanceCommit(ctx context.Contex
 		Summary: map[string]string{
 			"operation":           "replace",
 			"engine":              "matrixone",
-			"idempotency-key":     firstNonEmptyString(req.IdempotencyKey, req.JobID),
+			"idempotency-key":     api.FirstNonBlankPreserveWhitespace(req.IdempotencyKey, req.JobID),
 			"base-snapshot":       strconv.FormatInt(snapshot.SnapshotID, 10),
 			"candidate-files":     strconv.FormatUint(selection.CandidateFileCount, 10),
 			"candidate-bytes":     strconv.FormatInt(selection.CandidateSizeBytes, 10),
@@ -318,7 +318,7 @@ func (p NativeRewriteDataFilesPlanner) BuildMaintenanceCommit(ctx context.Contex
 func (p NativeRewriteDataFilesPlanner) rewriteBasePath(meta *api.TableMetadata, snapshot api.Snapshot, req Request) (string, error) {
 	base := strings.TrimRight(strings.TrimSpace(p.PathPrefix), "/")
 	if base == "" && meta != nil && strings.TrimSpace(meta.Location) != "" {
-		base = joinObjectPath(meta.Location, "metadata")
+		base = api.JoinObjectPath(meta.Location, "metadata")
 	}
 	if base == "" {
 		base = objectDir(snapshot.ManifestList)
@@ -328,7 +328,7 @@ func (p NativeRewriteDataFilesPlanner) rewriteBasePath(meta *api.TableMetadata, 
 			"snapshot_id": strconv.FormatInt(snapshot.SnapshotID, 10),
 		})
 	}
-	return joinObjectPath(base, "mo-rewrite-data-files", rewriteDataFilesID(req, snapshot)), nil
+	return api.JoinObjectPath(base, "mo-rewrite-data-files", rewriteDataFilesID(req, snapshot)), nil
 }
 
 func rewriteDataFilesCompactorSupportsDeletes(compactor RewriteDataFilesCompactor) bool {
@@ -337,7 +337,7 @@ func rewriteDataFilesCompactorSupportsDeletes(compactor RewriteDataFilesCompacto
 }
 
 func rewriteDataFilesID(req Request, snapshot api.Snapshot) string {
-	raw := firstNonEmptyString(req.IdempotencyKey, req.JobID, strconv.FormatInt(snapshot.SnapshotID, 10))
+	raw := api.FirstNonBlankPreserveWhitespace(req.IdempotencyKey, req.JobID, strconv.FormatInt(snapshot.SnapshotID, 10))
 	if raw == "" {
 		raw = "rewrite-data-files"
 	}
@@ -372,13 +372,13 @@ func materializeRewriteDataFilesPreservedManifestsWithBudget(meta *api.TableMeta
 	if len(preserved) == 0 {
 		return nil, nil, nil
 	}
-	if err := reserveMaintenanceMemory(memoryUsed, saturatingMaintenanceMul(int64(len(preserved)), 512), memoryLimit); err != nil {
+	if err := reserveMaintenanceMemory(memoryUsed, api.SaturatingMemoryMul(int64(len(preserved)), 512), memoryLimit); err != nil {
 		return nil, nil, err
 	}
 	outManifests := make([]api.ManifestFile, 0, len(preserved))
 	outObjects := make([]ObjectWrite, 0, len(preserved))
 	for idx, item := range preserved {
-		encoderScratch := saturatingMaintenanceMul(metadata.ManifestEntriesMemoryWeight(0, item.Entries), 2)
+		encoderScratch := api.SaturatingMemoryMul(metadata.ManifestEntriesMemoryWeight(0, item.Entries), 2)
 		if err := checkMaintenanceMemory(*memoryUsed, encoderScratch, memoryLimit); err != nil {
 			return nil, nil, err
 		}
@@ -386,7 +386,7 @@ func materializeRewriteDataFilesPreservedManifestsWithBudget(meta *api.TableMeta
 		if len(entries) == 0 {
 			continue
 		}
-		path := joinObjectPath(basePath, fmt.Sprintf("preserved-manifest-%05d.avro", idx+1))
+		path := api.JoinObjectPath(basePath, fmt.Sprintf("preserved-manifest-%05d.avro", idx+1))
 		content := item.Manifest.Content
 		if content == "" {
 			content = api.ManifestContentData
@@ -592,7 +592,7 @@ func (s RewriteDataFilesSelector) Select(ctx context.Context, req RewriteDataFil
 			candidate := RewriteDataFileCandidate{ManifestPath: manifestPath, Entry: entry, File: file}
 			// Candidate structs duplicate headers retained by PreservedDataManifests;
 			// their maps/strings still share immutable decoded backing storage.
-			candidateMemory := saturatingMaintenanceMul(metadata.ManifestEntriesMemoryWeight(0, []api.ManifestEntry{entry}), 2)
+			candidateMemory := api.SaturatingMemoryMul(metadata.ManifestEntriesMemoryWeight(0, []api.ManifestEntry{entry}), 2)
 			if err := checkMaintenanceMemory(memoryUsed, candidateMemory, memoryLimit); err != nil {
 				return nil, err
 			}
@@ -696,7 +696,7 @@ func isRewriteDataFilesCandidate(file api.DataFile, opts rewriteDataFilesSelecti
 	if uint64(file.FileSizeInBytes) > opts.targetFileSizeBytes {
 		return false
 	}
-	return strings.EqualFold(firstNonEmptyString(file.FileFormat, "parquet"), "parquet")
+	return strings.EqualFold(api.FirstNonBlankPreserveWhitespace(file.FileFormat, "parquet"), "parquet")
 }
 
 func buildRewriteDataFileGroups(grouped map[string][]RewriteDataFileCandidate, opts rewriteDataFilesSelectionOptions) []RewriteDataFileGroup {
@@ -837,7 +837,7 @@ func BuildRewriteDataFilesManifestCommit(req RewriteDataFilesMaterializeRequest)
 		specIDs = append(specIDs, specID)
 	}
 	sort.Ints(specIDs)
-	if err := reserveMaintenanceMemory(&memoryUsed, saturatingMaintenanceMul(int64(len(specIDs)), 512), memoryLimit); err != nil {
+	if err := reserveMaintenanceMemory(&memoryUsed, api.SaturatingMemoryMul(int64(len(specIDs)), 512), memoryLimit); err != nil {
 		return nil, err
 	}
 	manifests := make([]api.ManifestFile, 0, len(specIDs))
@@ -872,7 +872,7 @@ func BuildRewriteDataFilesManifestCommit(req RewriteDataFilesMaterializeRequest)
 		manifests = append(manifests, manifest)
 		manifestObjects = append(manifestObjects, ObjectWrite{Location: manifestPath, Payload: manifestBytes})
 	}
-	manifestListMemory := saturatingMaintenanceAdd(
+	manifestListMemory := api.SaturatingNonnegativeAdd(
 		metadata.ManifestListMemoryWeight(0, req.PreservedManifests),
 		metadata.ManifestListMemoryWeight(0, manifests),
 	)
@@ -942,7 +942,7 @@ func rewriteDataFilesNewEntriesMemory(req RewriteDataFilesMaterializeRequest) in
 
 func saturatingMetadataEntryWeight(total int64, file api.DataFile) int64 {
 	weight := metadata.ManifestEntriesMemoryWeight(0, []api.ManifestEntry{{DataFile: file}})
-	return saturatingMaintenanceAdd(total, weight)
+	return api.SaturatingNonnegativeAdd(total, weight)
 }
 
 func rewriteDataFilesEntriesBySpec(entries []api.ManifestEntry) map[int][]api.ManifestEntry {
@@ -1070,8 +1070,8 @@ func rewriteDataFilesManifestEntryWithSequences(status api.ManifestEntryStatus, 
 }
 
 func buildRewriteDataFilesCommitAttempt(req RewriteDataFilesMaterializeRequest, manifests []api.ManifestFile, rewrittenFiles, addedFiles uint64) *api.CommitAttempt {
-	targetRef := firstNonEmptyString(req.TargetRef, "main")
-	summary := cloneStringMap(req.Summary)
+	targetRef := api.FirstNonBlankPreserveWhitespace(req.TargetRef, "main")
+	summary := api.CloneNonEmptyMap(req.Summary)
 	if summary == nil {
 		summary = make(map[string]string)
 	}

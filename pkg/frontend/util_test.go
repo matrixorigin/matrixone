@@ -37,6 +37,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/cdc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	commonutil "github.com/matrixorigin/matrixone/pkg/common/util"
@@ -3083,8 +3084,10 @@ func Test_isLegal(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			assert.Equalf(t, tt.want, accountNameIsLegal(tt.args.name), "accountNameIsLegal(%v)", tt.args.name)
-			assert.Equalf(t, tt.want, dbNameIsLegal(tt.args.name), "dbNameIsLegal(%v)", tt.args.name)
-			assert.Equalf(t, tt.want, tableNameIsLegal(tt.args.name), "tableNameIsLegal(%v)", tt.args.name)
+			_, _, dbErr := CDCParseTableInfo(context.Background(), tt.args.name, cdc.CDCPitrGranularity_DB)
+			assert.Equalf(t, tt.want, dbErr == nil, "dbNameIsLegal(%v)", tt.args.name)
+			_, _, tableErr := CDCParseTableInfo(context.Background(), "*."+tt.args.name, cdc.CDCPitrGranularity_Table)
+			assert.Equalf(t, tt.want, tableErr == nil, "tableNameIsLegal(%v)", tt.args.name)
 		})
 	}
 }
@@ -3134,8 +3137,10 @@ func Test_islegal(t *testing.T) {
 
 func Test_accountNameIsLegal(t *testing.T) {
 	assert.False(t, accountNameIsLegal(",."))
-	assert.False(t, dbNameIsLegal(",."))
-	assert.False(t, tableNameIsLegal(",."))
+	_, _, dbErr := CDCParseTableInfo(context.Background(), ",.", cdc.CDCPitrGranularity_DB)
+	assert.Error(t, dbErr)
+	_, _, tableErr := CDCParseTableInfo(context.Background(), "*.,.", cdc.CDCPitrGranularity_Table)
+	assert.Error(t, tableErr)
 }
 
 func Test_replaceStr2(t *testing.T) {

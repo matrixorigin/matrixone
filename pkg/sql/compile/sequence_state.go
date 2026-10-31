@@ -16,6 +16,7 @@ package compile
 
 import (
 	"context"
+	"maps"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -38,8 +39,8 @@ func captureSequenceStatementState(proc *process.Process) sequenceStatementState
 	}
 	info := proc.GetSessionInfo()
 	state := sequenceStatementState{
-		curValues:  cloneSequenceValues(info.SeqCurValues),
-		addValues:  cloneSequenceValues(info.SeqAddValues),
+		curValues:  maps.Clone(info.SeqCurValues),
+		addValues:  maps.Clone(info.SeqAddValues),
 		deleteKeys: append([]uint64(nil), info.SeqDeleteKeys...),
 	}
 	if len(info.SeqLastValue) != 0 {
@@ -57,24 +58,13 @@ func (c *Compile) restoreSequenceStatementState() {
 
 func (state sequenceStatementState) apply(proc *process.Process) {
 	info := proc.GetSessionInfo()
-	info.SeqCurValues = cloneSequenceValues(state.curValues)
-	info.SeqAddValues = cloneSequenceValues(state.addValues)
+	info.SeqCurValues = maps.Clone(state.curValues)
+	info.SeqAddValues = maps.Clone(state.addValues)
 	info.SeqDeleteKeys = append([]uint64(nil), state.deleteKeys...)
 	if len(info.SeqLastValue) == 0 {
 		info.SeqLastValue = make([]string, 1)
 	}
 	info.SeqLastValue[0] = state.lastValue
-}
-
-func cloneSequenceValues(values map[uint64]string) map[uint64]string {
-	if values == nil {
-		return nil
-	}
-	cloned := make(map[uint64]string, len(values))
-	for key, value := range values {
-		cloned[key] = value
-	}
-	return cloned
 }
 
 // internalSequenceState is a synchronous CTAS handoff. The child owns its

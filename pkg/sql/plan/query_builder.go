@@ -4490,6 +4490,9 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		rootID = builder.applyAssociativeLaw(rootID)
 		builder.determineBuildAndProbeSide(rootID, true)
 		rootID = builder.aggPullup(rootID, rootID)
+		// Preserve INNER-join reordering before introducing an existence boundary.
+		// Otherwise a set arm can retain fact multiplicity behind a dimension SEMI.
+		builder.reduceSetMembershipJoins(rootID, i)
 		ReCalcNodeStats(rootID, builder, true, false, true)
 		rootID = builder.pushdownSemiAntiJoins(rootID)
 		rootID = builder.removeImpliedSemiJoins(rootID)
@@ -4643,6 +4646,7 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 	//for i := 1; i < len(builder.qry.Steps); i++ {
 	//	builder.remapSinkScanColRefs(builder.qry.Steps[i], int32(i), sinkColRef)
 	//}
+	builder.pushdownGroupingExpressions()
 	builder.hintQueryType()
 	for _, scan := range builder.windowValidationScans {
 		if scan == nil {
@@ -7534,17 +7538,6 @@ func mergeNumericProjectionTargets(left, right Type) (Type, bool) {
 
 func numericProjectionTableKey(ctx *BindContext, table string) string {
 	return tree.NewCStr(table, ctx.lower).Compare()
-}
-
-func storeNumericTableProjectionTargets(
-	targetsByTable map[string][]Type,
-	ambiguousByTable map[string][]bool,
-	table string,
-	targets []Type,
-) bool {
-	return storeNumericTableProjectionTargetsWithMerge(
-		targetsByTable, ambiguousByTable, strings.ToLower(table), targets, false,
-	)
 }
 
 func storeNumericTableProjectionTargetsWithMerge(
@@ -12597,6 +12590,12 @@ func (builder *QueryBuilder) appendStep(nodeID int32) int32 {
 
 func (builder *QueryBuilder) appendNode(node *plan.Node, ctx *BindContext) int32 {
 	nodeID := int32(len(builder.qry.Nodes))
+	switch node.NodeType {
+	case plan.Node_UNION, plan.Node_INTERSECT, plan.Node_MINUS:
+		// Their global deduplication phase is an aggregate, including set
+		// nodes synthesized outside the SELECT binder.
+		node.SpillMem = builder.aggSpillMem
+	}
 	if ctx != nil && len(node.ViewPath) == 0 {
 		node.ViewPath = append([]*plan.ViewStep(nil), ctx.viewPath...)
 	}
@@ -13720,7 +13719,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 					Database:       mongoEnv.Database,
 					Collection:     mongoEnv.Collection,
 					Columns:        sqlmongodb.ColumnsToPlan(mongoEnv.Columns),
-					ProjectedPaths: projectedMongoPaths(mongoEnv.Columns),
+					ProjectedPaths: sqlmongodb.ProjectedPaths(mongoEnv.Columns),
 					MaxParallelism: 1,
 				}
 			} else if externType == plan.ExternType_DATASTREAM_TB {
@@ -14068,19 +14067,6 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 	return
 }
 
-func projectedMongoPaths(columns []sqlmongodb.ColumnMapping) []string {
-	result := make([]string, 0, len(columns))
-	seen := make(map[string]struct{}, len(columns))
-	for _, column := range columns {
-		if _, ok := seen[column.Path]; ok {
-			continue
-		}
-		seen[column.Path] = struct{}{}
-		result = append(result, column.Path)
-	}
-	return result
-}
-
 // refreshMongoScanPushdown produces plan-time EXPLAIN evidence from the DDL
 // envelope. Compile re-runs the same translation after validating and loading
 // the authoritative catalog mapping. Keep the full definition snapshot on the
@@ -14094,12 +14080,7 @@ func (builder *QueryBuilder) refreshMongoScanPushdown(node *plan.Node) error {
 		return moerr.NewInternalError(builder.GetContext(), "MongoDB external scan is missing its table definition")
 	}
 	scan := node.ExternScan.MongodbScan
-	names := make([]string, 0, len(node.TableDef.Cols))
-	for _, column := range node.TableDef.Cols {
-		if column != nil && !column.Hidden && !catalog.IsForeignQueryCol(column.Name, column.ColId) {
-			names = append(names, column.Name)
-		}
-	}
+	names := sqlmongodb.RetainedColumnNames(node.TableDef.Cols)
 	columns, err := sqlmongodb.ProjectColumnsByName(
 		builder.GetContext(), sqlmongodb.ColumnsFromPlan(scan.Columns), names)
 	if err != nil {
