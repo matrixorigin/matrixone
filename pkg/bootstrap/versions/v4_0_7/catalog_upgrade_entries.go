@@ -189,7 +189,13 @@ func addUserDefinedFunctionSignatureIndex() versions.UpgradeEntry {
 		UpgType:   versions.ADD_INDEX,
 		UpgSql:    "create unique index name_db_arg_types on mo_catalog.mo_user_defined_function(name, db, arg_types)",
 		CheckFunc: func(txn executor.TxnExecutor, accountID uint32) (bool, error) {
-			return checkCatalogIndex(txn, accountID, catalog.MO_CATALOG, "mo_user_defined_function", "name_db_arg_types", true, "name", "db", "arg_types")
+			ready, err := checkCatalogIndex(txn, accountID, catalog.MO_CATALOG, "mo_user_defined_function", "name_db_arg_types", true, "name", "db", "arg_types")
+			if err != nil || ready {
+				return ready, err
+			}
+			// The later routine entry replaces this index in the same pending
+			// migration. A restart must not recreate an already superseded index.
+			return checkCatalogIndex(txn, accountID, catalog.MO_CATALOG, "mo_user_defined_function", "name_db_arg_types_descriptor", true, "name", "db", "arg_types", "canonical_input_descriptor")
 		},
 	}
 }

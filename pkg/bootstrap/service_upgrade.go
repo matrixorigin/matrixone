@@ -85,6 +85,22 @@ func crossingPending(v versions.Version, txn executor.TxnExecutor) (bool, error)
 	return crossingPendingInSteps(steps), nil
 }
 
+// crossingPendingInRoute is crossingPending instantiated on the final route.
+// On a 4.0.7 final the 4.0.7 step is the route's last step and the final
+// marker flips Ready only after every step is Ready, so a not-Ready marker
+// already implies the crossing step is not Ready and no added read is needed;
+// a later final scans its own persisted route steps.
+func crossingPendingInRoute(final versions.Version, txn executor.TxnExecutor) (bool, error) {
+	if final.Version == "4.0.7" {
+		return true, nil
+	}
+	steps, err := versions.GetUpgradeVersions(final.Version, final.VersionOffset, txn, false, false)
+	if err != nil {
+		return false, err
+	}
+	return crossingPendingInSteps(steps), nil
+}
+
 func crossingPendingInSteps(steps []versions.VersionUpgrade) bool {
 	for _, step := range steps {
 		if step.ToVersion == "4.0.7" && step.State != versions.StateReady {
@@ -261,12 +277,14 @@ func (s *service) checkUpgrade(ctx context.Context, recheck bool) error {
 				state, exists, err := versions.GetVersionState(final.Version, final.VersionOffset, txn, false)
 				if err != nil || exists {
 					if err == nil && exists && state != versions.StateReady && versions.Compare(final.Version, "4.0.7") >= 0 {
-						if final.Version == "4.0.7" {
+						pending, cerr := crossingPendingInRoute(final, txn)
+						if cerr != nil {
+							return cerr
+						}
+						if pending {
 							if err = rejectLegacyCDCTasks(txn); err != nil {
 								return err
 							}
-						} else if err = s.checkPendingV407Upgrade(final, txn); err != nil {
-							return err
 						}
 					}
 					completed = err == nil && exists && state == versions.StateReady
@@ -278,9 +296,6 @@ func (s *service) checkUpgrade(ctx context.Context, recheck bool) error {
 			if err != nil {
 				s.logger.Error("failed to get latest version",
 					zap.Error(err))
-				return err
-			}
-			if err := s.checkRetiredCatalogSource(v.Version); err != nil {
 				return err
 			}
 
@@ -309,15 +324,7 @@ func (s *service) checkUpgrade(ctx context.Context, recheck bool) error {
 					"catalog 4.0.7 offset %d differs from binary offset %d; 4.0.7 is frozen and further migrations require a new catalog version",
 					v.VersionOffset, v4_0_7.Handler.Metadata().VersionOffset)}
 			}
-			// Validate retained recovery before any catalog setup. That validation
-			// owns CDC admission for this route; do not run its preflight twice.
-			retainedRecovery := !v.IsReady() && v.Version != final.Version && s.canResumeUpgrade(v)
-			if retainedRecovery {
-				if err := s.checkUpgradeRecovery(v, txn); err != nil {
-					return err
-				}
-			}
-			if created && !retainedRecovery && versions.Compare(final.Version, "4.0.7") >= 0 {
+			if created && versions.Compare(final.Version, "4.0.7") >= 0 {
 				pending, err := crossingPending(v, txn)
 				if err != nil {
 					return err
@@ -350,8 +357,8 @@ func (s *service) checkUpgrade(ctx context.Context, recheck bool) error {
 			// until its cluster and tenant stages have all committed completion.
 			if !v.IsReady() {
 				if v.Version != final.Version {
-					if retainedRecovery {
-						return nil
+					if s.canResumeUpgrade(v) {
+						return s.checkUpgradeRecovery(v, txn)
 					}
 					return &terminalUpgradeError{moerr.NewInvalidStateNoCtxf("cannot upgrade to version %s, because version %s is in upgrading",
 						final.Version, v.Version)}
@@ -485,9 +492,6 @@ func (s *service) checkUpgradeRecovery(target versions.Version, txn executor.Txn
 		return &terminalUpgradeError{moerr.NewInvalidStateNoCtxf("cannot resume incomplete upgrade route to %s", target.Version)}
 	}
 	for i, u := range upgrades {
-		if err := s.checkRetiredCatalogSource(u.FromVersion); err != nil {
-			return err
-		}
 		if u.UpgradeOrder != int32(i) ||
 			(i > 0 && u.FromVersion != upgrades[i-1].ToVersion) ||
 			versions.Compare(u.FromVersion, u.ToVersion) > 0 ||
@@ -516,14 +520,15 @@ func (s *service) checkUpgradeRecovery(target versions.Version, txn executor.Txn
 			return &terminalUpgradeError{moerr.NewInvalidStateNoCtxf("cannot resume unsupported upgrade step %s", u.String())}
 		}
 	}
-	// Preserve the frozen-stage admission fence even when a later catalog
-	// repair is the retained route's final target.
-	pending, err := validateV407UpgradeSteps(upgrades)
-	if err != nil {
-		return err
-	}
-	if pending {
-		return rejectLegacyCDCTasks(txn)
+	// A retained route to the frozen 4.0.7 stage needs the same catalog
+	// admission upstream enforces before creating it: a final above 4.0.7
+	// reaches this resume path without any other admission check.
+	// canResumeUpgrade already pinned the route to the registered frozen
+	// handle's offset.
+	if target.Version == v4_0_7.Handler.Metadata().Version {
+		if err := rejectLegacyCDCTasks(txn); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -716,11 +721,6 @@ func (s *service) performUpgrade(
 		return false, false, nil, err
 	}
 
-	for _, u := range upgrades {
-		if err := s.checkRetiredCatalogSource(u.FromVersion); err != nil {
-			return false, false, nil, err
-		}
-	}
 	for _, u := range upgrades {
 		s.logger.Info("handle version upgrade",
 			zap.String("upgrade", u.String()))
