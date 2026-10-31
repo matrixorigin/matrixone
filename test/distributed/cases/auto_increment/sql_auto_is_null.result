@@ -112,4 +112,24 @@ select d.id from (select id from t30717 having id >= 0) d where d.id is null;
 ➤ id[-5,64,0]
 select d.id from (select id from t30717 union all select id from t30717) d where d.id is null;
 ➤ id[-5,64,0]
+select id,v from t30717 where isnull(id);
+➤ id[-5,64,0]  ¦  v[4,32,0]  𝄀
+1  ¦  7
+select id,v from t30717 where (isnull(id));
+➤ id[-5,64,0]  ¦  v[4,32,0]  𝄀
+1  ¦  7
+set sql_auto_is_null=0;
+select id,v from t30717 where isnull(id);
+➤ id[-5,64,0]  ¦  v[4,32,0]
+select id,v from t30717 where (isnull(id));
+➤ id[-5,64,0]  ¦  v[4,32,0]
+set sql_auto_is_null=1;
+select s.b from s30717 s left join t30717 t on t.id=s.b where isnull(t.id) order by s.b;
+➤ b[4,32,0]  𝄀
+5  𝄀
+200
+insert into t30717(v) values (21);
+select id,v from t30717 where (isnull(id));
+➤ id[-5,64,0]  ¦  v[4,32,0]  𝄀
+105  ¦  21
 drop database if exists sql_auto_is_null_bvt;

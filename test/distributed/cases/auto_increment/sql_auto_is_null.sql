@@ -88,4 +88,19 @@ select d.id from (select distinct id from t30717) d where d.id is null;
 select d.id from (select id, row_number() over (order by v) as rn from t30717) d where d.id is null;
 select d.id from (select id from t30717 having id >= 0) d where d.id is null;
 select d.id from (select id from t30717 union all select id from t30717) d where d.id is null;
+-- Functional whole-clause spelling (review 5722781455): MySQL resolves the
+-- one-argument builtin ISNULL to the same predicate as IS NULL
+-- (Item_func_isnull), so with sql_auto_is_null=1 both the plain and the
+-- parenthesized spelling select this session's last-inserted row; with the
+-- flag off both keep plain semantics over the NOT NULL id, and the
+-- null-extended LEFT JOIN side keeps plain semantics in this spelling too.
+select id,v from t30717 where isnull(id);
+select id,v from t30717 where (isnull(id));
+set sql_auto_is_null=0;
+select id,v from t30717 where isnull(id);
+select id,v from t30717 where (isnull(id));
+set sql_auto_is_null=1;
+select s.b from s30717 s left join t30717 t on t.id=s.b where isnull(t.id) order by s.b;
+insert into t30717(v) values (21);
+select id,v from t30717 where (isnull(id));
 drop database if exists sql_auto_is_null_bvt;

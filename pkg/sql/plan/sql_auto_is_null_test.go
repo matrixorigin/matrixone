@@ -598,3 +598,72 @@ func TestSqlAutoIsNullCorruptReferencesStayNoOp(t *testing.T) {
 	require.False(t, projecting.sqlAutoIsNullBaseFieldRef(0, sqlAutoIsNullTestColRef(1, 0)),
 		"a block-projected binding is never a raw FIELD_ITEM reference")
 }
+
+// Review 5722781455: MySQL resolves the one-argument builtin ISNULL to the
+// same comparison predicate as IS NULL (Item_func_isnull), so the
+// whole-clause functional spelling must produce the identical
+// last_insert_id() rewrite; every boundary that keeps the keyword form out
+// keeps the functional spelling out too.
+
+func TestSqlAutoIsNullIsnullFuncWholeClauseRewritten(t *testing.T) {
+	cc := newSqlAutoIsNullTestContext(t, int64(1), nil)
+	qry := buildSqlAutoIsNullQuery(t, cc, "select seq, val from auto_t where isnull(seq)")
+	require.True(t, sqlAutoIsNullQueryHasFunction(qry, "last_insert_id"),
+		"the whole-clause builtin ISNULL spelling must compare against last_insert_id()")
+	require.False(t, sqlAutoIsNullQueryHasFunction(qry, "isnull"),
+		"the ISNULL predicate must not survive the rewrite")
+	require.True(t, sqlAutoIsNullAnyNodeNotCacheable(qry),
+		"the rewrite decision depends on a session variable, so the statement must be plan-cache rejected")
+}
+
+func TestSqlAutoIsNullIsnullFuncParenthesizedWholeClauseRewritten(t *testing.T) {
+	cc := newSqlAutoIsNullTestContext(t, int64(1), nil)
+	qry := buildSqlAutoIsNullQuery(t, cc, "select seq, val from auto_t where (isnull(seq))")
+	require.True(t, sqlAutoIsNullQueryHasFunction(qry, "last_insert_id"),
+		"parentheses are surface syntax: the parenthesized whole-clause ISNULL form resolves to the same predicate and rewrites too")
+	require.False(t, sqlAutoIsNullQueryHasFunction(qry, "isnull"))
+	require.True(t, sqlAutoIsNullAnyNodeNotCacheable(qry))
+}
+
+func TestSqlAutoIsNullIsnullFuncCaseInsensitiveRewritten(t *testing.T) {
+	cc := newSqlAutoIsNullTestContext(t, int64(1), nil)
+	qry := buildSqlAutoIsNullQuery(t, cc, "select seq from auto_t where IsNull(seq)")
+	require.True(t, sqlAutoIsNullQueryHasFunction(qry, "last_insert_id"),
+		"function names are case-insensitive surface syntax; the canonical builtin match must survive any input casing")
+}
+
+func TestSqlAutoIsNullIsnullFuncDisabledKeepsPlainSemantics(t *testing.T) {
+	cc := newSqlAutoIsNullTestContext(t, int64(0), nil)
+	qry := buildSqlAutoIsNullQuery(t, cc, "select seq, val from auto_t where isnull(seq)")
+	require.True(t, sqlAutoIsNullQueryHasFunction(qry, "isnull"))
+	require.False(t, sqlAutoIsNullQueryHasFunction(qry, "last_insert_id"))
+	require.True(t, sqlAutoIsNullAnyNodeNotCacheable(qry),
+		"toggling the flag must never serve a plan cached under the other value for the functional spelling either")
+}
+
+func TestSqlAutoIsNullIsnullFuncCompositePredicateNotRewritten(t *testing.T) {
+	cc := newSqlAutoIsNullTestContext(t, int64(1), nil)
+	qry := buildSqlAutoIsNullQuery(t, cc, "select seq, val from auto_t where isnull(seq) and val <= 1001")
+	require.True(t, sqlAutoIsNullQueryHasFunction(qry, "isnull"))
+	require.False(t, sqlAutoIsNullQueryHasFunction(qry, "last_insert_id"))
+	require.False(t, sqlAutoIsNullAnyNodeNotCacheable(qry))
+}
+
+func TestSqlAutoIsNullIsnullFuncExpressionArgNotRewritten(t *testing.T) {
+	cc := newSqlAutoIsNullTestContext(t, int64(1), nil)
+	qry := buildSqlAutoIsNullQuery(t, cc, "select seq from auto_t where isnull(seq + 0)")
+	require.True(t, sqlAutoIsNullQueryHasFunction(qry, "isnull"),
+		"an expression argument stays a plain predicate; MySQL's FIELD_ITEM gate excludes it")
+	require.False(t, sqlAutoIsNullQueryHasFunction(qry, "last_insert_id"))
+	require.False(t, sqlAutoIsNullAnyNodeNotCacheable(qry))
+}
+
+func TestSqlAutoIsNullIsnullFuncNullExtendedJoinColumnNotRewritten(t *testing.T) {
+	cc := newSqlAutoIsNullTestContext(t, int64(1), nil)
+	qry := buildSqlAutoIsNullQuery(t, cc,
+		"select s.val from auto_t a left join auto_t s on a.seq = s.seq where isnull(s.seq)")
+	require.True(t, sqlAutoIsNullQueryHasFunction(qry, "isnull"),
+		"LEFT-JOIN null-extended references never participate in the rewrite, in the functional spelling too")
+	require.False(t, sqlAutoIsNullQueryHasFunction(qry, "last_insert_id"))
+	require.False(t, sqlAutoIsNullAnyNodeNotCacheable(qry))
+}

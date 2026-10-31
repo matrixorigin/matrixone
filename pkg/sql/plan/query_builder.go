@@ -9638,7 +9638,7 @@ func (builder *QueryBuilder) rewriteSqlAutoIsNull(
 		}
 		whereAst = paren.Expr
 	}
-	if _, ok := whereAst.(*tree.IsNullExpr); !ok || len(boundFilters) != 1 {
+	if !sqlAutoIsNullWholeClauseExpr(whereAst) || len(boundFilters) != 1 {
 		return boundFilters, false, nil
 	}
 	isNullFn := boundFilters[0].GetF()
@@ -9685,6 +9685,29 @@ func (builder *QueryBuilder) rewriteSqlAutoIsNull(
 		return nil, false, bindErr
 	}
 	return []*plan.Expr{eqExpr}, true, nil
+}
+
+// sqlAutoIsNullWholeClauseExpr reports whether the already paren-unwrapped
+// whole-WHERE expression can carry the sql_auto_is_null rewrite. MySQL
+// resolves the one-argument builtin ISNULL(x) to the same comparison
+// predicate as x IS NULL (Item_func_isnull, item_create.cc, with the
+// compatibility rewrite in item_cmpfunc.cc), so the whole-clause shape is
+// exactly the IS NULL expression or the builtin function call with a single
+// argument. Every other shape - qualified or user-defined functions, zero-
+// or multi-argument calls, composite predicates - stays out. The argument
+// itself keeps being judged by the bound-filter checks below, which retain
+// every existing eligibility guard (raw base-table AUTO_INCREMENT field,
+// outer-join null-side exclusion, session variable).
+func sqlAutoIsNullWholeClauseExpr(whereAst tree.Expr) bool {
+	switch expr := whereAst.(type) {
+	case *tree.IsNullExpr:
+		return true
+	case *tree.FuncExpr:
+		return len(expr.Exprs) == 1 &&
+			expr.FuncName != nil && expr.FuncName.Compare() == "isnull"
+	default:
+		return false
+	}
 }
 
 // sqlAutoIsNullEnabled interprets a resolved sql_auto_is_null value. Boolean
