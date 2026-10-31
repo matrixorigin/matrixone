@@ -55,13 +55,16 @@ type analyzeSelectedRange struct {
 }
 
 type analyzeColumnState struct {
-	name        string
-	typ         types.Type
-	ndv         *analyzestats.NDVAccumulator
-	sampleNulls uint64
-	sampleBytes uint64
-	canonical   []byte
-	zoneMap     index.ZM
+	distribution *analyzestats.ByteRangeSampler
+	column       *plan.ColDef
+	tableVersion uint32
+	name         string
+	typ          types.Type
+	ndv          *analyzestats.NDVAccumulator
+	sampleNulls  uint64
+	sampleBytes  uint64
+	canonical    []byte
+	zoneMap      index.ZM
 }
 
 var _ engine.AnalyzableRelation = (*txnTable)(nil)
@@ -98,7 +101,8 @@ func (tbl *txnTable) AnalyzeTable(
 	if proc == nil {
 		return nil, moerr.NewInternalErrorNoCtx("ANALYZE requires an execution process")
 	}
-	columns, err := resolveAnalyzeColumns(tbl.GetTableDef(ctx), request.Columns)
+	tableDef := tbl.GetTableDef(ctx)
+	columns, err := resolveAnalyzeColumns(tableDef, request.Columns)
 	if err != nil {
 		return nil, err
 	}
@@ -165,6 +169,7 @@ func (tbl *txnTable) AnalyzeTable(
 		result.Mode = "FULLSCAN"
 	}
 
+	stringSlots := analyzeByteRangeSlots(columns, qBlocks)
 	columnsPerPass := int(request.ColumnsPerPass)
 	for first := 0; first < len(columns); first += columnsPerPass {
 		last := min(first+columnsPerPass, len(columns))
@@ -176,9 +181,13 @@ func (tbl *txnTable) AnalyzeTable(
 			}
 			states[i] = analyzeColumnState{
 				name: column.Name,
-				typ: types.New(
-					types.T(column.Typ.Id), column.Typ.Width, column.Typ.Scale),
-				ndv: ndv,
+				typ:  types.New(types.T(column.Typ.Id), column.Typ.Width, column.Typ.Scale),
+				ndv:  ndv,
+			}
+			if stringSlots > 0 && !column.Typ.PadSpace && analyzestats.SupportsByteRange(types.NewWithCharset(types.T(column.Typ.Id), column.Typ.Width, column.Typ.Scale, uint8(column.Typ.Charset))) {
+				states[i].distribution = analyzestats.NewByteRangeSampler(stringSlots)
+				states[i].column = column
+				states[i].tableVersion = tableDef.Version
 			}
 			states[i].zoneMap = index.NewZM(states[i].typ.Oid, states[i].typ.Scale)
 		}
@@ -362,9 +371,11 @@ func (tbl *txnTable) scanAnalyzeColumnGroup(
 	states []analyzeColumnState,
 	seed [32]byte,
 ) (retainedRows, readBytes uint64, err error) {
+	hasDistribution := false
 	attrs := make([]string, 0, len(states)+1)
 	attrTypes := make([]types.Type, 0, len(states)+1)
 	for i := range states {
+		hasDistribution = hasDistribution || states[i].distribution != nil
 		attrs = append(attrs, states[i].name)
 		attrTypes = append(attrTypes, states[i].typ)
 	}
@@ -435,12 +446,23 @@ func (tbl *txnTable) scanAnalyzeColumnGroup(
 				if retainRow {
 					retainedRows++
 				}
+				var distributionPriority [16]byte
+				if retainRow && hasDistribution {
+					distributionPriority = analyzestats.ByteRangePriority(seed, types.Rowid(identity))
+				}
+
 				for columnIndex := range states {
 					valueVector := data.Vecs[columnIndex]
 					isNull := valueVector.IsNull(uint64(row))
 					var raw []byte
 					if !isNull {
 						raw = valueVector.GetRawBytesAt(row)
+					}
+					if retainRow && states[columnIndex].distribution != nil {
+						if sampleErr := states[columnIndex].distribution.Observe(distributionPriority, identity, raw, isNull); sampleErr != nil {
+							_ = reader.Close()
+							return 0, 0, sampleErr
+						}
 					}
 					if retainRow {
 						// StatsInfo.SizeMap is consumed as the uncompressed
@@ -509,6 +531,21 @@ func analyzeValueWidth(typ types.Type, raw []byte, isNull bool) uint64 {
 	return width
 }
 
+// A block-cluster sample is not a uniform row sample. Distribute the budget
+// across the entire selected schema before splitting it into column passes.
+func analyzeByteRangeSlots(columns []*plan.ColDef, blocks analyzestats.Fraction) int {
+	if blocks.Denominator == 0 || blocks.Numerator != blocks.Denominator {
+		return 0
+	}
+	eligible := 0
+	for _, col := range columns {
+		if !col.Typ.PadSpace && analyzestats.SupportsByteRange(types.NewWithCharset(types.T(col.Typ.Id), col.Typ.Width, col.Typ.Scale, uint8(col.Typ.Charset))) {
+			eligible++
+		}
+	}
+	return analyzestats.ByteRangeSampleCapacity(eligible)
+}
+
 func finalizeAnalyzeColumns(
 	stats *pbstats.StatsInfo,
 	states []analyzeColumnState,
@@ -545,6 +582,17 @@ func finalizeAnalyzeColumns(
 		stats.NullCntMap[state.name] = nullCount
 		stats.SizeMap[state.name] = scaleSampleRatio(state.sampleBytes, sampleRows, populationRows)
 		stats.DataTypeMap[state.name] = uint64(state.typ.Oid)
+		if d := state.distribution.Distribution(populationRows); d != nil {
+			d.TypeId = uint32(state.typ.Oid)
+			d.Charset = state.column.Typ.Charset
+			d.CollationVersion = state.column.Typ.CollationVersion
+			d.ColumnSeqnum = uint32(state.column.Seqnum)
+			d.TableVersion = state.tableVersion
+			if stats.ByteRangeMap == nil {
+				stats.ByteRangeMap = make(map[string]*pbstats.ByteRangeDistribution)
+			}
+			stats.ByteRangeMap[state.name] = d
+		}
 		if fullCoverage && state.zoneMap != nil && state.zoneMap.IsInited() {
 			minValue, minOK := tryGetMinMaxValueByFloat64(state.typ, state.zoneMap.GetMinBuf())
 			maxValue, maxOK := tryGetMinMaxValueByFloat64(state.typ, state.zoneMap.GetMaxBuf())

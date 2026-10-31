@@ -17,6 +17,7 @@ package plan
 import (
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -24,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	statspb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
 
@@ -2244,85 +2246,78 @@ func (builder *QueryBuilder) optimizeLikeExpr(nodeID int32) {
 	if builder.optimizerHints != nil && builder.optimizerHints.optimizeLikeExpr != 0 {
 		return
 	}
-	// for a like "abc%", change it to prefix_equal(a,"abc")
-	// for a like "abc%def", add an extra filter prefix_equal(a,"abc")
 	node := builder.qry.Nodes[nodeID]
-
 	for _, childID := range node.Children {
 		builder.optimizeLikeExpr(childID)
 	}
 	if node.NodeType != plan.Node_TABLE_SCAN || len(node.FilterList) == 0 {
 		return
 	}
-	var newFilters []*plan.Expr
-	for i := range node.FilterList {
-		expr := node.FilterList[i]
-		fun := expr.GetF()
-		if fun != nil && fun.Func.ObjName == "like" {
-			// Explicit ESCAPE changes how wildcard bytes are interpreted. Keep
-			// the original predicate intact instead of applying the two-argument
-			// prefix rewrite with its hard-coded default escape semantics.
-			if len(fun.Args) != 2 {
-				continue
+	var stats *statspb.StatsInfo
+	if w := builder.getStatsInfoByTableID(node.TableDef.TblId); w != nil {
+		stats = w.GetStats()
+	}
+	var prefixes []*plan.Expr
+	for i, expr := range node.FilterList {
+		fn := expr.GetF()
+		if fn == nil || fn.Func.ObjName != "like" || len(fn.Args) != 2 || fn.Args[0].GetCol() == nil {
+			continue
+		}
+		if _, usable := prefixStringDomain(fn.Args[0].Typ); !usable {
+			continue
+		}
+		lit := fn.Args[1].GetLit()
+		if lit == nil || lit.Isnull || lit.Src != nil {
+			continue
+		}
+		value, ok := lit.Value.(*plan.Literal_Sval)
+		if !ok || value.Sval == "" {
+			continue
+		}
+		binary, _ := prefixStringDomain(fn.Args[0].Typ)
+		if !binary && (!utf8.ValidString(value.Sval) || strings.ContainsRune(value.Sval, utf8.RuneError)) {
+			continue
+		}
+		prefix, wildcard, escaped, pure := likeLiteralPrefix(value.Sval)
+		if !wildcard {
+			if !escaped {
+				fn.Func.ObjName = function.EqualFunctionName
+				fn.Func.Obj = function.EqualFunctionEncodedID
 			}
-			col := fun.Args[0].GetCol()
-			if col == nil {
-				continue
-			}
-			if fun.Args[1].GetLit() == nil {
-				continue
-			}
-			str := fun.Args[1].GetLit().GetSval()
-			if len(str) == 0 {
-				continue
-			}
-			index1 := strings.IndexByte(str, '_')
-			if index1 > 0 && str[index1-1] == '\\' {
-				index1--
-			}
-			index2 := strings.IndexByte(str, '%')
-			if index2 > 0 && str[index2-1] == '\\' {
-				index2--
-			}
-			if index1 == -1 && index2 == -1 {
-				// it's col like string without wildcard, can change to equal
-				fun.Func.ObjName = function.EqualFunctionName
-				fun.Func.Obj = function.EqualFunctionEncodedID
-				continue
-			}
-
-			indexOfWildCard := index1
-			if index1 == -1 {
-				indexOfWildCard = index2
-			}
-			if index2 != -1 && index2 < index1 {
-				indexOfWildCard = index2
-			}
-			if indexOfWildCard <= 0 {
-				continue
-			}
-			newStr := str[:indexOfWildCard]
-
-			newFilter := node.FilterList[i]
-			// if no _ and % in the last, we can replace the origin filter
-			replaceOrigin := (index1 == -1) && (index2 == len(str)-1)
-			if !replaceOrigin {
-				newFilter = DeepCopyExpr(newFilter)
-				newFilters = append(newFilters, newFilter)
-			}
-			newFunc := newFilter.GetF()
-			newFunc.Func.ObjName = function.PrefixEqualFunctionName
-			newFunc.Func.Obj = function.PrefixEqualFunctionEncodedID
-			newFunc.Args[1].GetLit().Value.(*plan.Literal_Sval).Sval = newStr
-			if replaceOrigin {
-				node.BlockFilterList = append(node.BlockFilterList, DeepCopyExpr(newFilter))
-			}
+			continue
+		}
+		if _, ok := stringPrefixSuccessor(prefix, binary); !ok {
+			continue
+		}
+		bound := makePlan2StringConstExprWithType(prefix, binary)
+		bound.Typ.Charset = fn.Args[0].Typ.Charset
+		prefixExpr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "prefix_eq", []*plan.Expr{DeepCopyExpr(fn.Args[0]), bound})
+		if err != nil {
+			continue
+		}
+		col := fn.Args[0].GetCol()
+		if !logicalPrefixOnTable(prefixExpr.GetF(), node.TableDef) || len(node.BindingTags) == 0 || col.RelPos != node.BindingTags[0] {
+			continue
+		}
+		prefixExpr.Selectivity = regularIndexUnknownRangeSel
+		if upper, known := stringPrefixSelectivity(prefixExpr.GetF(), stats, node); known {
+			prefixExpr.Selectivity = upper
+		}
+		// This is one predicate's necessary condition, not an independent estimate.
+		// Preserve LIKE's truth and error semantics after the candidate lookup.
+		if pure {
+			// In the proved byte domain, trailing '%' contributes only a suffix:
+			// prefix_eq is exact even if later subject bytes are malformed UTF-8.
+			node.FilterList[i] = prefixExpr
+			node.BlockFilterList = append(node.BlockFilterList, DeepCopyExpr(prefixExpr))
+		} else {
+			expr.Selectivity = 1
+			prefixes = append(prefixes, prefixExpr)
 		}
 	}
-	if len(newFilters) > 0 {
-		node.FilterList = append(node.FilterList, newFilters...)
-		node.BlockFilterList = append(node.BlockFilterList, DeepCopyExprList(newFilters)...)
-	}
+	node.FilterList = append(node.FilterList, prefixes...)
+	node.BlockFilterList = append(node.BlockFilterList, DeepCopyExprList(prefixes)...)
+
 }
 
 func (builder *QueryBuilder) forceJoinOnOneCN(nodeID int32, force bool) {

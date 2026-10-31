@@ -2473,6 +2473,17 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, no
 		idxDef := indexes[candidate.indexPos]
 		work, skip, valid := costCtx.score(idxDef, candidate.filterIdx, candidate.residualLeadingPos, candidate.shape)
 		candidate.work = work
+		// This new range path requires a comparable cost even on small tables.
+		// Other access paths retain their established small-table policy.
+		for _, pos := range candidate.filterIdx {
+			if costCtx.filterFacts[pos].logicalPrefix && !forceIndex {
+				sawScorable = true
+				if valid && !skip && work < costCtx.baseWork && (best.indexPos == -1 || work < best.work) {
+					best = candidate
+				}
+				return
+			}
+		}
 		if preferSortedScan {
 			// Preserve the sorted-scan shortcut unless a legal point lookup has
 			// a known lower cost. Small-table policy alone is not that proof.
@@ -2687,6 +2698,11 @@ func checkIndexFilter(fn *plan.Function) (int, *plan.ColRef) {
 			return EqualIndexCondition, col
 		}
 
+	case "prefix_eq":
+		if _, _, ok := logicalStringPrefix(fn); ok {
+			return NonEqualIndexCondition, fn.Args[0].GetCol()
+		}
+
 	case "in", "between":
 		col := fn.Args[0].GetCol()
 		if col != nil && !isFloatIndexFilterExpr(fn.Args[0]) {
@@ -2717,6 +2733,9 @@ func checkIndexFilter(fn *plan.Function) (int, *plan.ColRef) {
 	case "or":
 		var col *plan.ColRef
 		for i := range fn.Args {
+			if _, _, prefix := logicalStringPrefix(fn.Args[i].GetF()); prefix {
+				return UnsupportedIndexCondition, nil
+			}
 			typ1, col1 := checkIndexFilter(fn.Args[i].GetF())
 			if typ1 != NonEqualIndexCondition {
 				return UnsupportedIndexCondition, nil
@@ -2819,6 +2838,14 @@ func (builder *QueryBuilder) replaceEqualCondition(idxDef *IndexDef, filterList 
 }
 
 func (builder *QueryBuilder) replaceNonEqualCondition(idxDef *IndexDef, filter *plan.Expr, idxTag int32, idxTableDef *plan.TableDef) (*plan.Expr, error) {
+	if filter.GetF().Func.ObjName == "prefix_eq" {
+		lowered, ok := stringPrefixRange(builder.GetContext(), filter.GetF())
+		if !ok {
+			return nil, moerr.NewInternalError(builder.GetContext(), "unsupported string prefix range")
+		}
+		lowered.Selectivity = filter.Selectivity
+		filter = lowered
+	}
 	numParts := len(idxDef.Parts)
 	expr := DeepCopyExpr(filter)
 	if numParts > 1 {
@@ -2952,6 +2979,10 @@ func serializedLookupResidualLeadingFilterPositions(tableDef *plan.TableDef, fil
 	isRangePair := rangePairFilterPositions(filterList, leadingPos)
 	for _, pos := range leadingPos {
 		if pos < 0 || int(pos) >= len(filterList) {
+			continue
+		}
+		if _, _, prefix := logicalStringPrefix(filterList[pos].GetF()); prefix {
+			residualPos = append(residualPos, pos)
 			continue
 		}
 		// A paired lower bound already excludes stored NULLs.
@@ -3170,6 +3201,9 @@ type encodedIndexFilterFact struct {
 	refs               []int32
 	directCol          int32
 	unknownRangeBounds bool
+	logicalPrefix      bool
+	prefixKnown        bool
+	prefixUpper        float64
 }
 
 type encodedRegularIndexCostContext struct {
@@ -3426,6 +3460,10 @@ func (builder *QueryBuilder) newEncodedRegularIndexCostContext(
 	for filterIdx, filter := range node.FilterList {
 		fact := &ctx.filterFacts[filterIdx]
 		fact.directCol = directEncodedIndexFilterCol(filter, ctx.relPos, numCols)
+		fact.logicalPrefix = logicalPrefixOnTable(filter.GetF(), node.TableDef)
+		if fact.logicalPrefix && fact.directCol >= 0 {
+			fact.prefixUpper, fact.prefixKnown = stringPrefixSelectivity(filter.GetF(), statsInfo, node)
+		}
 		if containsDynamicParam(filter) {
 			lowerSelectivity, hasUnknownBounds := encodedRegularIndexRangeLowerSelectivity(filter, builder, statsInfo)
 			fact.unknownRangeBounds = hasUnknownBounds
@@ -3440,7 +3478,9 @@ func (builder *QueryBuilder) newEncodedRegularIndexCostContext(
 		filterType, col := checkIndexFilter(filter.GetF())
 		if col != nil && col.ColPos >= 0 && int(col.ColPos) < numCols {
 			ctx.filterTypes[filterIdx] = filterType
-			if filterType != UnsupportedIndexCondition && ctx.firstFilters[col.ColPos] < 0 {
+			// A newly recognized prefix is a fallback, so it cannot hide a
+			// previously supported equality/range on the same leading column.
+			if filterType != UnsupportedIndexCondition && (ctx.firstFilters[col.ColPos] < 0 || ctx.filterFacts[ctx.firstFilters[col.ColPos]].logicalPrefix && !fact.logicalPrefix) {
 				ctx.firstFilters[col.ColPos] = int32(filterIdx)
 			}
 			if filterType == EqualIndexCondition {
@@ -3485,6 +3525,23 @@ func (builder *QueryBuilder) newEncodedRegularIndexCostContext(
 			float64(node.Stats.BlockNum)*float64(objectio.BlockMaxRows),
 		)
 		ctx.baseRows = max(ctx.baseRows, selectedBlockRows)
+	}
+	hasUnsortedPrefix := false
+	for _, filter := range node.FilterList {
+		if logicalPrefixOnTable(filter.GetF(), node.TableDef) && GetSortOrder(node.TableDef, filter.GetF().Args[0].GetCol().ColPos) != 0 {
+			hasUnsortedPrefix = true
+			break
+		}
+	}
+	if hasUnsortedPrefix {
+		blockSel := 1.0
+		for _, filter := range node.FilterList {
+			if logicalPrefixOnTable(filter.GetF(), node.TableDef) && GetSortOrder(node.TableDef, filter.GetF().Args[0].GetCol().ColPos) != 0 {
+				continue
+			}
+			blockSel = andSelectivity(blockSel, estimateFilterBlockSelectivity(builder.GetContext(), filter, node.TableDef, statsInfo))
+		}
+		ctx.baseRows = max(ctx.baseRows, node.Stats.TableCnt*blockSel)
 	}
 	ctx.outputRows = max(0, node.Stats.Outcnt)
 	ctx.valid = finitePositive(node.Stats.TableCnt) && finitePositive(node.Stats.Cost) &&
@@ -3583,6 +3640,9 @@ func (ctx *encodedRegularIndexCostContext) matchRangeBackfill(idxDef *IndexDef) 
 			}
 		}
 		if !ctx.builder.regularIndexRangeFunctionsUsable(idxDef, ctx.node.TableDef, fn, nil, false) {
+			continue
+		}
+		if ctx.filterFacts[currentFilterIdx].logicalPrefix && ctx.skipPrefixIndexByStats(currentFilterPos) {
 			continue
 		}
 		if isRangeOp(fn) && shouldSkipLargeRangeIndexByStats(ctx.node) {
@@ -3725,6 +3785,9 @@ func (ctx *encodedRegularIndexCostContext) score(
 			continue
 		}
 		selectivity := ctx.node.FilterList[pos].Selectivity
+		if ctx.filterFacts[pos].logicalPrefix && ctx.filterFacts[pos].prefixKnown {
+			selectivity = ctx.filterFacts[pos].prefixUpper
+		}
 		lowerSelectivity := selectivity
 		if ctx.filterFacts[pos].unknownRangeBounds {
 			// PREPARE has no range-bound values. The stats layer's optimistic dynamic
@@ -3772,6 +3835,25 @@ func (ctx *encodedRegularIndexCostContext) score(
 		}
 	}
 
+	// Only predicates sharing the access column are correlated with it.
+	// A prefix on an independently filtered covering column retains its normal
+	// output estimate and cannot reprice an established equality access path.
+	hasCorrelatedPrefix := false
+	for _, fact := range ctx.filterFacts {
+		if !fact.logicalPrefix || fact.directCol < 0 {
+			continue
+		}
+		for _, pos := range ctx.touchedLeading {
+			if fact.directCol == ctx.filterFacts[pos].directCol {
+				hasCorrelatedPrefix = true
+				break
+			}
+		}
+		if hasCorrelatedPrefix {
+			break
+		}
+	}
+
 	hiddenRows := ctx.outputRows
 	lowerHiddenRows := 0.0
 	hiddenFilterCount := 1
@@ -3789,6 +3871,10 @@ func (ctx *encodedRegularIndexCostContext) score(
 				ctx.addExtractRef(colPos, false)
 			}
 		}
+		if hasCorrelatedPrefix {
+			hiddenRows = max(hiddenRows, leadingCandidateRows)
+		}
+
 		if len(ctx.unknownRangeLowerSelectivities) > 0 {
 			lowerHiddenSelectivity := lowerCandidateSelectivity
 			for filterIdx, fact := range ctx.filterFacts {
@@ -3837,6 +3923,15 @@ func (ctx *encodedRegularIndexCostContext) score(
 				continue
 			}
 			selectivity := ctx.node.FilterList[filterIdx].Selectivity
+			// Predicates on the prefix's own column are correlated. Execution alone
+			// does not justify an independent reduction in transferred/backfill rows.
+			for _, leadingPos := range ctx.touchedLeading {
+				leading := ctx.filterFacts[leadingPos]
+				if fact.directCol == leading.directCol && (fact.logicalPrefix || leading.logicalPrefix) {
+					selectivity = 1
+					break
+				}
+			}
 			lowerSelectivity := selectivity
 			if fact.unknownRangeBounds {
 				lowerSelectivity = ctx.unknownRangeLowerSelectivities[int32(filterIdx)]
@@ -3936,7 +4031,13 @@ func (ctx *encodedRegularIndexCostContext) score(
 		return indexWork, valid
 	}
 
-	indexWork, validWork := calculateWork(candidateRows, hiddenRows, ctx.outputRows)
+	// Prefix-correlated output estimates cannot discount downstream extraction
+	// or join materialization after candidate/residual work has been charged.
+	outputCostRows := ctx.outputRows
+	if hasCorrelatedPrefix {
+		outputCostRows = max(outputCostRows, hiddenRows)
+	}
+	indexWork, validWork := calculateWork(candidateRows, hiddenRows, outputCostRows)
 	rejectionWork := indexWork
 	baseComparisonWork := ctx.baseWork
 	if len(ctx.unknownRangeLowerSelectivities) > 0 && validWork {
@@ -4101,9 +4202,12 @@ func (builder *QueryBuilder) matchRegularIndexOnlyScan(
 			filterType = RangeIndexCondition
 		}
 	}
-	if !leadingEqual && node.Stats != nil && node.Stats.TableCnt >= 50000 {
-		if node.Stats.Selectivity >= InFilterSelectivityLimit ||
-			node.Stats.Outcnt >= float64(GetInFilterCardLimitOnPK(builder.compCtx.GetProcess().GetService(), node.Stats.TableCnt)) {
+	if !leadingEqual {
+		if costCtx.filterFacts[firstFilter].logicalPrefix {
+			if costCtx.skipPrefixIndexByStats(firstFilter) {
+				return nil, false
+			}
+		} else if node.Stats != nil && node.Stats.TableCnt >= 50000 && (node.Stats.Selectivity >= InFilterSelectivityLimit || node.Stats.Outcnt >= float64(GetInFilterCardLimitOnPK(builder.compCtx.GetProcess().GetService(), node.Stats.TableCnt))) {
 			return nil, false
 		}
 	}
@@ -4401,6 +4505,14 @@ func (builder *QueryBuilder) regularIndexRangeFunctionsUsable(
 	if idxDef == nil || tableDef == nil || len(idxDef.Parts) == 0 || first == nil {
 		return false
 	}
+	if first.Func.ObjName == "prefix_eq" {
+		if !logicalPrefixOnTable(first, tableDef) {
+			return false
+		}
+		lowered, ok := stringPrefixRange(builder.GetContext(), first)
+		return ok && second == nil && builder.regularIndexRangeFunctionsUsable(idxDef, tableDef, lowered.GetF(), nil, false)
+	}
+
 	if !indexTableStoresSerializedKey(idxDef) {
 		// A pair would be rebound as BETWEEN/IN_RANGE, whose mixed temporal
 		// precision contract need not equal the two original scalar comparisons.

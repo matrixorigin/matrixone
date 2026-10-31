@@ -210,3 +210,30 @@ func TestRemoteStatsPreserveByteWidth(t *testing.T) {
 		})
 	}
 }
+
+func TestRemoteStatsSampleVisibility(t *testing.T) {
+	txn := newTransactionWithActivePKTableForTest(t, "pk")
+	origin := txn.tableOps.existAndActive(genTableKey(1, "tbl", 7, "db"))
+	op := txn.op.(*mock_frontend.MockTxnOperator)
+	op.EXPECT().Snapshot().Return(txnpb.CNTxnSnapshot{}, nil).AnyTimes()
+	op.EXPECT().SnapshotTS().Return(timestamp.Timestamp{}).AnyTimes()
+	op.EXPECT().IsSnapOp().Return(false).AnyTimes()
+	txn.proc.Base.TxnOperator = op
+	origin.proc.Store(txn.proc)
+	observation := &statsinfo.StatsInfo{TableName: "tbl", TableCnt: 5, ByteRangeMap: map[string]*statsinfo.ByteRangeDistribution{"v": {Version: 1}}}
+	response, err := observation.Marshal()
+	require.NoError(t, err)
+	tbl := &txnTableDelegate{origin: origin, isLocal: func() (bool, error) { return false, nil }}
+	tbl.shard.service = statsReadService{response: response}
+	txn.readOnly.Store(true)
+	got, err := tbl.Stats(t.Context(), true)
+	require.NoError(t, err)
+	require.NotEmpty(t, got.ByteRangeMap)
+	txn.readOnly.Store(false)
+	txn.writes = []Entry{{typ: DELETE, databaseId: 7, tableId: 42}}
+	got, err = tbl.Stats(t.Context(), true)
+	require.NoError(t, err)
+	require.Empty(t, got.ByteRangeMap, "delete-only workspace is invisible to the remote readonly owner")
+	require.Equal(t, 5.0, got.TableCnt)
+	require.NotEmpty(t, observation.ByteRangeMap)
+}

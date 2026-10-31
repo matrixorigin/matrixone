@@ -2231,7 +2231,7 @@ func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
 			} else if builder.optimizerHints.blockFilter == 2 { // never pushdown blockfilters
 				node.BlockFilterList = nil
 			} else {
-				if currentBlockSel < 1 || strings.HasPrefix(node.TableDef.Name, catalog.IndexTableNamePrefix) {
+				if currentBlockSel < 1 || strings.HasPrefix(node.TableDef.Name, catalog.IndexTableNamePrefix) || logicalPrefixOnTable(node.FilterList[i].GetF(), node.TableDef) {
 					if ExprIsZonemappable(builder.GetContext(), node.FilterList[i]) {
 						copyOfExpr := DeepCopyExpr(node.FilterList[i])
 						copyOfExpr.Selectivity = currentBlockSel
@@ -2240,7 +2240,7 @@ func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
 				}
 			}
 		} else {
-			if currentBlockSel < 1 || strings.HasPrefix(node.TableDef.Name, catalog.IndexTableNamePrefix) {
+			if currentBlockSel < 1 || strings.HasPrefix(node.TableDef.Name, catalog.IndexTableNamePrefix) || logicalPrefixOnTable(node.FilterList[i].GetF(), node.TableDef) {
 				if ExprIsZonemappable(builder.GetContext(), node.FilterList[i]) {
 					copyOfExpr := DeepCopyExpr(node.FilterList[i])
 					copyOfExpr.Selectivity = currentBlockSel
