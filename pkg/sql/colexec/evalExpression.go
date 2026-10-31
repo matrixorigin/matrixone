@@ -479,7 +479,7 @@ func newExpressionExecutorWithAllocation(
 		if routineCall := t.F.GetRoutineCall(); routineCall != nil {
 			parameters := make([]ExpressionExecutor, len(t.F.Args))
 			for i := range parameters {
-				child, childErr := newExpressionExecutorWithAllocation(proc, t.F.Args[i], selection, buildCtx)
+				child, childErr := newExpressionExecutorWithAllocation(proc, t.F.Args[i], selection, buildCtx, scope)
 				if childErr != nil {
 					for j := 0; j < i; j++ {
 						parameters[j].Free()
