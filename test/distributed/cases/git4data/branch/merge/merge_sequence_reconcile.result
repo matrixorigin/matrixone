@@ -373,4 +373,80 @@ select last_seq_num, is_called from ssu;
 60002  ¦  1
 drop database ms_smallu_br;
 drop database ms_smallu_src;
+use seq_merge_src;
+create sequence sdec18 as bigint increment by 1 start with 1 no cycle;
+create table tdec18 (id decimal(18,0) primary key default nextval('sdec18'), v int);
+insert into tdec18(v) values (10);
+data branch create database seq_merge_br from seq_merge_src;
+use seq_merge_br;
+insert into tdec18(v) values (20);
+use seq_merge_src;
+data branch merge seq_merge_br.tdec18 into seq_merge_src.tdec18;
+select id, v from tdec18 order by id;
+➤ id[3,18,0]  ¦  v[4,32,0]  𝄀
+1  ¦  10  𝄀
+2  ¦  20
+select last_seq_num, is_called from sdec18;
+➤ last_seq_num[-5,64,0]  ¦  is_called[-7,1,0]  𝄀
+2  ¦  1
+insert into tdec18(v) values (30);
+select id, v from tdec18 order by id;
+➤ id[3,18,0]  ¦  v[4,32,0]  𝄀
+1  ¦  10  𝄀
+2  ¦  20  𝄀
+3  ¦  30
+select last_seq_num, is_called from sdec18;
+➤ last_seq_num[-5,64,0]  ¦  is_called[-7,1,0]  𝄀
+3  ¦  1
+drop database seq_merge_br;
+create sequence sdec18s2 as bigint increment by 1 start with 1 no cycle;
+create table tdec18s2 (id decimal(18,2) primary key default nextval('sdec18s2'), v int);
+insert into tdec18s2(v) values (10);
+data branch create database seq_merge_br from seq_merge_src;
+use seq_merge_br;
+insert into tdec18s2(v) values (20);
+use seq_merge_src;
+data branch merge seq_merge_br.tdec18s2 into seq_merge_src.tdec18s2;
+select id, v from tdec18s2 order by id;
+➤ id[3,18,2]  ¦  v[4,32,0]  𝄀
+1.00  ¦  10  𝄀
+2.00  ¦  20
+select last_seq_num, is_called from sdec18s2;
+➤ last_seq_num[-5,64,0]  ¦  is_called[-7,1,0]  𝄀
+2  ¦  1
+insert into tdec18s2(v) values (30);
+select id, v from tdec18s2 order by id;
+➤ id[3,18,2]  ¦  v[4,32,0]  𝄀
+1.00  ¦  10  𝄀
+2.00  ¦  20  𝄀
+3.00  ¦  30
+select last_seq_num, is_called from sdec18s2;
+➤ last_seq_num[-5,64,0]  ¦  is_called[-7,1,0]  𝄀
+3  ¦  1
+drop database seq_merge_br;
+create sequence sdec38 as bigint increment by 1 start with 1 no cycle;
+create table tdec38 (id decimal(38,0) primary key default nextval('sdec38'), v int);
+insert into tdec38(v) values (10);
+data branch create database seq_merge_br from seq_merge_src;
+use seq_merge_br;
+insert into tdec38(v) values (20);
+use seq_merge_src;
+data branch merge seq_merge_br.tdec38 into seq_merge_src.tdec38;
+select id, v from tdec38 order by id;
+➤ id[3,38,0]  ¦  v[4,32,0]  𝄀
+1  ¦  10  𝄀
+2  ¦  20
+select last_seq_num, is_called from sdec38;
+➤ last_seq_num[-5,64,0]  ¦  is_called[-7,1,0]  𝄀
+2  ¦  1
+insert into tdec38(v) values (30);
+select id, v from tdec38 order by id;
+➤ id[3,38,0]  ¦  v[4,32,0]  𝄀
+1  ¦  10  𝄀
+2  ¦  20  𝄀
+3  ¦  30
+select last_seq_num, is_called from sdec38;
+➤ last_seq_num[-5,64,0]  ¦  is_called[-7,1,0]  𝄀
+3  ¦  1
+drop database seq_merge_br;
 drop database seq_merge_src;

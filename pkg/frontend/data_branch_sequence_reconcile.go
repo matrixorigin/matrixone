@@ -18,11 +18,13 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"math/bits"
 	"sort"
 	"strconv"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -325,7 +327,7 @@ func (t *sequenceWatermarkTracker) capture(tblStuff tableStuff, row []any, idxes
 		if !ok || idx >= len(row) || idx >= len(tblStuff.def.colTypes) {
 			continue
 		}
-		val, ok := sequenceWatermarkValueOf(row[idx])
+		val, ok := sequenceWatermarkValueOf(row[idx], tblStuff.def.colTypes[idx])
 		if !ok {
 			continue
 		}
@@ -378,8 +380,14 @@ func sequenceWatermarkIntValue(i int64) sequenceWatermarkValue {
 }
 
 // sequenceWatermarkValueOf converts a typed apply-row value into its
-// domain classification.
-func sequenceWatermarkValueOf(v any) (sequenceWatermarkValue, bool) {
+// domain classification. colType carries the extracted column's scale for
+// typed decimals: a DECIMAL(p,s) column backed by a nextval default stores
+// each issued key as key * 10^s, so integral decimal values normalize by
+// the column scale before classification. A stored fraction can never name
+// a sequence-issued integral key and stays skipped (#30359 post-PR review:
+// typed decimals matched no case here, merge watermarks stayed behind and
+// the next default insert regenerated an already-merged key).
+func sequenceWatermarkValueOf(v any, colType types.Type) (sequenceWatermarkValue, bool) {
 	switch n := v.(type) {
 	case int8:
 		return sequenceWatermarkIntValue(int64(n)), true
@@ -403,6 +411,12 @@ func sequenceWatermarkValueOf(v any) (sequenceWatermarkValue, bool) {
 		return parseSequenceWatermarkString(string(n))
 	case string:
 		return parseSequenceWatermarkString(n)
+	case types.Decimal64:
+		return sequenceDecimal64WatermarkValue(n, colType.Scale)
+	case types.Decimal128:
+		return sequenceDecimal128WatermarkValue(n, colType.Scale)
+	case types.Decimal256:
+		return sequenceDecimal256WatermarkValue(n, colType.Scale)
 	}
 	return sequenceWatermarkValue{}, false
 }
@@ -415,6 +429,165 @@ func parseSequenceWatermarkString(s string) (sequenceWatermarkValue, bool) {
 		return sequenceWatermarkIntValue(i), true
 	}
 	return sequenceWatermarkValue{}, false
+}
+
+// sequencePow10Tab holds 10^n for the n values that fit uint64; decimal
+// scale divisors below are assembled from these limbs.
+var sequencePow10Tab = [...]uint64{
+	1, 10, 100, 1000, 10000, 100000, 1000000, 10000000, 100000000,
+	1000000000, 10000000000, 100000000000, 1000000000000, 10000000000000,
+	100000000000000, 1000000000000000, 10000000000000000, 100000000000000000,
+	1000000000000000000, 10000000000000000000,
+}
+
+// sequenceIntegralFromMagnitude classifies one integral merged key given as
+// magnitude and sign. Non-negative keys classify as unsigned values;
+// negative keys classify as signed values, and a magnitude above 2^63
+// exceeds even MinInt64's reach, so it cannot be sequence-issued at all.
+func sequenceIntegralFromMagnitude(m uint64, negative bool) (sequenceWatermarkValue, bool) {
+	if !negative {
+		return sequenceWatermarkUintValue(m), true
+	}
+	if m > 1<<63 {
+		return sequenceWatermarkValue{}, false
+	}
+	// m == 1<<63 wraps to MinInt64 through the int64 negation, which is
+	// exactly the representable signed minimum.
+	return sequenceWatermarkIntValue(-int64(m)), true
+}
+
+// sequenceDecimal64WatermarkValue normalizes a typed DECIMAL64 apply-row
+// value. The unscaled integer stores value * 10^scale, so a value names a
+// sequence-issued integral key only when it divides exactly by 10^scale.
+func sequenceDecimal64WatermarkValue(v types.Decimal64, scale int32) (sequenceWatermarkValue, bool) {
+	if scale < 0 {
+		return sequenceWatermarkValue{}, false
+	}
+	negative := v.Sign()
+	mag := uint64(int64(v))
+	if negative {
+		mag = 0 - mag
+	}
+	if scale >= int32(len(sequencePow10Tab)) {
+		// A DECIMAL64 unscaled integer has at most 19 digits, so at a
+		// greater scale only the zero value is integral.
+		if mag != 0 {
+			return sequenceWatermarkValue{}, false
+		}
+		return sequenceWatermarkUintValue(0), true
+	}
+	divisor := sequencePow10Tab[scale]
+	quotient, remainder := mag/divisor, mag%divisor
+	if remainder != 0 {
+		return sequenceWatermarkValue{}, false
+	}
+	return sequenceIntegralFromMagnitude(quotient, negative)
+}
+
+// sequenceDecimal128WatermarkValue is the DECIMAL128 counterpart; widths
+// 19..38 reach this storage, so the scale fits the same divisor table
+// widened to 128 bits.
+func sequenceDecimal128WatermarkValue(v types.Decimal128, scale int32) (sequenceWatermarkValue, bool) {
+	if scale < 0 || scale > 38 {
+		return sequenceWatermarkValue{}, false
+	}
+	negative := v.Sign()
+	if negative {
+		v = v.Minus()
+	}
+	divisor := sequenceDecimal128Divisor(scale)
+	quotient, err := v.Div128Trunc(divisor)
+	if err != nil {
+		return sequenceWatermarkValue{}, false
+	}
+	remainder, err := v.Mod128(divisor)
+	if err != nil {
+		return sequenceWatermarkValue{}, false
+	}
+	if remainder.B0_63 != 0 || remainder.B64_127 != 0 {
+		return sequenceWatermarkValue{}, false
+	}
+	if quotient.B64_127 != 0 {
+		// An integral key at or above 2^64 exceeds every storage domain.
+		return sequenceWatermarkValue{}, false
+	}
+	return sequenceIntegralFromMagnitude(quotient.B0_63, negative)
+}
+
+// sequenceDecimal128Divisor builds 10^scale for scale in [0, 38].
+func sequenceDecimal128Divisor(scale int32) types.Decimal128 {
+	if scale <= 19 {
+		return types.Decimal128{B0_63: sequencePow10Tab[scale]}
+	}
+	hi, lo := bits.Mul64(sequencePow10Tab[scale-19], sequencePow10Tab[19])
+	return types.Decimal128{B0_63: lo, B64_127: hi}
+}
+
+// sequenceDecimal256WatermarkValue is the DECIMAL256 counterpart; widths
+// above 38 reach this storage, with scales up to 76.
+func sequenceDecimal256WatermarkValue(v types.Decimal256, scale int32) (sequenceWatermarkValue, bool) {
+	if scale < 0 || scale > 76 {
+		return sequenceWatermarkValue{}, false
+	}
+	negative := v.Sign()
+	if negative {
+		v = v.Minus()
+	}
+	divisor, ok := sequenceDecimal256Divisor(scale)
+	if !ok {
+		return sequenceWatermarkValue{}, false
+	}
+	quotient, err := v.Div256Trunc(divisor)
+	if err != nil {
+		return sequenceWatermarkValue{}, false
+	}
+	remainder, err := v.Mod256(divisor)
+	if err != nil {
+		return sequenceWatermarkValue{}, false
+	}
+	if remainder.B0_63 != 0 || remainder.B64_127 != 0 ||
+		remainder.B128_191 != 0 || remainder.B192_255 != 0 {
+		return sequenceWatermarkValue{}, false
+	}
+	if quotient.B64_127 != 0 || quotient.B128_191 != 0 || quotient.B192_255 != 0 {
+		// An integral key at or above 2^64 exceeds every storage domain.
+		return sequenceWatermarkValue{}, false
+	}
+	return sequenceIntegralFromMagnitude(quotient.B0_63, negative)
+}
+
+// sequenceDecimal256Divisor builds 10^scale for scale in [0, 76] by
+// multiplying the limb table into place a uint64 chunk at a time.
+func sequenceDecimal256Divisor(scale int32) (types.Decimal256, bool) {
+	d := types.Decimal256{B0_63: 1}
+	for s := int32(0); s < scale; {
+		n := scale - s
+		if n > 19 {
+			n = 19
+		}
+		var ok bool
+		d, ok = sequenceDecimalMultiplyUint64(d, sequencePow10Tab[n])
+		if !ok {
+			return types.Decimal256{}, false
+		}
+		s += n
+	}
+	return d, true
+}
+
+// sequenceDecimalMultiplyUint64 multiplies a non-negative 256-bit unscaled
+// value by a uint64 factor, reporting limb overflow.
+func sequenceDecimalMultiplyUint64(v types.Decimal256, m uint64) (types.Decimal256, bool) {
+	out := v
+	var carry uint64
+	limbs := [4]*uint64{&out.B0_63, &out.B64_127, &out.B128_191, &out.B192_255}
+	for _, p := range limbs {
+		hi, lo := bits.Mul64(*p, m)
+		sum, c := bits.Add64(lo, carry, 0)
+		*p = sum
+		carry = hi + c
+	}
+	return out, carry == 0
 }
 
 // extrema projects the captured watermark into the exported decision

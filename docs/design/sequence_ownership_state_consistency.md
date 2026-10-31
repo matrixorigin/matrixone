@@ -1,35 +1,29 @@
 # Sequence ownership and state consistency across DML, DDL, DATA BRANCH MERGE, and transactions
 
-- Design revision: **v21 (2026-10-30)** — independent design review of
-  v20's D1: two corrections (Z1–Z2) applied to the contention-set budget
-  and baseline transitions of the watch-set lifecycle, on the unchanged
-  v18 premise — a fixed wall-clock D loses
-  deterministically to any sustained contention herd whose serialized
-  drain exceeds D, while the base binary drains the same workload with
-  zero client-visible errors through its unbounded in-statement retry
-  loop. Z1 CLOSES the retry episode when its contention resolves: D is
-  retired exactly when the watch set becomes empty — by the statement's
-  own committed allocation, by an all-resolved probe round, or by an
-  unresolvable identity's retirement — and the statement returns to the
-  base per-invocation `min(statement, 10 s)` budget, so an expired D can
-  never strand an uncontended statement with a nonpositive attempt
-  budget and a later conflict re-admits with a FRESH window. Z2 makes
-  every watch entry carry its baseline from CREATION — first admission
-  by the admission probe, later conversions by the same bounded probe
-  taken at the conversion — and gives each identity a terminal-
-  eligibility clock measured from its own baseline once for each such
-  identity: an identity terminals only after one full renewal interval
-  observed unchanged AND held, a fresh baseline can never renew a
-  stalled co-identity's interval, and a never-baselined entry fails
-  safe after one full interval from its creation. The retained watch
-  set (A1), cancellation routing (A2), availability discriminant (A3),
-  per-decision accounting (A4), the v19 marker (B1) and pending-set
-  ownership (B3), the lazy creation point (G2), two-phase arbitration
-  (G1/F1), frozen tier 1 (I6), the E1 ALTER rule, and every v12
-  rejection are unchanged; end-to-end boundedness is unchanged in
-  kind — the session statement deadline, with the no-timeout ceiling
-  at one full interval ending with some terminal-eligible contended row
-  committed-unchanged AND unavailable to the statement.
+- Design revision: **v22 (2026-10-31)** — post-PR implementation review
+  of the merged head: one conformance correction (DEC1) applied to the §4 B
+  merge watermark capture, carrying the approved v21 D1 contract
+  (Z1–Z2) unchanged. DEC1: a DECIMAL(p,s) destination column backed by a
+  nextval default stores each issued key unscaled as key * 10^s, and the
+  merge-scope accumulator classified staged apply-row values only for
+  machine-integer and numeric string/bytes shapes — typed decimals matched
+  no capture case, the merge advanced no watermark, and the first
+  post-merge default INSERT regenerated an already-merged integral key
+  (ERROR 1062, "Duplicate entry '2'" / "'2.00'" against DECIMAL(18,0) /
+  DECIMAL(18,2) / DECIMAL(38,0) destinations, with the BIGINT control
+  passing). Capture now normalizes integral typed decimals by the
+  destination column's scale into the existing int64/uint64 domain
+  classification; a stored fraction can never name a sequence-issued
+  integral key and stays skipped, as do out-of-domain quotients. No
+  contract change: the retained watch set (A1), cancellation routing (A2),
+  availability discriminant (A3), per-decision accounting (A4), the v19
+  marker (B1) and pending-set ownership (B3), episode closure (Z1),
+  per-identity terminal eligibility (Z2), the lazy creation point (G2),
+  two-phase arbitration (G1/F1), frozen tier 1 (I6), the E1 ALTER rule,
+  and every v12 rejection are unchanged; end-to-end boundedness is
+  unchanged in kind — the session statement deadline, with the no-timeout
+  ceiling at one full interval ending with some terminal-eligible
+  contended row committed-unchanged AND unavailable to the statement.
  matrixorigin/matrixone#30359 (consolidation tracker for #30360, #30679, #30896)
 - Implementation PR/series: TBD (single PR, one coherent contract)
 - Base commit analyzed: `4769417cdc` (main; base reproductions executed on a local single-CN
@@ -104,6 +98,13 @@
 - **v19 (this document)**: independent design review of v18 (B1–B4 below; the progress-renewal direction, the C1–C4 conformance records and the four-issue scope pass review; the D1 mechanism gains four resolutions). B1: v18's strict-advance-beyond-extremum marker ("a wrap counts as advance") is unobservable across complete CYCLE passes — the sequence row persists only the final `(last_seq_num, is_called)` tuple (`seqfunc_autonomous.go:645-658`), with no committed wrap counter or version — so `MINVALUE 1 MAXVALUE 2` peers committing 2 then 1 between every probe leave identical samples despite continuing allocation; resolved by the complete-tuple marker with explicit complete-cycle ABA, SETVAL/reconfiguration and generation-change classifications (§4 D). B2: v18 renewed only at arbitration while three terminal-first exits (`seqfunc_autonomous.go:212-217`, `:339-341`, `sequence_state.go:101-103`) bypassed it — an attempt entered at D−ε or a rebuild crossing D could terminate despite peer advances committed before D; resolved by the probe-first expiry ordering with a specified bounded probe context at every decision point (§4 D). B3: the single overwriteable pending slot (`sequence_retry.go:63,91-118`) plus indistinguishable `NewTxnNeedRetry` conversions let a later payload from sequence B shadow sequence A's exhaustion, so B's committed progress could renew A's stalled window; resolved by a per-`(relation id, generation)` pending map consumed as a unit with conjunctive whole-set renewal (§4 D). B4: the producer-killed live oracle removed contention — the remaining allocator acquires the row, commits and returns success (`seqfunc_autonomous.go:237-240`) — so it could never establish bounded no-progress termination; replaced by the sustained uncommitted-lock blocker oracle, with producer-stop demoted to the successful-drain control (§4 D, §6). All v18 invariants stand: exactly-once terminal, publication precedence, no replay, per-execution D-derived budgets, default-deny admission envelope, frozen tier 1 (I6).
 - **v20 (this document)**: independent design review of v19 (A1–A4 below; the progress-renewal direction, the v19 marker and conjunctive pending set, the C1–C4 conformance records and the four-issue scope pass review; the D1 mechanism gains four resolutions). A1: §4 D required every expiry decision to probe the consumed pending set while arbitration consumes it — the post-rebuild entry had no probe set, and an empty set could not be distinguished from resolved contention or a still-stalled sequence (`sequence_retry.go:107-118` removes the payload); resolved by a retained statement-lifetime contention set (the watch set) created per identity at conversion, surviving verdicts/rebuilds/generations, probed by every expiry decision, and removed exactly when its contention observably ends (own committed allocation, availability resolution, or retirement — §4 D). A2: an attempt cancelled by its D-derived context records the context error (`seqfunc_autonomous.go:242-246`) but fails the `retryableSeqTxnErr` conversion gate (`:107-113`, `:280`) — the fixture returns `ctx.Err()` verbatim (`seqfunc_autonomous_test.go:210-212`) — so in-flight expiries terminated without any progress probe; resolved by routing this budget-expiry class into the shared expiry decision (caller cancellation precedence and unrelated immediate-return errors unchanged; §4 D). A3: §4 D forbade opening attempts at expired D and terminated on any unchanged tuple, but a completed herd leaves the row available and unchanged, so the remaining admitted statements would false-terminal against the successful-drain control (§4 D validation list); resolved by the availability discriminant — unchanged watch identities receive one bounded lock-acquisition check inside the probe round and terminate only when committed-unchanged AND locked; acquired identities resolve and a fully resolved statement renews and proceeds (§4 D); the public projection's examples are corrected (a completed herd is never a no-progress terminal cause). A4: the probe-cost bound claimed one round per retry generation, but renewed entries can re-cross expiry inside one generation and allocation calls can span renewal intervals; restated per expiry decision including baseline probes and the identity count (§4 D accounting, §6). All v18/v19 invariants stand: exactly-once terminal, publication precedence, no replay, per-execution D-derived budgets, default-deny admission envelope, frozen tier 1 (I6).
 - **v21 (this document)**: independent design review of v20 (Z1–Z2 below; the retained contention set, the availability discriminant, the cancellation routing, the probe-cost accounting, the v19 marker and conjunctive pending set, the v18 C1–C4 conformance records and the four-issue scope pass review; the D1 mechanism gains two transition resolutions). Z1 (expired-D empty-set budget): v20 derived every post-admission attempt context from D while its empty-set decision proceeded attempt-first WITHOUT renewing or retiring D, so an admitted statement that served its contention and processed past D faced a nonpositive attempt budget — `execSeqAutonomous` surfaces the named terminal at/after D before any attempt loop opens (`seqfunc_autonomous.go:213-223`), and a deadline pinned at D−ε fires at the loop's first context check (`:230-236`); the planned never-admitted control could not cover this transition because it never creates a D. Resolved by closing the episode (§4 D): D retires exactly when the watch set becomes empty (own committed-allocation removal, all-resolved probe round, or unresolvable-retirement removal), the statement returns to the base per-invocation `min(statement, 10 s)` budget, and a later conflict is a fresh first admission opening a fresh D with a fresh baselined watch entry; the exactly-once terminal still requires a retained unresolved terminal-eligible identity, and caller-cancellation precedence is untouched. Z2 (late-join baseline initialization): v20 promised baselines at entry creation (the A1 disposition row, §4 D, §10) while also initialising later conversions' baselines lazily at the next probe (§4 D A1 block), and its shared procedure skips probing while `now < D` and then classifies against the last-observed sample — an identity joining just before D reached its first expiry decision with no baseline, so an init-as-unchanged classification could terminal without any observed full no-progress interval and an init-as-progress classification introduced an unspecified renewal. Resolved by one authoritative creation-time initialization with per-identity terminal eligibility (§4 D): every watch entry is created CARRYING its baseline — first admission via the admission probe, later conversions via the conversion path's own bounded `min(statement, 1 s)` committed-tuple sample taken before the entry is recorded (the lazy wording is removed); an initialization failure records the entry young and retries the sample first inside the next decision's single probe round; an entry is terminal-eligible only one full renewal interval after its own baseline (or its creation while un-baselined), only then can a committed-unchanged AND unavailable observation terminal, and initialization/youth vote neither terminal nor renewal — a fresh baseline can never renew a stalled co-identity; with no terminal-eligible identity the decision renews once so each young identity receives its first full observed interval; an entry un-baselined for one full renewal interval from its creation fails safe to the exactly-once terminal. All v18/v19/v20 invariants stand: exactly-once terminal, publication precedence, no replay, per-execution D-derived budgets, default-deny admission envelope, frozen tier 1 (I6).
+- **v22 (this document)**: post-PR implementation review of the merged head (DEC1 below; the approved v21 D1 contract — Z1–Z2, the retained contention set, the availability discriminant, the cancellation routing, the probe-cost accounting, the v19 marker and conjunctive pending set, and the v18 C1–C4 conformance records — passes review unchanged; the §4 B merge watermark capture gains typed-decimal normalization). DEC1 (typed decimal capture skipped): `sequenceWatermarkValueOf` accepted only machine-integer types and numeric strings/bytes, so typed `Decimal64/128/256` apply-row values fell through the capture switch; a DECIMAL(p,s) primary key with `DEFAULT nextval('s')` stores each issued key unscaled as key * 10^s, and merging rows from a database branch advanced the owner sequence not at all (DATABRANCH-merge probe observed watermark 1 instead of 2) — the next default INSERT then regenerated the merged key and failed with ERROR 1062 (`Duplicate entry '2'` / `'2.00'`, DECIMAL(18,0)/(18,2)/(38,0); the BIGINT control passed). Resolved as a conformance correction with no contract change: capture receives the destination column's type and normalizes integral typed decimals by its scale — magnitude and sign are extracted (two's-complement negatives), the magnitude is divided by 10^scale (decimal64 by the machine divisor; decimal128/256 by limb-wise divisors built with 128-bit multiply), a nonzero remainder (a stored fraction, which can never name a sequence-issued integral key) or a quotient at/above 2^64 stays skipped like any foreign value, and the integral quotient folds into the unchanged int64/uint64 classification that already guards MinInt64 and the >MaxInt64 boundary. Maintained coverage: the capture truth table gains the decimal matrix (integral/fractional × sign × decimal64/128/256 × divisor crossing 64 bits × out-of-domain quotient, plus monotonic accumulation across fractional skips), and `merge_sequence_reconcile.sql` gains live DECIMAL(18,0)/(18,2)/(38,0) merge regressions asserting watermark advance to 2 and post-merge default allocation 3. All v18–v21 invariants stand: exactly-once terminal, publication precedence, no replay, per-execution D-derived budgets, default-deny admission envelope, frozen tier 1 (I6).
+- **v22 dispositions:**
+
+| # | Finding | Disposition | Where |
+|---|---|---|---|
+| DEC1 | Merge watermark capture skips typed decimals: `sequenceWatermarkValueOf` (`data_branch_sequence_reconcile.go`) classified only machine-integer types and numeric strings/bytes, so a staged apply-row value of a DECIMAL(p,s) destination column backed by a nextval default — stored unscaled as key * 10^s — matched no case and was silently dropped; the merge left the owner sequence at 1 while the destination table already held key 2, and the first post-merge default INSERT failed with ERROR 1062 ("Duplicate entry '2'" / "'2.00'") for DECIMAL(18,0), DECIMAL(18,2) and DECIMAL(38,0) destinations alike (the BIGINT control passed; post-merge live probe, three decimal cases). | Accepted (conformance; no contract change). Capture is typed-column-aware: typed `Decimal64/128/256` values are reduced by the destination column's scale — unscaled magnitude over sign, division by 10^scale with a nonzero-remainder skip (a stored fraction can never collide with future integral emissions), out-of-domain quotients skipped — and the integral quotient feeds the pre-existing {maxU, minU, maxS, minS} domain classification unchanged. Maintenance: the decimal capture truth-table matrix and accumulation subtests in `data_branch_sequence_reconcile_test.go`, plus the three live decimal merge regressions appended to `merge_sequence_reconcile.sql` (watermark 2 after merge; post-merge default INSERT allocates 3; sequences/reconciliation atomicity unchanged). | §4 B, §0 |
+
 - **v21 dispositions:**
 
 | # | Finding | Disposition | Where |
@@ -325,10 +326,19 @@ restored default is a single `nextval` with constant arguments (planner-inserted
 type-preserving assignment cast allowed); transformed/multiple/dynamic references
 are excluded (documented residual limitation).
 
-**Watermark capture (unchanged).** Merge-scope accumulator updated while typed rows
-are live at `appendDataBranchApplyRowAsSQLValues` (`:1920`), covering staged
-inserts, `disableInsertStage` direct applies, and staged-update values; deletes
-never advance; multi-flush merges reconcile to the global extreme.
+**Watermark capture (v22 typed-decimal normalization).** Merge-scope accumulator
+updated while typed rows are live at `appendDataBranchApplyRowAsSQLValues`
+(`:1920`), covering staged inserts, `disableInsertStage` direct applies, and
+staged-update values; deletes never advance; multi-flush merges reconcile to the
+global extreme. Machine-integer values and numeric strings/bytes classify
+directly as before; typed decimals normalize against the destination column's
+scale (v22, DEC1) — a DECIMAL(p,s) column backed by a nextval default carries
+each issued key unscaled as key * 10^s, so capture reduces the stored magnitude
+by 10^scale and folds only the integral quotient into the existing int64/uint64
+per-domain arms. A stored fraction can never name a sequence-issued integral
+key and stays skipped, and a quotient at/above 2^64 is outside every storage
+domain and stays skipped — identical to the pre-existing treatment of foreign
+values, so reconcile decisions and their failure atomicity are unchanged.
 
 **Reconciliation unit (placement v5 per L1; validate-before-proceed order v6 per K2).**
 After all apply batches are flushed and watermarks are final — at `mergeDiffs`

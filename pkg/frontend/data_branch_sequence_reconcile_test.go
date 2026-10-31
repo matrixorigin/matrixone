@@ -762,7 +762,7 @@ func TestSequenceWatermarkCaptureAccumulation(t *testing.T) {
 				// Full-domain truth table: each of the six storage-domain
 				// arms is present exactly when the captured classification
 				// says the value is representable there (#30359 review N2).
-				val, ok := sequenceWatermarkValueOf(v.value)
+				val, ok := sequenceWatermarkValueOf(v.value, tblStuff.def.colTypes[0])
 				require.True(t, ok)
 				for i := 0; i < int(function.SequenceDomainCount); i++ {
 					d := function.SequenceDomain(i)
@@ -772,6 +772,108 @@ func TestSequenceWatermarkCaptureAccumulation(t *testing.T) {
 				}
 			})
 		}
+	})
+
+	t.Run("decimal columns normalize integral keys by scale", func(t *testing.T) {
+		// #30359 post-PR review: a DECIMAL(p,s) column backed by a
+		// nextval default stores each issued key unscaled as key * 10^s.
+		// Typed decimals previously matched no capture case, so merging
+		// them advanced no watermark and the next default insert
+		// regenerated an already-merged key (duplicate entry '2' / '2.00').
+		// Integral decimals normalize by the column scale; stored
+		// fractions can never collide with future integral emissions and
+		// stay skipped.
+		decType := func(oid types.T, scale int32) types.Type {
+			tp := oid.ToType()
+			tp.Scale = scale
+			return tp
+		}
+		neg128 := func(lo uint64) types.Decimal128 {
+			return types.Decimal128{B0_63: lo}.Minus()
+		}
+		neg256 := func(lo uint64) types.Decimal256 {
+			return types.Decimal256{B0_63: lo}.Minus()
+		}
+		pow20 := types.Decimal128{B0_63: 7766279631452241920, B64_127: 5} // 10^20
+		for _, v := range []struct {
+			name    string
+			colType types.Type
+			value   any
+			wantOK  bool
+			hasU    bool
+			u       uint64
+			hasS    bool
+			s       uint64
+		}{
+			{"decimal64 scale 0", decType(types.T_decimal64, 0), types.Decimal64(200), true, true, 200, true, 200},
+			{"decimal64 integral after scale", decType(types.T_decimal64, 2), types.Decimal64(200), true, true, 2, true, 2},
+			{"decimal64 fractional skipped", decType(types.T_decimal64, 2), types.Decimal64(250), false, false, 0, false, 0},
+			{"decimal64 negative integral", decType(types.T_decimal64, 2), types.Decimal64(300).Minus(), true, false, 0, true, seqNegBits(-3)},
+			{"decimal64 negative fractional skipped", decType(types.T_decimal64, 2), types.Decimal64(250).Minus(), false, false, 0, false, 0},
+			{"decimal64 zero at scale", decType(types.T_decimal64, 2), types.Decimal64(0), true, true, 0, true, 0},
+			{"decimal128 scale 0", decType(types.T_decimal128, 0), types.Decimal128{B0_63: 21}, true, true, 21, true, 21},
+			{"decimal128 integral after scale", decType(types.T_decimal128, 4), types.Decimal128{B0_63: 12340000}, true, true, 1234, true, 1234},
+			{"decimal128 fractional skipped", decType(types.T_decimal128, 4), types.Decimal128{B0_63: 12345000}, false, false, 0, false, 0},
+			{"decimal128 negative integral", decType(types.T_decimal128, 2), neg128(300), true, false, 0, true, seqNegBits(-3)},
+			{"decimal128 divisor crossing 64 bits", decType(types.T_decimal128, 20), pow20, true, true, 1, true, 1},
+			{"decimal128 quotient at 2^64 skipped", decType(types.T_decimal128, 0), types.Decimal128{B64_127: 1}, false, false, 0, false, 0},
+			{"decimal256 scale 0", decType(types.T_decimal256, 0), types.Decimal256{B0_63: 7}, true, true, 7, true, 7},
+			{"decimal256 negative integral after scale", decType(types.T_decimal256, 6), neg256(7000000), true, false, 0, true, seqNegBits(-7)},
+			{"decimal256 fractional skipped", decType(types.T_decimal256, 2), types.Decimal256{B0_63: 7}, false, false, 0, false, 0},
+			{"decimal256 quotient above 2^64 skipped", decType(types.T_decimal256, 0), types.Decimal256{B64_127: 1}, false, false, 0, false, 0},
+		} {
+			t.Run(v.name, func(t *testing.T) {
+				tr, tblStuff := newTrackerForColumn(v.colType, sequenceWatermarkKey{"db1", "s"})
+				tr.capture(tblStuff, []any{v.value}, []int{0})
+				wm := tr.items[sequenceWatermarkKey{"db1", "s"}]
+				if !v.wantOK {
+					require.Nil(t, wm, "a fractional or out-of-domain decimal must never fold")
+					require.True(t, tr.empty())
+					return
+				}
+				require.NotNil(t, wm)
+				u64 := wm.arms[function.SeqDomainUint64]
+				require.Equal(t, v.hasU, u64.has, "unsigned-arm presence")
+				if v.hasU {
+					require.Equal(t, v.u, u64.max)
+					require.Equal(t, v.u, u64.min)
+				}
+				s64 := wm.arms[function.SeqDomainInt64]
+				require.Equal(t, v.hasS, s64.has, "signed-arm presence")
+				if v.hasS {
+					require.Equal(t, v.s, s64.max)
+					require.Equal(t, v.s, s64.min)
+				}
+				// Full-domain truth table across the six storage-domain
+				// arms, identical to the sibling subtests (#30359 review N2).
+				val, ok := sequenceWatermarkValueOf(v.value, tblStuff.def.colTypes[0])
+				require.True(t, ok)
+				for i := 0; i < int(function.SequenceDomainCount); i++ {
+					d := function.SequenceDomain(i)
+					want := (val.hasS && d.ContainsInt64(int64(val.s))) ||
+						(val.hasU && d.ContainsUint64(val.u))
+					require.Equal(t, want, wm.arms[i].has, "domain %d presence", i)
+				}
+			})
+		}
+	})
+
+	t.Run("decimal accumulation merges monotonic with fractional skips", func(t *testing.T) {
+		tr, tblStuff := newTrackerForColumn(func() types.Type {
+			tp := types.T_decimal64.ToType()
+			tp.Scale = 2
+			return tp
+		}(), sequenceWatermarkKey{"db1", "s"})
+		tr.capture(tblStuff, []any{types.Decimal64(200)}, []int{0})
+		tr.capture(tblStuff, []any{types.Decimal64(250)}, []int{0}) // 2.50: fractional, never folds
+		tr.capture(tblStuff, []any{types.Decimal64(700)}, []int{0})
+		wm := tr.items[sequenceWatermarkKey{"db1", "s"}]
+		require.NotNil(t, wm)
+		require.Equal(t, int64(2), wm.rowsCount, "fractional captures never reach the watermark")
+		require.Equal(t, uint64(7), wm.arms[function.SeqDomainInt64].max)
+		require.Equal(t, uint64(2), wm.arms[function.SeqDomainInt64].min)
+		require.Equal(t, uint64(7), wm.arms[function.SeqDomainUint64].max)
+		require.Equal(t, uint64(2), wm.arms[function.SeqDomainUint64].min)
 	})
 
 	t.Run("two columns owning one sequence merge into one watermark", func(t *testing.T) {

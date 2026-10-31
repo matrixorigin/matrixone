@@ -303,4 +303,60 @@ select last_seq_num, is_called from ssu;
 drop database ms_smallu_br;
 drop database ms_smallu_src;
 
+-- post-PR review (#30359, typed decimal capture): a DECIMAL(p,s) primary
+-- key with a nextval default stores each issued key unscaled as key*10^s.
+-- On the pre-revision build the merge advanced none of these sequences
+-- (the watermark stayed 1) and the first post-merge default INSERT failed
+-- with ERROR 1062 "Duplicate entry '2'" / "'2.00'"; a BIGINT control
+-- column passed. Integral decimal keys now normalize by the column scale,
+-- so the reconcile advances each owner sequence to 2 and the next default
+-- INSERT allocates 3 instead of colliding.
+use seq_merge_src;
+create sequence sdec18 as bigint increment by 1 start with 1 no cycle;
+create table tdec18 (id decimal(18,0) primary key default nextval('sdec18'), v int);
+insert into tdec18(v) values (10);
+data branch create database seq_merge_br from seq_merge_src;
+use seq_merge_br;
+insert into tdec18(v) values (20);
+use seq_merge_src;
+data branch merge seq_merge_br.tdec18 into seq_merge_src.tdec18;
+select id, v from tdec18 order by id;
+select last_seq_num, is_called from sdec18;
+insert into tdec18(v) values (30);
+select id, v from tdec18 order by id;
+select last_seq_num, is_called from sdec18;
+drop database seq_merge_br;
+
+-- Same defect at scale 2: the merged key is stored and rendered as 2.00.
+create sequence sdec18s2 as bigint increment by 1 start with 1 no cycle;
+create table tdec18s2 (id decimal(18,2) primary key default nextval('sdec18s2'), v int);
+insert into tdec18s2(v) values (10);
+data branch create database seq_merge_br from seq_merge_src;
+use seq_merge_br;
+insert into tdec18s2(v) values (20);
+use seq_merge_src;
+data branch merge seq_merge_br.tdec18s2 into seq_merge_src.tdec18s2;
+select id, v from tdec18s2 order by id;
+select last_seq_num, is_called from sdec18s2;
+insert into tdec18s2(v) values (30);
+select id, v from tdec18s2 order by id;
+select last_seq_num, is_called from sdec18s2;
+drop database seq_merge_br;
+
+-- Same defect in the decimal128 range: DECIMAL(38,0) keys.
+create sequence sdec38 as bigint increment by 1 start with 1 no cycle;
+create table tdec38 (id decimal(38,0) primary key default nextval('sdec38'), v int);
+insert into tdec38(v) values (10);
+data branch create database seq_merge_br from seq_merge_src;
+use seq_merge_br;
+insert into tdec38(v) values (20);
+use seq_merge_src;
+data branch merge seq_merge_br.tdec38 into seq_merge_src.tdec38;
+select id, v from tdec38 order by id;
+select last_seq_num, is_called from sdec38;
+insert into tdec38(v) values (30);
+select id, v from tdec38 order by id;
+select last_seq_num, is_called from sdec38;
+drop database seq_merge_br;
+
 drop database seq_merge_src;
