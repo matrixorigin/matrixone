@@ -15,7 +15,6 @@
 package bootstrap
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v1_2_0"
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v1_2_1"
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v1_2_2"
@@ -35,7 +34,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_5"
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_6"
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_7"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 // initUpgrade all versions need create a upgrade handle in pkg/bootstrap/versions
@@ -93,26 +91,5 @@ func (s *service) getVersionHandle(version string) VersionHandle {
 		}
 	}
 	s.logger.Fatal("missing upgrade handle for version: " + version)
-	return nil
-}
-
-// The consolidated 4.0.7 route retired unpublished intermediate catalogs.
-// A minimum-version check alone would let them skip its required migrations.
-// An explicitly registered source belongs to a retained, supported route.
-func (s *service) checkRetiredCatalogSource(source string) error {
-	if versions.Compare(source, "4.0.7") <= 0 || versions.Compare(source, "4.0.18") >= 0 {
-		return nil
-	}
-	consolidated := false
-	for _, h := range s.handles {
-		if h.Metadata().Version == source {
-			return nil
-		}
-		consolidated = consolidated || h == v4_0_7.Handler
-	}
-	if consolidated {
-		return &terminalUpgradeError{moerr.NewInvalidStateNoCtxf(
-			"unsupported unpublished catalog source %s; the consolidated 4.0.7 route does not support intermediate development catalogs", source)}
-	}
 	return nil
 }
