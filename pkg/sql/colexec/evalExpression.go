@@ -1363,13 +1363,23 @@ func (expr *FunctionExpressionExecutor) observeFlowControlPrepareParamKind(
 	}
 	resultDomain := types.StaticStringDomain(expr.resultType)
 	if !value.HasNull() && !value.HasBinaryStringMetadata() &&
-		!value.HasPrepareParamKind() && len(value.GetPrepareParamKinds()) == 0 &&
+		value.GetPrepareParamKind() == vector.PrepareParamNone && len(value.GetPrepareParamKinds()) == 0 &&
 		!value.HasStringSourceMetadata() &&
 		types.StaticStringDomain(*value.GetType()) == resultDomain &&
-		len(expr.flowControlKinds) == 0 &&
+		len(expr.flowControlKinds) == 0 && len(expr.flowControlStringDomains) == 0 &&
+		len(expr.flowControlStringSources) == 0 &&
 		(!expr.flowControlKindSeen || expr.flowControlKind == vector.PrepareParamNone) {
-		expr.flowControlKind = vector.PrepareParamNone
-		expr.flowControlKindSeen = true
+		// Materialization can mark ordinary values as observed None without
+		// adding row metadata. One selected value proves the uniform contribution;
+		// inactive arms must not observe a kind, even when their column is non-NULL.
+		selected := selection
+		if !value.IsConst() && len(selected) > value.Length() {
+			selected = selected[:value.Length()]
+		}
+		if hasSelectedRows(selected) {
+			expr.flowControlKind = vector.PrepareParamNone
+			expr.flowControlKindSeen = true
+		}
 		return
 	}
 	for row, selected := range selection {

@@ -308,6 +308,7 @@ func (builder *QueryBuilder) applyAssociativeLawRule1(nodeID int32) int32 {
 	if !node.Stats.HashmapStats.HashOnPK {
 		// a join b must be hash on primary key, or we can not do this change
 		node.Children[1] = rightChild.NodeId
+		determineHashOnPK(node.NodeId, builder)
 		return node.NodeId
 	}
 
@@ -360,6 +361,7 @@ func (builder *QueryBuilder) applyAssociativeLawRule2(nodeID int32) int32 {
 	if !node.Stats.HashmapStats.HashOnPK {
 		// b join c must be hash on primary key, or we can not do this change
 		node.Children[0] = leftChild.NodeId
+		determineHashOnPK(node.NodeId, builder)
 		return node.NodeId
 	}
 

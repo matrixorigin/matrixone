@@ -22,6 +22,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -665,6 +666,104 @@ func TestCaseCheckVectorResultTypes(t *testing.T) {
 	}
 }
 
+func TestCaseFixedNullElse(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	for _, tt := range []struct {
+		name         string
+		typ          types.Type
+		values, want any
+	}{
+		{"int64", types.T_int64.ToType(), []int64{1, 2, 3, 4, 5}, []int64{1, 0, 0, 0, 5}},
+		{"decimal128", types.T_decimal128.ToType(), []types.Decimal128{{B0_63: 1}, {B0_63: 2}, {B0_63: 3}, {B0_63: 4}, {B0_63: 5}}, []types.Decimal128{{B0_63: 1}, {}, {}, {}, {B0_63: 5}}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			tc := NewFunctionTestCase(proc, []FunctionTestInput{
+				NewFunctionTestInput(types.T_bool.ToType(), []bool{true, false, true, true, true}, []bool{false, false, true, false, false}),
+				NewFunctionTestInput(tt.typ, tt.values, []bool{false, false, false, true, false}),
+				NewFunctionTestConstInput(tt.typ, tt.values, []bool{true}),
+			}, NewFunctionTestResult(tt.typ, false, tt.want, []bool{false, true, true, true, false}), caseFn)
+			defer tc.Free()
+			for i := 0; i < 2; i++ {
+				ok, info := tc.Run()
+				require.True(t, ok, info)
+			}
+		})
+	}
+
+	for _, valueIsNull := range []bool{false, true} {
+		t.Run(fmt.Sprintf("constant-value-null=%t", valueIsNull), func(t *testing.T) {
+			tc := NewFunctionTestCase(proc, []FunctionTestInput{
+				NewFunctionTestInput(types.T_bool.ToType(), []bool{true, false, true}, nil),
+				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{9}, []bool{valueIsNull}),
+				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{0}, []bool{true}),
+			}, NewFunctionTestResult(types.T_int64.ToType(), false, []int64{9, 0, 9}, []bool{valueIsNull, true, valueIsNull}), caseFn)
+			defer tc.Free()
+			ok, info := tc.Run()
+			require.True(t, ok, info)
+		})
+	}
+
+	t.Run("accounted-bitmap-word-boundaries-and-resize", func(t *testing.T) {
+		const size = 130
+		conditions, values := make([]bool, size), make([]int64, size)
+		for _, row := range []int{0, 63, 65, 129} {
+			conditions[row], values[row] = true, int64(row+1)
+		}
+		tc := NewFunctionTestCase(proc, []FunctionTestInput{
+			NewFunctionTestInput(types.T_bool.ToType(), conditions, nil),
+			NewFunctionTestInput(types.T_int64.ToType(), values, nil),
+			NewFunctionTestConstInput(types.T_int64.ToType(), []int64{0}, []bool{true}),
+		}, NewFunctionTestResult(types.T_int64.ToType(), false, nil, nil), caseFn)
+		defer tc.Free()
+		registry, err := mpool.NewAllocationAccountRegistry(1, 16)
+		require.NoError(t, err)
+		account, err := registry.Open(1 << 20)
+		require.NoError(t, err)
+		selection, err := vector.NewAllocationAccountSelection(account, 1, 1, 2, 3, 4)
+		require.NoError(t, err)
+		tc.result.Free()
+		tc.result, err = vector.NewFunctionResultWrapperWithAllocation(types.T_int64.ToType(), proc.Mp(), selection)
+		require.NoError(t, err)
+		for _, n := range []int{130, 65, 130} {
+			require.NoError(t, tc.result.PreExtendAndReset(n))
+			require.NoError(t, caseFn(tc.parameters, tc.result, proc, n, nil))
+			result := tc.result.GetResultVector()
+			require.True(t, result.GetNulls().GetBitmap().HasExternalStorage())
+			for i := 0; i < n; i++ {
+				require.Equal(t, !conditions[i], result.IsNull(uint64(i)), "length %d row %d", n, i)
+				if conditions[i] {
+					require.Equal(t, values[i], vector.MustFixedColWithTypeCheck[int64](result)[i])
+				}
+			}
+		}
+		tc.result.Free()
+		tc.result = nil
+		require.Zero(t, account.Snapshot().Used)
+	})
+}
+
+func TestCaseFixedNullElseControls(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	cond := NewFunctionTestInput(types.T_bool.ToType(), []bool{true, false}, nil)
+	value := NewFunctionTestInput(types.T_int64.ToType(), []int64{1, 2}, nil)
+	for _, test := range []struct {
+		name   string
+		inputs []FunctionTestInput
+		want   []int64
+		nulls  []bool
+	}{
+		{"implicit-null", []FunctionTestInput{cond, value}, []int64{1, 0}, []bool{false, true}},
+		{"non-null-else", []FunctionTestInput{cond, value, NewFunctionTestConstInput(types.T_int64.ToType(), []int64{3}, nil)}, []int64{1, 3}, nil},
+		{"multiple-when", []FunctionTestInput{cond, value, cond, value, NewFunctionTestConstInput(types.T_int64.ToType(), []int64{0}, []bool{true})}, []int64{1, 0}, []bool{false, true}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			tc := NewFunctionTestCase(proc, test.inputs, NewFunctionTestResult(types.T_int64.ToType(), false, test.want, test.nulls), caseFn)
+			ok, info := tc.RunAndFree()
+			require.True(t, ok, info)
+		})
+	}
+}
+
 func TestCaseFnVectorResults(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	tests := []struct {
@@ -1096,6 +1195,17 @@ func TestCaseFn_JsonCondition(t *testing.T) {
 		},
 		NewFunctionTestResult(strType, false, want, nil), caseFn)
 	succeed, info := tc.RunAndFree()
+	require.True(t, succeed, info)
+
+	// A NULL ELSE must not route the JSON condition through the BOOL fast path.
+	intType := types.T_int64.ToType()
+	tc = NewFunctionTestCase(proc, []FunctionTestInput{
+		NewFunctionTestInput(jsonType, conditions, nil),
+		NewFunctionTestConstInput(intType, []int64{1}, nil),
+		NewFunctionTestConstInput(intType, []int64{0}, []bool{true}),
+	}, NewFunctionTestResult(intType, false, []int64{0, 0, 1, 0, 1, 1, 1},
+		[]bool{true, true, false, true, false, false, false}), caseFn)
+	succeed, info = tc.RunAndFree()
 	require.True(t, succeed, info)
 }
 

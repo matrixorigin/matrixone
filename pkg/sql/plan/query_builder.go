@@ -4490,6 +4490,9 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		rootID = builder.applyAssociativeLaw(rootID)
 		builder.determineBuildAndProbeSide(rootID, true)
 		rootID = builder.aggPullup(rootID, rootID)
+		// Preserve INNER-join reordering before introducing an existence boundary.
+		// Otherwise a set arm can retain fact multiplicity behind a dimension SEMI.
+		builder.reduceSetMembershipJoins(rootID, i)
 		ReCalcNodeStats(rootID, builder, true, false, true)
 		rootID = builder.pushdownSemiAntiJoins(rootID)
 		rootID = builder.removeImpliedSemiJoins(rootID)
@@ -4643,6 +4646,7 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 	//for i := 1; i < len(builder.qry.Steps); i++ {
 	//	builder.remapSinkScanColRefs(builder.qry.Steps[i], int32(i), sinkColRef)
 	//}
+	builder.pushdownGroupingExpressions()
 	builder.hintQueryType()
 	for _, scan := range builder.windowValidationScans {
 		if scan == nil {
@@ -12586,6 +12590,12 @@ func (builder *QueryBuilder) appendStep(nodeID int32) int32 {
 
 func (builder *QueryBuilder) appendNode(node *plan.Node, ctx *BindContext) int32 {
 	nodeID := int32(len(builder.qry.Nodes))
+	switch node.NodeType {
+	case plan.Node_UNION, plan.Node_INTERSECT, plan.Node_MINUS:
+		// Their global deduplication phase is an aggregate, including set
+		// nodes synthesized outside the SELECT binder.
+		node.SpillMem = builder.aggSpillMem
+	}
 	if ctx != nil && len(node.ViewPath) == 0 {
 		node.ViewPath = append([]*plan.ViewStep(nil), ctx.viewPath...)
 	}
