@@ -261,8 +261,8 @@ func TestPrefixIndexRepresentations(t *testing.T) {
 					names = append(names, f.GetF().Func.ObjName)
 				}
 			}
-			require.Contains(t, names, "prefix_eq", "range candidates require an exact residual")
-			require.NotContains(t, names, "like", "pure byte prefixes have an exact prefix_eq residual")
+			require.NotContains(t, names, "prefix_eq", "an exact byte-prefix range needs no duplicate residual")
+			require.NotContains(t, names, "like", "pure byte prefixes do not retain LIKE")
 			if tc.unique {
 				require.Contains(t, names, "in_range")
 			} else {
@@ -285,7 +285,7 @@ func TestPrefixCandidateCostAndIndependentPruning(t *testing.T) {
 	node := builder.qry.Nodes[id]
 	ctx := builder.newEncodedRegularIndexCostContext(node, refs)
 	require.Equal(t, 800000.0, ctx.baseRows, "an unsorted row predicate is not a block-count estimate")
-	require.True(t, ctx.skipPrefixIndexByStats(0), "unknown frequency cannot admit a new automatic prefix path")
+	require.False(t, ctx.prefixStatsUsable(0), "unknown frequency cannot admit a new automatic prefix path")
 	require.Empty(t, ctx.matchRangeBackfill(idx))
 	testCtx := builder.compCtx.(*encodedIndexCostTestContext)
 	stats := NewStatsInfo()
@@ -298,7 +298,7 @@ func TestPrefixCandidateCostAndIndependentPruning(t *testing.T) {
 	ctx = builder.newEncodedRegularIndexCostContext(node, refs)
 	require.True(t, ctx.filterFacts[0].prefixKnown)
 	require.Less(t, ctx.filterFacts[0].prefixUpper, 0.12)
-	require.False(t, ctx.skipPrefixIndexByStats(0))
+	require.True(t, ctx.prefixStatsUsable(0))
 	require.NotEmpty(t, ctx.matchRangeBackfill(idx))
 	historical := *node
 	historical.ScanSnapshot = &Snapshot{TS: &timestamp.Timestamp{PhysicalTime: 1}}
@@ -326,8 +326,11 @@ func TestPrefixCandidateCostAndIndependentPruning(t *testing.T) {
 	}
 	ctx = builder.newEncodedRegularIndexCostContext(node, refs)
 	require.Equal(t, 1.0, ctx.filterFacts[0].prefixUpper)
-	require.True(t, ctx.skipPrefixIndexByStats(0))
-	require.Empty(t, ctx.matchRangeBackfill(idx))
+	require.True(t, ctx.prefixStatsUsable(0))
+	require.NotEmpty(t, ctx.matchRangeBackfill(idx))
+	_, rejected, valid := ctx.score(idx, []int32{0}, nil, encodedRegularIndexCostBackfill)
+	require.True(t, valid)
+	require.True(t, rejected)
 
 	// The same unsorted prefix must not erase a separately selective sorted key.
 	builder, id, _, refs = makeFixture()
@@ -428,4 +431,103 @@ func TestPrefixCostPreservesIndependentColumnReduction(t *testing.T) {
 	controlWork, _, ok := control.score(idx, []int32{0}, nil, encodedRegularIndexCostIndexOnly)
 	require.True(t, ok)
 	require.Equal(t, controlWork, work, "a prefix on another column must retain ordinary covering output selectivity")
+}
+
+func TestLikePrefixPlanCostScales(t *testing.T) {
+	for _, tc := range []struct {
+		name                    string
+		rows                    uint64
+		unique, broad, noncover bool
+	}{
+		{name: "original census", rows: 500},
+		{name: "ten million", rows: 10000000},
+		{name: "old cap boundary", rows: 14000000},
+		{name: "twenty million", rows: 20000000},
+		{name: "direct unique", rows: 20000000, unique: true},
+		{name: "broad encoded", rows: 20000000, broad: true},
+		{name: "broad direct", rows: 20000000, unique: true, broad: true},
+		{name: "scattered backfill", rows: 10000000, noncover: true},
+		{name: "backfill budget", rows: 20000000, noncover: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := NewMockOptimizer(true, newPlanTestProcess(t))
+			addIndexHintChoiceTableForTest(mock)
+			table := mock.ctxt.tables["index_hint_t"]
+			table.Cols[1].Typ = planpb.Type{Id: int32(types.T_varchar), Width: 40}
+			table.Indexes = table.Indexes[:1]
+			if tc.unique {
+				table.Indexes[0].Unique = true
+				table.Indexes[0].Parts = []string{"a"}
+				mock.ctxt.tables["idx_hint_a"].Cols[0].Typ = table.Cols[1].Typ
+			}
+			optimizer := likePrefixPlanOptimizer(mock)
+			stats := optimizer.ctx.statsByID[table.TblId]
+			stats.TableCnt = float64(tc.rows)
+			stats.SizeMap = map[string]uint64{"a": tc.rows * 24, "id": tc.rows * 4, "b": tc.rows * 4}
+			n, m := min(tc.rows, uint64(2048)), uint64(2)
+			if tc.rows == 500 {
+				m = 150
+			}
+			if tc.broad {
+				m = n
+			}
+			d := prefixDistribution(table, 1, n, m)
+			d.PopulationRows = tc.rows
+			d.CompleteSample = n == tc.rows
+			stats.ByteRangeMap["a"] = d
+			optimizer.ctx.statsCache.Set(table.TblId, stats)
+			projection := "count(*)"
+			if tc.noncover {
+				projection = "sum(b)"
+			}
+			p, err := runOneStmt(optimizer, t, "select "+projection+" from index_hint_t where a like 'abc%'")
+			require.NoError(t, err)
+			if tc.broad || tc.noncover {
+				require.Empty(t, findFirstIndexScanName(p))
+				return
+			}
+			require.Equal(t, "idx_a", findFirstIndexScanName(p))
+			for _, node := range p.GetQuery().Nodes {
+				if node.NodeType == planpb.Node_JOIN {
+					require.NotEqual(t, planpb.Node_INDEX, node.JoinType, "covering must win by actual work")
+				}
+			}
+		})
+	}
+}
+
+func TestPrefixRangeExactnessAndResidualAgreement(t *testing.T) {
+	for _, prefix := range []string{"a", "ab\x00", "中文", "\x7f", "\ud7ff", "a\U0010ffff"} {
+		mock := NewMockOptimizer(true, newPlanTestProcess(t))
+		addIndexHintChoiceTableForTest(mock)
+		table := mock.ctxt.tables["index_hint_t"]
+		table.Cols[1].Typ = planpb.Type{Id: int32(types.T_varchar), Width: 40}
+		idx := table.Indexes[0]
+		f := makeStringEqFilterExpr(0, 1, prefix)
+		f.GetF().Func.ObjName = "prefix_eq"
+		f.GetF().Args[0].Typ = table.Cols[1].Typ
+		_, upper, ok := logicalStringPrefix(f.GetF())
+		require.True(t, ok)
+		byteUpper, finite := stringPrefixSuccessor(prefix, true)
+		exact := stringPrefixRangeIsExact(f.GetF())
+		require.Equal(t, finite && upper == byteUpper, exact)
+		lowerRange, ok := stringPrefixRange(mock.ctxt.GetContext(), f.GetF())
+		require.True(t, ok)
+		// Actual lookup materialization and its cost prediction use the same owner.
+		builder := NewQueryBuilder(planpb.Query_SELECT, &mock.ctxt, false, true)
+		lookup, err := builder.replaceNonEqualCondition(idx, f, 7, mock.ctxt.tables["idx_hint_a"])
+		require.NoError(t, err)
+		predicted := indexOnlyResidualLeadingFilterPositionsForPrefix(idx, table, []*planpb.Expr{f}, []int32{0}, indexOnlyLookupWillUsePrefixComparison(idx, []*planpb.Expr{f}, []int32{0}, NonEqualIndexCondition, false))
+		actual := indexOnlyResidualLeadingFilterPositions(idx, table, []*planpb.Expr{f}, []int32{0}, lookup)
+		require.Equal(t, predicted, actual)
+		require.Equal(t, !exact, len(actual) > 0)
+		require.Equal(t, "in_range", lowerRange.GetF().Func.ObjName)
+		values := []string{"", prefix, prefix + "a", prefix + "\x00", prefix + "\xff", upper, upper + "\x00", "\x80", "\xc2\x80"}
+		for _, value := range values {
+			inRange := value >= prefix && value < upper
+			if exact {
+				require.Equal(t, strings.HasPrefix(value, prefix), inRange, "p=%q v=%q", prefix, value)
+			}
+		}
+	}
 }
