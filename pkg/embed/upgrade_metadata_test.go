@@ -299,7 +299,7 @@ func requireColumnsEntryNoop(t *testing.T, ctx context.Context, cn ServiceOperat
 }
 
 // requireColumnsUpgradeComplete pins the completed forward route: the final
-// version marker is Ready at the 4.0.7 target, and the single 4.0.6 -> 4.0.7 step is
+// version marker is Ready at the registered 4.0.7 offset, and the single 4.0.6 -> 4.0.7 step is
 // Ready with converged tenant counters.
 func requireColumnsUpgradeComplete(t *testing.T, ctx context.Context, cn ServiceOperator) []uint64 {
 	t.Helper()
@@ -392,7 +392,8 @@ func TestColumnsUpgradeManualFailFastThenComplete(t *testing.T) {
 	setRecoveryCNHandles(c, append(columns46ShapeChain(), v4_0_7.Handler), false)
 	_, err = start()
 	require.Error(t, err, "manual mode must fail startup against a not-ready final catalog")
-	require.Contains(t, err.Error(), fmt.Sprintf("catalog version 4.0.6/5 is not ready for 4.0.7/%d; enable auto-upgrade for the stopped upgrade and restart", v4_0_7.Handler.Metadata().VersionOffset))
+	target := v4_0_7.Handler.Metadata()
+	require.Contains(t, err.Error(), fmt.Sprintf("catalog version 4.0.6/5 is not ready for %s/%d; enable auto-upgrade for the stopped upgrade and restart", target.Version, target.VersionOffset))
 
 	err = c.Stop()
 	require.NoError(t, err)
@@ -422,7 +423,7 @@ func TestColumnsUpgradeWithoutEntryKeepsPredecessorDefinitions(t *testing.T) {
 	var ctx context.Context
 	var err error
 
-	// Ablation generation: the predecessor chain without the v4_0_7 handle.
+	// Ablation generation: the released-predecessor chain with no v4_0_7 handle.
 	setRecoveryCNHandles(c, columns46ShapeChain(), true)
 	ctx, err = start()
 	require.NoError(t, err)
