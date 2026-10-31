@@ -28,10 +28,12 @@ import (
 
 	"github.com/go-sql-driver/mysql"
 	"github.com/gogo/protobuf/proto"
+	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/require"
 )
 
@@ -44,6 +46,10 @@ func TestTimestampAddHistoricalDumpRoundtrip(t *testing.T) {
 	runSQLIntegration(t, func(c embed.Cluster) {
 		cn, err := c.GetCNService(0)
 		require.NoError(t, err)
+		svc, ok := cn.RawService().(cnservice.Service)
+		require.True(t, ok)
+		barrier, ok := svc.GetEngine().(engine.LogtailReadBarrier)
+		require.True(t, ok)
 		ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 		defer cancel()
 		db, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/", cn.GetServiceConfig().CN.Frontend.Port))
@@ -166,6 +172,11 @@ func TestTimestampAddHistoricalDumpRoundtrip(t *testing.T) {
 			}
 		}()
 		rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, defines.MORPCVersion118)
+		require.NoError(t, validateDecimalDumpFlushResult(flush))
+		frontier, err := barrier.AcquireLogtailReadBarrier(ctx)
+		require.NoError(t, err)
+		require.False(t, frontier.IsEmpty(), "flush logtail barrier must report an applied frontier")
+		t.Logf("logtail read barrier frontier=%s", frontier.DebugString())
 		exec("dump table " + historicalSource + " to '" + dataPath + "'")
 		exported := readManifest(t, dataPath)
 		assertHistoricalChecks := func(manifest map[string]json.RawMessage) {
@@ -312,6 +323,11 @@ func TestTimestampAddHistoricalDumpRoundtrip(t *testing.T) {
 				var flush string
 				require.NoError(t, conn.QueryRowContext(ctx, "select mo_ctl('dn','flush','"+sourceName+"')").Scan(&flush))
 				dataDir := filepath.Join(root, "div-data-"+tc.name)
+				require.NoError(t, validateDecimalDumpFlushResult(flush))
+				frontier, err := barrier.AcquireLogtailReadBarrier(ctx)
+				require.NoError(t, err)
+				require.False(t, frontier.IsEmpty(), "flush logtail barrier must report an applied frontier")
+				t.Logf("logtail read barrier frontier=%s", frontier.DebugString())
 				exec("dump table " + sourceName + " to '" + dataDir + "'")
 				exec("load table " + restoredName + " from '" + dataDir + "'")
 				metadataDir := filepath.Join(root, "div-restored-"+tc.name)
